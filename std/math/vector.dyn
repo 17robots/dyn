@@ -1,0 +1,187 @@
+// Concrete vectors. Fields and arithmetic are f32 except length/normalize.
+// No fused operations or clamping. mul is componentwise, scale takes a scalar,
+// dot sums f32 products left to right, lerp is a + (b - a) * t.
+// length/normalize square and sum widened f64 components, then use sqrt64.
+// Every finite f32 square fits in f64 without overflow or underflow. length
+// rounds the magnitude to f32 (possibly infinity); normalize divides in f64
+// before rounding components to f32, giving approximately unit length for
+// every finite nonzero input, even when length overflows f32. Zero vectors
+// normalize to positive zero in every component. Zero initialization is valid.
+// IEEE NaN/infinity propagate: infinite magnitude gives signed zero for finite
+// components and NaN for infinite components; NaN magnitude gives all NaNs.
+// min/max are componentwise scalar min/max: unordered or equal comparisons
+// retain the first operand (including its signed zero or NaN).
+// Vec3 cross is right-handed: cross(+X,+Y) = +Z. Vec4 has no cross.
+// Vec2i add/sub/mul/scale/dot use checked i32 arithmetic, including each dot
+// product and intermediate sum; overflow panics in debug and release.
+// Vec2i length/normalize/lerp first convert components to f32 (possibly losing
+// precision); length returns f32, normalize and lerp return Vec2. lerp's t is
+// f32. Vec2i min/max return Vec2i. No integer division or rounding is implied.
+
+pub struct Vec2 { x: f32, y: f32 }
+
+pub fn vec2_add(a, b: Vec2) Vec2 {
+  return Vec2{ x: a.x + b.x, y: a.y + b.y }
+}
+pub fn vec2_sub(a, b: Vec2) Vec2 {
+  return Vec2{ x: a.x - b.x, y: a.y - b.y }
+}
+pub fn vec2_mul(a, b: Vec2) Vec2 {
+  return Vec2{ x: a.x * b.x, y: a.y * b.y }
+}
+pub fn vec2_scale(a: Vec2, s: f32) Vec2 {
+  return Vec2{ x: a.x * s, y: a.y * s }
+}
+pub fn vec2_dot(a, b: Vec2) f32 {
+  return a.x * b.x + a.y * b.y
+}
+fn vec2_magnitude(a: Vec2) f64 {
+  x := #cast(f64, a.x)
+  y := #cast(f64, a.y)
+  return sqrt64(x * x + y * y)
+}
+pub fn vec2_length(a: Vec2) f32 {
+  return #cast(f32, vec2_magnitude(a))
+}
+pub fn vec2_normalize(a: Vec2) Vec2 {
+  magnitude := vec2_magnitude(a)
+  if magnitude == 0.0 {
+    return Vec2{ x: 0.0, y: 0.0 }
+  }
+  return Vec2{ x: #cast(f32, #cast(f64, a.x) / magnitude), y: #cast(f32, #cast(f64, a.y) / magnitude) }
+}
+pub fn vec2_lerp(a, b: Vec2, t: f32) Vec2 {
+  return Vec2{ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t }
+}
+pub fn vec2_min(a, b: Vec2) Vec2 {
+  return Vec2{ x: min(a.x, b.x), y: min(a.y, b.y) }
+}
+pub fn vec2_max(a, b: Vec2) Vec2 {
+  return Vec2{ x: max(a.x, b.x), y: max(a.y, b.y) }
+}
+
+pub struct Vec3 { x: f32, y: f32, z: f32 }
+
+pub fn vec3_add(a, b: Vec3) Vec3 {
+  return Vec3{ x: a.x + b.x, y: a.y + b.y, z: a.z + b.z }
+}
+pub fn vec3_sub(a, b: Vec3) Vec3 {
+  return Vec3{ x: a.x - b.x, y: a.y - b.y, z: a.z - b.z }
+}
+pub fn vec3_mul(a, b: Vec3) Vec3 {
+  return Vec3{ x: a.x * b.x, y: a.y * b.y, z: a.z * b.z }
+}
+pub fn vec3_scale(a: Vec3, s: f32) Vec3 {
+  return Vec3{ x: a.x * s, y: a.y * s, z: a.z * s }
+}
+pub fn vec3_dot(a, b: Vec3) f32 {
+  return a.x * b.x + a.y * b.y + a.z * b.z
+}
+fn vec3_magnitude(a: Vec3) f64 {
+  x := #cast(f64, a.x)
+  y := #cast(f64, a.y)
+  z := #cast(f64, a.z)
+  return sqrt64(x * x + y * y + z * z)
+}
+pub fn vec3_length(a: Vec3) f32 {
+  return #cast(f32, vec3_magnitude(a))
+}
+pub fn vec3_normalize(a: Vec3) Vec3 {
+  magnitude := vec3_magnitude(a)
+  if magnitude == 0.0 {
+    return Vec3{ x: 0.0, y: 0.0, z: 0.0 }
+  }
+  return Vec3{ x: #cast(f32, #cast(f64, a.x) / magnitude), y: #cast(f32, #cast(f64, a.y) / magnitude), z: #cast(f32, #cast(f64, a.z) / magnitude) }
+}
+pub fn vec3_lerp(a, b: Vec3, t: f32) Vec3 {
+  return Vec3{ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, z: a.z + (b.z - a.z) * t }
+}
+pub fn vec3_min(a, b: Vec3) Vec3 {
+  return Vec3{ x: min(a.x, b.x), y: min(a.y, b.y), z: min(a.z, b.z) }
+}
+pub fn vec3_max(a, b: Vec3) Vec3 {
+  return Vec3{ x: max(a.x, b.x), y: max(a.y, b.y), z: max(a.z, b.z) }
+}
+pub fn vec3_cross(a, b: Vec3) Vec3 {
+  return Vec3{ x: a.y * b.z - a.z * b.y, y: a.z * b.x - a.x * b.z, z: a.x * b.y - a.y * b.x }
+}
+
+pub struct Vec4 { x: f32, y: f32, z: f32, w: f32 }
+
+pub fn vec4_add(a, b: Vec4) Vec4 {
+  return Vec4{ x: a.x + b.x, y: a.y + b.y, z: a.z + b.z, w: a.w + b.w }
+}
+pub fn vec4_sub(a, b: Vec4) Vec4 {
+  return Vec4{ x: a.x - b.x, y: a.y - b.y, z: a.z - b.z, w: a.w - b.w }
+}
+pub fn vec4_mul(a, b: Vec4) Vec4 {
+  return Vec4{ x: a.x * b.x, y: a.y * b.y, z: a.z * b.z, w: a.w * b.w }
+}
+pub fn vec4_scale(a: Vec4, s: f32) Vec4 {
+  return Vec4{ x: a.x * s, y: a.y * s, z: a.z * s, w: a.w * s }
+}
+pub fn vec4_dot(a, b: Vec4) f32 {
+  return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w
+}
+fn vec4_magnitude(a: Vec4) f64 {
+  x := #cast(f64, a.x)
+  y := #cast(f64, a.y)
+  z := #cast(f64, a.z)
+  w := #cast(f64, a.w)
+  return sqrt64(x * x + y * y + z * z + w * w)
+}
+pub fn vec4_length(a: Vec4) f32 {
+  return #cast(f32, vec4_magnitude(a))
+}
+pub fn vec4_normalize(a: Vec4) Vec4 {
+  magnitude := vec4_magnitude(a)
+  if magnitude == 0.0 {
+    return Vec4{ x: 0.0, y: 0.0, z: 0.0, w: 0.0 }
+  }
+  return Vec4{ x: #cast(f32, #cast(f64, a.x) / magnitude), y: #cast(f32, #cast(f64, a.y) / magnitude), z: #cast(f32, #cast(f64, a.z) / magnitude), w: #cast(f32, #cast(f64, a.w) / magnitude) }
+}
+pub fn vec4_lerp(a, b: Vec4, t: f32) Vec4 {
+  return Vec4{ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, z: a.z + (b.z - a.z) * t, w: a.w + (b.w - a.w) * t }
+}
+pub fn vec4_min(a, b: Vec4) Vec4 {
+  return Vec4{ x: min(a.x, b.x), y: min(a.y, b.y), z: min(a.z, b.z), w: min(a.w, b.w) }
+}
+pub fn vec4_max(a, b: Vec4) Vec4 {
+  return Vec4{ x: max(a.x, b.x), y: max(a.y, b.y), z: max(a.z, b.z), w: max(a.w, b.w) }
+}
+
+pub struct Vec2i { x: i32, y: i32 }
+
+pub fn vec2i_add(a, b: Vec2i) Vec2i {
+  return Vec2i{ x: a.x + b.x, y: a.y + b.y }
+}
+pub fn vec2i_sub(a, b: Vec2i) Vec2i {
+  return Vec2i{ x: a.x - b.x, y: a.y - b.y }
+}
+pub fn vec2i_mul(a, b: Vec2i) Vec2i {
+  return Vec2i{ x: a.x * b.x, y: a.y * b.y }
+}
+pub fn vec2i_scale(a: Vec2i, s: i32) Vec2i {
+  return Vec2i{ x: a.x * s, y: a.y * s }
+}
+pub fn vec2i_dot(a, b: Vec2i) i32 {
+  return a.x * b.x + a.y * b.y
+}
+fn vec2i_float(a: Vec2i) Vec2 {
+  return Vec2{ x: #cast(f32, a.x), y: #cast(f32, a.y) }
+}
+pub fn vec2i_length(a: Vec2i) f32 {
+  return vec2_length(vec2i_float(a))
+}
+pub fn vec2i_normalize(a: Vec2i) Vec2 {
+  return vec2_normalize(vec2i_float(a))
+}
+pub fn vec2i_lerp(a, b: Vec2i, t: f32) Vec2 {
+  return vec2_lerp(vec2i_float(a), vec2i_float(b), t)
+}
+pub fn vec2i_min(a, b: Vec2i) Vec2i {
+  return Vec2i{ x: min(a.x, b.x), y: min(a.y, b.y) }
+}
+pub fn vec2i_max(a, b: Vec2i) Vec2i {
+  return Vec2i{ x: max(a.x, b.x), y: max(a.y, b.y) }
+}

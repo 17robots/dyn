@@ -25,9 +25,11 @@ with tempfile.TemporaryDirectory(prefix='dyn-leaf-inline-') as directory:
     (module / 'main.dyn').write_text('''
 struct Pair { x: i64, y: i64 }
 state: i64 = 0
-fn next() i64 { state += 1 return state }
+fn next() i64 { state += 1
+return state }
 fn pair(a: i64, b: i64) Pair { return Pair{x: a + b, y: a - b} }
-fn change(target: **i64, replacement: *i64) i64 { target.* = replacement return 7 }
+fn change(target: **i64, replacement: *i64) i64 { target.* = replacement
+return 7 }
 fn identity(value: i64) i64 { return value }
 fn main() {
   constant := Pair{x: 41, y: 23}
@@ -77,7 +79,8 @@ use "std/io"
 fn add(a: i8, b: i8) i8 { return a + b }
 fn main() {
   defer { _ = io.println(io.stdout(), "cleanup") }
-  for i in 0..1 { value := add(127, 1) _ = value }
+  for i in 0..1 { value := add(127, 1)
+  _ = value }
 }
 ''')
     for level in (2, 3):
@@ -88,7 +91,7 @@ fn main() {
         assert result.stdout.splitlines() == ['cleanup'], result.stdout
         assert 'overflow' in result.stderr, result.stderr
     # Target checks precede both argument checks and checks in the leaf body.
-    for pointer, message in (('nil', 'null'), ('#cast(*i64) #cast(usize) 1', 'align')):
+    for pointer, message in (('nil', 'null'), ('#cast(*i64, #cast(usize, 1))', 'align')):
         (module / 'main.dyn').write_text(f'''
 fn add(a: i64, b: i64) i64 {{ return a + b }}
 fn main() {{
@@ -113,7 +116,9 @@ fn leaf_add(a: i64, b: i64) i64 {{ return a + b }}
 fn leaf_other(a: i64, b: i64) i64 {{ return a + b }}
 fn main() {{
   for i in 0..1 {{
-    first: i64 = 0 second: i64 = 0 third: i64 = 0
+    first: i64 = 0
+second: i64 = 0
+third: i64 = 0
     if failure != 0 {{ first = 1 }}
     if failure != 1 {{ second = 1 }}
     if failure == 2 {{ third = 1 }}
@@ -139,16 +144,21 @@ fn main() {{
 limit: i64 = 9223372036854775807
 fn leaf_add(a: i64, b: i64) i64 { return a + b }
 fn nested(a: i64) i64 { return leaf_add(a, 1) }
-fn main() { for i in 0..1 { value := nested(limit) _ = value } }
+fn main() { for i in 0..1 { value := nested(limit)
+_ = value } }
 ''', 'leaf_add'), ('''
 limit: i64 = 9223372036854775807
 struct Defaulted { value: i64 = 5 + 7 }
 fn leaf_default(a: i64) Defaulted { return Defaulted{value: a + 1} }
-fn main() { for i in 0..1 { value := leaf_default(limit) _ = value } }
+fn main() { for i in 0..1 { value := leaf_default(limit)
+_ = value } }
 ''', 'leaf_default'), ('''
 limit: i64 = 9223372036854775807
-fn leaf_compound(a: i64) i64 { result := a result += 1 return result }
-fn main() { for i in 0..1 { value := leaf_compound(limit) _ = value } }
+fn leaf_compound(a: i64) i64 { result := a
+result += 1
+return result }
+fn main() { for i in 0..1 { value := leaf_compound(limit)
+_ = value } }
 ''', 'leaf_compound')):
         (module / 'main.dyn').write_text(source)
         expected = f'runtime check failed (overflow.ok) in {origin}\n'
@@ -167,7 +177,8 @@ limit: i64 = 9223372036854775807
 fn leaf_add(a: i64) i64 { return a + 1 }
 fn main() {
   defer { limit += 1 }
-  for i in 0..1 { value := leaf_add(limit) _ = value }
+  for i in 0..1 { value := leaf_add(limit)
+  _ = value }
 }
 """)
     for tree in (False, True):

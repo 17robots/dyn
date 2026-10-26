@@ -918,6 +918,26 @@ static unsigned call(WG *g, const DynIrExpr *e) {
       args[i] = copy;
     }
   }
+  /* Only trusted SDK leaves carry this identity. Keep ordinary bodies and
+     address-taken calls available; unsupported operations retain their calls. */
+  if (f && f->return_type == DYN_TYPE_F64 && e->type == DYN_TYPE_F64 &&
+      !f->foreign && !f->variadic && n == e->item_count) {
+    unsigned opcode = 0, count = 1;
+    switch (f->math_intrinsic) {
+    case DYN_MATH_INTRINSIC_SQRT: opcode = 0x9f; break;
+    case DYN_MATH_INTRINSIC_FLOOR: opcode = 0x9c; break;
+    case DYN_MATH_INTRINSIC_CEIL: opcode = 0x9b; break;
+    case DYN_MATH_INTRINSIC_TRUNC: opcode = 0x9d; break;
+    case DYN_MATH_INTRINSIC_COPYSIGN: opcode = 0xa6; count = 2; break;
+    default: break; /* nearest is not ties-away round; Wasm has no fused FMA. */
+    }
+    if (opcode && n == count) {
+      for (unsigned i = 0; i < count; ++i) get(g, args[i]);
+      op(g, opcode);
+      free(args);
+      return save(g, 0x7c);
+    }
+  }
   if (f && f->variadic && f->foreign) {
     fprintf(stderr,
             "error: independent Wasm C variadic calls are unsupported\n");
@@ -1654,6 +1674,15 @@ static void finishbody(WG *g) {
 }
 #include "codegen_wasm_asm.inc"
 
+/* Inlining rebuilds body/local tables only for reachable functions. Their IDs
+   remain stable, but dead functions still carry original table offsets. Apply
+   the same selection to counts, indices, signatures and bodies. */
+static bool wasm_emits_function(const DynIrProgram *ir, size_t index) {
+  const DynIrFunction *f = &ir->functions[index];
+  return !(f->generic && !f->instance) &&
+         (!ir->live.functions || ir->live.functions[index]);
+}
+
 static int wasm_object_impl(const DynSource *source, const DynIrProgram *ir,
                             const char *path, bool report, bool assembly) {
   WG g = {.ir = ir, .source = source};
@@ -1674,7 +1703,7 @@ static int wasm_object_impl(const DynSource *source, const DynIrProgram *ir,
   unsigned imported = 0, defined = 0;
   for (size_t i = 0; i < nf; i++) {
     const DynIrFunction *f = &ir->functions[i];
-    if (f->generic && !f->instance)
+    if (!wasm_emits_function(ir, i))
       continue;
     if (f->foreign)
       g.fn_index[i] = imported++;
@@ -1684,7 +1713,7 @@ static int wasm_object_impl(const DynSource *source, const DynIrProgram *ir,
   unsigned next = imported;
   for (size_t i = 0; i < nf; i++) {
     const DynIrFunction *f = &ir->functions[i];
-    if (f->generic && !f->instance)
+    if (!wasm_emits_function(ir, i))
       continue;
     if (!f->foreign)
       g.fn_index[i] = next++;
@@ -1692,7 +1721,7 @@ static int wasm_object_impl(const DynSource *source, const DynIrProgram *ir,
   g.init_index = next;
   for (size_t i = 0; i < nf; i++) {
     const DynIrFunction *f = &ir->functions[i];
-    if (f->generic && !f->instance)
+    if (!wasm_emits_function(ir, i))
       continue;
     unsigned n = f->param_count + (f->variadic && !f->foreign ? 2 : 0);
     DynType *args = calloc(n + 1, sizeof(*args));
@@ -1707,7 +1736,7 @@ static int wasm_object_impl(const DynSource *source, const DynIrProgram *ir,
     free(args);
     const char *name =
         f->is_main     ? "__original_main"
-        : f->link_name ? f->link_name
+        : f->foreign && f->link_name ? f->link_name
                        : f->name; /* Root functions retain unmangled names. */
     bool exp = f->is_public && !f->foreign && strncmp(f->name, "dyn_m", 5) != 0;
     g.fn_symbol[i] = symbol(&g, name, 0,
@@ -1767,7 +1796,7 @@ static int wasm_object_impl(const DynSource *source, const DynIrProgram *ir,
   wu(&g.code, defined + 1);
   for (size_t i = 0; i < nf; i++) {
     const DynIrFunction *f = &ir->functions[i];
-    if (f->foreign || (f->generic && !f->instance))
+    if (f->foreign || !wasm_emits_function(ir, i))
       continue;
     bool sr =
         wagg(&g, f->return_type) && wflat(&g, f->return_type) == DYN_TYPE_VOID;
@@ -1832,8 +1861,7 @@ static int wasm_object_impl(const DynSource *source, const DynIrProgram *ir,
   wsec(&out, 2, &s);
   wu(&s, defined + 1);
   for (size_t i = 0; i < nf; i++)
-    if (!ir->functions[i].foreign &&
-        !(ir->functions[i].generic && !ir->functions[i].instance))
+    if (!ir->functions[i].foreign && wasm_emits_function(ir, i))
       wu(&s, g.fn_type[i]);
   wu(&s, init_type);
   wsec(&out, 3, &s);

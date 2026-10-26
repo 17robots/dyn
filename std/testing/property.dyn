@@ -8,16 +8,16 @@ pub struct PropertyResult {
 // A failure's minimized example borrows work. Reproduction requires the same
 // seed, iteration, work capacity, and deterministic predicate.
 pub fn check_property(options: PropertyOptions, work: []u8,
-  predicate: *fn(rawptr, []const u8) bool, context: rawptr) PropertyResult {
+  predicate: fn(rawptr, []const u8) bool, context: rawptr) PropertyResult {
   capacity := #len(work) / 2
-    sample := work[..capacity]
-    trial := work[capacity..]
+  sample := work[..capacity]
+  trial := work[capacity..]
   generator := random(options.seed)
-    iteration: usize = 0
+  iteration: usize = 0
   for iteration < options.cases {
     length := random_below(&generator, capacity + 1)
     for i in 0..length {
-      sample[i] = #cast(u8) (random_next(&generator) & 255)
+      sample[i] = #cast(u8, (random_next(&generator) & 255))
     }
     if !predicate(context, sample[..length]) {
       checks: usize = 0
@@ -55,8 +55,8 @@ pub fn check_property(options: PropertyOptions, work: []u8,
       for position < length && checks < options.shrink_checks {
         original := sample[position]
         candidate: u16 = 0
-        for candidate < #cast(u16) original && checks < options.shrink_checks {
-          sample[position] = #cast(u8) candidate
+        for candidate < #cast(u16, original) && checks < options.shrink_checks {
+          sample[position] = #cast(u8, candidate)
           checks += 1
           if !predicate(context, sample[..length]) {
             break

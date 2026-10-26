@@ -1,4 +1,6 @@
 #target(kernel: linux)
+use "std/mem" mem
+use "std/errors"
 use "std/fs" fs
 use "std/c" c
 
@@ -21,79 +23,106 @@ pub const HasDirectoryFlag: bool = true
 // Zero means no fixed userspace slot limit; native inotify quotas still apply.
 pub const FixedWatchCapacity: usize = 0
 pub enum Status { Event, Empty, Error }
-pub struct Watcher { descriptor: isize = -1, storage: []u8, used: usize, offset: usize, rescan_required: bool }
-pub struct OpenResult { watcher: Watcher, error: isize, ok: bool }
-pub struct Result { value: i32, error: isize, ok: bool }
+// Zero is a closed watcher: active is false.
+// Ownership: a live watcher is not an independent owner when copied. Keep one
+// stable owner and close it before its storage is released or reused.
+pub struct Watcher { descriptor: isize = -1, active: bool, storage: []u8, used: usize, offset: usize, rescan_required: bool, failed: bool, error: isize, kind: errors.Kind }
+pub struct OpenResult { value: Watcher, error: isize, kind: errors.Kind, ok: bool }
+// `error` keeps the native code; `kind` is its portable category.
+pub struct Result { value: i32, error: isize, kind: errors.Kind, ok: bool }
 pub struct Event { watch: i32, mask: u32, cookie: u32, name: []const u8, rescan: bool }
-pub struct EventResult { event: Event, status: Status, error: isize }
+pub struct EventResult { event: Event, status: Status, kind: errors.Kind, error: isize, ok: bool }
 
 // Watches are non-recursive. Register each directory explicitly. Names borrow
 // storage until next refill. An overflow invalidates all cached workspace state.
 pub fn open(storage: []u8) OpenResult {
   if #len(storage) < 272 {
-    return OpenResult{ watcher: Watcher{}, error: -28 }
+    return OpenResult{ value: Watcher{}, error: -28, kind: errors.linux(-28) }
   }
   descriptor := #syscall(294, 526336)
   if descriptor < 0 {
-    return OpenResult{ watcher: Watcher{}, error: descriptor }
+    return OpenResult{ value: Watcher{}, error: descriptor, kind: errors.linux(descriptor) }
   }
-  return OpenResult{ watcher: Watcher{ descriptor: descriptor, storage: storage }, ok: true }
+  return OpenResult{ value: Watcher{ descriptor: descriptor, active: true, storage: storage }, ok: true }
 }
 pub fn add(state: *Watcher, path: []const u8, mask: u32) Result {
-  storage: [4096]u8 = []
-  name := c.string_from_bytes(storage[..], path)
-  if !name.ok || #len(path) == 0 || state.descriptor < 0 {
-    return Result{ error: -22 }
+  storage: [4096 + mem.ArenaBufferOverhead]u8 = []
+  name := c.string_into(storage[..], path)
+  if !name.ok || #len(path) == 0 || !state.active {
+    return failure(-22)
   }
   value := #syscall(254, state.descriptor, name.value, mask)
   if value < 0 {
-    return Result{ error: value }
+    return failure(value)
   }
-  return Result{ value: #cast(i32) value, ok: true }
+  return Result{ value: #cast(i32, value), ok: true }
 }
 pub fn remove(state: *Watcher, watch: i32) Result {
   value := #syscall(255, state.descriptor, watch)
-  return Result{ error: value, ok: value == 0 }
+  return status(value)
 }
 pub fn close(state: *Watcher) Result {
-  if state.descriptor < 0 {
+  if !state.active {
     return Result{ ok: true }
   }
   value := #syscall(3, state.descriptor)
   state.descriptor = -1
+  state.active = false
   state.used = 0
   state.offset = 0
-  return Result{ error: value, ok: value == 0 }
+  return status(value)
 }
 fn load(bytes: []const u8, at: usize) u32 {
-  return #cast(u32) bytes[at] | (#cast(u32) bytes[at+1] << 8) | (#cast(u32) bytes[at+2] << 16) | (#cast(u32) bytes[at+3] << 24)
+  return #cast(u32, bytes[at]) | (#cast(u32, bytes[at+1]) << 8) | (#cast(u32, bytes[at+2]) << 16) | (#cast(u32, bytes[at+3]) << 24)
+}
+// Buffered records are returned first; reading more needs an active watcher.
+// Terminal failures are sticky. Empty and rescan events remain protocol states.
+fn event_failure(state: *Watcher, code: isize) EventResult {
+  return event_error(state, errors.linux(code), code)
+}
+fn event_error(state: *Watcher, kind: errors.Kind, code: isize) EventResult {
+  if !state.failed {
+    state.failed = true
+    state.error = code
+    state.kind = kind
+    if state.kind == errors.Kind.None {
+      state.kind = errors.Kind.System
+    }
+  }
+  return EventResult{ status: Status.Error, error: state.error, kind: state.kind }
 }
 pub fn next(state: *Watcher) EventResult {
-  if state.descriptor < 0 {
-    return EventResult{ status: Status.Error, error: -9 }
+  if state.failed {
+    return event_failure(state, state.error)
+  }
+  if state.used > #len(state.storage) || state.offset > state.used {
+    return event_failure(state, -74)
   }
   if state.offset == state.used {
+    if !state.active {
+      return event_failure(state, -9)
+    }
     file := fs.borrow_handle(state.descriptor)
     result := fs.read(&file, state.storage)
     if !result.ok {
       if result.error == -11 {
         return EventResult{ status: Status.Empty }
       }
-      return EventResult{ status: Status.Error, error: result.error }
+      return event_error(state, result.kind, result.error)
     }
     if result.transferred == 0 {
-      return EventResult{ status: Status.Error, error: -5 }
+      return event_failure(state, -5)
     }
     state.offset = 0
     state.used = result.transferred
   }
   at := state.offset
   if at > state.used || state.used - at < 16 {
-    return EventResult{ status: Status.Error, error: -74 }
+    return event_failure(state, -74)
   }
-  length := #cast(usize) load(state.storage, at+12)
+  length := #cast(usize, load(state.storage, at+12))
   if length > state.used - at - 16 {
-    return EventResult{ status: Status.Error, error: -74 }
+    return event_failure(state, -74)
   }
   name := state.storage[at+16..at+16+length]
   end: usize = 0
@@ -101,24 +130,34 @@ pub fn next(state: *Watcher) EventResult {
     end += 1
   }
   if length > 0 && end == length {
-    return EventResult{ status: Status.Error, error: -74 }
+    return event_failure(state, -74)
   }
   mask := load(state.storage, at+4)
   rescan := (mask & 16384) != 0
   watch: i32 = -1
   raw_watch := load(state.storage, at)
   if raw_watch != 4294967295 {
-    watch = #cast(i32) raw_watch
+    watch = #cast(i32, raw_watch)
   }
   state.offset += 16 + length
   if rescan {
     state.rescan_required = true
   }
-  return EventResult{ status: Status.Event, event: Event{ watch: watch, mask: mask,
+  return EventResult{ status: Status.Event, ok: true, event: Event{ watch: watch, mask: mask,
     cookie: load(state.storage, at+8), name: name[..end], rescan: rescan } }
 }
 // Call only after rebuilding the snapshot; events may continue arriving during
 // that scan, so drain/reconcile them before treating the workspace as current.
 pub fn acknowledge_rescan(state: *Watcher) {
   state.rescan_required = false
+}
+
+fn failure(code: isize) Result {
+  return Result{ error: code, kind: errors.linux(code) }
+}
+fn status(code: isize) Result {
+  if code == 0 {
+    return Result{ ok: true }
+  }
+  return failure(code)
 }

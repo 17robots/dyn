@@ -148,7 +148,7 @@ def parse_parameter(source: str) -> tuple[str, str] | None:
                 mapped = parsed[1]
             parameters.append(mapped)
         if returned is None: return None
-        return callback.group(2), f"*fn({', '.join(parameters)})" + (f" {returned}" if returned != "void" else "")
+        return callback.group(2), f"fn({', '.join(parameters)})" + (f" {returned}" if returned != "void" else "")
     match = re.fullmatch(r"(.+?)([A-Za-z_]\w*)", source.strip())
     if not match or not (match.group(1)[-1].isspace() or match.group(1)[-1] == "*"): return None
     c_type = match.group(1).strip()
@@ -339,7 +339,7 @@ def verify_layout(header: pathlib.Path, source: str, generated: str,
             expressions = [(f"sizeof({ctype})", f"#sizeof({name})"),
                            (f"_Alignof({ctype})", f"#alignof({name})")]
             expressions += [(f"offsetof({ctype},{field})",
-                             f"(#cast(usize) &{variable}.{field} - #cast(usize) &{variable})") for field in members]
+                             f"(#cast(usize, &{variable}.{field}) - #cast(usize, &{variable}))") for field in members]
             for cexpr, dexpr in expressions:
                 symbol = f"dyn_binding_layout_{count}"
                 c.append(f"size_t {symbol}(void) {{ return {cexpr}; }}")

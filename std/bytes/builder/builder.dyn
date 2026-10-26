@@ -2,8 +2,15 @@ use "std/mem" memory
 
 // Byte and UTF-8 string construction share this byte-oriented builder. No UTF-8
 // validation is implied. A builder borrows storage; arena growth is explicit.
+// The first failure is kept in error and turns later calls into no-ops that
+// return it, so callers may check error once at the end.
 pub enum ErrorKind { None, Capacity, Overflow, InvalidState }
-pub struct Builder { storage: []u8, length: usize }
+pub struct Builder { storage: []u8, length: usize, error: ErrorKind }
+
+fn fail(state: *Builder, error: ErrorKind) ErrorKind {
+  state.error = error
+  return error
+}
 
 pub fn from_buffer(storage: []u8) Builder {
   return Builder{ storage: storage }
@@ -14,27 +21,29 @@ pub fn from_buffer(storage: []u8) Builder {
 pub fn bytes(state: *const Builder) []const u8 {
   return state.storage[..state.length]
 }
+// Empties the builder and clears a recorded error. Keeps capacity.
 pub fn clear(state: *Builder) {
   state.length = 0
+  state.error = ErrorKind.None
 }
 
 // Exact capacity reservation. Panics when the arena is exhausted.
 // Extends the arena's most recent buffer in place when possible. Otherwise old
 // arena buffers remain allocated until the caller rewinds or resets.
 pub fn reserve(state: *Builder, arena: *memory.Arena, capacity: usize) ErrorKind {
+  if state.error != ErrorKind.None {
+    return state.error
+  }
   if state.length > #len(state.storage) {
-    return ErrorKind.InvalidState
+    return fail(state, ErrorKind.InvalidState)
   }
   if capacity <= #len(state.storage) {
     return ErrorKind.None
   }
-  if #len(state.storage) > 0 && arena.offset <= #len(arena.data) && arena.offset >= #len(state.storage) {
-    start := arena.offset - #len(state.storage)
-    if &state.storage[0] == &arena.data[start] {
-      _ = memory.arena_push_uninit(arena, capacity - #len(state.storage), 1)
-      state.storage = (&state.storage[0])[..capacity]
-      return ErrorKind.None
-    }
+  if #len(state.storage) > 0 && memory.arena_try_extend(arena, &state.storage[0],
+    #len(state.storage), capacity - #len(state.storage)) {
+    state.storage = (&state.storage[0])[..capacity]
+    return ErrorKind.None
   }
   allocated := memory.arena_push_uninit(arena, capacity, 1)
   storage := allocated[..capacity]
@@ -47,26 +56,32 @@ pub fn reserve(state: *Builder, arena: *memory.Arena, capacity: usize) ErrorKind
 // Allocation: none; capacity is fixed until an explicit reserve or append_grow.
 // Failure: builder length and bytes are unchanged.
 pub fn append(state: *Builder, source: []const u8) ErrorKind {
+  if state.error != ErrorKind.None {
+    return state.error
+  }
   if state.length > #len(state.storage) {
-    return ErrorKind.InvalidState
+    return fail(state, ErrorKind.InvalidState)
   }
   if #len(source) > #len(state.storage) - state.length {
-    return ErrorKind.Capacity
+    return fail(state, ErrorKind.Capacity)
   }
   _ = memory.move(state.storage[state.length..], source)
   state.length += #len(source)
   return ErrorKind.None
 }
 
-// Geometric growth with exact-size fallback for a nearly exhausted arena.
+// Geometric growth. Panics when the arena cannot hold the selected capacity.
 // Existing views must be reacquired after mutation. Source may borrow this builder.
 pub fn append_grow(state: *Builder, arena: *memory.Arena, source: []const u8) ErrorKind {
-  if state.length > #len(state.storage) {
-    return ErrorKind.InvalidState
+  if state.error != ErrorKind.None {
+    return state.error
   }
-  maximum := #cast(usize) -1
+  if state.length > #len(state.storage) {
+    return fail(state, ErrorKind.InvalidState)
+  }
+  maximum := #cast(usize, -1)
   if #len(source) > maximum - state.length {
-    return ErrorKind.Overflow
+    return fail(state, ErrorKind.Overflow)
   }
   required := state.length + #len(source)
   if required > #len(state.storage) {
@@ -82,11 +97,8 @@ pub fn append_grow(state: *Builder, arena: *memory.Arena, source: []const u8) Er
       capacity *= 2
     }
     error := reserve(state, arena, capacity)
-    if error == ErrorKind.Capacity && capacity != required {
-      error = reserve(state, arena, required)
-    }
     if error != ErrorKind.None {
-      return error
+      return fail(state, error)
     }
   }
   return append(state, source)

@@ -1,3 +1,4 @@
+use "std/mem" mem
 use "std/errors" errors
 
 pub const Nanosecond: i64 = 1
@@ -8,7 +9,7 @@ pub const Minute: i64 = 60000000000
 pub const Hour: i64 = 3600000000000
 
 pub struct Instant { seconds: i64, nanoseconds: i64 }
-pub struct DurationResult { value: i64, ok: bool }
+pub struct DurationResult { value: i64, kind: errors.Kind, error: isize, ok: bool }
 pub struct Deadline { at: Instant }
 pub struct DateTime {
   year: i32, month: u8, day: u8,
@@ -53,61 +54,70 @@ pub fn elapsed(start, end: Instant) DurationResult {
 
 pub struct ClockResult { value: Instant, error: isize, kind: errors.Kind, ok: bool }
 pub struct SleepResult { error: isize, kind: errors.Kind, ok: bool }
+pub struct DeadlineResult { value: Deadline, kind: errors.Kind, error: isize, ok: bool }
+pub struct ExpiredResult { value: bool, kind: errors.Kind, error: isize, ok: bool }
 // Monotonic instants are for elapsed time/deadlines; realtime instants use Unix epoch.
-pub fn try_monotonic_now() ClockResult {
+pub fn monotonic_now() ClockResult {
   return native_clock(true)
 }
-pub fn try_realtime_now() ClockResult {
+pub fn realtime_now() ClockResult {
   return native_clock(false)
 }
-pub fn monotonic_now() Instant {
-  result := try_monotonic_now()
-  if !result.ok {
-    #panic("monotonic clock failed")
-  }
-  return result.value
-}
-pub fn realtime_now() Instant {
-  result := try_realtime_now()
-  if !result.ok {
-    #panic("realtime clock failed")
-  }
-  return result.value
-}
-pub fn sleep_result(duration: i64) SleepResult {
+pub fn sleep(duration: i64) SleepResult {
   if duration <= 0 {
     return SleepResult{ ok: true }
   }
   return native_sleep(duration)
 }
-pub fn sleep(duration: i64) bool {
-  return sleep_result(duration).ok
-}
-pub fn deadline_after(duration: i64) Deadline {
+pub fn deadline_after(duration: i64) DeadlineResult {
   now := monotonic_now()
-  at := Instant{ seconds: now.seconds + duration / Second, nanoseconds: now.nanoseconds + duration % Second }
-  if at.nanoseconds >= Second {
-    at.seconds += 1
-    at.nanoseconds -= Second
+  if !now.ok {
+    return DeadlineResult{ kind: now.kind, error: now.error }
   }
-  if at.nanoseconds < 0 {
-    at.seconds -= 1
-    at.nanoseconds += Second
+  seconds := duration / Second
+  nanos := now.value.nanoseconds + duration % Second
+  if nanos >= Second {
+    seconds += 1
+    nanos -= Second
   }
-  return Deadline{ at: at }
+  if nanos < 0 {
+    seconds -= 1
+    nanos += Second
+  }
+  sum := checked_add(now.value.seconds, seconds)
+  if !sum.ok {
+    return DeadlineResult{ kind: errors.Kind.Overflow }
+  }
+  return DeadlineResult{ value: Deadline{ at: Instant{ seconds: sum.value, nanoseconds: nanos } }, ok: true }
 }
-pub fn deadline_expired(deadline: *const Deadline) bool {
-  now := monotonic_now()
-  return now.seconds > deadline.at.seconds ||
-    (now.seconds == deadline.at.seconds && now.nanoseconds >= deadline.at.nanoseconds)
-}
-pub fn deadline_remaining(deadline: *const Deadline) i64 {
-  now := monotonic_now()
-  result := elapsed(now, deadline.at)
-  if !result.ok || result.value < 0 {
-    return 0
+pub fn deadline_expired(deadline: *const Deadline) ExpiredResult {
+  if deadline == nil {
+    return ExpiredResult{ kind: errors.Kind.InvalidInput }
   }
-  return result.value
+  now := monotonic_now()
+  if !now.ok {
+    return ExpiredResult{ kind: now.kind, error: now.error }
+  }
+  return ExpiredResult{ value: now.value.seconds > deadline.at.seconds ||
+      (now.value.seconds == deadline.at.seconds && now.value.nanoseconds >= deadline.at.nanoseconds), ok: true }
+}
+pub fn deadline_remaining(deadline: *const Deadline) DurationResult {
+  if deadline == nil {
+    return DurationResult{ kind: errors.Kind.InvalidInput }
+  }
+  now := monotonic_now()
+  if !now.ok {
+    return DurationResult{ kind: now.kind, error: now.error }
+  }
+  if now.value.seconds > deadline.at.seconds ||
+    (now.value.seconds == deadline.at.seconds && now.value.nanoseconds >= deadline.at.nanoseconds) {
+    return DurationResult{ ok: true }
+  }
+  result := elapsed(now.value, deadline.at)
+  if !result.ok {
+    return DurationResult{ kind: errors.Kind.Overflow }
+  }
+  return result
 }
 
 fn leap_year(year: i32) bool {
@@ -116,10 +126,10 @@ fn leap_year(year: i32) bool {
 pub fn valid(value: *const DateTime) bool {
   if value.month < 1 || value.month > 12 || value.day < 1 || value.hour > 23 ||
     value.minute > 59 || value.second > 60 || value.nanosecond >= 1000000000 {
-      return false
-    }
+    return false
+  }
   days: [12]u8 = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-  maximum := days[#cast(usize) value.month - 1]
+  maximum := days[#cast(usize, value.month) - 1]
   if value.month == 2 && leap_year(value.year) {
     maximum = 29
   }
@@ -129,15 +139,15 @@ fn write_two(destination: []u8, at: usize, value: u8) {
   destination[at] = '0' + value / 10
   destination[at + 1] = '0' + value % 10
 }
-pub fn format_iso8601(destination: []u8, value: *const DateTime) []u8 {
+fn format_iso8601_into(destination: []u8, value: *const DateTime) []u8 {
   if #len(destination) < 20 || !valid(value) || value.year < 0 || value.year > 9999 {
     return destination[..0]
   }
-  year := #cast(u32) value.year
-  destination[0] = '0' + #cast(u8) (year / 1000)
-  destination[1] = '0' + #cast(u8) ((year / 100) % 10)
-  destination[2] = '0' + #cast(u8) ((year / 10) % 10)
-  destination[3] = '0' + #cast(u8) (year % 10)
+  year := #cast(u32, value.year)
+  destination[0] = '0' + #cast(u8, (year / 1000))
+  destination[1] = '0' + #cast(u8, ((year / 100) % 10))
+  destination[2] = '0' + #cast(u8, ((year / 10) % 10))
+  destination[3] = '0' + #cast(u8, (year % 10))
   destination[4] = '-'
   write_two(destination, 5, value.month)
   destination[7] = '-'
@@ -157,21 +167,42 @@ fn decimal(byte: u8) bool {
 fn read_two(input: []const u8, at: usize) u8 {
   return (input[at] - '0') * 10 + input[at + 1] - '0'
 }
-pub fn parse_iso8601(input: []const u8, output: *DateTime) bool {
+pub struct Parsed { value: DateTime, ok: bool }
+
+// Parses YYYY-MM-DDTHH:MM:SSZ. ok is false, with a zero value, for anything else.
+pub fn parse_iso8601(input: []const u8) Parsed {
+  value: DateTime
+  if !parse_iso8601_into(input, &value) {
+    return Parsed{}
+  }
+  return Parsed{ value: value, ok: true }
+}
+
+fn parse_iso8601_into(input: []const u8, output: *DateTime) bool {
   if #len(input) != 20 || input[4] != '-' || input[7] != '-' || input[10] != 'T' ||
     input[13] != ':' || input[16] != ':' || input[19] != 'Z' {
-      return false
-    }
+    return false
+  }
   positions: [14]u8 = [0, 1, 2, 3, 5, 6, 8, 9, 11, 12, 14, 15, 17, 18]
   for i in 0..#len(positions) {
-    if !decimal(input[#cast(usize) positions[i]]) {
+    if !decimal(input[#cast(usize, positions[i])]) {
       return false
     }
   }
   output.* = DateTime{
-    year: #cast(i32) ((#cast(u32) (input[0] - '0')) * 1000 + (#cast(u32) (input[1] - '0')) * 100 + (#cast(u32) (input[2] - '0')) * 10 + #cast(u32) (input[3] - '0')),
+    year: #cast(i32, ((#cast(u32, (input[0] - '0'))) * 1000 + (#cast(u32, (input[1] - '0'))) * 100 + (#cast(u32, (input[2] - '0'))) * 10 + #cast(u32, (input[3] - '0')))),
     month: read_two(input, 5), day: read_two(input, 8), hour: read_two(input, 11),
     minute: read_two(input, 14), second: read_two(input, 17), nanosecond: 0,
   }
   return valid(output)
+}
+
+// value as YYYY-MM-DDTHH:MM:SSZ in arena, or "" when value is not a valid
+// date in years 0 through 9999.
+pub fn format_iso8601(arena: *mem.Arena, value: *const DateTime) []u8 {
+  mark := mem.arena_mark(arena)
+  space := mem.push_bytes_uninit(arena, 20)
+  text := format_iso8601_into(space, value)
+  mem.arena_rewind(arena, mark + #len(text))
+  return text
 }

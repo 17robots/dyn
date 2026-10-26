@@ -36,7 +36,9 @@ selection, remarks, and a strict text sample-profile subset. These are real
 optimizations, but do not claim LLVM's complete optimization/performance parity.
 
 The build includes cross-target runtimes for x86-64 Linux, AArch64 Linux, RISC-V64 Linux,
-x86-64/AArch64 macOS, x86-64/AArch64 Windows, browser Wasm, and WASI Preview 1. Native runtime
+x86-64/AArch64 macOS, x86-64/AArch64 Windows, browser Wasm, and WASI Preview 1.
+Not every target is natively qualified; see the
+[support scope](docs/internals/release.md#support-scope). Native runtime
 assembly is generated directly; portable support is compiled by Dyn itself.
 No target Clang or assembler is required. GCC-only Linux packaging is available with:
 
@@ -58,6 +60,9 @@ generation, built-in object/archive linking, and directly generated runtime
 objects. See [WebAssembly](docs/guide/webassembly.md) and the
 [independent toolchain guide](docs/guide/independent-toolchain.md) for output
 formats, supported optimization/profile behavior, and qualification limits.
+The experimental `riscv64-none` and `riscv32-none` targets build bare-metal
+images for the QEMU `virt` board, and `thumbv7em-none` for the QEMU
+`mps2-an500` board (Cortex-M7); see [bare metal](docs/guide/bare-metal.md).
 The LLVM backend implementation has been removed. Independent emission is now
 the default and only backend, including textual exports.
 
@@ -119,9 +124,9 @@ export PATH="$PWD/dyn-sdk/bin:$PATH"
 On Windows, in PowerShell:
 
 ```powershell
-Expand-Archive .\dyn-0.1.0-preview.25-windows-x86_64.zip -DestinationPath .\dyn-preview20
-.\dyn-preview20\dyn-sdk\bin\dyn.exe version
-$env:Path = "$PWD\dyn-preview20\dyn-sdk\bin;$env:Path"
+Expand-Archive .\dyn-0.1.0-preview.25-windows-x86_64.zip -DestinationPath .\dyn-preview25
+.\dyn-preview25\dyn-sdk\bin\dyn.exe version
+$env:Path = "$PWD\dyn-preview25\dyn-sdk\bin;$env:Path"
 ```
 
 These PATH changes last for the current shell. For future shells, add the SDK's
@@ -176,7 +181,7 @@ may be newer than the latest published preview.
 | `std/fs` | Basic open/create/append/exclusive-create, read/write, seek/sync, close and stream adapters work on Linux, macOS and Windows. Directory traversal, metadata and atomic replacement remain Linux-specific; watching is available through the separate portable watch module. |
 | `fs.File{}` | Unopened. Use `fs.take(&file)` to transfer ownership, `fs.borrow(&file)` for a view, and `adopt_handle`/`borrow_handle` for native handles. Closing a borrowed or already-closed file returns `InvalidState`. |
 | `bufio.read_line` | Strips LF or CRLF, preserves lone CR. Returns `bufio.ReadStatus.More` when the destination fills: process those bytes and continue the same line. `Complete` ends a line; `End` may include a final fragment; `Error` reports failure. |
-| `process.arguments(&arena)` | Includes argv[0]; descriptors and bytes belong to the arena. Unix preserves native bytes; Windows converts UTF-16 to UTF-8. Linux reads `/proc/self/cmdline`; macOS and Windows use native process data. |
+| `process.arguments(arena)` | Includes argv[0]; descriptors and bytes belong to the arena. Unix preserves native bytes; Windows converts UTF-16 to UTF-8. Linux reads `/proc/self/cmdline`; macOS and Windows use native process data. |
 | `time.try_monotonic_now()` / `try_realtime_now()` | Fallible native clocks; monotonic measures durations, realtime uses Unix epoch. `sleep_result` reports failure. Date and duration helpers are portable; WASI supports clocks but not sleep. |
 | `std/errors` | Portable `kind` accompanies the original native `error` code. Check `ok` or `status` first: library failures may have code zero. |
 | `std/sync` | Atomics, mutexes, conditions, semaphores and once initialization work on Linux x64/ARM64, macOS ARM64 and Windows x64. Darwin mutexes use ownership-aware unfair locks; other waiters use native address waits. |
@@ -347,7 +352,22 @@ license. This is source-available software, not open source.
 
 ### Performance controls and measurement
 
-The default release policy remains portable O2. Optional controls:
+The default release policy remains portable O2.
+
+Ordinary native release executables compute function reachability before
+optimization, retaining callbacks and global initialization while skipping unused
+function bodies. Explicit object/assembly output, shared libraries, and builds
+with external link inputs preserve public symbol roots. Debug and Wasm output
+retain their existing policies. Object cache keys distinguish executables that
+prune public functions from builds that retain them for external inputs.
+
+O3 inlining estimates expression and aggregate work as well as statements,
+caches callee costs, and limits total expansion. `--timings` separates scalar
+optimization, inlining, SSA construction/optimization, register allocation,
+machine emission, and object serialization. Backend phase totals aggregate work
+across functions; they are contained within the overall native emission time.
+
+Optional controls:
 
 - `--cpu native` targets this host's CPU/features. Do not distribute that binary
   to machines lacking those features. Cross-target use is rejected; cache keys
@@ -394,10 +414,9 @@ non-aliasing merely because they are `const`.
   allocation. Both needle and table must remain alive and unchanged. Prefer it
   for repeated searches or adversarial repeated-prefix input; simple one-off
   searches remain available in `std/bytes`.
-- `std/container/string_map.reserve`: reserve capacity before bulk insertion to
-  avoid intermediate arena tables. Keys are copied; growth preserves key bytes.
-  `clear` reuses the table but retains key allocations. Deletion does not reclaim
-  arena memory. Never rewind storage belonging to a live map.
+- `std/container/hash`: the slot count is fixed when the table is made and
+  insertion never allocates, so size the slots for the expected entry count.
+  Seed `hash_bytes` from `std/crypto/random` for keys from untrusted input.
 - `std/bytes/builder.reserve`: extends the last arena allocation in place when
   possible; otherwise copies live bytes to new storage. Interleaved allocations
   can therefore increase retained storage. Reacquire views after mutation.
@@ -411,5 +430,5 @@ Performance changes must preserve empty inputs, overlap rules, arithmetic bounds
 allocation-failure behavior and ABI contracts. `tests/performance-contracts.py`
 checks these alongside independent search oracles and compiler option/cache tests.
 
-Allocation goes through arenas: `mem.push(T, &arena)`, `mem.push_array(T, &arena, n)`
-and `mem.push_bytes_uninit(&arena, n)`. See [memory patterns](docs/guide/memory-patterns.md).
+Allocation goes through arenas: `mem.push(T, arena)`, `mem.push_array(T, arena, n)`
+and `mem.push_bytes_uninit(arena, n)`. See [memory patterns](docs/guide/memory-patterns.md).

@@ -1,0 +1,128 @@
+// Intrusive chained hash tables. The table is the caller's slot slice, []*T,
+// and nodes chain through their own fields:
+//
+//   key        []const u8, compared byte for byte
+//   hash       u64, set before insert (usually hash_bytes(seed, key))
+//   hash_next  *T, the chain link
+//
+// The slot count is fixed when the table is made; pick it for the expected
+// size. Nothing here allocates except slots. Keys of other types use the same
+// fields with a hand-written comparison loop over the chain.
+
+use "std/mem" mem
+
+// Returns count empty slots from arena. count must be nonzero.
+pub fn slots($T: type, arena: *mem.Arena, count: usize) []*T {
+  if count == 0 {
+    #panic("hash table needs at least one slot")
+  }
+  return mem.push_array(*T, arena, count)
+}
+
+fn slot_of(slots: []*$T, hash: u64) usize {
+  return #cast(usize, hash % #cast(u64, #len(slots)))
+}
+
+// Finds the node with this hash and key, or returns nil_node.
+pub fn find(slots: []*$T, hash: u64, key: []const u8, nil_node: *const T) *T {
+  node := slots[slot_of(slots, hash)]
+  for node != nil {
+    if node.hash == hash && bytes_equal(node.key, key) {
+      return node
+    }
+    node = node.hash_next
+  }
+  return #cast(*T, nil_node)
+}
+
+// Adds node at the front of its chain. node.hash and node.key must be set.
+// Does not check for an existing node with the same key.
+pub fn insert(slots: []*$T, node: *T) {
+  slot := slot_of(slots, node.hash)
+  node.hash_next = slots[slot]
+  slots[slot] = node
+}
+
+// Unlinks node from its chain. Returns false when node is not in the table.
+pub fn remove(slots: []*$T, node: *T) bool {
+  link := &slots[slot_of(slots, node.hash)]
+  for link.* != nil {
+    if link.* == node {
+      link.* = node.hash_next
+      node.hash_next = nil
+      return true
+    }
+    link = &link.*.hash_next
+  }
+  return false
+}
+
+fn bytes_equal(left: []const u8, right: []const u8) bool {
+  if #len(left) != #len(right) {
+    return false
+  }
+  for i in 0..#len(left) {
+    if left[i] != right[i] {
+      return false
+    }
+  }
+  return true
+}
+
+fn rotate(value: u64, bits: u64) u64 {
+  return #wrap(value << bits) | (value >> (64 - bits))
+}
+
+struct Sip { v0: u64, v1: u64, v2: u64, v3: u64 }
+
+fn sip_round(s: *Sip) {
+  s.v0 = #wrap(s.v0 + s.v1)
+  s.v1 = rotate(s.v1, 13) ^ s.v0
+  s.v0 = rotate(s.v0, 32)
+  s.v2 = #wrap(s.v2 + s.v3)
+  s.v3 = rotate(s.v3, 16) ^ s.v2
+  s.v0 = #wrap(s.v0 + s.v3)
+  s.v3 = rotate(s.v3, 21) ^ s.v0
+  s.v2 = #wrap(s.v2 + s.v1)
+  s.v1 = rotate(s.v1, 17) ^ s.v2
+  s.v2 = rotate(s.v2, 32)
+}
+
+// SipHash-1-3 keyed by seed. With a seed the input cannot predict, such as one
+// from std/crypto/random, an attacker cannot build keys that collide on purpose.
+// The same seed and key always give the same hash.
+pub fn hash_bytes(seed: u64, key: []const u8) u64 {
+  k0 := seed
+  k1 := seed ^ 0x9e3779b97f4a7c15
+  s := Sip{
+    v0: k0 ^ 0x736f6d6570736575,
+    v1: k1 ^ 0x646f72616e646f6d,
+    v2: k0 ^ 0x6c7967656e657261,
+    v3: k1 ^ 0x7465646279746573,
+  }
+  length := #len(key)
+  full := length - length % 8
+  i: usize = 0
+  for i < full {
+    word: u64 = 0
+    for b in 0..8 {
+      word |= #cast(u64, key[i + b]) << #cast(u64, 8 * b)
+    }
+    s.v3 ^= word
+    sip_round(&s)
+    s.v0 ^= word
+    i += 8
+  }
+  last: u64 = #cast(u64, length & 0xff) << 56
+  for b in 0..length - full {
+    last |= #cast(u64, key[full + b]) << #cast(u64, 8 * b)
+  }
+  s.v3 ^= last
+  sip_round(&s)
+  s.v0 ^= last
+  s.v2 ^= 0xff
+  sip_round(&s)
+  sip_round(&s)
+  sip_round(&s)
+  return s.v0 ^ s.v1 ^ s.v2 ^ s.v3
+}

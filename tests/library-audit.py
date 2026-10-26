@@ -13,8 +13,9 @@ use "std/mem" memory
 use "std/fmt" fmt
 use "std/bytes" bytes
 fn expect_decimal(value:f64, precision:usize, expected:[]const u8) {
-  output:[128]u8=[]
-  if !bytes.equal(fmt.f64_decimal(output[..],value,precision),expected) { #panic("decimal rounding") }
+  output:[128 + memory.ArenaBufferOverhead]u8=[]
+  scratch:=memory.arena_from_buffer(output[..])
+  if !bytes.equal(fmt.f64_decimal(scratch,value,precision),expected) { #panic("decimal rounding") }
 }
 fn main() {
   backing:[16384]u8=[]
@@ -22,22 +23,24 @@ fn main() {
   arena.poison_on_rewind=true
   for i in 0..32 {
     control:[1]u8=[]
-    control[0]=#cast(u8) i
-    encoded:[16]u8=[]
-    written:=json.write_string(encoded[..],control[..])
+    control[0]=#cast(u8, i)
+    encoded:[16 + memory.ArenaBufferOverhead]u8=[]
+    encoded_arena:=memory.arena_from_buffer(encoded[..])
+    written:=json.write_string(encoded_arena,control[..])
     if #len(written)==0 { #panic("control escape") }
-    parsed:=json.parse(&arena,written)
+    parsed:=json.parse(arena,written)
     if !parsed.ok || #len(parsed.root.text)!=1 || parsed.root.text[0]!=control[0] { #panic("control roundtrip") }
-    roundtrip:[16]u8=[]
-    if !bytes.equal(json.encode(roundtrip[..],parsed.root),written) { #panic("node encode") }
+    roundtrip:[16 + memory.ArenaBufferOverhead]u8=[]
+    roundtrip_arena:=memory.arena_from_buffer(roundtrip[..])
+    if !bytes.equal(json.encode(roundtrip_arena,parsed.root),written) { #panic("node encode") }
   }
-  memory.arena_reset(&arena)
+  memory.arena_reset(arena)
   source:[6002]u8=[]
   source[0]='"'
   for i in 0..1000 { _=memory.copy(source[1+i*6..],"\\u0061") }
   source[6001]='"'
-  parsed:=json.parse(&arena,source[..])
-  if !parsed.ok || #len(parsed.root.text)!=1000 || memory.arena_used(&arena)!=#sizeof(json.Value)+1000 { #panic("retained string size") }
+  parsed:=json.parse(arena,source[..])
+  if !parsed.ok || #len(parsed.root.text)!=1000 || memory.arena_used(arena)!=#sizeof(json.Value)+1000 { #panic("retained string size") }
   for byte in parsed.root.text { if byte!='a' { #panic("rewind changed retained bytes") } }
   expect_decimal(4503599627370497.0,0,"4503599627370497")
   expect_decimal(9007199254740991.0,0,"9007199254740991")
@@ -50,55 +53,67 @@ fn main() {
 ''',
     'containers': r'''
 use "std/mem" mem
-use "std/container/string_map" maps
+use "std/container/hash" hash
+use "std/container/list" list
 use "std/container/slot_map" slots
 use "std/fmt" fmt
+struct Entry {
+  generation: u32,
+  key: []const u8,
+  hash: u64,
+  hash_next: *Entry,
+  free_next: *Entry,
+  value: usize,
+}
+const nil_entry: Entry = Entry{}
 fn main() {
   owned := mem.arena_create(1000000)
-  map := maps.Map{}
-  live: [128]bool = []
-  key: [32]u8 = []
+  table := hash.slots(Entry, owned, 8)
+  entries := mem.push_array(Entry, owned, 128)
+  first_free: *Entry
+  for i in 0..128 {
+    list.free_push(&first_free, &entries[127 - i])
+  }
+  live: [128]*Entry = []
+  handles: [128]slots.Handle = []
+  scratch := mem.arena_create(0)
   seed: u64 = 7
   for step in 0..4000 {
     seed = (seed * 1664525 + 1013904223) % 4294967296
-    index := #cast(usize) (seed % 128)
-    text := fmt.u64_decimal(key[..], #cast(u64) index)
+    index := #cast(usize, (seed % 128))
+    text := fmt.u64_decimal(scratch, #cast(u64, index))
     if (seed / 128) % 2 == 0 {
-      if maps.put(&map, &owned, text, index) != maps.ErrorKind.None { #panic("put") }
-      live[index] = true
-    } else {
-      if maps.remove(&map, text) != live[index] { #panic("remove") }
-      live[index] = false
+      if live[index] == nil {
+        entry := list.free_pop(&first_free, &nil_entry)
+        if entry == &nil_entry { #panic("free list exhausted") }
+        slots.reset(entry)
+        entry.key = fmt.u64_decimal(owned, #cast(u64, index))
+        entry.value = index
+        entry.hash = hash.hash_bytes(1, entry.key)
+        hash.insert(table, entry)
+        live[index] = entry
+        handles[index] = slots.handle_of(entries, entry)
+      }
+    } else if live[index] != nil {
+      entry := live[index]
+      if !hash.remove(table, entry) { #panic("remove") }
+      slots.retire(entry)
+      list.free_push(&first_free, entry)
+      if slots.resolve(entries, handles[index], &nil_entry) != &nil_entry { #panic("stale handle") }
+      live[index] = nil
     }
     if step % 13 == 0 {
-      count: usize = 0
       for i in 0..128 {
-        found := maps.get(&map, fmt.u64_decimal(key[..], #cast(u64) i))
-        if found.found != live[i] { #panic("collision chain") }
-        if live[i] {
-          count += 1
-          if found.value != i { #panic("value") }
+        name := fmt.u64_decimal(scratch, #cast(u64, i))
+        found := hash.find(table, hash.hash_bytes(1, name), name, &nil_entry)
+        if (found != &nil_entry) != (live[i] != nil) { #panic("collision chain") }
+        if live[i] != nil {
+          if found.value != i || slots.resolve(entries, handles[i], &nil_entry) != found { #panic("value") }
         }
       }
-      if count != map.length { #panic("length") }
     }
   }
-  data: [4]u8 = []
-  generations: [4]u32 = [0, 4294967294, 0, 0]
-  occupied: [1]u64 = []
-  state := slots.init(data[..], generations[..], occupied[..], 1)
-  handles: [3]slots.Handle = []
-  byte: [1]u8 = [42]
-  for i in 0..3 { handles[i] = slots.insert(&state, byte[..]) }
-  if handles[0].index != 0 || handles[1].index != 2 || handles[2].index != 3 { #panic("retired slot") }
-  if slots.insert(&state, byte[..]).generation != 0 { #panic("full") }
-  if !slots.remove(&state, handles[2]) || !slots.remove(&state, handles[0]) { #panic("remove slot") }
-  fresh := slots.insert(&state, byte[..])
-  if fresh.index != 0 || slots.get(&state, handles[0]).ok { #panic("reuse") }
-  if slots.insert(&state, byte[..]).index != 3 { #panic("second reuse") }
-  state = slots.init(data[..], generations[..], occupied[..], 1)
-  if slots.get(&state, fresh).ok || slots.insert(&state, byte[..]).index != 0 { #panic("reinit") }
-  mem.arena_release(&owned)
+  mem.arena_release(owned)
 }
 ''',
 }

@@ -47,7 +47,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-runtime-support-') as directory:
     # A C callback may initiate a panic without a message; cleanup still runs.
     module=work/'module'
     module.mkdir()
-    (module/'main.dyn').write_text('use "std/io"\nextern fn fail "null_panic"()\nfn main() { defer { _ = io.println(io.stdout(), "cleanup") } fail() }\n')
+    (module/'main.dyn').write_text('use "std/io"\nextern fn fail "null_panic"()\nfn main() { defer { _ = io.println(io.stdout(), "cleanup") }\nfail() }\n')
     (work/'callback.c').write_text('#include <stdint.h>\nextern void dyn_panic(const void *,uint64_t); void null_panic(void) { dyn_panic(0,0); }\n')
     subprocess.run([*shlex.split(os.environ.get('CC','cc')), '-c', str(work/'callback.c'),
                     '-o',str(work/'callback.o')],check=True)
@@ -109,7 +109,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-runtime-support-') as directory:
                               capture_output=True,text=True,timeout=30)
         assert result.returncode != 0 and 'needs TLS outside the supported x86-64' in result.stderr, (flags,result.returncode,result.stderr)
     # Large sparse heap records must not inherit the stack aggregate bound.
-    (module/'main.dyn').write_text('use "std/mem"\nstruct Sparse { first: u8, pad: [2147483648]u8, last: u8 }\nfn main() { arena := mem.arena_create(#sizeof(Sparse) * 2) defer mem.arena_release(&arena) p := #cast(*Sparse) mem.arena_push_uninit(&arena, #sizeof(Sparse) * 2, #alignof(Sparse)) p.first = 17 p.last = 29 view := p[..2] if #cast(usize) &view[1] - #cast(usize) p != #sizeof(Sparse) { #panic("large stride") } if p.first != 17 || p.last != 29 { #panic("large offset") } if #cast(usize) &p.last - #cast(usize) p != 2147483649 { #panic("offset sign") } }\n')
+    (module/'main.dyn').write_text('use "std/mem"\nstruct Sparse { first: u8, pad: [2147483648]u8, last: u8 }\nfn main() { arena := mem.arena_create(#sizeof(Sparse) * 2)\ndefer mem.arena_release(arena)\np := #cast(*Sparse, mem.arena_push_uninit(arena, #sizeof(Sparse) * 2, #alignof(Sparse)))\np.first = 17\np.last = 29\nview := p[..2]\nif #cast(usize, &view[1]) - #cast(usize, p) != #sizeof(Sparse) { #panic("large stride") }\nif p.first != 17 || p.last != 29 { #panic("large offset") }\nif #cast(usize, &p.last) - #cast(usize, p) != 2147483649 { #panic("offset sign") } }\n')
     for flags in ([],['--release']):
         subprocess.run([str(compiler),'build',str(module),'--backend','native',
                         '--no-cache','--output',str(work/'sparse'),*flags],check=True)

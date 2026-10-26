@@ -1,0 +1,17 @@
+--- /home/mdray/17robots/dyn/compiler/build/final-gap-20261025/utf8/ssa.before.inc	2026-10-25 14:02:06.423054552 -0400
++++ /home/mdray/17robots/dyn/compiler/src/backend/ssa.inc	2026-10-25 14:02:06.431277166 -0400
+@@ -2960,6 +2960,14 @@
+         /* Values already normalized to a range the outer extension keeps. */
+         if (inner->op == SO_EXT && ((inner->aux2 == v->aux2 && inner->aux <= v->aux) || (!inner->aux2 && v->aux2 && inner->aux < v->aux)))
+           replacement = v->a;
++        else if (inner->op == SO_AND && v->aux >= 1 && v->aux <= 64) {
++          uint64_t mask;
++          unsigned kept = (unsigned)v->aux - (v->aux2 != 0);
++          /* An AND mask bounds every result bit. Signed extension is an
++             identity only when the sign bit is also known clear. */
++          if ((ssa_is_const(s, inner->a, &mask) || ssa_is_const(s, inner->b, &mask)) &&
++              (kept == 64 || mask <= ((UINT64_C(1) << kept) - 1))) replacement = v->a;
++        }
+         else if ((inner->op == SO_CMP || inner->op == SO_FCMP) && v->aux >= 1) replacement = v->a;
+         else if (inner->op == SO_LOAD && !(inner->aux2 >> 9 & 1) && v->aux != 1) {
+           int64_t bits = inner->aux2 & 0xff, sign = inner->aux2 >> 8 & 1;

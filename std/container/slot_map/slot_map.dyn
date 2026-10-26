@@ -1,179 +1,57 @@
-use "std/mem" mem
+// Generation handles into the caller's slot array. Each slot struct carries
+// `generation: u32`; an odd generation means the slot is live, an even one
+// means it is free. A handle remembers the index and generation it was made
+// with, so it stops resolving once its slot is retired, even after reuse.
+//
+//   struct Enemy { generation: u32, free_next: *Enemy, hp: i32 }
+//   enemies: []Enemy
+//
+// Combine with list.free_push/free_pop for slot reuse. Handles are process
+// local; they are not stable IDs to serialize or a security capability.
 
-// Initialize generation backing to zero once. Reinitialization advances generations;
-// never clear/reuse that backing while stale handles exist. Handles belong to one
-// backing identity. Generation UINT32_MAX retires a slot permanently, avoiding ABA.
-// Process-local token, not a serialized ID or a security capability. Do not forge fields.
-// Identity is the generation backing address; keep that backing alive and never zero it again.
-pub struct Handle { index: usize, generation: u32, identity: *const u32 }
-// Successful data borrows the live slot until remove or init. Copy the bytes to retain them.
-pub struct Value { data: []u8, ok: bool }
+pub struct Handle { index: u32, generation: u32 }
 
-pub struct SlotMap {
-  data: []u8,
-  generations: []u32,
-  occupied: []u64,
-  slot_size: usize,
-  length: usize,
-  next_free: usize,
+// Prepares a fresh or reused slot: zeroes every field except generation and
+// marks the slot live.
+pub fn reset(node: *$T) {
+  generation := node.generation
+  bytes := (#cast(*u8, node))[..#sizeof(T)]
+  for i in 0..#len(bytes) {
+    bytes[i] = 0
+  }
+  if generation % 2 == 0 {
+    generation = #wrap(generation + 1)
+  }
+  node.generation = generation
 }
 
-fn occupied(state: *const SlotMap, index: usize) bool {
-  return (state.occupied[index / 64] & (#cast(u64) 1 << (index % 64))) != 0
-}
-
-fn set_occupied(state: *SlotMap, index: usize, value: bool) {
-  mask := #cast(u64) 1 << (index % 64)
-  if value {
-    state.occupied[index / 64] = state.occupied[index / 64] | mask
-  }
-  else {
-    state.occupied[index / 64] = state.occupied[index / 64] & ~mask
-  }
-}
-
-// Borrows three disjoint backing regions. Initialize generations to zero only on first use.
-// Reinitialization expires all values/handles; existing generations must be preserved.
-// Do not mutate bookkeeping or independently mutate copies. Thread-confined.
-pub fn init(data: []u8, generations: []u32, occupied_words: []u64, slot_size: usize) SlotMap {
-  if slot_size == 0 {
-    #panic("slot map requires non-zero slot size")
-  }
-  slot_count := #len(data) / slot_size
-  if slot_count == 0 || #len(generations) < slot_count || #len(occupied_words) < (slot_count - 1) / 64 + 1 {
-    #panic("slot map backing is too small")
-  }
-  i: usize = 0
-  for i < slot_count {
-    if generations[i] < 4294967295 {
-      generations[i] += 1
-    }
-    i += 1
-  }
-  i = 0
-  for i < #len(occupied_words) {
-    occupied_words[i] = 0
-    i += 1
-  }
-  return SlotMap{
-    data: data[..slot_count * slot_size],
-    generations: generations[..slot_count],
-    occupied: occupied_words,
-    slot_size: slot_size,
+// Marks a live slot free. Outstanding handles to it stop resolving.
+pub fn retire(node: *$T) {
+  if node.generation % 2 == 1 {
+    node.generation = #wrap(node.generation + 1)
   }
 }
 
-pub fn capacity(state: *const SlotMap) usize {
-  return #len(state.generations)
-}
-pub fn length(state: *const SlotMap) usize {
-  return state.length
+pub fn is_live(node: *const $T) bool {
+  return node.generation % 2 == 1
 }
 
-// Copies source bytes; overlap with data is supported. Wrong size/full returns Handle{}.
-// No allocation. A vacancy cursor skips the occupied prefix during sequential filling.
-// Lowest-index reusable slots are selected; lookup and removal are constant-time apart from copying.
-pub fn insert(state: *SlotMap, source: []const u8) Handle {
-  if #len(source) != state.slot_size {
-    return Handle{}
+// The handle for node, which must be an element of slots.
+pub fn handle_of(slots: []$T, node: *const T) Handle {
+  base := #cast(usize, &slots[0])
+  address := #cast(usize, node)
+  if address < base || (address - base) % #sizeof(T) != 0 || (address - base) / #sizeof(T) >= #len(slots) {
+    #panic("handle_of: node is not an element of slots")
   }
-  index := state.next_free
-  for index < #len(state.generations) && (occupied(state, index) || state.generations[index] == 4294967295) {
-    index += 1
-  }
-  if index == #len(state.generations) {
-    state.next_free = index
-    return Handle{}
-  }
-  _ = mem.move(state.data[index * state.slot_size..(index + 1) * state.slot_size], source)
-  set_occupied(state, index, true)
-  state.length += 1
-  state.next_free = index + 1
-  return Handle{ index: index, generation: state.generations[index], identity: &state.generations[0] }
+  return Handle{ index: #cast(u32, (address - base) / #sizeof(T)), generation: node.generation }
 }
 
-// Rejects stale, empty, out-of-range and foreign-backing handles. Does not dereference handle.identity.
-// Returned bytes borrow this slot; successful lookup does not extend their lifetime.
-pub fn get(state: *SlotMap, handle: Handle) Value {
-  if #len(state.generations) == 0 {
-    return Value{}
+// The live slot the handle was made for, or nil_node when the handle is stale,
+// zero, or out of range.
+pub fn resolve(slots: []$T, handle: Handle, nil_node: *const T) *T {
+  index := #cast(usize, handle.index)
+  if index >= #len(slots) || handle.generation % 2 == 0 || slots[index].generation != handle.generation {
+    return #cast(*T, nil_node)
   }
-  if handle.identity != &state.generations[0] || handle.generation == 0 || handle.index >= #len(state.generations) ||
-    !occupied(state, handle.index) || state.generations[handle.index] != handle.generation {
-    return Value{}
-  }
-  start := handle.index * state.slot_size
-  return Value{ data: state.data[start..start + state.slot_size], ok: true }
-}
-
-// Invalid handle returns false without changes. Successful removal zeros data and expires views.
-// Generation saturation permanently retires the slot; generations never wrap.
-pub fn remove(state: *SlotMap, handle: Handle) bool {
-  value := get(state, handle)
-  if !value.ok {
-    return false
-  }
-  i: usize = 0
-  for i < #len(value.data) {
-    value.data[i] = 0
-    i += 1
-  }
-  set_occupied(state, handle.index, false)
-  state.generations[handle.index] += 1
-  if state.generations[handle.index] != 4294967295 && handle.index < state.next_free {
-    state.next_free = handle.index
-  }
-  state.length -= 1
-  return true
-}
-
-
-pub enum CopyStatus { Complete, Missing, Capacity }
-
-// Copies one live slot into caller storage; result no longer borrows the slot when storage is disjoint.
-// Missing/Capacity leave destination unchanged. Extra destination bytes are untouched.
-// Overlap with data is supported, but overlapping output still shares the backing lifetime.
-// Destination must not overlap generation/occupancy metadata. No allocation.
-pub fn copy_into(state: *SlotMap, handle: Handle, destination: []u8) CopyStatus {
-  value := get(state, handle)
-  if !value.ok {
-    return CopyStatus.Missing
-  }
-  if #len(destination) < #len(value.data) {
-    return CopyStatus.Capacity
-  }
-  _ = mem.move(destination, value.data)
-  return CopyStatus.Complete
-}
-
-pub struct Snapshot { capacity: usize, live: usize, available: usize, retired: usize }
-
-// Allocation-free value snapshot, safe to retain after backing expires. O(capacity) scan.
-// No synchronization: call only while this thread exclusively accesses the map.
-pub fn snapshot(state: *const SlotMap) Snapshot {
-  retired: usize = 0
-  for generation in state.generations {
-    if generation == 4294967295 {
-      retired += 1
-    }
-  }
-  total := capacity(state)
-  return Snapshot{ capacity: total, live: state.length,
-    available: total - state.length - retired, retired: retired }
-}
-
-
-// Validated lookup represents absence and a live view as distinct alternatives.
-// Present still borrows slot storage until removal/reinitialization.
-pub enum Lookup { Missing, Present: []u8 }
-// Ownership: Present borrows slot storage; it does not copy the value.
-// Invalidation: removal, reinitialization, or destruction of backing storage.
-// Allocation: none; stale handles return Missing.
-// Thread safety: synchronize map access and consume views before mutation.
-pub fn lookup(state: *SlotMap, handle: Handle) Lookup {
-  value := get(state, handle)
-  if !value.ok {
-    return Lookup.Missing
-  }
-  return Lookup.Present(value.data)
+  return &slots[index]
 }

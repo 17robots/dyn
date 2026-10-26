@@ -1,0 +1,14 @@
+{
+  "records": 60000,
+  "nodes_per_record": 25,
+  "modes": [
+    0,
+    1
+  ],
+  "libraries": [
+    "gcc-checked",
+    "dyn"
+  ],
+  "normalized_sha256": "fbfbec133aec898a13c602b2f553be93b1449a8a2cbde0d08358fcb2c6d68985",
+  "input_sha256": "55632bc536a41285c2126eb1a0d684fc6778c303b95bdf380e9c3f8b509abfca"
+}

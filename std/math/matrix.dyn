@@ -1,0 +1,396 @@
+// Column-major f32 matrices: cN is column N, acting on column vectors.
+// mul(a,b) applies b first. Right-handed rotations, angles in radians.
+// Mat3 translate/scale/rotate are 2D homogeneous transforms; quaternion
+// conversion produces a 3D linear Mat3. Mat4 transforms are 3D homogeneous.
+// Cameras look along -Z with +Y up; projections map near/far to NDC -1/+1
+// (OpenGL depth), with perspective w = -view.z. No perspective divide here.
+// Zero structs are valid: zero matrices are singular, zero Quat is not a
+// rotation. Quat is Hamilton (x,y,z vector part, w scalar); a*b applies b first.
+// Fallible functions return {value,ok}; failure always has a zero value.
+// Constructors reject nonfinite inputs/results, zero rotation axes, coincident
+// eye/target, parallel up/view, invalid frusta. Perspective requires
+// 0 < fov_y < pi, aspect > 0, 0 < near < far; orthographic requires
+// left < right, bottom < top, 0 <= near < far. Scale may be zero/singular.
+// Finite constructor coefficients round to f32; extreme parameters may
+// underflow coefficients and produce singular matrices even when ok is true.
+// Quaternion normalization accepts every finite nonzero quaternion, using
+// f64 norm arithmetic to avoid f32 overflow/underflow. Rotation vectors have
+// axis direction and angle magnitude; zero is identity. Conversion back uses
+// the shortest angle [0,pi], choosing the quaternion sign with w >= 0.
+// Inverses use f64 Gauss-Jordan elimination with largest-absolute partial
+// pivoting. Nonfinite input, an exactly zero computed pivot, or a result
+// outside finite f32 fails. No epsilon cutoff, condition-number guarantee,
+// exact singularity oracle, or global error bound is implied; ill-conditioned
+// inputs can return inaccurate finite answers. Camera basis cross products
+// use f32: a rounded zero cross product is treated as degenerate; no exact
+// collinearity test or guarantee for nearly parallel directions is implied.
+// Other matrix arithmetic is ordinary f32, with IEEE nonfinite propagation
+// and possible overflow.
+
+pub struct Mat3 { c0: Vec3, c1: Vec3, c2: Vec3 }
+pub struct Mat4 { c0: Vec4, c1: Vec4, c2: Vec4, c3: Vec4 }
+pub struct Quat { x: f32, y: f32, z: f32, w: f32 }
+pub struct Mat3Result { value: Mat3, ok: bool }
+pub struct Mat4Result { value: Mat4, ok: bool }
+pub struct QuatResult { value: Quat, ok: bool }
+pub struct RotationVectorResult { value: Vec3, ok: bool }
+
+pub fn mat3_identity() Mat3 {
+  return Mat3{ c0: Vec3{ x: 1.0 }, c1: Vec3{ y: 1.0 }, c2: Vec3{ z: 1.0 } }
+}
+pub fn mat3_mul_vec3(a: Mat3, v: Vec3) Vec3 {
+  return vec3_add(vec3_add(vec3_scale(a.c0, v.x), vec3_scale(a.c1, v.y)), vec3_scale(a.c2, v.z))
+}
+pub fn mat3_mul(a, b: Mat3) Mat3 {
+  return Mat3{ c0: mat3_mul_vec3(a, b.c0), c1: mat3_mul_vec3(a, b.c1), c2: mat3_mul_vec3(a, b.c2) }
+}
+pub fn mat3_transpose(a: Mat3) Mat3 {
+  return Mat3{ c0: Vec3{ x: a.c0.x, y: a.c1.x, z: a.c2.x }, c1: Vec3{ x: a.c0.y, y: a.c1.y, z: a.c2.y }, c2: Vec3{ x: a.c0.z, y: a.c1.z, z: a.c2.z } }
+}
+fn mat3_finite(a: Mat3) bool {
+  return is_finite(a.c0.x) && is_finite(a.c0.y) && is_finite(a.c0.z) && is_finite(a.c1.x) && is_finite(a.c1.y) && is_finite(a.c1.z) && is_finite(a.c2.x) && is_finite(a.c2.y) && is_finite(a.c2.z)
+}
+pub fn mat3_inverse(a: Mat3) Mat3Result {
+  if !mat3_finite(a) {
+    return .{}
+  }
+  t: [18]f64 = []
+  t[0] = #cast(f64, a.c0.x)
+  t[1] = #cast(f64, a.c1.x)
+  t[2] = #cast(f64, a.c2.x)
+  t[3] = 1.0
+  t[6] = #cast(f64, a.c0.y)
+  t[7] = #cast(f64, a.c1.y)
+  t[8] = #cast(f64, a.c2.y)
+  t[10] = 1.0
+  t[12] = #cast(f64, a.c0.z)
+  t[13] = #cast(f64, a.c1.z)
+  t[14] = #cast(f64, a.c2.z)
+  t[17] = 1.0
+  k: i32 = 0
+  for k < 3 {
+    pivot := k
+    r := k + 1
+    for r < 3 {
+      if abs(t[r*6+k]) > abs(t[pivot*6+k]) {
+        pivot = r
+      }
+      r += 1
+    }
+    if t[pivot*6+k] == 0.0 {
+      return .{}
+    }
+    j: i32 = 0
+    for j < 6 {
+      swap := t[k*6+j]
+      t[k*6+j] = t[pivot*6+j]
+      t[pivot*6+j] = swap
+      j += 1
+    }
+    divisor := t[k*6+k]
+    j = 0
+    for j < 6 {
+      t[k*6+j] /= divisor
+      j += 1
+    }
+    r = 0
+    for r < 3 {
+      if r != k {
+        factor := t[r*6+k]
+        j = 0
+        for j < 6 {
+          t[r*6+j] -= factor*t[k*6+j]
+          j += 1
+        }
+      }
+      r += 1
+    }
+    k += 1
+  }
+  value := Mat3{ c0: Vec3{ x: #cast(f32, t[3]), y: #cast(f32, t[9]), z: #cast(f32, t[15]) }, c1: Vec3{ x: #cast(f32, t[4]), y: #cast(f32, t[10]), z: #cast(f32, t[16]) }, c2: Vec3{ x: #cast(f32, t[5]), y: #cast(f32, t[11]), z: #cast(f32, t[17]) } }
+  if !mat3_finite(value) {
+    return .{}
+  }
+  return Mat3Result{ value: value, ok: true }
+}
+
+pub fn mat4_identity() Mat4 {
+  return Mat4{ c0: Vec4{ x: 1.0 }, c1: Vec4{ y: 1.0 }, c2: Vec4{ z: 1.0 }, c3: Vec4{ w: 1.0 } }
+}
+pub fn mat4_mul_vec4(a: Mat4, v: Vec4) Vec4 {
+  return vec4_add(vec4_add(vec4_add(vec4_scale(a.c0, v.x), vec4_scale(a.c1, v.y)), vec4_scale(a.c2, v.z)), vec4_scale(a.c3, v.w))
+}
+pub fn mat4_mul(a, b: Mat4) Mat4 {
+  return Mat4{ c0: mat4_mul_vec4(a, b.c0), c1: mat4_mul_vec4(a, b.c1), c2: mat4_mul_vec4(a, b.c2), c3: mat4_mul_vec4(a, b.c3) }
+}
+pub fn mat4_transpose(a: Mat4) Mat4 {
+  return Mat4{ c0: Vec4{ x: a.c0.x, y: a.c1.x, z: a.c2.x, w: a.c3.x }, c1: Vec4{ x: a.c0.y, y: a.c1.y, z: a.c2.y, w: a.c3.y }, c2: Vec4{ x: a.c0.z, y: a.c1.z, z: a.c2.z, w: a.c3.z }, c3: Vec4{ x: a.c0.w, y: a.c1.w, z: a.c2.w, w: a.c3.w } }
+}
+fn mat4_finite(a: Mat4) bool {
+  return is_finite(a.c0.x) && is_finite(a.c0.y) && is_finite(a.c0.z) && is_finite(a.c0.w) && is_finite(a.c1.x) && is_finite(a.c1.y) && is_finite(a.c1.z) && is_finite(a.c1.w) && is_finite(a.c2.x) && is_finite(a.c2.y) && is_finite(a.c2.z) && is_finite(a.c2.w) && is_finite(a.c3.x) && is_finite(a.c3.y) && is_finite(a.c3.z) && is_finite(a.c3.w)
+}
+pub fn mat4_inverse(a: Mat4) Mat4Result {
+  if !mat4_finite(a) {
+    return .{}
+  }
+  t: [32]f64 = []
+  t[0] = #cast(f64, a.c0.x)
+  t[1] = #cast(f64, a.c1.x)
+  t[2] = #cast(f64, a.c2.x)
+  t[3] = #cast(f64, a.c3.x)
+  t[4] = 1.0
+  t[8] = #cast(f64, a.c0.y)
+  t[9] = #cast(f64, a.c1.y)
+  t[10] = #cast(f64, a.c2.y)
+  t[11] = #cast(f64, a.c3.y)
+  t[13] = 1.0
+  t[16] = #cast(f64, a.c0.z)
+  t[17] = #cast(f64, a.c1.z)
+  t[18] = #cast(f64, a.c2.z)
+  t[19] = #cast(f64, a.c3.z)
+  t[22] = 1.0
+  t[24] = #cast(f64, a.c0.w)
+  t[25] = #cast(f64, a.c1.w)
+  t[26] = #cast(f64, a.c2.w)
+  t[27] = #cast(f64, a.c3.w)
+  t[31] = 1.0
+  k: i32 = 0
+  for k < 4 {
+    pivot := k
+    r := k + 1
+    for r < 4 {
+      if abs(t[r*8+k]) > abs(t[pivot*8+k]) {
+        pivot = r
+      }
+      r += 1
+    }
+    if t[pivot*8+k] == 0.0 {
+      return .{}
+    }
+    j: i32 = 0
+    for j < 8 {
+      swap := t[k*8+j]
+      t[k*8+j] = t[pivot*8+j]
+      t[pivot*8+j] = swap
+      j += 1
+    }
+    divisor := t[k*8+k]
+    j = 0
+    for j < 8 {
+      t[k*8+j] /= divisor
+      j += 1
+    }
+    r = 0
+    for r < 4 {
+      if r != k {
+        factor := t[r*8+k]
+        j = 0
+        for j < 8 {
+          t[r*8+j] -= factor*t[k*8+j]
+          j += 1
+        }
+      }
+      r += 1
+    }
+    k += 1
+  }
+  value := Mat4{ c0: Vec4{ x: #cast(f32, t[4]), y: #cast(f32, t[12]), z: #cast(f32, t[20]), w: #cast(f32, t[28]) }, c1: Vec4{ x: #cast(f32, t[5]), y: #cast(f32, t[13]), z: #cast(f32, t[21]), w: #cast(f32, t[29]) }, c2: Vec4{ x: #cast(f32, t[6]), y: #cast(f32, t[14]), z: #cast(f32, t[22]), w: #cast(f32, t[30]) }, c3: Vec4{ x: #cast(f32, t[7]), y: #cast(f32, t[15]), z: #cast(f32, t[23]), w: #cast(f32, t[31]) } }
+  if !mat4_finite(value) {
+    return .{}
+  }
+  return Mat4Result{ value: value, ok: true }
+}
+
+pub fn mat3_translate(v: Vec2) Mat3Result {
+  value := mat3_identity()
+  value.c2.x = v.x
+  value.c2.y = v.y
+  if !mat3_finite(value) {
+    return .{}
+  }
+  return Mat3Result{ value: value, ok: true }
+}
+pub fn mat3_scale(v: Vec2) Mat3Result {
+  value := Mat3{ c0: Vec3{ x: v.x }, c1: Vec3{ y: v.y }, c2: Vec3{ z: 1.0 } }
+  if !mat3_finite(value) {
+    return .{}
+  }
+  return Mat3Result{ value: value, ok: true }
+}
+pub fn mat3_rotate(angle: f32) Mat3Result {
+  if !is_finite(angle) {
+    return .{}
+  }
+  c := cos(angle)
+  s := sin(angle)
+  return Mat3Result{ value: Mat3{ c0: Vec3{ x: c, y: s }, c1: Vec3{ x: -s, y: c }, c2: Vec3{ z: 1.0 } }, ok: true }
+}
+pub fn mat4_translate(v: Vec3) Mat4Result {
+  value := mat4_identity()
+  value.c3 = Vec4{ x: v.x, y: v.y, z: v.z, w: 1.0 }
+  if !mat4_finite(value) {
+    return .{}
+  }
+  return Mat4Result{ value: value, ok: true }
+}
+pub fn mat4_scale(v: Vec3) Mat4Result {
+  value := Mat4{ c0: Vec4{ x: v.x }, c1: Vec4{ y: v.y }, c2: Vec4{ z: v.z }, c3: Vec4{ w: 1.0 } }
+  if !mat4_finite(value) {
+    return .{}
+  }
+  return Mat4Result{ value: value, ok: true }
+}
+pub fn quat_identity() Quat {
+  return Quat{ w: 1.0 }
+}
+pub fn quat_mul(a, b: Quat) Quat {
+  return Quat{
+    x: a.w*b.x + a.x*b.w + a.y*b.z - a.z*b.y,
+    y: a.w*b.y - a.x*b.z + a.y*b.w + a.z*b.x,
+    z: a.w*b.z + a.x*b.y - a.y*b.x + a.z*b.w,
+    w: a.w*b.w - a.x*b.x - a.y*b.y - a.z*b.z }
+}
+pub fn quat_normalize(q: Quat) QuatResult {
+  x := #cast(f64, q.x)
+  y := #cast(f64, q.y)
+  z := #cast(f64, q.z)
+  w := #cast(f64, q.w)
+  length := sqrt64(x*x+y*y+z*z+w*w)
+  if length == 0.0 || !is_finite(length) {
+    return .{}
+  }
+  return QuatResult{ value: Quat{ x: #cast(f32, x/length), y: #cast(f32, y/length), z: #cast(f32, z/length), w: #cast(f32, w/length) }, ok: true }
+}
+pub fn quat_from_rotation_vector(v: Vec3) QuatResult {
+  x := #cast(f64, v.x)
+  y := #cast(f64, v.y)
+  z := #cast(f64, v.z)
+  angle := sqrt64(x*x+y*y+z*z)
+  if !is_finite(angle) {
+    return .{}
+  }
+  if angle == 0.0 {
+    return QuatResult{ value: quat_identity(), ok: true }
+  }
+  factor := sin(angle*0.5)/angle
+  return quat_normalize(Quat{ x: #cast(f32, x*factor), y: #cast(f32, y*factor), z: #cast(f32, z*factor), w: #cast(f32, cos(angle*0.5)) })
+}
+pub fn quat_to_rotation_vector(q: Quat) RotationVectorResult {
+  normalized := quat_normalize(q)
+  if !normalized.ok {
+    return .{}
+  }
+  n := normalized.value
+  if n.w < 0.0 {
+    n = Quat{ x: -n.x, y: -n.y, z: -n.z, w: -n.w }
+  }
+  x := #cast(f64, n.x)
+  y := #cast(f64, n.y)
+  z := #cast(f64, n.z)
+  length := sqrt64(x*x+y*y+z*z)
+  if length == 0.0 {
+    return RotationVectorResult{ ok: true }
+  }
+  factor := 2.0*atan2(length, #cast(f64, n.w))/length
+  return RotationVectorResult{ value: Vec3{ x: #cast(f32, x*factor), y: #cast(f32, y*factor), z: #cast(f32, z*factor) }, ok: true }
+}
+pub fn quat_to_mat3(q: Quat) Mat3Result {
+  normalized := quat_normalize(q)
+  if !normalized.ok {
+    return .{}
+  }
+  n := normalized.value
+  x := n.x
+  y := n.y
+  z := n.z
+  w := n.w
+  return Mat3Result{ value: Mat3{
+    c0: Vec3{ x: 1.0-2.0*(y*y+z*z), y: 2.0*(x*y+z*w), z: 2.0*(x*z-y*w) },
+    c1: Vec3{ x: 2.0*(x*y-z*w), y: 1.0-2.0*(x*x+z*z), z: 2.0*(y*z+x*w) },
+    c2: Vec3{ x: 2.0*(x*z+y*w), y: 2.0*(y*z-x*w), z: 1.0-2.0*(x*x+y*y) } }, ok: true }
+}
+// Axis normalization uses f64, including very large or subnormal f32 axes.
+pub fn mat4_rotate(axis: Vec3, angle: f32) Mat4Result {
+  x := #cast(f64, axis.x)
+  y := #cast(f64, axis.y)
+  z := #cast(f64, axis.z)
+  length := sqrt64(x*x+y*y+z*z)
+  if length == 0.0 || !is_finite(length) || !is_finite(angle) {
+    return .{}
+  }
+  factor := sin(#cast(f64, angle)*0.5)/length
+  rotation := quat_to_mat3(Quat{ x: #cast(f32, x*factor), y: #cast(f32, y*factor), z: #cast(f32, z*factor), w: #cast(f32, cos(#cast(f64, angle)*0.5)) })
+  if !rotation.ok {
+    return .{}
+  }
+  m := rotation.value
+  return Mat4Result{ value: Mat4{
+    c0: Vec4{ x: m.c0.x, y: m.c0.y, z: m.c0.z },
+    c1: Vec4{ x: m.c1.x, y: m.c1.y, z: m.c1.z },
+    c2: Vec4{ x: m.c2.x, y: m.c2.y, z: m.c2.z }, c3: Vec4{ w: 1.0 } }, ok: true }
+}
+// Reject a zero or nonfinite direction, normalize with the quaternion norm.
+fn matrix_unit(v: Vec3) RotationVectorResult {
+  q := quat_normalize(Quat{ x: v.x, y: v.y, z: v.z })
+  return RotationVectorResult{ value: Vec3{ x: q.value.x, y: q.value.y, z: q.value.z }, ok: q.ok }
+}
+pub fn mat4_look_at(eye, target, up: Vec3) Mat4Result {
+  // Differences and norm in f64 avoid f32 subtraction overflow/underflow.
+  x := #cast(f64, target.x)-#cast(f64, eye.x)
+  y := #cast(f64, target.y)-#cast(f64, eye.y)
+  z := #cast(f64, target.z)-#cast(f64, eye.z)
+  length := sqrt64(x*x+y*y+z*z)
+  if length == 0.0 || !is_finite(length) {
+    return .{}
+  }
+  forward := RotationVectorResult{ value: Vec3{ x: #cast(f32, x/length), y: #cast(f32, y/length), z: #cast(f32, z/length) }, ok: true }
+  up_unit := matrix_unit(up)
+  if !forward.ok || !up_unit.ok {
+    return .{}
+  }
+  side := matrix_unit(vec3_cross(forward.value, up_unit.value))
+  if !side.ok {
+    return .{}
+  }
+  u := vec3_cross(side.value, forward.value)
+  f := forward.value
+  r := side.value
+  value := Mat4{
+    c0: Vec4{ x: r.x, y: u.x, z: -f.x },
+    c1: Vec4{ x: r.y, y: u.y, z: -f.y },
+    c2: Vec4{ x: r.z, y: u.z, z: -f.z },
+    c3: Vec4{ x: -vec3_dot(r, eye), y: -vec3_dot(u, eye), z: vec3_dot(f, eye), w: 1.0 } }
+  if !mat4_finite(value) {
+    return .{}
+  }
+  return Mat4Result{ value: value, ok: true }
+}
+pub fn mat4_perspective(fov_y, aspect, near, far: f32) Mat4Result {
+  if !is_finite(fov_y) || !is_finite(aspect) || !is_finite(near) || !is_finite(far) || fov_y <= 0.0 || #cast(f64, fov_y) >= pi || aspect <= 0.0 || near <= 0.0 || far <= near {
+    return .{}
+  }
+  n := #cast(f64, near)
+  f := #cast(f64, far)
+  y := 1.0/tan(#cast(f64, fov_y)*0.5)
+  value := Mat4{ c0: Vec4{ x: #cast(f32, y/#cast(f64, aspect)) }, c1: Vec4{ y: #cast(f32, y) }, c2: Vec4{ z: #cast(f32, -(f+n)/(f-n)), w: -1.0 }, c3: Vec4{ z: #cast(f32, -2.0*f*n/(f-n)) } }
+  if !mat4_finite(value) {
+    return .{}
+  }
+  return Mat4Result{ value: value, ok: true }
+}
+pub fn mat4_orthographic(left, right, bottom, top, near, far: f32) Mat4Result {
+  if !is_finite(left) || !is_finite(right) || !is_finite(bottom) || !is_finite(top) || !is_finite(near) || !is_finite(far) || left >= right || bottom >= top || near < 0.0 || far <= near {
+    return .{}
+  }
+  l := #cast(f64, left)
+  r := #cast(f64, right)
+  b := #cast(f64, bottom)
+  t := #cast(f64, top)
+  n := #cast(f64, near)
+  f := #cast(f64, far)
+  value := Mat4{ c0: Vec4{ x: #cast(f32, 2.0/(r-l)) }, c1: Vec4{ y: #cast(f32, 2.0/(t-b)) }, c2: Vec4{ z: #cast(f32, -2.0/(f-n)) }, c3: Vec4{ x: #cast(f32, -(r+l)/(r-l)), y: #cast(f32, -(t+b)/(t-b)), z: #cast(f32, -(f+n)/(f-n)), w: 1.0 } }
+  if !mat4_finite(value) {
+    return .{}
+  }
+  return Mat4Result{ value: value, ok: true }
+}

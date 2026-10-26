@@ -1,0 +1,982 @@
+{
+  "schema": 1,
+  "host": "Linux-7.2.11-arch1-1-x86_64-with-glibc2.44",
+  "cpu_model": "AMD Ryzen 9 9950X 16-Core Processor",
+  "compiler_sha256": "11d472944f13982100f2d1167c00adfeed956493e01dca5afd2c3bd8e9e1d224",
+  "cpu": 2,
+  "client_cpus": [
+    4,
+    5,
+    6,
+    7
+  ],
+  "scope": "warm-filesystem CLI startup+I/O; std/library application ports; local HTTP single CPU, one and four clients; no language-wide ranking",
+  "settings": {
+    "output": "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/applications",
+    "rounds": 9,
+    "http_rounds": 5,
+    "records": 60000,
+    "files": 1024,
+    "check_only": false
+  },
+  "builds": {
+    "dyn": {
+      "command": [
+        "/home/mdray/17robots/dyn/compiler/build/dyn-release",
+        "build",
+        "/home/mdray/17robots/dyn/compiler/tools/app-comparison",
+        "--release",
+        "--opt-level",
+        "3",
+        "--cpu",
+        "generic",
+        "--no-cache",
+        "--quiet",
+        "--output",
+        "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/applications/dyn-app"
+      ],
+      "seconds_observed": 0.04176884097978473,
+      "sha256": "9b39cad3900720a2a6b7fe02e3fd0cfc99da62c644b9dc36716c3102df8d022d",
+      "executable_bytes": 184456
+    },
+    "gcc": {
+      "command": [
+        "/usr/bin/gcc",
+        "-O3",
+        "-march=x86-64",
+        "-std=c11",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "/home/mdray/17robots/dyn/compiler/tools/app-comparison/main.c",
+        "-lyyjson",
+        "-lm",
+        "-o",
+        "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/applications/gcc-app"
+      ],
+      "seconds_observed": 0.10373430995969102,
+      "sha256": "37822eb0769e49a5a003998cf56228a4ae096a6ff6fb12ee0d480631af32e4e2",
+      "executable_bytes": 21544
+    },
+    "clang": {
+      "command": [
+        "/usr/bin/clang",
+        "-O3",
+        "-march=x86-64",
+        "-std=c11",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "/home/mdray/17robots/dyn/compiler/tools/app-comparison/main.c",
+        "-lyyjson",
+        "-lm",
+        "-o",
+        "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/applications/clang-app"
+      ],
+      "seconds_observed": 0.10288319300161675,
+      "sha256": "b9beca22121743946e7c230cfe08e4d6b0aca79830d3911911cd2a73959a56b3",
+      "executable_bytes": 21432
+    },
+    "rust": {
+      "command": [
+        "/home/mdray/.cargo/bin/cargo",
+        "build",
+        "--offline",
+        "--release",
+        "--manifest-path",
+        "/home/mdray/17robots/dyn/compiler/tools/app-comparison/Cargo.toml",
+        "--target-dir",
+        "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/applications/rust-target"
+      ],
+      "seconds_observed": 1.8589611750212498,
+      "sha256": "45c1b923ccbe2c7a8e10d122fe79639069f86c349f33dbb1c87742424fbfd8d2",
+      "executable_bytes": 548112
+    },
+    "go": {
+      "command": [
+        "/home/mdray/.local/share/mise/shims/go",
+        "build",
+        "-o",
+        "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/applications/go-app",
+        "/home/mdray/17robots/dyn/compiler/tools/app-comparison/main.go"
+      ],
+      "seconds_observed": 0.23125872999662533,
+      "sha256": "52dd064611b9ccd94bfbbd5f093e22383e4da7d5de2729f3f4acc30e0d1f3970",
+      "executable_bytes": 9834971
+    }
+  },
+  "correctness": [
+    "dyn: full report/search oracles, escaped schema, byte fixtures, 12 negatives, stdout failure",
+    "gcc: full report/search oracles, escaped schema, byte fixtures, 12 negatives, stdout failure",
+    "clang: full report/search oracles, escaped schema, byte fixtures, 12 negatives, stdout failure",
+    "rust: full report/search oracles, escaped schema, byte fixtures, 12 negatives, stdout failure",
+    "go: full report/search oracles, escaped schema, byte fixtures, 12 negatives, stdout failure",
+    "node: full report/search oracles, escaped schema, byte fixtures, 12 negatives, stdout failure",
+    "python: full report/search oracles, escaped schema, byte fixtures, 12 negatives, stdout failure",
+    "dyn: HTTP health/404/body/schema/malformed/1MiB limit/clean quit",
+    "go: HTTP health/404/body/schema/malformed/1MiB limit/clean quit",
+    "node: HTTP health/404/body/schema/malformed/1MiB limit/clean quit",
+    "python: HTTP health/404/body/schema/malformed/1MiB limit/clean quit"
+  ],
+  "cli": {
+    "report": {
+      "samples": {
+        "dyn": [
+          {
+            "seconds": 0.048545,
+            "rss_mib": 18.0
+          },
+          {
+            "seconds": 0.048722,
+            "rss_mib": 18.0
+          },
+          {
+            "seconds": 0.048317,
+            "rss_mib": 18.0
+          },
+          {
+            "seconds": 0.048485,
+            "rss_mib": 18.0
+          },
+          {
+            "seconds": 0.050842,
+            "rss_mib": 18.0
+          },
+          {
+            "seconds": 0.048113,
+            "rss_mib": 18.0
+          },
+          {
+            "seconds": 0.048389,
+            "rss_mib": 18.0
+          },
+          {
+            "seconds": 0.048414,
+            "rss_mib": 18.0
+          },
+          {
+            "seconds": 0.048148,
+            "rss_mib": 18.0
+          }
+        ],
+        "gcc": [
+          {
+            "seconds": 0.012772,
+            "rss_mib": 15.1
+          },
+          {
+            "seconds": 0.012904,
+            "rss_mib": 15.3
+          },
+          {
+            "seconds": 0.012494,
+            "rss_mib": 16.4
+          },
+          {
+            "seconds": 0.012978,
+            "rss_mib": 15.6
+          },
+          {
+            "seconds": 0.01346,
+            "rss_mib": 16.0
+          },
+          {
+            "seconds": 0.012278,
+            "rss_mib": 16.1
+          },
+          {
+            "seconds": 0.012591,
+            "rss_mib": 16.1
+          },
+          {
+            "seconds": 0.01245,
+            "rss_mib": 15.8
+          },
+          {
+            "seconds": 0.01183,
+            "rss_mib": 16.1
+          }
+        ],
+        "clang": [
+          {
+            "seconds": 0.013611,
+            "rss_mib": 15.1
+          },
+          {
+            "seconds": 0.012849,
+            "rss_mib": 15.3
+          },
+          {
+            "seconds": 0.012866,
+            "rss_mib": 15.1
+          },
+          {
+            "seconds": 0.012956,
+            "rss_mib": 15.6
+          },
+          {
+            "seconds": 0.013669,
+            "rss_mib": 15.9
+          },
+          {
+            "seconds": 0.013475,
+            "rss_mib": 15.9
+          },
+          {
+            "seconds": 0.013291,
+            "rss_mib": 15.9
+          },
+          {
+            "seconds": 0.013146,
+            "rss_mib": 15.4
+          },
+          {
+            "seconds": 0.013228,
+            "rss_mib": 15.9
+          }
+        ],
+        "rust": [
+          {
+            "seconds": 0.04144,
+            "rss_mib": 15.0
+          },
+          {
+            "seconds": 0.041758,
+            "rss_mib": 15.1
+          },
+          {
+            "seconds": 0.041639,
+            "rss_mib": 15.1
+          },
+          {
+            "seconds": 0.041538,
+            "rss_mib": 15.1
+          },
+          {
+            "seconds": 0.042833,
+            "rss_mib": 14.8
+          },
+          {
+            "seconds": 0.041978,
+            "rss_mib": 15.0
+          },
+          {
+            "seconds": 0.041972,
+            "rss_mib": 15.0
+          },
+          {
+            "seconds": 0.041727,
+            "rss_mib": 15.0
+          },
+          {
+            "seconds": 0.042204,
+            "rss_mib": 15.0
+          }
+        ],
+        "go": [
+          {
+            "seconds": 0.186278,
+            "rss_mib": 49.0
+          },
+          {
+            "seconds": 0.185234,
+            "rss_mib": 49.0
+          },
+          {
+            "seconds": 0.186714,
+            "rss_mib": 48.9
+          },
+          {
+            "seconds": 0.184721,
+            "rss_mib": 49.0
+          },
+          {
+            "seconds": 0.189021,
+            "rss_mib": 49.0
+          },
+          {
+            "seconds": 0.186683,
+            "rss_mib": 49.0
+          },
+          {
+            "seconds": 0.186949,
+            "rss_mib": 48.9
+          },
+          {
+            "seconds": 0.185629,
+            "rss_mib": 49.0
+          },
+          {
+            "seconds": 0.184456,
+            "rss_mib": 48.9
+          }
+        ],
+        "node": [
+          {
+            "seconds": 0.0698,
+            "rss_mib": 97.4
+          },
+          {
+            "seconds": 0.07134,
+            "rss_mib": 97.7
+          },
+          {
+            "seconds": 0.071759,
+            "rss_mib": 98.4
+          },
+          {
+            "seconds": 0.071029,
+            "rss_mib": 98.6
+          },
+          {
+            "seconds": 0.07156,
+            "rss_mib": 98.4
+          },
+          {
+            "seconds": 0.069827,
+            "rss_mib": 97.8
+          },
+          {
+            "seconds": 0.0701,
+            "rss_mib": 99.2
+          },
+          {
+            "seconds": 0.070064,
+            "rss_mib": 98.5
+          },
+          {
+            "seconds": 0.070847,
+            "rss_mib": 99.2
+          }
+        ],
+        "python": [
+          {
+            "seconds": 0.236732,
+            "rss_mib": 47.6
+          },
+          {
+            "seconds": 0.237705,
+            "rss_mib": 47.6
+          },
+          {
+            "seconds": 0.234765,
+            "rss_mib": 47.7
+          },
+          {
+            "seconds": 0.237386,
+            "rss_mib": 47.5
+          },
+          {
+            "seconds": 0.245301,
+            "rss_mib": 47.8
+          },
+          {
+            "seconds": 0.235243,
+            "rss_mib": 47.7
+          },
+          {
+            "seconds": 0.237951,
+            "rss_mib": 47.5
+          },
+          {
+            "seconds": 0.241841,
+            "rss_mib": 47.6
+          },
+          {
+            "seconds": 0.235721,
+            "rss_mib": 47.7
+          }
+        ]
+      },
+      "medians": {
+        "dyn": {
+          "seconds": 0.048414,
+          "rss_mib": 18.0
+        },
+        "gcc": {
+          "seconds": 0.012591,
+          "rss_mib": 16.0
+        },
+        "clang": {
+          "seconds": 0.013228,
+          "rss_mib": 15.6
+        },
+        "rust": {
+          "seconds": 0.041758,
+          "rss_mib": 15.0
+        },
+        "go": {
+          "seconds": 0.186278,
+          "rss_mib": 49.0
+        },
+        "node": {
+          "seconds": 0.070847,
+          "rss_mib": 98.4
+        },
+        "python": {
+          "seconds": 0.237386,
+          "rss_mib": 47.6
+        }
+      }
+    },
+    "search": {
+      "samples": {
+        "dyn": [
+          {
+            "seconds": 0.010605,
+            "rss_mib": 8.1
+          },
+          {
+            "seconds": 0.010692,
+            "rss_mib": 8.1
+          },
+          {
+            "seconds": 0.011141,
+            "rss_mib": 8.1
+          },
+          {
+            "seconds": 0.010641,
+            "rss_mib": 8.1
+          },
+          {
+            "seconds": 0.010506,
+            "rss_mib": 8.1
+          },
+          {
+            "seconds": 0.010323,
+            "rss_mib": 8.1
+          },
+          {
+            "seconds": 0.009826,
+            "rss_mib": 8.1
+          },
+          {
+            "seconds": 0.009992,
+            "rss_mib": 8.1
+          },
+          {
+            "seconds": 0.010378,
+            "rss_mib": 8.1
+          }
+        ],
+        "gcc": [
+          {
+            "seconds": 0.033511,
+            "rss_mib": 2.2
+          },
+          {
+            "seconds": 0.032353,
+            "rss_mib": 2.3
+          },
+          {
+            "seconds": 0.033438,
+            "rss_mib": 2.2
+          },
+          {
+            "seconds": 0.032795,
+            "rss_mib": 2.2
+          },
+          {
+            "seconds": 0.032707,
+            "rss_mib": 2.3
+          },
+          {
+            "seconds": 0.03303,
+            "rss_mib": 2.1
+          },
+          {
+            "seconds": 0.031901,
+            "rss_mib": 2.4
+          },
+          {
+            "seconds": 0.03175,
+            "rss_mib": 2.4
+          },
+          {
+            "seconds": 0.03244,
+            "rss_mib": 2.2
+          }
+        ],
+        "clang": [
+          {
+            "seconds": 0.030063,
+            "rss_mib": 2.3
+          },
+          {
+            "seconds": 0.031275,
+            "rss_mib": 2.3
+          },
+          {
+            "seconds": 0.031325,
+            "rss_mib": 2.1
+          },
+          {
+            "seconds": 0.033116,
+            "rss_mib": 2.4
+          },
+          {
+            "seconds": 0.03206,
+            "rss_mib": 2.4
+          },
+          {
+            "seconds": 0.032885,
+            "rss_mib": 2.4
+          },
+          {
+            "seconds": 0.034012,
+            "rss_mib": 2.4
+          },
+          {
+            "seconds": 0.033506,
+            "rss_mib": 2.1
+          },
+          {
+            "seconds": 0.033514,
+            "rss_mib": 2.1
+          }
+        ],
+        "rust": [
+          {
+            "seconds": 0.045196,
+            "rss_mib": 2.2
+          },
+          {
+            "seconds": 0.04581,
+            "rss_mib": 2.3
+          },
+          {
+            "seconds": 0.045378,
+            "rss_mib": 2.2
+          },
+          {
+            "seconds": 0.046097,
+            "rss_mib": 2.2
+          },
+          {
+            "seconds": 0.045312,
+            "rss_mib": 2.2
+          },
+          {
+            "seconds": 0.046514,
+            "rss_mib": 2.2
+          },
+          {
+            "seconds": 0.046973,
+            "rss_mib": 2.2
+          },
+          {
+            "seconds": 0.045127,
+            "rss_mib": 2.2
+          },
+          {
+            "seconds": 0.046788,
+            "rss_mib": 2.2
+          }
+        ],
+        "go": [
+          {
+            "seconds": 0.013334,
+            "rss_mib": 13.9
+          },
+          {
+            "seconds": 0.013246,
+            "rss_mib": 15.9
+          },
+          {
+            "seconds": 0.012827,
+            "rss_mib": 15.8
+          },
+          {
+            "seconds": 0.012998,
+            "rss_mib": 13.9
+          },
+          {
+            "seconds": 0.01284,
+            "rss_mib": 13.9
+          },
+          {
+            "seconds": 0.013569,
+            "rss_mib": 13.9
+          },
+          {
+            "seconds": 0.013193,
+            "rss_mib": 13.9
+          },
+          {
+            "seconds": 0.012945,
+            "rss_mib": 13.9
+          },
+          {
+            "seconds": 0.013304,
+            "rss_mib": 15.9
+          }
+        ],
+        "node": [
+          {
+            "seconds": 0.067887,
+            "rss_mib": 68.6
+          },
+          {
+            "seconds": 0.06983,
+            "rss_mib": 69.3
+          },
+          {
+            "seconds": 0.068216,
+            "rss_mib": 69.1
+          },
+          {
+            "seconds": 0.069405,
+            "rss_mib": 70.3
+          },
+          {
+            "seconds": 0.069513,
+            "rss_mib": 67.7
+          },
+          {
+            "seconds": 0.067047,
+            "rss_mib": 68.2
+          },
+          {
+            "seconds": 0.069181,
+            "rss_mib": 68.0
+          },
+          {
+            "seconds": 0.067987,
+            "rss_mib": 69.6
+          },
+          {
+            "seconds": 0.068999,
+            "rss_mib": 68.6
+          }
+        ],
+        "python": [
+          {
+            "seconds": 0.079203,
+            "rss_mib": 19.1
+          },
+          {
+            "seconds": 0.078158,
+            "rss_mib": 19.0
+          },
+          {
+            "seconds": 0.078684,
+            "rss_mib": 19.1
+          },
+          {
+            "seconds": 0.079664,
+            "rss_mib": 19.0
+          },
+          {
+            "seconds": 0.079348,
+            "rss_mib": 18.9
+          },
+          {
+            "seconds": 0.079114,
+            "rss_mib": 19.1
+          },
+          {
+            "seconds": 0.081186,
+            "rss_mib": 19.1
+          },
+          {
+            "seconds": 0.078771,
+            "rss_mib": 19.1
+          },
+          {
+            "seconds": 0.0789,
+            "rss_mib": 19.0
+          }
+        ]
+      },
+      "medians": {
+        "dyn": {
+          "seconds": 0.010506,
+          "rss_mib": 8.1
+        },
+        "gcc": {
+          "seconds": 0.032707,
+          "rss_mib": 2.2
+        },
+        "clang": {
+          "seconds": 0.032885,
+          "rss_mib": 2.3
+        },
+        "rust": {
+          "seconds": 0.04581,
+          "rss_mib": 2.2
+        },
+        "go": {
+          "seconds": 0.013193,
+          "rss_mib": 13.9
+        },
+        "node": {
+          "seconds": 0.068999,
+          "rss_mib": 68.6
+        },
+        "python": {
+          "seconds": 0.079114,
+          "rss_mib": 19.1
+        }
+      }
+    }
+  },
+  "http": {
+    "dyn": [
+      {
+        "startup_seconds": 0.0012701209634542465,
+        "single_median_seconds": 0.0001204910222440958,
+        "single_p95_seconds": 0.00016356201376765966,
+        "four_requests_per_second": 10628.546747459126,
+        "four_p95_seconds": 0.0008225269848480821,
+        "peak_rss_kib": 18476,
+        "validated_requests": 1600
+      },
+      {
+        "startup_seconds": 0.0013230210170149803,
+        "single_median_seconds": 0.00012010100181214511,
+        "single_p95_seconds": 0.00014152098447084427,
+        "four_requests_per_second": 10845.226645685703,
+        "four_p95_seconds": 0.0009582379716448486,
+        "peak_rss_kib": 18476,
+        "validated_requests": 1600
+      },
+      {
+        "startup_seconds": 0.001348470977973193,
+        "single_median_seconds": 0.00012039599823765457,
+        "single_p95_seconds": 0.00017826200928539038,
+        "four_requests_per_second": 10905.814007544708,
+        "four_p95_seconds": 0.00114967004628852,
+        "peak_rss_kib": 18472,
+        "validated_requests": 1600
+      },
+      {
+        "startup_seconds": 0.0013278109836392105,
+        "single_median_seconds": 0.0001204959989991039,
+        "single_p95_seconds": 0.00017848098650574684,
+        "four_requests_per_second": 10751.055745911985,
+        "four_p95_seconds": 0.0013027600361965597,
+        "peak_rss_kib": 18476,
+        "validated_requests": 1600
+      },
+      {
+        "startup_seconds": 0.0013899320038035512,
+        "single_median_seconds": 0.00011989599443040788,
+        "single_p95_seconds": 0.00014591100625693798,
+        "four_requests_per_second": 10576.385063260996,
+        "four_p95_seconds": 0.0012509210500866175,
+        "peak_rss_kib": 18476,
+        "validated_requests": 1600
+      }
+    ],
+    "go": [
+      {
+        "startup_seconds": 0.0017684149788692594,
+        "single_median_seconds": 0.00022308152983896434,
+        "single_p95_seconds": 0.00035377300810068846,
+        "four_requests_per_second": 5244.599438917063,
+        "four_p95_seconds": 0.0011033489718101919,
+        "peak_rss_kib": 17572,
+        "validated_requests": 1600
+      },
+      {
+        "startup_seconds": 0.0016424739733338356,
+        "single_median_seconds": 0.00021861196728423238,
+        "single_p95_seconds": 0.00033387303119525313,
+        "four_requests_per_second": 5214.365431683049,
+        "four_p95_seconds": 0.0011119389673694968,
+        "peak_rss_kib": 17384,
+        "validated_requests": 1600
+      },
+      {
+        "startup_seconds": 0.0015812930068932474,
+        "single_median_seconds": 0.0002210770035162568,
+        "single_p95_seconds": 0.00032726197969168425,
+        "four_requests_per_second": 5225.830147044437,
+        "four_p95_seconds": 0.0010943489614874125,
+        "peak_rss_kib": 15364,
+        "validated_requests": 1600
+      },
+      {
+        "startup_seconds": 0.0015958230360411108,
+        "single_median_seconds": 0.00022174697369337082,
+        "single_p95_seconds": 0.00033624301431700587,
+        "four_requests_per_second": 5189.157531609576,
+        "four_p95_seconds": 0.0011170689831487834,
+        "peak_rss_kib": 17556,
+        "validated_requests": 1600
+      },
+      {
+        "startup_seconds": 0.001659184054005891,
+        "single_median_seconds": 0.00022087650722824037,
+        "single_p95_seconds": 0.00033454300137236714,
+        "four_requests_per_second": 5291.7775816395015,
+        "four_p95_seconds": 0.0010675790254026651,
+        "peak_rss_kib": 15332,
+        "validated_requests": 1600
+      }
+    ],
+    "node": [
+      {
+        "startup_seconds": 0.015447358950041234,
+        "single_median_seconds": 0.00011988097685389221,
+        "single_p95_seconds": 0.00033433298813179135,
+        "four_requests_per_second": 11031.973738406161,
+        "four_p95_seconds": 0.0006059849984012544,
+        "peak_rss_kib": 89524,
+        "validated_requests": 1600
+      },
+      {
+        "startup_seconds": 0.014842875010799617,
+        "single_median_seconds": 0.00012258600327186286,
+        "single_p95_seconds": 0.00034201302332803607,
+        "four_requests_per_second": 11306.017683077982,
+        "four_p95_seconds": 0.0005361150251701474,
+        "peak_rss_kib": 90328,
+        "validated_requests": 1600
+      },
+      {
+        "startup_seconds": 0.014277649985160679,
+        "single_median_seconds": 0.0001218159741256386,
+        "single_p95_seconds": 0.00034783297451213,
+        "four_requests_per_second": 10855.320673075345,
+        "four_p95_seconds": 0.0006417949916794896,
+        "peak_rss_kib": 91272,
+        "validated_requests": 1600
+      },
+      {
+        "startup_seconds": 0.01578259200323373,
+        "single_median_seconds": 0.000123306002933532,
+        "single_p95_seconds": 0.0003813630319200456,
+        "four_requests_per_second": 11215.024673281321,
+        "four_p95_seconds": 0.0006489150109700859,
+        "peak_rss_kib": 90032,
+        "validated_requests": 1600
+      },
+      {
+        "startup_seconds": 0.015498200024012476,
+        "single_median_seconds": 0.00012212098226882517,
+        "single_p95_seconds": 0.0003579030162654817,
+        "four_requests_per_second": 11111.864739872846,
+        "four_p95_seconds": 0.0005917749949730933,
+        "peak_rss_kib": 89496,
+        "validated_requests": 1600
+      }
+    ],
+    "python": [
+      {
+        "startup_seconds": 0.023384686966892332,
+        "single_median_seconds": 0.00022663699928671122,
+        "single_p95_seconds": 0.00030003301799297333,
+        "four_requests_per_second": 4634.041580484143,
+        "four_p95_seconds": 0.0013566220295615494,
+        "peak_rss_kib": 21728,
+        "validated_requests": 1600
+      },
+      {
+        "startup_seconds": 0.0232089749770239,
+        "single_median_seconds": 0.00022744698799215257,
+        "single_p95_seconds": 0.000313052034471184,
+        "four_requests_per_second": 4651.28662307719,
+        "four_p95_seconds": 0.0013445509830489755,
+        "peak_rss_kib": 21672,
+        "validated_requests": 1600
+      },
+      {
+        "startup_seconds": 0.02369181899121031,
+        "single_median_seconds": 0.00022964202798902988,
+        "single_p95_seconds": 0.00030926300678402185,
+        "four_requests_per_second": 4604.897832092077,
+        "four_p95_seconds": 0.001324490993283689,
+        "peak_rss_kib": 21724,
+        "validated_requests": 1600
+      },
+      {
+        "startup_seconds": 0.023566727992147207,
+        "single_median_seconds": 0.00022711200290359557,
+        "single_p95_seconds": 0.00030117196729406714,
+        "four_requests_per_second": 4618.065245715018,
+        "four_p95_seconds": 0.0012998710153624415,
+        "peak_rss_kib": 21688,
+        "validated_requests": 1600
+      },
+      {
+        "startup_seconds": 0.02389479096746072,
+        "single_median_seconds": 0.00023290200624614954,
+        "single_p95_seconds": 0.00039731303695589304,
+        "four_requests_per_second": 4523.450078549005,
+        "four_p95_seconds": 0.001379570981953293,
+        "peak_rss_kib": 21712,
+        "validated_requests": 1600
+      }
+    ]
+  },
+  "sources": {
+    "SPEC.md": "499ee8a4afcf43f461563d69e2cef55ef488c735708f89eb83a96dc154148686",
+    "main.c": "e21251e9106c574c6f9a8dd722fe6e16b998281c0c757d4fa75374c0cfcff2d1",
+    "main.go": "071026851968f5bffd94347787c25d53f3ee7812a4a2c1a508923bb98526396d",
+    "main.js": "5a1c07f17c17798e550f131e2e50d93a0959a0014d9d31acf34fb8f120e71ae0",
+    "main.rs": "eff0c09851dac3ff24bd444c391b9cd9c36804b1d0cb388344daeb1aa9c34997",
+    "main.py": "c517e6b0d4b9910261a10f50036407ef2a27efe3f9b305a41d203317563f14da",
+    "Cargo.toml": "5879341ba2cddffa287422390ad2a4bdae9d8077afdb8621c55684f0e24b8e00",
+    "Cargo.lock": "76ea34d720ea506ac508129a91faaa515e3b774b64b965ae35b6d1a2020cff34",
+    "main.dyn": "ddbf2c5388f42f5eaddd9f699350e21002d2c92dd7ef4d874776c40502d9390a",
+    "run.py": "67868071c7325c9567156d82f8a015ba7aa83fe40b6f3833641fcba867c218b8",
+    "check_harness.py": "48b51f18f332e1e1c507dc81adc44cae5c803af556ae191d4fdc64a02292ef2c",
+    "project_search.py": "06fbb8ddc51ee1e03cf090f70682c8824d29dbdf1646810988ee65010cb78817",
+    "README.md": "cd757cfeea669fc69162501abb83ec0f003fecc9b38600f0430106bb4b16b987",
+    "report.py": "03fd81d56ec715281d57895d5e867003c7bf4678a2d8f1aec8b19fd4697911e5"
+  },
+  "versions": {
+    "dyn": "dyn 0.1.0-dev",
+    "gcc": "gcc (GCC) 16.2.1 20260810",
+    "clang": "clang version 23.1.3",
+    "rust": "rustc 1.94.1 (e408947bf 2026-03-25)",
+    "go": "go version go1.27.3 linux/amd64",
+    "node": "v26.12.1",
+    "python": "Python 3.14.8",
+    "yyjson": "0.13.0"
+  },
+  "inputs": {
+    "report": {
+      "path": "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/applications/events.jsonl",
+      "bytes": 13589721,
+      "records": 60000,
+      "sha256": "55632bc536a41285c2126eb1a0d684fc6778c303b95bdf380e9c3f8b509abfca"
+    },
+    "search": {
+      "path": "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/applications/documents",
+      "files": 1024,
+      "bytes": 64292352,
+      "lines": 262144,
+      "matching_lines": 5689,
+      "matching_files": 910,
+      "sha256": "c9db9112f24e405d3ba7d4d9645b6d56575aec191f5e7464eb752faee74ba18e"
+    }
+  },
+  "http_input": {
+    "records": 64,
+    "bytes": 13974,
+    "sha256": "0006483821595f539e181c354f52c7854ccb53fd8e8e2457242acd023a2ebe36"
+  },
+  "peak_helper": {
+    "source_sha256": "b4247e8fe8847755b3cf185a0d25541ccaeaaf65c3f92be48c781558d1fcf26a",
+    "binary_sha256": "84a7847b72929103166e61aa67635d7abb6e80a1885d1245349e1f575a0a893a",
+    "scope": "wait4/RUSAGE_CHILDREN maximum individual-process RSS, rounded to 0.1 MiB"
+  },
+  "sources_after": {
+    "SPEC.md": "499ee8a4afcf43f461563d69e2cef55ef488c735708f89eb83a96dc154148686",
+    "main.c": "e21251e9106c574c6f9a8dd722fe6e16b998281c0c757d4fa75374c0cfcff2d1",
+    "main.go": "071026851968f5bffd94347787c25d53f3ee7812a4a2c1a508923bb98526396d",
+    "main.js": "5a1c07f17c17798e550f131e2e50d93a0959a0014d9d31acf34fb8f120e71ae0",
+    "main.rs": "eff0c09851dac3ff24bd444c391b9cd9c36804b1d0cb388344daeb1aa9c34997",
+    "main.py": "c517e6b0d4b9910261a10f50036407ef2a27efe3f9b305a41d203317563f14da",
+    "Cargo.toml": "5879341ba2cddffa287422390ad2a4bdae9d8077afdb8621c55684f0e24b8e00",
+    "Cargo.lock": "76ea34d720ea506ac508129a91faaa515e3b774b64b965ae35b6d1a2020cff34",
+    "main.dyn": "ddbf2c5388f42f5eaddd9f699350e21002d2c92dd7ef4d874776c40502d9390a",
+    "run.py": "67868071c7325c9567156d82f8a015ba7aa83fe40b6f3833641fcba867c218b8",
+    "check_harness.py": "48b51f18f332e1e1c507dc81adc44cae5c803af556ae191d4fdc64a02292ef2c",
+    "project_search.py": "06fbb8ddc51ee1e03cf090f70682c8824d29dbdf1646810988ee65010cb78817",
+    "README.md": "cd757cfeea669fc69162501abb83ec0f003fecc9b38600f0430106bb4b16b987",
+    "report.py": "03fd81d56ec715281d57895d5e867003c7bf4678a2d8f1aec8b19fd4697911e5"
+  }
+}

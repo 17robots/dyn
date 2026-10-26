@@ -3,16 +3,24 @@
 #include <pthread.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include <stdbool.h>
+#include <string.h>
 static _Thread_local unsigned allocation_count, fail_allocation;
-static void *emitter_calloc(size_t count,size_t size) {
-  if (++allocation_count==fail_allocation) return NULL;
+static _Thread_local bool failed_optional_cache;
+static void *emitter_calloc(size_t count,size_t size,const char *caller) {
+  if (++allocation_count==fail_allocation) {
+    /* literal's allocation is its optional deduplication table. Identify the
+       allocation by its owner, independent of allocation order or table size. */
+    failed_optional_cache=!strcmp(caller,"literal");
+    return NULL;
+  }
   return calloc(count,size);
 }
 static void *emitter_malloc(size_t size) {
   if (++allocation_count==fail_allocation) return NULL;
   return malloc(size);
 }
-#define calloc emitter_calloc
+#define calloc(count,size) emitter_calloc(count,size,__func__)
 #define malloc emitter_malloc
 #define main backend_cli_main
 #include "driver.c"
@@ -51,7 +59,7 @@ static void *run(void *raw) {
 int main(void) {
   Fixture fixtures[2]={0};
   prepare(&fixtures[0],"pub fn identity(a:u64) u64 { return a }\n");
-  prepare(&fixtures[1],"counter:u64=1\nfn add(a:u64){counter+=a}\npub fn work(a:u64) u64 {defer add(2) return a+counter}\npub fn second(a:u64) u64 {return work(a)*2}\n");
+  prepare(&fixtures[1],"counter:u64=1\nfn add(a:u64){counter+=a}\npub fn work(a:u64) u64 {defer add(2)\nreturn a+counter}\npub fn second(a:u64) u64 {return work(a)*2}\n");
   char directory[]="/tmp/dyn-backend-reentrant-XXXXXX";assert(mkdtemp(directory));
   char path[1024],expected[1024];
   for(unsigned fixture=0;fixture<2;++fixture) for(unsigned debug=0;debug<2;++debug) {
@@ -79,15 +87,27 @@ int main(void) {
   allocation_count=0;
   assert(object_mode(&fixtures[1].source,&fixtures[1].ir,path,true));
   unsigned allocations=allocation_count;unlink(path);
+  unsigned optional_failures=0,required_failures=0;
   for(unsigned failure=1;failure<=allocations;++failure) {
-    allocation_count=0;fail_allocation=failure;
-    assert(!object_mode(&fixtures[1].source,&fixtures[1].ir,path,true));
-    assert(access(path,F_OK));
+    allocation_count=0;fail_allocation=failure;failed_optional_cache=false;
+    bool emitted=object_mode(&fixtures[1].source,&fixtures[1].ir,path,true);
+    assert(allocation_count>=failure);
+    if(failed_optional_cache) {
+      ++optional_failures;
+      assert(emitted);
+      snprintf(expected,sizeof(expected),"%s/reference-1-1.o",directory);
+      assert(equal_files(path,expected));assert(!unlink(path));
+    } else {
+      ++required_failures;
+      assert(!emitted);
+      assert(access(path,F_OK));
+    }
     fail_allocation=0;
     assert(object(&fixtures[0].source,&fixtures[0].ir,path));
     snprintf(expected,sizeof(expected),"%s/reference-0-0.o",directory);
     assert(equal_files(path,expected));unlink(path);
   }
+  assert(optional_failures && required_failures);
   pthread_t threads[8];Job jobs[8];
   for(unsigned i=0;i<8;++i) {jobs[i]=(Job){&fixtures[i%2],directory,i};assert(!pthread_create(&threads[i],NULL,run,&jobs[i]));}
   for(unsigned i=0;i<8;++i)assert(!pthread_join(threads[i],NULL));

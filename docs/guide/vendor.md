@@ -496,8 +496,8 @@ OpenGL and Vulkan commands use explicit typed procedure arguments:
 ```dyn
 // `address` came from the appropriate context/instance/device loader.
 // Check availability before casting/calling.
-procedure := #cast(gl.Procedure_glClear) address
-gl.glClear(procedure, #cast(u32) gl.GL_COLOR_BUFFER_BIT)
+procedure := #cast(gl.Procedure_glClear, address)
+gl.glClear(procedure, #cast(u32, gl.GL_COLOR_BUFFER_BIT))
 ```
 
 Resolve OpenGL commands for the current context, and Vulkan commands through the

@@ -1,0 +1,154 @@
+--- before/src/native_opt.c
++++ after/src/native_opt.c
+@@ -306,7 +306,7 @@
+   size_t expressions_cap, statements_cap, items_cap, children_cap, locals_cap,
+       arms_cap;
+   uint32_t loop_stride, next_loop;
+-  unsigned expansions, budget, resource_budget;
++  unsigned expansions, budget, resource_budget, reserved_growth, reserved_resources;
+   unsigned *costs;
+   bool failed, leaf_only, byte_fast;
+   bool *active;
+@@ -727,8 +727,15 @@
+   unsigned growth = cost + f->param_count + 2;
+   unsigned resources = 4 * cost + 3 * f->local_count +
+                        2 * f->param_count + 16;
+-  if (cost > 64 || growth > b->budget || resources > b->resource_budget)
+-    return false;
++  bool hot = !b->leaf_only && !scope->returns && scope->in_loop && cost <= 16;
++  if (cost > 64 || growth > b->budget || resources > b->resource_budget ||
++      (!hot && (growth > b->budget - b->reserved_growth ||
++                resources > b->resource_budget - b->reserved_resources)))
++    return false;
++  if (hot) {
++    b->reserved_growth -= growth < b->reserved_growth ? growth : b->reserved_growth;
++    b->reserved_resources -= resources < b->reserved_resources ? resources : b->reserved_resources;
++  }
+   b->budget -= growth;
+   b->resource_budget -= resources;
+   InlineScope nested = {.function = f,
+@@ -781,14 +788,12 @@
+          e->kind == DYN_EXPR_FLOAT || e->kind == DYN_EXPR_BOOL ||
+          e->kind == DYN_EXPR_NIL;
+ }
+-static bool inline_cast_call(Inline *b, const InlineScope *scope,
+-                             DynExprId id, InlineList *list,
+-                             DynExprId *result, unsigned depth) {
+-  DynExprId wrappers[32];
+-  bool right[32];
++static DynExprId inline_spine(const DynIrProgram *ir, DynExprId id,
++                               DynExprId wrappers[32], bool right[32],
++                               unsigned *wrapper_count) {
+   unsigned count = 0;
+-  while (id < b->in->expression_count) {
+-    const DynIrExpr *e = &b->in->expressions[id];
++  while (id < ir->expression_count) {
++    const DynIrExpr *e = &ir->expressions[id];
+     bool conversion = e->kind == DYN_EXPR_CAST || e->kind == DYN_EXPR_CONVERT ||
+                       e->kind == DYN_EXPR_BITCAST;
+     bool unary = e->kind == DYN_EXPR_UNARY &&
+@@ -796,14 +801,24 @@
+     bool binary = e->kind == DYN_EXPR_BINARY;
+     if (!conversion && !unary && !binary) break;
+     if (count == 32 || e->item_count || (!binary && e->right != DYN_NO_EXPR))
+-      return false;
+-    bool descend_right = binary && e->left < b->in->expression_count &&
+-                         inline_literal(&b->in->expressions[e->left]) &&
++      return DYN_NO_EXPR;
++    bool descend_right = binary && e->left < ir->expression_count &&
++                         inline_literal(&ir->expressions[e->left]) &&
+                          e->op != DYN_OP_LOGICAL_AND && e->op != DYN_OP_LOGICAL_OR;
+     wrappers[count] = id;
+     right[count++] = descend_right;
+     id = descend_right ? e->right : e->left;
+   }
++  *wrapper_count = count;
++  return id;
++}
++static bool inline_cast_call(Inline *b, const InlineScope *scope,
++                             DynExprId id, InlineList *list,
++                             DynExprId *result, unsigned depth) {
++  DynExprId wrappers[32];
++  bool right[32];
++  unsigned count = 0;
++  id = inline_spine(b->in, id, wrappers, right, &count);
+   if (id >= b->in->expression_count ||
+       !inline_call(b, scope, &b->in->expressions[id], list, result, depth))
+     return false;
+@@ -819,6 +834,62 @@
+       e.right = inline_expr(b, scope, e.right, 0);
+     }
+     INLINE_APPEND(b, expression, expressions_cap, e, *result);
++  }
++  return true;
++}
++/* Reserve at most one quarter of the existing caller allowance for tiny
++   call sites actually observed in its original loops. This is admission
++   priority, not additional growth. A failed bounded scan reserves nothing. */
++static bool inline_reserve_hot(Inline *b, uint32_t start, uint32_t count,
++                                bool in_loop, bool expand, unsigned depth,
++                                unsigned *remaining) {
++  if (depth > 64 || (uint64_t)start + count > b->in->child_count) return false;
++  for (uint32_t i = 0; i < count; ++i) {
++    if (!*remaining) return false;
++    --*remaining;
++    uint32_t id = b->in->children[start + i];
++    if (id >= b->in->statement_count) return false;
++    const DynIrStmt *s = &b->in->statements[id];
++    bool eligible = s->kind == DYN_STMT_LOCAL || s->kind == DYN_STMT_RETURN ||
++                    s->kind == DYN_STMT_EXPR || s->kind == DYN_STMT_IF ||
++                    (s->kind == DYN_STMT_ASSIGN && s->assignment_op == DYN_OP_NONE &&
++                     inline_simple_target(b->in, s->target));
++    if (expand && in_loop && eligible && depth <= 16) {
++      DynExprId wrappers[32]; bool right[32]; unsigned n = 0;
++      DynExprId e = inline_spine(b->in, s->expression, wrappers, right, &n);
++      if (e < b->in->expression_count) {
++        const DynIrExpr *call = &b->in->expressions[e];
++        if (call->kind == DYN_EXPR_CALL && call->integer < b->in->function_count &&
++            !b->active[call->integer]) {
++          const DynIrFunction *f = &b->in->functions[call->integer];
++          unsigned cost = b->costs[call->integer];
++          bool byte = b->byte_fast && (f->byte_intrinsic == DYN_BYTE_INTRINSIC_FIND_BYTE ||
++                                      f->byte_intrinsic == DYN_BYTE_INTRINSIC_FIND);
++          if (!f->foreign && !f->generic && !f->variadic && !f->is_main && !byte &&
++              f->local_count <= 128 && cost <= 16 && call->item_count == f->param_count &&
++              (uint64_t)call->item_start + call->item_count <= b->in->item_count &&
++              (uint64_t)f->param_start + f->param_count <= b->in->param_count) {
++            unsigned growth = cost + f->param_count + 2;
++            unsigned resources = 4 * cost + 3 * f->local_count + 2 * f->param_count + 16;
++            if (growth <= 128 - b->reserved_growth && resources <= 1024 - b->reserved_resources) {
++              b->reserved_growth += growth;
++              b->reserved_resources += resources;
++            }
++          }
++        }
++      }
++    }
++    bool child_expand = expand && s->kind != DYN_STMT_DEFER;
++    bool child_loop = in_loop || s->kind == DYN_STMT_FOR;
++    if (!inline_reserve_hot(b, s->body_start, s->body_count, child_loop, child_expand, depth + 1, remaining) ||
++        !inline_reserve_hot(b, s->else_start, s->else_count, child_loop, child_expand, depth + 1, remaining)) return false;
++    if ((uint64_t)s->case_arm_start + s->case_arm_count > b->in->case_arm_count) return false;
++    for (uint32_t j = 0; j < s->case_arm_count; ++j) {
++      if (!*remaining) return false;
++      --*remaining;
++      const DynIrCaseArm *arm = &b->in->case_arms[s->case_arm_start + j];
++      if (!inline_reserve_hot(b, arm->body_start, arm->body_count, in_loop, expand, depth + 1, remaining)) return false;
++    }
+   }
+   return true;
+ }
+@@ -1062,7 +1133,13 @@
+                          .expand = true};
+     b.budget = leaf_only ? 24 : 512;
+     b.resource_budget = 8 * b.budget;
++    b.reserved_growth = b.reserved_resources = 0;
+     b.active[i] = true;
++    if (!leaf_only) {
++      unsigned visits = 4096;
++      if (!inline_reserve_hot(&b, f->body_start, f->body_count, false, true, 0, &visits))
++        b.reserved_growth = b.reserved_resources = 0;
++    }
+     InlineList body = {0};
+     inline_block(&b, &scope, f->body_start, f->body_count, &body, 0);
+     b.active[i] = false;

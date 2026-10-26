@@ -17,8 +17,8 @@ void dyn_cli_help(const char *command) {
       "  cache    inspect or clean shared compilation cache\n"
       "  help     show help\n  version  show version\n\n"
       "Build options:\n  --output <path>  --debug  --release  --debug-info\n"
-      "  --emit-object  --emit-asm  --no-link  --shared\n"
-      "  --target <x86_64-linux|aarch64-linux|riscv64-linux|x86_64-macos|aarch64-macos|x86_64-windows|aarch64-windows|wasm32-browser|wasm32-wasi>\n"
+      "  --emit-object  --emit-asm  --emit-ir  --no-link  --shared\n"
+      "  --target <x86_64-linux|aarch64-linux|riscv64-linux|riscv64-none|riscv32-none|riscv32-none-soft|thumbv7em-none|thumbv7em-none-soft|thumbv7em-none-nucleo-h753zi|x86_64-macos|aarch64-macos|x86_64-windows|aarch64-windows|wasm32-browser|wasm32-wasi>\n"
       "  --jobs <1..256>  --max-work <positive frontend work units>\n"
       "  --cpu <generic|native>  --opt-level <1|2|3>  --opt-remarks\n"
       "  --sample-profile <text profile>  (release builds only)\n"
@@ -33,24 +33,17 @@ int dyn_cli_parse(int argc, char **argv, DynOptions *o) {
   memset(o, 0, sizeof(*o));
   o->debug_info = true;
   o->target = DYN_HOST_TARGET;
-  if (argc < 2)
-    return 2;
+  if (argc < 2) return 2;
   o->command = argv[1];
   for (int i = 2; i < argc; ++i) {
     const char *a = argv[i];
-    if (strcmp(a, "--output") == 0 || strcmp(a, "--target") == 0 ||
-        strcmp(a, "--link") == 0 || strcmp(a, "--diagnostics") == 0 ||
-        strcmp(a, "--jobs") == 0 || strcmp(a, "--max-work") == 0 ||
-        strcmp(a, "--cpu") == 0 || strcmp(a, "--opt-level") == 0 ||
-        strcmp(a, "--sample-profile") == 0 || strcmp(a, "--backend") == 0) {
+    if (strcmp(a, "--output") == 0 || strcmp(a, "--target") == 0 || strcmp(a, "--link") == 0 || strcmp(a, "--diagnostics") == 0 || strcmp(a, "--jobs") == 0 || strcmp(a, "--max-work") == 0 || strcmp(a, "--cpu") == 0 || strcmp(a, "--opt-level") == 0 || strcmp(a, "--sample-profile") == 0 || strcmp(a, "--backend") == 0) {
       if (++i >= argc) {
         fprintf(stderr, "error: %s requires a value\n", a);
         return 2;
       }
-      if (strcmp(a, "--output") == 0)
-        o->output = argv[i];
-      else if (strcmp(a, "--target") == 0)
-        o->target = argv[i];
+      if (strcmp(a, "--output") == 0) o->output = argv[i];
+      else if (strcmp(a, "--target") == 0) o->target = argv[i];
       else if (strcmp(a, "--cpu") == 0) {
         if (strcmp(argv[i], "generic") && strcmp(argv[i], "native")) {
           fprintf(stderr, "error: --cpu accepts generic or native\n"); return 2;
@@ -58,18 +51,17 @@ int dyn_cli_parse(int argc, char **argv, DynOptions *o) {
         o->optimization.native_cpu = !strcmp(argv[i], "native");
       } else if (strcmp(a, "--opt-level") == 0) {
         if (strcmp(argv[i], "1") && strcmp(argv[i], "2") && strcmp(argv[i], "3")) {
-          fprintf(stderr, "error: --opt-level accepts 1, 2 or 3\n"); return 2;
+          fprintf(stderr, "error: --opt-level accepts 1, 2 or 3\n");
+          return 2;
         }
         o->optimization.level = (unsigned)(argv[i][0] - '0');
       } else if (strcmp(a, "--backend") == 0) {
-        if (!strcmp(argv[i], "auto"))
-          o->backend = DYN_BACKEND_AUTO;
-        else if (!strcmp(argv[i], "native"))
-          o->backend = DYN_BACKEND_NATIVE;
-        else if (!strcmp(argv[i], "llvm"))
-          o->backend = DYN_BACKEND_LLVM;
+        if (!strcmp(argv[i], "auto")) o->backend = DYN_BACKEND_AUTO;
+        else if (!strcmp(argv[i], "native")) o->backend = DYN_BACKEND_NATIVE;
+        else if (!strcmp(argv[i], "llvm")) o->backend = DYN_BACKEND_LLVM;
         else {
-          fprintf(stderr, "error: --backend accepts auto, native or llvm\n"); return 2;
+          fprintf(stderr, "error: --backend accepts auto, native or llvm\n");
+          return 2;
         }
       } else if (strcmp(a, "--sample-profile") == 0) {
         o->optimization.sample_profile = argv[i];
@@ -99,8 +91,7 @@ int dyn_cli_parse(int argc, char **argv, DynOptions *o) {
       } else if (o->link_input_count == 64) {
         fprintf(stderr, "error: at most 64 --link inputs are supported\n");
         return 2;
-      } else
-        o->link_inputs[o->link_input_count++] = argv[i];
+      } else o->link_inputs[o->link_input_count++] = argv[i];
     } else if (strcmp(a, "--opt-remarks") == 0) {
       o->optimization.remarks = true;
     } else if (strcmp(a, "--debug") == 0) {
@@ -131,8 +122,7 @@ int dyn_cli_parse(int argc, char **argv, DynOptions *o) {
     else if (strcmp(a, "--runtime-support") == 0)
       o->runtime_support = true;
     else if (strcmp(a, "--emit-ir") == 0) {
-      fprintf(stderr, "error: --emit-ir was removed; use --emit-asm\n");
-      return 2;
+      o->emit_ir = true;
     }
     else if (strcmp(a, "--emit-object") == 0)
       o->emit_object = true;
@@ -151,6 +141,13 @@ int dyn_cli_parse(int argc, char **argv, DynOptions *o) {
       fprintf(stderr, "error: unexpected argument '%s'\n", a);
       return 2;
     }
+  }
+  if (o->emit_ir && (strcmp(o->command, "build") || o->emit_object || o->emit_asm ||
+      o->no_link || o->runtime_support || o->link_input_count || o->release ||
+      o->debug_info_set || o->optimization.level || o->optimization.native_cpu ||
+      o->optimization.sample_profile || o->optimization.remarks || o->backend != DYN_BACKEND_AUTO)) {
+    fprintf(stderr, "error: --emit-ir requires build without code-generation, link or optimization options\n");
+    return 2;
   }
   if (o->docs_json && strcmp(o->command, "docs")) {
     fprintf(stderr, "error: --json is only supported by docs\n");

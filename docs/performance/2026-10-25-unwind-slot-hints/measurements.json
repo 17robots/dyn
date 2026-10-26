@@ -1,0 +1,701 @@
+{
+  "scope": "unchanged extended Dyn workload, runtime-only product change; whole-process time; CPU2; serial",
+  "warmups": 2,
+  "samples": 21,
+  "runs": {
+    "32": {
+      "n": 8192,
+      "rounds": 32,
+      "expected": "1126618515374080\n",
+      "milliseconds": {
+        "Dyn before": [
+          46.797145,
+          40.464431,
+          39.416544,
+          42.207733,
+          54.388678,
+          42.294595,
+          36.720736,
+          61.960561,
+          41.419838,
+          37.450651,
+          39.810846,
+          42.052992,
+          46.147141,
+          39.945958,
+          40.305321,
+          41.209387,
+          51.938351,
+          43.21765,
+          45.579137,
+          54.015316,
+          49.904817
+        ],
+        "Dyn hint": [
+          16.514325,
+          17.15718,
+          16.307733,
+          21.933233,
+          16.512375,
+          16.667825,
+          19.621686,
+          17.511182,
+          18.660349,
+          23.05429,
+          16.361204,
+          16.920688,
+          19.249674,
+          25.175055,
+          23.767465,
+          16.824307,
+          16.573555,
+          16.783617,
+          23.582664,
+          17.970985,
+          19.279163
+        ],
+        "C calloc/free": [
+          4.887294,
+          4.646632,
+          6.671916,
+          4.43984,
+          6.137253,
+          4.28972,
+          7.218121,
+          4.486131,
+          4.558771,
+          4.34389,
+          4.839904,
+          6.868068,
+          4.737332,
+          7.293971,
+          4.625732,
+          4.274149,
+          4.761983,
+          4.619702,
+          7.065849,
+          4.605922,
+          4.832284
+        ],
+        "C arena plain": [
+          2.181285,
+          2.643389,
+          2.401297,
+          2.219536,
+          2.649748,
+          2.206256,
+          4.459111,
+          2.535288,
+          2.128295,
+          2.259986,
+          2.119375,
+          2.342566,
+          2.097935,
+          2.592848,
+          2.121865,
+          2.150335,
+          2.090185,
+          2.223105,
+          2.244406,
+          2.212685,
+          2.126945
+        ],
+        "C arena old cleanup": [
+          37.083638,
+          37.142018,
+          37.087848,
+          39.387404,
+          49.944517,
+          36.04878,
+          45.390695,
+          42.527516,
+          40.483171,
+          35.935,
+          47.771012,
+          35.88575,
+          37.652712,
+          35.612248,
+          44.62319,
+          37.053117,
+          43.330841,
+          40.141009,
+          46.684684,
+          35.069364,
+          36.676075
+        ],
+        "C arena new cleanup": [
+          19.485586,
+          13.656015,
+          13.512094,
+          19.602707,
+          13.489074,
+          14.119028,
+          18.82733,
+          13.841876,
+          15.72131,
+          14.758042,
+          17.625542,
+          13.497094,
+          13.564964,
+          16.465644,
+          13.774846,
+          15.613569,
+          16.864038,
+          16.808887,
+          15.054465,
+          13.773796,
+          14.522711
+        ]
+      },
+      "medians_ms": {
+        "Dyn before": 42.207733,
+        "Dyn hint": 17.511182,
+        "C calloc/free": 4.737332,
+        "C arena plain": 2.219536,
+        "C arena old cleanup": 37.652712,
+        "C arena new cleanup": 14.758042
+      },
+      "order": [
+        [
+          "Dyn before",
+          "Dyn hint",
+          "C calloc/free",
+          "C arena plain",
+          "C arena old cleanup",
+          "C arena new cleanup"
+        ],
+        [
+          "Dyn before",
+          "C arena new cleanup",
+          "C arena old cleanup",
+          "C arena plain",
+          "C calloc/free",
+          "Dyn hint"
+        ],
+        [
+          "C calloc/free",
+          "C arena plain",
+          "C arena old cleanup",
+          "C arena new cleanup",
+          "Dyn before",
+          "Dyn hint"
+        ],
+        [
+          "C calloc/free",
+          "Dyn hint",
+          "Dyn before",
+          "C arena new cleanup",
+          "C arena old cleanup",
+          "C arena plain"
+        ],
+        [
+          "C arena old cleanup",
+          "C arena new cleanup",
+          "Dyn before",
+          "Dyn hint",
+          "C calloc/free",
+          "C arena plain"
+        ],
+        [
+          "C arena old cleanup",
+          "C arena plain",
+          "C calloc/free",
+          "Dyn hint",
+          "Dyn before",
+          "C arena new cleanup"
+        ],
+        [
+          "Dyn before",
+          "Dyn hint",
+          "C calloc/free",
+          "C arena plain",
+          "C arena old cleanup",
+          "C arena new cleanup"
+        ],
+        [
+          "Dyn before",
+          "C arena new cleanup",
+          "C arena old cleanup",
+          "C arena plain",
+          "C calloc/free",
+          "Dyn hint"
+        ],
+        [
+          "C calloc/free",
+          "C arena plain",
+          "C arena old cleanup",
+          "C arena new cleanup",
+          "Dyn before",
+          "Dyn hint"
+        ],
+        [
+          "C calloc/free",
+          "Dyn hint",
+          "Dyn before",
+          "C arena new cleanup",
+          "C arena old cleanup",
+          "C arena plain"
+        ],
+        [
+          "C arena old cleanup",
+          "C arena new cleanup",
+          "Dyn before",
+          "Dyn hint",
+          "C calloc/free",
+          "C arena plain"
+        ],
+        [
+          "C arena old cleanup",
+          "C arena plain",
+          "C calloc/free",
+          "Dyn hint",
+          "Dyn before",
+          "C arena new cleanup"
+        ],
+        [
+          "Dyn before",
+          "Dyn hint",
+          "C calloc/free",
+          "C arena plain",
+          "C arena old cleanup",
+          "C arena new cleanup"
+        ],
+        [
+          "Dyn before",
+          "C arena new cleanup",
+          "C arena old cleanup",
+          "C arena plain",
+          "C calloc/free",
+          "Dyn hint"
+        ],
+        [
+          "C calloc/free",
+          "C arena plain",
+          "C arena old cleanup",
+          "C arena new cleanup",
+          "Dyn before",
+          "Dyn hint"
+        ],
+        [
+          "C calloc/free",
+          "Dyn hint",
+          "Dyn before",
+          "C arena new cleanup",
+          "C arena old cleanup",
+          "C arena plain"
+        ],
+        [
+          "C arena old cleanup",
+          "C arena new cleanup",
+          "Dyn before",
+          "Dyn hint",
+          "C calloc/free",
+          "C arena plain"
+        ],
+        [
+          "C arena old cleanup",
+          "C arena plain",
+          "C calloc/free",
+          "Dyn hint",
+          "Dyn before",
+          "C arena new cleanup"
+        ],
+        [
+          "Dyn before",
+          "Dyn hint",
+          "C calloc/free",
+          "C arena plain",
+          "C arena old cleanup",
+          "C arena new cleanup"
+        ],
+        [
+          "Dyn before",
+          "C arena new cleanup",
+          "C arena old cleanup",
+          "C arena plain",
+          "C calloc/free",
+          "Dyn hint"
+        ],
+        [
+          "C calloc/free",
+          "C arena plain",
+          "C arena old cleanup",
+          "C arena new cleanup",
+          "Dyn before",
+          "Dyn hint"
+        ],
+        [
+          "C calloc/free",
+          "Dyn hint",
+          "Dyn before",
+          "C arena new cleanup",
+          "C arena old cleanup",
+          "C arena plain"
+        ],
+        [
+          "C arena old cleanup",
+          "C arena new cleanup",
+          "Dyn before",
+          "Dyn hint",
+          "C calloc/free",
+          "C arena plain"
+        ]
+      ],
+      "paired_bootstrap_ratio_95": [
+        0.3712375686270672,
+        0.4678342582480055
+      ]
+    },
+    "128": {
+      "n": 8192,
+      "rounds": 128,
+      "expected": "4503357962059776\n",
+      "milliseconds": {
+        "Dyn before": [
+          172.977683,
+          171.12616,
+          215.680941,
+          192.894982,
+          183.614497,
+          164.752197,
+          166.576479,
+          170.670148,
+          148.375123,
+          221.831614,
+          184.353593,
+          186.77225,
+          175.469281,
+          203.98311,
+          171.657854,
+          171.712106,
+          152.964944,
+          148.265043,
+          166.755471,
+          177.132574,
+          167.054163
+        ],
+        "Dyn hint": [
+          76.347702,
+          63.708843,
+          65.073982,
+          77.481209,
+          63.32692,
+          76.760104,
+          69.070901,
+          64.410018,
+          76.28379,
+          59.187592,
+          87.52436,
+          73.589642,
+          61.586109,
+          77.654231,
+          75.477765,
+          66.559283,
+          64.976953,
+          92.218042,
+          67.676871,
+          62.005071,
+          82.006481
+        ],
+        "C calloc/free": [
+          22.522697,
+          17.2918,
+          13.811586,
+          15.478768,
+          13.742626,
+          13.794486,
+          14.419521,
+          16.515845,
+          23.759076,
+          15.026204,
+          16.448054,
+          15.431447,
+          14.078188,
+          13.555304,
+          14.146409,
+          17.917735,
+          17.544282,
+          13.459484,
+          15.393108,
+          15.530189,
+          14.480111
+        ],
+        "C arena plain": [
+          3.662115,
+          3.661365,
+          3.698326,
+          3.835327,
+          4.340651,
+          4.940164,
+          5.020635,
+          4.562292,
+          4.899304,
+          4.574772,
+          5.193626,
+          4.569012,
+          3.685986,
+          6.278034,
+          3.879407,
+          6.420415,
+          5.425058,
+          4.246789,
+          3.636565,
+          5.488188,
+          3.766676
+        ],
+        "C arena old cleanup": [
+          154.004642,
+          191.459322,
+          173.403507,
+          148.228491,
+          159.894532,
+          161.985057,
+          165.092458,
+          160.690028,
+          156.057566,
+          158.05673,
+          177.536466,
+          174.608826,
+          159.224718,
+          134.647967,
+          143.242157,
+          161.278202,
+          159.196938,
+          142.356811,
+          181.771666,
+          142.742474,
+          156.353359
+        ],
+        "C arena new cleanup": [
+          51.394067,
+          66.487973,
+          52.658236,
+          70.080098,
+          51.650429,
+          49.587115,
+          62.162122,
+          49.994198,
+          69.708225,
+          50.718963,
+          63.736204,
+          49.812146,
+          49.899248,
+          51.70888,
+          59.674926,
+          54.238328,
+          54.61462,
+          52.963099,
+          51.620489,
+          54.304968,
+          68.147425
+        ]
+      },
+      "medians_ms": {
+        "Dyn before": 171.712106,
+        "Dyn hint": 69.070901,
+        "C calloc/free": 15.393108,
+        "C arena plain": 4.562292,
+        "C arena old cleanup": 159.224718,
+        "C arena new cleanup": 52.963099
+      },
+      "order": [
+        [
+          "Dyn before",
+          "Dyn hint",
+          "C calloc/free",
+          "C arena plain",
+          "C arena old cleanup",
+          "C arena new cleanup"
+        ],
+        [
+          "Dyn before",
+          "C arena new cleanup",
+          "C arena old cleanup",
+          "C arena plain",
+          "C calloc/free",
+          "Dyn hint"
+        ],
+        [
+          "C calloc/free",
+          "C arena plain",
+          "C arena old cleanup",
+          "C arena new cleanup",
+          "Dyn before",
+          "Dyn hint"
+        ],
+        [
+          "C calloc/free",
+          "Dyn hint",
+          "Dyn before",
+          "C arena new cleanup",
+          "C arena old cleanup",
+          "C arena plain"
+        ],
+        [
+          "C arena old cleanup",
+          "C arena new cleanup",
+          "Dyn before",
+          "Dyn hint",
+          "C calloc/free",
+          "C arena plain"
+        ],
+        [
+          "C arena old cleanup",
+          "C arena plain",
+          "C calloc/free",
+          "Dyn hint",
+          "Dyn before",
+          "C arena new cleanup"
+        ],
+        [
+          "Dyn before",
+          "Dyn hint",
+          "C calloc/free",
+          "C arena plain",
+          "C arena old cleanup",
+          "C arena new cleanup"
+        ],
+        [
+          "Dyn before",
+          "C arena new cleanup",
+          "C arena old cleanup",
+          "C arena plain",
+          "C calloc/free",
+          "Dyn hint"
+        ],
+        [
+          "C calloc/free",
+          "C arena plain",
+          "C arena old cleanup",
+          "C arena new cleanup",
+          "Dyn before",
+          "Dyn hint"
+        ],
+        [
+          "C calloc/free",
+          "Dyn hint",
+          "Dyn before",
+          "C arena new cleanup",
+          "C arena old cleanup",
+          "C arena plain"
+        ],
+        [
+          "C arena old cleanup",
+          "C arena new cleanup",
+          "Dyn before",
+          "Dyn hint",
+          "C calloc/free",
+          "C arena plain"
+        ],
+        [
+          "C arena old cleanup",
+          "C arena plain",
+          "C calloc/free",
+          "Dyn hint",
+          "Dyn before",
+          "C arena new cleanup"
+        ],
+        [
+          "Dyn before",
+          "Dyn hint",
+          "C calloc/free",
+          "C arena plain",
+          "C arena old cleanup",
+          "C arena new cleanup"
+        ],
+        [
+          "Dyn before",
+          "C arena new cleanup",
+          "C arena old cleanup",
+          "C arena plain",
+          "C calloc/free",
+          "Dyn hint"
+        ],
+        [
+          "C calloc/free",
+          "C arena plain",
+          "C arena old cleanup",
+          "C arena new cleanup",
+          "Dyn before",
+          "Dyn hint"
+        ],
+        [
+          "C calloc/free",
+          "Dyn hint",
+          "Dyn before",
+          "C arena new cleanup",
+          "C arena old cleanup",
+          "C arena plain"
+        ],
+        [
+          "C arena old cleanup",
+          "C arena new cleanup",
+          "Dyn before",
+          "Dyn hint",
+          "C calloc/free",
+          "C arena plain"
+        ],
+        [
+          "C arena old cleanup",
+          "C arena plain",
+          "C calloc/free",
+          "Dyn hint",
+          "Dyn before",
+          "C arena new cleanup"
+        ],
+        [
+          "Dyn before",
+          "Dyn hint",
+          "C calloc/free",
+          "C arena plain",
+          "C arena old cleanup",
+          "C arena new cleanup"
+        ],
+        [
+          "Dyn before",
+          "C arena new cleanup",
+          "C arena old cleanup",
+          "C arena plain",
+          "C calloc/free",
+          "Dyn hint"
+        ],
+        [
+          "C calloc/free",
+          "C arena plain",
+          "C arena old cleanup",
+          "C arena new cleanup",
+          "Dyn before",
+          "Dyn hint"
+        ],
+        [
+          "C calloc/free",
+          "Dyn hint",
+          "Dyn before",
+          "C arena new cleanup",
+          "C arena old cleanup",
+          "C arena plain"
+        ],
+        [
+          "C arena old cleanup",
+          "C arena new cleanup",
+          "Dyn before",
+          "Dyn hint",
+          "C calloc/free",
+          "C arena plain"
+        ]
+      ],
+      "paired_bootstrap_ratio_95": [
+        0.36707290092560413,
+        0.44855856053802645
+      ]
+    }
+  },
+  "binaries": {
+    "Dyn before": "b9a0804e345b56b1a630916830e23dcedb9fdf96b40ff42fba530474d8aa176f",
+    "Dyn hint": "dd11ba992cb96cb329749e29918a31c0a346d58a5dcbb6849da417c1c0850413",
+    "C calloc/free": "66dd93147dbe173d8b56f261edc4151458797430b1de59f9ae234c4b64e5e9ea",
+    "C arena plain": "bedf8c3f1b4643ff65b8714633593eb71a89a9952e415100336d95ef922252e1",
+    "C arena old cleanup": "bedf8c3f1b4643ff65b8714633593eb71a89a9952e415100336d95ef922252e1",
+    "C arena new cleanup": "2c4f805786559a1849b9a76cb63294eade64aff43d6109c67cae23ac2e5d8481"
+  }
+}

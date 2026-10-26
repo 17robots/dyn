@@ -136,8 +136,8 @@ fn main() {
   if !verify_layout() { #panic("layout") }
   if T_Negative != -7 || T_Next != -6 || T_BIG != 18446744073709551615 { #panic("constants") }
   if #len(T_TEXT) != 3 || T_TEXT[1] != 0 || T_TEXT[2] != 'b' { #panic("string bytes") }
-  if T_NULL != nil || #cast(usize) T_SENTINEL() != 18446744073709551615 { #panic("pointer constants") }
-  pair := T_apply(&callback, T_pair(8))
+  if T_NULL != nil || #cast(usize, T_SENTINEL()) != 18446744073709551615 { #panic("pointer constants") }
+  pair := T_apply(callback, T_pair(8))
   if pair.x != 9 || pair.y != 6.5 { #panic("aggregate calling convention") }
   returned: T_Callback = nil
   T_get_callback(&returned)

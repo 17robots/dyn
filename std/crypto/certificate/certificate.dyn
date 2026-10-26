@@ -1,28 +1,74 @@
+use "std/errors" errors
 use "std/crypto/der" der
 use "std/crypto/core" crypto_core
 
 // Borrowed DER certificate view. TLS provider performs trust and hostname verification.
 pub struct Certificate { encoded: []const u8, tbs: []const u8, signature_algorithm: []const u8, signature_bits: []const u8 }
-pub struct Result { certificate: Certificate, ok: bool }
+pub struct Result { value: Certificate, ok: bool, kind: errors.Kind, error: isize, offset: usize }
 
 pub fn parse(encoded: []const u8) Result {
   outer_cursor := der.cursor(encoded)
   outer := der.next(&outer_cursor)
-  if !outer.ok || outer.element.tag != 48 || !der.finished(&outer_cursor) {
-    return Result{}
-  }
-  children := der.enter(outer.element)
-  tbs := der.next(&children)
-  algorithm := der.next(&children)
-  signature := der.next(&children)
-  if !tbs.ok || tbs.element.tag != 48 || !algorithm.ok || algorithm.element.tag != 48 ||
-    !signature.ok || signature.element.tag != 3 || #len(signature.element.content) < 1 ||
-    signature.element.content[0] != 0 || !der.finished(&children) {
-      return Result{}
+  if !outer.ok {
+    kind:=outer.kind
+    if kind==errors.Kind.None {
+      kind=errors.Kind.InvalidInput
     }
-  return Result{ certificate: Certificate{
-    encoded: encoded, tbs: tbs.element.encoded, signature_algorithm: algorithm.element.encoded,
-    signature_bits: signature.element.content[1..],
+    return Result{kind:kind, offset:outer.offset}
+  }
+  if outer.value.tag!=48 {
+    return Result{kind:errors.Kind.InvalidInput}
+  }
+  if !der.finished(&outer_cursor) {
+    return Result{kind:errors.Kind.InvalidInput, offset:outer_cursor.offset}
+  }
+  header:=#len(outer.value.encoded)-#len(outer.value.content)
+  children:=der.enter(outer.value)
+  start:=children.offset
+  tbs:=der.next(&children)
+  if !tbs.ok {
+    kind:=tbs.kind
+    if kind==errors.Kind.None {
+      kind=errors.Kind.InvalidInput
+    }
+    return Result{kind:kind, offset:header+tbs.offset}
+  }
+  if tbs.value.tag!=48 {
+    return Result{kind:errors.Kind.InvalidInput, offset:header+start}
+  }
+  start=children.offset
+  algorithm:=der.next(&children)
+  if !algorithm.ok {
+    kind:=algorithm.kind
+    if kind==errors.Kind.None {
+      kind=errors.Kind.InvalidInput
+    }
+    return Result{kind:kind, offset:header+algorithm.offset}
+  }
+  if algorithm.value.tag!=48 {
+    return Result{kind:errors.Kind.InvalidInput, offset:header+start}
+  }
+  start=children.offset
+  signature:=der.next(&children)
+  if !signature.ok {
+    kind:=signature.kind
+    if kind==errors.Kind.None {
+      kind=errors.Kind.InvalidInput
+    }
+    return Result{kind:kind, offset:header+signature.offset}
+  }
+  if signature.value.tag!=3 || #len(signature.value.content)<1 {
+    return Result{kind:errors.Kind.InvalidInput, offset:header+start}
+  }
+  if signature.value.content[0]!=0 {
+    return Result{kind:errors.Kind.InvalidInput, offset:header+start+#len(signature.value.encoded)-#len(signature.value.content)}
+  }
+  if !der.finished(&children) {
+    return Result{kind:errors.Kind.InvalidInput, offset:header+children.offset}
+  }
+  return Result{ value: Certificate{
+    encoded: encoded, tbs: tbs.value.encoded, signature_algorithm: algorithm.value.encoded,
+    signature_bits: signature.value.content[1..],
   }, ok: true }
 }
 

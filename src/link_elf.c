@@ -6,6 +6,7 @@
    may be any OS, so ELF structures are read field by field instead of
    through <elf.h>. */
 #include "link_elf.h"
+#include "elf_class.h"
 #include <ctype.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -15,7 +16,7 @@
 
 enum {
   ELF_REL = 1, ELF_EXEC = 2, ELF_DYN = 3,
-  MACHINE_X86_64 = 62, MACHINE_AARCH64 = 183, MACHINE_RISCV = 243,
+  MACHINE_ARM = 40, MACHINE_X86_64 = 62, MACHINE_AARCH64 = 183, MACHINE_RISCV = 243,
   SHT_PROGBITS = 1, SHT_SYMTAB = 2, SHT_STRTAB = 3, SHT_RELA = 4, SHT_NOBITS = 8,
   SHT_REL = 9, SHT_INIT_ARRAY = 14, SHT_FINI_ARRAY = 15, SHT_PREINIT_ARRAY = 16,
   SHT_GROUP = 17, SHT_SYMTAB_SHNDX = 18, SHT_X86_64_UNWIND = 0x70000001,
@@ -57,6 +58,8 @@ enum {
   R_AARCH64_COPY = 1024, R_AARCH64_GLOB_DAT = 1025, R_AARCH64_JUMP_SLOT = 1026, R_AARCH64_RELATIVE = 1027,
 };
 enum {
+  R_ARM_NONE = 0, R_ARM_ABS32 = 2, R_ARM_REL32 = 3, R_ARM_THM_CALL = 10, R_ARM_THM_JUMP24 = 30,
+  R_ARM_TARGET1 = 38, R_ARM_V4BX = 40, R_ARM_THM_MOVW_ABS_NC = 47, R_ARM_THM_MOVT_ABS = 48,
   R_RISCV_NONE = 0, R_RISCV_32 = 1, R_RISCV_64 = 2, R_RISCV_RELATIVE = 3,
   R_RISCV_COPY = 4, R_RISCV_JUMP_SLOT = 5, R_RISCV_BRANCH = 16, R_RISCV_JAL = 17,
   R_RISCV_CALL = 18, R_RISCV_CALL_PLT = 19, R_RISCV_GOT_HI20 = 20,
@@ -85,7 +88,7 @@ typedef struct {
 /* Allocated outputs in address order: read-only, code, then writable. */
 typedef enum {
   OUT_INTERP, OUT_HASH, OUT_DYNSYM, OUT_DYNSTR, OUT_VERSYM, OUT_VERNEED, OUT_RELA_DYN, OUT_RELA_PLT,
-  OUT_RODATA, OUT_EH_FRAME, OUT_TEXT, OUT_PLT, OUT_DYNAMIC, OUT_INIT_ARRAY, OUT_FINI_ARRAY,
+  OUT_RODATA, OUT_DYN_UNWIND, OUT_EH_FRAME, OUT_TEXT, OUT_PLT, OUT_DYNAMIC, OUT_INIT_ARRAY, OUT_FINI_ARRAY,
   OUT_DATA_REL_RO, OUT_DATA, OUT_GOT, OUT_TDATA, OUT_TBSS, OUT_BSS, OUT_ALLOC_COUNT
 } OutputKind;
 typedef struct {
@@ -185,16 +188,19 @@ typedef struct {
   size_t extra_count, extra_capacity;
   char **signatures;
   size_t signature_count, signature_capacity;
-  bool shared_output, dynamic, lazy_plt;
+  bool shared_output, dynamic, lazy_plt, bare;
+  bool class32; /* Inputs are ELF32: they were widened on load, the output is narrowed. */
   uint64_t relro_offset, relro_address, relro_size;
   uint16_t machine; /* Of the first input; all must match. */
   uint32_t riscv_flags;
+  bool riscv_flags_seen;
+  uint32_t arm_float_flags;
   uint64_t page; /* Maximum page size: segments never share one. */
   uint32_t copy_type, glob_dat_type, jump_slot_type, relative_type, word_type;
   const char *interpreter;
   const char *runpath;
   uint32_t runpath_string;
-  uint64_t base;
+  uint64_t base, data_base, image_end, data_end;
   LinkShared **shareds;
   size_t shared_count, shared_capacity;
   LinkSymbol **plt_symbols, **dynsyms;
@@ -360,8 +366,10 @@ static bool define_symbol(Linker *linker, LinkObject *object, LinkSymbol *symbol
 
 /* Architectures differ in relocation numbering, page size and PLT. */
 static bool set_machine(Linker *linker, const char *path, uint16_t machine) {
-  if (machine != MACHINE_X86_64 && machine != MACHINE_AARCH64 && machine != MACHINE_RISCV)
-    return fail(linker, "'%s' is not x86-64, AArch64 or RV64%s", path, "");
+  if (machine != MACHINE_X86_64 && machine != MACHINE_AARCH64 && machine != MACHINE_RISCV && machine != MACHINE_ARM)
+    return fail(linker, "'%s' is not x86-64, AArch64, RISC-V or Arm%s", path, "");
+  if (machine == MACHINE_ARM && !linker->class32)
+    return fail(linker, "'%s' is a 64-bit Arm object%s", path, "");
   if (linker->machine && linker->machine != machine)
     return fail(linker, "'%s' is for a different architecture than the other inputs%s", path, "");
   linker->machine = machine;
@@ -372,9 +380,22 @@ static bool set_machine(Linker *linker, const char *path, uint16_t machine) {
   linker->jump_slot_type = riscv ? R_RISCV_JUMP_SLOT : arm ? R_AARCH64_JUMP_SLOT : R_X86_64_JUMP_SLOT;
   linker->relative_type = riscv ? R_RISCV_RELATIVE : arm ? R_AARCH64_RELATIVE : R_X86_64_RELATIVE;
   linker->word_type = riscv ? R_RISCV_64 : arm ? R_AARCH64_ABS64 : R_X86_64_64;
+  if (machine == MACHINE_ARM) {
+    /* Static bare-metal images only: no GOT, PLT or dynamic relocations. */
+    linker->copy_type = linker->glob_dat_type = linker->jump_slot_type = linker->relative_type = UINT32_MAX;
+    linker->word_type = UINT32_MAX;
+  }
   return true;
 }
 static SymbolUse symbol_use(const Linker *linker, uint32_t type) {
+  if (linker->machine == MACHINE_ARM) {
+    switch (type) {
+    case R_ARM_THM_CALL: case R_ARM_THM_JUMP24: return USE_CALL;
+    case R_ARM_ABS32: case R_ARM_TARGET1: case R_ARM_THM_MOVW_ABS_NC: case R_ARM_THM_MOVT_ABS: return USE_ABSOLUTE;
+    case R_ARM_REL32: return USE_ADDRESS;
+    default: return USE_OTHER;
+    }
+  }
   if (linker->machine == MACHINE_RISCV) {
     switch (type) {
     case R_RISCV_GOT_HI20: return USE_GOT;
@@ -406,8 +427,96 @@ static SymbolUse symbol_use(const Linker *linker, uint32_t type) {
   default: return USE_OTHER;
   }
 }
+/* Addenda32: AEABI file attributes, including default-zero VFP arguments.
+ * Section/symbol attributes are deprecated and may be ignored. */
+static bool arm_attribute_uleb(const uint8_t **cursor, const uint8_t *end, uint32_t *value) {
+  *value = 0;
+  for (unsigned shift = 0; shift < 35; shift += 7) {
+    if (*cursor == end) return false;
+    uint8_t byte = *(*cursor)++;
+    if (shift == 28 && (byte & 0xf0)) return false;
+    *value |= (uint32_t)(byte & 0x7f) << shift;
+    if (!(byte & 0x80)) return true;
+  }
+  return false;
+}
+static bool arm_attributes(const uint8_t *data, size_t size, bool *file_seen,
+                           bool *vfp_seen, uint32_t *vfp) {
+  if (!size || *data != 'A') return false;
+  const uint8_t *p = data + 1, *end = data + size;
+  while (p < end) {
+    if (end - p < 4) return false;
+    uint32_t length = read32(p);
+    if (length < 5 || length > (size_t)(end - p)) return false;
+    const uint8_t *vendor_end = p + length;
+    p += 4;
+    const uint8_t *name_end = memchr(p, 0, (size_t)(vendor_end - p));
+    if (!name_end) return false;
+    bool aeabi = name_end - p == 5 && !memcmp(p, "aeabi", 5);
+    p = name_end + 1;
+    if (!aeabi) { p = vendor_end; continue; }
+    while (p < vendor_end) {
+      const uint8_t *start = p;
+      uint32_t scope;
+      if (!arm_attribute_uleb(&p, vendor_end, &scope) || vendor_end - p < 4) return false;
+      length = read32(p);
+      p += 4;
+      if (length < (size_t)(p - start) || length > (size_t)(vendor_end - start)) return false;
+      const uint8_t *scope_end = start + length;
+      if (scope != 1) { p = scope_end; continue; }
+      *file_seen = true;
+      while (p < scope_end) {
+        uint32_t tag, value = 0;
+        if (!arm_attribute_uleb(&p, scope_end, &tag)) return false;
+        /* Addenda32: unknown tags below 64 modulo 128 are mandatory.
+         * Recognize standard metadata, including that emitted by Clang. */
+        bool known = (tag >= 4 && tag <= 32) || tag == 34 || tag == 36 ||
+                     tag == 38 || tag == 42 || tag == 44 || tag == 46 ||
+                     tag == 48 || tag == 50 || tag == 52;
+        if (!known && tag % 128 < 64) return false;
+        bool string = tag == 4 || tag == 5 || (tag > 32 && (tag & 1));
+        if (!string && !arm_attribute_uleb(&p, scope_end, &value)) return false;
+        /* Tag_compatibility has both a ULEB128 flag and a vendor NTBS. */
+        if (string || tag == 32) {
+          const uint8_t *nul = memchr(p, 0, (size_t)(scope_end - p));
+          if (!nul) return false;
+          /* No vendor-specific toolchain contracts are implemented here. */
+          if (tag == 32 && value != 0) return false;
+          p = nul + 1;
+        }
+        if (tag == 28) {
+          if (value == 2 || value > 3 || (*vfp_seen && *vfp != value)) return false;
+          *vfp_seen = true;
+          *vfp = value;
+        }
+      }
+    }
+  }
+  return true;
+}
 static bool kept_section(const LinkSection *section);
+static bool load_object64(Linker *linker, const char *path, const uint8_t *data, size_t size);
+/* ELF32 objects are widened to ELF64 on load; the output is narrowed again. */
 static bool load_object(Linker *linker, const char *path, const uint8_t *data, size_t size) {
+  if (size >= 52 && !memcmp(data, "\x7f" "ELF", 4) && data[4] == 1) {
+    if (linker->object_count && !linker->class32)
+      return fail(linker, "'%s' is a 32-bit object but other inputs are 64-bit%s", path, "");
+    uint8_t *wide = NULL; size_t wide_size = 0;
+    if (!dyn_elf_widen(data, size, &wide, &wide_size))
+      return fail(linker, "'%s' is not a supported 32-bit relocatable object%s", path, "");
+    if (!grow((void **)&linker->buffers, &linker->buffer_capacity, linker->buffer_count, sizeof(*linker->buffers))) {
+      free(wide);
+      return fail(linker, "out of memory%s%s", "", "");
+    }
+    linker->buffers[linker->buffer_count++] = wide;
+    linker->class32 = true;
+    return load_object64(linker, path, wide, wide_size);
+  }
+  if (linker->class32 && size >= 5 && data[4] == 2)
+    return fail(linker, "'%s' is a 64-bit object but other inputs are 32-bit%s", path, "");
+  return load_object64(linker, path, data, size);
+}
+static bool load_object64(Linker *linker, const char *path, const uint8_t *data, size_t size) {
   if (size < 64 || memcmp(data, "\x7f" "ELF", 4))
     return fail(linker, "'%s' is not an ELF object%s", path, "");
   if (data[4] != 2 || data[5] != 1 || read16(data + 16) != ELF_REL)
@@ -415,10 +524,15 @@ static bool load_object(Linker *linker, const char *path, const uint8_t *data, s
   if (!set_machine(linker, path, read16(data + 18))) return false;
   if (linker->machine == MACHINE_RISCV) {
     uint32_t flags = read32(data + 48);
-    if ((flags & 6) != 4 || (flags & ~7u))
-      return fail(linker, "'%s' does not use the supported RISC-V LP64D ABI%s", path, "");
+    if (((flags & 6) != 4 && !((flags & 6) == 0 && linker->class32 && linker->bare)) || (flags & ~7u))
+      return fail(linker, "'%s' uses an unsupported RISC-V ABI%s", path, "");
+    if (linker->riscv_flags_seen && (flags & 6) != (linker->riscv_flags & 6))
+      return fail(linker, "'%s' has a conflicting RISC-V floating-point ABI%s", path, "");
+    linker->riscv_flags_seen = true;
     linker->riscv_flags |= flags;
   }
+  if (linker->machine == MACHINE_ARM && (read32(data + 48) & 0xff000000u) != 0x05000000u)
+    return fail(linker, "'%s' does not use the Arm EABI version 5%s", path, "");
   LinkObject *object = calloc(1, sizeof(*object));
   if (!object || !grow((void **)&linker->objects, &linker->object_capacity, linker->object_count, sizeof(*linker->objects))) {
     free(object);
@@ -459,6 +573,26 @@ static bool load_object(Linker *linker, const char *path, const uint8_t *data, s
     }
     if (section->type == SHT_SYMTAB) symtab = i;
     section->eh_frame = !strcmp(section->name, ".eh_frame") || section->type == SHT_X86_64_UNWIND;
+  }
+  if (linker->machine == MACHINE_ARM) {
+    bool file_seen = false, vfp_seen = false;
+    uint32_t vfp = 0, abi = read32(data + 48) & 0x600;
+    for (uint32_t i = 1; i < count; ++i) {
+      LinkSection *section = &object->sections[i];
+      if (section->type == 0x70000003 &&
+          !arm_attributes(section->data, section->size, &file_seen, &vfp_seen, &vfp))
+        return fail(linker, "'%s' has malformed Arm ABI attributes%s", path, "");
+    }
+    /* Only 3 is compatible with both standard variants; toolchain-specific
+     * value 2 is rejected above, even with explicit flags. No attributes means
+     * unspecified: generated startup objects use only explicit ELF flags. */
+    uint32_t attribute_abi = file_seen && vfp < 2 ? (vfp == 1 ? 0x400 : 0x200) : 0;
+    if (abi == 0x600 || (abi && attribute_abi && abi != attribute_abi))
+      return fail(linker, "'%s' has a conflicting Arm floating-point ABI%s", path, "");
+    if (!abi) abi = attribute_abi;
+    if (abi && linker->arm_float_flags && abi != linker->arm_float_flags)
+      return fail(linker, "'%s' has a conflicting Arm floating-point ABI%s", path, "");
+    if (abi) linker->arm_float_flags = abi;
   }
   /* Later copies of a COMDAT group are dropped whole. */
   for (uint32_t i = 1; i < count; ++i) {
@@ -583,8 +717,11 @@ static bool load_shared(Linker *linker, const char *path, const uint8_t *data, s
   if (!set_machine(linker, path, read16(data + 18))) return false;
   if (linker->machine == MACHINE_RISCV) {
     uint32_t flags = read32(data + 48);
-    if ((flags & 6) != 4 || (flags & ~7u))
-      return fail(linker, "'%s' does not use the supported RISC-V LP64D ABI%s", path, "");
+    if (((flags & 6) != 4 && !((flags & 6) == 0 && linker->class32 && linker->bare)) || (flags & ~7u))
+      return fail(linker, "'%s' uses an unsupported RISC-V ABI%s", path, "");
+    if (linker->riscv_flags_seen && (flags & 6) != (linker->riscv_flags & 6))
+      return fail(linker, "'%s' has a conflicting RISC-V floating-point ABI%s", path, "");
+    linker->riscv_flags_seen = true;
     linker->riscv_flags |= flags;
   }
   uint64_t header_offset = read64(data + 40);
@@ -882,6 +1019,7 @@ static int classify(const LinkSection *section) {
   if (section->type == SHT_NOBITS) return OUT_BSS;
   if (section->flags & SHF_WRITE)
     return strncmp(section->name, ".data.rel.ro", 12) ? OUT_DATA : OUT_DATA_REL_RO;
+  if (!strcmp(section->name, "dyn_unwind")) return OUT_DYN_UNWIND;
   return OUT_RODATA;
 }
 static bool kept_section(const LinkSection *section) {
@@ -1067,6 +1205,12 @@ static bool collect_garbage(Linker *linker, const char *entry) {
     for (size_t i = 1; ok && i < object->section_count; ++i) {
       LinkSection *section = &object->sections[i];
       if (section->eh_frame && !section->discarded && section->flags & SHF_ALLOC) ok = rewrite_frames(linker, section);
+      else if (!section->live && !section->discarded && !strcmp(section->name, "dyn_unwind")) {
+        /* Dyn frame tables describe their object's code; they live with it
+           and are found through __start_dyn_unwind, not by reference. */
+        for (size_t t = 1; t < object->section_count; ++t)
+          if (object->sections[t].live && object->sections[t].flags & SHF_EXEC) section->live = true;
+      }
       else if (!(section->flags & SHF_ALLOC) && kept_section(section)) section->live = true;
     }
   }
@@ -1115,6 +1259,7 @@ static bool assign_outputs(Linker *linker) {
     [OUT_RELA_DYN] = {".rela.dyn", SHT_RELA, 24, OUT_DYNSYM},
     [OUT_RELA_PLT] = {".rela.plt", SHT_RELA, 24, OUT_DYNSYM},
     [OUT_RODATA] = {".rodata", SHT_PROGBITS, 0, -1},
+    [OUT_DYN_UNWIND] = {"dyn_unwind", SHT_PROGBITS, 0, -1},
     [OUT_EH_FRAME] = {".eh_frame", SHT_PROGBITS, 0, -1},
     [OUT_TEXT] = {".text", SHT_PROGBITS, 0, -1},
     [OUT_PLT] = {".plt", SHT_PROGBITS, 16, -1},
@@ -1182,7 +1327,7 @@ static bool preemptible(const Linker *linker, const LinkSymbol *symbol) {
   if (symbol->defined)
     return linker->shared_output && symbol->binding != STB_LOCAL && symbol->visibility == STV_DEFAULT &&
            !symbol->absolute;
-  return symbol->shared || (linker->shared_output && symbol->referenced);
+  return symbol->shared || (linker->shared_output && symbol->referenced && symbol->visibility == STV_DEFAULT);
 }
 static bool function_like(const LinkSymbol *symbol) {
   return symbol->shared_type == STT_FUNC || symbol->shared_type == STT_GNU_IFUNC;
@@ -1432,7 +1577,7 @@ static bool plan_dynamic(Linker *linker) {
    writable segment, ends on a page boundary, and PT_GNU_RELRO tells the
    loader to make it read-only once relocations are applied. */
 typedef struct {
-  uint64_t offset, address, file_size, memory_size;
+  uint64_t offset, address, file_size, memory_size, load_address;
   uint32_t flags;
 } Segment;
 static void place(LinkOutput *output, uint64_t *offset, uint64_t delta, bool allocated) {
@@ -1460,15 +1605,33 @@ static size_t layout(Linker *linker, Segment *segments, uint64_t header_size) {
   static const uint32_t flags[3] = {4, 5, 6};
   if (linker->outputs[OUT_TBSS].align > linker->outputs[OUT_TDATA].align)
     linker->outputs[OUT_TDATA].align = linker->outputs[OUT_TBSS].align;
+  /* Bare-metal images start executing at the load address, so code comes
+     first there and the file headers are not loaded. */
+  static const int orders[2][3] = {{0, 1, 2}, {1, 0, 2}};
   uint64_t offset = header_size, end = linker->base, page = linker->page;
   size_t count = 0;
-  for (int g = 0; g < 3; ++g) {
-    bool any = g == 0;
+  for (int i = 0; i < 3; ++i) {
+    int g = orders[linker->bare][i];
+    bool any = g == 0 && !linker->bare;
     for (int k = groups[g][0]; k <= groups[g][1]; ++k) any |= linker->outputs[k].count != 0;
+    if (g == 0) any |= linker->outputs[OUT_DATA_REL_RO].count != 0;
     if (g == 2) any |= linker->outputs[OUT_BSS].count != 0;
     if (!any) continue;
     uint64_t start = g ? offset : 0;
     uint64_t address = g ? align_up(end, page) + (offset & (page - 1)) : linker->base;
+    if (linker->bare && !count) {
+      offset = start = align_up(offset, page);
+      address = linker->base;
+    } else if (linker->bare) {
+      start = offset;
+      address = align_up(end, page) + (offset & (page - 1));
+    }
+    uint64_t load_address = address;
+    if (linker->bare && linker->data_base && g == 2) {
+      offset = start = align_up(offset, page);
+      load_address = align_up(end, page);
+      address = linker->data_base;
+    }
     uint64_t delta = address - start;
     for (int k = groups[g][0]; k <= groups[g][1]; ++k) {
       if (k == OUT_DATA_REL_RO && !linker->dynamic) continue;
@@ -1492,7 +1655,7 @@ static size_t layout(Linker *linker, Segment *segments, uint64_t header_size) {
       place(&linker->outputs[OUT_BSS], &bss, delta, true);
       memory_end = bss + linker->outputs[OUT_BSS].size;
     }
-    segments[count++] = (Segment){start, address, file_end - start, memory_end - start, flags[g]};
+    segments[count++] = (Segment){start, address, file_end - start, memory_end - start, load_address, flags[g]};
     end = address + (memory_end - start);
   }
   for (size_t e = 0; e < linker->extra_count; ++e) place(&linker->extra[e], &offset, 0, false);
@@ -1517,9 +1680,12 @@ static void define_linker_symbols(Linker *linker, Segment *segments, size_t segm
     {"__preinit_array_start", init->address}, {"__preinit_array_end", init->address},
     {"__fini_array_start", fini->address}, {"__fini_array_end", fini->address + fini->size},
     {"_etext", text->address + text->size}, {"etext", text->address + text->size},
+    {"__data_start", last->address}, {"__data_load", last->load_address},
     {"__bss_start", bss->address}, {"_edata", last->address + last->file_size},
     {"edata", last->address + last->file_size}, {"_end", last->address + last->memory_size},
     {"end", last->address + last->memory_size},
+    {"__start_dyn_unwind", linker->outputs[OUT_DYN_UNWIND].address},
+    {"__stop_dyn_unwind", linker->outputs[OUT_DYN_UNWIND].address + linker->outputs[OUT_DYN_UNWIND].size},
   };
   for (size_t i = 0; i < sizeof(defined) / sizeof(*defined); ++i) {
     LinkSymbol *symbol = symbol_find(linker, defined[i].name);
@@ -1728,6 +1894,50 @@ static bool relocate_riscv(Linker *linker, LinkSection *section, const LinkRela 
   }
   return fail(linker, "relocation to '%s' out of range in '%s'", symbol ? symbol->name : "?", section->object->path);
 }
+/* Thumb: code addresses carry bit 0 (T) wherever they are taken, and every
+   function is Thumb, so T is set for any target in an executable section. */
+static void thumb_immediate16(uint8_t *at, uint32_t value) {
+  uint16_t first = read16(at), second = read16(at + 2);
+  first = (uint16_t)((first & 0xfbf0) | ((value >> 12) & 15) | ((value >> 11) & 1) << 10);
+  second = (uint16_t)((second & 0x8f00) | ((value >> 8) & 7) << 12 | (value & 0xff));
+  write16(at, first); write16(at + 2, second);
+}
+static bool relocate_arm(Linker *linker, LinkSection *section, const LinkRela *rela,
+                         LinkSymbol *symbol, uint8_t *at, uint64_t value, bool debug) {
+  uint32_t type = rela->type;
+  if (type == R_ARM_NONE || type == R_ARM_V4BX) return true;
+  if (rela->offset > section->size || 4 > section->size - rela->offset)
+    return fail(linker, "relocation outside its section in '%s'%s", section->object->path, "");
+  LinkSection *target_section = symbol ? symbol_section(symbol) : NULL;
+  uint64_t thumb = target_section && (target_section->flags & SHF_EXEC) ? 1 : 0;
+  /* Debug ranges describe instruction addresses, not callable pointers. */
+  uint64_t target = debug && thumb ? (value + rela->addend) & ~UINT64_C(1)
+                                   : (value + rela->addend) | thumb;
+  int64_t relative = (int64_t)(target - (section->address + rela->offset));
+  switch (type) {
+  case R_ARM_ABS32: case R_ARM_TARGET1:
+    if (!debug && target > UINT32_MAX) break;
+    write32(at, (uint32_t)target); return true;
+  case R_ARM_REL32: write32(at, (uint32_t)relative); return true;
+  case R_ARM_THM_MOVW_ABS_NC: thumb_immediate16(at, (uint32_t)target & 0xffff); return true;
+  case R_ARM_THM_MOVT_ABS: thumb_immediate16(at, (uint32_t)(target >> 16) & 0xffff); return true;
+  case R_ARM_THM_CALL: case R_ARM_THM_JUMP24: {
+    /* BL and B.W: the offset is from the instruction plus four. */
+    relative -= 4;
+    if (!thumb || !fits_signed(relative, 25)) break;
+    uint32_t u = (uint32_t)relative, sign = (u >> 24) & 1;
+    uint32_t j1 = (~(u >> 23) ^ sign) & 1, j2 = (~(u >> 22) ^ sign) & 1;
+    write16(at, (uint16_t)(0xf000 | sign << 10 | ((u >> 12) & 0x3ff)));
+    write16(at + 2, (uint16_t)((read16(at + 2) & 0xd000) | j1 << 13 | j2 << 11 | ((u >> 1) & 0x7ff)));
+    return true;
+  }
+  default: {
+    char number[32]; snprintf(number, sizeof(number), "%u", type);
+    return fail(linker, "unsupported Arm relocation %s in '%s'", number, section->object->path);
+  }
+  }
+  return fail(linker, "relocation to '%s' out of range in '%s'", symbol ? symbol->name : "?", section->object->path);
+}
 static bool relocate(Linker *linker, LinkSection *section, uint8_t *out) {
   LinkObject *object = section->object;
   bool debug = !(section->flags & SHF_ALLOC);
@@ -1750,7 +1960,11 @@ static bool relocate(Linker *linker, LinkSection *section, uint8_t *out) {
       /* Point descriptions of discarded code at nothing, as lld does. */
       bool ranges = !strcmp(section->name, ".debug_ranges") || !strcmp(section->name, ".debug_loc");
       if (rela->type == linker->word_type) write64(at, ranges ? 1 : 0);
-      else if (rela->type == (linker->machine == MACHINE_RISCV ? R_RISCV_32 : arm ? R_AARCH64_ABS32 : R_X86_64_32)) write32(at, 0);
+      else if (rela->type == (linker->machine == MACHINE_RISCV ? R_RISCV_32 : linker->machine == MACHINE_ARM ? R_ARM_ABS32 : arm ? R_AARCH64_ABS32 : R_X86_64_32)) write32(at, 0);
+      continue;
+    }
+    if (linker->machine == MACHINE_ARM) {
+      if (!relocate_arm(linker, section, rela, symbol, at, value, debug)) return false;
       continue;
     }
     if (dead) return fail(linker, "'%s' references discarded section of '%s'", object->path, symbol->name);
@@ -1882,7 +2096,7 @@ static bool build_symtab(Linker *linker, Bytes *symbols, Bytes *names, uint32_t 
   *first_global = (uint32_t)(symbols->size / 24);
   for (size_t i = 0; i < linker->table_capacity; ++i) {
     LinkSymbol *symbol = linker->table[i];
-    if (symbol && listed(symbol) && !symbol->absolute && !symbol_entry(linker, symbols, names, symbol, true))
+    if (symbol && listed(symbol) && (linker->bare || !symbol->absolute) && !symbol_entry(linker, symbols, names, symbol, true))
       return false;
   }
   return true;
@@ -2129,6 +2343,14 @@ static bool write_output(Linker *linker, const char *entry_name) {
                             (relro(linker) ? 1 : 0);
   uint64_t header_size = 64 + 56 * phdr_count;
   size_t segment_count = layout(linker, segments, header_size);
+  for (size_t i = 0; i < segment_count; ++i) {
+    const Segment *s = &segments[i];
+    uint64_t limit = linker->data_base && (s->flags & 2) ? linker->data_end : linker->image_end;
+    if (limit && (s->address > limit || s->memory_size > limit - s->address))
+      return fail(linker, "bare-metal image exceeds %s region%s", s->flags & 2 ? "RAM" : "ROM", "");
+    if (linker->image_end && (s->load_address > linker->image_end || s->file_size > linker->image_end - s->load_address))
+      return fail(linker, "bare-metal initialized data exceeds ROM%s%s", "", "");
+  }
   plt_address = linker->outputs[OUT_PLT].address + (linker->lazy_plt ? 16 : 0);
   define_linker_symbols(linker, segments, segment_count);
   /* Section headers: null, allocated outputs, extras, .symtab, .strtab, .shstrtab. */
@@ -2219,10 +2441,11 @@ static bool write_output(Linker *linker, const char *entry_name) {
     write16(image + 16, linker->shared_output ? ELF_DYN : ELF_EXEC);
     write16(image + 18, linker->machine);
     write32(image + 20, 1);
-    write64(image + 24, entry ? symbol_address(entry) : 0);
+    write64(image + 24, entry ? symbol_address(entry) | (linker->machine == MACHINE_ARM) : 0);
     write64(image + 32, 64);
     write64(image + 40, section_headers);
     if (linker->machine == MACHINE_RISCV) write32(image + 48, linker->riscv_flags);
+    if (linker->machine == MACHINE_ARM) write32(image + 48, 0x05000000 | linker->arm_float_flags);
     write16(image + 52, 64);
     write16(image + 54, 56);
     write16(image + 56, (uint16_t)phdr_count);
@@ -2239,9 +2462,11 @@ static bool write_output(Linker *linker, const char *entry_name) {
       PROGRAM_HEADER(PT_PHDR, 4, 64, linker->base + 64, 56 * phdr_count, 56 * phdr_count, 8);
       PROGRAM_HEADER(PT_INTERP, 4, interp->file_offset, interp->address, interp->size, interp->size, 1);
     }
-    for (size_t s = 0; s < segment_count; ++s)
+    for (size_t s = 0; s < segment_count; ++s) {
       PROGRAM_HEADER(PT_LOAD, segments[s].flags, segments[s].offset, segments[s].address, segments[s].file_size,
                      segments[s].memory_size, linker->page);
+      write64(p - 56 + 24, segments[s].load_address);
+    }
     if (linker->dynamic) {
       const LinkOutput *dynamic = &linker->outputs[OUT_DYNAMIC];
       PROGRAM_HEADER(PT_DYNAMIC, 6, dynamic->file_offset, dynamic->address, dynamic->size, dynamic->size, 8);
@@ -2297,6 +2522,12 @@ static bool write_output(Linker *linker, const char *entry_name) {
     write64(h + 24, shstrtab_offset); write64(h + 32, shstrtab.size); write64(h + 48, 1);
   }
   free(extra_names); free(shstrtab.data); free(symtab.data); free(strtab.data);
+  if (ok && linker->class32) {
+    uint8_t *narrow = NULL; size_t narrow_size = 0;
+    if (linker->dynamic || !dyn_elf_narrow(image, file_size, &narrow, &narrow_size))
+      ok = fail(linker, "cannot write '%s' as a 32-bit static executable%s", linker->output_path, "");
+    else { free(image); image = narrow; file_size = narrow_size; }
+  }
   if (ok) {
     FILE *file = fopen(linker->output_path, "wb");
     ok = file && fwrite(image, 1, file_size, file) == file_size;
@@ -2360,8 +2591,11 @@ bool dyn_link_elf_supported(const char *path) {
   fclose(file);
   if (n >= 8 && !memcmp(magic, "!<arch>\n", 8)) return true;
   if (n >= 20 && !memcmp(magic, "\x7f" "ELF", 4))
-    return magic[4] == 2 && (read16(magic + 16) == ELF_REL || read16(magic + 16) == ELF_DYN) &&
-           (read16(magic + 18) == MACHINE_X86_64 || read16(magic + 18) == MACHINE_AARCH64 || read16(magic + 18) == MACHINE_RISCV);
+    return (magic[4] == 2 || (magic[4] == 1 && read16(magic + 16) == ELF_REL &&
+                               (read16(magic + 18) == MACHINE_RISCV || read16(magic + 18) == MACHINE_ARM))) &&
+           (read16(magic + 16) == ELF_REL || read16(magic + 16) == ELF_DYN) &&
+           (read16(magic + 18) == MACHINE_X86_64 || read16(magic + 18) == MACHINE_AARCH64 ||
+            read16(magic + 18) == MACHINE_RISCV || read16(magic + 18) == MACHINE_ARM);
   return is_script(magic, n);
 }
 
@@ -2408,8 +2642,10 @@ static bool local_version_script(Linker *linker, const char *path) {
 
 int dyn_link_elf(const char *const *inputs, size_t input_count, const char *output, const DynLinkOptions *options) {
   Linker linker = {.output_path = output, .shared_output = options->shared,
+                   .data_base = options->data_base, .image_end = options->image_end, .data_end = options->data_end,
                    .interpreter = options->interpreter ? options->interpreter : "/lib64/ld-linux-x86-64.so.2",
-                   .base = options->shared ? 0 : IMAGE_BASE};
+                   .base = options->shared ? 0 : options->base || options->bare ? options->base : IMAGE_BASE,
+                   .bare = !options->shared && (options->base || options->bare)};
   const char *entry = options->shared ? NULL : options->entry;
   bool ok = true;
   for (size_t i = 0; ok && i < input_count; ++i) {

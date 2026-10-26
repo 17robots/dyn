@@ -7,68 +7,96 @@ struct Attributes { storage: [8]u64 }
 extern fn attr_init "pthread_attr_init"(attributes: *Attributes) i32
 extern fn attr_size "pthread_attr_setstacksize"(attributes: *Attributes, size: usize) i32
 extern fn attr_destroy "pthread_attr_destroy"(attributes: *Attributes) i32
-extern fn create "pthread_create"(thread: *rawptr, attributes: *const Attributes, entry: *fn(rawptr) rawptr, context: rawptr) i32
+extern fn create "pthread_create"(thread: *rawptr, attributes: *const Attributes, entry: fn(rawptr) rawptr, context: rawptr) i32
 extern fn wait "pthread_join"(thread: rawptr, value: *rawptr) i32
 extern fn native_id "pthread_mach_thread_np"(thread: rawptr) u32
 extern fn native_yield "sched_yield"() i32
+extern fn native_errno "__error"() *i32
 
-pub struct Thread { handle: rawptr, identifier: u32, entry: *fn(rawptr) isize, context: rawptr, ready: sync.AtomicU32 }
+pub struct Thread { handle: rawptr, identifier: u32, entry: fn(rawptr) isize, context: rawptr, ready: sync.AtomicU32 }
 
 fn trampoline(context: rawptr) rawptr {
-  thread := #cast(*Thread) context
+  thread := #cast(*Thread, context)
   // Publish the native handle/id before entry can complete and retire its port.
-  for sync.load_u32(&thread.ready) == 0 { _ = native_yield() }
+  for sync.load_u32(&thread.ready) == 0 {
+    _ = native_yield()
+  }
   value := thread.entry(thread.context)
-  return #cast(rawptr) #cast(usize) value
+  return #cast(rawptr, #cast(usize, value))
 }
 
 // Darwin owns the stack. Slice length requests its size, rounded up to an
-// ARM64 page with a 16 KiB minimum. Thread/context must remain alive and unmoved
-// until join, including after the entry returns. Do not copy active Threads.
-pub fn spawn(thread: *Thread, stack: []u8, entry: *fn(rawptr) isize, context: rawptr) isize {
-  return spawn_with_size(thread, #len(stack), entry, context)
+// ARM64 page with a 16 KiB minimum. Arena/thread/context must remain alive and
+// unmoved until successful join. Fixed arena exhaustion panics; native spawn
+// failure restores the arena mark. Do not copy active Threads.
+pub fn spawn(arena: *mem.Arena, stack: []u8, entry: fn(rawptr) isize, context: rawptr) SpawnResult {
+  return spawn_with_size(arena, #len(stack), entry, context)
 }
-pub fn spawn_with_size(thread: *Thread, stack_size: usize, entry: *fn(rawptr) isize, context: rawptr) isize {
-  if stack_size < 256 || entry == nil || stack_size > (~#cast(usize) 0) - 16383 { return -22 }
-  if thread.handle != nil { return -16 }
+pub fn spawn_with_size(arena: *mem.Arena, stack_size: usize, entry: fn(rawptr) isize, context: rawptr) SpawnResult {
+  if stack_size < 256 || entry == nil || stack_size > (~#cast(usize, 0)) - 16383 {
+    return SpawnResult{ kind: errors.Kind.InvalidInput }
+  }
   attributes := Attributes{}
   error := attr_init(&attributes)
-  if error != 0 { return 0 - #cast(isize) error }
-  defer { _ = attr_destroy(&attributes) }
-  size := (stack_size + 16383) & ~#cast(usize) 16383
+  if error != 0 {
+    code := 0 - #cast(isize, error)
+    return SpawnResult{ error: code, kind: errors.darwin(code) }
+  }
+  defer {
+    _ = attr_destroy(&attributes)
+  }
+  size := (stack_size + 16383) & ~#cast(usize, 16383)
   error = attr_size(&attributes, size)
-  if error != 0 { return 0 - #cast(isize) error }
+  if error != 0 {
+    code := 0 - #cast(isize, error)
+    return SpawnResult{ error: code, kind: errors.darwin(code) }
+  }
+  mark := mem.arena_mark(arena)
+  thread := mem.push(Thread, arena)
   thread.entry = entry
   thread.context = context
   sync.store_u32(&thread.ready, 0)
   handle: rawptr = nil
-  error = create(&handle, &attributes, &trampoline, thread)
+  error = create(&handle, &attributes, trampoline, thread)
   if error != 0 {
-    thread.entry = nil
-    thread.context = nil
-    return 0 - #cast(isize) error
+    mem.arena_rewind(arena, mark)
+    code := 0 - #cast(isize, error)
+    return SpawnResult{ error: code, kind: errors.darwin(code) }
   }
   thread.handle = handle
   thread.identifier = native_id(handle)
   sync.store_u32(&thread.ready, 1)
-  return #cast(isize) thread.identifier
+  return SpawnResult{ value: thread, ok: true }
 }
 
 // Ownership: success ends worker access and clears the native owner.
-// Failure: retains the handle for retry; keep thread/context alive until success.
+// Failure: retains the handle for retry; keep arena/thread/context alive until success.
 // Allocation: none. Thread safety: one caller controls this descriptor.
-pub fn join(thread: *Thread) isize {
-  if thread.handle == nil { return 0 }
+pub fn join(thread: *Thread) Result {
+  if thread.handle == nil {
+    return Result{ ok: true }
+  }
   value: rawptr = nil
   error := wait(thread.handle, &value)
-  if error != 0 { return 0 - #cast(isize) error }
+  if error != 0 {
+    code := 0 - #cast(isize, error)
+    return Result{ error: code, kind: errors.darwin(code) }
+  }
   thread.handle = nil
   thread.identifier = 0
   thread.entry = nil
   thread.context = nil
-  return 0
+  return Result{ ok: true }
 }
 
 // Mach thread identifier while unjoined; join is the lifetime boundary.
-pub fn id(thread: *const Thread) u32 { return thread.identifier }
-pub fn yield_now() isize { return #cast(isize) native_yield() }
+pub fn id(thread: *const Thread) u32 {
+  return thread.identifier
+}
+pub fn yield_now() Result {
+  if native_yield() != 0 {
+    error := 0 - #cast(isize, native_errno().*)
+    return Result{ error: error, kind: errors.darwin(error) }
+  }
+  return Result{ ok: true }
+}

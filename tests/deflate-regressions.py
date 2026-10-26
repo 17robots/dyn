@@ -19,7 +19,7 @@ use "std/mem" memory
 fn require(ok: bool, message: []const u8) { if !ok { #panic(message) } }
 struct Source { bytes: []const u8, at: usize, chunk: usize }
 fn source_read(data: rawptr, destination: []u8) io.Result {
-  source := #cast(*Source) data
+  source := #cast(*Source, data)
   amount := #len(source.bytes) - source.at
   if amount > #len(destination) { amount = #len(destination) }
   if amount > source.chunk { amount = source.chunk }
@@ -31,7 +31,7 @@ fn source_read(data: rawptr, destination: []u8) io.Result {
 }
 fn check(encoded: []const u8, expected: []const u8, wrapped: bool, corrupt: bool, chunk: usize, source_chunk: usize, history_size: usize) {
   source := Source{ bytes: encoded, chunk: source_chunk }
-  reader := io.Reader{ data: #cast(rawptr) &source, read: &source_read }
+  reader := io.Reader{ data: #cast(rawptr, &source), read: source_read }
   compressed: [1024]u8 = []
   history: [65536]u8 = []
   output: [65536]u8 = []
@@ -59,38 +59,39 @@ fn check(encoded: []const u8, expected: []const u8, wrapped: bool, corrupt: bool
 }
 fn fixture(encoded_path: []const u8, expected_path: []const u8, wrapped: bool, corrupt: bool) {
   owned := memory.arena_create(4000000)
-  encoded := fs.read_all(&owned, encoded_path, 1000000)
-  expected := fs.read_all(&owned, expected_path, 1000000)
+  encoded := fs.read_all(owned, encoded_path, 1000000)
+  expected := fs.read_all(owned, expected_path, 1000000)
   require(encoded.ok && expected.ok, "read fixture")
   chunks: [5]usize = [1, 257, 258, 33025, 65536]
   for chunk in chunks {
-    check(encoded.data, expected.data, wrapped, corrupt, chunk, 7, 33026)
+    check(encoded.value, expected.value, wrapped, corrupt, chunk, 7, 33026)
     // Bytewise output already exercises every boundary with minimum history.
     // Larger chunks cover the second storage/input configuration without
     // repeating millions of debug-mode reader calls on shared CI runners.
-    if chunk != 1 { check(encoded.data, expected.data, wrapped, corrupt, chunk, 1024, 65536) }
+    if chunk != 1 { check(encoded.value, expected.value, wrapped, corrupt, chunk, 1024, 65536) }
   }
   if !wrapped && !corrupt {
-    destination := memory.arena_push(&owned, #len(expected.data), 1)[..#len(expected.data)]
-    result := deflate.inflate(destination, encoded.data)
-    require(result.ok && result.written == #len(expected.data), "one-shot inflate")
-    for i in 0..#len(destination) { require(destination[i] == expected.data[i], "one-shot output") }
+    inflated := deflate.inflate(owned, encoded.value)
+    require(inflated.ok && #len(inflated.value) == #len(expected.value), "one-shot inflate")
+    for i in 0..#len(inflated.value) { require(inflated.value[i] == expected.value[i], "one-shot output") }
+    destination := memory.arena_push(owned, #len(expected.value), 1)[..#len(expected.value)]
+    result: deflate.Result
     progressive := deflate.InflateState{}
     prefix: usize = 0
-    for prefix < #len(encoded.data) {
+    for prefix < #len(encoded.value) {
       prefix += 1024
-      if prefix > #len(encoded.data) { prefix = #len(encoded.data) }
-      result = deflate.resume(&progressive, destination, encoded.data[..prefix])
+      if prefix > #len(encoded.value) { prefix = #len(encoded.value) }
+      result = deflate.resume(&progressive, destination, encoded.value[..prefix])
       require(progressive.error == 0, "linear resume error")
     }
-    require(result.ok && result.written == #len(expected.data), "linear resume completion")
-    for i in 0..#len(destination) { require(destination[i] == expected.data[i], "linear resume output") }
+    require(result.ok && result.written == #len(expected.value), "linear resume completion")
+    for i in 0..#len(destination) { require(destination[i] == expected.value[i], "linear resume output") }
     tiny: [1]u8 = []
     capacity := deflate.InflateState{}
-    result = deflate.resume(&capacity, tiny[..], encoded.data)
+    result = deflate.resume(&capacity, tiny[..], encoded.value)
     require(!result.ok && capacity.error == -28, "linear output capacity")
   }
-  memory.arena_release(&owned)
+  memory.arena_release(owned)
 }
 fn main() {
 CALLS

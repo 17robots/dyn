@@ -1,10 +1,10 @@
 /* AArch64 emission for SSA code generation (included by ssa.inc).
 
    Register ids follow ssa.inc: 0-31 are x0-x31 and X_XMM0 + n is vn. The
-   emitter's scratch registers are x14-x17 and v30/v31; the allocator never
+   emitter's scratch registers are x14-x17 and v29/v30/v31; the allocator never
    assigns them. Frame memory and spill slots sit below x29. */
 
-enum { A_S1 = 16, A_S2 = 17, A_S3 = 15, A_S4 = 14, A_ZR = 31, A_F1 = 31, A_F2 = 30 };
+enum { A_S1 = 16, A_S2 = 17, A_S3 = 15, A_S4 = 14, A_ZR = 31, A_F1 = 31, A_F2 = 30, A_F3 = 29 };
 
 static bool a64s_floating(unsigned reg) { return reg >= X_XMM0; }
 static unsigned a64s_v(unsigned reg) { return reg - X_XMM0; }
@@ -407,6 +407,26 @@ static void a64s_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
   case SO_FSUB: a64s_float_binary(e, v, 0x1e603800u); return;
   case SO_FMUL: a64s_float_binary(e, v, 0x1e600800u); return;
   case SO_FDIV: a64s_float_binary(e, v, 0x1e601800u); return;
+  case SO_MATH: {
+    d = a64s_target(v);
+    unsigned ra = a64s_v(a64s_get(e, v->a, X_XMM0 + A_F1));
+    bool f32 = v->cls == SC_F32;
+    if (v->aux == DYN_MATH_INTRINSIC_FMA) {
+      unsigned rb = a64s_v(a64s_get(e, v->b, X_XMM0 + A_F2));
+      unsigned rc = a64s_v(a64s_get(e, v->c, X_XMM0 + A_F3));
+      a64_word(ctx, (f32 ? 0x1f000000u : 0x1f400000u) | rb << 16 | rc << 10 | ra << 5 | a64s_v(d));
+    } else {
+      uint32_t opcode = v->aux == DYN_MATH_INTRINSIC_SQRT ? 0x1e61c000u :
+                        v->aux == DYN_MATH_INTRINSIC_FLOOR ? 0x1e654000u :
+                        v->aux == DYN_MATH_INTRINSIC_CEIL ? 0x1e64c000u :
+                        v->aux == DYN_MATH_INTRINSIC_TRUNC ? 0x1e65c000u :
+                        v->aux == DYN_MATH_INTRINSIC_ROUND ? 0x1e664000u : 0;
+      if (!opcode) { ctx->text.failed = true; return; }
+      a64_word(ctx, (opcode & ~(f32 ? 0x400000u : 0)) | ra << 5 | a64s_v(d));
+    }
+    a64s_put(e, v, d);
+    return;
+  }
   case SO_FNEG:
     d = a64s_target(v);
     a64_word(ctx, (v->cls == SC_F32 ? 0x1e214000u : 0x1e614000u) | a64s_v(a64s_get(e, v->a, X_XMM0 + A_F1)) << 5 | a64s_v(d));

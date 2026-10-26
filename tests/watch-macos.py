@@ -36,34 +36,34 @@ fn main() {
   require(watch.next(&empty).status == watch.Status.Error,"default next")
   storage: [1024]u8 = []
   failed := watch.open(storage[..271])
-  require(!failed.ok && watch.close(&failed.watcher).ok,"short buffer")
+  require(!failed.ok && watch.close(&failed.value).ok,"short buffer")
   opened := watch.open(storage[..])
   require(opened.ok,"FSEvents open")
-  defer { _ = watch.close(&opened.watcher) }
-  require(!watch.add(&opened.watcher,"missing-directory",watch.Changes).ok,"missing path")
-  require(!watch.add(&opened.watcher,"existing",watch.Changes).ok,"file path")
-  added := watch.add(&opened.watcher,".",watch.Changes)
-  other := watch.add(&opened.watcher,"other",watch.Changes)
+  defer { _ = watch.close(&opened.value) }
+  require(!watch.add(&opened.value,"missing-directory",watch.Changes).ok,"missing path")
+  require(!watch.add(&opened.value,"existing",watch.Changes).ok,"file path")
+  added := watch.add(&opened.value,".",watch.Changes)
+  other := watch.add(&opened.value,"other",watch.Changes)
   require(added.ok && other.ok && added.value != other.value,"multiple watches")
-  require(watch.add(&opened.watcher,".",watch.Changes).value == added.value,"repeat add identity")
+  require(watch.add(&opened.value,".",watch.Changes).value == added.value,"repeat add identity")
   stage("create")
-  await_event(&opened.watcher,added.value,"café-😀",watch.Create,false)
+  await_event(&opened.value,added.value,"café-😀",watch.Create,false)
   stage("write")
-  await_event(&opened.watcher,added.value,"existing",watch.Modify,false)
+  await_event(&opened.value,added.value,"existing",watch.Modify,false)
   stage("rename")
-  await_event(&opened.watcher,added.value,"renamed",watch.MoveTo,true)
-  watch.acknowledge_rescan(&opened.watcher)
-  require(!opened.watcher.rescan_required,"rescan acknowledgement")
+  await_event(&opened.value,added.value,"renamed",watch.MoveTo,true)
+  watch.acknowledge_rescan(&opened.value)
+  require(!opened.value.rescan_required,"rescan acknowledgement")
   stage("delete")
-  await_event(&opened.watcher,added.value,"renamed",watch.Delete,false)
+  await_event(&opened.value,added.value,"renamed",watch.Delete,false)
   stage("other")
-  await_event(&opened.watcher,other.value,"second",watch.Create,false)
-  require(watch.remove(&opened.watcher,added.value).ok,"remove")
-  require(!watch.remove(&opened.watcher,added.value).ok,"stale remove")
+  await_event(&opened.value,other.value,"second",watch.Create,false)
+  require(watch.remove(&opened.value,added.value).ok,"remove")
+  require(!watch.remove(&opened.value,added.value).ok,"stale remove")
   stage("removed")
-  await_event(&opened.watcher,other.value,"third",watch.Create,false)
+  await_event(&opened.value,other.value,"third",watch.Create,false)
   for attempt in 0..50 {
-    result := watch.next(&opened.watcher)
+    result := watch.next(&opened.value)
     require(result.status != watch.Status.Error,"after remove")
     require(result.status != watch.Status.Event || result.event.watch != added.value,"removed watch delivery")
     _ = time.sleep(time.Millisecond*10)
@@ -73,11 +73,11 @@ fn main() {
   for iteration in 0..16 {
     pending := watch.open(storage[..])
     require(pending.ok,"pending open")
-    require(watch.add(&pending.watcher,".",watch.Changes).ok,"pending add")
+    require(watch.add(&pending.value,".",watch.Changes).ok,"pending add")
     _ = time.sleep(time.Millisecond*5)
-    require(watch.close(&pending.watcher).ok && watch.close(&pending.watcher).ok,"pending close")
+    require(watch.close(&pending.value).ok && watch.close(&pending.value).ok,"pending close")
   }
-  require(watch.close(&opened.watcher).ok,"final close")
+  require(watch.close(&opened.value).ok,"final close")
   stage("passed")
 }
 '''
@@ -86,40 +86,42 @@ fn main() {
 # exporting testing APIs. The nonzero stream value is compared, never called.
 AUDIT = r'''
 pub fn audit_callbacks() {
-  allocation := mem.arena_create(#sizeof(State))
-  defer { mem.arena_release(&allocation) }
-  pushed := mem.arena_push(&allocation,#sizeof(State),#alignof(State))
-  state := #cast(*State) pushed
+  allocation := mem.arena_create(mem.ArenaHeader + #alignof(State) + #sizeof(State))
+  defer { mem.arena_release(allocation) }
+  pushed := mem.arena_push(allocation,#sizeof(State),#alignof(State))
+  state := #cast(*State, pushed)
   slot := &state.slots[0]
-  slot.owner = state slot.id = 7 slot.mask = Changes
-  slot.stream = #cast(rawptr) #cast(usize) 1
+  slot.owner = state
+  slot.id = 7
+  slot.mask = Changes
+  slot.stream = #cast(rawptr, #cast(usize, 1))
   root := "/watched"
   slot.length = #len(root)
   for i in 0..#len(root) { slot.root[i] = root[i] }
   output: [1024]u8 = []
   watcher := Watcher{state:state,storage:output[..]}
   name_storage: [128]u8 = []
-  path := c.string_from_bytes(name_storage[..],"/watched/café-😀")
+  path := c.string_into(name_storage[..],"/watched/café-😀")
   pointers: [1]*const u8 = [path.value]
   flags: [1]u32 = [256]
   ids: [1]u64 = [1]
-  callback(nil,#cast(rawptr) slot,1,#cast(rawptr) &pointers[0],&flags[0],&ids[0])
+  callback(nil,#cast(rawptr, slot),1,#cast(rawptr, &pointers[0]),&flags[0],&ids[0])
   item := next(&watcher)
   if item.status != Status.Event || item.event.watch != 7 || item.event.mask != Create || !bytes.equal(item.event.name,"café-😀") { #panic("callback Unicode child") }
   for i in 0..128 { name_storage[i] = 0 }
   if !bytes.equal(item.event.name,"café-😀") { #panic("callback retained borrowed native path") }
-  path = c.string_from_bytes(name_storage[..],"/watched/nested/file")
+  path = c.string_into(name_storage[..],"/watched/nested/file")
   pointers[0] = path.value
-  callback(nil,#cast(rawptr) slot,1,#cast(rawptr) &pointers[0],&flags[0],&ids[0])
+  callback(nil,#cast(rawptr, slot),1,#cast(rawptr, &pointers[0]),&flags[0],&ids[0])
   if next(&watcher).status != Status.Empty { #panic("recursive event leaked") }
-  path = c.string_from_bytes(name_storage[..],"/watched/file")
+  path = c.string_into(name_storage[..],"/watched/file")
   pointers[0] = path.value
   flags[0] = 2048
-  callback(nil,#cast(rawptr) slot,1,#cast(rawptr) &pointers[0],&flags[0],&ids[0])
+  callback(nil,#cast(rawptr, slot),1,#cast(rawptr, &pointers[0]),&flags[0],&ids[0])
   item = next(&watcher)
   if !item.event.rescan || item.event.cookie != 0 || item.event.mask != (MoveFrom|MoveTo) { #panic("callback rename") }
   flags[0] = 4
-  callback(nil,#cast(rawptr) slot,1,#cast(rawptr) &pointers[0],&flags[0],&ids[0])
+  callback(nil,#cast(rawptr, slot),1,#cast(rawptr, &pointers[0]),&flags[0],&ids[0])
   if !next(&watcher).event.rescan || !watcher.rescan_required { #panic("kernel dropped events") }
   for next(&watcher).status == Status.Event {}
   acknowledge_rescan(&watcher)

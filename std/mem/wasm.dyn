@@ -5,12 +5,12 @@ extern fn grow_pages "dyn_wasm_grow_pages"(pages: usize) usize
 struct WasmRegion { pages: usize, next: *WasmRegion, requested: usize, live: bool }
 wasm_free: *WasmRegion
 const WasmPage: usize = 65536
-// A zero Arena's first push backs this much linear memory right away.
-const ZeroArenaReserve: usize = 4 * MiB
+// Linear memory each arena block backs by default, right away.
+const DefaultBlock: usize = 4 * MiB
 
 fn mapping_allocate(size: usize) Mapping {
   header := #sizeof(WasmRegion)
-  maximum := ~#cast(usize) 0
+  maximum := ~#cast(usize, 0)
   if size == 0 || size > maximum - header - (WasmPage - 1) {
     return Mapping{ error: -1 }
   }
@@ -24,7 +24,7 @@ fn mapping_allocate(size: usize) Mapping {
   if region != nil {
     next := region.next
     if region.pages > pages {
-      next = #cast(*WasmRegion) (#cast(usize) region + pages * WasmPage)
+      next = #cast(*WasmRegion, (#cast(usize, region) + pages * WasmPage))
       next.* = WasmRegion{ pages: region.pages - pages, next: region.next }
     }
     if previous == nil {
@@ -37,10 +37,10 @@ fn mapping_allocate(size: usize) Mapping {
     if start == maximum {
       return Mapping{ error: -1 }
     }
-    region = #cast(*WasmRegion) (start * WasmPage)
+    region = #cast(*WasmRegion, (start * WasmPage))
   }
   region.* = WasmRegion{ pages: pages, requested: size, live: true }
-  data := #cast(*u8) (#cast(usize) region + header)
+  data := #cast(*u8, (#cast(usize, region) + header))
   return Mapping{ bytes: data[..size], committed: size, ok: true }
 }
 
@@ -48,7 +48,7 @@ fn mapping_release(bytes: []u8) isize {
   if #len(bytes) == 0 {
     return -1
   }
-  region := #cast(*WasmRegion) (#cast(usize) &bytes[0] - #sizeof(WasmRegion))
+  region := #cast(*WasmRegion, (#cast(usize, &bytes[0]) - #sizeof(WasmRegion)))
   if !region.live || region.requested != #len(bytes) {
     return -1
   }
@@ -56,19 +56,19 @@ fn mapping_release(bytes: []u8) isize {
   region.requested = 0
   previous: *WasmRegion = nil
   next := wasm_free
-  for next != nil && #cast(usize) next < #cast(usize) region {
+  for next != nil && #cast(usize, next) < #cast(usize, region) {
     previous = next
     next = next.next
   }
   region.next = next
-  if next != nil && #cast(usize) region + region.pages * WasmPage == #cast(usize) next {
+  if next != nil && #cast(usize, region) + region.pages * WasmPage == #cast(usize, next) {
     region.pages += next.pages
     region.next = next.next
   }
   if previous == nil {
     wasm_free = region
   }
-  else if #cast(usize) previous + previous.pages * WasmPage == #cast(usize) region {
+  else if #cast(usize, previous) + previous.pages * WasmPage == #cast(usize, region) {
     previous.pages += region.pages
     previous.next = region.next
   } else {

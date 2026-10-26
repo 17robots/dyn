@@ -1,0 +1,18 @@
+{
+  "ssa-cleanup-proofs.py": {
+    "status": 1,
+    "log": "ssa-cleanup-proofs.py.baseline.log"
+  },
+  "ssa-byte-count.py": {
+    "status": 1,
+    "log": "ssa-byte-count.py.baseline.log"
+  },
+  "ssa-hot-intervals.py": {
+    "status": 10,
+    "meaning": "old allocator fails strict-hot-incoming admission case"
+  },
+  "inlining-expressions.py": {
+    "evidence": "inlining-evidence.json",
+    "meaning": "retained before compiler fails nested-call removal; packed behavior passes before and after"
+  }
+}

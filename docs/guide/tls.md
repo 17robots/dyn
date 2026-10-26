@@ -9,11 +9,12 @@ The binding uses `SSL_get1_peer_certificate`; OpenSSL 1.1.1 is not supported.
 - `client_connection_create` accepts arena scratch for hostname verification and SNI;
   `client_connection_create_into` accepts caller storage. Neither retains scratch.
 - `server_connection_create` attaches an existing descriptor to a server configuration.
-- Successful configurations require `config_destroy`; connections require
-  `connection_destroy`. Failed constructors release partially created handles.
+- Successful configurations require `config_release(&context)`; connections
+  require `connection_release(&connection)`. Both clear the handle, so a second
+  release does nothing. Failed constructors release partially created handles.
 - Provider allocations are owned by OpenSSL, outside the Dyn arena. Sockets remain
   caller-owned. Destroy connections before their configuration; close sockets separately.
-- `peer_certificate_owned` returns a provider reference requiring `certificate_free_owned`.
+- `peer_certificate_owned` returns a provider reference requiring `certificate_release(&certificate)`.
 - ALPN input is validated length-prefixed wire format. Selected ALPN bytes borrow the
   connection until renegotiation or destruction. Certificate subject/error text uses caller buffers.
 - Arena constructors rewind scratch on every return. Output slices and adapters never own it.

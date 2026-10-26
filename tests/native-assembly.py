@@ -110,8 +110,11 @@ int main(void) {
     # Machine optimization adds callee-save moves and SIMD. Reassembling the
     # readable forms must preserve every instruction byte, including tails.
     (module/'main.dyn').write_text('''pub fn kernel(seed: u32) u32 {
-  a: [19]u32 = [] b: [19]u32 = [] c: [19]u32 = []
-  for i in 0..19 { a[i] = #wrap(seed + (#cast(u32) i)) b[i] = 4294967295 }
+  a: [19]u32 = []
+  b: [19]u32 = []
+  c: [19]u32 = []
+  for i in 0..19 { a[i] = #wrap(seed + (#cast(u32, i)))
+  b[i] = 4294967295 }
   for i in 0..19 { c[i] = #wrap(a[i] + b[i]) }
   return c[18]
 }''')

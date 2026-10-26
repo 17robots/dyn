@@ -1,0 +1,26 @@
+[
+  {
+    "variant": "before",
+    "mode": "debug",
+    "returncode": 101,
+    "stderr": "JSON compact node bound\nstack trace:\n  at dyn_md0a369bd3d4694ce_read_append (/home/mdray/17robots/dyn/compiler/build/compact-json-20261024/bound-before/reader/read.dyn:36)\n  at dyn_md0a369bd3d4694ce_read_value (/home/mdray/17robots/dyn/compiler/build/compact-json-20261024/bound-before/reader/read.dyn:166)\n  at dyn_md0a369bd3d4694ce_read_value (/home/mdray/17robots/dyn/compiler/build/compact-json-20261024/bound-before/reader/read.dyn:166)\n  at dyn_md0a369bd3d4694ce_read_value (/home/mdray/17robots/dyn/compiler/build/compact-json-20261024/bound-before/reader/read.dyn:166)\n  at dyn_md0a369bd3d4694ce_parse (/home/mdray/17robots/dyn/compiler/build/compact-json-20261024/bound-before/reader/read.dyn:277)\n  at main (/home/mdray/17robots/dyn/compiler/build/compact-json-20261024/bound-before/main.dyn:3)\n"
+  },
+  {
+    "variant": "before",
+    "mode": "release",
+    "returncode": 101,
+    "stderr": "JSON compact node bound\n"
+  },
+  {
+    "variant": "fixed",
+    "mode": "debug",
+    "returncode": 0,
+    "stderr": ""
+  },
+  {
+    "variant": "fixed",
+    "mode": "release",
+    "returncode": 0,
+    "stderr": ""
+  }
+]

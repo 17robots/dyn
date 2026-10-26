@@ -41,6 +41,13 @@ static bool src_next_is(Parser *p, const char *word) {
   Token next = src_peek(p);
   return next.end - next.start == strlen(word) && at(p, next.start, word);
 }
+/* distinct, packed and is are keywords only where they start their construct,
+   so they stay usable as ordinary names everywhere else. */
+static bool src_distinct(Parser *p) { return is(p, "distinct") && src_next_is(p, "type"); }
+static bool src_packed(Parser *p) { return is(p, "packed") && src_next_is(p, "struct"); }
+static bool src_type_pattern(Parser *p) {
+  return is(p, "is") && !src_next_is(p, "=>") && !src_next_is(p, ",") && !src_next_is(p, "..");
+}
 static uint32_t src_literal(Parser *p, TokenKind token_kind, ExpKind kind) {
   Token token = p->token;
   if (token.kind != token_kind) { fail(p, token.start, "expected literal"); return NONE; }
@@ -182,7 +189,8 @@ static uint32_t src_case(Parser *p) {
   while (!is(p, "}") && !p->tree->error) {
     uint32_t begin = p->token.start, af = NONE, al = NONE;
     bool wildcard = false;
-    if (take(p, "is")) {
+    if (src_type_pattern(p)) {
+      lex(p);
       uint32_t pf = NONE, pl = NONE;
       append(p, &pf, &pl, type(p));
       if (p->token.kind == NAME) append(p, &pf, &pl, name(p));
@@ -201,7 +209,7 @@ static uint32_t src_case(Parser *p) {
     }
     expect(p, "=>"); append(p, &af, &al, src_block(p));
     append(p, &first, &last, mark(p, src_node(p, SRC_CASE_ARM, begin, src_end(p, al, begin), af), wildcard ? EXP_WILDCARD : 0));
-    if (!take(p, ",")) break;
+    if (is(p, ",")) fail(p, p->token.start, "case arms are not separated by commas");
   }
   uint32_t end = p->token.end; expect(p, "}");
   return src_node(p, SRC_CASE, start, end, first);
@@ -209,7 +217,7 @@ static uint32_t src_case(Parser *p) {
 static bool src_expression_start(Parser *p) {
   if (is(p, "return") || is(p, "break") || is(p, "continue") ||
       is(p, "const") || is(p, "if") || is(p, "case") || is(p, "for") ||
-      is(p, "defer") || is(p, "type") || is(p, "distinct")) return false;
+      is(p, "defer") || is(p, "type") || src_distinct(p)) return false;
   return p->token.kind == NAME || p->token.kind == NUMBER || p->token.kind == STRING ||
       p->token.kind == CHARACTER || is(p, "(") || is(p, "[") || is(p, ".") ||
       is(p, "-") || is(p, "&") || is(p, "!") || is(p, "~") ||
@@ -238,7 +246,7 @@ static uint32_t src_statement_body(Parser *p) {
   if (is(p, "case")) return src_case(p);
   if (is(p, "for")) return src_for(p);
   if (is(p, "const")) return src_const(p);
-  if (is(p, "type") || is(p, "distinct")) return src_alias(p);
+  if (is(p, "type") || src_distinct(p)) return src_alias(p);
   if (is(p, "#panic")) return src_panic(p);
   if (is(p, "defer")) {
     lex(p); uint32_t child = is(p, "{") ? src_block(p) : src_statement(p);
@@ -372,6 +380,8 @@ static uint32_t src_block(Parser *p) {
   while (!is(p, "}") && !p->tree->error && p->token.kind != END) {
     Parser saved = *p; uint32_t count = p->tree->count;
     uint32_t statement = src_statement(p);
+    if (!p->tree->error && !is(p, "}") && p->token.kind != END && !src_line_start(p, p->token.start))
+      fail(p, p->token.start, "each statement must start on its own line");
     if (p->tree->error) statement = src_recover(p, saved, count, false);
     append(p, &first, &last, statement);
   }
@@ -460,8 +470,8 @@ static uint32_t src_enum(Parser *p) {
 }
 static bool src_declaration_keyword(Parser *p) {
   return is(p, "fn") || is(p, "pub") || is(p, "const") || is(p, "extern") ||
-      is(p, "struct") || is(p, "packed") || is(p, "enum") || is(p, "type") ||
-      is(p, "distinct") || is(p, "use");
+      is(p, "struct") || src_packed(p) || is(p, "enum") || is(p, "type") ||
+      src_distinct(p) || is(p, "use");
 }
 static uint32_t src_use(Parser *p) {
   uint32_t start = p->token.start, first = NONE, last = NONE;
@@ -514,10 +524,10 @@ static uint32_t src_declaration(Parser *p) {
       append(p, &first, &last, src_qualifier(p));
       child = src_node(p, SRC_EXTERN_VARIABLE, begin, src_end(p, last, begin), first);
     }
-  } else if (is(p, "struct") || is(p, "packed")) child = src_struct(p);
+  } else if (is(p, "struct") || src_packed(p)) child = src_struct(p);
   else if (is(p, "enum")) child = src_enum(p);
   else if (is(p, "const")) child = src_const(p);
-  else if (is(p, "type") || is(p, "distinct")) child = src_alias(p);
+  else if (is(p, "type") || src_distinct(p)) child = src_alias(p);
   else if (!public && is(p, "use")) child = src_use(p);
   else if (!public && is(p, "#assert")) child = src_assert(p);
   else if (p->token.kind == NAME && src_peek(p).kind == END) {

@@ -12,6 +12,23 @@ static const DynTarget targets[] = {
      "aarch64", "linux", "sysv", "none", "little", "64", true},
     {"riscv64-linux", "riscv64-unknown-linux-gnu", "/lib/ld-linux-riscv64-lp64d.so.1",
      "riscv64", "linux", "lp64d", "none", "little", "64", true},
+    /* Bare metal: the QEMU virt board, machine mode, no operating system. */
+    {"riscv64-none", "riscv64-unknown-none-elf", NULL, "riscv64", "none", "lp64d",
+     "none", "little", "64", true},
+    /* Bare metal, 32-bit: the QEMU virt board with RV32GC, machine mode. */
+    {"riscv32-none", "riscv32-unknown-none-elf", NULL, "riscv32", "none", "ilp32d",
+     "none", "little", "32", true},
+    {"riscv32-none-soft", "riscv32-unknown-none-elf", NULL, "riscv32", "none", "ilp32",
+     "none", "little", "32", true},
+    /* Bare metal, 32-bit Arm: the QEMU mps2-an500 board, Cortex-M7 with a
+       double-precision FPU. */
+    {"thumbv7em-none", "thumbv7em-none-eabihf", NULL, "thumbv7em", "none", "aapcs",
+     "none", "little", "32", true},
+    {"thumbv7em-none-soft", "thumbv7em-none-eabi", NULL, "thumbv7em", "none", "aapcs-soft",
+     "none", "little", "32", true},
+    /* NUCLEO-H753ZI: Cortex-M7, flash boot, AXI SRAM data and DTCM stack. */
+    {"thumbv7em-none-nucleo-h753zi", "thumbv7em-none-eabihf", NULL, "thumbv7em", "none", "aapcs",
+     "none", "little", "32", true},
     {"x86_64-macos", "x86_64-apple-macosx", NULL, "x86_64", "darwin", "sysv",
      "system", "little", "64", true},
     {"aarch64-macos", "arm64-apple-macosx", NULL, "aarch64", "darwin", "aapcs",

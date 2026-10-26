@@ -1,0 +1,82 @@
+{
+  "parser": {
+    "paired_median_final_before": 0.9942243573035716,
+    "bootstrap95": [
+      0.9872859618060246,
+      1.0066851458796726
+    ],
+    "samples": 25
+  },
+  "scan": {
+    "paired_median_final_before": 0.15087738488247304,
+    "bootstrap95": [
+      0.1482045915126857,
+      0.15278900959439326
+    ],
+    "samples": 25
+  },
+  "integers": {
+    "paired_median_final_before": 0.8362167330135133,
+    "bootstrap95": [
+      0.8223861565589861,
+      0.8574920313061792
+    ],
+    "samples": 25
+  },
+  "records": {
+    "paired_median_final_before": 1.1228764931995256,
+    "bootstrap95": [
+      1.0652975378788663,
+      1.1622121762727493
+    ],
+    "samples": 25
+  },
+  "parse_lines": {
+    "paired_median_final_before": 0.9851566631492222,
+    "bootstrap95": [
+      0.9724718913179365,
+      0.9902153487544827
+    ],
+    "samples": 25
+  },
+  "records-isolated": {
+    "paired_median_final_before": 1.0055773057072541,
+    "bootstrap95": [
+      0.980607256664085,
+      1.0190839540313286
+    ],
+    "samples": 41
+  },
+  "compact": {
+    "paired_median_final_before": 0.9817973434482127,
+    "bootstrap95": [
+      0.9760679088557535,
+      0.992236099019031
+    ],
+    "samples": 25
+  },
+  "mutable": {
+    "paired_median_final_before": 0.9957775449683441,
+    "bootstrap95": [
+      0.9853765968914093,
+      0.9989701489534198
+    ],
+    "samples": 25
+  },
+  "large-search": {
+    "paired_median_final_before": 0.9924136378264259,
+    "bootstrap95": [
+      0.975600944364579,
+      1.0214245532926183
+    ],
+    "samples": 41
+  },
+  "project-search": {
+    "paired_median_final_before": 0.9983407147909694,
+    "bootstrap95": [
+      0.9554864614749157,
+      1.0521495606264786
+    ],
+    "samples": 41
+  }
+}

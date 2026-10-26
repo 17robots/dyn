@@ -1,13 +1,19 @@
 #target(kernel: linux)
 extern fn syscall_raw "dyn_syscall6"(n: i64, a: i64, b: i64, c: i64, d: i64, e: i64, f: i64) i64
-fn thread_id() u64 { return #cast(u64) syscall_raw(thread_number(), 0, 0, 0, 0, 0, 0) }
+fn thread_id() u64 {
+  return #cast(u64, syscall_raw(thread_number(), 0, 0, 0, 0, 0, 0))
+}
 fn trace_write(data: *const u8, size: u64) {
-  if size == 0 { return }
-  bytes := data[..#cast(usize) size]
+  if size == 0 {
+    return
+  }
+  bytes := data[..#cast(usize, size)]
   offset: usize = 0
   for offset < #len(bytes) {
-    written := syscall_raw(write_number(), 2, #cast(i64) #cast(usize) &bytes[offset], #cast(i64) (#len(bytes) - offset), 0, 0, 0)
-    if written <= 0 { return }
-    offset += #cast(usize) written
+    written := syscall_raw(write_number(), 2, #cast(i64, #cast(usize, &bytes[offset])), #cast(i64, (#len(bytes) - offset)), 0, 0, 0)
+    if written <= 0 {
+      return
+    }
+    offset += #cast(usize, written)
   }
 }

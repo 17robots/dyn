@@ -1,8 +1,9 @@
 # Memory patterns
 
-Fixed arenas are the default starting point. Select a capacity from an application
-budget, then measure actual use with `arena_snapshot`. A byte unit makes a budget
-readable; it does not choose the budget for you. Growth is an explicit choice.
+Choose fixed caller storage or an owned, chained arena according to the
+application lifetime and budget. Measure actual use with `arena_snapshot`. A
+byte unit makes a budget readable; it does not choose the budget for you. Owned
+arenas grow automatically; use `arena_create_bounded` to cap their backing.
 
 Every Dyn block in this document is a complete program. The documentation test
 builds and runs them in debug and release modes. They use the matching source
@@ -10,8 +11,10 @@ compiler and SDK, not necessarily the latest published preview.
 
 ## Fixed budgets and array allocation
 
-`mem.push_array(T, &arena, count)` checks the multiplication and returns zeroed
-`[]T`. Exhausting the arena panics, so the budget is the only thing to choose.
+`mem.push_array(T, arena, count)` checks the multiplication and returns zeroed
+`[]T`. Exhausting a fixed arena panics. The buffer below includes 159 bytes
+for the 144-byte header and up to 15 bytes of alignment padding, guaranteeing
+at least `WorkspaceBytes` of payload capacity.
 
 ```dyn
 use "std/mem"
@@ -20,12 +23,12 @@ const WorkspaceBytes: usize = 4 * mem.KiB
 struct Item { value: u64 }
 
 fn main() {
-  storage: [WorkspaceBytes]u8 = []
+  storage: [WorkspaceBytes + mem.ArenaBufferOverhead]u8 = []
   arena := mem.arena_from_buffer(storage[..])
-  items := mem.push_array(Item, &arena, 10)
+  items := mem.push_array(Item, arena, 10)
   items[9].value = 42
   if items[0].value != 0 || items[9].value != 42 { #panic("array contents") }
-  snapshot := mem.arena_snapshot(&arena)
+  snapshot := mem.arena_snapshot(arena)
   if snapshot.used > WorkspaceBytes { #panic("budget") }
 }
 ```
@@ -59,13 +62,13 @@ fn make_label(output: *mem.Arena, first: *mem.Arena, second: *mem.Arena) []u8 {
 }
 
 fn main() {
-  output_storage: [mem.KiB]u8 = []
-  scratch_storage: [mem.KiB]u8 = []
+  output_storage: [mem.KiB + mem.ArenaBufferOverhead]u8 = []
+  scratch_storage: [mem.KiB + mem.ArenaBufferOverhead]u8 = []
   output := mem.arena_from_buffer(output_storage[..])
   scratch := mem.arena_from_buffer(scratch_storage[..])
-  label := make_label(&output, &output, &scratch)
-  if mem.arena_used(&scratch) != 0 { #panic("scratch contract") }
-  mem.zero(scratch_storage[..])
+  label := make_label(output, output, scratch)
+  if mem.arena_used(scratch) != 0 { #panic("scratch contract") }
+  mem.zero(scratch.data[mem.ArenaHeader..])
   if !strings.equal(label, "retained") { #panic("retained output") }
 }
 ```
@@ -125,42 +128,49 @@ fn main() {
 }
 ```
 
-## Explicit growth and retention
+## Bounded growth and reclamation
 
-`growing_create_bounded` limits requested backing bytes, including headers and
-alignment allowance. The limit is not an RSS measurement. A preferred block must
-fit in full; choose a block size compatible with the limit. `growing_reset` expires
-all payloads but retains blocks. `growing_trim` releases only empty blocks, so its
-target may remain unattainable while live allocations exist. Inspect the snapshot.
+`arena_create_bounded` limits backing bytes across all blocks, headers included.
+The limit is not an RSS measurement. A large allocation can request a block
+larger than the preferred size; the last block can be smaller when necessary to
+fit the remaining budget. Earlier allocation addresses stay stable.
 
 ```dyn
 use "std/mem"
 
 fn main() {
-  workspace := mem.growing_create_bounded(mem.KiB, 16 * mem.KiB)
-  _ = mem.growing_push_or_panic(&workspace, 8 * mem.KiB, 8)
-  mem.growing_reset(&workspace)
-  if mem.growing_snapshot(&workspace).backing_bytes == 0 { #panic("reset should retain") }
-  mem.growing_trim(&workspace, 0)
-  if mem.growing_snapshot(&workspace).backing_bytes != 0 { #panic("trim did not release") }
-  mem.growing_release(&workspace)
+  workspace := mem.arena_create_bounded(mem.KiB, 16 * mem.KiB)
+  defer mem.arena_release(workspace)
+  prefix := mem.push_bytes_uninit(workspace, 8)
+  prefix[0] = 42
+  mark := mem.arena_mark(workspace)
+  _ = mem.push_bytes_uninit(workspace, 8 * mem.KiB)
+  if mem.arena_snapshot(workspace).blocks != 2 { #panic("expected growth") }
+  mem.arena_rewind(workspace, mark)
+  if mem.arena_snapshot(workspace).blocks != 1 || prefix[0] != 42 { #panic("rewind contract") }
+  mem.arena_reset(workspace)
+  if mem.arena_used(workspace) != 0 || mem.arena_snapshot(workspace).blocks != 1 { #panic("reset contract") }
 }
 ```
 
-Trim/release can partially succeed before an OS failure. Successfully released
-blocks stay released; unreleased blocks remain owned for retry. Do not discard the
-owner on failure. OS release failure is not exercised by these examples.
+Rewind releases later blocks; reset retains only the empty first block. Neither
+operation closes native resources stored in reclaimed memory. Rewind and
+release can partially succeed before an OS failure. Successfully released
+blocks stay released; the failed release panics rather than returning a
+retryable error. Release invalidates the arena pointer itself; do not release it
+a second time. OS release failure is not exercised by these examples.
 
 ## Choosing existing mechanisms
 
-- Use `strings.clone_into` for caller-owned output, `strings.clone` for copied
-  arena output, and views only while their backing remains valid. `strings.split`
+- Use `strings.clone` for copied output, wrapping fixed storage in
+  `mem.arena_from_buffer` when the copy must live there, and views only while
+  their backing remains valid. `strings.split`
   copies the descriptor table but borrows the input bytes.
-- Use pools or slot maps for independent deletion. Reacquire a slot view through
-  its handle at each use. `slot_map.lookup` already separates Missing from Present;
-  `copy_into` produces retained data when the destination has independent backing.
-- String-map removal reuses table positions but does not reclaim copied keys.
-  Use an arena per map lifetime, or choose slot/pool storage for bounded churn.
+- Use intrusive free lists and generation handles (`std/container/list`,
+  `slot_map`) for independent deletion. Resolve a handle at each use; a stale
+  handle gives the stub.
+- Hash-table removal unlinks the node but does not reclaim its memory. Reuse
+  nodes through a free list, or use an arena per table lifetime.
 - Keep thread context, stack, and the Thread descriptor alive and unmoved through
   successful join. Cancellation is an application protocol, not proof of completion.
   A failed join does not authorize reclamation. Linux raw threads do not establish
@@ -173,11 +183,14 @@ owner on failure. OS release failure is not exercised by these examples.
 
 ## Diagnostics and contracts
 
-Direct copies of known arena descriptors warn; use an address or `arena_take` for
-an intentional fixed-arena transfer. Payload addresses survive transfer, but
-pointers to the old descriptor do not retarget. Moving an address-dependent
-object remains a programmer obligation. This warning does not analyze arbitrary
-user-defined resource owners, calls, or aggregate copies.
+Constructors return `*mem.Arena`, with the header stored inside its backing.
+Pass this pointer directly rather than taking the address of a local arena
+value. Pointer copies alias the same arena; only one owner should release it.
+This API does not enforce uncopiability: explicitly copying `arena.*` still
+copies the header and breaks allocation bookkeeping. Do not copy live headers.
+Moving an address-dependent object remains a programmer obligation. Narrow
+compiler diagnostics do not analyze arbitrary user-defined resource owners,
+calls, or aggregate copies.
 
 Existing direct reset diagnostics also recognize literal `arena_rewind(..., 0)`.
 Other rewind marks, unknown calls, deferred operations, and control-flow joins
@@ -191,9 +204,10 @@ mean unspecified, not safe or allocation-free.
 
 ## Typed arena pushes
 
-`mem.push(T, &arena)` and `mem.push_array(T, &arena, count)` return zeroed `*T`
+`mem.push(T, arena)` and `mem.push_array(T, arena, count)` return zeroed `*T`
 and `[]T` with the type's size and alignment, so call sites need no casts.
-`mem.push_bytes_uninit(&arena, count)` returns uninitialized `[]u8` for buffers
+`mem.push_bytes_uninit(arena, count)` returns uninitialized `[]u8` for buffers
 that are overwritten right away. All three panic when the arena is full, like
 `mem.arena_push`. Code with a strict budget on a fixed arena can use
-`mem.arena_try_push`, the one push that reports exhaustion instead.
+`mem.arena_try_push`, `mem.try_push`, or `mem.try_push_array` to report
+exhaustion instead.

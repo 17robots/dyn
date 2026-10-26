@@ -3,9 +3,9 @@
    Register ids: 0-31 are x0-x31, X_XMM0 + n is fn. RISC-V has no condition
    flags: a comparison records its two operand registers and the following
    branch tests them directly. x5-x7 and x28-x31 are emitter scratch (x28 forms large memory addresses), as are
-   f30 and f31; x8 (s0) is the frame pointer. */
+   f29, f30 and f31; x8 (s0) is the frame pointer. */
 
-enum { R_S1 = 30, R_S2 = 31, R_S3 = 29, R_S4 = 7, R_T = 28, R_F1 = 31, R_F2 = 30 };
+enum { R_S1 = 30, R_S2 = 31, R_S3 = 29, R_S4 = 7, R_T = 28, R_F1 = 31, R_F2 = 30, R_F3 = 29 };
 
 static bool rvs_floating(unsigned reg) { return reg >= X_XMM0; }
 static unsigned rvs_f(unsigned reg) { return reg - X_XMM0; }
@@ -352,6 +352,20 @@ static void rvs_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
   case SO_FSUB: rvs_float_binary(e, v, 0x04); return;
   case SO_FMUL: rvs_float_binary(e, v, 0x08); return;
   case SO_FDIV: rvs_float_binary(e, v, 0x0c); return;
+  case SO_MATH: {
+    d = rvs_target(v);
+    unsigned ra = rvs_f(rvs_get(e, v->a, X_XMM0 + R_F1));
+    if (v->aux == DYN_MATH_INTRINSIC_FMA) {
+      unsigned rb = rvs_f(rvs_get(e, v->b, X_XMM0 + R_F2));
+      unsigned rc = rvs_f(rvs_get(e, v->c, X_XMM0 + R_F3));
+      word(ctx, 0x43u | rvs_f(d) << 7 | 7u << 12 | ra << 15 | rb << 20 |
+              (v->cls == SC_F32 ? 0u : 1u) << 25 | rc << 27);
+    } else if (v->aux == DYN_MATH_INTRINSIC_SQRT)
+      rv_r(ctx, 0x53, rvs_f(d), ra, 0, 7, v->cls == SC_F32 ? 0x2c : 0x2d);
+    else { ctx->text.failed = true; return; }
+    rvs_put(e, v, d);
+    return;
+  }
   case SO_FNEG: {
     d = rvs_target(v);
     unsigned ra = rvs_f(rvs_get(e, v->a, X_XMM0 + R_F1));

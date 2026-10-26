@@ -1,18 +1,19 @@
 #target(kernel: darwin)
+use "std/mem" mem
 use "std/c" cstrings
 
 fn terminated(path: []const u8, storage: []u8) *const u8 {
   if #len(path) == 0 {
     return nil
   }
-  value := cstrings.string_from_bytes(storage, path)
+  value := cstrings.string_into(storage, path)
   if !value.ok {
     return nil
   }
   return value.value
 }
 fn native_open(path: []const u8, mode: u8) FileResult {
-  storage: [4096]u8 = []
+  storage: [4096 + mem.ArenaBufferOverhead]u8 = []
   name := terminated(path, storage[..])
   if name == nil {
     return FileResult{ kind: errors.Kind.InvalidInput }
@@ -31,7 +32,7 @@ fn native_open(path: []const u8, mode: u8) FileResult {
   if value < 0 {
     return FileResult{ error: value, kind: native_kind(value) }
   }
-  return FileResult{ file: owned_file(value), ok: true }
+  return FileResult{ value: owned_file(value), ok: true }
 }
 fn native_close(handle: isize) isize {
   return #syscall(6, handle)

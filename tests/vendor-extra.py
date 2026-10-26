@@ -27,15 +27,15 @@ use "std/io"
 fn main() {
   backing := mem.arena_create(2 * 1024 * 1024)
   defer {
-    mem.arena_release(&backing)
+    mem.arena_release(backing)
   }
   rectangles: [3]atlas.Rectangle = []
   rectangles[0] = atlas.Rectangle{ width: 8, height: 8 }
   rectangles[1] = atlas.Rectangle{ width: 4, height: 4 }
   rectangles[2] = atlas.Rectangle{ width: 4, height: 4 }
-  mark := mem.arena_mark(&backing)
-  packed := atlas.pack(&backing, 16, 16, rectangles[..])
-  if !packed.ok || packed.packed != 3 || mem.arena_mark(&backing) != mark {
+  mark := mem.arena_mark(backing)
+  packed := atlas.pack(backing, 16, 16, rectangles[..])
+  if !packed.ok || packed.packed != 3 || mem.arena_mark(backing) != mark {
     #panic("atlas packing")
   }
   i: usize = 0
@@ -54,12 +54,12 @@ fn main() {
     }
     i += 1
   }
-  partial := atlas.pack(&backing, 4, 4, rectangles[..])
+  partial := atlas.pack(backing, 4, 4, rectangles[..])
   if partial.ok || partial.code != 0 || partial.packed != 1 {
     #panic("atlas partial fit")
   }
   rectangles[0].width = -1
-  if atlas.pack(&backing, 16, 16, rectangles[..]).code != -1 {
+  if atlas.pack(backing, 16, 16, rectangles[..]).code != -1 {
     #panic("invalid atlas rectangle")
   }
   source: [16]u8 = []
@@ -69,7 +69,7 @@ fn main() {
     source[k] = 128
     k += 1
   }
-  if !image.resize(&backing, source[..], 2, 2, destination[..], 4, 4, 4, false) {
+  if !image.resize(backing, source[..], 2, 2, destination[..], 4, 4, 4, false) {
     #panic("resize")
   }
   for value in destination[..] {
@@ -77,18 +77,19 @@ fn main() {
       #panic("resize constant color")
     }
   }
-  if !image.resize(&backing, source[..], 2, 2, destination[..], 4, 4, 4, true) {
+  if !image.resize(backing, source[..], 2, 2, destination[..], 4, 4, 4, true) {
     #panic("sRGB resize")
   }
-  if image.resize(&backing, source[..], 2, 2, destination[..1], 4, 4, 4, false) || image.resize(&backing, source[..], 2, 2, source[..], 2, 2, 4, false) || image.resize(&backing, source[..], 0, 2, destination[..], 4, 4, 4, false) {
+  if image.resize(backing, source[..], 2, 2, destination[..1], 4, 4, 4, false) || image.resize(backing, source[..], 2, 2, source[..], 2, 2, 4, false) || image.resize(backing, source[..], 0, 2, destination[..], 4, 4, 4, false) {
     #panic("resize bounds")
   }
-  if mem.arena_mark(&backing) != mark {
+  if mem.arena_mark(backing) != mark {
     #panic("scratch leak")
   }
-  tiny: [1]u8 = []
-  short_arena := mem.arena_from_buffer(tiny[..])
-  if image.resize(&short_arena, source[..], 2, 2, destination[..], 4, 4, 4, false) || mem.arena_mark(&short_arena) != 0 || atlas.pack(&short_arena, 16, 16, rectangles[..]).code != -1 || mem.arena_mark(&short_arena) != 0 {
+  tiny: [1 + mem.ArenaBufferOverhead]u8 = []
+  pad := (16-(#cast(usize,&tiny[0])&15))&15
+  short_arena := mem.arena_from_buffer(tiny[pad..pad+mem.ArenaHeader+1])
+  if image.resize(short_arena, source[..], 2, 2, destination[..], 4, 4, 4, false) || mem.arena_mark(short_arena) != mem.arena_start(short_arena) || atlas.pack(short_arena, 16, 16, rectangles[..]).code != -1 || mem.arena_mark(short_arena) != mem.arena_start(short_arena) {
     #panic("short scratch arena")
   }
   _ = io.println(io.stdout(), "stb atlas and resize passed")
@@ -105,9 +106,9 @@ use "std/io"
 fn main() {
   arena := mem.arena_create(1024 * 1024)
   defer {
-    mem.arena_release(&arena)
+    mem.arena_release(arena)
   }
-  args := linux.process_arguments(&arena)
+  args := linux.process_arguments(arena)
   smoke := #len(args) == 2 && strings.equal(args[1], "--smoke")
   if !sdl.init_video() {
     #panic("SDL video")
@@ -124,7 +125,7 @@ fn main() {
     #panic("SDL renderer")
   }
   defer sdl.renderer_destroy_owned(renderer.value)
-  context := ui.create(&arena)
+  context := ui.create(arena)
   if context == nil {
     #panic("UI context")
   }
@@ -191,24 +192,24 @@ use "std/io"
 fn main() {
   arena := mem.arena_create(2 * 1024 * 1024)
   defer {
-    mem.arena_release(&arena)
+    mem.arena_release(arena)
   }
-  args := linux.process_arguments(&arena)
+  args := linux.process_arguments(arena)
   if #len(args) < 2 {
     #panic("usage: audio-playback-example FILE.wav [--offline]")
   }
   offline := #len(args) == 3 && strings.equal(args[2], "--offline")
-  engine := audio.engine_create(&arena, !offline)
+  engine := audio.engine_create(arena, !offline)
   if !engine.ok {
     #panic("audio engine/device")
   }
   defer audio.engine_close(engine.value)
   path: [4096]u8 = []
-  mark := mem.arena_mark(&arena)
-  if audio.sound_create(&arena, engine.value, "/nonexistent/dyn-audio-fixture", path[..]).ok || mem.arena_mark(&arena) != mark {
+  mark := mem.arena_mark(arena)
+  if audio.sound_create(arena, engine.value, "/nonexistent/dyn-audio-fixture", path[..]).ok || mem.arena_mark(arena) != mark {
     #panic("sound failure rollback")
   }
-  sound := audio.sound_create(&arena, engine.value, args[1], path[..])
+  sound := audio.sound_create(arena, engine.value, args[1], path[..])
   if !sound.ok {
     #panic("sound decode")
   }
@@ -219,7 +220,11 @@ fn main() {
   deadline := time.deadline_after(60 * time.Second)
   samples: [2048]f32 = []
   heard := false
-  for !audio.sound_ended(sound.value) && !time.deadline_expired(&deadline) {
+  if !deadline.ok { #panic("deadline clock failed") }
+  for !audio.sound_ended(sound.value) {
+    deadline_status := time.deadline_expired(&deadline.value)
+    if !deadline_status.ok { #panic("deadline clock failed") }
+    if deadline_status.value { break }
     if offline {
       result := audio.mix(engine.value, samples[..])
       if !result.ok {
@@ -324,8 +329,8 @@ fn main() {
   triangles: [3]u16 = []
   triangles[1] = 1
   triangles[2] = 2
-  vertex_bytes := (#cast(*const u8) &vertices[0])[..36]
-  index_bytes := (#cast(*const u8) &triangles[0])[..6]
+  vertex_bytes := (#cast(*const u8, &vertices[0]))[..36]
+  index_bytes := (#cast(*const u8, &triangles[0]))[..6]
   if cgltf.buffer_count(mesh.value) != 2 || !strings.equal(cgltf.buffer_uri(mesh.value, 0, 256), "vertices.bin") || cgltf.buffer_size(mesh.value, 0) != 36 || cgltf.attach_buffer(mesh.value, 0, vertex_bytes[..1]) {
     #panic("mesh resource metadata")
   }
@@ -346,15 +351,15 @@ fn main() {
   }
   backing := mem.arena_create(2 * 1024 * 1024)
   defer {
-    mem.arena_release(&backing)
+    mem.arena_release(backing)
   }
-  args := linux.process_arguments(&backing)
+  args := linux.process_arguments(backing)
   if #len(args) == 2 {
-    file := fs.read_all(&backing, args[1], 1024 * 1024)
+    file := fs.read_all(backing, args[1], 1024 * 1024)
     if !file.ok {
       #panic("GLB read")
     }
-    binary := cgltf.parse_owned(file.data)
+    binary := cgltf.parse_owned(file.value)
     if !binary.ok {
       #panic("GLB parse")
     }
@@ -448,9 +453,9 @@ use "std/io"
 fn main() {
   storage := mem.arena_create(1024 * 1024)
   defer {
-    mem.arena_release(&storage)
+    mem.arena_release(storage)
   }
-  context := ui.create(&storage)
+  context := ui.create(storage)
   if context == nil {
     #panic("UI context")
   }
@@ -526,7 +531,11 @@ fn main() {
   }
   deadline := time.deadline_after(5 * time.Second)
   done := false
-  for !done && !time.deadline_expired(&deadline) {
+  if !deadline.ok { #panic("deadline clock failed") }
+  for !done {
+    deadline_status := time.deadline_expired(&deadline.value)
+    if !deadline_status.ok { #panic("deadline clock failed") }
+    if deadline_status.value { break }
     remote := enet.service(server, 0)
     if !remote.ok {
       #panic("server service")
@@ -568,7 +577,11 @@ fn main() {
   server_closed := false
   client_closed := false
   deadline = time.deadline_after(5 * time.Second)
-  for (!server_closed || !client_closed) && !time.deadline_expired(&deadline) {
+  if !deadline.ok { #panic("deadline clock failed") }
+  for (!server_closed || !client_closed) {
+    deadline_status := time.deadline_expired(&deadline.value)
+    if !deadline_status.ok { #panic("deadline clock failed") }
+    if deadline_status.value { break }
     server_event := enet.service(server, 0)
     client_event := enet.service(client, 0)
     if !server_event.ok || !client_event.ok {
@@ -606,21 +619,21 @@ use "std/time"
 fn main() {
   storage := mem.arena_create(4 * 1024 * 1024)
   defer {
-    mem.arena_release(&storage)
+    mem.arena_release(storage)
   }
-  args := linux.process_arguments(&storage)
+  args := linux.process_arguments(storage)
   if #len(args) != 2 {
     #panic("WAV path required")
   }
-  bytes := fs.read_all(&storage, args[1], 1024 * 1024)
+  bytes := fs.read_all(storage, args[1], 1024 * 1024)
   if !bytes.ok {
     #panic("WAV read")
   }
-  mark := mem.arena_mark(&storage)
-  if audio.decoder_create(&storage, "invalid").ok || mem.arena_mark(&storage) != mark {
+  mark := mem.arena_mark(storage)
+  if audio.decoder_create(storage, "invalid").ok || mem.arena_mark(storage) != mark {
     #panic("invalid decoder rollback")
   }
-  decoder := audio.decoder_create(&storage, bytes.data)
+  decoder := audio.decoder_create(storage, bytes.value)
   if !decoder.ok {
     #panic("decoder")
   }
@@ -652,7 +665,7 @@ fn main() {
   if audio.decoder_read(decoder.value, samples[..]).ok {
     #panic("closed decoder accepted")
   }
-  engine := audio.engine_create(&storage, false)
+  engine := audio.engine_create(storage, false)
   if !engine.ok {
     #panic("audio engine")
   }
@@ -692,13 +705,13 @@ use "std/io"
 fn main() {
   storage := mem.arena_create(4 * 1024 * 1024)
   defer {
-    mem.arena_release(&storage)
+    mem.arena_release(storage)
   }
-  args := linux.process_arguments(&storage)
+  args := linux.process_arguments(storage)
   if #len(args) != 2 {
     #panic("WAV path required")
   }
-  bytes := fs.read_all(&storage, args[1], 1024 * 1024)
+  bytes := fs.read_all(storage, args[1], 1024 * 1024)
   if !bytes.ok {
     #panic("WAV read")
   }
@@ -711,7 +724,7 @@ fn main() {
     #panic("mixer create")
   }
   defer mixer.destroy_owned(engine)
-  audio := mixer.decode_owned(engine, bytes.data)
+  audio := mixer.decode_owned(engine, bytes.value)
   if audio == nil {
     #panic("mixer decode")
   }

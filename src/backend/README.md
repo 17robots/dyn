@@ -4,7 +4,9 @@ The native backend is the compiler's only code generator for native targets. It
 reads the checked `DynIrProgram` from `dyn_ir_lower` (after `src/native_opt.c` in
 release builds) and writes relocatable objects directly, with no assembler:
 
-- ELF64 for x86-64, AArch64 and RISC-V64 Linux
+- ELF64 for x86-64, AArch64 and RISC-V64 Linux, and RISC-V64 bare metal
+- ELF32 for RISC-V32 bare metal (written as ELF64, then narrowed by
+  `src/elf_class.h`)
 - Mach-O for x86-64 and AArch64 macOS
 - COFF for x86-64 and ARM64 Windows
 
@@ -22,6 +24,8 @@ Wasm output is written by `src/codegen_wasm.c`, not by this backend.
 | `isa.inc` | x86-64 encodings |
 | `a64.inc` | AArch64 encodings |
 | `rv64.inc` | RISC-V64 encodings |
+| `rv32.inc` | RISC-V32: the 64-bit register model as register pairs, ILP32D calls |
+| `t32.inc` | Thumb-2 (ARMv7E-M with FPv5-D16): the same 32-bit model, AAPCS-VFP calls |
 | `allocation.inc` | Linear-scan allocation of integer locals to callee-saved registers |
 | `vector.inc` | Fixed-bound elementwise integer loops |
 | `reachability.inc` | Removal of private functions that nothing references |
@@ -38,6 +42,8 @@ Windows x86-64 and ARM64 use
 SSA code generation (`ssa.inc`), modeled on Go's compiler. Each function is
 built into SSA form while walking the IR (Braun et al.), then optimized:
 constant folding, dominator-based CSE that also removes repeated checks, a
+local load reuse pass that shares identical typed reads within one block until
+a store, call, copy, or other memory effect invalidates them, a
 range prover that removes bounds and overflow checks it can prove, division
 by constants through multiplication, and loop-invariant code motion. Small
 structs in frame memory that never escape (literals, call results, by-value
@@ -61,6 +67,25 @@ arguments are captured once, and constant subtrees are shared. Runtime checks
 retain their originating callee through inlining, including tree fallback and
 cleanup. Linear-scan register allocation runs over all values, with clobber-aware live intervals and hints that coalesce
 moves. Emission runs twice so the second pass can use short branches.
+
+RISC-V32 always uses the tree emitter. Each model register is a pair of
+32-bit registers (low words where RV64 keeps the value, high words in s2-s9),
+so every operation keeps its 64-bit meaning; `usize` and pointers are 32 bits
+in memory and are normalized like `u32`. Division, checked multiplication and
+64-bit integer/float conversion call helpers in the start runtime.
+
+Thumb-2 (`thumbv7em-none`) uses the same 32-bit model, also only through the
+tree emitter. ARMv7-M has twelve free core registers, too few for sixteen
+words, so the low words and the high words of A and C stay in core registers
+and the other high words in callee-saved VFP registers (s16-s21). The frame
+pointer r11 is biased by 4092 so one 12-bit offset reaches most locals.
+Comparisons store their operands in s24-s27 and each branch evaluates its
+condition from them, as RV32 does; add, subtract and negate keep their flags
+in s28 for overflow checks. Calls follow AAPCS-VFP, except that structs over
+64 bytes pass as a pointer to a copy. Aligned aggregate copies and zero fills
+use word accesses, with byte prefixes and tails; copies preserve overlap
+semantics. Both 32-bit targets emit DWARF with target-sized addresses and
+frame rules, including the biased Thumb frame pointer.
 
 A function the SSA path cannot build yet falls back to the tree emitter;
 `--opt-remarks` reports the line of `ssa.inc` that stopped it. Debug builds

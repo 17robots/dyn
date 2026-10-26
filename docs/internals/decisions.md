@@ -3,7 +3,7 @@
 - Compiler hosting and generated-code targets are separate support claims. See
   [releasing](release.md) for the supported scope.
 - SDK archives contain the compiler, standard-library sources and runtime objects.
-  Current Linux packages require external LLVM shared libraries.
+  Packages bundle no LLVM, LLD, or C++ libraries.
 - The compiler's handwritten parser (`src/parser.c`) defines Dyn syntax.
   `tree-sitter-dyn` serves editor highlighting and must accept the same syntax;
   editor packages pin its revision in `dyn-editors`.
@@ -11,8 +11,8 @@
   overrides. Existing output is atomically replaced without embedded compiler marker.
 - Debug default. SDK ships standard-library source plus prebuilt platform runtime objects.
 - C bootstrap uses strict C11 and compiles one object per source file, in parallel.
-- Linux release builds use the LLVM version pinned in
-  `.github/workflows/c-compiler.yml`.
+- Independent emission is the only backend in debug and release. External LLVM
+  tools serve only as optional format-validation oracles in tests.
 - Executable builds use a content-keyed, artifact-verifying sidecar cache; `--no-cache` bypasses it.
   Source diagnostics use byte spans internally and 1-based Unicode
   columns when rendered.

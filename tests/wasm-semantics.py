@@ -8,27 +8,32 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 DYN = os.environ.get('DYN', str(ROOT/'build/dyn'))
 SOURCE = r'''
-enum(u64) Big { Top = 0xFFFFFFFFFFFFFFFF }
-enum(i8) Sign { Minus = -1, Plus = 1 }
+enum(u64) Big { Zero = 0, Top = 0xFFFFFFFFFFFFFFFF }
+enum(i8) Sign { Minus = -1, Zero = 0, Plus = 1 }
 extern fn note "note"(value: i32)
 struct Pair { x: i32, y: i32 }
 pub fn rem64(a: f64,b: f64) f64 { return a % b }
 pub fn rem32(a: f32,b: f32) f32 { return a % b }
 pub fn high() u32 { return 4294967295 }
-pub fn badenum(x: i64) u64 { return #cast(u64) #cast(Big) x }
-pub fn goodenum(x: i64) i8 { return #cast(i8) #cast(Sign) x }
+pub fn badenum(x: i64) u64 { return #cast(u64, #cast(Big, x)) }
+pub fn goodenum(x: i64) i8 { return #cast(i8, #cast(Sign, x)) }
 pub fn divsmall(x: i8, y: i8) i8 { return x / y }
 pub fn remsmall(x: i8, y: i8) i8 { return x % y }
 pub fn deref(p: *i32) i32 { return p.* }
-pub fn cleanup(x: i32) i32 { defer { note(7) } return 10 / x }
-fn mutate(p: *Pair) i32 { p.x = 99 return 0 }
+pub fn cleanup(x: i32) i32 { defer { note(7) }
+return 10 / x }
+fn mutate(p: *Pair) i32 { p.x = 99
+return 0 }
 fn take(p: Pair, ignored: i32) i32 { return p.x }
-pub fn snapshot() i32 { p := Pair{x: 7, y: 9} return take(p, mutate(&p)) }
+pub fn snapshot() i32 { p := Pair{x: 7, y: 9}
+return take(p, mutate(&p)) }
 fn first(x: i32) i32 { return 11 }
 fn second(x: i32) i32 { return 22 }
-callback: *fn(i32) i32 = &first
-fn change() i32 { callback = &second return 0 }
-pub fn order() i32 { callback = &first return callback(change()) }
+callback: fn(i32) i32 = first
+fn change() i32 { callback = second
+return 0 }
+pub fn order() i32 { callback = first
+return callback(change()) }
 '''
 JS = r'''
 const assert = require('node:assert/strict');
@@ -58,6 +63,46 @@ const bytes = require('node:fs').readFileSync(process.argv[1]);
   assert.deepEqual(notes,[7]);
 })().catch(e=>{console.error(e);process.exit(1)});
 '''
+# Release executable pruning retains function IDs, but the inliner rebuilds
+# body/local tables only for live functions. An unused std/io body must never
+# be emitted against those rebuilt tables. Keep an indirect global initializer
+# and callback call live as well, so function/table indices are checked at runtime.
+WASI_SOURCE = r'''
+use "std/io"
+struct Point { x: i64, y: i64 }
+points: [32]Point
+fn step(p: Point, d: Point) Point {
+  return Point{x: (p.x + d.x) % 1000003, y: (p.y * 3 + d.y) % 1000003}
+}
+fn increment(x: i64) i64 { return x + 1 }
+fn twice(f: fn(i64) i64, x: i64) i64 { return f(x) + f(x) }
+callback: fn(i64) i64 = increment
+fn unused() i64 { values: [32]i64
+for i in 0..#len(values) { values[i] = #cast(i64, i) }
+return values[31] }
+fn main() {
+  for i in 0..#len(points) {
+    points[i] = Point{x: #cast(i64, i), y: #cast(i64, i * 7)}
+  }
+  delta := Point{x: 5, y: 11}
+  for round in 0..2 {
+    for *p in points { p.* = step(p.*, delta) }
+  }
+  total: i64 = 0
+  for p in points { total += p.x + p.y }
+  _ = io.println(io.stdout(), "{}", total + twice(callback, 10))
+}
+'''
+WASI_JS = r'''
+const fs = require('node:fs');
+const {WASI} = require('node:wasi');
+(async () => {
+  const wasi = new WASI({version:'preview1', args:[], env:{}, preopens:{}});
+  const module = await WebAssembly.compile(fs.readFileSync(process.argv[1]));
+  const instance = await WebAssembly.instantiate(module, {wasi_snapshot_preview1:wasi.wasiImport});
+  wasi.start(instance);
+})().catch(e=>{console.error(e);process.exit(1)});
+'''
 with tempfile.TemporaryDirectory(prefix='dyn-wasm-semantics-') as directory:
     work = Path(directory)
     module = work/'module'
@@ -68,4 +113,13 @@ with tempfile.TemporaryDirectory(prefix='dyn-wasm-semantics-') as directory:
         subprocess.run([DYN, 'build', str(module), '--target', 'wasm32-browser',
                         '--shared', '--output', str(output), *flags], cwd=ROOT, check=True)
         subprocess.run(['node', '-e', JS, str(output)], check=True)
-print('PASS Wasm arithmetic, aliasing, evaluation order and cleanup')
+    (module/'main.dyn').write_text(WASI_SOURCE)
+    for flags in ([], ['--release']):
+        output = work/'live-functions.wasm'
+        subprocess.run([DYN, 'build', str(module), '--target', 'wasm32-wasi',
+                        '--no-cache', '--output', str(output), *flags], cwd=ROOT,
+                       check=True, timeout=120)
+        result = subprocess.run(['node', '-e', WASI_JS, str(output)],
+                                check=True, capture_output=True, text=True, timeout=30)
+        assert result.stdout == '33494\n', result
+print('PASS Wasm arithmetic, aliasing, evaluation order, cleanup and live function indices')

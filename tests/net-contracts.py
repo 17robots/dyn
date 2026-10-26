@@ -35,9 +35,9 @@ fn main() {
     'failed-connection': '''use "std/net"
 fn check_failed(outcome: *net.ConnectionResult) {
   if outcome.ok { #panic("connection unexpectedly succeeded") }
-  _ = net.connection_close(&outcome.connection)
+  _ = net.connection_close(&outcome.value)
   if #syscall(72, 0, 1, 0) < 0 { #panic("failed connection closed stdin") }
-  if outcome.connection.descriptor != -1 { #panic("failed connection active") }
+  if outcome.value.active || outcome.value.descriptor != -1 { #panic("failed connection active") }
 }
 fn main() {
   address := net.ipv4(127, 0, 0, 1, 1)
@@ -54,14 +54,16 @@ fn main() {
 }
 ''',
     'failed-listener': '''use "std/net"
+use "std/errors"
 fn main() {
   address := net.ipv4(127, 0, 0, 1, 1)
   address.bytes[0] = 255
   outcome := net.tcp_listen_ipv4(&address, 1)
   if outcome.ok { #panic("listener unexpectedly succeeded") }
-  _ = net.listener_close(&outcome.listener)
+  closed := net.listener_close(&outcome.value)
+  if closed.ok || closed.kind != errors.Kind.InvalidState { #panic("closed kind") }
   if #syscall(72, 0, 1, 0) < 0 { #panic("failed listener closed stdin") }
-  if outcome.listener.descriptor != -1 { #panic("failed listener active") }
+  if outcome.value.active || outcome.value.descriptor != -1 { #panic("failed listener active") }
 }
 ''',
     'empty-datagram': '''use "std/net"
@@ -104,7 +106,7 @@ for operation, expression in {
 }.items():
     CASES['disconnected-' + operation] = '''use "std/net"
 fn main() {
-  connection := net.Connection{ descriptor: SOCKET_FD }
+  connection := net.connection_from_descriptor(SOCKET_FD)
   address := net.ipv4(127, 0, 0, 1, 1)
   outcome := EXPRESSION
   if outcome.ok || outcome.error != -32 { #panic("expected EPIPE") }
@@ -153,12 +155,14 @@ fn main() {
   queue := net.event_queue()
   if !queue.ok { #panic("queue") }
   defer { _ = net.close(queue.value) }
-  if !net.event_add(queue.value, #cast(isize) descriptor, net.EventReadable, 42).ok { #panic("event add") }
+  if !net.event_add(queue.value, #cast(isize, descriptor), net.EventReadable, 42).ok { #panic("event add") }
   items: [1]net.PollDescriptor = [net.PollDescriptor{ descriptor: descriptor, events: net.PollReadable }]
   events: [1]net.Event = []
   before := time.monotonic_now()
   outcome := OPERATION
-  duration := time.elapsed(before, time.monotonic_now())
+  after := time.monotonic_now()
+  if !before.ok || !after.ok { #panic("clock read") }
+  duration := time.elapsed(before.value, after.value)
   signals := stop()
   if !outcome.ok || !duration.ok { #panic("wait failed") }
   if TIMEOUT == 100 {

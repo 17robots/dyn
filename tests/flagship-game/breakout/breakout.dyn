@@ -1,0 +1,194 @@
+// Breakout core: fixed-step simulation and a software renderer. Platform
+// independent, so it also builds for wasm32-browser. Positions use 1/256 pixel
+// fixed point so every target computes the same frames.
+use "std/mem"
+
+pub const Width: i32 = 160
+pub const Height: i32 = 120
+pub const Columns: i32 = 10
+pub const Rows: i32 = 5
+const Unit: i32 = 256
+const BrickWidth: i32 = 16
+const BrickHeight: i32 = 6
+const BrickTop: i32 = 12
+const PaddleWidth: i32 = 24
+const PaddleTop: i32 = 110
+const PaddleSpeed: i32 = 3
+const BallSize: i32 = 2
+
+pub enum Input { None, Left, Right }
+
+pub struct Game {
+  paddle: i32,
+  ball_x: i32,
+  ball_y: i32,
+  velocity_x: i32,
+  velocity_y: i32,
+  bricks: [50]bool,
+  remaining: i32,
+  score: i32,
+  lives: i32,
+  frame: u64,
+}
+
+pub struct Rect {
+  x: i32,
+  y: i32,
+  width: i32,
+  height: i32,
+  color: u32,
+}
+
+pub fn init(game: *Game) {
+  game.* = Game{ paddle: (Width - PaddleWidth) / 2, remaining: Columns * Rows, lives: 3 }
+  for *brick in game.bricks {
+    brick.* = true
+  }
+  serve(game)
+}
+
+fn serve(game: *Game) {
+  game.ball_x = (game.paddle + PaddleWidth / 2) * Unit
+  game.ball_y = (PaddleTop - 8) * Unit
+  game.velocity_x = 300
+  if game.lives % 2 == 0 {
+    game.velocity_x = -300
+  }
+  game.velocity_y = -384
+}
+
+pub fn over(game: *const Game) bool {
+  return game.lives == 0 || game.remaining == 0
+}
+
+pub fn ball_center(game: *const Game) i32 {
+  return game.ball_x / Unit + BallSize / 2
+}
+
+pub fn paddle_center(game: *const Game) i32 {
+  return game.paddle + PaddleWidth / 2
+}
+
+fn clamp(value: i32, low: i32, high: i32) i32 {
+  if value < low {
+    return low
+  }
+  if value > high {
+    return high
+  }
+  return value
+}
+
+// Removes the brick under the ball's center, if any.
+fn hit_brick(game: *Game) bool {
+  x := game.ball_x / Unit + BallSize / 2
+  y := game.ball_y / Unit + BallSize / 2
+  if y < BrickTop || y >= BrickTop + Rows * BrickHeight || x < 0 || x >= Columns * BrickWidth {
+    return false
+  }
+  index := #cast(usize, (y - BrickTop) / BrickHeight * Columns + x / BrickWidth)
+  if !game.bricks[index] {
+    return false
+  }
+  game.bricks[index] = false
+  game.remaining -= 1
+  game.score += 1
+  return true
+}
+
+pub fn step(game: *Game, input: Input) {
+  if over(game) {
+    return
+  }
+  game.frame += 1
+  case input {
+    Input.Left => {
+      game.paddle -= PaddleSpeed
+    }
+    Input.Right => {
+      game.paddle += PaddleSpeed
+    }
+    Input.None => {
+    }
+  }
+  game.paddle = clamp(game.paddle, 0, Width - PaddleWidth)
+  game.ball_x += game.velocity_x
+  game.ball_y += game.velocity_y
+  limit_x := (Width - BallSize) * Unit
+  if game.ball_x < 0 || game.ball_x > limit_x {
+    game.ball_x = clamp(game.ball_x, 0, limit_x)
+    game.velocity_x = -game.velocity_x
+  }
+  if game.ball_y < 0 {
+    game.ball_y = 0
+    game.velocity_y = -game.velocity_y
+  }
+  if hit_brick(game) {
+    game.velocity_y = -game.velocity_y
+  }
+  bottom := game.ball_y / Unit + BallSize
+  if game.velocity_y > 0 && bottom >= PaddleTop && bottom <= PaddleTop + 2 {
+    offset := ball_center(game) - game.paddle
+    if offset >= 0 && offset <= PaddleWidth {
+      game.velocity_y = -game.velocity_y
+      // Steer by hit position: the edges send the ball out at a steeper angle.
+      game.velocity_x = (offset - PaddleWidth / 2) * 48
+      if game.velocity_x == 0 {
+        game.velocity_x = 64
+      }
+    }
+  }
+  if game.ball_y / Unit >= Height {
+    game.lives -= 1
+    if game.lives > 0 {
+      serve(game)
+    }
+  }
+}
+
+// Builds this frame's draw list in the frame arena, then rasterizes it. The
+// list is the only thing pushed on the frame arena while it grows.
+// pixels holds Width * Height RGBA values.
+pub fn render(game: *const Game, frame: *mem.Arena, pixels: []u32) {
+  rects: []Rect
+  _ = mem.append(frame, &rects, Rect{ width: Width, height: Height, color: 0xFF201810 })
+  row: i32 = 0
+  for row < Rows {
+    column: i32 = 0
+    for column < Columns {
+      if game.bricks[#cast(usize, row * Columns + column)] {
+        color := 0xFF3060E0 + #cast(u32, row) * 0x00201000
+        brick := Rect{ x: column * BrickWidth + 1, y: BrickTop + row * BrickHeight + 1, width: BrickWidth - 2, height: BrickHeight - 2, color: color }
+        _ = mem.append(frame, &rects, brick)
+      }
+      column += 1
+    }
+    row += 1
+  }
+  _ = mem.append(frame, &rects, Rect{ x: game.paddle, y: PaddleTop, width: PaddleWidth, height: 4, color: 0xFFE0E0E0 })
+  _ = mem.append(frame, &rects, Rect{ x: game.ball_x / Unit, y: game.ball_y / Unit, width: BallSize, height: BallSize, color: 0xFFFFFFFF })
+  life: i32 = 0
+  for life < game.lives {
+    _ = mem.append(frame, &rects, Rect{ x: 2 + life * 6, y: 2, width: 4, height: 4, color: 0xFF40C040 })
+    life += 1
+  }
+  for rect in rects {
+    fill(pixels, rect)
+  }
+}
+
+fn fill(pixels: []u32, rect: Rect) {
+  left := clamp(rect.x, 0, Width)
+  right := clamp(rect.x + rect.width, 0, Width)
+  top := clamp(rect.y, 0, Height)
+  bottom := clamp(rect.y + rect.height, 0, Height)
+  y := top
+  for y < bottom {
+    start := #cast(usize, y * Width + left)
+    end := #cast(usize, y * Width + right)
+    for *pixel in pixels[start..end] {
+      pixel.* = rect.color
+    }
+    y += 1
+  }
+}

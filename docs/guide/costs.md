@@ -11,10 +11,15 @@ work only when semantics remain unchanged.
 | slice index | none | bounds check plus access unless proven safe |
 | pointer dereference | none | nil/alignment checks plus access unless proven safe |
 | checked integer arithmetic | none | operation plus failure branch unless proven safe |
-| `#wrap` arithmetic | none | plain machine operation, no failure branch |
-| `arena_push`, `mem.push` | caller arena | constant time; alignment check; returned bytes zeroed; panics when exhausted |
-| first push to a zero `Arena{}` | address space | one reservation syscall |
-| arena rewind/reset | none | constant time; does not clear old bytes |
+| `#wrap` arithmetic | none | modular operations; division and shift-count checks remain |
+| `arena_push`, `mem.push` | caller arena | constant-time bookkeeping in the current block plus zeroing proportional to bytes; growth adds a backing block and may require OS reservation/commitment/page faults; panics when exhausted |
+| `arena_push_uninit` | caller arena | constant-time bookkeeping in the current block without zeroing; growth may add a block and require OS reservation/commitment/page faults |
+| `arena_create` / `arena_create_bounded` | OS backing | reserve and initialize a header in the first block; `arena_create(0)` selects the target default; Wasm obtains backed linear memory |
+| `arena_from_buffer` | caller buffer | constant-time header initialization; consumes 144 bytes plus up to 15 bytes of alignment padding |
+| arena rewind/reset | none | proportional to blocks released, plus OS release cost; poisoning touches reclaimed bytes in the retained block when enabled |
+| arena release | none | walks and releases all blocks; invalidates the arena pointer |
+| arena used/capacity/snapshot | none | proportional to the number of backing blocks |
+| arena mark/remaining | none | constant time; remaining describes the newest block only |
 | `...any` call | caller stack | descriptor/value packing proportional to argument count |
 | typed call | none | native call; commonly inlined in release |
 | generic call | none | one compiled instance per distinct type argument set |

@@ -23,19 +23,40 @@ typedef struct {
   size_t mem_kind_count;
 } Sema;
 
+/* Errors inside a module with no source file for the target all share that
+   cause: report it once per module instead of every missing name. */
+static bool target_gap_reported(DynSpan span, const DynSource *s) {
+  static _Thread_local char reported[4096];
+  char name[4096];
+  if (!dyn_source_target_gap(s, span.start_byte, name, sizeof(name))) return false;
+  if (!strcmp(reported, name)) return true;
+  memcpy(reported, name, strlen(name) + 1);
+  char message[4200];
+  snprintf(message, sizeof(message), "module '%s' has no source file for target %s; it is unavailable there",
+           name, dyn_context_target(&s->context)->name);
+  dyn_diagnostic_source("error", s, span.start_byte, span.end_byte, message);
+  return true;
+}
 static void error_span(DynSpan span, const DynSource *s, unsigned *e,
                        const char *m) {
-  dyn_diagnostic_source("error", s, span.start_byte, span.end_byte, m);
   ++*e;
+  if (target_gap_reported(span, s)) return;
+  dyn_diagnostic_source("error", s, span.start_byte, span.end_byte, m);
 }
 static void note_span(DynSpan span, const DynSource *s, const char *m) {
+  char name[4096];
+  if (dyn_source_target_gap(s, span.start_byte, name, sizeof(name))) return;
   dyn_diagnostic_source("note", s, span.start_byte, span.end_byte, m);
 }
-static void error_types(DynSpan span, const DynSource *s, unsigned *e,
-                        const char *m, DynType expected, DynType found) {
-  char detail[192];
-  snprintf(detail, sizeof(detail), "%s (expected %s, found %s)", m,
-           dyn_type_name(expected), dyn_type_name(found));
+static void display_type_name(DynAstProgram *a, DynType t, const DynSource *s,
+                              char *out, size_t cap);
+static void error_types(DynAstProgram *a, DynSpan span, const DynSource *s,
+                        unsigned *e, const char *m, DynType expected,
+                        DynType found) {
+  char detail[1024], want[384], got[384];
+  display_type_name(a, expected, s, want, sizeof(want));
+  display_type_name(a, found, s, got, sizeof(got));
+  snprintf(detail, sizeof(detail), "%s (expected %s, found %s)", m, want, got);
   error_span(span, s, e, detail);
 }
 
@@ -746,6 +767,27 @@ typedef struct {
   bool valid, overflow;
   int64_t value;
 } ConstantInt;
+/* Indexes and slice bounds accept any integer up to usize width, as in C, but
+   stay bounds checked: a signed operand converts to usize with sign
+   extension, so a negative value becomes huge and fails the length check. */
+static DynExprId index_operand(Sema *sema, DynAstProgram *a, DynExprId operand, DynType t,
+                               DynSpan span, const DynSource *s, unsigned *errors,
+                               const char *what) {
+  char message[128];
+  if (!integer(sema, t)) {
+    snprintf(message, sizeof(message), "%s requires integer", what);
+    error_span(span, s, errors, message);
+    return operand;
+  }
+  if (!signed_int(sema, t)) return operand;
+  if (bits(sema, t) > bits(sema, DYN_TYPE_USIZE)) {
+    snprintf(message, sizeof(message), "%s type is wider than usize on this target; use #cast", what);
+    error_span(span, s, errors, message);
+    return operand;
+  }
+  return convert_expr(a, operand, DYN_TYPE_USIZE);
+}
+
 typedef struct {
   bool valid, overflow;
   uint64_t value;
@@ -1006,7 +1048,11 @@ static void type_name_into(DynAstProgram *a, DynType t, const DynSource *s,
   if (dyn_type_is_pointer(t)) {
     DynAstPointer *p = pointer_info(a, t);
     type_name_into(a, p->pointee, s, inner, sizeof(inner));
-    snprintf(out, cap, "*%s%s", p->is_const ? "const " : "", inner);
+    /* A function value is a code pointer and is spelled fn(...) R. */
+    if (dyn_type_is_function(p->pointee) && !p->is_const)
+      snprintf(out, cap, "%s", inner);
+    else
+      snprintf(out, cap, "*%s%s", p->is_const ? "const " : "", inner);
     return;
   }
   if (dyn_type_is_array(t)) {
@@ -1344,7 +1390,7 @@ static DynType check_generic_call(Sema *sema, DynAstProgram *a, DynExprId id,
       if (can_convert(sema, a, values[i], target))
         arg = convert_expr(a, arg, target);
       else
-        error_types(a->expressions[arg].span, s, errors,
+        error_types(a, a->expressions[arg].span, s, errors,
                     "function argument type mismatch", target, values[i]);
     }
     a->items[item_start + kept++] = (DynAstItem){.expression = arg, .field_index = UINT32_MAX};
@@ -1472,7 +1518,7 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
           if (can_convert(sema, a, value, target))
             a->items[arg_index].expression = convert_expr(a, a->items[arg_index].expression, target);
           else
-            error_types(a->expressions[a->items[arg_index].expression].span, s, errors,
+            error_types(a, a->expressions[a->items[arg_index].expression].span, s, errors,
                         "function argument type mismatch", target, value);
         }
       }
@@ -1552,7 +1598,7 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
         if (can_convert(sema, a, value, want))
           a->items[arg_index].expression = convert_expr(a, a->items[arg_index].expression, want);
         else
-          error_types(a->expressions[a->items[arg_index].expression].span, s, errors,
+          error_types(a, a->expressions[a->items[arg_index].expression].span, s, errors,
                       "function pointer argument type mismatch", want, value);
       }
     }
@@ -1599,6 +1645,28 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
       a->expressions[id].integer = global;
       return a->expressions[id].type = a->globals[global].type;
     }
+    uint32_t fn = sema_find_function(sema, a, a->expressions[id].span, s);
+    if (fn != UINT32_MAX) {
+      /* A function named without a call is its code pointer, spelled fn(...) R. */
+      if (a->functions[fn].is_generic) {
+        error_span(a->expressions[id].span, s, errors,
+                   "a generic function can only be called, not used as a value");
+        return a->expressions[id].type = DYN_TYPE_ERROR;
+      }
+      if (a->functions[fn].variadic && !a->functions[fn].foreign) {
+        error_span(a->expressions[id].span, s, errors,
+                   "native variadic function pointers are not supported");
+        return a->expressions[id].type = DYN_TYPE_ERROR;
+      }
+      if (!sema_c_abi_function(a, &a->functions[fn])) {
+        error_span(a->expressions[id].span, s, errors,
+                   "type has no supported C ABI; use C-compatible storage or a pointer adapter");
+        return a->expressions[id].type = DYN_TYPE_ERROR;
+      }
+      a->expressions[id].kind = DYN_EXPR_FUNCTION;
+      a->expressions[id].integer = fn;
+      return a->expressions[id].type = function_pointer_type(a, fn);
+    }
     char message[256];
     error_span(a->expressions[id].span, s, errors,
                suggest_name(a, a->expressions[id].span, s, false, message, sizeof(message))
@@ -1637,8 +1705,8 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
   if (a->expressions[id].kind == DYN_EXPR_INDEX) {
     DynType base = check_expr(sema, a, a->expressions[id].left, s, errors, DYN_TYPE_INFER),
             index = check_expr(sema, a, a->expressions[id].right, s, errors, DYN_TYPE_USIZE);
-    if (!integer(sema, index) || signed_int(sema, index))
-      error_span(a->expressions[id].span, s, errors, "array index requires unsigned integer");
+    a->expressions[id].right = index_operand(sema, a, a->expressions[id].right, index,
+                                             a->expressions[id].span, s, errors, "array index");
     DynAstArray *ar = array_info(a, base);
     DynAstSlice *sl = slice_info(a, base);
     if (!ar && !sl) {
@@ -1670,14 +1738,14 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
     bool element_const = sl ? sl->is_const : pointer && pointer->is_const;
     if (a->expressions[id].right != DYN_NO_EXPR) {
       DynType t = check_expr(sema, a, a->expressions[id].right, s, errors, DYN_TYPE_USIZE);
-      if (!integer(sema, t) || signed_int(sema, t))
-        error_span(a->expressions[id].span, s, errors, "slice bound requires unsigned integer");
+      a->expressions[id].right = index_operand(sema, a, a->expressions[id].right, t,
+                                               a->expressions[id].span, s, errors, "slice bound");
     }
     if (a->expressions[id].integer != DYN_NO_EXPR) {
       DynType t =
           check_expr(sema, a, (DynExprId)a->expressions[id].integer, s, errors, DYN_TYPE_USIZE);
-      if (!integer(sema, t) || signed_int(sema, t))
-        error_span(a->expressions[id].span, s, errors, "slice bound requires unsigned integer");
+      a->expressions[id].integer = index_operand(sema, a, (DynExprId)a->expressions[id].integer, t,
+                                                 a->expressions[id].span, s, errors, "slice bound");
     }
     return a->expressions[id].type = sema_intern_slice(a, element, element_const);
   }
@@ -1959,6 +2027,9 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
         error_span(a->expressions[a->items[a->expressions[id].item_start + i].expression].span,
                    s, errors, "#syscall arguments require integer or pointer");
     }
+    if (!strcmp(dyn_context_target(&s->context)->kernel, "none"))
+      error_span(a->expressions[id].span, s, errors,
+                 "#syscall requires an operating system; bare-metal targets have none");
     if (a->expressions[id].item_count &&
         !strcmp(dyn_context_target(&s->context)->kernel, "linux") &&
         strcmp(dyn_context_target(&s->context)->arch, "x86_64")) {
@@ -2041,13 +2112,30 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
     uint32_t sid = base - DYN_TYPE_STRUCT_BASE,
              field = sema_find_field(a, sid, a->expressions[id].span, s);
     if (field == UINT32_MAX) {
-      error_span(a->expressions[id].span, s, errors, "unknown struct field");
+      char type_text[400], message[512];
+      DynSpan name = a->expressions[id].span;
+      type_name_into(a, base, s, type_text, sizeof(type_text));
+      snprintf(message, sizeof(message), "%s has no field '%.*s'", type_text,
+               (int)(name.end_byte - name.start_byte), s->text + name.start_byte);
+      error_span(name, s, errors, message);
       return a->expressions[id].type = DYN_TYPE_ERROR;
     }
     a->expressions[id].integer = field;
     return a->expressions[id].type = a->fields[a->structs[sid].field_start + field].type;
   }
   if (a->expressions[id].kind == DYN_EXPR_INT) {
+    if (expected == DYN_TYPE_F32 || expected == DYN_TYPE_F64) {
+      /* An integer literal in a float context is that float when exact. */
+      uint64_t value = a->expressions[id].integer;
+      if (value > (expected == DYN_TYPE_F32 ? (UINT64_C(1) << 24) : (UINT64_C(1) << 53))) {
+        error_span(a->expressions[id].span, s, errors,
+                   "integer literal is not exactly representable in expected float type");
+        return a->expressions[id].type = DYN_TYPE_ERROR;
+      }
+      a->expressions[id].kind = DYN_EXPR_FLOAT;
+      a->expressions[id].floating = (double)value;
+      return a->expressions[id].type = expected;
+    }
     if (expected != DYN_TYPE_INFER && !dyn_type_is_distinct(expected) &&
         integer(sema, expected)) {
       if (!literal_fits(sema, a->expressions[id].integer, expected)) {
@@ -2108,32 +2196,20 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
     a->expressions[id].boolean = true;
     return a->expressions[id].type = expected;
   }
+  if (a->expressions[id].kind == DYN_EXPR_UNARY && a->expressions[id].op == DYN_OP_NEG &&
+      !dyn_type_is_distinct(expected) && integer(sema, expected) && !signed_int(sema, expected) &&
+      a->expressions[a->expressions[id].left].kind == DYN_EXPR_INT &&
+      a->expressions[a->expressions[id].left].integer != 0) {
+    error_span(a->expressions[id].span, s, errors,
+               "negative literal is not representable in expected type");
+    return a->expressions[id].type = DYN_TYPE_ERROR;
+  }
   if (a->expressions[id].kind == DYN_EXPR_UNARY && a->expressions[id].op == DYN_OP_ADDRESS) {
     DynAstExpr *operand = &a->expressions[a->expressions[id].left];
-    if (operand->kind == DYN_EXPR_NAME) {
-      uint32_t fn = sema_find_function(sema, a, operand->span, s);
-      if (fn != UINT32_MAX) {
-        if (a->functions[fn].is_generic) {
-          error_span(a->expressions[id].span, s, errors,
-                     "a generic function can only be called, not used as a value");
-          return a->expressions[id].type = DYN_TYPE_ERROR;
-        }
-        if (a->functions[fn].variadic && !a->functions[fn].foreign) {
-          error_span(a->expressions[id].span, s, errors,
-                     "native variadic function pointers are not supported");
-          return a->expressions[id].type = DYN_TYPE_ERROR;
-        }
-        if (!sema_c_abi_function(a, &a->functions[fn])) {
-          error_span(a->expressions[id].span, s, errors,
-                     "type has no supported C ABI; use C-compatible storage or a pointer adapter");
-          return a->expressions[id].type = DYN_TYPE_ERROR;
-        }
-        a->expressions[id].kind = DYN_EXPR_FUNCTION;
-        a->expressions[id].op = DYN_OP_NONE;
-        a->expressions[id].integer = fn;
-        a->expressions[id].left = DYN_NO_EXPR;
-        return a->expressions[id].type = function_pointer_type(a, fn);
-      }
+    if (operand->kind == DYN_EXPR_NAME && find_local(sema, a, operand->span, s) == UINT32_MAX &&
+        sema_find_function(sema, a, operand->span, s) != UINT32_MAX) {
+      error_span(a->expressions[id].span, s, errors, "a function is already a value; drop the '&'");
+      return a->expressions[id].type = DYN_TYPE_ERROR;
     }
     DynType value = check_expr(sema, a, a->expressions[id].left, s, errors, DYN_TYPE_INFER);
     DynExprKind kind = a->expressions[a->expressions[id].left].kind;
@@ -2251,6 +2327,23 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
                                         : "pointers support equality only");
       return a->expressions[id].type = DYN_TYPE_ERROR;
     }
+    /* x < 0 and x >= 0 on an unsigned x are constant: almost always a
+       leftover -1 sentinel check. */
+    bool in_instance = sema->current_function != UINT32_MAX &&
+                       a->functions[sema->current_function].is_instance;
+    if (integer(sema, left) && !signed_int(sema, left) && !in_instance) {
+      DynOperator cmp = a->expressions[id].op;
+      const DynAstExpr *l = &a->expressions[a->expressions[id].left];
+      const DynAstExpr *r = &a->expressions[a->expressions[id].right];
+      bool right_zero = r->kind == DYN_EXPR_INT && r->integer == 0;
+      bool left_zero = l->kind == DYN_EXPR_INT && l->integer == 0;
+      if ((right_zero && (cmp == DYN_OP_LT || cmp == DYN_OP_GE)) ||
+          (left_zero && (cmp == DYN_OP_GT || cmp == DYN_OP_LE))) {
+        error_span(a->expressions[id].span, s, errors,
+                   "comparison is constant: an unsigned value is never negative");
+        return a->expressions[id].type = DYN_TYPE_ERROR;
+      }
+    }
     return a->expressions[id].type = DYN_TYPE_BOOL;
   }
   if (a->expressions[id].op == DYN_OP_BIT_AND || a->expressions[id].op == DYN_OP_BIT_OR ||
@@ -2315,6 +2408,9 @@ static bool lvalue_const(DynAstProgram *a, DynExprId id) {
     DynAstSlice *sl = slice_info(a, a->expressions[e->left].type);
     return sl ? sl->is_const : lvalue_const(a, e->left);
   }
+  /* Constants live in read-only data; their address is *const T. */
+  if (e->kind == DYN_EXPR_GLOBAL)
+    return e->integer < a->global_count && a->globals[e->integer].is_const;
   return false;
 }
 static bool sema_block(Sema *sema, DynAstProgram *, uint32_t, uint32_t,
@@ -2773,7 +2869,7 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
           st->expression =
               convert_expr(a, st->expression, sema->current_return_type);
         else
-          error_types(st->span, s, errors, "return type mismatch",
+          error_types(a, st->span, s, errors, "return type mismatch",
                       sema->current_return_type, value);
       }
     }
@@ -3091,7 +3187,7 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
         if (can_convert(sema, a, value, type))
           st->expression = convert_expr(a, st->expression, type);
         else
-          error_types(st->span, s, errors, "initializer type mismatch", type,
+          error_types(a, st->span, s, errors, "initializer type mismatch", type,
                       value);
       }
     }
@@ -3128,7 +3224,7 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
           st->assignment_op == DYN_OP_NONE)
         st->expression = convert_expr(a, st->expression, target);
       else
-        error_types(st->span, s, errors, "field assignment type mismatch",
+        error_types(a, st->span, s, errors, "field assignment type mismatch",
                     target, value);
     }
     if (st->assignment_op != DYN_OP_NONE) {
@@ -3194,7 +3290,7 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
     if (can_convert(sema, a, value, target) && st->assignment_op == DYN_OP_NONE)
       st->expression = convert_expr(a, st->expression, target);
     else
-      error_types(st->span, s, errors, "assignment type mismatch", target,
+      error_types(a, st->span, s, errors, "assignment type mismatch", target,
                   value);
   }
   if (st->assignment_op != DYN_OP_NONE) {

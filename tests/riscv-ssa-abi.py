@@ -11,14 +11,14 @@ ROOT = Path(__file__).resolve().parents[1]
 DYN = Path(os.environ.get('DYN', ROOT/'build/dyn-release')).resolve()
 SOURCE = '''struct Pair { x: i64, y: i64 }
 extern fn c_spill(a:i64,b:i64,c:i64,d:i64,e:i64,f:i64,g:i64,p:Pair,tail:i64) i64
-extern fn c_callback(callback:*fn(i64,i64,i64,i64,i64,i64,i64,Pair,i64) i64) i64
+extern fn c_callback(callback:fn(i64,i64,i64,i64,i64,i64,i64,Pair,i64) i64) i64
 fn dyn_spill(a:i64,b:i64,c:i64,d:i64,e:i64,f:i64,g:i64,p:Pair,tail:i64) i64 {
   return a+b+c+d+e+f+g+p.x*10+p.y*100+tail*1000
 }
 fn main() {
   if c_spill(1,2,3,4,5,6,7,Pair{x:8,y:2},3) != 3308 { #panic("split outgoing aggregate") }
   if c_spill(-1,-2,-3,-4,-5,-6,-7,Pair{x:-8,y:-2},-3) != -3308 { #panic("signed split outgoing aggregate") }
-  if c_callback(&dyn_spill) != 3308 { #panic("split incoming aggregate") }
+  if c_callback(dyn_spill) != 3308 { #panic("split incoming aggregate") }
 }
 '''
 PROVIDER = '''typedef long long i64;

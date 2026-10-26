@@ -25,7 +25,7 @@ fn require(ok: bool, message: []const u8) { if !ok { #panic(message) } }
 fn create(path: []const u8) {
   opened := fs.create(path)
   require(opened.ok, "create file")
-  require(fs.close(&opened.file).ok, "close file")
+  require(fs.close(&opened.value).ok, "close file")
 }
 fn malformed(storage: []u8, used: usize) {
   // Buffered records are the public seam; this never reads or owns descriptor 0.
@@ -70,13 +70,13 @@ fn exhausted_open() {
     opened := watch.open(storage[..])
     if !opened.ok {
       require(opened.error < 0, "open failure error")
-      require(opened.watcher.descriptor == -1, "failed syscall owns stdin")
-      require(watch.close(&opened.watcher).ok, "close syscall failure")
+      require(opened.value.descriptor == -1, "failed syscall owns stdin")
+      require(watch.close(&opened.value).ok, "close syscall failure")
       require(#syscall(72,0,1,0) >= 0, "syscall failure closed stdin")
       failed = true
       break
     }
-    states[count] = opened.watcher
+    states[count] = opened.value
     count += 1
   }
   for i in 0..count { require(watch.close(&states[i]).ok, "close exhausted watchers") }
@@ -94,12 +94,12 @@ fn main() {
   for length in 0..272 {
     failed := watch.open(storage[..length])
     require(!failed.ok && failed.error == -28, "short backing")
-    require(watch.close(&failed.watcher).ok, "close failed open")
+    require(watch.close(&failed.value).ok, "close failed open")
     require(#syscall(72,0,1,0) >= 0, "failed open closed stdin")
   }
   opened := watch.open(storage[..])
   require(opened.ok, "open watcher")
-  state := opened.watcher
+  state := opened.value
   defer { _ = watch.close(&state) }
   require(watch.next(&state).status == watch.Status.Empty, "empty nonblocking read")
   require(!watch.add(&state,"",watch.Create).ok, "empty path")

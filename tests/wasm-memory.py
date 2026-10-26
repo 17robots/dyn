@@ -6,27 +6,36 @@ ROOT=Path(__file__).resolve().parents[1]
 DYN=os.environ.get('DYN',str(ROOT/'build/dyn'))
 source=r'''
 use "std/mem" mem
-arenas: [8]mem.Arena
+arenas: [8]*mem.Arena
 pub fn allocate(slot: usize, size: usize) usize {
-  made := mem.arena_create(size)
+  made := mem.arena_create(size + mem.ArenaHeader)
   arenas[slot] = made
-  return #cast(usize) mem.arena_push(&arenas[slot], size, 1)
+  return #cast(usize, mem.arena_push(arenas[slot], size, 1))
 }
-pub fn release(slot: usize) bool { mem.arena_release(&arenas[slot]) return true }
+pub fn release(slot: usize) bool {
+  mem.arena_release(arenas[slot])
+  arenas[slot] = nil
+  return true
+}
 pub fn fixed() bool {
-  bytes: [8]u8 arena := mem.arena_from_buffer(bytes[..])
-  _ = mem.arena_push(&arena, 8, 1)
-  return !mem.arena_try_push(&arena, 1, 1).ok
+  bytes: [8 + mem.ArenaBufferOverhead]u8
+  arena := mem.arena_from_buffer(bytes[..])
+  arena = mem.arena_from_buffer(arena.data[..mem.ArenaHeader + 8])
+  _ = mem.arena_push(arena, 8, 1)
+  return !mem.arena_try_push(arena, 1, 1).ok
 }
 pub fn growing() bool {
-  arena := mem.growing_create(65536)
-  first := mem.growing_push_or_panic(&arena, 65536, 8) first.* = 42
-  second := mem.growing_push_or_panic(&arena, 65536, 8) second.* = 17
-  if first.* != 42 { return false }
-  mem.growing_reset(&arena)
-  reused := mem.growing_push_or_panic(&arena, 65536, 8)
-  ok := first == reused
-  mem.growing_release(&arena) return ok
+  arena := mem.arena_create(65536 + mem.ArenaHeader)
+  first := mem.arena_push(arena, 65536, 8)
+  first.* = 42
+  second := mem.arena_push(arena, 65536, 8)
+  second.* = 17
+  if first.* != 42 || mem.arena_snapshot(arena).blocks != 2 { return false }
+  mem.arena_reset(arena)
+  reused := mem.arena_push(arena, 65536, 8)
+  ok := mem.arena_snapshot(arena).blocks == 1 && reused.* == 0
+  mem.arena_release(arena)
+  return ok
 }
 pub fn multiply(a: u64, b: u64) u64 { return a * b }
 '''
@@ -52,7 +61,7 @@ const assert=require('node:assert/strict'),fs=require('fs');
 with tempfile.TemporaryDirectory(prefix='dyn-wasm-memory-') as directory:
  work=Path(directory);(work/'main.dyn').write_text(source)
  for flags in ([],['--release']):
-  subprocess.run([DYN,'build',str(work),'--target','wasm32-browser','--shared','--link','--max-memory=3145728','--output',str(work/'test.wasm'),*flags],cwd=ROOT,check=True,capture_output=True,text=True)
+  subprocess.run([DYN,'build',str(work),'--target','wasm32-browser','--shared','--link','--max-memory=3145728','--output',str(work/'test.wasm'),*flags],cwd=ROOT,check=True,capture_output=True,text=True,timeout=120)
   result=subprocess.run(['node','-e',js,str(work/'test.wasm')],capture_output=True,text=True,timeout=30)
   assert result.returncode==0,result.stdout+result.stderr
-print('PASS Wasm arena growth, stable pointers, reuse, split/coalesce, growing arenas, OOM, checked u64 multiplication (debug/release)')
+print('PASS Wasm arena growth, stable pointers, reuse, split/coalesce, chained arenas, OOM, checked u64 multiplication (debug/release)')

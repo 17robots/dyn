@@ -140,9 +140,9 @@ packed struct Packed { tag: u8, size: u64 }
 #assert(#offsetof(Packed, size) == 1)
 fn main() {
   h: Header
-  if #cast(usize) &h.flags - #cast(usize) &h != #offsetof(Header, flags) { #panic("offset") }
+  if #cast(usize, &h.flags) - #cast(usize, &h) != #offsetof(Header, flags) { #panic("offset") }
   p: Packed
-  if #cast(usize) &p.size - #cast(usize) &p != #offsetof(Packed, size) { #panic("packed") }
+  if #cast(usize, &p.size) - #cast(usize, &p) != #offsetof(Packed, size) { #panic("packed") }
 }
 '''))
     check(project(root, 'offsetof-field', '''struct A { x: u8 }

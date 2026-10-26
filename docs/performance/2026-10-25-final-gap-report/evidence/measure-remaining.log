@@ -1,0 +1,4 @@
+compute_final fib {'dyn': 23.917, 'c-O2': 65.828, 'c-O3': 55.481, 'go': 277.938}
+compute_final hash {'dyn': 77.209, 'c-O2': 77.171, 'c-O3': 77.141, 'go': 77.716}
+compute_final matmul {'dyn': 51.603, 'c-O2': 58.729, 'c-O3': 58.705, 'go': 109.042}
+PASS remaining kernels

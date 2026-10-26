@@ -1,6 +1,11 @@
-// Formatting into bounded caller-owned storage. Failed compound writes roll back.
+// Formatting. Buffer writes into bounded caller-owned storage and rolls back
+// failed compound writes; the free functions return text in an arena.
 
-pub struct Buffer { data: []u8, length: usize }
+use "std/mem" mem
+
+// failed records the first write that did not fit; later writes do nothing
+// and return false, so callers may check failed once at the end.
+pub struct Buffer { data: []u8, length: usize, failed: bool }
 pub fn buffer(storage: []u8) Buffer {
   return Buffer{ data: storage, length: 0 }
 }
@@ -13,12 +18,15 @@ pub fn remaining(state: *const Buffer) usize {
   }
   return #len(state.data) - state.length
 }
+// Empties the buffer and clears failed.
 pub fn clear(state: *Buffer) {
   state.length = 0
+  state.failed = false
 }
 
 pub fn write(state: *Buffer, value: []const u8) bool {
-  if state.length > #len(state.data) || #len(value) > remaining(state) {
+  if state.failed || state.length > #len(state.data) || #len(value) > remaining(state) {
+    state.failed = true
     return false
   }
   for i in 0..#len(value) {
@@ -29,7 +37,8 @@ pub fn write(state: *Buffer, value: []const u8) bool {
 }
 
 pub fn write_byte(state: *Buffer, value: u8) bool {
-  if state.length >= #len(state.data) {
+  if state.failed || state.length >= #len(state.data) {
+    state.failed = true
     return false
   }
   state.data[state.length] = value
@@ -37,11 +46,11 @@ pub fn write_byte(state: *Buffer, value: u8) bool {
   return true
 }
 
-pub fn u64_base(destination: []u8, value: u64, base: u8, uppercase: bool) []u8 {
+fn u64_base_into(destination: []u8, value: u64, base: u8, uppercase: bool) []u8 {
   if base < 2 || base > 36 {
     #panic("format base must be between 2 and 36")
   }
-  radix := #cast(u64) base
+  radix := #cast(u64, base)
   digit_count: usize = 1
   remaining_value := value
   for remaining_value >= radix {
@@ -55,7 +64,7 @@ pub fn u64_base(destination: []u8, value: u64, base: u8, uppercase: bool) []u8 {
   remaining_value = value
   for at > 0 {
     at -= 1
-    digit := #cast(u8) (remaining_value % radix)
+    digit := #cast(u8, (remaining_value % radix))
     if digit < 10 {
       destination[at] = digit + '0'
     }
@@ -70,28 +79,28 @@ pub fn u64_base(destination: []u8, value: u64, base: u8, uppercase: bool) []u8 {
   return destination[..digit_count]
 }
 
-pub fn u64_decimal(destination: []u8, value: u64) []u8 {
-  return u64_base(destination, value, 10, false)
+fn u64_decimal_into(destination: []u8, value: u64) []u8 {
+  return u64_base_into(destination, value, 10, false)
 }
 
-pub fn i64_decimal(destination: []u8, value: i64) []u8 {
+fn i64_decimal_into(destination: []u8, value: i64) []u8 {
   negative := value < 0
   magnitude: u64 = 0
   if negative {
-    magnitude = #cast(u64) (-(value + 1))
+    magnitude = #cast(u64, (-(value + 1)))
     magnitude += 1
   }
   else {
-    magnitude = #cast(u64) value
+    magnitude = #cast(u64, value)
   }
   if !negative {
-    return u64_decimal(destination, magnitude)
+    return u64_decimal_into(destination, magnitude)
   }
   if #len(destination) == 0 {
     return destination[..0]
   }
   destination[0] = '-'
-  digits := u64_decimal(destination[1..], magnitude)
+  digits := u64_decimal_into(destination[1..], magnitude)
   if #len(digits) == 0 {
     return destination[..0]
   }
@@ -100,12 +109,12 @@ pub fn i64_decimal(destination: []u8, value: i64) []u8 {
 
 pub fn write_u64(state: *Buffer, value: u64) bool {
   storage: [20]u8 = []
-  return write(state, u64_decimal(storage[..], value))
+  return write(state, u64_decimal_into(storage[..], value))
 }
 
 pub fn write_i64(state: *Buffer, value: i64) bool {
   storage: [20]u8 = []
-  return write(state, i64_decimal(storage[..], value))
+  return write(state, i64_decimal_into(storage[..], value))
 }
 
 pub fn write_bool(state: *Buffer, value: bool) bool {
@@ -116,7 +125,8 @@ pub fn write_bool(state: *Buffer, value: bool) bool {
 }
 
 pub fn write_padding(state: *Buffer, byte: u8, amount: usize) bool {
-  if state.length > #len(state.data) || amount > remaining(state) {
+  if state.failed || state.length > #len(state.data) || amount > remaining(state) {
+    state.failed = true
     return false
   }
   for i in 0..amount {
@@ -189,50 +199,50 @@ pub fn write_arguments(state: *Buffer, arguments: []const any) bool {
     ok := false
     case argument {
       is f32 value => {
-        ok = write_f64(state, #cast(f64) value)
-      },
+        ok = write_f64(state, #cast(f64, value))
+      }
       is f64 value => {
         ok = write_f64(state, value)
-      },
+      }
       is bool value => {
         ok = write_bool(state, value)
-      },
+      }
       is i8 value => {
-        ok = write_i64(state, #cast(i64) value)
-      },
+        ok = write_i64(state, #cast(i64, value))
+      }
       is i16 value => {
-        ok = write_i64(state, #cast(i64) value)
-      },
+        ok = write_i64(state, #cast(i64, value))
+      }
       is i32 value => {
-        ok = write_i64(state, #cast(i64) value)
-      },
+        ok = write_i64(state, #cast(i64, value))
+      }
       is i64 value => {
         ok = write_i64(state, value)
-      },
+      }
       is isize value => {
-        ok = write_i64(state, #cast(i64) value)
-      },
+        ok = write_i64(state, #cast(i64, value))
+      }
       is u8 value => {
-        ok = write_u64(state, #cast(u64) value)
-      },
+        ok = write_u64(state, #cast(u64, value))
+      }
       is u16 value => {
-        ok = write_u64(state, #cast(u64) value)
-      },
+        ok = write_u64(state, #cast(u64, value))
+      }
       is u32 value => {
-        ok = write_u64(state, #cast(u64) value)
-      },
+        ok = write_u64(state, #cast(u64, value))
+      }
       is u64 value => {
         ok = write_u64(state, value)
-      },
+      }
       is usize value => {
-        ok = write_u64(state, #cast(u64) value)
-      },
+        ok = write_u64(state, #cast(u64, value))
+      }
       is []const u8 value => {
         ok = write(state, value)
-      },
+      }
       is []u8 value => {
         ok = write(state, value)
-      },
+      }
       _ => {
         ok = false
       }
@@ -252,13 +262,13 @@ pub fn write_values(state: *Buffer, values: ...any) bool {
 // Rounded decimal formatting, not a shortest-roundtrip serialization format.
 // Up to 15 fractional digits; trailing zeroes are removed. Very small/large
 // magnitudes use a decimal exponent. Failure returns an empty slice.
-pub fn f64_decimal(destination: []u8, value: f64, precision: usize) []u8 {
+fn f64_decimal_into(destination: []u8, value: f64, precision: usize) []u8 {
   if precision > 15 {
     return destination[..0]
   }
   scratch: [64]u8 = []
   state := buffer(scratch[..])
-  bits := #bitcast(u64) value
+  bits := #bitcast(u64, value)
   negative := (bits >> 63) != 0
   exponent_bits := (bits >> 52) & 2047
   fraction_bits := bits & 4503599627370495
@@ -281,7 +291,7 @@ pub fn f64_decimal(destination: []u8, value: f64, precision: usize) []u8 {
       for i in 0..precision {
         scale *= 10
       }
-      scientific := magnitude != 0.0 && (magnitude < 0.000001 || magnitude * #cast(f64) scale >= 1000000000000000000.0)
+      scientific := magnitude != 0.0 && (magnitude < 0.000001 || magnitude * #cast(f64, scale) >= 1000000000000000000.0)
       exponent: i64 = 0
       if scientific {
         for magnitude >= 10.0 {
@@ -293,9 +303,9 @@ pub fn f64_decimal(destination: []u8, value: f64, precision: usize) []u8 {
           exponent -= 1
         }
       }
-      scaled := magnitude * #cast(f64) scale
-      rounded := #cast(u64) scaled
-      if scaled - #cast(f64) rounded >= 0.5 {
+      scaled := magnitude * #cast(f64, scale)
+      rounded := #cast(u64, scaled)
+      if scaled - #cast(f64, rounded) >= 0.5 {
         rounded += 1
       }
       if scientific && rounded >= 10 * scale {
@@ -311,7 +321,7 @@ pub fn f64_decimal(destination: []u8, value: f64, precision: usize) []u8 {
           digits -= 1
         }
         fraction_storage: [20]u8 = []
-        rendered := u64_decimal(fraction_storage[..], fraction)
+        rendered := u64_decimal_into(fraction_storage[..], fraction)
         _ = write_byte(&state, '.')
         _ = write_padding(&state, '0', digits - #len(rendered))
         _ = write(&state, rendered)
@@ -335,19 +345,53 @@ pub fn f64_decimal(destination: []u8, value: f64, precision: usize) []u8 {
 
 pub fn write_f64(state: *Buffer, value: f64) bool {
   storage: [64]u8 = []
-  return write(state, f64_decimal(storage[..], value, 6))
+  return write(state, f64_decimal_into(storage[..], value, 6))
 }
 
 pub fn write_u64_width(state: *Buffer, value: u64, width: usize, padding: u8) bool {
   storage: [20]u8 = []
-  rendered := u64_decimal(storage[..], value)
+  rendered := u64_decimal_into(storage[..], value)
   length := #len(rendered)
   if width > length {
     length = width
   }
-  if state.length > #len(state.data) || length > remaining(state) {
+  if state.failed || state.length > #len(state.data) || length > remaining(state) {
+    state.failed = true
     return false
   }
   _ = write_padding(state, padding, length - #len(rendered))
   return write(state, rendered)
+}
+
+fn copy_out(arena: *mem.Arena, text: []const u8) []u8 {
+  output := mem.push_bytes_uninit(arena, #len(text))
+  _ = mem.copy(output, text)
+  return output
+}
+
+// value in base 2 through 36. Panics on another base.
+pub fn u64_base(arena: *mem.Arena, value: u64, base: u8, uppercase: bool) []u8 {
+  storage: [64]u8 = []
+  return copy_out(arena, u64_base_into(storage[..], value, base, uppercase))
+}
+
+pub fn u64_decimal(arena: *mem.Arena, value: u64) []u8 {
+  storage: [20]u8 = []
+  return copy_out(arena, u64_decimal_into(storage[..], value))
+}
+
+pub fn i64_decimal(arena: *mem.Arena, value: i64) []u8 {
+  storage: [20]u8 = []
+  return copy_out(arena, i64_decimal_into(storage[..], value))
+}
+
+// Rounded decimal with up to 15 fractional digits; trailing zeroes are
+// removed. Very small or large magnitudes use a decimal exponent. Not a
+// shortest-roundtrip format. Panics when precision is above 15.
+pub fn f64_decimal(arena: *mem.Arena, value: f64, precision: usize) []u8 {
+  if precision > 15 {
+    #panic("fmt.f64_decimal: precision above 15")
+  }
+  storage: [64]u8 = []
+  return copy_out(arena, f64_decimal_into(storage[..], value, precision))
 }

@@ -1,8 +1,10 @@
+use "std/mem" mem
 use "std/unicode/utf8" utf8
 use "std/bytes" bytes
+use "std/errors" errors
 pub const UnicodeVersion: []const u8 = "17.0.0"
 pub enum ErrorKind { None, InvalidUtf8, Capacity, Overlap }
-pub struct Result { written: usize, error: ErrorKind, ok: bool }
+struct Result { written: usize, error: ErrorKind, ok: bool }
 pub enum Form { NFD, NFC, NFKD, NFKC }
 pub enum Category { Cn, Lu, Ll, Lt, Lm, Lo, Mn, Mc, Me, Nd, Nl, No, Pc, Pd, Ps, Pe, Pi, Pf, Po, Sm, Sc, Sk, So, Zs, Zl, Zp, Cc, Cf, Cs, Co }
 fn properties(codepoint: u32) u32 {
@@ -139,15 +141,15 @@ fn mapping(table: []const u32, codepoint: u32) []const u32 {
       low = mid + 1
     }
     else {
-      start := #cast(usize) table[at + 1]
-      return MappingValues[start..start + #cast(usize) table[at + 2]]
+      start := #cast(usize, table[at + 1])
+      return MappingValues[start..start + #cast(usize, table[at + 2])]
     }
   }
   return MappingValues[..0]
 }
 // Locale-independent full default case folding, without normalization.
 // Overlap is rejected before writing. Other failures report a complete UTF-8 prefix.
-pub fn case_fold(destination: []u8, source: []const u8) Result {
+fn case_fold_into(destination: []u8, source: []const u8) Result {
   if bytes.overlaps(destination, source) {
     return Result{ error: ErrorKind.Overlap }
   }
@@ -201,12 +203,12 @@ fn compose(left: u32, right: u32) u32 {
 // Work is split into equal decomposition/reordering buffers. Each half needs
 // one slot per fully decomposed scalar. Input/output/work must not overlap.
 // Errors may modify storage; written reports only the complete output prefix.
-pub fn normalize(destination: []u8, source: []const u8, form: Form, work: []u32) Result {
+fn normalize_into(destination: []u8, source: []const u8, form: Form, work: []u32) Result {
   if bytes.overlaps(destination, source) {
     return Result{ error: ErrorKind.Overlap }
   }
   if #len(work) > 0 {
-    workspace := (#cast(*u8) &work[0])[..#len(work) * 4]
+    workspace := (#cast(*u8, &work[0]))[..#len(work) * 4]
     if bytes.overlaps(workspace, source) || bytes.overlaps(workspace, destination) {
       return Result{ error: ErrorKind.Overlap }
     }
@@ -262,7 +264,7 @@ pub fn normalize(destination: []u8, source: []const u8, form: Form, work: []u32)
     buckets: [256]usize = []
     i := start
     for i < end {
-      buckets[#cast(usize) combining_class(values[i])] += 1
+      buckets[#cast(usize, combining_class(values[i]))] += 1
       i += 1
     }
     sum: usize = 0
@@ -273,7 +275,7 @@ pub fn normalize(destination: []u8, source: []const u8, form: Form, work: []u32)
     }
     i = start
     for i < end {
-      cls := #cast(usize) combining_class(values[i])
+      cls := #cast(usize, combining_class(values[i]))
       temporary[buckets[cls]] = values[i]
       buckets[cls] += 1
       i += 1
@@ -324,3 +326,95 @@ pub fn normalize(destination: []u8, source: []const u8, form: Form, work: []u32)
   }
   return Result{ written: written, ok: true }
 }
+
+// value borrows arena storage until rewind/reset/release. Validation failures
+// leave the arena mark unchanged. kind is portable; error is zero (no native
+// failure), detail preserves the text diagnostic. offset is the first invalid
+// UTF-8 sequence's byte offset, or zero for other outcomes. Exhaustion panics.
+pub struct Converted { value: []u8, ok: bool, kind: errors.Kind, error: isize, offset: usize, detail: ErrorKind }
+
+// Return source length when valid, otherwise the first undecodable byte offset.
+// Preflight must run before allocation, including for an empty fixed arena.
+fn invalid_utf8_offset(source: []const u8, start: usize) usize {
+  at := start
+  for at < #len(source) {
+    decoded := utf8.decode(source, at)
+    if !decoded.ok {
+      return at
+    }
+    at += decoded.width
+  }
+  return #len(source)
+}
+
+// Locale-independent full default case folding, without normalization, into arena.
+pub fn case_fold(arena: *mem.Arena, source: []const u8) Converted {
+  invalid := invalid_utf8_offset(source, 0)
+  if invalid != #len(source) {
+    return Converted{ kind: errors.Kind.InvalidInput, offset: invalid, detail: ErrorKind.InvalidUtf8 }
+  }
+  capacity := mem.trial_size(arena, 2 * #len(source) + 16)
+  for capacity > 0 {
+    mark := mem.arena_mark(arena)
+    space := mem.push_bytes_uninit(arena, capacity)
+    result := case_fold_into(space, source)
+    if result.ok {
+      mem.arena_rewind(arena, mark + result.written)
+      return Converted{ value: space[..result.written], ok: true }
+    }
+    mem.arena_rewind(arena, mark)
+    if result.error != ErrorKind.Capacity {
+      return Converted{ kind: errors.Kind.InvalidInput, detail: result.error }
+    }
+    capacity = mem.trial_next(arena, capacity)
+  }
+  #panic("arena exhausted")
+}
+
+// source in normalization form, into arena.
+pub fn normalize(arena: *mem.Arena, source: []const u8, form: Form) Converted {
+  invalid := invalid_utf8_offset(source, 0)
+  if invalid != #len(source) {
+    return Converted{ kind: errors.Kind.InvalidInput, offset: invalid, detail: ErrorKind.InvalidUtf8 }
+  }
+  capacity := mem.trial_size(arena, 2 * #len(source) + 16)
+  for capacity > 0 {
+    mark := mem.arena_mark(arena)
+    work_size := mem.size_for(capacity, 2 * #sizeof(u32))
+    if !work_size.ok {
+      #panic("arena size overflow")
+    }
+    work_count := work_size.bytes / #sizeof(u32)
+    maximum := ~#cast(usize, 0)
+    alignment := #alignof(u32)
+    padding := alignment - 1
+    if work_size.bytes > maximum - capacity ||
+      work_size.bytes + capacity > maximum - padding {
+      #panic("arena size overflow")
+    }
+    // One live allocation keeps scratch and output together across arena
+    // blocks. Compaction must finish before rewind can release that block.
+    allocation := mem.push_bytes_uninit(arena, work_size.bytes + capacity + padding)
+    address := #cast(usize, &allocation[0])
+    skip := (alignment - (address & (alignment - 1))) & (alignment - 1)
+    work := (#cast(*u32, &allocation[skip]))[..work_count]
+    space := allocation[skip + work_size.bytes..skip + work_size.bytes + capacity]
+    // Decomposition and reordering initialize their slots before reading them.
+    result := normalize_into(space, source, form, work)
+    if result.ok {
+      _ = mem.move(allocation[..result.written], space[..result.written])
+      mem.arena_rewind(arena, mark + result.written)
+      if result.written == 0 {
+        return Converted{ok: true}
+      }
+      return Converted{ value: allocation[..result.written], ok: true }
+    }
+    mem.arena_rewind(arena, mark)
+    if result.error != ErrorKind.Capacity {
+      return Converted{ kind: errors.Kind.InvalidInput, detail: result.error }
+    }
+    capacity = mem.trial_next(arena, capacity)
+  }
+  #panic("arena exhausted")
+}
+

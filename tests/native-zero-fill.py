@@ -16,7 +16,8 @@ pub counter: u64 = 7
 const marker: u64 = 31
 fn main() {
   if arena[0] != 0 || arena[1048575] != 0 || counter != 7 || marker != 31 { #panic("initialization") }
-  arena[1048575] = 19 counter += 2
+  arena[1048575] = 19
+  counter += 2
   if arena[1048575] != 19 || counter != 9 { #panic("write") }
 }
 '''

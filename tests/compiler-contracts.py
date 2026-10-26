@@ -13,9 +13,9 @@ class Contracts(unittest.TestCase):
     def test_scratch_rejects_all_conflicting_candidates(self):
         with tempfile.TemporaryDirectory(prefix='dyn-scratch-conflict-') as directory:
             root = Path(directory)
-            (root / 'main.dyn').write_text('use "std/mem"\nfn main() { storage: [8]u8 = [] '
-                'arena := mem.arena_from_buffer(storage[..]) '
-                '_ = mem.scratch_begin(&arena, &arena, &arena) }\n')
+            (root / 'main.dyn').write_text('use "std/mem"\nfn main() {\nstorage: [8 + mem.ArenaBufferOverhead]u8 = []\n'
+                'arena := mem.arena_from_buffer(storage[..])\n'
+                '_ = mem.scratch_begin(arena, arena, arena) }\n')
             subprocess.run([DYN, 'build', directory, '--quiet', '--no-cache', '--output', str(root / 'program')], check=True)
             result = subprocess.run([str(root / 'program')], capture_output=True, text=True)
             self.assertNotEqual(result.returncode, 0)
@@ -37,7 +37,7 @@ class Contracts(unittest.TestCase):
             (root / 'kinds/main.dyn').write_text('enum Internal { WantRead } pub type ErrorKind = Internal\n')
             (root / 'main.dyn').write_text(
                 'use "std/reflect" reflection\nuse "./kinds" tls\n'
-                'fn main() { kind := tls.ErrorKind.WantRead '
+                'fn main() {\nkind := tls.ErrorKind.WantRead\n'
                 'if kind != tls.ErrorKind.WantRead || reflection.category(#typeof(u8)) != reflection.Kind.Integer '
                 '{ #panic("alias and reflection") } }\n')
             for options in ([], ['--release']):
@@ -97,10 +97,10 @@ class Contracts(unittest.TestCase):
 }
 """
         invalid = [
-            ('fn main() { i := 0 _ = i for i in 0..3 { _ = i } }', 'shadowing or duplicate local is forbidden'),
+            ('fn main() { i := 0\n_ = i\nfor i in 0..3 { _ = i } }', 'shadowing or duplicate local is forbidden'),
             ('fn main() { for i in 0..3 { for i in 0..2 { _ = i } } }', 'shadowing or duplicate local is forbidden'),
-            ('fn main() { for i in 0..3 { _ = i } _ = i }', 'unknown name'),
-            ('fn main() { a: u8 = 1 b: u32 = 5 for i in a..b { _ = i } }', 'range bounds require the same integer type'),
+            ('fn main() { for i in 0..3 { _ = i }\n_ = i }', 'unknown name'),
+            ('fn main() { a: u8 = 1\nb: u32 = 5\nfor i in a..b { _ = i } }', 'range bounds require the same integer type'),
             ('fn main() { for *i in 0..3 { _ = i } }', 'range for-in binds values; remove the pointer binding'),
         ]
         with tempfile.TemporaryDirectory(prefix='dyn-range-loop-') as directory:
@@ -183,13 +183,21 @@ class Contracts(unittest.TestCase):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(subprocess.run([str(root / 'program')]).returncode, 0)
 
+    def test_reverse_outside_for_iterable_is_rejected(self):
+        with tempfile.TemporaryDirectory(prefix='dyn-reverse-misuse-') as directory:
+            root = Path(directory)
+            (root / 'main.dyn').write_text('fn main() {\n  a: [3]i64 = [1, 2, 3]\n  b := #reverse(a)\n}\n')
+            result = subprocess.run([DYN, 'check', directory], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertIn('#reverse is valid only as a for-loop iterable', result.stderr + result.stdout)
+
     def test_direct_local_borrows_cannot_escape_returns(self):
         invalid = [
-            'fn bad() *i32 { x: i32 = 1 return &x }',
+            'fn bad() *i32 { x: i32 = 1\nreturn &x }',
             'fn bad(x: i32) *i32 { return &x }',
-            'fn bad() []u8 { x: [4]u8 = [] return x[..] }',
-            'struct Box { data: []u8 } fn bad() Box { x: [4]u8 = [] return Box{data: x[..]} }',
-            'struct Box { value: i32 } fn bad() *i32 { x := Box{} return &x.value }',
+            'fn bad() []u8 { x: [4]u8 = []\nreturn x[..] }',
+            'struct Box { data: []u8 } fn bad() Box { x: [4]u8 = []\nreturn Box{data: x[..]} }',
+            'struct Box { value: i32 } fn bad() *i32 { x := Box{}\nreturn &x.value }',
         ]
         valid = [
             'fn good(x: *i32) *i32 { return x }',
@@ -197,7 +205,7 @@ class Contracts(unittest.TestCase):
             'fn good(x: []u8) *u8 { return &x[0] }',
             'struct Box { value: i32 } fn good(x: *Box) *i32 { return &x.value }',
             'data: [4]u8 = [] fn good() []u8 { return data[..] }',
-            'fn good() [4]u8 { x: [4]u8 = [] return x }',
+            'fn good() [4]u8 { x: [4]u8 = []\nreturn x }',
         ]
         with tempfile.TemporaryDirectory(prefix='dyn-local-borrow-') as directory:
             root = Path(directory)
@@ -240,7 +248,7 @@ class Contracts(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='dyn-reflection-text-') as directory:
             root = Path(directory)
             (root / 'main.dyn').write_text('struct Type { value: i32 }\n'
-                '// #typeof(i32)\nfn main() { value := Type{value: 42} _ = "#typeof(i32)" _ = value }\n')
+                '// #typeof(i32)\nfn main() { value := Type{value: 42}\n_ = "#typeof(i32)"\n_ = value }\n')
             for command in ('check', 'build'):
                 result = subprocess.run([DYN, command, directory, '--quiet', '--no-cache',
                                          '--no-link', '--output', str(root / 'program.o')],
@@ -273,14 +281,14 @@ class Contracts(unittest.TestCase):
 
     def test_comments_are_not_expression_operands(self):
         cases = [
-            'x := 1 p: * /* comment */ i32 = &x p.* = 2 if x != 2 { #panic("pointer") }',
-            'values := [1,2] s: [] /* comment */ i32 = values[..] s[0] = 3 if values[0] != 3 { #panic("slice") }',
-            'x := 0 for /* * const */ item in [1,2] { x += item } if x != 3 { #panic("loop") }',
-            'x := 1 /* note */ + 2 if x != 3 { #panic("binary") }',
-            'x := /* note */ 42 if x != 42 { #panic("initializer") }',
-            'values := [1, /* note */ 2, 3] if values[/* index */ 1] != 2 { #panic("array") }',
-            'x := answer(/* argument */ 42) if x != 42 { #panic("call") }',
-            'x := (/* group */ 42) if /* condition */ x != 42 /* branch */ { #panic("group") }',
+            'x := 1\np: * /* comment */ i32 = &x\np.* = 2\nif x != 2 { #panic("pointer") }',
+            'values := [1,2]\ns: [] /* comment */ i32 = values[..]\ns[0] = 3\nif values[0] != 3 { #panic("slice") }',
+            'x := 0\nfor /* * const */ item in [1,2] { x += item }\nif x != 3 { #panic("loop") }',
+            'x := 1 /* note */ + 2\nif x != 3 { #panic("binary") }',
+            'x := /* note */ 42\nif x != 42 { #panic("initializer") }',
+            'values := [1, /* note */ 2, 3]\nif values[/* index */ 1] != 2 { #panic("array") }',
+            'x := answer(/* argument */ 42)\nif x != 42 { #panic("call") }',
+            'x := (/* group */ 42)\nif /* condition */ x != 42 /* branch */ { #panic("group") }',
         ]
         with tempfile.TemporaryDirectory(prefix='dyn-comment-operands-') as directory:
             root = Path(directory)
@@ -327,7 +335,7 @@ class Contracts(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='dyn-module-scope-') as directory:
             root = Path(directory)
             (root / 'helper').mkdir()
-            (root / 'helper' / 'helper.dyn').write_text('pub fn answer() i32 { sequence := 42 return sequence }\n')
+            (root / 'helper' / 'helper.dyn').write_text('pub fn answer() i32 { sequence := 42\nreturn sequence }\n')
             (root / 'main.dyn').write_text('use "./helper"\nsequence: i32 = 7\nfn main() { if helper.answer() != 42 || sequence != 7 { #panic("scope") } }\n')
             checked = subprocess.run([DYN, 'check', directory, '--quiet'], capture_output=True, text=True)
             self.assertEqual(checked.returncode, 0, checked.stderr)
@@ -350,7 +358,7 @@ class Contracts(unittest.TestCase):
     def test_nested_slice_index(self):
         with tempfile.TemporaryDirectory(prefix='dyn-slice-index-') as directory:
             root = Path(directory)
-            (root / 'main.dyn').write_text('fn main() { values: [3]u8 = [4, 5, 6] if values[..][1] != 5 { #panic("nested index") } }\n')
+            (root / 'main.dyn').write_text('fn main() { values: [3]u8 = [4, 5, 6]\nif values[..][1] != 5 { #panic("nested index") } }\n')
             output = root / 'program'
             built = subprocess.run([DYN, 'build', directory, '--no-cache', '--quiet', '--output', str(output)], capture_output=True, text=True)
             self.assertEqual(built.returncode, 0, built.stderr)
@@ -360,7 +368,7 @@ class Contracts(unittest.TestCase):
     def test_struct_alias_constructor(self):
         with tempfile.TemporaryDirectory(prefix='dyn-struct-alias-') as directory:
             root = Path(directory)
-            (root / 'main.dyn').write_text('struct Item { value: i32 }\ntype Alias = Item\nfn main() { item := Alias{ value: 42 } if item.value != 42 { #panic("alias constructor") } }\n')
+            (root / 'main.dyn').write_text('struct Item { value: i32 }\ntype Alias = Item\nfn main() { item := Alias{ value: 42 }\nif item.value != 42 { #panic("alias constructor") } }\n')
             output = root / 'program'
             built = subprocess.run([DYN, 'build', directory, '--no-cache', '--quiet', '--output', str(output)], capture_output=True, text=True)
             self.assertEqual(built.returncode, 0, built.stderr)
@@ -380,7 +388,7 @@ class Contracts(unittest.TestCase):
     def test_trace_uses_original_file_and_line(self):
         with tempfile.TemporaryDirectory(prefix='dyn-trace-') as directory:
             root = Path(directory)
-            (root / 'main.dyn').write_text('use "std/mem"\nfn main() {\n  storage: [16]u8 = []\n  arena := mem.arena_from_buffer(storage[..])\n  _ = arena\n  fail()\n}\n')
+            (root / 'main.dyn').write_text('use "std/mem"\nfn main() {\n  storage: [16 + mem.ArenaBufferOverhead]u8 = []\n  arena := mem.arena_from_buffer(storage[..])\n  _ = arena\n  fail()\n}\n')
             helper = root / 'helper.dyn'
             helper.write_text('fn fail() { #panic("expected failure") }\n')
             output = root / 'program'

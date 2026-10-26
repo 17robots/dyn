@@ -1,0 +1,13 @@
+{
+  "final-twin.so": true,
+  "final-kernels.so": true,
+  "final-compact": true,
+  "final-mutable": true,
+  "final-records-isolated.so": true,
+  "languages/fib-dyn": true,
+  "languages/hash-dyn": true,
+  "languages/matmul-dyn": true,
+  "languages/points-dyn": true,
+  "languages/sieve-dyn": true,
+  "extended/dyn-bin": true
+}

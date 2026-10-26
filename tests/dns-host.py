@@ -19,6 +19,7 @@ parser.add_argument('--cross', action='store_true', help='cross-link all four na
 options = parser.parse_args()
 SOURCE = r'''use "std/net" net
 use "std/net/dns" dns
+use "std/mem" mem
 use "std/crypto/random" random
 fn require(value: bool, message: []const u8) { if !value { #panic(message) } }
 fn main() {
@@ -31,20 +32,19 @@ fn main() {
     for i in size+1..515 { require(bytes[i] == 42,"random suffix clobbered") }
   }
   server := net.ipv4(127,0,0,1,PORT)
-  packet: [128]u8 = []
-  addresses: [2]dns.Ipv4 = []
-  result := dns.resolve_ipv4("a.test",&server,addresses[..],packet[..],4000)
-  require(result.ok && result.count == 1,"A response")
-  require(addresses[0].a == 1 && addresses[0].b == 2 && addresses[0].c == 3 && addresses[0].d == 4,"A value / nonce filtering")
-  ipv6: [2]dns.Ipv6 = []
-  result = dns.resolve_ipv6("aaaa.test",&server,ipv6[..],packet[..],4000)
-  require(result.ok && result.count == 1,"AAAA response")
-  for i in 0..16 { require(ipv6[0].bytes[i] == #cast(u8) i,"AAAA value") }
-  result = dns.resolve_ipv4("missing.test",&server,addresses[..],packet[..],4000)
+  arena := mem.arena_create(0)
+  defer mem.arena_release(arena)
+  result := dns.resolve_ipv4(arena,"a.test",&server,4000)
+  require(result.ok && #len(result.value) == 1,"A response")
+  require(result.value[0].a == 1 && result.value[0].b == 2 && result.value[0].c == 3 && result.value[0].d == 4,"A value / nonce filtering")
+  result6 := dns.resolve_ipv6(arena,"aaaa.test",&server,4000)
+  require(result6.ok && #len(result6.value) == 1,"AAAA response")
+  for i in 0..16 { require(result6.value[0].bytes[i] == #cast(u8, i),"AAAA value") }
+  result = dns.resolve_ipv4(arena,"missing.test",&server,4000)
   require(!result.ok && result.error == -3,"NXDOMAIN response")
-  result = dns.resolve_ipv4("large.test",&server,addresses[..],packet[..],4000)
-  require(result.ok && result.count == 1,"UDP truncation TCP fallback")
-  require(addresses[0].a == 9 && addresses[0].b == 8 && addresses[0].c == 7 && addresses[0].d == 6,"TCP response value")
+  result = dns.resolve_ipv4(arena,"large.test",&server,4000)
+  require(result.ok && #len(result.value) == 1,"UDP truncation TCP fallback")
+  require(result.value[0].a == 9 && result.value[0].b == 8 && result.value[0].c == 7 && result.value[0].d == 6,"TCP response value")
 }
 '''
 
@@ -115,10 +115,10 @@ def serve(udp, tcp, failures, observed):
                 # A valid-looking answer with another transaction ID must be ignored.
                 udp.sendto(response(nonce ^ 0x8000, query, kind, bytes([8,8,8,8])), peer)
             if name == 'large.test':
-                # Deliberately do NOT set TC: oversized datagrams must be detected
-                # by the socket adapter itself. The prefix is a complete wrong A
-                # response, so treating a truncated receive as success fails clearly.
-                oversized = response(nonce, query, kind, bytes([2,2,2,2]))
+                # The resolver owns full protocol-sized storage now. Explicit TC
+                # forces TCP rather than relying on a small caller packet buffer.
+                oversized = bytearray(response(nonce, query, kind, bytes([2,2,2,2])))
+                oversized[2] |= 2
                 udp.sendto(oversized + bytes(1024-len(oversized)), peer)
                 connection, _ = tcp.accept()
                 with connection:

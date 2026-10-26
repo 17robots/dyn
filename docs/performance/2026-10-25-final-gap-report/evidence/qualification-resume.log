@@ -1,0 +1,28 @@
+GATE native-ssa EXIT 0 SECONDS 62.98
+PASS SSA division by 27 constants against hardware division; 8 programs match the tree emitter on 4 targets
+ 
+GATE generics EXIT 0 SECONDS 0.18
+PASS generics: inference, type arguments, cross-module instances, diagnostics, cache, std helpers
+ 
+GATE stdlib-host EXIT 0 SECONDS 0.05
+PASS portable stdlib: atomics, files, ownership, arguments, clocks and buffered lines
+ 
+GATE performance-contracts EXIT 0 SECONDS 0.22
+PASS search oracles, preallocation, statistics, native CPU/cache, remarks and sample PGO
+ 
+GATE formatter EXIT 0 SECONDS 0.25
+PASS dyn fmt indentation, idempotence and comments; 119 std/runtime/vendor modules formatted
+ 
+GATE sort-algorithms EXIT 0 SECONDS 4.54
+PASS sort algorithms debug: 538 Python oracle cases
+PASS sort algorithms release: 538 Python oracle cases
+PASS sort algorithms release-tree: 538 Python oracle cases
+PASS sort algorithms heap-depth0: 538 Python oracle cases
+PASS sort algorithms heap-depth1: 538 Python oracle cases
+PASS sort signed-zero permutation negative control debug
+PASS sort signed-zero permutation negative control release
+ 
+GATE ssa-masked-extension EXIT 0 SECONDS 0.31
+PASS masked extensions: 52 cases, 520832 values per SSA/tree; exact positive instruction controls
+ 
+BUILT final application

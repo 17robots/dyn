@@ -5,8 +5,12 @@ fn trace_slot(id: u64, claim: bool) *TraceSlot {
   for i in 0..64 {
     slot := &trace_slots[i]
     seen := atomic_load(&slot.tid)
-    if seen == id { return slot }
-    if claim && seen == 0 && atomic_claim(&slot.tid, 0, id) { return slot }
+    if seen == id {
+      return slot
+    }
+    if claim && seen == 0 && atomic_claim(&slot.tid, 0, id) {
+      return slot
+    }
   }
   return nil
 }
@@ -24,16 +28,24 @@ fn trace_pop() {
   slot := trace_slot(thread_id(), false)
   if slot != nil && slot.count != 0 {
     slot.count -= 1
-    if slot.count == 0 { atomic_store(&slot.tid, 0) }
+    if slot.count == 0 {
+      atomic_store(&slot.tid, 0)
+    }
   }
 }
-fn write_string(text: []const u8) { trace_write(&text[0], #cast(u64) #len(text)) }
+fn write_string(text: []const u8) {
+  trace_write(&text[0], #cast(u64, #len(text)))
+}
 fn trace_dump() {
   slot := trace_slot(thread_id(), false)
-  if slot == nil || slot.count == 0 { return }
+  if slot == nil || slot.count == 0 {
+    return
+  }
   write_string("stack trace:\n")
   count := slot.count
-  if count > 64 { count = 64 }
+  if count > 64 {
+    count = 64
+  }
   for count != 0 {
     count -= 1
     frame := &slot.frames[count]

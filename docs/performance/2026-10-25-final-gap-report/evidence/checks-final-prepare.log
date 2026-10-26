@@ -1,0 +1,17 @@
+BUILT checked
+BUILT bounds
+BUILT overflow
+BUILT pointers
+BUILT all
+BUILT final points
+BUILT final sieve
+PASS final cross x86_64-linux
+PASS final cross aarch64-linux
+PASS final cross riscv64-linux
+PASS final cross x86_64-windows
+PASS final cross aarch64-windows
+PASS final cross aarch64-macos
+PASS final cross riscv32-none
+PASS final cross riscv32-none-soft
+PASS final cross thumbv7em-none
+PASS final cross thumbv7em-none-soft

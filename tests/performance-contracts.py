@@ -11,14 +11,16 @@ with tempfile.TemporaryDirectory(prefix='dyn-performance-') as directory:
     root = Path(directory); src=root/'src'; src.mkdir()
     body=['use "std/bytes" bytes', 'use "std/bytes/search" search', 'use "std/testing" t',
           '''use "std/mem" mem
-use "std/container/string_map" maps
+use "std/container/hash" hash
 use "std/io" io
 use "std/bufio" bufio
 use "std/bytes/builder" builder
 use "std/errors" errors
 struct Sink { calls: usize, used: usize, fail_after: usize, fail: bool, bytes: [64]u8 }
+struct Entry { key: []const u8, hash: u64, hash_next: *Entry, bytes: [1]u8, value: usize }
+const nil_entry: Entry = Entry{}
 fn sink_write(data: rawptr, source: []const u8) io.Result {
-  state := #cast(*Sink) data
+  state := #cast(*Sink, data)
   state.calls += 1
   if state.fail || (state.fail_after > 0 && state.calls > state.fail_after) { return io.Result{transferred: 0, status: io.Status.Error, kind: errors.Kind.PermissionDenied, error: -13} }
   amount := #len(source)
@@ -32,18 +34,19 @@ fn main() {''']
     cases=[(b'', b''),(b'a', b''),(b'', b'a'),(b'aaaaab',b'aaab'),(b'abcabc',b'abc'),(b'a'*1024,b'a'*30+b'b'+b'a'*30)]
     cases += [(bytes(randomizer.randrange(5) for _ in range(randomizer.randrange(50))),
                bytes(randomizer.randrange(5) for _ in range(randomizer.randrange(12)))) for _ in range(180)]
+    def position(found, text): return len(text) if found < 0 else found  # a miss is the length
     def literal(data): return '"'+''.join('\\x%02x'%v for v in data)+'"'
     for text, needle in cases:
         body += ['if true {',f'text := {literal(text)}',f'needle := {literal(needle)}',
                  'table: [64]usize = []','p := search.prepare(needle, table[..])',
                  't.expect(p.ok, "prepare")',
-                 f't.expect(search.find(p.pattern, text) == {text.find(needle)}, "KMP oracle")',
-                 f't.expect(bytes.find(text, needle) == {text.find(needle)}, "find oracle")',
-                 f't.expect(bytes.find_last(text, needle) == {text.rfind(needle)}, "rfind oracle")','}']
+                 f't.expect(search.find(p.pattern, text) == {position(text.find(needle), text)}, "KMP oracle")',
+                 f't.expect(bytes.find(text, needle) == {position(text.find(needle), text)}, "find oracle")',
+                 f't.expect(bytes.find_last(text, needle) == {position(text.rfind(needle), text)}, "rfind oracle")','}']
     body += ['''
   sink := Sink{}
   staging: [4]u8 = []
-  buffered := bufio.writer(io.Writer{data: #cast(rawptr) &sink, write: &sink_write}, staging[..])
+  buffered := bufio.writer(io.Writer{data: #cast(rawptr, &sink), write: sink_write}, staging[..])
   result := io.write_all(bufio.writer_adapter(&buffered), "abcdefghijklmnopqrst")
   t.expect(result.transferred == 20 && sink.used == 16 && buffered.used == 4, "direct path keeps tail")
   t.expect(bufio.writer_flush(&buffered).status == io.Status.Complete, "flush tail")
@@ -55,7 +58,7 @@ fn main() {''']
   _ = io.write_all(bufio.writer_adapter(&buffered), "z")
   t.expect(sink.calls == calls, "sticky direct failure")
   sink = Sink{fail_after: 1}
-  buffered = bufio.writer(io.Writer{data: #cast(rawptr) &sink, write: &sink_write}, staging[..])
+  buffered = bufio.writer(io.Writer{data: #cast(rawptr, &sink), write: sink_write}, staging[..])
   result = io.write_all(bufio.writer_adapter(&buffered), "abcdefghijkl")
   t.expect(result.status == io.Status.Error && result.transferred == 3 && sink.used == 3 && buffered.used == 0, "partial direct failure")
   chunk_storage: [8]u8 = []
@@ -63,7 +66,7 @@ fn main() {''']
   for capacity in 1..9 {
     for size in 0..21 {
       sink = Sink{}
-      buffered = bufio.writer(io.Writer{data: #cast(rawptr) &sink, write: &sink_write}, chunk_storage[..capacity])
+      buffered = bufio.writer(io.Writer{data: #cast(rawptr, &sink), write: sink_write}, chunk_storage[..capacity])
       result = io.write_all(bufio.writer_adapter(&buffered), text[..size])
       expected: usize = 0
       if size > 0 { expected = (size - 1) % capacity + 1 }
@@ -77,37 +80,36 @@ fn main() {''']
   backing: [8192]u8 = []
   arena := mem.arena_from_buffer(backing[..])
   built := builder.from_buffer(backing[..0])
-  for i in 0..1000 { t.expect(builder.append_grow(&built, &arena, "x") == builder.ErrorKind.None, "builder growth") }
-  t.expect(mem.arena_used(&arena) == 1024, "last allocation extends without retained old buffers")
+  for i in 0..1000 { t.expect(builder.append_grow(&built, arena, "x") == builder.ErrorKind.None, "builder growth") }
+  t.expect(mem.arena_used(arena) == 1024, "last allocation extends without retained old buffers")
   view := builder.bytes(&built)
-  t.expect(builder.append_grow(&built, &arena, view) == builder.ErrorKind.None, "overlapping growth")
-  t.expect(built.length == 2000 && mem.arena_used(&arena) == 2048, "self append in place")
-  _ = mem.arena_push(&arena, 1, 1)
+  t.expect(builder.append_grow(&built, arena, view) == builder.ErrorKind.None, "overlapping growth")
+  t.expect(built.length == 2000 && mem.arena_used(arena) == 2048, "self append in place")
+  _ = mem.arena_push(arena, 1, 1)
   previous := &built.storage[0]
-  t.expect(builder.reserve(&built, &arena, 4096) == builder.ErrorKind.None, "interleaved growth")
+  t.expect(builder.reserve(&built, arena, 4096) == builder.ErrorKind.None, "interleaved growth")
   t.expect(&built.storage[0] != previous && built.storage[1999] == 'x', "interleaved allocation copied")
-  mem.arena_reset(&arena)
-  map := maps.Map{}
-  t.expect(maps.reserve(&map, &arena, 30) == maps.ErrorKind.None, "reserve")
-  initial := mem.arena_used(&arena)
-  key: [1]u8 = []
+  mem.arena_reset(arena)
+  names := hash.slots(Entry, arena, 32)
+  initial := mem.arena_used(arena)
+  entries: [30]Entry = []
   for i in 0..30 {
-    key[0] = #cast(u8) i
-    t.expect(maps.put(&map, &arena, key[..], i) == maps.ErrorKind.None, "put")
+    entries[i].bytes[0] = #cast(u8, i)
+    entries[i].key = entries[i].bytes[..]
+    entries[i].hash = hash.hash_bytes(3, entries[i].key)
+    entries[i].value = i
+    hash.insert(names, &entries[i])
   }
-  t.expect(mem.arena_used(&arena) == initial + 30, "preallocation avoids table growth")
-  t.expect(maps.reserve(&map, &arena, 60) == maps.ErrorKind.None, "reserve populated map")
-  used := mem.arena_used(&arena)
-  t.expect(maps.reserve(&map, &arena, #cast(usize) -1) == maps.ErrorKind.Overflow, "reserve overflow")
-  t.expect(mem.arena_used(&arena) == used && map.length == 30, "reserve atomic")
-  for i in 0..30 { key[0] = #cast(u8) i
-    t.expect(maps.get(&map, key[..]).value == i, "preserved values")
-    if i % 2 == 0 { t.expect(maps.remove(&map, key[..]), "deletion") }
+  t.expect(mem.arena_used(arena) == initial, "insertion does not allocate")
+  key: [1]u8 = []
+  for i in 0..30 { key[0] = #cast(u8, i)
+    found := hash.find(names, hash.hash_bytes(3, key[..]), key[..], &nil_entry)
+    t.expect(found.value == i, "values")
+    if i % 2 == 0 { t.expect(hash.remove(names, found), "deletion") }
   }
-  maps.clear(&map)
-  t.expect(map.length == 0 && mem.arena_used(&arena) == used, "clear retains storage")
-  for i in 0..30 { key[0] = #cast(u8) i
-    t.expect(!maps.get(&map, key[..]).found, "clear removes remaining entries")
+  for i in 0..30 { key[0] = #cast(u8, i)
+    found := hash.find(names, hash.hash_bytes(3, key[..]), key[..], &nil_entry)
+    t.expect((found == &nil_entry) == (i % 2 == 0), "removed entries miss")
   }
   values: [10]i64 = [10,9,8,7,6,5,4,3,2,1]
   stats := t.summarize(values[..])
@@ -129,14 +131,15 @@ fn main() {''']
         # Target isolation must preserve the existing Linux temporary helpers.
         (src/'main.dyn').write_text('''use "std/testing" t
 use "std/fs" fs
+use "std/mem" mem
 fn main() {
-  path: [4096]u8 = []
-  created := t.temporary_directory(path[..], "dyn-performance-contract")
-  t.expect(created.ok && created.directory.active, "temporary directory")
+  arena := mem.arena_create(0)
+  created := t.temporary_directory(arena, "dyn-performance-contract")
+  t.expect(created.ok && created.value.active, "temporary directory")
   frames: [4]fs.RemovalFrame = []
   scratch: [4096]u8 = []
-  removed := t.remove_temporary(&created.directory, frames[..], scratch[..])
-  t.expect(removed.ok && !created.directory.active, "remove temporary directory")
+  removed := t.remove_temporary(&created.value, frames[..], scratch[..])
+  t.expect(removed.ok && !created.value.active, "remove temporary directory")
 }
 ''')
         for flags in ([], ['--release']):

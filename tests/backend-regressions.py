@@ -166,7 +166,7 @@ CLOSED_SUM = """fn main() {
   sum: u32 = 0
   i: usize = 0
   for i <= 3 {
-    sum += #cast(u32) values[i]
+    sum += #cast(u32, values[i])
     i += 1
   }
   if sum != 10 { #panic("CLOSED SUM") }
@@ -183,7 +183,8 @@ CASES['closed_maximum'] = ("""fn main() {
 CASES['closed_accumulator'] = ("""fn main() {
   sum: u8 = 250
   i: usize = 0
-  for i <= 3 { sum += 2 i += 1 }
+  for i <= 3 { sum += 2
+  i += 1 }
   #panic("WRAPPED")
 }
 """, 'overflow.ok')
@@ -193,7 +194,8 @@ for original in ('range_mutated_bound', 'range_mutated_step', 'range_multiple_wr
     CASES['closed_' + original] = (source.replace('i < ', 'i <= '), error)
 CASES['closed_multiple_increments'] = ("""fn main() {
   i: u8 = 254
-  for i <= 254 { i += 1 i += 1 }
+  for i <= 254 { i += 1
+  i += 1 }
   #panic("WRAPPED")
 }
 """, 'overflow.ok')
@@ -218,7 +220,8 @@ fn main() {
 CASES['closed_call'] = ("""fn change(p: *u8) { p.* = 255 }
 fn main() {
   i: u8 = 0
-  for i <= 3 { change(&i) i += 1 }
+  for i <= 3 { change(&i)
+  i += 1 }
   #panic("WRAPPED")
 }
 """, 'overflow.ok')
@@ -227,12 +230,12 @@ fn main() {
 # A terminating cleanup replaces each exit and prevents older cleanups from
 # being emitted after its LLVM terminator.
 for name, body in {
-    'panic': 'defer { #panic("older") } defer { #panic("cleanup") } #panic("original")',
-    'return': 'defer { #panic("older") } defer { #panic("cleanup") } return 0',
-    'fallthrough': 'if true { defer { #panic("older") } defer { #panic("cleanup") } } return 0',
-    'guard': 'defer { #panic("older") } defer { #panic("cleanup") } return 1/a',
-    'break': 'for i in 0..1 { defer { #panic("older") } defer { #panic("cleanup") } break } return 0',
-    'continue': 'for i in 0..1 { defer { #panic("older") } defer { #panic("cleanup") } continue } return 0',
+    'panic': 'defer { #panic("older") }\ndefer { #panic("cleanup") }\n#panic("original")',
+    'return': 'defer { #panic("older") }\ndefer { #panic("cleanup") }\nreturn 0',
+    'fallthrough': 'if true { defer { #panic("older") }\ndefer { #panic("cleanup") } }\nreturn 0',
+    'guard': 'defer { #panic("older") }\ndefer { #panic("cleanup") }\nreturn 1/a',
+    'break': 'for i in 0..1 { defer { #panic("older") }\ndefer { #panic("cleanup") }\nbreak }\nreturn 0',
+    'continue': 'for i in 0..1 { defer { #panic("older") }\ndefer { #panic("cleanup") }\ncontinue }\nreturn 0',
 }.items():
     CASES['cleanup_' + name] = (
         'fn fail(a:u64) u64 {' + body + '}\nfn main() { _=fail(0) }\n', 'cleanup')
@@ -240,19 +243,23 @@ for name, body in {
 
 CASES['array_rvalue_index'] = ("""order:u64=0
 struct Record { values:[2]u64 }
-fn index() usize { order=order*10+1 return 1 }
-fn values() [2]u64 { order=order*10+2 return [11,22] }
+fn index() usize { order=order*10+1
+return 1 }
+fn values() [2]u64 { order=order*10+2
+return [11,22] }
 fn nested() [2][2]u64 { return [[1,2],[3,4]] }
 fn record() Record { return Record{values:[5,6]} }
 fn main() {
   if values()[index()]!=22 || order!=12 { #panic("EVALUATION ORDER") }
-  f:=&values
+  f:=values
   if f()[0]!=11 || order!=122 { #panic("INDIRECT ARRAY") }
   if nested()[1][0]!=3 || record().values[1]!=6 || ([7,8])[0]!=7 { #panic("ARRAY VALUE") }
 }
 """, None)
 CASES['array_rvalue_bounds'] = ("""fn values() [2]u64 { return [11,22] }
-fn main() { i:usize=2 _=values()[i] #panic("BOUNDS SKIPPED") }
+fn main() { i:usize=2
+_=values()[i]
+#panic("BOUNDS SKIPPED") }
 """, 'index.ok')
 
 

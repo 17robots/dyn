@@ -1,19 +1,31 @@
+use "std/mem" mem
 use "std/net" network
+use "std/errors"
 use "std/crypto/random" random
 use "std/time" time
+use "std/bytes" bytes
 
 pub struct Ipv4 { a: u8, b: u8, c: u8, d: u8 }
 pub struct Ipv6 { bytes: [16]u8 }
-pub struct Result { count: usize, error: isize, ok: bool }
+// error is a native transport code or negative DNS rcode; parser validation
+// uses zero. kind is portable; offset is zero when no packet location applies.
+struct Result { value: usize, error: isize, kind: errors.Kind, ok: bool, offset: usize }
+pub struct Ipv4Result { value: []Ipv4, ok: bool, kind: errors.Kind, error: isize, offset: usize }
+pub struct Ipv6Result { value: []Ipv6, ok: bool, kind: errors.Kind, error: isize, offset: usize }
+
+// Reject borrowed input anywhere in pending backing, before typed pushes zero it.
+fn conflicts(arena: *mem.Arena, input: []const u8) bool {
+  return mem.arena_overlaps_unallocated(arena, input)
+}
 
 fn load_u16(bytes: []const u8, offset: usize) u16 {
-  return #cast(u16) bytes[offset] * 256 + #cast(u16) bytes[offset + 1]
+  return #cast(u16, bytes[offset]) * 256 + #cast(u16, bytes[offset + 1])
 }
 fn store_u16(bytes: []u8, offset: usize, value: u16) {
-  bytes[offset] = #cast(u8) (value >> 8)
-  bytes[offset + 1] = #cast(u8) value
+  bytes[offset] = #cast(u8, (value >> 8))
+  bytes[offset + 1] = #cast(u8, value)
 }
-struct Name { end: usize, length: usize, ok: bool }
+struct Name { end: usize, length: usize, ok: bool, offset: usize }
 fn read_name(packet: []const u8, start: usize, destination: []u8) Name {
   cursor := start
   end: usize = 0
@@ -31,7 +43,7 @@ fn read_name(packet: []const u8, start: usize, destination: []u8) Name {
       if cursor + 1 >= #len(packet) {
         return Name{}
       }
-      target := #cast(usize) (length & 63) * 256 + #cast(usize) packet[cursor + 1]
+      target := #cast(usize, (length & 63)) * 256 + #cast(usize, packet[cursor + 1])
       // RFC compression points to a prior occurrence. This also excludes cycles.
       if target < 12 || target >= cursor {
         return Name{}
@@ -42,7 +54,7 @@ fn read_name(packet: []const u8, start: usize, destination: []u8) Name {
       cursor = target
       hops += 1
     } else {
-      amount := #cast(usize) length
+      amount := #cast(usize, length)
       if length > 63 || amount > #len(packet) - cursor - 1 {
         return Name{}
       }
@@ -89,11 +101,24 @@ fn question_matches(packet: []const u8, name: []const u8) bool {
   return parsed.ok && expected.ok && same_name(storage[..parsed.length], canonical[..expected.length])
 }
 
-pub fn query_ipv4(destination: []u8, name: []const u8, identifier: u16) []u8 {
-  return query(destination, name, identifier, 1)
+// An A query for name, in arena. Empty when name is not a valid DNS name.
+pub fn query_ipv4(arena: *mem.Arena, name: []const u8, identifier: u16) []u8 {
+  return query_arena(arena, name, identifier, 1)
 }
-pub fn query_ipv6(destination: []u8, name: []const u8, identifier: u16) []u8 {
-  return query(destination, name, identifier, 28)
+// An AAAA query for name, in arena. Empty when name is not a valid DNS name.
+pub fn query_ipv6(arena: *mem.Arena, name: []const u8, identifier: u16) []u8 {
+  return query_arena(arena, name, identifier, 28)
+}
+fn query_arena(arena: *mem.Arena, name: []const u8, identifier: u16, kind: u16) []u8 {
+  if conflicts(arena, name) {
+    empty: []u8
+    return empty
+  }
+  storage: [272]u8 = []
+  encoded := query(storage[..], name, identifier, kind)
+  output := mem.push_bytes_uninit(arena, #len(encoded))
+  _ = mem.copy(output, encoded)
+  return output
 }
 fn query(destination: []u8, name: []const u8, identifier: u16, kind: u16) []u8 {
   if #len(destination) < 17 || #len(name) == 0 || #len(name) > 253 {
@@ -116,7 +141,7 @@ fn query(destination: []u8, name: []const u8, identifier: u16, kind: u16) []u8 {
     if length == 0 || length > 63 || output + 1 + length + 5 > #len(destination) {
       return destination[..0]
     }
-    destination[output] = #cast(u8) length
+    destination[output] = #cast(u8, length)
     output += 1
     for j in 0..length {
       destination[output + j] = name[label_start + j]
@@ -132,13 +157,46 @@ fn query(destination: []u8, name: []const u8, identifier: u16, kind: u16) []u8 {
   return destination[..output + 5]
 }
 
-pub fn parse_ipv4(packet: []const u8, identifier: u16, name: []const u8, addresses: []Ipv4) Result {
-  empty: [0]Ipv6 = []
-  return parse(packet, identifier, name, addresses, empty[..], 1)
+// Complete arena-owned answers, invalidated by rewind/reset/release. Failures
+// publish no addresses and consume no arena bytes. Exhaustion panics. offset is
+// the malformed record start (or header/question field); error retains DNS rcode.
+pub fn parse_ipv4(arena: *mem.Arena, packet: []const u8, identifier: u16, name: []const u8) Ipv4Result {
+  if conflicts(arena, packet) || conflicts(arena, name) {
+    return Ipv4Result{kind: errors.Kind.InvalidInput}
+  }
+  empty4: []Ipv4
+  empty6: []Ipv6
+  measured := parse(packet, identifier, name, empty4, empty6, 1, false)
+  if !measured.ok {
+    return Ipv4Result{error: measured.error, kind: measured.kind, offset: measured.offset}
+  }
+  mark := mem.arena_mark(arena)
+  output := mem.push_array(Ipv4, arena, measured.value)
+  result := parse(packet, identifier, name, output, empty6, 1, true)
+  if !result.ok {
+    mem.arena_rewind(arena, mark)
+    return Ipv4Result{error: result.error, kind: result.kind, offset: result.offset}
+  }
+  return Ipv4Result{value: output, ok: true}
 }
-pub fn parse_ipv6(packet: []const u8, identifier: u16, name: []const u8, addresses: []Ipv6) Result {
-  empty: [0]Ipv4 = []
-  return parse(packet, identifier, name, empty[..], addresses, 28)
+pub fn parse_ipv6(arena: *mem.Arena, packet: []const u8, identifier: u16, name: []const u8) Ipv6Result {
+  if conflicts(arena, packet) || conflicts(arena, name) {
+    return Ipv6Result{kind: errors.Kind.InvalidInput}
+  }
+  empty4: []Ipv4
+  empty6: []Ipv6
+  measured := parse(packet, identifier, name, empty4, empty6, 28, false)
+  if !measured.ok {
+    return Ipv6Result{error: measured.error, kind: measured.kind, offset: measured.offset}
+  }
+  mark := mem.arena_mark(arena)
+  output := mem.push_array(Ipv6, arena, measured.value)
+  result := parse(packet, identifier, name, empty4, output, 28, true)
+  if !result.ok {
+    mem.arena_rewind(arena, mark)
+    return Ipv6Result{error: result.error, kind: result.kind, offset: result.offset}
+  }
+  return Ipv6Result{value: output, ok: true}
 }
 fn same_name(left: []const u8, right: []const u8) bool {
   if #len(left) != #len(right) {
@@ -156,7 +214,7 @@ fn same_name(left: []const u8, right: []const u8) bool {
 fn canonical_owner(packet: []const u8, start: usize, answers: usize, owner: []u8) Name {
   current := read_name(packet, 12, owner)
   if !current.ok {
-    return Name{}
+    return Name{offset: 12}
   }
   hop: usize = 0
   for hop <= answers && hop < 128 {
@@ -166,27 +224,28 @@ fn canonical_owner(packet: []const u8, start: usize, answers: usize, owner: []u8
     target_length: usize = 0
     target: [254]u8 = []
     for index < answers {
+      record_start := cursor
       record_name: [254]u8 = []
       parsed := read_name(packet, cursor, record_name[..])
       if !parsed.ok || parsed.end + 10 > #len(packet) {
-        return Name{}
+        return Name{offset: record_start}
       }
       cursor = parsed.end
       kind := load_u16(packet, cursor)
       class := load_u16(packet, cursor + 2)
-      length := #cast(usize) load_u16(packet, cursor + 8)
+      length := #cast(usize, load_u16(packet, cursor + 8))
       cursor += 10
       if length > #len(packet) - cursor {
-        return Name{}
+        return Name{offset: record_start}
       }
       if kind == 5 && class == 1 && same_name(record_name[..parsed.length], owner[..current.length]) {
         candidate: [254]u8 = []
         alias := read_name(packet, cursor, candidate[..])
         if !alias.ok || alias.end != cursor + length {
-          return Name{}
+          return Name{offset: record_start}
         }
         if found && !same_name(target[..target_length], candidate[..alias.length]) {
-          return Name{}
+          return Name{offset: record_start}
         }
         target_length = alias.length
         for j in 0..target_length {
@@ -206,118 +265,170 @@ fn canonical_owner(packet: []const u8, start: usize, answers: usize, owner: []u8
     current.length = target_length
     hop += 1
   }
-  return Name{}
+  return Name{offset: start}
 }
-fn parse(packet: []const u8, identifier: u16, name: []const u8, addresses: []Ipv4, ipv6: []Ipv6, query_kind: u16) Result {
-  if #len(packet) < 12 || load_u16(packet, 0) != identifier || (load_u16(packet, 2) & 32768) == 0 {
-    return Result{ error: -22, ok: false }
+fn parse(packet: []const u8, identifier: u16, name: []const u8, addresses: []Ipv4, ipv6: []Ipv6, query_kind: u16, writing: bool) Result {
+  if #len(packet) < 12 {
+    return Result{kind: errors.Kind.InvalidInput, offset: #len(packet)}
+  }
+  if load_u16(packet, 0) != identifier {
+    return Result{kind: errors.Kind.InvalidInput}
+  }
+  if (load_u16(packet, 2) & 32768) == 0 {
+    return Result{kind: errors.Kind.InvalidInput, offset: 2}
   }
   flags := load_u16(packet, 2)
   if (flags & 31232) != 0 {
-    return Result{ error: -74 }
+    return Result{ kind: errors.Kind.InvalidInput, offset: 2 }
   }
   if (flags & 15) != 0 {
-    return Result{ error: 0 - #cast(isize) (flags & 15), ok: false }
+    return Result{ error: 0 - #cast(isize, (flags & 15)), kind: rcode_kind(flags & 15), offset: 3, ok: false }
   }
-  questions := #cast(usize) load_u16(packet, 4)
-  answers := #cast(usize) load_u16(packet, 6)
-  if questions != 1 || !question_matches(packet, name) {
-    return Result{ error: -22 }
+  questions := #cast(usize, load_u16(packet, 4))
+  answers := #cast(usize, load_u16(packet, 6))
+  if questions != 1 {
+    return Result{kind: errors.Kind.InvalidInput, offset: 4}
+  }
+  if !question_matches(packet, name) {
+    return Result{kind: errors.Kind.InvalidInput, offset: 12}
   }
   cursor: usize = 12
   for q in 0..questions {
     cursor = skip_name(packet, cursor)
     if cursor == 0 || cursor + 4 > #len(packet) {
-      return Result{ error: -22, ok: false }
+      return Result{ kind: errors.Kind.InvalidInput, offset: 12 }
     }
     if load_u16(packet, cursor) != query_kind || load_u16(packet, cursor + 2) != 1 {
-      return Result{ error: -22 }
+      return Result{ kind: errors.Kind.InvalidInput, offset: cursor }
     }
     cursor += 4
+  }
+  scan := cursor
+  for index in 0..answers {
+    record := scan
+    end := skip_name(packet, scan)
+    if end == 0 || end + 10 > #len(packet) {
+      return Result{kind: errors.Kind.InvalidInput, offset: record}
+    }
+    length := #cast(usize, load_u16(packet, end + 8))
+    scan = end + 10
+    if length > #len(packet) - scan {
+      return Result{kind: errors.Kind.InvalidInput, offset: record}
+    }
+    kind := load_u16(packet, end)
+    if load_u16(packet, end + 2) == 1 {
+      if (kind == 1 && length != 4) || (kind == 28 && length != 16) {
+        return Result{kind: errors.Kind.InvalidInput, offset: record}
+      }
+      if kind == 5 {
+        target := skip_name(packet, scan)
+        if target == 0 || target != scan + length {
+          return Result{kind: errors.Kind.InvalidInput, offset: record}
+        }
+      }
+    }
+    scan += length
   }
   owner: [254]u8 = []
   canonical := canonical_owner(packet, cursor, answers, owner[..])
   if !canonical.ok {
-    return Result{ error: -22 }
+    return Result{ kind: errors.Kind.InvalidInput, offset: canonical.offset }
   }
   count: usize = 0
   for answer in 0..answers {
     record_owner: [254]u8 = []
     parsed_owner := read_name(packet, cursor, record_owner[..])
     if !parsed_owner.ok {
-      return Result{ error: -22 }
+      return Result{ kind: errors.Kind.InvalidInput }
     }
     matches := same_name(record_owner[..parsed_owner.length], owner[..canonical.length])
     cursor = parsed_owner.end
     if cursor == 0 || cursor + 10 > #len(packet) {
-      return Result{ count: count, error: -22, ok: false }
+      return Result{ value: count, kind: errors.Kind.InvalidInput, ok: false }
     }
     kind := load_u16(packet, cursor)
     class := load_u16(packet, cursor + 2)
-    length := #cast(usize) load_u16(packet, cursor + 8)
+    length := #cast(usize, load_u16(packet, cursor + 8))
     cursor += 10
     if cursor + length > #len(packet) {
-      return Result{ count: count, error: -22, ok: false }
+      return Result{ value: count, kind: errors.Kind.InvalidInput, ok: false }
     }
     if matches && kind == 1 && query_kind == 1 && class == 1 && length == 4 {
-      if count == #len(addresses) {
-        return Result{ count: count, error: -28 }
+      if writing {
+        addresses[count] = Ipv4{ a: packet[cursor], b: packet[cursor + 1], c: packet[cursor + 2], d: packet[cursor + 3] }
       }
-      addresses[count] = Ipv4{ a: packet[cursor], b: packet[cursor + 1], c: packet[cursor + 2], d: packet[cursor + 3] }
       count += 1
     }
     if matches && kind == 28 && query_kind == 28 && class == 1 && length == 16 {
-      if count == #len(ipv6) {
-        return Result{ count: count, error: -28 }
-      }
-      for i in 0..16 {
-        ipv6[count].bytes[i] = packet[cursor + i]
+      if writing {
+        for i in 0..16 {
+          ipv6[count].bytes[i] = packet[cursor + i]
+        }
       }
       count += 1
     }
     cursor += length
   }
-  return Result{ count: count, ok: true }
+  return Result{ value: count, ok: true }
 }
 
 // The server transport address is IPv4; IPv6 refers to AAAA result records.
 // One deadline covers UDP, TCP connect, framing, and every partial transfer.
-pub fn resolve_ipv4(name: []const u8, server: *const network.Ipv4Address, addresses: []Ipv4,
-                    packet: []u8, timeout_milliseconds: i32) Result {
-  received := exchange(name, server, packet, timeout_milliseconds, 1)
-  if !received.ok {
-    return Result{ error: received.error }
+pub fn resolve_ipv4(arena: *mem.Arena, name: []const u8, server: *const network.Ipv4Address,
+  timeout_milliseconds: i32) Ipv4Result {
+  if conflicts(arena, name) {
+    return Ipv4Result{kind: errors.Kind.InvalidInput}
   }
-  return parse_ipv4(packet[..received.length], received.identifier, name, addresses)
-}
-pub fn resolve_ipv6(name: []const u8, server: *const network.Ipv4Address, addresses: []Ipv6,
-                    packet: []u8, timeout_milliseconds: i32) Result {
-  received := exchange(name, server, packet, timeout_milliseconds, 28)
+  packet: [65535]u8 = []
+  received := exchange(name, server, packet[..], timeout_milliseconds, 1)
   if !received.ok {
-    return Result{ error: received.error }
+    return Ipv4Result{error: received.error, kind: received.kind}
   }
-  return parse_ipv6(packet[..received.length], received.identifier, name, addresses)
+  return parse_ipv4(arena, packet[..received.length], received.identifier, name)
 }
-struct Packet { length: usize, identifier: u16, error: isize, ok: bool }
-fn ready(descriptor: isize, events: i16, deadline: *const time.Deadline, finite: bool) isize {
+pub fn resolve_ipv6(arena: *mem.Arena, name: []const u8, server: *const network.Ipv4Address,
+  timeout_milliseconds: i32) Ipv6Result {
+  if conflicts(arena, name) {
+    return Ipv6Result{kind: errors.Kind.InvalidInput}
+  }
+  packet: [65535]u8 = []
+  received := exchange(name, server, packet[..], timeout_milliseconds, 28)
+  if !received.ok {
+    return Ipv6Result{error: received.error, kind: received.kind}
+  }
+  return parse_ipv6(arena, packet[..received.length], received.identifier, name)
+}
+// NXDOMAIN (3) is a missing name; other response codes are server failures.
+fn rcode_kind(code: u16) errors.Kind {
+  if code == 3 {
+    return errors.Kind.NotFound
+  }
+  return errors.Kind.System
+}
+
+struct Packet { length: usize, identifier: u16, error: isize, kind: errors.Kind, ok: bool }
+fn ready(descriptor: isize, events: i16, deadline: *const time.Deadline, finite: bool) network.Result {
   timeout: i32 = -1
   if finite {
     remaining := time.deadline_remaining(deadline)
-    if remaining == 0 {
-      return -110
+    if !remaining.ok {
+      return network.Result{error: remaining.error, kind: remaining.kind}
     }
-    timeout = #cast(i32) ((remaining + time.Millisecond - 1) / time.Millisecond)
+    if remaining.value == 0 {
+      return network.Result{error: -110, kind: errors.Kind.System}
+    }
+    timeout = #cast(i32, ((remaining.value + time.Millisecond - 1) / time.Millisecond))
   }
   result := network.wait(descriptor, events, timeout)
   if !result.ok {
-    return result.error
+    return result
   }
   if result.value == 0 {
-    return -110
+    return network.Result{error: -110, kind: errors.Kind.System}
   }
-  return 0
+  return network.Result{ok: true}
 }
-fn transfer(descriptor: isize, buffer: []u8, sending: bool, deadline: *const time.Deadline, finite: bool) isize {
+fn transfer(descriptor: isize, buffer: []u8, sending: bool, deadline: *const time.Deadline, finite: bool) network.Result {
   at: usize = 0
   for at < #len(buffer) {
     events := network.PollReadable
@@ -325,7 +436,7 @@ fn transfer(descriptor: isize, buffer: []u8, sending: bool, deadline: *const tim
       events = network.PollWritable
     }
     error := ready(descriptor, events, deadline, finite)
-    if error != 0 {
+    if !error.ok {
       return error
     }
     result := network.Result{}
@@ -339,122 +450,129 @@ fn transfer(descriptor: isize, buffer: []u8, sending: bool, deadline: *const tim
       if result.error == -4 || network.would_block(&result) {
         continue
       }
-      return result.error
+      return result
     }
     if result.value == 0 {
-      return -74
+      return network.Result{error: -74, kind: errors.Kind.InvalidInput}
     }
-    at += #cast(usize) result.value
+    at += #cast(usize, result.value)
   }
-  return 0
+  return network.Result{ok: true}
 }
 fn tcp(name: []const u8, server: *const network.Ipv4Address, packet: []u8,
-       identifier: u16, kind: u16, deadline: *const time.Deadline, finite: bool) Packet {
+  identifier: u16, kind: u16, deadline: *const time.Deadline, finite: bool) Packet {
   request := query(packet, name, identifier, kind)
   if #len(request) == 0 {
-    return Packet{ error: -22 }
+    return Packet{ error: -22, kind: errors.Kind.InvalidInput }
   }
   opened := network.socket(network.AddressFamilyIpv4, network.SocketStream, 0)
   if !opened.ok {
-    return Packet{ error: opened.error }
+    return Packet{ error: opened.error, kind: opened.kind }
   }
   descriptor := opened.value
-         defer {
-           _ = network.close(descriptor)
-         }
+  defer {
+    _ = network.close(descriptor)
+  }
   mode := network.nonblocking(descriptor, true)
-         if !mode.ok {
-           return Packet{ error: mode.error }
-         }
+  if !mode.ok {
+    return Packet{ error: mode.error, kind: mode.kind }
+  }
   connected := network.connect_ipv4(descriptor, server)
   if !connected.ok {
     if !network.would_block(&connected) {
-      return Packet{ error: connected.error }
+      return Packet{ error: connected.error, kind: connected.kind }
     }
     error := ready(descriptor, network.PollWritable, deadline, finite)
-    if error != 0 {
-      return Packet{ error: error }
+    if !error.ok {
+      return Packet{ error: error.error, kind: error.kind }
     }
     checked := network.socket_error(descriptor)
     if !checked.ok {
-      return Packet{ error: checked.error }
+      return Packet{ error: checked.error, kind: checked.kind }
     }
   }
   prefix: [2]u8 = []
-         store_u16(prefix[..], 0, #cast(u16) #len(request))
+  store_u16(prefix[..], 0, #cast(u16, #len(request)))
   sent := transfer(descriptor, prefix[..], true, deadline, finite)
-  if sent == 0 {
+  if sent.ok {
     sent = transfer(descriptor, request, true, deadline, finite)
   }
-  if sent != 0 {
-    return Packet{ error: sent }
+  if !sent.ok {
+    return Packet{ error: sent.error, kind: sent.kind }
   }
   received := transfer(descriptor, prefix[..], false, deadline, finite)
-  if received != 0 {
-    return Packet{ error: received }
+  if !received.ok {
+    return Packet{ error: received.error, kind: received.kind }
   }
-  length := #cast(usize) load_u16(prefix[..], 0)
+  length := #cast(usize, load_u16(prefix[..], 0))
   if length > #len(packet) {
-    return Packet{ error: -28 }
+    return Packet{ error: -28, kind: errors.Kind.Capacity }
   }
   if length < 12 {
-    return Packet{ error: -74 }
+    return Packet{ error: -74, kind: errors.Kind.InvalidInput }
   }
   received = transfer(descriptor, packet[..length], false, deadline, finite)
-  if received != 0 {
-    return Packet{ error: received }
+  if !received.ok {
+    return Packet{ error: received.error, kind: received.kind }
   }
   return Packet{ length: length, identifier: identifier, ok: true }
 }
 fn exchange(name: []const u8, server: *const network.Ipv4Address, packet: []u8,
-            timeout_milliseconds: i32, kind: u16) Packet {
+  timeout_milliseconds: i32, kind: u16) Packet {
   finite := timeout_milliseconds >= 0
-  deadline := time.deadline_after(#cast(i64) timeout_milliseconds * time.Millisecond)
+  deadline := time.Deadline{}
+  if finite {
+    created := time.deadline_after(#cast(i64, timeout_milliseconds) * time.Millisecond)
+    if !created.ok {
+      return Packet{error: created.error, kind: created.kind}
+    }
+    deadline = created.value
+  }
   entropy: [2]u8 = []
-              if !random.fill(entropy[..]) {
-                return Packet{ error: -5 }
-              }
+  if !random.fill(entropy[..]) {
+    return Packet{ error: -5, kind: errors.Kind.System }
+  }
   identifier := load_u16(entropy[..], 0)
   request := query(packet, name, identifier, kind)
   if #len(request) == 0 {
-    return Packet{ error: -22 }
+    return Packet{ error: -22, kind: errors.Kind.InvalidInput }
   }
   opened := network.socket(network.AddressFamilyIpv4, network.SocketDatagram, 0)
   if !opened.ok {
-    return Packet{ error: opened.error }
+    return Packet{ error: opened.error, kind: opened.kind }
   }
   descriptor := opened.value
-              defer {
-                _ = network.close(descriptor)
-              }
+  defer {
+    _ = network.close(descriptor)
+  }
   mode := network.nonblocking(descriptor, true)
-              if !mode.ok {
-                return Packet{ error: mode.error }
-              }
+  if !mode.ok {
+    return Packet{ error: mode.error, kind: mode.kind }
+  }
   connected := network.connect_ipv4(descriptor, server)
   if !connected.ok {
-    return Packet{ error: connected.error }
+    return Packet{ error: connected.error, kind: connected.kind }
   }
   sent := network.send(descriptor, request, 0)
   if !sent.ok {
-    return Packet{ error: sent.error }
+    return Packet{ error: sent.error, kind: sent.kind }
   }
-  if #cast(usize) sent.value != #len(request) {
-    return Packet{ error: -5 }
+  if #cast(usize, sent.value) != #len(request) {
+    return Packet{ error: -5, kind: errors.Kind.System }
   }
   for {
     error := ready(descriptor, network.PollReadable, &deadline, finite)
-    if error != 0 {
-      return Packet{ error: error }
+    if !error.ok {
+      return Packet{ error: error.error, kind: error.kind }
     }
     received := network.receive_packet(descriptor, packet)
     if !received.ok {
       if received.error == -4 || network.would_block(&received) {
         continue
       }
-      return Packet{ error: received.error }
+      return Packet{ error: received.error, kind: received.kind }
     }
-    length := #cast(usize) received.value
+    length := #cast(usize, received.value)
     stored := length
     if stored > #len(packet) {
       stored = #len(packet)
@@ -464,16 +582,16 @@ fn exchange(name: []const u8, server: *const network.Ipv4Address, packet: []u8,
       continue
     }
     if (load_u16(response, 2) & 30720) != 0 || load_u16(response, 4) != 1 || !question_matches(response, name) {
-      return Packet{ error: -74 }
+      return Packet{ error: -74, kind: errors.Kind.InvalidInput }
     }
     question_end := skip_name(response, 12)
     if question_end == 0 || question_end + 4 > stored || load_u16(response, question_end) != kind || load_u16(response, question_end + 2) != 1 {
-      return Packet{ error: -74 }
+      return Packet{ error: -74, kind: errors.Kind.InvalidInput }
     }
     if length > #len(packet) || (load_u16(response, 2) & 512) != 0 {
       return tcp(name, server, packet, identifier, kind, &deadline, finite)
     }
     return Packet{ length: length, identifier: identifier, ok: true }
   }
-  return Packet{ error: -5 }
+  return Packet{ error: -5, kind: errors.Kind.System }
 }

@@ -6,9 +6,9 @@ const Iterations: i64 = 50
 fn main() {
   inside: i64 = 0
   for py in 0..Size {
-    y0 := #cast(f64) py / #cast(f64) Size * 2.0 - 1.0
+    y0 := #cast(f64, py) / #cast(f64, Size) * 2.0 - 1.0
     for px in 0..Size {
-      x0 := #cast(f64) px / #cast(f64) Size * 3.0 - 2.0
+      x0 := #cast(f64, px) / #cast(f64, Size) * 3.0 - 2.0
       x: f64 = 0.0
       y: f64 = 0.0
       n: i64 = 0

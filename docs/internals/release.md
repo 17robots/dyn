@@ -48,7 +48,11 @@ highlighting) together. `grammar.lock.json` pins only the grammar that
 | Compiler host | Linux x86-64; macOS and Windows hosts are built and tested in CI |
 | Linux x86-64 output | Primary target |
 | Linux AArch64, macOS AArch64, Windows x86-64 output | Tested on native runners every release |
+| `riscv64-linux`, `x86_64-macos`, `aarch64-windows` output | Experimental; cross-compiled, not natively qualified |
 | `wasm32-browser`, `wasm32-wasi` | Experimental |
+| `riscv64-none` (bare metal, QEMU virt board) | Experimental; run under `qemu-system-riscv64` when installed. See [bare metal](../guide/bare-metal.md) |
+| `riscv32-none` (bare metal, QEMU virt board, RV32GC) | Experimental; run under `qemu-system-riscv32` when installed. `tools/backend/bare-differential.py` compares the value corpus with x86-64 Linux |
+| `thumbv7em-none` (bare metal, QEMU mps2-an500 board, Cortex-M7) | Experimental; run under `qemu-system-arm` when installed. `tools/backend/bare-differential.py --target thumbv7em-none` compares the value corpus with x86-64 Linux |
 | Vendor packages | Optional; qualified on Linux x86-64 |
 | Crypto and TLS | Known-answer and malformed-input tests; no independent audit |
 

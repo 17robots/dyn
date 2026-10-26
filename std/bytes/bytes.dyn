@@ -37,65 +37,79 @@ pub fn ends_with(value: []const u8, suffix: []const u8) bool {
   return #len(suffix) <= #len(value) && equal(value[#len(value) - #len(suffix)..], suffix)
 }
 
-pub fn find_byte(value: []const u8, byte: u8) isize {
+// Positions are usize. A miss returns #len(value), which is always a safe
+// slice bound: value[..at] is the whole input and value[at..] is empty.
+
+pub fn find_byte(value: []const u8, byte: u8) usize {
   for i in 0..#len(value) {
     if value[i] == byte {
-      return #cast(isize) i
+      return i
     }
   }
-  return -1
+  return #len(value)
 }
 
-pub fn find_last_byte(value: []const u8, byte: u8) isize {
+pub fn find_last_byte(value: []const u8, byte: u8) usize {
   i := #len(value)
   for i > 0 {
     i -= 1
     if value[i] == byte {
-      return #cast(isize) i
+      return i
     }
   }
-  return -1
+  return #len(value)
 }
 
-pub fn find(value: []const u8, needle: []const u8) isize {
+// An empty needle matches at zero.
+pub fn find(value: []const u8, needle: []const u8) usize {
   if #len(needle) == 0 {
     return 0
   }
   if #len(needle) > #len(value) {
-    return -1
+    return #len(value)
   }
-  if #len(needle) == 1 { return find_byte(value, needle[0]) }
+  if #len(needle) == 1 {
+    return find_byte(value, needle[0])
+  }
   last := #len(needle) - 1
+  final_byte := needle[last]
+  candidates := #len(value) - #len(needle) + 1
   i: usize = 0
-  for i <= #len(value) - #len(needle) {
-    if value[i + last] == needle[last] && equal(value[i..i + #len(needle)], needle) {
-      return #cast(isize) i
+  for i < candidates {
+    remaining := value[i + last..]
+    skipped := find_byte(remaining, final_byte)
+    if skipped == #len(remaining) {
+      return #len(value)
+    }
+    i += skipped
+    if equal(value[i..i + #len(needle)], needle) {
+      return i
     }
     i += 1
   }
-  return -1
+  return #len(value)
 }
 
-pub fn find_last(value: []const u8, needle: []const u8) isize {
-  if #len(needle) == 0 {
-    return #cast(isize) #len(value)
+// An empty needle matches at the end.
+pub fn find_last(value: []const u8, needle: []const u8) usize {
+  if #len(needle) == 0 || #len(needle) > #len(value) {
+    return #len(value)
   }
-  if #len(needle) > #len(value) {
-    return -1
+  if #len(needle) == 1 {
+    return find_last_byte(value, needle[0])
   }
-  if #len(needle) == 1 { return find_last_byte(value, needle[0]) }
   i := #len(value) - #len(needle) + 1
   for i > 0 {
     i -= 1
     if equal(value[i..i + #len(needle)], needle) {
-      return #cast(isize) i
+      return i
     }
   }
-  return -1
+  return #len(value)
 }
 
 pub fn contains(value: []const u8, needle: []const u8) bool {
-  return find(value, needle) >= 0
+  return #len(needle) == 0 || find(value, needle) < #len(value)
 }
 
 pub fn count_occurrences(value: []const u8, needle: []const u8) usize {
@@ -129,21 +143,25 @@ pub fn splitter(value: []const u8, separator: []const u8) Splitter {
   return Splitter{ value: value, separator: separator, offset: 0, done: false }
 }
 
-pub fn split_next(state: *Splitter, output: *[]const u8) bool {
+pub struct Piece { value: []const u8, ok: bool }
+
+// The next piece, or ok false after the last one. A value without the
+// separator is one piece; a trailing separator gives a final empty piece.
+pub fn split_next(state: *Splitter) Piece {
   if state.done {
-    return false
+    return Piece{}
   }
-  found := find(state.value[state.offset..], state.separator)
-  if found < 0 {
-    output.* = state.value[state.offset..]
+  rest := state.value[state.offset..]
+  found := find(rest, state.separator)
+  if found == #len(rest) {
     state.offset = #len(state.value)
     state.done = true
-    return true
+    return Piece{ value: rest, ok: true }
   }
-  end := state.offset + #cast(usize) found
-  output.* = state.value[state.offset..end]
+  end := state.offset + found
+  piece := state.value[state.offset..end]
   state.offset = end + #len(state.separator)
-  return true
+  return Piece{ value: piece, ok: true }
 }
 
 pub struct Cursor {
@@ -230,8 +248,8 @@ pub fn overlaps(left: []const u8, right: []const u8) bool {
   if #len(left) == 0 || #len(right) == 0 {
     return false
   }
-  a := #cast(usize) &left[0]
-  b := #cast(usize) &right[0]
+  a := #cast(usize, &left[0])
+  b := #cast(usize, &right[0])
   if a <= b {
     return b - a < #len(left)
   }

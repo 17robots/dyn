@@ -1,0 +1,72 @@
+// Flagship game check: plays Breakout headless with an autopilot, rendering
+// every frame through a per-frame arena. Prints the outcome, a hash of sampled
+// frames and memory use so debug and release builds can be compared.
+use "std/fmt"
+use "std/io"
+use "std/mem"
+use "breakout"
+
+const MaxFrames: u64 = 60000
+
+fn autopilot(game: *const breakout.Game) breakout.Input {
+  // Aim off-center by a slowly changing amount so the ball covers every column.
+  aim := breakout.ball_center(game) + #cast(i32, game.frame / 97 % 9) * 2 - 8
+  center := breakout.paddle_center(game)
+  if aim < center - 1 {
+    return breakout.Input.Left
+  }
+  if aim > center + 1 {
+    return breakout.Input.Right
+  }
+  return breakout.Input.None
+}
+
+fn hash_pixels(hash: u64, pixels: []const u32) u64 {
+  value := hash
+  for pixel in pixels {
+    value = #wrap((value ^ #cast(u64, pixel)) * 0x100000001B3)
+  }
+  return value
+}
+
+fn print_field(name: []const u8, value: u64) {
+  digits: [20 + mem.ArenaBufferOverhead]u8
+  scratch := mem.arena_from_buffer(digits[..])
+  _ = io.write_all(io.stdout(), name)
+  _ = io.write_all(io.stdout(), " ")
+  _ = io.write_all(io.stdout(), fmt.u64_decimal(scratch, value))
+  _ = io.write_all(io.stdout(), "\n")
+}
+
+fn main() {
+  persistent := mem.arena_create(mem.MiB)
+  defer mem.arena_release(persistent)
+  game := mem.push(breakout.Game, persistent)
+  pixels := mem.push_array(u32, persistent, #cast(usize, breakout.Width * breakout.Height))
+  frame := mem.arena_sub(persistent, 64 * mem.KiB)
+  retained := mem.arena_used(persistent)
+  breakout.init(game)
+  hash: u64 = 0xCBF29CE484222325
+  frame_peak: usize
+  for !breakout.over(game) && game.frame < MaxFrames {
+    breakout.step(game, autopilot(game))
+    mem.arena_reset(frame)
+    breakout.render(game, frame, pixels)
+    if mem.arena_used(frame) > frame_peak {
+      frame_peak = mem.arena_used(frame)
+    }
+    if game.frame % 60 == 0 {
+      hash = hash_pixels(hash, pixels)
+    }
+  }
+  hash = hash_pixels(hash, pixels)
+  if mem.arena_used(persistent) != retained {
+    #panic("frames must not retain memory")
+  }
+  print_field("frames", game.frame)
+  print_field("score", #cast(u64, game.score))
+  print_field("lives", #cast(u64, game.lives))
+  print_field("hash", hash)
+  print_field("frame_peak", #cast(u64, frame_peak))
+  print_field("retained", #cast(u64, retained))
+}

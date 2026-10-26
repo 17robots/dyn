@@ -1,5 +1,4 @@
-/* Preserve private constants needed by exported layouts without exporting
- * unrelated implementation constants. Names borrow the loaded source texts. */
+/* Preserve private constants needed by exported layouts without exporting * unrelated implementation constants. Names borrow the loaded source texts. */
 typedef struct {
   const char *name;
   size_t length;
@@ -9,15 +8,10 @@ typedef struct {
   bool needed, scanned;
 } InterfaceConstant;
 
-
-
-static bool interface_compact_named(const InterfaceConstant *constant, const ExpSnapshotTree *tree,
-                                     uint32_t name, const DynSource *source) {
-  return name != UINT32_MAX && tree->nodes[name].end-tree->nodes[name].start == constant->length &&
-    !memcmp(source->text+tree->nodes[name].start,constant->name,constant->length);
+static bool interface_compact_named(const InterfaceConstant *constant, const ExpSnapshotTree *tree, uint32_t name, const DynSource *source) {
+  return name != UINT32_MAX && tree->nodes[name].end-tree->nodes[name].start == constant->length && !memcmp(source->text+tree->nodes[name].start,constant->name,constant->length);
 }
-static bool interface_compact_refs(uint32_t root, const ExpSnapshotTree *tree, const DynSource *source,
-                                   InterfaceConstant *constants, size_t count, bool types_only) {
+static bool interface_compact_refs(uint32_t root, const ExpSnapshotTree *tree, const DynSource *source, InterfaceConstant *constants, size_t count, bool types_only) {
   const ExpNode *nodes=tree->nodes;
   uint32_t node=root;
   while(node!=UINT32_MAX) {
@@ -40,8 +34,7 @@ static bool interface_compact_refs(uint32_t root, const ExpSnapshotTree *tree, c
   }
   return true;
 }
-static bool interface_compact_constants(const DynSource *source,const ExpSnapshotTree *tree,
-                                        InterfaceConstant **constants,size_t *used) {
+static bool interface_compact_constants(const DynSource *source,const ExpSnapshotTree *tree, InterfaceConstant **constants,size_t *used) {
   const ExpNode *nodes=tree->nodes;
   for(uint32_t wrapper=nodes[tree->root].first;wrapper!=UINT32_MAX;wrapper=nodes[wrapper].next) {
     if(!dyn_work_step(&source->context,1)) return false;
@@ -55,14 +48,11 @@ static bool interface_compact_constants(const DynSource *source,const ExpSnapsho
     InterfaceConstant *grown=realloc(*constants,(*used+1)*sizeof(*grown));
     if(!grown) return false;
     *constants=grown;
-    grown[(*used)++]=(InterfaceConstant){.name=source->text+nodes[name].start,
-      .length=nodes[name].end-nodes[name].start,.source=source,.compact=tree,
-      .compact_initializer=initializer,.needed=(nodes[wrapper].flags&EXP_PUBLIC)!=0};
+    grown[(*used)++]=(InterfaceConstant){.name=source->text+nodes[name].start, .length=nodes[name].end-nodes[name].start,.source=source,.compact=tree, .compact_initializer=initializer,.needed=(nodes[wrapper].flags&EXP_PUBLIC)!=0};
   }
   return true;
 }
-static bool interface_compact_layout_refs(const DynSource *source,const ExpSnapshotTree *tree,
-                                          InterfaceConstant *constants,size_t count) {
+static bool interface_compact_layout_refs(const DynSource *source,const ExpSnapshotTree *tree, InterfaceConstant *constants,size_t count) {
   const ExpNode *nodes=tree->nodes;
   for(uint32_t wrapper=nodes[tree->root].first;wrapper!=UINT32_MAX;wrapper=nodes[wrapper].next) {
     if(!dyn_work_step(&source->context,1)) return false;
@@ -75,9 +65,7 @@ static bool interface_compact_layout_refs(const DynSource *source,const ExpSnaps
   }
   return true;
 }
-
-static bool interface_constants(const DynSources *sources,
-                                InterfaceConstant **result, size_t *count) {
+static bool interface_constants(const DynSources *sources, InterfaceConstant **result, size_t *count) {
   InterfaceConstant *constants = NULL;
   size_t used = 0;
   for (size_t si = 0; si < sources->count; ++si) {
@@ -97,8 +85,7 @@ static bool interface_constants(const DynSources *sources,
     for (size_t i = 0; i < used; ++i) {
       if (!constants[i].needed || constants[i].scanned) continue;
       constants[i].scanned = true;
-      if (!interface_compact_refs(constants[i].compact_initializer, constants[i].compact,
-                                  constants[i].source, constants, used, false)) goto fail;
+      if (!interface_compact_refs(constants[i].compact_initializer, constants[i].compact, constants[i].source, constants, used, false)) goto fail;
       progress = true;
     }
   }

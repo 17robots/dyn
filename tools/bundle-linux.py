@@ -37,7 +37,7 @@ def bundle(sdk):
     if architecture is None:
         raise RuntimeError('Unsupported compiler host architecture')
     return dict(os='linux', arch=architecture, glibc_min='.'.join(map(str, baseline)),
-                bundled=[], packages={}, backend='native', targets=['x86_64-linux', 'aarch64-linux', 'riscv64-linux', 'x86_64-macos', 'aarch64-macos', 'x86_64-windows', 'aarch64-windows', 'wasm32-browser', 'wasm32-wasi'])
+                bundled=[], packages={}, backend='native', targets=['x86_64-linux', 'aarch64-linux', 'riscv64-linux', 'riscv64-none', 'riscv32-none', 'riscv32-none-soft', 'thumbv7em-none', 'thumbv7em-none-soft', 'thumbv7em-none-nucleo-h753zi', 'x86_64-macos', 'aarch64-macos', 'x86_64-windows', 'aarch64-windows', 'wasm32-browser', 'wasm32-wasi'])
 
 
 def runtime_sources(dist, version):

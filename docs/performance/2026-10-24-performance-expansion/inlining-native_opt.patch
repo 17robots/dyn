@@ -1,0 +1,173 @@
+--- native_opt.before.c
++++ native_opt.after.c
+@@ -299,7 +299,7 @@
+ /* Direct calls in statement positions can be expanded without changing the IR
+    contract. A one-shot loop supplies a lexical cleanup boundary and a common
+    exit for multiple returns. Arguments are captured before entering that scope.
+-   Calls inside larger expressions and deferred call captures remain calls. */
++   Calls outside unconditional expression spines and deferred call captures remain calls. */
+ typedef struct {
+   const DynIrProgram *in;
+   DynIrProgram out;
+@@ -616,17 +616,53 @@
+   unsigned remaining = 24;
+   return inline_leaf_expr(ir, ir->statements[id].expression, &remaining);
+ }
++/* A typed dereference must not strengthen a packed-field store's alignment
++   requirement. Decline packed ancestry, including arrays nested in a packed
++   field. Ordinary indexing relies on the same element-alignment contract as
++   the original slice/array access. Bound the ancestry walk independently. */
++static bool inline_target_aligned(const DynIrProgram *ir, DynExprId id,
++                                   unsigned depth) {
++  if (depth > 32 || id >= ir->expression_count) return false;
++  const DynIrExpr *e = &ir->expressions[id];
++  if (e->kind == DYN_EXPR_FIELD) {
++    if (e->left >= ir->expression_count) return false;
++    DynType type = ir->expressions[e->left].type;
++    if (dyn_type_is_pointer(type)) {
++      size_t index = (size_t)(type - DYN_TYPE_POINTER_BASE);
++      if (index >= ir->pointer_count) return false;
++      type = ir->pointers[index].pointee;
++    }
++    if (!dyn_type_is_struct(type) ||
++        type - DYN_TYPE_STRUCT_BASE >= ir->struct_count ||
++        ir->structs[type - DYN_TYPE_STRUCT_BASE].packed) return false;
++    return inline_target_aligned(ir, e->left, depth + 1);
++  }
++  if (e->kind == DYN_EXPR_INDEX)
++    return inline_target_aligned(ir, e->left, depth + 1);
++  return true;
++}
++/* Reuse canonical pointer types; optimization never mutates borrowed type
++   tables. Large tables retain the call instead of paying an unbounded search. */
++static DynType inline_target_pointer(const DynIrProgram *ir, DynExprId id) {
++  if (id >= ir->expression_count) return DYN_TYPE_VOID;
++  const DynIrExpr *e = &ir->expressions[id];
++  if (e->kind == DYN_EXPR_UNARY && e->op == DYN_OP_DEREF &&
++      e->left < ir->expression_count)
++    return ir->expressions[e->left].type;
++  if ((e->kind != DYN_EXPR_INDEX && e->kind != DYN_EXPR_FIELD) ||
++      ir->pointer_count > 1024 || !inline_target_aligned(ir, id, 0))
++    return DYN_TYPE_VOID;
++  for (size_t i = 0; i < ir->pointer_count; ++i)
++    if (ir->pointers[i].pointee == e->type && !ir->pointers[i].is_const)
++      return DYN_TYPE_POINTER_BASE + (DynType)i;
++  return DYN_TYPE_VOID;
++}
+ static bool inline_simple_target(const DynIrProgram *ir, DynExprId id) {
+-  if (id == DYN_NO_EXPR)
+-    return true;
+-  if (id >= ir->expression_count)
+-    return false;
++  if (id == DYN_NO_EXPR) return true;
++  if (id >= ir->expression_count) return false;
+   const DynIrExpr *e = &ir->expressions[id];
+-  if (e->kind == DYN_EXPR_NAME || e->kind == DYN_EXPR_GLOBAL)
+-    return true;
+-  return e->kind == DYN_EXPR_UNARY && e->op == DYN_OP_DEREF &&
+-         e->left < ir->expression_count &&
+-         ir->expressions[e->left].kind == DYN_EXPR_NAME;
++  return e->kind == DYN_EXPR_NAME || e->kind == DYN_EXPR_GLOBAL ||
++         inline_target_pointer(ir, id) != DYN_TYPE_VOID;
+ }
+ /* Snapshot the checked assignment address before argument capture. Merely
+    requiring read-only arguments would still reorder null/alignment failures
+@@ -634,7 +670,7 @@
+ static DynExprId inline_capture_target(Inline *b, const InlineScope *scope,
+                                        DynExprId id, InlineList *list) {
+   const DynIrExpr *target = &b->in->expressions[id];
+-  DynType pointer_type = b->in->expressions[target->left].type;
++  DynType pointer_type = inline_target_pointer(b->in, id);
+   DynIrLocal local = {.name = "__inline_target", .type = pointer_type};
+   uint32_t local_id;
+   INLINE_APPEND(b, local, locals_cap, local, local_id);
+@@ -652,7 +688,10 @@
+   capture.local_id = local_id;
+   capture.expression = address_id;
+   inline_statement(b, list, capture);
+-  DynIrExpr dereference = *target;
++  DynIrExpr dereference = {.kind = DYN_EXPR_UNARY, .op = DYN_OP_DEREF,
++                            .type = target->type, .left = DYN_NO_EXPR,
++                            .right = DYN_NO_EXPR, .span = target->span,
++                            .check_origin = target->check_origin};
+   if (!dereference.check_origin)
+     dereference.check_origin = scope->check_origin;
+   dereference.left = inline_name(b, local_id, target->span);
+@@ -732,31 +771,53 @@
+   ++b->expansions;
+   return true;
+ }
+-/* Only conversions on a statement's result may surround the expanded call.
+-   They execute after its body, so no sibling or short-circuit work is hoisted. */
++/* Expand only an unconditional first-evaluated call spine. A literal left
++   sibling permits descent into a binary right operand; logical right operands
++   never do. Other siblings retain their position after the expanded call.
++   The 32-node cap bounds work and keeps wrapper copying in the ordinary rebuild
++   baseline: these nodes replace original nodes, not extra expansion records. */
++static bool inline_literal(const DynIrExpr *e) {
++  return e->kind == DYN_EXPR_INT || e->kind == DYN_EXPR_CHAR ||
++         e->kind == DYN_EXPR_FLOAT || e->kind == DYN_EXPR_BOOL ||
++         e->kind == DYN_EXPR_NIL;
++}
+ static bool inline_cast_call(Inline *b, const InlineScope *scope,
+                              DynExprId id, InlineList *list,
+                              DynExprId *result, unsigned depth) {
+-  DynExprId casts[32];
++  DynExprId wrappers[32];
++  bool right[32];
+   unsigned count = 0;
+   while (id < b->in->expression_count) {
+     const DynIrExpr *e = &b->in->expressions[id];
+-    if (e->kind != DYN_EXPR_CAST && e->kind != DYN_EXPR_CONVERT &&
+-        e->kind != DYN_EXPR_BITCAST)
+-      break;
+-    if (count == 32 || e->right != DYN_NO_EXPR || e->item_count)
+-      return false;
+-    casts[count++] = id;
+-    id = e->left;
++    bool conversion = e->kind == DYN_EXPR_CAST || e->kind == DYN_EXPR_CONVERT ||
++                      e->kind == DYN_EXPR_BITCAST;
++    bool unary = e->kind == DYN_EXPR_UNARY &&
++                 (e->op == DYN_OP_NEG || e->op == DYN_OP_NOT || e->op == DYN_OP_BIT_NOT);
++    bool binary = e->kind == DYN_EXPR_BINARY;
++    if (!conversion && !unary && !binary) break;
++    if (count == 32 || e->item_count || (!binary && e->right != DYN_NO_EXPR))
++      return false;
++    bool descend_right = binary && e->left < b->in->expression_count &&
++                         inline_literal(&b->in->expressions[e->left]) &&
++                         e->op != DYN_OP_LOGICAL_AND && e->op != DYN_OP_LOGICAL_OR;
++    wrappers[count] = id;
++    right[count++] = descend_right;
++    id = descend_right ? e->right : e->left;
+   }
+   if (id >= b->in->expression_count ||
+       !inline_call(b, scope, &b->in->expressions[id], list, result, depth))
+     return false;
+   while (count && !b->failed) {
+-    DynIrExpr e = b->in->expressions[casts[--count]];
+-    if (!e.check_origin)
+-      e.check_origin = scope->check_origin;
+-    e.left = *result;
++    --count;
++    DynIrExpr e = b->in->expressions[wrappers[count]];
++    if (!e.check_origin) e.check_origin = scope->check_origin;
++    if (right[count]) {
++      e.left = inline_expr(b, scope, e.left, 0);
++      e.right = *result;
++    } else {
++      e.left = *result;
++      e.right = inline_expr(b, scope, e.right, 0);
++    }
+     INLINE_APPEND(b, expression, expressions_cap, e, *result);
+   }
+   return true;
+@@ -789,7 +850,8 @@
+                                      &value, depth);
+     bool captured = expanded && s.kind == DYN_STMT_ASSIGN &&
+                     s.target < b->in->expression_count &&
+-                    b->in->expressions[s.target].kind == DYN_EXPR_UNARY;
++                    b->in->expressions[s.target].kind != DYN_EXPR_NAME &&
++                    b->in->expressions[s.target].kind != DYN_EXPR_GLOBAL;
+     if (captured)
+       s.target = inline_capture_target(b, scope, s.target, list);
+     for (size_t j = 0; j < expansion.count; ++j)

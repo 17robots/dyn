@@ -1,0 +1,10 @@
+from pathlib import Path
+import json,sys
+W=Path(__file__).resolve().parent;ROOT=W.parents[1];source=ROOT/'tools/app-comparison/run.py';text=source.read_text();a=text.index('for lang,cmd in builds.items():');b=text.index("commands['node']=",a)
+replacement='''frozen=json.loads((OUT/'check-results.json').read_text())
+for lang,cmd in builds.items():
+    commands[lang]=[str(OUT/'rust-target/release/rust-app')] if lang=='rust' else [str(OUT/('dyn-final' if lang=='dyn' else f'{lang}-app'))]
+    binary=Path(commands[lang][0]);report['builds'][lang]=dict(frozen['builds'][lang],sha256=digest(binary),executable_bytes=binary.stat().st_size,reused_frozen_binary=True)
+    if lang=='dyn':report['builds'][lang]['command']=[str(ROOT/'build/dyn-release'),'build',str(SRC),'--release','--opt-level','3','--cpu','generic','--no-cache','--quiet','--output',str(binary)]
+'''
+text=text[:a]+replacement+text[b:];(W/'apps/check-results.json').write_bytes((W/'apps/results.json').read_bytes());sys.argv=[str(source),'--output',str(W/'apps'),'--rounds','9','--http-rounds','5'];exec(compile(text,str(source),'exec'),{'__name__':'__main__','__file__':str(source)})

@@ -12,7 +12,7 @@ fn sockets() {
   for i in 0..32 {
     opened := win.socket_open(2, 1, 6)
     if !opened.ok { #panic("socket_open without explicit WSAStartup") }
-    if !win.socket_close(#cast(usize) opened.value) { #panic("socket_close") }
+    if !win.socket_close(#cast(usize, opened.value)) { #panic("socket_close") }
   }
   invalid := win.socket_open(-1, 1, 0)
   if invalid.ok || invalid.error == 0 || invalid.error == 10093 || invalid.value != -1 {
@@ -36,7 +36,7 @@ fn worker(context: rawptr) isize {
 fn main() {
   threads: [8]win.Thread = []
   for i in 0..8 {
-    if !win.thread_spawn(&threads[i], 65536, &worker, nil) { #panic("spawn") }
+    if !win.thread_spawn(&threads[i], 65536, worker, nil) { #panic("spawn") }
   }
   for sync.fetch_add_u32(&ready, 0) != 8 { win.thread_yield() }
   _ = sync.exchange_u32(&start, 1)

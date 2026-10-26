@@ -549,10 +549,22 @@ static int validate_member_at(Resolver *r, uint32_t start, uint32_t end, const D
     bool pub = false;
     if (decl_named(r, targets[found], member, &pub) && pub)
       return 0;
-    char message[512];
-    snprintf(message, sizeof(message),
-             "imported member '%s.%s' is missing or not pub", qualifier,
-             member);
+    char message[8192], module[4096];
+    if (dyn_module_target_gap(&s->context, targets[found], module, sizeof(module))) {
+      /* One error per unavailable module; its other members fail the same way. */
+      static _Thread_local char reported[4096];
+      static _Thread_local const char *reported_text;
+      if (reported_text == s->text && !strcmp(reported, module))
+        return 1;
+      reported_text = s->text;
+      snprintf(reported, sizeof(reported), "%s", module);
+      snprintf(message, sizeof(message),
+               "module '%s' has no source file for target %s; '%s.%s' is unavailable there",
+               module, dyn_context_target(&s->context)->name, qualifier, member);
+    } else
+      snprintf(message, sizeof(message),
+               "imported member '%s.%s' is missing or not pub", qualifier,
+               member);
     dyn_diagnostic_source("error", s, start, end, message);
     return 1;
   }
@@ -711,7 +723,7 @@ static int visit(Resolver *r, const char *directory,
                                 targets, alias_count, &locals);
     dyn_scope_free(&locals);
   }
-  if (r->out && sources == &owned && !result) {
+  if (r->out && sources == &owned && !result && owned.count) {
     /* Hand loaded sources over instead of copying their text and trees. */
     DynSource *grown = realloc(r->out->items, (r->out->count + owned.count) * sizeof(*grown));
     if (!grown)

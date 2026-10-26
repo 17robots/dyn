@@ -1,0 +1,173 @@
+{
+  "compiler": {
+    "gates": 203,
+    "passed": 203,
+    "failed": 0,
+    "skip_lines": 0
+  },
+  "dna": {
+    "gates_passed": 9,
+    "gates_total": 9,
+    "skip_count": 0,
+    "migration_tests_passed": 6,
+    "source_files_hashed": 300,
+    "source_changes": [],
+    "compiler_unchanged_during_qualification": true,
+    "core_module_runs": 20,
+    "host_mode_runs": 2,
+    "filesystem_mode_runs": 2,
+    "native_abi_pass": true,
+    "platform_abi_pass": true,
+    "editor_smoke_modes": [
+      "debug",
+      "release"
+    ],
+    "artifacts": {
+      "/home/mdray/17robots/dyn/compiler/build/dyn-release": {
+        "sha256": "6e31b45bc6081dcec705fff28da87d1bc5fb9f6228183a9dade2ae4ffdd362cf",
+        "bytes": 1488848,
+        "text_bytes": 1220581
+      },
+      "/home/mdray/17robots/dna/build/dna-release": {
+        "sha256": "d64cd57f6fc49e0c840b71fe25d61e07e6fb136df627b9f35c672cb31e2f09f5",
+        "bytes": 1598272,
+        "text_bytes": 1378169
+      },
+      "/home/mdray/17robots/dna/build/dna-debug": {
+        "sha256": "832124acac4de603264999978fa6bd3f893cf73f03a0b49d7a74a2315a05ee01",
+        "bytes": 3445120,
+        "text_bytes": 2284835
+      },
+      "/home/mdray/17robots/dna/build/dna-smoke-release": {
+        "sha256": "99cf0221114af10cdf3f0de0dd8ca614062d7418c566e7619817fcb0810ca6ef",
+        "bytes": 2236656,
+        "text_bytes": 1976991
+      },
+      "/home/mdray/17robots/dna/build/dna-smoke-debug": {
+        "sha256": "fc2c67cdd6ef966d4dc614392845dd36be47475629d7b6012bb1b52803ae4155",
+        "bytes": 4172320,
+        "text_bytes": 2856459
+      },
+      "/home/mdray/17robots/dna/build/deps/install/lib/libdna_native.so": {
+        "sha256": "7090ea6bbf43fffe9fa2611cc1ba03b7f3932f30e53d1ff18213e07059dbb5ab",
+        "bytes": 706776,
+        "text_bytes": 161827
+      },
+      "/home/mdray/17robots/dna/build/deps/install/bin/dna-language": {
+        "sha256": "5b49696caf070c41e0e7347e6ffea19294c4616611c2aae30a0baa93ba18c4d1",
+        "bytes": 546848,
+        "text_bytes": 297659
+      }
+    },
+    "immutable_before_comparison": {
+      "dna-release": {
+        "before": {
+          "sha256": "8b1d252a0d1996ce188910c81a253a2894bd2898332500cea2adb4663690594c",
+          "bytes": 1614640,
+          "text_bytes": 1394279
+        },
+        "after": {
+          "sha256": "d64cd57f6fc49e0c840b71fe25d61e07e6fb136df627b9f35c672cb31e2f09f5",
+          "bytes": 1598272,
+          "text_bytes": 1378169
+        },
+        "bytes_delta": -16368,
+        "bytes_change_percent": -1.0137244215428831,
+        "text_bytes_delta": -16110
+      },
+      "libdna_native.so": {
+        "before": {
+          "sha256": "f84ebfe6bbcc203c50e0b42b69b2e374ca31a9a37675e56bee75f9ab9b6bf087",
+          "bytes": 710872,
+          "text_bytes": 163795
+        },
+        "after": {
+          "sha256": "7090ea6bbf43fffe9fa2611cc1ba03b7f3932f30e53d1ff18213e07059dbb5ab",
+          "bytes": 706776,
+          "text_bytes": 161827
+        },
+        "bytes_delta": -4096,
+        "bytes_change_percent": -0.5761937451468024,
+        "text_bytes_delta": -1968
+      },
+      "dynrt_release.o": {
+        "before": {
+          "sha256": "d0eb2dfb743f666bf77711fd66c0f9c8393cf6e58a262eb92a1d3104be9028b2",
+          "bytes": 4920,
+          "text_bytes": 72
+        },
+        "after": {
+          "sha256": "d0eb2dfb743f666bf77711fd66c0f9c8393cf6e58a262eb92a1d3104be9028b2",
+          "bytes": 4920,
+          "text_bytes": 72
+        },
+        "bytes_delta": 0,
+        "bytes_change_percent": 0.0,
+        "text_bytes_delta": 0
+      },
+      "dynrt_shared.o": {
+        "before": {
+          "sha256": "0be03998a697a62c1d4c01197ae6b868a19f58ddec30aece0d5979193dedff0d",
+          "bytes": 72992,
+          "text_bytes": 72
+        },
+        "after": {
+          "sha256": "0be03998a697a62c1d4c01197ae6b868a19f58ddec30aece0d5979193dedff0d",
+          "bytes": 72992,
+          "text_bytes": 72
+        },
+        "bytes_delta": 0,
+        "bytes_change_percent": 0.0,
+        "text_bytes_delta": 0
+      },
+      "dynrt_support.o": {
+        "before": {
+          "sha256": "c5d42925ce2250fd2e834961545cc1073c4d77ee9c215ed38c47d9bd68e34b49",
+          "bytes": 30128,
+          "text_bytes": 17957
+        },
+        "after": {
+          "sha256": "c5d42925ce2250fd2e834961545cc1073c4d77ee9c215ed38c47d9bd68e34b49",
+          "bytes": 30128,
+          "text_bytes": 17957
+        },
+        "bytes_delta": 0,
+        "bytes_change_percent": 0.0,
+        "text_bytes_delta": 0
+      },
+      "dynrt_support_pic.o": {
+        "before": {
+          "sha256": "c5d42925ce2250fd2e834961545cc1073c4d77ee9c215ed38c47d9bd68e34b49",
+          "bytes": 30128,
+          "text_bytes": 17957
+        },
+        "after": {
+          "sha256": "c5d42925ce2250fd2e834961545cc1073c4d77ee9c215ed38c47d9bd68e34b49",
+          "bytes": 30128,
+          "text_bytes": 17957
+        },
+        "bytes_delta": 0,
+        "bytes_change_percent": 0.0,
+        "text_bytes_delta": 0
+      },
+      "dyn-release": {
+        "before": {
+          "sha256": "fd83b751deb9ddece31ad907c1732067bc64c11a471987da18b0ec9531ef5f45",
+          "bytes": 1476344,
+          "text_bytes": 1207845
+        },
+        "after": {
+          "sha256": "6e31b45bc6081dcec705fff28da87d1bc5fb9f6228183a9dade2ae4ffdd362cf",
+          "bytes": 1488848,
+          "text_bytes": 1220581
+        },
+        "bytes_delta": 12504,
+        "text_bytes_delta": 12736
+      }
+    },
+    "baseline_preserved": true,
+    "benchmark_timings_run": false
+  },
+  "compiler_sha256": "6e31b45bc6081dcec705fff28da87d1bc5fb9f6228183a9dade2ae4ffdd362cf",
+  "source_hashes_unchanged": true
+}

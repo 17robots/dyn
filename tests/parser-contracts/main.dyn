@@ -8,7 +8,7 @@ use "std/mem" mem
 use "std/unicode/utf8" utf8
 struct Chunk { source: []const u8, at: usize, split: usize, limit: usize }
 fn read_chunk(data: rawptr, destination: []u8) io.Result {
-  state := #cast(*Chunk) data
+  state := #cast(*Chunk, data)
   if state.at == #len(state.source) {
     return io.Result{ status: io.Status.End }
   }
@@ -29,7 +29,7 @@ fn read_chunk(data: rawptr, destination: []u8) io.Result {
   return io.Result{ transferred: take }
 }
 fn input(state: *Chunk) io.Reader {
-  return io.Reader{ data: #cast(rawptr) state, read: &read_chunk }
+  return io.Reader{ data: #cast(rawptr, state), read: read_chunk }
 }
 fn csv_check(source: []const u8, expected: bool) {
   for limit in 1..4 {
@@ -80,7 +80,7 @@ fn xml_check(source: []const u8, expected: bool) {
       if event.ok != original.ok || streamed.error != direct.error {
         #panic("XML chunk acceptance mismatch")
       }
-      if event.ok && (event.event.kind != original.event.kind || !bytes.equal(event.event.name, original.event.name) || !bytes.equal(event.event.text, original.event.text) || !bytes.equal(event.event.attributes, original.event.attributes)) {
+      if event.ok && (event.value.kind != original.value.kind || !bytes.equal(event.value.name, original.value.name) || !bytes.equal(event.value.text, original.value.text) || !bytes.equal(event.value.attributes, original.value.attributes)) {
         #panic("XML chunk contents mismatch")
       }
     }
@@ -93,16 +93,16 @@ fn json_document(source: []const u8, expected: bool) {
   // Arena exhaustion panics, so one roomy arena covers acceptance and rollback.
   backing: [4096]u8 = []
   arena := mem.arena_from_buffer(backing[..])
-  prefix := mem.arena_push(&arena, 7, 1)
+  prefix := mem.arena_push(arena, 7, 1)
   for i in 0..7 {
     prefix[..7][i] = 91
   }
-  mark := mem.arena_mark(&arena)
-  parsed := json.parse(&arena, source)
+  mark := mem.arena_mark(arena)
+  parsed := json.parse(arena, source)
   if parsed.ok != expected {
     #panic("JSON parse UTF8 result")
   }
-  if !parsed.ok && mem.arena_mark(&arena) != mark {
+  if !parsed.ok && mem.arena_mark(arena) != mark {
     #panic("JSON allocation rollback")
   }
   for byte in prefix[..7] {
@@ -137,7 +137,7 @@ fn json_bytes(value: []const u8, expected: bool) {
   json_document(quoted[..length], expected)
   arena_storage: [512]u8 = []
   arena := mem.arena_from_buffer(arena_storage[..])
-  string_value := json.make_string(&arena, value)
+  string_value := json.make_string(arena, value)
   if string_value == nil {
     #panic("JSON test string allocation")
   }
@@ -152,8 +152,8 @@ fn json_bytes(value: []const u8, expected: bool) {
     object[length+1+i] = tail[i]
   }
   json_document(object[..length+1+#len(tail)], expected)
-  object_value := json.make_object(&arena)
-  child := json.make_null(&arena)
+  object_value := json.make_object(arena)
+  child := json.make_null(arena)
   if object_value == nil || child == nil || !json.add_member(object_value, value, child) {
     #panic("JSON test member allocation")
   }
@@ -167,33 +167,15 @@ fn json_bytes(value: []const u8, expected: bool) {
   }
   object[#len(head)+length] = '}'
   json_document(object[..#len(head)+length+1], expected)
-  destination: [64]u8 = []
-  for capacity in 0..length+2 {
-    for i in 0..64 {
-      destination[i] = 123
+  storage: [64 + mem.ArenaBufferOverhead]u8 = []
+  output := mem.arena_from_buffer(storage[..])
+  written := json.write_string(output, value)
+  if !expected {
+    if #len(written) != 0 || mem.arena_used(output) != 0 {
+      #panic("JSON writes invalid UTF8")
     }
-    written := json.write_string(destination[..capacity], value)
-    if !expected {
-      if #len(written) != 0 {
-        #panic("JSON writes invalid UTF8")
-      }
-      for byte in destination {
-        if byte != 123 {
-          #panic("JSON invalid write changes destination")
-        }
-      }
-    } else if capacity >= length {
-      if !bytes.equal(written, quoted[..length]) {
-        #panic("JSON UTF8 roundtrip")
-      }
-    } else if #len(written) != 0 {
-      #panic("JSON insufficient output accepted")
-    }
-    for i in capacity..64 {
-      if destination[i] != 123 {
-        #panic("JSON exceeds output capacity")
-      }
-    }
+  } else if !bytes.equal(written, quoted[..length]) || mem.arena_used(output) != length {
+    #panic("JSON UTF8 roundtrip")
   }
 }
 fn json_contracts() {
@@ -225,12 +207,12 @@ fn recorded_errors() {
     if !item.ok {
       break
     }
-    if item.entry.kind == ini.Kind.Pair {
+    if item.value.kind == ini.Kind.Pair {
       keys += 1
     }
   }
-  if keys != 3 || scan.error != ini.ErrorKind.Syntax || scan.error_line != 2 || scan.errors != 2 {
-    #panic("INI keeps going and records the first error")
+  if keys != 1 || scan.error != ini.ErrorKind.Syntax || scan.error_line != 2 || scan.errors != 1 {
+    #panic("INI stops at the first error")
   }
   fields := csv.scanner("a,b\"c,d")
   buffer: [8]u8 = []
@@ -256,7 +238,7 @@ fn main() {
   recorded_errors()
   for value in 0..256 {
     source: [4]u8 = ['"', 'a', '"', 0]
-    source[3] = #cast(u8) value
+    source[3] = #cast(u8, value)
     expected := value == 44 || value == 10 || value == 13
     csv_check(source[..], expected)
   }

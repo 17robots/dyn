@@ -1,0 +1,29 @@
+{
+  "cases": 1828,
+  "full_comparisons": 32904,
+  "libraries": [
+    "dyn",
+    "dyn-tree",
+    "gcc",
+    "gcc-checked",
+    "gcc-scalar",
+    "gcc-checked-scalar",
+    "clang",
+    "clang-checked",
+    "gcc-noinline"
+  ],
+  "modes": [
+    0,
+    1
+  ],
+  "abi_sizes": [
+    16,
+    64,
+    32,
+    88,
+    48
+  ],
+  "misaligned_backing_offsets": 16,
+  "independent_oracle": "Python strict UTF8 JSON with lexical numbers and duplicate-preserving objects; exact normalized full DOM",
+  "case_sha256": "3155488eb74f00a4f1c075b153ff4072385c24f4e1e318ec59eaee7a13a434db"
+}

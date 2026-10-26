@@ -36,8 +36,7 @@ static inline wchar_t *dyn_host_wide(const char *text) {
 static inline char *dyn_host_realpath(const char *path, char *out) {
   wchar_t *wide = dyn_host_wide(path);
   if (!wide) return NULL;
-  HANDLE file = CreateFileW(wide, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-      NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+  HANDLE file = CreateFileW(wide, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
   free(wide);
   if (file == INVALID_HANDLE_VALUE) { errno = ENOENT; return NULL; }
   wchar_t buffer[32768];
@@ -53,7 +52,10 @@ static inline char *dyn_host_realpath(const char *path, char *out) {
   int bytes = WideCharToMultiByte(CP_UTF8, 0, start, -1, NULL, 0, NULL, NULL);
   if (bytes > 4096) { errno = ENAMETOOLONG; return NULL; }
   if (!out) out = malloc((size_t)bytes);
-  if (out) { WideCharToMultiByte(CP_UTF8, 0, start, -1, out, bytes, NULL, NULL); dyn_host_slashes(out); }
+  if (out) {
+    WideCharToMultiByte(CP_UTF8, 0, start, -1, out, bytes, NULL, NULL);
+    dyn_host_slashes(out);
+  }
   return out;
 }
 #define realpath dyn_host_realpath
@@ -89,15 +91,12 @@ static inline struct timespec dyn_host_filetime(int64_t ticks) {
 static inline int dyn_host_stat(const char *path, struct dyn_host_stat *out) {
   wchar_t *wide = dyn_host_wide(path);
   if (!wide) return -1;
-  HANDLE file = CreateFileW(wide, FILE_READ_ATTRIBUTES,
-      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
-      FILE_FLAG_BACKUP_SEMANTICS, NULL);
+  HANDLE file = CreateFileW(wide, FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
   free(wide);
   if (file == INVALID_HANDLE_VALUE) { errno = ENOENT; return -1; }
   BY_HANDLE_FILE_INFORMATION info;
   FILE_BASIC_INFO basic;
-  int ok = GetFileInformationByHandle(file, &info) &&
-      GetFileInformationByHandleEx(file, FileBasicInfo, &basic, sizeof(basic));
+  int ok = GetFileInformationByHandle(file, &info) && GetFileInformationByHandleEx(file, FileBasicInfo, &basic, sizeof(basic));
   CloseHandle(file);
   if (!ok) { errno = EIO; return -1; }
   out->st_dev = info.dwVolumeSerialNumber;
@@ -228,10 +227,8 @@ static inline bool dyn_host_runtime_file(const char *name, char *path, size_t ca
   char *slash = strrchr(executable, '/');
   if (!slash) return false;
   *slash = 0;
-  if (snprintf(path, capacity, "%s/%s", executable, name) < (int)capacity &&
-      !access(path, R_OK)) return true;
-  return snprintf(path, capacity, "%s/../lib/dyn/%s", executable, name) < (int)capacity &&
-         !access(path, R_OK);
+  if (snprintf(path, capacity, "%s/%s", executable, name) < (int)capacity && !access(path, R_OK)) return true;
+  return snprintf(path, capacity, "%s/../lib/dyn/%s", executable, name) < (int)capacity && !access(path, R_OK);
 }
 
 #endif

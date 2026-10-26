@@ -259,6 +259,46 @@ int dyn_source_target_enabled(const DynSource *s) {
   }
   return *p == ')' ? 1 : -1;
 }
+/* Whether byte lies in a module that has platform files but none for the
+   current target. Every error inside such a module follows from that, so
+   callers report it once per module. name receives the module, shortened to
+   its import path for standard modules. Cached per thread: errors cluster. */
+bool dyn_source_target_gap(const DynSource *s, size_t byte, char *name, size_t capacity) {
+  const char *path = NULL;
+  unsigned line = 0, column = 0;
+  dyn_source_location(s, byte, &path, &line, &column);
+  const char *slash = path ? strrchr(path, '/') : NULL;
+  if (!slash || (size_t)(slash - path) >= 4096) return false;
+  char directory[4096];
+  memcpy(directory, path, (size_t)(slash - path));
+  directory[slash - path] = 0;
+  return dyn_module_target_gap(&s->context, directory, name, capacity);
+}
+bool dyn_module_target_gap(const DynContext *context, const char *directory, char *name, size_t capacity) {
+  size_t length = strlen(directory);
+  if (!length || length >= 4096) return false;
+  static _Thread_local char cached[4096];
+  static _Thread_local bool cached_gap;
+  if (strcmp(cached, directory)) {
+    memcpy(cached, directory, length + 1);
+    DynSources sources = {0};
+    size_t gated = 0, enabled = 0;
+    if (!dyn_sources_load_quiet(context, cached, &sources)) {
+      for (size_t i = 0; i < sources.count; ++i) {
+        if (!source_target_directive(sources.items[i].text)) continue;
+        ++gated;
+        if (dyn_source_target_enabled(&sources.items[i]) == 1) ++enabled;
+      }
+      dyn_sources_free(&sources);
+    }
+    cached_gap = gated && !enabled;
+  }
+  if (!cached_gap) return false;
+  const char *shown = strstr(cached, "/std/");
+  shown = shown ? shown + 1 : cached;
+  int n = snprintf(name, capacity, "%s", shown);
+  return n > 0 && (size_t)n < capacity;
+}
 int dyn_sources_merge(const DynSources *sources, const char *module_name,
                       DynSource *out) {
   static const char reflection_prelude[] =

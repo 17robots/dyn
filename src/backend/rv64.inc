@@ -1,6 +1,7 @@
 /* RV64IMAFD instruction lowering. No compressed encodings or relaxation are
    required. The integer model uses caller-saved registers only; gp/tp stay
    untouched. x28-x31 retain synthesized arithmetic/comparison flags. */
+static void bare_stack_check(BackendContext *, uint32_t);
 static const unsigned char rv_reg[] = {10,5,11,12,13,14,15,16};
 static void rv_r(BackendContext *c,unsigned op,unsigned rd,unsigned rs,unsigned rt,unsigned f3,unsigned f7) {
   word(c,op|rd<<7|f3<<12|rs<<15|rt<<20|f7<<25);
@@ -54,7 +55,7 @@ static void rv_set(BackendContext *c,Cond cond) {
   size_t yes=rv_branch(c,cond);rv_imm(c,10,0);size_t end=rv_branch(c,-1);
   rv_patch(c,yes,c->text.n);rv_imm(c,10,1);rv_patch(c,end,c->text.n);
 }
-static void rv_push(BackendContext *c,Reg r) { ++c->stack_slots;rv_i(c,0x13,2,2,-16,0);rv_memory(c,true,rv_reg[r],2,0,3,false); }
+static void rv_push(BackendContext *c,Reg r) { bare_stack_check(c,16); ++c->stack_slots;rv_i(c,0x13,2,2,-16,0);rv_memory(c,true,rv_reg[r],2,0,3,false); }
 static void rv_pop(BackendContext *c,Reg r) { --c->stack_slots;rv_memory(c,false,rv_reg[r],2,0,3,false);rv_i(c,0x13,2,2,16,0); }
 static void rv_fp_bits(BackendContext *c,bool to_float,bool f32,unsigned d,unsigned s) {
   rv_r(c,0x53,d,s,0,0,(to_float?0x78:0x70)|(f32?0:1));
@@ -67,7 +68,7 @@ static void rv_symbol(BackendContext *c,unsigned d,unsigned symbol,int64_t adden
   if(c->rv_anchor_count>=MAX_NODES) { c->text.failed=true;return; }
   unsigned anchor=c->rv_anchor_count++;c->rv_anchors[anchor]=(uint32_t)at;
   relocate(c,symbol,got?20:23,addend);word(c,d<<7|0x17);
-  relocate(c,0x80000000u|anchor,24,0);rv_i(c,got?3:0x13,d,d,0,got?3:0);
+  relocate(c,0x80000000u|anchor,24,0);rv_i(c,got?3:0x13,d,d,0,got?(c->rv32?2:3):0);
 }
 static void rv_extend(BackendContext *c,unsigned bits,bool sign) {
   if(bits>=64)return;

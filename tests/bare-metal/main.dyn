@@ -1,0 +1,55 @@
+// Bare-metal check for riscv64-none, riscv32-none and thumbv7em-none: console
+// output, arenas from the fixed memory region, integer and float arithmetic,
+// and a clean exit. The board files write to each board's UART.
+use "std/fmt"
+use "std/io"
+use "std/mem"
+
+struct Particle {
+  x: f64,
+  velocity: f64,
+}
+
+fn print_number(label: []const u8, value: u64) {
+  digits: [20 + mem.ArenaBufferOverhead]u8
+  scratch := mem.arena_from_buffer(digits[..])
+  _ = io.write_all(io.stdout(), label)
+  _ = io.write_all(io.stdout(), fmt.u64_decimal(scratch, value))
+  _ = io.write_all(io.stdout(), "\n")
+}
+
+fn main() {
+  _ = io.write_all(io.stdout(), "hello from bare metal\n")
+  arena := mem.arena_create(256 * mem.KiB)
+  defer mem.arena_release(arena)
+  values: []u64
+  for i in 0..1000 {
+    _ = mem.append(arena, &values, #cast(u64, i) * 3)
+  }
+  sum: u64 = 0
+  for value in values {
+    sum += value
+  }
+  print_number("sum ", sum)
+  particles := mem.push_array(Particle, arena, 4)
+  for *particle in particles {
+    particle.velocity = 1.5
+  }
+  for step in 0..100 {
+    for *moving in particles {
+      moving.x += moving.velocity * 0.5
+    }
+  }
+  print_number("position ", #cast(u64, particles[3].x))
+  scratch := mem.arena_sub(arena, 4 * mem.KiB + mem.ArenaBufferOverhead)
+  bytes := mem.push_array(u8, scratch, 4096)
+  bytes[4095] = 7
+  print_number("scratch ", #cast(u64, bytes[4095]))
+  uart_write("mmio\n")
+  // 64-bit arithmetic is register pairs on the 32-bit targets.
+  big: u64 = 0xFFFFFFFF
+  big = big * 3 + 7
+  print_number("wide ", big / 5 + big % 1000)
+  pointer_size := #sizeof(usize)
+  print_number("usize ", #cast(u64, pointer_size) * 8)
+}

@@ -1,0 +1,700 @@
+// Experimental read-only JSON DOM. All values and decoded text belong to arena.
+// Values use a contiguous 16-byte tagged representation; no yyjson code is copied.
+// The Value fields are representation details. Use the accessors below.
+// Accessors accept live parser-produced pointers, nil or nil_value only.
+// Do not copy or move Value records: container children are relative to them.
+// Arena rewind/reset/release invalidates affected nodes, text and iterators.
+// Iterator must be zero-initialized or created by iterator(); advance only
+// through next(). Copying an iterator copies its position and borrowed view.
+use "std/errors" errors
+use "std/mem" memory
+use "std/strings" text
+use "std/unicode/utf8" utf8
+
+pub const KindMissing: u8 = 0
+pub const KindNull: u8 = 1
+pub const KindBool: u8 = 2
+pub const KindNumber: u8 = 3
+pub const KindString: u8 = 4
+pub const KindArray: u8 = 5
+pub const KindObject: u8 = 6
+pub enum ErrorKind { None, Syntax, TrailingData, NumberOverflow, Overlap, SizeOverflow }
+struct Cursor { source: []const u8, at: usize, error: ErrorKind }
+const MaximumDepth: usize = 256
+
+// Experimental read-only DOM. Inspired by compact tagged-value layouts;
+// no yyjson implementation code is copied.
+pub struct Value { tag: u64, bits: u64 }
+pub const nil_value: Value = Value{}
+pub struct ParseResult { root: *const Value, ok: bool, kind: errors.Kind, error: isize, offset: usize, detail: ErrorKind }
+struct ReadParser { cursor: Cursor, buffer: []u8, values: []Value, used: usize, limit: usize, arena: *memory.Arena }
+const ReadUnsigned: u64 = 256
+const ReadSigned: u64 = 512
+const ReadFloat: u64 = 768
+
+fn read_append(state: *ReadParser, kind: u8, bits: u64) usize {
+  if state.used == #len(state.values) {
+    old := #len(state.values)
+    capacity := old * 2
+    if capacity > state.limit {
+      capacity = state.limit
+    }
+    if capacity <= old {
+      #panic("JSON compact node bound")
+    }
+    if memory.arena_try_extend(state.arena, #cast(*u8, &state.values[0]), old * 16, (capacity - old) * 16) {
+      state.values = (&state.values[0])[..capacity]
+    }
+    else {
+      // Parsing retains indexes, not node pointers. Moving the complete tape
+      // preserves relative subtree spans; string pointers refer to stable buffer.
+      storage := memory.arena_push_uninit(state.arena, capacity * 16, 8)
+      replacement := #cast(*Value, storage)[..capacity]
+      _ = memory.copy(replacement[..state.used], state.values[..state.used])
+      state.values = replacement
+    }
+  }
+  index := state.used
+  state.values[index] = Value{ tag: #cast(u64, kind), bits: bits }
+  state.used += 1
+  return index
+}
+
+fn read_skip(cursor: *Cursor) {
+  source := cursor.source
+  at := cursor.at
+  for at < #len(source) {
+    byte := source[at]
+    if byte != ' ' && byte != 10 && byte != 13 && byte != 9 {
+      break
+    }
+    at += 1
+  }
+  cursor.at = at
+}
+fn read_number(state: *ReadParser) bool {
+  source := state.cursor.source
+  start := state.cursor.at
+  at := start
+  negative := source[at] == '-'
+  if negative {
+    at += 1
+  }
+  if at == #len(source) {
+    return false
+  }
+  integer: u64 = 0
+  exact := true
+  byte := source[at]
+  if byte == '0' {
+    at += 1
+  }
+  else {
+    if byte < '1' || byte > '9' {
+      return false
+    }
+    for at < #len(source) {
+      byte = source[at]
+      if byte < '0' || byte > '9' {
+        break
+      }
+      n := #cast(u64, byte - '0')
+      if exact {
+        if integer > 1844674407370955161 || (integer == 1844674407370955161 && n > 5) {
+          exact = false
+        }
+        else {
+          integer = #wrap(integer * 10 + n)
+        }
+      }
+      at += 1
+    }
+  }
+  if at < #len(source) && source[at] == '.' {
+    exact = false
+    at += 1
+    begin := at
+    for at < #len(source) {
+      byte = source[at]
+      if byte < '0' || byte > '9' {
+        break
+      }
+      at += 1
+    }
+    if at == begin {
+      state.cursor.at = at
+      return false
+    }
+  }
+  if at < #len(source) && (source[at] == 'e' || source[at] == 'E') {
+    exact = false
+    at += 1
+    if at < #len(source) && (source[at] == '+' || source[at] == '-') {
+      at += 1
+    }
+    begin := at
+    for at < #len(source) {
+      byte = source[at]
+      if byte < '0' || byte > '9' {
+        break
+      }
+      at += 1
+    }
+    if at == begin {
+      state.cursor.at = at
+      return false
+    }
+  }
+  state.cursor.at = at
+  if exact && !negative {
+    index := read_append(state, KindNumber, integer)
+    state.values[index].tag |= ReadUnsigned
+    return true
+  }
+  if exact && negative && integer != 0 && integer <= 9223372036854775808 {
+    magnitude := #wrap(0 - integer)
+    index := read_append(state, KindNumber, magnitude)
+    state.values[index].tag |= ReadSigned
+    return true
+  }
+  value := text.parse(f64, source[start..at])
+  if value > 1.7976931348623157e308 || value < -1.7976931348623157e308 {
+    state.cursor.error = ErrorKind.NumberOverflow
+    return false
+  }
+  index := read_append(state, KindNumber, #bitcast(u64, value))
+  state.values[index].tag |= ReadFloat
+  return true
+}
+
+// Caller has already identified the opening quote. Keys and ordinary string
+// values share the same decoding, allocation and node representation.
+fn read_string_value(state: *ReadParser) bool {
+  value := read_decoded_string(state)
+  if state.cursor.error != ErrorKind.None {
+    return false
+  }
+  pointer: u64 = 0
+  if #len(value) != 0 {
+    pointer = #cast(u64, #cast(usize, &value[0]))
+  }
+  index := read_append(state, KindString, pointer)
+  state.values[index].tag |= #cast(u64, #len(value)) << 8
+  return true
+}
+
+fn read_value(state: *ReadParser, depth: usize) bool {
+  read_skip(&state.cursor)
+  if state.cursor.at == #len(state.buffer) {
+    return false
+  }
+  byte := state.buffer[state.cursor.at]
+  if byte == '"' {
+    return read_string_value(state)
+  }
+  if byte == 'n' {
+    if !literal(&state.cursor, "null") {
+      return false
+    }
+    _ = read_append(state, KindNull, 0)
+    return true
+  }
+  if byte == 't' || byte == 'f' {
+    truth := byte == 't'
+    if truth {
+      if !literal(&state.cursor, "true") {
+        return false
+      }
+    }
+    else {
+      if !literal(&state.cursor, "false") {
+        return false
+      }
+    }
+    bits: u64 = 0
+    if truth {
+      bits = 1
+    }
+    _ = read_append(state, KindBool, bits)
+    return true
+  }
+  if byte != '[' && byte != '{' {
+    return read_number(state)
+  }
+  if depth >= MaximumDepth {
+    return false
+  }
+  object := byte == '{'
+  kind := KindArray
+  close: u8 = ']'
+  if object {
+    kind = KindObject
+    close = '}'
+  }
+  index := read_append(state, kind, 0)
+  state.cursor.at += 1
+  read_skip(&state.cursor)
+  count: usize = 0
+  if state.cursor.at < #len(state.buffer) && state.buffer[state.cursor.at] == close {
+    state.cursor.at += 1
+    state.values[index].bits = #cast(u64, state.used - index)
+    return true
+  }
+  for {
+    if object {
+      read_skip(&state.cursor)
+      if state.cursor.at == #len(state.buffer) || state.buffer[state.cursor.at] != '"' {
+        return false
+      }
+      if !read_string_value(state) {
+        return false
+      }
+      read_skip(&state.cursor)
+      if state.cursor.at == #len(state.buffer) || state.buffer[state.cursor.at] != ':' {
+        return false
+      }
+      state.cursor.at += 1
+    }
+    if !read_value(state, depth + 1) {
+      return false
+    }
+    count += 1
+    read_skip(&state.cursor)
+    if state.cursor.at == #len(state.buffer) {
+      return false
+    }
+    byte = state.buffer[state.cursor.at]
+    state.cursor.at += 1
+    if byte == close {
+      break
+    }
+    if byte != ',' {
+      return false
+    }
+  }
+  state.values[index].tag |= #cast(u64, count) << 8
+  state.values[index].bits = #cast(u64, state.used - index)
+  return true
+}
+
+// @ownership All values and text live in arena; source can change after success.
+// @failure Failure returns nil_value and rewinds allocations; exhaustion panics.
+// Finite binary64 reals, u64 positive integers and i64 negative integers are
+// retained. Other integers convert to binary64; real overflow is rejected.
+// Peak storage includes a geometrically grown value buffer (up to 32 initial
+// slots for containers). Moving growth retains earlier value-buffer copies until
+// arena rewind/reset; unused tail storage of the final buffer is reclaimed.
+// offset is the parser cursor; a bad string may report its content start.
+pub fn parse(arena: *memory.Arena, source: []const u8) ParseResult {
+  mark := memory.arena_mark(arena)
+  if #len(source) == 0 {
+    return ParseResult{ root: &nil_value, kind: errors.Kind.InvalidInput, detail: ErrorKind.Syntax }
+  }
+  maximum := ~#cast(usize, 0)
+  // Incomplete containers can consume one node per input byte before failure.
+  // The smaller complete-document estimate is only an initial capacity hint.
+  limit := #len(source)
+  if limit > maximum / 16 || #cast(u64, #len(source)) > 0x00ffffffffffffff {
+    return ParseResult{ root: &nil_value, kind: errors.Kind.Overflow, detail: ErrorKind.SizeOverflow }
+  }
+  if memory.arena_overlaps_unallocated(arena, source) {
+    return ParseResult{ root: &nil_value, kind: errors.Kind.InvalidInput, detail: ErrorKind.Overlap }
+  }
+  copy := memory.arena_push_uninit(arena, #len(source), 1)
+  buffer := copy[..#len(source)]
+  _ = memory.copy(buffer, source)
+  capacity := #len(source) / 2 + 1
+  if capacity > 32 {
+    capacity = 32
+  }
+  probe := Cursor{ source: buffer }
+  read_skip(&probe)
+  if probe.at < #len(buffer) && buffer[probe.at] != '[' && buffer[probe.at] != '{' {
+    capacity = 1
+  }
+  storage := memory.arena_push_uninit(arena, capacity * 16, 8)
+  values := #cast(*Value, storage)[..capacity]
+  state := ReadParser{ cursor: probe, buffer: buffer, values: values, limit: limit, arena: arena }
+  ok := read_value(&state, 0)
+  read_skip(&state.cursor)
+  if !ok || state.cursor.at != #len(source) {
+    offset := state.cursor.at
+    detail := state.cursor.error
+    if detail == ErrorKind.None {
+      detail = ErrorKind.Syntax
+    }
+    if ok {
+      detail = ErrorKind.TrailingData
+    }
+    memory.arena_rewind(arena, mark)
+    category := errors.Kind.InvalidInput
+    if detail == ErrorKind.NumberOverflow {
+      category = errors.Kind.Overflow
+    }
+    return ParseResult{ root: &nil_value, kind: category, offset: offset, detail: detail }
+  }
+  unused := (#len(state.values) - state.used) * 16
+  memory.arena_rewind(arena, memory.arena_mark(arena) - unused)
+  return ParseResult{ root: &state.values[0], ok: true }
+}
+
+pub fn kind(value: *const Value) u8 {
+  if value == nil {
+    return KindMissing
+  }
+  return #cast(u8, value.tag & 255)
+}
+pub fn length(value: *const Value) usize {
+  if value == nil {
+    return 0
+  }
+  value_kind := #cast(u8, value.tag & 255)
+  if value_kind == KindString || value_kind == KindArray || value_kind == KindObject {
+    return #cast(usize, value.tag >> 8)
+  }
+  return 0
+}
+pub fn as_text(value: *const Value) []const u8 {
+  if value == nil || (value.tag & 255) != #cast(u64, KindString) {
+    return ""
+  }
+  length := #cast(usize, value.tag >> 8)
+  if length == 0 {
+    return ""
+  }
+  return #cast(*const u8, #cast(usize, value.bits))[..length]
+}
+pub fn as_f64(value: *const Value) f64 {
+  if value == nil || (value.tag & 255) != #cast(u64, KindNumber) {
+    return 0.0
+  }
+  number_type := value.tag & 65280
+  if number_type == ReadUnsigned {
+    return #cast(f64, value.bits)
+  }
+  if number_type == ReadSigned {
+    return #cast(f64, #bitcast(i64, value.bits))
+  }
+  return #bitcast(f64, value.bits)
+}
+pub fn as_bool(value: *const Value) bool {
+  return value != nil && (value.tag & 255) == #cast(u64, KindBool) && value.bits != 0
+}
+fn read_after(value: *const Value) *const Value {
+  span: usize = 1
+  value_kind := #cast(u8, value.tag & 255)
+  if value_kind == KindArray || value_kind == KindObject {
+    span = #cast(usize, value.bits)
+  }
+  return #cast(*const Value, #cast(usize, value) + span * 16)
+}
+pub fn get(object: *const Value, key: []const u8) *const Value {
+  if object == nil || (object.tag & 255) != #cast(u64, KindObject) {
+    return &nil_value
+  }
+  at := #cast(*const Value, #cast(usize, object) + 16)
+  for i in 0..#cast(usize, object.tag >> 8) {
+    value := #cast(*const Value, #cast(usize, at) + 16)
+    length := #cast(usize, at.tag >> 8)
+    if length == #len(key) {
+      if length == 0 {
+        return value
+      }
+      name := #cast(*const u8, #cast(usize, at.bits))[..length]
+      if text.equal(name, key) {
+        return value
+      }
+    }
+    at = read_after(value)
+  }
+  return &nil_value
+}
+pub fn at(array: *const Value, index: usize) *const Value {
+  if array == nil || (array.tag & 255) != #cast(u64, KindArray) || index >= #cast(usize, array.tag >> 8) {
+    return &nil_value
+  }
+  at := #cast(*const Value, #cast(usize, array) + 16)
+  for i in 0..index {
+    at = read_after(at)
+  }
+  return at
+}
+
+// Stop before any byte that needs the full JSON string scanner. The compiler
+// may replace this exact SDK helper with bounded SIMD; other targets use this
+// body, including for short slices and bytes outside printable ASCII.
+fn ascii_string_prefix(source: []const u8) usize {
+  for i in 0..#len(source) {
+    byte := source[i]
+    if byte < 32 || byte >= 128 || byte == '"' || byte == '\\' {
+      return i
+    }
+  }
+  return #len(source)
+}
+
+fn read_decoded_string(state: *ReadParser) []const u8 {
+  cursor := &state.cursor
+  source := cursor.source
+  if cursor.at >= #len(source) || source[cursor.at] != '"' {
+    return failed_string(cursor)
+  }
+  cursor.at += 1
+  start := cursor.at
+  end := start
+  end += ascii_string_prefix(source[start..])
+  has_escape: bool = false
+  ascii: bool = true
+  for end < #len(source) {
+    byte := source[end]
+    if byte == '"' {
+      break
+    }
+    if byte >= 128 {
+      ascii = false
+    }
+    if byte == '\\' {
+      has_escape = true
+      end += 1
+      if end >= #len(source) {
+        return failed_string(cursor)
+      }
+      byte = source[end]
+      if byte >= 128 {
+        ascii = false
+      }
+    }
+    if byte < 32 {
+      return failed_string(cursor)
+    }
+    end += 1
+  }
+
+  if end >= #len(source) {
+    return failed_string(cursor)
+  }
+  if !ascii && !utf8.valid(source[start..end]) {
+    return failed_string(cursor)
+  }
+  if end == start {
+    cursor.at = end + 1
+    return source[start..end]
+  }
+  output := state.buffer[start..end]
+  if !has_escape {
+    cursor.at = end + 1
+    return output
+  }
+  source_at := start
+  output_at: usize = 0
+  for source_at < end {
+    byte := source[source_at]
+    source_at += 1
+    if byte == '\\' {
+      if source_at >= end {
+        return failed_string(cursor)
+      }
+      escaped := source[source_at]
+      source_at += 1
+      if escaped == '"' || escaped == '\\' || escaped == '/' {
+        byte = escaped
+      }
+      else if escaped == 'b' {
+        byte = 8
+      }
+      else if escaped == 'f' {
+        byte = 12
+      }
+      else if escaped == 'n' {
+        byte = '\n'
+      }
+      else if escaped == 'r' {
+        byte = '\r'
+      }
+      else if escaped == 't' {
+        byte = '\t'
+      }
+      else if escaped == 'u' {
+        if source_at + 4 > end {
+          return failed_string(cursor)
+        }
+        code: usize = 0
+        for digits in 0..4 {
+          part := hex_value(source[source_at])
+          if part == 16 {
+            return failed_string(cursor)
+          }
+          code = code * 16 + part
+          source_at += 1
+        }
+        if code >= 55296 && code <= 56319 {
+          if source_at + 6 > end || source[source_at] != '\\' || source[source_at + 1] != 'u' {
+            return failed_string(cursor)
+          }
+          source_at += 2
+          low: usize = 0
+          for low_digits in 0..4 {
+            low_part := hex_value(source[source_at])
+            if low_part == 16 {
+              return failed_string(cursor)
+            }
+            low = low * 16 + low_part
+            source_at += 1
+          }
+          if low < 56320 || low > 57343 {
+            return failed_string(cursor)
+          }
+          code = 65536 + (code - 55296) * 1024 + low - 56320
+        } else if code >= 56320 && code <= 57343 {
+          return failed_string(cursor)
+        }
+        if code <= 127 {
+          output[output_at] = #cast(u8, code)
+          output_at += 1
+        } else if code <= 2047 {
+          output[output_at] = utf8_byte(code >> 6, 192)
+          output[output_at + 1] = utf8_byte(code & 63, 128)
+          output_at += 2
+        } else if code <= 65535 {
+          output[output_at] = utf8_byte(code >> 12, 224)
+          output[output_at + 1] = utf8_byte((code >> 6) & 63, 128)
+          output[output_at + 2] = utf8_byte(code & 63, 128)
+          output_at += 3
+        } else {
+          output[output_at] = utf8_byte(code >> 18, 240)
+          output[output_at + 1] = utf8_byte((code >> 12) & 63, 128)
+          output[output_at + 2] = utf8_byte((code >> 6) & 63, 128)
+          output[output_at + 3] = utf8_byte(code & 63, 128)
+          output_at += 4
+        }
+        continue
+      } else {
+        return failed_string(cursor)
+      }
+    }
+    output[output_at] = byte
+    output_at += 1
+  }
+  cursor.at = end + 1
+  return output[..output_at]
+}
+
+
+fn hex_value(byte: u8) usize {
+  if byte >= '0' && byte <= '9' {
+    return #cast(usize, (byte - '0'))
+  }
+  if byte >= 'a' && byte <= 'f' {
+    return #cast(usize, (byte - 'a')) + 10
+  }
+  if byte >= 'A' && byte <= 'F' {
+    return #cast(usize, (byte - 'A')) + 10
+  }
+  return 16
+}
+
+fn utf8_byte(value: usize, marker: u8) u8 {
+  converted: u8 = #cast(u8, value)
+  return converted | marker
+}
+
+fn literal(cursor: *Cursor, text: []const u8) bool {
+  if cursor.at + #len(text) > #len(cursor.source) {
+    return false
+  }
+  for i in 0..#len(text) {
+    if cursor.source[cursor.at + i] != text[i] {
+      return false
+    }
+  }
+  cursor.at += #len(text)
+  return true
+}
+
+fn failed_string(cursor: *Cursor) []const u8 {
+  if cursor.error == ErrorKind.None {
+    cursor.error = ErrorKind.Syntax
+  }
+  return cursor.source[..0]
+}
+
+
+// Zero is returned for a wrong kind, a fractional real or an out-of-range value.
+pub fn as_u64(value: *const Value) u64 {
+  if value == nil || (value.tag & 255) != #cast(u64, KindNumber) {
+    return 0
+  }
+  number_type := value.tag & 65280
+  if number_type == ReadUnsigned {
+    return value.bits
+  }
+  if number_type == ReadSigned {
+    integer := #bitcast(i64, value.bits)
+    if integer < 0 {
+      return 0
+    }
+    return #cast(u64, integer)
+  }
+  real := #bitcast(f64, value.bits)
+  if !(real >= 0.0 && real < 18446744073709551616.0) {
+    return 0
+  }
+  integer := #cast(u64, real)
+  if #cast(f64, integer) != real {
+    return 0
+  }
+  return integer
+}
+pub fn as_i64(value: *const Value) i64 {
+  if value == nil || (value.tag & 255) != #cast(u64, KindNumber) {
+    return 0
+  }
+  number_type := value.tag & 65280
+  if number_type == ReadSigned {
+    return #bitcast(i64, value.bits)
+  }
+  if number_type == ReadUnsigned {
+    if value.bits > 9223372036854775807 {
+      return 0
+    }
+    return #cast(i64, value.bits)
+  }
+  real := #bitcast(f64, value.bits)
+  if !(real >= -9223372036854775808.0 && real < 9223372036854775808.0) {
+    return 0
+  }
+  integer := #cast(i64, real)
+  if #cast(f64, integer) != real {
+    return 0
+  }
+  return integer
+}
+pub fn is_missing(value: *const Value) bool {
+  return value == nil || (value.tag & 255) == 0
+}
+
+pub struct Iterator { cursor: *const Value, remaining: usize, object: bool }
+pub struct Entry { value: *const Value, key: []const u8, ok: bool }
+// @ownership Iterator and entries borrow the document's arena storage.
+// Iteration is linear; repeated at(array, index) traversal can be quadratic.
+pub fn iterator(container: *const Value) Iterator {
+  value_kind := kind(container)
+  if value_kind != KindArray && value_kind != KindObject {
+    return Iterator{}
+  }
+  return Iterator{ cursor: #cast(*const Value, #cast(usize, container) + 16), remaining: length(container), object: value_kind == KindObject }
+}
+pub fn next(state: *Iterator) Entry {
+  if state == nil || state.remaining == 0 {
+    return Entry{ value: &nil_value }
+  }
+  value := state.cursor
+  key: []const u8
+  if state.object {
+    key = as_text(value)
+    value = read_after(value)
+  }
+  state.cursor = read_after(value)
+  state.remaining -= 1
+  return Entry{ value: value, key: key, ok: true }
+}

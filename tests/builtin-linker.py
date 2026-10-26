@@ -56,14 +56,14 @@ fn mix(x: u64) u64 {
 }
 fn main() {
   arena := mem.arena_create(4096)
-  values := mem.arena_push(&arena, 64, 8)[..64]
+  values := mem.arena_push(arena, 64, 8)[..64]
   state: u64 = 1
   for i in 0..64 {
-    state = mix(state + #cast(u64) i) % 1000003
-    values[i] = #cast(u8) state
+    state = mix(state + #cast(u64, i)) % 1000003
+    values[i] = #cast(u8, state)
   }
   _ = io.println(io.stdout(), "{}", state)
-  mem.arena_release(&arena)
+  mem.arena_release(arena)
 }
 '''
 LIBRARY = r'''
@@ -76,7 +76,7 @@ extern int dyn_shared_value;
 int dyn_fixture_read(void) { return dyn_shared_value; }
 '''
 DYNAMIC = '''extern fn add "dyn_shared_add"(value: i32) i32
-extern fn call "dyn_shared_call"(callback: *fn(i32) i32) i32
+extern fn call "dyn_shared_call"(callback: fn(i32) i32) i32
 extern fn read "dyn_fixture_read"() i32
 fn twice(value: i32) i32 {
   return value * 2
@@ -84,7 +84,7 @@ fn twice(value: i32) i32 {
 fn main() {
   if add(1) != 42 { #panic("PLT call") }
   if read() != 41 { #panic("copied data") }
-  if call(&twice) != 84 { #panic("callback") }
+  if call(twice) != 84 { #panic("callback") }
   // The library writes the executable's copy, so both sides agree.
   if read() != 42 { #panic("shared copy") }
 }

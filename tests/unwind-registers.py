@@ -35,7 +35,8 @@ fn child(v: f64) {
   opaque()
   if v > 0.0 { #panic("float unwind") }
 }
-fn parent(v: f64) { defer cleanup(v) child(v + 1.0) }
+fn parent(v: f64) { defer cleanup(v)
+child(v + 1.0) }
 fn main() { parent(input()) }
 '''
 

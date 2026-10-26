@@ -4,6 +4,143 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Keep SDK candidate order in sync with module.c's resolve_std, without a
+   frontend-only link dependency on the module resolver. Missing paths or OOM
+   simply leave this optional optimization unrecognized. */
+extern char *realpath(const char *, char *);
+static char *sdk_source_path(const char *path, bool strict_configured) {
+  const char *configured = getenv("DYN_SDK");
+  if (configured && *configured) {
+    char *root = realpath(configured, NULL);
+    if (root) {
+      char *candidate = dyn_path_join(root, path);
+      if (!candidate) { free(root); return NULL; }
+      char *resolved = realpath(candidate, NULL);
+      free(candidate);
+      size_t n = strlen(root);
+      bool within = resolved && !strncmp(root, resolved, n) &&
+                    (resolved[n] == 0 || resolved[n] == '/');
+      free(root);
+      if (within) return resolved;
+      free(resolved);
+    }
+    if (strict_configured) return NULL;
+  }
+  char executable[4096], candidate[4096];
+  ssize_t n = dyn_host_executable(executable, sizeof(executable) - 1);
+  if (n < 0) return NULL;
+  executable[n] = 0;
+  char *slash = strrchr(executable, '/');
+  if (!slash) return NULL;
+  *slash = 0;
+  const char *formats[] = {"%s/../compiler/%s", "%s/../%s", "%s/../share/dyn/%s"};
+  for (size_t i = 0; i < sizeof(formats) / sizeof(*formats); ++i) {
+    int length = snprintf(candidate, sizeof(candidate), formats[i], executable,
+                          i == 2 ? path + 4 : path);
+    if (length < 0 || (size_t)length >= sizeof(candidate)) continue;
+    char *resolved = realpath(candidate, NULL);
+    if (resolved) return resolved;
+  }
+  return NULL;
+}
+static DynMathIntrinsic math_identity(const DynSource *source,
+                                     const char *source_path, const char *sdk,
+                                     const DynIrProgram *ir, const DynIrFunction *fn) {
+  if (!sdk || !source_path || fn->foreign || fn->variadic || fn->generic ||
+      !fn->is_public || (fn->return_type != DYN_TYPE_F32 && fn->return_type != DYN_TYPE_F64))
+    return DYN_MATH_INTRINSIC_NONE;
+  char *canonical = realpath(source_path, NULL);
+  bool trusted = canonical && !strcmp(canonical, sdk);
+  free(canonical);
+  if (!trusted) return DYN_MATH_INTRINSIC_NONE;
+  const char *original, *ignored_path;
+  size_t length, offset;
+  dyn_source_position(source, fn->source_offset, &ignored_path, &original, &length, &offset);
+  size_t end = offset;
+  while (end < length && ((original[end] >= 'a' && original[end] <= 'z') ||
+         (original[end] >= 'A' && original[end] <= 'Z') ||
+         (original[end] >= '0' && original[end] <= '9') || original[end] == '_')) ++end;
+  const char *names[] = {"sqrt64", "floor64", "ceil64", "trunc64", "round64", "copysign64", "fma64", "fma"};
+  for (size_t i = 0; i < sizeof(names) / sizeof(*names); ++i) {
+    if (end - offset != strlen(names[i]) || memcmp(original + offset, names[i], end - offset)) continue;
+    bool generic_fma = i == 7;
+    if (fn->instance != generic_fma || (!generic_fma && fn->return_type != DYN_TYPE_F64)) break;
+    uint32_t count = i >= 6 ? 3 : i == 5 ? 2 : 1;
+    if (fn->param_count != count || fn->param_start > ir->param_count ||
+        count > ir->param_count - fn->param_start) break;
+    for (uint32_t j = 0; j < count; ++j)
+      if (ir->params[fn->param_start + j].type != fn->return_type) return DYN_MATH_INTRINSIC_NONE;
+    return generic_fma ? DYN_MATH_INTRINSIC_FMA : (DynMathIntrinsic)(DYN_MATH_INTRINSIC_SQRT + i);
+  }
+  return DYN_MATH_INTRINSIC_NONE;
+}
+
+static bool byte_const_slice(const DynAstProgram *a, DynType type) {
+  return dyn_type_is_slice(type) && type - DYN_TYPE_SLICE_BASE < a->slice_count &&
+         a->slices[type - DYN_TYPE_SLICE_BASE].is_const &&
+         a->slices[type - DYN_TYPE_SLICE_BASE].element == DYN_TYPE_U8;
+}
+/* Only the current SDK's original ordinary declaration can gain this identity.
+   Read AST slice metadata: IR slice entries are populated after functions. */
+static DynByteIntrinsic byte_identity(const DynSource *source,
+                                     const char *source_path, const char *sdk,
+                                     const DynAstProgram *a, const DynIrProgram *ir,
+                                     const DynIrFunction *fn) {
+  if (!sdk || !source_path || fn->foreign || fn->variadic || fn->generic ||
+      fn->instance || !fn->is_public || fn->return_type != DYN_TYPE_USIZE ||
+      fn->param_count != 2 || fn->param_start > ir->param_count ||
+      2 > ir->param_count - fn->param_start ||
+      !byte_const_slice(a, ir->params[fn->param_start].type))
+    return DYN_BYTE_INTRINSIC_NONE;
+  char *canonical = realpath(source_path, NULL);
+  bool trusted = canonical && !strcmp(canonical, sdk);
+  free(canonical);
+  if (!trusted) return DYN_BYTE_INTRINSIC_NONE;
+  const char *original, *ignored_path;
+  size_t length, offset;
+  dyn_source_position(source, fn->source_offset, &ignored_path, &original, &length, &offset);
+  if (offset > length) return DYN_BYTE_INTRINSIC_NONE;
+  size_t end = offset;
+  while (end < length && ((original[end] >= 'a' && original[end] <= 'z') ||
+         (original[end] >= 'A' && original[end] <= 'Z') ||
+         (original[end] >= '0' && original[end] <= '9') || original[end] == '_')) ++end;
+  DynType needle = ir->params[fn->param_start + 1].type;
+  if (end - offset == 9 && !memcmp(original + offset, "find_byte", 9) && needle == DYN_TYPE_U8)
+    return DYN_BYTE_INTRINSIC_FIND_BYTE;
+  if (end - offset == 4 && !memcmp(original + offset, "find", 4) && byte_const_slice(a, needle))
+    return DYN_BYTE_INTRINSIC_FIND;
+  return DYN_BYTE_INTRINSIC_NONE;
+}
+
+/* The private JSON scanner has a scalar body on every target. Only its exact
+   SDK declaration may use the bounded x86 implementation. */
+static DynByteIntrinsic json_byte_identity(const DynSource *source,
+                                          const char *source_path, const char *sdk,
+                                          const DynAstProgram *a, const DynIrProgram *ir,
+                                          const DynIrFunction *fn) {
+  if (!sdk || !source_path || fn->foreign || fn->variadic || fn->generic || fn->instance ||
+      fn->return_type != DYN_TYPE_USIZE || fn->param_count != 1 ||
+      fn->param_start >= ir->param_count ||
+      !byte_const_slice(a, ir->params[fn->param_start].type)) return DYN_BYTE_INTRINSIC_NONE;
+  char *canonical = realpath(source_path, NULL);
+  bool trusted = canonical && !strcmp(canonical, sdk);
+  free(canonical);
+  if (!trusted) return DYN_BYTE_INTRINSIC_NONE;
+  const char *original, *ignored_path;
+  size_t length, offset;
+  dyn_source_position(source, fn->source_offset, &ignored_path, &original, &length, &offset);
+  const char name[] = "ascii_string_prefix";
+  size_t n = sizeof(name) - 1;
+  if (offset > length || n > length - offset || memcmp(original + offset, name, n))
+    return DYN_BYTE_INTRINSIC_NONE;
+  if (offset + n < length) {
+    unsigned char c = (unsigned char)original[offset + n];
+    if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+        (c >= '0' && c <= '9') || c == '_') return DYN_BYTE_INTRINSIC_NONE;
+  }
+  return DYN_BYTE_INTRINSIC_JSON_ASCII_PREFIX;
+}
+
 static bool allocate(void **out, size_t count, size_t size) {
   if (!count) {
     *out = NULL;
@@ -53,142 +190,89 @@ static bool unsigned_type(DynType t) {
   return (t >= DYN_TYPE_U8 && t <= DYN_TYPE_U64) || t == DYN_TYPE_USIZE;
 }
 static uint64_t unsigned_max(DynType t, unsigned pointer_bytes) {
-  if (t == DYN_TYPE_U8)
-    return UINT8_MAX;
-  if (t == DYN_TYPE_U16)
-    return UINT16_MAX;
-  if (t == DYN_TYPE_U32 || (t == DYN_TYPE_USIZE && pointer_bytes == 4))
-    return UINT32_MAX;
+  if (t == DYN_TYPE_U8) return UINT8_MAX;
+  if (t == DYN_TYPE_U16) return UINT16_MAX;
+  if (t == DYN_TYPE_U32 || (t == DYN_TYPE_USIZE && pointer_bytes == 4)) return UINT32_MAX;
   return UINT64_MAX;
 }
-static UIntRange uint_range(const DynIrProgram *ir, DynExprId id,
-                            RangeLocals locals, unsigned pointer_bytes,
-                            size_t depth) {
-  if (id == DYN_NO_EXPR || id >= ir->expression_count ||
-      depth > ir->expression_count)
-    return (UIntRange){0};
+static UIntRange uint_range(const DynIrProgram *ir, DynExprId id, RangeLocals locals, unsigned pointer_bytes, size_t depth) {
+  if (id == DYN_NO_EXPR || id >= ir->expression_count || depth > ir->expression_count) return (UIntRange){0};
   const DynIrExpr *e = &ir->expressions[id];
-  if (e->kind == DYN_EXPR_BOOL)
-    return (UIntRange){true, true, e->boolean, e->boolean};
-  if (e->kind == DYN_EXPR_INT || e->kind == DYN_EXPR_CHAR)
-    return (UIntRange){true, true, e->integer, e->integer};
-  if (e->kind == DYN_EXPR_NAME && range_has_local(locals, e->integer))
-    return locals.values[e->integer - locals.start];
+  if (e->kind == DYN_EXPR_BOOL) return (UIntRange){true, true, e->boolean, e->boolean};
+  if (e->kind == DYN_EXPR_INT || e->kind == DYN_EXPR_CHAR) return (UIntRange){true, true, e->integer, e->integer};
+  if (e->kind == DYN_EXPR_NAME && range_has_local(locals, e->integer)) return locals.values[e->integer - locals.start];
   if (e->kind == DYN_EXPR_CONVERT || e->kind == DYN_EXPR_CAST) {
-    if (!unsigned_type(e->type))
-      return (UIntRange){0};
+    if (!unsigned_type(e->type)) return (UIntRange){0};
     UIntRange source = uint_range(ir, e->left, locals, pointer_bytes, depth + 1);
     uint64_t limit = unsigned_max(e->type, pointer_bytes);
-    if (!source.valid || source.max > limit)
-      return (UIntRange){true, false, limit, 0};
+    if (!source.valid || source.max > limit) return (UIntRange){true, false, limit, 0};
     source.max = source.max < limit ? source.max : limit;
-    if (source.exact && source.value > limit)
-      source.exact = false;
+    if (source.exact && source.value > limit) source.exact = false;
     return source;
   }
-  if (e->kind == DYN_EXPR_INDEX && unsigned_type(e->type))
-    return (UIntRange){true, false, unsigned_max(e->type, pointer_bytes), 0};
-  if (e->kind != DYN_EXPR_BINARY || e->wrap)
-    return (UIntRange){0};
-  UIntRange left = uint_range(ir, e->left, locals, pointer_bytes, depth + 1),
-            right = uint_range(ir, e->right, locals, pointer_bytes, depth + 1);
-  if (!left.valid || !right.valid)
-    return (UIntRange){0};
+  if (e->kind == DYN_EXPR_INDEX && unsigned_type(e->type)) return (UIntRange){true, false, unsigned_max(e->type, pointer_bytes), 0};
+  if (e->kind != DYN_EXPR_BINARY || e->wrap) return (UIntRange){0};
+  UIntRange left = uint_range(ir, e->left, locals, pointer_bytes, depth + 1), right = uint_range(ir, e->right, locals, pointer_bytes, depth + 1);
+  if (!left.valid || !right.valid) return (UIntRange){0};
   if (e->op == DYN_OP_BIT_AND) {
     uint64_t max = left.max < right.max ? left.max : right.max;
-    if (right.exact && right.value < max)
-      max = right.value;
-    if (left.exact && left.value < max)
-      max = left.value;
-    return (UIntRange){true, left.exact && right.exact, max,
-                       left.value & right.value};
+    if (right.exact && right.value < max) max = right.value;
+    if (left.exact && left.value < max) max = left.value;
+    return (UIntRange){true, left.exact && right.exact, max, left.value & right.value};
   }
   if (e->op == DYN_OP_ADD && UINT64_MAX - left.max >= right.max) {
     uint64_t max = left.max + right.max;
-    return (UIntRange){true, left.exact && right.exact, max,
-                       left.value + right.value};
+    return (UIntRange){true, left.exact && right.exact, max, left.value + right.value};
   }
-  if (e->op == DYN_OP_MUL &&
-      (left.max == 0 || right.max <= UINT64_MAX / left.max)) {
+  if (e->op == DYN_OP_MUL && (left.max == 0 || right.max <= UINT64_MAX / left.max)) {
     uint64_t max = left.max * right.max;
-    return (UIntRange){true, left.exact && right.exact, max,
-                       left.value * right.value};
+    return (UIntRange){true, left.exact && right.exact, max, left.value * right.value};
   }
   return (UIntRange){0};
 }
 static bool range_pure(const DynIrProgram *ir, DynExprId id, size_t depth) {
-  if (id == DYN_NO_EXPR || id >= ir->expression_count ||
-      depth > ir->expression_count)
-    return false;
+  if (id == DYN_NO_EXPR || id >= ir->expression_count || depth > ir->expression_count) return false;
   const DynIrExpr *e = &ir->expressions[id];
-  if (e->kind == DYN_EXPR_INT || e->kind == DYN_EXPR_CHAR ||
-      e->kind == DYN_EXPR_BOOL || e->kind == DYN_EXPR_NAME ||
-      e->kind == DYN_EXPR_GLOBAL)
-    return true;
-  if (e->kind == DYN_EXPR_CONVERT || e->kind == DYN_EXPR_CAST)
-    return range_pure(ir, e->left, depth + 1);
-  if (e->kind == DYN_EXPR_INDEX || e->kind == DYN_EXPR_BINARY)
-    return range_pure(ir, e->left, depth + 1) &&
-           range_pure(ir, e->right, depth + 1);
+  if (e->kind == DYN_EXPR_INT || e->kind == DYN_EXPR_CHAR || e->kind == DYN_EXPR_BOOL || e->kind == DYN_EXPR_NAME || e->kind == DYN_EXPR_GLOBAL) return true;
+  if (e->kind == DYN_EXPR_CONVERT || e->kind == DYN_EXPR_CAST) return range_pure(ir, e->left, depth + 1);
+  if (e->kind == DYN_EXPR_INDEX || e->kind == DYN_EXPR_BINARY) return range_pure(ir, e->left, depth + 1) && range_pure(ir, e->right, depth + 1);
   return false;
 }
 static bool simple_loop_body(const DynIrProgram *ir, const DynIrStmt *loop) {
   for (uint32_t i = 0; i < loop->body_count; ++i) {
     const DynIrStmt *st = &ir->statements[ir->children[loop->body_start + i]];
     if (st->kind == DYN_STMT_LOCAL) {
-      if (!range_pure(ir, st->expression, 0))
-        return false;
+      if (!range_pure(ir, st->expression, 0)) return false;
       continue;
     }
     if (st->kind == DYN_STMT_ASSIGN) {
-      if (st->target != DYN_NO_EXPR || !range_pure(ir, st->expression, 0))
-        return false;
+      if (st->target != DYN_NO_EXPR || !range_pure(ir, st->expression, 0)) return false;
       continue;
     }
     return false;
   }
   return true;
 }
-static void prove_array_bounds(DynIrProgram *ir, DynExprId id,
-                               RangeLocals locals, unsigned pointer_bytes,
-                               size_t depth) {
-  if (id == DYN_NO_EXPR || id >= ir->expression_count ||
-      depth > ir->expression_count)
-    return;
+static void prove_array_bounds(DynIrProgram *ir, DynExprId id, RangeLocals locals, unsigned pointer_bytes, size_t depth) {
+  if (id == DYN_NO_EXPR || id >= ir->expression_count || depth > ir->expression_count) return;
   DynIrExpr *e = &ir->expressions[id];
   prove_array_bounds(ir, e->left, locals, pointer_bytes, depth + 1);
   prove_array_bounds(ir, e->right, locals, pointer_bytes, depth + 1);
-  for (uint32_t i = 0; i < e->item_count; ++i)
-    prove_array_bounds(ir, ir->items[e->item_start + i].expression, locals,
-                       pointer_bytes, depth + 1);
-  if (e->kind != DYN_EXPR_INDEX ||
-      !dyn_type_is_array(ir->expressions[e->left].type))
-    return;
+  for (uint32_t i = 0; i < e->item_count; ++i) prove_array_bounds(ir, ir->items[e->item_start + i].expression, locals, pointer_bytes, depth + 1);
+  if (e->kind != DYN_EXPR_INDEX || !dyn_type_is_array(ir->expressions[e->left].type)) return;
   UIntRange index = uint_range(ir, e->right, locals, pointer_bytes, 0);
-  DynIrArray *array =
-      &ir->arrays[ir->expressions[e->left].type - DYN_TYPE_ARRAY_BASE];
-  if (index.valid && index.max < array->length)
-    e->boolean = true;
+  DynIrArray *array = &ir->arrays[ir->expressions[e->left].type - DYN_TYPE_ARRAY_BASE];
+  if (index.valid && index.max < array->length) e->boolean = true;
 }
-static void prove_unsigned_loop(DynIrProgram *ir, DynIrStmt *loop,
-                                RangeLocals outer, unsigned pointer_bytes) {
-  if (loop->for_range || loop->expression == DYN_NO_EXPR ||
-      !simple_loop_body(ir, loop))
-    return;
+static void prove_unsigned_loop(DynIrProgram *ir, DynIrStmt *loop, RangeLocals outer, unsigned pointer_bytes) {
+  if (loop->for_range || loop->expression == DYN_NO_EXPR || !simple_loop_body(ir, loop)) return;
   DynIrExpr *condition = &ir->expressions[loop->expression];
-  if (condition->kind != DYN_EXPR_BINARY ||
-      (condition->op != DYN_OP_LT && condition->op != DYN_OP_LE))
-    return;
+  if (condition->kind != DYN_EXPR_BINARY || (condition->op != DYN_OP_LT && condition->op != DYN_OP_LE)) return;
   DynIrExpr *induction = &ir->expressions[condition->left];
-  if (induction->kind != DYN_EXPR_NAME ||
-      !range_has_local(outer, induction->integer) || !unsigned_type(induction->type))
-    return;
+  if (induction->kind != DYN_EXPR_NAME || !range_has_local(outer, induction->integer) || !unsigned_type(induction->type)) return;
   uint32_t induction_id = (uint32_t)induction->integer;
-  /* A loop-carried assignment invalidates the incoming value on subsequent
-     iterations. Only the induction range and freshly initialized locals may
-     be used to bound expressions within the body. */
-  RangeLocals inside = {calloc(outer.count, sizeof(*inside.values)),
-                         outer.start, outer.count};
+  /* A loop-carried assignment invalidates the incoming value on subsequent iterations. Only the induction range and freshly initialized locals may be used to bound expressions within the body. */
+  RangeLocals inside = {calloc(outer.count, sizeof(*inside.values)), outer.start, outer.count};
   unsigned *writes = calloc(outer.count, sizeof(*writes));
   if (!inside.values || !writes) {
     free(inside.values);
@@ -200,37 +284,23 @@ static void prove_unsigned_loop(DynIrProgram *ir, DynIrStmt *loop,
     DynIrStmt *st = &ir->statements[ir->children[loop->body_start + i]];
     if (range_has_local(inside, st->local_id)) {
       inside.values[st->local_id - inside.start] = (UIntRange){0};
-      if (st->kind == DYN_STMT_ASSIGN)
-        ++writes[st->local_id - inside.start];
+      if (st->kind == DYN_STMT_ASSIGN) ++writes[st->local_id - inside.start];
     }
   }
-  UIntRange bound = uint_range(ir, condition->right, inside, pointer_bytes, 0),
-            start = outer.values[induction_id - outer.start];
-  if (!bound.exact || !start.exact || bound.value < start.value)
-    goto done;
+  UIntRange bound = uint_range(ir, condition->right, inside, pointer_bytes, 0), start = outer.values[induction_id - outer.start];
+  if (!bound.exact || !start.exact || bound.value < start.value) goto done;
   bool inclusive = condition->op == DYN_OP_LE;
-  /* A closed loop still executes its final increment. At the maximum bound
-     that increment must panic, so neither iteration counts nor guards may be
-     inferred using an unrepresentable one-past-the-end value. */
-  if (inclusive && bound.value >= unsigned_max(induction->type, pointer_bytes))
-    goto done;
+  /* A closed loop still executes its final increment. At the maximum bound that increment must panic, so neither iteration counts nor guards may be inferred using an unrepresentable one-past-the-end value. */
+  if (inclusive && bound.value >= unsigned_max(induction->type, pointer_bytes)) goto done;
   uint64_t iterations = bound.value - start.value + inclusive;
-  if (writes[induction_id - inside.start] != 1 || !loop->body_count)
-    goto done;
-  DynIrStmt *last = &ir->statements[
-      ir->children[loop->body_start + loop->body_count - 1]];
-  if (last->kind != DYN_STMT_ASSIGN || last->local_id != induction_id)
-    goto done;
+  if (writes[induction_id - inside.start] != 1 || !loop->body_count) goto done;
+  DynIrStmt *last = &ir->statements[ ir->children[loop->body_start + loop->body_count - 1]];
+  if (last->kind != DYN_STMT_ASSIGN || last->local_id != induction_id) goto done;
   DynIrExpr *increment = &ir->expressions[last->expression];
-  if (increment->kind != DYN_EXPR_BINARY || increment->op != DYN_OP_ADD ||
-      ir->expressions[increment->left].kind != DYN_EXPR_NAME ||
-      ir->expressions[increment->left].integer != induction_id)
-    goto done;
+  if (increment->kind != DYN_EXPR_BINARY || increment->op != DYN_OP_ADD || ir->expressions[increment->left].kind != DYN_EXPR_NAME || ir->expressions[increment->left].integer != induction_id) goto done;
   UIntRange one = uint_range(ir, increment->right, inside, pointer_bytes, 0);
-  if (!one.exact || one.value != 1)
-    goto done;
-  inside.values[induction_id - inside.start] =
-      (UIntRange){true, false, inclusive ? bound.value : bound.value ? bound.value - 1 : 0, 0};
+  if (!one.exact || one.value != 1) goto done;
+  inside.values[induction_id - inside.start] = (UIntRange){true, false, inclusive ? bound.value : bound.value ? bound.value - 1 : 0, 0};
   for (uint32_t i = 0; i < loop->body_count; ++i) {
     DynIrStmt *st = &ir->statements[ir->children[loop->body_start + i]];
     prove_array_bounds(ir, st->expression, inside, pointer_bytes, 0);
@@ -238,24 +308,15 @@ static void prove_unsigned_loop(DynIrProgram *ir, DynIrStmt *loop,
       inside.values[st->local_id - inside.start] = uint_range(ir, st->expression, inside, pointer_bytes, 0);
       continue;
     }
-    if (st->kind != DYN_STMT_ASSIGN || !range_has_local(inside, st->local_id))
-      continue;
+    if (st->kind != DYN_STMT_ASSIGN || !range_has_local(inside, st->local_id)) continue;
     DynIrExpr *e = &ir->expressions[st->expression];
     inside.values[st->local_id - inside.start] = (UIntRange){0};
-    if (writes[st->local_id - inside.start] != 1 || e->kind != DYN_EXPR_BINARY ||
-        e->op != DYN_OP_ADD ||
-        ir->expressions[e->left].kind != DYN_EXPR_NAME ||
-        ir->expressions[e->left].integer != st->local_id)
-      continue;
-    UIntRange initial = outer.values[st->local_id - outer.start],
-              step = uint_range(ir, e->right, inside, pointer_bytes, 0);
+    if (writes[st->local_id - inside.start] != 1 || e->kind != DYN_EXPR_BINARY || e->op != DYN_OP_ADD || ir->expressions[e->left].kind != DYN_EXPR_NAME || ir->expressions[e->left].integer != st->local_id) continue;
+    UIntRange initial = outer.values[st->local_id - outer.start], step = uint_range(ir, e->right, inside, pointer_bytes, 0);
     uint64_t limit = unsigned_max(e->type, pointer_bytes), growth;
-    if (!unsigned_type(e->type) || !initial.valid || !step.valid ||
-        (iterations != 0 && step.max > UINT64_MAX / iterations))
-      continue;
+    if (!unsigned_type(e->type) || !initial.valid || !step.valid || (iterations != 0 && step.max > UINT64_MAX / iterations)) continue;
     growth = step.max * iterations;
-    if (initial.max <= limit && growth <= limit - initial.max)
-      e->boolean = true;
+    if (initial.max <= limit && growth <= limit - initial.max) e->boolean = true;
   }
 done:
   free(writes);
@@ -266,84 +327,52 @@ static void prove_unsigned_ranges(DynIrProgram *ir, unsigned pointer_bytes) {
     DynIrFunction *fn = &ir->functions[f];
     if (!fn->local_count)
       continue;
-    RangeLocals locals = {calloc(fn->local_count, sizeof(*locals.values)),
-                         fn->local_start, fn->local_count};
-    if (!locals.values)
-      continue;
+    RangeLocals locals = {calloc(fn->local_count, sizeof(*locals.values)), fn->local_start, fn->local_count};
+    if (!locals.values) continue;
     for (uint32_t i = 0; i < fn->body_count; ++i) {
       DynIrStmt *st = &ir->statements[ir->children[fn->body_start + i]];
-      if ((st->kind == DYN_STMT_LOCAL || st->kind == DYN_STMT_ASSIGN) &&
-          st->target == DYN_NO_EXPR && range_has_local(locals, st->local_id) &&
-          range_pure(ir, st->expression, 0))
-        locals.values[st->local_id - locals.start] =
-            uint_range(ir, st->expression, locals, pointer_bytes, 0);
+      if ((st->kind == DYN_STMT_LOCAL || st->kind == DYN_STMT_ASSIGN) && st->target == DYN_NO_EXPR && range_has_local(locals, st->local_id) && range_pure(ir, st->expression, 0))
+        locals.values[st->local_id - locals.start] = uint_range(ir, st->expression, locals, pointer_bytes, 0);
       else {
         if (st->kind == DYN_STMT_FOR)
           prove_unsigned_loop(ir, st, locals, pointer_bytes);
-        /* Branches, loops, calls, and indirect writes may change any local
-           through control flow or aliases. Do not carry their incoming facts. */
+        /* Branches, loops, calls, and indirect writes may change any local through control flow or aliases. Do not carry their incoming facts. */
         memset(locals.values, 0, locals.count * sizeof(*locals.values));
       }
     }
     free(locals.values);
   }
 }
-
 static bool validate_ir(const DynIrProgram *ir) {
   for (size_t i = 0; i < ir->expression_count; ++i) {
     const DynIrExpr *e = &ir->expressions[i];
-    if (e->type == DYN_TYPE_INFER || e->type == DYN_TYPE_ERROR ||
-        !valid_expr_id(ir, e->left) || !valid_expr_id(ir, e->right) ||
-        (size_t)e->item_start + e->item_count > ir->item_count)
-      return false;
-    if (e->kind == DYN_EXPR_NAME && e->integer >= ir->local_count)
-      return false;
-    if (e->kind == DYN_EXPR_GLOBAL && e->integer >= ir->global_count)
-      return false;
-    if (e->kind == DYN_EXPR_CALL && e->integer >= ir->function_count)
-      return false;
-    if (e->kind == DYN_EXPR_FUNCTION && e->integer >= ir->function_count)
-      return false;
-    if (e->kind == DYN_EXPR_INDIRECT_CALL && e->integer >= ir->fn_type_count)
-      return false;
-    if (e->kind == DYN_EXPR_STRUCT && e->integer >= ir->struct_count)
-      return false;
+    if (e->type == DYN_TYPE_INFER || e->type == DYN_TYPE_ERROR || !valid_expr_id(ir, e->left) || !valid_expr_id(ir, e->right) || (size_t)e->item_start + e->item_count > ir->item_count) return false;
+    if (e->kind == DYN_EXPR_NAME && e->integer >= ir->local_count) return false;
+    if (e->kind == DYN_EXPR_GLOBAL && e->integer >= ir->global_count) return false;
+    if (e->kind == DYN_EXPR_CALL && e->integer >= ir->function_count) return false;
+    if (e->kind == DYN_EXPR_FUNCTION && e->integer >= ir->function_count) return false;
+    if (e->kind == DYN_EXPR_INDIRECT_CALL && e->integer >= ir->fn_type_count) return false;
+    if (e->kind == DYN_EXPR_STRUCT && e->integer >= ir->struct_count) return false;
   }
   for (size_t i = 0; i < ir->item_count; ++i)
-    if (!valid_expr_id(ir, ir->items[i].expression))
-      return false;
+    if (!valid_expr_id(ir, ir->items[i].expression)) return false;
   for (size_t i = 0; i < ir->child_count; ++i)
-    if (ir->children[i] >= ir->statement_count)
-      return false;
+    if (ir->children[i] >= ir->statement_count) return false;
   for (size_t i = 0; i < ir->statement_count; ++i) {
     const DynIrStmt *st = &ir->statements[i];
-    if (!valid_expr_id(ir, st->expression) || !valid_expr_id(ir, st->target) ||
-        (st->assignment_op != DYN_OP_NONE && st->target == DYN_NO_EXPR) ||
-        (size_t)st->case_arm_start + st->case_arm_count > ir->case_arm_count)
-      return false;
-    if ((st->kind == DYN_STMT_BREAK || st->kind == DYN_STMT_CONTINUE) &&
-        st->target_loop_id >= ir->statement_count)
-      return false;
-    if (st->kind == DYN_STMT_FOR && st->loop_id >= ir->statement_count)
-      return false;
+    if (!valid_expr_id(ir, st->expression) || !valid_expr_id(ir, st->target) || (st->assignment_op != DYN_OP_NONE && st->target == DYN_NO_EXPR) || (size_t)st->case_arm_start + st->case_arm_count > ir->case_arm_count) return false;
+    if ((st->kind == DYN_STMT_BREAK || st->kind == DYN_STMT_CONTINUE) && st->target_loop_id >= ir->statement_count) return false;
+    if (st->kind == DYN_STMT_FOR && st->loop_id >= ir->statement_count) return false;
   }
   for (size_t i = 0; i < ir->case_arm_count; ++i)
-    if ((size_t)ir->case_arms[i].pattern_start +
-                ir->case_arms[i].pattern_count >
-            ir->pattern_count ||
-        (size_t)ir->case_arms[i].body_start + ir->case_arms[i].body_count >
-            ir->child_count)
-      return false;
+    if ((size_t)ir->case_arms[i].pattern_start + ir->case_arms[i].pattern_count > ir->pattern_count || (size_t)ir->case_arms[i].body_start + ir->case_arms[i].body_count > ir->child_count) return false;
   return true;
 }
-
-bool dyn_ir_lower(const DynAstProgram *a, const DynSource *source,
-                  DynIrProgram *ir) {
+static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgram *ir, bool proofs) {
   memset(ir, 0, sizeof(*ir));
   size_t extra = 0;
   for (size_t i = 0; i < a->statement_count; ++i)
-    if (a->statements[i].assignment_op != DYN_OP_NONE)
-      extra += a->statements[i].target == DYN_NO_EXPR ? 2 : 1;
+    if (a->statements[i].assignment_op != DYN_OP_NONE) extra += a->statements[i].target == DYN_NO_EXPR ? 2 : 1;
   ir->expression_count = a->expression_count;
   ir->expression_capacity = a->expression_count + extra;
   ir->item_count = a->item_count;
@@ -366,41 +395,17 @@ bool dyn_ir_lower(const DynAstProgram *a, const DynSource *source,
   ir->case_arm_count = a->case_arm_count;
   ir->child_count = a->child_count;
   ir->local_count = a->local_count;
-  if (!allocate((void **)&ir->expressions, ir->expression_capacity,
-                sizeof(*ir->expressions)) ||
-      !allocate((void **)&ir->items, ir->item_count, sizeof(*ir->items)) ||
-      !allocate((void **)&ir->fields, ir->field_count, sizeof(*ir->fields)) ||
-      !allocate((void **)&ir->structs, ir->struct_count,
-                sizeof(*ir->structs)) ||
-      !allocate((void **)&ir->enums, ir->enum_count, sizeof(*ir->enums)) ||
-      !allocate((void **)&ir->variants, ir->variant_count,
-                sizeof(*ir->variants)) ||
-      !allocate((void **)&ir->params, ir->param_count, sizeof(*ir->params)) ||
-      !allocate((void **)&ir->functions, ir->function_count,
-                sizeof(*ir->functions)) ||
-      !allocate((void **)&ir->globals, ir->global_count,
-                sizeof(*ir->globals)) ||
-      !allocate((void **)&ir->global_init_order, ir->global_init_count,
-                sizeof(*ir->global_init_order)) ||
-      !allocate((void **)&ir->pointers, ir->pointer_count,
-                sizeof(*ir->pointers)) ||
-      !allocate((void **)&ir->arrays, ir->array_count, sizeof(*ir->arrays)) ||
-      !allocate((void **)&ir->slices, ir->slice_count, sizeof(*ir->slices)) ||
-      !allocate((void **)&ir->fn_types, ir->fn_type_count,
-                sizeof(*ir->fn_types)) ||
-      !allocate((void **)&ir->fn_type_params, ir->fn_type_param_count,
-                sizeof(*ir->fn_type_params)) ||
-      !allocate((void **)&ir->strings, ir->string_count,
-                sizeof(*ir->strings)) ||
-      !allocate((void **)&ir->statements, ir->statement_count,
-                sizeof(*ir->statements)) ||
-      !allocate((void **)&ir->patterns, ir->pattern_count,
-                sizeof(*ir->patterns)) ||
-      !allocate((void **)&ir->case_arms, ir->case_arm_count,
-                sizeof(*ir->case_arms)) ||
-      !allocate((void **)&ir->children, ir->child_count,
-                sizeof(*ir->children)) ||
-      !allocate((void **)&ir->locals, ir->local_count, sizeof(*ir->locals))) {
+  if (!allocate((void **)&ir->expressions, ir->expression_capacity, sizeof(*ir->expressions)) ||
+      !allocate((void **)&ir->items, ir->item_count, sizeof(*ir->items)) || !allocate((void **)&ir->fields, ir->field_count, sizeof(*ir->fields)) ||
+      !allocate((void **)&ir->structs, ir->struct_count, sizeof(*ir->structs)) || !allocate((void **)&ir->enums, ir->enum_count, sizeof(*ir->enums)) ||
+      !allocate((void **)&ir->variants, ir->variant_count, sizeof(*ir->variants)) || !allocate((void **)&ir->params, ir->param_count, sizeof(*ir->params)) ||
+      !allocate((void **)&ir->functions, ir->function_count, sizeof(*ir->functions)) || !allocate((void **)&ir->globals, ir->global_count, sizeof(*ir->globals)) ||
+      !allocate((void **)&ir->global_init_order, ir->global_init_count, sizeof(*ir->global_init_order)) || !allocate((void **)&ir->pointers, ir->pointer_count, sizeof(*ir->pointers)) ||
+      !allocate((void **)&ir->arrays, ir->array_count, sizeof(*ir->arrays)) || !allocate((void **)&ir->slices, ir->slice_count, sizeof(*ir->slices)) ||
+      !allocate((void **)&ir->fn_types, ir->fn_type_count, sizeof(*ir->fn_types)) || !allocate((void **)&ir->fn_type_params, ir->fn_type_param_count, sizeof(*ir->fn_type_params)) ||
+      !allocate((void **)&ir->strings, ir->string_count, sizeof(*ir->strings)) || !allocate((void **)&ir->statements, ir->statement_count, sizeof(*ir->statements)) ||
+      !allocate((void **)&ir->patterns, ir->pattern_count, sizeof(*ir->patterns)) || !allocate((void **)&ir->case_arms, ir->case_arm_count, sizeof(*ir->case_arms)) ||
+      !allocate((void **)&ir->children, ir->child_count, sizeof(*ir->children)) || !allocate((void **)&ir->locals, ir->local_count, sizeof(*ir->locals))) {
     dyn_ir_free(ir);
     return false;
   }
@@ -418,13 +423,9 @@ bool dyn_ir_lower(const DynAstProgram *a, const DynSource *source,
       ir->expressions[i].type = DYN_TYPE_VOID;
       ir->expressions[i].left = ir->expressions[i].right = DYN_NO_EXPR;
     }
-  for (size_t i = 0; i < a->item_count; ++i)
-    ir->items[i] = (DynIrItem){a->items[i].expression, a->items[i].field_index};
+  for (size_t i = 0; i < a->item_count; ++i) ir->items[i] = (DynIrItem){a->items[i].expression, a->items[i].field_index};
   for (size_t i = 0; i < a->field_count; ++i) {
-    ir->fields[i] =
-        (DynIrField){.name = copy_span(a->fields[i].name, source),
-                     .type = lower_type(a, a->fields[i].type),
-                     .default_expression = a->fields[i].default_expression};
+    ir->fields[i] = (DynIrField){.name = copy_span(a->fields[i].name, source), .type = lower_type(a, a->fields[i].type), .default_expression = a->fields[i].default_expression};
     if (!ir->fields[i].name) {
       dyn_ir_free(ir);
       return false;
@@ -466,46 +467,43 @@ bool dyn_ir_lower(const DynAstProgram *a, const DynSource *source,
     }
   }
   for (size_t i = 0; i < a->variant_count; ++i) {
-    ir->variants[i] = (DynIrVariant){
-        .name = copy_span(a->variants[i].name, source),
-        .payload_type = lower_type(a, a->variants[i].payload_type),
-        .tag = a->variants[i].tag};
+    ir->variants[i] = (DynIrVariant){ .name = copy_span(a->variants[i].name, source), .payload_type = lower_type(a, a->variants[i].payload_type), .tag = a->variants[i].tag};
     if (!ir->variants[i].name) {
       dyn_ir_free(ir);
       return false;
     }
   }
   for (size_t i = 0; i < a->param_count; ++i) {
-    ir->params[i] = (DynIrParam){.name = copy_span(a->params[i].name, source),
-                                 .type = lower_type(a, a->params[i].type),
-                                 .local_id = a->params[i].local_id};
+    ir->params[i] = (DynIrParam){.name = copy_span(a->params[i].name, source), .type = lower_type(a, a->params[i].type), .local_id = a->params[i].local_id};
     if (!ir->params[i].name) {
       dyn_ir_free(ir);
       return false;
     }
   }
-  /* Function locations share line tables instead of rescanning every prefix.
-     If indexing runs out of memory, lookup retains its unindexed fallback. */
+  /* Function locations share line tables instead of rescanning every prefix. If indexing runs out of memory, lookup retains its unindexed fallback. */
   DynLocationIndex locations = {0};
   (void)dyn_location_build(&locations, source);
+  char *math_sdk = proofs ? sdk_source_path("std/math/float.dyn", false) : NULL;
+  char *bytes_sdk = proofs ? sdk_source_path("std/bytes/bytes.dyn", true) : NULL;
+  char *json_sdk = proofs ? sdk_source_path("std/encoding/json/read/read.dyn", true) : NULL;
   for (size_t i = 0; i < a->function_count; ++i) {
     size_t n = a->functions[i].name.end_byte - a->functions[i].name.start_byte;
-    /* Instances share the generic's name; the suffix hashes the type
-       arguments, so it stays stable when other code changes. */
+    /* Instances share the generic's name; the suffix hashes the type arguments, so it stays stable when other code changes. */
     ir->functions[i].name = malloc(n + 20);
     if (!ir->functions[i].name) {
+      free(json_sdk);
+      free(bytes_sdk);
+      free(math_sdk);
       dyn_location_free(&locations);
       dyn_ir_free(ir);
       return false;
     }
-    memcpy(ir->functions[i].name,
-           source->text + a->functions[i].name.start_byte, n);
+    memcpy(ir->functions[i].name, source->text + a->functions[i].name.start_byte, n);
     ir->functions[i].name[n] = 0;
     if (a->functions[i].is_instance) {
       const DynAstInstance *instance = &a->instances[a->functions[i].instance];
       uint32_t count = a->generics[instance->generic].type_param_count;
-      snprintf(ir->functions[i].name + n, 20, "__g%016llx",
-               (unsigned long long)instance->hash);
+      snprintf(ir->functions[i].name + n, 20, "__g%016llx", (unsigned long long)instance->hash);
       /* Drop the module prefix (dyn_m<16 hex>_) for readability. */
       const char *base = ir->functions[i].name;
       size_t base_length = n;
@@ -518,25 +516,24 @@ bool dyn_ir_lower(const DynAstProgram *a, const DynSource *source,
       for (uint32_t k = 0; k < count && used < sizeof(debug); ++k) {
         char type[256];
         dyn_type_format((DynAstProgram *)a, instance->args[k], source, type, sizeof(type));
-        used += (size_t)snprintf(debug + used, sizeof(debug) - used, "%s%s",
-                                 k ? ", " : "", type);
+        used += (size_t)snprintf(debug + used, sizeof(debug) - used, "%s%s", k ? ", " : "", type);
       }
-      if (used < sizeof(debug))
-        snprintf(debug + used, sizeof(debug) - used, ")");
+      if (used < sizeof(debug)) snprintf(debug + used, sizeof(debug) - used, ")");
       ir->functions[i].debug_name = strdup(debug);
     }
     ir->functions[i].generic = a->functions[i].is_generic;
     ir->functions[i].instance = a->functions[i].is_instance;
-    size_t link_length = a->functions[i].link_name.end_byte -
-                         a->functions[i].link_name.start_byte;
+    size_t link_length = a->functions[i].link_name.end_byte - a->functions[i].link_name.start_byte;
     ir->functions[i].link_name = malloc(link_length + 1);
     if (!ir->functions[i].link_name) {
+      free(json_sdk);
+      free(bytes_sdk);
+      free(math_sdk);
       dyn_location_free(&locations);
       dyn_ir_free(ir);
       return false;
     }
-    memcpy(ir->functions[i].link_name,
-           source->text + a->functions[i].link_name.start_byte, link_length);
+    memcpy(ir->functions[i].link_name, source->text + a->functions[i].link_name.start_byte, link_length);
     ir->functions[i].link_name[link_length] = 0;
     ir->functions[i].return_type = a->functions[i].return_type;
     ir->functions[i].param_start = a->functions[i].param_start;
@@ -549,16 +546,21 @@ bool dyn_ir_lower(const DynAstProgram *a, const DynSource *source,
     ir->functions[i].source_offset = a->functions[i].name.start_byte;
     const char *source_path;
     unsigned source_column;
-    dyn_location_get(&locations, source, ir->functions[i].source_offset,
-                     &source_path, &ir->functions[i].source_line, &source_column);
+    dyn_location_get(&locations, source, ir->functions[i].source_offset, &source_path, &ir->functions[i].source_line, &source_column);
     ir->functions[i].is_main = a->functions[i].is_main;
     ir->functions[i].foreign = a->functions[i].foreign;
     ir->functions[i].variadic = a->functions[i].variadic;
     ir->functions[i].is_public = a->functions[i].is_public;
     ir->functions[i].module_owner = a->functions[i].module_owner;
-    ir->functions[i].variadic_type =
-        lower_type(a, a->functions[i].variadic_type);
+    ir->functions[i].variadic_type = lower_type(a, a->functions[i].variadic_type);
+    ir->functions[i].math_intrinsic = math_identity(source, source_path, math_sdk, ir, &ir->functions[i]);
+    ir->functions[i].byte_intrinsic = byte_identity(source, source_path, bytes_sdk, a, ir, &ir->functions[i]);
+    if (ir->functions[i].byte_intrinsic == DYN_BYTE_INTRINSIC_NONE)
+      ir->functions[i].byte_intrinsic = json_byte_identity(source, source_path, json_sdk, a, ir, &ir->functions[i]);
   }
+  free(json_sdk);
+  free(bytes_sdk);
+  free(math_sdk);
   dyn_location_free(&locations);
   for (size_t i = 0; i < a->global_count; ++i) {
     size_t n = a->globals[i].name.end_byte - a->globals[i].name.start_byte;
@@ -567,8 +569,7 @@ bool dyn_ir_lower(const DynAstProgram *a, const DynSource *source,
       dyn_ir_free(ir);
       return false;
     }
-    memcpy(ir->globals[i].name, source->text + a->globals[i].name.start_byte,
-           n);
+    memcpy(ir->globals[i].name, source->text + a->globals[i].name.start_byte, n);
     ir->globals[i].name[n] = 0;
     ir->globals[i].span = a->globals[i].name;
     DynSpan link = a->globals[i].link_name;
@@ -587,24 +588,12 @@ bool dyn_ir_lower(const DynAstProgram *a, const DynSource *source,
     ir->globals[i].is_public = a->globals[i].is_public;
     ir->globals[i].module_owner = a->globals[i].module_owner;
   }
-  if (a->global_init_count)
-    memcpy(ir->global_init_order, a->global_init_order,
-           a->global_init_count * sizeof(*ir->global_init_order));
-  for (size_t i = 0; i < a->pointer_count; ++i)
-    ir->pointers[i] = (DynIrPointer){lower_type(a, a->pointers[i].pointee),
-                                     a->pointers[i].is_const};
-  for (size_t i = 0; i < a->array_count; ++i)
-    ir->arrays[i] =
-        (DynIrArray){lower_type(a, a->arrays[i].element), a->arrays[i].length};
-  for (size_t i = 0; i < a->slice_count; ++i)
-    ir->slices[i] = (DynIrSlice){lower_type(a, a->slices[i].element),
-                                 a->slices[i].is_const};
-  for (size_t i = 0; i < a->fn_type_count; ++i)
-    ir->fn_types[i] = (DynIrFnType){
-        lower_type(a, a->fn_types[i].return_type), a->fn_types[i].param_start,
-        a->fn_types[i].param_count, a->fn_types[i].variadic};
-  for (size_t i = 0; i < a->fn_type_param_count; ++i)
-    ir->fn_type_params[i] = lower_type(a, a->fn_type_params[i]);
+  if (a->global_init_count) memcpy(ir->global_init_order, a->global_init_order, a->global_init_count * sizeof(*ir->global_init_order));
+  for (size_t i = 0; i < a->pointer_count; ++i) ir->pointers[i] = (DynIrPointer){lower_type(a, a->pointers[i].pointee), a->pointers[i].is_const};
+  for (size_t i = 0; i < a->array_count; ++i) ir->arrays[i] = (DynIrArray){lower_type(a, a->arrays[i].element), a->arrays[i].length};
+  for (size_t i = 0; i < a->slice_count; ++i) ir->slices[i] = (DynIrSlice){lower_type(a, a->slices[i].element), a->slices[i].is_const};
+  for (size_t i = 0; i < a->fn_type_count; ++i) ir->fn_types[i] = (DynIrFnType){ lower_type(a, a->fn_types[i].return_type), a->fn_types[i].param_start, a->fn_types[i].param_count, a->fn_types[i].variadic};
+  for (size_t i = 0; i < a->fn_type_param_count; ++i) ir->fn_type_params[i] = lower_type(a, a->fn_type_params[i]);
   for (size_t i = 0; i < a->string_count; ++i) {
     ir->strings[i].length = a->strings[i].length;
     ir->strings[i].data = malloc(a->strings[i].length);
@@ -612,12 +601,10 @@ bool dyn_ir_lower(const DynAstProgram *a, const DynSource *source,
       dyn_ir_free(ir);
       return false;
     }
-    if (a->strings[i].length)
-      memcpy(ir->strings[i].data, a->strings[i].data, a->strings[i].length);
+    if (a->strings[i].length) memcpy(ir->strings[i].data, a->strings[i].data, a->strings[i].length);
   }
   for (size_t i = 0; i < a->local_count; ++i) {
-    ir->locals[i] = (DynIrLocal){.name = copy_span(a->locals[i].name, source),
-                                 .type = lower_type(a, a->locals[i].type)};
+    ir->locals[i] = (DynIrLocal){.name = copy_span(a->locals[i].name, source), .type = lower_type(a, a->locals[i].type)};
     if (!ir->locals[i].name) {
       dyn_ir_free(ir);
       return false;
@@ -645,13 +632,7 @@ bool dyn_ir_lower(const DynAstProgram *a, const DynSource *source,
                                     a->statements[i].for_reverse,
                                     a->statements[i].span, 0};
   for (size_t i = 0; i < a->pattern_count; ++i)
-    ir->patterns[i] = (DynIrPattern){a->patterns[i].first_value,
-                                     a->patterns[i].last_value,
-                                     lower_type(a, a->patterns[i].type),
-                                     a->patterns[i].variant,
-                                     a->patterns[i].is_enum,
-                                     a->patterns[i].is_signed,
-                                     a->patterns[i].is_type};
+    ir->patterns[i] = (DynIrPattern){a->patterns[i].first_value, a->patterns[i].last_value, lower_type(a, a->patterns[i].type), a->patterns[i].variant, a->patterns[i].is_enum, a->patterns[i].is_signed, a->patterns[i].is_type};
   for (size_t i = 0; i < a->case_arm_count; ++i)
     ir->case_arms[i] = (DynIrCaseArm){
         a->case_arms[i].pattern_start,  a->case_arms[i].pattern_count,
@@ -674,45 +655,26 @@ bool dyn_ir_lower(const DynAstProgram *a, const DynSource *source,
     }
   for (size_t i = 0; i < ir->statement_count; ++i) {
     DynIrStmt *st = &ir->statements[i];
-    if (st->assignment_op == DYN_OP_NONE || st->target != DYN_NO_EXPR)
-      continue;
+    if (st->assignment_op == DYN_OP_NONE || st->target != DYN_NO_EXPR) continue;
     DynExprId left;
-    if (st->target != DYN_NO_EXPR)
-      left = st->target;
+    if (st->target != DYN_NO_EXPR) left = st->target;
     else {
       left = (DynExprId)ir->expression_count;
-      ir->expressions[ir->expression_count++] =
-          (DynIrExpr){.kind = DYN_EXPR_NAME,
-                      .type = ir->locals[st->local_id].type,
-                      .left = DYN_NO_EXPR,
-                      .right = DYN_NO_EXPR,
-                      .integer = st->local_id,
-                      .span = st->span};
+      ir->expressions[ir->expression_count++] = (DynIrExpr){.kind = DYN_EXPR_NAME, .type = ir->locals[st->local_id].type, .left = DYN_NO_EXPR, .right = DYN_NO_EXPR, .integer = st->local_id, .span = st->span};
     }
     DynType type = ir->expressions[left].type;
     DynExprId binary = (DynExprId)ir->expression_count;
-    ir->expressions[ir->expression_count++] =
-        (DynIrExpr){.kind = DYN_EXPR_BINARY,
-                    .type = type,
-                    .op = st->assignment_op,
-                    .left = left,
-                    .right = st->expression,
-                    .span = st->span};
+    ir->expressions[ir->expression_count++] = (DynIrExpr){.kind = DYN_EXPR_BINARY, .type = type, .op = st->assignment_op, .left = left, .right = st->expression, .span = st->span};
     st->expression = binary;
     st->assignment_op = DYN_OP_NONE;
   }
-  for (size_t i = 0; i < ir->function_count; ++i)
-    ir->functions[i].return_type = lower_type(a, ir->functions[i].return_type);
-  for (size_t i = 0; i < ir->global_count; ++i)
-    ir->globals[i].type = lower_type(a, ir->globals[i].type);
-  for (size_t i = 0; i < ir->enum_count; ++i)
-    ir->enums[i].tag_type = lower_type(a, ir->enums[i].tag_type);
-  if (a->child_count)
-    memcpy(ir->children, a->children, a->child_count * sizeof(*ir->children));
-  prove_unsigned_ranges(ir, dyn_target_pointer_bytes(dyn_context_target(&source->context)));
+  for (size_t i = 0; i < ir->function_count; ++i) ir->functions[i].return_type = lower_type(a, ir->functions[i].return_type);
+  for (size_t i = 0; i < ir->global_count; ++i) ir->globals[i].type = lower_type(a, ir->globals[i].type);
+  for (size_t i = 0; i < ir->enum_count; ++i) ir->enums[i].tag_type = lower_type(a, ir->enums[i].tag_type);
+  if (a->child_count) memcpy(ir->children, a->children, a->child_count * sizeof(*ir->children));
+  if (proofs) prove_unsigned_ranges(ir, dyn_target_pointer_bytes(dyn_context_target(&source->context)));
   for (size_t i = 0; i < ir->function_count; ++i) {
-    if ((size_t)ir->functions[i].body_start + ir->functions[i].body_count >
-        ir->child_count) {
+    if ((size_t)ir->functions[i].body_start + ir->functions[i].body_count > ir->child_count) {
       dyn_ir_free(ir);
       return false;
     }
@@ -724,34 +686,52 @@ bool dyn_ir_lower(const DynAstProgram *a, const DynSource *source,
   return true;
 }
 
+#include "ir_reachability.inc"
+
+bool dyn_ir_lower(const DynAstProgram *a, const DynSource *source, DynIrProgram *ir) {
+  return lower_ir(a, source, ir, true);
+}
+
+bool dyn_ir_lower_structural(const DynAstProgram *a, const DynSource *source, DynIrProgram *ir) {
+  return lower_ir(a, source, ir, false);
+}
+
+bool dyn_ir_prune_functions(DynIrProgram *ir) {
+  Reachability p = {.ir = ir};
+  p.live = calloc(ir->function_count ? ir->function_count : 1, sizeof(*p.live));
+  p.expressions = calloc(ir->expression_count ? ir->expression_count : 1, 1);
+  p.statements = calloc(ir->statement_count ? ir->statement_count : 1, 1);
+  p.queue = calloc(ir->function_count ? ir->function_count : 1, sizeof(*p.queue));
+  bool ok = p.live && reachable_collect(&p, false, false);
+  free(p.queue);
+  if (!ok) {
+    free(p.live); free(p.expressions); free(p.statements);
+    return false;
+  }
+  free(ir->live.functions); free(ir->live.expressions); free(ir->live.statements);
+  ir->live = (DynIrLiveness){p.live, p.expressions, p.statements};
+  return true;
+}
+
 void dyn_ir_free(DynIrProgram *ir) {
   dyn_location_free(&ir->locations);
+  free(ir->live.functions);
+  free(ir->live.expressions);
+  free(ir->live.statements);
   free(ir->unstable_locals);
   free(ir->local_statements);
-  for (size_t i = 0; ir->strings && i < ir->string_count; ++i)
-    free(ir->strings[i].data);
-  for (size_t i = 0; ir->functions && i < ir->function_count; ++i)
-    free(ir->functions[i].name);
-  for (size_t i = 0; ir->functions && i < ir->function_count; ++i)
-    free(ir->functions[i].debug_name);
-  for (size_t i = 0; ir->functions && i < ir->function_count; ++i)
-    free(ir->functions[i].link_name);
-  for (size_t i = 0; ir->globals && i < ir->global_count; ++i)
-    free(ir->globals[i].name);
-  for (size_t i = 0; ir->globals && i < ir->global_count; ++i)
-    free(ir->globals[i].link_name);
-  for (size_t i = 0; ir->params && i < ir->param_count; ++i)
-    free(ir->params[i].name);
-  for (size_t i = 0; ir->locals && i < ir->local_count; ++i)
-    free(ir->locals[i].name);
-  for (size_t i = 0; ir->fields && i < ir->field_count; ++i)
-    free(ir->fields[i].name);
-  for (size_t i = 0; ir->structs && i < ir->struct_count; ++i)
-    free(ir->structs[i].name);
-  for (size_t i = 0; ir->enums && i < ir->enum_count; ++i)
-    free(ir->enums[i].name);
-  for (size_t i = 0; ir->variants && i < ir->variant_count; ++i)
-    free(ir->variants[i].name);
+  for (size_t i = 0; ir->strings && i < ir->string_count; ++i) free(ir->strings[i].data);
+  for (size_t i = 0; ir->functions && i < ir->function_count; ++i) free(ir->functions[i].name);
+  for (size_t i = 0; ir->functions && i < ir->function_count; ++i) free(ir->functions[i].debug_name);
+  for (size_t i = 0; ir->functions && i < ir->function_count; ++i) free(ir->functions[i].link_name);
+  for (size_t i = 0; ir->globals && i < ir->global_count; ++i) free(ir->globals[i].name);
+  for (size_t i = 0; ir->globals && i < ir->global_count; ++i) free(ir->globals[i].link_name);
+  for (size_t i = 0; ir->params && i < ir->param_count; ++i) free(ir->params[i].name);
+  for (size_t i = 0; ir->locals && i < ir->local_count; ++i) free(ir->locals[i].name);
+  for (size_t i = 0; ir->fields && i < ir->field_count; ++i) free(ir->fields[i].name);
+  for (size_t i = 0; ir->structs && i < ir->struct_count; ++i) free(ir->structs[i].name);
+  for (size_t i = 0; ir->enums && i < ir->enum_count; ++i) free(ir->enums[i].name);
+  for (size_t i = 0; ir->variants && i < ir->variant_count; ++i) free(ir->variants[i].name);
   free(ir->expressions);
   free(ir->items);
   free(ir->fields);

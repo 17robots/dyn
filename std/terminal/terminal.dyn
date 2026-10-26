@@ -1,28 +1,49 @@
 #target(kernel: linux)
 
 use "std/unicode/utf8"
+use "std/errors" errors
 
 pub struct State { bytes: [60]u8 }
-pub struct Size { columns: usize, rows: usize, ok: bool }
+pub struct Size { columns: usize, rows: usize, kind: errors.Kind, error: isize, ok: bool }
 
-pub fn read_state(descriptor: isize, output: *State) bool {
-  return #syscall(16, descriptor, 21505, &output.bytes[0]) >= 0
+pub struct Read { value: State, kind: errors.Kind, error: isize, ok: bool }
+pub struct Result { kind: errors.Kind, error: isize, ok: bool }
+
+// The terminal settings of descriptor. ok is false when it is not a terminal.
+pub fn read_state(descriptor: isize) Read {
+  result: Read
+  code := #syscall(16, descriptor, 21505, &result.value.bytes[0])
+  if code < 0 {
+    return Read{ kind: errors.linux(code), error: code }
+  }
+  result.ok = true
+  return result
 }
 
-pub fn restore(descriptor: isize, saved: *const State) bool {
-  return #syscall(16, descriptor, 21506, &saved.bytes[0]) >= 0
+pub fn restore(descriptor: isize, saved: *const State) Result {
+  if saved == nil {
+    return Result{ kind: errors.Kind.InvalidInput }
+  }
+  code := #syscall(16, descriptor, 21506, &saved.bytes[0])
+  if code < 0 {
+    return Result{ kind: errors.linux(code), error: code }
+  }
+  return Result{ ok: true }
 }
 
 pub fn is_attached(descriptor: isize) bool {
-  saved := State{ bytes: [] }
-  return read_state(descriptor, &saved)
+  return read_state(descriptor).ok
 }
 
-// Applies a small cfmakeraw-equivalent while retaining a restorable copy.
-pub fn raw(descriptor: isize, previous: *State) bool {
-  if !read_state(descriptor, previous) {
-    return false
+// Applies a small cfmakeraw-equivalent. Returns the previous settings, to
+// pass to restore; ok is false when descriptor is not a terminal or the change
+// failed.
+pub fn raw(descriptor: isize) Read {
+  saved := read_state(descriptor)
+  if !saved.ok {
+    return saved
   }
+  previous := &saved.value
   changed := State{ bytes: [] }
   i: usize = 0
   for i < #len(changed.bytes) {
@@ -35,16 +56,21 @@ pub fn raw(descriptor: isize, previous: *State) bool {
   changed.bytes[12] = changed.bytes[12] & 160
   changed.bytes[22] = 0
   changed.bytes[23] = 1
-  return restore(descriptor, &changed)
+  applied := restore(descriptor, &changed)
+  if !applied.ok {
+    return Read{ kind: applied.kind, error: applied.error }
+  }
+  return saved
 }
 
 pub fn size(descriptor: isize) Size {
   bytes: [8]u8 = []
-  if #syscall(16, descriptor, 21523, &bytes[0]) < 0 {
-    return Size{}
+  code := #syscall(16, descriptor, 21523, &bytes[0])
+  if code < 0 {
+    return Size{ kind: errors.linux(code), error: code }
   }
-  rows := #cast(usize) bytes[0] + #cast(usize) bytes[1] * 256
-  columns := #cast(usize) bytes[2] + #cast(usize) bytes[3] * 256
+  rows := #cast(usize, bytes[0]) + #cast(usize, bytes[1]) * 256
+  columns := #cast(usize, bytes[2]) + #cast(usize, bytes[3]) * 256
   return Size{ columns: columns, rows: rows, ok: true }
 }
 

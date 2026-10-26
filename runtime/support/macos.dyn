@@ -1,17 +1,46 @@
 #target(kernel: darwin)
+// This target retains thread lookup when unlinking an unwind frame.
+fn unwind_owner_offset() usize {
+  return 0
+}
 extern fn pthread_self "pthread_self"() rawptr
 extern fn syscall_raw "dyn_syscall6"(n: i64, a: i64, b: i64, c: i64, d: i64, e: i64, f: i64) i64
-fn thread_id() u64 { return #cast(u64) #cast(usize) pthread_self() }
+fn thread_id() u64 {
+  return #cast(u64, #cast(usize, pthread_self()))
+}
 fn trace_write(data: *const u8, size: u64) {
-  if size == 0 { return }
-  bytes := data[..#cast(usize) size]
+  if size == 0 {
+    return
+  }
+  bytes := data[..#cast(usize, size)]
   offset: usize = 0
   for offset < #len(bytes) {
-    written := syscall_raw(4, 2, #cast(i64) #cast(usize) &bytes[offset], #cast(i64) (#len(bytes) - offset), 0, 0, 0)
-    if written <= 0 { return }
-    offset += #cast(usize) written
+    written := syscall_raw(4, 2, #cast(i64, #cast(usize, &bytes[offset])), #cast(i64, (#len(bytes) - offset)), 0, 0, 0)
+    if written <= 0 {
+      return
+    }
+    offset += #cast(usize, written)
   }
 }
-pub fn dyn_trace_push(name: *const u8, length: u64) { trace_push(name, length) }
-pub fn dyn_trace_pop() { trace_pop() }
-pub fn dyn_trace_dump() { trace_dump() }
+pub fn dyn_trace_push(name: *const u8, length: u64) {
+  trace_push(name, length)
+}
+pub fn dyn_trace_pop() {
+  trace_pop()
+}
+pub fn dyn_trace_dump() {
+  trace_dump()
+}
+// Resumes unwinding after a frame's cleanup has run.
+pub fn dyn_unwind_continue() {
+  slot := unwind_slot(false)
+  if slot != nil && slot.top != nil {
+    frame := slot.top
+    slot.top = frame.previous
+    jump(frame)
+  }
+  if slot != nil {
+    panic_raw(slot.message, slot.length)
+  }
+  panic_raw(nil, 0)
+}

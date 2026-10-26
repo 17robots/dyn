@@ -1,0 +1,19 @@
+{
+  "probe_sha256": "79bd6a25bb03e64bf3b7146460192e3e8a2aaca0e26195ac17293f19cdc08b2b",
+  "source_sha256": "1fb1deece4e15523394f9a8b9cd62c36cf5d1d56f1fc284a4c8b6c28f57f7e5a",
+  "tests": [
+    "inlining-expressions SSA/tree incl packed fallback",
+    "baseline negative control fails nested call removal",
+    "inlining-budget",
+    "inlining-casts",
+    "native-leaf-inline",
+    "native-optimization",
+    "ASan/UBSan expression32/33/resource/pointerfallback harness"
+  ],
+  "timings": "none",
+  "global_build": "none",
+  "source_changes": [
+    "src/native_opt.c",
+    "tests/inlining-expressions.py"
+  ]
+}

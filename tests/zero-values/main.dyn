@@ -3,34 +3,35 @@ use "std/io" io
 use "std/encoding/csv" csv
 use "std/encoding/ini" ini
 use "std/text/scanner" text
+use "std/net"
 
 
 fn read_nothing(data: rawptr, destination: []u8) io.Result {
   return io.Result{ status: io.Status.End }
 }
 
-// A zero Arena reserves on its first push and is reusable after release.
+// Explicit default arenas initialize zeroed payload; replacement follows release.
 fn zero_arena() {
-  arena := mem.Arena{}
-  first := mem.push(u64, &arena)
+  arena := mem.arena_create(0)
+  first := mem.push(u64, arena)
   first.* = 7
-  many := mem.push_array(u64, &arena, 100000)
+  many := mem.push_array(u64, arena, 100000)
   many[99999] = first.*
   if many[99999] != 7 || !arena.owns_memory {
     #panic("zero arena push")
   }
-  mem.arena_release(&arena)
-  again := mem.push(u32, &arena)
+  mem.arena_release(arena)
+  arena = mem.arena_create(0)
+  again := mem.push(u32, arena)
   if again.* != 0 {
     #panic("zero arena after release")
   }
-  mem.arena_release(&arena)
+  mem.arena_release(arena)
 }
 
 fn zero_scanners() {
   lines := text.Scanner{ source: "a\nbc" }
-  line: []const u8 = ""
-  _ = text.next_line(&lines, &line)
+  _ = text.next_line(&lines)
   _ = text.advance(&lines, 1)
   if lines.line != 1 || lines.column != 1 {
     #panic("text scanner positions are zero-based")
@@ -38,11 +39,11 @@ fn zero_scanners() {
   entries := ini.Scanner{ source: "\n[s]\nk=v\n" }
   section := ini.next(&entries)
   pair := ini.next(&entries)
-  if section.entry.line != 2 || pair.entry.line != 3 || !bytes_equal(pair.entry.section, "s") {
+  if section.value.line != 2 || pair.value.line != 3 || !bytes_equal(pair.value.section, "s") {
     #panic("zero INI scanner lines")
   }
   // An empty stream holds one empty field, from the constructor or from zero.
-  empty := csv.StreamScanner{ input: io.Reader{ read: &read_nothing } }
+  empty := csv.StreamScanner{ input: io.Reader{ read: read_nothing } }
   storage: [4]u8 = []
   field := csv.next_stream(&empty, storage[..])
   if !field.ok || #len(field.text) != 0 || !field.end_input {
@@ -62,7 +63,19 @@ fn bytes_equal(a: []const u8, b: []const u8) bool {
   return true
 }
 
+// Zeroed net handles are closed; closing one must not touch descriptor 0.
+fn zero_net_handles() {
+  arena := mem.arena_create(0)
+  defer mem.arena_release(arena)
+  connection := mem.push(net.Connection, arena)
+  listener := mem.push(net.Listener, arena)
+  if net.connection_close(connection).ok || net.listener_close(listener).ok {
+    #panic("zero net handle closed")
+  }
+}
+
 fn main() {
   zero_arena()
   zero_scanners()
+  zero_net_handles()
 }

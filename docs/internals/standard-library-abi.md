@@ -7,11 +7,11 @@ directory. The development tree uses `std`; an installed SDK uses `std` beside i
 
 Public standard-library functions use the same native ABI as Dyn functions:
 
-- integers and floats use their LLVM scalar representation;
+- integers and floats use their native scalar representation;
 - pointers are thin native pointers;
 - slices and strings are `{data: pointer, len: usize}` values passed by value;
 - fixed arrays, structs, and enums use compiler-calculated aggregate layouts;
-- `bool` uses LLVM `i1` internally;
+- `bool` is a one-byte value holding 0 or 1;
 - no hidden allocator, error channel, or destructor parameter is passed.
 
 C-compatible struct signatures share the target ABI lowering used for foreign

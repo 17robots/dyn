@@ -29,7 +29,7 @@ Debug builds describe statement lines, parameters, source locals, globals, struc
 pointers, strings, and slices. Payload enums expose a named tag and typed union, allowing
 `print value.payload.Variant` instead of decoding raw bytes. Plain release builds omit metadata. `--release --debug-info` retains
 DWARF while optimizing and prevents user-function inlining so breakpoints and backtraces remain
-useful. Parameters and promoted scalar locals retain SSA value locations when LLVM can describe them; values may still become optimized out after their last use. A variable becomes inspectable after execution reaches its declaration
+useful. Parameters and promoted scalar locals retain SSA value locations when the backend can describe them; values may still become optimized out after their last use. A variable becomes inspectable after execution reaches its declaration
 and can become unavailable after leaving its lexical scope. Values are represented using their
 native machine layout; slices and aggregates may be shown as debugger fields rather than Dyn
 syntax.

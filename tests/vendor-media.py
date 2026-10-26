@@ -206,18 +206,18 @@ use "std/io"
 fn main() {
   storage := mem.arena_create(16 * 1024 * 1024)
   defer {
-    mem.arena_release(&storage)
+    mem.arena_release(storage)
   }
-  args := linux.process_arguments(&storage)
+  args := linux.process_arguments(storage)
   if #len(args) != 2 {
     _ = io.println(io.stdout(), "usage: archive-example ARCHIVE")
     return
   }
-  loaded := fs.read_all(&storage, args[1], 8 * 1024 * 1024)
+  loaded := fs.read_all(storage, args[1], 8 * 1024 * 1024)
   if !loaded.ok {
     #panic("read archive")
   }
-  opened := archive.open_memory_owned(loaded.data)
+  opened := archive.open_memory_owned(loaded.value)
   if !opened.ok {
     #panic("open archive")
   }
@@ -258,7 +258,7 @@ use "std/io"
 fn main() {
   storage: [65536]u8 = []
   arena := mem.arena_from_buffer(storage[..])
-  args := linux.process_arguments(&arena)
+  args := linux.process_arguments(arena)
   if #len(args) != 2 {
     _ = io.println(io.stdout(), "usage: curl-example URL")
     return
@@ -286,9 +286,9 @@ use "std/io"
 fn main() {
   storage := mem.arena_create(16 * 1024 * 1024)
   defer {
-    mem.arena_release(&storage)
+    mem.arena_release(storage)
   }
-  args := linux.process_arguments(&storage)
+  args := linux.process_arguments(storage)
   if #len(args) != 2 {
     _ = io.println(io.stdout(), "usage: sdl3-image-example IMAGE")
     return
@@ -299,11 +299,11 @@ fn main() {
     #panic("image load")
   }
   defer sdl3.surface_destroy_owned(surface.value)
-  bytes := fs.read_all(&storage, args[1], 8 * 1024 * 1024)
+  bytes := fs.read_all(storage, args[1], 8 * 1024 * 1024)
   if !bytes.ok {
     #panic("image read")
   }
-  decoded := image.decode_owned(bytes.data)
+  decoded := image.decode_owned(bytes.value)
   if !decoded.ok {
     #panic("image decode")
   }
@@ -322,7 +322,7 @@ use "std/io"
 fn main() {
   storage: [65536]u8 = []
   arena := mem.arena_from_buffer(storage[..])
-  args := linux.process_arguments(&arena)
+  args := linux.process_arguments(arena)
   if #len(args) != 2 {
     _ = io.println(io.stdout(), "usage: sdl3-font-example FONT.ttf")
     return
@@ -368,7 +368,7 @@ fn shader(api: *gl.Api, kind: u32, source: []const u8) u32 {
     #panic("create shader")
   }
   pointer := &source[0]
-  length := #cast(i32) #len(source)
+  length := #cast(i32, #len(source))
   api.shader_source(value, 1, &pointer, &length)
   api.compile_shader(value)
   compiled: i32 = 0
@@ -378,7 +378,7 @@ fn shader(api: *gl.Api, kind: u32, source: []const u8) u32 {
     written: i32 = 0
     api.get_shader_log(value, 2048, &written, &log[0])
     if written > 0 && written <= 2048 {
-      _ = io.println(io.stderr(), "{}", log[..#cast(usize) written])
+      _ = io.println(io.stderr(), "{}", log[..#cast(usize, written)])
     }
     api.delete_shader(value)
     #panic("compile shader")
@@ -389,7 +389,7 @@ fn missing_proc(name: *const u8) rawptr {
   return nil
 }
 fn main() {
-  missing := gl.load(&missing_proc)
+  missing := gl.load(missing_proc)
   if missing.ok || !strings.equal(missing.missing, "glClearColor") {
     #panic("missing symbol accepted")
   }
@@ -398,7 +398,7 @@ fn main() {
   }
   backing: [65536]u8 = []
   arena := mem.arena_from_buffer(backing[..])
-  args := linux.process_arguments(&arena)
+  args := linux.process_arguments(arena)
   smoke := #len(args) == 2 && strings.equal(args[1], "--smoke")
   if !sdl3.init_video() {
     #panic("video unavailable")
@@ -423,7 +423,7 @@ fn main() {
   if !sdl3.gl_make_current(window.value, context) {
     #panic("GL current")
   }
-  loaded := gl.load(&sdl3.gl_proc)
+  loaded := gl.load(sdl3.gl_proc)
   if !loaded.ok {
     _ = io.println(io.stderr(), "missing {}", loaded.missing)
     #panic("GL load")
@@ -445,7 +445,7 @@ fn main() {
     }
     bad_source := "this is not GLSL"
     bad_pointer := &bad_source[0]
-    bad_length := #cast(i32) #len(bad_source)
+    bad_length := #cast(i32, #len(bad_source))
     api.shader_source(invalid, 1, &bad_pointer, &bad_length)
     api.compile_shader(invalid)
     compiled: i32 = 0
@@ -485,7 +485,7 @@ fn main() {
   api.bind_vertex_array(vao)
   api.bind_buffer(gl.ArrayBuffer, vbo)
   vertices: [6]f32 = [-0.8, -0.8, 0.8, -0.8, 0.0, 0.8]
-  api.buffer_data(gl.ArrayBuffer, #cast(isize) #sizeof(vertices), #cast(rawptr) &vertices[0], gl.StaticDraw)
+  api.buffer_data(gl.ArrayBuffer, #cast(isize, #sizeof(vertices)), #cast(rawptr, &vertices[0]), gl.StaticDraw)
   api.enable_vertex_attribute(0)
   api.vertex_attribute(0, 2, gl.Float, 0, 8, nil)
   event := sdl3.Event{}
@@ -512,7 +512,7 @@ fn main() {
     api.draw_arrays(gl.Triangles, 0, 3)
     if smoke {
       pixel: [4]u8 = []
-      api.read_pixels(width / 2, height / 2, 1, 1, gl.Rgba, gl.UnsignedByte, #cast(rawptr) &pixel[0])
+      api.read_pixels(width / 2, height / 2, 1, 1, gl.Rgba, gl.UnsignedByte, #cast(rawptr, &pixel[0]))
       if pixel[0] < 200 || pixel[1] > 30 || pixel[2] > 30 {
         #panic("triangle pixel mismatch")
       }
@@ -536,12 +536,14 @@ use "std/mem"
 use "std/os/linux"
 use "std/strings"
 fn main() {
-  backing: [65536]u8 = [] arena := mem.arena_from_buffer(backing[..])
-  args := linux.process_arguments(&arena)
+  backing: [65536]u8 = []
+  arena := mem.arena_from_buffer(backing[..])
+  args := linux.process_arguments(arena)
   if #len(args) != 3 { #panic("URL required") }
   if curl.init() != 0 { #panic("init") }
   defer curl.cleanup()
-  url: [4096]u8 = [] output: [256]u8 = []
+  url: [4096]u8 = []
+  output: [256]u8 = []
   result := curl.get_into(args[1], url[..], output[..], 5000)
   if !result.ok || result.http_status != 200 || !strings.equal(output[..result.written], "vendor transfer\n") { #panic("transfer") }
   missing := curl.get_into(args[2], url[..], output[..], 5000)
@@ -568,15 +570,19 @@ extern fn color_size "oracle_color_size"() usize
 extern fn surface_valid "oracle_surface"(surface: sdl3.Surface) i32
 fn main() {
   if #sizeof(ts.Node) != node_size() || #alignof(ts.Node) != node_align() || #sizeof(ts.Edit) != edit_size() || #sizeof(sdl3.Color) != color_size() { #panic("provider ABI mismatch") }
-  backing: [65536]u8 = [] arena := mem.arena_from_buffer(backing[..])
-  args := linux.process_arguments(&arena) if #len(args) != 3 { #panic("image and font paths required") }
-  buffer: [4096]u8 = [] surface := image.load_owned(args[1], buffer[..])
+  backing: [65536]u8 = []
+  arena := mem.arena_from_buffer(backing[..])
+  args := linux.process_arguments(arena)
+  if #len(args) != 3 { #panic("image and font paths required") }
+  buffer: [4096]u8 = []
+  surface := image.load_owned(args[1], buffer[..])
   if !surface.ok { #panic("image") }
   defer sdl3.surface_destroy_owned(surface.value)
   if surface_valid(surface.value) == 0 { #panic("image dimensions") }
   if !ttf.init() { #panic("TTF init") }
   defer ttf.quit()
-  font := ttf.open_owned(args[2], buffer[..], 18.0) if !font.ok { #panic("font") }
+  font := ttf.open_owned(args[2], buffer[..], 18.0)
+  if !font.ok { #panic("font") }
   defer ttf.destroy_owned(font.value)
   rendered := ttf.render_owned(font.value, "Dyn", sdl3.Color{ red: 255, green: 127, blue: 64, alpha: 255 })
   if !rendered.ok { #panic("rendered text") }

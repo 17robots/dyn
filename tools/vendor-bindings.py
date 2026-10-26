@@ -182,7 +182,7 @@ class Generator:
   if nested:
    ret=self.type(nested[1]+' (*)('+nested[3]+')',seen)
    args=split_types(nested[2]);args=[] if args==['void'] else args
-   return '*fn('+', '.join(self.type(arg,seen) for arg in args)+') '+ret
+   return 'fn('+', '.join(self.type(arg,seen) for arg in args)+') '+ret
   # Function pointers and adjusted function parameters.
   match=re.fullmatch(r'([^()]+?)\s*\(\s*(\*+)\s*(?:const\s*)?\)\s*\((.*)\)',value)
   if match:
@@ -190,14 +190,14 @@ class Generator:
     if self.record_name(item) in self.opaque:raise ValueError('opaque aggregate callback ABI requires a C trampoline')
    result=self.type(match[1],seen);params=split_types(match[3]);params=[] if params==['void'] else params
    mapped=[self.type(p,seen) if p!='...' else '...' for p in params]
-   return '*'*(len(match[2])-1)+'*fn('+', '.join(mapped)+')'+(' '+result if result!='void' else '')
+   return '*'*(len(match[2])-1)+'fn('+', '.join(mapped)+')'+(' '+result if result!='void' else '')
   match=re.fullmatch(r'(.+?)\s*\((.*)\)',value)
   if match and not match[2].lstrip().startswith('*') and not match[1].startswith(('struct ','union ')):
    for item in [match[1],*split_types(match[2])]:
     if self.record_name(item) in self.opaque:raise ValueError('opaque aggregate callback ABI requires a C trampoline')
    result=self.type(match[1],seen);params=split_types(match[2]);params=[] if params==['void'] else params
    mapped=[self.type(p,seen) if p!='...' else '...' for p in params]
-   return '*fn('+', '.join(mapped)+')'+(' '+result if result!='void' else '')
+   return 'fn('+', '.join(mapped)+')'+(' '+result if result!='void' else '')
   match=re.fullmatch(r'(.+?)\s*\(\s*\*\s*\)\s*\[(\d+)\]',value)
   if match:return '*['+match[2]+']'+self.type(match[1],seen)
   match=re.fullmatch(r'(.+?)((?:\s*\[\d*\])+)',value)
@@ -335,7 +335,7 @@ class Generator:
    if name in declared or name in self.needed or name in self.functions:continue
    if kind=='pointer':
     if value=='0':lines.append(f'pub const {ident(name)}: rawptr = nil')
-    else:lines.append(f'pub fn {ident(name)}() rawptr {{ address: usize = {value} return #cast(rawptr) address }}')
+    else:lines.append(f'pub fn {ident(name)}() rawptr {{ address: usize = {value}\n  return #cast(rawptr, address) }}')
    else:lines.append(f'pub const {ident(name)}: '+('[]const u8' if kind=='string' else kind)+' = '+value)
   checks=[]
   for name in sorted(self.needed):
@@ -348,7 +348,7 @@ class Generator:
     for f in children(self.records[name],'FieldDecl'):
      field=f['name'];offset=self.layout['@'+name+'.'+field][0]
      glue.append(f'_Static_assert(offsetof({self.cnames[name]},{field}) == {offset}, "regenerate {name}.{field} binding");')
-     checks.append(f'  if #cast(usize) &v_{target}.{ident(field)} - #cast(usize) &v_{target} != {offset} {{ return false }}')
+     checks.append(f'  if #cast(usize, &v_{target}.{ident(field)}) - #cast(usize, &v_{target}) != {offset} {{ return false }}')
    else:
     for field in children(self.records[name],'FieldDecl'):
      if not field.get('name'):continue
@@ -394,7 +394,7 @@ class Generator:
       cparams.append('void *'+arg if t=='struct __va_list_tag *' else ('__typeof__(('+ct+')0) '+arg if '(*' in t else ct+' '+arg));args.append(arg);dargs.append(arg)
     if (self.dispatch or name in self.procedures) and not name.startswith('dyn_helper_'):
      if record in self.opaque or any(self.record_name(p['type']['qualType']) in self.opaque for p in params):raise ValueError('opaque aggregate procedure ABI requires a C trampoline')
-     signature='*fn('+', '.join(self.type(p['type']['qualType']) for p in params)+')'+(' '+dr if dr!='void' else '')
+     signature='fn('+', '.join(self.type(p['type']['qualType']) for p in params)+')'+(' '+dr if dr!='void' else '')
      lines.append(f'pub type Procedure_{ident(name)} = '+signature)
      lines.append(f'pub fn {ident(name)}(procedure: Procedure_{ident(name)}'+(', '+', '.join(dparams) if dparams else '')+')'+(' '+dr if dr!='void' else '')+' { '+('return ' if dr!='void' else '')+'procedure('+', '.join('arg'+str(i) for i in range(len(params)))+') }')
     elif node.get('variadic'):

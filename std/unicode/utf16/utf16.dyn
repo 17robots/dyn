@@ -8,7 +8,7 @@ pub fn decode(source: []const u16, offset: usize) Decode {
   }
   first := source[offset]
   if first < 55296 || first > 57343 {
-    return Decode{ codepoint: #cast(u32) first, width: 1, ok: true }
+    return Decode{ codepoint: #cast(u32, first), width: 1, ok: true }
   }
   if first >= 56320 || offset + 1 >= #len(source) {
     return Decode{ codepoint: Replacement, width: 1, ok: false }
@@ -17,8 +17,8 @@ pub fn decode(source: []const u16, offset: usize) Decode {
   if second < 56320 || second > 57343 {
     return Decode{ codepoint: Replacement, width: 1, ok: false }
   }
-  high := #cast(u32) (first - 55296)
-  low := #cast(u32) (second - 56320)
+  high := #cast(u32, (first - 55296))
+  low := #cast(u32, (second - 56320))
   return Decode{ codepoint: 65536 + high * 1024 + low, width: 2, ok: true }
 }
 
@@ -30,15 +30,15 @@ pub fn encode(destination: []u16, codepoint: u32) usize {
     if #len(destination) < 1 {
       return 0
     }
-    destination[0] = #cast(u16) codepoint
+    destination[0] = #cast(u16, codepoint)
     return 1
   }
   if #len(destination) < 2 {
     return 0
   }
   value := codepoint - 65536
-  destination[0] = #cast(u16) (#cast(u32) 55296 + value / 1024)
-  destination[1] = #cast(u16) (#cast(u32) 56320 + value % 1024)
+  destination[0] = #cast(u16, (#cast(u32, 55296) + value / 1024))
+  destination[1] = #cast(u16, (#cast(u32, 56320) + value % 1024))
   return 2
 }
 
@@ -54,17 +54,19 @@ pub fn valid(source: []const u16) bool {
   return true
 }
 
-pub fn codepoint_count(source: []const u16, output: *usize) bool {
+pub struct Count { value: usize, ok: bool }
+
+// Code points in source. ok is false when source is not valid UTF-16.
+pub fn codepoint_count(source: []const u16) Count {
   count: usize = 0
   offset: usize = 0
   for offset < #len(source) {
     decoded := decode(source, offset)
     if !decoded.ok {
-      return false
+      return Count{}
     }
     offset += decoded.width
     count += 1
   }
-  output.* = count
-  return true
+  return Count{ value: count, ok: true }
 }

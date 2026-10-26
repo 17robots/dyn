@@ -127,7 +127,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-riscv-linker-') as directory:
         if compiler.exists():
             library = work/'dyn-library';library.mkdir()
             client = work/'dyn-client';client.mkdir()
-            (library/'main.dyn').write_text('pub value:i64 = 5\npub fn calculate(x:i64) i64 { value += x return value }\n')
+            (library/'main.dyn').write_text('pub value:i64 = 5\npub fn calculate(x:i64) i64 { value += x\nreturn value }\n')
             (client/'main.dyn').write_text('extern fn calculate(x:i64) i64\nfn main() { if calculate(7) != 12 || calculate(3) != 15 { #panic("shared") } }\n')
             for mode in ('debug','release'):
                 shared = work/('dyn-'+mode+'.so');executable = work/('client-'+mode)
@@ -142,7 +142,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-riscv-linker-') as directory:
     struct.pack_into('<I', incompatible, 48, 0)  # LP64 soft-float cannot mix with LP64D.
     (work/'soft.o').write_bytes(incompatible)
     result = subprocess.run([str(work/'link'), str(work/'soft'), str(work/'soft.o')], capture_output=True)
-    assert result.returncode != 0 and b'LP64D ABI' in result.stderr, result.stderr
+    assert result.returncode != 0 and b'unsupported RISC-V ABI' in result.stderr, result.stderr
     # Malformed HI/LO pair must fail closed rather than encoding a bad address.
     broken = bytearray((work/'static.o').read_bytes())
     headers = struct.unpack_from('<Q', broken, 40)[0]

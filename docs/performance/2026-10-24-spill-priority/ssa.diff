@@ -1,0 +1,50 @@
+--- before/ssa.inc
++++ after/ssa.inc
+@@ -4635,7 +4635,21 @@
+   Ssa *s = a->s;
+   uint32_t *list = malloc((s->value_count + 1) * sizeof(uint32_t)), count = 0;
+   uint32_t *active = malloc((s->value_count + 1) * sizeof(uint32_t)), actives = 0;
+-  if (!list || !active) { free(list); free(active); return false; }
++  uint64_t *weight = calloc((size_t)s->value_count + 1, sizeof(uint64_t));
++  if (!list || !active || !weight) { free(list); free(active); free(weight); return false; }
++  /* Weight actual uses in loops; cap the depth estimate. */
++  for (uint32_t i = 0; i < a->n; ++i) {
++    SsaBlock *b = &s->blocks[a->order[i]];
++    uint64_t cost = UINT64_C(1) << (2 * (b->loop_depth < 5 ? b->loop_depth : 5));
++    if (b->control >= 0) weight[b->control] += cost;
++    for (uint32_t k = 0; k < b->values.count; ++k) {
++      uint32_t id = b->values.items[k];
++      if (s->values[id].dead) continue;
++      uint32_t n = ssa_operands(s, id, ssa_slots, SSA_MAX_OPERANDS);
++      for (uint32_t j = 0; j < n; ++j)
++        if (*ssa_slots[j] >= 0) weight[*ssa_slots[j]] += cost;
++    }
++  }
+   for (uint32_t i = 0; i < a->n; ++i) {
+     SsaBlock *block = &s->blocks[a->order[i]];
+     for (uint32_t k = 0; k < block->values.count; ++k) {
+@@ -4685,12 +4699,13 @@
+       }
+     }
+     if (chosen < 0) {
+-      /* Evict the active interval of this class that ends last, if it
+-         outlives this one and its register suits this interval. */
++      /* Keep the farthest-end policy, but protect substantially hotter
++         values from eviction by a cold temporary. */
+       int victim = -1;
+       for (uint32_t j = 0; j < actives; ++j) {
+         SsaValue *w = &s->values[active[j]];
+         if (w->reg < 0 || (w->reg >= X_XMM0) != floating || ssa_clobbered(a, (unsigned)w->reg, v->start, v->end)) continue;
++        if (weight[active[j]] > 4 * weight[id]) continue;
+         if (victim < 0 || w->end > s->values[active[victim]].end) victim = (int)j;
+       }
+       if (victim >= 0 && s->values[active[victim]].end > v->end) {
+@@ -4716,7 +4731,7 @@
+                          : (v->reg == X_RBX || (v->reg >= X_R12 && v->reg <= X_R15)))
+       a->used_callee |= UINT64_C(1) << v->reg;
+   }
+-  free(list); free(active);
++  free(list); free(active); free(weight);
+   return true;
+ }
+ 

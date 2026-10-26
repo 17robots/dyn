@@ -1,0 +1,14 @@
+{
+  "ssa-compare-flags.py": {
+    "baseline_status": 1,
+    "log": "ssa-compare-flags.py.baseline.log"
+  },
+  "ssa-byte-count.py": {
+    "baseline_status": 1,
+    "log": "ssa-byte-count.py.baseline.log"
+  },
+  "ssa-spill-compare.py": {
+    "baseline_status": -6,
+    "log": "ssa-spill-compare.py.baseline.log"
+  }
+}

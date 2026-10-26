@@ -2,10 +2,11 @@
 
 Status: phase 1 is implemented: generic functions, std phase 1, and
 arena-only allocation replacing `Allocator` and the `#alloc*` builtins.
-Phase 2 (generic structs) waits for measurements. See [Implementation status](#implementation-status).
+Generic structs were rejected on 2026-10-22; see
+[Decided: no generic types](#decided-no-generic-types). See
+[Implementation status](#implementation-status).
 
-Dyn gains one small feature: functions, and later structs, may take types as
-parameters. The goal is to remove repeated per-type code and casts through
+Dyn has one small feature: functions may take types as parameters. The goal is to remove repeated per-type code and casts through
 `*u8`/`rawptr` without adding a type-level language. The model is Go's
 simplicity budget, Odin's `$T` syntax, and the way Ryan Fleury's code actually
 uses generic helpers (`Min`, `Max`, `Clamp`, `Swap`, `push_array`): small,
@@ -43,10 +44,9 @@ language decision, not an extension of this design.
 - Operator overloading. Operators keep their fixed built-in meaning.
 - Specialization: no different body for a particular type, and no overloading
   by parameter type.
-- Generic methods, generic enums, generic unions, and generic type aliases.
+- Generic structs, enums and unions, generic methods, and generic type aliases.
 - Value parameters (`$N: usize`) and compile-time function execution.
 - Higher-kinded parameters (a parameter that is itself a generic type).
-- Inferring the type parameters of a struct literal.
 
 ## Syntax
 
@@ -55,12 +55,12 @@ language decision, not an extension of this design.
 ```dyn
 // Explicit type argument: the type is the first thing a reader sees.
 pub fn push($T: type, arena: *Arena) *T {
-  return #cast(*T) arena_push_or_panic(arena, #sizeof(T), #alignof(T))
+  return #cast(*T, arena_push_or_panic(arena, #sizeof(T), #alignof(T)))
 }
 
 pub fn push_array($T: type, arena: *Arena, count: usize) []T {
   bytes := arena_push_or_panic(arena, count * #sizeof(T), #alignof(T))
-  return (#cast(*T) bytes)[..count]
+  return (#cast(*T, bytes))[..count]
 }
 
 // Inferred type argument: T comes from the arguments.
@@ -76,7 +76,7 @@ pub fn swap(a, b: *$T) {
 }
 
 pub fn clear(value: *$T) {
-  zero((#cast(*u8) value)[..#sizeof(T)])
+  zero((#cast(*u8, value))[..#sizeof(T)])
 }
 
 pub fn copy(destination: []$T, source: []const T) usize {
@@ -127,22 +127,39 @@ No unification beyond this, no inference from the return type, and no
 implicit conversion to make inference succeed (a `u32` argument does not widen
 to match an `i64` one). Add a cast at the call.
 
-### Structs (phase 2)
+### Decided: no generic types
+
+Structs, enums and unions never take type parameters. Storage is always the
+caller's own concrete struct, and generic functions do the plumbing through
+its fields. This is how Ryan Fleury's macros (`SLLQueuePush`,
+`DLLPushBack`) work, but checked: a body may use any field the instance type
+has, and a missing field is an error at the call.
 
 ```dyn
-pub struct List($T) {
-  items: []T,
-  count: usize,
+pub fn sll_stack_push(first: **$T, node: *T) {
+  node.next = first.*
+  first.* = node
 }
 
-names: List([]const u8) = {}
+struct Node { next: *Node, value: i32 }
+list.sll_stack_push(&state.first_free, node)
 ```
 
-The parser already reserves `Name(T){...}`. Type arguments are always
-explicit. Struct literals are written with the full type, `List(i32){}`, or as
-`{}` where the target type is known. Recursive self-instantiation is limited to
-the same arguments (`next: *List(T)`), which rules out unbounded instance
-growth.
+Reasons:
+
+- One mechanism. Generic types would add type identity, per-instance layout and
+  a second way to write containers next to intrusive ones.
+- No pressure to spread. Without generic types no API can require one, and
+  without constraints generic code cannot stack into abstractions over
+  containers.
+- The only large consumer, the self-hosted compiler, is written the way the C
+  compiler already is: concrete tables with intrusive links.
+- Measured in std, DNA and `projects/`: almost no code would change. DNA's
+  `#cast(*T)` sites are FFI and thread userdata, which generic types do not
+  touch.
+
+Std containers follow from this; see
+[std standardization](std-standardization.md).
 
 ## Checking
 
@@ -188,7 +205,7 @@ the language server. If the prototype grows past 2,500, stop and simplify the
 design rather than the code.
 
 1. **Grammar.** `$identifier` in parameter types, `type` as a parameter kind,
-   type arguments in struct types (phase 2). Editor queries highlight `$T`.
+   no type arguments on types. Editor queries highlight `$T`.
 2. **Lowering.** Generic declarations stay in the AST unchanged, marked
    generic. Lowering, analysis and code generation skip them until they are
    instantiated.
@@ -254,28 +271,21 @@ overwritten right away. Std functions that produced output through an
   `_i64`/`_u64` versions.
 - `mem`: `push`, `push_array`, `push_bytes_uninit`, `zero`, `clear`, `swap`, `copy`,
   `move`, `fill`, `equal`.
-- `sort`: `sort` (insertion sort below 16 elements, otherwise a heap sort;
-  elements must support `<`) and `search`, replacing the `i64`/`u64` versions.
+- `sort`: `sort` (allocation-free introsort with monotone-input fast paths,
+  insertion sort for small partitions, and a worst-case heap fallback; elements
+  must support `<` with a strict weak ordering) and `search`, replacing the
+  `i64`/`u64` versions.
 
 The `[]u8`-only versions of `copy`, `fill`, `zero` and `equal` are replaced,
 not kept alongside. `[]u8` calls keep working because `T` is inferred as `u8`.
-
-### Std (phase 2, only after phase 1 ships and is measured)
-
-- `List($T)`: an arena-backed array that grows by copying.
-- `Map($K, $V)`: fixed slot count, chained, arena-backed, keyed by any type
-  with `==`. Requires a hash function chosen per key type; phase 2 must settle
-  that without adding constraints (likely `hash: fn(*const K) u64` as a field).
-- `Rng1($T)`, `Vec2($T)`: only if DNA's geometry work shows the concrete `f32`
-  versions are not enough.
 
 ## Phases
 
 1. Generic functions, std phase 1, removal of the `#alloc*` builtins with a
    migration note. DNA migrates arena pushes and `mem.zero` byte casts to `mem.clear`.
 2. Measure in DNA and std for one release.
-3. Generic structs and std phase 2, if phase 1 met the budget and real code
-   asks for containers.
+
+There is no phase 3: generic types were rejected.
 
 ## Tests
 

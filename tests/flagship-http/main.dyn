@@ -1,0 +1,135 @@
+// Flagship HTTP service: a small notes server on four worker threads. Handlers
+// reach application state through Request.context, not module globals.
+// GET /health, GET /notes, POST /notes and POST /quit. Prints "port N" once
+// listening on 127.0.0.1, then serves until a client posts /quit.
+use "std/bytes"
+use "std/fmt"
+use "std/io"
+use "std/mem"
+use "std/net"
+use "std/net/http"
+use "std/net/http/concurrent"
+use "std/sync"
+use "std/time"
+
+const WorkerCount: usize = 4
+const NoteCapacity: usize = 64 * mem.KiB
+
+// Application state, shared by every worker through Request.context.
+struct App {
+  router: http.Router,
+  routes: [4]http.Route,
+  notes: [NoteCapacity]u8,
+  notes_used: usize,
+  notes_count: usize,
+  notes_lock: sync.Mutex,
+  quit: sync.AtomicU32,
+}
+
+fn app(request: *const http.Request) *App {
+  return #cast(*App, request.context)
+}
+
+fn text(response: *http.Response, status: u16, body: []const u8) http.Result {
+  return http.respond(response, body, http.ResponseOptions{ status: status, content_type: "text/plain; charset=utf-8" })
+}
+
+fn handle_health(response: *http.Response, request: *const http.Request) http.Result {
+  return text(response, http.StatusOk, "ok\n")
+}
+
+fn handle_list(response: *http.Response, request: *const http.Request) http.Result {
+  // Copy under the lock, respond outside it: a slow client must not block writers.
+  state := app(request)
+  copy: [NoteCapacity]u8
+  sync.lock(&state.notes_lock)
+  used := state.notes_used
+  _ = mem.copy(copy[..used], state.notes[..used])
+  sync.unlock(&state.notes_lock)
+  return text(response, http.StatusOk, copy[..used])
+}
+
+fn handle_add(response: *http.Response, request: *const http.Request) http.Result {
+  body := request.body
+  if #len(body) == 0 || bytes.find_byte(body, '\n') < #len(body) {
+    return text(response, http.StatusBadRequest, "note must be one nonempty line\n")
+  }
+  state := app(request)
+  sync.lock(&state.notes_lock)
+  stored := state.notes_used + #len(body) + 1 <= NoteCapacity
+  count: usize
+  if stored {
+    used := state.notes_used
+    _ = mem.copy(state.notes[used..used + #len(body)], body)
+    state.notes[used + #len(body)] = '\n'
+    state.notes_used += #len(body) + 1
+    state.notes_count += 1
+    count = state.notes_count
+  }
+  sync.unlock(&state.notes_lock)
+  if !stored {
+    return text(response, http.StatusPayloadTooLarge, "notes full\n")
+  }
+  digits: [21 + mem.ArenaBufferOverhead]u8
+  scratch := mem.arena_from_buffer(digits[..])
+  number := fmt.u64_decimal(scratch, #cast(u64, count))
+  payload := (#cast(*u8, &number[0]))[..#len(number) + 1]
+  payload[#len(number)] = '\n'
+  return text(response, http.StatusOk, payload)
+}
+
+fn handle_quit(response: *http.Response, request: *const http.Request) http.Result {
+  sync.store_u32(&app(request).quit, 1)
+  return http.respond(response, "bye\n", http.ResponseOptions{ content_type: "text/plain; charset=utf-8", close_connection: true })
+}
+
+fn handle(response: *http.Response, request: *const http.Request) http.Result {
+  return http.dispatch(&app(request).router, response, request)
+}
+
+fn main() {
+  arena := mem.arena_create(16 * mem.MiB)
+  defer mem.arena_release(arena)
+  state := mem.push(App, arena)
+  state.router = http.router(state.routes[..], nil)
+  _ = http.route(&state.router, "GET", "/health", handle_health)
+  _ = http.route(&state.router, "GET", "/notes", handle_list)
+  _ = http.route(&state.router, "POST", "/notes", handle_add)
+  _ = http.route(&state.router, "POST", "/quit", handle_quit)
+
+  address := net.ipv4(127, 0, 0, 1, 0)
+  listened := net.tcp_listen_ipv4(&address, 64)
+  if !listened.ok {
+    #panic("cannot listen")
+  }
+  listener := net.listener_take(&listened.value)
+  bound := net.Address{}
+  if !net.local_address(listener.descriptor, &bound).ok {
+    #panic("cannot read local address")
+  }
+  port := #cast(u64, bound.bytes[2]) * 256 + #cast(u64, bound.bytes[3])
+
+  workers := mem.push_array(concurrent.Worker, arena, WorkerCount)
+  receive_storage := mem.push_array(u8, arena, WorkerCount * 16 * mem.KiB)
+  stacks := mem.push_array(u8, arena, WorkerCount * 256 * mem.KiB)
+  started := concurrent.start_context(arena, workers, &listener, receive_storage, 16 * mem.KiB, stacks, 256 * mem.KiB, handle, state)
+  if !started.ok {
+    #panic("cannot start workers")
+  }
+
+  digits: [20 + mem.ArenaBufferOverhead]u8
+  scratch := mem.arena_from_buffer(digits[..])
+  _ = io.write_all(io.stdout(), "port ")
+  _ = io.write_all(io.stdout(), fmt.u64_decimal(scratch, port))
+  _ = io.write_all(io.stdout(), "\n")
+
+  for sync.load_u32(&state.quit) == 0 {
+    _ = time.sleep(10 * time.Millisecond)
+  }
+  concurrent.stop(workers)
+  joined := concurrent.join(workers)
+  _ = net.listener_close(&listener)
+  if !joined.ok {
+    #panic("worker failed")
+  }
+}

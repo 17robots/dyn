@@ -1,4 +1,4 @@
-pub struct HexdumpResult { data: []u8, consumed: usize, complete: bool }
+use "std/mem" mem
 
 fn digit(value: u8) u8 {
   if value < 10 {
@@ -7,11 +7,14 @@ fn digit(value: u8) u8 {
   return 'a' + value - 10
 }
 
-// Compact deterministic hex dump. Each row: 8-digit offset, two spaces, bytes, newline.
-pub fn hexdump(destination: []u8, source: []const u8, columns: usize) HexdumpResult {
+// Compact deterministic hex dump in arena. Each row: 8-digit offset, two
+// spaces, bytes, newline. Panics when columns is zero.
+pub fn hexdump(arena: *mem.Arena, source: []const u8, columns: usize) []u8 {
   if columns == 0 {
-    return HexdumpResult{}
+    #panic("hexdump needs at least one column")
   }
+  rows := (#len(source) + columns - 1) / columns
+  destination := mem.push_bytes_uninit(arena, rows * 11 + #len(source) * 3)
   output_at: usize = 0
   input_at: usize = 0
   for input_at < #len(source) {
@@ -19,14 +22,10 @@ pub fn hexdump(destination: []u8, source: []const u8, columns: usize) HexdumpRes
     if row > columns {
       row = columns
     }
-    required: usize = 11 + row * 3
-    if required > #len(destination) - output_at {
-      return HexdumpResult{ data: destination[..output_at], consumed: input_at }
-    }
     shift: usize = 8
     for shift > 0 {
       shift -= 1
-      destination[output_at] = digit(#cast(u8) ((input_at >> (shift * 4)) & 15))
+      destination[output_at] = digit(#cast(u8, ((input_at >> (shift * 4)) & 15)))
       output_at += 1
     }
     destination[output_at] = ' '
@@ -43,7 +42,7 @@ pub fn hexdump(destination: []u8, source: []const u8, columns: usize) HexdumpRes
     output_at += 1
     input_at += row
   }
-  return HexdumpResult{ data: destination[..output_at], consumed: input_at, complete: true }
+  return destination[..output_at]
 }
 
 pub fn poison(destination: []u8, pattern: u8) {

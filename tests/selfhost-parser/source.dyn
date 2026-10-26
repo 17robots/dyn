@@ -1,0 +1,947 @@
+// Port of the fail-fast source parser in src/parser_source.inc.
+const SrcFile: u16 = 1000
+const SrcDeclaration: u16 = 1001
+const SrcTarget: u16 = 1002
+const SrcTargetCondition: u16 = 1003
+const SrcLink: u16 = 1004
+const SrcUse: u16 = 1005
+const SrcImport: u16 = 1006
+const SrcVariable: u16 = 1007
+const SrcConst: u16 = 1008
+const SrcAlias: u16 = 1009
+const SrcStruct: u16 = 1010
+const SrcStructMember: u16 = 1011
+const SrcEnum: u16 = 1012
+const SrcEnumMember: u16 = 1013
+const SrcFn: u16 = 1014
+const SrcExternFn: u16 = 1015
+const SrcExternVariable: u16 = 1016
+const SrcFnParam: u16 = 1017
+const SrcVariadicParam: u16 = 1018
+const SrcVariadic: u16 = 1019
+const SrcBlock: u16 = 1020
+const SrcReturn: u16 = 1021
+const SrcContinue: u16 = 1022
+const SrcBreak: u16 = 1023
+const SrcIf: u16 = 1024
+const SrcElse: u16 = 1025
+const SrcCase: u16 = 1026
+const SrcCaseArm: u16 = 1027
+const SrcCasePattern: u16 = 1028
+const SrcTypePattern: u16 = 1029
+const SrcFor: u16 = 1030
+const SrcForCondition: u16 = 1031
+const SrcDefer: u16 = 1032
+const SrcAssignment: u16 = 1033
+const SrcAssert: u16 = 1034
+const SrcPanic: u16 = 1035
+const SrcRange: u16 = 1036
+const SrcQualifier: u16 = 1037
+const SrcReverse: u16 = 1038
+
+fn src_end(p: *const Parser, id: u32, fallback: u32) u32 {
+  if id == None {
+    return fallback
+  }
+  return node_end(p, id)
+}
+
+fn src_peek(p: *Parser) Token {
+  if p.tree.failed {
+    return Token{ start: p.offset, end: p.offset, kind: TokenKind.End }
+  }
+  probe := p.*
+  scratch := Tree{}
+  probe.tree = &scratch
+  lex(&probe)
+  if scratch.failed {
+    propagate_error(p, &scratch)
+  }
+  return probe.token
+}
+
+fn src_next_is(p: *Parser, word: []const u8) bool {
+  next := src_peek(p)
+  return #cast(usize, next.end - next.start) == #len(word) && at(p, next.start, word)
+}
+
+// distinct, packed and is are keywords only where they start their construct.
+fn src_distinct(p: *Parser) bool {
+  return token_is(p, "distinct") && src_next_is(p, "type")
+}
+
+fn src_packed(p: *Parser) bool {
+  return token_is(p, "packed") && src_next_is(p, "struct")
+}
+
+fn src_type_pattern(p: *Parser) bool {
+  return token_is(p, "is") && !src_next_is(p, "=>") && !src_next_is(p, ",") && !src_next_is(p, "..")
+}
+
+fn src_literal(p: *Parser, token_kind: TokenKind, kind: u16) u32 {
+  token := p.token
+  if token.kind != token_kind {
+    fail(p, token.start, "expected literal")
+    return None
+  }
+  lex(p)
+  return add_node(p, kind, token.start, token.end, None)
+}
+
+fn src_qualifier(p: *Parser) u32 {
+  start := p.token.start
+  expect(p, ":")
+  child := parse_type(p)
+  return add_node(p, SrcQualifier, start, src_end(p, child, start), child)
+}
+
+fn src_dots(p: *Parser) bool {
+  if take(p, "...") {
+    return true
+  }
+  start := p.token.start
+  if !take(p, "..") {
+    return false
+  }
+  if p.token.start != start + 2 {
+    fail(p, start, "variadic marker must be contiguous")
+  }
+  expect(p, ".")
+  return !p.tree.failed
+}
+
+fn src_variadic(p: *Parser) u32 {
+  start := p.token.start
+  if !src_dots(p) {
+    fail(p, start, "expected variadic marker")
+  }
+  return add_node(p, SrcVariadic, start, start + 3, None)
+}
+
+fn src_variable(p: *Parser) u32 {
+  start := p.token.start
+  first := None
+  last := None
+  chain(p, &first, &last, parse_name(p))
+  if take(p, ":=") {
+    chain(p, &first, &last, expression(p, 0))
+  } else {
+    colon := p.token.start
+    expect(p, ":")
+    target := parse_type(p)
+    if take(p, "=") {
+      chain(p, &first, &last, target)
+      chain(p, &first, &last, expression(p, 0))
+    } else {
+      chain(p, &first, &last, add_node(p, SrcQualifier, colon, src_end(p, target, colon), target))
+    }
+  }
+  return add_node(p, SrcVariable, start, src_end(p, last, start), first)
+}
+
+fn src_const(p: *Parser) u32 {
+  start := p.token.start
+  expect(p, "const")
+  child := src_variable(p)
+  return mark(p, add_node(p, SrcConst, start, src_end(p, child, start), child), FlagConst)
+}
+
+fn src_alias(p: *Parser) u32 {
+  start := p.token.start
+  first := None
+  last := None
+  is_distinct := take(p, "distinct")
+  expect(p, "type")
+  chain(p, &first, &last, parse_name(p))
+  expect(p, "=")
+  chain(p, &first, &last, parse_type(p))
+  flags: u16
+  if is_distinct {
+    flags = FlagDistinct
+  }
+  return mark(p, add_node(p, SrcAlias, start, src_end(p, last, start), first), flags)
+}
+
+// A condition can end in a name directly before its block. The initial
+// expression attempt can consume that block as a named struct literal. Scan
+// only the bytes reached by that attempt, retaining the final top-level brace;
+// earlier braces belong to genuine struct operands.
+fn src_condition(p: *Parser) u32 {
+  saved := p.*
+  count := p.tree.count
+  value := expression(p, 0)
+  if !p.tree.failed && (token_is(p, "{") || token_is(p, "..") || token_is(p, "..=")) {
+    return value
+  }
+  stop := p.token.start
+  if resource_error(p) {
+    return None
+  }
+  restore(p, &saved, count)
+  probe := p.*
+  scratch := Tree{}
+  probe.tree = &scratch
+  parens: u32
+  brackets: u32
+  braces: u32
+  brace: u32
+  for probe.token.kind != TokenKind.End && probe.token.start <= stop && !scratch.failed {
+    if token_is(&probe, "{") {
+      if parens == 0 && brackets == 0 && braces == 0 {
+        brace = probe.token.start
+      }
+      braces += 1
+    } else if token_is(&probe, "}") {
+      if braces == 0 {
+        break
+      }
+      braces -= 1
+    } else if token_is(&probe, "(") {
+      parens += 1
+    } else if token_is(&probe, ")") {
+      if parens == 0 {
+        break
+      }
+      parens -= 1
+    } else if token_is(&probe, "[") {
+      brackets += 1
+    } else if token_is(&probe, "]") {
+      if brackets == 0 {
+        break
+      }
+      brackets -= 1
+    }
+    lex(&probe)
+  }
+  if scratch.failed {
+    propagate_error(p, &scratch)
+    return None
+  }
+  p.block_brace = brace
+  retry := expression(p, 0)
+  p.block_brace = saved.block_brace
+  return retry
+}
+
+fn src_range(p: *Parser, condition: bool) u32 {
+  first := None
+  if condition {
+    first = src_condition(p)
+  } else {
+    first = expression(p, 0)
+  }
+  if first == None || (!token_is(p, "..") && !token_is(p, "..=")) {
+    return first
+  }
+  operator := p.token
+  lex(p)
+  last := None
+  if condition {
+    last = src_condition(p)
+  } else {
+    last = expression(p, 0)
+  }
+  if last == None {
+    return None
+  }
+  p.tree.nodes[first].next = last
+  flags: u16
+  if operator.end - operator.start == 3 {
+    flags = FlagInclusive
+  }
+  return mark(p, add_node(p, SrcRange, p.tree.nodes[first].start, node_end(p, last), first), flags)
+}
+
+fn src_if(p: *Parser) u32 {
+  start := p.token.start
+  first := None
+  last := None
+  expect(p, "if")
+  chain(p, &first, &last, src_condition(p))
+  chain(p, &first, &last, src_block(p))
+  if token_is(p, "else") {
+    begin := p.token.start
+    lex(p)
+    child := None
+    if token_is(p, "if") {
+      child = src_statement(p)
+    } else {
+      child = src_block(p)
+    }
+    chain(p, &first, &last, add_node(p, SrcElse, begin, src_end(p, child, begin), child))
+  }
+  return add_node(p, SrcIf, start, src_end(p, last, start), first)
+}
+
+fn src_for(p: *Parser) u32 {
+  start := p.token.start
+  first := None
+  last := None
+  if !token_is(p, "for") {
+    chain(p, &first, &last, parse_name(p))
+    expect(p, ":")
+  }
+  expect(p, "for")
+  if !token_is(p, "{") {
+    begin := p.token.start
+    condition_first := None
+    condition_last := None
+    saved := p.*
+    count := p.tree.count
+    pointer := take(p, "*")
+    constant := pointer && take(p, "const")
+    flags: u16
+    binding := None
+    if p.token.kind == TokenKind.Name {
+      binding = parse_name(p)
+    }
+    if binding != None && take(p, "in") {
+      flags = FlagIteration
+      if pointer {
+        flags |= FlagPointerBinding
+      }
+      if constant {
+        flags |= FlagConst
+      }
+      chain(p, &condition_first, &condition_last, binding)
+      if token_is(p, "#reverse") {
+        reverse_start := p.token.start
+        lex(p)
+        expect(p, "(")
+        value := src_range(p, false)
+        end := p.token.end
+        expect(p, ")")
+        chain(p, &condition_first, &condition_last, add_node(p, SrcReverse, reverse_start, end, value))
+      } else {
+        chain(p, &condition_first, &condition_last, src_range(p, true))
+      }
+    } else {
+      if resource_error(p) {
+        return None
+      }
+      restore(p, &saved, count)
+      chain(p, &condition_first, &condition_last, src_condition(p))
+    }
+    chain(p, &first, &last, mark(p, add_node(p, SrcForCondition, begin, src_end(p, condition_last, begin), condition_first), flags))
+  }
+  chain(p, &first, &last, src_block(p))
+  return add_node(p, SrcFor, start, src_end(p, last, start), first)
+}
+
+fn src_case(p: *Parser) u32 {
+  start := p.token.start
+  first := None
+  last := None
+  expect(p, "case")
+  chain(p, &first, &last, src_condition(p))
+  expect(p, "{")
+  for !token_is(p, "}") && !p.tree.failed {
+    begin := p.token.start
+    arm_first := None
+    arm_last := None
+    wildcard := false
+    if src_type_pattern(p) {
+      lex(p)
+      pattern_first := None
+      pattern_last := None
+      chain(p, &pattern_first, &pattern_last, parse_type(p))
+      if p.token.kind == TokenKind.Name {
+        chain(p, &pattern_first, &pattern_last, parse_name(p))
+      }
+      chain(p, &arm_first, &arm_last, add_node(p, SrcTypePattern, begin, src_end(p, pattern_last, begin), pattern_first))
+    } else {
+      wildcard = take(p, "_")
+      if !wildcard {
+        for {
+          pattern := src_range(p, false)
+          if pattern == None {
+            break
+          }
+          chain(p, &arm_first, &arm_last, add_node(p, SrcCasePattern, p.tree.nodes[pattern].start, node_end(p, pattern), pattern))
+          if !take(p, ",") || p.tree.failed {
+            break
+          }
+        }
+      }
+      if p.token.kind == TokenKind.Name {
+        chain(p, &arm_first, &arm_last, parse_name(p))
+      }
+    }
+    expect(p, "=>")
+    chain(p, &arm_first, &arm_last, src_block(p))
+    flags: u16
+    if wildcard {
+      flags = FlagWildcard
+    }
+    chain(p, &first, &last, mark(p, add_node(p, SrcCaseArm, begin, src_end(p, arm_last, begin), arm_first), flags))
+    if token_is(p, ",") {
+      fail(p, p.token.start, "case arms are not separated by commas")
+    }
+  }
+  end := p.token.end
+  expect(p, "}")
+  return add_node(p, SrcCase, start, end, first)
+}
+
+fn src_expression_start(p: *Parser) bool {
+  if src_distinct(p) {
+    return false
+  }
+  keywords: [9][]const u8 = ["return", "break", "continue", "const", "if", "case", "for", "defer", "type"]
+  for keyword in keywords {
+    if token_is(p, keyword) {
+      return false
+    }
+  }
+  kind := p.token.kind
+  if kind == TokenKind.Name || kind == TokenKind.Number || kind == TokenKind.Text || kind == TokenKind.Character {
+    return true
+  }
+  starts: [17][]const u8 = ["(", "[", ".", "-", "&", "!", "~", "#cast", "#bitcast", "#sizeof", "#alignof", "#offsetof", "#typeof", "#len", "#wrap", "#load", "#syscall"]
+  for candidate in starts {
+    if token_is(p, candidate) {
+      return true
+    }
+  }
+  return false
+}
+
+fn src_panic(p: *Parser) u32 {
+  start := p.token.start
+  expect(p, "#panic")
+  expect(p, "(")
+  child := expression(p, 0)
+  end := p.token.end
+  expect(p, ")")
+  return add_node(p, SrcPanic, start, end, child)
+}
+
+fn src_assignment_operator(p: *const Parser) bool {
+  operators: [11][]const u8 = ["=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<=", ">>="]
+  for candidate in operators {
+    if token_is(p, candidate) {
+      return true
+    }
+  }
+  return false
+}
+
+fn src_primary_kind(kind: u16) bool {
+  return kind == ExpName || kind == ExpGroup || kind == ExpDeref || kind == ExpCall || kind == ExpField || kind == ExpIndex || kind == ExpSlice
+}
+
+fn src_deferrable(kind: u16) bool {
+  return kind == SrcBlock || kind == ExpCall || kind == SrcAssignment || kind == SrcIf || kind == SrcCase || kind == SrcFor || kind == SrcPanic || kind == ExpSyscall
+}
+
+fn src_statement_body(p: *Parser) u32 {
+  if p.tree.failed {
+    return None
+  }
+  start := p.token.start
+  if token_is(p, "if") {
+    return src_if(p)
+  }
+  if token_is(p, "case") {
+    return src_case(p)
+  }
+  if token_is(p, "for") {
+    return src_for(p)
+  }
+  if token_is(p, "const") {
+    return src_const(p)
+  }
+  if token_is(p, "type") || src_distinct(p) {
+    return src_alias(p)
+  }
+  if token_is(p, "#panic") {
+    return src_panic(p)
+  }
+  if token_is(p, "defer") {
+    lex(p)
+    child := None
+    if token_is(p, "{") {
+      child = src_block(p)
+    } else {
+      child = src_statement(p)
+    }
+    if child != None && !src_deferrable(p.tree.nodes[child].kind) {
+      fail(p, start, "invalid deferred statement")
+    }
+    return add_node(p, SrcDefer, start, src_end(p, child, start), child)
+  }
+  if token_is(p, "break") || token_is(p, "continue") {
+    kind := SrcContinue
+    if token_is(p, "break") {
+      kind = SrcBreak
+    }
+    end := p.token.end
+    lex(p)
+    child := None
+    if take(p, ":") {
+      child = parse_name(p)
+    }
+    return add_node(p, kind, start, src_end(p, child, end), child)
+  }
+  if token_is(p, "return") {
+    end := p.token.end
+    lex(p)
+    child := None
+    if src_expression_start(p) {
+      saved := p.*
+      count := p.tree.count
+      child = expression(p, 0)
+      if p.tree.failed {
+        if resource_error(p) {
+          return None
+        }
+        restore(p, &saved, count)
+        child = None
+      }
+    }
+    return add_node(p, SrcReturn, start, src_end(p, child, end), child)
+  }
+  if p.token.kind == TokenKind.Name && !token_is(p, "true") && !token_is(p, "false") && !token_is(p, "nil") && (src_next_is(p, ":") || src_next_is(p, ":=")) {
+    probe := p.*
+    scratch := Tree{}
+    probe.tree = &scratch
+    lex(&probe)
+    colon := take(&probe, ":")
+    if scratch.failed {
+      propagate_error(p, &scratch)
+      return None
+    }
+    if colon && token_is(&probe, "for") {
+      return src_for(p)
+    }
+    return src_variable(p)
+  }
+  value := expression(p, 0)
+  if value == None {
+    return None
+  }
+  if src_assignment_operator(p) {
+    if !src_primary_kind(p.tree.nodes[value].kind) {
+      fail(p, start, "assignment target must be primary")
+      return None
+    }
+    lex(p)
+    right := expression(p, 0)
+    if right == None {
+      return None
+    }
+    p.tree.nodes[value].next = right
+    return add_node(p, SrcAssignment, start, node_end(p, right), value)
+  }
+  if p.tree.nodes[value].kind != ExpCall && p.tree.nodes[value].kind != ExpSyscall {
+    fail(p, start, "expression is not a statement")
+    return None
+  }
+  p.tree.nodes[value].flags &= ~FlagPrimary
+  return value
+}
+
+fn src_statement(p: *Parser) u32 {
+  if p.tree.failed {
+    return None
+  }
+  p.depth += 1
+  if p.depth > MaxDepth {
+    p.depth -= 1
+    fail(p, p.token.start, "source nesting limit exceeded")
+    return None
+  }
+  value := src_statement_body(p)
+  p.depth -= 1
+  return value
+}
+
+fn src_block(p: *Parser) u32 {
+  start := p.token.start
+  first := None
+  last := None
+  expect(p, "{")
+  for !token_is(p, "}") && !p.tree.failed && p.token.kind != TokenKind.End {
+    chain(p, &first, &last, src_statement(p))
+    if !p.tree.failed && !token_is(p, "}") && p.token.kind != TokenKind.End && !src_line_start(p, p.token.start) {
+      fail(p, p.token.start, "each statement must start on its own line")
+    }
+  }
+  end := p.token.end
+  expect(p, "}")
+  return add_node(p, SrcBlock, start, end, first)
+}
+// Whether only spaces and tabs separate offset from the start of its line.
+fn src_line_start(p: *Parser, offset: u32) bool {
+  at := offset
+  for at != 0 && (p.text[at - 1] == ' ' || p.text[at - 1] == '\t') {
+    at -= 1
+  }
+  return at == 0 || p.text[at - 1] == '\n'
+}
+
+fn src_param(p: *Parser, variadic_allowed: bool) u32 {
+  start := p.token.start
+  first := None
+  last := None
+  if at(p, start, "$") {
+    token := p.token
+    lex(p)
+    chain(p, &first, &last, add_node(p, ExpTypeParameter, start, token.end, None))
+  } else {
+    chain(p, &first, &last, parse_name(p))
+    for take(p, ",") && !p.tree.failed {
+      chain(p, &first, &last, parse_name(p))
+    }
+  }
+  colon := p.token.start
+  expect(p, ":")
+  if variadic_allowed && (token_is(p, "..") || token_is(p, "...")) {
+    if first != last || (first != None && p.tree.nodes[first].kind != ExpName) {
+      fail(p, start, "variadic parameter requires one identifier")
+    }
+    chain(p, &first, &last, src_variadic(p))
+    chain(p, &first, &last, parse_type(p))
+    return add_node(p, SrcVariadicParam, start, src_end(p, last, start), first)
+  }
+  target := parse_type(p)
+  chain(p, &first, &last, add_node(p, SrcQualifier, colon, src_end(p, target, colon), target))
+  return add_node(p, SrcFnParam, start, src_end(p, last, start), first)
+}
+
+fn src_function(p: *Parser, external: bool) u32 {
+  start := p.token.start
+  first := None
+  last := None
+  if external {
+    expect(p, "extern")
+  }
+  expect(p, "fn")
+  chain(p, &first, &last, parse_name(p))
+  if external && p.token.kind == TokenKind.Text {
+    chain(p, &first, &last, src_literal(p, TokenKind.Text, ExpString))
+  }
+  expect(p, "(")
+  for !token_is(p, ")") && !p.tree.failed {
+    if external && (token_is(p, "..") || token_is(p, "...")) {
+      chain(p, &first, &last, src_variadic(p))
+      break
+    }
+    chain(p, &first, &last, src_param(p, !external))
+    if !take(p, ",") {
+      break
+    }
+  }
+  end := p.token.end
+  expect(p, ")")
+  if external {
+    if optional_type_start(p) {
+      chain(p, &first, &last, parse_type(p))
+      end = src_end(p, last, end)
+    }
+  } else {
+    if !token_is(p, "{") {
+      chain(p, &first, &last, parse_type(p))
+    }
+    chain(p, &first, &last, src_block(p))
+    end = src_end(p, last, end)
+  }
+  kind := SrcFn
+  if external {
+    kind = SrcExternFn
+  }
+  return add_node(p, kind, start, end, first)
+}
+
+fn src_struct(p: *Parser) u32 {
+  start := p.token.start
+  first := None
+  last := None
+  is_packed := take(p, "packed")
+  expect(p, "struct")
+  chain(p, &first, &last, parse_name(p))
+  expect(p, "{")
+  for !token_is(p, "}") && !p.tree.failed {
+    begin := p.token.start
+    member_first := None
+    member_last := None
+    chain(p, &member_first, &member_last, parse_name(p))
+    for take(p, ",") && !p.tree.failed {
+      chain(p, &member_first, &member_last, parse_name(p))
+    }
+    chain(p, &member_first, &member_last, src_qualifier(p))
+    if take(p, "=") {
+      chain(p, &member_first, &member_last, expression(p, 0))
+    }
+    chain(p, &first, &last, add_node(p, SrcStructMember, begin, src_end(p, member_last, begin), member_first))
+    if !take(p, ",") {
+      break
+    }
+  }
+  end := p.token.end
+  expect(p, "}")
+  flags: u16
+  if is_packed {
+    flags = FlagPacked
+  }
+  return mark(p, add_node(p, SrcStruct, start, end, first), flags)
+}
+
+fn src_enum(p: *Parser) u32 {
+  start := p.token.start
+  first := None
+  last := None
+  expect(p, "enum")
+  if take(p, "(") {
+    if !primitive(p) && p.token.kind != TokenKind.Name {
+      fail(p, p.token.start, "invalid enum tag type")
+    }
+    chain(p, &first, &last, type_body(p))
+    expect(p, ")")
+  }
+  chain(p, &first, &last, parse_name(p))
+  expect(p, "{")
+  for !token_is(p, "}") && !p.tree.failed {
+    begin := p.token.start
+    member_first := None
+    member_last := None
+    chain(p, &member_first, &member_last, parse_name(p))
+    if token_is(p, ":") {
+      chain(p, &member_first, &member_last, src_qualifier(p))
+    }
+    if take(p, "=") {
+      chain(p, &member_first, &member_last, expression(p, 0))
+    }
+    chain(p, &first, &last, add_node(p, SrcEnumMember, begin, src_end(p, member_last, begin), member_first))
+    if !take(p, ",") {
+      break
+    }
+  }
+  end := p.token.end
+  expect(p, "}")
+  return add_node(p, SrcEnum, start, end, first)
+}
+
+fn src_declaration_keyword(p: *Parser) bool {
+  if src_distinct(p) || src_packed(p) {
+    return true
+  }
+  keywords: [8][]const u8 = ["fn", "pub", "const", "extern", "struct", "enum", "type", "use"]
+  for keyword in keywords {
+    if token_is(p, keyword) {
+      return true
+    }
+  }
+  return false
+}
+
+fn src_use(p: *Parser) u32 {
+  start := p.token.start
+  first := None
+  last := None
+  expect(p, "use")
+  for {
+    begin := p.token.start
+    path := src_literal(p, TokenKind.Text, ExpString)
+    end := src_end(p, path, begin)
+    if p.token.kind == TokenKind.Name && !src_declaration_keyword(p) && !src_next_is(p, ":") && !src_next_is(p, ":=") {
+      alias := parse_name(p)
+      if path != None {
+        p.tree.nodes[path].next = alias
+      }
+      end = src_end(p, alias, end)
+    }
+    chain(p, &first, &last, add_node(p, SrcImport, begin, end, path))
+    if !take(p, ",") || p.tree.failed {
+      break
+    }
+  }
+  return add_node(p, SrcUse, start, src_end(p, last, start), first)
+}
+
+fn src_assert(p: *Parser) u32 {
+  start := p.token.start
+  first := None
+  last := None
+  expect(p, "#assert")
+  expect(p, "(")
+  chain(p, &first, &last, expression(p, 0))
+  if take(p, ",") {
+    chain(p, &first, &last, src_literal(p, TokenKind.Text, ExpString))
+  }
+  end := p.token.end
+  expect(p, ")")
+  return add_node(p, SrcAssert, start, end, first)
+}
+
+fn src_directive(p: *Parser) u32 {
+  target := token_is(p, "#target")
+  start := p.token.start
+  first := None
+  last := None
+  lex(p)
+  expect(p, "(")
+  if target {
+    for {
+      begin := p.token.start
+      condition_first := None
+      condition_last := None
+      chain(p, &condition_first, &condition_last, parse_name(p))
+      expect(p, ":")
+      if p.token.kind == TokenKind.Number {
+        chain(p, &condition_first, &condition_last, src_literal(p, TokenKind.Number, ExpNumber))
+      } else {
+        chain(p, &condition_first, &condition_last, parse_name(p))
+      }
+      chain(p, &first, &last, add_node(p, SrcTargetCondition, begin, src_end(p, condition_last, begin), condition_first))
+      if !take(p, ",") || p.tree.failed {
+        break
+      }
+    }
+  } else {
+    chain(p, &first, &last, src_literal(p, TokenKind.Text, ExpString))
+  }
+  end := p.token.end
+  expect(p, ")")
+  kind := SrcLink
+  if target {
+    kind = SrcTarget
+  }
+  return add_node(p, kind, start, end, first)
+}
+
+fn src_declaration(p: *Parser) u32 {
+  if token_is(p, "#target") || token_is(p, "#link") {
+    return src_directive(p)
+  }
+  start := p.token.start
+  child := None
+  public := take(p, "pub")
+  if token_is(p, "fn") {
+    child = src_function(p, false)
+  } else if token_is(p, "extern") {
+    if src_next_is(p, "fn") {
+      child = src_function(p, true)
+    } else {
+      begin := p.token.start
+      first := None
+      last := None
+      lex(p)
+      chain(p, &first, &last, parse_name(p))
+      if p.token.kind == TokenKind.Text {
+        chain(p, &first, &last, src_literal(p, TokenKind.Text, ExpString))
+      }
+      chain(p, &first, &last, src_qualifier(p))
+      child = add_node(p, SrcExternVariable, begin, src_end(p, last, begin), first)
+    }
+  } else if token_is(p, "struct") || src_packed(p) {
+    child = src_struct(p)
+  } else if token_is(p, "enum") {
+    child = src_enum(p)
+  } else if token_is(p, "const") {
+    child = src_const(p)
+  } else if token_is(p, "type") || src_distinct(p) {
+    child = src_alias(p)
+  } else if !public && token_is(p, "use") {
+    child = src_use(p)
+  } else if !public && token_is(p, "#assert") {
+    child = src_assert(p)
+  } else if p.token.kind == TokenKind.Name && src_peek(p).kind == TokenKind.End {
+    // A dangling declaration name is the offending token, not the empty
+    // position after its trailing newline. Editors need a visible range.
+    fail(p, p.token.start, "incomplete or invalid syntax")
+  } else {
+    child = src_variable(p)
+  }
+  flags: u16
+  if public {
+    flags = FlagPublic
+  }
+  return mark(p, add_node(p, SrcDeclaration, start, src_end(p, child, start), child), flags)
+}
+
+// Links parents over reachable nodes, charging the same work as finish_tree.
+fn finish_tree(p: *Parser, root: u32) bool {
+  id := root
+  p.tree.nodes[root].parent = None
+  for {
+    if !charge(p, 1, p.tree.nodes[id].start) {
+      return false
+    }
+    child := p.tree.nodes[id].first
+    for child != None {
+      if !charge(p, 1, p.tree.nodes[child].start) {
+        return false
+      }
+      p.tree.nodes[child].parent = id
+      child = p.tree.nodes[child].next
+    }
+    if p.tree.nodes[id].first != None {
+      id = p.tree.nodes[id].first
+      continue
+    }
+    for id != root && p.tree.nodes[id].next == None {
+      if !charge(p, 1, p.tree.nodes[id].start) {
+        return false
+      }
+      id = p.tree.nodes[id].parent
+    }
+    if id == root {
+      break
+    }
+    id = p.tree.nodes[id].next
+  }
+  return true
+}
+
+// Fail-fast equivalent of exp_parse_source. Returns the root or None.
+fn parse_source(source: []const u8, tree: *Tree, arena: *mem.Arena) u32 {
+  tree.* = Tree{}
+  if #len(source) >= 0xFFFFFFFF {
+    tree.failed = true
+    tree.error = "invalid source or source too large"
+    tree.error_kind = ErrorKind.Limit
+    return None
+  }
+  length := #cast(u32, #len(source))
+  work_remaining := #cast(u64, length) * 128 + 1024
+  p := Parser{ text: source, length: length, work_remaining: &work_remaining, tree: tree, arena: arena }
+  if !charge(&p, #cast(u64, length), 0) {
+    return None
+  }
+  // Sources are text: NUL is never valid, even in comments or literals.
+  nul := bytes.find_byte(source, 0)
+  if nul < #len(source) {
+    fail(&p, #cast(u32, nul), "unexpected character")
+    return None
+  }
+  lex(&p)
+  first := None
+  last := None
+  for p.token.kind != TokenKind.End && !tree.failed {
+    offset := p.token.start
+    chain(&p, &first, &last, src_declaration(&p))
+    if !tree.failed && p.token.start == offset {
+      fail(&p, offset, "source parser made no progress")
+    }
+  }
+  p.scan_next = 0
+  if tree.failed {
+    return None
+  }
+  start: u32
+  for start < length && space(source[start]) {
+    if !scan_byte(&p, start) {
+      return None
+    }
+    start += 1
+  }
+  root := add_node(&p, SrcFile, start, length, first)
+  if tree.failed {
+    return None
+  }
+  if !finish_tree(&p, root) {
+    return None
+  }
+  return root
+}

@@ -1,11 +1,17 @@
-pub enum MatchError { None, Capacity }
-pub struct Match { start: usize, end: usize, ok: bool, error: MatchError }
+use "std/mem" mem
+use "std/errors" errors
 
-// Caller-owned compiled form. `compile` writes only into storage/workspace.
-// Syntax identifies malformed patterns; Capacity asks caller for larger buffers.
+pub struct Match { start: usize, end: usize, ok: bool }
 pub enum CompileError { None, Syntax, Capacity, Depth }
-pub struct Instruction { op: u8, byte: u8, x: usize, y: usize, z: usize }
-pub struct Program { pattern: []const u8, code: []Instruction, start: usize, groups: usize, error: CompileError, ok: bool }
+struct Instruction { op: u8, byte: u8, x: usize, y: usize, z: usize }
+// All slices belong to the compile arena, including the retained pattern bytes.
+// Copies share mutable workspace: serialize find/next calls on a program and its
+// copies. Compile separately for concurrent use. Reset/release invalidates all.
+pub struct Program { pattern: []const u8, code: []Instruction, start: usize, groups: usize, workspace: []usize, captures: []Match, error: CompileError, ok: bool }
+pub struct Result { value: Program, ok: bool, kind: errors.Kind, error: isize, offset: usize, detail: CompileError }
+// ok means an operation succeeded. value.ok distinguishes a match from a miss.
+// Capture slices are borrowed until the next operation on this program.
+pub struct MatchResult { value: Match, captures: []Match, ok: bool, kind: errors.Kind, error: isize, offset: usize }
 
 const Char: u8 = 1
 const Any: u8 = 2
@@ -22,9 +28,18 @@ const StarToken: u8 = 22
 const PlusToken: u8 = 23
 const OptionalToken: u8 = 24
 
-struct CompileState { pattern: []const u8, tokens: []Instruction, used: usize, groups: usize, capacity: bool, ok: bool }
+struct CompileState { pattern: []const u8, tokens: []Instruction, used: usize, groups: usize, capacity: bool, ok: bool, counting: bool, offset: usize }
 
 fn token(state: *CompileState, op: u8, byte: u8, x: usize, y: usize) bool {
+  if state.counting {
+    if state.used == NoPatch {
+      state.capacity = true
+      state.ok = false
+      return false
+    }
+    state.used += 1
+    return true
+  }
   if state.used >= #len(state.tokens) {
     state.capacity = true
     state.ok = false
@@ -127,6 +142,7 @@ fn sequence(state: *CompileState, lo: usize, hi: usize) bool {
   i := lo
   pieces: usize = 0
   for i < hi {
+    state.offset = i
     begin := state.used
     after := i + 1
     if state.pattern[i] == '(' {
@@ -159,11 +175,11 @@ fn sequence(state: *CompileState, lo: usize, hi: usize) bool {
       after = i + 2
     } else {
       if state.pattern[i] == ')' || state.pattern[i] == '|' ||
-         state.pattern[i] == '*' || state.pattern[i] == '+' ||
-         state.pattern[i] == '?' || state.pattern[i] == '{' {
-           state.ok = false
-           return false
-         }
+        state.pattern[i] == '*' || state.pattern[i] == '+' ||
+        state.pattern[i] == '?' || state.pattern[i] == '{' {
+        state.ok = false
+        return false
+      }
       op := Char
       if state.pattern[i] == '.' {
         op = Any
@@ -202,7 +218,31 @@ fn sequence(state: *CompileState, lo: usize, hi: usize) bool {
     else if counted(state.pattern, after, &minimum, &maximum, &unbounded, &qafter) {
       quantified = true
     }
-    if quantified {
+    if quantified && state.counting {
+      atom_count := state.used - begin
+      copies := maximum
+      if unbounded {
+        if minimum == NoPatch {
+          state.capacity = true
+          state.ok = false
+          return false
+        }
+        copies = minimum + 1
+      }
+      // Each copy needs at most two postfix operators. Count conservatively;
+      // the emission pass uses the same parser and cannot exceed this bound.
+      if copies == 0 {
+        copies = 1
+      }
+      if atom_count > NoPatch - 2 || copies > (NoPatch - begin) / (atom_count + 2) {
+        state.capacity = true
+        state.ok = false
+        return false
+      }
+      state.used = begin + copies * (atom_count + 2)
+      after = qafter
+    }
+    else if quantified {
       atom_end := state.used
       atom_count := atom_end - begin
       if minimum == 0 {
@@ -278,7 +318,7 @@ fn sequence(state: *CompileState, lo: usize, hi: usize) bool {
   return pieces > 0
 }
 
-const NoPatch: usize = 18446744073709551615
+const NoPatch: usize = ~#cast(usize, 0)
 struct Fragment { start: usize, out: usize }
 
 fn field(code: []Instruction, slot: usize) usize {
@@ -330,10 +370,8 @@ fn patch_list(code: []Instruction, first: usize, target: usize) {
   }
 }
 
-// Compiles into caller storage. workspace holds postfix tokens; scratch holds two
-// usizes per fragment. Required sizes are pattern-dependent and failure is clean.
-// Program borrows pattern and storage. Keep both alive and unchanged while using it.
-pub fn compile(pattern: []const u8, storage: []Instruction, workspace: []Instruction, scratch: []usize) Program {
+// Private postfix emission and Thompson patching in arena allocations.
+fn compile_into(pattern: []const u8, storage: []Instruction, workspace: []Instruction, scratch: []usize) Program {
   // Bound recursive compilation independently of caller workspace size.
   nesting: usize = 0
   escaped := false
@@ -433,6 +471,7 @@ pub fn compile(pattern: []const u8, storage: []Instruction, workspace: []Instruc
         scratch[(top - 1) * 2 + 1] = list(storage, used, 1)
       }
       else {
+        scratch[(top - 1) * 2] = used
         scratch[(top - 1) * 2 + 1] = append_list(storage, value.out, list(storage, used, 1))
       }
       used += 1
@@ -452,6 +491,70 @@ pub fn compile(pattern: []const u8, storage: []Instruction, workspace: []Instruc
   return Program{ pattern: pattern, code: storage[..used], start: start, groups: state.groups, error: CompileError.None, ok: true }
 }
 
+// Arena exhaustion/size overflow panics, like other arena producers. Syntax
+// failures return InvalidInput with native error 0 and the offending byte offset.
+// No options existed on the native compiler. Parsing nesting is limited to 128.
+pub fn compile(arena: *mem.Arena, pattern: []const u8) Result {
+  depth: usize = 0
+  escaped := false
+  in_class := false
+  for i in 0..#len(pattern) {
+    b := pattern[i]
+    if escaped {
+      escaped = false
+    }
+    else if b == '\\' {
+      escaped = true
+    }
+    else if b == '[' {
+      in_class = true
+    }
+    else if b == ']' {
+      in_class = false
+    }
+    else if !in_class && b == '(' {
+      depth += 1
+      if depth > 128 {
+        return Result{ kind: errors.Kind.InvalidInput, offset: i, detail: CompileError.Depth }
+      }
+    }
+    else if !in_class && b == ')' && depth > 0 {
+      depth -= 1
+    }
+  }
+  count := CompileState{ pattern: pattern, counting: true, ok: true }
+  if #len(pattern) == 0 || !expression(&count, 0, #len(pattern)) || !count.ok {
+    if count.capacity {
+      #panic("regex compile size overflow")
+    }
+    return Result{ kind: errors.Kind.InvalidInput, offset: count.offset, detail: CompileError.Syntax }
+  }
+  if count.used > (NoPatch - 1) / 2 {
+    #panic("regex compile size overflow")
+  }
+  retained := mem.push_array(u8, arena, #len(pattern))
+  for i in 0..#len(pattern) {
+    retained[i] = pattern[i]
+  }
+  storage := mem.push_array(Instruction, arena, count.used + 1)
+  // Temporary compiler allocations are rewound after code generation.
+  mark := mem.arena_mark(arena)
+  tokens := mem.push_array(Instruction, arena, count.used)
+  scratch := mem.push_array(usize, arena, count.used * 2)
+  program := compile_into(retained, storage, tokens, scratch)
+  mem.arena_rewind(arena, mark)
+  if !program.ok {
+    #panic("regex compiler sizing invariant")
+  }
+  required := workspace_size(program, program.groups)
+  if required == 0 {
+    #panic("regex match size overflow")
+  }
+  program.workspace = mem.push_array(usize, arena, required)
+  program.captures = mem.push_array(Match, arena, program.groups)
+  return Result{ value: program, ok: true }
+}
+
 fn class_matches(program: Program, instruction: Instruction, byte: u8) bool {
   return atom(program.pattern, instruction.x, byte)
 }
@@ -459,11 +562,13 @@ fn class_matches(program: Program, instruction: Instruction, byte: u8) bool {
 // Thread rows contain a program counter and start/end offsets per capture.
 // An unset end marks a capture as incomplete. Lists retain leftmost-first order.
 fn copy_thread(destination: []usize, source: []usize) {
-  for i in 0..#len(destination) { destination[i] = source[i] }
+  for i in 0..#len(destination) {
+    destination[i] = source[i]
+  }
 }
 
 fn expand(program: Program, text: []const u8, at: usize, seed: []usize,
-          output: []usize, used: *usize, pending: []usize, seen: []usize, stride: usize) {
+  output: []usize, used: *usize, pending: []usize, seen: []usize, stride: usize) {
   copy_thread(pending[..stride], seed)
   top: usize = 1
   for top > 0 {
@@ -471,7 +576,9 @@ fn expand(program: Program, text: []const u8, at: usize, seed: []usize,
     row := pending[top * stride..(top + 1) * stride]
     for true {
       pc := row[0]
-      if pc >= #len(program.code) || seen[pc] != 0 { break }
+      if pc >= #len(program.code) || seen[pc] != 0 {
+        break
+      }
       seen[pc] = 1
       instruction := program.code[pc]
       if instruction.op == Split {
@@ -482,21 +589,29 @@ fn expand(program: Program, text: []const u8, at: usize, seed: []usize,
         top += 2
         break
       }
-      if instruction.op == Jump { row[0] = instruction.x }
+      if instruction.op == Jump {
+        row[0] = instruction.x
+      }
       else if instruction.op == Save {
         slot := instruction.x + 1
         if slot < stride {
           row[slot] = at
-          if instruction.x % 2 == 0 { row[slot + 1] = NoPatch }
+          if instruction.x % 2 == 0 {
+            row[slot + 1] = NoPatch
+          }
         }
         row[0] = instruction.y
       }
       else if instruction.op == Begin {
-        if at != 0 { break }
+        if at != 0 {
+          break
+        }
         row[0] = instruction.x
       }
       else if instruction.op == End {
-        if at != #len(text) { break }
+        if at != #len(text) {
+          break
+        }
         row[0] = instruction.x
       }
       else {
@@ -508,47 +623,72 @@ fn expand(program: Program, text: []const u8, at: usize, seed: []usize,
   }
 }
 
-// Number of usize slots required by find_compiled_workspace. Zero means invalid
+// Private workspace sizing. Zero means invalid
 // program or size overflow. Space depends on the program, never on input length.
-pub fn match_workspace_size(program: Program, capture_count: usize) usize {
-  if !program.ok || #len(program.code) == 0 { return 0 }
+fn workspace_size(program: Program, capture_count: usize) usize {
+  if !program.ok || #len(program.code) == 0 {
+    return 0
+  }
   groups := capture_count
-  if groups > program.groups { groups = program.groups }
-  if groups > (NoPatch - 1) / 2 { return 0 }
+  if groups > program.groups {
+    groups = program.groups
+  }
+  if groups > (NoPatch - 1) / 2 {
+    return 0
+  }
   stride := groups * 2 + 1
   n := #len(program.code)
-  if n > (NoPatch - 1) / 3 { return 0 }
+  if n > (NoPatch - 1) / 3 {
+    return 0
+  }
   rows := n * 3 + 1
-  if stride > (NoPatch - n) / rows { return 0 }
+  if stride > (NoPatch - n) / rows {
+    return 0
+  }
   return rows * stride + n
 }
 
-// Ordered Thompson execution with caller-owned workspace. Insufficient workspace
-// returns MatchError.Capacity. Captures are cleared on failure; no hidden allocation.
-pub fn find_compiled_workspace(program: Program, text: []const u8, captures: []Match, workspace: []usize) Match {
-  for i in 0..#len(captures) { captures[i] = Match{} }
-  required := match_workspace_size(program, #len(captures))
-  if !program.ok { return Match{} }
-  if required == 0 || #len(workspace) < required { return Match{ error: MatchError.Capacity } }
+// Ordered Thompson execution in arena-reserved workspace. Captures are cleared
+// on failure. Each attempt deduplicates PCs. Unanchored search restarts per byte
+// and therefore retains the existing worst-case quadratic search behavior.
+fn execute(program: Program, text: []const u8, captures: []Match, workspace: []usize, from: usize) Match {
+  for i in 0..#len(captures) {
+    captures[i] = Match{}
+  }
+  required := workspace_size(program, #len(captures))
+  if !program.ok {
+    return Match{}
+  }
+  if required == 0 || #len(workspace) < required {
+    #panic("regex workspace invariant")
+  }
   groups := #len(captures)
-  if groups > program.groups { groups = program.groups }
+  if groups > program.groups {
+    groups = program.groups
+  }
   stride := groups * 2 + 1
   n := #len(program.code)
   current := workspace[..n * stride]
   following := workspace[n * stride..2 * n * stride]
   pending := workspace[2 * n * stride..(3 * n + 1) * stride]
   seen := workspace[(3 * n + 1) * stride..required]
-  start: usize = 0
+  start := from
   for start <= #len(text) {
-    for i in 0..n { seen[i] = 0 }
-    for i in 0..stride { pending[i] = NoPatch }
+    for i in 0..n {
+      seen[i] = 0
+    }
+    for i in 0..stride {
+      pending[i] = NoPatch
+    }
     pending[0] = program.start
     count: usize = 0
     expand(program, text, start, pending[..stride], current, &count, pending, seen, stride)
     at := start
     found := Match{}
     for count > 0 {
-      for i in 0..n { seen[i] = 0 }
+      for i in 0..n {
+        seen[i] = 0
+      }
       next_count: usize = 0
       for i in 0..count {
         row := current[i * stride..(i + 1) * stride]
@@ -569,7 +709,9 @@ pub fn find_compiled_workspace(program: Program, text: []const u8, captures: []M
             (instruction.op == Class && class_matches(program, instruction, text[at]))
           if consumes {
             row[0] = instruction.x
-            if instruction.op == Class { row[0] = instruction.z }
+            if instruction.op == Class {
+              row[0] = instruction.z
+            }
             expand(program, text, at + 1, row, following, &next_count, pending, seen, stride)
           }
         }
@@ -580,19 +722,28 @@ pub fn find_compiled_workspace(program: Program, text: []const u8, captures: []M
       count = next_count
       at += 1
     }
-    if found.ok { return found }
+    if found.ok {
+      return found
+    }
     start += 1
   }
   return Match{}
 }
 
-// Compatibility entry point with bounded stack storage. Larger programs can use
-// match_workspace_size and find_compiled_workspace with caller-owned storage.
-// Insufficient storage is reported as MatchError.Capacity, distinct from no match.
-// Capture 0 corresponds to the first '(' group.
-pub fn find_compiled(program: Program, text: []const u8, captures: []Match) Match {
-  workspace: [4096]usize = []
-  return find_compiled_workspace(program, text, captures, workspace[..])
+// Reuses arena-reserved workspace. Matching itself allocates nothing.
+// Capture 0 corresponds to the first parenthesized group.
+pub fn find(program: Program, text: []const u8) MatchResult {
+  return find_from(program, text, 0)
+}
+fn find_from(program: Program, text: []const u8, from: usize) MatchResult {
+  if !program.ok {
+    return MatchResult{ kind: errors.Kind.InvalidState }
+  }
+  value := execute(program, text, program.captures, program.workspace, from)
+  return MatchResult{ value: value, captures: program.captures, ok: true }
+}
+pub fn matches(program: Program, text: []const u8) bool {
+  return find(program, text).value.ok
 }
 
 fn atom(pattern: []const u8, at: usize, byte: u8) bool {
@@ -664,7 +815,7 @@ fn counted(pattern: []const u8, at: usize, minimum: *usize, maximum: *usize, unb
   min: usize = 0
   digits: usize = 0
   for i < #len(pattern) && pattern[i] >= '0' && pattern[i] <= '9' {
-    digit := #cast(usize) (pattern[i] - '0')
+    digit := #cast(usize, (pattern[i] - '0'))
     if min > (NoPatch - digit) / 10 {
       return false
     }
@@ -684,7 +835,7 @@ fn counted(pattern: []const u8, at: usize, minimum: *usize, maximum: *usize, unb
       max = 0
       unlimited = false
       for i < #len(pattern) && pattern[i] >= '0' && pattern[i] <= '9' {
-        digit2 := #cast(usize) (pattern[i] - '0')
+        digit2 := #cast(usize, (pattern[i] - '0'))
         if max > (NoPatch - digit2) / 10 {
           return false
         }
@@ -703,157 +854,31 @@ fn counted(pattern: []const u8, at: usize, minimum: *usize, maximum: *usize, unb
   return true
 }
 
-fn match_here(pattern: []const u8, p: usize, text: []const u8, t: usize, end: *usize) bool {
-  if p == #len(pattern) {
-    end.* = t
-    return true
-  }
-  if pattern[p] == '$' && p + 1 == #len(pattern) {
-    if t == #len(text) {
-      end.* = t
-      return true
-    }
-    return false
-  }
-  w := width(pattern, p)
-  minimum: usize = 1
-  maximum: usize = 1
-  pattern_after := p + w
-  quantified := false
-  unbounded := false
-  if pattern_after < #len(pattern) && pattern[pattern_after] == '*' {
-    minimum = 0
-    maximum = #len(text) - t
-    pattern_after += 1
-    quantified = true
-  }
-  else if pattern_after < #len(pattern) && pattern[pattern_after] == '+' {
-    maximum = #len(text) - t
-    pattern_after += 1
-    quantified = true
-  }
-  else if pattern_after < #len(pattern) && pattern[pattern_after] == '?' {
-    minimum = 0
-    pattern_after += 1
-    quantified = true
-  }
-  else if counted(pattern, pattern_after, &minimum, &maximum, &unbounded, &pattern_after) {
-    quantified = true
-  }
-  if quantified {
-    if unbounded { maximum = #len(text) - t }
-    cursor := t
-    count: usize = 0
-    for cursor < #len(text) && count < maximum && atom(pattern, p, text[cursor]) {
-      cursor += 1
-      count += 1
-    }
-    if count < minimum {
-      return false
-    }
-    for true {
-      if match_here(pattern, pattern_after, text, cursor, end) {
-        return true
-      }
-      if count == minimum {
-        return false
-      }
-      cursor -= 1
-      count -= 1
-    }
-  }
-  if t < #len(text) && atom(pattern, p, text[t]) {
-    return match_here(pattern, p + w, text, t + 1, end)
-  }
-  return false
+// Iterator shares its program's workspace and capture lifetime contract.
+pub struct Iterator { program: Program, text: []const u8, offset: usize, done: bool }
+pub fn iterator(program: Program, text: []const u8) Iterator {
+  return Iterator{ program: program, text: text }
 }
-
-// Byte-oriented regular expressions: ^ $ . * + ?, classes/ranges, and escaping.
-fn find_branch(pattern: []const u8, text: []const u8) Match {
-  anchored := #len(pattern) > 0 && pattern[0] == '^'
-  start: usize = 0
-  p: usize = 0
-  if anchored {
-    p = 1
+pub fn next(state: *Iterator) MatchResult {
+  if !state.program.ok {
+    return MatchResult{ kind: errors.Kind.InvalidState }
   }
-  for start <= #len(text) {
-    end: usize = start
-    if match_here(pattern, p, text, start, &end) {
-      return Match{ start: start, end: end, ok: true }
-    }
-    if anchored {
-      return Match{}
-    }
-    start += 1
-  }
-  return Match{}
-}
-
-// Top-level alternation; escaped bars and bars in byte classes are literals.
-pub fn find(pattern: []const u8, text: []const u8) Match {
-  branch: usize = 0
-  i: usize = 0
-  escaped := false
-  in_class := false
-  found := Match{}
-  for i <= #len(pattern) {
-    split := i == #len(pattern)
-    if !split {
-      byte := pattern[i]
-      if escaped {
-        escaped = false
-      }
-      else if byte == '\\' {
-        escaped = true
-      }
-      else if byte == '[' {
-        in_class = true
-      }
-      else if byte == ']' {
-        in_class = false
-      }
-      else if byte == '|' && !in_class {
-        split = true
-      }
-    }
-    if split {
-      candidate := find_branch(pattern[branch..i], text)
-      if candidate.ok && (!found.ok || candidate.start < found.start) {
-        found = candidate
-      }
-      branch = i + 1
-    }
-    i += 1
-  }
-  return found
-}
-
-pub struct Iterator { pattern: []const u8, text: []const u8, offset: usize, done: bool }
-pub fn iterator(pattern: []const u8, text: []const u8) Iterator {
-  return Iterator{ pattern: pattern, text: text }
-}
-pub fn next(state: *Iterator) Match {
   if state.done || state.offset > #len(state.text) {
-    return Match{}
+    return MatchResult{ ok: true }
   }
-  result := find(state.pattern, state.text[state.offset..])
-  if !result.ok {
+  result := find_from(state.program, state.text, state.offset)
+  if !result.value.ok {
     state.done = true
-    return Match{}
+    return result
   }
-  result.start += state.offset
-  result.end += state.offset
-  if result.end == result.start {
-    state.offset = result.end + 1
-  } else {
-    state.offset = result.end
+  if result.value.end == result.value.start {
+    state.offset = result.value.end + 1
   }
-  if result.end == #len(state.text) {
+  else {
+    state.offset = result.value.end
+  }
+  if result.value.end == #len(state.text) {
     state.done = true
   }
   return result
-}
-
-pub fn matches(pattern: []const u8, text: []const u8) bool {
-  return find(pattern, text).ok
 }

@@ -1,22 +1,24 @@
+use "std/mem" mem
 use "std/encoding" codec
 use "std/bytes" bytes
-pub type Result = codec.Result
-pub type ErrorKind = codec.ErrorKind
+use "std/errors" errors
+type Result = codec.Result
+type ErrorKind = codec.ErrorKind
 
 // Source and destination must not overlap. All failures leave destination unchanged.
 
 const Lower: []const u8 = "0123456789abcdef"
 const Upper: []const u8 = "0123456789ABCDEF"
 
-pub fn encoded_size(source_size: usize) usize {
-  maximum: usize = 18446744073709551615
+fn encoded_size(source_size: usize) usize {
+  maximum := ~#cast(usize, 0)
   if source_size > maximum / 2 {
     return 0
   }
   return source_size * 2
 }
 
-pub fn encode(destination: []u8, source: []const u8, uppercase: bool) Result {
+fn encode_into(destination: []u8, source: []const u8, uppercase: bool) Result {
   required := encoded_size(#len(source))
   if #len(source) != 0 && required == 0 {
     return Result{ error: ErrorKind.Overflow }
@@ -32,26 +34,27 @@ pub fn encode(destination: []u8, source: []const u8, uppercase: bool) Result {
     alphabet = Upper
   }
   for i in 0..#len(source) {
-    destination[i * 2] = alphabet[#cast(usize) (source[i] >> 4)]
-    destination[i * 2 + 1] = alphabet[#cast(usize) (source[i] & 15)]
+    destination[i * 2] = alphabet[#cast(usize, (source[i] >> 4))]
+    destination[i * 2 + 1] = alphabet[#cast(usize, (source[i] & 15))]
   }
   return Result{ data: destination[..required], required: required, ok: true }
 }
 
 fn digit_value(byte: u8) isize {
   if byte >= '0' && byte <= '9' {
-    return #cast(isize) (byte - '0')
+    return #cast(isize, (byte - '0'))
   }
   if byte >= 'a' && byte <= 'f' {
-    return #cast(isize) (byte - 'a') + 10
+    return #cast(isize, (byte - 'a')) + 10
   }
   if byte >= 'A' && byte <= 'F' {
-    return #cast(isize) (byte - 'A') + 10
+    return #cast(isize, (byte - 'A')) + 10
   }
   return -1
 }
 
-fn decode_pass(destination: []u8, source: []const u8, write: bool) Result {
+fn decode_pass(destination: []u8, source: []const u8, write: bool, offset: *usize) Result {
+  offset.* = #len(source)
   if #len(source) % 2 != 0 || (write && #len(source) / 2 > #len(destination)) {
     return Result{ data: destination[..0], error: ErrorKind.InvalidInput, ok: false }
   }
@@ -60,10 +63,14 @@ fn decode_pass(destination: []u8, source: []const u8, write: bool) Result {
     high := digit_value(source[i * 2])
     low := digit_value(source[i * 2 + 1])
     if high < 0 || low < 0 {
+      offset.* = i * 2
+      if high >= 0 {
+        offset.* += 1
+      }
       return Result{ data: destination[..0], error: ErrorKind.InvalidInput, ok: false }
     }
     if write {
-      destination[i] = #cast(u8) (high * 16 + low)
+      destination[i] = #cast(u8, (high * 16 + low))
     }
     i += 1
   }
@@ -71,8 +78,9 @@ fn decode_pass(destination: []u8, source: []const u8, write: bool) Result {
 }
 
 
-pub fn decode(destination: []u8, source: []const u8) Result {
-  measured := decode_pass(destination[..0], source, false)
+fn decode_into(destination: []u8, source: []const u8) Result {
+  offset: usize = 0
+  measured := decode_pass(destination[..0], source, false, &offset)
   if !measured.ok {
     return measured
   }
@@ -82,18 +90,62 @@ pub fn decode(destination: []u8, source: []const u8) Result {
   if bytes.overlaps(destination[..measured.required], source) {
     return Result{ error: ErrorKind.Overlap, required: measured.required }
   }
-  _ = decode_pass(destination, source, true)
+  _ = decode_pass(destination, source, true, &offset)
   return Result{ data: destination[..measured.required], required: measured.required, ok: true }
 }
 
-// Validates the complete input and reports exact decoded bytes. Failure leaves
-// output unchanged; true with zero bytes is a valid empty encoding.
-pub fn decoded_size(source: []const u8, output: *usize) bool {
+struct Size { value: usize, ok: bool, offset: usize }
+
+// Validates the complete input and reports the exact decoded byte count.
+// ok with value zero is a valid empty encoding.
+fn decoded_size(source: []const u8) Size {
   empty: [0]u8 = []
-  measured := decode_pass(empty[..], source, false)
-  if !measured.ok {
-    return false
+  offset: usize = 0
+  measured := decode_pass(empty[..], source, false, &offset)
+  return Size{ value: measured.required, ok: measured.ok, offset: offset }
+}
+
+pub struct Decoded { value: []u8, ok: bool, kind: errors.Kind, error: isize, offset: usize, detail: codec.ErrorKind }
+
+// Encodes source into arena. Size overflow or overlapping input/output panics.
+pub fn encode(arena: *mem.Arena, source: []const u8, uppercase: bool) []u8 {
+  required := encoded_size(#len(source))
+  if #len(source) != 0 && required == 0 {
+    #panic("hex.encode: size overflows")
   }
-  output.* = measured.required
-  return true
+  output := mem.push_bytes_uninit(arena, required)
+  result := encode_into(output, source, uppercase)
+  if !result.ok {
+    #panic("hex.encode: invalid source/output overlap")
+  }
+  return output
+}
+
+// Decodes validated input into arena. Failures preserve the arena and source;
+// offset identifies an offending byte, or the end of a truncated group.
+// Arena exhaustion panics. Pure codec failures have no native error code.
+pub fn decode(arena: *mem.Arena, source: []const u8) Decoded {
+  mark := mem.arena_mark(arena)
+  size := decoded_size(source)
+  if !size.ok {
+    return Decoded{ kind: errors.Kind.InvalidInput, offset: size.offset, detail: ErrorKind.InvalidInput }
+  }
+  if size.value > (~#cast(usize, 0)) - mark {
+    return Decoded{ kind: errors.Kind.Overflow, detail: ErrorKind.Overflow }
+  }
+  // Check borrowed backing before allocation or rewind can modify aliased input.
+  if mem.arena_overlaps_unallocated(arena, source) {
+    return Decoded{ kind: errors.Kind.InvalidInput, detail: ErrorKind.Overlap }
+  }
+  output := mem.push_bytes_uninit(arena, size.value)
+  result := decode_into(output, source)
+  if !result.ok {
+    mem.arena_rewind(arena, mark)
+    kind := errors.Kind.InvalidInput
+    if result.error == ErrorKind.Overflow {
+      kind = errors.Kind.Overflow
+    }
+    return Decoded{ kind: kind, detail: result.error }
+  }
+  return Decoded{ value: output, ok: true }
 }

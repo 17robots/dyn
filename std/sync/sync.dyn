@@ -34,9 +34,15 @@ fn wait_mutex_unlock(value: *Mutex) {
 }
 
 
-pub fn try_lock(value: *Mutex) bool { return native_mutex_try_lock(value) }
-pub fn lock(value: *Mutex) { native_mutex_lock(value) }
-pub fn unlock(value: *Mutex) { native_mutex_unlock(value) }
+pub fn try_lock(value: *Mutex) bool {
+  return native_mutex_try_lock(value)
+}
+pub fn lock(value: *Mutex) {
+  native_mutex_lock(value)
+}
+pub fn unlock(value: *Mutex) {
+  native_mutex_unlock(value)
+}
 
 pub struct Condition { sequence: AtomicU32 }
 pub struct Semaphore { count: AtomicU32 }

@@ -19,16 +19,16 @@ fn native_interrupted(code: isize) bool {
   return false
 }
 fn pointer(handle: isize) rawptr {
-  return #cast(rawptr) #cast(usize) handle
+  return #cast(rawptr, #cast(usize, handle))
 }
 fn last_error() isize {
-  return 0 - #cast(isize) win_error()
+  return 0 - #cast(isize, win_error())
 }
 fn limit(length: usize) u32 {
   if length > 4294967295 {
     return 4294967295
   }
-  return #cast(u32) length
+  return #cast(u32, length)
 }
 // Paths are borrowed UTF-8, converted into bounded stack storage; no hidden allocation.
 fn native_open(path: []const u8, mode: u8) FileResult {
@@ -65,12 +65,12 @@ fn native_open(path: []const u8, mode: u8) FileResult {
     access = 1073741824
     creation = 1
   }
-  handle := #cast(isize) #cast(usize) win_open(&storage[0], access, 7, nil, creation, 128, nil)
+  handle := #cast(isize, #cast(usize, win_open(&storage[0], access, 7, nil, creation, 128, nil)))
   if !native_valid(handle) {
     code := last_error()
     return FileResult{ error: code, kind: native_kind(code) }
   }
-  return FileResult{ file: owned_file(handle), ok: true }
+  return FileResult{ value: owned_file(handle), ok: true }
 }
 fn native_close(handle: isize) isize {
   if win_close(pointer(handle)) == 0 {
@@ -83,28 +83,28 @@ fn native_read(handle: isize, destination: []u8) isize {
   if win_read(pointer(handle), &destination[0], limit(#len(destination)), &done, nil) == 0 {
     error := win_error()
     if error == 38 || error == 109 {
-      return #cast(isize) done
+      return #cast(isize, done)
     }
     if error == 234 && done > 0 {
-      return #cast(isize) done
+      return #cast(isize, done)
     }
-    return 0 - #cast(isize) error
+    return 0 - #cast(isize, error)
   }
-  return #cast(isize) done
+  return #cast(isize, done)
 }
 fn native_write(handle: isize, source: []const u8) isize {
   done: u32 = 0
   if win_write(pointer(handle), &source[0], limit(#len(source)), &done, nil) == 0 {
     return last_error()
   }
-  return #cast(isize) done
+  return #cast(isize, done)
 }
 fn native_seek(handle: isize, offset: isize, origin: usize) isize {
   position: i64 = 0
-  if win_seek(pointer(handle), #cast(i64) offset, &position, #cast(u32) origin) == 0 {
+  if win_seek(pointer(handle), #cast(i64, offset), &position, #cast(u32, origin)) == 0 {
     return last_error()
   }
-  return #cast(isize) position
+  return #cast(isize, position)
 }
 fn native_sync(handle: isize) isize {
   if win_sync(pointer(handle)) == 0 {

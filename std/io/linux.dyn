@@ -17,7 +17,7 @@ fn stdin_read(data: rawptr, destination: []u8) Result {
   if value == 0 {
     status = Status.End
   }
-  return Result{ transferred: #cast(usize) value, error: 0, status: status }
+  return Result{ transferred: #cast(usize, value), error: 0, status: status }
 }
 
 fn write_descriptor(descriptor: isize, source: []const u8) Result {
@@ -32,7 +32,7 @@ fn write_descriptor(descriptor: isize, source: []const u8) Result {
       return Result{ transferred: written, error: value, kind: errors.linux(value), status: Status.Error }
     }
     else {
-      written += #cast(usize) value
+      written += #cast(usize, value)
     }
   }
   return Result{ transferred: written, error: 0, status: Status.Complete }
@@ -48,12 +48,12 @@ fn stderr_write(data: rawptr, source: []const u8) Result {
 }
 
 pub fn stdin() Reader {
-  return Reader{ data: nil, read: &stdin_read }
+  return Reader{ data: nil, read: stdin_read }
 }
 pub fn stdout() Writer {
-  return Writer{ data: nil, write: &stdout_write }
+  return Writer{ data: nil, write: stdout_write }
 }
 pub fn stderr() Writer {
-  return Writer{ data: nil, write: &stderr_write }
+  return Writer{ data: nil, write: stderr_write }
 }
 

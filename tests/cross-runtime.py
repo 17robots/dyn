@@ -28,12 +28,15 @@ def run(command, **kwargs):
 NAMES = ('dynrt_start.o', 'dynrt_release.o', 'dynrt_shared.o',
          'dynrt_aarch64_start.o', 'dynrt_aarch64_release.o', 'dynrt_aarch64_shared.o',
          'dynrt_riscv64_start.o', 'dynrt_riscv64_release.o', 'dynrt_riscv64_shared.o',
+         'dynrt_riscv64_none_start.o', 'dynrt_riscv64_none_release.o',
+         'dynrt_riscv32_none_start.o', 'dynrt_riscv32_none_release.o',
+         'dynrt_thumbv7em_none_start.o', 'dynrt_thumbv7em_none_release.o',
          'dynrt_windows_start.o', 'dynrt_windows_shared.o',
          'dynrt_macos_start.o', 'dynrt_macos_shared.o',
          'dynrt_macos_x64_start.o', 'dynrt_macos_x64_shared.o',
          'dynrt_windows_arm64_start.o', 'dynrt_windows_arm64_shared.o')
 
-SOURCE = 'use "std/io"\nuse "std/thread"\nuse "std/sync"\nfn remainder(x: f64, y: f64) f64 { return x % y }\nfn remainder32(x: f32, y: f32) f32 { return x % y }\nstruct Context { count: sync.AtomicU64 }\nfn worker(pointer: rawptr) isize {\n  context := #cast(*Context) pointer\n  defer { _ = sync.fetch_add_u64(&context.count, 1) }\n  for i in 0..1000 { _ = sync.fetch_add_u64(&context.count, 1) }\n  return 0\n}\nfn main() {\n  context := Context{}\n  active := thread.Thread{}\n  if thread.spawn_with_size(&active, 65536, &worker, #cast(rawptr) &context) < 0 { #panic("spawn") }\n  if thread.join(&active) != 0 || sync.load_u64(&context.count) != 1001 { #panic("join") }\n\n  if remainder(5.5, 2.0) != 1.5 || remainder(-5.5, 2.0) != -1.5 { #panic("fmod") }\n  if remainder32(5.5, 2.0) != 1.5 { #panic("fmodf") }\n  if (#bitcast(u64) remainder(-4.0, 2.0)) != 0x8000000000000000 { #panic("negative zero") }\n  _ = io.println(io.stdout(), "cross runtime ready")\n}\n'
+SOURCE = 'use "std/io"\nuse "std/thread"\nuse "std/mem" mem\nuse "std/errors" errors\nuse "std/sync"\nfn remainder(x: f64, y: f64) f64 { return x % y }\nfn remainder32(x: f32, y: f32) f32 { return x % y }\nstruct Context { count: sync.AtomicU64 }\nfn worker(pointer: rawptr) isize {\n  context := #cast(*Context, pointer)\n  defer { _ = sync.fetch_add_u64(&context.count, 1) }\n  for i in 0..1000 { _ = sync.fetch_add_u64(&context.count, 1) }\n  return 0\n}\nfn main() {\n  arena:=mem.arena_create(0)\n  defer { mem.arena_release(arena) }\n  context := Context{}\n  spawned:=thread.spawn_with_size(arena,65536,worker,#cast(rawptr,&context))\n  if !spawned.ok { #panic("spawn") }\n  active:=spawned.value\n  if !thread.join(active).ok || sync.load_u64(&context.count) != 1001 { #panic("join") }\n\n  if remainder(5.5, 2.0) != 1.5 || remainder(-5.5, 2.0) != -1.5 { #panic("fmod") }\n  if remainder32(5.5, 2.0) != 1.5 { #panic("fmodf") }\n  if (#bitcast(u64, remainder(-4.0, 2.0))) != 0x8000000000000000 { #panic("negative zero") }\n  _ = io.println(io.stdout(), "cross runtime ready")\n}\n'
 PANIC = '''use "std/io"
 fn child(value: f64) {
   defer {
@@ -111,7 +114,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-cross-runtime-') as temporary:
             assert struct.unpack_from('<II', original) == (0xfeedfacf, 0x1000007 if 'x64' in name else 0x100000c)
         else:
             assert original[:4] == b'\x7fELF'
-            assert struct.unpack_from('<H', original, 18)[0] == (243 if 'riscv64' in name else 183 if 'aarch64' in name else 62)
+            assert struct.unpack_from('<H', original, 18)[0] == (243 if 'riscv' in name else 40 if 'thumb' in name else 183 if 'aarch64' in name else 62)
     print('PASS all native startup/shared runtime objects with empty PATH; reproducible bytes')
 
     if platform.system() == 'Linux' and platform.machine().lower() in ('x86_64', 'amd64'):
@@ -146,7 +149,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-cross-runtime-') as temporary:
             shutil.copy2(original, compiler)
             for name in ('dynrt_support.o', 'dynrt_support_pic.o',
                          'dynrt_aarch64_support.o', 'dynrt_aarch64_support_pic.o',
-                         'dynrt_riscv64_support.o', 'dynrt_riscv64_support_pic.o',
+                         'dynrt_riscv64_support.o', 'dynrt_riscv64_support_pic.o', 'dynrt_riscv64_none_support.o', 'dynrt_riscv32_none_support.o', 'dynrt_thumbv7em_none_support.o',
                          'dynrt_windows_support.o', 'dynrt_macos_support.o',
                          'dynrt_macos_x64_support.o', 'dynrt_windows_arm64_support.o', 'libSystem.tbd'):
                 candidate = original.parent / name

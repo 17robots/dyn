@@ -14,6 +14,272 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- **Breaking arena API:** constructors return `*mem.Arena`, with the header in
+  backing storage. Pass the pointer directly rather than `&arena`. Explicit
+  `arena_create(0)` selects the target default; zero arena values no longer
+  initialize themselves. Owned arenas chain blocks, while caller-buffer arenas
+  stay fixed. Release invalidates an owned handle. The separate `GrowingArena`
+  and `arena_take` APIs are removed. See [arena migration](docs/migrations/arena-handles-20261025.md).
+
+- **Breaking syntax:** each statement starts on its own line; `a := 1 b := 2` and
+  `defer { x() y() }` are syntax errors. Split them onto separate lines.
+- **Breaking syntax:** `case` arms are no longer separated by commas. Delete the
+  `,` after each arm's closing `}`.
+- **Breaking syntax:** a function's name is its value. Write `write: buffer_write`
+  instead of `write: &buffer_write`; `&function` is now an error.
+- Literals that do not fit their context are compile errors, including `-1` for
+  an unsigned type and inside generic instances. Integer literals work in float
+  contexts when exact, so generic code can write `value < 0` and `x * 2` instead
+  of `#cast(T, 0)` and `#cast(T, 2)`.
+- Restored `dyn build --emit-ir` as versioned structural Dyn IR, with deterministic byte encoding and atomic `--output` files. This does not emit LLVM IR.
+- Standard-library contract corrections: buffered I/O, INI and WebSocket state retain their first failure; zero SHA-256 contexts initialize lazily; failed Metadesk parses return the stub; sort searches return the input length on a miss.
+- Breaking API migrations: flags parsing, regex compilation and thread creation take arenas first. Thread creation returns a stable arena-backed pointer. See [migration notes](docs/migrations/std-contracts-20261024.md). Flags, regex, URL, semver, PNG and QOI expose portable error categories and native error codes; codec payloads are under `value`. Remaining std migrations are tracked separately; these changes do not establish universal compliance.
+- **Breaking:** DNS answer collections, complete HTTP exchanges/chunk decoding,
+  process capture and AEAD outputs now use caller arenas. Capture limits are
+  explicit policy. HTTP/WebSocket controls, TLS, terminal operations and
+  capability reads return portable results; protocol diagnostics remain separate
+  from native codes. Watchers retain terminal failures. Zero PRNG and HTTP worker
+  states are safe, and worker startup takes an arena for stable thread nodes.
+- **Breaking:** clock reads, sleep, deadlines, profiling completion and benchmark
+  queries return structured failures; duplicate `try_*` clock names are removed.
+  OS clock failures propagate through network waits and process capture. CSV,
+  XML and TAR retain portable stream diagnostics. Text/HTML template exhaustion
+  follows the arena panic contract.
+- Trusted standard math calls use target-gated native instructions in tree,
+  SSA and Wasm emission. Unsupported operations keep portable implementations.
+  Native x86 optional instructions require CPU and OS capability checks.
+
+- Expanded `std/math` with integer bit/overflow/saturating helpers, portable
+  floating-point functions, concrete vectors, column-major matrices,
+  quaternions and half-open ranges. Vector normalization widens intermediates;
+  matrix inverses and fallible constructors return `{value, ok}`. Floating
+  accuracy is checked by sampled host-libm comparisons and selected RV32/Thumb
+  cases; these tests do not establish a global transcendental error bound.
+
+- **Breaking:** `process.Options{}` is valid and inherits every stream.
+  Streams are `process.Redirect` values made with `process.redirect(handle)`;
+  `process.options()` is removed.
+- `bytes/builder.Builder` keeps its first error in `error` and `fmt.Buffer`
+  sets `failed`; later calls do nothing, so callers may check once at the end.
+  `clear` resets both.
+- A zeroed `watch.Watcher` is inactive and `close` leaves descriptor 0 alone.
+- New `tools/std-lint.py`, run by the test suite, flags `_into` forms, size
+  companions, out parameters and `-1` positions in std.
+- **Breaking:** one result shape at the edges. Single-payload results name
+  the payload `value`: `fs.FileResult`, `OffsetResult`, `ReadAllResult`,
+  `PathResult`, `DirectoryResult`, `AtomicResult`; `net.ConnectionResult`,
+  `ListenerResult`, `http.AcceptResult`; `process.SpawnResult`,
+  `ArgumentsResult`; `testing.TemporaryResult`; `watch.OpenResult`; `zip`
+  `EntryResult`, `ExtractResult`, `OpenResult`; DNS address results; `xml` and `ini`
+  scanner results; `semver`, `template`, `der` and `certificate` results.
+  Network, watch and temporary-directory results gain `kind`. Parser results
+  use portable `kind`, native `error`, and byte `offset`. Module-specific parser
+  diagnostics use `detail`; `ini` also retains its line number. JSON and Metadesk
+  retain `root` and return their read-only stub on failure.
+- **Breaking:** one way to produce variable-size data: the function takes
+  `arena: *mem.Arena` first and returns the result in it. Removed the
+  caller-buffer forms and size companions: `strings.clone_into`, `join_size`,
+  `join_into`, `split_count`, `split_into`; codec `encoded_size` and
+  `decoded_size`; `zstd.compress_into` and `decompress_into`; `tls`
+  `*_create_into`; `c.string_from_arena` (now `string_from_bytes(arena,
+  source)`). Converted to arena-first: `strings.replace`, `fmt` number
+  formatting, hex/base32/base64 `encode` and `decode`, JSON `encode`,
+  `encode_pretty` and `write_string`, `path` and `url` builders,
+  `time.format_iso8601`, `debug.hexdump`, `flags.usage` and `completion`,
+  Unicode `case_fold` and `normalize`, HTTP and WebSocket writers, DNS queries,
+  `tls.certificate_subject` and `error_string`, `deflate.inflate` (new
+  `gunzip`), `gzip.decompress`, `zip.extract`, `png` and `qoi` codecs,
+  `pem.decode`, `process.environment`, `fs.read_link`, `fs.app_directory` and
+  `testing.temporary_*`. Wrap fixed storage with `mem.arena_from_buffer`.
+  Fixed-size results and streaming reads keep caller buffers. New
+  `mem.trial_size` and `trial_next` for producers of unknown size.
+- The 32-bit SSA backends now accept `main`'s call to the global initializer
+  instead of falling back to the tree emitter.
+- **Breaking:** positions are `usize` and a miss returns the length, which is
+  always a safe slice bound: `bytes.find`, `find_byte`, `find_last`,
+  `find_last_byte`, the `strings` wrappers and `search.find`. The compiler now
+  rejects `x < 0` and `x >= 0` on unsigned values, which catches leftover `-1`
+  checks.
+- **Breaking:** typed reads. `strings.parse(T, text)`, `strings.parse_base(T,
+  text, base)` and `strings.valid(T, text)` replace `parse_u64`, `parse_i64`,
+  `parse_f64` and `parse_u64_base`; bad input gives zero. `json.get(T, value,
+  key)` and `json.as(T, value)` read members as integers, floats, bools,
+  strings or nested values.
+- **Breaking:** JSON lookups return the read-only `json.nil_value` stub
+  instead of nil, and a failed parse returns it as `root`. Kind zero is now
+  `KindMissing`; the other kind constants moved up by one. `mdesk.nil_node` is a
+  read-only constant.
+- **Breaking:** results are returned, not written through out parameters:
+  `bytes.split_next`, `strings.scan_until/scan_field/scan_line`,
+  `text/scanner.next_line/next_field`, `utf8.next`, `utf8/utf16.codepoint_count`,
+  the `decoded_size` functions, `time.parse_iso8601`, `terminal.read_state` and
+  `terminal.raw`, and `ring.pop` return `{value, ok}`. `rand.below` returns the
+  value and panics on an invalid limit. `path.Component.found` is now `ok`.
+- **Breaking:** containers are intrusive. New `std/container/list` (stacks,
+  queues, doubly linked lists, trees and free lists through `next`, `prev`,
+  `first`, `last`, `parent` and `free_next`), `std/container/hash` (chained
+  slot tables through `key`, `hash` and `hash_next`, with seeded SipHash-1-3)
+  and `std/container/chunk` (chunk lists on a shared arena). `slot_map` now
+  works on the caller's slot array through a `generation` field. Removed:
+  `std/container/string_map`, `mem.Pool`, `mem.FreeList` and their functions.
+  See `docs/migrations/containers.md`.
+- **Breaking:** `mem.append(&arena, &items, value)` replaces
+  `mem.append(&items, &count, &arena, value)`. The slice owns the rest of its
+  arena, so appends never copy and element addresses never change; it panics
+  when something else was pushed on that arena. New `mem.append_many`.
+- Unknown field errors name the type and field: `Node has no field 'prev'`.
+- **Breaking:** function types drop the `*`: write `fn(i32, i32) i32`, not
+  `*fn(i32, i32) i32`. Parameters may be named for documentation:
+  `fn(target: *Entity, damage: i32) bool`. `*fn(...)` now means a pointer to
+  a function value. See `docs/migrations/function-types.md`.
+- Taking the address of a constant gives a `*const T` into read-only data, so
+  constants work as shared read-only stubs: `const nil_node: Node = Node{}`
+  and `&nil_node`. Writing through it is a compile error.
+- New experimental target `thumbv7em-none`: bare-metal images for Cortex-M7
+  (Thumb-2, double-precision FPU, AAPCS with floating-point registers),
+  tested on the QEMU `mps2-an500` board. It uses the same 32-bit model as
+  `riscv32-none`. The runtime assembler and the ELF linker now handle Thumb
+  code and Arm relocations. The value corpus of 3,249 cases matches x86-64
+  Linux in debug and release builds (`just test-native-thumb`).
+- New experimental target `riscv32-none`: 32-bit bare-metal images for the
+  QEMU `virt` board (RV32GC, ILP32D). The native backend now handles 32-bit
+  pointers and `usize`: 64-bit values use register pairs, and 64-bit division,
+  checked multiplication and integer/float conversions call start-runtime
+  helpers. The ELF linker reads ELF32 objects and writes ELF32 executables.
+  The value corpus of 3,249 cases matches x86-64 Linux in debug and release
+  builds (`tools/backend/bare-differential.py`).
+- Importing a member of a module that has no source file for the target now
+  reports the missing module once, instead of "imported member is missing".
+- `std/strings`, `std/path`, `std/encoding`, `std/crypto/der`,
+  `std/crypto/password`, `std/text/regex`, `std/net/http` and
+  `std/net/websocket` no longer assume a 64-bit `usize`.
+- `distinct`, `packed` and `is` are contextual keywords. They stay keywords at
+  the start of `distinct type`, `packed struct` and a `case` type pattern, and
+  are ordinary names everywhere else. `type` stays reserved.
+- Type mismatch errors name the full types, for example
+  `expected *u8, found *i32` instead of `expected pointer, found pointer`.
+- `mem.append` grows the arena's newest allocation in place instead of copying,
+  through the new `mem.arena_try_extend`. A slice built in a loop with nothing
+  else allocated in between now costs its final size, not twice that.
+- Typed pools: `mem.pool_for(T, &arena, count)`, `mem.acquire(T, &pool)`
+  (zeroed `*T`) and `mem.release(&pool, item)`.
+- `tests/bare-metal.py` kills the QEMU process group on timeout. A trap raised
+  while reporting a trap on `riscv64-none` exits with status 103 instead of
+  trapping again.
+
+- Every enum now needs a variant with value 0, so zeroed storage is always a
+  valid variant. Enums such as `enum(u8) Op { Add = 1, Halt = 0xFF }` must add
+  one, for example `None = 0`, and handle it in exhaustive `case` statements.
+  An exhaustive `case` that sees an invalid tag now panics with `enum.tag.ok`
+  instead of executing an illegal instruction.
+- Documented binary operator precedence. Bitwise operators bind tighter than
+  comparisons, unlike C.
+- Handle cleanup now follows one convention: `close(&handle)` or
+  `release(&handle)` takes a pointer and clears the handle. Renamed:
+  `tls.config_destroy(c)` to `tls.config_release(&c)`,
+  `tls.connection_destroy(c)` to `tls.connection_release(&c)`,
+  `tls.certificate_free_owned(c)` to `tls.certificate_release(&c)`, and
+  `dynlib.close(h)` now takes `&h`. `net.listener_close` and
+  `net.connection_close` clear the descriptor even when close fails, so a
+  reused descriptor is never closed twice. New `net.listener_take` and
+  `net.connection_take`. `dyn vet` now also warns on copies of std handle
+  structs.
+- `net.Connection` and `net.Listener` gain an `active` field, so zeroed storage
+  is a closed handle; closing one no longer closes descriptor 0 (stdin).
+  Construct from a raw descriptor with `net.connection_from_descriptor` or
+  `net.listener_from_descriptor` instead of a struct literal, and test
+  `handle.active` instead of `handle.descriptor >= 0`.
+- New `mem.try_push(T, &arena)` and `mem.try_push_array(T, &arena, count)`
+  return nil or an empty slice instead of panicking when the arena is
+  exhausted. The memory guide documents per-request budgets and that std never
+  rewinds partial output on failure.
+- New `mem.append(&items, &count, &arena, value)` grows any typed slice, and
+  `slot_map` gains `init_for`, `insert_value` and `get_value` for typed records
+  without casts. Generic structs remain deferred.
+- `net.Result`, `dns.Result` and `watch.Result` gain a portable
+  `kind: errors.Kind`, matching `fs`. New `net.error_kind(code)` maps a native
+  socket error code. DNS NXDOMAIN reports `NotFound`.
+- `dyn fmt` now owns indentation: two spaces per enclosing bracket, one extra
+  level for a line continuing an expression, and closing brackets at their
+  opener's level. Block comment interiors are untouched. Run `dyn fmt` once;
+  `dyn fmt --check` reports code that only differs in indentation. All std,
+  runtime and vendor modules are now formatted and checked in CI.
+- Fixed two undefined-behaviour bugs found by the new `just sanitize-test`
+  gate: formatting a file with no layout edits, and language-server import
+  completion in a module with no other sources.
+- Clearer diagnostics: `#reverse` outside a `for` iterable, and a type
+  parameter written `$T` more than once in one signature.
+- The language guide now defines assignment and literal evaluation order, what
+  `string` guarantees about UTF-8 (nothing, without validation), and shallow
+  `*const` with an example.
+
+- Empty caller-buffer arenas and zero-capacity subarenas now remain fixed at
+  zero capacity instead of silently allocating OS backing. Reset, rewind, and
+  transfer preserve this mode. Release clears the descriptor to the lazy default;
+  use `arena_from_buffer` again before reusing it under a fixed budget. `Arena`
+  gains a `fixed_buffer` field; rebuild consumers rather than relying on its
+  previous binary layout. Memory documentation now distinguishes fatal cleanup
+  from retryable thread errors and accounts for zeroing and page commitment costs.
+
+- **Breaking syntax change:** conversions now use `#cast(Type, value)` and
+  `#bitcast(Type, value)`. The old prefix forms are rejected with a migration
+  diagnostic. Conversion behavior is unchanged; the operand is evaluated once.
+  Cast results support ordinary postfix operations. SDK sources, generators,
+  examples, and language-server snippets use the new forms. See the
+  [cast syntax migration](docs/migrations/cast-syntax.md).
+- `http.serve_stream` and `http.serve_connection` now answer a malformed
+  request with `400 Bad Request` and an oversized one with
+  `413 Payload Too Large` before closing the connection. Before, the client
+  saw the connection close with no reply.
+- Fixed `http.receive` waiting for more input forever after a complete
+  request head that does not parse. It now returns `ErrorKind.Invalid`.
+- Added `tests/flagship-http`, a notes server on four worker threads using
+  `Request.context` for its state, checked
+  with concurrent keep-alive clients, pipelined requests and bad input.
+- Added `tests/flagship-game`, a headless Breakout that renders every frame
+  through a per-frame arena. The test checks that debug and release builds
+  produce identical frames, that frames retain no memory, and that the game
+  core builds for `wasm32-browser`, `aarch64-linux`, `x86_64-windows` and
+  `aarch64-macos`.
+- Added the experimental `riscv64-none` target: static bare-metal images for
+  the QEMU `virt` board, with no operating system. Output goes to the board's
+  UART, arenas take memory from a fixed region after the image, and a panic or
+  a return from `main` ends QEMU with the program's exit status. `std/mem`,
+  `std/io` and the modules built only on them work; modules that need an
+  operating system do not. See [bare metal](docs/guide/bare-metal.md).
+- The built-in ELF linker accepts a load address. Bare-metal images place code
+  first at that address and do not load the ELF headers.
+- `dyn docs` creates its temporary output in `TMPDIR` and reports when it
+  cannot, instead of exiting silently.
+- `just sanitize-test` instruments only the compiler, so C helpers the tests
+  build no longer load the ASan runtime into Dyn programs.
+- **Breaking:** fallible memory functions now all use the `try_` prefix, and
+  the plain names panic, matching `arena_push` and `arena_try_push`:
+  `growing_push` (was `growing_push_or_panic`) and `growing_try_push` (was
+  `growing_push`), `growing_try_push_uninit` (was `growing_push_uninit`),
+  `pool_acquire` / `pool_try_acquire`, and `free_list_alloc` /
+  `free_list_try_alloc`. The `_or_panic` names are gone.
+- Signed integers can index arrays and slices and bound slices, as in C, with
+  the same bounds check: a negative index panics with `index.ok`. Types wider
+  than `usize` (such as `i64` on 32-bit targets) still need `#cast`.
+- Using a module with no source file for the target (for example `std/process`
+  on `wasm32-wasi`) reports one error naming the module instead of an error
+  for every missing name inside it.
+- Added `std/mmio` for memory-mapped device registers: `load_u8` through
+  `load_u64` and `store_u8` through `store_u64` take an address and perform
+  exactly one access each, never removed, merged or cached by the compiler.
+  Each access is one call into the runtime support object.
+- HTTP handlers can reach application state without module globals:
+  `http.Request` has a `context: rawptr` field, set by the new
+  `http.serve_stream_context`, `http.serve_connection_context` and
+  `concurrent.start_context`. The existing functions pass nil.
+- Added a Dyn port of the fail-fast source parser in `tests/selfhost-parser`,
+  the first self-hosting step. `tests/selfhost-parser.py` checks that it
+  produces the same tree, node for node, as the C parser on every `.dyn` file
+  in the repository and on generated broken and deeply nested inputs.
+
+## 0.1.0-preview.25
+
 - The compiler no longer uses Tree-sitter. Its handwritten parser handles every
   command and the language server, and source builds no longer need the
   Tree-sitter library or a grammar checkout. Editor highlighting still uses the

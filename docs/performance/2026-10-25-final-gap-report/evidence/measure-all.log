@@ -1,0 +1,16 @@
+extended sort {'dyn': 83.266, 'c': 138.111, 'rust': 15.937, 'go': 87.916, 'dyn_before': 123.573}
+extended map {'dyn': 42.984, 'c': 35.374, 'rust': 34.292, 'go': 37.098, 'dyn_before': 42.533}
+extended utf8 {'dyn': 53.166, 'c': 31.533, 'rust': 44.135, 'go': 54.244, 'dyn_before': 55.25}
+extended allocate {'dyn': 27.479, 'c': 23.566, 'rust': 40.965, 'go': 32.937, 'dyn_before': 27.423}
+check_families map {'checked': 42.998, 'bounds': 41.527, 'overflow': 43.331, 'all': 36.143}
+check_families utf8 {'checked': 55.898, 'bounds': 55.513, 'overflow': 50.599, 'all': 46.429}
+check_families allocate {'checked': 27.329, 'bounds': 26.518, 'overflow': 26.542, 'all': 24.251}
+decoder shared_driver {'checked-loop': 52.743, 'fixed-loop': 52.465, 'nocheck-loop': 55.17, 'checked-unroll': 39.726, 'nocheck-unroll': 41.088, 'checked-guardunroll': 54.644, 'checked-offsetunroll': 37.93, 'c': 29.676, 'c-no-unroll': 42.424}
+compute points {'checked': 12.146, 'c': 20.726, 'c-O2': 9.73, 'suppression_probe': 11.815, 'points-stack': 11.87, 'points-magic': 12.078, 'points-stack-magic': 11.954, 'c-no-interchange': 9.895}
+compute sieve {'checked': 121.221, 'c': 110.831, 'c-O2': 111.002, 'suppression_probe': 121.232, 'sieve-cmp': 122.451, 'sieve-phi': 121.646, 'sieve-fill': 121.892, 'sieve-cmp-phi': 125.525, 'sieve-all': 125.478}
+sort_distributions random {'heap': 125.102, 'intro': 83.663, 'c': 138.953, 'rust': 17.425}
+sort_distributions sorted {'heap': 75.145, 'intro': 101.76, 'c': 26.763, 'rust': 2.78}
+sort_distributions reverse {'heap': 78.255, 'intro': 97.024, 'c': 28.133, 'rust': 2.893}
+sort_distributions equal {'heap': 4.821, 'intro': 3.054, 'c': 24.431, 'rust': 2.74}
+sort_distributions duplicates {'heap': 94.153, 'intro': 23.671, 'c': 83.439, 'rust': 7.023}
+PASS all measurements and hashes

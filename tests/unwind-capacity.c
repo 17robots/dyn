@@ -18,6 +18,13 @@ void dyn_panic(const unsigned char *message, uint64_t length) {
   longjmp(panic_jump, 1);
 }
 int main(void) {
+  DynUnwind lower = {0}, higher = {0}, nested = {0};
+  current_tid = 1; dyn_unwind_link(&lower);
+  current_tid = 2; dyn_unwind_link(&higher);
+  current_tid = 1; dyn_unwind_unlink(&lower);
+  current_tid = 2; dyn_unwind_link(&nested);
+  assert(nested.previous == &higher);
+  dyn_unwind_unlink(&nested); dyn_unwind_unlink(&higher);
   DynUnwind frames[65] = {0};
   for (current_tid = 1; current_tid <= 64; ++current_tid)
     dyn_unwind_link(&frames[current_tid - 1]);

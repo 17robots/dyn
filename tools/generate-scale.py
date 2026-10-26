@@ -54,7 +54,7 @@ def function(rng, module, index, helpers):
         bound = rng.randint(2, 9)
         lines += [
             f'  for i in 0..{bound} {{',
-            f'    t += s.values[i % #len(s.values)] * {rng.randint(1, 7)} + #cast(i64) i',
+            f'    t += s.values[i % #len(s.values)] * {rng.randint(1, 7)} + #cast(i64, i)',
             '  }',
         ]
     lines += [
@@ -79,7 +79,7 @@ def module(rng, number, previous, helpers):
     for index in range(FUNCTIONS_PER_MODULE):
         lines += function(rng, number, index, helpers)
         lines.append('')
-    lines += ['pub fn run(seed: i64) i64 {', '  s := State{}', '  for i in 0..8 {', '    s.values[i] = seed + #cast(i64) i', '  }', '  t: i64 = 0']
+    lines += ['pub fn run(seed: i64) i64 {', '  s := State{}', '  for i in 0..8 {', '    s.values[i] = seed + #cast(i64, i)', '  }', '  t: i64 = 0']
     for index in range(FUNCTIONS_PER_MODULE - 4, FUNCTIONS_PER_MODULE):
         lines.append(f'  t += f{index}(&s, seed)')
     if previous is not None:

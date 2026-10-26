@@ -1,0 +1,718 @@
+{
+  "host": "Linux-7.2.11-arch1-1-x86_64-with-glibc2.44",
+  "cpu": "AMD Ryzen 9 9950X 16-Core Processor",
+  "scope": "Whole-process serial rotated/reversed runs: 2 warmups,18 native samples;1 warmup,4 Node/Python samples. Matched source fixtures, independent exact checksums; no language-wide ranking.",
+  "source_origin": "/home/mdray/17robots/dyn/compiler/build/language-comparison-20261024/sources",
+  "tools": {
+    "dyn": {
+      "path": "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/dyn-final",
+      "sha256": "11d472944f13982100f2d1167c00adfeed956493e01dca5afd2c3bd8e9e1d224",
+      "version": "dyn 0.1.0-dev"
+    },
+    "gcc": {
+      "path": "/usr/bin/gcc",
+      "sha256": "8aac907d6fbf40394b424b5fa4a2ad1aa291dac7d3a0315c5b415c1f5ace1287",
+      "version": "gcc (GCC) 16.2.1 20260810"
+    },
+    "clang": {
+      "path": "/home/mdray/.local/share/mise/installs/clang/latest/.mise-bins/clang",
+      "sha256": "a33cd3d8b9a33049b95902ae4e9b5628a1e2bc50399ce621f388e0fd4aedabc7",
+      "version": "clang version 23.1.3 (https://github.com/conda-forge/clangdev-feedstock 25b3b037ec2a28639e5f42c2012b1e4e80d96bcf)"
+    },
+    "rust": {
+      "path": "/home/mdray/.rustup/toolchains/1.94.1-x86_64-unknown-linux-gnu/bin/rustc",
+      "sha256": "ef6d716e5d1c6c93def277c0afa037c21e7a74f7de3aed4ee0700646c3301b1d",
+      "version": "rustc 1.94.1 (e408947bf 2026-03-25)"
+    },
+    "go": {
+      "path": "/home/mdray/.local/share/mise/installs/go/1.27.3/bin/go",
+      "sha256": "5f5eb6d0b2fb6aa0bb5d5f8c5f1c944e0de955c925f0111af92a9d8f79680b5b",
+      "version": "go version go1.27.3 linux/amd64"
+    },
+    "node": {
+      "path": "/home/mdray/.local/share/mise/installs/node/latest/bin/node",
+      "sha256": "08f12d42fb304468e8ee86247fe686aae5b225836ea65e9d6566c11ae6ba2e8e",
+      "version": "v26.12.1"
+    },
+    "python": {
+      "path": "/usr/bin/python3",
+      "sha256": "375532f83be620283ab780c14ca6bcc5907dc379d2b621de0c5d0a112cf5458b",
+      "version": "Python 3.14.8"
+    },
+    "before": {
+      "path": "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/dyn-before",
+      "sha256": "e19240933ee9c4d15804f31c0f1a1cb6ba2764d0dd7de92f388e752796dafdbc",
+      "version": "dyn 0.1.0-dev"
+    }
+  },
+  "kernels": [
+    {
+      "name": "fib",
+      "expected": "102334155",
+      "commands": {
+        "before": [
+          "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/languages/fib-before"
+        ],
+        "dyn": [
+          "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/languages/fib-dyn"
+        ],
+        "gcc": [
+          "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/fib-gcc"
+        ],
+        "clang": [
+          "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/fib-clang"
+        ],
+        "rust": [
+          "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/fib-rust"
+        ],
+        "go": [
+          "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/fib-go"
+        ],
+        "node": [
+          "/home/mdray/.local/share/mise/installs/node/latest/bin/node",
+          "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/sources/node/fib/main.js"
+        ],
+        "python": [
+          "/usr/bin/python3",
+          "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/sources/python/fib/main.py"
+        ]
+      },
+      "builds": {
+        "before": {
+          "command": [
+            "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/dyn-before",
+            "build",
+            "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/languages/sources/dyn/fib",
+            "--release",
+            "--opt-level",
+            "3",
+            "--cpu",
+            "generic",
+            "--no-cache",
+            "--quiet",
+            "--output",
+            "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/languages/fib-before"
+          ],
+          "sha256": "d9394ea335dab893ce9654c6fefb62b52fbc22d2f287df0981280f04ae08202d",
+          "bytes": 45240
+        },
+        "dyn": {
+          "command": [
+            "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/dyn-final",
+            "build",
+            "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/languages/sources/dyn/fib",
+            "--release",
+            "--opt-level",
+            "3",
+            "--cpu",
+            "generic",
+            "--no-cache",
+            "--quiet",
+            "--output",
+            "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/languages/fib-dyn"
+          ],
+          "sha256": "9cc9965d149ce19db6995345f1d29c13adcbf1e29b5bd5d06975f10313cb1222",
+          "bytes": 44856
+        },
+        "gcc": {
+          "command": [
+            "/usr/bin/gcc",
+            "-O3",
+            "-march=x86-64",
+            "-mtune=generic",
+            "-ffp-contract=off",
+            "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/sources/gcc/fib/main.c",
+            "-o",
+            "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/fib-gcc"
+          ],
+          "sha256": "ac7a55c4e80a712b649edb6bd15e858f9ab3c40eef268dca2db7087d83f7cd0d",
+          "bytes": 16000
+        },
+        "clang": {
+          "command": [
+            "/home/mdray/.local/share/mise/installs/clang/latest/.mise-bins/clang",
+            "-O3",
+            "-march=x86-64",
+            "-mtune=generic",
+            "-ffp-contract=off",
+            "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/sources/clang/fib/main.c",
+            "-o",
+            "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/fib-clang"
+          ],
+          "sha256": "6c98557eeded6f97e750976a749812bfecc1d4057cfc1f41f9a73854e5949d15",
+          "bytes": 16736
+        },
+        "rust": {
+          "command": [
+            "/home/mdray/.rustup/toolchains/1.94.1-x86_64-unknown-linux-gnu/bin/rustc",
+            "-C",
+            "opt-level=3",
+            "-C",
+            "target-cpu=x86-64",
+            "-C",
+            "codegen-units=1",
+            "--edition=2021",
+            "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/sources/rust/fib/main.rs",
+            "-o",
+            "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/fib-rust"
+          ],
+          "sha256": "835c408d6af86409fe2205a76f3646100b1eccd1990935618749392bfb98abcf",
+          "bytes": 3954152
+        },
+        "go": {
+          "command": [
+            "/home/mdray/.local/share/mise/installs/go/1.27.3/bin/go",
+            "build",
+            "-o",
+            "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/fib-go",
+            "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/sources/go/fib/main.go"
+          ],
+          "sha256": "39410532996abfa8723ee5a5c59ca14d3d12f0d540a007e35a2d174699eddaa8",
+          "bytes": 2350682
+        }
+      }
+    },
+    {
+      "name": "hash",
+      "expected": "3712437418107600896",
+      "commands": {
+        "before": [
+          "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/languages/hash-before"
+        ],
+        "dyn": [
+          "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/languages/hash-dyn"
+        ],
+        "gcc": [
+          "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/hash-gcc"
+        ],
+        "clang": [
+          "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/hash-clang"
+        ],
+        "rust": [
+          "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/hash-rust"
+        ],
+        "go": [
+          "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/hash-go"
+        ],
+        "node": [
+          "/home/mdray/.local/share/mise/installs/node/latest/bin/node",
+          "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/sources/node/hash/main.js"
+        ],
+        "python": [
+          "/usr/bin/python3",
+          "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/sources/python/hash/main.py"
+        ]
+      },
+      "builds": {
+        "before": {
+          "command": [
+            "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/dyn-before",
+            "build",
+            "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/languages/sources/dyn/hash",
+            "--release",
+            "--opt-level",
+            "3",
+            "--cpu",
+            "generic",
+            "--no-cache",
+            "--quiet",
+            "--output",
+            "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/languages/hash-before"
+          ],
+          "sha256": "3734fac8fe68e3e75d0b4723e65c887a9b8c7bfd085d584d0c0649e5b263f614",
+          "bytes": 45240
+        },
+        "dyn": {
+          "command": [
+            "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/dyn-final",
+            "build",
+            "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/languages/sources/dyn/hash",
+            "--release",
+            "--opt-level",
+            "3",
+            "--cpu",
+            "generic",
+            "--no-cache",
+            "--quiet",
+            "--output",
+            "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/languages/hash-dyn"
+          ],
+          "sha256": "19931ad5c1f2a5d43afe5aa7cdc1a0553ab652a3a6c17ed36d07938cde2d1954",
+          "bytes": 44920
+        },
+        "gcc": {
+          "command": [
+            "/usr/bin/gcc",
+            "-O3",
+            "-march=x86-64",
+            "-mtune=generic",
+            "-ffp-contract=off",
+            "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/sources/gcc/hash/main.c",
+            "-o",
+            "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/hash-gcc"
+          ],
+          "sha256": "0e5995ee2cc915dd9e6205b1df11a6efd8d9d9bf635301054c3188ae00a791ec",
+          "bytes": 16000
+        },
+        "clang": {
+          "command": [
+            "/home/mdray/.local/share/mise/installs/clang/latest/.mise-bins/clang",
+            "-O3",
+            "-march=x86-64",
+            "-mtune=generic",
+            "-ffp-contract=off",
+            "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/sources/clang/hash/main.c",
+            "-o",
+            "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/hash-clang"
+          ],
+          "sha256": "e4ba5b60f779befefdfb4805d7a274509603920048b7e6eefb14ff96ef5e6753",
+          "bytes": 16736
+        },
+        "rust": {
+          "command": [
+            "/home/mdray/.rustup/toolchains/1.94.1-x86_64-unknown-linux-gnu/bin/rustc",
+            "-C",
+            "opt-level=3",
+            "-C",
+            "target-cpu=x86-64",
+            "-C",
+            "codegen-units=1",
+            "--edition=2021",
+            "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/sources/rust/hash/main.rs",
+            "-o",
+            "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/hash-rust"
+          ],
+          "sha256": "97fd066d302ee86d077c7aa1b7e0e1c33f8dcb3451d7b5ce3dbfca293f87e70d",
+          "bytes": 3955272
+        },
+        "go": {
+          "command": [
+            "/home/mdray/.local/share/mise/installs/go/1.27.3/bin/go",
+            "build",
+            "-o",
+            "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/hash-go",
+            "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/sources/go/hash/main.go"
+          ],
+          "sha256": "7583ce21b2fd8a29a148019bef4f42ffe681d757d88f333b23222d71983a2194",
+          "bytes": 2351107
+        }
+      }
+    },
+    {
+      "name": "matmul",
+      "expected": "102495355",
+      "commands": {
+        "before": [
+          "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/languages/matmul-before"
+        ],
+        "dyn": [
+          "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/languages/matmul-dyn"
+        ],
+        "gcc": [
+          "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/matmul-gcc"
+        ],
+        "clang": [
+          "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/matmul-clang"
+        ],
+        "rust": [
+          "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/matmul-rust"
+        ],
+        "go": [
+          "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/matmul-go"
+        ],
+        "node": [
+          "/home/mdray/.local/share/mise/installs/node/latest/bin/node",
+          "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/sources/node/matmul/main.js"
+        ],
+        "python": [
+          "/usr/bin/python3",
+          "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/sources/python/matmul/main.py"
+        ]
+      },
+      "builds": {
+        "before": {
+          "command": [
+            "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/dyn-before",
+            "build",
+            "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/languages/sources/dyn/matmul",
+            "--release",
+            "--opt-level",
+            "3",
+            "--cpu",
+            "generic",
+            "--no-cache",
+            "--quiet",
+            "--output",
+            "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/languages/matmul-before"
+          ],
+          "sha256": "f3315a6648d89d7a12a0c63fa35b452851846dfa684887a73f7f4d174d05a48f",
+          "bytes": 45624
+        },
+        "dyn": {
+          "command": [
+            "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/dyn-final",
+            "build",
+            "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/languages/sources/dyn/matmul",
+            "--release",
+            "--opt-level",
+            "3",
+            "--cpu",
+            "generic",
+            "--no-cache",
+            "--quiet",
+            "--output",
+            "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/languages/matmul-dyn"
+          ],
+          "sha256": "babd540738e22cf14005ae49e83798de4b72364e12554230b402b48585c9f360",
+          "bytes": 45304
+        },
+        "gcc": {
+          "command": [
+            "/usr/bin/gcc",
+            "-O3",
+            "-march=x86-64",
+            "-mtune=generic",
+            "-ffp-contract=off",
+            "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/sources/gcc/matmul/main.c",
+            "-o",
+            "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/matmul-gcc"
+          ],
+          "sha256": "535ddd5b1dad7a64daa4a334171a16047f2fe540922c471294a49f7c08149624",
+          "bytes": 16016
+        },
+        "clang": {
+          "command": [
+            "/home/mdray/.local/share/mise/installs/clang/latest/.mise-bins/clang",
+            "-O3",
+            "-march=x86-64",
+            "-mtune=generic",
+            "-ffp-contract=off",
+            "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/sources/clang/matmul/main.c",
+            "-o",
+            "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/matmul-clang"
+          ],
+          "sha256": "3e2be321059854b724d76b1f893ae48a33cb1f8711d5809fa2ae3451dae0457b",
+          "bytes": 16760
+        },
+        "rust": {
+          "command": [
+            "/home/mdray/.rustup/toolchains/1.94.1-x86_64-unknown-linux-gnu/bin/rustc",
+            "-C",
+            "opt-level=3",
+            "-C",
+            "target-cpu=x86-64",
+            "-C",
+            "codegen-units=1",
+            "--edition=2021",
+            "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/sources/rust/matmul/main.rs",
+            "-o",
+            "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/matmul-rust"
+          ],
+          "sha256": "92d2cb47ee6bde01806566015bae2d76609336072a1ac1d15594bad490886c10",
+          "bytes": 3956568
+        },
+        "go": {
+          "command": [
+            "/home/mdray/.local/share/mise/installs/go/1.27.3/bin/go",
+            "build",
+            "-o",
+            "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/matmul-go",
+            "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/sources/go/matmul/main.go"
+          ],
+          "sha256": "6ff29c52e81d27d5cb02c5fc83d1b31808eff907e0b52000fd6020e5c1d703da",
+          "bytes": 2351566
+        }
+      }
+    },
+    {
+      "name": "points",
+      "expected": "2094662128",
+      "commands": {
+        "before": [
+          "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/languages/points-before"
+        ],
+        "dyn": [
+          "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/languages/points-dyn"
+        ],
+        "gcc": [
+          "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/points-gcc"
+        ],
+        "clang": [
+          "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/points-clang"
+        ],
+        "rust": [
+          "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/points-rust"
+        ],
+        "go": [
+          "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/points-go"
+        ],
+        "node": [
+          "/home/mdray/.local/share/mise/installs/node/latest/bin/node",
+          "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/sources/node/points/main.js"
+        ],
+        "python": [
+          "/usr/bin/python3",
+          "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/sources/python/points/main.py"
+        ]
+      },
+      "builds": {
+        "before": {
+          "command": [
+            "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/dyn-before",
+            "build",
+            "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/languages/sources/dyn/points",
+            "--release",
+            "--opt-level",
+            "3",
+            "--cpu",
+            "generic",
+            "--no-cache",
+            "--quiet",
+            "--output",
+            "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/languages/points-before"
+          ],
+          "sha256": "f19f950ee20dcd10b22699b6701bfae94d93873b64584ebfc324090cdf0cf20d",
+          "bytes": 45440
+        },
+        "dyn": {
+          "command": [
+            "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/dyn-final",
+            "build",
+            "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/languages/sources/dyn/points",
+            "--release",
+            "--opt-level",
+            "3",
+            "--cpu",
+            "generic",
+            "--no-cache",
+            "--quiet",
+            "--output",
+            "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/languages/points-dyn"
+          ],
+          "sha256": "bf39f64f64c280f204efeb877d42b1b845492a2f7df097b4dd9c20cdf2e61c4b",
+          "bytes": 45056
+        },
+        "gcc": {
+          "command": [
+            "/usr/bin/gcc",
+            "-O3",
+            "-march=x86-64",
+            "-mtune=generic",
+            "-ffp-contract=off",
+            "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/sources/gcc/points/main.c",
+            "-o",
+            "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/points-gcc"
+          ],
+          "sha256": "d8fa0ce1b19842d3d2b295f363e64d1fa332ef83b132c5eff7b526bcd9ea33ef",
+          "bytes": 16000
+        },
+        "clang": {
+          "command": [
+            "/home/mdray/.local/share/mise/installs/clang/latest/.mise-bins/clang",
+            "-O3",
+            "-march=x86-64",
+            "-mtune=generic",
+            "-ffp-contract=off",
+            "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/sources/clang/points/main.c",
+            "-o",
+            "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/points-clang"
+          ],
+          "sha256": "d368018bc2bd501059a09a31dbe3fa3bda149fff42a32fd8a87b8f9243546e3d",
+          "bytes": 16736
+        },
+        "rust": {
+          "command": [
+            "/home/mdray/.rustup/toolchains/1.94.1-x86_64-unknown-linux-gnu/bin/rustc",
+            "-C",
+            "opt-level=3",
+            "-C",
+            "target-cpu=x86-64",
+            "-C",
+            "codegen-units=1",
+            "--edition=2021",
+            "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/sources/rust/points/main.rs",
+            "-o",
+            "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/points-rust"
+          ],
+          "sha256": "39868035c20df6e77e03a8570782b127705c8ba8e23e40e59602c452a7a75fb6",
+          "bytes": 3954944
+        },
+        "go": {
+          "command": [
+            "/home/mdray/.local/share/mise/installs/go/1.27.3/bin/go",
+            "build",
+            "-o",
+            "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/points-go",
+            "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/sources/go/points/main.go"
+          ],
+          "sha256": "b46dfc877461e27a3b0314809d74d2ae462a9eb5ffef2357f0e888bd1d01bf80",
+          "bytes": 2351621
+        }
+      }
+    },
+    {
+      "name": "sieve",
+      "expected": "5397556",
+      "commands": {
+        "before": [
+          "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/languages/sieve-before"
+        ],
+        "dyn": [
+          "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/languages/sieve-dyn"
+        ],
+        "gcc": [
+          "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/sieve-gcc"
+        ],
+        "clang": [
+          "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/sieve-clang"
+        ],
+        "rust": [
+          "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/sieve-rust"
+        ],
+        "go": [
+          "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/sieve-go"
+        ],
+        "node": [
+          "/home/mdray/.local/share/mise/installs/node/latest/bin/node",
+          "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/sources/node/sieve/main.js"
+        ],
+        "python": [
+          "/usr/bin/python3",
+          "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/sources/python/sieve/main.py"
+        ]
+      },
+      "builds": {
+        "before": {
+          "command": [
+            "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/dyn-before",
+            "build",
+            "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/languages/sources/dyn/sieve",
+            "--release",
+            "--opt-level",
+            "3",
+            "--cpu",
+            "generic",
+            "--no-cache",
+            "--quiet",
+            "--output",
+            "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/languages/sieve-before"
+          ],
+          "sha256": "6b029e9f34b6ec0b642d7506c89b470c3c22f0e42db1a194f6aa447b64162644",
+          "bytes": 45264
+        },
+        "dyn": {
+          "command": [
+            "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/dyn-final",
+            "build",
+            "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/languages/sources/dyn/sieve",
+            "--release",
+            "--opt-level",
+            "3",
+            "--cpu",
+            "generic",
+            "--no-cache",
+            "--quiet",
+            "--output",
+            "/home/mdray/17robots/dyn/compiler/build/performance-inline-20261024/languages/sieve-dyn"
+          ],
+          "sha256": "5955a964cb39b1d944995adf4b355bc523c6989c39b33cff8de86c0cecd59c7b",
+          "bytes": 44880
+        },
+        "gcc": {
+          "command": [
+            "/usr/bin/gcc",
+            "-O3",
+            "-march=x86-64",
+            "-mtune=generic",
+            "-ffp-contract=off",
+            "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/sources/gcc/sieve/main.c",
+            "-o",
+            "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/sieve-gcc"
+          ],
+          "sha256": "b45d31d9ead66df8a695cd0fa4c34841e4947c87084d1f5507e7f5abd4057276",
+          "bytes": 16048
+        },
+        "clang": {
+          "command": [
+            "/home/mdray/.local/share/mise/installs/clang/latest/.mise-bins/clang",
+            "-O3",
+            "-march=x86-64",
+            "-mtune=generic",
+            "-ffp-contract=off",
+            "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/sources/clang/sieve/main.c",
+            "-o",
+            "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/sieve-clang"
+          ],
+          "sha256": "ab7a6c199294b1850de888cfcd578ec736b7b30e4a7dfc6771de268c5380efdb",
+          "bytes": 16792
+        },
+        "rust": {
+          "command": [
+            "/home/mdray/.rustup/toolchains/1.94.1-x86_64-unknown-linux-gnu/bin/rustc",
+            "-C",
+            "opt-level=3",
+            "-C",
+            "target-cpu=x86-64",
+            "-C",
+            "codegen-units=1",
+            "--edition=2021",
+            "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/sources/rust/sieve/main.rs",
+            "-o",
+            "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/sieve-rust"
+          ],
+          "sha256": "d6cf66f3b5c921c5f78533f83ff76c3882a0fdfb11305d83d9f06c61b023e750",
+          "bytes": 3955256
+        },
+        "go": {
+          "command": [
+            "/home/mdray/.local/share/mise/installs/go/1.27.3/bin/go",
+            "build",
+            "-o",
+            "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/sieve-go",
+            "/home/mdray/17robots/dyn/compiler/build/performance-expansion-20261024/languages/sources/go/sieve/main.go"
+          ],
+          "sha256": "06b567a9bf2ad419d041543474c0d8a4fdf0f4b9cab515b1675206c817a775ff",
+          "bytes": 2351316
+        }
+      }
+    }
+  ],
+  "source_hashes": {
+    "sources/python/fib/main.py": "406bc0dbff70fa95a31dad0beb874905fbc4eb5622a42d87e54436ad4c032868",
+    "sources/python/hash/main.py": "a7b8cedfd8e3bf1b0f1937cc7d3c997f7b6c9928bc4103d19a9d74f2161e9287",
+    "sources/python/matmul/main.py": "2e34aeae518ea33653a130875d81961c11ad3d47897d8035c90a02f56f81f771",
+    "sources/python/points/main.py": "d19d8346aa131f375d4fe4e124d8be42595642dda9ae9a8f66c6c167de6b7e19",
+    "sources/python/sieve/main.py": "492791b925657d00507ed974c55fb7566db2d533cdb3e4a8fa32e732d1011e62",
+    "sources/clang/fib/main.c": "ce245f7114088ec279ddc582a3261c8b8636dd01e54a3d88b68bab59449a9df2",
+    "sources/clang/hash/main.c": "e0b7df2477b9dc44f8fd30235bb26f3049858ab4be608d632d5882424f6bc124",
+    "sources/clang/matmul/main.c": "c4daaa4cd217dcfd4e314241f08fe9f206f4450c959fa97bfb27014cb0bd3b64",
+    "sources/clang/points/main.c": "1d9afc3faa438d85b608e383063c3125c4d4b4a02dc3710596892bcce6832312",
+    "sources/clang/sieve/main.c": "ade1fb9f8b9cb209be9ad7dfed132ba6c9f74217f55ac42d7e449c16ec6be390",
+    "sources/gcc/fib/main.c": "ce245f7114088ec279ddc582a3261c8b8636dd01e54a3d88b68bab59449a9df2",
+    "sources/gcc/hash/main.c": "e0b7df2477b9dc44f8fd30235bb26f3049858ab4be608d632d5882424f6bc124",
+    "sources/gcc/matmul/main.c": "c4daaa4cd217dcfd4e314241f08fe9f206f4450c959fa97bfb27014cb0bd3b64",
+    "sources/gcc/points/main.c": "1d9afc3faa438d85b608e383063c3125c4d4b4a02dc3710596892bcce6832312",
+    "sources/gcc/sieve/main.c": "ade1fb9f8b9cb209be9ad7dfed132ba6c9f74217f55ac42d7e449c16ec6be390",
+    "sources/go/fib/main.go": "65da64524d6d848b46faf085462eb5479a83f51cccc1cbd9e688fbdc3f34bb37",
+    "sources/go/hash/main.go": "af06dfdb67d76d4e818b89e74ad6e8327efe74e18646fe68101ba5b00bc54be6",
+    "sources/go/matmul/main.go": "517e3789e8764c550fe3f5882f8ada7cf5b1590358803d561f8ea9ee6cc7b1d9",
+    "sources/go/points/main.go": "ab06c1ef2baf4bb699b8f5f0e5bac4e559e80e74d095e8b5dc7a79b158008350",
+    "sources/go/sieve/main.go": "bf77e009da96186eaa2742214577b9fd6c1bc3c1560a5c10b02b75227716eba1",
+    "sources/dyn/fib/main.dyn": "d51cc9969cb529a8917d36af04a185ec992521875ef457d187fe1b84c555f069",
+    "sources/dyn/hash/main.dyn": "2dde49175e8605932e35120ccbc5f5d337064a4df9cfd7bee69ecc9b5c8b04db",
+    "sources/dyn/matmul/main.dyn": "14c8764ee82dbc8b6c8006c546f8771e78077f1aec09b88534a9bcd69fdf0556",
+    "sources/dyn/points/main.dyn": "ad9a3858100a19c7d2cff5eb63ec59e7ef50cb678bf47d9c04f3f8ab0ac0f2ac",
+    "sources/dyn/sieve/main.dyn": "82cb2e63cfe0e82748bac5b1bae8b12385f51afc7a6e8826d90cd38ca4691e60",
+    "sources/node/fib/main.js": "5eee268b0bb2823be00070a3fa55fb89a75967c88dff0050ae2fac0375ebe981",
+    "sources/node/hash/main.js": "aae32a1ff6ce786202927975bbb9f7cc9d6331c5596d846aa6eef0e3d15945cd",
+    "sources/node/matmul/main.js": "2da72c84266e8343d906d09e5af0f0777aae9cf70a2969cba9d7ec57b3e101d1",
+    "sources/node/points/main.js": "e5b56f65f86712236eaf6325a415970d42ed91ec2ccfc7cdd9eb172c060c8ec2",
+    "sources/node/sieve/main.js": "d89c13b952298b6299ce66dfd1f1ed04d815642c18923a7f2a40e635209f76fd",
+    "sources/rust/fib/main.rs": "cb0bfc1d962776f22bc3dec40fad6a3eba8691ee9e57b2c99c870c95d5aa0150",
+    "sources/rust/hash/main.rs": "17fab2a695d6f7edf96d5d3304ec6e628eaa1a1874ba2ece4ee19c0e72a1a7ec",
+    "sources/rust/matmul/main.rs": "87efd8326f99581e6962fd54eb24f5476839ff2c645c3d8ba02147b7d677eb42",
+    "sources/rust/points/main.rs": "89176d1f5a1d1db0325fce02765968836ecb89732d309b1f6c9bf53c1dbf3f01",
+    "sources/rust/sieve/main.rs": "61c15bad30bbc656ab7b57b1b478167706d496a08afd71137c46641e6a88b8e5"
+  },
+  "baseline_sdk": "Original before-source/std staged at the same private sdk path used by final."
+}

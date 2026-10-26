@@ -1,10 +1,46 @@
 use "vendor/openssl/crypto" provider
-pub type Result = provider.KeyResult
+use "std/bytes"
+use "std/errors"
+
+// Fixed-size keys and signatures use caller storage by exception. Successful
+// values borrow destination; failures return an empty value. Validation leaves
+// storage untouched. Provider failures clear only the intended output prefix.
+pub struct Result {
+  value: []u8,
+  ok: bool,
+  kind: errors.Kind,
+  error: isize,
+  provider_code: u64,
+}
+
+fn result(destination: []u8, native: provider.KeyResult) Result {
+  if !native.ok {
+    for i in 0..#len(destination) {
+      destination[i] = 0
+    }
+    return Result{ kind: errors.Kind.System, provider_code: native.provider_code }
+  }
+  return Result{ value: destination[..native.written], ok: true, provider_code: native.provider_code }
+}
+
+// Destination must not overlap any borrowed input, including in its tail.
 pub fn ed25519_public(destination: []u8, private_key: []const u8) Result {
-  return provider.ed25519_public(destination, private_key)
+  if #len(destination) < 32 || #len(private_key) != 32 {
+    return Result{ kind: errors.Kind.InvalidInput }
+  }
+  if bytes.overlaps(destination, private_key) {
+    return Result{ kind: errors.Kind.InvalidInput }
+  }
+  return result(destination[..32], provider.ed25519_public(destination[..32], private_key))
 }
 pub fn ed25519_sign(destination: []u8, message: []const u8, private_key: []const u8) Result {
-  return provider.ed25519_sign(destination, message, private_key)
+  if #len(destination) < 64 || #len(private_key) != 32 {
+    return Result{ kind: errors.Kind.InvalidInput }
+  }
+  if bytes.overlaps(destination, private_key) || bytes.overlaps(destination, message) {
+    return Result{ kind: errors.Kind.InvalidInput }
+  }
+  return result(destination[..64], provider.ed25519_sign(destination[..64], message, private_key))
 }
 pub fn ed25519_verify(signature: []const u8, message: []const u8, public_key: []const u8) bool {
   return provider.ed25519_verify(signature, message, public_key)

@@ -15,7 +15,7 @@ struct Pair { integer: i64, real: f64 }
 struct Large { bytes: [40]u8, value: i64 }
 struct Floats { x:f32, y:f32 }
 packed struct Packed { small: u8, wide: i64 }
-enum(i8) Sign { Minus = -1, Plus = 1 }
+enum(i8) Sign { Minus = -1, Zero = 0, Plus = 1 }
 extern fn provider "provider"(x: Pair) Pair
 extern fn floats_provider "floats_provider"(x:Floats) Floats
 extern fn large_provider "large_provider"(x: Large) Large
@@ -23,11 +23,14 @@ extern fn packed_provider "packed_provider"(x: Packed) Packed
 counter: i32 = 0
 message: []const u8 = "bytes\x00with null"
 fn first(x: i32) i32 { return x + 2 }
-callback: *fn(i32) i32 = &first
+callback: fn(i32) i32 = first
 fn add(p: *i32) { p.* += 1 }
 fn cleanup() { counter += 1 }
-fn checked(x: i32) i32 { defer cleanup() return 12 / x }
-fn aggregate(x: Pair) Pair { value := x value.integer += 1 return value }
+fn checked(x: i32) i32 { defer cleanup()
+return 12 / x }
+fn aggregate(x: Pair) Pair { value := x
+value.integer += 1
+return value }
 fn main() {
   floats := floats_provider(Floats{x:1.25,y:2.5})
   if floats.x != 2.25 || floats.y != 3.5 { #panic("HFA") }
@@ -35,7 +38,7 @@ fn main() {
   original := Pair{integer: 7, real: 2.5}
   local := aggregate(original)
   foreign := provider(original)
-  indirect := &provider
+  indirect := provider
   foreign = indirect(foreign)
   if original.integer != 7 || local.integer != 8 || foreign.integer != 9 || foreign.real != 4.5 { #panic("pair ABI") }
   large := Large{value: 41}
@@ -47,16 +50,16 @@ fn main() {
   values := [1, 2, 3, 4]
   sum: i32 = 0
   for value in values { sum += value }
-  for i in 0..3 { sum += #cast(i32) i }
+  for i in 0..3 { sum += #cast(i32, i) }
   if sum != 13 { #panic("loops") }
   ptr := &sum
   add(ptr)
   if ptr.* != 14 || callback(3) != 5 { #panic("pointer") }
-  sign := #cast(Sign) -1
-  if #cast(i8) sign != -1 { #panic("signed enum") }
+  sign := #cast(Sign, -1)
+  if #cast(i8, sign) != -1 { #panic("signed enum") }
   number: f32 = 1.25
-  wide := #cast(f64) number
-  if wide + 0.75 != 2.0 || #cast(i32) wide != 1 { #panic("float") }
+  wide := #cast(f64, number)
+  if wide + 0.75 != 2.0 || #cast(i32, wide) != 1 { #panic("float") }
   if checked(3) != 4 || counter != 1 || #len(message) != 15 { #panic("cleanup globals") }
 }
 '''

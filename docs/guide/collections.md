@@ -14,7 +14,7 @@ fn main() {
   storage: [256]u8 = []
   arena := mem.arena_from_buffer(storage[..])
   text := builder.Builder{}
-  if builder.append_grow(&text, &arena, "hello") != builder.ErrorKind.None {
+  if builder.append_grow(&text, arena, "hello") != builder.ErrorKind.None {
     #panic("builder size")
   }
   _ = builder.bytes(&text)
@@ -31,60 +31,180 @@ fn main() {
   only after all builder uses and borrowed views have ended.
 - Do not independently mutate copies of a builder sharing storage. No internal locking.
 
-## String-keyed map
+Dyn has no container types. Collections are slices and plain structs that you
+declare, and std supplies generic functions that work on them. Each job has one
+shape:
 
-`std/container/string_map` maps byte-string keys to `usize` values (IDs, indices, counters).
-It uses open addressing, copies keys into the supplied arena, and starts as `Map{}`.
+| Job | Shape |
+| --- | --- |
+| Fixed list | a slice from `mem.push_array(T, &arena, n)` |
+| Growing list | a slice that owns its arena, grown with `mem.append` |
+| Growing list on a shared arena | a chunk list (`std/container/chunk`) |
+| Trees, free lists, an item in several lists | intrusive links (`std/container/list`) |
+| Lookup by key | hash slots chained through `hash_next` (`std/container/hash`) |
+| References that survive deletion | generation handles (`std/container/slot_map`) |
+
+Lookups that can miss take a stub and return it instead of nil. A stub is a
+constant, so reading it is safe and writing through it is a compile error:
 
 ```dyn
-use "std/container/string_map" maps
+const nil_entity: Entity = Entity{}
+```
+
+## Growing lists
+
+A growing list is a slice whose elements are the newest allocation on its own
+arena. `mem.append` pushes the next element directly after the last one, so
+nothing is copied and element addresses never change:
+
+```dyn
 use "std/mem"
 
-fn main() {
-  storage: [4096]u8 = []
-  arena := mem.arena_from_buffer(storage[..])
-  index := maps.Map{}
-  if maps.put(&index, &arena, "name", 42) != maps.ErrorKind.None { #panic("map size") }
-  result := maps.get(&index, "name")
-  if !result.found || result.value != 42 { #panic("map lookup") }
+struct Level {
+  enemy_arena: mem.Arena,
+  enemies: []Enemy,
+}
+
+fn spawn(level: *Level) {
+  enemy := mem.append(&level.enemy_arena, &level.enemies, Enemy{hp: 10})
+  enemy.hp += 1
+  for e in level.enemies {
+    _ = e.hp
+  }
 }
 ```
 
-- `put` inserts or updates. Updates allocate nothing. Running out of arena panics; the only
-  reported error is `Overflow`, for a table too large to address.
-- Empty keys and zero values are valid. `get` returns `found` separately from the value.
-- `remove` returns whether an entry existed. Removed key bytes remain arena allocations.
-- `next` uses a caller cursor starting at zero. Order is unspecified; any mutation invalidates
-  iteration. Returned keys borrow the arena and survive table growth, until arena invalidation.
-- Tables grow at 75% occupancy. Growth retains previous tables; plan arena capacity for the
-  allocation history. Removal shifts entries to preserve probe chains without tombstones. Operations are expected
-  constant-time for ordinary keys and worst-case linear; hashing is not collision-attack resistant.
-- The arena(s) used by a map must outlive all its uses. Do not mutate public implementation
-  fields or independently mutate copies of a live map. No internal locking.
+- `append` returns the new element. `append_many` appends a slice.
+- `append` panics when something else was pushed on that arena after the list,
+  which means the list does not own its arena. A list can also share an arena
+  if it is built completely before anything else is pushed.
+- Use `arena := mem.arena_create(0)` for an explicit default arena. One arena
+  per list reserves address space cheaply on 64-bit hosts. Lists can move when
+  they outgrow a block; reacquire views after append. Fixed-buffer arenas never
+  chain and require header space. Reset invalidates their allocations too.
+- Resetting the arena empties the list; set the slice back to empty as well.
 
+## Chunk lists
 
-## Slot-map handles and retained copies
+A chunk list grows on any arena, including one shared with other data. You write
+two small structs per element type; `chunk` works through their field names:
 
-`std/container/slot_map` stores fixed-size byte records in caller backing. `init`
-borrows disjoint data, generation and occupancy regions. Generation backing starts
-zeroed once; subsequent `init` calls advance generations and invalidate all prior
-handles/views. Do not clear that backing or let it expire while stale handles exist.
-Do not independently mutate map copies or bookkeeping. Operations are thread-confined.
+```dyn
+use "std/container/chunk"
 
-Handles include generation-backing identity, slot index and generation. `get` rejects
-empty, out-of-range, stale and foreign-backing handles. A successful `get` returns
-borrowed mutable bytes, not a lifetime extension. Reacquire views before use and
-finish using them before removal or reinitialization. Handles are process-local,
-forgeable tokens, not serializable IDs or security capabilities.
+struct EnemyChunk { next: *EnemyChunk, count: usize, items: [64]Enemy }
+struct EnemyList { first: *EnemyChunk, last: *EnemyChunk, total: usize }
 
-`copy_into` copies a live record into caller output, returning `CopyStatus.Complete`,
-`Missing` or `Capacity`. Both failures leave output unchanged. Extra output bytes
-remain untouched. Data overlap is supported, but only disjoint output provides an
-independent lifetime. Neither source nor destination may corrupt map metadata.
-`insert` also supports overlap with record data; input must match slot size exactly.
+fn spawn(arena: *mem.Arena, enemies: *EnemyList) {
+  enemy := chunk.push(arena, enemies, Enemy{hp: 10})
+  enemy.hp += 1
+  it := enemies.first
+  for it != nil {
+    for i in 0..it.count {
+      it.items[i].hp -= 1
+    }
+    it = it.next
+  }
+}
+```
 
-`remove` zeros bytes and advances the generation. Saturation permanently retires
-the slot instead of wrapping. `snapshot` reports capacity, live, available and
-retired slots; available + live + retired = capacity. Snapshot values remain valid
-after backing expires. Snapshot and insertion scan slots; lookup is constant-time;
-copy/removal also cost time proportional to record size.
+- `push` returns the stored element; its address never changes.
+- `at(&list, index, &nil_enemy)` walks to one element; `to_slice(T, &arena, &list)`
+  copies the whole list into one contiguous slice.
+
+## Intrusive lists and trees
+
+`std/container/list` links nodes through fields on your own struct: `next`,
+`prev`, `first`, `last`, `parent` and `free_next`. A struct missing a field the
+function needs is a compile error at the call (`Node has no field 'prev'`).
+
+```dyn
+use "std/container/list"
+
+struct Node {
+  parent: *Node,
+  first: *Node,
+  last: *Node,
+  next: *Node,
+  prev: *Node,
+  free_next: *Node,
+}
+
+const nil_node: Node = Node{}
+
+fn reuse(first_free: **Node, root: *Node, arena: *mem.Arena) *Node {
+  node := list.free_pop(first_free, &nil_node)
+  if node == &nil_node {
+    node = mem.push(Node, arena)
+  } else {
+    mem.clear(node)
+  }
+  list.tree_push_child(root, node)
+  return node
+}
+```
+
+- Stacks and queues use `next`: `sll_stack_push/pop`, `sll_queue_push/pop`.
+- Doubly linked lists use `next` and `prev`: `dll_push_back`, `dll_push_front`,
+  `dll_insert_after`, `dll_remove`.
+- Trees add `parent`, `first` and `last`: `tree_push_child`, `tree_remove`.
+- Free lists use their own link, `free_next`, so freeing a node cannot corrupt
+  another list. Unlink a node before freeing it.
+
+## Hash tables
+
+A table is a slot slice, `[]*T`, and nodes chain through `key`, `hash` and
+`hash_next`. Nothing is allocated after the slots:
+
+```dyn
+use "std/container/hash"
+
+struct Symbol { key: []const u8, hash: u64, hash_next: *Symbol, kind: u32 }
+const nil_symbol: Symbol = Symbol{}
+
+fn define(table: []*Symbol, symbol: *Symbol, seed: u64) {
+  symbol.hash = hash.hash_bytes(seed, symbol.key)
+  hash.insert(table, symbol)
+}
+
+fn lookup(table: []*Symbol, name: []const u8, seed: u64) *Symbol {
+  return hash.find(table, hash.hash_bytes(seed, name), name, &nil_symbol)
+}
+```
+
+- `slots(T, &arena, count)` makes the table. The slot count is fixed; choose it
+  for the expected size.
+- `hash_bytes(seed, key)` is SipHash-1-3. With a seed the input cannot predict
+  (from `std/crypto/random`), keys cannot be built to collide.
+- `insert` does not check for an existing key. `remove` returns whether the
+  node was in the table.
+- Keys of other types use the same `hash` and `hash_next` fields and a
+  hand-written loop over the chain.
+
+## Generation handles
+
+`std/container/slot_map` gives references into your slot array that stop
+resolving once the slot is freed, even after it is reused. The slot struct
+carries `generation: u32`; an odd generation means live:
+
+```dyn
+use "std/container/slot_map" slots
+
+struct Enemy { generation: u32, free_next: *Enemy, hp: i32 }
+const nil_enemy: Enemy = Enemy{}
+
+fn damage(enemies: []Enemy, target: slots.Handle) {
+  enemy := slots.resolve(enemies, target, &nil_enemy)
+  if enemy != &nil_enemy {
+    enemy.hp -= 10
+  }
+}
+```
+
+- `reset(node)` prepares a fresh or reused slot: it zeroes the other fields and
+  marks the slot live. `retire(node)` frees it; outstanding handles then
+  resolve to the stub.
+- `handle_of(slots, node)` makes a handle; `resolve` returns the slot or the
+  stub. A zero `Handle{}` never resolves.
+- Handles are process-local; they are not IDs to serialize or a security
+  capability.

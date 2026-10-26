@@ -1,14 +1,18 @@
 use "std/strings"
 use "std/mem" memory
 use "std/bytes" bytes
+use "std/errors" errors
 
-// Allocation-free command-line parser. Definitions and returned strings are borrowed.
+// Command-line parser. Option definitions and returned strings are borrowed.
 pub enum Kind { Bool, String, Integer, Float, Choice }
 pub enum ErrorKind { None, Unknown, MissingValue, UnexpectedValue, Capacity, InvalidValue, Required, Overflow, Overlap }
 pub struct Option { name: []const u8, short: u8, kind: Kind, required: bool, default_value: []const u8, choices: [][]const u8 }
 pub struct Value { text: []const u8, present: bool, occurrences: usize }
-pub struct Error { kind: ErrorKind, argument: usize, option: []const u8 }
-pub struct Result { values: []Value, positionals: [][]const u8, error: Error, ok: bool }
+pub struct Parsed { values: []Value, positionals: [][]const u8 }
+// offset is an argument index; end-of-input validation uses len(arguments).
+// option borrows the offending argument or option name. Failure has an empty value.
+// kind is portable; detail preserves the parser diagnostic. error is always zero.
+pub struct Result { value: Parsed, ok: bool, kind: errors.Kind, error: isize, offset: usize, detail: ErrorKind, option: []const u8 }
 
 pub fn bool_option(name: []const u8, short: u8) Option {
   return Option{ name: name, short: short, kind: Kind.Bool }
@@ -33,18 +37,24 @@ fn short_index(options: []const Option, name: u8) usize {
   }
   return #len(options)
 }
-fn failure(values: []Value, positionals: [][]const u8, kind: ErrorKind, at: usize, option: []const u8) Result {
-  return Result{ values: values, positionals: positionals, error: Error{ kind: kind, argument: at, option: option }, ok: false }
+fn failure(kind: ErrorKind, at: usize, option: []const u8) Result {
+  portable := errors.Kind.InvalidInput
+  if kind == ErrorKind.Capacity {
+    portable = errors.Kind.Capacity
+  } else if kind == ErrorKind.Overflow {
+    portable = errors.Kind.Overflow
+  }
+  return Result{ kind: portable, detail: kind, offset: at, option: option }
 }
 
-pub fn parse(
+fn parse_buffers(
   options: []const Option,
   arguments: [][]const u8,
   value_storage: []Value,
   positional_storage: [][]const u8,
 ) Result {
   if #len(value_storage) < #len(options) {
-    return failure(value_storage[..0], positional_storage[..0], ErrorKind.Capacity, 0, "")
+    return failure(ErrorKind.Capacity, 0, "")
   }
   values := value_storage[..#len(options)]
   for i in 0..#len(values) {
@@ -71,19 +81,19 @@ pub fn parse(
       }
       long_option := long_index(options, text[2..name_end])
       if long_option == #len(options) {
-        return failure(values, positional_storage[..positional_length], ErrorKind.Unknown, argument, text)
+        return failure(ErrorKind.Unknown, argument, text)
       }
       inline := name_end < #len(text)
       if options[long_option].kind == Kind.Bool {
         if inline {
-          return failure(values, positional_storage[..positional_length], ErrorKind.UnexpectedValue, argument, text)
+          return failure(ErrorKind.UnexpectedValue, argument, text)
         }
       } else if inline {
         values[long_option].text = text[name_end + 1..]
       }
       else {
         if argument + 1 == #len(arguments) {
-          return failure(values, positional_storage[..positional_length], ErrorKind.MissingValue, argument, text)
+          return failure(ErrorKind.MissingValue, argument, text)
         }
         argument += 1
         values[long_option].text = arguments[argument]
@@ -95,7 +105,7 @@ pub fn parse(
       for short_at < #len(text) {
         short_option := short_index(options, text[short_at])
         if short_option == #len(options) {
-          return failure(values, positional_storage[..positional_length], ErrorKind.Unknown, argument, text)
+          return failure(ErrorKind.Unknown, argument, text)
         }
         values[short_option].present = true
         values[short_option].occurrences += 1
@@ -105,7 +115,7 @@ pub fn parse(
           }
           else {
             if argument + 1 == #len(arguments) {
-              return failure(values, positional_storage[..positional_length], ErrorKind.MissingValue, argument, text)
+              return failure(ErrorKind.MissingValue, argument, text)
             }
             argument += 1
             values[short_option].text = arguments[argument]
@@ -117,7 +127,7 @@ pub fn parse(
       }
     } else {
       if positional_length == #len(positional_storage) {
-        return failure(values, positional_storage, ErrorKind.Capacity, argument, text)
+        return failure(ErrorKind.Capacity, argument, text)
       }
       positional_storage[positional_length] = text
       positional_length += 1
@@ -129,20 +139,18 @@ pub fn parse(
     definition := options[option_index]
     if !values[option_index].present {
       if definition.required {
-        return failure(values, positional_storage[..positional_length], ErrorKind.Required, #len(arguments), definition.name)
+        return failure(ErrorKind.Required, #len(arguments), definition.name)
       }
       values[option_index].text = definition.default_value
     }
     if values[option_index].present || #len(definition.default_value) > 0 {
       text_value := values[option_index].text
       valid := true
-      integer_value: i64 = 0
-      float_value: f64 = 0.0
       if definition.kind == Kind.Integer {
-        valid = strings.parse_i64(text_value, &integer_value)
+        valid = strings.valid(i64, text_value)
       }
       else if definition.kind == Kind.Float {
-        valid = strings.parse_f64(text_value, &float_value)
+        valid = strings.valid(f64, text_value)
       }
       else if definition.kind == Kind.Choice {
         valid = false
@@ -153,18 +161,35 @@ pub fn parse(
         }
       }
       if !valid {
-        return failure(values, positional_storage[..positional_length], ErrorKind.InvalidValue, #len(arguments), definition.name)
+        return failure(ErrorKind.InvalidValue, #len(arguments), definition.name)
       }
     }
     option_index += 1
   }
-  return Result{ values: values, positionals: positional_storage[..positional_length], error: Error{}, ok: true }
+  return Result{ value: Parsed{ values: values, positionals: positional_storage[..positional_length] }, ok: true }
+}
+
+// Output arrays belong to arena and live until rewind/reset/release. Text slices
+// borrow arguments or option defaults; those bytes must outlive the result.
+// Allocates checked, aligned arrays for len(options) values and at most
+// len(arguments) positional views, exclusively in arena. Exhaustion/overflow
+// panic under the ordinary mem push policy. Invalid input rewinds all pushes
+// and returns an empty payload, preserving allocations before the call.
+pub fn parse(arena: *memory.Arena, options: []const Option, arguments: [][]const u8) Result {
+  mark := memory.arena_mark(arena)
+  values := memory.push_array(Value, arena, #len(options))
+  positionals := memory.push_array([]const u8, arena, #len(arguments))
+  result := parse_buffers(options, arguments, values, positionals)
+  if !result.ok {
+    memory.arena_rewind(arena, mark)
+  }
+  return result
 }
 
 pub struct TextResult { value: []u8, error: ErrorKind, required: usize, ok: bool }
 
 fn render_piece(destination: []u8, offset: *usize, piece: []const u8, write: bool) bool {
-  if #len(piece) > #cast(usize) -1 - offset.* {
+  if #len(piece) > #cast(usize, -1) - offset.* {
     return false
   }
   if write {
@@ -220,8 +245,9 @@ fn render_checked(destination: []u8, program: []const u8, options: []const Optio
   return TextResult{ value: output, required: measured.required, ok: true }
 }
 // Failure writes nothing. Returned text borrows destination and excludes NUL.
-pub fn usage(destination: []u8, program: []const u8, options: []const Option) TextResult {
-  return render_checked(destination, program, options, true)
+// Usage text for options, in arena.
+pub fn usage(arena: *memory.Arena, program: []const u8, options: []const Option) []u8 {
+  return render_arena(arena, program, options, true)
 }
 
 pub fn required_string_option(name: []const u8, short: u8) Option {
@@ -237,6 +263,18 @@ pub fn choice_option(name: []const u8, short: u8, choices: [][]const u8) Option 
   return Option{ name: name, short: short, kind: Kind.Choice, choices: choices }
 }
 // One long-option candidate per line. Empty option lists succeed with empty text.
-pub fn completion(destination: []u8, options: []const Option) TextResult {
-  return render_checked(destination, "", options, false)
+// Shell completion words for options, in arena.
+pub fn completion(arena: *memory.Arena, options: []const Option) []u8 {
+  return render_arena(arena, "", options, false)
+}
+
+fn render_arena(arena: *memory.Arena, program: []const u8, options: []const Option, is_usage: bool) []u8 {
+  empty: [0]u8 = []
+  measured := render(empty[..], program, options, is_usage, false)
+  if !measured.ok {
+    #panic("flags: usage text size overflows")
+  }
+  output := memory.push_bytes_uninit(arena, measured.required)
+  _ = render_checked(output, program, options, is_usage)
+  return output
 }

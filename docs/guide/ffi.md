@@ -75,6 +75,14 @@ A foreign function may invoke a Dyn callback that panics. Dyn caller defers run,
 but this does not provide C++ exception unwinding or cleanup for intervening C
 frames. Foreign resources require an explicit cleanup contract.
 
+Cleanup frames belong to the OS thread that links them. Moving an active frame
+between threads, or bypassing its normal completion with a foreign `longjmp`,
+is unsupported. A child created by raw `fork` cannot panic through inherited
+Dyn cleanup frames; execute a new program or exit without returning through them.
+Linux x64 retains a frame-local runtime owner for normal completion. In a forked
+child, normal completion can release copied parent-owner slots; this does not
+make inherited panic cleanup supported.
+
 ## Binding reports and layout verification
 
 ```sh

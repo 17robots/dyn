@@ -7,19 +7,26 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
 ## Conventions
 
 - **No hidden allocation.** A function that needs memory takes a `*mem.Arena`
-  or a caller slice. Arena pushes cannot fail; caller-slice functions report
-  `Capacity` with the exact size `required`. See [memory](memory.md) and
+  or a caller slice. Ordinary arena pushes panic when exhausted (`mem.try_push`
+  reports it instead); caller-slice functions report `Capacity` with the exact
+  size `required`. See [memory](memory.md) and
   [buffer contracts](buffer-contracts.md).
 - **Borrowing is the default.** Returned slices borrow the input, the caller's
   buffer or the arena, as each function's comment says. Reader-backed scanners
   return views that last until the next call.
-- **Zero is initialization.** A zeroed struct is a valid empty value: `Arena{}`,
-  `Builder{}`, `Map{}`, `GrowingArena{}`, scanners given only their `source`.
-  Constructors exist for convenience, not because zero is broken. The exception
-  is `process.Options`, where 0 is a real file descriptor; use
-  `process.options()`.
-- **Errors are values.** OS calls return `{value, error, kind, ok}`: `error`
-  keeps the native code and `kind` is a portable `std/errors` category.
+- **Zero is initialization.** A zeroed data struct is a valid empty value: `Builder{}`,
+  `process.Options{}` (inherit every stream), and scanners given only their
+  `source`. Arena handles are pointers to backing headers and require
+  `arena_create` or `arena_from_buffer`; a nil arena handle does not allocate.
+- **Errors are values, in one shape.** Results at the edges (OS, files,
+  network, processes) are `{value, ok, kind, error}`: `value` is the payload,
+  `kind` a portable `std/errors` category and `error` the native code. Test
+  `ok` first, then branch on `kind`; compare `error` only for platform-specific
+  handling. Parsers of external input use the same portable `kind` and native `error`,
+  plus an `offset`. Pure parsers use native error `0`; an optional `detail`
+  preserves a module-specific diagnostic. Tree parsers (`json`, `mdesk`) name
+  the payload `root` and return a usable stub on failure. Migration status
+  and remaining exceptions are tracked in [std standardization](../internals/std-standardization.md).
   Scanners and writers keep their first error in their state and turn later
   calls into no-ops, so callers check once at the end. Predicates return
   `bool`. Missing lookups and end of input are ordinary results, not errors.
@@ -35,7 +42,7 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
 
 | Package | Purpose |
 | --- | --- |
-| `std/mem` | Arenas, typed pushes, scratch scopes, frames, growing arenas, pools and free lists |
+| `std/mem` | Arenas, typed pushes, `append`, scratch scopes, frames and growing arenas |
 | `std/bytes` | Byte-slice operations, cursors and splitters |
 | `std/bytes/builder` | Byte and UTF-8 string builder over caller storage or an arena |
 | `std/bytes/search` | Prepared KMP search |
@@ -43,13 +50,15 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
 | `std/fmt` | Formatting into a bounded caller buffer |
 | `std/unicode/utf8`, `utf16`, `text` | Strict UTF-8 and UTF-16, case folding and normalization |
 | `std/text/scanner` | Line and field scanner with positions |
-| `std/text/regex` | Thompson-NFA regular expressions compiled into caller storage |
+| `std/text/regex` | Thompson-NFA regular expressions compiled into an arena; reusable workspace |
 | `std/text/template`, `std/html/template` | Text templates, and HTML templates that escape text and quoted attributes |
-| `std/container/string_map` | Open-addressing map from byte strings to `usize` |
-| `std/container/slot_map` | Generation-checked handles to fixed-size records |
+| `std/container/list` | Intrusive stacks, queues, doubly linked lists, trees and free lists |
+| `std/container/hash` | Intrusive chained hash tables and seeded SipHash-1-3 |
+| `std/container/chunk` | Chunk lists that grow on a shared arena without copying |
+| `std/container/slot_map` | Generation handles into caller slot arrays |
 | `std/container/ring`, `bit_set` | Ring buffer and bit set over caller storage |
 | `std/sort` | In-place sort and binary search for any ordered element type |
-| `std/math` | `min`, `max`, `clamp`, `abs`, `narrow` and other scalar helpers |
+| `std/math` | Scalar arithmetic, bit helpers, concrete vectors, matrices, quaternions and ranges |
 | `std/hash` | Stable non-cryptographic hashes (FNV-1a) and checksums |
 | `std/rand` | Deterministic caller-owned PRNG; not for cryptography |
 
@@ -57,10 +66,11 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
 
 | Package | Purpose |
 | --- | --- |
-| `std/encoding/json` | Validation, arena-backed DOM parsing, queries and writing |
+| `std/encoding/json` | Validation, arena-backed mutable DOM parsing, queries and writing |
+| `std/encoding/json/read` | [Experimental compact read-only DOM](json-read.md), with arena-owned values and text |
 | `std/encoding/csv` | RFC 4180 field scanner, stream scanner and writer |
 | `std/encoding/ini` | INI scanner and one-pass `parse` into an arena table |
-| `std/encoding/xml` | XML event scanner, attributes, namespaces and writer |
+| `std/encoding/xml` | XML document trees, event scanner, attributes, namespaces and writer |
 | `std/encoding/mdesk` | Metadesk-style labeled trees with tags |
 | `std/encoding/hex`, `base32`, `base64` | Codecs into caller buffers that validate before writing |
 | `std/encoding/binary` | Fixed-width endian and unsigned LEB128 encoding |
@@ -80,7 +90,7 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
 | `std/fs/watch` | File watching: inotify, kqueue or ReadDirectoryChangesW |
 | `std/path` | Lexical slash-separated paths |
 | `std/process` | Spawn, capture, pipes, environment and arguments |
-| `std/thread`, `std/sync` | Caller-stack threads; mutexes, conditions, semaphores, once and atomics |
+| `std/thread`, `std/sync` | Arena-backed thread handles; caller or owned stacks; portable synchronization |
 | `std/time` | Monotonic and realtime clocks, durations, deadlines and UTC ISO-8601 |
 | `std/terminal` | Raw mode, terminal control and key decoding (Linux) |
 | `std/dynlib` | Dynamic library loading (Linux; link libc explicitly) |
@@ -129,3 +139,33 @@ all four. `std/terminal` and `std/dynlib` are Linux only. On wasm32, see
 Optional bindings to native libraries live under `vendor/`. Importing one adds
 its native dependency, and each package documents its supported subset. See
 [vendor packages](vendor.md).
+
+## Math conventions
+
+`std/math` uses concrete `Vec2`, `Vec3`, `Vec4` (f32) and `Vec2i` (i32)
+structs. Functions use type prefixes such as `vec3_dot` and `vec3_normalize`.
+Vector multiplication is componentwise; matrix multiplication composes
+transforms. Finite vector normalization widens its intermediate arithmetic to
+f64. Zero normalization returns a zero vector. Integer vector arithmetic is
+checked, including intermediate dot products.
+
+`Mat3` and `Mat4` store columns and multiply column vectors; the right operand
+is applied first. Mat3 transforms are homogeneous 2D transforms. Rotations use
+radians and a right-handed convention. Cameras look down −Z; projection depth
+maps the near plane to −1 and the far plane to +1. Inverses and fallible
+constructors return `{value, ok}`; failure has a zero value. Inversion uses
+partial pivoting and does not guarantee a useful answer for ill-conditioned
+matrices. Quaternions store `x, y, z, w`.
+
+`Rng1u64`, `Rng1i64`, `Rng1f32`, `Rng2f32` and `Rng2i32` are half-open
+ranges: `min` is included and `max` is excluded. Equal endpoints are empty;
+rectangles are empty when either dimension is zero. Endpoints must be ordered
+and must not be NaN. Overlap excludes touching edges. Union treats empty
+ranges as identities. Range clamp uses the closed endpoint interval, so its
+result can equal `max`. Integer centers round toward the lower endpoint;
+integer dimensions and padding panic if their result cannot be represented.
+
+The floating-point implementation has sampled host and RV32/Thumb execution
+tests. It assumes round to
+nearest, ties to even, and requires no host libm at runtime. Sampled comparisons
+with host libm are not a global accuracy proof. Direct calls to trusted SDK math leaves use native instructions when the target permits them. Square root uses hardware FP on hard-float targets; copy-sign uses integer bits. AArch64 also lowers floor, ceil, truncation, ties-away rounding and fused FMA. RV32/RV64 and Thumb hard-float lower fused FMA. On x86, `--cpu native` enables SSE4.1 rounding and FMA only when CPU and OS support are present. Generic x86 and soft-float keep portable fallbacks where needed. Wasm lowers square root, floor, ceil, truncation and copy-sign; its nearest instruction does not implement ties-away round. Address-taken functions retain ordinary callable bodies.

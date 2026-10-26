@@ -6,20 +6,20 @@ extern fn standard_write "dyn_stdio_write"(handle: rawptr, bytes: *const u8, cou
 extern fn standard_error "dyn_stdio_error"() u32
 
 fn valid_handle(handle: rawptr) bool {
-  return handle != nil && #cast(usize) handle != 18446744073709551615
+  return handle != nil && #cast(usize, handle) != 18446744073709551615
 }
 fn transfer_limit(size: usize) u32 {
   if size > 4294967295 {
     return 4294967295
   }
-  return #cast(u32) size
+  return #cast(u32, size)
 }
 fn stream_error(count: u32, code: u32) Result {
-  error: isize = 0 - #cast(isize) code
+  error: isize = 0 - #cast(isize, code)
   if error == 0 {
     error = -5
   }
-  return Result{ transferred: #cast(usize) count, error: error, kind: errors.windows(error), status: Status.Error }
+  return Result{ transferred: #cast(usize, count), error: error, kind: errors.windows(error), status: Status.Error }
 }
 fn stdin_read(data: rawptr, destination: []u8) Result {
   _ = data
@@ -35,18 +35,18 @@ fn stdin_read(data: rawptr, destination: []u8) Result {
     error := standard_error()
     // A closed pipe and a file at EOF both end the byte stream.
     if error == 109 || error == 38 {
-      return Result{ transferred: #cast(usize) count, status: Status.End }
+      return Result{ transferred: #cast(usize, count), status: Status.End }
     }
     // A message-mode pipe may return a partial message with ERROR_MORE_DATA.
     if error == 234 && count > 0 {
-      return Result{ transferred: #cast(usize) count }
+      return Result{ transferred: #cast(usize, count) }
     }
     return stream_error(count, error)
   }
   if count == 0 {
     return Result{ status: Status.End }
   }
-  return Result{ transferred: #cast(usize) count }
+  return Result{ transferred: #cast(usize, count) }
 }
 fn write_standard(kind: u32, source: []const u8) Result {
   if #len(source) == 0 {
@@ -63,7 +63,7 @@ fn write_standard(kind: u32, source: []const u8) Result {
   if count == 0 {
     return stream_error(0, 5)
   }
-  return Result{ transferred: #cast(usize) count }
+  return Result{ transferred: #cast(usize, count) }
 }
 fn stdout_write(data: rawptr, source: []const u8) Result {
   _ = data
@@ -76,11 +76,11 @@ fn stderr_write(data: rawptr, source: []const u8) Result {
 
 // Borrow current standard handles. Bytes are not transcoded or newline-translated.
 pub fn stdin() Reader {
-  return Reader{ read: &stdin_read }
+  return Reader{ read: stdin_read }
 }
 pub fn stdout() Writer {
-  return Writer{ write: &stdout_write }
+  return Writer{ write: stdout_write }
 }
 pub fn stderr() Writer {
-  return Writer{ write: &stderr_write }
+  return Writer{ write: stderr_write }
 }

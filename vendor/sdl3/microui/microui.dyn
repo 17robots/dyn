@@ -6,7 +6,7 @@ use "vendor/microui" ui
 // Feed events before ui.begin. Render after ui.end, then present. Uses current
 // renderer viewport/scale; restores clip rectangle, blend mode and draw color.
 pub fn event(context: ui.Context, renderer: sdl3.Renderer, value: *const sdl3.Event) bool {
-  return native_event(context, renderer, #cast(rawptr) value)
+  return native_event(context, renderer, #cast(rawptr, value))
 }
 pub extern fn render "dyn_mu_sdl_render"(context: ui.Context, renderer: sdl3.Renderer) bool
 extern fn native_event "dyn_mu_sdl_event"(context: ui.Context, renderer: sdl3.Renderer, value: rawptr) bool

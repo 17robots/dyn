@@ -1,0 +1,14 @@
+[
+  {
+    "mode": "ssa",
+    "windows_wine": "PASS"
+  },
+  {
+    "mode": "tree",
+    "windows_wine": "PASS"
+  },
+  {
+    "constant_eviction_asan_ubsan": "PASS",
+    "output": "PASS loop constants ssa: 9 overflow boundaries\nPASS loop constants tree: 9 overflow boundaries\nPASS deterministic constant eviction and rejected-allocation rematerialization\n"
+  }
+]

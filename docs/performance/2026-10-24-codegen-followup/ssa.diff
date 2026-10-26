@@ -1,0 +1,327 @@
+--- before/ssa.inc
++++ after/ssa.inc
+@@ -55,6 +55,7 @@
+   SO_FIND_BYTE,  /* x86 only: first c byte in a[0..b], or b; memory read */
+   SO_FIND,       /* x86 only: four list operands: hay ptr/len, needle ptr/len */
+   SO_JSON_ASCII_PREFIX, /* x86 only: safe JSON ASCII prefix in a[0..b]; memory read */
++  SO_BYTE_COUNT, /* x86 only: count predicate matches in a[0..b], starting at c */
+   SO_PANIC,      /* dyn_panic(a, b) */
+   SO_VECTOR,     /* SIMD loop over frame arrays a = b op c; aux: elements, aux2: op | bytes << 8 */
+   SO_MULOK32,   /* paired targets: checked product fits, without a guard */
+@@ -177,7 +178,7 @@
+   v->check_origin = s->check_origin;
+   v->block = block; v->reg = v->slot = -1; v->hint = -1; v->scale = 1;
+   v->effect = op == SO_CHECK || op == SO_CHECK_SHL || op == SO_ADDO || op == SO_SUBO || op == SO_MULO ||
+-              op == SO_LOAD || op == SO_STORE || op == SO_CALL || op == SO_COPYMEM || op == SO_ZEROMEM || op == SO_FILLMEM || op == SO_FIND_BYTE || op == SO_FIND || op == SO_JSON_ASCII_PREFIX ||
++              op == SO_LOAD || op == SO_STORE || op == SO_CALL || op == SO_COPYMEM || op == SO_ZEROMEM || op == SO_FILLMEM || op == SO_FIND_BYTE || op == SO_FIND || op == SO_JSON_ASCII_PREFIX || op == SO_BYTE_COUNT ||
+               op == SO_PANIC || op == SO_DIV || op == SO_REM || op == SO_RESULT || op == SO_PARAM || op == SO_VECTOR || op == SO_TRAP || op == SO_FAIL || op == SO_CONTINUE;
+   return (int32_t)s->value_count++;
+ }
+@@ -1833,6 +1834,156 @@
+             (unsigned long long)count, (unsigned long long)value->integer);
+   return true;
+ }
++/* A byte-count loop has no stores, calls, escaping bindings or pending
++   cleanup. Its only observable change is an unsigned 64-bit accumulator.
++   The emitter keeps checked increments scalar near overflow. */
++static bool ssa_byte_count_private(Ssa *s, uint64_t id) {
++  if (id < s->f->local_start || id - s->f->local_start >= s->f->local_count) return false;
++  uint32_t local = (uint32_t)(id - s->f->local_start);
++  return !s->memory_local[local] && !s->address_exposed[local] && s->alias[local] < 0;
++}
++static bool ssa_byte_count_unchanged(Ssa *s, uint64_t local, uint32_t start, uint32_t count,
++                                     DynExprId *initializer, uint32_t *budget, unsigned depth) {
++  const DynIrProgram *ir = s->ir;
++  if (depth > MAX_DEPTH || (uint64_t)start + count > ir->child_count) return false;
++  for (uint32_t i = 0; i < count; ++i) {
++    if (!*budget) return false;
++    --*budget;
++    const DynIrStmt *st = &ir->statements[ir->children[start + i]];
++    if (initializer && st->kind == DYN_STMT_LOCAL && st->local_id == local) {
++      if (*initializer != DYN_NO_EXPR) return false;
++      *initializer = st->expression;
++    }
++    if (st->kind == DYN_STMT_ASSIGN &&
++        ((st->target == DYN_NO_EXPR && st->local_id == local) ||
++         (st->target < ir->expression_count && ir->expressions[st->target].kind == DYN_EXPR_NAME &&
++          ir->expressions[st->target].integer == local))) return false;
++    if (st->kind == DYN_STMT_FOR && st->local_id == local) return false;
++    if (!ssa_byte_count_unchanged(s, local, st->body_start, st->body_count, initializer, budget, depth + 1) ||
++        !ssa_byte_count_unchanged(s, local, st->else_start, st->else_count, initializer, budget, depth + 1)) return false;
++    if ((uint64_t)st->case_arm_start + st->case_arm_count > ir->case_arm_count) return false;
++    for (uint32_t j = 0; j < st->case_arm_count; ++j) {
++      if (!*budget) return false;
++      --*budget; /* Empty case arms still consume traversal work. */
++      const DynIrCaseArm *arm = &ir->case_arms[st->case_arm_start + j];
++      if (!ssa_byte_count_unchanged(s, local, arm->body_start, arm->body_count, initializer, budget, depth + 1)) return false;
++    }
++  }
++  return true;
++}
++static bool ssa_byte_count_index(Ssa *s, DynExprId id, uint64_t index, uint64_t *source) {
++  const DynIrProgram *ir = s->ir;
++  if (id >= ir->expression_count) return false;
++  const DynIrExpr *e = &ir->expressions[id];
++  if (e->kind != DYN_EXPR_INDEX || e->type != DYN_TYPE_U8 ||
++      e->left >= ir->expression_count || e->right >= ir->expression_count) return false;
++  const DynIrExpr *base = &ir->expressions[e->left], *at = &ir->expressions[e->right];
++  if (base->kind != DYN_EXPR_NAME || at->kind != DYN_EXPR_NAME || at->integer != index ||
++      !ssa_byte_count_private(s, base->integer) || !dyn_type_is_slice(base->type) ||
++      base->type - DYN_TYPE_SLICE_BASE >= ir->slice_count ||
++      ir->slices[base->type - DYN_TYPE_SLICE_BASE].element != DYN_TYPE_U8) return false;
++  if (*source != UINT64_MAX && *source != base->integer) return false;
++  *source = base->integer;
++  return true;
++}
++static bool ssa_byte_count_predicate(Ssa *s, DynExprId id, uint64_t index, uint64_t byte_local,
++                                     uint64_t *source, uint64_t *terms, unsigned *count, unsigned depth) {
++  const DynIrProgram *ir = s->ir;
++  if (id >= ir->expression_count || depth > 4) return false;
++  const DynIrExpr *e = &ir->expressions[id];
++  if (e->kind != DYN_EXPR_BINARY) return false;
++  if (e->op == DYN_OP_LOGICAL_OR)
++    return ssa_byte_count_predicate(s, e->left, index, byte_local, source, terms, count, depth + 1) &&
++           ssa_byte_count_predicate(s, e->right, index, byte_local, source, terms, count, depth + 1);
++  if (*count == 3 || (e->op != DYN_OP_EQ && e->op != DYN_OP_LT) ||
++      e->left >= ir->expression_count || e->right >= ir->expression_count) return false;
++  const DynIrExpr *left = &ir->expressions[e->left], *right = &ir->expressions[e->right];
++  if ((right->kind != DYN_EXPR_INT && right->kind != DYN_EXPR_CHAR) ||
++      right->integer > UINT8_MAX || left->type != DYN_TYPE_U8) return false;
++  if (!(left->kind == DYN_EXPR_NAME && byte_local != UINT64_MAX && left->integer == byte_local) &&
++      !ssa_byte_count_index(s, e->left, index, source)) return false;
++  *terms |= (right->integer | (uint64_t)(e->op == DYN_OP_LT) << 8) << (9 * (*count)++);
++  return true;
++}
++static bool ssa_byte_count(Ssa *s, const DynIrStmt *st) {
++  const DynIrProgram *ir = s->ir;
++  if (!s->ctx->vectorize || s->ctx->a64 || s->ctx->rv64 || s->ctx->rv32 || s->ctx->t32 ||
++      s->defer_count || !st->for_range || st->for_reverse || st->for_inclusive || st->for_pointer ||
++      (st->body_count != 1 && st->body_count != 2) ||
++      (uint64_t)st->body_start + st->body_count > ir->child_count ||
++      st->target >= ir->expression_count || st->expression >= ir->expression_count ||
++      !ssa_byte_count_private(s, st->local_id)) return false;
++  const DynIrExpr *start = &ir->expressions[st->target], *stop = &ir->expressions[st->expression];
++  if (start->kind != DYN_EXPR_INT || start->integer || start->type != DYN_TYPE_USIZE || stop->type != DYN_TYPE_USIZE) return false;
++  uint64_t source = UINT64_MAX, byte_local = UINT64_MAX;
++  unsigned position = 0;
++  if (st->body_count == 2) {
++    const DynIrStmt *binding = &ir->statements[ir->children[st->body_start]];
++    if (binding->kind != DYN_STMT_LOCAL || !ssa_byte_count_private(s, binding->local_id) ||
++        !ssa_byte_count_index(s, binding->expression, st->local_id, &source)) return false;
++    byte_local = binding->local_id; position = 1;
++  }
++  const DynIrStmt *condition = &ir->statements[ir->children[st->body_start + position]];
++  if (condition->kind != DYN_STMT_IF || condition->else_count || condition->body_count != 1 ||
++      condition->body_start >= ir->child_count) return false;
++  uint64_t terms = 0; unsigned count = 0;
++  if (!ssa_byte_count_predicate(s, condition->expression, st->local_id, byte_local, &source, &terms, &count, 0) ||
++      source == UINT64_MAX) return false;
++  const DynIrStmt *increment = &ir->statements[ir->children[condition->body_start]];
++  if (increment->kind != DYN_STMT_ASSIGN || increment->expression >= ir->expression_count) return false;
++  uint64_t accumulator = increment->local_id;
++  if (increment->target != DYN_NO_EXPR) {
++    if (increment->target >= ir->expression_count || ir->expressions[increment->target].kind != DYN_EXPR_NAME) return false;
++    accumulator = ir->expressions[increment->target].integer;
++  }
++  if (!ssa_byte_count_private(s, accumulator)) return false;
++  DynType type = ir->locals[accumulator].type;
++  if (type != DYN_TYPE_U64 && type != DYN_TYPE_USIZE) return false;
++  const DynIrExpr *one = &ir->expressions[increment->expression];
++  if (increment->assignment_op == DYN_OP_NONE) {
++    if (one->kind != DYN_EXPR_BINARY || one->op != DYN_OP_ADD || one->wrap ||
++        one->left >= ir->expression_count || one->right >= ir->expression_count ||
++        ir->expressions[one->left].kind != DYN_EXPR_NAME || ir->expressions[one->left].integer != accumulator) return false;
++    one = &ir->expressions[one->right];
++  } else if (increment->assignment_op != DYN_OP_ADD) return false;
++  if (one->kind != DYN_EXPR_INT || one->integer != 1) return false;
++  uint32_t source_local = (uint32_t)(source - s->f->local_start);
++  int32_t length = ssa_read(s, 2 * source_local + 1, s->current, SC_INT), end;
++  if (stop->kind == DYN_EXPR_LEN && stop->left < ir->expression_count &&
++      ir->expressions[stop->left].kind == DYN_EXPR_NAME && ir->expressions[stop->left].integer == source) end = length;
++  else if (stop->kind == DYN_EXPR_NAME && ssa_byte_count_private(s, stop->integer))
++    end = ssa_read(s, 2 * (uint32_t)(stop->integer - s->f->local_start), s->current, SC_INT);
++  else return false;
++  if (ssa_resolve(s, end) != ssa_resolve(s, length)) {
++    /* Independent provisional phis in an outer loop are not evidence of
++       equality. Instead prove the source-level relation: this private slice
++       was declared as p[0..n], and neither it nor n is ever assigned. */
++    DynExprId initializer = DYN_NO_EXPR;
++    uint32_t budget = 4096; /* Shared by both complete-function proofs. */
++    if (stop->kind != DYN_EXPR_NAME ||
++        !ssa_byte_count_unchanged(s, source, s->f->body_start, s->f->body_count, &initializer, &budget, 0) ||
++        !ssa_byte_count_unchanged(s, stop->integer, s->f->body_start, s->f->body_count, NULL, &budget, 0) ||
++        initializer >= ir->expression_count) return false;
++    const DynIrExpr *slice = &ir->expressions[initializer];
++    if (slice->kind != DYN_EXPR_SLICE || slice->integer >= ir->expression_count ||
++        ir->expressions[slice->integer].kind != DYN_EXPR_NAME ||
++        ir->expressions[slice->integer].integer != stop->integer ||
++        (slice->right != DYN_NO_EXPR && (slice->right >= ir->expression_count ||
++         ir->expressions[slice->right].kind != DYN_EXPR_INT || ir->expressions[slice->right].integer))) return false;
++  }
++  uint32_t local = (uint32_t)(accumulator - s->f->local_start);
++  int32_t pointer = ssa_read(s, 2 * source_local, s->current, SC_INT);
++  int32_t initial = ssa_read(s, 2 * local, s->current, SC_INT);
++  uint32_t saved_origin = s->check_origin;
++  if (increment->check_origin) s->check_origin = increment->check_origin;
++  if (ir->expressions[increment->expression].check_origin) s->check_origin = ir->expressions[increment->expression].check_origin;
++  int32_t result = ssa_emit(s, SO_BYTE_COUNT, SC_INT, pointer, length, initial, (int64_t)terms, count);
++  s->check_origin = saved_origin;
++  ssa_set_local(s, local, result, -1);
++  ++s->vectorized;
++  if (s->ctx->optimization_remarks) fprintf(stderr, "remark: %s: vectorized byte predicate count (%u terms)\n", s->f->name, count);
++  return true;
++}
+ static bool ssa_vector(Ssa *s, const DynIrStmt *st) {
+   const DynIrProgram *ir = s->ir;
+   if (!s->ctx->vectorize || !st->for_range || st->for_reverse || st->for_inclusive || st->for_pointer ||
+@@ -2218,6 +2369,7 @@
+   }
+   case DYN_STMT_FOR: {
+     if (ssa_byte_fill(s, st)) return;
++    if (ssa_byte_count(s, st)) return;
+     if (ssa_vector(s, st)) return;
+     uint32_t counter = s->variable_count + s->hidden_variables++;
+     ++s->loop_depth;
+@@ -3095,7 +3247,7 @@
+                                       ssa_access_size(v), &at, &inside);
+         if (!memory || !inside) {
+           state[r] |= REGION_ESCAPED;
+-          if (((v->op == SO_FIND_BYTE || v->op == SO_JSON_ASCII_PREFIX) && address) || (v->op == SO_FIND && (j == 0 || j == 2))) state[r] |= REGION_READ;
++          if (((v->op == SO_FIND_BYTE || v->op == SO_JSON_ASCII_PREFIX || v->op == SO_BYTE_COUNT) && address) || (v->op == SO_FIND && (j == 0 || j == 2))) state[r] |= REGION_READ;
+           continue;
+         }
+         if (v->op == SO_LOAD || source) state[r] |= REGION_READ;
+@@ -4440,6 +4592,8 @@
+                        UINT64_C(1) << X_R8 | UINT64_C(1) << X_R9 | UINT64_C(1) << X_R10 | UINT64_C(1) << X_R11;
+   case SO_JSON_ASCII_PREFIX: return UINT64_C(1) << X_RAX | UINT64_C(1) << X_RCX | UINT64_C(1) << X_RDX |
+                                   UINT64_C(1) << X_R10 | UINT64_C(1) << X_R11;
++  case SO_BYTE_COUNT: return UINT64_C(1) << X_RAX | UINT64_C(1) << X_RCX | UINT64_C(1) << X_RDX |
++                            UINT64_C(1) << X_R10 | UINT64_C(1) << X_R11;
+   case SO_FIND_BYTE: return UINT64_C(1) << X_RAX | UINT64_C(1) << X_RCX |
+                             UINT64_C(1) << X_R10 | UINT64_C(1) << X_R11;
+   default: return 0;
+@@ -5009,6 +5163,13 @@
+   Ssa *s = e->s; BackendContext *ctx = e->ctx;
+   int32_t imm;
+   if (ssa_imm32(s, a, &imm) && !ssa_imm32(s, b, &imm)) { int32_t t = a; a = b; b = t; cond = ssa_swap(cond); }
++  /* Fold a spilled left operand against an existing register. Immediate
++     comparisons keep the register TEST/CMP forms used by branch fusion. */
++  SsaValue *va = &s->values[a], *vb = &s->values[b];
++  if (va->reg < 0 && va->slot >= 0 && vb->reg >= 0) {
++    x86_mem_op(ctx, -1, true, OP1(0x39), (unsigned)vb->reg, ssa_slot_memory(e, va), false);
++    return cond;
++  }
+   unsigned ra = ssa_get(e, a, X_R11);
+   if (ssa_imm32(s, b, &imm)) {
+     if (!imm) x86_reg_op(ctx, -1, true, OP1(0x85), ra, ra, false); /* test */
+@@ -5016,7 +5177,6 @@
+     else { x86_reg_op(ctx, -1, true, OP1(0x81), 7, ra, false); word(ctx, (uint32_t)imm); }
+     return cond;
+   }
+-  SsaValue *vb = &s->values[b];
+   if (vb->reg < 0 && vb->slot >= 0) { x86_mem_op(ctx, -1, true, OP1(0x3b), ra, ssa_slot_memory(e, vb), false); return cond; }
+   unsigned rb = ssa_get(e, b, X_R10);
+   x86_reg_op(ctx, -1, true, OP1(0x39), rb, ra, false);
+@@ -5171,6 +5331,69 @@
+ }
+ /* SSE2 only. No vector load crosses the logical end; the byte tail also
+    handles a null zero-length slice without dereferencing its address. */
++static void ssa_byte_count_emit(SsaEmit *e, SsaValue *v) {
++  BackendContext *ctx = e->ctx;
++  SsaMove moves[3] = {ssa_source(e, v->a), ssa_source(e, v->b), ssa_source(e, v->c)};
++  unsigned registers[3] = {X_R10, X_R11, X_RCX};
++  for (unsigned i = 0; i < 3; ++i) {
++    moves[i].dst_kind = L_REG; moves[i].dst = registers[i]; moves[i].cls = SC_INT;
++  }
++  ssa_parallel(e, moves, 3);
++  size_t loop = ctx->text.n;
++  CODE(0x49,0x83,0xfb,0x10); /* remaining >= 16 */
++  size_t short_tail = isa_branch(ctx, CC_B);
++  CODE(0x48,0x83,0xf9,0xef); /* count <= UINT64_MAX - 16 */
++  size_t overflow_tail = isa_branch(ctx, CC_A);
++  x86_reg_op(ctx, 0x66, false, OP2(0x0f,0xef), SSA_XS2 - X_XMM0, SSA_XS2 - X_XMM0, false);
++  for (unsigned i = 0; i < (unsigned)v->aux2; ++i) {
++    unsigned term = (unsigned)((uint64_t)v->aux >> (9 * i)) & 511, value = term & 255;
++    x86_mem_op(ctx, 0xf3, false, OP2(0x0f,0x6f), SSA_XS1 - X_XMM0, (SsaMemory){X_R10,-1,1,0}, false);
++    if (term & 256) {
++      /* Bias unsigned bytes into signed order for PCMPGTB. */
++      CODE(0xb8); word(ctx, UINT32_C(0x80808080));
++      x86_reg_op(ctx, 0x66, false, OP2(0x0f,0x6e), SSA_XS3 - X_XMM0, X_RAX, false);
++      x86_reg_op(ctx, 0x66, false, OP2(0x0f,0x70), SSA_XS3 - X_XMM0, SSA_XS3 - X_XMM0, false); byte(ctx, 0);
++      x86_reg_op(ctx, 0x66, false, OP2(0x0f,0xef), SSA_XS1 - X_XMM0, SSA_XS3 - X_XMM0, false);
++      value ^= 128;
++    }
++    CODE(0xb8); word(ctx, (uint32_t)value * UINT32_C(0x01010101));
++    x86_reg_op(ctx, 0x66, false, OP2(0x0f,0x6e), SSA_XS3 - X_XMM0, X_RAX, false);
++    x86_reg_op(ctx, 0x66, false, OP2(0x0f,0x70), SSA_XS3 - X_XMM0, SSA_XS3 - X_XMM0, false); byte(ctx, 0);
++    x86_reg_op(ctx, 0x66, false, OP2(0x0f, term & 256 ? 0x64 : 0x74), SSA_XS3 - X_XMM0, SSA_XS1 - X_XMM0, false);
++    x86_reg_op(ctx, 0x66, false, OP2(0x0f,0xeb), SSA_XS2 - X_XMM0, SSA_XS3 - X_XMM0, false);
++  }
++  /* One count per matching lane, with no byte-lane accumulation overflow. */
++  CODE(0xb8); word(ctx, UINT32_C(0x01010101));
++  x86_reg_op(ctx, 0x66, false, OP2(0x0f,0x6e), SSA_XS3 - X_XMM0, X_RAX, false);
++  x86_reg_op(ctx, 0x66, false, OP2(0x0f,0x70), SSA_XS3 - X_XMM0, SSA_XS3 - X_XMM0, false); byte(ctx, 0);
++  x86_reg_op(ctx, 0x66, false, OP2(0x0f,0xdb), SSA_XS2 - X_XMM0, SSA_XS3 - X_XMM0, false);
++  x86_reg_op(ctx, 0x66, false, OP2(0x0f,0xef), SSA_XS1 - X_XMM0, SSA_XS1 - X_XMM0, false);
++  x86_reg_op(ctx, 0x66, false, OP2(0x0f,0xf6), SSA_XS2 - X_XMM0, SSA_XS1 - X_XMM0, false);
++  x86_reg_op(ctx, 0x66, true, OP2(0x0f,0x7e), SSA_XS2 - X_XMM0, X_RDX, false);
++  x86_reg_op(ctx, 0x66, false, OP2(0x0f,0x73), 3, SSA_XS2 - X_XMM0, false); byte(ctx, 8);
++  x86_reg_op(ctx, 0x66, true, OP2(0x0f,0x7e), SSA_XS2 - X_XMM0, X_RAX, false);
++  CODE(0x48,0x01,0xd1,0x48,0x01,0xc1,0x49,0x83,0xc2,0x10,0x49,0x83,0xeb,0x10);
++  isa_patch(ctx, isa_branch(ctx, -1), loop);
++  isa_patch(ctx, short_tail, ctx->text.n); isa_patch(ctx, overflow_tail, ctx->text.n);
++  CODE(0x4d,0x85,0xdb);
++  size_t empty = isa_branch(ctx, CC_E), scalar = ctx->text.n;
++  x86_mem_op(ctx, -1, false, OP2(0x0f,0xb6), X_RAX, (SsaMemory){X_R10,-1,1,0}, false);
++  size_t matches[3];
++  for (unsigned i = 0; i < (unsigned)v->aux2; ++i) {
++    unsigned term = (unsigned)((uint64_t)v->aux >> (9 * i)) & 511;
++    CODE(0x3d); word(ctx, term & 255);
++    matches[i] = isa_branch(ctx, term & 256 ? CC_B : CC_E);
++  }
++  size_t miss = isa_branch(ctx, -1);
++  for (unsigned i = 0; i < (unsigned)v->aux2; ++i) isa_patch(ctx, matches[i], ctx->text.n);
++  CODE(0x48,0x83,0xc1,1);
++  ssa_fail_when(e, CC_B, GUARD_OVERFLOW);
++  isa_patch(ctx, miss, ctx->text.n);
++  CODE(0x49,0xff,0xc2,0x49,0xff,0xcb);
++  isa_patch(ctx, isa_branch(ctx, CC_NE), scalar);
++  isa_patch(ctx, empty, ctx->text.n);
++  ssa_put(e, v, X_RCX);
++}
+ static void ssa_json_ascii_prefix(SsaEmit *e, SsaValue *v) {
+   BackendContext *ctx = e->ctx;
+   SsaMove moves[2] = {ssa_source(e, v->a), ssa_source(e, v->b)};
+@@ -5803,6 +6026,7 @@
+   case SO_ZEROMEM: ssa_zero_memory(e, v); return;
+   case SO_FILLMEM: ssa_fill_memory(e, v); return;
+   case SO_FIND_BYTE: ssa_find_byte(e, v); return;
++  case SO_BYTE_COUNT: ssa_byte_count_emit(e, v); return;
+   case SO_JSON_ASCII_PREFIX: ssa_json_ascii_prefix(e, v); return;
+   case SO_FIND: ssa_find(e, v); return;
+   case SO_CALL:
+@@ -6145,7 +6369,23 @@
+     } else if (block->kind == SB_IF) {
+       SsaValue *c = &s->values[block->control];
+       int cond;
+-      if (c->fused) cond = ctx->a64 ? a64s_compare(e, c->a, c->b, (Cond)c->cond) : ctx->rv64 ? rvs_compare(e, c->a, c->b, (Cond)c->cond)
++      /* A fallthrough from one fused integer comparison can test the same
++         operands under a different condition without comparing again. Only
++         a sole predecessor and an empty emitted body preserve that proof. */
++      bool same_flags = false;
++      if (c->fused && !ctx->a64 && !ctx->rv64 && i && ctx->text.n == block->at &&
++          block->preds.count == 1 && block->preds.items[0] == order[i - 1]) {
++        SsaBlock *prior = &s->blocks[order[i - 1]];
++        if (prior->kind == SB_IF && prior->control >= 0) {
++          SsaValue *p = &s->values[prior->control];
++          same_flags = p->fused && p->a == c->a && p->b == c->b;
++        }
++      }
++      if (same_flags) {
++        int32_t imm;
++        cond = c->cond;
++        if (ssa_imm32(s, c->a, &imm) && !ssa_imm32(s, c->b, &imm)) cond = ssa_swap((Cond)cond);
++      } else if (c->fused) cond = ctx->a64 ? a64s_compare(e, c->a, c->b, (Cond)c->cond) : ctx->rv64 ? rvs_compare(e, c->a, c->b, (Cond)c->cond)
+                            : ssa_compare_values(e, c->a, c->b, (Cond)c->cond);
+       else if (ctx->rv64) { e->rv_a = rvs_get(e, block->control, R_S1); e->rv_b = 0; cond = CC_NE; }
+       else if (ctx->a64) {

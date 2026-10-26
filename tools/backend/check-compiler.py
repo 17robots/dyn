@@ -29,7 +29,8 @@ def main():
         root = Path(directory); source = root/'main.dyn'; output = root/'app'
         source.write_text('''use "std/io"
 counter:u64
-fn next() u64 { counter+=1 return counter }
+fn next() u64 { counter+=1
+return counter }
 first:u64=next()
 second:u64=next()
 fn identity(x:$T) T { return x }
@@ -52,9 +53,12 @@ fn write(text:[]const u8) { _ = #syscall(1,1,&text[0],#len(text)) }
 fn main() {
  info:=#typeof(model.Pair)
  if info.kind!=TypeKind.Struct || info.size!=16 || info.alignment!=8 || info.member_count!=2 { #panic("reflection layout") }
- wide:=#typeof(u64) narrow:=#typeof(u8)
+ wide:=#typeof(u64)
+ narrow:=#typeof(u8)
  if info.fields[0].type_id!=wide.id || info.fields[1].type_id!=narrow.id { #panic("field types") }
- write(info.name) write(info.fields[0].name) write(info.fields[1].name)
+ write(info.name)
+ write(info.fields[0].name)
+ write(info.fields[1].name)
  if #syscall(999999)!=-38 { #panic("raw syscall") }
 }
 ''')

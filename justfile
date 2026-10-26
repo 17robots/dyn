@@ -27,6 +27,13 @@ smoke: release
 test: smoke
     python3 tests/run.py
 
+# Full regression suite against an ASan/UBSan compiler in build/sanitize.
+sanitize-test:
+    # Only the compiler is instrumented: C helpers the tests build for Dyn
+    # programs use the plain compiler, so they do not pull in the ASan runtime.
+    BUILD="{{COMPILER_DIR}}/build/sanitize" CC="${CC:-cc} -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer" python3 tools/build.py all
+    BUILD="{{COMPILER_DIR}}/build/sanitize" DYN="{{COMPILER_DIR}}/build/sanitize/dyn-release" python3 tests/run.py
+
 # Qualification of generated ABI bindings and the Tree-sitter provider binding
 # (needs libtree-sitter; fetches the grammar it parses with).
 test-vendors: release
@@ -88,6 +95,18 @@ test-native-debug: release
 test-native-a64: release
     python3 tools/build.py dyn
     python3 tools/backend/native-differential.py --target aarch64-linux
+
+# RV32 bare metal against x86-64 Linux, debug and release. Needs
+# qemu-system-riscv32, or DYN_QEMU_RISCV32 naming a container wrapper.
+test-native-rv32: release
+    python3 tools/backend/bare-differential.py --compiler build/dyn-release
+    python3 tools/backend/bare-differential.py --compiler build/dyn-release --release
+
+# Cortex-M7 bare metal against x86-64 Linux, debug and release. Needs
+# qemu-system-arm, or DYN_QEMU_ARM naming a container wrapper.
+test-native-thumb: release
+    python3 tools/backend/bare-differential.py --compiler build/dyn-release --target thumbv7em-none
+    python3 tools/backend/bare-differential.py --compiler build/dyn-release --target thumbv7em-none --release
 
 # x86-64 Windows native output against x86-64 Linux output under wine (skips without wine).
 test-native-windows: release

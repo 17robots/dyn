@@ -622,9 +622,9 @@ void lsp_completion(long id, LspDocument *documents, size_t count,
     struct {
       const char *label, *signature, *snippet;
     } builtins[] = {
-        {"#cast", "#cast(type) value -> type", "#cast(${1:type}) ${2:value}"},
-        {"#bitcast", "#bitcast(type) value -> type",
-         "#bitcast(${1:type}) ${2:value}"},
+        {"#cast", "#cast(type, value) -> type", "#cast(${1:type}, ${2:value})"},
+        {"#bitcast", "#bitcast(type, value) -> type",
+         "#bitcast(${1:type}, ${2:value})"},
         {"#len", "#len(array_or_slice) -> usize", "#len(${1:array_or_slice})"},
         {"#reverse", "for item in #reverse(range_or_collection)",
          "#reverse(${1:range_or_collection})"},

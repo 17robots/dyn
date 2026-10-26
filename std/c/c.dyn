@@ -67,10 +67,11 @@ pub fn succeeded(value: isize) bool {
   return value >= 0
 }
 
-// Copies bytes and appends NUL. Embedded NUL is invalid; arbitrary overlap is
-// supported. Failure leaves destination untouched. Required includes the NUL.
-pub fn string_from_bytes(destination: []u8, source: []const u8) StringResult {
-  if #len(source) == #cast(usize) -1 {
+// Raw C-ABI scratch conversion. Borrows caller storage; writes source plus NUL.
+// Invalid input or insufficient capacity leaves storage unchanged. This bounded
+// adapter allocates nothing; use string_from_bytes for arena-owned strings.
+pub fn string_into(destination: []u8, source: []const u8) StringResult {
+  if #len(source) == #cast(usize, -1) {
     return StringResult{ error: ErrorKind.Overflow }
   }
   for byte in source {
@@ -87,14 +88,15 @@ pub fn string_from_bytes(destination: []u8, source: []const u8) StringResult {
   return StringResult{ value: &destination[0], required: required, ok: true }
 }
 
-// Arena-owned C string; failure rewinds only this operation's allocation.
-pub fn string_from_arena(arena: *memory.Arena, source: []const u8) StringResult {
-  if #len(source) == #cast(usize) -1 {
+// source with a NUL appended, in arena. Embedded NUL is invalid input; failure
+// pushes nothing.
+pub fn string_from_bytes(arena: *memory.Arena, source: []const u8) StringResult {
+  if #len(source) == #cast(usize, -1) {
     return StringResult{ error: ErrorKind.Overflow }
   }
   mark := memory.arena_mark(arena)
   allocation := memory.arena_push_uninit(arena, #len(source) + 1, 1)
-  result := string_from_bytes(allocation[..#len(source) + 1], source)
+  result := string_into(allocation[..#len(source) + 1], source)
   if !result.ok {
     memory.arena_rewind(arena, mark)
   }
