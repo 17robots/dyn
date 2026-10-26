@@ -92,6 +92,7 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
 | `std/process` | Spawn, capture, pipes, environment and arguments |
 | `std/process/signal` | Interrupt, terminate and hangup signals as queued events, read with `poll` or `wait` |
 | `std/thread`, `std/sync` | Arena-backed thread handles; caller or owned stacks; portable synchronization |
+| `std/thread/pool` | Fixed worker pool over a bounded arena queue, and wait groups |
 | `std/time` | Monotonic and realtime clocks, durations, deadlines and UTC ISO-8601 |
 | `std/terminal` | Raw mode, terminal size and key decoding |
 | `std/dynlib` | Dynamic library loading (on Linux, link libc explicitly) |

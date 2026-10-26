@@ -14,6 +14,7 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- `std/thread/pool` runs tasks on a fixed set of workers over a bounded queue in the caller's arena, with `Group` wait groups.
 - `fmt.write_f64_shortest` and `fmt.f64_shortest` print the shortest decimal that parses back to the same `f64` (a Ryu port). `{}` formatting is unchanged.
 - `std/process/signal` reads Ctrl-C, SIGTERM, SIGHUP and Windows console close events as queued events, with no code in signal handlers.
 - `fs.map` and `fs.unmap` give read-only views of whole files on Linux, macOS and Windows.

@@ -1,0 +1,165 @@
+// A fixed set of worker threads draining a bounded task queue. All storage
+// comes from the caller's arena when the pool starts; submit never allocates
+// and reports a full queue instead of growing it.
+
+use "std/mem" mem
+use "std/sync" sync
+use "std/thread" thread
+use "std/errors" errors
+
+// One unit of work. run receives data on a worker thread.
+pub struct Task { run: fn(rawptr), data: rawptr }
+
+// Pools live in the caller's arena and must not move. Use the functions below;
+// fields are private to this module.
+pub struct Pool {
+  lock: sync.Mutex,
+  ready: sync.Condition,
+  idle: sync.Condition,
+  tasks: []Task,
+  head: usize,
+  count: usize,
+  running: usize,
+  stopping: bool,
+  workers: []*thread.Thread,
+  started: usize,
+}
+
+pub struct StartResult { value: *Pool, kind: errors.Kind, error: isize, ok: bool }
+pub struct Result { kind: errors.Kind, error: isize, ok: bool }
+
+fn worker(context: rawptr) isize {
+  pool := #cast(*Pool, context)
+  sync.lock(&pool.lock)
+  for true {
+    for pool.count == 0 && !pool.stopping {
+      sync.condition_wait(&pool.ready, &pool.lock)
+    }
+    if pool.count == 0 {
+      break
+    }
+    task := pool.tasks[pool.head]
+    pool.head = (pool.head + 1) % #len(pool.tasks)
+    pool.count -= 1
+    pool.running += 1
+    sync.unlock(&pool.lock)
+    task.run(task.data)
+    sync.lock(&pool.lock)
+    pool.running -= 1
+    if pool.count == 0 && pool.running == 0 {
+      sync.condition_broadcast(&pool.idle)
+    }
+  }
+  sync.unlock(&pool.lock)
+  return 0
+}
+
+// Starts workers threads, each with an owned stack of stack_size bytes, and a
+// queue of capacity tasks. Storage comes from arena; on failure the arena is
+// rewound and any started workers are stopped.
+pub fn start(arena: *mem.Arena, workers: usize, capacity: usize, stack_size: usize) StartResult {
+  if workers == 0 || capacity == 0 || stack_size < 256 {
+    return StartResult{ kind: errors.Kind.InvalidInput }
+  }
+  mark := mem.arena_mark(arena)
+  pool := mem.push(Pool, arena)
+  pool.lock = sync.mutex()
+  pool.ready = sync.condition()
+  pool.idle = sync.condition()
+  pool.tasks = mem.push_array(Task, arena, capacity)
+  pool.workers = mem.push_array(*thread.Thread, arena, workers)
+  for i in 0..workers {
+    spawned := thread.spawn_with_size(arena, stack_size, worker, pool)
+    if !spawned.ok {
+      _ = stop(pool)
+      mem.arena_rewind(arena, mark)
+      return StartResult{ kind: spawned.kind, error: spawned.error }
+    }
+    pool.workers[i] = spawned.value
+    pool.started += 1
+  }
+  return StartResult{ value: pool, ok: true }
+}
+
+// Queues task. Returns false, queuing nothing, when the queue is full or the
+// pool is stopping.
+pub fn submit(pool: *Pool, task: Task) bool {
+  if pool == nil || task.run == nil {
+    return false
+  }
+  sync.lock(&pool.lock)
+  if pool.stopping || pool.count == #len(pool.tasks) {
+    sync.unlock(&pool.lock)
+    return false
+  }
+  pool.tasks[(pool.head + pool.count) % #len(pool.tasks)] = task
+  pool.count += 1
+  sync.condition_signal(&pool.ready)
+  sync.unlock(&pool.lock)
+  return true
+}
+
+// Blocks until every queued task has finished, including tasks submitted by
+// running tasks.
+pub fn wait(pool: *Pool) {
+  if pool == nil {
+    return
+  }
+  sync.lock(&pool.lock)
+  for pool.count != 0 || pool.running != 0 {
+    sync.condition_wait(&pool.idle, &pool.lock)
+  }
+  sync.unlock(&pool.lock)
+}
+
+// Finishes queued tasks, then joins every worker. The pool's arena storage
+// may be reclaimed after a successful stop.
+pub fn stop(pool: *Pool) Result {
+  if pool == nil {
+    return Result{ kind: errors.Kind.InvalidInput }
+  }
+  sync.lock(&pool.lock)
+  pool.stopping = true
+  sync.condition_broadcast(&pool.ready)
+  sync.unlock(&pool.lock)
+  for i in 0..pool.started {
+    joined := thread.join(pool.workers[i])
+    if !joined.ok {
+      return Result{ kind: joined.kind, error: joined.error }
+    }
+  }
+  pool.started = 0
+  return Result{ ok: true }
+}
+
+// A counter that waiters block on until it returns to zero, for fan-out work
+// that does not use a pool. Zero is ready to use.
+pub struct Group { lock: sync.Mutex, done: sync.Condition, count: usize }
+
+pub fn group_add(group: *Group, amount: usize) {
+  sync.lock(&group.lock)
+  group.count += amount
+  sync.unlock(&group.lock)
+}
+
+// Marks one unit finished. Calling it more times than added panics.
+pub fn group_done(group: *Group) {
+  sync.lock(&group.lock)
+  if group.count == 0 {
+    sync.unlock(&group.lock)
+    #panic("pool.group_done without matching group_add")
+  }
+  group.count -= 1
+  if group.count == 0 {
+    sync.condition_broadcast(&group.done)
+  }
+  sync.unlock(&group.lock)
+}
+
+pub fn group_wait(group: *Group) {
+  sync.lock(&group.lock)
+  for group.count != 0 {
+    sync.condition_wait(&group.done, &group.lock)
+  }
+  sync.unlock(&group.lock)
+}

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""std/terminal, std/dynlib and fs.map on every desktop kernel.
+"""std/terminal, std/dynlib, fs.map and std/thread/pool on every desktop kernel.
 
-Cross-builds both fixtures for Linux, macOS and Windows. Runs Linux natively
-(the terminal fixture also inside a 37x91 pseudo-terminal) and Windows under
-wine when it is installed.
+Cross-builds every fixture for Linux, macOS and Windows. Runs Linux natively
+(the terminal fixture also inside a 37x91 pseudo-terminal), the libc-free
+fixtures on AArch64 Linux under qemu-aarch64, and Windows under wine, when
+those are installed.
 """
 import fcntl
 import os
@@ -47,7 +48,7 @@ def run_in_pty(program):
 
 with tempfile.TemporaryDirectory(prefix='dyn-platform-parity-') as directory:
     work = Path(directory)
-    for name in ['dynlib', 'terminal', 'map']:
+    for name in ['dynlib', 'terminal', 'map', 'pool']:
         for target in TARGETS:
             # Linking libc for another Linux architecture needs its sysroot.
             if name == 'dynlib' and target == 'aarch64-linux':
@@ -55,6 +56,8 @@ with tempfile.TemporaryDirectory(prefix='dyn-platform-parity-') as directory:
             build(name, target, work / f'{name}-{target}')
         if sys.platform == 'linux' and os.uname().machine == 'x86_64':
             subprocess.run([str(work / f'{name}-x86_64-linux')], stdin=subprocess.DEVNULL, cwd=work, check=True, timeout=60)
+        if name != 'dynlib' and sys.platform == 'linux' and shutil.which('qemu-aarch64'):
+            subprocess.run(['qemu-aarch64', str(work / f'{name}-aarch64-linux')], stdin=subprocess.DEVNULL, cwd=work, check=True, timeout=120)
         if shutil.which('wine'):
             subprocess.run(['wine', str(work / f'{name}-x86_64-windows')], stdin=subprocess.DEVNULL, cwd=work, check=True, timeout=120)
     if sys.platform == 'linux' and os.uname().machine == 'x86_64':
