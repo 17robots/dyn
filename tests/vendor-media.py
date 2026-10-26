@@ -217,7 +217,7 @@ fn main() {
   if !loaded.ok {
     #panic("read archive")
   }
-  opened := archive.open_memory_owned(loaded.data)
+  opened := archive.open_memory_owned(loaded.value)
   if !opened.ok {
     #panic("open archive")
   }
@@ -303,7 +303,7 @@ fn main() {
   if !bytes.ok {
     #panic("image read")
   }
-  decoded := image.decode_owned(bytes.data)
+  decoded := image.decode_owned(bytes.value)
   if !decoded.ok {
     #panic("image decode")
   }
