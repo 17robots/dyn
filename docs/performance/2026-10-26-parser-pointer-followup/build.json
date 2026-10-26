@@ -1,0 +1,11 @@
+{
+  "apps": {
+    "command": ["/tmp/dyn-syntax/build/dyn-release", "build", "/tmp/dyn-syntax/build/remaining-gaps-20261026/projects/apps", "--release", "--opt-level", "3", "--cpu", "generic", "--no-cache", "--output", "/tmp/dyn-syntax/build/remaining-gaps-20261026/final-apps"],
+    "sha256": "9af510e8df167dd06ecb4880f09f340e52d08360d537b9d448d6f70a3e0d060a"
+  },
+  "extended": {
+    "command": ["/tmp/dyn-syntax/build/dyn-release", "build", "/tmp/dyn-syntax/build/remaining-gaps-20261026/projects/extended", "--release", "--opt-level", "3", "--cpu", "generic", "--no-cache", "--output", "/tmp/dyn-syntax/build/remaining-gaps-20261026/final-extended"],
+    "sha256": "fa924690ee6ef620aa98b41a62bf601cb56c90f5b051a0d5a6d89c32cd477eb2"
+  },
+  "compiler_sha256": "e19afab4b479c86a18b36f27367bf51dc6f1646a768e1acdb26a5dbcafe25377"
+}

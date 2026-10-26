@@ -1,0 +1,23 @@
+use "std/mem" mem
+use "std/encoding/json" json
+extern fn configure() usize
+extern fn document() rawptr
+extern fn document_length() usize
+extern fn report(value:u64)
+fn main() {
+ rounds:=configure()
+ pointer:=document()
+ source:=#cast(*const u8,pointer)[..document_length()]
+ arena:=mem.arena_create(65536)
+ checksum:u64=0
+ for i in 0..rounds {
+  mem.arena_reset(arena)
+  parsed:=json.parse(arena,source)
+  if !parsed.ok || parsed.root.kind!=json.KindString { #panic("parse") }
+  text:=parsed.root.text
+  checksum+=#cast(u64,#len(text))+#cast(u64,parsed.root.kind)
+  if #len(text)>0 { checksum+=#cast(u64,text[0])+#cast(u64,text[#len(text)-1]) }
+ }
+ mem.arena_release(arena)
+ report(checksum)
+}

@@ -51,20 +51,21 @@ int oracle(void){
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-json-prefix-') as tmp:
  w=Path(tmp);sdk=w/'sdk';shutil.copytree(R/'std',sdk/'std')
- module=sdk/'std/encoding/json/read/read.dyn'
- with module.open('a') as f:f.write('\npub fn test_prefix(source:[]const u8) usize { return ascii_string_prefix(source) }\n')
- project=w/'project';project.mkdir();(project/'main.dyn').write_text(SOURCE)
+ project=w/'project';project.mkdir()
  (w/'oracle.c').write_text(C)
  run([os.environ.get('CC','cc'),'-O2','-ffreestanding','-fno-stack-protector','-c',w/'oracle.c','-o',w/'oracle.o'])
- for mode in ('ssa','tree'):
-  env=dict(os.environ,DYN_SDK=str(sdk),DYN_NO_SSA='0' if mode=='ssa' else '1')
-  binary=w/mode
-  run([D,'build',project,'--release','--opt-level','3','--no-cache','--emit-object','--link',w/'oracle.o','--output',binary],env=env)
-  run([binary])
-  asm=run(['objdump','-d','-Mintel',str(binary)+'.o']).stdout
-  # Existing decoder has no SIMD byte comparison in scalar mode.
-  assert ('pcmpgtb' in asm)==(mode=='ssa'),mode
-  print('PASS private JSON ASCII prefix '+mode+': byte/length/alignment, guarded tail, FP live values')
+ for variant,relative,import_path in [('compact','std/encoding/json/read/read.dyn','std/encoding/json/read'),('mutable','std/encoding/json/json.dyn','std/encoding/json')]:
+  module=sdk/relative
+  with module.open('a') as f:f.write('\npub fn test_prefix(source:[]const u8) usize { return ascii_string_prefix(source) }\n')
+  (project/'main.dyn').write_text(SOURCE.replace('std/encoding/json/read',import_path))
+  for mode in ('ssa','tree'):
+   env=dict(os.environ,DYN_SDK=str(sdk),DYN_NO_SSA='0' if mode=='ssa' else '1')
+   binary=w/(variant+'-'+mode)
+   run([D,'build',project,'--release','--opt-level','3','--no-cache','--emit-object','--link',w/'oracle.o','--output',binary],env=env)
+   run([binary])
+   asm=run(['objdump','-d','-Mintel',str(binary)+'.o']).stdout
+   assert ('pcmpgtb' in asm)==(mode=='ssa'),(variant,mode)
+   print('PASS private JSON ASCII prefix '+variant+' '+mode+': byte/length/alignment, guarded tail, FP live values')
  # Same helper spelling and signature outside the SDK must keep its body.
  fake=project/'fake';fake.mkdir();(fake/'fake.dyn').write_text('fn ascii_string_prefix(source:[]const u8) usize { return 7 }\npub fn test(source:[]const u8) usize { return ascii_string_prefix(source) }\n')
  (project/'main.dyn').write_text('use "fake" fake\nfn main(){ if fake.test("abc")!=7 { #panic("untrusted helper") } }\n')

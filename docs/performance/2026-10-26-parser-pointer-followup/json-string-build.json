@@ -1,0 +1,24 @@
+{
+  "flags": ["--release", "--opt-level", "3", "--cpu", "generic", "--no-cache"],
+  "variants": {
+    "baseline": {
+      "command": ["/tmp/dyn-syntax/build/dyn-release-pre-gaps", "build", "/tmp/dyn-syntax/build/remaining-gaps-20261026/json-lengths/project", "--release", "--opt-level", "3", "--cpu", "generic", "--no-cache", "--emit-object", "--link", "/tmp/dyn-syntax/build/remaining-gaps-20261026/json-lengths/driver.o", "--output", "/tmp/dyn-syntax/build/remaining-gaps-20261026/json-lengths/baseline"],
+      "compiler_sha256": "dd7ff1e1e398afa91c04271250b7ed42a39df1fde42d1227f17555cc2ec58aec",
+      "json_sha256": "298ab7ffb13c5daee070a82a1bf6c636199b2d961e9cc22998450ebd540f2c99",
+      "binary_sha256": "c3e663b84424d79d9ebbd9627f958ffee19c95a4cd5c657613040cf7e8154125",
+      "13_round_checksums": ["52", "2587", "2665", "2782", "3406", "55822", "3406", "5616"],
+      "driver_sha256": "d62863fde30d4d2eedc9c44d5c4dfa067ceb28fd3db78c55afc603c83e78f40b"
+    },
+    "current": {
+      "command": ["/tmp/dyn-syntax/build/dyn-release", "build", "/tmp/dyn-syntax/build/remaining-gaps-20261026/json-lengths/project", "--release", "--opt-level", "3", "--cpu", "generic", "--no-cache", "--emit-object", "--link", "/tmp/dyn-syntax/build/remaining-gaps-20261026/json-lengths/driver.o", "--output", "/tmp/dyn-syntax/build/remaining-gaps-20261026/json-lengths/current"],
+      "compiler_sha256": "e19afab4b479c86a18b36f27367bf51dc6f1646a768e1acdb26a5dbcafe25377",
+      "json_sha256": "1910c8c3cde2ed68d93c3c75c0be8813c17869aa260b29fc4d194c0e8c92cd2d",
+      "binary_sha256": "a2b3167925610fe2d63115db4a592ee4af0efc5890f5c90938bd158bd25918cd",
+      "13_round_checksums": ["52", "2587", "2665", "2782", "3406", "55822", "3406", "5616"],
+      "driver_sha256": "d62863fde30d4d2eedc9c44d5c4dfa067ceb28fd3db78c55afc603c83e78f40b"
+    }
+  },
+  "cases": ["empty", "ascii1", "ascii7", "ascii16", "ascii64", "ascii4096", "escaped64", "nonascii64"],
+  "driver.c_sha256": "bbf4ac719c8fe0a5c731e1ef46222d0083594e58f19a3a6b438b923c11e8a803",
+  "project/main.dyn_sha256": "d343a35e5814ea1ff120a906cc061732d378304796cd7ace637d5860117a4e46"
+}
