@@ -32,6 +32,9 @@ fn main() {
   check(net.unix(oversized[..]).length == 0)
   invalid := net.unix("")
   check(net.unix_listen(&invalid, 1).kind == errors.Kind.InvalidInput)
+  invalid.length = 111
+  check(net.bind_unix(-1, &invalid).kind == errors.Kind.InvalidInput)
+  check(net.connect_unix(-1, &invalid).kind == errors.Kind.InvalidInput)
   path := net.unix("dyn-net-extras.sock")
   opened := net.unix_listen(&path, 4)
   check(opened.ok)

@@ -146,13 +146,13 @@ pub fn bind_ipv6(descriptor: isize, address: *const Ipv6Address) Result {
   return result(native_bind(descriptor, &address.bytes[0], 28))
 }
 pub fn connect_unix(descriptor: isize, address: *const UnixAddress) Result {
-  if address.length == 0 {
+  if address.length == 0 || address.length > #len(address.bytes) {
     return Result{ value: -1, error: -22, kind: errors.Kind.InvalidInput, ok: false }
   }
   return result(native_connect(descriptor, &address.bytes[0], address.length))
 }
 pub fn bind_unix(descriptor: isize, address: *const UnixAddress) Result {
-  if address.length == 0 {
+  if address.length == 0 || address.length > #len(address.bytes) {
     return Result{ value: -1, error: -22, kind: errors.Kind.InvalidInput, ok: false }
   }
   return result(native_bind(descriptor, &address.bytes[0], address.length))
@@ -182,10 +182,14 @@ fn stream_listen(family: usize, address: []const u8, backlog: usize) ListenerRes
     return ListenerResult{ value: Listener{}, error: opened.error, kind: opened.kind, ok: false }
   }
   descriptor := result_value(&opened)
-  reused := reuse_address(descriptor, true)
-  if !reused.ok {
-    _ = close(descriptor)
-    return ListenerResult{ value: Listener{}, error: reused.error, kind: reused.kind, ok: false }
+  // Unix path ownership controls rebinding. SO_REUSEADDR is an Internet
+  // option and is not supported by every AF_UNIX implementation.
+  if family != AddressFamilyUnix {
+    reused := reuse_address(descriptor, true)
+    if !reused.ok {
+      _ = close(descriptor)
+      return ListenerResult{ value: Listener{}, error: reused.error, kind: reused.kind, ok: false }
+    }
   }
   bound := bind(descriptor, address)
   if !bound.ok {
