@@ -5,6 +5,25 @@ fn unwind_owner_offset() usize {
 }
 // Bare metal: one hart, output through the board console in the start runtime.
 extern fn console_write "dyn_console_write"(data: *const u8, size: u64)
+// One hart: one unwind slot and one trace slot, in fixed storage.
+const unwind_chunk_slots: usize = 1
+const unwind_hint_count: usize = 1
+const trace_chunk_slots: usize = 1
+none_unwind: UnwindChunk
+none_trace: TraceChunk
+none_unwind_taken: bool
+none_trace_taken: bool
+fn runtime_pages(bytes: u64) u64 {
+  if bytes == #cast(u64, #sizeof(UnwindChunk)) && !none_unwind_taken {
+    none_unwind_taken = true
+    return #cast(u64, #cast(usize, &none_unwind))
+  }
+  if bytes == #cast(u64, #sizeof(TraceChunk)) && !none_trace_taken {
+    none_trace_taken = true
+    return #cast(u64, #cast(usize, &none_trace))
+  }
+  return 0
+}
 fn thread_id() u64 {
   return 1
 }

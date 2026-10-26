@@ -5,16 +5,21 @@ struct UnwindSlot {
   tid: u64, top: *Unwind, message: *const u8, length: u64, unwinding: u64,
   storage: [4096]u8
 }
-unwind_slots: [64]UnwindSlot
-// A hint is one atomic word: the full eligible thread identity and slot index.
-// Collisions only discard hints. The owning thread is the only writer of a
-// hint with its identity, so a matching hint names its latest known slot.
-// Always validate/claim the slot atomically; never retain slot ownership here.
-// Large opaque identities use the complete search without truncation.
-unwind_hints: [64]u64
+// Slots live in chunks obtained from the platform on first use, so programs
+// that never register a cleanup frame reserve nothing. Chunks are never
+// returned: a finished thread's slot is reused by the next thread. Links are
+// addresses stored as u64 so the 64-bit atomics serve every target.
+struct UnwindChunk { next: u64, slots: [unwind_chunk_slots]UnwindSlot }
+unwind_first: u64
+// A hint is one atomic word: the full eligible thread identity and slot index
+// in the first chunk. Collisions only discard hints. The owning thread is the
+// only writer of a hint with its identity, so a matching hint names its latest
+// known slot. Always validate/claim the slot atomically; never retain slot
+// ownership here. Large opaque identities use the complete search.
+unwind_hints: [unwind_hint_count]u64
 fn unwind_remember(tid: u64, index: usize) {
-  if tid != 0 && tid >> 58 == 0 {
-    atomic_store(&unwind_hints[#cast(usize, tid & 63)], (tid << 6) | #cast(u64, index))
+  if tid != 0 && tid >> 58 == 0 && index < 64 {
+    atomic_store(&unwind_hints[#cast(usize, tid % #cast(u64, unwind_hint_count))], (tid << 6) | #cast(u64, index))
   }
 }
 extern fn atomic_load "dyn_atomic_load_u64"(p: *const u64) u64
@@ -23,20 +28,51 @@ extern fn atomic_claim "dyn_atomic_compare_exchange_u64"(p: *u64, expected: u64,
 extern fn jump "dyn_unwind_jump"(frame: *Unwind)
 extern fn panic_raw "dyn_panic"(message: *const u8, length: u64)
 
+fn chunk_at(address: u64) *UnwindChunk {
+  return #cast(*UnwindChunk, #cast(usize, address))
+}
+
+// Appends a fresh chunk after the last one. A thread that loses the race
+// keeps searching; its chunk is released to the platform.
+fn unwind_grow() bool {
+  bytes := #cast(u64, #sizeof(UnwindChunk))
+  fresh := runtime_pages(bytes)
+  if fresh == 0 {
+    return false
+  }
+  link := &unwind_first
+  for true {
+    if atomic_claim(link, 0, fresh) {
+      return true
+    }
+    link = &chunk_at(atomic_load(link)).next
+  }
+  return false
+}
+
 fn unwind_slot(claim: bool) *UnwindSlot {
   tid := thread_id()
+  first := atomic_load(&unwind_first)
+  if first == 0 {
+    if !claim || !unwind_grow() {
+      return nil
+    }
+    first = atomic_load(&unwind_first)
+  }
+  head := chunk_at(first)
   // Nested cleanup on the first owner already needs only one atomic read.
   // Keep that path ahead of the hint, which benefits empty-stack registration.
-  first_seen := atomic_load(&unwind_slots[0].tid)
+  first_seen := atomic_load(&head.slots[0].tid)
   if first_seen == tid {
-    return &unwind_slots[0]
+    return &head.slots[0]
   }
   if tid != 0 && tid >> 58 == 0 {
-    hint := atomic_load(&unwind_hints[#cast(usize, tid & 63)])
-    if hint >> 6 == tid {
-      candidate := &unwind_slots[#cast(usize, hint & 63)]
+    hint := atomic_load(&unwind_hints[#cast(usize, tid % #cast(u64, unwind_hint_count))])
+    index := #cast(usize, hint & 63)
+    if hint >> 6 == tid && index < unwind_chunk_slots {
+      candidate := &head.slots[index]
       seen := first_seen
-      if (hint & 63) != 0 {
+      if index != 0 {
         seen = atomic_load(&candidate.tid)
       }
       if seen == tid {
@@ -52,33 +88,44 @@ fn unwind_slot(claim: bool) *UnwindSlot {
     empty_index: usize = 0
     // Find an existing owner before claiming a vacancy. A lower slot may
     // have become empty while this thread still owns a higher slot.
-    for i in 0..64 {
-      slot := &unwind_slots[i]
-      seen := atomic_load(&slot.tid)
-      if seen == tid {
-        unwind_remember(tid, i)
-        return slot
+    chunk := first
+    base: usize = 0
+    for chunk != 0 {
+      for i in 0..unwind_chunk_slots {
+        slot := &chunk_at(chunk).slots[i]
+        seen := atomic_load(&slot.tid)
+        if seen == tid {
+          unwind_remember(tid, base + i)
+          return slot
+        }
+        if seen == 0 && empty == nil {
+          empty = slot
+          empty_index = base + i
+        }
       }
-      if seen == 0 && empty == nil {
-        empty = slot
-        empty_index = i
-      }
+      chunk = atomic_load(&chunk_at(chunk).next)
+      base += unwind_chunk_slots
     }
-    if !claim || empty == nil {
+    if !claim {
       return nil
     }
-    if atomic_claim(&empty.tid, 0, tid) {
+    if empty == nil {
+      if !unwind_grow() {
+        return nil
+      }
+    }
+    else if atomic_claim(&empty.tid, 0, tid) {
       unwind_remember(tid, empty_index)
       return empty
     }
-    // Another thread won the vacancy; repeat the ownership search.
+    // Another thread won the vacancy, or a chunk was added; search again.
   }
   return nil
 }
 pub fn dyn_unwind_link(frame: *Unwind) {
   slot := unwind_slot(true)
   if slot == nil {
-    message: []const u8 = "runtime unwind thread capacity exceeded"
+    message: []const u8 = "runtime unwind storage unavailable"
     panic_raw(&message[0], #cast(u64, #len(message)))
     return
   }

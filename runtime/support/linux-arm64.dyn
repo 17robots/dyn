@@ -6,6 +6,9 @@ fn unwind_owner_offset() usize {
 fn thread_number() i64 {
   return 178
 }
+fn mmap_number() i64 {
+  return 222
+}
 fn write_number() i64 {
   return 64
 }

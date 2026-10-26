@@ -1,5 +1,18 @@
 #target(kernel: linux)
 extern fn syscall_raw "dyn_syscall6"(n: i64, a: i64, b: i64, c: i64, d: i64, e: i64, f: i64) i64
+// Runtime slot chunks: 64 threads per chunk, more chunks on demand.
+const unwind_chunk_slots: usize = 64
+const unwind_hint_count: usize = 64
+const trace_chunk_slots: usize = 64
+// Private anonymous read-write pages; zero on failure. The kernel commits
+// them on first touch.
+fn runtime_pages(bytes: u64) u64 {
+  address := syscall_raw(mmap_number(), 0, #cast(i64, bytes), 3, 34, -1, 0)
+  if address < 0 {
+    return 0
+  }
+  return #cast(u64, address)
+}
 fn thread_id() u64 {
   return #cast(u64, syscall_raw(thread_number(), 0, 0, 0, 0, 0, 0))
 }
