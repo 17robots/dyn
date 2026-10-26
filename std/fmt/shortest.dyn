@@ -1,0 +1,298 @@
+// Shortest round-trip binary64 formatting, ported from Ryu (Ulf Adams,
+// ulfjack/ryu d2s.c, Copyright 2018 Ulf Adams), used under the Boost Software
+// License 1.0 in LICENSE-Boost-Ryu.txt. The output is the shortest
+// decimal that parses back to the same value; among equally short decimals it
+// is the closest, with ties to even.
+
+struct Wide { low: u64, high: u64 }
+
+// The full 128-bit product, built from 32-bit halves on every target.
+fn multiply_wide(a: u64, b: u64) Wide {
+  a_low := a & 0xffffffff
+  a_high := a >> 32
+  b_low := b & 0xffffffff
+  b_high := b >> 32
+  low_low := a_low * b_low
+  low_high := a_low * b_high
+  high_low := a_high * b_low
+  high_high := a_high * b_high
+  middle := (low_low >> 32) + (low_high & 0xffffffff) + (high_low & 0xffffffff)
+  low := (low_low & 0xffffffff) | #wrap(middle << 32)
+  high := #wrap(high_high + (low_high >> 32) + (high_low >> 32) + (middle >> 32))
+  return Wide{ low: low, high: high }
+}
+
+// (m * (high:low)) >> j for 64 < j < 128, as in Ryu's mulShift64.
+fn multiply_shift(m: u64, low: u64, high: u64, j: i64) u64 {
+  b0 := multiply_wide(m, low)
+  b2 := multiply_wide(m, high)
+  sum_low := #wrap(b2.low + b0.high)
+  carry: u64 = 0
+  if sum_low < b2.low {
+    carry = 1
+  }
+  sum_high := #wrap(b2.high + carry)
+  distance := #cast(u64, j - 64)
+  return #wrap(sum_high << (64 - distance)) | (sum_low >> distance)
+}
+
+fn pow5_bits(e: i64) i64 {
+  return ((e * 1217359) >> 19) + 1
+}
+
+fn log10_pow2(e: i64) i64 {
+  return (e * 78913) >> 18
+}
+
+fn log10_pow5(e: i64) i64 {
+  return (e * 732923) >> 20
+}
+
+fn pow5_factor(value: u64) i64 {
+  count: i64 = 0
+  rest := value
+  for rest % 5 == 0 {
+    rest /= 5
+    count += 1
+  }
+  return count
+}
+
+fn multiple_of_pow5(value: u64, p: i64) bool {
+  return pow5_factor(value) >= p
+}
+
+fn multiple_of_pow2(value: u64, p: i64) bool {
+  return value & (#wrap((#cast(u64, 1) << #cast(u64, p)) - 1)) == 0
+}
+
+struct Decimal { mantissa: u64, exponent: i64 }
+
+// Ryu's d2d: the shortest decimal for a finite, nonzero binary64.
+fn shortest_decimal(mantissa_bits: u64, exponent_bits: u64) Decimal {
+  e2: i64 = 0
+  m2: u64 = 0
+  if exponent_bits == 0 {
+    e2 = 1 - 1023 - 52 - 2
+    m2 = mantissa_bits
+  }
+  else {
+    e2 = #cast(i64, exponent_bits) - 1023 - 52 - 2
+    m2 = 4503599627370496 | mantissa_bits
+  }
+  accept_bounds := m2 & 1 == 0
+  mv := 4 * m2
+  mm_shift: u64 = 0
+  if mantissa_bits != 0 || exponent_bits <= 1 {
+    mm_shift = 1
+  }
+  vr: u64 = 0
+  vp: u64 = 0
+  vm: u64 = 0
+  e10: i64 = 0
+  vm_trailing_zeros := false
+  vr_trailing_zeros := false
+  if e2 >= 0 {
+    q := log10_pow2(e2)
+    if e2 > 3 {
+      q -= 1
+    }
+    e10 = q
+    k := 125 + pow5_bits(q) - 1
+    i := q + k - e2
+    index := #cast(usize, q)
+    low := pow5_inverse_low[index]
+    high := pow5_inverse_high[index]
+    vr = multiply_shift(4 * m2, low, high, i)
+    vp = multiply_shift(4 * m2 + 2, low, high, i)
+    vm = multiply_shift(4 * m2 - 1 - mm_shift, low, high, i)
+    if q <= 21 {
+      if mv % 5 == 0 {
+        vr_trailing_zeros = multiple_of_pow5(mv, q)
+      }
+      else if accept_bounds {
+        vm_trailing_zeros = multiple_of_pow5(mv - 1 - mm_shift, q)
+      }
+      else if multiple_of_pow5(mv + 2, q) {
+        vp -= 1
+      }
+    }
+  }
+  else {
+    q := log10_pow5(-e2)
+    if -e2 > 1 {
+      q -= 1
+    }
+    e10 = q + e2
+    i := -e2 - q
+    k := pow5_bits(i) - 125
+    j := q - k
+    index := #cast(usize, i)
+    low := pow5_low[index]
+    high := pow5_high[index]
+    vr = multiply_shift(4 * m2, low, high, j)
+    vp = multiply_shift(4 * m2 + 2, low, high, j)
+    vm = multiply_shift(4 * m2 - 1 - mm_shift, low, high, j)
+    if q <= 1 {
+      vr_trailing_zeros = true
+      if accept_bounds {
+        vm_trailing_zeros = mm_shift == 1
+      }
+      else {
+        vp -= 1
+      }
+    }
+    else if q < 63 {
+      vr_trailing_zeros = multiple_of_pow2(mv, q)
+    }
+  }
+  removed: i64 = 0
+  last_removed: u64 = 0
+  output: u64 = 0
+  if vm_trailing_zeros || vr_trailing_zeros {
+    for vp / 10 > vm / 10 {
+      vm_trailing_zeros = vm_trailing_zeros && vm % 10 == 0
+      vr_trailing_zeros = vr_trailing_zeros && last_removed == 0
+      last_removed = vr % 10
+      vr /= 10
+      vp /= 10
+      vm /= 10
+      removed += 1
+    }
+    if vm_trailing_zeros {
+      for vm % 10 == 0 {
+        vr_trailing_zeros = vr_trailing_zeros && last_removed == 0
+        last_removed = vr % 10
+        vr /= 10
+        vp /= 10
+        vm /= 10
+        removed += 1
+      }
+    }
+    if vr_trailing_zeros && last_removed == 5 && vr % 2 == 0 {
+      last_removed = 4
+    }
+    output = vr
+    if (vr == vm && (!accept_bounds || !vm_trailing_zeros)) || last_removed >= 5 {
+      output += 1
+    }
+  }
+  else {
+    round_up := false
+    if vp / 100 > vm / 100 {
+      round_up = vr % 100 >= 50
+      vr /= 100
+      vp /= 100
+      vm /= 100
+      removed += 2
+    }
+    for vp / 10 > vm / 10 {
+      round_up = vr % 10 >= 5
+      vr /= 10
+      vp /= 10
+      vm /= 10
+      removed += 1
+    }
+    output = vr
+    if vr == vm || round_up {
+      output += 1
+    }
+  }
+  return Decimal{ mantissa: output, exponent: e10 + removed }
+}
+
+// Writes value as the shortest decimal that parses back to the same binary64.
+// Magnitudes from 1e-6 up to below 1e21 print in positional form ("0.001", "1500",
+// "123.25"); others print as digits with an exponent ("1e-7", "1.5e+300").
+// Integers have no fractional part. Non-finite values print "nan", "inf" and
+// "-inf". Negative zero prints "-0".
+pub fn write_f64_shortest(state: *Buffer, value: f64) bool {
+  start := state.length
+  bits := #bitcast(u64, value)
+  negative := bits >> 63 != 0
+  exponent_bits := (bits >> 52) & 2047
+  mantissa_bits := bits & 4503599627370495
+  if exponent_bits == 2047 {
+    if mantissa_bits != 0 {
+      return write(state, "nan")
+    }
+    if negative {
+      return write(state, "-inf")
+    }
+    return write(state, "inf")
+  }
+  if negative && !write_byte(state, '-') {
+    return false
+  }
+  if exponent_bits == 0 && mantissa_bits == 0 {
+    if !write_byte(state, '0') {
+      state.length = start
+      return false
+    }
+    return true
+  }
+  decimal := shortest_decimal(mantissa_bits, exponent_bits)
+  digits: [20]u8 = []
+  count: usize = 0
+  rest := decimal.mantissa
+  for rest != 0 {
+    digits[count] = #cast(u8, rest % 10) + '0'
+    rest /= 10
+    count += 1
+  }
+  // digits holds count digits in reverse; the value is 0.d1d2... * 10^point.
+  point := decimal.exponent + #cast(i64, count)
+  ok := true
+  if point > -6 && point <= 21 {
+    if point <= 0 {
+      ok = write(state, "0.") && write_padding(state, '0', #cast(usize, -point))
+      for i in 0..count {
+        ok = ok && write_byte(state, digits[count - 1 - i])
+      }
+    }
+    else {
+      for i in 0..count {
+        if #cast(i64, i) == point {
+          ok = ok && write_byte(state, '.')
+        }
+        ok = ok && write_byte(state, digits[count - 1 - i])
+      }
+      if point > #cast(i64, count) {
+        ok = ok && write_padding(state, '0', #cast(usize, point - #cast(i64, count)))
+      }
+    }
+  }
+  else {
+    ok = write_byte(state, digits[count - 1])
+    if count > 1 {
+      ok = ok && write_byte(state, '.')
+      for i in 1..count {
+        ok = ok && write_byte(state, digits[count - 1 - i])
+      }
+    }
+    shown := point - 1
+    ok = ok && write_byte(state, 'e')
+    if shown < 0 {
+      ok = ok && write_byte(state, '-')
+      shown = -shown
+    }
+    else {
+      ok = ok && write_byte(state, '+')
+    }
+    ok = ok && write_u64(state, #cast(u64, shown))
+  }
+  if !ok {
+    state.length = start
+    state.failed = true
+  }
+  return ok
+}
+
+// The shortest round-trip text of value in arena storage; see
+// write_f64_shortest. At most 24 bytes.
+pub fn f64_shortest(arena: *mem.Arena, value: f64) []u8 {
+  storage: [32]u8 = []
+  state := buffer(storage[..])
+  _ = write_f64_shortest(&state, value)
+  return copy_out(arena, bytes(&state))
+}
