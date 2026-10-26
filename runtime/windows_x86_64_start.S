@@ -343,7 +343,6 @@ kernel_lookup:
     thunk UpdateProcThreadAttribute
     thunk DeleteProcThreadAttributeList
     thunk GetEnvironmentVariableW
-    thunk CreateEventW
     thunk ResetEvent
     thunk ReadDirectoryChangesW
     thunk GetOverlappedResult
@@ -438,7 +437,6 @@ iat InitializeProcThreadAttributeList
 iat UpdateProcThreadAttribute
 iat DeleteProcThreadAttributeList
 iat GetEnvironmentVariableW
-iat CreateEventW
 iat ResetEvent
 iat ReadDirectoryChangesW
 iat GetOverlappedResult
@@ -528,7 +526,6 @@ hint InitializeProcThreadAttributeList
 hint UpdateProcThreadAttribute
 hint DeleteProcThreadAttributeList
 hint GetEnvironmentVariableW
-hint CreateEventW
 hint ResetEvent
 hint ReadDirectoryChangesW
 hint GetOverlappedResult
