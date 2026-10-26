@@ -1,0 +1,30 @@
+[
+  {
+    "test": "json-parser-loops",
+    "status": 0
+  },
+  {
+    "test": "json-string-fast",
+    "status": 0
+  },
+  {
+    "test": "json-read",
+    "status": 0
+  },
+  {
+    "test": "parser-contracts",
+    "status": 0
+  },
+  {
+    "test": "formatter",
+    "status": 0
+  },
+  {
+    "test": "std-lint",
+    "status": 0
+  },
+  {
+    "test": "documentation-snippets",
+    "status": 0
+  }
+]

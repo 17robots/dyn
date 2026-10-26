@@ -1,0 +1,259 @@
+{
+  "cpu": 2,
+  "warmups": 3,
+  "samples": 15,
+  "cases": {
+    "extended": {
+      "commands": {
+        "baseline": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/coalesce/dyn-baseline", "build", "/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/coalesce/projects/extended", "--release", "--opt-level", "3", "--cpu", "generic", "--no-cache", "--output", "/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/coalesce/cost-extended"],
+        "candidate": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/coalesce/dyn-candidate", "build", "/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/coalesce/projects/extended", "--release", "--opt-level", "3", "--cpu", "generic", "--no-cache", "--output", "/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/coalesce/cost-extended"]
+      },
+      "median_ms": {
+        "baseline": 19.758268,
+        "candidate": 21.481143
+      },
+      "samples_ms": {
+        "baseline": [19.707067, 19.604336, 19.718937, 19.758268, 19.712357, 19.730248, 19.713598, 20.483874, 20.10679, 20.191592, 20.367023, 19.813838, 19.461725, 19.838529, 19.779208],
+        "candidate": [21.195031, 21.537454, 21.780796, 21.111859, 21.327102, 21.435062, 21.592533, 21.324121, 22.039198, 22.067678, 21.481143, 21.893687, 21.17822, 21.18521, 21.497723]
+      },
+      "ratio": 1.0868849248159986,
+      "ci95": [1.0685075736395517, 1.0961072354164936],
+      "orders": [
+        ["baseline", "candidate"],
+        ["candidate", "baseline"],
+        ["candidate", "baseline"],
+        ["candidate", "baseline"],
+        ["baseline", "candidate"],
+        ["candidate", "baseline"],
+        ["baseline", "candidate"],
+        ["candidate", "baseline"],
+        ["baseline", "candidate"],
+        ["baseline", "candidate"],
+        ["candidate", "baseline"],
+        ["candidate", "baseline"],
+        ["candidate", "baseline"],
+        ["candidate", "baseline"],
+        ["candidate", "baseline"],
+        ["candidate", "baseline"],
+        ["baseline", "candidate"],
+        ["baseline", "candidate"]
+      ]
+    },
+    "apps": {
+      "commands": {
+        "baseline": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/coalesce/dyn-baseline", "build", "/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/coalesce/projects/apps", "--release", "--opt-level", "3", "--cpu", "generic", "--no-cache", "--output", "/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/coalesce/cost-apps"],
+        "candidate": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/coalesce/dyn-candidate", "build", "/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/coalesce/projects/apps", "--release", "--opt-level", "3", "--cpu", "generic", "--no-cache", "--output", "/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/coalesce/cost-apps"]
+      },
+      "median_ms": {
+        "baseline": 56.057743,
+        "candidate": 62.118948
+      },
+      "samples_ms": {
+        "baseline": [56.223955, 56.298996, 55.923782, 55.61946, 55.6384, 56.079754, 55.995683, 56.057743, 55.705071, 56.514878, 56.191255, 56.683609, 56.245116, 55.873162, 56.016803],
+        "candidate": [61.889976, 62.671353, 61.825335, 62.118948, 62.242729, 61.393792, 61.895846, 62.407291, 61.958686, 62.410321, 61.861186, 62.502811, 62.009657, 62.700543, 62.216889]
+      },
+      "ratio": 1.1055285030615418,
+      "ci95": [1.1026611061409306, 1.1132679922557709],
+      "orders": [
+        ["baseline", "candidate"],
+        ["baseline", "candidate"],
+        ["baseline", "candidate"],
+        ["candidate", "baseline"],
+        ["candidate", "baseline"],
+        ["candidate", "baseline"],
+        ["candidate", "baseline"],
+        ["baseline", "candidate"],
+        ["candidate", "baseline"],
+        ["candidate", "baseline"],
+        ["candidate", "baseline"],
+        ["baseline", "candidate"],
+        ["baseline", "candidate"],
+        ["candidate", "baseline"],
+        ["candidate", "baseline"],
+        ["baseline", "candidate"],
+        ["baseline", "candidate"],
+        ["candidate", "baseline"]
+      ]
+    },
+    "points": {
+      "commands": {
+        "baseline": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/coalesce/dyn-baseline", "build", "/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/coalesce/projects/points", "--release", "--opt-level", "3", "--cpu", "generic", "--no-cache", "--output", "/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/coalesce/cost-points"],
+        "candidate": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/coalesce/dyn-candidate", "build", "/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/coalesce/projects/points", "--release", "--opt-level", "3", "--cpu", "generic", "--no-cache", "--output", "/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/coalesce/cost-points"]
+      },
+      "median_ms": {
+        "baseline": 8.577947,
+        "candidate": 9.491705
+      },
+      "samples_ms": {
+        "baseline": [8.725438, 8.654198, 8.554657, 8.592427, 8.638668, 8.451396, 8.403656, 8.442046, 8.603197, 8.548777, 8.357425, 8.497496, 8.577947, 8.928971, 8.775259],
+        "candidate": [9.555086, 9.689737, 9.364894, 10.336223, 9.367514, 9.464765, 9.491705, 9.615256, 9.542626, 9.503435, 9.347134, 9.378655, 9.294274, 9.317103, 9.847118]
+      },
+      "ratio": 1.111671880082964,
+      "ci95": [1.0947129732962992, 1.1199055162011102],
+      "orders": [
+        ["baseline", "candidate"],
+        ["baseline", "candidate"],
+        ["baseline", "candidate"],
+        ["candidate", "baseline"],
+        ["baseline", "candidate"],
+        ["baseline", "candidate"],
+        ["candidate", "baseline"],
+        ["baseline", "candidate"],
+        ["baseline", "candidate"],
+        ["baseline", "candidate"],
+        ["baseline", "candidate"],
+        ["candidate", "baseline"],
+        ["baseline", "candidate"],
+        ["baseline", "candidate"],
+        ["candidate", "baseline"],
+        ["candidate", "baseline"],
+        ["candidate", "baseline"],
+        ["candidate", "baseline"]
+      ]
+    },
+    "sieve": {
+      "commands": {
+        "baseline": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/coalesce/dyn-baseline", "build", "/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/coalesce/projects/sieve", "--release", "--opt-level", "3", "--cpu", "generic", "--no-cache", "--output", "/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/coalesce/cost-sieve"],
+        "candidate": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/coalesce/dyn-candidate", "build", "/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/coalesce/projects/sieve", "--release", "--opt-level", "3", "--cpu", "generic", "--no-cache", "--output", "/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/coalesce/cost-sieve"]
+      },
+      "median_ms": {
+        "baseline": 8.492276,
+        "candidate": 9.417984
+      },
+      "samples_ms": {
+        "baseline": [8.337954, 8.787009, 8.528336, 8.432365, 8.400866, 8.526536, 8.353015, 8.431426, 8.694178, 8.585817, 8.492276, 8.353625, 8.716869, 8.355345, 8.609257],
+        "candidate": [9.462345, 9.390715, 9.245364, 9.593126, 9.308864, 9.450325, 9.385415, 9.537495, 9.560656, 9.623347, 9.332644, 9.609696, 9.235313, 9.417984, 9.230913]
+      },
+      "ratio": 1.1083428252692535,
+      "ci95": [1.0840759557315753, 1.1271807447807363],
+      "orders": [
+        ["candidate", "baseline"],
+        ["candidate", "baseline"],
+        ["candidate", "baseline"],
+        ["baseline", "candidate"],
+        ["baseline", "candidate"],
+        ["baseline", "candidate"],
+        ["baseline", "candidate"],
+        ["candidate", "baseline"],
+        ["baseline", "candidate"],
+        ["candidate", "baseline"],
+        ["candidate", "baseline"],
+        ["baseline", "candidate"],
+        ["baseline", "candidate"],
+        ["baseline", "candidate"],
+        ["baseline", "candidate"],
+        ["candidate", "baseline"],
+        ["baseline", "candidate"],
+        ["baseline", "candidate"]
+      ]
+    },
+    "fib": {
+      "commands": {
+        "baseline": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/coalesce/dyn-baseline", "build", "/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/coalesce/projects/fib", "--release", "--opt-level", "3", "--cpu", "generic", "--no-cache", "--output", "/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/coalesce/cost-fib"],
+        "candidate": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/coalesce/dyn-candidate", "build", "/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/coalesce/projects/fib", "--release", "--opt-level", "3", "--cpu", "generic", "--no-cache", "--output", "/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/coalesce/cost-fib"]
+      },
+      "median_ms": {
+        "baseline": 8.443906,
+        "candidate": 9.332703
+      },
+      "samples_ms": {
+        "baseline": [8.365075, 8.446146, 8.439266, 8.377166, 8.499756, 8.616967, 8.344595, 8.639478, 8.602827, 8.255824, 8.471416, 8.604557, 8.371195, 8.443906, 8.435455],
+        "candidate": [9.216263, 9.290853, 9.459354, 9.332703, 9.382795, 9.549536, 9.477735, 9.304654, 9.231583, 9.406035, 9.293653, 9.365474, 9.457955, 9.320104, 9.321974]
+      },
+      "ratio": 1.10388992342839,
+      "ci95": [1.0970601608987212, 1.1208740191386313],
+      "orders": [
+        ["baseline", "candidate"],
+        ["baseline", "candidate"],
+        ["candidate", "baseline"],
+        ["baseline", "candidate"],
+        ["baseline", "candidate"],
+        ["candidate", "baseline"],
+        ["baseline", "candidate"],
+        ["candidate", "baseline"],
+        ["candidate", "baseline"],
+        ["baseline", "candidate"],
+        ["candidate", "baseline"],
+        ["candidate", "baseline"],
+        ["baseline", "candidate"],
+        ["baseline", "candidate"],
+        ["candidate", "baseline"],
+        ["baseline", "candidate"],
+        ["candidate", "baseline"],
+        ["baseline", "candidate"]
+      ]
+    },
+    "hash": {
+      "commands": {
+        "baseline": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/coalesce/dyn-baseline", "build", "/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/coalesce/projects/hash", "--release", "--opt-level", "3", "--cpu", "generic", "--no-cache", "--output", "/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/coalesce/cost-hash"],
+        "candidate": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/coalesce/dyn-candidate", "build", "/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/coalesce/projects/hash", "--release", "--opt-level", "3", "--cpu", "generic", "--no-cache", "--output", "/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/coalesce/cost-hash"]
+      },
+      "median_ms": {
+        "baseline": 8.492846,
+        "candidate": 9.472366
+      },
+      "samples_ms": {
+        "baseline": [8.492846, 8.445296, 8.529927, 8.520796, 8.444375, 8.299354, 8.515197, 8.488716, 8.493016, 8.400585, 8.234014, 8.670608, 8.589267, 8.464246, 8.793639],
+        "candidate": [9.527906, 9.667367, 9.443255, 9.473285, 9.398765, 9.451455, 9.611976, 9.419205, 9.353874, 9.266014, 9.248113, 9.503195, 9.472366, 9.888099, 9.751887]
+      },
+      "ratio": 1.1117840398948642,
+      "ci95": [1.1070733665129842, 1.1288025397415937],
+      "orders": [
+        ["candidate", "baseline"],
+        ["candidate", "baseline"],
+        ["baseline", "candidate"],
+        ["candidate", "baseline"],
+        ["baseline", "candidate"],
+        ["candidate", "baseline"],
+        ["baseline", "candidate"],
+        ["candidate", "baseline"],
+        ["baseline", "candidate"],
+        ["candidate", "baseline"],
+        ["baseline", "candidate"],
+        ["baseline", "candidate"],
+        ["candidate", "baseline"],
+        ["baseline", "candidate"],
+        ["baseline", "candidate"],
+        ["candidate", "baseline"],
+        ["baseline", "candidate"],
+        ["baseline", "candidate"]
+      ]
+    },
+    "matmul": {
+      "commands": {
+        "baseline": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/coalesce/dyn-baseline", "build", "/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/coalesce/projects/matmul", "--release", "--opt-level", "3", "--cpu", "generic", "--no-cache", "--output", "/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/coalesce/cost-matmul"],
+        "candidate": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/coalesce/dyn-candidate", "build", "/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/coalesce/projects/matmul", "--release", "--opt-level", "3", "--cpu", "generic", "--no-cache", "--output", "/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/coalesce/cost-matmul"]
+      },
+      "median_ms": {
+        "baseline": 8.582577,
+        "candidate": 9.436225
+      },
+      "samples_ms": {
+        "baseline": [8.604397, 8.559237, 8.512377, 8.536477, 8.428456, 8.445706, 8.563887, 8.582577, 8.653918, 8.599017, 11.451093, 9.502625, 8.607637, 8.472976, 8.587197],
+        "candidate": [9.404585, 9.301043, 9.436225, 9.358004, 9.490065, 9.636516, 9.395734, 9.382114, 9.272493, 9.380104, 11.632785, 10.070431, 9.792848, 9.456965, 9.488876]
+      },
+      "ratio": 1.096237241663042,
+      "ci95": [1.0866673045739943, 1.1085299675989444],
+      "orders": [
+        ["candidate", "baseline"],
+        ["baseline", "candidate"],
+        ["candidate", "baseline"],
+        ["baseline", "candidate"],
+        ["baseline", "candidate"],
+        ["candidate", "baseline"],
+        ["candidate", "baseline"],
+        ["candidate", "baseline"],
+        ["candidate", "baseline"],
+        ["candidate", "baseline"],
+        ["candidate", "baseline"],
+        ["candidate", "baseline"],
+        ["candidate", "baseline"],
+        ["candidate", "baseline"],
+        ["baseline", "candidate"],
+        ["candidate", "baseline"],
+        ["baseline", "candidate"],
+        ["baseline", "candidate"]
+      ]
+    }
+  }
+}

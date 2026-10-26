@@ -1,0 +1,30 @@
+[
+  {
+    "variant": "baseline",
+    "command": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/json/dyn-release", "build", "/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/json/apps", "--release", "--opt-level", "3", "--cpu", "generic", "--no-cache", "--output", "/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/json/baseline-apps"],
+    "compiler_sha256": "e19afab4b479c86a18b36f27367bf51dc6f1646a768e1acdb26a5dbcafe25377",
+    "json_sha256": "1910c8c3cde2ed68d93c3c75c0be8813c17869aa260b29fc4d194c0e8c92cd2d",
+    "binary_sha256": "1aa77f8d2a63288446dff00ff9d84bf0a06c5e79683b36045e033d32a0a164ce"
+  },
+  {
+    "variant": "skip-local",
+    "command": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/json/dyn-release", "build", "/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/json/apps", "--release", "--opt-level", "3", "--cpu", "generic", "--no-cache", "--output", "/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/json/skip-local-apps"],
+    "compiler_sha256": "e19afab4b479c86a18b36f27367bf51dc6f1646a768e1acdb26a5dbcafe25377",
+    "json_sha256": "cdab5308ccc169113539f4946b521b5c967bfc33951c1044336b3a5d3c860376",
+    "binary_sha256": "c93125aea4af84446f4556f0bcc7dea2b068fb5ac104a28927c948f688b8887e"
+  },
+  {
+    "variant": "digit-inline",
+    "command": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/json/dyn-release", "build", "/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/json/apps", "--release", "--opt-level", "3", "--cpu", "generic", "--no-cache", "--output", "/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/json/digit-inline-apps"],
+    "compiler_sha256": "e19afab4b479c86a18b36f27367bf51dc6f1646a768e1acdb26a5dbcafe25377",
+    "json_sha256": "f7b1d03c68958b498184e26dbb152f5eb2785160c54dc6d5c39d505e876cc5f6",
+    "binary_sha256": "11bc72069a0019207d4761ce6915aedc20b6b9a70f9100a7ce64ee1bae6d677e"
+  },
+  {
+    "variant": "combined",
+    "command": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/json/dyn-release", "build", "/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/json/apps", "--release", "--opt-level", "3", "--cpu", "generic", "--no-cache", "--output", "/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/json/combined-apps"],
+    "compiler_sha256": "e19afab4b479c86a18b36f27367bf51dc6f1646a768e1acdb26a5dbcafe25377",
+    "json_sha256": "bf466a6d2aed93f01d4541751f0db1346fb0c1167566bc8d32f84b021809c552",
+    "binary_sha256": "32be23ec5f7cf08f43b253b93e8be21897804e32a3ed1631541685e9c38485f2"
+  }
+]

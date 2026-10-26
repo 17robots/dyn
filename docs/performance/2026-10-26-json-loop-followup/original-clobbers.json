@@ -1,0 +1,283 @@
+{
+  "parent": "59104604",
+  "cpu": 2,
+  "warmups": 3,
+  "samples": 25,
+  "cases": {
+    "mask-map": {
+      "commands": {
+        "before": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/map-power2/extended-baseline", "map", "65536", "64", "912345"],
+        "current": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/map-power2-mask/extended-mask", "map", "65536", "64", "912345"]
+      },
+      "hashes": {
+        "before": "5aa967276c6aaa72c41f352177c92a37d4e27bccd8abe734678735f1777a0125",
+        "current": "70e1282fd0429dcc99974faa6de68b3c87cd0e018b16a2158e798688ab07529a"
+      },
+      "expected": "2336869060870\n",
+      "samples_ms": {
+        "before": [38.98401, 38.792709, 39.244923, 38.9291, 38.88915, 39.164752, 39.121342, 38.803909, 39.247703, 39.301533, 39.218912, 39.05417, 39.595955, 39.251853, 39.062081, 39.175182, 39.255163, 39.457315, 38.96896, 39.215572, 39.284053, 39.107982, 39.443354, 39.263333, 39.202682],
+        "current": [39.651186, 39.536615, 39.549695, 39.387723, 39.453934, 39.425644, 39.440974, 39.547765, 39.440774, 39.533195, 39.727227, 39.610096, 39.581885, 39.738236, 39.632816, 39.617645, 39.595896, 39.877107, 39.614106, 39.735207, 39.596305, 39.786107, 39.882128, 39.803647, 39.728077]
+      },
+      "median_ms": {
+        "before": 39.202682,
+        "current": 39.610096
+      },
+      "ratios": {
+        "current": {
+          "median": 1.0123913385694174,
+          "ci95": [1.0086799537681197, 1.0142347411300765]
+        }
+      },
+      "orders": [
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"]
+      ]
+    },
+    "mask-utf8": {
+      "commands": {
+        "before": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/map-power2/extended-baseline", "utf8", "262144", "128", "912345"],
+        "current": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/map-power2-mask/extended-mask", "utf8", "262144", "128", "912345"]
+      },
+      "hashes": {
+        "before": "5aa967276c6aaa72c41f352177c92a37d4e27bccd8abe734678735f1777a0125",
+        "current": "70e1282fd0429dcc99974faa6de68b3c87cd0e018b16a2158e798688ab07529a"
+      },
+      "expected": "18749879746560\n",
+      "samples_ms": {
+        "before": [51.91708, 52.220903, 51.768498, 52.136272, 52.434155, 51.651768, 51.811059, 51.657088, 51.589237, 51.877089, 51.817029, 51.424035, 51.621268, 51.715498, 51.573857, 51.832749, 51.717938, 51.727148, 51.737379, 51.670307, 52.180613, 52.708006, 52.005721, 51.678618, 52.026191],
+        "current": [51.601647, 52.053301, 51.567157, 51.828419, 52.372404, 51.766328, 51.629627, 52.245363, 51.788499, 51.403706, 51.847549, 51.480097, 52.308433, 52.187882, 51.619637, 51.788909, 51.641548, 51.97171, 51.791928, 52.016191, 52.075851, 51.90725, 51.777418, 51.8623, 51.773288]
+      },
+      "median_ms": {
+        "before": 51.768498,
+        "current": 51.791928
+      },
+      "ratios": {
+        "current": {
+          "median": 0.9991542026837125,
+          "ci95": [0.9964981993516094, 1.002217929887705]
+        }
+      },
+      "orders": [
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"]
+      ]
+    },
+    "mask-allocate": {
+      "commands": {
+        "before": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/map-power2/extended-baseline", "allocate", "8192", "256", "912345"],
+        "current": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/map-power2-mask/extended-mask", "allocate", "8192", "256", "912345"]
+      },
+      "hashes": {
+        "before": "5aa967276c6aaa72c41f352177c92a37d4e27bccd8abe734678735f1777a0125",
+        "current": "70e1282fd0429dcc99974faa6de68b3c87cd0e018b16a2158e798688ab07529a"
+      },
+      "expected": "9007407145418752\n",
+      "samples_ms": {
+        "before": [26.795177, 26.946938, 26.948199, 26.994219, 26.982708, 27.042049, 26.805048, 26.789876, 27.037379, 27.014608, 26.968299, 26.823178, 26.960589, 26.950458, 26.843357, 26.814937, 26.953108, 27.028009, 27.023399, 26.983388, 27.012399, 27.005629, 26.986769, 27.022789, 27.016829],
+        "current": [26.797497, 26.801997, 26.817577, 26.956778, 26.807508, 26.877547, 26.786667, 26.779948, 26.792766, 27.00955, 27.088409, 26.764956, 26.760457, 26.797597, 26.958839, 26.776547, 26.898528, 27.018299, 27.013269, 26.759927, 26.969599, 26.827917, 26.952718, 26.981019, 27.052089]
+      },
+      "median_ms": {
+        "before": 26.982708,
+        "current": 26.827917
+      },
+      "ratios": {
+        "current": {
+          "median": 0.9984542676183424,
+          "ci95": [0.994621244165107, 0.9996251396798752]
+        }
+      },
+      "orders": [
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"]
+      ]
+    },
+    "mask-jsonl": {
+      "commands": {
+        "before": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/map-power2/apps-baseline", "report", "/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/apps/events.jsonl"],
+        "current": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/map-power2-mask/apps-mask", "report", "/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/apps/events.jsonl"]
+      },
+      "hashes": {
+        "before": "a968b28ee89072a7045850f356440de7a4dc801dd28bb3b15952ed17c18daed0",
+        "current": "62feb8433c64d7c221c5aa6f64a98749bbb681c0287ae803a477b338defaa795"
+      },
+      "expected": "{\"records\":60000,\"bytes\":1965950512,\"latency_us\":7440820000,\"errors\":3530,\"services\":[[3750,122186000,465070000,221],[3750,122638310,465008750,221],[3750,123090620,464947500,220],[3750,123211250,465026250,221],[3750,122549448,464965000,220],[3750,123063294,465293750,221],[3750,123515604,464982500,220],[3750,122522122,465061250,221],[3750,122974432,465000000,221],[3750,123361206,465188750,220],[3750,122367724,465017500,221],[3750,122820034,465206250,220],[3750,123333880,465035000,221],[3750,122278862,464973750,220],[3750,122792708,465052500,221],[3750,123245018,464991250,221]]}\n",
+      "samples_ms": {
+        "before": [37.911972, 37.79056, 37.83008, 38.271405, 37.77334, 37.912762, 38.064243, 37.458328, 37.7072, 37.658589, 37.674269, 37.760989, 38.064513, 38.593257, 37.992502, 37.82244, 37.593029, 38.631248, 37.497257, 37.552628, 37.77601, 37.870721, 37.78199, 37.88685, 37.72064],
+        "current": [37.665249, 37.72225, 37.76006, 37.509427, 37.557578, 37.509528, 37.914311, 37.682889, 37.659759, 37.461947, 37.595888, 37.564638, 37.8, 37.8417, 37.78127, 37.623648, 37.74734, 37.864731, 37.717519, 37.363437, 37.613848, 37.667099, 37.750359, 37.682979, 37.75407]
+      },
+      "median_ms": {
+        "before": 37.79056,
+        "current": 37.682889
+      },
+      "ratios": {
+        "current": {
+          "median": 0.9948001626758239,
+          "ci95": [0.9944401661148823, 0.9981490919395359]
+        }
+      },
+      "orders": [
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"]
+      ]
+    },
+    "mask-search": {
+      "commands": {
+        "before": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/map-power2/apps-baseline", "search", "/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/apps/documents"],
+        "current": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/map-power2-mask/apps-mask", "search", "/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/apps/documents"]
+      },
+      "hashes": {
+        "before": "a968b28ee89072a7045850f356440de7a4dc801dd28bb3b15952ed17c18daed0",
+        "current": "62feb8433c64d7c221c5aa6f64a98749bbb681c0287ae803a477b338defaa795"
+      },
+      "expected": "{\"files\":1024,\"bytes\":64292352,\"lines\":262144,\"matching_lines\":5689,\"matching_files\":910}\n",
+      "samples_ms": {
+        "before": [9.753822, 9.786173, 9.851773, 9.934085, 9.371519, 9.012346, 8.911525, 8.920445, 8.908715, 8.966916, 8.939165, 8.932276, 8.927506, 8.944166, 8.907286, 8.946826, 9.062297, 9.052076, 8.948096, 8.909066, 8.923786, 8.951436, 8.915316, 8.925435, 8.921665],
+        "current": [9.684382, 9.794343, 9.797753, 10.373108, 9.809433, 8.920036, 8.929066, 8.923645, 8.907646, 8.879126, 8.965745, 8.915036, 8.900015, 8.912845, 8.888465, 8.984176, 8.917046, 8.934286, 8.885575, 8.886105, 8.879375, 8.977476, 8.939556, 8.880436, 8.883886]
+      },
+      "median_ms": {
+        "before": 8.944166,
+        "current": 8.920036
+      },
+      "ratios": {
+        "current": {
+          "median": 0.9974227376921443,
+          "ci95": [0.9949583409660144, 1.0008348513765288]
+        }
+      },
+      "orders": [
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"]
+      ]
+    }
+  }
+}
