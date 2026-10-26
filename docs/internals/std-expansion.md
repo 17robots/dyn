@@ -88,6 +88,28 @@ Pure Dyn, no platform calls:
 - Audio formats: WAV read and write.
 - Data formats: TOML, CBOR, MessagePack, protobuf wire format.
 
+### GUI foundation progress (2026-10-26)
+
+The first GUI slice is implemented locally: `std/ui` emits caller-arena-owned
+rectangle and text commands with clip snapshots, stable IDs, pointer capture,
+forward keyboard focus, buttons, checkboxes and integer sliders. `std/ui/software`
+executes those commands into caller RGBA storage using a caller-supplied bitmap
+glyph callback. This provides a complete headless rendering path without SDL or
+other native dependencies. `tests/ui-demo` produces an inspected 480x240 PNG.
+
+`tests/ui-results.py` checks interaction sequences, clipping, extreme coordinates,
+text ownership, straight-alpha blending, glyph coverage, UTF-8 recovery, invalid
+inputs and frame lifecycle errors. Debug/release and emulated Linux ARM64,
+RISC-V64, Windows x86-64, and WASI execution pass; both macOS targets and Windows
+ARM64 cross-build. The PNG example produces identical bytes in debug/release.
+The WASI execution test exposed stale unreachable bodies after O3 inlining;
+Wasm now filters emitted functions by liveness. A separate O2/O3 regression checks
+allocation, exports, initialization and indirect callbacks.
+
+This does not complete the GUI phase: TrueType/font atlas work, general text
+layout, native windows/input and GPU renderers remain open. Software text currently
+uses code-point advances and newline handling without kerning, wrapping or shaping.
+
 ## Phase 4: vendor graphics and windowing without SDL
 
 - `vendor/window`: native windows and input for X11, Wayland, Win32 and

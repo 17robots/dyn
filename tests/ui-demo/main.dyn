@@ -1,0 +1,115 @@
+// Headless UI example. Writes ui-demo.png in the working directory.
+// The tiny bitmap alphabet is example-owned; no platform font service is used.
+use "std/ui" ui
+use "std/ui/software" software
+use "std/mem" mem
+use "std/image/png" png
+use "std/fs" fs
+use "std/fmt" fmt
+patterns: [38][7]u8 = [
+  [14, 17, 17, 31, 17, 17, 17],
+  [30, 17, 17, 30, 17, 17, 30],
+  [14, 17, 16, 16, 16, 17, 14],
+  [30, 17, 17, 17, 17, 17, 30],
+  [31, 16, 16, 30, 16, 16, 31],
+  [31, 16, 16, 30, 16, 16, 16],
+  [14, 17, 16, 23, 17, 17, 15],
+  [17, 17, 17, 31, 17, 17, 17],
+  [14, 4, 4, 4, 4, 4, 14],
+  [7, 2, 2, 2, 18, 18, 12],
+  [17, 18, 20, 24, 20, 18, 17],
+  [16, 16, 16, 16, 16, 16, 31],
+  [17, 27, 21, 21, 17, 17, 17],
+  [17, 25, 21, 19, 17, 17, 17],
+  [14, 17, 17, 17, 17, 17, 14],
+  [30, 17, 17, 30, 16, 16, 16],
+  [14, 17, 17, 17, 21, 18, 13],
+  [30, 17, 17, 30, 20, 18, 17],
+  [15, 16, 16, 14, 1, 1, 30],
+  [31, 4, 4, 4, 4, 4, 4],
+  [17, 17, 17, 17, 17, 17, 14],
+  [17, 17, 17, 17, 17, 10, 4],
+  [17, 17, 17, 21, 21, 27, 17],
+  [17, 17, 10, 4, 10, 17, 17],
+  [17, 17, 10, 4, 4, 4, 4],
+  [31, 1, 2, 4, 8, 16, 31],
+  [14, 17, 19, 21, 25, 17, 14],
+  [4, 12, 4, 4, 4, 4, 14],
+  [14, 17, 1, 2, 4, 8, 31],
+  [30, 1, 1, 14, 1, 1, 30],
+  [2, 6, 10, 18, 31, 2, 2],
+  [31, 16, 16, 30, 1, 1, 30],
+  [14, 16, 16, 30, 17, 17, 14],
+  [31, 1, 2, 4, 8, 8, 8],
+  [14, 17, 17, 14, 17, 17, 14],
+  [14, 17, 17, 15, 1, 1, 14],
+  [14, 17, 1, 2, 4, 0, 4],
+  [0, 0, 0, 0, 0, 0, 0]
+]
+coverage: [140]u8
+fn glyph(data: rawptr, codepoint: u32) software.Glyph {
+  _ = data
+  index: usize = 36
+  if codepoint >= 65 && codepoint <= 90 {
+    index = #cast(usize, (codepoint - 65))
+  }
+  else if codepoint >= 48 && codepoint <= 57 {
+    index = 26 + #cast(usize, (codepoint - 48))
+  }
+  else if codepoint == 32 {
+    index = 37
+  }
+  for y in 0..14 {
+    for x in 0..10 {
+      alpha: u8 = 0
+      if ((patterns[index][y / 2] >> (4 - x / 2)) & 1) != 0 {
+        alpha = 255
+      }
+      coverage[y * 10 + x] = alpha
+    }
+  }
+  return software.Glyph{ pixels: coverage[..], width: 10, height: 14, stride: 10, advance: 12, y_offset: 2 }
+}
+fn main() {
+  frame := mem.Arena{}
+  output := mem.Arena{}
+  defer {
+    mem.arena_release(&output)
+    mem.arena_release(&frame)
+  }
+  context := ui.Context{}
+  viewport := ui.Rect{ width: 480, height: 240 }
+  count: i32 = 2
+  grid := true
+  // One press/release pair demonstrates the same input path as a window host.
+  ui.begin(&context, &frame, ui.Input{ x: 80, y: 110, pressed: true, released: true }, viewport)
+  ui.rectangle(&context, viewport, ui.Color{ r: 16, g: 20, b: 28, a: 255 })
+  ui.rectangle(&context, ui.Rect{ x: 16, y: 16, width: 448, height: 208 }, ui.Color{ r: 27, g: 33, b: 44, a: 255 })
+  ui.label(&context, ui.Rect{ x: 32, y: 30, width: 416, height: 24 }, "PORTABLE UI", context.style.foreground)
+  added := ui.button(&context, 1, ui.Rect{ x: 32, y: 100, width: 192, height: 32 }, "ADD", true)
+  if added.activated {
+    count += 1
+  }
+  reset := ui.button(&context, 2, ui.Rect{ x: 240, y: 100, width: 192, height: 32 }, "RESET", true)
+  if reset.activated {
+    count = 0
+  }
+  _ = ui.checkbox(&context, 3, ui.Rect{ x: 32, y: 152, width: 180, height: 24 }, "GRID", &grid, true)
+  _ = ui.slider(&context, 4, ui.Rect{ x: 240, y: 160, width: 192, height: 16 }, &count, 0, 10, true)
+  label_bytes: [32]u8 = []
+  label := fmt.buffer(label_bytes[..])
+  _ = fmt.write(&label, "COUNT ")
+  _ = fmt.write_i64(&label, #cast(i64, count))
+  ui.label(&context, ui.Rect{ x: 32, y: 64, width: 416, height: 24 }, fmt.bytes(&label), context.style.accent)
+  ui.end(&context)
+  pixels := mem.push_array(u8, &output, #cast(usize, 480 * 240 * 4))
+  surface := software.Surface{ pixels: pixels, width: 480, height: 240, stride: 480 * 4 }
+  rendered := software.render(&surface, ui.first(&context), software.Font{ glyph: glyph, line_height: 20 })
+  if !rendered.ok || count != 3 {
+    #panic("UI demo render")
+  }
+  encoded := png.encode(&output, pixels, 480, 240, 4)
+  if !encoded.ok || !fs.write_all("ui-demo.png", encoded.value).ok {
+    #panic("UI demo output")
+  }
+}

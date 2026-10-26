@@ -14,6 +14,9 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- `std/ui` adds a pure-Dyn immediate-mode core with buttons, checkboxes, integer sliders, pointer capture, keyboard focus and arena-owned draw commands. `std/ui/software` renders RGBA output with caller-provided glyph coverage; a headless PNG example is included.
+- Wasm emission now respects function liveness after O3 inlining, avoiding invalid bodies referencing replaced IR tables.
+
 - `std/simd` adds ten portable 128-bit lane types, per-lane wrapping arithmetic, masks and checked loads/stores, using existing O3 SIMD lowering where supported.
 - Generic instance symbols now distinguish nominal types from different modules, including nested compound types.
 

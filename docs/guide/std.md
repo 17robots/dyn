@@ -107,6 +107,8 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
 
 | Package | Purpose |
 | --- | --- |
+| `std/ui` | Immediate-mode buttons, checkboxes, integer sliders and arena-owned draw commands |
+| `std/ui/software` | RGBA software rendering with caller-provided bitmap glyphs |
 | `std/event` | Portable level-triggered readiness queues: epoll, kqueue and WSAPoll |
 | `std/net` | IPv4, IPv6 and Unix streams, IPv4 UDP multicast, polling and event queues |
 | `std/net/dns` | DNS queries into caller storage |
@@ -236,3 +238,57 @@ At O3, supported 32/64-bit integer add/subtract and bitwise loops use SSE2 on
 x86-64 or NEON on ARM64. Other operations and targets retain scalar code;
 float lanes do not currently promise hardware SIMD. These values are not native
 vector ABI types and must not be passed to C functions expecting vector types.
+
+### Immediate-mode UI
+
+`std/ui` is a portable UI core with no window system or native library dependency.
+Construct a `ui.Context{}` once, then call `begin`, submit widgets, and call `end`
+for each frame. The application supplies integer rectangle bounds and stable,
+nonzero widget IDs; IDs must be unique within a frame. `button`, `checkbox` and
+`slider` return responses containing activation, focus, hover, capture and change
+flags. Checkboxes and sliders update caller-owned values. Disabled widgets do
+not accept input. Sliders normalize enabled values into the supplied inclusive
+range, which must have distinct ordered endpoints.
+
+`Input` contains pointer coordinates and the current left-button state. Press
+and release edges are derived from consecutive frames; explicit `pressed` and
+`released` fields also preserve a complete click arriving between frames.
+Pointer capture persists while dragging, and release activates a button only
+inside its visible rectangle. A release without capture does not activate it.
+Tab advances focus in submission order, `activate` triggers a focused button or
+checkbox, and `left`/`right` adjust a focused slider. Window hosts supply these
+logical input events, including any desired keyboard repeat. Missing or disabled
+widgets lose focus and capture. Overlapping widgets give pointer priority to the
+first submitted widget. Submit non-overlapping controls when visual stacking
+would otherwise imply a different order.
+
+The frame arena owns command nodes and copies of label text. `first` and `next`
+iterate the list until `Kind.None`; misses return `nil_command`. Render only
+after `end` and before resetting the frame arena. Keep the context and application
+state outside that arena. `begin` discards the old list. Building outside a frame,
+starting a second frame, reading an unfinished list, or using ID zero panics in
+both debug and release. `push_clip` returns the previous clip; pass it to
+`pop_clip` to restore it. Each command snapshots its clip and color.
+
+`std/ui/software` renders this list into caller-owned straight-alpha RGBA bytes.
+A surface provides width, height and byte stride; its pixel slice must contain
+all full row strides, including padding. The renderer clips to the surface and
+the command bounds and performs source-over alpha blending. A caller-provided
+`Font` callback returns alpha-coverage glyphs, offsets and advances for Unicode
+code points. Invalid UTF-8 is replaced with U+FFFD. Glyph coverage may borrow
+scratch storage until the next callback. Text supports newlines and clipping;
+font loading, wrapping, kerning and shaping are separate work. Invalid surface,
+font or glyph data returns `InvalidInput`; a glyph error can leave earlier draws
+visible because rendering modifies the surface in place.
+
+The [headless example](../../tests/ui-demo/main.dyn) demonstrates controls,
+keyboard-capable state, bitmap text and PNG output. From the compiler directory:
+
+```sh
+build/dyn-release build tests/ui-demo --release --output build/ui-demo
+(cd build && ./ui-demo)
+```
+
+The example writes `build/ui-demo.png`. Its small bitmap alphabet belongs to the
+example; it is not a built-in std font. Native windows, OpenGL/Vulkan backends,
+TrueType rasterization and general text layout remain planned.
