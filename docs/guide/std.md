@@ -58,6 +58,7 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
 | `std/container/slot_map` | Generation handles into caller slot arrays |
 | `std/container/ring`, `bit_set` | Ring buffer and bit set over caller storage |
 | `std/sort` | In-place sort and binary search for any ordered element type |
+| `std/simd` | Portable 128-bit integer and floating-point lanes; supported O3 operations use SSE2/NEON |
 | `std/math` | Scalar arithmetic, bit helpers, concrete vectors, matrices, quaternions and ranges |
 | `std/math/big` | Arena-backed arbitrary-precision integers: arithmetic, division, shifts, bases, bytes, `power_mod` and `gcd` |
 | `std/hash` | Stable non-cryptographic hashes (FNV-1a, wyhash), CRC-32 and checksums |
@@ -215,3 +216,23 @@ Linux uses epoll, macOS uses kqueue, and Windows uses WSAPoll. Windows waits
 scan the registered sockets; this is not an IOCP operation-completion API.
 Timeouts let a caller run timers between batches; callbacks, timer scheduling,
 GUI message pumping and cross-thread wakeups remain application responsibilities.
+
+### Portable lanes
+
+`std/simd` provides `U8x16`, `I8x16`, `U16x8`, `I16x8`, `U32x4`, `I32x4`,
+`U64x2`, `I64x2`, `F32x4` and `F64x2`. Each is a 16-byte array alias with
+ordinary element alignment and indexing. Functions use the lane type as a
+prefix, for example `u32x4_add(a, b)`, `u32x4_splat(value)`, `u32x4_load(slice)`
+and `u32x4_store(slice, value)`. Loads and stores require a full lane value's
+worth of elements, panic on short slices, and leave any trailing elements alone.
+
+Integer add, subtract and multiply wrap independently per element in every
+build mode. Integer and/or/xor operate on bits. Equality returns all-one or
+zero masks per element; select takes bits from its first input where the mask
+is one and from its second input otherwise. Float add/subtract/multiply/divide
+use ordinary scalar float semantics.
+
+At O3, supported 32/64-bit integer add/subtract and bitwise loops use SSE2 on
+x86-64 or NEON on ARM64. Other operations and targets retain scalar code;
+float lanes do not currently promise hardware SIMD. These values are not native
+vector ABI types and must not be passed to C functions expecting vector types.

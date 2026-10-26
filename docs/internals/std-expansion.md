@@ -25,7 +25,7 @@ are removed from the gap list.
 Requested 2026-10-26. Lands before GUI, which needs the event loop and text
 segmentation.
 
-1. Portable event loop over epoll, kqueue and IOCP (`std/event`).
+1. Portable readiness queues over epoll, kqueue and WSAPoll (`std/event`).
 2. Job system: fixed workers, task queue over caller storage, wait groups
    (`std/thread/pool`).
 3. Signals: interrupt and terminate handling, including the Windows console
@@ -39,6 +39,15 @@ segmentation.
 10. Portable 128-bit SIMD lanes (`std/simd`).
 11. Unix domain sockets, UDP multicast, IPv6 checks (`std/net`).
 12. Fuzzing support in `std/testing`.
+
+Status: implemented locally 2026-10-26. The twelve systems items now have
+registered regression coverage. `std/event` exposes level-triggered readiness,
+not asynchronous operation completion. Windows uses WSAPoll, with linear scans;
+IOCP requires a separate submitted-operation/buffer-lifetime API and remains
+future work. Queue timers, callbacks and GUI message pumping are not provided.
+`std/simd` uses existing O3 SSE2/NEON lowering for supported 32/64-bit integer
+operations and scalar fallbacks elsewhere; it does not add native vector FFI
+or hardware float SIMD. Native macOS and real Windows qualification are pending.
 
 ## Phase 2: embedded helpers
 

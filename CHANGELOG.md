@@ -14,6 +14,9 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- `std/simd` adds ten portable 128-bit lane types, per-lane wrapping arithmetic, masks and checked loads/stores, using existing O3 SIMD lowering where supported.
+- Generic instance symbols now distinguish nominal types from different modules, including nested compound types.
+
 - `std/event` adds caller-owned readiness queues over epoll, kqueue and WSAPoll, with tokens and deadline-preserving waits.
 
 - IPv6 and Unix stream helpers, IPv4 UDP multicast membership and options, and loopback regression coverage. Unix paths reject embedded NULs.
