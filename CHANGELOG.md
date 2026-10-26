@@ -12,10 +12,9 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
-## Unreleased
+## 0.1.0-preview.26
 
-Candidate upgrade guide: [0.1.0-preview.26](docs/migrations/0.1.0-preview.26.md).
-This section describes candidate changes; it does not announce a published release.
+Upgrade guide: [0.1.0-preview.26](docs/migrations/0.1.0-preview.26.md).
 
 - **Breaking arena API:** constructors return `*mem.Arena`, with the header in
   backing storage. Pass the pointer directly rather than `&arena`. Explicit
