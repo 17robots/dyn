@@ -105,7 +105,7 @@ fn widgets(arena: *mem.Arena) {
   check(value == 100 && !response.changed)
 }
 coverage: [4]u8 = [255, 128, 0, 255]
-struct Trace { calls: usize, first: u32, last: u32, invalid: bool, bearing: i32 }
+struct Trace { calls: usize, first: u32, last: u32, invalid: bool, bearing: i32, vertical: i32 }
 fn glyph(raw: rawptr, codepoint: u32) software.Glyph {
   trace := #cast(*Trace, raw)
   if trace.calls == 0 { trace.first = codepoint }
@@ -113,7 +113,7 @@ fn glyph(raw: rawptr, codepoint: u32) software.Glyph {
   trace.last = codepoint
   pixels: []const u8 = coverage[..]
   if trace.invalid { pixels = pixels[..3] }
-  return software.Glyph{ pixels: pixels, width: 2, height: 2, stride: 2, advance: 3, x_offset: trace.bearing }
+  return software.Glyph{ pixels: pixels, width: 2, height: 2, stride: 2, advance: 3, x_offset: trace.bearing, y_offset: trace.vertical }
 }
 fn raster(arena: *mem.Arena) {
   context := ui.Context{}
@@ -150,6 +150,20 @@ fn raster(arena: *mem.Arena) {
   ui.end(&context)
   check(software.render(&surface, ui.first(&context), font).ok)
   check(bytes[27] == 128 && bytes[47] == 255 && bytes[23] == 0)
+  for i in 0..80 { bytes[i] = 0 }
+  trace = Trace{ bearing: -1 }
+  ui.begin(&context, arena, ui.Input{}, ui.Rect{ width: 4, height: 4 })
+  ui.label(&context, ui.Rect{ width: 3, height: 3 }, "AA", ui.Color{ a: 255 })
+  ui.end(&context)
+  check(software.render(&surface, ui.first(&context), font).ok)
+  check(bytes[11] == 255)
+  for i in 0..80 { bytes[i] = 0 }
+  trace = Trace{ vertical: -1 }
+  ui.begin(&context, arena, ui.Input{}, ui.Rect{ width: 4, height: 4 })
+  ui.label(&context, ui.Rect{ width: 2, height: 3 }, "A\nA", ui.Color{ a: 255 })
+  ui.end(&context)
+  check(software.render(&surface, ui.first(&context), font).ok)
+  check(bytes[43] == 255)
   trace = Trace{}
   ui.begin(&context, arena, ui.Input{}, ui.Rect{ width: 4, height: 4 })
   ui.label(&context, ui.Rect{ width: 4, height: 4 }, "\xff\xc3\xa9", ui.Color{ a: 255 })

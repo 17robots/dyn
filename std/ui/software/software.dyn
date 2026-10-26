@@ -63,11 +63,12 @@ fn text(surface: *Surface, command: *const ui.Command, clip: ui.Rect, font: Font
     if codepoint == 10 {
       x = #cast(i64, command.bounds.x)
       y += #cast(i64, font.line_height)
-      if y >= bottom { break }
+      if y >= bottom + 2147483648 { break }
       continue
     }
-    // Do not grow a pen without bound for a line whose remainder is clipped.
-    if x >= right { continue }
+    // Beyond this bound, even the most negative i32 bearing cannot reach
+    // the clip. Nonnegative advances make it safe to skip the rest of the line.
+    if x >= right + 2147483648 { continue }
     glyph := font.glyph(font.data, codepoint)
     if !valid_glyph(&glyph) { return Result{ kind: errors.Kind.InvalidInput } }
     left := x + #cast(i64, glyph.x_offset)
