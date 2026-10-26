@@ -116,8 +116,24 @@ fn main() {
                 '--emit-object', '--no-link', '--output', kept)
             assert b'unused_public_marker' in Path(str(kept)+'.o').read_bytes()
 
+    # Libraries found through #link are C providers, not callers of Dyn
+    # exports by name, so they must not keep public functions alive.
+    if platform.system() == 'Linux' and platform.machine() == 'x86_64':
+        (module/'main.dyn').write_text('''#link("c")
+extern fn c_abs "abs"(value: i32) i32
+pub fn unused_public_marker() u64 { return 77 }
+fn main() {
+  if c_abs(-3) != 3 { #panic("abs") }
+}
+''')
+        output = work/'discovered-link'
+        built = run(DYN, 'build', module, '--release', '--no-cache', '--timings', '--output', output)
+        run(output)
+        assert 'timing detail reachability ' in built.stderr
+        assert b'unused_public_marker' not in output.read_bytes()
+
     (module/'main.dyn').write_text('fn unreachable_error() u64 { return true }\nfn main() {}\n')
     result = subprocess.run([str(DYN), 'build', str(module), '--release', '--no-cache',
                              '--output', str(work/'invalid')], capture_output=True, text=True, timeout=30)
     assert result.returncode != 0 and 'error' in result.stderr, result.stderr
-print('PASS seven-target reachability: exports, FFI/address callbacks, recursion, deferred cleanup, global initialization and dead-source diagnostics')
+print('PASS seven-target reachability: exports, FFI/address callbacks, recursion, deferred cleanup, global initialization, #link providers and dead-source diagnostics')

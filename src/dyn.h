@@ -96,6 +96,7 @@ typedef struct {
   uint64_t compiler_hash; /* Command-scoped cache identity, inherited by workers. */
   const char *link_inputs[64];
   size_t link_input_count;
+  size_t explicit_link_input_count; /* --link inputs; #link discoveries follow them. */
 } DynOptions;
 typedef struct {
   size_t generated_start, generated_end, original_start, original_end;
