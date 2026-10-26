@@ -471,6 +471,11 @@ static void guard(WG *g) {
   end(g);
 }
 static void branch(WG *g, unsigned depth, bool cond) {
+  if (depth >= g->depth) {
+    fprintf(stderr, "error: invalid Wasm branch in %s: target %u at depth %u\n", g->function ? g->function->name : "initializer", depth, g->depth);
+    g->failed = true;
+    return;
+  }
   op(g, cond ? 0x0d : 0x0c);
   wu(&g->body, g->depth - depth - 1);
 }
@@ -1674,6 +1679,13 @@ static void finishbody(WG *g) {
 }
 #include "codegen_wasm_asm.inc"
 
+/* Inlining rebuilds only live bodies and their local/child tables. Dead
+   function metadata still refers to the original tables and must not be emitted. */
+static bool wasm_function_live(const DynIrProgram *ir, size_t i) {
+  return (!ir->live.functions || ir->live.functions[i]) &&
+         !(ir->functions[i].generic && !ir->functions[i].instance);
+}
+
 static int wasm_object_impl(const DynSource *source, const DynIrProgram *ir,
                             const char *path, bool report, bool assembly) {
   WG g = {.ir = ir, .source = source};
@@ -1694,7 +1706,7 @@ static int wasm_object_impl(const DynSource *source, const DynIrProgram *ir,
   unsigned imported = 0, defined = 0;
   for (size_t i = 0; i < nf; i++) {
     const DynIrFunction *f = &ir->functions[i];
-    if (f->generic && !f->instance)
+    if (!wasm_function_live(ir, i))
       continue;
     if (f->foreign)
       g.fn_index[i] = imported++;
@@ -1704,7 +1716,7 @@ static int wasm_object_impl(const DynSource *source, const DynIrProgram *ir,
   unsigned next = imported;
   for (size_t i = 0; i < nf; i++) {
     const DynIrFunction *f = &ir->functions[i];
-    if (f->generic && !f->instance)
+    if (!wasm_function_live(ir, i))
       continue;
     if (!f->foreign)
       g.fn_index[i] = next++;
@@ -1712,7 +1724,7 @@ static int wasm_object_impl(const DynSource *source, const DynIrProgram *ir,
   g.init_index = next;
   for (size_t i = 0; i < nf; i++) {
     const DynIrFunction *f = &ir->functions[i];
-    if (f->generic && !f->instance)
+    if (!wasm_function_live(ir, i))
       continue;
     unsigned n = f->param_count + (f->variadic && !f->foreign ? 2 : 0);
     DynType *args = calloc(n + 1, sizeof(*args));
@@ -1787,7 +1799,7 @@ static int wasm_object_impl(const DynSource *source, const DynIrProgram *ir,
   wu(&g.code, defined + 1);
   for (size_t i = 0; i < nf; i++) {
     const DynIrFunction *f = &ir->functions[i];
-    if (f->foreign || (f->generic && !f->instance))
+    if (f->foreign || !wasm_function_live(ir, i))
       continue;
     bool sr =
         wagg(&g, f->return_type) && wflat(&g, f->return_type) == DYN_TYPE_VOID;
@@ -1852,8 +1864,7 @@ static int wasm_object_impl(const DynSource *source, const DynIrProgram *ir,
   wsec(&out, 2, &s);
   wu(&s, defined + 1);
   for (size_t i = 0; i < nf; i++)
-    if (!ir->functions[i].foreign &&
-        !(ir->functions[i].generic && !ir->functions[i].instance))
+    if (!ir->functions[i].foreign && wasm_function_live(ir, i))
       wu(&s, g.fn_type[i]);
   wu(&s, init_type);
   wsec(&out, 3, &s);
