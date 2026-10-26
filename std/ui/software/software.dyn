@@ -14,23 +14,39 @@ pub struct Glyph { pixels: []const u8, width: i32, height: i32, stride: usize, x
 pub struct Font { data: rawptr, glyph: fn(rawptr, u32) Glyph, line_height: i32 }
 pub struct Result { kind: errors.Kind, error: isize, ok: bool }
 fn valid_surface(surface: *const Surface) bool {
-  if surface.width < 0 || surface.height < 0 { return false }
-  if surface.width == 0 || surface.height == 0 { return true }
+  if surface.width < 0 || surface.height < 0 {
+    return false
+  }
+  if surface.width == 0 || surface.height == 0 {
+    return true
+  }
   width := #cast(usize, surface.width)
   height := #cast(usize, surface.height)
-  if width > #len(surface.pixels) / 4 { return false }
-  if surface.stride < width * 4 || surface.stride == 0 { return false }
+  if width > #len(surface.pixels) / 4 {
+    return false
+  }
+  if surface.stride < width * 4 || surface.stride == 0 {
+    return false
+  }
   return height <= #len(surface.pixels) / surface.stride
 }
 fn valid_glyph(glyph: *const Glyph) bool {
-  if glyph.width < 0 || glyph.height < 0 || glyph.advance < 0 { return false }
-  if glyph.width == 0 || glyph.height == 0 { return true }
-  if glyph.stride < #cast(usize, glyph.width) || glyph.stride == 0 { return false }
+  if glyph.width < 0 || glyph.height < 0 || glyph.advance < 0 {
+    return false
+  }
+  if glyph.width == 0 || glyph.height == 0 {
+    return true
+  }
+  if glyph.stride < #cast(usize, glyph.width) || glyph.stride == 0 {
+    return false
+  }
   return #cast(usize, glyph.height) <= #len(glyph.pixels) / glyph.stride
 }
 fn blend(surface: *Surface, x, y: i32, tint: ui.Color, coverage: u8) {
   alpha := (#cast(u32, tint.a) * #cast(u32, coverage) + 127) / 255
-  if alpha == 0 { return }
+  if alpha == 0 {
+    return
+  }
   at := #cast(usize, y) * surface.stride + #cast(usize, x) * 4
   old_alpha := #cast(u32, surface.pixels[at + 3])
   denominator := alpha * 255 + old_alpha * (255 - alpha)
@@ -44,11 +60,15 @@ fn blend(surface: *Surface, x, y: i32, tint: ui.Color, coverage: u8) {
 }
 fn rectangle(surface: *Surface, bounds: ui.Rect, tint: ui.Color) {
   for y in 0..bounds.height {
-    for x in 0..bounds.width { blend(surface, bounds.x + x, bounds.y + y, tint, 255) }
+    for x in 0..bounds.width {
+      blend(surface, bounds.x + x, bounds.y + y, tint, 255)
+    }
   }
 }
 fn text(surface: *Surface, command: *const ui.Command, clip: ui.Rect, font: Font) Result {
-  if font.glyph == nil || font.line_height <= 0 { return Result{ kind: errors.Kind.InvalidInput } }
+  if font.glyph == nil || font.line_height <= 0 {
+    return Result{ kind: errors.Kind.InvalidInput }
+  }
   x := #cast(i64, command.bounds.x)
   y := #cast(i64, command.bounds.y)
   right := #cast(i64, command.bounds.x) + #cast(i64, command.bounds.width)
@@ -58,19 +78,29 @@ fn text(surface: *Surface, command: *const ui.Command, clip: ui.Rect, font: Font
     decoded := utf8.decode(command.text, offset)
     offset += decoded.width
     codepoint := decoded.codepoint
-    if !decoded.ok { codepoint = 65533 }
-    if codepoint == 13 { continue }
+    if !decoded.ok {
+      codepoint = 65533
+    }
+    if codepoint == 13 {
+      continue
+    }
     if codepoint == 10 {
       x = #cast(i64, command.bounds.x)
       y += #cast(i64, font.line_height)
-      if y >= bottom + 2147483648 { break }
+      if y >= bottom + 2147483648 {
+        break
+      }
       continue
     }
     // Beyond this bound, even the most negative i32 bearing cannot reach
     // the clip. Nonnegative advances make it safe to skip the rest of the line.
-    if x >= right + 2147483648 { continue }
+    if x >= right + 2147483648 {
+      continue
+    }
     glyph := font.glyph(font.data, codepoint)
-    if !valid_glyph(&glyph) { return Result{ kind: errors.Kind.InvalidInput } }
+    if !valid_glyph(&glyph) {
+      return Result{ kind: errors.Kind.InvalidInput }
+    }
     left := x + #cast(i64, glyph.x_offset)
     top := y + #cast(i64, glyph.y_offset)
     // Intersect in i64: bearings may place the glyph outside i32 coordinates.
@@ -78,12 +108,20 @@ fn text(surface: *Surface, command: *const ui.Command, clip: ui.Rect, font: Font
     gy := top
     gr := left + #cast(i64, glyph.width)
     gb := top + #cast(i64, glyph.height)
-    if gx < #cast(i64, clip.x) { gx = #cast(i64, clip.x) }
-    if gy < #cast(i64, clip.y) { gy = #cast(i64, clip.y) }
+    if gx < #cast(i64, clip.x) {
+      gx = #cast(i64, clip.x)
+    }
+    if gy < #cast(i64, clip.y) {
+      gy = #cast(i64, clip.y)
+    }
     cr := #cast(i64, clip.x) + #cast(i64, clip.width)
     cb := #cast(i64, clip.y) + #cast(i64, clip.height)
-    if gr > cr { gr = cr }
-    if gb > cb { gb = cb }
+    if gr > cr {
+      gr = cr
+    }
+    if gb > cb {
+      gb = cb
+    }
     for gy < gb {
       px := gx
       for px < gr {
@@ -101,17 +139,25 @@ fn text(surface: *Surface, command: *const ui.Command, clip: ui.Rect, font: Font
 // surface data returns InvalidInput. A glyph failure may leave earlier draws
 // visible. This renderer clips text without wrapping, kerning or shaping.
 pub fn render(surface: *Surface, commands: *const ui.Command, font: Font) Result {
-  if !valid_surface(surface) { return Result{ kind: errors.Kind.InvalidInput } }
-  if surface.width == 0 || surface.height == 0 { return Result{ ok: true } }
+  if !valid_surface(surface) {
+    return Result{ kind: errors.Kind.InvalidInput }
+  }
+  if surface.width == 0 || surface.height == 0 {
+    return Result{ ok: true }
+  }
   viewport := ui.Rect{ width: surface.width, height: surface.height }
   command := commands
   for command.kind != ui.Kind.None {
     clip := ui.intersect(viewport, ui.intersect(command.clip, command.bounds))
     if clip.width > 0 && clip.height > 0 {
-      if command.kind == ui.Kind.Rectangle { rectangle(surface, clip, command.color) }
+      if command.kind == ui.Kind.Rectangle {
+        rectangle(surface, clip, command.color)
+      }
       else if command.kind == ui.Kind.Text {
         outcome := text(surface, command, clip, font)
-        if !outcome.ok { return outcome }
+        if !outcome.ok {
+          return outcome
+        }
       }
     }
     command = ui.next(command)
