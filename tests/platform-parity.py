@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""std/terminal and std/dynlib on every desktop kernel.
+"""std/terminal, std/dynlib and fs.map on every desktop kernel.
 
 Cross-builds both fixtures for Linux, macOS and Windows. Runs Linux natively
 (the terminal fixture also inside a 37x91 pseudo-terminal) and Windows under
@@ -47,16 +47,16 @@ def run_in_pty(program):
 
 with tempfile.TemporaryDirectory(prefix='dyn-platform-parity-') as directory:
     work = Path(directory)
-    for name in ['dynlib', 'terminal']:
+    for name in ['dynlib', 'terminal', 'map']:
         for target in TARGETS:
             # Linking libc for another Linux architecture needs its sysroot.
             if name == 'dynlib' and target == 'aarch64-linux':
                 continue
             build(name, target, work / f'{name}-{target}')
         if sys.platform == 'linux' and os.uname().machine == 'x86_64':
-            subprocess.run([str(work / f'{name}-x86_64-linux')], stdin=subprocess.DEVNULL, check=True, timeout=60)
+            subprocess.run([str(work / f'{name}-x86_64-linux')], stdin=subprocess.DEVNULL, cwd=work, check=True, timeout=60)
         if shutil.which('wine'):
-            subprocess.run(['wine', str(work / f'{name}-x86_64-windows')], stdin=subprocess.DEVNULL, check=True, timeout=120)
+            subprocess.run(['wine', str(work / f'{name}-x86_64-windows')], stdin=subprocess.DEVNULL, cwd=work, check=True, timeout=120)
     if sys.platform == 'linux' and os.uname().machine == 'x86_64':
         run_in_pty(work / 'terminal-x86_64-linux')
 print('platform parity: ok')

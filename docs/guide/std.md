@@ -85,7 +85,7 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
 | --- | --- |
 | `std/io` | `Reader`/`Writer` callbacks, standard streams and `print`/`println` |
 | `std/bufio` | Buffered readers and writers over caller storage |
-| `std/fs` | Files, directories, metadata, atomic writes and locks |
+| `std/fs` | Files, directories, metadata, atomic writes, locks and read-only mappings |
 | `std/fs/capability` | File access limited to a directory descriptor |
 | `std/fs/watch` | File watching: inotify, kqueue or ReadDirectoryChangesW |
 | `std/path` | Lexical slash-separated paths |

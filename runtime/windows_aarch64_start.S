@@ -217,6 +217,21 @@ dyn_terminal_buffer_info:
     adrp x16, __imp_GetConsoleScreenBufferInfo
     ldr x16, [x16, :lo12:__imp_GetConsoleScreenBufferInfo]
     br x16
+.global dyn_fs_map_create
+dyn_fs_map_create:
+    adrp x16, __imp_CreateFileMappingW
+    ldr x16, [x16, :lo12:__imp_CreateFileMappingW]
+    br x16
+.global dyn_fs_map_view
+dyn_fs_map_view:
+    adrp x16, __imp_MapViewOfFile
+    ldr x16, [x16, :lo12:__imp_MapViewOfFile]
+    br x16
+.global dyn_fs_map_release
+dyn_fs_map_release:
+    adrp x16, __imp_UnmapViewOfFile
+    ldr x16, [x16, :lo12:__imp_UnmapViewOfFile]
+    br x16
 .global dyn_win_load_library
 dyn_win_load_library:
     adrp x16, __imp_LoadLibraryA
@@ -622,6 +637,9 @@ kernel_lookup:
     thunk CloseHandle
     thunk WaitForSingleObject
     thunk SwitchToThread
+    thunk CreateFileMappingW
+    thunk MapViewOfFile
+    thunk UnmapViewOfFile
     thunk GetConsoleMode
     thunk SetConsoleMode
     thunk GetConsoleScreenBufferInfo
@@ -707,6 +725,9 @@ iat ExitProcess
 iat CloseHandle
 iat WaitForSingleObject
 iat SwitchToThread
+iat CreateFileMappingW
+iat MapViewOfFile
+iat UnmapViewOfFile
 iat GetConsoleMode
 iat SetConsoleMode
 iat GetConsoleScreenBufferInfo
@@ -793,6 +814,9 @@ hint ExitProcess
 hint CloseHandle
 hint WaitForSingleObject
 hint SwitchToThread
+hint CreateFileMappingW
+hint MapViewOfFile
+hint UnmapViewOfFile
 hint GetConsoleMode
 hint SetConsoleMode
 hint GetConsoleScreenBufferInfo

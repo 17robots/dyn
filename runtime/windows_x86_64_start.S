@@ -173,6 +173,9 @@ import_jump dyn_sync_single, WakeByAddressSingle
 import_jump dyn_sync_all, WakeByAddressAll
 import_jump dyn_sync_error, GetLastError
 import_jump dyn_win_yield, SwitchToThread
+import_jump dyn_fs_map_create, CreateFileMappingW
+import_jump dyn_fs_map_view, MapViewOfFile
+import_jump dyn_fs_map_release, UnmapViewOfFile
 import_jump dyn_terminal_get_mode, GetConsoleMode
 import_jump dyn_terminal_set_mode, SetConsoleMode
 import_jump dyn_terminal_buffer_info, GetConsoleScreenBufferInfo
@@ -300,6 +303,9 @@ kernel_lookup:
     thunk CloseHandle
     thunk WaitForSingleObject
     thunk SwitchToThread
+    thunk CreateFileMappingW
+    thunk MapViewOfFile
+    thunk UnmapViewOfFile
     thunk GetConsoleMode
     thunk SetConsoleMode
     thunk GetConsoleScreenBufferInfo
@@ -385,6 +391,9 @@ iat ExitProcess
 iat CloseHandle
 iat WaitForSingleObject
 iat SwitchToThread
+iat CreateFileMappingW
+iat MapViewOfFile
+iat UnmapViewOfFile
 iat GetConsoleMode
 iat SetConsoleMode
 iat GetConsoleScreenBufferInfo
@@ -471,6 +480,9 @@ hint ExitProcess
 hint CloseHandle
 hint WaitForSingleObject
 hint SwitchToThread
+hint CreateFileMappingW
+hint MapViewOfFile
+hint UnmapViewOfFile
 hint GetConsoleMode
 hint SetConsoleMode
 hint GetConsoleScreenBufferInfo
