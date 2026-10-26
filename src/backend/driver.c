@@ -3098,6 +3098,7 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
     for (unsigned i=0;i<4;++i) symbols[3+i]=(Elf64_Sym){.st_info=ELF64_ST_INFO(STB_LOCAL,STT_SECTION),.st_shndx=(Elf64_Half)(13+2*i)};
   }
   BackendDwarfOutput debug={0};
+  unsigned char *unwind_blob = NULL;
   struct timespec serialization = {0};
   bool serializing = false;
   size_t names = 1;
@@ -3329,7 +3330,7 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
   /* dyn_unwind: header {magic, size, text - &text field, text size,
      function count, landing count}, then 32-byte frame records and 8-byte
      landing records. Offsets are relative to this object's .text. */
-  unsigned char *unwind_blob = NULL; size_t unwind_bytes = 0; unsigned unwind_section = ctx->dwarf ? 21 : 13;
+  size_t unwind_bytes = 0; unsigned unwind_section = ctx->dwarf ? 21 : 13;
   if (ctx->unwind_tables && ctx->frame_record_count) {
     unwind_bytes = 24 + 32 * ctx->frame_record_count + 8 * ctx->landing_count;
     unwind_blob = calloc(unwind_bytes, 1);
@@ -3380,7 +3381,6 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
     memcpy(data+sh[unwind_section].sh_offset, unwind_blob, unwind_bytes);
     Elf64_Rela text_base={.r_offset=8,.r_info=ELF64_R_INFO(2,R_X86_64_PC32),.r_addend=0};
     memcpy(data+sh[unwind_section+1].sh_offset,&text_base,sizeof(text_base));
-    free(unwind_blob);
   }
   memcpy(data+h.e_shoff, sh, shbytes);
   /* No output is opened until every function has passed the whitelist. */
@@ -3392,6 +3392,7 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
   if (!ok) backend_report(ctx, "native backend: failed to write object\n");
   free(data);
 done:
+  free(unwind_blob);
   if (serializing) ctx->serialization_ms += backend_timing(&source->context, &serialization);
   backend_dwarf_output_free(&debug);
   dyn_location_free(&locations);
