@@ -232,6 +232,21 @@ dyn_fs_map_release:
     adrp x16, __imp_UnmapViewOfFile
     ldr x16, [x16, :lo12:__imp_UnmapViewOfFile]
     br x16
+.global dyn_signal_console_handler
+dyn_signal_console_handler:
+    adrp x16, __imp_SetConsoleCtrlHandler
+    ldr x16, [x16, :lo12:__imp_SetConsoleCtrlHandler]
+    br x16
+.global dyn_signal_create_event
+dyn_signal_create_event:
+    adrp x16, __imp_CreateEventW
+    ldr x16, [x16, :lo12:__imp_CreateEventW]
+    br x16
+.global dyn_signal_set_event
+dyn_signal_set_event:
+    adrp x16, __imp_SetEvent
+    ldr x16, [x16, :lo12:__imp_SetEvent]
+    br x16
 .global dyn_win_load_library
 dyn_win_load_library:
     adrp x16, __imp_LoadLibraryA
@@ -637,6 +652,9 @@ kernel_lookup:
     thunk CloseHandle
     thunk WaitForSingleObject
     thunk SwitchToThread
+    thunk SetConsoleCtrlHandler
+    thunk CreateEventW
+    thunk SetEvent
     thunk CreateFileMappingW
     thunk MapViewOfFile
     thunk UnmapViewOfFile
@@ -725,6 +743,9 @@ iat ExitProcess
 iat CloseHandle
 iat WaitForSingleObject
 iat SwitchToThread
+iat SetConsoleCtrlHandler
+iat CreateEventW
+iat SetEvent
 iat CreateFileMappingW
 iat MapViewOfFile
 iat UnmapViewOfFile
@@ -814,6 +835,9 @@ hint ExitProcess
 hint CloseHandle
 hint WaitForSingleObject
 hint SwitchToThread
+hint SetConsoleCtrlHandler
+hint CreateEventW
+hint SetEvent
 hint CreateFileMappingW
 hint MapViewOfFile
 hint UnmapViewOfFile

@@ -90,6 +90,7 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
 | `std/fs/watch` | File watching: inotify, kqueue or ReadDirectoryChangesW |
 | `std/path` | Lexical slash-separated paths |
 | `std/process` | Spawn, capture, pipes, environment and arguments |
+| `std/process/signal` | Interrupt, terminate and hangup signals as queued events, read with `poll` or `wait` |
 | `std/thread`, `std/sync` | Arena-backed thread handles; caller or owned stacks; portable synchronization |
 | `std/time` | Monotonic and realtime clocks, durations, deadlines and UTC ISO-8601 |
 | `std/terminal` | Raw mode, terminal size and key decoding |

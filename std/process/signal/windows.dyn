@@ -1,0 +1,120 @@
+#target(kernel: windows)
+
+use "std/sync" sync
+
+// Console control events arrive on a thread that Windows creates. The handler
+// records them and signals an auto-reset event; the program reads them with
+// poll or wait. For close, logoff and shutdown, Windows ends the process
+// shortly after the handler returns, so read Terminate promptly.
+extern fn console_handler "dyn_signal_console_handler"(handler: fn(u32) i32, add: i32) i32
+extern fn create_event "dyn_signal_create_event"(security: rawptr, manual: i32, initial: i32, name: *const u16) rawptr
+extern fn set_event "dyn_signal_set_event"(event: rawptr) i32
+extern fn wait_one "dyn_win_wait"(handle: rawptr, milliseconds: u32) u32
+extern fn close_handle "dyn_win_close_handle"(handle: rawptr) i32
+extern fn last_error "dyn_win_last_error"() u32
+
+const interrupt_bit: u32 = 1
+const terminate_bit: u32 = 2
+
+pending: sync.AtomicU32
+watched: sync.AtomicU32
+event_handle: sync.AtomicU64
+
+fn failure() WatchResult {
+  code := #cast(isize, last_error())
+  return WatchResult{ kind: errors.windows(code), error: code }
+}
+
+fn console_event(event: u32) i32 {
+  bit: u32 = 0
+  // CTRL_C 0 and CTRL_BREAK 1; CTRL_CLOSE 2, LOGOFF 5 and SHUTDOWN 6.
+  if event == 0 || event == 1 {
+    bit = interrupt_bit
+  }
+  else if event == 2 || event == 5 || event == 6 {
+    bit = terminate_bit
+  }
+  if bit == 0 || sync.load_u32(&watched) & bit == 0 {
+    return 0
+  }
+  for true {
+    seen := sync.load_u32(&pending)
+    if sync.compare_exchange_u32(&pending, seen, seen | bit) {
+      break
+    }
+  }
+  _ = set_event(#cast(rawptr, #cast(usize, sync.load_u64(&event_handle))))
+  return 1
+}
+
+fn platform_watch(set: Set) WatchResult {
+  bits: u32 = 0
+  if set.interrupt {
+    bits |= interrupt_bit
+  }
+  if set.terminate {
+    bits |= terminate_bit
+  }
+  if sync.load_u32(&watched) != 0 {
+    return WatchResult{ kind: errors.Kind.InvalidState }
+  }
+  event := create_event(nil, 0, 0, nil)
+  if event == nil {
+    return failure()
+  }
+  sync.store_u64(&event_handle, #cast(u64, #cast(usize, event)))
+  sync.store_u32(&pending, 0)
+  sync.store_u32(&watched, bits)
+  if console_handler(console_event, 1) == 0 {
+    failed := failure()
+    sync.store_u32(&watched, 0)
+    _ = close_handle(event)
+    return failed
+  }
+  return WatchResult{ value: Watch{ handle: #cast(isize, #cast(usize, event)), set: set, active: true }, ok: true }
+}
+
+fn take() Kind {
+  for true {
+    seen := sync.load_u32(&pending)
+    if seen == 0 {
+      return Kind.None
+    }
+    bit := interrupt_bit
+    if seen & interrupt_bit == 0 {
+      bit = terminate_bit
+    }
+    if sync.compare_exchange_u32(&pending, seen, seen & ~bit) {
+      if bit == interrupt_bit {
+        return Kind.Interrupt
+      }
+      return Kind.Terminate
+    }
+  }
+  return Kind.None
+}
+
+fn platform_next(state: *Watch, block: bool) Next {
+  for true {
+    kind := take()
+    if kind != Kind.None || !block {
+      return Next{ value: kind, ok: true }
+    }
+    // INFINITE; WAIT_FAILED is 0xffffffff.
+    if wait_one(#cast(rawptr, #cast(usize, state.handle)), 4294967295) == 4294967295 {
+      code := #cast(isize, last_error())
+      return Next{ kind: errors.windows(code), error: code }
+    }
+  }
+  return Next{}
+}
+
+fn platform_close(state: *Watch) Result {
+  if console_handler(console_event, 0) == 0 {
+    code := #cast(isize, last_error())
+    return Result{ kind: errors.windows(code), error: code }
+  }
+  sync.store_u32(&watched, 0)
+  _ = close_handle(#cast(rawptr, #cast(usize, state.handle)))
+  return Result{ ok: true }
+}

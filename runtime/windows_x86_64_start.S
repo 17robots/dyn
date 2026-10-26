@@ -173,6 +173,9 @@ import_jump dyn_sync_single, WakeByAddressSingle
 import_jump dyn_sync_all, WakeByAddressAll
 import_jump dyn_sync_error, GetLastError
 import_jump dyn_win_yield, SwitchToThread
+import_jump dyn_signal_console_handler, SetConsoleCtrlHandler
+import_jump dyn_signal_create_event, CreateEventW
+import_jump dyn_signal_set_event, SetEvent
 import_jump dyn_fs_map_create, CreateFileMappingW
 import_jump dyn_fs_map_view, MapViewOfFile
 import_jump dyn_fs_map_release, UnmapViewOfFile
@@ -303,6 +306,9 @@ kernel_lookup:
     thunk CloseHandle
     thunk WaitForSingleObject
     thunk SwitchToThread
+    thunk SetConsoleCtrlHandler
+    thunk CreateEventW
+    thunk SetEvent
     thunk CreateFileMappingW
     thunk MapViewOfFile
     thunk UnmapViewOfFile
@@ -391,6 +397,9 @@ iat ExitProcess
 iat CloseHandle
 iat WaitForSingleObject
 iat SwitchToThread
+iat SetConsoleCtrlHandler
+iat CreateEventW
+iat SetEvent
 iat CreateFileMappingW
 iat MapViewOfFile
 iat UnmapViewOfFile
@@ -480,6 +489,9 @@ hint ExitProcess
 hint CloseHandle
 hint WaitForSingleObject
 hint SwitchToThread
+hint SetConsoleCtrlHandler
+hint CreateEventW
+hint SetEvent
 hint CreateFileMappingW
 hint MapViewOfFile
 hint UnmapViewOfFile

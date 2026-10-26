@@ -1,0 +1,90 @@
+#target(kernel: linux)
+
+// Blocked signals are read from a signalfd. Numbers: SIGHUP 1, SIGINT 2,
+// SIGTERM 15.
+fn mask_of(set: Set) u64 {
+  mask: u64 = 0
+  if set.hangup {
+    mask |= 1
+  }
+  if set.interrupt {
+    mask |= 2
+  }
+  if set.terminate {
+    mask |= 16384
+  }
+  return mask
+}
+
+fn platform_watch(set: Set) WatchResult {
+  mask := mask_of(set)
+  code := #syscall(14, 0, &mask, 0, 8)
+  if code < 0 {
+    return WatchResult{ kind: errors.linux(code), error: code }
+  }
+  // SFD_NONBLOCK | SFD_CLOEXEC.
+  descriptor := #syscall(289, -1, &mask, 8, 526336)
+  if descriptor < 0 {
+    _ = #syscall(14, 1, &mask, 0, 8)
+    return WatchResult{ kind: errors.linux(descriptor), error: descriptor }
+  }
+  return WatchResult{ value: Watch{ handle: descriptor, set: set, active: true }, ok: true }
+}
+
+fn kind_of(number: u32) Kind {
+  if number == 1 {
+    return Kind.Hangup
+  }
+  if number == 2 {
+    return Kind.Interrupt
+  }
+  if number == 15 {
+    return Kind.Terminate
+  }
+  return Kind.None
+}
+
+fn platform_next(state: *Watch, block: bool) Next {
+  info: [128]u8 = []
+  for true {
+    count := #syscall(0, state.handle, &info[0], 128)
+    if count == 128 {
+      number := #cast(u32, info[0]) | #cast(u32, info[1]) << 8 | #cast(u32, info[2]) << 16 | #cast(u32, info[3]) << 24
+      return Next{ value: kind_of(number), ok: true }
+    }
+    if count == -11 {
+      if !block {
+        return Next{ ok: true }
+      }
+      // Wait for readability: ppoll on one descriptor with no timeout.
+      entry: [8]u8 = []
+      descriptor := #cast(u32, state.handle)
+      entry[0] = #cast(u8, descriptor & 255)
+      entry[1] = #cast(u8, descriptor >> 8 & 255)
+      entry[2] = #cast(u8, descriptor >> 16 & 255)
+      entry[3] = #cast(u8, descriptor >> 24)
+      entry[4] = 1
+      waited := #syscall(271, &entry[0], 1, 0, 0, 8)
+      if waited < 0 && waited != -4 {
+        return Next{ kind: errors.linux(waited), error: waited }
+      }
+    }
+    else if count != -4 {
+      if count >= 0 {
+        return Next{ kind: errors.Kind.System }
+      }
+      return Next{ kind: errors.linux(count), error: count }
+    }
+  }
+  return Next{}
+}
+
+fn platform_close(state: *Watch) Result {
+  code := #syscall(3, state.handle)
+  if code < 0 {
+    return Result{ kind: errors.linux(code), error: code }
+  }
+  mask := mask_of(state.set)
+  _ = #syscall(14, 1, &mask, 0, 8)
+  return Result{ ok: true }
+}

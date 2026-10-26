@@ -1,0 +1,61 @@
+use "std/errors" errors
+
+// Process signals as events, not handlers. watch routes the chosen signals to
+// a queue that the program reads at a safe point; no code runs inside a signal
+// handler. On Linux and macOS, call watch on the main thread before starting
+// other threads, so every thread inherits the blocked mask.
+//
+// Interrupt is SIGINT or Ctrl-C (and Ctrl-Break on Windows). Terminate is
+// SIGTERM, or a console close, logoff or shutdown event on Windows. Hangup is
+// SIGHUP and never arrives on Windows.
+pub enum Kind { None, Interrupt, Terminate, Hangup }
+
+// Kinds to watch.
+pub struct Set { interrupt: bool, terminate: bool, hangup: bool }
+
+// An open watch. handle is the readable descriptor (signalfd or kqueue) or the
+// Windows event handle, for use with an event loop.
+pub struct Watch { handle: isize = -1, set: Set, active: bool }
+pub struct WatchResult { value: Watch, kind: errors.Kind, error: isize, ok: bool }
+pub struct Next { value: Kind, kind: errors.Kind, error: isize, ok: bool }
+pub struct Result { kind: errors.Kind, error: isize, ok: bool }
+
+pub fn watch(set: Set) WatchResult {
+  if !set.interrupt && !set.terminate && !set.hangup {
+    return WatchResult{ kind: errors.Kind.InvalidInput }
+  }
+  return platform_watch(set)
+}
+
+// The next pending signal without blocking; value is None when nothing is
+// pending.
+pub fn poll(state: *Watch) Next {
+  if state == nil || !state.active {
+    return Next{ kind: errors.Kind.InvalidState }
+  }
+  return platform_next(state, false)
+}
+
+// Blocks until a watched signal arrives.
+pub fn wait(state: *Watch) Next {
+  if state == nil || !state.active {
+    return Next{ kind: errors.Kind.InvalidState }
+  }
+  return platform_next(state, true)
+}
+
+// Restores default signal behavior and releases the handle. Closing a zero
+// Watch succeeds.
+pub fn close(state: *Watch) Result {
+  if state == nil {
+    return Result{ kind: errors.Kind.InvalidInput }
+  }
+  if !state.active {
+    return Result{ ok: true }
+  }
+  closed := platform_close(state)
+  if closed.ok {
+    state.* = Watch{}
+  }
+  return closed
+}

@@ -14,6 +14,7 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- `std/process/signal` reads Ctrl-C, SIGTERM, SIGHUP and Windows console close events as queued events, with no code in signal handlers.
 - `fs.map` and `fs.unmap` give read-only views of whole files on Linux, macOS and Windows.
 - `std/hash` adds `wyhash` (final version 4.3) and `crc32_update`; `crc32` is table-driven.
 - `std/terminal` and `std/dynlib` now work on macOS and Windows as well as Linux.
