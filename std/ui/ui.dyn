@@ -27,6 +27,7 @@ pub struct Response { hovered: bool, held: bool, focused: bool, activated: bool,
 // Keep one context across frames. Copying a live context does not create a new
 // owner. IDs are caller-assigned, nonzero, stable, and unique within each frame.
 // Overlapping widgets give pointer priority to the first submitted widget.
+struct FocusTarget { bounds: Rect, clip: Rect, color: Color }
 pub struct Context {
   style: Style = Style{},
   active: u64, focused: u64, hot: u64,
@@ -35,6 +36,7 @@ pub struct Context {
   first: *Command, last: *Command, building: bool,
   active_seen: bool, focus_seen: bool, consumed: bool,
   first_focus: u64, focus_from: u64, focus_pending: bool, focus_moved: bool,
+  focus_target: FocusTarget, first_target: FocusTarget,
 }
 
 pub fn intersect(a, b: Rect) Rect {
@@ -121,9 +123,18 @@ pub fn end(context: *Context) {
   }
   if context.input.tab && !context.focus_moved {
     context.focused = context.first_focus
+    context.focus_target = context.first_target
   }
   else if !context.focus_seen {
     context.focused = 0
+  }
+  // Focus can move after an earlier widget was submitted. Draw one final ring
+  // after traversal so Tab never produces two rings or retains the old ring.
+  if context.focused != 0 {
+    saved := context.clip
+    context.clip = context.focus_target.clip
+    outline(context, context.focus_target.bounds, context.focus_target.color)
+    context.clip = saved
   }
   context.building = false
   context.arena = nil
@@ -205,6 +216,7 @@ fn interact(context: *Context, id: u64, bounds: Rect, enabled: bool) Response {
   }
   if context.first_focus == 0 {
     context.first_focus = id
+    context.first_target = FocusTarget{ bounds: bounds, clip: context.clip, color: context.style.accent }
   }
   if context.input.tab && !context.focus_moved {
     if context.focus_pending {
@@ -226,6 +238,9 @@ fn interact(context: *Context, id: u64, bounds: Rect, enabled: bool) Response {
     context.active = id
     context.focused = id
     context.focus_seen = true
+  }
+  if context.focused == id {
+    context.focus_target = FocusTarget{ bounds: bounds, clip: context.clip, color: context.style.accent }
   }
   captured := context.active == id
   if captured {
@@ -267,9 +282,6 @@ fn outline(context: *Context, bounds: Rect, tint: Color) {
 pub fn button(context: *Context, id: u64, bounds: Rect, text: []const u8, enabled: bool) Response {
   response := interact(context, id, bounds, enabled)
   rectangle(context, bounds, background(context, response, enabled))
-  if response.focused {
-    outline(context, bounds, context.style.accent)
-  }
   label(context, inset(bounds, context.style.padding), text, context.style.foreground)
   return response
 }
@@ -287,9 +299,6 @@ pub fn checkbox(context: *Context, id: u64, bounds: Rect, text: []const u8, valu
   rectangle(context, box, background(context, response, enabled))
   if value.* {
     rectangle(context, inset(box, context.style.padding), context.style.accent)
-  }
-  if response.focused {
-    outline(context, bounds, context.style.accent)
   }
   remaining := #cast(i64, bounds.width) - #cast(i64, size) - #cast(i64, context.style.padding)
   if remaining > 0 {
@@ -339,9 +348,6 @@ pub fn slider(context: *Context, id: u64, bounds: Rect, value: *i32, low, high: 
   if bounds.width > 0 {
     position := (current - #cast(i64, low)) * (#cast(i64, bounds.width) - 1) / range
     rectangle(context, Rect{ x: coordinate(#cast(i64, bounds.x) + position), y: bounds.y, width: 1, height: bounds.height }, context.style.accent)
-  }
-  if response.focused {
-    outline(context, bounds, context.style.accent)
   }
   return response
 }

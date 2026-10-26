@@ -21,6 +21,18 @@ fn pair(context: *ui.Context, arena: *mem.Arena, input: ui.Input) [2]ui.Response
   ui.end(context)
   return [a, b]
 }
+fn ring(context: *const ui.Context, x: i32) {
+  count: usize = 0
+  command := ui.first(context)
+  for command.kind != ui.Kind.None {
+    if command.kind == ui.Kind.Rectangle && command.color.r == 80 && command.color.g == 170 && command.color.b == 240 {
+      check(command.bounds.x >= x && command.bounds.x < x + 10)
+      count += 1
+    }
+    command = ui.next(command)
+  }
+  check(count == 4)
+}
 fn interactions(arena: *mem.Arena) {
   context := ui.Context{}
   check(context.style.background.a == 255 && context.style.padding == 4)
@@ -44,8 +56,10 @@ fn interactions(arena: *mem.Arena) {
   check(context.focused == 1)
   response = pair(&context, arena, ui.Input{ tab: true })
   check(context.focused == 2)
+  ring(&context, 20)
   response = pair(&context, arena, ui.Input{ tab: true })
   check(context.focused == 1)
+  ring(&context, 0)
   response = pair(&context, arena, ui.Input{ activate: true })
   check(response[0].activated && !response[1].activated)
   ui.begin(&context, arena, ui.Input{}, ui.Rect{ width: 100, height: 60 })
