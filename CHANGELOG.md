@@ -14,6 +14,7 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- `std/math/big` adds arbitrary-precision integers in the caller's arena.
 - `std/unicode/text` adds `word_breaks` (UAX #29) and `line_breaks` (UAX #14), passing all Unicode 17 conformance cases.
 - `std/time` converts between instants and calendar dates (`date_time`, `instant_of`, `weekday`, `day_of_year`). `std/time/zone` adds time zones, local time and formatting.
 - `std/thread/pool` runs tasks on a fixed set of workers over a bounded queue in the caller's arena, with `Group` wait groups.

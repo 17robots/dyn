@@ -1,0 +1,515 @@
+// Arbitrary-precision integers. Values are immutable: every operation writes
+// its result into the caller's arena and never changes its operands. Limbs are
+// 32-bit, least significant first, with no leading zero limbs; zero has no
+// limbs and is never negative.
+
+use "std/mem" mem
+use "std/errors" errors
+
+pub struct Int { limbs: []const u32, negative: bool }
+
+pub struct ParseResult { value: Int, kind: errors.Kind, offset: usize, ok: bool }
+pub struct Division { quotient: Int, remainder: Int, ok: bool }
+
+fn trimmed(limbs: []u32, negative: bool) Int {
+  length := #len(limbs)
+  for length != 0 && limbs[length - 1] == 0 {
+    length -= 1
+  }
+  return Int{ limbs: limbs[..length], negative: negative && length != 0 }
+}
+
+pub fn zero() Int {
+  return Int{}
+}
+
+pub fn from_u64(arena: *mem.Arena, value: u64) Int {
+  limbs := mem.push_array(u32, arena, 2)
+  limbs[0] = #cast(u32, value & 0xffffffff)
+  limbs[1] = #cast(u32, value >> 32)
+  return trimmed(limbs, false)
+}
+
+pub fn from_i64(arena: *mem.Arena, value: i64) Int {
+  magnitude := #bitcast(u64, value)
+  if value < 0 {
+    magnitude = #wrap(0 - magnitude)
+  }
+  result := from_u64(arena, magnitude)
+  result.negative = value < 0
+  return result
+}
+
+pub fn is_zero(value: Int) bool {
+  return #len(value.limbs) == 0
+}
+
+// The value as a u64; ok is false when it is negative or does not fit.
+pub struct U64Result { value: u64, ok: bool }
+
+pub fn to_u64(value: Int) U64Result {
+  if value.negative || #len(value.limbs) > 2 {
+    return U64Result{}
+  }
+  result: u64 = 0
+  for i in 0..#len(value.limbs) {
+    result |= #cast(u64, value.limbs[i]) << #cast(u64, 32 * i)
+  }
+  return U64Result{ value: result, ok: true }
+}
+
+pub fn negate(value: Int) Int {
+  return Int{ limbs: value.limbs, negative: !value.negative && #len(value.limbs) != 0 }
+}
+
+pub fn absolute(value: Int) Int {
+  return Int{ limbs: value.limbs }
+}
+
+fn compare_magnitude(a: []const u32, b: []const u32) i32 {
+  if #len(a) != #len(b) {
+    if #len(a) < #len(b) {
+      return -1
+    }
+    return 1
+  }
+  at := #len(a)
+  for at != 0 {
+    at -= 1
+    if a[at] != b[at] {
+      if a[at] < b[at] {
+        return -1
+      }
+      return 1
+    }
+  }
+  return 0
+}
+
+// -1, 0 or 1 as a is less than, equal to or greater than b.
+pub fn compare(a: Int, b: Int) i32 {
+  if a.negative != b.negative {
+    if a.negative {
+      return -1
+    }
+    return 1
+  }
+  order := compare_magnitude(a.limbs, b.limbs)
+  if a.negative {
+    return -order
+  }
+  return order
+}
+
+pub fn equal(a: Int, b: Int) bool {
+  return compare(a, b) == 0
+}
+
+fn add_magnitude(arena: *mem.Arena, a: []const u32, b: []const u32) []u32 {
+  long := a
+  short := b
+  if #len(b) > #len(a) {
+    long = b
+    short = a
+  }
+  result := mem.push_array(u32, arena, #len(long) + 1)
+  carry: u64 = 0
+  for i in 0..#len(long) {
+    sum := #cast(u64, long[i]) + carry
+    if i < #len(short) {
+      sum += #cast(u64, short[i])
+    }
+    result[i] = #cast(u32, sum & 0xffffffff)
+    carry = sum >> 32
+  }
+  result[#len(long)] = #cast(u32, carry)
+  return result
+}
+
+// a - b for |a| >= |b|.
+fn subtract_magnitude(arena: *mem.Arena, a: []const u32, b: []const u32) []u32 {
+  result := mem.push_array(u32, arena, #len(a))
+  borrow: u64 = 0
+  for i in 0..#len(a) {
+    subtrahend := borrow
+    if i < #len(b) {
+      subtrahend += #cast(u64, b[i])
+    }
+    minuend := #cast(u64, a[i])
+    if minuend >= subtrahend {
+      result[i] = #cast(u32, minuend - subtrahend)
+      borrow = 0
+    }
+    else {
+      result[i] = #cast(u32, minuend + 4294967296 - subtrahend)
+      borrow = 1
+    }
+  }
+  return result
+}
+
+pub fn add(arena: *mem.Arena, a: Int, b: Int) Int {
+  if a.negative == b.negative {
+    return trimmed(add_magnitude(arena, a.limbs, b.limbs), a.negative)
+  }
+  if compare_magnitude(a.limbs, b.limbs) >= 0 {
+    return trimmed(subtract_magnitude(arena, a.limbs, b.limbs), a.negative)
+  }
+  return trimmed(subtract_magnitude(arena, b.limbs, a.limbs), b.negative)
+}
+
+pub fn subtract(arena: *mem.Arena, a: Int, b: Int) Int {
+  return add(arena, a, negate(b))
+}
+
+pub fn multiply(arena: *mem.Arena, a: Int, b: Int) Int {
+  if is_zero(a) || is_zero(b) {
+    return Int{}
+  }
+  result := mem.push_array(u32, arena, #len(a.limbs) + #len(b.limbs))
+  for i in 0..#len(a.limbs) {
+    carry: u64 = 0
+    left := #cast(u64, a.limbs[i])
+    for j in 0..#len(b.limbs) {
+      product := left * #cast(u64, b.limbs[j]) + #cast(u64, result[i + j]) + carry
+      result[i + j] = #cast(u32, product & 0xffffffff)
+      carry = product >> 32
+    }
+    result[i + #len(b.limbs)] = #cast(u32, carry)
+  }
+  return trimmed(result, a.negative != b.negative)
+}
+
+fn leading_zeros(value: u32) u32 {
+  count: u32 = 0
+  probe := value
+  for probe & 0x80000000 == 0 {
+    probe <<= 1
+    count += 1
+  }
+  return count
+}
+
+// Knuth's algorithm D for |a| / |b| with b of at least two limbs.
+fn divide_magnitude(arena: *mem.Arena, a: []const u32, b: []const u32, quotient: []u32, remainder: []u32) {
+  shift := leading_zeros(b[#len(b) - 1])
+  n := #len(b)
+  m := #len(a) - n
+  divisor := mem.push_array(u32, arena, n)
+  dividend := mem.push_array(u32, arena, #len(a) + 1)
+  for i in 0..n {
+    value := #wrap(b[i] << shift)
+    if shift != 0 && i != 0 {
+      value |= b[i - 1] >> (32 - shift)
+    }
+    divisor[i] = value
+  }
+  for i in 0..#len(a) {
+    value := #wrap(a[i] << shift)
+    if shift != 0 && i != 0 {
+      value |= a[i - 1] >> (32 - shift)
+    }
+    dividend[i] = value
+  }
+  if shift != 0 {
+    dividend[#len(a)] = a[#len(a) - 1] >> (32 - shift)
+  }
+  top := #cast(u64, divisor[n - 1])
+  next := #cast(u64, divisor[n - 2])
+  j := m + 1
+  for j != 0 {
+    j -= 1
+    numerator := #cast(u64, dividend[j + n]) << 32 | #cast(u64, dividend[j + n - 1])
+    estimate := numerator / top
+    rest := numerator % top
+    for estimate > 0xffffffff || estimate * next > (rest << 32 | #cast(u64, dividend[j + n - 2])) {
+      estimate -= 1
+      rest += top
+      if rest > 0xffffffff {
+        break
+      }
+    }
+    // Multiply and subtract estimate * divisor from the dividend window.
+    borrow: i64 = 0
+    carry: u64 = 0
+    for i in 0..n {
+      product := estimate * #cast(u64, divisor[i]) + carry
+      carry = product >> 32
+      difference := #cast(i64, dividend[i + j]) - borrow - #cast(i64, product & 0xffffffff)
+      dividend[i + j] = #cast(u32, #bitcast(u64, difference) & 0xffffffff)
+      borrow = 0
+      if difference < 0 {
+        borrow = 1
+      }
+    }
+    difference := #cast(i64, dividend[j + n]) - borrow - #cast(i64, carry)
+    dividend[j + n] = #cast(u32, #bitcast(u64, difference) & 0xffffffff)
+    if difference < 0 {
+      // The estimate was one too large: add the divisor back.
+      estimate -= 1
+      sum: u64 = 0
+      for i in 0..n {
+        sum = #cast(u64, dividend[i + j]) + #cast(u64, divisor[i]) + (sum >> 32)
+        dividend[i + j] = #cast(u32, sum & 0xffffffff)
+      }
+      dividend[j + n] = #cast(u32, #wrap(#cast(u64, dividend[j + n]) + (sum >> 32)) & 0xffffffff)
+    }
+    quotient[j] = #cast(u32, estimate)
+  }
+  for i in 0..n {
+    value := dividend[i] >> shift
+    if shift != 0 {
+      value |= #wrap(dividend[i + 1] << (32 - shift))
+    }
+    remainder[i] = value
+  }
+}
+
+// Truncated division: the quotient rounds toward zero and the remainder has
+// the sign of a. ok is false, with zero results, when b is zero.
+pub fn divide(arena: *mem.Arena, a: Int, b: Int) Division {
+  if is_zero(b) {
+    return Division{}
+  }
+  if compare_magnitude(a.limbs, b.limbs) < 0 {
+    return Division{ remainder: a, ok: true }
+  }
+  quotient := mem.push_array(u32, arena, #len(a.limbs) - #len(b.limbs) + 1)
+  if #len(b.limbs) == 1 {
+    divisor := #cast(u64, b.limbs[0])
+    rest: u64 = 0
+    at := #len(a.limbs)
+    for at != 0 {
+      at -= 1
+      current := rest << 32 | #cast(u64, a.limbs[at])
+      quotient[at] = #cast(u32, current / divisor)
+      rest = current % divisor
+    }
+    remainder := mem.push_array(u32, arena, 1)
+    remainder[0] = #cast(u32, rest)
+    return Division{ quotient: trimmed(quotient, a.negative != b.negative), remainder: trimmed(remainder, a.negative), ok: true }
+  }
+  remainder := mem.push_array(u32, arena, #len(b.limbs))
+  mark := mem.arena_mark(arena)
+  divide_magnitude(arena, a.limbs, b.limbs, quotient, remainder)
+  mem.arena_rewind(arena, mark)
+  return Division{ quotient: trimmed(quotient, a.negative != b.negative), remainder: trimmed(remainder, a.negative), ok: true }
+}
+
+pub fn shift_left(arena: *mem.Arena, value: Int, bits: usize) Int {
+  if is_zero(value) {
+    return value
+  }
+  words := bits / 32
+  shift := #cast(u32, bits % 32)
+  result := mem.push_array(u32, arena, #len(value.limbs) + words + 1)
+  for i in 0..#len(value.limbs) {
+    limb := value.limbs[i]
+    result[i + words] |= #wrap(limb << shift)
+    if shift != 0 {
+      result[i + words + 1] = limb >> (32 - shift)
+    }
+  }
+  return trimmed(result, value.negative)
+}
+
+// Shifts the magnitude right; negative values round toward zero.
+pub fn shift_right(arena: *mem.Arena, value: Int, bits: usize) Int {
+  words := bits / 32
+  if words >= #len(value.limbs) {
+    return Int{}
+  }
+  shift := #cast(u32, bits % 32)
+  count := #len(value.limbs) - words
+  result := mem.push_array(u32, arena, count)
+  for i in 0..count {
+    limb := value.limbs[i + words] >> shift
+    if shift != 0 && i + words + 1 < #len(value.limbs) {
+      limb |= #wrap(value.limbs[i + words + 1] << (32 - shift))
+    }
+    result[i] = limb
+  }
+  return trimmed(result, value.negative)
+}
+
+pub fn bit_length(value: Int) usize {
+  if is_zero(value) {
+    return 0
+  }
+  top := value.limbs[#len(value.limbs) - 1]
+  return #len(value.limbs) * 32 - #cast(usize, leading_zeros(top))
+}
+
+// The non-negative remainder of value modulo a positive modulus.
+fn reduce(arena: *mem.Arena, value: Int, modulus: Int) Int {
+  divided := divide(arena, value, modulus)
+  if divided.remainder.negative {
+    return add(arena, divided.remainder, modulus)
+  }
+  return divided.remainder
+}
+
+// base^exponent mod modulus by square and multiply. ok is false for a
+// modulus below one or a negative exponent. Not constant time.
+pub struct ModResult { value: Int, ok: bool }
+
+pub fn power_mod(arena: *mem.Arena, base: Int, exponent: Int, modulus: Int) ModResult {
+  if modulus.negative || is_zero(modulus) || exponent.negative {
+    return ModResult{}
+  }
+  one := from_u64(arena, 1)
+  if equal(modulus, one) {
+    return ModResult{ ok: true }
+  }
+  result := one
+  current := reduce(arena, base, modulus)
+  bits := bit_length(exponent)
+  for i in 0..bits {
+    if exponent.limbs[i / 32] >> #cast(u32, i % 32) & 1 != 0 {
+      result = reduce(arena, multiply(arena, result, current), modulus)
+    }
+    if i + 1 < bits {
+      current = reduce(arena, multiply(arena, current, current), modulus)
+    }
+  }
+  return ModResult{ value: result, ok: true }
+}
+
+// Greatest common divisor, never negative.
+pub fn gcd(arena: *mem.Arena, a: Int, b: Int) Int {
+  x := absolute(a)
+  y := absolute(b)
+  for !is_zero(y) {
+    divided := divide(arena, x, y)
+    x = y
+    y = divided.remainder
+  }
+  return x
+}
+
+fn digit_value(byte: u8) u32 {
+  if byte >= '0' && byte <= '9' {
+    return #cast(u32, byte - '0')
+  }
+  if byte >= 'a' && byte <= 'z' {
+    return #cast(u32, byte - 'a') + 10
+  }
+  if byte >= 'A' && byte <= 'Z' {
+    return #cast(u32, byte - 'A') + 10
+  }
+  return 99
+}
+
+// Parses an optional sign and digits in base 2 through 36. Fails at the first
+// invalid byte, reporting its offset, and allocates nothing then.
+pub fn parse(arena: *mem.Arena, text: []const u8, base: u32) ParseResult {
+  if base < 2 || base > 36 {
+    return ParseResult{ kind: errors.Kind.InvalidInput }
+  }
+  at: usize = 0
+  negative := false
+  if at < #len(text) && (text[at] == '-' || text[at] == '+') {
+    negative = text[at] == '-'
+    at += 1
+  }
+  if at == #len(text) {
+    return ParseResult{ kind: errors.Kind.InvalidInput, offset: at }
+  }
+  for i in at..#len(text) {
+    if digit_value(text[i]) >= base {
+      return ParseResult{ kind: errors.Kind.InvalidInput, offset: i }
+    }
+  }
+  // Each digit needs at most log2(36) < 6 bits.
+  limbs := mem.push_array(u32, arena, (#len(text) - at) * 6 / 32 + 1)
+  used: usize = 0
+  for i in at..#len(text) {
+    carry := #cast(u64, digit_value(text[i]))
+    for k in 0..used {
+      product := #cast(u64, limbs[k]) * #cast(u64, base) + carry
+      limbs[k] = #cast(u32, product & 0xffffffff)
+      carry = product >> 32
+    }
+    if carry != 0 {
+      limbs[used] = #cast(u32, carry)
+      used += 1
+    }
+  }
+  return ParseResult{ value: trimmed(limbs[..used], negative), ok: true }
+}
+
+// The value's digits in base 2 through 36, lowercase, with a leading '-' when
+// negative. Panics on another base.
+pub fn format(arena: *mem.Arena, value: Int, base: u32) []u8 {
+  if base < 2 || base > 36 {
+    #panic("big.format base must be 2 through 36")
+  }
+  if is_zero(value) {
+    text := mem.push_bytes_uninit(arena, 1)
+    text[0] = '0'
+    return text
+  }
+  // Digits come out least significant first into scratch after the output.
+  capacity := #len(value.limbs) * 32 + 2
+  output := mem.push_bytes_uninit(arena, capacity)
+  mark := mem.arena_mark(arena)
+  work := mem.push_array(u32, arena, #len(value.limbs))
+  _ = mem.copy(work, value.limbs)
+  length := #len(work)
+  count: usize = 0
+  for length != 0 {
+    rest: u64 = 0
+    at := length
+    for at != 0 {
+      at -= 1
+      current := rest << 32 | #cast(u64, work[at])
+      work[at] = #cast(u32, current / #cast(u64, base))
+      rest = current % #cast(u64, base)
+    }
+    for length != 0 && work[length - 1] == 0 {
+      length -= 1
+    }
+    digit := #cast(u8, rest)
+    if digit < 10 {
+      output[capacity - 1 - count] = '0' + digit
+    }
+    else {
+      output[capacity - 1 - count] = 'a' + digit - 10
+    }
+    count += 1
+  }
+  mem.arena_rewind(arena, mark)
+  start := capacity - count
+  if value.negative {
+    start -= 1
+    output[start] = '-'
+  }
+  // Move the digits to the front and release the unused tail.
+  shown := capacity - start
+  for i in 0..shown {
+    output[i] = output[start + i]
+  }
+  mem.arena_rewind(arena, mark - (capacity - shown))
+  return output[..shown]
+}
+
+// A non-negative value from big-endian bytes.
+pub fn from_bytes(arena: *mem.Arena, data: []const u8) Int {
+  limbs := mem.push_array(u32, arena, (#len(data) + 3) / 4)
+  for i in 0..#len(data) {
+    position := #len(data) - 1 - i
+    limbs[position / 4] |= #cast(u32, data[i]) << #cast(u32, 8 * (position % 4))
+  }
+  return trimmed(limbs, false)
+}
+
+// The magnitude as big-endian bytes without leading zeros; zero is empty.
+pub fn to_bytes(arena: *mem.Arena, value: Int) []u8 {
+  count := (bit_length(value) + 7) / 8
+  data := mem.push_bytes_uninit(arena, count)
+  for i in 0..count {
+    position := count - 1 - i
+    data[i] = #cast(u8, value.limbs[position / 4] >> #cast(u32, 8 * (position % 4)) & 255)
+  }
+  return data
+}

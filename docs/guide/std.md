@@ -59,6 +59,7 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
 | `std/container/ring`, `bit_set` | Ring buffer and bit set over caller storage |
 | `std/sort` | In-place sort and binary search for any ordered element type |
 | `std/math` | Scalar arithmetic, bit helpers, concrete vectors, matrices, quaternions and ranges |
+| `std/math/big` | Arena-backed arbitrary-precision integers: arithmetic, division, shifts, bases, bytes, `power_mod` and `gcd` |
 | `std/hash` | Stable non-cryptographic hashes (FNV-1a, wyhash), CRC-32 and checksums |
 | `std/rand` | Deterministic caller-owned PRNG; not for cryptography |
 
