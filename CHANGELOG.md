@@ -12,9 +12,16 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
-## 0.1.0-preview.26
+## 0.1.0-preview.27
 
-Upgrade guide: [0.1.0-preview.26](docs/migrations/0.1.0-preview.26.md).
+Upgrade guide: [0.1.0-preview.27](docs/migrations/0.1.0-preview.27.md).
+
+The preview.26 publication was cancelled before assets were published; upgrade
+directly from preview.25 to preview.27. The earlier tag is retained for traceability.
+
+- Fix Linux x86-64 shared-runtime linking when a module has no unwind table. Weak
+  table boundaries resolve safely to zero; populated tables retain their range
+  through image-base relocations in the built-in ELF linker.
 
 - **Breaking arena API:** constructors return `*mem.Arena`, with the header in
   backing storage. Pass the pointer directly rather than `&arena`. Explicit

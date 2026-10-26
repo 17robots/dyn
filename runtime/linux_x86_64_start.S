@@ -141,12 +141,22 @@ dyn_unwind_continue:
 .global dyn_unwind_tables_start
 .type dyn_unwind_tables_start,@function
 dyn_unwind_tables_start:
+#ifdef DYN_SHARED
+    # An empty module has no boundary symbol; load its weak zero through the GOT.
+    movq __start_dyn_unwind@GOTPCREL(%rip), %rax
+#else
     lea __start_dyn_unwind(%rip), %rax
+#endif
     ret
 .global dyn_unwind_tables_stop
 .type dyn_unwind_tables_stop,@function
 dyn_unwind_tables_stop:
+#ifdef DYN_SHARED
+    # An empty module has no boundary symbol; load its weak zero through the GOT.
+    movq __stop_dyn_unwind@GOTPCREL(%rip), %rax
+#else
     lea __stop_dyn_unwind(%rip), %rax
+#endif
     ret
 # Each module walks its own tables.
 .weak __start_dyn_unwind
