@@ -423,6 +423,18 @@ fn failed_string(cursor: *Cursor) []const u8 {
   return cursor.source[..0]
 }
 
+// Stop before any byte requiring the full decoder. The compiler may replace
+// this exact SDK helper with bounded SIMD; all other paths use this scalar body.
+fn ascii_string_prefix(source: []const u8) usize {
+  for i in 0..#len(source) {
+    byte := source[i]
+    if byte < 32 || byte >= 128 || byte == '"' || byte == '\\' {
+      return i
+    }
+  }
+  return #len(source)
+}
+
 fn decoded_string(arena: *memory.Arena, cursor: *Cursor) []const u8 {
   source := cursor.source
   if cursor.at >= #len(source) || source[cursor.at] != '"' {
@@ -431,6 +443,13 @@ fn decoded_string(arena: *memory.Arena, cursor: *Cursor) []const u8 {
   cursor.at += 1
   start := cursor.at
   end := start
+  // Amortize scanner setup, and leave a leading special byte to the decoder.
+  if #len(source) - start >= 16 {
+    first := source[start]
+    if first >= 32 && first < 128 && first != '"' && first != '\\' {
+      end += ascii_string_prefix(source[start..])
+    }
+  }
   has_escape: bool = false
   ascii: bool = true
   for end < #len(source) {

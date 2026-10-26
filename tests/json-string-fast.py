@@ -20,11 +20,17 @@ valid = [
     ('"café ☃ 😀"'.encode(), 'café ☃ 😀'.encode()),
     (b'"ascii\\u00e9 tail"', 'asciié tail'.encode()),
 ]
+# Exercise the scanner threshold and decoder resumption after an ASCII block.
+valid += [(b'"' + b'x' * n + b'"', b'x' * n) for n in (14, 15, 16, 17, 31, 32)]
+valid += [(b'"' + b'x' * 16 + b'\\u00e9"', b'x' * 16 + 'é'.encode()),
+          (b'"' + b'x' * 16 + 'é'.encode() + b'"', b'x' * 16 + 'é'.encode())]
 invalid = [b'"unterminated', b'"bad\\q"', b'"bad\\"', b'"\\u12"',
            b'"\\u00xz"', b'"\\ud800"', b'"\\udc00"', b'"\\ud800\\u0041"',
            b'"\xc0\xaf"', b'"\xed\xa0\x80"', b'"\xf4\x90\x80\x80"',
            b'"\xe2\x82"', b'"\x80"', b'"\\\xff"']
 invalid += [b'"a' + bytes([c]) + b'b"' for c in range(32)]
+invalid += [b'"' + b'a' * 16 + tail for tail in (b'\\q"', b'\xc0\xaf"', b'\x00"', b'')]
+
 checks = []
 # Depth rejection and rollback do not depend on the optimized string route.
 deep = b'[' * 257 + b'"plain"' + b']' * 257

@@ -1,0 +1,363 @@
+{
+  "cpu": 2,
+  "samples": 25,
+  "warmups": 3,
+  "cases": {
+    "empty": {
+      "rounds": 500000,
+      "checksum": 2000000,
+      "median_ms": {
+        "baseline": 9.281806,
+        "current": 9.521398
+      },
+      "ratio": 1.025095023401661,
+      "ci95": [1.021905201356925, 1.0333642824553417],
+      "samples_ms": {
+        "baseline": [9.066804, 9.280376, 9.364176, 9.283376, 9.220115, 9.330367, 13.697732, 9.338467, 9.199085, 9.205715, 9.400987, 9.214956, 10.190873, 9.238315, 9.254495, 9.327447, 9.326526, 9.396597, 9.338226, 9.197585, 9.185925, 9.281806, 9.330987, 9.161955, 9.158195],
+        "current": [9.482458, 10.072232, 9.538358, 9.490078, 9.664049, 9.641668, 9.563268, 9.543028, 9.521398, 9.459107, 9.561098, 9.520438, 9.597518, 9.467818, 9.643649, 9.502147, 9.558768, 9.507717, 9.572569, 9.468477, 9.494118, 9.502597, 9.500928, 9.87207, 9.434017]
+      },
+      "orders": [
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["current", "baseline"],
+        ["baseline", "current"]
+      ]
+    },
+    "ascii1": {
+      "rounds": 500000,
+      "checksum": 99500000,
+      "median_ms": {
+        "baseline": 12.22558,
+        "current": 12.467912
+      },
+      "ratio": 1.0189425381374995,
+      "ci95": [1.0090267257068157, 1.0267702668550034],
+      "samples_ms": {
+        "baseline": [12.342491, 12.867215, 12.159099, 12.158219, 12.099539, 12.341071, 12.18997, 12.21472, 12.331371, 12.562252, 12.2255, 12.529102, 12.17974, 12.586223, 12.281541, 12.133579, 12.103839, 12.15605, 12.057448, 12.095119, 12.28682, 12.654673, 12.597042, 12.553943, 12.22558],
+        "current": [12.519832, 12.444982, 12.591643, 12.426802, 12.460452, 12.565132, 12.29794, 12.448892, 13.080017, 12.471302, 12.457082, 12.572303, 12.467912, 12.29399, 12.434221, 12.497702, 12.427862, 12.33519, 12.427952, 12.349851, 13.187298, 12.705204, 12.647003, 12.667264, 12.594892]
+      },
+      "orders": [
+        ["baseline", "current"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["baseline", "current"]
+      ]
+    },
+    "ascii7": {
+      "rounds": 500000,
+      "checksum": 102500000,
+      "median_ms": {
+        "baseline": 14.297306,
+        "current": 14.407068
+      },
+      "ratio": 1.0078111014254458,
+      "ci95": [0.9976937055003098, 1.0222353410522385],
+      "samples_ms": {
+        "baseline": [14.67553, 14.208446, 14.295147, 14.115935, 14.308667, 14.381648, 14.284776, 14.543229, 14.309617, 14.038724, 14.189586, 14.302047, 14.276237, 14.532369, 14.252626, 14.278046, 14.531079, 14.297306, 14.323147, 14.240076, 14.308077, 14.368407, 14.365327, 14.187446, 14.284976],
+        "current": [14.489908, 14.096605, 14.138476, 14.226196, 14.275667, 14.74232, 13.998754, 14.7488, 14.327697, 14.407068, 14.582189, 14.322997, 14.385767, 14.209186, 14.569538, 14.449738, 14.295817, 14.523468, 14.66239, 14.785151, 14.086866, 14.65917, 14.985073, 14.516928, 14.288937]
+      },
+      "orders": [
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["current", "baseline"],
+        ["current", "baseline"]
+      ]
+    },
+    "ascii16": {
+      "rounds": 500000,
+      "checksum": 107000000,
+      "median_ms": {
+        "baseline": 17.946157,
+        "current": 14.417757
+      },
+      "ratio": 0.8027706131178404,
+      "ci95": [0.7960871709275342, 0.8139748777919377],
+      "samples_ms": {
+        "baseline": [17.766155, 18.331289, 17.596334, 17.894316, 18.149268, 17.819515, 17.739575, 18.173879, 17.905126, 18.489201, 18.039527, 17.964237, 17.946157, 18.010647, 17.972827, 18.005837, 18.653412, 18.40724, 18.104118, 17.597684, 17.475493, 17.532533, 17.844646, 17.800585, 17.880416],
+        "current": [14.213766, 14.283117, 14.405978, 14.6062, 14.569699, 14.506689, 14.504319, 14.417757, 14.391868, 14.581759, 14.463039, 14.539968, 14.148946, 14.447258, 14.307937, 14.292826, 14.289197, 14.232186, 14.6006, 14.090675, 14.244376, 14.170786, 14.70695, 14.489229, 14.806711]
+      },
+      "orders": [
+        ["baseline", "current"],
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["current", "baseline"]
+      ]
+    },
+    "ascii64": {
+      "rounds": 500000,
+      "checksum": 131000000,
+      "median_ms": {
+        "baseline": 41.055695,
+        "current": 20.408297
+      },
+      "ratio": 0.4970880897278685,
+      "ci95": [0.49138707341679466, 0.5027550114107451],
+      "samples_ms": {
+        "baseline": [46.330498, 43.881569, 42.837249, 44.00417, 40.829133, 42.113044, 40.902385, 39.521042, 40.967585, 41.889922, 40.844394, 41.295197, 40.428161, 40.141948, 40.050787, 40.438131, 39.867915, 41.891992, 40.243209, 41.407828, 41.280438, 41.910563, 39.13242, 41.402558, 41.055695],
+        "current": [21.102333, 20.596338, 20.254366, 20.104164, 19.892952, 19.971253, 20.434766, 20.654828, 20.167935, 21.142233, 21.204103, 20.291926, 20.244305, 20.965911, 20.141065, 20.285346, 20.587918, 20.090234, 20.232475, 20.675479, 20.514237, 20.642118, 20.401877, 20.442677, 20.408297]
+      },
+      "orders": [
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["current", "baseline"]
+      ]
+    },
+    "ascii4096": {
+      "rounds": 25000,
+      "checksum": 107350000,
+      "median_ms": {
+        "baseline": 80.211825,
+        "current": 29.152338
+      },
+      "ratio": 0.3653431622372804,
+      "ci95": [0.356988026454991, 0.370282728541367],
+      "samples_ms": {
+        "baseline": [79.65262, 77.958777, 80.491018, 80.219266, 81.385094, 81.108943, 80.346877, 78.438411, 78.814334, 79.242527, 81.650087, 81.303534, 82.357553, 79.348209, 81.255313, 80.211825, 79.396808, 78.980346, 79.458409, 80.708239, 79.176957, 79.324107, 83.313751, 81.094112, 79.081756],
+        "current": [31.326707, 28.583354, 29.079417, 29.755893, 29.824154, 28.2121, 28.579013, 29.583691, 29.890705, 29.335449, 30.233617, 28.293421, 28.356652, 28.927576, 29.686073, 29.157608, 29.615282, 29.731603, 28.247751, 28.910747, 29.152338, 28.23156, 28.08828, 28.949627, 29.628642]
+      },
+      "orders": [
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["current", "baseline"]
+      ]
+    },
+    "escaped64": {
+      "rounds": 100000,
+      "checksum": 26200000,
+      "median_ms": {
+        "baseline": 57.254937,
+        "current": 50.925596
+      },
+      "ratio": 0.8898057824358307,
+      "ci95": [0.8850914473428197, 0.8945145559858744],
+      "samples_ms": {
+        "baseline": [58.307837, 57.55002, 57.229937, 57.192108, 56.998665, 56.944325, 58.481487, 57.074116, 57.203227, 56.655432, 57.052975, 58.256686, 57.254937, 56.615302, 57.384219, 57.702351, 56.956465, 57.537101, 56.640712, 57.387819, 57.570931, 56.710794, 57.298508, 57.314648, 57.487609],
+        "current": [51.650281, 50.868646, 51.490831, 51.021857, 50.497933, 51.345659, 50.815876, 51.537591, 51.044507, 50.412331, 51.245889, 50.571544, 52.115206, 51.695353, 50.912996, 50.16549, 50.948387, 50.925596, 50.313631, 50.545513, 50.699074, 50.492902, 51.024917, 51.44586, 50.788435]
+      },
+      "orders": [
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["baseline", "current"]
+      ]
+    },
+    "utf8-64": {
+      "rounds": 250000,
+      "checksum": 108000000,
+      "median_ms": {
+        "baseline": 40.3601,
+        "current": 41.019905
+      },
+      "ratio": 1.0171865085300928,
+      "ci95": [1.0140808531477445, 1.0228602664353301],
+      "samples_ms": {
+        "baseline": [40.170048, 40.951544, 39.983786, 41.064635, 40.025238, 40.570171, 40.616602, 46.706921, 39.967136, 41.801121, 40.526172, 39.412872, 40.867844, 39.750854, 40.676842, 40.877774, 40.3601, 41.013915, 39.795055, 39.660714, 39.644224, 40.194098, 40.614841, 39.172301, 40.057587],
+        "current": [41.088346, 41.019905, 42.102834, 41.931283, 40.759922, 41.259397, 40.841104, 40.187058, 40.992365, 40.373889, 41.149596, 40.661772, 41.62145, 40.479191, 41.334348, 40.513452, 42.286665, 41.718801, 41.111706, 41.60279, 40.046967, 40.843494, 41.148607, 40.675152, 40.621632]
+      },
+      "orders": [
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["baseline", "current"],
+        ["current", "baseline"],
+        ["current", "baseline"],
+        ["baseline", "current"],
+        ["baseline", "current"]
+      ]
+    }
+  },
+  "hashes": {
+    "baseline": "c3e663b84424d79d9ebbd9627f958ffee19c95a4cd5c657613040cf7e8154125",
+    "current": "a440bda67d839aef6dd31c05948a80902afa7dd15be844b35151749fe2d70aa9"
+  }
+}

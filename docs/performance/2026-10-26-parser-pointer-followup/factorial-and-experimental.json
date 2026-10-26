@@ -1,0 +1,357 @@
+{
+  "commit": "3cb6a0da+experimental",
+  "build_flags": ["--release", "--opt-level", "3", "--cpu", "generic", "--no-cache"],
+  "cpu": 2,
+  "warmups": 3,
+  "samples": 25,
+  "compiler_sha256": "0e0ac8f4e509753a7dcc84e86a247bffffd05957a80e96c945e2eb986ccfb538",
+  "cases": {
+    "map": {
+      "commands": {
+        "before": ["/tmp/dyn-syntax/build/remaining-gaps-20261026/baseline-extended", "map", "65536", "64", "912345"],
+        "current": ["/tmp/dyn-syntax/build/remaining-gaps-20261026/combined-extended", "map", "65536", "64", "912345"],
+        "c": ["/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/extended/c-bin", "map", "65536", "64", "912345"]
+      },
+      "hashes": {
+        "before": "9f2777067adb26304d7d0709b25499021c7f60fbe97fdbcb8206753ebe5b1dd0",
+        "current": "fa924690ee6ef620aa98b41a62bf601cb56c90f5b051a0d5a6d89c32cd477eb2",
+        "c": "66dd93147dbe173d8b56f261edc4151458797430b1de59f9ae234c4b64e5e9ea"
+      },
+      "expected": "2336869060870\n",
+      "samples_ms": {
+        "before": [43.869928, 43.797747, 44.292882, 48.328745, 46.374559, 44.10633, 44.337642, 44.07165, 44.434743, 44.05454, 43.941669, 44.05634, 43.862629, 44.15625, 43.967999, 44.106751, 44.239831, 44.163211, 44.0439, 43.998829, 44.02858, 43.950459, 44.09084, 44.223361, 44.1098],
+        "current": [39.832286, 39.543293, 39.820106, 39.800455, 39.966636, 39.960897, 39.773415, 39.894646, 39.721075, 39.869226, 39.666323, 39.893096, 39.601463, 42.176254, 39.755975, 39.773694, 39.955307, 39.802005, 39.559783, 39.974937, 39.874635, 40.075898, 39.668514, 40.216399, 40.448311],
+        "c": [35.251688, 35.308308, 35.634061, 35.218798, 35.815742, 35.49855, 35.583601, 35.390049, 35.49753, 35.466319, 35.538121, 35.406959, 35.49178, 35.785283, 35.650811, 35.499851, 35.55294, 35.49644, 35.399859, 35.46002, 35.43509, 35.303838, 35.47108, 35.223618, 36.069774]
+      },
+      "median_ms": {
+        "before": 44.09084,
+        "current": 39.832286,
+        "c": 35.49178
+      },
+      "paired_ratio": 0.9031523425123391,
+      "paired_ratio_bootstrap95": [0.9012479867009671, 0.9056534414691548],
+      "orders": [
+        ["before", "c", "current"],
+        ["current", "c", "before"],
+        ["before", "current", "c"],
+        ["c", "current", "before"],
+        ["c", "before", "current"],
+        ["current", "before", "c"],
+        ["c", "current", "before"],
+        ["before", "c", "current"],
+        ["current", "before", "c"],
+        ["c", "before", "current"],
+        ["before", "current", "c"],
+        ["current", "before", "c"],
+        ["current", "before", "c"],
+        ["current", "c", "before"],
+        ["before", "c", "current"],
+        ["c", "before", "current"],
+        ["c", "before", "current"],
+        ["c", "current", "before"],
+        ["c", "current", "before"],
+        ["before", "current", "c"],
+        ["before", "c", "current"],
+        ["current", "c", "before"],
+        ["before", "c", "current"],
+        ["current", "before", "c"],
+        ["before", "c", "current"],
+        ["current", "c", "before"],
+        ["c", "before", "current"],
+        ["before", "current", "c"]
+      ]
+    },
+    "allocate": {
+      "commands": {
+        "before": ["/tmp/dyn-syntax/build/remaining-gaps-20261026/baseline-extended", "allocate", "8192", "256", "912345"],
+        "current": ["/tmp/dyn-syntax/build/remaining-gaps-20261026/combined-extended", "allocate", "8192", "256", "912345"],
+        "c": ["/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/extended/c-bin", "allocate", "8192", "256", "912345"]
+      },
+      "hashes": {
+        "before": "9f2777067adb26304d7d0709b25499021c7f60fbe97fdbcb8206753ebe5b1dd0",
+        "current": "fa924690ee6ef620aa98b41a62bf601cb56c90f5b051a0d5a6d89c32cd477eb2",
+        "c": "66dd93147dbe173d8b56f261edc4151458797430b1de59f9ae234c4b64e5e9ea"
+      },
+      "expected": "9007407145418752\n",
+      "samples_ms": {
+        "before": [27.813648, 27.685116, 28.366531, 28.675414, 28.16824, 28.16234, 28.060959, 27.828327, 27.752117, 27.886937, 27.841777, 27.769647, 27.807287, 27.691787, 27.614145, 27.781737, 28.039589, 27.707337, 27.673866, 27.737527, 27.848397, 27.788937, 27.886727, 27.921128, 27.795427],
+        "current": [27.012381, 26.847649, 28.0798, 27.421824, 27.451154, 27.389554, 27.145352, 27.069051, 27.306853, 27.339944, 26.959931, 27.097561, 27.103562, 27.055991, 27.066471, 26.89116, 26.989081, 27.109751, 27.050631, 27.288823, 27.329333, 26.99556, 26.975081, 26.975941, 27.072991],
+        "c": [23.824594, 23.615163, 25.176655, 23.473662, 23.714614, 23.25965, 23.094559, 23.076799, 23.19794, 23.031388, 23.113179, 23.055128, 24.086947, 23.33353, 22.991408, 23.025108, 23.483962, 23.21714, 23.028668, 22.974647, 23.311741, 23.046529, 23.028488, 23.25188, 25.000154]
+      },
+      "median_ms": {
+        "before": 27.813648,
+        "current": 27.072991,
+        "c": 23.21714
+      },
+      "paired_ratio": 0.9740088180692457,
+      "paired_ratio_bootstrap95": [0.9697502802588943, 0.9774792940025075],
+      "orders": [
+        ["current", "before", "c"],
+        ["before", "current", "c"],
+        ["current", "before", "c"],
+        ["before", "c", "current"],
+        ["before", "current", "c"],
+        ["before", "current", "c"],
+        ["before", "c", "current"],
+        ["before", "current", "c"],
+        ["current", "c", "before"],
+        ["current", "c", "before"],
+        ["current", "c", "before"],
+        ["before", "current", "c"],
+        ["before", "current", "c"],
+        ["before", "current", "c"],
+        ["current", "before", "c"],
+        ["current", "before", "c"],
+        ["c", "current", "before"],
+        ["c", "current", "before"],
+        ["before", "current", "c"],
+        ["current", "c", "before"],
+        ["c", "current", "before"],
+        ["c", "current", "before"],
+        ["current", "before", "c"],
+        ["c", "current", "before"],
+        ["before", "current", "c"],
+        ["before", "current", "c"],
+        ["before", "current", "c"],
+        ["current", "c", "before"]
+      ]
+    },
+    "utf8": {
+      "commands": {
+        "before": ["/tmp/dyn-syntax/build/remaining-gaps-20261026/baseline-extended", "utf8", "262144", "128", "912345"],
+        "current": ["/tmp/dyn-syntax/build/remaining-gaps-20261026/combined-extended", "utf8", "262144", "128", "912345"],
+        "c": ["/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/extended/c-bin", "utf8", "262144", "128", "912345"]
+      },
+      "hashes": {
+        "before": "9f2777067adb26304d7d0709b25499021c7f60fbe97fdbcb8206753ebe5b1dd0",
+        "current": "fa924690ee6ef620aa98b41a62bf601cb56c90f5b051a0d5a6d89c32cd477eb2",
+        "c": "66dd93147dbe173d8b56f261edc4151458797430b1de59f9ae234c4b64e5e9ea"
+      },
+      "expected": "18749879746560\n",
+      "samples_ms": {
+        "before": [55.566524, 56.210159, 55.13851, 55.259642, 54.890259, 55.025289, 55.438653, 55.672425, 55.330252, 56.069278, 55.947657, 55.349622, 55.757585, 55.759846, 56.389321, 55.344162, 55.376703, 55.681005, 54.999879, 55.776765, 54.917948, 55.265771, 55.599774, 55.025069, 55.962067],
+        "current": [52.827501, 52.670551, 53.493307, 52.775651, 52.985233, 52.821932, 53.181674, 52.61736, 52.904832, 52.355098, 52.954382, 52.476319, 52.55502, 52.71985, 52.807091, 52.647841, 52.445568, 52.521659, 52.403968, 52.502739, 52.648851, 52.247257, 52.69046, 52.665231, 52.995863],
+        "c": [31.478888, 31.284375, 31.306526, 31.498207, 31.454467, 31.209065, 31.305556, 31.405257, 31.433907, 31.228585, 31.621188, 31.337886, 31.387157, 31.466867, 31.690389, 31.457307, 31.365416, 31.298346, 31.384567, 31.319106, 31.379766, 31.254465, 31.440637, 31.227765, 31.91207]
+      },
+      "median_ms": {
+        "before": 55.438653,
+        "current": 52.670551,
+        "c": 31.384567
+      },
+      "paired_ratio": 0.9476739959410627,
+      "paired_ratio_bootstrap95": [0.9453818530822631, 0.9550487315860643],
+      "orders": [
+        ["current", "c", "before"],
+        ["c", "before", "current"],
+        ["c", "before", "current"],
+        ["before", "current", "c"],
+        ["before", "c", "current"],
+        ["c", "current", "before"],
+        ["before", "c", "current"],
+        ["c", "before", "current"],
+        ["c", "before", "current"],
+        ["c", "current", "before"],
+        ["before", "c", "current"],
+        ["before", "current", "c"],
+        ["c", "current", "before"],
+        ["current", "before", "c"],
+        ["before", "c", "current"],
+        ["c", "before", "current"],
+        ["current", "c", "before"],
+        ["before", "c", "current"],
+        ["before", "current", "c"],
+        ["c", "current", "before"],
+        ["current", "before", "c"],
+        ["current", "before", "c"],
+        ["current", "c", "before"],
+        ["c", "before", "current"],
+        ["before", "current", "c"],
+        ["before", "current", "c"],
+        ["c", "current", "before"],
+        ["current", "before", "c"]
+      ]
+    },
+    "jsonl": {
+      "commands": {
+        "before": ["/tmp/dyn-syntax/build/remaining-gaps-20261026/baseline-apps", "report", "/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/apps/events.jsonl"],
+        "current": ["/tmp/dyn-syntax/build/remaining-gaps-20261026/combined-apps", "report", "/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/apps/events.jsonl"],
+        "proofs": ["/tmp/dyn-syntax/build/remaining-gaps-20261026/proofs-apps", "report", "/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/apps/events.jsonl"],
+        "scalar-prefix": ["/tmp/dyn-syntax/build/remaining-gaps-20261026/scalar-prefix-apps", "report", "/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/apps/events.jsonl"],
+        "c": ["/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/apps/gcc-app", "report", "/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/apps/events.jsonl"]
+      },
+      "hashes": {
+        "before": "43c0082be5d9b71dfbcde2ef37298a81db684636b887da3536301d3600e9bf79",
+        "current": "181b0322b8c571afdc3a9e59ed17dea06cb7e1b83f18b7717f5fcac74461ee54",
+        "proofs": "96f4493020c12bc237b565503d517aee161116aae2336ff724175b021d7b92d1",
+        "scalar-prefix": "966ec8dc9bdd1dcc5f8d95ce509e5533efd4662db978e0991d2c9e4fa9d35ec4",
+        "c": "37822eb0769e49a5a003998cf56228a4ae096a6ff6fb12ee0d480631af32e4e2"
+      },
+      "expected": "{\"records\":60000,\"bytes\":1965950512,\"latency_us\":7440820000,\"errors\":3530,\"services\":[[3750,122186000,465070000,221],[3750,122638310,465008750,221],[3750,123090620,464947500,220],[3750,123211250,465026250,221],[3750,122549448,464965000,220],[3750,123063294,465293750,221],[3750,123515604,464982500,220],[3750,122522122,465061250,221],[3750,122974432,465000000,221],[3750,123361206,465188750,220],[3750,122367724,465017500,221],[3750,122820034,465206250,220],[3750,123333880,465035000,221],[3750,122278862,464973750,220],[3750,122792708,465052500,221],[3750,123245018,464991250,221]]}\n",
+      "samples_ms": {
+        "before": [44.184601, 44.083041, 44.189161, 44.158021, 44.068269, 44.261942, 44.196381, 43.936749, 46.39596, 44.808666, 45.32089, 44.588455, 43.755718, 44.122171, 43.942749, 44.08327, 44.930318, 47.038414, 43.97686, 44.130961, 43.850589, 43.717727, 43.943929, 43.866209, 45.619913],
+        "current": [41.226247, 41.106165, 40.837073, 40.775073, 40.825673, 40.765303, 40.871144, 40.660942, 40.935434, 42.008533, 42.576648, 42.294446, 41.204457, 41.322648, 40.748493, 40.605732, 40.858853, 40.953165, 40.719183, 40.664563, 40.559412, 40.831654, 40.644532, 40.503101, 42.545188],
+        "proofs": [44.633624, 44.10615, 44.334793, 43.96494, 44.359582, 44.228241, 43.709777, 43.849828, 43.933349, 46.914863, 46.442769, 44.395793, 43.831358, 43.634806, 43.607666, 43.747598, 43.631216, 43.664827, 44.382473, 43.919159, 43.384644, 43.472985, 43.98694, 43.643866, 45.540142],
+        "scalar-prefix": [42.528288, 41.805472, 41.824662, 41.63343, 41.977983, 41.762901, 41.64945, 42.009013, 42.052214, 43.038572, 43.475205, 42.462497, 41.957803, 41.836321, 41.787451, 41.716861, 41.951922, 42.478207, 41.524219, 41.886422, 41.66191, 41.5907, 41.517559, 41.56317, 41.805392],
+        "c": [13.756063, 13.621001, 13.758112, 13.43998, 13.845983, 13.779732, 13.564181, 13.589511, 14.011284, 13.191608, 13.713432, 14.298777, 13.896984, 13.776602, 13.46698, 13.216408, 13.885633, 13.729442, 13.660812, 13.743562, 13.57712, 13.953674, 13.843924, 13.769862, 13.732103]
+      },
+      "median_ms": {
+        "before": 44.130961,
+        "current": 40.837073,
+        "proofs": 43.933349,
+        "scalar-prefix": 41.824662,
+        "c": 13.743562
+      },
+      "paired_ratio": 0.9254426630427299,
+      "paired_ratio_bootstrap95": [0.9233899544547072, 0.932601252439916],
+      "orders": [
+        ["c", "scalar-prefix", "current", "before", "proofs"],
+        ["before", "scalar-prefix", "current", "proofs", "c"],
+        ["before", "c", "current", "proofs", "scalar-prefix"],
+        ["c", "current", "scalar-prefix", "proofs", "before"],
+        ["c", "scalar-prefix", "before", "current", "proofs"],
+        ["c", "before", "current", "proofs", "scalar-prefix"],
+        ["scalar-prefix", "proofs", "before", "c", "current"],
+        ["c", "current", "before", "proofs", "scalar-prefix"],
+        ["c", "proofs", "before", "current", "scalar-prefix"],
+        ["c", "scalar-prefix", "proofs", "before", "current"],
+        ["c", "before", "current", "proofs", "scalar-prefix"],
+        ["current", "scalar-prefix", "proofs", "before", "c"],
+        ["proofs", "c", "before", "current", "scalar-prefix"],
+        ["before", "proofs", "current", "c", "scalar-prefix"],
+        ["before", "c", "current", "scalar-prefix", "proofs"],
+        ["current", "scalar-prefix", "proofs", "before", "c"],
+        ["before", "current", "scalar-prefix", "proofs", "c"],
+        ["current", "scalar-prefix", "proofs", "before", "c"],
+        ["current", "proofs", "c", "scalar-prefix", "before"],
+        ["proofs", "scalar-prefix", "before", "c", "current"],
+        ["scalar-prefix", "before", "c", "proofs", "current"],
+        ["c", "scalar-prefix", "current", "proofs", "before"],
+        ["proofs", "scalar-prefix", "current", "c", "before"],
+        ["current", "scalar-prefix", "c", "proofs", "before"],
+        ["current", "before", "c", "proofs", "scalar-prefix"],
+        ["before", "c", "current", "proofs", "scalar-prefix"],
+        ["scalar-prefix", "before", "proofs", "c", "current"],
+        ["scalar-prefix", "c", "current", "before", "proofs"]
+      ]
+    },
+    "search": {
+      "commands": {
+        "before": ["/tmp/dyn-syntax/build/remaining-gaps-20261026/baseline-apps", "search", "/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/apps/documents"],
+        "current": ["/tmp/dyn-syntax/build/remaining-gaps-20261026/combined-apps", "search", "/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/apps/documents"],
+        "proofs": ["/tmp/dyn-syntax/build/remaining-gaps-20261026/proofs-apps", "search", "/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/apps/documents"],
+        "scalar-prefix": ["/tmp/dyn-syntax/build/remaining-gaps-20261026/scalar-prefix-apps", "search", "/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/apps/documents"],
+        "c": ["/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/apps/gcc-app", "search", "/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/apps/documents"]
+      },
+      "hashes": {
+        "before": "43c0082be5d9b71dfbcde2ef37298a81db684636b887da3536301d3600e9bf79",
+        "current": "181b0322b8c571afdc3a9e59ed17dea06cb7e1b83f18b7717f5fcac74461ee54",
+        "proofs": "96f4493020c12bc237b565503d517aee161116aae2336ff724175b021d7b92d1",
+        "scalar-prefix": "966ec8dc9bdd1dcc5f8d95ce509e5533efd4662db978e0991d2c9e4fa9d35ec4",
+        "c": "37822eb0769e49a5a003998cf56228a4ae096a6ff6fb12ee0d480631af32e4e2"
+      },
+      "expected": "{\"files\":1024,\"bytes\":64292352,\"lines\":262144,\"matching_lines\":5689,\"matching_files\":910}\n",
+      "samples_ms": {
+        "before": [9.202285, 9.181055, 9.214235, 10.495286, 9.515837, 9.335026, 9.292696, 10.588056, 9.142194, 9.116324, 9.610898, 9.194105, 10.494316, 9.553759, 9.311406, 9.337927, 9.431247, 9.926181, 9.949552, 9.690339, 9.663579, 9.636179, 9.433277, 9.616248, 9.403527],
+        "current": [9.710559, 9.458168, 10.428475, 10.667407, 9.202635, 9.283685, 9.370436, 9.78079, 9.536818, 9.256256, 9.997951, 9.384337, 9.333756, 9.724159, 9.494007, 9.402186, 9.169365, 9.312266, 9.625388, 9.473668, 9.183206, 9.912691, 9.466798, 9.82882, 9.603948],
+        "proofs": [9.325656, 9.310856, 10.641767, 10.717997, 9.472618, 9.161105, 10.343395, 9.566268, 9.264416, 9.318756, 9.558898, 9.204725, 9.76532, 9.395897, 9.505568, 9.651059, 9.215286, 9.314516, 9.330646, 9.453547, 9.247195, 9.68128, 9.289236, 9.638619, 9.578918],
+        "scalar-prefix": [9.292857, 9.304186, 9.079494, 10.794418, 9.436467, 9.366147, 9.906161, 9.887611, 9.394877, 9.086595, 9.249796, 9.502928, 9.153495, 9.231326, 9.642319, 9.471728, 9.612238, 9.279586, 9.75577, 9.553648, 9.419387, 9.417467, 9.667629, 9.73168, 9.78851],
+        "c": [32.048282, 32.066542, 31.988252, 35.57153, 33.11773, 33.838867, 32.705127, 32.471015, 35.200778, 33.196361, 32.067792, 32.088092, 31.707219, 31.700279, 31.969991, 33.324032, 31.648028, 31.428657, 32.718027, 33.663945, 31.466077, 32.540515, 33.327572, 32.107922, 32.019291]
+      },
+      "median_ms": {
+        "before": 9.433277,
+        "current": 9.473668,
+        "proofs": 9.453547,
+        "scalar-prefix": 9.436467,
+        "c": 32.107922
+      },
+      "paired_ratio": 1.0153496080218298,
+      "paired_ratio_bootstrap95": [0.9776405139180373, 1.021313385924239],
+      "orders": [
+        ["before", "proofs", "current", "scalar-prefix", "c"],
+        ["proofs", "scalar-prefix", "before", "current", "c"],
+        ["c", "proofs", "current", "scalar-prefix", "before"],
+        ["c", "current", "scalar-prefix", "before", "proofs"],
+        ["before", "scalar-prefix", "proofs", "c", "current"],
+        ["before", "scalar-prefix", "c", "proofs", "current"],
+        ["before", "scalar-prefix", "proofs", "c", "current"],
+        ["before", "proofs", "c", "scalar-prefix", "current"],
+        ["scalar-prefix", "proofs", "current", "c", "before"],
+        ["current", "before", "proofs", "c", "scalar-prefix"],
+        ["c", "before", "scalar-prefix", "proofs", "current"],
+        ["c", "current", "proofs", "scalar-prefix", "before"],
+        ["scalar-prefix", "before", "proofs", "current", "c"],
+        ["c", "current", "before", "scalar-prefix", "proofs"],
+        ["c", "scalar-prefix", "current", "proofs", "before"],
+        ["scalar-prefix", "c", "before", "proofs", "current"],
+        ["proofs", "scalar-prefix", "c", "current", "before"],
+        ["c", "scalar-prefix", "before", "current", "proofs"],
+        ["before", "c", "proofs", "scalar-prefix", "current"],
+        ["proofs", "current", "c", "scalar-prefix", "before"],
+        ["current", "c", "scalar-prefix", "proofs", "before"],
+        ["current", "proofs", "before", "c", "scalar-prefix"],
+        ["proofs", "current", "c", "scalar-prefix", "before"],
+        ["scalar-prefix", "before", "current", "proofs", "c"],
+        ["proofs", "before", "scalar-prefix", "c", "current"],
+        ["scalar-prefix", "before", "c", "current", "proofs"],
+        ["current", "c", "before", "scalar-prefix", "proofs"],
+        ["scalar-prefix", "current", "before", "proofs", "c"]
+      ]
+    },
+    "utf8-matched": {
+      "commands": {
+        "before": ["/tmp/dyn-syntax/build/remaining-gaps-20261026/utf8-trace/checked-loop-before", "262144", "128", "912345"],
+        "current": ["/tmp/dyn-syntax/build/remaining-gaps-20261026/utf8-trace/checked-loop", "262144", "128", "912345"],
+        "c": ["/tmp/dyn-syntax/build/remaining-gaps-20261026/utf8-trace/c-common", "262144", "128", "912345"]
+      },
+      "hashes": {
+        "before": "a3fd984ad3b0348f5d50cec12cf94683c55fec1562bcb7103aa2a02fe7a4860e",
+        "current": "3e48bffa2c1bade64f299d9e694b898a18492e4918e0f4c5e581ef8fd9e4869e",
+        "c": "4e7d14f0fbb7219240a29620f4f044ddb27846008b3e9630d419cb1adb367668"
+      },
+      "expected": "18749879746560\n",
+      "samples_ms": {
+        "before": [51.840793, 52.712371, 52.324457, 57.584341, 51.775683, 51.39381, 52.047715, 51.604011, 52.471489, 60.704556, 51.679522, 51.538181, 52.265587, 51.538631, 53.330386, 51.686073, 52.291797, 52.087335, 53.389476, 52.749701, 51.633082, 52.750331, 53.012393, 51.917763, 53.912111],
+        "current": [50.400222, 51.199788, 51.024776, 56.687383, 50.750435, 50.994267, 51.872914, 51.217959, 50.114509, 53.162524, 50.898706, 50.870456, 50.235881, 50.813285, 50.754795, 50.327381, 50.858185, 52.70493, 50.739685, 50.28838, 51.162168, 50.527702, 50.400931, 50.416402, 51.084977],
+        "c": [29.513911, 29.712923, 29.699713, 30.242637, 29.834883, 29.607562, 29.628122, 29.571062, 29.690623, 35.138827, 29.734813, 29.637222, 29.745753, 29.661052, 29.933864, 29.674012, 29.553762, 29.768263, 29.801553, 29.762284, 29.689722, 29.811384, 29.723283, 29.625672, 29.643902]
+      },
+      "median_ms": {
+        "before": 52.265587,
+        "current": 50.858185,
+        "c": 29.699713
+      },
+      "paired_ratio": 0.9725843806821173,
+      "paired_ratio_bootstrap95": [0.9578651174719642, 0.9848911915245655],
+      "orders": [
+        ["current", "c", "before"],
+        ["current", "c", "before"],
+        ["before", "c", "current"],
+        ["c", "before", "current"],
+        ["before", "c", "current"],
+        ["before", "current", "c"],
+        ["current", "before", "c"],
+        ["before", "current", "c"],
+        ["c", "before", "current"],
+        ["before", "current", "c"],
+        ["c", "before", "current"],
+        ["before", "current", "c"],
+        ["c", "before", "current"],
+        ["current", "before", "c"],
+        ["current", "c", "before"],
+        ["c", "before", "current"],
+        ["c", "current", "before"],
+        ["current", "before", "c"],
+        ["before", "current", "c"],
+        ["before", "current", "c"],
+        ["c", "before", "current"],
+        ["before", "current", "c"],
+        ["current", "before", "c"],
+        ["before", "current", "c"],
+        ["c", "before", "current"],
+        ["c", "before", "current"],
+        ["current", "c", "before"],
+        ["current", "c", "before"]
+      ]
+    }
+  },
+  "limits": ["Shared desktop host; whole-process timings", "Current SDK and pointer-migrated sources versus retained pre-arena binaries", "No universal language ranking"]
+}
