@@ -363,39 +363,6 @@ fn zero_bytes_fast(items: []u8) {
   }
 }
 
-// Pushes into the newest block, or returns ok false when it lacks room.
-fn block_push(arena: *Arena, size: usize, alignment: usize, zero_memory: bool) Allocation {
-  block := arena.current
-  available := block.data[block.offset..]
-  if #len(available) == 0 {
-    return Allocation{error: ErrorKind.Capacity}
-  }
-  address := #cast(usize, &available[0])
-  remainder := address & (alignment - 1)
-  padding: usize = 0
-  if remainder != 0 {
-    padding = alignment - remainder
-  }
-  if padding > #len(available) || size > #len(available) - padding {
-    return Allocation{error: ErrorKind.Capacity}
-  }
-  end := block.offset + padding + size
-  if block.owns_memory && end > block.committed {
-    arena_commit(block, end)
-  }
-  memory := &available[padding]
-  block.offset = end
-  used := block.base + end - header_size()
-  if used > arena.peak_used {
-    arena.peak_used = used
-  }
-  arena_event(arena, observe.Kind.Allocated, size)
-  if zero_memory {
-    zero_bytes_fast(memory[..size])
-  }
-  return Allocation{ memory: memory, size: size, ok: true }
-}
-
 // Adds a block large enough for size bytes at alignment.
 fn arena_grow(arena: *Arena, size: usize, alignment: usize) Growth {
   if arena.fixed_buffer || arena.block_size == 0 {
@@ -458,17 +425,48 @@ fn arena_try_push_impl(arena: *Arena, size: usize, alignment: usize, zero_memory
   if size == 0 {
     return Allocation{ memory: nil, size: 0, ok: true }
   }
-  pushed := block_push(arena, size, alignment, zero_memory)
-  if pushed.ok {
-    return pushed
+  grew := false
+  for {
+    block := arena.current
+    available := block.data[block.offset..]
+    if #len(available) != 0 {
+      address := #cast(usize, &available[0])
+      remainder := address & (alignment - 1)
+      padding: usize = 0
+      if remainder != 0 {
+        padding = alignment - remainder
+      }
+      if padding <= #len(available) && size <= #len(available) - padding {
+        end := block.offset + padding + size
+        if block.owns_memory && end > block.committed {
+          arena_commit(block, end)
+        }
+        memory := &available[padding]
+        block.offset = end
+        used := block.base + end - header_size()
+        if used > arena.peak_used {
+          arena.peak_used = used
+        }
+        arena_event(arena, observe.Kind.Allocated, size)
+        if zero_memory {
+          zero_bytes_fast(memory[..size])
+        }
+        return Allocation{ memory: memory, size: size, ok: true }
+      }
+    }
+    // Retry once after growth, preserving the failure result if it still lacks room.
+    if grew {
+      return Allocation{error: ErrorKind.Capacity}
+    }
+    grown := arena_grow(arena, size, alignment)
+    if grown.error != ErrorKind.None {
+      failed := arena_failure(arena, grown.error)
+      failed.code = grown.code
+      return failed
+    }
+    grew = true
   }
-  grown := arena_grow(arena, size, alignment)
-  if grown.error != ErrorKind.None {
-    failed := arena_failure(arena, grown.error)
-    failed.code = grown.code
-    return failed
-  }
-  return block_push(arena, size, alignment, zero_memory)
+  #panic("unreachable arena push exit")
 }
 
 // Grows the newest allocation in place: when the size bytes at memory end at
