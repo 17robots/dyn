@@ -2,7 +2,9 @@
 """Check narrow syntactic std API conventions, not semantic compliance.
 
 Flag _into names, size/count companions of caller-storage APIs, pointer
-parameters named out/output, and find names returning isize. Comments, contract
+parameters named out/output, find names returning isize, and std or vendor
+imports that resolve from the project root instead of the SDK or relative to
+the importing module. Comments, contract
 tags, ownership, and the behavior of function bodies are not checked.
 """
 from pathlib import Path
@@ -117,9 +119,27 @@ def declarations(source):
         yield name, number, parameters, result, raw
 
 
+IMPORT_PATH = re.compile(r'"([^"]*)"')
+
+
+def imports(source):
+    """Yield (path, line) for every module named by a use statement."""
+    for number, line in enumerate(source.split('\n'), 1):
+        if re.match(r'\s*use\s+"', line):
+            for match in IMPORT_PATH.finditer(line.split('//', 1)[0]):
+                yield match[1], number
+
+
 def check(path):
     path = Path(path)
     problems = []
+    # Copied libraries keep working only when their imports never depend on
+    # the importing project's root.
+    for imported, number in imports(path.read_text()):
+        if not imported.startswith(('std/', 'vendor/', './', '../')):
+            problems.append((number, f'use "{imported}": resolves from the project root; use a ./ or ../ path'))
+    if 'vendor' in path.relative_to(ROOT).parts[:1]:
+        return problems
     declarations_found = list(declarations(path.read_text()))
     names = {name: parameters for name, _, parameters, _, _ in declarations_found}
     # Raw extern declarations must preserve the platform/C ABI, including out
@@ -146,7 +166,7 @@ def check(path):
 
 def main():
     failures = 0
-    for path in sorted((ROOT / 'std').rglob('*.dyn')):
+    for path in sorted([*(ROOT / 'std').rglob('*.dyn'), *(ROOT / 'vendor').rglob('*.dyn')]):
         for number, message in check(path):
             print(f'{path.relative_to(ROOT)}:{number}: {message}')
             failures += 1
