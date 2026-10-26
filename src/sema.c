@@ -1258,17 +1258,65 @@ static bool bind_pattern(DynAstProgram *a, DynType pattern, DynType actual,
   }
   return true;
 }
+/* Generic symbols need canonical type identity, not diagnostic names (which
+   strip module prefixes and truncate long compound types). Nominal names in
+   the merged source carry stable module prefixes; never hash AST table IDs. */
+static uint64_t instance_hash_word(uint64_t hash, uint64_t value) {
+  for (unsigned i = 0; i < 8; ++i) {
+    hash = (hash ^ (unsigned char)value) * UINT64_C(1099511628211);
+    value >>= 8;
+  }
+  return hash;
+}
+static uint64_t instance_hash_type(DynAstProgram *a, const DynSource *s,
+                                   DynType type, uint64_t hash) {
+  DynSpan name = {0};
+  if (dyn_type_is_struct(type)) {
+    hash = instance_hash_word(hash, DYN_TYPE_STRUCT_BASE);
+    name = a->structs[type - DYN_TYPE_STRUCT_BASE].name;
+  } else if (dyn_type_is_enum(type)) {
+    hash = instance_hash_word(hash, DYN_TYPE_ENUM_BASE);
+    name = a->enums[type - DYN_TYPE_ENUM_BASE].name;
+  } else if (dyn_type_is_distinct(type)) {
+    hash = instance_hash_word(hash, DYN_TYPE_DISTINCT_BASE);
+    name = a->aliases[type - DYN_TYPE_DISTINCT_BASE].name;
+  } else if (dyn_type_is_pointer(type)) {
+    DynAstPointer p = a->pointers[type - DYN_TYPE_POINTER_BASE];
+    hash = instance_hash_word(hash, DYN_TYPE_POINTER_BASE);
+    hash = instance_hash_word(hash, p.is_const);
+    return instance_hash_type(a, s, p.pointee, hash);
+  } else if (dyn_type_is_array(type)) {
+    DynAstArray v = a->arrays[type - DYN_TYPE_ARRAY_BASE];
+    hash = instance_hash_word(hash, DYN_TYPE_ARRAY_BASE);
+    hash = instance_hash_word(hash, v.length);
+    return instance_hash_type(a, s, v.element, hash);
+  } else if (dyn_type_is_slice(type)) {
+    DynAstSlice v = a->slices[type - DYN_TYPE_SLICE_BASE];
+    hash = instance_hash_word(hash, DYN_TYPE_SLICE_BASE);
+    hash = instance_hash_word(hash, v.is_const);
+    return instance_hash_type(a, s, v.element, hash);
+  } else if (dyn_type_is_function(type)) {
+    DynAstFnType f = a->fn_types[type - DYN_TYPE_FN_BASE];
+    hash = instance_hash_word(hash, DYN_TYPE_FN_BASE);
+    hash = instance_hash_word(hash, f.variadic);
+    hash = instance_hash_word(hash, f.param_count);
+    hash = instance_hash_type(a, s, f.return_type, hash);
+    for (uint32_t i = 0; i < f.param_count; ++i)
+      hash = instance_hash_type(a, s, a->fn_type_params[f.param_start + i], hash);
+    return hash;
+  } else {
+    return instance_hash_word(hash, type);
+  }
+  hash = instance_hash_word(hash, name.end_byte - name.start_byte);
+  for (uint32_t i = name.start_byte; i < name.end_byte; ++i)
+    hash = (hash ^ (unsigned char)s->text[i]) * UINT64_C(1099511628211);
+  return hash;
+}
 static uint64_t instance_hash(DynAstProgram *a, const DynSource *s,
                               const DynType *args, uint32_t count) {
-  uint64_t hash = UINT64_C(1469598103934665603);
-  for (uint32_t i = 0; i < count; ++i) {
-    char name[256];
-    dyn_type_format(a, args[i], s, name, sizeof(name));
-    for (const char *c = name; ; ++c) {
-      hash = (hash ^ (unsigned char)*c) * UINT64_C(1099511628211);
-      if (!*c) break;
-    }
-  }
+  uint64_t hash = instance_hash_word(UINT64_C(1469598103934665603), count);
+  for (uint32_t i = 0; i < count; ++i)
+    hash = instance_hash_type(a, s, args[i], hash);
   return hash;
 }
 /* Infer type arguments, find or create the instance, and check the call
