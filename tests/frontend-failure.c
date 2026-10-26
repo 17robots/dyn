@@ -15,11 +15,11 @@ int main(void) {
   char text[16384] = "struct Pair { x: i32, flag: bool }\nenum Choice { A, B: i32 }\n"
     "const answer: i32 = 42\nfn add(value: i32) i32 { return value + answer }\n"
     "fn consume(value: i32) { _ = value }\n"
-    "fn main() { consume(1) callback := &consume callback(2) p := Pair{x: add(1), flag: true} values := [1,2,3] for item in values { if item == p.x { break } } _ = \"hello\" }\n";
+    "fn main() {\n  consume(1)\n  callback := consume\n  callback(2)\n  p := Pair{x: add(1), flag: true}\n  values := [1,2,3]\n  for item in values { if item == p.x { break } }\n  _ = \"hello\"\n}\n";
   // Cross the small-function threshold and exercise local-index growth/failure.
-  strcat(text, "fn many() { ");
+  strcat(text, "fn many() {\n");
   for (unsigned i = 0; i < 80; ++i) {
-    char local[64]; snprintf(local, sizeof(local), "value%u := %u _ = value%u ", i, i, i);
+    char local[64]; snprintf(local, sizeof(local), "value%u := %u\n_ = value%u\n", i, i, i);
     strcat(text, local);
   }
   strcat(text, "}\n");
