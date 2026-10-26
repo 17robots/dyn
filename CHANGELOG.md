@@ -14,6 +14,9 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+Candidate upgrade guide: [0.1.0-preview.26](docs/migrations/0.1.0-preview.26.md).
+This section describes candidate changes; it does not announce a published release.
+
 - **Breaking arena API:** constructors return `*mem.Arena`, with the header in
   backing storage. Pass the pointer directly rather than `&arena`. Explicit
   `arena_create(0)` selects the target default; zero arena values no longer
@@ -123,10 +126,11 @@ servers so they pick up the new `dyn`.
   works on the caller's slot array through a `generation` field. Removed:
   `std/container/string_map`, `mem.Pool`, `mem.FreeList` and their functions.
   See `docs/migrations/containers.md`.
-- **Breaking:** `mem.append(&arena, &items, value)` replaces
-  `mem.append(&items, &count, &arena, value)`. The slice owns the rest of its
-  arena, so appends never copy and element addresses never change; it panics
-  when something else was pushed on that arena. New `mem.append_many`.
+- **Breaking:** `mem.append(arena, &items, value)` replaces
+  `mem.append(&items, &count, &arena, value)`. The slice must be the newest
+  allocation in its arena. Appends extend it in place when possible, but move
+  it when it outgrows a block; reacquire element pointers and views afterward.
+  Appending after another allocation panics. New `mem.append_many`.
 - Unknown field errors name the type and field: `Node has no field 'prev'`.
 - **Breaking:** function types drop the `*`: write `fn(i32, i32) i32`, not
   `*fn(i32, i32) i32`. Parameters may be named for documentation:
@@ -161,8 +165,8 @@ servers so they pick up the new `dyn`.
 - `mem.append` grows the arena's newest allocation in place instead of copying,
   through the new `mem.arena_try_extend`. A slice built in a loop with nothing
   else allocated in between now costs its final size, not twice that.
-- Typed pools: `mem.pool_for(T, &arena, count)`, `mem.acquire(T, &pool)`
-  (zeroed `*T`) and `mem.release(&pool, item)`.
+- Legacy typed pools are superseded by the caller-owned intrusive containers
+  described above; `mem.Pool` and `mem.FreeList` are removed.
 - `tests/bare-metal.py` kills the QEMU process group on timeout. A trap raised
   while reporting a trap on `riscv64-none` exits with status 103 instead of
   trapping again.
