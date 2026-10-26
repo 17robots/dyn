@@ -138,7 +138,7 @@ def check(path):
     for imported, number in imports(path.read_text()):
         if not imported.startswith(('std/', 'vendor/', './', '../')):
             problems.append((number, f'use "{imported}": resolves from the project root; use a ./ or ../ path'))
-    if 'vendor' in path.relative_to(ROOT).parts[:1]:
+    if path.resolve().is_relative_to(ROOT / 'vendor'):
         return problems
     declarations_found = list(declarations(path.read_text()))
     names = {name: parameters for name, _, parameters, _, _ in declarations_found}
