@@ -26,6 +26,7 @@ for t, n in [('u8',16), ('i8',16), ('u16',8), ('i16',8), ('u32',4), ('i32',4), (
         max_value = (1 << int(t[1:]))-1 if t[0]=='u' else (1 << (int(t[1:])-1))-1
         source.append(f'  maximum := simd.{prefix}_splat({max_value})\n  one := simd.{prefix}_splat(1)\n  overflow := simd.{prefix}_add(maximum, one)\n  product := simd.{prefix}_mul(maximum, maximum)\n  for i in 0..{n} {{ check(overflow[i] == #wrap(maximum[i] + one[i]) && product[i] == #wrap(maximum[i] * maximum[i])) }}')
         source.append(f'  b[0] = a[0]\n  mask := simd.{prefix}_equal(a,b)\n  selected := simd.{prefix}_select(mask, a, b)\n  check(mask[0] == ~#cast({t}, 0))\n  for i in 1..{n} {{ check(mask[i] == 0 && selected[i] == b[i]) }}')
+        source.append(f'  five := simd.{prefix}_splat(5)\n  nine := simd.{prefix}_splat(9)\n  chosen := simd.{prefix}_select(mask, five, nine)\n  check(chosen[0] == 5)\n  for i in 1..{n} {{ check(chosen[i] == 9) }}\n  bits := simd.{prefix}_select(five, five, nine)\n  for i in 0..{n} {{ check(bits[i] == 13) }}')
     source.append('}')
 source.append('}')
 with tempfile.TemporaryDirectory(prefix='dyn-simd-lanes-') as directory:
