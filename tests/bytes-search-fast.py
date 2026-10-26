@@ -107,5 +107,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-bytes-search-') as directory:
     (root / 'main.dyn').write_text(SOURCE)
     for mode in ([], ['--release']):
         subprocess.run([DYN, 'build', str(root), '--quiet', '--no-cache', '--output', str(root/'run'), *mode], cwd=ROOT, check=True)
-        subprocess.run([str(root/'run')], check=True, timeout=60)
+        # The exhaustive checked build exceeds 60 seconds on two-core CI.
+        # Preserve every vector; release remains subject to the tighter bound.
+        subprocess.run([str(root/'run')], check=True, timeout=180 if not mode else 60)
 print('PASS byte search differential, alignment, random needles, repetition, guard pages (debug/release)')
