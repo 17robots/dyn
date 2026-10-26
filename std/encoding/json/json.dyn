@@ -152,9 +152,16 @@ fn utf8_byte(value: usize, marker: u8) u8 {
 }
 
 fn skip(cursor: *Cursor) {
-  for cursor.at < #len(cursor.source) && whitespace(cursor.source[cursor.at]) {
-    cursor.at += 1
+  source := cursor.source
+  at := cursor.at
+  for at < #len(source) {
+    byte := source[at]
+    if byte != ' ' && byte != '\n' && byte != '\r' && byte != '\t' {
+      break
+    }
+    at += 1
   }
+  cursor.at = at
 }
 
 fn literal(cursor: *Cursor, text: []const u8) bool {
@@ -226,14 +233,14 @@ fn number(cursor: *Cursor) bool {
     if cursor.source[cursor.at] < '1' || cursor.source[cursor.at] > '9' {
       return false
     }
-    for cursor.at < #len(cursor.source) && digit(cursor.source[cursor.at]) {
+    for cursor.at < #len(cursor.source) && (cursor.source[cursor.at] >= '0' && cursor.source[cursor.at] <= '9') {
       cursor.at += 1
     }
   }
   if cursor.at < #len(cursor.source) && cursor.source[cursor.at] == '.' {
     cursor.at += 1
     exponent_start := cursor.at
-    for cursor.at < #len(cursor.source) && digit(cursor.source[cursor.at]) {
+    for cursor.at < #len(cursor.source) && (cursor.source[cursor.at] >= '0' && cursor.source[cursor.at] <= '9') {
       cursor.at += 1
     }
     if cursor.at == exponent_start {
@@ -246,7 +253,7 @@ fn number(cursor: *Cursor) bool {
       cursor.at += 1
     }
     start := cursor.at
-    for cursor.at < #len(cursor.source) && digit(cursor.source[cursor.at]) {
+    for cursor.at < #len(cursor.source) && (cursor.source[cursor.at] >= '0' && cursor.source[cursor.at] <= '9') {
       cursor.at += 1
     }
     if cursor.at == start {

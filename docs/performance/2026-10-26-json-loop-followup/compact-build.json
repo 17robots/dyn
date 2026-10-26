@@ -1,0 +1,29 @@
+[
+  {
+    "variant": "old-mutable",
+    "command": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/dyn-release", "build", "/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/json-compact-app/app", "--release", "--opt-level", "3", "--cpu", "generic", "--no-cache", "--output", "/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/json-compact-app/old-mutable"],
+    "source_sha256": "c1211172a1e2fb420742015a30e7c8c79fb7ce10a04b39ba900b73ffc00aae9a",
+    "compiler_sha256": "e19afab4b479c86a18b36f27367bf51dc6f1646a768e1acdb26a5dbcafe25377",
+    "mutable_json_sha256": "1910c8c3cde2ed68d93c3c75c0be8813c17869aa260b29fc4d194c0e8c92cd2d",
+    "compact_json_sha256": "080836186f220d6823463867ae7380ee114f4239ee9c0167c92cec7bc213d2e0",
+    "binary_sha256": "0e603ee85fd2fd341aeb6d5d1607988814d2fde0f0ec15844be6f685682a0c6f"
+  },
+  {
+    "variant": "current-mutable",
+    "command": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/dyn-release", "build", "/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/json-compact-app/app", "--release", "--opt-level", "3", "--cpu", "generic", "--no-cache", "--output", "/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/json-compact-app/current-mutable"],
+    "source_sha256": "c1211172a1e2fb420742015a30e7c8c79fb7ce10a04b39ba900b73ffc00aae9a",
+    "compiler_sha256": "e19afab4b479c86a18b36f27367bf51dc6f1646a768e1acdb26a5dbcafe25377",
+    "mutable_json_sha256": "bf466a6d2aed93f01d4541751f0db1346fb0c1167566bc8d32f84b021809c552",
+    "compact_json_sha256": "080836186f220d6823463867ae7380ee114f4239ee9c0167c92cec7bc213d2e0",
+    "binary_sha256": "3cdb22e6b3829b582d1f6b7ea4ceb383b5fab89802af26cbfc473c0a1d7ee353"
+  },
+  {
+    "variant": "compact",
+    "command": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/dyn-release", "build", "/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/json-compact-app/app", "--release", "--opt-level", "3", "--cpu", "generic", "--no-cache", "--output", "/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/json-compact-app/compact"],
+    "source_sha256": "1f4e341891b427c81d01affc48a534a828eac9f2de029f7338339fbd54b567c5",
+    "compiler_sha256": "e19afab4b479c86a18b36f27367bf51dc6f1646a768e1acdb26a5dbcafe25377",
+    "mutable_json_sha256": "bf466a6d2aed93f01d4541751f0db1346fb0c1167566bc8d32f84b021809c552",
+    "compact_json_sha256": "080836186f220d6823463867ae7380ee114f4239ee9c0167c92cec7bc213d2e0",
+    "binary_sha256": "a70b01d0626c9c577a720958618fdeded92252ac1764661c01e4ef272c1ea30c"
+  }
+]
