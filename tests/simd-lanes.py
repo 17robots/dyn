@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """128-bit lanes: scalar oracle, per-lane wrap, float arithmetic and native SIMD."""
 import os
+import platform
 from pathlib import Path
 import shutil
 import subprocess
@@ -39,7 +40,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-simd-lanes-') as directory:
         built = subprocess.run(command, capture_output=True, text=True, timeout=300)
         assert built.returncode == 0, built.stderr
         subprocess.run([str(work / 'program')], check=True, timeout=30)
-        if mode == '--release' and os.uname().machine in ('x86_64', 'aarch64'):
+        if mode == '--release' and platform.machine().lower() in ('x86_64', 'amd64', 'aarch64', 'arm64'):
             assert 'vectorized' in built.stderr, built.stderr
     for target in ('aarch64-linux', 'riscv64-linux', 'x86_64-macos', 'aarch64-macos', 'x86_64-windows', 'aarch64-windows', 'wasm32-wasi'):
         output = work / target
