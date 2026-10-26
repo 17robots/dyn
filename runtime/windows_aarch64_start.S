@@ -247,6 +247,11 @@ dyn_signal_set_event:
     adrp x16, __imp_SetEvent
     ldr x16, [x16, :lo12:__imp_SetEvent]
     br x16
+.global dyn_time_zone_information
+dyn_time_zone_information:
+    adrp x16, __imp_GetDynamicTimeZoneInformation
+    ldr x16, [x16, :lo12:__imp_GetDynamicTimeZoneInformation]
+    br x16
 .global dyn_win_load_library
 dyn_win_load_library:
     adrp x16, __imp_LoadLibraryA
@@ -652,6 +657,7 @@ kernel_lookup:
     thunk CloseHandle
     thunk WaitForSingleObject
     thunk SwitchToThread
+    thunk GetDynamicTimeZoneInformation
     thunk SetConsoleCtrlHandler
     thunk CreateEventW
     thunk SetEvent
@@ -743,6 +749,7 @@ iat ExitProcess
 iat CloseHandle
 iat WaitForSingleObject
 iat SwitchToThread
+iat GetDynamicTimeZoneInformation
 iat SetConsoleCtrlHandler
 iat CreateEventW
 iat SetEvent
@@ -835,6 +842,7 @@ hint ExitProcess
 hint CloseHandle
 hint WaitForSingleObject
 hint SwitchToThread
+hint GetDynamicTimeZoneInformation
 hint SetConsoleCtrlHandler
 hint CreateEventW
 hint SetEvent

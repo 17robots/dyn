@@ -1,0 +1,578 @@
+// Time zones: offsets from UTC, daylight saving time and zone abbreviations.
+// POSIX systems read TZif files from the zoneinfo database; Windows reads the
+// system zone rule. All zone data lives in the caller's arena.
+
+use "std/time" time
+use "std/mem" mem
+use "std/bytes" bytes
+use "std/errors" errors
+use "std/strings" strings
+
+// One local-time type: seconds east of UTC, daylight flag and abbreviation.
+pub struct Type { offset: i32, dst: bool, abbreviation: []const u8 }
+
+// A yearly transition date. Month rules (kind 2) name the week (1-5, 5 is
+// last) and weekday (0 is Sunday) of month. Kind 0 is a Julian day 1-365 that
+// ignores February 29; kind 1 is a zero-based day 0-365. time is seconds after
+// local midnight and may be negative or exceed one day.
+pub struct Rule { kind: u8, month: u8, week: u8, weekday: u8, day: u16, time: i32 }
+
+// transitions[i] is the UTC second from which types[transition_types[i]]
+// applies. After the last transition, or with no transitions, the recurring
+// rule applies when has_rule is set.
+pub struct Zone {
+  name: []const u8,
+  transitions: []i64,
+  transition_types: []u8,
+  types: []Type,
+  has_rule: bool,
+  standard: Type,
+  daylight: Type,
+  has_daylight: bool,
+  start: Rule,
+  end: Rule,
+}
+
+pub struct ZoneResult { value: Zone, kind: errors.Kind, error: isize, ok: bool }
+
+// A local time with the type in effect at that instant.
+pub struct Local { value: time.DateTime, offset: i32, dst: bool, abbreviation: []const u8 }
+
+// UTC with no daylight saving time.
+pub fn utc() Zone {
+  standard := Type{ abbreviation: "UTC" }
+  return Zone{ name: "UTC", has_rule: true, standard: standard, daylight: standard }
+}
+
+fn rule_day(rule: Rule, year: i32) i64 {
+  first := time.days_from_civil(year, 1, 1)
+  leap := year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
+  if rule.kind == 0 {
+    day := #cast(i64, rule.day) - 1
+    if leap && rule.day >= 60 {
+      day += 1
+    }
+    return first + day
+  }
+  if rule.kind == 1 {
+    return first + #cast(i64, rule.day)
+  }
+  month_start := time.days_from_civil(year, rule.month, 1)
+  first_day := time.DateTime{ year: year, month: rule.month, day: 1 }
+  start_weekday := #cast(i64, #cast(u8, time.weekday(&first_day)))
+  day := month_start + (#cast(i64, rule.weekday) - start_weekday + 7) % 7 + (#cast(i64, rule.week) - 1) * 7
+  lengths: [12]i64 = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+  length := lengths[#cast(usize, rule.month) - 1]
+  if rule.month == 2 && leap {
+    length = 29
+  }
+  for day >= month_start + length {
+    day -= 7
+  }
+  return day
+}
+
+// The UTC second at which rule fires in year, for wall clock offset.
+fn rule_instant(rule: Rule, year: i32, offset: i32) i64 {
+  return rule_day(rule, year) * 86400 + #cast(i64, rule.time) - #cast(i64, offset)
+}
+
+fn rule_type(zone: *const Zone, seconds: i64) Type {
+  if !zone.has_daylight {
+    return zone.standard
+  }
+  year := time.date_time(time.Instant{ seconds: seconds }, #cast(i64, zone.standard.offset)).year
+  start := rule_instant(zone.start, year, zone.standard.offset)
+  end := rule_instant(zone.end, year, zone.daylight.offset)
+  if start < end {
+    if seconds >= start && seconds < end {
+      return zone.daylight
+    }
+    return zone.standard
+  }
+  // Southern hemisphere: daylight time spans the new year.
+  if seconds >= end && seconds < start {
+    return zone.standard
+  }
+  return zone.daylight
+}
+
+// The type in effect at a UTC second.
+pub fn type_at(zone: *const Zone, seconds: i64) Type {
+  count := #len(zone.transitions)
+  if count == 0 || seconds >= zone.transitions[count - 1] && zone.has_rule {
+    if zone.has_rule {
+      return rule_type(zone, seconds)
+    }
+  }
+  if count == 0 {
+    if #len(zone.types) != 0 {
+      return zone.types[0]
+    }
+    return zone.standard
+  }
+  if seconds < zone.transitions[0] {
+    // Before the first transition: the first standard-time type.
+    for candidate in zone.types {
+      if !candidate.dst {
+        return candidate
+      }
+    }
+    return zone.types[0]
+  }
+  low: usize = 0
+  high := count
+  for high - low > 1 {
+    middle := low + (high - low) / 2
+    if zone.transitions[middle] <= seconds {
+      low = middle
+    }
+    else {
+      high = middle
+    }
+  }
+  return zone.types[#cast(usize, zone.transition_types[low])]
+}
+
+// The local calendar time of an instant in zone.
+pub fn local(zone: *const Zone, instant: time.Instant) Local {
+  chosen := type_at(zone, instant.seconds)
+  return Local{ value: time.date_time(instant, #cast(i64, chosen.offset)), offset: chosen.offset, dst: chosen.dst, abbreviation: chosen.abbreviation }
+}
+
+// The instant of a local wall clock time in zone. A time skipped by a forward
+// transition uses the offset before it; a repeated time takes the earlier one.
+pub fn instant_of_local(zone: *const Zone, value: *const time.DateTime) time.Instant {
+  guess := time.instant_of(value, 0)
+  // The offset at the wall time read as UTC, then corrected once or twice.
+  first := type_at(zone, guess.seconds - 86400)
+  candidate := time.instant_of(value, #cast(i64, first.offset))
+  second := type_at(zone, candidate.seconds)
+  if second.offset != first.offset {
+    retried := time.instant_of(value, #cast(i64, second.offset))
+    if type_at(zone, retried.seconds).offset == second.offset {
+      return retried
+    }
+  }
+  return candidate
+}
+
+fn read_u32(data: []const u8, at: usize) u32 {
+  return #cast(u32, data[at]) << 24 | #cast(u32, data[at + 1]) << 16 | #cast(u32, data[at + 2]) << 8 | #cast(u32, data[at + 3])
+}
+
+fn read_i64(data: []const u8, at: usize) i64 {
+  high := #cast(u64, read_u32(data, at))
+  low := #cast(u64, read_u32(data, at + 4))
+  return #bitcast(i64, high << 32 | low)
+}
+
+fn invalid() ZoneResult {
+  return ZoneResult{ kind: errors.Kind.InvalidInput }
+}
+
+// Parses a TZif file (RFC 8536, versions 1 through 4) into arena storage. The
+// result borrows nothing from data. name is copied into the zone.
+pub fn parse_tzif(arena: *mem.Arena, name: []const u8, data: []const u8) ZoneResult {
+  if #len(data) < 44 || !bytes.starts_with(data, "TZif") {
+    return invalid()
+  }
+  mark := mem.arena_mark(arena)
+  version := data[4]
+  at: usize = 0
+  time_size: usize = 4
+  if version >= '2' {
+    // Skip the version 1 block; its 32-bit times are superseded.
+    counts := data[20..44]
+    utc_count := #cast(usize, read_u32(counts, 0))
+    standard_count := #cast(usize, read_u32(counts, 4))
+    leap_count := #cast(usize, read_u32(counts, 8))
+    transition_count := #cast(usize, read_u32(counts, 12))
+    type_count := #cast(usize, read_u32(counts, 16))
+    character_count := #cast(usize, read_u32(counts, 20))
+    at = 44 + transition_count * 5 + type_count * 6 + character_count + leap_count * 8 + standard_count + utc_count
+    time_size = 8
+    if at + 44 > #len(data) || !bytes.starts_with(data[at..], "TZif") {
+      return invalid()
+    }
+  }
+  counts := data[at + 20..at + 44]
+  utc_count := #cast(usize, read_u32(counts, 0))
+  standard_count := #cast(usize, read_u32(counts, 4))
+  leap_count := #cast(usize, read_u32(counts, 8))
+  transition_count := #cast(usize, read_u32(counts, 12))
+  type_count := #cast(usize, read_u32(counts, 16))
+  character_count := #cast(usize, read_u32(counts, 20))
+  body := at + 44
+  size := transition_count * time_size + transition_count + type_count * 6 + character_count + leap_count * (time_size + 4) + standard_count + utc_count
+  if type_count == 0 || type_count > 256 || body + size > #len(data) {
+    return invalid()
+  }
+  zone := Zone{ name: strings.clone(arena, name) }
+  zone.transitions = mem.push_array(i64, arena, transition_count)
+  zone.transition_types = mem.push_array(u8, arena, transition_count)
+  zone.types = mem.push_array(Type, arena, type_count)
+  for i in 0..transition_count {
+    if time_size == 8 {
+      zone.transitions[i] = read_i64(data, body + i * 8)
+    }
+    else {
+      zone.transitions[i] = #cast(i64, #bitcast(i32, read_u32(data, body + i * 4)))
+    }
+  }
+  indexes := body + transition_count * time_size
+  for i in 0..transition_count {
+    index := data[indexes + i]
+    if #cast(usize, index) >= type_count {
+      mem.arena_rewind(arena, mark)
+      return invalid()
+    }
+    zone.transition_types[i] = index
+  }
+  types_at := indexes + transition_count
+  characters_at := types_at + type_count * 6
+  characters := strings.clone(arena, data[characters_at..characters_at + character_count])
+  for i in 0..type_count {
+    entry := types_at + i * 6
+    designation := #cast(usize, data[entry + 5])
+    if designation >= character_count {
+      mem.arena_rewind(arena, mark)
+      return invalid()
+    }
+    end := designation
+    for end < character_count && characters[end] != 0 {
+      end += 1
+    }
+    zone.types[i] = Type{ offset: #bitcast(i32, read_u32(data, entry)), dst: data[entry + 4] != 0, abbreviation: characters[designation..end] }
+  }
+  if version >= '2' {
+    footer := body + size
+    if footer < #len(data) && data[footer] == 10 {
+      close := footer + 1
+      for close < #len(data) && data[close] != 10 {
+        close += 1
+      }
+      if close < #len(data) && close > footer + 1 {
+        rule := parse_posix(arena, data[footer + 1..close])
+        if !rule.ok {
+          mem.arena_rewind(arena, mark)
+          return invalid()
+        }
+        zone.has_rule = true
+        zone.standard = rule.value.standard
+        zone.daylight = rule.value.daylight
+        zone.has_daylight = rule.value.has_daylight
+        zone.start = rule.value.start
+        zone.end = rule.value.end
+      }
+    }
+  }
+  return ZoneResult{ value: zone, ok: true }
+}
+
+struct Cursor { text: []const u8, at: usize, ok: bool }
+
+fn peek(cursor: *Cursor) u8 {
+  if cursor.at >= #len(cursor.text) {
+    return 0
+  }
+  return cursor.text[cursor.at]
+}
+
+fn digit(byte: u8) bool {
+  return byte >= '0' && byte <= '9'
+}
+
+fn number(cursor: *Cursor, maximum: i64) i64 {
+  if !digit(peek(cursor)) {
+    cursor.ok = false
+    return 0
+  }
+  value: i64 = 0
+  for digit(peek(cursor)) {
+    value = value * 10 + #cast(i64, peek(cursor) - '0')
+    cursor.at += 1
+    if value > maximum {
+      cursor.ok = false
+      return 0
+    }
+  }
+  return value
+}
+
+fn abbreviation(arena: *mem.Arena, cursor: *Cursor) []const u8 {
+  start := cursor.at
+  if peek(cursor) == '<' {
+    cursor.at += 1
+    start = cursor.at
+    for peek(cursor) != '>' && peek(cursor) != 0 {
+      cursor.at += 1
+    }
+    if peek(cursor) != '>' || cursor.at - start < 3 {
+      cursor.ok = false
+      return ""
+    }
+    text := cursor.text[start..cursor.at]
+    cursor.at += 1
+    return strings.clone(arena, text)
+  }
+  for (peek(cursor) >= 'A' && peek(cursor) <= 'Z') || (peek(cursor) >= 'a' && peek(cursor) <= 'z') {
+    cursor.at += 1
+  }
+  if cursor.at - start < 3 {
+    cursor.ok = false
+    return ""
+  }
+  return strings.clone(arena, cursor.text[start..cursor.at])
+}
+
+// [+-]hh[:mm[:ss]] in seconds.
+fn clock(cursor: *Cursor, maximum_hours: i64) i64 {
+  negative := false
+  if peek(cursor) == '+' || peek(cursor) == '-' {
+    negative = peek(cursor) == '-'
+    cursor.at += 1
+  }
+  value := number(cursor, maximum_hours) * 3600
+  if peek(cursor) == ':' {
+    cursor.at += 1
+    value += number(cursor, 59) * 60
+    if peek(cursor) == ':' {
+      cursor.at += 1
+      value += number(cursor, 59)
+    }
+  }
+  if negative {
+    return -value
+  }
+  return value
+}
+
+fn rule(cursor: *Cursor) Rule {
+  value := Rule{ time: 7200 }
+  if peek(cursor) == 'M' {
+    cursor.at += 1
+    value.kind = 2
+    value.month = #cast(u8, number(cursor, 12))
+    if peek(cursor) != '.' {
+      cursor.ok = false
+      return value
+    }
+    cursor.at += 1
+    value.week = #cast(u8, number(cursor, 5))
+    if peek(cursor) != '.' {
+      cursor.ok = false
+      return value
+    }
+    cursor.at += 1
+    value.weekday = #cast(u8, number(cursor, 6))
+    if value.month == 0 || value.week == 0 {
+      cursor.ok = false
+    }
+  }
+  else if peek(cursor) == 'J' {
+    cursor.at += 1
+    value.day = #cast(u16, number(cursor, 365))
+    if value.day == 0 {
+      cursor.ok = false
+    }
+  }
+  else {
+    value.kind = 1
+    value.day = #cast(u16, number(cursor, 365))
+  }
+  if peek(cursor) == '/' {
+    cursor.at += 1
+    value.time = #cast(i32, clock(cursor, 167))
+  }
+  return value
+}
+
+// Parses a POSIX TZ rule such as "CET-1CEST,M3.5.0,M10.5.0/3" into a zone with
+// no transition table. POSIX offsets count west of UTC; Type offsets count east.
+pub fn parse_posix(arena: *mem.Arena, text: []const u8) ZoneResult {
+  mark := mem.arena_mark(arena)
+  cursor := Cursor{ text: text, ok: true }
+  zone := Zone{ name: strings.clone(arena, text), has_rule: true }
+  zone.standard.abbreviation = abbreviation(arena, &cursor)
+  zone.standard.offset = #cast(i32, -clock(&cursor, 24))
+  zone.daylight = zone.standard
+  if cursor.ok && peek(&cursor) != 0 {
+    zone.has_daylight = true
+    zone.daylight = Type{ offset: zone.standard.offset + 3600, dst: true, abbreviation: abbreviation(arena, &cursor) }
+    if peek(&cursor) != ',' && peek(&cursor) != 0 {
+      zone.daylight.offset = #cast(i32, -clock(&cursor, 24))
+    }
+    // Without explicit rules POSIX leaves the dates to the implementation; use
+    // the United States rules, as glibc does.
+    zone.start = Rule{ kind: 2, month: 3, week: 2, time: 7200 }
+    zone.end = Rule{ kind: 2, month: 11, week: 1, time: 7200 }
+    if peek(&cursor) == ',' {
+      cursor.at += 1
+      zone.start = rule(&cursor)
+      if peek(&cursor) != ',' {
+        cursor.ok = false
+      }
+      cursor.at += 1
+      zone.end = rule(&cursor)
+    }
+  }
+  if !cursor.ok || cursor.at != #len(text) {
+    mem.arena_rewind(arena, mark)
+    return invalid()
+  }
+  return ZoneResult{ value: zone, ok: true }
+}
+
+// The zone named by an IANA name such as "Europe/Berlin", read from the
+// system zoneinfo database. Windows has no database and reports Unsupported.
+pub fn load(arena: *mem.Arena, name: []const u8) ZoneResult {
+  if #len(name) == 0 || name[0] == '/' || bytes.find(name, "..") != #len(name) {
+    return invalid()
+  }
+  return platform_load(arena, name)
+}
+
+// The system's local zone. On POSIX systems a TZ variable takes precedence
+// over /etc/localtime; Windows uses the configured zone and its current rule.
+// When nothing is configured the result is UTC.
+pub fn system(arena: *mem.Arena) ZoneResult {
+  return platform_system(arena)
+}
+
+const weekday_names: [7][]const u8 = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+const month_names: [12][]const u8 = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
+
+fn put(output: []u8, used: *usize, text: []const u8) bool {
+  if used.* + #len(text) > #len(output) {
+    return false
+  }
+  for i in 0..#len(text) {
+    output[used.* + i] = text[i]
+  }
+  used.* += #len(text)
+  return true
+}
+
+fn put_number(output: []u8, used: *usize, value: i64, width: usize) bool {
+  digits: [24]u8 = []
+  count: usize = 0
+  rest := value
+  negative := rest < 0
+  if negative {
+    rest = -rest
+  }
+  for rest != 0 || count < width {
+    digits[23 - count] = '0' + #cast(u8, rest % 10)
+    rest /= 10
+    count += 1
+  }
+  if negative && !put(output, used, "-") {
+    return false
+  }
+  return put(output, used, digits[24 - count..])
+}
+
+fn put_offset(output: []u8, used: *usize, offset: i32, colon: bool) bool {
+  sign := "+"
+  magnitude := offset
+  if offset < 0 {
+    sign = "-"
+    magnitude = -offset
+  }
+  ok := put(output, used, sign) && put_number(output, used, #cast(i64, magnitude / 3600), 2)
+  if colon {
+    ok = ok && put(output, used, ":")
+  }
+  return ok && put_number(output, used, #cast(i64, magnitude / 60 % 60), 2)
+}
+
+// Formats a local time into arena storage. Directives: %Y year, %m month,
+// %d day, %H hour, %M minute, %S second, %j day of year, %a and %A weekday,
+// %b and %B month, %Z abbreviation, %z offset as +hhmm, %:z as +hh:mm and %%
+// a percent sign. Other bytes copy through. An unknown directive returns "".
+pub fn format(arena: *mem.Arena, pattern: []const u8, value: *const Local) []u8 {
+  mark := mem.arena_mark(arena)
+  capacity := #len(pattern) * (12 + #len(value.abbreviation)) + 16
+  output := mem.push_bytes_uninit(arena, capacity)
+  used: usize = 0
+  date := &value.value
+  at: usize = 0
+  ok := true
+  for ok && at < #len(pattern) {
+    byte := pattern[at]
+    at += 1
+    if byte != '%' {
+      ok = put(output, &used, pattern[at - 1..at])
+      continue
+    }
+    if at == #len(pattern) {
+      ok = false
+      break
+    }
+    directive := pattern[at]
+    at += 1
+    if directive == 'Y' {
+      ok = put_number(output, &used, #cast(i64, date.year), 4)
+    }
+    else if directive == 'm' {
+      ok = put_number(output, &used, #cast(i64, date.month), 2)
+    }
+    else if directive == 'd' {
+      ok = put_number(output, &used, #cast(i64, date.day), 2)
+    }
+    else if directive == 'H' {
+      ok = put_number(output, &used, #cast(i64, date.hour), 2)
+    }
+    else if directive == 'M' {
+      ok = put_number(output, &used, #cast(i64, date.minute), 2)
+    }
+    else if directive == 'S' {
+      ok = put_number(output, &used, #cast(i64, date.second), 2)
+    }
+    else if directive == 'j' {
+      ok = put_number(output, &used, #cast(i64, time.day_of_year(date)), 3)
+    }
+    else if directive == 'a' || directive == 'A' {
+      name := weekday_names[#cast(usize, #cast(u8, time.weekday(date)))]
+      if directive == 'a' {
+        name = name[..3]
+      }
+      ok = put(output, &used, name)
+    }
+    else if directive == 'b' || directive == 'B' {
+      name := month_names[#cast(usize, date.month) - 1]
+      if directive == 'b' {
+        name = name[..3]
+      }
+      ok = put(output, &used, name)
+    }
+    else if directive == 'Z' {
+      ok = put(output, &used, value.abbreviation)
+    }
+    else if directive == 'z' {
+      ok = put_offset(output, &used, value.offset, false)
+    }
+    else if directive == ':' && at < #len(pattern) && pattern[at] == 'z' {
+      at += 1
+      ok = put_offset(output, &used, value.offset, true)
+    }
+    else if directive == '%' {
+      ok = put(output, &used, "%")
+    }
+    else {
+      ok = false
+    }
+  }
+  if !ok || !time.valid(date) {
+    mem.arena_rewind(arena, mark)
+    return output[..0]
+  }
+  mem.arena_rewind(arena, mark + used)
+  return output[..used]
+}
+
+// RFC 3339 with the zone offset, such as 2026-10-26T14:05:09+01:00, or "".
+pub fn format_rfc3339(arena: *mem.Arena, value: *const Local) []u8 {
+  return format(arena, "%Y-%m-%dT%H:%M:%S%:z", value)
+}

@@ -206,3 +206,90 @@ pub fn format_iso8601(arena: *mem.Arena, value: *const DateTime) []u8 {
   mem.arena_rewind(arena, mark + #len(text))
   return text
 }
+
+pub enum Weekday { Sunday, Monday, Tuesday, Wednesday, Thursday, Friday, Saturday }
+
+// Days since 1970-01-01 for a proleptic Gregorian date (Hinnant's
+// days_from_civil). Valid for any i32 year.
+pub fn days_from_civil(year: i32, month: u8, day: u8) i64 {
+  y := #cast(i64, year)
+  if month <= 2 {
+    y -= 1
+  }
+  era := y / 400
+  if y < 0 && y % 400 != 0 {
+    era = (y - 399) / 400
+  }
+  year_of_era := y - era * 400
+  shifted := #cast(i64, month) + 9
+  if month > 2 {
+    shifted = #cast(i64, month) - 3
+  }
+  day_of_year := (153 * shifted + 2) / 5 + #cast(i64, day) - 1
+  day_of_era := year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year
+  return era * 146097 + day_of_era - 719468
+}
+
+// The calendar date of a day count from 1970-01-01 (Hinnant's civil_from_days).
+pub fn civil_from_days(days: i64) DateTime {
+  z := days + 719468
+  era := z / 146097
+  if z < 0 && z % 146097 != 0 {
+    era = (z - 146096) / 146097
+  }
+  day_of_era := z - era * 146097
+  year_of_era := (day_of_era - day_of_era / 1460 + day_of_era / 36524 - day_of_era / 146096) / 365
+  day_of_year := day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100)
+  shifted := (5 * day_of_year + 2) / 153
+  day := day_of_year - (153 * shifted + 2) / 5 + 1
+  month := shifted + 3
+  if shifted >= 10 {
+    month = shifted - 9
+  }
+  year := year_of_era + era * 400
+  if month <= 2 {
+    year += 1
+  }
+  return DateTime{ year: #cast(i32, year), month: #cast(u8, month), day: #cast(u8, day) }
+}
+
+fn floor_divide(value: i64, divisor: i64) i64 {
+  quotient := value / divisor
+  if value % divisor != 0 && (value < 0) != (divisor < 0) {
+    quotient -= 1
+  }
+  return quotient
+}
+
+// The UTC calendar time of an instant, shifted by offset seconds east of UTC.
+// Use offset 0 for UTC, or a zone offset from std/time/zone.
+pub fn date_time(instant: Instant, offset: i64) DateTime {
+  seconds := instant.seconds + offset
+  days := floor_divide(seconds, 86400)
+  rest := seconds - days * 86400
+  value := civil_from_days(days)
+  value.hour = #cast(u8, rest / 3600)
+  value.minute = #cast(u8, rest / 60 % 60)
+  value.second = #cast(u8, rest % 60)
+  value.nanosecond = #cast(u32, instant.nanoseconds)
+  return value
+}
+
+// The instant of a calendar time that is offset seconds east of UTC. A leap
+// second (second 60) maps to the following second.
+pub fn instant_of(value: *const DateTime, offset: i64) Instant {
+  days := days_from_civil(value.year, value.month, value.day)
+  seconds := days * 86400 + #cast(i64, value.hour) * 3600 + #cast(i64, value.minute) * 60 + #cast(i64, value.second) - offset
+  return Instant{ seconds: seconds, nanoseconds: #cast(i64, value.nanosecond) }
+}
+
+pub fn weekday(value: *const DateTime) Weekday {
+  days := days_from_civil(value.year, value.month, value.day)
+  index := floor_divide(days + 4, 7)
+  return #cast(Weekday, #cast(u8, days + 4 - index * 7))
+}
+
+// Day of the year, from 1 for January 1.
+pub fn day_of_year(value: *const DateTime) u16 {
+  return #cast(u16, days_from_civil(value.year, value.month, value.day) - days_from_civil(value.year, 1, 1) + 1)
+}

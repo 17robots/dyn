@@ -173,6 +173,7 @@ import_jump dyn_sync_single, WakeByAddressSingle
 import_jump dyn_sync_all, WakeByAddressAll
 import_jump dyn_sync_error, GetLastError
 import_jump dyn_win_yield, SwitchToThread
+import_jump dyn_time_zone_information, GetDynamicTimeZoneInformation
 import_jump dyn_signal_console_handler, SetConsoleCtrlHandler
 import_jump dyn_signal_create_event, CreateEventW
 import_jump dyn_signal_set_event, SetEvent
@@ -306,6 +307,7 @@ kernel_lookup:
     thunk CloseHandle
     thunk WaitForSingleObject
     thunk SwitchToThread
+    thunk GetDynamicTimeZoneInformation
     thunk SetConsoleCtrlHandler
     thunk CreateEventW
     thunk SetEvent
@@ -397,6 +399,7 @@ iat ExitProcess
 iat CloseHandle
 iat WaitForSingleObject
 iat SwitchToThread
+iat GetDynamicTimeZoneInformation
 iat SetConsoleCtrlHandler
 iat CreateEventW
 iat SetEvent
@@ -489,6 +492,7 @@ hint ExitProcess
 hint CloseHandle
 hint WaitForSingleObject
 hint SwitchToThread
+hint GetDynamicTimeZoneInformation
 hint SetConsoleCtrlHandler
 hint CreateEventW
 hint SetEvent
