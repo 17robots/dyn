@@ -14,6 +14,7 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- `testing.fuzz` replays a corpus, then mutates it and shrinks failures; `testing.Source` decodes structured values from fuzz input.
 - `std/math/big` adds arbitrary-precision integers in the caller's arena.
 - `std/unicode/text` adds `word_breaks` (UAX #29) and `line_breaks` (UAX #14), passing all Unicode 17 conformance cases.
 - `std/time` converts between instants and calendar dates (`date_time`, `instant_of`, `weekday`, `day_of_year`). `std/time/zone` adds time zones, local time and formatting.

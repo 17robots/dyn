@@ -1,0 +1,208 @@
+// Coverage-free mutation fuzzing and structured input decoding. A fuzz run
+// first replays every corpus entry, then mutates corpus entries and random
+// bytes. Failures shrink with the same minimizer as check_property. The
+// predicate returns false to report a failure; a panic ends the process, and
+// the printed seed and iteration reproduce it.
+
+pub struct FuzzOptions { seed: u64, cases: usize, shrink_checks: usize }
+
+// iteration counts corpus replays first, then generated cases. corpus_entry is
+// the corpus index of a failing replay, or #len(corpus) for generated input.
+pub struct FuzzResult {
+  passed: bool, seed: u64, iteration: usize, corpus_entry: usize,
+  example: []const u8, checks: usize, shrink_exhausted: bool,
+}
+
+const interesting: [10]u8 = [0, 1, 2, 16, 32, 64, 127, 128, 254, 255]
+
+fn copy_into(destination: []u8, source: []const u8) usize {
+  count := #len(source)
+  if count > #len(destination) {
+    count = #len(destination)
+  }
+  for i in 0..count {
+    destination[i] = source[i]
+  }
+  return count
+}
+
+// Applies one random mutation to sample[..length] and returns the new length.
+fn mutate(generator: *Random, sample: []u8, length: usize, corpus: []const []const u8) usize {
+  capacity := #len(sample)
+  choice := random_below(generator, 7)
+  if length == 0 && choice < 4 {
+    choice = 4
+  }
+  if choice == 0 {
+    at := random_below(generator, length)
+    sample[at] ^= #cast(u8, 1) << #cast(u8, random_below(generator, 8))
+    return length
+  }
+  if choice == 1 {
+    sample[random_below(generator, length)] = #cast(u8, random_next(generator) & 255)
+    return length
+  }
+  if choice == 2 {
+    sample[random_below(generator, length)] = interesting[random_below(generator, #len(interesting))]
+    return length
+  }
+  if choice == 3 {
+    // Delete a range.
+    at := random_below(generator, length)
+    count := 1 + random_below(generator, length - at)
+    for i in at..length - count {
+      sample[i] = sample[i + count]
+    }
+    return length - count
+  }
+  if choice == 4 && length < capacity {
+    // Insert a random byte.
+    at := random_below(generator, length + 1)
+    index := length
+    for index > at {
+      sample[index] = sample[index - 1]
+      index -= 1
+    }
+    sample[at] = #cast(u8, random_next(generator) & 255)
+    return length + 1
+  }
+  if choice == 5 && length != 0 && length < capacity {
+    // Duplicate a range after itself.
+    at := random_below(generator, length)
+    count := 1 + random_below(generator, length - at)
+    if length + count > capacity {
+      count = capacity - length
+    }
+    index := length + count
+    for index > at + count {
+      sample[index - 1] = sample[index - 1 - count]
+      index -= 1
+    }
+    return length + count
+  }
+  if #len(corpus) != 0 {
+    // Splice: keep a prefix, append a suffix of another corpus entry.
+    other := corpus[random_below(generator, #len(corpus))]
+    keep := random_below(generator, length + 1)
+    if #len(other) == 0 {
+      return keep
+    }
+    from := random_below(generator, #len(other))
+    return keep + copy_into(sample[keep..], other[from..])
+  }
+  return length
+}
+
+fn failure(options: FuzzOptions, iteration: usize, entry: usize, sample: []u8, trial: []u8, length: usize,
+  predicate: fn(rawptr, []const u8) bool, context: rawptr) FuzzResult {
+  shrunk := shrink(sample, trial, length, options.shrink_checks, predicate, context)
+  return FuzzResult{ seed: options.seed, iteration: iteration, corpus_entry: entry, example: sample[..shrunk.length],
+    checks: shrunk.checks, shrink_exhausted: shrunk.checks == options.shrink_checks }
+}
+
+// Runs predicate over the corpus and then options.cases mutated inputs of at
+// most #len(work) / 2 bytes. Longer corpus entries are truncated. A failure's
+// minimized example borrows work. The same seed, corpus, work capacity and
+// deterministic predicate reproduce a run.
+pub fn fuzz(options: FuzzOptions, corpus: []const []const u8, work: []u8,
+  predicate: fn(rawptr, []const u8) bool, context: rawptr) FuzzResult {
+  capacity := #len(work) / 2
+  sample := work[..capacity]
+  trial := work[capacity..]
+  iteration: usize = 0
+  for entry in 0..#len(corpus) {
+    length := copy_into(sample, corpus[entry])
+    if !predicate(context, sample[..length]) {
+      return failure(options, iteration, entry, sample, trial, length, predicate, context)
+    }
+    iteration += 1
+  }
+  generator := random(options.seed)
+  for case_index in 0..options.cases {
+    length: usize = 0
+    if #len(corpus) != 0 && random_below(&generator, 4) != 0 {
+      length = copy_into(sample, corpus[random_below(&generator, #len(corpus))])
+    }
+    else {
+      length = random_below(&generator, capacity + 1)
+      for i in 0..length {
+        sample[i] = #cast(u8, random_next(&generator) & 255)
+      }
+    }
+    rounds := 1 + random_below(&generator, 4)
+    for round in 0..rounds {
+      length = mutate(&generator, sample, length, corpus)
+    }
+    if !predicate(context, sample[..length]) {
+      return failure(options, iteration, #len(corpus), sample, trial, length, predicate, context)
+    }
+    iteration += 1
+  }
+  return FuzzResult{ passed: true, seed: options.seed, iteration: iteration, corpus_entry: #len(corpus) }
+}
+
+// Decodes structured values from fuzz input, front to back. Reads past the end
+// return zero, so every byte string is a valid input and shrinking stays
+// meaningful.
+pub struct Source { data: []const u8, at: usize }
+
+pub fn source(data: []const u8) Source {
+  return Source{ data: data }
+}
+
+pub fn remaining(state: *const Source) usize {
+  return #len(state.data) - state.at
+}
+
+pub fn take_u8(state: *Source) u8 {
+  if state.at == #len(state.data) {
+    return 0
+  }
+  value := state.data[state.at]
+  state.at += 1
+  return value
+}
+
+pub fn take_bool(state: *Source) bool {
+  return take_u8(state) & 1 != 0
+}
+
+// Little-endian, zero-filled past the end.
+pub fn take_u32(state: *Source) u32 {
+  value: u32 = 0
+  for i in 0..4 {
+    value |= #cast(u32, take_u8(state)) << #cast(u32, 8 * i)
+  }
+  return value
+}
+
+pub fn take_u64(state: *Source) u64 {
+  value: u64 = 0
+  for i in 0..8 {
+    value |= #cast(u64, take_u8(state)) << #cast(u64, 8 * i)
+  }
+  return value
+}
+
+// A value in 0..bound; zero when bound is zero.
+pub fn take_below(state: *Source, bound: u64) u64 {
+  if bound == 0 {
+    return 0
+  }
+  return take_u64(state) % bound
+}
+
+// Up to count bytes, borrowing the input.
+pub fn take_bytes(state: *Source, count: usize) []const u8 {
+  available := remaining(state)
+  if count < available {
+    available = count
+  }
+  value := state.data[state.at..state.at + available]
+  state.at += available
+  return value
+}
+
+pub fn take_rest(state: *Source) []const u8 {
+  return take_bytes(state, remaining(state))
+}

@@ -122,7 +122,7 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
 
 | Package | Purpose |
 | --- | --- |
-| `std/testing` | Expectations, benchmarks and temporary paths |
+| `std/testing` | Expectations, benchmarks, temporary paths, property checks with shrinking, mutation fuzzing and structured fuzz input |
 | `std/profile` | Monotonic spans recorded into caller storage |
 | `std/observe` | Optional allocation-free event log used by arenas and other packages |
 | `std/progress` | Nested progress counters in caller storage |

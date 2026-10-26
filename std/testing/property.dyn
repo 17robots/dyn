@@ -20,56 +20,69 @@ pub fn check_property(options: PropertyOptions, work: []u8,
       sample[i] = #cast(u8, (random_next(&generator) & 255))
     }
     if !predicate(context, sample[..length]) {
-      checks: usize = 0
-      chunk := length
-      // Delta debugging: remove contiguous chunks, then reduce byte values.
-      for chunk > 0 && checks < options.shrink_checks {
-        at: usize = 0
-        reduced: bool = false
-        for at + chunk <= length && checks < options.shrink_checks {
-          j: usize = 0
-          for j < at {
-            trial[j] = sample[j]
-            j += 1
-          }
-          for tail in at + chunk..length {
-            trial[j] = sample[tail]
-            j += 1
-          }
-          checks += 1
-          if !predicate(context, trial[..length - chunk]) {
-            length -= chunk
-            for k in 0..length {
-              sample[k] = trial[k]
-            }
-            reduced = true
-          } else {
-            at += chunk
-          }
-        }
-        if !reduced {
-          chunk /= 2
-        }
-      }
-      position: usize = 0
-      for position < length && checks < options.shrink_checks {
-        original := sample[position]
-        candidate: u16 = 0
-        for candidate < #cast(u16, original) && checks < options.shrink_checks {
-          sample[position] = #cast(u8, candidate)
-          checks += 1
-          if !predicate(context, sample[..length]) {
-            break
-          }
-          sample[position] = original
-          candidate += 1
-        }
-        position += 1
-      }
+      shrunk := shrink(sample, trial, length, options.shrink_checks, predicate, context)
+      length = shrunk.length
+      checks := shrunk.checks
       return PropertyResult{ seed: options.seed, iteration: iteration, example: sample[..length],
         checks: checks, shrink_exhausted: checks == options.shrink_checks }
     }
     iteration += 1
   }
   return PropertyResult{ passed: true, seed: options.seed, iteration: iteration }
+}
+
+struct Shrunk { length: usize, checks: usize }
+
+// Minimizes a failing sample[..length] in place: removes contiguous chunks,
+// then lowers byte values, while predicate keeps failing. trial is scratch of
+// the same capacity.
+fn shrink(sample: []u8, trial: []u8, failing: usize, budget: usize,
+  predicate: fn(rawptr, []const u8) bool, context: rawptr) Shrunk {
+  length := failing
+  checks: usize = 0
+  chunk := length
+  for chunk > 0 && checks < budget {
+    at: usize = 0
+    reduced: bool = false
+    for at + chunk <= length && checks < budget {
+      j: usize = 0
+      for j < at {
+        trial[j] = sample[j]
+        j += 1
+      }
+      for tail in at + chunk..length {
+        trial[j] = sample[tail]
+        j += 1
+      }
+      checks += 1
+      if !predicate(context, trial[..length - chunk]) {
+        length -= chunk
+        for k in 0..length {
+          sample[k] = trial[k]
+        }
+        reduced = true
+      } else {
+        at += chunk
+      }
+    }
+    if !reduced {
+      chunk /= 2
+    }
+  }
+  position: usize = 0
+  for position < length && checks < budget {
+    original := sample[position]
+    candidate: u16 = 0
+    for candidate < #cast(u16, original) && checks < budget {
+      sample[position] = #cast(u8, candidate)
+      checks += 1
+      if !predicate(context, sample[..length]) {
+        break
+      }
+      sample[position] = original
+      candidate += 1
+    }
+    position += 1
+  }
+  return Shrunk{ length: length, checks: checks }
 }
