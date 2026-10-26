@@ -14,6 +14,8 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- `std/terminal` and `std/dynlib` now work on macOS and Windows as well as Linux.
+  `terminal.State` grows to 72 bytes to hold the Darwin termios layout.
 - **Breaking syntax:** each statement starts on its own line; `a := 1 b := 2` and
   `defer { x() y() }` are syntax errors. Split them onto separate lines.
 - **Breaking syntax:** `case` arms are no longer separated by commas. Delete the

@@ -202,6 +202,21 @@ dyn_win_write_file:
     adrp x16, __imp_WriteFile
     ldr x16, [x16, :lo12:__imp_WriteFile]
     br x16
+.global dyn_terminal_get_mode
+dyn_terminal_get_mode:
+    adrp x16, __imp_GetConsoleMode
+    ldr x16, [x16, :lo12:__imp_GetConsoleMode]
+    br x16
+.global dyn_terminal_set_mode
+dyn_terminal_set_mode:
+    adrp x16, __imp_SetConsoleMode
+    ldr x16, [x16, :lo12:__imp_SetConsoleMode]
+    br x16
+.global dyn_terminal_buffer_info
+dyn_terminal_buffer_info:
+    adrp x16, __imp_GetConsoleScreenBufferInfo
+    ldr x16, [x16, :lo12:__imp_GetConsoleScreenBufferInfo]
+    br x16
 .global dyn_win_load_library
 dyn_win_load_library:
     adrp x16, __imp_LoadLibraryA
@@ -607,6 +622,9 @@ kernel_lookup:
     thunk CloseHandle
     thunk WaitForSingleObject
     thunk SwitchToThread
+    thunk GetConsoleMode
+    thunk SetConsoleMode
+    thunk GetConsoleScreenBufferInfo
     thunk VirtualAlloc
     thunk VirtualFree
     thunk CreateFileA
@@ -689,6 +707,9 @@ iat ExitProcess
 iat CloseHandle
 iat WaitForSingleObject
 iat SwitchToThread
+iat GetConsoleMode
+iat SetConsoleMode
+iat GetConsoleScreenBufferInfo
 iat VirtualAlloc
 iat VirtualFree
 iat CreateFileA
@@ -772,6 +793,9 @@ hint ExitProcess
 hint CloseHandle
 hint WaitForSingleObject
 hint SwitchToThread
+hint GetConsoleMode
+hint SetConsoleMode
+hint GetConsoleScreenBufferInfo
 hint VirtualAlloc
 hint VirtualFree
 hint CreateFileA

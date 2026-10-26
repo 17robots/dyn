@@ -1,0 +1,65 @@
+# Std and vendor expansion before the freeze
+
+Status: planned 2026-10-26. The user chose to land every "gap after the freeze"
+from [std standardization](std-standardization.md#gaps-after-the-freeze), and
+more, before the compatibility freeze. Each phase is its own stacked PR on top
+of `syntax-statements`. Every new module follows the std rules: caller-owned
+storage, arenas first, nil stubs on a miss, and real errors only at the edges.
+
+PNG and QOI encoders already exist (`std/image/png`, `std/image/qoi`), so they
+are removed from the gap list.
+
+## Phase 1: platform parity
+
+- `std/terminal` on macOS (termios through the Darwin `ioctl` syscall,
+  `TIOCGETA`/`TIOCSETA`/`TIOCGWINSZ`) and Windows (console modes, screen
+  buffer size, virtual-terminal input).
+- `std/dynlib` on macOS (`dlopen` from libSystem) and Windows (`LoadLibraryA`,
+  `GetProcAddress`, `FreeLibrary`, numeric `GetLastError` codes).
+- Tests: `tests/platform-parity.py` cross-builds both modules for six targets,
+  runs Linux natively and in a pseudo-terminal, and runs Windows under wine.
+- Status: done 2026-10-26. Real macOS and Windows console runs are pending CI.
+
+## Phase 2: embedded helpers
+
+Move the board helpers out of `tests/bare-metal/board_*.dyn` into std beside
+`std/mmio`: `std/embedded/uart`, `std/embedded/timer` (CLINT/mtime, SysTick)
+and `std/embedded/interrupt` (mtvec/NVIC enable, disable and critical
+sections). Board tests then use std.
+
+## Phase 3: portable media and data
+
+Pure Dyn, no platform calls:
+
+- Fonts: TrueType parsing and an antialiased glyph rasterizer
+  (`std/font`), plus a glyph atlas packer.
+- Text layout: line breaking, kerning and simple shaping for Latin text
+  (`std/text/layout`). Complex scripts stay in vendor (HarfBuzz).
+- Immediate-mode UI core: widgets that emit a draw-command list
+  (`std/ui`). Rendering backends live in vendor.
+- More image codecs: BMP, TGA, PPM/PGM read and write; GIF and baseline
+  JPEG decode.
+- Audio formats: WAV read and write.
+- Data formats: TOML, CBOR, MessagePack, protobuf wire format.
+
+## Phase 4: vendor graphics and windowing without SDL
+
+- `vendor/window`: native windows and input for X11, Wayland, Win32 and
+  Cocoa, behind one small API.
+- Renderers for `std/ui` draw commands on OpenGL and Vulkan, both of which
+  already have bindings in `vendor/`.
+- New bindings where useful: WebGPU (wgpu-native), Metal, Direct3D 12,
+  FreeType, HarfBuzz, GLFW, raylib and Dear ImGui (cimgui).
+
+## Phase 5: native crypto
+
+Replace the OpenSSL-backed `aes`, `aead`, `signature`, `exchange` and
+`certificate` modules with Dyn implementations: AES-GCM, ChaCha20-Poly1305,
+X25519, Ed25519, ECDSA P-256 and X.509 validation. Every primitive needs
+published test vectors and a constant-time review. Then audit all of
+`std/crypto`. OpenSSL stays in `vendor/openssl`.
+
+## Exit
+
+All phases merged, docs updated, qualification rerun. Then record the freeze
+and start the two-preview clock.

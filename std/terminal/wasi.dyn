@@ -1,0 +1,26 @@
+#target(kernel: wasi)
+
+// WASI Preview 1 has no terminal control. Descriptors are never terminals;
+// key_decode still works on bytes read from standard input.
+pub fn read_state(descriptor: isize) Read {
+  _ = descriptor
+  return Read{ kind: errors.Kind.Unsupported }
+}
+
+pub fn restore(descriptor: isize, saved: *const State) Result {
+  _ = descriptor
+  if saved == nil {
+    return Result{ kind: errors.Kind.InvalidInput }
+  }
+  return Result{ kind: errors.Kind.Unsupported }
+}
+
+fn make_raw(descriptor: isize, state: *State) {
+  _ = descriptor
+  _ = state
+}
+
+pub fn size(descriptor: isize) Size {
+  _ = descriptor
+  return Size{ kind: errors.Kind.Unsupported }
+}

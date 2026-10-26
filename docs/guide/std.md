@@ -92,8 +92,8 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
 | `std/process` | Spawn, capture, pipes, environment and arguments |
 | `std/thread`, `std/sync` | Arena-backed thread handles; caller or owned stacks; portable synchronization |
 | `std/time` | Monotonic and realtime clocks, durations, deadlines and UTC ISO-8601 |
-| `std/terminal` | Raw mode, terminal control and key decoding (Linux) |
-| `std/dynlib` | Dynamic library loading (Linux; link libc explicitly) |
+| `std/terminal` | Raw mode, terminal size and key decoding |
+| `std/dynlib` | Dynamic library loading (on Linux, link libc explicitly) |
 | `std/os/linux`, `macos`, `windows`, `wasi` | Platform services; prefer the portable packages above |
 | `std/errors` | Portable error categories that accompany native codes |
 | `std/c` | C ABI scalar aliases and C-string helpers |
@@ -130,7 +130,10 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
 
 Linux x86-64 has the broadest coverage, with Linux AArch64, macOS AArch64 and
 Windows x86-64 close behind. Threads, sync, processes and file watching work on
-all four. `std/terminal` and `std/dynlib` are Linux only. On wasm32, see
+all four, and so do `std/terminal` and `std/dynlib`. On Windows,
+`std/terminal` uses console modes and `std/dynlib` reports `GetLastError`
+codes instead of loader messages. On WASI, `std/terminal` reports
+`Unsupported` and only `key_decode` is useful. On wasm32, see
 [WebAssembly](webassembly.md). Packages gated to a platform say so with
 `#target` at the top of their files.
 

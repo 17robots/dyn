@@ -1,0 +1,3 @@
+#target(kernel: darwin)
+const library_path: []const u8 = "/usr/lib/libSystem.B.dylib"
+const symbol_name: []const u8 = "strlen"

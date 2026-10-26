@@ -305,9 +305,10 @@ the host libm in tests.
 
 ## Gaps after the freeze
 
-These add API and break nothing, so they can follow the freeze:
+These add API and break nothing. The user chose on 2026-10-26 to land them
+before the freeze; see [std expansion](std-expansion.md).
 
-1. Image encoders for `png` and `qoi`.
+1. Image encoders for `png` and `qoi` (done: both exist).
 2. Text layout and font rasterization.
 3. Graphics, GUI and audio: windowing, GPU and audio output stay in
    `vendor/` (SDL3, OpenGL, Vulkan, miniaudio). Std gains only portable,
@@ -315,7 +316,7 @@ These add API and break nothing, so they can follow the freeze:
    immediate-mode UI core that produces draw commands.
 4. Native crypto to replace the OpenSSL-backed `aes`, `aead`, `signature`,
    `exchange` and `certificate`, and an audit of all of `crypto`.
-5. `terminal` and `dynlib` beyond Linux.
+5. `terminal` and `dynlib` beyond Linux (done 2026-10-26).
 6. Embedded helpers beyond `mmio`: timers, interrupts and UART, now only in
    board test files.
 

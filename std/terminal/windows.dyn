@@ -1,0 +1,100 @@
+#target(kernel: windows)
+
+extern fn standard_handle "dyn_stdio_handle"(kind: u32) rawptr
+extern fn get_mode "dyn_terminal_get_mode"(handle: rawptr, mode: *u32) i32
+extern fn set_mode "dyn_terminal_set_mode"(handle: rawptr, mode: u32) i32
+extern fn buffer_info "dyn_terminal_buffer_info"(handle: rawptr, info: *u8) i32
+extern fn last_error "dyn_win_last_error"() u32
+
+const line_input: u32 = 2
+const echo_input: u32 = 4
+const processed_input: u32 = 1
+const virtual_terminal_input: u32 = 512
+const virtual_terminal_output: u32 = 4
+
+// Maps 0, 1 and 2 to the standard input, output and error handles.
+fn handle_of(descriptor: isize) rawptr {
+  if descriptor == 0 {
+    return standard_handle(4294967286)
+  }
+  if descriptor == 1 {
+    return standard_handle(4294967285)
+  }
+  if descriptor == 2 {
+    return standard_handle(4294967284)
+  }
+  return #cast(rawptr, descriptor)
+}
+
+fn failure() Result {
+  code := #cast(isize, last_error())
+  return Result{ kind: errors.windows(code), error: code }
+}
+
+fn mode_of(state: *const State) u32 {
+  return #cast(u32, state.bytes[0]) | #cast(u32, state.bytes[1]) << 8 | #cast(u32, state.bytes[2]) << 16 | #cast(u32, state.bytes[3]) << 24
+}
+
+fn set_mode_bytes(state: *State, mode: u32) {
+  state.bytes[0] = #cast(u8, mode & 255)
+  state.bytes[1] = #cast(u8, mode >> 8 & 255)
+  state.bytes[2] = #cast(u8, mode >> 16 & 255)
+  state.bytes[3] = #cast(u8, mode >> 24)
+}
+
+// The console mode of descriptor. ok is false when it is not a console.
+pub fn read_state(descriptor: isize) Read {
+  mode: u32 = 0
+  if get_mode(handle_of(descriptor), &mode) == 0 {
+    failed := failure()
+    return Read{ kind: failed.kind, error: failed.error }
+  }
+  result := Read{ ok: true }
+  set_mode_bytes(&result.value, mode)
+  return result
+}
+
+pub fn restore(descriptor: isize, saved: *const State) Result {
+  if saved == nil {
+    return Result{ kind: errors.Kind.InvalidInput }
+  }
+  if set_mode(handle_of(descriptor), mode_of(saved)) == 0 {
+    return failure()
+  }
+  return Result{ ok: true }
+}
+
+// Output streams (1 and 2) gain virtual-terminal processing. Every other
+// descriptor is treated as console input: no line input, echo or Ctrl-C
+// processing, with virtual-terminal key sequences.
+fn make_raw(descriptor: isize, state: *State) {
+  mode := mode_of(state)
+  if descriptor == 1 || descriptor == 2 {
+    mode = mode | virtual_terminal_output
+  }
+  else {
+    mode = mode & ~(line_input | echo_input | processed_input) | virtual_terminal_input
+  }
+  set_mode_bytes(state, mode)
+}
+
+// The visible window of the console screen buffer. Descriptor 0 reports the
+// standard output buffer.
+pub fn size(descriptor: isize) Size {
+  handle := handle_of(descriptor)
+  if descriptor == 0 {
+    handle = handle_of(1)
+  }
+  info: [22]u8 = []
+  if buffer_info(handle, &info[0]) == 0 {
+    failed := failure()
+    return Size{ kind: failed.kind, error: failed.error }
+  }
+  left := #cast(i16, #cast(u16, info[10]) | #cast(u16, info[11]) << 8)
+  top := #cast(i16, #cast(u16, info[12]) | #cast(u16, info[13]) << 8)
+  right := #cast(i16, #cast(u16, info[14]) | #cast(u16, info[15]) << 8)
+  bottom := #cast(i16, #cast(u16, info[16]) | #cast(u16, info[17]) << 8)
+  columns := #cast(usize, right - left + 1)
+  rows := #cast(usize, bottom - top + 1)
+  return Size{ columns: columns, rows: rows, ok: true }
+}

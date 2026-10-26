@@ -1,0 +1,21 @@
+use "std/dynlib" dl
+
+fn check(ok: bool) {
+  if !ok {
+    #panic("dynlib")
+  }
+}
+
+pub fn main() {
+  missing := dl.open("missing-library-xyz", dl.Now)
+  check(!missing.ok)
+  library := dl.open(library_path, dl.Now)
+  check(library.ok)
+  found := dl.symbol(library.value, symbol_name)
+  check(found.ok && found.value != nil)
+  absent := dl.symbol(library.value, "no_such_symbol_xyz")
+  check(!absent.ok)
+  handle := library.value
+  check(dl.close(&handle).ok)
+  check(handle == nil)
+}

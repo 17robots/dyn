@@ -1,0 +1,42 @@
+#target(kernel: windows)
+
+extern fn native_open "dyn_win_load_library"(path: *const u8) rawptr
+extern fn native_symbol "dyn_win_get_symbol"(handle: rawptr, name: *const u8) rawptr
+extern fn native_close "dyn_win_free_library"(handle: rawptr) i32
+extern fn native_error "dyn_win_last_error"() u32
+
+fn failure_code() isize {
+  return #cast(isize, native_error())
+}
+
+// LoadLibraryA takes the active code page; ASCII paths are portable.
+fn platform_open(path: *const u8, flags: i32) OpenResult {
+  _ = flags
+  value := native_open(path)
+  if value == nil {
+    code := failure_code()
+    return OpenResult{ kind: errors.windows(code), error: code }
+  }
+  return OpenResult{ value: value, ok: true }
+}
+
+fn platform_symbol(handle: Handle, name: *const u8) SymbolResult {
+  value := native_symbol(handle, name)
+  if value == nil {
+    code := failure_code()
+    return SymbolResult{ kind: errors.windows(code), error: code }
+  }
+  return SymbolResult{ value: value, ok: true }
+}
+
+fn platform_close(handle: Handle) Result {
+  if native_close(handle) == 0 {
+    code := failure_code()
+    return Result{ kind: errors.windows(code), error: code }
+  }
+  return Result{ ok: true }
+}
+
+fn platform_error() *const u8 {
+  return nil
+}

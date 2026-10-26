@@ -173,6 +173,9 @@ import_jump dyn_sync_single, WakeByAddressSingle
 import_jump dyn_sync_all, WakeByAddressAll
 import_jump dyn_sync_error, GetLastError
 import_jump dyn_win_yield, SwitchToThread
+import_jump dyn_terminal_get_mode, GetConsoleMode
+import_jump dyn_terminal_set_mode, SetConsoleMode
+import_jump dyn_terminal_buffer_info, GetConsoleScreenBufferInfo
 import_jump dyn_net_idle, Sleep
 import_jump dyn_win_virtual_alloc, VirtualAlloc
 import_jump dyn_win_virtual_free, VirtualFree
@@ -297,6 +300,9 @@ kernel_lookup:
     thunk CloseHandle
     thunk WaitForSingleObject
     thunk SwitchToThread
+    thunk GetConsoleMode
+    thunk SetConsoleMode
+    thunk GetConsoleScreenBufferInfo
     thunk VirtualAlloc
     thunk VirtualFree
     thunk CreateFileA
@@ -379,6 +385,9 @@ iat ExitProcess
 iat CloseHandle
 iat WaitForSingleObject
 iat SwitchToThread
+iat GetConsoleMode
+iat SetConsoleMode
+iat GetConsoleScreenBufferInfo
 iat VirtualAlloc
 iat VirtualFree
 iat CreateFileA
@@ -462,6 +471,9 @@ hint ExitProcess
 hint CloseHandle
 hint WaitForSingleObject
 hint SwitchToThread
+hint GetConsoleMode
+hint SetConsoleMode
+hint GetConsoleScreenBufferInfo
 hint VirtualAlloc
 hint VirtualFree
 hint CreateFileA

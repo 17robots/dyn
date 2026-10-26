@@ -1,0 +1,38 @@
+#target(kernel: darwin)
+
+extern fn native_open "dlopen"(path: *const u8, flags: i32) rawptr
+extern fn native_symbol "dlsym"(handle: rawptr, name: *const u8) rawptr
+extern fn native_close "dlclose"(handle: rawptr) i32
+extern fn native_error "dlerror"() *const u8
+
+fn platform_open(path: *const u8, flags: i32) OpenResult {
+  _ = native_error()
+  value := native_open(path, flags)
+  if value == nil {
+    return OpenResult{ kind: errors.Kind.System, message: native_error() }
+  }
+  return OpenResult{ value: value, ok: true }
+}
+
+fn platform_symbol(handle: Handle, name: *const u8) SymbolResult {
+  // POSIX requires clearing prior error because a valid symbol may be null.
+  _ = native_error()
+  value := native_symbol(handle, name)
+  error := native_error()
+  if error != nil {
+    return SymbolResult{ value: value, kind: errors.Kind.System, message: error }
+  }
+  return SymbolResult{ value: value, ok: true }
+}
+
+fn platform_close(handle: Handle) Result {
+  _ = native_error()
+  if native_close(handle) != 0 {
+    return Result{ kind: errors.Kind.System, message: native_error() }
+  }
+  return Result{ ok: true }
+}
+
+fn platform_error() *const u8 {
+  return native_error()
+}
