@@ -48,7 +48,7 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
 | `std/bytes/search` | Prepared KMP search |
 | `std/strings` | Search, parse, split, join, format, glob, ASCII helpers and string lists |
 | `std/fmt` | Formatting into a bounded caller buffer, including shortest round-trip floats |
-| `std/unicode/utf8`, `utf16`, `text` | Strict UTF-8 and UTF-16, case folding and normalization |
+| `std/unicode/utf8`, `utf16`, `text` | Strict UTF-8 and UTF-16, case folding, normalization, and grapheme, word and line segmentation |
 | `std/text/scanner` | Line and field scanner with positions |
 | `std/text/regex` | Thompson-NFA regular expressions compiled into an arena; reusable workspace |
 | `std/text/template`, `std/html/template` | Text templates, and HTML templates that escape text and quoted attributes |
