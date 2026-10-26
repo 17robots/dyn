@@ -49,6 +49,23 @@ future work. Queue timers, callbacks and GUI message pumping are not provided.
 operations and scalar fallbacks elsewhere; it does not add native vector FFI
 or hardware float SIMD. Native macOS and real Windows qualification are pending.
 
+Qualification on 2026-10-26: the registered suite completed across an initial
+run and a resumed run after correcting duplicate `CreateEventW` import-table
+entries in both Windows runtimes. This is combined evidence, not an uninterrupted
+final-state run. The hard-requiring `rv32-soft.py` gate was excluded because
+`qemu-system-riscv32` is unavailable; other tests reported their normal missing
+system-emulator skips. All remaining registered gates and C regression binaries
+passed. Focused networking, event, generic-identity and SIMD tests passed in
+debug/release; Linux ARM64/RISC-V64 ran under QEMU, event/SIMD Windows x86-64 ran
+under Wine, and both macOS and Windows ARM64 cross-builds passed. Unix/IPv6 and
+multicast execution on Windows is not established by those cross-builds.
+Formatting checks for the three new/changed packages and std lint also passed.
+
+The generic-symbol collision found during event integration is fixed by hashing
+canonical nominal and compound type identities instead of diagnostic names.
+The regression covers same-named structs, enums and distinct types from different
+packages, including pointers, arrays, slices and function types.
+
 ## Phase 2: embedded helpers
 
 Move the board helpers out of `tests/bare-metal/board_*.dyn` into std beside
