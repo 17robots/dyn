@@ -106,7 +106,7 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
 
 | Package | Purpose |
 | --- | --- |
-| `std/net` | IPv4, IPv6 and Unix sockets, polling and event queues |
+| `std/net` | IPv4, IPv6 and Unix streams, IPv4 UDP multicast, polling and event queues |
 | `std/net/dns` | DNS queries into caller storage |
 | `std/net/http`, `http/concurrent` | HTTP/1 client, server and router, and a worker-pool server |
 | `std/net/websocket` | RFC 6455 handshake and frame codec |
@@ -176,3 +176,18 @@ The floating-point implementation has sampled host and RV32/Thumb execution
 tests. It assumes round to
 nearest, ties to even, and requires no host libm at runtime. Sampled comparisons
 with host libm are not a global accuracy proof. Direct calls to trusted SDK math leaves use native instructions when the target permits them. Square root uses hardware FP on hard-float targets; copy-sign uses integer bits. AArch64 also lowers floor, ceil, truncation, ties-away rounding and fused FMA. RV32/RV64 and Thumb hard-float lower fused FMA. On x86, `--cpu native` enables SSE4.1 rounding and FMA only when CPU and OS support are present. Generic x86 and soft-float keep portable fallbacks where needed. Wasm lowers square root, floor, ceil, truncation and copy-sign; its nearest instruction does not implement ties-away round. Address-taken functions retain ordinary callable bodies.
+
+### Multicast and local streams
+
+`net.tcp_listen_ipv6` and `tcp_connect_ipv6` use the same owned `Listener`
+and `Connection` handles as IPv4. `unix_listen` and `unix_connect` accept
+`net.unix(path)`; empty, oversized and embedded-NUL paths are invalid. The
+caller removes the filesystem socket path after closing its listener. Windows
+requires OS support for AF_UNIX.
+
+For IPv4 UDP multicast, call `multicast_join_ipv4` with network-order group
+and interface octets; an all-zero interface selects the system default.
+`multicast_interface_ipv4` selects the outgoing interface, `multicast_ttl_ipv4`
+sets its TTL, and `multicast_leave_ipv4` drops membership. The loop option
+controls outgoing loopback on POSIX and receipt on Windows, matching the native
+socket semantics. Multicast delivery still depends on interface configuration.

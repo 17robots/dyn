@@ -14,6 +14,8 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- IPv6 and Unix stream helpers, IPv4 UDP multicast membership and options, and loopback regression coverage. Unix paths reject embedded NULs.
+
 - `testing.fuzz` replays a corpus, then mutates it and shrinks failures; `testing.Source` decodes structured values from fuzz input.
 - `std/math/big` adds arbitrary-precision integers in the caller's arena.
 - `std/unicode/text` adds `word_breaks` (UAX #29) and `line_breaks` (UAX #14), passing all Unicode 17 conformance cases.
