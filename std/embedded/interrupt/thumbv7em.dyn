@@ -1,0 +1,24 @@
+#target(arch: thumbv7em, kernel: none)
+use "std/mmio" mmio
+// Hardware may require stricter alignment for a larger vector table.
+const VectorAlignment: usize = 128
+fn register(base: usize, irq: u16) usize {
+  if irq >= 240 {
+    #panic("invalid NVIC interrupt")
+  }
+  return base + (#cast(usize, irq) / 32) * 4
+}
+pub fn nvic_enable(irq: u16) {
+  mmio.store_u32(register(0xe000e100, irq), #cast(u32, 1) << (irq % 32))
+}
+extern fn native_barrier "dyn_irq_barrier"()
+pub fn nvic_disable(irq: u16) {
+  mmio.store_u32(register(0xe000e180, irq), #cast(u32, 1) << (irq % 32))
+  native_barrier()
+}
+pub fn nvic_pend(irq: u16) {
+  mmio.store_u32(register(0xe000e200, irq), #cast(u32, 1) << (irq % 32))
+}
+pub fn nvic_clear(irq: u16) {
+  mmio.store_u32(register(0xe000e280, irq), #cast(u32, 1) << (irq % 32))
+}

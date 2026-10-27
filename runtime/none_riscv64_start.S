@@ -59,7 +59,8 @@ dyn_console_write:
 .global dyn_memory_start
 dyn_memory_start:
     la a0, _end
-    addi a0, a0, 4095
+    li t0, 4095
+    add a0, a0, t0
     li t0, -4096
     and a0, a0, t0
     ret
@@ -261,3 +262,22 @@ dyn_atomic_compare_exchange_u64:
 .Lnewline: .byte 10
 .Ltrap: .ascii "unexpected trap"
 .Lstack_overflow: .ascii "stack overflow\n"
+
+.text
+.global dyn_irq_disable
+dyn_irq_disable:
+    // csrrci a0, mstatus, 8: atomically read and clear MIE.
+    .long 0x30047573
+    ret
+.global dyn_irq_restore
+dyn_irq_restore:
+    andi a0, a0, 8
+    li t0, 8
+    // csrrc zero, mstatus, t0: clear only MIE before restoring its saved bit.
+    .long 0x3002b073
+    csrs mstatus, a0
+    ret
+.global dyn_irq_vector
+dyn_irq_vector:
+    csrw mtvec, a0
+    ret

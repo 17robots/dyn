@@ -1,0 +1,2 @@
+#target(arch: riscv32, kernel: none)
+const VectorAlignment: usize = 4
