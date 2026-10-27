@@ -1,0 +1,306 @@
+use "std/mem" mem
+use "std/errors" errors
+use "std/encoding/binary" binary
+// Decodes the first composited GIF87a/89a image, including interlace and
+// transparency. consumed ends after that image's data; later animation frames
+// remain available to the caller. No animation timing/disposal is performed.
+pub struct Info { width: u32, height: u32, channels: u8 = 4 }
+pub struct Image { info: Info, pixels: []u8 }
+pub struct Result { value: Image, consumed: usize, kind: errors.Kind, error: isize, offset: usize, ok: bool }
+struct Bits { source: []const u8, at: usize, remaining: usize, buffer: u32, count: u8, ended: bool, failed: bool }
+fn byte(bits: *Bits) u8 {
+  if bits.ended || bits.failed {
+    bits.failed = true
+    return 0
+  }
+  if bits.remaining == 0 {
+    if bits.at == #len(bits.source) {
+      bits.failed = true
+      return 0
+    }
+    bits.remaining = #cast(usize, bits.source[bits.at])
+    bits.at += 1
+    if bits.remaining == 0 {
+      bits.ended = true
+      bits.failed = true
+      return 0
+    }
+    if bits.remaining > #len(bits.source) - bits.at {
+      bits.failed = true
+      return 0
+    }
+  }
+  value := bits.source[bits.at]
+  bits.at += 1
+  bits.remaining -= 1
+  return value
+}
+fn code(bits: *Bits, width: u8) u16 {
+  for bits.count < width {
+    next := byte(bits)
+    if bits.failed {
+      return 0
+    }
+    bits.buffer |= #cast(u32, next) << bits.count
+    bits.count += 8
+  }
+  value := #cast(u16, bits.buffer & ((#cast(u32, 1) << width) - 1))
+  bits.buffer = bits.buffer >> width
+  bits.count -= width
+  return value
+}
+fn finish(bits: *Bits) {
+  if bits.failed {
+    return
+  }
+  bits.at += bits.remaining
+  bits.remaining = 0
+  for true {
+    if bits.at == #len(bits.source) {
+      bits.failed = true
+      return
+    }
+    length := #cast(usize, bits.source[bits.at])
+    bits.at += 1
+    if length == 0 {
+      bits.ended = true
+      return
+    }
+    if length > #len(bits.source) - bits.at {
+      bits.failed = true
+      return
+    }
+    bits.at += length
+  }
+}
+fn skip(source: []const u8, start: usize) usize {
+  at := start
+  for at < #len(source) {
+    length := #cast(usize, source[at])
+    at += 1
+    if length == 0 {
+      return at
+    }
+    if length > #len(source) - at {
+      return #len(source) + 1
+    }
+    at += length
+  }
+  return #len(source) + 1
+}
+// Ownership: pixels borrow arena backing; source is read only during this call.
+// Inputs must not borrow unused backing of the output arena.
+// Invalid/unsupported input restores the arena mark. Allocation exhaustion panics.
+pub fn decode(arena: *mem.Arena, source: []const u8) Result {
+  if #len(source) < 13 || source[0] != 71 || source[1] != 73 || source[2] != 70 || source[3] != 56 || (source[4] != 55 && source[4] != 57) || source[5] != 97 {
+    return Result{ kind: errors.Kind.InvalidInput }
+  }
+  width := #cast(u32, binary.load_u16_le(source[6..]))
+  height := #cast(u32, binary.load_u16_le(source[8..]))
+  if width == 0 || height == 0 {
+    return Result{ kind: errors.Kind.InvalidInput }
+  }
+  if #cast(u64, width) * #cast(u64, height) > 16777216 {
+    return Result{ kind: errors.Kind.Capacity }
+  }
+  at: usize = 13
+  palette: []const u8
+  if (source[10] & 128) != 0 {
+    count := #cast(usize, 1) << ((source[10] & 7) + 1)
+    if count * 3 > #len(source) - at || #cast(usize, source[11]) >= count {
+      return Result{ kind: errors.Kind.InvalidInput, offset: at }
+    }
+    palette = source[at..at + count * 3]
+    at += count * 3
+  }
+  transparent := false
+  transparent_index: u8 = 0
+  for at < #len(source) {
+    marker := source[at]
+    at += 1
+    if marker == 33 {
+      if at == #len(source) {
+        return Result{ kind: errors.Kind.InvalidInput, offset: at }
+      }
+      label := source[at]
+      at += 1
+      if label == 249 {
+        if #len(source) - at < 6 || source[at] != 4 || source[at + 5] != 0 {
+          return Result{ kind: errors.Kind.InvalidInput, offset: at }
+        }
+        transparent = (source[at + 1] & 1) != 0
+        transparent_index = source[at + 4]
+        at += 6
+      } else {
+        at = skip(source, at)
+        if at > #len(source) {
+          return Result{ kind: errors.Kind.InvalidInput, offset: #len(source) }
+        }
+        // A plain-text rendering block consumes its associated graphic control.
+        if label == 1 {
+          transparent = false
+        }
+      }
+      continue
+    }
+    if marker != 44 || #len(source) - at < 9 {
+      return Result{ kind: errors.Kind.InvalidInput, offset: at - 1 }
+    }
+    left := #cast(u32, binary.load_u16_le(source[at..]))
+    top := #cast(u32, binary.load_u16_le(source[at + 2..]))
+    image_width := #cast(u32, binary.load_u16_le(source[at + 4..]))
+    image_height := #cast(u32, binary.load_u16_le(source[at + 6..]))
+    flags := source[at + 8]
+    at += 9
+    if image_width == 0 || image_height == 0 || left + image_width > width || top + image_height > height || (flags & 24) != 0 {
+      return Result{ kind: errors.Kind.InvalidInput, offset: at - 9 }
+    }
+    background := palette
+    if (flags & 128) != 0 {
+      count := #cast(usize, 1) << ((flags & 7) + 1)
+      if count * 3 > #len(source) - at {
+        return Result{ kind: errors.Kind.InvalidInput, offset: at }
+      }
+      palette = source[at..at + count * 3]
+      at += count * 3
+    }
+    if #len(palette) == 0 || at == #len(source) {
+      return Result{ kind: errors.Kind.InvalidInput, offset: at }
+    }
+    minimum := source[at]
+    at += 1
+    if minimum < 2 || minimum > 8 {
+      return Result{ kind: errors.Kind.InvalidInput, offset: at - 1 }
+    }
+    mark := mem.arena_mark(arena)
+    success := false
+    defer {
+      if !success {
+        mem.arena_rewind(arena, mark)
+      }
+    }
+    pixels := mem.push_array(u8, arena, #cast(usize, width) * #cast(usize, height) * 4)
+    if !transparent && #len(background) > 0 {
+      color_at := #cast(usize, source[11]) * 3
+      for p in 0..#len(pixels) / 4 {
+        pixels[p * 4] = background[color_at]
+        pixels[p * 4 + 1] = background[color_at + 1]
+        pixels[p * 4 + 2] = background[color_at + 2]
+        pixels[p * 4 + 3] = 255
+      }
+    }
+    scratch := mem.arena_mark(arena)
+    prefixes := mem.push_array(u16, arena, 4096)
+    suffixes := mem.push_array(u8, arena, 4096)
+    stack := mem.push_array(u8, arena, 4097)
+    clear := #cast(u16, 1) << minimum
+    end := clear + 1
+    next := clear + 2
+    size := minimum + 1
+    old: i32 = -1
+    first: u8 = 0
+    bits := Bits{ source: source, at: at }
+    if code(&bits, size) != clear || bits.failed {
+      return Result{ kind: errors.Kind.InvalidInput, offset: bits.at }
+    }
+    produced: usize = 0
+    count := #cast(usize, image_width) * #cast(usize, image_height)
+    row: usize = 0
+    pass: usize = 0
+    starts: [4]usize = [0, 4, 2, 1]
+    steps: [4]usize = [8, 8, 4, 2]
+    for true {
+      incoming := code(&bits, size)
+      if bits.failed {
+        return Result{ kind: errors.Kind.InvalidInput, offset: bits.at }
+      }
+      if incoming == clear {
+        next = clear + 2
+        size = minimum + 1
+        old = -1
+        continue
+      }
+      if incoming == end {
+        break
+      }
+      current := incoming
+      used: usize = 0
+      if old < 0 {
+        if current >= clear {
+          return Result{ kind: errors.Kind.InvalidInput, offset: bits.at }
+        }
+      } else {
+        if current == next {
+          stack[used] = first
+          used += 1
+          current = #cast(u16, old)
+        } else if current > next {
+          return Result{ kind: errors.Kind.InvalidInput, offset: bits.at }
+        }
+        for current >= clear {
+          if current >= next || used >= 4096 {
+            return Result{ kind: errors.Kind.InvalidInput, offset: bits.at }
+          }
+          stack[used] = suffixes[#cast(usize, current)]
+          used += 1
+          current = prefixes[#cast(usize, current)]
+        }
+      }
+      first = #cast(u8, current)
+      stack[used] = first
+      used += 1
+      if used > count - produced {
+        return Result{ kind: errors.Kind.InvalidInput, offset: bits.at }
+      }
+      for used > 0 {
+        used -= 1
+        index := stack[used]
+        x := produced % #cast(usize, image_width)
+        dst := ((#cast(usize, top) + row) * #cast(usize, width) + #cast(usize, left) + x) * 4
+        if !transparent || index != transparent_index {
+          if #cast(usize, index) >= #len(palette) / 3 {
+            return Result{ kind: errors.Kind.InvalidInput, offset: bits.at }
+          }
+          p := #cast(usize, index) * 3
+          pixels[dst] = palette[p]
+          pixels[dst + 1] = palette[p + 1]
+          pixels[dst + 2] = palette[p + 2]
+          pixels[dst + 3] = 255
+        }
+        produced += 1
+        if produced % #cast(usize, image_width) == 0 {
+          if (flags & 64) == 0 {
+            row += 1
+          }
+          else {
+            row += steps[pass]
+            for row >= #cast(usize, image_height) && pass < 3 {
+              pass += 1
+              row = starts[pass]
+            }
+          }
+        }
+      }
+      if old >= 0 && next < 4096 {
+        prefixes[#cast(usize, next)] = #cast(u16, old)
+        suffixes[#cast(usize, next)] = first
+        next += 1
+        if next == (#cast(u16, 1) << size) && size < 12 {
+          size += 1
+        }
+      }
+      old = #cast(i32, incoming)
+    }
+    if produced != count {
+      return Result{ kind: errors.Kind.InvalidInput, offset: bits.at }
+    }
+    finish(&bits)
+    if bits.failed {
+      return Result{ kind: errors.Kind.InvalidInput, offset: bits.at }
+    }
+    mem.arena_rewind(arena, scratch)
+    success = true
+    return Result{ value: Image{ info: Info{ width: width, height: height, channels: 4 }, pixels: pixels }, consumed: bits.at, ok: true }
+  }
+  return Result{ kind: errors.Kind.InvalidInput, offset: at }
+}

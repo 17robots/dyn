@@ -1,0 +1,248 @@
+use "std/mem" mem
+use "std/errors" errors
+use "std/encoding/binary" binary
+// Windows DIB headers, uncompressed indexed/BGR and contiguous bitfields.
+// RLE, embedded JPEG/PNG and OS/2 DIB variants return Unsupported.
+pub struct Info { width: u32, height: u32, channels: u8 = 4 }
+pub struct Image { info: Info, pixels: []u8 }
+pub struct Result { value: Image, kind: errors.Kind, error: isize, offset: usize, ok: bool }
+pub struct EncodeResult { value: []u8, kind: errors.Kind, error: isize, ok: bool }
+fn le16(data: []const u8, at: usize) u16 {
+  return binary.load_u16_le(data[at..])
+}
+fn le32(data: []const u8, at: usize) u32 {
+  return binary.load_u32_le(data[at..])
+}
+fn mask_valid(mask: u32, bits: u16) bool {
+  if bits < 32 && mask >> bits != 0 {
+    return false
+  }
+  if mask == 0 {
+    return true
+  }
+  for (mask & 1) == 0 {
+    mask >>= 1
+  }
+  return (mask & #wrap(mask + 1)) == 0
+}
+fn component(pixel, mask: u32, missing: u8) u8 {
+  if mask == 0 {
+    return missing
+  }
+  for (mask & 1) == 0 {
+    mask >>= 1
+    pixel >>= 1
+  }
+  value := #cast(u64, pixel & mask)
+  maximum := #cast(u64, mask)
+  return #cast(u8, ((value * 255 + maximum / 2) / maximum))
+}
+// Ownership: pixels borrow arena backing; source is read only during this call.
+// Inputs must not borrow unused backing of the output arena.
+// Invalid/unsupported input restores the arena mark. Allocation exhaustion panics.
+pub fn decode(arena: *mem.Arena, source: []const u8) Result {
+  if #len(source) < 54 || source[0] != 66 || source[1] != 77 {
+    return Result{ kind: errors.Kind.InvalidInput }
+  }
+  dib := #cast(usize, le32(source, 14))
+  if dib != 40 && dib != 52 && dib != 56 && dib != 108 && dib != 124 {
+    return Result{ kind: errors.Kind.Unsupported, offset: 14 }
+  }
+  if dib > #len(source) - 14 {
+    return Result{ kind: errors.Kind.InvalidInput, offset: 14 }
+  }
+  signed_width := #cast(i32, le32(source, 18))
+  signed_height := #cast(i32, le32(source, 22))
+  if signed_width <= 0 || signed_height == 0 || signed_height == -2147483648 || le16(source, 26) != 1 {
+    return Result{ kind: errors.Kind.InvalidInput, offset: 18 }
+  }
+  width := #cast(u32, signed_width)
+  height := #cast(u32, signed_height)
+  if signed_height < 0 {
+    height = #cast(u32, (0 - signed_height))
+  }
+  if #cast(u64, width) * #cast(u64, height) > 16777216 {
+    return Result{ kind: errors.Kind.Capacity }
+  }
+  bits := le16(source, 28)
+  compression := le32(source, 30)
+  if bits != 1 && bits != 4 && bits != 8 && bits != 16 && bits != 24 && bits != 32 {
+    return Result{ kind: errors.Kind.Unsupported, offset: 28 }
+  }
+  if compression != 0 && compression != 3 && compression != 6 {
+    return Result{ kind: errors.Kind.Unsupported, offset: 30 }
+  }
+  if compression != 0 && bits != 16 && bits != 32 {
+    return Result{ kind: errors.Kind.InvalidInput, offset: 30 }
+  }
+  pixel_at := #cast(usize, le32(source, 10))
+  header_end := 14 + dib
+  masks: [4]u32 = [0x7c00, 0x3e0, 0x1f, 0]
+  if bits == 32 {
+    masks = [0xff0000, 0xff00, 0xff, 0]
+  }
+  if compression != 0 {
+    mask_at: usize = 54
+    required: usize = 12
+    if compression == 6 || dib >= 56 {
+      required = 16
+    }
+    if mask_at > #len(source) || required > #len(source) - mask_at || (dib != 40 && dib < 40 + required) {
+      return Result{ kind: errors.Kind.InvalidInput, offset: mask_at }
+    }
+    for i in 0..required / 4 {
+      masks[i] = le32(source, mask_at + i * 4)
+    }
+    if dib == 40 {
+      header_end += required
+    }
+    if masks[0] == 0 || masks[1] == 0 || masks[2] == 0 {
+      return Result{ kind: errors.Kind.InvalidInput, offset: mask_at }
+    }
+    for i in 0..4 {
+      if !mask_valid(masks[i], bits) {
+        return Result{ kind: errors.Kind.InvalidInput, offset: mask_at }
+      }
+      for j in 0..i {
+        if (masks[i] & masks[j]) != 0 {
+          return Result{ kind: errors.Kind.InvalidInput, offset: mask_at }
+        }
+      }
+    }
+  }
+  palette_count: usize = 0
+  if bits <= 8 {
+    palette_count = #cast(usize, le32(source, 46))
+    maximum := #cast(usize, 1) << bits
+    if palette_count == 0 {
+      palette_count = maximum
+    }
+    if palette_count > maximum || header_end > #len(source) || palette_count > (#len(source) - header_end) / 4 {
+      return Result{ kind: errors.Kind.InvalidInput, offset: 46 }
+    }
+  }
+  if pixel_at < header_end + palette_count * 4 || pixel_at > #len(source) {
+    return Result{ kind: errors.Kind.InvalidInput, offset: 10 }
+  }
+  row := #cast(usize, ((#cast(u64, width) * #cast(u64, bits) + 31) / 32 * 4))
+  if #cast(usize, height) > (#len(source) - pixel_at) / row {
+    return Result{ kind: errors.Kind.InvalidInput, offset: pixel_at }
+  }
+  declared := #cast(usize, le32(source, 2))
+  if declared != 0 && (declared > #len(source) || declared < pixel_at + row * #cast(usize, height)) {
+    return Result{ kind: errors.Kind.InvalidInput, offset: 2 }
+  }
+  mark := mem.arena_mark(arena)
+  success := false
+  defer {
+    if !success {
+      mem.arena_rewind(arena, mark)
+    }
+  }
+  pixels := mem.push_array(u8, arena, #cast(usize, width) * #cast(usize, height) * 4)
+  for y in 0..#cast(usize, height) {
+    sy := y
+    if signed_height > 0 {
+      sy = #cast(usize, height) - 1 - y
+    }
+    start := pixel_at + sy * row
+    for x in 0..#cast(usize, width) {
+      at := (y * #cast(usize, width) + x) * 4
+      if bits <= 8 {
+        index: usize = 0
+        if bits == 8 {
+          index = #cast(usize, source[start + x])
+        }
+        else if bits == 4 {
+          index = #cast(usize, (source[start + x / 2] >> ((1 - x % 2) * 4)) & 15)
+        }
+        else {
+          index = #cast(usize, (source[start + x / 8] >> (7 - x % 8)) & 1)
+        }
+        if index >= palette_count {
+          return Result{ kind: errors.Kind.InvalidInput, offset: start + x * #cast(usize, bits) / 8 }
+        }
+        p := header_end + index * 4
+        pixels[at] = source[p + 2]
+        pixels[at + 1] = source[p + 1]
+        pixels[at + 2] = source[p]
+        pixels[at + 3] = 255
+      } else if bits == 24 {
+        p := start + x * 3
+        pixels[at] = source[p + 2]
+        pixels[at + 1] = source[p + 1]
+        pixels[at + 2] = source[p]
+        pixels[at + 3] = 255
+      } else {
+        value: u32 = 0
+        if bits == 16 {
+          value = #cast(u32, le16(source, start + x * 2))
+        }
+        else {
+          value = le32(source, start + x * 4)
+        }
+        pixels[at] = component(value, masks[0], 0)
+        pixels[at + 1] = component(value, masks[1], 0)
+        pixels[at + 2] = component(value, masks[2], 0)
+        pixels[at + 3] = component(value, masks[3], 255)
+      }
+    }
+  }
+  success = true
+  return Result{ value: Image{ info: Info{ width: width, height: height, channels: 4 }, pixels: pixels }, ok: true }
+}
+// RGB is written as a 24-bit Windows DIB. RGBA uses V4 bitfields, preserving alpha.
+// Ownership: encoded bytes borrow arena backing; pixels are not retained.
+// Inputs must not borrow unused backing of the output arena.
+pub fn encode(arena: *mem.Arena, pixels: []const u8, width, height: u32, channels: u8) EncodeResult {
+  if width == 0 || height == 0 || width > 2147483647 || height > 2147483647 || (channels != 3 && channels != 4) {
+    return EncodeResult{ kind: errors.Kind.InvalidInput }
+  }
+  count := #cast(u64, width) * #cast(u64, height)
+  if count > 16777216 {
+    return EncodeResult{ kind: errors.Kind.Capacity }
+  }
+  if #cast(usize, count) * #cast(usize, channels) != #len(pixels) {
+    return EncodeResult{ kind: errors.Kind.InvalidInput }
+  }
+  header: usize = 54
+  dib: u32 = 40
+  if channels == 4 {
+    header = 122
+    dib = 108
+  }
+  row := (#cast(usize, width) * #cast(usize, channels) + 3) & ~#cast(usize, 3)
+  size := header + row * #cast(usize, height)
+  output := mem.push_array(u8, arena, size)
+  output[0] = 66
+  output[1] = 77
+  binary.store_u32_le(output[2..], #cast(u32, size))
+  binary.store_u32_le(output[10..], #cast(u32, header))
+  binary.store_u32_le(output[14..], dib)
+  binary.store_u32_le(output[18..], width)
+  binary.store_u32_le(output[22..], height)
+  binary.store_u16_le(output[26..], 1)
+  binary.store_u16_le(output[28..], #cast(u16, channels) * 8)
+  binary.store_u32_le(output[34..], #cast(u32, (row * #cast(usize, height))))
+  if channels == 4 {
+    binary.store_u32_le(output[30..], 3)
+    binary.store_u32_le(output[54..], 0xff0000)
+    binary.store_u32_le(output[58..], 0xff00)
+    binary.store_u32_le(output[62..], 0xff)
+    binary.store_u32_le(output[66..], 0xff000000)
+    binary.store_u32_le(output[70..], 0x73524742)
+  }
+  for y in 0..#cast(usize, height) {
+    for x in 0..#cast(usize, width) {
+      src := (y * #cast(usize, width) + x) * #cast(usize, channels)
+      dst := header + (#cast(usize, height) - 1 - y) * row + x * #cast(usize, channels)
+      output[dst] = pixels[src + 2]
+      output[dst + 1] = pixels[src + 1]
+      output[dst + 2] = pixels[src]
+      if channels == 4 {
+        output[dst + 3] = pixels[src + 3]
+      }
+    }
+  }
+  return EncodeResult{ value: output, ok: true }
+}
