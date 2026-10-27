@@ -111,12 +111,30 @@ for long_loca, cmap12 in ((False, False), (True, True)):
     cases.append(('font-' + ('long' if long_loca else 'short'), declaration + font['SOURCE']))
 cases.append(('bmp-tga-gif-jpeg-toml', FORMATS))
 
+for script in ('ui-box-edit.py', 'ui-box-extras.py'):
+    cases.append((script.removesuffix('.py'), fixture(script)['SOURCE']))
+system = fixture('font-system-results.py')
+system_regular = system['face']('Test 😀', mono=True)
+system_bold = system['face']('Test 😀', 'Bold Italic', 700, True, True)
+system_invalid = system['face'](b'\xd8\x00\x00A')
+declarations = ''.join(f'{name}: [{len(data)}]u8 = [{",".join(map(str, data))}]\n'
+                       for name, data in [('regular_data', system_regular), ('bold_data', system_bold), ('invalid_data', system_invalid)])
+cases.append(('font-system-metadata', declarations + system['SOURCE']))
+cases.append(('font-system-scan', system['SCAN_SOURCE'].replace('FONT_DIRECTORY', 'fonts')))
+
 with tempfile.TemporaryDirectory(prefix='dyn-expansion-host-') as directory:
     work = Path(directory)
     for name, source in cases:
         project = work / name
         project.mkdir()
         (project / 'main.dyn').write_text(source, encoding='utf-8')
+        if name == 'font-system-scan':
+            fonts = project / 'fonts'
+            (fonts / 'nested').mkdir(parents=True)
+            (fonts / 'regular.TTF').write_bytes(system_regular)
+            (fonts / 'nested/bold.ttf').write_bytes(system_bold)
+            (fonts / 'invalid.ttf').write_bytes(system_invalid)
+            (fonts / 'ignored.txt').write_bytes(system_regular)
         if name == 'wav-results-source':
             reference = io.BytesIO()
             with wave.open(reference, 'wb') as writer:

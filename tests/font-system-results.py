@@ -73,6 +73,22 @@ fn main() {
   for i in 0..#len(regular_data) { regular_data[i] = 0 }
   check(bytes.equal(regular.family, "Test 😀"), "check 59")
 }'''
+SCAN_SOURCE = r'''use "std/font/system" system
+use "std/mem" mem
+fn check(ok: bool) { if !ok { #panic("font scan contract") } }
+fn main() {
+  arena := mem.Arena{}
+  defer { mem.arena_release(&arena) }
+  directories: [2][]const u8 = ["MISSING_DIRECTORY", "FONT_DIRECTORY"]
+  check(#len(system.scan_directories(&arena, directories[..], 0)) == 0)
+  entries := system.scan_directories(&arena, directories[..], 20)
+  check(#len(entries) == 2)
+  check(#len(system.scan_directories(&arena, directories[..], 1)) == 1)
+  check(#len(system.covering(entries, 65, true).path) != 0)
+  check(#len(system.covering(entries, 0x10ffff, false).path) == 0)
+  _ = system.scan(&arena, 4)
+}
+'''
 with tempfile.TemporaryDirectory(prefix='dyn-font-system-') as directory:
     work = Path(directory)
     regular = face('Test 😀', mono=True)
@@ -98,22 +114,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-font-system-') as directory:
     (fonts / 'invalid.ttf').write_bytes(invalid)
     (fonts / 'ignored.txt').write_bytes(regular)
     path_literal = str(fonts).replace('\\', '\\\\').replace('"', '\\"')
-    (work / 'main.dyn').write_text(r'''use "std/font/system" system
-use "std/mem" mem
-fn check(ok: bool) { if !ok { #panic("font scan contract") } }
-fn main() {
-  arena := mem.Arena{}
-  defer { mem.arena_release(&arena) }
-  directories: [2][]const u8 = ["MISSING_DIRECTORY", "FONT_DIRECTORY"]
-  check(#len(system.scan_directories(&arena, directories[..], 0)) == 0)
-  entries := system.scan_directories(&arena, directories[..], 20)
-  check(#len(entries) == 2)
-  check(#len(system.scan_directories(&arena, directories[..], 1)) == 1)
-  check(#len(system.covering(entries, 65, true).path) != 0)
-  check(#len(system.covering(entries, 0x10ffff, false).path) == 0)
-  _ = system.scan(&arena, 4)
-}
-'''.replace('FONT_DIRECTORY', path_literal))
+    (work / 'main.dyn').write_text(SCAN_SOURCE.replace('FONT_DIRECTORY', path_literal))
     for mode in ('--debug', '--release'):
         output = work / 'scan'
         subprocess.run([DYN, 'build', str(work), mode, '--quiet', '--output', str(output)], check=True, timeout=300)
