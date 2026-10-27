@@ -2,7 +2,8 @@ use "std/errors" errors
 use "std/crypto/der" der
 use "std/crypto/core" crypto_core
 
-// Borrowed DER certificate view. TLS provider performs trust and hostname verification.
+// Borrowed DER envelope; parse alone does not establish trust. std/crypto/x509
+// validates explicit native paths. TLS retains its separate provider policy.
 pub struct Certificate { encoded: []const u8, tbs: []const u8, signature_algorithm: []const u8, signature_bits: []const u8 }
 pub struct Result { value: Certificate, ok: bool, kind: errors.Kind, error: isize, offset: usize }
 

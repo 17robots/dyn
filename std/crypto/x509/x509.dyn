@@ -1,0 +1,838 @@
+use "std/crypto/certificate" certificate
+use "std/crypto/der" der
+use "std/crypto/ed25519" ed
+use "std/crypto/p256" p256
+use "std/bytes" bytes
+use "std/errors" errors
+use "std/unicode/utf8" utf8
+// Strict, allocation-free ordered-path profile of RFC5280/RFC8410/RFC9525.
+// This is not path discovery or a browser trust store. Caller supplies leaf-first
+// DER chain, explicit DER trust anchors, Unix seconds and DNS name or raw IP.
+// Ed25519 and ECDSA-SHA256/P256 only; unsupported critical extensions, name/policy
+// constraints and other algorithms are rejected. No revocation/AIA/network I/O.
+// Issuer names match exact DER, not directory-name normalization. No CN fallback.
+pub enum Algorithm { Unsupported, Ed25519, P256 }
+pub enum Purpose { Any, Server, Client }
+pub enum Reason { None, Malformed, UnsupportedAlgorithm, UnsupportedExtension, Expired, NotYetValid, Untrusted, Issuer, Signature, Constraints, Hostname, TooDeep }
+pub struct View {
+  envelope: certificate.Certificate, issuer: []const u8, subject: []const u8,
+  public_key: []const u8, key_algorithm: Algorithm, signature_algorithm: Algorithm,
+  not_before: i64, not_after: i64, ca: bool, basic_constraints: bool,
+  basic_critical: bool, path_length: i64 = -1, has_usage: bool, usage: u16,
+  has_extended_usage: bool, server: bool, client: bool, san: []const u8,
+  san_critical: bool,
+}
+pub struct InspectResult { value: View, kind: errors.Kind, reason: Reason, ok: bool }
+pub struct Options { now: i64, hostname: []const u8, ip: []const u8, purpose: Purpose }
+pub struct Validation { kind: errors.Kind, reason: Reason, index: usize, anchor: usize, ok: bool }
+const EdOid: []const u8 = "\x2b\x65\x70"
+const EcOid: []const u8 = "\x2a\x86\x48\xce\x3d\x02\x01"
+const CurveOid: []const u8 = "\x2a\x86\x48\xce\x3d\x03\x01\x07"
+const EcdsaOid: []const u8 = "\x2a\x86\x48\xce\x3d\x04\x03\x02"
+fn failed(reason: Reason) InspectResult {
+  kind := errors.Kind.InvalidInput
+  if reason == Reason.UnsupportedAlgorithm || reason == Reason.UnsupportedExtension {
+    kind = errors.Kind.Unsupported
+  }
+  return InspectResult{kind:kind, reason:reason}
+}
+fn validation(reason: Reason, index: usize) Validation {
+  result := failed(reason)
+  kind := result.kind
+  if reason == Reason.TooDeep {
+    kind = errors.Kind.Capacity
+  }
+  return Validation{kind:kind, reason:reason, index:index}
+}
+fn one(source: []const u8, tag: u8) der.Result {
+  cursor := der.cursor(source)
+  result := der.next(&cursor)
+  if !result.ok || result.value.tag != tag || !der.finished(&cursor) {
+    return der.Result{}
+  }
+  return result
+}
+fn oid(value: []const u8) bool {
+  if #len(value) == 0 {
+    return false
+  }
+  first := true
+  for byte in value {
+    if first && byte == 128 {
+      return false
+    }
+    first = (byte & 128) == 0
+  }
+  return first
+}
+fn positive(value: []const u8) bool {
+  if #len(value) == 0 || (value[0] & 128) != 0 {
+    return false
+  }
+  return #len(value) == 1 || value[0] != 0 || (value[1] & 128) != 0
+}
+fn small(value: []const u8) i64 {
+  if !positive(value) || #len(value) > 4 {
+    return -1
+  }
+  result: i64 = 0
+  for byte in value {
+    result = result*256 + #cast(i64, byte)
+  }
+  return result
+}
+fn signature_algorithm(encoded: []const u8) Algorithm {
+  seq := one(encoded, 48)
+  if !seq.ok {
+    return Algorithm.Unsupported
+  }
+  cursor := der.enter(seq.value)
+  name := der.next(&cursor)
+  if !name.ok || name.value.tag != 6 || !der.finished(&cursor) {
+    return Algorithm.Unsupported
+  }
+  if bytes.equal(name.value.content, EdOid) {
+    return Algorithm.Ed25519
+  }
+  if bytes.equal(name.value.content, EcdsaOid) {
+    return Algorithm.P256
+  }
+  return Algorithm.Unsupported
+}
+fn public_key(encoded: der.Element, view: *View) bool {
+  if encoded.tag != 48 {
+    return false
+  }
+  cursor := der.enter(encoded)
+  algorithm := der.next(&cursor)
+  key := der.next(&cursor)
+  if !algorithm.ok || algorithm.value.tag != 48 || !key.ok || key.value.tag != 3 || #len(key.value.content) < 1 || key.value.content[0] != 0 || !der.finished(&cursor) {
+    return false
+  }
+  cursor = der.enter(algorithm.value)
+  name := der.next(&cursor)
+  if !name.ok || name.value.tag != 6 || !oid(name.value.content) {
+    return false
+  }
+  view.public_key = key.value.content[1..]
+  if bytes.equal(name.value.content, EdOid) {
+    if !der.finished(&cursor) || #len(view.public_key) != 32 {
+      return false
+    }
+    if !ed.valid_public_key(view.public_key) {
+      return false
+    }
+    view.key_algorithm = Algorithm.Ed25519
+  } else if bytes.equal(name.value.content, EcOid) {
+    curve := der.next(&cursor)
+    if !curve.ok || curve.value.tag != 6 || !der.finished(&cursor) {
+      return false
+    }
+    if bytes.equal(curve.value.content, CurveOid) {
+      if #len(view.public_key) != 65 || view.public_key[0] != 4 {
+        return false
+      }
+      if !p256.valid_public_key(view.public_key) {
+        return false
+      }
+      view.key_algorithm = Algorithm.P256
+    }
+  }
+  return true
+}
+fn name(encoded: der.Element) bool {
+  if encoded.tag != 48 {
+    return false
+  }
+  sets := der.enter(encoded)
+  for !der.finished(&sets) {
+    set := der.next(&sets)
+    if !set.ok || set.value.tag != 49 || #len(set.value.content) == 0 {
+      return false
+    }
+    entries := der.enter(set.value)
+    previous: []const u8
+    for !der.finished(&entries) {
+      entry := der.next(&entries)
+      if !entry.ok || entry.value.tag != 48 {
+        return false
+      }
+      // DER SET OF order is unsigned lexicographic encoded-byte order.
+      if #len(previous) != 0 {
+        limit := #len(previous)
+        if #len(entry.value.encoded) < limit {
+          limit = #len(entry.value.encoded)
+        }
+        decided := false
+        for i in 0..limit {
+          if previous[i] < entry.value.encoded[i] {
+            decided = true
+            break
+          }
+          if previous[i] > entry.value.encoded[i] {
+            return false
+          }
+        }
+        if !decided && #len(previous) > #len(entry.value.encoded) {
+          return false
+        }
+      }
+      previous = entry.value.encoded
+      pair := der.enter(entry.value)
+      typ := der.next(&pair)
+      value := der.next(&pair)
+      if !typ.ok || typ.value.tag != 6 || !oid(typ.value.content) || !value.ok || !der.finished(&pair) {
+        return false
+      }
+      data := value.value.content
+      tag := value.value.tag
+      if #len(data) == 0 {
+        return false
+      }
+      if tag == 12 {
+        if !utf8.valid(data) {
+          return false
+        }
+      }
+      else if tag == 19 {
+        for byte in data {
+          c := lower(byte)
+          valid := (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+          for extra in " '()+,-./:=?" {
+            if byte == extra {
+              valid = true
+            }
+          }
+          if !valid {
+            return false
+          }
+        }
+      } else if tag == 22 {
+        for byte in data {
+          if byte >= 128 {
+            return false
+          }
+        }
+      }
+      else if tag == 30 {
+        if #len(data)%2 != 0 {
+          return false
+        }
+        for i in 0..#len(data)/2 {
+          scalar := #cast(u32, data[i*2])*256 + #cast(u32, data[i*2+1])
+          if scalar >= 0xd800 && scalar <= 0xdfff {
+            return false
+          }
+        }
+      } else if tag == 28 {
+        if #len(data)%4 != 0 {
+          return false
+        }
+        for i in 0..#len(data)/4 {
+          scalar := (#cast(u32, data[i*4])<<24) | (#cast(u32, data[i*4+1])<<16) | (#cast(u32, data[i*4+2])<<8) | #cast(u32, data[i*4+3])
+          if scalar > 0x10ffff || (scalar >= 0xd800 && scalar <= 0xdfff) {
+            return false
+          }
+        }
+      } else {
+        return false
+      } // Teletex and other attribute encodings omitted.
+
+    }
+  }
+  return true
+}
+fn decimal(source: []const u8) i64 {
+  result: i64 = 0
+  for byte in source {
+    if byte < '0' || byte > '9' {
+      return -1
+    }
+    result = result*10 + #cast(i64, byte-'0')
+  }
+  return result
+}
+struct Date { seconds: i64, ok: bool }
+fn date(element: der.Element) Date {
+  source := element.content
+  year: i64 = 0
+  at: usize = 0
+  if element.tag == 23 && #len(source) == 13 {
+    year = decimal(source[..2])
+    at = 2
+    if year < 0 {
+      return Date{}
+    }
+    if year >= 50 {
+      year += 1900
+    } else {
+      year += 2000
+    }
+  } else if element.tag == 24 && #len(source) == 15 {
+    year = decimal(source[..4])
+    at = 4
+    // RFC5280 requires UTCTime through 2049.
+    if year < 2050 {
+      return Date{}
+    }
+  } else {
+    return Date{}
+  }
+  month := decimal(source[at..at+2])
+  day := decimal(source[at+2..at+4])
+  hour := decimal(source[at+4..at+6])
+  minute := decimal(source[at+6..at+8])
+  second := decimal(source[at+8..at+10])
+  if year < 1 || month < 1 || month > 12 || day < 1 || hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59 || source[at+10] != 'Z' {
+    return Date{}
+  }
+  days: i64 = 31
+  if month == 4 || month == 6 || month == 9 || month == 11 {
+    days = 30
+  }
+  if month == 2 {
+    days = 28
+    if year%4 == 0 && (year%100 != 0 || year%400 == 0) {
+      days = 29
+    }
+  }
+  if day > days {
+    return Date{}
+  }
+  if month <= 2 {
+    year -= 1
+  }
+  era := year / 400
+  yoe := year - era*400
+  adjusted := month - 3
+  if month <= 2 {
+    adjusted = month + 9
+  }
+  ordinal := (153*adjusted+2)/5 + day - 1
+  total := era*146097 + yoe*365 + yoe/4 - yoe/100 + ordinal - 719468
+  return Date{seconds:total*86400+hour*3600+minute*60+second, ok:true}
+}
+fn basic(source: []const u8, critical: bool, view: *View) bool {
+  outer := one(source, 48)
+  if !outer.ok {
+    return false
+  }
+  cursor := der.enter(outer.value)
+  view.basic_constraints = true
+  view.basic_critical = critical
+  if der.finished(&cursor) {
+    return true
+  }
+  value := der.next(&cursor)
+  if !value.ok {
+    return false
+  }
+  if value.value.tag == 1 {
+    // DEFAULT FALSE must be omitted in DER.
+    if #len(value.value.content) != 1 || value.value.content[0] != 255 {
+      return false
+    }
+    view.ca = true
+    if der.finished(&cursor) {
+      return true
+    }
+    value = der.next(&cursor)
+  }
+  if !view.ca || !value.ok || value.value.tag != 2 {
+    return false
+  }
+  view.path_length = small(value.value.content)
+  return view.path_length >= 0 && der.finished(&cursor)
+}
+fn usage(source: []const u8, view: *View) bool {
+  item := one(source, 3)
+  if !item.ok || #len(item.value.content) < 2 || #len(item.value.content) > 3 {
+    return false
+  }
+  content := item.value.content
+  unused := content[0]
+  last := content[#len(content)-1]
+  if unused > 7 || last == 0 || (last & #cast(u8, (#cast(u16, 1)<<#cast(u16, unused))-1)) != 0 || (last & (#cast(u8, 1)<<unused)) == 0 {
+    return false
+  }
+  if #len(content) == 3 && (last != 128 || unused != 7) {
+    return false
+  }
+  view.has_usage = true
+  view.usage = #cast(u16, content[1]) << 8
+  if #len(content) == 3 {
+    view.usage |= #cast(u16, content[2])
+  }
+  // encipherOnly/decipherOnly require keyAgreement.
+  if (view.usage & 0x0180) != 0 && (view.usage & 0x0800) == 0 {
+    return false
+  }
+  return true
+}
+fn extended(source: []const u8, view: *View) bool {
+  item := one(source, 48)
+  if !item.ok || #len(item.value.content) == 0 {
+    return false
+  }
+  cursor := der.enter(item.value)
+  seen: [64][]const u8 = []
+  count: usize = 0
+  for !der.finished(&cursor) {
+    value := der.next(&cursor)
+    if !value.ok || value.value.tag != 6 || !oid(value.value.content) || count == #len(seen) {
+      return false
+    }
+    for i in 0..count {
+      if bytes.equal(seen[i], value.value.content) {
+        return false
+      }
+    }
+    seen[count] = value.value.content
+    count += 1
+    if bytes.equal(value.value.content, "\x2b\x06\x01\x05\x05\x07\x03\x01") {
+      view.server = true
+    }
+    if bytes.equal(value.value.content, "\x2b\x06\x01\x05\x05\x07\x03\x02") {
+      view.client = true
+    }
+    if bytes.equal(value.value.content, "\x55\x1d\x25\x00") {
+      view.server = true
+      view.client = true
+    }
+  }
+  view.has_extended_usage = true
+  return true
+}
+fn san(source: []const u8) Reason {
+  item := one(source, 48)
+  if !item.ok || #len(item.value.content) == 0 {
+    return Reason.Malformed
+  }
+  cursor := der.enter(item.value)
+  for !der.finished(&cursor) {
+    value := der.next(&cursor)
+    if !value.ok {
+      return Reason.Malformed
+    }
+    tag := value.value.tag
+    if tag == 160 || tag == 163 || tag == 165 {
+      return Reason.UnsupportedExtension
+    }
+    if tag == 164 {
+      directory := one(value.value.content, 48)
+      if !directory.ok || !name(directory.value) {
+        return Reason.Malformed
+      }
+    }
+    if tag != 160 && tag != 129 && tag != 130 && tag != 163 && tag != 164 && tag != 165 && tag != 134 && tag != 135 && tag != 136 {
+      return Reason.Malformed
+    }
+    if tag == 129 || tag == 130 || tag == 134 {
+      if #len(value.value.content) == 0 {
+        return Reason.Malformed
+      }
+      for byte in value.value.content {
+        if byte == 0 || byte >= 128 {
+          return Reason.Malformed
+        }
+      }
+    }
+    if tag == 130 {
+      dns := value.value.content
+      if #len(dns) > 2 && dns[0] == '*' && dns[1] == '.' {
+        dns = dns[2..]
+      }
+      if !dns_name(dns) {
+        return Reason.Malformed
+      }
+    }
+    if tag == 135 && #len(value.value.content) != 4 && #len(value.value.content) != 16 {
+      return Reason.Malformed
+    }
+    if tag == 136 && !oid(value.value.content) {
+      return Reason.Malformed
+    }
+  }
+  return Reason.None
+}
+fn extensions(element: der.Element, view: *View) Reason {
+  list := one(element.content, 48)
+  if !list.ok || #len(list.value.content) == 0 {
+    return Reason.Malformed
+  }
+  cursor := der.enter(list.value)
+  seen: [64][]const u8 = []
+  count: usize = 0
+  for !der.finished(&cursor) {
+    entry := der.next(&cursor)
+    if !entry.ok || entry.value.tag != 48 || count == #len(seen) {
+      return Reason.Malformed
+    }
+    fields := der.enter(entry.value)
+    name := der.next(&fields)
+    value := der.next(&fields)
+    if !name.ok || name.value.tag != 6 || !oid(name.value.content) || !value.ok {
+      return Reason.Malformed
+    }
+    for i in 0..count {
+      if bytes.equal(seen[i], name.value.content) {
+        return Reason.Malformed
+      }
+    }
+    seen[count] = name.value.content
+    count += 1
+    critical := false
+    if value.value.tag == 1 {
+      if #len(value.value.content) != 1 || value.value.content[0] != 255 {
+        return Reason.Malformed
+      }
+      critical = true
+      value = der.next(&fields)
+    }
+    if !value.ok || value.value.tag != 4 || !der.finished(&fields) {
+      return Reason.Malformed
+    }
+    ext := name.value.content
+    if bytes.equal(ext, "\x55\x1d\x13") {
+      if !basic(value.value.content, critical, view) {
+        return Reason.Malformed
+      }
+    } else if bytes.equal(ext, "\x55\x1d\x0f") {
+      if !usage(value.value.content, view) {
+        return Reason.Malformed
+      }
+    } else if bytes.equal(ext, "\x55\x1d\x25") {
+      if !extended(value.value.content, view) {
+        return Reason.Malformed
+      }
+    } else if bytes.equal(ext, "\x55\x1d\x11") {
+      san_reason := san(value.value.content)
+      if san_reason != Reason.None {
+        return san_reason
+      }
+      view.san = value.value.content
+      view.san_critical = critical
+    } else if bytes.equal(ext, "\x55\x1d\x1e") || bytes.equal(ext, "\x55\x1d\x24") || bytes.equal(ext, "\x55\x1d\x36") || critical {
+      return Reason.UnsupportedExtension
+    }
+  }
+  return Reason.None
+}
+// All returned slices borrow the original DER, including the envelope.
+pub fn inspect(encoded: []const u8) InspectResult {
+  envelope := certificate.parse(encoded)
+  if !envelope.ok {
+    return failed(Reason.Malformed)
+  }
+  view := View{envelope:envelope.value}
+  outer := one(view.envelope.tbs, 48)
+  if !outer.ok {
+    return failed(Reason.Malformed)
+  }
+  cursor := der.enter(outer.value)
+  serial := der.next(&cursor)
+  version: i64 = 0
+  if serial.ok && serial.value.tag == 160 {
+    item := one(serial.value.content, 2)
+    if !item.ok {
+      return failed(Reason.Malformed)
+    }
+    version = small(item.value.content)
+    if version < 1 || version > 2 {
+      return failed(Reason.Malformed)
+    }
+    serial = der.next(&cursor)
+  }
+  algorithm := der.next(&cursor)
+  issuer := der.next(&cursor)
+  validity := der.next(&cursor)
+  subject := der.next(&cursor)
+  key := der.next(&cursor)
+  if !serial.ok || serial.value.tag != 2 || !positive(serial.value.content) || #len(serial.value.content) > 20 || small(serial.value.content) == 0 || !algorithm.ok || algorithm.value.tag != 48 || !issuer.ok || !name(issuer.value) || #len(issuer.value.content) == 0 || !validity.ok || validity.value.tag != 48 || !subject.ok || !name(subject.value) || !key.ok || !public_key(key.value, &view) {
+    return failed(Reason.Malformed)
+  }
+  if !bytes.equal(algorithm.value.encoded, view.envelope.signature_algorithm) {
+    return failed(Reason.Malformed)
+  }
+  view.signature_algorithm = signature_algorithm(algorithm.value.encoded)
+  if view.signature_algorithm == Algorithm.Unsupported || view.key_algorithm == Algorithm.Unsupported {
+    return failed(Reason.UnsupportedAlgorithm)
+  }
+  view.issuer = issuer.value.encoded
+  view.subject = subject.value.encoded
+  dates := der.enter(validity.value)
+  first := der.next(&dates)
+  last := der.next(&dates)
+  if !first.ok || !last.ok || !der.finished(&dates) {
+    return failed(Reason.Malformed)
+  }
+  before := date(first.value)
+  after := date(last.value)
+  if !before.ok || !after.ok || before.seconds > after.seconds {
+    return failed(Reason.Malformed)
+  }
+  view.not_before = before.seconds
+  view.not_after = after.seconds
+  previous: u8 = 128
+  for !der.finished(&cursor) {
+    optional := der.next(&cursor)
+    if !optional.ok || optional.value.tag <= previous {
+      return failed(Reason.Malformed)
+    }
+    previous = optional.value.tag
+    if optional.value.tag == 129 || optional.value.tag == 130 {
+      if version == 0 || #len(optional.value.content) == 0 || optional.value.content[0] > 7 {
+        return failed(Reason.Malformed)
+      }
+      content := optional.value.content
+      if #len(content) == 1 && content[0] != 0 {
+        return failed(Reason.Malformed)
+      }
+      if #len(content) > 1 && (content[#len(content)-1] & #cast(u8, (#cast(u16, 1)<<#cast(u16, content[0]))-1)) != 0 {
+        return failed(Reason.Malformed)
+      }
+    } else if optional.value.tag == 163 {
+      if version != 2 {
+        return failed(Reason.Malformed)
+      }
+      reason := extensions(optional.value, &view)
+      if reason != Reason.None {
+        return failed(reason)
+      }
+    } else {
+      return failed(Reason.Malformed)
+    }
+  }
+  if #len(subject.value.content) == 0 && (#len(view.san) == 0 || !view.san_critical) {
+    return failed(Reason.Malformed)
+  }
+  if view.has_usage && (view.usage & 0x0400) != 0 && !view.ca {
+    return failed(Reason.Malformed)
+  }
+  return InspectResult{value:view, ok:true}
+}
+fn lower(c: u8) u8 {
+  if c >= 'A' && c <= 'Z' {
+    return c + 32
+  }
+  return c
+}
+fn equal_name(left: []const u8, right: []const u8) bool {
+  if #len(left) != #len(right) {
+    return false
+  }
+  for i in 0..#len(left) {
+    if lower(left[i]) != lower(right[i]) {
+      return false
+    }
+  }
+  return true
+}
+fn dns_name(source: []const u8) bool {
+  if #len(source) == 0 || #len(source) > 253 {
+    return false
+  }
+  length: usize = 0
+  previous: u8 = 0
+  for byte in source {
+    c := lower(byte)
+    if c == '.' {
+      if length == 0 || previous == '-' {
+        return false
+      }
+      length = 0
+    } else {
+      if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-') || (length == 0 && c == '-') {
+        return false
+      }
+      length += 1
+      if length > 63 {
+        return false
+      }
+    }
+    previous = c
+  }
+  return length != 0 && previous != '-'
+}
+fn dns_match(presented: []const u8, reference: []const u8) bool {
+  if #len(presented) > 2 && presented[0] == '*' && presented[1] == '.' {
+    suffix := presented[2..]
+    if !dns_name(suffix) {
+      return false
+    }
+    first_dot: usize = 0
+    for first_dot < #len(reference) && reference[first_dot] != '.' {
+      first_dot += 1
+    }
+    if first_dot == 0 || first_dot == #len(reference) {
+      return false
+    }
+    return equal_name(suffix, reference[first_dot+1..])
+  }
+  return dns_name(presented) && equal_name(presented, reference)
+}
+fn identity(view: *const View, options: Options) bool {
+  if #len(options.hostname) == 0 && #len(options.ip) == 0 {
+    return true
+  }
+  reference := options.hostname
+  if #len(reference) != 0 && reference[#len(reference)-1] == '.' {
+    reference = reference[..#len(reference)-1]
+  }
+  if #len(options.ip) == 0 {
+    numeric := true
+    for byte in reference {
+      if (byte < '0' || byte > '9') && byte != '.' {
+        numeric = false
+      }
+    }
+    if numeric {
+      return false
+    } // IP references must use raw options.ip.
+  }
+  if #len(options.ip) == 0 && !dns_name(reference) {
+    return false
+  }
+  if #len(view.san) == 0 {
+    return false
+  }
+  list := one(view.san, 48)
+  cursor := der.enter(list.value)
+  for !der.finished(&cursor) {
+    entry := der.next(&cursor)
+    if #len(options.ip) != 0 {
+      if entry.value.tag == 135 && bytes.equal(entry.value.content, options.ip) {
+        return true
+      }
+    } else if entry.value.tag == 130 && dns_match(entry.value.content, reference) {
+      return true
+    }
+  }
+  return false
+}
+fn raw_signature(source: []const u8, destination: []u8) bool {
+  seq := one(source, 48)
+  if !seq.ok {
+    return false
+  }
+  cursor := der.enter(seq.value)
+  for part in 0..2 {
+    value := der.next(&cursor)
+    if !value.ok || value.value.tag != 2 || !positive(value.value.content) {
+      return false
+    }
+    content := value.value.content
+    if #len(content) > 1 && content[0] == 0 {
+      content = content[1..]
+    }
+    if #len(content) > 32 {
+      return false
+    }
+    for i in 0..32 {
+      destination[part*32+i] = 0
+    }
+    for i in 0..#len(content) {
+      destination[part*32+32-#len(content)+i] = content[i]
+    }
+  }
+  return der.finished(&cursor)
+}
+fn signed(child: *const View, parent: *const View) bool {
+  if child.signature_algorithm != parent.key_algorithm {
+    return false
+  }
+  if child.signature_algorithm == Algorithm.Ed25519 {
+    return ed.verify(child.envelope.signature_bits, child.envelope.tbs, parent.public_key)
+  }
+  raw: [64]u8 = []
+  if !raw_signature(child.envelope.signature_bits, raw[..]) {
+    return false
+  }
+  return p256.verify(raw[..], child.envelope.tbs, parent.public_key)
+}
+fn constraints(view: *const View, purpose: Purpose, ca: bool, below: usize) bool {
+  if ca && (!view.ca || !view.basic_constraints || !view.basic_critical || (view.has_usage && (view.usage & 0x0400) == 0) || (view.path_length >= 0 && #cast(u64, below) > #cast(u64, view.path_length))) {
+    return false
+  }
+  if purpose != Purpose.Any && view.has_extended_usage {
+    if purpose == Purpose.Server && !view.server {
+      return false
+    }
+    if purpose == Purpose.Client && !view.client {
+      return false
+    }
+  }
+  return true
+}
+// Exact anchor DER matching permits a directly pinned end certificate. Otherwise
+// the final certificate must be signed by a supplied CA anchor. Intermediates are
+// explicit, never downloaded or reordered. Time checks are inclusive; an anchor
+// included in chain is time-checked too. External anchors are caller trust policy.
+pub fn validate(chain: []const []const u8, anchors: []const []const u8, options: Options) Validation {
+  if #len(chain) == 0 || (#len(options.hostname) != 0 && #len(options.ip) != 0) || (#len(options.ip) != 0 && #len(options.ip) != 4 && #len(options.ip) != 16) || #cast(u32, options.purpose) > #cast(u32, Purpose.Client) {
+    return validation(Reason.Malformed, 0)
+  }
+  if #len(chain) > 16 {
+    return validation(Reason.TooDeep, 0)
+  }
+  views: [16]View = []
+  for i in 0..#len(chain) {
+    parsed := inspect(chain[i])
+    if !parsed.ok {
+      return validation(parsed.reason, i)
+    }
+    views[i] = parsed.value
+    if options.now < views[i].not_before {
+      return validation(Reason.NotYetValid, i)
+    }
+    if options.now > views[i].not_after {
+      return validation(Reason.Expired, i)
+    }
+    below: usize = 0
+    // RFC5280 pathLen counts non-self-issued CA certificates below this issuer.
+    for j in 1..i {
+      if !bytes.equal(views[j].issuer, views[j].subject) {
+        below += 1
+      }
+    }
+    if !constraints(&views[i], options.purpose, i != 0, below) {
+      return validation(Reason.Constraints, i)
+    }
+  }
+  if options.purpose != Purpose.Any && views[0].has_usage && (views[0].usage & 0x8000) == 0 {
+    return validation(Reason.Constraints, 0)
+  }
+  if !identity(&views[0], options) {
+    return validation(Reason.Hostname, 0)
+  }
+  for i in 1..#len(chain) {
+    if !bytes.equal(views[i-1].issuer, views[i].subject) {
+      return validation(Reason.Issuer, i-1)
+    }
+    if !signed(&views[i-1], &views[i]) {
+      return validation(Reason.Signature, i-1)
+    }
+  }
+  last := #len(chain)-1
+  for i in 0..#len(anchors) {
+    if bytes.equal(chain[last], anchors[i]) {
+      return Validation{ok:true, anchor:i}
+    }
+  }
+  below: usize = 0
+  for j in 1..#len(chain) {
+    if !bytes.equal(views[j].issuer, views[j].subject) {
+      below += 1
+    }
+  }
+  for i in 0..#len(anchors) {
+    anchor := inspect(anchors[i])
+    if !anchor.ok || !bytes.equal(views[last].issuer, anchor.value.subject) || !constraints(&anchor.value, options.purpose, true, below) {
+      continue
+    }
+    if signed(&views[last], &anchor.value) {
+      return Validation{ok:true, anchor:i}
+    }
+  }
+  return validation(Reason.Untrusted, last)
+}
