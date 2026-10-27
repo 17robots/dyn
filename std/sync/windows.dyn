@@ -31,3 +31,22 @@ fn native_mutex_try_lock(value: *Mutex) bool {
 fn native_mutex_unlock(value: *Mutex) {
   wait_mutex_unlock(value)
 }
+
+fn native_wait_timeout(address: *AtomicU32, expected: u32, duration: i64) isize {
+  milliseconds := duration / time.Millisecond
+  if duration % time.Millisecond != 0 { milliseconds += 1 }
+  // INFINITE is reserved. Long durations use finite chunks and the shared
+  // monotonic deadline determines when the complete budget expires.
+  if milliseconds > 4294967294 { milliseconds = 4294967294 }
+  compared := expected
+  if wait_address(&address.value,&compared,4,#cast(u32,milliseconds)) != 0 { return 0 }
+  code := wait_error()
+  if code == 1460 { return 1 }
+  return 0 - #cast(isize,code)
+}
+fn native_sync_error(code: isize) errors.Kind { return errors.windows(code) }
+
+fn native_wait_interrupted(code: isize) bool {
+  _ = code
+  return false
+}

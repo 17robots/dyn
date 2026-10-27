@@ -18,3 +18,16 @@ fn native_mutex_lock(value: *Mutex) {
 fn native_mutex_unlock(value: *Mutex) {
   wait_mutex_unlock(value)
 }
+
+fn native_wait_timeout(address: *AtomicU32, expected: u32, duration: i64) isize {
+  request := time.Instant{seconds:duration / time.Second,nanoseconds:duration % time.Second}
+  code := #syscall(202,address,0,expected,&request,0,0)
+  if code == -110 { return 1 }
+  if code == -11 { return 0 }
+  return code
+}
+fn native_sync_error(code: isize) errors.Kind { return errors.linux(code) }
+
+fn native_wait_interrupted(code: isize) bool {
+  return code == -4
+}
