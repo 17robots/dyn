@@ -14,6 +14,8 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- `std/font/system` scans platform or explicit font directories, reads owned family/style metadata, matches weight/slant and selects fonts covering missing code points without fontconfig. Unsupported collections and CFF faces are skipped. `examples/box-viewer` now discovers its default font instead of requiring a Linux path.
+
 - `std/fs` directory listing, `metadata`, `file_metadata`, `remove`, `rename`, `make_directory` and `remove_directory` now work on macOS and Windows, not only Linux. Fixed: `open_directory` failed on Linux AArch64, which uses a different `O_DIRECTORY` value.
 - Desktop input now works on every `vendor/window` backend: Wayland (xkbcommon text with compose and key repeat, `wl_data_device` clipboard, cursors, output scale), Win32 (UTF-16 text and IME output, clipboard, cursors, DPI) and Cocoa (text, clipboard, cursors, backing scale; untested until macOS CI runs). Paste arrives on the poll after the request on every backend.
 - `vendor/window` on X11 adds UTF-8 text input through the input method, editing keys, wheel scrolling, the clipboard, cursors, display scale, `wait` for idle loops and `box_input`. `examples/box-viewer` is a 100,000-row log viewer on `std/ui/box`.

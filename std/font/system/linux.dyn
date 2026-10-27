@@ -1,0 +1,16 @@
+#target(kernel: linux)
+
+fn font_directories(arena: *mem.Arena, output: [][]const u8) usize {
+  output[0] = "/usr/share/fonts"
+  output[1] = "/usr/local/share/fonts"
+  count: usize = 2
+  user := home(arena)
+  if #len(user) != 0 {
+    parts: [2][]const u8 = [user, ".local/share/fonts"]
+    output[2] = strings.join(arena, parts[..], "/")
+    legacy: [2][]const u8 = [user, ".fonts"]
+    output[3] = strings.join(arena, legacy[..], "/")
+    count = 4
+  }
+  return count
+}

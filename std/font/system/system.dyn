@@ -1,0 +1,437 @@
+// System font discovery without fontconfig. scan walks the platform font
+// directories, maps each TrueType file just long enough to read its family,
+// style, weight, slant and pitch, and returns entries in the caller's arena.
+// Faces that std/font cannot open (CFF-flavored OpenType and collections)
+// are skipped.
+
+use "std/mem" mem
+use "std/fs" fs
+use "std/font" font
+use "std/process" process
+use "std/strings" strings
+use "std/unicode/utf8" utf8
+
+pub struct Entry {
+  path: []const u8,
+  family: []const u8,
+  style: []const u8,
+  // OS/2 usWeightClass: 400 regular, 700 bold.
+  weight: u16,
+  italic: bool,
+  monospace: bool,
+}
+
+pub nil_entry: Entry
+
+const depth_limit: usize = 8
+
+fn equal_fold(left: []const u8, right: []const u8) bool {
+  if #len(left) != #len(right) {
+    return false
+  }
+  for i in 0..#len(left) {
+    a := left[i]
+    b := right[i]
+    if a >= 65 && a <= 90 {
+      a += 32
+    }
+    if b >= 65 && b <= 90 {
+      b += 32
+    }
+    if a != b {
+      return false
+    }
+  }
+  return true
+}
+
+fn u16be(bytes: []const u8, at: usize) u16 {
+  return #cast(u16, bytes[at]) << 8 | #cast(u16, bytes[at + 1])
+}
+
+fn u32be(bytes: []const u8, at: usize) u32 {
+  return #cast(u32, u16be(bytes, at)) << 16 | #cast(u32, u16be(bytes, at + 2))
+}
+
+struct Table { value: []const u8, ok: bool }
+
+fn table(data: []const u8, tag: u32) Table {
+  count := #cast(usize, u16be(data, 4))
+  if 12 + count * 16 > #len(data) {
+    return Table{}
+  }
+  for i in 0..count {
+    at := 12 + i * 16
+    if u32be(data, at) == tag {
+      offset := #cast(usize, u32be(data, at + 8))
+      length := #cast(usize, u32be(data, at + 12))
+      if offset <= #len(data) && length <= #len(data) - offset {
+        return Table{ value: data[offset..offset + length], ok: true }
+      }
+      return Table{}
+    }
+  }
+  return Table{}
+}
+
+// A name table string as UTF-8 in arena: Windows Unicode records in English
+// preferred, then any Windows Unicode record, then Macintosh Roman ASCII.
+fn name(arena: *mem.Arena, names: []const u8, wanted: u16) []const u8 {
+  if #len(names) < 6 {
+    return ""
+  }
+  count := #cast(usize, u16be(names, 2))
+  storage := #cast(usize, u16be(names, 4))
+  best: usize = 0
+  best_rank := 0
+  for i in 0..count {
+    at := 6 + i * 12
+    if at + 12 > #len(names) {
+      break
+    }
+    platform := u16be(names, at)
+    encoding := u16be(names, at + 2)
+    language := u16be(names, at + 4)
+    if u16be(names, at + 6) != wanted {
+      continue
+    }
+    rank := 0
+    if platform == 3 && (encoding == 1 || encoding == 10) {
+      rank = 2
+      if language == 0x409 {
+        rank = 3
+      }
+    }
+    else if platform == 0 {
+      rank = 2
+    }
+    else if platform == 1 && encoding == 0 {
+      rank = 1
+    }
+    if rank > best_rank {
+      best_rank = rank
+      best = at
+    }
+  }
+  if best_rank == 0 {
+    return ""
+  }
+  length := #cast(usize, u16be(names, best + 8))
+  offset := storage + #cast(usize, u16be(names, best + 10))
+  if offset > #len(names) || length > #len(names) - offset {
+    return ""
+  }
+  raw := names[offset..offset + length]
+  if best_rank == 1 {
+    copied := mem.push_bytes_uninit(arena, length)
+    for i in 0..length {
+      if raw[i] >= 128 || raw[i] == 0 {
+        return ""
+      }
+      copied[i] = raw[i]
+    }
+    return copied
+  }
+  if length % 2 != 0 {
+    return ""
+  }
+  output := mem.push_bytes_uninit(arena, length / 2 * 3 + 4)
+  used: usize = 0
+  at: usize = 0
+  for at + 1 < length {
+    unit := #cast(u32, u16be(raw, at))
+    at += 2
+    if unit >= 0xd800 && unit <= 0xdbff {
+      if at + 1 >= length {
+        return ""
+      }
+      low := #cast(u32, u16be(raw, at))
+      if low < 0xdc00 || low > 0xdfff {
+        return ""
+      }
+      at += 2
+      unit = 0x10000 + ((unit - 0xd800) << 10) + (low - 0xdc00)
+    }
+    else if unit >= 0xdc00 && unit <= 0xdfff {
+      return ""
+    }
+    if unit == 0 {
+      return ""
+    }
+    used += utf8.encode(output[used..], unit)
+  }
+  return output[..used]
+}
+
+// Describes a supported TrueType face. Strings are owned by arena; invalid
+// data returns nil_entry. No input bytes are retained.
+pub fn describe(arena: *mem.Arena, path: []const u8, data: []const u8) Entry {
+  mark := mem.arena_mark(arena)
+  result := describe_data(arena, path, data)
+  if #len(result.family) == 0 {
+    mem.arena_rewind(arena, mark)
+  }
+  return result
+}
+
+fn describe_data(arena: *mem.Arena, path: []const u8, data: []const u8) Entry {
+  if #len(data) < 12 || u32be(data, 0) != 65536 {
+    return nil_entry
+  }
+  count := #cast(usize, u16be(data, 4))
+  if count > (#len(data) - 12) / 16 {
+    return nil_entry
+  }
+  for i in 0..count {
+    at := 12 + i * 16
+    offset := #cast(usize, u32be(data, at + 8))
+    length := #cast(usize, u32be(data, at + 12))
+    if offset > #len(data) || length > #len(data) - offset {
+      return nil_entry
+    }
+  }
+  opened := font.open(data)
+  if !opened.ok {
+    return nil_entry
+  }
+  names := table(data, 0x6e616d65)
+  if !names.ok {
+    return nil_entry
+  }
+  // Typographic family and subfamily (16, 17) group weights under one name.
+  family := name(arena, names.value, 16)
+  if #len(family) == 0 {
+    family = name(arena, names.value, 1)
+  }
+  style := name(arena, names.value, 17)
+  if #len(style) == 0 {
+    style = name(arena, names.value, 2)
+  }
+  if #len(family) == 0 {
+    return nil_entry
+  }
+  entry := Entry{ path: strings.clone(arena, path), family: family, style: style, weight: 400 }
+  os2 := table(data, 0x4f532f32)
+  if os2.ok && #len(os2.value) >= 64 {
+    value := u16be(os2.value, 4)
+    if value >= 1 && value <= 1000 {
+      entry.weight = value
+    }
+    // fsSelection bit 0 is italic.
+    entry.italic = u16be(os2.value, 62) & 1 != 0
+  }
+  post := table(data, 0x706f7374)
+  if post.ok && #len(post.value) >= 16 {
+    entry.monospace = u32be(post.value, 12) != 0
+  }
+  return entry
+}
+
+fn font_file(name: []const u8) bool {
+  if #len(name) < 4 {
+    return false
+  }
+  ending := name[#len(name) - 4..]
+  return equal_fold(ending, ".ttf") || equal_fold(ending, ".otf")
+}
+
+struct Walk { entries: []Entry, count: usize }
+
+fn visit(arena: *mem.Arena, scratch: *mem.Arena, walk: *Walk, directory: []const u8, depth: usize) {
+  if depth > depth_limit || walk.count == #len(walk.entries) {
+    return
+  }
+  storage: [8192]u8 = []
+  opened := fs.open_directory(directory, storage[..])
+  if !opened.ok {
+    return
+  }
+  listing := opened.value
+  for walk.count < #len(walk.entries) {
+    item := fs.directory_next(&listing)
+    if !item.ok {
+      break
+    }
+    mark := mem.arena_mark(scratch)
+    parts: [2][]const u8 = [directory, item.name]
+    path := strings.join(scratch, parts[..], "/")
+    if item.kind == 4 {
+      // Directories recurse with their own scratch path, then release it.
+      visit(arena, scratch, walk, path, depth + 1)
+    }
+    else if font_file(item.name) && walk.count < #len(walk.entries) {
+      file := fs.open(path)
+      if file.ok {
+        handle := file.value
+        mapped := fs.map(&handle)
+        _ = fs.close(&handle)
+        if mapped.ok {
+          entry_mark := mem.arena_mark(arena)
+          entry := describe(arena, path, mapped.value)
+          _ = fs.unmap(&mapped)
+          if #len(entry.family) != 0 {
+            walk.entries[walk.count] = entry
+            walk.count += 1
+          }
+          else {
+            mem.arena_rewind(arena, entry_mark)
+          }
+        }
+      }
+    }
+    mem.arena_rewind(scratch, mark)
+  }
+  _ = fs.close_directory(&listing)
+}
+
+// Walks explicit directories, at most limit entries and eight levels deep.
+// Unreadable paths and unsupported faces are skipped. No symlink directories
+// are followed. Returned paths and metadata belong to arena. Enumeration order
+// is filesystem order; callers can reorder entries before fallback selection.
+pub fn scan_directories(arena: *mem.Arena, directories: []const []const u8, limit: usize) []Entry {
+  walk := Walk{ entries: mem.push_array(Entry, arena, limit) }
+  scratch := mem.arena_create(16777216)
+  defer {
+    mem.arena_release(&scratch)
+  }
+  for directory in directories {
+    visit(arena, &scratch, &walk, directory, 0)
+  }
+  return walk.entries[..walk.count]
+}
+
+// Fonts in platform system and user directories, at most limit entries.
+// This does not read fontconfig configuration or platform font registries.
+pub fn scan(arena: *mem.Arena, limit: usize) []Entry {
+  scratch := mem.arena_create(16777216)
+  defer {
+    mem.arena_release(&scratch)
+  }
+  directories: [6][]const u8 = []
+  count := font_directories(&scratch, directories[..])
+  return scan_directories(arena, directories[..count], limit)
+}
+
+fn home(arena: *mem.Arena) []const u8 {
+  found := process.environment(arena, "HOME")
+  if found.ok && found.found {
+    return found.value
+  }
+  return ""
+}
+
+fn closeness(entry: *const Entry, weight: u16, italic: bool) u32 {
+  difference: u32 = 0
+  if entry.weight > weight {
+    difference = #cast(u32, entry.weight - weight)
+  }
+  else {
+    difference = #cast(u32, weight - entry.weight)
+  }
+  if entry.italic != italic {
+    difference += 1000
+  }
+  return difference
+}
+
+// The entry in family closest to weight and slant, or nil_entry. Family names
+// compare without regard to ASCII case.
+pub fn find(entries: []const Entry, family: []const u8, weight: u16, italic: bool) *const Entry {
+  best: *const Entry = &nil_entry
+  best_score: u32 = 4294967295
+  for i in 0..#len(entries) {
+    entry := &entries[i]
+    if equal_fold(entry.family, family) {
+      score := closeness(entry, weight, italic)
+      if score < best_score {
+        best_score = score
+        best = entry
+      }
+    }
+  }
+  return best
+}
+
+// The first family in preferred that is installed, at weight and slant.
+pub fn first_of(entries: []const Entry, preferred: []const []const u8, weight: u16, italic: bool) *const Entry {
+  for family in preferred {
+    found := find(entries, family, weight, italic)
+    if #len(found.path) != 0 {
+      return found
+    }
+  }
+  return &nil_entry
+}
+
+const monospace_families: [9][]const u8 = ["JetBrains Mono", "Cascadia Mono", "DejaVu Sans Mono", "Noto Sans Mono", "Liberation Mono", "Ubuntu Mono", "SF Mono", "Menlo", "Consolas"]
+const sans_families: [8][]const u8 = ["Inter", "Noto Sans", "DejaVu Sans", "Liberation Sans", "Ubuntu", "Segoe UI", "Helvetica Neue", "Arial"]
+
+// A regular monospace face: a well-known family when installed, otherwise
+// any face whose post table marks it fixed pitch.
+pub fn monospace(entries: []const Entry) *const Entry {
+  known := first_of(entries, monospace_families[..], 400, false)
+  if #len(known.path) != 0 {
+    return known
+  }
+  best: *const Entry = &nil_entry
+  best_score: u32 = 4294967295
+  for i in 0..#len(entries) {
+    if entries[i].monospace {
+      score := closeness(&entries[i], 400, false)
+      if score < best_score {
+        best_score = score
+        best = &entries[i]
+      }
+    }
+  }
+  return best
+}
+
+// A regular proportional face for interface text.
+pub fn sans(entries: []const Entry) *const Entry {
+  known := first_of(entries, sans_families[..], 400, false)
+  if #len(known.path) != 0 {
+    return known
+  }
+  best: *const Entry = &nil_entry
+  best_score: u32 = 4294967295
+  for i in 0..#len(entries) {
+    if !entries[i].monospace {
+      score := closeness(&entries[i], 400, false)
+      if score < best_score {
+        best_score = score
+        best = &entries[i]
+      }
+    }
+  }
+  return best
+}
+
+// The first entry in caller-provided order whose cmap maps codepoint;
+// use it for glyphs the primary font lacks. Opens files as it searches, so
+// call it once per missing code point and cache the answer.
+pub fn covering(entries: []const Entry, codepoint: u32, regular_only: bool) *const Entry {
+  for i in 0..#len(entries) {
+    entry := &entries[i]
+    if regular_only && (entry.italic || entry.weight != 400) {
+      continue
+    }
+    file := fs.open(entry.path)
+    if !file.ok {
+      continue
+    }
+    handle := file.value
+    mapped := fs.map(&handle)
+    _ = fs.close(&handle)
+    if !mapped.ok {
+      continue
+    }
+    face := font.open(mapped.value)
+    found := face.ok && font.glyph_index(&face.value, codepoint) != 0
+    _ = fs.unmap(&mapped)
+    if found {
+      return entry
+    }
+  }
+  return &nil_entry
+}

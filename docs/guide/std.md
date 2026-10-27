@@ -109,6 +109,7 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
 
 | Package | Purpose |
 | --- | --- |
+| `std/font/system` | System and explicit-directory TrueType discovery, owned family/style metadata, weight/slant matching, defaults and cmap fallback; no fontconfig dependency |
 | `std/font`, `font/ui` | TrueType simple/composite rasterizer, atlas packing and software UI font adapters |
 | `std/ui` | Immediate-mode buttons, checkboxes, integer sliders and arena-owned draw commands |
 | `std/ui/box` | Box-model UI: keyed boxes, automatic layout from semantic sizes, animation, text fields, scrolling and virtual lists |
