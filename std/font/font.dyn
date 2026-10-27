@@ -251,8 +251,8 @@ fn edge(edges: []Edge, used: *usize, a, b: Point) {
   edges[used.*] = Edge{ a: a, b: b }
   used.* += 1
 }
-// Unhinted 4x4 supersampling. Simple glyf outlines only in this initial slice;
-// composite glyphs, collections, CFF, variation and hint programs are unsupported.
+// Unhinted 4x4 supersampling for simple and composite glyf outlines.
+// Collections, CFF, variation and hint programs remain unsupported.
 // pixels_per_em is 1..256. Limits: 1,048,576 output pixels, 8,192 points,
 // and 16,777,216 pixel-edge pairs (before 4x4 supersampling).
 // Output belongs to arena; temporary outline storage is rewound on completion.
@@ -261,11 +261,7 @@ pub fn raster(arena: *mem.Arena, face: *const Face, index: u16, pixels_per_em: u
     return BitmapResult{ kind: errors.Kind.InvalidInput }
   }
   scale := #cast(f64, pixels_per_em) / #cast(f64, face.units_per_em)
-  metric := #cast(usize, index)
-  if index >= face.metrics {
-    metric = #cast(usize, (face.metrics - 1))
-  }
-  advance := #cast(i32, math.floor64(#cast(f64, u16be(face.hmtx, metric * 4)) * scale + 0.5))
+  advance := #cast(i32, math.floor64(metric_advance(face, index).x * scale + 0.5))
   start := location(face, #cast(usize, index))
   end := location(face, #cast(usize, index) + 1)
   bitmap := Bitmap{ advance: advance }
@@ -277,13 +273,10 @@ pub fn raster(arena: *mem.Arena, face: *const Face, index: u16, pixels_per_em: u
     return BitmapResult{ kind: errors.Kind.InvalidInput }
   }
   contours := i16be(data, 0)
-  if contours < 0 {
-    return BitmapResult{ kind: errors.Kind.Unsupported }
-  }
   if contours == 0 {
     return BitmapResult{ value: bitmap, ok: true }
   }
-  if !fits(data, 10, #cast(usize, contours) * 2 + 2) {
+  if contours > 0 && !fits(data, 10, #cast(usize, contours) * 2 + 2) {
     return BitmapResult{ kind: errors.Kind.InvalidInput }
   }
   x0 := i16be(data, 2)
@@ -293,17 +286,12 @@ pub fn raster(arena: *mem.Arena, face: *const Face, index: u16, pixels_per_em: u
   if x0 > x1 || y0 > y1 {
     return BitmapResult{ kind: errors.Kind.InvalidInput }
   }
-  bearing_at := #cast(usize, index) * 4 + 2
-  if index >= face.metrics {
-    bearing_at = #cast(usize, face.metrics) * 4 + (#cast(usize, index) - #cast(usize, face.metrics)) * 2
-  }
-  bearing := i16be(face.hmtx, bearing_at)
-  shift := #cast(f64, #cast(i32, bearing) - #cast(i32, x0)) * scale
-  left := math.floor64(#cast(f64, x0) * scale + shift)
+  metric_base := metric_origin(face, index, x0)
+  left := math.floor64((#cast(f64, x0) - metric_base.x) * scale)
   top := math.floor64(0.0 - #cast(f64, y1) * scale)
   bitmap.x_offset = #cast(i32, left)
   bitmap.y_offset = #cast(i32, top)
-  bitmap.width = #cast(i32, math.ceil64(#cast(f64, x1) * scale + shift) - left)
+  bitmap.width = #cast(i32, math.ceil64((#cast(f64, x1) - metric_base.x) * scale) - left)
   bitmap.height = #cast(i32, math.ceil64(0.0 - #cast(f64, y0) * scale) - top)
   width := #cast(usize, bitmap.width)
   height := #cast(usize, bitmap.height)
@@ -317,93 +305,50 @@ pub fn raster(arena: *mem.Arena, face: *const Face, index: u16, pixels_per_em: u
       mem.arena_rewind(arena, mark)
     }
   }
-  bitmap.pixels = mem.push_array(u8, arena, width * height)
+  // Component-selected phantom origins can shift fractional pixel alignment.
+  // Reserve one extra row/column before allocating the temporary outline.
+  bitmap.pixels = mem.push_array(u8, arena, (width + 1) * (height + 1))
   scratch := mem.arena_mark(arena)
   defer {
     if success {
       mem.arena_rewind(arena, scratch)
     }
   }
-  count := #cast(usize, u16be(data, 10 + (#cast(usize, contours) - 1) * 2)) + 1
-  ends := mem.push_array(usize, arena, #cast(usize, contours))
-  for i in 0..#len(ends) {
-    ends[i] = #cast(usize, u16be(data, 10 + i * 2))
-    if (i != 0 && ends[i] <= ends[i - 1]) || ends[i] >= count {
+  budget := OutlineBudget{}
+  outline := read_outline(arena, face, index, 0, &budget)
+  if !outline.ok {
+    return BitmapResult{ kind: outline.kind }
+  }
+  if outline.advance.x < 0.0 || outline.advance.y != 0.0 {
+    return BitmapResult{ kind: errors.Kind.Unsupported }
+  }
+  bitmap.advance = #cast(i32, math.floor64(outline.advance.x * scale + 0.5))
+  points := outline.points
+  ends := outline.ends
+  count := #len(points)
+  if count == 0 {
+    // No output allocation survives. Let the failure-cleanup branch rewind
+    // all scratch; rewinding here would invalidate the later scratch mark.
+    return BitmapResult{ value: Bitmap{ advance: bitmap.advance }, ok: true }
+  }
+  left = math.floor64((#cast(f64, x0) - outline.origin.x) * scale)
+  top = math.floor64((outline.origin.y - #cast(f64, y1)) * scale)
+  bitmap.x_offset = #cast(i32, left)
+  bitmap.y_offset = #cast(i32, top)
+  bitmap.width = #cast(i32, math.ceil64((#cast(f64, x1) - outline.origin.x) * scale) - left)
+  bitmap.height = #cast(i32, math.ceil64((outline.origin.y - #cast(f64, y0)) * scale) - top)
+  width = #cast(usize, bitmap.width)
+  height = #cast(usize, bitmap.height)
+  if width > 4096 || height > 4096 || (width != 0 && height > 1048576 / width) {
+    return BitmapResult{ kind: errors.Kind.Capacity }
+  }
+  bitmap.pixels = bitmap.pixels[..width * height]
+  for *point in points {
+    if point.x < #cast(f64, x0) || point.x > #cast(f64, x1) || point.y < #cast(f64, y0) || point.y > #cast(f64, y1) {
       return BitmapResult{ kind: errors.Kind.InvalidInput }
     }
-  }
-  at := 10 + #len(ends) * 2
-  instructions := #cast(usize, u16be(data, at))
-  at += 2
-  if !fits(data, at, instructions) {
-    return BitmapResult{ kind: errors.Kind.InvalidInput }
-  }
-  at += instructions
-  flags := mem.push_array(u8, arena, count)
-  points := mem.push_array(Point, arena, count)
-  i: usize = 0
-  for i < count {
-    if !fits(data, at, 1) {
-      return BitmapResult{ kind: errors.Kind.InvalidInput }
-    }
-    flag := data[at]
-    at += 1
-    repeat: usize = 1
-    if (flag & 8) != 0 {
-      if !fits(data, at, 1) {
-        return BitmapResult{ kind: errors.Kind.InvalidInput }
-      }
-      repeat += #cast(usize, data[at])
-      at += 1
-    }
-    if repeat > count - i {
-      return BitmapResult{ kind: errors.Kind.InvalidInput }
-    }
-    for j in 0..repeat {
-      flags[i + j] = flag
-    }
-    i += repeat
-  }
-  for axis in 0..2 {
-    coordinate: i32 = 0
-    short: u8 = 2
-    same: u8 = 16
-    if axis == 1 {
-      short = 4
-      same = 32
-    }
-    for j in 0..count {
-      delta: i32 = 0
-      if (flags[j] & short) != 0 {
-        if !fits(data, at, 1) {
-          return BitmapResult{ kind: errors.Kind.InvalidInput }
-        }
-        delta = #cast(i32, data[at])
-        at += 1
-        if (flags[j] & same) == 0 {
-          delta = 0 - delta
-        }
-      } else if (flags[j] & same) == 0 {
-        if !fits(data, at, 2) {
-          return BitmapResult{ kind: errors.Kind.InvalidInput }
-        }
-        delta = #cast(i32, i16be(data, at))
-        at += 2
-      }
-      coordinate += delta
-      if axis == 0 {
-        if coordinate < #cast(i32, x0) || coordinate > #cast(i32, x1) {
-          return BitmapResult{ kind: errors.Kind.InvalidInput }
-        }
-        points[j].x = #cast(f64, coordinate) * scale + shift - left
-        points[j].on = (flags[j] & 1) != 0
-      } else {
-        if coordinate < #cast(i32, y0) || coordinate > #cast(i32, y1) {
-          return BitmapResult{ kind: errors.Kind.InvalidInput }
-        }
-        points[j].y = 0.0 - #cast(f64, coordinate) * scale - top
-      }
-    }
+    point.x = (point.x - outline.origin.x) * scale - left
+    point.y = (outline.origin.y - point.y) * scale - top
   }
   // Each off-curve point produces at most 128 flattened edges; on-curve
   // segments need one. Bound this temporary expansion explicitly.

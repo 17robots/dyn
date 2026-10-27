@@ -1,0 +1,145 @@
+struct Outline { points: []Point, ends: []usize, origin: Point, advance: Point, kind: errors.Kind, ok: bool }
+struct OutlineBudget { points: usize = 8192, nodes: usize = 256, path: [17]u16 }
+fn metric_origin(face: *const Face, index: u16, xmin: i16) Point {
+  at := #cast(usize, index) * 4 + 2
+  if index >= face.metrics {
+    at = #cast(usize, face.metrics) * 4 + (#cast(usize, index) - #cast(usize, face.metrics)) * 2
+  }
+  return Point{ x: #cast(f64, #cast(i32, xmin) - #cast(i32, i16be(face.hmtx, at))) }
+}
+fn metric_advance(face: *const Face, index: u16) Point {
+  metric := #cast(usize, index)
+  if index >= face.metrics {
+    metric = #cast(usize, face.metrics - 1)
+  }
+  return Point{ x: #cast(f64, u16be(face.hmtx, metric * 4)) }
+}
+fn read_outline(arena: *mem.Arena, face: *const Face, index: u16, depth: usize, budget: *OutlineBudget) Outline {
+  if index >= face.glyphs {
+    return Outline{ kind: errors.Kind.InvalidInput }
+  }
+  for i in 0..depth {
+    if budget.path[i] == index {
+      return Outline{ kind: errors.Kind.InvalidInput }
+    }
+  }
+  if depth >= 16 || budget.nodes == 0 {
+    return Outline{ kind: errors.Kind.Capacity }
+  }
+  budget.nodes -= 1
+  budget.path[depth] = index
+  start := location(face, #cast(usize, index))
+  end := location(face, #cast(usize, index) + 1)
+  data := face.glyf[start..end]
+  if start == end {
+    return Outline{ origin: metric_origin(face, index, 0), advance: metric_advance(face, index), ok: true }
+  }
+  if #len(data) < 10 {
+    return Outline{ kind: errors.Kind.InvalidInput }
+  }
+  contours := i16be(data, 0)
+  x0 := i16be(data, 2)
+  y0 := i16be(data, 4)
+  x1 := i16be(data, 6)
+  y1 := i16be(data, 8)
+  if x0 > x1 || y0 > y1 {
+    return Outline{ kind: errors.Kind.InvalidInput }
+  }
+  origin := metric_origin(face, index, x0)
+  advance := metric_advance(face, index)
+  if contours < 0 {
+    return composite_outline(arena, face, data, origin, advance, depth, budget)
+  }
+  if contours == 0 {
+    return Outline{ origin: origin, advance: advance, ok: true }
+  }
+  if !fits(data, 10, #cast(usize, contours) * 2 + 2) {
+    return Outline{ kind: errors.Kind.InvalidInput }
+  }
+  count := #cast(usize, u16be(data, 10 + (#cast(usize, contours) - 1) * 2)) + 1
+  if count > budget.points {
+    return Outline{ kind: errors.Kind.Capacity }
+  }
+  budget.points -= count
+  ends := mem.push_array(usize, arena, #cast(usize, contours))
+  for i in 0..#len(ends) {
+    ends[i] = #cast(usize, u16be(data, 10 + i * 2))
+    if (i != 0 && ends[i] <= ends[i - 1]) || ends[i] >= count {
+      return Outline{ kind: errors.Kind.InvalidInput }
+    }
+  }
+  at := 10 + #len(ends) * 2
+  instructions := #cast(usize, u16be(data, at))
+  at += 2
+  if !fits(data, at, instructions) {
+    return Outline{ kind: errors.Kind.InvalidInput }
+  }
+  at += instructions
+  flags := mem.push_array(u8, arena, count)
+  points := mem.push_array(Point, arena, count)
+  i: usize = 0
+  for i < count {
+    if !fits(data, at, 1) {
+      return Outline{ kind: errors.Kind.InvalidInput }
+    }
+    flag := data[at]
+    at += 1
+    repeat: usize = 1
+    if (flag & 8) != 0 {
+      if !fits(data, at, 1) {
+        return Outline{ kind: errors.Kind.InvalidInput }
+      }
+      repeat += #cast(usize, data[at])
+      at += 1
+    }
+    if repeat > count - i {
+      return Outline{ kind: errors.Kind.InvalidInput }
+    }
+    for j in 0..repeat {
+      flags[i + j] = flag
+    }
+    i += repeat
+  }
+  for axis in 0..2 {
+    coordinate: i32 = 0
+    short: u8 = 2
+    same: u8 = 16
+    if axis == 1 {
+      short = 4
+      same = 32
+    }
+    for j in 0..count {
+      delta: i32 = 0
+      if (flags[j] & short) != 0 {
+        if !fits(data, at, 1) {
+          return Outline{ kind: errors.Kind.InvalidInput }
+        }
+        delta = #cast(i32, data[at])
+        at += 1
+        if (flags[j] & same) == 0 {
+          delta = 0 - delta
+        }
+      } else if (flags[j] & same) == 0 {
+        if !fits(data, at, 2) {
+          return Outline{ kind: errors.Kind.InvalidInput }
+        }
+        delta = #cast(i32, i16be(data, at))
+        at += 2
+      }
+      coordinate += delta
+      if axis == 0 {
+        if coordinate < #cast(i32, x0) || coordinate > #cast(i32, x1) {
+          return Outline{ kind: errors.Kind.InvalidInput }
+        }
+        points[j].x = #cast(f64, coordinate)
+        points[j].on = (flags[j] & 1) != 0
+      } else {
+        if coordinate < #cast(i32, y0) || coordinate > #cast(i32, y1) {
+          return Outline{ kind: errors.Kind.InvalidInput }
+        }
+        points[j].y = #cast(f64, coordinate)
+      }
+    }
+  }
+  return Outline{ points: points, ends: ends, origin: origin, advance: advance, ok: true }
+}

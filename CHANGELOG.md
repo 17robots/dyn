@@ -14,7 +14,9 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
-- Initial `std/font` support loads TrueType cmap/metrics and rasterizes simple quadratic outlines into caller arenas, with bounded supersampling and atlas packing. `std/font/ui` renders direct or cached glyphs through the portable UI backend. Composite glyphs return `Unsupported`; full OpenType and text layout remain pending.
+- TrueType rasterization now expands composite outlines with affine transforms, contour-point attachment, nested components and horizontal metric selection. Graph and coordinate budgets bound expansion; cycle/truncation failures preserve arena state. Phantom-point attachment and rotated selected metrics remain unsupported.
+
+- Initial `std/font` support loads TrueType cmap/metrics and rasterizes simple quadratic outlines into caller arenas, with bounded supersampling and atlas packing. `std/font/ui` renders direct or cached glyphs through the portable UI backend. Full OpenType and text layout remain pending.
 
 - `std/ui` adds a pure-Dyn immediate-mode core with buttons, checkboxes, integer sliders, pointer capture, keyboard focus and arena-owned draw commands. `std/ui/software` renders RGBA output with caller-provided glyph coverage; a headless PNG example is included.
 - Wasm emission now respects function liveness after O3 inlining, avoiding invalid bodies referencing replaced IR tables.

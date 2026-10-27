@@ -1,0 +1,157 @@
+struct Matrix { xx: f64 = 1.0, yx: f64, xy: f64, yy: f64 = 1.0 }
+fn transformed(point: Point, matrix: Matrix) Point {
+  return Point{ x: point.x * matrix.xx + point.y * matrix.xy,
+    y: point.x * matrix.yx + point.y * matrix.yy, on: point.on }
+}
+fn f2dot14(data: []const u8, at: usize) f64 {
+  return #cast(f64, i16be(data, at)) / 16384.0
+}
+fn composite_outline(arena: *mem.Arena, face: *const Face, data: []const u8, origin, advance: Point, depth: usize, budget: *OutlineBudget) Outline {
+  result := Outline{ origin: origin, advance: advance }
+  at: usize = 10
+  instructions := false
+  component_number: usize = 0
+  for true {
+    if !fits(data, at, 4) {
+      return Outline{ kind: errors.Kind.InvalidInput }
+    }
+    flags := u16be(data, at)
+    index := u16be(data, at + 2)
+    at += 4
+    if (flags & 0xe010) != 0 {
+      return Outline{ kind: errors.Kind.InvalidInput }
+    }
+    forms := flags & 0xc8
+    if forms != 0 && forms != 8 && forms != 64 && forms != 128 {
+      return Outline{ kind: errors.Kind.InvalidInput }
+    }
+    words := (flags & 1) != 0
+    xy := (flags & 2) != 0
+    if !xy && component_number == 0 {
+      return Outline{ kind: errors.Kind.InvalidInput }
+    }
+    length: usize = 2
+    if words {
+      length = 4
+    }
+    if !fits(data, at, length) {
+      return Outline{ kind: errors.Kind.InvalidInput }
+    }
+    a: i32 = 0
+    b: i32 = 0
+    if words {
+      if xy {
+        a = #cast(i32, i16be(data, at))
+        b = #cast(i32, i16be(data, at + 2))
+      }
+      else {
+        a = #cast(i32, u16be(data, at))
+        b = #cast(i32, u16be(data, at + 2))
+      }
+    } else {
+      if xy {
+        a = #cast(i32, #cast(i8, data[at]))
+        b = #cast(i32, #cast(i8, data[at + 1]))
+      }
+      else {
+        a = #cast(i32, data[at])
+        b = #cast(i32, data[at + 1])
+      }
+    }
+    at += length
+    matrix := Matrix{}
+    if forms != 0 {
+      size: usize = 2
+      if forms == 64 {
+        size = 4
+      }
+      if forms == 128 {
+        size = 8
+      }
+      if !fits(data, at, size) {
+        return Outline{ kind: errors.Kind.InvalidInput }
+      }
+      matrix.xx = f2dot14(data, at)
+      matrix.yy = matrix.xx
+      if forms == 64 {
+        matrix.yy = f2dot14(data, at + 2)
+      }
+      if forms == 128 {
+        matrix.yx = f2dot14(data, at + 2)
+        matrix.xy = f2dot14(data, at + 4)
+        matrix.yy = f2dot14(data, at + 6)
+      }
+      at += size
+    }
+    child := read_outline(arena, face, index, depth + 1, budget)
+    if !child.ok {
+      return child
+    }
+    for *point in child.points {
+      point.* = transformed(point.*, matrix)
+    }
+    offset := Point{ x: #cast(f64, a), y: #cast(f64, b) }
+    if xy {
+      // Unspecified/conflicting offset flags use the recommended unscaled
+      // default. Grid fitting is deliberately omitted with all other hinting.
+      if (flags & 0x1800) == 0x800 {
+        offset = transformed(offset, matrix)
+      }
+    } else {
+      if #cast(usize, a) >= #len(result.points) || #cast(usize, b) >= #len(child.points) {
+        if #cast(usize, a) < #len(result.points) + 4 && #cast(usize, b) < #len(child.points) + 4 {
+          return Outline{ kind: errors.Kind.Unsupported }
+        }
+        return Outline{ kind: errors.Kind.InvalidInput }
+      }
+      offset.x = result.points[#cast(usize, a)].x - child.points[#cast(usize, b)].x
+      offset.y = result.points[#cast(usize, a)].y - child.points[#cast(usize, b)].y
+    }
+    for *point in child.points {
+      point.x += offset.x
+      point.y += offset.y
+      if math.abs(point.x) > 1048576.0 || math.abs(point.y) > 1048576.0 {
+        return Outline{ kind: errors.Kind.Capacity }
+      }
+    }
+    if (flags & 512) != 0 {
+      if matrix.xy != 0.0 || matrix.yx != 0.0 || matrix.xx < 0.0 {
+        return Outline{ kind: errors.Kind.Unsupported }
+      }
+      result.origin = transformed(child.origin, matrix)
+      result.origin.x += offset.x
+      result.origin.y += offset.y
+      result.advance = transformed(child.advance, matrix)
+      if math.abs(result.origin.x) > 1048576.0 || math.abs(result.origin.y) > 1048576.0 || math.abs(result.advance.x) > 1048576.0 {
+        return Outline{ kind: errors.Kind.Capacity }
+      }
+    }
+    old_count := #len(result.points)
+    points := mem.push_array(Point, arena, old_count + #len(child.points))
+    _ = mem.copy(points[..old_count], result.points)
+    _ = mem.copy(points[old_count..], child.points)
+    ends := mem.push_array(usize, arena, #len(result.ends) + #len(child.ends))
+    _ = mem.copy(ends[..#len(result.ends)], result.ends)
+    for i in 0..#len(child.ends) {
+      ends[#len(result.ends) + i] = old_count + child.ends[i]
+    }
+    result.points = points
+    result.ends = ends
+    instructions = instructions || (flags & 256) != 0
+    component_number += 1
+    if (flags & 32) == 0 {
+      break
+    }
+  }
+  if instructions {
+    if !fits(data, at, 2) {
+      return Outline{ kind: errors.Kind.InvalidInput }
+    }
+    length := #cast(usize, u16be(data, at))
+    if !fits(data, at + 2, length) {
+      return Outline{ kind: errors.Kind.InvalidInput }
+    }
+  }
+  result.ok = true
+  return result
+}

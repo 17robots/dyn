@@ -107,7 +107,7 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
 
 | Package | Purpose |
 | --- | --- |
-| `std/font`, `font/ui` | Initial TrueType simple-outline rasterizer, atlas packing and software UI font adapters |
+| `std/font`, `font/ui` | TrueType simple/composite rasterizer, atlas packing and software UI font adapters |
 | `std/ui` | Immediate-mode buttons, checkboxes, integer sliders and arena-owned draw commands |
 | `std/ui/software` | RGBA software rendering with caller-provided bitmap glyphs |
 | `std/event` | Portable level-triggered readiness queues: epoll, kqueue and WSAPoll |
@@ -292,31 +292,42 @@ build/dyn-release build tests/ui-demo --release --output build/ui-demo
 
 The example writes `build/ui-demo.png`. Its small bitmap alphabet belongs to the
 example; it is not a built-in std font. Native windows, OpenGL/Vulkan backends and general text layout remain planned.
-Initial TrueType simple-outline support is described below.
+TrueType font support is described below.
 
 ### TrueType fonts and atlases
 
 `font.open(bytes)` reads one SFNT TrueType face. The returned face borrows the
 bytes, which must remain immutable and alive. Unicode cmap formats 4 and 12,
-short/long loca, horizontal metrics and simple quadratic glyf outlines are
+short/long loca, horizontal metrics and simple/composite quadratic glyf outlines are
 supported. `glyph_index` returns glyph zero on a miss. `raster(arena, face,
 index, pixels_per_em)` produces an arena-owned alpha bitmap with horizontal
 advance and baseline-relative offsets. It ignores hint instructions and uses
 flattened quadratic curves with nonzero winding and 4x4 supersampling.
 
-This is initial simple-outline support, not full OpenType support. Composite
-glyphs return `Unsupported`; collections, CFF, variable-instance selection,
-hinting, kerning, shaping and general text layout are not implemented. A face
-can open successfully while an individual glyph returns `Unsupported` or
+Composite glyphs support signed byte/word XY offsets, contour-point attachment,
+uniform and independent-axis scale, full 2x2 transforms, nested components, and
+component-selected horizontal metrics. Unspecified or conflicting offset-scaling
+flags use the OpenType-recommended unscaled default. Hint programs and grid-fit
+rounding are ignored. Phantom-point attachment returns `Unsupported`.
+Component-selected metrics require a diagonal transform with nonnegative
+horizontal scale; other transforms return `Unsupported` rather than an approximation. Cyclic graphs,
+invalid component indices, contradictory transform flags and truncated records
+return `InvalidInput`. Other OpenType features—collections, CFF, variable-instance
+selection, hinting, kerning, shaping and general text layout—remain unimplemented. A face can open successfully while an individual glyph returns `Unsupported` or
 `InvalidInput`. Structural checks are not a complete font-conformance validator;
 checksums are not verified. Parse errors use portable `kind`, native `error`
 (zero for parser failures), and `offset` when known. Failed raster/atlas calls
 rewind their arena allocations.
 
-Rasterization accepts 1..256 pixels per em. Limits are 8,192 outline points,
+Rasterization accepts 1..256 pixels per em. Limits are 8,192 total leaf outline
+points, 256 glyph nodes per expansion, 16 active glyph levels, transformed
+coordinates/selected metrics within 1,048,576 design units in magnitude,
 1,048,576 bitmap pixels, 4,096 per dimension, and 16,777,216 pixel-edge pairs
 before supersampling. Larger work returns `Capacity`. Temporary storage includes
-points, flags and up to 129 edges per point; it is rewound before returning.
+points, flags, accumulated component copies and up to 129 edges per point; it is
+rewound before returning. Output reserves at most one extra row/column around
+the initial bounds to allow component-selected metric origins to change fractional
+pixel alignment; the returned slice contains only the actual bitmap pixels.
 This CPU reference renderer favors portability and bounded storage over speed.
 
 `font.atlas(arena, face, codepoints, pixels_per_em, width, height)` shelf-packs
@@ -339,7 +350,7 @@ output path. Font data is not bundled:
 
 ```sh
 build/dyn-release build tests/font-ui-demo --release --output build/font-ui-demo
-build/font-ui-demo /path/to/simple-outline-font.ttf build/font-ui-demo.png
+build/font-ui-demo /path/to/font.ttf build/font-ui-demo.png
 ```
 
 The reader follows the OpenType [glyf](https://learn.microsoft.com/en-us/typography/opentype/spec/glyf),

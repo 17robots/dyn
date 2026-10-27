@@ -95,7 +95,7 @@ fn main() {
   check(partial)
   check(font.raster(&arena, &face, 0, 16).ok)
   mark := mem.arena_mark(&arena)
-  check(font.raster(&arena, &face, 4, 16).kind == errors.Kind.Unsupported)
+  check(font.raster(&arena, &face, 4, 16).kind == errors.Kind.InvalidInput)
   check(font.raster(&arena, &face, 5, 16).kind == errors.Kind.InvalidInput)
   check(font.raster(&arena, &face, 1, 0).kind == errors.Kind.InvalidInput)
   check(mem.arena_mark(&arena) == mark)
@@ -143,7 +143,7 @@ fn main() {
   ui.label(&context, ui.Rect{ width: 64, height: 32 }, "D", ui.Color{ a: 255 })
   ui.end(&context)
   result = software.render(&surface, ui.first(&context), font_ui.renderer(&adapter))
-  check(!result.ok && adapter.failed && adapter.kind == errors.Kind.Unsupported)
+  check(!result.ok && adapter.failed && adapter.kind == errors.Kind.InvalidInput)
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-font-results-') as directory:

@@ -136,8 +136,8 @@ No system font bytes are copied into the repository. Focused font and UI gates
 pass; font tests cross-build macOS and Windows ARM64 and execute on Linux,
 emulated ARM64/RISC-V64, Wine and WASI where available.
 
-This remains partial font support: composite glyphs explicitly return
-`Unsupported`. Composite transforms, hinting, collections, CFF, variable-instance
+At this initial stage, composite glyphs returned `Unsupported`; the composite
+pass below supersedes that limitation. Hinting, collections, CFF, variable-instance
 selection, kerning, shaping and general text layout remain open. Native windows
 and GPU renderers are still pending. See the std guide for resource limits.
 
@@ -146,6 +146,32 @@ contract gates in debug/release, plus the formatter and std lint. The full broad
 regression suite was not rerun for this isolated font slice. Native macOS and
 real Windows font execution remain unverified; cross-builds and Wine are distinct
 from native platform qualification.
+
+### Composite TrueType glyphs (2026-10-26)
+
+The shared outline reader now expands composite glyphs before rasterization.
+It supports byte/word XY offsets, ordinary contour-point attachment, independent
+scale and 2x2 transforms, nested components, and horizontal metric selection.
+Cycle detection and shared point/node/depth budgets bound untrusted graphs.
+Failure paths rewind the entire arena allocation, including empty composites.
+Phantom-point attachment and non-diagonal or negative-horizontal-scale selected
+metrics remain explicit `Unsupported` cases. Grid fitting and hint programs are still omitted.
+
+`tests/font-composites.py` compares 19 composite glyphs with independently
+flattened outlines at two sizes, including curves, bearings, metric origins,
+mirrors, shear, scaled offsets, attachment and empty glyphs. Fifteen malformed,
+cyclic, unsupported and budget cases verify errors and allocation rollback.
+Debug, release O2/O3, emulated native and WASI checks cover the same cases.
+The existing font/UI tests also pass, and the inspected Liberation Sans PNG demo
+now includes “Café Å ñ ü Ç”. General text layout, kerning, native windows and
+GPU renderers remain open.
+
+Focused qualification passes the existing font, UI and arena-memory contract
+regressions, formatter and std lint, alongside the new composite gate. Synthetic
+composite checks execute in debug and release O2/O3, under ARM64/RISC-V64 QEMU,
+Wine x86-64, and WASI; macOS and Windows ARM64 cross-builds pass. The full broad
+regression suite was not rerun for this isolated font change. Real macOS and
+real Windows execution remain separate qualification work.
 
 ## Phase 4: vendor graphics and windowing without SDL
 

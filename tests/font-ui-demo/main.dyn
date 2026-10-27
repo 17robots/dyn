@@ -27,13 +27,18 @@ fn main() {
   if !opened.ok {
     #panic("unsupported or malformed TrueType font")
   }
-  codepoints: [95]u32 = []
+  codepoints: [100]u32 = []
   for i in 0..95 {
     codepoints[i] = 32 + #cast(u32, i)
   }
+  codepoints[95] = 197
+  codepoints[96] = 199
+  codepoints[97] = 233
+  codepoints[98] = 241
+  codepoints[99] = 252
   cached := font.atlas(&output, &opened.value, codepoints[..], 24, 512, 256)
   if !cached.ok {
-    #panic("cannot cache font: simple outlines required")
+    #panic("cannot cache font")
   }
   context := ui.Context{}
   viewport := ui.Rect{ width: 480, height: 240 }
@@ -59,6 +64,7 @@ fn main() {
   _ = fmt.write(&label, "COUNT ")
   _ = fmt.write_i64(&label, #cast(i64, count))
   ui.label(&context, ui.Rect{ x: 32, y: 64, width: 416, height: 24 }, fmt.bytes(&label), context.style.accent)
+  ui.label(&context, ui.Rect{ x: 32, y: 188, width: 416, height: 28 }, "Café Å ñ ü Ç", context.style.foreground)
   ui.end(&context)
   pixels := mem.push_array(u8, &output, #cast(usize, 480 * 240 * 4))
   surface := software.Surface{ pixels: pixels, width: 480, height: 240, stride: 480 * 4 }
