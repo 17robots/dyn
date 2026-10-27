@@ -87,6 +87,9 @@ pub struct Box {
   // Persistent state.
   hash_next: *Box,
   touched: u64,
+  // Caller-owned identity associated with this cached box. Preserved across
+  // builds, cleared when an expired box is recycled for a new key.
+  user_data: usize,
   size: [2]f32,
   position: [2]f32,
   // Absolute screen rectangle of the last layout: x0, y0, x1, y1.
@@ -198,11 +201,37 @@ fn key_text(label: []const u8) []const u8 {
 }
 
 pub fn key(seed: u64, label: []const u8) u64 {
-  value := hash.wyhash(key_text(label), seed)
+  return key_bytes(seed, key_text(label))
+}
+
+// Hashes an explicit identity without interpreting label suffixes.
+pub fn key_bytes(seed: u64, identity: []const u8) u64 {
+  value := hash.wyhash(identity, seed)
   if value == 0 {
     return 1
   }
   return value
+}
+
+// A stable child identity for a numeric application value, independent of
+// machine byte order and width. Unlike labels, numbers have no ### suffix.
+pub fn key_number(seed: u64, number: u64) u64 {
+  encoded: [8]u8 = []
+  for i in 0..8 {
+    encoded[i] = #cast(u8, (number >> (i * 8)) & 255)
+  }
+  return key_bytes(seed, encoded[..])
+}
+
+// Finds a box built in the current frame; nil on a miss or expired identity.
+// The result belongs to the state's arena. Do not retain it across frames in
+// which that key disappears, because expired storage may serve another key.
+pub fn find(state: *const State, value: u64) *Box {
+  found := lookup(state, value)
+  if found != nil && found.touched == state.frame_index {
+    return found
+  }
+  return nil
 }
 
 fn derived(value: u64) u64 {
@@ -213,7 +242,7 @@ fn derived(value: u64) u64 {
   return next
 }
 
-fn lookup(state: *State, value: u64) *Box {
+fn lookup(state: *const State, value: u64) *Box {
   at := state.buckets[#cast(usize, value % #cast(u64, bucket_count))]
   for at != nil {
     if at.key == value {

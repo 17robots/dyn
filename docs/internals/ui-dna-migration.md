@@ -56,7 +56,7 @@ found and corrected later panels overwriting earlier panels' geometry; its
 production UI regression checks multiple roots in one frame.
 
 The native-host qualification runner now includes the new UI and font
-contracts: 20 fixtures, each in debug, O2 and O3. Native macOS and real Windows
+contracts: 21 fixtures, each in debug, O2 and O3. Native macOS and real Windows
 execution still require their CI hosts; cross-builds and Wine do not establish
 native OS behavior. On 2026-10-27 the registered compiler regression suite passed. Its early UI
 checks preceded the final pointer-release adjustment; the box, editing, extras
@@ -68,8 +68,16 @@ not physical board execution. Local logs are retained under
 
 ## Remaining platform work
 
-DNA's indexed application records and custom drawing remain intentional during
-this transition. Completing native presentation requires replacing SDL window,
+DNA now builds persistent shared boxes directly. Its private key hashing,
+linear identity lookup, temporary geometry arrays, fixed label buffer and hit
+scan are removed. The shared cache supplies current-frame lookup, numeric/raw
+identities, caller handles and expiry/recycling. DNA retains only indexed
+application metadata, configurable tweens and its custom SDL renderer. The
+production cache oracle checks 40 KB owned text, stable duplicate identities,
+multiple panels, bounded key churn and release/rebuild.
+
+DNA's application records and custom drawing remain intentional during this
+transition. Completing native presentation requires replacing SDL window,
 event and rendering calls one platform at a time, preserving editor/terminal
 rendering, input methods, clipboard and font shaping/fallback behavior. Offscreen
 Vulkan is not an onscreen presentation backend. Collection/CFF fonts need a

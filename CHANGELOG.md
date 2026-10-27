@@ -14,6 +14,8 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- `std/ui/box` exposes current-frame `find`, explicit `key_bytes`, portable `key_number` identities and persistent caller `user_data`, allowing applications to share the keyed cache and recycling policy with custom renderers.
+
 - `std/ui/box` adds mouse and Shift selection, Unicode word movement/deletion, selected clipboard operations, atomic replacement and horizontal scrolling in text fields. Tab/Shift-Tab traverse controls; Enter activates buttons. Tabs, popup menus, tooltips and splitters compose existing boxes. `layout`/`render` can run separately for custom app renderers, with container padding, absolute positioning and optional ordered shrinking.
 
 - `std/font/system` scans platform or explicit font directories, reads owned family/style metadata, matches weight/slant and selects fonts covering missing code points without fontconfig. Unsupported collections and CFF faces are skipped. `examples/box-viewer` now discovers its default font instead of requiring a Linux path.
