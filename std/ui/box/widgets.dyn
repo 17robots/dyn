@@ -106,13 +106,24 @@ pub struct Range { first: usize, last: usize }
 
 pub fn list_begin(state: *State, label: []const u8, width: Size, height: Size, count: usize, row_height: f32) Range {
   box := scroll_begin(state, label, width, height)
-  start := box.view[1] / row_height
-  first: usize = 0
-  if start > 0.0 {
-    first = #cast(usize, start)
+  // Cover the whole glide between the shown offset and its target, so rows
+  // exist wherever the animation passes this frame.
+  low := box.view[1]
+  high := box.view[1]
+  if box.view_target[1] < low {
+    low = box.view_target[1]
   }
-  visible := box.size[1] / row_height + 2.0
-  last := first + #cast(usize, visible)
+  if box.view_target[1] > high {
+    high = box.view_target[1]
+  }
+  first: usize = 0
+  if low > 0.0 {
+    first = #cast(usize, low / row_height)
+  }
+  if first > 0 {
+    first -= 1
+  }
+  last := #cast(usize, (high + box.size[1]) / row_height) + 2
   if first > count {
     first = count
   }

@@ -95,7 +95,7 @@ fn build(state: *box.State, app: *App) {
   _ = fmt.write(&status, " rows###status")
   _ = box.label(state, fmt.bytes(&status))
   box.pop_parent(state)
-  row_height := 20.0 * app.zoom
+  row_height := 20.0 * app.zoom * state.scale
   range := box.list_begin(state, "rows", box.percent(1.0, 0.0), box.percent(1.0, 0.0), app.match_count, row_height)
   list := box.parent(state)
   list.background = ui.Color{ r: 22, g: 24, b: 29, a: 255 }
@@ -177,12 +177,6 @@ fn main() {
   for c in 0..95 {
     codepoints[c] = #cast(u32, c + 32)
   }
-  built := font.atlas(&persistent, &face.value, codepoints[..], 16, 512, 512)
-  if !built.ok {
-    #panic("font atlas")
-  }
-  atlas := mem.push(font.Atlas, &persistent)
-  atlas.* = built.value
   host := window.Window{}
   if !window.open(&host, "Dyn box viewer", 1100, 700).ok {
     #panic("cannot open a window")
@@ -190,6 +184,13 @@ fn main() {
   defer {
     window.close(&host)
   }
+  scale := window.scale(&host)
+  built := font.atlas(&persistent, &face.value, codepoints[..], #cast(u16, 16.0 * scale + 0.5), 1024, 1024)
+  if !built.ok {
+    #panic("font atlas")
+  }
+  atlas := mem.push(font.Atlas, &persistent)
+  atlas.* = built.value
   loaded := gl.load(window.gl_proc)
   batch := mem.push(gpu.Batch, &persistent)
   if !loaded.ok || !gpu.open_batch(batch, loaded.api).ok {
@@ -206,21 +207,28 @@ fn main() {
   app.matches = mem.push_array(u32, &persistent, row_count)
   refilter(app)
   state := box.create(&persistent, measure, atlas, #cast(f32, atlas.line_height))
+  state.scale = scale
   context: ui.Context
   glyphs := font_ui.atlas_renderer(atlas)
   last := time.monotonic_now().value
   drawn: usize = 0
+  shown_width: i32 = 0
+  shown_height: i32 = 0
   for !host.close_requested && !app.quit {
-    if !box.animating(state) && frames == 0 {
-      window.wait(&host, -1)
-    }
+    // Sleep until input that changes the frame; motion inside a box is free.
     _ = window.poll(&host)
+    for frames == 0 && drawn != 0 && !box.animating(state) && !box.needs_frame(state, window.box_input(&host)) && !host.close_requested && host.width == shown_width && host.height == shown_height {
+      window.wait(&host, -1)
+      _ = window.poll(&host)
+    }
     now := time.monotonic_now().value
     dt := #cast(f32, time.elapsed(last, now).value) / 1000000000.0
     last = now
     mem.arena_reset(&frame_arena)
     width := host.width
     height := host.height
+    shown_width = width
+    shown_height = height
     ui.begin(&context, &frame_arena, ui.Input{}, ui.Rect{ width: width, height: height })
     box.begin(state, &frame_arena, window.box_input(&host), #cast(f32, width), #cast(f32, height), dt)
     build(state, app)

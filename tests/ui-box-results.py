@@ -32,6 +32,7 @@ struct App {
   first: usize,
   last: usize,
   button_rect: [4]f32,
+  button_key: u64,
   list_box: *box.Box,
 }
 
@@ -46,6 +47,7 @@ fn frame(state: *box.State, context: *ui.Context, arena: *mem.Arena, app: *App, 
     app.clicks += 1
   }
   app.button_rect = pressed.box.rect
+  app.button_key = pressed.box.key
   _ = box.checkbox(state, "Enabled", &app.enabled)
   _ = box.slider(state, "volume", &app.volume, 0.0, 10.0)
   box.pop_parent(state)
@@ -127,6 +129,47 @@ fn main() {
   check(app.list_box.view[1] == 19900.0, "scroll clamps to content")
   check(app.first >= 994 && app.last == 1000, "list follows scroll")
   check(!box.animating(state), "animation settles")
+  // Pointer motion inside one box needs no frame; onto another box it does.
+  frame(state, &context, &arena, &app, box.Input{ x: 10.0, y: 10.0 })
+  frame(state, &context, &arena, &app, box.Input{ x: 10.0, y: 10.0 })
+  check(box.hit(state, 10.0, 10.0) == app.button_key, "hit finds the button")
+  check(!box.needs_frame(state, box.Input{ x: 20.0, y: 12.0 }), "motion within a box")
+  check(box.needs_frame(state, box.Input{ x: 70.0, y: 10.0 }), "motion onto another box")
+  check(box.needs_frame(state, box.Input{ x: 20.0, y: 12.0, text: "a" }), "typing")
+  duplicates(&persistent, &arena)
+}
+
+// Equal labels in one frame get derived keys; reduced motion snaps; scale
+// multiplies pixel sizes and padding.
+fn duplicates(persistent: *mem.Arena, arena: *mem.Arena) {
+  state := box.create(persistent, measure, nil, 16.0)
+  context: ui.Context
+  for round in 0..3 {
+    mem.arena_reset(arena)
+    ui.begin(&context, arena, ui.Input{}, ui.Rect{ width: 200, height: 200 })
+    box.begin(state, arena, box.Input{ x: 5.0, y: 5.0 }, 200.0, 200.0, 1.0 / 60.0)
+    first := box.button(state, "Same")
+    second := box.button(state, "Same")
+    check(first.box != second.box, "duplicate labels make distinct boxes")
+    box.end(state, &context)
+    ui.end(&context)
+  }
+  state.reduced_motion = true
+  state.scale = 2.0
+  for round in 0..2 {
+    mem.arena_reset(arena)
+    ui.begin(&context, arena, ui.Input{}, ui.Rect{ width: 200, height: 200 })
+    box.begin(state, arena, box.Input{ x: 5.0, y: 5.0 }, 200.0, 200.0, 1.0 / 60.0)
+    hovered := box.button(state, "Same")
+    _ = box.button(state, "Same")
+    box.end(state, &context)
+    ui.end(&context)
+    if round == 1 {
+      check(hovered.box.hot_t == 1.0, "reduced motion snaps")
+      // Text 32 plus padding 2 * 10 * 2.
+      check(hovered.box.size[0] == 72.0, "scale applies to padding")
+    }
+  }
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-ui-box-') as directory:
@@ -138,4 +181,4 @@ with tempfile.TemporaryDirectory(prefix='dyn-ui-box-') as directory:
         subprocess.run([str(output)], check=True, timeout=60)
     for target in ('aarch64-macos', 'x86_64-windows', 'wasm32-wasi'):
         subprocess.run([DYN, 'build', str(project), '--no-cache', '--quiet', '--target', target, '--output', str(project / ('program-' + target))], check=True, timeout=300)
-print('PASS ui box: layout, previous-frame input, button, checkbox, slider, text field, clipboard, focus, virtual list, scroll clamp, settled animation (debug/release)')
+print('PASS ui box: layout, previous-frame input, button, checkbox, slider, text field, clipboard, focus, virtual list, scroll clamp, settled animation, hit testing, frame-on-change, duplicate keys, reduced motion, scale (debug/release)')

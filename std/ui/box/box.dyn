@@ -140,6 +140,12 @@ pub struct State {
   // Keyboard focus, and text that a copy or cut this frame produced.
   focused: u64,
   focus_claimed: bool,
+  // Snap animations instead of easing them, for users who ask for reduced
+  // motion.
+  reduced_motion: bool,
+  // Display scale applied to pixel sizes and text padding. Pass a font
+  // rasterized at the same scale.
+  scale: f32,
   copied: []const u8,
 }
 
@@ -154,6 +160,7 @@ pub fn create(arena: *mem.Arena, measure: fn(rawptr, []const u8) f32, measure_da
   state.measure_data = measure_data
   state.line_height = line_height
   state.half_life = 0.04
+  state.scale = 1.0
   return state
 }
 
@@ -184,6 +191,14 @@ pub fn key(seed: u64, label: []const u8) u64 {
     return 1
   }
   return value
+}
+
+fn derived(value: u64) u64 {
+  next := hash.wyhash("derived", value)
+  if next == 0 {
+    return 1
+  }
+  return next
 }
 
 fn lookup(state: *State, value: u64) *Box {
@@ -247,8 +262,9 @@ pub fn parent(state: *State) *Box {
   return top(state)
 }
 
-// Builds a box under the current parent. A key built twice in one frame
-// panics; give repeated labels distinct "##" suffixes.
+// Builds a box under the current parent. A key built twice in one frame gets
+// a derived key, so its state follows build order; give repeated labels
+// distinct "##" suffixes when their state must stay attached to them.
 pub fn build_key(state: *State, flags: u32, value: u64, text: []const u8) *Box {
   box := lookup(state, value)
   if box == nil {
@@ -266,7 +282,9 @@ pub fn build_key(state: *State, flags: u32, value: u64, text: []const u8) *Box {
     slot.* = box
   }
   else if box.touched == state.frame_index {
-    #panic("UI box key built twice in one frame")
+    // An equal label built twice in one frame, such as two overloads in a
+    // list, gets a derived key instead of failing.
+    return build_key(state, flags, derived(value), text)
   }
   box.touched = state.frame_index
   box.flags = flags
@@ -405,14 +423,14 @@ fn scrolls(box: *const Box, axis: usize) bool {
 fn standalone(state: *State, box: *Box, axis: usize) {
   semantic := size_of(box, axis)
   if semantic.kind == SizeKind.Pixels {
-    box.size[axis] = semantic.value
+    box.size[axis] = semantic.value * state.scale
   }
   else if semantic.kind == SizeKind.Text {
     if axis == 0 {
-      box.size[0] = state.measure(state.measure_data, box.text) + 2.0 * semantic.value
+      box.size[0] = state.measure(state.measure_data, box.text) + 2.0 * semantic.value * state.scale
     }
     else {
-      box.size[1] = state.line_height + 2.0 * semantic.value
+      box.size[1] = state.line_height + 2.0 * semantic.value * state.scale
     }
   }
   child := box.first
@@ -723,7 +741,7 @@ pub fn end(state: *State, context: *ui.Context) {
     positions(state.root, axis)
   }
   rate: f32 = 1.0
-  if state.half_life > 0.0 {
+  if state.half_life > 0.0 && !state.reduced_motion {
     rate = 1.0 - math.exp2(-state.dt / state.half_life)
   }
   finish(state, state.root, state.root.rect, rate)
@@ -736,4 +754,55 @@ pub fn end(state: *State, context: *ui.Context) {
   }
   draw(state, context, state.root)
   state.depth = 0
+}
+
+// The key of the topmost clickable box under a point in the last layout, or
+// zero.
+pub fn hit(state: *const State, x, y: f32) u64 {
+  return hit_box(state.root, x, y)
+}
+
+fn hit_box(box: *const Box, x, y: f32) u64 {
+  if box == nil || !inside(box.visible, x, y) {
+    return 0
+  }
+  found: u64 = 0
+  if box.flags & Clickable != 0 {
+    found = box.key
+  }
+  child := box.first
+  for child != nil {
+    inner := hit_box(child, x, y)
+    if inner != 0 {
+      found = inner
+    }
+    child = child.next
+  }
+  return found
+}
+
+// Whether input since the last frame can change what is drawn. Pointer motion
+// counts only when it moves onto a different clickable box or a press is
+// held, so moving the mouse within a box costs no frame. Combine it with
+// animating to decide when to draw.
+pub fn needs_frame(state: *const State, input: Input) bool {
+  if input.down != state.previous_down || input.down || input.scroll_x != 0.0 || input.scroll_y != 0.0 || #len(input.text) != 0 {
+    return true
+  }
+  if input.backspace || input.delete || input.left || input.right || input.home || input.end || input.enter || input.escape ||
+    input.tab || input.select_all || input.copy || input.cut || input.paste {
+    return true
+  }
+  return hit(state, input.x, input.y) != state.hot
+}
+
+// Scrolls a scrolling box so the span top..bottom of its content is visible.
+// Use it to keep a selected list row in view.
+pub fn scroll_into_view(target: *Box, top, bottom: f32) {
+  if top < target.view_target[1] {
+    target.view_target[1] = top
+  }
+  if bottom > target.view_target[1] + target.size[1] {
+    target.view_target[1] = bottom - target.size[1]
+  }
 }
