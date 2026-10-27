@@ -54,8 +54,8 @@ fn conflicts(arena: *mem.Arena, count: usize, first: []const u8, second: []const
 // only for this call and must not overlap pending output. Key is 32 bytes; GCM
 // accepts 1..128 nonce bytes, ChaCha requires 12 bytes. Nonce uniqueness for a key
 // is the caller's responsibility. Exhaustion panics; failure returns empty
-// values, preserves the arena prefix, and consumes no arena bytes. error is
-// and provider_code are always zero; the latter remains for source compatibility.
+// values, preserves the arena prefix, and consumes no arena bytes. error and
+// provider_code are always zero; the latter remains for source compatibility.
 pub fn seal(arena: *mem.Arena, kind: Cipher, plaintext: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) SealResult {
   count := #len(plaintext)
   if !valid(kind, count, additional, key, nonce) || count > ~#cast(usize, 0) - 16 {

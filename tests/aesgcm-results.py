@@ -112,6 +112,16 @@ fn main() {
  check(!aead.seal(storage[..1],storage[..16],"x","",key[..],nonce[..]))
  check(!aead.seal(storage[..1],tag[..],"x","",storage[..32],nonce[..]))
  check(!aead.open(storage[..1],"x",storage[..16],"",key[..],nonce[..]))
+ for byte in storage { check(byte == 0) }
+ if #sizeof(usize) == 8 {
+  oversize_payload: u64 = 68719476705
+  huge := (&key[0])[..#cast(usize,oversize_payload)]
+  check(!aead.seal(huge,tag[..],huge,"",key[..],nonce[..]))
+  oversize_aad: u64 = 2305843009213693952
+  huge_aad := (&key[0])[..#cast(usize,oversize_aad)]
+  check(!aead.seal(storage[..1],tag[..],"x",huge_aad,key[..],nonce[..]))
+ }
+
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-aesgcm-') as directory:
