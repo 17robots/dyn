@@ -1,0 +1,82 @@
+use "std/crypto/chacha20" chacha
+use "std/crypto/poly1305" poly
+use "std/encoding/binary" binary
+// RFC 8439 AEAD. Key:32, nonce:12, tag:16 bytes. Never reuse a nonce/key pair.
+// Caller owns all storage. Input/output may be exactly the same slice, but no
+// partial overlap is allowed. Other output/input overlaps are rejected before
+// writing. Authentication failure leaves destination unchanged.
+fn overlaps(left: []const u8, right: []const u8) bool {
+  if #len(left) == 0 || #len(right) == 0 {
+    return false
+  }
+  a := #cast(usize, &left[0])
+  b := #cast(usize, &right[0])
+  if a <= b {
+    return b - a < #len(left)
+  }
+  return a - b < #len(right)
+}
+fn valid(output: []u8, input: []const u8, aad: []const u8, key: []const u8, nonce: []const u8) bool {
+  if #len(key) != 32 || #len(nonce) != 12 || #len(output) != #len(input) {
+    return false
+  }
+  // Counter zero is reserved for the MAC key. This expression cannot overflow.
+  blocks := #len(input) / 64
+  if #len(input) % 64 != 0 {
+    blocks += 1
+  }
+  if #cast(u64, blocks) > 0xffffffff {
+    return false
+  }
+  if overlaps(output, key) || overlaps(output, nonce) || overlaps(output, aad) {
+    return false
+  }
+  if overlaps(output, input) && #cast(rawptr, &output[0]) != #cast(rawptr, &input[0]) {
+    return false
+  }
+  return true
+}
+fn mac(ciphertext: []const u8, aad: []const u8, key: []const u8, nonce: []const u8) poly.Tag {
+  first: [64]u8 = []
+  if !chacha.block(first[..], key, nonce, 0) {
+    return poly.Tag{}
+  }
+  state := poly.init(first[..32])
+  zero: [16]u8 = []
+  _ = poly.update(&state, aad)
+  if #len(aad) % 16 != 0 {
+    _ = poly.update(&state, zero[..16-#len(aad)%16])
+  }
+  _ = poly.update(&state, ciphertext)
+  if #len(ciphertext) % 16 != 0 {
+    _ = poly.update(&state, zero[..16-#len(ciphertext)%16])
+  }
+  lengths: [16]u8 = []
+  binary.store_u64_le(lengths[..8], #cast(u64, #len(aad)))
+  binary.store_u64_le(lengths[8..], #cast(u64, #len(ciphertext)))
+  _ = poly.update(&state, lengths[..])
+  return poly.finish(&state)
+}
+pub fn seal(output: []u8, tag: []u8, input: []const u8, aad: []const u8, key: []const u8, nonce: []const u8) bool {
+  if !valid(output, input, aad, key, nonce) || #len(tag) != 16 || overlaps(tag, output) || overlaps(tag, input) || overlaps(tag, aad) || overlaps(tag, key) || overlaps(tag, nonce) {
+    return false
+  }
+  if !chacha.xor(output, input, key, nonce, 1) {
+    return false
+  }
+  result := mac(output, aad, key, nonce)
+  for i in 0..16 {
+    tag[i] = result.value[i]
+  }
+  return true
+}
+pub fn open(output: []u8, input: []const u8, tag: []const u8, aad: []const u8, key: []const u8, nonce: []const u8) bool {
+  if !valid(output, input, aad, key, nonce) || #len(tag) != 16 || overlaps(output, tag) {
+    return false
+  }
+  expected := mac(input, aad, key, nonce)
+  if !poly.equal(expected.value[..], tag) {
+    return false
+  }
+  return chacha.xor(output, input, key, nonce, 1)
+}

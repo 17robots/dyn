@@ -1,0 +1,225 @@
+use "std/encoding/binary" binary
+use "std/crypto/core" core
+// Portable AES-256-GCM. FIPS197 / SP800-38D. Table-free S-box inversion and
+// fixed-iteration GHASH avoid secret indexes/branches. This favors portability
+// over throughput. Compiler/platform constant-time qualification is separate.
+// Key32; nonce1..128; tag16. Caller must never reuse a nonce/key pair.
+struct Key { bytes: [240]u8 }
+struct Block { high: u64, low: u64 }
+fn multiply(left: u8, right: u8) u8 {
+  a := left
+  b := right
+  result: u8 = 0
+  for i in 0..8 {
+    result ^= a & #wrap(#cast(u8, 0) - (b & 1))
+    a = #wrap(a << 1) ^ (0x1b & #wrap(#cast(u8, 0) - (a >> 7)))
+    b >>= 1
+  }
+  return result
+}
+fn rotate(value: u8, amount: u32) u8 {
+  return #wrap(value << amount) | (value >> (8 - amount))
+}
+fn substitute(value: u8) u8 {
+  // x^254 in GF(2^8), including 0 -> 0. Fixed addition chain.
+  x2 := multiply(value, value)
+  x4 := multiply(x2, x2)
+  x8 := multiply(x4, x4)
+  x16 := multiply(x8, x8)
+  x32 := multiply(x16, x16)
+  x64 := multiply(x32, x32)
+  x128 := multiply(x64, x64)
+  inv := multiply(multiply(multiply(x2, x4), multiply(x8, x16)), multiply(multiply(x32, x64), x128))
+  return inv ^ rotate(inv, 1) ^ rotate(inv, 2) ^ rotate(inv, 3) ^ rotate(inv, 4) ^ 0x63
+}
+fn expand(source: []const u8) Key {
+  key := Key{}
+  for i in 0..32 {
+    key.bytes[i] = source[i]
+  }
+  rcon: u8 = 1
+  for word in 8..60 {
+    temp: [4]u8 = []
+    for j in 0..4 {
+      temp[j] = key.bytes[(word - 1)*4+j]
+    }
+    if word % 8 == 0 {
+      first := temp[0]
+      temp[0] = substitute(temp[1]) ^ rcon
+      temp[1] = substitute(temp[2])
+      temp[2] = substitute(temp[3])
+      temp[3] = substitute(first)
+      rcon = multiply(rcon, 2)
+    } else if word % 8 == 4 {
+      for j in 0..4 {
+        temp[j] = substitute(temp[j])
+      }
+    }
+    for j in 0..4 {
+      key.bytes[word*4+j] = key.bytes[(word-8)*4+j] ^ temp[j]
+    }
+  }
+  return key
+}
+fn encrypt(key: *const Key, input: Block) Block {
+  state: [16]u8 = []
+  binary.store_u64_be(state[..8], input.high)
+  binary.store_u64_be(state[8..], input.low)
+  for i in 0..16 {
+    state[i] ^= key.bytes[i]
+  }
+  for round in 1..15 {
+    shifted: [16]u8 = []
+    for column in 0..4 {
+      for row in 0..4 {
+        shifted[column*4+row] = substitute(state[((column+row)%4)*4+row])
+      }
+    }
+    state = shifted
+    if round != 14 {
+      for column in 0..4 {
+        at := column * 4
+        a := shifted[at]
+        b := shifted[at+1]
+        c := shifted[at+2]
+        d := shifted[at+3]
+        all := a ^ b ^ c ^ d
+        state[at] = a ^ all ^ multiply(a ^ b, 2)
+        state[at+1] = b ^ all ^ multiply(b ^ c, 2)
+        state[at+2] = c ^ all ^ multiply(c ^ d, 2)
+        state[at+3] = d ^ all ^ multiply(d ^ a, 2)
+      }
+    }
+    for i in 0..16 {
+      state[i] ^= key.bytes[round*16+i]
+    }
+  }
+  return Block{ high: binary.load_u64_be(state[..8]), low: binary.load_u64_be(state[8..]) }
+}
+fn xor(left: Block, right: Block) Block {
+  return Block{ high: left.high ^ right.high, low: left.low ^ right.low }
+}
+fn product(left: Block, right: Block) Block {
+  z := Block{}
+  v := right
+  for i in 0..128 {
+    bit: u64 = 0
+    if i < 64 {
+      bit = (left.high >> #cast(u64, 63-i)) & 1
+    } else {
+      bit = (left.low >> #cast(u64, 127-i)) & 1
+    }
+    mask := #wrap(#cast(u64, 0) - bit)
+    z.high ^= v.high & mask
+    z.low ^= v.low & mask
+    reduction := 0xe100000000000000 & #wrap(#cast(u64, 0) - (v.low & 1))
+    v.low = (v.low >> 1) | #wrap(v.high << 63)
+    v.high = (v.high >> 1) ^ reduction
+  }
+  return z
+}
+fn hash(state: Block, h: Block, source: []const u8) Block {
+  result := state
+  at: usize = 0
+  for #len(source) - at >= 16 {
+    part := Block{ high: binary.load_u64_be(source[at..at+8]), low: binary.load_u64_be(source[at+8..at+16]) }
+    result = product(xor(result, part), h)
+    at += 16
+  }
+  if at < #len(source) {
+    buffer: [16]u8 = []
+    for i in 0..#len(source)-at {
+      buffer[i] = source[at+i]
+    }
+    part := Block{ high: binary.load_u64_be(buffer[..8]), low: binary.load_u64_be(buffer[8..]) }
+    result = product(xor(result, part), h)
+  }
+  return result
+}
+fn initial(h: Block, nonce: []const u8) Block {
+  if #len(nonce) == 12 {
+    return Block{ high: binary.load_u64_be(nonce[..8]), low: (#cast(u64, binary.load_u32_be(nonce[8..])) << 32) | 1 }
+  }
+  result := hash(Block{}, h, nonce)
+  return product(xor(result, Block{ low: #cast(u64, #len(nonce))*8 }), h)
+}
+fn tag(key: *const Key, h: Block, j0: Block, cipher: []const u8, aad: []const u8) Block {
+  result := hash(hash(Block{}, h, aad), h, cipher)
+  result = product(xor(result, Block{ high: #cast(u64, #len(aad))*8, low: #cast(u64, #len(cipher))*8 }), h)
+  return xor(result, encrypt(key, j0))
+}
+fn transform(key: *const Key, j0: Block, output: []u8, input: []const u8) {
+  counter := j0
+  at: usize = 0
+  for at < #len(input) {
+    low := #wrap(#cast(u32, counter.low) + 1)
+    counter.low = (counter.low & 0xffffffff00000000) | #cast(u64, low)
+    stream := encrypt(key, counter)
+    buffer: [16]u8 = []
+    binary.store_u64_be(buffer[..8], stream.high)
+    binary.store_u64_be(buffer[8..], stream.low)
+    take := #len(input) - at
+    if take > 16 {
+      take = 16
+    }
+    for i in 0..take {
+      output[at+i] = input[at+i] ^ buffer[i]
+    }
+    at += take
+  }
+}
+fn overlaps(left: []const u8, right: []const u8) bool {
+  if #len(left) == 0 || #len(right) == 0 {
+    return false
+  }
+  a := #cast(usize, &left[0])
+  b := #cast(usize, &right[0])
+  if a <= b {
+    return b-a < #len(left)
+  }
+  return a-b < #len(right)
+}
+fn valid(output: []u8, input: []const u8, aad: []const u8, key: []const u8, nonce: []const u8) bool {
+  if #len(key) != 32 || #len(nonce) == 0 || #len(nonce) > 128 || #len(output) != #len(input) || #cast(u64, #len(input)) > 68719476704 || #cast(u64, #len(aad)) > 0x1fffffffffffffff {
+    return false
+  }
+  if overlaps(output, key) || overlaps(output, nonce) || overlaps(output, aad) {
+    return false
+  }
+  if overlaps(output, input) && #cast(rawptr, &output[0]) != #cast(rawptr, &input[0]) {
+    return false
+  }
+  return true
+}
+// Exact in-place payload operation is allowed. Other output overlaps are
+// rejected before writing. Failure, including authentication, preserves output.
+pub fn seal(output: []u8, authentication: []u8, input: []const u8, aad: []const u8, source_key: []const u8, nonce: []const u8) bool {
+  if !valid(output, input, aad, source_key, nonce) || #len(authentication) != 16 || overlaps(authentication, output) || overlaps(authentication, input) || overlaps(authentication, aad) || overlaps(authentication, source_key) || overlaps(authentication, nonce) {
+    return false
+  }
+  key := expand(source_key)
+  h := encrypt(&key, Block{})
+  j0 := initial(h, nonce)
+  transform(&key, j0, output, input)
+  value := tag(&key, h, j0, output, aad)
+  binary.store_u64_be(authentication[..8], value.high)
+  binary.store_u64_be(authentication[8..], value.low)
+  return true
+}
+pub fn open(output: []u8, input: []const u8, authentication: []const u8, aad: []const u8, source_key: []const u8, nonce: []const u8) bool {
+  if !valid(output, input, aad, source_key, nonce) || #len(authentication) != 16 || overlaps(output, authentication) {
+    return false
+  }
+  key := expand(source_key)
+  h := encrypt(&key, Block{})
+  j0 := initial(h, nonce)
+  value := tag(&key, h, j0, input, aad)
+  expected: [16]u8 = []
+  binary.store_u64_be(expected[..8], value.high)
+  binary.store_u64_be(expected[8..], value.low)
+  if !core.equal_constant_time(expected[..], authentication) {
+    return false
+  }
+  transform(&key, j0, output, input)
+  return true
+}

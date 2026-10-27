@@ -8,6 +8,7 @@ X25519/Ed25519 vectors: RFC 7748 / RFC 8032.
 import os
 from pathlib import Path
 import subprocess
+import shutil
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -345,73 +346,6 @@ _ = public_key
 return false }
 '''
 
-AEAD_PROVIDER = r'''pub const CipherAes256Gcm: u8 = 0
-pub const CipherChacha20Poly1305: u8 = 1
-pub struct Result { written: usize, provider_code: u64, ok: bool }
-fn failure(output: []u8, key: []const u8) Result {
-  for i in 0..#len(output) { output[i] = 77 }
-  if key[0] == 0 { return Result{} }
-  if key[0] == 1 { return Result{provider_code: 18446744073709551615} }
-  // A provider claiming success with the wrong count must also roll back.
-  return Result{ok: true, written: 1}
-}
-pub fn aead_seal(kind: u8, output: []u8, tag: []u8, input: []const u8, aad: []const u8, key: []const u8, nonce: []const u8) Result {
-  _ = kind
-  _ = input
-  _ = aad
-  _ = nonce
-  for i in 0..#len(tag) { tag[i] = 77 }
-  return failure(output, key)
-}
-pub fn aead_open(kind: u8, output: []u8, input: []const u8, tag: []const u8, aad: []const u8, key: []const u8, nonce: []const u8) Result {
-  _ = kind
-  _ = input
-  _ = tag
-  _ = aad
-  _ = nonce
-  return failure(output, key)
-}
-'''
-
-AEAD_FAILURE = r'''use "aead" aead
-use "std/mem" mem
-use "std/errors" errors
-fn check(ok: bool) { if !ok { #panic("AEAD provider failure") } }
-fn main() {
-  for cipher in 0..2 {
-    kind := aead.Cipher.Aes256Gcm
-    if cipher == 1 { kind = aead.Cipher.Chacha20Poly1305 }
-    for mode in 0..3 {
-      storage: [128]u8
-      mem.fill(storage[..], 165)
-      arena := mem.arena_from_buffer(storage[..])
-      _ = mem.push_bytes_uninit(&arena, 7)
-      key: [32]u8
-      nonce: [12]u8
-      tag: [16]u8
-      key[0] = #cast(u8, mode)
-      code: u64 = 0
-      if mode == 1 { code = 18446744073709551615 }
-      sealed := aead.seal(&arena, kind, "hello", "aad", key[..], nonce[..])
-      check(!sealed.ok && sealed.kind == errors.Kind.System && sealed.error == 0 && sealed.provider_code == code)
-      check(#len(sealed.value.ciphertext) == 0 && #len(sealed.value.tag) == 0 && mem.arena_used(&arena) == 7)
-      for i in 0..7 { check(storage[i] == 165) }
-      for i in 7..28 { check(storage[i] == 0) }
-      for i in 28..128 { check(storage[i] == 165) }
-      mem.fill(storage[7..], 165)
-      opened := aead.open(&arena, kind, "hello", tag[..], "aad", key[..], nonce[..])
-      expected := errors.Kind.System
-      if mode == 0 { expected = errors.Kind.InvalidInput }
-      check(!opened.ok && opened.kind == expected && opened.error == 0 && opened.provider_code == code)
-      check(#len(opened.value) == 0 && mem.arena_used(&arena) == 7)
-      for i in 0..7 { check(storage[i] == 165) }
-      for i in 7..12 { check(storage[i] == 0) }
-      for i in 12..128 { check(storage[i] == 165) }
-      check(key[0] == #cast(u8, mode))
-    }
-  }
-}
-'''
 
 def run(project, release, panic=False):
     output = project / ("program.exe" if os.name == "nt" else "program")
@@ -451,12 +385,6 @@ with tempfile.TemporaryDirectory(prefix="dyn-crypto-results-") as temporary:
     stub.mkdir()
     (stub / "stub.dyn").write_text(KEY_PROVIDER, encoding="utf-8")
     cases.append(fault)
-    aead_fault = project(root, "aead-failure", AEAD_FAILURE)
-    mocked_module(aead_fault, "aead")
-    aead_stub = aead_fault / "stub"
-    aead_stub.mkdir()
-    (aead_stub / "stub.dyn").write_text(AEAD_PROVIDER, encoding="utf-8")
-    cases.append(aead_fault)
     cases.append(project(root, "sdk-aead", (ROOT.parent / "tests/sdk-aead/main.dyn").read_text(encoding="utf-8")))
     exhaustion = []
     for cipher in ("Aes256Gcm", "Chacha20Poly1305"):
@@ -476,3 +404,14 @@ with tempfile.TemporaryDirectory(prefix="dyn-crypto-results-") as temporary:
         for case in exhaustion:
             run(case, release, panic=True)
         print("PASS crypto results " + ("release" if release else "debug"), flush=True)
+
+    # Both AEADs now compile and execute without the Linux OpenSSL provider.
+    for target in ('aarch64-linux','riscv64-linux','x86_64-macos','aarch64-macos','x86_64-windows','aarch64-windows','wasm32-wasi'):
+        output = root / target
+        subprocess.run([DYN,'build',str(cases[0]),'--target',target,'--release','--quiet','--output',str(output)],check=True,timeout=300)
+        emulator = {'aarch64-linux':'qemu-aarch64','riscv64-linux':'qemu-riscv64','x86_64-windows':'wine'}.get(target)
+        if emulator and shutil.which(emulator): subprocess.run([emulator,str(output)],check=True,timeout=60)
+        if target == 'wasm32-wasi' and shutil.which('node'):
+            script = "const {WASI}=require('node:wasi'),fs=require('fs');(async()=>{const wasi=new WASI({version:'preview1',returnOnExit:true});const {instance}=await WebAssembly.instantiate(fs.readFileSync(process.argv[1]),{wasi_snapshot_preview1:wasi.wasiImport});process.exitCode=wasi.start(instance);})().catch(e=>{console.error(e);process.exit(1)});"
+            subprocess.run(['node','--no-warnings','-e',script,str(output)],check=True,timeout=60)
+    print('PASS native AEAD facade cross-targets')
