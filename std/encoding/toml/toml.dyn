@@ -806,7 +806,7 @@ fn emit(arena: *mem.Arena, output: *[]u8, current: *const Value, depth: usize) b
   }
   return true
 }
-// Canonical writer uses quoted keys and inline tables, preserving scalar lexemes.
+// Normalized writer uses quoted keys and inline tables, preserving scalar lexemes.
 // Inputs must not borrow unused backing of the output arena.
 // Output borrows arena
 // malformed/manual trees return InvalidInput and rewind.
