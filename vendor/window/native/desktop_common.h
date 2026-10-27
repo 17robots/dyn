@@ -53,9 +53,15 @@ static inline int desktop_next(Desktop *d, dyn_window_event *out) {
 static inline void desktop_simple(Desktop *d, uint32_t kind) {
   dyn_window_event event={0}; event.kind=kind; desktop_push(d,event);
 }
-static inline void desktop_key(Desktop *d, int down, uint32_t key, uint32_t scan, uint32_t modifiers, int repeated) {
+static inline void desktop_key_character(Desktop *d, int down, uint32_t key, uint32_t scan, uint32_t modifiers, int repeated, uint32_t character) {
   dyn_window_event event={0}; event.kind=down?DYN_EVENT_KEY_DOWN:DYN_EVENT_KEY_UP;
-  event.key=key; event.scancode=scan; event.modifiers=modifiers; event.repeated=(uint32_t)(repeated!=0); desktop_push(d,event);
+  event.key=key; event.scancode=scan; event.modifiers=modifiers; event.repeated=(uint32_t)(repeated!=0);
+  if (character <= 0x10ffff && !(character >= 0xd800 && character <= 0xdfff))
+    event.height=(int32_t)character;
+  desktop_push(d,event);
+}
+static inline void desktop_key(Desktop *d, int down, uint32_t key, uint32_t scan, uint32_t modifiers, int repeated) {
+  desktop_key_character(d,down,key,scan,modifiers,repeated,0);
 }
 static inline void desktop_pointer(Desktop *d, uint32_t kind, int32_t x, int32_t y, uint32_t button, uint32_t modifiers) {
   dyn_window_event event={0}; event.kind=kind; event.x=x; event.y=y; event.button=button; event.modifiers=modifiers; desktop_push(d,event);

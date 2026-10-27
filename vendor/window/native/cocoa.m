@@ -1,5 +1,6 @@
 #include "desktop_common.h"
 #include "window.h"
+#include "cocoa_key.h"
 #import <Cocoa/Cocoa.h>
 #import <OpenGL/OpenGL.h>
 #include <dlfcn.h>
@@ -238,6 +239,22 @@ static uint32_t event_modifiers(NSEventModifierFlags flags) {
   if (flags & NSEventModifierFlagCapsLock)
     value |= DYN_MOD_CAPS;
   return value;
+}
+/* Capture from the source event before queued consumers observe later input.
+ * Ctrl/Command are shortcut modifiers; retain layout, Shift, Option and Caps
+ * while avoiding their control-character transformation. Dead keys stay empty.
+ */
+static uint32_t event_character(NSEvent *event) {
+  NSEventModifierFlags flags = [event modifierFlags];
+  NSString *chars = [event characters];
+  if (flags & (NSEventModifierFlagControl | NSEventModifierFlagCommand))
+    chars = [event charactersByApplyingModifiers:
+        flags & ~(NSEventModifierFlagControl | NSEventModifierFlagCommand)];
+  NSUInteger count = [chars length];
+  if (count < 1 || count > 2) return 0;
+  unichar units[2] = {0};
+  [chars getCharacters:units range:NSMakeRange(0,count)];
+  return cocoa_key_scalar(units,count);
 }
 static uint32_t event_key(NSEvent *event) {
   NSString *chars = [event charactersByApplyingModifiers:0];
@@ -500,10 +517,11 @@ int32_t dyn_window_poll(void *p, dyn_window_frame *out) {
         if (type == NSEventTypeFlagsChanged)
           modifier_event(target, event);
         if (type == NSEventTypeKeyDown || type == NSEventTypeKeyUp)
-          desktop_key(&target->desktop, type == NSEventTypeKeyDown,
+          desktop_key_character(&target->desktop, type == NSEventTypeKeyDown,
                       event_key(event), [event keyCode],
                       event_modifiers([event modifierFlags]),
-                      type == NSEventTypeKeyDown && [event isARepeat]);
+                      type == NSEventTypeKeyDown && [event isARepeat],
+                      event_character(event));
         if (type == NSEventTypeFlagsChanged || type == NSEventTypeKeyDown) {
           if ([event modifierFlags] & NSEventModifierFlagShift)
             target->desktop.pending.keys |= DYN_KEY_SHIFT;

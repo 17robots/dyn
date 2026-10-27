@@ -237,7 +237,24 @@ valid seat input serial; publication before input returns InvalidState. Wayland
 provides no declared transfer length, so EOF after a valid UTF-8 prefix cannot
 prove that a sender intended more bytes.
 
-Wayland KeyDown/KeyUp events capture the translated Unicode scalar in `height`;
+Native Wayland, Windows and Cocoa KeyDown/KeyUp events capture a translated
+Unicode scalar in `height`;
 `events.character` reads it. The snapshot preserves the keyboard layout and
 modifier state at production time even when later events change that state.
 `key` remains the unshifted identity; the event ABI remains 312 bytes.
+
+
+Windows queries the current keyboard state and layout without changing dead-key
+state, using the Windows 10 version 1607+ `ToUnicodeEx` flag. Plain Ctrl shortcuts
+retain their layout character; Ctrl+Alt is retained for AltGr. Coalesced repeats
+copy the same snapshot. Dead-key output, malformed UTF-16 and multi-scalar
+translations have no single character and report zero. WM_CHAR and IME text
+remain separate. See [Microsoft's ToUnicodeEx contract](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-tounicodeex).
+
+Cocoa reads the key event's character string, retaining Shift, Option and Caps
+Lock while excluding Control/Command control-character effects. Function-key
+codes, controls, malformed UTF-16 and multi-scalar strings report zero. IME text
+continues through NSTextInputClient. See [Apple's event character contract](https://developer.apple.com/documentation/appkit/nsevent/characters(byapplyingmodifiers:)).
+Windows production-path tests use controlled keyboard APIs under Wine; Cocoa's
+UTF-16 conversion is tested portably. Neither qualifies actual desktop keyboard
+layouts or IME/dead-key sessions on those hosts.

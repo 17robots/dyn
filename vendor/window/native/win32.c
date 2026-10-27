@@ -108,6 +108,26 @@ static uint32_t event_key(WPARAM key, LPARAM native) {
     return 0x10000 + ((value - 0xd800) << 10) + text[1] - 0xdc00;
   return value >= 0xd800 && value <= 0xdfff ? 0 : value;
 }
+/* Query current modifiers/layout without consuming or changing dead-key state.
+ * A key may expand to multiple Unicode scalars; that has no single character. */
+static uint32_t key_character(WPARAM key, LPARAM native) {
+  BYTE state[256];
+  WCHAR text[8] = {0};
+  if (!GetKeyboardState(state)) return 0;
+  /* Ctrl shortcuts still identify their layout character. Preserve Ctrl+Alt:
+   * Windows layouts use that pair for AltGr, including its alternate symbols. */
+  if (!(state[VK_MENU] & 0x80) && !(state[VK_LMENU] & 0x80) &&
+      !(state[VK_RMENU] & 0x80))
+    state[VK_CONTROL] = state[VK_LCONTROL] = state[VK_RCONTROL] = 0;
+  int count = ToUnicodeEx((UINT)key, ((UINT)(uintptr_t)native >> 16) & 0xff,
+      state, text, 8, 4, GetKeyboardLayout(0));
+  uint32_t first = text[0];
+  if (count == 1 && !(first >= 0xd800 && first <= 0xdfff)) return first;
+  if (count == 2 && first >= 0xd800 && first <= 0xdbff &&
+      text[1] >= 0xdc00 && text[1] <= 0xdfff)
+    return 0x10000 + ((first - 0xd800) << 10) + text[1] - 0xdc00;
+  return 0;
+}
 static uint32_t scan_code(LPARAM value) {
   return ((uint32_t)((uintptr_t)value >> 16) & 0xff) |
          (((uint32_t)((uintptr_t)value >> 24) & 1) << 8);
@@ -133,12 +153,12 @@ static uint32_t event_space(const Desktop *desktop) {
              : 0;
 }
 static void repeated_key(Desktop *desktop, uint32_t key, uint32_t scan,
-                         uint32_t mods, int repeated, uint32_t count) {
+                         uint32_t mods, int repeated, uint32_t count, uint32_t character) {
   uint32_t emitted = event_space(desktop);
   if (emitted > count)
     emitted = count;
   for (uint32_t i = 0; i < emitted; ++i)
-    desktop_key(desktop, 1, key, scan, mods, repeated || i != 0);
+    desktop_key_character(desktop, 1, key, scan, mods, repeated || i != 0, character);
   drop_events(desktop, count - emitted);
 }
 static void repeated_text(Desktop *desktop, uint32_t codepoint,
@@ -355,7 +375,7 @@ static LRESULT CALLBACK procedure(HWND window, UINT message, WPARAM w,
     if (h->desktop.event_enabled)
       repeated_key(&h->desktop, event_key(w, l), scan_code(l), modifiers(),
                    ((uintptr_t)l & ((uintptr_t)1 << 30)) != 0,
-                   message_repeats(l));
+                   message_repeats(l), key_character(w, l));
     uint32_t *keys = &h->desktop.pending.keys;
     if (w == VK_TAB) {
       h->frame.flags |= DYN_TAB;
@@ -403,8 +423,8 @@ static LRESULT CALLBACK procedure(HWND window, UINT message, WPARAM w,
   case WM_KEYUP:
   case WM_SYSKEYUP:
     if (h->desktop.event_enabled)
-      desktop_key(&h->desktop, 0, event_key(w, l), scan_code(l), modifiers(),
-                  0);
+      desktop_key_character(&h->desktop, 0, event_key(w, l), scan_code(l), modifiers(),
+                  0, key_character(w, l));
     if (w == VK_SHIFT)
       h->desktop.pending.keys &= ~(uint32_t)DYN_KEY_SHIFT;
     if (!control_down())

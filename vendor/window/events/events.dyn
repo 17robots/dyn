@@ -18,8 +18,9 @@ use "std/unicode/utf8" edit_utf8
 // the unshifted Unicode character, or a special Key value. Scancode is the
 // native physical identifier (X11 keycode, Win32 scan/extended, Cocoa keyCode,
 // Wayland evdev keycode); it is platform-specific, never a portable keycode.
-// Wayland key events also capture the translated Unicode scalar in height;
-// character(event) reads this snapshot. Other backends may return zero.
+// Native Wayland, Windows and Cocoa key events capture a translated Unicode
+// scalar in height; character(event) reads this snapshot. Other backends may
+// return zero. A snapshot is a key identity, not an IME text commit.
 // Kind-specific payloads retain Event's stable 312-byte ABI:
 // Composition owns preedit in text; x/y are UTF-8 cursor byte offsets (-1
 // hides it), width is active (0/1). Decode with composition(event).

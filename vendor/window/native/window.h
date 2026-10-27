@@ -39,7 +39,7 @@ enum { DYN_ESCAPE=0x110000, DYN_ENTER, DYN_TAB_KEY, DYN_BACKSPACE,
  DYN_HOME, DYN_END, DYN_PAGE_UP, DYN_PAGE_DOWN, DYN_INSERT,
  DYN_F1=0x110020, DYN_SHIFT_KEY=0x110040, DYN_CONTROL_KEY,
  DYN_ALT_KEY, DYN_SUPER_KEY };
-/* Wayland key events snapshot the translated Unicode scalar in height.
+/* Native key events snapshot a translated Unicode scalar in height.
  * key remains the unshifted identity; zero height means no character. */
 typedef struct dyn_window_event {
  uint32_t kind,key,scancode,modifiers,repeated,button,dropped;

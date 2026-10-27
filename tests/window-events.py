@@ -260,6 +260,16 @@ int main(void) {
  Desktop d={0}; dyn_window_event e;
  desktop_simple(&d,DYN_EVENT_CLOSE);assert(!desktop_next(&d,&e));
  desktop_listen(&d,1);
+ desktop_key_character(&d,1,'a',30,DYN_MOD_SHIFT,1,'A');
+ desktop_key_character(&d,0,'a',30,0,0,0x1f600);
+ desktop_key_character(&d,1,'a',30,0,0,0xd800);
+ desktop_key_character(&d,1,'a',30,0,0,0x110000);
+ desktop_key(&d,0,'a',30,0,0);
+ assert(desktop_next(&d,&e)&&e.kind==DYN_EVENT_KEY_DOWN&&e.key=='a'&&e.height=='A'&&e.repeated==1&&e.modifiers==DYN_MOD_SHIFT);
+ assert(desktop_next(&d,&e)&&e.kind==DYN_EVENT_KEY_UP&&e.height==0x1f600);
+ assert(desktop_next(&d,&e)&&e.height==0);
+ assert(desktop_next(&d,&e)&&e.height==0);
+ assert(desktop_next(&d,&e)&&e.height==0);
  uint8_t bytes[520],copied[520];memset(bytes,'A',sizeof(bytes));
  bytes[255]=0xf0;bytes[256]=0x9f;bytes[257]=0x98;bytes[258]=0x80;
  desktop_text(&d,bytes,sizeof(bytes));
