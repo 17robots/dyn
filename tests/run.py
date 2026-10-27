@@ -8,6 +8,7 @@ ROOT=Path(__file__).resolve().parents[1]
 BUILD=Path(os.environ.get('BUILD',ROOT/'build')).resolve()
 def run(*command, timeout=300):
     subprocess.run(list(map(str,command)),cwd=ROOT,check=True,timeout=timeout)
+run(sys.executable, ROOT/'tests/import-sdk-diagnostics.py')
 run(sys.executable, ROOT/'tests/memory-ergonomics.py')
 run(sys.executable, ROOT/'tests/arena-strings.py')
 run(sys.executable, ROOT/'tests/mdesk.py')

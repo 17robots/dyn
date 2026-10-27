@@ -666,8 +666,14 @@ static int visit(Resolver *r, const char *directory,
           result = 1;
         } else if (!target || !dyn_path_is_directory(target)) {
           char message[512];
-          snprintf(message, sizeof(message),
-                   "import '%s' does not resolve inside project root", path);
+          if (!strncmp(path, "std/", 4) || !strncmp(path, "vendor/", 7))
+            snprintf(message, sizeof(message),
+                     "module '%s' not found in the selected Dyn SDK; install a "
+                     "matching SDK or set DYN_SDK to the SDK root containing "
+                     "std/ and vendor/", path);
+          else
+            snprintf(message, sizeof(message),
+                     "import '%s' does not resolve inside project root", path);
           dyn_diagnostic_source("error", s, item.start, item.end, message);
           result = 1;
         } else if (has(r->stack, r->stack_count, target)) {
