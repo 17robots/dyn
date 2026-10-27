@@ -119,7 +119,7 @@ pub fn splitter(state: *State, label: []const u8, axis: u8, extent: f32, minimum
   if result.pressed {
     split.start = split.position
   }
-  if result.dragging {
+  if result.dragging || result.released {
     delta := result.drag_x
     if axis == 1 {
       delta = result.drag_y

@@ -60,7 +60,7 @@ pub fn slider(state: *State, label: []const u8, value: *f32, low, high: f32) Sig
   track.width = pixels(160.0, 0.5)
   track.height = text_size(5.0, 1.0)
   result := signal(state, track)
-  if (result.pressed || result.dragging) && track.size[0] > 0.0 {
+  if (result.pressed || result.dragging || result.released) && track.size[0] > 0.0 {
     fraction := (state.input.x - track.rect[0]) / track.size[0]
     if fraction < 0.0 {
       fraction = 0.0

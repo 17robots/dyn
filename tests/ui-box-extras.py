@@ -92,6 +92,7 @@ fn main() {
   for step in 0..5 {
     pointer: f32 = 210.0
     if step >= 3 { pointer = 250.0 }
+    if step == 4 { pointer = 270.0 }
     start(split_state, &frame, &context, box.Input{ x: pointer, y: 10.0, down: step == 2 || step == 3 })
     group := box.row(split_state, "panes")
     group.width = box.pixels(306.0, 1.0)
@@ -103,7 +104,7 @@ fn main() {
     box.pop_parent(split_state)
     if step == 2 { check(signal.pressed, "splitter captures") }
     if step == 3 { check(signal.dragging && split.position == 120.0, "splitter converts display scale") }
-    if step == 4 { check(signal.released && split.position == 120.0, "splitter release preserves size") }
+    if step == 4 { check(signal.released && split.position == 130.0, "splitter consumes final release movement") }
     finish(split_state, &context)
   }
   split.position = -10.0

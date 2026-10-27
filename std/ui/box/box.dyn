@@ -437,6 +437,8 @@ pub fn signal(state: *State, box: *Box) Signal {
       result.pressed = true
     }
     if state.active == box.key {
+      result.drag_x = input.x - state.press_x
+      result.drag_y = input.y - state.press_y
       if released_now {
         result.released = true
         result.clicked = over
@@ -444,8 +446,6 @@ pub fn signal(state: *State, box: *Box) Signal {
       }
       else if input.down {
         result.dragging = true
-        result.drag_x = input.x - state.press_x
-        result.drag_y = input.y - state.press_y
       }
     }
   }
