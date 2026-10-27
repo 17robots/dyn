@@ -48,7 +48,7 @@ def run_in_pty(program):
 
 with tempfile.TemporaryDirectory(prefix='dyn-platform-parity-') as directory:
     work = Path(directory)
-    for name in ['dynlib', 'terminal', 'map', 'pool']:
+    for name in ['dynlib', 'terminal', 'map', 'pool', 'directory']:
         for target in TARGETS:
             # Linking libc for another Linux architecture needs its sysroot.
             if name == 'dynlib' and target == 'aarch64-linux':

@@ -1,0 +1,4 @@
+#target(kernel: linux, arch: riscv64)
+
+// O_DIRECTORY.
+const directory_flag: usize = 65536

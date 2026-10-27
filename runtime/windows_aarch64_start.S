@@ -252,6 +252,51 @@ dyn_time_zone_information:
     adrp x16, __imp_GetDynamicTimeZoneInformation
     ldr x16, [x16, :lo12:__imp_GetDynamicTimeZoneInformation]
     br x16
+.global dyn_fs_find_first
+dyn_fs_find_first:
+    adrp x16, __imp_FindFirstFileW
+    ldr x16, [x16, :lo12:__imp_FindFirstFileW]
+    br x16
+.global dyn_fs_find_next
+dyn_fs_find_next:
+    adrp x16, __imp_FindNextFileW
+    ldr x16, [x16, :lo12:__imp_FindNextFileW]
+    br x16
+.global dyn_fs_find_close
+dyn_fs_find_close:
+    adrp x16, __imp_FindClose
+    ldr x16, [x16, :lo12:__imp_FindClose]
+    br x16
+.global dyn_fs_make_directory
+dyn_fs_make_directory:
+    adrp x16, __imp_CreateDirectoryW
+    ldr x16, [x16, :lo12:__imp_CreateDirectoryW]
+    br x16
+.global dyn_fs_delete
+dyn_fs_delete:
+    adrp x16, __imp_DeleteFileW
+    ldr x16, [x16, :lo12:__imp_DeleteFileW]
+    br x16
+.global dyn_fs_remove_directory
+dyn_fs_remove_directory:
+    adrp x16, __imp_RemoveDirectoryW
+    ldr x16, [x16, :lo12:__imp_RemoveDirectoryW]
+    br x16
+.global dyn_fs_move
+dyn_fs_move:
+    adrp x16, __imp_MoveFileExW
+    ldr x16, [x16, :lo12:__imp_MoveFileExW]
+    br x16
+.global dyn_fs_attributes
+dyn_fs_attributes:
+    adrp x16, __imp_GetFileAttributesExW
+    ldr x16, [x16, :lo12:__imp_GetFileAttributesExW]
+    br x16
+.global dyn_fs_information
+dyn_fs_information:
+    adrp x16, __imp_GetFileInformationByHandle
+    ldr x16, [x16, :lo12:__imp_GetFileInformationByHandle]
+    br x16
 .global dyn_win_load_library
 dyn_win_load_library:
     adrp x16, __imp_LoadLibraryA
@@ -657,6 +702,15 @@ kernel_lookup:
     thunk CloseHandle
     thunk WaitForSingleObject
     thunk SwitchToThread
+    thunk CreateDirectoryW
+    thunk DeleteFileW
+    thunk RemoveDirectoryW
+    thunk MoveFileExW
+    thunk GetFileAttributesExW
+    thunk GetFileInformationByHandle
+    thunk FindFirstFileW
+    thunk FindNextFileW
+    thunk FindClose
     thunk GetDynamicTimeZoneInformation
     thunk SetConsoleCtrlHandler
     thunk CreateEventW
@@ -748,6 +802,15 @@ iat ExitProcess
 iat CloseHandle
 iat WaitForSingleObject
 iat SwitchToThread
+iat CreateDirectoryW
+iat DeleteFileW
+iat RemoveDirectoryW
+iat MoveFileExW
+iat GetFileAttributesExW
+iat GetFileInformationByHandle
+iat FindFirstFileW
+iat FindNextFileW
+iat FindClose
 iat GetDynamicTimeZoneInformation
 iat SetConsoleCtrlHandler
 iat CreateEventW
@@ -840,6 +903,15 @@ hint ExitProcess
 hint CloseHandle
 hint WaitForSingleObject
 hint SwitchToThread
+hint CreateDirectoryW
+hint DeleteFileW
+hint RemoveDirectoryW
+hint MoveFileExW
+hint GetFileAttributesExW
+hint GetFileInformationByHandle
+hint FindFirstFileW
+hint FindNextFileW
+hint FindClose
 hint GetDynamicTimeZoneInformation
 hint SetConsoleCtrlHandler
 hint CreateEventW

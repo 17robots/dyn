@@ -173,6 +173,15 @@ import_jump dyn_sync_single, WakeByAddressSingle
 import_jump dyn_sync_all, WakeByAddressAll
 import_jump dyn_sync_error, GetLastError
 import_jump dyn_win_yield, SwitchToThread
+import_jump dyn_fs_make_directory, CreateDirectoryW
+import_jump dyn_fs_delete, DeleteFileW
+import_jump dyn_fs_remove_directory, RemoveDirectoryW
+import_jump dyn_fs_move, MoveFileExW
+import_jump dyn_fs_attributes, GetFileAttributesExW
+import_jump dyn_fs_information, GetFileInformationByHandle
+import_jump dyn_fs_find_first, FindFirstFileW
+import_jump dyn_fs_find_next, FindNextFileW
+import_jump dyn_fs_find_close, FindClose
 import_jump dyn_time_zone_information, GetDynamicTimeZoneInformation
 import_jump dyn_signal_console_handler, SetConsoleCtrlHandler
 import_jump dyn_signal_create_event, CreateEventW
@@ -307,6 +316,15 @@ kernel_lookup:
     thunk CloseHandle
     thunk WaitForSingleObject
     thunk SwitchToThread
+    thunk CreateDirectoryW
+    thunk DeleteFileW
+    thunk RemoveDirectoryW
+    thunk MoveFileExW
+    thunk GetFileAttributesExW
+    thunk GetFileInformationByHandle
+    thunk FindFirstFileW
+    thunk FindNextFileW
+    thunk FindClose
     thunk GetDynamicTimeZoneInformation
     thunk SetConsoleCtrlHandler
     thunk CreateEventW
@@ -398,6 +416,15 @@ iat ExitProcess
 iat CloseHandle
 iat WaitForSingleObject
 iat SwitchToThread
+iat CreateDirectoryW
+iat DeleteFileW
+iat RemoveDirectoryW
+iat MoveFileExW
+iat GetFileAttributesExW
+iat GetFileInformationByHandle
+iat FindFirstFileW
+iat FindNextFileW
+iat FindClose
 iat GetDynamicTimeZoneInformation
 iat SetConsoleCtrlHandler
 iat CreateEventW
@@ -490,6 +517,15 @@ hint ExitProcess
 hint CloseHandle
 hint WaitForSingleObject
 hint SwitchToThread
+hint CreateDirectoryW
+hint DeleteFileW
+hint RemoveDirectoryW
+hint MoveFileExW
+hint GetFileAttributesExW
+hint GetFileInformationByHandle
+hint FindFirstFileW
+hint FindNextFileW
+hint FindClose
 hint GetDynamicTimeZoneInformation
 hint SetConsoleCtrlHandler
 hint CreateEventW
