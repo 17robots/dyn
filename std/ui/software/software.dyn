@@ -1,6 +1,7 @@
 use "std/ui" ui
 use "std/errors" errors
 use "std/unicode/utf8" utf8
+use "std/math" math
 
 // Straight-alpha RGBA bytes. stride includes row padding, in bytes; pixels
 // contains height full strides. The surface and its bytes remain caller-owned.
@@ -67,6 +68,32 @@ fn rectangle(surface: *Surface, bounds: ui.Rect, tint: ui.Color) {
   for y in 0..bounds.height {
     for x in 0..bounds.width {
       blend(surface, bounds.x + x, bounds.y + y, tint, 255)
+    }
+  }
+}
+
+// Coverage of a rounded rectangle at a pixel center, from its signed distance.
+// GPU renderers evaluate the same expression.
+pub fn rounded_coverage(shape: ui.Rect, radius: i32, x, y: i32) u8 {
+  half_x := #cast(f32, shape.width) / 2.0
+  half_y := #cast(f32, shape.height) / 2.0
+  r := #cast(f32, radius)
+  qx := math.abs(#cast(f32, x) + 0.5 - #cast(f32, shape.x) - half_x) - (half_x - r)
+  qy := math.abs(#cast(f32, y) + 0.5 - #cast(f32, shape.y) - half_y) - (half_y - r)
+  outside_x := math.max(qx, 0.0)
+  outside_y := math.max(qy, 0.0)
+  distance := math.sqrt(outside_x * outside_x + outside_y * outside_y) + math.min(math.max(qx, qy), 0.0) - r
+  coverage := math.clamp(0.5 - distance, 0.0, 1.0)
+  return #cast(u8, coverage * 255.0 + 0.5)
+}
+
+fn rounded(surface: *Surface, clip: ui.Rect, shape: ui.Rect, radius: i32, tint: ui.Color) {
+  for y in 0..clip.height {
+    for x in 0..clip.width {
+      coverage := rounded_coverage(shape, radius, clip.x + x, clip.y + y)
+      if coverage != 0 {
+        blend(surface, clip.x + x, clip.y + y, tint, coverage)
+      }
     }
   }
 }
@@ -171,7 +198,12 @@ pub fn render(surface: *Surface, commands: *const ui.Command, font: Font) Result
     clip := ui.intersect(viewport, ui.intersect(command.clip, command.bounds))
     if clip.width > 0 && clip.height > 0 {
       if command.kind == ui.Kind.Rectangle {
-        rectangle(surface, clip, command.color)
+        if command.radius > 0 {
+          rounded(surface, clip, command.bounds, command.radius, command.color)
+        }
+        else {
+          rectangle(surface, clip, command.color)
+        }
       }
       else if command.kind == ui.Kind.Glyph {
         drawn := draw_glyph(surface, clip, command.color, font, command.codepoint, #cast(i64, command.glyph_x), #cast(i64, command.glyph_y))

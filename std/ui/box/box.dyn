@@ -63,6 +63,8 @@ pub struct Box {
   foreground: ui.Color,
   hot_color: ui.Color,
   active_color: ui.Color,
+  // Corner radius in pixels for the background.
+  radius: i32,
   // Floating boxes take this position relative to the parent's content.
   floating: [2]f32,
   // Tree links, rebuilt every frame.
@@ -277,6 +279,7 @@ pub fn build_key(state: *State, flags: u32, value: u64, text: []const u8) *Box {
   box.foreground = ui.Color{ r: 235, g: 239, b: 244, a: 255 }
   box.hot_color = ui.Color{ r: 64, g: 76, b: 92, a: 255 }
   box.active_color = ui.Color{ r: 38, g: 105, b: 165, a: 255 }
+  box.radius = 0
   box.first = nil
   box.last = nil
   box.next = nil
@@ -673,9 +676,9 @@ fn draw(state: *State, context: *ui.Context, box: *const Box) {
     if box.flags & ActiveAnimation != 0 {
       tint = mix(tint, box.active_color, box.active_t)
     }
-    ui.rectangle(context, bounds, tint)
+    ui.rounded_rectangle(context, bounds, box.radius, tint)
   }
-  if box.flags & DrawBorder != 0 {
+  if box.flags & DrawBorder != 0 && box.radius == 0 {
     ui.rectangle(context, ui.Rect{ x: bounds.x, y: bounds.y, width: bounds.width, height: 1 }, box.border)
     ui.rectangle(context, ui.Rect{ x: bounds.x, y: bounds.y + bounds.height - 1, width: bounds.width, height: 1 }, box.border)
     ui.rectangle(context, ui.Rect{ x: bounds.x, y: bounds.y, width: 1, height: bounds.height }, box.border)

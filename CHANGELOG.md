@@ -14,6 +14,7 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- `ui.rounded_rectangle` and `Command.radius` draw antialiased rounded rectangles. `vendor/ui/opengl` adds a batched renderer: one signed-distance shader, a cached glyph atlas, and a draw call per clip.
 - `std/ui/box` adds a box-model UI after the RAD Debugger design: keyed boxes, semantic-size layout, previous-frame input, animation, text fields, scrolling and virtual lists.
 
 - `std/text/layout` adds NFC-aware Unicode line layout, Latin pair kerning, wrapping,

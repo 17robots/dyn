@@ -6,7 +6,8 @@ pub struct Rect { x: i32, y: i32, width: i32, height: i32 }
 pub enum Kind { None, Rectangle, Text, Glyph }
 // Command nodes and text belong to the frame arena. Read them after end and
 // before resetting that arena. Render in list order, applying each command's clip.
-pub struct Command { kind: Kind, bounds: Rect, clip: Rect, color: Color, text: []const u8, codepoint: u32, glyph_x: i64, glyph_y: i64, next: *Command }
+// radius rounds Rectangle corners, in pixels; renderers antialias the curve.
+pub struct Command { kind: Kind, bounds: Rect, clip: Rect, color: Color, text: []const u8, codepoint: u32, glyph_x: i64, glyph_y: i64, next: *Command, radius: i32 }
 pub nil_command: Command
 pub struct Input {
   x: i32, y: i32, down: bool,
@@ -169,11 +170,11 @@ pub fn pop_clip(context: *Context, previous: Rect) {
   frame(context)
   context.clip = intersect(context.viewport, previous)
 }
-fn emit(context: *Context, kind: Kind, bounds: Rect, tint: Color, text: []const u8) {
+fn emit(context: *Context, kind: Kind, bounds: Rect, tint: Color, text: []const u8) *Command {
   frame(context)
   visible := intersect(bounds, context.clip)
   if visible.width == 0 || visible.height == 0 || tint.a == 0 || (kind == Kind.Text && #len(text) == 0) {
-    return
+    return nil
   }
   command := mem.push(Command, context.arena)
   command.kind = kind
@@ -192,12 +193,33 @@ fn emit(context: *Context, kind: Kind, bounds: Rect, tint: Color, text: []const 
     context.last.next = command
   }
   context.last = command
+  return command
 }
 pub fn rectangle(context: *Context, bounds: Rect, tint: Color) {
-  emit(context, Kind.Rectangle, bounds, tint, "")
+  _ = emit(context, Kind.Rectangle, bounds, tint, "")
+}
+
+// A rectangle with corners rounded by radius pixels, clamped to half the
+// shorter side.
+pub fn rounded_rectangle(context: *Context, bounds: Rect, radius: i32, tint: Color) {
+  command := emit(context, Kind.Rectangle, bounds, tint, "")
+  if command != nil {
+    shortest := bounds.width
+    if bounds.height < shortest {
+      shortest = bounds.height
+    }
+    value := radius
+    if value > shortest / 2 {
+      value = shortest / 2
+    }
+    if value < 0 {
+      value = 0
+    }
+    command.radius = value
+  }
 }
 pub fn label(context: *Context, bounds: Rect, text: []const u8, tint: Color) {
-  emit(context, Kind.Text, bounds, tint, text)
+  _ = emit(context, Kind.Text, bounds, tint, text)
 }
 fn interact(context: *Context, id: u64, bounds: Rect, enabled: bool) Response {
   frame(context)
@@ -356,7 +378,7 @@ pub fn slider(context: *Context, id: u64, bounds: Rect, value: *i32, low, high: 
 // Bounds provide a text-region clip and may differ from the glyph's ink bounds.
 pub fn glyph(context: *Context, bounds: Rect, codepoint: u32, x, y: i64, tint: Color) {
   previous := context.last
-  emit(context, Kind.Glyph, bounds, tint, "")
+  _ = emit(context, Kind.Glyph, bounds, tint, "")
   if context.last != previous {
     context.last.codepoint = codepoint
     context.last.glyph_x = x

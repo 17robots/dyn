@@ -35,6 +35,7 @@ pub fn button(state: *State, label: []const u8) Signal {
   box := build(state, Clickable | DrawBackground | DrawBorder | DrawText | CenterText | HotAnimation | ActiveAnimation, label)
   box.width = text_size(10.0, 1.0)
   box.height = text_size(5.0, 1.0)
+  box.radius = 5
   return signal(state, box)
 }
 

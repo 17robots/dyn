@@ -1,0 +1,379 @@
+// Batched renderer: every rectangle and glyph goes into one vertex stream
+// drawn by a single shader, with a draw call only when the clip changes or the
+// stream fills. Rectangles are signed-distance shapes with rounded corners;
+// glyphs come from a cached atlas texture, uploaded once per code point.
+//
+// Storage: the CPU-side atlas index lives in the Batch value; the vertex
+// stream is caller storage passed to render_batch. One Batch per GL context.
+
+const atlas_size: i32 = 1024
+const index_size: usize = 4096
+const vertex_floats: usize = 14
+
+struct Entry { codepoint: u32, used: bool, x: i32, y: i32, width: i32, height: i32, x_offset: i32, y_offset: i32, advance: i32 }
+
+pub struct Batch {
+  api: gl.Api,
+  program: u32,
+  vao: u32,
+  buffer: u32,
+  atlas: u32,
+  viewport: i32,
+  sampler: i32,
+  entries: [index_size]Entry,
+  // Shelf packer state.
+  shelf_x: i32,
+  shelf_y: i32,
+  shelf_height: i32,
+  // Glyph uploads since open; a cache hit uploads nothing.
+  uploads: u64,
+  draw_calls: u64,
+}
+
+const batch_vertex: []const u8 = "#version 330 core\nlayout(location=0) in vec2 p; layout(location=1) in vec2 t; layout(location=2) in vec4 c;\nlayout(location=3) in vec4 shape; layout(location=4) in vec2 kind;\nuniform vec2 viewport;\nout vec2 uv; out vec4 tint; out vec2 position; out vec4 rect; out vec2 mode;\nvoid main(){uv=t;tint=c;position=p;rect=shape;mode=kind;\ngl_Position=vec4(p.x/viewport.x*2.-1.,1.-p.y/viewport.y*2.,0.,1.);}"
+
+// The rectangle branch matches software.rounded_coverage.
+const batch_fragment: []const u8 = "#version 330 core\nin vec2 uv; in vec4 tint; in vec2 position; in vec4 rect; in vec2 mode;\nuniform sampler2D image; out vec4 color;\nvoid main(){float a;\nif(mode.y>0.5){a=texture(image,uv).r;}\nelse{float r=mode.x;vec2 q=abs(position-rect.xy)-(rect.zw-vec2(r));\nfloat d=length(max(q,vec2(0.)))+min(max(q.x,q.y),0.)-r;a=clamp(.5-d,0.,1.);}\ncolor=vec4(tint.rgb,tint.a*a);}"
+
+pub fn open_batch(batch: *Batch, api: gl.Api) Result {
+  if batch.program != 0 {
+    return Result{ kind: errors.Kind.InvalidState }
+  }
+  if !healthy(&api) {
+    return Result{ kind: errors.Kind.System }
+  }
+  vertex := shader(&api, gl.VertexShader, batch_vertex)
+  fragment := shader(&api, gl.FragmentShader, batch_fragment)
+  if vertex == 0 || fragment == 0 {
+    if vertex != 0 {
+      api.delete_shader(vertex)
+    }
+    if fragment != 0 {
+      api.delete_shader(fragment)
+    }
+    return Result{ kind: errors.Kind.System }
+  }
+  batch.api = api
+  batch.program = api.create_program()
+  api.attach_shader(batch.program, vertex)
+  api.attach_shader(batch.program, fragment)
+  api.link_program(batch.program)
+  api.delete_shader(vertex)
+  api.delete_shader(fragment)
+  valid: i32 = 0
+  api.get_program_iv(batch.program, gl.LinkStatus, &valid)
+  if valid == 0 {
+    close_batch(batch)
+    return Result{ kind: errors.Kind.System }
+  }
+  viewport_name := "viewport\x00"
+  batch.viewport = api.get_uniform_location(batch.program, &viewport_name[0])
+  sampler_name := "image\x00"
+  batch.sampler = api.get_uniform_location(batch.program, &sampler_name[0])
+  api.gen_vertex_arrays(1, &batch.vao)
+  api.gen_buffers(1, &batch.buffer)
+  api.gen_textures(1, &batch.atlas)
+  api.bind_vertex_array(batch.vao)
+  api.bind_buffer(gl.ArrayBuffer, batch.buffer)
+  stride := #cast(i32, vertex_floats * 4)
+  sizes: [5]i32 = [2, 2, 4, 4, 2]
+  offset: usize = 0
+  for i in 0..5 {
+    api.enable_vertex_attribute(#cast(u32, i))
+    api.vertex_attribute(#cast(u32, i), sizes[i], gl.Float, 0, stride, #cast(rawptr, offset))
+    offset += #cast(usize, sizes[i]) * 4
+  }
+  api.bind_texture(gl.Texture2d, batch.atlas)
+  api.pixel_store_i(gl.UnpackAlignment, 1)
+  api.tex_image_2d(gl.Texture2d, 0, #cast(i32, gl.R8), atlas_size, atlas_size, 0, gl.Red, gl.UnsignedByte, nil)
+  if batch.vao == 0 || batch.buffer == 0 || batch.atlas == 0 || !healthy(&api) {
+    close_batch(batch)
+    return Result{ kind: errors.Kind.System }
+  }
+  reset_atlas(batch)
+  return Result{ ok: true }
+}
+
+pub fn close_batch(batch: *Batch) {
+  if batch.program == 0 {
+    return
+  }
+  batch.api.delete_program(batch.program)
+  batch.api.delete_vertex_arrays(1, &batch.vao)
+  batch.api.delete_buffers(1, &batch.buffer)
+  batch.api.delete_textures(1, &batch.atlas)
+  batch.* = Batch{}
+}
+
+fn reset_atlas(batch: *Batch) {
+  for i in 0..index_size {
+    batch.entries[i].used = false
+  }
+  // Pixel (0, 0) stays empty so cleared regions never sample stale coverage.
+  batch.shelf_x = 1
+  batch.shelf_y = 0
+  batch.shelf_height = 1
+}
+
+struct Stream { data: []f32, count: usize }
+
+fn push_vertex(stream: *Stream, x, y, u, v: f32, tint: ui.Color, shape: [4]f32, radius: f32, glyph: f32) {
+  at := stream.count * vertex_floats
+  values: [14]f32 = [x, y, u, v,
+    #cast(f32, tint.r) / 255.0, #cast(f32, tint.g) / 255.0, #cast(f32, tint.b) / 255.0, #cast(f32, tint.a) / 255.0,
+    shape[0], shape[1], shape[2], shape[3], radius, glyph]
+  for i in 0..vertex_floats {
+    stream.data[at + i] = values[i]
+  }
+  stream.count += 1
+}
+
+fn push_quad(stream: *Stream, x0, y0, x1, y1, u0, v0, u1, v1: f32, tint: ui.Color, shape: [4]f32, radius: f32, glyph: f32) {
+  push_vertex(stream, x0, y0, u0, v0, tint, shape, radius, glyph)
+  push_vertex(stream, x1, y0, u1, v0, tint, shape, radius, glyph)
+  push_vertex(stream, x1, y1, u1, v1, tint, shape, radius, glyph)
+  push_vertex(stream, x0, y0, u0, v0, tint, shape, radius, glyph)
+  push_vertex(stream, x1, y1, u1, v1, tint, shape, radius, glyph)
+  push_vertex(stream, x0, y1, u0, v1, tint, shape, radius, glyph)
+}
+
+fn flush(batch: *Batch, stream: *Stream) {
+  if stream.count == 0 {
+    return
+  }
+  batch.api.buffer_data(gl.ArrayBuffer, #cast(isize, stream.count * vertex_floats * 4), &stream.data[0], gl.DynamicDraw)
+  batch.api.draw_arrays(gl.Triangles, 0, #cast(i32, stream.count))
+  batch.draw_calls += 1
+  stream.count = 0
+}
+
+struct Cached { entry: *Entry, ok: bool, full: bool }
+
+// The atlas entry for codepoint, rasterizing and uploading it on a miss.
+fn cached(batch: *Batch, font: software.Font, codepoint: u32) Cached {
+  slot := #cast(usize, #wrap(codepoint * 2654435761) % #cast(u32, index_size))
+  for probe in 0..index_size {
+    entry := &batch.entries[(slot + probe) % index_size]
+    if !entry.used {
+      bitmap := font.glyph(font.data, codepoint)
+      if bitmap.width < 0 || bitmap.height < 0 || bitmap.advance < 0 {
+        return Cached{}
+      }
+      if bitmap.width > 0 && (bitmap.stride < #cast(usize, bitmap.width) || #cast(usize, bitmap.width) > #len(bitmap.pixels) ||
+          bitmap.height > 0 && #cast(usize, bitmap.height - 1) > (#len(bitmap.pixels) - #cast(usize, bitmap.width)) / bitmap.stride) {
+        return Cached{}
+      }
+      if bitmap.width >= atlas_size || bitmap.height >= atlas_size {
+        return Cached{}
+      }
+      if batch.shelf_x + bitmap.width + 1 > atlas_size {
+        batch.shelf_x = 1
+        batch.shelf_y += batch.shelf_height + 1
+        batch.shelf_height = 1
+      }
+      if batch.shelf_y + bitmap.height + 1 > atlas_size {
+        return Cached{ full: true }
+      }
+      entry.* = Entry{ codepoint: codepoint, used: true, x: batch.shelf_x, y: batch.shelf_y, width: bitmap.width, height: bitmap.height,
+        x_offset: bitmap.x_offset, y_offset: bitmap.y_offset, advance: bitmap.advance }
+      for row in 0..bitmap.height {
+        batch.api.tex_sub_image_2d(gl.Texture2d, 0, entry.x, entry.y + row, bitmap.width, 1, gl.Red, gl.UnsignedByte,
+          #cast(rawptr, &bitmap.pixels[#cast(usize, row) * bitmap.stride]))
+      }
+      batch.uploads += 1
+      batch.shelf_x += bitmap.width + 1
+      if bitmap.height > batch.shelf_height {
+        batch.shelf_height = bitmap.height
+      }
+      return Cached{ entry: entry, ok: true }
+    }
+    if entry.codepoint == codepoint {
+      return Cached{ entry: entry, ok: true }
+    }
+  }
+  return Cached{ full: true }
+}
+
+fn glyph_quad(batch: *Batch, stream: *Stream, entry: *const Entry, x, y: i64, tint: ui.Color, clip: ui.Rect) {
+  if entry.width == 0 || entry.height == 0 {
+    return
+  }
+  // Crop the glyph to clip in whole pixels, shifting texture coordinates.
+  left := x + #cast(i64, entry.x_offset)
+  top := y + #cast(i64, entry.y_offset)
+  right := left + #cast(i64, entry.width)
+  bottom := top + #cast(i64, entry.height)
+  x0 := left
+  y0 := top
+  x1 := right
+  y1 := bottom
+  if x0 < #cast(i64, clip.x) {
+    x0 = #cast(i64, clip.x)
+  }
+  if y0 < #cast(i64, clip.y) {
+    y0 = #cast(i64, clip.y)
+  }
+  if x1 > #cast(i64, clip.x) + #cast(i64, clip.width) {
+    x1 = #cast(i64, clip.x) + #cast(i64, clip.width)
+  }
+  if y1 > #cast(i64, clip.y) + #cast(i64, clip.height) {
+    y1 = #cast(i64, clip.y) + #cast(i64, clip.height)
+  }
+  if x1 <= x0 || y1 <= y0 {
+    return
+  }
+  scale := 1.0 / #cast(f32, atlas_size)
+  u0 := #cast(f32, #cast(i64, entry.x) + x0 - left) * scale
+  v0 := #cast(f32, #cast(i64, entry.y) + y0 - top) * scale
+  u1 := #cast(f32, #cast(i64, entry.x) + x1 - left) * scale
+  v1 := #cast(f32, #cast(i64, entry.y) + y1 - top) * scale
+  none: [4]f32 = [0.0, 0.0, 0.0, 0.0]
+  push_quad(stream, #cast(f32, x0), #cast(f32, y0), #cast(f32, x1), #cast(f32, y1), u0, v0, u1, v1, tint, none, 0.0, 1.0)
+  _ = batch
+}
+
+struct Drawn { advance: i64, ok: bool, full: bool }
+
+fn batch_glyph(batch: *Batch, stream: *Stream, font: software.Font, codepoint: u32, x, y: i64, tint: ui.Color, clip: ui.Rect) Drawn {
+  found := cached(batch, font, codepoint)
+  if found.full {
+    return Drawn{ full: true }
+  }
+  if !found.ok {
+    return Drawn{}
+  }
+  if stream.count + 6 > #len(stream.data) / vertex_floats {
+    flush(batch, stream)
+  }
+  glyph_quad(batch, stream, found.entry, x, y, tint, clip)
+  return Drawn{ advance: #cast(i64, found.entry.advance), ok: true }
+}
+
+// Draws commands in order with their clips. vertices holds the stream between
+// draw calls and must fit at least six vertices (84 floats); larger storage
+// means fewer draw calls. A full atlas is cleared between draw calls, so a
+// frame with more distinct glyphs than fit returns Capacity.
+pub fn render_batch(batch: *Batch, commands: *const ui.Command, width, height: i32, font: software.Font, vertices: []f32) Result {
+  if batch.program == 0 {
+    return Result{ kind: errors.Kind.InvalidState }
+  }
+  if width < 0 || height < 0 || #len(vertices) < 6 * vertex_floats || font.glyph == nil || font.line_height <= 0 {
+    return Result{ kind: errors.Kind.InvalidInput }
+  }
+  if width == 0 || height == 0 {
+    return Result{ ok: true }
+  }
+  api := &batch.api
+  if !healthy(api) {
+    return Result{ kind: errors.Kind.System }
+  }
+  api.viewport(0, 0, width, height)
+  api.use_program(batch.program)
+  api.bind_vertex_array(batch.vao)
+  api.bind_buffer(gl.ArrayBuffer, batch.buffer)
+  api.active_texture(gl.Texture0)
+  api.bind_sampler(0, 0)
+  api.bind_texture(gl.Texture2d, batch.atlas)
+  api.bind_buffer(gl.PixelUnpackBuffer, 0)
+  api.pixel_store_i(gl.UnpackAlignment, 1)
+  api.pixel_store_i(gl.UnpackRowLength, 0)
+  api.pixel_store_i(gl.UnpackSkipRows, 0)
+  api.pixel_store_i(gl.UnpackSkipPixels, 0)
+  api.tex_parameter_i(gl.Texture2d, gl.TextureMinFilter, #cast(i32, gl.Nearest))
+  api.tex_parameter_i(gl.Texture2d, gl.TextureMagFilter, #cast(i32, gl.Nearest))
+  api.tex_parameter_i(gl.Texture2d, gl.TextureWrapS, #cast(i32, gl.ClampToEdge))
+  api.tex_parameter_i(gl.Texture2d, gl.TextureWrapT, #cast(i32, gl.ClampToEdge))
+  api.disable(gl.DepthTest)
+  api.disable(gl.CullFace)
+  api.disable(gl.StencilTest)
+  api.disable(gl.FramebufferSrgb)
+  api.enable(gl.Blend)
+  api.enable(gl.ScissorTest)
+  api.blend_equation_separate(gl.FuncAdd, gl.FuncAdd)
+  api.blend_func_separate(gl.SrcAlpha, gl.OneMinusSrcAlpha, gl.One, gl.OneMinusSrcAlpha)
+  api.uniform_2f(batch.viewport, #cast(f32, width), #cast(f32, height))
+  api.uniform_1i(batch.sampler, 0)
+  stream := Stream{ data: vertices }
+  current := ui.Rect{ width: -1 }
+  command := commands
+  for command != nil && command.kind != ui.Kind.None {
+    // The scissor is the command's clip; the bounds limit each quad on the
+    // CPU, so commands under one clip share a draw call.
+    scissor := ui.intersect(command.clip, ui.Rect{ width: width, height: height })
+    clip := ui.intersect(scissor, command.bounds)
+    if clip.width > 0 && clip.height > 0 && command.color.a != 0 {
+      if scissor.x != current.x || scissor.y != current.y || scissor.width != current.width || scissor.height != current.height {
+        flush(batch, &stream)
+        api.scissor(scissor.x, height - scissor.y - scissor.height, scissor.width, scissor.height)
+        current = scissor
+      }
+      if command.kind == ui.Kind.Rectangle {
+        if stream.count + 6 > #len(stream.data) / vertex_floats {
+          flush(batch, &stream)
+        }
+        b := command.bounds
+        x0 := #cast(f32, b.x)
+        y0 := #cast(f32, b.y)
+        x1 := #cast(f32, #cast(i64, b.x) + #cast(i64, b.width))
+        y1 := #cast(f32, #cast(i64, b.y) + #cast(i64, b.height))
+        shape: [4]f32 = [(x0 + x1) / 2.0, (y0 + y1) / 2.0, (x1 - x0) / 2.0, (y1 - y0) / 2.0]
+        push_quad(&stream, x0, y0, x1, y1, 0.0, 0.0, 0.0, 0.0, command.color, shape, #cast(f32, command.radius), 0.0)
+      }
+      else if command.kind == ui.Kind.Glyph {
+        drawn := batch_glyph(batch, &stream, font, command.codepoint, command.glyph_x, command.glyph_y, command.color, clip)
+        if drawn.full {
+          flush(batch, &stream)
+          reset_atlas(batch)
+          drawn = batch_glyph(batch, &stream, font, command.codepoint, command.glyph_x, command.glyph_y, command.color, clip)
+        }
+        if drawn.full {
+          return Result{ kind: errors.Kind.Capacity }
+        }
+        if !drawn.ok {
+          return Result{ kind: errors.Kind.InvalidInput }
+        }
+      }
+      else if command.kind == ui.Kind.Text {
+        x := #cast(i64, command.bounds.x)
+        y := #cast(i64, command.bounds.y)
+        offset: usize = 0
+        for offset < #len(command.text) {
+          decoded := utf8.decode(command.text, offset)
+          offset += decoded.width
+          codepoint := decoded.codepoint
+          if !decoded.ok {
+            codepoint = 65533
+          }
+          if codepoint == 10 {
+            x = #cast(i64, command.bounds.x)
+            y += #cast(i64, font.line_height)
+          }
+          else if codepoint != 13 {
+            drawn := batch_glyph(batch, &stream, font, codepoint, x, y, command.color, clip)
+            if drawn.full {
+              flush(batch, &stream)
+              reset_atlas(batch)
+              drawn = batch_glyph(batch, &stream, font, codepoint, x, y, command.color, clip)
+            }
+            if drawn.full {
+              return Result{ kind: errors.Kind.Capacity }
+            }
+            if !drawn.ok {
+              return Result{ kind: errors.Kind.InvalidInput }
+            }
+            x += drawn.advance
+          }
+        }
+      }
+      else {
+        return Result{ kind: errors.Kind.InvalidInput }
+      }
+    }
+    command = command.next
+  }
+  flush(batch, &stream)
+  if !healthy(api) {
+    return Result{ kind: errors.Kind.System }
+  }
+  return Result{ ok: true }
+}
