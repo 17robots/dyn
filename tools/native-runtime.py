@@ -521,7 +521,19 @@ class Assembler:
         op,*tail=line.split(None,1)
         a=self.operands(tail[0]) if tail else []
         r=self.rr
-        def i(rd,rs,n,f3=0,opcode=0x13): self.word(opcode|rd<<7|f3<<12|rs<<15|(n&4095)<<20)
+        def signed12(n):
+            if -2048 <= n <= 2047:
+                return n
+            # Assemblers accept canonical unsigned spellings of negative
+            # immediates, not arbitrary low-12-bit truncation. RV32 accepts
+            # both 32-bit and 64-bit sign-extended input spellings.
+            for bits in ((32, 64) if self.rv32 else (64,)):
+                if (1 << bits) - 2048 <= n < (1 << bits):
+                    return n - (1 << bits)
+            raise ValueError(f'RISC-V signed 12-bit immediate out of range: {n}')
+        def i(rd,rs,n,f3=0,opcode=0x13):
+            n = signed12(n)
+            self.word(opcode|rd<<7|f3<<12|rs<<15|(n&4095)<<20)
         def rr(rd,rs,rt,f3=0,f7=0,opcode=0x33): self.word(opcode|rd<<7|f3<<12|rs<<15|rt<<20|f7<<25)
         def li(rd,n):
             if self.rv32:
@@ -555,13 +567,19 @@ class Assembler:
             self.branch(a[2],'rvb');self.word(0x63|f3<<12|r(a[0])<<15|r(a[1])<<20);return
         if op in ('addi','andi','xori','slli','srli','srai'):
             n=int(a[2],0);f3={'addi':0,'andi':7,'xori':4,'slli':1,'srli':5,'srai':5}[op]
+            if op in ('slli','srli','srai') and not 0 <= n < (32 if self.rv32 else 64):
+                raise ValueError(f'RISC-V shift amount out of range: {n}')
             i(r(a[0]),r(a[1]),n+(0x400 if op=='srai' else 0),f3);return
         if op in ('add','sub','xor','or','and','sltu','slt','sll','srl','sra'):
             rr(r(a[0]),r(a[1]),r(a[2]),{'add':0,'sub':0,'xor':4,'or':6,'and':7,'sltu':3,'slt':2,'sll':1,'srl':5,'sra':5}[op],32 if op in ('sub','sra') else 0);return
         if op in ('mul','mulhu','mulh','divu','remu'):
             rr(r(a[0]),r(a[1]),r(a[2]),{'mul':0,'mulh':1,'mulhu':3,'divu':5,'remu':7}[op],1);return
         if op=='sltiu':i(r(a[0]),r(a[1]),int(a[2],0),3);return
-        if op=='lui':self.word(0x37|r(a[0])<<7|(int(a[1],0)&0xfffff)<<12);return
+        if op=='lui':
+            n=int(a[1],0)
+            if not 0 <= n <= 0xfffff:
+                raise ValueError(f'RISC-V unsigned 20-bit immediate out of range: {n}')
+            self.word(0x37|r(a[0])<<7|n<<12);return
         # RV32D/F subset used by the start runtime's conversion helpers.
         rounding={'rne':0,'rtz':1,'rdn':2,'rup':3,'rmm':4,'dyn':7}
         fp3={'fadd.d':(0x01,None),'fsub.d':(0x05,None),'fmul.d':(0x09,None),'fdiv.d':(0x0d,None),
@@ -579,7 +597,9 @@ class Assembler:
         if op in ('ld','lw','lwu','lbu','sd','sw','sb','fld','fsd','flw','fsw'):
             m=re.fullmatch(r'(-?\d+)\((\w+)\)',a[1]);n=int(m[1]);base=r(m[2]);reg=r(a[0]);store=op in ('sd','sw','sb','fsd','fsw')
             f3={'ld':3,'lw':2,'lwu':6,'lbu':4,'sd':3,'sw':2,'sb':0,'fld':3,'fsd':3,'flw':2,'fsw':2}[op]
-            if store:self.word((0x27 if op in ('fsd','fsw') else 0x23)|(n&31)<<7|f3<<12|base<<15|reg<<20|((n&4095)>>5)<<25)
+            if store:
+                n = signed12(n)
+                self.word((0x27 if op in ('fsd','fsw') else 0x23)|(n&31)<<7|f3<<12|base<<15|reg<<20|((n&4095)>>5)<<25)
             else:i(reg,base,n,f3,7 if op in ('fld','flw') else 3)
             return
         if op=='ecall':self.word(0x73);return
