@@ -348,6 +348,20 @@ pub fn text_field(state: *State, label: []const u8, storage: []u8, edit: *Edit) 
   result.focused = focused
   if focused {
     input := state.input
+    if input.composition_handled || #len(input.composition) != 0 {
+      input.home = false
+      input.end = false
+      input.left = false
+      input.right = false
+      input.backspace = false
+      input.delete = false
+      input.select_all = false
+      input.copy = false
+      input.cut = false
+      input.paste = false
+      input.enter = false
+      input.escape = false
+    }
     text := storage[..edit.length]
     if input.select_all {
       edit.anchor = 0
@@ -463,14 +477,40 @@ pub fn text_field(state: *State, label: []const u8, storage: []u8, edit: *Edit) 
   shown := mem.push_bytes_uninit(state.frame, edit.length)
   _ = mem.copy(shown, storage[..edit.length])
   box.text = shown
+  composing := state.input.composition
+  if !focused || !utf8.valid(composing) {
+    composing = ""
+  }
   caret_x := state.measure(state.measure_data, storage[..edit.cursor])
+  caret_offset: f32 = 0.0
+  if #len(composing) != 0 {
+    low := selection_low(edit)
+    high := selection_high(edit)
+    // Preview the replacement as one text run. Overlaying a second label
+    // would draw preedit on top of the unchanged suffix beneath it.
+    preview := mem.push_bytes_uninit(state.frame, edit.length - (high - low) + #len(composing))
+    _ = mem.copy(preview[..low], storage[..low])
+    _ = mem.copy(preview[low..low + #len(composing)], composing)
+    _ = mem.copy(preview[low + #len(composing)..], storage[high..edit.length])
+    box.text = preview
+    caret_x = state.measure(state.measure_data, storage[..low])
+    cursor := #len(composing)
+    if state.input.composition_cursor >= 0 && #cast(usize, state.input.composition_cursor) <= #len(composing) {
+      cursor = #cast(usize, state.input.composition_cursor)
+    }
+    for cursor > 0 && cursor < #len(composing) && composing[cursor] & 0xc0 == 0x80 {
+      cursor -= 1
+    }
+    caret_offset = state.measure(state.measure_data, composing[..cursor])
+  }
+  visual_caret := caret_x + caret_offset
   available := box.size[0] - 8.0
   if available > 0.0 {
-    if caret_x < edit.scroll_x {
-      edit.scroll_x = caret_x
+    if visual_caret < edit.scroll_x {
+      edit.scroll_x = visual_caret
     }
-    if caret_x > edit.scroll_x + available {
-      edit.scroll_x = caret_x - available
+    if visual_caret > edit.scroll_x + available {
+      edit.scroll_x = visual_caret - available
     }
   }
   if edit.scroll_x < 0.0 {
@@ -478,42 +518,24 @@ pub fn text_field(state: *State, label: []const u8, storage: []u8, edit: *Edit) 
   }
   box.text_offset = edit.scroll_x
   if focused {
-    if edit.selecting {
+    if edit.selecting && #len(composing) == 0 {
       box.selection[0] = state.measure(state.measure_data, storage[..selection_low(edit)])
       box.selection[1] = state.measure(state.measure_data, storage[..selection_high(edit)])
     }
     push_parent(state, box)
     box.axis = 0
-    // An input method composition shows underlined at the caret; the caret
-    // moves to the composition cursor. Nothing is inserted until commit.
-    composing := state.input.composition
-    caret_offset: f32 = 0.0
     if #len(composing) != 0 {
-      shown_composition := mem.push_bytes_uninit(state.frame, #len(composing))
-      _ = mem.copy(shown_composition, composing)
-      width := state.measure(state.measure_data, composing)
-      preedit := build(state, DrawText | FloatingX | FloatingY, "##composition")
-      preedit.text = shown_composition
-      preedit.floating[0] = caret_x - edit.scroll_x
-      preedit.floating[1] = 0.0
-      preedit.width = pixels((width + 8.0) / state.scale, 1.0)
-      preedit.height = pixels(box.size[1] / state.scale, 1.0)
-      preedit.foreground = box.foreground
       line := build(state, DrawBackground | FloatingX | FloatingY, "##composition-line")
       line.floating[0] = 4.0 + caret_x - edit.scroll_x
       line.floating[1] = (box.size[1] + state.line_height) / 2.0
-      line.width = pixels(width / state.scale, 1.0)
+      line.width = pixels(state.measure(state.measure_data, composing) / state.scale, 1.0)
       line.height = pixels(1.0 / state.scale, 1.0)
       line.background = box.foreground
-      cursor := #len(composing)
-      if state.input.composition_cursor >= 0 && #cast(usize, state.input.composition_cursor) <= #len(composing) {
-        cursor = #cast(usize, state.input.composition_cursor)
-      }
-      caret_offset = state.measure(state.measure_data, composing[..cursor])
     }
     caret := build(state, DrawBackground | FloatingX | FloatingY, "##caret")
-    caret.floating[0] = 4.0 + caret_x - edit.scroll_x + caret_offset
+    caret.floating[0] = 4.0 + visual_caret - edit.scroll_x
     state.text_input = true
+    state.text_input_anchor = caret
     state.text_input_rect[0] = box.rect[0] + caret.floating[0]
     state.text_input_rect[1] = box.rect[1] + (box.size[1] - state.line_height) / 2.0
     state.text_input_rect[2] = 1.0
@@ -522,6 +544,9 @@ pub fn text_field(state: *State, label: []const u8, storage: []u8, edit: *Edit) 
     caret.width = pixels(1.0 / state.scale, 1.0)
     caret.height = pixels(state.line_height / state.scale, 1.0)
     caret.background = box.foreground
+    if #len(composing) != 0 && state.input.composition_cursor < 0 {
+      caret.flags = 0
+    }
     pop_parent(state)
   }
   return result

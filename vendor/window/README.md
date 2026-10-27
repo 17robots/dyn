@@ -67,29 +67,65 @@ Win32 expands native coalesced repeat counts while retaining bounded overflow
 accounting. Cocoa retains the native repeat indication; Wayland generates
 repeats using compositor-provided rate and delay. X11 uses detectable repeat
 when the server supports it; other servers may deliver release/press pairs.
-Input method composition: `set_text_input(&host, enabled, x, y, width, height)`
-turns text input on for a focused field and gives the caret rectangle in window
-pixels; `composition(&host)` (and `box_input`) report the in-progress preedit
-with a byte cursor. Committed text still arrives as ordinary text. Backends:
-X11 negotiates XIM preedit callbacks, then over-the-spot placement, after
-setting the user's locale and `XMODIFIERS`; Wayland uses `text-input-v3`;
-Win32 uses IMM composition and candidate windows; Cocoa implements
-`NSTextInputClient`. Local tests cover the API, snapshots and placement calls
-with no input method running; composing with a real IME (ibus, fcitx, the
-Windows and macOS IMEs) is not exercised by automated tests, and Cocoa is
-compiled only in macOS CI. Wayland does not report surrounding text, so
-`delete_surrounding_text` requests are ignored.
+## Input methods and ordered clipboard replies
+
+`set_text_input(&host, enabled, x, y, width, height)` enables a focused field and
+places its candidate rectangle in physical window pixels. Caret-only updates
+preserve composition. When focus changes between text widgets, disable the old
+field before enabling the new one, even if both fields accept text. Existing
+clients retain legacy text input until they configure it; explicit disable
+suppresses text commits while raw keys remain available.
+
+`composition(&host)` returns the latest polled preedit snapshot. The shared
+`Composition` ABI holds 256 UTF-8 bytes, a byte length, two byte cursor offsets
+and an active integer. A cursor offset of -1 hides it. Truncation preserves
+code point boundaries and clamps cursor offsets. In the ordered stream, each
+`Composition` event owns that exact snapshot. Decode it with
+`events.composition(&event)`; later updates cannot overwrite an earlier event.
+XIM callbacks are emitted in callback order, including a clear before commit.
+
+X11 negotiates XIM callbacks, then over-the-spot placement, using the configured
+locale and `XMODIFIERS`. Callback character counts, feedback-only changes and
+caret directions follow the [Xlib input-method contract](https://www.x.org/releases/X11R7.6/doc/libX11/specs/libX11/libX11.pdf).
+Locale multibyte strings are converted to Unicode before UTF-8 encoding. XIM
+preedit storage retains at most 128 code points; over-capacity edits report
+loss through the ordered overflow mechanism. Wayland uses text-input-v3 when
+available and xkb compose otherwise; Win32 uses IMM; Cocoa implements
+NSTextInputClient. Surrounding-text correction/replacement outside preedit is
+not modeled, and Wayland delete-surrounding requests are not applied. These
+limits must be addressed or retained deliberately during an editor migration.
+
+`box_input` supplies preedit plus `composition_handled`, including the poll that
+clears it. Text fields show a replacement preview without modifying caller
+storage, suppress IME-consumed editing/submission keys, and insert only committed
+text. Unchanged preedit stays idle; changed text or cursor schedules a frame.
+The finalized layout supplies the candidate rectangle. `examples/box-viewer`
+shows the focus/rectangle calls.
+
+`Clipboard` events own reply chunks. `x` is the byte offset, `width` the total
+reply length, and `button == 1` marks the final chunk, including an empty reply.
+Assemble a complete reply before applying it. Discard incomplete assembly on
+`Overflow`; the fixed queue cannot retain every large reply. `clipboard(&host)`
+is a compatibility view of the latest reply, borrowed until another paste
+request/reply or close. X11 and Wayland allow one outstanding remote transfer;
+an overlapping request reports overflow instead of corrupting its partial data.
+Snapshots/replies retain the existing 64 KiB clipboard bound. X11 incremental
+(INCR) clipboard transfers are not implemented.
+
+Production callback and protocol mocks exercise composition, caret placement,
+UTF-8 clipping and reply ordering. Real ibus/fcitx and native Windows/macOS IME
+sessions are not automated here; native Cocoa execution remains CI work.
 
 `wake(&host)` interrupts `wait`, whether ordered listening is enabled or not.
 When listening, subsequent polling produces a `Wake` event; multiple wakes may
 coalesce. It is the only supported cross-thread window operation. The owning
 window must outlive all wake callers: stop and join workers before `close`.
-Continue polling/draining on the GUI thread. Clipboard retrieval still uses the
-existing clipboard/`box_input` API, rather than an ordered clipboard event.
+Continue polling/draining on the GUI thread. Clipboard replies are available as owned ordered chunks and through the
+existing compatibility snapshot API.
 
 `tests/window-events.py` checks bounded queues, UTF-8 chunks, native C/Dyn ABI,
 production XIM/compose overflow paths, X11 ordered input, Win32 repeat counts and
 worker wake-ups on available hosts. `tests/window-desktop-results.py` also tests
-the Dyn-to-native wake/event round trip for its selected backend. Native Cocoa
+the Dyn-to-native wake/event and owned clipboard round trips for its selected backend. Native Cocoa
 and real Windows execution require their CI hosts; Wine and cross-builds are
 separate evidence.

@@ -31,6 +31,9 @@ pub struct Desktop {
   // Input method preedit, in code points, and its UTF-8 snapshot.
   style: usize,
   preedit: [preedit_limit]u32, preedit_count: usize, preedit_caret: i32,
+  owner: *Window,
+  preedit_visible: bool,
+  composition_handled: bool,
   composition: Composition,
   text_input: bool,
   spot_x: i32, spot_y: i32,
@@ -40,10 +43,13 @@ const preedit_limit: usize = 128
 
 // The in-progress input method text, drawn by the application at its caret.
 // Cursor offsets are bytes into text; -1 hides the cursor.
-pub struct Composition { text: [256]u8, text_length: usize, cursor_begin: i32, cursor_end: i32, active: bool }
+pub type Composition = ordered.Composition
 
 // XIMText and XIMPreeditDrawCallbackStruct.
 struct XimText { length: u16, feedback: rawptr, wide: i32, string: rawptr }
+struct PreeditCaret { position: i32, direction: i32, style: i32 }
+// Opaque mbstate_t on the supported Linux libc ABIs; checked against C.
+struct MbState { storage: [2]u32 }
 struct PreeditDraw { caret: i32, change_first: i32, change_length: i32, text: *XimText }
 struct XimCallback { data: rawptr, callback: rawptr }
 struct XimStyles { count: u16, styles: *usize }
@@ -60,6 +66,8 @@ extern fn set_values "XSetICValues"(context: rawptr, ...) rawptr
 extern fn get_method_values "XGetIMValues"(method: rawptr, ...) rawptr
 extern fn nested_list "XVaCreateNestedList"(unused: i32, ...) rawptr
 extern fn set_locale_modifiers "XSetLocaleModifiers"(modifiers: *const u8) *const u8
+extern fn decode_multibyte "mbrtowc"(output: *u32, text: *const u8, length: usize, state: *MbState) usize
+extern fn wide_space "iswspace"(codepoint: u32) i32
 extern fn set_locale "setlocale"(category: i32, locale: *const u8) *const u8
 extern fn unset_focus "XUnsetICFocus"(context: rawptr)
 extern fn destroy_input_context "XDestroyIC"(context: rawptr)
@@ -85,6 +93,9 @@ fn atom(display: rawptr, name: []const u8) usize {
 
 fn desktop_open(window: *Window) {
   desktop := &window.desktop
+  desktop.owner = window
+  desktop.text_input = true
+  desktop.preedit_visible = true
   display := window.display
   desktop.clipboard_atom = atom(display, "CLIPBOARD\x00")
   desktop.utf8_atom = atom(display, "UTF8_STRING\x00")
@@ -174,26 +185,56 @@ fn open_context(window: *Window) {
 }
 
 // Rebuilds the UTF-8 composition from the code point preedit.
+fn desktop_loss(desktop: *Desktop) {
+  if desktop.owner != nil && desktop.owner.events_enabled && desktop.owner.events.dropped != 4294967295 {
+    desktop.owner.events.dropped += 1
+  }
+}
+
 fn compose_snapshot(desktop: *Desktop) {
+  desktop.composition_handled = true
   composition := &desktop.composition
   used: usize = 0
   caret_bytes: i32 = -1
+  emitted: usize = 0
   for i in 0..desktop.preedit_count {
     if #cast(i32, i) == desktop.preedit_caret {
       caret_bytes = #cast(i32, used)
     }
-    if used + 4 > #len(composition.text) {
+    width := utf8.encoded_width(desktop.preedit[i])
+    if width == 0 || width > #len(composition.text) - used {
       break
     }
     used += utf8.encode(composition.text[used..], desktop.preedit[i])
+    emitted += 1
   }
-  if desktop.preedit_caret >= #cast(i32, desktop.preedit_count) {
+  if desktop.preedit_caret >= #cast(i32, emitted) {
     caret_bytes = #cast(i32, used)
   }
-  composition.text_length = used
+  if !desktop.preedit_visible {
+    caret_bytes = -1
+  }
+  composition.text_length = #cast(u32, used)
   composition.cursor_begin = caret_bytes
   composition.cursor_end = caret_bytes
-  composition.active = used != 0
+  composition.active = 0
+  if used != 0 && desktop.text_input {
+    composition.active = 1
+  }
+  if !desktop.text_input {
+    composition.text_length = 0
+  }
+  if desktop.owner != nil {
+    value := ordered.Event{ kind: ordered.Kind.Composition, text_length: #cast(u32, composition.text_length),
+      x: caret_bytes, y: caret_bytes }
+    if composition.active != 0 {
+      value.width = 1
+    }
+    for i in 0..#cast(usize, composition.text_length) {
+      value.text[i] = composition.text[i]
+    }
+    ordered_push(desktop.owner, value)
+  }
 }
 
 fn preedit_start(context: rawptr, data: rawptr, call: rawptr) i32 {
@@ -202,6 +243,7 @@ fn preedit_start(context: rawptr, data: rawptr, call: rawptr) i32 {
   desktop := #cast(*Desktop, data)
   desktop.preedit_count = 0
   desktop.preedit_caret = 0
+  desktop.preedit_visible = true
   compose_snapshot(desktop)
   return #cast(i32, preedit_limit)
 }
@@ -214,14 +256,54 @@ fn preedit_done(context: rawptr, data: rawptr, call: rawptr) {
   compose_snapshot(desktop)
 }
 
-fn preedit_caret(context: rawptr, data: rawptr, call: *i32) {
+fn preedit_caret(context: rawptr, data: rawptr, call: *PreeditCaret) {
   _ = context
-  desktop := #cast(*Desktop, data)
-  // XIMPreeditCaretCallbackStruct starts with the new position.
-  if call != nil && call.* >= 0 {
-    desktop.preedit_caret = call.*
-    compose_snapshot(desktop)
+  if call == nil {
+    return
   }
+  desktop := #cast(*Desktop, data)
+  position := #cast(usize, math.clamp(desktop.preedit_caret, 0, #cast(i32, desktop.preedit_count)))
+  if call.direction == 0 && position < desktop.preedit_count {
+    position += 1
+  }
+  else if call.direction == 1 && position > 0 {
+    position -= 1
+  }
+  else if call.direction == 2 {
+    for position < desktop.preedit_count && wide_space(desktop.preedit[position]) == 0 {
+      position += 1
+    }
+    for position < desktop.preedit_count && wide_space(desktop.preedit[position]) != 0 {
+      position += 1
+    }
+  }
+  else if call.direction == 3 {
+    for position > 0 && wide_space(desktop.preedit[position - 1]) != 0 {
+      position -= 1
+    }
+    for position > 0 && wide_space(desktop.preedit[position - 1]) == 0 {
+      position -= 1
+    }
+  }
+  else if call.direction == 8 {
+    for position > 0 && desktop.preedit[position - 1] != 10 {
+      position -= 1
+    }
+  }
+  else if call.direction == 9 {
+    for position < desktop.preedit_count && desktop.preedit[position] != 10 {
+      position += 1
+    }
+  }
+  else if call.direction == 10 {
+    position = #cast(usize, math.clamp(call.position, 0, #cast(i32, desktop.preedit_count)))
+  }
+  // Vertical movement needs application text layout. This single-line preedit
+  // keeps its current position and reports that actual position to the IM.
+  desktop.preedit_caret = #cast(i32, position)
+  desktop.preedit_visible = call.style != 0
+  call.position = desktop.preedit_caret
+  compose_snapshot(desktop)
 }
 
 // Replaces change_length code points at change_first with the new text.
@@ -239,35 +321,63 @@ fn preedit_draw(context: rawptr, data: rawptr, call: *PreeditDraw) {
   if first + remove > desktop.preedit_count {
     remove = desktop.preedit_count - first
   }
+  // A non-null XIMText with a null string changes highlighting only.
+  if call.text != nil && call.text.string == nil {
+    desktop.preedit_caret = call.caret
+    compose_snapshot(desktop)
+    return
+  }
   incoming: [preedit_limit]u32 = []
   count: usize = 0
+  room := preedit_limit - first
   if call.text != nil && call.text.string != nil {
+    wanted := #cast(usize, call.text.length)
+    if wanted > room {
+      wanted = room
+      desktop_loss(desktop)
+    }
     if call.text.wide != 0 {
-      wide := #cast(*const u32, call.text.string)[..#cast(usize, call.text.length)]
-      for i in 0..#len(wide) {
-        if count < preedit_limit {
-          incoming[count] = wide[i]
-          count += 1
+      wide := #cast(*const u32, call.text.string)[..wanted]
+      for i in 0..wanted {
+        if wide[i] == 0 || utf8.encoded_width(wide[i]) == 0 {
+          desktop_loss(desktop)
+          return
         }
+        incoming[count] = wide[i]
+        count += 1
       }
     }
     else {
-      found := c.bytes_from_string(#cast(*const u8, call.text.string), 4096)
+      // XIM multibyte data uses the process locale, not necessarily UTF-8.
+      // Decode exactly the declared number of characters; no NUL scan is
+      // needed and callbacks can provide non-terminated character arrays.
+      bytes := #cast(*const u8, call.text.string)
+      state := MbState{}
       at: usize = 0
-      for found.ok && at < #len(found.value) && count < preedit_limit {
-        decoded := utf8.decode(found.value, at)
-        if !decoded.ok {
-          break
+      for count < wanted && at < 4096 {
+        point: u32 = 0
+        result := decode_multibyte(&point, &bytes[..4096][at], 1, &state)
+        at += 1
+        if result == #cast(usize, -2) {
+          continue
         }
-        incoming[count] = decoded.codepoint
+        if result == 0 || result == #cast(usize, -1) || utf8.encoded_width(point) == 0 {
+          desktop_loss(desktop)
+          return
+        }
+        incoming[count] = point
         count += 1
-        at += decoded.width
+      }
+      if count < wanted {
+        desktop_loss(desktop)
+        return
       }
     }
   }
   tail := desktop.preedit_count - first - remove
   if first + count + tail > preedit_limit {
     tail = preedit_limit - first - count
+    desktop_loss(desktop)
   }
   rest: [preedit_limit]u32 = []
   for i in 0..tail {
@@ -284,6 +394,11 @@ fn preedit_draw(context: rawptr, data: rawptr, call: *PreeditDraw) {
   compose_snapshot(desktop)
 }
 
+// The most recent pasted text, borrowed until the next paste request/reply or close.
+pub fn clipboard(window: *const Window) []const u8 {
+  return window.desktop.received[..window.desktop.received_length]
+}
+
 // The current input method composition, or an inactive one.
 pub fn composition(window: *const Window) Composition {
   return window.desktop.composition
@@ -294,19 +409,24 @@ pub fn composition(window: *const Window) Composition {
 // preedit there.
 pub fn set_text_input(window: *Window, enabled: bool, x, y, width, height: i32) {
   desktop := &window.desktop
-  if desktop.context == nil {
-    return
-  }
   if enabled != desktop.text_input {
     desktop.text_input = enabled
-    if enabled {
-      set_focus(desktop.context)
+    if desktop.context != nil {
+      if enabled {
+        desktop.preedit_count = 0
+        set_focus(desktop.context)
+      }
+      else {
+        unset_focus(desktop.context)
+      }
     }
-    else {
-      unset_focus(desktop.context)
+    if !enabled {
       desktop.preedit_count = 0
       compose_snapshot(desktop)
     }
+  }
+  if desktop.context == nil {
+    return
   }
   if enabled && (x != desktop.spot_x || y + height != desktop.spot_y) {
     desktop.spot_x = x
@@ -378,6 +498,7 @@ fn read_scale(display: rawptr) f32 {
 
 fn desktop_begin(window: *Window) {
   desktop := &window.desktop
+  desktop.composition_handled = desktop.composition.active != 0
   desktop.text_length = 0
   desktop.backspace = false
   desktop.delete = false
@@ -441,9 +562,9 @@ fn desktop_key(window: *Window, event: *Event) {
   desktop := &window.desktop
   key_event := #cast(*KeyEvent, event)
   buffer: [4096]u8 = []
-  key: usize = 0
+  key: usize = keysym(event, 0)
   count: i32 = 0
-  if desktop.context != nil {
+  if desktop.context != nil && desktop.text_input {
     status: i32 = 0
     count = lookup_utf8(desktop.context, event, &buffer[0], 4096, &key, &status)
     if status == -1 || count < 0 || count > 4096 {
@@ -455,7 +576,7 @@ fn desktop_key(window: *Window, event: *Event) {
       count = 0
     }
   }
-  else {
+  else if desktop.text_input {
     latin: [8]u8 = []
     length := lookup_latin1(event, &latin[0], 8, &key, nil)
     for i in 0..#cast(usize, length) {
@@ -527,6 +648,10 @@ fn desktop_pointer(window: *Window, kind: i32, button: u32) {
 // poll, never on the current frame. Ctrl+V calls this, as can a Paste menu item.
 pub fn request_paste(window: *Window) {
   desktop := &window.desktop
+  if desktop.paste_pending {
+    desktop_loss(desktop)
+    return
+  }
   if desktop.owns {
     // Our own text needs no round trip.
     desktop.received_length = desktop.owned_length
@@ -534,6 +659,7 @@ pub fn request_paste(window: *Window) {
       desktop.received[i] = desktop.owned[i]
     }
     desktop.paste_ready = true
+    ordered_clipboard(window, desktop.received[..desktop.received_length])
     return
   }
   if get_owner(window.display, desktop.clipboard_atom) == 0 {
@@ -591,6 +717,7 @@ fn desktop_selection(window: *Window, event: *Event) {
         }
         desktop.received_length = length
         desktop.paste = true
+        ordered_clipboard(window, desktop.received[..length])
       }
       _ = free(data)
     }
@@ -655,14 +782,15 @@ pub fn box_input(window: *const Window) box.Input {
     backspace: desktop.backspace, delete: desktop.delete, left: desktop.left, right: desktop.right,
     home: desktop.home, end: desktop.end, enter: desktop.enter, escape: desktop.escape,
     tab: desktop.tab, shift: desktop.shift, control: desktop.control, select_all: desktop.select_all,
+    composition_handled: desktop.composition_handled,
     copy: desktop.copy, cut: desktop.cut, paste: desktop.paste,
   }
   if desktop.paste {
     value.clipboard = desktop.received[..desktop.received_length]
   }
   value.composition_cursor = -1
-  if desktop.composition.active {
-    value.composition = desktop.composition.text[..desktop.composition.text_length]
+  if desktop.composition.active != 0 {
+    value.composition = desktop.composition.text[..#cast(usize, desktop.composition.text_length)]
     value.composition_cursor = desktop.composition.cursor_begin
   }
   return value

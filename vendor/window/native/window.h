@@ -26,7 +26,12 @@ enum {
 enum { DYN_EVENT_NONE, DYN_EVENT_KEY_DOWN, DYN_EVENT_KEY_UP, DYN_EVENT_TEXT,
  DYN_EVENT_POINTER_MOVE, DYN_EVENT_POINTER_DOWN, DYN_EVENT_POINTER_UP,
  DYN_EVENT_WHEEL, DYN_EVENT_FOCUS_GAINED, DYN_EVENT_FOCUS_LOST,
- DYN_EVENT_RESIZE, DYN_EVENT_CLOSE, DYN_EVENT_WAKE, DYN_EVENT_OVERFLOW };
+ DYN_EVENT_RESIZE, DYN_EVENT_CLOSE, DYN_EVENT_WAKE, DYN_EVENT_OVERFLOW,
+ /* A requested paste arrived, or the input method composition changed.
+  * Clipboard events own text chunks: x=byte offset, width=total reply bytes,
+  * button=1 on final chunk. Composition events own a snapshot: x/y=cursor
+  * byte offsets (-1 hidden), width=active. The Event ABI remains 312 bytes. */
+ DYN_EVENT_CLIPBOARD, DYN_EVENT_COMPOSITION };
 enum { DYN_MOD_SHIFT=1, DYN_MOD_CONTROL=2, DYN_MOD_ALT=4, DYN_MOD_SUPER=8,
  DYN_MOD_CAPS=16, DYN_MOD_NUM=32 };
 enum { DYN_ESCAPE=0x110000, DYN_ENTER, DYN_TAB_KEY, DYN_BACKSPACE,
@@ -61,6 +66,8 @@ typedef struct dyn_window_composition {
 } dyn_window_composition;
 /* Snapshot of the current composition; inactive when none. */
 DYN_WINDOW_EXPORT void dyn_window_composition_get(void *, dyn_window_composition *);
+/* The most recent pasted text, borrowed until the next paste request/reply or close. */
+DYN_WINDOW_EXPORT uint32_t dyn_window_clipboard_get(void *, const uint8_t **);
 /* Enables or disables text input, and places the caret rectangle (physical
  * window pixels) where the input method shows its candidate window. Call when
  * a text field gains focus and whenever its caret moves. */
@@ -82,7 +89,9 @@ enum {
   DYN_KEY_CUT = 1 << 12,
   DYN_KEY_PASTE = 1 << 13,
   /* Ctrl on X11/Wayland/Win32; Option on Cocoa for word movement. */
-  DYN_KEY_CONTROL = 1 << 14
+  DYN_KEY_CONTROL = 1 << 14,
+  /* Composition consumed keyboard editing during this poll. */
+  DYN_KEY_IME = 1 << 15
 };
 enum { DYN_TEXT_LIMIT = 256, DYN_CLIPBOARD_LIMIT = 65536 };
 typedef struct dyn_window_desktop {

@@ -114,6 +114,28 @@ static inline void desktop_deliver(Desktop *d) {
   d->pending.keys |= DYN_KEY_PASTE;
   d->pending.clipboard = d->received;
   d->pending.clipboard_length = d->received_length;
+  /* Each event owns its reply bytes even when another reply arrives before
+   * the application drains this queue. x is the byte offset, width the total
+   * reply size, and button marks the final chunk (also emitted for empty text). */
+  size_t at = 0;
+  do {
+    size_t count = d->received_length - at;
+    if (count > sizeof(((dyn_window_event *)0)->text)) {
+      count = sizeof(((dyn_window_event *)0)->text);
+      while (count && (d->received[at + count] & 0xc0) == 0x80) count--;
+      /* Invalid clipboard encodings must still make bounded progress. */
+      if (!count) count = sizeof(((dyn_window_event *)0)->text);
+    }
+    dyn_window_event event = {0};
+    event.kind = DYN_EVENT_CLIPBOARD;
+    event.x = (int32_t)at;
+    event.width = (int32_t)d->received_length;
+    event.text_length = (uint32_t)count;
+    memcpy(event.text, d->received + at, count);
+    at += count;
+    event.button = at == d->received_length;
+    desktop_push(d, event);
+  } while (at < d->received_length);
 }
 static inline void desktop_take(Desktop *d, dyn_window_desktop *out, float scale) {
   d->pending.scale = scale;
@@ -124,6 +146,24 @@ static inline void desktop_take(Desktop *d, dyn_window_desktop *out, float scale
 }
 /* Copies UTF-8 preedit into a composition snapshot, truncated at a code point
  * boundary; cursor offsets past the cut are clamped. */
+static inline void composition_changed(Desktop *d, const dyn_window_composition *composition) {
+  dyn_window_event event = {0};
+  d->pending.keys |= DYN_KEY_IME;
+  event.kind = DYN_EVENT_COMPOSITION;
+  event.text_length = composition->text_length;
+  memcpy(event.text, composition->text, event.text_length);
+  event.x = composition->cursor_begin;
+  event.y = composition->cursor_end;
+  event.width = composition->active != 0;
+  desktop_push(d, event);
+}
+static inline int32_t composition_cursor(const uint8_t *text, size_t length, int32_t offset) {
+  if (offset < 0) return -1;
+  size_t at = (size_t)offset;
+  if (at > length) at = length;
+  while (at && at < length && (text[at] & 0xc0) == 0x80) at--;
+  return (int32_t)at;
+}
 static inline void composition_store(dyn_window_composition *out, const uint8_t *text, size_t length,
                                      int32_t begin, int32_t end) {
   if (length > sizeof(out->text)) {
@@ -134,8 +174,8 @@ static inline void composition_store(dyn_window_composition *out, const uint8_t 
   }
   memcpy(out->text, text, length);
   out->text_length = (uint32_t)length;
-  out->cursor_begin = begin < 0 ? -1 : (size_t)begin > length ? (int32_t)length : begin;
-  out->cursor_end = end < 0 ? -1 : (size_t)end > length ? (int32_t)length : end;
+  out->cursor_begin = composition_cursor(out->text, length, begin);
+  out->cursor_end = composition_cursor(out->text, length, end);
   out->active = length > 0;
 }
 #endif

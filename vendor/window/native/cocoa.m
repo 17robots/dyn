@@ -16,7 +16,8 @@ struct Host {
   dyn_window_frame frame;
   Desktop desktop;
   dyn_window_composition composition;
-  int text_input;
+  int text_input, text_input_configured;
+  NSRange marked_range, selected_range;
   NSRect caret;
   int cursor;
   NSInteger window_number;
@@ -41,6 +42,9 @@ struct Host {
   self.host->desktop.pending.keys &=
       ~(uint32_t)(DYN_KEY_SHIFT | DYN_KEY_CONTROL);
   memset(self.host->modifier_down, 0, sizeof(self.host->modifier_down));
+  DynTextView *text_view = (__bridge DynTextView *)self.host->view;
+  [[text_view inputContext] discardMarkedText];
+  if (self.host->composition.active) [text_view unmarkText];
   desktop_simple(&self.host->desktop, DYN_EVENT_FOCUS_LOST);
 }
 @end
@@ -58,27 +62,41 @@ static NSString *plain(id string) {
 }
 - (void)insertText:(id)string replacementRange:(NSRange)range {
   (void)range;
-  if (!self.host)
+  if (!self.host || (self.host->text_input_configured && !self.host->text_input))
     return;
   const char *text = [plain(string) UTF8String];
   if (text)
     desktop_text(&self.host->desktop, (const uint8_t *)text, strlen(text));
+  self.host->marked_range = NSMakeRange(NSNotFound, 0);
+  self.host->selected_range = NSMakeRange(NSNotFound, 0);
   memset(&self.host->composition, 0, sizeof(self.host->composition));
+  composition_changed(&self.host->desktop, &self.host->composition);
 }
 - (void)setMarkedText:(id)string selectedRange:(NSRange)selected replacementRange:(NSRange)range {
   (void)range;
-  if (!self.host)
+  if (!self.host || (self.host->text_input_configured && !self.host->text_input))
     return;
   NSString *value = plain(string);
   const char *text = [value UTF8String];
-  NSUInteger end = MIN(selected.location, [value length]);
-  const char *prefix = [[value substringToIndex:end] UTF8String];
-  int32_t cursor = prefix ? (int32_t)strlen(prefix) : -1;
-  composition_store(&self.host->composition, (const uint8_t *)(text ? text : ""), text ? strlen(text) : 0, cursor, cursor);
+  NSUInteger begin = selected.location == NSNotFound ? [value length] : MIN(selected.location, [value length]);
+  NSUInteger selected_length = MIN(selected.length, [value length] - begin);
+  NSUInteger end = begin + selected_length;
+  self.host->marked_range = NSMakeRange(0, [value length]);
+  self.host->selected_range = NSMakeRange(begin, selected_length);
+  const char *prefix = [[value substringToIndex:begin] UTF8String];
+  const char *through_selection = [[value substringToIndex:end] UTF8String];
+  int32_t cursor_begin = prefix ? (int32_t)strlen(prefix) : -1;
+  int32_t cursor_end = through_selection ? (int32_t)strlen(through_selection) : -1;
+  composition_store(&self.host->composition, (const uint8_t *)(text ? text : ""), text ? strlen(text) : 0, cursor_begin, cursor_end);
+  composition_changed(&self.host->desktop, &self.host->composition);
 }
 - (void)unmarkText {
-  if (self.host)
+  if (self.host) {
+    self.host->marked_range = NSMakeRange(NSNotFound, 0);
+    self.host->selected_range = NSMakeRange(NSNotFound, 0);
     memset(&self.host->composition, 0, sizeof(self.host->composition));
+    composition_changed(&self.host->desktop, &self.host->composition);
+  }
 }
 - (BOOL)hasMarkedText {
   return self.host && self.host->composition.active;
@@ -86,22 +104,21 @@ static NSString *plain(id string) {
 - (NSRange)markedRange {
   if (![self hasMarkedText])
     return NSMakeRange(NSNotFound, 0);
-  return NSMakeRange(0, self.host->composition.text_length);
+  return self.host->marked_range;
 }
 - (NSRange)selectedRange {
-  return NSMakeRange(NSNotFound, 0);
+  return [self hasMarkedText] ? self.host->selected_range : NSMakeRange(NSNotFound, 0);
 }
 - (NSAttributedString *)attributedSubstringForProposedRange:(NSRange)range actualRange:(NSRangePointer)actual {
   (void)range;
-  (void)actual;
+  if (actual) *actual = NSMakeRange(NSNotFound, 0);
   return nil;
 }
 - (NSArray<NSAttributedStringKey> *)validAttributesForMarkedText {
   return @[];
 }
 - (NSRect)firstRectForCharacterRange:(NSRange)range actualRange:(NSRangePointer)actual {
-  (void)range;
-  (void)actual;
+  if (actual) *actual = range;
   if (!self.host)
     return NSZeroRect;
   /* The caret is in backing pixels from the top; convert to screen points. */
@@ -451,7 +468,7 @@ int32_t dyn_window_poll(void *p, dyn_window_frame *out) {
           if (!command && target->text_input) {
             /* The input method composes and commits through DynTextView. */
             [view(target) interpretKeyEvents:@[ event ]];
-          } else if (!command && [chars length]) {
+          } else if (!command && !target->text_input_configured && [chars length]) {
             unichar key = [chars characterAtIndex:0];
             if (key < 0xf700 || key > 0xf8ff) {
               const char *text = [[event characters] UTF8String];
@@ -594,14 +611,27 @@ void dyn_window_composition_get(void *p, dyn_window_composition *out) {
 }
 void dyn_window_set_text_input(void *p, int32_t enabled, int32_t x, int32_t y, int32_t width, int32_t height) {
   Host *h = p;
+  /* Focus changes can cancel preedit synchronously, but that cancellation
+   * is not evidence that a later keyboard edit was consumed by the IME. */
+  uint32_t consumed_before = h->desktop.pending.keys & DYN_KEY_IME;
   h->caret = NSMakeRect(x, y, width, height);
-  if (!enabled && h->text_input) {
+  if (!enabled && (h->text_input || h->composition.active)) {
     [[view(h) inputContext] discardMarkedText];
     memset(&h->composition, 0, sizeof(h->composition));
+    composition_changed(&h->desktop, &h->composition);
   }
   h->text_input = enabled != 0;
+  h->text_input_configured = 1;
   if (enabled) {
     [window(h) makeFirstResponder:view(h)];
     [[view(h) inputContext] invalidateCharacterCoordinates];
   }
+  if (!enabled)
+    h->desktop.pending.keys = (h->desktop.pending.keys & ~(uint32_t)DYN_KEY_IME) | consumed_before;
+}
+
+uint32_t dyn_window_clipboard_get(void *p, const uint8_t **text) {
+  Host *h = p;
+  *text = h->desktop.received;
+  return h->desktop.received_length;
 }

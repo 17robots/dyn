@@ -66,3 +66,6 @@ pub fn composition(window: *const Window) Composition {
 pub fn set_text_input(window: *Window, enabled: bool, x, y, width, height: i32) {
   x11.set_text_input(window, enabled, x, y, width, height)
 }
+pub fn clipboard(window: *const Window) []const u8 {
+  return x11.clipboard(window)
+}

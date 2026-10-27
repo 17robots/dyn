@@ -23,14 +23,15 @@ typedef struct Host {
   /* Input method (text-input-v3): pending state applies on done. */
   struct zwp_text_input_manager_v3 *text_manager;
   struct zwp_text_input_v3 *text_input;
-  int text_enabled, text_focused;
+  int text_enabled, text_focused, text_applied, text_configured;
   int32_t caret[4];
   dyn_window_composition composition;
-  char pending_preedit[256];
+  char pending_preedit[257];
   int32_t pending_begin, pending_end;
   int pending_has_preedit;
-  char pending_commit[1024];
+  char pending_commit[4096];
   size_t pending_commit_length;
+  int pending_commit_overflow;
   struct wl_display *display;
   struct wl_registry *registry;
   struct wl_compositor *compositor;
@@ -320,6 +321,10 @@ static void press(Host *h, uint32_t key) {
     else if (sym == XKB_KEY_v || sym == XKB_KEY_V) dyn_window_request_paste(h);
     return;
   }
+  /* While text-input-v3 owns committed input, xkb still supplies raw keys
+   * and navigation shortcuts but must not insert a second copy of the text. */
+  if ((h->text_configured && !h->text_enabled) ||
+      (h->text_input && h->text_focused && h->text_enabled)) return;
   char text[64];
   int length = 0;
   if (h->compose) {
@@ -554,14 +559,19 @@ static void text_apply_state(Host *h) {
   if (!h->text_input || !h->text_focused)
     return;
   if (h->text_enabled) {
-    zwp_text_input_v3_enable(h->text_input);
-    zwp_text_input_v3_set_content_type(h->text_input, ZWP_TEXT_INPUT_V3_CONTENT_HINT_NONE,
-                                       ZWP_TEXT_INPUT_V3_CONTENT_PURPOSE_NORMAL);
+    if (!h->text_applied) {
+      zwp_text_input_v3_enable(h->text_input);
+      zwp_text_input_v3_set_content_type(h->text_input, ZWP_TEXT_INPUT_V3_CONTENT_HINT_NONE,
+                                         ZWP_TEXT_INPUT_V3_CONTENT_PURPOSE_NORMAL);
+      h->text_applied = 1;
+    }
     /* The protocol uses surface-local (logical) coordinates. */
     int32_t s = h->scale > 0 ? h->scale : 1;
     zwp_text_input_v3_set_cursor_rectangle(h->text_input, h->caret[0] / s, h->caret[1] / s, h->caret[2] / s, h->caret[3] / s);
   } else {
+    if (!h->text_applied) return;
     zwp_text_input_v3_disable(h->text_input);
+    h->text_applied = 0;
   }
   zwp_text_input_v3_commit(h->text_input);
 }
@@ -569,6 +579,7 @@ static void text_enter(void *p, struct zwp_text_input_v3 *t, struct wl_surface *
   (void)t;
   Host *h = p;
   h->text_focused = s == h->surface;
+  h->text_applied = 0;
   text_apply_state(h);
 }
 static void text_leave(void *p, struct zwp_text_input_v3 *t, struct wl_surface *s) {
@@ -576,14 +587,21 @@ static void text_leave(void *p, struct zwp_text_input_v3 *t, struct wl_surface *
   (void)s;
   Host *h = p;
   h->text_focused = 0;
+  h->text_applied = 0;
+  h->pending_has_preedit = 0;
+  h->pending_commit_length = 0;
+  h->pending_commit_overflow = 0;
   memset(&h->composition, 0, sizeof(h->composition));
+  composition_changed(&h->desktop, &h->composition);
 }
 static void text_preedit(void *p, struct zwp_text_input_v3 *t, const char *text, int32_t begin, int32_t end) {
   (void)t;
   Host *h = p;
   size_t length = text ? strlen(text) : 0;
-  if (length >= sizeof(h->pending_preedit))
+  if (length >= sizeof(h->pending_preedit)) {
     length = sizeof(h->pending_preedit) - 1;
+    while (length && (text[length] & 0xc0) == 0x80) length--;
+  }
   memcpy(h->pending_preedit, text ? text : "", length);
   h->pending_preedit[length] = 0;
   h->pending_begin = begin;
@@ -594,10 +612,11 @@ static void text_commit(void *p, struct zwp_text_input_v3 *t, const char *text) 
   (void)t;
   Host *h = p;
   size_t length = text ? strlen(text) : 0;
-  if (h->pending_commit_length + length > sizeof(h->pending_commit))
-    length = sizeof(h->pending_commit) - h->pending_commit_length;
-  memcpy(h->pending_commit + h->pending_commit_length, text, length);
-  h->pending_commit_length += length;
+  /* Protocol state is double buffered: a later commit_string replaces the
+   * pending string; it does not concatenate another transaction. */
+  h->pending_commit_overflow = length > sizeof(h->pending_commit);
+  h->pending_commit_length = h->pending_commit_overflow ? 0 : length;
+  if (h->pending_commit_length) memcpy(h->pending_commit, text, length);
 }
 static void text_delete(void *p, struct zwp_text_input_v3 *t, uint32_t before, uint32_t after) {
   /* Surrounding text is not reported, so deletion requests have nothing to
@@ -609,17 +628,33 @@ static void text_delete(void *p, struct zwp_text_input_v3 *t, uint32_t before, u
 }
 static void text_done(void *p, struct zwp_text_input_v3 *t, uint32_t serial) {
   (void)t;
+  /* Even stale serials apply the input transaction. This handler sends no
+   * client-side protocol state; caret updates are committed separately. */
   (void)serial;
   Host *h = p;
+  if (!h->text_enabled || !h->text_focused) {
+    h->pending_commit_length = 0;
+    h->pending_commit_overflow = 0;
+    h->pending_has_preedit = 0;
+    return;
+  }
+  /* A done transaction removes the prior preedit before committing text. */
+  if (h->composition.active) {
+    memset(&h->composition, 0, sizeof(h->composition));
+    composition_changed(&h->desktop, &h->composition);
+  }
+  if (h->pending_commit_overflow && h->desktop.event_enabled && h->desktop.event_dropped != UINT32_MAX)
+    h->desktop.event_dropped++;
+  h->pending_commit_overflow = 0;
   if (h->pending_commit_length) {
     desktop_text(&h->desktop, (const uint8_t *)h->pending_commit, h->pending_commit_length);
     h->pending_commit_length = 0;
   }
-  if (h->pending_has_preedit)
+  if (h->pending_has_preedit) {
     composition_store(&h->composition, (const uint8_t *)h->pending_preedit, strlen(h->pending_preedit),
                       h->pending_begin, h->pending_end);
-  else
-    memset(&h->composition, 0, sizeof(h->composition));
+    composition_changed(&h->desktop, &h->composition);
+  }
   h->pending_has_preedit = 0;
 }
 static const struct zwp_text_input_v3_listener text_listener = {
@@ -944,6 +979,13 @@ void dyn_window_set_clipboard(void *p, const uint8_t *text, uint32_t length) {
 }
 void dyn_window_request_paste(void *p) {
   Host *h = p;
+  /* A pending remote transfer owns received[] until EOF. Even a self-owned
+   * selection must not overwrite that transaction's partial bytes. */
+  if (h->receive_fd >= 0) {
+    if (h->desktop.event_enabled && h->desktop.event_dropped != UINT32_MAX)
+      h->desktop.event_dropped++;
+    return;
+  }
   if (h->source) {
     /* Our own selection needs no round trip. */
     memcpy(h->desktop.received, h->desktop.owned, h->desktop.owned_length);
@@ -951,7 +993,7 @@ void dyn_window_request_paste(void *p) {
     desktop_deliver(&h->desktop);
     return;
   }
-  if (!h->offer || !h->offer_text || h->receive_fd >= 0)
+  if (!h->offer || !h->offer_text)
     return;
   int fds[2];
   if (pipe2(fds, O_CLOEXEC | O_NONBLOCK) != 0)
@@ -1003,17 +1045,36 @@ void dyn_window_composition_get(void *p, dyn_window_composition *out) {
 }
 void dyn_window_set_text_input(void *p, int32_t enabled, int32_t x, int32_t y, int32_t width, int32_t height) {
   Host *h = p;
+  /* Focus changes can cancel preedit synchronously, but that cancellation
+   * is not evidence that a later keyboard edit was consumed by the IME. */
+  uint32_t consumed_before = h->desktop.pending.keys & DYN_KEY_IME;
   int changed = (enabled != 0) != h->text_enabled || h->caret[0] != x || h->caret[1] != y ||
                 h->caret[2] != width || h->caret[3] != height;
   h->text_enabled = enabled != 0;
+  h->text_configured = 1;
+  if (!enabled) {
+    h->pending_commit_length = 0;
+    h->pending_commit_overflow = 0;
+    h->pending_has_preedit = 0;
+  }
   h->caret[0] = x;
   h->caret[1] = y;
   h->caret[2] = width;
   h->caret[3] = height;
-  if (!enabled)
+  if (!enabled && h->composition.active) {
     memset(&h->composition, 0, sizeof(h->composition));
+    composition_changed(&h->desktop, &h->composition);
+  }
   if (changed) {
     text_apply_state(h);
     wl_display_flush(h->display);
   }
+  if (!enabled)
+    h->desktop.pending.keys = (h->desktop.pending.keys & ~(uint32_t)DYN_KEY_IME) | consumed_before;
+}
+
+uint32_t dyn_window_clipboard_get(void *p, const uint8_t **text) {
+  Host *h = p;
+  *text = h->desktop.received;
+  return h->desktop.received_length;
 }

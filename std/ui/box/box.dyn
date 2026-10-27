@@ -119,6 +119,9 @@ pub struct Input {
   // offset into it, or -1.
   composition: []const u8,
   composition_cursor: i32,
+  // Editing/navigation keys in this poll were consumed by the input method,
+  // including the poll that clears preedit. Committed text still inserts.
+  composition_handled: bool,
 }
 
 pub struct Signal {
@@ -167,11 +170,16 @@ pub struct State {
   // rasterized at the same scale.
   scale: f32,
   copied: []const u8,
+  // Owned previous preedit for change-driven redraw; native snapshots cap256.
+  composition_text: [256]u8,
+  composition_length: usize,
+  composition_cursor: i32,
   // Set during building when a focused text field wants text input: pass
   // text_input and text_input_rect (x, y, width, height in window pixels) to
   // the window so the input method places its candidates at the caret.
   text_input: bool,
   text_input_rect: [4]f32,
+  text_input_anchor: *Box,
 }
 
 pub struct StateResult { value: *State, ok: bool }
@@ -410,7 +418,7 @@ fn focus_order(box: *const Box, focused: u64, order: *FocusOrder) {
 }
 
 pub fn begin(state: *State, frame: *mem.Arena, input: Input, width: f32, height: f32, dt: f32) {
-  if input.tab {
+  if input.tab && !input.composition_handled && #len(input.composition) == 0 {
     order := FocusOrder{}
     focus_order(state.root, state.focused, &order)
     if input.shift {
@@ -430,11 +438,21 @@ pub fn begin(state: *State, frame: *mem.Arena, input: Input, width: f32, height:
   state.frame_index += 1
   collect(state)
   state.input = input
+  state.composition_length = #len(input.composition)
+  state.composition_cursor = input.composition_cursor
+  saved_length := #len(input.composition)
+  if saved_length > #len(state.composition_text) {
+    saved_length = #len(state.composition_text)
+  }
+  for i in 0..saved_length {
+    state.composition_text[i] = input.composition[i]
+  }
   state.dt = dt
   state.hot = state.next_hot
   state.next_hot = 0
   state.copied = ""
   state.text_input = false
+  state.text_input_anchor = nil
   if input.down && !state.previous_down {
     // A press anywhere clears focus unless a focusable box claims it.
     state.focus_claimed = false
@@ -489,7 +507,7 @@ pub fn signal(state: *State, box: *Box) Signal {
       }
     }
   }
-  if box.flags & Focusable != 0 && state.focused == box.key && input.enter && !input.tab {
+  if box.flags & Focusable != 0 && state.focused == box.key && input.enter && !input.tab && !input.composition_handled && #len(input.composition) == 0 {
     result.clicked = true
   }
   if box.flags & (ScrollX | ScrollY) != 0 && over {
@@ -889,6 +907,10 @@ pub fn layout(state: *State) {
     rate = 1.0 - math.exp2(-state.dt / state.half_life)
   }
   finish(state, state.root, state.root.rect, rate)
+  if state.text_input && state.text_input_anchor != nil {
+    anchor := state.text_input_anchor
+    state.text_input_rect = [anchor.rect[0], anchor.rect[1], anchor.size[0], anchor.size[1]]
+  }
   if state.input.down && !state.previous_down && !state.focus_claimed {
     state.focused = 0
   }
@@ -937,6 +959,21 @@ fn hit_box(box: *const Box, x, y: f32) u64 {
 // held, so moving the mouse within a box costs no frame. Combine it with
 // animating to decide when to draw.
 pub fn needs_frame(state: *const State, input: Input) bool {
+  if #len(input.composition) != state.composition_length {
+    return true
+  }
+  if #len(input.composition) != 0 && input.composition_cursor != state.composition_cursor {
+    return true
+  }
+  // Larger custom snapshots conservatively redraw; window snapshots fit256.
+  if #len(input.composition) > #len(state.composition_text) {
+    return true
+  }
+  for i in 0..#len(input.composition) {
+    if input.composition[i] != state.composition_text[i] {
+      return true
+    }
+  }
   if input.down != state.previous_down || input.down || input.scroll_x != 0.0 || input.scroll_y != 0.0 || #len(input.text) != 0 {
     return true
   }

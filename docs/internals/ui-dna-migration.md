@@ -56,7 +56,7 @@ found and corrected later panels overwriting earlier panels' geometry; its
 production UI regression checks multiple roots in one frame.
 
 The native-host qualification runner now includes the new UI and font
-contracts: 21 fixtures, each in debug, O2 and O3. Native macOS and real Windows
+contracts: 22 fixtures, each in debug, O2 and O3. Native macOS and real Windows
 execution still require their CI hosts; cross-builds and Wine do not establish
 native OS behavior. On 2026-10-27 the registered compiler regression suite passed. Its early UI
 checks preceded the final pointer-release adjustment; the box, editing, extras
@@ -99,7 +99,24 @@ round trip. Cocoa source and Dyn target checks are distinct from native macOS
 execution. Native-host CI now includes the event contracts.
 
 This is a dependency for DNA's next backend migration. DNA still uses SDL
-for ordered input and SDL/TTF rendering. The new window API does not expose IME
-preedit/candidate placement or ordered clipboard replies. Those behaviors and
-the renderer-bound document/terminal text path must be preserved before the
-editor switches backends.
+for ordered input and SDL/TTF rendering. The window API now includes basic preedit/candidate support and owned ordered
+clipboard replies. Surrounding-text corrections, real input-method sessions,
+and the renderer-bound document/terminal text path still require qualification
+before the editor switches backends.
+
+## Input-method ownership and editing qualification
+
+Composition and clipboard events own payloads rather than referring to a mutable
+latest value. Event remains 312 bytes; the shared Composition ABI is 272 bytes.
+Production XIM callback tests compare C layouts, locale decoding, feedback-only
+changes, caret directions, bounded insertion, disable and multiple queued
+snapshots/replies. Native tests cover IMM Unicode conversion/candidate geometry,
+Wayland transactions and explicit disable, plus owned snapshots, clipboard
+chunking and overflow. Cocoa is source-reviewed and requires native CI.
+
+Text-field regressions prove consumed final Backspace/Enter/Escape/Tab cannot
+modify, submit or move focus, while committed text still inserts. The preview
+replaces the selection visually and shifts the suffix; caller bytes stay intact.
+Preedit redraw detection owns prior bytes, and candidate placement uses finalized
+caret geometry. Unchanged native snapshots stay idle. These checks run in
+Debug/O2/O3 and desktop/WASI cross-builds, with available emulators.

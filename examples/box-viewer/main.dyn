@@ -220,6 +220,7 @@ fn main() {
   context: ui.Context
   glyphs := font_ui.atlas_renderer(atlas)
   last := time.monotonic_now().value
+  text_focus: u64 = 0
   drawn: usize = 0
   shown_width: i32 = 0
   shown_height: i32 = 0
@@ -243,6 +244,16 @@ fn main() {
     build(state, app)
     box.end(state, &context)
     // Let the input method place its candidates at the focused field's caret.
+    next_text_focus: u64 = 0
+    if state.text_input {
+      next_text_focus = state.focused
+    }
+    if next_text_focus != text_focus {
+      // A different widget starts a fresh composition even when both fields
+      // enable text input. Caret-only movement keeps the current composition.
+      window.set_text_input(&host, false, 0, 0, 0, 0)
+      text_focus = next_text_focus
+    }
     rect := state.text_input_rect
     window.set_text_input(&host, state.text_input, #cast(i32, rect[0]), #cast(i32, rect[1]), #cast(i32, rect[2]), #cast(i32, rect[3]))
     ui.end(&context)

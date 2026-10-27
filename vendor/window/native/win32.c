@@ -17,7 +17,7 @@ typedef struct Host {
   HCURSOR cursors[5];
   int cursor;
   dyn_window_composition composition;
-  int text_input;
+  int text_input, text_input_configured;
   RECT caret;
 } Host;
 #define DYN_WAKE_MESSAGE (WM_APP + 983)
@@ -306,6 +306,7 @@ static LRESULT CALLBACK procedure(HWND window, UINT message, WPARAM w,
       break;
     return 0;
   case WM_CHAR: {
+    if (h->text_input_configured && !h->text_input) return 0;
     /* WM_CHAR carries UTF-16; the IME delivers composed text here too. */
     WCHAR unit = (WCHAR)w;
     uint32_t count = message_repeats(l);
@@ -344,7 +345,11 @@ static LRESULT CALLBACK procedure(HWND window, UINT message, WPARAM w,
     desktop_wheel(&h->desktop,
                   (float)GET_WHEEL_DELTA_WPARAM(w) / 120.0f * 48.0f, 0.0f);
     return 0;
+  case WM_IME_SETCONTEXT:
+    if (h->text_input) l &= ~(LPARAM)ISC_SHOWUICOMPOSITIONWINDOW;
+    break;
   case WM_IME_STARTCOMPOSITION: {
+    if (h->text_input_configured && !h->text_input) break;
     HIMC context = ImmGetContext(window);
     if (context) {
       /* Place the composition and candidate windows at the caret. */
@@ -358,6 +363,7 @@ static LRESULT CALLBACK procedure(HWND window, UINT message, WPARAM w,
     break;
   }
   case WM_IME_COMPOSITION: {
+    if (h->text_input_configured && !h->text_input) break;
     if (l & GCS_COMPSTR) {
       HIMC context = ImmGetContext(window);
       if (context) {
@@ -365,13 +371,20 @@ static LRESULT CALLBACK procedure(HWND window, UINT message, WPARAM w,
         LONG bytes = ImmGetCompositionStringW(context, GCS_COMPSTR, wide, sizeof(wide));
         LONG cursor = ImmGetCompositionStringW(context, GCS_CURSORPOS, NULL, 0);
         ImmReleaseContext(window, context);
-        if (bytes < 0)
-          bytes = 0;
+        if (bytes < 0) bytes = 0;
+        if (bytes > (LONG)sizeof(wide)) bytes = sizeof(wide);
         int units = (int)(bytes / (LONG)sizeof(WCHAR));
-        char utf8[256];
+        /* Convert the complete bounded UTF-16 prefix before clipping UTF-8;
+         * converting directly into 256 bytes rejects a valid longer preedit. */
+        if (units && wide[units - 1] >= 0xd800 && wide[units - 1] <= 0xdbff) units--;
+        char utf8[768];
         int length = units ? WideCharToMultiByte(CP_UTF8, 0, wide, units, utf8, sizeof(utf8), NULL, NULL) : 0;
-        int position = cursor > 0 && cursor <= units ? WideCharToMultiByte(CP_UTF8, 0, wide, cursor, NULL, 0, NULL, NULL) : 0;
+        int cursor_units = cursor < 0 ? 0 : cursor > units ? units : (int)cursor;
+        if (cursor_units && cursor_units < units && wide[cursor_units - 1] >= 0xd800 && wide[cursor_units - 1] <= 0xdbff &&
+            wide[cursor_units] >= 0xdc00 && wide[cursor_units] <= 0xdfff) cursor_units--;
+        int position = cursor < 0 ? -1 : cursor_units ? WideCharToMultiByte(CP_UTF8, 0, wide, cursor_units, NULL, 0, NULL, NULL) : 0;
         composition_store(&h->composition, (const uint8_t *)utf8, length > 0 ? (size_t)length : 0, position, position);
+        composition_changed(&h->desktop, &h->composition);
       }
     }
     /* Committed text (GCS_RESULTSTR) arrives through WM_CHAR. */
@@ -379,6 +392,7 @@ static LRESULT CALLBACK procedure(HWND window, UINT message, WPARAM w,
   }
   case WM_IME_ENDCOMPOSITION:
     memset(&h->composition, 0, sizeof(h->composition));
+    composition_changed(&h->desktop, &h->composition);
     break;
   case WM_SETCURSOR:
     if (LOWORD(l) == HTCLIENT && h->cursors[h->cursor]) {
@@ -609,6 +623,9 @@ void dyn_window_composition_get(void *p, dyn_window_composition *out) {
 }
 void dyn_window_set_text_input(void *p, int32_t enabled, int32_t x, int32_t y, int32_t width, int32_t height) {
   Host *h = p;
+  /* Focus changes can cancel preedit synchronously, but that cancellation
+   * is not evidence that a later keyboard edit was consumed by the IME. */
+  uint32_t consumed_before = h->desktop.pending.keys & DYN_KEY_IME;
   h->caret = (RECT){x, y, x + width, y + height};
   if (!enabled && h->text_input) {
     HIMC context = ImmGetContext(h->window);
@@ -617,8 +634,19 @@ void dyn_window_set_text_input(void *p, int32_t enabled, int32_t x, int32_t y, i
       ImmReleaseContext(h->window, context);
     }
     memset(&h->composition, 0, sizeof(h->composition));
+    composition_changed(&h->desktop, &h->composition);
+  }
+  if (!enabled) {
+    h->high_surrogate = 0;
+    h->high_surrogate_repeats = 0;
   }
   h->text_input = enabled != 0;
+  h->text_input_configured = 1;
+  ImmAssociateContextEx(h->window, NULL, enabled ? IACE_DEFAULT : 0);
+  if (!enabled) {
+    h->desktop.pending.keys = (h->desktop.pending.keys & ~(uint32_t)DYN_KEY_IME) | consumed_before;
+    return;
+  }
   HIMC context = ImmGetContext(h->window);
   if (!context)
     return;
@@ -627,4 +655,10 @@ void dyn_window_set_text_input(void *p, int32_t enabled, int32_t x, int32_t y, i
   CANDIDATEFORM candidate = {.dwIndex = 0, .dwStyle = CFS_EXCLUDE, .ptCurrentPos = {x, y + height}, .rcArea = h->caret};
   ImmSetCandidateWindow(context, &candidate);
   ImmReleaseContext(h->window, context);
+}
+
+uint32_t dyn_window_clipboard_get(void *p, const uint8_t **text) {
+  Host *h = p;
+  *text = h->desktop.received;
+  return h->desktop.received_length;
 }

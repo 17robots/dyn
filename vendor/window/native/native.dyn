@@ -13,7 +13,7 @@ pub struct Window { handle: rawptr, width: i32, height: i32, input: ui.Input, cl
 // The in-progress input method text, drawn by the application at its caret.
 // Mirrors dyn_window_composition: cursor offsets are bytes into text, -1 hides
 // the cursor.
-pub struct Composition { text: [256]u8, text_length: u32, cursor_begin: i32, cursor_end: i32, active: u32 }
+pub type Composition = ordered.Composition
 // Mirrors dyn_window_desktop in window.h.
 struct Desktop { text: [256]u8, text_length: u32, keys: u32, scroll_x: f32, scroll_y: f32, scale: f32, clipboard: *const u8, clipboard_length: u32 }
 pub enum Cursor { Arrow, Text, Hand, ResizeX, ResizeY }
@@ -31,6 +31,7 @@ extern fn native_request_paste "dyn_window_request_paste"(handle: rawptr)
 extern fn native_set_cursor "dyn_window_set_cursor"(handle: rawptr, cursor: i32)
 extern fn native_wait "dyn_window_wait"(handle: rawptr, timeout: i32)
 extern fn native_composition "dyn_window_composition_get"(handle: rawptr, composition: *Composition)
+extern fn native_clipboard "dyn_window_clipboard_get"(handle: rawptr, text: **const u8) u32
 extern fn native_text_input "dyn_window_set_text_input"(handle: rawptr, enabled: i32, x: i32, y: i32, width: i32, height: i32)
 extern fn native_listen_events "dyn_window_listen_events"(handle: rawptr, enabled: i32)
 extern fn native_next_event "dyn_window_next_event"(handle: rawptr, event: *OrderedEvent) i32
@@ -70,6 +71,7 @@ pub fn poll(window: *Window) Result {
   if window.handle == nil {
     return Result{kind:errors.Kind.InvalidState}
   }
+  previous_composition := window.composition.active != 0
   frame := Frame{}
   if native_poll(window.handle, &frame) == 0 {
     return Result{kind:errors.Kind.System}
@@ -80,6 +82,9 @@ pub fn poll(window: *Window) Result {
   window.input = ui.Input{x:frame.x, y:frame.y, down:(frame.flags&1)!=0, pressed:(frame.flags&2)!=0, released:(frame.flags&4)!=0, tab:(frame.flags&8)!=0, activate:(frame.flags&16)!=0, left:(frame.flags&32)!=0, right:(frame.flags&64)!=0}
   native_desktop(window.handle, &window.desktop)
   native_composition(window.handle, &window.composition)
+  if previous_composition || window.composition.active != 0 {
+    window.desktop.keys |= 32768
+  }
   return Result{ok:true}
 }
 pub fn make_current(window: *Window) Result {
@@ -159,6 +164,7 @@ pub fn box_input(window: *const Window) box.Input {
     backspace: keys & 1 != 0, delete: keys & 2 != 0, left: keys & 4 != 0, right: keys & 8 != 0,
     home: keys & 16 != 0, end: keys & 32 != 0, enter: keys & 64 != 0, escape: keys & 128 != 0,
     tab: keys & 256 != 0, shift: keys & 512 != 0, control: keys & 16384 != 0, select_all: keys & 1024 != 0,
+    composition_handled: keys & 32768 != 0,
     copy: keys & 2048 != 0, cut: keys & 4096 != 0, paste: keys & 8192 != 0,
   }
   if value.paste && desktop.clipboard != nil {
@@ -213,4 +219,18 @@ pub fn set_text_input(window: *Window, enabled: bool, x, y, width, height: i32) 
     on = 1
   }
   native_text_input(window.handle, on, x, y, width, height)
+  native_composition(window.handle, &window.composition)
+}
+
+// The most recent pasted text, borrowed until the next paste request/reply or close.
+pub fn clipboard(window: *const Window) []const u8 {
+  if window.handle == nil {
+    return ""
+  }
+  text: *const u8 = nil
+  length := native_clipboard(window.handle, &text)
+  if text == nil {
+    return ""
+  }
+  return text[..#cast(usize, length)]
 }

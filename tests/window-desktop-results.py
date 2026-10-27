@@ -42,6 +42,7 @@ fn main() {
   window.set_cursor(&host, window.Cursor.Arrow)
   quiet := window.box_input(&host)
   check(#len(quiet.text) == 0 && !quiet.paste, "no input yet")
+  window.listen_events(&host, true)
   window.set_clipboard(&host, "clip ✓ text")
   window.request_paste(&host)
   got := false
@@ -56,6 +57,29 @@ fn main() {
     window.wait(&host, 10)
   }
   check(got, "paste arrived")
+  clip_event := false
+  for window.next_event(&host, &event) {
+    if event.kind == window.EventKind.Clipboard {
+      check(event.x == 0 && event.button == 1 && bytes.equal(event.text[..#cast(usize, event.text_length)], "clip ✓ text"), "owned clipboard payload")
+      clip_event = true
+    }
+  }
+  check(clip_event, "ordered paste arrived")
+  window.set_clipboard(&host, "first")
+  window.request_paste(&host)
+  window.set_clipboard(&host, "second")
+  window.request_paste(&host)
+  _ = window.poll(&host)
+  replies: usize = 0
+  for window.next_event(&host, &event) {
+    if event.kind == window.EventKind.Clipboard {
+      if replies == 0 { check(bytes.equal(event.text[..#cast(usize, event.text_length)], "first"), "first reply survives latest snapshot") }
+      else { check(bytes.equal(event.text[..#cast(usize, event.text_length)], "second"), "second reply order") }
+      replies += 1
+    }
+  }
+  check(replies == 2 && bytes.equal(window.clipboard(&host), "second"), "two owned replies and borrowed latest")
+  window.listen_events(&host, false)
   _ = window.poll(&host)
   check(!window.box_input(&host).paste, "paste is one frame")
   // No input method composes during the test: the composition stays empty.

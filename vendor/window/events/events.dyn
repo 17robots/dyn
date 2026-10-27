@@ -6,15 +6,21 @@
 // Further arrivals are dropped until that Overflow is consumed.
 // Text is printable UTF-8 commits, chunked at code point boundaries (256 bytes).
 // Control-leading commits (including Enter/Tab) use key events instead. X11
-// commits above 4096 bytes are dropped with Overflow. Native IME preedit and
-// candidate rectangle placement are not exposed. Oversized source commits
+// commits above 4096 bytes are dropped with Overflow. Input method preedit
+// arrives as Composition events. Oversized source commits
 // count as one dropped commit; Wayland compose lookup is capped at 63 bytes. X11 legacy non-Latin keysyms
 // without Unicode encoding report key zero; physical scancode remains available.
 // Key identifies
 // the unshifted Unicode character, or a special Key value. Scancode is the
 // native physical identifier (X11 keycode, Win32 scan/extended, Cocoa keyCode,
 // Wayland evdev keycode); it is platform-specific, never a portable keycode.
-pub enum Kind { None, KeyDown, KeyUp, Text, PointerMove, PointerDown, PointerUp, Wheel, FocusGained, FocusLost, Resize, Close, Wake, Overflow }
+// Kind-specific payloads retain Event's stable 312-byte ABI:
+// Composition owns preedit in text; x/y are UTF-8 cursor byte offsets (-1
+// hides it), width is active (0/1). Decode with composition(event).
+// Clipboard owns reply chunks: x is byte offset, width is total reply bytes,
+// button is 1 on the final chunk (including an empty reply). No event borrows
+// mutable window storage; clipboard() remains a latest-snapshot convenience.
+pub enum Kind { None, KeyDown, KeyUp, Text, PointerMove, PointerDown, PointerUp, Wheel, FocusGained, FocusLost, Resize, Close, Wake, Overflow, Clipboard, Composition }
 pub const Shift: u32 = 1
 pub const Control: u32 = 2
 pub const Alt: u32 = 4
@@ -43,6 +49,9 @@ pub const AltKey: u32 = 1114178
 pub const SuperKey: u32 = 1114179
 pub const capacity: usize = 128
 pub const text_capacity: usize = 256
+// Shared snapshot ABI, also mirrored by dyn_window_composition in window.h.
+pub struct Composition { text: [256]u8, text_length: u32, cursor_begin: i32, cursor_end: i32, active: u32 }
+#assert(#sizeof(Composition) == 272)
 pub struct Event {
   kind: Kind,
   key: u32, scancode: u32, modifiers: u32,
@@ -64,6 +73,18 @@ pub struct Event {
 #assert(#offsetof(Event, text) == 56)
 pub fn text(event: *const Event) []const u8 {
   return event.text[..#cast(usize, event.text_length)]
+}
+// Extracts an owned preedit snapshot; other kinds produce an inactive value.
+pub fn composition(event: *const Event) Composition {
+  if event.kind != Kind.Composition {
+    return Composition{}
+  }
+  value := Composition{ text: event.text, text_length: event.text_length,
+    cursor_begin: event.x, cursor_end: event.y }
+  if event.width != 0 {
+    value.active = 1
+  }
+  return value
 }
 pub struct Queue { values: [128]Event, head: usize, count: usize, dropped: u32 }
 pub fn push(queue: *Queue, event: Event) {
