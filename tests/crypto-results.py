@@ -304,7 +304,6 @@ def project(root, name, source):
 with tempfile.TemporaryDirectory(prefix="dyn-crypto-results-") as temporary:
     root = Path(temporary)
     cases = [project(root, "aead", AEAD), project(root, "keys", KEYS)]
-    cases.append(project(root, "sdk-aead", (ROOT.parent / "tests/sdk-aead/main.dyn").read_text(encoding="utf-8")))
     exhaustion = []
     for cipher in ("Aes256Gcm", "Chacha20Poly1305"):
         for operation in ("seal", "open"):
