@@ -58,6 +58,11 @@ fn main() {
   check(got, "paste arrived")
   _ = window.poll(&host)
   check(!window.box_input(&host).paste, "paste is one frame")
+  // No input method composes during the test: the composition stays empty.
+  window.set_text_input(&host, true, 10, 12, 1, 16)
+  _ = window.poll(&host)
+  check(#len(window.box_input(&host).composition) == 0 && window.box_input(&host).composition_cursor == -1, "no composition")
+  window.set_text_input(&host, false, 0, 0, 0, 0)
   window.wait(&host, 20)
 }
 '''
@@ -86,7 +91,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-window-desktop-') as directory:
         (project / 'main.dyn').write_text(SOURCE)
         bridge = project / 'dyn_window.dll'
         library = project / 'libdyn_window.dll.a'
-        subprocess.run(['zig', 'cc', '-target', 'x86_64-windows-gnu', '-shared', str(ROOT / 'vendor/window/native/win32.c'), '-luser32', '-lgdi32', '-lopengl32',
+        subprocess.run(['zig', 'cc', '-target', 'x86_64-windows-gnu', '-shared', str(ROOT / 'vendor/window/native/win32.c'), '-luser32', '-lgdi32', '-lopengl32','-limm32',
                         '-Wl,--out-implib,' + str(library), '-o', str(bridge)], check=True, timeout=180)
         subprocess.run([DYN, 'build', str(project), '--target', 'x86_64-windows', '--quiet', '--no-cache', '--link', str(library), '--output', str(project / 'program.exe')], check=True, timeout=300)
         subprocess.run(['wine', str(project / 'program.exe')], env={**os.environ, 'WINEDEBUG': '-all'}, check=True, timeout=120)
@@ -111,4 +116,26 @@ with tempfile.TemporaryDirectory(prefix='dyn-window-desktop-') as directory:
 if not results:
     print('SKIP window desktop: no display backend available; cross-builds only')
 else:
-    print('PASS window desktop: clipboard round trip, cursors, scale, wait and box_input on ' + ', '.join(results) + '; macOS and Windows ARM64 cross-build')
+    COMPOSITION_C = r'''
+#include "desktop_common.h"
+#include <assert.h>
+int main(void) {
+  dyn_window_composition c;
+  uint8_t text[300];
+  for (int i = 0; i < 300; i += 3) { text[i] = 0xe3; text[i + 1] = 0x81; text[i + 2] = 0x82; }
+  composition_store(&c, text, 300, 9, 400);
+  assert(c.text_length == 255 && c.active && c.cursor_begin == 9 && c.cursor_end == 255);
+  composition_store(&c, (const uint8_t *)"ab", 2, -1, 1);
+  assert(c.text_length == 2 && c.cursor_begin == -1 && c.cursor_end == 1);
+  composition_store(&c, (const uint8_t *)"", 0, 0, 0);
+  assert(!c.active);
+  return 0;
+}
+'''
+if shutil.which('cc'):
+    with tempfile.TemporaryDirectory(prefix='dyn-composition-') as directory:
+        source = Path(directory) / 'composition.c'
+        source.write_text(COMPOSITION_C)
+        subprocess.run(['cc', '-std=c11', '-Wall', '-Wextra', '-Werror', '-I' + str(ROOT / 'vendor/window/native'), str(source), '-o', str(Path(directory) / 'composition')], check=True, timeout=60)
+        subprocess.run([str(Path(directory) / 'composition')], check=True, timeout=30)
+print('PASS window desktop: composition snapshots and text input placement, clipboard round trip, cursors, scale, wait and box_input on ' + ', '.join(results) + '; macOS and Windows ARM64 cross-build')

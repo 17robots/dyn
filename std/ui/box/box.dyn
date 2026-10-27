@@ -114,6 +114,11 @@ pub struct Input {
   copy: bool, cut: bool, paste: bool,
   // The clipboard text offered for paste this frame.
   clipboard: []const u8,
+  // The input method's in-progress composition (preedit), shown at the focused
+  // text field's caret but not yet inserted. composition_cursor is a byte
+  // offset into it, or -1.
+  composition: []const u8,
+  composition_cursor: i32,
 }
 
 pub struct Signal {
@@ -162,6 +167,11 @@ pub struct State {
   // rasterized at the same scale.
   scale: f32,
   copied: []const u8,
+  // Set during building when a focused text field wants text input: pass
+  // text_input and text_input_rect (x, y, width, height in window pixels) to
+  // the window so the input method places its candidates at the caret.
+  text_input: bool,
+  text_input_rect: [4]f32,
 }
 
 pub struct StateResult { value: *State, ok: bool }
@@ -424,6 +434,7 @@ pub fn begin(state: *State, frame: *mem.Arena, input: Input, width: f32, height:
   state.hot = state.next_hot
   state.next_hot = 0
   state.copied = ""
+  state.text_input = false
   if input.down && !state.previous_down {
     // A press anywhere clears focus unless a focusable box claims it.
     state.focus_claimed = false

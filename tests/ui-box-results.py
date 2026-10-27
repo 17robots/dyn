@@ -137,6 +137,43 @@ fn main() {
   check(box.needs_frame(state, box.Input{ x: 70.0, y: 10.0 }), "motion onto another box")
   check(box.needs_frame(state, box.Input{ x: 20.0, y: 12.0, text: "a" }), "typing")
   duplicates(&persistent, &arena)
+  composing(&persistent, &arena)
+}
+
+// An input method composition draws at the caret, moves it, inserts nothing
+// and asks the window for text input at the caret.
+fn composing(persistent: *mem.Arena, arena: *mem.Arena) {
+  state := box.create(persistent, measure, nil, 16.0)
+  context: ui.Context
+  storage: [64]u8 = []
+  edit := box.Edit{}
+  inputs: [5]box.Input = [
+    box.Input{ x: 20.0, y: 10.0 },
+    box.Input{ x: 20.0, y: 10.0 },
+    box.Input{ x: 20.0, y: 10.0, down: true },
+    box.Input{ x: 20.0, y: 10.0, text: "ab" },
+    box.Input{ x: 20.0, y: 10.0, composition: "かな", composition_cursor: 3 },
+  ]
+  caret_x: f32 = 0.0
+  for round in 0..6 {
+    input := inputs[4]
+    if round < 5 {
+      input = inputs[round]
+    }
+    mem.arena_reset(arena)
+    ui.begin(&context, arena, ui.Input{}, ui.Rect{ width: 300, height: 100 })
+    box.begin(state, arena, input, 300.0, 100.0, 1.0 / 60.0)
+    _ = box.text_field(state, "field", storage[..], &edit)
+    box.end(state, &context)
+    ui.end(&context)
+    if round == 3 {
+      caret_x = state.text_input_rect[0]
+    }
+  }
+  check(state.text_input, "focused field wants text input")
+  check(edit.length == 2, "composition inserts nothing")
+  // "か" is three bytes; the caret sits one measured code unit run further.
+  check(state.text_input_rect[0] == caret_x + measure(nil, "か"), "caret follows composition cursor")
 }
 
 // Equal labels in one frame get derived keys; reduced motion snaps; scale
@@ -181,4 +218,4 @@ with tempfile.TemporaryDirectory(prefix='dyn-ui-box-') as directory:
         subprocess.run([str(output)], check=True, timeout=60)
     for target in ('aarch64-macos', 'x86_64-windows', 'wasm32-wasi'):
         subprocess.run([DYN, 'build', str(project), '--no-cache', '--quiet', '--target', target, '--output', str(project / ('program-' + target))], check=True, timeout=300)
-print('PASS ui box: layout, previous-frame input, button, checkbox, slider, text field, clipboard, focus, virtual list, scroll clamp, settled animation, hit testing, frame-on-change, duplicate keys, reduced motion, scale (debug/release)')
+print('PASS ui box: layout, previous-frame input, button, checkbox, slider, text field, clipboard, focus, virtual list, scroll clamp, settled animation, hit testing, frame-on-change, duplicate keys, reduced motion, scale, input method composition (debug/release)')

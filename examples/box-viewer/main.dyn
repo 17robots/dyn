@@ -242,6 +242,9 @@ fn main() {
     box.begin(state, &frame_arena, window.box_input(&host), #cast(f32, width), #cast(f32, height), dt)
     build(state, app)
     box.end(state, &context)
+    // Let the input method place its candidates at the focused field's caret.
+    rect := state.text_input_rect
+    window.set_text_input(&host, state.text_input, #cast(i32, rect[0]), #cast(i32, rect[1]), #cast(i32, rect[2]), #cast(i32, rect[3]))
     ui.end(&context)
     if #len(state.copied) != 0 {
       window.set_clipboard(&host, state.copied)

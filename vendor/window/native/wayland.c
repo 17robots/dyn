@@ -1,6 +1,7 @@
 #include "window.h"
 #include "desktop_common.h"
 #include "xdg-shell-client-protocol.h"
+#include "text-input-unstable-v3-client-protocol.h"
 #include <fcntl.h>
 #include <locale.h>
 #include <sys/mman.h>
@@ -19,6 +20,17 @@
 #include <wayland-client.h>
 #include <wayland-egl.h>
 typedef struct Host {
+  /* Input method (text-input-v3): pending state applies on done. */
+  struct zwp_text_input_manager_v3 *text_manager;
+  struct zwp_text_input_v3 *text_input;
+  int text_enabled, text_focused;
+  int32_t caret[4];
+  dyn_window_composition composition;
+  char pending_preedit[256];
+  int32_t pending_begin, pending_end;
+  int pending_has_preedit;
+  char pending_commit[1024];
+  size_t pending_commit_length;
   struct wl_display *display;
   struct wl_registry *registry;
   struct wl_compositor *compositor;
@@ -538,6 +550,81 @@ static void output_scale(void *p, struct wl_output *o, int32_t factor) {
 }
 static const struct wl_output_listener output_listener = {
     .geometry = output_geometry, .mode = output_mode, .done = output_done, .scale = output_scale};
+static void text_apply_state(Host *h) {
+  if (!h->text_input || !h->text_focused)
+    return;
+  if (h->text_enabled) {
+    zwp_text_input_v3_enable(h->text_input);
+    zwp_text_input_v3_set_content_type(h->text_input, ZWP_TEXT_INPUT_V3_CONTENT_HINT_NONE,
+                                       ZWP_TEXT_INPUT_V3_CONTENT_PURPOSE_NORMAL);
+    /* The protocol uses surface-local (logical) coordinates. */
+    int32_t s = h->scale > 0 ? h->scale : 1;
+    zwp_text_input_v3_set_cursor_rectangle(h->text_input, h->caret[0] / s, h->caret[1] / s, h->caret[2] / s, h->caret[3] / s);
+  } else {
+    zwp_text_input_v3_disable(h->text_input);
+  }
+  zwp_text_input_v3_commit(h->text_input);
+}
+static void text_enter(void *p, struct zwp_text_input_v3 *t, struct wl_surface *s) {
+  (void)t;
+  Host *h = p;
+  h->text_focused = s == h->surface;
+  text_apply_state(h);
+}
+static void text_leave(void *p, struct zwp_text_input_v3 *t, struct wl_surface *s) {
+  (void)t;
+  (void)s;
+  Host *h = p;
+  h->text_focused = 0;
+  memset(&h->composition, 0, sizeof(h->composition));
+}
+static void text_preedit(void *p, struct zwp_text_input_v3 *t, const char *text, int32_t begin, int32_t end) {
+  (void)t;
+  Host *h = p;
+  size_t length = text ? strlen(text) : 0;
+  if (length >= sizeof(h->pending_preedit))
+    length = sizeof(h->pending_preedit) - 1;
+  memcpy(h->pending_preedit, text ? text : "", length);
+  h->pending_preedit[length] = 0;
+  h->pending_begin = begin;
+  h->pending_end = end;
+  h->pending_has_preedit = 1;
+}
+static void text_commit(void *p, struct zwp_text_input_v3 *t, const char *text) {
+  (void)t;
+  Host *h = p;
+  size_t length = text ? strlen(text) : 0;
+  if (h->pending_commit_length + length > sizeof(h->pending_commit))
+    length = sizeof(h->pending_commit) - h->pending_commit_length;
+  memcpy(h->pending_commit + h->pending_commit_length, text, length);
+  h->pending_commit_length += length;
+}
+static void text_delete(void *p, struct zwp_text_input_v3 *t, uint32_t before, uint32_t after) {
+  /* Surrounding text is not reported, so deletion requests have nothing to
+   * act on; input methods fall back to committing replacement text. */
+  (void)p;
+  (void)t;
+  (void)before;
+  (void)after;
+}
+static void text_done(void *p, struct zwp_text_input_v3 *t, uint32_t serial) {
+  (void)t;
+  (void)serial;
+  Host *h = p;
+  if (h->pending_commit_length) {
+    desktop_text(&h->desktop, (const uint8_t *)h->pending_commit, h->pending_commit_length);
+    h->pending_commit_length = 0;
+  }
+  if (h->pending_has_preedit)
+    composition_store(&h->composition, (const uint8_t *)h->pending_preedit, strlen(h->pending_preedit),
+                      h->pending_begin, h->pending_end);
+  else
+    memset(&h->composition, 0, sizeof(h->composition));
+  h->pending_has_preedit = 0;
+}
+static const struct zwp_text_input_v3_listener text_listener = {
+    .enter = text_enter, .leave = text_leave, .preedit_string = text_preedit,
+    .commit_string = text_commit, .delete_surrounding_text = text_delete, .done = text_done};
 static void global(void *p, struct wl_registry *r, uint32_t name,
                    const char *interface, uint32_t version) {
   Host *h = p;
@@ -550,6 +637,8 @@ static void global(void *p, struct wl_registry *r, uint32_t name,
   } else if (!strcmp(interface, "wl_seat") && !h->seat && version >= 5) {
     h->seat = wl_registry_bind(r, name, &wl_seat_interface, 5);
     wl_seat_add_listener(h->seat, &seat_listener, h);
+  } else if (!strcmp(interface, "zwp_text_input_manager_v3") && !h->text_manager) {
+    h->text_manager = wl_registry_bind(r, name, &zwp_text_input_manager_v3_interface, 1);
   } else if (!strcmp(interface, "wl_data_device_manager") && !h->data_manager && version >= 3) {
     h->data_manager = wl_registry_bind(r, name, &wl_data_device_manager_interface, 3);
   } else if (!strcmp(interface, "wl_shm") && !h->shm) {
@@ -570,6 +659,10 @@ void dyn_window_close(void *p) {
   Host *h = p;
   if (!h)
     return;
+  if (h->text_input)
+    zwp_text_input_v3_destroy(h->text_input);
+  if (h->text_manager)
+    zwp_text_input_manager_v3_destroy(h->text_manager);
   if (h->egl != EGL_NO_DISPLAY) {
     if (eglGetCurrentContext() == h->context)
       eglMakeCurrent(h->egl, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
@@ -663,6 +756,10 @@ void *dyn_window_open(const char *title, int32_t width, int32_t height) {
   /* Output scale events arrive on this round trip. */
   if (wl_display_roundtrip(h->display) < 0)
     goto fail;
+  if (h->text_manager && h->seat) {
+    h->text_input = zwp_text_input_manager_v3_get_text_input(h->text_manager, h->seat);
+    zwp_text_input_v3_add_listener(h->text_input, &text_listener, h);
+  }
   if (h->data_manager && h->seat) {
     h->data_device = wl_data_device_manager_get_data_device(h->data_manager, h->seat);
     wl_data_device_add_listener(h->data_device, &data_listener, h);
@@ -898,4 +995,25 @@ void dyn_window_wait(void *p, int32_t timeout) {
                           {.fd = h->wake_fd, .events = POLLIN},
                           {.fd = h->receive_fd, .events = POLLIN}};
   poll(fds, h->receive_fd >= 0 ? 3 : 2, timeout);
+}
+
+void dyn_window_composition_get(void *p, dyn_window_composition *out) {
+  Host *h = p;
+  *out = h->composition;
+}
+void dyn_window_set_text_input(void *p, int32_t enabled, int32_t x, int32_t y, int32_t width, int32_t height) {
+  Host *h = p;
+  int changed = (enabled != 0) != h->text_enabled || h->caret[0] != x || h->caret[1] != y ||
+                h->caret[2] != width || h->caret[3] != height;
+  h->text_enabled = enabled != 0;
+  h->caret[0] = x;
+  h->caret[1] = y;
+  h->caret[2] = width;
+  h->caret[3] = height;
+  if (!enabled)
+    memset(&h->composition, 0, sizeof(h->composition));
+  if (changed) {
+    text_apply_state(h);
+    wl_display_flush(h->display);
+  }
 }

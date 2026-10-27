@@ -67,10 +67,18 @@ Win32 expands native coalesced repeat counts while retaining bounded overflow
 accounting. Cocoa retains the native repeat indication; Wayland generates
 repeats using compositor-provided rate and delay. X11 uses detectable repeat
 when the server supports it; other servers may deliver release/press pairs.
-No backend
-exposes IME preedit text, selection or candidate-window placement through this
-API. Wayland provides xkb compose input, not the text-input protocol. This API
-therefore does not yet establish DNA's full input-method parity.
+Input method composition: `set_text_input(&host, enabled, x, y, width, height)`
+turns text input on for a focused field and gives the caret rectangle in window
+pixels; `composition(&host)` (and `box_input`) report the in-progress preedit
+with a byte cursor. Committed text still arrives as ordinary text. Backends:
+X11 negotiates XIM preedit callbacks, then over-the-spot placement, after
+setting the user's locale and `XMODIFIERS`; Wayland uses `text-input-v3`;
+Win32 uses IMM composition and candidate windows; Cocoa implements
+`NSTextInputClient`. Local tests cover the API, snapshots and placement calls
+with no input method running; composing with a real IME (ibus, fcitx, the
+Windows and macOS IMEs) is not exercised by automated tests, and Cocoa is
+compiled only in macOS CI. Wayland does not report surrounding text, so
+`delete_surrounding_text` requests are ignored.
 
 `wake(&host)` interrupts `wait`, whether ordered listening is enabled or not.
 When listening, subsequent polling produces a `Wake` event; multiple wakes may

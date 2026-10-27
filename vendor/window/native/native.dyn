@@ -9,7 +9,11 @@ use "std/ui/box" box
 #link("dyn_window")
 // Native bridge owns its OS allocations. Keep the owning Window on its GUI
 // thread, close renderer resources before close, and never copy a live owner.
-pub struct Window { handle: rawptr, width: i32, height: i32, input: ui.Input, close_requested: bool, desktop: Desktop }
+pub struct Window { handle: rawptr, width: i32, height: i32, input: ui.Input, close_requested: bool, desktop: Desktop, composition: Composition }
+// The in-progress input method text, drawn by the application at its caret.
+// Mirrors dyn_window_composition: cursor offsets are bytes into text, -1 hides
+// the cursor.
+pub struct Composition { text: [256]u8, text_length: u32, cursor_begin: i32, cursor_end: i32, active: u32 }
 // Mirrors dyn_window_desktop in window.h.
 struct Desktop { text: [256]u8, text_length: u32, keys: u32, scroll_x: f32, scroll_y: f32, scale: f32, clipboard: *const u8, clipboard_length: u32 }
 pub enum Cursor { Arrow, Text, Hand, ResizeX, ResizeY }
@@ -26,6 +30,8 @@ extern fn native_set_clipboard "dyn_window_set_clipboard"(handle: rawptr, text: 
 extern fn native_request_paste "dyn_window_request_paste"(handle: rawptr)
 extern fn native_set_cursor "dyn_window_set_cursor"(handle: rawptr, cursor: i32)
 extern fn native_wait "dyn_window_wait"(handle: rawptr, timeout: i32)
+extern fn native_composition "dyn_window_composition_get"(handle: rawptr, composition: *Composition)
+extern fn native_text_input "dyn_window_set_text_input"(handle: rawptr, enabled: i32, x: i32, y: i32, width: i32, height: i32)
 extern fn native_listen_events "dyn_window_listen_events"(handle: rawptr, enabled: i32)
 extern fn native_next_event "dyn_window_next_event"(handle: rawptr, event: *OrderedEvent) i32
 extern fn native_wake "dyn_window_wake"(handle: rawptr) i32
@@ -73,6 +79,7 @@ pub fn poll(window: *Window) Result {
   window.close_requested = (frame.flags & 128) != 0
   window.input = ui.Input{x:frame.x, y:frame.y, down:(frame.flags&1)!=0, pressed:(frame.flags&2)!=0, released:(frame.flags&4)!=0, tab:(frame.flags&8)!=0, activate:(frame.flags&16)!=0, left:(frame.flags&32)!=0, right:(frame.flags&64)!=0}
   native_desktop(window.handle, &window.desktop)
+  native_composition(window.handle, &window.composition)
   return Result{ok:true}
 }
 pub fn make_current(window: *Window) Result {
@@ -157,6 +164,11 @@ pub fn box_input(window: *const Window) box.Input {
   if value.paste && desktop.clipboard != nil {
     value.clipboard = desktop.clipboard[..#cast(usize, desktop.clipboard_length)]
   }
+  value.composition_cursor = -1
+  if window.composition.active != 0 && window.composition.text_length <= 256 {
+    value.composition = window.composition.text[..#cast(usize, window.composition.text_length)]
+    value.composition_cursor = window.composition.cursor_begin
+  }
   return value
 }
 
@@ -184,4 +196,21 @@ pub fn listen_events(window: *Window, enabled: bool) {
     }
     native_listen_events(window.handle, value)
   }
+}
+
+pub fn composition(window: *const Window) Composition {
+  return window.composition
+}
+
+// Enables text input and places the caret rectangle (window pixels) where the
+// input method shows its candidates.
+pub fn set_text_input(window: *Window, enabled: bool, x, y, width, height: i32) {
+  if window.handle == nil {
+    return
+  }
+  on: i32 = 0
+  if enabled {
+    on = 1
+  }
+  native_text_input(window.handle, on, x, y, width, height)
 }

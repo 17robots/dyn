@@ -157,7 +157,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-native-ui-') as directory:
             subprocess.run(['zig','cc','-target',target,'-c','-Wall','-Wextra','-Werror',str(ROOT/'vendor/window/native/win32.c'),'-o',str(work/(target+'.o'))],check=True,timeout=120)
         if shutil.which('wine') and os.environ.get('DISPLAY'):
             bridge=work/'dyn_window.dll';library=work/'libdyn_window.dll.a'
-            subprocess.run(['zig','cc','-target','x86_64-windows-gnu','-shared',str(ROOT/'vendor/window/native/win32.c'),'-luser32','-lgdi32','-lopengl32','-Wl,--out-implib,'+str(library),'-o',str(bridge)],check=True,timeout=180)
+            subprocess.run(['zig','cc','-target','x86_64-windows-gnu','-shared',str(ROOT/'vendor/window/native/win32.c'),'-luser32','-lgdi32','-lopengl32','-limm32','-Wl,--out-implib,'+str(library),'-o',str(bridge)],check=True,timeout=180)
             for flags in (['--debug'], ['--release'], ['--release','--opt-level','3']):
                 output=work/'program.exe'
                 subprocess.run([DYN,'build',str(work),'--target','x86_64-windows',*flags,'--quiet','--no-cache','--link',str(library),'--output',str(output)],check=True,timeout=300)

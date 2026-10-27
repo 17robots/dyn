@@ -484,8 +484,40 @@ pub fn text_field(state: *State, label: []const u8, storage: []u8, edit: *Edit) 
     }
     push_parent(state, box)
     box.axis = 0
+    // An input method composition shows underlined at the caret; the caret
+    // moves to the composition cursor. Nothing is inserted until commit.
+    composing := state.input.composition
+    caret_offset: f32 = 0.0
+    if #len(composing) != 0 {
+      shown_composition := mem.push_bytes_uninit(state.frame, #len(composing))
+      _ = mem.copy(shown_composition, composing)
+      width := state.measure(state.measure_data, composing)
+      preedit := build(state, DrawText | FloatingX | FloatingY, "##composition")
+      preedit.text = shown_composition
+      preedit.floating[0] = caret_x - edit.scroll_x
+      preedit.floating[1] = 0.0
+      preedit.width = pixels((width + 8.0) / state.scale, 1.0)
+      preedit.height = pixels(box.size[1] / state.scale, 1.0)
+      preedit.foreground = box.foreground
+      line := build(state, DrawBackground | FloatingX | FloatingY, "##composition-line")
+      line.floating[0] = 4.0 + caret_x - edit.scroll_x
+      line.floating[1] = (box.size[1] + state.line_height) / 2.0
+      line.width = pixels(width / state.scale, 1.0)
+      line.height = pixels(1.0 / state.scale, 1.0)
+      line.background = box.foreground
+      cursor := #len(composing)
+      if state.input.composition_cursor >= 0 && #cast(usize, state.input.composition_cursor) <= #len(composing) {
+        cursor = #cast(usize, state.input.composition_cursor)
+      }
+      caret_offset = state.measure(state.measure_data, composing[..cursor])
+    }
     caret := build(state, DrawBackground | FloatingX | FloatingY, "##caret")
-    caret.floating[0] = 4.0 + caret_x - edit.scroll_x
+    caret.floating[0] = 4.0 + caret_x - edit.scroll_x + caret_offset
+    state.text_input = true
+    state.text_input_rect[0] = box.rect[0] + caret.floating[0]
+    state.text_input_rect[1] = box.rect[1] + (box.size[1] - state.line_height) / 2.0
+    state.text_input_rect[2] = 1.0
+    state.text_input_rect[3] = state.line_height
     caret.floating[1] = (box.size[1] - state.line_height) / 2.0
     caret.width = pixels(1.0 / state.scale, 1.0)
     caret.height = pixels(state.line_height / state.scale, 1.0)

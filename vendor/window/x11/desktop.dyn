@@ -1,5 +1,7 @@
 #target(kernel: linux)
 use "std/ui/box" box
+use "std/math" math
+use "std/unicode/utf8" utf8
 
 // Text, editing keys, wheel, clipboard, cursors, DPI and event waiting.
 // Typed text uses an X input method when one is available, so dead keys and
@@ -26,7 +28,26 @@ pub struct Desktop {
   paste_ready: bool,
   cursors: [5]usize, cursor: Cursor,
   scale: f32,
+  // Input method preedit, in code points, and its UTF-8 snapshot.
+  style: usize,
+  preedit: [preedit_limit]u32, preedit_count: usize, preedit_caret: i32,
+  composition: Composition,
+  text_input: bool,
+  spot_x: i32, spot_y: i32,
 }
+
+const preedit_limit: usize = 128
+
+// The in-progress input method text, drawn by the application at its caret.
+// Cursor offsets are bytes into text; -1 hides the cursor.
+pub struct Composition { text: [256]u8, text_length: usize, cursor_begin: i32, cursor_end: i32, active: bool }
+
+// XIMText and XIMPreeditDrawCallbackStruct.
+struct XimText { length: u16, feedback: rawptr, wide: i32, string: rawptr }
+struct PreeditDraw { caret: i32, change_first: i32, change_length: i32, text: *XimText }
+struct XimCallback { data: rawptr, callback: rawptr }
+struct XimStyles { count: u16, styles: *usize }
+struct Point { x: i16, y: i16 }
 
 struct KeyEvent { kind: i32, serial: usize, sent: i32, display: rawptr, window: usize, root: usize, subwindow: usize, time: usize, x: i32, y: i32, root_x: i32, root_y: i32, state: u32, keycode: u32, same_screen: i32 }
 struct SelectionRequest { kind: i32, serial: usize, sent: i32, display: rawptr, owner: usize, requestor: usize, selection: usize, target: usize, property: usize, time: usize }
@@ -35,6 +56,12 @@ struct SelectionNotify { kind: i32, serial: usize, sent: i32, display: rawptr, r
 extern fn open_method "XOpenIM"(display: rawptr, database: rawptr, name: rawptr, class: rawptr) rawptr
 extern fn close_method "XCloseIM"(method: rawptr) i32
 extern fn create_context "XCreateIC"(method: rawptr, ...) rawptr
+extern fn set_values "XSetICValues"(context: rawptr, ...) rawptr
+extern fn get_method_values "XGetIMValues"(method: rawptr, ...) rawptr
+extern fn nested_list "XVaCreateNestedList"(unused: i32, ...) rawptr
+extern fn set_locale_modifiers "XSetLocaleModifiers"(modifiers: *const u8) *const u8
+extern fn set_locale "setlocale"(category: i32, locale: *const u8) *const u8
+extern fn unset_focus "XUnsetICFocus"(context: rawptr)
 extern fn destroy_input_context "XDestroyIC"(context: rawptr)
 extern fn set_focus "XSetICFocus"(context: rawptr)
 extern fn filter "XFilterEvent"(event: rawptr, window: usize) i32
@@ -63,22 +90,234 @@ fn desktop_open(window: *Window) {
   desktop.utf8_atom = atom(display, "UTF8_STRING\x00")
   desktop.targets_atom = atom(display, "TARGETS\x00")
   desktop.property_atom = atom(display, "DYN_CLIPBOARD\x00")
+  // Input methods (ibus, fcitx) are found through the locale and XMODIFIERS;
+  // the C locale reaches only the built-in compose method.
+  empty := "\x00"
+  if set_locale(0, &empty[0]) == nil {
+    fallback := "C.UTF-8\x00"
+    _ = set_locale(0, &fallback[0])
+  }
+  _ = set_locale_modifiers(&empty[0])
   desktop.method = open_method(display, nil, nil, nil)
   if desktop.method != nil {
-    style := "inputStyle\x00"
-    client := "clientWindow\x00"
-    focus := "focusWindow\x00"
-    // XIMPreeditNothing | XIMStatusNothing.
-    desktop.context = create_context(desktop.method, &style[0], 1032, &client[0], window.handle, &focus[0], window.handle, #cast(usize, 0))
-    if desktop.context != nil {
-      set_focus(desktop.context)
-    }
+    open_context(window)
   }
   shapes: [5]u32 = [68, 152, 60, 108, 116]
   for i in 0..5 {
     desktop.cursors[i] = font_cursor(display, shapes[i])
   }
   desktop.scale = read_scale(display)
+}
+
+fn styles_supported(method: rawptr) usize {
+  query := "queryInputStyle\x00"
+  styles: *XimStyles = nil
+  if get_method_values(method, &query[0], &styles, #cast(usize, 0)) != nil || styles == nil {
+    return 0
+  }
+  found: usize = 0
+  // Prefer preedit callbacks (the application draws the composition), then
+  // over-the-spot (the method draws it at the spot), then neither.
+  wanted: [3]usize = [0x402, 0x404, 0x408]
+  for choice in wanted {
+    listed := styles.styles[..#cast(usize, styles.count)]
+    for i in 0..#len(listed) {
+      if listed[i] == choice && found == 0 {
+        found = choice
+      }
+    }
+  }
+  _ = free(styles)
+  return found
+}
+
+fn open_context(window: *Window) {
+  desktop := &window.desktop
+  style := styles_supported(desktop.method)
+  if style == 0 {
+    style = 0x408
+  }
+  desktop.style = style
+  style_name := "inputStyle\x00"
+  client := "clientWindow\x00"
+  focus := "focusWindow\x00"
+  if style == 0x402 {
+    start_name := "preeditStartCallback\x00"
+    draw_name := "preeditDrawCallback\x00"
+    done_name := "preeditDoneCallback\x00"
+    caret_name := "preeditCaretCallback\x00"
+    desktop_pointer := #cast(rawptr, desktop)
+    start := XimCallback{ data: desktop_pointer, callback: #cast(rawptr, preedit_start) }
+    draw := XimCallback{ data: desktop_pointer, callback: #cast(rawptr, preedit_draw) }
+    done := XimCallback{ data: desktop_pointer, callback: #cast(rawptr, preedit_done) }
+    caret := XimCallback{ data: desktop_pointer, callback: #cast(rawptr, preedit_caret) }
+    attributes := nested_list(0, &start_name[0], &start, &draw_name[0], &draw, &done_name[0], &done, &caret_name[0], &caret, #cast(usize, 0))
+    preedit_name := "preeditAttributes\x00"
+    desktop.context = create_context(desktop.method, &style_name[0], style, &client[0], window.handle, &focus[0], window.handle, &preedit_name[0], #cast(usize, attributes), #cast(usize, 0))
+    _ = free(attributes)
+  }
+  else if style == 0x404 {
+    spot := Point{}
+    spot_name := "spotLocation\x00"
+    attributes := nested_list(0, &spot_name[0], &spot, #cast(usize, 0))
+    preedit_name := "preeditAttributes\x00"
+    desktop.context = create_context(desktop.method, &style_name[0], style, &client[0], window.handle, &focus[0], window.handle, &preedit_name[0], #cast(usize, attributes), #cast(usize, 0))
+    _ = free(attributes)
+  }
+  if desktop.context == nil {
+    desktop.style = 0x408
+    desktop.context = create_context(desktop.method, &style_name[0], 0x408, &client[0], window.handle, &focus[0], window.handle, #cast(usize, 0))
+  }
+  if desktop.context != nil {
+    set_focus(desktop.context)
+  }
+}
+
+// Rebuilds the UTF-8 composition from the code point preedit.
+fn compose_snapshot(desktop: *Desktop) {
+  composition := &desktop.composition
+  used: usize = 0
+  caret_bytes: i32 = -1
+  for i in 0..desktop.preedit_count {
+    if #cast(i32, i) == desktop.preedit_caret {
+      caret_bytes = #cast(i32, used)
+    }
+    if used + 4 > #len(composition.text) {
+      break
+    }
+    used += utf8.encode(composition.text[used..], desktop.preedit[i])
+  }
+  if desktop.preedit_caret >= #cast(i32, desktop.preedit_count) {
+    caret_bytes = #cast(i32, used)
+  }
+  composition.text_length = used
+  composition.cursor_begin = caret_bytes
+  composition.cursor_end = caret_bytes
+  composition.active = used != 0
+}
+
+fn preedit_start(context: rawptr, data: rawptr, call: rawptr) i32 {
+  _ = context
+  _ = call
+  desktop := #cast(*Desktop, data)
+  desktop.preedit_count = 0
+  desktop.preedit_caret = 0
+  compose_snapshot(desktop)
+  return #cast(i32, preedit_limit)
+}
+
+fn preedit_done(context: rawptr, data: rawptr, call: rawptr) {
+  _ = context
+  _ = call
+  desktop := #cast(*Desktop, data)
+  desktop.preedit_count = 0
+  compose_snapshot(desktop)
+}
+
+fn preedit_caret(context: rawptr, data: rawptr, call: *i32) {
+  _ = context
+  desktop := #cast(*Desktop, data)
+  // XIMPreeditCaretCallbackStruct starts with the new position.
+  if call != nil && call.* >= 0 {
+    desktop.preedit_caret = call.*
+    compose_snapshot(desktop)
+  }
+}
+
+// Replaces change_length code points at change_first with the new text.
+fn preedit_draw(context: rawptr, data: rawptr, call: *PreeditDraw) {
+  _ = context
+  desktop := #cast(*Desktop, data)
+  if call == nil {
+    return
+  }
+  first := #cast(usize, math.max(call.change_first, 0))
+  remove := #cast(usize, math.max(call.change_length, 0))
+  if first > desktop.preedit_count {
+    first = desktop.preedit_count
+  }
+  if first + remove > desktop.preedit_count {
+    remove = desktop.preedit_count - first
+  }
+  incoming: [preedit_limit]u32 = []
+  count: usize = 0
+  if call.text != nil && call.text.string != nil {
+    if call.text.wide != 0 {
+      wide := #cast(*const u32, call.text.string)[..#cast(usize, call.text.length)]
+      for i in 0..#len(wide) {
+        if count < preedit_limit {
+          incoming[count] = wide[i]
+          count += 1
+        }
+      }
+    }
+    else {
+      found := c.bytes_from_string(#cast(*const u8, call.text.string), 4096)
+      at: usize = 0
+      for found.ok && at < #len(found.value) && count < preedit_limit {
+        decoded := utf8.decode(found.value, at)
+        if !decoded.ok {
+          break
+        }
+        incoming[count] = decoded.codepoint
+        count += 1
+        at += decoded.width
+      }
+    }
+  }
+  tail := desktop.preedit_count - first - remove
+  if first + count + tail > preedit_limit {
+    tail = preedit_limit - first - count
+  }
+  rest: [preedit_limit]u32 = []
+  for i in 0..tail {
+    rest[i] = desktop.preedit[first + remove + i]
+  }
+  for i in 0..count {
+    desktop.preedit[first + i] = incoming[i]
+  }
+  for i in 0..tail {
+    desktop.preedit[first + count + i] = rest[i]
+  }
+  desktop.preedit_count = first + count + tail
+  desktop.preedit_caret = call.caret
+  compose_snapshot(desktop)
+}
+
+// The current input method composition, or an inactive one.
+pub fn composition(window: *const Window) Composition {
+  return window.desktop.composition
+}
+
+// Enables text input and places the caret rectangle (window pixels) where the
+// input method shows its candidates. Over-the-spot methods also draw their
+// preedit there.
+pub fn set_text_input(window: *Window, enabled: bool, x, y, width, height: i32) {
+  desktop := &window.desktop
+  if desktop.context == nil {
+    return
+  }
+  if enabled != desktop.text_input {
+    desktop.text_input = enabled
+    if enabled {
+      set_focus(desktop.context)
+    }
+    else {
+      unset_focus(desktop.context)
+      desktop.preedit_count = 0
+      compose_snapshot(desktop)
+    }
+  }
+  if enabled && (x != desktop.spot_x || y + height != desktop.spot_y) {
+    desktop.spot_x = x
+    desktop.spot_y = y + height
+    spot := Point{ x: #cast(i16, math.clamp(x, -32768, 32767)), y: #cast(i16, math.clamp(y + height, -32768, 32767)) }
+    spot_name := "spotLocation\x00"
+    preedit_name := "preeditAttributes\x00"
+    attributes := nested_list(0, &spot_name[0], &spot, #cast(usize, 0))
+    _ = set_values(desktop.context, &preedit_name[0], #cast(usize, attributes), #cast(usize, 0))
+    _ = free(attributes)
+  }
 }
 
 fn desktop_close(window: *Window) {
@@ -420,6 +659,11 @@ pub fn box_input(window: *const Window) box.Input {
   }
   if desktop.paste {
     value.clipboard = desktop.received[..desktop.received_length]
+  }
+  value.composition_cursor = -1
+  if desktop.composition.active {
+    value.composition = desktop.composition.text[..desktop.composition.text_length]
+    value.composition_cursor = desktop.composition.cursor_begin
   }
   return value
 }

@@ -50,8 +50,21 @@ DYN_WINDOW_EXPORT int32_t dyn_window_next_event(void *, dyn_window_event *);
 /* The only cross-thread operation. Owner must outlive all wake callers;
  * serialize close after joining them. Wakes may coalesce, never carry data. */
 DYN_WINDOW_EXPORT int32_t dyn_window_wake(void *);
-/* No backend currently exposes IME preedit/candidate placement through this
- * ABI. Committed text is supported; callers must not infer composition parity. */
+/* Input method composition. Committed text still arrives as text input; the
+ * composition is the in-progress preedit the application draws at its caret.
+ * Cursor offsets are bytes into text; -1 hides the cursor. */
+typedef struct dyn_window_composition {
+  uint8_t text[256];
+  uint32_t text_length;
+  int32_t cursor_begin, cursor_end;
+  uint32_t active;
+} dyn_window_composition;
+/* Snapshot of the current composition; inactive when none. */
+DYN_WINDOW_EXPORT void dyn_window_composition_get(void *, dyn_window_composition *);
+/* Enables or disables text input, and places the caret rectangle (physical
+ * window pixels) where the input method shows its candidate window. Call when
+ * a text field gains focus and whenever its caret moves. */
+DYN_WINDOW_EXPORT void dyn_window_set_text_input(void *, int32_t enabled, int32_t x, int32_t y, int32_t width, int32_t height);
 /* Desktop input since the last dyn_window_desktop call, which clears it. */
 enum {
   DYN_KEY_BACKSPACE = 1 << 0,

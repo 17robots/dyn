@@ -8,10 +8,16 @@ typedef struct Host Host;
 @interface DynWindowDelegate : NSObject <NSWindowDelegate>
 @property(nonatomic, assign) Host *host;
 @end
+@interface DynTextView : NSOpenGLView <NSTextInputClient>
+@property(nonatomic, assign) Host *host;
+@end
 struct Host {
   void *window, *view, *delegate;
   dyn_window_frame frame;
   Desktop desktop;
+  dyn_window_composition composition;
+  int text_input;
+  NSRect caret;
   int cursor;
   NSInteger window_number;
   uint8_t modifier_down[128];
@@ -40,6 +46,79 @@ struct Host {
 @end
 static NSWindow *window(Host *h) { return (__bridge NSWindow *)h->window; }
 static NSOpenGLView *view(Host *h) { return (__bridge NSOpenGLView *)h->view; }
+static NSString *plain(id string) {
+  return [string isKindOfClass:[NSAttributedString class]] ? [(NSAttributedString *)string string] : (NSString *)string;
+}
+/* The input method talks to the view through NSTextInputClient: committed
+ * text arrives in insertText, preedit in setMarkedText, and the candidate
+ * window asks firstRectForCharacterRange where the caret is. */
+@implementation DynTextView
+- (BOOL)acceptsFirstResponder {
+  return YES;
+}
+- (void)insertText:(id)string replacementRange:(NSRange)range {
+  (void)range;
+  if (!self.host)
+    return;
+  const char *text = [plain(string) UTF8String];
+  if (text)
+    desktop_text(&self.host->desktop, (const uint8_t *)text, strlen(text));
+  memset(&self.host->composition, 0, sizeof(self.host->composition));
+}
+- (void)setMarkedText:(id)string selectedRange:(NSRange)selected replacementRange:(NSRange)range {
+  (void)range;
+  if (!self.host)
+    return;
+  NSString *value = plain(string);
+  const char *text = [value UTF8String];
+  NSUInteger end = MIN(selected.location, [value length]);
+  const char *prefix = [[value substringToIndex:end] UTF8String];
+  int32_t cursor = prefix ? (int32_t)strlen(prefix) : -1;
+  composition_store(&self.host->composition, (const uint8_t *)(text ? text : ""), text ? strlen(text) : 0, cursor, cursor);
+}
+- (void)unmarkText {
+  if (self.host)
+    memset(&self.host->composition, 0, sizeof(self.host->composition));
+}
+- (BOOL)hasMarkedText {
+  return self.host && self.host->composition.active;
+}
+- (NSRange)markedRange {
+  if (![self hasMarkedText])
+    return NSMakeRange(NSNotFound, 0);
+  return NSMakeRange(0, self.host->composition.text_length);
+}
+- (NSRange)selectedRange {
+  return NSMakeRange(NSNotFound, 0);
+}
+- (NSAttributedString *)attributedSubstringForProposedRange:(NSRange)range actualRange:(NSRangePointer)actual {
+  (void)range;
+  (void)actual;
+  return nil;
+}
+- (NSArray<NSAttributedStringKey> *)validAttributesForMarkedText {
+  return @[];
+}
+- (NSRect)firstRectForCharacterRange:(NSRange)range actualRange:(NSRangePointer)actual {
+  (void)range;
+  (void)actual;
+  if (!self.host)
+    return NSZeroRect;
+  /* The caret is in backing pixels from the top; convert to screen points. */
+  NSRect backing = self.host->caret;
+  NSRect local = [self convertRectFromBacking:backing];
+  local.origin.y = [self bounds].size.height - local.origin.y - local.size.height;
+  return [[self window] convertRectToScreen:[self convertRect:local toView:nil]];
+}
+- (NSUInteger)characterIndexForPoint:(NSPoint)point {
+  (void)point;
+  return NSNotFound;
+}
+- (void)doCommandBySelector:(SEL)selector {
+  /* Editing keys are read from key events; nothing to do here. */
+  (void)selector;
+}
+@end
 enum { DYN_WAKE_SUBTYPE = 0x4459 };
 static uint32_t event_modifiers(NSEventModifierFlags flags) {
   uint32_t value = 0;
@@ -169,6 +248,8 @@ void dyn_window_close(void *p) {
           (__bridge_transfer DynWindowDelegate *)h->delegate;
       delegate.host = NULL;
     }
+    if (h->view)
+      ((__bridge DynTextView *)h->view).host = NULL;
     (void)(__bridge_transfer NSOpenGLView *)h->view;
     (void)(__bridge_transfer NSWindow *)h->window;
   }
@@ -207,7 +288,7 @@ void *dyn_window_open(const char *title, int32_t width, int32_t height) {
                                               NSWindowStyleMaskResizable
                                       backing:NSBackingStoreBuffered
                                         defer:NO];
-    NSOpenGLView *v = [[NSOpenGLView alloc] initWithFrame:rect
+    DynTextView *v = [[DynTextView alloc] initWithFrame:rect
                                               pixelFormat:format];
     if (!w || !v || ![v openGLContext]) {
       dyn_window_close(h);
@@ -220,6 +301,7 @@ void *dyn_window_open(const char *title, int32_t width, int32_t height) {
     [w setTitle:[NSString stringWithUTF8String:title] ?: @"Dyn"];
     DynWindowDelegate *d = [DynWindowDelegate new];
     d.host = h;
+    v.host = h;
     [w setDelegate:d];
     h->window_number = [w windowNumber];
     h->window = (__bridge_retained void *)w;
@@ -366,11 +448,12 @@ int32_t dyn_window_poll(void *p, dyn_window_frame *out) {
             else if (command && (key == 'v' || key == 'V'))
               dyn_window_request_paste(target);
           }
-          if (!command && [chars length]) {
+          if (!command && target->text_input) {
+            /* The input method composes and commits through DynTextView. */
+            [view(target) interpretKeyEvents:@[ event ]];
+          } else if (!command && [chars length]) {
             unichar key = [chars characterAtIndex:0];
             if (key < 0xf700 || key > 0xf8ff) {
-              /* This preserves committed NSEvent characters, not IME preedit.
-               */
               const char *text = [[event characters] UTF8String];
               if (text)
                 desktop_text(&target->desktop, (const uint8_t *)text,
@@ -503,4 +586,22 @@ void dyn_window_listen_events(void *p, int32_t enabled) {
   Host *h = p;
   if (h && [NSThread isMainThread])
     desktop_listen(&h->desktop, enabled);
+}
+
+void dyn_window_composition_get(void *p, dyn_window_composition *out) {
+  Host *h = p;
+  *out = h->composition;
+}
+void dyn_window_set_text_input(void *p, int32_t enabled, int32_t x, int32_t y, int32_t width, int32_t height) {
+  Host *h = p;
+  h->caret = NSMakeRect(x, y, width, height);
+  if (!enabled && h->text_input) {
+    [[view(h) inputContext] discardMarkedText];
+    memset(&h->composition, 0, sizeof(h->composition));
+  }
+  h->text_input = enabled != 0;
+  if (enabled) {
+    [window(h) makeFirstResponder:view(h)];
+    [[view(h) inputContext] invalidateCharacterCoordinates];
+  }
 }

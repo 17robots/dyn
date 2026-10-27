@@ -393,10 +393,13 @@ with tempfile.TemporaryDirectory(prefix='dyn-window-events-') as directory:
             xml=str(Path(protocol_root)/'stable/xdg-shell/xdg-shell.xml')
             subprocess.run(['wayland-scanner','client-header',xml,str(work/'xdg-shell-client-protocol.h')],check=True)
             subprocess.run(['wayland-scanner','private-code',xml,str(work/'xdg-shell-protocol.c')],check=True)
+            text_xml=str(Path(protocol_root)/'unstable/text-input/text-input-unstable-v3.xml')
+            subprocess.run(['wayland-scanner','client-header',text_xml,str(work/'text-input-unstable-v3-client-protocol.h')],check=True)
+            subprocess.run(['wayland-scanner','private-code',text_xml,str(work/'text-input-unstable-v3-protocol.c')],check=True)
             (work/'wayland-probe.c').write_text(WAYLAND_MOCK)
             flags=shlex.split(subprocess.check_output(['pkg-config','--cflags','--libs','wayland-client','wayland-egl','wayland-cursor','xkbcommon','egl'],text=True))
             output=work/'wayland-probe'
-            subprocess.run([*CC,'-std=c11','-D_GNU_SOURCE','-Wall','-Wextra','-Werror','-I'+str(ROOT/'vendor/window/native'),'-I'+str(work),str(work/'wayland-probe.c'),str(work/'xdg-shell-protocol.c'),*flags,'-o',str(output)],check=True,timeout=120)
+            subprocess.run([*CC,'-std=c11','-D_GNU_SOURCE','-Wall','-Wextra','-Werror','-I'+str(ROOT/'vendor/window/native'),'-I'+str(work),str(work/'wayland-probe.c'),str(work/'xdg-shell-protocol.c'),str(work/'text-input-unstable-v3-protocol.c'),*flags,'-o',str(output)],check=True,timeout=120)
             subprocess.run([str(output)],check=True,timeout=20)
             if os.environ.get('WAYLAND_DISPLAY'):
                 bridge=work/'libdyn_window.so'
@@ -414,7 +417,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-window-events-') as directory:
             subprocess.run(['zig','cc','-target',target,'-std=c11','-Wall','-Wextra','-Werror','-I'+str(ROOT/'vendor/window/native'),'-c',str(work/'native-unit.c'),'-o',str(work/(target+'.o'))],check=True,timeout=120)
         if shutil.which('wine') and os.environ.get('DISPLAY'):
             output=work/'win32.exe'
-            subprocess.run(['zig','cc','-target','x86_64-windows-gnu','-I'+str(ROOT/'vendor/window/native'),str(work/'win32-probe.c'),'-luser32','-lgdi32','-lopengl32','-o',str(output)],check=True,timeout=180)
+            subprocess.run(['zig','cc','-target','x86_64-windows-gnu','-I'+str(ROOT/'vendor/window/native'),str(work/'win32-probe.c'),'-luser32','-lgdi32','-lopengl32','-limm32','-o',str(output)],check=True,timeout=180)
             result=subprocess.run(['wine',str(output)],capture_output=True,text=True,timeout=60)
             if result.returncode: print(result.stderr, file=sys.stderr)
             result.check_returncode()
@@ -426,7 +429,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-window-events-') as directory:
             driver=Path(os.environ['DYN_OPENGL_DLL']).resolve()
             shutil.copy2(driver,work/'opengl32.dll')
             shutil.copy2(driver.parent/'libgallium_wgl.dll',work/'libgallium_wgl.dll')
-        subprocess.run([*CC,'-std=c11','-Wall','-Wextra','-Werror','-I'+str(ROOT/'vendor/window/native'),str(work/'win32-probe.c'),'-luser32','-lgdi32','-lopengl32','-o',str(output)],check=True,timeout=180)
+        subprocess.run([*CC,'-std=c11','-Wall','-Wextra','-Werror','-I'+str(ROOT/'vendor/window/native'),str(work/'win32-probe.c'),'-luser32','-lgdi32','-lopengl32','-limm32','-o',str(output)],check=True,timeout=180)
         subprocess.run([str(output)],env={**os.environ,'GALLIUM_DRIVER':'llvmpipe'},check=True,timeout=60)
     if sys.platform == 'darwin':
         print('SKIP Cocoa ordered runtime injection: C ABI queue tested; native event/wake qualification remains separate')

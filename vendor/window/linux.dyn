@@ -59,3 +59,10 @@ pub fn wake(window: *const Window) Result {
 pub fn listen_events(window: *Window, enabled: bool) {
   x11.listen_events(window, enabled)
 }
+pub type Composition = x11.Composition
+pub fn composition(window: *const Window) Composition {
+  return x11.composition(window)
+}
+pub fn set_text_input(window: *Window, enabled: bool, x, y, width, height: i32) {
+  x11.set_text_input(window, enabled, x, y, width, height)
+}

@@ -122,4 +122,20 @@ static inline void desktop_take(Desktop *d, dyn_window_desktop *out, float scale
   memset(&d->pending, 0, sizeof(d->pending));
   d->pending.keys = modifiers;
 }
+/* Copies UTF-8 preedit into a composition snapshot, truncated at a code point
+ * boundary; cursor offsets past the cut are clamped. */
+static inline void composition_store(dyn_window_composition *out, const uint8_t *text, size_t length,
+                                     int32_t begin, int32_t end) {
+  if (length > sizeof(out->text)) {
+    length = sizeof(out->text);
+    /* Never split a code point: back off while the next byte continues one. */
+    while (length > 0 && (text[length] & 0xc0) == 0x80)
+      length--;
+  }
+  memcpy(out->text, text, length);
+  out->text_length = (uint32_t)length;
+  out->cursor_begin = begin < 0 ? -1 : (size_t)begin > length ? (int32_t)length : begin;
+  out->cursor_end = end < 0 ? -1 : (size_t)end > length ? (int32_t)length : end;
+  out->active = length > 0;
+}
 #endif

@@ -15,11 +15,15 @@ if sys.platform.startswith('linux'):
     xml=str(pathlib.Path(protocols)/'stable/xdg-shell/xdg-shell.xml')
     run(['wayland-scanner','client-header',xml,str(header)])
     run(['wayland-scanner','private-code',xml,str(source)])
+    text_xml=str(pathlib.Path(protocols)/'unstable/text-input/text-input-unstable-v3.xml')
+    text_header=out.parent/'text-input-unstable-v3-client-protocol.h';text_source=out.parent/'text-input-unstable-v3-protocol.c'
+    run(['wayland-scanner','client-header',text_xml,str(text_header)])
+    run(['wayland-scanner','private-code',text_xml,str(text_source)])
     flags=shlex.split(subprocess.check_output(['pkg-config','--cflags','--libs','wayland-client','wayland-egl','wayland-cursor','xkbcommon','egl'],text=True))
-    run([*cc,'-shared','-fPIC','-std=c11','-D_GNU_SOURCE','-Wall','-Wextra','-Werror',f'-I{root}',f'-I{out.parent}',str(root/'wayland.c'),str(source),*flags,'-o',str(out)])
+    run([*cc,'-shared','-fPIC','-std=c11','-D_GNU_SOURCE','-Wall','-Wextra','-Werror',f'-I{root}',f'-I{out.parent}',str(root/'wayland.c'),str(source),str(text_source),*flags,'-o',str(out)])
 elif sys.platform=='darwin':
     run([*cc,'-dynamiclib','-fobjc-arc','-Wall','-Wextra',str(root/'cocoa.m'),'-framework','Cocoa','-framework','OpenGL','-o',str(out)])
 elif sys.platform=='win32':
-    run([*cc,'-shared','-std=c11','-Wall','-Wextra',str(root/'win32.c'),'-luser32','-lgdi32','-lopengl32',f'-Wl,--out-implib,{out.parent / 'libdyn_window.dll.a'}','-o',str(out)])
+    run([*cc,'-shared','-std=c11','-Wall','-Wextra',str(root/'win32.c'),'-luser32','-lgdi32','-lopengl32','-limm32',f'-Wl,--out-implib,{out.parent / 'libdyn_window.dll.a'}','-o',str(out)])
 else: p.error('unsupported host platform')
 print(out)

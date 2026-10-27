@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <windows.h>
 #include <windowsx.h>
+#include <imm.h>
 typedef struct Host {
   HWND window;
   HDC dc;
@@ -15,6 +16,9 @@ typedef struct Host {
   uint32_t high_surrogate_repeats;
   HCURSOR cursors[5];
   int cursor;
+  dyn_window_composition composition;
+  int text_input;
+  RECT caret;
 } Host;
 #define DYN_WAKE_MESSAGE (WM_APP + 983)
 static uint32_t modifiers(void) {
@@ -340,6 +344,42 @@ static LRESULT CALLBACK procedure(HWND window, UINT message, WPARAM w,
     desktop_wheel(&h->desktop,
                   (float)GET_WHEEL_DELTA_WPARAM(w) / 120.0f * 48.0f, 0.0f);
     return 0;
+  case WM_IME_STARTCOMPOSITION: {
+    HIMC context = ImmGetContext(window);
+    if (context) {
+      /* Place the composition and candidate windows at the caret. */
+      COMPOSITIONFORM form = {.dwStyle = CFS_FORCE_POSITION, .ptCurrentPos = {h->caret.left, h->caret.top}};
+      ImmSetCompositionWindow(context, &form);
+      CANDIDATEFORM candidate = {.dwIndex = 0, .dwStyle = CFS_EXCLUDE,
+                                 .ptCurrentPos = {h->caret.left, h->caret.bottom}, .rcArea = h->caret};
+      ImmSetCandidateWindow(context, &candidate);
+      ImmReleaseContext(window, context);
+    }
+    break;
+  }
+  case WM_IME_COMPOSITION: {
+    if (l & GCS_COMPSTR) {
+      HIMC context = ImmGetContext(window);
+      if (context) {
+        WCHAR wide[256];
+        LONG bytes = ImmGetCompositionStringW(context, GCS_COMPSTR, wide, sizeof(wide));
+        LONG cursor = ImmGetCompositionStringW(context, GCS_CURSORPOS, NULL, 0);
+        ImmReleaseContext(window, context);
+        if (bytes < 0)
+          bytes = 0;
+        int units = (int)(bytes / (LONG)sizeof(WCHAR));
+        char utf8[256];
+        int length = units ? WideCharToMultiByte(CP_UTF8, 0, wide, units, utf8, sizeof(utf8), NULL, NULL) : 0;
+        int position = cursor > 0 && cursor <= units ? WideCharToMultiByte(CP_UTF8, 0, wide, cursor, NULL, 0, NULL, NULL) : 0;
+        composition_store(&h->composition, (const uint8_t *)utf8, length > 0 ? (size_t)length : 0, position, position);
+      }
+    }
+    /* Committed text (GCS_RESULTSTR) arrives through WM_CHAR. */
+    break;
+  }
+  case WM_IME_ENDCOMPOSITION:
+    memset(&h->composition, 0, sizeof(h->composition));
+    break;
   case WM_SETCURSOR:
     if (LOWORD(l) == HTCLIENT && h->cursors[h->cursor]) {
       SetCursor(h->cursors[h->cursor]);
@@ -561,4 +601,30 @@ void dyn_window_listen_events(void *p, int32_t enabled) {
   Host *h = p;
   if (h)
     desktop_listen(&h->desktop, enabled);
+}
+
+void dyn_window_composition_get(void *p, dyn_window_composition *out) {
+  Host *h = p;
+  *out = h->composition;
+}
+void dyn_window_set_text_input(void *p, int32_t enabled, int32_t x, int32_t y, int32_t width, int32_t height) {
+  Host *h = p;
+  h->caret = (RECT){x, y, x + width, y + height};
+  if (!enabled && h->text_input) {
+    HIMC context = ImmGetContext(h->window);
+    if (context) {
+      ImmNotifyIME(context, NI_COMPOSITIONSTR, CPS_CANCEL, 0);
+      ImmReleaseContext(h->window, context);
+    }
+    memset(&h->composition, 0, sizeof(h->composition));
+  }
+  h->text_input = enabled != 0;
+  HIMC context = ImmGetContext(h->window);
+  if (!context)
+    return;
+  COMPOSITIONFORM form = {.dwStyle = CFS_FORCE_POSITION, .ptCurrentPos = {x, y}};
+  ImmSetCompositionWindow(context, &form);
+  CANDIDATEFORM candidate = {.dwIndex = 0, .dwStyle = CFS_EXCLUDE, .ptCurrentPos = {x, y + height}, .rcArea = h->caret};
+  ImmSetCandidateWindow(context, &candidate);
+  ImmReleaseContext(h->window, context);
 }

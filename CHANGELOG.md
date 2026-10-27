@@ -14,6 +14,7 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- Input method composition: `vendor/window` reports preedit text and cursor and places candidate windows at the caret (`set_text_input`) on X11 (XIM callbacks or over-the-spot), Wayland (`text-input-v3`), Win32 (IMM) and Cocoa (`NSTextInputClient`). `std/ui/box` text fields draw the composition at the caret and request text input placement.
 - `vendor/window` adds opt-in ordered raw key/text events, explicit queue overflow and worker wake-ups on X11, Wayland, Win32 and Cocoa. Event text is caller-owned; existing `box_input` summary clients retain their idle behavior. IME preedit and candidate placement remain unsupported.
 
 - `std/ui/box` exposes current-frame `find`, explicit `key_bytes`, portable `key_number` identities and persistent caller `user_data`, allowing applications to share the keyed cache and recycling policy with custom renderers.
