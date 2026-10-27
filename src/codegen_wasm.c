@@ -185,6 +185,7 @@ typedef struct {
   unsigned stack_symbol, stack_low_symbol, init_symbol, guard_symbol,
       init_index;
   WB body, localtypes;
+  size_t temp_cursor;
   WRs relocs, bodyrelocs;
   unsigned param_count, base, frame, depth;
   unsigned *localoffset, *localalias, *captured;
@@ -350,9 +351,17 @@ static void set(WG *g, unsigned n) {
   wu(&g->body, n);
 }
 static unsigned tmp(WG *g, unsigned vt) {
-  unsigned n = g->param_count + (unsigned)g->localtypes.n;
-  wb(&g->localtypes, vt);
-  return n;
+  /* Aggregate initializer scopes can release completed element temporaries.
+     Keep the physical declarations at their high-water mark and reuse only a
+     matching value type above the current live prefix. Outer expression values
+     stay below the cursor; stack-slot backing is never rewound here. */
+  size_t at = g->temp_cursor;
+  while (at < g->localtypes.n && g->localtypes.p[at] != vt)
+    ++at;
+  if (at == g->localtypes.n)
+    wb(&g->localtypes, vt);
+  g->temp_cursor = at + 1;
+  return g->param_count + (unsigned)at;
 }
 static unsigned save(WG *g, unsigned vt) {
   unsigned n = tmp(g, vt);
@@ -1065,13 +1074,16 @@ static unsigned expr(WG *g, DynExprId id) {
   case DYN_EXPR_ARRAY: {
     p = slot(g, wsize(g, e->type), wa(g, e->type));
     zero(g, p, wsize(g, e->type));
+    size_t element_temps = g->temp_cursor;
     if (e->kind == DYN_EXPR_STRUCT) {
       DynIrStruct *s = &g->ir->structs[e->integer];
       for (unsigned i = 0; i < s->field_count; i++) {
         DynIrField *f = &g->ir->fields[s->field_start + i];
-        if (f->default_expression != DYN_NO_EXPR)
+        if (f->default_expression != DYN_NO_EXPR) {
           store(g, offset(g, p, wfield(g, e->type, i)),
                 expr(g, f->default_expression), f->type);
+          g->temp_cursor = element_temps;
+        }
       }
     }
     for (unsigned i = 0; i < e->item_count; i++) {
@@ -1082,6 +1094,7 @@ static unsigned expr(WG *g, DynExprId id) {
                          : i * wsize(g, t);
       v = expr(g, it->expression);
       store(g, offset(g, p, off), v, t);
+      g->temp_cursor = element_temps;
     }
     return p;
   }
@@ -1608,6 +1621,7 @@ static void exportfn(WG *g, const char *name, unsigned index) {
 static void startbody(WG *g, const DynIrFunction *f, unsigned params) {
   g->function = f;
   g->param_count = params;
+  g->temp_cursor = 0;
   g->frame = 0;
   g->depth = 0;
   g->ndefer = 0;
