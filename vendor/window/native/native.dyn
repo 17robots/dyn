@@ -1,3 +1,4 @@
+use "std/text/edit" surrounding_edit
 use "vendor/window/events" ordered
 pub type OrderedEvent = ordered.Event
 pub type EventKind = ordered.Kind
@@ -30,6 +31,7 @@ extern fn native_set_clipboard "dyn_window_set_clipboard"(handle: rawptr, text: 
 extern fn native_request_paste "dyn_window_request_paste"(handle: rawptr)
 extern fn native_set_cursor "dyn_window_set_cursor"(handle: rawptr, cursor: i32)
 extern fn native_wait "dyn_window_wait"(handle: rawptr, timeout: i32)
+extern fn native_surrounding "dyn_window_set_surrounding_text"(handle: rawptr, text: *const u8, length: u32, cursor: u32, anchor: u32, token: u64, cause: u32) i32
 extern fn native_composition "dyn_window_composition_get"(handle: rawptr, composition: *Composition)
 extern fn native_clipboard "dyn_window_clipboard_get"(handle: rawptr, text: **const u8) u32
 extern fn native_text_input "dyn_window_set_text_input"(handle: rawptr, enabled: i32, x: i32, y: i32, width: i32, height: i32)
@@ -233,4 +235,42 @@ pub fn clipboard(window: *const Window) []const u8 {
     return ""
   }
   return text[..#cast(usize, length)]
+}
+
+pub type Surrounding = surrounding_edit.Context
+// Publish after enabling ordered listening and before enabling a newly focused
+// field. The protocol copies text synchronously. Failure preserves old context.
+pub fn set_surrounding_text(window: *Window, context: Surrounding) Result {
+  if window.handle == nil {
+    return Result{ kind: errors.Kind.InvalidState }
+  }
+  checked := surrounding_edit.validate(&context)
+  if !checked.ok {
+    return Result{ kind: checked.kind }
+  }
+  for byte in context.text {
+    if byte == 0 {
+      return Result{ kind: errors.Kind.InvalidInput }
+    }
+  }
+  empty: [1]u8 = []
+  pointer: *const u8 = &empty[0]
+  if #len(context.text) != 0 {
+    pointer = &context.text[0]
+  }
+  cause: u32 = 0
+  if context.cause == surrounding_edit.Cause.InputMethod {
+    cause = 1
+  }
+  status := native_surrounding(window.handle, pointer, #cast(u32, #len(context.text)), #cast(u32, context.cursor), #cast(u32, context.anchor), context.token, cause)
+  if status == 1 {
+    return Result{ ok: true }
+  }
+  if status == -1 {
+    return Result{ kind: errors.Kind.Unsupported }
+  }
+  if status == -2 {
+    return Result{ kind: errors.Kind.Capacity }
+  }
+  return Result{ kind: errors.Kind.InvalidState }
 }

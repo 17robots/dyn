@@ -31,7 +31,7 @@ enum { DYN_EVENT_NONE, DYN_EVENT_KEY_DOWN, DYN_EVENT_KEY_UP, DYN_EVENT_TEXT,
   * Clipboard events own text chunks: x=byte offset, width=total reply bytes,
   * button=1 on final chunk. Composition events own a snapshot: x/y=cursor
   * byte offsets (-1 hidden), width=active. The Event ABI remains 312 bytes. */
- DYN_EVENT_CLIPBOARD, DYN_EVENT_COMPOSITION };
+ DYN_EVENT_CLIPBOARD, DYN_EVENT_COMPOSITION, DYN_EVENT_EDIT };
 enum { DYN_MOD_SHIFT=1, DYN_MOD_CONTROL=2, DYN_MOD_ALT=4, DYN_MOD_SUPER=8,
  DYN_MOD_CAPS=16, DYN_MOD_NUM=32 };
 enum { DYN_ESCAPE=0x110000, DYN_ENTER, DYN_TAB_KEY, DYN_BACKSPACE,
@@ -72,6 +72,13 @@ DYN_WINDOW_EXPORT uint32_t dyn_window_clipboard_get(void *, const uint8_t **);
  * window pixels) where the input method shows its candidate window. Call when
  * a text field gains focus and whenever its caret moves. */
 DYN_WINDOW_EXPORT void dyn_window_set_text_input(void *, int32_t enabled, int32_t x, int32_t y, int32_t width, int32_t height);
+/* Publishes an owned UTF-8 document snapshot for ordered IME corrections.
+ * Requires ordered listening and a nonzero fresh context token. Cursor/anchor
+ * are byte boundaries. 1 success, 0 invalid/state, -1 unsupported, -2 capacity.
+ * Edit events retain the 312-byte ABI: key/modifiers hold token low/high32,
+ * x/y replacement range, width replacement byte length, scancode chunk offset,
+ * button final chunk. A complete edit is queued atomically or reports overflow. */
+DYN_WINDOW_EXPORT int32_t dyn_window_set_surrounding_text(void *, const uint8_t *, uint32_t length, uint32_t cursor, uint32_t anchor, uint64_t token, uint32_t cause);
 /* Desktop input since the last dyn_window_desktop call, which clears it. */
 enum {
   DYN_KEY_BACKSPACE = 1 << 0,

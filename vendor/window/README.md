@@ -129,3 +129,42 @@ worker wake-ups on available hosts. `tests/window-desktop-results.py` also tests
 the Dyn-to-native wake/event and owned clipboard round trips for its selected backend. Native Cocoa
 and real Windows execution require their CI hosts; Wine and cross-builds are
 separate evidence.
+
+### Surrounding-text corrections
+
+Ordered clients can publish `window.Surrounding` through
+`set_surrounding_text(&host, context)`. Enable `listen_events` first. Contexts
+contain owned-on-publication UTF-8 text, cursor and anchor byte offsets, a nonzero
+revision token, and `std/text/edit.Cause`. The shared limit is 4096 bytes;
+Wayland accepts at most 4000 bytes. Native contexts reject embedded NUL bytes.
+Wayland and Cocoa support corrections. X11 and Windows return `Unsupported`;
+preedit and ordinary committed text remain available. See the
+[XIM investigation](../../docs/internals/xim-surrounding-support.md).
+
+`events.Kind.Edit` retains the 312-byte event ABI. `key` and `modifiers` encode
+low/high halves of the context token; `x`/`y` identify the replaced byte range;
+`width` is total replacement length; `scancode` is chunk offset; `button == 1`
+marks the final chunk. Native producers enqueue the complete replacement or
+report overflow. Feed events in order through `events.collect_edit`; its ready
+replacement borrows collector storage until the next Edit. Overflow discards
+partial assembly. Do not apply a correction from an aggregate keyboard summary.
+
+`std/text/edit.Tracker` publishes bounded snapshots with stable tokens for an
+unchanged owner, text and selection. Changing any of those produces a fresh
+token. `apply` validates revision, UTF-8 boundaries and capacity before mutation;
+rejected replacements preserve bytes and metadata. Successful replacements
+consume the buffer token. Publish a fresh snapshot after every correction.
+Never reuse a token for different text or selection.
+
+The box textbox exposes its current snapshot as `State.text_context`. Pass one
+assembled replacement in an isolated `Input.correction` step, without text or
+editing keys. `FieldSignal.correction_error` reports rejection; successful
+corrections publish `Cause.InputMethod`. Consume ordered input before publishing
+that snapshot and updating native text input/caret state. On focus changes,
+disable the old native context, publish the new context, then enable text input.
+The summary-based box viewer does not enable surrounding corrections.
+
+Wayland matches corrections against committed protocol serials and rejects stale
+history. Cocoa maps UTF-16 native ranges to UTF-8 boundaries; partial replacement
+inside active marked text reports overflow. Real macOS IME behavior still needs
+native runtime qualification.

@@ -111,7 +111,7 @@ for long_loca, cmap12 in ((False, False), (True, True)):
     cases.append(('font-' + ('long' if long_loca else 'short'), declaration + font['SOURCE']))
 cases.append(('bmp-tga-gif-jpeg-toml', FORMATS))
 
-for script in ('ui-box-edit.py', 'ui-box-extras.py', 'ui-box-cache.py', 'ui-box-ime.py'):
+for script in ('ui-box-edit.py', 'ui-box-extras.py', 'ui-box-cache.py', 'ui-box-ime.py', 'text-edit-results.py', 'ui-box-correction.py'):
     cases.append((script.removesuffix('.py'), fixture(script)['SOURCE']))
 system = fixture('font-system-results.py')
 system_regular = system['face']('Test 😀', mono=True)

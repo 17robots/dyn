@@ -14,6 +14,8 @@ use "std/mem" mem
 use "std/hash" hash
 use "std/math" math
 use "std/ui" ui
+use "std/text/edit" text_edits
+use "std/errors" errors
 
 pub const Clickable: u32 = 1
 pub const DrawBackground: u32 = 2
@@ -122,6 +124,9 @@ pub struct Input {
   // Editing/navigation keys in this poll were consumed by the input method,
   // including the poll that clears preedit. Committed text still inserts.
   composition_handled: bool,
+  // One complete correction as its own ordered input step. Do not combine it
+  // with unrelated keyboard/text input. Stale or invalid corrections fail closed.
+  correction: *const text_edits.Replacement,
 }
 
 pub struct Signal {
@@ -180,6 +185,11 @@ pub struct State {
   text_input: bool,
   text_input_rect: [4]f32,
   text_input_anchor: *Box,
+  // Publish this bounded context to a native input method before enabling the
+  // focused field. Tracker lifetime must match one window, not one widget.
+  text_context: text_edits.Context,
+  text_context_error: errors.Kind,
+  text_tracker: text_edits.Tracker,
 }
 
 pub struct StateResult { value: *State, ok: bool }
@@ -418,7 +428,7 @@ fn focus_order(box: *const Box, focused: u64, order: *FocusOrder) {
 }
 
 pub fn begin(state: *State, frame: *mem.Arena, input: Input, width: f32, height: f32, dt: f32) {
-  if input.tab && !input.composition_handled && #len(input.composition) == 0 {
+  if input.tab && input.correction == nil && !input.composition_handled && #len(input.composition) == 0 {
     order := FocusOrder{}
     focus_order(state.root, state.focused, &order)
     if input.shift {
@@ -453,6 +463,8 @@ pub fn begin(state: *State, frame: *mem.Arena, input: Input, width: f32, height:
   state.copied = ""
   state.text_input = false
   state.text_input_anchor = nil
+  state.text_context = text_edits.Context{}
+  state.text_context_error = errors.Kind.None
   if input.down && !state.previous_down {
     // A press anywhere clears focus unless a focusable box claims it.
     state.focus_claimed = false
@@ -507,7 +519,7 @@ pub fn signal(state: *State, box: *Box) Signal {
       }
     }
   }
-  if box.flags & Focusable != 0 && state.focused == box.key && input.enter && !input.tab && !input.composition_handled && #len(input.composition) == 0 {
+  if box.flags & Focusable != 0 && state.focused == box.key && input.enter && !input.tab && input.correction == nil && !input.composition_handled && #len(input.composition) == 0 {
     result.clicked = true
   }
   if box.flags & (ScrollX | ScrollY) != 0 && over {
@@ -911,6 +923,9 @@ pub fn layout(state: *State) {
     anchor := state.text_input_anchor
     state.text_input_rect = [anchor.rect[0], anchor.rect[1], anchor.size[0], anchor.size[1]]
   }
+  if !state.text_input {
+    text_edits.invalidate(&state.text_tracker)
+  }
   if state.input.down && !state.previous_down && !state.focus_claimed {
     state.focused = 0
   }
@@ -959,6 +974,9 @@ fn hit_box(box: *const Box, x, y: f32) u64 {
 // held, so moving the mouse within a box costs no frame. Combine it with
 // animating to decide when to draw.
 pub fn needs_frame(state: *const State, input: Input) bool {
+  if input.correction != nil {
+    return true
+  }
   if #len(input.composition) != state.composition_length {
     return true
   }

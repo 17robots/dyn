@@ -1,0 +1,29 @@
+#target(kernel: linux)
+
+// XIM string conversion cannot safely provide surrounding corrections through
+// the libX11 protocol transport currently audited. Do not register a callback
+// that only works under a synthetic test: see the source evidence in
+// docs/internals/xim-surrounding-support.md. Preedit remains independent.
+pub fn set_surrounding_text(window: *Window, text: []const u8, cursor, anchor: usize, token: u64) Result {
+  if window.display == nil || window.handle == 0 {
+    return Result{ kind: errors.Kind.InvalidState }
+  }
+  if #len(text) > 4096 {
+    return Result{ kind: errors.Kind.Capacity }
+  }
+  if token == 0 || cursor > #len(text) || anchor > #len(text) || !utf8.valid(text) {
+    return Result{ kind: errors.Kind.InvalidInput }
+  }
+  if (cursor < #len(text) && text[cursor] & 0xc0 == 0x80) || (anchor < #len(text) && text[anchor] & 0xc0 == 0x80) {
+    return Result{ kind: errors.Kind.InvalidInput }
+  }
+  for byte in text {
+    if byte == 0 {
+      return Result{ kind: errors.Kind.InvalidInput }
+    }
+  }
+  if !window.events_enabled {
+    return Result{ kind: errors.Kind.InvalidState }
+  }
+  return Result{ kind: errors.Kind.Unsupported }
+}

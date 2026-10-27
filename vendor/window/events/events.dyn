@@ -1,3 +1,7 @@
+use "std/text/edit" edits
+use "std/errors" edit_errors
+use "std/unicode/utf8" edit_utf8
+
 // Ordered GUI events. listen_events(window,true) opts in before polling.
 // next_event copies one event into caller storage; its
 // text bytes remain valid until the caller overwrites that value. Queues hold
@@ -20,7 +24,7 @@
 // Clipboard owns reply chunks: x is byte offset, width is total reply bytes,
 // button is 1 on the final chunk (including an empty reply). No event borrows
 // mutable window storage; clipboard() remains a latest-snapshot convenience.
-pub enum Kind { None, KeyDown, KeyUp, Text, PointerMove, PointerDown, PointerUp, Wheel, FocusGained, FocusLost, Resize, Close, Wake, Overflow, Clipboard, Composition }
+pub enum Kind { None, KeyDown, KeyUp, Text, PointerMove, PointerDown, PointerUp, Wheel, FocusGained, FocusLost, Resize, Close, Wake, Overflow, Clipboard, Composition, Edit }
 pub const Shift: u32 = 1
 pub const Control: u32 = 2
 pub const Alt: u32 = 4
@@ -110,4 +114,73 @@ pub fn next(queue: *Queue, output: *Event) bool {
     return true
   }
   return false
+}
+
+// Edit owns a revision-tagged replacement in consecutive chunks. key/modifiers
+// are token low/high32; x/y the byte range; width replacement byte length;
+// scancode chunk offset; button final1. Native enqueue is all-or-overflow.
+pub struct EditBuffer {
+  bytes: [4096]u8,
+  token: u64,
+  start: usize,
+  end: usize,
+  total: usize,
+  used: usize,
+  active: bool,
+}
+pub struct EditResult { value: edits.Replacement, ready: bool, kind: edit_errors.Kind, ok: bool }
+
+fn edit_failure(buffer: *EditBuffer, kind: edit_errors.Kind) EditResult {
+  buffer.active = false
+  buffer.used = 0
+  buffer.token = 0
+  return EditResult{ kind: kind }
+}
+
+// A ready value borrows buffer until its next Edit chunk. Other event kinds
+// are ignored unless they interrupt a partial transaction. Overflow clears it.
+pub fn collect_edit(buffer: *EditBuffer, event: *const Event) EditResult {
+  if event.kind == Kind.Overflow {
+    return edit_failure(buffer, edit_errors.Kind.Capacity)
+  }
+  if event.kind != Kind.Edit {
+    if buffer.active {
+      return edit_failure(buffer, edit_errors.Kind.InvalidState)
+    }
+    return EditResult{ ok: true }
+  }
+  token := #cast(u64, event.key) | (#cast(u64, event.modifiers) << 32)
+  if event.x < 0 || event.y < event.x || event.width < 0 || event.width > 4096 || event.text_length > 256 || token == 0 || event.button > 1 {
+    return edit_failure(buffer, edit_errors.Kind.InvalidInput)
+  }
+  offset := #cast(usize, event.scancode)
+  total := #cast(usize, event.width)
+  count := #cast(usize, event.text_length)
+  if offset > total || count > total - offset || (count == 0 && (total != 0 || event.button != 1)) ||
+    (event.button == 1) != (offset + count == total) || !edit_utf8.valid(event.text[..count]) {
+    return edit_failure(buffer, edit_errors.Kind.InvalidInput)
+  }
+  if !buffer.active {
+    if offset != 0 {
+      return edit_failure(buffer, edit_errors.Kind.InvalidState)
+    }
+    buffer.token = token
+    buffer.start = #cast(usize, event.x)
+    buffer.end = #cast(usize, event.y)
+    buffer.total = total
+    buffer.used = 0
+    buffer.active = true
+  }
+  if buffer.token != token || buffer.start != #cast(usize, event.x) || buffer.end != #cast(usize, event.y) || buffer.total != total || buffer.used != offset {
+    return edit_failure(buffer, edit_errors.Kind.InvalidState)
+  }
+  for i in 0..count {
+    buffer.bytes[offset + i] = event.text[i]
+  }
+  buffer.used += count
+  if event.button == 0 {
+    return EditResult{ ok: true }
+  }
+  buffer.active = false
+  return EditResult{ value: edits.Replacement{ text: buffer.bytes[..total], start: buffer.start, end: buffer.end, token: token }, ready: true, ok: true }
 }

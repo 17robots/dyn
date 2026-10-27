@@ -167,7 +167,7 @@ pub struct Edit {
   // Horizontal scroll in physical pixels; managed by text_field.
   scroll_x: f32,
 }
-pub struct FieldSignal { signal: Signal, focused: bool, changed: bool, submitted: bool }
+pub struct FieldSignal { signal: Signal, focused: bool, changed: bool, submitted: bool, correction_error: errors.Kind }
 
 fn previous_boundary(text: []const u8, at: usize) usize {
   index := at
@@ -346,9 +346,47 @@ pub fn text_field(state: *State, label: []const u8, storage: []u8, edit: *Edit) 
   }
   focused := state.focused == box.key
   result.focused = focused
+  correction_applied := false
   if focused {
+    anchor := edit.cursor
+    if edit.selecting {
+      anchor = edit.anchor
+    }
+    before := text_edits.snapshot(&state.text_tracker, box.key, storage[..edit.length], edit.cursor, anchor, text_edits.Cause.Other)
+    if state.input.correction != nil {
+      replacement := state.input.correction
+      invalid := #len(state.input.text) != 0 || state.input.backspace || state.input.delete || state.input.left || state.input.right || state.input.home || state.input.end ||
+        state.input.copy || state.input.cut || state.input.paste || state.input.select_all || state.input.enter || state.input.escape || state.input.tab
+      for byte in replacement.text {
+        if byte == 0 || byte == 10 || byte == 13 {
+          invalid = true
+        }
+      }
+      if !before.ok {
+        result.correction_error = before.kind
+      }
+      else if invalid {
+        result.correction_error = errors.Kind.InvalidInput
+      }
+      else {
+        buffer := text_edits.Buffer{ storage: storage, length: edit.length, cursor: edit.cursor, anchor: anchor, token: before.value.token }
+        applied := text_edits.apply(state.frame, &buffer, replacement)
+        if applied.ok {
+          edit.length = buffer.length
+          edit.cursor = buffer.cursor
+          edit.anchor = buffer.anchor
+          edit.selecting = false
+          result.changed = true
+          correction_applied = true
+        }
+        else {
+          result.correction_error = applied.kind
+        }
+      }
+      text_edits.invalidate(&state.text_tracker)
+    }
     input := state.input
-    if input.composition_handled || #len(input.composition) != 0 {
+    if input.composition_handled || #len(input.composition) != 0 || input.correction != nil {
       input.home = false
       input.end = false
       input.left = false
@@ -463,7 +501,7 @@ pub fn text_field(state: *State, label: []const u8, storage: []u8, edit: *Edit) 
     if input.paste && #len(input.clipboard) != 0 {
       result.changed = insert(state, storage, edit, input.clipboard) || result.changed
     }
-    if #len(input.text) != 0 {
+    if input.correction == nil && #len(input.text) != 0 {
       result.changed = insert(state, storage, edit, input.text) || result.changed
     }
     if input.enter {
@@ -474,6 +512,8 @@ pub fn text_field(state: *State, label: []const u8, storage: []u8, edit: *Edit) 
     }
     box.border = box.active_color
   }
+  focused = state.focused == box.key
+  result.focused = focused
   shown := mem.push_bytes_uninit(state.frame, edit.length)
   _ = mem.copy(shown, storage[..edit.length])
   box.text = shown
@@ -536,6 +576,22 @@ pub fn text_field(state: *State, label: []const u8, storage: []u8, edit: *Edit) 
     caret.floating[0] = 4.0 + visual_caret - edit.scroll_x
     state.text_input = true
     state.text_input_anchor = caret
+    cause := text_edits.Cause.Other
+    if correction_applied {
+      cause = text_edits.Cause.InputMethod
+    }
+    anchor := edit.cursor
+    if edit.selecting {
+      anchor = edit.anchor
+    }
+    context := text_edits.snapshot(&state.text_tracker, box.key, storage[..edit.length], edit.cursor, anchor, cause)
+    if context.ok {
+      state.text_context = context.value
+    }
+    else {
+      state.text_context = text_edits.Context{}
+      state.text_context_error = context.kind
+    }
     state.text_input_rect[0] = box.rect[0] + caret.floating[0]
     state.text_input_rect[1] = box.rect[1] + (box.size[1] - state.line_height) / 2.0
     state.text_input_rect[2] = 1.0

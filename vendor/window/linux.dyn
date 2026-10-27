@@ -1,3 +1,5 @@
+use "std/errors" errors
+use "std/text/edit" surrounding_edit
 #target(kernel: linux)
 use "vendor/window/x11" x11
 use "std/ui/box" box
@@ -68,4 +70,12 @@ pub fn set_text_input(window: *Window, enabled: bool, x, y, width, height: i32) 
 }
 pub fn clipboard(window: *const Window) []const u8 {
   return x11.clipboard(window)
+}
+
+pub type Surrounding = surrounding_edit.Context
+pub fn set_surrounding_text(window: *Window, context: Surrounding) Result {
+  if context.cause != surrounding_edit.Cause.Other && context.cause != surrounding_edit.Cause.InputMethod {
+    return Result{ kind: errors.Kind.InvalidInput }
+  }
+  return x11.set_surrounding_text(window, context.text, context.cursor, context.anchor, context.token)
 }

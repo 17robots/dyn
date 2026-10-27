@@ -515,3 +515,11 @@ provide dynamic native font/raster/shaping tables; HarfBuzz copies shaped glyph
 records into caller arenas, and the FreeType adapter supports Unicode or shaped
 glyph IDs. Complex-script run shaping is distinct from paragraph bidi, fallback
 and line layout, which remain application policy.
+
+### Revision-checked text editing
+
+`std/text/edit` provides bounded surrounding-text snapshots, revision tokens,
+UTF-8 byte-boundary checks and transactional caller-buffer replacements.
+`Tracker` owns up to 4096 bytes; `apply` uses caller scratch and preserves the
+destination on rejection. Native integration is documented in
+[window corrections](../../vendor/window/README.md#surrounding-text-corrections).

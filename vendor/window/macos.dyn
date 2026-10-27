@@ -67,3 +67,8 @@ pub fn set_text_input(window: *Window, enabled: bool, x, y, width, height: i32) 
 pub fn clipboard(window: *const Window) []const u8 {
   return native.clipboard(window)
 }
+
+pub type Surrounding = native.Surrounding
+pub fn set_surrounding_text(window: *Window, context: Surrounding) Result {
+  return native.set_surrounding_text(window, context)
+}

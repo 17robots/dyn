@@ -18,11 +18,46 @@ struct Host {
   dyn_window_composition composition;
   int text_input, text_input_configured;
   NSRange marked_range, selected_range;
+  void *marked_text;
+  Surrounding marked_context;
+  uint32_t marked_start, marked_end;
   NSRect caret;
   int cursor;
   NSInteger window_number;
   uint8_t modifier_down[128];
 };
+static void clear_mark(Host *h) {
+  h->marked_range = NSMakeRange(NSNotFound, 0);
+  h->selected_range = NSMakeRange(NSNotFound, 0);
+  if (h->marked_text) (void)(__bridge_transfer NSString *)h->marked_text;
+  h->marked_text = NULL;
+  h->marked_context.token = 0;
+}
+static int cocoa_context(Host *h) {
+  return h && h->desktop.surrounding.token &&
+      h->desktop.surrounding.token != h->desktop.consumed_token;
+}
+static NSString *context_string(const Surrounding *context) {
+  return [[NSString alloc] initWithBytes:context->text length:context->length encoding:NSUTF8StringEncoding];
+}
+static int context_range(const Surrounding *context, NSRange range, uint32_t *start, uint32_t *end) {
+  if (range.location == NSNotFound || range.location > UINT32_MAX ||
+      range.length > UINT32_MAX - range.location) return 0;
+  return surrounding_byte(context->text, context->length, (uint32_t)range.location, start) &&
+      surrounding_byte(context->text, context->length, (uint32_t)(range.location + range.length), end);
+}
+static NSString *client_string(Host *h) {
+  if (!cocoa_context(h)) return nil;
+  NSString *base = context_string(&h->desktop.surrounding);
+  if (h->marked_text && h->marked_context.token == h->desktop.surrounding.token) {
+    uint32_t low = surrounding_utf16(h->marked_context.text, h->marked_start);
+    uint32_t high = surrounding_utf16(h->marked_context.text, h->marked_end);
+    NSMutableString *value = [base mutableCopy];
+    [value replaceCharactersInRange:NSMakeRange(low, high-low) withString:(__bridge NSString *)h->marked_text];
+    return value;
+  }
+  return base;
+}
 @implementation DynWindowDelegate
 - (BOOL)windowShouldClose:(NSWindow *)sender {
   (void)sender;
@@ -42,6 +77,7 @@ struct Host {
   self.host->desktop.pending.keys &=
       ~(uint32_t)(DYN_KEY_SHIFT | DYN_KEY_CONTROL);
   memset(self.host->modifier_down, 0, sizeof(self.host->modifier_down));
+  if (self.host->desktop.surrounding.token) self.host->desktop.consumed_token = self.host->desktop.surrounding.token;
   DynTextView *text_view = (__bridge DynTextView *)self.host->view;
   [[text_view inputContext] discardMarkedText];
   if (self.host->composition.active) [text_view unmarkText];
@@ -61,39 +97,81 @@ static NSString *plain(id string) {
   return YES;
 }
 - (void)insertText:(id)string replacementRange:(NSRange)range {
-  (void)range;
-  if (!self.host || (self.host->text_input_configured && !self.host->text_input))
-    return;
-  const char *text = [plain(string) UTF8String];
-  if (text)
-    desktop_text(&self.host->desktop, (const uint8_t *)text, strlen(text));
-  self.host->marked_range = NSMakeRange(NSNotFound, 0);
-  self.host->selected_range = NSMakeRange(NSNotFound, 0);
-  memset(&self.host->composition, 0, sizeof(self.host->composition));
-  composition_changed(&self.host->desktop, &self.host->composition);
-}
-- (void)setMarkedText:(id)string selectedRange:(NSRange)selected replacementRange:(NSRange)range {
-  (void)range;
-  if (!self.host || (self.host->text_input_configured && !self.host->text_input))
-    return;
+  Host *h = self.host;
+  if (!h || (h->text_input_configured && !h->text_input)) return;
   NSString *value = plain(string);
   const char *text = [value UTF8String];
+  size_t length = [value lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
+  if (!text || length > UINT32_MAX || !surrounding_utf8((const uint8_t *)text, (uint32_t)length)) {
+    desktop_loss(&h->desktop, 1); return;
+  }
+  int correcting = (h->marked_text && h->marked_context.token) || range.location != NSNotFound ||
+      (cocoa_context(h) && h->desktop.surrounding.cursor != h->desktop.surrounding.anchor);
+  if (correcting && length > DYN_SURROUND_LIMIT) { desktop_loss(&h->desktop, 1); return; }
+  if (h->marked_text && h->marked_context.token) {
+    /* A marked string stands in for its original document range. Partial
+     * replacement inside it is not silently mapped onto unrelated bytes. */
+    if (range.location != NSNotFound && !NSEqualRanges(range, h->marked_range))
+      desktop_loss(&h->desktop, 1);
+    else desktop_edit(&h->desktop, &h->marked_context, h->marked_start, h->marked_end,
+                                  (const uint8_t *)text, (uint32_t)length);
+  } else if (range.location != NSNotFound) {
+    uint32_t start, end;
+    if (cocoa_context(h) && context_range(&h->desktop.surrounding, range, &start, &end) && length <= DYN_SURROUND_LIMIT)
+      desktop_edit(&h->desktop, &h->desktop.surrounding, start, end, (const uint8_t *)text, (uint32_t)length);
+    else desktop_loss(&h->desktop, 1);
+  } else if (cocoa_context(h) && h->desktop.surrounding.cursor != h->desktop.surrounding.anchor) {
+    const Surrounding *context = &h->desktop.surrounding;
+    uint32_t start = context->cursor < context->anchor ? context->cursor : context->anchor;
+    uint32_t end = context->cursor > context->anchor ? context->cursor : context->anchor;
+    desktop_edit(&h->desktop, context, start, end, (const uint8_t *)text, (uint32_t)length);
+  } else if (text) desktop_text(&h->desktop, (const uint8_t *)text, length);
+  clear_mark(h);
+  memset(&h->composition, 0, sizeof(h->composition));
+  composition_changed(&h->desktop, &h->composition);
+}
+- (void)setMarkedText:(id)string selectedRange:(NSRange)selected replacementRange:(NSRange)range {
+  Host *h = self.host;
+  if (!h || (h->text_input_configured && !h->text_input)) return;
+  NSString *value = plain(string);
+  const char *text = [value UTF8String];
+  size_t length = [value lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
+  if (!text || length > DYN_SURROUND_LIMIT || !surrounding_utf8((const uint8_t *)text, (uint32_t)length)) {
+    desktop_loss(&h->desktop, 1); return;
+  }
+  Surrounding context = h->marked_context;
+  uint32_t start = h->marked_start, end = h->marked_end;
+  if (h->marked_text && h->marked_context.token) {
+    if (range.location != NSNotFound && !NSEqualRanges(range, h->marked_range)) {
+      desktop_loss(&h->desktop, 1); return;
+    }
+  } else if (cocoa_context(h)) {
+    context = h->desktop.surrounding;
+    if (range.location != NSNotFound) {
+      if (!context_range(&context, range, &start, &end)) { desktop_loss(&h->desktop, 1); return; }
+    } else {
+      start = context.cursor < context.anchor ? context.cursor : context.anchor;
+      end = context.cursor > context.anchor ? context.cursor : context.anchor;
+    }
+  } else { memset(&context, 0, sizeof(context)); start = end = 0; }
+  clear_mark(h);
+  h->marked_context = context; h->marked_start = start; h->marked_end = end;
+  h->marked_text = (__bridge_retained void *)[value copy];
   NSUInteger begin = selected.location == NSNotFound ? [value length] : MIN(selected.location, [value length]);
   NSUInteger selected_length = MIN(selected.length, [value length] - begin);
-  NSUInteger end = begin + selected_length;
-  self.host->marked_range = NSMakeRange(0, [value length]);
-  self.host->selected_range = NSMakeRange(begin, selected_length);
+  NSUInteger finish = begin + selected_length;
+  NSUInteger offset = context.token ? surrounding_utf16(context.text, start) : 0;
+  h->marked_range = NSMakeRange(offset, [value length]);
+  h->selected_range = NSMakeRange(offset + begin, selected_length);
   const char *prefix = [[value substringToIndex:begin] UTF8String];
-  const char *through_selection = [[value substringToIndex:end] UTF8String];
-  int32_t cursor_begin = prefix ? (int32_t)strlen(prefix) : -1;
-  int32_t cursor_end = through_selection ? (int32_t)strlen(through_selection) : -1;
-  composition_store(&self.host->composition, (const uint8_t *)(text ? text : ""), text ? strlen(text) : 0, cursor_begin, cursor_end);
-  composition_changed(&self.host->desktop, &self.host->composition);
+  const char *through_selection = [[value substringToIndex:finish] UTF8String];
+  composition_store(&h->composition, (const uint8_t *)(text ? text : ""), length,
+                    prefix ? (int32_t)strlen(prefix) : -1, through_selection ? (int32_t)strlen(through_selection) : -1);
+  composition_changed(&h->desktop, &h->composition);
 }
 - (void)unmarkText {
   if (self.host) {
-    self.host->marked_range = NSMakeRange(NSNotFound, 0);
-    self.host->selected_range = NSMakeRange(NSNotFound, 0);
+    clear_mark(self.host);
     memset(&self.host->composition, 0, sizeof(self.host->composition));
     composition_changed(&self.host->desktop, &self.host->composition);
   }
@@ -107,12 +185,21 @@ static NSString *plain(id string) {
   return self.host->marked_range;
 }
 - (NSRange)selectedRange {
-  return [self hasMarkedText] ? self.host->selected_range : NSMakeRange(NSNotFound, 0);
+  if ([self hasMarkedText]) return self.host->selected_range;
+  if (!cocoa_context(self.host)) return NSMakeRange(NSNotFound, 0);
+  const Surrounding *context = &self.host->desktop.surrounding;
+  uint32_t begin = surrounding_utf16(context->text, context->cursor);
+  uint32_t end = surrounding_utf16(context->text, context->anchor);
+  return NSMakeRange(MIN(begin,end), begin > end ? begin-end : end-begin);
 }
 - (NSAttributedString *)attributedSubstringForProposedRange:(NSRange)range actualRange:(NSRangePointer)actual {
-  (void)range;
   if (actual) *actual = NSMakeRange(NSNotFound, 0);
-  return nil;
+  NSString *value = client_string(self.host);
+  if (!value || range.location == NSNotFound || range.location > [value length]) return nil;
+  NSRange bounded = NSMakeRange(range.location, MIN(range.length, [value length] - range.location));
+  if (bounded.length) bounded = [value rangeOfComposedCharacterSequencesForRange:bounded];
+  if (actual) *actual = bounded;
+  return [[NSAttributedString alloc] initWithString:[value substringWithRange:bounded]];
 }
 - (NSArray<NSAttributedStringKey> *)validAttributesForMarkedText {
   return @[];
@@ -249,6 +336,7 @@ void dyn_window_close(void *p) {
   if (!h)
     return;
   @autoreleasepool {
+    clear_mark(h);
     if (h->view) {
       NSOpenGLContext *context = [view(h) openGLContext];
       if ([NSOpenGLContext currentContext] == context)
@@ -620,6 +708,11 @@ void dyn_window_set_text_input(void *p, int32_t enabled, int32_t x, int32_t y, i
     memset(&h->composition, 0, sizeof(h->composition));
     composition_changed(&h->desktop, &h->composition);
   }
+  if (!enabled) {
+    if (h->text_input && h->desktop.surrounding.token)
+      h->desktop.consumed_token = h->desktop.surrounding.token;
+    clear_mark(h);
+  }
   h->text_input = enabled != 0;
   h->text_input_configured = 1;
   if (enabled) {
@@ -634,4 +727,21 @@ uint32_t dyn_window_clipboard_get(void *p, const uint8_t **text) {
   Host *h = p;
   *text = h->desktop.received;
   return h->desktop.received_length;
+}
+
+int32_t dyn_window_set_surrounding_text(void *p, const uint8_t *text, uint32_t length,
+                                        uint32_t cursor, uint32_t anchor, uint64_t token, uint32_t cause) {
+  Host *h = p;
+  if (!h || ![NSThread isMainThread] || cause > 1) return 0;
+  uint64_t previous = h->desktop.surrounding.token;
+  int32_t result = desktop_surrounding(&h->desktop, text, length, cursor, anchor, token);
+  if (result == 1 && previous != token && h->marked_text && h->marked_context.token != token) {
+    uint32_t consumed = h->desktop.pending.keys & DYN_KEY_IME;
+    [[view(h) inputContext] discardMarkedText];
+    clear_mark(h);
+    memset(&h->composition, 0, sizeof(h->composition));
+    composition_changed(&h->desktop, &h->composition);
+    h->desktop.pending.keys = (h->desktop.pending.keys & ~(uint32_t)DYN_KEY_IME) | consumed;
+  }
+  return result;
 }

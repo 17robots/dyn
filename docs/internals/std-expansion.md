@@ -267,3 +267,13 @@ record the compatibility freeze and run the two-preview stability period. No
 freeze or preview clock has started in this local implementation pass.
 
 Final full-suite evidence is recorded in [the expansion qualification record](qualification-20261026-expansion.md).
+
+## Surrounding-text correction follow-up
+
+Added `std/text/edit`, ordered replacement assembly, and box textbox revision
+checks. Native Wayland/Cocoa snapshots carry selection, revision and change
+cause. X11 and Windows explicitly reject this capability while retaining basic
+IME input. Qualification covers transactional Unicode edits, stale revisions,
+native callback/protocol contracts and the seven-argument C ABI. Cocoa callback
+runtime checks require macOS. Existing aggregate-input examples remain limited
+to preedit and committed text; SDL/SDL_ttf replacement in DNA remains pending.

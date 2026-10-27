@@ -662,3 +662,11 @@ uint32_t dyn_window_clipboard_get(void *p, const uint8_t **text) {
   *text = h->desktop.received;
   return h->desktop.received_length;
 }
+
+int32_t dyn_window_set_surrounding_text(void *p, const uint8_t *text, uint32_t length,
+                                        uint32_t cursor, uint32_t anchor, uint64_t token, uint32_t cause) {
+  /* IMM reconversion/context queries require a document service beyond the
+   * composition bridge. Do not advertise surrounding corrections here. */
+  (void)p; (void)text; (void)length; (void)cursor; (void)anchor; (void)token; (void)cause;
+  return -1;
+}

@@ -32,6 +32,13 @@ typedef struct Host {
   char pending_commit[4096];
   size_t pending_commit_length;
   int pending_commit_overflow;
+  int pending_has_delete;
+  uint32_t pending_before, pending_after;
+  uint32_t text_serial;
+  Surrounding context_history[16];
+  uint32_t context_serial[16];
+  uint8_t context_valid[16];
+  uint32_t surrounding_cause;
   struct wl_display *display;
   struct wl_registry *registry;
   struct wl_compositor *compositor;
@@ -565,6 +572,12 @@ static void text_apply_state(Host *h) {
                                          ZWP_TEXT_INPUT_V3_CONTENT_PURPOSE_NORMAL);
       h->text_applied = 1;
     }
+    if (h->desktop.surrounding.token) {
+      zwp_text_input_v3_set_text_change_cause(h->text_input, h->surrounding_cause ? ZWP_TEXT_INPUT_V3_CHANGE_CAUSE_INPUT_METHOD : ZWP_TEXT_INPUT_V3_CHANGE_CAUSE_OTHER);
+      zwp_text_input_v3_set_surrounding_text(h->text_input,
+          (const char *)h->desktop.surrounding.text,
+          (int32_t)h->desktop.surrounding.cursor, (int32_t)h->desktop.surrounding.anchor);
+    }
     /* The protocol uses surface-local (logical) coordinates. */
     int32_t s = h->scale > 0 ? h->scale : 1;
     zwp_text_input_v3_set_cursor_rectangle(h->text_input, h->caret[0] / s, h->caret[1] / s, h->caret[2] / s, h->caret[3] / s);
@@ -574,6 +587,11 @@ static void text_apply_state(Host *h) {
     h->text_applied = 0;
   }
   zwp_text_input_v3_commit(h->text_input);
+  h->text_serial++;
+  uint32_t slot = h->text_serial % 16;
+  h->context_history[slot] = h->desktop.surrounding;
+  h->context_serial[slot] = h->text_serial;
+  h->context_valid[slot] = h->desktop.surrounding.token != 0;
 }
 static void text_enter(void *p, struct zwp_text_input_v3 *t, struct wl_surface *s) {
   (void)t;
@@ -587,8 +605,10 @@ static void text_leave(void *p, struct zwp_text_input_v3 *t, struct wl_surface *
   (void)s;
   Host *h = p;
   h->text_focused = 0;
+  if (h->desktop.surrounding.token) h->desktop.consumed_token = h->desktop.surrounding.token;
   h->text_applied = 0;
   h->pending_has_preedit = 0;
+  h->pending_has_delete = 0;
   h->pending_commit_length = 0;
   h->pending_commit_overflow = 0;
   memset(&h->composition, 0, sizeof(h->composition));
@@ -619,12 +639,11 @@ static void text_commit(void *p, struct zwp_text_input_v3 *t, const char *text) 
   if (h->pending_commit_length) memcpy(h->pending_commit, text, length);
 }
 static void text_delete(void *p, struct zwp_text_input_v3 *t, uint32_t before, uint32_t after) {
-  /* Surrounding text is not reported, so deletion requests have nothing to
-   * act on; input methods fall back to committing replacement text. */
-  (void)p;
   (void)t;
-  (void)before;
-  (void)after;
+  Host *h = p;
+  h->pending_has_delete = 1;
+  h->pending_before = before;
+  h->pending_after = after;
 }
 static void text_done(void *p, struct zwp_text_input_v3 *t, uint32_t serial) {
   (void)t;
@@ -636,6 +655,7 @@ static void text_done(void *p, struct zwp_text_input_v3 *t, uint32_t serial) {
     h->pending_commit_length = 0;
     h->pending_commit_overflow = 0;
     h->pending_has_preedit = 0;
+    h->pending_has_delete = 0;
     return;
   }
   /* A done transaction removes the prior preedit before committing text. */
@@ -643,13 +663,29 @@ static void text_done(void *p, struct zwp_text_input_v3 *t, uint32_t serial) {
     memset(&h->composition, 0, sizeof(h->composition));
     composition_changed(&h->desktop, &h->composition);
   }
-  if (h->pending_commit_overflow && h->desktop.event_enabled && h->desktop.event_dropped != UINT32_MAX)
-    h->desktop.event_dropped++;
-  h->pending_commit_overflow = 0;
-  if (h->pending_commit_length) {
+  uint32_t slot = serial % 16;
+  const Surrounding *snapshot = h->context_valid[slot] && h->context_serial[slot] == serial
+      ? &h->context_history[slot] : NULL;
+  int selected = snapshot && snapshot->cursor != snapshot->anchor;
+  int correction = h->pending_has_delete || (selected && h->pending_commit_length);
+  if (h->pending_commit_overflow) desktop_loss(&h->desktop, 1);
+  else if (correction) {
+    if (!snapshot) desktop_loss(&h->desktop, 1);
+    else {
+      uint32_t low = snapshot->cursor < snapshot->anchor ? snapshot->cursor : snapshot->anchor;
+      uint32_t high = snapshot->cursor > snapshot->anchor ? snapshot->cursor : snapshot->anchor;
+      if (h->pending_before > low || h->pending_after > snapshot->length - high)
+        desktop_loss(&h->desktop, 1);
+      else desktop_edit(&h->desktop, snapshot, low - h->pending_before, high + h->pending_after,
+                        (const uint8_t *)h->pending_commit, (uint32_t)h->pending_commit_length);
+    }
+  } else if (h->pending_commit_length) {
     desktop_text(&h->desktop, (const uint8_t *)h->pending_commit, h->pending_commit_length);
-    h->pending_commit_length = 0;
   }
+  h->pending_commit_overflow = 0;
+  h->pending_commit_length = 0;
+  h->pending_has_delete = 0;
+  h->pending_before = h->pending_after = 0;
   if (h->pending_has_preedit) {
     composition_store(&h->composition, (const uint8_t *)h->pending_preedit, strlen(h->pending_preedit),
                       h->pending_begin, h->pending_end);
@@ -1050,12 +1086,15 @@ void dyn_window_set_text_input(void *p, int32_t enabled, int32_t x, int32_t y, i
   uint32_t consumed_before = h->desktop.pending.keys & DYN_KEY_IME;
   int changed = (enabled != 0) != h->text_enabled || h->caret[0] != x || h->caret[1] != y ||
                 h->caret[2] != width || h->caret[3] != height;
+  if (!enabled && h->text_enabled && h->desktop.surrounding.token)
+    h->desktop.consumed_token = h->desktop.surrounding.token;
   h->text_enabled = enabled != 0;
   h->text_configured = 1;
   if (!enabled) {
     h->pending_commit_length = 0;
     h->pending_commit_overflow = 0;
     h->pending_has_preedit = 0;
+    h->pending_has_delete = 0;
   }
   h->caret[0] = x;
   h->caret[1] = y;
@@ -1077,4 +1116,21 @@ uint32_t dyn_window_clipboard_get(void *p, const uint8_t **text) {
   Host *h = p;
   *text = h->desktop.received;
   return h->desktop.received_length;
+}
+
+int32_t dyn_window_set_surrounding_text(void *p, const uint8_t *text, uint32_t length,
+                                        uint32_t cursor, uint32_t anchor, uint64_t token, uint32_t cause) {
+  Host *h = p;
+  if (!h || cause > 1) return 0;
+  /* Wayland strings and protocol messages impose a stricter limit. */
+  if (length > 4000) return -2;
+  if (!h->text_input) return -1;
+  uint64_t previous = h->desktop.surrounding.token;
+  int32_t result = desktop_surrounding(&h->desktop, text, length, cursor, anchor, token);
+  if (result == 1 && previous != token) {
+    h->surrounding_cause = cause;
+    text_apply_state(h);
+    wl_display_flush(h->display);
+  }
+  return result;
 }
