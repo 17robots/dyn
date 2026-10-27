@@ -170,9 +170,9 @@ fn main() {
   // Pasting into the owner needs no round trip.
   window.request_paste(&source)
   _ = window.poll(&source)
-  check(window.box_input(&source).paste == false, "poll resets edge")
-  window.request_paste(&source)
-  check(bytes.equal(window.box_input(&source).clipboard, "héllo clipboard"), "owner paste")
+  check(window.box_input(&source).paste && bytes.equal(window.box_input(&source).clipboard, "héllo clipboard"), "owner paste on the next poll")
+  _ = window.poll(&source)
+  check(!window.box_input(&source).paste, "paste lasts one frame")
   start := time.monotonic_now().value
   window.wait(&source, 50)
   elapsed := time.elapsed(start, time.monotonic_now().value).value

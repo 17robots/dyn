@@ -15,8 +15,8 @@ if sys.platform.startswith('linux'):
     xml=str(pathlib.Path(protocols)/'stable/xdg-shell/xdg-shell.xml')
     run(['wayland-scanner','client-header',xml,str(header)])
     run(['wayland-scanner','private-code',xml,str(source)])
-    flags=shlex.split(subprocess.check_output(['pkg-config','--cflags','--libs','wayland-client','wayland-egl','egl'],text=True))
-    run([*cc,'-shared','-fPIC','-std=c11','-Wall','-Wextra','-Werror',f'-I{out.parent}',str(root/'wayland.c'),str(source),*flags,'-o',str(out)])
+    flags=shlex.split(subprocess.check_output(['pkg-config','--cflags','--libs','wayland-client','wayland-egl','wayland-cursor','xkbcommon','egl'],text=True))
+    run([*cc,'-shared','-fPIC','-std=c11','-D_GNU_SOURCE','-Wall','-Wextra','-Werror',f'-I{root}',f'-I{out.parent}',str(root/'wayland.c'),str(source),*flags,'-o',str(out)])
 elif sys.platform=='darwin':
     run([*cc,'-dynamiclib','-fobjc-arc','-Wall','-Wextra',str(root/'cocoa.m'),'-framework','Cocoa','-framework','OpenGL','-o',str(out)])
 elif sys.platform=='win32':

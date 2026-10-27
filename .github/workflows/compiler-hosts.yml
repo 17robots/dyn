@@ -45,6 +45,7 @@ jobs:
           python3 tests/stdlib-host.py
           python3 tests/std-expansion-host.py
           python3 tests/native-ui-results.py
+          python3 tests/window-desktop-results.py
           python3 tests/sync-host.py
           python3 tests/concurrency-net-host.py
           python3 tests/dns-host.py
@@ -100,6 +101,7 @@ jobs:
           python tests/stdlib-host.py
           python tests/std-expansion-host.py
           DYN_OPENGL_DLL="$(cygpath -w /clang64/bin/opengl32.dll)" GALLIUM_DRIVER=llvmpipe python tests/native-ui-results.py
+          python tests/window-desktop-results.py
           python tests/sync-host.py
           python tests/concurrency-net-host.py
           python tests/dns-host.py

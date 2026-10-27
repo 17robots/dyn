@@ -22,6 +22,8 @@ pub struct Desktop {
   owned: [clipboard_limit]u8, owned_length: usize, owns: bool,
   // The most recent clipboard text received from another client.
   received: [clipboard_limit]u8, received_length: usize, paste_pending: bool,
+  // Received text waiting for the next poll to report it as a paste.
+  paste_ready: bool,
   cursors: [5]usize, cursor: Cursor,
   scale: f32,
 }
@@ -150,7 +152,8 @@ fn desktop_begin(window: *Window) {
   desktop.select_all = false
   desktop.copy = false
   desktop.cut = false
-  desktop.paste = false
+  desktop.paste = desktop.paste_ready
+  desktop.paste_ready = false
   desktop.scroll_x = 0.0
   desktop.scroll_y = 0.0
 }
@@ -249,8 +252,8 @@ fn desktop_pointer(window: *Window, kind: i32, button: u32) {
   }
 }
 
-// Asks for the clipboard text; it arrives in box_input as a paste within a few
-// polls. Ctrl+V calls this, as can a Paste menu item.
+// Asks for the clipboard text; it arrives in box_input as a paste on a later
+// poll, never on the current frame. Ctrl+V calls this, as can a Paste menu item.
 pub fn request_paste(window: *Window) {
   desktop := &window.desktop
   if desktop.owns {
@@ -259,7 +262,7 @@ pub fn request_paste(window: *Window) {
     for i in 0..desktop.owned_length {
       desktop.received[i] = desktop.owned[i]
     }
-    desktop.paste = true
+    desktop.paste_ready = true
     return
   }
   if get_owner(window.display, desktop.clipboard_atom) == 0 {

@@ -1,4 +1,5 @@
 #include "window.h"
+#include "desktop_common.h"
 #import <Cocoa/Cocoa.h>
 #import <OpenGL/OpenGL.h>
 #include <dlfcn.h>
@@ -10,6 +11,8 @@ typedef struct Host Host;
 struct Host {
   void *window, *view, *delegate;
   dyn_window_frame frame;
+  Desktop desktop;
+  int cursor;
 };
 @implementation DynWindowDelegate
 - (BOOL)windowShouldClose:(NSWindow *)sender {
@@ -150,19 +153,65 @@ int32_t dyn_window_poll(void *p, dyn_window_frame *out) {
             target->frame.flags |= DYN_RELEASED;
           }
         }
+        if (type == NSEventTypeScrollWheel) {
+          CGFloat factor = [event hasPreciseScrollingDeltas] ? 1.0 : 48.0;
+          CGFloat scale = [window(target) backingScaleFactor];
+          target->desktop.pending.scroll_x -= (float)([event scrollingDeltaX] * factor * scale);
+          target->desktop.pending.scroll_y -= (float)([event scrollingDeltaY] * factor * scale);
+        }
+        if (type == NSEventTypeFlagsChanged || type == NSEventTypeKeyDown) {
+          if ([event modifierFlags] & NSEventModifierFlagShift)
+            target->desktop.pending.keys |= DYN_KEY_SHIFT;
+          else
+            target->desktop.pending.keys &= ~(uint32_t)DYN_KEY_SHIFT;
+        }
         if (type == NSEventTypeKeyDown) {
           NSString *chars = [event charactersIgnoringModifiers];
+          uint32_t *keys = &target->desktop.pending.keys;
+          int command = ([event modifierFlags] & NSEventModifierFlagCommand) != 0;
           if ([chars length]) {
             unichar key = [chars characterAtIndex:0];
-            if (key == 9)
+            if (key == 9) {
               target->frame.flags |= DYN_TAB;
-            else if (key == 13 || key == 32)
+              *keys |= DYN_KEY_TAB;
+            } else if (key == 13 || key == 3 || key == 32) {
               target->frame.flags |= DYN_ACTIVATE;
-            else if (key == NSLeftArrowFunctionKey)
+              if (key != 32)
+                *keys |= DYN_KEY_ENTER;
+            } else if (key == NSLeftArrowFunctionKey) {
               target->frame.flags |= DYN_LEFT;
-            else if (key == NSRightArrowFunctionKey)
+              *keys |= DYN_KEY_LEFT;
+            } else if (key == NSRightArrowFunctionKey) {
               target->frame.flags |= DYN_RIGHT;
+              *keys |= DYN_KEY_RIGHT;
+            } else if (key == 127)
+              *keys |= DYN_KEY_BACKSPACE;
+            else if (key == NSDeleteFunctionKey)
+              *keys |= DYN_KEY_DELETE;
+            else if (key == NSHomeFunctionKey)
+              *keys |= DYN_KEY_HOME;
+            else if (key == NSEndFunctionKey)
+              *keys |= DYN_KEY_END;
+            else if (key == 27)
+              *keys |= DYN_KEY_ESCAPE;
+            else if (command && (key == 'a' || key == 'A'))
+              *keys |= DYN_KEY_SELECT_ALL;
+            else if (command && (key == 'c' || key == 'C'))
+              *keys |= DYN_KEY_COPY;
+            else if (command && (key == 'x' || key == 'X'))
+              *keys |= DYN_KEY_CUT;
+            else if (command && (key == 'v' || key == 'V'))
+              dyn_window_request_paste(target);
+            else if (!command && (key < 0xf700 || key > 0xf8ff)) {
+              /* Dead keys and Option combinations resolve in characters. */
+              const char *text = [[event characters] UTF8String];
+              if (text)
+                desktop_text(&target->desktop, (const uint8_t *)text, strlen(text));
+            }
           }
+          /* The application handles keys; do not beep for unhandled ones. */
+          if (!command)
+            continue;
         }
       }
       [NSApp sendEvent:event];
@@ -190,3 +239,54 @@ int32_t dyn_window_swap(void *p) {
   return 1;
 }
 void *dyn_window_proc(const char *name) { return dlsym(RTLD_DEFAULT, name); }
+
+void dyn_window_desktop_take(void *p, dyn_window_desktop *out) {
+  Host *h = p;
+  float scale = h->window ? (float)[window(h) backingScaleFactor] : 1.0f;
+  desktop_take(&h->desktop, out, scale);
+}
+void dyn_window_set_clipboard(void *p, const uint8_t *text, uint32_t length) {
+  Host *h = p;
+  desktop_own(&h->desktop, text, length);
+  @autoreleasepool {
+    NSString *value = [[NSString alloc] initWithBytes:h->desktop.owned length:h->desktop.owned_length encoding:NSUTF8StringEncoding];
+    if (!value)
+      return;
+    NSPasteboard *board = [NSPasteboard generalPasteboard];
+    [board clearContents];
+    [board setString:value forType:NSPasteboardTypeString];
+  }
+}
+void dyn_window_request_paste(void *p) {
+  Host *h = p;
+  @autoreleasepool {
+    NSString *value = [[NSPasteboard generalPasteboard] stringForType:NSPasteboardTypeString];
+    if (!value)
+      return;
+    const char *text = [value UTF8String];
+    size_t length = text ? strlen(text) : 0;
+    if (length > DYN_CLIPBOARD_LIMIT)
+      length = DYN_CLIPBOARD_LIMIT;
+    memcpy(h->desktop.received, text, length);
+    h->desktop.received_length = (uint32_t)length;
+    desktop_deliver(&h->desktop);
+  }
+}
+void dyn_window_set_cursor(void *p, int32_t cursor) {
+  Host *h = p;
+  if (cursor < 0 || cursor > 4)
+    return;
+  h->cursor = cursor;
+  NSCursor *shapes[5] = {[NSCursor arrowCursor], [NSCursor IBeamCursor], [NSCursor pointingHandCursor],
+                         [NSCursor resizeLeftRightCursor], [NSCursor resizeUpDownCursor]};
+  [shapes[cursor] set];
+}
+void dyn_window_wait(void *p, int32_t timeout) {
+  (void)p;
+  if (![NSThread isMainThread])
+    return;
+  @autoreleasepool {
+    NSDate *until = timeout < 0 ? [NSDate distantFuture] : [NSDate dateWithTimeIntervalSinceNow:timeout / 1000.0];
+    (void)[NSApp nextEventMatchingMask:NSEventMaskAny untilDate:until inMode:NSDefaultRunLoopMode dequeue:NO];
+  }
+}

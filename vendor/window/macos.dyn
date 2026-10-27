@@ -1,5 +1,6 @@
 #target(kernel: darwin)
 use "vendor/window/native" native
+use "std/ui/box" box
 pub type Window = native.Window
 pub type Result = native.Result
 pub fn open(window: *Window, title: []const u8, width, height: i32) Result {
@@ -19,4 +20,23 @@ pub fn swap(window: *Window) Result {
 }
 pub fn gl_proc(name: *const u8) rawptr {
   return native.gl_proc(name)
+}
+pub type Cursor = native.Cursor
+pub fn set_clipboard(window: *Window, text: []const u8) {
+  native.set_clipboard(window, text)
+}
+pub fn request_paste(window: *Window) {
+  native.request_paste(window)
+}
+pub fn set_cursor(window: *Window, cursor: Cursor) {
+  native.set_cursor(window, cursor)
+}
+pub fn scale(window: *const Window) f32 {
+  return native.scale(window)
+}
+pub fn wait(window: *Window, timeout: i32) {
+  native.wait(window, timeout)
+}
+pub fn box_input(window: *const Window) box.Input {
+  return native.box_input(window)
 }

@@ -2,10 +2,14 @@ use "std/mem" mem
 use "std/c" c
 use "std/errors" errors
 use "std/ui" ui
+use "std/ui/box" box
 #link("dyn_window")
 // Native bridge owns its OS allocations. Keep the owning Window on its GUI
 // thread, close renderer resources before close, and never copy a live owner.
-pub struct Window { handle: rawptr, width: i32, height: i32, input: ui.Input, close_requested: bool }
+pub struct Window { handle: rawptr, width: i32, height: i32, input: ui.Input, close_requested: bool, desktop: Desktop }
+// Mirrors dyn_window_desktop in window.h.
+struct Desktop { text: [256]u8, text_length: u32, keys: u32, scroll_x: f32, scroll_y: f32, scale: f32, clipboard: *const u8, clipboard_length: u32 }
+pub enum Cursor { Arrow, Text, Hand, ResizeX, ResizeY }
 pub struct Result { kind: errors.Kind, ok: bool }
 struct Frame { width: i32, height: i32, x: i32, y: i32, flags: u32 }
 extern fn native_open "dyn_window_open"(title: *const u8, width: i32, height: i32) rawptr
@@ -14,6 +18,11 @@ extern fn native_poll "dyn_window_poll"(handle: rawptr, frame: *Frame) i32
 extern fn native_current "dyn_window_current"(handle: rawptr) i32
 extern fn native_swap "dyn_window_swap"(handle: rawptr) i32
 pub extern fn gl_proc "dyn_window_proc"(name: *const u8) rawptr
+extern fn native_desktop "dyn_window_desktop_take"(handle: rawptr, desktop: *Desktop)
+extern fn native_set_clipboard "dyn_window_set_clipboard"(handle: rawptr, text: *const u8, length: u32)
+extern fn native_request_paste "dyn_window_request_paste"(handle: rawptr)
+extern fn native_set_cursor "dyn_window_set_cursor"(handle: rawptr, cursor: i32)
+extern fn native_wait "dyn_window_wait"(handle: rawptr, timeout: i32)
 pub fn open(window: *Window, title: []const u8, width, height: i32) Result {
   if window.handle != nil {
     return Result{kind:errors.Kind.InvalidState}
@@ -57,6 +66,7 @@ pub fn poll(window: *Window) Result {
   window.height = frame.height
   window.close_requested = (frame.flags & 128) != 0
   window.input = ui.Input{x:frame.x, y:frame.y, down:(frame.flags&1)!=0, pressed:(frame.flags&2)!=0, released:(frame.flags&4)!=0, tab:(frame.flags&8)!=0, activate:(frame.flags&16)!=0, left:(frame.flags&32)!=0, right:(frame.flags&64)!=0}
+  native_desktop(window.handle, &window.desktop)
   return Result{ok:true}
 }
 pub fn make_current(window: *Window) Result {
@@ -76,4 +86,70 @@ pub fn swap(window: *Window) Result {
     return Result{kind:errors.Kind.System}
   }
   return Result{ok:true}
+}
+
+// Offers text on the clipboard; longer text is truncated to 64 KiB.
+pub fn set_clipboard(window: *Window, text: []const u8) {
+  if window.handle == nil {
+    return
+  }
+  length := #len(text)
+  if length > 65536 {
+    length = 65536
+  }
+  if length == 0 {
+    empty: [1]u8 = []
+    native_set_clipboard(window.handle, &empty[0], 0)
+    return
+  }
+  native_set_clipboard(window.handle, &text[0], #cast(u32, length))
+}
+
+// Asks for the clipboard; the text arrives in box_input as a paste.
+pub fn request_paste(window: *Window) {
+  if window.handle != nil {
+    native_request_paste(window.handle)
+  }
+}
+
+pub fn set_cursor(window: *Window, cursor: Cursor) {
+  if window.handle != nil {
+    native_set_cursor(window.handle, #cast(i32, #cast(u8, cursor)))
+  }
+}
+
+// Display scale relative to 96 DPI (or the platform's base scale).
+pub fn scale(window: *const Window) f32 {
+  if window.desktop.scale <= 0.0 {
+    return 1.0
+  }
+  return window.desktop.scale
+}
+
+// Blocks until input arrives or timeout milliseconds pass; negative waits
+// indefinitely.
+pub fn wait(window: *Window, timeout: i32) {
+  if window.handle != nil {
+    native_wait(window.handle, timeout)
+  }
+}
+
+// The box input for this frame. Text and clipboard views borrow the window
+// until the next poll.
+pub fn box_input(window: *const Window) box.Input {
+  desktop := &window.desktop
+  keys := desktop.keys
+  value := box.Input{
+    x: #cast(f32, window.input.x), y: #cast(f32, window.input.y), down: window.input.down,
+    scroll_x: desktop.scroll_x, scroll_y: desktop.scroll_y,
+    text: desktop.text[..#cast(usize, desktop.text_length)],
+    backspace: keys & 1 != 0, delete: keys & 2 != 0, left: keys & 4 != 0, right: keys & 8 != 0,
+    home: keys & 16 != 0, end: keys & 32 != 0, enter: keys & 64 != 0, escape: keys & 128 != 0,
+    tab: keys & 256 != 0, shift: keys & 512 != 0, select_all: keys & 1024 != 0,
+    copy: keys & 2048 != 0, cut: keys & 4096 != 0, paste: keys & 8192 != 0,
+  }
+  if value.paste && desktop.clipboard != nil {
+    value.clipboard = desktop.clipboard[..#cast(usize, desktop.clipboard_length)]
+  }
+  return value
 }
