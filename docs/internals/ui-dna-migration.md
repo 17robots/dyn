@@ -58,7 +58,12 @@ production UI regression checks multiple roots in one frame.
 The native-host qualification runner now includes the new UI and font
 contracts: 20 fixtures, each in debug, O2 and O3. Native macOS and real Windows
 execution still require their CI hosts; cross-builds and Wine do not establish
-native OS behavior. Local full-suite evidence is retained under
+native OS behavior. On 2026-10-27 the registered compiler regression suite passed. Its early UI
+checks preceded the final pointer-release adjustment; the box, editing, extras
+and batched-renderer gates were rerun successfully on the final UI source.
+The optional Unicorn check skipped in the default environment and passed
+separately through an isolated `uv --with unicorn` run. This is emulation,
+not physical board execution. Local logs are retained under
 `build/ui-dna-qualification/`.
 
 ## Remaining platform work
