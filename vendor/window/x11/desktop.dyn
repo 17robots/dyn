@@ -1,0 +1,401 @@
+#target(kernel: linux)
+use "std/ui/box" box
+
+// Text, editing keys, wheel, clipboard, cursors, DPI and event waiting.
+// Typed text uses an X input method when one is available, so dead keys and
+// compose sequences produce UTF-8; otherwise Latin-1 keys are converted.
+
+const text_limit: usize = 256
+const clipboard_limit: usize = 65536
+
+pub enum Cursor { Arrow, Text, Hand, ResizeX, ResizeY }
+
+pub struct Desktop {
+  method: rawptr, context: rawptr,
+  text: [text_limit]u8, text_length: usize,
+  backspace: bool, delete: bool, left: bool, right: bool, home: bool, end: bool,
+  enter: bool, escape: bool, tab: bool, shift: bool, select_all: bool,
+  copy: bool, cut: bool, paste: bool,
+  scroll_x: f32, scroll_y: f32,
+  clipboard_atom: usize, utf8_atom: usize, targets_atom: usize, property_atom: usize,
+  // Text this window offers while it owns the clipboard.
+  owned: [clipboard_limit]u8, owned_length: usize, owns: bool,
+  // The most recent clipboard text received from another client.
+  received: [clipboard_limit]u8, received_length: usize, paste_pending: bool,
+  cursors: [5]usize, cursor: Cursor,
+  scale: f32,
+}
+
+struct KeyEvent { kind: i32, serial: usize, sent: i32, display: rawptr, window: usize, root: usize, subwindow: usize, time: usize, x: i32, y: i32, root_x: i32, root_y: i32, state: u32, keycode: u32, same_screen: i32 }
+struct SelectionRequest { kind: i32, serial: usize, sent: i32, display: rawptr, owner: usize, requestor: usize, selection: usize, target: usize, property: usize, time: usize }
+struct SelectionNotify { kind: i32, serial: usize, sent: i32, display: rawptr, requestor: usize, selection: usize, target: usize, property: usize, time: usize }
+
+extern fn open_method "XOpenIM"(display: rawptr, database: rawptr, name: rawptr, class: rawptr) rawptr
+extern fn close_method "XCloseIM"(method: rawptr) i32
+extern fn create_context "XCreateIC"(method: rawptr, ...) rawptr
+extern fn destroy_input_context "XDestroyIC"(context: rawptr)
+extern fn set_focus "XSetICFocus"(context: rawptr)
+extern fn filter "XFilterEvent"(event: rawptr, window: usize) i32
+extern fn lookup_utf8 "Xutf8LookupString"(context: rawptr, event: rawptr, buffer: *u8, size: i32, key: *usize, status: *i32) i32
+extern fn lookup_latin1 "XLookupString"(event: rawptr, buffer: *u8, size: i32, key: *usize, compose: rawptr) i32
+extern fn set_owner "XSetSelectionOwner"(display: rawptr, selection: usize, owner: usize, time: usize) i32
+extern fn get_owner "XGetSelectionOwner"(display: rawptr, selection: usize) usize
+extern fn convert "XConvertSelection"(display: rawptr, selection: usize, target: usize, property: usize, requestor: usize, time: usize) i32
+extern fn change_property "XChangeProperty"(display: rawptr, window: usize, property: usize, kind: usize, format: i32, mode: i32, data: *const u8, count: i32) i32
+extern fn get_property "XGetWindowProperty"(display: rawptr, window: usize, property: usize, offset: isize, length: isize, delete: i32, kind: usize, actual_kind: *usize, actual_format: *i32, count: *usize, after: *usize, data: **u8) i32
+extern fn send_event "XSendEvent"(display: rawptr, window: usize, propagate: i32, mask: isize, event: rawptr) i32
+extern fn font_cursor "XCreateFontCursor"(display: rawptr, shape: u32) usize
+extern fn define_cursor "XDefineCursor"(display: rawptr, window: usize, cursor: usize) i32
+extern fn free_cursor "XFreeCursor"(display: rawptr, cursor: usize) i32
+extern fn connection "XConnectionNumber"(display: rawptr) i32
+extern fn resources "XResourceManagerString"(display: rawptr) *const u8
+
+fn atom(display: rawptr, name: []const u8) usize {
+  return intern_atom(display, &name[0], 0)
+}
+
+fn desktop_open(window: *Window) {
+  desktop := &window.desktop
+  display := window.display
+  desktop.clipboard_atom = atom(display, "CLIPBOARD\x00")
+  desktop.utf8_atom = atom(display, "UTF8_STRING\x00")
+  desktop.targets_atom = atom(display, "TARGETS\x00")
+  desktop.property_atom = atom(display, "DYN_CLIPBOARD\x00")
+  desktop.method = open_method(display, nil, nil, nil)
+  if desktop.method != nil {
+    style := "inputStyle\x00"
+    client := "clientWindow\x00"
+    focus := "focusWindow\x00"
+    // XIMPreeditNothing | XIMStatusNothing.
+    desktop.context = create_context(desktop.method, &style[0], 1032, &client[0], window.handle, &focus[0], window.handle, #cast(usize, 0))
+    if desktop.context != nil {
+      set_focus(desktop.context)
+    }
+  }
+  shapes: [5]u32 = [68, 152, 60, 108, 116]
+  for i in 0..5 {
+    desktop.cursors[i] = font_cursor(display, shapes[i])
+  }
+  desktop.scale = read_scale(display)
+}
+
+fn desktop_close(window: *Window) {
+  desktop := &window.desktop
+  if desktop.context != nil {
+    destroy_input_context(desktop.context)
+  }
+  if desktop.method != nil {
+    _ = close_method(desktop.method)
+  }
+  for i in 0..5 {
+    if desktop.cursors[i] != 0 {
+      _ = free_cursor(window.display, desktop.cursors[i])
+    }
+  }
+}
+
+// Xft.dpi from the resource database, relative to 96; 1 when unset.
+fn read_scale(display: rawptr) f32 {
+  raw := resources(display)
+  if raw == nil {
+    return 1.0
+  }
+  found := c.bytes_from_string(raw, 1048576)
+  if !found.ok {
+    return 1.0
+  }
+  text := found.value
+  key := "Xft.dpi:"
+  at: usize = 0
+  for at + #len(key) <= #len(text) {
+    matched := true
+    for i in 0..#len(key) {
+      if text[at + i] != key[i] {
+        matched = false
+        break
+      }
+    }
+    if matched {
+      at += #len(key)
+      for at < #len(text) && (text[at] == ' ' || text[at] == 9) {
+        at += 1
+      }
+      value: f32 = 0.0
+      for at < #len(text) && text[at] >= '0' && text[at] <= '9' {
+        value = value * 10.0 + #cast(f32, text[at] - '0')
+        at += 1
+      }
+      if value > 0.0 {
+        return value / 96.0
+      }
+      return 1.0
+    }
+    at += 1
+  }
+  return 1.0
+}
+
+fn desktop_begin(window: *Window) {
+  desktop := &window.desktop
+  desktop.text_length = 0
+  desktop.backspace = false
+  desktop.delete = false
+  desktop.left = false
+  desktop.right = false
+  desktop.home = false
+  desktop.end = false
+  desktop.enter = false
+  desktop.escape = false
+  desktop.tab = false
+  desktop.select_all = false
+  desktop.copy = false
+  desktop.cut = false
+  desktop.paste = false
+  desktop.scroll_x = 0.0
+  desktop.scroll_y = 0.0
+}
+
+fn desktop_filter(window: *Window, event: *Event) bool {
+  return window.desktop.context != nil && filter(event, 0) != 0
+}
+
+fn append_text(desktop: *Desktop, bytes: []const u8) {
+  for byte in bytes {
+    if desktop.text_length < text_limit {
+      desktop.text[desktop.text_length] = byte
+      desktop.text_length += 1
+    }
+  }
+}
+
+fn desktop_key(window: *Window, event: *Event) {
+  desktop := &window.desktop
+  key_event := #cast(*KeyEvent, event)
+  buffer: [64]u8 = []
+  key: usize = 0
+  count: i32 = 0
+  if desktop.context != nil {
+    status: i32 = 0
+    count = lookup_utf8(desktop.context, event, &buffer[0], 64, &key, &status)
+    if count < 0 || count > 64 {
+      count = 0
+    }
+  }
+  else {
+    latin: [8]u8 = []
+    length := lookup_latin1(event, &latin[0], 8, &key, nil)
+    for i in 0..#cast(usize, length) {
+      byte := latin[i]
+      if byte < 128 {
+        buffer[count] = byte
+        count += 1
+      }
+      else {
+        buffer[count] = 192 | byte >> 6
+        buffer[count + 1] = 128 | byte & 63
+        count += 2
+      }
+    }
+  }
+  control := key_event.state & 4 != 0
+  desktop.shift = key_event.state & 1 != 0
+  if key == 0xff08 {
+    desktop.backspace = true
+  } else if key == 0xffff {
+    desktop.delete = true
+  } else if key == 0xff51 {
+    desktop.left = true
+  } else if key == 0xff53 {
+    desktop.right = true
+  } else if key == 0xff50 {
+    desktop.home = true
+  } else if key == 0xff57 {
+    desktop.end = true
+  } else if key == 0xff0d || key == 0xff8d {
+    desktop.enter = true
+  } else if key == 0xff1b {
+    desktop.escape = true
+  } else if key == 0xff09 {
+    desktop.tab = true
+  } else if control && (key == #cast(usize, 'a') || key == #cast(usize, 'A')) {
+    desktop.select_all = true
+  } else if control && (key == #cast(usize, 'c') || key == #cast(usize, 'C')) {
+    desktop.copy = true
+  } else if control && (key == #cast(usize, 'x') || key == #cast(usize, 'X')) {
+    desktop.cut = true
+  } else if control && (key == #cast(usize, 'v') || key == #cast(usize, 'V')) {
+    request_paste(window)
+  } else if !control {
+    shown := buffer[..#cast(usize, count)]
+    if #len(shown) != 0 && shown[0] >= 32 && shown[0] != 127 {
+      append_text(desktop, shown)
+    }
+  }
+}
+
+fn desktop_pointer(window: *Window, kind: i32, button: u32) {
+  if kind != 4 {
+    return
+  }
+  step: f32 = 48.0 * window.desktop.scale
+  if button == 4 {
+    window.desktop.scroll_y -= step
+  } else if button == 5 {
+    window.desktop.scroll_y += step
+  } else if button == 6 {
+    window.desktop.scroll_x -= step
+  } else if button == 7 {
+    window.desktop.scroll_x += step
+  }
+}
+
+// Asks for the clipboard text; it arrives in box_input as a paste within a few
+// polls. Ctrl+V calls this, as can a Paste menu item.
+pub fn request_paste(window: *Window) {
+  desktop := &window.desktop
+  if desktop.owns {
+    // Our own text needs no round trip.
+    desktop.received_length = desktop.owned_length
+    for i in 0..desktop.owned_length {
+      desktop.received[i] = desktop.owned[i]
+    }
+    desktop.paste = true
+    return
+  }
+  if get_owner(window.display, desktop.clipboard_atom) == 0 {
+    return
+  }
+  _ = convert(window.display, desktop.clipboard_atom, desktop.utf8_atom, desktop.property_atom, window.handle, 0)
+  desktop.paste_pending = true
+}
+
+// Serves clipboard requests from other clients and receives pasted text.
+fn desktop_selection(window: *Window, event: *Event) {
+  desktop := &window.desktop
+  if event.kind == 30 {
+    request := #cast(*SelectionRequest, event)
+    reply := SelectionNotify{ kind: 31, display: request.display, requestor: request.requestor, selection: request.selection, target: request.target, time: request.time }
+    if request.selection == desktop.clipboard_atom && desktop.owns && request.property != 0 {
+      if request.target == desktop.utf8_atom {
+        _ = change_property(window.display, request.requestor, request.property, desktop.utf8_atom, 8, 0, &desktop.owned[0], #cast(i32, desktop.owned_length))
+        reply.property = request.property
+      }
+      else if request.target == desktop.targets_atom {
+        offered: [2]usize = [desktop.targets_atom, desktop.utf8_atom]
+        // Atom lists are format 32, stored as native longs.
+        _ = change_property(window.display, request.requestor, request.property, 4, 32, 0, #cast(*const u8, &offered[0]), 2)
+        reply.property = request.property
+      }
+    }
+    _ = send_event(window.display, request.requestor, 0, 0, &reply)
+    _ = flush(window.display)
+  }
+  else if event.kind == 29 {
+    // SelectionClear: another client took the clipboard.
+    desktop.owns = false
+  }
+  else if event.kind == 31 && desktop.paste_pending {
+    notify := #cast(*SelectionNotify, event)
+    desktop.paste_pending = false
+    if notify.property == 0 {
+      return
+    }
+    actual_kind: usize = 0
+    actual_format: i32 = 0
+    count: usize = 0
+    after: usize = 0
+    data: *u8 = nil
+    if get_property(window.display, window.handle, desktop.property_atom, 0, #cast(isize, clipboard_limit / 4), 1, 0, &actual_kind, &actual_format, &count, &after, &data) == 0 && data != nil {
+      if actual_format == 8 {
+        length := count
+        if length > clipboard_limit {
+          length = clipboard_limit
+        }
+        bytes := data[..length]
+        for i in 0..length {
+          desktop.received[i] = bytes[i]
+        }
+        desktop.received_length = length
+        desktop.paste = true
+      }
+      _ = free(data)
+    }
+  }
+}
+
+// Offers text on the clipboard; longer text is truncated to 64 KiB.
+pub fn set_clipboard(window: *Window, text: []const u8) {
+  if window.display == nil {
+    return
+  }
+  desktop := &window.desktop
+  length := #len(text)
+  if length > clipboard_limit {
+    length = clipboard_limit
+  }
+  for i in 0..length {
+    desktop.owned[i] = text[i]
+  }
+  desktop.owned_length = length
+  _ = set_owner(window.display, desktop.clipboard_atom, window.handle, 0)
+  desktop.owns = get_owner(window.display, desktop.clipboard_atom) == window.handle
+  _ = flush(window.display)
+}
+
+pub fn set_cursor(window: *Window, cursor: Cursor) {
+  if window.display == nil || window.desktop.cursor == cursor {
+    return
+  }
+  window.desktop.cursor = cursor
+  _ = define_cursor(window.display, window.handle, window.desktop.cursors[#cast(usize, #cast(u8, cursor))])
+  _ = flush(window.display)
+}
+
+// Display scale relative to 96 DPI.
+pub fn scale(window: *const Window) f32 {
+  if window.desktop.scale <= 0.0 {
+    return 1.0
+  }
+  return window.desktop.scale
+}
+
+// Blocks until an event arrives or timeout milliseconds pass; a negative
+// timeout waits indefinitely. Use it when nothing animates, so idle
+// programs use no CPU.
+pub fn wait(window: *Window, timeout: i32) {
+  if window.display == nil || pending(window.display) > 0 {
+    return
+  }
+  entry: [8]u8 = []
+  descriptor := #cast(u32, connection(window.display))
+  entry[0] = #cast(u8, descriptor & 255)
+  entry[1] = #cast(u8, descriptor >> 8 & 255)
+  entry[2] = #cast(u8, descriptor >> 16 & 255)
+  entry[3] = #cast(u8, descriptor >> 24)
+  entry[4] = 1
+  if timeout < 0 {
+    _ = #syscall(271, &entry[0], 1, 0, 0, 8)
+    return
+  }
+  limit: [2]i64 = [#cast(i64, timeout / 1000), #cast(i64, timeout % 1000) * 1000000]
+  _ = #syscall(271, &entry[0], 1, &limit[0], 0, 8)
+}
+
+// The box input for this frame. Text and clipboard views borrow the window
+// until the next poll.
+pub fn box_input(window: *const Window) box.Input {
+  desktop := &window.desktop
+  value := box.Input{
+    x: #cast(f32, window.input.x), y: #cast(f32, window.input.y), down: window.input.down,
+    scroll_x: desktop.scroll_x, scroll_y: desktop.scroll_y,
+    text: desktop.text[..desktop.text_length],
+    backspace: desktop.backspace, delete: desktop.delete, left: desktop.left, right: desktop.right,
+    home: desktop.home, end: desktop.end, enter: desktop.enter, escape: desktop.escape,
+    tab: desktop.tab, shift: desktop.shift, select_all: desktop.select_all,
+    copy: desktop.copy, cut: desktop.cut, paste: desktop.paste,
+  }
+  if desktop.paste {
+    value.clipboard = desktop.received[..desktop.received_length]
+  }
+  return value
+}

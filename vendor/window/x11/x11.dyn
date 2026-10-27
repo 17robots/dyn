@@ -7,7 +7,12 @@ use "std/ui" ui
 #link("GL")
 // Xlib and GLX are thread-affine. Keep this owner alive until close; do not
 // copy live windows. Destroy renderer resources before closing their context.
-pub struct Window { display: rawptr, handle: usize, context: rawptr, colormap: usize, close_atom: usize, protocol_atom: usize, width: i32, height: i32, input: ui.Input, close_requested: bool }
+pub struct Window {
+  display: rawptr, handle: usize, context: rawptr, colormap: usize, close_atom: usize, protocol_atom: usize,
+  width: i32, height: i32, input: ui.Input, close_requested: bool,
+  // Desktop input for std/ui/box, reset by each poll; see desktop.dyn.
+  desktop: Desktop,
+}
 pub struct Result { kind: errors.Kind, ok: bool }
 struct Visual { visual: rawptr, id: usize, screen: i32, depth: i32, class: i32, red: usize, green: usize, blue: usize, colormap_size: i32, bits: i32 }
 struct Attributes { background_pixmap: usize, background_pixel: usize, border_pixmap: usize, border_pixel: usize, bit_gravity: i32, win_gravity: i32, backing_store: i32, backing_planes: usize, backing_pixel: usize, save_under: i32, event_mask: isize, propagate: isize, override_redirect: i32, colormap: usize, cursor: usize }
@@ -101,7 +106,7 @@ pub fn open(window: *Window, title: []const u8, width, height: i32) Result {
     return Result{kind:errors.Kind.System}
   }
   window.colormap = create_colormap(display, root(display, info.screen), info.visual, 0)
-  attrs := Attributes{colormap:window.colormap, event_mask:1|2|4|8|64|32768|131072|2097152}
+  attrs := Attributes{colormap:window.colormap, event_mask:1|2|4|8|64|32768|131072|2097152|4194304}
   window.handle = create_window(display, root(display, info.screen), 0, 0, #cast(u32, width), #cast(u32, height), 0, info.depth, 1, info.visual, 8192|2048, &attrs)
   create_name := "glXCreateContextAttribsARB\x00"
   create := #cast(fn(rawptr, rawptr, rawptr, i32, *const i32)rawptr, gl_proc(&create_name[0]))
@@ -123,6 +128,7 @@ pub fn open(window: *Window, title: []const u8, width, height: i32) Result {
   _ = protocols(display, window.handle, &window.close_atom, 1)
   _ = store_name(display, window.handle, name.value)
   _ = map_window(display, window.handle)
+  desktop_open(window)
   _ = flush(display)
   _ = sync(display, 0)
   if context_error_seen {
@@ -157,10 +163,15 @@ pub fn poll(window: *Window) Result {
   window.input.activate = false
   window.input.left = false
   window.input.right = false
+  desktop_begin(window)
   for pending(window.display) > 0 {
     event := Event{}
     _ = next_event(window.display, &event)
+    if desktop_filter(window, &event) {
+      continue
+    }
     if event.kind == 2 {
+      desktop_key(window, &event)
       key := keysym(&event, 0)
       window.input.tab = window.input.tab || key == 0xff09
       window.input.activate = window.input.activate || key == 0xff0d || key == 0x20
@@ -170,6 +181,7 @@ pub fn poll(window: *Window) Result {
       pointer := #cast(*PointerEvent, &event)
       window.input.x = pointer.x
       window.input.y = pointer.y
+      desktop_pointer(window, event.kind, pointer.button)
       if pointer.button == 1 && event.kind != 6 {
         if event.kind == 4 {
           window.input.down = true
@@ -191,6 +203,8 @@ pub fn poll(window: *Window) Result {
       if message.message == window.protocol_atom && message.format == 32 && #cast(usize, message.data[0]) == window.close_atom {
         window.close_requested = true
       }
+    } else {
+      desktop_selection(window, &event)
     }
   }
   return Result{ok:true}
@@ -199,6 +213,7 @@ pub fn close(window: *Window) {
   if window.display == nil {
     return
   }
+  desktop_close(window)
   if window.context != nil {
     if current_context() == window.context {
       _ = current(window.display, 0, nil)

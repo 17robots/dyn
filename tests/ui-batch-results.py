@@ -128,6 +128,57 @@ fn main() {
 
 persistent_arena: mem.Arena
 '''
+CLIPBOARD = r'''use "vendor/window" window
+use "std/bytes" bytes
+use "std/time" time
+
+fn check(ok: bool, message: []const u8) {
+  if !ok {
+    #panic(message)
+  }
+}
+
+fn main() {
+  source := window.Window{}
+  target := window.Window{}
+  check(window.open(&source, "source", 64, 64).ok, "source")
+  defer {
+    window.close(&source)
+  }
+  check(window.open(&target, "target", 64, 64).ok, "target")
+  defer {
+    window.close(&target)
+  }
+  check(window.scale(&source) > 0.0, "scale")
+  window.set_cursor(&source, window.Cursor.Text)
+  window.set_cursor(&source, window.Cursor.Hand)
+  window.set_clipboard(&source, "héllo clipboard")
+  window.request_paste(&target)
+  got := false
+  for i in 0..200 {
+    _ = window.poll(&source)
+    _ = window.poll(&target)
+    input := window.box_input(&target)
+    if input.paste {
+      check(bytes.equal(input.clipboard, "héllo clipboard"), "pasted text")
+      got = true
+      break
+    }
+    window.wait(&target, 10)
+  }
+  check(got, "paste arrived")
+  // Pasting into the owner needs no round trip.
+  window.request_paste(&source)
+  _ = window.poll(&source)
+  check(window.box_input(&source).paste == false, "poll resets edge")
+  window.request_paste(&source)
+  check(bytes.equal(window.box_input(&source).clipboard, "héllo clipboard"), "owner paste")
+  start := time.monotonic_now().value
+  window.wait(&source, 50)
+  elapsed := time.elapsed(start, time.monotonic_now().value).value
+  check(elapsed < 2 * time.Second, "wait returns")
+}
+'''
 if not sys.platform.startswith('linux') or not os.environ.get('DISPLAY'):
     print('SKIP batched UI: DISPLAY unavailable')
     raise SystemExit(0)
@@ -138,4 +189,16 @@ with tempfile.TemporaryDirectory(prefix='dyn-ui-batch-') as directory:
         output = work / 'program'
         subprocess.run([DYN, 'build', str(work), *flags, '--quiet', '--no-cache', '--output', str(output)], check=True, timeout=300)
         subprocess.run([str(output)], check=True, timeout=60)
-print('PASS batched UI: rounded SDF rectangles and atlas glyphs match the software oracle in one draw call; glyph cache, small streams (debug/O2/O3)')
+    clipboard = work / 'clipboard'
+    clipboard.mkdir()
+    (clipboard / 'main.dyn').write_text(CLIPBOARD)
+    subprocess.run([DYN, 'build', str(clipboard), '--quiet', '--no-cache', '--output', str(clipboard / 'program')], check=True, timeout=300)
+    subprocess.run([str(clipboard / 'program')], check=True, timeout=60)
+    viewer = work / 'box-viewer'
+    subprocess.run([DYN, 'build', str(ROOT / 'examples/box-viewer'), '--release', '--quiet', '--no-cache', '--output', str(viewer)], check=True, timeout=300)
+    font = Path('/usr/share/fonts/noto/NotoSans-Regular.ttf')
+    if font.exists():
+        shot = work / 'viewer.png'
+        subprocess.run([str(viewer), str(font), '--frames', '5', '--screenshot', str(shot)], check=True, timeout=60)
+        assert shot.stat().st_size > 1000
+print('PASS batched UI: rounded SDF rectangles and atlas glyphs match the software oracle in one draw call; glyph cache, small streams (debug/O2/O3); X11 clipboard between windows, cursors, wait; box-viewer example runs')

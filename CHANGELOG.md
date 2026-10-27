@@ -14,6 +14,7 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- `vendor/window` on X11 adds UTF-8 text input through the input method, editing keys, wheel scrolling, the clipboard, cursors, display scale, `wait` for idle loops and `box_input`. `examples/box-viewer` is a 100,000-row log viewer on `std/ui/box`.
 - `ui.rounded_rectangle` and `Command.radius` draw antialiased rounded rectangles. `vendor/ui/opengl` adds a batched renderer: one signed-distance shader, a cached glyph atlas, and a draw call per clip.
 - `std/ui/box` adds a box-model UI after the RAD Debugger design: keyed boxes, semantic-size layout, previous-frame input, animation, text fields, scrolling and virtual lists.
 

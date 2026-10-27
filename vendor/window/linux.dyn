@@ -1,5 +1,6 @@
 #target(kernel: linux)
 use "vendor/window/x11" x11
+use "std/ui/box" box
 // Linux default currently uses X11/GLX, including XWayland. Explicit native
 // Wayland is a separate backend; availability never silently selects SDL.
 pub type Window = x11.Window
@@ -21,4 +22,23 @@ pub fn swap(window: *Window) Result {
 }
 pub fn gl_proc(name: *const u8) rawptr {
   return x11.gl_proc(name)
+}
+pub type Cursor = x11.Cursor
+pub fn set_clipboard(window: *Window, text: []const u8) {
+  x11.set_clipboard(window, text)
+}
+pub fn set_cursor(window: *Window, cursor: Cursor) {
+  x11.set_cursor(window, cursor)
+}
+pub fn scale(window: *const Window) f32 {
+  return x11.scale(window)
+}
+pub fn wait(window: *Window, timeout: i32) {
+  x11.wait(window, timeout)
+}
+pub fn box_input(window: *const Window) box.Input {
+  return x11.box_input(window)
+}
+pub fn request_paste(window: *Window) {
+  x11.request_paste(window)
 }
