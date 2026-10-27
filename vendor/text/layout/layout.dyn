@@ -655,3 +655,119 @@ pub fn at_point(layout:*const Layout, x, y:f64) Hit {
   }
   return Hit{start:offset, end:offset, line:line_index, x:line.width, y:line.y, height:#cast(f64, layout.line_height), rtl:last.rtl, ok:true}
 }
+
+// Visual cells touched by a logical source selection. start/end are the source
+// hull of each merged rectangle; at bidi boundaries that hull need not describe
+// a contiguous visual or logical run. Geometry is authoritative for drawing.
+pub struct SelectionRect { line: usize, start: usize, end: usize, x: f64, y: f64, width: f64, height: f64 }
+pub struct SelectionResult { value: []SelectionRect, kind: errors.Kind, ok: bool }
+fn selection_boundary(text: []const u8, offset: usize) bool {
+  return offset<=#len(text) && (offset==#len(text) || text[offset]&0xc0!=0x80)
+}
+fn selection_store(destination: []SelectionRect, count: usize, rect: SelectionRect) {
+  if count<#len(destination) {
+    destination[count]=rect
+  }
+}
+// Two linear passes count then write exactly the required number of rectangles.
+// An unselected positive-width cell is a merge barrier, including at bidi runs.
+fn selection_walk(layout: *const Layout, start, end: usize, destination: []SelectionRect) usize {
+  count: usize=0
+  for line_index in 0..#len(layout.lines) {
+    line:=layout.lines[line_index]
+    pending:=SelectionRect{}
+    active:=false
+    i:=line.glyph_start
+    limit:=line.glyph_start+line.glyph_count
+    for i<limit {
+      glyph:=layout.glyphs[i]
+      left:=math.min(glyph.x, glyph.x+glyph.advance)
+      right:=math.max(glyph.x, glyph.x+glyph.advance)
+      next:=i+1
+      for next<limit && layout.glyphs[next].start==glyph.start && layout.glyphs[next].end==glyph.end {
+        other:=layout.glyphs[next]
+        left=math.min(left, math.min(other.x, other.x+other.advance))
+        right=math.max(right, math.max(other.x, other.x+other.advance))
+        next+=1
+      }
+      selected:=glyph.start<end && glyph.end>start
+      if right>left {
+        if selected {
+          if active && left<=pending.x+pending.width {
+            edge:=math.max(pending.x+pending.width, right)
+            pending.x=math.min(pending.x, left)
+            pending.width=edge-pending.x
+            if glyph.start<pending.start {
+              pending.start=glyph.start
+            }
+            if glyph.end>pending.end {
+              pending.end=glyph.end
+            }
+          }
+          else {
+            if active {
+              selection_store(destination, count, pending)
+              count+=1
+            }
+            pending=SelectionRect{line:line_index, start:glyph.start, end:glyph.end, x:left, y:line.y, width:right-left, height:#cast(f64, layout.line_height)}
+            active=true
+          }
+        }
+        else if active {
+          selection_store(destination, count, pending)
+          count+=1
+          active=false
+        }
+      }
+      i=next
+    }
+    if active {
+      selection_store(destination, count, pending)
+      count+=1
+    }
+  }
+  return count
+}
+// Selects whole canonical shaped clusters when any source byte in the cluster
+// is selected. Bounds must be UTF-8 scalar boundaries. Tabs contribute their
+// advance cells; zero-width controls and paragraph separators have no rectangle.
+// Newline extensions and empty-line selection policy belong to the application.
+// Layouts built by build have contiguous line glyph slices; forged malformed
+// layouts are rejected before allocation. Empty ranges allocate nothing.
+pub fn selection(arena: *mem.Arena, layout: *const Layout, start, end: usize) SelectionResult {
+  if arena==nil || layout==nil || start>end || end>#len(layout.text) || !utf8.valid(layout.text) || !selection_boundary(layout.text, start) || !selection_boundary(layout.text, end) {
+    return SelectionResult{kind:errors.Kind.InvalidInput}
+  }
+  if start==end {
+    return SelectionResult{ok:true}
+  }
+  if layout.line_height<=0 {
+    return SelectionResult{kind:errors.Kind.InvalidInput}
+  }
+  used: usize=0
+  for line in layout.lines {
+    if line.start>line.end || line.end>#len(layout.text) || line.glyph_start!=used || line.glyph_count>#len(layout.glyphs)-used || !selection_boundary(layout.text, line.start) || !selection_boundary(layout.text, line.end) || !finite(line.y) || !finite(line.y+#cast(f64, layout.line_height)) {
+      return SelectionResult{kind:errors.Kind.InvalidInput}
+    }
+    used+=line.glyph_count
+  }
+  if used!=#len(layout.glyphs) {
+    return SelectionResult{kind:errors.Kind.InvalidInput}
+  }
+  for glyph in layout.glyphs {
+    if glyph.start>=glyph.end || glyph.end>#len(layout.text) || !selection_boundary(layout.text, glyph.start) || !selection_boundary(layout.text, glyph.end) || !finite(glyph.x) || !finite(glyph.advance) || !finite(glyph.x+glyph.advance) {
+      return SelectionResult{kind:errors.Kind.InvalidInput}
+    }
+  }
+  empty: [0]SelectionRect=[]
+  count:=selection_walk(layout, start, end, empty[..])
+  if count>~#cast(usize, 0)/#sizeof(SelectionRect) {
+    return SelectionResult{kind:errors.Kind.Overflow}
+  }
+  if count==0 {
+    return SelectionResult{ok:true}
+  }
+  rects:=mem.push_array(SelectionRect, arena, count)
+  _=selection_walk(layout, start, end, rects)
+  return SelectionResult{value:rects, ok:true}
+}

@@ -49,3 +49,33 @@ controls and tabs. A separate Arabic fixture alternates two native fonts within
 one joining word and compares the contextual forms. It checks wrapping, source ranges, missing-glyph graphemes,
 soft hyphens, hit queries, atomic errors and a 20,000-glyph unwrapped line. Host
 execution covers debug/O2/O3; six desktop targets compile objects separately.
+
+## Visual selection geometry
+
+`selection(arena, layout, start, end)` accepts a half-open logical UTF-8 byte
+range and returns arena-owned `SelectionRect` values in visual line order.
+Endpoints must be scalar boundaries. Any touched canonical shaped cluster is
+selected in full, including a ligature or base-plus-mark grapheme. The function
+does not change source bytes, glyph placements or line records. Empty ranges
+allocate nothing. Invalid ranges or malformed layout slices fail before
+allocation. Selection scans source, lines and glyphs linearly.
+
+Each rectangle includes line index, pixel coordinates, line height and the
+selected source `start/end` hull. That hull is metadata, not a promise that a
+bidi transition forms a contiguous logical run. Draw the geometry rather than
+reconstructing a band from the hull's source endpoints. Adjacent selected visual
+cells merge on the same line; unselected positive-width cells prevent merging.
+A logical range can therefore yield multiple separated rectangles on one line.
+
+Tabs contribute their positive advance even though their placements are hidden.
+Zero-width format controls and paragraph separators have no selection cell.
+The application supplies newline extension, empty-line highlighting and clip
+policy. Rectangles follow logical advance cells rather than glyph ink offsets.
+Results own copied geometry and remain valid independently of later layout
+mutation, until the destination arena is rewound or released.
+
+`tests/text-shaped-selection.py` derives selection unions from the independent
+C HarfBuzz/FriBidi glyph oracle for all scalar-boundary intervals in mixed-script
+fixtures. It also covers discontiguous visual regions, partial ligatures and
+marks, tabs/newlines, caller-arena ownership, invalid ranges/slices and a
+20,000-glyph line in debug/O2/O3 plus six desktop object targets.

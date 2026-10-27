@@ -14,6 +14,8 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- Shaped text now exposes visual selection rectangles for logical UTF-8 ranges, preserving bidi gaps and expanding touched ligatures/graphemes atomically.
+
 - Added optional FriBidi paragraph resolution and HarfBuzz shaped layout with script/font runs, grapheme-safe wrapping and source-cluster queries. HarfBuzz now supports explicit run properties and full-line context; FreeType exposes scalable-face metrics.
 - Software rendering skips blending for fully opaque pixels. X11 exposes checked swap interval control for immediate presentation or refresh pacing.
 
