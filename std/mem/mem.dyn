@@ -323,6 +323,11 @@ pub fn arena_try_push(arena: *Arena, size: usize, alignment: usize) Allocation {
   return arena_try_push_impl(arena, size, alignment, true)
 }
 
+// Same failure and lifetime contract as arena_try_push, without initializing bytes.
+pub fn arena_try_push_uninit(arena: *Arena, size: usize, alignment: usize) Allocation {
+  return arena_try_push_impl(arena, size, alignment, false)
+}
+
 // Pushes one zeroed T. Panics when the arena is exhausted.
 pub fn push($T: type, arena: *Arena) *T {
   return #cast(*T, arena_push(arena, #sizeof(T), #alignof(T)))

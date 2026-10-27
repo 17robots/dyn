@@ -15,6 +15,11 @@ fn main() {
   successful := mem.arena_try_create(64)
   expect(successful.ok, "fallible creation succeeds")
   mem.arena_release(&successful.arena)
+  untouched: [4]u8 = [11, 22, 33, 44]
+  borrowed := mem.arena_from_buffer(untouched[..])
+  raw := mem.arena_try_push_uninit(&borrowed, 4, 1)
+  expect(raw.ok && raw.memory.* == 11 && raw.memory[..4][3] == 44, "fallible uninitialized push")
+  expect(!mem.arena_try_push_uninit(&borrowed, 1, 1).ok && mem.arena_used(&borrowed) == 4, "uninitialized push capacity rollback")
   created := mem.arena_create(128)
   arena := &created
   allocation := mem.arena_push(arena, 128, 1)

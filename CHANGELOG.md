@@ -14,7 +14,7 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
-- Added `std/mem.arena_try_create` for recoverable backing reservation. Fallible arena pushes and extension now return failure on Windows commitment refusal; growing arenas roll back failed backing/header/payload acquisition before publishing a block.
+- Added `std/mem.arena_try_create` for recoverable backing reservation and `arena_try_push_uninit` for fallible allocation without eagerly initializing payload bytes. Fallible arena pushes and extension now return failure on Windows commitment refusal; growing arenas roll back failed backing/header/payload acquisition before publishing a block.
 
 - Shaped text now exposes visual selection rectangles for logical UTF-8 ranges, preserving bidi gaps and expanding touched ligatures/graphemes atomically.
 

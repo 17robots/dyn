@@ -76,7 +76,8 @@ also fail while reserving or committing backing. The ordinary push APIs treat
 these failures as fatal. Code with a strict budget uses the fallible forms:
 `mem.try_push(T, &arena)` returns nil and `mem.try_push_array(T, &arena, count)`
 returns an empty slice on exhaustion or size overflow. The untyped
-`mem.arena_try_push` returns an `Allocation` with the error kind. Failure preserves the offset and existing payload bytes, but
+`mem.arena_try_push` returns an `Allocation` with the error kind;
+`arena_try_push_uninit` has the same failure contract without initializing bytes. Failure preserves the offset and existing payload bytes, but
 increments the failure counter and can record an observation event. A lazy
 owned arena may retain newly acquired backing after a failed oversized push;
 Windows commitment failure returns `System` from fallible pushes.
