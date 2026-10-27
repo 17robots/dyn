@@ -1,0 +1,172 @@
+use "std/mem" mem
+use "std/errors" errors
+// P2/P3/P5/P6 portable graymaps/pixmaps. Samples up to 65535 are rounded
+// to 8 bits, without changing transfer functions. decode reads one image
+
+// consumed permits concatenated raw images. Binary headers consume exactly
+// one whitespace byte after Maxval: raster whitespace and '#' are pixel data.
+// See https://netpbm.sourceforge.net/doc/ppm.html and ../pgm.html.
+pub struct Info { width: u32, height: u32, channels: u8 }
+pub struct Image { info: Info, pixels: []u8 }
+pub struct Result { value: Image, consumed: usize, kind: errors.Kind, offset: usize, ok: bool }
+pub struct EncodeResult { value: []u8, kind: errors.Kind, ok: bool }
+struct Cursor { source: []const u8, at: usize, failed: bool }
+fn whitespace(c: u8) bool {
+  return c == ' ' || (c >= 9 && c <= 13)
+}
+fn skip(cursor: *Cursor) {
+  for cursor.at < #len(cursor.source) {
+    c := cursor.source[cursor.at]
+    if whitespace(c) {
+      cursor.at += 1
+    }
+    else if c == '#' {
+      for cursor.at < #len(cursor.source) && cursor.source[cursor.at] != '\n' && cursor.source[cursor.at] != '\r' {
+        cursor.at += 1
+      }
+    } else {
+      return
+    }
+  }
+}
+fn decimal(cursor: *Cursor) u32 {
+  skip(cursor)
+  start := cursor.at
+  value: u32 = 0
+  for cursor.at < #len(cursor.source) {
+    c := cursor.source[cursor.at]
+    if c < '0' || c > '9' {
+      break
+    }
+    digit := #cast(u32, c - '0')
+    if value > (4294967295 - digit) / 10 {
+      cursor.failed = true
+      return 0
+    }
+    value = value * 10 + digit
+    cursor.at += 1
+  }
+  if cursor.at == start || (cursor.at < #len(cursor.source) && !whitespace(cursor.source[cursor.at]) && cursor.source[cursor.at] != '#') {
+    cursor.failed = true
+  }
+  return value
+}
+pub fn decode(arena: *mem.Arena, source: []const u8) Result {
+  if #len(source) < 3 || source[0] != 'P' || (source[1] != '2' && source[1] != '3' && source[1] != '5' && source[1] != '6') || !whitespace(source[2]) {
+    return Result{ kind: errors.Kind.InvalidInput }
+  }
+  cursor := Cursor{ source: source, at: 2 }
+  width := decimal(&cursor)
+  height := decimal(&cursor)
+  maxval := decimal(&cursor)
+  // A comment attached to Maxval ends before its line delimiter. Once the
+  // delimiter is consumed, every byte (including '#') belongs to the raster.
+  if cursor.at < #len(source) && source[cursor.at] == '#' {
+    for cursor.at < #len(source) && source[cursor.at] != '\n' && source[cursor.at] != '\r' {
+      cursor.at += 1
+    }
+  }
+  if cursor.failed || width == 0 || height == 0 || maxval == 0 || maxval > 65535 || cursor.at == #len(source) || !whitespace(source[cursor.at]) {
+    return Result{ kind: errors.Kind.InvalidInput, offset: cursor.at }
+  }
+  channels: usize = 1
+  if source[1] == '3' || source[1] == '6' {
+    channels = 3
+  }
+  if #cast(u64, width) * #cast(u64, height) > #cast(u64, ~#cast(usize, 0) / channels) {
+    return Result{ kind: errors.Kind.Overflow, offset: cursor.at }
+  }
+  count := #cast(usize, width) * #cast(usize, height) * channels
+  plain := source[1] == '2' || source[1] == '3'
+  cursor.at += 1
+  stride: usize = 1
+  if maxval > 255 {
+    stride = 2
+  }
+  // Every plain sample needs at least one byte. Reject impossible lengths
+  // before allocating
+  // malformed input never causes dimension-sized storage.
+  if (!plain && count > (#len(source) - cursor.at) / stride) || (plain && count > #len(source) - cursor.at) {
+    return Result{ kind: errors.Kind.InvalidInput, offset: cursor.at }
+  }
+  mark := mem.arena_mark(arena)
+  pixels := mem.push_array(u8, arena, count)
+  for i in 0..count {
+    value: u32 = 0
+    if plain {
+      value = decimal(&cursor)
+    }
+    else {
+      value = #cast(u32, source[cursor.at])
+      cursor.at += 1
+      if stride == 2 {
+        value = value * 256 + #cast(u32, source[cursor.at])
+        cursor.at += 1
+      }
+    }
+    if cursor.failed || value > maxval {
+      mem.arena_rewind(arena, mark)
+      return Result{ kind: errors.Kind.InvalidInput, offset: cursor.at }
+    }
+    pixels[i] = #cast(u8, (value * 255 + maxval / 2) / maxval)
+  }
+  if plain {
+    skip(&cursor)
+  }
+  return Result{ value: Image{ info: Info{ width: width, height: height, channels: #cast(u8, channels) }, pixels: pixels }, consumed: cursor.at, ok: true }
+}
+fn digits(value: u32) usize {
+  count: usize = 1
+  for value >= 10 {
+    value /= 10
+    count += 1
+  }
+  return count
+}
+fn write_decimal(output: []u8, at: *usize, value: u32) {
+  count := digits(value)
+  for i in 0..count {
+    output[at.* + count - i - 1] = '0' + #cast(u8, value % 10)
+    value /= 10
+  }
+  at.* += count
+}
+// Emit binary P5 (one channel) or P6 (three channels) with Maxval 255.
+// Input must not borrow unused output-arena storage. Failure allocates nothing.
+pub fn encode(arena: *mem.Arena, pixels: []const u8, width: u32, height: u32, channels: u8) EncodeResult {
+  if width == 0 || height == 0 || (channels != 1 && channels != 3) {
+    return EncodeResult{ kind: errors.Kind.InvalidInput }
+  }
+  header := 9 + digits(width) + digits(height)
+  if #cast(u64, width) * #cast(u64, height) > #cast(u64, (~#cast(usize, 0) - header) / #cast(usize, channels)) {
+    return EncodeResult{ kind: errors.Kind.Overflow }
+  }
+  count := #cast(usize, width) * #cast(usize, height) * #cast(usize, channels)
+  if #len(pixels) != count {
+    return EncodeResult{ kind: errors.Kind.InvalidInput }
+  }
+  output := mem.push_array(u8, arena, header + count)
+  output[0] = 'P'
+  output[1] = '5'
+  if channels == 3 {
+    output[1] = '6'
+  }
+  output[2] = '\n'
+  at: usize = 3
+  write_decimal(output, &at, width)
+  output[at] = ' '
+  at += 1
+  write_decimal(output, &at, height)
+  output[at] = '\n'
+  at += 1
+  output[at] = '2'
+  output[at + 1] = '5'
+  output[at + 2] = '5'
+  output[at + 3] = '\n'
+  at += 4
+  for byte in pixels {
+    output[at] = byte
+    at += 1
+  }
+  return EncodeResult{ value: output, ok: true }
+}
