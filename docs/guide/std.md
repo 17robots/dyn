@@ -111,6 +111,7 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
 | --- | --- |
 | `std/font`, `font/ui` | TrueType simple/composite rasterizer, atlas packing and software UI font adapters |
 | `std/ui` | Immediate-mode buttons, checkboxes, integer sliders and arena-owned draw commands |
+| `std/ui/box` | Box-model UI: keyed boxes, automatic layout from semantic sizes, animation, text fields, scrolling and virtual lists |
 | `std/ui/software` | RGBA software rendering with caller-provided bitmap glyphs |
 | `std/text/layout`, `std/ui/text` | Unicode line layout, Latin pair kerning and positioned UI glyphs |
 | `std/embedded/uart`, `timer`, `interrupt` | Polling UART, CLINT/SysTick and bare-metal critical sections |

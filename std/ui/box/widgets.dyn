@@ -1,0 +1,270 @@
+// Widgets are builder code over boxes. Each returns its Signal; state such as
+// a checkbox value or text buffer belongs to the caller.
+
+use "std/unicode/utf8" utf8
+
+// A box that lays its children left to right.
+pub fn row(state: *State, label: []const u8) *Box {
+  box := build(state, 0, label)
+  box.axis = 0
+  return box
+}
+
+// A box that lays its children top to bottom.
+pub fn column(state: *State, label: []const u8) *Box {
+  box := build(state, 0, label)
+  box.axis = 1
+  return box
+}
+
+pub fn spacer(state: *State, label: []const u8, width: Size, height: Size) *Box {
+  box := build(state, 0, label)
+  box.width = width
+  box.height = height
+  return box
+}
+
+pub fn label(state: *State, text: []const u8) Signal {
+  box := build(state, DrawText, text)
+  box.width = text_size(4.0, 1.0)
+  box.height = text_size(2.0, 1.0)
+  return signal(state, box)
+}
+
+pub fn button(state: *State, label: []const u8) Signal {
+  box := build(state, Clickable | DrawBackground | DrawBorder | DrawText | CenterText | HotAnimation | ActiveAnimation, label)
+  box.width = text_size(10.0, 1.0)
+  box.height = text_size(5.0, 1.0)
+  return signal(state, box)
+}
+
+pub fn checkbox(state: *State, label: []const u8, value: *bool) Signal {
+  box := build(state, Clickable | DrawBackground | DrawBorder | DrawText | HotAnimation | ActiveAnimation, label)
+  box.width = text_size(14.0, 1.0)
+  box.height = text_size(5.0, 1.0)
+  result := signal(state, box)
+  if result.clicked {
+    value.* = !value.*
+  }
+  if value.* {
+    box.background = box.active_color
+  }
+  return result
+}
+
+// A horizontal slider over low..high. Dragging sets the value from the pointer.
+pub fn slider(state: *State, label: []const u8, value: *f32, low, high: f32) Signal {
+  track := build(state, Clickable | DrawBackground | DrawBorder | HotAnimation, label)
+  track.width = pixels(160.0, 0.5)
+  track.height = text_size(5.0, 1.0)
+  result := signal(state, track)
+  if (result.pressed || result.dragging) && track.size[0] > 0.0 {
+    fraction := (state.input.x - track.rect[0]) / track.size[0]
+    if fraction < 0.0 {
+      fraction = 0.0
+    }
+    if fraction > 1.0 {
+      fraction = 1.0
+    }
+    value.* = low + (high - low) * fraction
+  }
+  push_parent(state, track)
+  track.axis = 0
+  fill := build(state, DrawBackground, "##fill")
+  span := high - low
+  shown: f32 = 0.0
+  if span != 0.0 {
+    shown = (value.* - low) / span
+  }
+  fill.width = percent(shown, 1.0)
+  fill.height = percent(1.0, 1.0)
+  fill.background = track.active_color
+  pop_parent(state)
+  return result
+}
+
+// A clipped, vertically scrolling region. Build its contents between
+// scroll_begin and scroll_end.
+pub fn scroll_begin(state: *State, label: []const u8, width: Size, height: Size) *Box {
+  box := build(state, Clip | ScrollY | DrawBackground, label)
+  box.width = width
+  box.height = height
+  _ = signal(state, box)
+  push_parent(state, box)
+  return box
+}
+
+pub fn scroll_end(state: *State) {
+  pop_parent(state)
+}
+
+// The rows of a virtual list visible this frame. Build only rows first..last
+// inside the list, after a spacer of first * row_height; the list adds the
+// trailing space so the scroll extent covers count rows.
+pub struct Range { first: usize, last: usize }
+
+pub fn list_begin(state: *State, label: []const u8, width: Size, height: Size, count: usize, row_height: f32) Range {
+  box := scroll_begin(state, label, width, height)
+  start := box.view[1] / row_height
+  first: usize = 0
+  if start > 0.0 {
+    first = #cast(usize, start)
+  }
+  visible := box.size[1] / row_height + 2.0
+  last := first + #cast(usize, visible)
+  if first > count {
+    first = count
+  }
+  if last > count {
+    last = count
+  }
+  _ = spacer(state, "##before", pixels(1.0, 1.0), pixels(#cast(f32, first) * row_height, 1.0))
+  box.floating[1] = #cast(f32, count - last) * row_height
+  return Range{ first: first, last: last }
+}
+
+pub fn list_end(state: *State) {
+  box := parent(state)
+  _ = spacer(state, "##after", pixels(1.0, 1.0), pixels(box.floating[1], 1.0))
+  scroll_end(state)
+}
+
+// An editable single-line field over caller storage. length is the used byte
+// count; cursor is a byte offset kept on code point boundaries. Returns
+// changed when the text changed and submitted when Enter was pressed.
+pub struct Edit { length: usize, cursor: usize }
+pub struct FieldSignal { signal: Signal, focused: bool, changed: bool, submitted: bool }
+
+fn previous_boundary(text: []const u8, at: usize) usize {
+  index := at
+  for index > 0 {
+    index -= 1
+    if text[index] & 0xc0 != 0x80 {
+      return index
+    }
+  }
+  return 0
+}
+
+fn next_boundary(text: []const u8, at: usize) usize {
+  if at >= #len(text) {
+    return #len(text)
+  }
+  decoded := utf8.decode(text, at)
+  if !decoded.ok {
+    return at + 1
+  }
+  return at + decoded.width
+}
+
+fn insert(storage: []u8, edit: *Edit, text: []const u8) bool {
+  if !utf8.valid(text) || edit.length + #len(text) > #len(storage) {
+    return false
+  }
+  index := edit.length
+  for index > edit.cursor {
+    index -= 1
+    storage[index + #len(text)] = storage[index]
+  }
+  for i in 0..#len(text) {
+    storage[edit.cursor + i] = text[i]
+  }
+  edit.length += #len(text)
+  edit.cursor += #len(text)
+  return true
+}
+
+fn remove(storage: []u8, edit: *Edit, from: usize, to: usize) {
+  count := to - from
+  for i in from..edit.length - count {
+    storage[i] = storage[i + count]
+  }
+  edit.length -= count
+  if edit.cursor > to {
+    edit.cursor -= count
+  }
+  else if edit.cursor > from {
+    edit.cursor = from
+  }
+}
+
+pub fn text_field(state: *State, label: []const u8, storage: []u8, edit: *Edit) FieldSignal {
+  box := build(state, Clickable | DrawBackground | DrawBorder | DrawText | Clip | HotAnimation, label)
+  box.width = pixels(220.0, 0.5)
+  box.height = text_size(5.0, 1.0)
+  result := FieldSignal{ signal: signal(state, box) }
+  if result.signal.pressed {
+    state.focused = box.key
+    state.focus_claimed = true
+  }
+  if edit.length > #len(storage) {
+    edit.length = #len(storage)
+  }
+  if edit.cursor > edit.length {
+    edit.cursor = edit.length
+  }
+  focused := state.focused == box.key
+  result.focused = focused
+  if focused {
+    input := state.input
+    text := storage[..edit.length]
+    if input.home {
+      edit.cursor = 0
+    }
+    if input.end {
+      edit.cursor = edit.length
+    }
+    if input.left {
+      edit.cursor = previous_boundary(text, edit.cursor)
+    }
+    if input.right {
+      edit.cursor = next_boundary(text, edit.cursor)
+    }
+    if input.backspace && edit.cursor > 0 {
+      remove(storage, edit, previous_boundary(storage[..edit.length], edit.cursor), edit.cursor)
+      result.changed = true
+    }
+    if input.delete && edit.cursor < edit.length {
+      remove(storage, edit, edit.cursor, next_boundary(storage[..edit.length], edit.cursor))
+      result.changed = true
+    }
+    if input.copy || input.cut {
+      copied := mem.push_bytes_uninit(state.frame, edit.length)
+      _ = mem.copy(copied, storage[..edit.length])
+      state.copied = copied
+      if input.cut {
+        edit.length = 0
+        edit.cursor = 0
+        result.changed = true
+      }
+    }
+    if input.paste && #len(input.clipboard) != 0 {
+      result.changed = insert(storage, edit, input.clipboard) || result.changed
+    }
+    if #len(input.text) != 0 {
+      result.changed = insert(storage, edit, input.text) || result.changed
+    }
+    if input.enter {
+      result.submitted = true
+    }
+    if input.escape {
+      state.focused = 0
+    }
+    box.border = box.active_color
+  }
+  shown := mem.push_bytes_uninit(state.frame, edit.length)
+  _ = mem.copy(shown, storage[..edit.length])
+  box.text = shown
+  if focused {
+    push_parent(state, box)
+    box.axis = 0
+    caret := build(state, DrawBackground | FloatingX | FloatingY, "##caret")
+    caret.floating[0] = 4.0 + state.measure(state.measure_data, storage[..edit.cursor])
+    caret.floating[1] = 3.0
+    caret.width = pixels(1.0, 1.0)
+    caret.height = pixels(state.line_height, 1.0)
+    caret.background = box.foreground
+    pop_parent(state)
+  }
+  return result
+}

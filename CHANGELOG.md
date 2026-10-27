@@ -14,6 +14,7 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- `std/ui/box` adds a box-model UI after the RAD Debugger design: keyed boxes, semantic-size layout, previous-frame input, animation, text fields, scrolling and virtual lists.
 
 - `std/text/layout` adds NFC-aware Unicode line layout, Latin pair kerning, wrapping,
   alignment, tabs and soft hyphens. `std/ui/text` emits positioned glyph commands.
