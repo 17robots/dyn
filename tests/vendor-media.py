@@ -362,6 +362,7 @@ use "std/mem"
 use "std/os/linux"
 use "std/strings"
 use "std/io"
+use "std/c" c
 fn shader(api: *gl.Api, kind: u32, source: []const u8) u32 {
   value := api.create_shader(kind)
   if value == 0 {
@@ -387,6 +388,95 @@ fn shader(api: *gl.Api, kind: u32, source: []const u8) u32 {
 }
 fn missing_proc(name: *const u8) rawptr {
   return nil
+}
+fn atlas_smoke(api: *gl.Api) {
+  vertex := shader(api, gl.VertexShader, "#version 330 core\nlayout(location=0) in vec2 p; uniform vec2 uv_scale; out vec2 uv; void main(){uv=(p+1.0)*0.5*uv_scale;gl_Position=vec4(p,0,1);}")
+  defer api.delete_shader(vertex)
+  fragment := shader(api, gl.FragmentShader, "#version 330 core\nin vec2 uv; uniform sampler2D coverage; uniform vec4 tint; out vec4 color; void main(){color=vec4(tint.rgb,tint.a*texture(coverage,uv).r);}")
+  defer api.delete_shader(fragment)
+  program := api.create_program()
+  defer api.delete_program(program)
+  api.attach_shader(program, vertex)
+  api.attach_shader(program, fragment)
+  api.link_program(program)
+  linked: i32 = 0
+  api.get_program_iv(program, gl.LinkStatus, &linked)
+  if linked == 0 { #panic("atlas shader link") }
+  api.use_program(program)
+  sampler_name := "coverage\x00"
+  scale_name := "uv_scale\x00"
+  tint_name := "tint\x00"
+  sampler := api.get_uniform_location(program, &sampler_name[0])
+  scale := api.get_uniform_location(program, &scale_name[0])
+  tint := api.get_uniform_location(program, &tint_name[0])
+  if sampler < 0 || scale < 0 || tint < 0 { #panic("atlas uniforms") }
+  api.uniform_1i(sampler, 0)
+  api.uniform_2f(scale, 1.0, 1.0)
+  api.uniform_4f(tint, 1.0, 0.0, 0.0, 0.5)
+  vao: u32 = 0
+  vbo: u32 = 0
+  texture: u32 = 0
+  api.gen_vertex_arrays(1, &vao)
+  api.gen_buffers(1, &vbo)
+  api.gen_textures(1, &texture)
+  defer api.delete_vertex_arrays(1, &vao)
+  defer api.delete_buffers(1, &vbo)
+  defer api.delete_textures(1, &texture)
+  if vao == 0 || vbo == 0 || texture == 0 { #panic("atlas objects") }
+  api.bind_vertex_array(vao)
+  api.bind_buffer(gl.ArrayBuffer, vbo)
+  vertices: [6]f32 = [-1.0, -1.0, 3.0, -1.0, -1.0, 3.0]
+  api.buffer_data(gl.ArrayBuffer, #cast(isize, #sizeof(vertices)), &vertices[0], gl.DynamicDraw)
+  api.enable_vertex_attribute(0)
+  api.vertex_attribute(0, 2, gl.Float, 0, 8, nil)
+  api.active_texture(gl.Texture0)
+  api.bind_sampler(0, 0)
+  api.bind_texture(gl.Texture2d, texture)
+  api.tex_parameter_i(gl.Texture2d, gl.TextureMinFilter, #cast(i32, gl.Nearest))
+  api.tex_parameter_i(gl.Texture2d, gl.TextureMagFilter, #cast(i32, gl.Nearest))
+  api.tex_parameter_i(gl.Texture2d, gl.TextureWrapS, #cast(i32, gl.ClampToEdge))
+  api.tex_parameter_i(gl.Texture2d, gl.TextureWrapT, #cast(i32, gl.ClampToEdge))
+  alignment: i32 = 0
+  api.get_integer(gl.UnpackAlignment, &alignment)
+  api.pixel_store_i(gl.UnpackAlignment, 1)
+  empty: [4]u8 = []
+  coverage: [4]u8 = [255, 128, 0, 255]
+  api.tex_image_2d(gl.Texture2d, 0, #cast(i32, gl.R8), 2, 2, 0, gl.Red, gl.UnsignedByte, &empty[0])
+  api.tex_sub_image_2d(gl.Texture2d, 0, 0, 0, 2, 2, gl.Red, gl.UnsignedByte, &coverage[0])
+  api.pixel_store_i(gl.UnpackAlignment, alignment)
+  api.viewport(0, 0, 8, 8)
+  api.disable(gl.ScissorTest)
+  api.clear_color(0.0, 0.0, 1.0, 1.0)
+  api.clear(gl.ColorBufferBit)
+  api.enable(gl.Blend)
+  api.blend_equation_separate(gl.FuncAdd, gl.FuncAdd)
+  api.blend_func_separate(gl.SrcAlpha, gl.OneMinusSrcAlpha, gl.One, gl.OneMinusSrcAlpha)
+  api.scissor(0, 0, 4, 8)
+  api.enable(gl.ScissorTest)
+  if api.is_enabled(gl.Blend) == 0 || api.is_enabled(gl.ScissorTest) == 0 { #panic("atlas enables") }
+  api.draw_arrays(gl.Triangles, 0, 3)
+  pixel: [4]u8 = []
+  api.read_pixels(1, 1, 1, 1, gl.Rgba, gl.UnsignedByte, &pixel[0])
+  if pixel[0] < 126 || pixel[0] > 130 || pixel[1] != 0 || pixel[2] < 125 || pixel[2] > 129 || pixel[3] != 255 { #panic("atlas solid alpha") }
+  api.read_pixels(1, 6, 1, 1, gl.Rgba, gl.UnsignedByte, &pixel[0])
+  if pixel[0] != 0 || pixel[1] != 0 || pixel[2] != 255 { #panic("atlas zero coverage") }
+  api.read_pixels(6, 1, 1, 1, gl.Rgba, gl.UnsignedByte, &pixel[0])
+  if pixel[0] != 0 || pixel[1] != 0 || pixel[2] != 255 { #panic("atlas scissor") }
+  api.disable(gl.ScissorTest)
+  api.draw_arrays(gl.Triangles, 0, 3)
+  api.read_pixels(6, 1, 1, 1, gl.Rgba, gl.UnsignedByte, &pixel[0])
+  if pixel[0] < 62 || pixel[0] > 66 || pixel[1] != 0 || pixel[2] < 189 || pixel[2] > 193 || pixel[3] != 255 { #panic("atlas partial coverage") }
+  api.disable(gl.Blend)
+  api.use_program(0)
+  api.bind_vertex_array(0)
+  api.bind_buffer(gl.ArrayBuffer, 0)
+  api.bind_texture(gl.Texture2d, 0)
+  if api.get_error() != 0 { #panic("atlas GL error") }
+}
+fn missing_texture_proc(name: *const u8) rawptr {
+  bytes := c.bytes_from_string(name, 64)
+  if bytes.ok && strings.equal(bytes.value, "glTexImage2D") { return nil }
+  return sdl3.gl_proc(name)
 }
 fn main() {
   missing := gl.load(missing_proc)
@@ -428,6 +518,10 @@ fn main() {
     _ = io.println(io.stderr(), "missing {}", loaded.missing)
     #panic("GL load")
   }
+  absent_texture := gl.load(missing_texture_proc)
+  if absent_texture.ok || !strings.equal(absent_texture.missing, "glTexImage2D") || absent_texture.api.clear_color != nil {
+    #panic("partial atlas API accepted")
+  }
   api := &loaded.api
   major: i32 = 0
   minor: i32 = 0
@@ -458,6 +552,7 @@ fn main() {
       #panic("shader diagnostics")
     }
   }
+  if smoke { atlas_smoke(api) }
   _ = sdl3.gl_swap_interval(1)
   vertex := shader(api, gl.VertexShader, "#version 330 core\nlayout(location=0) in vec2 p; void main(){gl_Position=vec4(p,0,1);}")
   defer api.delete_shader(vertex)
