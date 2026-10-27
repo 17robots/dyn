@@ -15,6 +15,7 @@ struct Host {
   void *window, *view, *delegate;
   dyn_window_frame frame;
   Desktop desktop;
+  int clipboard_status, clipboard_requested;
   dyn_window_composition composition;
   int text_input, text_input_configured;
   NSRange marked_range, selected_range;
@@ -579,6 +580,34 @@ int32_t dyn_window_poll(void *p, dyn_window_frame *out) {
     return 1;
   }
 }
+int32_t dyn_window_set_title(void *p, const uint8_t *text, uint32_t length) {
+  if (!p || ![NSThread isMainThread] || (length && !text)) return 0;
+  if (length > 4096) return -2;
+  if (!surrounding_utf8(text,length)) return 0;
+  NSString *title = [[NSString alloc] initWithBytes:text length:length encoding:NSUTF8StringEncoding];
+  if (!title) return 0;
+  [window((Host *)p) setTitle:title];
+  return 1;
+}
+int32_t dyn_window_set_size(void *p, int32_t width, int32_t height) {
+  if (!p || ![NSThread isMainThread] || width <= 0 || height <= 0) return 0;
+  Host *h = p;
+  if (([window(h) styleMask] & NSWindowStyleMaskFullScreen) || [window(h) isZoomed]) return -1;
+  CGFloat scale = [window(h) backingScaleFactor];
+  if (scale <= 0) return 0;
+  [window(h) setContentSize:NSMakeSize(width/scale,height/scale)];
+  dimensions(h);
+  return 1;
+}
+int32_t dyn_window_set_swap_interval(void *p, int32_t interval) {
+  if (!p || ![NSThread isMainThread] || interval < 0) return 0;
+  NSOpenGLContext *context = [view((Host *)p) openGLContext];
+  if ([NSOpenGLContext currentContext] != context) return 0;
+  GLint value = interval;
+  [context setValues:&value forParameter:NSOpenGLCPSwapInterval];
+  [context getValues:&value forParameter:NSOpenGLCPSwapInterval];
+  return value == interval;
+}
 int32_t dyn_window_current(void *p) {
   if (![NSThread isMainThread])
     return 0;
@@ -601,35 +630,54 @@ void dyn_window_desktop_take(void *p, dyn_window_desktop *out) {
   float scale = h->window ? (float)[window(h) backingScaleFactor] : 1.0f;
   desktop_take(&h->desktop, out, scale);
 }
-void dyn_window_set_clipboard(void *p, const uint8_t *text, uint32_t length) {
+int32_t dyn_window_try_set_clipboard(void *p, const uint8_t *text, uint32_t length) {
   Host *h = p;
-  desktop_own(&h->desktop, text, length);
+  if (!h || ![NSThread isMainThread]) return -4;
+  if (length > DYN_CLIPBOARD_LIMIT) return -2;
+  if (!surrounding_utf8(text, length)) return -3;
   @autoreleasepool {
-    NSString *value = [[NSString alloc] initWithBytes:h->desktop.owned
-                                               length:h->desktop.owned_length
-                                             encoding:NSUTF8StringEncoding];
-    if (!value)
-      return;
+    NSString *value = [[NSString alloc] initWithBytes:length ? text : (const uint8_t *)""
+        length:length encoding:NSUTF8StringEncoding];
+    if (!value) return -3;
     NSPasteboard *board = [NSPasteboard generalPasteboard];
+    if (!board) return 0;
     [board clearContents];
-    [board setString:value forType:NSPasteboardTypeString];
+    if (![board setString:value forType:NSPasteboardTypeString]) return 0;
+    if (length) memcpy(h->desktop.owned, text, length);
+    h->desktop.owned_length = length;
+    return 1;
   }
 }
-void dyn_window_request_paste(void *p) {
-  Host *h = p;
+void dyn_window_set_clipboard(void *p, const uint8_t *text, uint32_t length) {
+  (void)dyn_window_try_set_clipboard(p, text, length);
+}
+static void clipboard_request(Host *h, int emit) {
+  if (!h) return;
+  h->clipboard_requested = 1;
+  h->clipboard_status = -4;
+  if (![NSThread isMainThread]) return;
+  h->clipboard_status = 0;
   @autoreleasepool {
-    NSString *value =
-        [[NSPasteboard generalPasteboard] stringForType:NSPasteboardTypeString];
-    if (!value)
-      return;
-    const char *text = [value UTF8String];
-    size_t length = text ? strlen(text) : 0;
-    if (length > DYN_CLIPBOARD_LIMIT)
-      length = DYN_CLIPBOARD_LIMIT;
-    memcpy(h->desktop.received, text, length);
+    NSString *value = [[NSPasteboard generalPasteboard] stringForType:NSPasteboardTypeString];
+    if (!value) return;
+    NSData *data = [value dataUsingEncoding:NSUTF8StringEncoding allowLossyConversion:NO];
+    if (!data) { h->clipboard_status = -3; return; }
+    NSUInteger length = [data length];
+    if (length > DYN_CLIPBOARD_LIMIT) { h->clipboard_status = -2; return; }
+    const uint8_t *text = [data bytes];
+    if (!surrounding_utf8(text, (uint32_t)length)) { h->clipboard_status = -3; return; }
+    if (length) memcpy(h->desktop.received, text, length);
     h->desktop.received_length = (uint32_t)length;
-    desktop_deliver(&h->desktop);
+    h->clipboard_status = 1;
+    desktop_deliver_mode(&h->desktop, emit);
   }
+}
+void dyn_window_request_paste(void *p) { clipboard_request(p, 1); }
+void dyn_window_request_paste_snapshot(void *p) { clipboard_request(p, 0); }
+int32_t dyn_window_paste_pending(void *p) { (void)p; return 0; }
+int32_t dyn_window_paste_status(void *p) {
+  Host *h = p;
+  return h && h->clipboard_requested ? h->clipboard_status : -4;
 }
 void dyn_window_set_cursor(void *p, int32_t cursor) {
   Host *h = p;

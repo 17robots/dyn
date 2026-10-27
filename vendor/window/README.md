@@ -91,9 +91,8 @@ Locale multibyte strings are converted to Unicode before UTF-8 encoding. XIM
 preedit storage retains at most 128 code points; over-capacity edits report
 loss through the ordered overflow mechanism. Wayland uses text-input-v3 when
 available and xkb compose otherwise; Win32 uses IMM; Cocoa implements
-NSTextInputClient. Surrounding-text correction/replacement outside preedit is
-not modeled, and Wayland delete-surrounding requests are not applied. These
-limits must be addressed or retained deliberately during an editor migration.
+NSTextInputClient. Surrounding-text correction uses revision-checked Edit events as described below.
+Applications must publish fresh context and validate each proposed edit.
 
 `box_input` supplies preedit plus `composition_handled`, including the poll that
 clears it. Text fields show a replacement preview without modifying caller
@@ -109,8 +108,8 @@ Assemble a complete reply before applying it. Discard incomplete assembly on
 is a compatibility view of the latest reply, borrowed until another paste
 request/reply or close. X11 and Wayland allow one outstanding remote transfer;
 an overlapping request reports overflow instead of corrupting its partial data.
-Snapshots/replies retain the existing 64 KiB clipboard bound. X11 incremental
-(INCR) clipboard transfers are not implemented.
+X11 and Wayland snapshots support up to 16 MiB; Windows and Cocoa retain a
+64 KiB bound. X11 supports incremental (INCR) clipboard transfers.
 
 Production callback and protocol mocks exercise composition, caret placement,
 UTF-8 clipping and reply ordering. Real ibus/fcitx and native Windows/macOS IME
@@ -197,7 +196,7 @@ snapshot on failure. A successful empty reply replaces it with an empty view.
 The ordered queue remains bounded: a large reply that cannot fit produces
 Overflow without partial Clipboard events. Snapshot clients can read the full
 completed value separately; ordered clients must handle overflow explicitly.
-Clipboard capacities on other backends remain unchanged.
+Wayland has the same 16 MiB snapshot bound; Windows and Cocoa retain 64 KiB.
 
 `request_paste_snapshot` requests the same complete value without emitting
 Clipboard chunks; use it when an ordered client deliberately reads the completed
@@ -214,3 +213,31 @@ loading EXT/MESA/SGI procedures; SGI alone cannot disable synchronization. Missi
 capability returns `Unsupported`, while X/GLX errors return `System`. Driver or
 compositor policy can still override requested pacing. See the
 [Khronos swap-control contract](https://github.com/KhronosGroup/OpenGL-Registry/blob/main/extensions/EXT/EXT_swap_control.txt).
+
+### Native controls and checked clipboard
+
+Wayland, Windows and Cocoa expose `set_title`, `set_size` and
+`set_swap_interval`. Size results reflect the actual polled frame; a compositor
+may reject client sizing in constrained states. Presentation pacing is subject
+to compositor and driver policy. Calls belong on the owning GUI thread.
+
+The native facades expose `try_set_clipboard`, `request_paste_snapshot`,
+`paste_pending` and `paste_status`. Checked publication validates UTF-8 and
+rejects embedded NUL bytes. A failed read retains the last completed snapshot.
+Snapshot requests suppress Clipboard events while retaining other queued input.
+Windows and Cocoa report Capacity above 64 KiB rather than silently truncating.
+The older native `set_clipboard` compatibility operation still truncates at
+64 KiB; use the checked operation for editor copy/cut workflows.
+
+Wayland owns dynamic snapshots up to 16 MiB. Eight nonblocking outgoing sends
+retain immutable copies. Incoming transfers complete atomically and fail after
+five seconds without progress. Ordered delivery emits all chunks or Overflow,
+never an incomplete prefix. Standard Wayland selection publication requires a
+valid seat input serial; publication before input returns InvalidState. Wayland
+provides no declared transfer length, so EOF after a valid UTF-8 prefix cannot
+prove that a sender intended more bytes.
+
+Wayland KeyDown/KeyUp events capture the translated Unicode scalar in `height`;
+`events.character` reads it. The snapshot preserves the keyboard layout and
+modifier state at production time even when later events change that state.
+`key` remains the unshifted identity; the event ABI remains 312 bytes.

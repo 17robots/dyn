@@ -118,10 +118,11 @@ static inline void desktop_own(Desktop *d, const uint8_t *text, uint32_t length)
   memcpy(d->owned, text, length);
   d->owned_length = length;
 }
-static inline void desktop_deliver(Desktop *d) {
+static inline void desktop_deliver_mode(Desktop *d, int emit) {
   d->pending.keys |= DYN_KEY_PASTE;
   d->pending.clipboard = d->received;
   d->pending.clipboard_length = d->received_length;
+  if (!emit) return;
   /* Each event owns its reply bytes even when another reply arrives before
    * the application drains this queue. x is the byte offset, width the total
    * reply size, and button marks the final chunk (also emitted for empty text). */
@@ -145,6 +146,7 @@ static inline void desktop_deliver(Desktop *d) {
     desktop_push(d, event);
   } while (at < d->received_length);
 }
+static inline void desktop_deliver(Desktop *d) { desktop_deliver_mode(d, 1); }
 /* UTF-8 validation is independent of process locale and rejects embedded NUL,
  * since the Wayland surrounding-text wire value is a NUL-terminated string. */
 static inline int surrounding_utf8(const uint8_t *text, uint32_t length) {

@@ -39,6 +39,8 @@ enum { DYN_ESCAPE=0x110000, DYN_ENTER, DYN_TAB_KEY, DYN_BACKSPACE,
  DYN_HOME, DYN_END, DYN_PAGE_UP, DYN_PAGE_DOWN, DYN_INSERT,
  DYN_F1=0x110020, DYN_SHIFT_KEY=0x110040, DYN_CONTROL_KEY,
  DYN_ALT_KEY, DYN_SUPER_KEY };
+/* Wayland key events snapshot the translated Unicode scalar in height.
+ * key remains the unshifted identity; zero height means no character. */
 typedef struct dyn_window_event {
  uint32_t kind,key,scancode,modifiers,repeated,button,dropped;
  int32_t x,y,width,height;
@@ -114,6 +116,10 @@ typedef struct dyn_window_desktop {
 /* Cursor shapes: arrow, text, hand, horizontal resize, vertical resize. */
 enum { DYN_CURSOR_ARROW, DYN_CURSOR_TEXT, DYN_CURSOR_HAND, DYN_CURSOR_RESIZE_X, DYN_CURSOR_RESIZE_Y };
 DYN_WINDOW_EXPORT void dyn_window_desktop_take(void *, dyn_window_desktop *);
+DYN_WINDOW_EXPORT int32_t dyn_window_try_set_clipboard(void *, const uint8_t *, uint32_t);
+DYN_WINDOW_EXPORT void dyn_window_request_paste_snapshot(void *);
+DYN_WINDOW_EXPORT int32_t dyn_window_paste_pending(void *);
+DYN_WINDOW_EXPORT int32_t dyn_window_paste_status(void *);
 DYN_WINDOW_EXPORT void dyn_window_set_clipboard(void *, const uint8_t *, uint32_t);
 DYN_WINDOW_EXPORT void dyn_window_request_paste(void *);
 DYN_WINDOW_EXPORT void dyn_window_set_cursor(void *, int32_t);
@@ -122,6 +128,13 @@ DYN_WINDOW_EXPORT void dyn_window_wait(void *, int32_t);
 DYN_WINDOW_EXPORT void *dyn_window_open(const char *, int32_t, int32_t);
 DYN_WINDOW_EXPORT void dyn_window_close(void *);
 DYN_WINDOW_EXPORT int32_t dyn_window_poll(void *, dyn_window_frame *);
+/* Title is valid UTF-8 without NUL, at most 4096 bytes. Size is drawable pixels.
+ * Status: 1 success, 0 invalid/state/system failure, -1 unsupported, -2 capacity.
+ * KEY event.height snapshots translated Unicode (zero for non-character keys).
+ */
+DYN_WINDOW_EXPORT int32_t dyn_window_set_title(void *, const uint8_t *, uint32_t);
+DYN_WINDOW_EXPORT int32_t dyn_window_set_size(void *, int32_t, int32_t);
+DYN_WINDOW_EXPORT int32_t dyn_window_set_swap_interval(void *, int32_t);
 DYN_WINDOW_EXPORT int32_t dyn_window_current(void *);
 DYN_WINDOW_EXPORT int32_t dyn_window_swap(void *);
 DYN_WINDOW_EXPORT void *dyn_window_proc(const char *);

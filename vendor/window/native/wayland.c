@@ -14,11 +14,24 @@
 #include <EGL/eglext.h>
 #include <errno.h>
 #include <poll.h>
+#include <signal.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <wayland-client.h>
 #include <wayland-egl.h>
+#define WAYLAND_CLIPBOARD_LIMIT (16u * 1024u * 1024u)
+typedef struct ClipboardSend {
+  struct ClipboardSend *next;
+  uint8_t *bytes;
+  uint32_t length, offset;
+  int fd;
+} ClipboardSend;
+typedef struct ClipboardOffer {
+  struct ClipboardOffer *next;
+  struct wl_data_offer *offer;
+  int text;
+} ClipboardOffer;
 typedef struct Host {
   /* Input method (text-input-v3): pending state applies on done. */
   struct zwp_text_input_manager_v3 *text_manager;
@@ -55,6 +68,7 @@ typedef struct Host {
   EGLContext context;
   dyn_window_frame frame;
   int configured;
+  int size_constrained;
   /* Desktop input: keymap, compose, repeat, clipboard, cursors and scale. */
   Desktop desktop;
   struct xkb_context *xkb;
@@ -71,6 +85,12 @@ typedef struct Host {
   struct wl_data_offer *offer;
   int offer_text;
   int receive_fd;
+  uint8_t *clipboard_owned, *clipboard_received, *clipboard_incoming;
+  uint32_t clipboard_owned_length, clipboard_received_length, clipboard_incoming_length;
+  int clipboard_ordered, clipboard_status;
+  int64_t clipboard_deadline;
+  ClipboardSend *clipboard_sends;
+  ClipboardOffer *clipboard_offers;
   int wake_fd;
   uint32_t serial;
   struct wl_shm *shm;
@@ -101,8 +121,15 @@ static const struct xdg_surface_listener surface_listener = {.configure =
 static void size(void *p, struct xdg_toplevel *t, int32_t w, int32_t h,
                  struct wl_array *a) {
   (void)t;
-  (void)a;
   Host *s = p;
+  uint32_t *state;
+  s->size_constrained = 0;
+  wl_array_for_each(state,a) {
+    if (*state == XDG_TOPLEVEL_STATE_MAXIMIZED || *state == XDG_TOPLEVEL_STATE_FULLSCREEN ||
+        *state == XDG_TOPLEVEL_STATE_RESIZING ||
+        (*state >= XDG_TOPLEVEL_STATE_TILED_LEFT && *state <= XDG_TOPLEVEL_STATE_TILED_BOTTOM))
+      s->size_constrained = 1;
+  }
   if (w > 0)
     s->frame.width = w * s->scale;
   if (h > 0)
@@ -156,7 +183,12 @@ static void event_keyboard(Host *h,uint32_t key,int down,int repeated) {
     xkb_layout_index_t layout=xkb_state_key_get_layout(h->state,key+8);
     if (xkb_keymap_key_get_syms_by_level(h->keymap,key+8,layout,0,&syms)>0) sym=syms[0];
   }
-  desktop_key(&h->desktop,down,event_key(sym),key,event_modifiers(h),repeated);
+  dyn_window_event event = {0};
+  event.kind = down ? DYN_EVENT_KEY_DOWN : DYN_EVENT_KEY_UP;
+  event.key = event_key(sym); event.scancode = key;
+  event.modifiers = event_modifiers(h); event.repeated = repeated != 0;
+  if (h->state) event.height = (int32_t)xkb_keysym_to_utf32(xkb_state_key_get_one_sym(h->state,key+8));
+  desktop_push(&h->desktop,event);
 }
 static void enter(void *p, struct wl_pointer *q, uint32_t serial,
                   struct wl_surface *s, wl_fixed_t x, wl_fixed_t y) {
@@ -440,10 +472,16 @@ static void seat_name(void *p, struct wl_seat *s, const char *n) {
 }
 static const struct wl_seat_listener seat_listener = {
     .capabilities = capabilities, .name = seat_name};
+static void clipboard_offer_destroy(Host *h, struct wl_data_offer *offer) {
+  ClipboardOffer **link = &h->clipboard_offers;
+  while (*link && (*link)->offer != offer) link = &(*link)->next;
+  if (*link) { ClipboardOffer *old = *link; *link = old->next; free(old); }
+  wl_data_offer_destroy(offer);
+}
 static void offer_mime(void *p, struct wl_data_offer *o, const char *mime) {
-  Host *h = p;
-  if (o == h->offer && (!strcmp(mime, "text/plain;charset=utf-8") || !strcmp(mime, "UTF8_STRING")))
-    h->offer_text = 1;
+  ClipboardOffer *offer = p;
+  (void)o;
+  if (!strcmp(mime, "text/plain;charset=utf-8")) offer->text = 1;
 }
 static void offer_actions(void *p, struct wl_data_offer *o, uint32_t a) {
   (void)p;
@@ -460,7 +498,10 @@ static const struct wl_data_offer_listener offer_listener = {
 static void data_offer(void *p, struct wl_data_device *d, struct wl_data_offer *o) {
   (void)d;
   Host *h = p;
-  wl_data_offer_add_listener(o, &offer_listener, h);
+  ClipboardOffer *offer = calloc(1, sizeof(*offer));
+  if (!offer) { wl_data_offer_destroy(o); return; }
+  offer->offer = o; offer->next = h->clipboard_offers; h->clipboard_offers = offer;
+  wl_data_offer_add_listener(o, &offer_listener, offer);
 }
 static void data_enter(void *p, struct wl_data_device *d, uint32_t serial, struct wl_surface *s,
                        wl_fixed_t x, wl_fixed_t y, struct wl_data_offer *o) {
@@ -471,7 +512,7 @@ static void data_enter(void *p, struct wl_data_device *d, uint32_t serial, struc
   (void)x;
   (void)y;
   if (o)
-    wl_data_offer_destroy(o);
+    clipboard_offer_destroy(p, o);
 }
 static void data_leave(void *p, struct wl_data_device *d) {
   (void)p;
@@ -492,12 +533,10 @@ static void selection(void *p, struct wl_data_device *d, struct wl_data_offer *o
   (void)d;
   Host *h = p;
   if (h->offer && h->offer != o)
-    wl_data_offer_destroy(h->offer);
-  h->offer = o;
-  h->offer_text = 0;
-  /* Mime offers for o arrived before this event. */
-  if (o)
-    h->offer_text = 1;
+    clipboard_offer_destroy(h, h->offer);
+  h->offer = o; h->offer_text = 0;
+  for (ClipboardOffer *at = h->clipboard_offers; at; at = at->next)
+    if (at->offer == o) h->offer_text = at->text;
 }
 static const struct wl_data_device_listener data_listener = {
     .data_offer = data_offer, .enter = data_enter, .leave = data_leave,
@@ -507,19 +546,47 @@ static void source_target(void *p, struct wl_data_source *s, const char *m) {
   (void)s;
   (void)m;
 }
-static void source_send(void *p, struct wl_data_source *s, const char *mime, int32_t fd) {
-  (void)s;
-  (void)mime;
-  Host *h = p;
-  uint32_t written = 0;
-  while (written < h->desktop.owned_length) {
-    ssize_t n = write(fd, h->desktop.owned + written, h->desktop.owned_length - written);
-    if (n <= 0 && errno != EINTR)
-      break;
-    if (n > 0)
-      written += (uint32_t)n;
+/* Pipe writes must neither block the GUI thread nor deliver SIGPIPE to it. */
+static ssize_t clipboard_write(int fd, const uint8_t *bytes, size_t length) {
+  sigset_t block, old, pending;
+  sigemptyset(&block); sigaddset(&block, SIGPIPE);
+  if (sigprocmask(SIG_BLOCK, &block, &old) != 0) return -1;
+  sigpending(&pending);
+  int was_pending = sigismember(&pending, SIGPIPE);
+  ssize_t result = write(fd, bytes, length);
+  int saved = errno;
+  if (result < 0 && saved == EPIPE && !was_pending) {
+    struct timespec zero = {0};
+    while (sigtimedwait(&block, NULL, &zero) < 0 && errno == EINTR) {}
   }
-  close(fd);
+  sigprocmask(SIG_SETMASK, &old, NULL); errno = saved;
+  return result;
+}
+static void send_clipboards(Host *h) {
+  ClipboardSend **link = &h->clipboard_sends;
+  while (*link) {
+    ClipboardSend *send = *link;
+    ssize_t n = clipboard_write(send->fd, send->bytes + send->offset, send->length - send->offset);
+    if (n > 0) send->offset += (uint32_t)n;
+    if ((n >= 0 && send->offset == send->length) || (n < 0 && errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK)) {
+      *link = send->next; close(send->fd); free(send->bytes); free(send);
+    } else link = &send->next;
+  }
+}
+static void source_send(void *p, struct wl_data_source *s, const char *mime, int32_t fd) {
+  Host *h = p;
+  if (s != h->source || (strcmp(mime, "text/plain;charset=utf-8") && strcmp(mime, "UTF8_STRING"))) { close(fd); return; }
+  unsigned count = 0;
+  for (ClipboardSend *at = h->clipboard_sends; at; at = at->next) count++;
+  int flags = fcntl(fd, F_GETFL);
+  ClipboardSend *send = count < 8 ? calloc(1, sizeof(*send)) : NULL;
+  if (!send || flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) { free(send); close(fd); return; }
+  send->bytes = malloc(h->clipboard_owned_length ? h->clipboard_owned_length : 1);
+  if (!send->bytes) { free(send); close(fd); return; }
+  if (h->clipboard_owned_length) memcpy(send->bytes, h->clipboard_owned, h->clipboard_owned_length);
+  send->length = h->clipboard_owned_length; send->fd = fd;
+  send->next = h->clipboard_sends; h->clipboard_sends = send;
+  send_clipboards(h);
 }
 static void source_cancelled(void *p, struct wl_data_source *s) {
   Host *h = p;
@@ -751,10 +818,14 @@ void dyn_window_close(void *p) {
     xdg_surface_destroy(h->xdg);
   if (h->surface)
     wl_surface_destroy(h->surface);
-  if (h->receive_fd > 0)
-    close(h->receive_fd);
-  if (h->offer)
-    wl_data_offer_destroy(h->offer);
+  if (h->receive_fd >= 0) close(h->receive_fd);
+  free(h->clipboard_owned); free(h->clipboard_received); free(h->clipboard_incoming);
+  while (h->clipboard_sends) {
+    ClipboardSend *send = h->clipboard_sends; h->clipboard_sends = send->next;
+    close(send->fd); free(send->bytes); free(send);
+  }
+  while (h->clipboard_offers)
+    clipboard_offer_destroy(h, h->clipboard_offers->offer);
   if (h->source)
     wl_data_source_destroy(h->source);
   if (h->data_device)
@@ -802,6 +873,7 @@ void *dyn_window_open(const char *title, int32_t width, int32_t height) {
   h->frame.height = height;
   h->scale = 1;
   h->receive_fd = -1;
+  h->clipboard_status = -4;
   h->wake_fd = eventfd(0,EFD_CLOEXEC|EFD_NONBLOCK);
   if (h->wake_fd<0) goto fail;
   h->xkb = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
@@ -897,25 +969,68 @@ fail:
   dyn_window_close(h);
   return NULL;
 }
-static void receive_clipboard(Host *h) {
-  if (h->receive_fd < 0)
-    return;
-  for (;;) {
-    if (h->desktop.received_length >= DYN_CLIPBOARD_LIMIT)
-      break;
-    ssize_t n = read(h->receive_fd, h->desktop.received + h->desktop.received_length,
-                     DYN_CLIPBOARD_LIMIT - h->desktop.received_length);
-    if (n > 0) {
-      h->desktop.received_length += (uint32_t)n;
-      continue;
-    }
-    if (n < 0 && (errno == EAGAIN || errno == EINTR))
-      return;
-    break;
+static void clipboard_loss(Host *h) {
+  if (h->desktop.event_enabled && h->desktop.event_dropped != UINT32_MAX) h->desktop.event_dropped++;
+}
+static void clipboard_deliver(Host *h) {
+  Desktop *d = &h->desktop;
+  d->pending.keys |= DYN_KEY_PASTE;
+  d->pending.clipboard = h->clipboard_received;
+  d->pending.clipboard_length = h->clipboard_received_length;
+  uint32_t at = 0, chunks = 0;
+  do {
+    uint32_t count = h->clipboard_received_length - at;
+    if (count > 256) { count = 256; while ((h->clipboard_received[at + count] & 0xc0) == 0x80) count--; }
+    at += count; chunks++;
+  } while (at < h->clipboard_received_length);
+  if (!d->event_enabled) return;
+  if (d->event_dropped || chunks > DYN_EVENT_CAPACITY - d->event_count) { clipboard_loss(h); return; }
+  at = 0;
+  do {
+    dyn_window_event event = {0}; event.kind = DYN_EVENT_CLIPBOARD;
+    uint32_t count = h->clipboard_received_length - at;
+    if (count > 256) { count = 256; while ((h->clipboard_received[at + count] & 0xc0) == 0x80) count--; }
+    event.x = (int32_t)at; event.width = (int32_t)h->clipboard_received_length; event.text_length = count;
+    if (count) memcpy(event.text, h->clipboard_received + at, count);
+    at += count; event.button = at == h->clipboard_received_length; desktop_push(d, event);
+  } while (at < h->clipboard_received_length);
+}
+static void clipboard_publish(Host *h, uint8_t *bytes, uint32_t length) {
+  free(h->clipboard_received); h->clipboard_received = bytes; h->clipboard_received_length = length;
+  /* Legacy pending state must not retain a pointer to the released snapshot. */
+  if (h->desktop.pending.keys & DYN_KEY_PASTE) {
+    h->desktop.pending.clipboard = bytes; h->desktop.pending.clipboard_length = length;
   }
-  close(h->receive_fd);
-  h->receive_fd = -1;
-  desktop_deliver(&h->desktop);
+}
+static void clipboard_finish(Host *h, int status) {
+  close(h->receive_fd); h->receive_fd = -1;
+  if (status == 1 && !surrounding_utf8(h->clipboard_incoming, h->clipboard_incoming_length)) status = -3;
+  h->clipboard_status = status;
+  if (status == 1) {
+    clipboard_publish(h, h->clipboard_incoming, h->clipboard_incoming_length);
+    h->clipboard_incoming = NULL;
+    if (h->clipboard_ordered) clipboard_deliver(h);
+  } else if (h->clipboard_ordered) clipboard_loss(h);
+  free(h->clipboard_incoming); h->clipboard_incoming = NULL; h->clipboard_incoming_length = 0;
+}
+static void receive_clipboard(Host *h) {
+  if (h->receive_fd < 0) return;
+  if (now_ms() >= h->clipboard_deadline) { clipboard_finish(h, 0); return; }
+  uint8_t bytes[16384];
+  for (;;) {
+    ssize_t n = read(h->receive_fd, bytes, sizeof(bytes));
+    if (n > 0) {
+      if ((uint32_t)n > WAYLAND_CLIPBOARD_LIMIT - h->clipboard_incoming_length) { clipboard_finish(h, -2); return; }
+      uint32_t length = h->clipboard_incoming_length + (uint32_t)n;
+      uint8_t *next = realloc(h->clipboard_incoming, length);
+      if (!next) { clipboard_finish(h, 0); return; }
+      h->clipboard_incoming = next; memcpy(next + h->clipboard_incoming_length, bytes, (size_t)n);
+      h->clipboard_incoming_length = length; h->clipboard_deadline = now_ms() + 5000; continue;
+    }
+    if (n < 0 && errno == EINTR) continue;
+    if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) return;
+    clipboard_finish(h, n == 0 ? 1 : 0); return;
+  }
 }
 static void repeat_keys(Host *h) {
   if (!h->repeat_key || h->repeat_rate <= 0)
@@ -935,6 +1050,7 @@ int32_t dyn_window_poll(void *p, dyn_window_frame *out) {
   if (read(h->wake_fd,&wake_count,sizeof(wake_count))==(ssize_t)sizeof(wake_count)) desktop_simple(&h->desktop,DYN_EVENT_WAKE);
   repeat_keys(h);
   receive_clipboard(h);
+  send_clipboards(h);
   while (wl_display_prepare_read(h->display) != 0) {
     if (wl_display_dispatch_pending(h->display) < 0)
       return 0;
@@ -962,6 +1078,33 @@ int32_t dyn_window_poll(void *p, dyn_window_frame *out) {
   *out = h->frame;
   h->frame.flags &= DYN_DOWN | DYN_CLOSE;
   return 1;
+}
+int32_t dyn_window_set_title(void *p, const uint8_t *text, uint32_t length) {
+  Host *h = p;
+  if (!h || !h->toplevel || (length && !text)) return 0;
+  if (length > 4096) return -2;
+  if (!surrounding_utf8(text,length)) return 0;
+  char title[4097];
+  if (length) memcpy(title,text,length);
+  title[length] = 0;
+  xdg_toplevel_set_title(h->toplevel,title);
+  return 1;
+}
+int32_t dyn_window_set_size(void *p, int32_t width, int32_t height) {
+  Host *h = p;
+  if (!h || !h->window || width <= 0 || height <= 0 || h->scale <= 0 ||
+      width % h->scale || height % h->scale) return 0;
+  if (h->size_constrained) return -1;
+  h->frame.width = width; h->frame.height = height;
+  wl_egl_window_resize(h->window,width,height,0,0);
+  desktop_resize(&h->desktop,width,height);
+  return 1;
+}
+int32_t dyn_window_set_swap_interval(void *p, int32_t interval) {
+  Host *h = p;
+  if (!h || interval < 0 || eglGetCurrentContext() != h->context ||
+      eglGetCurrentDisplay() != h->egl || eglGetCurrentSurface(EGL_DRAW) != h->target) return 0;
+  return eglSwapInterval(h->egl,interval) == EGL_TRUE;
 }
 int32_t dyn_window_current(void *p) {
   Host *h = p;
@@ -999,47 +1142,61 @@ void dyn_window_desktop_take(void *p, dyn_window_desktop *out) {
   Host *h = p;
   desktop_take(&h->desktop, out, (float)h->scale);
 }
+int32_t dyn_window_try_set_clipboard(void *p, const uint8_t *text, uint32_t length) {
+  Host *h = p;
+  if (!h) return 0;
+  if (length > WAYLAND_CLIPBOARD_LIMIT) return -2;
+  if (!surrounding_utf8(text, length)) return -3;
+  if (!h->data_manager || !h->data_device) return -1;
+  if (!h->serial) return -4;
+  uint8_t *owned = malloc(length ? length : 1);
+  if (!owned) return 0;
+  if (length) memcpy(owned, text, length);
+  struct wl_data_source *source = wl_data_device_manager_create_data_source(h->data_manager);
+  if (!source) { free(owned); return 0; }
+  if (wl_data_source_add_listener(source, &source_listener, h) < 0) { wl_data_source_destroy(source); free(owned); return 0; }
+  wl_data_source_offer(source, "text/plain;charset=utf-8"); wl_data_source_offer(source, "UTF8_STRING");
+  wl_data_device_set_selection(h->data_device, source, h->serial);
+  if (wl_display_flush(h->display) < 0 && errno != EAGAIN) {
+    wl_data_source_destroy(source); free(owned); return 0;
+  }
+  if (h->source) wl_data_source_destroy(h->source);
+  h->source = source; free(h->clipboard_owned); h->clipboard_owned = owned; h->clipboard_owned_length = length;
+  return 1;
+}
 void dyn_window_set_clipboard(void *p, const uint8_t *text, uint32_t length) {
-  Host *h = p;
-  desktop_own(&h->desktop, text, length);
-  if (!h->data_manager || !h->data_device)
-    return;
-  if (h->source)
-    wl_data_source_destroy(h->source);
-  h->source = wl_data_device_manager_create_data_source(h->data_manager);
-  wl_data_source_add_listener(h->source, &source_listener, h);
-  wl_data_source_offer(h->source, "text/plain;charset=utf-8");
-  wl_data_source_offer(h->source, "UTF8_STRING");
-  wl_data_device_set_selection(h->data_device, h->source, h->serial);
-  wl_display_flush(h->display);
+  (void)dyn_window_try_set_clipboard(p, text, length);
 }
-void dyn_window_request_paste(void *p) {
-  Host *h = p;
-  /* A pending remote transfer owns received[] until EOF. Even a self-owned
-   * selection must not overwrite that transaction's partial bytes. */
-  if (h->receive_fd >= 0) {
-    if (h->desktop.event_enabled && h->desktop.event_dropped != UINT32_MAX)
-      h->desktop.event_dropped++;
-    return;
-  }
+static void clipboard_request(Host *h, int ordered) {
+  if (h->receive_fd >= 0) { if (ordered) clipboard_loss(h); return; }
+  h->clipboard_ordered = ordered; h->clipboard_status = 0;
   if (h->source) {
-    /* Our own selection needs no round trip. */
-    memcpy(h->desktop.received, h->desktop.owned, h->desktop.owned_length);
-    h->desktop.received_length = h->desktop.owned_length;
-    desktop_deliver(&h->desktop);
+    uint8_t *snapshot = malloc(h->clipboard_owned_length ? h->clipboard_owned_length : 1);
+    if (!snapshot) { if (ordered) clipboard_loss(h); return; }
+    if (h->clipboard_owned_length) memcpy(snapshot, h->clipboard_owned, h->clipboard_owned_length);
+    clipboard_publish(h, snapshot, h->clipboard_owned_length); h->clipboard_status = 1;
+    if (ordered) clipboard_deliver(h);
     return;
   }
-  if (!h->offer || !h->offer_text)
-    return;
+  if (!h->data_device) { h->clipboard_status = -1; return; }
+  if (!h->offer) {
+    clipboard_publish(h, NULL, 0);
+    h->clipboard_status = 1; if (ordered) clipboard_deliver(h); return;
+  }
+  if (!h->offer_text) { h->clipboard_status = -1; return; }
   int fds[2];
-  if (pipe2(fds, O_CLOEXEC | O_NONBLOCK) != 0)
-    return;
-  wl_data_offer_receive(h->offer, "text/plain;charset=utf-8", fds[1]);
-  close(fds[1]);
-  wl_display_flush(h->display);
-  h->receive_fd = fds[0];
-  h->desktop.received_length = 0;
+  /* Only our reader is nonblocking: the peer controls its writer policy. */
+  if (pipe2(fds, O_CLOEXEC) != 0) return;
+  if (fcntl(fds[0], F_SETFL, O_NONBLOCK) < 0) { close(fds[0]); close(fds[1]); return; }
+  wl_data_offer_receive(h->offer, "text/plain;charset=utf-8", fds[1]); close(fds[1]);
+  h->receive_fd = fds[0]; h->clipboard_incoming_length = 0; h->clipboard_status = -4;
+  h->clipboard_deadline = now_ms() + 5000;
+  if (wl_display_flush(h->display) < 0 && errno != EAGAIN) clipboard_finish(h, 0);
 }
+void dyn_window_request_paste(void *p) { if (p) clipboard_request(p, 1); }
+void dyn_window_request_paste_snapshot(void *p) { if (p) clipboard_request(p, 0); }
+int32_t dyn_window_paste_pending(void *p) { return p && ((Host *)p)->receive_fd >= 0; }
+int32_t dyn_window_paste_status(void *p) { return p ? ((Host *)p)->clipboard_status : 0; }
 void dyn_window_set_cursor(void *p, int32_t cursor) {
   Host *h = p;
   if (cursor < 0 || cursor > 4 || cursor == h->cursor)
@@ -1069,10 +1226,18 @@ void dyn_window_wait(void *p, int32_t timeout) {
       timeout = (int32_t)left;
   }
   wl_display_flush(h->display);
-  struct pollfd fds[3] = {{.fd = wl_display_get_fd(h->display), .events = POLLIN},
+  if (h->receive_fd >= 0) {
+    int64_t left = h->clipboard_deadline - now_ms();
+    if (left < 0) left = 0;
+    if (timeout < 0 || left < timeout) timeout = (int32_t)left;
+  }
+  struct pollfd fds[11] = {{.fd = wl_display_get_fd(h->display), .events = POLLIN},
                           {.fd = h->wake_fd, .events = POLLIN},
                           {.fd = h->receive_fd, .events = POLLIN}};
-  poll(fds, h->receive_fd >= 0 ? 3 : 2, timeout);
+  unsigned count = 3;
+  for (ClipboardSend *send = h->clipboard_sends; send && count < 11; send = send->next)
+    fds[count++] = (struct pollfd){.fd = send->fd, .events = POLLOUT};
+  poll(fds, count, timeout);
 }
 
 void dyn_window_composition_get(void *p, dyn_window_composition *out) {
@@ -1114,8 +1279,8 @@ void dyn_window_set_text_input(void *p, int32_t enabled, int32_t x, int32_t y, i
 
 uint32_t dyn_window_clipboard_get(void *p, const uint8_t **text) {
   Host *h = p;
-  *text = h->desktop.received;
-  return h->desktop.received_length;
+  *text = h->clipboard_received;
+  return h->clipboard_received_length;
 }
 
 int32_t dyn_window_set_surrounding_text(void *p, const uint8_t *text, uint32_t length,

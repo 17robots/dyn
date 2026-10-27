@@ -4,6 +4,7 @@ pub type OrderedEvent = ordered.Event
 pub type EventKind = ordered.Kind
 use "std/mem" mem
 use "std/c" c
+use "std/unicode/utf8" utf8
 use "std/errors" errors
 use "std/ui" ui
 use "std/ui/box" box
@@ -23,6 +24,13 @@ struct Frame { width: i32, height: i32, x: i32, y: i32, flags: u32 }
 extern fn native_open "dyn_window_open"(title: *const u8, width: i32, height: i32) rawptr
 extern fn native_close "dyn_window_close"(handle: rawptr)
 extern fn native_poll "dyn_window_poll"(handle: rawptr, frame: *Frame) i32
+extern fn native_set_title "dyn_window_set_title"(handle: rawptr, text: *const u8, length: u32) i32
+extern fn native_set_size "dyn_window_set_size"(handle: rawptr, width: i32, height: i32) i32
+extern fn native_swap_interval "dyn_window_set_swap_interval"(handle: rawptr, interval: i32) i32
+extern fn native_try_clipboard "dyn_window_try_set_clipboard"(handle: rawptr, text: *const u8, length: u32) i32
+extern fn native_snapshot "dyn_window_request_paste_snapshot"(handle: rawptr)
+extern fn native_paste_pending "dyn_window_paste_pending"(handle: rawptr) i32
+extern fn native_paste_status "dyn_window_paste_status"(handle: rawptr) i32
 extern fn native_current "dyn_window_current"(handle: rawptr) i32
 extern fn native_swap "dyn_window_swap"(handle: rawptr) i32
 pub extern fn gl_proc "dyn_window_proc"(name: *const u8) rawptr
@@ -273,4 +281,55 @@ pub fn set_surrounding_text(window: *Window, context: Surrounding) Result {
     return Result{ kind: errors.Kind.Capacity }
   }
   return Result{ kind: errors.Kind.InvalidState }
+}
+
+fn checked_status(status: i32) Result {
+  if status == 1 { return Result{ok:true} }
+  if status == -1 { return Result{kind:errors.Kind.Unsupported} }
+  if status == -2 { return Result{kind:errors.Kind.Capacity} }
+  if status == -3 { return Result{kind:errors.Kind.InvalidInput} }
+  if status == -4 { return Result{kind:errors.Kind.InvalidState} }
+  return Result{kind:errors.Kind.System}
+}
+pub fn set_title(window: *Window, title: []const u8) Result {
+  if window.handle == nil { return Result{kind:errors.Kind.InvalidState} }
+  if #len(title) > 4096 { return Result{kind:errors.Kind.Capacity} }
+  if !utf8.valid(title) { return Result{kind:errors.Kind.InvalidInput} }
+  for byte in title { if byte == 0 { return Result{kind:errors.Kind.InvalidInput} } }
+  empty: [1]u8 = []
+  pointer: *const u8 = &empty[0]
+  if #len(title) != 0 { pointer = &title[0] }
+  return checked_status(native_set_title(window.handle,pointer,#cast(u32,#len(title))))
+}
+pub fn set_size(window: *Window, width, height: i32) Result {
+  if window.handle == nil { return Result{kind:errors.Kind.InvalidState} }
+  if width <= 0 || height <= 0 { return Result{kind:errors.Kind.InvalidInput} }
+  result := checked_status(native_set_size(window.handle,width,height))
+  if !result.ok { return result }
+  return poll(window)
+}
+pub fn set_swap_interval(window: *Window, interval: i32) Result {
+  if window.handle == nil { return Result{kind:errors.Kind.InvalidState} }
+  if interval < 0 { return Result{kind:errors.Kind.InvalidInput} }
+  return checked_status(native_swap_interval(window.handle,interval))
+}
+// Checked publication copies all text or reports failure; no truncation.
+pub fn try_set_clipboard(window: *Window, text: []const u8) Result {
+  if window.handle == nil { return Result{kind:errors.Kind.InvalidState} }
+  if #len(text) > 4294967295 { return Result{kind:errors.Kind.Capacity} }
+  empty: [1]u8 = []
+  pointer: *const u8 = &empty[0]
+  if #len(text) != 0 { pointer = &text[0] }
+  return checked_status(native_try_clipboard(window.handle,pointer,#cast(u32,#len(text))))
+}
+// Snapshot replies update clipboard without entering the ordered event stream.
+pub fn request_paste_snapshot(window: *Window) {
+  if window.handle != nil { native_snapshot(window.handle) }
+}
+pub fn paste_pending(window: *const Window) bool {
+  return window.handle != nil && native_paste_pending(window.handle) != 0
+}
+pub fn paste_status(window: *const Window) Result {
+  if window.handle == nil { return Result{kind:errors.Kind.InvalidState} }
+  return checked_status(native_paste_status(window.handle))
 }

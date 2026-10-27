@@ -12,6 +12,7 @@ typedef struct Host {
   HGLRC context;
   dyn_window_frame frame;
   Desktop desktop;
+  int clipboard_status, clipboard_requested;
   WCHAR high_surrogate;
   uint32_t high_surrogate_repeats;
   HCURSOR cursors[5];
@@ -649,6 +650,35 @@ int32_t dyn_window_poll(void *p, dyn_window_frame *out) {
   h->frame.flags &= DYN_DOWN | DYN_CLOSE;
   return 1;
 }
+int32_t dyn_window_set_title(void *p, const uint8_t *text, uint32_t length) {
+  if (!p || (length && !text)) return 0;
+  if (length > 4096) return -2;
+  if (!surrounding_utf8(text,length)) return 0;
+  WCHAR title[4097];
+  int count = length ? MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,(const char *)text,(int)length,title,4096) : 0;
+  if (length && !count) return 0;
+  title[count] = 0;
+  return SetWindowTextW(((Host *)p)->window,title) != 0;
+}
+int32_t dyn_window_set_size(void *p, int32_t width, int32_t height) {
+  if (!p || width <= 0 || height <= 0 || width > INT32_MAX-65536 || height > INT32_MAX-65536) return 0;
+  Host *h = p;
+  if (IsZoomed(h->window)) return -1;
+  RECT r = {0,0,width,height};
+  if (!AdjustWindowRectEx(&r,(DWORD)GetWindowLongPtrW(h->window,GWL_STYLE),FALSE,
+                         (DWORD)GetWindowLongPtrW(h->window,GWL_EXSTYLE))) return 0;
+  if ((int64_t)r.right-r.left > INT32_MAX || (int64_t)r.bottom-r.top > INT32_MAX) return 0;
+  return SetWindowPos(h->window,NULL,0,0,r.right-r.left,r.bottom-r.top,SWP_NOMOVE|SWP_NOZORDER|SWP_NOACTIVATE) != 0;
+}
+int32_t dyn_window_set_swap_interval(void *p, int32_t interval) {
+  if (!p || interval < 0) return 0;
+  Host *h = p;
+  if (wglGetCurrentContext() != h->context || wglGetCurrentDC() != h->dc) return 0;
+  typedef BOOL (WINAPI *SwapInterval)(int);
+  SwapInterval set = (SwapInterval)(void *)wglGetProcAddress("wglSwapIntervalEXT");
+  if (!set || (uintptr_t)set <= 3 || (intptr_t)set == -1) return -1;
+  return set(interval) != 0;
+}
 int32_t dyn_window_current(void *p) {
   Host *h = p;
   return wglMakeCurrent(h->dc, h->context) != 0;
@@ -677,44 +707,78 @@ void dyn_window_desktop_take(void *p, dyn_window_desktop *out) {
   Host *h = p;
   desktop_take(&h->desktop, out, window_scale(h));
 }
-void dyn_window_set_clipboard(void *p, const uint8_t *text, uint32_t length) {
+int32_t dyn_window_try_set_clipboard(void *p, const uint8_t *text, uint32_t length) {
   Host *h = p;
-  desktop_own(&h->desktop, text, length);
-  int units = MultiByteToWideChar(CP_UTF8, 0, (const char *)h->desktop.owned,
-                                  (int)h->desktop.owned_length, NULL, 0);
-  HGLOBAL memory =
-      GlobalAlloc(GMEM_MOVEABLE, ((size_t)units + 1) * sizeof(WCHAR));
-  if (!memory)
-    return;
+  if (!h) return -4;
+  if (length > DYN_CLIPBOARD_LIMIT) return -2;
+  if (!surrounding_utf8(text, length)) return -3;
+  int units = length ? MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+      (const char *)text, (int)length, NULL, 0) : 0;
+  if (length && !units) return -3;
+  HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, ((size_t)units + 1) * sizeof(WCHAR));
+  if (!memory) return 0;
   WCHAR *wide = GlobalLock(memory);
-  MultiByteToWideChar(CP_UTF8, 0, (const char *)h->desktop.owned,
-                      (int)h->desktop.owned_length, wide, units);
+  if (!wide) { GlobalFree(memory); return 0; }
+  if (units && MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+      (const char *)text, (int)length, wide, units) != units) {
+    GlobalUnlock(memory); GlobalFree(memory); return 0;
+  }
   wide[units] = 0;
   GlobalUnlock(memory);
-  if (!OpenClipboard(h->window)) {
-    GlobalFree(memory);
-    return;
-  }
-  EmptyClipboard();
-  if (!SetClipboardData(CF_UNICODETEXT, memory))
-    GlobalFree(memory);
-  CloseClipboard();
+  if (!OpenClipboard(h->window)) { GlobalFree(memory); return 0; }
+  int ok = EmptyClipboard() && SetClipboardData(CF_UNICODETEXT, memory) != NULL;
+  if (!ok) GlobalFree(memory);
+  int closed = CloseClipboard() != 0;
+  if (!ok || !closed) return 0;
+  if (length) memcpy(h->desktop.owned, text, length);
+  h->desktop.owned_length = length;
+  return 1;
 }
-void dyn_window_request_paste(void *p) {
-  Host *h = p;
-  if (!OpenClipboard(h->window))
-    return;
+void dyn_window_set_clipboard(void *p, const uint8_t *text, uint32_t length) {
+  (void)dyn_window_try_set_clipboard(p, text, length);
+}
+static void clipboard_request(Host *h, int emit) {
+  if (!h) return;
+  h->clipboard_requested = 1;
+  h->clipboard_status = 0;
+  if (!OpenClipboard(h->window)) return;
   HANDLE memory = GetClipboardData(CF_UNICODETEXT);
   const WCHAR *wide = memory ? GlobalLock(memory) : NULL;
+  uint8_t temporary[DYN_CLIPBOARD_LIMIT];
+  uint32_t length = 0;
+  int status = 0;
   if (wide) {
-    int bytes =
-        WideCharToMultiByte(CP_UTF8, 0, wide, -1, (char *)h->desktop.received,
-                            DYN_CLIPBOARD_LIMIT, NULL, NULL);
-    h->desktop.received_length = bytes > 0 ? (uint32_t)bytes - 1 : 0;
+    SIZE_T capacity = GlobalSize(memory) / sizeof(WCHAR), units = 0;
+    while (units < capacity && wide[units]) units++;
+    if (units == capacity) status = -3;
+    else if (units > DYN_CLIPBOARD_LIMIT) status = -2;
+    else if (!units) status = 1;
+    else {
+      int bytes = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide,
+          (int)units, NULL, 0, NULL, NULL);
+      if (!bytes) status = -3;
+      else if (bytes > DYN_CLIPBOARD_LIMIT) status = -2;
+      else if (WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide,
+          (int)units, (char *)temporary, bytes, NULL, NULL) == bytes) {
+        length = (uint32_t)bytes; status = 1;
+      }
+    }
     GlobalUnlock(memory);
-    desktop_deliver(&h->desktop);
   }
-  CloseClipboard();
+  if (!CloseClipboard()) status = 0;
+  h->clipboard_status = status;
+  if (status == 1) {
+    if (length) memcpy(h->desktop.received, temporary, length);
+    h->desktop.received_length = length;
+    desktop_deliver_mode(&h->desktop, emit);
+  }
+}
+void dyn_window_request_paste(void *p) { clipboard_request(p, 1); }
+void dyn_window_request_paste_snapshot(void *p) { clipboard_request(p, 0); }
+int32_t dyn_window_paste_pending(void *p) { (void)p; return 0; }
+int32_t dyn_window_paste_status(void *p) {
+  Host *h = p;
+  return h && h->clipboard_requested ? h->clipboard_status : -4;
 }
 void dyn_window_set_cursor(void *p, int32_t cursor) {
   Host *h = p;
