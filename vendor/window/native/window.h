@@ -35,7 +35,9 @@ enum {
   DYN_KEY_SELECT_ALL = 1 << 10,
   DYN_KEY_COPY = 1 << 11,
   DYN_KEY_CUT = 1 << 12,
-  DYN_KEY_PASTE = 1 << 13
+  DYN_KEY_PASTE = 1 << 13,
+  /* Ctrl on X11/Wayland/Win32; Option on Cocoa for word movement. */
+  DYN_KEY_CONTROL = 1 << 14
 };
 enum { DYN_TEXT_LIMIT = 256, DYN_CLIPBOARD_LIMIT = 65536 };
 typedef struct dyn_window_desktop {

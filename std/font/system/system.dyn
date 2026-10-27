@@ -262,7 +262,7 @@ fn visit(arena: *mem.Arena, scratch: *mem.Arena, walk: *Walk, directory: []const
     else if font_file(item.name) && walk.count < #len(walk.entries) {
       file := fs.open(path)
       if file.ok {
-        handle := file.value
+        handle := fs.take(&file.value)
         mapped := fs.map(&handle)
         _ = fs.close(&handle)
         if mapped.ok {
@@ -420,7 +420,7 @@ pub fn covering(entries: []const Entry, codepoint: u32, regular_only: bool) *con
     if !file.ok {
       continue
     }
-    handle := file.value
+    handle := fs.take(&file.value)
     mapped := fs.map(&handle)
     _ = fs.close(&handle)
     if !mapped.ok {

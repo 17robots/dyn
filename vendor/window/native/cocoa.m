@@ -25,6 +25,7 @@ struct Host {
   if (self.host->frame.flags & DYN_DOWN)
     self.host->frame.flags |= DYN_RELEASED;
   self.host->frame.flags &= ~DYN_DOWN;
+  self.host->desktop.pending.keys &= ~(uint32_t)(DYN_KEY_SHIFT | DYN_KEY_CONTROL);
 }
 @end
 static NSWindow *window(Host *h) { return (__bridge NSWindow *)h->window; }
@@ -164,6 +165,11 @@ int32_t dyn_window_poll(void *p, dyn_window_frame *out) {
             target->desktop.pending.keys |= DYN_KEY_SHIFT;
           else
             target->desktop.pending.keys &= ~(uint32_t)DYN_KEY_SHIFT;
+          /* Option is the platform word-motion modifier. */
+          if ([event modifierFlags] & NSEventModifierFlagOption)
+            target->desktop.pending.keys |= DYN_KEY_CONTROL;
+          else
+            target->desktop.pending.keys &= ~(uint32_t)DYN_KEY_CONTROL;
         }
         if (type == NSEventTypeKeyDown) {
           NSString *chars = [event charactersIgnoringModifiers];

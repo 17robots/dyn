@@ -61,6 +61,8 @@ static LRESULT CALLBACK procedure(HWND window, UINT message, WPARAM w,
     return 0;
   case WM_CAPTURECHANGED:
   case WM_KILLFOCUS:
+    if (message == WM_KILLFOCUS)
+      h->desktop.pending.keys &= ~(uint32_t)(DYN_KEY_SHIFT | DYN_KEY_CONTROL);
     if (h->frame.flags & DYN_DOWN)
       h->frame.flags |= DYN_RELEASED;
     h->frame.flags &= ~DYN_DOWN;
@@ -103,13 +105,22 @@ static LRESULT CALLBACK procedure(HWND window, UINT message, WPARAM w,
       *keys |= DYN_KEY_SHIFT;
     else
       *keys &= ~(uint32_t)DYN_KEY_SHIFT;
+    if (control_down())
+      *keys |= DYN_KEY_CONTROL;
+    else
+      *keys &= ~(uint32_t)DYN_KEY_CONTROL;
     if (message == WM_SYSKEYDOWN)
       break;
     return 0;
   }
   case WM_KEYUP:
+  case WM_SYSKEYUP:
     if (w == VK_SHIFT)
       h->desktop.pending.keys &= ~(uint32_t)DYN_KEY_SHIFT;
+    if (!control_down())
+      h->desktop.pending.keys &= ~(uint32_t)DYN_KEY_CONTROL;
+    if (message == WM_SYSKEYUP)
+      break;
     return 0;
   case WM_CHAR: {
     /* WM_CHAR carries UTF-16; the IME delivers composed text here too. */

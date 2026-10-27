@@ -14,7 +14,7 @@ pub struct Desktop {
   method: rawptr, context: rawptr,
   text: [text_limit]u8, text_length: usize,
   backspace: bool, delete: bool, left: bool, right: bool, home: bool, end: bool,
-  enter: bool, escape: bool, tab: bool, shift: bool, select_all: bool,
+  enter: bool, escape: bool, tab: bool, shift: bool, control: bool, select_all: bool,
   copy: bool, cut: bool, paste: bool,
   scroll_x: f32, scroll_y: f32,
   clipboard_atom: usize, utf8_atom: usize, targets_atom: usize, property_atom: usize,
@@ -159,6 +159,25 @@ fn desktop_begin(window: *Window) {
 }
 
 fn desktop_filter(window: *Window, event: *Event) bool {
+  // Track modifier releases as well as editing-key presses. The X state is
+  // the state before the event, so adjust the modifier named by this event.
+  if event.kind == 2 || event.kind == 3 {
+    key_event := #cast(*KeyEvent, event)
+    desktop := &window.desktop
+    desktop.shift = key_event.state & 1 != 0
+    desktop.control = key_event.state & 4 != 0
+    key := keysym(event, 0)
+    if key == 0xffe1 || key == 0xffe2 {
+      desktop.shift = event.kind == 2
+    }
+    if key == 0xffe3 || key == 0xffe4 {
+      desktop.control = event.kind == 2
+    }
+  }
+  else if event.kind == 10 {
+    window.desktop.shift = false
+    window.desktop.control = false
+  }
   return window.desktop.context != nil && filter(event, 0) != 0
 }
 
@@ -201,7 +220,6 @@ fn desktop_key(window: *Window, event: *Event) {
     }
   }
   control := key_event.state & 4 != 0
-  desktop.shift = key_event.state & 1 != 0
   if key == 0xff08 {
     desktop.backspace = true
   } else if key == 0xffff {
@@ -394,7 +412,7 @@ pub fn box_input(window: *const Window) box.Input {
     text: desktop.text[..desktop.text_length],
     backspace: desktop.backspace, delete: desktop.delete, left: desktop.left, right: desktop.right,
     home: desktop.home, end: desktop.end, enter: desktop.enter, escape: desktop.escape,
-    tab: desktop.tab, shift: desktop.shift, select_all: desktop.select_all,
+    tab: desktop.tab, shift: desktop.shift, control: desktop.control, select_all: desktop.select_all,
     copy: desktop.copy, cut: desktop.cut, paste: desktop.paste,
   }
   if desktop.paste {

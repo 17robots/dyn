@@ -145,7 +145,7 @@ pub fn box_input(window: *const Window) box.Input {
     text: desktop.text[..#cast(usize, desktop.text_length)],
     backspace: keys & 1 != 0, delete: keys & 2 != 0, left: keys & 4 != 0, right: keys & 8 != 0,
     home: keys & 16 != 0, end: keys & 32 != 0, enter: keys & 64 != 0, escape: keys & 128 != 0,
-    tab: keys & 256 != 0, shift: keys & 512 != 0, select_all: keys & 1024 != 0,
+    tab: keys & 256 != 0, shift: keys & 512 != 0, control: keys & 16384 != 0, select_all: keys & 1024 != 0,
     copy: keys & 2048 != 0, cut: keys & 4096 != 0, paste: keys & 8192 != 0,
   }
   if value.paste && desktop.clipboard != nil {

@@ -55,8 +55,8 @@ static inline void desktop_deliver(Desktop *d) {
 static inline void desktop_take(Desktop *d, dyn_window_desktop *out, float scale) {
   d->pending.scale = scale;
   *out = d->pending;
-  uint32_t shift = d->pending.keys & DYN_KEY_SHIFT;
+  uint32_t modifiers = d->pending.keys & (DYN_KEY_SHIFT | DYN_KEY_CONTROL);
   memset(&d->pending, 0, sizeof(d->pending));
-  d->pending.keys = shift;
+  d->pending.keys = modifiers;
 }
 #endif

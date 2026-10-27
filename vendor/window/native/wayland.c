@@ -224,6 +224,7 @@ static void key_leave(void *p, struct wl_keyboard *k, uint32_t serial,
     h->frame.flags |= DYN_RELEASED;
   h->frame.flags &= ~DYN_DOWN;
   h->repeat_key = 0;
+  h->desktop.pending.keys &= ~(uint32_t)(DYN_KEY_SHIFT | DYN_KEY_CONTROL);
 }
 static void press(Host *h, uint32_t key) {
   if (!h->state)
@@ -231,6 +232,10 @@ static void press(Host *h, uint32_t key) {
   xkb_keysym_t sym = xkb_state_key_get_one_sym(h->state, key + 8);
   int control = xkb_state_mod_name_is_active(h->state, XKB_MOD_NAME_CTRL, XKB_STATE_MODS_EFFECTIVE) > 0;
   uint32_t *keys = &h->desktop.pending.keys;
+  if (control)
+    *keys |= DYN_KEY_CONTROL;
+  else
+    *keys &= ~(uint32_t)DYN_KEY_CONTROL;
   switch (sym) {
   case XKB_KEY_BackSpace: *keys |= DYN_KEY_BACKSPACE; return;
   case XKB_KEY_Delete: *keys |= DYN_KEY_DELETE; return;
@@ -310,6 +315,10 @@ static void modifiers(void *p, struct wl_keyboard *k, uint32_t serial,
     h->desktop.pending.keys |= DYN_KEY_SHIFT;
   else
     h->desktop.pending.keys &= ~(uint32_t)DYN_KEY_SHIFT;
+  if (xkb_state_mod_name_is_active(h->state, XKB_MOD_NAME_CTRL, XKB_STATE_MODS_EFFECTIVE) > 0)
+    h->desktop.pending.keys |= DYN_KEY_CONTROL;
+  else
+    h->desktop.pending.keys &= ~(uint32_t)DYN_KEY_CONTROL;
 }
 static void repeat(void *p, struct wl_keyboard *k, int32_t rate,
                    int32_t delay) {

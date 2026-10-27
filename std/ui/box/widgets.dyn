@@ -2,6 +2,7 @@
 // a checkbox value or text buffer belongs to the caller.
 
 use "std/unicode/utf8" utf8
+use "std/unicode/text" unicode_text
 
 // A box that lays its children left to right.
 pub fn row(state: *State, label: []const u8) *Box {
@@ -32,7 +33,7 @@ pub fn label(state: *State, text: []const u8) Signal {
 }
 
 pub fn button(state: *State, label: []const u8) Signal {
-  box := build(state, Clickable | DrawBackground | DrawBorder | DrawText | CenterText | HotAnimation | ActiveAnimation, label)
+  box := build(state, Focusable | Clickable | DrawBackground | DrawBorder | DrawText | CenterText | HotAnimation | ActiveAnimation, label)
   box.width = text_size(10.0, 1.0)
   box.height = text_size(5.0, 1.0)
   box.radius = 5
@@ -40,7 +41,7 @@ pub fn button(state: *State, label: []const u8) Signal {
 }
 
 pub fn checkbox(state: *State, label: []const u8, value: *bool) Signal {
-  box := build(state, Clickable | DrawBackground | DrawBorder | DrawText | HotAnimation | ActiveAnimation, label)
+  box := build(state, Focusable | Clickable | DrawBackground | DrawBorder | DrawText | HotAnimation | ActiveAnimation, label)
   box.width = text_size(14.0, 1.0)
   box.height = text_size(5.0, 1.0)
   result := signal(state, box)
@@ -55,7 +56,7 @@ pub fn checkbox(state: *State, label: []const u8, value: *bool) Signal {
 
 // A horizontal slider over low..high. Dragging sets the value from the pointer.
 pub fn slider(state: *State, label: []const u8, value: *f32, low, high: f32) Signal {
-  track := build(state, Clickable | DrawBackground | DrawBorder | HotAnimation, label)
+  track := build(state, Focusable | Clickable | DrawBackground | DrawBorder | HotAnimation, label)
   track.width = pixels(160.0, 0.5)
   track.height = text_size(5.0, 1.0)
   result := signal(state, track)
@@ -68,6 +69,21 @@ pub fn slider(state: *State, label: []const u8, value: *f32, low, high: f32) Sig
       fraction = 1.0
     }
     value.* = low + (high - low) * fraction
+  }
+  if state.focused == track.key && (state.input.left || state.input.right) {
+    step := (high - low) / 100.0
+    if state.input.left {
+      value.* -= step
+    }
+    if state.input.right {
+      value.* += step
+    }
+    if value.* < low {
+      value.* = low
+    }
+    if value.* > high {
+      value.* = high
+    }
   }
   push_parent(state, track)
   track.axis = 0
@@ -144,7 +160,13 @@ pub fn list_end(state: *State) {
 // An editable single-line field over caller storage. length is the used byte
 // count; cursor is a byte offset kept on code point boundaries. Returns
 // changed when the text changed and submitted when Enter was pressed.
-pub struct Edit { length: usize, cursor: usize }
+pub struct Edit {
+  length: usize, cursor: usize,
+  // Active range is anchor..cursor when selecting is true.
+  anchor: usize, selecting: bool,
+  // Horizontal scroll in physical pixels; managed by text_field.
+  scroll_x: f32,
+}
 pub struct FieldSignal { signal: Signal, focused: bool, changed: bool, submitted: bool }
 
 fn previous_boundary(text: []const u8, at: usize) usize {
@@ -169,21 +191,48 @@ fn next_boundary(text: []const u8, at: usize) usize {
   return at + decoded.width
 }
 
-fn insert(storage: []u8, edit: *Edit, text: []const u8) bool {
-  if !utf8.valid(text) || edit.length + #len(text) > #len(storage) {
+fn selection_low(edit: *const Edit) usize {
+  if edit.selecting && edit.anchor < edit.cursor {
+    return edit.anchor
+  }
+  return edit.cursor
+}
+
+fn selection_high(edit: *const Edit) usize {
+  if edit.selecting && edit.anchor > edit.cursor {
+    return edit.anchor
+  }
+  return edit.cursor
+}
+
+fn insert(state: *State, storage: []u8, edit: *Edit, text: []const u8) bool {
+  low := selection_low(edit)
+  high := selection_high(edit)
+  if !utf8.valid(text) || #len(text) > #len(storage) - (edit.length - (high - low)) {
     return false
   }
+  for byte in text {
+    if byte == 0 || byte == 10 || byte == 13 {
+      return false
+    }
+  }
+  replacement := mem.push_bytes_uninit(state.frame, #len(text))
+  _ = mem.copy(replacement, text)
+  remove(storage, edit, low, high)
+  edit.cursor = low
   index := edit.length
   for index > edit.cursor {
     index -= 1
     storage[index + #len(text)] = storage[index]
   }
   for i in 0..#len(text) {
-    storage[edit.cursor + i] = text[i]
+    storage[edit.cursor + i] = replacement[i]
   }
   edit.length += #len(text)
   edit.cursor += #len(text)
-  return true
+  edit.anchor = edit.cursor
+  edit.selecting = false
+  return #len(text) != 0 || high != low
 }
 
 fn remove(storage: []u8, edit: *Edit, from: usize, to: usize) {
@@ -200,61 +249,208 @@ fn remove(storage: []u8, edit: *Edit, from: usize, to: usize) {
   }
 }
 
+fn space(byte: u8) bool {
+  return byte == 32 || byte == 9 || byte == 10 || byte == 13
+}
+
+fn word_boundary(state: *State, text: []const u8, at: usize, forward: bool) usize {
+  mark := mem.arena_mark(state.frame)
+  defer {
+    mem.arena_rewind(state.frame, mark)
+  }
+  boundaries := unicode_text.word_breaks(state.frame, text)
+  if !boundaries.ok {
+    return at
+  }
+  if forward {
+    target := #len(text)
+    for boundary in boundaries.value {
+      if boundary > at {
+        target = boundary
+        break
+      }
+    }
+    for target < #len(text) && space(text[target]) {
+      target += 1
+    }
+    return target
+  }
+  target := at
+  for target > 0 && space(text[target - 1]) {
+    target -= 1
+  }
+  previous: usize = 0
+  for boundary in boundaries.value {
+    if boundary >= target {
+      break
+    }
+    previous = boundary
+  }
+  return previous
+}
+
+fn pointer_boundary(state: *State, box: *const Box, text: []const u8, scroll: f32) usize {
+  x := state.input.x - box.rect[0] - 4.0 + scroll
+  previous: usize = 0
+  previous_width: f32 = 0.0
+  for previous < #len(text) {
+    next := next_boundary(text, previous)
+    width := state.measure(state.measure_data, text[..next])
+    if x < (previous_width + width) / 2.0 {
+      return previous
+    }
+    previous = next
+    previous_width = width
+  }
+  return #len(text)
+}
+
 pub fn text_field(state: *State, label: []const u8, storage: []u8, edit: *Edit) FieldSignal {
-  box := build(state, Clickable | DrawBackground | DrawBorder | DrawText | Clip | HotAnimation, label)
+  box := build(state, Focusable | Clickable | DrawBackground | DrawBorder | DrawText | Clip | HotAnimation, label)
   box.width = pixels(220.0, 0.5)
   box.height = text_size(5.0, 1.0)
   result := FieldSignal{ signal: signal(state, box) }
-  if result.signal.pressed {
-    state.focused = box.key
-    state.focus_claimed = true
-  }
   if edit.length > #len(storage) {
     edit.length = #len(storage)
   }
+  // Caller offsets may have become stale after replacing its buffer.
+  if !utf8.valid(storage[..edit.length]) {
+    return result
+  }
   if edit.cursor > edit.length {
     edit.cursor = edit.length
+  }
+  for edit.cursor > 0 && edit.cursor < edit.length && storage[edit.cursor] & 0xc0 == 0x80 {
+    edit.cursor -= 1
+  }
+  if edit.anchor > edit.length {
+    edit.anchor = edit.length
+  }
+  for edit.anchor > 0 && edit.anchor < edit.length && storage[edit.anchor] & 0xc0 == 0x80 {
+    edit.anchor -= 1
+  }
+  if !edit.selecting {
+    edit.anchor = edit.cursor
+  }
+  if result.signal.pressed {
+    at := pointer_boundary(state, box, storage[..edit.length], edit.scroll_x)
+    if !state.input.shift {
+      edit.anchor = at
+    }
+    edit.cursor = at
+    edit.selecting = edit.cursor != edit.anchor
+  }
+  else if result.signal.dragging || result.signal.released {
+    edit.cursor = pointer_boundary(state, box, storage[..edit.length], edit.scroll_x)
+    edit.selecting = edit.cursor != edit.anchor
   }
   focused := state.focused == box.key
   result.focused = focused
   if focused {
     input := state.input
     text := storage[..edit.length]
-    if input.home {
-      edit.cursor = 0
-    }
-    if input.end {
+    if input.select_all {
+      edit.anchor = 0
       edit.cursor = edit.length
+      edit.selecting = true
     }
-    if input.left {
-      edit.cursor = previous_boundary(text, edit.cursor)
+    moved := input.home || input.end || input.left || input.right
+    if moved {
+      old := edit.cursor
+      target := old
+      if input.home {
+        target = 0
+      }
+      if input.end {
+        target = edit.length
+      }
+      if input.left {
+        if !input.shift && edit.selecting {
+          target = selection_low(edit)
+        }
+        else if input.control {
+          target = word_boundary(state, text, old, false)
+        }
+        else {
+          target = previous_boundary(text, old)
+        }
+      }
+      if input.right {
+        if !input.shift && edit.selecting {
+          target = selection_high(edit)
+        }
+        else if input.control {
+          target = word_boundary(state, text, old, true)
+        }
+        else {
+          target = next_boundary(text, old)
+        }
+      }
+      if input.shift {
+        if !edit.selecting {
+          edit.anchor = old
+        }
+        edit.selecting = target != edit.anchor
+      }
+      else {
+        edit.anchor = target
+        edit.selecting = false
+      }
+      edit.cursor = target
     }
-    if input.right {
-      edit.cursor = next_boundary(text, edit.cursor)
-    }
-    if input.backspace && edit.cursor > 0 {
-      remove(storage, edit, previous_boundary(storage[..edit.length], edit.cursor), edit.cursor)
-      result.changed = true
-    }
-    if input.delete && edit.cursor < edit.length {
-      remove(storage, edit, edit.cursor, next_boundary(storage[..edit.length], edit.cursor))
-      result.changed = true
+    if input.backspace || input.delete {
+      low := selection_low(edit)
+      high := selection_high(edit)
+      if low == high {
+        if input.backspace {
+          if input.control {
+            low = word_boundary(state, text, low, false)
+          }
+          else {
+            low = previous_boundary(text, low)
+          }
+        }
+        else {
+          if input.control {
+            high = word_boundary(state, text, high, true)
+          }
+          else {
+            high = next_boundary(text, high)
+          }
+        }
+      }
+      if low != high {
+        remove(storage, edit, low, high)
+        edit.cursor = low
+        result.changed = true
+      }
+      edit.anchor = edit.cursor
+      edit.selecting = false
     }
     if input.copy || input.cut {
-      copied := mem.push_bytes_uninit(state.frame, edit.length)
-      _ = mem.copy(copied, storage[..edit.length])
+      low := selection_low(edit)
+      high := selection_high(edit)
+      // Preserve the original whole-field shortcut when there is no selection.
+      if low == high {
+        low = 0
+        high = edit.length
+      }
+      copied := mem.push_bytes_uninit(state.frame, high - low)
+      _ = mem.copy(copied, storage[low..high])
       state.copied = copied
-      if input.cut {
-        edit.length = 0
-        edit.cursor = 0
+      if input.cut && high != low {
+        remove(storage, edit, low, high)
+        edit.cursor = low
+        edit.anchor = low
+        edit.selecting = false
         result.changed = true
       }
     }
     if input.paste && #len(input.clipboard) != 0 {
-      result.changed = insert(storage, edit, input.clipboard) || result.changed
+      result.changed = insert(state, storage, edit, input.clipboard) || result.changed
     }
     if #len(input.text) != 0 {
-      result.changed = insert(storage, edit, input.text) || result.changed
+      result.changed = insert(state, storage, edit, input.text) || result.changed
     }
     if input.enter {
       result.submitted = true
@@ -267,14 +463,32 @@ pub fn text_field(state: *State, label: []const u8, storage: []u8, edit: *Edit) 
   shown := mem.push_bytes_uninit(state.frame, edit.length)
   _ = mem.copy(shown, storage[..edit.length])
   box.text = shown
+  caret_x := state.measure(state.measure_data, storage[..edit.cursor])
+  available := box.size[0] - 8.0
+  if available > 0.0 {
+    if caret_x < edit.scroll_x {
+      edit.scroll_x = caret_x
+    }
+    if caret_x > edit.scroll_x + available {
+      edit.scroll_x = caret_x - available
+    }
+  }
+  if edit.scroll_x < 0.0 {
+    edit.scroll_x = 0.0
+  }
+  box.text_offset = edit.scroll_x
   if focused {
+    if edit.selecting {
+      box.selection[0] = state.measure(state.measure_data, storage[..selection_low(edit)])
+      box.selection[1] = state.measure(state.measure_data, storage[..selection_high(edit)])
+    }
     push_parent(state, box)
     box.axis = 0
     caret := build(state, DrawBackground | FloatingX | FloatingY, "##caret")
-    caret.floating[0] = 4.0 + state.measure(state.measure_data, storage[..edit.cursor])
-    caret.floating[1] = 3.0
-    caret.width = pixels(1.0, 1.0)
-    caret.height = pixels(state.line_height, 1.0)
+    caret.floating[0] = 4.0 + caret_x - edit.scroll_x
+    caret.floating[1] = (box.size[1] - state.line_height) / 2.0
+    caret.width = pixels(1.0 / state.scale, 1.0)
+    caret.height = pixels(state.line_height / state.scale, 1.0)
     caret.background = box.foreground
     pop_parent(state)
   }
