@@ -272,8 +272,24 @@ Final full-suite evidence is recorded in [the expansion qualification record](qu
 
 Added `std/text/edit`, ordered replacement assembly, and box textbox revision
 checks. Native Wayland/Cocoa snapshots carry selection, revision and change
-cause. X11 and Windows explicitly reject this capability while retaining basic
-IME input. Qualification covers transactional Unicode edits, stale revisions,
+cause. X11 explicitly rejects this capability while retaining basic IME input.
+Windows IMM supports document feed and selected-range reconversion. Qualification covers transactional Unicode edits, stale revisions,
 native callback/protocol contracts and the seven-argument C ABI. Cocoa callback
 runtime checks require macOS. Existing aggregate-input examples remain limited
 to preedit and committed text; SDL/SDL_ttf replacement in DNA remains pending.
+
+## Native editor follow-up
+
+Windows IMM now provides document feed and selected-range reconversion with
+UTF-16 validation, source revisions and canceled-result tombstones. Strict
+x64/ARM64 cross-builds and Wine callback oracles cover malformed data, stale
+publication and focus/disable races; real Windows IME sessions remain separate.
+The real-session prerequisite probe and acceptance procedure record missing
+local macOS/engine prerequisites without claiming native runtime qualification.
+
+DNA now has an isolated SDL-free Linux X11 development profile using shared
+windowing, TrueType rasterization/text layout, software drawing and an OpenGL
+framebuffer presenter. Default SDL builds remain available because complex
+shaping and other platform profiles are not yet equivalent. Its production
+smoke exposed the shared X11 clipboard truncation bound: dynamic checked
+snapshots and INCR transport now preserve large multi-selection copies.

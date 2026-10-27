@@ -19,6 +19,12 @@ typedef struct Host {
   dyn_window_composition composition;
   int text_input, text_input_configured;
   RECT caret;
+  /* IME-initiated selected-range reconversion. Keep the source identity until
+   * END, including after rejection, so stale results never become insertions. */
+  Surrounding reconvert;
+  uint32_t reconvert_start, reconvert_end;
+  int reconvert_pending, reconvert_active, reconvert_done;
+
 } Host;
 #define DYN_WAKE_MESSAGE (WM_APP + 983)
 static uint32_t modifiers(void) {
@@ -155,6 +161,102 @@ static void repeated_text(Desktop *desktop, uint32_t codepoint,
     desktop_codepoint(desktop, codepoint);
   drop_events(desktop, count - emitted);
 }
+/* Unicode RECONVERTSTRING lengths are UTF-16 units, but all three offsets
+ * are bytes (Microsoft RECONVERTSTRING contract). Never split a surrogate. */
+static int surrounding_wide(const Surrounding *source, WCHAR *wide) {
+  return source->length ? MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+      (const char *)source->text, (int)source->length, wide, DYN_SURROUND_LIMIT) : 0;
+}
+static LRESULT reconvert_request(Host *h, UINT request, RECONVERTSTRING *output) {
+  const Surrounding *source = &h->desktop.surrounding;
+  if (!h->text_input || !h->desktop.event_enabled || !source->token ||
+      source->token == h->desktop.consumed_token || h->reconvert_active) return 0;
+  uint32_t low = source->cursor < source->anchor ? source->cursor : source->anchor;
+  uint32_t high = source->cursor > source->anchor ? source->cursor : source->anchor;
+  /* No word-boundary heuristic: the caller selects the initial range. The
+   * IME may expand it through CONFIRM; ordinary collapsed input stays basic. */
+  if (request == IMR_RECONVERTSTRING &&
+      (low == high || (h->reconvert_pending && !h->reconvert.token))) return 0;
+  WCHAR wide[DYN_SURROUND_LIMIT + 1];
+  int units = surrounding_wide(source, wide);
+  if (source->length && !units) return 0;
+  uint32_t size = (uint32_t)sizeof(*output) + ((uint32_t)units + 1) * sizeof(WCHAR);
+  if (!output) return size;
+  if (output->dwSize < size) return 0;
+  RECONVERTSTRING result = {0};
+  result.dwSize = size;
+  result.dwStrLen = (DWORD)units;
+  result.dwStrOffset = sizeof(result);
+  result.dwCompStrOffset = surrounding_utf16(source->text, low) * sizeof(WCHAR);
+  result.dwCompStrLen = surrounding_utf16(source->text, high) - result.dwCompStrOffset / sizeof(WCHAR);
+  result.dwTargetStrOffset = result.dwCompStrOffset;
+  result.dwTargetStrLen = result.dwCompStrLen;
+  memcpy(output, &result, sizeof(result));
+  memcpy((uint8_t *)output + result.dwStrOffset, wide, (size_t)units * sizeof(WCHAR));
+  memset((uint8_t *)output + result.dwStrOffset + (size_t)units * sizeof(WCHAR), 0, sizeof(WCHAR));
+  if (request == IMR_RECONVERTSTRING) {
+    h->reconvert = *source;
+    h->reconvert_start = low;
+    h->reconvert_end = high;
+    h->reconvert_pending = 1;
+    h->reconvert_done = 0;
+  }
+  return size;
+}
+static LRESULT reconvert_confirm(Host *h, const RECONVERTSTRING *input) {
+  if (!input || !h->text_input || !h->desktop.event_enabled || !h->reconvert_pending ||
+      h->reconvert_active || !h->reconvert.token ||
+      h->reconvert.token != h->desktop.surrounding.token ||
+      h->reconvert.token == h->desktop.consumed_token) return 0;
+  WCHAR wide[DYN_SURROUND_LIMIT + 1];
+  int units = surrounding_wide(&h->reconvert, wide);
+  if (input->dwVersion || input->dwSize < sizeof(*input) ||
+      input->dwStrOffset < sizeof(*input) || input->dwStrOffset % sizeof(WCHAR) ||
+      input->dwStrOffset > input->dwSize || input->dwStrLen != (DWORD)units ||
+      input->dwStrLen > (input->dwSize - input->dwStrOffset) / sizeof(WCHAR) ||
+      input->dwCompStrOffset % sizeof(WCHAR) || input->dwTargetStrOffset % sizeof(WCHAR) ||
+      !input->dwCompStrLen) return 0;
+  uint32_t start_units = input->dwCompStrOffset / sizeof(WCHAR);
+  uint32_t target_units = input->dwTargetStrOffset / sizeof(WCHAR);
+  if (start_units > (uint32_t)units || input->dwCompStrLen > (uint32_t)units - start_units ||
+      target_units < start_units || target_units > start_units + input->dwCompStrLen ||
+      input->dwTargetStrLen > start_units + input->dwCompStrLen - target_units ||
+      memcmp((const uint8_t *)input + input->dwStrOffset, wide, (size_t)units * sizeof(WCHAR))) return 0;
+  uint32_t start, end, target_start, target_end;
+  if (!surrounding_byte(h->reconvert.text, h->reconvert.length, start_units, &start) ||
+      !surrounding_byte(h->reconvert.text, h->reconvert.length, start_units + input->dwCompStrLen, &end) ||
+      !surrounding_byte(h->reconvert.text, h->reconvert.length, target_units, &target_start) ||
+      !surrounding_byte(h->reconvert.text, h->reconvert.length, target_units + input->dwTargetStrLen, &target_end)) return 0;
+  h->reconvert_start = start;
+  h->reconvert_end = end;
+  return 1;
+}
+static void reconvert_result(Host *h, HWND window) {
+  int accepted = 0;
+  HIMC context = ImmGetContext(window);
+  if (context) {
+    LONG bytes = ImmGetCompositionStringW(context, GCS_RESULTSTR, NULL, 0);
+    if (!h->reconvert_done && bytes >= 0 && bytes % (LONG)sizeof(WCHAR) == 0 &&
+        bytes <= (LONG)(DYN_SURROUND_LIMIT * sizeof(WCHAR))) {
+      WCHAR wide[DYN_SURROUND_LIMIT];
+      LONG copied = bytes ? ImmGetCompositionStringW(context, GCS_RESULTSTR, wide, (DWORD)bytes) : 0;
+      if (copied == bytes) {
+        uint8_t utf8[DYN_SURROUND_LIMIT];
+        int count = bytes ? WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide,
+            (int)(bytes / (LONG)sizeof(WCHAR)), (char *)utf8, sizeof(utf8), NULL, NULL) : 0;
+        if (!bytes || count > 0) {
+          /* desktop_edit validates UTF-8/NUL, revision and queue capacity. */
+          accepted = desktop_edit(&h->desktop, &h->reconvert, h->reconvert_start,
+              h->reconvert_end, utf8, (uint32_t)count) ? 1 : -1;
+        }
+      }
+    }
+    ImmReleaseContext(window, context);
+  }
+  if (!accepted) desktop_loss(&h->desktop, 1);
+  h->reconvert_done = 1;
+  h->desktop.pending.keys |= DYN_KEY_IME;
+}
 static LRESULT CALLBACK procedure(HWND window, UINT message, WPARAM w,
                                   LPARAM l) {
   Host *h = (Host *)GetWindowLongPtrW(window, GWLP_USERDATA);
@@ -237,6 +339,10 @@ static LRESULT CALLBACK procedure(HWND window, UINT message, WPARAM w,
       h->desktop.pending.keys &= ~(uint32_t)(DYN_KEY_SHIFT | DYN_KEY_CONTROL);
       h->high_surrogate = 0;
       h->high_surrogate_repeats = 0;
+      /* Keep a cancelled pending/active identity through END. A delayed
+       * START/RESULT must remain a rejected correction, never an insertion. */
+      h->reconvert.token = 0;
+      h->desktop.surrounding.token = 0;
       desktop_simple(&h->desktop, DYN_EVENT_FOCUS_LOST);
     }
     if (h->frame.flags & DYN_DOWN)
@@ -345,10 +451,21 @@ static LRESULT CALLBACK procedure(HWND window, UINT message, WPARAM w,
     desktop_wheel(&h->desktop,
                   (float)GET_WHEEL_DELTA_WPARAM(w) / 120.0f * 48.0f, 0.0f);
     return 0;
+  case WM_IME_REQUEST:
+    if (w == IMR_DOCUMENTFEED || w == IMR_RECONVERTSTRING)
+      return reconvert_request(h, (UINT)w, (RECONVERTSTRING *)l);
+    if (w == IMR_CONFIRMRECONVERTSTRING)
+      return reconvert_confirm(h, (const RECONVERTSTRING *)l);
+    break;
   case WM_IME_SETCONTEXT:
     if (h->text_input) l &= ~(LPARAM)ISC_SHOWUICOMPOSITIONWINDOW;
     break;
   case WM_IME_STARTCOMPOSITION: {
+    if (!h->reconvert_active) {
+      h->reconvert_active = h->reconvert_pending;
+      h->reconvert_pending = 0;
+      h->reconvert_done = 0;
+    }
     if (h->text_input_configured && !h->text_input) break;
     HIMC context = ImmGetContext(window);
     if (context) {
@@ -363,6 +480,11 @@ static LRESULT CALLBACK procedure(HWND window, UINT message, WPARAM w,
     break;
   }
   case WM_IME_COMPOSITION: {
+    if ((l & GCS_RESULTSTR) && h->reconvert_active &&
+        h->text_input_configured && !h->text_input) {
+      reconvert_result(h, window);
+      return 0;
+    }
     if (h->text_input_configured && !h->text_input) break;
     if (l & GCS_COMPSTR) {
       HIMC context = ImmGetContext(window);
@@ -387,10 +509,17 @@ static LRESULT CALLBACK procedure(HWND window, UINT message, WPARAM w,
         composition_changed(&h->desktop, &h->composition);
       }
     }
-    /* Committed text (GCS_RESULTSTR) arrives through WM_CHAR. */
+    if ((l & GCS_RESULTSTR) && h->reconvert_active) {
+      reconvert_result(h, window);
+      /* We own this result. Default processing would insert it again through
+       * the IME character path instead of replacing the source selection. */
+      return 0;
+    }
+    /* Ordinary committed text (GCS_RESULTSTR) arrives through WM_CHAR. */
     break;
   }
   case WM_IME_ENDCOMPOSITION:
+    h->reconvert_pending = h->reconvert_active = h->reconvert_done = 0;
     memset(&h->composition, 0, sizeof(h->composition));
     composition_changed(&h->desktop, &h->composition);
     break;
@@ -613,8 +742,10 @@ int32_t dyn_window_wake(void *p) {
 
 void dyn_window_listen_events(void *p, int32_t enabled) {
   Host *h = p;
-  if (h)
+  if (h) {
+    if (h->desktop.event_enabled != (enabled != 0)) h->desktop.surrounding.token = 0;
     desktop_listen(&h->desktop, enabled);
+  }
 }
 
 void dyn_window_composition_get(void *p, dyn_window_composition *out) {
@@ -628,6 +759,10 @@ void dyn_window_set_text_input(void *p, int32_t enabled, int32_t x, int32_t y, i
   uint32_t consumed_before = h->desktop.pending.keys & DYN_KEY_IME;
   h->caret = (RECT){x, y, x + width, y + height};
   if (!enabled && h->text_input) {
+    /* ImmNotifyIME may synchronously send END, which releases the tombstone.
+     * Without END, retain pending/active state to absorb delayed results. */
+    h->reconvert.token = 0;
+    h->desktop.surrounding.token = 0;
     HIMC context = ImmGetContext(h->window);
     if (context) {
       ImmNotifyIME(context, NI_COMPOSITIONSTR, CPS_CANCEL, 0);
@@ -665,8 +800,9 @@ uint32_t dyn_window_clipboard_get(void *p, const uint8_t **text) {
 
 int32_t dyn_window_set_surrounding_text(void *p, const uint8_t *text, uint32_t length,
                                         uint32_t cursor, uint32_t anchor, uint64_t token, uint32_t cause) {
-  /* IMM reconversion/context queries require a document service beyond the
-   * composition bridge. Do not advertise surrounding corrections here. */
-  (void)p; (void)text; (void)length; (void)cursor; (void)anchor; (void)token; (void)cause;
-  return -1;
+  Host *h = p;
+  if (!h || cause > 1) return 0;
+  /* Retain a pending source across publication too: its later START/RESULT
+   * must fail revision validation rather than become an ordinary insertion. */
+  return desktop_surrounding(&h->desktop, text, length, cursor, anchor, token);
 }

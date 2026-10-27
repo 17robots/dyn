@@ -137,7 +137,9 @@ Ordered clients can publish `window.Surrounding` through
 contain owned-on-publication UTF-8 text, cursor and anchor byte offsets, a nonzero
 revision token, and `std/text/edit.Cause`. The shared limit is 4096 bytes;
 Wayland accepts at most 4000 bytes. Native contexts reject embedded NUL bytes.
-Wayland and Cocoa support corrections. X11 and Windows return `Unsupported`;
+Wayland and Cocoa support corrections. Windows supports IMM document feed and
+selected-range reconversion, including IME-confirmed range expansion; collapsed
+reconversion is rejected without guessing word boundaries. X11 returns `Unsupported`;
 preedit and ordinary committed text remain available. See the
 [XIM investigation](../../docs/internals/xim-surrounding-support.md).
 
@@ -168,3 +170,37 @@ Wayland matches corrections against committed protocol serials and rejects stale
 history. Cocoa maps UTF-16 native ranges to UTF-8 boundaries; partial replacement
 inside active marked text reports overflow. Real macOS IME behavior still needs
 native runtime qualification.
+
+The X11 facade also exposes GUI-thread `set_title` and `set_size`. Titles use
+bounded NUL-free UTF-8 conversion; dimensions must be within 1..16384. Size
+requests are synchronized with Xlib and current events are polled, but a window
+manager may constrain or defer the requested dimensions. Observe actual size
+through subsequent polls. These metadata operations are currently X11-specific.
+
+For prerequisites and manual real-engine acceptance, see
+[IME session qualification](../../docs/internals/ime-session-qualification.md).
+`tests/ime-session-probe.py` reports installed engines and display services;
+its inventory is not a qualification result.
+
+### Large X11 clipboard snapshots
+
+X11 supports owned clipboard snapshots up to 16 MiB and four concurrent outgoing
+INCR transfers. Each outgoing transfer owns its original snapshot, so changing
+the offer does not change bytes already being sent. `try_set_clipboard` returns
+a result before replacing the offer; the compatibility `set_clipboard` wrapper
+discards that result. Use the checked operation when copying is part of a
+destructive editor action.
+
+After `request_paste`, `paste_pending` stays true until completion or failure.
+`paste_status` reports the result; `clipboard` retains the previous completed
+snapshot on failure. A successful empty reply replaces it with an empty view.
+The ordered queue remains bounded: a large reply that cannot fit produces
+Overflow without partial Clipboard events. Snapshot clients can read the full
+completed value separately; ordered clients must handle overflow explicitly.
+Clipboard capacities on other backends remain unchanged.
+
+`request_paste_snapshot` requests the same complete value without emitting
+Clipboard chunks; use it when an ordered client deliberately reads the completed
+snapshot itself. Other input and overflow events remain enabled. A live sender
+that never finishes INCR can leave a request pending until owner destruction or
+window closure; receive memory and simultaneous outgoing transfers stay bounded.

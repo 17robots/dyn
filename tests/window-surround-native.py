@@ -169,9 +169,9 @@ WINDOWS=r'''#define WIN32_LEAN_AND_MEAN
 #include <assert.h>
 #include <stdio.h>
 int main(void){Host h={0};desktop_listen(&h.desktop,1);h.desktop.surrounding.token=123;
- assert(dyn_window_set_surrounding_text(&h,(const uint8_t*)"text",4,0,0,1,0)==-1);
- assert(h.desktop.surrounding.token==123);
- puts("PASS Win32 surrounding correction explicitly unsupported without mutating context");return 0;}
+ assert(dyn_window_set_surrounding_text(&h,(const uint8_t*)"text",4,0,0,1,0)==1);
+ assert(h.desktop.surrounding.token==1);
+ puts("PASS Win32 surrounding publication preserves validated revision");return 0;}
 '''
 def prefix_fixture():
     path=ROOT/'tests/window-ime-native.py'

@@ -79,3 +79,24 @@ pub fn set_surrounding_text(window: *Window, context: Surrounding) Result {
   }
   return x11.set_surrounding_text(window, context.text, context.cursor, context.anchor, context.token)
 }
+
+pub fn set_title(window:*Window, title:[]const u8) Result {
+  return x11.set_title(window, title)
+}
+pub fn set_size(window:*Window, width, height:i32) Result {
+  return x11.set_size(window, width, height)
+}
+
+pub fn try_set_clipboard(window:*Window, text:[]const u8) Result {
+  return x11.try_set_clipboard(window, text)
+}
+pub fn paste_pending(window:*const Window) bool {
+  return x11.paste_pending(window)
+}
+pub fn paste_status(window:*const Window) Result {
+  return x11.paste_status(window)
+}
+
+pub fn request_paste_snapshot(window:*Window) {
+  x11.request_paste_snapshot(window)
+}

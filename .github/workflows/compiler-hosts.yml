@@ -109,6 +109,7 @@ jobs:
           DYN_OPENGL_DLL="$(cygpath -w /clang64/bin/opengl32.dll)" GALLIUM_DRIVER=llvmpipe python tests/window-events.py
           python tests/window-ime-native.py
           python tests/window-surround-native.py
+          python tests/window-surround-win32.py
           python tests/window-surrounding.py
           python tests/sync-host.py
           python tests/concurrency-net-host.py

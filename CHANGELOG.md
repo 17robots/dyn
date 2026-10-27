@@ -14,7 +14,9 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
-- Added revision-checked `std/text/edit`, ordered IME replacement events, and textbox correction handling. Wayland and Cocoa publish bounded surrounding text; X11 and Windows explicitly return `Unsupported`. Stale revisions, invalid UTF-8 ranges and capacity failures preserve caller text.
+- X11 clipboard snapshots now support up to 16 MiB through bounded INCR transfers. `try_set_clipboard`, `paste_pending` and `paste_status` expose copy/receive failures; large ordered replies overflow atomically instead of publishing a prefix.
+
+- Added revision-checked `std/text/edit`, ordered IME replacement events, and textbox correction handling. Wayland, Cocoa and Windows IMM publish bounded surrounding text; Windows supports selected-range reconversion and X11 explicitly returns `Unsupported`. Stale revisions, invalid UTF-8 ranges and capacity failures preserve caller text.
 
 - Ordered composition snapshots and clipboard chunks now own their payloads, preserving multiple updates before draining. Composition has one portable 272-byte ABI; Event remains 312 bytes. XIM caret/locale/bounds, IMM Unicode conversion and Wayland transactions/disable are hardened. Text fields suppress IME-consumed keys, preview selected replacement without insertion, redraw on preedit changes and publish current-layout candidate rectangles.
 
