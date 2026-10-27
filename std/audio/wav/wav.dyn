@@ -122,7 +122,11 @@ pub fn decode(arena: *mem.Arena, source: []const u8) DecodeResult {
   if channels == 0 || rate == 0 || #cast(usize, channels) * stride != #cast(usize, align) || #cast(u64, rate) * #cast(u64, align) != #cast(u64, u32le(format, 8)) || !mask_valid(mask, channels) || #len(data) % #cast(usize, align) != 0 {
     return DecodeResult{ kind: errors.Kind.InvalidInput, offset: data_offset }
   }
-  samples := mem.push_array(f32, arena, #len(data) / stride)
+  sample_count := #len(data) / stride
+  if sample_count > ~#cast(usize, 0) / #sizeof(f32) {
+    return DecodeResult{ kind: errors.Kind.Overflow, offset: data_offset }
+  }
+  samples := mem.push_array(f32, arena, sample_count)
   for i in 0..#len(samples) {
     pos := i * stride
     value: f64 = 0.0
