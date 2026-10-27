@@ -1,0 +1,22 @@
+#target(kernel: darwin)
+use "vendor/window/native" native
+pub type Window = native.Window
+pub type Result = native.Result
+pub fn open(window: *Window, title: []const u8, width, height: i32) Result {
+  return native.open(window, title, width, height)
+}
+pub fn close(window: *Window) {
+  native.close(window)
+}
+pub fn poll(window: *Window) Result {
+  return native.poll(window)
+}
+pub fn make_current(window: *Window) Result {
+  return native.make_current(window)
+}
+pub fn swap(window: *Window) Result {
+  return native.swap(window)
+}
+pub fn gl_proc(name: *const u8) rawptr {
+  return native.gl_proc(name)
+}

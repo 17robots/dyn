@@ -1,0 +1,79 @@
+use "std/mem" mem
+use "std/c" c
+use "std/errors" errors
+use "std/ui" ui
+#link("dyn_window")
+// Native bridge owns its OS allocations. Keep the owning Window on its GUI
+// thread, close renderer resources before close, and never copy a live owner.
+pub struct Window { handle: rawptr, width: i32, height: i32, input: ui.Input, close_requested: bool }
+pub struct Result { kind: errors.Kind, ok: bool }
+struct Frame { width: i32, height: i32, x: i32, y: i32, flags: u32 }
+extern fn native_open "dyn_window_open"(title: *const u8, width: i32, height: i32) rawptr
+extern fn native_close "dyn_window_close"(handle: rawptr)
+extern fn native_poll "dyn_window_poll"(handle: rawptr, frame: *Frame) i32
+extern fn native_current "dyn_window_current"(handle: rawptr) i32
+extern fn native_swap "dyn_window_swap"(handle: rawptr) i32
+pub extern fn gl_proc "dyn_window_proc"(name: *const u8) rawptr
+pub fn open(window: *Window, title: []const u8, width, height: i32) Result {
+  if window.handle != nil {
+    return Result{kind:errors.Kind.InvalidState}
+  }
+  if width <= 0 || height <= 0 || #len(title) > 4095 {
+    return Result{kind:errors.Kind.InvalidInput}
+  }
+  storage: [4096]u8 = []
+  arena := mem.arena_from_buffer(storage[..])
+  name := c.string_from_bytes(&arena, title)
+  if !name.ok {
+    return Result{kind:errors.Kind.InvalidInput}
+  }
+  handle := native_open(name.value, width, height)
+  if handle == nil {
+    return Result{kind:errors.Kind.System}
+  }
+  window.* = Window{handle:handle, width:width, height:height}
+  opened := poll(window)
+  if !opened.ok {
+    close(window)
+    return opened
+  }
+  return Result{ok:true}
+}
+pub fn close(window: *Window) {
+  if window.handle != nil {
+    native_close(window.handle)
+    window.* = Window{}
+  }
+}
+pub fn poll(window: *Window) Result {
+  if window.handle == nil {
+    return Result{kind:errors.Kind.InvalidState}
+  }
+  frame := Frame{}
+  if native_poll(window.handle, &frame) == 0 {
+    return Result{kind:errors.Kind.System}
+  }
+  window.width = frame.width
+  window.height = frame.height
+  window.close_requested = (frame.flags & 128) != 0
+  window.input = ui.Input{x:frame.x, y:frame.y, down:(frame.flags&1)!=0, pressed:(frame.flags&2)!=0, released:(frame.flags&4)!=0, tab:(frame.flags&8)!=0, activate:(frame.flags&16)!=0, left:(frame.flags&32)!=0, right:(frame.flags&64)!=0}
+  return Result{ok:true}
+}
+pub fn make_current(window: *Window) Result {
+  if window.handle == nil {
+    return Result{kind:errors.Kind.InvalidState}
+  }
+  if native_current(window.handle) == 0 {
+    return Result{kind:errors.Kind.System}
+  }
+  return Result{ok:true}
+}
+pub fn swap(window: *Window) Result {
+  if window.handle == nil {
+    return Result{kind:errors.Kind.InvalidState}
+  }
+  if native_swap(window.handle) == 0 {
+    return Result{kind:errors.Kind.System}
+  }
+  return Result{ok:true}
+}

@@ -1,0 +1,282 @@
+use "vendor/opengl" gl
+use "std/ui" ui
+use "std/ui/software" software
+use "std/unicode/utf8" utf8
+use "std/errors" errors
+// Explicit GL ownership; create/render/close on the current owning context.
+// Rendering owns GL state: viewport, program, VAO, VBO, texture unit zero,
+// blending, scissor, depth/cull/stencil and unpack state. Caller resets as needed.
+// Target framebuffer must be opaque for conventional straight-alpha blending.
+pub struct Renderer { api: gl.Api, program: u32, vao: u32, buffer: u32, texture: u32, viewport: i32, tint: i32, sampler: i32, max_texture: i32 }
+pub struct Result { kind: errors.Kind, ok: bool }
+// Drains the context error flags. Preexisting errors also fail the operation.
+fn healthy(api: *const gl.Api) bool {
+  ok := true
+  error := api.get_error()
+  for error != 0 {
+    ok = false
+    error = api.get_error()
+  }
+  return ok
+}
+fn shader(api: *const gl.Api, kind: u32, source: []const u8) u32 {
+  id := api.create_shader(kind)
+  pointer := &source[0]
+  length := #cast(i32, #len(source))
+  if id == 0 {
+    return 0
+  }
+  api.shader_source(id, 1, &pointer, &length)
+  api.compile_shader(id)
+  valid: i32 = 0
+  api.get_shader_iv(id, gl.CompileStatus, &valid)
+  if valid == 0 {
+    api.delete_shader(id)
+    return 0
+  }
+  return id
+}
+pub fn open(renderer: *Renderer, api: gl.Api) Result {
+  if renderer.program != 0 {
+    return Result{kind:errors.Kind.InvalidState}
+  }
+  // Pass a successfully loaded GL 3.3 table from vendor/opengl.load.
+  if !healthy(&api) {
+    return Result{kind:errors.Kind.System}
+  }
+  vertex := shader(&api, gl.VertexShader, "#version 330 core\nlayout(location=0) in vec2 p; layout(location=1) in vec2 t; uniform vec2 viewport; out vec2 uv; void main(){uv=t;gl_Position=vec4(p.x/viewport.x*2.-1.,1.-p.y/viewport.y*2.,0.,1.);}")
+  fragment := shader(&api, gl.FragmentShader, "#version 330 core\nin vec2 uv; uniform sampler2D image; uniform vec4 tint; out vec4 color; void main(){color=vec4(tint.rgb,tint.a*texture(image,uv).r);}")
+  if vertex == 0 || fragment == 0 {
+    if vertex != 0 {
+      api.delete_shader(vertex)
+    }
+    if fragment != 0 {
+      api.delete_shader(fragment)
+    }
+    return Result{kind:errors.Kind.System}
+  }
+  renderer.api = api
+  api.get_integer(gl.MaxTextureSize, &renderer.max_texture)
+  renderer.program = api.create_program()
+  api.attach_shader(renderer.program, vertex)
+  api.attach_shader(renderer.program, fragment)
+  api.link_program(renderer.program)
+  api.delete_shader(vertex)
+  api.delete_shader(fragment)
+  valid: i32 = 0
+  api.get_program_iv(renderer.program, gl.LinkStatus, &valid)
+  if valid == 0 {
+    close(renderer)
+    return Result{kind:errors.Kind.System}
+  }
+  viewport_name := "viewport\x00"
+  renderer.viewport = api.get_uniform_location(renderer.program, &viewport_name[0])
+  tint_name := "tint\x00"
+  renderer.tint = api.get_uniform_location(renderer.program, &tint_name[0])
+  sampler_name := "image\x00"
+  renderer.sampler = api.get_uniform_location(renderer.program, &sampler_name[0])
+  api.gen_vertex_arrays(1, &renderer.vao)
+  api.gen_buffers(1, &renderer.buffer)
+  api.gen_textures(1, &renderer.texture)
+  api.bind_vertex_array(renderer.vao)
+  api.bind_buffer(gl.ArrayBuffer, renderer.buffer)
+  api.enable_vertex_attribute(0)
+  api.enable_vertex_attribute(1)
+  api.vertex_attribute(0, 2, gl.Float, 0, 16, nil)
+  api.vertex_attribute(1, 2, gl.Float, 0, 16, #cast(rawptr, 8))
+  valid_resources := renderer.vao != 0 && renderer.buffer != 0 && renderer.texture != 0 && renderer.max_texture > 0
+  valid_api := healthy(&api)
+  if !valid_resources || !valid_api {
+    close(renderer)
+    return Result{kind:errors.Kind.System}
+  }
+  return Result{ok:true}
+}
+pub fn close(renderer: *Renderer) {
+  if renderer.program == 0 {
+    return
+  }
+  renderer.api.delete_program(renderer.program)
+  renderer.api.delete_vertex_arrays(1, &renderer.vao)
+  renderer.api.delete_buffers(1, &renderer.buffer)
+  renderer.api.delete_textures(1, &renderer.texture)
+  renderer.* = Renderer{}
+}
+fn quad(renderer: *Renderer, x, y, right, bottom: f32, tint: ui.Color) {
+  vertices: [24]f32 = [x, y, 0.0, 0.0, right, y, 1.0, 0.0, right, bottom, 1.0, 1.0, x, y, 0.0, 0.0, right, bottom, 1.0, 1.0, x, bottom, 0.0, 1.0]
+  renderer.api.uniform_4f(renderer.tint, #cast(f32, tint.r)/255.0, #cast(f32, tint.g)/255.0, #cast(f32, tint.b)/255.0, #cast(f32, tint.a)/255.0)
+  renderer.api.buffer_data(gl.ArrayBuffer, #cast(isize, #sizeof(vertices)), &vertices[0], gl.DynamicDraw)
+  renderer.api.draw_arrays(gl.Triangles, 0, 6)
+}
+fn glyph(renderer: *Renderer, clip: ui.Rect, tint: ui.Color, font: software.Font, codepoint: u32, x, y: i64) i64 {
+  if font.glyph == nil || font.line_height <= 0 {
+    return -1
+  }
+  if x < #cast(i64, clip.x)-4294967296 || x > #cast(i64, clip.x)+#cast(i64, clip.width)+4294967296 || y < #cast(i64, clip.y)-4294967296 || y > #cast(i64, clip.y)+#cast(i64, clip.height)+4294967296 {
+    return 0
+  }
+  bitmap := font.glyph(font.data, codepoint)
+  if bitmap.width < 0 || bitmap.height < 0 || bitmap.advance < 0 {
+    return -1
+  }
+  if bitmap.width == 0 || bitmap.height == 0 {
+    return #cast(i64, bitmap.advance)
+  }
+  if bitmap.stride < #cast(usize, bitmap.width) || bitmap.stride > 2147483647 || #cast(usize, bitmap.width) > #len(bitmap.pixels) {
+    return -1
+  }
+  if #cast(usize, bitmap.height-1) > (#len(bitmap.pixels)-#cast(usize, bitmap.width))/bitmap.stride {
+    return -1
+  }
+  left := x+#cast(i64, bitmap.x_offset)
+  top := y+#cast(i64, bitmap.y_offset)
+  if left >= #cast(i64, clip.x)+#cast(i64, clip.width) || top >= #cast(i64, clip.y)+#cast(i64, clip.height) || left+#cast(i64, bitmap.width) <= #cast(i64, clip.x) || top+#cast(i64, bitmap.height) <= #cast(i64, clip.y) {
+    return #cast(i64, bitmap.advance)
+  }
+  gx := left
+  gy := top
+  right := left+#cast(i64, bitmap.width)
+  bottom := top+#cast(i64, bitmap.height)
+  if gx < #cast(i64, clip.x) {
+    gx = #cast(i64, clip.x)
+  }
+  if gy < #cast(i64, clip.y) {
+    gy = #cast(i64, clip.y)
+  }
+  if right > #cast(i64, clip.x)+#cast(i64, clip.width) {
+    right = #cast(i64, clip.x)+#cast(i64, clip.width)
+  }
+  if bottom > #cast(i64, clip.y)+#cast(i64, clip.height) {
+    bottom = #cast(i64, clip.y)+#cast(i64, clip.height)
+  }
+  cropped_width := #cast(i32, right-gx)
+  cropped_height := #cast(i32, bottom-gy)
+  if cropped_width > renderer.max_texture || cropped_height > renderer.max_texture {
+    return -2
+  }
+  // Upload only visible rows, without requiring final-row atlas padding.
+  renderer.api.tex_image_2d(gl.Texture2d, 0, #cast(i32, gl.R8), cropped_width, cropped_height, 0, gl.Red, gl.UnsignedByte, nil)
+  for row in 0..cropped_height {
+    offset := #cast(usize, gy-top+#cast(i64, row))*bitmap.stride+#cast(usize, gx-left)
+    renderer.api.tex_sub_image_2d(gl.Texture2d, 0, 0, row, cropped_width, 1, gl.Red, gl.UnsignedByte, #cast(rawptr, &bitmap.pixels[offset]))
+  }
+  quad(renderer, #cast(f32, gx), #cast(f32, gy), #cast(f32, right), #cast(f32, bottom), tint)
+  return #cast(i64, bitmap.advance)
+}
+// Draws in order, with command clip snapshots. Font coverage is borrowed only
+// until the next callback. No persistent glyph cache or frame allocations.
+pub fn render(renderer: *Renderer, commands: *const ui.Command, width, height: i32, font: software.Font) Result {
+  if renderer.program == 0 {
+    return Result{kind:errors.Kind.InvalidState}
+  }
+  if width < 0 || height < 0 {
+    return Result{kind:errors.Kind.InvalidInput}
+  }
+  if width == 0 || height == 0 {
+    return Result{ok:true}
+  }
+  api := &renderer.api
+  if !healthy(api) {
+    return Result{kind:errors.Kind.System}
+  }
+  api.viewport(0, 0, width, height)
+  api.use_program(renderer.program)
+  api.bind_vertex_array(renderer.vao)
+  api.bind_buffer(gl.ArrayBuffer, renderer.buffer)
+  api.active_texture(gl.Texture0)
+  api.bind_sampler(0, 0)
+  api.bind_texture(gl.Texture2d, renderer.texture)
+  api.bind_buffer(gl.PixelUnpackBuffer, 0)
+  api.pixel_store_i(gl.UnpackAlignment, 1)
+  api.pixel_store_i(gl.UnpackRowLength, 0)
+  api.pixel_store_i(gl.UnpackSkipRows, 0)
+  api.pixel_store_i(gl.UnpackSkipPixels, 0)
+  api.tex_parameter_i(gl.Texture2d, gl.TextureMinFilter, #cast(i32, gl.Nearest))
+  api.tex_parameter_i(gl.Texture2d, gl.TextureMagFilter, #cast(i32, gl.Nearest))
+  api.tex_parameter_i(gl.Texture2d, gl.TextureWrapS, #cast(i32, gl.ClampToEdge))
+  api.tex_parameter_i(gl.Texture2d, gl.TextureWrapT, #cast(i32, gl.ClampToEdge))
+  api.color_mask(1, 1, 1, 1)
+  api.polygon_mode(gl.FrontAndBack, gl.Fill)
+  api.disable(gl.FramebufferSrgb)
+  api.disable(gl.ColorLogicOp)
+  api.disable(gl.RasterizerDiscard)
+  api.disable(gl.Dither)
+  api.disable(gl.PolygonSmooth)
+  api.disable(gl.Multisample)
+  api.disable(gl.SampleAlphaToCoverage)
+  api.disable(gl.SampleCoverage)
+  api.disable(gl.SampleMask)
+  distances: i32 = 0
+  api.get_integer(gl.MaxClipDistances, &distances)
+  for i in 0..distances {
+    api.disable(gl.ClipDistance0+#cast(u32, i))
+  }
+  api.disable(gl.DepthTest)
+  api.disable(gl.CullFace)
+  api.disable(gl.StencilTest)
+  api.enable(gl.Blend)
+  api.enable(gl.ScissorTest)
+  api.blend_equation_separate(gl.FuncAdd, gl.FuncAdd)
+  api.blend_func_separate(gl.SrcAlpha, gl.OneMinusSrcAlpha, gl.One, gl.OneMinusSrcAlpha)
+  api.uniform_2f(renderer.viewport, #cast(f32, width), #cast(f32, height))
+  api.uniform_1i(renderer.sampler, 0)
+  command := commands
+  for command != nil && command.kind != ui.Kind.None {
+    clip := ui.intersect(command.clip, ui.Rect{width:width, height:height})
+    clip = ui.intersect(clip, command.bounds)
+    if clip.width > 0 && clip.height > 0 && command.color.a != 0 {
+      api.scissor(clip.x, height-clip.y-clip.height, clip.width, clip.height)
+      if command.kind == ui.Kind.Rectangle {
+        bounds := ui.intersect(command.bounds, clip)
+        if bounds.width > 0 && bounds.height > 0 {
+          solid: u8 = 255
+          api.tex_image_2d(gl.Texture2d, 0, #cast(i32, gl.R8), 1, 1, 0, gl.Red, gl.UnsignedByte, &solid)
+          quad(renderer, #cast(f32, bounds.x), #cast(f32, bounds.y), #cast(f32, #cast(i64, bounds.x)+#cast(i64, bounds.width)), #cast(f32, #cast(i64, bounds.y)+#cast(i64, bounds.height)), command.color)
+        }
+      } else if command.kind == ui.Kind.Glyph {
+        advance := glyph(renderer, clip, command.color, font, command.codepoint, command.glyph_x, command.glyph_y)
+        if advance == -2 {
+          return Result{kind:errors.Kind.Capacity}
+        }
+        if advance < 0 {
+          return Result{kind:errors.Kind.InvalidInput}
+        }
+      } else if command.kind == ui.Kind.Text {
+        if font.glyph == nil || font.line_height <= 0 {
+          return Result{kind:errors.Kind.InvalidInput}
+        }
+        x := #cast(i64, command.bounds.x)
+        y := #cast(i64, command.bounds.y)
+        offset: usize = 0
+        for offset < #len(command.text) {
+          decoded := utf8.decode(command.text, offset)
+          offset += decoded.width
+          codepoint := decoded.codepoint
+          if !decoded.ok {
+            codepoint = 65533
+          }
+          if codepoint == 10 {
+            x = #cast(i64, command.bounds.x)
+            y += #cast(i64, font.line_height)
+          } else if codepoint != 13 {
+            advance := glyph(renderer, clip, command.color, font, codepoint, x, y)
+            if advance == -2 {
+              return Result{kind:errors.Kind.Capacity}
+            }
+            if advance < 0 {
+              return Result{kind:errors.Kind.InvalidInput}
+            }
+            x += advance
+          }
+        }
+      } else {
+        return Result{kind:errors.Kind.InvalidInput}
+      }
+    }
+    command = command.next
+  }
+  if !healthy(api) {
+    return Result{kind:errors.Kind.System}
+  }
+  return Result{ok:true}
+}

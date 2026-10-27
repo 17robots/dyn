@@ -1,0 +1,24 @@
+#target(kernel: linux)
+use "vendor/window/x11" x11
+// Linux default currently uses X11/GLX, including XWayland. Explicit native
+// Wayland is a separate backend; availability never silently selects SDL.
+pub type Window = x11.Window
+pub type Result = x11.Result
+pub fn open(window: *Window, title: []const u8, width, height: i32) Result {
+  return x11.open(window, title, width, height)
+}
+pub fn close(window: *Window) {
+  x11.close(window)
+}
+pub fn poll(window: *Window) Result {
+  return x11.poll(window)
+}
+pub fn make_current(window: *Window) Result {
+  return x11.make_current(window)
+}
+pub fn swap(window: *Window) Result {
+  return x11.swap(window)
+}
+pub fn gl_proc(name: *const u8) rawptr {
+  return x11.gl_proc(name)
+}
