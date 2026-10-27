@@ -10,8 +10,8 @@ its GPU resources before closing it. Cocoa requires the process main thread.
 `poll` updates framebuffer `width`/`height`, UI `input`, and `close_requested`.
 A close request leaves the window alive until the caller calls `close`.
 Input coordinates use framebuffer pixels. Press/release edges can coexist in
-one poll. Keyboard input exposes the existing UI navigation keys, not a general
-text-input/IME API. Platform-native error text is not retained.
+one poll. `box_input` remains a per-poll summary for widgets. Ordered raw input is an
+explicit opt-in; platform-native error text is not retained.
 
 X11 links system X11/GL and requests GL 3.3 core, as do Wayland and WGL.
 X11 creation is serialized on the GUI thread while a temporary global X error
@@ -39,3 +39,49 @@ X11/Wayland displays, Windows under Wine when Zig/Wine are available, and native
 macOS/Windows when run there. Cross-object generation is distinct from native
 backend compilation and execution. Native Cocoa compilation/execution and real
 Windows qualification remain platform CI work.
+
+## Ordered events and worker wake-ups
+
+After opening a window, call `listen_events(&host, true)` before polling. Drain
+`next_event(&host, &event)` after `poll`. `vendor/window/events` defines kinds,
+modifier bits and normalized special keys. `window.Event` owns its text bytes,
+so copying an event retains its text across later polls and drains. Text chunks
+end on UTF-8 code point boundaries and hold at most 256 bytes. Printable committed
+text is distinct from raw key events; editing/control keys arrive as keys.
+Native scancodes are platform-specific. Unknown legacy X11 keysyms may have key
+zero while retaining the native scancode and any committed text.
+
+The queue retains 128 events across polls. On exhaustion it drops new arrivals
+until the retained queue and one `Overflow` event have been drained. The
+saturating `dropped` counter counts dropped records; rejecting an oversized
+native commit before chunking counts one lost commit, rather than lost bytes.
+Treat overflow as input loss, including possible key transitions; it cannot
+reconstruct the lost input. Switching listening on or off clears the queue.
+Listening starts disabled, so applications using only `box_input` retain their
+existing idle behavior. Listening applications must drain the queue before
+blocking in `wait`.
+
+X11 accepts input-method commits up to 4096 bytes. Wayland compose results must
+fit 63 bytes plus a NUL terminator; larger commits report overflow explicitly.
+Win32 expands native coalesced repeat counts while retaining bounded overflow
+accounting. Cocoa retains the native repeat indication; Wayland generates
+repeats using compositor-provided rate and delay. X11 uses detectable repeat
+when the server supports it; other servers may deliver release/press pairs.
+No backend
+exposes IME preedit text, selection or candidate-window placement through this
+API. Wayland provides xkb compose input, not the text-input protocol. This API
+therefore does not yet establish DNA's full input-method parity.
+
+`wake(&host)` interrupts `wait`, whether ordered listening is enabled or not.
+When listening, subsequent polling produces a `Wake` event; multiple wakes may
+coalesce. It is the only supported cross-thread window operation. The owning
+window must outlive all wake callers: stop and join workers before `close`.
+Continue polling/draining on the GUI thread. Clipboard retrieval still uses the
+existing clipboard/`box_input` API, rather than an ordered clipboard event.
+
+`tests/window-events.py` checks bounded queues, UTF-8 chunks, native C/Dyn ABI,
+production XIM/compose overflow paths, X11 ordered input, Win32 repeat counts and
+worker wake-ups on available hosts. `tests/window-desktop-results.py` also tests
+the Dyn-to-native wake/event round trip for its selected backend. Native Cocoa
+and real Windows execution require their CI hosts; Wine and cross-builds are
+separate evidence.

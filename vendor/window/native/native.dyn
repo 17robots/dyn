@@ -1,3 +1,6 @@
+use "vendor/window/events" ordered
+pub type OrderedEvent = ordered.Event
+pub type EventKind = ordered.Kind
 use "std/mem" mem
 use "std/c" c
 use "std/errors" errors
@@ -23,6 +26,9 @@ extern fn native_set_clipboard "dyn_window_set_clipboard"(handle: rawptr, text: 
 extern fn native_request_paste "dyn_window_request_paste"(handle: rawptr)
 extern fn native_set_cursor "dyn_window_set_cursor"(handle: rawptr, cursor: i32)
 extern fn native_wait "dyn_window_wait"(handle: rawptr, timeout: i32)
+extern fn native_listen_events "dyn_window_listen_events"(handle: rawptr, enabled: i32)
+extern fn native_next_event "dyn_window_next_event"(handle: rawptr, event: *OrderedEvent) i32
+extern fn native_wake "dyn_window_wake"(handle: rawptr) i32
 pub fn open(window: *Window, title: []const u8, width, height: i32) Result {
   if window.handle != nil {
     return Result{kind:errors.Kind.InvalidState}
@@ -152,4 +158,30 @@ pub fn box_input(window: *const Window) box.Input {
     value.clipboard = desktop.clipboard[..#cast(usize, desktop.clipboard_length)]
   }
   return value
+}
+
+// Copies one queued event into caller storage; independent of box_input.
+pub fn next_event(window: *Window, output: *OrderedEvent) bool {
+  return window.handle != nil && native_next_event(window.handle, output) != 0
+}
+// Thread-safe; join all wake callers before close. Wakes may coalesce.
+pub fn wake(window: *const Window) Result {
+  if window.handle == nil {
+    return Result{kind:errors.Kind.InvalidState}
+  }
+  if native_wake(window.handle) == 0 {
+    return Result{kind:errors.Kind.System}
+  }
+  return Result{ok:true}
+}
+
+// Opt-in before poll. Toggling clears queued events; disabled by default.
+pub fn listen_events(window: *Window, enabled: bool) {
+  if window.handle != nil {
+    value: i32 = 0
+    if enabled {
+      value = 1
+    }
+    native_listen_events(window.handle, value)
+  }
 }

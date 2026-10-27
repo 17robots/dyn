@@ -1,5 +1,5 @@
-#include "window.h"
 #include "desktop_common.h"
+#include "window.h"
 #import <Cocoa/Cocoa.h>
 #import <OpenGL/OpenGL.h>
 #include <dlfcn.h>
@@ -13,27 +13,139 @@ struct Host {
   dyn_window_frame frame;
   Desktop desktop;
   int cursor;
+  NSInteger window_number;
+  uint8_t modifier_down[128];
 };
 @implementation DynWindowDelegate
 - (BOOL)windowShouldClose:(NSWindow *)sender {
   (void)sender;
   self.host->frame.flags |= DYN_CLOSE;
+  desktop_simple(&self.host->desktop, DYN_EVENT_CLOSE);
   return NO;
+}
+- (void)windowDidBecomeKey:(NSNotification *)notification {
+  (void)notification;
+  desktop_simple(&self.host->desktop, DYN_EVENT_FOCUS_GAINED);
 }
 - (void)windowDidResignKey:(NSNotification *)notification {
   (void)notification;
   if (self.host->frame.flags & DYN_DOWN)
     self.host->frame.flags |= DYN_RELEASED;
   self.host->frame.flags &= ~DYN_DOWN;
-  self.host->desktop.pending.keys &= ~(uint32_t)(DYN_KEY_SHIFT | DYN_KEY_CONTROL);
+  self.host->desktop.pending.keys &=
+      ~(uint32_t)(DYN_KEY_SHIFT | DYN_KEY_CONTROL);
+  memset(self.host->modifier_down, 0, sizeof(self.host->modifier_down));
+  desktop_simple(&self.host->desktop, DYN_EVENT_FOCUS_LOST);
 }
 @end
 static NSWindow *window(Host *h) { return (__bridge NSWindow *)h->window; }
 static NSOpenGLView *view(Host *h) { return (__bridge NSOpenGLView *)h->view; }
+enum { DYN_WAKE_SUBTYPE = 0x4459 };
+static uint32_t event_modifiers(NSEventModifierFlags flags) {
+  uint32_t value = 0;
+  if (flags & NSEventModifierFlagShift)
+    value |= DYN_MOD_SHIFT;
+  if (flags & NSEventModifierFlagControl)
+    value |= DYN_MOD_CONTROL;
+  if (flags & NSEventModifierFlagOption)
+    value |= DYN_MOD_ALT;
+  if (flags & NSEventModifierFlagCommand)
+    value |= DYN_MOD_SUPER;
+  if (flags & NSEventModifierFlagCapsLock)
+    value |= DYN_MOD_CAPS;
+  return value;
+}
+static uint32_t event_key(NSEvent *event) {
+  NSString *chars = [event charactersByApplyingModifiers:0];
+  if (![chars length])
+    return 0;
+  uint32_t key = [chars characterAtIndex:0];
+  if (key >= 0xd800 && key <= 0xdbff && [chars length] > 1) {
+    uint32_t low = [chars characterAtIndex:1];
+    if (low >= 0xdc00 && low <= 0xdfff)
+      return 0x10000 + ((key - 0xd800) << 10) + low - 0xdc00;
+  }
+  if (key >= NSF1FunctionKey && key <= NSF24FunctionKey)
+    return DYN_F1 + key - NSF1FunctionKey;
+  switch (key) {
+  case 27:
+    return DYN_ESCAPE;
+  case 13:
+  case 3:
+    return DYN_ENTER;
+  case 9:
+  case 25:
+    return DYN_TAB_KEY;
+  case 127:
+    return DYN_BACKSPACE;
+  case NSDeleteFunctionKey:
+    return DYN_DELETE;
+  case NSLeftArrowFunctionKey:
+    return DYN_LEFT_KEY;
+  case NSRightArrowFunctionKey:
+    return DYN_RIGHT_KEY;
+  case NSUpArrowFunctionKey:
+    return DYN_UP_KEY;
+  case NSDownArrowFunctionKey:
+    return DYN_DOWN_KEY;
+  case NSHomeFunctionKey:
+    return DYN_HOME;
+  case NSEndFunctionKey:
+    return DYN_END;
+  case NSPageUpFunctionKey:
+    return DYN_PAGE_UP;
+  case NSPageDownFunctionKey:
+    return DYN_PAGE_DOWN;
+  case NSInsertFunctionKey:
+    return DYN_INSERT;
+  default:
+    break;
+  }
+  if (key >= 0xd800 && key <= 0xdfff)
+    return 0;
+  if (key >= 'A' && key <= 'Z')
+    key += 'a' - 'A';
+  return key;
+}
+static void modifier_event(Host *h, NSEvent *event) {
+  unsigned short scan = [event keyCode];
+  uint32_t key = 0;
+  switch (scan) {
+  case 56:
+  case 60:
+    key = DYN_SHIFT_KEY;
+    break;
+  case 59:
+  case 62:
+    key = DYN_CONTROL_KEY;
+    break;
+  case 58:
+  case 61:
+    key = DYN_ALT_KEY;
+    break;
+  case 55:
+  case 54:
+    key = DYN_SUPER_KEY;
+    break;
+  default:
+    return;
+  }
+  uint32_t group = key == DYN_SHIFT_KEY     ? DYN_MOD_SHIFT
+                   : key == DYN_CONTROL_KEY ? DYN_MOD_CONTROL
+                   : key == DYN_ALT_KEY     ? DYN_MOD_ALT
+                                            : DYN_MOD_SUPER;
+  h->modifier_down[scan] = (event_modifiers([event modifierFlags]) & group) &&
+                           !h->modifier_down[scan];
+  desktop_key(&h->desktop, h->modifier_down[scan], key, scan,
+              event_modifiers([event modifierFlags]), 0);
+}
 static void dimensions(Host *h) {
   NSRect r = [view(h) convertRectToBacking:[view(h) bounds]];
-  h->frame.width = (int32_t)r.size.width;
-  h->frame.height = (int32_t)r.size.height;
+  int32_t width = (int32_t)r.size.width, height = (int32_t)r.size.height;
+  if (h->frame.width != width || h->frame.height != height)
+    desktop_resize(&h->desktop, width, height);
+  h->frame.width = width;
+  h->frame.height = height;
   [[view(h) openGLContext] update];
 }
 void dyn_window_close(void *p) {
@@ -109,6 +221,7 @@ void *dyn_window_open(const char *title, int32_t width, int32_t height) {
     DynWindowDelegate *d = [DynWindowDelegate new];
     d.host = h;
     [w setDelegate:d];
+    h->window_number = [w windowNumber];
     h->window = (__bridge_retained void *)w;
     h->view = (__bridge_retained void *)v;
     h->delegate = (__bridge_retained void *)d;
@@ -139,14 +252,45 @@ int32_t dyn_window_poll(void *p, dyn_window_frame *out) {
       if (target) {
         dimensions(target);
         NSEventType type = [event type];
+        if (type == NSEventTypeApplicationDefined &&
+            [event subtype] == DYN_WAKE_SUBTYPE) {
+          desktop_simple(&target->desktop, DYN_EVENT_WAKE);
+          continue;
+        }
         if (type == NSEventTypeLeftMouseDown ||
             type == NSEventTypeLeftMouseUp || type == NSEventTypeMouseMoved ||
-            type == NSEventTypeLeftMouseDragged) {
+            type == NSEventTypeLeftMouseDragged ||
+            type == NSEventTypeRightMouseDown ||
+            type == NSEventTypeRightMouseUp ||
+            type == NSEventTypeRightMouseDragged ||
+            type == NSEventTypeOtherMouseDown ||
+            type == NSEventTypeOtherMouseUp ||
+            type == NSEventTypeOtherMouseDragged) {
           NSPoint point = [view(target) convertPoint:[event locationInWindow]
                                             fromView:nil];
           NSPoint backing = [view(target) convertPointToBacking:point];
           target->frame.x = (int32_t)backing.x;
           target->frame.y = target->frame.height - 1 - (int32_t)backing.y;
+          uint32_t kind = DYN_EVENT_POINTER_MOVE;
+          if (type == NSEventTypeLeftMouseDown ||
+              type == NSEventTypeRightMouseDown ||
+              type == NSEventTypeOtherMouseDown)
+            kind = DYN_EVENT_POINTER_DOWN;
+          else if (type == NSEventTypeLeftMouseUp ||
+                   type == NSEventTypeRightMouseUp ||
+                   type == NSEventTypeOtherMouseUp)
+            kind = DYN_EVENT_POINTER_UP;
+          uint32_t button = 0;
+          if (kind != DYN_EVENT_POINTER_MOVE) {
+            NSInteger number = [event buttonNumber];
+            button = number == 0   ? 1
+                     : number == 1 ? 3
+                     : number == 2 ? 2
+                                   : (uint32_t)number + 1;
+          }
+          desktop_pointer(&target->desktop, kind, target->frame.x,
+                          target->frame.y, button,
+                          event_modifiers([event modifierFlags]));
           if (type == NSEventTypeLeftMouseDown)
             target->frame.flags |= DYN_DOWN | DYN_PRESSED;
           else if (type == NSEventTypeLeftMouseUp) {
@@ -157,9 +301,21 @@ int32_t dyn_window_poll(void *p, dyn_window_frame *out) {
         if (type == NSEventTypeScrollWheel) {
           CGFloat factor = [event hasPreciseScrollingDeltas] ? 1.0 : 48.0;
           CGFloat scale = [window(target) backingScaleFactor];
-          target->desktop.pending.scroll_x -= (float)([event scrollingDeltaX] * factor * scale);
-          target->desktop.pending.scroll_y -= (float)([event scrollingDeltaY] * factor * scale);
+          target->desktop.pending.scroll_x -=
+              (float)([event scrollingDeltaX] * factor * scale);
+          target->desktop.pending.scroll_y -=
+              (float)([event scrollingDeltaY] * factor * scale);
+          desktop_wheel(&target->desktop,
+                        -(float)([event scrollingDeltaX] * factor * scale),
+                        -(float)([event scrollingDeltaY] * factor * scale));
         }
+        if (type == NSEventTypeFlagsChanged)
+          modifier_event(target, event);
+        if (type == NSEventTypeKeyDown || type == NSEventTypeKeyUp)
+          desktop_key(&target->desktop, type == NSEventTypeKeyDown,
+                      event_key(event), [event keyCode],
+                      event_modifiers([event modifierFlags]),
+                      type == NSEventTypeKeyDown && [event isARepeat]);
         if (type == NSEventTypeFlagsChanged || type == NSEventTypeKeyDown) {
           if ([event modifierFlags] & NSEventModifierFlagShift)
             target->desktop.pending.keys |= DYN_KEY_SHIFT;
@@ -174,7 +330,8 @@ int32_t dyn_window_poll(void *p, dyn_window_frame *out) {
         if (type == NSEventTypeKeyDown) {
           NSString *chars = [event charactersIgnoringModifiers];
           uint32_t *keys = &target->desktop.pending.keys;
-          int command = ([event modifierFlags] & NSEventModifierFlagCommand) != 0;
+          int command =
+              ([event modifierFlags] & NSEventModifierFlagCommand) != 0;
           if ([chars length]) {
             unichar key = [chars characterAtIndex:0];
             if (key == 9) {
@@ -208,11 +365,16 @@ int32_t dyn_window_poll(void *p, dyn_window_frame *out) {
               *keys |= DYN_KEY_CUT;
             else if (command && (key == 'v' || key == 'V'))
               dyn_window_request_paste(target);
-            else if (!command && (key < 0xf700 || key > 0xf8ff)) {
-              /* Dead keys and Option combinations resolve in characters. */
+          }
+          if (!command && [chars length]) {
+            unichar key = [chars characterAtIndex:0];
+            if (key < 0xf700 || key > 0xf8ff) {
+              /* This preserves committed NSEvent characters, not IME preedit.
+               */
               const char *text = [[event characters] UTF8String];
               if (text)
-                desktop_text(&target->desktop, (const uint8_t *)text, strlen(text));
+                desktop_text(&target->desktop, (const uint8_t *)text,
+                             strlen(text));
             }
           }
           /* The application handles keys; do not beep for unhandled ones. */
@@ -255,7 +417,9 @@ void dyn_window_set_clipboard(void *p, const uint8_t *text, uint32_t length) {
   Host *h = p;
   desktop_own(&h->desktop, text, length);
   @autoreleasepool {
-    NSString *value = [[NSString alloc] initWithBytes:h->desktop.owned length:h->desktop.owned_length encoding:NSUTF8StringEncoding];
+    NSString *value = [[NSString alloc] initWithBytes:h->desktop.owned
+                                               length:h->desktop.owned_length
+                                             encoding:NSUTF8StringEncoding];
     if (!value)
       return;
     NSPasteboard *board = [NSPasteboard generalPasteboard];
@@ -266,7 +430,8 @@ void dyn_window_set_clipboard(void *p, const uint8_t *text, uint32_t length) {
 void dyn_window_request_paste(void *p) {
   Host *h = p;
   @autoreleasepool {
-    NSString *value = [[NSPasteboard generalPasteboard] stringForType:NSPasteboardTypeString];
+    NSString *value =
+        [[NSPasteboard generalPasteboard] stringForType:NSPasteboardTypeString];
     if (!value)
       return;
     const char *text = [value UTF8String];
@@ -283,16 +448,59 @@ void dyn_window_set_cursor(void *p, int32_t cursor) {
   if (cursor < 0 || cursor > 4)
     return;
   h->cursor = cursor;
-  NSCursor *shapes[5] = {[NSCursor arrowCursor], [NSCursor IBeamCursor], [NSCursor pointingHandCursor],
-                         [NSCursor resizeLeftRightCursor], [NSCursor resizeUpDownCursor]};
+  NSCursor *shapes[5] = {[NSCursor arrowCursor],
+                         [NSCursor IBeamCursor],
+                         [NSCursor pointingHandCursor],
+                         [NSCursor resizeLeftRightCursor],
+                         [NSCursor resizeUpDownCursor]};
   [shapes[cursor] set];
 }
 void dyn_window_wait(void *p, int32_t timeout) {
-  (void)p;
-  if (![NSThread isMainThread])
+  Host *h = p;
+  if (!h || ![NSThread isMainThread] || h->desktop.event_count ||
+      h->desktop.event_dropped)
     return;
   @autoreleasepool {
-    NSDate *until = timeout < 0 ? [NSDate distantFuture] : [NSDate dateWithTimeIntervalSinceNow:timeout / 1000.0];
-    (void)[NSApp nextEventMatchingMask:NSEventMaskAny untilDate:until inMode:NSDefaultRunLoopMode dequeue:NO];
+    NSDate *until =
+        timeout < 0 ? [NSDate distantFuture]
+                    : [NSDate dateWithTimeIntervalSinceNow:timeout / 1000.0];
+    (void)[NSApp nextEventMatchingMask:NSEventMaskAny
+                             untilDate:until
+                                inMode:NSDefaultRunLoopMode
+                               dequeue:NO];
   }
+}
+
+int32_t dyn_window_next_event(void *p, dyn_window_event *out) {
+  Host *h = p;
+  if (!h || !out || ![NSThread isMainThread])
+    return 0;
+  return desktop_next(&h->desktop, out);
+}
+int32_t dyn_window_wake(void *p) {
+  Host *h = p;
+  if (!h || !NSApp)
+    return 0;
+  @autoreleasepool {
+    NSEvent *event = [NSEvent otherEventWithType:NSEventTypeApplicationDefined
+                                        location:NSZeroPoint
+                                   modifierFlags:0
+                                       timestamp:0
+                                    windowNumber:h->window_number
+                                         context:nil
+                                         subtype:DYN_WAKE_SUBTYPE
+                                           data1:0
+                                           data2:0];
+    if (!event)
+      return 0;
+    /* NSApplication postEvent is thread-safe. No NSWindow method runs here. */
+    [NSApp postEvent:event atStart:NO];
+  }
+  return 1;
+}
+
+void dyn_window_listen_events(void *p, int32_t enabled) {
+  Host *h = p;
+  if (h && [NSThread isMainThread])
+    desktop_listen(&h->desktop, enabled);
 }

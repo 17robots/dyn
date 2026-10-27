@@ -1,0 +1,92 @@
+// Ordered GUI events. listen_events(window,true) opts in before polling.
+// next_event copies one event into caller storage; its
+// text bytes remain valid until the caller overwrites that value. Queues hold
+// 128 events across polls. On exhaustion new events are dropped; after queued
+// events drain, one Overflow reports the number dropped (saturating u32).
+// Further arrivals are dropped until that Overflow is consumed.
+// Text is printable UTF-8 commits, chunked at code point boundaries (256 bytes).
+// Control-leading commits (including Enter/Tab) use key events instead. X11
+// commits above 4096 bytes are dropped with Overflow. Native IME preedit and
+// candidate rectangle placement are not exposed. Oversized source commits
+// count as one dropped commit; Wayland compose lookup is capped at 63 bytes. X11 legacy non-Latin keysyms
+// without Unicode encoding report key zero; physical scancode remains available.
+// Key identifies
+// the unshifted Unicode character, or a special Key value. Scancode is the
+// native physical identifier (X11 keycode, Win32 scan/extended, Cocoa keyCode,
+// Wayland evdev keycode); it is platform-specific, never a portable keycode.
+pub enum Kind { None, KeyDown, KeyUp, Text, PointerMove, PointerDown, PointerUp, Wheel, FocusGained, FocusLost, Resize, Close, Wake, Overflow }
+pub const Shift: u32 = 1
+pub const Control: u32 = 2
+pub const Alt: u32 = 4
+pub const Super: u32 = 8
+pub const CapsLock: u32 = 16
+pub const NumLock: u32 = 32
+pub const Escape: u32 = 1114112
+pub const Enter: u32 = 1114113
+pub const Tab: u32 = 1114114
+pub const Backspace: u32 = 1114115
+pub const Delete: u32 = 1114116
+pub const Left: u32 = 1114117
+pub const Right: u32 = 1114118
+pub const Up: u32 = 1114119
+pub const Down: u32 = 1114120
+pub const Home: u32 = 1114121
+pub const End: u32 = 1114122
+pub const PageUp: u32 = 1114123
+pub const PageDown: u32 = 1114124
+pub const Insert: u32 = 1114125
+pub const F1: u32 = 1114144
+pub const F24: u32 = 1114167
+pub const ShiftKey: u32 = 1114176
+pub const ControlKey: u32 = 1114177
+pub const AltKey: u32 = 1114178
+pub const SuperKey: u32 = 1114179
+pub const capacity: usize = 128
+pub const text_capacity: usize = 256
+pub struct Event {
+  kind: Kind,
+  key: u32, scancode: u32, modifiers: u32,
+  repeated: u32,
+  // Buttons: 1 primary, 2 middle, 3 secondary; others backend button numbers.
+  button: u32,
+  dropped: u32,
+  // Pointer/size coordinates are framebuffer pixels; wheel uses pixel deltas.
+  x: i32, y: i32, width: i32, height: i32,
+  scroll_x: f32, scroll_y: f32,
+  text_length: u32,
+  text: [256]u8,
+}
+#assert(#sizeof(Event) == 312)
+#assert(#alignof(Event) == 4)
+#assert(#offsetof(Event, x) == 28)
+#assert(#offsetof(Event, scroll_x) == 44)
+#assert(#offsetof(Event, text_length) == 52)
+#assert(#offsetof(Event, text) == 56)
+pub fn text(event: *const Event) []const u8 {
+  return event.text[..#cast(usize, event.text_length)]
+}
+pub struct Queue { values: [128]Event, head: usize, count: usize, dropped: u32 }
+pub fn push(queue: *Queue, event: Event) {
+  if queue.count == capacity || queue.dropped != 0 {
+    if queue.dropped != 4294967295 {
+      queue.dropped += 1
+    }
+    return
+  }
+  queue.values[(queue.head + queue.count) % capacity] = event
+  queue.count += 1
+}
+pub fn next(queue: *Queue, output: *Event) bool {
+  if queue.count != 0 {
+    output.* = queue.values[queue.head]
+    queue.head = (queue.head + 1) % capacity
+    queue.count -= 1
+    return true
+  }
+  if queue.dropped != 0 {
+    output.* = Event{ kind: Kind.Overflow, dropped: queue.dropped }
+    queue.dropped = 0
+    return true
+  }
+  return false
+}

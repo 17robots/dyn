@@ -12,6 +12,7 @@ pub struct Window {
   width: i32, height: i32, input: ui.Input, close_requested: bool,
   // Desktop input for std/ui/box, reset by each poll; see desktop.dyn.
   desktop: Desktop,
+  events: ordered.Queue, events_enabled: bool, wake_descriptor: i32 = -1, ordered_pressed: [256]u8,
 }
 pub struct Result { kind: errors.Kind, ok: bool }
 struct Visual { visual: rawptr, id: usize, screen: i32, depth: i32, class: i32, red: usize, green: usize, blue: usize, colormap_size: i32, bits: i32 }
@@ -34,7 +35,7 @@ extern fn store_name "XStoreName"(display: rawptr, window: usize, title: *const 
 extern fn intern_atom "XInternAtom"(display: rawptr, name: *const u8, only: i32) usize
 extern fn protocols "XSetWMProtocols"(display: rawptr, window: usize, atoms: *usize, count: i32) i32
 extern fn pending "XPending"(display: rawptr) i32
-extern fn next_event "XNextEvent"(display: rawptr, event: *Event) i32
+extern fn next_xevent "XNextEvent"(display: rawptr, event: *Event) i32
 extern fn keysym "XLookupKeysym"(event: rawptr, index: i32) usize
 extern fn flush "XFlush"(display: rawptr) i32
 extern fn choose "glXChooseFBConfig"(display: rawptr, screen: i32, attributes: *const i32, count: *i32) *rawptr
@@ -129,6 +130,10 @@ pub fn open(window: *Window, title: []const u8, width, height: i32) Result {
   _ = store_name(display, window.handle, name.value)
   _ = map_window(display, window.handle)
   desktop_open(window)
+  if !ordered_open(window) {
+    close(window)
+    return Result{kind:errors.Kind.System}
+  }
   _ = flush(display)
   _ = sync(display, 0)
   if context_error_seen {
@@ -164,9 +169,13 @@ pub fn poll(window: *Window) Result {
   window.input.left = false
   window.input.right = false
   desktop_begin(window)
+  ordered_wakes(window)
   for pending(window.display) > 0 {
     event := Event{}
-    _ = next_event(window.display, &event)
+    _ = next_xevent(window.display, &event)
+    if event.kind == 2 || event.kind == 3 {
+      ordered_keyboard(window, &event)
+    }
     if desktop_filter(window, &event) {
       continue
     }
@@ -182,6 +191,35 @@ pub fn poll(window: *Window) Result {
       window.input.x = pointer.x
       window.input.y = pointer.y
       desktop_pointer(window, event.kind, pointer.button)
+      value := ordered.Event{ kind: ordered.Kind.PointerMove, x: pointer.x, y: pointer.y, modifiers: ordered_modifiers(pointer.state) }
+      if event.kind == 4 || event.kind == 5 {
+        value.kind = ordered.Kind.PointerDown
+        if event.kind == 5 {
+          value.kind = ordered.Kind.PointerUp
+        }
+        value.button = pointer.button
+      }
+      if pointer.button >= 4 && pointer.button <= 7 && event.kind != 6 {
+        if event.kind == 4 {
+          value.kind = ordered.Kind.Wheel
+          if pointer.button == 4 {
+            value.scroll_y = -48.0 * window.desktop.scale
+          }
+          if pointer.button == 5 {
+            value.scroll_y = 48.0 * window.desktop.scale
+          }
+          if pointer.button == 6 {
+            value.scroll_x = -48.0 * window.desktop.scale
+          }
+          if pointer.button == 7 {
+            value.scroll_x = 48.0 * window.desktop.scale
+          }
+          ordered_push(window, value)
+        }
+      }
+      else {
+        ordered_push(window, value)
+      }
       if pointer.button == 1 && event.kind != 6 {
         if event.kind == 4 {
           window.input.down = true
@@ -191,17 +229,23 @@ pub fn poll(window: *Window) Result {
           window.input.released = true
         }
       }
+    } else if event.kind == 9 {
+      ordered_push(window, ordered.Event{kind:ordered.Kind.FocusGained})
     } else if event.kind == 10 {
+      window.ordered_pressed = []
+      ordered_push(window, ordered.Event{kind:ordered.Kind.FocusLost})
       window.input.released = window.input.released || window.input.down
       window.input.down = false
     } else if event.kind == 22 {
       resized := #cast(*Configure, &event)
       window.width = resized.width
       window.height = resized.height
+      ordered_push(window, ordered.Event{kind:ordered.Kind.Resize, width:resized.width, height:resized.height})
     } else if event.kind == 33 {
       message := #cast(*Client, &event)
       if message.message == window.protocol_atom && message.format == 32 && #cast(usize, message.data[0]) == window.close_atom {
         window.close_requested = true
+        ordered_push(window, ordered.Event{kind:ordered.Kind.Close})
       }
     } else {
       desktop_selection(window, &event)
@@ -212,6 +256,10 @@ pub fn poll(window: *Window) Result {
 pub fn close(window: *Window) {
   if window.display == nil {
     return
+  }
+  if window.wake_descriptor >= 0 {
+    _ = event_close(window.wake_descriptor)
+    window.wake_descriptor = -1
   }
   desktop_close(window)
   if window.context != nil {

@@ -41,3 +41,20 @@ pub fn wait(window: *Window, timeout: i32) {
 pub fn box_input(window: *const Window) box.Input {
   return native.box_input(window)
 }
+
+// Ordered events retain all supported raw input; box_input remains a summary.
+pub type Event = native.OrderedEvent
+pub type EventKind = native.EventKind
+pub fn next_event(window: *Window, output: *Event) bool {
+  return native.next_event(window, output)
+}
+// The owner must outlive all worker wake calls; stop/join them before close.
+pub fn wake(window: *const Window) Result {
+  return native.wake(window)
+}
+
+// Ordered listening is disabled initially. Enable before polling input;
+// changing this flag clears the queue without changing box_input summaries.
+pub fn listen_events(window: *Window, enabled: bool) {
+  native.listen_events(window, enabled)
+}

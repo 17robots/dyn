@@ -5,17 +5,80 @@
 #include <string.h>
 typedef struct Desktop {
   dyn_window_desktop pending;
+  dyn_window_event events[DYN_EVENT_CAPACITY];
+  uint32_t event_head, event_count, event_dropped;
+  int event_enabled;
   uint8_t owned[DYN_CLIPBOARD_LIMIT];
   uint32_t owned_length;
   uint8_t received[DYN_CLIPBOARD_LIMIT];
   uint32_t received_length;
   int receiving;
 } Desktop;
-static inline void desktop_text(Desktop *d, const uint8_t *bytes, size_t length) {
-  if (!length || bytes[0] < 32 || bytes[0] == 127)
+static inline void desktop_listen(Desktop *d,int enabled) {
+  enabled=enabled!=0;
+  if (d->event_enabled!=enabled) {
+    d->event_enabled=enabled; d->event_head=d->event_count=d->event_dropped=0;
+  }
+}
+static inline void desktop_push(Desktop *d, dyn_window_event event) {
+  if (!d->event_enabled) return;
+  if (d->event_count == DYN_EVENT_CAPACITY || d->event_dropped) {
+    if (d->event_dropped != UINT32_MAX) d->event_dropped++;
     return;
-  for (size_t i = 0; i < length && d->pending.text_length < DYN_TEXT_LIMIT; ++i)
-    d->pending.text[d->pending.text_length++] = bytes[i];
+  }
+  d->events[(d->event_head+d->event_count)%DYN_EVENT_CAPACITY]=event;
+  d->event_count++;
+}
+static inline int desktop_next(Desktop *d, dyn_window_event *out) {
+  if (d->event_count) {
+    *out=d->events[d->event_head];
+    d->event_head=(d->event_head+1)%DYN_EVENT_CAPACITY;
+    d->event_count--;
+    return 1;
+  }
+  if (d->event_dropped) {
+    memset(out,0,sizeof(*out)); out->kind=DYN_EVENT_OVERFLOW;
+    out->dropped=d->event_dropped; d->event_dropped=0; return 1;
+  }
+  return 0;
+}
+static inline void desktop_simple(Desktop *d, uint32_t kind) {
+  dyn_window_event event={0}; event.kind=kind; desktop_push(d,event);
+}
+static inline void desktop_key(Desktop *d, int down, uint32_t key, uint32_t scan, uint32_t modifiers, int repeated) {
+  dyn_window_event event={0}; event.kind=down?DYN_EVENT_KEY_DOWN:DYN_EVENT_KEY_UP;
+  event.key=key; event.scancode=scan; event.modifiers=modifiers; event.repeated=(uint32_t)(repeated!=0); desktop_push(d,event);
+}
+static inline void desktop_pointer(Desktop *d, uint32_t kind, int32_t x, int32_t y, uint32_t button, uint32_t modifiers) {
+  dyn_window_event event={0}; event.kind=kind; event.x=x; event.y=y; event.button=button; event.modifiers=modifiers; desktop_push(d,event);
+}
+static inline void desktop_wheel(Desktop *d, float x, float y) {
+  dyn_window_event event={0}; event.kind=DYN_EVENT_WHEEL; event.scroll_x=x; event.scroll_y=y; desktop_push(d,event);
+}
+static inline void desktop_resize(Desktop *d, int32_t width, int32_t height) {
+  dyn_window_event event={0}; event.kind=DYN_EVENT_RESIZE; event.width=width; event.height=height; desktop_push(d,event);
+}
+static inline void desktop_text(Desktop *d, const uint8_t *bytes, size_t length) {
+  if (!length || bytes[0] < 32 || bytes[0] == 127) return;
+  /* Summary clients keep the leading UTF-8 prefix that fits, independently
+   * of ordered chunk boundaries. Never skip a head chunk and append its tail. */
+  size_t prefix=length;
+  if (prefix>DYN_TEXT_LIMIT-d->pending.text_length) prefix=DYN_TEXT_LIMIT-d->pending.text_length;
+  if (prefix<length) while(prefix && (bytes[prefix]&0xc0)==0x80) prefix--;
+  memcpy(d->pending.text+d->pending.text_length,bytes,prefix);
+  d->pending.text_length+=(uint32_t)prefix;
+  size_t at=0;
+  while (at<length) {
+    size_t count=length-at;
+    if (count>256) {
+      count=256;
+      while (count && (bytes[at+count]&0xc0)==0x80) count--;
+    }
+    if (!count) return;
+    dyn_window_event event={0}; event.kind=DYN_EVENT_TEXT; event.text_length=(uint32_t)count;
+    memcpy(event.text,bytes+at,count); desktop_push(d,event);
+    at+=count;
+  }
 }
 static inline void desktop_codepoint(Desktop *d, uint32_t c) {
   uint8_t b[4];

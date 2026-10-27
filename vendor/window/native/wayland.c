@@ -4,6 +4,7 @@
 #include <fcntl.h>
 #include <locale.h>
 #include <sys/mman.h>
+#include <sys/eventfd.h>
 #include <time.h>
 #include <wayland-cursor.h>
 #include <xkbcommon/xkbcommon-compose.h>
@@ -50,6 +51,7 @@ typedef struct Host {
   struct wl_data_offer *offer;
   int offer_text;
   int receive_fd;
+  int wake_fd;
   uint32_t serial;
   struct wl_shm *shm;
   struct wl_cursor_theme *theme;
@@ -87,13 +89,55 @@ static void size(void *p, struct xdg_toplevel *t, int32_t w, int32_t h,
     s->frame.height = h * s->scale;
   if (s->window)
     wl_egl_window_resize(s->window, s->frame.width, s->frame.height, 0, 0);
+  desktop_resize(&s->desktop,s->frame.width,s->frame.height);
 }
 static void closing(void *p, struct xdg_toplevel *t) {
   (void)t;
   ((Host *)p)->frame.flags |= DYN_CLOSE;
+  desktop_simple(&((Host *)p)->desktop,DYN_EVENT_CLOSE);
 }
 static const struct xdg_toplevel_listener top_listener = {.configure = size,
                                                           .close = closing};
+static uint32_t event_modifiers(Host *h) {
+  if (!h->state) return 0;
+  uint32_t result=0;
+  if (xkb_state_mod_name_is_active(h->state,XKB_MOD_NAME_SHIFT,XKB_STATE_MODS_EFFECTIVE)>0) result|=DYN_MOD_SHIFT;
+  if (xkb_state_mod_name_is_active(h->state,XKB_MOD_NAME_CTRL,XKB_STATE_MODS_EFFECTIVE)>0) result|=DYN_MOD_CONTROL;
+  if (xkb_state_mod_name_is_active(h->state,XKB_MOD_NAME_ALT,XKB_STATE_MODS_EFFECTIVE)>0) result|=DYN_MOD_ALT;
+  if (xkb_state_mod_name_is_active(h->state,XKB_MOD_NAME_LOGO,XKB_STATE_MODS_EFFECTIVE)>0) result|=DYN_MOD_SUPER;
+  if (xkb_state_mod_name_is_active(h->state,XKB_MOD_NAME_CAPS,XKB_STATE_MODS_EFFECTIVE)>0) result|=DYN_MOD_CAPS;
+  if (xkb_state_mod_name_is_active(h->state,XKB_MOD_NAME_NUM,XKB_STATE_MODS_EFFECTIVE)>0) result|=DYN_MOD_NUM;
+  return result;
+}
+static uint32_t event_key(xkb_keysym_t sym) {
+  if (sym>=XKB_KEY_F1 && sym<=XKB_KEY_F24) return DYN_F1+sym-XKB_KEY_F1;
+  switch(sym) {
+   case XKB_KEY_Escape:return DYN_ESCAPE;
+   case XKB_KEY_Return:case XKB_KEY_KP_Enter:return DYN_ENTER;
+   case XKB_KEY_Tab:case XKB_KEY_ISO_Left_Tab:return DYN_TAB_KEY;
+   case XKB_KEY_BackSpace:return DYN_BACKSPACE;
+   case XKB_KEY_Delete:return DYN_DELETE;
+   case XKB_KEY_Left:return DYN_LEFT_KEY;case XKB_KEY_Right:return DYN_RIGHT_KEY;
+   case XKB_KEY_Up:return DYN_UP_KEY;case XKB_KEY_Down:return DYN_DOWN_KEY;
+   case XKB_KEY_Home:return DYN_HOME;case XKB_KEY_End:return DYN_END;
+   case XKB_KEY_Page_Up:return DYN_PAGE_UP;case XKB_KEY_Page_Down:return DYN_PAGE_DOWN;
+   case XKB_KEY_Insert:return DYN_INSERT;
+   case XKB_KEY_Shift_L:case XKB_KEY_Shift_R:return DYN_SHIFT_KEY;
+   case XKB_KEY_Control_L:case XKB_KEY_Control_R:return DYN_CONTROL_KEY;
+   case XKB_KEY_Alt_L:case XKB_KEY_Alt_R:return DYN_ALT_KEY;
+   case XKB_KEY_Super_L:case XKB_KEY_Super_R:return DYN_SUPER_KEY;
+   default:return xkb_keysym_to_utf32(sym);
+  }
+}
+static void event_keyboard(Host *h,uint32_t key,int down,int repeated) {
+  const xkb_keysym_t *syms=NULL;
+  xkb_keysym_t sym=XKB_KEY_NoSymbol;
+  if (h->keymap && h->state) {
+    xkb_layout_index_t layout=xkb_state_key_get_layout(h->state,key+8);
+    if (xkb_keymap_key_get_syms_by_level(h->keymap,key+8,layout,0,&syms)>0) sym=syms[0];
+  }
+  desktop_key(&h->desktop,down,event_key(sym),key,event_modifiers(h),repeated);
+}
 static void enter(void *p, struct wl_pointer *q, uint32_t serial,
                   struct wl_surface *s, wl_fixed_t x, wl_fixed_t y) {
   (void)q;
@@ -101,6 +145,7 @@ static void enter(void *p, struct wl_pointer *q, uint32_t serial,
   Host *h = p;
   h->frame.x = wl_fixed_to_int(x) * h->scale;
   h->frame.y = wl_fixed_to_int(y) * h->scale;
+  desktop_pointer(&h->desktop,DYN_EVENT_POINTER_MOVE,h->frame.x,h->frame.y,0,event_modifiers(h));
   h->pointer_serial = serial;
   apply_cursor(h);
 }
@@ -118,6 +163,7 @@ static void motion(void *p, struct wl_pointer *q, uint32_t time, wl_fixed_t x,
   Host *h = p;
   h->frame.x = wl_fixed_to_int(x) * h->scale;
   h->frame.y = wl_fixed_to_int(y) * h->scale;
+  desktop_pointer(&h->desktop,DYN_EVENT_POINTER_MOVE,h->frame.x,h->frame.y,0,event_modifiers(h));
 }
 static void button(void *p, struct wl_pointer *q, uint32_t serial,
                    uint32_t time, uint32_t button, uint32_t state) {
@@ -125,6 +171,8 @@ static void button(void *p, struct wl_pointer *q, uint32_t serial,
   (void)time;
   Host *h = p;
   h->serial = serial;
+  uint32_t number=button==0x110?1:button==0x112?2:button==0x111?3:button;
+  desktop_pointer(&h->desktop,state?DYN_EVENT_POINTER_DOWN:DYN_EVENT_POINTER_UP,h->frame.x,h->frame.y,number,event_modifiers(h));
   if (button == 0x110) {
     if (state) {
       h->frame.flags |= DYN_DOWN | DYN_PRESSED;
@@ -140,10 +188,13 @@ static void axis(void *p, struct wl_pointer *q, uint32_t time, uint32_t axis,
   (void)time;
   Host *h = p;
   float amount = (float)wl_fixed_to_double(v) * 3.0f * (float)h->scale;
-  if (axis == WL_POINTER_AXIS_VERTICAL_SCROLL)
+  if (axis == WL_POINTER_AXIS_VERTICAL_SCROLL) {
     h->desktop.pending.scroll_y += amount;
-  else
+    desktop_wheel(&h->desktop,0,amount);
+  } else {
     h->desktop.pending.scroll_x += amount;
+    desktop_wheel(&h->desktop,amount,0);
+  }
 }
 static void pointer_frame(void *p, struct wl_pointer *q) {
   (void)p;
@@ -213,6 +264,7 @@ static void key_enter(void *p, struct wl_keyboard *k, uint32_t serial,
   (void)serial;
   (void)s;
   (void)a;
+  desktop_simple(&((Host *)p)->desktop,DYN_EVENT_FOCUS_GAINED);
 }
 static void key_leave(void *p, struct wl_keyboard *k, uint32_t serial,
                       struct wl_surface *s) {
@@ -224,6 +276,7 @@ static void key_leave(void *p, struct wl_keyboard *k, uint32_t serial,
     h->frame.flags |= DYN_RELEASED;
   h->frame.flags &= ~DYN_DOWN;
   h->repeat_key = 0;
+  desktop_simple(&h->desktop,DYN_EVENT_FOCUS_LOST);
   h->desktop.pending.keys &= ~(uint32_t)(DYN_KEY_SHIFT | DYN_KEY_CONTROL);
 }
 static void press(Host *h, uint32_t key) {
@@ -274,6 +327,8 @@ static void press(Host *h, uint32_t key) {
     length = xkb_state_key_get_utf8(h->state, key + 8, text, sizeof(text));
   if (length > 0 && length < (int)sizeof(text))
     desktop_text(&h->desktop, (const uint8_t *)text, (size_t)length);
+  else if (length >= (int)sizeof(text) && h->desktop.event_enabled && h->desktop.event_dropped != UINT32_MAX)
+    h->desktop.event_dropped++;
 }
 static void key(void *p, struct wl_keyboard *k, uint32_t serial, uint32_t time,
                 uint32_t key, uint32_t state) {
@@ -281,6 +336,7 @@ static void key(void *p, struct wl_keyboard *k, uint32_t serial, uint32_t time,
   (void)time;
   Host *h = p;
   h->serial = serial;
+  event_keyboard(h,key,state!=0,0);
   if (state) {
     press(h, key);
     /* Wayland leaves key repeat to clients. */
@@ -571,6 +627,7 @@ void dyn_window_close(void *p) {
     wl_registry_destroy(h->registry);
   if (h->display)
     wl_display_disconnect(h->display);
+  if (h->wake_fd>=0) close(h->wake_fd);
   free(h);
 }
 void *dyn_window_open(const char *title, int32_t width, int32_t height) {
@@ -581,6 +638,8 @@ void *dyn_window_open(const char *title, int32_t width, int32_t height) {
   h->frame.height = height;
   h->scale = 1;
   h->receive_fd = -1;
+  h->wake_fd = eventfd(0,EFD_CLOEXEC|EFD_NONBLOCK);
+  if (h->wake_fd<0) goto fail;
   h->xkb = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
   if (h->xkb) {
     const char *locale = getenv("LC_ALL");
@@ -695,12 +754,17 @@ static void repeat_keys(Host *h) {
     return;
   int64_t now = now_ms();
   while (now >= h->repeat_next) {
+    event_keyboard(h,h->repeat_key,1,1);
     press(h, h->repeat_key);
-    h->repeat_next += 1000 / h->repeat_rate;
+    int64_t interval=1000/h->repeat_rate;
+    if (interval<1) interval=1;
+    h->repeat_next += interval;
   }
 }
 int32_t dyn_window_poll(void *p, dyn_window_frame *out) {
   Host *h = p;
+  uint64_t wake_count;
+  if (read(h->wake_fd,&wake_count,sizeof(wake_count))==(ssize_t)sizeof(wake_count)) desktop_simple(&h->desktop,DYN_EVENT_WAKE);
   repeat_keys(h);
   receive_clipboard(h);
   while (wl_display_prepare_read(h->display) != 0) {
@@ -808,8 +872,20 @@ void dyn_window_set_cursor(void *p, int32_t cursor) {
   h->cursor = cursor;
   apply_cursor(h);
 }
+void dyn_window_listen_events(void *p,int32_t enabled) {
+  if (p) desktop_listen(&((Host *)p)->desktop,enabled);
+}
+int32_t dyn_window_next_event(void *p,dyn_window_event *out) {
+  return p && out ? desktop_next(&((Host *)p)->desktop,out):0;
+}
+int32_t dyn_window_wake(void *p) {
+  if (!p) return 0;
+  uint64_t one=1;
+  return write(((Host *)p)->wake_fd,&one,sizeof(one))==(ssize_t)sizeof(one) || errno==EAGAIN;
+}
 void dyn_window_wait(void *p, int32_t timeout) {
   Host *h = p;
+  if (h->desktop.event_count || h->desktop.event_dropped) return;
   if (h->repeat_key && h->repeat_rate > 0) {
     int64_t left = h->repeat_next - now_ms();
     if (left < 0)
@@ -818,7 +894,8 @@ void dyn_window_wait(void *p, int32_t timeout) {
       timeout = (int32_t)left;
   }
   wl_display_flush(h->display);
-  struct pollfd fds[2] = {{.fd = wl_display_get_fd(h->display), .events = POLLIN},
+  struct pollfd fds[3] = {{.fd = wl_display_get_fd(h->display), .events = POLLIN},
+                          {.fd = h->wake_fd, .events = POLLIN},
                           {.fd = h->receive_fd, .events = POLLIN}};
-  poll(fds, h->receive_fd >= 0 ? 2 : 1, timeout);
+  poll(fds, h->receive_fd >= 0 ? 3 : 2, timeout);
 }

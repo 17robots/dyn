@@ -1,6 +1,6 @@
 #define WIN32_LEAN_AND_MEAN
-#include "window.h"
 #include "desktop_common.h"
+#include "window.h"
 #include <GL/gl.h>
 #include <stdlib.h>
 #include <windows.h>
@@ -12,10 +12,145 @@ typedef struct Host {
   dyn_window_frame frame;
   Desktop desktop;
   WCHAR high_surrogate;
+  uint32_t high_surrogate_repeats;
   HCURSOR cursors[5];
   int cursor;
 } Host;
-static int control_down(void) { return (GetKeyState(VK_CONTROL) & 0x8000) != 0; }
+#define DYN_WAKE_MESSAGE (WM_APP + 983)
+static uint32_t modifiers(void) {
+  uint32_t value = 0;
+  if (GetKeyState(VK_SHIFT) & 0x8000)
+    value |= DYN_MOD_SHIFT;
+  if (GetKeyState(VK_CONTROL) & 0x8000)
+    value |= DYN_MOD_CONTROL;
+  if (GetKeyState(VK_MENU) & 0x8000)
+    value |= DYN_MOD_ALT;
+  if ((GetKeyState(VK_LWIN) | GetKeyState(VK_RWIN)) & 0x8000)
+    value |= DYN_MOD_SUPER;
+  if (GetKeyState(VK_CAPITAL) & 1)
+    value |= DYN_MOD_CAPS;
+  if (GetKeyState(VK_NUMLOCK) & 1)
+    value |= DYN_MOD_NUM;
+  return value;
+}
+static uint32_t event_key(WPARAM key, LPARAM native) {
+  if (key >= VK_F1 && key <= VK_F24)
+    return DYN_F1 + (uint32_t)(key - VK_F1);
+  switch (key) {
+  case VK_ESCAPE:
+    return DYN_ESCAPE;
+  case VK_RETURN:
+    return DYN_ENTER;
+  case VK_TAB:
+    return DYN_TAB_KEY;
+  case VK_BACK:
+    return DYN_BACKSPACE;
+  case VK_DELETE:
+    return DYN_DELETE;
+  case VK_LEFT:
+    return DYN_LEFT_KEY;
+  case VK_RIGHT:
+    return DYN_RIGHT_KEY;
+  case VK_UP:
+    return DYN_UP_KEY;
+  case VK_DOWN:
+    return DYN_DOWN_KEY;
+  case VK_HOME:
+    return DYN_HOME;
+  case VK_END:
+    return DYN_END;
+  case VK_PRIOR:
+    return DYN_PAGE_UP;
+  case VK_NEXT:
+    return DYN_PAGE_DOWN;
+  case VK_INSERT:
+    return DYN_INSERT;
+  case VK_SHIFT:
+  case VK_LSHIFT:
+  case VK_RSHIFT:
+    return DYN_SHIFT_KEY;
+  case VK_CONTROL:
+  case VK_LCONTROL:
+  case VK_RCONTROL:
+    return DYN_CONTROL_KEY;
+  case VK_MENU:
+  case VK_LMENU:
+  case VK_RMENU:
+    return DYN_ALT_KEY;
+  case VK_LWIN:
+  case VK_RWIN:
+    return DYN_SUPER_KEY;
+  default:
+    break;
+  }
+  BYTE state[256] = {0};
+  WCHAR text[4] = {0};
+  /* Flag 4 leaves the layout's dead-key state unchanged (Windows 10+).
+   * The zero modifier state gives layout-aware base characters. */
+  int count = ToUnicodeEx((UINT)key, ((UINT)(uintptr_t)native >> 16) & 0xff,
+                          state, text, 4, 4, GetKeyboardLayout(0));
+  if (count == 0)
+    return 0;
+  uint32_t value = text[0];
+  if (value >= 0xd800 && value <= 0xdbff && count > 1 && text[1] >= 0xdc00 &&
+      text[1] <= 0xdfff)
+    return 0x10000 + ((value - 0xd800) << 10) + text[1] - 0xdc00;
+  return value >= 0xd800 && value <= 0xdfff ? 0 : value;
+}
+static uint32_t scan_code(LPARAM value) {
+  return ((uint32_t)((uintptr_t)value >> 16) & 0xff) |
+         (((uint32_t)((uintptr_t)value >> 24) & 1) << 8);
+}
+static int control_down(void) {
+  return (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+}
+static uint32_t message_repeats(LPARAM value) {
+  uint32_t count = (uint32_t)(uintptr_t)value & 0xffff;
+  /* Real key messages have a positive count; accept zero-count synthetic
+   * messages as one, matching the earlier bridge behavior. */
+  return count ? count : 1;
+}
+static void drop_events(Desktop *desktop, uint32_t count) {
+  if (!desktop->event_enabled)
+    return;
+  uint32_t available = UINT32_MAX - desktop->event_dropped;
+  desktop->event_dropped += count < available ? count : available;
+}
+static uint32_t event_space(const Desktop *desktop) {
+  return desktop->event_enabled && !desktop->event_dropped
+             ? DYN_EVENT_CAPACITY - desktop->event_count
+             : 0;
+}
+static void repeated_key(Desktop *desktop, uint32_t key, uint32_t scan,
+                         uint32_t mods, int repeated, uint32_t count) {
+  uint32_t emitted = event_space(desktop);
+  if (emitted > count)
+    emitted = count;
+  for (uint32_t i = 0; i < emitted; ++i)
+    desktop_key(desktop, 1, key, scan, mods, repeated || i != 0);
+  drop_events(desktop, count - emitted);
+}
+static void repeated_text(Desktop *desktop, uint32_t codepoint,
+                          uint32_t count) {
+  if (codepoint < 32 || codepoint == 127 || codepoint > 0x10ffff ||
+      (codepoint >= 0xd800 && codepoint <= 0xdfff))
+    return;
+  uint32_t width = codepoint < 0x80      ? 1
+                   : codepoint < 0x800   ? 2
+                   : codepoint < 0x10000 ? 3
+                                         : 4;
+  uint32_t emitted = event_space(desktop);
+  uint32_t summary = (DYN_TEXT_LIMIT - desktop->pending.text_length) / width;
+  if (emitted < summary)
+    emitted = summary;
+  if (emitted > count)
+    emitted = count;
+  /* At most 256 iterations. Keep the legacy summary even if the ordered
+   * queue is full, then account for all further dropped text in one step. */
+  for (uint32_t i = 0; i < emitted; ++i)
+    desktop_codepoint(desktop, codepoint);
+  drop_events(desktop, count - emitted);
+}
 static LRESULT CALLBACK procedure(HWND window, UINT message, WPARAM w,
                                   LPARAM l) {
   Host *h = (Host *)GetWindowLongPtrW(window, GWLP_USERDATA);
@@ -27,7 +162,14 @@ static LRESULT CALLBACK procedure(HWND window, UINT message, WPARAM w,
   if (!h)
     return DefWindowProcW(window, message, w, l);
   switch (message) {
+  case DYN_WAKE_MESSAGE:
+    desktop_simple(&h->desktop, DYN_EVENT_WAKE);
+    return 0;
+  case WM_SETFOCUS:
+    desktop_simple(&h->desktop, DYN_EVENT_FOCUS_GAINED);
+    return 0;
   case WM_CLOSE:
+    desktop_simple(&h->desktop, DYN_EVENT_CLOSE);
     h->frame.flags |= DYN_CLOSE;
     return 0;
   case WM_NCDESTROY:
@@ -38,17 +180,41 @@ static LRESULT CALLBACK procedure(HWND window, UINT message, WPARAM w,
     if (GetClientRect(window, &r)) {
       h->frame.width = r.right;
       h->frame.height = r.bottom;
+      desktop_resize(&h->desktop, h->frame.width, h->frame.height);
     }
     return 0;
   }
   case WM_MOUSEMOVE:
     h->frame.x = GET_X_LPARAM(l);
     h->frame.y = GET_Y_LPARAM(l);
+    desktop_pointer(&h->desktop, DYN_EVENT_POINTER_MOVE, h->frame.x, h->frame.y,
+                    0, modifiers());
     return 0;
+  case WM_RBUTTONDOWN:
+  case WM_RBUTTONUP:
+  case WM_MBUTTONDOWN:
+  case WM_MBUTTONUP:
+  case WM_XBUTTONDOWN:
+  case WM_XBUTTONUP: {
+    uint32_t button =
+        message == WM_RBUTTONDOWN || message == WM_RBUTTONUP ? 3 : 2;
+    if (message == WM_XBUTTONDOWN || message == WM_XBUTTONUP)
+      button = GET_XBUTTON_WPARAM(w) == XBUTTON1 ? 4 : 5;
+    int down = message == WM_RBUTTONDOWN || message == WM_MBUTTONDOWN ||
+               message == WM_XBUTTONDOWN;
+    h->frame.x = GET_X_LPARAM(l);
+    h->frame.y = GET_Y_LPARAM(l);
+    desktop_pointer(&h->desktop,
+                    down ? DYN_EVENT_POINTER_DOWN : DYN_EVENT_POINTER_UP,
+                    h->frame.x, h->frame.y, button, modifiers());
+    return message == WM_XBUTTONDOWN || message == WM_XBUTTONUP ? TRUE : 0;
+  }
   case WM_LBUTTONDOWN:
     h->frame.x = GET_X_LPARAM(l);
     h->frame.y = GET_Y_LPARAM(l);
     h->frame.flags |= DYN_DOWN | DYN_PRESSED;
+    desktop_pointer(&h->desktop, DYN_EVENT_POINTER_DOWN, h->frame.x, h->frame.y,
+                    1, modifiers());
     SetCapture(window);
     return 0;
   case WM_LBUTTONUP:
@@ -56,19 +222,29 @@ static LRESULT CALLBACK procedure(HWND window, UINT message, WPARAM w,
     h->frame.y = GET_Y_LPARAM(l);
     h->frame.flags &= ~DYN_DOWN;
     h->frame.flags |= DYN_RELEASED;
+    desktop_pointer(&h->desktop, DYN_EVENT_POINTER_UP, h->frame.x, h->frame.y,
+                    1, modifiers());
     if (GetCapture() == window)
       ReleaseCapture();
     return 0;
   case WM_CAPTURECHANGED:
   case WM_KILLFOCUS:
-    if (message == WM_KILLFOCUS)
+    if (message == WM_KILLFOCUS) {
       h->desktop.pending.keys &= ~(uint32_t)(DYN_KEY_SHIFT | DYN_KEY_CONTROL);
+      h->high_surrogate = 0;
+      h->high_surrogate_repeats = 0;
+      desktop_simple(&h->desktop, DYN_EVENT_FOCUS_LOST);
+    }
     if (h->frame.flags & DYN_DOWN)
       h->frame.flags |= DYN_RELEASED;
     h->frame.flags &= ~DYN_DOWN;
     return 0;
   case WM_KEYDOWN:
   case WM_SYSKEYDOWN: {
+    if (h->desktop.event_enabled)
+      repeated_key(&h->desktop, event_key(w, l), scan_code(l), modifiers(),
+                   ((uintptr_t)l & ((uintptr_t)1 << 30)) != 0,
+                   message_repeats(l));
     uint32_t *keys = &h->desktop.pending.keys;
     if (w == VK_TAB) {
       h->frame.flags |= DYN_TAB;
@@ -115,6 +291,9 @@ static LRESULT CALLBACK procedure(HWND window, UINT message, WPARAM w,
   }
   case WM_KEYUP:
   case WM_SYSKEYUP:
+    if (h->desktop.event_enabled)
+      desktop_key(&h->desktop, 0, event_key(w, l), scan_code(l), modifiers(),
+                  0);
     if (w == VK_SHIFT)
       h->desktop.pending.keys &= ~(uint32_t)DYN_KEY_SHIFT;
     if (!control_down())
@@ -125,27 +304,41 @@ static LRESULT CALLBACK procedure(HWND window, UINT message, WPARAM w,
   case WM_CHAR: {
     /* WM_CHAR carries UTF-16; the IME delivers composed text here too. */
     WCHAR unit = (WCHAR)w;
+    uint32_t count = message_repeats(l);
     if (control_down() && unit < 32)
       return 0;
     if (unit >= 0xd800 && unit <= 0xdbff) {
       h->high_surrogate = unit;
+      h->high_surrogate_repeats = count;
       return 0;
     }
     uint32_t codepoint = unit;
     if (unit >= 0xdc00 && unit <= 0xdfff) {
       if (!h->high_surrogate)
         return 0;
-      codepoint = 0x10000 + (((uint32_t)h->high_surrogate - 0xd800) << 10) + (unit - 0xdc00);
+      /* Paired messages normally have equal repeat counts. On malformed
+       * mismatched input only complete high/low pairs produce text. */
+      if (count > h->high_surrogate_repeats)
+        count = h->high_surrogate_repeats;
+      codepoint = 0x10000 + (((uint32_t)h->high_surrogate - 0xd800) << 10) +
+                  (unit - 0xdc00);
     }
     h->high_surrogate = 0;
-    desktop_codepoint(&h->desktop, codepoint);
+    h->high_surrogate_repeats = 0;
+    repeated_text(&h->desktop, codepoint, count);
     return 0;
   }
   case WM_MOUSEWHEEL:
-    h->desktop.pending.scroll_y -= (float)GET_WHEEL_DELTA_WPARAM(w) / 120.0f * 48.0f;
+    h->desktop.pending.scroll_y -=
+        (float)GET_WHEEL_DELTA_WPARAM(w) / 120.0f * 48.0f;
+    desktop_wheel(&h->desktop, 0.0f,
+                  -(float)GET_WHEEL_DELTA_WPARAM(w) / 120.0f * 48.0f);
     return 0;
   case WM_MOUSEHWHEEL:
-    h->desktop.pending.scroll_x += (float)GET_WHEEL_DELTA_WPARAM(w) / 120.0f * 48.0f;
+    h->desktop.pending.scroll_x +=
+        (float)GET_WHEEL_DELTA_WPARAM(w) / 120.0f * 48.0f;
+    desktop_wheel(&h->desktop,
+                  (float)GET_WHEEL_DELTA_WPARAM(w) / 120.0f * 48.0f, 0.0f);
     return 0;
   case WM_SETCURSOR:
     if (LOWORD(l) == HTCLIENT && h->cursors[h->cursor]) {
@@ -244,7 +437,9 @@ void *dyn_window_open(const char *title, int32_t width, int32_t height) {
   if (!wglMakeCurrent(h->dc, h->context))
     goto fail;
   {
-    LPCWSTR shapes[5] = {MAKEINTRESOURCEW(32512), MAKEINTRESOURCEW(32513), MAKEINTRESOURCEW(32649), MAKEINTRESOURCEW(32644), MAKEINTRESOURCEW(32645)};
+    LPCWSTR shapes[5] = {MAKEINTRESOURCEW(32512), MAKEINTRESOURCEW(32513),
+                         MAKEINTRESOURCEW(32649), MAKEINTRESOURCEW(32644),
+                         MAKEINTRESOURCEW(32645)};
     for (int i = 0; i < 5; ++i)
       h->cursors[i] = LoadCursorW(NULL, shapes[i]);
   }
@@ -259,9 +454,10 @@ int32_t dyn_window_poll(void *p, dyn_window_frame *out) {
   Host *h = p;
   MSG message;
   while (PeekMessageW(&message, NULL, 0, 0, PM_REMOVE)) {
-    if (message.message == WM_QUIT)
+    if (message.message == WM_QUIT) {
       h->frame.flags |= DYN_CLOSE;
-    else {
+      desktop_simple(&h->desktop, DYN_EVENT_CLOSE);
+    } else {
       TranslateMessage(&message);
       DispatchMessageW(&message);
     }
@@ -281,7 +477,8 @@ int32_t dyn_window_swap(void *p) {
 
 static float window_scale(Host *h) {
   typedef UINT(WINAPI * Dpi)(HWND);
-  Dpi dpi = (Dpi)(void *)GetProcAddress(GetModuleHandleW(L"user32.dll"), "GetDpiForWindow");
+  Dpi dpi = (Dpi)(void *)GetProcAddress(GetModuleHandleW(L"user32.dll"),
+                                        "GetDpiForWindow");
   if (dpi && h->window) {
     UINT value = dpi(h->window);
     if (value)
@@ -300,12 +497,15 @@ void dyn_window_desktop_take(void *p, dyn_window_desktop *out) {
 void dyn_window_set_clipboard(void *p, const uint8_t *text, uint32_t length) {
   Host *h = p;
   desktop_own(&h->desktop, text, length);
-  int units = MultiByteToWideChar(CP_UTF8, 0, (const char *)h->desktop.owned, (int)h->desktop.owned_length, NULL, 0);
-  HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, ((size_t)units + 1) * sizeof(WCHAR));
+  int units = MultiByteToWideChar(CP_UTF8, 0, (const char *)h->desktop.owned,
+                                  (int)h->desktop.owned_length, NULL, 0);
+  HGLOBAL memory =
+      GlobalAlloc(GMEM_MOVEABLE, ((size_t)units + 1) * sizeof(WCHAR));
   if (!memory)
     return;
   WCHAR *wide = GlobalLock(memory);
-  MultiByteToWideChar(CP_UTF8, 0, (const char *)h->desktop.owned, (int)h->desktop.owned_length, wide, units);
+  MultiByteToWideChar(CP_UTF8, 0, (const char *)h->desktop.owned,
+                      (int)h->desktop.owned_length, wide, units);
   wide[units] = 0;
   GlobalUnlock(memory);
   if (!OpenClipboard(h->window)) {
@@ -324,7 +524,9 @@ void dyn_window_request_paste(void *p) {
   HANDLE memory = GetClipboardData(CF_UNICODETEXT);
   const WCHAR *wide = memory ? GlobalLock(memory) : NULL;
   if (wide) {
-    int bytes = WideCharToMultiByte(CP_UTF8, 0, wide, -1, (char *)h->desktop.received, DYN_CLIPBOARD_LIMIT, NULL, NULL);
+    int bytes =
+        WideCharToMultiByte(CP_UTF8, 0, wide, -1, (char *)h->desktop.received,
+                            DYN_CLIPBOARD_LIMIT, NULL, NULL);
     h->desktop.received_length = bytes > 0 ? (uint32_t)bytes - 1 : 0;
     GlobalUnlock(memory);
     desktop_deliver(&h->desktop);
@@ -339,6 +541,24 @@ void dyn_window_set_cursor(void *p, int32_t cursor) {
   SetCursor(h->cursors[cursor]);
 }
 void dyn_window_wait(void *p, int32_t timeout) {
-  (void)p;
-  MsgWaitForMultipleObjects(0, NULL, FALSE, timeout < 0 ? INFINITE : (DWORD)timeout, QS_ALLINPUT);
+  Host *h = p;
+  if (!h || h->desktop.event_count || h->desktop.event_dropped)
+    return;
+  MsgWaitForMultipleObjects(
+      0, NULL, FALSE, timeout < 0 ? INFINITE : (DWORD)timeout, QS_ALLINPUT);
+}
+
+int32_t dyn_window_next_event(void *p, dyn_window_event *out) {
+  Host *h = p;
+  return h && out ? desktop_next(&h->desktop, out) : 0;
+}
+int32_t dyn_window_wake(void *p) {
+  Host *h = p;
+  return h && h->window && PostMessageW(h->window, DYN_WAKE_MESSAGE, 0, 0) != 0;
+}
+
+void dyn_window_listen_events(void *p, int32_t enabled) {
+  Host *h = p;
+  if (h)
+    desktop_listen(&h->desktop, enabled);
 }

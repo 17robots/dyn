@@ -20,6 +20,38 @@ enum {
   DYN_RIGHT = 64,
   DYN_CLOSE = 128
 };
+/* Ordered event ABI, mirrored by vendor/window/events.Event. Text is copied
+ * into caller storage; the queue survives polls. Overflow drops newest events,
+ * then reports a saturating dropped count after the retained queue drains. */
+enum { DYN_EVENT_NONE, DYN_EVENT_KEY_DOWN, DYN_EVENT_KEY_UP, DYN_EVENT_TEXT,
+ DYN_EVENT_POINTER_MOVE, DYN_EVENT_POINTER_DOWN, DYN_EVENT_POINTER_UP,
+ DYN_EVENT_WHEEL, DYN_EVENT_FOCUS_GAINED, DYN_EVENT_FOCUS_LOST,
+ DYN_EVENT_RESIZE, DYN_EVENT_CLOSE, DYN_EVENT_WAKE, DYN_EVENT_OVERFLOW };
+enum { DYN_MOD_SHIFT=1, DYN_MOD_CONTROL=2, DYN_MOD_ALT=4, DYN_MOD_SUPER=8,
+ DYN_MOD_CAPS=16, DYN_MOD_NUM=32 };
+enum { DYN_ESCAPE=0x110000, DYN_ENTER, DYN_TAB_KEY, DYN_BACKSPACE,
+ DYN_DELETE, DYN_LEFT_KEY, DYN_RIGHT_KEY, DYN_UP_KEY, DYN_DOWN_KEY,
+ DYN_HOME, DYN_END, DYN_PAGE_UP, DYN_PAGE_DOWN, DYN_INSERT,
+ DYN_F1=0x110020, DYN_SHIFT_KEY=0x110040, DYN_CONTROL_KEY,
+ DYN_ALT_KEY, DYN_SUPER_KEY };
+typedef struct dyn_window_event {
+ uint32_t kind,key,scancode,modifiers,repeated,button,dropped;
+ int32_t x,y,width,height;
+ float scroll_x,scroll_y;
+ uint32_t text_length;
+ uint8_t text[256];
+} dyn_window_event;
+enum { DYN_EVENT_CAPACITY=128 };
+/* Listening is opt-in, default off so summary-only clients retain idle wait.
+ * Changing enabled clears the retained queue; enable before polling input. */
+DYN_WINDOW_EXPORT void dyn_window_listen_events(void *, int32_t enabled);
+/* GUI-thread drain; may be called independently of poll. */
+DYN_WINDOW_EXPORT int32_t dyn_window_next_event(void *, dyn_window_event *);
+/* The only cross-thread operation. Owner must outlive all wake callers;
+ * serialize close after joining them. Wakes may coalesce, never carry data. */
+DYN_WINDOW_EXPORT int32_t dyn_window_wake(void *);
+/* No backend currently exposes IME preedit/candidate placement through this
+ * ABI. Committed text is supported; callers must not infer composition parity. */
 /* Desktop input since the last dyn_window_desktop call, which clears it. */
 enum {
   DYN_KEY_BACKSPACE = 1 << 0,

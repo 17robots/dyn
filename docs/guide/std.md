@@ -503,6 +503,10 @@ return an empty slice. These contracts prevent key corruption across KDF blocks.
 
 Native windows and UI backends are in `vendor/window` and `vendor/ui/opengl` or
 `vendor/ui/vulkan`; see their READMEs for native bridge builds and ownership.
+`listen_events` opts into a bounded ordered key/text stream with caller-owned
+UTF-8 event values and explicit overflow; `wake` is the cross-thread operation
+that interrupts GUI waiting. IME preedit/candidate placement is not exposed.
+See the window README for lifetime, scancode and platform commit limits.
 The OpenGL path presents native windows; Vulkan currently renders offscreen via
 compute and copies completed RGBA pixels to caller storage. FreeType and HarfBuzz
 provide dynamic native font/raster/shaping tables; HarfBuzz copies shaped glyph

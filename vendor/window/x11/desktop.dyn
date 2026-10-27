@@ -182,24 +182,37 @@ fn desktop_filter(window: *Window, event: *Event) bool {
 }
 
 fn append_text(desktop: *Desktop, bytes: []const u8) {
-  for byte in bytes {
-    if desktop.text_length < text_limit {
-      desktop.text[desktop.text_length] = byte
-      desktop.text_length += 1
+  count := #len(bytes)
+  remaining := text_limit - desktop.text_length
+  if count > remaining {
+    count = remaining
+  }
+  if count < #len(bytes) {
+    for count > 0 && bytes[count] & 0xc0 == 0x80 {
+      count -= 1
     }
   }
+  for i in 0..count {
+    desktop.text[desktop.text_length + i] = bytes[i]
+  }
+  desktop.text_length += count
 }
 
 fn desktop_key(window: *Window, event: *Event) {
   desktop := &window.desktop
   key_event := #cast(*KeyEvent, event)
-  buffer: [64]u8 = []
+  buffer: [4096]u8 = []
   key: usize = 0
   count: i32 = 0
   if desktop.context != nil {
     status: i32 = 0
-    count = lookup_utf8(desktop.context, event, &buffer[0], 64, &key, &status)
-    if count < 0 || count > 64 {
+    count = lookup_utf8(desktop.context, event, &buffer[0], 4096, &key, &status)
+    if status == -1 || count < 0 || count > 4096 {
+      // XBufferOverflow reports the required byte count. Bound stack work;
+      // losing this commit is explicit in the ordered stream, never silent.
+      if window.events_enabled && window.events.dropped != 4294967295 {
+        window.events.dropped += 1
+      }
       count = 0
     }
   }
@@ -249,6 +262,7 @@ fn desktop_key(window: *Window, event: *Event) {
   } else if !control {
     shown := buffer[..#cast(usize, count)]
     if #len(shown) != 0 && shown[0] >= 32 && shown[0] != 127 {
+      ordered_text(window, shown)
       append_text(desktop, shown)
     }
   }
@@ -384,22 +398,11 @@ pub fn scale(window: *const Window) f32 {
 // timeout waits indefinitely. Use it when nothing animates, so idle
 // programs use no CPU.
 pub fn wait(window: *Window, timeout: i32) {
-  if window.display == nil || pending(window.display) > 0 {
+  if window.display == nil || pending(window.display) > 0 || window.events.count != 0 || window.events.dropped != 0 {
     return
   }
-  entry: [8]u8 = []
-  descriptor := #cast(u32, connection(window.display))
-  entry[0] = #cast(u8, descriptor & 255)
-  entry[1] = #cast(u8, descriptor >> 8 & 255)
-  entry[2] = #cast(u8, descriptor >> 16 & 255)
-  entry[3] = #cast(u8, descriptor >> 24)
-  entry[4] = 1
-  if timeout < 0 {
-    _ = #syscall(271, &entry[0], 1, 0, 0, 8)
-    return
-  }
-  limit: [2]i64 = [#cast(i64, timeout / 1000), #cast(i64, timeout % 1000) * 1000000]
-  _ = #syscall(271, &entry[0], 1, &limit[0], 0, 8)
+  descriptors: [2]EventPoll = [EventPoll{ fd: connection(window.display), requested: 1 }, EventPoll{ fd: window.wake_descriptor, requested: 1 }]
+  _ = event_poll(&descriptors[0], 2, timeout)
 }
 
 // The box input for this frame. Text and clipboard views borrow the window

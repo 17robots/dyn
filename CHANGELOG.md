@@ -14,6 +14,8 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- `vendor/window` adds opt-in ordered raw key/text events, explicit queue overflow and worker wake-ups on X11, Wayland, Win32 and Cocoa. Event text is caller-owned; existing `box_input` summary clients retain their idle behavior. IME preedit and candidate placement remain unsupported.
+
 - `std/ui/box` exposes current-frame `find`, explicit `key_bytes`, portable `key_number` identities and persistent caller `user_data`, allowing applications to share the keyed cache and recycling policy with custom renderers.
 
 - `std/ui/box` adds mouse and Shift selection, Unicode word movement/deletion, selected clipboard operations, atomic replacement and horizontal scrolling in text fields. Tab/Shift-Tab traverse controls; Enter activates buttons. Tabs, popup menus, tooltips and splitters compose existing boxes. `layout`/`render` can run separately for custom app renderers, with container padding, absolute positioning and optional ordered shrinking.

@@ -82,3 +82,24 @@ event and rendering calls one platform at a time, preserving editor/terminal
 rendering, input methods, clipboard and font shaping/fallback behavior. Offscreen
 Vulkan is not an onscreen presentation backend. Collection/CFF fonts need a
 separate supported-font path before platform font parity can be claimed.
+
+## Ordered desktop input foundation, 2026-10-27
+
+The window facade now provides opt-in owned event values, ordered key/text
+input, explicit queue overflow and cross-thread wake-ups. Legacy summary-only
+clients remain opted out and keep their existing idle wait behavior. The public
+window README records queue lifetime, text chunking, scancode semantics, native
+commit bounds and close/worker ownership.
+
+Focused review found and corrected long-commit silent loss, Win32 coalesced
+repeat loss, and partial-capacity text-summary loss. Permanent tests cover the
+production XIM and compose branches, native C/Dyn ABI, real X11 ordering/wake,
+Wayland wake, Wine key/text/repeat behavior and the facade's native wake/event
+round trip. Cocoa source and Dyn target checks are distinct from native macOS
+execution. Native-host CI now includes the event contracts.
+
+This is a dependency for DNA's next backend migration. DNA still uses SDL
+for ordered input and SDL/TTF rendering. The new window API does not expose IME
+preedit/candidate placement or ordered clipboard replies. Those behaviors and
+the renderer-bound document/terminal text path must be preserved before the
+editor switches backends.

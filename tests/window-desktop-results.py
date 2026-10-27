@@ -25,6 +25,18 @@ fn main() {
     window.close(&host)
   }
   _ = window.poll(&host)
+  window.listen_events(&host, true)
+  check(window.wake(&host).ok, "wake accepted")
+  window.wait(&host, 100)
+  check(window.poll(&host).ok, "poll wake")
+  event := window.Event{}
+  woke := false
+  for window.next_event(&host, &event) {
+    if event.kind == window.EventKind.Wake { woke = true }
+  }
+  check(woke, "native event ABI wake round trip")
+  window.listen_events(&host, false)
+  check(!window.next_event(&host, &event), "disable clears stream")
   check(window.scale(&host) > 0.0, "scale")
   window.set_cursor(&host, window.Cursor.Text)
   window.set_cursor(&host, window.Cursor.Arrow)
