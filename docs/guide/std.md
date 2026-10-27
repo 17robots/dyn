@@ -72,6 +72,7 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
 | `std/encoding/json/read` | [Experimental compact read-only DOM](json-read.md), with arena-owned values and text |
 | `std/encoding/csv` | RFC 4180 field scanner, stream scanner and writer |
 | `std/encoding/ini` | INI scanner and one-pass `parse` into an arena table |
+| `std/encoding/toml` | TOML 1.0 arena-owned tree, queries and normalized writing |
 | `std/encoding/xml` | XML document trees, event scanner, attributes, namespaces and writer |
 | `std/encoding/mdesk` | Metadesk-style labeled trees with tags |
 | `std/encoding/hex`, `base32`, `base64` | Codecs into caller buffers that validate before writing |
@@ -80,6 +81,7 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
 | `std/compress/deflate`, `gzip`, `zstd` | DEFLATE encode and decode, gzip members, zstd compress and decompress |
 | `std/archive/tar`, `zip` | TAR (ustar, PAX, GNU) and ZIP reading |
 | `std/image/png`, `qoi`, `color` | PNG and QOI encode and decode, with caller RGBA storage |
+| `std/image/bmp`, `tga`, `gif`, `jpeg` | BMP/TGA read-write, first-frame GIF and baseline JPEG decode |
 
 ### Operating system
 
@@ -110,6 +112,11 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
 | `std/font`, `font/ui` | TrueType simple/composite rasterizer, atlas packing and software UI font adapters |
 | `std/ui` | Immediate-mode buttons, checkboxes, integer sliders and arena-owned draw commands |
 | `std/ui/software` | RGBA software rendering with caller-provided bitmap glyphs |
+| `std/text/layout`, `std/ui/text` | Unicode line layout, Latin pair kerning and positioned UI glyphs |
+| `std/embedded/uart`, `timer`, `interrupt` | Polling UART, CLINT/SysTick and bare-metal critical sections |
+| `std/audio/wav` | PCM and IEEE floating-point WAVE decoding and encoding |
+| `std/image/pnm` | Plain/binary PPM and PGM decoding and binary encoding |
+| `std/encoding/protobuf`, `msgpack`, `cbor` | Borrowed streaming tokens and arena-owned wire encoders |
 | `std/event` | Portable level-triggered readiness queues: epoll, kqueue and WSAPoll |
 | `std/net` | IPv4, IPv6 and Unix streams, IPv4 UDP multicast, polling and event queues |
 | `std/net/dns` | DNS queries into caller storage |
@@ -117,10 +124,11 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
 | `std/net/websocket` | RFC 6455 handshake and frame codec |
 | `std/net/url` | URL parsing and component encoding |
 | `std/net/tls` | Verified TLS client and server through OpenSSL; link it explicitly |
-| `std/crypto/sha2`, `hmac`, `kdf`, `password` | SHA-256, HMAC-SHA-256, HKDF and PBKDF2 |
-| `std/crypto/aes`, `chacha20`, `aead` | Ciphers and authenticated encryption |
-| `std/crypto/exchange`, `signature` | X25519 and Ed25519 |
-| `std/crypto/der`, `pem`, `certificate` | Certificate parsing; trust decisions stay with TLS |
+| `std/crypto/sha2`, `sha512`, `hmac`, `kdf`, `password` | SHA-256/SHA-512, HMAC-SHA-256, HKDF and PBKDF2 |
+| `std/crypto/aes`, `chacha20`, `aead` | Native AES-256-GCM and ChaCha20-Poly1305 |
+| `std/crypto/aesgcm`, `chacha20poly1305`, `poly1305` | Native caller-storage AEAD and one-time authentication |
+| `std/crypto/exchange`, `signature`, `x25519`, `ed25519`, `p256` | Native X25519, Ed25519 and deterministic ECDSA P-256 |
+| `std/crypto/der`, `pem`, `certificate`, `x509` | Borrowed certificate envelopes and explicit native trust-path validation |
 | `std/crypto/random` | OS entropy |
 
 ### Tooling
@@ -313,7 +321,8 @@ Component-selected metrics require a diagonal transform with nonnegative
 horizontal scale; other transforms return `Unsupported` rather than an approximation. Cyclic graphs,
 invalid component indices, contradictory transform flags and truncated records
 return `InvalidInput`. Other OpenType features—collections, CFF, variable-instance
-selection, hinting, kerning, shaping and general text layout—remain unimplemented. A face can open successfully while an individual glyph returns `Unsupported` or
+selection, hinting and complex-script shaping—remain unimplemented. Legacy horizontal
+`kern` format 0 pair adjustments and Latin text layout are provided separately. A face can open successfully while an individual glyph returns `Unsupported` or
 `InvalidInput`. Structural checks are not a complete font-conformance validator;
 checksums are not verified. Parse errors use portable `kind`, native `error`
 (zero for parser failures), and `offset` when known. Failed raster/atlas calls
@@ -358,3 +367,143 @@ The reader follows the OpenType [glyf](https://learn.microsoft.com/en-us/typogra
 [head](https://learn.microsoft.com/en-us/typography/opentype/spec/head),
 [hhea](https://learn.microsoft.com/en-us/typography/opentype/spec/hhea) and
 [hmtx](https://learn.microsoft.com/en-us/typography/opentype/spec/hmtx) specifications.
+
+
+### Text layout and embedded helpers
+
+`text/layout.build(arena, source, font, options)` owns a text copy, positioned
+glyphs and line records. NFC normalization is enabled by default; glyph/line byte
+offsets refer to the returned text, not the original source. Layout preserves
+grapheme clusters, uses Unicode line-break opportunities, handles mandatory
+breaks, tabs and conditional soft hyphens, and supports left/center/right alignment.
+Oversized words use emergency wrapping. Combining marks have zero advance; bidi,
+GSUB/GPOS and complex-script shaping are not implemented. `font/ui.LayoutAdapter`
+provides atlas advances and legacy TrueType pair kerning. `ui/text.label` snapshots
+positioned glyph commands into the UI frame arena.
+
+Embedded UART descriptors provide caller-selected register addresses, access
+width and readiness polarity, including NS16550 and CMSDK defaults. Writes poll
+without a timeout. The timer package provides coherent CLINT reads and safe split
+compare writes, and SysTick periods from 2 through 2^24 ticks. CLINT helpers require
+strongly ordered little-endian device I/O; they do not configure memory attributes.
+Interrupt helpers preserve nested RISC-V MIE or Thumb PRIMASK state. Vector checks
+validate only architectural minimum alignment; the board must enforce any larger
+alignment required by its vector table. Thumb also exposes NVIC operations.
+
+### Portable media and wire formats
+
+`audio/wav.decode` returns owned interleaved f32 samples from PCM8/16/24/32 and
+IEEE32/64 WAVE, including extensible PCM/IEEE headers. Encoding supports PCM8/16/24/32
+and IEEE32, writing channel masks and float fact chunks when needed. Integer output
+clamps and rounds finite samples; IEEE32 preserves raw floating-point bits. RF64,
+RIFX and compressed formats return `Unsupported`.
+
+`image/pnm.decode` reads P2/P3/P5/P6, scales 1..65535 sample ranges to 8-bit Gray/RGB,
+and reports consumed bytes for concatenated raw images. Binary headers consume
+exactly one raster delimiter: later whitespace and `#` bytes are pixels. Encoding
+writes P5/P6 with Maxval 255. Transfer functions are preserved without conversion.
+
+The protobuf, MessagePack and CBOR readers borrow their source and token payloads.
+Their encoders own output in the supplied arena. Input must remain alive and must
+not borrow unused output-arena storage. Parse errors are sticky and include byte
+offsets; encoding errors use token indexes. Nesting is bounded to 64 active frames.
+Protobuf emits explicit group fields and supports fixed/varint/length-delimited
+fields plus ZigZag helpers; schemas and generated code are outside this module.
+MessagePack emits preorder tokens with array/map counts and opaque extensions,
+including timestamps; text payloads preserve invalid UTF-8 bytes. CBOR emits End
+only for indefinite containers/strings, validates UTF-8 and chunk structure, wraps
+one child per tag, and preserves its full negative-integer range as -1-n. Tag
+semantics and duplicate-key policy belong to the caller. Neither codec promises
+a canonical serialization profile. Multiple top-level values are supported.
+
+The additional image decoders return arena-owned RGBA8 pixels and cap images at
+16,777,216 pixels. BMP supports known Windows DIB headers, indexed 1/4/8-bit,
+16/24/32-bit and contiguous bitfields; RLE and OS/2 headers are unsupported. TGA
+supports true-color/gray, RLE and all origins, but omits color maps, 15/16-bit true
+color and interleaving. GIF returns the first composited image with transparency
+and interlace; later animation timing/disposal is not processed. JPEG supports
+8-bit baseline sequential Huffman gray/RGB/YCbCr, interleaved/separate scans and
+restart markers, with nearest chroma upsampling and a portable reference IDCT.
+Progressive, arithmetic, lossless and CMYK JPEG are unsupported. Decode failures
+rewind arena allocations; inputs must not borrow unused output-arena backing.
+
+`encoding/toml.parse` owns all keys, strings and scalar lexemes. `member` and
+`index` return `nil_value` on misses. Parsing covers TOML 1.0 table/array-of-table
+rules, dotted/quoted keys, all four string forms, arrays, inline tables, signed
+64-bit integer syntax, floats and date/time syntax, with 64-level nesting.
+Scalar lexemes preserve precision, leap seconds and year 0000 without requiring
+conversion to a platform datetime. The normalized writer uses quoted keys and
+inline tables and preserves scalar spelling. Failed parse/write calls rewind;
+manual malformed or cyclic/deep trees are rejected. Neither input nor tree storage
+may borrow unused output-arena backing.
+
+
+### Native authenticated encryption
+
+`crypto/aead` and its AES adapter use native Dyn implementations without OpenSSL.
+The existing arena, alias-rejection, rollback and failure-zeroing contracts remain.
+Key size is 32 bytes; tags are 16 bytes; ChaCha nonces are 12 bytes and AES-GCM
+nonces are 1..128 bytes. The facade preserves the existing INT_MAX payload/AAD
+limits. `provider_code` remains for source compatibility and is always zero.
+
+The lower-level `aesgcm.seal/open` and `chacha20poly1305.seal/open` write exact-sized
+caller storage and allow exact in-place payload operation. Partial overlap and
+output overlap with other inputs are rejected. Authentication is checked before
+decryption; failed operations preserve caller output. Nonce uniqueness is the
+caller's responsibility. `poly1305` keys are one-time keys and must never be reused.
+
+AES uses a table-free finite-field S-box and fixed-iteration GHASH, favoring
+portability over throughput. Poly1305 uses bounded five-limb arithmetic. Source
+avoids secret indexes and secret branches, but that does not establish machine
+constant-time behavior on every target. Selected O2/O3 mask and comparison
+sites are inspected on x86-64, AArch64 and RISC-V. Full scope and limitations are
+recorded in the [crypto review](../internals/native-crypto-review.md). State clearing
+is not a guarantee that optimized code erases every stack/register copy.
+
+
+### Native signatures and trust paths
+
+X25519 and Ed25519 now use native fixed-limb arithmetic. X25519 rejects all-zero
+shared secrets. Ed25519 verifies canonical encodings and scalars, nonidentity
+prime-subgroup public keys, and signature equations. SHA-512 is a native streaming
+implementation. P-256 uses uncompressed SEC1 65-byte public keys and raw 64-byte
+r||s signatures; message APIs use SHA-256, with separate digest APIs in `p256`.
+Signing uses deterministic RFC 6979 and does not normalize to low-S. The existing
+`exchange` and `signature` result/tail/overlap contracts remain; `signature` also
+exposes `p256_public`, `p256_sign` and `p256_verify`. Provider diagnostics are zero.
+
+`x509.inspect` borrows strict DER fields and validates supported public keys.
+`x509.validate` takes a leaf-first ordered chain, explicit DER anchors and caller
+Unix time, DNS name or raw IP, and optional server/client purpose. It verifies
+Ed25519/ECDSA-SHA256 signatures, inclusive validity times, SAN identity, basic
+constraints, path lengths, key usage and extended key usage. DNS matching uses
+ASCII/A-labels, one complete leftmost wildcard label, and no CN fallback. IP
+references use `options.ip`, not numeric DNS names. Issuer/subject names match
+exact DER; normalized directory-name comparison is not implemented. Chain depth
+is limited to 16. Exact terminal-anchor matches also permit direct leaf pins.
+
+This is a restricted explicit-path validator, not complete browser PKIX policy:
+RSA/other curves, name/policy constraints and unsupported critical extensions
+fail closed. Unsupported constructed SAN forms and legacy Teletex names are
+rejected. Path discovery, system trust stores, AIA fetching, revocation, IDNA
+conversion and public-suffix policy remain caller responsibilities. External
+anchors are explicit trust policy; chain entries are time-checked. Native TLS
+continues to use its separate OpenSSL provider; these modules do not replace
+TLS handshake or trust-store behavior.
+
+HKDF expansion and PBKDF2 require destination/scratch to be disjoint from each
+other and borrowed inputs, including provided slice tails. Invalid lengths and
+aliases are rejected before writes. HMAC itself permits destination overlap with
+inputs because it consumes inputs before emitting the digest; oversized inputs
+return an empty slice. These contracts prevent key corruption across KDF blocks.
+
+### Vendor graphics and fonts
+
+Native windows and UI backends are in `vendor/window` and `vendor/ui/opengl` or
+`vendor/ui/vulkan`; see their READMEs for native bridge builds and ownership.
+The OpenGL path presents native windows; Vulkan currently renders offscreen via
+compute and copies completed RGBA pixels to caller storage. FreeType and HarfBuzz
+provide dynamic native font/raster/shaping tables; HarfBuzz copies shaped glyph
+records into caller arenas, and the FreeType adapter supports Unicode or shaped
+glyph IDs. Complex-script run shaping is distinct from paragraph bidi, fallback
+and line layout, which remain application policy.

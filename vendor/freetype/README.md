@@ -8,6 +8,7 @@ and ARM64. Public face/glyph records are read only through a bounded prefix.
 `open(font, api, bytes, face_index, pixel_height)` creates an owned native library
 and memory face. Font bytes are borrowed until `close`; do not reset their arena
 while the face is alive. `close` releases face before library and is idempotent.
+Do not copy a live owning `Font`; keep it at a stable address until closed.
 The wrapper reports native FT errors as `System` plus the numeric `error` value.
 
 The raw table exposes glyph lookup/loading, rendering and kerning. After a render,

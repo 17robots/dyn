@@ -1,6 +1,8 @@
 # Std and vendor expansion before the freeze
 
-Status: planned 2026-10-26. The user chose to land every "gap after the freeze"
+Status: all implementation phases completed locally 2026-10-26; the final
+registered regression suite passes. Historical slice notes below remain as evidence; the
+closure checklist at the end is authoritative. The user chose to land every "gap after the freeze"
 from [std standardization](std-standardization.md#gaps-after-the-freeze), and
 more, before the compatibility freeze. Each phase is its own stacked PR on top
 of `syntax-statements`. Every new module follows the std rules: caller-owned
@@ -194,3 +196,74 @@ published test vectors and a constant-time review. Then audit all of
 
 All phases merged, docs updated, qualification rerun. Then record the freeze
 and start the two-preview clock.
+
+
+## Current implementation checkpoint (2026-10-26)
+
+This checkpoint supersedes earlier pending statements about layout, kerning and
+embedded helpers. Unicode text layout, TrueType legacy pair kerning and positioned
+UI glyph commands are implemented and tested. UART/CLINT/SysTick/interrupt helpers
+are in std, and all three board fixtures use them. Actual system-QEMU runs now
+pass RV32, RV64 and Cortex-M debug/release, including nested critical sections,
+arena allocation and panic cleanup. Packages were extracted under `/tmp`, without
+changing the host installation. These runs found and fixed a pre-existing RV64
+allocator alignment instruction that silently encoded an invalid immediate;
+the assembler now rejects out-of-range immediate encodings against Clang oracles.
+
+WAVE, PPM/PGM, protobuf wire format, MessagePack and CBOR are implemented with
+registered host, emulated and cross-target tests. Formats still in progress are
+BMP/TGA, GIF/baseline JPEG and TOML. OpenGL has the texture/blending/scissor API
+needed by the UI renderer; native windows and GPU backends remain in progress.
+
+AES-256-GCM and ChaCha20-Poly1305 now use pure Dyn implementations. The AEAD facade
+no longer imports OpenSSL and passes native, cross-target and emulated contract
+checks. NIST/RFC goldens, independent integer/EVP oracles, boundary lengths,
+tampered tags/AAD/nonces/keys/ciphertext, overlap checks and allocation rollback
+are covered. Poly1305 also covers the p-1/p/p+1 reduction boundaries, zero-r keys,
+all streaming splits and bytewise updates. This does not close the crypto phase:
+curve algorithms, X.509 validation and the complete constant-time audit remain
+in progress. No compatibility freeze or preview clock has started.
+
+
+## Implementation closure and release checklist (2026-10-26)
+
+All five implementation phases now have code, focused tests and independent
+review. The profile limits below are deliberate API boundaries, not claims of
+complete format/PKIX/graphics feature parity.
+
+| Area | Local implementation and proof | Remaining qualification |
+| --- | --- | --- |
+| Platform/systems | Terminal/dynlib parity and all twelve systems items; registered tests | Real macOS/Windows platform paths |
+| Embedded | UART, CLINT/SysTick, vector/critical-section/NVIC helpers; RV32/RV64/Cortex-M QEMU debug/release | Physical boards |
+| Text/UI | TrueType simple/composite atlas, legacy pair kerning, Unicode/NFC Latin layout, software/positioned UI | Complex paragraph layout is application/vendor policy |
+| Portable formats | WAV, BMP/TGA/PPM/PGM, first-frame GIF, baseline JPEG, TOML 1.0, CBOR, MessagePack, protobuf wire | Broader format profiles are explicit unsupported cases |
+| Native windows/GL | X11/GLX 3.3 core, Wayland/EGL, Win32/WGL, Cocoa 4.1; actual X11/Wayland/Wine GPU/software oracles | Native Cocoa SDK/runtime and real Windows CI |
+| Vulkan | Actual GPU compute UI renderer with exact straight-alpha RGBA oracle and bounded resources | Native bridge execution outside Linux; WSI/swapchains are not provided |
+| Font providers | Dynamic FreeType raster/adapter and HarfBuzz run shaping; C raster/shaping and Windows/Unix layout oracles | Native provider execution outside Linux |
+| Crypto | Native AES-GCM/ChaCha-Poly, X25519/Ed25519/P256/SHA512, explicit Ed/P256 X509 validation; vectors, malformed-input/alias gates | Not machine-wide constant-time certification or full browser PKIX |
+
+The [native crypto review](native-crypto-review.md) covers every std crypto source
+and selected O2/O3 emitted mask/comparison sites on x86-64, AArch64 and RISC-V.
+It records bounds and limitations, including RFC6979 rejection retries. The audit
+also fixed older HMAC oversized-key handling, KDF length overflow and borrowed-key
+corruption from mutable overlap, plus the SHA256 block-loop overflow expression.
+Native cipher, signature and exchange facades no longer import OpenSSL. TLS keeps
+its separate vendor-backed handshake and trust-store behavior.
+
+Independent review additionally fixed soft-hyphen/kerning/clip issues, invalid
+JPEG Huffman/padding acceptance, OS/2 BMP header misclassification, TOML leap-second
+rejection, GL oversized uploads/state/resource failures, Cocoa multiwindow input
+routing and HarfBuzz non-null empty-object allocation failure handling.
+
+The macOS ARM64 and Windows x64 compiler-host workflows now run a native expansion
+probe (16 projects in debug/O2/O3) and native window/UI qualification. Windows
+provisions Mesa llvmpipe/WGL from MSYS2 and deploys both required DLLs alongside
+test executables. The host probe's 48 Linux executions pass; YAML syntax is checked.
+Configuring these jobs is not evidence that they have executed on native hosts.
+
+Release work remains distinct from local implementation: publish/review/merge,
+native platform CI, physical-board qualification where required, then explicitly
+record the compatibility freeze and run the two-preview stability period. No
+freeze or preview clock has started in this local implementation pass.
+
+Final full-suite evidence is recorded in [the expansion qualification record](qualification-20261026-expansion.md).

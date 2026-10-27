@@ -16,6 +16,10 @@ source, or `share/dyn/unicode/text/LICENSE-UNICODE.txt` in the SDK archive.
 - `hash.wyhash` in `std/hash` ports wyhash final version 4.3 by Wang Yi,
   released into the public domain under The Unlicense.
 
+- `std/crypto/curve25519` and `std/crypto/ed25519` adapt the public-domain
+  [TweetNaCl](https://tweetnacl.cr.yp.to/) field/Ed25519 algorithms; source references
+  the 2014-04-27 implementation. X25519 uses the same field arithmetic.
+
 ## Bundled host dependencies
 
 Current independent SDK builds do not bundle LLVM or LLD. The compiler does not

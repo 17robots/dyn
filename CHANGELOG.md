@@ -14,9 +14,31 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+
+- `std/text/layout` adds NFC-aware Unicode line layout, Latin pair kerning, wrapping,
+  alignment, tabs and soft hyphens. `std/ui/text` emits positioned glyph commands.
+- `std/embedded/uart`, `timer` and `interrupt` replace board-only helpers with
+  reusable polling UART, CLINT/SysTick and nested critical-section APIs. RV64 heap
+  alignment and RISC-V assembler immediate validation are corrected.
+- Portable codecs add WAV, BMP/TGA/PPM/PGM read-write, first-frame GIF and baseline
+  JPEG decode, TOML 1.0 parse/write, and CBOR/MessagePack/protobuf wire APIs.
+- `vendor/window` adds native X11, Wayland, Win32 and Cocoa windows with UI input.
+  OpenGL presents UI commands; Vulkan provides an offscreen compute renderer.
+  FreeType/HarfBuzz bindings add native rasterization and directional run shaping.
+- Authenticated encryption, X25519, Ed25519 and P-256 now use native Dyn; SHA-512
+  and explicit Ed/P-256 X.509 path validation are included. TLS retains its separate
+  OpenSSL provider. Low-level AEAD supports exact in-place payload operation.
+- HMAC rejects oversized keys correctly. HKDF/PBKDF2 reject overflowing lengths
+  and mutable/borrowed overlap before writing; callers must provide disjoint
+  destination, scratch and borrowed key/info/password/salt slices.
+- Wasm emission reuses completed aggregate temporaries, avoiding local-count
+  exhaustion on large or nested literal arrays.
+- Native expansion/UI qualification is wired into macOS and Windows CI; real
+  native execution and physical-board qualification remain release gates.
+
 - TrueType rasterization now expands composite outlines with affine transforms, contour-point attachment, nested components and horizontal metric selection. Graph and coordinate budgets bound expansion; cycle/truncation failures preserve arena state. Phantom-point attachment and rotated selected metrics remain unsupported.
 
-- Initial `std/font` support loads TrueType cmap/metrics and rasterizes simple quadratic outlines into caller arenas, with bounded supersampling and atlas packing. `std/font/ui` renders direct or cached glyphs through the portable UI backend. Full OpenType and text layout remain pending.
+- Initial `std/font` support loads TrueType cmap/metrics and rasterizes simple quadratic outlines into caller arenas, with bounded supersampling and atlas packing. `std/font/ui` renders direct or cached glyphs through the portable UI backend. Full OpenType and complex-script shaping remain outside the portable font parser.
 
 - `std/ui` adds a pure-Dyn immediate-mode core with buttons, checkboxes, integer sliders, pointer capture, keyboard focus and arena-owned draw commands. `std/ui/software` renders RGBA output with caller-provided glyph coverage; a headless PNG example is included.
 - Wasm emission now respects function liveness after O3 inlining, avoiding invalid bodies referencing replaced IR tables.
