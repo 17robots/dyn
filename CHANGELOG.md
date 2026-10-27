@@ -14,6 +14,9 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- Added optional FriBidi paragraph resolution and HarfBuzz shaped layout with script/font runs, grapheme-safe wrapping and source-cluster queries. HarfBuzz now supports explicit run properties and full-line context; FreeType exposes scalable-face metrics.
+- Software rendering skips blending for fully opaque pixels. X11 exposes checked swap interval control for immediate presentation or refresh pacing.
+
 - X11 clipboard snapshots now support up to 16 MiB through bounded INCR transfers. `try_set_clipboard`, `paste_pending` and `paste_status` expose copy/receive failures; large ordered replies overflow atomically instead of publishing a prefix.
 
 - Added revision-checked `std/text/edit`, ordered IME replacement events, and textbox correction handling. Wayland, Cocoa and Windows IMM publish bounded surrounding text; Windows supports selected-range reconversion and X11 explicitly returns `Unsupported`. Stale revisions, invalid UTF-8 ranges and capacity failures preserve caller text.

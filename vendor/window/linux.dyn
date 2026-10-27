@@ -100,3 +100,7 @@ pub fn paste_status(window:*const Window) Result {
 pub fn request_paste_snapshot(window:*Window) {
   x11.request_paste_snapshot(window)
 }
+
+pub fn set_swap_interval(window:*Window, interval:i32) Result {
+  return x11.set_swap_interval(window, interval)
+}

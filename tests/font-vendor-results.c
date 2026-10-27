@@ -10,9 +10,16 @@ static void word(FILE *file, uint32_t value) {
                             (unsigned char)(value >> 24)};
   assert(fwrite(bytes, 1, 4, file) == 4);
 }
-static void shape(hb_font_t *font, const char *text, const char *path) {
+static void shape(hb_font_t *font, const char *text, const char *path, int explicit_run) {
   hb_buffer_t *buffer = hb_buffer_create();
-  hb_buffer_add_utf8(buffer, text, -1, 0, -1);
+  hb_buffer_add_utf8(buffer, text, -1, explicit_run == 2 ? 2 : 0, explicit_run == 2 ? 2 : -1);
+  if (explicit_run) {
+    hb_buffer_set_direction(buffer, HB_DIRECTION_RTL);
+    hb_buffer_set_script(buffer, HB_SCRIPT_ARABIC);
+    hb_buffer_set_language(buffer, hb_language_from_string("ar", -1));
+    hb_buffer_set_cluster_level(buffer, HB_BUFFER_CLUSTER_LEVEL_MONOTONE_CHARACTERS);
+    hb_buffer_set_flags(buffer, explicit_run == 1 ? HB_BUFFER_FLAG_BOT | HB_BUFFER_FLAG_EOT : 0);
+  }
   hb_buffer_guess_segment_properties(buffer);
   hb_shape(font, buffer, NULL, 0);
   unsigned count;
@@ -52,6 +59,16 @@ int main(void) {
     assert(fwrite(slot->bitmap.buffer + row * slot->bitmap.pitch, 1,
                   slot->bitmap.width, file) == slot->bitmap.width);
   fclose(file);
+  file = fopen("metrics-reference.bin", "wb");
+  assert(file);
+  word(file, face->units_per_EM);
+  word(file, (uint32_t)(int32_t)face->ascender);
+  word(file, (uint32_t)(int32_t)face->descender);
+  word(file, (uint32_t)(int32_t)face->height);
+  word(file, (uint32_t)face->num_glyphs);
+  word(file, (uint32_t)face->num_faces);
+  word(file, (uint32_t)face->face_index);
+  fclose(file);
   FT_Done_Face(face);
   FT_Done_FreeType(library);
   hb_blob_t *blob = hb_blob_create_from_file_or_fail("font.ttf");
@@ -60,8 +77,10 @@ int main(void) {
   hb_font_t *font = hb_font_create(hbface);
   hb_ot_font_set_funcs(font);
   hb_font_set_scale(font, 2048, 2048);
-  shape(font, "office AV", "latin-reference.bin");
-  shape(font, "السلام", "arabic-reference.bin");
+  shape(font, "office AV", "latin-reference.bin", 0);
+  shape(font, "السلام", "arabic-reference.bin", 0);
+  shape(font, "السَلام", "run-reference.bin", 1);
+  shape(font, "بجح", "context-reference.bin", 2);
   hb_font_destroy(font);
   hb_face_destroy(hbface);
   hb_blob_destroy(blob);

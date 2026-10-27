@@ -204,3 +204,13 @@ Clipboard chunks; use it when an ordered client deliberately reads the completed
 snapshot itself. Other input and overflow events remain enabled. A live sender
 that never finishes INCR can leave a request pending until owner destruction or
 window closure; receive memory and simultaneous outgoing transfers stay bounded.
+
+### X11 presentation pacing
+
+`set_swap_interval(window, interval)` selects immediate presentation (0) or one
+refresh interval (1) on the owning GLX drawable and leaves that context current.
+Call on the serialized GUI thread. It checks advertised extension tokens before
+loading EXT/MESA/SGI procedures; SGI alone cannot disable synchronization. Missing
+capability returns `Unsupported`, while X/GLX errors return `System`. Driver or
+compositor policy can still override requested pacing. See the
+[Khronos swap-control contract](https://github.com/KhronosGroup/OpenGL-Registry/blob/main/extensions/EXT/EXT_swap_control.txt).

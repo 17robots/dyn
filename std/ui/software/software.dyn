@@ -54,6 +54,14 @@ fn blend(surface: *Surface, x, y: i32, tint: ui.Color, coverage: u8) {
     return
   }
   at := #cast(usize, y) * surface.stride + #cast(usize, x) * 4
+  // Full coverage replaces every destination component, including alpha.
+  if alpha == 255 {
+    surface.pixels[at]=tint.r
+    surface.pixels[at+1]=tint.g
+    surface.pixels[at+2]=tint.b
+    surface.pixels[at+3]=255
+    return
+  }
   old_alpha := #cast(u32, surface.pixels[at + 3])
   denominator := alpha * 255 + old_alpha * (255 - alpha)
   components: [3]u8 = [tint.r, tint.g, tint.b]

@@ -20,6 +20,8 @@ pub struct Api {
   font_create: fn(rawptr)rawptr, font_get_empty: fn()rawptr, font_destroy: fn(rawptr), font_set_scale: fn(rawptr, i32, i32), font_set_ppem: fn(rawptr, u32, u32), ot_font_set_funcs: fn(rawptr),
   buffer_create: fn()rawptr, buffer_destroy: fn(rawptr), buffer_allocation_successful: fn(rawptr)i32,
   buffer_add_utf8: fn(rawptr, *const u8, i32, u32, i32), buffer_guess_properties: fn(rawptr),
+  unicode_get_default: fn()rawptr, unicode_script: fn(rawptr, u32)u32, script_horizontal_direction: fn(u32)u32,
+  buffer_set_cluster_level: fn(rawptr, u32), buffer_set_flags: fn(rawptr, u32),
   buffer_set_direction: fn(rawptr, u32), buffer_set_script: fn(rawptr, u32), buffer_set_language: fn(rawptr, rawptr),
   language_from_string: fn(*const u8, i32)rawptr,
   shape: fn(rawptr, rawptr, *const Feature, u32),
@@ -29,6 +31,14 @@ pub struct Api {
 pub struct LoadResult { api: Api, missing: []const u8, ok: bool }
 pub struct FontResult { value: rawptr, kind: errors.Kind, ok: bool }
 pub struct ShapeResult { value: []Glyph, kind: errors.Kind, ok: bool }
+// Explicit directional/script run properties. Zero properties are guessed.
+// Cluster levels 0..2 are supported by HarfBuzz >= 0.9.42.
+pub struct Options { direction: u32, script: u32, language: []const u8, cluster_level: u32, flags: u32, item_offset: u32, item_length: i32 = -1 }
+pub const MonotoneGraphemes: u32 = 0
+pub const MonotoneCharacters: u32 = 1
+pub const Characters: u32 = 2
+pub const BeginningOfText: u32 = 1
+pub const EndOfText: u32 = 2
 // Copies font bytes into HarfBuzz-owned storage. The returned font owns native
 // references and is destroyed with api.font_destroy. Scale uses caller units.
 pub fn font_owned(api: *const Api, bytes: []const u8, face_index: u32) FontResult {
@@ -69,7 +79,31 @@ pub fn font_owned(api: *const Api, bytes: []const u8, face_index: u32) FontResul
 // Clusters are byte offsets into UTF-8 input. Invalid sequences use HB recovery.
 // Feature ranges are input cluster offsets; feature tags are big-endian ASCII.
 pub fn shape(arena: *mem.Arena, api: *const Api, font: rawptr, text: []const u8, direction: u32, features: []const Feature) ShapeResult {
+  return shape_run(arena, api, font, text, Options{direction:direction}, features)
+}
+// Shapes a single run. Text recovery follows HarfBuzz as in shape; layout
+// clients that preserve editor offsets must validate UTF-8 before calling.
+pub fn shape_run(arena: *mem.Arena, api: *const Api, font: rawptr, text: []const u8, options: Options, features: []const Feature) ShapeResult {
+  direction:=options.direction
+  if options.cluster_level>2 || options.flags&~#cast(u32, 255)!=0 || #len(options.language)>2147483647 {
+    return ShapeResult{kind:errors.Kind.InvalidInput}
+  }
+  for byte in options.language {
+    if byte==0 {
+      return ShapeResult{kind:errors.Kind.InvalidInput}
+    }
+  }
   if font == nil || #len(text) > 2147483647 || #cast(u64, #len(features)) > 0xffffffff || (direction != 0 && (direction < 4 || direction > 7)) {
+    return ShapeResult{kind:errors.Kind.InvalidInput}
+  }
+  if #cast(usize, options.item_offset)>#len(text) || options.item_length< -1 {
+    return ShapeResult{kind:errors.Kind.InvalidInput}
+  }
+  item_length:=options.item_length
+  if item_length== -1 {
+    item_length=#cast(i32, #len(text)-#cast(usize, options.item_offset))
+  }
+  if #cast(usize, item_length)>#len(text)-#cast(usize, options.item_offset) {
     return ShapeResult{kind:errors.Kind.InvalidInput}
   }
   buffer := api.buffer_create()
@@ -80,11 +114,23 @@ pub fn shape(arena: *mem.Arena, api: *const Api, font: rawptr, text: []const u8,
     api.buffer_destroy(buffer)
   }
   if #len(text) != 0 {
-    api.buffer_add_utf8(buffer, &text[0], #cast(i32, #len(text)), 0, #cast(i32, #len(text)))
+    api.buffer_add_utf8(buffer, &text[0], #cast(i32, #len(text)), options.item_offset, item_length)
   }
   if direction != 0 {
     api.buffer_set_direction(buffer, direction)
   }
+  if options.script!=0 {
+    api.buffer_set_script(buffer, options.script)
+  }
+  if #len(options.language)!=0 {
+    language:=api.language_from_string(&options.language[0], #cast(i32, #len(options.language)))
+    if language==nil {
+      return ShapeResult{kind:errors.Kind.InvalidInput}
+    }
+    api.buffer_set_language(buffer, language)
+  }
+  api.buffer_set_cluster_level(buffer, options.cluster_level)
+  api.buffer_set_flags(buffer, options.flags)
   api.buffer_guess_properties(buffer)
   feature_pointer: *const Feature
   if #len(features) != 0 {
@@ -216,6 +262,26 @@ pub fn load(handle: dynlib.Handle) LoadResult {
   api.glyph_positions = #cast(fn(rawptr, *u32)*const GlyphPosition, dynlib.symbol(handle, "hb_buffer_get_glyph_positions").value)
   if api.glyph_positions == nil {
     return LoadResult{missing:"hb_buffer_get_glyph_positions"}
+  }
+  api.unicode_get_default=#cast(fn()rawptr, dynlib.symbol(handle, "hb_unicode_funcs_get_default").value)
+  if api.unicode_get_default==nil {
+    return LoadResult{missing:"hb_unicode_funcs_get_default"}
+  }
+  api.unicode_script=#cast(fn(rawptr, u32)u32, dynlib.symbol(handle, "hb_unicode_script").value)
+  if api.unicode_script==nil {
+    return LoadResult{missing:"hb_unicode_script"}
+  }
+  api.script_horizontal_direction=#cast(fn(u32)u32, dynlib.symbol(handle, "hb_script_get_horizontal_direction").value)
+  if api.script_horizontal_direction==nil {
+    return LoadResult{missing:"hb_script_get_horizontal_direction"}
+  }
+  api.buffer_set_cluster_level=#cast(fn(rawptr, u32), dynlib.symbol(handle, "hb_buffer_set_cluster_level").value)
+  if api.buffer_set_cluster_level==nil {
+    return LoadResult{missing:"hb_buffer_set_cluster_level"}
+  }
+  api.buffer_set_flags=#cast(fn(rawptr, u32), dynlib.symbol(handle, "hb_buffer_set_flags").value)
+  if api.buffer_set_flags==nil {
+    return LoadResult{missing:"hb_buffer_set_flags"}
   }
   return LoadResult{api:api, ok:true}
 }

@@ -23,3 +23,23 @@ y coordinates. Keep shaping and face access serialized when sharing mutable font
 
 `tests/font-vendor-results.py` compares complete Latin and Arabic glyph records
 with an independent C HarfBuzz program and renders the Arabic result with FreeType.
+
+`shape_run` accepts `Options` with explicit direction, script, language, cluster
+level and buffer flags. Empty properties are guessed as in `shape`. Cluster
+levels 0..2 cover monotone graphemes, monotone characters and ungrouped
+characters. Flags `BeginningOfText`/`EndOfText` identify true text boundaries;
+do not set them on fragments lacking their surrounding context. Language tags
+use explicit byte lengths and reject embedded NUL. The table also exposes
+Unicode script lookup and script horizontal direction for run itemization.
+See [HarfBuzz buffer properties](https://harfbuzz.github.io/setting-buffer-properties.html)
+and [clusters](https://harfbuzz.github.io/working-with-harfbuzz-clusters.html).
+
+For paragraph bidi, script runs, wrapping and source cluster queries, use
+[`vendor/text/layout`](../text/layout/README.md) with a FriBidi API table.
+
+`Options.item_offset` and `item_length` select a UTF-8 byte range while retaining
+the full `text` as shaping context. Length -1 means the remaining bytes. Bounds
+are checked before allocation. Returned clusters remain offsets into the full
+text, so normalize them only when exposing a run-relative API. This permits
+Arabic joining across font boundaries without marking every font run as a
+separate paragraph.

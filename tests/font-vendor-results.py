@@ -72,6 +72,13 @@ fn main(){
  for i in 0..6 {binary.store_u32_le(output[i*4..i*4+4],fields[i])}
  for row in 0..value.height {for x in 0..value.width {output[24+#cast(usize,row*value.width+x)] = value.pixels[#cast(usize,row)*value.stride+#cast(usize,x)]}}
  check(fs.write_all("ft-actual.bin",output).ok)
+ metrics:=ft.face_metrics(font.face)
+ check(metrics.ok && ft.face_metrics(nil).kind==errors.Kind.InvalidInput)
+ values:=metrics.value
+ metric_fields:[7]u32=[#cast(u32,values.units_per_em),#cast(u32,#cast(i32,values.ascent)),#cast(u32,#cast(i32,values.descent)),#cast(u32,#cast(i32,values.height)),values.glyph_count,values.face_count,values.face_index]
+ metric_bytes:[28]u8=[]
+ for i in 0..7 {binary.store_u32_le(metric_bytes[i*4..i*4+4],metric_fields[i])}
+ check(fs.write_all("metrics-actual.bin",metric_bytes[..]).ok)
  shaping := dynlib.open("HB_LIBRARY",dynlib.Now)
  check(shaping.ok)
  defer {_ = dynlib.close(&shaping.value)}
@@ -106,6 +113,22 @@ fn main(){
  for glyph in arabic.value {check(glyph.index != 0)}
  save(&arena,latin.value,"latin-actual.bin")
  save(&arena,arabic.value,"arabic-actual.bin")
+ run := hb.shape_run(&arena,&loaded.api,created.value,"السَلام",hb.Options{direction:hb.RightToLeft,script:1098015074,language:"ar",cluster_level:hb.MonotoneCharacters,flags:hb.BeginningOfText|hb.EndOfText},features)
+ check(run.ok)
+ save(&arena,run.value,"run-actual.bin")
+ context_run:=hb.shape_run(&arena,&loaded.api,created.value,"بجح",hb.Options{direction:hb.RightToLeft,script:1098015074,language:"ar",cluster_level:1,item_offset:2,item_length:2},features)
+ check(context_run.ok && #len(context_run.value)>0 && context_run.value[0].cluster==2)
+ save(&arena,context_run.value,"context-actual.bin")
+ unicode := loaded.api.unicode_get_default()
+ check(unicode!=nil && loaded.api.unicode_script(unicode,65)==1281455214 && loaded.api.script_horizontal_direction(1098015074)==hb.RightToLeft)
+ checkpoint := mem.arena_mark(&arena)
+ check(hb.shape_run(&arena,&loaded.api,created.value,"x",hb.Options{cluster_level:3},features).kind==errors.Kind.InvalidInput)
+ check(hb.shape_run(&arena,&loaded.api,created.value,"x",hb.Options{flags:256},features).kind==errors.Kind.InvalidInput)
+ check(hb.shape_run(&arena,&loaded.api,created.value,"x",hb.Options{language:"a\0r"},features).kind==errors.Kind.InvalidInput)
+ check(hb.shape_run(&arena,&loaded.api,created.value,"x",hb.Options{item_offset:2},features).kind==errors.Kind.InvalidInput)
+ check(hb.shape_run(&arena,&loaded.api,created.value,"x",hb.Options{item_length:2},features).kind==errors.Kind.InvalidInput)
+ check(hb.shape_run(&arena,&loaded.api,created.value,"x",hb.Options{item_length: -2},features).kind==errors.Kind.InvalidInput)
+ check(mem.arena_mark(&arena)==checkpoint)
  // The FreeType callback consumes shaped glyph IDs with baseline origins.
  adapter := ft.Adapter{font:&font,line_height:40,glyph_ids:true}
  context := ui.Context{}
@@ -144,7 +167,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-font-vendors-') as directory:
         output=work/'program'
         subprocess.run([DYN,'build',str(work),*flags,'--quiet','--no-cache','--output',str(output)],check=True,timeout=300)
         subprocess.run([str(output)],cwd=work,check=True,timeout=60)
-        for item in ('ft','latin','arabic'):
+        for item in ('ft','metrics','latin','arabic','run','context'):
             assert (work/(item+'-actual.bin')).read_bytes()==(work/(item+'-reference.bin')).read_bytes(),item
     for target in ('aarch64-linux','riscv64-linux','x86_64-macos','aarch64-macos','x86_64-windows','aarch64-windows'):
         subprocess.run([DYN,'build',str(work),'--target',target,'--release','--quiet','--no-link','--emit-object','--output',str(work/target)],check=True,timeout=300)

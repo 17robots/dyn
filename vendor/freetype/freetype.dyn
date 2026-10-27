@@ -35,6 +35,27 @@ pub struct Font { api: Api, library: rawptr, face: rawptr, bytes: []const u8 }
 pub struct Result { kind: errors.Kind, error: isize, ok: bool }
 pub struct BitmapView { pixels: []const u8, width: i32, height: i32, stride: usize, left: i32, top: i32, advance_x: i64, advance_y: i64 }
 pub struct BitmapResult { value: BitmapView, kind: errors.Kind, ok: bool }
+// Unscaled metrics from a live scalable FT_Face. Faces and their font bytes
+// remain caller-owned; variation changes can change these values.
+pub struct FaceMetrics { units_per_em: u16, ascent: i16, descent: i16, height: i16, glyph_count: u32, face_count: u32, face_index: u32 }
+pub struct FaceMetricsResult { value: FaceMetrics, kind: errors.Kind, ok: bool }
+pub fn face_metrics(face: rawptr) FaceMetricsResult {
+  if face==nil {
+    return FaceMetricsResult{kind:errors.Kind.InvalidInput}
+  }
+  prefix:=#cast(*FacePrefix, face)
+  if prefix.face_flags&1==0 || prefix.units_per_em==0 {
+    return FaceMetricsResult{kind:errors.Kind.Unsupported}
+  }
+  if prefix.num_glyphs<0 || prefix.num_faces<=0 || prefix.face_index<0 {
+    return FaceMetricsResult{kind:errors.Kind.InvalidState}
+  }
+  if #cast(u64, prefix.num_glyphs)>4294967295 || #cast(u64, prefix.num_faces)>4294967295 || #cast(u64, prefix.face_index)>4294967295 {
+    return FaceMetricsResult{kind:errors.Kind.Overflow}
+  }
+  return FaceMetricsResult{value:FaceMetrics{units_per_em:prefix.units_per_em, ascent:prefix.ascender, descent:prefix.descender, height:prefix.height, glyph_count:#cast(u32, prefix.num_glyphs), face_count:#cast(u32, prefix.num_faces), face_index:#cast(u32, prefix.face_index)}, ok:true}
+}
+
 // ABI accessor for the public FreeType face/glyph records. Returned coverage is
 // borrowed until the next load/render on this face. Normal gray8 only; other
 // bitmap pixel modes or negative-pitch storage return Unsupported.

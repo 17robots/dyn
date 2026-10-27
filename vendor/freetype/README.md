@@ -26,3 +26,9 @@ Set `glyph_ids` for HarfBuzz output and leave it false for Unicode lookup. Confi
 independent C FreeType program, verifies HarfBuzz-shaped Arabic rendering through
 the adapter, and checks Dyn object generation for six targets. Native ABI execution
 outside Linux remains separate qualification work.
+
+`face_metrics` copies unscaled metrics from a live scalable face: units per EM,
+ascent, descent, baseline height, glyph count and collection/index metadata.
+Bitmap-only faces return `Unsupported`; callers must not divide by a zero EM.
+Variation changes can change unscaled metrics, so query again after changing
+variation coordinates. See the [FreeType face reference](https://freetype.org/freetype2/docs/reference/ft2-face_creation.html).
