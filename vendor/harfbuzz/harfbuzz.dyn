@@ -16,7 +16,7 @@ pub struct Glyph { index: u32, cluster: u32, x_advance: i32, y_advance: i32, x_o
 pub struct Api {
   blob_create: fn(*const u8, u32, u32, rawptr, fn(rawptr))rawptr,
   blob_destroy: fn(rawptr), blob_length: fn(rawptr)u32,
-  face_create: fn(rawptr, u32)rawptr, face_destroy: fn(rawptr), face_glyph_count: fn(rawptr)u32,
+  face_create: fn(rawptr, u32)rawptr, face_get_empty: fn()rawptr, face_destroy: fn(rawptr), face_glyph_count: fn(rawptr)u32,
   font_create: fn(rawptr)rawptr, font_get_empty: fn()rawptr, font_destroy: fn(rawptr), font_set_scale: fn(rawptr, i32, i32), font_set_ppem: fn(rawptr, u32, u32), ot_font_set_funcs: fn(rawptr),
   buffer_create: fn()rawptr, buffer_destroy: fn(rawptr), buffer_allocation_successful: fn(rawptr)i32,
   buffer_add_utf8: fn(rawptr, *const u8, i32, u32, i32), buffer_guess_properties: fn(rawptr),
@@ -44,7 +44,10 @@ pub fn font_owned(api: *const Api, bytes: []const u8, face_index: u32) FontResul
   }
   face := api.face_create(blob, face_index)
   api.blob_destroy(blob)
-  if face == nil {
+  if face == nil || face == api.face_get_empty() {
+    if face != nil {
+      api.face_destroy(face)
+    }
     return FontResult{kind:errors.Kind.System}
   }
   if api.face_glyph_count(face) == 0 {
@@ -129,6 +132,10 @@ pub fn load(handle: dynlib.Handle) LoadResult {
   api.face_create = #cast(fn(rawptr, u32)rawptr, dynlib.symbol(handle, "hb_face_create").value)
   if api.face_create == nil {
     return LoadResult{missing:"hb_face_create"}
+  }
+  api.face_get_empty = #cast(fn()rawptr, dynlib.symbol(handle, "hb_face_get_empty").value)
+  if api.face_get_empty == nil {
+    return LoadResult{missing:"hb_face_get_empty"}
   }
   api.face_destroy = #cast(fn(rawptr), dynlib.symbol(handle, "hb_face_destroy").value)
   if api.face_destroy == nil {

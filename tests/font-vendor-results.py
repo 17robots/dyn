@@ -27,6 +27,19 @@ fn save(arena: *mem.Arena, glyphs: []const hb.Glyph, path: []const u8){
  for j in 0..6 {binary.store_u32_le(output[4+i*24+j*4..8+i*24+j*4],values[j])}}
  check(fs.write_all(path,output).ok)
 }
+empty_face: rawptr
+empty_face_destroyed: u32
+blob_destroyed: u32
+real_blob_destroy: fn(rawptr)
+fn empty_face_create(blob: rawptr, index: u32) rawptr { _ = blob
+ _ = index
+ return empty_face }
+fn count_empty_face_destroy(face: rawptr) { check(face == empty_face)
+ empty_face_destroyed += 1 }
+fn count_blob_destroy(blob: rawptr) { blob_destroyed += 1
+ real_blob_destroy(blob) }
+fn reject_empty_glyph_count(face: rawptr) u32 { _ = face
+ #panic("empty face must not be validated as malformed font") }
 empty_font: rawptr
 empty_destroyed: u32
 fn empty_create(face: rawptr) rawptr { _ = face
@@ -73,6 +86,15 @@ fn main(){
  oom_api.ot_font_set_funcs = reject_empty_configuration
  failed_font := hb.font_owned(&oom_api,font_bytes.value,0)
  check(!failed_font.ok && failed_font.kind == errors.Kind.System && failed_font.value == nil && empty_destroyed == 1)
+ empty_face = loaded.api.face_get_empty()
+ real_blob_destroy = loaded.api.blob_destroy
+ face_oom := loaded.api
+ face_oom.face_create = empty_face_create
+ face_oom.face_destroy = count_empty_face_destroy
+ face_oom.blob_destroy = count_blob_destroy
+ face_oom.face_glyph_count = reject_empty_glyph_count
+ failed_face := hb.font_owned(&face_oom,font_bytes.value,0)
+ check(!failed_face.ok && failed_face.kind == errors.Kind.System && failed_face.value == nil && empty_face_destroyed == 1 && blob_destroyed == 1)
  defer {loaded.api.font_destroy(created.value)}
  loaded.api.font_set_scale(created.value,2048,2048)
  features: []const hb.Feature
@@ -101,7 +123,7 @@ fn main(){
  check(ink > 100 && adapter.kind == errors.Kind.None)
  bad := ft.Font{}
  check(!ft.open(&bad,ft_loaded.api,"broken",0,32).ok && bad.face == nil && bad.library == nil)
- check(!hb.font_owned(&loaded.api,"broken",0).ok)
+ check(hb.font_owned(&loaded.api,"broken",0).kind == errors.Kind.InvalidInput)
  check(hb.shape(&arena,&loaded.api,created.value,"x",1,features).kind == errors.Kind.InvalidInput)
  ft.close(&font)
  ft.close(&font)
