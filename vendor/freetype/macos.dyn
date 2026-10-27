@@ -1,0 +1,3 @@
+#target(kernel: darwin)
+pub type Long = isize
+pub type ULong = usize

@@ -1,0 +1,4 @@
+#target(kernel: linux)
+pub type Long = isize
+pub type ULong = usize
+#link("c")
