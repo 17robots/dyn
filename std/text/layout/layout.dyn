@@ -1,0 +1,293 @@
+use "std/mem" mem
+use "std/errors" errors
+use "std/unicode/utf8" utf8
+use "std/unicode/text" unicode
+use "std/math" math
+
+pub enum Align { Left, Center, Right }
+pub struct Font { data: rawptr, advance: fn(rawptr, u32) f64, kerning: fn(rawptr, u32, u32) f64, line_height: i32 }
+pub struct Options { width: i32, wrap: bool = true, normalize: bool = true, alignment: Align, tab_columns: usize = 4 }
+// Offsets refer to Layout.text, an owned NFC copy by default. A grapheme's
+// placements share one byte range, so wrapping never splits that grapheme.
+pub struct Glyph { codepoint: u32, start: usize, end: usize, x: f64, y: f64 }
+pub struct Line { start: usize, end: usize, glyph_start: usize, glyph_count: usize, width: f64, y: f64 }
+pub struct Layout { text: []const u8, glyphs: []Glyph, lines: []Line, width: f64, height: f64, line_height: i32 }
+pub struct Result { value: Layout, kind: errors.Kind, error: isize, offset: usize, ok: bool }
+struct Cluster { start: usize, end: usize, first: usize, count: usize, advance: f64, first_cp: u32, last_cp: u32, break_after: bool, hard: bool, space: bool, tab: bool, soft: bool }
+fn valid_metric(value: f64) bool {
+  return value == value && value >= -2147483647.0 && value <= 2147483647.0
+}
+fn kern(font: Font, left, right: u32) f64 {
+  if font.kerning == nil {
+    return 0.0
+  }
+  return font.kerning(font.data, left, right)
+}
+fn step(cluster: Cluster, x: f64) f64 {
+  if cluster.soft {
+    return 0.0
+  }
+  if cluster.tab {
+    if cluster.advance <= 0.0 {
+      return 0.0
+    }
+    return (math.floor64(x / cluster.advance) + 1.0) * cluster.advance - x
+  }
+  return cluster.advance
+}
+// Latin shaping consists of optional NFC composition, code-point advances and
+// pair kerning. UAX #14 break opportunities and UAX #29 graphemes are reused.
+// Bidi reordering, OpenType substitutions and complex-script shaping belong to
+// the caller/provider (for example HarfBuzz), not this simple layout engine.
+pub fn build(arena: *mem.Arena, source: []const u8, font: Font, options: Options) Result {
+  if font.advance == nil || font.line_height <= 0 || options.width < 0 || options.tab_columns == 0 || options.tab_columns > 256 ||
+    (options.alignment != Align.Left && options.alignment != Align.Center && options.alignment != Align.Right) {
+    return Result{ kind: errors.Kind.InvalidInput }
+  }
+  mark := mem.arena_mark(arena)
+  success := false
+  defer {
+    if !success {
+      mem.arena_rewind(arena, mark)
+    }
+  }
+  text: []const u8
+  if options.normalize {
+    normalized := unicode.normalize(arena, source, unicode.Form.NFC)
+    if !normalized.ok {
+      return Result{ kind: normalized.kind, error: normalized.error, offset: normalized.offset }
+    }
+    text = normalized.value
+  } else {
+    copied := mem.push_array(u8, arena, #len(source))
+    _ = mem.copy(copied, source)
+    text = copied
+  }
+  breaks := unicode.line_breaks(arena, text)
+  if !breaks.ok {
+    return Result{ kind: breaks.kind, offset: breaks.offset }
+  }
+  count := utf8.codepoint_count(text)
+  work := mem.push_array(Glyph, arena, count.value)
+  clusters := mem.push_array(Cluster, arena, count.value)
+  used: usize = 0
+  cluster_count: usize = 0
+  break_index: usize = 0
+  iterator := unicode.graphemes(text)
+  for iterator.offset < #len(text) {
+    start := iterator.offset
+    run := unicode.next_grapheme(&iterator)
+    if !run.ok {
+      return Result{ kind: run.kind, offset: run.offset }
+    }
+    first := utf8.decode(text, start).codepoint
+    cluster := Cluster{ start: start, end: iterator.offset, first: used, space: first == 32 || first == 9 || first == 0x200b,
+      tab: first == 9, soft: first == 0xad,
+      hard: first == 10 || first == 13 || first == 11 || first == 12 || first == 0x85 || first == 0x2028 || first == 0x2029 }
+    for break_index < #len(breaks.value) && breaks.value[break_index].offset <= cluster.end {
+      if breaks.value[break_index].offset == cluster.end {
+        cluster.break_after = true
+      }
+      break_index += 1
+    }
+    if cluster.tab {
+      width := font.advance(font.data, 32)
+      if !valid_metric(width) || width < 0.0 {
+        return Result{ kind: errors.Kind.InvalidInput, offset: start }
+      }
+      cluster.advance = width * #cast(f64, options.tab_columns)
+    } else if !cluster.hard && first != 0x200b {
+      at := start
+      has_previous := false
+      previous: u32 = 0
+      for at < cluster.end {
+        decoded := utf8.decode(text, at)
+        cp := decoded.codepoint
+        if cluster.soft {
+          cp = 45
+        }
+        advance := font.advance(font.data, cp)
+        if !valid_metric(advance) || advance < 0.0 {
+          return Result{ kind: errors.Kind.InvalidInput, offset: at }
+        }
+        combining := unicode.combining_class(cp) != 0
+        adjustment: f64 = 0.0
+        if has_previous && !combining {
+          adjustment = kern(font, previous, cp)
+        }
+        if !valid_metric(adjustment) {
+          return Result{ kind: errors.Kind.InvalidInput, offset: at }
+        }
+        cluster.advance += adjustment
+        work[used] = Glyph{ codepoint: cp, start: cluster.start, end: cluster.end, x: cluster.advance }
+        if !combining {
+          cluster.advance += advance
+        }
+        if !has_previous {
+          cluster.first_cp = cp
+        }
+        if !combining || cluster.count == 0 {
+          cluster.last_cp = cp
+        }
+        cluster.count += 1
+        used += 1
+        previous = cp
+        has_previous = true
+        at += decoded.width
+      }
+    }
+    clusters[cluster_count] = cluster
+    cluster_count += 1
+  }
+  glyphs := mem.push_array(Glyph, arena, used)
+  lines := mem.push_array(Line, arena, cluster_count + 1)
+  glyph_count: usize = 0
+  line_count: usize = 0
+  begin: usize = 0
+  more := true
+  maximum: f64 = 0.0
+  for more {
+    cursor := begin
+    candidate := begin
+    width: f64 = 0.0
+    previous: u32 = 0
+    has_previous := false
+    wrapped := false
+    selected_break := false
+    for cursor < cluster_count && !clusters[cursor].hard {
+      cluster := clusters[cursor]
+      adjustment: f64 = 0.0
+      if has_previous && cluster.count > 0 && !cluster.soft {
+        adjustment = kern(font, previous, cluster.first_cp)
+      }
+      if !valid_metric(adjustment) {
+        return Result{ kind: errors.Kind.InvalidInput, offset: cluster.start }
+      }
+      next_width := width + adjustment + step(cluster, width + adjustment)
+      if options.wrap && options.width > 0 && next_width > #cast(f64, options.width) && cursor > begin {
+        if candidate > begin {
+          cursor = candidate
+          selected_break = true
+        }
+        wrapped = true
+        break
+      }
+      width = next_width
+      cursor += 1
+      if cluster.tab {
+        has_previous = false
+      }
+      if cluster.count > 0 && !cluster.soft {
+        previous = cluster.last_cp
+        has_previous = true
+      }
+      if cluster.break_after {
+        break_width := width
+        if cluster.soft {
+          soft_adjustment: f64 = 0.0
+          if has_previous {
+            soft_adjustment = kern(font, previous, cluster.first_cp)
+          }
+          if !valid_metric(soft_adjustment) {
+            return Result{ kind: errors.Kind.InvalidInput, offset: cluster.start }
+          }
+          break_width += cluster.advance + soft_adjustment
+        }
+        if options.width == 0 || break_width <= #cast(f64, options.width) {
+          candidate = cursor
+        }
+      }
+    }
+    end := cursor
+    visible_end := end
+    if wrapped {
+      for visible_end > begin && clusters[visible_end - 1].space {
+        visible_end -= 1
+      }
+    }
+    y := #cast(f64, line_count) * #cast(f64, font.line_height)
+    glyph_start := glyph_count
+    x: f64 = 0.0
+    previous = 0
+    has_previous = false
+    for i in begin..visible_end {
+      cluster := clusters[i]
+      show_soft := cluster.soft && selected_break && i + 1 == end
+      if cluster.soft && !show_soft {
+        continue
+      }
+      adjustment: f64 = 0.0
+      if has_previous && cluster.count > 0 {
+        adjustment = kern(font, previous, cluster.first_cp)
+      }
+      if !valid_metric(adjustment) {
+        return Result{ kind: errors.Kind.InvalidInput, offset: cluster.start }
+      }
+      x += adjustment
+      for j in 0..cluster.count {
+        glyph := work[cluster.first + j]
+        glyph.x += x
+        glyph.y = y
+        glyphs[glyph_count] = glyph
+        glyph_count += 1
+      }
+      if show_soft {
+        x += cluster.advance
+      } else {
+        x += step(cluster, x)
+      }
+      if cluster.tab {
+        has_previous = false
+      }
+      if cluster.count > 0 {
+        previous = cluster.last_cp
+        has_previous = true
+      }
+    }
+    shift: f64 = 0.0
+    if options.width > 0 && x < #cast(f64, options.width) {
+      if options.alignment == Align.Center {
+        shift = (#cast(f64, options.width) - x) * 0.5
+      }
+      if options.alignment == Align.Right {
+        shift = #cast(f64, options.width) - x
+      }
+    }
+    for i in glyph_start..glyph_count {
+      glyphs[i].x += shift
+    }
+    start_byte := #len(text)
+    end_byte := #len(text)
+    if begin < cluster_count {
+      start_byte = clusters[begin].start
+    }
+    if end < cluster_count {
+      end_byte = clusters[end].start
+    }
+    lines[line_count] = Line{ start: start_byte, end: end_byte, glyph_start: glyph_start, glyph_count: glyph_count - glyph_start, width: x, y: y }
+    if x > maximum {
+      maximum = x
+    }
+    line_count += 1
+    if end < cluster_count && clusters[end].hard {
+      lines[line_count - 1].end = clusters[end].end
+      begin = end + 1
+    } else if end == cluster_count {
+      more = false
+    }
+    else {
+      begin = end
+      if wrapped {
+        for begin < cluster_count && clusters[begin].space {
+          begin += 1
+        }
+      }
+      if begin == cluster_count {
+        more = false
+      }
+    }
+  }
+  success = true
+  return Result{ value: Layout{ text: text, glyphs: glyphs[..glyph_count], lines: lines[..line_count], width: maximum,
+    height: #cast(f64, line_count) * #cast(f64, font.line_height), line_height: font.line_height }, ok: true }
+}

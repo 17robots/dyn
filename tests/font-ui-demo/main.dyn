@@ -8,6 +8,8 @@ use "std/fmt" fmt
 use "std/font" font
 use "std/font/ui" font_ui
 use "std/process" process
+use "std/text/layout" layout
+use "std/ui/text" ui_text
 fn main() {
   frame := mem.Arena{}
   output := mem.Arena{}
@@ -64,7 +66,12 @@ fn main() {
   _ = fmt.write(&label, "COUNT ")
   _ = fmt.write_i64(&label, #cast(i64, count))
   ui.label(&context, ui.Rect{ x: 32, y: 64, width: 416, height: 24 }, fmt.bytes(&label), context.style.accent)
-  ui.label(&context, ui.Rect{ x: 32, y: 188, width: 416, height: 28 }, "Café Å ñ ü Ç", context.style.foreground)
+  metrics := font_ui.LayoutAdapter{ atlas: &cached.value, face: &opened.value, pixels_per_em: 24 }
+  positioned := layout.build(&frame, "AV Café Å ñ ü Ç", font_ui.layout_font(&metrics), layout.Options{ width: 416 })
+  if !positioned.ok {
+    #panic("font text layout")
+  }
+  ui_text.label(&context, ui.Rect{ x: 32, y: 188, width: 416, height: 28 }, &positioned.value, context.style.foreground)
   ui.end(&context)
   pixels := mem.push_array(u8, &output, #cast(usize, 480 * 240 * 4))
   surface := software.Surface{ pixels: pixels, width: 480, height: 240, stride: 480 * 4 }

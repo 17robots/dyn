@@ -3,10 +3,10 @@ use "std/image/color" color
 
 pub type Color = color.Rgba
 pub struct Rect { x: i32, y: i32, width: i32, height: i32 }
-pub enum Kind { None, Rectangle, Text }
+pub enum Kind { None, Rectangle, Text, Glyph }
 // Command nodes and text belong to the frame arena. Read them after end and
 // before resetting that arena. Render in list order, applying each command's clip.
-pub struct Command { kind: Kind, bounds: Rect, clip: Rect, color: Color, text: []const u8, next: *Command }
+pub struct Command { kind: Kind, bounds: Rect, clip: Rect, color: Color, text: []const u8, codepoint: u32, glyph_x: i64, glyph_y: i64, next: *Command }
 pub nil_command: Command
 pub struct Input {
   x: i32, y: i32, down: bool,
@@ -350,4 +350,16 @@ pub fn slider(context: *Context, id: u64, bounds: Rect, value: *i32, low, high: 
     rectangle(context, Rect{ x: coordinate(#cast(i64, bounds.x) + position), y: bounds.y, width: 1, height: bounds.height }, context.style.accent)
   }
   return response
+}
+
+// A positioned glyph origin shares the same font top-left convention as Text.
+// Bounds provide a text-region clip and may differ from the glyph's ink bounds.
+pub fn glyph(context: *Context, bounds: Rect, codepoint: u32, x, y: i64, tint: Color) {
+  previous := context.last
+  emit(context, Kind.Glyph, bounds, tint, "")
+  if context.last != previous {
+    context.last.codepoint = codepoint
+    context.last.glyph_x = x
+    context.last.glyph_y = y
+  }
 }

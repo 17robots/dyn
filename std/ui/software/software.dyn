@@ -70,6 +70,51 @@ fn rectangle(surface: *Surface, bounds: ui.Rect, tint: ui.Color) {
     }
   }
 }
+struct DrawResult { advance: i32, ok: bool }
+fn draw_glyph(surface: *Surface, clip: ui.Rect, tint: ui.Color, font: Font, codepoint: u32, x, y: i64) DrawResult {
+  if font.glyph == nil || font.line_height <= 0 {
+    return DrawResult{}
+  }
+  if x < #cast(i64, clip.x) - 4294967296 || x > #cast(i64, clip.x) + #cast(i64, clip.width) + 4294967296 ||
+    y < #cast(i64, clip.y) - 4294967296 || y > #cast(i64, clip.y) + #cast(i64, clip.height) + 4294967296 {
+    return DrawResult{ ok: true }
+  }
+  glyph := font.glyph(font.data, codepoint)
+  if !valid_glyph(&glyph) {
+    return DrawResult{}
+  }
+  left := x + #cast(i64, glyph.x_offset)
+  top := y + #cast(i64, glyph.y_offset)
+  // Intersect in i64: bearings may place the glyph outside i32 coordinates.
+  gx := left
+  gy := top
+  gr := left + #cast(i64, glyph.width)
+  gb := top + #cast(i64, glyph.height)
+  if gx < #cast(i64, clip.x) {
+    gx = #cast(i64, clip.x)
+  }
+  if gy < #cast(i64, clip.y) {
+    gy = #cast(i64, clip.y)
+  }
+  cr := #cast(i64, clip.x) + #cast(i64, clip.width)
+  cb := #cast(i64, clip.y) + #cast(i64, clip.height)
+  if gr > cr {
+    gr = cr
+  }
+  if gb > cb {
+    gb = cb
+  }
+  for gy < gb {
+    px := gx
+    for px < gr {
+      coverage := glyph.pixels[#cast(usize, (gy - top)) * glyph.stride + #cast(usize, (px - left))]
+      blend(surface, #cast(i32, px), #cast(i32, gy), tint, coverage)
+      px += 1
+    }
+    gy += 1
+  }
+  return DrawResult{ advance: glyph.advance, ok: true }
+}
 fn text(surface: *Surface, command: *const ui.Command, clip: ui.Rect, font: Font) Result {
   if font.glyph == nil || font.line_height <= 0 {
     return Result{ kind: errors.Kind.InvalidInput }
@@ -102,41 +147,11 @@ fn text(surface: *Surface, command: *const ui.Command, clip: ui.Rect, font: Font
     if x >= right + 2147483648 {
       continue
     }
-    glyph := font.glyph(font.data, codepoint)
-    if !valid_glyph(&glyph) {
+    drawn := draw_glyph(surface, clip, command.color, font, codepoint, x, y)
+    if !drawn.ok {
       return Result{ kind: errors.Kind.InvalidInput }
     }
-    left := x + #cast(i64, glyph.x_offset)
-    top := y + #cast(i64, glyph.y_offset)
-    // Intersect in i64: bearings may place the glyph outside i32 coordinates.
-    gx := left
-    gy := top
-    gr := left + #cast(i64, glyph.width)
-    gb := top + #cast(i64, glyph.height)
-    if gx < #cast(i64, clip.x) {
-      gx = #cast(i64, clip.x)
-    }
-    if gy < #cast(i64, clip.y) {
-      gy = #cast(i64, clip.y)
-    }
-    cr := #cast(i64, clip.x) + #cast(i64, clip.width)
-    cb := #cast(i64, clip.y) + #cast(i64, clip.height)
-    if gr > cr {
-      gr = cr
-    }
-    if gb > cb {
-      gb = cb
-    }
-    for gy < gb {
-      px := gx
-      for px < gr {
-        coverage := glyph.pixels[#cast(usize, (gy - top)) * glyph.stride + #cast(usize, (px - left))]
-        blend(surface, #cast(i32, px), #cast(i32, gy), command.color, coverage)
-        px += 1
-      }
-      gy += 1
-    }
-    x += #cast(i64, glyph.advance)
+    x += #cast(i64, drawn.advance)
   }
   return Result{ ok: true }
 }
@@ -157,6 +172,12 @@ pub fn render(surface: *Surface, commands: *const ui.Command, font: Font) Result
     if clip.width > 0 && clip.height > 0 {
       if command.kind == ui.Kind.Rectangle {
         rectangle(surface, clip, command.color)
+      }
+      else if command.kind == ui.Kind.Glyph {
+        drawn := draw_glyph(surface, clip, command.color, font, command.codepoint, #cast(i64, command.glyph_x), #cast(i64, command.glyph_y))
+        if !drawn.ok {
+          return Result{ kind: errors.Kind.InvalidInput }
+        }
       }
       else if command.kind == ui.Kind.Text {
         outcome := text(surface, command, clip, font)

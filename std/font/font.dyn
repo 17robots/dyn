@@ -8,6 +8,7 @@ pub struct Face {
   data: []const u8, cmap: []const u8, glyf: []const u8, loca: []const u8, hmtx: []const u8,
   units_per_em: u16, glyphs: u16, metrics: u16, long_loca: bool,
   ascent: i16, descent: i16, line_gap: i16,
+  kern: []const u8,
 }
 pub struct FaceResult { value: Face, kind: errors.Kind, error: isize, offset: usize, ok: bool }
 pub struct Bitmap { pixels: []u8, width: i32, height: i32, x_offset: i32, y_offset: i32, advance: i32 }
@@ -172,6 +173,19 @@ pub fn open(data: []const u8) FaceResult {
   }
   if best == 0 {
     return FaceResult{ kind: errors.Kind.Unsupported }
+  }
+  kern := table(data, 0x6b65726e)
+  if !kern.ok && kern.offset != 0 {
+    return FaceResult{ kind: errors.Kind.InvalidInput, offset: kern.offset }
+  }
+  if kern.ok {
+    checked := validate_kern(kern.value, glyphs)
+    if !checked.ok {
+      return FaceResult{ kind: errors.Kind.InvalidInput, offset: kern.offset + checked.offset }
+    }
+    if #len(kern.value) >= 4 && u16be(kern.value, 0) == 0 {
+      face.kern = kern.value
+    }
   }
   face.cmap = selected
   return FaceResult{ value: face, ok: true }
