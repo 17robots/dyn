@@ -1,0 +1,322 @@
+// NIST P-256 / ECDSA-SHA256. Fixed-width, fixed-schedule arithmetic.
+// Keys use SEC1 uncompressed65; signatures are raw32-byte r ||32-byte s.
+// Compiler/machine constant-time qualification is separate.
+use "std/crypto/sha2" sha
+use "std/crypto/hmac" hmac
+use "std/bytes" bytes
+struct Number { limbs: [8]u32 }
+struct Point { x: Number, y: Number, z: Number }
+const P: Number = Number{limbs: [0xffffffff, 0xffffffff, 0xffffffff, 0x0, 0x0, 0x0, 0x1, 0xffffffff]}
+const N: Number = Number{limbs: [0xfc632551, 0xf3b9cac2, 0xa7179e84, 0xbce6faad, 0xffffffff, 0xffffffff, 0x0, 0xffffffff]}
+const Gx: Number = Number{limbs: [0xd898c296, 0xf4a13945, 0x2deb33a0, 0x77037d81, 0x63a440f2, 0xf8bce6e5, 0xe12c4247, 0x6b17d1f2]}
+const Gy: Number = Number{limbs: [0x37bf51f5, 0xcbb64068, 0x6b315ece, 0x2bce3357, 0x7c0f9e16, 0x8ee7eb4a, 0xfe1a7f9b, 0x4fe342e2]}
+const B: Number = Number{limbs: [0x27d2604b, 0x3bce3c3e, 0xcc53b0f6, 0x651d06b0, 0x769886bc, 0xb3ebbd55, 0xaa3a93e7, 0x5ac635d8]}
+fn one() Number {
+  result: Number
+  result.limbs[0]=1
+  return result
+}
+fn zero_bit(a: Number) u64 {
+  word: u32
+  for i in 0..8 {
+    word|=a.limbs[i]
+  }
+  return 1-#cast(u64, (word|#wrap(0-word))>>31)
+}
+fn choose(a: Number, b: Number, bit: u64) Number {
+  mask:=#cast(u32, #wrap(0-bit))
+  result: Number
+  for i in 0..8 {
+    result.limbs[i]=(a.limbs[i]&~mask)|(b.limbs[i]&mask)
+  }
+  return result
+}
+fn subtract(a: Number, b: Number, borrow: *u64) Number {
+  result: Number
+  carry: u64
+  for i in 0..8 {
+    wide:=4294967296+#cast(u64, a.limbs[i])-#cast(u64, b.limbs[i])-carry
+    result.limbs[i]=#cast(u32, wide)
+    carry=1-(wide>>32)
+  }
+  borrow.*=carry
+  return result
+}
+fn plus(a: Number, b: Number, modulus: Number) Number {
+  sum: Number
+  carry: u64
+  for i in 0..8 {
+    wide:=#cast(u64, a.limbs[i])+#cast(u64, b.limbs[i])+carry
+    sum.limbs[i]=#cast(u32, wide)
+    carry=wide>>32
+  }
+  borrow: u64
+  reduced:=subtract(sum, modulus, &borrow)
+  return choose(sum, reduced, carry|(1-borrow))
+}
+fn minus(a: Number, b: Number, modulus: Number) Number {
+  borrow: u64
+  result:=subtract(a, b, &borrow)
+  mask:=#cast(u32, #wrap(0-borrow))
+  carry: u64
+  for i in 0..8 {
+    wide:=#cast(u64, result.limbs[i])+#cast(u64, modulus.limbs[i]&mask)+carry
+    result.limbs[i]=#cast(u32, wide)
+    carry=wide>>32
+  }
+  return result
+}
+fn multiply(a: Number, b: Number, modulus: Number) Number {
+  result: Number
+  for step in 0..256 {
+    i:=255-step
+    result=plus(result, result, modulus)
+    added:=plus(result, a, modulus)
+    result=choose(result, added, #cast(u64, (b.limbs[i/32]>>#cast(u32, i%32))&1))
+  }
+  return result
+}
+fn inverse(value: Number, modulus: Number) Number {
+  two: Number
+  two.limbs[0]=2
+  borrow: u64
+  exponent:=subtract(modulus, two, &borrow)
+  result:=one()
+  for step in 0..256 {
+    i:=255-step
+    result=multiply(result, result, modulus)
+    // The exponent is public and fixed by the chosen modulus.
+    if (exponent.limbs[i/32]>>#cast(u32, i%32))&1!=0 {
+      result=multiply(result, value, modulus)
+    }
+  }
+  return result
+}
+fn reduced(value: Number, modulus: Number) Number {
+  borrow: u64
+  difference:=subtract(value, modulus, &borrow)
+  return choose(difference, value, borrow)
+}
+fn decode(input: []const u8) Number {
+  result: Number
+  for i in 0..32 {
+    result.limbs[i/4]|=#cast(u32, input[31-i])<<#cast(u32, (i%4)*8)
+  }
+  return result
+}
+fn encode(output: []u8, value: Number) {
+  for i in 0..32 {
+    output[31-i]=#cast(u8, value.limbs[i/4]>>#cast(u32, (i%4)*8))
+  }
+}
+fn canonical(value: Number, modulus: Number) bool {
+  borrow: u64
+  _=subtract(value, modulus, &borrow)
+  return borrow==1
+}
+fn add(a: Number, b: Number) Number {
+  return plus(a, b, P)
+}
+fn sub(a: Number, b: Number) Number {
+  return minus(a, b, P)
+}
+fn mul(a: Number, b: Number) Number {
+  return multiply(a, b, P)
+}
+fn sq(a: Number) Number {
+  return mul(a, a)
+}
+fn twice(a: Number) Number {
+  return add(a, a)
+}
+fn four(a: Number) Number {
+  return twice(twice(a))
+}
+fn eight(a: Number) Number {
+  return twice(four(a))
+}
+fn select(p: Point, q: Point, bit: u64) Point {
+  return Point{x:choose(p.x, q.x, bit), y:choose(p.y, q.y, bit), z:choose(p.z, q.z, bit)}
+}
+fn double(p: Point) Point {
+  delta:=sq(p.z)
+  gamma:=sq(p.y)
+  beta:=mul(p.x, gamma)
+  alpha:=mul(sub(p.x, delta), add(p.x, delta))
+  alpha=add(twice(alpha), alpha)
+  x:=sub(sq(alpha), eight(beta))
+  y:=sub(mul(alpha, sub(four(beta), x)), eight(sq(gamma)))
+  z:=sub(sub(sq(add(p.y, p.z)), gamma), delta)
+  return Point{x:x, y:y, z:z}
+}
+fn point_add(p: Point, q: Point) Point {
+  zz1:=sq(p.z)
+  zz2:=sq(q.z)
+  u1:=mul(p.x, zz2)
+  u2:=mul(q.x, zz1)
+  s1:=mul(p.y, mul(q.z, zz2))
+  s2:=mul(q.y, mul(p.z, zz1))
+  h:=sub(u2, u1)
+  i:=sq(twice(h))
+  j:=mul(h, i)
+  r:=twice(sub(s2, s1))
+  v:=mul(u1, i)
+  x:=sub(sub(sq(r), j), twice(v))
+  y:=sub(mul(r, sub(v, x)), twice(mul(s1, j)))
+  z:=mul(sub(sub(sq(add(p.z, q.z)), zz1), zz2), h)
+  result:=Point{x:x, y:y, z:z}
+  result=select(result, double(p), zero_bit(h)&zero_bit(r))
+  result=select(result, p, zero_bit(q.z))
+  return select(result, q, zero_bit(p.z))
+}
+fn scalar(point: Point, value: Number) Point {
+  result: Point
+  for step in 0..256 {
+    i:=255-step
+    result=double(result)
+    added:=point_add(result, point)
+    result=select(result, added, #cast(u64, (value.limbs[i/32]>>#cast(u32, i%32))&1))
+  }
+  return result
+}
+fn generator() Point {
+  return Point{x:Gx, y:Gy, z:one()}
+}
+fn affine(point: Point) Point {
+  inv:=inverse(point.z, P)
+  square:=sq(inv)
+  return Point{x:mul(point.x, square), y:mul(point.y, mul(square, inv)), z:one()}
+}
+struct Decoded { point: Point, ok: bool }
+fn public_point(public_key: []const u8) Decoded {
+  if #len(public_key)!=65 {
+    return Decoded{}
+  }
+  if public_key[0]!=4 {
+    return Decoded{}
+  }
+  q:=Point{x:decode(public_key[1..33]), y:decode(public_key[33..]), z:one()}
+  if !canonical(q.x, P) || !canonical(q.y, P) {
+    return Decoded{}
+  }
+  equation:=sub(add(mul(sq(q.x), q.x), B), add(twice(q.x), q.x))
+  if zero_bit(sub(sq(q.y), equation))==0 {
+    return Decoded{}
+  }
+  return Decoded{point:q, ok:true}
+}
+pub fn valid_public_key(public_key: []const u8) bool {
+  return public_point(public_key).ok
+}
+pub fn verify_hash(signature: []const u8, digest: []const u8, public_key: []const u8) bool {
+  if #len(signature)!=64 || #len(digest)!=32 || #len(public_key)!=65 {
+    return false
+  }
+  if public_key[0]!=4 {
+    return false
+  }
+  r:=decode(signature[..32])
+  s:=decode(signature[32..])
+  if zero_bit(r)!=0 || zero_bit(s)!=0 || !canonical(r, N) || !canonical(s, N) {
+    return false
+  }
+  decoded:=public_point(public_key)
+  if !decoded.ok {
+    return false
+  }
+  q:=decoded.point
+  z:=reduced(decode(digest), N)
+  w:=inverse(s, N)
+  first:=scalar(generator(), multiply(z, w, N))
+  second:=scalar(q, multiply(r, w, N))
+  sum:=point_add(first, second)
+  if zero_bit(sum.z)!=0 {
+    return false
+  }
+  x:=reduced(affine(sum).x, N)
+  borrow: u64
+  return zero_bit(subtract(x, r, &borrow))!=0
+}
+pub fn verify(signature: []const u8, message: []const u8, public_key: []const u8) bool {
+  digest: [32]u8
+  if #len(sha.sum256(digest[..], message))!=32 {
+    return false
+  }
+  return verify_hash(signature, digest[..], public_key)
+}
+pub fn public_key(output: []u8, private_key: []const u8) bool {
+  if #len(output)<65 || #len(private_key)!=32 || bytes.overlaps(output, private_key) {
+    return false
+  }
+  value:=decode(private_key)
+  if zero_bit(value)!=0 || !canonical(value, N) {
+    return false
+  }
+  point:=affine(scalar(generator(), value))
+  output[0]=4
+  encode(output[1..33], point.x)
+  encode(output[33..65], point.y)
+  return true
+}
+// RFC6979 deterministic ECDSA. Retry branches concern rejection-sampled nonce
+// candidates, not scalar multiplication bits. The raw signature is not low-S
+// normalized; both S representatives are valid ECDSA.
+pub fn sign_hash(output: []u8, digest: []const u8, private_key: []const u8) bool {
+  if #len(output)<64 || #len(digest)!=32 || #len(private_key)!=32 || bytes.overlaps(output, digest) || bytes.overlaps(output, private_key) {
+    return false
+  }
+  secret:=decode(private_key)
+  if zero_bit(secret)!=0 || !canonical(secret, N) {
+    return false
+  }
+  z:=reduced(decode(digest), N)
+  key: [32]u8
+  value: [32]u8
+  for i in 0..32 {
+    value[i]=1
+  }
+  material: [97]u8
+  for i in 0..32 {
+    material[i]=value[i]
+    material[i+33]=private_key[i]
+  }
+  encode(material[65..], z)
+  _=hmac.sha256(key[..], key[..], material[..])
+  _=hmac.sha256(value[..], key[..], value[..])
+  for i in 0..32 {
+    material[i]=value[i]
+  }
+  material[32]=1
+  _=hmac.sha256(key[..], key[..], material[..])
+  _=hmac.sha256(value[..], key[..], value[..])
+  for attempt in 0..128 {
+    _=hmac.sha256(value[..], key[..], value[..])
+    nonce:=decode(value[..])
+    if zero_bit(nonce)==0 && canonical(nonce, N) {
+      r:=reduced(affine(scalar(generator(), nonce)).x, N)
+      s:=multiply(inverse(nonce, N), plus(z, multiply(r, secret, N), N), N)
+      if zero_bit(r)==0 && zero_bit(s)==0 {
+        encode(output[..32], r)
+        encode(output[32..64], s)
+        return true
+      }
+    }
+    for i in 0..32 {
+      material[i]=value[i]
+    }
+    material[32]=0
+    _=hmac.sha256(key[..], key[..], material[..33])
+    _=hmac.sha256(value[..], key[..], value[..])
+  }
+  return false
+}
+pub fn sign(output: []u8, message: []const u8, private_key: []const u8) bool {
+  if bytes.overlaps(output, message) {
+    return false
+  }
+  digest: [32]u8
+  if #len(sha.sum256(digest[..], message))!=32 {
+    return false
+  }
+  return sign_hash(output, digest[..], private_key)
+}

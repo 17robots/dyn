@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Crypto result contracts against real providers and injected failures.
+"""Native crypto result contracts against published and independent vectors.
 
 AES vectors: NIST zero-key AES-256-GCM. ChaCha bytes were independently
 computed with OpenSSL EVP, never with the std wrapper under test.
@@ -132,7 +132,6 @@ fn main() {
 
 KEYS = r'''use "std/crypto/exchange" ex
 use "std/crypto/signature" sig
-use "vendor/openssl/crypto" raw
 use "std/bytes"
 use "std/errors"
 fn check(ok: bool) { if !ok { #panic("key contract") } }
@@ -148,7 +147,6 @@ fn main() {
   public: [32]u8 = [215, 90, 152, 1, 130, 177, 10, 183, 213, 75, 254, 211, 201, 100, 7, 58, 14, 225, 114, 243, 218, 166, 35, 37, 175, 2, 26, 104, 247, 7, 81, 26]
   signature: [64]u8 = [229, 86, 67, 0, 195, 96, 172, 114, 144, 134, 226, 204, 128, 110, 130, 138, 132, 135, 127, 30, 184, 229, 217, 116, 216, 115, 224, 101, 34, 73, 1, 85, 95, 184, 130, 21, 144, 163, 59, 172, 198, 30, 57, 112, 28, 249, 180, 107, 210, 91, 245, 240, 89, 91, 190, 36, 101, 81, 65, 67, 142, 122, 16, 11]
   output: [96]u8 = []
-  native_output: [96]u8 = []
   zero: [32]u8 = []
   zex := ex.Result{}
   zsig := sig.Result{}
@@ -275,75 +273,12 @@ fn main() {
     check(filled(output[..], 165))
   }
   fill(output[..])
-  native := raw.x25519_shared(native_output[..], alice[..], zero[..])
   failed := ex.x25519(output[..], alice[..], zero[..])
-  check(!native.ok && !failed.ok && failed.kind == errors.Kind.System && failed.error == 0 && #len(failed.value) == 0)
-  check(failed.provider_code == native.provider_code && failed.provider_code != 0)
+  check(!failed.ok && failed.kind == errors.Kind.System && failed.error == 0 && #len(failed.value) == 0)
+  check(failed.provider_code == 0)
   check(filled(output[..32], 0) && filled(output[32..], 165))
   check(bytes.equal(alice[..], alice[..]) && filled(zero[..], 0))
 }
-'''
-
-KEY_FAILURE = r'''use "exchange" ex
-use "signature" sig
-use "std/errors"
-fn check(ok: bool) { if !ok { #panic("fault contract") } }
-fn main() {
-  key: [32]u8 = []
-  peer: [32]u8 = []
-  output: [96]u8 = []
-  for mode in 0..2 {
-    key[0] = #cast(u8, mode)
-    code: u64 = 0
-    if mode == 1 { code = 18446744073709551615 }
-    for i in 0..96 { output[i] = 165 }
-    if true { r := ex.x25519_public(output[..], key[..])
-      check(!r.ok && r.kind == errors.Kind.System && r.error == 0 && r.provider_code == code && #len(r.value) == 0)
-      for i in 0..32 { check(output[i] == 0) }
-      for i in 32..96 { check(output[i] == 165) }
-      check(key[0] == #cast(u8, mode))
-    }
-    for i in 0..96 { output[i] = 165 }
-    if true { r := ex.x25519(output[..], key[..], peer[..])
-      check(!r.ok && r.kind == errors.Kind.System && r.error == 0 && r.provider_code == code && #len(r.value) == 0)
-      for i in 0..32 { check(output[i] == 0) }
-      for i in 32..96 { check(output[i] == 165) }
-      check(key[0] == #cast(u8, mode))
-    }
-    for i in 0..96 { output[i] = 165 }
-    if true { r := sig.ed25519_public(output[..], key[..])
-      check(!r.ok && r.kind == errors.Kind.System && r.error == 0 && r.provider_code == code && #len(r.value) == 0)
-      for i in 0..32 { check(output[i] == 0) }
-      for i in 32..96 { check(output[i] == 165) }
-      check(key[0] == #cast(u8, mode))
-    }
-    for i in 0..96 { output[i] = 165 }
-    if true { r := sig.ed25519_sign(output[..], "", key[..])
-      check(!r.ok && r.kind == errors.Kind.System && r.error == 0 && r.provider_code == code && #len(r.value) == 0)
-      for i in 0..64 { check(output[i] == 0) }
-      for i in 64..96 { check(output[i] == 165) }
-      check(key[0] == #cast(u8, mode))
-    }
-  }
-}
-'''
-
-KEY_PROVIDER = r'''pub struct KeyResult { written: usize, provider_code: u64, ok: bool }
-fn failure(destination: []u8, key: []const u8) KeyResult {
-  for i in 0..#len(destination) { destination[i] = 77 }
-  if key[0] == 0 { return KeyResult{} }
-  return KeyResult{ provider_code: 18446744073709551615 }
-}
-pub fn x25519_public(destination: []u8, private_key: []const u8) KeyResult { return failure(destination, private_key) }
-pub fn x25519_shared(destination: []u8, private_key: []const u8, peer: []const u8) KeyResult { _ = peer
-return failure(destination, private_key) }
-pub fn ed25519_public(destination: []u8, private_key: []const u8) KeyResult { return failure(destination, private_key) }
-pub fn ed25519_sign(destination: []u8, message: []const u8, private_key: []const u8) KeyResult { _ = message
-return failure(destination, private_key) }
-pub fn ed25519_verify(signature: []const u8, message: []const u8, public_key: []const u8) bool { _ = signature
-_ = message
-_ = public_key
-return false }
 '''
 
 
@@ -366,25 +301,9 @@ def project(root, name, source):
     return path
 
 
-def mocked_module(path, name):
-    # Copy the current wrapper, changing only its provider import.
-    source = (ROOT / "std/crypto" / name / (name + ".dyn")).read_text(encoding="utf-8")
-    source = source.replace('use "vendor/openssl/crypto" provider', 'use "stub" provider')
-    module = path / name
-    module.mkdir()
-    (module / (name + ".dyn")).write_text(source, encoding="utf-8")
-
-
 with tempfile.TemporaryDirectory(prefix="dyn-crypto-results-") as temporary:
     root = Path(temporary)
     cases = [project(root, "aead", AEAD), project(root, "keys", KEYS)]
-    fault = project(root, "key-failure", KEY_FAILURE)
-    mocked_module(fault, "exchange")
-    mocked_module(fault, "signature")
-    stub = fault / "stub"
-    stub.mkdir()
-    (stub / "stub.dyn").write_text(KEY_PROVIDER, encoding="utf-8")
-    cases.append(fault)
     cases.append(project(root, "sdk-aead", (ROOT.parent / "tests/sdk-aead/main.dyn").read_text(encoding="utf-8")))
     exhaustion = []
     for cipher in ("Aes256Gcm", "Chacha20Poly1305"):

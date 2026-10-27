@@ -1,0 +1,247 @@
+// RFC 8032 Ed25519. Fixed-schedule field/scalar arithmetic adapted from the
+// public-domain TweetNaCl (https://tweetnacl.cr.yp.to/20140427/tweetnacl.c).
+// Verification handles only public values. Machine constant-time qualification
+// of private operations remains target/compiler specific.
+use "std/crypto/curve25519" f
+use "std/crypto/sha512" sha
+use "std/bytes" bytes
+struct Point { x: f.Field, y: f.Field, z: f.Field, t: f.Field }
+const D: f.Field = f.Field{limbs: [0x78a3, 0x1359, 0x4dca, 0x75eb, 0xd8ab, 0x4141, 0x0a4d, 0x0070, 0xe898, 0x7779, 0x4079, 0x8cc7, 0xfe73, 0x2b6f, 0x6cee, 0x5203]}
+const D2: f.Field = f.Field{limbs: [0xf159, 0x26b2, 0x9b94, 0xebd6, 0xb156, 0x8283, 0x149a, 0x00e0, 0xd130, 0xeef3, 0x80f2, 0x198e, 0xfce7, 0x56df, 0xd9dc, 0x2406]}
+const X: f.Field = f.Field{limbs: [0xd51a, 0x8f25, 0x2d60, 0xc956, 0xa7b2, 0x9525, 0xc760, 0x692c, 0xdc5c, 0xfdd6, 0xe231, 0xc0a4, 0x53fe, 0xcd6e, 0x36d3, 0x2169]}
+const Y: f.Field = f.Field{limbs: [0x6658, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666, 0x6666]}
+const I: f.Field = f.Field{limbs: [0xa0b0, 0x4a0e, 0x1b27, 0xc4ee, 0xe478, 0xad2f, 0x1806, 0x2f43, 0xd7a7, 0x3dfb, 0x0099, 0x2b4d, 0xdf0b, 0x4fc1, 0x2480, 0x2b83]}
+const L: [32]i64 = [0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58, 0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde, 0x14, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x10]
+fn add(p: Point, q: Point) Point {
+  a:=f.multiply(f.sub(p.y, p.x), f.sub(q.y, q.x))
+  b:=f.multiply(f.add(p.x, p.y), f.add(q.x, q.y))
+  c:=f.multiply(f.multiply(p.t, q.t), D2)
+  d:=f.multiply(p.z, q.z)
+  twice:=f.add(d, d)
+  e:=f.sub(b, a)
+  ff:=f.sub(twice, c)
+  g:=f.add(twice, c)
+  h:=f.add(b, a)
+  return Point{x:f.multiply(e, ff), y:f.multiply(h, g), z:f.multiply(g, ff), t:f.multiply(e, h)}
+}
+fn swap(p: *Point, q: *Point, bit: i64) {
+  f.select(&p.x, &q.x, bit)
+  f.select(&p.y, &q.y, bit)
+  f.select(&p.z, &q.z, bit)
+  f.select(&p.t, &q.t, bit)
+}
+fn scalar(point: Point, key: []const u8) Point {
+  p:=Point{y:f.number(1), z:f.number(1)}
+  q:=point
+  for step in 0..256 {
+    i:=255-step
+    bit:=#cast(i64, (key[i/8] >> #cast(u8, i&7))&1)
+    swap(&p, &q, bit)
+    q=add(q, p)
+    p=add(p, p)
+    swap(&p, &q, bit)
+  }
+  return p
+}
+fn base(key: []const u8) Point {
+  return scalar(Point{x:X, y:Y, z:f.number(1), t:f.multiply(X, Y)}, key)
+}
+fn encode(output: []u8, point: Point) {
+  inverse:=f.inverse(point.z)
+  x:=f.multiply(point.x, inverse)
+  y:=f.multiply(point.y, inverse)
+  f.encode(output, y)
+  output[31] ^= #cast(u8, f.parity(x)*128)
+}
+fn modulo(output: []u8, wide: [64]i64) {
+  x:=wide
+  for step in 0..32 {
+    i:=63-step
+    carry: i64
+    for j in i-32..i-12 {
+      x[j]+=carry-16*x[i]*L[j-(i-32)]
+      carry=(x[j]+128)>>8
+      x[j]-=carry*256
+    }
+    x[i-12]+=carry
+    x[i]=0
+  }
+  carry: i64
+  for j in 0..32 {
+    x[j]+=carry-(x[31]>>4)*L[j]
+    carry=x[j]>>8
+    x[j]&=255
+  }
+  for j in 0..32 {
+    x[j]-=carry*L[j]
+  }
+  for i in 0..32 {
+    x[i+1]+=x[i]>>8
+    output[i]=#cast(u8, x[i]&255)
+  }
+}
+fn reduce(hash: []u8) {
+  wide: [64]i64
+  for i in 0..64 {
+    wide[i]=#cast(i64, hash[i])
+  }
+  modulo(hash, wide)
+}
+fn expand(key: []const u8) [64]u8 {
+  hash: [64]u8
+  _=sha.digest(hash[..], key)
+  hash[0]&=248
+  hash[31]=(hash[31]&127)|64
+  return hash
+}
+// Destination/input overlaps are rejected, including destination tails.
+pub fn public_key(output: []u8, key: []const u8) bool {
+  if #len(output)<32 || #len(key)!=32 || bytes.overlaps(output, key) {
+    return false
+  }
+  hash:=expand(key)
+  encode(output[..32], base(hash[..32]))
+  return true
+}
+pub fn sign(output: []u8, message: []const u8, key: []const u8) bool {
+  if #len(output)<64 || #len(key)!=32 || bytes.overlaps(output, key) || bytes.overlaps(output, message) {
+    return false
+  }
+  secret:=expand(key)
+  public: [32]u8
+  encode(public[..], base(secret[..32]))
+  state:=sha.init()
+  _=sha.update(&state, secret[32..])
+  _=sha.update(&state, message)
+  r: [64]u8
+  if #len(sha.finish(&state, r[..]))!=64 {
+    return false
+  }
+  reduce(r[..])
+  encoded: [32]u8
+  encode(encoded[..], base(r[..32]))
+  state=sha.init()
+  _=sha.update(&state, encoded[..])
+  _=sha.update(&state, public[..])
+  _=sha.update(&state, message)
+  h: [64]u8
+  if #len(sha.finish(&state, h[..]))!=64 {
+    return false
+  }
+  reduce(h[..])
+  wide: [64]i64
+  for i in 0..32 {
+    wide[i]=#cast(i64, r[i])
+  }
+  for i in 0..32 {
+    for j in 0..32 {
+      wide[i+j]+=#cast(i64, h[i])*#cast(i64, secret[j])
+    }
+  }
+  modulo(output[32..64], wide)
+  for i in 0..32 {
+    output[i]=encoded[i]
+  }
+  return true
+}
+struct Decoded { point: Point, ok: bool }
+fn decode(input: []const u8) Decoded {
+  y:=f.decode(input)
+  canonical: [32]u8
+  f.encode(canonical[..], y)
+  canonical[31]|=input[31]&128
+  if !bytes.equal(canonical[..], input) {
+    return Decoded{}
+  }
+  one:=f.number(1)
+  num:=f.sub(f.square(y), one)
+  den:=f.add(one, f.multiply(f.square(y), D))
+  den2:=f.square(den)
+  den4:=f.square(den2)
+  den6:=f.multiply(den4, den2)
+  t:=f.power2523(f.multiply(f.multiply(den6, num), den))
+  x:=f.multiply(f.multiply(f.multiply(f.multiply(t, num), den), den), den)
+  if !f.equal(f.multiply(f.square(x), den), num) {
+    x=f.multiply(x, I)
+  }
+  if !f.equal(f.multiply(f.square(x), den), num) {
+    return Decoded{}
+  }
+  if f.equal(x, f.number(0)) && input[31]&128!=0 {
+    return Decoded{}
+  }
+  // Decode the negated point, for [S]B-[h]A.
+  if f.parity(x)==#cast(i64, input[31]>>7) {
+    x=f.sub(f.number(0), x)
+  }
+  return Decoded{point:Point{x:x, y:y, z:one, t:f.multiply(x, y)}, ok:true}
+}
+fn public_point(key: []const u8) Decoded {
+  if #len(key)!=32 {
+    return Decoded{}
+  }
+  decoded:=decode(key)
+  if !decoded.ok {
+    return Decoded{}
+  }
+  // Reject identity and non-prime-subgroup public keys.
+  encoded: [32]u8
+  identity: [32]u8
+  identity[0]=1
+  encode(encoded[..], decoded.point)
+  if bytes.equal(encoded[..], identity[..]) {
+    return Decoded{}
+  }
+  order: [32]u8
+  for i in 0..32 {
+    order[i]=#cast(u8, L[i])
+  }
+  encode(encoded[..], scalar(decoded.point, order[..]))
+  if !bytes.equal(encoded[..], identity[..]) {
+    return Decoded{}
+  }
+  return decoded
+}
+pub fn valid_public_key(key: []const u8) bool {
+  return public_point(key).ok
+}
+pub fn verify(signature: []const u8, message: []const u8, key: []const u8) bool {
+  if #len(signature)!=64 || #len(key)!=32 {
+    return false
+  }
+  // S must be strictly less than the prime subgroup order.
+  less:=false
+  for step in 0..32 {
+    i:=31-step
+    if #cast(i64, signature[i+32])<L[i] {
+      less=true
+      break
+    }
+    if #cast(i64, signature[i+32])>L[i] {
+      return false
+    }
+  }
+  if !less {
+    return false
+  }
+  decoded:=public_point(key)
+  if !decoded.ok {
+    return false
+  }
+  encoded: [32]u8
+  if !decode(signature[..32]).ok {
+    return false
+  }
+  state:=sha.init()
+  _=sha.update(&state, signature[..32])
+  _=sha.update(&state, key)
+  _=sha.update(&state, message)
+  h: [64]u8
+  if #len(sha.finish(&state, h[..]))!=64 {
+    return false
+  }
+  reduce(h[..])
+  point:=add(scalar(decoded.point, h[..32]), base(signature[32..]))
+  encode(encoded[..], point)
+  return bytes.equal(encoded[..], signature[..32])
+}

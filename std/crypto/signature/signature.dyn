@@ -1,10 +1,12 @@
-use "vendor/openssl/crypto" provider
+use "std/crypto/p256" p256
+use "std/crypto/ed25519" native
 use "std/bytes"
 use "std/errors"
 
 // Fixed-size keys and signatures use caller storage by exception. Successful
 // values borrow destination; failures return an empty value. Validation leaves
-// storage untouched. Provider failures clear only the intended output prefix.
+// storage untouched. Arithmetic failures clear only the intended output prefix.
+// error and provider_code remain zero for this native implementation.
 pub struct Result {
   value: []u8,
   ok: bool,
@@ -13,14 +15,14 @@ pub struct Result {
   provider_code: u64,
 }
 
-fn result(destination: []u8, native: provider.KeyResult) Result {
-  if !native.ok {
+fn result(destination: []u8, ok: bool) Result {
+  if !ok {
     for i in 0..#len(destination) {
       destination[i] = 0
     }
-    return Result{ kind: errors.Kind.System, provider_code: native.provider_code }
+    return Result{kind: errors.Kind.System}
   }
-  return Result{ value: destination[..native.written], ok: true, provider_code: native.provider_code }
+  return Result{value: destination, ok: true}
 }
 
 // Destination must not overlap any borrowed input, including in its tail.
@@ -31,7 +33,7 @@ pub fn ed25519_public(destination: []u8, private_key: []const u8) Result {
   if bytes.overlaps(destination, private_key) {
     return Result{ kind: errors.Kind.InvalidInput }
   }
-  return result(destination[..32], provider.ed25519_public(destination[..32], private_key))
+  return result(destination[..32], native.public_key(destination[..32], private_key))
 }
 pub fn ed25519_sign(destination: []u8, message: []const u8, private_key: []const u8) Result {
   if #len(destination) < 64 || #len(private_key) != 32 {
@@ -40,8 +42,27 @@ pub fn ed25519_sign(destination: []u8, message: []const u8, private_key: []const
   if bytes.overlaps(destination, private_key) || bytes.overlaps(destination, message) {
     return Result{ kind: errors.Kind.InvalidInput }
   }
-  return result(destination[..64], provider.ed25519_sign(destination[..64], message, private_key))
+  return result(destination[..64], native.sign(destination[..64], message, private_key))
 }
 pub fn ed25519_verify(signature: []const u8, message: []const u8, public_key: []const u8) bool {
-  return provider.ed25519_verify(signature, message, public_key)
+  return native.verify(signature, message, public_key)
+}
+
+// P-256 private keys are 32-byte big-endian scalars in 1..n-1. Public keys are
+// 65-byte SEC1 uncompressed points; signatures are 64-byte big-endian r || s.
+// Invalid key, length or overlap leaves the entire destination unchanged.
+pub fn p256_public(destination: []u8, private_key: []const u8) Result {
+  if !p256.public_key(destination, private_key) {
+    return Result{kind: errors.Kind.InvalidInput}
+  }
+  return Result{value: destination[..65], ok: true}
+}
+pub fn p256_sign(destination: []u8, message: []const u8, private_key: []const u8) Result {
+  if !p256.sign(destination, message, private_key) {
+    return Result{kind: errors.Kind.InvalidInput}
+  }
+  return Result{value: destination[..64], ok: true}
+}
+pub fn p256_verify(signature: []const u8, message: []const u8, public_key: []const u8) bool {
+  return p256.verify(signature, message, public_key)
 }
