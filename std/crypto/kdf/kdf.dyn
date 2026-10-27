@@ -1,4 +1,5 @@
 use "std/crypto/core" crypto_core
+use "std/bytes" bytes
 
 pub fn hkdf_extract(destination: []u8, salt: []const u8, input_key_material: []const u8) []u8 {
   if #len(destination) < 32 {
@@ -13,8 +14,14 @@ pub fn hkdf_extract(destination: []u8, salt: []const u8, input_key_material: []c
 }
 
 // scratch needs 32 + len(info) + 1 bytes. Maximum output is 255 SHA-256 blocks.
+// Destination and scratch must not overlap each other or the borrowed key/info,
+// including unused slice tails. Validation failure leaves all storage unchanged.
 pub fn hkdf_expand(destination: []u8, pseudorandom_key: []const u8, info: []const u8, scratch: []u8) bool {
-  if #len(pseudorandom_key) < 32 || #len(destination) > 8160 || #len(scratch) < 33 + #len(info) {
+  limit: u64 = 2305843009213693951
+  if #len(pseudorandom_key) < 32 || #cast(u64, #len(pseudorandom_key)) > limit || #len(destination) > 8160 || #len(info) > ~#cast(usize, 0) - 33 || #cast(u64, #len(info)) > limit - 97 || #len(scratch) < 33 + #len(info) {
+    return false
+  }
+  if bytes.overlaps(destination, scratch) || bytes.overlaps(destination, pseudorandom_key) || bytes.overlaps(destination, info) || bytes.overlaps(scratch, pseudorandom_key) || bytes.overlaps(scratch, info) {
     return false
   }
   previous: [32]u8 = []
