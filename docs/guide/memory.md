@@ -79,7 +79,10 @@ returns an empty slice on exhaustion or size overflow. The untyped
 `mem.arena_try_push` returns an `Allocation` with the error kind. Failure preserves the offset and existing payload bytes, but
 increments the failure counter and can record an observation event. A lazy
 owned arena may retain newly acquired backing after a failed oversized push;
-Windows commitment failure still panics. Use `arena_from_buffer` for a fixed
+Windows commitment failure returns `System` from fallible pushes.
+`arena_try_create(capacity)` returns an `ArenaCreation` with an owning `arena`,
+`ok`, error kind and system code; failed creation leaves an empty owner.
+Use `arena_from_buffer` for a fixed
 budget without OS allocation. A zero-byte push with valid alignment succeeds
 without acquiring backing.
 
@@ -88,6 +91,7 @@ expected outcome:
 
 | Recoverable | Fatal |
 | --- | --- |
+| `arena_try_create` | `arena_create` |
 | `try_push` / `try_push_array` / `arena_try_push` | every other arena push |
 | `growing_try_push` / `growing_try_push_uninit` | `growing_push` |
 

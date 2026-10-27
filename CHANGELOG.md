@@ -14,6 +14,8 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- Added `std/mem.arena_try_create` for recoverable backing reservation. Fallible arena pushes and extension now return failure on Windows commitment refusal; growing arenas roll back failed backing/header/payload acquisition before publishing a block.
+
 - Shaped text now exposes visual selection rectangles for logical UTF-8 ranges, preserving bidi gaps and expanding touched ligatures/graphemes atomically.
 
 - Added optional FriBidi paragraph resolution and HarfBuzz shaped layout with script/font runs, grapheme-safe wrapping and source-cluster queries. HarfBuzz now supports explicit run properties and full-line context; FreeType exposes scalable-face metrics.

@@ -38,22 +38,32 @@ pub fn arena_from_buffer(backing: []u8) Arena {
   return Arena{ data: backing, offset: 0, fixed_buffer: true }
 }
 
+pub struct ArenaCreation { arena: Arena, error: ErrorKind, code: isize, ok: bool }
+
+// Failure returns an empty, releasable owner without reserving backing.
+pub fn arena_try_create(capacity: usize) ArenaCreation {
+  if capacity == 0 { return ArenaCreation{ error: ErrorKind.Capacity } }
+  mapping := mapping_allocate(capacity)
+  if !mapping.ok {
+    return ArenaCreation{ error: ErrorKind.System, code: mapping.error }
+  }
+  return ArenaCreation{
+    arena: Arena{ data: mapping.bytes, owns_memory: true, committed: mapping.committed },
+    ok: true,
+  }
+}
+
 // Reserves capacity bytes of address space for an owning arena. Pages cost
 // memory only once pushes reach them, so reserve generously: a GiB or more is
 // normal on 64-bit targets. wasm32 has no reservation and backs it right away.
-// Panics when the OS refuses the reservation or capacity is zero; there is
-// nothing useful to do when address space is gone. A zero Arena{} works too: its
+// Panics when the OS refuses the reservation or capacity is zero.
+// Use arena_try_create for recoverable failure. A zero Arena{} works too: its
 // first push reserves 64 GiB of address space (4 MiB on wasm32). Release it
 // with arena_release either way.
 pub fn arena_create(capacity: usize) Arena {
-  if capacity == 0 {
-    #panic("arena capacity must be nonzero")
-  }
-  mapping := mapping_allocate(capacity)
-  if !mapping.ok {
-    #panic("cannot reserve arena memory")
-  }
-  return Arena{ data: mapping.bytes, owns_memory: true, committed: mapping.committed }
+  result := arena_try_create(capacity)
+  if !result.ok { #panic("cannot reserve arena memory") }
+  return result.arena
 }
 struct Mapping { bytes: []u8, committed: usize, error: isize, ok: bool }
 // Releases owned backing, or clears a borrowed arena without freeing its storage.
@@ -73,15 +83,16 @@ pub fn arena_release(arena: *Arena) {
 const CommitStep: usize = 1048576
 
 // Commits owned backing through end, in CommitStep pieces. Windows only in practice.
-fn arena_commit(arena: *Arena, end: usize) {
+fn arena_commit(arena: *Arena, end: usize) bool {
   target := align_size(end, CommitStep)
   if target > #len(arena.data) || target < end {
     target = #len(arena.data)
   }
   if !mapping_commit(arena.data, arena.committed, target) {
-    #panic("cannot commit arena memory")
+    return false
   }
   arena.committed = target
+  return true
 }
 
 pub fn arena_capacity(arena: *const Arena) usize {
@@ -235,7 +246,7 @@ fn arena_try_push_impl(arena: *Arena, size: usize, alignment: usize, zero_memory
 
   end := arena.offset + padding + size
   if arena.owns_memory && end > arena.committed {
-    arena_commit(arena, end)
+    if !arena_commit(arena, end) { return arena_failure(arena, ErrorKind.System) }
   }
   memory := &available[padding]
   arena.offset = end
@@ -267,7 +278,7 @@ pub fn arena_try_extend(arena: *Arena, memory: *u8, size: usize, extra: usize) b
   }
   end := arena.offset + extra
   if arena.owns_memory && end > arena.committed {
-    arena_commit(arena, end)
+    if !arena_commit(arena, end) { return false }
   }
   zero_bytes_fast(arena.data[arena.offset..end])
   arena.offset = end
@@ -716,16 +727,29 @@ fn growing_push_impl(arena: *GrowingArena, size: usize, alignment: usize, zero_m
   }
   capacity += alignment - 1
   retained := arena.backing_bytes
+  if capacity > maximum - retained { return Allocation{ error: ErrorKind.Overflow } }
   if arena.capacity_limit != 0 && (retained > arena.capacity_limit || capacity > arena.capacity_limit - retained) {
     return Allocation{ error: ErrorKind.Capacity }
   }
-  created := arena_create(capacity)
-  header := arena_push(&created, #sizeof(Block), #alignof(Block))
-  block = #cast(*Block, header)
+  creation := arena_try_create(capacity)
+  if !creation.ok { return Allocation{ error: creation.error, code: creation.code } }
+  created := arena_take(&creation.arena)
+  header := arena_try_push(&created, #sizeof(Block), #alignof(Block))
+  if !header.ok {
+    arena_release(&created)
+    return header
+  }
+  start := arena_mark(&created)
+  payload := arena_try_push_impl(&created, size, alignment, zero_memory)
+  if !payload.ok {
+    arena_release(&created)
+    return payload
+  }
+  block = #cast(*Block, header.memory)
   block.arena = created
-  block.start = arena_mark(&block.arena)
+  block.start = start
   // Capacity above includes worst-case header and payload alignment padding.
-  // Publish ownership before the push so even a broken invariant cannot orphan it.
+  // Publish only after both allocations succeed; failure leaves the chain intact.
   if last != nil {
     last.next = block
   }
@@ -734,7 +758,7 @@ fn growing_push_impl(arena: *GrowingArena, size: usize, alignment: usize, zero_m
   }
   arena.current = block
   arena.backing_bytes += capacity
-  return arena_try_push_impl(&block.arena, size, alignment, zero_memory)
+  return payload
 }
 
 // Ownership: result borrows growing arena storage; growth preserves earlier pointers.

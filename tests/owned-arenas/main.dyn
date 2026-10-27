@@ -2,6 +2,19 @@ use "std/mem"
 fn expect(condition: bool, message: []const u8) { if !condition { #panic(message) } }
 
 fn main() {
+  empty := mem.arena_try_create(0)
+  expect(!empty.ok && mem.arena_capacity(&empty.arena) == 0, "zero capacity is fallible")
+  mem.arena_release(&empty.arena)
+  refused := mem.arena_try_create(#cast(usize, -1))
+  expect(!refused.ok && mem.arena_capacity(&refused.arena) == 0, "impossible reservation is fallible")
+  mem.arena_release(&refused.arena)
+  failed_chain := mem.growing_create(#cast(usize, 1) << 62)
+  failure := mem.growing_try_push(&failed_chain, 8, 8)
+  expect(!failure.ok && failed_chain.first == nil && failed_chain.backing_bytes == 0, "system failure preserves growing owner")
+  mem.growing_release(&failed_chain)
+  successful := mem.arena_try_create(64)
+  expect(successful.ok, "fallible creation succeeds")
+  mem.arena_release(&successful.arena)
   created := mem.arena_create(128)
   arena := &created
   allocation := mem.arena_push(arena, 128, 1)
