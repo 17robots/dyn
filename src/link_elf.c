@@ -1327,7 +1327,11 @@ static bool preemptible(const Linker *linker, const LinkSymbol *symbol) {
   if (symbol->defined)
     return linker->shared_output && symbol->binding != STB_LOCAL && symbol->visibility == STV_DEFAULT &&
            !symbol->absolute;
-  return symbol->shared || (linker->shared_output && symbol->referenced && symbol->visibility == STV_DEFAULT);
+  /* A hidden reference binds inside this module, even if a dependency exports
+     the same name. In particular, runtime unwind boundary references are
+     defined by this linker after layout, not imported from another DSO. */
+  return symbol->visibility == STV_DEFAULT &&
+         (symbol->shared || (linker->shared_output && symbol->referenced));
 }
 static bool function_like(const LinkSymbol *symbol) {
   return symbol->shared_type == STT_FUNC || symbol->shared_type == STT_GNU_IFUNC;
