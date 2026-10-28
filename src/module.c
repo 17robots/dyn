@@ -634,11 +634,15 @@ static int visit(Resolver *r, const char *directory,
   result = extract_interface(r, directory, sources);
   char **aliases = NULL, **targets = NULL;
   size_t alias_count = 0, target_count = 0;
+  char **paths = NULL;
+  size_t path_count = 0;
   for (size_t si = 0; si < sources->count && !result; ++si) {
     if (!dyn_work_step(&r->context, 1)) { result = 2; break; }
     if (dyn_source_target_enabled(&sources->items[si]) == 0)
       continue;
     const DynSource *s = &sources->items[si];
+    char **file_aliases = NULL, **file_targets = NULL;
+    size_t file_alias_count = 0, file_target_count = 0;
     DynImports imports;
     if (!dyn_imports_open(&imports, s)) { result = 2; break; }
     DynImportView item;
@@ -649,7 +653,9 @@ static int visit(Resolver *r, const char *directory,
           result = 1;
           break;
         }
-        char *target = resolve(r, directory, path);
+        size_t cached = alias_index(paths, path_count, path);
+        char *target = cached < path_count ? strdup(targets[cached])
+                                           : resolve(r, directory, path);
         char *alias = item.alias_node ? dyn_import_copy(item.alias, item.alias_length)
                                       : dyn_path_basename(path);
         if (!alias) {
@@ -658,13 +664,15 @@ static int visit(Resolver *r, const char *directory,
           result = 2;
           break;
         }
-        if (has(aliases, alias_count, alias)) {
+        size_t existing = alias_index(aliases, alias_count, alias);
+        if (has(file_aliases, file_alias_count, alias) ||
+            (existing < alias_count && target && strcmp(targets[existing], target))) {
           char message[512];
           snprintf(message, sizeof(message), "duplicate import alias '%s'",
                    alias);
           dyn_diagnostic_source("error", s, item.start, item.end, message);
           result = 1;
-        } else if (!target || !dyn_path_is_directory(target)) {
+        } else if (!target || (cached == path_count && !dyn_path_is_directory(target))) {
           char message[512];
           if (!strncmp(path, "std/", 4) || !strncmp(path, "vendor/", 7))
             snprintf(message, sizeof(message),
@@ -695,7 +703,7 @@ static int visit(Resolver *r, const char *directory,
           dyn_diagnostic_source("error", s, item.start, item.end, message);
           result = 1;
         } else {
-          if (s->context.vet && has(targets, target_count, target)) {
+          if (s->context.vet && has(file_targets, file_target_count, target)) {
             char message[512];
             snprintf(
                 message, sizeof(message),
@@ -704,10 +712,18 @@ static int visit(Resolver *r, const char *directory,
             dyn_diagnostic_source("warning", s, item.start, item.end, message);
             if (s->context.vet_findings) ++*s->context.vet_findings;
           }
-          if (!push(&aliases, &alias_count, alias) ||
-              !push(&targets, &target_count, target))
+          /* File declarations retain their diagnostics. Module bindings and
+             dependency visits are shared across all files in the directory. */
+          bool known_target = has(targets, target_count, target);
+          if (!push(&file_aliases, &file_alias_count, alias) ||
+              !push(&file_targets, &file_target_count, target))
             result = 2;
-          else
+          else if (existing == alias_count &&
+                   (!push(&aliases, &alias_count, alias) ||
+                    !push(&targets, &target_count, target) ||
+                    !push(&paths, &path_count, path)))
+            result = 2;
+          else if (!known_target)
             result = visit(r, target, NULL);
         }
         free(path);
@@ -716,7 +732,12 @@ static int visit(Resolver *r, const char *directory,
     }
     if (imports.failed) result = 2;
     dyn_imports_close(&imports);
+    for (size_t i = 0; i < file_alias_count; ++i) free(file_aliases[i]);
+    for (size_t i = 0; i < file_target_count; ++i) free(file_targets[i]);
+    free(file_aliases); free(file_targets);
   }
+  for (size_t i = 0; i < path_count; ++i) free(paths[i]);
+  free(paths);
   size_t first_out = r->out ? r->out->count : 0;
   for (size_t si = 0; si < sources->count && !result && !r->defer_refs; ++si) {
     if (!dyn_work_step(&r->context, 1)) { result = 2; break; }
@@ -799,15 +820,22 @@ static bool prefetch_seen(const Resolver *r, const char *directory) {
    skipped here; visit reports them. */
 static bool prefetch_imports(Resolver *r, const char *directory,
                              const DynSources *sources) {
-  for (size_t si = 0; si < sources->count; ++si) {
+  char **paths = NULL;
+  size_t path_count = 0;
+  bool success = true;
+  for (size_t si = 0; si < sources->count && success; ++si) {
     const DynSource *s = &sources->items[si];
     if (dyn_source_target_enabled(s) != 1 || !s->compact) continue;
     DynImports imports;
-    if (!dyn_imports_open(&imports, s)) return false;
+    if (!dyn_imports_open(&imports, s)) { success = false; break; }
     DynImportView item;
     bool ok = true;
     while (dyn_imports_next(&imports, &item)) {
         char *path = dyn_import_copy(item.path, item.path_length);
+        if (path && has(paths, path_count, path)) { free(path); continue; }
+        if (path && !push(&paths, &path_count, path)) {
+          free(path); ok = false; break;
+        }
         bool oom = !path && item.path_node;
         char *target = path ? resolve_checked(r, directory, path, &oom) : NULL;
         free(path);
@@ -823,10 +851,11 @@ static bool prefetch_imports(Resolver *r, const char *directory,
     }
     if (imports.failed) ok = false;
     dyn_imports_close(&imports);
-    if (!ok)
-      return false;
+    success = ok;
   }
-  return true;
+  for (size_t i = 0; i < path_count; ++i) free(paths[i]);
+  free(paths);
+  return success;
 }
 /* Parse the import graph breadth first; each wave loads in parallel.
    Only allocation failure is an error: anything else is left for visit. */

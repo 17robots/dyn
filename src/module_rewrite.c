@@ -18,6 +18,7 @@ typedef struct {
 typedef struct {
   char *name;
   char *target;
+  char *path;
 } Alias;
 typedef struct {
   char *dir;
@@ -132,15 +133,19 @@ static bool add_decl(Module *m, const char *name) {
   m->decl_buckets[slot] = m->decl_count;
   return true;
 }
-static bool add_alias(Module *m, const char *name, const char *target) {
+static bool add_alias(Module *m, const char *name, const char *target, const char *path) {
+  for (size_t i = 0; i < m->alias_count; ++i)
+    if (!strcmp(m->aliases[i].name, name))
+      return !strcmp(m->aliases[i].target, target);
   Alias *p = realloc(m->aliases, (m->alias_count + 1) * sizeof(*p));
   if (!p)
     return false;
   m->aliases = p;
-  p[m->alias_count] = (Alias){strdup(name), strdup(target)};
-  if (!p[m->alias_count].name || !p[m->alias_count].target) {
+  p[m->alias_count] = (Alias){strdup(name), strdup(target), strdup(path)};
+  if (!p[m->alias_count].name || !p[m->alias_count].target || !p[m->alias_count].path) {
     free(p[m->alias_count].name);
     free(p[m->alias_count].target);
+    free(p[m->alias_count].path);
     p[m->alias_count] = (Alias){0};
     return false;
   }
@@ -346,6 +351,7 @@ static void free_modules(Module *m, size_t count) {
     for (size_t j = 0; j < m[i].alias_count; ++j) {
       free(m[i].aliases[j].name);
       free(m[i].aliases[j].target);
+      free(m[i].aliases[j].path);
     }
     free(m[i].aliases);
   }
@@ -407,10 +413,17 @@ static bool compact_rewrite_imports(const DynSource *source, Module *module, con
   bool ok = true;
   while (ok && dyn_imports_next(&reader, &view)) {
     char *path = dyn_import_copy(view.path, view.path_length);
-    char *target = path ? dyn_module_resolve_import(&source->context, root, module->dir, path) : NULL;
+    const char *cached = NULL;
+    for (size_t i = 0; path && i < module->alias_count; ++i)
+      if (!strcmp(module->aliases[i].path, path)) {
+        cached = module->aliases[i].target;
+        break;
+      }
+    char *target = cached ? strdup(cached) :
+        (path ? dyn_module_resolve_import(&source->context, root, module->dir, path) : NULL);
     char *alias = view.alias_node ? dyn_import_copy(view.alias, view.alias_length)
                                  : dyn_path_basename(path ? path : "");
-    ok = target && alias && add_alias(module, alias, target);
+    ok = target && alias && add_alias(module, alias, target, path);
     free(path); free(target); free(alias);
   }
   ok = ok && !reader.failed;

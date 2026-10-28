@@ -7,7 +7,12 @@ the [language reference](language.md); for the standard library, see [std](std.m
 
 A directory is one module. All immediate `.dyn` files share a namespace. Put the executable entry
 point in `main.dyn`; it must be exactly `fn main()` (optionally `pub`). Import other modules with
-`use`, and qualify imported declarations.
+`use`, and qualify imported declarations. Import aliases are shared by all files in the
+module. Repeating an alias for the same module in another file is accepted and
+internally deduplicated; different aliases may also refer to the same module.
+An alias cannot refer to different modules. Duplicate aliases within one file are
+errors; importing the same module under multiple aliases within one file is a
+`dyn vet` finding.
 
 ```dyn
 use "std/io"

@@ -14,6 +14,8 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- Imports retain module-wide visibility. Repeated identical imports across files are accepted and deduplicated, and importing the same module under different aliases in separate files no longer produces a vet finding. Conflicting alias targets remain errors, as do duplicate aliases within one file; same-file duplicate-module vet findings remain. No import migration is required.
+
 - Added `std/mem.arena_try_create` for recoverable backing reservation and `arena_try_push_uninit` for fallible allocation without eagerly initializing payload bytes. Fallible arena pushes and extension now return failure on Windows commitment refusal; growing arenas roll back failed backing/header/payload acquisition before publishing a block.
 
 - Shaped text now exposes visual selection rectangles for logical UTF-8 ranges, preserving bidi gaps and expanding touched ligatures/graphemes atomically.
