@@ -15,7 +15,10 @@ try:
         with (OUT/(name+'.log')).open('w') as log:
             result=subprocess.run(command,cwd=ROOT,stdout=log,stderr=subprocess.STDOUT,timeout=1800)
         report['stages'].append(dict(name=name,status='passed' if result.returncode==0 else 'failed',seconds=time.monotonic()-start))
-        if result.returncode:raise RuntimeError(name+' failed; see '+str(OUT/(name+'.log')))
+        if result.returncode:
+            # CI keeps no build directory; show the failing tail in the job log.
+            print(''.join((OUT/(name+'.log')).read_text(errors='replace').splitlines(True)[-80:]),flush=True)
+            raise RuntimeError(name+' failed; see '+str(OUT/(name+'.log')))
     package=json.loads((BUILD/'dist/package-validation.json').read_text())
     destination=OUT/'artifacts';destination.mkdir()
     archive=destination/package['archive'];shutil.copy2(BUILD/'dist'/archive.name,archive)
