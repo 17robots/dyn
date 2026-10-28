@@ -634,8 +634,9 @@ static int visit(Resolver *r, const char *directory,
   result = extract_interface(r, directory, sources);
   char **aliases = NULL, **targets = NULL;
   size_t alias_count = 0, target_count = 0;
-  char **paths = NULL;
-  size_t path_count = 0;
+  /* Resolved import paths, shared by every file whatever alias they use. */
+  char **paths = NULL, **resolved = NULL;
+  size_t path_count = 0, resolved_count = 0;
   for (size_t si = 0; si < sources->count && !result; ++si) {
     if (!dyn_work_step(&r->context, 1)) { result = 2; break; }
     if (dyn_source_target_enabled(&sources->items[si]) == 0)
@@ -654,7 +655,7 @@ static int visit(Resolver *r, const char *directory,
           break;
         }
         size_t cached = alias_index(paths, path_count, path);
-        char *target = cached < path_count ? strdup(targets[cached])
+        char *target = cached < path_count ? strdup(resolved[cached])
                                            : resolve(r, directory, path);
         char *alias = item.alias_node ? dyn_import_copy(item.alias, item.alias_length)
                                       : dyn_path_basename(path);
@@ -720,8 +721,11 @@ static int visit(Resolver *r, const char *directory,
             result = 2;
           else if (existing == alias_count &&
                    (!push(&aliases, &alias_count, alias) ||
-                    !push(&targets, &target_count, target) ||
-                    !push(&paths, &path_count, path)))
+                    !push(&targets, &target_count, target)))
+            result = 2;
+          else if (cached == path_count &&
+                   (!push(&paths, &path_count, path) ||
+                    !push(&resolved, &resolved_count, target)))
             result = 2;
           else if (!known_target)
             result = visit(r, target, NULL);
@@ -737,7 +741,8 @@ static int visit(Resolver *r, const char *directory,
     free(file_aliases); free(file_targets);
   }
   for (size_t i = 0; i < path_count; ++i) free(paths[i]);
-  free(paths);
+  for (size_t i = 0; i < resolved_count; ++i) free(resolved[i]);
+  free(paths); free(resolved);
   size_t first_out = r->out ? r->out->count : 0;
   for (size_t si = 0; si < sources->count && !result && !r->defer_refs; ++si) {
     if (!dyn_work_step(&r->context, 1)) { result = 2; break; }
