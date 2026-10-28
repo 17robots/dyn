@@ -93,16 +93,16 @@ fn json_document(source: []const u8, expected: bool) {
   // Arena exhaustion panics, so one roomy arena covers acceptance and rollback.
   backing: [4096]u8 = []
   arena := mem.arena_from_buffer(backing[..])
-  prefix := mem.arena_push(&arena, 7, 1)
+  prefix := mem.arena_push(arena, 7, 1)
   for i in 0..7 {
     prefix[..7][i] = 91
   }
-  mark := mem.arena_mark(&arena)
-  parsed := json.parse(&arena, source)
+  mark := mem.arena_mark(arena)
+  parsed := json.parse(arena, source)
   if parsed.ok != expected {
     #panic("JSON parse UTF8 result")
   }
-  if !parsed.ok && mem.arena_mark(&arena) != mark {
+  if !parsed.ok && mem.arena_mark(arena) != mark {
     #panic("JSON allocation rollback")
   }
   for byte in prefix[..7] {
@@ -137,7 +137,7 @@ fn json_bytes(value: []const u8, expected: bool) {
   json_document(quoted[..length], expected)
   arena_storage: [512]u8 = []
   arena := mem.arena_from_buffer(arena_storage[..])
-  string_value := json.make_string(&arena, value)
+  string_value := json.make_string(arena, value)
   if string_value == nil {
     #panic("JSON test string allocation")
   }
@@ -152,8 +152,8 @@ fn json_bytes(value: []const u8, expected: bool) {
     object[length+1+i] = tail[i]
   }
   json_document(object[..length+1+#len(tail)], expected)
-  object_value := json.make_object(&arena)
-  child := json.make_null(&arena)
+  object_value := json.make_object(arena)
+  child := json.make_null(arena)
   if object_value == nil || child == nil || !json.add_member(object_value, value, child) {
     #panic("JSON test member allocation")
   }
@@ -167,14 +167,14 @@ fn json_bytes(value: []const u8, expected: bool) {
   }
   object[#len(head)+length] = '}'
   json_document(object[..#len(head)+length+1], expected)
-  storage: [64]u8 = []
+  storage: [64 + mem.ArenaBufferOverhead]u8 = []
   output := mem.arena_from_buffer(storage[..])
-  written := json.write_string(&output, value)
+  written := json.write_string(output, value)
   if !expected {
-    if #len(written) != 0 || mem.arena_used(&output) != 0 {
+    if #len(written) != 0 || mem.arena_used(output) != 0 {
       #panic("JSON writes invalid UTF8")
     }
-  } else if !bytes.equal(written, quoted[..length]) || mem.arena_used(&output) != length {
+  } else if !bytes.equal(written, quoted[..length]) || mem.arena_used(output) != length {
     #panic("JSON UTF8 roundtrip")
   }
 }

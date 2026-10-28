@@ -74,10 +74,24 @@ pub fn set_surrounding_text(window: *Window, context: Surrounding) Result {
   return native.set_surrounding_text(window, context)
 }
 
-pub fn set_title(window: *Window, title: []const u8) Result { return native.set_title(window,title) }
-pub fn set_size(window: *Window, width, height: i32) Result { return native.set_size(window,width,height) }
-pub fn set_swap_interval(window: *Window, interval: i32) Result { return native.set_swap_interval(window,interval) }
-pub fn try_set_clipboard(window: *Window, text: []const u8) Result { return native.try_set_clipboard(window,text) }
-pub fn request_paste_snapshot(window: *Window) { native.request_paste_snapshot(window) }
-pub fn paste_pending(window: *const Window) bool { return native.paste_pending(window) }
-pub fn paste_status(window: *const Window) Result { return native.paste_status(window) }
+pub fn set_title(window: *Window, title: []const u8) Result {
+  return native.set_title(window, title)
+}
+pub fn set_size(window: *Window, width, height: i32) Result {
+  return native.set_size(window, width, height)
+}
+pub fn set_swap_interval(window: *Window, interval: i32) Result {
+  return native.set_swap_interval(window, interval)
+}
+pub fn try_set_clipboard(window: *Window, text: []const u8) Result {
+  return native.try_set_clipboard(window, text)
+}
+pub fn request_paste_snapshot(window: *Window) {
+  native.request_paste_snapshot(window)
+}
+pub fn paste_pending(window: *const Window) bool {
+  return native.paste_pending(window)
+}
+pub fn paste_status(window: *const Window) Result {
+  return native.paste_status(window)
+}

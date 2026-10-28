@@ -16,55 +16,55 @@ use "std/fs" fs
 use "std/errors" errors
 fn check(ok: bool) { if !ok { #panic("WAV contract") } }
 fn main() {
-  arena := mem.Arena{}
-  defer { mem.arena_release(&arena) }
+  arena := mem.arena_create(0)
+  defer { mem.arena_release(arena) }
   samples: [6]f32 = [-1.0,-0.5,0.0,0.25,0.5,1.0]
   audio := wav.Audio{ samples: samples[..], rate: 48000, channels: 2 }
   formats: [5]wav.Encoding = [wav.Encoding.Pcm8,wav.Encoding.Pcm16,wav.Encoding.Pcm24,wav.Encoding.Pcm32,wav.Encoding.Float32]
   paths: [5][]const u8 = ["8.wav","16.wav","24.wav","32.wav","float.wav"]
   for i in 0..5 {
-    encoded := wav.encode(&arena, &audio, formats[i])
+    encoded := wav.encode(arena, &audio, formats[i])
     check(encoded.ok && fs.write_all(paths[i],encoded.value).ok)
-    decoded := wav.decode(&arena, encoded.value)
+    decoded := wav.decode(arena, encoded.value)
     check(decoded.ok && decoded.value.rate == 48000 && decoded.value.channels == 2 && #len(decoded.value.samples) == 6)
     for j in 0..6 {
       difference := decoded.value.samples[j] - samples[j]
       check(difference >= -0.008 && difference <= 0.008)
     }
-    before := mem.arena_mark(&arena)
+    before := mem.arena_mark(arena)
     for length in 0..#len(encoded.value) {
-      bad := wav.decode(&arena, encoded.value[..length])
-      check(!bad.ok && mem.arena_mark(&arena) == before)
+      bad := wav.decode(arena, encoded.value[..length])
+      check(!bad.ok && mem.arena_mark(arena) == before)
     }
   }
   audio.channel_mask = 3
-  extended := wav.encode(&arena, &audio, wav.Encoding.Pcm24)
+  extended := wav.encode(arena, &audio, wav.Encoding.Pcm24)
   check(extended.ok)
-  decoded := wav.decode(&arena, extended.value)
+  decoded := wav.decode(arena, extended.value)
   check(decoded.ok && decoded.value.channel_mask == 3)
   check(fs.write_all("extended.wav",extended.value).ok)
-  floating := wav.encode(&arena, &audio, wav.Encoding.Float32)
-  check(floating.ok && wav.decode(&arena, floating.value).ok)
-  before := mem.arena_mark(&arena)
+  floating := wav.encode(arena, &audio, wav.Encoding.Float32)
+  check(floating.ok && wav.decode(arena, floating.value).ok)
+  before := mem.arena_mark(arena)
   audio.channel_mask = 1
-  check(wav.encode(&arena, &audio, wav.Encoding.Pcm16).kind == errors.Kind.InvalidInput)
-  check(mem.arena_mark(&arena) == before)
-  reference := fs.read_all(&arena,"reference.wav",10000)
+  check(wav.encode(arena, &audio, wav.Encoding.Pcm16).kind == errors.Kind.InvalidInput)
+  check(mem.arena_mark(arena) == before)
+  reference := fs.read_all(arena,"reference.wav",10000)
   check(reference.ok)
-  decoded = wav.decode(&arena, reference.value)
+  decoded = wav.decode(arena, reference.value)
   check(decoded.ok && #len(decoded.value.samples) == 5)
   expected: [5]f32 = [-1.0,-0.5,0.0,0.5,0.999969482421875]
   for i in 0..5 { check(decoded.value.samples[i] == expected[i]) }
   // Every individual header/data mutation must return or decode, never trap.
-  work := mem.push_array(u8,&arena,#len(reference.value))
+  work := mem.push_array(u8,arena,#len(reference.value))
   _ = mem.copy(work,reference.value)
   for at in 0..#len(work) {
     for bit in 0..8 {
       saved := work[at]
       work[at] ^= #cast(u8,(1 << bit))
-      checkpoint := mem.arena_mark(&arena)
-      _ = wav.decode(&arena,work)
-      mem.arena_rewind(&arena,checkpoint)
+      checkpoint := mem.arena_mark(arena)
+      _ = wav.decode(arena,work)
+      mem.arena_rewind(arena,checkpoint)
       work[at] = saved
     }
   }
@@ -100,15 +100,15 @@ with tempfile.TemporaryDirectory(prefix='dyn-wav-') as directory:
 use "std/mem" mem
 fn check(ok: bool) { if !ok { #panic("WAV portable") } }
 fn main() {
-  arena := mem.Arena{}
-  defer { mem.arena_release(&arena) }
+  arena := mem.arena_create(0)
+  defer { mem.arena_release(arena) }
   samples: [6]f32 = [-1.0,-0.5,0.0,0.25,0.5,1.0]
   audio := wav.Audio{ samples: samples[..], rate: 48000, channels: 2, channel_mask: 3 }
   formats: [5]wav.Encoding = [wav.Encoding.Pcm8,wav.Encoding.Pcm16,wav.Encoding.Pcm24,wav.Encoding.Pcm32,wav.Encoding.Float32]
   for encoding in formats {
-    encoded := wav.encode(&arena,&audio,encoding)
+    encoded := wav.encode(arena,&audio,encoding)
     check(encoded.ok)
-    decoded := wav.decode(&arena,encoded.value)
+    decoded := wav.decode(arena,encoded.value)
     check(decoded.ok && decoded.value.channels == 2 && decoded.value.rate == 48000 && decoded.value.channel_mask == 3)
     for i in 0..6 { difference := samples[i] - decoded.value.samples[i]
       check(difference <= 0.008 && difference >= -0.008) }

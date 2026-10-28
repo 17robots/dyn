@@ -38,52 +38,52 @@ fn frame(state: *box.State, arena: *mem.Arena, app: *App, input: box.Input) {
   ui.end(&context)
 }
 fn main() {
-  persistent := mem.Arena{}
-  arena := mem.Arena{}
-  defer { mem.arena_release(&arena)
-    mem.arena_release(&persistent) }
-  state := box.create(&persistent,measure,nil,16.0)
+  persistent := mem.arena_create(0)
+  arena := mem.arena_create(0)
+  defer { mem.arena_release(arena)
+    mem.arena_release(persistent) }
+  state := box.create(persistent,measure,nil,16.0)
   app := App{}
-  frame(state,&arena,&app,box.Input{})
-  frame(state,&arena,&app,box.Input{tab:true})
-  frame(state,&arena,&app,box.Input{text:"ab"})
+  frame(state,arena,&app,box.Input{})
+  frame(state,arena,&app,box.Input{tab:true})
+  frame(state,arena,&app,box.Input{text:"ab"})
   focus := state.focused
   check(focus == app.field.key && app.edit.cursor == 2,"focused typed buffer")
   preedit: [3]u8 = [0xe3,0x81,0x8b]
   input := box.Input{composition:preedit[..],composition_cursor:3,composition_handled:true}
   check(box.needs_frame(state,input),"preedit starts redraw")
-  frame(state,&arena,&app,input)
+  frame(state,arena,&app,input)
   check(!box.needs_frame(state,input),"unchanged preedit stays idle")
   preedit[2] = 0x8d
   check(box.needs_frame(state,input),"borrowed bytes changed require redraw")
-  frame(state,&arena,&app,input)
+  frame(state,arena,&app,input)
   check(!box.needs_frame(state,input),"updated preedit settles")
   input.composition_cursor = 1
-  frame(state,&arena,&app,input)
+  frame(state,arena,&app,input)
   check(app.edit.length == 2,"preedit does not insert")
   // Byte1 lies inside a three-byte code point; never measure a broken prefix.
   check(state.text_input_rect[0] == app.field.rect[0] + 20.0,"cursor clamps to UTF8 boundary")
-  frame(state,&arena,&app,box.Input{composition:preedit[..],composition_cursor:3,backspace:true,left:true,enter:true,escape:true,tab:true})
+  frame(state,arena,&app,box.Input{composition:preedit[..],composition_cursor:3,backspace:true,left:true,enter:true,escape:true,tab:true})
   check(bytes.equal(app.storage[..app.edit.length],"ab") && app.edit.cursor == 2 && !app.submitted && state.focused == focus,"active IME owns keys")
-  frame(state,&arena,&app,box.Input{home:true})
-  frame(state,&arena,&app,box.Input{right:true})
-  frame(state,&arena,&app,input)
+  frame(state,arena,&app,box.Input{home:true})
+  frame(state,arena,&app,box.Input{right:true})
+  frame(state,arena,&app,input)
   check(bytes.equal(app.field.text,"aきb") && bytes.equal(app.storage[..app.edit.length],"ab"),"preedit preview shifts suffix without insertion")
-  frame(state,&arena,&app,box.Input{select_all:true})
-  frame(state,&arena,&app,input)
+  frame(state,arena,&app,box.Input{select_all:true})
+  frame(state,arena,&app,input)
   check(bytes.equal(app.field.text,"き") && app.edit.length == 2,"preedit previews selection replacement")
-  frame(state,&arena,&app,box.Input{end:true})
+  frame(state,arena,&app,box.Input{end:true})
   // The final Backspace may clear preedit in the same native poll.
-  frame(state,&arena,&app,box.Input{composition_handled:true,backspace:true,delete:true,home:true,select_all:true,cut:true,escape:true,tab:true,enter:true})
+  frame(state,arena,&app,box.Input{composition_handled:true,backspace:true,delete:true,home:true,select_all:true,cut:true,escape:true,tab:true,enter:true})
   check(bytes.equal(app.storage[..app.edit.length],"ab") && app.edit.cursor == 2 && !app.submitted && state.focused == focus,"ending IME owns final poll")
-  frame(state,&arena,&app,box.Input{composition_handled:true,text:"é",enter:true})
+  frame(state,arena,&app,box.Input{composition_handled:true,text:"é",enter:true})
   check(bytes.equal(app.storage[..app.edit.length],"abé") && !app.submitted,"committed text inserts despite consumed Enter")
-  frame(state,&arena,&app,box.Input{enter:true})
+  frame(state,arena,&app,box.Input{enter:true})
   check(app.submitted,"ordinary Enter still submits")
   app.x = 70.0
-  frame(state,&arena,&app,box.Input{})
+  frame(state,arena,&app,box.Input{})
   check(state.text_input_rect[0] == 98.0 && state.text_input_rect[1] == 25.0,"candidate rectangle follows current layout")
-  frame(state,&arena,&app,box.Input{backspace:true})
+  frame(state,arena,&app,box.Input{backspace:true})
   check(bytes.equal(app.storage[..app.edit.length],"ab"),"ordinary editing resumes")
 }
 '''

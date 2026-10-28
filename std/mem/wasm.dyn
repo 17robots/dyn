@@ -5,8 +5,8 @@ extern fn grow_pages "dyn_wasm_grow_pages"(pages: usize) usize
 struct WasmRegion { pages: usize, next: *WasmRegion, requested: usize, live: bool }
 wasm_free: *WasmRegion
 const WasmPage: usize = 65536
-// A zero Arena's first push backs this much linear memory right away.
-const ZeroArenaReserve: usize = 4 * MiB
+// Linear memory each arena block backs by default, right away.
+const DefaultBlock: usize = 4 * MiB
 
 fn mapping_allocate(size: usize) Mapping {
   header := #sizeof(WasmRegion)

@@ -48,9 +48,9 @@ fn main() {
  defer { window.close(&owner) }
  check(window.open(&reader,"clipboard reader",80,80).ok,28)
  defer { window.close(&reader) }
- arena := mem.Arena{}
- defer { mem.arena_release(&arena) }
- large := mem.push_bytes_uninit(&arena, 1200000)
+ arena := mem.arena_create(0)
+ defer { mem.arena_release(arena) }
+ large := mem.push_bytes_uninit(arena, 1200000)
  for i in 0..#len(large) { large[i] = #cast(u8, 32 + i % 90) }
  check(window.try_set_clipboard(&owner,large).ok,34)
  window.request_paste(&owner)
@@ -95,7 +95,7 @@ fn main() {
  check(found_wake,1010)
  check(window.try_set_clipboard(&owner,"new offer").ok,57)
  // Rejection leaves current offer unchanged.
- oversized := mem.push_bytes_uninit(&arena,16777217)
+ oversized := mem.push_bytes_uninit(arena,16777217)
  check(window.try_set_clipboard(&owner,oversized).kind==errors.Kind.Capacity,60)
  window.request_paste(&reader)
  complete(&owner,&reader)

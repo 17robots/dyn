@@ -26,18 +26,18 @@ fn count(node: *Node) i64 {
 
 // Each tree lives in one arena region that is rewound after counting.
 fn main() {
-  arena := mem.Arena{}
+  arena := mem.arena_create(0)
   total: i64 = 0
   depth: i64 = 4
   for depth <= MaxDepth {
     iterations := #cast(i64, 1) << #cast(u32, (MaxDepth - depth + 4))
     for _ in 0..iterations {
-      mark := mem.arena_mark(&arena)
-      total += count(build_tree(&arena, depth))
-      mem.arena_rewind(&arena, mark)
+      mark := mem.arena_mark(arena)
+      total += count(build_tree(arena, depth))
+      mem.arena_rewind(arena, mark)
     }
     depth += 2
   }
   _ = io.println(io.stdout(), "{}", total)
-  mem.arena_release(&arena)
+  mem.arena_release(arena)
 }

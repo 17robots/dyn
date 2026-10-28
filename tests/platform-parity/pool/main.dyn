@@ -40,10 +40,10 @@ fn grouped(data: rawptr) {
 fn main() {
   arena := mem.arena_create(16777216)
   defer {
-    mem.arena_release(&arena)
+    mem.arena_release(arena)
   }
-  check(pool.start(&arena, 0, 8, 65536).kind == errors.Kind.InvalidInput)
-  started := pool.start(&arena, 4, 64, 65536)
+  check(pool.start(arena, 0, 8, 65536).kind == errors.Kind.InvalidInput)
+  started := pool.start(arena, 4, 64, 65536)
   check(started.ok)
   workers := started.value
   shared = workers

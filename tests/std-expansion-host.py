@@ -61,35 +61,35 @@ use "std/mem" mem
 use "std/bytes" bytes
 fn check(ok: bool) { if !ok { #panic("host formats") } }
 fn main() {
- arena := mem.Arena{}
- defer { mem.arena_release(&arena) }
+ arena := mem.arena_create(0)
+ defer { mem.arena_release(arena) }
  pixels: [8]u8 = [255,0,0,255,0,128,255,64]
- bitmap := bmp.encode(&arena,pixels[..],2,1,4)
+ bitmap := bmp.encode(arena,pixels[..],2,1,4)
  check(bitmap.ok)
- decoded := bmp.decode(&arena,bitmap.value)
+ decoded := bmp.decode(arena,bitmap.value)
  check(decoded.ok && bytes.equal(decoded.value.pixels,pixels[..]))
- targa := tga.encode(&arena,pixels[..],2,1,4)
+ targa := tga.encode(arena,pixels[..],2,1,4)
  check(targa.ok)
- uncompressed := tga.decode(&arena,targa.value)
+ uncompressed := tga.decode(arena,targa.value)
  check(uncompressed.ok && bytes.equal(uncompressed.value.pixels,pixels[..]))
- animation := gif.decode(&arena,GIF_BYTES)
+ animation := gif.decode(arena,GIF_BYTES)
  check(animation.ok && bytes.equal(animation.value.pixels,"\xff\0\0\xff"))
- photo := jpeg.decode(&arena,JPEG_BYTES)
+ photo := jpeg.decode(arena,JPEG_BYTES)
  check(photo.ok && bytes.equal(photo.value.pixels,"\x80\x80\x80\xff"))
- mark := mem.arena_mark(&arena)
- check(!bmp.decode(&arena,"BM").ok && mem.arena_mark(&arena)==mark)
- check(!tga.decode(&arena,"bad").ok && mem.arena_mark(&arena)==mark)
- check(!gif.decode(&arena,"GIF89a").ok && mem.arena_mark(&arena)==mark)
- check(!jpeg.decode(&arena,"\xff\xd8").ok && mem.arena_mark(&arena)==mark)
- document := toml.parse(&arena,"[owner]\nname='Dyn'\nports=[8000,8001]\n[[products]]\nx=1979-05-27T07:32:00Z\n")
+ mark := mem.arena_mark(arena)
+ check(!bmp.decode(arena,"BM").ok && mem.arena_mark(arena)==mark)
+ check(!tga.decode(arena,"bad").ok && mem.arena_mark(arena)==mark)
+ check(!gif.decode(arena,"GIF89a").ok && mem.arena_mark(arena)==mark)
+ check(!jpeg.decode(arena,"\xff\xd8").ok && mem.arena_mark(arena)==mark)
+ document := toml.parse(arena,"[owner]\nname='Dyn'\nports=[8000,8001]\n[[products]]\nx=1979-05-27T07:32:00Z\n")
  check(document.ok)
  owner := toml.member(document.root,"owner")
  check(bytes.equal(toml.member(owner,"name").text,"Dyn"))
  check(bytes.equal(toml.index(toml.member(owner,"ports"),1).text,"8001"))
- encoded := toml.encode(&arena,document.root)
- check(encoded.ok && toml.parse(&arena,encoded.value).ok)
- before := mem.arena_mark(&arena)
- check(!toml.parse(&arena,"a=1\na=2").ok && mem.arena_mark(&arena)==before)
+ encoded := toml.encode(arena,document.root)
+ check(encoded.ok && toml.parse(arena,encoded.value).ok)
+ before := mem.arena_mark(arena)
+ check(!toml.parse(arena,"a=1\na=2").ok && mem.arena_mark(arena)==before)
 }
 '''.replace('GIF_BYTES', dyn_bytes(gif)).replace('JPEG_BYTES', dyn_bytes(jpeg))
 

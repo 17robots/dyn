@@ -21,8 +21,8 @@ fn bad(source: []const u8) {
  check(again.kind == item.kind && again.offset == item.offset)
 }
 fn main() {
- arena := mem.Arena{}
- defer { mem.arena_release(&arena) }
+ arena := mem.arena_create(0)
+ defer { mem.arena_release(arena) }
  golden := "\x82\xa1a\x93\x00\xcc\x80\xff\xa1b\xc4\x02hi"
  state := mp.reader(golden)
  tokens: [9]mp.Token = []
@@ -35,7 +35,7 @@ fn main() {
  check(tokens[0].kind == mp.Kind.Map && tokens[0].value == 2)
  check(tokens[2].kind == mp.Kind.Array && tokens[2].value == 3)
  check(tokens[5].integer == -1 && bytes.equal(tokens[7].bytes,"hi"))
- encoded := mp.encode(&arena,tokens[..count])
+ encoded := mp.encode(arena,tokens[..count])
  check(encoded.ok)
  state = mp.reader(encoded.value)
  for token in tokens[..count] {
@@ -59,7 +59,7 @@ fn main() {
  bad("\xc7\x01")
  bad("\xcf\x00")
  extrema: [7]mp.Token = [mp.Token{kind:mp.Kind.Unsigned,value:0xffffffffffffffff},mp.Token{kind:mp.Kind.Signed,integer:-9223372036854775808},mp.Token{kind:mp.Kind.Signed,integer:9223372036854775807},mp.Token{kind:mp.Kind.Float,real:-1.5},mp.Token{kind:mp.Kind.Extension,extension:-1,bytes:"123456789012"},mp.Token{kind:mp.Kind.Text,bytes:"\xff\x00"},mp.Token{kind:mp.Kind.Bool,boolean:true}]
- encoded = mp.encode(&arena,extrema[..])
+ encoded = mp.encode(arena,extrema[..])
  check(encoded.ok)
  state = mp.reader(encoded.value)
  for expected in extrema {
@@ -68,9 +68,9 @@ fn main() {
  }
  state = mp.reader("\xca\x3f\xc0\x00\x00")
  check(mp.next(&state).value.real == 1.5)
- mark := mem.arena_mark(&arena)
+ mark := mem.arena_mark(arena)
  invalid: [1]mp.Token = [mp.Token{kind:mp.Kind.Array,value:1}]
- check(mp.encode(&arena,invalid[..]).kind == errors.Kind.InvalidInput && mem.arena_mark(&arena) == mark)
+ check(mp.encode(arena,invalid[..]).kind == errors.Kind.InvalidInput && mem.arena_mark(arena) == mark)
  deep: [130]u8 = []
  for i in 0..129 { deep[i] = 0x91 }
  state = mp.reader(deep[..])

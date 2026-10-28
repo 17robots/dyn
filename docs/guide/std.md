@@ -14,10 +14,10 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
 - **Borrowing is the default.** Returned slices borrow the input, the caller's
   buffer or the arena, as each function's comment says. Reader-backed scanners
   return views that last until the next call.
-- **Zero is initialization.** A zeroed struct is a valid empty value: `Arena{}`,
-  `Builder{}`, `GrowingArena{}`, `process.Options{}` (inherit every stream),
-  scanners given only their `source`. Constructors exist for convenience, not
-  because zero is broken.
+- **Zero is initialization.** A zeroed data struct is a valid empty value: `Builder{}`,
+  `process.Options{}` (inherit every stream), and scanners given only their
+  `source`. Arena handles are pointers to backing headers and require
+  `arena_create` or `arena_from_buffer`; a nil arena handle does not allocate.
 - **Errors are values, in one shape.** Results at the edges (OS, files,
   network, processes) are `{value, ok, kind, error}`: `value` is the payload,
   `kind` a portable `std/errors` category and `error` the native code. Test

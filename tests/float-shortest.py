@@ -42,9 +42,9 @@ fn main() {{
   if fmt.write_f64_shortest(&small, 0.125) || small.length != 0 || !small.failed {{
     #panic("rollback")
   }}
-  backing: [64]u8 = []
+  backing: [64 + mem.ArenaBufferOverhead]u8 = []
   arena := mem.arena_from_buffer(backing[..])
-  if !mem.equal(fmt.f64_shortest(&arena, -2.5e-9), "-2.5e-9") {{
+  if !mem.equal(fmt.f64_shortest(arena, -2.5e-9), "-2.5e-9") {{
     #panic("arena")
   }}
 }}

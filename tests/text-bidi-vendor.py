@@ -78,40 +78,40 @@ fn fail_reorder(flags:u32,types:*const u32,n,off:i32,base:u32,levels:*i8,visual:
  return 0
 }
 fn main() {
- arena:=mem.Arena{}
- defer mem.arena_release(&arena)
+ arena:=mem.arena_create(0)
+ defer mem.arena_release(arena)
  library:=dynlib.open("LIBRARY",dynlib.Now)
  check(library.ok)
  loaded:=bidi.load(library.value)
  check(loaded.ok)
  api:=loaded.api
  CASE_CALLS
- mark:=mem.arena_mark(&arena)
- check(!bidi.resolve(&arena,&api,"\xc0\xaf",bidi.Auto).ok && mem.arena_mark(&arena)==mark)
- check(!bidi.resolve(&arena,&api,"a\nb",bidi.Auto).ok && mem.arena_mark(&arena)==mark)
- check(!bidi.resolve(&arena,&api,"a\xe2\x80\xa9b",bidi.Auto).ok && mem.arena_mark(&arena)==mark)
- check(!bidi.resolve(&arena,&api,"abc",123).ok && mem.arena_mark(&arena)==mark)
+ mark:=mem.arena_mark(arena)
+ check(!bidi.resolve(arena,&api,"\xc0\xaf",bidi.Auto).ok && mem.arena_mark(arena)==mark)
+ check(!bidi.resolve(arena,&api,"a\nb",bidi.Auto).ok && mem.arena_mark(arena)==mark)
+ check(!bidi.resolve(arena,&api,"a\xe2\x80\xa9b",bidi.Auto).ok && mem.arena_mark(arena)==mark)
+ check(!bidi.resolve(arena,&api,"abc",123).ok && mem.arena_mark(arena)==mark)
  check(!bidi.load(nil).ok)
  nil_api:=bidi.Api{}
- check(bidi.resolve(&arena,&nil_api,"",bidi.Auto).ok)
- check(bidi.resolve(&arena,&nil_api,"a",bidi.Auto).kind==errors.Kind.InvalidState && mem.arena_mark(&arena)==mark)
+ check(bidi.resolve(arena,&nil_api,"",bidi.Auto).ok)
+ check(bidi.resolve(arena,&nil_api,"a",bidi.Auto).kind==errors.Kind.InvalidState && mem.arena_mark(arena)==mark)
  broken:=api
  broken.log2vis=fail_resolve
- check(bidi.resolve(&arena,&broken,"abc",bidi.Auto).kind==errors.Kind.System && mem.arena_mark(&arena)==mark)
+ check(bidi.resolve(arena,&broken,"abc",bidi.Auto).kind==errors.Kind.System && mem.arena_mark(arena)==mark)
  source:[4]u8=[97,215,144,98]
- owned:=bidi.resolve(&arena,&api,source[..],bidi.Auto)
+ owned:=bidi.resolve(arena,&api,source[..],bidi.Auto)
  check(owned.ok && owned.value.logical[1]==1488 && owned.value.starts[1]==1 && owned.value.ends[1]==3)
  source[1]=120
  paragraph:=owned.value
  saved_level:=paragraph.levels[1]
- line:=bidi.reorder(&arena,&api,&paragraph,0,2)
+ line:=bidi.reorder(arena,&api,&paragraph,0,2)
  check(line.ok && paragraph.levels[1]==saved_level)
- mark=mem.arena_mark(&arena)
- check(!bidi.reorder(&arena,&api,&paragraph,2,1).ok && mem.arena_mark(&arena)==mark)
- check(!bidi.reorder(&arena,&api,&paragraph,0,4).ok && mem.arena_mark(&arena)==mark)
+ mark=mem.arena_mark(arena)
+ check(!bidi.reorder(arena,&api,&paragraph,2,1).ok && mem.arena_mark(arena)==mark)
+ check(!bidi.reorder(arena,&api,&paragraph,0,4).ok && mem.arena_mark(arena)==mark)
  broken=api
  broken.reorder_line=fail_reorder
- check(bidi.reorder(&arena,&broken,&paragraph,0,2).kind==errors.Kind.System && mem.arena_mark(&arena)==mark)
+ check(bidi.reorder(arena,&broken,&paragraph,0,2).kind==errors.Kind.System && mem.arena_mark(arena)==mark)
  check(dynlib.close(&library.value).ok)
  check(paragraph.logical[1]==1488 && paragraph.starts[1]==1 && paragraph.ends[1]==3 && paragraph.levels[1]==saved_level)
 }
@@ -150,7 +150,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-fribidi-') as directory:
  for i,(text,base) in enumerate(CASES):
   starts=[];ends=[];offset=0
   for cp in text: starts.append(offset);offset+=len(cp.encode());ends.append(offset)
-  calls.append(f'save(&arena,&api,{lit(text.encode())},{base},"{work}/dyn-{i}")')
+  calls.append(f'save(arena,&api,{lit(text.encode())},{base},"{work}/dyn-{i}")')
   def array(values):return '{'+','.join(map(str,values or [0]))+'}'
   c_calls.append(f'{{const FriBidiChar input[]={array(list(map(ord,text)))};const uint32_t starts[]={array(starts)},ends[]={array(ends)};save(input,starts,ends,{len(text)},{base},"{work}/c-{i}");}}')
  source=SOURCE.replace('LIBRARY',library).replace('CASE_CALLS','\n'.join(calls))

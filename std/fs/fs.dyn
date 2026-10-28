@@ -213,42 +213,104 @@ pub fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) ReadAllR
     return ReadAllResult{ error: opened.error, kind: opened.kind }
   }
   mark := memory.arena_mark(arena)
-  if maximum != 0 && #len(arena.data) == 0 && arena.offset == 0 && !arena.fixed_buffer {
-    // Acquire lazy backing before consulting remaining capacity. Empty fixed
-    // buffers remain bounded; a zero maximum needs only the EOF probe below.
-    _ = memory.arena_push_uninit(arena, 1, 1)
-    memory.arena_rewind(arena, mark)
-  }
+  output: []u8
+  output_mark := mark
   total: usize = 0
   error: isize = 0
   kind := errors.Kind.None
   for {
-    capacity := maximum - total
-    if capacity > memory.arena_remaining(arena) {
-      capacity = memory.arena_remaining(arena)
-    }
+    capacity := #len(output) - total
     if capacity > 65536 {
       capacity = 65536
     }
     if capacity == 0 {
+      // Probe before growing: empty files need no allocation, and a full
+      // caller buffer still distinguishes EOF from capacity/maximum overflow.
       probe: [1]u8 = []
       extra := read(&opened.value, probe[..])
       if !extra.ok {
         error = extra.error
         kind = extra.kind
+        break
       }
-      else if extra.transferred != 0 {
-        kind = errors.Kind.Capacity
-        if total == maximum {
-          kind = errors.Kind.Overflow
+      if extra.transferred == 0 {
+        break
+      }
+      if total == maximum {
+        kind = errors.Kind.Overflow
+        break
+      }
+      wanted := maximum
+      if total == 0 {
+        if wanted > 65536 {
+          wanted = 65536
+        }
+      } else if total <= maximum / 2 {
+        wanted = total * 2
+      }
+      available := memory.arena_remaining(arena)
+      if total == 0 && available != 0 && wanted > available {
+        wanted = available
+      } else if total != 0 && available != 0 && wanted - total > available {
+        wanted = total + available
+      }
+      if arena.fixed_buffer {
+        if total != 0 {
+          kind = errors.Kind.Capacity
+          break
+        }
+        if wanted > memory.arena_remaining(arena) {
+          wanted = memory.arena_remaining(arena)
         }
       }
-      break
+      if wanted <= total {
+        kind = errors.Kind.Capacity
+        break
+      }
+      if total != 0 && memory.arena_try_extend(arena, &output[0], total, wanted - total) {
+        output = (&output[0])[..wanted]
+      } else {
+        if wanted > available && arena.limit != 0 {
+          // A geometric reservation is only a preference. Use the last
+          // bounded block when it can still hold the complete output.
+          backing_left := arena.limit - arena.backing
+          if backing_left <= memory.ArenaHeader || backing_left - memory.ArenaHeader <= total {
+            kind = errors.Kind.Capacity
+            break
+          }
+          if wanted > backing_left - memory.ArenaHeader {
+            wanted = backing_left - memory.ArenaHeader
+          }
+        }
+        pointer: *u8 = nil
+        if wanted <= memory.arena_remaining(arena) {
+          pointer = memory.arena_push_uninit(arena, wanted, 1)
+        } else {
+          allocation := memory.arena_try_push(arena, wanted, 1)
+          if !allocation.ok {
+            kind = errors.Kind.Capacity
+            if allocation.error == memory.ErrorKind.Overflow {
+              kind = errors.Kind.Overflow
+            }
+            if allocation.error == memory.ErrorKind.System {
+              kind = errors.Kind.System
+            }
+            error = allocation.code
+            break
+          }
+          pointer = allocation.memory
+        }
+        next := pointer[..wanted]
+        _ = memory.copy(next, output[..total])
+        output = next
+        output_mark = memory.arena_mark(arena) - wanted
+      }
+      output[total] = probe[0]
+      total += 1
+      continue
     }
-    allocation := memory.arena_push_uninit(arena, capacity, 1)
-    part := read(&opened.value, allocation[..capacity])
+    part := read(&opened.value, output[total..total + capacity])
     total += part.transferred
-    memory.arena_rewind(arena, mark + total)
     if !part.ok {
       error = part.error
       kind = part.kind
@@ -267,7 +329,10 @@ pub fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) ReadAllR
     memory.arena_rewind(arena, mark)
     return ReadAllResult{ error: error, kind: kind }
   }
-  return ReadAllResult{ value: arena.data[mark..mark + total], ok: true }
+  if #len(output) != 0 {
+    memory.arena_rewind(arena, output_mark + total)
+  }
+  return ReadAllResult{ value: output[..total], ok: true }
 }
 
 pub fn write_all(path: []const u8, source: []const u8) Result {

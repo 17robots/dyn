@@ -26,25 +26,25 @@ if not Path('/usr/share/zoneinfo/Europe/Berlin').exists():
 lines = ['use "std/time" time', 'use "std/time/zone" zone', 'use "std/mem" mem', 'use "std/io" io', '',
          f'const instants: [{len(instants)}]i64 = [{", ".join(map(str, instants))}]',
          f'const days: [{len(calendar_days)}]i64 = [{", ".join(map(str, calendar_days))}]', '',
-         'fn main() {', '  arena := mem.arena_create(16777216)', '  defer {', '    mem.arena_release(&arena)', '  }',
+         'fn main() {', '  arena := mem.arena_create(16777216)', '  defer {', '    mem.arena_release(arena)', '  }',
          '  for day in days {', '    date := time.civil_from_days(day)',
          '    _ = io.println(io.stdout(), "day {} {} {} {} {} {}", day, date.year, date.month, date.day, time.days_from_civil(date.year, date.month, date.day), #cast(u8, time.weekday(&date)))',
          '  }']
 for index, name in enumerate(ZONES):
-    lines += [f'  loaded{index} := zone.load(&arena, "{name}")', f'  if !loaded{index}.ok {{', f'    #panic("load {name}")', '  }',
+    lines += [f'  loaded{index} := zone.load(arena, "{name}")', f'  if !loaded{index}.ok {{', f'    #panic("load {name}")', '  }',
               '  for seconds in instants {',
               f'    shown := zone.local(&loaded{index}.value, time.Instant{{ seconds: seconds }})',
               f'    back := zone.instant_of_local(&loaded{index}.value, &shown.value)',
               f'    _ = io.println(io.stdout(), "{name} {{}} {{}} {{}} {{}} {{}}-{{}}-{{}} {{}}:{{}}:{{}} {{}}", seconds, shown.offset, shown.dst, shown.abbreviation, shown.value.year, shown.value.month, shown.value.day, shown.value.hour, shown.value.minute, shown.value.second, back.seconds)',
               '  }']
-lines += ['  posix := zone.parse_posix(&arena, "CET-1CEST,M3.5.0,M10.5.0/3")', '  if !posix.ok {', '    #panic("posix")', '  }',
+lines += ['  posix := zone.parse_posix(arena, "CET-1CEST,M3.5.0,M10.5.0/3")', '  if !posix.ok {', '    #panic("posix")', '  }',
           '  for seconds in instants {', '    shown := zone.local(&posix.value, time.Instant{ seconds: seconds })',
           '    _ = io.println(io.stdout(), "posix {} {} {}", seconds, shown.offset, shown.abbreviation)', '  }',
-          '  bad := zone.parse_posix(&arena, "CET-1CEST,M13.5.0")', '  if bad.ok {', '    #panic("bad posix")', '  }',
+          '  bad := zone.parse_posix(arena, "CET-1CEST,M13.5.0")', '  if bad.ok {', '    #panic("bad posix")', '  }',
           '  for seconds in instants {', '    shown := zone.local(&loaded0.value, time.Instant{ seconds: seconds })',
-          '    _ = io.println(io.stdout(), "format {} {} {}", seconds, zone.format(&arena, "%Y-%m-%d %H:%M:%S %j %a %A %b %B %Z %z %%", &shown), zone.format_rfc3339(&arena, &shown))', '  }',
-          '  bad_format := zone.local(&loaded0.value, time.Instant{})', '  if #len(zone.format(&arena, "%Q", &bad_format)) != 0 {', '    #panic("bad format")', '  }',
-          '  system := zone.system(&arena)', '  if !system.ok {', '    #panic("system")', '  }',
+          '    _ = io.println(io.stdout(), "format {} {} {}", seconds, zone.format(arena, "%Y-%m-%d %H:%M:%S %j %a %A %b %B %Z %z %%", &shown), zone.format_rfc3339(arena, &shown))', '  }',
+          '  bad_format := zone.local(&loaded0.value, time.Instant{})', '  if #len(zone.format(arena, "%Q", &bad_format)) != 0 {', '    #panic("bad format")', '  }',
+          '  system := zone.system(arena)', '  if !system.ok {', '    #panic("system")', '  }',
           '  _ = io.println(io.stdout(), "system {}", system.value.name)', '}']
 
 
@@ -106,12 +106,12 @@ use "std/errors" errors
 fn main() {
   arena := mem.arena_create(1048576)
   defer {
-    mem.arena_release(&arena)
+    mem.arena_release(arena)
   }
-  if zone.load(&arena, "Europe/Berlin").kind != errors.Kind.Unsupported {
+  if zone.load(arena, "Europe/Berlin").kind != errors.Kind.Unsupported {
     #panic("windows load")
   }
-  system := zone.system(&arena)
+  system := zone.system(arena)
   if !system.ok || #len(system.value.name) == 0 || #len(system.value.standard.abbreviation) == 0 {
     #panic("windows system")
   }

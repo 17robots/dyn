@@ -32,8 +32,8 @@ fn quicksort(values: []u64) {
 }
 
 fn main() {
-  arena := mem.Arena{}
-  values := mem.push_array(u64, &arena, Count)
+  arena := mem.arena_create(0)
+  values := mem.push_array(u64, arena, Count)
   state: u64 = 42
   for *value in values {
     state = #wrap(state * 6364136223846793005 + 1442695040888963407)
@@ -41,5 +41,5 @@ fn main() {
   }
   quicksort(values)
   _ = io.println(io.stdout(), "{} {} {}", values[0], values[Count / 2], values[Count - 1])
-  mem.arena_release(&arena)
+  mem.arena_release(arena)
 }

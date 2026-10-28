@@ -98,7 +98,7 @@ fn expression(p: *Compiler, symbols: *const Symbols, depth: usize) {
 fn main() {
   storage: [16384]u8 = []
   arena := mem.arena_from_buffer(storage[..])
-  arguments := process.arguments(&arena)
+  arguments := process.arguments(arena)
   if !arguments.ok || #len(arguments.value) != 2 { #panic("arguments") }
   symbols := Symbols{}
   if !insert(&symbols, "alpha", '4') || !insert(&symbols, "beta", '7') { #panic("insert") }

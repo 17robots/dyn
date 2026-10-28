@@ -59,7 +59,7 @@ static void *run(void *raw) {
 int main(void) {
   Fixture fixtures[2]={0};
   prepare(&fixtures[0],"pub fn identity(a:u64) u64 { return a }\n");
-  prepare(&fixtures[1],"counter:u64=1\nfn add(a:u64){counter+=a}\npub fn work(a:u64) u64 {defer add(2) return a+counter}\npub fn second(a:u64) u64 {return work(a)*2}\n");
+  prepare(&fixtures[1],"counter:u64=1\nfn add(a:u64){counter+=a}\npub fn work(a:u64) u64 {defer add(2)\nreturn a+counter}\npub fn second(a:u64) u64 {return work(a)*2}\n");
   char directory[]="/tmp/dyn-backend-reentrant-XXXXXX";assert(mkdtemp(directory));
   char path[1024],expected[1024];
   for(unsigned fixture=0;fixture<2;++fixture) for(unsigned debug=0;debug<2;++debug) {

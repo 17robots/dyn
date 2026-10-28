@@ -385,14 +385,29 @@ pub fn normalize(arena: *mem.Arena, source: []const u8, form: Form) Converted {
       #panic("arena size overflow")
     }
     work_count := work_size.bytes / #sizeof(u32)
-    // Decomposition writes values before reading them; each sorted run fills
-    // temporary before copying it back. Leave work untouched until preflight.
-    work := (#cast(*u32, mem.arena_push_uninit(arena, work_size.bytes, #alignof(u32))))[..work_count]
-    space := mem.push_bytes_uninit(arena, capacity)
+    maximum := ~#cast(usize, 0)
+    alignment := #alignof(u32)
+    padding := alignment - 1
+    if work_size.bytes > maximum - capacity ||
+      work_size.bytes + capacity > maximum - padding {
+      #panic("arena size overflow")
+    }
+    // One live allocation keeps scratch and output together across arena
+    // blocks. Compaction must finish before rewind can release that block.
+    allocation := mem.push_bytes_uninit(arena, work_size.bytes + capacity + padding)
+    address := #cast(usize, &allocation[0])
+    skip := (alignment - (address & (alignment - 1))) & (alignment - 1)
+    work := (#cast(*u32, &allocation[skip]))[..work_count]
+    space := allocation[skip + work_size.bytes..skip + work_size.bytes + capacity]
+    // Decomposition and reordering initialize their slots before reading them.
     result := normalize_into(space, source, form, work)
     if result.ok {
-      output := clone_down(arena, mark, space[..result.written])
-      return Converted{ value: output, ok: true }
+      _ = mem.move(allocation[..result.written], space[..result.written])
+      mem.arena_rewind(arena, mark + result.written)
+      if result.written == 0 {
+        return Converted{ok: true}
+      }
+      return Converted{ value: allocation[..result.written], ok: true }
     }
     mem.arena_rewind(arena, mark)
     if result.error != ErrorKind.Capacity {
@@ -403,10 +418,3 @@ pub fn normalize(arena: *mem.Arena, source: []const u8, form: Form) Converted {
   #panic("arena exhausted")
 }
 
-// Moves text down to mark, dropping the work area pushed before it.
-fn clone_down(arena: *mem.Arena, mark: usize, text: []const u8) []u8 {
-  mem.arena_rewind(arena, mark)
-  output := mem.push_bytes_uninit(arena, #len(text))
-  _ = mem.move(output, text)
-  return output
-}

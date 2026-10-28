@@ -97,14 +97,14 @@ pub fn write_all(writer: Writer, source: []const u8) Result {
 }
 
 fn print_value(writer: Writer, value: any) Result {
-  storage: [64]u8 = []
+  storage: [64 + memory.ArenaBufferOverhead]u8 = []
   scratch := memory.arena_from_buffer(storage[..])
   case value {
     is f32 item => {
-      return write_all(writer, format.f64_decimal(&scratch, #cast(f64, item), 6))
+      return write_all(writer, format.f64_decimal(scratch, #cast(f64, item), 6))
     }
     is f64 item => {
-      return write_all(writer, format.f64_decimal(&scratch, item, 6))
+      return write_all(writer, format.f64_decimal(scratch, item, 6))
     }
     is bool item => {
       if item {
@@ -113,34 +113,34 @@ fn print_value(writer: Writer, value: any) Result {
       return write_all(writer, "false")
     }
     is i8 item => {
-      return write_all(writer, format.i64_decimal(&scratch, #cast(i64, item)))
+      return write_all(writer, format.i64_decimal(scratch, #cast(i64, item)))
     }
     is i16 item => {
-      return write_all(writer, format.i64_decimal(&scratch, #cast(i64, item)))
+      return write_all(writer, format.i64_decimal(scratch, #cast(i64, item)))
     }
     is i32 item => {
-      return write_all(writer, format.i64_decimal(&scratch, #cast(i64, item)))
+      return write_all(writer, format.i64_decimal(scratch, #cast(i64, item)))
     }
     is i64 item => {
-      return write_all(writer, format.i64_decimal(&scratch, item))
+      return write_all(writer, format.i64_decimal(scratch, item))
     }
     is isize item => {
-      return write_all(writer, format.i64_decimal(&scratch, #cast(i64, item)))
+      return write_all(writer, format.i64_decimal(scratch, #cast(i64, item)))
     }
     is u8 item => {
-      return write_all(writer, format.u64_decimal(&scratch, #cast(u64, item)))
+      return write_all(writer, format.u64_decimal(scratch, #cast(u64, item)))
     }
     is u16 item => {
-      return write_all(writer, format.u64_decimal(&scratch, #cast(u64, item)))
+      return write_all(writer, format.u64_decimal(scratch, #cast(u64, item)))
     }
     is u32 item => {
-      return write_all(writer, format.u64_decimal(&scratch, #cast(u64, item)))
+      return write_all(writer, format.u64_decimal(scratch, #cast(u64, item)))
     }
     is u64 item => {
-      return write_all(writer, format.u64_decimal(&scratch, item))
+      return write_all(writer, format.u64_decimal(scratch, item))
     }
     is usize item => {
-      return write_all(writer, format.u64_decimal(&scratch, #cast(u64, item)))
+      return write_all(writer, format.u64_decimal(scratch, #cast(u64, item)))
     }
     is []u8 item => {
       return write_all(writer, item)

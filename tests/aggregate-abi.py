@@ -48,8 +48,10 @@ c = ['char c_char_value(void) { return (char)-1; }',
      'int c_char_negative(void) { return (char)-1 < 0; }']
 dyn = ['use "std/c"', 'extern fn c_char_value "c_char_value"() c.char',
        'extern fn c_char_negative "c_char_negative"() i32']
+# Widen before comparing: plain char is unsigned on some targets, where an
+# unsigned comparison against zero is correctly rejected as always false.
 body = ['plain_char := c_char_value()',
-        'if #sizeof(c.char) != 1 || (plain_char < 0) != (c_char_negative() != 0) { #panic("C char signedness") }']
+        'if #sizeof(c.char) != 1 || (#cast(i64, plain_char) < 0) != (c_char_negative() != 0) { #panic("C char signedness") }']
 for name, cf, df, init, field, expected in cases:
     packed = name == 'Packed'
     increment = '1.0' if '.' in expected else '1'
@@ -98,7 +100,7 @@ if a.riscv:
              'if narrow_callback(narrow_return) != 0xffffffff80000000 { #panic("LP64D unsigned32 return") }',
              'if variadic_sum(9,0.5,1.5,2.5,3.5,4.5,5.5,6.5,7.5,8.5) != 40.5 { #panic("LP64D variadic stack") }']
 source = work/'source'; source.mkdir(exist_ok=True)
-(source/'char_linux_arm.dyn').write_text('#target(kernel: linux, arch: aarch64)\nfn check_unsigned_char() { value: c.char = 255\n_ = value }\n')
+(source/'char_linux_arm.dyn').write_text('#target(kernel: linux, arch: aarch64)\nuse "std/c" arm_c\nfn check_unsigned_char() { value: arm_c.char = 255\n_ = value }\n')
 (source/'main.dyn').write_text('\n'.join(dyn)+'\nfn main() {\n'+'\n'.join(body)+'\n}\n')
 (work/'provider.c').write_text('\n'.join(c)+'\n')
 targets = [('linux','x86_64-linux',shlex.split(os.environ.get('CC','cc')),True),

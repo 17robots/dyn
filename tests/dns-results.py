@@ -61,13 +61,13 @@ fn require(ok: bool) { if !ok { #panic("DNS result contract") } }
 for label, family, data, count, offset in cases:
     source += f'''fn case_{label}() {{
   data: [{len(data)}]u8 = {literal(data)}
-  backing: [1024]u8 = []
+  backing: [1024 + mem.ArenaBufferOverhead]u8 = []
   arena := mem.arena_from_buffer(backing[..])
   arena.poison_on_rewind = true
-  prefix := mem.push_bytes_uninit(&arena, 3)
+  prefix := mem.push_bytes_uninit(arena, 3)
   prefix[0] = 42
-  mark := mem.arena_mark(&arena)
-  result := dns.parse_ipv{family}(&arena, data[..], 7, "example.test")
+  mark := mem.arena_mark(arena)
+  result := dns.parse_ipv{family}(arena, data[..], 7, "example.test")
 '''
     if count is not None:
         source += f'  require(result.ok && #len(result.value) == {count})\n'
@@ -78,11 +78,11 @@ for label, family, data, count, offset in cases:
                     source += '  require(result.value[1].a == 5 && result.value[1].d == 8)\n'
             else:
                 source += '  for i in 0..16 { require(result.value[0].bytes[i] == #cast(u8,i) && result.value[1].bytes[i] == #cast(u8,i+16)) }\n'
-            source += '  require(mem.arena_mark(&arena) > mark)\n'
+            source += '  require(mem.arena_mark(arena) > mark)\n'
         else:
-            source += '  require(mem.arena_mark(&arena) == mark)\n'
+            source += '  require(mem.arena_mark(arena) == mark)\n'
     else:
-        source += '  require(!result.ok && #len(result.value) == 0 && mem.arena_mark(&arena) == mark)\n'
+        source += '  require(!result.ok && #len(result.value) == 0 && mem.arena_mark(arena) == mark)\n'
         if offset is not None:
             source += f'  require(result.offset == {offset})\n'
         if label == 'nxdomain':
@@ -91,43 +91,44 @@ for label, family, data, count, offset in cases:
             source += '  require(result.kind == errors.Kind.InvalidInput && result.error == 0)\n'
     source += '  require(prefix[0] == 42)\n'
     if count is None:
-        source += '  for i in mark..#len(backing) { require(backing[i] == 0) }\n'
+        source += '  for i in mark..#len(arena.data) { require(arena.data[i] == 0) }\n'
     source += '}\n'
 data = packet(1, [a, b])
 source += f'''fn aliases() {{
-  backing: [1024]u8 = []
+  backing: [1024 + mem.ArenaBufferOverhead]u8 = []
   data: [{len(data)}]u8 = {literal(data)}
-  for i in 0..#len(data) {{ backing[16+i] = data[i] }}
   arena := mem.arena_from_buffer(backing[..])
+  payload := arena.data[mem.ArenaHeader..]
+  for i in 0..#len(data) {{ payload[16+i] = data[i] }}
   arena.poison_on_rewind = true
-  result := dns.parse_ipv4(&arena, backing[16..16+#len(data)], 7, "example.test")
-  require(!result.ok && #len(result.value) == 0 && mem.arena_mark(&arena) == 0)
-  for i in 0..#len(data) {{ require(backing[16+i] == data[i]) }}
+  result := dns.parse_ipv4(arena, payload[16..16+#len(data)], 7, "example.test")
+  require(!result.ok && #len(result.value) == 0 && mem.arena_mark(arena) == mem.arena_start(arena))
+  for i in 0..#len(data) {{ require(payload[16+i] == data[i]) }}
   text := "example.test"
-  for i in 0..#len(text) {{ backing[i] = text[i] }}
-  result = dns.parse_ipv4(&arena, data[..], 7, backing[..#len(text)])
-  require(!result.ok && mem.arena_mark(&arena) == 0)
-  query := dns.query_ipv4(&arena, backing[..#len(text)], 7)
-  require(#len(query) == 0 && mem.arena_mark(&arena) == 0)
-  for i in 0..#len(text) {{ require(backing[i] == text[i]) }}
+  for i in 0..#len(text) {{ payload[i] = text[i] }}
+  result = dns.parse_ipv4(arena, data[..], 7, payload[..#len(text)])
+  require(!result.ok && mem.arena_mark(arena) == mem.arena_start(arena))
+  query := dns.query_ipv4(arena, payload[..#len(text)], 7)
+  require(#len(query) == 0 && mem.arena_mark(arena) == mem.arena_start(arena))
+  for i in 0..#len(text) {{ require(payload[i] == text[i]) }}
   server := net.ipv4(127,0,0,1,53)
-  rejected4 := dns.resolve_ipv4(&arena, backing[..#len(text)], &server, 0)
-  rejected6 := dns.resolve_ipv6(&arena, backing[..#len(text)], &server, 0)
-  require(!rejected4.ok && !rejected6.ok && mem.arena_mark(&arena) == 0)
-  invalid4 := dns.resolve_ipv4(&arena, "", &server, 0)
-  invalid6 := dns.resolve_ipv6(&arena, "", &server, 0)
-  require(!invalid4.ok && !invalid6.ok && mem.arena_mark(&arena) == 0)
+  rejected4 := dns.resolve_ipv4(arena, payload[..#len(text)], &server, 0)
+  rejected6 := dns.resolve_ipv6(arena, payload[..#len(text)], &server, 0)
+  require(!rejected4.ok && !rejected6.ok && mem.arena_mark(arena) == mem.arena_start(arena))
+  invalid4 := dns.resolve_ipv4(arena, "", &server, 0)
+  invalid6 := dns.resolve_ipv6(arena, "", &server, 0)
+  require(!invalid4.ok && !invalid6.ok && mem.arena_mark(arena) == mem.arena_start(arena))
   // Borrowing a live prefix is safe; output is after it.
-  arena.offset = #len(text)
-  result = dns.parse_ipv4(&arena, data[..], 7, backing[..#len(text)])
+  _ = mem.push_bytes_uninit(arena, #len(text))
+  result = dns.parse_ipv4(arena, data[..], 7, payload[..#len(text)])
   require(result.ok && #len(result.value) == 2)
-  query4 := dns.query_ipv4(&arena, "example.test", 7)
-  query6 := dns.query_ipv6(&arena, "example.test", 7)
+  query4 := dns.query_ipv4(arena, "example.test", 7)
+  query6 := dns.query_ipv6(arena, "example.test", 7)
   require(#len(query4) == 30 && #len(query6) == 30)
   require(query4[27] == 1 && query6[27] == 28)
-  mark := mem.arena_mark(&arena)
-  invalid := dns.query_ipv4(&arena, "bad..name", 7)
-  require(#len(invalid) == 0 && mem.arena_mark(&arena) == mark)
+  mark := mem.arena_mark(arena)
+  invalid := dns.query_ipv4(arena, "bad..name", 7)
+  require(#len(invalid) == 0 && mem.arena_mark(arena) == mark)
 }}
 fn main() {{
 '''
@@ -136,9 +137,10 @@ exhaustion = f'''use "std/net/dns" dns
 use "std/mem" mem
 fn main() {{
   data: [{len(data)}]u8 = {literal(data)}
-  backing: [1]u8 = []
+  backing: [1 + mem.ArenaBufferOverhead]u8 = []
   arena := mem.arena_from_buffer(backing[..])
-  _ = dns.parse_ipv4(&arena, data[..], 7, "example.test")
+  arena = mem.arena_from_buffer(arena.data[..mem.ArenaHeader + 1])
+  _ = dns.parse_ipv4(arena, data[..], 7, "example.test")
 }}
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-dns-results-') as temporary:
@@ -155,5 +157,5 @@ with tempfile.TemporaryDirectory(prefix='dyn-dns-results-') as temporary:
                 assert result.returncode == 0, (mode, result.stdout, result.stderr)
             else:
                 assert result.returncode != 0, (mode, 'arena exhaustion did not panic')
-                assert b'arena' in result.stderr.lower(), (mode, result.stderr)
+                assert b'arena exhausted' in result.stderr.lower(), (mode, result.stderr)
     print('PASS DNS arena wire goldens/offsets/rollback/aliases/zero/exhaustion (debug/release)')

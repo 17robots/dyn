@@ -82,10 +82,10 @@ static unsigned declaration_index(unsigned failure) {
 }
 
 int main(void) {
-  for (fail_copy = 1; fail_copy <= 2; ++fail_copy) {
+  for (fail_copy = 1; fail_copy <= 3; ++fail_copy) {
     copies = 0;
     Module module = {0};
-    assert(!add_alias(&module, "alias", "target"));
+    assert(!add_alias(&module, "alias", "target", "./target"));
     assert(module.alias_count == 0);
     free(module.aliases);
     assert(live == 0);

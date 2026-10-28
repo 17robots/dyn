@@ -49,14 +49,14 @@ fn count_empty_destroy(font: rawptr) { check(font == empty_font)
 fn reject_empty_configuration(font: rawptr) { _ = font
  #panic("empty font must not be configured") }
 fn main(){
- arena := mem.Arena{}
- defer {mem.arena_release(&arena)}
+ arena := mem.arena_create(0)
+ defer {mem.arena_release(arena)}
  library := dynlib.open("FT_LIBRARY",dynlib.Now)
  check(library.ok)
  defer {_ = dynlib.close(&library.value)}
  ft_loaded := ft.load(library.value)
  check(ft_loaded.ok && !ft.load(nil).ok)
- font_bytes := fs.read_all(&arena,"font.ttf",10000000)
+ font_bytes := fs.read_all(arena,"font.ttf",10000000)
  check(font_bytes.ok)
  font := ft.Font{}
  check(ft.open(&font,ft_loaded.api,font_bytes.value,0,32).ok)
@@ -67,7 +67,7 @@ fn main(){
  bitmap := ft.bitmap(font.face)
  check(bitmap.ok && bitmap.value.width > 0 && bitmap.value.height > 0)
  value := bitmap.value
- output := mem.push_array(u8,&arena,24+#cast(usize,value.width)*#cast(usize,value.height))
+ output := mem.push_array(u8,arena,24+#cast(usize,value.width)*#cast(usize,value.height))
  fields: [6]u32 = [#cast(u32,value.width),#cast(u32,value.height),#cast(u32,value.left),#cast(u32,value.top),#cast(u32,value.advance_x),#cast(u32,value.advance_y)]
  for i in 0..6 {binary.store_u32_le(output[i*4..i*4+4],fields[i])}
  for row in 0..value.height {for x in 0..value.width {output[24+#cast(usize,row*value.width+x)] = value.pixels[#cast(usize,row)*value.stride+#cast(usize,x)]}}
@@ -105,40 +105,40 @@ fn main(){
  defer {loaded.api.font_destroy(created.value)}
  loaded.api.font_set_scale(created.value,2048,2048)
  features: []const hb.Feature
- latin := hb.shape(&arena,&loaded.api,created.value,"office AV",0,features)
- arabic := hb.shape(&arena,&loaded.api,created.value,"السلام",0,features)
+ latin := hb.shape(arena,&loaded.api,created.value,"office AV",0,features)
+ arabic := hb.shape(arena,&loaded.api,created.value,"السلام",0,features)
  check(latin.ok && #len(latin.value) < 9 && arabic.ok && #len(arabic.value) <= 6)
  check(arabic.value[0].cluster > arabic.value[#len(arabic.value)-1].cluster)
  for glyph in latin.value {check(glyph.index != 0)}
  for glyph in arabic.value {check(glyph.index != 0)}
- save(&arena,latin.value,"latin-actual.bin")
- save(&arena,arabic.value,"arabic-actual.bin")
- run := hb.shape_run(&arena,&loaded.api,created.value,"السَلام",hb.Options{direction:hb.RightToLeft,script:1098015074,language:"ar",cluster_level:hb.MonotoneCharacters,flags:hb.BeginningOfText|hb.EndOfText},features)
+ save(arena,latin.value,"latin-actual.bin")
+ save(arena,arabic.value,"arabic-actual.bin")
+ run := hb.shape_run(arena,&loaded.api,created.value,"السَلام",hb.Options{direction:hb.RightToLeft,script:1098015074,language:"ar",cluster_level:hb.MonotoneCharacters,flags:hb.BeginningOfText|hb.EndOfText},features)
  check(run.ok)
- save(&arena,run.value,"run-actual.bin")
- context_run:=hb.shape_run(&arena,&loaded.api,created.value,"بجح",hb.Options{direction:hb.RightToLeft,script:1098015074,language:"ar",cluster_level:1,item_offset:2,item_length:2},features)
+ save(arena,run.value,"run-actual.bin")
+ context_run:=hb.shape_run(arena,&loaded.api,created.value,"بجح",hb.Options{direction:hb.RightToLeft,script:1098015074,language:"ar",cluster_level:1,item_offset:2,item_length:2},features)
  check(context_run.ok && #len(context_run.value)>0 && context_run.value[0].cluster==2)
- save(&arena,context_run.value,"context-actual.bin")
+ save(arena,context_run.value,"context-actual.bin")
  unicode := loaded.api.unicode_get_default()
  check(unicode!=nil && loaded.api.unicode_script(unicode,65)==1281455214 && loaded.api.script_horizontal_direction(1098015074)==hb.RightToLeft)
- checkpoint := mem.arena_mark(&arena)
- check(hb.shape_run(&arena,&loaded.api,created.value,"x",hb.Options{cluster_level:3},features).kind==errors.Kind.InvalidInput)
- check(hb.shape_run(&arena,&loaded.api,created.value,"x",hb.Options{flags:256},features).kind==errors.Kind.InvalidInput)
- check(hb.shape_run(&arena,&loaded.api,created.value,"x",hb.Options{language:"a\0r"},features).kind==errors.Kind.InvalidInput)
- check(hb.shape_run(&arena,&loaded.api,created.value,"x",hb.Options{item_offset:2},features).kind==errors.Kind.InvalidInput)
- check(hb.shape_run(&arena,&loaded.api,created.value,"x",hb.Options{item_length:2},features).kind==errors.Kind.InvalidInput)
- check(hb.shape_run(&arena,&loaded.api,created.value,"x",hb.Options{item_length: -2},features).kind==errors.Kind.InvalidInput)
- check(mem.arena_mark(&arena)==checkpoint)
+ checkpoint := mem.arena_mark(arena)
+ check(hb.shape_run(arena,&loaded.api,created.value,"x",hb.Options{cluster_level:3},features).kind==errors.Kind.InvalidInput)
+ check(hb.shape_run(arena,&loaded.api,created.value,"x",hb.Options{flags:256},features).kind==errors.Kind.InvalidInput)
+ check(hb.shape_run(arena,&loaded.api,created.value,"x",hb.Options{language:"a\0r"},features).kind==errors.Kind.InvalidInput)
+ check(hb.shape_run(arena,&loaded.api,created.value,"x",hb.Options{item_offset:2},features).kind==errors.Kind.InvalidInput)
+ check(hb.shape_run(arena,&loaded.api,created.value,"x",hb.Options{item_length:2},features).kind==errors.Kind.InvalidInput)
+ check(hb.shape_run(arena,&loaded.api,created.value,"x",hb.Options{item_length: -2},features).kind==errors.Kind.InvalidInput)
+ check(mem.arena_mark(arena)==checkpoint)
  // The FreeType callback consumes shaped glyph IDs with baseline origins.
  adapter := ft.Adapter{font:&font,line_height:40,glyph_ids:true}
  context := ui.Context{}
  viewport := ui.Rect{width:256,height:64}
- ui.begin(&context,&arena,ui.Input{},viewport)
+ ui.begin(&context,arena,ui.Input{},viewport)
  pen: i64 = 20*64
  for glyph in arabic.value {ui.glyph(&context,viewport,glyph.index,(pen+#cast(i64,glyph.x_offset))/64,40-#cast(i64,glyph.y_offset)/64,ui.Color{r:255,g:255,b:255,a:255})
  pen += #cast(i64,glyph.x_advance)}
  ui.end(&context)
- pixels := mem.push_array(u8,&arena,#cast(usize,256*64*4))
+ pixels := mem.push_array(u8,arena,#cast(usize,256*64*4))
  surface := software.Surface{pixels:pixels,width:256,height:64,stride:256*4}
  check(software.render(&surface,ui.first(&context),ft.renderer(&adapter)).ok)
  ink: usize = 0
@@ -147,7 +147,7 @@ fn main(){
  bad := ft.Font{}
  check(!ft.open(&bad,ft_loaded.api,"broken",0,32).ok && bad.face == nil && bad.library == nil)
  check(hb.font_owned(&loaded.api,"broken",0).kind == errors.Kind.InvalidInput)
- check(hb.shape(&arena,&loaded.api,created.value,"x",1,features).kind == errors.Kind.InvalidInput)
+ check(hb.shape(arena,&loaded.api,created.value,"x",1,features).kind == errors.Kind.InvalidInput)
  ft.close(&font)
  ft.close(&font)
 }

@@ -208,10 +208,8 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Decoded {
     return Decoded{ kind: errors.Kind.Overflow, detail: ErrorKind.Overflow }
   }
   // Check borrowed backing before allocation or rewind can modify aliased input.
-  if mark <= #len(arena.data) && size.value <= #len(arena.data) - mark {
-    if bytes.overlaps(arena.data[mark..mark + size.value], source) {
-      return Decoded{ kind: errors.Kind.InvalidInput, detail: ErrorKind.Overlap }
-    }
+  if mem.arena_overlaps_unallocated(arena, source) {
+    return Decoded{ kind: errors.Kind.InvalidInput, detail: ErrorKind.Overlap }
   }
   output := mem.push_bytes_uninit(arena, size.value)
   result := decode_into(output, source)

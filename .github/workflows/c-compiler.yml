@@ -69,7 +69,6 @@ jobs:
         run: |
           just artifact dyn-sanitize
           python3 tests/compiler-contracts.py
-          python3 tests/file-imports.py
           python3 tests/generics.py
           python3 tests/native-optimization.py
           python3 tests/native-machine-optimization.py

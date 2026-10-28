@@ -3750,6 +3750,14 @@ static unsigned ssa_zero_bits(Ssa *s, int32_t id, unsigned depth) {
   default: return 0;
   }
 }
+/* Only compiler-owned global storage has the backend's minimum alignment.
+   Foreign symbols retain their linker-provided address and alignment. */
+static bool ssa_defined_global(Ssa *s, const SsaValue *v) {
+  if (v->op != SO_SYMBOL || v->aux2 != SYM_GLOBAL || v->aux < 0) return false;
+  for (size_t i = 0; i < s->ir->global_count; ++i)
+    if ((uint64_t)v->aux == s->ctx->global_symbols[i]) return !s->ir->globals[i].foreign;
+  return false;
+}
 static bool ssa_address_facts(Ssa *s, int32_t id, unsigned *align, unsigned depth) {
   if (id < 0 || depth > 8) return false;
   SsaValue *v = &s->values[id];
@@ -3757,7 +3765,7 @@ static bool ssa_address_facts(Ssa *s, int32_t id, unsigned *align, unsigned dept
   case SO_COPY: return ssa_address_facts(s, v->a, align, depth + 1);
   case SO_FRAME: *align = ssa_low_zero_bits((uint64_t)v->aux, 4); return true;
   case SO_SYMBOL:
-    if (v->aux2 != SYM_GLOBAL) return false;
+    if (!ssa_defined_global(s, v)) return false;
     *align = ssa_low_zero_bits((uint64_t)v->c, 3);
     return true;
   case SO_LEA: {
@@ -3808,6 +3816,39 @@ static bool ssa_increment_fits(Ssa *s, uint32_t block, uint32_t before, int32_t 
   if (r->op != SO_ADD) return false;
   bool step = (r->a == x && ssa_is_const(s, r->b, &c) && c == 1) || (r->b == x && ssa_is_const(s, r->a, &c) && c == 1);
   return step && ssa_below_some(s, block, before, x);
+}
+/* A frame or unoffset defined symbol is nonnull. Derived addresses may wrap,
+   so the broader alignment facts alone cannot prove arbitrary E/NE branches. */
+static bool ssa_direct_nonnull(Ssa *s, int32_t id, unsigned depth) {
+  if (id < 0 || depth > 8) return false;
+  SsaValue *v = &s->values[id];
+  if (v->op == SO_COPY) return ssa_direct_nonnull(s, v->a, depth + 1);
+  return v->op == SO_FRAME || (ssa_defined_global(s, v) && v->c == 0);
+}
+/* Cleanup turns pointer checks into branch controls rather than SO_CHECK.
+   Prove only the same address facts used below; never rewrite a shared CMP. */
+static bool ssa_address_comparison(Ssa *s, const SsaValue *cmp, bool *holds) {
+  if (cmp->op != SO_CMP || (cmp->cond != CC_E && cmp->cond != CC_NE)) return false;
+  uint64_t zero, mask;
+  int32_t address;
+  if (ssa_is_const(s, cmp->b, &zero) && zero == 0) address = cmp->a;
+  else if (ssa_is_const(s, cmp->a, &zero) && zero == 0) address = cmp->b;
+  else return false;
+  unsigned align;
+  if (ssa_direct_nonnull(s, address, 0)) {
+    *holds = cmp->cond == CC_NE;
+    return true;
+  }
+  if (address < 0) return false;
+  SsaValue *bits = &s->values[address];
+  if (bits->op != SO_AND) return false;
+  int32_t base;
+  if (ssa_is_const(s, bits->b, &mask)) base = bits->a;
+  else if (ssa_is_const(s, bits->a, &mask)) base = bits->b;
+  else return false;
+  if (!ssa_address_facts(s, base, &align, 0) || (mask & ~((UINT64_C(1) << align) - 1))) return false;
+  *holds = cmp->cond == CC_E;
+  return true;
 }
 static bool ssa_prove(Ssa *s, const uint32_t *order, uint32_t n) {
   bool changed = false;
@@ -3871,7 +3912,15 @@ static bool ssa_prove(Ssa *s, const uint32_t *order, uint32_t n) {
        only this use: CSE may share its comparison with an earlier branch. */
     if (block->kind == SB_IF && block->control >= 0) {
       SsaValue *cmp = &s->values[block->control];
-      if (cmp->op == SO_CMP &&
+      bool address_holds;
+      if (ssa_address_comparison(s, cmp, &address_holds)) {
+        int32_t constant = ssa_value(s, b, SO_CONST, SC_INT, -1, -1, -1, address_holds, 0);
+        if (!s->failed) {
+          ssa_push(s, &block->values, (uint32_t)constant);
+          block->control = constant;
+          changed = true;
+        }
+      } else if (cmp->op == SO_CMP &&
           (cmp->cond == CC_B || cmp->cond == CC_AE || cmp->cond == CC_A || cmp->cond == CC_BE)) {
         bool reversed = cmp->cond == CC_A || cmp->cond == CC_BE;
         if (cmp->cond == CC_AE && ssa_increment_fits(s, b, block->values.count, cmp->a, cmp->b)) {

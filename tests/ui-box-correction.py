@@ -38,49 +38,49 @@ fn correction(collector: *events.EditBuffer, token: u64, start, end: i32, text: 
   return result.value
 }
 fn main() {
-  persistent := mem.Arena{}
-  arena := mem.Arena{}
-  defer { mem.arena_release(&arena)
-    mem.arena_release(&persistent) }
-  state := box.create(&persistent,measure,nil,16.0)
+  persistent := mem.arena_create(0)
+  arena := mem.arena_create(0)
+  defer { mem.arena_release(arena)
+    mem.arena_release(persistent) }
+  state := box.create(persistent,measure,nil,16.0)
   app := App{}
   collector := events.EditBuffer{}
-  frame(state,&arena,&app,box.Input{})
-  frame(state,&arena,&app,box.Input{tab:true})
-  frame(state,&arena,&app,box.Input{text:"teh cat"})
+  frame(state,arena,&app,box.Input{})
+  frame(state,arena,&app,box.Input{tab:true})
+  frame(state,arena,&app,box.Input{text:"teh cat"})
   published := state.text_context.token
   check(published != 0 && bytes.equal(state.text_context.text,"teh cat"),"focused context publication")
-  frame(state,&arena,&app,box.Input{})
+  frame(state,arena,&app,box.Input{})
   check(state.text_context.token == published,"idle redraw keeps context token")
   change := correction(&collector,published,0,3,"the")
-  frame(state,&arena,&app,box.Input{correction:&change})
+  frame(state,arena,&app,box.Input{correction:&change})
   check(app.changed && app.error == errors.Kind.None && bytes.equal(app.storage[..app.edit.length],"the cat") && app.edit.cursor == 3,"owned edit reaches widget")
   check(state.text_context.token != published && state.text_context.cause == edit.Cause.InputMethod,"correction publishes fresh IME context")
-  frame(state,&arena,&app,box.Input{correction:&change})
+  frame(state,arena,&app,box.Input{correction:&change})
   check(!app.changed && app.error == errors.Kind.InvalidState && bytes.equal(app.storage[..app.edit.length],"the cat"),"replay does not change buffer")
   published = state.text_context.token
   change = correction(&collector,published,0,3,"bad")
-  frame(state,&arena,&app,box.Input{left:true})
-  frame(state,&arena,&app,box.Input{correction:&change})
+  frame(state,arena,&app,box.Input{left:true})
+  frame(state,arena,&app,box.Input{correction:&change})
   check(app.error == errors.Kind.InvalidState && bytes.equal(app.storage[..app.edit.length],"the cat"),"selection change invalidates pending edit")
   published = state.text_context.token
   change = correction(&collector,published,0,3,"bad")
   app.storage[0] = 'T'
-  frame(state,&arena,&app,box.Input{correction:&change})
+  frame(state,arena,&app,box.Input{correction:&change})
   check(app.error == errors.Kind.InvalidState && app.storage[0] == 'T',"external document change invalidates edit")
   published = state.text_context.token
-  frame(state,&arena,&app,box.Input{tab:true})
+  frame(state,arena,&app,box.Input{tab:true})
   check(state.text_context.token == 0,"leaving text focus removes publication")
-  frame(state,&arena,&app,box.Input{tab:true,shift:true})
+  frame(state,arena,&app,box.Input{tab:true,shift:true})
   check(state.text_context.token != published,"returning focus gets fresh publication")
   change = correction(&collector,state.text_context.token,0,0,"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
-  frame(state,&arena,&app,box.Input{correction:&change})
+  frame(state,arena,&app,box.Input{correction:&change})
   check(!app.changed && app.error == errors.Kind.Capacity && bytes.equal(app.storage[..app.edit.length],"The cat"),"capacity failure is atomic")
   change = correction(&collector,state.text_context.token,0,1,"A\nB")
-  frame(state,&arena,&app,box.Input{correction:&change})
+  frame(state,arena,&app,box.Input{correction:&change})
   check(app.error == errors.Kind.InvalidInput && app.storage[0] == 'T',"single line rejects multiline correction")
   change = correction(&collector,state.text_context.token,0,1,"Z")
-  frame(state,&arena,&app,box.Input{correction:&change,text:"extra",tab:true})
+  frame(state,arena,&app,box.Input{correction:&change,text:"extra",tab:true})
   check(app.error == errors.Kind.InvalidInput && bytes.equal(app.storage[..app.edit.length],"The cat") && state.text_context.token != 0,"unordered combined input rejected without moving focus")
 }
 '''

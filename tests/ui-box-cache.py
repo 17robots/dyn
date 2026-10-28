@@ -17,17 +17,17 @@ fn start(state: *box.State, frame: *mem.Arena) {
   box.begin(state, frame, box.Input{}, 100.0, 100.0, 0.02)
 }
 fn main() {
-  persistent := mem.Arena{}
-  frame := mem.Arena{}
-  defer { mem.arena_release(&frame)
-    mem.arena_release(&persistent) }
-  state := box.create(&persistent, measure, nil, 16.0)
+  persistent := mem.arena_create(0)
+  frame := mem.arena_create(0)
+  defer { mem.arena_release(frame)
+    mem.arena_release(persistent) }
+  state := box.create(persistent, measure, nil, 16.0)
   key := box.key_bytes(0, "explicit###identity")
   check(key != box.key(0, "explicit###identity"), "explicit identity does not parse label suffix")
   encoded: [8]u8 = [35,35,35,0,0,0,0,0]
   check(box.key_number(7, 0x232323) == box.key_bytes(7, encoded[..]), "numeric little-endian full bytes")
   check(box.key(7, "shown###identity") == box.key(7, "changed###identity"), "label suffix remains stable")
-  start(state, &frame)
+  start(state, frame)
   first := box.build_key(state, 0, key, "first")
   second := box.build_key(state, 0, key, "second")
   check(first != second && first.key != second.key, "duplicate identities derive separate boxes")
@@ -36,18 +36,18 @@ fn main() {
   second_key := second.key
   check(box.find(state, key) == first && box.find(state, second_key) == second, "lookup current frame")
   box.layout(state)
-  start(state, &frame)
+  start(state, frame)
   check(box.find(state, key) == nil, "previous frame is not current lookup")
   repeated := box.build_key(state, 0, key, "changed")
   repeated_second := box.build_key(state, 0, key, "changed second")
   check(repeated == first && repeated.user_data == 31 && repeated_second.key == second_key && repeated_second.user_data == 47, "caller identities persist across builds")
   box.layout(state)
   for i in 0..3 {
-    start(state, &frame)
+    start(state, frame)
     _ = box.build_key(state, 0, box.key_number(99, #cast(u64, i)), "temporary")
     box.layout(state)
   }
-  start(state, &frame)
+  start(state, frame)
   fresh := box.build_key(state, 0, key, "fresh")
   check(fresh.user_data == 0 && box.find(state, second_key) == nil, "expired caller state clears on recycle")
   box.layout(state)

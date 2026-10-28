@@ -25,12 +25,12 @@ fn oracle_write(raw: rawptr, data: []const u8) io.Result {
   return io.Result{ transferred: #len(data), status: io.Status.Complete }
 }
 fn request_check(body: []const u8, expected: []const u8) {
-  arena := mem.Arena{}
+  arena := mem.arena_create(0)
   feed := Feed{ data: "HTTP/1.1 204 No Content\r\n\r\n", step: 1 }
   oracle := Oracle{ expected: expected }
-  got := http.client_do(&arena, io.Reader{ data: &feed, read: read_feed }, io.Writer{ data: &oracle, write: oracle_write }, "POST", "?x", "host", body)
+  got := http.client_do(arena, io.Reader{ data: &feed, read: read_feed }, io.Writer{ data: &oracle, write: oracle_write }, "POST", "?x", "host", body)
   if !got.ok || oracle.at != #len(expected) { #panic("large request") }
-  mem.arena_release(&arena)
+  mem.arena_release(arena)
 }
 fn error_read(raw: rawptr, data: []u8) io.Result {
   _ = raw
@@ -43,14 +43,14 @@ fn error_write(raw: rawptr, data: []const u8) io.Result {
   return io.Result{ kind: errors.Kind.PermissionDenied, error: 0, status: io.Status.Error }
 }
 fn io_check(write_failure: bool) {
-  arena := mem.Arena{}
-  _ = mem.push_bytes_uninit(&arena, 7)
-  mark := mem.arena_mark(&arena)
+  arena := mem.arena_create(0)
+  _ = mem.push_bytes_uninit(arena, 7)
+  mark := mem.arena_mark(arena)
   writer := io.Writer{ write: sink }
   if write_failure { writer.write = error_write }
-  got := http.client_do(&arena, io.Reader{ read: error_read }, writer, "GET", "/", "host", "")
-  if got.ok || got.kind != errors.Kind.PermissionDenied || got.error != 0 || got.detail != http.ErrorKind.Io || #len(got.raw) != 0 || #len(got.body) != 0 || mem.arena_mark(&arena) != mark { #panic("I/O rollback") }
-  mem.arena_release(&arena)
+  got := http.client_do(arena, io.Reader{ read: error_read }, writer, "GET", "/", "host", "")
+  if got.ok || got.kind != errors.Kind.PermissionDenied || got.error != 0 || got.detail != http.ErrorKind.Io || #len(got.raw) != 0 || #len(got.body) != 0 || mem.arena_mark(arena) != mark { #panic("I/O rollback") }
+  mem.arena_release(arena)
 }
 struct Feed { data: []const u8, at: usize, cut: usize, step: usize }
 fn read_feed(raw: rawptr, destination: []u8) io.Result {
@@ -74,42 +74,75 @@ fn check(wire: []const u8, expected: []const u8, valid: bool, method: []const u8
   for cut in 0..splits {
     for step in [1, 7, 65536] {
       feed := Feed{ data: wire, cut: cut, step: #cast(usize, step) }
-      arena := mem.Arena{}
-      _ = mem.push_bytes_uninit(&arena, 3)
-      mark := mem.arena_mark(&arena)
+      arena := mem.arena_create(0)
+      _ = mem.push_bytes_uninit(arena, 3)
+      mark := mem.arena_mark(arena)
       _ = capacity
-      got := http.client_do(&arena, io.Reader{ data: #cast(rawptr, &feed), read: read_feed }, io.Writer{ write: sink }, method, "/", "host", "")
+      got := http.client_do(arena, io.Reader{ data: #cast(rawptr, &feed), read: read_feed }, io.Writer{ write: sink }, method, "/", "host", "")
       if got.ok != valid { #panic("response validity") }
       if valid && !bytes.equal(got.body, expected) { #panic("response body") }
       if !valid && got.detail != http.ErrorKind.Invalid { #panic("response error") }
-      if !valid && (#len(got.raw) != 0 || #len(got.body) != 0 || mem.arena_mark(&arena) != mark) { #panic("response rollback") }
-      mem.arena_release(&arena)
+      if !valid && (#len(got.raw) != 0 || #len(got.body) != 0 || mem.arena_mark(arena) != mark) { #panic("response rollback") }
+      mem.arena_release(arena)
+    }
+  }
+}
+fn chain_check(wire: []const u8, expected: []const u8, valid: bool) {
+  for block in [160,176] {
+    for step in [1,7,65536] {
+      arena := mem.arena_create(#cast(usize,block))
+      first := mem.push_bytes_uninit(arena,16)
+      for *byte in first { byte.*=71 }
+      forced := mem.push_bytes_uninit(arena,33)
+      for *byte in forced { byte.*=82 }
+      mark := mem.arena_mark(arena)
+      blocks := mem.arena_snapshot(arena).blocks
+      if blocks!=2 { #panic("prior forced chain") }
+      feed := Feed{data:wire,step:#cast(usize,step)}
+      got := http.client_do(arena,io.Reader{data:&feed,read:read_feed},io.Writer{write:sink},"GET","/","host","")
+      if got.ok!=valid { #panic("chain response validity") }
+      if valid {
+        if !bytes.equal(got.body,expected) || got.status!=200 { #panic("chain response body") }
+        checksum:usize=0
+        for byte in got.raw { checksum+=#cast(usize,byte) }
+        // An independent allocation must not reclaim or overwrite the result.
+        tail := mem.push_bytes_uninit(arena,4096)
+        for *byte in tail { byte.*=99 }
+        after:usize=0
+        for byte in got.raw { after+=#cast(usize,byte) }
+        if !bytes.equal(got.body,expected) || #len(got.raw)<#len(expected) || after!=checksum { #panic("chain retained response") }
+      } else if got.kind!=errors.Kind.InvalidInput || got.error!=0 || mem.arena_mark(arena)!=mark || mem.arena_snapshot(arena).blocks!=blocks || #len(got.raw)!=0 || #len(got.body)!=0 {
+        #panic("chain failure rollback")
+      }
+      for byte in first { if byte!=71 { #panic("chain first prefix") } }
+      for byte in forced { if byte!=82 { #panic("chain later prefix") } }
+      mem.arena_release(arena)
     }
   }
 }
 fn decode_check(wire: []const u8, expected: []const u8, valid: bool, offset: usize) {
-  arena := mem.Arena{}
-  _ = mem.push_bytes_uninit(&arena, 5)
-  mark := mem.arena_mark(&arena)
-  got := http.decode_chunked(&arena, wire)
+  arena := mem.arena_create(0)
+  _ = mem.push_bytes_uninit(arena, 5)
+  mark := mem.arena_mark(arena)
+  got := http.decode_chunked(arena, wire)
   if got.ok != valid { #panic("decode validity") }
   if valid && (!bytes.equal(got.value, expected) || got.count != #len(expected)) { #panic("decode bytes") }
-  if !valid && (#len(got.value) != 0 || got.offset != offset || got.error != 0 || mem.arena_mark(&arena) != mark) { #panic("decode rollback") }
-  mem.arena_release(&arena)
+  if !valid && (#len(got.value) != 0 || got.offset != offset || got.error != 0 || mem.arena_mark(arena) != mark) { #panic("decode rollback") }
+  mem.arena_release(arena)
 }
 fn live_alias_check() {
-  arena := mem.Arena{}
+  arena := mem.arena_create(0)
   wire: []const u8 = "3\r\nabc\r\n0\r\n\r\nrest"
-  borrowed := mem.push_bytes_uninit(&arena, #len(wire))
+  borrowed := mem.push_bytes_uninit(arena, #len(wire))
   _ = mem.copy(borrowed, wire)
-  got := http.decode_chunked(&arena, borrowed)
+  got := http.decode_chunked(arena, borrowed)
   if !got.ok || got.consumed != 13 || got.count != 3 || !bytes.equal(got.value, "abc") || !bytes.equal(borrowed, wire) { #panic("live decode alias") }
-  method := mem.push_bytes_uninit(&arena, 4)
+  method := mem.push_bytes_uninit(arena, 4)
   _ = mem.copy(method, "HEAD")
   feed := Feed{ data: "HTTP/1.1 200 OK\r\nContent-Length: 999999\r\n\r\n", step: 1 }
-  result := http.client_do(&arena, io.Reader{ data: &feed, read: read_feed }, io.Writer{ write: sink }, method, "/", "host", "")
+  result := http.client_do(arena, io.Reader{ data: &feed, read: read_feed }, io.Writer{ write: sink }, method, "/", "host", "")
   if !result.ok || #len(result.body) != 0 || !bytes.equal(method, "HEAD") { #panic("live method alias") }
-  mem.arena_release(&arena)
+  mem.arena_release(arena)
 }
 fn main() {
   live_alias_check()
@@ -154,6 +187,17 @@ for bad in ['g\r\n', ';x\r\n', '10000000000000000\r\n', '1\r\naXX', '0\r\nMissin
 # Truncation anywhere in encoded framing or payload must never report success.
 for end in range(len(chunk_head), len(chunk)):
     cases.append((chunk[:end], '', False, 'GET', 65536))
+chain_cases = [
+    ('HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nabcdef', 'abcdef', True),
+    ('HTTP/1.1 200 OK\r\n\r\nclose body', 'close body', True),
+    (chunk, 'abcde', True),
+    ('HTTP/1.1 100 Continue\r\n\r\n' + chunk, 'abcde', True),
+    ('HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nabcdef', 'abcdef', True),
+    ('HTTP/1.1 200 OK\r\nContent-Length: 9\r\n\r\nshort', '', False),
+    (chunk_head + '1\r\naXX', '', False),
+]
+for wire, body, valid in chain_cases:
+    SOURCE += f'  chain_check({q(wire)}, {q(body)}, {str(valid).lower()})\n'
 for wire, body, valid, method, capacity in cases:
     SOURCE += f'  check({q(wire)}, {q(body)}, {str(valid).lower()}, {q(method)}, {capacity})\n'
 SOURCE += '}\n'
@@ -165,18 +209,20 @@ with tempfile.TemporaryDirectory(prefix='dyn-http-fragments-') as temporary:
         subprocess.run([str(DYN), 'build', str(project), '--quiet', '--no-cache', '--output', str(binary), *mode], env=ENV, check=True, timeout=120)
         subprocess.run([str(binary)], env=ENV, check=True, timeout=30)
 PANICS = [
-    ('decode overlap', 'storage: [256]u8 = []\narena := mem.arena_from_buffer(storage[..])\n_ = http.decode_chunked(&arena, storage[80..90])'),
-    ('client late argument overlap', 'storage: [256]u8 = []\narena := mem.arena_from_buffer(storage[..])\n_ = http.client_do(&arena, io.Reader{ read: error_read }, io.Writer{ write: sink }, "GET", "/", "host", storage[80..90])'),
-    ('decode exhaustion', 'storage: [2]u8 = []\narena := mem.arena_from_buffer(storage[..])\n_ = http.decode_chunked(&arena, "3\\r\\nabc\\r\\n0\\r\\n\\r\\n")'),
-    ('client exhaustion', 'storage: [128]u8 = []\narena := mem.arena_from_buffer(storage[..])\nfeed := Feed{ data: "HTTP/1.1 200 OK\\r\\nContent-Length: 100\\r\\n\\r\\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", step: 1 }\n_ = http.client_do(&arena, io.Reader{ data: &feed, read: read_feed }, io.Writer{ write: sink }, "GET", "/", "host", "")'),
+    ('decode overlap', 'storage: [256 + mem.ArenaBufferOverhead]u8 = []\narena := mem.arena_from_buffer(storage[..])\n_ = http.decode_chunked(arena, arena.data[mem.ArenaHeader + 80..mem.ArenaHeader + 90])'),
+    ('client late argument overlap', 'storage: [256 + mem.ArenaBufferOverhead]u8 = []\narena := mem.arena_from_buffer(storage[..])\n_ = http.client_do(arena, io.Reader{ read: error_read }, io.Writer{ write: sink }, "GET", "/", "host", arena.data[mem.ArenaHeader + 80..mem.ArenaHeader + 90])'),
+    ('decode exhaustion', 'storage: [2 + mem.ArenaBufferOverhead]u8 = []\narena := mem.arena_from_buffer(storage[..])\narena = mem.arena_from_buffer(arena.data[..mem.ArenaHeader + 2])\n_ = http.decode_chunked(arena, "3\\r\\nabc\\r\\n0\\r\\n\\r\\n")'),
+    ('client exhaustion', 'storage: [128 + mem.ArenaBufferOverhead]u8 = []\narena := mem.arena_from_buffer(storage[..])\narena = mem.arena_from_buffer(arena.data[..mem.ArenaHeader + 128])\nfeed := Feed{ data: "HTTP/1.1 200 OK\\r\\nContent-Length: 100\\r\\n\\r\\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", step: 1 }\n_ = http.client_do(arena, io.Reader{ data: &feed, read: read_feed }, io.Writer{ write: sink }, "GET", "/", "host", "")'),
 ]
 with tempfile.TemporaryDirectory(prefix='dyn-http-arena-panic-') as temporary:
     project = Path(temporary)
     prefix = SOURCE[:SOURCE.index('fn main() {')]
-    for name, statement in PANICS:
-        (project / 'main.dyn').write_text(prefix + 'fn main() { ' + statement + ' }\n')
-        binary = project / 'panic'
-        subprocess.run([str(DYN), 'build', str(project), '--quiet', '--no-cache', '--output', str(binary)], env=ENV, check=True, timeout=120)
-        got = subprocess.run([str(binary)], env=ENV, capture_output=True, timeout=10)
-        assert got.returncode != 0 and b'panic' in got.stderr.lower(), (name, got.returncode, got.stderr)
-print('PASS HTTP arena: large request/response wire oracles, byte reads/splits, framing/trailers, rollback, aliases, native-zero I/O, exhaustion panics')
+    for mode in ([], ['--release']):
+        for name, statement in PANICS:
+            (project / 'main.dyn').write_text(prefix + 'fn main() { ' + statement + ' }\n')
+            binary = project / 'panic'
+            subprocess.run([str(DYN), 'build', str(project), '--quiet', '--no-cache', '--output', str(binary), *mode], env=ENV, check=True, timeout=120)
+            got = subprocess.run([str(binary)], env=ENV, capture_output=True, timeout=10)
+            expected = b'overlaps arena output' if 'overlap' in name else b'arena exhausted'
+            assert got.returncode != 0 and expected in got.stderr, (name, mode, got.returncode, got.stderr)
+print('PASS HTTP arena: large wire oracles, tiny chained blocks, interim/final framing, retained results/prefixes, exact rollback, aliases, native-zero I/O, exhaustion panics')

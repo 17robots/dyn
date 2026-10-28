@@ -67,7 +67,7 @@ fn show(arena: *mem.Arena, value: big.Int) {
 fn main() {
   arena := mem.arena_create(268435456)
   defer {
-    mem.arena_release(&arena)
+    mem.arena_release(arena)
   }
   at: usize = 0
   for at < #len(data) {
@@ -75,44 +75,44 @@ fn main() {
     line := data[at..end]
     at = end + 1
     space := bytes.find_byte(line, 32)
-    mark := mem.arena_mark(&arena)
-    a := big.parse(&arena, line[..space], 10).value
-    b := big.parse(&arena, line[space + 1..], 10).value
-    show(&arena, big.add(&arena, a, b))
-    show(&arena, big.subtract(&arena, a, b))
-    show(&arena, big.multiply(&arena, a, b))
-    divided := big.divide(&arena, a, b)
+    mark := mem.arena_mark(arena)
+    a := big.parse(arena, line[..space], 10).value
+    b := big.parse(arena, line[space + 1..], 10).value
+    show(arena, big.add(arena, a, b))
+    show(arena, big.subtract(arena, a, b))
+    show(arena, big.multiply(arena, a, b))
+    divided := big.divide(arena, a, b)
     if divided.ok {
-      show(&arena, divided.quotient)
-      show(&arena, divided.remainder)
+      show(arena, divided.quotient)
+      show(arena, divided.remainder)
     }
     else {
       _ = io.print(io.stdout(), "none none ")
     }
-    shift_bits := big.divide(&arena, big.absolute(b), big.from_u64(&arena, 300)).remainder
+    shift_bits := big.divide(arena, big.absolute(b), big.from_u64(arena, 300)).remainder
     shift := big.to_u64(shift_bits).value
-    show(&arena, big.shift_left(&arena, a, #cast(usize, shift)))
-    show(&arena, big.shift_right(&arena, a, #cast(usize, shift)))
+    show(arena, big.shift_left(arena, a, #cast(usize, shift)))
+    show(arena, big.shift_right(arena, a, #cast(usize, shift)))
     _ = io.print(io.stdout(), "{} {} ", big.compare(a, b), big.bit_length(a))
-    _ = io.print(io.stdout(), "{} {} ", big.format(&arena, a, 16), big.format(&arena, a, 2))
-    show(&arena, big.from_bytes(&arena, big.to_bytes(&arena, a)))
-    show(&arena, big.gcd(&arena, a, b))
-    exponent := big.divide(&arena, big.absolute(a), big.from_u64(&arena, 4096)).remainder
-    powered := big.power_mod(&arena, a, exponent, big.absolute(b))
+    _ = io.print(io.stdout(), "{} {} ", big.format(arena, a, 16), big.format(arena, a, 2))
+    show(arena, big.from_bytes(arena, big.to_bytes(arena, a)))
+    show(arena, big.gcd(arena, a, b))
+    exponent := big.divide(arena, big.absolute(a), big.from_u64(arena, 4096)).remainder
+    powered := big.power_mod(arena, a, exponent, big.absolute(b))
     if powered.ok {
-      _ = io.println(io.stdout(), "{}", big.format(&arena, powered.value, 10))
+      _ = io.println(io.stdout(), "{}", big.format(arena, powered.value, 10))
     }
     else {
       _ = io.println(io.stdout(), "none")
     }
-    mem.arena_rewind(&arena, mark)
+    mem.arena_rewind(arena, mark)
   }
-  bad := big.parse(&arena, "12x4", 10)
+  bad := big.parse(arena, "12x4", 10)
   if bad.ok || bad.offset != 2 {
     #panic("parse failure")
   }
-  hex := big.parse(&arena, "-FfeE", 16)
-  if !hex.ok || !mem.equal(big.format(&arena, hex.value, 36), "-1ejy") {
+  hex := big.parse(arena, "-FfeE", 16)
+  if !hex.ok || !mem.equal(big.format(arena, hex.value, 36), "-1ejy") {
     #panic("bases")
   }
 }

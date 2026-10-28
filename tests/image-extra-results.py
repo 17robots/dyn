@@ -16,17 +16,17 @@ use "std/process" process
 use "std/io" io
 use "std/strings" strings
 fn main() {
-  arena := mem.Arena{}
-  defer { mem.arena_release(&arena) }
-  args := process.arguments(&arena)
+  arena := mem.arena_create(0)
+  defer { mem.arena_release(arena) }
+  args := process.arguments(arena)
   if !args.ok || #len(args.value) != 4 { #panic("image arguments") }
   ENCODER
-  source := fs.read_all(&arena, args.value[2], 64000000)
+  source := fs.read_all(arena, args.value[2], 64000000)
   if !source.ok { #panic("image source") }
-  before := mem.arena_mark(&arena)
-  result := codec.decode(&arena, source.value)
+  before := mem.arena_mark(arena)
+  result := codec.decode(arena, source.value)
   if !result.ok {
-    if mem.arena_mark(&arena) != before { #panic("image rollback") }
+    if mem.arena_mark(arena) != before { #panic("image rollback") }
     _ = io.println(io.stdout(), "ERR {}", #cast(u32, result.kind))
     return
   }
@@ -38,7 +38,7 @@ ENCODER='''if strings.starts_with(args.value[1], "encode") {
   channels := strings.parse(u8, args.value[1][6..])
   pixels: [16]u8 = []
   for i in 0..4 { for j in 0..#cast(usize, channels) { pixels[i * #cast(usize, channels) + j] = #cast(u8, (i * 51 + j * 37)) } }
-  result := codec.encode(&arena, pixels[..4 * #cast(usize, channels)], 2, 2, channels)
+  result := codec.encode(arena, pixels[..4 * #cast(usize, channels)], 2, 2, channels)
   if !result.ok || !fs.write_all(args.value[2], result.value).ok { #panic("image encode") }
   return
 }'''
@@ -189,7 +189,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-image-extra-') as directory:
     if shutil.which('cjpeg'):fixture_data['jpeg']=data
     for kind,fixture in fixture_data.items():
         project=work/(kind+'-portable');project.mkdir()
-        source='use "std/image/'+kind+'" codec\nuse "std/mem" mem\nfn main() { arena := mem.Arena{}; defer { mem.arena_release(&arena) }; source: ['+str(len(fixture))+']u8 = ['+','.join(map(str,fixture))+']; result := codec.decode(&arena,source[..]); if !result.ok || result.value.info.width == 0 { #panic("portable image") } }'
+        source='use "std/image/'+kind+'" codec\nuse "std/mem" mem\nfn main() { arena := mem.arena_create(0); defer { mem.arena_release(arena) }; source: ['+str(len(fixture))+']u8 = ['+','.join(map(str,fixture))+']; result := codec.decode(arena,source[..]); if !result.ok || result.value.info.width == 0 { #panic("portable image") } }'
         (project/'main.dyn').write_text(source.replace('; ', '\n'))
         for target in ('aarch64-linux','riscv64-linux','x86_64-macos','aarch64-macos','x86_64-windows','aarch64-windows','wasm32-wasi'):
             subprocess.run([DYN,'build',str(project),'--release','--target',target,'--quiet','--output',str(work/(kind+'-'+target))],check=True,timeout=300)

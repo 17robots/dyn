@@ -144,10 +144,10 @@ fn main() {
   persistent := mem.arena_create(268435456)
   frame_arena := mem.arena_create(1073741824)
   defer {
-    mem.arena_release(&frame_arena)
-    mem.arena_release(&persistent)
+    mem.arena_release(frame_arena)
+    mem.arena_release(persistent)
   }
-  arguments := process.arguments(&persistent).value
+  arguments := process.arguments(persistent).value
   path: []const u8 = ""
   frames: usize = 0
   screenshot: []const u8 = ""
@@ -167,14 +167,14 @@ fn main() {
     }
   }
   if #len(path) == 0 {
-    installed := system_fonts.scan(&persistent, 4096)
+    installed := system_fonts.scan(persistent, 4096)
     selected := system_fonts.sans(installed)
     path = selected.path
     if #len(path) == 0 {
       #panic("no supported system font; pass a TrueType file")
     }
   }
-  data := fs.read_all(&persistent, path, 67108864)
+  data := fs.read_all(persistent, path, 67108864)
   if !data.ok {
     #panic("cannot read the font; pass a TrueType file")
   }
@@ -194,28 +194,28 @@ fn main() {
     window.close(&host)
   }
   scale := window.scale(&host)
-  built := font.atlas(&persistent, &face.value, codepoints[..], #cast(u16, 16.0 * scale + 0.5), 1024, 1024)
+  built := font.atlas(persistent, &face.value, codepoints[..], #cast(u16, 16.0 * scale + 0.5), 1024, 1024)
   if !built.ok {
     #panic("font atlas")
   }
-  atlas := mem.push(font.Atlas, &persistent)
+  atlas := mem.push(font.Atlas, persistent)
   atlas.* = built.value
   loaded := gl.load(window.gl_proc)
-  batch := mem.push(gpu.Batch, &persistent)
+  batch := mem.push(gpu.Batch, persistent)
   if !loaded.ok || !gpu.open_batch(batch, loaded.api).ok {
     #panic("OpenGL 3.3 unavailable")
   }
   defer {
     gpu.close_batch(batch)
   }
-  vertices := mem.push_array(f32, &persistent, #cast(usize, 14 * 6 * 16384))
-  app := mem.push(App, &persistent)
+  vertices := mem.push_array(f32, persistent, #cast(usize, 14 * 6 * 16384))
+  app := mem.push(App, persistent)
   app.atlas = atlas
   app.zoom = 1.0
   app.selected = 0
-  app.matches = mem.push_array(u32, &persistent, row_count)
+  app.matches = mem.push_array(u32, persistent, row_count)
   refilter(app)
-  state := box.create(&persistent, measure, atlas, #cast(f32, atlas.line_height))
+  state := box.create(persistent, measure, atlas, #cast(f32, atlas.line_height))
   state.scale = scale
   context: ui.Context
   glyphs := font_ui.atlas_renderer(atlas)
@@ -234,13 +234,13 @@ fn main() {
     now := time.monotonic_now().value
     dt := #cast(f32, time.elapsed(last, now).value) / 1000000000.0
     last = now
-    mem.arena_reset(&frame_arena)
+    mem.arena_reset(frame_arena)
     width := host.width
     height := host.height
     shown_width = width
     shown_height = height
-    ui.begin(&context, &frame_arena, ui.Input{}, ui.Rect{ width: width, height: height })
-    box.begin(state, &frame_arena, window.box_input(&host), #cast(f32, width), #cast(f32, height), dt)
+    ui.begin(&context, frame_arena, ui.Input{}, ui.Rect{ width: width, height: height })
+    box.begin(state, frame_arena, window.box_input(&host), #cast(f32, width), #cast(f32, height), dt)
     build(state, app)
     box.end(state, &context)
     // Let the input method place its candidates at the focused field's caret.
@@ -267,7 +267,7 @@ fn main() {
     }
     drawn += 1
     if frames != 0 && drawn >= frames && #len(screenshot) != 0 {
-      save(&loaded.api, &frame_arena, screenshot, width, height)
+      save(&loaded.api, frame_arena, screenshot, width, height)
     }
     _ = window.swap(&host)
     if frames != 0 && drawn >= frames {

@@ -1,7 +1,7 @@
 # Dyn compiler
 
 Dyn is ready for public preview testing. Start with
-[preview 25](https://github.com/17robots/dyn/releases/tag/v0.1.0-preview.25), then
+[preview 27](https://github.com/17robots/dyn/releases/tag/v0.1.0-preview.27), then
 [report bugs](https://github.com/17robots/dyn/issues). APIs may change between previews.
 See the [changelog](CHANGELOG.md) for upgrade notes and code migrations.
 The [documentation](docs/README.md) covers the language, the standard library
@@ -70,9 +70,9 @@ the default and only backend, including textual exports.
 
 | System | Download from the release |
 | --- | --- |
-| Linux x64, glibc 2.39+ (Ubuntu 24.04 or current Arch) | `dyn-0.1.0-preview.25-linux-x86_64-glibc2.39.tar.gz` |
-| Windows x64 (10/11 or Server 2022) | `dyn-0.1.0-preview.25-windows-x86_64.zip` |
-| macOS 15+, Apple Silicon | `dyn-0.1.0-preview.25-macos-aarch64.tar.gz` |
+| Linux x64, glibc 2.39+ (Ubuntu 24.04 or current Arch) | `dyn-0.1.0-preview.27-linux-x86_64-glibc2.39.tar.gz` |
+| Windows x64 (10/11 or Server 2022) | `dyn-0.1.0-preview.27-windows-x86_64.zip` |
+| macOS 15+, Apple Silicon | `dyn-0.1.0-preview.27-macos-aarch64.tar.gz` |
 
 The SDKs include the compiler, standard library, runtime, host linker and library
 dependencies. LLVM, MSYS2 and Homebrew are not required to use the
@@ -92,7 +92,7 @@ mise install github:17robots/dyn
 mise exec -- dyn version
 ```
 
-Expected version: `dyn 0.1.0-preview.25`. No compiler checkout is needed.
+Expected version: `dyn 0.1.0-preview.27`. No compiler checkout is needed.
 `mise exec -- dyn ...` works without shell activation. To use plain `dyn`, follow
 [mise's shell setup](https://mise.jdx.dev/getting-started.html).
 
@@ -116,7 +116,7 @@ On Linux/macOS, from the directory containing the downloaded archive:
 
 ```sh
 # Linux; substitute the macos-aarch64 archive name on macOS.
-tar -xzf dyn-0.1.0-preview.25-linux-x86_64-glibc2.39.tar.gz
+tar -xzf dyn-0.1.0-preview.27-linux-x86_64-glibc2.39.tar.gz
 ./dyn-sdk/bin/dyn version
 export PATH="$PWD/dyn-sdk/bin:$PATH"
 ```
@@ -124,9 +124,9 @@ export PATH="$PWD/dyn-sdk/bin:$PATH"
 On Windows, in PowerShell:
 
 ```powershell
-Expand-Archive .\dyn-0.1.0-preview.25-windows-x86_64.zip -DestinationPath .\dyn-preview25
-.\dyn-preview25\dyn-sdk\bin\dyn.exe version
-$env:Path = "$PWD\dyn-preview25\dyn-sdk\bin;$env:Path"
+Expand-Archive .\dyn-0.1.0-preview.27-windows-x86_64.zip -DestinationPath .\dyn-preview27
+.\dyn-preview27\dyn-sdk\bin\dyn.exe version
+$env:Path = "$PWD\dyn-preview27\dyn-sdk\bin;$env:Path"
 ```
 
 These PATH changes last for the current shell. For future shells, add the SDK's
@@ -181,7 +181,7 @@ may be newer than the latest published preview.
 | `std/fs` | Basic open/create/append/exclusive-create, read/write, seek/sync, close and stream adapters work on Linux, macOS and Windows. Directory traversal, metadata and atomic replacement remain Linux-specific; watching is available through the separate portable watch module. |
 | `fs.File{}` | Unopened. Use `fs.take(&file)` to transfer ownership, `fs.borrow(&file)` for a view, and `adopt_handle`/`borrow_handle` for native handles. Closing a borrowed or already-closed file returns `InvalidState`. |
 | `bufio.read_line` | Strips LF or CRLF, preserves lone CR. Returns `bufio.ReadStatus.More` when the destination fills: process those bytes and continue the same line. `Complete` ends a line; `End` may include a final fragment; `Error` reports failure. |
-| `process.arguments(&arena)` | Includes argv[0]; descriptors and bytes belong to the arena. Unix preserves native bytes; Windows converts UTF-16 to UTF-8. Linux reads `/proc/self/cmdline`; macOS and Windows use native process data. |
+| `process.arguments(arena)` | Includes argv[0]; descriptors and bytes belong to the arena. Unix preserves native bytes; Windows converts UTF-16 to UTF-8. Linux reads `/proc/self/cmdline`; macOS and Windows use native process data. |
 | `time.try_monotonic_now()` / `try_realtime_now()` | Fallible native clocks; monotonic measures durations, realtime uses Unix epoch. `sleep_result` reports failure. Date and duration helpers are portable; WASI supports clocks but not sleep. |
 | `std/errors` | Portable `kind` accompanies the original native `error` code. Check `ok` or `status` first: library failures may have code zero. |
 | `std/sync` | Atomics, mutexes, conditions, semaphores and once initialization work on Linux x64/ARM64, macOS ARM64 and Windows x64. Darwin mutexes use ownership-aware unfair locks; other waiters use native address waits. |
@@ -255,8 +255,8 @@ cd dyn
 ```
 
 These commands build current `main`. To build the published preview instead,
-run `git checkout v0.1.0-preview.25` before continuing. Source builds normally report
-`0.1.0-dev`; set `DYN_VERSION=0.1.0-preview.25` if you need that embedded version.
+run `git checkout v0.1.0-preview.27` before continuing. Source builds normally report
+`0.1.0-dev`; set `DYN_VERSION=0.1.0-preview.27` if you need that embedded version.
 Source builds require their build-time libraries and linker to remain installed.
 
 ### Linux x64 (Ubuntu 24.04)
@@ -430,5 +430,5 @@ Performance changes must preserve empty inputs, overlap rules, arithmetic bounds
 allocation-failure behavior and ABI contracts. `tests/performance-contracts.py`
 checks these alongside independent search oracles and compiler option/cache tests.
 
-Allocation goes through arenas: `mem.push(T, &arena)`, `mem.push_array(T, &arena, n)`
-and `mem.push_bytes_uninit(&arena, n)`. See [memory patterns](docs/guide/memory-patterns.md).
+Allocation goes through arenas: `mem.push(T, arena)`, `mem.push_array(T, arena, n)`
+and `mem.push_bytes_uninit(arena, n)`. See [memory patterns](docs/guide/memory-patterns.md).

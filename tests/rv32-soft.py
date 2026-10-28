@@ -21,7 +21,8 @@ CLANG = shlex.split(os.environ.get('CLANG', 'clang'))
 QEMU = shlex.split(os.environ.get('DYN_QEMU_RISCV32', 'qemu-system-riscv32'))
 for tool in ([DYN], CLANG, QEMU):
     if not tool or not shutil.which(tool[0]):
-        raise SystemExit('SKIP rv32-soft: missing prerequisite ' + str(tool))
+        print('SKIP rv32-soft: missing prerequisite ' + str(tool), flush=True)
+        raise SystemExit(0)
 
 
 def run(command, **kwargs):

@@ -22,7 +22,7 @@ fn main() {
   if pointer == nil { #panic("expected Lua string") }
   // Lua's pointer borrows the live stack value. Copy before popping it.
   borrowed := (#cast(*const u8, pointer))[..count]
-  retained := strings.clone(&persistent, borrowed)
+  retained := strings.clone(persistent, borrowed)
   lua.lua_pop(state, 1)
   // No use of borrowed/pointer beyond this point.
   if lua.lua_gettop(state) != 0 || !strings.equal(retained, "retained result") { #panic("lifetime contract") }

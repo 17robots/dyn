@@ -150,7 +150,11 @@ def check(path):
     for name, number, parameters, result, raw in declarations_found:
         if raw and raw_directory:
             continue
-        if name.endswith('_into'):
+        # The fixed C-string adapter preserves raw ABI scratch capacity and
+        # recoverable validation errors (see guide/buffer-contracts.md). This
+        # exempts its name only, not other wrappers or parameter heuristics.
+        c_string_adapter = path.parts[-3:] == ('std', 'c', 'c.dyn') and name == 'string_into'
+        if name.endswith('_into') and not c_string_adapter:
             problems.append((number, f'{name}: caller-buffer form; take the arena first and drop _into'))
         for suffix in ('_size', '_count'):
             base = name[:-len(suffix)]

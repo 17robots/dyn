@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """RFC6979 P-256/SHA256 vector plus independent Python integer oracle."""
-import hashlib,hmac,os,random,shutil,subprocess,tempfile
+import hashlib,hmac,os,random,shutil,subprocess,tempfile,time
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 P=2**256-2**224+2**192+2**96-1
@@ -66,13 +67,18 @@ fn vector(key: []const u8,message: []const u8,expected_public: []const u8,expect
 }
 fn main() {
 '''
+main_prefix = s
+debug_sources = []
 key=int('c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721',16)
 assert vector(key,b'sample')[1].hex()=='efd48b2aacb6a8fd1140dd9cd45e81d69d2c877b56aaf991c34d0ea84eaf3716f7cb1c942d657c41d436c7a1b6e29f65f3e900dbb9aff4064dc4ab2f843acda8'
 rng=random.Random(6979)
 vectors=[(key,b'sample'),(1,b''),(N-1,b'boundary'),(rng.randrange(1,N),rng.randbytes(257))]
 for key,message in vectors:
  public,signature=vector(key,message)
- s+=' vector('+','.join(map(literal,(key.to_bytes(32,'big'),message,public,signature)))+')\n'
+ call=' vector('+','.join(map(literal,(key.to_bytes(32,'big'),message,public,signature)))+')\n'
+ s+=call
+ debug_sources.append((f'vector-{len(debug_sources)+1}', main_prefix+call+'}\n'))
+vectors_end = len(s)
 # Force equal and opposite points in the final verification addition.
 r=scalar(2)[0]%N
 base=b'\4'+b''.join(x.to_bytes(32,'big') for x in G)
@@ -102,12 +108,38 @@ s+=''' key: [32]u8
  check(!p.verify(signature[..],"",public[..]))
  check(!p.verify(signature[..63],"",public[..]))
 }\n'''
+# Keep debug tracing enabled for every vector. Individual processes give CI
+# progress/failure isolation without widening process or aggregate time budgets.
+debug_sources.append(('edge-cases', main_prefix+s[vectors_end:]))
+def run_debug_case(program):
+ case,output=program
+ print(f'RUN P256 debug {case}: tracing enabled, 300s limit',flush=True)
+ start=time.monotonic()
+ subprocess.run([str(output)],check=True,timeout=300)
+ print(f'PASS P256 debug {case}: {time.monotonic()-start:.2f}s',flush=True)
+
 with tempfile.TemporaryDirectory(prefix='dyn-p256-') as directory:
- work=Path(directory);(work/'main.dyn').write_text(s)
- for flags in (['--debug'],['--release'],['--release','--opt-level','3']):
+ work=Path(directory)
+ debug_programs=[]
+ for case,source in debug_sources:
+  project=work/case
+  project.mkdir()
+  (project/'main.dyn').write_text(source,encoding='utf-8')
+  output=project/('program.exe' if os.name=='nt' else 'program')
+  subprocess.run([DYN,'build',str(project),'--debug','--quiet','--no-cache','--output',str(output)],check=True,timeout=300)
+  debug_programs.append((case,output))
+ # Two independent cases fit the hosted runner while keeping all trace checks.
+ with ThreadPoolExecutor(max_workers=min(2,os.cpu_count() or 1)) as pool:
+  list(pool.map(run_debug_case,debug_programs))
+ (work/'main.dyn').write_text(s,encoding='utf-8')
+ for flags in (['--release'],['--release','--opt-level','3']):
   output=work/'program'
   subprocess.run([DYN,'build',str(work),*flags,'--quiet','--no-cache','--output',str(output)],check=True,timeout=300)
+  mode='O3' if '--opt-level' in flags else 'O2'
+  print(f'RUN P256 {mode}: all vectors, 120s limit',flush=True)
+  start=time.monotonic()
   subprocess.run([str(output)],check=True,timeout=120)
+  print(f'PASS P256 {mode}: {time.monotonic()-start:.2f}s',flush=True)
  for target in ('aarch64-linux','riscv64-linux','x86_64-macos','aarch64-macos','x86_64-windows','aarch64-windows','wasm32-wasi'):
   output=work/target
   subprocess.run([DYN,'build',str(work),'--target',target,'--release','--quiet','--no-cache','--output',str(output)],check=True,timeout=300)

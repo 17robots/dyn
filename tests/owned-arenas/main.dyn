@@ -2,26 +2,12 @@ use "std/mem"
 fn expect(condition: bool, message: []const u8) { if !condition { #panic(message) } }
 
 fn main() {
-  empty := mem.arena_try_create(0)
-  expect(!empty.ok && mem.arena_capacity(&empty.arena) == 0, "zero capacity is fallible")
-  mem.arena_release(&empty.arena)
-  refused := mem.arena_try_create(#cast(usize, -1))
-  expect(!refused.ok && mem.arena_capacity(&refused.arena) == 0, "impossible reservation is fallible")
-  mem.arena_release(&refused.arena)
-  failed_chain := mem.growing_create(#cast(usize, 1) << 62)
-  failure := mem.growing_try_push(&failed_chain, 8, 8)
-  expect(!failure.ok && failed_chain.first == nil && failed_chain.backing_bytes == 0, "system failure preserves growing owner")
-  mem.growing_release(&failed_chain)
-  successful := mem.arena_try_create(64)
-  expect(successful.ok, "fallible creation succeeds")
-  mem.arena_release(&successful.arena)
-  untouched: [4]u8 = [11, 22, 33, 44]
-  borrowed := mem.arena_from_buffer(untouched[..])
-  raw := mem.arena_try_push_uninit(&borrowed, 4, 1)
-  expect(raw.ok && raw.memory.* == 11 && raw.memory[..4][3] == 44, "fallible uninitialized push")
-  expect(!mem.arena_try_push_uninit(&borrowed, 1, 1).ok && mem.arena_used(&borrowed) == 4, "uninitialized push capacity rollback")
-  created := mem.arena_create(128)
-  arena := &created
+  defaults := mem.arena_create(0)
+  expect(mem.arena_capacity(defaults) > 0 && mem.arena_snapshot(defaults).owns_memory, "explicit default owned arena")
+  mem.arena_release(defaults)
+  defaults = nil
+  // This limit includes the header and exactly 128 payload bytes.
+  arena := mem.arena_create_bounded(mem.ArenaHeader + 128, mem.ArenaHeader + 128)
   allocation := mem.arena_push(arena, 128, 1)
   allocated_bytes := allocation[..128]
   expect(allocated_bytes[0] == 0 && allocated_bytes[127] == 0, "owned zeroed storage")
@@ -30,30 +16,39 @@ fn main() {
   expect(mem.arena_used(arena) == 128, "failed fixed push preserves offset")
   mem.arena_reset(arena)
   repeated := mem.arena_push(arena, 128, 1)
-  expect(repeated == allocation && repeated.* == 0, "owned reset reuse and zero")
+  expect(repeated[..128][0] == 0 && repeated[..128][127] == 0 && mem.arena_used(arena) == 128, "owned reset reuse and zero")
+  saved := mem.arena_snapshot(arena)
   mem.arena_release(arena)
-  mem.arena_release(arena)
-  expect(mem.arena_capacity(arena) == 0, "release clears borrowed buffer")
+  arena = nil
+  expect(saved.used == 128 && saved.blocks == 1, "snapshot survives release")
+  mem.arena_release(arena) // Nil is safe; an owned arena pointer expires on release.
 
-  chain := mem.growing_create(32)
-  a := mem.growing_push(&chain, 24, 8)
-  b := mem.growing_push(&chain, 24, 8)
+  // Small blocks force chaining; earlier pushes never move.
+  chain := mem.arena_create(256)
+  a := mem.push(u64, chain)
+  start := mem.arena_mark(chain)
+  for i in 0..40 {
+    _ = mem.arena_push(chain, 24, 8)
+  }
+  b := mem.push(u64, chain)
   a.* = 20
   b.* = 22
-  expect(a != b && a.* + b.* == 42, "growing pointer stability")
-  huge := mem.growing_try_push(&chain, #cast(usize, -1), 8)
+  expect(a != b && a.* + b.* == 42 && mem.arena_snapshot(chain).blocks > 1, "chained pointer stability")
+  huge := mem.arena_try_push(chain, #cast(usize, -1), 8)
   expect(!huge.ok && a.* == 20 && b.* == 22, "overflow leaves allocations intact")
-  expect(!mem.growing_try_push(&chain, 1, 3).ok, "invalid alignment")
-  aligned := mem.growing_try_push(&chain, 1, 8192)
+  expect(!mem.arena_try_push(chain, 1, 3).ok, "invalid alignment")
+  aligned := mem.arena_try_push(chain, 1, 8192)
   expect(aligned.ok && (#cast(usize, aligned.memory) & 8191) == 0, "large alignment")
-  mem.growing_reset(&chain)
-  reused_a := mem.growing_push(&chain, 24, 8)
-  reused_b := mem.growing_push(&chain, 24, 8)
-  expect(reused_a == a && reused_b == b && reused_a.* == 0 && reused_b.* == 0, "reuse all retained blocks")
-  mem.growing_release(&chain)
-  mem.growing_release(&chain)
-  expect(chain.first == nil && chain.current == nil, "release clears chain")
-  expect(mem.growing_try_push(&chain, 0, 1).ok, "empty allocation")
-  expect(mem.growing_try_push(&chain, 1, 1).ok, "reuse released handle")
-  mem.growing_release(&chain)
+  mem.arena_rewind(chain, start)
+  expect(mem.arena_snapshot(chain).blocks == 1 && a.* == 20, "rewind frees later blocks")
+  mem.arena_reset(chain)
+  reused := mem.push(u64, chain)
+  expect(reused.* == 0 && mem.arena_snapshot(chain).blocks == 1, "reset starts fresh in first block")
+  mem.arena_release(chain)
+  chain = nil
+  bounded := mem.arena_create_bounded(256, 1024)
+  expect(mem.arena_try_push(bounded, 128, 8).ok, "bounded push")
+  expect(!mem.arena_try_push(bounded, 2048, 8).ok, "bounded cap")
+  mem.arena_release(bounded)
+  bounded = nil
 }

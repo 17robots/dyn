@@ -77,10 +77,10 @@ fn main() {
  }
  check(loaded.api.get_error() == 0)
  // A glyph wider than hardware textures succeeds when only one pixel is visible.
- arena := mem.Arena{}
- defer { mem.arena_release(&arena) }
+ arena := mem.arena_create(0)
+ defer { mem.arena_release(arena) }
  check(renderer.max_texture > 0 && renderer.max_texture < 1048576)
- wide := Wide{pixels:mem.push_array(u8,&arena,#cast(usize,renderer.max_texture)+1)}
+ wide := Wide{pixels:mem.push_array(u8,arena,#cast(usize,renderer.max_texture)+1)}
  wide.pixels[0] = 255
  single := ui.Command{kind:ui.Kind.Glyph,bounds:ui.Rect{width:32,height:32},clip:ui.Rect{x:2,y:2,width:1,height:1},glyph_x:2,glyph_y:2,color:ui.Color{r:255,a:255}}
  check(gpu.render(&renderer,&single,32,32,software.Font{data:&wide,glyph:wide_bitmap,line_height:1}).ok)
@@ -130,7 +130,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-native-ui-') as directory:
         library=bridge if sys.platform=='darwin' else work/'libdyn_window.dll.a'
         backends.append((sys.platform,SOURCE,['--link',str(library)]))
     for name,source,links in backends:
-        (work/'main.dyn').write_text(source)
+        (work/'main.dyn').write_text(source, encoding='utf-8')
         for flags in (['--debug'], ['--release'], ['--release', '--opt-level', '3']):
             output = work/('program.exe' if sys.platform=='win32' else 'program')
             subprocess.run([DYN,'build',str(work),*flags,'--quiet','--no-cache',*links,'--output',str(output)],check=True,timeout=300)
@@ -139,7 +139,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-native-ui-') as directory:
     if sys.platform.startswith('linux') and os.environ.get('DISPLAY'):
         shim=work/'glx-failure.so'
         subprocess.run([*shlex.split(os.environ.get('CC','cc')),'-shared','-fPIC','-Wall','-Wextra','-Werror',str(ROOT/'tests/x11-context-failure.c'),'-ldl','-o',str(shim)],check=True,timeout=60)
-        (work/'main.dyn').write_text('use "vendor/window" window\nuse "std/errors" errors\nfn main(){ host := window.Window{}\n result := window.open(&host,"Expected failure",32,32)\n if result.ok || result.kind != errors.Kind.System || host.display != nil { #panic("GLX error was not recovered") }\n window.close(&host)\n}\n')
+        (work/'main.dyn').write_text('use "vendor/window" window\nuse "std/errors" errors\nfn main(){ host := window.Window{}\n result := window.open(&host,"Expected failure",32,32)\n if result.ok || result.kind != errors.Kind.System || host.display != nil { #panic("GLX error was not recovered") }\n window.close(&host)\n}\n', encoding='utf-8')
         output=work/'context-failure'
         subprocess.run([DYN,'build',str(work),'--debug','--quiet','--output',str(output)],check=True,timeout=300)
         subprocess.run([str(output)],env={**os.environ,'LD_PRELOAD':str(shim)},check=True,timeout=60)
@@ -149,7 +149,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-native-ui-') as directory:
         subprocess.run([*shlex.split(os.environ.get('CC','cc')),'-fobjc-arc',str(ROOT/'tests/cocoa-window-results.m'),'-framework','Cocoa','-framework','OpenGL','-o',str(executable)],check=True,timeout=60)
         subprocess.run([str(executable)],check=True,timeout=60)
         print('PASS native Cocoa multiwindow event routing')
-    (work/'main.dyn').write_text(SOURCE)
+    (work/'main.dyn').write_text(SOURCE, encoding='utf-8')
     for target in ('aarch64-linux','riscv64-linux','x86_64-windows','aarch64-windows','x86_64-macos','aarch64-macos'):
         subprocess.run([DYN,'build',str(work),'--target',target,'--release','--quiet','--no-link','--emit-object','--output',str(work/target)],check=True,timeout=300)
     if sys.platform.startswith('linux') and shutil.which('zig'):

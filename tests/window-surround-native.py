@@ -176,7 +176,7 @@ int main(void){Host h={0};desktop_listen(&h.desktop,1);h.desktop.surrounding.tok
 def prefix_fixture():
     path=ROOT/'tests/window-ime-native.py'
     statements=[]
-    for node in ast.parse(path.read_text()).body:
+    for node in ast.parse(path.read_text(encoding='utf-8')).body:
         if isinstance(node,ast.With): break
         statements.append(node)
     namespace={'__file__':str(path)}
@@ -186,7 +186,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-surround-native-') as directory:
     work=Path(directory)
     cc=shlex.split(os.environ.get('CC','cc'))
     if cc and shutil.which(cc[0]):
-        (work/'common.c').write_text(COMMON)
+        (work/'common.c').write_text(COMMON, encoding='utf-8')
         output=work/('common.exe' if os.name=='nt' else 'common')
         subprocess.run([*cc,'-std=c11','-Wall','-Wextra','-Werror','-I'+str(NATIVE),str(work/'common.c'),'-o',str(output)],check=True)
         subprocess.run([str(output)],check=True,timeout=30)
@@ -197,17 +197,17 @@ with tempfile.TemporaryDirectory(prefix='dyn-surround-native-') as directory:
             subprocess.run([sys.executable,str(NATIVE/'build.py'),'--output',str(work/'libdyn_window.so')],check=True,timeout=120)
             old=prefix_fixture()['WAYLAND']; old=old[:old.index('int main(void)')]
             old=old.replace('#include "wayland.c"',EXTRA+'\n#include "wayland.c"')
-            (work/'wayland-probe.c').write_text(old+WAYLAND_MAIN)
+            (work/'wayland-probe.c').write_text(old+WAYLAND_MAIN, encoding='utf-8')
             flags=shlex.split(subprocess.check_output(['pkg-config','--cflags','--libs','wayland-client','wayland-egl','wayland-cursor','xkbcommon','egl'],text=True))
             output=work/'wayland'
             subprocess.run([*cc,'-std=c11','-D_GNU_SOURCE','-Wall','-Wextra','-Werror','-I'+str(NATIVE),'-I'+str(work),str(work/'wayland-probe.c'),str(work/'xdg-shell-protocol.c'),str(work/'text-input-unstable-v3-protocol.c'),*flags,'-o',str(output)],check=True,timeout=120)
             subprocess.run([str(output)],check=True,timeout=30)
     if sys.platform=='darwin' and cc:
-        (work/'cocoa-probe.m').write_text(COCOA)
+        (work/'cocoa-probe.m').write_text(COCOA, encoding='utf-8')
         output=work/'cocoa-probe'
         subprocess.run([*cc,'-fobjc-arc','-Wno-deprecated-declarations','-I'+str(NATIVE),str(work/'cocoa-probe.m'),'-framework','Cocoa','-framework','OpenGL','-o',str(output)],check=True,timeout=120)
         subprocess.run([str(output)],check=True,timeout=30)
-    (work/'windows.c').write_text(WINDOWS)
+    (work/'windows.c').write_text(WINDOWS, encoding='utf-8')
     if sys.platform.startswith('linux') and shutil.which('zig'):
         for target in ('x86_64-windows-gnu','aarch64-windows-gnu'):
             subprocess.run(['zig','cc','-target',target,'-std=c11','-Wall','-Wextra','-Werror','-I'+str(NATIVE),'-c',str(work/'windows.c'),'-o',str(work/(target+'.o'))],check=True,timeout=120)

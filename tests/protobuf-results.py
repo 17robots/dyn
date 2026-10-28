@@ -21,8 +21,8 @@ fn bad(source: []const u8) {
   check(again.kind == result.kind && again.offset == result.offset)
 }
 fn main() {
-  arena := mem.Arena{}
-  defer { mem.arena_release(&arena) }
+  arena := mem.arena_create(0)
+  defer { mem.arena_release(arena) }
   fields: [7]pb.Field = [pb.Field{ number: 1, wire: pb.Wire.Varint, value: 150 },
     pb.Field{ number: 2, wire: pb.Wire.Fixed64, value: 0x0123456789abcdef },
     pb.Field{ number: 3, wire: pb.Wire.Bytes, bytes: "hi\x00" },
@@ -30,7 +30,7 @@ fn main() {
     pb.Field{ number: 5, wire: pb.Wire.StartGroup },
     pb.Field{ number: 1, wire: pb.Wire.Varint, value: 0xffffffffffffffff },
     pb.Field{ number: 5, wire: pb.Wire.EndGroup }]
-  encoded := pb.encode(&arena,fields[..])
+  encoded := pb.encode(arena,fields[..])
   golden := "\x08\x96\x01\x11\xef\xcd\xab\x89\x67\x45\x23\x01\x1a\x03hi\x00\x25\xef\xcd\xab\x89\x2b\x08\xff\xff\xff\xff\xff\xff\xff\xff\xff\x01\x2c"
   check(encoded.ok && bytes.equal(encoded.value,golden))
   state := pb.reader(golden)
@@ -56,15 +56,15 @@ fn main() {
   state = pb.reader(deep[..])
   for i in 0..64 { check(pb.next(&state).ok) }
   check(pb.next(&state).kind == errors.Kind.Capacity && pb.next(&state).kind == errors.Kind.Capacity)
-  mark := mem.arena_mark(&arena)
+  mark := mem.arena_mark(arena)
   invalid: [1]pb.Field = [pb.Field{ number: 0 }]
-  check(pb.encode(&arena,invalid[..]).kind == errors.Kind.InvalidInput && mem.arena_mark(&arena) == mark)
+  check(pb.encode(arena,invalid[..]).kind == errors.Kind.InvalidInput && mem.arena_mark(arena) == mark)
   invalid[0] = pb.Field{ number: 1, wire: pb.Wire.Fixed32, value: 0x100000000 }
-  check(pb.encode(&arena,invalid[..]).kind == errors.Kind.InvalidInput && mem.arena_mark(&arena) == mark)
+  check(pb.encode(arena,invalid[..]).kind == errors.Kind.InvalidInput && mem.arena_mark(arena) == mark)
   invalid[0] = pb.Field{ number: 1, wire: pb.Wire.StartGroup }
-  check(pb.encode(&arena,invalid[..]).kind == errors.Kind.InvalidInput && mem.arena_mark(&arena) == mark)
+  check(pb.encode(arena,invalid[..]).kind == errors.Kind.InvalidInput && mem.arena_mark(arena) == mark)
   fields[0] = pb.Field{ number: 536870911, value: 0xffffffffffffffff }
-  encoded = pb.encode(&arena,fields[..1])
+  encoded = pb.encode(arena,fields[..1])
   state = pb.reader(encoded.value)
   result := pb.next(&state)
   check(encoded.ok && result.ok && result.value.number == 536870911 && result.value.value == 0xffffffffffffffff)

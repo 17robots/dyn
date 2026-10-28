@@ -14,15 +14,15 @@ use "std/mem" mem
 use "std/errors" errors
 fn check(ok: bool) { if !ok { #panic("event readiness") } }
 fn main() {
-  arena := mem.Arena{}
-  scratch := mem.Arena{}
-  defer { mem.arena_release(&scratch)
-    mem.arena_release(&arena) }
-  check(event.open(&arena, 0).kind == errors.Kind.InvalidInput)
-  opened := event.open(&arena, 1)
+  arena := mem.arena_create(0)
+  scratch := mem.arena_create(0)
+  defer { mem.arena_release(scratch)
+    mem.arena_release(arena) }
+  check(event.open(arena, 0).kind == errors.Kind.InvalidInput)
+  opened := event.open(arena, 1)
   check(opened.ok)
   queue := opened.value
-  check(event.wait(&scratch, &queue, 0).ok)
+  check(event.wait(scratch, &queue, 0).ok)
   socket := net.socket(net.AddressFamilyIpv4, net.SocketDatagram, 0)
   check(socket.ok)
   descriptor := socket.value
@@ -38,34 +38,34 @@ fn main() {
   check(other.ok)
   check(event.add(&queue, other.value, event.Readable, 1).kind == errors.Kind.Capacity)
   check(net.close(other.value).ok)
-  empty := event.wait(&scratch, &queue, 5)
+  empty := event.wait(scratch, &queue, 5)
   check(empty.ok && #len(empty.value) == 0)
   check(net.send_to(descriptor, "x", 0, local.bytes[..local.length]).ok)
-  ready := event.wait(&scratch, &queue, 1000)
+  ready := event.wait(scratch, &queue, 1000)
   check(ready.ok && #len(ready.value) == 1)
   check(ready.value[0].descriptor == descriptor && ready.value[0].token == 42 && (ready.value[0].events & event.Readable) != 0)
-  ready = event.wait(&scratch, &queue, 0)
+  ready = event.wait(scratch, &queue, 0)
   check(ready.ok && #len(ready.value) == 1)
   check(event.modify(&queue, descriptor, event.Writable, 18446744073709551615).ok)
-  ready = event.wait(&scratch, &queue, 1000)
+  ready = event.wait(scratch, &queue, 1000)
   check(ready.ok && #len(ready.value) == 1 && ready.value[0].token == 18446744073709551615 && (ready.value[0].events & event.Writable) != 0)
   check(event.remove(&queue, descriptor).ok)
   check(event.remove(&queue, descriptor).kind == errors.Kind.NotFound)
   check(event.modify(&queue, descriptor, event.Readable, 0).kind == errors.Kind.NotFound)
-  check(event.wait(&scratch, &queue, 0).ok)
+  check(event.wait(scratch, &queue, 0).ok)
   check(event.add(&queue, descriptor, event.Readable, 7).ok)
-  ready = event.wait(&scratch, &queue, 0)
+  ready = event.wait(scratch, &queue, 0)
   check(ready.ok && #len(ready.value) == 1 && ready.value[0].token == 7)
   check(event.remove(&queue, descriptor).ok)
   check(event.close(&queue).ok && event.close(&queue).ok)
-  check(event.wait(&scratch, &queue, 0).kind == errors.Kind.InvalidState)
+  check(event.wait(scratch, &queue, 0).kind == errors.Kind.InvalidState)
   // The queue never closes registered descriptors.
   check(net.close(descriptor).ok)
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-event-results-') as directory:
     work = Path(directory)
-    (work / 'main.dyn').write_text(SOURCE.replace('  // The queue never closes registered descriptors.', '  fault(&arena, &scratch)\n  // The queue never closes registered descriptors.'))
+    (work / 'main.dyn').write_text(SOURCE.replace('  // The queue never closes registered descriptors.', '  fault(arena, scratch)\n  // The queue never closes registered descriptors.'))
     (work / 'posix.dyn').write_text('''#target(kernel: linux)
 fn fault(arena: *mem.Arena, scratch: *mem.Arena) {
   opened := event.open(arena, 1)

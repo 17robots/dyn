@@ -187,9 +187,9 @@ use "std/mem" mem
 extern fn key "dyn_send_key"(display:rawptr,handle:usize,symbol:usize,modifiers:u32,down:i32)
 fn check(ok:bool){if !ok{#panic("XIM commit bounds")}}
 fn main(){
- arena:=mem.Arena{}
- defer{mem.arena_release(&arena)}
- split:=process.environment(&arena,"DYN_TEST_SPLIT_COMMIT").found
+ arena:=mem.arena_create(0)
+ defer{mem.arena_release(arena)}
+ split:=process.environment(arena,"DYN_TEST_SPLIT_COMMIT").found
  host:=window.Window{}
  check(window.open(&host,"XIM commit bounds",64,64).ok)
  defer{window.close(&host)}
@@ -384,7 +384,7 @@ int main(void) {
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-window-events-') as directory:
     work = Path(directory)
-    (work/'main.dyn').write_text(SOURCE)
+    (work/'main.dyn').write_text(SOURCE, encoding='utf-8')
     for mode in ('--debug','--release'):
         output=work/('queue'+SUFFIX)
         subprocess.run([DYN,'build',str(work),mode,'--quiet','--output',str(output)],check=True,timeout=120)
@@ -392,7 +392,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-window-events-') as directory:
     for target in ('aarch64-linux','riscv64-linux','x86_64-macos','aarch64-macos','x86_64-windows','aarch64-windows','wasm32-wasi'):
         subprocess.run([DYN,'build',str(work),'--release','--target',target,'--quiet','--output',str(work/target)],check=True,timeout=120)
     if HAVE_CC:
-        (work/'native-unit.c').write_text(NATIVE_UNIT)
+        (work/'native-unit.c').write_text(NATIVE_UNIT, encoding='utf-8')
         subprocess.run([*CC,'-std=c11','-Wall','-Wextra','-Werror','-I'+str(ROOT/'vendor/window/native'),str(work/'native-unit.c'),'-o',str(work/('native-unit'+SUFFIX))],check=True)
         subprocess.run([str(work/('native-unit'+SUFFIX))],check=True,timeout=20)
     if sys.platform.startswith('linux') and HAVE_CC and shutil.which('wayland-scanner') and shutil.which('pkg-config'):
@@ -406,7 +406,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-window-events-') as directory:
             text_xml=str(Path(protocol_root)/'unstable/text-input/text-input-unstable-v3.xml')
             subprocess.run(['wayland-scanner','client-header',text_xml,str(work/'text-input-unstable-v3-client-protocol.h')],check=True)
             subprocess.run(['wayland-scanner','private-code',text_xml,str(work/'text-input-unstable-v3-protocol.c')],check=True)
-            (work/'wayland-probe.c').write_text(WAYLAND_MOCK)
+            (work/'wayland-probe.c').write_text(WAYLAND_MOCK, encoding='utf-8')
             flags=shlex.split(subprocess.check_output(['pkg-config','--cflags','--libs','wayland-client','wayland-egl','wayland-cursor','xkbcommon','egl'],text=True))
             output=work/'wayland-probe'
             subprocess.run([*CC,'-std=c11','-D_GNU_SOURCE','-Wall','-Wextra','-Werror','-I'+str(ROOT/'vendor/window/native'),'-I'+str(work),str(work/'wayland-probe.c'),str(work/'xdg-shell-protocol.c'),str(work/'text-input-unstable-v3-protocol.c'),*flags,'-o',str(output)],check=True,timeout=120)
@@ -415,14 +415,14 @@ with tempfile.TemporaryDirectory(prefix='dyn-window-events-') as directory:
                 bridge=work/'libdyn_window.so'
                 subprocess.run([sys.executable,str(ROOT/'vendor/window/native/build.py'),'--output',str(bridge)],check=True,timeout=120)
                 wake_source='#define _POSIX_C_SOURCE 200809L\n#include <pthread.h>\n#include <stdlib.h>\n#include <time.h>\n'+C[C.index('typedef struct Work'):]
-                (work/'wake.c').write_text(wake_source)
+                (work/'wake.c').write_text(wake_source, encoding='utf-8')
                 subprocess.run([*CC,'-std=c11','-Wall','-Wextra','-Werror','-c',str(work/'wake.c'),'-o',str(work/'wake.o'),'-pthread'],check=True)
-                (work/'main.dyn').write_text(WAYLAND_WAKE)
+                (work/'main.dyn').write_text(WAYLAND_WAKE, encoding='utf-8')
                 output=work/'wayland-wake'
                 subprocess.run([DYN,'build',str(work),'--release','--quiet','--link',str(bridge),'--link',str(work/'wake.o'),'--output',str(output)],check=True,timeout=120)
                 subprocess.run([str(output)],check=True,timeout=20)
     if sys.platform.startswith('linux') and shutil.which('zig') and HAVE_CC:
-        (work/'win32-probe.c').write_text(WIN32)
+        (work/'win32-probe.c').write_text(WIN32, encoding='utf-8')
         for target in ('x86_64-windows-gnu','aarch64-windows-gnu'):
             subprocess.run(['zig','cc','-target',target,'-std=c11','-Wall','-Wextra','-Werror','-I'+str(ROOT/'vendor/window/native'),'-c',str(work/'native-unit.c'),'-o',str(work/(target+'.o'))],check=True,timeout=120)
         if shutil.which('wine') and os.environ.get('DISPLAY'):
@@ -433,7 +433,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-window-events-') as directory:
             result.check_returncode()
             print(result.stdout.strip())
     if sys.platform == 'win32' and HAVE_CC:
-        (work/'win32-probe.c').write_text(WIN32)
+        (work/'win32-probe.c').write_text(WIN32, encoding='utf-8')
         output=work/'win32-native.exe'
         if os.environ.get('DYN_OPENGL_DLL'):
             driver=Path(os.environ['DYN_OPENGL_DLL']).resolve()
@@ -444,17 +444,17 @@ with tempfile.TemporaryDirectory(prefix='dyn-window-events-') as directory:
     if sys.platform == 'darwin':
         print('SKIP Cocoa ordered runtime injection: C ABI queue tested; native event/wake qualification remains separate')
     if sys.platform.startswith('linux') and os.environ.get('DISPLAY') and HAVE_CC:
-        (work/'probe.c').write_text(C)
+        (work/'probe.c').write_text(C, encoding='utf-8')
         subprocess.run([*CC,'-std=c11','-Wall','-Wextra','-Werror','-c',str(work/'probe.c'),'-o',str(work/'probe.o'),'-pthread'],check=True)
-        (work/'main.dyn').write_text(X11)
+        (work/'main.dyn').write_text(X11, encoding='utf-8')
         for mode in ('--debug','--release'):
             output=work/'x11'
             subprocess.run([DYN,'build',str(work),mode,'--quiet','--link',str(work/'probe.o'),'--output',str(output)],check=True,timeout=120)
             subprocess.run([str(output)],check=True,timeout=20)
-        (work/'lookup.c').write_text(XIM_MOCK)
+        (work/'lookup.c').write_text(XIM_MOCK, encoding='utf-8')
         shim=work/'lookup.so'
         subprocess.run([*CC,'-shared','-fPIC','-Wall','-Wextra','-Werror',str(work/'lookup.c'),'-o',str(shim)],check=True)
-        (work/'main.dyn').write_text(XIM_SOURCE)
+        (work/'main.dyn').write_text(XIM_SOURCE, encoding='utf-8')
         output=work/'xim'
         subprocess.run([DYN,'build',str(work),'--debug','--quiet','--link',str(work/'probe.o'),'--output',str(output)],check=True,timeout=120)
         env={**os.environ,'LD_PRELOAD':str(shim)}

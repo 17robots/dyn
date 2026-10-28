@@ -13,22 +13,25 @@ use "std/hash" hashing
 use "std/bytes" bytes
 use "std/errors" errors
 fn main() {
-  buffer:[16]u8=[]
-  buffer[0]='a'
-  buffer[1]='b'
-  buffer[2]='c'
-  arena:=mem.arena_from_buffer(buffer[1..4])
-  entry:=zip.Entry{payload:buffer[..3],compressed_size:3,uncompressed_size:3,checksum:hashing.crc32(buffer[..3])}
-  result:=zip.extract(&arena,entry)
-  if result.ok || result.kind!=errors.Kind.InvalidInput || result.detail!=zip.ErrorKind.Overlap || result.error!=0 || #len(result.value)!=0 || mem.arena_mark(&arena)!=0 || !bytes.equal(buffer[..3],"abc") { #panic("ZIP overlap preflight") }
-  backing:[1024]u8=[]
-  backing[0]='a'
+  buffer:[4+mem.ArenaBufferOverhead]u8=[]
+  pad:=(16-(#cast(usize,&buffer[0])&15))&15
+  arena:=mem.arena_from_buffer(buffer[pad..pad+mem.ArenaHeader+4])
+  _=mem.push_bytes_uninit(arena,1)
+  payload:=arena.data[mem.ArenaHeader..]
+  _=mem.copy(payload,"abc")
+  mark:=mem.arena_mark(arena)
+  entry:=zip.Entry{payload:payload[..3],compressed_size:3,uncompressed_size:3,checksum:hashing.crc32(payload[..3])}
+  result:=zip.extract(arena,entry)
+  if result.ok || result.kind!=errors.Kind.InvalidInput || result.detail!=zip.ErrorKind.Overlap || result.error!=0 || #len(result.value)!=0 || mem.arena_mark(arena)!=mark || !bytes.equal(payload[..3],"abc") { #panic("ZIP overlap preflight") }
+  backing:[1024+mem.ArenaBufferOverhead]u8=[]
   unicodearena:=mem.arena_from_buffer(backing[..])
-  converted:=text.normalize(&unicodearena,backing[..1],text.Form.NFC)
-  if converted.ok || mem.arena_mark(&unicodearena)!=0 || backing[0]!='a' { #panic("normalization work overlap") }
-  backing[144]='A'
-  converted=text.normalize(&unicodearena,backing[144..145],text.Form.NFC)
-  if converted.ok || mem.arena_mark(&unicodearena)!=0 || backing[144]!='A' { #panic("normalization output overlap") }
+  text_payload:=unicodearena.data[mem.ArenaHeader..]
+  text_payload[0]='a'
+  converted:=text.normalize(unicodearena,text_payload[..1],text.Form.NFC)
+  if converted.ok || mem.arena_mark(unicodearena)!=mem.arena_start(unicodearena) || text_payload[0]!='a' { #panic("normalization work overlap") }
+  text_payload[144]='A'
+  converted=text.normalize(unicodearena,text_payload[144..145],text.Form.NFC)
+  if converted.ok || mem.arena_mark(unicodearena)!=mem.arena_start(unicodearena) || text_payload[144]!='A' { #panic("normalization output overlap") }
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-producer-overlap-') as directory:

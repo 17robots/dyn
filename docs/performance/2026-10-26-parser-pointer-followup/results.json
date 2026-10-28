@@ -1,0 +1,286 @@
+{
+  "commit": "3cb6a0da+experimental",
+  "build_flags": ["--release", "--opt-level", "3", "--cpu", "generic", "--no-cache"],
+  "cpu": 2,
+  "warmups": 3,
+  "samples": 25,
+  "compiler_sha256": "e19afab4b479c86a18b36f27367bf51dc6f1646a768e1acdb26a5dbcafe25377",
+  "cases": {
+    "map": {
+      "commands": {
+        "before": ["/tmp/dyn-syntax/build/remaining-gaps-20261026/baseline-extended", "map", "65536", "64", "912345"],
+        "current": ["/tmp/dyn-syntax/build/remaining-gaps-20261026/final-extended", "map", "65536", "64", "912345"],
+        "c": ["/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/extended/c-bin", "map", "65536", "64", "912345"]
+      },
+      "hashes": {
+        "before": "9f2777067adb26304d7d0709b25499021c7f60fbe97fdbcb8206753ebe5b1dd0",
+        "current": "fa924690ee6ef620aa98b41a62bf601cb56c90f5b051a0d5a6d89c32cd477eb2",
+        "c": "66dd93147dbe173d8b56f261edc4151458797430b1de59f9ae234c4b64e5e9ea"
+      },
+      "expected": "2336869060870\n",
+      "samples_ms": {
+        "before": [43.587876, 43.619386, 44.195851, 43.874099, 44.026169, 43.798068, 44.09034, 43.843488, 43.737657, 43.774858, 44.264772, 44.09647, 43.814098, 43.849538, 43.828888, 44.173321, 44.022729, 43.916489, 44.162111, 44.02969, 43.942499, 44.019719, 43.890909, 43.715507, 43.726348],
+        "current": [39.342212, 39.666894, 39.681405, 39.741055, 39.404902, 39.446752, 39.568434, 39.630524, 39.423293, 39.607993, 39.586933, 39.522933, 39.580683, 39.779465, 39.726495, 39.669673, 39.681474, 39.818755, 39.962137, 39.917136, 39.734515, 39.752465, 39.961746, 39.702624, 39.636613],
+        "c": [35.272798, 34.997636, 35.839142, 35.342828, 35.302299, 35.216978, 35.193337, 35.092156, 35.220208, 35.079687, 35.403779, 35.386569, 35.300359, 36.371837, 35.465039, 35.302268, 35.41046, 35.292798, 35.51197, 35.305328, 35.443789, 35.357849, 35.376199, 35.116747, 35.354728]
+      },
+      "median_ms": {
+        "before": 43.890909,
+        "current": 39.669673,
+        "c": 35.305328
+      },
+      "paired_ratio": 0.9039090138083904,
+      "paired_ratio_bootstrap95": [0.9013581363080332, 0.9063997927576899],
+      "orders": [
+        ["before", "c", "current"],
+        ["current", "c", "before"],
+        ["before", "current", "c"],
+        ["c", "current", "before"],
+        ["c", "before", "current"],
+        ["current", "before", "c"],
+        ["c", "current", "before"],
+        ["before", "c", "current"],
+        ["current", "before", "c"],
+        ["c", "before", "current"],
+        ["before", "current", "c"],
+        ["current", "before", "c"],
+        ["current", "before", "c"],
+        ["current", "c", "before"],
+        ["before", "c", "current"],
+        ["c", "before", "current"],
+        ["c", "before", "current"],
+        ["c", "current", "before"],
+        ["c", "current", "before"],
+        ["before", "current", "c"],
+        ["before", "c", "current"],
+        ["current", "c", "before"],
+        ["before", "c", "current"],
+        ["current", "before", "c"],
+        ["before", "c", "current"],
+        ["current", "c", "before"],
+        ["c", "before", "current"],
+        ["before", "current", "c"]
+      ]
+    },
+    "allocate": {
+      "commands": {
+        "before": ["/tmp/dyn-syntax/build/remaining-gaps-20261026/baseline-extended", "allocate", "8192", "256", "912345"],
+        "current": ["/tmp/dyn-syntax/build/remaining-gaps-20261026/final-extended", "allocate", "8192", "256", "912345"],
+        "c": ["/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/extended/c-bin", "allocate", "8192", "256", "912345"]
+      },
+      "hashes": {
+        "before": "9f2777067adb26304d7d0709b25499021c7f60fbe97fdbcb8206753ebe5b1dd0",
+        "current": "fa924690ee6ef620aa98b41a62bf601cb56c90f5b051a0d5a6d89c32cd477eb2",
+        "c": "66dd93147dbe173d8b56f261edc4151458797430b1de59f9ae234c4b64e5e9ea"
+      },
+      "expected": "9007407145418752\n",
+      "samples_ms": {
+        "before": [27.699787, 27.675556, 27.764847, 27.690947, 27.620806, 28.069049, 27.980959, 27.956348, 27.784597, 27.746367, 27.766537, 27.599165, 27.636336, 27.905648, 27.692976, 27.910938, 27.907598, 27.701406, 27.595176, 27.713196, 27.823097, 27.573046, 27.749107, 27.883908, 27.695556],
+        "current": [27.187212, 27.155232, 27.128941, 26.93904, 27.283062, 27.112861, 27.430504, 27.310243, 27.160172, 27.209812, 27.227482, 27.012401, 27.045571, 27.248923, 27.029951, 26.88775, 27.253762, 27.299293, 27.277933, 26.817119, 26.998961, 26.99746, 27.220232, 26.877139, 27.216512],
+        "c": [23.553882, 24.645872, 23.392151, 23.30049, 23.1347, 23.312891, 23.753494, 23.989076, 23.20299, 23.25612, 23.539483, 23.393751, 23.630023, 22.884797, 23.2918, 23.724644, 23.20829, 23.481482, 23.397911, 23.726114, 22.934307, 25.153796, 23.355191, 23.324001, 23.348571]
+      },
+      "median_ms": {
+        "before": 27.746367,
+        "current": 27.160172,
+        "c": 23.392151
+      },
+      "paired_ratio": 0.9786236134920345,
+      "paired_ratio_bootstrap95": [0.9764662336456047, 0.9806621529946605],
+      "orders": [
+        ["current", "before", "c"],
+        ["before", "current", "c"],
+        ["current", "before", "c"],
+        ["before", "c", "current"],
+        ["before", "current", "c"],
+        ["before", "current", "c"],
+        ["before", "c", "current"],
+        ["before", "current", "c"],
+        ["current", "c", "before"],
+        ["current", "c", "before"],
+        ["current", "c", "before"],
+        ["before", "current", "c"],
+        ["before", "current", "c"],
+        ["before", "current", "c"],
+        ["current", "before", "c"],
+        ["current", "before", "c"],
+        ["c", "current", "before"],
+        ["c", "current", "before"],
+        ["before", "current", "c"],
+        ["current", "c", "before"],
+        ["c", "current", "before"],
+        ["c", "current", "before"],
+        ["current", "before", "c"],
+        ["c", "current", "before"],
+        ["before", "current", "c"],
+        ["before", "current", "c"],
+        ["before", "current", "c"],
+        ["current", "c", "before"]
+      ]
+    },
+    "utf8": {
+      "commands": {
+        "before": ["/tmp/dyn-syntax/build/remaining-gaps-20261026/baseline-extended", "utf8", "262144", "128", "912345"],
+        "current": ["/tmp/dyn-syntax/build/remaining-gaps-20261026/final-extended", "utf8", "262144", "128", "912345"],
+        "c": ["/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/extended/c-bin", "utf8", "262144", "128", "912345"]
+      },
+      "hashes": {
+        "before": "9f2777067adb26304d7d0709b25499021c7f60fbe97fdbcb8206753ebe5b1dd0",
+        "current": "fa924690ee6ef620aa98b41a62bf601cb56c90f5b051a0d5a6d89c32cd477eb2",
+        "c": "66dd93147dbe173d8b56f261edc4151458797430b1de59f9ae234c4b64e5e9ea"
+      },
+      "expected": "18749879746560\n",
+      "samples_ms": {
+        "before": [55.778636, 56.058068, 55.490033, 54.893849, 56.224419, 55.385292, 55.649634, 55.597965, 56.066058, 55.462043, 55.485024, 55.323332, 55.916227, 56.580623, 55.000679, 55.12184, 55.12589, 55.222211, 54.791118, 55.604274, 54.861838, 55.234281, 55.014539, 55.716245, 55.341192],
+        "current": [52.394378, 52.562809, 52.345418, 52.448099, 52.411209, 52.492589, 54.204473, 52.481239, 52.734401, 52.232507, 52.136636, 52.962192, 52.319707, 52.181097, 52.497789, 52.504519, 52.56871, 52.867362, 52.022735, 52.763851, 52.317957, 52.813061, 52.945733, 52.55949, 52.991943],
+        "c": [31.341216, 31.485917, 31.420567, 31.381536, 31.476837, 31.384806, 31.616579, 31.491537, 31.464437, 31.422366, 31.330405, 31.355086, 31.413627, 31.418026, 31.404907, 31.352466, 31.359806, 31.278796, 31.357906, 31.380006, 31.206275, 31.403517, 31.350906, 31.466757, 31.298766]
+      },
+      "median_ms": {
+        "before": 55.462043,
+        "current": 52.497789,
+        "c": 31.384806
+      },
+      "paired_ratio": 0.9489171821576162,
+      "paired_ratio_bootstrap95": [0.9417703383194881, 0.9544934708896957],
+      "orders": [
+        ["current", "c", "before"],
+        ["c", "before", "current"],
+        ["c", "before", "current"],
+        ["before", "current", "c"],
+        ["before", "c", "current"],
+        ["c", "current", "before"],
+        ["before", "c", "current"],
+        ["c", "before", "current"],
+        ["c", "before", "current"],
+        ["c", "current", "before"],
+        ["before", "c", "current"],
+        ["before", "current", "c"],
+        ["c", "current", "before"],
+        ["current", "before", "c"],
+        ["before", "c", "current"],
+        ["c", "before", "current"],
+        ["current", "c", "before"],
+        ["before", "c", "current"],
+        ["before", "current", "c"],
+        ["c", "current", "before"],
+        ["current", "before", "c"],
+        ["current", "before", "c"],
+        ["current", "c", "before"],
+        ["c", "before", "current"],
+        ["before", "current", "c"],
+        ["before", "current", "c"],
+        ["c", "current", "before"],
+        ["current", "before", "c"]
+      ]
+    },
+    "jsonl": {
+      "commands": {
+        "before": ["/tmp/dyn-syntax/build/remaining-gaps-20261026/baseline-apps", "report", "/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/apps/events.jsonl"],
+        "current": ["/tmp/dyn-syntax/build/remaining-gaps-20261026/final-apps", "report", "/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/apps/events.jsonl"],
+        "c": ["/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/apps/gcc-app", "report", "/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/apps/events.jsonl"]
+      },
+      "hashes": {
+        "before": "43c0082be5d9b71dfbcde2ef37298a81db684636b887da3536301d3600e9bf79",
+        "current": "9af510e8df167dd06ecb4880f09f340e52d08360d537b9d448d6f70a3e0d060a",
+        "c": "37822eb0769e49a5a003998cf56228a4ae096a6ff6fb12ee0d480631af32e4e2"
+      },
+      "expected": "{\"records\":60000,\"bytes\":1965950512,\"latency_us\":7440820000,\"errors\":3530,\"services\":[[3750,122186000,465070000,221],[3750,122638310,465008750,221],[3750,123090620,464947500,220],[3750,123211250,465026250,221],[3750,122549448,464965000,220],[3750,123063294,465293750,221],[3750,123515604,464982500,220],[3750,122522122,465061250,221],[3750,122974432,465000000,221],[3750,123361206,465188750,220],[3750,122367724,465017500,221],[3750,122820034,465206250,220],[3750,123333880,465035000,221],[3750,122278862,464973750,220],[3750,122792708,465052500,221],[3750,123245018,464991250,221]]}\n",
+      "samples_ms": {
+        "before": [43.928668, 44.07823, 43.636347, 43.446504, 43.354664, 44.01872, 43.724988, 44.08142, 43.889098, 43.883849, 43.685697, 43.596336, 43.842148, 43.602416, 43.568066, 43.343914, 43.409374, 43.605056, 43.990019, 43.99856, 43.586596, 44.13655, 43.845348, 43.422095, 44.354152],
+        "current": [40.758323, 40.207169, 39.973896, 39.861065, 40.085808, 40.131298, 40.026187, 40.584732, 40.634161, 40.070807, 40.057307, 40.254239, 39.925537, 40.019827, 40.195758, 40.138018, 40.211579, 40.28387, 40.087477, 39.880316, 40.143278, 40.177819, 40.34329, 40.591152, 40.593682],
+        "c": [13.43011, 13.44689, 13.52127, 13.350629, 13.640261, 13.207318, 13.824903, 14.005214, 13.4395, 12.989226, 13.721532, 13.107497, 13.104087, 13.690962, 13.419989, 13.450059, 13.645271, 13.45739, 13.369909, 14.002655, 13.767943, 13.485301, 12.848575, 13.50819, 13.706842]
+      },
+      "median_ms": {
+        "before": 43.724988,
+        "current": 40.143278,
+        "c": 13.45739
+      },
+      "paired_ratio": 0.9178350805148046,
+      "paired_ratio_bootstrap95": [0.91521718192245, 0.9233399568257296],
+      "orders": [
+        ["c", "before", "current"],
+        ["c", "before", "current"],
+        ["before", "current", "c"],
+        ["before", "c", "current"],
+        ["before", "c", "current"],
+        ["before", "c", "current"],
+        ["c", "current", "before"],
+        ["before", "current", "c"],
+        ["c", "before", "current"],
+        ["c", "current", "before"],
+        ["before", "current", "c"],
+        ["before", "current", "c"],
+        ["c", "before", "current"],
+        ["current", "c", "before"],
+        ["current", "c", "before"],
+        ["before", "c", "current"],
+        ["c", "current", "before"],
+        ["c", "before", "current"],
+        ["current", "c", "before"],
+        ["current", "c", "before"],
+        ["current", "before", "c"],
+        ["before", "c", "current"],
+        ["c", "before", "current"],
+        ["current", "before", "c"],
+        ["current", "before", "c"],
+        ["c", "before", "current"],
+        ["c", "current", "before"],
+        ["before", "c", "current"]
+      ]
+    },
+    "search": {
+      "commands": {
+        "before": ["/tmp/dyn-syntax/build/remaining-gaps-20261026/baseline-apps", "search", "/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/apps/documents"],
+        "current": ["/tmp/dyn-syntax/build/remaining-gaps-20261026/final-apps", "search", "/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/apps/documents"],
+        "c": ["/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/apps/gcc-app", "search", "/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/apps/documents"]
+      },
+      "hashes": {
+        "before": "43c0082be5d9b71dfbcde2ef37298a81db684636b887da3536301d3600e9bf79",
+        "current": "9af510e8df167dd06ecb4880f09f340e52d08360d537b9d448d6f70a3e0d060a",
+        "c": "37822eb0769e49a5a003998cf56228a4ae096a6ff6fb12ee0d480631af32e4e2"
+      },
+      "expected": "{\"files\":1024,\"bytes\":64292352,\"lines\":262144,\"matching_lines\":5689,\"matching_files\":910}\n",
+      "samples_ms": {
+        "before": [10.038732, 10.663707, 10.011362, 9.305746, 9.334466, 9.484037, 9.148284, 9.564799, 9.344367, 9.209435, 9.428777, 9.373196, 9.7924, 10.291974, 10.017672, 9.529127, 10.157823, 9.411447, 10.322695, 9.304297, 9.481418, 9.639649, 9.468207, 9.318976, 9.874791],
+        "current": [9.271276, 10.507495, 9.854001, 9.438077, 9.894371, 9.684139, 9.458037, 9.252705, 10.341274, 9.526688, 9.179975, 9.431467, 9.332086, 10.174254, 9.725929, 10.403696, 9.673719, 9.202535, 9.494627, 9.325736, 9.723319, 9.407477, 9.78714, 11.195611, 10.541456],
+        "c": [31.650478, 34.630423, 32.493265, 31.909301, 33.788676, 33.243012, 32.091562, 31.929811, 32.631497, 32.333344, 32.624136, 33.134731, 32.356715, 34.403331, 33.641595, 31.827299, 32.944079, 32.118513, 33.448313, 32.509575, 32.059782, 32.252943, 32.336934, 33.681425, 32.769038]
+      },
+      "median_ms": {
+        "before": 9.484037,
+        "current": 9.673719,
+        "c": 32.509575
+      },
+      "paired_ratio": 1.0023042041757695,
+      "paired_ratio_bootstrap95": [0.9759148906770361, 1.0336846247658085],
+      "orders": [
+        ["before", "current", "c"],
+        ["current", "c", "before"],
+        ["current", "c", "before"],
+        ["c", "before", "current"],
+        ["c", "before", "current"],
+        ["before", "c", "current"],
+        ["c", "current", "before"],
+        ["before", "current", "c"],
+        ["before", "current", "c"],
+        ["current", "before", "c"],
+        ["before", "c", "current"],
+        ["before", "c", "current"],
+        ["current", "before", "c"],
+        ["before", "c", "current"],
+        ["before", "c", "current"],
+        ["c", "before", "current"],
+        ["c", "before", "current"],
+        ["before", "current", "c"],
+        ["current", "before", "c"],
+        ["current", "c", "before"],
+        ["before", "current", "c"],
+        ["c", "before", "current"],
+        ["before", "current", "c"],
+        ["current", "before", "c"],
+        ["c", "before", "current"],
+        ["c", "current", "before"],
+        ["before", "c", "current"],
+        ["current", "c", "before"]
+      ]
+    }
+  },
+  "limits": ["Shared desktop host; whole-process timings", "Current SDK and pointer-migrated sources versus retained pre-arena binaries", "No universal language ranking"]
+}

@@ -54,8 +54,7 @@ pub fn open(window: *Window, title: []const u8, width, height: i32) Result {
     return Result{kind:errors.Kind.InvalidInput}
   }
   storage: [4096]u8 = []
-  arena := mem.arena_from_buffer(storage[..])
-  name := c.string_from_bytes(&arena, title)
+  name := c.string_into(storage[..], title)
   if !name.ok {
     return Result{kind:errors.Kind.InvalidInput}
   }
@@ -284,52 +283,94 @@ pub fn set_surrounding_text(window: *Window, context: Surrounding) Result {
 }
 
 fn checked_status(status: i32) Result {
-  if status == 1 { return Result{ok:true} }
-  if status == -1 { return Result{kind:errors.Kind.Unsupported} }
-  if status == -2 { return Result{kind:errors.Kind.Capacity} }
-  if status == -3 { return Result{kind:errors.Kind.InvalidInput} }
-  if status == -4 { return Result{kind:errors.Kind.InvalidState} }
+  if status == 1 {
+    return Result{ok:true}
+  }
+  if status == -1 {
+    return Result{kind:errors.Kind.Unsupported}
+  }
+  if status == -2 {
+    return Result{kind:errors.Kind.Capacity}
+  }
+  if status == -3 {
+    return Result{kind:errors.Kind.InvalidInput}
+  }
+  if status == -4 {
+    return Result{kind:errors.Kind.InvalidState}
+  }
   return Result{kind:errors.Kind.System}
 }
 pub fn set_title(window: *Window, title: []const u8) Result {
-  if window.handle == nil { return Result{kind:errors.Kind.InvalidState} }
-  if #len(title) > 4096 { return Result{kind:errors.Kind.Capacity} }
-  if !utf8.valid(title) { return Result{kind:errors.Kind.InvalidInput} }
-  for byte in title { if byte == 0 { return Result{kind:errors.Kind.InvalidInput} } }
+  if window.handle == nil {
+    return Result{kind:errors.Kind.InvalidState}
+  }
+  if #len(title) > 4096 {
+    return Result{kind:errors.Kind.Capacity}
+  }
+  if !utf8.valid(title) {
+    return Result{kind:errors.Kind.InvalidInput}
+  }
+  for byte in title {
+    if byte == 0 {
+      return Result{kind:errors.Kind.InvalidInput}
+    }
+  }
   empty: [1]u8 = []
   pointer: *const u8 = &empty[0]
-  if #len(title) != 0 { pointer = &title[0] }
-  return checked_status(native_set_title(window.handle,pointer,#cast(u32,#len(title))))
+  if #len(title) != 0 {
+    pointer = &title[0]
+  }
+  return checked_status(native_set_title(window.handle, pointer, #cast(u32, #len(title))))
 }
 pub fn set_size(window: *Window, width, height: i32) Result {
-  if window.handle == nil { return Result{kind:errors.Kind.InvalidState} }
-  if width <= 0 || height <= 0 { return Result{kind:errors.Kind.InvalidInput} }
-  result := checked_status(native_set_size(window.handle,width,height))
-  if !result.ok { return result }
+  if window.handle == nil {
+    return Result{kind:errors.Kind.InvalidState}
+  }
+  if width <= 0 || height <= 0 {
+    return Result{kind:errors.Kind.InvalidInput}
+  }
+  result := checked_status(native_set_size(window.handle, width, height))
+  if !result.ok {
+    return result
+  }
   return poll(window)
 }
 pub fn set_swap_interval(window: *Window, interval: i32) Result {
-  if window.handle == nil { return Result{kind:errors.Kind.InvalidState} }
-  if interval < 0 { return Result{kind:errors.Kind.InvalidInput} }
-  return checked_status(native_swap_interval(window.handle,interval))
+  if window.handle == nil {
+    return Result{kind:errors.Kind.InvalidState}
+  }
+  if interval < 0 {
+    return Result{kind:errors.Kind.InvalidInput}
+  }
+  return checked_status(native_swap_interval(window.handle, interval))
 }
 // Checked publication copies all text or reports failure; no truncation.
 pub fn try_set_clipboard(window: *Window, text: []const u8) Result {
-  if window.handle == nil { return Result{kind:errors.Kind.InvalidState} }
-  if #len(text) > 4294967295 { return Result{kind:errors.Kind.Capacity} }
+  if window.handle == nil {
+    return Result{kind:errors.Kind.InvalidState}
+  }
+  if #len(text) > 4294967295 {
+    return Result{kind:errors.Kind.Capacity}
+  }
   empty: [1]u8 = []
   pointer: *const u8 = &empty[0]
-  if #len(text) != 0 { pointer = &text[0] }
-  return checked_status(native_try_clipboard(window.handle,pointer,#cast(u32,#len(text))))
+  if #len(text) != 0 {
+    pointer = &text[0]
+  }
+  return checked_status(native_try_clipboard(window.handle, pointer, #cast(u32, #len(text))))
 }
 // Snapshot replies update clipboard without entering the ordered event stream.
 pub fn request_paste_snapshot(window: *Window) {
-  if window.handle != nil { native_snapshot(window.handle) }
+  if window.handle != nil {
+    native_snapshot(window.handle)
+  }
 }
 pub fn paste_pending(window: *const Window) bool {
   return window.handle != nil && native_paste_pending(window.handle) != 0
 }
 pub fn paste_status(window: *const Window) Result {
-  if window.handle == nil { return Result{kind:errors.Kind.InvalidState} }
+  if window.handle == nil {
+    return Result{kind:errors.Kind.InvalidState}
+  }
   return checked_status(native_paste_status(window.handle))
 }

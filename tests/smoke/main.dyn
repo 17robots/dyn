@@ -1,9 +1,15 @@
 use "std/strings"
 fn main() {
   // Only APIs every preview has: this file is also built by the installed preview in CI.
-  if !strings.equal("compiler SDK smoke", "compiler SDK smoke") { #panic("SDK strings") }
-  values: [3]i16 = [10, 20, 12]
+  if !strings.equal("compiler SDK smoke", "compiler SDK smoke") {
+    #panic("SDK strings")
+  }
+  values: [3]i32 = [10, 20, 12]
   total: i32 = 0
-  for value in values { total += #cast(i32, value) }
-  if total != 42 { #panic("code generation") }
+  for value in values {
+    total += value
+  }
+  if total != 42 {
+    #panic("code generation")
+  }
 }

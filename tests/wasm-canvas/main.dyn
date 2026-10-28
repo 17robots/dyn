@@ -2,14 +2,14 @@ use "std/mem" mem
 
 // Storage belongs to this Wasm instance, not a temporary function stack.
 backing: [65536]u8
-arena: mem.Arena = mem.arena_from_buffer(backing[..])
+arena: *mem.Arena = mem.arena_from_buffer(backing[..])
 extern fn changed "pixels_changed"(count: usize)
 
 pub fn reset() {
-  mem.arena_reset(&arena)
+  mem.arena_reset(arena)
 }
 pub fn allocate(size: usize) rawptr {
-  result := mem.arena_try_push(&arena, size, 4)
+  result := mem.arena_try_push(arena, size, 4)
   if !result.ok {
     return nil
   }

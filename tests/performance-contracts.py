@@ -80,18 +80,18 @@ fn main() {''']
   backing: [8192]u8 = []
   arena := mem.arena_from_buffer(backing[..])
   built := builder.from_buffer(backing[..0])
-  for i in 0..1000 { t.expect(builder.append_grow(&built, &arena, "x") == builder.ErrorKind.None, "builder growth") }
-  t.expect(mem.arena_used(&arena) == 1024, "last allocation extends without retained old buffers")
+  for i in 0..1000 { t.expect(builder.append_grow(&built, arena, "x") == builder.ErrorKind.None, "builder growth") }
+  t.expect(mem.arena_used(arena) == 1024, "last allocation extends without retained old buffers")
   view := builder.bytes(&built)
-  t.expect(builder.append_grow(&built, &arena, view) == builder.ErrorKind.None, "overlapping growth")
-  t.expect(built.length == 2000 && mem.arena_used(&arena) == 2048, "self append in place")
-  _ = mem.arena_push(&arena, 1, 1)
+  t.expect(builder.append_grow(&built, arena, view) == builder.ErrorKind.None, "overlapping growth")
+  t.expect(built.length == 2000 && mem.arena_used(arena) == 2048, "self append in place")
+  _ = mem.arena_push(arena, 1, 1)
   previous := &built.storage[0]
-  t.expect(builder.reserve(&built, &arena, 4096) == builder.ErrorKind.None, "interleaved growth")
+  t.expect(builder.reserve(&built, arena, 4096) == builder.ErrorKind.None, "interleaved growth")
   t.expect(&built.storage[0] != previous && built.storage[1999] == 'x', "interleaved allocation copied")
-  mem.arena_reset(&arena)
-  names := hash.slots(Entry, &arena, 32)
-  initial := mem.arena_used(&arena)
+  mem.arena_reset(arena)
+  names := hash.slots(Entry, arena, 32)
+  initial := mem.arena_used(arena)
   entries: [30]Entry = []
   for i in 0..30 {
     entries[i].bytes[0] = #cast(u8, i)
@@ -100,7 +100,7 @@ fn main() {''']
     entries[i].value = i
     hash.insert(names, &entries[i])
   }
-  t.expect(mem.arena_used(&arena) == initial, "insertion does not allocate")
+  t.expect(mem.arena_used(arena) == initial, "insertion does not allocate")
   key: [1]u8 = []
   for i in 0..30 { key[0] = #cast(u8, i)
     found := hash.find(names, hash.hash_bytes(3, key[..]), key[..], &nil_entry)
@@ -133,8 +133,8 @@ fn main() {''']
 use "std/fs" fs
 use "std/mem" mem
 fn main() {
-  arena: mem.Arena
-  created := t.temporary_directory(&arena, "dyn-performance-contract")
+  arena := mem.arena_create(0)
+  created := t.temporary_directory(arena, "dyn-performance-contract")
   t.expect(created.ok && created.value.active, "temporary directory")
   frames: [4]fs.RemovalFrame = []
   scratch: [4096]u8 = []

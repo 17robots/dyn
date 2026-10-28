@@ -142,7 +142,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-riscv-linker-') as directory:
     struct.pack_into('<I', incompatible, 48, 0)  # LP64 soft-float cannot mix with LP64D.
     (work/'soft.o').write_bytes(incompatible)
     result = subprocess.run([str(work/'link'), str(work/'soft'), str(work/'soft.o')], capture_output=True)
-    assert result.returncode != 0 and b'LP64D ABI' in result.stderr, result.stderr
+    assert result.returncode != 0 and b'unsupported RISC-V ABI' in result.stderr, result.stderr
     # Malformed HI/LO pair must fail closed rather than encoding a bad address.
     broken = bytearray((work/'static.o').read_bytes())
     headers = struct.unpack_from('<Q', broken, 40)[0]

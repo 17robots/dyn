@@ -116,15 +116,15 @@ fn same(arena: *mem.Arena, face: *const font.Face, a, b: u16, size: u16) {
   mem.arena_rewind(arena, mark)
 }
 fn main() {
-  arena := mem.Arena{}
-  defer { mem.arena_release(&arena) }
+  arena := mem.arena_create(0)
+  defer { mem.arena_release(arena) }
   parsed := font.open(data[..])
   check(parsed.ok)
 '''
 for a,b in pairs:
-    for size in (16,25): SOURCE+=f'  same(&arena, &parsed.value, {a}, {b}, {size})\n'
+    for size in (16,25): SOURCE+=f'  same(arena, &parsed.value, {a}, {b}, {size})\n'
 for index,kind in failures:
-    SOURCE+=f'  before_{index} := mem.arena_mark(&arena)\n  check(font.raster(&arena, &parsed.value, {index}, 16).kind == errors.Kind.{kind})\n  check(mem.arena_mark(&arena) == before_{index})\n'
+    SOURCE+=f'  before_{index} := mem.arena_mark(arena)\n  check(font.raster(arena, &parsed.value, {index}, 16).kind == errors.Kind.{kind})\n  check(mem.arena_mark(arena) == before_{index})\n'
 SOURCE+='}\n'
 with tempfile.TemporaryDirectory(prefix='dyn-composite-results-') as directory:
     work=Path(directory);data=fixture()

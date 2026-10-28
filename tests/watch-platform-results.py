@@ -76,6 +76,16 @@ _ = output
 return nil }
 fn require(ok: bool) { if !ok { #panic("macos mock") } }
 fn main() {
+ owner := mem.arena_create(0)
+ live := Watcher{arena: owner, state: mem.push(State, owner)}
+ require(close(&live).ok)
+ require(live.arena == nil && live.state == nil)
+ require(close(&live).ok)
+ partial := Watcher{arena: mem.arena_create(0)}
+ require(close(&partial).ok && partial.arena == nil)
+ require(close(&partial).ok)
+ empty := Watcher{}
+ require(close(&empty).ok && close(&empty).ok)
  backing: [272]u8 = []
  opened := open(backing[..])
  require(!opened.ok && opened.error == -95 && opened.kind == errors.Kind.Unsupported)

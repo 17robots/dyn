@@ -206,18 +206,18 @@ use "std/io"
 fn main() {
   storage := mem.arena_create(16 * 1024 * 1024)
   defer {
-    mem.arena_release(&storage)
+    mem.arena_release(storage)
   }
-  args := linux.process_arguments(&storage)
+  args := linux.process_arguments(storage)
   if #len(args) != 2 {
     _ = io.println(io.stdout(), "usage: archive-example ARCHIVE")
     return
   }
-  loaded := fs.read_all(&storage, args[1], 8 * 1024 * 1024)
+  loaded := fs.read_all(storage, args[1], 8 * 1024 * 1024)
   if !loaded.ok {
     #panic("read archive")
   }
-  opened := archive.open_memory_owned(loaded.data)
+  opened := archive.open_memory_owned(loaded.value)
   if !opened.ok {
     #panic("open archive")
   }
@@ -258,7 +258,7 @@ use "std/io"
 fn main() {
   storage: [65536]u8 = []
   arena := mem.arena_from_buffer(storage[..])
-  args := linux.process_arguments(&arena)
+  args := linux.process_arguments(arena)
   if #len(args) != 2 {
     _ = io.println(io.stdout(), "usage: curl-example URL")
     return
@@ -286,9 +286,9 @@ use "std/io"
 fn main() {
   storage := mem.arena_create(16 * 1024 * 1024)
   defer {
-    mem.arena_release(&storage)
+    mem.arena_release(storage)
   }
-  args := linux.process_arguments(&storage)
+  args := linux.process_arguments(storage)
   if #len(args) != 2 {
     _ = io.println(io.stdout(), "usage: sdl3-image-example IMAGE")
     return
@@ -299,11 +299,11 @@ fn main() {
     #panic("image load")
   }
   defer sdl3.surface_destroy_owned(surface.value)
-  bytes := fs.read_all(&storage, args[1], 8 * 1024 * 1024)
+  bytes := fs.read_all(storage, args[1], 8 * 1024 * 1024)
   if !bytes.ok {
     #panic("image read")
   }
-  decoded := image.decode_owned(bytes.data)
+  decoded := image.decode_owned(bytes.value)
   if !decoded.ok {
     #panic("image decode")
   }
@@ -322,7 +322,7 @@ use "std/io"
 fn main() {
   storage: [65536]u8 = []
   arena := mem.arena_from_buffer(storage[..])
-  args := linux.process_arguments(&arena)
+  args := linux.process_arguments(arena)
   if #len(args) != 2 {
     _ = io.println(io.stdout(), "usage: sdl3-font-example FONT.ttf")
     return
@@ -488,7 +488,7 @@ fn main() {
   }
   backing: [65536]u8 = []
   arena := mem.arena_from_buffer(backing[..])
-  args := linux.process_arguments(&arena)
+  args := linux.process_arguments(arena)
   smoke := #len(args) == 2 && strings.equal(args[1], "--smoke")
   if !sdl3.init_video() {
     #panic("video unavailable")
@@ -633,7 +633,7 @@ use "std/strings"
 fn main() {
   backing: [65536]u8 = []
   arena := mem.arena_from_buffer(backing[..])
-  args := linux.process_arguments(&arena)
+  args := linux.process_arguments(arena)
   if #len(args) != 3 { #panic("URL required") }
   if curl.init() != 0 { #panic("init") }
   defer curl.cleanup()
@@ -667,7 +667,7 @@ fn main() {
   if #sizeof(ts.Node) != node_size() || #alignof(ts.Node) != node_align() || #sizeof(ts.Edit) != edit_size() || #sizeof(sdl3.Color) != color_size() { #panic("provider ABI mismatch") }
   backing: [65536]u8 = []
   arena := mem.arena_from_buffer(backing[..])
-  args := linux.process_arguments(&arena)
+  args := linux.process_arguments(arena)
   if #len(args) != 3 { #panic("image and font paths required") }
   buffer: [4096]u8 = []
   surface := image.load_owned(args[1], buffer[..])

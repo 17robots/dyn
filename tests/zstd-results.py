@@ -135,8 +135,8 @@ fn main() {
  replay_invalid:=adapter.read(adapter.data,destination[..0])
  if replay_invalid.status!=io.Status.Error || replay_invalid.kind!=errors.Kind.InvalidState || replay_invalid.error!=0 { #panic("sticky invalid decoder cursor") }
  owner := mem.arena_create(16000000)
- defer { mem.arena_release(&owner) }
- arena := &owner
+ defer { mem.arena_release(owner) }
+ arena := owner
  raw := fs.read_all(arena, "DIRECTORY/raw", 6000000)
  encoded := fs.read_all(arena, "DIRECTORY/encoded", 2000000)
  concatenated := fs.read_all(arena, "DIRECTORY/concatenated", 4000000)
@@ -174,9 +174,10 @@ with tempfile.TemporaryDirectory(prefix='dyn-zstd-results-') as temporary:
     panic_source = '''use "std/mem" mem
 use "std/compress/zstd" z
 fn main() {
- storage: [1]u8 = []
+ storage: [1 + mem.ArenaBufferOverhead]u8 = []
  arena := mem.arena_from_buffer(storage[..])
- _ = z.compress(&arena, "exhaustion", 3)
+ arena = mem.arena_from_buffer(arena.data[..mem.ArenaHeader + 1])
+ _ = z.compress(arena, "exhaustion", 3)
 }
 '''
     for mode in ([], ['--release']):
@@ -185,7 +186,7 @@ fn main() {
             subprocess.run([str(DYN), 'build', str(project), '--quiet', '--no-cache', '--output', str(project / 'run'), *mode], cwd=ROOT, check=True, timeout=120)
             result = subprocess.run([str(project / 'run')], cwd=ROOT, capture_output=True, timeout=30)
             if panic:
-                assert result.returncode != 0 and b'arena' in result.stderr.lower(), result
+                assert result.returncode != 0 and b'arena exhausted' in result.stderr.lower(), result
             else:
                 assert result.returncode == 0, result.stderr.decode(errors='replace')
 print('PASS zstd-results: native fixtures, portable kinds, unknown size, rollback, retained codes, sticky callbacks, concatenation, arena panic; debug/release')

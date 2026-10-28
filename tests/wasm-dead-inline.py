@@ -14,11 +14,11 @@ if not shutil.which(NODE):
     raise SystemExit(0)
 SOURCE = '''use "std/mem" mem
 fn main() {
-  arena := mem.Arena{}
-  value := mem.push(i32, &arena)
+  arena := mem.arena_create(0)
+  value := mem.push(i32, arena)
   value.* = 42
   if value.* != 42 { #panic("live allocation") }
-  mem.arena_release(&arena)
+  mem.arena_release(arena)
 }
 '''
 WASI = "const {WASI}=require('node:wasi'),fs=require('node:fs');(async()=>{const wasi=new WASI({version:'preview1',returnOnExit:true});const {instance}=await WebAssembly.instantiate(fs.readFileSync(process.argv[1]),{wasi_snapshot_preview1:wasi.wasiImport});process.exitCode=wasi.start(instance);})().catch(e=>{console.error(e);process.exit(1)});"
@@ -30,11 +30,11 @@ state: i32 = initial()
 fn plus(value: i32) i32 { return value + state }
 callback: fn(i32) i32 = plus
 pub fn api(value: i32) i32 {
-  arena := mem.Arena{}
-  slot := mem.push(i32, &arena)
+  arena := mem.arena_create(0)
+  slot := mem.push(i32, arena)
   slot.* = callback(value)
   result := slot.*
-  mem.arena_release(&arena)
+  mem.arena_release(arena)
   return result
 }
 '''

@@ -105,7 +105,7 @@ if not shutil.which('cc'):
     raise SystemExit(0)
 with tempfile.TemporaryDirectory(prefix='dyn-surround-abi-') as directory:
     work=Path(directory)
-    (work/'main.dyn').write_text(SOURCE,encoding='utf-8');(work/'probe.c').write_text(C)
+    (work/'main.dyn').write_text(SOURCE,encoding='utf-8');(work/'probe.c').write_text(C, encoding='utf-8')
     host=work/'host';host.mkdir()
     suffix='.dll' if os.name=='nt' else '.dylib' if sys.platform=='darwin' else '.so'
     library=host/('dyn_window.dll' if os.name=='nt' else 'libdyn_window'+suffix)

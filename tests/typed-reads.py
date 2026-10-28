@@ -22,7 +22,7 @@ fn check(ok: bool, message: []const u8) {
   }
 }
 fn main() {
-  arena: mem.Arena
+  arena := mem.arena_create(0)
   check(strings.parse(u16, "8080") == 8080, "u16")
   check(strings.parse(u8, "256") == 0 && !strings.valid(u8, "256"), "u8 overflow")
   check(strings.parse(i8, "-128") == -128 && strings.parse(i8, "-129") == 0, "i8 range")
@@ -57,7 +57,7 @@ fn main() {
   check(!strings.scan_line(&lines).ok, "scanner end")
   fields := text.Scanner{ source: "a  bc" }
   check(strings.equal(text.next_field(&fields).value, "a") && strings.equal(text.next_field(&fields).value, "bc"), "fields")
-  doc := json.parse(&arena, "{\"x\": 2.5, \"name\": \"boss\", \"hp\": 40, \"alive\": true, \"tags\": [1, 2]}")
+  doc := json.parse(arena, "{\"x\": 2.5, \"name\": \"boss\", \"hp\": 40, \"alive\": true, \"tags\": [1, 2]}")
   check(doc.ok, "json parse")
   check(json.get(f32, doc.root, "x") == 2.5 && json.get(i32, doc.root, "hp") == 40, "json numbers")
   check(strings.equal(json.get([]const u8, doc.root, "name"), "boss") && json.get(bool, doc.root, "alive"), "json text")
@@ -66,10 +66,10 @@ fn main() {
   check(json.get(i32, doc.root, "nope") == 0 && #len(json.get([]const u8, doc.root, "hp")) == 0, "json misses")
   nothing := json.get(*const json.Value, json.get(*const json.Value, doc.root, "a"), "b")
   check(nothing == &json.nil_value && json.is_missing(nothing) && !json.is_null(nothing), "json chained miss")
-  broken := json.parse(&arena, "{\"x\": ")
+  broken := json.parse(arena, "{\"x\": ")
   check(!broken.ok && broken.root == &json.nil_value && json.get(i32, broken.root, "x") == 0, "json failed root")
-  decoded := hex.decode(&arena, "abcd")
-  check(decoded.ok && #len(decoded.value) == 2 && decoded.value[0] == 171 && !hex.decode(&arena, "abc").ok, "hex decode")
+  decoded := hex.decode(arena, "abcd")
+  check(decoded.ok && #len(decoded.value) == 2 && decoded.value[0] == 171 && !hex.decode(arena, "abc").ok, "hex decode")
   check(utf8.codepoint_count("h\xc3\xa9").value == 2 && !utf8.codepoint_count("\xff").ok, "codepoints")
   walker := utf8.iterator("\xc3\xa9")
   check(utf8.next(&walker).value == 233 && !utf8.next(&walker).ok, "utf8 next")

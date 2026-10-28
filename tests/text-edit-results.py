@@ -15,8 +15,8 @@ use "std/errors" errors
 use "vendor/window/events" events
 fn check(ok: bool, why: []const u8) { if !ok { #panic(why) } }
 fn main() {
-  arena := mem.Arena{}
-  defer mem.arena_release(&arena)
+  arena := mem.arena_create(0)
+  defer mem.arena_release(arena)
   tracker := edit.Tracker{}
   first := edit.snapshot(&tracker, 7, "hé world", 3, 3, edit.Cause.Other)
   again := edit.snapshot(&tracker, 7, "hé world", 3, 3, edit.Cause.Other)
@@ -25,30 +25,31 @@ fn main() {
   _ = mem.copy(storage[..9],"hé world")
   buffer := edit.Buffer{storage:storage[..],length:9,cursor:3,anchor:3,token:first.value.token}
   replacement := edit.Replacement{start:3,end:9,text:"😀",token:first.value.token}
-  mark := mem.arena_mark(&arena)
-  check(edit.apply(&arena,&buffer,&replacement).ok && buffer.length == 7 && buffer.cursor == 7 && buffer.anchor == 7 && buffer.token == 0,"atomic Unicode replacement")
-  check(bytes.equal(storage[..7],"hé😀") && mem.arena_mark(&arena)==mark,"bytes and scratch lifetime")
-  check(edit.apply(&arena,&buffer,&replacement).kind == errors.Kind.InvalidState && bytes.equal(storage[..7],"hé😀"),"replay rejected")
+  mark := mem.arena_mark(arena)
+  check(edit.apply(arena,&buffer,&replacement).ok && buffer.length == 7 && buffer.cursor == 7 && buffer.anchor == 7 && buffer.token == 0,"atomic Unicode replacement")
+  check(bytes.equal(storage[..7],"hé😀") && mem.arena_mark(arena)==mark,"bytes and scratch lifetime")
+  check(edit.apply(arena,&buffer,&replacement).kind == errors.Kind.InvalidState && bytes.equal(storage[..7],"hé😀"),"replay rejected")
   next := edit.snapshot(&tracker,7,storage[..7],7,7,edit.Cause.InputMethod)
   check(next.ok && next.value.token != first.value.token && next.value.cause == edit.Cause.InputMethod,"changed context identity and cause")
   same := edit.snapshot(&tracker,7,storage[..7],7,7,edit.Cause.Other)
   check(same.value.token == next.value.token && same.value.cause == edit.Cause.InputMethod,"unchanged cause is retained")
   buffer.token = next.value.token
   replacement = edit.Replacement{start:2,end:3,text:"x",token:buffer.token}
-  check(edit.apply(&arena,&buffer,&replacement).kind == errors.Kind.InvalidInput && buffer.length == 7 && buffer.token == next.value.token && bytes.equal(storage[..7],"hé😀"),"split codepoint rejected without mutation")
+  check(edit.apply(arena,&buffer,&replacement).kind == errors.Kind.InvalidInput && buffer.length == 7 && buffer.token == next.value.token && bytes.equal(storage[..7],"hé😀"),"split codepoint rejected without mutation")
   replacement = edit.Replacement{start:0,end:0,text:"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",token:buffer.token}
-  check(edit.apply(&arena,&buffer,&replacement).kind == errors.Kind.Capacity && bytes.equal(storage[..7],"hé😀"),"capacity failure preserves bytes")
+  check(edit.apply(arena,&buffer,&replacement).kind == errors.Kind.Capacity && bytes.equal(storage[..7],"hé😀"),"capacity failure preserves bytes")
   _ = mem.copy(storage[..6],"abcdef")
   buffer = edit.Buffer{storage:storage[..],length:6,cursor:3,anchor:0,token:99}
   replacement = edit.Replacement{start:0,end:3,text:storage[..2],token:99}
-  check(edit.apply(&arena,&buffer,&replacement).ok && bytes.equal(storage[..buffer.length],"abdef"),"aliased replacement")
-  scratch_bytes: [64]u8 = []
+  check(edit.apply(arena,&buffer,&replacement).ok && bytes.equal(storage[..buffer.length],"abdef"),"aliased replacement")
+  scratch_backing: [64 + mem.ArenaBufferOverhead]u8 = []
+  scratch := mem.arena_from_buffer(scratch_backing[..])
+  scratch_bytes := scratch.data[mem.ArenaHeader..]
   _ = mem.copy(scratch_bytes[..6],"abcdef")
-  scratch := mem.arena_from_buffer(scratch_bytes[..])
   scratch.poison_on_rewind = true
   buffer = edit.Buffer{storage:scratch_bytes[..16],length:6,cursor:0,anchor:0,token:99}
   replacement = edit.Replacement{start:0,end:1,text:"new",token:99}
-  check(edit.apply(&scratch,&buffer,&replacement).kind == errors.Kind.InvalidInput && mem.arena_used(&scratch)==0 && bytes.equal(scratch_bytes[..6],"abcdef"),"pending scratch alias rejected")
+  check(edit.apply(scratch,&buffer,&replacement).kind == errors.Kind.InvalidInput && mem.arena_used(scratch)==0 && bytes.equal(scratch_bytes[..6],"abcdef"),"pending scratch alias rejected")
   failed := edit.snapshot(&tracker,7,"é",1,0,edit.Cause.Other)
   check(!failed.ok && tracker.token == 0,"invalid publication invalidates old identity")
   back := edit.snapshot(&tracker,7,"hé😀",7,7,edit.Cause.Other)
@@ -74,7 +75,7 @@ fn main() {
   large: [512]u8 = []
   _ = mem.copy(large[..3],"old")
   buffer = edit.Buffer{storage:large[..],length:3,cursor:3,anchor:3,token:complete.value.token}
-  check(edit.apply(&arena,&buffer,&complete.value).ok && buffer.length==260 && large[259]==0x80,"assembled transaction applies")
+  check(edit.apply(arena,&buffer,&complete.value).ok && buffer.length==260 && large[259]==0x80,"assembled transaction applies")
   event = events.Event{kind:events.Kind.Edit,key:1,width:2,text_length:1}
   event.text[0] = 'a'
   check(events.collect_edit(&collector,&event).ok,"new transaction")
@@ -83,7 +84,7 @@ fn main() {
   event = events.Event{kind:events.Kind.Edit,key:1,width:2,scancode:1,text_length:1,button:1}
   event.text[0] = 'b'
   check(!events.collect_edit(&collector,&event).ok,"orphan final rejected")
-  golden(&arena)
+  golden(arena)
 }
 '''
 def literal(data):

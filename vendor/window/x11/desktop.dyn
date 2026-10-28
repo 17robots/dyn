@@ -10,7 +10,7 @@ use "std/unicode/utf8" utf8
 const text_limit: usize = 256
 const clipboard_limit: usize = 16777216
 const clipboard_transfers: usize = 4
-struct ClipboardSend { arena: mem.Arena, bytes: []u8, requestor: usize, property: usize, offset: usize }
+struct ClipboardSend { arena: *mem.Arena, bytes: []u8, requestor: usize, property: usize, offset: usize }
 
 pub enum Cursor { Arrow, Text, Hand, ResizeX, ResizeY }
 
@@ -24,10 +24,10 @@ pub struct Desktop {
   clipboard_atom: usize, utf8_atom: usize, targets_atom: usize, property_atom: usize, incr_atom: usize,
   clipboard_chunk: usize, outgoing: [clipboard_transfers]ClipboardSend,
   // Text this window offers while it owns the clipboard.
-  owned: []u8, owned_arena: mem.Arena, owned_length: usize, owns: bool,
+  owned: []u8, owned_arena: *mem.Arena, owned_length: usize, owns: bool,
   // The most recent clipboard text received from another client.
-  received: []u8, received_arena: mem.Arena, received_length: usize, paste_pending: bool,
-  incoming_arena: mem.Arena, incoming: bool, incoming_failed: bool, paste_result: Result, paste_owner: usize, paste_ordered: bool,
+  received: []u8, received_arena: *mem.Arena, received_length: usize, paste_pending: bool,
+  incoming_arena: *mem.Arena, incoming: bool, incoming_failed: bool, paste_result: Result, paste_owner: usize, paste_ordered: bool,
   // Received text waiting for the next poll to report it as a paste.
   paste_ready: bool,
   cursors: [5]usize, cursor: Cursor,
@@ -459,11 +459,15 @@ pub fn set_text_input(window: *Window, enabled: bool, x, y, width, height: i32) 
 
 fn desktop_close(window: *Window) {
   desktop := &window.desktop
-  mem.arena_release(&desktop.owned_arena)
-  mem.arena_release(&desktop.received_arena)
-  mem.arena_release(&desktop.incoming_arena)
+  mem.arena_release(desktop.owned_arena)
+  desktop.owned_arena = nil
+  mem.arena_release(desktop.received_arena)
+  desktop.received_arena = nil
+  mem.arena_release(desktop.incoming_arena)
+  desktop.incoming_arena = nil
   for i in 0..clipboard_transfers {
-    mem.arena_release(&desktop.outgoing[i].arena)
+    mem.arena_release(desktop.outgoing[i].arena)
+    desktop.outgoing[i].arena = nil
   }
   if desktop.context != nil {
     destroy_input_context(desktop.context)
@@ -741,7 +745,7 @@ fn clipboard_finish(window: *Window, deferred: bool) {
   desktop.paste_pending = false
   desktop.incoming = false
   if !desktop.incoming_failed {
-    incoming := desktop.incoming_arena.data[..mem.arena_used(&desktop.incoming_arena)]
+    incoming := clipboard_bytes(desktop.incoming_arena)
     if !utf8.valid(incoming) {
       clipboard_fail(desktop)
     }
@@ -752,10 +756,12 @@ fn clipboard_finish(window: *Window, deferred: bool) {
     }
   }
   if !desktop.incoming_failed {
-    mem.arena_release(&desktop.received_arena)
-    desktop.received_arena = mem.arena_take(&desktop.incoming_arena)
-    desktop.received_length = mem.arena_used(&desktop.received_arena)
-    desktop.received = desktop.received_arena.data[..desktop.received_length]
+    mem.arena_release(desktop.received_arena)
+    desktop.received_arena = nil
+    desktop.received_arena = desktop.incoming_arena
+    desktop.incoming_arena = nil
+    desktop.received = clipboard_bytes(desktop.received_arena)
+    desktop.received_length = #len(desktop.received)
     desktop.paste_result = Result{ok:true}
     if deferred {
       desktop.paste_ready = true
@@ -766,7 +772,8 @@ fn clipboard_finish(window: *Window, deferred: bool) {
     clipboard_deliver(window)
   }
   else {
-    mem.arena_release(&desktop.incoming_arena)
+    mem.arena_release(desktop.incoming_arena)
+    desktop.incoming_arena = nil
   }
 }
 
@@ -801,12 +808,13 @@ fn clipboard_request(window: *Window, emit_ordered: bool) {
   desktop.incoming_failed = false
   desktop.paste_result = Result{kind:errors.Kind.InvalidState}
   desktop.incoming = false
-  mem.arena_release(&desktop.incoming_arena)
+  mem.arena_release(desktop.incoming_arena)
+  desktop.incoming_arena = nil
   desktop.paste_owner = get_owner(window.display, desktop.clipboard_atom)
   desktop.owns = desktop.paste_owner == window.handle
   if desktop.owns {
-    desktop.incoming_arena = mem.arena_create(math.max(desktop.owned_length, 1))
-    _ = mem.copy(mem.push_bytes_uninit(&desktop.incoming_arena, desktop.owned_length), desktop.owned[..desktop.owned_length])
+    desktop.incoming_arena = clipboard_arena(desktop.owned_length)
+    _ = mem.copy(mem.push_bytes_uninit(desktop.incoming_arena, desktop.owned_length), desktop.owned[..desktop.owned_length])
     clipboard_finish(window, true)
     return
   }
@@ -856,17 +864,17 @@ fn clipboard_read(window: *Window, incremental: bool) {
     _ = flush(window.display)
     return
   }
-  if actual_kind != desktop.utf8_atom || actual_format != 8 || after != 0 || count > clipboard_limit - mem.arena_used(&desktop.incoming_arena) || (count != 0 && data == nil) {
+  if actual_kind != desktop.utf8_atom || actual_format != 8 || after != 0 || count > clipboard_limit - clipboard_incoming_used(desktop) || (count != 0 && data == nil) {
     clipboard_fail(desktop)
-    if count > clipboard_limit - mem.arena_used(&desktop.incoming_arena) || after != 0 {
+    if count > clipboard_limit - clipboard_incoming_used(desktop) || after != 0 {
       desktop.paste_result = Result{kind:errors.Kind.Capacity}
     }
   }
   if !desktop.incoming_failed && count != 0 {
-    if #len(desktop.incoming_arena.data) == 0 {
-      desktop.incoming_arena = mem.arena_create(clipboard_limit)
+    if desktop.incoming_arena == nil {
+      desktop.incoming_arena = mem.arena_create_bounded(clipboard_limit + mem.ArenaHeader, clipboard_limit + mem.ArenaHeader)
     }
-    _ = mem.copy(mem.push_bytes_uninit(&desktop.incoming_arena, count), data[..count])
+    _ = mem.copy(mem.push_bytes_uninit(desktop.incoming_arena, count), data[..count])
   }
   if data != nil {
     _ = free(data)
@@ -881,7 +889,8 @@ fn clipboard_read(window: *Window, incremental: bool) {
 }
 
 fn clipboard_send_release(transfer: *ClipboardSend) {
-  mem.arena_release(&transfer.arena)
+  mem.arena_release(transfer.arena)
+  transfer.arena = nil
   transfer.* = ClipboardSend{}
 }
 
@@ -980,8 +989,8 @@ fn desktop_selection(window: *Window, event: *Event) {
           for i in 0..clipboard_transfers {
             transfer := &desktop.outgoing[i]
             if transfer.requestor == 0 {
-              transfer.arena = mem.arena_create(math.max(desktop.owned_length, 1))
-              transfer.bytes = mem.push_bytes_uninit(&transfer.arena, desktop.owned_length)
+              transfer.arena = clipboard_arena(desktop.owned_length)
+              transfer.bytes = mem.push_bytes_uninit(transfer.arena, desktop.owned_length)
               _ = mem.copy(transfer.bytes, desktop.owned[..desktop.owned_length])
               transfer.requestor = request.requestor
               transfer.property = property
@@ -1043,17 +1052,19 @@ pub fn try_set_clipboard(window: *Window, text: []const u8) Result {
       return Result{kind:errors.Kind.InvalidInput}
     }
   }
-  arena := mem.arena_create(math.max(#len(text), 1))
-  owned := mem.push_bytes_uninit(&arena, #len(text))
+  arena := clipboard_arena(#len(text))
+  owned := mem.push_bytes_uninit(arena, #len(text))
   _ = mem.copy(owned, text)
   desktop := &window.desktop
   _ = set_owner(window.display, desktop.clipboard_atom, window.handle, 0)
   if get_owner(window.display, desktop.clipboard_atom) != window.handle {
-    mem.arena_release(&arena)
+    mem.arena_release(arena)
     return Result{kind:errors.Kind.System}
   }
-  mem.arena_release(&desktop.owned_arena)
-  desktop.owned_arena = mem.arena_take(&arena)
+  mem.arena_release(desktop.owned_arena)
+  desktop.owned_arena = nil
+  desktop.owned_arena = arena
+  arena = nil
   desktop.owned = owned
   desktop.owned_length = #len(owned)
   desktop.owns = true
@@ -1129,8 +1140,7 @@ pub fn set_title(window: *Window, title: []const u8) Result {
     return Result{kind:errors.Kind.InvalidInput}
   }
   storage: [4096]u8 = []
-  arena := mem.arena_from_buffer(storage[..])
-  name := c.string_from_bytes(&arena, title)
+  name := c.string_into(storage[..], title)
   if !name.ok {
     return Result{kind:errors.Kind.InvalidInput}
   }
@@ -1151,4 +1161,23 @@ pub fn set_size(window:*Window, width, height:i32) Result {
   _ = resize_window(window.display, window.handle, #cast(u32, width), #cast(u32, height))
   _ = sync(window.display, 0)
   return poll(window)
+}
+
+fn clipboard_incoming_used(desktop: *Desktop) usize {
+  if desktop.incoming_arena == nil {
+    return 0
+  }
+  return mem.arena_used(desktop.incoming_arena)
+}
+
+fn clipboard_arena(size: usize) *mem.Arena {
+  backing := math.max(size, 1) + mem.ArenaHeader
+  return mem.arena_create_bounded(backing, backing)
+}
+fn clipboard_bytes(arena: *const mem.Arena) []u8 {
+  empty: []u8
+  if arena == nil {
+    return empty
+  }
+  return arena.data[mem.ArenaHeader..mem.ArenaHeader + mem.arena_used(arena)]
 }

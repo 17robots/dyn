@@ -12,84 +12,52 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
-## Unreleased
+## 0.1.0-preview.28
 
-- Imports retain module-wide visibility. Repeated identical imports across files are accepted and deduplicated, and importing the same module under different aliases in separate files no longer produces a vet finding. Conflicting alias targets remain errors, as do duplicate aliases within one file; same-file duplicate-module vet findings remain. No import migration is required.
+This release preserves preview.27's pointer-handle, chained arena API. Upgrade
+the compiler, SDK, native adapters and editor integrations together.
 
-- Added `std/mem.arena_try_create` for recoverable backing reservation and `arena_try_push_uninit` for fallible allocation without eagerly initializing payload bytes. Fallible arena pushes and extension now return failure on Windows commitment refusal; growing arenas roll back failed backing/header/payload acquisition before publishing a block.
+- Imports remain module-wide. Identical imports across files are deduplicated;
+  different aliases for one dependency no longer produce cross-file vet findings.
+  Conflicting aliases and same-file duplicate diagnostics remain. Import path
+  resolution is reused across repeated declarations.
+- Added fallible `mem.arena_try_create`, `arena_try_create_bounded` and
+  `arena_try_push_uninit` using pointer handles. Fallible pushes and extension
+  report Windows commitment failure without publishing a partial allocation.
+- Added portable filesystem metadata, directory operations and file mappings;
+  portable readiness queues, process signals and watchers; SIMD helpers and
+  expanded media, serialization, cryptography and certificate APIs.
+- Added `std/ui/box`: persistent keyed boxes, layout, animation, scrolling,
+  virtual lists, keyboard focus, text selection and composed desktop widgets.
+- Added TrueType font discovery, composite outlines, rasterization and optional
+  HarfBuzz/FriBidi layout with grapheme wrapping, source-cluster queries and
+  visual selection rectangles. Added batched OpenGL rendering.
+- Expanded desktop window backends with ordered input, clipboard transfers,
+  worker wake-ups, translated keys, IME composition, surrounding-text correction
+  and portable native frontend controls. Wayland, X11, Win32 and Cocoa remain
+  subject to the native qualification scope documented in the release evidence.
+- Preserved preview.27's JSON/parser optimizations and shared-unwind fixes while
+  integrating the development SDK. Added regression and native qualification
+  coverage for the expanded APIs.
 
-- Shaped text now exposes visual selection rectangles for logical UTF-8 ranges, preserving bidi gaps and expanding touched ligatures/graphemes atomically.
+## 0.1.0-preview.27
 
-- Added optional FriBidi paragraph resolution and HarfBuzz shaped layout with script/font runs, grapheme-safe wrapping and source-cluster queries. HarfBuzz now supports explicit run properties and full-line context; FreeType exposes scalable-face metrics.
-- Software rendering skips blending for fully opaque pixels. X11 exposes checked swap interval control for immediate presentation or refresh pacing.
+Upgrade guide: [0.1.0-preview.27](docs/migrations/0.1.0-preview.27.md).
 
-- X11 clipboard snapshots now support up to 16 MiB through bounded INCR transfers. `try_set_clipboard`, `paste_pending` and `paste_status` expose copy/receive failures; large ordered replies overflow atomically instead of publishing a prefix.
+The preview.26 publication was cancelled before assets were published; upgrade
+directly from preview.25 to preview.27. The earlier tag is retained for traceability.
 
-- Added revision-checked `std/text/edit`, ordered IME replacement events, and textbox correction handling. Wayland, Cocoa and Windows IMM publish bounded surrounding text; Windows supports selected-range reconversion and X11 explicitly returns `Unsupported`. Stale revisions, invalid UTF-8 ranges and capacity failures preserve caller text.
+- Fix Linux x86-64 shared-runtime linking when a module has no unwind table. Weak
+  table boundaries resolve safely to zero; populated tables retain their range
+  through image-base relocations in the built-in ELF linker.
 
-- Ordered composition snapshots and clipboard chunks now own their payloads, preserving multiple updates before draining. Composition has one portable 272-byte ABI; Event remains 312 bytes. XIM caret/locale/bounds, IMM Unicode conversion and Wayland transactions/disable are hardened. Text fields suppress IME-consumed keys, preview selected replacement without insertion, redraw on preedit changes and publish current-layout candidate rectangles.
+- **Breaking arena API:** constructors return `*mem.Arena`, with the header in
+  backing storage. Pass the pointer directly rather than `&arena`. Explicit
+  `arena_create(0)` selects the target default; zero arena values no longer
+  initialize themselves. Owned arenas chain blocks, while caller-buffer arenas
+  stay fixed. Release invalidates an owned handle. The separate `GrowingArena`
+  and `arena_take` APIs are removed. See [arena migration](docs/migrations/arena-handles-20261025.md).
 
-- Input method composition: `vendor/window` reports preedit text and cursor and places candidate windows at the caret (`set_text_input`) on X11 (XIM callbacks or over-the-spot), Wayland (`text-input-v3`), Win32 (IMM) and Cocoa (`NSTextInputClient`). `std/ui/box` text fields draw the composition at the caret and request text input placement.
-- `vendor/window` adds opt-in ordered raw key/text events, explicit queue overflow and worker wake-ups on X11, Wayland, Win32 and Cocoa. Event text is caller-owned; existing `box_input` summary clients retain their idle behavior. IME preedit and candidate placement remain unsupported.
-
-- `std/ui/box` exposes current-frame `find`, explicit `key_bytes`, portable `key_number` identities and persistent caller `user_data`, allowing applications to share the keyed cache and recycling policy with custom renderers.
-
-- `std/ui/box` adds mouse and Shift selection, Unicode word movement/deletion, selected clipboard operations, atomic replacement and horizontal scrolling in text fields. Tab/Shift-Tab traverse controls; Enter activates buttons. Tabs, popup menus, tooltips and splitters compose existing boxes. `layout`/`render` can run separately for custom app renderers, with container padding, absolute positioning and optional ordered shrinking.
-
-- `std/font/system` scans platform or explicit font directories, reads owned family/style metadata, matches weight/slant and selects fonts covering missing code points without fontconfig. Unsupported collections and CFF faces are skipped. `examples/box-viewer` now discovers its default font instead of requiring a Linux path.
-
-- `std/fs` directory listing, `metadata`, `file_metadata`, `remove`, `rename`, `make_directory` and `remove_directory` now work on macOS and Windows, not only Linux. Fixed: `open_directory` failed on Linux AArch64, which uses a different `O_DIRECTORY` value.
-- Desktop input now works on every `vendor/window` backend: Wayland (xkbcommon text with compose and key repeat, `wl_data_device` clipboard, cursors, output scale), Win32 (UTF-16 text and IME output, clipboard, cursors, DPI) and Cocoa (text, clipboard, cursors, backing scale; untested until macOS CI runs). Paste arrives on the poll after the request on every backend.
-- `vendor/window` on X11 adds UTF-8 text input through the input method, editing keys, wheel scrolling, the clipboard, cursors, display scale, `wait` for idle loops and `box_input`. `examples/box-viewer` is a 100,000-row log viewer on `std/ui/box`.
-- `ui.rounded_rectangle` and `Command.radius` draw antialiased rounded rectangles. `vendor/ui/opengl` adds a batched renderer: one signed-distance shader, a cached glyph atlas, and a draw call per clip.
-- `std/ui/box` adds a box-model UI after the RAD Debugger design: keyed boxes, semantic-size layout, previous-frame input, animation, text fields, scrolling and virtual lists.
-
-- `std/text/layout` adds NFC-aware Unicode line layout, Latin pair kerning, wrapping,
-  alignment, tabs and soft hyphens. `std/ui/text` emits positioned glyph commands.
-- `std/embedded/uart`, `timer` and `interrupt` replace board-only helpers with
-  reusable polling UART, CLINT/SysTick and nested critical-section APIs. RV64 heap
-  alignment and RISC-V assembler immediate validation are corrected.
-- Portable codecs add WAV, BMP/TGA/PPM/PGM read-write, first-frame GIF and baseline
-  JPEG decode, TOML 1.0 parse/write, and CBOR/MessagePack/protobuf wire APIs.
-- `vendor/window` adds native X11, Wayland, Win32 and Cocoa windows with UI input.
-  OpenGL presents UI commands; Vulkan provides an offscreen compute renderer.
-  FreeType/HarfBuzz bindings add native rasterization and directional run shaping.
-- Authenticated encryption, X25519, Ed25519 and P-256 now use native Dyn; SHA-512
-  and explicit Ed/P-256 X.509 path validation are included. TLS retains its separate
-  OpenSSL provider. Low-level AEAD supports exact in-place payload operation.
-- HMAC rejects oversized keys correctly. HKDF/PBKDF2 reject overflowing lengths
-  and mutable/borrowed overlap before writing; callers must provide disjoint
-  destination, scratch and borrowed key/info/password/salt slices.
-- Wasm emission reuses completed aggregate temporaries, avoiding local-count
-  exhaustion on large or nested literal arrays.
-- Native expansion/UI qualification is wired into macOS and Windows CI; real
-  native execution and physical-board qualification remain release gates.
-
-- TrueType rasterization now expands composite outlines with affine transforms, contour-point attachment, nested components and horizontal metric selection. Graph and coordinate budgets bound expansion; cycle/truncation failures preserve arena state. Phantom-point attachment and rotated selected metrics remain unsupported.
-
-- Initial `std/font` support loads TrueType cmap/metrics and rasterizes simple quadratic outlines into caller arenas, with bounded supersampling and atlas packing. `std/font/ui` renders direct or cached glyphs through the portable UI backend. Full OpenType and complex-script shaping remain outside the portable font parser.
-
-- `std/ui` adds a pure-Dyn immediate-mode core with buttons, checkboxes, integer sliders, pointer capture, keyboard focus and arena-owned draw commands. `std/ui/software` renders RGBA output with caller-provided glyph coverage; a headless PNG example is included.
-- Wasm emission now respects function liveness after O3 inlining, avoiding invalid bodies referencing replaced IR tables.
-
-- `std/simd` adds ten portable 128-bit lane types, per-lane wrapping arithmetic, masks and checked loads/stores, using existing O3 SIMD lowering where supported.
-- Generic instance symbols now distinguish nominal types from different modules, including nested compound types.
-
-- `std/event` adds caller-owned readiness queues over epoll, kqueue and WSAPoll, with tokens and deadline-preserving waits.
-
-- IPv6 and Unix stream helpers, IPv4 UDP multicast membership and options, and loopback regression coverage. Unix paths reject embedded NULs.
-
-- `testing.fuzz` replays a corpus, then mutates it and shrinks failures; `testing.Source` decodes structured values from fuzz input.
-- `std/math/big` adds arbitrary-precision integers in the caller's arena.
-- `std/unicode/text` adds `word_breaks` (UAX #29) and `line_breaks` (UAX #14), passing all Unicode 17 conformance cases.
-- `std/time` converts between instants and calendar dates (`date_time`, `instant_of`, `weekday`, `day_of_year`). `std/time/zone` adds time zones, local time and formatting.
-- `std/thread/pool` runs tasks on a fixed set of workers over a bounded queue in the caller's arena, with `Group` wait groups.
-- `fmt.write_f64_shortest` and `fmt.f64_shortest` print the shortest decimal that parses back to the same `f64` (a Ryu port). `{}` formatting is unchanged.
-- `std/process/signal` reads Ctrl-C, SIGTERM, SIGHUP and Windows console close events as queued events, with no code in signal handlers.
-- `fs.map` and `fs.unmap` give read-only views of whole files on Linux, macOS and Windows.
-- `std/hash` adds `wyhash` (final version 4.3) and `crc32_update`; `crc32` is table-driven.
-- `std/terminal` and `std/dynlib` now work on macOS and Windows as well as Linux.
-  `terminal.State` grows to 72 bytes to hold the Darwin termios layout.
 - **Breaking syntax:** each statement starts on its own line; `a := 1 b := 2` and
   `defer { x() y() }` are syntax errors. Split them onto separate lines.
 - **Breaking syntax:** `case` arms are no longer separated by commas. Delete the
@@ -192,10 +160,11 @@ servers so they pick up the new `dyn`.
   works on the caller's slot array through a `generation` field. Removed:
   `std/container/string_map`, `mem.Pool`, `mem.FreeList` and their functions.
   See `docs/migrations/containers.md`.
-- **Breaking:** `mem.append(&arena, &items, value)` replaces
-  `mem.append(&items, &count, &arena, value)`. The slice owns the rest of its
-  arena, so appends never copy and element addresses never change; it panics
-  when something else was pushed on that arena. New `mem.append_many`.
+- **Breaking:** `mem.append(arena, &items, value)` replaces
+  `mem.append(&items, &count, &arena, value)`. The slice must be the newest
+  allocation in its arena. Appends extend it in place when possible, but move
+  it when it outgrows a block; reacquire element pointers and views afterward.
+  Appending after another allocation panics. New `mem.append_many`.
 - Unknown field errors name the type and field: `Node has no field 'prev'`.
 - **Breaking:** function types drop the `*`: write `fn(i32, i32) i32`, not
   `*fn(i32, i32) i32`. Parameters may be named for documentation:
@@ -230,8 +199,8 @@ servers so they pick up the new `dyn`.
 - `mem.append` grows the arena's newest allocation in place instead of copying,
   through the new `mem.arena_try_extend`. A slice built in a loop with nothing
   else allocated in between now costs its final size, not twice that.
-- Typed pools: `mem.pool_for(T, &arena, count)`, `mem.acquire(T, &pool)`
-  (zeroed `*T`) and `mem.release(&pool, item)`.
+- Legacy typed pools are superseded by the caller-owned intrusive containers
+  described above; `mem.Pool` and `mem.FreeList` are removed.
 - `tests/bare-metal.py` kills the QEMU process group on timeout. A trap raised
   while reporting a trap on `riscv64-none` exits with status 103 instead of
   trapping again.

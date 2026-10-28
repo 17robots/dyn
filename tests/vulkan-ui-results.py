@@ -21,8 +21,8 @@ fn bitmap(data: rawptr, codepoint: u32) software.Glyph {
  return software.Glyph{pixels:font.pixels[..],width:3,height:2,stride:5,advance:4,x_offset:-1,y_offset:1}
 }
 fn main() {
- arena := mem.Arena{}
- defer { mem.arena_release(&arena) }
+ arena := mem.arena_create(0)
+ defer { mem.arena_release(arena) }
  renderer := gpu.Renderer{}
  check(gpu.open(&renderer,gpu.Limits{}).ok)
  defer { gpu.close(&renderer) }
@@ -43,7 +43,7 @@ fn main() {
  surface := software.Surface{pixels:pixels[..],width:32,height:32,stride:132}
  target := software.Surface{pixels:actual[..],width:32,height:32,stride:132}
  check(software.render(&surface,&commands[0],font).ok)
- check(gpu.render(&renderer,&arena,&target,&commands[0],font).ok)
+ check(gpu.render(&renderer,arena,&target,&commands[0],font).ok)
  for i in 0..#len(pixels) { check(pixels[i] == actual[i]) }
  // Reuse persistent GPU buffer on a smaller frame.
  surface.width = 7
@@ -51,23 +51,23 @@ fn main() {
  target.width = 7
  target.height = 5
  check(software.render(&surface,&commands[0],font).ok)
- check(gpu.render(&renderer,&arena,&target,&commands[0],font).ok)
+ check(gpu.render(&renderer,arena,&target,&commands[0],font).ok)
  for i in 0..#len(pixels) { check(pixels[i] == actual[i]) }
  renderer.limits.draws = 0
- check(gpu.render(&renderer,&arena,&target,&commands[0],font).kind == errors.Kind.Capacity)
+ check(gpu.render(&renderer,arena,&target,&commands[0],font).kind == errors.Kind.Capacity)
  renderer.limits = gpu.Limits{coverage_bytes:0}
  target.width = 32
  target.height = 32
- check(gpu.render(&renderer,&arena,&target,&commands[2],font).kind == errors.Kind.Capacity)
+ check(gpu.render(&renderer,arena,&target,&commands[2],font).kind == errors.Kind.Capacity)
  renderer.limits = gpu.Limits{}
  bad := commands[3]
  bad.codepoint = 0
- check(gpu.render(&renderer,&arena,&target,&bad,font).kind == errors.Kind.InvalidInput)
+ check(gpu.render(&renderer,arena,&target,&bad,font).kind == errors.Kind.InvalidInput)
  target.stride = 0
- check(gpu.render(&renderer,&arena,&target,&commands[0],font).kind == errors.Kind.InvalidInput)
+ check(gpu.render(&renderer,arena,&target,&commands[0],font).kind == errors.Kind.InvalidInput)
  gpu.close(&renderer)
  gpu.close(&renderer)
- check(gpu.render(&renderer,&arena,&target,&commands[0],font).kind == errors.Kind.InvalidState)
+ check(gpu.render(&renderer,arena,&target,&commands[0],font).kind == errors.Kind.InvalidState)
 }
 '''
 if not shutil.which('glslangValidator'):

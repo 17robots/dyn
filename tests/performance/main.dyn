@@ -33,8 +33,8 @@ fn main() {
   }
   backing: [65536]u8 = []
   arena := memory.arena_from_buffer(backing[..])
-  names := hash.slots(Entry, &arena, 128)
-  entries := memory.push_array(Entry, &arena, 128)
+  names := hash.slots(Entry, arena, 128)
+  entries := memory.push_array(Entry, arena, 128)
   for i in 0..128 {
     entry := &entries[i]
     entry.bytes[0] = #cast(u8, i)
@@ -51,7 +51,7 @@ fn main() {
     testing.expect(hash.remove(names, found), "remove")
   }
   built := builder.from_buffer(backing[..0])
-  for i in 0..1024 { _ = builder.append_grow(&built, &arena, "x") }
-  snapshot := memory.arena_snapshot(&arena)
+  for i in 0..1024 { _ = builder.append_grow(&built, arena, "x") }
+  snapshot := memory.arena_snapshot(arena)
   _ = io.println(io.stdout(), "checksum={} arena_used={} arena_peak={} allocation_failures={}", checksum, snapshot.used, snapshot.peak_used, snapshot.allocation_failures)
 }

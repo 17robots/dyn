@@ -60,6 +60,8 @@ fn build(state: *box.State, context: *ui.Context, arena: *mem.Arena) {
 }
 
 fn main() {
+  persistent_arena = mem.arena_create(0)
+  defer mem.arena_release(persistent_arena)
   for i in 0..48 {
     coverage[i] = 255
     if i % 6 == 5 {
@@ -73,28 +75,28 @@ fn main() {
   }
   loaded := gl.load(window.gl_proc)
   check(loaded.ok, "gl")
-  batch := mem.push(gpu.Batch, &persistent_arena)
+  batch := mem.push(gpu.Batch, persistent_arena)
   check(gpu.open_batch(batch, loaded.api).ok, "open batch")
   defer {
     gpu.close_batch(batch)
   }
   arena := mem.arena_create(16777216)
   defer {
-    mem.arena_release(&arena)
+    mem.arena_release(arena)
   }
-  state := box.create(&persistent_arena, measure, nil, 12.0)
+  state := box.create(persistent_arena, measure, nil, 12.0)
   context: ui.Context
-  build(state, &context, &arena)
-  build(state, &context, &arena)
+  build(state, &context, arena)
+  build(state, &context, arena)
   font := software.Font{ glyph: bitmap, line_height: 12 }
-  pixels := mem.push_array(u8, &persistent_arena, #cast(usize, 61440))
+  pixels := mem.push_array(u8, persistent_arena, #cast(usize, 61440))
   surface := software.Surface{ pixels: pixels, width: 160, height: 96, stride: 640 }
   check(software.render(&surface, ui.first(&context), font).ok, "software")
-  vertices := mem.push_array(f32, &persistent_arena, #cast(usize, 86016))
+  vertices := mem.push_array(f32, persistent_arena, #cast(usize, 86016))
   loaded.api.clear_color(0.0, 0.0, 0.0, 0.0)
   loaded.api.clear(gl.ColorBufferBit)
   check(gpu.render_batch(batch, ui.first(&context), 160, 96, font, vertices).ok, "batch render")
-  actual := mem.push_array(u8, &persistent_arena, #cast(usize, 61440))
+  actual := mem.push_array(u8, persistent_arena, #cast(usize, 61440))
   loaded.api.read_pixels(0, 0, 160, 96, gl.Rgba, gl.UnsignedByte, &actual[0])
   worst: i32 = 0
   for y in 0..96 {
@@ -126,7 +128,7 @@ fn main() {
   check(window.poll(&host).ok && window.swap(&host).ok, "present")
 }
 
-persistent_arena: mem.Arena
+persistent_arena: *mem.Arena
 '''
 CLIPBOARD = r'''use "vendor/window" window
 use "std/bytes" bytes

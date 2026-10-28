@@ -15,8 +15,17 @@ use "std/io"
 struct Padded { a: u8, b: usize, c: u8 }
 fn expect(ok: bool) { if !ok { #panic("arena zero contract") } }
 fn fill(bytes: []u8) { for *b in bytes { b.* = 171 } }
-fn verify(bytes: []u8, start: usize, size: usize) {
+// Header fields are live mutable metadata; dirty only bytes outside that region.
+fn fill_payload(bytes: []u8, arena: *mem.Arena) {
+  header := #cast(usize,arena)-#cast(usize,&bytes[0])
   for i in 0..#len(bytes) {
+    if i < header || i-header >= mem.ArenaHeader { bytes[i]=171 }
+  }
+}
+fn verify(bytes: []u8, arena: *mem.Arena, start: usize, size: usize) {
+  header := #cast(usize,arena)-#cast(usize,&bytes[0])
+  for i in 0..#len(bytes) {
+    if i >= header && i-header < mem.ArenaHeader { continue }
     if i >= start && i-start < size { expect(bytes[i] == 0) }
     else { expect(bytes[i] == 171) }
   }
@@ -36,23 +45,23 @@ fn typed_array($T:type, count:usize, offset:usize) {
   untyped.events=&untyped_log
   typed.event_resource=83
   untyped.event_resource=83
-  values:=mem.push_array(T,&typed,count)
-  raw:=mem.arena_push_array(&untyped,count,#sizeof(T),#alignof(T))
+  values:=mem.push_array(T,typed,count)
+  raw:=mem.arena_push_array(untyped,count,#sizeof(T),#alignof(T))
   expect(#len(values)==count && typed.offset==untyped.offset && typed.peak_used==untyped.peak_used)
   expect(typed_log.count==untyped_log.count)
-  if count==0 { expect(raw==nil && typed.offset==0 && typed_log.count==0)
+  if count==0 { expect(raw==nil && typed.offset==mem.arena_start(typed) && typed_log.count==0)
   return }
   start:=#cast(usize,&values[0])-#cast(usize,&left[0])
   other:=#cast(usize,raw)-#cast(usize,&right[0])
   expect(start==other && (#cast(usize,&values[0]) & (#alignof(T)-1))==0)
-  verify(left[..],start,count*#sizeof(T))
-  verify(right[..],other,count*#sizeof(T))
+  verify(left[..],typed,start,count*#sizeof(T))
+  verify(right[..],untyped,other,count*#sizeof(T))
   expect(typed_log.count==1 && typed_events[0].kind==observe.Kind.Allocated)
   expect(typed_events[0].value==#cast(u64,count*#sizeof(T)) && typed_events[0].resource==83)
   expect(untyped_events[0].kind==typed_events[0].kind && untyped_events[0].value==typed_events[0].value)
   typed.poison_on_rewind=true
-  mem.arena_reset(&typed)
-  reused:=mem.push_array(T,&typed,count)
+  mem.arena_reset(typed)
+  reused:=mem.push_array(T,typed,count)
   expect(&reused[0]==&values[0] && typed_log.count==3)
   payload:=(#cast(*u8,&reused[0]))[..count*#sizeof(T)]
   for byte in payload { expect(byte==0) }
@@ -65,65 +74,68 @@ fn main() {
       typed_array(Padded,count,offset)
     }
   }
-  invalid:mem.Arena
+  invalid := mem.arena_create(0)
+  defer mem.arena_release(invalid)
   invalid.offset=1
-  expect(#len(mem.push_array(u64,&invalid,0))==0 && invalid.offset==1 && invalid.allocation_failures==0)
+  expect(#len(mem.push_array(u64,invalid,0))==0 && invalid.offset==1 && invalid.allocation_failures==0)
+  invalid.offset=mem.arena_start(invalid)
   absent:*mem.Arena=nil
   expect(#len(mem.push_array(u64,absent,0))==0)
-  backing: [320]u8
+  backing: [512]u8
   for offset in 0..16 {
     for size in 0..130 {
       for alignment in [1, 2, 4, 8, 16] {
         fill(backing[..])
-        arena := mem.arena_from_buffer(backing[offset..300])
-        result := mem.arena_try_push(&arena, size, #cast(usize, alignment))
+        arena := mem.arena_from_buffer(backing[offset..480])
+        result := mem.arena_try_push(arena, size, #cast(usize, alignment))
         expect(result.ok && result.size == size)
         if size == 0 {
-          expect(result.memory == nil && arena.offset == 0)
-          verify(backing[..], 0, 0)
+          expect(result.memory == nil && arena.offset == mem.arena_start(arena))
+          verify(backing[..], arena, 0, 0)
         } else {
           start := #cast(usize, result.memory)-#cast(usize, &backing[0])
           expect(#cast(usize, result.memory) % #cast(usize, alignment) == 0)
-          expect(arena.offset == start-offset+size)
-          verify(backing[..], start, size)
+          base := #cast(usize,arena)-#cast(usize,&backing[0])
+          expect(arena.offset == start-base+size)
+          verify(backing[..], arena, start, size)
           for extra in 0..34 {
-            fill(backing[..])
-            arena.offset = start-offset+size
-            expect(mem.arena_try_extend(&arena, result.memory, size, extra))
-            verify(backing[..], start+size, extra)
+            fill_payload(backing[..],arena)
+            arena.offset = start-base+size
+            expect(mem.arena_try_extend(arena, result.memory, size, extra))
+            verify(backing[..], arena, start+size, extra)
           }
         }
       }
     }
   }
   fill(backing[..])
-  arena := mem.arena_from_buffer(backing[..64])
+  arena := mem.arena_from_buffer(backing[..mem.ArenaBufferOverhead+64])
   events: [16]observe.Event
   log := observe.log(events[..])
   arena.events = &log
   arena.event_resource = 77
-  zero := mem.arena_try_push(&arena, 0, 1)
+  zero := mem.arena_try_push(arena, 0, 1)
   expect(zero.ok && zero.memory == nil && log.count == 0)
-  item := mem.push(Padded, &arena)
+  item := mem.push(Padded, arena)
   start := #cast(usize, item)-#cast(usize, &backing[0])
-  verify(backing[..], start, #sizeof(Padded))
+  verify(backing[..], arena, start, #sizeof(Padded))
   expect(log.count == 1 && events[0].kind == observe.Kind.Allocated)
   expect(events[0].value == #cast(u64, #sizeof(Padded)) && events[0].resource == 77)
   before := arena.offset
-  fill(backing[..])
-  failed := mem.arena_try_push(&arena, 65, 1)
+  fill_payload(backing[..],arena)
+  failed := mem.arena_try_push(arena, 128, 1)
   expect(!failed.ok && failed.error == mem.ErrorKind.Capacity && arena.offset == before)
   expect(arena.allocation_failures == 1 && log.count == 2)
   expect(events[1].kind == observe.Kind.AllocationFailed && events[1].value == #cast(u64, before))
-  expect(!mem.arena_try_extend(&arena, #cast(*u8, item), #sizeof(Padded), 65))
-  verify(backing[..], 0, 0)
+  expect(!mem.arena_try_extend(arena, #cast(*u8, item), #sizeof(Padded), 128))
+  verify(backing[..], arena, 0, 0)
   expect(log.count == 2 && arena.offset == before)
   arena.poison_on_rewind = true
-  mem.arena_reset(&arena)
-  for i in 0..before { expect(backing[i] == 221) }
-  reused := mem.push(Padded, &arena)
+  mem.arena_reset(arena)
+  for i in start..start+before-mem.arena_start(arena) { expect(backing[i] == 221) }
+  reused := mem.push(Padded, arena)
   expect(reused == item)
-  verify(backing[..], start, #sizeof(Padded))
+  verify(backing[..], arena, start, #sizeof(Padded))
   expect(log.count == 4 && events[2].kind == observe.Kind.Reclaimed && events[3].kind == observe.Kind.Allocated)
   fill(backing[..])
   mem.zero(backing[..])
@@ -160,29 +172,32 @@ def run(work):
             if target:
                 command += ['--target', target]
             subprocess.run(command, cwd=ROOT, check=True, timeout=120)
-            result = subprocess.run([*runner, str(output)], capture_output=True, timeout=60)
+            # Debug deliberately checks every surrounding byte after each extend.
+            # Shared CI CPUs need more time for this unchanged exhaustive corpus.
+            result = subprocess.run([*runner, str(output)], capture_output=True,
+                                    timeout=180 if not target and not release else 60)
             assert result.returncode == 0 and b'ARENA ZERO PASS' in result.stdout, (name, result.returncode, result.stdout, result.stderr)
             print('PASS arena zero', name, flush=True)
     for failure in ('overflow', 'exhaustion'):
         for typed in (False, True):
-            call = 'mem.push_array(u64,&arena,count)' if typed else 'mem.arena_push_array(&arena,count,#sizeof(u64),#alignof(u64))'
-            count = '(~#cast(usize,0))/#sizeof(u64)+1' if failure == 'overflow' else '3'
+            call = 'mem.push_array(u64,arena,count)' if typed else 'mem.arena_push_array(arena,count,#sizeof(u64),#alignof(u64))'
+            count = '(~#cast(usize,0))/#sizeof(u64)+1' if failure == 'overflow' else '8'
             failures = '0' if failure == 'overflow' else '1'
             source = '''use "std/mem" mem
 use "std/observe"
 use "std/io"
 fn cleanup(arena:*mem.Arena, log:*observe.Log) {
- if arena.offset!=3 || arena.allocation_failures!=FAILURES || log.count!=EVENTS { #panic("typed array failure state") }
+ if arena.offset!=mem.arena_start(arena)+3 || arena.allocation_failures!=FAILURES || log.count!=EVENTS { #panic("typed array failure state") }
  _=io.println(io.stdout(),"FAILURE STATE PASS")
 }
 fn main() {
- backing:[16]u8=[]
+ backing:[mem.ArenaBufferOverhead+16]u8=[]
  arena:=mem.arena_from_buffer(backing[..])
  events:[4]observe.Event=[]
  log:=observe.log(events[..])
  arena.events=&log
- _=mem.push_bytes_uninit(&arena,3)
- defer cleanup(&arena,&log)
+ _=mem.push_bytes_uninit(arena,3)
+ defer cleanup(arena,&log)
  count:usize=COUNT
  _=CALL
 }

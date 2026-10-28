@@ -33,7 +33,7 @@ pub struct EventResult { event: Event, status: Status, kind: errors.Kind, error:
 // The caller output buffer must outlive the watcher; names expire on next Event.
 // FSEvents coalesces changes. Rename has both move bits, cookie=0 and rescan=true;
 // CloseWrite is unavailable. Rescan must rebuild/reconcile the watched snapshot.
-pub struct Watcher { state: *State, storage: []u8, arena: mem.Arena, rescan_required: bool, failed: bool, error: isize, kind: errors.Kind }
+pub struct Watcher { state: *State, storage: []u8, arena: *mem.Arena, rescan_required: bool, failed: bool, error: isize, kind: errors.Kind }
 pub struct OpenResult { value: Watcher, error: isize, kind: errors.Kind, ok: bool }
 struct Context { version: isize, info: rawptr, retain: rawptr, release: rawptr, describe: rawptr }
 type Callback = fn(rawptr, rawptr, usize, rawptr, *const u32, *const u64)
@@ -62,18 +62,16 @@ extern fn queue_create "dispatch_queue_create"(label: *const u8, attributes: raw
 extern fn queue_sync "dispatch_sync_f"(queue: rawptr, context: rawptr, callback: fn(rawptr))
 extern fn queue_release "dispatch_release"(queue: rawptr)
 fn symbol(handle: rawptr, name: []const u8) rawptr {
-  backing: [128]u8 = []
-  cstring_space1 := mem.arena_from_buffer(backing[..])
-  value := c.string_from_bytes(&cstring_space1, name)
+  backing: [128 + mem.ArenaBufferOverhead]u8 = []
+  value := c.string_into(backing[..], name)
   if handle == nil || !value.ok {
     return nil
   }
   return library_symbol(handle, value.value)
 }
 fn library(path: []const u8) rawptr {
-  backing: [256]u8 = []
-  cstring_space2 := mem.arena_from_buffer(backing[..])
-  value := c.string_from_bytes(&cstring_space2, path)
+  backing: [256 + mem.ArenaBufferOverhead]u8 = []
+  value := c.string_into(backing[..], path)
   if !value.ok {
     return nil
   }
@@ -139,16 +137,16 @@ pub fn open(storage: []u8) OpenResult {
     return OpenResult{ error: -28, kind: errors.darwin(-28) }
   }
   arena := mem.arena_create(#sizeof(State))
-  state := mem.push(State, &arena)
+  state := mem.push(State, arena)
   if !load(&state.api) {
     unload(&state.api)
-    mem.arena_release(&arena)
+    mem.arena_release(arena)
     return OpenResult{ error: -95, kind: errors.Kind.Unsupported }
   }
   state.queue = queue_create(nil, nil)
   if state.queue == nil {
     unload(&state.api)
-    mem.arena_release(&arena)
+    mem.arena_release(arena)
     return OpenResult{ error: -12, kind: errors.darwin(-12) }
   }
   return OpenResult{ value: Watcher{ state: state, storage: storage, arena: arena }, ok: true }
@@ -261,9 +259,8 @@ pub fn add(watcher: *Watcher, path: []const u8, mask: u32) Result {
   if (mask & SupportedEvents) == 0 {
     return Result{ error: -95, kind: errors.Kind.Unsupported }
   }
-  input: [1024]u8 = []
-  cstring_space3 := mem.arena_from_buffer(input[..])
-  terminated := c.string_from_bytes(&cstring_space3, path)
+  input: [1024 + mem.ArenaBufferOverhead]u8 = []
+  terminated := c.string_into(input[..], path)
   if !terminated.ok {
     return failure(-22)
   }
@@ -347,7 +344,8 @@ pub fn remove(watcher: *Watcher, id: i32) Result {
 pub fn close(watcher: *Watcher) Result {
   state := watcher.state
   if state == nil {
-    mem.arena_release(&watcher.arena)
+    mem.arena_release(watcher.arena)
+    watcher.arena = nil
     return Result{ ok: true }
   }
   for i in 0..16 {
@@ -355,7 +353,8 @@ pub fn close(watcher: *Watcher) Result {
   }
   queue_release(state.queue)
   unload(&state.api)
-  mem.arena_release(&watcher.arena)
+  mem.arena_release(watcher.arena)
+  watcher.arena = nil
   watcher.state = nil
   watcher.rescan_required = false
   return Result{ ok: true }

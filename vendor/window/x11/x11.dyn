@@ -71,8 +71,7 @@ pub fn open(window: *Window, title: []const u8, width, height: i32) Result {
     return Result{kind:errors.Kind.InvalidInput}
   }
   storage: [4096]u8 = []
-  arena := mem.arena_from_buffer(storage[..])
-  name := c.string_from_bytes(&arena, title)
+  name := c.string_into(storage[..], title)
   if !name.ok {
     return Result{kind:errors.Kind.InvalidInput}
   }

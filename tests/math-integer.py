@@ -133,7 +133,7 @@ def extra_cases(work):
             fixture.write_bytes(b''.join(struct.pack('<Q', v & ((1<<64)-1)) for v in valid))
             name = f'narrow_{target}_{origin}'
             narrow_source += f"fn {name}(data: []const u8) {{ cursor: usize = 0\n for cursor < #len(data) {{ raw := read(data, &cursor)\n value := #cast({origin}, raw)\n require(#cast(u64, math.narrow({target}, value)) == raw, \"{name}\") }} }}\n"
-            narrow_calls += f'if true {{ input := fs.read_all(&arena, "{fixture}", 134217728)\n require(input.ok, "narrow input")\n {name}(input.value)\n mem.arena_reset(&arena) }}\n'
+            narrow_calls += f'if true {{ input := fs.read_all(arena, "{fixture}", 134217728)\n require(input.ok, "narrow input")\n {name}(input.value)\n mem.arena_reset(arena) }}\n'
             successes += len(valid)
             for value in values:
                 if not tl <= value <= th:
@@ -164,11 +164,11 @@ def extra_cases(work):
                 panic_bodies.append((f'a := #cast({target}, raw)\n b := #cast({target}, other)\n _ = {expr}',a,b,message))
     fixture = work/'panic.bin'
     panic_source = HEADER + 'fn main() { arena := mem.arena_create(4096)\n'
-    panic_source += f'input := fs.read_all(&arena, "{fixture}", 4096)\n require(input.ok, "panic input")\n cursor: usize = 0\n selector := read(input.value, &cursor)\n raw := read(input.value, &cursor)\n other := read(input.value, &cursor)\n'
+    panic_source += f'input := fs.read_all(arena, "{fixture}", 4096)\n require(input.ok, "panic input")\n cursor: usize = 0\n selector := read(input.value, &cursor)\n raw := read(input.value, &cursor)\n other := read(input.value, &cursor)\n'
     for index,(body,_,_,_) in enumerate(panic_bodies):
         panic_source += f'if selector == {index} {{ {body} }}\n'
     panic_source += '}\n'
-    narrow_source += 'fn narrow_all() { arena := mem.arena_create(134217728)\n'+narrow_calls+'mem.arena_release(&arena) }\n'
+    narrow_source += 'fn narrow_all() { arena := mem.arena_create(134217728)\n'+narrow_calls+'mem.arena_release(arena) }\n'
     return narrow_source, panic_source, fixture, panic_bodies, successes
 
 
@@ -180,7 +180,7 @@ def run():
         for t,w,signed in TYPES:
             path = work/f'{t}.bin'
             body,count,eligible = generate(t,w,signed,path); source += body; total += count; coverage.update(eligible)
-            calls += f'if true {{ arena := mem.arena_create(134217728)\n input := fs.read_all(&arena, "{path}", 134217728)\n require(input.ok, "read fixture")\n test_{t}(input.value)\n mem.arena_release(&arena) }}\n'
+            calls += f'if true {{ arena := mem.arena_create(134217728)\n input := fs.read_all(arena, "{path}", 134217728)\n require(input.ok, "read fixture")\n test_{t}(input.value)\n mem.arena_release(arena) }}\n'
         source += 'fn main() {\n'+calls+'}\n'
         (project/'main.dyn').write_text(source)
         for mode in ('--debug','--release'):

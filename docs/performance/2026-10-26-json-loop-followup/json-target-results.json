@@ -1,0 +1,50 @@
+[
+  {
+    "target": "riscv32-none",
+    "mode": "debug",
+    "status": 0,
+    "soft_no_fp_audit": false
+  },
+  {
+    "target": "riscv32-none",
+    "mode": "release",
+    "status": 0,
+    "soft_no_fp_audit": false
+  },
+  {
+    "target": "riscv32-none-soft",
+    "mode": "debug",
+    "status": 0,
+    "soft_no_fp_audit": true
+  },
+  {
+    "target": "riscv32-none-soft",
+    "mode": "release",
+    "status": 0,
+    "soft_no_fp_audit": true
+  },
+  {
+    "target": "thumbv7em-none",
+    "mode": "debug",
+    "status": 0,
+    "soft_no_fp_audit": false
+  },
+  {
+    "target": "thumbv7em-none",
+    "mode": "release",
+    "status": 0,
+    "soft_no_fp_audit": false
+  },
+  {
+    "target": "thumbv7em-none-soft",
+    "mode": "debug",
+    "status": 0,
+    "soft_no_fp_audit": true
+  },
+  {
+    "target": "thumbv7em-none-soft",
+    "mode": "release",
+    "status": 0,
+    "soft_no_fp_audit": true
+  }
+]

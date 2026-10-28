@@ -31,7 +31,7 @@ def hash_bytes(seed, key):
 
 # Published SipHash-1-3 vector: key 00..0f, empty message.
 assert sip13(0x0706050403020100, 0x0f0e0d0c0b0a0908, b'') == 0xabac0158050fc4dc
-CONTAINERS = 'use "std/mem" mem\nuse "std/container/list" list\nuse "std/container/hash" hash\nuse "std/container/chunk" chunk\nuse "std/container/slot_map" slots\n\nstruct Entity {\n  generation: u32,\n  key: []const u8,\n  hash: u64,\n  hash_next: *Entity,\n  parent: *Entity,\n  first: *Entity,\n  last: *Entity,\n  next: *Entity,\n  prev: *Entity,\n  free_next: *Entity,\n  hp: i32,\n}\nstruct EntityChunk { next: *EntityChunk, count: usize, items: [3]Entity }\nstruct EntityList { first: *EntityChunk, last: *EntityChunk, total: usize }\n\nconst nil_entity: Entity = Entity{}\n\nfn main() {\n  arena: mem.Arena\n  entities := mem.push_array(Entity, &arena, 8)\n  first_free: *Entity\n  for i in 0..8 {\n    list.free_push(&first_free, &entities[7 - i])\n  }\n  table := hash.slots(Entity, &arena, 4)\n  root := list.free_pop(&first_free, &nil_entity)\n  slots.reset(root)\n  names: [3][]const u8 = ["a", "boss", "c"]\n  for name in names {\n    e := list.free_pop(&first_free, &nil_entity)\n    slots.reset(e)\n    e.key = name\n    e.hash = hash.hash_bytes(7, name)\n    hash.insert(table, e)\n    list.tree_push_child(root, e)\n  }\n  boss := hash.find(table, hash.hash_bytes(7, "boss"), "boss", &nil_entity)\n  if boss == &nil_entity || boss.key[0] != \'b\' || boss.parent != root || root.first.next != boss {\n    #panic("find")\n  }\n  missing := hash.find(table, hash.hash_bytes(7, "zed"), "zed", &nil_entity)\n  if missing != &nil_entity || missing.hp != 0 {\n    #panic("miss")\n  }\n  handle := slots.handle_of(entities, boss)\n  if slots.resolve(entities, handle, &nil_entity) != boss {\n    #panic("resolve")\n  }\n  list.tree_remove(boss)\n  _ = hash.remove(table, boss)\n  slots.retire(boss)\n  list.free_push(&first_free, boss)\n  if slots.resolve(entities, handle, &nil_entity) != &nil_entity || root.first.next.key[0] != \'c\' {\n    #panic("stale")\n  }\n  again := list.free_pop(&first_free, &nil_entity)\n  slots.reset(again)\n  if again != boss || slots.resolve(entities, handle, &nil_entity) != &nil_entity || !slots.is_live(again) {\n    #panic("reuse")\n  }\n  if slots.resolve(entities, slots.Handle{}, &nil_entity) != &nil_entity {\n    #panic("zero handle")\n  }\n  shared: mem.Arena\n  chunks: EntityList\n  for i in 0..10 {\n    e := chunk.push(&shared, &chunks, Entity{hp: #cast(i32, i)})\n    _ = mem.push(u8, &shared)\n    e.hp += 1\n  }\n  flat := chunk.to_slice(Entity, &shared, &chunks)\n  if chunks.total != 10 || #len(flat) != 10 || flat[9].hp != 10 || chunk.at(&chunks, 4, &nil_entity).hp != 5 || chunk.at(&chunks, 10, &nil_entity) != &nil_entity {\n    #panic("chunk")\n  }\n  queue_first: *Entity\n  queue_last: *Entity\n  for i in 0..3 {\n    list.sll_queue_push(&queue_first, &queue_last, &entities[i])\n  }\n  if list.sll_queue_pop(&queue_first, &queue_last, &nil_entity) != &entities[0] {\n    #panic("queue")\n  }\n}\n'
+CONTAINERS = 'use "std/mem" mem\nuse "std/container/list" list\nuse "std/container/hash" hash\nuse "std/container/chunk" chunk\nuse "std/container/slot_map" slots\n\nstruct Entity {\n  generation: u32,\n  key: []const u8,\n  hash: u64,\n  hash_next: *Entity,\n  parent: *Entity,\n  first: *Entity,\n  last: *Entity,\n  next: *Entity,\n  prev: *Entity,\n  free_next: *Entity,\n  hp: i32,\n}\nstruct EntityChunk { next: *EntityChunk, count: usize, items: [3]Entity }\nstruct EntityList { first: *EntityChunk, last: *EntityChunk, total: usize }\n\nconst nil_entity: Entity = Entity{}\n\nfn main() {\n  arena := mem.arena_create(0)\n  entities := mem.push_array(Entity, arena, 8)\n  first_free: *Entity\n  for i in 0..8 {\n    list.free_push(&first_free, &entities[7 - i])\n  }\n  table := hash.slots(Entity, arena, 4)\n  root := list.free_pop(&first_free, &nil_entity)\n  slots.reset(root)\n  names: [3][]const u8 = ["a", "boss", "c"]\n  for name in names {\n    e := list.free_pop(&first_free, &nil_entity)\n    slots.reset(e)\n    e.key = name\n    e.hash = hash.hash_bytes(7, name)\n    hash.insert(table, e)\n    list.tree_push_child(root, e)\n  }\n  boss := hash.find(table, hash.hash_bytes(7, "boss"), "boss", &nil_entity)\n  if boss == &nil_entity || boss.key[0] != \'b\' || boss.parent != root || root.first.next != boss {\n    #panic("find")\n  }\n  missing := hash.find(table, hash.hash_bytes(7, "zed"), "zed", &nil_entity)\n  if missing != &nil_entity || missing.hp != 0 {\n    #panic("miss")\n  }\n  handle := slots.handle_of(entities, boss)\n  if slots.resolve(entities, handle, &nil_entity) != boss {\n    #panic("resolve")\n  }\n  list.tree_remove(boss)\n  _ = hash.remove(table, boss)\n  slots.retire(boss)\n  list.free_push(&first_free, boss)\n  if slots.resolve(entities, handle, &nil_entity) != &nil_entity || root.first.next.key[0] != \'c\' {\n    #panic("stale")\n  }\n  again := list.free_pop(&first_free, &nil_entity)\n  slots.reset(again)\n  if again != boss || slots.resolve(entities, handle, &nil_entity) != &nil_entity || !slots.is_live(again) {\n    #panic("reuse")\n  }\n  if slots.resolve(entities, slots.Handle{}, &nil_entity) != &nil_entity {\n    #panic("zero handle")\n  }\n  shared := mem.arena_create(0)\n  chunks: EntityList\n  for i in 0..10 {\n    e := chunk.push(shared, &chunks, Entity{hp: #cast(i32, i)})\n    _ = mem.push(u8, shared)\n    e.hp += 1\n  }\n  flat := chunk.to_slice(Entity, shared, &chunks)\n  if chunks.total != 10 || #len(flat) != 10 || flat[9].hp != 10 || chunk.at(&chunks, 4, &nil_entity).hp != 5 || chunk.at(&chunks, 10, &nil_entity) != &nil_entity {\n    #panic("chunk")\n  }\n  queue_first: *Entity\n  queue_last: *Entity\n  for i in 0..5 {\n    list.sll_queue_push(&queue_first, &queue_last, &entities[i])\n  }\n  if list.sll_queue_pop(&queue_first, &queue_last, &nil_entity) != &entities[0] {\n    #panic("queue")\n  }\n}\n'
 KEYS = [b'', b'a', b'boss', b'1234567', b'12345678', b'123456789', bytes(range(40))]
 SEEDS = [0, 7, 0xffffffffffffffff]
 def escaped_bytes(key):
@@ -43,28 +43,28 @@ HASHES = 'use "std/container/hash" hash\nfn main() {\n' + ''.join(
     for seed in SEEDS for key in KEYS) + '}\n'
 APPEND = """use "std/mem" mem
 fn main() {
-  arena: mem.Arena
+  arena := mem.arena_create(0)
   items: []u64
   for i in 0..1000 {
-    _ = mem.append(&arena, &items, #cast(u64, i))
+    _ = mem.append(arena, &items, #cast(u64, i))
   }
   first := &items[0]
-  mem.append_many(&arena, &items, items[..3])
+  mem.append_many(arena, &items, items[..3])
   if #len(items) != 1003 || items[1001] != 1 || first != &items[0] {
     #panic("append")
   }
-  storage: [64]u8 = []
+  storage: [64 + mem.ArenaBufferOverhead]u8 = []
   fixed := mem.arena_from_buffer(storage[..])
   small: []u32
   for i in 0..16 {
-    _ = mem.append(&fixed, &small, #cast(u32, i))
+    _ = mem.append(fixed, &small, #cast(u32, i))
   }
   if #len(small) != 16 || small[15] != 15 {
     #panic("fixed")
   }
   if #len(std_args()) > 0 {
-    _ = mem.push(u8, &arena)
-    _ = mem.append(&arena, &items, 5)
+    _ = mem.push(u8, arena)
+    _ = mem.append(arena, &items, 5)
   }
 }
 fn std_args() []u8 {
@@ -73,8 +73,8 @@ fn std_args() []u8 {
 }
 """
 FAILURES = {
-    'not the newest allocation': 'use "std/mem" mem\nfn main() {\n  arena: mem.Arena\n  items: []u64\n  _ = mem.append(&arena, &items, 1)\n  _ = mem.push(u8, &arena)\n  _ = mem.append(&arena, &items, 2)\n}\n',
-    'arena exhausted': 'use "std/mem" mem\nfn main() {\n  storage: [16]u8 = []\n  arena := mem.arena_from_buffer(storage[..])\n  items: []u64\n  for i in 0..3 {\n    _ = mem.append(&arena, &items, #cast(u64, i))\n  }\n}\n',
+    'not the newest allocation': 'use "std/mem" mem\nfn main() {\n  arena := mem.arena_create(0)\n  items: []u64\n  _ = mem.append(arena, &items, 1)\n  _ = mem.push(u8, arena)\n  _ = mem.append(arena, &items, 2)\n}\n',
+    'arena exhausted': 'use "std/mem" mem\nfn main() {\n  storage: [16 + mem.ArenaBufferOverhead]u8 = []\n  arena := mem.arena_from_buffer(storage[..])\n  items: []u64\n  for i in 0..5 {\n    _ = mem.append(arena, &items, #cast(u64, i))\n  }\n}\n',
     'node is not an element': 'use "std/container/slot_map" slots\nstruct S { generation: u32 }\nfn main() {\n  a: [2]S = []\n  b: S\n  _ = slots.handle_of(a[..], &b)\n}\n',
 }
 with tempfile.TemporaryDirectory(prefix='dyn-containers-') as temporary:

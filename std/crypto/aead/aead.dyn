@@ -35,18 +35,11 @@ fn overlaps(left: []const u8, right: []const u8) bool {
   }
   return a - b < #len(right)
 }
-// Inspect the pending allocation before even zeroing bytes: inputs can borrow
-// unused arena backing. Lazy arenas have no backing that an input could alias.
+// Reject unused backing before allocations can overwrite borrowed inputs.
+// Allocated inputs remain stable when this arena adds blocks.
 fn conflicts(arena: *mem.Arena, count: usize, first: []const u8, second: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) bool {
-  mark := mem.arena_mark(arena)
-  if mark > #len(arena.data) {
-    #panic("invalid arena offset")
-  }
-  if count > #len(arena.data) - mark {
-    return false
-  }
-  pending := arena.data[mark..mark + count]
-  return overlaps(pending, first) || overlaps(pending, second) || overlaps(pending, additional) || overlaps(pending, key) || overlaps(pending, nonce)
+  _ = count
+  return mem.arena_overlaps_unallocated(arena, first) || mem.arena_overlaps_unallocated(arena, second) || mem.arena_overlaps_unallocated(arena, additional) || mem.arena_overlaps_unallocated(arena, key) || mem.arena_overlaps_unallocated(arena, nonce)
 }
 
 // Produces arena-owned ciphertext (same length as plaintext) and a 16-byte tag.

@@ -242,22 +242,22 @@ fn scalar_index(paragraph:*const bidi.Paragraph, offset:usize) usize {
   return low
 }
 fn emit(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[]const u8, paragraph:*const bidi.Paragraph, clusters:[]Cluster, start, end, base:usize, font:Font, tab:f64) errors.Kind {
-  work:=mem.Arena{}
-  defer mem.arena_release(&work)
+  work:=mem.arena_create(0)
+  defer mem.arena_release(work)
   first:=cluster_index(clusters, start)
   last:=cluster_index(clusters, end)
   first_scalar:=scalar_index(paragraph, start)
   last_scalar:=scalar_index(paragraph, end)
-  reordered:=bidi.reorder(&work, bidi_api, paragraph, first_scalar, last_scalar)
+  reordered:=bidi.reorder(work, bidi_api, paragraph, first_scalar, last_scalar)
   if !reordered.ok {
     return reordered.kind
   }
-  span:=shape(&work, api, text, clusters, first, last, reordered.value.levels, first_scalar, end<#len(text))
+  span:=shape(work, api, text, clusters, first, last, reordered.value.levels, first_scalar, end<#len(text))
   if !span.ok {
     return span.kind
   }
-  order:=mem.push_array(usize, &work, #len(span.runs))
-  seen:=mem.push_array(u8, &work, #len(span.runs))
+  order:=mem.push_array(usize, work, #len(span.runs))
+  seen:=mem.push_array(u8, work, #len(span.runs))
   count:usize=0
   for scalar in reordered.value.visual_to_logical {
     byte:=paragraph.starts[#cast(usize, scalar)]
@@ -338,14 +338,14 @@ fn emit(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[]cons
   return errors.Kind.None
 }
 fn paragraph(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[]const u8, base:usize, font:Font, options:Options) errors.Kind {
-  work:=mem.Arena{}
-  defer mem.arena_release(&work)
-  resolved:=bidi.resolve(&work, bidi_api, text, options.base)
+  work:=mem.arena_create(0)
+  defer mem.arena_release(work)
+  resolved:=bidi.resolve(work, bidi_api, text, options.base)
   if !resolved.ok {
     return resolved.kind
   }
   count:=utf8.codepoint_count(text).value
-  clusters:=mem.push_array(Cluster, &work, count)
+  clusters:=mem.push_array(Cluster, work, count)
   used:usize=0
   scalar:usize=0
   iterator:=unicode.graphemes(text)
@@ -401,14 +401,14 @@ fn paragraph(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[
   if !options.wrap || options.width==0 || #len(text)==0 {
     return emit(output, api, bidi_api, text, &resolved.value, clusters, 0, #len(text), base, font, tab)
   }
-  breaks:=unicode.line_breaks(&work, text)
+  breaks:=unicode.line_breaks(work, text)
   if !breaks.ok {
     return breaks.kind
   }
-  spans:=mem.Arena{}
-  defer mem.arena_release(&spans)
+  spans:=mem.arena_create(0)
+  defer mem.arena_release(spans)
   adjusted:[0]i8=[]
-  measured:=shape(&spans, api, text, clusters, 0, used, adjusted[..], 0, false)
+  measured:=shape(spans, api, text, clusters, 0, used, adjusted[..], 0, false)
   if !measured.ok {
     return measured.kind
   }
@@ -448,14 +448,14 @@ fn paragraph(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[
         end=u+1
       }
     }
-    candidate:=mem.Arena{}
+    candidate:=mem.arena_create(0)
     accepted:=false
     for !accepted {
-      mem.arena_reset(&candidate)
-      temporary:=Output{arena:&candidate, line_count:output.line_count}
+      mem.arena_reset(candidate)
+      temporary:=Output{arena:candidate, line_count:output.line_count}
       kind:=emit(&temporary, api, bidi_api, text, &resolved.value, clusters, measured.units[u].start, measured.units[end-1].end, base, font, tab)
       if kind!=errors.Kind.None {
-        mem.arena_release(&candidate)
+        mem.arena_release(candidate)
         return kind
       }
       line:=temporary.tail.value
@@ -473,7 +473,7 @@ fn paragraph(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[
       line_append(output, line)
       accepted=true
     }
-    mem.arena_release(&candidate)
+    mem.arena_release(candidate)
     u=end
   }
   return errors.Kind.None
@@ -498,9 +498,9 @@ pub fn build(arena:*mem.Arena, source:[]const u8, font:Font, api:*const hb.Api, 
       mem.arena_rewind(arena, mark)
     }
   }
-  work:=mem.Arena{}
-  defer mem.arena_release(&work)
-  output:=Output{arena:&work}
+  work:=mem.arena_create(0)
+  defer mem.arena_release(work)
+  output:=Output{arena:work}
   begin:usize=0
   at:usize=0
   for at<#len(source) {

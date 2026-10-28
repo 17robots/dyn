@@ -25,17 +25,17 @@ fn finish(state: *box.State, context: *ui.Context) {
   ui.end(context)
 }
 fn main() {
-  persistent := mem.Arena{}
-  frame := mem.Arena{}
-  defer { mem.arena_release(&frame)
-    mem.arena_release(&persistent) }
+  persistent := mem.arena_create(0)
+  frame := mem.arena_create(0)
+  defer { mem.arena_release(frame)
+    mem.arena_release(persistent) }
   context: ui.Context
-  state := box.create(&persistent, measure, nil, 16.0)
+  state := box.create(persistent, measure, nil, 16.0)
   state.reduced_motion = true
   selected: usize = 0
   // Hover, press and release a tab. Selection changes on activation only.
   for step in 0..4 {
-    start(state, &frame, &context, box.Input{ x: 10.0, y: 5.0, down: step == 2 })
+    start(state, frame, &context, box.Input{ x: 10.0, y: 5.0, down: step == 2 })
     result := box.tab(state, "Second", 1, &selected)
     if step < 3 { check(selected == 0, "tab waits for release") }
     if step == 3 {
@@ -50,17 +50,17 @@ fn main() {
     }
     finish(state, &context)
   }
-  start(state, &frame, &context, box.Input{ x: 700.0, y: 300.0 })
+  start(state, frame, &context, box.Input{ x: 700.0, y: 300.0 })
   target := box.tab(state, "Second", 1, &selected)
   check(box.tooltip(state, "tip", "Hidden", target.box) == nil, "tooltip leaves target")
   check(box.tooltip(state, "nil-tip", "Hidden", nil) == nil, "nil tooltip target")
   finish(state, &context)
 
-  menu_state := box.create(&persistent, measure, nil, 16.0)
+  menu_state := box.create(persistent, measure, nil, 16.0)
   menu := box.Menu{}
   // Open the popup through its trigger.
   for step in 0..4 {
-    start(menu_state, &frame, &context, box.Input{ x: 10.0, y: 5.0, down: step == 2 })
+    start(menu_state, frame, &context, box.Input{ x: 10.0, y: 5.0, down: step == 2 })
     _ = box.menu_button(menu_state, "File", &menu)
     if box.menu_begin(menu_state, "file-menu", &menu) {
       _ = box.menu_item(menu_state, "Open", &menu)
@@ -72,7 +72,7 @@ fn main() {
   check(menu.open, "menu trigger opens")
   check(menu.anchor[1] == 26.0, "menu anchors under trigger")
   for step in 0..3 {
-    start(menu_state, &frame, &context, box.Input{ x: 10.0, y: 35.0, down: step == 1 })
+    start(menu_state, frame, &context, box.Input{ x: 10.0, y: 35.0, down: step == 1 })
     _ = box.menu_button(menu_state, "File", &menu)
     check(box.menu_begin(menu_state, "file-menu", &menu), "menu remains open")
     item := box.menu_item(menu_state, "Open", &menu)
@@ -81,19 +81,19 @@ fn main() {
     finish(menu_state, &context)
   }
   menu.open = true
-  start(menu_state, &frame, &context, box.Input{ escape: true })
+  start(menu_state, frame, &context, box.Input{ escape: true })
   check(!box.menu_begin(menu_state, "file-menu", &menu) && !menu.open, "escape closes menu")
   check(box.parent(menu_state) == menu_state.root, "closed menu balances stack")
   finish(menu_state, &context)
 
-  split_state := box.create(&persistent, measure, nil, 16.0)
+  split_state := box.create(persistent, measure, nil, 16.0)
   split_state.scale = 2.0
   split := box.Split{ position: 100.0 }
   for step in 0..5 {
     pointer: f32 = 210.0
     if step >= 3 { pointer = 250.0 }
     if step == 4 { pointer = 270.0 }
-    start(split_state, &frame, &context, box.Input{ x: pointer, y: 10.0, down: step == 2 || step == 3 })
+    start(split_state, frame, &context, box.Input{ x: pointer, y: 10.0, down: step == 2 || step == 3 })
     group := box.row(split_state, "panes")
     group.width = box.pixels(306.0, 1.0)
     group.height = box.pixels(80.0, 1.0)
@@ -108,11 +108,11 @@ fn main() {
     finish(split_state, &context)
   }
   split.position = -10.0
-  start(split_state, &frame, &context, box.Input{})
+  start(split_state, frame, &context, box.Input{})
   _ = box.splitter(split_state, "clamped", 1, 50.0, 40.0, &split)
   check(split.position == 25.0, "splitter shares undersized extent")
   finish(split_state, &context)
-  start(split_state, &frame, &context, box.Input{})
+  start(split_state, frame, &context, box.Input{})
   _ = box.splitter(split_state, "empty", 1, -1.0, 0.0, &split)
   check(split.position == 0.0, "splitter handles empty extent")
   finish(split_state, &context)

@@ -11,8 +11,8 @@ use "std/mem"
 
 fn main() {
   arena := mem.arena_create(mem.MiB)
-  defer mem.arena_release(&arena)
-  parsed := json.parse(&arena, "{\"count\":12}")
+  defer mem.arena_release(arena)
+  parsed := json.parse(arena, "{\"count\":12}")
   if !parsed.ok {
     return
   }

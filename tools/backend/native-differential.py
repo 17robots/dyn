@@ -371,21 +371,21 @@ def build_program(rng, per_function):
             if len(combos) >= per_function: break
         if not types: combos = {()}
         for combo in sorted(combos, key=str):
-            locals_ = ' '.join(f'v{k}: {t} = {v}' for k, (t, v) in enumerate(zip(types, combo)))
+            locals_ = '\n'.join(f'v{k}: {t} = {v}' for k, (t, v) in enumerate(zip(types, combo)))
             call = f'{name}(' + ', '.join(f'v{k}' for k in range(len(types))) + ')'
-            body = f'_ = io.println(io.stdout(), "{{}}", {call})' if result else f'{call} _ = io.println(io.stdout(), "void")'
-            cases.append(f'{locals_} {body}')
+            body = f'_ = io.println(io.stdout(), "{{}}", {call})' if result else f'{call}\n_ = io.println(io.stdout(), "void")'
+            cases.append(f'{locals_}\n{body}')
     # Keep the dispatcher below object-format function/unwind size limits while
     # retaining every generated case. Large-frame functions remain in the corpus.
     dispatchers = []
     dispatch_arms = []
     for start in range(0, len(cases), 128):
         group = start // 128
-        arms = '\n'.join(f'    {i} => {{ {case} }},'
+        arms = '\n'.join(f'    {i} => {{ {case} }}'
                          for i, case in enumerate(cases[start:start + 128], start))
         dispatchers.append(f'fn dispatch_{group}(index:u64) {{ case index {{\n{arms}\n'
-                           '    _ => { #panic("unknown case") },\n  }\n}\n')
-        dispatch_arms.append(f'    {group} => {{ dispatch_{group}(index) }},')
+                           '    _ => { #panic("unknown case") }\n  }\n}\n')
+        dispatch_arms.append(f'    {group} => {{ dispatch_{group}(index) }}')
     dispatch_source = '\n'.join(dispatchers)
     arms = '\n'.join(dispatch_arms)
     program = f'''use "std/io"
@@ -397,13 +397,13 @@ use "std/strings"
 fn main() {{
   backing: [65536]u8 = []
   arena := mem.arena_from_buffer(backing[..])
-  arguments := process.arguments(&arena)
-  if !arguments.ok || #len(arguments.values) < 2 {{ #panic("case index required") }}
-  if !strings.valid(u64, arguments.values[1]) {{ #panic("bad case index") }}
-  index := strings.parse(u64, arguments.values[1])
+  arguments := process.arguments(arena)
+  if !arguments.ok || #len(arguments.value) < 2 {{ #panic("case index required") }}
+  if !strings.valid(u64, arguments.value[1]) {{ #panic("bad case index") }}
+  index := strings.parse(u64, arguments.value[1])
   case index / 128 {{
 {arms}
-    _ => {{ #panic("unknown case") }},
+    _ => {{ #panic("unknown case") }}
   }}
 }}
 '''

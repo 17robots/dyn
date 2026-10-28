@@ -41,8 +41,8 @@ fn save(arena:*mem.Arena,result:*const layout.Layout,path:[]const u8) {
  check(fs.write_all(path,out).ok)
 }
 fn main() {
- arena:=mem.Arena{}
- defer mem.arena_release(&arena)
+ arena:=mem.arena_create(0)
+ defer mem.arena_release(arena)
  hb_library:=dynlib.open("HB_LIBRARY",dynlib.Now)
  bidi_library:=dynlib.open("BIDI_LIBRARY",dynlib.Now)
  check(hb_library.ok && bidi_library.ok)
@@ -51,7 +51,7 @@ fn main() {
  h:=hb.load(hb_library.value)
  b:=bidi.load(bidi_library.value)
  check(h.ok && b.ok)
- data:=fs.read_all(&arena,"font.ttf",10000000)
+ data:=fs.read_all(arena,"font.ttf",10000000)
  check(data.ok)
  created:=hb.font_owned(&h.api,data.value,0)
  check(created.ok)
@@ -63,25 +63,25 @@ fn main() {
  other_font=other.value
  defer h.api.font_destroy(other.value)
  h.api.font_set_scale(other.value,2048,2048)
- fallback:=layout.build(&arena,"بجح",layout.Font{data:created.value,select:context_select,line_height:40,space_advance:10.171875},&h.api,&b.api,layout.Options{})
+ fallback:=layout.build(arena,"بجح",layout.Font{data:created.value,select:context_select,line_height:40,space_advance:10.171875},&h.api,&b.api,layout.Options{})
  check(fallback.ok && #len(fallback.value.glyphs)==3)
- save(&arena,&fallback.value,"actual-fallback.bin")
+ save(arena,&fallback.value,"actual-fallback.bin")
  CASES
- empty:=layout.build(&arena,"",font,&h.api,&b.api,layout.Options{})
+ empty:=layout.build(arena,"",font,&h.api,&b.api,layout.Options{})
  check(empty.ok && #len(empty.value.lines)==1 && #len(empty.value.glyphs)==0 && empty.value.height==40.0)
  eof:=layout.cluster_at(&empty.value,0)
  check(eof.ok && eof.start==0 && eof.end==0)
- multiline:=layout.build(&arena,"a\r\n\nאבג\xe2\x80\xa8z",font,&h.api,&b.api,layout.Options{})
+ multiline:=layout.build(arena,"a\r\n\nאבג\xe2\x80\xa8z",font,&h.api,&b.api,layout.Options{})
  check(multiline.ok && #len(multiline.value.lines)==4 && multiline.value.lines[1].start==3 && multiline.value.lines[2].start==4)
- rtl:=layout.build(&arena,"אבג",font,&h.api,&b.api,layout.Options{})
+ rtl:=layout.build(arena,"אבג",font,&h.api,&b.api,layout.Options{})
  check(rtl.ok && rtl.value.glyphs[0].start>rtl.value.glyphs[#len(rtl.value.glyphs)-1].start)
  left:=layout.at_point(&rtl.value,-10.0,0.0)
  right:=layout.at_point(&rtl.value,10000.0,0.0)
  check(left.ok && right.ok && right.start==0 && right.end==0)
- mark:=mem.arena_mark(&arena)
- check(layout.build(&arena,"\xff",font,&h.api,&b.api,layout.Options{}).kind==errors.Kind.InvalidInput && mem.arena_mark(&arena)==mark)
- check(layout.build(&arena,"x",layout.Font{select:reject,line_height:40,space_advance:10.0},&h.api,&b.api,layout.Options{}).kind==errors.Kind.NotFound && mem.arena_mark(&arena)==mark)
- wrapped:=layout.build(&arena,"office office السلام abc אבג",font,&h.api,&b.api,layout.Options{width:65})
+ mark:=mem.arena_mark(arena)
+ check(layout.build(arena,"\xff",font,&h.api,&b.api,layout.Options{}).kind==errors.Kind.InvalidInput && mem.arena_mark(arena)==mark)
+ check(layout.build(arena,"x",layout.Font{select:reject,line_height:40,space_advance:10.0},&h.api,&b.api,layout.Options{}).kind==errors.Kind.NotFound && mem.arena_mark(arena)==mark)
+ wrapped:=layout.build(arena,"office office السلام abc אבג",font,&h.api,&b.api,layout.Options{width:65})
  check(wrapped.ok && #len(wrapped.value.lines)>1)
  for line in wrapped.value.lines {
   if line.width>65.0 {check(line.glyph_count>0)
@@ -94,25 +94,25 @@ fn main() {
   check(hit.ok && hit.start==g.start && hit.end==g.end)
  }
  check(!layout.cluster_at(&wrapped.value,#len(wrapped.value.text)+1).ok)
- alias:=layout.build(&arena,wrapped.value.text,font,&h.api,&b.api,layout.Options{})
+ alias:=layout.build(arena,wrapped.value.text,font,&h.api,&b.api,layout.Options{})
  check(alias.ok && bytes.equal(alias.value.text,wrapped.value.text))
  // A long unwrapped editor line must not perform a source scan per glyph.
- long_text:=mem.push_bytes_uninit(&arena,20000)
+ long_text:=mem.push_bytes_uninit(arena,20000)
  for i in 0..#len(long_text) {long_text[i]=120}
- long_line:=layout.build(&arena,long_text,font,&h.api,&b.api,layout.Options{})
+ long_line:=layout.build(arena,long_text,font,&h.api,&b.api,layout.Options{})
  check(long_line.ok && #len(long_line.value.glyphs)==20000 && #len(long_line.value.lines)==1)
  long_hit:=layout.at_point(&long_line.value,long_line.value.width-1.0,0.0)
  check(long_hit.ok && long_hit.start==19999)
- missing:=layout.build(&arena,"कर्म",font,&h.api,&b.api,layout.Options{width:5})
+ missing:=layout.build(arena,"कर्म",font,&h.api,&b.api,layout.Options{width:5})
  check(missing.ok)
  for g in missing.value.glyphs {check(g.start<g.end && g.end<=12)}
- dash:=layout.build(&arena,"-",font,&h.api,&b.api,layout.Options{})
- soft:=layout.build(&arena,"ab\xc2\xadcd",font,&h.api,&b.api,layout.Options{width:55})
+ dash:=layout.build(arena,"-",font,&h.api,&b.api,layout.Options{})
+ soft:=layout.build(arena,"ab\xc2\xadcd",font,&h.api,&b.api,layout.Options{width:55})
  check(dash.ok && soft.ok && #len(soft.value.lines)==2)
  soft_line:=soft.value.lines[0]
  soft_glyph:=soft.value.glyphs[soft_line.glyph_start+soft_line.glyph_count-1]
  check(soft_glyph.id==dash.value.glyphs[0].id && soft_glyph.start==2 && soft_glyph.end==4)
- mixed:=layout.build(&arena,"abc אבג",font,&h.api,&b.api,layout.Options{})
+ mixed:=layout.build(arena,"abc אבג",font,&h.api,&b.api,layout.Options{})
  check(mixed.ok)
  mixed_eof:=layout.cluster_at(&mixed.value,#len(mixed.value.text))
  check(mixed_eof.ok && mixed_eof.rtl && mixed_eof.x<mixed.value.width)
@@ -163,7 +163,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-shaped-layout-') as directory:
     for i,text in enumerate(CASES):
         (work/f'case-{i}.txt').write_text(text,encoding='utf-8')
         subprocess.run([str(work/'oracle'),'font.ttf',f'case-{i}.txt',f'expected-{i}.bin'],cwd=work,check=True)
-        cases.append(f'result_{i}:=layout.build(&arena,{lit(text)},font,&h.api,&b.api,layout.Options{{}})\ncheck(result_{i}.ok)\nsave(&arena,&result_{i}.value,"actual-{i}.bin")')
+        cases.append(f'result_{i}:=layout.build(arena,{lit(text)},font,&h.api,&b.api,layout.Options{{}})\ncheck(result_{i}.ok)\nsave(arena,&result_{i}.value,"actual-{i}.bin")')
     source=SOURCE.replace('CASES','\n'.join(cases)).replace('HB_LIBRARY',ctypes.util.find_library('harfbuzz') or 'libharfbuzz.so.0').replace('BIDI_LIBRARY',ctypes.util.find_library('fribidi') or 'libfribidi.so.0')
     (work/'main.dyn').write_text(source,encoding='utf-8')
     for flags in (['--debug'],['--release'],['--release','--opt-level','3']):

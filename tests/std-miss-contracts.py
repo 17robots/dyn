@@ -23,23 +23,24 @@ fn main() {
   }
   empty:[0]i32=[]
   if sort.search(empty[..],0).index!=0 || sort.search(empty[..],0).found { #panic("empty search") }
-  arena:mem.Arena
-  prefix:=mem.push(u8,&arena)
+  arena := mem.arena_create(0)
+  defer mem.arena_release(arena)
+  prefix:=mem.push(u8,arena)
   prefix.*=91
-  mark:=mem.arena_mark(&arena)
-  parsed:=mdesk.parse(&arena,"valid: 1\nbroken: {")
+  mark:=mem.arena_mark(arena)
+  parsed:=mdesk.parse(arena,"valid: 1\nbroken: {")
   if parsed.kind!=errors.Kind.InvalidInput || parsed.error!=0 || parsed.detail!=mdesk.ErrorKind.Unclosed { #panic("mdesk error fields") }
   if parsed.ok || parsed.root!= &mdesk.nil_node || !mdesk.is_nil(parsed.root) { #panic("failed root") }
-  if mem.arena_used(&arena)!=mark || prefix.*!=91 { #panic("failed parse rollback") }
+  if mem.arena_mark(arena)!=mark || prefix.*!=91 { #panic("failed parse rollback") }
   if mdesk.child(parsed.root,"valid")!= &mdesk.nil_node || mdesk.child_count(parsed.root)!=0 { #panic("stub navigation") }
-  valid:=mdesk.parse(&arena,"valid: 1")
+  valid:=mdesk.parse(arena,"valid: 1")
   if !valid.ok || valid.kind!=errors.Kind.None || valid.error!=0 || valid.detail!=mdesk.ErrorKind.None || mdesk.is_nil(valid.root) { #panic("parse after failure") }
-  jsonmark:=mem.arena_mark(&arena)
-  invalidjson:=json.parse(&arena,"{broken")
-  if invalidjson.ok || invalidjson.kind!=errors.Kind.InvalidInput || invalidjson.error!=0 || invalidjson.detail!=json.ErrorKind.Syntax || invalidjson.root!= &json.nil_value || mem.arena_mark(&arena)!=jsonmark { #panic("JSON syntax fields/stub/rollback") }
-  trailing:=json.parse(&arena,"null garbage")
-  if trailing.ok || trailing.kind!=errors.Kind.InvalidInput || trailing.error!=0 || trailing.detail!=json.ErrorKind.TrailingData || trailing.offset!=5 || trailing.root!= &json.nil_value || mem.arena_mark(&arena)!=jsonmark { #panic("JSON trailing fields") }
-  validjson:=json.parse(&arena,"null")
+  jsonmark:=mem.arena_mark(arena)
+  invalidjson:=json.parse(arena,"{broken")
+  if invalidjson.ok || invalidjson.kind!=errors.Kind.InvalidInput || invalidjson.error!=0 || invalidjson.detail!=json.ErrorKind.Syntax || invalidjson.root!= &json.nil_value || mem.arena_mark(arena)!=jsonmark { #panic("JSON syntax fields/stub/rollback") }
+  trailing:=json.parse(arena,"null garbage")
+  if trailing.ok || trailing.kind!=errors.Kind.InvalidInput || trailing.error!=0 || trailing.detail!=json.ErrorKind.TrailingData || trailing.offset!=5 || trailing.root!= &json.nil_value || mem.arena_mark(arena)!=jsonmark { #panic("JSON trailing fields") }
+  validjson:=json.parse(arena,"null")
   if !validjson.ok || validjson.kind!=errors.Kind.None || validjson.error!=0 || validjson.detail!=json.ErrorKind.None || validjson.root.kind!=json.KindNull { #panic("JSON success fields") }
 }
 '''

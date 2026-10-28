@@ -1,0 +1,1289 @@
+{
+  "parent": "59104604",
+  "cpu": 2,
+  "warmups": 3,
+  "samples": 25,
+  "cases": {
+    "power2-map": {
+      "commands": {
+        "before": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/map-power2/extended-baseline", "map", "65536", "64", "912345"],
+        "current": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/map-power2/extended-probe", "map", "65536", "64", "912345"]
+      },
+      "hashes": {
+        "before": "5aa967276c6aaa72c41f352177c92a37d4e27bccd8abe734678735f1777a0125",
+        "current": "5a48196c23fd404e6719dd63276dffd4638f07b286d89b4d275155c91c7e7b9e"
+      },
+      "expected": "2336869060870\n",
+      "samples_ms": {
+        "before": [39.170215, 39.076643, 39.164295, 39.170545, 39.244065, 39.187454, 39.070564, 39.352306, 39.081453, 39.470917, 39.291445, 39.430947, 39.319755, 39.889421, 39.125544, 39.501827, 39.079943, 39.111284, 39.376956, 39.097304, 39.235735, 39.540448, 38.954402, 39.316205, 39.140824],
+        "current": [41.445674, 41.787127, 41.350633, 41.309732, 41.451404, 41.462264, 41.560335, 41.638175, 41.353084, 41.648296, 41.600405, 41.511365, 41.569325, 41.477114, 41.479664, 41.479395, 41.541035, 41.558195, 41.510824, 41.829977, 41.572025, 41.590705, 41.462804, 41.362623, 41.403154]
+      },
+      "median_ms": {
+        "before": 39.187454,
+        "current": 41.510824
+      },
+      "ratios": {
+        "current": {
+          "median": 1.0580494461314072,
+          "ci95": [1.0551641351529786, 1.0595449530893202]
+        }
+      },
+      "orders": [
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"]
+      ]
+    },
+    "power2-utf8": {
+      "commands": {
+        "before": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/map-power2/extended-baseline", "utf8", "262144", "128", "912345"],
+        "current": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/map-power2/extended-probe", "utf8", "262144", "128", "912345"]
+      },
+      "hashes": {
+        "before": "5aa967276c6aaa72c41f352177c92a37d4e27bccd8abe734678735f1777a0125",
+        "current": "5a48196c23fd404e6719dd63276dffd4638f07b286d89b4d275155c91c7e7b9e"
+      },
+      "expected": "18749879746560\n",
+      "samples_ms": {
+        "before": [51.425449, 52.124436, 51.704901, 51.939963, 52.76247, 51.884143, 52.445957, 51.819023, 53.628447, 51.999895, 51.813682, 52.084915, 52.168285, 52.068764, 52.060485, 51.59736, 53.209014, 51.860373, 51.729651, 52.145975, 51.929843, 51.901543, 51.681192, 51.433219, 52.224246],
+        "current": [57.678282, 51.795822, 51.607261, 52.166366, 52.72116, 51.367739, 52.254786, 51.489819, 51.676972, 51.62376, 52.087075, 52.212566, 52.049904, 51.915173, 52.489478, 51.58124, 51.827192, 51.380529, 52.523668, 52.124015, 52.106115, 52.520788, 52.333666, 51.717362, 52.223516]
+      },
+      "median_ms": {
+        "before": 51.939963,
+        "current": 52.087075
+      },
+      "ratios": {
+        "current": {
+          "median": 0.9995788744960661,
+          "ci95": [0.9963548953830703, 1.0043589364898085]
+        }
+      },
+      "orders": [
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"]
+      ]
+    },
+    "power2-allocate": {
+      "commands": {
+        "before": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/map-power2/extended-baseline", "allocate", "8192", "256", "912345"],
+        "current": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/map-power2/extended-probe", "allocate", "8192", "256", "912345"]
+      },
+      "hashes": {
+        "before": "5aa967276c6aaa72c41f352177c92a37d4e27bccd8abe734678735f1777a0125",
+        "current": "5a48196c23fd404e6719dd63276dffd4638f07b286d89b4d275155c91c7e7b9e"
+      },
+      "expected": "9007407145418752\n",
+      "samples_ms": {
+        "before": [26.813679, 26.96506, 26.849189, 26.94606, 26.93672, 26.819649, 26.983811, 27.03421, 27.00232, 27.02584, 26.94257, 26.91093, 26.825459, 27.102621, 26.89722, 26.87793, 27.059641, 27.183912, 26.95035, 26.95185, 26.90327, 27.094141, 26.838919, 26.921159, 27.156662],
+        "current": [26.665817, 26.95106, 26.665378, 26.89427, 27.052371, 27.221742, 27.419344, 27.325054, 27.173222, 26.88332, 27.071581, 27.057121, 27.341853, 26.812149, 27.144141, 27.046351, 26.776448, 26.992831, 27.168442, 26.869399, 27.022261, 26.94528, 27.267713, 26.87124, 27.320253]
+      },
+      "median_ms": {
+        "before": 26.94606,
+        "current": 27.046351
+      },
+      "ratios": {
+        "current": {
+          "median": 1.0044229195930459,
+          "ci95": [0.9969408036925109, 1.0063291598647819]
+        }
+      },
+      "orders": [
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"]
+      ]
+    },
+    "power2-sort": {
+      "commands": {
+        "before": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/map-power2/extended-baseline", "sort", "32768", "64", "912345"],
+        "current": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/map-power2/extended-probe", "sort", "32768", "64", "912345"]
+      },
+      "hashes": {
+        "before": "5aa967276c6aaa72c41f352177c92a37d4e27bccd8abe734678735f1777a0125",
+        "current": "5a48196c23fd404e6719dd63276dffd4638f07b286d89b4d275155c91c7e7b9e"
+      },
+      "expected": "6138083027377370626\n",
+      "samples_ms": {
+        "before": [82.358902, 83.505093, 82.971108, 82.984048, 83.003929, 82.498504, 82.685905, 82.639416, 83.018119, 82.398454, 82.087131, 82.920127, 82.797827, 82.591705, 83.022599, 82.683556, 82.925917, 82.698726, 83.2434, 82.647105, 82.194391, 82.458373, 82.517094, 82.09061, 82.216661],
+        "current": [82.940138, 83.329812, 85.213067, 82.968859, 83.015898, 83.022678, 82.447084, 82.478794, 83.682194, 82.476733, 82.743726, 82.784987, 82.676685, 82.762027, 83.137499, 82.458274, 82.461854, 83.074009, 82.557385, 82.296713, 83.028639, 82.672926, 82.259232, 82.264953, 82.779077]
+      },
+      "median_ms": {
+        "before": 82.683556,
+        "current": 82.762027
+      },
+      "ratios": {
+        "current": {
+          "median": 1.0009500056882135,
+          "ci95": [0.9980563512210686, 1.0045379538253105]
+        }
+      },
+      "orders": [
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"]
+      ]
+    },
+    "power2-points": {
+      "commands": {
+        "before": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/map-power2/points-baseline"],
+        "current": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/map-power2/points-probe"]
+      },
+      "hashes": {
+        "before": "1df0c7544f5a1279e7caa6b9d1b1e7b733189f4ed7d071d38dacf0df6d98472c",
+        "current": "1df0c7544f5a1279e7caa6b9d1b1e7b733189f4ed7d071d38dacf0df6d98472c"
+      },
+      "expected": "2094662128\n",
+      "samples_ms": {
+        "before": [12.091863, 12.020053, 12.205545, 11.989872, 12.072913, 12.057012, 12.121594, 12.128803, 12.074193, 12.115263, 12.097203, 12.021763, 12.053953, 12.107183, 11.989732, 12.170794, 12.024293, 12.137683, 12.155243, 12.137334, 12.113703, 12.118933, 12.136874, 11.997292, 12.080093],
+        "current": [12.031103, 12.051533, 12.131423, 12.144383, 11.940232, 12.077813, 12.196174, 12.079524, 12.152133, 12.140524, 12.145004, 12.168374, 12.062763, 12.297755, 12.147084, 12.038613, 12.011532, 12.223055, 12.071283, 11.969062, 12.242925, 12.064863, 12.027493, 12.086353, 12.108334]
+      },
+      "median_ms": {
+        "before": 12.097203,
+        "current": 12.086353
+      },
+      "ratios": {
+        "current": {
+          "median": 1.002085055850624,
+          "ci95": [0.9955383860938913, 1.0064550897935787]
+        }
+      },
+      "orders": [
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"]
+      ]
+    },
+    "power2-sieve": {
+      "commands": {
+        "before": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/map-power2/sieve-baseline"],
+        "current": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/map-power2/sieve-probe"]
+      },
+      "hashes": {
+        "before": "b10f3aad42c09bfef8e70dd66c69049b814746ab3d989f36dc6a81de3557ab65",
+        "current": "b10f3aad42c09bfef8e70dd66c69049b814746ab3d989f36dc6a81de3557ab65"
+      },
+      "expected": "5397815\n",
+      "samples_ms": {
+        "before": [120.386077, 119.209377, 119.174007, 122.499326, 119.319248, 119.706312, 118.899095, 119.400959, 120.230036, 120.782471, 119.758112, 120.818031, 118.871024, 119.214307, 119.239818, 119.163627, 117.990327, 119.723771, 118.850914, 119.888313, 119.776212, 119.684771, 120.940792, 120.171275, 119.743102],
+        "current": [119.186898, 120.240466, 119.4971, 118.991525, 118.698543, 119.309758, 120.385607, 120.345597, 118.971215, 119.166407, 120.156895, 119.871393, 119.962524, 120.351037, 118.763863, 117.915956, 118.922055, 118.598752, 120.211576, 119.001935, 119.58262, 120.939892, 120.445588, 120.621719, 119.52789]
+      },
+      "median_ms": {
+        "before": 119.706312,
+        "current": 119.52789
+      },
+      "ratios": {
+        "current": {
+          "median": 0.9982027190175848,
+          "ci95": [0.9926066354774715, 1.0078966473243185]
+        }
+      },
+      "orders": [
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"]
+      ]
+    },
+    "power2-fib": {
+      "commands": {
+        "before": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/map-power2/fib-baseline"],
+        "current": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/map-power2/fib-probe"]
+      },
+      "hashes": {
+        "before": "f69e2db8c1635499156ffb7e94c5e0790d3bf911af95ba5e139e6f7b2799652f",
+        "current": "f69e2db8c1635499156ffb7e94c5e0790d3bf911af95ba5e139e6f7b2799652f"
+      },
+      "expected": "102334155\n",
+      "samples_ms": {
+        "before": [23.610882, 23.712712, 23.681812, 23.631871, 23.608172, 23.629361, 23.707592, 23.640252, 23.648432, 23.621262, 23.618511, 23.594901, 23.574471, 23.665462, 23.613542, 23.616932, 23.582432, 23.560621, 23.658842, 23.606751, 23.625942, 23.690172, 23.601261, 23.672772, 23.647481],
+        "current": [23.572861, 23.532231, 23.599371, 23.611282, 23.613311, 23.617262, 23.594402, 23.678832, 23.571021, 23.608451, 23.546091, 23.616532, 23.544381, 23.590491, 23.623131, 23.608501, 23.568551, 23.573001, 23.607971, 23.607362, 23.708972, 23.622591, 23.658792, 23.609371, 23.598342]
+      },
+      "median_ms": {
+        "before": 23.625942,
+        "current": 23.607971
+      },
+      "ratios": {
+        "current": {
+          "median": 0.999128761324061,
+          "ci95": [0.9973217754135426, 1.000025882426599]
+        }
+      },
+      "orders": [
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"]
+      ]
+    },
+    "power2-hash": {
+      "commands": {
+        "before": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/map-power2/hash-baseline"],
+        "current": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/map-power2/hash-probe"]
+      },
+      "hashes": {
+        "before": "9943c9dcf7c98ff7c891b2c4eb16b1abbd7bdcca38038478f9a89c9f11863329",
+        "current": "9943c9dcf7c98ff7c891b2c4eb16b1abbd7bdcca38038478f9a89c9f11863329"
+      },
+      "expected": "15118522325907425936\n",
+      "samples_ms": {
+        "before": [76.053149, 76.018189, 76.108809, 75.995638, 76.015838, 76.063549, 76.007528, 76.030439, 76.11378, 75.987718, 76.122839, 76.13073, 76.047779, 76.006579, 76.036499, 76.013799, 76.25775, 76.057449, 76.07139, 75.992488, 76.007598, 75.996759, 76.13306, 76.108179, 76.098849],
+        "current": [76.015628, 76.033709, 76.055469, 76.021899, 76.098119, 76.177601, 75.995448, 76.023809, 76.021548, 76.335511, 76.264231, 76.131889, 76.17091, 76.008388, 76.010178, 76.127059, 76.19678, 76.090109, 76.096179, 76.016068, 75.996399, 76.002418, 76.148949, 76.290921, 76.022509]
+      },
+      "median_ms": {
+        "before": 76.047779,
+        "current": 76.055469
+      },
+      "ratios": {
+        "current": {
+          "median": 1.0002041616645194,
+          "ci95": [0.999852659467018, 1.0004294122459982]
+        }
+      },
+      "orders": [
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"]
+      ]
+    },
+    "power2-matmul": {
+      "commands": {
+        "before": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/map-power2/matmul-baseline"],
+        "current": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/map-power2/matmul-probe"]
+      },
+      "hashes": {
+        "before": "ac635fdbda59d133366ef9044055752aadbc1d0d794450944cdec246ec321ed9",
+        "current": "ac635fdbda59d133366ef9044055752aadbc1d0d794450944cdec246ec321ed9"
+      },
+      "expected": "13041151\n",
+      "samples_ms": {
+        "before": [50.42853, 50.41242, 50.764733, 50.642302, 50.48655, 50.418691, 50.628302, 50.45635, 50.501831, 50.37724, 50.567421, 50.578991, 50.639762, 50.489541, 50.593702, 50.573301, 50.533281, 50.580932, 50.705572, 50.509901, 50.603432, 50.43521, 50.493131, 50.47463, 50.467451],
+        "current": [50.573801, 50.33266, 50.524001, 50.543211, 50.493031, 50.550801, 50.47961, 50.478631, 50.39808, 50.47576, 50.557382, 50.466191, 50.43604, 50.51781, 50.559021, 50.549312, 50.535341, 50.42922, 50.607622, 50.46154, 50.40066, 50.553131, 50.503831, 50.626822, 50.574861]
+      },
+      "median_ms": {
+        "before": 50.509901,
+        "current": 50.51781
+      },
+      "ratios": {
+        "current": {
+          "median": 0.9995256588056216,
+          "ci95": [0.9980433156454854, 1.0004415896116148]
+        }
+      },
+      "orders": [
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"]
+      ]
+    },
+    "power2-jsonl": {
+      "commands": {
+        "before": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/map-power2/apps-baseline", "report", "/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/apps/events.jsonl"],
+        "current": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/map-power2/apps-probe", "report", "/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/apps/events.jsonl"]
+      },
+      "hashes": {
+        "before": "a968b28ee89072a7045850f356440de7a4dc801dd28bb3b15952ed17c18daed0",
+        "current": "6639814627b001fc07e5e9e98902f0d925149f9ae0a029a637c7a9c9e96873c0"
+      },
+      "expected": "{\"records\":60000,\"bytes\":1965950512,\"latency_us\":7440820000,\"errors\":3530,\"services\":[[3750,122186000,465070000,221],[3750,122638310,465008750,221],[3750,123090620,464947500,220],[3750,123211250,465026250,221],[3750,122549448,464965000,220],[3750,123063294,465293750,221],[3750,123515604,464982500,220],[3750,122522122,465061250,221],[3750,122974432,465000000,221],[3750,123361206,465188750,220],[3750,122367724,465017500,221],[3750,122820034,465206250,220],[3750,123333880,465035000,221],[3750,122278862,464973750,220],[3750,122792708,465052500,221],[3750,123245018,464991250,221]]}\n",
+      "samples_ms": {
+        "before": [37.739382, 37.858473, 37.755952, 37.657251, 37.710442, 37.745852, 37.684461, 37.882353, 39.025153, 38.134415, 37.842543, 38.146956, 37.622731, 37.759302, 37.751012, 37.604131, 37.584941, 38.016484, 37.665041, 37.739121, 38.242506, 37.818493, 37.863353, 37.625331, 37.868903],
+        "current": [36.811604, 36.776134, 36.847824, 36.663343, 36.837934, 36.890055, 36.975615, 37.033815, 37.730652, 37.52888, 37.054076, 36.939325, 36.793314, 36.752874, 37.243028, 36.766754, 36.821004, 36.862255, 37.242277, 36.917225, 37.009775, 37.226697, 37.085136, 36.836345, 37.168447]
+      },
+      "median_ms": {
+        "before": 37.755952,
+        "current": 36.917225
+      },
+      "ratios": {
+        "current": {
+          "median": 0.9777317816492023,
+          "ci95": [0.9754161846105484, 0.9794466961232937]
+        }
+      },
+      "orders": [
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"]
+      ]
+    },
+    "power2-search": {
+      "commands": {
+        "before": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/map-power2/apps-baseline", "search", "/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/apps/documents"],
+        "current": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/map-power2/apps-probe", "search", "/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/apps/documents"]
+      },
+      "hashes": {
+        "before": "a968b28ee89072a7045850f356440de7a4dc801dd28bb3b15952ed17c18daed0",
+        "current": "6639814627b001fc07e5e9e98902f0d925149f9ae0a029a637c7a9c9e96873c0"
+      },
+      "expected": "{\"files\":1024,\"bytes\":64292352,\"lines\":262144,\"matching_lines\":5689,\"matching_files\":910}\n",
+      "samples_ms": {
+        "before": [9.014827, 8.961717, 8.974866, 8.940206, 9.003136, 9.013837, 8.909526, 8.917646, 8.918036, 8.939026, 9.011607, 9.33332, 9.503121, 9.40939, 9.502841, 9.44033, 9.557102, 9.40021, 9.748973, 9.815254, 9.980655, 9.890935, 10.089396, 9.856813, 9.936885],
+        "current": [8.780995, 8.770615, 8.812445, 8.756404, 8.729925, 8.770425, 8.761035, 8.755224, 8.720775, 8.755635, 8.872206, 8.960816, 9.140578, 9.171998, 9.307239, 9.39522, 9.367129, 9.30534, 9.664052, 9.717772, 9.683552, 9.681392, 9.748913, 9.537252, 9.729343]
+      },
+      "median_ms": {
+        "before": 9.40021,
+        "current": 9.140578
+      },
+      "ratios": {
+        "current": {
+          "median": 0.9791139778713349,
+          "ci95": [0.9740613990706644, 0.9817864490247763]
+        }
+      },
+      "orders": [
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"]
+      ]
+    },
+    "hoist-map": {
+      "commands": {
+        "before": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/hoist-constant/baseline-extended", "map", "65536", "64", "912345"],
+        "current": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/hoist-constant/candidate-extended", "map", "65536", "64", "912345"]
+      },
+      "hashes": {
+        "before": "6d219fe396e901f10513fffc97f7811e58182877035430e95468e554f6107ef0",
+        "current": "c5afeb1adba90723b67c7d6b21269ee6cc79a76f98898748c09991454143fe4b"
+      },
+      "expected": "2336869060870\n",
+      "samples_ms": {
+        "before": [39.261195, 39.327276, 39.337785, 39.443456, 39.687798, 39.258455, 39.390556, 39.258495, 39.231265, 39.289395, 39.456676, 39.172104, 39.276925, 39.507147, 39.487347, 39.270815, 39.571898, 39.259265, 39.261135, 39.349516, 39.195464, 39.643178, 39.424886, 39.530297, 39.238415],
+        "current": [41.358492, 41.505234, 41.435814, 41.377263, 41.353493, 41.427783, 41.418083, 41.372713, 41.476903, 41.358223, 41.408863, 41.492914, 41.645656, 41.394953, 41.320042, 41.337982, 41.305102, 41.410673, 41.474344, 41.460683, 41.363393, 41.233532, 41.458354, 41.536634, 41.321392]
+      },
+      "median_ms": {
+        "before": 39.327276,
+        "current": 41.408863
+      },
+      "ratios": {
+        "current": {
+          "median": 1.0530851462782072,
+          "ci95": [1.0507544124953072, 1.0548000070811312]
+        }
+      },
+      "orders": [
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"]
+      ]
+    },
+    "hoist-utf8": {
+      "commands": {
+        "before": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/hoist-constant/baseline-extended", "utf8", "262144", "128", "912345"],
+        "current": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/hoist-constant/candidate-extended", "utf8", "262144", "128", "912345"]
+      },
+      "hashes": {
+        "before": "6d219fe396e901f10513fffc97f7811e58182877035430e95468e554f6107ef0",
+        "current": "c5afeb1adba90723b67c7d6b21269ee6cc79a76f98898748c09991454143fe4b"
+      },
+      "expected": "18749879746560\n",
+      "samples_ms": {
+        "before": [52.126794, 51.939013, 52.099994, 52.026634, 51.55816, 52.382236, 51.757631, 51.809032, 52.054493, 52.002444, 51.919193, 52.031984, 51.257388, 52.203956, 52.216015, 51.793992, 51.6372, 52.137925, 51.892732, 52.232846, 51.875562, 52.008874, 51.62383, 51.814162, 52.174645],
+        "current": [51.917873, 52.537058, 51.969554, 52.594668, 52.005333, 52.113575, 52.126165, 52.124405, 52.146575, 52.104314, 52.335046, 51.779572, 51.819541, 51.924142, 52.243395, 52.132175, 52.658349, 52.629539, 51.771542, 52.721689, 52.103754, 52.241705, 52.088315, 52.932461, 52.123564]
+      },
+      "median_ms": {
+        "before": 52.002444,
+        "current": 52.124405
+      },
+      "ratios": {
+        "current": {
+          "median": 1.006087220467659,
+          "ci95": [1.0005243601986862, 1.008997492049699]
+        }
+      },
+      "orders": [
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"]
+      ]
+    },
+    "hoist-allocate": {
+      "commands": {
+        "before": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/hoist-constant/baseline-extended", "allocate", "8192", "256", "912345"],
+        "current": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/hoist-constant/candidate-extended", "allocate", "8192", "256", "912345"]
+      },
+      "hashes": {
+        "before": "6d219fe396e901f10513fffc97f7811e58182877035430e95468e554f6107ef0",
+        "current": "c5afeb1adba90723b67c7d6b21269ee6cc79a76f98898748c09991454143fe4b"
+      },
+      "expected": "9007407145418752\n",
+      "samples_ms": {
+        "before": [26.844749, 26.828909, 26.844878, 27.04762, 27.129321, 27.056191, 26.98512, 27.00172, 26.98546, 26.85997, 27.02716, 27.03501, 26.96336, 26.9737, 26.94807, 27.01364, 27.035931, 26.98693, 26.808658, 26.826239, 26.874, 26.788288, 26.863279, 27.01389, 27.04608],
+        "current": [28.041979, 27.757517, 28.063109, 28.034049, 27.928458, 28.024989, 28.007039, 28.006269, 28.011359, 27.992548, 28.10146, 27.828327, 28.03956, 28.016078, 28.05517, 28.047979, 28.030139, 27.882608, 27.686806, 28.064999, 27.924658, 27.611436, 27.994278, 27.792428, 28.05849]
+      },
+      "median_ms": {
+        "before": 26.98512,
+        "current": 28.011359
+      },
+      "ratios": {
+        "current": {
+          "median": 1.0378697222765731,
+          "ci95": [1.0358068879688203, 1.0397489044353903]
+        }
+      },
+      "orders": [
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"]
+      ]
+    },
+    "hoist-sort": {
+      "commands": {
+        "before": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/hoist-constant/baseline-extended", "sort", "32768", "64", "912345"],
+        "current": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/hoist-constant/candidate-extended", "sort", "32768", "64", "912345"]
+      },
+      "hashes": {
+        "before": "6d219fe396e901f10513fffc97f7811e58182877035430e95468e554f6107ef0",
+        "current": "c5afeb1adba90723b67c7d6b21269ee6cc79a76f98898748c09991454143fe4b"
+      },
+      "expected": "6138083027377370626\n",
+      "samples_ms": {
+        "before": [82.370072, 82.586344, 82.389503, 82.872217, 82.743986, 82.546564, 82.653265, 82.885777, 82.518123, 82.693515, 82.339011, 82.360112, 82.350072, 82.290642, 82.14428, 82.379612, 82.769636, 82.440693, 82.389043, 82.456483, 82.520773, 82.360542, 82.571204, 82.301781, 82.867567],
+        "current": [82.758306, 82.681785, 82.426443, 82.561513, 82.571814, 82.821996, 82.386732, 82.445103, 82.591284, 82.576655, 82.666555, 82.578544, 82.596674, 82.569744, 82.656835, 82.692505, 82.576584, 82.423053, 82.862616, 82.345832, 82.708086, 82.575504, 82.790736, 82.364062, 82.544704]
+      },
+      "median_ms": {
+        "before": 82.456483,
+        "current": 82.576655
+      },
+      "ratios": {
+        "current": {
+          "median": 1.0011556511086144,
+          "ci95": [0.9997860279995463, 1.0029945571875152]
+        }
+      },
+      "orders": [
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"]
+      ]
+    },
+    "hoist-points": {
+      "commands": {
+        "before": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/hoist-constant/baseline-points"],
+        "current": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/hoist-constant/candidate-points"]
+      },
+      "hashes": {
+        "before": "9249d9b2f4d0d4542b68c740bf2c381e1da2c95040c2bcbbf026d50662349e65",
+        "current": "f40eed8d530dcb14c735ee692bd5357e194480f9b3c159146b7351039924798f"
+      },
+      "expected": "2094662128\n",
+      "samples_ms": {
+        "before": [12.145813, 12.076303, 12.210514, 12.225605, 12.126273, 12.203894, 12.089003, 12.068153, 12.053243, 12.104593, 11.998452, 12.108573, 12.158584, 12.057553, 12.240825, 12.131523, 12.105723, 12.257625, 12.040172, 12.201224, 12.037482, 12.143593, 12.113583, 12.179044, 12.124253],
+        "current": [12.021423, 12.129934, 12.041852, 12.075973, 12.276795, 12.074423, 11.983662, 12.101193, 12.125513, 11.994953, 12.072303, 12.060613, 12.087353, 12.022252, 11.989902, 12.044213, 12.088243, 12.086343, 12.064333, 12.055763, 12.043723, 12.003403, 12.000252, 12.134423, 12.068823]
+      },
+      "median_ms": {
+        "before": 12.124253,
+        "current": 12.064333
+      },
+      "ratios": {
+        "current": {
+          "median": 0.9941415052937086,
+          "ci95": [0.9897586106422024, 0.9985560548510817]
+        }
+      },
+      "orders": [
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"]
+      ]
+    },
+    "hoist-sieve": {
+      "commands": {
+        "before": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/hoist-constant/baseline-sieve"],
+        "current": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/hoist-constant/candidate-sieve"]
+      },
+      "hashes": {
+        "before": "756b3d592bb2ebfa532a5f9e65f6676bdc4704a543590690b81ed2bcfd196f13",
+        "current": "73c68166275b534554281ef27044a48a1a1512720314c7924ad5cea2d4630ba0"
+      },
+      "expected": "5397815\n",
+      "samples_ms": {
+        "before": [120.241315, 120.404327, 120.923601, 119.054845, 119.327657, 119.248127, 120.507328, 119.72179, 119.910632, 120.493548, 119.782971, 119.841522, 119.987242, 120.235305, 119.762571, 120.611498, 119.255857, 119.396807, 120.398236, 119.302787, 119.884271, 119.273036, 120.705829, 119.69641, 120.399737],
+        "current": [120.901481, 119.207526, 119.174826, 119.925092, 119.058595, 120.074443, 118.741002, 119.211577, 119.238266, 119.061705, 120.753739, 122.463983, 128.573376, 119.934693, 119.790551, 119.259007, 120.319255, 120.453887, 120.277776, 119.072265, 118.853064, 119.740001, 119.578619, 119.230567, 120.336745]
+      },
+      "median_ms": {
+        "before": 119.884271,
+        "current": 119.740001
+      },
+      "ratios": {
+        "current": {
+          "median": 0.9980677567909625,
+          "ci95": [0.9943927741119736, 1.0054903424833637]
+        }
+      },
+      "orders": [
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"]
+      ]
+    },
+    "hoist-fib": {
+      "commands": {
+        "before": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/hoist-constant/baseline-fib"],
+        "current": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/hoist-constant/candidate-fib"]
+      },
+      "hashes": {
+        "before": "44efb26a2479e948e65895f6efa968c31ddf9799c7847e42d0dc4a2769061b5d",
+        "current": "c9ca45a933b76ff3d9dc078ba31c2bd8c99b2b271b71b4d70c453b7f415e93b4"
+      },
+      "expected": "102334155\n",
+      "samples_ms": {
+        "before": [23.690292, 23.664431, 23.638532, 23.621831, 23.606971, 23.548931, 23.605491, 23.593231, 23.634511, 23.555591, 23.606341, 23.615791, 23.617801, 23.738423, 23.673912, 23.567421, 23.562211, 23.566261, 23.621101, 23.604961, 23.696672, 23.654901, 23.613631, 23.658052, 23.602811],
+        "current": [23.559871, 23.633102, 23.593441, 23.686952, 23.570121, 23.573691, 23.672672, 23.536541, 23.583911, 23.554991, 23.579691, 23.563781, 23.554631, 23.652871, 23.703892, 23.613191, 23.597321, 23.558211, 23.552301, 23.582891, 23.654142, 23.592721, 23.656882, 23.580061, 23.636322]
+      },
+      "median_ms": {
+        "before": 23.615791,
+        "current": 23.583911
+      },
+      "ratios": {
+        "current": {
+          "median": 0.998676114376044,
+          "ci95": [0.9977976600487359, 1.0010514277696936]
+        }
+      },
+      "orders": [
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"]
+      ]
+    },
+    "hoist-hash": {
+      "commands": {
+        "before": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/hoist-constant/baseline-hash"],
+        "current": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/hoist-constant/candidate-hash"]
+      },
+      "hashes": {
+        "before": "222563c8219d8f98def7f28b165b019c676054eefa0af8ad50d14de13f9a0486",
+        "current": "6dbc307bbcf53477cabcc0f80b8497b4cadfd4e2e58628bde7c2136d3950bb5d"
+      },
+      "expected": "15118522325907425936\n",
+      "samples_ms": {
+        "before": [76.099939, 76.115438, 76.072278, 76.122199, 76.065579, 76.040409, 76.493311, 76.234109, 76.308461, 76.2655, 76.013648, 76.063379, 76.138859, 76.19816, 76.31745, 76.112898, 76.121159, 76.101689, 76.085548, 76.122859, 76.130848, 76.191649, 76.113998, 75.998598, 76.146579],
+        "current": [76.132279, 76.126229, 76.108819, 76.057078, 76.071078, 76.095968, 76.846675, 76.27099, 76.30484, 76.23042, 76.101598, 76.044257, 76.070979, 76.226189, 76.27291, 76.22315, 76.23114, 76.174429, 76.036818, 76.135639, 76.170419, 76.23741, 76.081829, 76.119438, 76.075008]
+      },
+      "median_ms": {
+        "before": 76.121159,
+        "current": 76.132279
+      },
+      "ratios": {
+        "current": {
+          "median": 1.0003678435279804,
+          "ci95": [0.9997486043842465, 1.0006006038798294]
+        }
+      },
+      "orders": [
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"]
+      ]
+    },
+    "hoist-matmul": {
+      "commands": {
+        "before": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/hoist-constant/baseline-matmul"],
+        "current": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/hoist-constant/candidate-matmul"]
+      },
+      "hashes": {
+        "before": "7d4c607278679b1c2f33dcede2cb933524b11bfb2a315815fa90a226e2264e9b",
+        "current": "326dd59b753d4c18b31a49392ac58d18011737f169154233a6782e1565ae3187"
+      },
+      "expected": "13041151\n",
+      "samples_ms": {
+        "before": [50.39339, 50.45966, 50.434159, 50.48033, 50.560331, 50.54882, 50.574501, 50.676212, 50.620911, 50.347849, 50.496751, 50.512401, 50.49975, 50.530621, 50.764592, 50.571881, 50.47707, 50.632802, 50.611442, 50.55577, 50.729233, 50.748602, 50.600961, 50.730782, 50.778743],
+        "current": [50.51027, 50.530071, 50.40635, 50.600202, 50.421709, 50.619192, 50.315259, 50.581071, 50.771333, 50.49533, 50.43541, 50.659951, 50.50566, 50.415739, 50.45571, 50.527271, 50.42219, 50.649431, 50.53548, 50.667672, 50.688121, 50.612002, 52.300116, 50.564731, 50.698702]
+      },
+      "median_ms": {
+        "before": 50.560331,
+        "current": 50.53548
+      },
+      "ratios": {
+        "current": {
+          "median": 0.9991895797044674,
+          "ci95": [0.9984237301817416, 1.001395391883338]
+        }
+      },
+      "orders": [
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"]
+      ]
+    },
+    "hoist-jsonl": {
+      "commands": {
+        "before": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/hoist-constant/baseline-apps", "report", "/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/apps/events.jsonl"],
+        "current": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/hoist-constant/candidate-apps", "report", "/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/apps/events.jsonl"]
+      },
+      "hashes": {
+        "before": "f701082775df7aa3dca1d63e4e62b04cadade2c46ec5e382707d558170d17a6e",
+        "current": "76191300f82a1b7771ab3152aa8774fb7af50576f7d0d5d816ad2a9ae24758db"
+      },
+      "expected": "{\"records\":60000,\"bytes\":1965950512,\"latency_us\":7440820000,\"errors\":3530,\"services\":[[3750,122186000,465070000,221],[3750,122638310,465008750,221],[3750,123090620,464947500,220],[3750,123211250,465026250,221],[3750,122549448,464965000,220],[3750,123063294,465293750,221],[3750,123515604,464982500,220],[3750,122522122,465061250,221],[3750,122974432,465000000,221],[3750,123361206,465188750,220],[3750,122367724,465017500,221],[3750,122820034,465206250,220],[3750,123333880,465035000,221],[3750,122278862,464973750,220],[3750,122792708,465052500,221],[3750,123245018,464991250,221]]}\n",
+      "samples_ms": {
+        "before": [38.212985, 38.001553, 37.932453, 38.046394, 38.004324, 37.930223, 37.867663, 38.042704, 38.043304, 38.013574, 38.034004, 37.959003, 38.338167, 38.291366, 37.939643, 37.888553, 38.062725, 37.954504, 37.705571, 38.087694, 38.610729, 38.805201, 38.149485, 38.167945, 38.077765],
+        "current": [37.891853, 38.162405, 37.984514, 38.039014, 38.159845, 37.906143, 37.725492, 37.972304, 37.938113, 38.016514, 38.033664, 38.351006, 38.329037, 38.138385, 37.766982, 37.645291, 38.031794, 38.028454, 37.808342, 37.843362, 38.69243, 38.502409, 37.868713, 38.194995, 37.861582]
+      },
+      "median_ms": {
+        "before": 38.042704,
+        "current": 38.016514
+      },
+      "ratios": {
+        "current": {
+          "median": 0.9993651500546148,
+          "ci95": [0.9960048173784138, 1.000708709887315]
+        }
+      },
+      "orders": [
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"]
+      ]
+    },
+    "hoist-search": {
+      "commands": {
+        "before": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/hoist-constant/baseline-apps", "search", "/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/apps/documents"],
+        "current": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/hoist-constant/candidate-apps", "search", "/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/apps/documents"]
+      },
+      "hashes": {
+        "before": "f701082775df7aa3dca1d63e4e62b04cadade2c46ec5e382707d558170d17a6e",
+        "current": "76191300f82a1b7771ab3152aa8774fb7af50576f7d0d5d816ad2a9ae24758db"
+      },
+      "expected": "{\"files\":1024,\"bytes\":64292352,\"lines\":262144,\"matching_lines\":5689,\"matching_files\":910}\n",
+      "samples_ms": {
+        "before": [9.599402, 9.717852, 9.881694, 9.947995, 9.920144, 9.875314, 9.896654, 9.990685, 10.006666, 10.061346, 10.028005, 9.32396, 9.144828, 9.782603, 9.785623, 9.957355, 10.092566, 9.808894, 9.770053, 9.193509, 9.706522, 9.754783, 9.943164, 9.967865, 9.898194],
+        "current": [9.528212, 9.623163, 9.512751, 9.543032, 9.614122, 9.52447, 9.611482, 9.678813, 9.752263, 9.712262, 9.683283, 9.740023, 9.163218, 9.445071, 9.42955, 9.924814, 9.615112, 9.233618, 9.797124, 9.269699, 9.256689, 9.42825, 9.40351, 9.630592, 9.431501]
+      },
+      "median_ms": {
+        "before": 9.881694,
+        "current": 9.543032
+      },
+      "ratios": {
+        "current": {
+          "median": 0.9661639679108817,
+          "ci95": [0.9636126386638849, 0.9745766472069718]
+        }
+      },
+      "orders": [
+        ["current", "before"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"],
+        ["before", "current"],
+        ["before", "current"],
+        ["current", "before"]
+      ]
+    },
+    "compact-jsonl": {
+      "commands": {
+        "before": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/json-compact-app/old-mutable", "report", "/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/apps/events.jsonl"],
+        "current": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/json-compact-app/current-mutable", "report", "/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/apps/events.jsonl"],
+        "compact": ["/tmp/dyn-syntax/build/remaining-gaps-round2-20261026/json-compact-app/compact", "report", "/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/apps/events.jsonl"],
+        "c": ["/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/apps/gcc-app", "report", "/home/mdray/17robots/dyn/compiler/build/final-gap-20261025/apps/events.jsonl"]
+      },
+      "hashes": {
+        "before": "0e603ee85fd2fd341aeb6d5d1607988814d2fde0f0ec15844be6f685682a0c6f",
+        "current": "3cdb22e6b3829b582d1f6b7ea4ceb383b5fab89802af26cbfc473c0a1d7ee353",
+        "compact": "a70b01d0626c9c577a720958618fdeded92252ac1764661c01e4ef272c1ea30c",
+        "c": "37822eb0769e49a5a003998cf56228a4ae096a6ff6fb12ee0d480631af32e4e2"
+      },
+      "expected": "{\"records\":60000,\"bytes\":1965950512,\"latency_us\":7440820000,\"errors\":3530,\"services\":[[3750,122186000,465070000,221],[3750,122638310,465008750,221],[3750,123090620,464947500,220],[3750,123211250,465026250,221],[3750,122549448,464965000,220],[3750,123063294,465293750,221],[3750,123515604,464982500,220],[3750,122522122,465061250,221],[3750,122974432,465000000,221],[3750,123361206,465188750,220],[3750,122367724,465017500,221],[3750,122820034,465206250,220],[3750,123333880,465035000,221],[3750,122278862,464973750,220],[3750,122792708,465052500,221],[3750,123245018,464991250,221]]}\n",
+      "samples_ms": {
+        "before": [39.627907, 39.78567, 39.466817, 39.753218, 39.539307, 39.86925, 39.804399, 39.676268, 40.027062, 39.9088, 39.83644, 39.8325, 39.475776, 39.632938, 39.344976, 39.669667, 39.422366, 39.532597, 39.488037, 39.87593, 39.553138, 39.316026, 40.222422, 39.572077, 39.333605],
+        "current": [37.995845, 37.692831, 37.707911, 37.827813, 37.665071, 37.481159, 37.947084, 37.845343, 37.6512, 37.754632, 38.091534, 37.955093, 37.749862, 37.717602, 37.863063, 37.868533, 38.354217, 37.713272, 37.834192, 37.934763, 38.108834, 37.839922, 37.789732, 38.036244, 37.768542],
+        "compact": [27.816347, 27.439503, 27.700776, 27.734926, 27.736337, 27.580005, 27.716586, 27.603935, 27.468034, 27.584935, 27.535485, 27.322792, 27.497794, 27.729186, 27.483894, 26.90132, 28.267301, 27.582865, 27.673165, 27.620745, 27.675075, 27.874867, 27.502924, 27.655455, 27.689946],
+        "c": [13.330873, 13.099322, 13.039381, 12.856839, 13.680687, 13.165802, 12.678408, 13.356844, 13.829278, 13.051201, 13.249043, 13.430624, 13.046631, 13.130102, 12.795859, 13.420124, 13.017981, 13.249383, 12.997231, 13.245263, 13.472365, 13.156262, 13.004741, 12.790449, 13.137152]
+      },
+      "median_ms": {
+        "before": 39.632938,
+        "current": 37.834192,
+        "compact": 27.620745,
+        "c": 13.137152
+      },
+      "ratios": {
+        "current": {
+          "median": 0.9539791175368519,
+          "ci95": [0.9516731260246212, 0.9581178218608335]
+        },
+        "compact": {
+          "median": 0.6976775062587387,
+          "ci95": [0.6917613198141425, 0.6996935363257398]
+        },
+        "c": {
+          "median": 0.3312926737856275,
+          "ci95": [0.3292472390184707, 0.3351508376745398]
+        }
+      },
+      "orders": [
+        ["before", "compact", "current", "c"],
+        ["compact", "before", "current", "c"],
+        ["before", "compact", "c", "current"],
+        ["compact", "before", "current", "c"],
+        ["current", "before", "compact", "c"],
+        ["current", "c", "before", "compact"],
+        ["compact", "current", "c", "before"],
+        ["c", "compact", "current", "before"],
+        ["compact", "current", "before", "c"],
+        ["c", "before", "current", "compact"],
+        ["current", "c", "before", "compact"],
+        ["current", "c", "compact", "before"],
+        ["before", "current", "compact", "c"],
+        ["current", "before", "compact", "c"],
+        ["compact", "current", "before", "c"],
+        ["before", "c", "current", "compact"],
+        ["c", "current", "before", "compact"],
+        ["before", "c", "current", "compact"],
+        ["compact", "before", "c", "current"],
+        ["c", "current", "compact", "before"],
+        ["before", "compact", "c", "current"],
+        ["compact", "current", "c", "before"],
+        ["current", "c", "before", "compact"],
+        ["compact", "before", "current", "c"],
+        ["current", "compact", "before", "c"],
+        ["compact", "before", "current", "c"],
+        ["compact", "c", "current", "before"],
+        ["c", "compact", "current", "before"]
+      ]
+    }
+  }
+}

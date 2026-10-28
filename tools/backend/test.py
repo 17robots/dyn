@@ -198,14 +198,14 @@ pub fn local_wrap(a:u64,b:u64) u64 { x := a
 x = #wrap(x + b)
 return x }
 """
-SOURCE += 'pub fn large_frame_panic(a:u64,b:u64) u64 {' + ''.join(f'x{i} := call_identity(a) ' for i in range(24)) + 'x23 += b return x23 }\n'
-SOURCE += 'pub fn large_frame(a:u64) u64 {' + ''.join(f'x{i} := call_identity(a) ' for i in range(24)) + 'return #wrap(' + '+'.join(f'x{i}' for i in range(24)) + ') }\n'
+SOURCE += 'pub fn large_frame_panic(a:u64,b:u64) u64 {' + ''.join(f'x{i} := call_identity(a)\n' for i in range(24)) + 'x23 += b\nreturn x23 }\n'
+SOURCE += 'pub fn large_frame(a:u64) u64 {' + ''.join(f'x{i} := call_identity(a)\n' for i in range(24)) + 'return #wrap(' + '+'.join(f'x{i}' for i in range(24)) + ') }\n'
 
 UPDATE_OPERATORS = dict(add='+',sub='-',mul='*',div='/',rem='%',shl='<<',shr='>>',band='&',bor='|',bxor='^')
 for ty in ('i64','u64'):
     for op,symbol in UPDATE_OPERATORS.items():
         right = 'u64' if op in ('shl','shr') else ty
-        SOURCE += f'pub fn update_{ty}_{op}(a:{ty},b:{right}) {ty} {{ x := a x {symbol}= b return x }}\n'
+        SOURCE += f'pub fn update_{ty}_{op}(a:{ty},b:{right}) {ty} {{ x := a\nx {symbol}= b\nreturn x }}\n'
 
 for arity in (3,4,5):
     names = ['a','b','c','d','e'][:arity]
@@ -317,7 +317,7 @@ for ty in ('i64','u64'):
             name = f'range_{ty}_{int(reverse)}_{int(inclusive)}'
             interval = 'a' + ('..=' if inclusive else '..') + 'b'
             if reverse: interval = f'#reverse({interval})'
-            SOURCE += f'pub fn {name}(a:{ty},b:{ty}) {ty} {{ total:{ty} = 0 for i in {interval} {{ total = #wrap(total*17+i) }} return total }}\n'
+            SOURCE += f'pub fn {name}(a:{ty},b:{ty}) {ty} {{ total:{ty} = 0\nfor i in {interval} {{ total = #wrap(total*17+i) }}\nreturn total }}\n'
 
 NARROW_TYPES = {f'{sign}{bits}': (bits,sign=='i',getattr(ctypes,f'c_{"int" if sign=="i" else "uint"}{bits}')) for sign in ('i','u') for bits in (8,16,32)}
 for ty,(bits,sign,ctype) in NARROW_TYPES.items():
@@ -334,7 +334,7 @@ for ty,(bits,sign,ctype) in NARROW_TYPES.items():
     SOURCE+=f'pub fn narrow_{ty}_apply(f:fn({ty}) {ty},a:{ty}) {ty} {{ return f(a) }}\n'
     SOURCE+=f'pub fn narrow_{ty}_stack(' + ','.join(f'a{i}:{ty}' for i in range(8)) + f') {ty} {{ return #wrap(a0+a6+a7) }}\n'
     SOURCE+=f'pub fn narrow_{ty}_identity(a:{ty}) {ty} {{ return a }}\n'
-    SOURCE+=f'pub fn narrow_{ty}_call(a:{ty}) {ty} {{ f:=&narrow_{ty}_identity return f(a) }}\n'
+    SOURCE+=f'pub fn narrow_{ty}_call(a:{ty}) {ty} {{ f:=narrow_{ty}_identity\nreturn f(a) }}\n'
 
 SOURCE += 'extern fn difftime(a:i64,b:i64) f64\npub fn foreign_time(a:i64,b:i64) f64 { return difftime(a,b) }\n'
 for ty in ('f32','f64'):
@@ -343,8 +343,8 @@ for ty in ('f32','f64'):
     SOURCE+=f'pub fn float_{ty}_neg(a:{ty}) {ty} {{ return -a }}\n'
     SOURCE+=f'pub fn float_{ty}_constant() {ty} {{ return 1.25 }}\n'
     SOURCE+=f'pub fn float_{ty}_apply(f:fn({ty},{ty}) {ty},a:{ty},b:{ty}) {ty} {{ return f(a,b) }}\n'
-    SOURCE+=f'pub fn float_{ty}_call(a:{ty},b:{ty}) {ty} {{ f:=&float_{ty}_add return f(a,b) }}\n'
-    SOURCE+=f'pub fn float_{ty}_local(a:{ty},b:{ty}) {ty} {{ x:=a x+=b if x>0.0 {{ return x }} return -x }}\n'
+    SOURCE+=f'pub fn float_{ty}_call(a:{ty},b:{ty}) {ty} {{ f:=float_{ty}_add\nreturn f(a,b) }}\n'
+    SOURCE+=f'pub fn float_{ty}_local(a:{ty},b:{ty}) {ty} {{ x:=a\nx+=b\nif x>0.0 {{ return x }}\nreturn -x }}\n'
     for op,(symbol,_) in COMPARISONS.items():
         SOURCE+=f'pub fn float_{ty}_{op}(a:{ty},b:{ty}) bool {{ return a {symbol} b }}\n'
     params=','.join(f'a{i}:{ty}' for i in range(10));expr='+'.join(f'a{i}' for i in range(10))
@@ -352,10 +352,10 @@ for ty in ('f32','f64'):
     SOURCE+=f'pub fn float_{ty}_stack_call({params}) {ty} {{ return float_{ty}_stack('+','.join(f'a{i}' for i in range(10))+') }\n'
 SOURCE+='pub fn float_widen(a:f32) f64 { return a }\npub fn float_narrow(a:f64) f32 { return #cast(f32, a) }\n'
 params=','.join(f'f{i}:f64,i{i}:u64' for i in range(10));checks=' || '.join(f'i{i} != {i}' for i in range(10))
-SOURCE+=f'pub fn float_mixed({params}) f64 {{ if {checks} {{ return -1.0 }} return '+ '+'.join(f'f{i}' for i in range(10))+' }\n'
+SOURCE+=f'pub fn float_mixed({params}) f64 {{ if {checks} {{ return -1.0 }}\nreturn '+ '+'.join(f'f{i}' for i in range(10))+' }\n'
 args=','.join(f'{i}.25,{i}' for i in range(10))
 SOURCE+=f'pub fn float_mixed_call() f64 {{ return float_mixed({args}) }}\n'
-SOURCE+=f'pub fn float_mixed_indirect() f64 {{ f:=float_mixed return f({args}) }}\n'
+SOURCE+=f'pub fn float_mixed_indirect() f64 {{ f:=float_mixed\nreturn f({args}) }}\n'
 SOURCE+='pub fn float_panic(a:f64,b:u64,c:u64) f64 { _ = b/c\nreturn a }\n'
 SOURCE+='pub fn float_panic_call(a:u64,b:u64) f64 { return float_panic(1.25,a,b) }\n'
 
@@ -456,7 +456,7 @@ pub fn float_bits(a:f32) u32 { return #bitcast(u32, a) }
 pub fn bits_float(a:u32) f32 { return #bitcast(f32, a) }
 """
 for ty in ('i8','u16','i32','u64','bool','f32','f64'):
-    SOURCE+=f'pub fn pointer_{ty}(p:*{ty},a:{ty}) {ty} {{ p.*=a return p.* }}\n'
+    SOURCE+=f'pub fn pointer_{ty}(p:*{ty},a:{ty}) {ty} {{ p.*=a\nreturn p.* }}\n'
 
 def run(args, **kwargs):
     result = subprocess.run([str(x) for x in args], check=False,
@@ -485,20 +485,31 @@ def inspect(path, debug):
     sections = {strings[h[0]:].split(b'\0')[0]: h for h in headers}
     assert sections[b'.text'][2] == 6
     assert sections[b'.rodata'][2] == 2 and sections[b'.rodata'][8] == 8
-    # Mutable globals are zero-filled storage: .bss (SHT_NOBITS), writable and allocated.
-    assert sections[b'.bss'][1] == 8 and sections[b'.bss'][2] == 3 and sections[b'.bss'][8] == 8
+    # Mutable globals use writable, allocated SHT_NOBITS storage. The section
+    # preserves the backend's 16-byte preferred global-array storage alignment;
+    # individual globals still retain their source ABI sizes.
+    assert sections[b'.bss'][1] == 8 and sections[b'.bss'][2] == 3 and sections[b'.bss'][8] == 16
     assert sections[b'.note.GNU-stack'][2] == 0
     table = sections[b'.symtab']
     symbols = [struct.unpack_from('<IBBHQQ', data, offset)
                for offset in range(table[4], table[4] + table[5], table[9])]
     assert all(s[1] >> 4 == 0 for s in symbols[:table[7]])
     assert all(s[1] >> 4 == 1 for s in symbols[table[7]:])
-    # Fixed symbols: dyn_check_failed and the local constant-literals label.
-    assert len(symbols) == SOURCE.count('pub fn ') + SOURCE.count('extern fn ') + GLOBAL_COUNT + 14 + (3 if debug else 1)
+    # Table-based release unwinding needs continue, but no set/link/unlink calls.
+    # Debug keeps those calls and the two tracing hooks. Both modes retain the
+    # local .text section symbol used by the unwind-table relocation.
+    runtime_symbols = {b'dyn_panic', b'dyn_unwind_continue', b'fmod', b'fmodf', b'dyn_check_failed'}
+    if debug:
+        runtime_symbols |= {b'dyn_trace_push', b'dyn_trace_pop', b'dyn_unwind_set', b'dyn_unwind_link', b'dyn_unwind_unlink'}
+    # Three generic templates produce five concrete instances. Fixed symbols:
+    # null, .rodata, .text, literals, initializer, and initialized flag.
+    concrete_functions = SOURCE.count('pub fn ') - 3 + 5
+    assert len(symbols) == concrete_functions + SOURCE.count('extern fn ') + GLOBAL_COUNT + 6 + len(runtime_symbols)
+    assert symbols[2][1] == 3 and symbols[2][3] == 1  # STT_SECTION for .text
     names = headers[table[6]]
     names = data[names[4]:names[4] + names[5]]
     undefined = {names[s[0]:].split(b'\0')[0] for s in symbols[2:] if s[3] == 0}
-    assert undefined == {b'llabs',b'abs',b'difftime',b'malloc',b'free',b'write',b'dyn_unwind_set',b'dyn_unwind_link',b'dyn_unwind_unlink',b'dyn_unwind_continue',b'fmod',b'fmodf',b'dyn_check_failed'} | ({b'dyn_panic', b'dyn_trace_push', b'dyn_trace_pop'} if debug else {b'dyn_panic'})
+    assert undefined == {b'llabs', b'abs', b'difftime', b'malloc', b'free', b'write'} | runtime_symbols
     constructors = sections[b'.init_array']
     assert constructors[1] == 14 and constructors[2] == 3 and constructors[5] == 8
     init_reloc = sections[b'.rela.init_array']
@@ -694,10 +705,10 @@ ABI_STRUCTS = [
 for name,fields,decl,field,value in ABI_STRUCTS:
     SOURCE+=f'struct Abi{name} {{ {decl} }}\n'
     increment='1.0' if isinstance(value,float) else '1'
-    SOURCE+=f'pub fn abi_{name}(x:Abi{name}) Abi{name} {{ x.{field}+={increment} return x }}\n'
+    SOURCE+=f'pub fn abi_{name}(x:Abi{name}) Abi{name} {{ x.{field}+={increment}\nreturn x }}\n'
     SOURCE+=f'pub fn abi_{name}_call(x:Abi{name}) Abi{name} {{ return abi_{name}(x) }}\n'
     SOURCE+=f'pub fn abi_{name}_apply(f:fn(Abi{name}) Abi{name},x:Abi{name}) Abi{name} {{ return f(x) }}\n'
-    SOURCE+=f'pub fn abi_{name}_defer(x:Abi{name}) Abi{name} {{ defer {{ x.{field}+={increment} }} return x }}\n'
+    SOURCE+=f'pub fn abi_{name}_defer(x:Abi{name}) Abi{name} {{ defer {{ x.{field}+={increment} }}\nreturn x }}\n'
 SOURCE+="""
 packed struct AbiPacked { tag:u8,value:i64 }
 pub fn abi_Packed(x:AbiPacked) AbiPacked { x.value+=1
@@ -731,9 +742,9 @@ for name,ty in ARRAY_ABI_TYPES:
     for n in range(1,7):
         increment='1.0' if name.startswith('f') else '1'
         literal=','.join(f'{i}.0' if name.startswith('f') else str(i) for i in range(n))
-        SOURCE+=f'pub fn arrayabi_{name}_{n}(x:[{n}]{name}) [{n}]{name} {{ x[{n-1}]+={increment} return x }}\n'
-        SOURCE+=f'pub fn arrayabi_{name}_{n}_call(a:{name}) {name} {{ x:[{n}]{name}=[{literal}] x[{n-1}]=a return arrayabi_{name}_{n}(x)[{n-1}] }}\n'
-        SOURCE+=f'pub fn arrayabi_{name}_{n}_apply(f:fn([{n}]{name}) [{n}]{name},a:{name}) {name} {{ x:[{n}]{name}=[{literal}] x[{n-1}]=a return f(x)[{n-1}] }}\n'
+        SOURCE+=f'pub fn arrayabi_{name}_{n}(x:[{n}]{name}) [{n}]{name} {{ x[{n-1}]+={increment}\nreturn x }}\n'
+        SOURCE+=f'pub fn arrayabi_{name}_{n}_call(a:{name}) {name} {{ x:[{n}]{name}=[{literal}]\nx[{n-1}]=a\nreturn arrayabi_{name}_{n}(x)[{n-1}] }}\n'
+        SOURCE+=f'pub fn arrayabi_{name}_{n}_apply(f:fn([{n}]{name}) [{n}]{name},a:{name}) {name} {{ x:[{n}]{name}=[{literal}]\nx[{n-1}]=a\nreturn f(x)[{n-1}] }}\n'
 SOURCE+="""
 pub fn arrayabi_gp(a:u64,b:u64,c:u64,d:u64,e:u64,x:[3]u8) [3]u8 { return x }
 pub fn arrayabi_gp_call() u64 { x:=arrayabi_gp(1,2,3,4,5,[7,8,9])
@@ -800,8 +811,10 @@ with tempfile.TemporaryDirectory(prefix='dyn-scalar-backend-') as directory:
     source = root / 'main.dyn'
     source.write_text(SOURCE)
     support = root / 'support.o'
-    run([*CC, '-O2', '-fPIC', '-ffreestanding', '-fno-builtin', '-fno-stack-protector',
-         '-c', ROOT / 'runtime/reference_support.c', '-o', support])
+    # Compile support against the current assembly runtime ABI, including
+    # table-based unwinding. Numeric and exact panic oracles remain below.
+    run([sys.executable, ROOT / 'tools/build-native-support.py', '--compiler', DYN,
+         '--target', 'x86_64-linux', '--output', support])
     rng = random.Random(1776)
     count = panic_count = 0
     u64, i64, boolean = ctypes.c_uint64, ctypes.c_int64, ctypes.c_bool
@@ -1558,7 +1571,7 @@ raise AssertionError('overflow returned normally')
         'unreachable-aggregate': 'pub fn fail(a:u64) u64 { if false { x:[2097153]u64\n_=x }\nreturn a }',
         'main-frame-limit': 'fn main() { x:[2097153]u64\n_=x }',
         'aggregate-local': 'pub fn fail(a: u64) u64 { b: [2097153]u64\nreturn a }',
-        'frame-limit': 'pub fn fail() u64 {' + ''.join(f'x{i}:[1048576]u64 ' for i in range(3)) + 'return 0}',
+        'frame-limit': 'pub fn fail() u64 {\n' + ''.join(f'x{i}:[1048576]u64\n' for i in range(3)) + 'return 0}',
         'enum-storage-limit': 'enum E { A:[2097153]u64,B } pub fn fail(a:E) E { return a }',
         'indirect-aggregate-limit': 'pub fn fail(f:fn([513]u8) u64,x:[513]u8) u64 { return f(x) }',
         'global-aggregate-limit': 'stored:[536870912]u64 pub fn fail() u64 { return 0 }',

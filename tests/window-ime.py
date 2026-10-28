@@ -13,6 +13,13 @@ extern fn abi "dyn_xim_abi"(index: u32) usize
 fn ime_check(ok: bool, message: []const u8) { if !ok { #panic(message) } }
 fn ime_drain(host: *Window) { value := ordered.Event{}
   for next_event(host, &value) {} }
+fn ime_clipboard_reply(host: *Window, text: []const u8) {
+  desktop := &host.desktop
+  desktop.incoming_arena = clipboard_arena(#len(text))
+  _ = mem.copy(mem.push_bytes_uninit(desktop.incoming_arena, #len(text)), text)
+  desktop.paste_ordered = true
+  clipboard_finish(host, true)
+}
 pub fn ime_oracle() {
   ime_check(#sizeof(XimText) == abi(0) && #offsetof(XimText, feedback) == abi(1) && #offsetof(XimText, string) == abi(2), "XIMText ABI")
   ime_check(#sizeof(PreeditDraw) == abi(3) && #offsetof(PreeditDraw, text) == abi(4), "XIM draw ABI")
@@ -75,16 +82,19 @@ pub fn ime_oracle() {
   ime_drain(&host)
   desktop.owns = true
   desktop.owned_length = 1
+  owned_storage: [1]u8 = []
+  desktop.owned = owned_storage[..]
+  defer desktop_close(&host)
   desktop.owned[0] = 'a'
-  request_paste(&host)
+  ime_clipboard_reply(&host, desktop.owned[..desktop.owned_length])
   desktop.owned[0] = 'b'
-  request_paste(&host)
+  ime_clipboard_reply(&host, desktop.owned[..desktop.owned_length])
   desktop.received[0] = '!'
   ime_check(next_event(&host, &event) && event.kind == ordered.Kind.Clipboard && event.text[0] == 'a' && event.button == 1, "first owned reply")
   ime_check(next_event(&host, &event) && event.kind == ordered.Kind.Clipboard && event.text[0] == 'b' && event.button == 1, "second owned reply")
   desktop.paste_pending = true
-  request_paste(&host)
-  ime_check(next_event(&host, &event) && event.kind == ordered.Kind.Overflow && desktop.received[0] == '!', "overlap preserves pending reply")
+  desktop_loss(desktop)
+  ime_check(next_event(&host, &event) && event.kind == ordered.Kind.Overflow && desktop.received[0] == '!', "overflow preserves pending reply")
 }
 '''
 C = r'''#include <X11/Xlib.h>

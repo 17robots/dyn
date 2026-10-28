@@ -292,10 +292,10 @@ pub fn scan_directories(arena: *mem.Arena, directories: []const []const u8, limi
   walk := Walk{ entries: mem.push_array(Entry, arena, limit) }
   scratch := mem.arena_create(16777216)
   defer {
-    mem.arena_release(&scratch)
+    mem.arena_release(scratch)
   }
   for directory in directories {
-    visit(arena, &scratch, &walk, directory, 0)
+    visit(arena, scratch, &walk, directory, 0)
   }
   return walk.entries[..walk.count]
 }
@@ -305,10 +305,10 @@ pub fn scan_directories(arena: *mem.Arena, directories: []const []const u8, limi
 pub fn scan(arena: *mem.Arena, limit: usize) []Entry {
   scratch := mem.arena_create(16777216)
   defer {
-    mem.arena_release(&scratch)
+    mem.arena_release(scratch)
   }
   directories: [6][]const u8 = []
-  count := font_directories(&scratch, directories[..])
+  count := font_directories(scratch, directories[..])
   return scan_directories(arena, directories[..count], limit)
 }
 

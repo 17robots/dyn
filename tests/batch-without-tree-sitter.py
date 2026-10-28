@@ -47,6 +47,10 @@ with tempfile.TemporaryDirectory(prefix='dyn-batch-tree-sitter-') as temporary:
 
     smoke = root/'smoke'
     shutil.copytree(ROOT/'tests/smoke', smoke)
+    # Keep this formatter negative control explicit; the shared smoke source
+    # may already use canonical layout.
+    smoke_source = smoke/'main.dyn'
+    smoke_source.write_text(smoke_source.read_text().replace('  values:', '        values:', 1))
     reflection = project('reflection', {'main.dyn': 'struct P { x: i32 }\nfn main() {\n  info := #typeof(P)\n  _ = info\n}\n'})
     gated = project('gated', {'main.dyn': '#target(kernel: darwin, arch: aarch64, abi: aapcs)\nfn f() {}\n'})
     broken = project('broken', {'main.dyn': 'fn main() {\n  x := (1 +\n}\n'})

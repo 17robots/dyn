@@ -48,12 +48,12 @@ use "std/mem" mem
 use "std/bytes" bytes
 fn check(ok: bool, label: []const u8) { if !ok { #panic(label) } }
 fn main() {
-  arena := mem.Arena{}
-  defer { mem.arena_release(&arena) }
-  regular := system.describe(&arena, "regular.ttf", regular_data[..])
+  arena := mem.arena_create(0)
+  defer { mem.arena_release(arena) }
+  regular := system.describe(arena, "regular.ttf", regular_data[..])
   check(bytes.equal(regular.family, "Test 😀") && bytes.equal(regular.style, "Regular"), "check 39")
   check(regular.weight == 400 && regular.monospace && !regular.italic, "check 40")
-  bold := system.describe(&arena, "bold.ttf", bold_data[..])
+  bold := system.describe(arena, "bold.ttf", bold_data[..])
   check(bold.weight == 700 && bold.italic, "check 42")
   entries: [2]system.Entry = [regular, bold]
   check(system.find(entries[..], "TEST 😀", 700, true) == &entries[1], "check 44")
@@ -62,13 +62,13 @@ fn main() {
   check(#len(system.sans(entries[..]).path) == 0, "check 47")
   preferred: [2][]const u8 = ["missing", "Test 😀"]
   check(system.first_of(entries[..], preferred[..], 400, false) == &entries[0], "check 49")
-  before := mem.arena_mark(&arena)
+  before := mem.arena_mark(arena)
   for n in 0..#len(regular_data) {
-    rejected := system.describe(&arena, "truncated.ttf", regular_data[..n])
-    check(#len(rejected.family) == 0 && mem.arena_mark(&arena) == before, "check 53")
+    rejected := system.describe(arena, "truncated.ttf", regular_data[..n])
+    check(#len(rejected.family) == 0 && mem.arena_mark(arena) == before, "check 53")
   }
-  rejected := system.describe(&arena, "invalid.ttf", invalid_data[..])
-  check(#len(rejected.family) == 0 && mem.arena_mark(&arena) == before, "check 56")
+  rejected := system.describe(arena, "invalid.ttf", invalid_data[..])
+  check(#len(rejected.family) == 0 && mem.arena_mark(arena) == before, "check 56")
   // Strings remain valid after the caller mutates the original file bytes.
   for i in 0..#len(regular_data) { regular_data[i] = 0 }
   check(bytes.equal(regular.family, "Test 😀"), "check 59")
@@ -77,16 +77,16 @@ SCAN_SOURCE = r'''use "std/font/system" system
 use "std/mem" mem
 fn check(ok: bool) { if !ok { #panic("font scan contract") } }
 fn main() {
-  arena := mem.Arena{}
-  defer { mem.arena_release(&arena) }
+  arena := mem.arena_create(0)
+  defer { mem.arena_release(arena) }
   directories: [2][]const u8 = ["MISSING_DIRECTORY", "FONT_DIRECTORY"]
-  check(#len(system.scan_directories(&arena, directories[..], 0)) == 0)
-  entries := system.scan_directories(&arena, directories[..], 20)
+  check(#len(system.scan_directories(arena, directories[..], 0)) == 0)
+  entries := system.scan_directories(arena, directories[..], 20)
   check(#len(entries) == 2)
-  check(#len(system.scan_directories(&arena, directories[..], 1)) == 1)
+  check(#len(system.scan_directories(arena, directories[..], 1)) == 1)
   check(#len(system.covering(entries, 65, true).path) != 0)
   check(#len(system.covering(entries, 0x10ffff, false).path) == 0)
-  _ = system.scan(&arena, 4)
+  _ = system.scan(arena, 4)
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-font-system-') as directory:

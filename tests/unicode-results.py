@@ -31,43 +31,75 @@ fn convert(a: *mem.Arena, input: []const u8, mode: usize) text.Converted {
  return text.normalize(a, input, form)
 }
 fn good(input: []const u8, expected: []const u8, mode: usize) {
- backing: [8192]u8 = []
+ backing: [8192+mem.ArenaBufferOverhead]u8 = []
  mem.fill(backing[..], 99)
  a := mem.arena_from_buffer(backing[..])
- _ = mem.push_bytes_uninit(&a, 7)
- r := convert(&a, input, mode)
+ prefix := mem.push_bytes_uninit(a, 7)
+ r := convert(a, input, mode)
  converted(r, expected)
- require(mem.arena_mark(&a) == 7 + #len(expected), "exact retained allocation")
- for c in backing[..7] { require(c == 99, "prefix preserved") }
+ require(mem.arena_mark(a) == mem.arena_start(a) + 7 + #len(expected), "exact retained allocation")
+ for c in prefix { require(c == 99, "prefix preserved") }
+}
+fn chained(input: []const u8, expected: []const u8, mode: usize, block: usize, prior: bool) {
+ a := mem.arena_create_bounded(block, 1024 * 1024)
+ defer mem.arena_release(a)
+ prefix := mem.push_bytes_uninit(a, 3)
+ mem.fill(prefix, 91)
+ guard: []u8
+ if prior {
+  guard = mem.push_bytes_uninit(a, 257)
+  mem.fill(guard, 73)
+  require(mem.arena_snapshot(a).blocks > 1, "forced prior chain")
+ }
+ owned_input := mem.push_bytes_uninit(a, #len(input))
+ _ = mem.copy(owned_input, input)
+ mark := mem.arena_mark(a)
+ used := mem.arena_used(a)
+ r := convert(a, owned_input, mode)
+ converted(r, expected)
+ require(mem.arena_mark(a) == mark + #len(expected), "chained exact retained mark")
+ require(mem.arena_used(a) == used + #len(expected), "chained scratch reclaimed")
+ require(bytes.equal(owned_input, input), "live input preserved across chain")
+ for value in prefix { require(value == 91, "chained prefix canary") }
+ for value in guard { require(value == 73, "earlier block canary") }
+ mem.arena_rewind(a, mark)
+ require(mem.arena_mark(a) == mark && bytes.equal(owned_input, input), "chained output rollback")
+ for value in prefix { require(value == 91, "prefix after rollback") }
+ for value in guard { require(value == 73, "prior block after rollback") }
 }
 fn bad(input: []const u8, off: usize) {
  for mode in 0..5 {
-  backing: [256]u8 = []
+  backing: [256+mem.ArenaBufferOverhead]u8 = []
   mem.fill(backing[..], 99)
   a := mem.arena_from_buffer(backing[..])
-  _ = mem.push_bytes_uninit(&a, 7)
+  prefix := mem.push_bytes_uninit(a, 7)
   a.poison_on_rewind = true
-  r := convert(&a, input, mode)
+  snapshot: [256+mem.ArenaBufferOverhead]u8
+  _ = mem.copy(snapshot[..], backing[..])
+  r := convert(a, input, mode)
   require(!r.ok && #len(r.value) == 0 && r.kind == errors.Kind.InvalidInput && r.error == 0 && r.offset == off && r.detail == text.ErrorKind.InvalidUtf8, "invalid diagnostics")
-  require(mem.arena_mark(&a) == 7, "invalid rollback")
-  for c in backing { require(c == 99, "validation wrote arena") }
-  empty: [0]u8 = []
-  full := mem.arena_from_buffer(empty[..])
-  r = convert(&full, input, mode)
-  require(!r.ok && r.offset == off && r.error == 0 && r.kind == errors.Kind.InvalidInput && r.detail == text.ErrorKind.InvalidUtf8 && #len(r.value) == 0 && mem.arena_mark(&full) == 0, "validate before allocation")
+  require(mem.arena_mark(a) == mem.arena_start(a) + 7, "invalid rollback")
+  require(bytes.equal(backing[..], snapshot[..]), "validation wrote arena")
+  empty: [mem.ArenaBufferOverhead]u8 = []
+  pad := (16-(#cast(usize,&empty[0])&15))&15
+  full := mem.arena_from_buffer(empty[pad..pad+mem.ArenaHeader])
+  r = convert(full, input, mode)
+  require(!r.ok && r.offset == off && r.error == 0 && r.kind == errors.Kind.InvalidInput && r.detail == text.ErrorKind.InvalidUtf8 && #len(r.value) == 0 && mem.arena_mark(full) == mem.arena_start(full), "validate before allocation")
  }
 }
 fn overlap(start: usize, mode: usize) {
- backing: [1024]u8 = []
- snapshot: [1024]u8 = []
+ backing: [1024+mem.ArenaBufferOverhead]u8 = []
+ snapshot: [1024+mem.ArenaBufferOverhead]u8 = []
  mem.fill(backing[..], 99)
- _ = mem.copy(backing[start..], "ABCD")
- _ = mem.copy(snapshot[..], backing[..])
  a := mem.arena_from_buffer(backing[..])
- _ = mem.push_bytes_uninit(&a, 8)
- r := convert(&a, backing[start..start+4], mode)
+ _ = mem.push_bytes_uninit(a, 8)
+ at := mem.arena_start(a) + start
+ _ = mem.copy(a.data[at..], "ABCD")
+ payload := a.data[mem.ArenaHeader..]
+ _ = mem.copy(snapshot[..], payload)
+ r := convert(a, a.data[at..at+4], mode)
  require(!r.ok && #len(r.value) == 0 && r.kind == errors.Kind.InvalidInput && r.error == 0 && r.offset == 0 && r.detail == text.ErrorKind.Overlap, "overlap diagnostics")
- require(mem.arena_mark(&a) == 8 && bytes.equal(backing[..], snapshot[..]), "overlap preserved bytes and mark")
+ require(mem.arena_mark(a) == mem.arena_start(a) + 8 && bytes.equal(payload, snapshot[..#len(payload)]), "overlap preserved bytes and mark")
 }
 fn end(r: text.GraphemeResult) {
  require(!r.ok && #len(r.value) == 0 && r.kind == errors.Kind.None && r.error == 0 && r.offset == 0 && r.detail == text.ErrorKind.None, "ordinary EOF")
@@ -107,6 +139,16 @@ def source():
     program = SOURCE
     for raw, expected, mode in goldens:
         program += f'good({literal(raw)}, {literal(expected)}, {mode})\n'
+        for block in (160, 176, 256):
+            for prior in (False, True):
+                program += f'chained({literal(raw)}, {literal(expected)}, {mode}, {block}, {str(prior).lower()})\n'
+    for raw, expected, mode in [('é' * 160, 'e\u0301' * 160, 0),
+                                 ('a\u0315\u0300' * 80, 'a\u0300\u0315' * 80, 0),
+                                 ('ﬃ①Ａ' * 80, 'ffi1A' * 80, 2),
+                                 ('Straße' * 100, 'strasse' * 100, 4)]:
+        for block in (160, 176, 256):
+            for prior in (False, True):
+                program += f'chained({literal(raw)}, {literal(expected)}, {mode}, {block}, {str(prior).lower()})\n'
     malformed = [b'\x80', b'\xc0\xaf', b'\xc1\xbf', b'\xc2', b'\xe0\x80\x80',
                  b'\xed\xa0\x80', b'\xf0\x80\x80\x80', b'\xf4\x90\x80\x80',
                  b'\xf5\x80\x80\x80', b'\xff', b'\xe2\x82', b'\xe2A\xac']
@@ -114,7 +156,8 @@ def source():
         for invalid in malformed:
             program += f'bad({literal(prefix + invalid + b"Z")}, {len(prefix)})\n'
     program += '''for mode in 0..4 {
- // capacity=24: work occupies [8,200), output [200,224).
+ // For four input bytes, capacity=24: relative to the payload start,
+ // work occupies [8,200), output [200,224); trailing alignment slack follows.
  overlap(8, mode)
 overlap(12, mode)
 overlap(200, mode)
@@ -141,9 +184,14 @@ overlap(10, 4)
     return program + '}\n', len(goldens), len(malformed) * 3
 
 
-def build(work, mode):
+def build(work, mode, tree=False):
+    env = dict(os.environ, DYN_SDK=str(ROOT))
+    if tree:
+        env["DYN_NO_SSA"] = "1"
+    else:
+        env.pop("DYN_NO_SSA", None)
     subprocess.run([DYN, 'build', str(work), '--' + mode, '--quiet', '--no-cache',
-                    '--output', str(work / 'run')], cwd=ROOT, check=True, timeout=120)
+                    '--output', str(work / 'run')], cwd=ROOT, env=env, check=True, timeout=120)
 
 
 def main():
@@ -151,24 +199,25 @@ def main():
     with tempfile.TemporaryDirectory(prefix='dyn-unicode-results-') as tmp:
         work = Path(tmp)
         for mode in ('debug', 'release'):
-            (work / 'main.dyn').write_text(program)
-            build(work, mode)
-            subprocess.run([str(work / 'run')], check=True, capture_output=True, timeout=30)
-            print(f'PASS Unicode {mode}: {goldens} goldens, {invalid} invalid UTF-8 cases × 5 operations; overlap, zero, grapheme EOF/sticky', flush=True)
-            for operation in ['text.case_fold(&a, "ABCD")', 'text.normalize(&a, "ABCD", text.Form.NFD)']:
-                (work / 'main.dyn').write_text('''use "std/unicode/text" text
-use "std/mem" mem
-fn main() {
- backing: [1]u8 = []
- a := mem.arena_from_buffer(backing[..])
- _ = OPERATION
-}
-'''.replace('OPERATION', operation))
-                build(work, mode)
-                result = subprocess.run([str(work / 'run')], capture_output=True, timeout=10)
-                assert result.returncode != 0 and b'arena exhausted' in result.stderr, (mode, operation, result)
-            print(f'PASS Unicode exhaustion panics {mode}: fold/normalize', flush=True)
-
+            for tree in (False, True):
+                (work / 'main.dyn').write_text(program)
+                build(work, mode, tree)
+                subprocess.run([str(work / 'run')], check=True, capture_output=True, timeout=30)
+                print(f'PASS Unicode {mode} {"tree" if tree else "SSA"}: {goldens} goldens, {invalid} invalid UTF-8 cases × 5 operations; 120 chained conversions, overlap, zero, grapheme EOF/sticky', flush=True)
+                for operation in ['text.case_fold(a, "ABCD")', 'text.normalize(a, "ABCD", text.Form.NFD)']:
+                    (work / 'main.dyn').write_text('''use "std/unicode/text" text
+    use "std/mem" mem
+    fn main() {
+     backing: [1+mem.ArenaBufferOverhead]u8 = []
+     pad := (16-(#cast(usize,&backing[0])&15))&15
+     a := mem.arena_from_buffer(backing[pad..pad+mem.ArenaHeader+1])
+     _ = OPERATION
+    }
+    '''.replace('OPERATION', operation))
+                    build(work, mode, tree)
+                    result = subprocess.run([str(work / 'run')], capture_output=True, timeout=10)
+                    assert result.returncode == 101 and b'arena exhausted' in result.stderr, (mode, operation, result)
+                print(f'PASS Unicode exhaustion panics {mode} {"tree" if tree else "SSA"}: fold/normalize', flush=True)
 
 if __name__ == '__main__':
     main()

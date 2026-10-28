@@ -166,7 +166,7 @@ class Contracts(unittest.TestCase):
     def test_enum_context_and_snippets_skip_comments(self):
         definitions = ('enum Choice { One, Two }\n'
                        'fn /* comment */ take(first, second: Choice) {}\n'
-                       'fn /* return */ pick() Choice {\n return O|\n}\n')
+                       'fn /* return */ pick() Choice {\n return\n O|\n}\n')
         self.assertIn('One', {i['label'] for i in self.complete(definitions)})
         items = self.complete('fn take(first, /* misleading: comma, */ second: i32) {}\nfn main() { ta| }\n')
         take = next(i for i in items if i['label'] == 'take')

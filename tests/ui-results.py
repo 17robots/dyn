@@ -178,11 +178,11 @@ fn raster(arena: *mem.Arena) {
   check(software.render(&surface, ui.first(&context), software.Font{}).kind == errors.Kind.InvalidInput)
 }
 fn main() {
-  arena := mem.Arena{}
-  defer { mem.arena_release(&arena) }
-  interactions(&arena)
-  widgets(&arena)
-  raster(&arena)
+  arena := mem.arena_create(0)
+  defer { mem.arena_release(arena) }
+  interactions(arena)
+  widgets(arena)
+  raster(arena)
   huge := ui.Rect{ x: 2147483640, y: 2147483640, width: 2147483647, height: 2147483647 }
   check(ui.contains(huge, 2147483647, 2147483647))
   overlap := ui.intersect(huge, ui.Rect{ x: 2147483647, y: 2147483647, width: 10, height: 10 })
@@ -217,12 +217,12 @@ with tempfile.TemporaryDirectory(prefix='dyn-ui-results-') as directory:
         reference = image
     failures = {
         'UI frame not begun': 'ui.end(&context)',
-        'UI frame already begun': 'ui.begin(&context, &arena, ui.Input{}, bounds)\n ui.begin(&context, &arena, ui.Input{}, bounds)',
-        'UI frame not ended': 'ui.begin(&context, &arena, ui.Input{}, bounds)\n _ = ui.first(&context)',
-        'UI widget ID must be nonzero': 'ui.begin(&context, &arena, ui.Input{}, bounds)\n _ = ui.button(&context, 0, bounds, "", true)',
+        'UI frame already begun': 'ui.begin(&context, arena, ui.Input{}, bounds)\n ui.begin(&context, arena, ui.Input{}, bounds)',
+        'UI frame not ended': 'ui.begin(&context, arena, ui.Input{}, bounds)\n _ = ui.first(&context)',
+        'UI widget ID must be nonzero': 'ui.begin(&context, arena, ui.Input{}, bounds)\n _ = ui.button(&context, 0, bounds, "", true)',
     }
     for message, body in failures.items():
-        (work / 'main.dyn').write_text('use "std/ui" ui\nuse "std/mem" mem\nfn main() {\n arena := mem.Arena{}\n context := ui.Context{}\n bounds := ui.Rect{ width: 10, height: 10 }\n '+body+'\n}')
+        (work / 'main.dyn').write_text('use "std/ui" ui\nuse "std/mem" mem\nfn main() {\n arena := mem.arena_create(0)\n context := ui.Context{}\n bounds := ui.Rect{ width: 10, height: 10 }\n '+body+'\n}')
         for mode in ('--debug', '--release'):
             output = work / 'invalid'
             subprocess.run([DYN, 'build', str(work), mode, '--quiet', '--output', str(output)], check=True, timeout=300)

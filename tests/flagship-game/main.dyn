@@ -30,37 +30,37 @@ fn hash_pixels(hash: u64, pixels: []const u32) u64 {
 }
 
 fn print_field(name: []const u8, value: u64) {
-  digits: [20]u8
+  digits: [20 + mem.ArenaBufferOverhead]u8
   scratch := mem.arena_from_buffer(digits[..])
   _ = io.write_all(io.stdout(), name)
   _ = io.write_all(io.stdout(), " ")
-  _ = io.write_all(io.stdout(), fmt.u64_decimal(&scratch, value))
+  _ = io.write_all(io.stdout(), fmt.u64_decimal(scratch, value))
   _ = io.write_all(io.stdout(), "\n")
 }
 
 fn main() {
   persistent := mem.arena_create(mem.MiB)
-  defer mem.arena_release(&persistent)
-  game := mem.push(breakout.Game, &persistent)
-  pixels := mem.push_array(u32, &persistent, #cast(usize, breakout.Width * breakout.Height))
-  frame := mem.arena_sub(&persistent, 64 * mem.KiB)
-  retained := mem.arena_used(&persistent)
+  defer mem.arena_release(persistent)
+  game := mem.push(breakout.Game, persistent)
+  pixels := mem.push_array(u32, persistent, #cast(usize, breakout.Width * breakout.Height))
+  frame := mem.arena_sub(persistent, 64 * mem.KiB)
+  retained := mem.arena_used(persistent)
   breakout.init(game)
   hash: u64 = 0xCBF29CE484222325
   frame_peak: usize
   for !breakout.over(game) && game.frame < MaxFrames {
     breakout.step(game, autopilot(game))
-    mem.arena_reset(&frame)
-    breakout.render(game, &frame, pixels)
-    if mem.arena_used(&frame) > frame_peak {
-      frame_peak = mem.arena_used(&frame)
+    mem.arena_reset(frame)
+    breakout.render(game, frame, pixels)
+    if mem.arena_used(frame) > frame_peak {
+      frame_peak = mem.arena_used(frame)
     }
     if game.frame % 60 == 0 {
       hash = hash_pixels(hash, pixels)
     }
   }
   hash = hash_pixels(hash, pixels)
-  if mem.arena_used(&persistent) != retained {
+  if mem.arena_used(persistent) != retained {
     #panic("frames must not retain memory")
   }
   print_field("frames", game.frame)

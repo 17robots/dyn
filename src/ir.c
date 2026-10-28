@@ -116,14 +116,17 @@ static DynByteIntrinsic byte_identity(const DynSource *source,
    SDK declaration may use the bounded x86 implementation. */
 static DynByteIntrinsic json_byte_identity(const DynSource *source,
                                           const char *source_path, const char *sdk,
+                                          const char *mutable_sdk,
                                           const DynAstProgram *a, const DynIrProgram *ir,
                                           const DynIrFunction *fn) {
-  if (!sdk || !source_path || fn->foreign || fn->variadic || fn->generic || fn->instance ||
+  if ((!sdk && !mutable_sdk) || !source_path || fn->foreign || fn->variadic ||
+      fn->generic || fn->instance || fn->is_public ||
       fn->return_type != DYN_TYPE_USIZE || fn->param_count != 1 ||
       fn->param_start >= ir->param_count ||
       !byte_const_slice(a, ir->params[fn->param_start].type)) return DYN_BYTE_INTRINSIC_NONE;
   char *canonical = realpath(source_path, NULL);
-  bool trusted = canonical && !strcmp(canonical, sdk);
+  bool trusted = canonical && ((sdk && !strcmp(canonical, sdk)) ||
+                               (mutable_sdk && !strcmp(canonical, mutable_sdk)));
   free(canonical);
   if (!trusted) return DYN_BYTE_INTRINSIC_NONE;
   const char *original, *ignored_path;
@@ -486,11 +489,13 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
   char *math_sdk = proofs ? sdk_source_path("std/math/float.dyn", false) : NULL;
   char *bytes_sdk = proofs ? sdk_source_path("std/bytes/bytes.dyn", true) : NULL;
   char *json_sdk = proofs ? sdk_source_path("std/encoding/json/read/read.dyn", true) : NULL;
+  char *mutable_json_sdk = proofs ? sdk_source_path("std/encoding/json/json.dyn", true) : NULL;
   for (size_t i = 0; i < a->function_count; ++i) {
     size_t n = a->functions[i].name.end_byte - a->functions[i].name.start_byte;
     /* Instances share the generic's name; the suffix hashes the type arguments, so it stays stable when other code changes. */
     ir->functions[i].name = malloc(n + 20);
     if (!ir->functions[i].name) {
+      free(mutable_json_sdk);
       free(json_sdk);
       free(bytes_sdk);
       free(math_sdk);
@@ -526,6 +531,7 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
     size_t link_length = a->functions[i].link_name.end_byte - a->functions[i].link_name.start_byte;
     ir->functions[i].link_name = malloc(link_length + 1);
     if (!ir->functions[i].link_name) {
+      free(mutable_json_sdk);
       free(json_sdk);
       free(bytes_sdk);
       free(math_sdk);
@@ -556,8 +562,9 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
     ir->functions[i].math_intrinsic = math_identity(source, source_path, math_sdk, ir, &ir->functions[i]);
     ir->functions[i].byte_intrinsic = byte_identity(source, source_path, bytes_sdk, a, ir, &ir->functions[i]);
     if (ir->functions[i].byte_intrinsic == DYN_BYTE_INTRINSIC_NONE)
-      ir->functions[i].byte_intrinsic = json_byte_identity(source, source_path, json_sdk, a, ir, &ir->functions[i]);
+      ir->functions[i].byte_intrinsic = json_byte_identity(source, source_path, json_sdk, mutable_json_sdk, a, ir, &ir->functions[i]);
   }
+  free(mutable_json_sdk);
   free(json_sdk);
   free(bytes_sdk);
   free(math_sdk);

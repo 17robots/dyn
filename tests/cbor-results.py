@@ -21,8 +21,8 @@ fn bad(source: []const u8) {
  check(again.kind == item.kind && again.offset == item.offset)
 }
 fn main() {
- arena := mem.Arena{}
- defer { mem.arena_release(&arena) }
+ arena := mem.arena_create(0)
+ defer { mem.arena_release(arena) }
  // RFC8949 Appendix A: {"a":1,"b":[2,3]}, indefinite [1,[2,3],4,5].
  golden := "\xa2\x61a\x01\x61b\x82\x02\x03"
  state := cbor.reader(golden)
@@ -33,7 +33,7 @@ fn main() {
  count += 1
  item = cbor.next(&state) }
  check(item.kind == errors.Kind.None && count == 7)
- encoded := cbor.encode(&arena,tokens[..count])
+ encoded := cbor.encode(arena,tokens[..count])
  check(encoded.ok && bytes.equal(encoded.value,golden))
  golden = "\x9f\x01\x82\x02\x03\x04\x05\xff"
  state = cbor.reader(golden)
@@ -43,7 +43,7 @@ fn main() {
  count += 1
  item = cbor.next(&state) }
  check(item.kind == errors.Kind.None && count == 8)
- encoded = cbor.encode(&arena,tokens[..count])
+ encoded = cbor.encode(arena,tokens[..count])
  check(encoded.ok && bytes.equal(encoded.value,golden))
  golden = "\xbf\x61a\x5f\x42ab\x41c\xff\x61b\x7f\x61d\x62ef\xff\xff"
  state = cbor.reader(golden)
@@ -53,7 +53,7 @@ fn main() {
  count += 1
  item = cbor.next(&state) }
  check(item.kind == errors.Kind.None)
- encoded = cbor.encode(&arena,tokens[..count])
+ encoded = cbor.encode(arena,tokens[..count])
  check(encoded.ok && bytes.equal(encoded.value,golden))
  // Tags wrap one child, including nested containers and other tags.
  golden = "\x81\xd8\x20\xc0\x81\x61x"
@@ -64,7 +64,7 @@ fn main() {
  count += 1
  item = cbor.next(&state) }
  check(item.kind == errors.Kind.None && count == 5)
- encoded = cbor.encode(&arena,tokens[..count])
+ encoded = cbor.encode(arena,tokens[..count])
  check(encoded.ok && bytes.equal(encoded.value,golden))
  floats := "\xf9\x3e\x00\xfa\xbf\xc0\x00\x00\xfb\x3f\xf8\x00\x00\x00\x00\x00\x00\xf9\x00\x01\xf9\x80\x00\xf9\x7c\x00\xf9\x7e\x00"
  state = cbor.reader(floats)
@@ -77,7 +77,7 @@ fn main() {
  nan := cbor.next(&state).value.real
  check(nan != nan)
  extremes: [8]cbor.Token = [cbor.Token{kind:cbor.Kind.Unsigned,value:0xffffffffffffffff},cbor.Token{kind:cbor.Kind.Negative,value:0xffffffffffffffff},cbor.Token{kind:cbor.Kind.Bool,boolean:true},cbor.Token{kind:cbor.Kind.Null},cbor.Token{kind:cbor.Kind.Undefined},cbor.Token{kind:cbor.Kind.Simple,value:255},cbor.Token{kind:cbor.Kind.Simple,value:19},cbor.Token{kind:cbor.Kind.Float,real:-1.5}]
- encoded = cbor.encode(&arena,extremes[..])
+ encoded = cbor.encode(arena,extremes[..])
  check(encoded.ok)
  state = cbor.reader(encoded.value)
  for expected in extremes {
@@ -96,11 +96,11 @@ fn main() {
  bad("\x81")
  bad("\xc0")
  bad("\x9f")
- mark := mem.arena_mark(&arena)
+ mark := mem.arena_mark(arena)
  invalid: [1]cbor.Token = [cbor.Token{kind:cbor.Kind.Tag,value:1}]
- check(cbor.encode(&arena,invalid[..]).kind == errors.Kind.InvalidInput && mem.arena_mark(&arena) == mark)
+ check(cbor.encode(arena,invalid[..]).kind == errors.Kind.InvalidInput && mem.arena_mark(arena) == mark)
  invalid[0] = cbor.Token{kind:cbor.Kind.Simple,value:24}
- check(cbor.encode(&arena,invalid[..]).kind == errors.Kind.InvalidInput && mem.arena_mark(&arena) == mark)
+ check(cbor.encode(arena,invalid[..]).kind == errors.Kind.InvalidInput && mem.arena_mark(arena) == mark)
  deep: [65]u8 = []
  for i in 0..65 { deep[i] = 0x9f }
  state = cbor.reader(deep[..])

@@ -50,7 +50,7 @@ fn read_u32(at: usize) usize {
 fn main() {
   arena := mem.arena_create(67108864)
   defer {
-    mem.arena_release(&arena)
+    mem.arena_release(arena)
   }
   at: usize = 0
   for at < #len(data) {
@@ -58,21 +58,21 @@ fn main() {
     length := read_u32(at + 1)
     sample := data[at + 5..at + 5 + length]
     at += 5 + length
-    mark := mem.arena_mark(&arena)
+    mark := mem.arena_mark(arena)
     if kind == 0 {
-      found := text.word_breaks(&arena, sample)
+      found := text.word_breaks(arena, sample)
       for offset in found.value {
         _ = io.print(io.stdout(), "{} ", offset)
       }
     }
     else {
-      found := text.line_breaks(&arena, sample)
+      found := text.line_breaks(arena, sample)
       for entry in found.value {
         _ = io.print(io.stdout(), "{} ", entry.offset)
       }
     }
     _ = io.println(io.stdout(), "")
-    mem.arena_rewind(&arena, mark)
+    mem.arena_rewind(arena, mark)
   }
 }
 '''

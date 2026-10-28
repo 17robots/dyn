@@ -13,9 +13,9 @@ use "std/bytes" bytes
 use "std/mem" mem
 fn check(ok: bool) { if !ok { #panic("native AEAD contract") } }
 fn vector(key: []const u8, nonce: []const u8, aad: []const u8, message: []const u8, cipher: []const u8, expected: []const u8) {
- arena := mem.Arena{}
- defer { mem.arena_release(&arena) }
- output := mem.push_array(u8,&arena,#len(message))
+ arena := mem.arena_create(0)
+ defer { mem.arena_release(arena) }
+ output := mem.push_array(u8,arena,#len(message))
  tag: [16]u8 = []
  check(aead.seal(output,tag[..],message,aad,key,nonce))
  check(bytes.equal(output,cipher) && bytes.equal(tag[..],expected))
@@ -33,14 +33,14 @@ fn vector(key: []const u8, nonce: []const u8, aad: []const u8, message: []const 
  check(!aead.open(output,cipher,tag[..],aad,key,wrong_nonce[..#len(nonce)]))
  for byte in output { check(byte == 165) }
  if #len(cipher) != 0 {
-  changed := mem.push_array(u8,&arena,#len(cipher))
+  changed := mem.push_array(u8,arena,#len(cipher))
   for i in 0..#len(cipher) { changed[i] = cipher[i] }
   changed[0] ^= 1
   check(!aead.open(output,changed,tag[..],aad,key,nonce))
   for byte in output { check(byte == 165) }
  }
  if #len(aad) != 0 {
-  changed_aad := mem.push_array(u8,&arena,#len(aad))
+  changed_aad := mem.push_array(u8,arena,#len(aad))
   for i in 0..#len(aad) { changed_aad[i] = aad[i] }
   changed_aad[0] ^= 1
   check(!aead.open(output,cipher,tag[..],changed_aad,key,nonce))

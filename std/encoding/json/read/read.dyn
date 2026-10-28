@@ -10,7 +10,6 @@ use "std/errors" errors
 use "std/mem" memory
 use "std/strings" text
 use "std/unicode/utf8" utf8
-use "std/bytes" read_bytes
 
 pub const KindMissing: u8 = 0
 pub const KindNull: u8 = 1
@@ -43,12 +42,17 @@ fn read_append(state: *ReadParser, kind: u8, bits: u64) usize {
     if capacity <= old {
       #panic("JSON compact node bound")
     }
-    tail := memory.arena_push_uninit(state.arena, (capacity - old) * 16, 8)
-    expected := #cast(usize, &state.values[0]) + old * 16
-    if #cast(usize, tail) != expected {
-      #panic("JSON compact arena moved")
+    if memory.arena_try_extend(state.arena, #cast(*u8, &state.values[0]), old * 16, (capacity - old) * 16) {
+      state.values = (&state.values[0])[..capacity]
     }
-    state.values = (&state.values[0])[..capacity]
+    else {
+      // Parsing retains indexes, not node pointers. Moving the complete tape
+      // preserves relative subtree spans; string pointers refer to stable buffer.
+      storage := memory.arena_push_uninit(state.arena, capacity * 16, 8)
+      replacement := #cast(*Value, storage)[..capacity]
+      _ = memory.copy(replacement[..state.used], state.values[..state.used])
+      state.values = replacement
+    }
   }
   index := state.used
   state.values[index] = Value{ tag: #cast(u64, kind), bits: bits }
@@ -278,7 +282,8 @@ fn read_value(state: *ReadParser, depth: usize) bool {
 // Finite binary64 reals, u64 positive integers and i64 negative integers are
 // retained. Other integers convert to binary64; real overflow is rejected.
 // Peak storage includes a geometrically grown value buffer (up to 32 initial
-// slots for containers). Unused tail storage is reclaimed after success.
+// slots for containers). Moving growth retains earlier value-buffer copies until
+// arena rewind/reset; unused tail storage of the final buffer is reclaimed.
 // offset is the parser cursor; a bad string may report its content start.
 pub fn parse(arena: *memory.Arena, source: []const u8) ParseResult {
   mark := memory.arena_mark(arena)
@@ -292,7 +297,7 @@ pub fn parse(arena: *memory.Arena, source: []const u8) ParseResult {
   if limit > maximum / 16 || #cast(u64, #len(source)) > 0x00ffffffffffffff {
     return ParseResult{ root: &nil_value, kind: errors.Kind.Overflow, detail: ErrorKind.SizeOverflow }
   }
-  if mark <= #len(arena.data) && read_bytes.overlaps(arena.data[mark..], source) {
+  if memory.arena_overlaps_unallocated(arena, source) {
     return ParseResult{ root: &nil_value, kind: errors.Kind.InvalidInput, detail: ErrorKind.Overlap }
   }
   copy := memory.arena_push_uninit(arena, #len(source), 1)
@@ -328,8 +333,8 @@ pub fn parse(arena: *memory.Arena, source: []const u8) ParseResult {
     }
     return ParseResult{ root: &nil_value, kind: category, offset: offset, detail: detail }
   }
-  base := #cast(usize, &state.values[0]) - #cast(usize, &arena.data[0])
-  memory.arena_rewind(arena, base + state.used * 16)
+  unused := (#len(state.values) - state.used) * 16
+  memory.arena_rewind(arena, memory.arena_mark(arena) - unused)
   return ParseResult{ root: &state.values[0], ok: true }
 }
 

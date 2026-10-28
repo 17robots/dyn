@@ -22,12 +22,11 @@ pub struct SymbolResult { value: rawptr, kind: errors.Kind, error: isize, messag
 pub struct Result { ok: bool, kind: errors.Kind, error: isize, message: *const u8 }
 
 pub fn open(path: []const u8, flags: i32) OpenResult {
-  storage: [4096]u8 = []
-  cstring_space1 := mem.arena_from_buffer(storage[..])
+  storage: [4096 + mem.ArenaBufferOverhead]u8 = []
   if #len(path) >= #len(storage) {
     return OpenResult{ kind: errors.Kind.InvalidInput }
   }
-  name := cabi.string_from_bytes(&cstring_space1, path)
+  name := cabi.string_into(storage[..], path)
   if !name.ok {
     return OpenResult{ kind: errors.Kind.InvalidInput }
   }
@@ -38,12 +37,11 @@ pub fn symbol(handle: Handle, name: []const u8) SymbolResult {
   if handle == nil {
     return SymbolResult{ kind: errors.Kind.InvalidState }
   }
-  storage: [4096]u8 = []
+  storage: [4096 + mem.ArenaBufferOverhead]u8 = []
   if #len(name) >= #len(storage) {
     return SymbolResult{ kind: errors.Kind.InvalidInput }
   }
-  cstring_space2 := mem.arena_from_buffer(storage[..])
-  native_name := cabi.string_from_bytes(&cstring_space2, name)
+  native_name := cabi.string_into(storage[..], name)
   if !native_name.ok {
     return SymbolResult{ kind: errors.Kind.InvalidInput }
   }

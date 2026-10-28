@@ -96,14 +96,14 @@ with tempfile.TemporaryDirectory(prefix='dyn-window-desktop-') as directory:
     if sys.platform.startswith('linux') and os.environ.get('DISPLAY'):
         project = work / 'x11'
         project.mkdir()
-        (project / 'main.dyn').write_text(SOURCE)
+        (project / 'main.dyn').write_text(SOURCE, encoding='utf-8')
         subprocess.run([DYN, 'build', str(project), '--quiet', '--no-cache', '--output', str(project / 'program')], check=True, timeout=300)
         subprocess.run([str(project / 'program')], check=True, timeout=60)
         results.append('X11')
     if sys.platform.startswith('linux') and os.environ.get('WAYLAND_DISPLAY') and shutil.which('wayland-scanner'):
         project = work / 'wayland'
         project.mkdir()
-        (project / 'main.dyn').write_text(SOURCE.replace('use "vendor/window" window', 'use "vendor/window/wayland" window'))
+        (project / 'main.dyn').write_text(SOURCE.replace('use "vendor/window" window', 'use "vendor/window/wayland" window'), encoding='utf-8')
         bridge = project / 'libdyn_window.so'
         subprocess.run([sys.executable, str(ROOT / 'vendor/window/native/build.py'), '--output', str(bridge)], check=True, timeout=120)
         subprocess.run([DYN, 'build', str(project), '--quiet', '--no-cache', '--link', str(bridge), '--output', str(project / 'program')], check=True, timeout=300)
@@ -112,7 +112,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-window-desktop-') as directory:
     if sys.platform.startswith('linux') and shutil.which('zig') and shutil.which('wine') and os.environ.get('DISPLAY'):
         project = work / 'wine'
         project.mkdir()
-        (project / 'main.dyn').write_text(SOURCE)
+        (project / 'main.dyn').write_text(SOURCE, encoding='utf-8')
         bridge = project / 'dyn_window.dll'
         library = project / 'libdyn_window.dll.a'
         subprocess.run(['zig', 'cc', '-target', 'x86_64-windows-gnu', '-shared', str(ROOT / 'vendor/window/native/win32.c'), '-luser32', '-lgdi32', '-lopengl32','-limm32',
@@ -124,7 +124,12 @@ with tempfile.TemporaryDirectory(prefix='dyn-window-desktop-') as directory:
         # Native Cocoa or Win32 through the C bridge, on a real desktop host.
         project = work / 'native'
         project.mkdir()
-        (project / 'main.dyn').write_text(SOURCE)
+        (project / 'main.dyn').write_text(SOURCE, encoding='utf-8')
+        if sys.platform == 'win32' and os.environ.get('DYN_OPENGL_DLL'):
+            # Match the rendering/event fixtures on software-only Windows runners.
+            driver = Path(os.environ['DYN_OPENGL_DLL']).resolve()
+            shutil.copy2(driver, project / 'opengl32.dll')
+            shutil.copy2(driver.parent / 'libgallium_wgl.dll', project / 'libgallium_wgl.dll')
         bridge = project / ('libdyn_window.dylib' if sys.platform == 'darwin' else 'dyn_window.dll')
         subprocess.run([sys.executable, str(ROOT / 'vendor/window/native/build.py'), '--output', str(bridge)], check=True, timeout=180)
         library = bridge if sys.platform == 'darwin' else project / 'libdyn_window.dll.a'
@@ -135,12 +140,9 @@ with tempfile.TemporaryDirectory(prefix='dyn-window-desktop-') as directory:
     for target in ('aarch64-macos', 'x86_64-windows', 'aarch64-windows'):
         project = work / ('cross-' + target)
         project.mkdir()
-        (project / 'main.dyn').write_text(SOURCE)
+        (project / 'main.dyn').write_text(SOURCE, encoding='utf-8')
         subprocess.run([DYN, 'build', str(project), '--target', target, '--quiet', '--no-cache', '--emit-object', '--no-link', '--output', str(project / 'program')], check=True, timeout=300)
-if not results:
-    print('SKIP window desktop: no display backend available; cross-builds only')
-else:
-    COMPOSITION_C = r'''
+COMPOSITION_C = r'''
 #include "desktop_common.h"
 #include <assert.h>
 int main(void) {
@@ -159,7 +161,11 @@ int main(void) {
 if shutil.which('cc'):
     with tempfile.TemporaryDirectory(prefix='dyn-composition-') as directory:
         source = Path(directory) / 'composition.c'
-        source.write_text(COMPOSITION_C)
+        source.write_text(COMPOSITION_C, encoding='utf-8')
         subprocess.run(['cc', '-std=c11', '-Wall', '-Wextra', '-Werror', '-I' + str(ROOT / 'vendor/window/native'), str(source), '-o', str(Path(directory) / 'composition')], check=True, timeout=60)
         subprocess.run([str(Path(directory) / 'composition')], check=True, timeout=30)
-print('PASS window desktop: composition snapshots and text input placement, clipboard round trip, cursors, scale, wait and box_input on ' + ', '.join(results) + '; macOS and Windows ARM64 cross-build')
+    print('PASS portable composition snapshots without a display')
+if not results:
+    print('SKIP window desktop runtime: no display backend available; cross-builds passed')
+else:
+    print('PASS window desktop: composition snapshots and text input placement, clipboard round trip, cursors, scale, wait and box_input on ' + ', '.join(results) + '; macOS and Windows ARM64 cross-build')

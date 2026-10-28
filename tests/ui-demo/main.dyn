@@ -71,18 +71,18 @@ fn glyph(data: rawptr, codepoint: u32) software.Glyph {
   return software.Glyph{ pixels: coverage[..], width: 10, height: 14, stride: 10, advance: 12, y_offset: 2 }
 }
 fn main() {
-  frame := mem.Arena{}
-  output := mem.Arena{}
+  frame := mem.arena_create(0)
+  output := mem.arena_create(0)
   defer {
-    mem.arena_release(&output)
-    mem.arena_release(&frame)
+    mem.arena_release(output)
+    mem.arena_release(frame)
   }
   context := ui.Context{}
   viewport := ui.Rect{ width: 480, height: 240 }
   count: i32 = 2
   grid := true
   // One press/release pair demonstrates the same input path as a window host.
-  ui.begin(&context, &frame, ui.Input{ x: 80, y: 110, pressed: true, released: true }, viewport)
+  ui.begin(&context, frame, ui.Input{ x: 80, y: 110, pressed: true, released: true }, viewport)
   ui.rectangle(&context, viewport, ui.Color{ r: 16, g: 20, b: 28, a: 255 })
   ui.rectangle(&context, ui.Rect{ x: 16, y: 16, width: 448, height: 208 }, ui.Color{ r: 27, g: 33, b: 44, a: 255 })
   ui.label(&context, ui.Rect{ x: 32, y: 30, width: 416, height: 24 }, "PORTABLE UI", context.style.foreground)
@@ -102,13 +102,13 @@ fn main() {
   _ = fmt.write_i64(&label, #cast(i64, count))
   ui.label(&context, ui.Rect{ x: 32, y: 64, width: 416, height: 24 }, fmt.bytes(&label), context.style.accent)
   ui.end(&context)
-  pixels := mem.push_array(u8, &output, #cast(usize, 480 * 240 * 4))
+  pixels := mem.push_array(u8, output, #cast(usize, 480 * 240 * 4))
   surface := software.Surface{ pixels: pixels, width: 480, height: 240, stride: 480 * 4 }
   rendered := software.render(&surface, ui.first(&context), software.Font{ glyph: glyph, line_height: 20 })
   if !rendered.ok || count != 3 {
     #panic("UI demo render")
   }
-  encoded := png.encode(&output, pixels, 480, 240, 4)
+  encoded := png.encode(output, pixels, 480, 240, 4)
   if !encoded.ok || !fs.write_all("ui-demo.png", encoded.value).ok {
     #panic("UI demo output")
   }

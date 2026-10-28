@@ -74,36 +74,42 @@ pub struct ConditionWaitResult { status: ConditionWaitStatus, kind: errors.Kind,
 // permits spurious wakeups: always recheck the protected predicate. Mutex
 // reacquisition and scheduling may finish after the timeout has elapsed.
 pub fn condition_wait_timeout(value: *Condition, lock_value: *Mutex, timeout: i64) ConditionWaitResult {
-  if timeout < 0 { return ConditionWaitResult{kind:errors.Kind.InvalidInput} }
-  if timeout == 0 { return ConditionWaitResult{status:ConditionWaitStatus.TimedOut,ok:true} }
+  if timeout < 0 {
+    return ConditionWaitResult{kind:errors.Kind.InvalidInput}
+  }
+  if timeout == 0 {
+    return ConditionWaitResult{status:ConditionWaitStatus.TimedOut, ok:true}
+  }
   deadline := time.deadline_after(timeout)
-  if !deadline.ok { return ConditionWaitResult{kind:deadline.kind,error:deadline.error} }
+  if !deadline.ok {
+    return ConditionWaitResult{kind:deadline.kind, error:deadline.error}
+  }
   sequence := load_u32(&value.sequence)
   unlock(lock_value)
   result := ConditionWaitResult{}
   for {
     if load_u32(&value.sequence) != sequence {
-      result = ConditionWaitResult{status:ConditionWaitStatus.Signaled,ok:true}
+      result = ConditionWaitResult{status:ConditionWaitStatus.Signaled, ok:true}
       break
     }
     remaining := time.deadline_remaining(&deadline.value)
     if !remaining.ok {
-      result = ConditionWaitResult{kind:remaining.kind,error:remaining.error}
+      result = ConditionWaitResult{kind:remaining.kind, error:remaining.error}
       break
     }
     if remaining.value == 0 {
-      result = ConditionWaitResult{status:ConditionWaitStatus.TimedOut,ok:true}
+      result = ConditionWaitResult{status:ConditionWaitStatus.TimedOut, ok:true}
       break
     }
-    code := native_wait_timeout(&value.sequence,sequence,remaining.value)
+    code := native_wait_timeout(&value.sequence, sequence, remaining.value)
     if code == 0 {
-      result = ConditionWaitResult{status:ConditionWaitStatus.Signaled,ok:true}
+      result = ConditionWaitResult{status:ConditionWaitStatus.Signaled, ok:true}
       break
     }
     // Timeouts are checked against the same deadline, including finite native
     // timeout chunks on Windows. EINTR never restarts the original budget.
     if code != 1 && !native_wait_interrupted(code) {
-      result = ConditionWaitResult{kind:native_sync_error(code),error:code}
+      result = ConditionWaitResult{kind:native_sync_error(code), error:code}
       break
     }
   }

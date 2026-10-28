@@ -197,7 +197,7 @@ int main(void){
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-ime-native-') as directory:
     work=Path(directory)
-    common=work/'common.c';common.write_text(COMMON)
+    common=work/'common.c';common.write_text(COMMON, encoding='utf-8')
     cc=shlex.split(os.environ.get('CC','cc'))
     if not cc or not shutil.which(cc[0]): cc=[]
     if cc:
@@ -210,13 +210,13 @@ with tempfile.TemporaryDirectory(prefix='dyn-ime-native-') as directory:
         available = subprocess.run(['pkg-config','--exists','wayland-client','wayland-egl','wayland-cursor','xkbcommon','egl','wayland-protocols']).returncode == 0
         if available:
             subprocess.run([sys.executable,str(NATIVE/'build.py'),'--output',str(work/'libdyn_window.so')],check=True,timeout=120)
-            probe=work/'wayland-probe.c';probe.write_text(WAYLAND)
+            probe=work/'wayland-probe.c';probe.write_text(WAYLAND, encoding='utf-8')
             flags=shlex.split(subprocess.check_output(['pkg-config','--cflags','--libs','wayland-client','wayland-egl','wayland-cursor','xkbcommon','egl'],text=True))
             output=work/'wayland-probe'
             subprocess.run([*cc,'-std=c11','-D_GNU_SOURCE','-Wall','-Wextra','-Werror','-I'+str(NATIVE),'-I'+str(work),str(probe),str(work/'xdg-shell-protocol.c'),str(work/'text-input-unstable-v3-protocol.c'),*flags,'-o',str(output)],check=True,timeout=120)
             subprocess.run([str(output)],check=True,timeout=30)
     if sys.platform.startswith('linux') and shutil.which('zig'):
-        probe=work/'windows.c';probe.write_text(WINDOWS)
+        probe=work/'windows.c';probe.write_text(WINDOWS, encoding='utf-8')
         for target in ('x86_64-windows-gnu','aarch64-windows-gnu'):
             subprocess.run(['zig','cc','-target',target,'-std=c11','-Wall','-Wextra','-Werror','-I'+str(NATIVE),'-c',str(probe),'-o',str(work/(target+'.o'))],check=True,timeout=120)
         if shutil.which('wine') and os.environ.get('DISPLAY'):
@@ -224,7 +224,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-ime-native-') as directory:
             subprocess.run(['zig','cc','-target','x86_64-windows-gnu','-I'+str(NATIVE),str(probe),'-luser32','-lgdi32','-lopengl32','-limm32','-o',str(output)],check=True,timeout=180)
             subprocess.run(['wine',str(output)],check=True,timeout=60)
     if os.name=='nt' and cc:
-        probe=work/'windows.c';probe.write_text(WINDOWS);output=work/'windows.exe'
+        probe=work/'windows.c';probe.write_text(WINDOWS, encoding='utf-8');output=work/'windows.exe'
         subprocess.run([*cc,'-std=c11','-Wall','-Wextra','-Werror','-I'+str(NATIVE),str(probe),'-luser32','-lgdi32','-lopengl32','-limm32','-o',str(output)],check=True,timeout=180)
         subprocess.run([str(output)],check=True,timeout=60)
 print('PASS native IME payload and adapter contracts; native Cocoa runtime remains unqualified')

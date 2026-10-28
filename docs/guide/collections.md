@@ -14,7 +14,7 @@ fn main() {
   storage: [256]u8 = []
   arena := mem.arena_from_buffer(storage[..])
   text := builder.Builder{}
-  if builder.append_grow(&text, &arena, "hello") != builder.ErrorKind.None {
+  if builder.append_grow(&text, arena, "hello") != builder.ErrorKind.None {
     #panic("builder size")
   }
   _ = builder.bytes(&text)
@@ -78,9 +78,10 @@ fn spawn(level: *Level) {
 - `append` panics when something else was pushed on that arena after the list,
   which means the list does not own its arena. A list can also share an arena
   if it is built completely before anything else is pushed.
-- A zero `Arena{}` reserves address space lazily, so one arena per list is cheap
-  on 64-bit targets. On targets without virtual memory, give the arena a fixed
-  buffer with `mem.arena_from_buffer`.
+- Use `arena := mem.arena_create(0)` for an explicit default arena. One arena
+  per list reserves address space cheaply on 64-bit hosts. Lists can move when
+  they outgrow a block; reacquire views after append. Fixed-buffer arenas never
+  chain and require header space. Reset invalidates their allocations too.
 - Resetting the arena empties the list; set the slice back to empty as well.
 
 ## Chunk lists

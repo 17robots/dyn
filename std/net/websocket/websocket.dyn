@@ -185,9 +185,9 @@ fn ws_append(destination: []u8, offset: usize, source: []const u8) usize {
 
 // Computes RFC 6455 Sec-WebSocket-Accept into 28 caller-owned bytes.
 fn websocket_accept(destination: []u8, key: []const u8) []u8 {
-  decoded: [18]u8 = []
+  decoded: [18 + mem.ArenaBufferOverhead]u8 = []
   decoded_arena := mem.arena_from_buffer(decoded[..])
-  if #len(key) != 24 || #len(base64.decode(&decoded_arena, key).value) != 16 || #len(destination) < 28 {
+  if #len(key) != 24 || #len(base64.decode(decoded_arena, key).value) != 16 || #len(destination) < 28 {
     return destination[..0]
   }
   guid: []const u8 = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
@@ -217,8 +217,13 @@ fn websocket_accept(destination: []u8, key: []const u8) []u8 {
     digest[i * 4 + 3] = #cast(u8, state[i])
     i += 1
   }
-  encoded := mem.arena_from_buffer(destination)
-  return base64.encode(&encoded, digest[..])
+  encoding_storage: [28 + mem.ArenaBufferOverhead]u8 = []
+  encoded := mem.arena_from_buffer(encoding_storage[..])
+  text := base64.encode(encoded, digest[..])
+  for j in 0..#len(text) {
+    destination[j] = text[j]
+  }
+  return destination[..#len(text)]
 }
 
 // Validates the HTTP request-side RFC 6455 upgrade fields. Returned key borrows request.
@@ -234,11 +239,11 @@ fn websocket_validate_upgrade_request(request: []const u8) WebSocketUpgrade {
   connection_header := http.header(request, "Connection")
   version := http.header(request, "Sec-WebSocket-Version")
   key := http.header(request, "Sec-WebSocket-Key")
-  scratch: [18]u8 = []
+  scratch: [18 + mem.ArenaBufferOverhead]u8 = []
   scratch_arena := mem.arena_from_buffer(scratch[..])
   if !upgrade.ok || !connection_header.ok || !version.ok || !key.ok || !ws_equal_case(upgrade.value, "websocket") ||
     !ws_equal_case(connection_header.value, "Upgrade") || !ws_equal(version.value, "13") ||
-    #len(base64.decode(&scratch_arena, key.value).value) != 16 {
+    #len(base64.decode(scratch_arena, key.value).value) != 16 {
     return WebSocketUpgrade{ kind: errors.Kind.InvalidInput }
   }
   return WebSocketUpgrade{ key: key.value, ok: true }
