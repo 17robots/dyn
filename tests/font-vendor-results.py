@@ -154,7 +154,7 @@ fn main(){
 '''
 font=next((p for p in (Path('/usr/share/fonts/TTF/DejaVuSans.ttf'),Path('/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf')) if p.exists()),None)
 ft=ctypes.util.find_library('freetype');hb=ctypes.util.find_library('harfbuzz')
-if not font or not ft or not hb or not shutil.which('pkg-config'):
+if not font or not ft or not hb or not shutil.which('pkg-config') or subprocess.run(['pkg-config','--exists','freetype2','harfbuzz']).returncode:
     print('SKIP font vendor native oracle: FreeType/HarfBuzz development packages and DejaVu Sans required');raise SystemExit(0)
 with tempfile.TemporaryDirectory(prefix='dyn-font-vendors-') as directory:
     work=Path(directory);shutil.copy(font,work/'font.ttf')
