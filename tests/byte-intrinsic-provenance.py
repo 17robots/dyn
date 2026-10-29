@@ -43,8 +43,8 @@ def project(path, imported, expected=(1, 1)):
 ''')
 
 
-def build(project, output, env, flags=(), simd=True):
-    call([DYN, 'build', project, '--release', '--opt-level', '3', '--no-cache', '--quiet',
+def build(project, output, env, flags=(), simd=True, compiler=DYN):
+    call([compiler, 'build', project, '--release', '--opt-level', '3', '--no-cache', '--quiet',
           '--emit-object', '--output', output, *flags], env)
     call([output], env)
     asm = call(['objdump', '-dr', '-Mintel', str(output)+'.o'], env).stdout.decode()
@@ -74,12 +74,24 @@ with tempfile.TemporaryDirectory(prefix='dyn-byte-provenance-') as directory:
     shutil.copytree(SDK/'std/bytes', relocated/'std/bytes')
     moved_env = dict(env, DYN_SDK=str(relocated))
     build(trusted, work/'relocated-run', moved_env)
+    # Give fallback tests a fixed SDK layout, independent of whether DYN lives
+    # in build/, build/sanitize/ or an installed prefix. Copy the executable:
+    # a symlink would preserve its original executable-relative lookup path.
+    fallback = work/'fallback-sdk'
+    (fallback/'bin').mkdir(parents=True)
+    fallback_compiler = fallback/'bin/dyn'
+    shutil.copy2(DYN, fallback_compiler)
+    (fallback/'std').symlink_to(SDK/'std', target_is_directory=True)
+    for name in ('dynrt_release.o', 'dynrt_support.o'):
+        candidates = (DYN.parent/name, DYN.parent.parent/'lib/dyn'/name)
+        runtime = next(path for path in candidates if path.is_file())
+        (fallback/'bin'/name).symlink_to(runtime)
     # Explicit invalid SDKs and symlink escapes cannot authorize fallback code.
-    build(trusted, work/'missing-sdk-run', dict(env, DYN_SDK=str(work/'missing-sdk')), simd=False)
+    build(trusted, work/'missing-sdk-run', dict(env, DYN_SDK=str(work/'missing-sdk')), simd=False, compiler=fallback_compiler)
     escaped = work/'escaped-sdk'
     escaped.mkdir()
     (escaped/'std').symlink_to(SDK/'std', target_is_directory=True)
-    build(trusted, work/'escaped-sdk-run', dict(env, DYN_SDK=str(escaped)), simd=False)
+    build(trusted, work/'escaped-sdk-run', dict(env, DYN_SDK=str(escaped)), simd=False, compiler=fallback_compiler)
     # A project-local std directory cannot replace a canonical std import.
     (trusted/'std/bytes').mkdir(parents=True)
     (trusted/'std/bytes/bytes.dyn').write_text(LOOKALIKE)

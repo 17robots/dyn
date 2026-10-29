@@ -38,6 +38,10 @@ int main(void) {
  Host h={0};h.receive_fd=-1;h.clipboard_status=-4;h.serial=7;
  h.data_manager=(struct wl_data_device_manager*)1;h.data_device=(struct wl_data_device*)1;
  desktop_listen(&h.desktop,1);
+ h.serial=0;
+ assert(dyn_window_try_set_clipboard(&h,(const uint8_t*)"no input",8)==-4);
+ assert(!h.source&&!h.clipboard_owned&&!h.clipboard_owned_length);
+ h.serial=7;
  const uint32_t length=1200000;uint8_t *large=malloc(length);assert(large);memset(large,'a',length);
  assert(dyn_window_try_set_clipboard(&h,large,length)==1);
  assert(h.clipboard_owned_length==length);

@@ -6,7 +6,7 @@ full-u64 backend argument passing, NOT frontend acceptance of wide descriptors.
 Its independent C handler checks the pointer/length without reading fake-length
 buffers, then calls the real runtime with a valid short message. A returning
 handler verifies the mandatory post-call trap in both emitters.
-ROOT, BUILD, DYN, CC, CLANG, TMPDIR and DYN_QEMU_ARM/RISCV32 are overrides.
+ROOT, BUILD, DYN, CC, COMPILER_CC, CLANG, TMPDIR and DYN_QEMU_ARM/RISCV32 are overrides.
 Container prefixes must mount TMPDIR identically and bound their own guests.
 All subprocesses are bounded; all generated artifacts are temporary.
 """
@@ -22,7 +22,8 @@ ROOT = Path(os.environ.get('ROOT', Path(__file__).resolve().parents[1])).resolve
 BUILD = Path(os.environ.get('BUILD', ROOT/'build')).resolve()
 DYN = str(Path(os.environ.get('DYN', BUILD/'dyn-release')).resolve())
 CLANG = shlex.split(os.environ.get('CLANG', 'clang'))
-CC = shlex.split(os.environ.get('CC', 'cc'))
+# Adapter compilers link compiler objects; guest C helpers still use plain CC.
+COMPILER_CC = shlex.split(os.environ.get('COMPILER_CC', os.environ.get('CC', 'cc')))
 
 
 def module(name):
@@ -86,7 +87,7 @@ def controls():
 
 
 def build_adapter(work):
-    if not CC or not shutil.which(CC[0]) or not (BUILD/'obj/release/main.o').exists():
+    if not COMPILER_CC or not shutil.which(COMPILER_CC[0]) or not (BUILD/'obj/release/main.o').exists():
         print('SKIP panic backend adapter: requires CC and release compiler objects', flush=True)
         return None
     work.mkdir()
@@ -110,7 +111,7 @@ def build_adapter(work):
     (work/'compiler.c').write_text((ROOT/'src/backend/compiler.c').read_text())
     compiler = work/'dyn-wide'
     objects = sorted((BUILD/'obj/release').glob('*.o'))
-    subprocess.run([*CC, '-std=c11', '-D_POSIX_C_SOURCE=200809L', '-O1',
+    subprocess.run([*COMPILER_CC, '-std=c11', '-D_POSIX_C_SOURCE=200809L', '-O1',
         '-I'+str(ROOT/'src'), str(work/'compiler.c'),
         *[str(p) for p in objects if p.name != 'compiler.o'], '-pthread', '-o', str(compiler)],
         check=True, timeout=120)

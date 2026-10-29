@@ -21,6 +21,9 @@ the compiler, SDK, native adapters and editor integrations together.
   different aliases for one dependency no longer produce cross-file vet findings.
   Conflicting aliases and same-file duplicate diagnostics remain. Import path
   resolution is reused across repeated declarations.
+- Reduced compiler allocations and repeated import work; parallelized frontend
+  and backend passes. The language server reuses unchanged rewritten sources
+  across edits. Compile-cost budgets now guard allocations and peak memory.
 - Added fallible `mem.arena_try_create`, `arena_try_create_bounded` and
   `arena_try_push_uninit` using pointer handles. Fallible pushes and extension
   report Windows commitment failure without publishing a partial allocation.

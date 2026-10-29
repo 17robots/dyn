@@ -32,7 +32,7 @@ sanitize-test:
     # Only the compiler is instrumented: C helpers the tests build for Dyn
     # programs use the plain compiler, so they do not pull in the ASan runtime.
     BUILD="{{COMPILER_DIR}}/build/sanitize" CC="${CC:-cc} -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer" python3 tools/build.py all
-    BUILD="{{COMPILER_DIR}}/build/sanitize" DYN="{{COMPILER_DIR}}/build/sanitize/dyn-release" python3 tests/run.py
+    BUILD="{{COMPILER_DIR}}/build/sanitize" DYN="{{COMPILER_DIR}}/build/sanitize/dyn-release" COMPILER_CC="${CC:-cc} -fsanitize=address,undefined -fno-sanitize-recover=all -fno-omit-frame-pointer" python3 tests/run.py
 
 # Qualification of generated ABI bindings and the Tree-sitter provider binding
 # (needs libtree-sitter; fetches the grammar it parses with).

@@ -43,7 +43,7 @@ fn main() {
   quiet := window.box_input(&host)
   check(#len(quiet.text) == 0 && !quiet.paste, "no input yet")
   window.listen_events(&host, true)
-  window.set_clipboard(&host, "clip ✓ text")
+  check(window.try_set_clipboard(&host, "clip ✓ text").ok, "clipboard publication")
   window.request_paste(&host)
   got := false
   for i in 0..300 {
@@ -103,12 +103,23 @@ with tempfile.TemporaryDirectory(prefix='dyn-window-desktop-') as directory:
     if sys.platform.startswith('linux') and os.environ.get('WAYLAND_DISPLAY') and shutil.which('wayland-scanner'):
         project = work / 'wayland'
         project.mkdir()
-        (project / 'main.dyn').write_text(SOURCE.replace('use "vendor/window" window', 'use "vendor/window/wayland" window'), encoding='utf-8')
+        # A Wayland selection requires a real input serial. Supply input only
+        # inside the private compositor, never through the user's desktop.
+        source = SOURCE.replace('use "vendor/window" window', 'use "vendor/window/wayland" window')
+        source = source.replace('  _ = window.poll(&host)', '  check(window.swap(&host).ok, "map window")\n  _ = window.poll(&host)', 1)
+        source = source.replace(
+            '  check(window.try_set_clipboard(&host, "clip ✓ text").ok, "clipboard publication")',
+            '  for i in 0..300 {\n    if window.try_set_clipboard(&host, "clip ✓ text").ok { break }\n    _ = window.poll(&host)\n    window.wait(&host, 10)\n  }\n  check(window.try_set_clipboard(&host, "clip ✓ text").ok, "clipboard publication after input")')
+        (project / 'main.dyn').write_text(source, encoding='utf-8')
         bridge = project / 'libdyn_window.so'
         subprocess.run([sys.executable, str(ROOT / 'vendor/window/native/build.py'), '--output', str(bridge)], check=True, timeout=120)
         subprocess.run([DYN, 'build', str(project), '--quiet', '--no-cache', '--link', str(bridge), '--output', str(project / 'program')], check=True, timeout=300)
-        subprocess.run([str(project / 'program')], check=True, timeout=60)
-        results.append('Wayland')
+        if shutil.which('niri') and os.environ.get('XDG_RUNTIME_DIR'):
+            subprocess.run([sys.executable, str(ROOT / 'tests/window-clipboard-wayland-live.py'),
+                            '--run', str(project / 'program')], check=True, timeout=180)
+            results.append('Wayland (isolated input)')
+        else:
+            print('SKIP live Wayland clipboard: isolated niri input requires niri and XDG_RUNTIME_DIR; cross-build passed')
     if sys.platform.startswith('linux') and shutil.which('zig') and shutil.which('wine') and os.environ.get('DISPLAY'):
         project = work / 'wine'
         project.mkdir()
