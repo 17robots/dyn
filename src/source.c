@@ -498,43 +498,42 @@ int dyn_sources_merge(const DynSources *sources, const char *module_name,
   }
   return 0;
 }
+/* Original offset of local inside the first span containing it, if any.
+   Spans ascend and meet only at their ends. */
+static bool source_span_offset(const DynSourceSpan *spans, size_t count, size_t local, size_t *offset) {
+  size_t lo = 0, hi = count;
+  while (lo < hi) {
+    size_t mid = lo + (hi - lo) / 2;
+    if (spans[mid].generated_end < local) lo = mid + 1; else hi = mid;
+  }
+  if (lo == count || local < spans[lo].generated_start) return false;
+  DynSourceSpan p = spans[lo];
+  size_t gn = p.generated_end - p.generated_start, on = p.original_end - p.original_start;
+  *offset = p.original_start + (gn ? (local - p.generated_start) * on / gn : 0);
+  return true;
+}
 void dyn_source_position(const DynSource *s, size_t byte, const char **path,
                          const char **original, size_t *original_length, size_t *original_offset) {
   const char *text = s->original_text ? s->original_text : s->text;
   size_t length = s->original_text ? s->original_length : s->length,
          offset = byte;
   *path = s->path;
-  for (size_t i = 0; i < s->map_count; ++i)
-    if (byte >= s->maps[i].start && byte <= s->maps[i].end) {
-      const DynSourceMap *m = &s->maps[i];
-      size_t local = byte - m->start;
-      *path = m->path;
-      text = m->original_text;
-      length = m->original_length;
-      offset = local;
-      for (size_t j = 0; j < m->span_count; ++j)
-        if (local >= m->spans[j].generated_start &&
-            local <= m->spans[j].generated_end) {
-          DynSourceSpan p = m->spans[j];
-          size_t gn = p.generated_end - p.generated_start,
-                 on = p.original_end - p.original_start;
-          offset = p.original_start +
-                   (gn ? (local - p.generated_start) * on / gn : 0);
-          break;
-        }
-      break;
-    }
-  if (!s->map_count && s->span_count)
-    for (size_t j = 0; j < s->span_count; ++j)
-      if (byte >= s->spans[j].generated_start &&
-          byte <= s->spans[j].generated_end) {
-        DynSourceSpan p = s->spans[j];
-        size_t gn = p.generated_end - p.generated_start,
-               on = p.original_end - p.original_start;
-        offset =
-            p.original_start + (gn ? (byte - p.generated_start) * on / gn : 0);
-        break;
-      }
+  /* Maps ascend and meet only at their ends: the first with end >= byte is
+     the only candidate. */
+  size_t lo = 0, hi = s->map_count;
+  while (lo < hi) {
+    size_t mid = lo + (hi - lo) / 2;
+    if (s->maps[mid].end < byte) lo = mid + 1; else hi = mid;
+  }
+  if (lo < s->map_count && byte >= s->maps[lo].start) {
+    const DynSourceMap *m = &s->maps[lo];
+    *path = m->path;
+    text = m->original_text;
+    length = m->original_length;
+    offset = byte - m->start;
+    source_span_offset(m->spans, m->span_count, byte - m->start, &offset);
+  }
+  if (!s->map_count && s->span_count) source_span_offset(s->spans, s->span_count, byte, &offset);
   *original = text; *original_length = length; *original_offset = offset;
 }
 void dyn_source_location(const DynSource *s, size_t byte, const char **path,
@@ -544,14 +543,15 @@ void dyn_source_location(const DynSource *s, size_t byte, const char **path,
   dyn_source_position(s, byte, path, &text, &length, &offset);
   if (offset > length)
     offset = length;
-  *line = 1;
-  *column = 1;
-  for (size_t i = 0; i < offset; ++i)
-    if (text[i] == '\n') {
-      ++*line;
-      *column = 1;
-    } else
-      ++*column;
+  /* Columns count bytes after the last newline before offset. */
+  unsigned lines = 1;
+  const char *start = text, *end = text + offset, *newline;
+  while (start < end && (newline = memchr(start, '\n', (size_t)(end - start)))) {
+    ++lines;
+    start = newline + 1;
+  }
+  *line = lines;
+  *column = (unsigned)(end - start) + 1;
 }
 void dyn_source_free(DynSource *s) {
   dyn_source_discard_syntax(s);

@@ -771,29 +771,31 @@ static bool compact_block(CompactNode block, const DynSource *s, DynAstProgram *
     return true;
   }
   uint32_t n = compact_count(block);
-  uint32_t *ids = malloc(n * sizeof(*ids));
+  /* Most blocks are short; their statement ids fit on the stack. */
+  uint32_t local[32];
+  uint32_t *ids = n <= 32 ? local : malloc(n * sizeof(*ids));
   if (n && !ids) {
     a->allocation_failed = true;
     compact_diagnostic(block, s, errors, "out of memory");
     return false;
   }
   for (CompactNode c = compact_first(block); !compact_null(c); c = compact_next(c)) {
-    if (!dyn_work_step(&s->context, 1)) { free(ids); *count = 0; return false; }
+    if (!dyn_work_step(&s->context, 1)) { if (ids != local) free(ids); *count = 0; return false; }
     uint32_t id = compact_stmt(c, s, a, errors, loop_depth);
-    if (id == UINT32_MAX) { free(ids); *count = 0; return false; }
+    if (id == UINT32_MAX) { if (ids != local) free(ids); *count = 0; return false; }
     ids[(*count)++] = id;
   }
   *start = (uint32_t)a->child_count;
   for (uint32_t i = 0; i < *count; ++i) {
     if (!reserve_child(a)) {
-      free(ids);
+      if (ids != local) free(ids);
       *count = 0;
       compact_diagnostic(block, s, errors, "out of memory");
       return false;
     }
     a->children[a->child_count++] = ids[i];
   }
-  free(ids);
+  if (ids != local) free(ids);
   return true;
 }
 /* Preserve the old reader's treatment of extras in the few raw-child scans

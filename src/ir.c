@@ -163,15 +163,16 @@ static bool allocate(void **out, size_t count, size_t size) {
   return *out != NULL;
 }
 
-static char *copy_span(DynSpan span, const DynSource *source) {
+/* Copies a name into the program's name pool at *cursor. */
+static char *copy_span(DynSpan span, const DynSource *source, char **cursor) {
   size_t n = span.end_byte - span.start_byte;
-  char *text = malloc(n + 1);
-  if (!text)
-    return NULL;
+  char *text = *cursor;
   memcpy(text, source->text + span.start_byte, n);
   text[n] = 0;
+  *cursor += n + 1;
   return text;
 }
+static size_t span_bytes(DynSpan span) { return span.end_byte - span.start_byte + 1; }
 
 static bool valid_expr_id(const DynIrProgram *ir, DynExprId id) {
   return id == DYN_NO_EXPR || id < ir->expression_count;
@@ -422,6 +423,20 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
     dyn_ir_free(ir);
     return false;
   }
+  /* One pool holds every declaration and local name. */
+  size_t name_bytes = 1;
+  for (size_t i = 0; i < a->field_count; ++i) name_bytes += span_bytes(a->fields[i].name);
+  for (size_t i = 0; i < a->struct_count; ++i) name_bytes += span_bytes(a->structs[i].name);
+  for (size_t i = 0; i < a->enum_count; ++i) name_bytes += span_bytes(a->enums[i].name);
+  for (size_t i = 0; i < a->variant_count; ++i) name_bytes += span_bytes(a->variants[i].name);
+  for (size_t i = 0; i < a->param_count; ++i) name_bytes += span_bytes(a->params[i].name);
+  for (size_t i = 0; i < a->local_count; ++i) name_bytes += span_bytes(a->locals[i].name);
+  ir->names = malloc(name_bytes);
+  if (!ir->names) {
+    dyn_ir_free(ir);
+    return false;
+  }
+  char *cursor = ir->names;
   for (size_t i = 0; i < a->expression_count; ++i)
     ir->expressions[i] = (DynIrExpr){
         a->expressions[i].kind,       lower_type(a, a->expressions[i].type),
@@ -438,15 +453,11 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
     }
   for (size_t i = 0; i < a->item_count; ++i) ir->items[i] = (DynIrItem){a->items[i].expression, a->items[i].field_index};
   for (size_t i = 0; i < a->field_count; ++i) {
-    ir->fields[i] = (DynIrField){.name = copy_span(a->fields[i].name, source), .type = lower_type(a, a->fields[i].type), .default_expression = a->fields[i].default_expression};
-    if (!ir->fields[i].name) {
-      dyn_ir_free(ir);
-      return false;
-    }
+    ir->fields[i] = (DynIrField){.name = copy_span(a->fields[i].name, source, &cursor), .type = lower_type(a, a->fields[i].type), .default_expression = a->fields[i].default_expression};
   }
   for (size_t i = 0; i < a->struct_count; ++i) {
     ir->structs[i] =
-        (DynIrStruct){.name = copy_span(a->structs[i].name, source),
+        (DynIrStruct){.name = copy_span(a->structs[i].name, source, &cursor),
                       .span = a->structs[i].span,
                       .packed = a->structs[i].packed,
                       .is_public = a->structs[i].is_public,
@@ -455,14 +466,10 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
                       .field_count = a->structs[i].field_count,
                       .size = a->structs[i].size,
                       .alignment = a->structs[i].alignment};
-    if (!ir->structs[i].name) {
-      dyn_ir_free(ir);
-      return false;
-    }
   }
   for (size_t i = 0; i < a->enum_count; ++i) {
     ir->enums[i] =
-        (DynIrEnum){.name = copy_span(a->enums[i].name, source),
+        (DynIrEnum){.name = copy_span(a->enums[i].name, source, &cursor),
                     .span = a->enums[i].span,
                     .tag_type = a->enums[i].tag_type,
                     .variant_start = a->enums[i].variant_start,
@@ -474,24 +481,12 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
                     .has_payload = a->enums[i].has_payload,
                     .is_public = a->enums[i].is_public,
                     .module_owner = a->enums[i].module_owner};
-    if (!ir->enums[i].name) {
-      dyn_ir_free(ir);
-      return false;
-    }
   }
   for (size_t i = 0; i < a->variant_count; ++i) {
-    ir->variants[i] = (DynIrVariant){ .name = copy_span(a->variants[i].name, source), .payload_type = lower_type(a, a->variants[i].payload_type), .tag = a->variants[i].tag};
-    if (!ir->variants[i].name) {
-      dyn_ir_free(ir);
-      return false;
-    }
+    ir->variants[i] = (DynIrVariant){ .name = copy_span(a->variants[i].name, source, &cursor), .payload_type = lower_type(a, a->variants[i].payload_type), .tag = a->variants[i].tag};
   }
   for (size_t i = 0; i < a->param_count; ++i) {
-    ir->params[i] = (DynIrParam){.name = copy_span(a->params[i].name, source), .type = lower_type(a, a->params[i].type), .local_id = a->params[i].local_id};
-    if (!ir->params[i].name) {
-      dyn_ir_free(ir);
-      return false;
-    }
+    ir->params[i] = (DynIrParam){.name = copy_span(a->params[i].name, source, &cursor), .type = lower_type(a, a->params[i].type), .local_id = a->params[i].local_id};
   }
   /* Function locations share line tables instead of rescanning every prefix.
      The index stays with the program for later passes. If indexing runs out
@@ -624,11 +619,7 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
     if (a->strings[i].length) memcpy(ir->strings[i].data, a->strings[i].data, a->strings[i].length);
   }
   for (size_t i = 0; i < a->local_count; ++i) {
-    ir->locals[i] = (DynIrLocal){.name = copy_span(a->locals[i].name, source), .type = lower_type(a, a->locals[i].type)};
-    if (!ir->locals[i].name) {
-      dyn_ir_free(ir);
-      return false;
-    }
+    ir->locals[i] = (DynIrLocal){.name = copy_span(a->locals[i].name, source, &cursor), .type = lower_type(a, a->locals[i].type)};
   }
   for (size_t i = 0; i < a->statement_count; ++i)
     ir->statements[i] = (DynIrStmt){a->statements[i].kind,
@@ -746,12 +737,7 @@ void dyn_ir_free(DynIrProgram *ir) {
   for (size_t i = 0; ir->functions && i < ir->function_count; ++i) free(ir->functions[i].link_name);
   for (size_t i = 0; ir->globals && i < ir->global_count; ++i) free(ir->globals[i].name);
   for (size_t i = 0; ir->globals && i < ir->global_count; ++i) free(ir->globals[i].link_name);
-  for (size_t i = 0; ir->params && i < ir->param_count; ++i) free(ir->params[i].name);
-  for (size_t i = 0; ir->locals && i < ir->local_count; ++i) free(ir->locals[i].name);
-  for (size_t i = 0; ir->fields && i < ir->field_count; ++i) free(ir->fields[i].name);
-  for (size_t i = 0; ir->structs && i < ir->struct_count; ++i) free(ir->structs[i].name);
-  for (size_t i = 0; ir->enums && i < ir->enum_count; ++i) free(ir->enums[i].name);
-  for (size_t i = 0; ir->variants && i < ir->variant_count; ++i) free(ir->variants[i].name);
+  free(ir->names);
   free(ir->expressions);
   free(ir->items);
   free(ir->fields);

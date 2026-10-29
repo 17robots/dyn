@@ -150,6 +150,9 @@ typedef struct {
      literal_uses lists their IR string indexes in encounter order. */
   bool defer_literals;
   uint32_t *literal_uses; uint32_t literal_use_count, literal_use_capacity;
+  /* Storage of block value and predecessor lists and call argument lists,
+     released together by ssa_free: a function has thousands of short lists. */
+  struct SsaChunk *chunks;
 } Ssa;
 
 /* Call argument locations; see ssa_argument. */
@@ -168,8 +171,45 @@ static void *ssa_grow(void *items, uint32_t *capacity, uint32_t need, size_t siz
   *capacity = next;
   return grown;
 }
+typedef struct SsaChunk {
+  struct SsaChunk *next;
+  uint32_t used, size;
+  uint32_t words[];
+} SsaChunk;
+/* Room for count 32-bit words in the list arena. */
+static uint32_t *ssa_words(Ssa *s, uint32_t count) {
+  SsaChunk *chunk = s->chunks;
+  if (!chunk || chunk->size - chunk->used < count) {
+    /* Small functions keep small chunks; each new chunk doubles up to 64 KiB. */
+    uint32_t size = chunk ? (chunk->size < 16384 ? 2 * chunk->size : 16384) : 1024;
+    if (size < count) size = count;
+    chunk = malloc(sizeof(SsaChunk) + (size_t)size * sizeof(uint32_t));
+    if (!chunk) { s->failed = true; return NULL; }
+    chunk->next = s->chunks;
+    chunk->used = 0;
+    chunk->size = size;
+    s->chunks = chunk;
+  }
+  uint32_t *words = chunk->words + chunk->used;
+  chunk->used += count;
+  return words;
+}
+/* Grows an arena list; the old storage stays in the arena until ssa_free. */
+static void *ssa_grow_words(Ssa *s, void *items, uint32_t *capacity, uint32_t count, uint32_t need) {
+  if (need <= *capacity) return items;
+  uint32_t next = *capacity ? *capacity : 8;
+  while (next < need) {
+    if (next > UINT32_MAX / 4) { s->failed = true; return items; }
+    next *= 2;
+  }
+  uint32_t *grown = ssa_words(s, next);
+  if (!grown) return items;
+  if (count) memcpy(grown, items, (size_t)count * sizeof(uint32_t));
+  *capacity = next;
+  return grown;
+}
 static void ssa_push(Ssa *s, SsaList *list, uint32_t item) {
-  list->items = ssa_grow(list->items, &list->capacity, list->count + 1, sizeof(uint32_t), &s->failed);
+  list->items = ssa_grow_words(s, list->items, &list->capacity, list->count, list->count + 1);
   if (!s->failed) list->items[list->count++] = item;
 }
 static uint32_t ssa_block(Ssa *s) {
@@ -341,7 +381,11 @@ static void ssa_write(Ssa *s, uint32_t variable, int32_t value) {
   if (s->current != UINT32_MAX) ssa_define(s, variable, s->current, value);
 }
 static void ssa_free(Ssa *s) {
-  for (uint32_t i = 0; i < s->block_count; ++i) { free(s->blocks[i].values.items); free(s->blocks[i].preds.items); }
+  while (s->chunks) {
+    SsaChunk *next = s->chunks->next;
+    free(s->chunks);
+    s->chunks = next;
+  }
   free(s->values); free(s->blocks); free(s->lists); free(s->defs); free(s->pending);
   free(s->address_exposed); free(s->memory_local); free(s->local_offset); free(s->alias); free(s->captures); free(s->regions);
 }
@@ -1042,7 +1086,7 @@ static void ssa_store_bytes(Ssa *s, int32_t address, uint32_t offset, uint32_t s
    retains the common {value, SSA_TARGET, 0} encoding. */
 typedef struct { int32_t *items; uint32_t count, capacity; } SsaArguments;
 static void ssa_argument(Ssa *s, SsaArguments *list, int32_t value, int32_t location, int32_t bytes) {
-  list->items = ssa_grow(list->items, &list->capacity, list->count + 3, sizeof(int32_t), &s->failed);
+  list->items = ssa_grow_words(s, list->items, &list->capacity, list->count, list->count + 3);
   if (s->failed) return;
   list->items[list->count++] = value; list->items[list->count++] = location; list->items[list->count++] = bytes;
 }
@@ -1450,7 +1494,7 @@ static int32_t ssa_call(Ssa *s, const DynIrExpr *e, int32_t *second, unsigned de
     }
     ssa_pass(s, &list, type, value, length, parts, count, &stack);
   }
-  if (s->unsupported || s->failed) { free(list.items); return 0; }
+  if (s->unsupported || s->failed) return 0;
   if (indirect) ssa_argument(s, &list, target, SSA_TARGET, 0);
   int32_t call = ssa_emit(s, SO_CALL, SC_NONE, -1, -1, -1, indirect ? 0 : ctx->function_symbols[e->integer], indirect ? 2 : 0);
   if (!s->failed) {
@@ -1463,7 +1507,6 @@ static int32_t ssa_call(Ssa *s, const DynIrExpr *e, int32_t *second, unsigned de
       s->values[call].abi_group_count = group_count;
     }
   }
-  free(list.items);
   if (stack > s->outgoing) s->outgoing = stack;
   s->calls = true;
   if (ssa_cleanup(s) && !s->failed) {
@@ -2793,14 +2836,14 @@ static uint32_t ssa_successor(const Ssa *s, const SsaBlock *b, uint32_t i) {
 }
 static uint32_t *ssa_order(Ssa *s, uint32_t *count) {
   uint32_t *order = malloc((s->block_count + 1) * sizeof(uint32_t));
-  uint32_t *stack = malloc((s->block_count + 1) * 2 * sizeof(uint32_t));
+  /* The DFS stack (two words per entry) and the postorder share one block. */
+  uint32_t *stack = malloc((s->block_count + 1) * 3 * sizeof(uint32_t));
   if (!order || !stack) { free(order); free(stack); s->failed = true; return NULL; }
   for (uint32_t i = 0; i < s->block_count; ++i) { s->blocks[i].reachable = false; s->blocks[i].order = UINT32_MAX; }
   uint32_t top = 0, n = 0;
   stack[top++] = 0; stack[top++] = 0;
   s->blocks[0].reachable = true;
-  uint32_t *post = malloc((s->block_count + 1) * sizeof(uint32_t)), posts = 0;
-  if (!post) { free(order); free(stack); s->failed = true; return NULL; }
+  uint32_t *post = stack + 2 * (s->block_count + 1), posts = 0;
   while (top) {
     uint32_t b = stack[top - 2], next = stack[top - 1];
     SsaBlock *block = &s->blocks[b];
@@ -2823,7 +2866,7 @@ static uint32_t *ssa_order(Ssa *s, uint32_t *count) {
     top -= 2;
   }
   for (uint32_t i = 0; i < posts; ++i) { order[n] = post[posts - 1 - i]; s->blocks[order[n]].order = n; ++n; }
-  free(post); free(stack);
+  free(stack);
   /* Remove unreachable predecessors together with their phi operands. */
   for (uint32_t i = 0; i < n; ++i) {
     SsaBlock *block = &s->blocks[order[i]];
@@ -3268,11 +3311,12 @@ static void ssa_dominator_numbers(Ssa *s, const uint32_t *order, uint32_t n, uin
 static bool ssa_cse(Ssa *s, const uint32_t *order, uint32_t n) {
   uint32_t capacity = 64;
   while (capacity < 2 * s->value_count) capacity *= 2;
-  int32_t *table = malloc(capacity * sizeof(int32_t));
+  size_t blocks = s->block_count ? s->block_count : 1;
+  /* The hash table, then the dominator numbering. */
+  int32_t *table = malloc(capacity * sizeof(int32_t) + (n ? 5 * blocks * sizeof(uint32_t) : 0));
   if (!table) { s->failed = true; return false; }
   for (uint32_t i = 0; i < capacity; ++i) table[i] = -1;
-  size_t blocks = s->block_count ? s->block_count : 1;
-  uint32_t *numbers = n ? malloc(5 * blocks * sizeof(uint32_t)) : NULL;
+  uint32_t *numbers = n ? (uint32_t *)(table + capacity) : NULL;
   uint32_t *enter = numbers, *leave = numbers ? numbers + blocks : NULL;
   if (numbers) ssa_dominator_numbers(s, order, n, enter, leave, numbers + 2 * blocks, numbers + 3 * blocks, numbers + 4 * blocks);
   bool changed = false;
@@ -3308,7 +3352,7 @@ static bool ssa_cse(Ssa *s, const uint32_t *order, uint32_t n) {
     }
     block->values.count = kept;
   }
-  free(table); free(numbers);
+  free(table);
   return changed;
 }
 /* ---- Frame memory forwarding ----
@@ -3516,13 +3560,14 @@ static void ssa_disjoint_copies(Ssa *s, const uint32_t *order, uint32_t n, const
 static bool ssa_forward(Ssa *s, const uint32_t *order, uint32_t n) {
   uint32_t regions = s->region_count;
   if (!regions) return false;
-  uint8_t *state = malloc(regions);
-  int32_t *owner = malloc((size_t)regions * SSA_TRACKED * sizeof(int32_t));
-  uint32_t *touched = malloc(regions * sizeof(uint32_t)), touched_count = 0;
+  /* One block: owner, saved, touched, writer, then state. */
+  int32_t *owner = malloc((size_t)regions * (2 * SSA_TRACKED * sizeof(int32_t) + 2 * sizeof(uint32_t) + 1));
+  int32_t *saved = owner ? owner + (size_t)regions * SSA_TRACKED : NULL;
+  uint32_t *touched = owner ? (uint32_t *)(saved + (size_t)regions * SSA_TRACKED) : NULL, touched_count = 0;
   /* A region written in one block only: what that block leaves holds
      wherever the block dominates. */
-  uint32_t *writer = malloc(regions * sizeof(uint32_t));
-  int32_t *saved = malloc((size_t)regions * SSA_TRACKED * sizeof(int32_t));
+  uint32_t *writer = touched ? touched + regions : NULL;
+  uint8_t *state = writer ? (uint8_t *)(writer + regions) : NULL;
   SsaKnown *known = NULL;
   uint32_t known_count = 0, known_capacity = 0;
   bool changed = false;
@@ -3657,7 +3702,7 @@ static bool ssa_forward(Ssa *s, const uint32_t *order, uint32_t n) {
   }
   ssa_disjoint_copies(s, order, n, state);
 done:
-  free(state); free(owner); free(touched); free(writer); free(saved); free(known);
+  free(owner); free(known);
   return changed;
 }
 /* Unsigned bounds of a value where `block` executes: arithmetic over
@@ -3739,18 +3784,17 @@ static uint32_t ssa_fact_blocks(Ssa *s, int32_t id, uint32_t block, uint32_t out
    numbers the dominator tree so dominance is an interval test. */
 static bool ssa_fact_index(Ssa *s, const uint32_t *order, uint32_t n) {
   uint32_t values = s->value_count, blocks = s->block_count ? s->block_count : 1;
-  s->dom_enter = malloc(blocks * sizeof(uint32_t));
-  s->dom_leave = malloc(blocks * sizeof(uint32_t));
-  uint32_t *child = malloc(blocks * sizeof(uint32_t)), *sibling = malloc(blocks * sizeof(uint32_t));
-  uint32_t *stack = malloc(blocks * sizeof(uint32_t));
+  /* dom_enter owns one block: the intervals, then the numbering's scratch. */
+  s->dom_enter = malloc(5 * (size_t)blocks * sizeof(uint32_t));
+  s->dom_leave = s->dom_enter ? s->dom_enter + blocks : NULL;
   s->fact_start = calloc((size_t)values + 2, sizeof(uint32_t));
-  if (!s->dom_enter || !s->dom_leave || !child || !sibling || !stack || !s->fact_start || !n) {
-    free(s->dom_enter); free(s->dom_leave); free(child); free(sibling); free(stack); free(s->fact_start);
+  if (!s->dom_enter || !s->fact_start || !n) {
+    free(s->dom_enter); free(s->fact_start);
     s->dom_enter = s->dom_leave = s->fact_start = NULL;
     return false;
   }
-  ssa_dominator_numbers(s, order, n, s->dom_enter, s->dom_leave, child, sibling, stack);
-  free(child); free(sibling); free(stack);
+  ssa_dominator_numbers(s, order, n, s->dom_enter, s->dom_leave, s->dom_enter + 2 * blocks,
+                        s->dom_enter + 3 * blocks, s->dom_enter + 4 * blocks);
   for (int pass = 0; pass < 2; ++pass) {
     for (uint32_t b = 0; b < s->block_count; ++b) {
       int32_t compare; bool holds; uint32_t next;
@@ -3768,7 +3812,7 @@ static bool ssa_fact_index(Ssa *s, const uint32_t *order, uint32_t n) {
       for (uint32_t v = 0; v < values; ++v) s->fact_start[v + 2] += s->fact_start[v + 1];
       s->fact_blocks = malloc(((size_t)s->fact_start[values + 1] + 1) * sizeof(uint32_t));
       if (!s->fact_blocks) {
-        free(s->fact_start); free(s->dom_enter); free(s->dom_leave);
+        free(s->fact_start); free(s->dom_enter);
         s->fact_start = s->dom_enter = s->dom_leave = NULL;
         return false;
       }
@@ -4147,7 +4191,7 @@ static bool ssa_prove(Ssa *s, const uint32_t *order, uint32_t n) {
   }
   stamp = s->range_stamp;
   s->range_memo = NULL;
-  free(s->fact_start); free(s->fact_blocks); free(s->dom_enter); free(s->dom_leave);
+  free(s->fact_start); free(s->fact_blocks); free(s->dom_enter);
   s->fact_start = s->fact_blocks = s->dom_enter = s->dom_leave = NULL; s->fact_value_count = 0;
   return changed;
 }
@@ -4702,14 +4746,18 @@ static bool ssa_jam_loop(Ssa *s, const uint32_t *order, uint32_t n, uint32_t ind
 }
 static bool ssa_jam(Ssa *s, const uint32_t *order, uint32_t n) {
   uint32_t *stamp = calloc(s->block_count, sizeof(uint32_t)), *work = malloc((s->block_count + 1) * sizeof(uint32_t));
-  uint8_t *depends = malloc(s->value_count + 1);
+  uint32_t depends_size = s->value_count + 1;
+  uint8_t *depends = malloc(depends_size);
   bool changed = false;
   if (!stamp || !work || !depends) { s->failed = true; goto done; }
   for (uint32_t i = 0; i < n && !s->failed; ++i) {
     if (s->value_count > 100000) break;
-    uint8_t *grown = realloc(depends, s->value_count + 1);
-    if (!grown) { s->failed = true; break; }
-    depends = grown;
+    if (depends_size < s->value_count + 1) {
+      uint8_t *grown = realloc(depends, s->value_count + 1);
+      if (!grown) { s->failed = true; break; }
+      depends = grown;
+      depends_size = s->value_count + 1;
+    }
     if (!ssa_jam_loop(s, order, n, i, stamp, i + 1, work, depends)) continue;
     changed = true;
     if (s->ctx->optimization_remarks) fprintf(stderr, "remark: %s: unrolled and jammed a loop nest by 2\n", s->f->name);

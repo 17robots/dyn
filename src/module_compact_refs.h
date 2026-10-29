@@ -1,5 +1,6 @@
 #ifndef DYN_MODULE_COMPACT_REFS_H
 #define DYN_MODULE_COMPACT_REFS_H
+#include "dyn_name_text.h"
 /* Concrete source-reference checks over immutable compact nodes. Module lookup
    and diagnostics share the production policy; recovery keeps its TS walker. */
 static uint32_t compact_ref_unwrap(const ExpSnapshotTree *tree, uint32_t node) {
@@ -8,10 +9,11 @@ static uint32_t compact_ref_unwrap(const ExpSnapshotTree *tree, uint32_t node) {
     node = tree->nodes[node].first;
   return node;
 }
-static char *compact_ref_text(const DynSource *s, const ExpSnapshotTree *tree, uint32_t id) {
+static char *compact_ref_text(DynNameText *t, const DynSource *s, const ExpSnapshotTree *tree, uint32_t id) {
+  t->text = NULL;
   if (id == UINT32_MAX) return NULL;
   const ExpNode *node = &tree->nodes[id];
-  return dyn_import_copy(s->text + node->start, node->end - node->start);
+  return dyn_name_text(t, s->text + node->start, node->end - node->start);
 }
 static bool compact_ref_value_type(const ExpSnapshotTree *tree, uint32_t id) {
   uint32_t parent = tree->nodes[id].parent;
@@ -31,25 +33,28 @@ static int validate_compact_ref(Resolver *r, const DynSource *s, const ExpSnapsh
     if (nodes[first].kind == EXP_FIELD) return 0;
     uint32_t base = compact_ref_unwrap(tree, first);
     if (base == UINT32_MAX || nodes[base].kind != EXP_NAME) return 0;
-    char *qualifier = compact_ref_text(s, tree, base),
-         *member = compact_ref_text(s, tree, nodes[first].next);
-    if (!qualifier || !member) { free(qualifier); free(member); return 1; }
+    DynNameText qualifier_text, member_text;
+    char *qualifier = compact_ref_text(&qualifier_text, s, tree, base),
+         *member = compact_ref_text(&member_text, s, tree, nodes[first].next);
+    if (!qualifier || !member) { dyn_name_text_free(&qualifier_text); dyn_name_text_free(&member_text); return 1; }
     if (alias_index(aliases, count, qualifier) < count &&
         !dyn_scope_local_at(locals, nodes[base].start, qualifier))
       errors = validate_member_at(r,node->start,node->end,s,aliases,targets,count,qualifier,member);
-    free(qualifier); free(member);
+    dyn_name_text_free(&qualifier_text); dyn_name_text_free(&member_text);
   } else if (node->kind == EXP_FIELD_TYPE || node->kind == EXP_STRUCT) {
     uint32_t names = nodes[first].kind == EXP_NAME ? 1 : 0;
     if (names && nodes[first].next != UINT32_MAX && nodes[nodes[first].next].kind == EXP_NAME) names = 2;
     bool value = node->kind == EXP_FIELD_TYPE && compact_ref_value_type(tree,id);
     if (names > 1) {
-      char *qualifier=compact_ref_text(s,tree,first), *member=compact_ref_text(s,tree,nodes[first].next);
-      if (!qualifier || !member) { free(qualifier); free(member); return 1; }
+      DynNameText qualifier_text, member_text;
+      char *qualifier=compact_ref_text(&qualifier_text,s,tree,first), *member=compact_ref_text(&member_text,s,tree,nodes[first].next);
+      if (!qualifier || !member) { dyn_name_text_free(&qualifier_text); dyn_name_text_free(&member_text); return 1; }
       if (!(value && dyn_scope_local_at(locals,node->start,qualifier)))
         errors = validate_member_at(r,node->start,node->end,s,aliases,targets,count,qualifier,member);
-      free(qualifier); free(member);
+      dyn_name_text_free(&qualifier_text); dyn_name_text_free(&member_text);
     } else if (names == 1) {
-      char *name=compact_ref_text(s,tree,first);
+      DynNameText name_text;
+      char *name=compact_ref_text(&name_text,s,tree,first);
       if (!name) return 1;
       bool pub=false;
       if (!decl_named(r,directory,name,&pub) &&
@@ -58,12 +63,13 @@ static int validate_compact_ref(Resolver *r, const DynSource *s, const ExpSnapsh
         snprintf(message,sizeof(message),"imported type '%s' must be module-qualified",name);
         dyn_diagnostic_source("error",s,node->start,node->end,message); ++errors;
       }
-      free(name);
+      dyn_name_text_free(&name_text);
     }
   } else if (node->kind == EXP_CALL) {
     uint32_t callee=compact_ref_unwrap(tree,first);
     if (callee==UINT32_MAX || nodes[callee].kind!=EXP_NAME) return 0;
-    char *name=compact_ref_text(s,tree,callee);
+    DynNameText name_text;
+    char *name=compact_ref_text(&name_text,s,tree,callee);
     if (!name) return 1;
     bool pub=false;
     if (!decl_named(r,directory,name,&pub) &&
@@ -72,7 +78,7 @@ static int validate_compact_ref(Resolver *r, const DynSource *s, const ExpSnapsh
       snprintf(message,sizeof(message),"imported function '%s' must be module-qualified",name);
       dyn_diagnostic_source("error",s,nodes[callee].start,nodes[callee].end,message); ++errors;
     }
-    free(name);
+    dyn_name_text_free(&name_text);
   }
   return errors;
 }

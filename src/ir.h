@@ -195,6 +195,9 @@ typedef struct DynIrProgram {
   /* Whole-program facts every code generator needs, computed once by dyn_codegen_prepare instead of once per module. Per local: whether it is assigned or address-taken, and the 1-based statement declaring it. */
   bool *unstable_locals;
   uint32_t *local_statements;
+  /* When set, holds the names of fields, structs, enums, variants, params and
+     locals, which then are not separate allocations. */
+  char *names;
 } DynIrProgram;
 bool dyn_ir_lower(const DynAstProgram *ast, const DynSource *source, DynIrProgram *ir);
 /* Checked structural lowering before optional range-proof optimization. */

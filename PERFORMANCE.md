@@ -1,5 +1,38 @@
 # Performance qualification
 
+## Allocations, editor latency and debug builds — 2026-10-29
+
+A DNA release build made 720,000 heap allocations; it now makes 212,000.
+Name lookups during import rewriting and reference checks copy names into
+inline buffers instead of the heap. SSA block, predecessor and call argument
+lists come from a per-function arena released at once. Passes take one block
+for all their scratch arrays. IR keeps every declaration and local name in
+one pool. Rewrite replacement texts come from a per-file arena. Short AST
+blocks collect statement ids on the stack.
+
+Editor analysis in `dyn lsp`, measured as the time from a one-character edit
+of DNA's main.dyn to its diagnostics, falls from a median of 192 ms to 53 ms:
+
+- The syntax cache held 64 entries and 8 MiB, fewer than one project's
+  sources, so least-recently-used eviction missed on every file of every
+  edit. It now holds 4096 entries and 128 MiB.
+- Rewritten imports patch their trees under a work budget too, charging about
+  what parsing would cost.
+- Line and column lookup counts newlines with `memchr`, and source maps and
+  edit spans are binary searched.
+
+Interleaved medians for DNA:
+
+| | Before | After |
+|---|---|---|
+| Release build | 140.5 ms, 126 MiB | 112.4 ms, 129 MiB |
+| Debug build | 118.5 ms, 105 MiB | 91.6 ms, 101 MiB |
+| `dyn check` | 67.0 ms, 59 MiB | 50.1 ms, 66 MiB |
+| Editor edit | 192 ms | 53 ms |
+
+Objects stay byte-identical on 46 project and target builds. The debug
+build's tree emitter, about 31 ms, remains serial.
+
 ## Parallel frontend — 2026-10-29
 
 Function bodies lower to the AST on up to four worker threads. Each worker

@@ -30,7 +30,8 @@ void dyn_syntax_cache_clear(DynSyntaxCache *cache) {
 /* Snapshots are immutable; a hit shares one with an extra reference. */
 static void syntax_cache_store(DynSyntaxCache *cache, const DynSource *source,
                                ExpSnapshot *snapshot) {
-  const size_t limit = 8u * 1024u * 1024u;
+  const size_t limit = cache->byte_limit ? cache->byte_limit : DYN_SYNTAX_CACHE_BYTES;
+  const size_t entries = cache->entry_limit ? cache->entry_limit : DYN_SYNTAX_CACHE_ENTRIES;
   const ExpSnapshotTree *tree = exp_snapshot_tree(snapshot);
   size_t path_bytes = strlen(source->path) + 1;
   /* Copied text twice (entry and snapshot), nodes, errors and metadata. */
@@ -53,7 +54,7 @@ static void syntax_cache_store(DynSyntaxCache *cache, const DynSource *source,
   entry->length = source->length; entry->charge = charge;
   entry->snapshot = snapshot;
   while (cache->entries &&
-         (cache->count >= 64 || charge > limit - cache->bytes)) {
+         (cache->count >= entries || charge > limit - cache->bytes)) {
     DynSyntaxCacheEntry **last = &cache->entries;
     while ((*last)->next) last = &(*last)->next;
     syntax_cache_drop(cache, last);
