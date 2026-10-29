@@ -1,0 +1,71 @@
+use "std/fs" fs
+use "std/process" process
+
+// Zone files are small; a larger file is not a zone.
+const tzif_limit: usize = 1048576
+
+fn read_zone(arena: *mem.Arena, name: []const u8, path: []const u8) ZoneResult {
+  mark := mem.arena_mark(arena)
+  file := fs.read_all(arena, path, tzif_limit)
+  if !file.ok {
+    mem.arena_rewind(arena, mark)
+    return ZoneResult{ kind: file.kind, error: file.error }
+  }
+  parsed := parse_tzif(arena, name, file.value)
+  if !parsed.ok {
+    mem.arena_rewind(arena, mark)
+  }
+  return parsed
+}
+
+fn posix_load(arena: *mem.Arena, name: []const u8) ZoneResult {
+  mark := mem.arena_mark(arena)
+  path := mem.push_bytes_uninit(arena, #len(zoneinfo_root) + 1 + #len(name))
+  _ = mem.copy(path, zoneinfo_root)
+  path[#len(zoneinfo_root)] = '/'
+  _ = mem.copy(path[#len(zoneinfo_root) + 1..], name)
+  loaded := read_zone(arena, name, path)
+  if !loaded.ok {
+    mem.arena_rewind(arena, mark)
+  }
+  return loaded
+}
+
+// The zone name of /etc/localtime, from its symbolic link target when it is
+// one ("/usr/share/zoneinfo/Europe/Berlin" names "Europe/Berlin").
+fn local_name(arena: *mem.Arena) []const u8 {
+  storage: [4096]u8 = []
+  length := read_link("/etc/localtime\x00", storage[..])
+  if length > 0 {
+    target := storage[..#cast(usize, length)]
+    marker := "zoneinfo/"
+    at := bytes.find(target, marker)
+    if at != #len(target) {
+      return strings.clone(arena, target[at + #len(marker)..])
+    }
+  }
+  return "localtime"
+}
+
+fn posix_system(arena: *mem.Arena) ZoneResult {
+  variable := process.environment(arena, "TZ")
+  if variable.ok && variable.found && #len(variable.value) != 0 {
+    text := variable.value[..]
+    if text[0] == ':' {
+      text = text[1..]
+    }
+    if #len(text) != 0 && text[0] == '/' {
+      return read_zone(arena, text, text)
+    }
+    loaded := load(arena, text)
+    if loaded.ok {
+      return loaded
+    }
+    return parse_posix(arena, text)
+  }
+  loaded := read_zone(arena, local_name(arena), "/etc/localtime")
+  if !loaded.ok && loaded.kind == errors.Kind.NotFound {
+    return ZoneResult{ value: utc(), ok: true }
+  }
+  return loaded
+}

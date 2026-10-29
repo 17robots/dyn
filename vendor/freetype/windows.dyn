@@ -1,0 +1,3 @@
+#target(kernel: windows)
+pub type Long = i32
+pub type ULong = u32

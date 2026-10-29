@@ -1,4 +1,6 @@
 #target(pointer_bits: 64)
+use "std/errors" errors
+use "std/time" time
 
 pub struct Mutex { state: AtomicU32 }
 
@@ -57,10 +59,62 @@ pub fn condition_wait(value: *Condition, lock_value: *Mutex) {
   sequence := load_u32(&value.sequence)
   unlock(lock_value)
   result := native_wait(&value.sequence, sequence)
-  for result == -4 {
+  for native_wait_interrupted(result) {
     result = native_wait(&value.sequence, sequence)
   }
   lock(lock_value)
+}
+
+pub enum ConditionWaitStatus { Signaled, TimedOut }
+pub struct ConditionWaitResult { status: ConditionWaitStatus, kind: errors.Kind, error: isize, ok: bool }
+
+// Relative monotonic timeout in nanoseconds. The caller must hold lock_value.
+// Every return keeps/reacquires that mutex, including errors. Zero returns
+// TimedOut without unlocking; negative durations are InvalidInput. Signaled
+// permits spurious wakeups: always recheck the protected predicate. Mutex
+// reacquisition and scheduling may finish after the timeout has elapsed.
+pub fn condition_wait_timeout(value: *Condition, lock_value: *Mutex, timeout: i64) ConditionWaitResult {
+  if timeout < 0 {
+    return ConditionWaitResult{kind:errors.Kind.InvalidInput}
+  }
+  if timeout == 0 {
+    return ConditionWaitResult{status:ConditionWaitStatus.TimedOut, ok:true}
+  }
+  deadline := time.deadline_after(timeout)
+  if !deadline.ok {
+    return ConditionWaitResult{kind:deadline.kind, error:deadline.error}
+  }
+  sequence := load_u32(&value.sequence)
+  unlock(lock_value)
+  result := ConditionWaitResult{}
+  for {
+    if load_u32(&value.sequence) != sequence {
+      result = ConditionWaitResult{status:ConditionWaitStatus.Signaled, ok:true}
+      break
+    }
+    remaining := time.deadline_remaining(&deadline.value)
+    if !remaining.ok {
+      result = ConditionWaitResult{kind:remaining.kind, error:remaining.error}
+      break
+    }
+    if remaining.value == 0 {
+      result = ConditionWaitResult{status:ConditionWaitStatus.TimedOut, ok:true}
+      break
+    }
+    code := native_wait_timeout(&value.sequence, sequence, remaining.value)
+    if code == 0 {
+      result = ConditionWaitResult{status:ConditionWaitStatus.Signaled, ok:true}
+      break
+    }
+    // Timeouts are checked against the same deadline, including finite native
+    // timeout chunks on Windows. EINTR never restarts the original budget.
+    if code != 1 && !native_wait_interrupted(code) {
+      result = ConditionWaitResult{kind:native_sync_error(code), error:code}
+      break
+    }
+  }
+  lock(lock_value)
+  return result
 }
 
 pub fn condition_signal(value: *Condition) {

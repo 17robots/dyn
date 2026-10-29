@@ -25,8 +25,9 @@ the outside world.
 
 The 2026-10-24 pass fixes sticky buffered I/O, INI and WebSocket errors; lazy zero-state SHA-256 initialization; sort miss positions; and Metadesk failure rollback/stubs. Flags and regex now take arenas, with explicit payload ownership and portable result metadata. URL, semver, JSON, Metadesk, PNG/QOI, INI, DER/PEM/certificate, ZIP/zstd, Unicode and byte-codec results now carry portable diagnostics. Thread creation returns stable arena-backed pointers, and XML has an iterative document tree. The structural IR dump is implemented and its focused regression passes.
 
-Provider-backed crypto wrappers now use portable results and arena-backed AEAD
-outputs. The structural IR dump and target-gated native math lowering are
+Crypto facades use portable results and arena-backed AEAD outputs. The
+2026-10-26 expansion replaces their cipher/signature/exchange implementations
+with native Dyn; TLS retains its separate provider. The structural IR dump and target-gated native math lowering are
 implemented, reviewed and included in qualification. Physical board execution
 and the two-preview stability period remain separate milestones.
 
@@ -305,9 +306,10 @@ the host libm in tests.
 
 ## Gaps after the freeze
 
-These add API and break nothing, so they can follow the freeze:
+These add API and break nothing. The user chose on 2026-10-26 to land them
+before the freeze; see [std expansion](std-expansion.md).
 
-1. Image encoders for `png` and `qoi`.
+1. Image encoders for `png` and `qoi` (done: both exist).
 2. Text layout and font rasterization.
 3. Graphics, GUI and audio: windowing, GPU and audio output stay in
    `vendor/` (SDL3, OpenGL, Vulkan, miniaudio). Std gains only portable,
@@ -315,9 +317,9 @@ These add API and break nothing, so they can follow the freeze:
    immediate-mode UI core that produces draw commands.
 4. Native crypto to replace the OpenSSL-backed `aes`, `aead`, `signature`,
    `exchange` and `certificate`, and an audit of all of `crypto`.
-5. `terminal` and `dynlib` beyond Linux.
-6. Embedded helpers beyond `mmio`: timers, interrupts and UART, now only in
-   board test files.
+5. `terminal` and `dynlib` beyond Linux (done 2026-10-26).
+6. Embedded helpers beyond `mmio`: timers, interrupts and UART (now in std,
+   exercised by all three board fixtures under QEMU).
 
 ## Order
 
@@ -384,8 +386,18 @@ The initial findings now have focused regression coverage:
 - `math-lowering.py`: generic/native x86 feature gates, SSA/tree numerical oracles, argument order, spills, AArch64/RV64 execution and Wasm behavior. RV32/Thumb hard/soft samples retain no-FP audits.
 - `std-lint.py`: multiline declaration recognition has independent scanner tests. It checks narrow syntactic heuristics, not ownership semantics or universal compliance.
 
-A fresh closure audit and complete registered qualification are still required. Provider-backed crypto migrations and ownership/cost comments remain under review. This record does not turn earlier math-only qualification into qualification of the current working tree.
+A fresh closure audit and complete registered qualification are still required. The later native-crypto and media/GUI expansion has its own review and qualification record. This record does not turn earlier math-only qualification into qualification of the current working tree.
 
 Fixed-size hash/key buffers, binary stores, encoding primitives, streaming and
 raw OS/C bindings retain their documented exceptions. These are not blanket
 exceptions for variable-size producers or stateful I/O after failure.
+
+
+## Expansion implementation (2026-10-26)
+
+The pre-freeze expansion now has local implementations for the systems, embedded,
+portable media/data, native graphics and native crypto phases. The authoritative
+scope and platform limitations are in [std expansion](std-expansion.md) and the
+[std guide](../guide/std.md). Implementation, local qualification, native-platform
+CI, publication/merge and the two-preview stability window are distinct milestones.
+This update does not declare a compatibility freeze or start the preview clock.

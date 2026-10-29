@@ -202,6 +202,101 @@ dyn_win_write_file:
     adrp x16, __imp_WriteFile
     ldr x16, [x16, :lo12:__imp_WriteFile]
     br x16
+.global dyn_terminal_get_mode
+dyn_terminal_get_mode:
+    adrp x16, __imp_GetConsoleMode
+    ldr x16, [x16, :lo12:__imp_GetConsoleMode]
+    br x16
+.global dyn_terminal_set_mode
+dyn_terminal_set_mode:
+    adrp x16, __imp_SetConsoleMode
+    ldr x16, [x16, :lo12:__imp_SetConsoleMode]
+    br x16
+.global dyn_terminal_buffer_info
+dyn_terminal_buffer_info:
+    adrp x16, __imp_GetConsoleScreenBufferInfo
+    ldr x16, [x16, :lo12:__imp_GetConsoleScreenBufferInfo]
+    br x16
+.global dyn_fs_map_create
+dyn_fs_map_create:
+    adrp x16, __imp_CreateFileMappingW
+    ldr x16, [x16, :lo12:__imp_CreateFileMappingW]
+    br x16
+.global dyn_fs_map_view
+dyn_fs_map_view:
+    adrp x16, __imp_MapViewOfFile
+    ldr x16, [x16, :lo12:__imp_MapViewOfFile]
+    br x16
+.global dyn_fs_map_release
+dyn_fs_map_release:
+    adrp x16, __imp_UnmapViewOfFile
+    ldr x16, [x16, :lo12:__imp_UnmapViewOfFile]
+    br x16
+.global dyn_signal_console_handler
+dyn_signal_console_handler:
+    adrp x16, __imp_SetConsoleCtrlHandler
+    ldr x16, [x16, :lo12:__imp_SetConsoleCtrlHandler]
+    br x16
+.global dyn_signal_create_event
+dyn_signal_create_event:
+    adrp x16, __imp_CreateEventW
+    ldr x16, [x16, :lo12:__imp_CreateEventW]
+    br x16
+.global dyn_signal_set_event
+dyn_signal_set_event:
+    adrp x16, __imp_SetEvent
+    ldr x16, [x16, :lo12:__imp_SetEvent]
+    br x16
+.global dyn_time_zone_information
+dyn_time_zone_information:
+    adrp x16, __imp_GetDynamicTimeZoneInformation
+    ldr x16, [x16, :lo12:__imp_GetDynamicTimeZoneInformation]
+    br x16
+.global dyn_fs_find_first
+dyn_fs_find_first:
+    adrp x16, __imp_FindFirstFileW
+    ldr x16, [x16, :lo12:__imp_FindFirstFileW]
+    br x16
+.global dyn_fs_find_next
+dyn_fs_find_next:
+    adrp x16, __imp_FindNextFileW
+    ldr x16, [x16, :lo12:__imp_FindNextFileW]
+    br x16
+.global dyn_fs_find_close
+dyn_fs_find_close:
+    adrp x16, __imp_FindClose
+    ldr x16, [x16, :lo12:__imp_FindClose]
+    br x16
+.global dyn_fs_make_directory
+dyn_fs_make_directory:
+    adrp x16, __imp_CreateDirectoryW
+    ldr x16, [x16, :lo12:__imp_CreateDirectoryW]
+    br x16
+.global dyn_fs_delete
+dyn_fs_delete:
+    adrp x16, __imp_DeleteFileW
+    ldr x16, [x16, :lo12:__imp_DeleteFileW]
+    br x16
+.global dyn_fs_remove_directory
+dyn_fs_remove_directory:
+    adrp x16, __imp_RemoveDirectoryW
+    ldr x16, [x16, :lo12:__imp_RemoveDirectoryW]
+    br x16
+.global dyn_fs_move
+dyn_fs_move:
+    adrp x16, __imp_MoveFileExW
+    ldr x16, [x16, :lo12:__imp_MoveFileExW]
+    br x16
+.global dyn_fs_attributes
+dyn_fs_attributes:
+    adrp x16, __imp_GetFileAttributesExW
+    ldr x16, [x16, :lo12:__imp_GetFileAttributesExW]
+    br x16
+.global dyn_fs_information
+dyn_fs_information:
+    adrp x16, __imp_GetFileInformationByHandle
+    ldr x16, [x16, :lo12:__imp_GetFileInformationByHandle]
+    br x16
 .global dyn_win_load_library
 dyn_win_load_library:
     adrp x16, __imp_LoadLibraryA
@@ -607,6 +702,25 @@ kernel_lookup:
     thunk CloseHandle
     thunk WaitForSingleObject
     thunk SwitchToThread
+    thunk CreateDirectoryW
+    thunk DeleteFileW
+    thunk RemoveDirectoryW
+    thunk MoveFileExW
+    thunk GetFileAttributesExW
+    thunk GetFileInformationByHandle
+    thunk FindFirstFileW
+    thunk FindNextFileW
+    thunk FindClose
+    thunk GetDynamicTimeZoneInformation
+    thunk SetConsoleCtrlHandler
+    thunk CreateEventW
+    thunk SetEvent
+    thunk CreateFileMappingW
+    thunk MapViewOfFile
+    thunk UnmapViewOfFile
+    thunk GetConsoleMode
+    thunk SetConsoleMode
+    thunk GetConsoleScreenBufferInfo
     thunk VirtualAlloc
     thunk VirtualFree
     thunk CreateFileA
@@ -633,7 +747,6 @@ kernel_lookup:
     thunk UpdateProcThreadAttribute
     thunk DeleteProcThreadAttributeList
     thunk GetEnvironmentVariableW
-    thunk CreateEventW
     thunk ResetEvent
     thunk ReadDirectoryChangesW
     thunk GetOverlappedResult
@@ -689,6 +802,25 @@ iat ExitProcess
 iat CloseHandle
 iat WaitForSingleObject
 iat SwitchToThread
+iat CreateDirectoryW
+iat DeleteFileW
+iat RemoveDirectoryW
+iat MoveFileExW
+iat GetFileAttributesExW
+iat GetFileInformationByHandle
+iat FindFirstFileW
+iat FindNextFileW
+iat FindClose
+iat GetDynamicTimeZoneInformation
+iat SetConsoleCtrlHandler
+iat CreateEventW
+iat SetEvent
+iat CreateFileMappingW
+iat MapViewOfFile
+iat UnmapViewOfFile
+iat GetConsoleMode
+iat SetConsoleMode
+iat GetConsoleScreenBufferInfo
 iat VirtualAlloc
 iat VirtualFree
 iat CreateFileA
@@ -718,7 +850,6 @@ iat InitializeProcThreadAttributeList
 iat UpdateProcThreadAttribute
 iat DeleteProcThreadAttributeList
 iat GetEnvironmentVariableW
-iat CreateEventW
 iat ResetEvent
 iat ReadDirectoryChangesW
 iat GetOverlappedResult
@@ -772,6 +903,25 @@ hint ExitProcess
 hint CloseHandle
 hint WaitForSingleObject
 hint SwitchToThread
+hint CreateDirectoryW
+hint DeleteFileW
+hint RemoveDirectoryW
+hint MoveFileExW
+hint GetFileAttributesExW
+hint GetFileInformationByHandle
+hint FindFirstFileW
+hint FindNextFileW
+hint FindClose
+hint GetDynamicTimeZoneInformation
+hint SetConsoleCtrlHandler
+hint CreateEventW
+hint SetEvent
+hint CreateFileMappingW
+hint MapViewOfFile
+hint UnmapViewOfFile
+hint GetConsoleMode
+hint SetConsoleMode
+hint GetConsoleScreenBufferInfo
 hint VirtualAlloc
 hint VirtualFree
 hint CreateFileA
@@ -798,7 +948,6 @@ hint InitializeProcThreadAttributeList
 hint UpdateProcThreadAttribute
 hint DeleteProcThreadAttributeList
 hint GetEnvironmentVariableW
-hint CreateEventW
 hint ResetEvent
 hint ReadDirectoryChangesW
 hint GetOverlappedResult

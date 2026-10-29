@@ -1,0 +1,318 @@
+use "std/mem" mem
+use "std/errors" errors
+use "std/math" math
+pub enum Encoding { Pcm8, Pcm16, Pcm24, Pcm32, Float32 }
+// Interleaved normalized samples; floating WAV samples are preserved, including
+// out-of-range values. channel_mask is zero when speaker assignment is unknown.
+pub struct Audio { samples: []f32, rate: u32, channels: u16, channel_mask: u32 }
+pub struct DecodeResult { value: Audio, kind: errors.Kind, error: isize, offset: usize, ok: bool }
+pub struct EncodeResult { value: []u8, kind: errors.Kind, error: isize, offset: usize, ok: bool }
+fn u16le(data: []const u8, at: usize) u16 {
+  return #cast(u16, data[at]) | (#cast(u16, data[at + 1]) << 8)
+}
+fn u32le(data: []const u8, at: usize) u32 {
+  return #cast(u32, u16le(data, at)) | (#cast(u32, u16le(data, at + 2)) << 16)
+}
+fn put16(data: []u8, at: usize, value: u16) {
+  data[at] = #cast(u8, value)
+  data[at + 1] = #cast(u8, (value >> 8))
+}
+fn put32(data: []u8, at: usize, value: u32) {
+  put16(data, at, #cast(u16, value))
+  put16(data, at + 2, #cast(u16, value >> 16))
+}
+fn tag(data: []const u8, at: usize, a, b, c, d: u8) bool {
+  return data[at] == a && data[at+1] == b && data[at+2] == c && data[at+3] == d
+}
+fn mask_valid(mask: u32, channels: u16) bool {
+  if mask == 0 {
+    return true
+  }
+  count: u16 = 0
+  for i in 0..32 {
+    if ((mask >> i) & 1) != 0 {
+      count += 1
+    }
+  }
+  return count == channels
+}
+// RIFF WAVE: PCM 8/16/24/32 and IEEE float 32/64, including extensible
+// subformats. Unknown chunks are skipped with RIFF padding. Compressed formats
+// and RF64/RIFX return Unsupported. No native audio provider is used.
+pub fn decode(arena: *mem.Arena, source: []const u8) DecodeResult {
+  if #len(source) < 12 {
+    return DecodeResult{ kind: errors.Kind.InvalidInput }
+  }
+  if tag(source, 0, 82, 73, 70, 88) || tag(source, 0, 82, 70, 54, 52) {
+    return DecodeResult{ kind: errors.Kind.Unsupported }
+  }
+  if !tag(source, 0, 82, 73, 70, 70) || !tag(source, 8, 87, 65, 86, 69) {
+    return DecodeResult{ kind: errors.Kind.InvalidInput }
+  }
+  size := #cast(usize, u32le(source, 4))
+  if size < 4 || size > #len(source) - 8 {
+    return DecodeResult{ kind: errors.Kind.InvalidInput, offset: 4 }
+  }
+  end := size + 8
+  at: usize = 12
+  format: []const u8
+  data: []const u8
+  data_offset: usize = 0
+  have_data := false
+  for at < end {
+    if end - at < 8 {
+      return DecodeResult{ kind: errors.Kind.InvalidInput, offset: at }
+    }
+    length := #cast(usize, u32le(source, at + 4))
+    payload := at + 8
+    if length > end - payload || (length & 1) > end - payload - length {
+      return DecodeResult{ kind: errors.Kind.InvalidInput, offset: at + 4 }
+    }
+    if tag(source, at, 102, 109, 116, 32) {
+      if #len(format) != 0 || length < 16 {
+        return DecodeResult{ kind: errors.Kind.InvalidInput, offset: at }
+      }
+      format = source[payload..payload + length]
+    } else if tag(source, at, 100, 97, 116, 97) {
+      if have_data {
+        return DecodeResult{ kind: errors.Kind.Unsupported, offset: at }
+      }
+      data = source[payload..payload + length]
+      data_offset = payload
+      have_data = true
+    }
+    at = payload + length + (length & 1)
+  }
+  if #len(format) < 16 || !have_data {
+    return DecodeResult{ kind: errors.Kind.InvalidInput }
+  }
+  code := u16le(format, 0)
+  channels := u16le(format, 2)
+  rate := u32le(format, 4)
+  align := u16le(format, 12)
+  bits := u16le(format, 14)
+  mask: u32 = 0
+  precision := bits
+  if code == 65534 {
+    if #len(format) < 40 || u16le(format, 16) < 22 || #cast(usize, u16le(format, 16)) > #len(format) - 18 {
+      return DecodeResult{ kind: errors.Kind.InvalidInput }
+    }
+    valid_bits := u16le(format, 18)
+    precision = valid_bits
+    if valid_bits == 0 || valid_bits > bits {
+      return DecodeResult{ kind: errors.Kind.InvalidInput }
+    }
+    mask = u32le(format, 20)
+    // Subformat GUID is {PCM/IEEE,0000,0010,8000,00aa00389b71}.
+    if u16le(format, 26) != 0 || u32le(format, 28) != 0x00100000 || u32le(format, 32) != 0xaa000080 || u32le(format, 36) != 0x719b3800 {
+      return DecodeResult{ kind: errors.Kind.Unsupported }
+    }
+    code = u16le(format, 24)
+    if code == 3 && valid_bits != bits {
+      return DecodeResult{ kind: errors.Kind.InvalidInput }
+    }
+  }
+  if code != 1 && code != 3 {
+    return DecodeResult{ kind: errors.Kind.Unsupported }
+  }
+  if (code == 1 && bits != 8 && bits != 16 && bits != 24 && bits != 32) || (code == 3 && bits != 32 && bits != 64) {
+    return DecodeResult{ kind: errors.Kind.Unsupported }
+  }
+  stride := #cast(usize, bits / 8)
+  if channels == 0 || rate == 0 || #cast(usize, channels) * stride != #cast(usize, align) || #cast(u64, rate) * #cast(u64, align) != #cast(u64, u32le(format, 8)) || !mask_valid(mask, channels) || #len(data) % #cast(usize, align) != 0 {
+    return DecodeResult{ kind: errors.Kind.InvalidInput, offset: data_offset }
+  }
+  sample_count := #len(data) / stride
+  if sample_count > ~#cast(usize, 0) / #sizeof(f32) {
+    return DecodeResult{ kind: errors.Kind.Overflow, offset: data_offset }
+  }
+  samples := mem.push_array(f32, arena, sample_count)
+  for i in 0..#len(samples) {
+    pos := i * stride
+    value: f64 = 0.0
+    if code == 3 {
+      if bits == 32 {
+        samples[i] = #bitcast(f32, u32le(data, pos))
+        continue
+      }
+      else {
+        raw := #cast(u64, u32le(data, pos)) | (#cast(u64, u32le(data, pos + 4)) << 32)
+        value = #bitcast(f64, raw)
+      }
+    } else {
+      raw: u32 = 0
+      if bits == 8 {
+        raw = #cast(u32, data[pos])
+      }
+      else if bits == 16 {
+        raw = #cast(u32, u16le(data, pos))
+      }
+      else if bits == 24 {
+        raw = #cast(u32, data[pos]) | (#cast(u32, data[pos + 1]) << 8) | (#cast(u32, data[pos + 2]) << 16)
+      }
+      else {
+        raw = u32le(data, pos)
+      }
+      if precision < bits {
+        raw &= ~((#cast(u32, 1) << (bits - precision)) - 1)
+      }
+      if bits == 8 {
+        value = (#cast(f64, raw) - 128.0) / 128.0
+      }
+      else if bits == 16 {
+        value = #cast(f64, #cast(i16, raw)) / 32768.0
+      }
+      else if bits == 24 {
+        signed := #cast(i32, (raw << 8)) >> 8
+        value = #cast(f64, signed) / 8388608.0
+      }
+      else {
+        value = #cast(f64, #cast(i32, raw)) / 2147483648.0
+      }
+    }
+    samples[i] = #cast(f32, value)
+  }
+  return DecodeResult{ value: Audio{ samples: samples, rate: rate, channels: channels, channel_mask: mask }, ok: true }
+}
+// Integer encoding clamps to [-1,1] and rounds ties toward positive infinity.
+// Float encoding preserves f32 bits. Invalid input allocates nothing.
+pub fn encode(arena: *mem.Arena, audio: *const Audio, encoding: Encoding) EncodeResult {
+  bits: u16 = 0
+  if encoding == Encoding.Pcm8 {
+    bits = 8
+  }
+  if encoding == Encoding.Pcm16 {
+    bits = 16
+  }
+  if encoding == Encoding.Pcm24 {
+    bits = 24
+  }
+  if encoding == Encoding.Pcm32 || encoding == Encoding.Float32 {
+    bits = 32
+  }
+  if bits == 0 || audio.channels == 0 || audio.rate == 0 || #len(audio.samples) % #cast(usize, audio.channels) != 0 || !mask_valid(audio.channel_mask, audio.channels) {
+    return EncodeResult{ kind: errors.Kind.InvalidInput }
+  }
+  align := #cast(u32, audio.channels) * #cast(u32, bits / 8)
+  if align > 65535 || #cast(u64, audio.rate) * #cast(u64, align) > 0xffffffff {
+    return EncodeResult{ kind: errors.Kind.Overflow }
+  }
+  stride := #cast(usize, bits / 8)
+  extended := audio.channel_mask != 0 || audio.channels > 2
+  floating := encoding == Encoding.Float32
+  header: usize = 44
+  fmt_size: u32 = 16
+  if floating {
+    header = 58
+    fmt_size = 18
+  }
+  if extended {
+    header = 68
+    fmt_size = 40
+    if floating {
+      header = 80
+    }
+  }
+  if #len(audio.samples) > (4294967295 - (header - 8) - 1) / stride || #len(audio.samples) > (~#cast(usize, 0) - header - 1) / stride {
+    return EncodeResult{ kind: errors.Kind.Overflow }
+  }
+  length := #len(audio.samples) * stride
+  if !floating {
+    for value in audio.samples {
+      if value != value || value > 3.4028234663852886e38 || value < -3.4028234663852886e38 {
+        return EncodeResult{ kind: errors.Kind.InvalidInput }
+      }
+    }
+  }
+  output := mem.push_array(u8, arena, header + length + (length & 1))
+  output[0] = 82
+  output[1] = 73
+  output[2] = 70
+  output[3] = 70
+  put32(output, 4, #cast(u32, #len(output) - 8))
+  output[8] = 87
+  output[9] = 65
+  output[10] = 86
+  output[11] = 69
+  output[12] = 102
+  output[13] = 109
+  output[14] = 116
+  output[15] = 32
+  put32(output, 16, fmt_size)
+  code: u16 = 1
+  if floating {
+    code = 3
+  }
+  put16(output, 20, code)
+  if extended {
+    put16(output, 20, 65534)
+  }
+  put16(output, 22, audio.channels)
+  put32(output, 24, audio.rate)
+  put32(output, 28, audio.rate * align)
+  put16(output, 32, #cast(u16, align))
+  put16(output, 34, bits)
+  if extended {
+    put16(output, 36, 22)
+    put16(output, 38, bits)
+    put32(output, 40, audio.channel_mask)
+    put16(output, 44, code)
+    put32(output, 48, 0x00100000)
+    put32(output, 52, 0xaa000080)
+    put32(output, 56, 0x719b3800)
+  }
+  if floating {
+    fact := header - 20
+    output[fact] = 102
+    output[fact + 1] = 97
+    output[fact + 2] = 99
+    output[fact + 3] = 116
+    put32(output, fact + 4, 4)
+    put32(output, fact + 8, #cast(u32, #len(audio.samples) / #cast(usize, audio.channels)))
+  }
+  data := header - 8
+  output[data] = 100
+  output[data + 1] = 97
+  output[data + 2] = 116
+  output[data + 3] = 97
+  put32(output, data + 4, #cast(u32, length))
+  for i in 0..#len(audio.samples) {
+    at := header + i * stride
+    value := #cast(f64, audio.samples[i])
+    if floating {
+      put32(output, at, #bitcast(u32, audio.samples[i]))
+    }
+    else {
+      maximum: f64 = 128.0
+      if bits == 16 {
+        maximum = 32768.0
+      }
+      if bits == 24 {
+        maximum = 8388608.0
+      }
+      if bits == 32 {
+        maximum = 2147483648.0
+      }
+      if value < -1.0 {
+        value = -1.0
+      }
+      if value > 1.0 {
+        value = 1.0
+      }
+      sample := #cast(i64, math.floor64(value * maximum + 0.5))
+      if sample >= #cast(i64, maximum) {
+        sample = #cast(i64, maximum) - 1
+      }
+      if bits == 8 {
+        output[at] = #cast(u8, sample + 128)
+      }
+      else {
+        raw := #cast(u32, sample)
+        for byte in 0..stride {
+          output[at + byte] = #cast(u8, (raw >> (byte * 8)))
+        }
+      }
+    }
+  }
+  return EncodeResult{ value: output, ok: true }
+}

@@ -1,0 +1,773 @@
+use "std/mem" mem
+use "std/errors" errors
+use "std/math" math
+use "std/unicode/utf8" utf8
+use "std/unicode/text" unicode
+use "vendor/harfbuzz" hb
+use "vendor/fribidi" bidi
+
+// HarfBuzz fonts use 26.6 pixel positions. data identifies the caller's raster
+// owner; select receives a complete extended grapheme, never a partial mark.
+pub struct Face { data: rawptr, font: rawptr }
+pub struct Font { data: rawptr, select: fn(rawptr, []const u8) Face, line_height: i32, space_advance: f64 }
+pub struct Options { width: i32, wrap: bool = true, tab_columns: usize = 4, base: u32 = bidi.Auto }
+pub struct Glyph { id: u32, font: rawptr, start: usize, end: usize, x: f64, y: f64, x_offset: f64, y_offset: f64, advance: f64, rtl: bool, hidden: bool }
+pub struct Line { start: usize, end: usize, glyph_start: usize, glyph_count: usize, width: f64, y: f64, rtl: bool }
+pub struct Layout { text: []const u8, glyphs: []Glyph, lines: []Line, width: f64, height: f64, line_height: i32 }
+pub struct Result { value: Layout, kind: errors.Kind, offset: usize, ok: bool }
+pub struct Hit { start: usize, end: usize, line: usize, x: f64, y: f64, width: f64, height: f64, rtl: bool, ok: bool }
+struct Cluster { start: usize, end: usize, scalar: usize, level: i8, script: u32, face: Face, tab: bool }
+struct Unit { start: usize, end: usize, advance: f64, tab: bool, break_after: bool }
+struct Run { start: usize, end: usize, first: usize, last: usize, level: i8, script: u32, face: Face, glyphs: []hb.Glyph, advance: f64, tab: bool }
+struct Span { runs: []Run, units: []Unit, ok: bool, kind: errors.Kind }
+struct GlyphNode { value: Glyph, next: *GlyphNode }
+struct LineNode { value: Line, next: *LineNode }
+struct Output { arena: *mem.Arena, first: *GlyphNode, last: *GlyphNode, lines: *LineNode, tail: *LineNode, glyph_count: usize, line_count: usize, width: f64 }
+const common: u32 = 1517910393
+const inherited: u32 = 1516858984
+fn neutral(script: u32) bool {
+  return script==common || script==inherited || script==0
+}
+fn finite(value: f64) bool {
+  return value==value && value>=-2147483647.0 && value<=2147483647.0
+}
+fn append(output: *Output, glyph: Glyph) {
+  node:=mem.push(GlyphNode, output.arena)
+  node.value=glyph
+  if output.last==nil {
+    output.first=node
+  }
+  else {
+    output.last.next=node
+  }
+  output.last=node
+  output.glyph_count+=1
+}
+fn line_append(output: *Output, line: Line) {
+  node:=mem.push(LineNode, output.arena)
+  node.value=line
+  if output.tail==nil {
+    output.lines=node
+  }
+  else {
+    output.tail.next=node
+  }
+  output.tail=node
+  output.line_count+=1
+  if line.width>output.width {
+    output.width=line.width
+  }
+}
+fn level(cluster: Cluster, adjusted: []i8, first_scalar: usize) i8 {
+  if #len(adjusted)!=0 {
+    return adjusted[cluster.scalar-first_scalar]
+  }
+  return cluster.level
+}
+fn shape(arena:*mem.Arena, api:*const hb.Api, text:[]const u8, clusters:[]Cluster, first, last:usize, adjusted:[]i8, first_scalar:usize, show_soft:bool) Span {
+  runs:=mem.push_array(Run, arena, last-first)
+  capacity:usize=0
+  if last>first {
+    capacity=clusters[last-1].end-clusters[first].start
+  }
+  units:=mem.push_array(Unit, arena, capacity)
+  context_start:usize=0
+  context_end:usize=0
+  if last>first {
+    context_start=clusters[first].start
+    context_end=clusters[last-1].end
+  }
+  context_text:=text[context_start..context_end]
+  soft:=show_soft && #len(context_text)>=2 && context_text[#len(context_text)-2]==194 && context_text[#len(context_text)-1]==173
+  if soft {
+    visible:=mem.push_bytes_uninit(arena, #len(context_text)-1)
+    _=mem.copy(visible[..#len(visible)-1], context_text[..#len(context_text)-2])
+    visible[#len(visible)-1]=45
+    context_text=visible
+  }
+  used:usize=0
+  unit_count:usize=0
+  at:=first
+  for at<last {
+    cluster:=clusters[at]
+    run:=Run{start:cluster.start, end:cluster.end, first:at, last:at+1, level:level(cluster, adjusted, first_scalar), script:cluster.script, face:cluster.face, tab:cluster.tab}
+    at+=1
+    for at<last && !run.tab && !clusters[at].tab && level(clusters[at], adjusted, first_scalar)==run.level && clusters[at].script==run.script && clusters[at].face.font==run.face.font && clusters[at].face.data==run.face.data {
+      run.end=clusters[at].end
+      run.last=at+1
+      at+=1
+    }
+    if run.tab {
+      units[unit_count]=Unit{start:run.start, end:run.end, tab:true, break_after:true}
+      unit_count+=1
+    } else {
+      direction:=hb.LeftToRight
+      if run.level&1!=0 {
+        direction=hb.RightToLeft
+      }
+      features:[0]hb.Feature=[]
+      flags:u32=0
+      if run.first==first {
+        flags|=hb.BeginningOfText
+      }
+      if run.last==last {
+        flags|=hb.EndOfText
+      }
+      item_offset:=run.start-context_start
+      item_length:=run.end-run.start
+      if soft && run.last==last {
+        item_length-=1
+      }
+      shaped:=hb.shape_run(arena, api, run.face.font, context_text, hb.Options{direction:direction, script:run.script, cluster_level:hb.MonotoneGraphemes, flags:flags, item_offset:#cast(u32, item_offset), item_length:#cast(i32, item_length)}, features[..])
+      if !shaped.ok {
+        return Span{kind:shaped.kind}
+      }
+      run.glyphs=shaped.value
+      for g in shaped.value {
+        if #cast(usize, g.cluster)<item_offset {
+          return Span{kind:errors.Kind.InvalidInput}
+        }
+      }
+      for g in 0..#len(shaped.value) {
+        shaped.value[g].cluster-=#cast(u32, item_offset)
+      }
+      begin_units:=unit_count
+      i:usize=0
+      previous:=run.end
+      for i<#len(run.glyphs) {
+        source:=run.start+#cast(usize, run.glyphs[i].cluster)
+        if source<run.start || source>=run.end || !utf8.decode(text, source).ok {
+          return Span{kind:errors.Kind.InvalidInput}
+        }
+        next:=i+1
+        advance:f64=0.0
+        for next<#len(run.glyphs) && run.glyphs[next].cluster==run.glyphs[i].cluster {
+          next+=1
+        }
+        for j in i..next {
+          advance+=#cast(f64, run.glyphs[j].x_advance)/64.0
+        }
+        end:=run.end
+        if run.level&1!=0 {
+          end=previous
+        }
+        else if next<#len(run.glyphs) {
+          end=run.start+#cast(usize, run.glyphs[next].cluster)
+        }
+        if end<=source || end>run.end || advance<0.0 || !finite(advance) || unit_count>=#len(units) {
+          return Span{kind:errors.Kind.InvalidInput}
+        }
+        c:=cluster_index(clusters, source)
+        if c==#len(clusters) || clusters[c].start>source {
+          c-=1
+        }
+        snapped_start:=clusters[c].start
+        e:=cluster_index(clusters, end)
+        snapped_end:=end
+        if e==#len(clusters) || clusters[e].start!=end {
+          snapped_end=clusters[e-1].end
+        }
+        units[unit_count]=Unit{start:snapped_start, end:snapped_end, advance:advance}
+        unit_count+=1
+        run.advance+=advance
+        previous=source
+        i=next
+      }
+      if run.level&1!=0 {
+        count:=unit_count-begin_units
+        for j in 0..count/2 {
+          saved:=units[begin_units+j]
+          units[begin_units+j]=units[unit_count-j-1]
+          units[unit_count-j-1]=saved
+        }
+      }
+      write:=begin_units
+      for read in begin_units..unit_count {
+        current:=units[read]
+        if write>begin_units && current.start<units[write-1].end {
+          if current.end>units[write-1].end {
+            units[write-1].end=current.end
+          }
+          units[write-1].advance+=current.advance
+        } else {
+          units[write]=current
+          write+=1
+        }
+      }
+      unit_count=write
+      // A native shaper may remove a format-only run. Keep its source range
+      // as an invisible, zero-width unit so byte positions remain queryable.
+      if unit_count==begin_units {
+        units[unit_count]=Unit{start:run.start, end:run.end}
+        unit_count+=1
+      }
+    }
+    runs[used]=run
+    used+=1
+  }
+  return Span{runs:runs[..used], units:units[..unit_count], ok:true}
+}
+fn advance(unit: Unit, x, tab:f64) f64 {
+  if unit.tab {
+    return (math.floor64(x/tab)+1.0)*tab-x
+  }
+  return unit.advance
+}
+fn cluster_index(clusters:[]Cluster, offset:usize) usize {
+  low:usize=0
+  high:=#len(clusters)
+  for low<high {
+    mid:=low+(high-low)/2
+    if clusters[mid].start<offset {
+      low=mid+1
+    }
+    else {
+      high=mid
+    }
+  }
+  return low
+}
+fn scalar_index(paragraph:*const bidi.Paragraph, offset:usize) usize {
+  low:usize=0
+  high:=#len(paragraph.starts)
+  for low<high {
+    mid:=low+(high-low)/2
+    if paragraph.starts[mid]<offset {
+      low=mid+1
+    }
+    else {
+      high=mid
+    }
+  }
+  return low
+}
+fn emit(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[]const u8, paragraph:*const bidi.Paragraph, clusters:[]Cluster, start, end, base:usize, font:Font, tab:f64) errors.Kind {
+  work:=mem.arena_create(0)
+  defer mem.arena_release(work)
+  first:=cluster_index(clusters, start)
+  last:=cluster_index(clusters, end)
+  first_scalar:=scalar_index(paragraph, start)
+  last_scalar:=scalar_index(paragraph, end)
+  reordered:=bidi.reorder(work, bidi_api, paragraph, first_scalar, last_scalar)
+  if !reordered.ok {
+    return reordered.kind
+  }
+  span:=shape(work, api, text, clusters, first, last, reordered.value.levels, first_scalar, end<#len(text))
+  if !span.ok {
+    return span.kind
+  }
+  order:=mem.push_array(usize, work, #len(span.runs))
+  seen:=mem.push_array(u8, work, #len(span.runs))
+  count:usize=0
+  for scalar in reordered.value.visual_to_logical {
+    byte:=paragraph.starts[#cast(usize, scalar)]
+    low:usize=0
+    high:=#len(span.runs)
+    for low<high {
+      mid:=low+(high-low)/2
+      if span.runs[mid].end<=byte {
+        low=mid+1
+      }
+      else {
+        high=mid
+      }
+    }
+    if low<#len(span.runs) && seen[low]==0 && byte>=span.runs[low].start {
+      order[count]=low
+      count+=1
+      seen[low]=1
+    }
+  }
+  x:f64=0.0
+  y:=#cast(f64, output.line_count)*#cast(f64, font.line_height)
+  glyph_start:=output.glyph_count
+  for ordered in order[..count] {
+    run:=span.runs[ordered]
+    if run.tab {
+      width:=(math.floor64(x/tab)+1.0)*tab-x
+      append(output, Glyph{font:run.face.data, start:base+run.start, end:base+run.end, x:x, y:y, advance:width, rtl:run.level&1!=0, hidden:true})
+      x+=width
+      continue
+    }
+    if #len(run.glyphs)==0 {
+      append(output, Glyph{font:run.face.data, start:base+run.start, end:base+run.end, x:x, y:y, rtl:run.level&1!=0, hidden:true})
+    }
+    previous:=run.end
+    i:usize=0
+    for i<#len(run.glyphs) {
+      source:=run.start+#cast(usize, run.glyphs[i].cluster)
+      next:=i+1
+      for next<#len(run.glyphs) && run.glyphs[next].cluster==run.glyphs[i].cluster {
+        next+=1
+      }
+      cluster_end:=run.end
+      if run.level&1!=0 {
+        cluster_end=previous
+      }
+      else if next<#len(run.glyphs) {
+        cluster_end=run.start+#cast(usize, run.glyphs[next].cluster)
+      }
+      low:usize=0
+      high:=#len(span.units)
+      for low<high {
+        mid:=low+(high-low)/2
+        if span.units[mid].start<=source {
+          low=mid+1
+        }
+        else {
+          high=mid
+        }
+      }
+      snapped_start:=source
+      snapped_end:=cluster_end
+      if low!=0 && source<span.units[low-1].end {
+        snapped_start=span.units[low-1].start
+        snapped_end=span.units[low-1].end
+      }
+      for j in i..next {
+        g:=run.glyphs[j]
+        width:=#cast(f64, g.x_advance)/64.0
+        append(output, Glyph{id:g.index, font:run.face.data, start:base+snapped_start, end:base+snapped_end, x:x, y:y, x_offset:#cast(f64, g.x_offset)/64.0, y_offset:0.0-#cast(f64, g.y_offset)/64.0, advance:width, rtl:run.level&1!=0})
+        x+=width
+      }
+      previous=source
+      i=next
+    }
+  }
+  line_append(output, Line{start:base+start, end:base+end, glyph_start:glyph_start, glyph_count:output.glyph_count-glyph_start, width:x, y:y, rtl:paragraph.base==bidi.RightToLeft})
+  return errors.Kind.None
+}
+fn paragraph(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[]const u8, base:usize, font:Font, options:Options) errors.Kind {
+  work:=mem.arena_create(0)
+  defer mem.arena_release(work)
+  resolved:=bidi.resolve(work, bidi_api, text, options.base)
+  if !resolved.ok {
+    return resolved.kind
+  }
+  count:=utf8.codepoint_count(text).value
+  clusters:=mem.push_array(Cluster, work, count)
+  used:usize=0
+  scalar:usize=0
+  iterator:=unicode.graphemes(text)
+  unicode_api:=api.unicode_get_default()
+  for iterator.offset<#len(text) {
+    start:=iterator.offset
+    grapheme:=unicode.next_grapheme(&iterator)
+    if !grapheme.ok {
+      return grapheme.kind
+    }
+    face:=font.select(font.data, grapheme.value)
+    if face.font==nil {
+      return errors.Kind.NotFound
+    }
+    script:u32=0
+    at:=start
+    for at<iterator.offset {
+      cp:=utf8.decode(text, at)
+      current:=api.unicode_script(unicode_api, cp.codepoint)
+      if !neutral(current) && neutral(script) {
+        script=current
+      }
+      at+=cp.width
+    }
+    clusters[used]=Cluster{start:start, end:iterator.offset, scalar:scalar, level:resolved.value.levels[scalar], script:script, face:face, tab:utf8.decode(text, start).codepoint==9}
+    scalar+=utf8.codepoint_count(grapheme.value).value
+    used+=1
+  }
+  clusters=clusters[..used]
+  // Common/inherited graphemes inherit a neighboring script. Preserve the
+  // paragraph's logical order; native bidi levels decide visual run order.
+  previous:u32=0
+  for i in 0..used {
+    if !neutral(clusters[i].script) {
+      previous=clusters[i].script
+    }
+    else if previous!=0 {
+      clusters[i].script=previous
+    }
+  }
+  next_script:u32=0
+  i:=used
+  for i>0 {
+    i-=1
+    if !neutral(clusters[i].script) {
+      next_script=clusters[i].script
+    }
+    else if next_script!=0 {
+      clusters[i].script=next_script
+    }
+  }
+  tab:=font.space_advance*#cast(f64, options.tab_columns)
+  if !options.wrap || options.width==0 || #len(text)==0 {
+    return emit(output, api, bidi_api, text, &resolved.value, clusters, 0, #len(text), base, font, tab)
+  }
+  breaks:=unicode.line_breaks(work, text)
+  if !breaks.ok {
+    return breaks.kind
+  }
+  spans:=mem.arena_create(0)
+  defer mem.arena_release(spans)
+  adjusted:[0]i8=[]
+  measured:=shape(spans, api, text, clusters, 0, used, adjusted[..], 0, false)
+  if !measured.ok {
+    return measured.kind
+  }
+  breaks_index:usize=0
+  for u in 0..#len(measured.units) {
+    for breaks_index<#len(breaks.value) && breaks.value[breaks_index].offset<measured.units[u].end {
+      breaks_index+=1
+    }
+    measured.units[u].break_after=breaks_index<#len(breaks.value) && breaks.value[breaks_index].offset==measured.units[u].end
+  }
+  if #len(measured.units)==0 {
+    return emit(output, api, bidi_api, text, &resolved.value, clusters, 0, 0, base, font, tab)
+  }
+  u:usize=0
+  for u<#len(measured.units) {
+    end:=#len(measured.units)
+    if options.wrap && options.width>0 {
+      x:f64=0.0
+      last_break:=u
+      at:=u
+      for at<#len(measured.units) {
+        width:=advance(measured.units[at], x, tab)
+        if at>u && x+width>#cast(f64, options.width) {
+          break
+        }
+        x+=width
+        at+=1
+        if measured.units[at-1].break_after {
+          last_break=at
+        }
+      }
+      end=at
+      if end<#len(measured.units) && last_break>u {
+        end=last_break
+      }
+      if end==u {
+        end=u+1
+      }
+    }
+    candidate:=mem.arena_create(0)
+    accepted:=false
+    for !accepted {
+      mem.arena_reset(candidate)
+      temporary:=Output{arena:candidate, line_count:output.line_count}
+      kind:=emit(&temporary, api, bidi_api, text, &resolved.value, clusters, measured.units[u].start, measured.units[end-1].end, base, font, tab)
+      if kind!=errors.Kind.None {
+        mem.arena_release(candidate)
+        return kind
+      }
+      line:=temporary.tail.value
+      if options.wrap && options.width>0 && line.width>#cast(f64, options.width) && end>u+1 {
+        end-=1
+        continue
+      }
+      first_glyph:=output.glyph_count
+      node:=temporary.first
+      for node!=nil {
+        append(output, node.value)
+        node=node.next
+      }
+      line.glyph_start=first_glyph
+      line_append(output, line)
+      accepted=true
+    }
+    mem.arena_release(candidate)
+    u=end
+  }
+  return errors.Kind.None
+}
+fn separator(cp:u32) bool {
+  return cp==10 || cp==13 || cp==11 || cp==12 || cp==28 || cp==29 || cp==30 || cp==133 || cp==8232 || cp==8233
+}
+// Owns the source byte copy and placements in arena. Font handles/data remain
+// caller-owned. Wrapping uses shaped clusters and reshapes each accepted line;
+// an overwide indivisible cluster is emitted intact rather than split.
+pub fn build(arena:*mem.Arena, source:[]const u8, font:Font, api:*const hb.Api, bidi_api:*const bidi.Api, options:Options) Result {
+  if arena==nil || api==nil || bidi_api==nil || font.select==nil || font.line_height<=0 || !finite(font.space_advance) || font.space_advance<=0.0 || options.width<0 || options.tab_columns==0 || options.tab_columns>256 || !utf8.valid(source) || #len(source)>2147483647 || (options.base!=bidi.Auto && options.base!=bidi.LeftToRight && options.base!=bidi.RightToLeft) {
+    return Result{kind:errors.Kind.InvalidInput}
+  }
+  if api.unicode_get_default==nil || api.unicode_script==nil || api.shape==nil {
+    return Result{kind:errors.Kind.InvalidState}
+  }
+  mark:=mem.arena_mark(arena)
+  success:=false
+  defer {
+    if !success {
+      mem.arena_rewind(arena, mark)
+    }
+  }
+  work:=mem.arena_create(0)
+  defer mem.arena_release(work)
+  output:=Output{arena:work}
+  begin:usize=0
+  at:usize=0
+  for at<#len(source) {
+    decoded:=utf8.decode(source, at)
+    if separator(decoded.codepoint) {
+      kind:=paragraph(&output, api, bidi_api, source[begin..at], begin, font, options)
+      if kind!=errors.Kind.None {
+        return Result{kind:kind, offset:begin}
+      }
+      at+=decoded.width
+      if decoded.codepoint==13 && at<#len(source) && source[at]==10 {
+        at+=1
+      }
+      begin=at
+    } else {
+      at+=decoded.width
+    }
+  }
+  kind:=paragraph(&output, api, bidi_api, source[begin..], begin, font, options)
+  if kind!=errors.Kind.None {
+    return Result{kind:kind, offset:begin}
+  }
+  text:=mem.push_bytes_uninit(arena, #len(source))
+  _=mem.copy(text, source)
+  glyphs:=mem.push_array(Glyph, arena, output.glyph_count)
+  lines:=mem.push_array(Line, arena, output.line_count)
+  node:=output.first
+  index:usize=0
+  for node!=nil {
+    glyphs[index]=node.value
+    index+=1
+    node=node.next
+  }
+  line_node:=output.lines
+  index=0
+  for line_node!=nil {
+    lines[index]=line_node.value
+    index+=1
+    line_node=line_node.next
+  }
+  success=true
+  return Result{value:Layout{text:text, glyphs:glyphs, lines:lines, width:output.width, height:#cast(f64, output.line_count)*#cast(f64, font.line_height), line_height:font.line_height}, ok:true}
+}
+fn hit(layout:*const Layout, line_index, offset:usize) Hit {
+  line:=layout.lines[line_index]
+  x:=line.width
+  rtl:=line.rtl
+  if rtl {
+    x=0.0
+  }
+  chosen:usize=0
+  has:=false
+  for i in line.glyph_start..line.glyph_start+line.glyph_count {
+    glyph:=layout.glyphs[i]
+    if glyph.end<=offset && (!has || glyph.end>layout.glyphs[chosen].end || (glyph.end==layout.glyphs[chosen].end && glyph.start>layout.glyphs[chosen].start)) {
+      chosen=i
+      has=true
+    }
+  }
+  if has {
+    glyph:=layout.glyphs[chosen]
+    left:=glyph.x
+    right:=glyph.x+glyph.advance
+    for i in line.glyph_start..line.glyph_start+line.glyph_count {
+      other:=layout.glyphs[i]
+      if other.start==glyph.start && other.end==glyph.end {
+        left=math.min(left, other.x)
+        right=math.max(right, other.x+other.advance)
+      }
+    }
+    rtl=glyph.rtl
+    x=right
+    if rtl {
+      x=left
+    }
+  }
+  return Hit{start:offset, end:offset, line:line_index, x:x, y:line.y, height:#cast(f64, layout.line_height), rtl:rtl, ok:true}
+}
+
+pub fn cluster_at(layout:*const Layout, offset:usize) Hit {
+  if layout==nil || offset>#len(layout.text) || #len(layout.lines)==0 {
+    return Hit{}
+  }
+  line_index:usize=0
+  for i in 1..#len(layout.lines) {
+    if offset>=layout.lines[i].start {
+      line_index=i
+    }
+  }
+  line:=layout.lines[line_index]
+  for i in line.glyph_start..line.glyph_start+line.glyph_count {
+    glyph:=layout.glyphs[i]
+    if offset>=glyph.start && offset<glyph.end {
+      left:=glyph.x
+      right:=glyph.x+glyph.advance
+      for j in line.glyph_start..line.glyph_start+line.glyph_count {
+        other:=layout.glyphs[j]
+        if other.start==glyph.start && other.end==glyph.end {
+          left=math.min(left, other.x)
+          right=math.max(right, other.x+other.advance)
+        }
+      }
+      return Hit{start:glyph.start, end:glyph.end, line:line_index, x:left, y:line.y, width:right-left, height:#cast(f64, layout.line_height), rtl:glyph.rtl, ok:true}
+    }
+  }
+  return hit(layout, line_index, offset)
+}
+pub fn at_point(layout:*const Layout, x, y:f64) Hit {
+  if layout==nil || #len(layout.lines)==0 || !finite(x) || !finite(y) {
+    return Hit{}
+  }
+  line_index:usize=0
+  if y>0.0 {
+    line_index=#cast(usize, math.floor64(y/#cast(f64, layout.line_height)))
+  }
+  if line_index>=#len(layout.lines) {
+    return cluster_at(layout, #len(layout.text))
+  }
+  line:=layout.lines[line_index]
+  if line.glyph_count==0 {
+    return hit(layout, line_index, line.start)
+  }
+  first:=layout.glyphs[line.glyph_start]
+  if x<first.x {
+    offset:=first.start
+    if first.rtl {
+      offset=first.end
+    }
+    return Hit{start:offset, end:offset, line:line_index, x:first.x, y:line.y, height:#cast(f64, layout.line_height), rtl:first.rtl, ok:true}
+  }
+  i:=line.glyph_start
+  for i<line.glyph_start+line.glyph_count {
+    glyph:=layout.glyphs[i]
+    left:=glyph.x
+    right:=glyph.x+glyph.advance
+    next:=i+1
+    for next<line.glyph_start+line.glyph_count && layout.glyphs[next].start==glyph.start && layout.glyphs[next].end==glyph.end {
+      other:=layout.glyphs[next]
+      left=math.min(left, other.x)
+      right=math.max(right, other.x+other.advance)
+      next+=1
+    }
+    if x<right {
+      return Hit{start:glyph.start, end:glyph.end, line:line_index, x:left, y:line.y, width:right-left, height:#cast(f64, layout.line_height), rtl:glyph.rtl, ok:true}
+    }
+    i=next
+  }
+  last:=layout.glyphs[line.glyph_start+line.glyph_count-1]
+  offset:=last.end
+  if last.rtl {
+    offset=last.start
+  }
+  return Hit{start:offset, end:offset, line:line_index, x:line.width, y:line.y, height:#cast(f64, layout.line_height), rtl:last.rtl, ok:true}
+}
+
+// Visual cells touched by a logical source selection. start/end are the source
+// hull of each merged rectangle; at bidi boundaries that hull need not describe
+// a contiguous visual or logical run. Geometry is authoritative for drawing.
+pub struct SelectionRect { line: usize, start: usize, end: usize, x: f64, y: f64, width: f64, height: f64 }
+pub struct SelectionResult { value: []SelectionRect, kind: errors.Kind, ok: bool }
+fn selection_boundary(text: []const u8, offset: usize) bool {
+  return offset<=#len(text) && (offset==#len(text) || text[offset]&0xc0!=0x80)
+}
+fn selection_store(destination: []SelectionRect, count: usize, rect: SelectionRect) {
+  if count<#len(destination) {
+    destination[count]=rect
+  }
+}
+// Two linear passes count then write exactly the required number of rectangles.
+// An unselected positive-width cell is a merge barrier, including at bidi runs.
+fn selection_walk(layout: *const Layout, start, end: usize, destination: []SelectionRect) usize {
+  count: usize=0
+  for line_index in 0..#len(layout.lines) {
+    line:=layout.lines[line_index]
+    pending:=SelectionRect{}
+    active:=false
+    i:=line.glyph_start
+    limit:=line.glyph_start+line.glyph_count
+    for i<limit {
+      glyph:=layout.glyphs[i]
+      left:=math.min(glyph.x, glyph.x+glyph.advance)
+      right:=math.max(glyph.x, glyph.x+glyph.advance)
+      next:=i+1
+      for next<limit && layout.glyphs[next].start==glyph.start && layout.glyphs[next].end==glyph.end {
+        other:=layout.glyphs[next]
+        left=math.min(left, math.min(other.x, other.x+other.advance))
+        right=math.max(right, math.max(other.x, other.x+other.advance))
+        next+=1
+      }
+      selected:=glyph.start<end && glyph.end>start
+      if right>left {
+        if selected {
+          if active && left<=pending.x+pending.width {
+            edge:=math.max(pending.x+pending.width, right)
+            pending.x=math.min(pending.x, left)
+            pending.width=edge-pending.x
+            if glyph.start<pending.start {
+              pending.start=glyph.start
+            }
+            if glyph.end>pending.end {
+              pending.end=glyph.end
+            }
+          }
+          else {
+            if active {
+              selection_store(destination, count, pending)
+              count+=1
+            }
+            pending=SelectionRect{line:line_index, start:glyph.start, end:glyph.end, x:left, y:line.y, width:right-left, height:#cast(f64, layout.line_height)}
+            active=true
+          }
+        }
+        else if active {
+          selection_store(destination, count, pending)
+          count+=1
+          active=false
+        }
+      }
+      i=next
+    }
+    if active {
+      selection_store(destination, count, pending)
+      count+=1
+    }
+  }
+  return count
+}
+// Selects whole canonical shaped clusters when any source byte in the cluster
+// is selected. Bounds must be UTF-8 scalar boundaries. Tabs contribute their
+// advance cells; zero-width controls and paragraph separators have no rectangle.
+// Newline extensions and empty-line selection policy belong to the application.
+// Layouts built by build have contiguous line glyph slices; forged malformed
+// layouts are rejected before allocation. Empty ranges allocate nothing.
+pub fn selection(arena: *mem.Arena, layout: *const Layout, start, end: usize) SelectionResult {
+  if arena==nil || layout==nil || start>end || end>#len(layout.text) || !utf8.valid(layout.text) || !selection_boundary(layout.text, start) || !selection_boundary(layout.text, end) {
+    return SelectionResult{kind:errors.Kind.InvalidInput}
+  }
+  if start==end {
+    return SelectionResult{ok:true}
+  }
+  if layout.line_height<=0 {
+    return SelectionResult{kind:errors.Kind.InvalidInput}
+  }
+  used: usize=0
+  for line in layout.lines {
+    if line.start>line.end || line.end>#len(layout.text) || line.glyph_start!=used || line.glyph_count>#len(layout.glyphs)-used || !selection_boundary(layout.text, line.start) || !selection_boundary(layout.text, line.end) || !finite(line.y) || !finite(line.y+#cast(f64, layout.line_height)) {
+      return SelectionResult{kind:errors.Kind.InvalidInput}
+    }
+    used+=line.glyph_count
+  }
+  if used!=#len(layout.glyphs) {
+    return SelectionResult{kind:errors.Kind.InvalidInput}
+  }
+  for glyph in layout.glyphs {
+    if glyph.start>=glyph.end || glyph.end>#len(layout.text) || !selection_boundary(layout.text, glyph.start) || !selection_boundary(layout.text, glyph.end) || !finite(glyph.x) || !finite(glyph.advance) || !finite(glyph.x+glyph.advance) {
+      return SelectionResult{kind:errors.Kind.InvalidInput}
+    }
+  }
+  empty: [0]SelectionRect=[]
+  count:=selection_walk(layout, start, end, empty[..])
+  if count>~#cast(usize, 0)/#sizeof(SelectionRect) {
+    return SelectionResult{kind:errors.Kind.Overflow}
+  }
+  if count==0 {
+    return SelectionResult{ok:true}
+  }
+  rects:=mem.push_array(SelectionRect, arena, count)
+  _=selection_walk(layout, start, end, rects)
+  return SelectionResult{value:rects, ok:true}
+}

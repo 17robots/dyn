@@ -12,6 +12,34 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
+## 0.1.0-preview.28
+
+This release preserves preview.27's pointer-handle, chained arena API. Upgrade
+the compiler, SDK, native adapters and editor integrations together.
+
+- Imports remain module-wide. Identical imports across files are deduplicated;
+  different aliases for one dependency no longer produce cross-file vet findings.
+  Conflicting aliases and same-file duplicate diagnostics remain. Import path
+  resolution is reused across repeated declarations.
+- Added fallible `mem.arena_try_create`, `arena_try_create_bounded` and
+  `arena_try_push_uninit` using pointer handles. Fallible pushes and extension
+  report Windows commitment failure without publishing a partial allocation.
+- Added portable filesystem metadata, directory operations and file mappings;
+  portable readiness queues, process signals and watchers; SIMD helpers and
+  expanded media, serialization, cryptography and certificate APIs.
+- Added `std/ui/box`: persistent keyed boxes, layout, animation, scrolling,
+  virtual lists, keyboard focus, text selection and composed desktop widgets.
+- Added TrueType font discovery, composite outlines, rasterization and optional
+  HarfBuzz/FriBidi layout with grapheme wrapping, source-cluster queries and
+  visual selection rectangles. Added batched OpenGL rendering.
+- Expanded desktop window backends with ordered input, clipboard transfers,
+  worker wake-ups, translated keys, IME composition, surrounding-text correction
+  and portable native frontend controls. Wayland, X11, Win32 and Cocoa remain
+  subject to the native qualification scope documented in the release evidence.
+- Preserved preview.27's JSON/parser optimizations and shared-unwind fixes while
+  integrating the development SDK. Added regression and native qualification
+  coverage for the expanded APIs.
+
 ## 0.1.0-preview.27
 
 Upgrade guide: [0.1.0-preview.27](docs/migrations/0.1.0-preview.27.md).

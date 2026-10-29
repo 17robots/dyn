@@ -1,0 +1,154 @@
+#target(kernel: darwin)
+
+// Directory listing through getdirentries64, with the Linux API shape.
+// Entry kinds use dirent values: 4 directory, 8 regular file, 10 link.
+pub struct Directory { file: File, storage: []u8, offset: usize, used: usize, base: i64 }
+pub struct DirectoryResult { value: Directory, error: isize, kind: errors.Kind, ok: bool }
+pub struct DirectoryEntry { name: []const u8, kind: u8, ok: bool, error: isize, error_kind: errors.Kind }
+
+pub fn open_directory(path: []const u8, storage: []u8) DirectoryResult {
+  if #len(storage) < 1048 {
+    return DirectoryResult{ error: -22, kind: errors.Kind.InvalidInput }
+  }
+  space: [4096]u8 = []
+  name := terminated(path, space[..])
+  if name == nil {
+    return DirectoryResult{ error: -22, kind: errors.Kind.InvalidInput }
+  }
+  // O_RDONLY | O_DIRECTORY | O_CLOEXEC.
+  descriptor := #syscall(5, name, 17825792, 0)
+  if descriptor < 0 {
+    return DirectoryResult{ error: descriptor, kind: errors.darwin(descriptor) }
+  }
+  return DirectoryResult{ value: Directory{ file: owned_file(descriptor), storage: storage }, ok: true }
+}
+
+// Entry name borrows directory storage until the next call.
+pub fn directory_next(directory: *Directory) DirectoryEntry {
+  if !is_open(&directory.file) {
+    return DirectoryEntry{ error: -9, error_kind: errors.Kind.InvalidState }
+  }
+  for true {
+    if directory.offset >= directory.used {
+      value := #syscall(344, directory.file.descriptor, &directory.storage[0], #len(directory.storage), &directory.base)
+      for value == -4 {
+        value = #syscall(344, directory.file.descriptor, &directory.storage[0], #len(directory.storage), &directory.base)
+      }
+      if value < 0 {
+        return DirectoryEntry{ error: value, error_kind: errors.darwin(value) }
+      }
+      if value == 0 {
+        return DirectoryEntry{}
+      }
+      directory.offset = 0
+      directory.used = #cast(usize, value)
+    }
+    at := directory.offset
+    if at + 21 > directory.used {
+      return DirectoryEntry{ error: -5, error_kind: errors.Kind.System }
+    }
+    record := #cast(usize, directory.storage[at + 16]) | #cast(usize, directory.storage[at + 17]) << 8
+    length := #cast(usize, directory.storage[at + 18]) | #cast(usize, directory.storage[at + 19]) << 8
+    if record < 21 || at + record > directory.used || 21 + length > record {
+      return DirectoryEntry{ error: -5, error_kind: errors.Kind.System }
+    }
+    kind := directory.storage[at + 20]
+    name := directory.storage[at + 21..at + 21 + length]
+    directory.offset += record
+    dot := #len(name) == 1 && name[0] == '.'
+    dot_dot := #len(name) == 2 && name[0] == '.' && name[1] == '.'
+    if !dot && !dot_dot {
+      return DirectoryEntry{ name: name, kind: kind, ok: true }
+    }
+  }
+  return DirectoryEntry{}
+}
+
+pub fn close_directory(directory: *Directory) Result {
+  directory.offset = 0
+  directory.used = 0
+  return close(&directory.file)
+}
+
+// Size, inode, device and the POSIX mode (type and permission bits).
+pub struct Metadata { size: u64, inode: u64, device: u64, mode: u16, error: isize, kind: errors.Kind, ok: bool }
+
+fn stat_metadata(raw: *const [144]u8) Metadata {
+  bytes := raw.*
+  read := fn_u64(bytes[..], 8)
+  return Metadata{ size: fn_u64(bytes[..], 96), inode: read, device: #cast(u64, fn_u32(bytes[..], 0)), mode: #cast(u16, bytes[4]) | #cast(u16, bytes[5]) << 8, ok: true }
+}
+
+fn fn_u32(bytes: []const u8, at: usize) u32 {
+  return #cast(u32, bytes[at]) | #cast(u32, bytes[at + 1]) << 8 | #cast(u32, bytes[at + 2]) << 16 | #cast(u32, bytes[at + 3]) << 24
+}
+
+fn fn_u64(bytes: []const u8, at: usize) u64 {
+  return #cast(u64, fn_u32(bytes, at)) | #cast(u64, fn_u32(bytes, at + 4)) << 32
+}
+
+pub fn metadata(path: []const u8) Metadata {
+  space: [4096]u8 = []
+  name := terminated(path, space[..])
+  if name == nil {
+    return Metadata{ error: -22, kind: errors.Kind.InvalidInput }
+  }
+  raw: [144]u8 = []
+  value := #syscall(338, name, &raw[0])
+  if value < 0 {
+    return Metadata{ error: value, kind: errors.darwin(value) }
+  }
+  return stat_metadata(&raw)
+}
+
+pub fn file_metadata(file: *const File) Metadata {
+  if !is_open(file) {
+    return Metadata{ error: -9, kind: errors.Kind.InvalidState }
+  }
+  raw: [144]u8 = []
+  value := #syscall(339, file.descriptor, &raw[0])
+  if value < 0 {
+    return Metadata{ error: value, kind: errors.darwin(value) }
+  }
+  return stat_metadata(&raw)
+}
+
+fn path_call(number: isize, path: []const u8, argument: usize) Result {
+  space: [4096]u8 = []
+  name := terminated(path, space[..])
+  if name == nil {
+    return Result{ error: -22, kind: errors.Kind.InvalidInput }
+  }
+  value := #syscall(number, name, argument)
+  if value < 0 {
+    return failure(value)
+  }
+  return Result{ ok: true }
+}
+
+pub fn remove(path: []const u8) Result {
+  return path_call(10, path, 0)
+}
+
+pub fn make_directory(path: []const u8, mode: usize) Result {
+  return path_call(136, path, mode)
+}
+
+pub fn remove_directory(path: []const u8) Result {
+  return path_call(137, path, 0)
+}
+
+pub fn rename(old_path: []const u8, new_path: []const u8) Result {
+  old_space: [4096]u8 = []
+  new_space: [4096]u8 = []
+  old_name := terminated(old_path, old_space[..])
+  new_name := terminated(new_path, new_space[..])
+  if old_name == nil || new_name == nil {
+    return Result{ error: -22, kind: errors.Kind.InvalidInput }
+  }
+  value := #syscall(128, old_name, new_name)
+  if value < 0 {
+    return failure(value)
+  }
+  return Result{ ok: true }
+}

@@ -1,0 +1,278 @@
+#target(kernel: linux)
+use "std/mem" mem
+use "std/c" c
+use "std/errors" errors
+use "std/ui" ui
+#link("X11")
+#link("GL")
+// Xlib and GLX are thread-affine. Keep this owner alive until close; do not
+// copy live windows. Destroy renderer resources before closing their context.
+pub struct Window {
+  display: rawptr, handle: usize, context: rawptr, colormap: usize, close_atom: usize, protocol_atom: usize,
+  width: i32, height: i32, input: ui.Input, close_requested: bool,
+  // Desktop input for std/ui/box, reset by each poll; see desktop.dyn.
+  desktop: Desktop,
+  events: ordered.Queue, events_enabled: bool, wake_descriptor: i32 = -1, ordered_pressed: [256]u8,
+}
+pub struct Result { kind: errors.Kind, ok: bool }
+struct Visual { visual: rawptr, id: usize, screen: i32, depth: i32, class: i32, red: usize, green: usize, blue: usize, colormap_size: i32, bits: i32 }
+struct Attributes { background_pixmap: usize, background_pixel: usize, border_pixmap: usize, border_pixel: usize, bit_gravity: i32, win_gravity: i32, backing_store: i32, backing_planes: usize, backing_pixel: usize, save_under: i32, event_mask: isize, propagate: isize, override_redirect: i32, colormap: usize, cursor: usize }
+struct Event { kind: i32, serial: usize, sent: i32, display: rawptr, window: usize, rest: [19]usize }
+struct PointerEvent { kind: i32, serial: usize, sent: i32, display: rawptr, window: usize, root: usize, subwindow: usize, time: usize, x: i32, y: i32, root_x: i32, root_y: i32, state: u32, button: u32, same_screen: i32 }
+struct Configure { kind: i32, serial: usize, sent: i32, display: rawptr, event: usize, window: usize, x: i32, y: i32, width: i32, height: i32 }
+struct Client { kind: i32, serial: usize, sent: i32, display: rawptr, window: usize, message: usize, format: i32, data: [5]isize }
+extern fn display_open "XOpenDisplay"(name: rawptr) rawptr
+extern fn display_close "XCloseDisplay"(display: rawptr) i32
+extern fn screen "XDefaultScreen"(display: rawptr) i32
+extern fn root "XRootWindow"(display: rawptr, screen: i32) usize
+extern fn free "XFree"(pointer: rawptr) i32
+extern fn create_colormap "XCreateColormap"(display: rawptr, root: usize, visual: rawptr, allocation: i32) usize
+extern fn free_colormap "XFreeColormap"(display: rawptr, colormap: usize) i32
+extern fn create_window "XCreateWindow"(display: rawptr, parent: usize, x: i32, y: i32, width: u32, height: u32, border: u32, depth: i32, class: u32, visual: rawptr, mask: usize, attributes: *Attributes) usize
+extern fn destroy_window "XDestroyWindow"(display: rawptr, window: usize) i32
+extern fn map_window "XMapWindow"(display: rawptr, window: usize) i32
+extern fn store_name "XStoreName"(display: rawptr, window: usize, title: *const u8) i32
+extern fn intern_atom "XInternAtom"(display: rawptr, name: *const u8, only: i32) usize
+extern fn protocols "XSetWMProtocols"(display: rawptr, window: usize, atoms: *usize, count: i32) i32
+extern fn pending "XPending"(display: rawptr) i32
+extern fn next_xevent "XNextEvent"(display: rawptr, event: *Event) i32
+extern fn keysym "XLookupKeysym"(event: rawptr, index: i32) usize
+extern fn flush "XFlush"(display: rawptr) i32
+extern fn choose "glXChooseFBConfig"(display: rawptr, screen: i32, attributes: *const i32, count: *i32) *rawptr
+extern fn visual "glXGetVisualFromFBConfig"(display: rawptr, config: rawptr) *Visual
+extern fn sync "XSync"(display: rawptr, discard: i32) i32
+extern fn set_error_handler "XSetErrorHandler"(handler: fn(rawptr, rawptr)i32) fn(rawptr, rawptr)i32
+context_error_display: rawptr
+context_error_seen: bool
+context_previous_handler: fn(rawptr, rawptr)i32
+fn context_error(display: rawptr, event: rawptr) i32 {
+  if display == context_error_display {
+    context_error_seen = true
+    return 0
+  }
+  if context_previous_handler != nil {
+    return context_previous_handler(display, event)
+  }
+  return 0
+}
+extern fn destroy_context "glXDestroyContext"(display: rawptr, context: rawptr)
+extern fn current_context "glXGetCurrentContext"() rawptr
+extern fn current "glXMakeCurrent"(display: rawptr, drawable: usize, context: rawptr) i32
+extern fn swap_buffers "glXSwapBuffers"(display: rawptr, drawable: usize)
+pub extern fn gl_proc "glXGetProcAddressARB"(name: *const u8) rawptr
+// Creates a double-buffered GL 3.3 core context. All Xlib window creation
+// must be serialized on the GUI thread: the temporary X error handler is global.
+// Asynchronous X/GLX failures return System rather than terminating the process.
+pub fn open(window: *Window, title: []const u8, width, height: i32) Result {
+  if window.display != nil {
+    return Result{kind:errors.Kind.InvalidState}
+  }
+  if width <= 0 || height <= 0 || width > 65535 || height > 65535 || #len(title) > 4095 {
+    return Result{kind:errors.Kind.InvalidInput}
+  }
+  storage: [4096]u8 = []
+  name := c.string_into(storage[..], title)
+  if !name.ok {
+    return Result{kind:errors.Kind.InvalidInput}
+  }
+  display := display_open(nil)
+  if display == nil {
+    return Result{kind:errors.Kind.System}
+  }
+  window.* = Window{display:display, width:width, height:height}
+  context_error_display = display
+  context_error_seen = false
+  context_previous_handler = set_error_handler(context_error)
+  defer {
+    _ = set_error_handler(context_previous_handler)
+    context_error_display = nil
+    context_previous_handler = nil
+  }
+  attributes: [15]i32 = [0x8012, 1, 0x8010, 1, 0x8011, 1, 5, 1, 8, 8, 9, 8, 10, 8, 0]
+  count: i32 = 0
+  configs := choose(display, screen(display), &attributes[0], &count)
+  if configs == nil || count == 0 {
+    if configs != nil {
+      _ = free(configs)
+    }
+    close(window)
+    return Result{kind:errors.Kind.System}
+  }
+  chosen := configs.*
+  info := visual(display, chosen)
+  if info == nil {
+    _ = free(configs)
+    close(window)
+    return Result{kind:errors.Kind.System}
+  }
+  window.colormap = create_colormap(display, root(display, info.screen), info.visual, 0)
+  attrs := Attributes{colormap:window.colormap, event_mask:1|2|4|8|64|32768|131072|2097152|4194304}
+  window.handle = create_window(display, root(display, info.screen), 0, 0, #cast(u32, width), #cast(u32, height), 0, info.depth, 1, info.visual, 8192|2048, &attrs)
+  create_name := "glXCreateContextAttribsARB\x00"
+  create := #cast(fn(rawptr, rawptr, rawptr, i32, *const i32)rawptr, gl_proc(&create_name[0]))
+  if create != nil {
+    context_attributes: [7]i32 = [0x2091, 3, 0x2092, 3, 0x9126, 1, 0]
+    window.context = create(display, chosen, nil, 1, &context_attributes[0])
+  }
+  _ = sync(display, 0)
+  _ = free(info)
+  _ = free(configs)
+  if window.handle == 0 || window.context == nil || context_error_seen || !make_current(window).ok {
+    close(window)
+    return Result{kind:errors.Kind.System}
+  }
+  atom_name: [17]u8 = ['W', 'M', '_', 'D', 'E', 'L', 'E', 'T', 'E', '_', 'W', 'I', 'N', 'D', 'O', 'W', 0]
+  window.close_atom = intern_atom(display, &atom_name[0], 0)
+  protocol_name := "WM_PROTOCOLS\x00"
+  window.protocol_atom = intern_atom(display, &protocol_name[0], 0)
+  _ = protocols(display, window.handle, &window.close_atom, 1)
+  _ = store_name(display, window.handle, name.value)
+  _ = map_window(display, window.handle)
+  desktop_open(window)
+  if !ordered_open(window) {
+    close(window)
+    return Result{kind:errors.Kind.System}
+  }
+  _ = flush(display)
+  _ = sync(display, 0)
+  if context_error_seen {
+    close(window)
+    return Result{kind:errors.Kind.System}
+  }
+  return Result{ok:true}
+}
+pub fn make_current(window: *Window) Result {
+  if window.display == nil || window.context == nil || window.handle == 0 {
+    return Result{kind:errors.Kind.InvalidState}
+  }
+  if current(window.display, window.handle, window.context) == 0 {
+    return Result{kind:errors.Kind.System}
+  }
+  return Result{ok:true}
+}
+pub fn swap(window: *Window) Result {
+  if window.display == nil || window.context == nil {
+    return Result{kind:errors.Kind.InvalidState}
+  }
+  swap_buffers(window.display, window.handle)
+  return Result{ok:true}
+}
+pub fn poll(window: *Window) Result {
+  if window.display == nil {
+    return Result{kind:errors.Kind.InvalidState}
+  }
+  window.input.pressed = false
+  window.input.released = false
+  window.input.tab = false
+  window.input.activate = false
+  window.input.left = false
+  window.input.right = false
+  desktop_begin(window)
+  ordered_wakes(window)
+  for pending(window.display) > 0 {
+    event := Event{}
+    _ = next_xevent(window.display, &event)
+    if event.kind == 2 || event.kind == 3 {
+      ordered_keyboard(window, &event)
+    }
+    if desktop_filter(window, &event) {
+      continue
+    }
+    if event.kind == 2 {
+      desktop_key(window, &event)
+      key := keysym(&event, 0)
+      window.input.tab = window.input.tab || key == 0xff09
+      window.input.activate = window.input.activate || key == 0xff0d || key == 0x20
+      window.input.left = window.input.left || key == 0xff51
+      window.input.right = window.input.right || key == 0xff53
+    } else if event.kind == 4 || event.kind == 5 || event.kind == 6 {
+      pointer := #cast(*PointerEvent, &event)
+      window.input.x = pointer.x
+      window.input.y = pointer.y
+      desktop_pointer(window, event.kind, pointer.button)
+      value := ordered.Event{ kind: ordered.Kind.PointerMove, x: pointer.x, y: pointer.y, modifiers: ordered_modifiers(pointer.state) }
+      if event.kind == 4 || event.kind == 5 {
+        value.kind = ordered.Kind.PointerDown
+        if event.kind == 5 {
+          value.kind = ordered.Kind.PointerUp
+        }
+        value.button = pointer.button
+      }
+      if pointer.button >= 4 && pointer.button <= 7 && event.kind != 6 {
+        if event.kind == 4 {
+          value.kind = ordered.Kind.Wheel
+          if pointer.button == 4 {
+            value.scroll_y = -48.0 * window.desktop.scale
+          }
+          if pointer.button == 5 {
+            value.scroll_y = 48.0 * window.desktop.scale
+          }
+          if pointer.button == 6 {
+            value.scroll_x = -48.0 * window.desktop.scale
+          }
+          if pointer.button == 7 {
+            value.scroll_x = 48.0 * window.desktop.scale
+          }
+          ordered_push(window, value)
+        }
+      }
+      else {
+        ordered_push(window, value)
+      }
+      if pointer.button == 1 && event.kind != 6 {
+        if event.kind == 4 {
+          window.input.down = true
+          window.input.pressed = true
+        } else {
+          window.input.down = false
+          window.input.released = true
+        }
+      }
+    } else if event.kind == 9 {
+      ordered_push(window, ordered.Event{kind:ordered.Kind.FocusGained})
+    } else if event.kind == 10 {
+      window.ordered_pressed = []
+      ordered_push(window, ordered.Event{kind:ordered.Kind.FocusLost})
+      window.input.released = window.input.released || window.input.down
+      window.input.down = false
+    } else if event.kind == 22 {
+      resized := #cast(*Configure, &event)
+      window.width = resized.width
+      window.height = resized.height
+      ordered_push(window, ordered.Event{kind:ordered.Kind.Resize, width:resized.width, height:resized.height})
+    } else if event.kind == 33 {
+      message := #cast(*Client, &event)
+      if message.message == window.protocol_atom && message.format == 32 && #cast(usize, message.data[0]) == window.close_atom {
+        window.close_requested = true
+        ordered_push(window, ordered.Event{kind:ordered.Kind.Close})
+      }
+    } else {
+      desktop_selection(window, &event)
+    }
+  }
+  return Result{ok:true}
+}
+pub fn close(window: *Window) {
+  if window.display == nil {
+    return
+  }
+  if window.wake_descriptor >= 0 {
+    _ = event_close(window.wake_descriptor)
+    window.wake_descriptor = -1
+  }
+  desktop_close(window)
+  if window.context != nil {
+    if current_context() == window.context {
+      _ = current(window.display, 0, nil)
+    }
+    destroy_context(window.display, window.context)
+  }
+  if window.handle != 0 {
+    _ = destroy_window(window.display, window.handle)
+  }
+  if window.colormap != 0 {
+    _ = free_colormap(window.display, window.colormap)
+  }
+  _ = display_close(window.display)
+  window.* = Window{}
+}

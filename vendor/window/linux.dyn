@@ -1,0 +1,106 @@
+use "std/errors" errors
+use "std/text/edit" surrounding_edit
+#target(kernel: linux)
+use "vendor/window/x11" x11
+use "std/ui/box" box
+// Linux default currently uses X11/GLX, including XWayland. Explicit native
+// Wayland is a separate backend; availability never silently selects SDL.
+pub type Window = x11.Window
+pub type Result = x11.Result
+pub fn open(window: *Window, title: []const u8, width, height: i32) Result {
+  return x11.open(window, title, width, height)
+}
+pub fn close(window: *Window) {
+  x11.close(window)
+}
+pub fn poll(window: *Window) Result {
+  return x11.poll(window)
+}
+pub fn make_current(window: *Window) Result {
+  return x11.make_current(window)
+}
+pub fn swap(window: *Window) Result {
+  return x11.swap(window)
+}
+pub fn gl_proc(name: *const u8) rawptr {
+  return x11.gl_proc(name)
+}
+pub type Cursor = x11.Cursor
+pub fn set_clipboard(window: *Window, text: []const u8) {
+  x11.set_clipboard(window, text)
+}
+pub fn set_cursor(window: *Window, cursor: Cursor) {
+  x11.set_cursor(window, cursor)
+}
+pub fn scale(window: *const Window) f32 {
+  return x11.scale(window)
+}
+pub fn wait(window: *Window, timeout: i32) {
+  x11.wait(window, timeout)
+}
+pub fn box_input(window: *const Window) box.Input {
+  return x11.box_input(window)
+}
+pub fn request_paste(window: *Window) {
+  x11.request_paste(window)
+}
+
+// Ordered events retain all supported raw input; box_input remains a summary.
+pub type Event = x11.OrderedEvent
+pub type EventKind = x11.EventKind
+pub fn next_event(window: *Window, output: *Event) bool {
+  return x11.next_event(window, output)
+}
+// The owner must outlive all worker wake calls; stop/join them before close.
+pub fn wake(window: *const Window) Result {
+  return x11.wake(window)
+}
+
+// Ordered listening is disabled initially. Enable before polling input;
+// changing this flag clears the queue without changing box_input summaries.
+pub fn listen_events(window: *Window, enabled: bool) {
+  x11.listen_events(window, enabled)
+}
+pub type Composition = x11.Composition
+pub fn composition(window: *const Window) Composition {
+  return x11.composition(window)
+}
+pub fn set_text_input(window: *Window, enabled: bool, x, y, width, height: i32) {
+  x11.set_text_input(window, enabled, x, y, width, height)
+}
+pub fn clipboard(window: *const Window) []const u8 {
+  return x11.clipboard(window)
+}
+
+pub type Surrounding = surrounding_edit.Context
+pub fn set_surrounding_text(window: *Window, context: Surrounding) Result {
+  if context.cause != surrounding_edit.Cause.Other && context.cause != surrounding_edit.Cause.InputMethod {
+    return Result{ kind: errors.Kind.InvalidInput }
+  }
+  return x11.set_surrounding_text(window, context.text, context.cursor, context.anchor, context.token)
+}
+
+pub fn set_title(window:*Window, title:[]const u8) Result {
+  return x11.set_title(window, title)
+}
+pub fn set_size(window:*Window, width, height:i32) Result {
+  return x11.set_size(window, width, height)
+}
+
+pub fn try_set_clipboard(window:*Window, text:[]const u8) Result {
+  return x11.try_set_clipboard(window, text)
+}
+pub fn paste_pending(window:*const Window) bool {
+  return x11.paste_pending(window)
+}
+pub fn paste_status(window:*const Window) Result {
+  return x11.paste_status(window)
+}
+
+pub fn request_paste_snapshot(window:*Window) {
+  x11.request_paste_snapshot(window)
+}
+
+pub fn set_swap_interval(window:*Window, interval:i32) Result {
+  return x11.set_swap_interval(window, interval)
+}

@@ -1,0 +1,155 @@
+#target(pointer_bits: 64)
+use "std/mem" mem
+use "std/errors" errors
+use "std/net" net
+use "std/time" clock
+
+pub const Readable: u32 = 1
+pub const Writable: u32 = 4
+pub const Error: u32 = 8
+pub const Hangup: u32 = 16
+pub struct Event { descriptor: isize, token: u64, events: u32 }
+pub struct Result { kind: errors.Kind, error: isize, ok: bool }
+pub struct OpenResult { value: Queue, kind: errors.Kind, error: isize, ok: bool }
+pub struct WaitResult { value: []Event, kind: errors.Kind, error: isize, ok: bool }
+struct Entry { descriptor: isize, token: u64, events: u32, active: bool }
+// One owner, one thread. Storage belongs to the opening arena. Remove each
+// descriptor before closing/reusing it. A queue never owns its descriptors.
+// A native control failure poisons the queue: close and rebuild it, since a
+// platform may have applied part of a multi-filter update.
+pub struct Queue {
+  handle: isize = -1, active: bool, entries: []Entry,
+  failed: bool, kind: errors.Kind, error: isize,
+}
+
+pub fn open(arena: *mem.Arena, capacity: usize) OpenResult {
+  if capacity == 0 || capacity > 2147483647 {
+    return OpenResult{ kind: errors.Kind.InvalidInput }
+  }
+  opened := native_open()
+  if !opened.ok {
+    return OpenResult{ kind: opened.kind, error: opened.error }
+  }
+  return OpenResult{ value: Queue{ handle: opened.value, active: true, entries: mem.push_array(Entry, arena, capacity) }, ok: true }
+}
+fn find(queue: *Queue, descriptor: isize) usize {
+  for i in 0..#len(queue.entries) {
+    if queue.entries[i].active && queue.entries[i].descriptor == descriptor {
+      return i
+    }
+  }
+  return #len(queue.entries)
+}
+fn state(queue: *Queue) Result {
+  if !queue.active {
+    return Result{ kind: errors.Kind.InvalidState }
+  }
+  if queue.failed {
+    return Result{ kind: queue.kind, error: queue.error }
+  }
+  return Result{ ok: true }
+}
+fn control(queue: *Queue, index: usize, entry: Entry) Result {
+  outcome := native_control(queue, index, entry)
+  if !outcome.ok {
+    queue.failed = true
+    queue.kind = outcome.kind
+    queue.error = outcome.error
+    return outcome
+  }
+  queue.entries[index] = entry
+  return outcome
+}
+pub fn add(queue: *Queue, descriptor: isize, events: u32, token: u64) Result {
+  ready := state(queue)
+  if !ready.ok {
+    return ready
+  }
+  if descriptor < 0 || #cast(isize, #cast(net.Descriptor, descriptor)) != descriptor || events == 0 || (events & ~#cast(u32, 5)) != 0 {
+    return Result{ kind: errors.Kind.InvalidInput }
+  }
+  if find(queue, descriptor) != #len(queue.entries) {
+    return Result{ kind: errors.Kind.AlreadyExists }
+  }
+  for i in 0..#len(queue.entries) {
+    if !queue.entries[i].active {
+      return control(queue, i, Entry{ descriptor: descriptor, token: token, events: events, active: true })
+    }
+  }
+  return Result{ kind: errors.Kind.Capacity }
+}
+pub fn modify(queue: *Queue, descriptor: isize, events: u32, token: u64) Result {
+  ready := state(queue)
+  if !ready.ok {
+    return ready
+  }
+  if events == 0 || (events & ~#cast(u32, 5)) != 0 {
+    return Result{ kind: errors.Kind.InvalidInput }
+  }
+  index := find(queue, descriptor)
+  if index == #len(queue.entries) {
+    return Result{ kind: errors.Kind.NotFound }
+  }
+  return control(queue, index, Entry{ descriptor: descriptor, token: token, events: events, active: true })
+}
+pub fn remove(queue: *Queue, descriptor: isize) Result {
+  ready := state(queue)
+  if !ready.ok {
+    return ready
+  }
+  index := find(queue, descriptor)
+  if index == #len(queue.entries) {
+    return Result{ kind: errors.Kind.NotFound }
+  }
+  return control(queue, index, Entry{})
+}
+// Level-triggered readiness. Use nonblocking descriptors; readiness can become
+// stale before I/O. timeout < 0 waits indefinitely, zero polls. Each call's
+// output and temporary arrays belong to arena; use a separate scratch arena
+// from the queue's storage. No callbacks or hidden threads run here.
+pub fn wait(arena: *mem.Arena, queue: *Queue, timeout_milliseconds: i32) WaitResult {
+  ready := state(queue)
+  if !ready.ok {
+    return WaitResult{ kind: ready.kind, error: ready.error }
+  }
+  start := clock.ClockResult{}
+  if timeout_milliseconds > 0 {
+    start = clock.monotonic_now()
+    if !start.ok {
+      return WaitResult{ kind: start.kind, error: start.error }
+    }
+  }
+  remaining := timeout_milliseconds
+  mark := mem.arena_mark(arena)
+  for true {
+    outcome := native_wait(arena, queue, remaining)
+    if outcome.ok || outcome.kind != errors.Kind.Interrupted {
+      return outcome
+    }
+    mem.arena_rewind(arena, mark)
+    if timeout_milliseconds > 0 {
+      now := clock.monotonic_now()
+      if !now.ok {
+        return WaitResult{ kind: now.kind, error: now.error }
+      }
+      elapsed := clock.elapsed(start.value, now.value)
+      if !elapsed.ok {
+        return WaitResult{ kind: elapsed.kind, error: elapsed.error }
+      }
+      duration := #cast(i64, timeout_milliseconds) * clock.Millisecond
+      if elapsed.value >= duration {
+        return WaitResult{ ok: true }
+      }
+      remaining = #cast(i32, ((duration - elapsed.value + clock.Millisecond - 1) / clock.Millisecond))
+    }
+  }
+  return WaitResult{}
+}
+pub fn close(queue: *Queue) Result {
+  if !queue.active {
+    return Result{ ok: true }
+  }
+  outcome := native_close(queue.handle)
+  queue.* = Queue{}
+  return outcome
+}

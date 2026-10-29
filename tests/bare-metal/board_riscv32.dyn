@@ -1,14 +1,8 @@
 #target(arch: riscv32, kernel: none)
 // NS16550 UART on the QEMU virt board: transmit register and line status.
-use "std/mmio"
-
-const UartData: usize = 0x10000000
-const UartStatus: usize = 0x10000005
+use "std/embedded/uart" uart
 
 fn uart_write(text: []const u8) {
-  for byte in text {
-    for (mmio.load_u8(UartStatus) & 0x20) == 0 {
-    }
-    mmio.store_u8(UartData, byte)
-  }
+  device := uart.ns16550(0x10000000)
+  uart.write(&device, text)
 }

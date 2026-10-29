@@ -73,7 +73,10 @@ pub fn xor(destination: []u8, input: []const u8, key: []const u8, nonce: []const
   if #len(destination) < #len(input) || #len(key) != 32 || #len(nonce) != 12 {
     return false
   }
-  blocks := (#len(input) + 63) / 64
+  blocks := #len(input) / 64
+  if #len(input) % 64 != 0 {
+    blocks += 1
+  }
   if #cast(u64, blocks) > 4294967296 - #cast(u64, counter) {
     return false
   }

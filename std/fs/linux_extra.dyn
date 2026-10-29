@@ -30,7 +30,7 @@ pub fn open_directory(path: []const u8, storage: []u8) DirectoryResult {
   if #len(storage) < 24 {
     return DirectoryResult{ error: -22, kind: errors.linux(-22), ok: false }
   }
-  opened := open_flags(path, 65536, 0)
+  opened := open_flags(path, directory_flag, 0)
   if !opened.ok {
     return DirectoryResult{ error: opened.error, kind: errors.linux(opened.error), ok: false }
   }
@@ -263,7 +263,7 @@ fn read_link_into(path: []const u8, destination: []u8) PathResult {
 }
 
 pub fn sync_directory(path: []const u8) Result {
-  opened := open_flags(path, 65536, 0)
+  opened := open_flags(path, directory_flag, 0)
   if !opened.ok {
     return Result{ error: opened.error, kind: errors.linux(opened.error), ok: false }
   }

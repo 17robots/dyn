@@ -1,0 +1,1014 @@
+// Box-model immediate-mode UI, after Ryan Fleury's UI series. Every widget is
+// a tree of boxes rebuilt each frame. Boxes are keyed by a hash of their label
+// and their parent's key; a persistent copy keeps layout, animation and scroll
+// state across frames. Input is tested against the previous frame's layout, so
+// building never waits for layout. Layout sizes each axis from semantic sizes
+// (pixels, text, percent of parent, sum of children) and shrinks boxes by
+// their strictness when children overflow.
+//
+// Storage: persistent boxes come from the state arena and are recycled through
+// a free list when a frame no longer builds them. Per-frame text and draw
+// commands use the frame arena passed to begin.
+
+use "std/mem" mem
+use "std/hash" hash
+use "std/math" math
+use "std/ui" ui
+use "std/text/edit" text_edits
+use "std/errors" errors
+
+pub const Clickable: u32 = 1
+pub const DrawBackground: u32 = 2
+pub const DrawBorder: u32 = 4
+pub const DrawText: u32 = 8
+pub const Clip: u32 = 16
+pub const ScrollX: u32 = 32
+pub const ScrollY: u32 = 64
+pub const FloatingX: u32 = 128
+pub const FloatingY: u32 = 256
+pub const HotAnimation: u32 = 512
+pub const ActiveAnimation: u32 = 1024
+pub const CenterText: u32 = 2048
+// Participates in Tab/Shift-Tab traversal and Enter activation.
+pub const Focusable: u32 = 4096
+// Floating positions in screen coordinates, independent of parent scrolling.
+pub const AbsoluteX: u32 = 8192
+pub const AbsoluteY: u32 = 16384
+// Consume zero-strictness children in build order before proportional shrink.
+pub const GreedyShrink: u32 = 32768
+
+pub enum SizeKind { None, Pixels, Text, Parent, Children }
+
+// strictness is the fraction of the size a box keeps when its parent must
+// shrink children to fit: 1 never shrinks, 0 may shrink to nothing.
+pub struct Size { kind: SizeKind, value: f32, strictness: f32 }
+
+pub fn pixels(value: f32, strictness: f32) Size {
+  return Size{ kind: SizeKind.Pixels, value: value, strictness: strictness }
+}
+
+pub fn text_size(padding: f32, strictness: f32) Size {
+  return Size{ kind: SizeKind.Text, value: padding, strictness: strictness }
+}
+
+pub fn percent(fraction: f32, strictness: f32) Size {
+  return Size{ kind: SizeKind.Parent, value: fraction, strictness: strictness }
+}
+
+pub fn children(strictness: f32) Size {
+  return Size{ kind: SizeKind.Children, strictness: strictness }
+}
+
+pub struct Box {
+  key: u64,
+  flags: u32,
+  // Layout axis for children: 0 stacks them left to right, 1 top to bottom.
+  axis: u8,
+  width: Size,
+  height: Size,
+  // Container inset in physical pixels.
+  padding: [2]f32,
+  text: []const u8,
+  background: ui.Color,
+  border: ui.Color,
+  foreground: ui.Color,
+  hot_color: ui.Color,
+  active_color: ui.Color,
+  // Corner radius in pixels for the background.
+  radius: i32,
+  // Pixel offset and selection span for editable text. Reset by build.
+  text_offset: f32,
+  selection: [2]f32,
+  // Floating boxes take this position relative to the parent's content.
+  floating: [2]f32,
+  // Tree links, rebuilt every frame.
+  parent: *Box,
+  first: *Box,
+  last: *Box,
+  next: *Box,
+  // Persistent state.
+  hash_next: *Box,
+  touched: u64,
+  // Caller-owned identity associated with this cached box. Preserved across
+  // builds, cleared when an expired box is recycled for a new key.
+  user_data: usize,
+  size: [2]f32,
+  position: [2]f32,
+  // Absolute screen rectangle of the last layout: x0, y0, x1, y1.
+  rect: [4]f32,
+  // Visible part after ancestor clips, for input.
+  visible: [4]f32,
+  hot_t: f32,
+  active_t: f32,
+  view: [2]f32,
+  view_target: [2]f32,
+  content: [2]f32,
+}
+
+pub struct Input {
+  x: f32, y: f32, down: bool,
+  // Scroll in pixels this frame, positive scrolls content up and left.
+  scroll_x: f32, scroll_y: f32,
+  // UTF-8 text typed this frame, and editing keys pressed this frame.
+  text: []const u8,
+  backspace: bool, delete: bool, left: bool, right: bool, home: bool, end: bool,
+  enter: bool, escape: bool, tab: bool, shift: bool, control: bool, select_all: bool,
+  copy: bool, cut: bool, paste: bool,
+  // The clipboard text offered for paste this frame.
+  clipboard: []const u8,
+  // The input method's in-progress composition (preedit), shown at the focused
+  // text field's caret but not yet inserted. composition_cursor is a byte
+  // offset into it, or -1.
+  composition: []const u8,
+  composition_cursor: i32,
+  // Editing/navigation keys in this poll were consumed by the input method,
+  // including the poll that clears preedit. Committed text still inserts.
+  composition_handled: bool,
+  // One complete correction as its own ordered input step. Do not combine it
+  // with unrelated keyboard/text input. Stale or invalid corrections fail closed.
+  correction: *const text_edits.Replacement,
+}
+
+pub struct Signal {
+  box: *Box,
+  hovered: bool,
+  pressed: bool,
+  released: bool,
+  clicked: bool,
+  dragging: bool,
+  // Pointer movement since the press while dragging.
+  drag_x: f32, drag_y: f32,
+}
+
+const bucket_count: usize = 4096
+const parent_limit: usize = 256
+
+pub struct State {
+  arena: *mem.Arena,
+  frame: *mem.Arena,
+  buckets: []*Box,
+  free: *Box,
+  frame_index: u64,
+  root: *Box,
+  parents: [parent_limit]*Box,
+  depth: usize,
+  input: Input,
+  previous_down: bool,
+  press_x: f32, press_y: f32,
+  hot: u64,
+  next_hot: u64,
+  active: u64,
+  dt: f32,
+  // Text measurement in pixels, and the line height used for Text sizes.
+  measure: fn(rawptr, []const u8) f32,
+  measure_data: rawptr,
+  line_height: f32,
+  // Seconds for animations to close half their remaining distance.
+  half_life: f32,
+  // Keyboard focus, and text that a copy or cut this frame produced.
+  focused: u64,
+  focus_claimed: bool,
+  // Snap animations instead of easing them, for users who ask for reduced
+  // motion.
+  reduced_motion: bool,
+  // Display scale applied to pixel sizes and text padding. Pass a font
+  // rasterized at the same scale.
+  scale: f32,
+  copied: []const u8,
+  // Owned previous preedit for change-driven redraw; native snapshots cap256.
+  composition_text: [256]u8,
+  composition_length: usize,
+  composition_cursor: i32,
+  // Set during building when a focused text field wants text input: pass
+  // text_input and text_input_rect (x, y, width, height in window pixels) to
+  // the window so the input method places its candidates at the caret.
+  text_input: bool,
+  text_input_rect: [4]f32,
+  text_input_anchor: *Box,
+  // Publish this bounded context to a native input method before enabling the
+  // focused field. Tracker lifetime must match one window, not one widget.
+  text_context: text_edits.Context,
+  text_context_error: errors.Kind,
+  text_tracker: text_edits.Tracker,
+}
+
+pub struct StateResult { value: *State, ok: bool }
+
+// A state in arena. measure returns the pixel width of a text run.
+pub fn create(arena: *mem.Arena, measure: fn(rawptr, []const u8) f32, measure_data: rawptr, line_height: f32) *State {
+  state := mem.push(State, arena)
+  state.arena = arena
+  state.buckets = mem.push_array(*Box, arena, bucket_count)
+  state.measure = measure
+  state.measure_data = measure_data
+  state.line_height = line_height
+  state.half_life = 0.04
+  state.scale = 1.0
+  return state
+}
+
+// The visible part of a label: text before "##" is shown, the whole label is
+// hashed. "###" hashes only what follows it, so the shown text may change
+// while the key stays.
+pub fn display_text(label: []const u8) []const u8 {
+  for i in 0..#len(label) {
+    if i + 1 < #len(label) && label[i] == '#' && label[i + 1] == '#' {
+      return label[..i]
+    }
+  }
+  return label
+}
+
+fn key_text(label: []const u8) []const u8 {
+  for i in 0..#len(label) {
+    if i + 2 < #len(label) && label[i] == '#' && label[i + 1] == '#' && label[i + 2] == '#' {
+      return label[i + 3..]
+    }
+  }
+  return label
+}
+
+pub fn key(seed: u64, label: []const u8) u64 {
+  return key_bytes(seed, key_text(label))
+}
+
+// Hashes an explicit identity without interpreting label suffixes.
+pub fn key_bytes(seed: u64, identity: []const u8) u64 {
+  value := hash.wyhash(identity, seed)
+  if value == 0 {
+    return 1
+  }
+  return value
+}
+
+// A stable child identity for a numeric application value, independent of
+// machine byte order and width. Unlike labels, numbers have no ### suffix.
+pub fn key_number(seed: u64, number: u64) u64 {
+  encoded: [8]u8 = []
+  for i in 0..8 {
+    encoded[i] = #cast(u8, (number >> (i * 8)) & 255)
+  }
+  return key_bytes(seed, encoded[..])
+}
+
+// Finds a box built in the current frame; nil on a miss or expired identity.
+// The result belongs to the state's arena. Do not retain it across frames in
+// which that key disappears, because expired storage may serve another key.
+pub fn find(state: *const State, value: u64) *Box {
+  found := lookup(state, value)
+  if found != nil && found.touched == state.frame_index {
+    return found
+  }
+  return nil
+}
+
+fn derived(value: u64) u64 {
+  next := hash.wyhash("derived", value)
+  if next == 0 {
+    return 1
+  }
+  return next
+}
+
+fn lookup(state: *const State, value: u64) *Box {
+  at := state.buckets[#cast(usize, value % #cast(u64, bucket_count))]
+  for at != nil {
+    if at.key == value {
+      return at
+    }
+    at = at.hash_next
+  }
+  return nil
+}
+
+fn unlink(state: *State, target: *Box) {
+  slot := &state.buckets[#cast(usize, target.key % #cast(u64, bucket_count))]
+  for slot.* != nil {
+    if slot.* == target {
+      slot.* = target.hash_next
+      return
+    }
+    slot = &slot.*.hash_next
+  }
+}
+
+// Boxes not built in the previous frame return to the free list.
+fn collect(state: *State) {
+  for i in 0..bucket_count {
+    at := state.buckets[i]
+    for at != nil {
+      following := at.hash_next
+      if at.touched + 1 < state.frame_index {
+        unlink(state, at)
+        at.hash_next = state.free
+        state.free = at
+      }
+      at = following
+    }
+  }
+}
+
+fn top(state: *State) *Box {
+  return state.parents[state.depth - 1]
+}
+
+pub fn push_parent(state: *State, parent: *Box) {
+  if state.depth == parent_limit {
+    #panic("UI box nesting exceeds 256")
+  }
+  state.parents[state.depth] = parent
+  state.depth += 1
+}
+
+pub fn pop_parent(state: *State) {
+  if state.depth <= 1 {
+    #panic("UI box parent stack underflow")
+  }
+  state.depth -= 1
+}
+
+pub fn parent(state: *State) *Box {
+  return top(state)
+}
+
+// Builds a box under the current parent. A key built twice in one frame gets
+// a derived key, so its state follows build order; give repeated labels
+// distinct "##" suffixes when their state must stay attached to them.
+pub fn build_key(state: *State, flags: u32, value: u64, text: []const u8) *Box {
+  box := lookup(state, value)
+  if box == nil {
+    box = state.free
+    if box != nil {
+      state.free = box.hash_next
+      box.* = Box{}
+    }
+    else {
+      box = mem.push(Box, state.arena)
+    }
+    box.key = value
+    slot := &state.buckets[#cast(usize, value % #cast(u64, bucket_count))]
+    box.hash_next = slot.*
+    slot.* = box
+  }
+  else if box.touched == state.frame_index {
+    // An equal label built twice in one frame, such as two overloads in a
+    // list, gets a derived key instead of failing.
+    return build_key(state, flags, derived(value), text)
+  }
+  box.touched = state.frame_index
+  box.flags = flags
+  box.axis = 1
+  box.width = children(1.0)
+  box.height = children(1.0)
+  box.text = text
+  box.background = ui.Color{ r: 48, g: 52, b: 60, a: 255 }
+  box.border = ui.Color{ r: 72, g: 78, b: 90, a: 255 }
+  box.foreground = ui.Color{ r: 235, g: 239, b: 244, a: 255 }
+  box.hot_color = ui.Color{ r: 64, g: 76, b: 92, a: 255 }
+  box.active_color = ui.Color{ r: 38, g: 105, b: 165, a: 255 }
+  box.padding = [0.0, 0.0]
+  box.text_offset = 0.0
+  box.selection = [0.0, 0.0]
+  box.radius = 0
+  box.first = nil
+  box.last = nil
+  box.next = nil
+  box.parent = nil
+  if state.depth != 0 {
+    owner := top(state)
+    box.parent = owner
+    if owner.last == nil {
+      owner.first = box
+    }
+    else {
+      owner.last.next = box
+    }
+    owner.last = box
+  }
+  return box
+}
+
+// Builds a box keyed by label under the current parent. The text shown is the
+// part before "##"; it is copied into the frame arena.
+pub fn build(state: *State, flags: u32, label: []const u8) *Box {
+  seed: u64 = 0
+  if state.depth != 0 {
+    seed = top(state).key
+  }
+  shown := display_text(label)
+  copied := mem.push_bytes_uninit(state.frame, #len(shown))
+  _ = mem.copy(copied, shown)
+  return build_key(state, flags, key(seed, label), copied)
+}
+
+struct FocusOrder { first: u64, last: u64, before: u64, after: u64, seen: bool }
+
+fn focus_order(box: *const Box, focused: u64, order: *FocusOrder) {
+  if box == nil {
+    return
+  }
+  if box.flags & Focusable != 0 {
+    if order.first == 0 {
+      order.first = box.key
+    }
+    if box.key == focused {
+      order.before = order.last
+      order.seen = true
+    }
+    else if order.seen && order.after == 0 {
+      order.after = box.key
+    }
+    order.last = box.key
+  }
+  child := box.first
+  for child != nil {
+    focus_order(child, focused, order)
+    child = child.next
+  }
+}
+
+pub fn begin(state: *State, frame: *mem.Arena, input: Input, width: f32, height: f32, dt: f32) {
+  if input.tab && input.correction == nil && !input.composition_handled && #len(input.composition) == 0 {
+    order := FocusOrder{}
+    focus_order(state.root, state.focused, &order)
+    if input.shift {
+      state.focused = order.before
+      if state.focused == 0 {
+        state.focused = order.last
+      }
+    }
+    else {
+      state.focused = order.after
+      if state.focused == 0 {
+        state.focused = order.first
+      }
+    }
+  }
+  state.frame = frame
+  state.frame_index += 1
+  collect(state)
+  state.input = input
+  state.composition_length = #len(input.composition)
+  state.composition_cursor = input.composition_cursor
+  saved_length := #len(input.composition)
+  if saved_length > #len(state.composition_text) {
+    saved_length = #len(state.composition_text)
+  }
+  for i in 0..saved_length {
+    state.composition_text[i] = input.composition[i]
+  }
+  state.dt = dt
+  state.hot = state.next_hot
+  state.next_hot = 0
+  state.copied = ""
+  state.text_input = false
+  state.text_input_anchor = nil
+  state.text_context = text_edits.Context{}
+  state.text_context_error = errors.Kind.None
+  if input.down && !state.previous_down {
+    // A press anywhere clears focus unless a focusable box claims it.
+    state.focus_claimed = false
+  }
+  if input.down && !state.previous_down {
+    state.press_x = input.x
+    state.press_y = input.y
+  }
+  state.depth = 0
+  root := build_key(state, Clip, 1, "")
+  root.width = pixels(width, 1.0)
+  root.height = pixels(height, 1.0)
+  state.root = root
+  push_parent(state, root)
+}
+
+fn inside(area: [4]f32, x, y: f32) bool {
+  return x >= area[0] && x < area[2] && y >= area[1] && y < area[3]
+}
+
+// Interaction with box from the previous frame's layout. Later boxes win
+// overlapping hover, so call signal after building the box.
+pub fn signal(state: *State, box: *Box) Signal {
+  result := Signal{ box: box }
+  input := state.input
+  over := inside(box.visible, input.x, input.y)
+  pressed_now := input.down && !state.previous_down
+  released_now := !input.down && state.previous_down
+  if box.flags & Clickable != 0 {
+    if over && (state.active == 0 || state.active == box.key) {
+      state.next_hot = box.key
+    }
+    result.hovered = state.hot == box.key && over
+    if result.hovered && pressed_now {
+      state.active = box.key
+      if box.flags & Focusable != 0 {
+        state.focused = box.key
+        state.focus_claimed = true
+      }
+      result.pressed = true
+    }
+    if state.active == box.key {
+      result.drag_x = input.x - state.press_x
+      result.drag_y = input.y - state.press_y
+      if released_now {
+        result.released = true
+        result.clicked = over
+        state.active = 0
+      }
+      else if input.down {
+        result.dragging = true
+      }
+    }
+  }
+  if box.flags & Focusable != 0 && state.focused == box.key && input.enter && !input.tab && input.correction == nil && !input.composition_handled && #len(input.composition) == 0 {
+    result.clicked = true
+  }
+  if box.flags & (ScrollX | ScrollY) != 0 && over {
+    if box.flags & ScrollX != 0 {
+      box.view_target[0] += input.scroll_x
+    }
+    if box.flags & ScrollY != 0 {
+      box.view_target[1] += input.scroll_y
+    }
+  }
+  return result
+}
+
+fn size_of(box: *const Box, axis: usize) Size {
+  if axis == 0 {
+    return box.width
+  }
+  return box.height
+}
+
+fn floating(box: *const Box, axis: usize) bool {
+  if axis == 0 {
+    return box.flags & (FloatingX | AbsoluteX) != 0
+  }
+  return box.flags & (FloatingY | AbsoluteY) != 0
+}
+
+fn scrolls(box: *const Box, axis: usize) bool {
+  if axis == 0 {
+    return box.flags & ScrollX != 0
+  }
+  return box.flags & ScrollY != 0
+}
+
+fn standalone(state: *State, box: *Box, axis: usize) {
+  semantic := size_of(box, axis)
+  if semantic.kind == SizeKind.Pixels {
+    box.size[axis] = semantic.value * state.scale
+  }
+  else if semantic.kind == SizeKind.Text {
+    if axis == 0 {
+      box.size[0] = state.measure(state.measure_data, box.text) + 2.0 * semantic.value * state.scale + 2.0 * box.padding[axis]
+    }
+    else {
+      box.size[1] = state.line_height + 2.0 * semantic.value * state.scale + 2.0 * box.padding[axis]
+    }
+  }
+  child := box.first
+  for child != nil {
+    standalone(state, child, axis)
+    child = child.next
+  }
+}
+
+fn upward(box: *Box, axis: usize) {
+  semantic := size_of(box, axis)
+  if semantic.kind == SizeKind.Parent && box.parent != nil {
+    // The nearest ancestor with a size that does not depend on its children.
+    owner := box.parent
+    for owner.parent != nil && size_of(owner, axis).kind == SizeKind.Children {
+      owner = owner.parent
+    }
+    available := owner.size[axis] - 2.0 * owner.padding[axis]
+    if available < 0.0 {
+      available = 0.0
+    }
+    box.size[axis] = available * semantic.value
+  }
+  child := box.first
+  for child != nil {
+    upward(child, axis)
+    child = child.next
+  }
+}
+
+fn downward(box: *Box, axis: usize) {
+  child := box.first
+  for child != nil {
+    downward(child, axis)
+    child = child.next
+  }
+  if size_of(box, axis).kind == SizeKind.Children {
+    total: f32 = 0.0
+    child = box.first
+    for child != nil {
+      if !floating(child, axis) {
+        if #cast(usize, box.axis) == axis {
+          total += child.size[axis]
+        }
+        else if child.size[axis] > total {
+          total = child.size[axis]
+        }
+      }
+      child = child.next
+    }
+    box.size[axis] = total + 2.0 * box.padding[axis]
+  }
+}
+
+// Shrinks children that overflow their parent, by each child's slack.
+fn violations(box: *Box, axis: usize) {
+  available := box.size[axis] - 2.0 * box.padding[axis]
+  if available < 0.0 {
+    available = 0.0
+  }
+  if !scrolls(box, axis) {
+    if #cast(usize, box.axis) == axis {
+      total: f32 = 0.0
+      slack: f32 = 0.0
+      child := box.first
+      for child != nil {
+        if !floating(child, axis) {
+          total += child.size[axis]
+          slack += child.size[axis] * (1.0 - size_of(child, axis).strictness)
+        }
+        child = child.next
+      }
+      excess := total - available
+      if excess > 0.0 && box.flags & GreedyShrink != 0 {
+        child = box.first
+        for child != nil && excess > 0.0 {
+          if !floating(child, axis) && size_of(child, axis).strictness == 0.0 {
+            amount := child.size[axis]
+            if amount > excess {
+              amount = excess
+            }
+            child.size[axis] -= amount
+            excess -= amount
+            slack -= amount
+          }
+          child = child.next
+        }
+      }
+      if excess > 0.0 && slack > 0.0 {
+        fraction := excess / slack
+        if fraction > 1.0 {
+          fraction = 1.0
+        }
+        child = box.first
+        for child != nil {
+          if !floating(child, axis) {
+            child.size[axis] -= child.size[axis] * (1.0 - size_of(child, axis).strictness) * fraction
+          }
+          child = child.next
+        }
+      }
+    }
+    else {
+      child := box.first
+      for child != nil {
+        if !floating(child, axis) && child.size[axis] > available {
+          keep := available
+          minimum := child.size[axis] * size_of(child, axis).strictness
+          if keep < minimum {
+            keep = minimum
+          }
+          child.size[axis] = keep
+        }
+        child = child.next
+      }
+    }
+  }
+  child := box.first
+  for child != nil {
+    violations(child, axis)
+    child = child.next
+  }
+}
+
+fn positions(box: *Box, axis: usize) {
+  cursor: f32 = box.padding[axis]
+  extent: f32 = 0.0
+  child := box.first
+  for child != nil {
+    if floating(child, axis) {
+      child.position[axis] = child.floating[axis]
+    }
+    else {
+      if #cast(usize, box.axis) == axis {
+        child.position[axis] = cursor
+        cursor += child.size[axis]
+      }
+      else {
+        child.position[axis] = box.padding[axis]
+      }
+      if child.position[axis] + child.size[axis] > extent {
+        extent = child.position[axis] + child.size[axis]
+      }
+    }
+    child.rect[axis] = box.rect[axis] + child.position[axis] - box.view[axis]
+    if (axis == 0 && child.flags & AbsoluteX != 0) || (axis == 1 && child.flags & AbsoluteY != 0) {
+      child.rect[axis] = child.floating[axis]
+    }
+    child.rect[axis + 2] = child.rect[axis] + child.size[axis]
+    child = child.next
+  }
+  box.content[axis] = extent + box.padding[axis]
+  child = box.first
+  for child != nil {
+    positions(child, axis)
+    child = child.next
+  }
+}
+
+fn intersect(a, b: [4]f32) [4]f32 {
+  value := a
+  if b[0] > value[0] {
+    value[0] = b[0]
+  }
+  if b[1] > value[1] {
+    value[1] = b[1]
+  }
+  if b[2] < value[2] {
+    value[2] = b[2]
+  }
+  if b[3] < value[3] {
+    value[3] = b[3]
+  }
+  if value[2] < value[0] {
+    value[2] = value[0]
+  }
+  if value[3] < value[1] {
+    value[3] = value[1]
+  }
+  return value
+}
+
+fn approach(current, target, rate: f32) f32 {
+  return current + (target - current) * rate
+}
+
+// Clips, scroll limits and animation, top-down.
+fn finish(state: *State, box: *Box, clip: [4]f32, rate: f32) {
+  box.visible = intersect(box.rect, clip)
+  inner := clip
+  if box.flags & Clip != 0 {
+    inner = box.visible
+  }
+  for axis in 0..2 {
+    if scrolls(box, axis) {
+      limit := box.content[axis] - box.size[axis]
+      if limit < 0.0 {
+        limit = 0.0
+      }
+      if box.view_target[axis] > limit {
+        box.view_target[axis] = limit
+      }
+      if box.view_target[axis] < 0.0 {
+        box.view_target[axis] = 0.0
+      }
+      box.view[axis] = approach(box.view[axis], box.view_target[axis], rate)
+      if math.abs(box.view[axis] - box.view_target[axis]) < 0.5 {
+        box.view[axis] = box.view_target[axis]
+      }
+    }
+  }
+  hot: f32 = 0.0
+  if state.hot == box.key {
+    hot = 1.0
+  }
+  active: f32 = 0.0
+  if state.active == box.key {
+    active = 1.0
+  }
+  box.hot_t = approach(box.hot_t, hot, rate)
+  box.active_t = approach(box.active_t, active, rate)
+  child := box.first
+  for child != nil {
+    finish(state, child, inner, rate)
+    child = child.next
+  }
+}
+
+// True while scroll or hover animations are still moving; keep drawing frames.
+pub fn animating(state: *const State) bool {
+  return animating_box(state.root)
+}
+
+fn animating_box(box: *const Box) bool {
+  if box == nil {
+    return false
+  }
+  if box.view[0] != box.view_target[0] || box.view[1] != box.view_target[1] {
+    return true
+  }
+  if box.hot_t > 0.002 && box.hot_t < 0.998 || box.active_t > 0.002 && box.active_t < 0.998 {
+    return true
+  }
+  child := box.first
+  for child != nil {
+    if animating_box(child) {
+      return true
+    }
+    child = child.next
+  }
+  return false
+}
+
+fn mix(a, b: ui.Color, t: f32) ui.Color {
+  return ui.Color{
+    r: #cast(u8, #cast(f32, a.r) + (#cast(f32, b.r) - #cast(f32, a.r)) * t),
+    g: #cast(u8, #cast(f32, a.g) + (#cast(f32, b.g) - #cast(f32, a.g)) * t),
+    b: #cast(u8, #cast(f32, a.b) + (#cast(f32, b.b) - #cast(f32, a.b)) * t),
+    a: #cast(u8, #cast(f32, a.a) + (#cast(f32, b.a) - #cast(f32, a.a)) * t),
+  }
+}
+
+fn whole(value: f32) i32 {
+  if value < -1000000000.0 {
+    return -1000000000
+  }
+  if value > 1000000000.0 {
+    return 1000000000
+  }
+  return #cast(i32, math.floor(value + 0.5))
+}
+
+fn area(rect: [4]f32) ui.Rect {
+  x := whole(rect[0])
+  y := whole(rect[1])
+  return ui.Rect{ x: x, y: y, width: whole(rect[2]) - x, height: whole(rect[3]) - y }
+}
+
+fn draw(state: *State, context: *ui.Context, box: *const Box) {
+  bounds := area(box.rect)
+  if box.flags & DrawBackground != 0 {
+    tint := box.background
+    if box.flags & Focusable != 0 && state.focused == box.key {
+      tint = box.hot_color
+    }
+    if box.flags & HotAnimation != 0 {
+      tint = mix(tint, box.hot_color, box.hot_t)
+    }
+    if box.flags & ActiveAnimation != 0 {
+      tint = mix(tint, box.active_color, box.active_t)
+    }
+    ui.rounded_rectangle(context, bounds, box.radius, tint)
+  }
+  if box.flags & DrawBorder != 0 && box.radius == 0 {
+    ui.rectangle(context, ui.Rect{ x: bounds.x, y: bounds.y, width: bounds.width, height: 1 }, box.border)
+    ui.rectangle(context, ui.Rect{ x: bounds.x, y: bounds.y + bounds.height - 1, width: bounds.width, height: 1 }, box.border)
+    ui.rectangle(context, ui.Rect{ x: bounds.x, y: bounds.y, width: 1, height: bounds.height }, box.border)
+    ui.rectangle(context, ui.Rect{ x: bounds.x + bounds.width - 1, y: bounds.y, width: 1, height: bounds.height }, box.border)
+  }
+  saved := context.clip
+  if box.flags & Clip != 0 {
+    _ = ui.push_clip(context, bounds)
+  }
+  if box.selection[1] > box.selection[0] {
+    ui.rectangle(context, ui.Rect{ x: whole(box.rect[0] + 4.0 + box.selection[0] - box.text_offset),
+      y: whole(box.rect[1] + (box.size[1] - state.line_height) / 2.0),
+      width: whole(box.selection[1] - box.selection[0]), height: whole(state.line_height) }, box.active_color)
+  }
+  if box.flags & DrawText != 0 && #len(box.text) != 0 {
+    width := state.measure(state.measure_data, box.text)
+    x := box.rect[0] + 4.0 - box.text_offset
+    if box.flags & CenterText != 0 {
+      x = box.rect[0] + (box.size[0] - width) / 2.0
+    }
+    y := box.rect[1] + (box.size[1] - state.line_height) / 2.0
+    ui.label(context, ui.Rect{ x: whole(x), y: whole(y), width: whole(width) + 1, height: whole(state.line_height) }, box.text, box.foreground)
+  }
+  child := box.first
+  for child != nil {
+    draw(state, context, child)
+    child = child.next
+  }
+  if box.flags & Clip != 0 {
+    ui.pop_clip(context, saved)
+  }
+}
+
+// Lays out the frame, advances animation and emits draw commands into an open
+// ui.Context frame.
+pub fn end(state: *State, context: *ui.Context) {
+  layout(state)
+  render(state, context)
+}
+
+// Finalizes layout, animation and input without emitting commands. Apps with
+// custom renderers can consume the persistent box tree until the next begin.
+pub fn layout(state: *State) {
+  if state.depth != 1 {
+    #panic("UI box parents not popped before end")
+  }
+  for axis in 0..2 {
+    standalone(state, state.root, axis)
+    upward(state.root, axis)
+    downward(state.root, axis)
+    violations(state.root, axis)
+    state.root.rect[axis] = 0.0
+    state.root.rect[axis + 2] = state.root.size[axis]
+    positions(state.root, axis)
+  }
+  rate: f32 = 1.0
+  if state.half_life > 0.0 && !state.reduced_motion {
+    rate = 1.0 - math.exp2(-state.dt / state.half_life)
+  }
+  finish(state, state.root, state.root.rect, rate)
+  if state.text_input && state.text_input_anchor != nil {
+    anchor := state.text_input_anchor
+    state.text_input_rect = [anchor.rect[0], anchor.rect[1], anchor.size[0], anchor.size[1]]
+  }
+  if !state.text_input {
+    text_edits.invalidate(&state.text_tracker)
+  }
+  if state.input.down && !state.previous_down && !state.focus_claimed {
+    state.focused = 0
+  }
+  state.previous_down = state.input.down
+  if !state.input.down {
+    state.active = 0
+  }
+  state.depth = 0
+}
+
+// Emits the most recently finalized tree into an open UI frame.
+pub fn render(state: *State, context: *ui.Context) {
+  draw(state, context, state.root)
+}
+
+// The key of the topmost clickable box under a point in the last layout, or
+// zero.
+pub fn hit(state: *const State, x, y: f32) u64 {
+  return hit_box(state.root, x, y)
+}
+
+fn hit_box(box: *const Box, x, y: f32) u64 {
+  if box == nil {
+    return 0
+  }
+  if box.flags & Clip != 0 && !inside(box.visible, x, y) {
+    return 0
+  }
+  found: u64 = 0
+  if box.flags & Clickable != 0 && inside(box.visible, x, y) {
+    found = box.key
+  }
+  child := box.first
+  for child != nil {
+    inner := hit_box(child, x, y)
+    if inner != 0 {
+      found = inner
+    }
+    child = child.next
+  }
+  return found
+}
+
+// Whether input since the last frame can change what is drawn. Pointer motion
+// counts only when it moves onto a different clickable box or a press is
+// held, so moving the mouse within a box costs no frame. Combine it with
+// animating to decide when to draw.
+pub fn needs_frame(state: *const State, input: Input) bool {
+  if input.correction != nil {
+    return true
+  }
+  if #len(input.composition) != state.composition_length {
+    return true
+  }
+  if #len(input.composition) != 0 && input.composition_cursor != state.composition_cursor {
+    return true
+  }
+  // Larger custom snapshots conservatively redraw; window snapshots fit256.
+  if #len(input.composition) > #len(state.composition_text) {
+    return true
+  }
+  for i in 0..#len(input.composition) {
+    if input.composition[i] != state.composition_text[i] {
+      return true
+    }
+  }
+  if input.down != state.previous_down || input.down || input.scroll_x != 0.0 || input.scroll_y != 0.0 || #len(input.text) != 0 {
+    return true
+  }
+  if input.backspace || input.delete || input.left || input.right || input.home || input.end || input.enter || input.escape ||
+    input.tab || input.select_all || input.copy || input.cut || input.paste {
+    return true
+  }
+  return hit(state, input.x, input.y) != state.hot
+}
+
+// Scrolls a scrolling box so the span top..bottom of its content is visible.
+// Use it to keep a selected list row in view.
+pub fn scroll_into_view(target: *Box, top, bottom: f32) {
+  if top < target.view_target[1] {
+    target.view_target[1] = top
+  }
+  if bottom > target.view_target[1] + target.size[1] {
+    target.view_target[1] = bottom - target.size[1]
+  }
+}

@@ -1,0 +1,54 @@
+#target(kernel: darwin)
+
+// Darwin ioctl is syscall 54. Requests: TIOCGETA, TIOCSETA and TIOCGWINSZ.
+// The shim returns negative errno.
+fn control(descriptor: isize, request: isize, bytes: *const u8) isize {
+  return #syscall(54, descriptor, request, bytes)
+}
+
+// The terminal settings of descriptor. ok is false when it is not a terminal.
+pub fn read_state(descriptor: isize) Read {
+  result: Read
+  code := control(descriptor, 1078490131, &result.value.bytes[0])
+  if code < 0 {
+    return Read{ kind: errors.darwin(code), error: code }
+  }
+  result.ok = true
+  return result
+}
+
+pub fn restore(descriptor: isize, saved: *const State) Result {
+  if saved == nil {
+    return Result{ kind: errors.Kind.InvalidInput }
+  }
+  code := control(descriptor, 2152231956, &saved.bytes[0])
+  if code < 0 {
+    return Result{ kind: errors.darwin(code), error: code }
+  }
+  return Result{ ok: true }
+}
+
+// cfmakeraw in the Darwin termios layout: 64-bit iflag, oflag, cflag and
+// lflag, then c_cc at offset 32 with VMIN at 16 and VTIME at 17.
+fn make_raw(descriptor: isize, state: *State) {
+  _ = descriptor
+  state.bytes[0] = state.bytes[0] & 20
+  state.bytes[1] = state.bytes[1] & 252
+  state.bytes[8] = state.bytes[8] & 254
+  state.bytes[17] = state.bytes[17] & 236 | 3
+  state.bytes[24] = state.bytes[24] & 103
+  state.bytes[25] = state.bytes[25] & 250
+  state.bytes[48] = 1
+  state.bytes[49] = 0
+}
+
+pub fn size(descriptor: isize) Size {
+  bytes: [8]u8 = []
+  code := control(descriptor, 1074295912, &bytes[0])
+  if code < 0 {
+    return Size{ kind: errors.darwin(code), error: code }
+  }
+  rows := #cast(usize, bytes[0]) + #cast(usize, bytes[1]) * 256
+  columns := #cast(usize, bytes[2]) + #cast(usize, bytes[3]) * 256
+  return Size{ columns: columns, rows: rows, ok: true }
+}

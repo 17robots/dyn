@@ -1,0 +1,24 @@
+use "std/ui" ui
+use "std/text/layout" layout
+use "std/math" math
+struct Coordinate { value: i64, ok: bool }
+fn coordinate(value: f64) Coordinate {
+  // Origins farther away cannot intersect any i32 rectangle even with the
+  // most extreme i32 glyph bearings/dimensions. Never clamp ink into view.
+  if value != value || value < -8589934592.0 || value > 8589934592.0 {
+    return Coordinate{}
+  }
+  return Coordinate{ value: #cast(i64, math.floor64(value + 0.5)), ok: true }
+}
+// Layout and text need survive only this call; draw commands copy positions
+// and codepoints into the current frame arena. The font used to render must
+// match the metrics used to build the layout.
+pub fn label(context: *ui.Context, bounds: ui.Rect, value: *const layout.Layout, tint: ui.Color) {
+  for glyph in value.glyphs {
+    x := coordinate(#cast(f64, bounds.x) + glyph.x)
+    y := coordinate(#cast(f64, bounds.y) + glyph.y)
+    if x.ok && y.ok {
+      ui.glyph(context, bounds, glyph.codepoint, x.value, y.value, tint)
+    }
+  }
+}

@@ -1,0 +1,4 @@
+#target(kernel: linux, arch: aarch64)
+
+// O_DIRECTORY; AArch64 does not use the generic value.
+const directory_flag: usize = 16384

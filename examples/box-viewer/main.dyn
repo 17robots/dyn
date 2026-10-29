@@ -1,0 +1,277 @@
+// A log viewer built on std/ui/box: a toolbar, a filter field and a virtual
+// list of 100,000 rows, drawn by the batched OpenGL renderer. The loop sleeps
+// until input arrives unless something is animating.
+//
+// Usage: box-viewer [FONT.ttf] [--frames N] [--screenshot OUT.png]
+
+use "vendor/window" window
+use "vendor/opengl" gl
+use "vendor/ui/opengl" gpu
+use "std/ui" ui
+use "std/ui/box" box
+use "std/ui/software" software
+use "std/font" font
+use "std/font/system" system_fonts
+use "std/font/ui" font_ui
+use "std/fs" fs
+use "std/mem" mem
+use "std/process" process
+use "std/strings" strings
+use "std/bytes" bytes
+use "std/fmt" fmt
+use "std/time" time
+use "std/image/png" png
+
+const row_count: usize = 100000
+
+struct App {
+  atlas: *font.Atlas,
+  filter: [128]u8,
+  edit: box.Edit,
+  wrap: bool,
+  zoom: f32,
+  selected: usize,
+  quit: bool,
+  matches: []u32,
+  match_count: usize,
+}
+
+fn measure(data: rawptr, text: []const u8) f32 {
+  atlas := #cast(*font.Atlas, data)
+  width: i32 = 0
+  for byte in text {
+    width += font.atlas_glyph(atlas, #cast(u32, byte)).advance
+  }
+  return #cast(f32, width)
+}
+
+const levels: [4][]const u8 = ["INFO ", "WARN ", "DEBUG", "ERROR"]
+
+fn row_text(storage: []u8, index: usize) []const u8 {
+  state := fmt.buffer(storage)
+  _ = fmt.write(&state, levels[index % 4])
+  _ = fmt.write(&state, "  request ")
+  _ = fmt.write_u64(&state, #cast(u64, index))
+  _ = fmt.write(&state, " handled in ")
+  _ = fmt.write_u64(&state, #cast(u64, index * 7919 % 997))
+  _ = fmt.write(&state, " ms")
+  return fmt.bytes(&state)
+}
+
+// Indexes of rows containing the filter text.
+fn refilter(app: *App) {
+  needle := app.filter[..app.edit.length]
+  storage: [96]u8 = []
+  count: usize = 0
+  for i in 0..row_count {
+    if #len(needle) == 0 || bytes.find(row_text(storage[..], i), needle) != #len(row_text(storage[..], i)) {
+      app.matches[count] = #cast(u32, i)
+      count += 1
+    }
+  }
+  app.match_count = count
+}
+
+fn build(state: *box.State, app: *App) {
+  toolbar := box.row(state, "toolbar")
+  toolbar.flags |= box.DrawBackground
+  toolbar.background = ui.Color{ r: 30, g: 33, b: 40, a: 255 }
+  toolbar.width = box.percent(1.0, 1.0)
+  box.push_parent(state, toolbar)
+  if box.button(state, "Quit").clicked {
+    app.quit = true
+  }
+  if box.button(state, "Top").clicked {
+    app.selected = 0
+  }
+  _ = box.checkbox(state, "Wrap", &app.wrap)
+  _ = box.slider(state, "zoom", &app.zoom, 0.5, 2.0)
+  field := box.text_field(state, "filter", app.filter[..], &app.edit)
+  if field.changed {
+    refilter(app)
+  }
+  storage: [64]u8 = []
+  status := fmt.buffer(storage[..])
+  _ = fmt.write_u64(&status, #cast(u64, app.match_count))
+  _ = fmt.write(&status, " rows###status")
+  _ = box.label(state, fmt.bytes(&status))
+  box.pop_parent(state)
+  row_height := 20.0 * app.zoom * state.scale
+  range := box.list_begin(state, "rows", box.percent(1.0, 0.0), box.percent(1.0, 0.0), app.match_count, row_height)
+  list := box.parent(state)
+  list.background = ui.Color{ r: 22, g: 24, b: 29, a: 255 }
+  text: [96]u8 = []
+  for i in range.first..range.last {
+    index := #cast(usize, app.matches[i])
+    row := box.build_key(state, box.Clickable | box.DrawText | box.DrawBackground | box.HotAnimation, box.key(list.key, "row") + #cast(u64, index), "")
+    shown := row_text(text[..], index)
+    copied := mem.push_bytes_uninit(state.frame, #len(shown))
+    _ = mem.copy(copied, shown)
+    row.text = copied
+    row.width = box.percent(1.0, 0.0)
+    row.height = box.pixels(row_height, 1.0)
+    row.background = list.background
+    if index % 4 == 3 {
+      row.foreground = ui.Color{ r: 240, g: 120, b: 110, a: 255 }
+    }
+    if index == app.selected {
+      row.background = ui.Color{ r: 40, g: 70, b: 110, a: 255 }
+    }
+    if box.signal(state, row).clicked {
+      app.selected = index
+    }
+  }
+  box.list_end(state)
+}
+
+// Writes the back buffer as a PNG, flipped to top-down rows.
+fn save(api: *const gl.Api, arena: *mem.Arena, path: []const u8, width, height: i32) {
+  size := #cast(usize, width) * #cast(usize, height) * 4
+  raw := mem.push_array(u8, arena, size)
+  api.read_pixels(0, 0, width, height, gl.Rgba, gl.UnsignedByte, &raw[0])
+  rows := mem.push_array(u8, arena, size)
+  stride := #cast(usize, width) * 4
+  for y in 0..#cast(usize, height) {
+    _ = mem.copy(rows[y * stride..(y + 1) * stride], raw[(#cast(usize, height) - 1 - y) * stride..(#cast(usize, height) - y) * stride])
+  }
+  encoded := png.encode(arena, rows, #cast(u32, width), #cast(u32, height), 4)
+  if !encoded.ok || !fs.write_all(path, encoded.value).ok {
+    #panic("cannot write the screenshot")
+  }
+}
+
+fn main() {
+  persistent := mem.arena_create(268435456)
+  frame_arena := mem.arena_create(1073741824)
+  defer {
+    mem.arena_release(frame_arena)
+    mem.arena_release(persistent)
+  }
+  arguments := process.arguments(persistent).value
+  path: []const u8 = ""
+  frames: usize = 0
+  screenshot: []const u8 = ""
+  i: usize = 1
+  for i < #len(arguments) {
+    if bytes.equal(arguments[i], "--frames") && i + 1 < #len(arguments) {
+      frames = strings.parse(usize, arguments[i + 1])
+      i += 2
+    }
+    else if bytes.equal(arguments[i], "--screenshot") && i + 1 < #len(arguments) {
+      screenshot = arguments[i + 1]
+      i += 2
+    }
+    else {
+      path = arguments[i]
+      i += 1
+    }
+  }
+  if #len(path) == 0 {
+    installed := system_fonts.scan(persistent, 4096)
+    selected := system_fonts.sans(installed)
+    path = selected.path
+    if #len(path) == 0 {
+      #panic("no supported system font; pass a TrueType file")
+    }
+  }
+  data := fs.read_all(persistent, path, 67108864)
+  if !data.ok {
+    #panic("cannot read the font; pass a TrueType file")
+  }
+  face := font.open(data.value)
+  if !face.ok {
+    #panic("not a TrueType font")
+  }
+  codepoints: [95]u32 = []
+  for c in 0..95 {
+    codepoints[c] = #cast(u32, c + 32)
+  }
+  host := window.Window{}
+  if !window.open(&host, "Dyn box viewer", 1100, 700).ok {
+    #panic("cannot open a window")
+  }
+  defer {
+    window.close(&host)
+  }
+  scale := window.scale(&host)
+  built := font.atlas(persistent, &face.value, codepoints[..], #cast(u16, 16.0 * scale + 0.5), 1024, 1024)
+  if !built.ok {
+    #panic("font atlas")
+  }
+  atlas := mem.push(font.Atlas, persistent)
+  atlas.* = built.value
+  loaded := gl.load(window.gl_proc)
+  batch := mem.push(gpu.Batch, persistent)
+  if !loaded.ok || !gpu.open_batch(batch, loaded.api).ok {
+    #panic("OpenGL 3.3 unavailable")
+  }
+  defer {
+    gpu.close_batch(batch)
+  }
+  vertices := mem.push_array(f32, persistent, #cast(usize, 14 * 6 * 16384))
+  app := mem.push(App, persistent)
+  app.atlas = atlas
+  app.zoom = 1.0
+  app.selected = 0
+  app.matches = mem.push_array(u32, persistent, row_count)
+  refilter(app)
+  state := box.create(persistent, measure, atlas, #cast(f32, atlas.line_height))
+  state.scale = scale
+  context: ui.Context
+  glyphs := font_ui.atlas_renderer(atlas)
+  last := time.monotonic_now().value
+  text_focus: u64 = 0
+  drawn: usize = 0
+  shown_width: i32 = 0
+  shown_height: i32 = 0
+  for !host.close_requested && !app.quit {
+    // Sleep until input that changes the frame; motion inside a box is free.
+    _ = window.poll(&host)
+    for frames == 0 && drawn != 0 && !box.animating(state) && !box.needs_frame(state, window.box_input(&host)) && !host.close_requested && host.width == shown_width && host.height == shown_height {
+      window.wait(&host, -1)
+      _ = window.poll(&host)
+    }
+    now := time.monotonic_now().value
+    dt := #cast(f32, time.elapsed(last, now).value) / 1000000000.0
+    last = now
+    mem.arena_reset(frame_arena)
+    width := host.width
+    height := host.height
+    shown_width = width
+    shown_height = height
+    ui.begin(&context, frame_arena, ui.Input{}, ui.Rect{ width: width, height: height })
+    box.begin(state, frame_arena, window.box_input(&host), #cast(f32, width), #cast(f32, height), dt)
+    build(state, app)
+    box.end(state, &context)
+    // Let the input method place its candidates at the focused field's caret.
+    next_text_focus: u64 = 0
+    if state.text_input {
+      next_text_focus = state.focused
+    }
+    if next_text_focus != text_focus {
+      // A different widget starts a fresh composition even when both fields
+      // enable text input. Caret-only movement keeps the current composition.
+      window.set_text_input(&host, false, 0, 0, 0, 0)
+      text_focus = next_text_focus
+    }
+    rect := state.text_input_rect
+    window.set_text_input(&host, state.text_input, #cast(i32, rect[0]), #cast(i32, rect[1]), #cast(i32, rect[2]), #cast(i32, rect[3]))
+    ui.end(&context)
+    if #len(state.copied) != 0 {
+      window.set_clipboard(&host, state.copied)
+    }
+    loaded.api.clear_color(0.08, 0.09, 0.11, 1.0)
+    loaded.api.clear(gl.ColorBufferBit)
+    if !gpu.render_batch(batch, ui.first(&context), width, height, glyphs, vertices).ok {
+      #panic("render")
+    }
+    drawn += 1
+    if frames != 0 && drawn >= frames && #len(screenshot) != 0 {
+      save(&loaded.api, frame_arena, screenshot, width, height)
+    }
+    _ = window.swap(&host)
+    if frames != 0 && drawn >= frames {
+      break
+    }
+  }
+}

@@ -1,0 +1,609 @@
+// Widgets are builder code over boxes. Each returns its Signal; state such as
+// a checkbox value or text buffer belongs to the caller.
+
+use "std/unicode/utf8" utf8
+use "std/unicode/text" unicode_text
+
+// A box that lays its children left to right.
+pub fn row(state: *State, label: []const u8) *Box {
+  box := build(state, 0, label)
+  box.axis = 0
+  return box
+}
+
+// A box that lays its children top to bottom.
+pub fn column(state: *State, label: []const u8) *Box {
+  box := build(state, 0, label)
+  box.axis = 1
+  return box
+}
+
+pub fn spacer(state: *State, label: []const u8, width: Size, height: Size) *Box {
+  box := build(state, 0, label)
+  box.width = width
+  box.height = height
+  return box
+}
+
+pub fn label(state: *State, text: []const u8) Signal {
+  box := build(state, DrawText, text)
+  box.width = text_size(4.0, 1.0)
+  box.height = text_size(2.0, 1.0)
+  return signal(state, box)
+}
+
+pub fn button(state: *State, label: []const u8) Signal {
+  box := build(state, Focusable | Clickable | DrawBackground | DrawBorder | DrawText | CenterText | HotAnimation | ActiveAnimation, label)
+  box.width = text_size(10.0, 1.0)
+  box.height = text_size(5.0, 1.0)
+  box.radius = 5
+  return signal(state, box)
+}
+
+pub fn checkbox(state: *State, label: []const u8, value: *bool) Signal {
+  box := build(state, Focusable | Clickable | DrawBackground | DrawBorder | DrawText | HotAnimation | ActiveAnimation, label)
+  box.width = text_size(14.0, 1.0)
+  box.height = text_size(5.0, 1.0)
+  result := signal(state, box)
+  if result.clicked {
+    value.* = !value.*
+  }
+  if value.* {
+    box.background = box.active_color
+  }
+  return result
+}
+
+// A horizontal slider over low..high. Dragging sets the value from the pointer.
+pub fn slider(state: *State, label: []const u8, value: *f32, low, high: f32) Signal {
+  track := build(state, Focusable | Clickable | DrawBackground | DrawBorder | HotAnimation, label)
+  track.width = pixels(160.0, 0.5)
+  track.height = text_size(5.0, 1.0)
+  result := signal(state, track)
+  if (result.pressed || result.dragging || result.released) && track.size[0] > 0.0 {
+    fraction := (state.input.x - track.rect[0]) / track.size[0]
+    if fraction < 0.0 {
+      fraction = 0.0
+    }
+    if fraction > 1.0 {
+      fraction = 1.0
+    }
+    value.* = low + (high - low) * fraction
+  }
+  if state.focused == track.key && (state.input.left || state.input.right) {
+    step := (high - low) / 100.0
+    if state.input.left {
+      value.* -= step
+    }
+    if state.input.right {
+      value.* += step
+    }
+    if value.* < low {
+      value.* = low
+    }
+    if value.* > high {
+      value.* = high
+    }
+  }
+  push_parent(state, track)
+  track.axis = 0
+  fill := build(state, DrawBackground, "##fill")
+  span := high - low
+  shown: f32 = 0.0
+  if span != 0.0 {
+    shown = (value.* - low) / span
+  }
+  fill.width = percent(shown, 1.0)
+  fill.height = percent(1.0, 1.0)
+  fill.background = track.active_color
+  pop_parent(state)
+  return result
+}
+
+// A clipped, vertically scrolling region. Build its contents between
+// scroll_begin and scroll_end.
+pub fn scroll_begin(state: *State, label: []const u8, width: Size, height: Size) *Box {
+  box := build(state, Clip | ScrollY | DrawBackground, label)
+  box.width = width
+  box.height = height
+  _ = signal(state, box)
+  push_parent(state, box)
+  return box
+}
+
+pub fn scroll_end(state: *State) {
+  pop_parent(state)
+}
+
+// The rows of a virtual list visible this frame. Build only rows first..last
+// inside the list, after a spacer of first * row_height; the list adds the
+// trailing space so the scroll extent covers count rows.
+pub struct Range { first: usize, last: usize }
+
+pub fn list_begin(state: *State, label: []const u8, width: Size, height: Size, count: usize, row_height: f32) Range {
+  box := scroll_begin(state, label, width, height)
+  // Cover the whole glide between the shown offset and its target, so rows
+  // exist wherever the animation passes this frame.
+  low := box.view[1]
+  high := box.view[1]
+  if box.view_target[1] < low {
+    low = box.view_target[1]
+  }
+  if box.view_target[1] > high {
+    high = box.view_target[1]
+  }
+  first: usize = 0
+  if low > 0.0 {
+    first = #cast(usize, low / row_height)
+  }
+  if first > 0 {
+    first -= 1
+  }
+  last := #cast(usize, (high + box.size[1]) / row_height) + 2
+  if first > count {
+    first = count
+  }
+  if last > count {
+    last = count
+  }
+  _ = spacer(state, "##before", pixels(1.0, 1.0), pixels(#cast(f32, first) * row_height, 1.0))
+  box.floating[1] = #cast(f32, count - last) * row_height
+  return Range{ first: first, last: last }
+}
+
+pub fn list_end(state: *State) {
+  box := parent(state)
+  _ = spacer(state, "##after", pixels(1.0, 1.0), pixels(box.floating[1], 1.0))
+  scroll_end(state)
+}
+
+// An editable single-line field over caller storage. length is the used byte
+// count; cursor is a byte offset kept on code point boundaries. Returns
+// changed when the text changed and submitted when Enter was pressed.
+pub struct Edit {
+  length: usize, cursor: usize,
+  // Active range is anchor..cursor when selecting is true.
+  anchor: usize, selecting: bool,
+  // Horizontal scroll in physical pixels; managed by text_field.
+  scroll_x: f32,
+}
+pub struct FieldSignal { signal: Signal, focused: bool, changed: bool, submitted: bool, correction_error: errors.Kind }
+
+fn previous_boundary(text: []const u8, at: usize) usize {
+  index := at
+  for index > 0 {
+    index -= 1
+    if text[index] & 0xc0 != 0x80 {
+      return index
+    }
+  }
+  return 0
+}
+
+fn next_boundary(text: []const u8, at: usize) usize {
+  if at >= #len(text) {
+    return #len(text)
+  }
+  decoded := utf8.decode(text, at)
+  if !decoded.ok {
+    return at + 1
+  }
+  return at + decoded.width
+}
+
+fn selection_low(edit: *const Edit) usize {
+  if edit.selecting && edit.anchor < edit.cursor {
+    return edit.anchor
+  }
+  return edit.cursor
+}
+
+fn selection_high(edit: *const Edit) usize {
+  if edit.selecting && edit.anchor > edit.cursor {
+    return edit.anchor
+  }
+  return edit.cursor
+}
+
+fn insert(state: *State, storage: []u8, edit: *Edit, text: []const u8) bool {
+  low := selection_low(edit)
+  high := selection_high(edit)
+  if !utf8.valid(text) || #len(text) > #len(storage) - (edit.length - (high - low)) {
+    return false
+  }
+  for byte in text {
+    if byte == 0 || byte == 10 || byte == 13 {
+      return false
+    }
+  }
+  replacement := mem.push_bytes_uninit(state.frame, #len(text))
+  _ = mem.copy(replacement, text)
+  remove(storage, edit, low, high)
+  edit.cursor = low
+  index := edit.length
+  for index > edit.cursor {
+    index -= 1
+    storage[index + #len(text)] = storage[index]
+  }
+  for i in 0..#len(text) {
+    storage[edit.cursor + i] = replacement[i]
+  }
+  edit.length += #len(text)
+  edit.cursor += #len(text)
+  edit.anchor = edit.cursor
+  edit.selecting = false
+  return #len(text) != 0 || high != low
+}
+
+fn remove(storage: []u8, edit: *Edit, from: usize, to: usize) {
+  count := to - from
+  for i in from..edit.length - count {
+    storage[i] = storage[i + count]
+  }
+  edit.length -= count
+  if edit.cursor > to {
+    edit.cursor -= count
+  }
+  else if edit.cursor > from {
+    edit.cursor = from
+  }
+}
+
+fn space(byte: u8) bool {
+  return byte == 32 || byte == 9 || byte == 10 || byte == 13
+}
+
+fn word_boundary(state: *State, text: []const u8, at: usize, forward: bool) usize {
+  mark := mem.arena_mark(state.frame)
+  defer {
+    mem.arena_rewind(state.frame, mark)
+  }
+  boundaries := unicode_text.word_breaks(state.frame, text)
+  if !boundaries.ok {
+    return at
+  }
+  if forward {
+    target := #len(text)
+    for boundary in boundaries.value {
+      if boundary > at {
+        target = boundary
+        break
+      }
+    }
+    for target < #len(text) && space(text[target]) {
+      target += 1
+    }
+    return target
+  }
+  target := at
+  for target > 0 && space(text[target - 1]) {
+    target -= 1
+  }
+  previous: usize = 0
+  for boundary in boundaries.value {
+    if boundary >= target {
+      break
+    }
+    previous = boundary
+  }
+  return previous
+}
+
+fn pointer_boundary(state: *State, box: *const Box, text: []const u8, scroll: f32) usize {
+  x := state.input.x - box.rect[0] - 4.0 + scroll
+  previous: usize = 0
+  previous_width: f32 = 0.0
+  for previous < #len(text) {
+    next := next_boundary(text, previous)
+    width := state.measure(state.measure_data, text[..next])
+    if x < (previous_width + width) / 2.0 {
+      return previous
+    }
+    previous = next
+    previous_width = width
+  }
+  return #len(text)
+}
+
+pub fn text_field(state: *State, label: []const u8, storage: []u8, edit: *Edit) FieldSignal {
+  box := build(state, Focusable | Clickable | DrawBackground | DrawBorder | DrawText | Clip | HotAnimation, label)
+  box.width = pixels(220.0, 0.5)
+  box.height = text_size(5.0, 1.0)
+  result := FieldSignal{ signal: signal(state, box) }
+  if edit.length > #len(storage) {
+    edit.length = #len(storage)
+  }
+  // Caller offsets may have become stale after replacing its buffer.
+  if !utf8.valid(storage[..edit.length]) {
+    return result
+  }
+  if edit.cursor > edit.length {
+    edit.cursor = edit.length
+  }
+  for edit.cursor > 0 && edit.cursor < edit.length && storage[edit.cursor] & 0xc0 == 0x80 {
+    edit.cursor -= 1
+  }
+  if edit.anchor > edit.length {
+    edit.anchor = edit.length
+  }
+  for edit.anchor > 0 && edit.anchor < edit.length && storage[edit.anchor] & 0xc0 == 0x80 {
+    edit.anchor -= 1
+  }
+  if !edit.selecting {
+    edit.anchor = edit.cursor
+  }
+  if result.signal.pressed {
+    at := pointer_boundary(state, box, storage[..edit.length], edit.scroll_x)
+    if !state.input.shift {
+      edit.anchor = at
+    }
+    edit.cursor = at
+    edit.selecting = edit.cursor != edit.anchor
+  }
+  else if result.signal.dragging || result.signal.released {
+    edit.cursor = pointer_boundary(state, box, storage[..edit.length], edit.scroll_x)
+    edit.selecting = edit.cursor != edit.anchor
+  }
+  focused := state.focused == box.key
+  result.focused = focused
+  correction_applied := false
+  if focused {
+    anchor := edit.cursor
+    if edit.selecting {
+      anchor = edit.anchor
+    }
+    before := text_edits.snapshot(&state.text_tracker, box.key, storage[..edit.length], edit.cursor, anchor, text_edits.Cause.Other)
+    if state.input.correction != nil {
+      replacement := state.input.correction
+      invalid := #len(state.input.text) != 0 || state.input.backspace || state.input.delete || state.input.left || state.input.right || state.input.home || state.input.end ||
+        state.input.copy || state.input.cut || state.input.paste || state.input.select_all || state.input.enter || state.input.escape || state.input.tab
+      for byte in replacement.text {
+        if byte == 0 || byte == 10 || byte == 13 {
+          invalid = true
+        }
+      }
+      if !before.ok {
+        result.correction_error = before.kind
+      }
+      else if invalid {
+        result.correction_error = errors.Kind.InvalidInput
+      }
+      else {
+        buffer := text_edits.Buffer{ storage: storage, length: edit.length, cursor: edit.cursor, anchor: anchor, token: before.value.token }
+        applied := text_edits.apply(state.frame, &buffer, replacement)
+        if applied.ok {
+          edit.length = buffer.length
+          edit.cursor = buffer.cursor
+          edit.anchor = buffer.anchor
+          edit.selecting = false
+          result.changed = true
+          correction_applied = true
+        }
+        else {
+          result.correction_error = applied.kind
+        }
+      }
+      text_edits.invalidate(&state.text_tracker)
+    }
+    input := state.input
+    if input.composition_handled || #len(input.composition) != 0 || input.correction != nil {
+      input.home = false
+      input.end = false
+      input.left = false
+      input.right = false
+      input.backspace = false
+      input.delete = false
+      input.select_all = false
+      input.copy = false
+      input.cut = false
+      input.paste = false
+      input.enter = false
+      input.escape = false
+    }
+    text := storage[..edit.length]
+    if input.select_all {
+      edit.anchor = 0
+      edit.cursor = edit.length
+      edit.selecting = true
+    }
+    moved := input.home || input.end || input.left || input.right
+    if moved {
+      old := edit.cursor
+      target := old
+      if input.home {
+        target = 0
+      }
+      if input.end {
+        target = edit.length
+      }
+      if input.left {
+        if !input.shift && edit.selecting {
+          target = selection_low(edit)
+        }
+        else if input.control {
+          target = word_boundary(state, text, old, false)
+        }
+        else {
+          target = previous_boundary(text, old)
+        }
+      }
+      if input.right {
+        if !input.shift && edit.selecting {
+          target = selection_high(edit)
+        }
+        else if input.control {
+          target = word_boundary(state, text, old, true)
+        }
+        else {
+          target = next_boundary(text, old)
+        }
+      }
+      if input.shift {
+        if !edit.selecting {
+          edit.anchor = old
+        }
+        edit.selecting = target != edit.anchor
+      }
+      else {
+        edit.anchor = target
+        edit.selecting = false
+      }
+      edit.cursor = target
+    }
+    if input.backspace || input.delete {
+      low := selection_low(edit)
+      high := selection_high(edit)
+      if low == high {
+        if input.backspace {
+          if input.control {
+            low = word_boundary(state, text, low, false)
+          }
+          else {
+            low = previous_boundary(text, low)
+          }
+        }
+        else {
+          if input.control {
+            high = word_boundary(state, text, high, true)
+          }
+          else {
+            high = next_boundary(text, high)
+          }
+        }
+      }
+      if low != high {
+        remove(storage, edit, low, high)
+        edit.cursor = low
+        result.changed = true
+      }
+      edit.anchor = edit.cursor
+      edit.selecting = false
+    }
+    if input.copy || input.cut {
+      low := selection_low(edit)
+      high := selection_high(edit)
+      // Preserve the original whole-field shortcut when there is no selection.
+      if low == high {
+        low = 0
+        high = edit.length
+      }
+      copied := mem.push_bytes_uninit(state.frame, high - low)
+      _ = mem.copy(copied, storage[low..high])
+      state.copied = copied
+      if input.cut && high != low {
+        remove(storage, edit, low, high)
+        edit.cursor = low
+        edit.anchor = low
+        edit.selecting = false
+        result.changed = true
+      }
+    }
+    if input.paste && #len(input.clipboard) != 0 {
+      result.changed = insert(state, storage, edit, input.clipboard) || result.changed
+    }
+    if input.correction == nil && #len(input.text) != 0 {
+      result.changed = insert(state, storage, edit, input.text) || result.changed
+    }
+    if input.enter {
+      result.submitted = true
+    }
+    if input.escape {
+      state.focused = 0
+    }
+    box.border = box.active_color
+  }
+  focused = state.focused == box.key
+  result.focused = focused
+  shown := mem.push_bytes_uninit(state.frame, edit.length)
+  _ = mem.copy(shown, storage[..edit.length])
+  box.text = shown
+  composing := state.input.composition
+  if !focused || !utf8.valid(composing) {
+    composing = ""
+  }
+  caret_x := state.measure(state.measure_data, storage[..edit.cursor])
+  caret_offset: f32 = 0.0
+  if #len(composing) != 0 {
+    low := selection_low(edit)
+    high := selection_high(edit)
+    // Preview the replacement as one text run. Overlaying a second label
+    // would draw preedit on top of the unchanged suffix beneath it.
+    preview := mem.push_bytes_uninit(state.frame, edit.length - (high - low) + #len(composing))
+    _ = mem.copy(preview[..low], storage[..low])
+    _ = mem.copy(preview[low..low + #len(composing)], composing)
+    _ = mem.copy(preview[low + #len(composing)..], storage[high..edit.length])
+    box.text = preview
+    caret_x = state.measure(state.measure_data, storage[..low])
+    cursor := #len(composing)
+    if state.input.composition_cursor >= 0 && #cast(usize, state.input.composition_cursor) <= #len(composing) {
+      cursor = #cast(usize, state.input.composition_cursor)
+    }
+    for cursor > 0 && cursor < #len(composing) && composing[cursor] & 0xc0 == 0x80 {
+      cursor -= 1
+    }
+    caret_offset = state.measure(state.measure_data, composing[..cursor])
+  }
+  visual_caret := caret_x + caret_offset
+  available := box.size[0] - 8.0
+  if available > 0.0 {
+    if visual_caret < edit.scroll_x {
+      edit.scroll_x = visual_caret
+    }
+    if visual_caret > edit.scroll_x + available {
+      edit.scroll_x = visual_caret - available
+    }
+  }
+  if edit.scroll_x < 0.0 {
+    edit.scroll_x = 0.0
+  }
+  box.text_offset = edit.scroll_x
+  if focused {
+    if edit.selecting && #len(composing) == 0 {
+      box.selection[0] = state.measure(state.measure_data, storage[..selection_low(edit)])
+      box.selection[1] = state.measure(state.measure_data, storage[..selection_high(edit)])
+    }
+    push_parent(state, box)
+    box.axis = 0
+    if #len(composing) != 0 {
+      line := build(state, DrawBackground | FloatingX | FloatingY, "##composition-line")
+      line.floating[0] = 4.0 + caret_x - edit.scroll_x
+      line.floating[1] = (box.size[1] + state.line_height) / 2.0
+      line.width = pixels(state.measure(state.measure_data, composing) / state.scale, 1.0)
+      line.height = pixels(1.0 / state.scale, 1.0)
+      line.background = box.foreground
+    }
+    caret := build(state, DrawBackground | FloatingX | FloatingY, "##caret")
+    caret.floating[0] = 4.0 + visual_caret - edit.scroll_x
+    state.text_input = true
+    state.text_input_anchor = caret
+    cause := text_edits.Cause.Other
+    if correction_applied {
+      cause = text_edits.Cause.InputMethod
+    }
+    anchor := edit.cursor
+    if edit.selecting {
+      anchor = edit.anchor
+    }
+    context := text_edits.snapshot(&state.text_tracker, box.key, storage[..edit.length], edit.cursor, anchor, cause)
+    if context.ok {
+      state.text_context = context.value
+    }
+    else {
+      state.text_context = text_edits.Context{}
+      state.text_context_error = context.kind
+    }
+    state.text_input_rect[0] = box.rect[0] + caret.floating[0]
+    state.text_input_rect[1] = box.rect[1] + (box.size[1] - state.line_height) / 2.0
+    state.text_input_rect[2] = 1.0
+    state.text_input_rect[3] = state.line_height
+    caret.floating[1] = (box.size[1] - state.line_height) / 2.0
+    caret.width = pixels(1.0 / state.scale, 1.0)
+    caret.height = pixels(state.line_height / state.scale, 1.0)
+    caret.background = box.foreground
+    if #len(composing) != 0 && state.input.composition_cursor < 0 {
+      caret.flags = 0
+    }
+    pop_parent(state)
+  }
+  return result
+}

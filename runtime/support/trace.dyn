@@ -1,15 +1,44 @@
 struct Frame { name: *const u8, length: u64 }
 struct TraceSlot { tid: u64, count: u64, frames: [64]Frame }
-trace_slots: [64]TraceSlot
-fn trace_slot(id: u64, claim: bool) *TraceSlot {
-  for i in 0..64 {
-    slot := &trace_slots[i]
-    seen := atomic_load(&slot.tid)
-    if seen == id {
-      return slot
+// Debug builds trace calls; release builds never call trace_push, so they
+// reserve nothing. Chunks come from the platform on first use and are reused.
+struct TraceChunk { next: u64, slots: [trace_chunk_slots]TraceSlot }
+trace_first: u64
+fn trace_chunk(address: u64) *TraceChunk {
+  return #cast(*TraceChunk, #cast(usize, address))
+}
+fn trace_grow() bool {
+  fresh := runtime_pages(#cast(u64, #sizeof(TraceChunk)))
+  if fresh == 0 {
+    return false
+  }
+  link := &trace_first
+  for true {
+    if atomic_claim(link, 0, fresh) {
+      return true
     }
-    if claim && seen == 0 && atomic_claim(&slot.tid, 0, id) {
-      return slot
+    link = &trace_chunk(atomic_load(link)).next
+  }
+  return false
+}
+fn trace_slot(id: u64, claim: bool) *TraceSlot {
+  for true {
+    chunk := atomic_load(&trace_first)
+    for chunk != 0 {
+      for i in 0..trace_chunk_slots {
+        slot := &trace_chunk(chunk).slots[i]
+        seen := atomic_load(&slot.tid)
+        if seen == id {
+          return slot
+        }
+        if claim && seen == 0 && atomic_claim(&slot.tid, 0, id) {
+          return slot
+        }
+      }
+      chunk = atomic_load(&trace_chunk(chunk).next)
+    }
+    if !claim || !trace_grow() {
+      return nil
     }
   }
   return nil

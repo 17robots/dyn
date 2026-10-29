@@ -1,0 +1,4 @@
+#target(kernel: linux)
+#link("c")
+const library_path: []const u8 = "libc.so.6"
+const symbol_name: []const u8 = "strlen"

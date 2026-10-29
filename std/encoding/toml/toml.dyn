@@ -1,0 +1,835 @@
+use "std/mem" mem
+use "std/errors" errors
+use "std/strings" strings
+use "std/unicode/utf8" utf8
+// TOML 1.0 tree. All parsed strings, keys and scalar lexemes are arena-owned.
+// Integer/float/date/time text preserves spelling
+// no conversion loses precision.
+pub enum Kind { Missing, String, Integer, Float, Bool, DateTime, Array, Table }
+pub struct Value { kind: Kind, text: []const u8, boolean: bool, key: []const u8, first: *Value, last: *Value, next: *Value, defined: bool, header_defined: bool, sealed: bool, table_array: bool }
+pub const nil_value: Value = Value{}
+pub struct ParseResult { root: *const Value, kind: errors.Kind, error: isize, offset: usize, ok: bool }
+pub struct EncodeResult { value: []u8, kind: errors.Kind, error: isize, ok: bool }
+struct Parser { arena: *mem.Arena, source: []const u8, at: usize, failed: bool, depth: usize }
+fn copy(arena: *mem.Arena, source: []const u8) []u8 {
+  result := mem.push_array(u8, arena, #len(source))
+  for i in 0..#len(source) {
+    result[i] = source[i]
+  }
+  return result
+}
+fn node(parser: *Parser, kind: Kind) *Value {
+  value := mem.push(Value, parser.arena)
+  value.kind = kind
+  return value
+}
+fn link(parent, child: *Value) {
+  if parent.last == nil {
+    parent.first = child
+  } else {
+    parent.last.next = child
+  }
+  parent.last = child
+}
+fn find(parent: *Value, key: []const u8) *Value {
+  value := parent.first
+  for value != nil {
+    if strings.equal(value.key, key) {
+      return value
+    }
+    value = value.next
+  }
+  return nil
+}
+pub fn member(parent: *const Value, key: []const u8) *const Value {
+  if parent == nil || parent.kind != Kind.Table {
+    return &nil_value
+  }
+  value := parent.first
+  for value != nil {
+    if strings.equal(value.key, key) {
+      return value
+    }
+    value = value.next
+  }
+  return &nil_value
+}
+pub fn index(parent: *const Value, at: usize) *const Value {
+  if parent == nil || parent.kind != Kind.Array {
+    return &nil_value
+  }
+  value := parent.first
+  count: usize = 0
+  for value != nil {
+    if count == at {
+      return value
+    }
+    count += 1
+    value = value.next
+  }
+  return &nil_value
+}
+fn peek(parser: *const Parser) u8 {
+  if parser.at == #len(parser.source) {
+    return 0
+  }
+  return parser.source[parser.at]
+}
+fn horizontal(parser: *Parser) {
+  for peek(parser) == 32 || peek(parser) == 9 {
+    parser.at += 1
+  }
+}
+fn newline(parser: *Parser) bool {
+  if peek(parser) == 13 {
+    parser.at += 1
+    if peek(parser) != 10 {
+      parser.failed = true
+      return false
+    }
+  }
+  if peek(parser) == 10 {
+    parser.at += 1
+    return true
+  }
+  return false
+}
+fn comment(parser: *Parser) {
+  if peek(parser) != 35 {
+    return
+  }
+  for parser.at < #len(parser.source) && peek(parser) != 10 && peek(parser) != 13 {
+    c := peek(parser)
+    if (c < 32 && c != 9) || c == 127 {
+      parser.failed = true
+    }
+    parser.at += 1
+  }
+}
+fn spaces(parser: *Parser) {
+  for true {
+    horizontal(parser)
+    comment(parser)
+    if !newline(parser) {
+      return
+    }
+  }
+}
+fn hex(c: u8) i32 {
+  if c >= 48 && c <= 57 {
+    return #cast(i32, c - 48)
+  }
+  if c >= 65 && c <= 70 {
+    return #cast(i32, c - 65 + 10)
+  }
+  if c >= 97 && c <= 102 {
+    return #cast(i32, c - 97 + 10)
+  }
+  return -1
+}
+fn quoted(parser: *Parser, key: bool) []const u8 {
+  quote := peek(parser)
+  parser.at += 1
+  multiline := !key && #len(parser.source) - parser.at >= 2 && parser.source[parser.at] == quote && parser.source[parser.at + 1] == quote
+  if multiline {
+    parser.at += 2
+    _ = newline(parser)
+  }
+  output: []u8
+  for parser.at < #len(parser.source) {
+    c := peek(parser)
+    if c == quote {
+      count: usize = 0
+      for parser.at < #len(parser.source) && peek(parser) == quote {
+        count += 1
+        parser.at += 1
+      }
+      if !multiline {
+        parser.at -= count - 1
+        return output
+      }
+      if count >= 3 {
+        if count > 5 {
+          parser.failed = true
+          return output
+        }
+        for i in 3..count {
+          _ = mem.append(parser.arena, &output, quote)
+        }
+        return output
+      }
+      for i in 0..count {
+        _ = mem.append(parser.arena, &output, quote)
+      }
+      continue
+    }
+    if c == 10 || c == 13 {
+      if !multiline || !newline(parser) {
+        parser.failed = true
+        return output
+      }
+      _ = mem.append(parser.arena, &output, #cast(u8, 10))
+      continue
+    }
+    if (c < 32 && c != 9) || c == 127 {
+      parser.failed = true
+      return output
+    }
+    parser.at += 1
+    if c == 92 && quote == 34 {
+      if multiline {
+        escape_start := parser.at
+        horizontal(parser)
+        if newline(parser) {
+          for true {
+            horizontal(parser)
+            if !newline(parser) {
+              break
+            }
+          }
+          continue
+        }
+        if parser.at != escape_start {
+          parser.failed = true
+          return output
+        }
+      }
+      c = peek(parser)
+      if parser.at == #len(parser.source) {
+        parser.failed = true
+        return output
+      }
+      parser.at += 1
+      if c == 98 {
+        c = 8
+      }
+      else if c == 116 {
+        c = 9
+      }
+      else if c == 110 {
+        c = 10
+      }
+      else if c == 102 {
+        c = 12
+      }
+      else if c == 114 {
+        c = 13
+      }
+      else if c == 117 || c == 85 {
+        count: usize = 4
+        if c == 85 {
+          count = 8
+        }
+        scalar: u32 = 0
+        if count > #len(parser.source) - parser.at {
+          parser.failed = true
+          return output
+        }
+        for i in 0..count {
+          digit := hex(parser.source[parser.at + i])
+          if digit < 0 {
+            parser.failed = true
+            return output
+          }
+          scalar = (scalar << 4) | #cast(u32, digit)
+        }
+        parser.at += count
+        encoded: [4]u8 = []
+        width := utf8.encode(encoded[..], scalar)
+        if width == 0 {
+          parser.failed = true
+          return output
+        }
+        mem.append_many(parser.arena, &output, encoded[..width])
+        continue
+      }
+      else if c != 34 && c != 92 {
+        parser.failed = true
+        return output
+      }
+    }
+    _ = mem.append(parser.arena, &output, c)
+  }
+  parser.failed = true
+  return output
+}
+fn bare(c: u8) bool {
+  return (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c == 45 || c == 95
+}
+fn keypart(parser: *Parser) []const u8 {
+  horizontal(parser)
+  if peek(parser) == 34 || peek(parser) == 39 {
+    return quoted(parser, true)
+  }
+  start := parser.at
+  for bare(peek(parser)) {
+    parser.at += 1
+  }
+  if start == parser.at {
+    parser.failed = true
+  }
+  return copy(parser.arena, parser.source[start..parser.at])
+}
+fn digits(source: []const u8, at: *usize, base: i32) bool {
+  start := at.*
+  previous := false
+  for at.* < #len(source) {
+    c := source[at.*]
+    digit := hex(c)
+    if digit >= 0 && digit < base {
+      previous = true
+      at.* += 1
+    }
+    else if c == 95 {
+      if !previous || at.* + 1 == #len(source) || hex(source[at.* + 1]) < 0 || hex(source[at.* + 1]) >= base {
+        return false
+      }
+      previous = false
+      at.* += 1
+    } else {
+      break
+    }
+  }
+  return at.* > start && previous
+}
+fn fixed(source: []const u8, at, count: usize) i32 {
+  if at > #len(source) || count > #len(source) - at {
+    return -1
+  }
+  result: i32 = 0
+  for i in at..at + count {
+    if source[i] < 48 || source[i] > 57 {
+      return -1
+    }
+    result = result * 10 + #cast(i32, source[i] - 48)
+  }
+  return result
+}
+fn datetime(source: []const u8) bool {
+  at: usize = 0
+  date := #len(source) >= 10 && source[4] == 45 && source[7] == 45
+  if date {
+    year := fixed(source, 0, 4)
+    month := fixed(source, 5, 2)
+    day := fixed(source, 8, 2)
+    if year < 0 || month < 1 || month > 12 || day < 1 {
+      return false
+    }
+    days: [12]i32 = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) {
+      days[1] = 29
+    }
+    if day > days[#cast(usize, month - 1)] {
+      return false
+    }
+    at = 10
+    if at == #len(source) {
+      return true
+    }
+    if source[at] != 84 && source[at] != 116 && source[at] != 32 {
+      return false
+    }
+    at += 1
+  }
+  if #len(source) - at < 8 || source[at + 2] != 58 || source[at + 5] != 58 {
+    return false
+  }
+  hour := fixed(source, at, 2)
+  minute := fixed(source, at + 3, 2)
+  // RFC 3339/TOML ABNF includes leap second 60; retain it as text.
+  second := fixed(source, at + 6, 2)
+  if hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 60 {
+    return false
+  }
+  at += 8
+  if at < #len(source) && source[at] == 46 {
+    at += 1
+    start := at
+    for at < #len(source) && source[at] >= 48 && source[at] <= 57 {
+      at += 1
+    }
+    if at == start {
+      return false
+    }
+  }
+  if at == #len(source) {
+    return true
+  }
+  if !date {
+    return false
+  }
+  if (source[at] == 90 || source[at] == 122) && at + 1 == #len(source) {
+    return true
+  }
+  if #len(source) - at != 6 || (source[at] != 43 && source[at] != 45) || source[at + 3] != 58 {
+    return false
+  }
+  offset_hour := fixed(source, at + 1, 2)
+  offset_minute := fixed(source, at + 4, 2)
+  return offset_hour >= 0 && offset_hour <= 23 && offset_minute >= 0 && offset_minute <= 59
+}
+fn scalar_kind(source: []const u8) Kind {
+  if strings.equal(source, "true") || strings.equal(source, "false") {
+    return Kind.Bool
+  }
+  if datetime(source) {
+    return Kind.DateTime
+  }
+  at: usize = 0
+  negative := false
+  signed := false
+  if #len(source) > 0 && (source[0] == 43 || source[0] == 45) {
+    signed = true
+    negative = source[0] == 45
+    at += 1
+  }
+  if strings.equal(source[at..], "inf") || strings.equal(source[at..], "nan") {
+    return Kind.Float
+  }
+  base: i32 = 10
+  if #len(source) - at >= 2 && source[at] == 48 {
+    prefix := source[at + 1]
+    if prefix == 120 {
+      base = 16
+    }
+    else if prefix == 111 {
+      base = 8
+    }
+    else if prefix == 98 {
+      base = 2
+    }
+    if base != 10 {
+      if signed {
+        return Kind.Missing
+      }
+      at += 2
+    }
+  }
+  start := at
+  if !digits(source, &at, base) {
+    return Kind.Missing
+  }
+  if base == 10 && at - start > 1 && source[start] == 48 {
+    return Kind.Missing
+  }
+  floating := false
+  if base == 10 && at < #len(source) && source[at] == 46 {
+    floating = true
+    at += 1
+    if !digits(source, &at, 10) {
+      return Kind.Missing
+    }
+  }
+  if base == 10 && at < #len(source) && (source[at] == 101 || source[at] == 69) {
+    floating = true
+    at += 1
+    if at < #len(source) && (source[at] == 43 || source[at] == 45) {
+      at += 1
+    }
+    if !digits(source, &at, 10) {
+      return Kind.Missing
+    }
+  }
+  if at != #len(source) {
+    return Kind.Missing
+  }
+  if floating {
+    return Kind.Float
+  }
+  maximum: u64 = 9223372036854775807
+  if negative {
+    maximum += 1
+  }
+  number: u64 = 0
+  for i in start..#len(source) {
+    if source[i] == 95 {
+      continue
+    }
+    digit := #cast(u64, hex(source[i]))
+    if number > (maximum - digit) / #cast(u64, base) {
+      return Kind.Missing
+    }
+    number = number * #cast(u64, base) + digit
+  }
+  return Kind.Integer
+}
+fn value(parser: *Parser) *Value {
+  if parser.depth >= 64 {
+    parser.failed = true
+    return nil
+  }
+  parser.depth += 1
+  defer {
+    parser.depth -= 1
+  }
+  c := peek(parser)
+  if c == 34 || c == 39 {
+    result := node(parser, Kind.String)
+    result.text = quoted(parser, false)
+    return result
+  }
+  if c == 91 {
+    parser.at += 1
+    result := node(parser, Kind.Array)
+    spaces(parser)
+    for peek(parser) != 93 && !parser.failed {
+      child := value(parser)
+      if child == nil {
+        return nil
+      }
+      link(result, child)
+      spaces(parser)
+      if peek(parser) == 93 {
+        break
+      }
+      if peek(parser) != 44 {
+        parser.failed = true
+        return nil
+      }
+      parser.at += 1
+      spaces(parser)
+    }
+    if peek(parser) != 93 {
+      parser.failed = true
+      return nil
+    }
+    parser.at += 1
+    return result
+  }
+  if c == 123 {
+    parser.at += 1
+    result := node(parser, Kind.Table)
+    horizontal(parser)
+    for peek(parser) != 125 && !parser.failed {
+      assign(parser, result)
+      horizontal(parser)
+      if peek(parser) == 125 {
+        break
+      }
+      if peek(parser) != 44 {
+        parser.failed = true
+        return nil
+      }
+      parser.at += 1
+      horizontal(parser)
+      if peek(parser) == 125 {
+        parser.failed = true
+        return nil
+      }
+    }
+    if peek(parser) != 125 {
+      parser.failed = true
+      return nil
+    }
+    parser.at += 1
+    result.sealed = true
+    return result
+  }
+  start := parser.at
+  for parser.at < #len(parser.source) {
+    c = peek(parser)
+    if c == 32 || c == 9 || c == 10 || c == 13 || c == 35 || c == 44 || c == 93 || c == 125 {
+      break
+    }
+    parser.at += 1
+  }
+  // A single space may separate the date and time portions.
+  if parser.at - start == 10 && peek(parser) == 32 && #len(parser.source) - parser.at >= 9 && parser.source[parser.at + 3] == 58 {
+    parser.at += 1
+    for parser.at < #len(parser.source) {
+      c = peek(parser)
+      if c == 32 || c == 9 || c == 10 || c == 13 || c == 35 || c == 44 || c == 93 || c == 125 {
+        break
+      }
+      parser.at += 1
+    }
+  }
+  token := parser.source[start..parser.at]
+  kind := scalar_kind(token)
+  if kind == Kind.Missing {
+    parser.failed = true
+    return nil
+  }
+  result := node(parser, kind)
+  result.text = copy(parser.arena, token)
+  result.boolean = strings.equal(token, "true")
+  return result
+}
+fn assign(parser: *Parser, table: *Value) {
+  parent := table
+  for true {
+    key := keypart(parser)
+    horizontal(parser)
+    if parser.failed {
+      return
+    }
+    if peek(parser) == 46 {
+      child := find(parent, key)
+      if child == nil {
+        child = node(parser, Kind.Table)
+        child.key = key
+        child.defined = true
+        link(parent, child)
+      }
+      if child.kind != Kind.Table || child.sealed || child.header_defined {
+        parser.failed = true
+        return
+      }
+      parent = child
+      parser.at += 1
+      continue
+    }
+    if peek(parser) != 61 || find(parent, key) != nil {
+      parser.failed = true
+      return
+    }
+    parser.at += 1
+    horizontal(parser)
+    child := value(parser)
+    if child == nil || parser.failed {
+      return
+    }
+    child.key = key
+    link(parent, child)
+    return
+  }
+}
+fn header(parser: *Parser, root: *Value) *Value {
+  parser.at += 1
+  array := peek(parser) == 91
+  if array {
+    parser.at += 1
+  }
+  parent := root
+  for true {
+    key := keypart(parser)
+    horizontal(parser)
+    if parser.failed {
+      return root
+    }
+    child := find(parent, key)
+    final := peek(parser) != 46
+    if final && array {
+      if child == nil {
+        child = node(parser, Kind.Array)
+        child.table_array = true
+        child.key = key
+        link(parent, child)
+      }
+      if child.kind != Kind.Array || !child.table_array {
+        parser.failed = true
+        return root
+      }
+      element := node(parser, Kind.Table)
+      element.defined = true
+      link(child, element)
+      parent = element
+    } else {
+      if child == nil {
+        child = node(parser, Kind.Table)
+        child.key = key
+        link(parent, child)
+      }
+      if !final && child.kind == Kind.Array && child.table_array {
+        child = child.last
+      }
+      if child.kind != Kind.Table || child.sealed || (final && child.defined) {
+        parser.failed = true
+        return root
+      }
+      if final {
+        child.defined = true
+        child.header_defined = true
+      }
+      parent = child
+    }
+    if final {
+      break
+    }
+    parser.at += 1
+  }
+  if peek(parser) != 93 {
+    parser.failed = true
+    return root
+  }
+  parser.at += 1
+  if array {
+    if peek(parser) != 93 {
+      parser.failed = true
+      return root
+    }
+    parser.at += 1
+  }
+  return parent
+}
+fn bounded(value: *const Value, depth: usize) bool {
+  if depth > 64 {
+    return false
+  }
+  child := value.first
+  for child != nil {
+    if !bounded(child, depth + 1) {
+      return false
+    }
+    child = child.next
+  }
+  return true
+}
+// Inputs must not borrow unused backing of the output arena.
+// Failure restores the caller's arena mark
+// successful trees own all input text.
+// Inputs must be UTF-8. Nesting is limited to 64
+// exhausted arenas panic.
+pub fn parse(arena: *mem.Arena, source: []const u8) ParseResult {
+  if !utf8.valid(source) {
+    return ParseResult{ root: &nil_value, kind: errors.Kind.InvalidInput }
+  }
+  mark := mem.arena_mark(arena)
+  parser := Parser{ arena: arena, source: source }
+  root := node(&parser, Kind.Table)
+  current := root
+  spaces(&parser)
+  for parser.at < #len(source) && !parser.failed {
+    if peek(&parser) == 91 {
+      current = header(&parser, root)
+    }
+    else {
+      assign(&parser, current)
+    }
+    horizontal(&parser)
+    comment(&parser)
+    if parser.at != #len(source) && !newline(&parser) {
+      parser.failed = true
+    }
+    spaces(&parser)
+  }
+  if !parser.failed && !bounded(root, 0) {
+    parser.failed = true
+  }
+  if parser.failed {
+    mem.arena_rewind(arena, mark)
+    return ParseResult{ root: &nil_value, kind: errors.Kind.InvalidInput, offset: parser.at }
+  }
+  return ParseResult{ root: root, ok: true }
+}
+fn emit_string(arena: *mem.Arena, output: *[]u8, text: []const u8) {
+  _ = mem.append(arena, output, #cast(u8, 34))
+  hexes := "0123456789abcdef"
+  for c in text {
+    if c == 34 || c == 92 {
+      _ = mem.append(arena, output, #cast(u8, 92))
+      _ = mem.append(arena, output, c)
+    } else if c < 32 || c == 127 {
+      mem.append_many(arena, output, "\\u00")
+      _ = mem.append(arena, output, hexes[#cast(usize, c >> 4)])
+      _ = mem.append(arena, output, hexes[#cast(usize, c & 15)])
+    } else {
+      _ = mem.append(arena, output, c)
+    }
+  }
+  _ = mem.append(arena, output, #cast(u8, 34))
+}
+fn valid_children(current: *const Value) bool {
+  slow := current.first
+  fast := current.first
+  for fast != nil && fast.next != nil {
+    slow = slow.next
+    fast = fast.next.next
+    if slow == fast {
+      return false
+    }
+  }
+  if current.kind == Kind.Table {
+    child := current.first
+    for child != nil {
+      if !utf8.valid(child.key) {
+        return false
+      }
+      previous := current.first
+      for previous != child {
+        if strings.equal(previous.key, child.key) {
+          return false
+        }
+        previous = previous.next
+      }
+      child = child.next
+    }
+  }
+  return true
+}
+fn emit(arena: *mem.Arena, output: *[]u8, current: *const Value, depth: usize) bool {
+  if current == nil || depth >= 64 {
+    return false
+  }
+  if current.kind == Kind.String {
+    if !utf8.valid(current.text) {
+      return false
+    }
+    emit_string(arena, output, current.text)
+  } else if current.kind == Kind.Array || current.kind == Kind.Table {
+    if !valid_children(current) {
+      return false
+    }
+    opening: u8 = 91
+    closing: u8 = 93
+    if current.kind == Kind.Table {
+      opening = 123
+      closing = 125
+    }
+    _ = mem.append(arena, output, opening)
+    child := current.first
+    for child != nil {
+      if current.kind == Kind.Table {
+        emit_string(arena, output, child.key)
+        mem.append_many(arena, output, " = ")
+      }
+      if !emit(arena, output, child, depth + 1) {
+        return false
+      }
+      child = child.next
+      if child != nil {
+        mem.append_many(arena, output, ", ")
+      }
+    }
+    _ = mem.append(arena, output, closing)
+  } else if current.kind == Kind.Bool {
+    if current.boolean {
+      mem.append_many(arena, output, "true")
+    } else {
+      mem.append_many(arena, output, "false")
+    }
+  } else {
+    if current.kind == Kind.Missing || scalar_kind(current.text) != current.kind {
+      return false
+    }
+    mem.append_many(arena, output, current.text)
+  }
+  return true
+}
+// Normalized writer uses quoted keys and inline tables, preserving scalar lexemes.
+// Inputs must not borrow unused backing of the output arena.
+// Output borrows arena
+// malformed/manual trees return InvalidInput and rewind.
+pub fn encode(arena: *mem.Arena, root: *const Value) EncodeResult {
+  if root == nil || root.kind != Kind.Table || !valid_children(root) {
+    return EncodeResult{ kind: errors.Kind.InvalidInput }
+  }
+  mark := mem.arena_mark(arena)
+  output: []u8
+  child := root.first
+  for child != nil {
+    if !utf8.valid(child.key) {
+      mem.arena_rewind(arena, mark)
+      return EncodeResult{ kind: errors.Kind.InvalidInput }
+    }
+    emit_string(arena, &output, child.key)
+    mem.append_many(arena, &output, " = ")
+    if !emit(arena, &output, child, 0) {
+      mem.arena_rewind(arena, mark)
+      return EncodeResult{ kind: errors.Kind.InvalidInput }
+    }
+    _ = mem.append(arena, &output, #cast(u8, 10))
+    child = child.next
+  }
+  return EncodeResult{ value: output, ok: true }
+}

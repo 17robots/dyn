@@ -1,0 +1,59 @@
+use "std/crypto/curve25519" field
+// RFC 7748. Caller storage
+// destination must have at least 32 bytes. Inputs are
+// copied before writing, permitting in-place use. All-zero shared secrets fail.
+pub fn shared(destination: []u8, private_key: []const u8, peer: []const u8) bool {
+  if #len(destination)<32 || #len(private_key)!=32 || #len(peer)!=32 {
+    return false
+  }
+  scalar: [32]u8
+  for i in 0..32 {
+    scalar[i]=private_key[i]
+  }
+  scalar[0] &= 248
+  scalar[31] = (scalar[31]&127)|64
+  x := field.decode(peer)
+  a := field.number(1)
+  b := x
+  c := field.number(0)
+  d := field.number(1)
+  constant := field.number(121665)
+  for step in 0..255 {
+    i := 254-step
+    bit := #cast(i64, (scalar[i/8] >> #cast(u8, i&7)) & 1)
+    field.select(&a, &b, bit)
+    field.select(&c, &d, bit)
+    e := field.add(a, c)
+    a=field.sub(a, c)
+    c=field.add(b, d)
+    b=field.sub(b, d)
+    d=field.square(e)
+    f:=field.square(a)
+    a=field.multiply(c, a)
+    c=field.multiply(b, e)
+    e=field.add(a, c)
+    a=field.sub(a, c)
+    b=field.square(a)
+    c=field.sub(d, f)
+    a=field.multiply(c, constant)
+    a=field.add(a, d)
+    c=field.multiply(c, a)
+    a=field.multiply(d, f)
+    d=field.multiply(b, x)
+    b=field.square(e)
+    field.select(&a, &b, bit)
+    field.select(&c, &d, bit)
+  }
+  a=field.multiply(a, field.inverse(c))
+  field.encode(destination[..32], a)
+  nonzero: u32
+  for i in 0..32 {
+    nonzero |= #cast(u32, destination[i])
+  }
+  return nonzero != 0
+}
+pub fn public_key(destination: []u8, private_key: []const u8) bool {
+  base: [32]u8
+  base[0]=9
+  return shared(destination, private_key, base[..])
+}

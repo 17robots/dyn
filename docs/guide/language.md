@@ -17,7 +17,9 @@ failure or compiler crash.
 `use "std/terminal"` binds `terminal`; `use "std/io" raw_io` binds `raw_io`; `use "std/io" io,
 "std/fs" fs` imports several modules in one `use`. `as` is invalid. Relative
 imports use `./` or `../` but cannot escape project root. Other paths resolve from project
-root; `std/` and `vendor/` resolve only inside the SDK. `DYN_SDK` may name an SDK root containing
+root; `std/` and `vendor/` resolve only inside the SDK. Third-party libraries
+are copied into the project (see [style](style.md#third-party-code)) and must use
+relative paths for their own modules. `DYN_SDK` may name an SDK root containing
 `std/` and `vendor/` collections, which is useful for SDK development and alternate installations.
 Import paths are canonicalized. Declarations across
 same module see each other regardless of file/source order. `pub` controls imported access.

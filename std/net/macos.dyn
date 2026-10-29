@@ -111,3 +111,13 @@ pub fn receive_packet(descriptor: isize, bytes: []u8) Result {
 fn native_kind(code: isize) errors.Kind {
   return errors.darwin(code)
 }
+
+const MulticastJoinOption: usize = 12
+const MulticastLeaveOption: usize = 13
+const MulticastInterfaceOption: usize = 9
+const MulticastTtlOption: usize = 10
+const MulticastLoopOption: usize = 11
+fn native_multicast_byte(descriptor: isize, option: usize, value: u8) isize {
+  native: u8 = #cast(u8, value)
+  return native_set_option(descriptor, 0, option, &native, #sizeof(u8))
+}

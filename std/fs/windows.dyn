@@ -8,6 +8,9 @@ extern fn win_write "dyn_fs_write"(handle: rawptr, data: *const u8, count: u32, 
 extern fn win_seek "dyn_fs_seek"(handle: rawptr, offset: i64, position: *i64, origin: u32) i32
 extern fn win_sync "dyn_fs_sync"(handle: rawptr) i32
 extern fn win_error "dyn_fs_error"() u32
+extern fn win_map_create "dyn_fs_map_create"(handle: rawptr, security: rawptr, protect: u32, high: u32, low: u32, name: *const u16) rawptr
+extern fn win_map_view "dyn_fs_map_view"(mapping: rawptr, access: u32, high: u32, low: u32, size: usize) rawptr
+extern fn win_map_release "dyn_fs_map_release"(address: rawptr) i32
 fn native_kind(code: isize) errors.Kind {
   return errors.windows(code)
 }
@@ -108,6 +111,33 @@ fn native_seek(handle: isize, offset: isize, origin: usize) isize {
 }
 fn native_sync(handle: isize) isize {
   if win_sync(pointer(handle)) == 0 {
+    return last_error()
+  }
+  return 0
+}
+
+// Read-only view of the whole file. The view keeps the section alive, so the
+// mapping handle closes at once.
+fn native_map(handle: isize, size: usize) isize {
+  _ = size
+  mapping := win_map_create(pointer(handle), nil, 2, 0, 0, nil)
+  if mapping == nil {
+    return last_error()
+  }
+  view := win_map_view(mapping, 4, 0, 0, 0)
+  failed: isize = 0
+  if view == nil {
+    failed = last_error()
+  }
+  _ = win_close(mapping)
+  if view == nil {
+    return failed
+  }
+  return #cast(isize, #cast(usize, view))
+}
+fn native_unmap(address: usize, size: usize) isize {
+  _ = size
+  if win_map_release(#cast(rawptr, address)) == 0 {
     return last_error()
   }
   return 0

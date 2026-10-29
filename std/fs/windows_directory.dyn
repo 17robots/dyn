@@ -1,0 +1,241 @@
+#target(kernel: windows)
+
+extern fn find_first "dyn_fs_find_first"(pattern: *const u16, data: *u8) rawptr
+extern fn find_next "dyn_fs_find_next"(handle: rawptr, data: *u8) i32
+extern fn find_close "dyn_fs_find_close"(handle: rawptr) i32
+
+// Directory listing through FindFirstFileW, with the Linux API shape. Entry
+// names are UTF-8 in caller storage; kinds use dirent values: 4 directory,
+// 8 regular file, 10 reparse point (links).
+pub struct Directory { handle: rawptr, storage: []u8, data: [592]u8, pending: bool, active: bool }
+pub struct DirectoryResult { value: Directory, error: isize, kind: errors.Kind, ok: bool }
+pub struct DirectoryEntry { name: []const u8, kind: u8, ok: bool, error: isize, error_kind: errors.Kind }
+
+pub fn open_directory(path: []const u8, storage: []u8) DirectoryResult {
+  if #len(storage) < 1040 || #len(path) == 0 || #len(path) > 32000 {
+    return DirectoryResult{ error: -22, kind: errors.Kind.InvalidInput }
+  }
+  wide: [32768]u16 = []
+  count: usize = 0
+  at: usize = 0
+  for at < #len(path) {
+    decoded := utf8.decode(path, at)
+    if !decoded.ok || count + 4 >= #len(wide) {
+      return DirectoryResult{ error: -22, kind: errors.Kind.InvalidInput }
+    }
+    count += utf16.encode(wide[count..], decoded.codepoint)
+    at += decoded.width
+  }
+  last := path[#len(path) - 1]
+  if last != '/' && last != '\\' {
+    wide[count] = '\\'
+    count += 1
+  }
+  wide[count] = '*'
+  wide[count + 1] = 0
+  result := Directory{ storage: storage, pending: true, active: true }
+  handle := find_first(&wide[0], &result.data[0])
+  if handle == #cast(rawptr, #cast(usize, -1)) {
+    code := last_error()
+    // An empty directory reports no files.
+    if code == -2 || code == -18 {
+      result.pending = false
+      return DirectoryResult{ value: result, ok: true }
+    }
+    return DirectoryResult{ error: code, kind: native_kind(code) }
+  }
+  result.handle = handle
+  return DirectoryResult{ value: result, ok: true }
+}
+
+// Entry name borrows directory storage until the next call.
+pub fn directory_next(directory: *Directory) DirectoryEntry {
+  if !directory.active {
+    return DirectoryEntry{ error: -9, error_kind: errors.Kind.InvalidState }
+  }
+  for true {
+    if !directory.pending {
+      if directory.handle == nil || find_next(directory.handle, &directory.data[0]) == 0 {
+        return DirectoryEntry{}
+      }
+    }
+    directory.pending = false
+    attributes := #cast(u32, directory.data[0]) | #cast(u32, directory.data[1]) << 8 | #cast(u32, directory.data[2]) << 16
+    used: usize = 0
+    index: usize = 44
+    units: [260]u16 = []
+    count: usize = 0
+    for count < 260 {
+      unit := #cast(u16, directory.data[index]) | #cast(u16, directory.data[index + 1]) << 8
+      if unit == 0 {
+        break
+      }
+      units[count] = unit
+      count += 1
+      index += 2
+    }
+    position: usize = 0
+    for position < count {
+      decoded := utf16.decode(units[..count], position)
+      if !decoded.ok || used + 4 > #len(directory.storage) {
+        break
+      }
+      used += utf8.encode(directory.storage[used..], decoded.codepoint)
+      position += decoded.width
+    }
+    name := directory.storage[..used]
+    dot := #len(name) == 1 && name[0] == '.'
+    dot_dot := #len(name) == 2 && name[0] == '.' && name[1] == '.'
+    if !dot && !dot_dot {
+      kind: u8 = 8
+      if attributes & 1024 != 0 {
+        kind = 10
+      }
+      else if attributes & 16 != 0 {
+        kind = 4
+      }
+      return DirectoryEntry{ name: name, kind: kind, ok: true }
+    }
+  }
+  return DirectoryEntry{}
+}
+
+pub fn close_directory(directory: *Directory) Result {
+  if directory.handle != nil {
+    _ = find_close(directory.handle)
+  }
+  directory.* = Directory{}
+  return Result{ ok: true }
+}
+
+extern fn win_make_directory "dyn_fs_make_directory"(path: *const u16, security: rawptr) i32
+extern fn win_delete "dyn_fs_delete"(path: *const u16) i32
+extern fn win_remove_directory "dyn_fs_remove_directory"(path: *const u16) i32
+extern fn win_move "dyn_fs_move"(from: *const u16, to: *const u16, flags: u32) i32
+extern fn win_attributes "dyn_fs_attributes"(path: *const u16, level: i32, data: *u8) i32
+extern fn win_information "dyn_fs_information"(handle: rawptr, data: *u8) i32
+
+// Size, file index, volume serial and a POSIX-style mode: 0o040000 for
+// directories, 0o100000 for files, with write bits unless read-only.
+pub struct Metadata { size: u64, inode: u64, device: u64, mode: u16, error: isize, kind: errors.Kind, ok: bool }
+
+struct WidePath { units: [32768]u16, ok: bool }
+
+fn wide_path(path: []const u8, output: *WidePath) {
+  count: usize = 0
+  at: usize = 0
+  output.ok = false
+  if #len(path) == 0 {
+    return
+  }
+  for at < #len(path) {
+    decoded := utf8.decode(path, at)
+    if !decoded.ok || decoded.codepoint == 0 || count + 3 >= 32768 {
+      return
+    }
+    count += utf16.encode(output.units[count..], decoded.codepoint)
+    at += decoded.width
+  }
+  output.units[count] = 0
+  output.ok = true
+}
+
+fn word32(bytes: []const u8, at: usize) u32 {
+  return #cast(u32, bytes[at]) | #cast(u32, bytes[at + 1]) << 8 | #cast(u32, bytes[at + 2]) << 16 | #cast(u32, bytes[at + 3]) << 24
+}
+
+fn mode_of(attributes: u32) u16 {
+  mode: u16 = 0o100444
+  if attributes & 16 != 0 {
+    mode = 0o040555
+  }
+  if attributes & 1 == 0 {
+    mode |= 0o222
+  }
+  return mode
+}
+
+pub fn metadata(path: []const u8) Metadata {
+  wide := WidePath{}
+  wide_path(path, &wide)
+  if !wide.ok {
+    return Metadata{ error: -22, kind: errors.Kind.InvalidInput }
+  }
+  // WIN32_FILE_ATTRIBUTE_DATA: attributes, three FILETIMEs, size high, low.
+  data: [36]u8 = []
+  if win_attributes(&wide.units[0], 0, &data[0]) == 0 {
+    code := last_error()
+    return Metadata{ error: code, kind: native_kind(code) }
+  }
+  attributes := word32(data[..], 0)
+  size := #cast(u64, word32(data[..], 28)) << 32 | #cast(u64, word32(data[..], 32))
+  return Metadata{ size: size, mode: mode_of(attributes), ok: true }
+}
+
+pub fn file_metadata(file: *const File) Metadata {
+  if !is_open(file) {
+    return Metadata{ error: -9, kind: errors.Kind.InvalidState }
+  }
+  // BY_HANDLE_FILE_INFORMATION.
+  data: [52]u8 = []
+  if win_information(pointer(file.descriptor), &data[0]) == 0 {
+    code := last_error()
+    return Metadata{ error: code, kind: native_kind(code) }
+  }
+  attributes := word32(data[..], 0)
+  return Metadata{
+    size: #cast(u64, word32(data[..], 32)) << 32 | #cast(u64, word32(data[..], 36)),
+    inode: #cast(u64, word32(data[..], 44)) << 32 | #cast(u64, word32(data[..], 48)),
+    device: #cast(u64, word32(data[..], 28)),
+    mode: mode_of(attributes), ok: true,
+  }
+}
+
+fn wide_result(ok: i32) Result {
+  if ok == 0 {
+    return failure(last_error())
+  }
+  return Result{ ok: true }
+}
+
+pub fn remove(path: []const u8) Result {
+  wide := WidePath{}
+  wide_path(path, &wide)
+  if !wide.ok {
+    return Result{ error: -22, kind: errors.Kind.InvalidInput }
+  }
+  return wide_result(win_delete(&wide.units[0]))
+}
+
+// mode is ignored on Windows.
+pub fn make_directory(path: []const u8, mode: usize) Result {
+  _ = mode
+  wide := WidePath{}
+  wide_path(path, &wide)
+  if !wide.ok {
+    return Result{ error: -22, kind: errors.Kind.InvalidInput }
+  }
+  return wide_result(win_make_directory(&wide.units[0], nil))
+}
+
+pub fn remove_directory(path: []const u8) Result {
+  wide := WidePath{}
+  wide_path(path, &wide)
+  if !wide.ok {
+    return Result{ error: -22, kind: errors.Kind.InvalidInput }
+  }
+  return wide_result(win_remove_directory(&wide.units[0]))
+}
+
+// Replaces an existing destination, like POSIX rename.
+pub fn rename(old_path: []const u8, new_path: []const u8) Result {
+  from := WidePath{}
+  to := WidePath{}
+  wide_path(old_path, &from)
+  wide_path(new_path, &to)
+  if !from.ok || !to.ok {
+    return Result{ error: -22, kind: errors.Kind.InvalidInput }
+  }
+  // MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED.
+  return wide_result(win_move(&from.units[0], &to.units[0], 3))
+}

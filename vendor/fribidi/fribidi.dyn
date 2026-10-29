@@ -1,0 +1,170 @@
+use "std/dynlib" dynlib
+use "std/mem" mem
+use "std/errors" errors
+use "std/unicode/utf8" utf8
+
+// FriBidi's fixed-width public C ABI. The API table borrows a caller-owned
+// loader handle. Keep it loaded during calls; all helper results are copied
+// into the caller arena and outlive native temporary storage/library closure.
+pub const Auto: u32 = 64
+pub const LeftToRight: u32 = 272
+pub const RightToLeft: u32 = 273
+pub struct Api {
+  log2vis: fn(*const u32, i32, *u32, *u32, *i32, *i32, *i8) i8,
+  get_bidi_types: fn(*const u32, i32, *u32),
+  reorder_line: fn(u32, *const u32, i32, i32, u32, *i8, *u32, *i32) i8,
+}
+pub struct LoadResult { api: Api, missing: []const u8, ok: bool }
+pub struct Paragraph {
+  logical: []u32,
+  visual: []u32,
+  starts: []usize,
+  ends: []usize,
+  logical_to_visual: []i32,
+  visual_to_logical: []i32,
+  levels: []i8,
+  types: []u32,
+  base: u32,
+}
+pub struct Result { value: Paragraph, kind: errors.Kind, ok: bool }
+// Map values are global paragraph scalar indexes. levels remains in logical
+// order for [start,end), after line-specific UAX #9 rule L1 reset.
+pub struct Line { visual_to_logical: []i32, levels: []i8 }
+pub struct LineResult { value: Line, kind: errors.Kind, ok: bool }
+
+pub fn load(handle: dynlib.Handle) LoadResult {
+  api := Api{}
+  api.log2vis = #cast(fn(*const u32, i32, *u32, *u32, *i32, *i32, *i8)i8, dynlib.symbol(handle, "fribidi_log2vis").value)
+  if api.log2vis == nil {
+    return LoadResult{missing:"fribidi_log2vis"}
+  }
+  api.get_bidi_types = #cast(fn(*const u32, i32, *u32), dynlib.symbol(handle, "fribidi_get_bidi_types").value)
+  if api.get_bidi_types == nil {
+    return LoadResult{missing:"fribidi_get_bidi_types"}
+  }
+  api.reorder_line = #cast(fn(u32, *const u32, i32, i32, u32, *i8, *u32, *i32)i8, dynlib.symbol(handle, "fribidi_reorder_line").value)
+  if api.reorder_line == nil {
+    return LoadResult{missing:"fribidi_reorder_line"}
+  }
+  return LoadResult{api:api, ok:true}
+}
+fn direction(base: u32) bool {
+  return base == Auto || base == LeftToRight || base == RightToLeft
+}
+fn separator(cp: u32) bool {
+  return cp == 10 || cp == 13 || cp == 28 || cp == 29 || cp == 30 || cp == 133 || cp == 8232 || cp == 8233
+}
+// Resolves one single-line paragraph. Invalid UTF-8, separators and invalid
+// direction fail before allocation. Explicit bidi/isolate controls are retained
+// in the source and maps. visual is FriBidi's convenience presentation output;
+// shape original logical source, not visual (which may contain mirrored or
+// Arabic presentation-form characters). Use levels/maps to position shaped runs.
+pub fn resolve(arena: *mem.Arena, api: *const Api, text: []const u8, base: u32) Result {
+  if !direction(base) || #len(text) > 2147483647 {
+    return Result{kind:errors.Kind.InvalidInput}
+  }
+  count: usize = 0
+  offset: usize = 0
+  for offset < #len(text) {
+    decoded := utf8.decode(text, offset)
+    if !decoded.ok || separator(decoded.codepoint) {
+      return Result{kind:errors.Kind.InvalidInput}
+    }
+    count += 1
+    offset += decoded.width
+  }
+  if count == 0 {
+    return Result{value:Paragraph{base:base}, ok:true}
+  }
+  if api.log2vis == nil || api.get_bidi_types == nil {
+    return Result{kind:errors.Kind.InvalidState}
+  }
+  mark := mem.arena_mark(arena)
+  logical := mem.push_array(u32, arena, count)
+  visual := mem.push_array(u32, arena, count)
+  starts := mem.push_array(usize, arena, count)
+  ends := mem.push_array(usize, arena, count)
+  logical_to_visual := mem.push_array(i32, arena, count)
+  visual_to_logical := mem.push_array(i32, arena, count)
+  levels := mem.push_array(i8, arena, count)
+  types := mem.push_array(u32, arena, count)
+  offset = 0
+  for i in 0..count {
+    decoded := utf8.decode(text, offset)
+    logical[i] = decoded.codepoint
+    starts[i] = offset
+    offset += decoded.width
+    ends[i] = offset
+  }
+  resolved := base
+  if api.log2vis(&logical[0], #cast(i32, count), &resolved, &visual[0], &logical_to_visual[0], &visual_to_logical[0], &levels[0]) == 0 {
+    mem.arena_rewind(arena, mark)
+    return Result{kind:errors.Kind.System}
+  }
+  if !direction(resolved) {
+    mem.arena_rewind(arena, mark)
+    return Result{kind:errors.Kind.InvalidState}
+  }
+  api.get_bidi_types(&logical[0], #cast(i32, count), &types[0])
+  for i in 0..count {
+    v := logical_to_visual[i]
+    l := visual_to_logical[i]
+    if v < 0 || l < 0 || #cast(usize, v) >= count || #cast(usize, l) >= count || levels[i] < 0 {
+      mem.arena_rewind(arena, mark)
+      return Result{kind:errors.Kind.InvalidState}
+    }
+  }
+  for i in 0..count {
+    if visual_to_logical[#cast(usize, logical_to_visual[i])] != #cast(i32, i) {
+      mem.arena_rewind(arena, mark)
+      return Result{kind:errors.Kind.InvalidState}
+    }
+  }
+  return Result{value:Paragraph{logical:logical, visual:visual, starts:starts, ends:ends, logical_to_visual:logical_to_visual, visual_to_logical:visual_to_logical, levels:levels, types:types, base:resolved}, ok:true}
+}
+// Reorders a wrapped line with native L1/L2 handling. Does not mutate paragraph
+// levels/maps. Flags zero leave shaping, mirroring and mark placement to HB.
+pub fn reorder(arena: *mem.Arena, api: *const Api, paragraph: *const Paragraph, start, end: usize) LineResult {
+  count := #len(paragraph.logical)
+  if start > end || end > count || count > 2147483647 || #len(paragraph.levels) != count || #len(paragraph.types) != count || !direction(paragraph.base) {
+    return LineResult{kind:errors.Kind.InvalidInput}
+  }
+  if start == end {
+    return LineResult{ok:true}
+  }
+  if api.reorder_line == nil {
+    return LineResult{kind:errors.Kind.InvalidState}
+  }
+  for i in start..end {
+    if paragraph.levels[i] < 0 {
+      return LineResult{kind:errors.Kind.InvalidInput}
+    }
+  }
+  mark := mem.arena_mark(arena)
+  levels := mem.push_array(i8, arena, end-start)
+  map := mem.push_array(i32, arena, end-start)
+  for i in 0..end-start {
+    levels[i] = paragraph.levels[start+i]
+    map[i] = #cast(i32, start+i)
+  }
+  if api.reorder_line(0, &paragraph.types[start], #cast(i32, end-start), 0, paragraph.base, &levels[0], nil, &map[0]) == 0 {
+    mem.arena_rewind(arena, mark)
+    return LineResult{kind:errors.Kind.System}
+  }
+  scratch := mem.arena_mark(arena)
+  seen := mem.push_array(u8, arena, #len(map))
+  for i in 0..#len(map) {
+    if map[i] < 0 || #cast(usize, map[i]) < start || #cast(usize, map[i]) >= end || levels[i] < 0 {
+      mem.arena_rewind(arena, mark)
+      return LineResult{kind:errors.Kind.InvalidState}
+    }
+    index := #cast(usize, map[i]) - start
+    if seen[index] != 0 {
+      mem.arena_rewind(arena, mark)
+      return LineResult{kind:errors.Kind.InvalidState}
+    }
+    seen[index] = 1
+  }
+  mem.arena_rewind(arena, scratch)
+  return LineResult{value:Line{visual_to_logical:map, levels:levels}, ok:true}
+}

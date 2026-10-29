@@ -1,0 +1,86 @@
+use "std/font" font
+use "std/ui/software" software
+use "std/mem" mem
+use "std/math" math
+use "std/errors" errors
+
+// Keep this state at a stable address while rendering. Face and its bytes outlive
+// the adapter; arena stores bitmaps until reset. A failure is sticky until reset
+// by the caller. The software renderer receives an invalid glyph on failure.
+pub struct Adapter { face: *const font.Face, arena: *mem.Arena, pixels_per_em: u16, kind: errors.Kind, failed: bool }
+fn glyph(raw: rawptr, codepoint: u32) software.Glyph {
+  state := #cast(*Adapter, raw)
+  if state.failed {
+    return software.Glyph{ width: -1 }
+  }
+  index := font.glyph_index(state.face, codepoint)
+  bitmap := font.raster(state.arena, state.face, index, state.pixels_per_em)
+  if !bitmap.ok {
+    state.failed = true
+    state.kind = bitmap.kind
+    return software.Glyph{ width: -1 }
+  }
+  scale := #cast(f64, state.pixels_per_em) / #cast(f64, state.face.units_per_em)
+  ascent := #cast(i32, math.ceil64(#cast(f64, state.face.ascent) * scale))
+  value := bitmap.value
+  return software.Glyph{ pixels: value.pixels, width: value.width, height: value.height, stride: #cast(usize, value.width),
+    x_offset: value.x_offset, y_offset: value.y_offset + ascent, advance: value.advance }
+}
+pub fn renderer(state: *Adapter) software.Font {
+  if state.face == nil || state.arena == nil || state.face.units_per_em == 0 || state.pixels_per_em == 0 || state.pixels_per_em > 256 {
+    state.failed = true
+    state.kind = errors.Kind.InvalidInput
+    return software.Font{}
+  }
+  height := #cast(i32, state.face.ascent) - #cast(i32, state.face.descent) + #cast(i32, state.face.line_gap)
+  if height <= 0 {
+    state.failed = true
+    state.kind = errors.Kind.InvalidInput
+    return software.Font{}
+  }
+  scale := #cast(f64, state.pixels_per_em) / #cast(f64, state.face.units_per_em)
+  return software.Font{ data: state, glyph: glyph, line_height: #cast(i32, math.ceil64(#cast(f64, height) * scale)) }
+}
+
+fn atlas_glyph(raw: rawptr, codepoint: u32) software.Glyph {
+  atlas := #cast(*const font.Atlas, raw)
+  glyph := font.atlas_glyph(atlas, codepoint)
+  pixels: []const u8
+  if glyph.width > 0 && glyph.height > 0 {
+    offset := #cast(usize, glyph.y) * #cast(usize, atlas.width) + #cast(usize, glyph.x)
+    pixels = atlas.pixels[offset..]
+  }
+  return software.Glyph{ pixels: pixels, width: glyph.width, height: glyph.height, stride: #cast(usize, atlas.width),
+    x_offset: glyph.x_offset, y_offset: glyph.y_offset, advance: glyph.advance }
+}
+// No allocation or rerasterization. Keep the atlas descriptor at a stable address
+// and its backing arena alive throughout rendering.
+pub fn atlas_renderer(atlas: *font.Atlas) software.Font {
+  return software.Font{ data: atlas, glyph: atlas_glyph, line_height: atlas.line_height }
+}
+
+use "std/text/layout" layout
+pub struct LayoutAdapter { atlas: *const font.Atlas, face: *const font.Face, pixels_per_em: u16 }
+fn layout_advance(raw: rawptr, codepoint: u32) f64 {
+  adapter := #cast(*const LayoutAdapter, raw)
+  return #cast(f64, font.atlas_glyph(adapter.atlas, codepoint).advance)
+}
+fn layout_kerning(raw: rawptr, left, right: u32) f64 {
+  adapter := #cast(*const LayoutAdapter, raw)
+  a: u16 = 0
+  b: u16 = 0
+  if font.atlas_glyph(adapter.atlas, left).codepoint == left {
+    a = font.glyph_index(adapter.face, left)
+  }
+  if font.atlas_glyph(adapter.atlas, right).codepoint == right {
+    b = font.glyph_index(adapter.face, right)
+  }
+  return font.kerning(adapter.face, a, b, adapter.pixels_per_em)
+}
+// Keep adapter, atlas and face bytes alive until layout.build returns.
+pub fn layout_font(adapter: *LayoutAdapter) layout.Font {
+  if adapter.atlas == nil || adapter.face == nil || adapter.pixels_per_em == 0 || adapter.pixels_per_em > 256 {
+    return layout.Font{}
+  }
+  return layout.Font{ data: adapter, advance: layout_advance, kerning: layout_kerning, line_height: adapter.atlas.line_height }
+}

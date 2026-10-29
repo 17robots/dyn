@@ -35,4 +35,20 @@ fn clamp(value: i32, low: i32, high: i32) i32 {
 - Structs, enums, enum variants, and constants: `PascalCase`.
 - Import aliases: short `snake_case` module names.
 
+## Imports
+
+- Inside a library, import its own modules with `./` or `../` paths. Never use
+  a path from the project root, such as `use "src/util"`: it breaks when the
+  library is copied into another project. `std/` and `vendor/` paths are fine.
+- Std lint (`tools/std-lint.py`) enforces this rule for `std/` and `vendor/`.
+
+## Third-party code
+
+Dyn has no package manager. Copy a library's directory into your project, for
+example `third_party/dynjson`, and commit it. The copy is the pin. Import it
+from the project root with `use "third_party/dynjson" json`. Updating means
+copying the new version over the old one and reviewing the diff. Unused code
+costs nothing in release executables, which keep only functions reachable from
+`main`, global initializers and function values. A git submodule works the same way if you prefer one.
+
 For idioms beyond layout, see [idiomatic Dyn](idiomatic-dyn.md).

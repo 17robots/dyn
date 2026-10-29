@@ -534,3 +534,17 @@ libraries; merely using other vendor packages does not link FFmpeg. Native libra
 versions are recorded individually in `provider_versions`. Available codecs,
 filters and devices depend on the installed FFmpeg build. Generation is native
 Linux; this native package is separate from the browser FFmpeg integration. Neither is a finished player or editor.
+
+## Shaped text
+
+`vendor/harfbuzz` dynamically loads OpenType shaping and Unicode script helpers;
+`vendor/fribidi` resolves paragraph embedding levels and wrapped-line ordering.
+`vendor/text/layout` combines them with Unicode grapheme/line-break segmentation
+and caller-selected fonts. It returns owned source bytes, visual glyphs, lines
+and source-cluster hit geometry. These modules remain optional and do not change
+`std/text/layout`'s dependency-free Latin layout contract. See the
+[shaped layout contract](../../vendor/text/layout/README.md).
+
+`vendor/freetype.face_metrics` exposes checked unscaled scalable-face metrics
+for raster adapters, including CFF and collection faces accepted by FreeType.
+Native font handles and dynamic library lifetimes remain caller-owned.

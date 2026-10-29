@@ -1,0 +1,83 @@
+use "std/thread/pool" pool
+use "std/sync" sync
+use "std/mem" mem
+use "std/errors" errors
+
+fn check(ok: bool) {
+  if !ok {
+    #panic("thread pool")
+  }
+}
+
+total: sync.AtomicU64
+gate: sync.Semaphore
+group: pool.Group
+shared: *pool.Pool
+
+fn add(data: rawptr) {
+  _ = sync.fetch_add_u64(&total, #cast(u64, #cast(usize, data)))
+}
+
+fn blocked(data: rawptr) {
+  _ = data
+  sync.semaphore_wait(&gate)
+  _ = sync.fetch_add_u64(&total, 1)
+}
+
+// Submits two more tasks from inside a running task.
+fn spread(data: rawptr) {
+  _ = data
+  check(pool.submit(shared, pool.Task{ run: add, data: #cast(rawptr, #cast(usize, 10)) }))
+  check(pool.submit(shared, pool.Task{ run: add, data: #cast(rawptr, #cast(usize, 20)) }))
+}
+
+fn grouped(data: rawptr) {
+  _ = data
+  _ = sync.fetch_add_u64(&total, 1)
+  pool.group_done(&group)
+}
+
+fn main() {
+  arena := mem.arena_create(16777216)
+  defer {
+    mem.arena_release(arena)
+  }
+  check(pool.start(arena, 0, 8, 65536).kind == errors.Kind.InvalidInput)
+  started := pool.start(arena, 4, 64, 65536)
+  check(started.ok)
+  workers := started.value
+  shared = workers
+  for i in 1..1001 {
+    for !pool.submit(workers, pool.Task{ run: add, data: #cast(rawptr, #cast(usize, i)) }) {
+      pool.wait(workers)
+    }
+  }
+  pool.wait(workers)
+  check(sync.load_u64(&total) == 500500)
+  // A full queue refuses work instead of growing.
+  sync.store_u64(&total, 0)
+  gate = sync.semaphore(0)
+  filled: usize = 0
+  for pool.submit(workers, pool.Task{ run: blocked }) {
+    filled += 1
+  }
+  check(filled >= 64 && filled <= 68)
+  for i in 0..filled {
+    sync.semaphore_post(&gate)
+  }
+  pool.wait(workers)
+  check(sync.load_u64(&total) == #cast(u64, filled))
+  sync.store_u64(&total, 0)
+  check(pool.submit(workers, pool.Task{ run: spread }))
+  pool.wait(workers)
+  check(sync.load_u64(&total) == 30)
+  sync.store_u64(&total, 0)
+  pool.group_add(&group, 50)
+  for i in 0..50 {
+    check(pool.submit(workers, pool.Task{ run: grouped }))
+  }
+  pool.group_wait(&group)
+  check(sync.load_u64(&total) == 50)
+  check(pool.stop(workers).ok)
+  check(!pool.submit(workers, pool.Task{ run: add }))
+}

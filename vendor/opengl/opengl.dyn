@@ -14,7 +14,87 @@ pub const Float: u32 = 5126
 pub const Triangles: u32 = 4
 pub const Rgba: u32 = 6408
 pub const UnsignedByte: u32 = 5121
+pub const DynamicDraw: u32 = 35048
+pub const Texture2d: u32 = 3553
+pub const Texture0: u32 = 33984
+pub const R8: u32 = 33321
+pub const Red: u32 = 6403
+pub const Rgba8: u32 = 32856
+pub const TextureMinFilter: u32 = 10241
+pub const TextureMagFilter: u32 = 10240
+pub const TextureWrapS: u32 = 10242
+pub const TextureWrapT: u32 = 10243
+pub const Nearest: u32 = 9728
+pub const Linear: u32 = 9729
+pub const ClampToEdge: u32 = 33071
+pub const UnpackAlignment: u32 = 3317
+pub const UnpackRowLength: u32 = 3314
+pub const UnpackSkipRows: u32 = 3315
+pub const UnpackSkipPixels: u32 = 3316
+pub const PackAlignment: u32 = 3333
+pub const PixelUnpackBuffer: u32 = 35052
+pub const PixelUnpackBufferBinding: u32 = 35055
+pub const Blend: u32 = 3042
+pub const ScissorTest: u32 = 3089
+pub const SrcAlpha: u32 = 770
+pub const OneMinusSrcAlpha: u32 = 771
+pub const One: u32 = 1
+pub const Zero: u32 = 0
+pub const FuncAdd: u32 = 32774
+pub const BlendSrcRgb: u32 = 32969
+pub const BlendDstRgb: u32 = 32968
+pub const BlendSrcAlpha: u32 = 32971
+pub const BlendDstAlpha: u32 = 32970
+pub const BlendEquationRgb: u32 = 32777
+pub const BlendEquationAlpha: u32 = 34877
+pub const ActiveTexture: u32 = 34016
+pub const TextureBinding2d: u32 = 32873
+pub const SamplerBinding: u32 = 35097
+pub const ScissorBox: u32 = 3088
+pub const Viewport: u32 = 2978
+pub const CurrentProgram: u32 = 35725
+pub const VertexArrayBinding: u32 = 34229
+pub const ArrayBufferBinding: u32 = 34964
+pub const DepthTest: u32 = 2929
+pub const CullFace: u32 = 2884
+pub const StencilTest: u32 = 2960
+pub const FramebufferSrgb: u32 = 36281
+pub const ColorLogicOp: u32 = 3058
+pub const RasterizerDiscard: u32 = 35977
+pub const Dither: u32 = 3024
+pub const FrontAndBack: u32 = 1032
+pub const Fill: u32 = 6914
+pub const PolygonSmooth: u32 = 2881
+pub const Multisample: u32 = 32925
+pub const SampleAlphaToCoverage: u32 = 32926
+pub const SampleCoverage: u32 = 32928
+pub const SampleMask: u32 = 36433
+pub const MaxTextureSize: u32 = 3379
+pub const MaxClipDistances: u32 = 3378
+pub const ClipDistance0: u32 = 12288
 pub struct Api {
+  color_mask: fn(u8, u8, u8, u8),
+  polygon_mode: fn(u32, u32),
+  enable: fn(u32),
+  disable: fn(u32),
+  is_enabled: fn(u32) u8,
+  scissor: fn(i32, i32, i32, i32),
+  blend_func_separate: fn(u32, u32, u32, u32),
+  blend_equation_separate: fn(u32, u32),
+  active_texture: fn(u32),
+  bind_sampler: fn(u32, u32),
+  gen_textures: fn(i32, *u32),
+  bind_texture: fn(u32, u32),
+  delete_textures: fn(i32, *const u32),
+  tex_image_2d: fn(u32, i32, i32, i32, i32, i32, u32, u32, rawptr),
+  tex_sub_image_2d: fn(u32, i32, i32, i32, i32, i32, u32, u32, rawptr),
+  tex_parameter_i: fn(u32, u32, i32),
+  pixel_store_i: fn(u32, i32),
+  get_uniform_location: fn(u32, *const u8) i32,
+  uniform_1i: fn(i32, i32),
+  uniform_2f: fn(i32, f32, f32),
+  uniform_4f: fn(i32, f32, f32, f32, f32),
+
   clear_color: fn(f32, f32, f32, f32),
   clear: fn(u32),
   viewport: fn(i32, i32, i32, i32),
@@ -176,6 +256,90 @@ pub fn load(loader: Loader) LoadResult {
   api.get_integer = #cast(fn(u32, *i32), symbol(loader, "glGetIntegerv"))
   if api.get_integer == nil {
     return LoadResult{ missing: "glGetIntegerv" }
+  }
+  api.enable = #cast(fn(u32), symbol(loader, "glEnable"))
+  if api.enable == nil {
+    return LoadResult{ missing: "glEnable" }
+  }
+  api.disable = #cast(fn(u32), symbol(loader, "glDisable"))
+  if api.disable == nil {
+    return LoadResult{ missing: "glDisable" }
+  }
+  api.is_enabled = #cast(fn(u32) u8, symbol(loader, "glIsEnabled"))
+  if api.is_enabled == nil {
+    return LoadResult{ missing: "glIsEnabled" }
+  }
+  api.scissor = #cast(fn(i32, i32, i32, i32), symbol(loader, "glScissor"))
+  if api.scissor == nil {
+    return LoadResult{ missing: "glScissor" }
+  }
+  api.blend_func_separate = #cast(fn(u32, u32, u32, u32), symbol(loader, "glBlendFuncSeparate"))
+  if api.blend_func_separate == nil {
+    return LoadResult{ missing: "glBlendFuncSeparate" }
+  }
+  api.blend_equation_separate = #cast(fn(u32, u32), symbol(loader, "glBlendEquationSeparate"))
+  if api.blend_equation_separate == nil {
+    return LoadResult{ missing: "glBlendEquationSeparate" }
+  }
+  api.active_texture = #cast(fn(u32), symbol(loader, "glActiveTexture"))
+  if api.active_texture == nil {
+    return LoadResult{ missing: "glActiveTexture" }
+  }
+  api.bind_sampler = #cast(fn(u32, u32), symbol(loader, "glBindSampler"))
+  if api.bind_sampler == nil {
+    return LoadResult{ missing: "glBindSampler" }
+  }
+  api.gen_textures = #cast(fn(i32, *u32), symbol(loader, "glGenTextures"))
+  if api.gen_textures == nil {
+    return LoadResult{ missing: "glGenTextures" }
+  }
+  api.bind_texture = #cast(fn(u32, u32), symbol(loader, "glBindTexture"))
+  if api.bind_texture == nil {
+    return LoadResult{ missing: "glBindTexture" }
+  }
+  api.delete_textures = #cast(fn(i32, *const u32), symbol(loader, "glDeleteTextures"))
+  if api.delete_textures == nil {
+    return LoadResult{ missing: "glDeleteTextures" }
+  }
+  api.tex_image_2d = #cast(fn(u32, i32, i32, i32, i32, i32, u32, u32, rawptr), symbol(loader, "glTexImage2D"))
+  if api.tex_image_2d == nil {
+    return LoadResult{ missing: "glTexImage2D" }
+  }
+  api.tex_sub_image_2d = #cast(fn(u32, i32, i32, i32, i32, i32, u32, u32, rawptr), symbol(loader, "glTexSubImage2D"))
+  if api.tex_sub_image_2d == nil {
+    return LoadResult{ missing: "glTexSubImage2D" }
+  }
+  api.tex_parameter_i = #cast(fn(u32, u32, i32), symbol(loader, "glTexParameteri"))
+  if api.tex_parameter_i == nil {
+    return LoadResult{ missing: "glTexParameteri" }
+  }
+  api.pixel_store_i = #cast(fn(u32, i32), symbol(loader, "glPixelStorei"))
+  if api.pixel_store_i == nil {
+    return LoadResult{ missing: "glPixelStorei" }
+  }
+  api.get_uniform_location = #cast(fn(u32, *const u8) i32, symbol(loader, "glGetUniformLocation"))
+  if api.get_uniform_location == nil {
+    return LoadResult{ missing: "glGetUniformLocation" }
+  }
+  api.uniform_1i = #cast(fn(i32, i32), symbol(loader, "glUniform1i"))
+  if api.uniform_1i == nil {
+    return LoadResult{ missing: "glUniform1i" }
+  }
+  api.uniform_2f = #cast(fn(i32, f32, f32), symbol(loader, "glUniform2f"))
+  if api.uniform_2f == nil {
+    return LoadResult{ missing: "glUniform2f" }
+  }
+  api.uniform_4f = #cast(fn(i32, f32, f32, f32, f32), symbol(loader, "glUniform4f"))
+  if api.uniform_4f == nil {
+    return LoadResult{ missing: "glUniform4f" }
+  }
+  api.color_mask = #cast(fn(u8, u8, u8, u8), symbol(loader, "glColorMask"))
+  if api.color_mask == nil {
+    return LoadResult{missing:"glColorMask"}
+  }
+  api.polygon_mode = #cast(fn(u32, u32), symbol(loader, "glPolygonMode"))
+  if api.polygon_mode == nil {
+    return LoadResult{missing:"glPolygonMode"}
   }
   return LoadResult{ api: api, ok: true }
 }

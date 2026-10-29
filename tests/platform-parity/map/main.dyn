@@ -1,0 +1,42 @@
+use "std/fs" fs
+use "std/bytes" bytes
+use "std/errors" errors
+
+fn check(ok: bool) {
+  if !ok {
+    #panic("fs map")
+  }
+}
+
+fn main() {
+  zero: fs.Mapping
+  check(!zero.ok && #len(zero.value) == 0)
+  check(fs.unmap(&zero).ok)
+  closed: fs.File
+  check(fs.map(&closed).kind == errors.Kind.InvalidState)
+  content: [5000]u8 = []
+  for i in 0..#len(content) {
+    content[i] = #cast(u8, #wrap(i * 7) & 255)
+  }
+  check(fs.write_all("map-fixture.bin", content[..]).ok)
+  opened := fs.open("map-fixture.bin")
+  check(opened.ok)
+  file := opened.value
+  head: [3]u8 = []
+  check(fs.read(&file, head[..]).ok)
+  mapping := fs.map(&file)
+  check(mapping.ok && bytes.equal(mapping.value, content[..]))
+  check(fs.seek(&file, 0, 1).value == 3)
+  check(fs.close(&file).ok)
+  // The view stays valid after its file closes.
+  check(mapping.value[4999] == content[4999])
+  check(fs.unmap(&mapping).ok && #len(mapping.value) == 0 && !mapping.ok)
+  check(fs.write_all("map-empty.bin", "").ok)
+  empty_file := fs.open("map-empty.bin")
+  check(empty_file.ok)
+  empty_handle := empty_file.value
+  empty := fs.map(&empty_handle)
+  check(empty.ok && #len(empty.value) == 0)
+  check(fs.unmap(&empty).ok)
+  check(fs.close(&empty_handle).ok)
+}

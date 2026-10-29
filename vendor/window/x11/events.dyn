@@ -1,0 +1,210 @@
+use "vendor/window/events" ordered
+#link("c")
+pub type EventKind = ordered.Kind
+pub type OrderedEvent = ordered.Event
+extern fn event_descriptor "eventfd"(initial: u32, flags: i32) i32
+extern fn event_read "read"(fd: i32, bytes: rawptr, count: usize) isize
+extern fn event_write "write"(fd: i32, bytes: rawptr, count: usize) isize
+extern fn event_close "close"(fd: i32) i32
+struct EventPoll { fd: i32, requested: i16, returned: i16 }
+extern fn event_poll "poll"(fds: *EventPoll, count: usize, timeout: i32) i32
+extern fn detectable_repeat "XkbSetDetectableAutoRepeat"(display: rawptr, enabled: i32, supported: *i32) i32
+// Opt-in stream, so summary-only clients can continue using wait unchanged.
+pub fn listen_events(window: *Window, enabled: bool) {
+  if window.events_enabled != enabled {
+    window.events = ordered.Queue{}
+    window.events_enabled = enabled
+  }
+}
+fn ordered_push(window: *Window, event: OrderedEvent) {
+  if window.events_enabled {
+    ordered.push(&window.events, event)
+  }
+}
+fn ordered_open(window: *Window) bool {
+  window.wake_descriptor = event_descriptor(0, 526336)
+  supported: i32 = 0
+  _ = detectable_repeat(window.display, 1, &supported)
+  return window.wake_descriptor >= 0
+}
+// Keysyms encode Unicode directly above 0x01000000. Legacy Latin-1 maps
+// directly; unmapped legacy non-Latin keysyms report key zero, with scancode.
+fn ordered_key(key: usize) u32 {
+  if key >= 32 && key <= 126 || key >= 160 && key <= 255 {
+    return #cast(u32, key)
+  }
+  if key >= 16777472 && key <= 17891327 {
+    return #cast(u32, key - 16777216)
+  }
+  if key >= 0xffbe && key <= 0xffd5 {
+    return ordered.F1 + #cast(u32, key - 0xffbe)
+  }
+  if key == 0xff1b {
+    return ordered.Escape
+  }
+  if key == 0xff0d || key == 0xff8d {
+    return ordered.Enter
+  }
+  if key == 0xff09 || key == 0xfe20 {
+    return ordered.Tab
+  }
+  if key == 0xff08 {
+    return ordered.Backspace
+  }
+  if key == 0xffff {
+    return ordered.Delete
+  }
+  if key == 0xff51 {
+    return ordered.Left
+  }
+  if key == 0xff53 {
+    return ordered.Right
+  }
+  if key == 0xff52 {
+    return ordered.Up
+  }
+  if key == 0xff54 {
+    return ordered.Down
+  }
+  if key == 0xff50 {
+    return ordered.Home
+  }
+  if key == 0xff57 {
+    return ordered.End
+  }
+  if key == 0xff55 {
+    return ordered.PageUp
+  }
+  if key == 0xff56 {
+    return ordered.PageDown
+  }
+  if key == 0xff63 {
+    return ordered.Insert
+  }
+  if key == 0xffe1 || key == 0xffe2 {
+    return ordered.ShiftKey
+  }
+  if key == 0xffe3 || key == 0xffe4 {
+    return ordered.ControlKey
+  }
+  if key == 0xffe9 || key == 0xffea {
+    return ordered.AltKey
+  }
+  if key == 0xffeb || key == 0xffec {
+    return ordered.SuperKey
+  }
+  return 0
+}
+fn ordered_modifiers(state: u32) u32 {
+  result: u32 = 0
+  if state & 1 != 0 {
+    result |= ordered.Shift
+  }
+  if state & 4 != 0 {
+    result |= ordered.Control
+  }
+  if state & 8 != 0 {
+    result |= ordered.Alt
+  }
+  if state & 64 != 0 {
+    result |= ordered.Super
+  }
+  if state & 2 != 0 {
+    result |= ordered.CapsLock
+  }
+  if state & 16 != 0 {
+    result |= ordered.NumLock
+  }
+  return result
+}
+fn ordered_keyboard(window: *Window, event: *Event) {
+  native := #cast(*KeyEvent, event)
+  value := ordered.Event{ kind: ordered.Kind.KeyUp, key: ordered_key(keysym(event, 0)), scancode: native.keycode, modifiers: ordered_modifiers(native.state) }
+  code := #cast(usize, native.keycode)
+  if event.kind == 2 {
+    value.kind = ordered.Kind.KeyDown
+    if code < 256 {
+      value.repeated = #cast(u32, window.ordered_pressed[code])
+      window.ordered_pressed[code] = 1
+    }
+  }
+  else if code < 256 {
+    window.ordered_pressed[code] = 0
+  }
+  ordered_push(window, value)
+}
+fn ordered_text(window: *Window, text: []const u8) {
+  at: usize = 0
+  for at < #len(text) {
+    count := #len(text) - at
+    if count > 256 {
+      count = 256
+      for count > 0 && text[at + count] & 0xc0 == 0x80 {
+        count -= 1
+      }
+    }
+    if count == 0 {
+      return
+    }
+    value := ordered.Event{ kind: ordered.Kind.Text, text_length: #cast(u32, count) }
+    for i in 0..count {
+      value.text[i] = text[at + i]
+    }
+    ordered_push(window, value)
+    at += count
+  }
+}
+pub fn next_event(window: *Window, output: *OrderedEvent) bool {
+  return ordered.next(&window.events, output)
+}
+// Thread-safe wake only. Stop/join wake callers before closing the owner.
+pub fn wake(window: *const Window) Result {
+  if window.display == nil || window.wake_descriptor < 0 {
+    return Result{ kind: errors.Kind.InvalidState }
+  }
+  one: u64 = 1
+  if event_write(window.wake_descriptor, &one, 8) != 8 {
+    return Result{ kind: errors.Kind.System }
+  }
+  return Result{ ok: true }
+}
+fn ordered_wakes(window: *Window) {
+  value: u64 = 0
+  if window.wake_descriptor >= 0 && event_read(window.wake_descriptor, &value, 8) == 8 {
+    ordered_push(window, ordered.Event{ kind: ordered.Kind.Wake })
+  }
+}
+
+// Copy complete paste replies into ordered chunks. The compatibility snapshot
+// can be overwritten by a later reply without changing queued input.
+fn ordered_clipboard(window: *Window, text: []const u8) {
+  at: usize = 0
+  for true {
+    count := #len(text) - at
+    if count > 256 {
+      count = 256
+      for count > 0 && text[at + count] & 0xc0 == 0x80 {
+        count -= 1
+      }
+    }
+    if count == 0 && at < #len(text) {
+      if window.events_enabled && window.events.dropped != 4294967295 {
+        window.events.dropped += 1
+      }
+      return
+    }
+    value := ordered.Event{ kind: ordered.Kind.Clipboard, text_length: #cast(u32, count),
+      x: #cast(i32, at), width: #cast(i32, #len(text)) }
+    if at + count == #len(text) {
+      value.button = 1
+    }
+    for i in 0..count {
+      value.text[i] = text[at + i]
+    }
+    ordered_push(window, value)
+    at += count
+    if at == #len(text) {
+      return
+    }
+  }
+}

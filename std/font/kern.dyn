@@ -1,0 +1,93 @@
+// Legacy OpenType kern v0, horizontal format 0. GPOS and Apple's extended
+// table version are not interpreted. All bytes borrow the face's font data.
+struct KernCheck { offset: usize, ok: bool }
+fn kern_supported(bytes: []const u8, at: usize) bool {
+  coverage := u16be(bytes, at + 4)
+  return u16be(bytes, at) == 0 && (coverage & 0xfff7) == 1
+}
+fn validate_kern(bytes: []const u8, glyphs: u16) KernCheck {
+  if #len(bytes) < 2 {
+    return KernCheck{}
+  }
+  if u16be(bytes, 0) != 0 {
+    return KernCheck{ ok: true }
+  }
+  if #len(bytes) < 4 {
+    return KernCheck{}
+  }
+  count := #cast(usize, u16be(bytes, 2))
+  at: usize = 4
+  for i in 0..count {
+    if !fits(bytes, at, 6) {
+      return KernCheck{ offset: at }
+    }
+    length := #cast(usize, u16be(bytes, at + 2))
+    if length < 6 || !fits(bytes, at, length) {
+      return KernCheck{ offset: at + 2 }
+    }
+    if kern_supported(bytes, at) {
+      if length < 14 {
+        return KernCheck{ offset: at + 2 }
+      }
+      pairs := #cast(usize, u16be(bytes, at + 6))
+      if pairs > (length - 14) / 6 {
+        return KernCheck{ offset: at + 6 }
+      }
+      previous: u32 = 0
+      for j in 0..pairs {
+        pair_at := at + 14 + j * 6
+        key := u32be(bytes, pair_at)
+        if (j != 0 && key <= previous) || u16be(bytes, pair_at) >= glyphs || u16be(bytes, pair_at + 2) >= glyphs {
+          return KernCheck{ offset: pair_at }
+        }
+        previous = key
+      }
+    }
+    at += length
+  }
+  return KernCheck{ ok: true }
+}
+// Pixel adjustment added between left and right glyphs. A missing pair, absent
+// kern table, unsupported subtable, invalid glyph index or size returns zero.
+// Supported tables add in order; an override replaces only a matching pair.
+// Requires the immutable face returned by open. No allocation or rounding.
+pub fn kerning(face: *const Face, left, right: u16, pixels_per_em: u16) f64 {
+  bytes := face.kern
+  if #len(bytes) < 4 || face.units_per_em == 0 || left >= face.glyphs || right >= face.glyphs || pixels_per_em == 0 || pixels_per_em > 256 {
+    return 0.0
+  }
+  key := (#cast(u32, left) << 16) | #cast(u32, right)
+  result: i64 = 0
+  count := #cast(usize, u16be(bytes, 2))
+  at: usize = 4
+  for i in 0..count {
+    length := #cast(usize, u16be(bytes, at + 2))
+    if kern_supported(bytes, at) {
+      low: usize = 0
+      high := #cast(usize, u16be(bytes, at + 6))
+      for low < high {
+        mid := low + (high - low) / 2
+        pair_at := at + 14 + mid * 6
+        found := u32be(bytes, pair_at)
+        if found < key {
+          low = mid + 1
+        }
+        else if found > key {
+          high = mid
+        }
+        else {
+          value := #cast(i64, i16be(bytes, pair_at + 4))
+          if (u16be(bytes, at + 4) & 8) != 0 {
+            result = value
+          }
+          else {
+            result += value
+          }
+          break
+        }
+      }
+    }
+    at += length
+  }
+  return #cast(f64, result) * #cast(f64, pixels_per_em) / #cast(f64, face.units_per_em)
+}

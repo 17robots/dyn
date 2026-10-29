@@ -126,12 +126,32 @@ pub fn arena_create(block_size: usize) *Arena {
   return arena_create_bounded(block_size, 0)
 }
 
+pub struct ArenaCreation { arena: *Arena, error: ErrorKind, code: isize, ok: bool }
+
+// Like arena_create, returning an absent handle on reservation failure.
+// Zero selects the target default, just as for arena_create.
+pub fn arena_try_create(block_size: usize) ArenaCreation {
+  return arena_try_create_bounded(block_size, 0)
+}
+
 // Like arena_create, with a cap on backing bytes across all blocks, headers
 // included. Pushes that would pass it fail like an exhausted fixed arena. A zero
 // limit means no cap.
 pub fn arena_create_bounded(block_size: usize, limit: usize) *Arena {
+  result := arena_try_create_bounded(block_size, limit)
+  if !result.ok {
+    if result.error == ErrorKind.Capacity {
+      #panic("arena backing limit cannot hold the header")
+    }
+    #panic("cannot reserve arena memory")
+  }
+  return result.arena
+}
+
+// Fallible bounded construction. Failed construction owns no backing.
+pub fn arena_try_create_bounded(block_size: usize, limit: usize) ArenaCreation {
   if limit != 0 && limit < header_size() {
-    #panic("arena backing limit cannot hold the header")
+    return ArenaCreation{ error: ErrorKind.Capacity }
   }
   size := block_size
   if size == 0 {
@@ -145,14 +165,14 @@ pub fn arena_create_bounded(block_size: usize, limit: usize) *Arena {
   }
   mapping := mapping_with_header(size)
   if !mapping.ok {
-    #panic("cannot reserve arena memory")
+    return ArenaCreation{ error: ErrorKind.System, code: mapping.error }
   }
   arena := block_init(mapping.bytes, 0, true, mapping.committed)
   arena.current = arena
   arena.block_size = size
   arena.limit = limit
   arena.backing = size
-  return arena
+  return ArenaCreation{ arena: arena, ok: true }
 }
 
 // Frees every block that is not the first. Release with the newest first, so a
@@ -191,15 +211,16 @@ pub fn arena_release(arena: *Arena) {
 const CommitStep: usize = 1048576
 
 // Commits a block's backing through end, in CommitStep pieces. Windows only in practice.
-fn arena_commit(block: *Arena, end: usize) {
+fn arena_commit(block: *Arena, end: usize) bool {
   target := align_size(end, CommitStep)
   if target > #len(block.data) || target < end {
     target = #len(block.data)
   }
   if !mapping_commit(block.data, block.committed, target) {
-    #panic("cannot commit arena memory")
+    return false
   }
   block.committed = target
+  return true
 }
 
 // Bytes the arena can hold without adding a block: everything in its blocks
@@ -425,6 +446,7 @@ fn arena_try_push_impl(arena: *Arena, size: usize, alignment: usize, zero_memory
   if size == 0 {
     return Allocation{ memory: nil, size: 0, ok: true }
   }
+  original := arena.current
   grew := false
   for {
     block := arena.current
@@ -439,7 +461,14 @@ fn arena_try_push_impl(arena: *Arena, size: usize, alignment: usize, zero_memory
       if padding <= #len(available) && size <= #len(available) - padding {
         end := block.offset + padding + size
         if block.owns_memory && end > block.committed {
-          arena_commit(block, end)
+          if !arena_commit(block, end) {
+            if grew {
+              release_blocks_after(arena, original)
+            }
+            failed := arena_failure(arena, ErrorKind.System)
+            failed.code = -12
+            return failed
+          }
         }
         memory := &available[padding]
         block.offset = end
@@ -488,7 +517,9 @@ pub fn arena_try_extend(arena: *Arena, memory: *u8, size: usize, extra: usize) b
   }
   end := block.offset + extra
   if block.owns_memory && end > block.committed {
-    arena_commit(block, end)
+    if !arena_commit(block, end) {
+      return false
+    }
   }
   zero_bytes_fast(block.data[block.offset..end])
   block.offset = end
@@ -531,6 +562,11 @@ pub fn arena_push_uninit(arena: *Arena, size: usize, alignment: usize) *u8 {
 // Failure leaves the position and existing bytes unchanged.
 pub fn arena_try_push(arena: *Arena, size: usize, alignment: usize) Allocation {
   return arena_try_push_impl(arena, size, alignment, true)
+}
+
+// Fallible allocation without initializing the returned bytes.
+pub fn arena_try_push_uninit(arena: *Arena, size: usize, alignment: usize) Allocation {
+  return arena_try_push_impl(arena, size, alignment, false)
 }
 
 // Pushes one zeroed T. Panics when the arena is exhausted.

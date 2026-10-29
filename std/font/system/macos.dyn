@@ -1,0 +1,14 @@
+#target(kernel: darwin)
+
+fn font_directories(arena: *mem.Arena, output: [][]const u8) usize {
+  output[0] = "/System/Library/Fonts"
+  output[1] = "/Library/Fonts"
+  count: usize = 2
+  user := home(arena)
+  if #len(user) != 0 {
+    parts: [2][]const u8 = [user, "Library/Fonts"]
+    output[2] = strings.join(arena, parts[..], "/")
+    count = 3
+  }
+  return count
+}

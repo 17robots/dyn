@@ -1,0 +1,148 @@
+// Small composed widgets with caller-owned state. Build floating menus and
+// tooltips after ordinary content so they draw above it. They stay clipped to
+// the root viewport; positioning uses framebuffer coordinates.
+
+// A tab button. The selected index belongs to the caller; build the selected
+// page after the tab row. IDs need only be distinct within that tab group.
+pub fn tab(state: *State, label: []const u8, index: usize, selected: *usize) Signal {
+  result := button(state, label)
+  if result.clicked {
+    selected.* = index
+  }
+  if selected.* == index {
+    result.box.background = result.box.active_color
+  }
+  return result
+}
+
+// One open popup, anchored to its trigger's last layout. Menus close on their
+// trigger, Escape or an item activation. Outside-click policy belongs to the
+// caller, which can close open before building the frame's ordinary widgets.
+pub struct Menu { open: bool, anchor: [2]f32 }
+
+pub fn menu_button(state: *State, label: []const u8, menu: *Menu) Signal {
+  result := button(state, label)
+  if result.clicked {
+    menu.open = !menu.open
+  }
+  menu.anchor[0] = result.box.rect[0]
+  menu.anchor[1] = result.box.rect[3]
+  return result
+}
+
+// On true, build menu_item calls (or custom content), then call menu_end.
+// On false, no parent stack changes. The returned panel can be customized
+// through parent(state), for example to set a minimum width.
+pub fn menu_begin(state: *State, label: []const u8, menu: *Menu) bool {
+  if state.input.escape {
+    menu.open = false
+  }
+  if !menu.open {
+    return false
+  }
+  push_parent(state, state.root)
+  panel := build(state, DrawBackground | DrawBorder | FloatingX | FloatingY | Clip, label)
+  panel.axis = 1
+  panel.width = children(1.0)
+  panel.height = children(1.0)
+  panel.floating = menu.anchor
+  push_parent(state, panel)
+  return true
+}
+
+// Closes the menu after an item activates. Finish the current menu tree even
+// after activation, then use menu.open when deciding whether to build next frame.
+pub fn menu_item(state: *State, label: []const u8, menu: *Menu) Signal {
+  result := button(state, label)
+  if result.clicked {
+    menu.open = false
+  }
+  return result
+}
+
+pub fn menu_end(state: *State) {
+  pop_parent(state)
+  pop_parent(state)
+}
+
+// An immediate tooltip for a hovered clickable target. Delay policy belongs
+// to the caller. Returns nil when hidden; no parent stack changes remain.
+pub fn tooltip(state: *State, label: []const u8, text: []const u8, target: *const Box) *Box {
+  if target == nil || state.hot != target.key || !inside(target.visible, state.input.x, state.input.y) {
+    return nil
+  }
+  push_parent(state, state.root)
+  panel := build(state, DrawBackground | DrawBorder | DrawText | FloatingX | FloatingY, label)
+  copied := mem.push_bytes_uninit(state.frame, #len(text))
+  _ = mem.copy(copied, text)
+  panel.text = copied
+  panel.width = text_size(6.0, 1.0)
+  panel.height = text_size(4.0, 1.0)
+  panel.floating[0] = target.rect[0]
+  panel.floating[1] = target.rect[3] + 4.0 * state.scale
+  pop_parent(state)
+  return panel
+}
+
+// position and the extent passed to splitter are logical pixels. axis selects
+// the size being changed: 0 for side-by-side panes, 1 for stacked panes.
+pub struct Split { position: f32, start: f32 }
+
+// A six-pixel divider. Put it between two panes whose sizes derive from
+// split.position; extent is the space available to both panes, excluding the
+// divider. minimum applies to each pane, reduced when the extent is too small.
+pub fn splitter(state: *State, label: []const u8, axis: u8, extent: f32, minimum: f32, split: *Split) Signal {
+  if axis > 1 {
+    #panic("splitter axis must be 0 or 1")
+  }
+  available := extent
+  if available < 0.0 {
+    available = 0.0
+  }
+  low := minimum
+  if low < 0.0 {
+    low = 0.0
+  }
+  if low > available * 0.5 {
+    low = available * 0.5
+  }
+  divider := build(state, Clickable | Focusable | DrawBackground | HotAnimation | ActiveAnimation, label)
+  if axis == 0 {
+    divider.width = pixels(6.0, 1.0)
+    divider.height = percent(1.0, 1.0)
+  }
+  else {
+    divider.width = percent(1.0, 1.0)
+    divider.height = pixels(6.0, 1.0)
+  }
+  result := signal(state, divider)
+  if result.pressed {
+    split.start = split.position
+  }
+  if result.dragging || result.released {
+    delta := result.drag_x
+    if axis == 1 {
+      delta = result.drag_y
+    }
+    scale := state.scale
+    if scale <= 0.0 {
+      scale = 1.0
+    }
+    split.position = split.start + delta / scale
+  }
+  if state.focused == divider.key {
+    if state.input.left {
+      split.position -= 1.0
+    }
+    if state.input.right {
+      split.position += 1.0
+    }
+  }
+  if split.position < low {
+    split.position = low
+  }
+  if split.position > available - low {
+    split.position = available - low
+  }
+  return result
+}

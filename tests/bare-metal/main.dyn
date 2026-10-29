@@ -1,3 +1,4 @@
+use "std/embedded/interrupt" interrupt
 // Bare-metal check for riscv64-none, riscv32-none and thumbv7em-none: console
 // output, arenas from the fixed memory region, integer and float arithmetic,
 // and a clean exit. The board files write to each board's UART.
@@ -45,6 +46,10 @@ fn main() {
   bytes := mem.push_array(u8, scratch, 4096)
   bytes[4095] = 7
   print_number("scratch ", #cast(u64, bytes[4095]))
+  outer := interrupt.disable()
+  inner := interrupt.disable()
+  interrupt.restore(inner)
+  interrupt.restore(outer)
   uart_write("mmio\n")
   // 64-bit arithmetic is register pairs on the 32-bit targets.
   big: u64 = 0xFFFFFFFF

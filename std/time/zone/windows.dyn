@@ -1,0 +1,84 @@
+#target(kernel: windows)
+
+use "std/unicode/utf8" utf8
+use "std/unicode/utf16" utf16
+
+extern fn zone_information "dyn_time_zone_information"(information: *u8) u32
+extern fn last_error "dyn_win_last_error"() u32
+
+// Unused on Windows; the shared POSIX loader needs them to compile.
+const zoneinfo_root: []const u8 = ""
+fn read_link(path: []const u8, storage: []u8) isize {
+  _ = path
+  _ = storage
+  return -1
+}
+
+fn platform_load(arena: *mem.Arena, name: []const u8) ZoneResult {
+  _ = arena
+  _ = name
+  return ZoneResult{ kind: errors.Kind.Unsupported }
+}
+
+fn word(data: []const u8, at: usize) u16 {
+  return #cast(u16, data[at]) | #cast(u16, data[at + 1]) << 8
+}
+
+fn long(data: []const u8, at: usize) i32 {
+  return #bitcast(i32, #cast(u32, word(data, at)) | #cast(u32, word(data, at + 2)) << 16)
+}
+
+// A zero-terminated UTF-16 field of at most units code units, as UTF-8.
+fn name(arena: *mem.Arena, data: []const u8, at: usize, units: usize) []const u8 {
+  wide: [128]u16 = []
+  count: usize = 0
+  for count < units && word(data, at + count * 2) != 0 {
+    wide[count] = word(data, at + count * 2)
+    count += 1
+  }
+  output := mem.push_bytes_uninit(arena, count * 3)
+  used: usize = 0
+  index: usize = 0
+  for index < count {
+    decoded := utf16.decode(wide[..count], index)
+    if !decoded.ok {
+      break
+    }
+    used += utf8.encode(output[used..], decoded.codepoint)
+    index += decoded.width
+  }
+  return output[..used]
+}
+
+// SYSTEMTIME at offset: year, month, weekday, day (week 1-5), hour, minute, second.
+fn windows_rule(data: []const u8, at: usize) Rule {
+  return Rule{
+    kind: 2,
+    month: #cast(u8, word(data, at + 2)),
+    weekday: #cast(u8, word(data, at + 4)),
+    week: #cast(u8, word(data, at + 6)),
+    time: #cast(i32, word(data, at + 8)) * 3600 + #cast(i32, word(data, at + 10)) * 60 + #cast(i32, word(data, at + 12)),
+  }
+}
+
+// DYNAMIC_TIME_ZONE_INFORMATION: Bias, StandardName[32], StandardDate,
+// StandardBias, DaylightName[32], DaylightDate, DaylightBias,
+// TimeZoneKeyName[128], DynamicDaylightTimeDisabled. Biases are minutes west.
+fn platform_system(arena: *mem.Arena) ZoneResult {
+  data: [432]u8 = []
+  if zone_information(&data[0]) == 4294967295 {
+    code := #cast(isize, last_error())
+    return ZoneResult{ kind: errors.windows(code), error: code }
+  }
+  bias := long(data[..], 0)
+  zone := Zone{ name: name(arena, data[..], 172, 128), has_rule: true }
+  zone.standard = Type{ offset: -(bias + long(data[..], 84)) * 60, abbreviation: name(arena, data[..], 4, 32) }
+  zone.daylight = zone.standard
+  if word(data[..], 154) != 0 && data[428] == 0 {
+    zone.has_daylight = true
+    zone.daylight = Type{ offset: -(bias + long(data[..], 168)) * 60, dst: true, abbreviation: name(arena, data[..], 88, 32) }
+    zone.start = windows_rule(data[..], 152)
+    zone.end = windows_rule(data[..], 68)
+  }
+  return ZoneResult{ value: zone, ok: true }
+}

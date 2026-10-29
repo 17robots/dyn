@@ -1,0 +1,232 @@
+use "std/ui" ui
+use "std/errors" errors
+use "std/unicode/utf8" utf8
+use "std/math" math
+
+// Straight-alpha RGBA bytes. stride includes row padding, in bytes; pixels
+// contains height full strides. The surface and its bytes remain caller-owned.
+pub struct Surface { pixels: []u8, width: i32, height: i32, stride: usize }
+// Coverage is one alpha byte per pixel, top-to-bottom. Glyph offsets are
+// relative to the text pen's top-left. Advance and dimensions must be nonnegative.
+pub struct Glyph { pixels: []const u8, width: i32, height: i32, stride: usize, x_offset: i32, y_offset: i32, advance: i32 }
+// A caller supplies bitmap glyphs at the desired size. Coverage need only
+// survive until the next callback. Missing glyph policy belongs to the callback.
+// No font files, platform APIs, native dependencies, or shaping are hidden here.
+pub struct Font { data: rawptr, glyph: fn(rawptr, u32) Glyph, line_height: i32 }
+pub struct Result { kind: errors.Kind, error: isize, ok: bool }
+fn valid_surface(surface: *const Surface) bool {
+  if surface.width < 0 || surface.height < 0 {
+    return false
+  }
+  if surface.width == 0 || surface.height == 0 {
+    return true
+  }
+  width := #cast(usize, surface.width)
+  height := #cast(usize, surface.height)
+  if width > #len(surface.pixels) / 4 {
+    return false
+  }
+  if surface.stride < width * 4 || surface.stride == 0 {
+    return false
+  }
+  return height <= #len(surface.pixels) / surface.stride
+}
+fn valid_glyph(glyph: *const Glyph) bool {
+  if glyph.width < 0 || glyph.height < 0 || glyph.advance < 0 {
+    return false
+  }
+  if glyph.width == 0 || glyph.height == 0 {
+    return true
+  }
+  if glyph.stride < #cast(usize, glyph.width) || glyph.stride == 0 {
+    return false
+  }
+  width := #cast(usize, glyph.width)
+  if width > #len(glyph.pixels) {
+    return false
+  }
+  // Atlas views can end immediately after the last row's used pixels.
+  return #cast(usize, glyph.height - 1) <= (#len(glyph.pixels) - width) / glyph.stride
+}
+fn blend(surface: *Surface, x, y: i32, tint: ui.Color, coverage: u8) {
+  alpha := (#cast(u32, tint.a) * #cast(u32, coverage) + 127) / 255
+  if alpha == 0 {
+    return
+  }
+  at := #cast(usize, y) * surface.stride + #cast(usize, x) * 4
+  // Full coverage replaces every destination component, including alpha.
+  if alpha == 255 {
+    surface.pixels[at]=tint.r
+    surface.pixels[at+1]=tint.g
+    surface.pixels[at+2]=tint.b
+    surface.pixels[at+3]=255
+    return
+  }
+  old_alpha := #cast(u32, surface.pixels[at + 3])
+  denominator := alpha * 255 + old_alpha * (255 - alpha)
+  components: [3]u8 = [tint.r, tint.g, tint.b]
+  for i in 0..3 {
+    source := #cast(u32, components[i]) * alpha * 255
+    destination := #cast(u32, surface.pixels[at + i]) * old_alpha * (255 - alpha)
+    surface.pixels[at + i] = #cast(u8, ((source + destination + denominator / 2) / denominator))
+  }
+  surface.pixels[at + 3] = #cast(u8, ((denominator + 127) / 255))
+}
+fn rectangle(surface: *Surface, bounds: ui.Rect, tint: ui.Color) {
+  for y in 0..bounds.height {
+    for x in 0..bounds.width {
+      blend(surface, bounds.x + x, bounds.y + y, tint, 255)
+    }
+  }
+}
+
+// Coverage of a rounded rectangle at a pixel center, from its signed distance.
+// GPU renderers evaluate the same expression.
+pub fn rounded_coverage(shape: ui.Rect, radius: i32, x, y: i32) u8 {
+  half_x := #cast(f32, shape.width) / 2.0
+  half_y := #cast(f32, shape.height) / 2.0
+  r := #cast(f32, radius)
+  qx := math.abs(#cast(f32, x) + 0.5 - #cast(f32, shape.x) - half_x) - (half_x - r)
+  qy := math.abs(#cast(f32, y) + 0.5 - #cast(f32, shape.y) - half_y) - (half_y - r)
+  outside_x := math.max(qx, 0.0)
+  outside_y := math.max(qy, 0.0)
+  distance := math.sqrt(outside_x * outside_x + outside_y * outside_y) + math.min(math.max(qx, qy), 0.0) - r
+  coverage := math.clamp(0.5 - distance, 0.0, 1.0)
+  return #cast(u8, coverage * 255.0 + 0.5)
+}
+
+fn rounded(surface: *Surface, clip: ui.Rect, shape: ui.Rect, radius: i32, tint: ui.Color) {
+  for y in 0..clip.height {
+    for x in 0..clip.width {
+      coverage := rounded_coverage(shape, radius, clip.x + x, clip.y + y)
+      if coverage != 0 {
+        blend(surface, clip.x + x, clip.y + y, tint, coverage)
+      }
+    }
+  }
+}
+struct DrawResult { advance: i32, ok: bool }
+fn draw_glyph(surface: *Surface, clip: ui.Rect, tint: ui.Color, font: Font, codepoint: u32, x, y: i64) DrawResult {
+  if font.glyph == nil || font.line_height <= 0 {
+    return DrawResult{}
+  }
+  if x < #cast(i64, clip.x) - 4294967296 || x > #cast(i64, clip.x) + #cast(i64, clip.width) + 4294967296 ||
+    y < #cast(i64, clip.y) - 4294967296 || y > #cast(i64, clip.y) + #cast(i64, clip.height) + 4294967296 {
+    return DrawResult{ ok: true }
+  }
+  glyph := font.glyph(font.data, codepoint)
+  if !valid_glyph(&glyph) {
+    return DrawResult{}
+  }
+  left := x + #cast(i64, glyph.x_offset)
+  top := y + #cast(i64, glyph.y_offset)
+  // Intersect in i64: bearings may place the glyph outside i32 coordinates.
+  gx := left
+  gy := top
+  gr := left + #cast(i64, glyph.width)
+  gb := top + #cast(i64, glyph.height)
+  if gx < #cast(i64, clip.x) {
+    gx = #cast(i64, clip.x)
+  }
+  if gy < #cast(i64, clip.y) {
+    gy = #cast(i64, clip.y)
+  }
+  cr := #cast(i64, clip.x) + #cast(i64, clip.width)
+  cb := #cast(i64, clip.y) + #cast(i64, clip.height)
+  if gr > cr {
+    gr = cr
+  }
+  if gb > cb {
+    gb = cb
+  }
+  for gy < gb {
+    px := gx
+    for px < gr {
+      coverage := glyph.pixels[#cast(usize, (gy - top)) * glyph.stride + #cast(usize, (px - left))]
+      blend(surface, #cast(i32, px), #cast(i32, gy), tint, coverage)
+      px += 1
+    }
+    gy += 1
+  }
+  return DrawResult{ advance: glyph.advance, ok: true }
+}
+fn text(surface: *Surface, command: *const ui.Command, clip: ui.Rect, font: Font) Result {
+  if font.glyph == nil || font.line_height <= 0 {
+    return Result{ kind: errors.Kind.InvalidInput }
+  }
+  x := #cast(i64, command.bounds.x)
+  y := #cast(i64, command.bounds.y)
+  right := #cast(i64, command.bounds.x) + #cast(i64, command.bounds.width)
+  bottom := #cast(i64, command.bounds.y) + #cast(i64, command.bounds.height)
+  offset: usize = 0
+  for offset < #len(command.text) {
+    decoded := utf8.decode(command.text, offset)
+    offset += decoded.width
+    codepoint := decoded.codepoint
+    if !decoded.ok {
+      codepoint = 65533
+    }
+    if codepoint == 13 {
+      continue
+    }
+    if codepoint == 10 {
+      x = #cast(i64, command.bounds.x)
+      y += #cast(i64, font.line_height)
+      if y >= bottom + 2147483648 {
+        break
+      }
+      continue
+    }
+    // Beyond this bound, even the most negative i32 bearing cannot reach
+    // the clip. Nonnegative advances make it safe to skip the rest of the line.
+    if x >= right + 2147483648 {
+      continue
+    }
+    drawn := draw_glyph(surface, clip, command.color, font, codepoint, x, y)
+    if !drawn.ok {
+      return Result{ kind: errors.Kind.InvalidInput }
+    }
+    x += #cast(i64, drawn.advance)
+  }
+  return Result{ ok: true }
+}
+// Render in order after ui.end. Changes pixels in place; malformed glyph or
+// surface data returns InvalidInput. A glyph failure may leave earlier draws
+// visible. This renderer clips text without wrapping, kerning or shaping.
+pub fn render(surface: *Surface, commands: *const ui.Command, font: Font) Result {
+  if !valid_surface(surface) {
+    return Result{ kind: errors.Kind.InvalidInput }
+  }
+  if surface.width == 0 || surface.height == 0 {
+    return Result{ ok: true }
+  }
+  viewport := ui.Rect{ width: surface.width, height: surface.height }
+  command := commands
+  for command.kind != ui.Kind.None {
+    clip := ui.intersect(viewport, ui.intersect(command.clip, command.bounds))
+    if clip.width > 0 && clip.height > 0 {
+      if command.kind == ui.Kind.Rectangle {
+        if command.radius > 0 {
+          rounded(surface, clip, command.bounds, command.radius, command.color)
+        }
+        else {
+          rectangle(surface, clip, command.color)
+        }
+      }
+      else if command.kind == ui.Kind.Glyph {
+        drawn := draw_glyph(surface, clip, command.color, font, command.codepoint, #cast(i64, command.glyph_x), #cast(i64, command.glyph_y))
+        if !drawn.ok {
+          return Result{ kind: errors.Kind.InvalidInput }
+        }
+      }
+      else if command.kind == ui.Kind.Text {
+        outcome := text(surface, command, clip, font)
+        if !outcome.ok {
+          return outcome
+        }
+      }
+    }
+    command = ui.next(command)
+  }
+  return Result{ ok: true }
+}

@@ -1,0 +1,36 @@
+#target(kernel: linux)
+fn native_open() net.Result {
+  return net.event_queue()
+}
+fn native_close(handle: isize) Result {
+  outcome := net.close(handle)
+  return Result{ kind: outcome.kind, error: outcome.error, ok: outcome.ok }
+}
+fn native_control(queue: *Queue, index: usize, entry: Entry) Result {
+  old := queue.entries[index]
+  outcome := net.Result{}
+  if !entry.active {
+    outcome = net.event_remove(queue.handle, old.descriptor)
+  }
+  else if old.active {
+    outcome = net.event_modify(queue.handle, entry.descriptor, entry.events, #cast(u64, index))
+  }
+  else {
+    outcome = net.event_add(queue.handle, entry.descriptor, entry.events, #cast(u64, index))
+  }
+  return Result{ kind: outcome.kind, error: outcome.error, ok: outcome.ok }
+}
+fn native_wait(arena: *mem.Arena, queue: *Queue, timeout: i32) WaitResult {
+  native := mem.push_array(net.Event, arena, #len(queue.entries))
+  outcome := net.event_wait(queue.handle, native, timeout)
+  if !outcome.ok {
+    return WaitResult{ kind: outcome.kind, error: outcome.error }
+  }
+  events := mem.push_array(Event, arena, #cast(usize, outcome.value))
+  for i in 0..#len(events) {
+    index := #cast(usize, net.event_data(&native[i]))
+    entry := queue.entries[index]
+    events[i] = Event{ descriptor: entry.descriptor, token: entry.token, events: net.event_events(&native[i]) & 29 }
+  }
+  return WaitResult{ value: events, ok: true }
+}

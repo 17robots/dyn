@@ -1,0 +1,330 @@
+use "std/mem" mem
+use "std/errors" errors
+use "std/unicode/utf8" utf8
+// RFC 8949: https://www.rfc-editor.org/rfc/rfc8949.html
+// Borrowed preorder tokens, with End only for indefinite containers/strings.
+// Definite arrays/maps carry element/pair counts in value. Tag wraps one item.
+// Negative stores n for the integer -1-n, preserving CBOR's full 65-bit range.
+// Tags are opaque; duplicate map keys and tag-specific validity are caller policy.
+// This is a sequence codec, not a deterministic/canonical encoding profile.
+pub enum Kind { Unsigned, Negative, Bytes, Text, Array, Map, Tag, Bool, Null, Undefined, Simple, Float, End }
+pub struct Token { kind: Kind, value: u64, bytes: []const u8, real: f64, boolean: bool, indefinite: bool }
+pub struct Frame { kind: Kind, remaining: u64, indefinite: bool, odd: bool }
+pub struct Reader { source: []const u8, offset: usize, frames: [64]Frame, depth: usize, failed: bool, error_kind: errors.Kind, error_offset: usize }
+pub struct Result { value: Token, kind: errors.Kind, offset: usize, ok: bool }
+pub struct EncodeResult { value: []u8, kind: errors.Kind, offset: usize, ok: bool }
+pub fn reader(source: []const u8) Reader {
+  return Reader{ source: source }
+}
+fn trim(state: *Reader) {
+  for state.depth > 0 && !state.frames[state.depth - 1].indefinite && state.frames[state.depth - 1].remaining == 0 {
+    state.depth -= 1
+  }
+}
+fn accept(state: *Reader, token: Token) errors.Kind {
+  trim(state)
+  if #cast(u32, token.kind) > #cast(u32, Kind.End) {
+    return errors.Kind.InvalidInput
+  }
+  if token.kind == Kind.End {
+    if token.indefinite || state.depth == 0 || !state.frames[state.depth - 1].indefinite || state.frames[state.depth - 1].odd {
+      return errors.Kind.InvalidInput
+    }
+    state.depth -= 1
+    return errors.Kind.None
+  }
+  if token.indefinite && token.kind != Kind.Array && token.kind != Kind.Map && token.kind != Kind.Bytes && token.kind != Kind.Text {
+    return errors.Kind.InvalidInput
+  }
+  if token.kind == Kind.Simple && (token.value > 255 || (token.value >= 20 && token.value <= 31)) {
+    return errors.Kind.InvalidInput
+  }
+  if token.kind == Kind.Text && !utf8.valid(token.bytes) {
+    return errors.Kind.InvalidInput
+  }
+  if token.indefinite && (token.kind == Kind.Text || token.kind == Kind.Bytes) && #len(token.bytes) != 0 {
+    return errors.Kind.InvalidInput
+  }
+  if state.depth > 0 {
+    frame := &state.frames[state.depth - 1]
+    if frame.kind == Kind.Text || frame.kind == Kind.Bytes {
+      if token.kind != frame.kind || token.indefinite {
+        return errors.Kind.InvalidInput
+      }
+    }
+    if frame.indefinite {
+      if frame.kind == Kind.Map {
+        frame.odd = !frame.odd
+      }
+    } else {
+      frame.remaining -= 1
+    }
+  }
+  if token.indefinite || token.kind == Kind.Array || token.kind == Kind.Map || token.kind == Kind.Tag {
+    count := token.value
+    if token.kind == Kind.Tag {
+      count = 1
+    }
+    if token.kind == Kind.Map && !token.indefinite {
+      if count > 0x7fffffffffffffff {
+        return errors.Kind.Overflow
+      }
+      count *= 2
+    }
+    if token.indefinite || count != 0 {
+      if state.depth == #len(state.frames) {
+        return errors.Kind.Capacity
+      }
+      state.frames[state.depth] = Frame{ kind: token.kind, remaining: count, indefinite: token.indefinite }
+      state.depth += 1
+    }
+  }
+  return errors.Kind.None
+}
+fn fail(state: *Reader, offset: usize, kind: errors.Kind) Result {
+  state.failed = true
+  state.error_kind = kind
+  state.error_offset = offset
+  return Result{ kind: kind, offset: offset }
+}
+fn half(raw: u64) f64 {
+  exponent := (raw >> 10) & 31
+  fraction := raw & 1023
+  sign := (raw & 32768) << 48
+  if exponent == 0 {
+    result := #cast(f64, fraction) / 16777216.0
+    if sign != 0 {
+      result = -result
+    }
+    return result
+  }
+  if exponent == 31 {
+    return #bitcast(f64, sign | 0x7ff0000000000000 | (fraction << 42))
+  }
+  return #bitcast(f64, sign | ((exponent + 1008) << 52) | (fraction << 42))
+}
+pub fn next(state: *Reader) Result {
+  if state.failed {
+    return Result{ kind: state.error_kind, offset: state.error_offset }
+  }
+  start := state.offset
+  if start == #len(state.source) {
+    trim(state)
+    if state.depth != 0 {
+      return fail(state, start, errors.Kind.InvalidInput)
+    }
+    return Result{ offset: start }
+  }
+  tag := state.source[start]
+  major := tag >> 5
+  info := tag & 31
+  at := start + 1
+  token := Token{}
+  if major <= 6 {
+    token.kind = #cast(Kind, major)
+  }
+  value := #cast(u64, info)
+  if info >= 28 && info <= 30 {
+    return fail(state, start, errors.Kind.InvalidInput)
+  }
+  if info == 31 {
+    if tag == 255 {
+      token.kind = Kind.End
+    } else if major >= 2 && major <= 5 {
+      token.indefinite = true
+    } else {
+      return fail(state, start, errors.Kind.InvalidInput)
+    }
+    value = 0
+  } else if info >= 24 {
+    count := #cast(usize, 1) << #cast(usize, info - 24)
+    if count > #len(state.source) - at {
+      return fail(state, at, errors.Kind.InvalidInput)
+    }
+    value = 0
+    for byte in state.source[at..at+count] {
+      value = (value << 8) | #cast(u64, byte)
+    }
+    at += count
+  }
+  token.value = value
+  if major == 7 && info != 31 {
+    if info == 20 || info == 21 {
+      token.kind = Kind.Bool
+      token.boolean = info == 21
+    } else if info == 22 {
+      token.kind = Kind.Null
+    } else if info == 23 {
+      token.kind = Kind.Undefined
+    } else if info <= 24 {
+      if info == 24 && value < 32 {
+        return fail(state, start, errors.Kind.InvalidInput)
+      }
+      token.kind = Kind.Simple
+    } else {
+      token.kind = Kind.Float
+      if info == 25 {
+        token.real = half(value)
+      }
+      else if info == 26 {
+        token.real = #cast(f64, #bitcast(f32, #cast(u32, value)))
+      }
+      else {
+        token.real = #bitcast(f64, value)
+      }
+    }
+    if token.kind != Kind.Simple {
+      token.value = 0
+    }
+  }
+  if !token.indefinite && (token.kind == Kind.Bytes || token.kind == Kind.Text) {
+    if value > #cast(u64, #len(state.source) - at) {
+      return fail(state, at, errors.Kind.InvalidInput)
+    }
+    count := #cast(usize, value)
+    token.bytes = state.source[at..at+count]
+    token.value = 0
+    at += count
+  }
+  if !token.indefinite && (token.kind == Kind.Array || token.kind == Kind.Map) {
+    available := #cast(u64, #len(state.source) - at)
+    if token.kind == Kind.Map {
+      available /= 2
+    }
+    if value > available {
+      return fail(state, at, errors.Kind.InvalidInput)
+    }
+  }
+  kind := accept(state, token)
+  if kind != errors.Kind.None {
+    return fail(state, start, kind)
+  }
+  state.offset = at
+  return Result{ value: token, offset: start, ok: true }
+}
+fn extra(value: u64) usize {
+  if value < 24 {
+    return 0
+  }
+  if value <= 255 {
+    return 1
+  }
+  if value <= 65535 {
+    return 2
+  }
+  if value <= 0xffffffff {
+    return 4
+  }
+  return 8
+}
+fn argument(token: Token) u64 {
+  if token.kind == Kind.Bytes || token.kind == Kind.Text {
+    return #cast(u64, #len(token.bytes))
+  }
+  return token.value
+}
+fn size(token: Token) usize {
+  if token.indefinite || token.kind == Kind.End || token.kind == Kind.Bool || token.kind == Kind.Null || token.kind == Kind.Undefined {
+    return 1
+  }
+  if token.kind == Kind.Float {
+    return 9
+  }
+  return 1 + extra(argument(token))
+}
+fn put(output: []u8, at: *usize, value: u64, count: usize) {
+  for i in 0..count {
+    output[at.* + i] = #cast(u8, value >> #cast(u64, (count - i - 1) * 8))
+  }
+  at.* += count
+}
+// Arena-owned output. Invalid token structure allocates nothing. Bytes/text
+// input must not borrow unused output-arena storage. Floats emit binary64;
+// maps preserve order, duplicate keys and indefinite structure.
+pub fn encode(arena: *mem.Arena, tokens: []const Token) EncodeResult {
+  state := Reader{}
+  total: usize = 0
+  for i in 0..#len(tokens) {
+    token := tokens[i]
+    kind := accept(&state, token)
+    if kind != errors.Kind.None {
+      return EncodeResult{ kind: kind, offset: i }
+    }
+    count := size(token)
+    if token.kind == Kind.Bytes || token.kind == Kind.Text {
+      if #len(token.bytes) > ~#cast(usize, 0) - count {
+        return EncodeResult{ kind: errors.Kind.Overflow, offset: i }
+      }
+      count += #len(token.bytes)
+    }
+    if count > ~#cast(usize, 0) - total {
+      return EncodeResult{ kind: errors.Kind.Overflow, offset: i }
+    }
+    total += count
+  }
+  trim(&state)
+  if state.depth != 0 {
+    return EncodeResult{ kind: errors.Kind.InvalidInput, offset: #len(tokens) }
+  }
+  output := mem.push_array(u8, arena, total)
+  at: usize = 0
+  for token in tokens {
+    tag: u8 = 0
+    if token.kind == Kind.End {
+      tag = 255
+    } else if token.kind == Kind.Bool {
+      tag = 244
+      if token.boolean {
+        tag = 245
+      }
+    } else if token.kind == Kind.Null {
+      tag = 246
+    } else if token.kind == Kind.Undefined {
+      tag = 247
+    } else if token.kind == Kind.Float {
+      tag = 251
+    } else {
+      major := #cast(u8, token.kind)
+      if token.kind == Kind.Simple {
+        major = 7
+      }
+      tag = major << 5
+      if token.indefinite {
+        tag |= 31
+      }
+      else {
+        value := argument(token)
+        count := extra(value)
+        if count == 0 {
+          tag |= #cast(u8, value)
+        }
+        else if count == 1 {
+          tag |= 24
+        }
+        else if count == 2 {
+          tag |= 25
+        }
+        else if count == 4 {
+          tag |= 26
+        }
+        else {
+          tag |= 27
+        }
+      }
+    }
+    output[at] = tag
+    at += 1
+    if token.kind == Kind.Float {
+      put(output, &at, #bitcast(u64, token.real), 8)
+    } else if size(token) > 1 {
+      put(output, &at, argument(token), size(token) - 1)
+    }
+    if !token.indefinite && (token.kind == Kind.Bytes || token.kind == Kind.Text) {
+      for byte in token.bytes {
+        output[at] = byte
+        at += 1
+      }
+    }
+  }
+  return EncodeResult{ value: output, ok: true }
+}

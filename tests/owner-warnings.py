@@ -37,6 +37,9 @@ fn main() {
         assert rejected.returncode == 2, (removed, rejected.stderr)
     (project / 'other.dyn').write_text('use "std/mem" memory\n')
     aliases = subprocess.run([DYN, 'vet', str(project), '--no-cache'], capture_output=True, text=True, timeout=30)
+    assert 'imported more than once' not in aliases.stderr, aliases.stderr
+    (project / 'other.dyn').write_text('use \"std/mem\" memory\nuse \"std/mem\" another\n')
+    aliases = subprocess.run([DYN, 'vet', str(project), '--no-cache'], capture_output=True, text=True, timeout=30)
     assert aliases.returncode == 1 and 'imported more than once' in aliases.stderr, aliases.stderr
     assert 'imported more than once' not in subprocess.run(command, capture_output=True, text=True, timeout=30).stderr
     (project / 'other.dyn').unlink()

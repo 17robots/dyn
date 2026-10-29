@@ -10,7 +10,7 @@ import sys
 import tempfile
 
 if sys.platform != 'linux':
-    print('SKIP dynlib results: std/dynlib is Linux only', flush=True)
+    print('SKIP dynlib results: this loader oracle is Linux only; see platform-parity.py', flush=True)
     raise SystemExit(0)
 
 ROOT = Path(__file__).resolve().parents[1]

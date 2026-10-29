@@ -121,7 +121,24 @@ fn commitment_failure() {
  retry := mem.arena_try_push(arena, 1, 1)
  require(retry.ok && retry.code == 0)
 }
+fn payload_commitment_failure() {
+ arena := mem.arena_create_bounded(512, 512)
+ defer mem.arena_release(arena)
+ bytes := mem.arena_push(arena, 8, 1)
+ bytes.* = 91
+ arena.current.committed = mem.ArenaHeader
+ mark := mem.arena_mark(arena)
+ mem.inject_commit_failure()
+ failed := mem.arena_try_push_uninit(arena, 8, 1)
+ require(!failed.ok && failed.error == mem.ErrorKind.System && failed.code == -12)
+ require(mem.arena_mark(arena) == mark && bytes.* == 91)
+ require(!mem.arena_try_extend(arena, bytes, 8, 8))
+ require(mem.arena_mark(arena) == mark && bytes.* == 91)
+ mem.clear_failure()
+ require(mem.arena_try_push_uninit(arena, 8, 1).ok)
+}
 fn main() {
+ payload_commitment_failure()
  native_failure(-123)
  native_failure(0)
  local_failures()

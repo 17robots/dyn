@@ -1,0 +1,587 @@
+// Word boundaries (UAX #29) and line break opportunities (UAX #14), Unicode
+// 17 default rules. Both take the whole text and return byte offsets in the
+// caller's arena; working storage is proportional to the code point count and
+// is released before returning.
+
+fn segment_value(codepoint: u32) u32 {
+  low: usize = 0
+  high: usize = #len(Segments) / 3
+  for low < high {
+    mid := low + (high - low) / 2
+    at := mid * 3
+    if codepoint < Segments[at] {
+      high = mid
+    }
+    else if codepoint > Segments[at + 1] {
+      low = mid + 1
+    }
+    else {
+      return Segments[at + 2]
+    }
+  }
+  return 0
+}
+
+// Word classes, in generator order.
+const WOther: u8 = 0
+const WCR: u8 = 1
+const WLF: u8 = 2
+const WNewline: u8 = 3
+const WExtend: u8 = 4
+const WZWJ: u8 = 5
+const WRegional: u8 = 6
+const WFormat: u8 = 7
+const WKatakana: u8 = 8
+const WHebrew: u8 = 9
+const WLetter: u8 = 10
+const WSingleQuote: u8 = 11
+const WDoubleQuote: u8 = 12
+const WMidNumLet: u8 = 13
+const WMidLetter: u8 = 14
+const WMidNum: u8 = 15
+const WNumeric: u8 = 16
+const WExtendNumLet: u8 = 17
+const WSpace: u8 = 18
+
+// Line classes, in generator order.
+const LAL: u8 = 0
+const LBK: u8 = 1
+const LCR: u8 = 2
+const LLF: u8 = 3
+const LNL: u8 = 4
+const LSP: u8 = 5
+const LZW: u8 = 6
+const LZWJ: u8 = 7
+const LCM: u8 = 8
+const LWJ: u8 = 9
+const LGL: u8 = 10
+const LBA: u8 = 11
+const LHY: u8 = 12
+const LHH: u8 = 13
+const LBB: u8 = 14
+const LB2: u8 = 15
+const LCB: u8 = 16
+const LCL: u8 = 17
+const LCP: u8 = 18
+const LEX: u8 = 19
+const LIN: u8 = 20
+const LNS: u8 = 21
+const LOP: u8 = 22
+const LQU: u8 = 23
+const LIS: u8 = 24
+const LNU: u8 = 25
+const LPO: u8 = 26
+const LPR: u8 = 27
+const LSY: u8 = 28
+const LHL: u8 = 29
+const LID: u8 = 30
+const LEB: u8 = 31
+const LEM: u8 = 32
+const LH2: u8 = 33
+const LH3: u8 = 34
+const LJL: u8 = 35
+const LJV: u8 = 36
+const LJT: u8 = 37
+const LRI: u8 = 38
+const LAK: u8 = 39
+const LAP: u8 = 40
+const LAS: u8 = 41
+const LVF: u8 = 42
+const LVI: u8 = 43
+
+const FlagEastAsian: u32 = 2048
+const FlagPictographic: u32 = 4096
+const FlagInitial: u32 = 8192
+const FlagFinal: u32 = 16384
+const FlagUnassigned: u32 = 32768
+const FlagDottedCircle: u32 = 65536
+
+pub struct Breaks { value: []usize, kind: errors.Kind, offset: usize, ok: bool }
+
+pub struct LineBreak { offset: usize, mandatory: bool }
+pub struct LineBreaks { value: []LineBreak, kind: errors.Kind, offset: usize, ok: bool }
+
+// One unit after attaching marks: base class and flags, first and last code
+// point indexes, and its starting byte.
+struct Unit { class: u8, flags: u32, first: usize, last: usize, start: usize }
+
+fn first_invalid(text: []const u8) usize {
+  offset: usize = 0
+  for offset < #len(text) {
+    decoded := utf8.decode(text, offset)
+    if !decoded.ok {
+      return offset
+    }
+    offset += decoded.width
+  }
+  return offset
+}
+
+// Decodes text into per code point values and starting bytes.
+fn decode_values(text: []const u8, values: []u32, starts: []usize) {
+  offset: usize = 0
+  index: usize = 0
+  for offset < #len(text) {
+    decoded := utf8.decode(text, offset)
+    value := segment_value(decoded.codepoint)
+    if decoded.codepoint == 9676 {
+      value |= FlagDottedCircle
+    }
+    values[index] = value
+    starts[index] = offset
+    offset += decoded.width
+    index += 1
+  }
+}
+
+fn word_class(value: u32) u8 {
+  return #cast(u8, value & 31)
+}
+
+fn line_class(value: u32) u8 {
+  return #cast(u8, (value >> 5) & 63)
+}
+
+fn letter(class: u8) bool {
+  return class == WLetter || class == WHebrew
+}
+
+fn mid_letter_q(class: u8) bool {
+  return class == WMidLetter || class == WMidNumLet || class == WSingleQuote
+}
+
+fn mid_num_q(class: u8) bool {
+  return class == WMidNum || class == WMidNumLet || class == WSingleQuote
+}
+
+// Word boundaries as byte offsets, excluding 0 and including #len(text) when
+// text is not empty. Invalid UTF-8 fails with its offset and allocates nothing.
+pub fn word_breaks(arena: *mem.Arena, text: []const u8) Breaks {
+  count := utf8.codepoint_count(text)
+  if !count.ok {
+    return Breaks{ kind: errors.Kind.InvalidInput, offset: first_invalid(text) }
+  }
+  n := count.value
+  if n == 0 {
+    return Breaks{ ok: true }
+  }
+  result := mem.push_array(usize, arena, n)
+  mark := mem.arena_mark(arena)
+  values := mem.push_array(u32, arena, n)
+  starts := mem.push_array(usize, arena, n)
+  units := mem.push_array(Unit, arena, n)
+  decode_values(text, values, starts)
+  // WB4: Extend, Format and ZWJ attach to the preceding unit, except after
+  // CR, LF and Newline. Boundaries inside a unit are decided by WB3 and WB4.
+  unit_count: usize = 0
+  for i in 0..n {
+    class := word_class(values[i])
+    attach := false
+    if unit_count != 0 && (class == WExtend || class == WFormat || class == WZWJ) {
+      base := units[unit_count - 1].class
+      attach = base != WCR && base != WLF && base != WNewline
+    }
+    if attach {
+      units[unit_count - 1].last = i
+    }
+    else {
+      units[unit_count] = Unit{ class: class, flags: values[i], first: i, last: i, start: starts[i] }
+      unit_count += 1
+    }
+  }
+  used: usize = 0
+  for u in 1..unit_count {
+    a := units[u - 1].class
+    b := units[u].class
+    last_raw := word_class(values[units[u - 1].last])
+    joined := false
+    if a == WCR && b == WLF {
+      joined = true
+    }
+    else if a == WCR || a == WLF || a == WNewline || b == WCR || b == WLF || b == WNewline {
+      joined = false
+    }
+    else if last_raw == WZWJ && values[units[u].first] & FlagPictographic != 0 {
+      joined = true
+    }
+    else if last_raw == WSpace && units[u - 1].first == units[u - 1].last && b == WSpace {
+      joined = true
+    }
+    else if letter(a) && letter(b) {
+      joined = true
+    }
+    else if letter(a) && mid_letter_q(b) && u + 1 < unit_count && letter(units[u + 1].class) {
+      joined = true
+    }
+    else if mid_letter_q(a) && letter(b) && u >= 2 && letter(units[u - 2].class) {
+      joined = true
+    }
+    else if a == WHebrew && b == WSingleQuote {
+      joined = true
+    }
+    else if a == WHebrew && b == WDoubleQuote && u + 1 < unit_count && units[u + 1].class == WHebrew {
+      joined = true
+    }
+    else if a == WDoubleQuote && b == WHebrew && u >= 2 && units[u - 2].class == WHebrew {
+      joined = true
+    }
+    else if a == WNumeric && b == WNumeric {
+      joined = true
+    }
+    else if letter(a) && b == WNumeric {
+      joined = true
+    }
+    else if a == WNumeric && letter(b) {
+      joined = true
+    }
+    else if mid_num_q(a) && b == WNumeric && u >= 2 && units[u - 2].class == WNumeric {
+      joined = true
+    }
+    else if a == WNumeric && mid_num_q(b) && u + 1 < unit_count && units[u + 1].class == WNumeric {
+      joined = true
+    }
+    else if a == WKatakana && b == WKatakana {
+      joined = true
+    }
+    else if (letter(a) || a == WNumeric || a == WKatakana || a == WExtendNumLet) && b == WExtendNumLet {
+      joined = true
+    }
+    else if a == WExtendNumLet && (letter(b) || b == WNumeric || b == WKatakana) {
+      joined = true
+    }
+    else if a == WRegional && b == WRegional {
+      // WB15 and WB16: pair regional indicators from the start of the run.
+      count_back: usize = 0
+      back := u
+      for back > 0 && units[back - 1].class == WRegional {
+        count_back += 1
+        back -= 1
+      }
+      joined = count_back % 2 == 1
+    }
+    if !joined {
+      result[used] = units[u].start
+      used += 1
+    }
+  }
+  result[used] = #len(text)
+  used += 1
+  mem.arena_rewind(arena, mark - (n - used) * #sizeof(usize))
+  return Breaks{ value: result[..used], ok: true }
+}
+
+fn unit_class(units: []Unit, index: usize) u8 {
+  return units[index].class
+}
+
+fn alphabetic(class: u8) bool {
+  return class == LAL || class == LHL
+}
+
+fn ideographic(class: u8) bool {
+  return class == LID || class == LEB || class == LEM
+}
+
+fn korean(class: u8) bool {
+  return class == LJL || class == LJV || class == LJT || class == LH2 || class == LH3
+}
+
+fn aksara(unit: *const Unit) bool {
+  return unit.class == LAK || unit.class == LAS || unit.flags & FlagDottedCircle != 0
+}
+
+fn hard(class: u8) bool {
+  return class == LBK || class == LCR || class == LLF || class == LNL
+}
+
+// Skips back over SP units ending at index; returns the first non-SP index,
+// or n when only spaces precede.
+fn before_spaces(units: []Unit, index: usize) usize {
+  at := index
+  for true {
+    if units[at].class != LSP {
+      return at
+    }
+    if at == 0 {
+      return #len(units)
+    }
+    at -= 1
+  }
+  return #len(units)
+}
+
+// NU (SY | IS)* ending at index.
+fn numeric_run(units: []Unit, index: usize) bool {
+  at := index
+  for true {
+    class := units[at].class
+    if class == LNU {
+      return true
+    }
+    if class != LSY && class != LIS || at == 0 {
+      return false
+    }
+    at -= 1
+  }
+  return false
+}
+
+// Whether a line may break between units u - 1 and u (UAX #14 rules 4-31).
+// Returns 0 for no break, 1 for an opportunity and 2 for a mandatory break.
+fn line_decision(units: []Unit, values: []u32, u: usize) u8 {
+  n := #len(units)
+  left := &units[u - 1]
+  right := &units[u]
+  a := left.class
+  b := right.class
+  if a == LBK {
+    return 2
+  }
+  if a == LCR && b == LLF {
+    return 0
+  }
+  if a == LCR || a == LLF || a == LNL {
+    return 2
+  }
+  if hard(b) || b == LSP || b == LZW {
+    return 0
+  }
+  zero_width := before_spaces(units, u - 1)
+  if zero_width < n && units[zero_width].class == LZW {
+    return 1
+  }
+  if line_class(values[left.last]) == LZWJ {
+    return 0
+  }
+  if a == LWJ || b == LWJ {
+    return 0
+  }
+  if a == LGL {
+    return 0
+  }
+  if b == LGL && a != LSP && a != LBA && a != LHY && a != LHH {
+    return 0
+  }
+  if b == LEX || b == LCL || b == LCP || b == LSY {
+    return 0
+  }
+  opening := before_spaces(units, u - 1)
+  if opening < n && units[opening].class == LOP {
+    return 0
+  }
+  // LB15a: an initial quote after a break context, then spaces.
+  quote := before_spaces(units, u - 1)
+  if quote < n && units[quote].class == LQU && units[quote].flags & FlagInitial != 0 {
+    if quote == 0 {
+      return 0
+    }
+    previous := units[quote - 1].class
+    if hard(previous) || previous == LOP || previous == LQU || previous == LGL || previous == LSP || previous == LZW {
+      return 0
+    }
+  }
+  // LB15b: a final quote before a closing context or the end.
+  if b == LQU && right.flags & FlagFinal != 0 {
+    if u + 1 == n {
+      return 0
+    }
+    next := units[u + 1].class
+    if next == LSP || next == LGL || next == LWJ || next == LCL || next == LQU || next == LCP || next == LEX || next == LIS || next == LSY || hard(next) || next == LZW {
+      return 0
+    }
+  }
+  if a == LSP && b == LIS && u + 1 < n && units[u + 1].class == LNU {
+    return 1
+  }
+  if b == LIS {
+    return 0
+  }
+  closing := before_spaces(units, u - 1)
+  if b == LNS && closing < n && (units[closing].class == LCL || units[closing].class == LCP) {
+    return 0
+  }
+  if b == LB2 && closing < n && units[closing].class == LB2 {
+    return 0
+  }
+  if a == LSP {
+    return 1
+  }
+  if b == LQU && right.flags & FlagInitial == 0 {
+    return 0
+  }
+  if a == LQU && left.flags & FlagFinal == 0 {
+    return 0
+  }
+  if b == LQU && left.flags & FlagEastAsian == 0 {
+    return 0
+  }
+  if b == LQU && (u + 1 == n || units[u + 1].flags & FlagEastAsian == 0) {
+    return 0
+  }
+  if a == LQU && right.flags & FlagEastAsian == 0 {
+    return 0
+  }
+  if a == LQU && (u == 1 || units[u - 2].flags & FlagEastAsian == 0) {
+    return 0
+  }
+  if b == LCB || a == LCB {
+    return 1
+  }
+  if (a == LHY || a == LHH) && alphabetic(b) {
+    if u == 1 {
+      return 0
+    }
+    previous := units[u - 2].class
+    if hard(previous) || previous == LSP || previous == LZW || previous == LCB || previous == LGL {
+      return 0
+    }
+  }
+  if b == LBA || b == LHH || b == LHY || b == LNS || a == LBB {
+    return 0
+  }
+  if (a == LHY || a == LHH) && b != LHL && u >= 2 && units[u - 2].class == LHL {
+    return 0
+  }
+  if a == LSY && b == LHL {
+    return 0
+  }
+  if b == LIN {
+    return 0
+  }
+  if alphabetic(a) && b == LNU || a == LNU && alphabetic(b) {
+    return 0
+  }
+  if a == LPR && ideographic(b) || ideographic(a) && b == LPO {
+    return 0
+  }
+  if (a == LPR || a == LPO) && alphabetic(b) || alphabetic(a) && (b == LPR || b == LPO) {
+    return 0
+  }
+  if (b == LPO || b == LPR) && (a == LCL || a == LCP) && u >= 2 && numeric_run(units, u - 2) {
+    return 0
+  }
+  if (b == LPO || b == LPR) && numeric_run(units, u - 1) {
+    return 0
+  }
+  if (a == LPO || a == LPR) && b == LOP && u + 1 < n {
+    next := units[u + 1].class
+    if next == LNU || next == LIS && u + 2 < n && units[u + 2].class == LNU {
+      return 0
+    }
+  }
+  if (a == LPO || a == LPR || a == LHY || a == LIS) && b == LNU {
+    return 0
+  }
+  if b == LNU && numeric_run(units, u - 1) {
+    return 0
+  }
+  if a == LJL && (b == LJL || b == LJV || b == LH2 || b == LH3) {
+    return 0
+  }
+  if (a == LJV || a == LH2) && (b == LJV || b == LJT) {
+    return 0
+  }
+  if (a == LJT || a == LH3) && b == LJT {
+    return 0
+  }
+  if korean(a) && b == LPO || a == LPR && korean(b) {
+    return 0
+  }
+  if alphabetic(a) && alphabetic(b) {
+    return 0
+  }
+  if a == LAP && aksara(right) {
+    return 0
+  }
+  if aksara(left) && (b == LVF || b == LVI) {
+    return 0
+  }
+  if a == LVI && u >= 2 && aksara(&units[u - 2]) && (b == LAK || right.flags & FlagDottedCircle != 0) {
+    return 0
+  }
+  if aksara(left) && aksara(right) && u + 1 < n && units[u + 1].class == LVF {
+    return 0
+  }
+  if a == LIS && alphabetic(b) {
+    return 0
+  }
+  if (alphabetic(a) || a == LNU) && b == LOP && right.flags & FlagEastAsian == 0 {
+    return 0
+  }
+  if a == LCP && left.flags & FlagEastAsian == 0 && (alphabetic(b) || b == LNU) {
+    return 0
+  }
+  if a == LRI && b == LRI {
+    count_back: usize = 0
+    back := u
+    for back > 0 && units[back - 1].class == LRI {
+      count_back += 1
+      back -= 1
+    }
+    if count_back % 2 == 1 {
+      return 0
+    }
+    return 1
+  }
+  if b == LEM && (a == LEB || left.flags & FlagPictographic != 0 && left.flags & FlagUnassigned != 0) {
+    return 0
+  }
+  return 1
+}
+
+// Line break opportunities as byte offsets where a line may start, excluding
+// 0. The last entry is #len(text) and is always mandatory. Mandatory breaks
+// follow hard line breaks (BK, CR, LF, NL).
+pub fn line_breaks(arena: *mem.Arena, text: []const u8) LineBreaks {
+  count := utf8.codepoint_count(text)
+  if !count.ok {
+    return LineBreaks{ kind: errors.Kind.InvalidInput, offset: first_invalid(text) }
+  }
+  n := count.value
+  if n == 0 {
+    return LineBreaks{ ok: true }
+  }
+  result := mem.push_array(LineBreak, arena, n)
+  mark := mem.arena_mark(arena)
+  values := mem.push_array(u32, arena, n)
+  starts := mem.push_array(usize, arena, n)
+  units := mem.push_array(Unit, arena, n)
+  decode_values(text, values, starts)
+  // LB9 attaches CM and ZWJ to the preceding unit unless it is BK, CR, LF, NL,
+  // SP or ZW; LB10 treats a mark left alone as AL.
+  unit_count: usize = 0
+  for i in 0..n {
+    class := line_class(values[i])
+    if class == LCM || class == LZWJ {
+      if unit_count != 0 {
+        base := units[unit_count - 1].class
+        if !hard(base) && base != LSP && base != LZW {
+          units[unit_count - 1].last = i
+          continue
+        }
+      }
+      values[i] = values[i] & ~(#cast(u32, 63) << 5)
+      units[unit_count] = Unit{ class: LAL, flags: values[i], first: i, last: i, start: starts[i] }
+      if class == LZWJ {
+        // A lone ZWJ still forbids a break after it (LB8a).
+        values[i] |= #cast(u32, LZWJ) << 5
+      }
+      unit_count += 1
+      continue
+    }
+    units[unit_count] = Unit{ class: class, flags: values[i], first: i, last: i, start: starts[i] }
+    unit_count += 1
+  }
+  used: usize = 0
+  for u in 1..unit_count {
+    decision := line_decision(units[..unit_count], values, u)
+    if decision != 0 {
+      result[used] = LineBreak{ offset: units[u].start, mandatory: decision == 2 }
+      used += 1
+    }
+  }
+  result[used] = LineBreak{ offset: #len(text), mandatory: true }
+  used += 1
+  mem.arena_rewind(arena, mark - (n - used) * #sizeof(LineBreak))
+  return LineBreaks{ value: result[..used], ok: true }
+}

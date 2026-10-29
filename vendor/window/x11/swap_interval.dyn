@@ -1,0 +1,118 @@
+#target(kernel: linux)
+// Khronos GLX EXT/MESA/SGI swap-control contracts:
+// https://registry.khronos.org/OpenGL/extensions/EXT/EXT_swap_control.txt
+// https://registry.khronos.org/OpenGL/extensions/MESA/GLX_MESA_swap_control.txt
+// https://registry.khronos.org/OpenGL/extensions/SGI/GLX_SGI_swap_control.txt
+extern fn swap_extensions "glXQueryExtensionsString"(display: rawptr, screen: i32) *const u8
+
+fn swap_extension(list: []const u8, wanted: []const u8) bool {
+  at:usize=0
+  for at<#len(list) {
+    for at<#len(list) && list[at]==32 {
+      at+=1
+    }
+    first:=at
+    for at<#len(list) && list[at]!=32 {
+      at+=1
+    }
+    if at-first==#len(wanted) {
+      equal:=true
+      for i in 0..#len(wanted) {
+        if list[first+i]!=wanted[i] {
+          equal=false
+          break
+        }
+      }
+      if equal {
+        return true
+      }
+    }
+  }
+  return false
+}
+// GUI-thread swap pacing for the owning drawable. Changes current GL context
+// to this window, and leaves it current. Serialize against all Xlib calls that
+// install process-global error handlers. Missing extensions return Unsupported;
+// a non-nil GLX procedure address alone does not establish driver support.
+// Only immediate (0) and one-refresh (1) intervals are part of this contract.
+pub fn set_swap_interval(window:*Window, interval:i32) Result {
+  if window==nil || window.display==nil || window.context==nil || window.handle==0 {
+    return Result{kind:errors.Kind.InvalidState}
+  }
+  if interval!=0 && interval!=1 {
+    return Result{kind:errors.Kind.InvalidInput}
+  }
+  saved_display:=context_error_display
+  saved_seen:=context_error_seen
+  saved_previous:=context_previous_handler
+  context_error_display=window.display
+  context_error_seen=false
+  context_previous_handler=set_error_handler(context_error)
+  defer {
+    _=set_error_handler(context_previous_handler)
+    context_error_display=saved_display
+    context_error_seen=saved_seen
+    context_previous_handler=saved_previous
+  }
+  // Drain old requests before attributing errors to the interval operation.
+  _=sync(window.display, 0)
+  context_error_seen=false
+  if !make_current(window).ok {
+    _=sync(window.display, 0)
+    return Result{kind:errors.Kind.System}
+  }
+  pointer:=swap_extensions(window.display, screen(window.display))
+  _=sync(window.display, 0)
+  if context_error_seen {
+    return Result{kind:errors.Kind.System}
+  }
+  if pointer==nil {
+    return Result{kind:errors.Kind.Unsupported}
+  }
+  length:=c.string_length(pointer, 65536)
+  if length==65536 {
+    return Result{kind:errors.Kind.Capacity}
+  }
+  extensions:=pointer[..length]
+  if swap_extension(extensions, "GLX_EXT_swap_control") {
+    name:="glXSwapIntervalEXT\x00"
+    apply:=#cast(fn(rawptr, usize, i32), gl_proc(&name[0]))
+    if apply!=nil {
+      apply(window.display, window.handle, interval)
+      _=sync(window.display, 0)
+      if context_error_seen {
+        return Result{kind:errors.Kind.System}
+      }
+      return Result{ok:true}
+    }
+  }
+  if swap_extension(extensions, "GLX_MESA_swap_control") {
+    name:="glXSwapIntervalMESA\x00"
+    apply:=#cast(fn(u32)i32, gl_proc(&name[0]))
+    if apply!=nil {
+      status:=apply(#cast(u32, interval))
+      _=sync(window.display, 0)
+      if status!=0 || context_error_seen {
+        return Result{kind:errors.Kind.System}
+      }
+      return Result{ok:true}
+    }
+  }
+  if interval==1 && swap_extension(extensions, "GLX_SGI_swap_control") {
+    name:="glXSwapIntervalSGI\x00"
+    apply:=#cast(fn(i32)i32, gl_proc(&name[0]))
+    if apply!=nil {
+      status:=apply(interval)
+      _=sync(window.display, 0)
+      if status!=0 || context_error_seen {
+        return Result{kind:errors.Kind.System}
+      }
+      return Result{ok:true}
+    }
+  }
+  _=sync(window.display, 0)
+  if context_error_seen {
+    return Result{kind:errors.Kind.System}
+  }
+  return Result{kind:errors.Kind.Unsupported}
+}

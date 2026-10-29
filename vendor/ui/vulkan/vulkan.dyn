@@ -1,0 +1,246 @@
+use "std/mem" mem
+use "std/ui" ui
+use "std/ui/software" software
+use "std/unicode/utf8" utf8
+use "std/errors" errors
+#link("dyn_ui_vulkan")
+// Headless Vulkan compute renderer. Ordered integer compositing matches the
+// software renderer, including straight alpha over transparent destinations.
+// No window/swapchain is owned. Render writes caller RGBA bytes after GPU wait.
+// Native device/pipeline/buffer allocations belong to Renderer; do not copy it.
+pub struct Limits { draws: usize = 65536, coverage_bytes: usize = 67108864 }
+pub struct Renderer { handle: rawptr, limits: Limits }
+pub struct Result { kind: errors.Kind, ok: bool }
+extern fn native_open "dyn_ui_vk_open"() rawptr
+extern fn native_close "dyn_ui_vk_close"(handle: rawptr)
+extern fn native_render "dyn_ui_vk_render"(handle: rawptr, words: *const u32, count: u32, rgba: *u8, width: u32, height: u32) i32
+struct Draw { bounds: ui.Rect, tint: ui.Color, coverage: []u8, next: *Draw }
+struct Build { arena: *mem.Arena, limits: Limits, count: usize, coverage_bytes: usize, first: *Draw, last: *Draw, kind: errors.Kind }
+pub fn open(renderer: *Renderer, limits: Limits) Result {
+  if renderer.handle != nil {
+    return Result{kind:errors.Kind.InvalidState}
+  }
+  handle := native_open()
+  if handle == nil {
+    return Result{kind:errors.Kind.System}
+  }
+  renderer.* = Renderer{handle:handle, limits:limits}
+  return Result{ok:true}
+}
+pub fn close(renderer: *Renderer) {
+  if renderer.handle != nil {
+    native_close(renderer.handle)
+    renderer.* = Renderer{}
+  }
+}
+fn append(build: *Build, bounds: ui.Rect, tint: ui.Color, glyph: *const software.Glyph, source_x, source_y: usize) {
+  if bounds.width <= 0 || bounds.height <= 0 || tint.a == 0 {
+    return
+  }
+  if build.count >= build.limits.draws {
+    build.kind = errors.Kind.Capacity
+    return
+  }
+  pixels: []u8
+  if glyph != nil {
+    width := #cast(usize, bounds.width)
+    height := #cast(usize, bounds.height)
+    if width > (build.limits.coverage_bytes-build.coverage_bytes)/height {
+      build.kind = errors.Kind.Capacity
+      return
+    }
+    count := width*height
+    pixels = mem.push_array(u8, build.arena, count)
+    for row in 0..height {
+      for x in 0..width {
+        pixels[row*width+x] = glyph.pixels[(source_y+row)*glyph.stride+source_x+x]
+      }
+    }
+    build.coverage_bytes += count
+  }
+  draw := mem.push(Draw, build.arena)
+  draw.* = Draw{bounds:bounds, tint:tint, coverage:pixels}
+  if build.last == nil {
+    build.first = draw
+  } else {
+    build.last.next = draw
+  }
+  build.last = draw
+  build.count += 1
+}
+fn glyph(build: *Build, clip: ui.Rect, tint: ui.Color, font: software.Font, codepoint: u32, x, y: i64) i64 {
+  if font.glyph == nil || font.line_height <= 0 {
+    build.kind = errors.Kind.InvalidInput
+    return 0
+  }
+  if x < #cast(i64, clip.x)-4294967296 || x > #cast(i64, clip.x)+#cast(i64, clip.width)+4294967296 || y < #cast(i64, clip.y)-4294967296 || y > #cast(i64, clip.y)+#cast(i64, clip.height)+4294967296 {
+    return 0
+  }
+  bitmap := font.glyph(font.data, codepoint)
+  if bitmap.width < 0 || bitmap.height < 0 || bitmap.advance < 0 {
+    build.kind = errors.Kind.InvalidInput
+    return 0
+  }
+  if bitmap.width == 0 || bitmap.height == 0 {
+    return #cast(i64, bitmap.advance)
+  }
+  if bitmap.stride < #cast(usize, bitmap.width) || #cast(usize, bitmap.width) > #len(bitmap.pixels) {
+    build.kind = errors.Kind.InvalidInput
+    return 0
+  }
+  if #cast(usize, bitmap.height-1) > (#len(bitmap.pixels)-#cast(usize, bitmap.width))/bitmap.stride {
+    build.kind = errors.Kind.InvalidInput
+    return 0
+  }
+  left := x+#cast(i64, bitmap.x_offset)
+  top := y+#cast(i64, bitmap.y_offset)
+  gx := left
+  gy := top
+  right := left+#cast(i64, bitmap.width)
+  bottom := top+#cast(i64, bitmap.height)
+  if gx < #cast(i64, clip.x) {
+    gx = #cast(i64, clip.x)
+  }
+  if gy < #cast(i64, clip.y) {
+    gy = #cast(i64, clip.y)
+  }
+  if right > #cast(i64, clip.x)+#cast(i64, clip.width) {
+    right = #cast(i64, clip.x)+#cast(i64, clip.width)
+  }
+  if bottom > #cast(i64, clip.y)+#cast(i64, clip.height) {
+    bottom = #cast(i64, clip.y)+#cast(i64, clip.height)
+  }
+  if right > gx && bottom > gy {
+    append(build, ui.Rect{x:#cast(i32, gx), y:#cast(i32, gy), width:#cast(i32, right-gx), height:#cast(i32, bottom-gy)}, tint, &bitmap, #cast(usize, gx-left), #cast(usize, gy-top))
+  }
+  return #cast(i64, bitmap.advance)
+}
+// Scratch holds copied glyph coverage and serialized commands. It may be reset
+// after return; do not use it to retain font-cache entries during callbacks.
+// Rendering is synchronous and externally serialized for each owning Renderer.
+pub fn render(renderer: *Renderer, scratch: *mem.Arena, surface: *software.Surface, commands: *const ui.Command, font: software.Font) Result {
+  if renderer.handle == nil {
+    return Result{kind:errors.Kind.InvalidState}
+  }
+  if surface.width < 0 || surface.height < 0 {
+    return Result{kind:errors.Kind.InvalidInput}
+  }
+  if surface.width == 0 || surface.height == 0 {
+    return Result{ok:true}
+  }
+  width := #cast(usize, surface.width)
+  height := #cast(usize, surface.height)
+  if width > #len(surface.pixels)/4 || surface.stride < width*4 || height > #len(surface.pixels)/surface.stride {
+    return Result{kind:errors.Kind.InvalidInput}
+  }
+  build := Build{arena:scratch, limits:renderer.limits}
+  viewport := ui.Rect{width:surface.width, height:surface.height}
+  command := commands
+  for command != nil && command.kind != ui.Kind.None {
+    clip := ui.intersect(viewport, ui.intersect(command.clip, command.bounds))
+    if clip.width > 0 && clip.height > 0 && command.color.a != 0 {
+      if command.kind == ui.Kind.Rectangle {
+        append(&build, clip, command.color, nil, 0, 0)
+      } else if command.kind == ui.Kind.Glyph {
+        _ = glyph(&build, clip, command.color, font, command.codepoint, command.glyph_x, command.glyph_y)
+      } else if command.kind == ui.Kind.Text {
+        if font.glyph == nil || font.line_height <= 0 {
+          return Result{kind:errors.Kind.InvalidInput}
+        }
+        x := #cast(i64, command.bounds.x)
+        y := #cast(i64, command.bounds.y)
+        offset: usize = 0
+        for offset < #len(command.text) {
+          decoded := utf8.decode(command.text, offset)
+          offset += decoded.width
+          codepoint := decoded.codepoint
+          if !decoded.ok {
+            codepoint = 65533
+          }
+          if codepoint == 10 {
+            x = #cast(i64, command.bounds.x)
+            y += #cast(i64, font.line_height)
+            if y >= #cast(i64, command.bounds.y)+#cast(i64, command.bounds.height)+2147483648 {
+              break
+            }
+          } else if codepoint != 13 && x < #cast(i64, command.bounds.x)+#cast(i64, command.bounds.width)+2147483648 {
+            x += glyph(&build, clip, command.color, font, codepoint, x, y)
+          }
+          if build.kind != errors.Kind.None {
+            return Result{kind:build.kind}
+          }
+        }
+      } else {
+        return Result{kind:errors.Kind.InvalidInput}
+      }
+    }
+    if build.kind != errors.Kind.None {
+      return Result{kind:build.kind}
+    }
+    command = command.next
+  }
+  if build.count == 0 {
+    return Result{ok:true}
+  }
+  max_words := ~#cast(usize, 0)/4
+  if max_words > 0xffffffff {
+    max_words = 0xffffffff
+  }
+  if build.count > (max_words-8)/8 {
+    return Result{kind:errors.Kind.Overflow}
+  }
+  draw_words := 8+build.count*8
+  coverage_words := build.coverage_bytes/4
+  if build.coverage_bytes%4 != 0 {
+    coverage_words += 1
+  }
+  if coverage_words > max_words-draw_words {
+    return Result{kind:errors.Kind.Overflow}
+  }
+  words := mem.push_array(u32, scratch, draw_words+coverage_words)
+  words[2] = #cast(u32, build.count)
+  words[3] = #cast(u32, draw_words)
+  draw := build.first
+  index: usize = 8
+  coverage_at: usize = 0
+  for draw != nil {
+    words[index] = #cast(u32, draw.bounds.x)
+    words[index+1] = #cast(u32, draw.bounds.y)
+    words[index+2] = #cast(u32, draw.bounds.x+draw.bounds.width)
+    words[index+3] = #cast(u32, draw.bounds.y+draw.bounds.height)
+    words[index+4] = #cast(u32, draw.tint.r)|(#cast(u32, draw.tint.g)<<8)|(#cast(u32, draw.tint.b)<<16)|(#cast(u32, draw.tint.a)<<24)
+    if #len(draw.coverage) != 0 {
+      words[index+5] = 1
+      if coverage_at > 0xffffffff || #len(draw.coverage) > 0xffffffff-coverage_at {
+        return Result{kind:errors.Kind.Overflow}
+      }
+      words[index+6] = #cast(u32, coverage_at)
+      for byte in draw.coverage {
+        words[draw_words+coverage_at/4] |= #cast(u32, byte)<<#cast(u32, (coverage_at%4)*8)
+        coverage_at += 1
+      }
+    }
+    index += 8
+    draw = draw.next
+  }
+  output := surface.pixels
+  if surface.stride != width*4 {
+    output = mem.push_array(u8, scratch, width*height*4)
+    for row in 0..height {
+      _ = mem.copy(output[row*width*4..(row+1)*width*4], surface.pixels[row*surface.stride..row*surface.stride+width*4])
+    }
+  }
+  status := native_render(renderer.handle, &words[0], #cast(u32, #len(words)), &output[0], #cast(u32, surface.width), #cast(u32, surface.height))
+  if status == 2 {
+    return Result{kind:errors.Kind.Capacity}
+  }
+  if status != 1 {
+    return Result{kind:errors.Kind.System}
+  }
+  if surface.stride != width*4 {
+    for row in 0..height {
+      _ = mem.copy(surface.pixels[row*surface.stride..row*surface.stride+width*4], output[row*width*4..(row+1)*width*4])
+    }
+  }
+  return Result{ok:true}
+}

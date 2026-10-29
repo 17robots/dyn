@@ -1,0 +1,582 @@
+use "std/mem" mem
+use "std/errors" errors
+use "std/math" math
+// ITU-T T.81 baseline sequential Huffman JPEG, 8-bit gray/RGB/YCbCr.
+// Interleaved and separate scans, restart markers, 1..4 sampling factors.
+// No progressive/arithmetic/lossless, CMYK, DNL or color-profile processing.
+// Chroma uses nearest-neighbor upsampling. IDCT is a portable f64 reference.
+pub struct Info { width: u32, height: u32, channels: u8 = 4 }
+pub struct Image { info: Info, pixels: []u8 }
+pub struct Result { value: Image, kind: errors.Kind, error: isize, offset: usize, ok: bool }
+struct Huffman { counts: [16]u16, first: [16]u32, offsets: [16]u16, values: [256]u8, valid: bool }
+struct Component { id: u8, h: u8, v: u8, quant: u8, dc_table: u8, ac_table: u8, prediction: i32, stride: usize, rows: usize, pixels: []u8, decoded: bool }
+struct Decoder {
+  source: []const u8, at: usize, kind: errors.Kind,
+  width: u32, height: u32, count: usize, hmax: u8, vmax: u8,
+  components: [3]Component, quant: [4][64]u16, quant_valid: [4]bool,
+  dc: [4]Huffman, ac: [4]Huffman, basis: [64]f64, restart: usize,
+  adobe: i32 = -1,
+}
+struct Bits { source: []const u8, at: usize, buffer: u32, count: u8, failed: bool }
+const Zigzag: [64]usize = [0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63]
+fn be16(data: []const u8, at: usize) u16 {
+  return (#cast(u16, data[at]) << 8) | #cast(u16, data[at + 1])
+}
+fn invalid(decoder: *Decoder) bool {
+  decoder.kind = errors.Kind.InvalidInput
+  return false
+}
+fn take(bits: *Bits, count: u8) u32 {
+  for bits.count < count {
+    if bits.at >= #len(bits.source) {
+      bits.failed = true
+      return 0
+    }
+    value := bits.source[bits.at]
+    bits.at += 1
+    if value == 255 {
+      if bits.at == #len(bits.source) || bits.source[bits.at] != 0 {
+        bits.failed = true
+        return 0
+      }
+      bits.at += 1
+    }
+    bits.buffer = #wrap((bits.buffer << 8) | #cast(u32, value))
+    bits.count += 8
+  }
+  bits.count -= count
+  return (bits.buffer >> bits.count) & ((#cast(u32, 1) << count) - 1)
+}
+fn symbol(bits: *Bits, table: *const Huffman) u8 {
+  value: u32 = 0
+  for length in 0..16 {
+    value = (value << 1) | take(bits, 1)
+    if bits.failed {
+      return 0
+    }
+    start := table.first[length]
+    if value >= start && value - start < #cast(u32, table.counts[length]) {
+      return table.values[#cast(usize, table.offsets[length]) + #cast(usize, (value - start))]
+    }
+  }
+  bits.failed = true
+  return 0
+}
+fn signed(bits: *Bits, size: u8) i32 {
+  if size == 0 {
+    return 0
+  }
+  value := #cast(i32, take(bits, size))
+  threshold := #cast(i32, 1) << (size - 1)
+  if value < threshold {
+    return value + 1 - (#cast(i32, 1) << size)
+  }
+  return value
+}
+fn clamp(value: i32) u8 {
+  if value < 0 {
+    return 0
+  }
+  if value > 255 {
+    return 255
+  }
+  return #cast(u8, value)
+}
+fn sample_value(value: f64) u8 {
+  if value <= 0.0 {
+    return 0
+  }
+  if value >= 255.0 {
+    return 255
+  }
+  return #cast(u8, math.floor64(value + 0.5))
+}
+fn block(decoder: *Decoder, bits: *Bits, component: *Component, bx, by: usize) bool {
+  coefficients: [64]f64 = []
+  category := symbol(bits, &decoder.dc[#cast(usize, component.dc_table)])
+  if bits.failed || category > 11 {
+    return invalid(decoder)
+  }
+  difference := signed(bits, category)
+  component.prediction += difference
+  if bits.failed || component.prediction < -2047 || component.prediction > 2047 {
+    return invalid(decoder)
+  }
+  q := #cast(usize, component.quant)
+  coefficients[0] = #cast(f64, (component.prediction * #cast(i32, decoder.quant[q][0])))
+  at: usize = 1
+  nonzero := false
+  for at < 64 {
+    value := symbol(bits, &decoder.ac[#cast(usize, component.ac_table)])
+    if bits.failed {
+      return invalid(decoder)
+    }
+    if value == 0 {
+      break
+    }
+    if value == 240 {
+      if at > 48 {
+        return invalid(decoder)
+      }
+      at += 16
+      continue
+    }
+    run := #cast(usize, value >> 4)
+    size := value & 15
+    if size == 0 || size > 10 || run >= 64 - at {
+      return invalid(decoder)
+    }
+    at += run
+    amplitude := signed(bits, size)
+    if bits.failed {
+      return invalid(decoder)
+    }
+    coefficients[Zigzag[at]] = #cast(f64, (amplitude * #cast(i32, decoder.quant[q][at])))
+    nonzero = true
+    at += 1
+  }
+  if !nonzero {
+    pixel := sample_value(coefficients[0] / 8.0 + 128.0)
+    for y in 0..8 {
+      for x in 0..8 {
+        component.pixels[(by * 8 + y) * component.stride + bx * 8 + x] = pixel
+      }
+    }
+    return true
+  }
+  temporary: [64]f64 = []
+  for v in 0..8 {
+    for x in 0..8 {
+      sum: f64 = 0.0
+      for u in 0..8 {
+        sum += coefficients[v * 8 + u] * decoder.basis[x * 8 + u]
+      }
+      temporary[v * 8 + x] = sum
+    }
+  }
+  for y in 0..8 {
+    for x in 0..8 {
+      sum: f64 = 0.0
+      for v in 0..8 {
+        sum += temporary[v * 8 + x] * decoder.basis[y * 8 + v]
+      }
+      component.pixels[(by * 8 + y) * component.stride + bx * 8 + x] = sample_value(sum / 4.0 + 128.0)
+    }
+  }
+  return true
+}
+fn quantization(decoder: *Decoder, payload: []const u8) bool {
+  at: usize = 0
+  for at < #len(payload) {
+    descriptor := payload[at]
+    at += 1
+    if (descriptor >> 4) != 0 {
+      decoder.kind = errors.Kind.Unsupported
+      return false
+    }
+    id := #cast(usize, descriptor & 15)
+    if id >= 4 || #len(payload) - at < 64 {
+      return invalid(decoder)
+    }
+    for i in 0..64 {
+      if payload[at + i] == 0 {
+        return invalid(decoder)
+      }
+      decoder.quant[id][i] = #cast(u16, payload[at + i])
+    }
+    decoder.quant_valid[id] = true
+    at += 64
+  }
+  return true
+}
+fn huffman(decoder: *Decoder, payload: []const u8) bool {
+  at: usize = 0
+  for at < #len(payload) {
+    if #len(payload) - at < 17 {
+      return invalid(decoder)
+    }
+    descriptor := payload[at]
+    at += 1
+    id := #cast(usize, descriptor & 15)
+    kind := descriptor >> 4
+    if id >= 4 || kind > 1 {
+      return invalid(decoder)
+    }
+    table := &decoder.dc[id]
+    if kind == 1 {
+      table = &decoder.ac[id]
+    }
+    table.valid = false
+    count: usize = 0
+    code: u32 = 0
+    for i in 0..16 {
+      n := #cast(usize, payload[at + i])
+      if code + #cast(u32, n) >= (#cast(u32, 1) << (i + 1)) || n > 256 - count {
+        return invalid(decoder)
+      }
+      table.first[i] = code
+      table.counts[i] = #cast(u16, n)
+      table.offsets[i] = #cast(u16, count)
+      count += n
+      code = (code + #cast(u32, n)) << 1
+    }
+    at += 16
+    if count == 0 || count > #len(payload) - at {
+      return invalid(decoder)
+    }
+    for i in 0..count {
+      table.values[i] = payload[at + i]
+    }
+    at += count
+    table.valid = true
+  }
+  return true
+}
+fn frame(arena: *mem.Arena, decoder: *Decoder, payload: []const u8) bool {
+  if decoder.count != 0 || #len(payload) < 6 {
+    return invalid(decoder)
+  }
+  if payload[0] != 8 {
+    decoder.kind = errors.Kind.Unsupported
+    return false
+  }
+  decoder.height = #cast(u32, be16(payload, 1))
+  decoder.width = #cast(u32, be16(payload, 3))
+  count := #cast(usize, payload[5])
+  if decoder.width == 0 || decoder.height == 0 {
+    decoder.kind = errors.Kind.Unsupported
+    return false
+  }
+  if count != 1 && count != 3 {
+    decoder.kind = errors.Kind.Unsupported
+    return false
+  }
+  if #len(payload) != 6 + count * 3 {
+    return invalid(decoder)
+  }
+  if #cast(u64, decoder.width) * #cast(u64, decoder.height) > 16777216 {
+    decoder.kind = errors.Kind.Capacity
+    return false
+  }
+  blocks: usize = 0
+  for i in 0..count {
+    id := payload[6 + i * 3]
+    h := payload[7 + i * 3] >> 4
+    v := payload[7 + i * 3] & 15
+    q := payload[8 + i * 3]
+    if h == 0 || h > 4 || v == 0 || v > 4 || q > 3 {
+      return invalid(decoder)
+    }
+    for j in 0..i {
+      if decoder.components[j].id == id {
+        return invalid(decoder)
+      }
+    }
+    decoder.components[i] = Component{ id: id, h: h, v: v, quant: q }
+    if h > decoder.hmax {
+      decoder.hmax = h
+    }
+    if v > decoder.vmax {
+      decoder.vmax = v
+    }
+    blocks += #cast(usize, h) * #cast(usize, v)
+  }
+  if blocks > 10 {
+    return invalid(decoder)
+  }
+  decoder.count = count
+  _ = arena
+  return true
+}
+fn allocate_planes(arena: *mem.Arena, decoder: *Decoder) bool {
+  columns := (#cast(usize, decoder.width) + #cast(usize, decoder.hmax) * 8 - 1) / (#cast(usize, decoder.hmax) * 8)
+  rows := (#cast(usize, decoder.height) + #cast(usize, decoder.vmax) * 8 - 1) / (#cast(usize, decoder.vmax) * 8)
+  total: u64 = 0
+  for i in 0..decoder.count {
+    component := &decoder.components[i]
+    component.stride = columns * #cast(usize, component.h) * 8
+    component.rows = rows * #cast(usize, component.v) * 8
+    size := #cast(u64, component.stride) * #cast(u64, component.rows)
+    if size > 67108864 - total {
+      decoder.kind = errors.Kind.Capacity
+      return false
+    }
+    total += size
+    component.pixels = mem.push_array(u8, arena, #cast(usize, size))
+  }
+  return true
+}
+fn padding(bits: *const Bits) bool {
+  mask := (#cast(u32, 1) << bits.count) - 1
+  return !bits.failed && (bits.buffer & mask) == mask
+}
+fn scan(decoder: *Decoder, payload: []const u8) bool {
+  if decoder.count == 0 || #len(payload) < 6 {
+    return invalid(decoder)
+  }
+  count := #cast(usize, payload[0])
+  if count == 0 || count > decoder.count || #len(payload) != 1 + count * 2 + 3 {
+    return invalid(decoder)
+  }
+  if payload[1 + count * 2] != 0 || payload[2 + count * 2] != 63 || payload[3 + count * 2] != 0 {
+    decoder.kind = errors.Kind.Unsupported
+    return false
+  }
+  selected: [3]usize = []
+  for i in 0..count {
+    id := payload[1 + i * 2]
+    found := decoder.count
+    for j in 0..decoder.count {
+      if decoder.components[j].id == id {
+        found = j
+      }
+    }
+    if found == decoder.count {
+      return invalid(decoder)
+    }
+    for j in 0..i {
+      if selected[j] == found {
+        return invalid(decoder)
+      }
+    }
+    selected[i] = found
+    component := &decoder.components[found]
+    tables := payload[2 + i * 2]
+    component.dc_table = tables >> 4
+    component.ac_table = tables & 15
+    if component.decoded || component.dc_table > 3 || component.ac_table > 3 || !decoder.quant_valid[#cast(usize, component.quant)] || !decoder.dc[#cast(usize, component.dc_table)].valid || !decoder.ac[#cast(usize, component.ac_table)].valid {
+      return invalid(decoder)
+    }
+    component.prediction = 0
+  }
+  columns := (#cast(usize, decoder.width) + #cast(usize, decoder.hmax) * 8 - 1) / (#cast(usize, decoder.hmax) * 8)
+  rows := (#cast(usize, decoder.height) + #cast(usize, decoder.vmax) * 8 - 1) / (#cast(usize, decoder.vmax) * 8)
+  if count == 1 {
+    component := &decoder.components[selected[0]]
+    columns = (#cast(usize, decoder.width) * #cast(usize, component.h) + #cast(usize, decoder.hmax) * 8 - 1) / (#cast(usize, decoder.hmax) * 8)
+    rows = (#cast(usize, decoder.height) * #cast(usize, component.v) + #cast(usize, decoder.vmax) * 8 - 1) / (#cast(usize, decoder.vmax) * 8)
+  }
+  bits := Bits{ source: decoder.source, at: decoder.at }
+  units: usize = 0
+  restart: u8 = 0
+  for y in 0..rows {
+    for x in 0..columns {
+      if decoder.restart != 0 && units != 0 && units % decoder.restart == 0 {
+        if !padding(&bits) {
+          return invalid(decoder)
+        }
+        bits.count = 0
+        bits.buffer = 0
+        if bits.at == #len(bits.source) || bits.source[bits.at] != 255 {
+          return invalid(decoder)
+        }
+        for bits.at < #len(bits.source) && bits.source[bits.at] == 255 {
+          bits.at += 1
+        }
+        if bits.at == #len(bits.source) || bits.source[bits.at] != 208 + restart {
+          return invalid(decoder)
+        }
+        bits.at += 1
+        restart = (restart + 1) & 7
+        for i in 0..decoder.count {
+          decoder.components[i].prediction = 0
+        }
+      }
+      for i in 0..count {
+        component := &decoder.components[selected[i]]
+        horizontal: usize = 1
+        vertical: usize = 1
+        if count > 1 {
+          horizontal = #cast(usize, component.h)
+          vertical = #cast(usize, component.v)
+        }
+        for by in 0..vertical {
+          for bx in 0..horizontal {
+            if !block(decoder, &bits, component, x * horizontal + bx, y * vertical + by) {
+              decoder.at = bits.at
+              return false
+            }
+          }
+        }
+      }
+      units += 1
+    }
+  }
+  if !padding(&bits) {
+    return invalid(decoder)
+  }
+  decoder.at = bits.at
+  for i in 0..count {
+    decoder.components[selected[i]].decoded = true
+  }
+  return true
+}
+fn channel(decoder: *const Decoder, index: usize, x, y: u32) i32 {
+  component := &decoder.components[index]
+  sx := #cast(usize, x) * #cast(usize, component.h) / #cast(usize, decoder.hmax)
+  sy := #cast(usize, y) * #cast(usize, component.v) / #cast(usize, decoder.vmax)
+  return #cast(i32, component.pixels[sy * component.stride + sx])
+}
+// Ownership: pixels borrow arena backing; source is read only during this call.
+// Inputs must not borrow unused backing of the output arena.
+// Invalid/unsupported input restores the arena mark. Allocation exhaustion panics.
+pub fn decode(arena: *mem.Arena, source: []const u8) Result {
+  if #len(source) < 4 || source[0] != 255 || source[1] != 216 {
+    return Result{ kind: errors.Kind.InvalidInput }
+  }
+  decoder := Decoder{ source: source, at: 2 }
+  for x in 0..8 {
+    for u in 0..8 {
+      factor: f64 = 1.0
+      if u == 0 {
+        factor = 0.7071067811865475244
+      }
+      decoder.basis[x * 8 + u] = factor * math.cos64(#cast(f64, ((2 * x + 1) * u)) * 3.14159265358979323846 / 16.0)
+    }
+  }
+  mark := mem.arena_mark(arena)
+  scratch := mark
+  success := false
+  defer {
+    if success {
+      mem.arena_rewind(arena, scratch)
+    } else {
+      mem.arena_rewind(arena, mark)
+    }
+  }
+  pixels: []u8
+  for decoder.at < #len(source) {
+    if source[decoder.at] != 255 {
+      return Result{ kind: errors.Kind.InvalidInput, offset: decoder.at }
+    }
+    for decoder.at < #len(source) && source[decoder.at] == 255 {
+      decoder.at += 1
+    }
+    if decoder.at == #len(source) {
+      return Result{ kind: errors.Kind.InvalidInput, offset: decoder.at }
+    }
+    marker := source[decoder.at]
+    decoder.at += 1
+    if marker == 217 {
+      if decoder.count == 0 {
+        return Result{ kind: errors.Kind.InvalidInput, offset: decoder.at }
+      }
+      for i in 0..decoder.count {
+        if !decoder.components[i].decoded {
+          return Result{ kind: errors.Kind.InvalidInput, offset: decoder.at }
+        }
+      }
+      if decoder.adobe > 1 {
+        return Result{ kind: errors.Kind.Unsupported, offset: decoder.at }
+      }
+      direct := decoder.adobe == 0
+      indices: [3]usize = [0, 1, 2]
+      if decoder.count == 3 {
+        rgb: [3]usize = [3, 3, 3]
+        ycc: [3]usize = [3, 3, 3]
+        for i in 0..3 {
+          id := decoder.components[i].id
+          if id == 82 {
+            rgb[0] = i
+          }
+          if id == 71 {
+            rgb[1] = i
+          }
+          if id == 66 {
+            rgb[2] = i
+          }
+          if id >= 1 && id <= 3 {
+            ycc[#cast(usize, id - 1)] = i
+          }
+        }
+        if rgb[0] < 3 && rgb[1] < 3 && rgb[2] < 3 {
+          direct = true
+          indices = rgb
+        }
+        else if !direct && ycc[0] < 3 && ycc[1] < 3 && ycc[2] < 3 {
+          indices = ycc
+        }
+      }
+      for y in 0..decoder.height {
+        for x in 0..decoder.width {
+          dst := (#cast(usize, y) * #cast(usize, decoder.width) + #cast(usize, x)) * 4
+          a := channel(&decoder, indices[0], x, y)
+          r := a
+          g := a
+          b := a
+          if decoder.count == 3 {
+            second := channel(&decoder, indices[1], x, y)
+            third := channel(&decoder, indices[2], x, y)
+            if direct {
+              g = second
+              b = third
+            }
+            else {
+              cb := second - 128
+              cr := third - 128
+              r = a + ((91881 * cr + 32768) >> 16)
+              g = a - ((22554 * cb + 46802 * cr + 32768) >> 16)
+              b = a + ((116130 * cb + 32768) >> 16)
+            }
+          }
+          pixels[dst] = clamp(r)
+          pixels[dst + 1] = clamp(g)
+          pixels[dst + 2] = clamp(b)
+          pixels[dst + 3] = 255
+        }
+      }
+      success = true
+      return Result{ value: Image{ info: Info{ width: decoder.width, height: decoder.height, channels: 4 }, pixels: pixels }, ok: true }
+    }
+    if marker == 0 || marker == 216 || marker == 1 || (marker >= 208 && marker <= 215) {
+      return Result{ kind: errors.Kind.InvalidInput, offset: decoder.at - 1 }
+    }
+    if #len(source) - decoder.at < 2 {
+      return Result{ kind: errors.Kind.InvalidInput, offset: decoder.at }
+    }
+    length := #cast(usize, be16(source, decoder.at))
+    if length < 2 || length > #len(source) - decoder.at {
+      return Result{ kind: errors.Kind.InvalidInput, offset: decoder.at }
+    }
+    payload := source[decoder.at + 2..decoder.at + length]
+    decoder.at += length
+    ok := true
+    if marker == 192 {
+      ok = frame(arena, &decoder, payload)
+      if ok {
+        pixels = mem.push_array(u8, arena, #cast(usize, decoder.width) * #cast(usize, decoder.height) * 4)
+        scratch = mem.arena_mark(arena)
+        ok = allocate_planes(arena, &decoder)
+      }
+    } else if marker == 219 {
+      ok = quantization(&decoder, payload)
+    }
+    else if marker == 196 {
+      ok = huffman(&decoder, payload)
+    }
+    else if marker == 218 {
+      ok = scan(&decoder, payload)
+    }
+    else if marker == 221 {
+      if #len(payload) != 2 {
+        ok = invalid(&decoder)
+      }
+      else {
+        decoder.restart = #cast(usize, be16(payload, 0))
+      }
+    } else if marker == 238 && #len(payload) >= 12 && payload[0] == 65 && payload[1] == 100 && payload[2] == 111 && payload[3] == 98 && payload[4] == 101 {
+      decoder.adobe = #cast(i32, payload[11])
+    }
+    else if marker >= 193 && marker <= 207 && marker != 196 && marker != 200 && marker != 204 {
+      decoder.kind = errors.Kind.Unsupported
+      ok = false
+    } else if marker == 204 || marker == 220 {
+      decoder.kind = errors.Kind.Unsupported
+      ok = false
+    }
+    if !ok {
+      return Result{ kind: decoder.kind, offset: decoder.at }
+    }
+  }
+  return Result{ kind: errors.Kind.InvalidInput, offset: decoder.at }
+}

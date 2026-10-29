@@ -1,0 +1,28 @@
+#version 450
+layout(local_size_x=8,local_size_y=8) in;
+layout(set=0,binding=0,std430) buffer Storage { uint words[]; } s;
+void main() {
+ uint x=gl_GlobalInvocationID.x,y=gl_GlobalInvocationID.y;
+ uint width=s.words[0],height=s.words[1];
+ if(x>=width||y>=height)return;
+ uint destination=s.words[4]+y*width+x;
+ uint packed=s.words[destination];
+ uvec4 old=uvec4(packed&255u,(packed>>8)&255u,(packed>>16)&255u,packed>>24);
+ for(uint i=0u;i<s.words[2];++i){
+  uint at=8u+i*8u;
+  uint left=s.words[at],top=s.words[at+1u],right=s.words[at+2u],bottom=s.words[at+3u];
+  if(x<left||x>=right||y<top||y>=bottom)continue;
+  uint tint=s.words[at+4u],coverage=255u;
+  if(s.words[at+5u]!=0u){
+   uint index=s.words[at+6u]+(y-top)*(right-left)+(x-left);
+   coverage=(s.words[s.words[3]+index/4u]>>((index%4u)*8u))&255u;
+  }
+  uint alpha=((tint>>24)*coverage+127u)/255u;
+  if(alpha==0u)continue;
+  uint denominator=alpha*255u+old.a*(255u-alpha);
+  uvec3 rgb=uvec3(tint&255u,(tint>>8)&255u,(tint>>16)&255u);
+  old.rgb=(rgb*alpha*255u+old.rgb*old.a*(255u-alpha)+denominator/2u)/denominator;
+  old.a=(denominator+127u)/255u;
+ }
+ s.words[destination]=old.r|(old.g<<8)|(old.b<<16)|(old.a<<24);
+}

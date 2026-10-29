@@ -501,11 +501,12 @@ static int execute_command(DynOptions *options, const char *compiler) {
       result = dyn_codegen_prepare_owned(&module_source, options->shared, NULL, &prepared);
       have_ir = !result;
     }
-    /* Explicit objects, libraries and external link inputs preserve public ABI
-       roots. Ordinary native executables have the complete checked program. */
+    /* Explicit objects, libraries and --link inputs preserve public ABI roots.
+       Libraries discovered from #link are C providers that reach Dyn code only
+       through function values, so they do not keep public functions alive. */
     if (!result && native && options->release && !options->shared &&
         !options->emit_object && !options->emit_asm && !options->no_link &&
-        !options->runtime_support && !options->link_input_count) {
+        !options->runtime_support && !options->explicit_link_input_count) {
       struct timespec pruning = timer_start();
       if (!dyn_ir_prune_functions(&prepared)) {
         fprintf(stderr, "error: failed to compute executable reachability\n");
@@ -600,6 +601,7 @@ int main(int argc, char **argv) {
   }
   /* CLI link inputs borrow argv; discovered libraries are owned suffix entries. Keep cleanup outside execution so every early return follows this path. */
   size_t borrowed_links = o.link_input_count;
+  o.explicit_link_input_count = o.link_input_count;
   /* argv[0] is commonly just "dyn" when launched through PATH. Hash the running executable, not a nonexistent file in the project directory. */
   char executable[4096];
   ssize_t executable_length = dyn_host_executable(executable, sizeof(executable) - 1);

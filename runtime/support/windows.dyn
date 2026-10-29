@@ -7,6 +7,15 @@ extern fn get_tid "GetCurrentThreadId"() u32
 extern fn get_handle "GetStdHandle"(kind: u32) rawptr
 extern fn write_file "WriteFile"(handle: rawptr, data: rawptr, size: u32, written: *u32, overlapped: rawptr) i32
 pub _fltused: i32
+extern fn virtual_alloc "dyn_win_virtual_alloc"(address: rawptr, size: usize, kind: u32, protect: u32) rawptr
+// Runtime slot chunks: 64 threads per chunk, more chunks on demand.
+const unwind_chunk_slots: usize = 64
+const unwind_hint_count: usize = 64
+const trace_chunk_slots: usize = 64
+// Committed read-write pages; Windows backs them physically on first touch.
+fn runtime_pages(bytes: u64) u64 {
+  return #cast(u64, #cast(usize, virtual_alloc(nil, #cast(usize, bytes), 12288, 4)))
+}
 fn thread_id() u64 {
   return #cast(u64, get_tid())
 }

@@ -1,0 +1,143 @@
+// Revision-tagged UTF-8 replacement. Publish one tracker per native window;
+// keep it alive across widget focus changes so tokens are never reused.
+use "std/mem" mem
+use "std/errors" errors
+use "std/unicode/utf8" utf8
+
+pub const context_limit: usize = 4096
+pub enum Cause { Other, InputMethod }
+pub struct Context { text: []const u8, cursor: usize, anchor: usize, token: u64, cause: Cause }
+pub struct Replacement { text: []const u8, start: usize, end: usize, token: u64 }
+// token zero means unpublished. A successful application invalidates it;
+// publish a fresh context before accepting another correction.
+pub struct Buffer { storage: []u8, length: usize, cursor: usize, anchor: usize, token: u64 }
+pub struct Status { kind: errors.Kind, ok: bool }
+pub struct ContextResult { value: Context, kind: errors.Kind, ok: bool }
+pub struct Tracker {
+  serial: u64,
+  token: u64,
+  owner: u64,
+  length: usize,
+  cursor: usize,
+  anchor: usize,
+  cause: Cause,
+  bytes: [4096]u8,
+}
+
+pub fn boundary(text: []const u8, offset: usize) bool {
+  return offset <= #len(text) && (offset == #len(text) || text[offset] & 0xc0 != 0x80)
+}
+
+// Validates the shared bounded context. Native window protocols additionally
+// require text without embedded NUL; generic UTF-8 buffers may contain it.
+pub fn validate(context: *const Context) Status {
+  if #len(context.text) > context_limit {
+    return Status{ kind: errors.Kind.Capacity }
+  }
+  if context.token == 0 || !utf8.valid(context.text) || !boundary(context.text, context.cursor) || !boundary(context.text, context.anchor) ||
+    (context.cause != Cause.Other && context.cause != Cause.InputMethod) {
+    return Status{ kind: errors.Kind.InvalidInput }
+  }
+  return Status{ ok: true }
+}
+
+// The returned view borrows tracker until its next changed snapshot. Equal
+// text/selection/owner reuses the token; changing focus or bytes advances it.
+pub fn snapshot(tracker: *Tracker, owner: u64, text: []const u8, cursor, anchor: usize, cause: Cause) ContextResult {
+  if #len(text) > context_limit {
+    invalidate(tracker)
+    return ContextResult{ kind: errors.Kind.Capacity }
+  }
+  if !utf8.valid(text) || !boundary(text, cursor) || !boundary(text, anchor) || (cause != Cause.Other && cause != Cause.InputMethod) {
+    invalidate(tracker)
+    return ContextResult{ kind: errors.Kind.InvalidInput }
+  }
+  equal := tracker.token != 0 && tracker.owner == owner && tracker.length == #len(text) && tracker.cursor == cursor && tracker.anchor == anchor
+  if equal {
+    for i in 0..#len(text) {
+      if tracker.bytes[i] != text[i] {
+        equal = false
+        break
+      }
+    }
+  }
+  if !equal {
+    if tracker.serial == 18446744073709551615 {
+      invalidate(tracker)
+      return ContextResult{ kind: errors.Kind.Overflow }
+    }
+    tracker.serial += 1
+    tracker.token = tracker.serial
+    tracker.cause = cause
+    tracker.owner = owner
+    tracker.length = #len(text)
+    tracker.cursor = cursor
+    tracker.anchor = anchor
+    _ = mem.move(tracker.bytes[..#len(text)], text)
+  }
+  return ContextResult{ value: Context{ text: tracker.bytes[..tracker.length], cursor: cursor, anchor: anchor, token: tracker.token, cause: tracker.cause }, ok: true }
+}
+
+// Invalidates a published identity without resetting the monotonic clock.
+pub fn invalidate(tracker: *Tracker) {
+  tracker.token = 0
+}
+
+fn overlaps(left, right: []const u8) bool {
+  if #len(left) == 0 || #len(right) == 0 {
+    return false
+  }
+  a := #cast(usize, &left[0])
+  b := #cast(usize, &right[0])
+  if a >= b {
+    return a - b < #len(right)
+  }
+  return b - a < #len(left)
+}
+
+// All validation precedes writes. Scratch is rewound on success and failure;
+// the replacement may alias storage. Buffer metadata is unchanged on error.
+pub fn apply(scratch: *mem.Arena, buffer: *Buffer, replacement: *const Replacement) Status {
+  if buffer.token == 0 || replacement.token != buffer.token {
+    return Status{ kind: errors.Kind.InvalidState }
+  }
+  if buffer.length > #len(buffer.storage) || replacement.start > replacement.end || replacement.end > buffer.length {
+    return Status{ kind: errors.Kind.InvalidInput }
+  }
+  original := buffer.storage[..buffer.length]
+  if !utf8.valid(original) || !utf8.valid(replacement.text) || !boundary(original, replacement.start) || !boundary(original, replacement.end) ||
+    !boundary(original, buffer.cursor) || !boundary(original, buffer.anchor) {
+    return Status{ kind: errors.Kind.InvalidInput }
+  }
+  retained := buffer.length - (replacement.end - replacement.start)
+  if #len(replacement.text) > #len(buffer.storage) - retained {
+    return Status{ kind: errors.Kind.Capacity }
+  }
+  // Reject output borrowed from the pending scratch region before allocating:
+  // even a later rewind can scribble it when diagnostic poisoning is enabled.
+  if scratch.offset > #len(scratch.data) {
+    return Status{ kind: errors.Kind.InvalidState }
+  }
+  pending := #len(scratch.data) - scratch.offset
+  if pending > #len(replacement.text) {
+    pending = #len(replacement.text)
+  }
+  if overlaps(scratch.data[scratch.offset..scratch.offset + pending], buffer.storage) {
+    return Status{ kind: errors.Kind.InvalidInput }
+  }
+  mark := mem.arena_mark(scratch)
+  defer {
+    mem.arena_rewind(scratch, mark)
+  }
+  copied := mem.push_bytes_uninit(scratch, #len(replacement.text))
+  _ = mem.move(copied, replacement.text)
+  suffix := buffer.length - replacement.end
+  destination := replacement.start + #len(copied)
+  _ = mem.move(buffer.storage[destination..destination + suffix], buffer.storage[replacement.end..buffer.length])
+  _ = mem.copy(buffer.storage[replacement.start..destination], copied)
+  buffer.length = retained + #len(copied)
+  buffer.cursor = destination
+  buffer.anchor = destination
+  buffer.token = 0
+  return Status{ ok: true }
+}

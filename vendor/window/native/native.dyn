@@ -1,0 +1,376 @@
+use "std/text/edit" surrounding_edit
+use "vendor/window/events" ordered
+pub type OrderedEvent = ordered.Event
+pub type EventKind = ordered.Kind
+use "std/mem" mem
+use "std/c" c
+use "std/unicode/utf8" utf8
+use "std/errors" errors
+use "std/ui" ui
+use "std/ui/box" box
+#link("dyn_window")
+// Native bridge owns its OS allocations. Keep the owning Window on its GUI
+// thread, close renderer resources before close, and never copy a live owner.
+pub struct Window { handle: rawptr, width: i32, height: i32, input: ui.Input, close_requested: bool, desktop: Desktop, composition: Composition }
+// The in-progress input method text, drawn by the application at its caret.
+// Mirrors dyn_window_composition: cursor offsets are bytes into text, -1 hides
+// the cursor.
+pub type Composition = ordered.Composition
+// Mirrors dyn_window_desktop in window.h.
+struct Desktop { text: [256]u8, text_length: u32, keys: u32, scroll_x: f32, scroll_y: f32, scale: f32, clipboard: *const u8, clipboard_length: u32 }
+pub enum Cursor { Arrow, Text, Hand, ResizeX, ResizeY }
+pub struct Result { kind: errors.Kind, ok: bool }
+struct Frame { width: i32, height: i32, x: i32, y: i32, flags: u32 }
+extern fn native_open "dyn_window_open"(title: *const u8, width: i32, height: i32) rawptr
+extern fn native_close "dyn_window_close"(handle: rawptr)
+extern fn native_poll "dyn_window_poll"(handle: rawptr, frame: *Frame) i32
+extern fn native_set_title "dyn_window_set_title"(handle: rawptr, text: *const u8, length: u32) i32
+extern fn native_set_size "dyn_window_set_size"(handle: rawptr, width: i32, height: i32) i32
+extern fn native_swap_interval "dyn_window_set_swap_interval"(handle: rawptr, interval: i32) i32
+extern fn native_try_clipboard "dyn_window_try_set_clipboard"(handle: rawptr, text: *const u8, length: u32) i32
+extern fn native_snapshot "dyn_window_request_paste_snapshot"(handle: rawptr)
+extern fn native_paste_pending "dyn_window_paste_pending"(handle: rawptr) i32
+extern fn native_paste_status "dyn_window_paste_status"(handle: rawptr) i32
+extern fn native_current "dyn_window_current"(handle: rawptr) i32
+extern fn native_swap "dyn_window_swap"(handle: rawptr) i32
+pub extern fn gl_proc "dyn_window_proc"(name: *const u8) rawptr
+extern fn native_desktop "dyn_window_desktop_take"(handle: rawptr, desktop: *Desktop)
+extern fn native_set_clipboard "dyn_window_set_clipboard"(handle: rawptr, text: *const u8, length: u32)
+extern fn native_request_paste "dyn_window_request_paste"(handle: rawptr)
+extern fn native_set_cursor "dyn_window_set_cursor"(handle: rawptr, cursor: i32)
+extern fn native_wait "dyn_window_wait"(handle: rawptr, timeout: i32)
+extern fn native_surrounding "dyn_window_set_surrounding_text"(handle: rawptr, text: *const u8, length: u32, cursor: u32, anchor: u32, token: u64, cause: u32) i32
+extern fn native_composition "dyn_window_composition_get"(handle: rawptr, composition: *Composition)
+extern fn native_clipboard "dyn_window_clipboard_get"(handle: rawptr, text: **const u8) u32
+extern fn native_text_input "dyn_window_set_text_input"(handle: rawptr, enabled: i32, x: i32, y: i32, width: i32, height: i32)
+extern fn native_listen_events "dyn_window_listen_events"(handle: rawptr, enabled: i32)
+extern fn native_next_event "dyn_window_next_event"(handle: rawptr, event: *OrderedEvent) i32
+extern fn native_wake "dyn_window_wake"(handle: rawptr) i32
+pub fn open(window: *Window, title: []const u8, width, height: i32) Result {
+  if window.handle != nil {
+    return Result{kind:errors.Kind.InvalidState}
+  }
+  if width <= 0 || height <= 0 || #len(title) > 4095 {
+    return Result{kind:errors.Kind.InvalidInput}
+  }
+  storage: [4096]u8 = []
+  name := c.string_into(storage[..], title)
+  if !name.ok {
+    return Result{kind:errors.Kind.InvalidInput}
+  }
+  handle := native_open(name.value, width, height)
+  if handle == nil {
+    return Result{kind:errors.Kind.System}
+  }
+  window.* = Window{handle:handle, width:width, height:height}
+  opened := poll(window)
+  if !opened.ok {
+    close(window)
+    return opened
+  }
+  return Result{ok:true}
+}
+pub fn close(window: *Window) {
+  if window.handle != nil {
+    native_close(window.handle)
+    window.* = Window{}
+  }
+}
+pub fn poll(window: *Window) Result {
+  if window.handle == nil {
+    return Result{kind:errors.Kind.InvalidState}
+  }
+  previous_composition := window.composition.active != 0
+  frame := Frame{}
+  if native_poll(window.handle, &frame) == 0 {
+    return Result{kind:errors.Kind.System}
+  }
+  window.width = frame.width
+  window.height = frame.height
+  window.close_requested = (frame.flags & 128) != 0
+  window.input = ui.Input{x:frame.x, y:frame.y, down:(frame.flags&1)!=0, pressed:(frame.flags&2)!=0, released:(frame.flags&4)!=0, tab:(frame.flags&8)!=0, activate:(frame.flags&16)!=0, left:(frame.flags&32)!=0, right:(frame.flags&64)!=0}
+  native_desktop(window.handle, &window.desktop)
+  native_composition(window.handle, &window.composition)
+  if previous_composition || window.composition.active != 0 {
+    window.desktop.keys |= 32768
+  }
+  return Result{ok:true}
+}
+pub fn make_current(window: *Window) Result {
+  if window.handle == nil {
+    return Result{kind:errors.Kind.InvalidState}
+  }
+  if native_current(window.handle) == 0 {
+    return Result{kind:errors.Kind.System}
+  }
+  return Result{ok:true}
+}
+pub fn swap(window: *Window) Result {
+  if window.handle == nil {
+    return Result{kind:errors.Kind.InvalidState}
+  }
+  if native_swap(window.handle) == 0 {
+    return Result{kind:errors.Kind.System}
+  }
+  return Result{ok:true}
+}
+
+// Offers text on the clipboard; longer text is truncated to 64 KiB.
+pub fn set_clipboard(window: *Window, text: []const u8) {
+  if window.handle == nil {
+    return
+  }
+  length := #len(text)
+  if length > 65536 {
+    length = 65536
+  }
+  if length == 0 {
+    empty: [1]u8 = []
+    native_set_clipboard(window.handle, &empty[0], 0)
+    return
+  }
+  native_set_clipboard(window.handle, &text[0], #cast(u32, length))
+}
+
+// Asks for the clipboard; the text arrives in box_input as a paste.
+pub fn request_paste(window: *Window) {
+  if window.handle != nil {
+    native_request_paste(window.handle)
+  }
+}
+
+pub fn set_cursor(window: *Window, cursor: Cursor) {
+  if window.handle != nil {
+    native_set_cursor(window.handle, #cast(i32, #cast(u8, cursor)))
+  }
+}
+
+// Display scale relative to 96 DPI (or the platform's base scale).
+pub fn scale(window: *const Window) f32 {
+  if window.desktop.scale <= 0.0 {
+    return 1.0
+  }
+  return window.desktop.scale
+}
+
+// Blocks until input arrives or timeout milliseconds pass; negative waits
+// indefinitely.
+pub fn wait(window: *Window, timeout: i32) {
+  if window.handle != nil {
+    native_wait(window.handle, timeout)
+  }
+}
+
+// The box input for this frame. Text and clipboard views borrow the window
+// until the next poll.
+pub fn box_input(window: *const Window) box.Input {
+  desktop := &window.desktop
+  keys := desktop.keys
+  value := box.Input{
+    x: #cast(f32, window.input.x), y: #cast(f32, window.input.y), down: window.input.down,
+    scroll_x: desktop.scroll_x, scroll_y: desktop.scroll_y,
+    text: desktop.text[..#cast(usize, desktop.text_length)],
+    backspace: keys & 1 != 0, delete: keys & 2 != 0, left: keys & 4 != 0, right: keys & 8 != 0,
+    home: keys & 16 != 0, end: keys & 32 != 0, enter: keys & 64 != 0, escape: keys & 128 != 0,
+    tab: keys & 256 != 0, shift: keys & 512 != 0, control: keys & 16384 != 0, select_all: keys & 1024 != 0,
+    composition_handled: keys & 32768 != 0,
+    copy: keys & 2048 != 0, cut: keys & 4096 != 0, paste: keys & 8192 != 0,
+  }
+  if value.paste && desktop.clipboard != nil {
+    value.clipboard = desktop.clipboard[..#cast(usize, desktop.clipboard_length)]
+  }
+  value.composition_cursor = -1
+  if window.composition.active != 0 && window.composition.text_length <= 256 {
+    value.composition = window.composition.text[..#cast(usize, window.composition.text_length)]
+    value.composition_cursor = window.composition.cursor_begin
+  }
+  return value
+}
+
+// Copies one queued event into caller storage; independent of box_input.
+pub fn next_event(window: *Window, output: *OrderedEvent) bool {
+  return window.handle != nil && native_next_event(window.handle, output) != 0
+}
+// Thread-safe; join all wake callers before close. Wakes may coalesce.
+pub fn wake(window: *const Window) Result {
+  if window.handle == nil {
+    return Result{kind:errors.Kind.InvalidState}
+  }
+  if native_wake(window.handle) == 0 {
+    return Result{kind:errors.Kind.System}
+  }
+  return Result{ok:true}
+}
+
+// Opt-in before poll. Toggling clears queued events; disabled by default.
+pub fn listen_events(window: *Window, enabled: bool) {
+  if window.handle != nil {
+    value: i32 = 0
+    if enabled {
+      value = 1
+    }
+    native_listen_events(window.handle, value)
+  }
+}
+
+pub fn composition(window: *const Window) Composition {
+  return window.composition
+}
+
+// Enables text input and places the caret rectangle (window pixels) where the
+// input method shows its candidates.
+pub fn set_text_input(window: *Window, enabled: bool, x, y, width, height: i32) {
+  if window.handle == nil {
+    return
+  }
+  on: i32 = 0
+  if enabled {
+    on = 1
+  }
+  native_text_input(window.handle, on, x, y, width, height)
+  native_composition(window.handle, &window.composition)
+}
+
+// The most recent pasted text, borrowed until the next paste request/reply or close.
+pub fn clipboard(window: *const Window) []const u8 {
+  if window.handle == nil {
+    return ""
+  }
+  text: *const u8 = nil
+  length := native_clipboard(window.handle, &text)
+  if text == nil {
+    return ""
+  }
+  return text[..#cast(usize, length)]
+}
+
+pub type Surrounding = surrounding_edit.Context
+// Publish after enabling ordered listening and before enabling a newly focused
+// field. The protocol copies text synchronously. Failure preserves old context.
+pub fn set_surrounding_text(window: *Window, context: Surrounding) Result {
+  if window.handle == nil {
+    return Result{ kind: errors.Kind.InvalidState }
+  }
+  checked := surrounding_edit.validate(&context)
+  if !checked.ok {
+    return Result{ kind: checked.kind }
+  }
+  for byte in context.text {
+    if byte == 0 {
+      return Result{ kind: errors.Kind.InvalidInput }
+    }
+  }
+  empty: [1]u8 = []
+  pointer: *const u8 = &empty[0]
+  if #len(context.text) != 0 {
+    pointer = &context.text[0]
+  }
+  cause: u32 = 0
+  if context.cause == surrounding_edit.Cause.InputMethod {
+    cause = 1
+  }
+  status := native_surrounding(window.handle, pointer, #cast(u32, #len(context.text)), #cast(u32, context.cursor), #cast(u32, context.anchor), context.token, cause)
+  if status == 1 {
+    return Result{ ok: true }
+  }
+  if status == -1 {
+    return Result{ kind: errors.Kind.Unsupported }
+  }
+  if status == -2 {
+    return Result{ kind: errors.Kind.Capacity }
+  }
+  return Result{ kind: errors.Kind.InvalidState }
+}
+
+fn checked_status(status: i32) Result {
+  if status == 1 {
+    return Result{ok:true}
+  }
+  if status == -1 {
+    return Result{kind:errors.Kind.Unsupported}
+  }
+  if status == -2 {
+    return Result{kind:errors.Kind.Capacity}
+  }
+  if status == -3 {
+    return Result{kind:errors.Kind.InvalidInput}
+  }
+  if status == -4 {
+    return Result{kind:errors.Kind.InvalidState}
+  }
+  return Result{kind:errors.Kind.System}
+}
+pub fn set_title(window: *Window, title: []const u8) Result {
+  if window.handle == nil {
+    return Result{kind:errors.Kind.InvalidState}
+  }
+  if #len(title) > 4096 {
+    return Result{kind:errors.Kind.Capacity}
+  }
+  if !utf8.valid(title) {
+    return Result{kind:errors.Kind.InvalidInput}
+  }
+  for byte in title {
+    if byte == 0 {
+      return Result{kind:errors.Kind.InvalidInput}
+    }
+  }
+  empty: [1]u8 = []
+  pointer: *const u8 = &empty[0]
+  if #len(title) != 0 {
+    pointer = &title[0]
+  }
+  return checked_status(native_set_title(window.handle, pointer, #cast(u32, #len(title))))
+}
+pub fn set_size(window: *Window, width, height: i32) Result {
+  if window.handle == nil {
+    return Result{kind:errors.Kind.InvalidState}
+  }
+  if width <= 0 || height <= 0 {
+    return Result{kind:errors.Kind.InvalidInput}
+  }
+  result := checked_status(native_set_size(window.handle, width, height))
+  if !result.ok {
+    return result
+  }
+  return poll(window)
+}
+pub fn set_swap_interval(window: *Window, interval: i32) Result {
+  if window.handle == nil {
+    return Result{kind:errors.Kind.InvalidState}
+  }
+  if interval < 0 {
+    return Result{kind:errors.Kind.InvalidInput}
+  }
+  return checked_status(native_swap_interval(window.handle, interval))
+}
+// Checked publication copies all text or reports failure; no truncation.
+pub fn try_set_clipboard(window: *Window, text: []const u8) Result {
+  if window.handle == nil {
+    return Result{kind:errors.Kind.InvalidState}
+  }
+  if #len(text) > 4294967295 {
+    return Result{kind:errors.Kind.Capacity}
+  }
+  empty: [1]u8 = []
+  pointer: *const u8 = &empty[0]
+  if #len(text) != 0 {
+    pointer = &text[0]
+  }
+  return checked_status(native_try_clipboard(window.handle, pointer, #cast(u32, #len(text))))
+}
+// Snapshot replies update clipboard without entering the ordered event stream.
+pub fn request_paste_snapshot(window: *Window) {
+  if window.handle != nil {
+    native_snapshot(window.handle)
+  }
+}
+pub fn paste_pending(window: *const Window) bool {
+  return window.handle != nil && native_paste_pending(window.handle) != 0
+}
+pub fn paste_status(window: *const Window) Result {
+  if window.handle == nil {
+    return Result{kind:errors.Kind.InvalidState}
+  }
+  return checked_status(native_paste_status(window.handle))
+}

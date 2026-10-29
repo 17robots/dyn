@@ -1,0 +1,200 @@
+use "std/text/edit" edits
+use "std/errors" edit_errors
+use "std/unicode/utf8" edit_utf8
+
+// Ordered GUI events. listen_events(window,true) opts in before polling.
+// next_event copies one event into caller storage; its
+// text bytes remain valid until the caller overwrites that value. Queues hold
+// 128 events across polls. On exhaustion new events are dropped; after queued
+// events drain, one Overflow reports the number dropped (saturating u32).
+// Further arrivals are dropped until that Overflow is consumed.
+// Text is printable UTF-8 commits, chunked at code point boundaries (256 bytes).
+// Control-leading commits (including Enter/Tab) use key events instead. X11
+// commits above 4096 bytes are dropped with Overflow. Input method preedit
+// arrives as Composition events. Oversized source commits
+// count as one dropped commit; Wayland compose lookup is capped at 63 bytes. X11 legacy non-Latin keysyms
+// without Unicode encoding report key zero; physical scancode remains available.
+// Key identifies
+// the unshifted Unicode character, or a special Key value. Scancode is the
+// native physical identifier (X11 keycode, Win32 scan/extended, Cocoa keyCode,
+// Wayland evdev keycode); it is platform-specific, never a portable keycode.
+// Native Wayland, Windows and Cocoa key events capture a translated Unicode
+// scalar in height; character(event) reads this snapshot. Other backends may
+// return zero. A snapshot is a key identity, not an IME text commit.
+// Kind-specific payloads retain Event's stable 312-byte ABI:
+// Composition owns preedit in text; x/y are UTF-8 cursor byte offsets (-1
+// hides it), width is active (0/1). Decode with composition(event).
+// Clipboard owns reply chunks: x is byte offset, width is total reply bytes,
+// button is 1 on the final chunk (including an empty reply). No event borrows
+// mutable window storage; clipboard() remains a latest-snapshot convenience.
+pub enum Kind { None, KeyDown, KeyUp, Text, PointerMove, PointerDown, PointerUp, Wheel, FocusGained, FocusLost, Resize, Close, Wake, Overflow, Clipboard, Composition, Edit }
+pub const Shift: u32 = 1
+pub const Control: u32 = 2
+pub const Alt: u32 = 4
+pub const Super: u32 = 8
+pub const CapsLock: u32 = 16
+pub const NumLock: u32 = 32
+pub const Escape: u32 = 1114112
+pub const Enter: u32 = 1114113
+pub const Tab: u32 = 1114114
+pub const Backspace: u32 = 1114115
+pub const Delete: u32 = 1114116
+pub const Left: u32 = 1114117
+pub const Right: u32 = 1114118
+pub const Up: u32 = 1114119
+pub const Down: u32 = 1114120
+pub const Home: u32 = 1114121
+pub const End: u32 = 1114122
+pub const PageUp: u32 = 1114123
+pub const PageDown: u32 = 1114124
+pub const Insert: u32 = 1114125
+pub const F1: u32 = 1114144
+pub const F24: u32 = 1114167
+pub const ShiftKey: u32 = 1114176
+pub const ControlKey: u32 = 1114177
+pub const AltKey: u32 = 1114178
+pub const SuperKey: u32 = 1114179
+pub const capacity: usize = 128
+pub const text_capacity: usize = 256
+// Shared snapshot ABI, also mirrored by dyn_window_composition in window.h.
+pub struct Composition { text: [256]u8, text_length: u32, cursor_begin: i32, cursor_end: i32, active: u32 }
+#assert(#sizeof(Composition) == 272)
+pub struct Event {
+  kind: Kind,
+  key: u32, scancode: u32, modifiers: u32,
+  repeated: u32,
+  // Buttons: 1 primary, 2 middle, 3 secondary; others backend button numbers.
+  button: u32,
+  dropped: u32,
+  // Pointer/size coordinates are framebuffer pixels; wheel uses pixel deltas.
+  x: i32, y: i32, width: i32, height: i32,
+  scroll_x: f32, scroll_y: f32,
+  text_length: u32,
+  text: [256]u8,
+}
+#assert(#sizeof(Event) == 312)
+#assert(#alignof(Event) == 4)
+#assert(#offsetof(Event, x) == 28)
+#assert(#offsetof(Event, scroll_x) == 44)
+#assert(#offsetof(Event, text_length) == 52)
+#assert(#offsetof(Event, text) == 56)
+pub fn text(event: *const Event) []const u8 {
+  return event.text[..#cast(usize, event.text_length)]
+}
+// Returns the producer's translated key snapshot, or zero when unavailable.
+pub fn character(event: *const Event) u32 {
+  if event.kind != Kind.KeyDown && event.kind != Kind.KeyUp {
+    return 0
+  }
+  value := event.height
+  if value <= 0 || value > 1114111 || (value >= 55296 && value <= 57343) {
+    return 0
+  }
+  return #cast(u32, value)
+}
+// Extracts an owned preedit snapshot; other kinds produce an inactive value.
+pub fn composition(event: *const Event) Composition {
+  if event.kind != Kind.Composition {
+    return Composition{}
+  }
+  value := Composition{ text: event.text, text_length: event.text_length,
+    cursor_begin: event.x, cursor_end: event.y }
+  if event.width != 0 {
+    value.active = 1
+  }
+  return value
+}
+pub struct Queue { values: [128]Event, head: usize, count: usize, dropped: u32 }
+pub fn push(queue: *Queue, event: Event) {
+  if queue.count == capacity || queue.dropped != 0 {
+    if queue.dropped != 4294967295 {
+      queue.dropped += 1
+    }
+    return
+  }
+  queue.values[(queue.head + queue.count) % capacity] = event
+  queue.count += 1
+}
+pub fn next(queue: *Queue, output: *Event) bool {
+  if queue.count != 0 {
+    output.* = queue.values[queue.head]
+    queue.head = (queue.head + 1) % capacity
+    queue.count -= 1
+    return true
+  }
+  if queue.dropped != 0 {
+    output.* = Event{ kind: Kind.Overflow, dropped: queue.dropped }
+    queue.dropped = 0
+    return true
+  }
+  return false
+}
+
+// Edit owns a revision-tagged replacement in consecutive chunks. key/modifiers
+// are token low/high32; x/y the byte range; width replacement byte length;
+// scancode chunk offset; button final1. Native enqueue is all-or-overflow.
+pub struct EditBuffer {
+  bytes: [4096]u8,
+  token: u64,
+  start: usize,
+  end: usize,
+  total: usize,
+  used: usize,
+  active: bool,
+}
+pub struct EditResult { value: edits.Replacement, ready: bool, kind: edit_errors.Kind, ok: bool }
+
+fn edit_failure(buffer: *EditBuffer, kind: edit_errors.Kind) EditResult {
+  buffer.active = false
+  buffer.used = 0
+  buffer.token = 0
+  return EditResult{ kind: kind }
+}
+
+// A ready value borrows buffer until its next Edit chunk. Other event kinds
+// are ignored unless they interrupt a partial transaction. Overflow clears it.
+pub fn collect_edit(buffer: *EditBuffer, event: *const Event) EditResult {
+  if event.kind == Kind.Overflow {
+    return edit_failure(buffer, edit_errors.Kind.Capacity)
+  }
+  if event.kind != Kind.Edit {
+    if buffer.active {
+      return edit_failure(buffer, edit_errors.Kind.InvalidState)
+    }
+    return EditResult{ ok: true }
+  }
+  token := #cast(u64, event.key) | (#cast(u64, event.modifiers) << 32)
+  if event.x < 0 || event.y < event.x || event.width < 0 || event.width > 4096 || event.text_length > 256 || token == 0 || event.button > 1 {
+    return edit_failure(buffer, edit_errors.Kind.InvalidInput)
+  }
+  offset := #cast(usize, event.scancode)
+  total := #cast(usize, event.width)
+  count := #cast(usize, event.text_length)
+  if offset > total || count > total - offset || (count == 0 && (total != 0 || event.button != 1)) ||
+    (event.button == 1) != (offset + count == total) || !edit_utf8.valid(event.text[..count]) {
+    return edit_failure(buffer, edit_errors.Kind.InvalidInput)
+  }
+  if !buffer.active {
+    if offset != 0 {
+      return edit_failure(buffer, edit_errors.Kind.InvalidState)
+    }
+    buffer.token = token
+    buffer.start = #cast(usize, event.x)
+    buffer.end = #cast(usize, event.y)
+    buffer.total = total
+    buffer.used = 0
+    buffer.active = true
+  }
+  if buffer.token != token || buffer.start != #cast(usize, event.x) || buffer.end != #cast(usize, event.y) || buffer.total != total || buffer.used != offset {
+    return edit_failure(buffer, edit_errors.Kind.InvalidState)
+  }
+  for i in 0..count {
+    buffer.bytes[offset + i] = event.text[i]
+  }
+  buffer.used += count
+  if event.button == 0 {
+    return EditResult{ ok: true }
+  }
+  buffer.active = false
+  return EditResult{ value: edits.Replacement{ text: buffer.bytes[..total], start: buffer.start, end: buffer.end, token: token }, ready: true, ok: true }
+}

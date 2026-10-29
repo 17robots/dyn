@@ -1,0 +1,62 @@
+use "std/mmio" mmio
+use "std/errors" errors
+pub struct Result { kind: errors.Kind, error: isize, ok: bool }
+// Little-endian split 64-bit MTIME/MTIMECMP registers. These descriptors borrow
+// hardware registers; clock frequency and hart ownership belong to the caller.
+// Split accesses require strongly ordered device I/O (the RISC-V MTIMER
+// contract). These calls do not configure PMAs or supply device-order fences.
+pub struct MachineTimer { time: usize, compare: usize }
+pub fn clint(base: usize, hart_index: usize) MachineTimer {
+  return MachineTimer{ time: base + 0xbff8, compare: base + 0x4000 + hart_index * 8 }
+}
+// RV32-safe coherent read. No assumption about atomic 64-bit device accesses.
+pub fn now(timer: *const MachineTimer) u64 {
+  for true {
+    high := mmio.load_u32(timer.time + 4)
+    low := mmio.load_u32(timer.time)
+    again := mmio.load_u32(timer.time + 4)
+    if high == again {
+      return (#cast(u64, high) << 32) | #cast(u64, low)
+    }
+  }
+  return 0
+}
+// Avoid transient early compares when updating through 32-bit device accesses.
+pub fn deadline(timer: *const MachineTimer, ticks: u64) {
+  mmio.store_u32(timer.compare, 0xffffffff)
+  mmio.store_u32(timer.compare + 4, #cast(u32, (ticks >> 32)))
+  mmio.store_u32(timer.compare, #cast(u32, ticks))
+}
+pub fn disarm(timer: *const MachineTimer) {
+  deadline(timer, 0xffffffffffffffff)
+}
+pub struct SysTick { base: usize = 0xe000e010 }
+// periods are 2..2^24 clock ticks. Device initialization, interrupt handler and
+// processor clock frequency remain caller responsibilities. Invalid periods
+// leave registers untouched. CTRL reads clear COUNTFLAG on real hardware.
+pub fn start(timer: *const SysTick, period: u32, interrupt: bool, processor_clock: bool) Result {
+  if period < 2 || period > 16777216 {
+    return Result{ kind: errors.Kind.InvalidInput }
+  }
+  control: u32 = 1
+  if interrupt {
+    control |= 2
+  }
+  if processor_clock {
+    control |= 4
+  }
+  mmio.store_u32(timer.base, 0)
+  mmio.store_u32(timer.base + 4, period - 1)
+  mmio.store_u32(timer.base + 8, 0)
+  mmio.store_u32(timer.base, control)
+  return Result{ ok: true }
+}
+pub fn stop(timer: *const SysTick) {
+  mmio.store_u32(timer.base, 0)
+}
+pub fn current(timer: *const SysTick) u32 {
+  return mmio.load_u32(timer.base + 8) & 0xffffff
+}
+pub fn elapsed(timer: *const SysTick) bool {
+  return (mmio.load_u32(timer.base) & 0x10000) != 0
+}

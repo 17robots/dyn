@@ -263,3 +263,12 @@ On `wasm32-browser` and `wasm32-wasi`, owned arenas get pages through
 `memory.grow`. Page splitting, reuse and coalescing live in `std/mem`. Released
 memory is reused within the instance but linear memory never shrinks. Any growth
 can detach JavaScript typed-array views, so rebuild them after allocating.
+
+### Fallible arena creation
+
+`mem.arena_try_create(block_size)` and `arena_try_create_bounded(block_size, limit)`
+return `ArenaCreation` with `arena: *Arena`, `ok`, an error kind and system code.
+Failure returns nil and owns no backing; zero block size selects the target
+default. `arena_try_push_uninit` provides the ordinary fallible push contract
+without initializing returned bytes. Commitment failures return `System` from
+fallible pushes, and `arena_try_extend` returns false without advancing the arena.

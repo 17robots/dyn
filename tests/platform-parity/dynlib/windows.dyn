@@ -1,0 +1,3 @@
+#target(kernel: windows)
+const library_path: []const u8 = "kernel32.dll"
+const symbol_name: []const u8 = "lstrlenA"

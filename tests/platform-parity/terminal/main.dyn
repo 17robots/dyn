@@ -1,0 +1,28 @@
+use "std/terminal" terminal
+use "std/errors" errors
+
+fn check(ok: bool) {
+  if !ok {
+    #panic("terminal")
+  }
+}
+
+pub fn main() {
+  zero: terminal.State
+  check(zero.bytes[0] == 0)
+  check(!terminal.is_attached(-1))
+  bad := terminal.raw(-1)
+  check(!bad.ok)
+  check(terminal.restore(0, nil).kind == errors.Kind.InvalidInput)
+  key := terminal.key_decode("\x1b[A")
+  check(key.kind == terminal.KeyKind.Up && key.consumed == 3)
+  if terminal.is_attached(0) {
+    saved := terminal.raw(0)
+    check(saved.ok)
+    check(terminal.restore(0, &saved.value).ok)
+    again := terminal.read_state(0)
+    check(again.ok)
+    shown := terminal.size(1)
+    check(shown.ok && shown.columns == 91 && shown.rows == 37)
+  }
+}

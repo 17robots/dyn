@@ -717,3 +717,28 @@ dyn_t32_float_to_int:
 .data
 .p2align 2
 .Ltrapped: .long 0
+
+.text
+.global dyn_irq_disable
+dyn_irq_disable:
+    mrs r0, primask
+    cpsid i
+    bx lr
+.global dyn_irq_restore
+dyn_irq_restore:
+    msr primask, r0
+    bx lr
+.global dyn_irq_vector
+dyn_irq_vector:
+    movw r1, #0xed08
+    movt r1, #0xe000
+    str.w r0, [r1]
+    dsb sy
+    isb sy
+    bx lr
+
+.global dyn_irq_barrier
+dyn_irq_barrier:
+    dsb sy
+    isb sy
+    bx lr

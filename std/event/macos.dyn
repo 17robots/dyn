@@ -1,0 +1,74 @@
+#target(kernel: darwin)
+struct Kevent { ident: u64, filter: i16, flags: u16, filter_flags: u32, data: i64, user: u64 }
+struct Timeout { seconds: i64, nanoseconds: i64 }
+fn native_open() net.Result {
+  value := #syscall(362)
+  if value < 0 {
+    return net.Result{ kind: errors.darwin(value), error: value }
+  }
+  return net.Result{ value: value, ok: true }
+}
+fn native_close(handle: isize) Result {
+  code := #syscall(6, handle)
+  return Result{ kind: errors.darwin(code), error: code, ok: code >= 0 }
+}
+fn native_control(queue: *Queue, index: usize, entry: Entry) Result {
+  old := queue.entries[index]
+  changes: [2]Kevent = []
+  count: usize = 0
+  for i in 0..2 {
+    bit: u32 = Readable
+    filter: i16 = -1
+    if i == 1 {
+      bit = Writable
+      filter = -2
+    }
+    before := old.active && (old.events & bit) != 0
+    after := entry.active && (entry.events & bit) != 0
+    if before || after {
+      flags: u16 = 2
+      descriptor := old.descriptor
+      if after {
+        flags = 1
+        descriptor = entry.descriptor
+      }
+      changes[count] = Kevent{ ident: #cast(u64, descriptor), filter: filter, flags: flags, user: #cast(u64, index) }
+      count += 1
+    }
+  }
+  code := #syscall(363, queue.handle, &changes[0], count, 0, 0, 0)
+  if code < 0 {
+    return Result{ kind: errors.darwin(code), error: code }
+  }
+  return Result{ ok: true }
+}
+fn native_wait(arena: *mem.Arena, queue: *Queue, milliseconds: i32) WaitResult {
+  native := mem.push_array(Kevent, arena, #len(queue.entries))
+  timeout := Timeout{}
+  pointer: *Timeout = nil
+  if milliseconds >= 0 {
+    timeout.seconds = #cast(i64, (milliseconds / 1000))
+    timeout.nanoseconds = #cast(i64, (milliseconds % 1000)) * 1000000
+    pointer = &timeout
+  }
+  code := #syscall(363, queue.handle, 0, 0, &native[0], #len(native), pointer)
+  if code < 0 {
+    return WaitResult{ kind: errors.darwin(code), error: code }
+  }
+  events := mem.push_array(Event, arena, #cast(usize, code))
+  for i in 0..#len(events) {
+    entry := queue.entries[#cast(usize, native[i].user)]
+    flags := Readable
+    if native[i].filter == -2 {
+      flags = Writable
+    }
+    if (native[i].flags & 32768) != 0 {
+      flags |= Hangup
+    }
+    if (native[i].flags & 16384) != 0 {
+      flags |= Error
+    }
+    events[i] = Event{ descriptor: entry.descriptor, token: entry.token, events: flags }
+  }
+  return WaitResult{ value: events, ok: true }
+}

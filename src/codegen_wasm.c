@@ -185,6 +185,7 @@ typedef struct {
   unsigned stack_symbol, stack_low_symbol, init_symbol, guard_symbol,
       init_index;
   WB body, localtypes;
+  size_t temp_cursor;
   WRs relocs, bodyrelocs;
   unsigned param_count, base, frame, depth;
   unsigned *localoffset, *localalias, *captured;
@@ -350,9 +351,17 @@ static void set(WG *g, unsigned n) {
   wu(&g->body, n);
 }
 static unsigned tmp(WG *g, unsigned vt) {
-  unsigned n = g->param_count + (unsigned)g->localtypes.n;
-  wb(&g->localtypes, vt);
-  return n;
+  /* Aggregate initializer scopes can release completed element temporaries.
+     Keep the physical declarations at their high-water mark and reuse only a
+     matching value type above the current live prefix. Outer expression values
+     stay below the cursor; stack-slot backing is never rewound here. */
+  size_t at = g->temp_cursor;
+  while (at < g->localtypes.n && g->localtypes.p[at] != vt)
+    ++at;
+  if (at == g->localtypes.n)
+    wb(&g->localtypes, vt);
+  g->temp_cursor = at + 1;
+  return g->param_count + (unsigned)at;
 }
 static unsigned save(WG *g, unsigned vt) {
   unsigned n = tmp(g, vt);
@@ -471,6 +480,11 @@ static void guard(WG *g) {
   end(g);
 }
 static void branch(WG *g, unsigned depth, bool cond) {
+  if (depth >= g->depth) {
+    fprintf(stderr, "error: invalid Wasm branch in %s: target %u at depth %u\n", g->function ? g->function->name : "initializer", depth, g->depth);
+    g->failed = true;
+    return;
+  }
   op(g, cond ? 0x0d : 0x0c);
   wu(&g->body, g->depth - depth - 1);
 }
@@ -1060,13 +1074,16 @@ static unsigned expr(WG *g, DynExprId id) {
   case DYN_EXPR_ARRAY: {
     p = slot(g, wsize(g, e->type), wa(g, e->type));
     zero(g, p, wsize(g, e->type));
+    size_t element_temps = g->temp_cursor;
     if (e->kind == DYN_EXPR_STRUCT) {
       DynIrStruct *s = &g->ir->structs[e->integer];
       for (unsigned i = 0; i < s->field_count; i++) {
         DynIrField *f = &g->ir->fields[s->field_start + i];
-        if (f->default_expression != DYN_NO_EXPR)
+        if (f->default_expression != DYN_NO_EXPR) {
           store(g, offset(g, p, wfield(g, e->type, i)),
                 expr(g, f->default_expression), f->type);
+          g->temp_cursor = element_temps;
+        }
       }
     }
     for (unsigned i = 0; i < e->item_count; i++) {
@@ -1077,6 +1094,7 @@ static unsigned expr(WG *g, DynExprId id) {
                          : i * wsize(g, t);
       v = expr(g, it->expression);
       store(g, offset(g, p, off), v, t);
+      g->temp_cursor = element_temps;
     }
     return p;
   }
@@ -1603,6 +1621,7 @@ static void exportfn(WG *g, const char *name, unsigned index) {
 static void startbody(WG *g, const DynIrFunction *f, unsigned params) {
   g->function = f;
   g->param_count = params;
+  g->temp_cursor = 0;
   g->frame = 0;
   g->depth = 0;
   g->ndefer = 0;
@@ -1674,13 +1693,11 @@ static void finishbody(WG *g) {
 }
 #include "codegen_wasm_asm.inc"
 
-/* Inlining rebuilds body/local tables only for reachable functions. Their IDs
-   remain stable, but dead functions still carry original table offsets. Apply
-   the same selection to counts, indices, signatures and bodies. */
-static bool wasm_emits_function(const DynIrProgram *ir, size_t index) {
-  const DynIrFunction *f = &ir->functions[index];
-  return !(f->generic && !f->instance) &&
-         (!ir->live.functions || ir->live.functions[index]);
+/* Inlining rebuilds only live bodies and their local/child tables. Dead
+   function metadata still refers to the original tables and must not be emitted. */
+static bool wasm_function_live(const DynIrProgram *ir, size_t i) {
+  return (!ir->live.functions || ir->live.functions[i]) &&
+         !(ir->functions[i].generic && !ir->functions[i].instance);
 }
 
 static int wasm_object_impl(const DynSource *source, const DynIrProgram *ir,
@@ -1703,7 +1720,7 @@ static int wasm_object_impl(const DynSource *source, const DynIrProgram *ir,
   unsigned imported = 0, defined = 0;
   for (size_t i = 0; i < nf; i++) {
     const DynIrFunction *f = &ir->functions[i];
-    if (!wasm_emits_function(ir, i))
+    if (!wasm_function_live(ir, i))
       continue;
     if (f->foreign)
       g.fn_index[i] = imported++;
@@ -1713,7 +1730,7 @@ static int wasm_object_impl(const DynSource *source, const DynIrProgram *ir,
   unsigned next = imported;
   for (size_t i = 0; i < nf; i++) {
     const DynIrFunction *f = &ir->functions[i];
-    if (!wasm_emits_function(ir, i))
+    if (!wasm_function_live(ir, i))
       continue;
     if (!f->foreign)
       g.fn_index[i] = next++;
@@ -1721,7 +1738,7 @@ static int wasm_object_impl(const DynSource *source, const DynIrProgram *ir,
   g.init_index = next;
   for (size_t i = 0; i < nf; i++) {
     const DynIrFunction *f = &ir->functions[i];
-    if (!wasm_emits_function(ir, i))
+    if (!wasm_function_live(ir, i))
       continue;
     unsigned n = f->param_count + (f->variadic && !f->foreign ? 2 : 0);
     DynType *args = calloc(n + 1, sizeof(*args));
@@ -1796,7 +1813,7 @@ static int wasm_object_impl(const DynSource *source, const DynIrProgram *ir,
   wu(&g.code, defined + 1);
   for (size_t i = 0; i < nf; i++) {
     const DynIrFunction *f = &ir->functions[i];
-    if (f->foreign || !wasm_emits_function(ir, i))
+    if (f->foreign || !wasm_function_live(ir, i))
       continue;
     bool sr =
         wagg(&g, f->return_type) && wflat(&g, f->return_type) == DYN_TYPE_VOID;
@@ -1861,7 +1878,7 @@ static int wasm_object_impl(const DynSource *source, const DynIrProgram *ir,
   wsec(&out, 2, &s);
   wu(&s, defined + 1);
   for (size_t i = 0; i < nf; i++)
-    if (!ir->functions[i].foreign && wasm_emits_function(ir, i))
+    if (!ir->functions[i].foreign && wasm_function_live(ir, i))
       wu(&s, g.fn_type[i]);
   wu(&s, init_type);
   wsec(&out, 3, &s);

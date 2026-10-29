@@ -1,0 +1,65 @@
+use "std/fs" fs
+use "std/bytes" bytes
+
+fn check(ok: bool, message: []const u8) {
+  if !ok {
+    #panic(message)
+  }
+}
+
+fn clean() {
+  _ = fs.remove("listing/alpha.txt")
+  _ = fs.remove("listing/βeta.txt")
+  _ = fs.remove("listing/renamed.txt")
+  _ = fs.remove_directory("listing/inner")
+  _ = fs.remove_directory("listing")
+}
+
+fn main() {
+  clean()
+  check(fs.make_directory("listing", 493).ok, "make directory")
+  check(fs.make_directory("listing/inner", 493).ok, "make inner")
+  check(fs.write_all("listing/alpha.txt", "a").ok, "alpha")
+  check(fs.write_all("listing/βeta.txt", "b").ok, "beta")
+  storage: [4096]u8 = []
+  opened := fs.open_directory("listing", storage[..])
+  check(opened.ok, "open directory")
+  directory := opened.value
+  seen_alpha := false
+  seen_beta := false
+  seen_inner := false
+  count := 0
+  for true {
+    entry := fs.directory_next(&directory)
+    if !entry.ok {
+      check(entry.error == 0, "listing error")
+      break
+    }
+    count += 1
+    if bytes.equal(entry.name, "alpha.txt") {
+      seen_alpha = entry.kind == 8
+    }
+    if bytes.equal(entry.name, "βeta.txt") {
+      seen_beta = entry.kind == 8
+    }
+    if bytes.equal(entry.name, "inner") {
+      seen_inner = entry.kind == 4
+    }
+  }
+  check(count == 3 && seen_alpha && seen_beta && seen_inner, "entries")
+  check(fs.close_directory(&directory).ok, "close")
+  empty := fs.open_directory("listing/inner", storage[..])
+  check(empty.ok, "open empty")
+  inner := empty.value
+  check(!fs.directory_next(&inner).ok, "empty directory")
+  _ = fs.close_directory(&inner)
+  check(!fs.open_directory("missing-directory", storage[..]).ok, "missing")
+  info := fs.metadata("listing/alpha.txt")
+  check(info.ok && info.size == 1 && info.mode & 0o170000 == 0o100000, "file metadata")
+  folder := fs.metadata("listing/inner")
+  check(folder.ok && folder.mode & 0o170000 == 0o040000, "directory metadata")
+  check(fs.rename("listing/alpha.txt", "listing/renamed.txt").ok, "rename")
+  check(!fs.metadata("listing/alpha.txt").ok && fs.metadata("listing/renamed.txt").ok, "renamed")
+  clean()
+  check(!fs.metadata("listing").ok, "cleaned up")
+}

@@ -1,0 +1,50 @@
+use "std/mmio" mmio
+
+pub enum RegisterWidth { Byte, Word }
+// The caller configures and initializes the hardware before transmitting.
+// Addresses must satisfy the MMIO width/alignment contract. This descriptor
+// borrows registers; it allocates nothing and does not own a peripheral.
+pub struct Uart {
+  data: usize,
+  status: usize,
+  ready_mask: u32,
+  ready_when_set: bool,
+  width: RegisterWidth,
+}
+
+// Byte-wide NS16550 registers, as on the QEMU virt board.
+pub fn ns16550(base: usize) Uart {
+  return Uart{ data: base, status: base + 5, ready_mask: 0x20, ready_when_set: true, width: RegisterWidth.Byte }
+}
+
+// CMSDK UART registers, as on QEMU mps2-an500. State bit 0 set means TX full.
+pub fn cmsdk(base: usize) Uart {
+  return Uart{ data: base, status: base + 4, ready_mask: 1, ready_when_set: false, width: RegisterWidth.Word }
+}
+
+pub fn ready(uart: *const Uart) bool {
+  status: u32 = 0
+  if uart.width == RegisterWidth.Byte {
+    status = #cast(u32, mmio.load_u8(uart.status))
+  } else {
+    status = mmio.load_u32(uart.status)
+  }
+  set := (status & uart.ready_mask) != 0
+  return set == uart.ready_when_set
+}
+
+// Polls indefinitely, matching the board console's blocking transmit contract.
+pub fn write_byte(uart: *const Uart, byte: u8) {
+  for !ready(uart) {}
+  if uart.width == RegisterWidth.Byte {
+    mmio.store_u8(uart.data, byte)
+  } else {
+    mmio.store_u32(uart.data, #cast(u32, byte))
+  }
+}
+
+pub fn write(uart: *const Uart, text: []const u8) {
+  for byte in text {
+    write_byte(uart, byte)
+  }
+}

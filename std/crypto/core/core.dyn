@@ -132,7 +132,7 @@ pub fn sha256_update(context: *Sha256, input: []const u8) bool {
       return true
     }
   }
-  for at + 64 <= #len(input) {
+  for #len(input) - at >= 64 {
     block(context.state[..], input[at..at + 64])
     at += 64
   }
@@ -209,6 +209,9 @@ pub fn hmac_sha256(destination: []u8, key: []const u8, message: []const u8) []u8
   key_at: usize = 0
   if #len(key) > 64 {
     hashed := sha256(key_digest[..], key)
+    if #len(hashed) != 32 {
+      return destination[..0]
+    }
     for key_at < #len(hashed) {
       key_block[key_at] = hashed[key_at]
       key_at += 1

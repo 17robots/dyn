@@ -58,7 +58,7 @@ static void options_contract(void) {
   cancellation("a", false);
   cancellation("#sizeof([1]*u8)+f([1,2],#typeof(a+b))", false);
   cancellation("fn f(){x:=1}", true);
-  cancellation("fn f(){ if foo(x){ return Point{x:1} }\n for i in 0..=3 { foo(i) } }", true);
+  cancellation("fn f(){\n if foo(x){ return Point{x:1} }\n for i in 0..=3 { foo(i) }\n}", true);
   /* UTF-8 and escapes can skip exact 1024-byte offsets. */
   char large[16390];
   large[0] = '"';
@@ -167,9 +167,9 @@ int main(void) {
   assert(tree.root == NONE && tree.error_offset <= length);
   assert(strstr(tree.error, "nesting limit exceeded"));
   exp_free(&tree);
-  const char *metadata = "use \"a\" mod #link(\"c\") pub packed struct S{x:i32} distinct type T=i32 "
-      "extern fn f \"c_f\"(...) fn(i32)u8 fn g(p:*const T,x:[]const T){"
-      "for *const v in x{v.* = 1}\n case p{_=>{}}\n foo($T,#bitcast(u64,p)) }";
+  const char *metadata = "use \"a\" mod\n#link(\"c\")\npub packed struct S{x:i32}\ndistinct type T=i32\n"
+      "extern fn f \"c_f\"(...) fn(i32)u8\nfn g(p:*const T,x:[]const T){\n"
+      "for *const v in x{v.* = 1}\ncase p{_=>{}}\nfoo($T,#bitcast(u64,p))\n}";
   cancellation(metadata, true);
   assert(exp_parse_source(metadata, strlen(metadata), &tree));
   assert(tree.nodes[tree.root].parent == NONE);

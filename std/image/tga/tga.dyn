@@ -1,0 +1,156 @@
+use "std/mem" mem
+use "std/errors" errors
+use "std/encoding/binary" binary
+// True-color and gray TGA, including RLE and all origin directions. Color-map
+// images, 15/16-bit true color, and interleaving return Unsupported.
+pub struct Info { width: u32, height: u32, channels: u8 = 4 }
+pub struct Image { info: Info, pixels: []u8 }
+pub struct Result { value: Image, kind: errors.Kind, error: isize, offset: usize, ok: bool }
+pub struct EncodeResult { value: []u8, kind: errors.Kind, error: isize, ok: bool }
+// Ownership: pixels borrow arena backing; source is read only during this call.
+// Inputs must not borrow unused backing of the output arena.
+// Invalid/unsupported input restores the arena mark. Allocation exhaustion panics.
+pub fn decode(arena: *mem.Arena, source: []const u8) Result {
+  if #len(source) < 18 {
+    return Result{ kind: errors.Kind.InvalidInput }
+  }
+  kind := source[2]
+  if source[1] != 0 || (kind != 2 && kind != 3 && kind != 10 && kind != 11) || (source[17] & 192) != 0 {
+    return Result{ kind: errors.Kind.Unsupported }
+  }
+  gray := kind == 3 || kind == 11
+  rle := kind == 10 || kind == 11
+  bits := source[16]
+  if (gray && bits != 8 && bits != 16) || (!gray && bits != 24 && bits != 32) {
+    return Result{ kind: errors.Kind.Unsupported, offset: 16 }
+  }
+  alpha := source[17] & 15
+  if (bits == 8 || bits == 24) && alpha != 0 {
+    return Result{ kind: errors.Kind.InvalidInput, offset: 17 }
+  }
+  if (bits == 16 || bits == 32) && alpha != 0 && alpha != 8 {
+    return Result{ kind: errors.Kind.Unsupported, offset: 17 }
+  }
+  width := #cast(u32, binary.load_u16_le(source[12..]))
+  height := #cast(u32, binary.load_u16_le(source[14..]))
+  if width == 0 || height == 0 {
+    return Result{ kind: errors.Kind.InvalidInput }
+  }
+  count := #cast(usize, width) * #cast(usize, height)
+  if #cast(u64, width) * #cast(u64, height) > 16777216 {
+    return Result{ kind: errors.Kind.Capacity }
+  }
+  stride := #cast(usize, bits / 8)
+  at := 18 + #cast(usize, source[0])
+  if at > #len(source) {
+    return Result{ kind: errors.Kind.InvalidInput, offset: 18 }
+  }
+  mark := mem.arena_mark(arena)
+  success := false
+  defer {
+    if !success {
+      mem.arena_rewind(arena, mark)
+    }
+  }
+  pixels := mem.push_array(u8, arena, count * 4)
+  produced: usize = 0
+  for produced < count {
+    repeat := false
+    length: usize = 1
+    if rle {
+      if at == #len(source) {
+        return Result{ kind: errors.Kind.InvalidInput, offset: at }
+      }
+      repeat = (source[at] & 128) != 0
+      length = #cast(usize, source[at] & 127) + 1
+      at += 1
+    }
+    if length > count - produced {
+      return Result{ kind: errors.Kind.InvalidInput, offset: at }
+    }
+    needed := length * stride
+    if repeat {
+      needed = stride
+    }
+    if needed > #len(source) - at {
+      return Result{ kind: errors.Kind.InvalidInput, offset: at }
+    }
+    for j in 0..length {
+      src := at
+      if !repeat {
+        src += j * stride
+      }
+      index := produced + j
+      x := index % #cast(usize, width)
+      y := index / #cast(usize, width)
+      if (source[17] & 16) != 0 {
+        x = #cast(usize, width) - 1 - x
+      }
+      if (source[17] & 32) == 0 {
+        y = #cast(usize, height) - 1 - y
+      }
+      dst := (y * #cast(usize, width) + x) * 4
+      if gray {
+        pixels[dst] = source[src]
+        pixels[dst + 1] = source[src]
+        pixels[dst + 2] = source[src]
+      }
+      else {
+        pixels[dst] = source[src + 2]
+        pixels[dst + 1] = source[src + 1]
+        pixels[dst + 2] = source[src]
+      }
+      pixels[dst + 3] = 255
+      if alpha == 8 {
+        pixels[dst + 3] = source[src + stride - 1]
+      }
+    }
+    at += needed
+    produced += length
+  }
+  success = true
+  return Result{ value: Image{ info: Info{ width: width, height: height, channels: 4 }, pixels: pixels }, ok: true }
+}
+// Ownership: encoded bytes borrow arena backing; pixels are not retained.
+// Inputs must not borrow unused backing of the output arena.
+pub fn encode(arena: *mem.Arena, pixels: []const u8, width, height: u32, channels: u8) EncodeResult {
+  if width == 0 || height == 0 || width > 65535 || height > 65535 || (channels != 1 && channels != 2 && channels != 3 && channels != 4) {
+    return EncodeResult{ kind: errors.Kind.InvalidInput }
+  }
+  count := #cast(u64, width) * #cast(u64, height)
+  if count > 16777216 {
+    return EncodeResult{ kind: errors.Kind.Capacity }
+  }
+  size := #cast(usize, count) * #cast(usize, channels)
+  if #len(pixels) != size {
+    return EncodeResult{ kind: errors.Kind.InvalidInput }
+  }
+  output := mem.push_array(u8, arena, 18 + size)
+  output[2] = 2
+  if channels < 3 {
+    output[2] = 3
+  }
+  binary.store_u16_le(output[12..], #cast(u16, width))
+  binary.store_u16_le(output[14..], #cast(u16, height))
+  output[16] = channels * 8
+  output[17] = 32
+  if channels == 2 || channels == 4 {
+    output[17] |= 8
+  }
+  for i in 0..#cast(usize, count) {
+    src := i * #cast(usize, channels)
+    dst := 18 + src
+    if channels < 3 {
+      output[dst] = pixels[src]
+    }
+    else {
+      output[dst] = pixels[src + 2]
+      output[dst + 1] = pixels[src + 1]
+      output[dst + 2] = pixels[src]
+    }
+    if channels == 2 || channels == 4 {
+      output[dst + #cast(usize, channels) - 1] = pixels[src + #cast(usize, channels) - 1]
+    }
+  }
+  return EncodeResult{ value: output, ok: true }
+}

@@ -1,12 +1,11 @@
-#target(kernel: linux)
-
 use "std/mem" mem
 use "std/c" cabi
 use "std/errors" errors
 
-// POSIX dynamic-loader adapter. Handles own loader references; symbols borrow them.
-// Symbols are invalid after the library is successfully closed.
-// Linking a program using this module requires libc (or libdl on older systems).
+// Dynamic-loader adapter for Linux, macOS and Windows. Handles own loader
+// references; symbols borrow them. Symbols are invalid after the library is
+// successfully closed. On Linux, linking requires libc (or libdl on older
+// systems). Flags apply only to POSIX loaders; Windows ignores them.
 pub type Handle = rawptr
 
 pub const Lazy: i32 = 1
@@ -18,13 +17,9 @@ pub struct OpenResult { value: Handle, kind: errors.Kind, error: isize, message:
 pub struct SymbolResult { value: rawptr, kind: errors.Kind, error: isize, message: *const u8, ok: bool }
 
 // Loader messages borrow storage until the next loader operation.
-// dlerror supplies text, not a native integer code; error remains zero.
+// POSIX dlerror supplies text, not a native integer code; error remains zero.
+// Windows supplies a GetLastError code in error; message stays nil.
 pub struct Result { ok: bool, kind: errors.Kind, error: isize, message: *const u8 }
-
-extern fn native_open "dlopen"(path: *const u8, flags: i32) rawptr
-extern fn native_symbol "dlsym"(handle: rawptr, name: *const u8) rawptr
-extern fn native_close "dlclose"(handle: rawptr) i32
-extern fn native_error "dlerror"() *const u8
 
 pub fn open(path: []const u8, flags: i32) OpenResult {
   storage: [4096 + mem.ArenaBufferOverhead]u8 = []
@@ -35,12 +30,7 @@ pub fn open(path: []const u8, flags: i32) OpenResult {
   if !name.ok {
     return OpenResult{ kind: errors.Kind.InvalidInput }
   }
-  _ = native_error()
-  value := native_open(name.value, flags)
-  if value == nil {
-    return OpenResult{ value: nil, kind: errors.Kind.System, message: native_error(), ok: false }
-  }
-  return OpenResult{ value: value, ok: true }
+  return platform_open(name.value, flags)
 }
 
 pub fn symbol(handle: Handle, name: []const u8) SymbolResult {
@@ -55,14 +45,7 @@ pub fn symbol(handle: Handle, name: []const u8) SymbolResult {
   if !native_name.ok {
     return SymbolResult{ kind: errors.Kind.InvalidInput }
   }
-  // POSIX requires clearing prior error because a valid symbol may be null.
-  _ = native_error()
-  value := native_symbol(handle, native_name.value)
-  error := native_error()
-  if error != nil {
-    return SymbolResult{ value: value, kind: errors.Kind.System, message: error }
-  }
-  return SymbolResult{ value: value, ok: true }
+  return platform_symbol(handle, native_name.value)
 }
 
 // Clears the owned handle only after a successful close. Failure retains ownership.
@@ -74,21 +57,18 @@ pub fn close(handle: *Handle) Result {
   if value == nil {
     return Result{ kind: errors.Kind.InvalidState }
   }
-  _ = native_error()
-  if native_close(value) != 0 {
-    return Result{ kind: errors.Kind.System, message: native_error() }
+  closed := platform_close(value)
+  if closed.ok {
+    handle.* = nil
   }
-  handle.* = nil
-  return Result{ ok: true }
+  return closed
 }
 
 // Returned bytes borrow loader-owned storage and die at next loader operation.
 pub fn last_error(maximum: usize) cabi.BytesResult {
-  return cabi.bytes_from_string(native_error(), maximum)
+  return cabi.bytes_from_string(platform_error(), maximum)
 }
 
 pub fn error_bytes(error: *const u8, maximum: usize) cabi.BytesResult {
   return cabi.bytes_from_string(error, maximum)
 }
-#target(kernel: linux)
-#target(kernel: linux)

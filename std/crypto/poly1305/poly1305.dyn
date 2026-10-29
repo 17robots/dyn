@@ -1,0 +1,142 @@
+use "std/encoding/binary" binary
+// RFC 8439 section 2.5. A one-time authenticator: NEVER reuse a key.
+// Five base-2^26 limbs; secret arithmetic has fixed loop bounds, no secret
+// indexes, and no secret-dependent branches. Message lengths are public.
+// Compiler/machine constant-time qualification is tracked separately.
+pub struct State { r: [5]u64, h: [5]u64, pad: [4]u32, buffer: [16]u8, used: usize, ok: bool }
+pub struct Tag { value: [16]u8, ok: bool }
+const Mask: u64 = 0x3ffffff
+fn load(source: []const u8, at: usize) u64 {
+  return #cast(u64, binary.load_u32_le(source[at..at+4]))
+}
+pub fn init(key: []const u8) State {
+  if #len(key) != 32 {
+    return State{}
+  }
+  state := State{ ok: true }
+  state.r[0] = load(key, 0) & 0x3ffffff
+  state.r[1] = (load(key, 3) >> 2) & 0x3ffff03
+  state.r[2] = (load(key, 6) >> 4) & 0x3ffc0ff
+  state.r[3] = (load(key, 9) >> 6) & 0x3f03fff
+  state.r[4] = (load(key, 12) >> 8) & 0x00fffff
+  for i in 0..4 {
+    state.pad[i] = binary.load_u32_le(key[16+i*4..20+i*4])
+  }
+  return state
+}
+fn block(state: *State, input: []const u8, high: u64) {
+  state.h[0] += load(input, 0) & Mask
+  state.h[1] += (load(input, 3) >> 2) & Mask
+  state.h[2] += (load(input, 6) >> 4) & Mask
+  state.h[3] += (load(input, 9) >> 6) & Mask
+  state.h[4] += (load(input, 12) >> 8) | high
+  d: [5]u64 = []
+  for i in 0..5 {
+    for j in 0..5 {
+      // i/j are public, so this branch and these indexes reveal no key bits.
+      if j <= i {
+        d[i] += state.h[j] * state.r[i-j]
+      } else {
+        d[i] += state.h[j] * state.r[5+i-j] * 5
+      }
+    }
+  }
+  carry: u64 = 0
+  for i in 0..5 {
+    d[i] += carry
+    state.h[i] = d[i] & Mask
+    carry = d[i] >> 26
+  }
+  state.h[0] += carry * 5
+  state.h[1] += state.h[0] >> 26
+  state.h[0] &= Mask
+}
+pub fn update(state: *State, input: []const u8) bool {
+  if !state.ok {
+    return false
+  }
+  at: usize = 0
+  if state.used != 0 {
+    for at < #len(input) && state.used < 16 {
+      state.buffer[state.used] = input[at]
+      state.used += 1
+      at += 1
+    }
+    if state.used == 16 {
+      block(state, state.buffer[..], 1 << 24)
+      state.used = 0
+    }
+  }
+  for #len(input) - at >= 16 {
+    block(state, input[at..at+16], 1 << 24)
+    at += 16
+  }
+  for at < #len(input) {
+    state.buffer[state.used] = input[at]
+    state.used += 1
+    at += 1
+  }
+  return true
+}
+// finish consumes the state. A second finish or update is rejected.
+pub fn finish(state: *State) Tag {
+  if !state.ok {
+    return Tag{}
+  }
+  if state.used != 0 {
+    state.buffer[state.used] = 1
+    for i in state.used+1..16 {
+      state.buffer[i] = 0
+    }
+    block(state, state.buffer[..], 0)
+  }
+  h := state.h
+  for i in 1..4 {
+    h[i+1] += h[i] >> 26
+    h[i] &= Mask
+  }
+  h[0] += (h[4] >> 26) * 5
+  h[4] &= Mask
+  h[1] += h[0] >> 26
+  h[0] &= Mask
+  g: [5]u64 = []
+  carry: u64 = 5
+  for i in 0..4 {
+    g[i] = h[i] + carry
+    carry = g[i] >> 26
+    g[i] &= Mask
+  }
+  g[4] = #wrap(h[4] + carry - (1 << 26))
+  select := #wrap((g[4] >> 63) - 1)
+  for i in 0..5 {
+    h[i] = (h[i] & ~select) | (g[i] & select)
+  }
+  words: [4]u64 = [(h[0] | (h[1] << 26)) & 0xffffffff, ((h[1] >> 6) | (h[2] << 20)) & 0xffffffff, ((h[2] >> 12) | (h[3] << 14)) & 0xffffffff, ((h[3] >> 18) | (h[4] << 8)) & 0xffffffff]
+  result := Tag{ ok: true }
+  carry = 0
+  for i in 0..4 {
+    word := words[i] + #cast(u64, state.pad[i]) + carry
+    binary.store_u32_le(result.value[i*4..i*4+4], #cast(u32, word))
+    carry = word >> 32
+  }
+  state.* = State{}
+  return result
+}
+pub fn authenticate(message: []const u8, key: []const u8) Tag {
+  state := init(key)
+  if !update(&state, message) {
+    return Tag{}
+  }
+  return finish(&state)
+}
+// Fixed 16-byte comparison; length is public.
+pub fn equal(left: []const u8, right: []const u8) bool {
+  if #len(left) != 16 || #len(right) != 16 {
+    return false
+  }
+  difference: u32 = 0
+  for i in 0..16 {
+    difference |= #cast(u32, left[i] ^ right[i])
+  }
+  return difference == 0
+}

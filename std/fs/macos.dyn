@@ -58,3 +58,10 @@ fn native_valid(handle: isize) bool {
 fn native_interrupted(code: isize) bool {
   return code == -4
 }
+// Read-only private mapping of size bytes from offset zero.
+fn native_map(handle: isize, size: usize) isize {
+  return #syscall(197, 0, size, 1, 2, handle, 0)
+}
+fn native_unmap(address: usize, size: usize) isize {
+  return #syscall(73, address, size)
+}

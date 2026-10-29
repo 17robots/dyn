@@ -1,0 +1,96 @@
+#target(kernel: windows)
+use "vendor/window/native" native
+use "std/ui/box" box
+pub type Window = native.Window
+pub type Result = native.Result
+pub fn open(window: *Window, title: []const u8, width, height: i32) Result {
+  return native.open(window, title, width, height)
+}
+pub fn close(window: *Window) {
+  native.close(window)
+}
+pub fn poll(window: *Window) Result {
+  return native.poll(window)
+}
+pub fn make_current(window: *Window) Result {
+  return native.make_current(window)
+}
+pub fn swap(window: *Window) Result {
+  return native.swap(window)
+}
+pub fn gl_proc(name: *const u8) rawptr {
+  return native.gl_proc(name)
+}
+pub type Cursor = native.Cursor
+pub fn set_clipboard(window: *Window, text: []const u8) {
+  native.set_clipboard(window, text)
+}
+pub fn request_paste(window: *Window) {
+  native.request_paste(window)
+}
+pub fn set_cursor(window: *Window, cursor: Cursor) {
+  native.set_cursor(window, cursor)
+}
+pub fn scale(window: *const Window) f32 {
+  return native.scale(window)
+}
+pub fn wait(window: *Window, timeout: i32) {
+  native.wait(window, timeout)
+}
+pub fn box_input(window: *const Window) box.Input {
+  return native.box_input(window)
+}
+
+// Ordered events retain all supported raw input; box_input remains a summary.
+pub type Event = native.OrderedEvent
+pub type EventKind = native.EventKind
+pub fn next_event(window: *Window, output: *Event) bool {
+  return native.next_event(window, output)
+}
+// The owner must outlive all worker wake calls; stop/join them before close.
+pub fn wake(window: *const Window) Result {
+  return native.wake(window)
+}
+
+// Ordered listening is disabled initially. Enable before polling input;
+// changing this flag clears the queue without changing box_input summaries.
+pub fn listen_events(window: *Window, enabled: bool) {
+  native.listen_events(window, enabled)
+}
+pub type Composition = native.Composition
+pub fn composition(window: *const Window) Composition {
+  return native.composition(window)
+}
+pub fn set_text_input(window: *Window, enabled: bool, x, y, width, height: i32) {
+  native.set_text_input(window, enabled, x, y, width, height)
+}
+pub fn clipboard(window: *const Window) []const u8 {
+  return native.clipboard(window)
+}
+
+pub type Surrounding = native.Surrounding
+pub fn set_surrounding_text(window: *Window, context: Surrounding) Result {
+  return native.set_surrounding_text(window, context)
+}
+
+pub fn set_title(window: *Window, title: []const u8) Result {
+  return native.set_title(window, title)
+}
+pub fn set_size(window: *Window, width, height: i32) Result {
+  return native.set_size(window, width, height)
+}
+pub fn set_swap_interval(window: *Window, interval: i32) Result {
+  return native.set_swap_interval(window, interval)
+}
+pub fn try_set_clipboard(window: *Window, text: []const u8) Result {
+  return native.try_set_clipboard(window, text)
+}
+pub fn request_paste_snapshot(window: *Window) {
+  native.request_paste_snapshot(window)
+}
+pub fn paste_pending(window: *const Window) bool {
+  return native.paste_pending(window)
+}
+pub fn paste_status(window: *const Window) Result {
+  return native.paste_status(window)
+}

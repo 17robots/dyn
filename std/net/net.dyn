@@ -118,6 +118,11 @@ pub fn unix(path: []const u8) UnixAddress {
   if #len(path) == 0 || #len(path) > UnixPathLimit {
     return value
   }
+  for i in 0..#len(path) {
+    if path[i] == 0 {
+      return value
+    }
+  }
   address_family(value.bytes[..], 3 + #len(path), 1)
   for i in 0..#len(path) {
     value.bytes[2 + i] = path[i]
@@ -141,13 +146,13 @@ pub fn bind_ipv6(descriptor: isize, address: *const Ipv6Address) Result {
   return result(native_bind(descriptor, &address.bytes[0], 28))
 }
 pub fn connect_unix(descriptor: isize, address: *const UnixAddress) Result {
-  if address.length == 0 {
+  if address.length == 0 || address.length > #len(address.bytes) {
     return Result{ value: -1, error: -22, kind: errors.Kind.InvalidInput, ok: false }
   }
   return result(native_connect(descriptor, &address.bytes[0], address.length))
 }
 pub fn bind_unix(descriptor: isize, address: *const UnixAddress) Result {
-  if address.length == 0 {
+  if address.length == 0 || address.length > #len(address.bytes) {
     return Result{ value: -1, error: -22, kind: errors.Kind.InvalidInput, ok: false }
   }
   return result(native_bind(descriptor, &address.bytes[0], address.length))
@@ -171,18 +176,22 @@ pub fn accept(descriptor: isize) Result {
   return result(native_accept(descriptor, nil, nil))
 }
 
-pub fn tcp_listen_ipv4(address: *const Ipv4Address, backlog: usize) ListenerResult {
-  opened := socket(AddressFamilyIpv4, SocketStream, 0)
+fn stream_listen(family: usize, address: []const u8, backlog: usize) ListenerResult {
+  opened := socket(family, SocketStream, 0)
   if !opened.ok {
     return ListenerResult{ value: Listener{}, error: opened.error, kind: opened.kind, ok: false }
   }
   descriptor := result_value(&opened)
-  reused := reuse_address(descriptor, true)
-  if !reused.ok {
-    _ = close(descriptor)
-    return ListenerResult{ value: Listener{}, error: reused.error, kind: reused.kind, ok: false }
+  // Unix path ownership controls rebinding. SO_REUSEADDR is an Internet
+  // option and is not supported by every AF_UNIX implementation.
+  if family != AddressFamilyUnix {
+    reused := reuse_address(descriptor, true)
+    if !reused.ok {
+      _ = close(descriptor)
+      return ListenerResult{ value: Listener{}, error: reused.error, kind: reused.kind, ok: false }
+    }
   }
-  bound := bind_ipv4(descriptor, address)
+  bound := bind(descriptor, address)
   if !bound.ok {
     _ = close(descriptor)
     return ListenerResult{ value: Listener{}, error: bound.error, kind: bound.kind, ok: false }
@@ -195,18 +204,78 @@ pub fn tcp_listen_ipv4(address: *const Ipv4Address, backlog: usize) ListenerResu
   return ListenerResult{ value: listener_from_descriptor(descriptor), ok: true }
 }
 
-pub fn tcp_connect_ipv4(address: *const Ipv4Address) ConnectionResult {
-  opened := socket(AddressFamilyIpv4, SocketStream, 0)
+fn stream_connect(family: usize, address: []const u8) ConnectionResult {
+  opened := socket(family, SocketStream, 0)
   if !opened.ok {
     return ConnectionResult{ value: Connection{}, error: opened.error, kind: opened.kind, ok: false }
   }
   descriptor := result_value(&opened)
-  connected := connect_ipv4(descriptor, address)
+  connected := connect(descriptor, address)
   if !connected.ok {
     _ = close(descriptor)
     return ConnectionResult{ value: Connection{}, error: connected.error, kind: connected.kind, ok: false }
   }
   return ConnectionResult{ value: connection_from_descriptor(descriptor), ok: true }
+}
+
+pub fn tcp_listen_ipv4(address: *const Ipv4Address, backlog: usize) ListenerResult {
+  return stream_listen(AddressFamilyIpv4, address.bytes[..], backlog)
+}
+pub fn tcp_connect_ipv4(address: *const Ipv4Address) ConnectionResult {
+  return stream_connect(AddressFamilyIpv4, address.bytes[..])
+}
+pub fn tcp_listen_ipv6(address: *const Ipv6Address, backlog: usize) ListenerResult {
+  return stream_listen(AddressFamilyIpv6, address.bytes[..], backlog)
+}
+pub fn tcp_connect_ipv6(address: *const Ipv6Address) ConnectionResult {
+  return stream_connect(AddressFamilyIpv6, address.bytes[..])
+}
+// The caller removes the filesystem socket path after closing the listener.
+pub fn unix_listen(address: *const UnixAddress, backlog: usize) ListenerResult {
+  if address.length == 0 || address.length > #len(address.bytes) {
+    return ListenerResult{ kind: errors.Kind.InvalidInput, error: -22 }
+  }
+  return stream_listen(AddressFamilyUnix, address.bytes[..address.length], backlog)
+}
+pub fn unix_connect(address: *const UnixAddress) ConnectionResult {
+  if address.length == 0 || address.length > #len(address.bytes) {
+    return ConnectionResult{ kind: errors.Kind.InvalidInput, error: -22 }
+  }
+  return stream_connect(AddressFamilyUnix, address.bytes[..address.length])
+}
+
+// IPv4 multicast membership uses network-order octets for both addresses.
+// An all-zero interface selects the system default interface.
+pub fn multicast_join_ipv4(descriptor: isize, group: [4]u8, interface: [4]u8) Result {
+  return multicast_membership(descriptor, group, interface, MulticastJoinOption)
+}
+pub fn multicast_leave_ipv4(descriptor: isize, group: [4]u8, interface: [4]u8) Result {
+  return multicast_membership(descriptor, group, interface, MulticastLeaveOption)
+}
+fn multicast_membership(descriptor: isize, group: [4]u8, interface: [4]u8, option: usize) Result {
+  if group[0] < 224 || group[0] > 239 {
+    return Result{ kind: errors.Kind.InvalidInput, error: -22 }
+  }
+  request: [8]u8 = []
+  for i in 0..4 {
+    request[i] = group[i]
+    request[4 + i] = interface[i]
+  }
+  return result(native_set_option(descriptor, 0, option, &request[0], 8))
+}
+pub fn multicast_interface_ipv4(descriptor: isize, interface: [4]u8) Result {
+  return result(native_set_option(descriptor, 0, MulticastInterfaceOption, &interface[0], 4))
+}
+pub fn multicast_ttl_ipv4(descriptor: isize, ttl: u8) Result {
+  return result(native_multicast_byte(descriptor, MulticastTtlOption, ttl))
+}
+// POSIX controls outgoing loopback; Windows controls receipt on this socket.
+pub fn multicast_loop_ipv4(descriptor: isize, enabled: bool) Result {
+  value: u8 = 0
+  if enabled {
+    value = 1
+  }
+  return result(native_multicast_byte(descriptor, MulticastLoopOption, value))
 }
 
 pub fn listener_accept(listener: *Listener) ConnectionResult {

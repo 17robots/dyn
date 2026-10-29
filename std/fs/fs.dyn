@@ -155,10 +155,58 @@ pub fn sync(file: *File) Result {
   return Result{ ok: true }
 }
 
-// Reads one complete file into contiguous arena storage, bounded by maximum.
-// Returned bytes borrow arena until rewind/reset/release. Growing output can
-// leave earlier copies allocated; failures rewind all work to the entry mark.
-// Buffer/bounded exhaustion is Capacity; data past maximum is Overflow.
+// A read-only view of a whole file, owned by the caller until unmap. The
+// bytes reflect the file when mapped; another writer may change them later.
+// Truncating the file while mapped can fault on access. A zero-length file
+// maps to an empty value without a native mapping.
+pub struct Mapping { value: []const u8, kind: errors.Kind, error: isize, ok: bool }
+
+// Maps the whole file. The file position is unchanged, and the file may be
+// closed while the mapping stays valid.
+pub fn map(file: *const File) Mapping {
+  if !is_open(file) {
+    return Mapping{ kind: errors.Kind.InvalidState }
+  }
+  current := native_seek(file.descriptor, 0, 1)
+  if current < 0 {
+    return Mapping{ error: current, kind: native_kind(current) }
+  }
+  end := native_seek(file.descriptor, 0, 2)
+  restored := native_seek(file.descriptor, current, 0)
+  if end < 0 {
+    return Mapping{ error: end, kind: native_kind(end) }
+  }
+  if restored < 0 {
+    return Mapping{ error: restored, kind: native_kind(restored) }
+  }
+  size := #cast(usize, end)
+  if size == 0 {
+    return Mapping{ ok: true }
+  }
+  address := native_map(file.descriptor, size)
+  if address < 0 {
+    return Mapping{ error: address, kind: native_kind(address) }
+  }
+  bytes := #cast(*const u8, #cast(usize, address))
+  return Mapping{ value: bytes[..size], ok: true }
+}
+
+// Releases a mapping and clears it. Unmapping a zero Mapping succeeds.
+pub fn unmap(mapping: *Mapping) Result {
+  if mapping == nil {
+    return Result{ kind: errors.Kind.InvalidInput }
+  }
+  if #len(mapping.value) != 0 {
+    value := native_unmap(#cast(usize, &mapping.value[0]), #len(mapping.value))
+    if value < 0 {
+      return failure(value)
+    }
+  }
+  mapping.* = Mapping{}
+  return Result{ ok: true }
+}
+
+// Reads one complete file into arena storage, bounded by maximum.
 pub fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) ReadAllResult {
   opened := open(path)
   if !opened.ok {

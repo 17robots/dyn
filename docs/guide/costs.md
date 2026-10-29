@@ -28,6 +28,13 @@ work only when semantics remain unchanged.
 | file/JSON/CLI retained data | caller arena | proportional to retained data |
 | `#typeof` | static metadata | constant-time value construction; no operand evaluation |
 
+A thread's first protected call (a call in a function with `defer`) takes a slot
+from runtime-owned pages. The first such call in a program reserves one block of
+64 slots (about 264 KiB of address space; only touched pages use memory). Slots
+are reused when threads finish, and further blocks are added past 64 concurrent
+threads. Programs without cleanup frames reserve nothing. Bare-metal targets use
+one fixed slot instead. Debug tracing uses the same scheme.
+
 Release omits diagnostic function tracing. It does not disable overflow, shift, bounds, nil, or
 alignment correctness checks. Benchmark matched algorithms, ownership, and I/O strategies before
 attributing a difference to the language.

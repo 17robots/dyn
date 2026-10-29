@@ -1,0 +1,566 @@
+use "std/mem" mem
+use "std/errors" errors
+use "std/math" math
+
+// A face borrows immutable font bytes. Keep them alive for every lookup/raster.
+// This initial reader supports SFNT TrueType outlines and Unicode cmap 4/12.
+pub struct Face {
+  data: []const u8, cmap: []const u8, glyf: []const u8, loca: []const u8, hmtx: []const u8,
+  units_per_em: u16, glyphs: u16, metrics: u16, long_loca: bool,
+  ascent: i16, descent: i16, line_gap: i16,
+  kern: []const u8,
+}
+pub struct FaceResult { value: Face, kind: errors.Kind, error: isize, offset: usize, ok: bool }
+pub struct Bitmap { pixels: []u8, width: i32, height: i32, x_offset: i32, y_offset: i32, advance: i32 }
+pub struct BitmapResult { value: Bitmap, kind: errors.Kind, error: isize, offset: usize, ok: bool }
+struct Table { value: []const u8, offset: usize, ok: bool }
+fn u16be(bytes: []const u8, at: usize) u16 {
+  return (#cast(u16, bytes[at]) << 8) | #cast(u16, bytes[at + 1])
+}
+fn i16be(bytes: []const u8, at: usize) i16 {
+  return #cast(i16, u16be(bytes, at))
+}
+fn u32be(bytes: []const u8, at: usize) u32 {
+  return (#cast(u32, u16be(bytes, at)) << 16) | #cast(u32, u16be(bytes, at + 2))
+}
+fn fits(bytes: []const u8, at, length: usize) bool {
+  return at <= #len(bytes) && length <= #len(bytes) - at
+}
+fn table(data: []const u8, tag: u32) Table {
+  count := #cast(usize, u16be(data, 4))
+  for i in 0..count {
+    at := 12 + i * 16
+    if u32be(data, at) == tag {
+      offset := #cast(usize, u32be(data, at + 8))
+      length := #cast(usize, u32be(data, at + 12))
+      if fits(data, offset, length) {
+        return Table{ value: data[offset..offset + length], offset: offset, ok: true }
+      }
+      return Table{ offset: at + 8 }
+    }
+  }
+  return Table{}
+}
+pub fn open(data: []const u8) FaceResult {
+  if #len(data) < 12 {
+    return FaceResult{ kind: errors.Kind.InvalidInput }
+  }
+  signature := u32be(data, 0)
+  if signature != 65536 {
+    if signature == 0x4f54544f || signature == 0x74746366 || signature == 0x74727565 || signature == 0x74797031 {
+      return FaceResult{ kind: errors.Kind.Unsupported }
+    }
+    return FaceResult{ kind: errors.Kind.InvalidInput }
+  }
+  if #cast(usize, u16be(data, 4)) > (#len(data) - 12) / 16 {
+    return FaceResult{ kind: errors.Kind.InvalidInput, offset: 4 }
+  }
+  head := table(data, 0x68656164)
+  maxp := table(data, 0x6d617870)
+  hhea := table(data, 0x68686561)
+  hmtx := table(data, 0x686d7478)
+  loca := table(data, 0x6c6f6361)
+  glyf := table(data, 0x676c7966)
+  cmap := table(data, 0x636d6170)
+  if !head.ok || !maxp.ok || !hhea.ok || !hmtx.ok || !loca.ok || !glyf.ok || !cmap.ok ||
+    #len(head.value) < 54 || #len(maxp.value) < 6 || #len(hhea.value) < 36 || #len(cmap.value) < 4 {
+    return FaceResult{ kind: errors.Kind.InvalidInput }
+  }
+  units := u16be(head.value, 18)
+  format := i16be(head.value, 50)
+  glyphs := u16be(maxp.value, 4)
+  metrics := u16be(hhea.value, 34)
+  if units < 16 || units > 16384 || glyphs == 0 || metrics == 0 || metrics > glyphs || (format != 0 && format != 1) {
+    return FaceResult{ kind: errors.Kind.InvalidInput }
+  }
+  stride: usize = 2
+  if format == 1 {
+    stride = 4
+  }
+  if (#cast(usize, glyphs) + 1) > #len(loca.value) / stride ||
+    #cast(usize, metrics) * 4 + (#cast(usize, glyphs) - #cast(usize, metrics)) * 2 > #len(hmtx.value) {
+    return FaceResult{ kind: errors.Kind.InvalidInput }
+  }
+  face := Face{ data: data, glyf: glyf.value, loca: loca.value, hmtx: hmtx.value,
+    units_per_em: units, glyphs: glyphs, metrics: metrics, long_loca: format == 1,
+    ascent: i16be(hhea.value, 4), descent: i16be(hhea.value, 6), line_gap: i16be(hhea.value, 8) }
+  previous: usize = 0
+  for i in 0..#cast(usize, glyphs) + 1 {
+    current := location(&face, i)
+    if current < previous || current > #len(face.glyf) {
+      return FaceResult{ kind: errors.Kind.InvalidInput, offset: loca.offset + i * stride }
+    }
+    previous = current
+  }
+  count := #cast(usize, u16be(cmap.value, 2))
+  if count > (#len(cmap.value) - 4) / 8 {
+    return FaceResult{ kind: errors.Kind.InvalidInput, offset: cmap.offset + 2 }
+  }
+  selected: []const u8
+  best: u16 = 0
+  for i in 0..count {
+    at := 4 + i * 8
+    platform := u16be(cmap.value, at)
+    encoding := u16be(cmap.value, at + 2)
+    if platform != 0 && !(platform == 3 && (encoding == 1 || encoding == 10)) {
+      continue
+    }
+    offset := #cast(usize, u32be(cmap.value, at + 4))
+    if !fits(cmap.value, offset, 2) {
+      return FaceResult{ kind: errors.Kind.InvalidInput, offset: cmap.offset + at + 4 }
+    }
+    sub := cmap.value[offset..]
+    kind := u16be(sub, 0)
+    if (kind == 4 || kind == 12) && #len(sub) < 16 {
+      return FaceResult{ kind: errors.Kind.InvalidInput, offset: cmap.offset + offset }
+    }
+    length: usize = 0
+    if kind == 4 && #len(sub) >= 16 {
+      length = #cast(usize, u16be(sub, 2))
+    }
+    else if kind == 12 && #len(sub) >= 16 {
+      length = #cast(usize, u32be(sub, 4))
+    }
+    else {
+      continue
+    }
+    if length < 16 || length > #len(sub) {
+      return FaceResult{ kind: errors.Kind.InvalidInput, offset: cmap.offset + offset }
+    }
+    sub = sub[..length]
+    if kind == 4 {
+      segments := #cast(usize, u16be(sub, 6)) / 2
+      if segments == 0 || (u16be(sub, 6) & 1) != 0 || segments > (length - 16) / 8 {
+        return FaceResult{ kind: errors.Kind.InvalidInput }
+      }
+      prior: u16 = 0
+      for j in 0..segments {
+        end := u16be(sub, 14 + j * 2)
+        start := u16be(sub, 16 + segments * 2 + j * 2)
+        if start > end || (j != 0 && start <= prior) {
+          return FaceResult{ kind: errors.Kind.InvalidInput }
+        }
+        range_at := 16 + segments * 6 + j * 2
+        range := #cast(usize, u16be(sub, range_at))
+        if range != 0 && ((range & 1) != 0 || range > length - range_at || !fits(sub, range_at + range, (#cast(usize, end) - #cast(usize, start)) * 2 + 2)) {
+          return FaceResult{ kind: errors.Kind.InvalidInput }
+        }
+        prior = end
+      }
+      if prior != 65535 {
+        return FaceResult{ kind: errors.Kind.InvalidInput }
+      }
+    } else {
+      groups := #cast(usize, u32be(sub, 12))
+      if groups > (length - 16) / 12 {
+        return FaceResult{ kind: errors.Kind.InvalidInput }
+      }
+      prior: u32 = 0
+      for j in 0..groups {
+        start := u32be(sub, 16 + j * 12)
+        end := u32be(sub, 20 + j * 12)
+        base := u32be(sub, 24 + j * 12)
+        if start > end || end > 1114111 || (j != 0 && start <= prior) || base >= #cast(u32, glyphs) || end - start >= #cast(u32, glyphs) - base {
+          return FaceResult{ kind: errors.Kind.InvalidInput }
+        }
+        prior = end
+      }
+    }
+    if kind > best {
+      selected = sub
+      best = kind
+    }
+  }
+  if best == 0 {
+    return FaceResult{ kind: errors.Kind.Unsupported }
+  }
+  kern := table(data, 0x6b65726e)
+  if !kern.ok && kern.offset != 0 {
+    return FaceResult{ kind: errors.Kind.InvalidInput, offset: kern.offset }
+  }
+  if kern.ok {
+    checked := validate_kern(kern.value, glyphs)
+    if !checked.ok {
+      return FaceResult{ kind: errors.Kind.InvalidInput, offset: kern.offset + checked.offset }
+    }
+    if #len(kern.value) >= 4 && u16be(kern.value, 0) == 0 {
+      face.kern = kern.value
+    }
+  }
+  face.cmap = selected
+  return FaceResult{ value: face, ok: true }
+}
+fn location(face: *const Face, index: usize) usize {
+  if face.long_loca {
+    return #cast(usize, u32be(face.loca, index * 4))
+  }
+  return #cast(usize, u16be(face.loca, index * 2)) * 2
+}
+// Zero is the font's missing-glyph slot. Invalid Unicode also maps to zero.
+pub fn glyph_index(face: *const Face, codepoint: u32) u16 {
+  if codepoint > 1114111 || (codepoint >= 55296 && codepoint <= 57343) || #len(face.cmap) < 16 {
+    return 0
+  }
+  sub := face.cmap
+  if u16be(sub, 0) == 12 {
+    low: usize = 0
+    high := #cast(usize, u32be(sub, 12))
+    for low < high {
+      mid := low + (high - low) / 2
+      start := u32be(sub, 16 + mid * 12)
+      end := u32be(sub, 20 + mid * 12)
+      if codepoint < start {
+        high = mid
+      }
+      else if codepoint > end {
+        low = mid + 1
+      }
+      else {
+        return #cast(u16, (u32be(sub, 24 + mid * 12) + codepoint - start))
+      }
+    }
+    return 0
+  }
+  if codepoint > 65535 {
+    return 0
+  }
+  segments := #cast(usize, u16be(sub, 6)) / 2
+  for i in 0..segments {
+    end := #cast(u32, u16be(sub, 14 + i * 2))
+    if codepoint > end {
+      continue
+    }
+    start := #cast(u32, u16be(sub, 16 + segments * 2 + i * 2))
+    if codepoint < start {
+      return 0
+    }
+    delta := u16be(sub, 16 + segments * 4 + i * 2)
+    at := 16 + segments * 6 + i * 2
+    range := #cast(usize, u16be(sub, at))
+    value := #cast(u16, codepoint)
+    if range != 0 {
+      skip := #cast(usize, (codepoint - start)) * 2
+      if range > #len(sub) - at || !fits(sub, at + range, skip + 2) {
+        return 0
+      }
+      value = u16be(sub, at + range + skip)
+      if value == 0 {
+        return 0
+      }
+    }
+    value = #wrap(value + delta)
+    if value >= face.glyphs {
+      return 0
+    }
+    return value
+  }
+  return 0
+}
+struct Point { x: f64, y: f64, on: bool }
+struct Edge { a: Point, b: Point }
+fn midpoint(a, b: Point) Point {
+  return Point{ x: (a.x + b.x) * 0.5, y: (a.y + b.y) * 0.5, on: true }
+}
+fn edge(edges: []Edge, used: *usize, a, b: Point) {
+  edges[used.*] = Edge{ a: a, b: b }
+  used.* += 1
+}
+// Unhinted 4x4 supersampling for simple and composite glyf outlines.
+// Collections, CFF, variation and hint programs remain unsupported.
+// pixels_per_em is 1..256. Limits: 1,048,576 output pixels, 8,192 points,
+// and 16,777,216 pixel-edge pairs (before 4x4 supersampling).
+// Output belongs to arena; temporary outline storage is rewound on completion.
+pub fn raster(arena: *mem.Arena, face: *const Face, index: u16, pixels_per_em: u16) BitmapResult {
+  if index >= face.glyphs || face.units_per_em == 0 || pixels_per_em == 0 || pixels_per_em > 256 {
+    return BitmapResult{ kind: errors.Kind.InvalidInput }
+  }
+  scale := #cast(f64, pixels_per_em) / #cast(f64, face.units_per_em)
+  advance := #cast(i32, math.floor64(metric_advance(face, index).x * scale + 0.5))
+  start := location(face, #cast(usize, index))
+  end := location(face, #cast(usize, index) + 1)
+  bitmap := Bitmap{ advance: advance }
+  if start == end {
+    return BitmapResult{ value: bitmap, ok: true }
+  }
+  data := face.glyf[start..end]
+  if #len(data) < 10 {
+    return BitmapResult{ kind: errors.Kind.InvalidInput }
+  }
+  contours := i16be(data, 0)
+  if contours == 0 {
+    return BitmapResult{ value: bitmap, ok: true }
+  }
+  if contours > 0 && !fits(data, 10, #cast(usize, contours) * 2 + 2) {
+    return BitmapResult{ kind: errors.Kind.InvalidInput }
+  }
+  x0 := i16be(data, 2)
+  y0 := i16be(data, 4)
+  x1 := i16be(data, 6)
+  y1 := i16be(data, 8)
+  if x0 > x1 || y0 > y1 {
+    return BitmapResult{ kind: errors.Kind.InvalidInput }
+  }
+  metric_base := metric_origin(face, index, x0)
+  left := math.floor64((#cast(f64, x0) - metric_base.x) * scale)
+  top := math.floor64(0.0 - #cast(f64, y1) * scale)
+  bitmap.x_offset = #cast(i32, left)
+  bitmap.y_offset = #cast(i32, top)
+  bitmap.width = #cast(i32, math.ceil64((#cast(f64, x1) - metric_base.x) * scale) - left)
+  bitmap.height = #cast(i32, math.ceil64(0.0 - #cast(f64, y0) * scale) - top)
+  width := #cast(usize, bitmap.width)
+  height := #cast(usize, bitmap.height)
+  if width > 4096 || height > 4096 || (width != 0 && height > 1048576 / width) {
+    return BitmapResult{ kind: errors.Kind.Capacity }
+  }
+  mark := mem.arena_mark(arena)
+  success := false
+  defer {
+    if !success {
+      mem.arena_rewind(arena, mark)
+    }
+  }
+  // Component-selected phantom origins can shift fractional pixel alignment.
+  // Reserve one extra row/column before allocating the temporary outline.
+  bitmap.pixels = mem.push_array(u8, arena, (width + 1) * (height + 1))
+  scratch := mem.arena_mark(arena)
+  defer {
+    if success {
+      mem.arena_rewind(arena, scratch)
+    }
+  }
+  budget := OutlineBudget{}
+  outline := read_outline(arena, face, index, 0, &budget)
+  if !outline.ok {
+    return BitmapResult{ kind: outline.kind }
+  }
+  if outline.advance.x < 0.0 || outline.advance.y != 0.0 {
+    return BitmapResult{ kind: errors.Kind.Unsupported }
+  }
+  bitmap.advance = #cast(i32, math.floor64(outline.advance.x * scale + 0.5))
+  points := outline.points
+  ends := outline.ends
+  count := #len(points)
+  if count == 0 {
+    // No output allocation survives. Let the failure-cleanup branch rewind
+    // all scratch; rewinding here would invalidate the later scratch mark.
+    return BitmapResult{ value: Bitmap{ advance: bitmap.advance }, ok: true }
+  }
+  left = math.floor64((#cast(f64, x0) - outline.origin.x) * scale)
+  top = math.floor64((outline.origin.y - #cast(f64, y1)) * scale)
+  bitmap.x_offset = #cast(i32, left)
+  bitmap.y_offset = #cast(i32, top)
+  bitmap.width = #cast(i32, math.ceil64((#cast(f64, x1) - outline.origin.x) * scale) - left)
+  bitmap.height = #cast(i32, math.ceil64((outline.origin.y - #cast(f64, y0)) * scale) - top)
+  width = #cast(usize, bitmap.width)
+  height = #cast(usize, bitmap.height)
+  if width > 4096 || height > 4096 || (width != 0 && height > 1048576 / width) {
+    return BitmapResult{ kind: errors.Kind.Capacity }
+  }
+  bitmap.pixels = bitmap.pixels[..width * height]
+  for *point in points {
+    if point.x < #cast(f64, x0) || point.x > #cast(f64, x1) || point.y < #cast(f64, y0) || point.y > #cast(f64, y1) {
+      return BitmapResult{ kind: errors.Kind.InvalidInput }
+    }
+    point.x = (point.x - outline.origin.x) * scale - left
+    point.y = (outline.origin.y - point.y) * scale - top
+  }
+  // Each off-curve point produces at most 128 flattened edges; on-curve
+  // segments need one. Bound this temporary expansion explicitly.
+  if count > 8192 {
+    return BitmapResult{ kind: errors.Kind.Capacity }
+  }
+  edges := mem.push_array(Edge, arena, count * 129 + #len(ends))
+  used: usize = 0
+  first: usize = 0
+  for last in ends {
+    a := points[first]
+    b := points[last]
+    origin := a
+    cursor := first
+    if a.on {
+      cursor += 1
+    }
+    else if b.on {
+      origin = b
+    }
+    else {
+      origin = midpoint(a, b)
+    }
+    current := origin
+    for cursor <= last {
+      point := points[cursor]
+      cursor += 1
+      if point.on {
+        edge(edges, &used, current, point)
+        current = point
+        continue
+      }
+      destination := origin
+      if cursor <= last {
+        destination = points[cursor]
+      }
+      if !destination.on {
+        destination = midpoint(point, destination)
+      }
+      else if cursor <= last {
+        cursor += 1
+      }
+      curvature := math.abs(current.x - 2.0 * point.x + destination.x) + math.abs(current.y - 2.0 * point.y + destination.y)
+      steps := #cast(usize, math.ceil64(math.sqrt64(curvature) * 2.0))
+      if steps < 1 {
+        steps = 1
+      }
+      if steps > 128 {
+        steps = 128
+      }
+      start_point := current
+      for step in 1..steps + 1 {
+        t := #cast(f64, step) / #cast(f64, steps)
+        u := 1.0 - t
+        next := Point{ x: u * u * start_point.x + 2.0 * u * t * point.x + t * t * destination.x,
+          y: u * u * start_point.y + 2.0 * u * t * point.y + t * t * destination.y, on: true }
+        edge(edges, &used, current, next)
+        current = next
+      }
+    }
+    edge(edges, &used, current, origin)
+    first = last + 1
+  }
+  if used != 0 && width * height > 16777216 / used {
+    return BitmapResult{ kind: errors.Kind.Capacity }
+  }
+  for y in 0..height {
+    for x in 0..width {
+      hits: u32 = 0
+      for sy in 0..4 {
+        for sx in 0..4 {
+          px := #cast(f64, x) + (#cast(f64, sx) + 0.5) / 4.0
+          py := #cast(f64, y) + (#cast(f64, sy) + 0.5) / 4.0
+          winding: i32 = 0
+          for e in edges[..used] {
+            if (e.a.y <= py && e.b.y > py) || (e.b.y <= py && e.a.y > py) {
+              crossing := e.a.x + (py - e.a.y) * (e.b.x - e.a.x) / (e.b.y - e.a.y)
+              if crossing > px {
+                if e.b.y > e.a.y {
+                  winding += 1
+                } else {
+                  winding -= 1
+                }
+              }
+            }
+          }
+          if winding != 0 {
+            hits += 1
+          }
+        }
+      }
+      bitmap.pixels[y * width + x] = #cast(u8, ((hits * 255 + 8) / 16))
+    }
+  }
+  success = true
+  return BitmapResult{ value: bitmap, ok: true }
+}
+
+pub struct AtlasGlyph { codepoint: u32, x: i32, y: i32, width: i32, height: i32, x_offset: i32, y_offset: i32, advance: i32 }
+// Glyphs are sorted by codepoint. The final entry is glyph zero, used on a miss.
+pub struct Atlas { pixels: []u8, width: i32, height: i32, line_height: i32, glyphs: []AtlasGlyph }
+pub struct AtlasResult { value: Atlas, kind: errors.Kind, error: isize, offset: usize, ok: bool }
+// Shelf packing with one transparent padding pixel. Requested codepoints must
+// be strictly increasing Unicode scalars. Caller chooses dimensions, 1..4096.
+// Entire output belongs to arena. A failure rewinds all allocations from this call.
+pub fn atlas(arena: *mem.Arena, face: *const Face, codepoints: []const u32, pixels_per_em: u16, width, height: i32) AtlasResult {
+  if width <= 0 || height <= 0 || width > 4096 || height > 4096 || face.units_per_em == 0 || pixels_per_em == 0 || pixels_per_em > 256 || #len(codepoints) > 65536 {
+    return AtlasResult{ kind: errors.Kind.InvalidInput }
+  }
+  for i in 0..#len(codepoints) {
+    cp := codepoints[i]
+    if cp > 1114111 || (cp >= 55296 && cp <= 57343) || (i != 0 && cp <= codepoints[i - 1]) {
+      return AtlasResult{ kind: errors.Kind.InvalidInput }
+    }
+  }
+  line := #cast(i32, face.ascent) - #cast(i32, face.descent) + #cast(i32, face.line_gap)
+  if line <= 0 {
+    return AtlasResult{ kind: errors.Kind.InvalidInput }
+  }
+  scale := #cast(f64, pixels_per_em) / #cast(f64, face.units_per_em)
+  mark := mem.arena_mark(arena)
+  success := false
+  defer {
+    if !success {
+      mem.arena_rewind(arena, mark)
+    }
+  }
+  value := Atlas{ width: width, height: height, line_height: #cast(i32, math.ceil64(#cast(f64, line) * scale)),
+    pixels: mem.push_array(u8, arena, #cast(usize, width) * #cast(usize, height)),
+    glyphs: mem.push_array(AtlasGlyph, arena, #len(codepoints) + 1) }
+  scratch := mem.arena_mark(arena)
+  x: i32 = 0
+  y: i32 = 0
+  row: i32 = 0
+  for i in 0..#len(value.glyphs) {
+    cp: u32 = 0
+    index: u16 = 0
+    if i < #len(codepoints) {
+      cp = codepoints[i]
+      index = glyph_index(face, cp)
+    }
+    rendered := raster(arena, face, index, pixels_per_em)
+    if !rendered.ok {
+      return AtlasResult{ kind: rendered.kind, error: rendered.error, offset: rendered.offset }
+    }
+    glyph := rendered.value
+    if glyph.width > width || glyph.height > height {
+      return AtlasResult{ kind: errors.Kind.Capacity }
+    }
+    place_x: i32 = 0
+    place_y: i32 = 0
+    if glyph.width > 0 && glyph.height > 0 {
+      if x > width - glyph.width {
+        x = 0
+        y += row
+        row = 0
+      }
+      if y > height - glyph.height {
+        return AtlasResult{ kind: errors.Kind.Capacity }
+      }
+      place_x = x
+      place_y = y
+    }
+    for gy in 0..glyph.height {
+      for gx in 0..glyph.width {
+        value.pixels[#cast(usize, (place_y + gy)) * #cast(usize, width) + #cast(usize, (place_x + gx))] = glyph.pixels[#cast(usize, gy) * #cast(usize, glyph.width) + #cast(usize, gx)]
+      }
+    }
+    value.glyphs[i] = AtlasGlyph{ codepoint: cp, x: place_x, y: place_y, width: glyph.width, height: glyph.height,
+      x_offset: glyph.x_offset, y_offset: glyph.y_offset + #cast(i32, math.ceil64(#cast(f64, face.ascent) * scale)), advance: glyph.advance }
+    if glyph.width > 0 && glyph.height > 0 {
+      x += glyph.width + 1
+      if glyph.height + 1 > row {
+        row = glyph.height + 1
+      }
+    }
+    mem.arena_rewind(arena, scratch)
+  }
+  success = true
+  return AtlasResult{ value: value, ok: true }
+}
+pub nil_glyph: AtlasGlyph
+pub fn atlas_glyph(value: *const Atlas, codepoint: u32) *const AtlasGlyph {
+  if #len(value.glyphs) == 0 {
+    return &nil_glyph
+  }
+  low: usize = 0
+  high := #len(value.glyphs) - 1
+  for low < high {
+    mid := low + (high - low) / 2
+    if value.glyphs[mid].codepoint < codepoint {
+      low = mid + 1
+    } else {
+      high = mid
+    }
+  }
+  if low < #len(value.glyphs) - 1 && value.glyphs[low].codepoint == codepoint {
+    return &value.glyphs[low]
+  }
+  return &value.glyphs[#len(value.glyphs) - 1]
+}

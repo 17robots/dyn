@@ -11,8 +11,8 @@ exports:
                _fork, _chdir, _pipe, _fcntl, _dup2, _execve, __exit, _waitpid, _kill,
                _read, _write, _close, _getenv, _strlen, _pthread_self, _pthread_attr_init, _pthread_attr_setstacksize,
                _pthread_attr_destroy, _pthread_create, _pthread_join,
-               _pthread_mach_thread_np, _sched_yield, _dlopen, _dlsym, _dlclose,
-               _dispatch_queue_create, _dispatch_sync_f, _dispatch_release, _os_sync_wait_on_address,
+               _pthread_mach_thread_np, _sched_yield, _dlopen, _dlsym, _dlclose, _dlerror,
+               _dispatch_queue_create, _dispatch_sync_f, _dispatch_release, _os_sync_wait_on_address, _os_sync_wait_on_address_with_timeout,
                _os_sync_wake_by_address_any, _os_sync_wake_by_address_all,
                _os_unfair_lock_lock, _os_unfair_lock_trylock, _os_unfair_lock_unlock, _getentropy ]
 ...

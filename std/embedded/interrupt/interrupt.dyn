@@ -1,0 +1,21 @@
+#target(kernel: none)
+// Privileged, single-core interrupt state. Pair disable/restore in LIFO order;
+// restore changes only the global interrupt-enable mask, not other CPU state.
+pub struct State { value: usize }
+extern fn native_disable "dyn_irq_disable"() usize
+extern fn native_restore "dyn_irq_restore"(state: usize)
+extern fn native_vector "dyn_irq_vector"(address: usize)
+pub fn disable() State {
+  return State{ value: native_disable() }
+}
+pub fn restore(state: State) {
+  native_restore(state.value)
+}
+// The caller supplies a correctly sized resident vector table / trap entry and
+// owns all handlers. Cortex-M needs an architectural vector table, not a Dyn fn.
+pub fn vector(address: usize) {
+  if (address & (VectorAlignment - 1)) != 0 {
+    #panic("unaligned interrupt vector")
+  }
+  native_vector(address)
+}

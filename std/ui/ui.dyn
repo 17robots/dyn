@@ -1,0 +1,387 @@
+use "std/mem" mem
+use "std/image/color" color
+
+pub type Color = color.Rgba
+pub struct Rect { x: i32, y: i32, width: i32, height: i32 }
+pub enum Kind { None, Rectangle, Text, Glyph }
+// Command nodes and text belong to the frame arena. Read them after end and
+// before resetting that arena. Render in list order, applying each command's clip.
+// radius rounds Rectangle corners, in pixels; renderers antialias the curve.
+pub struct Command { kind: Kind, bounds: Rect, clip: Rect, color: Color, text: []const u8, codepoint: u32, glyph_x: i64, glyph_y: i64, next: *Command, radius: i32 }
+pub nil_command: Command
+pub struct Input {
+  x: i32, y: i32, down: bool,
+  // Optional edges preserve a press/release pair that arrives in one frame.
+  pressed: bool, released: bool,
+  tab: bool, activate: bool, left: bool, right: bool,
+}
+pub struct Style {
+  background: Color = Color{ r: 48, g: 52, b: 60, a: 255 },
+  hover: Color = Color{ r: 64, g: 76, b: 92, a: 255 },
+  held: Color = Color{ r: 38, g: 105, b: 165, a: 255 },
+  foreground: Color = Color{ r: 235, g: 239, b: 244, a: 255 },
+  accent: Color = Color{ r: 80, g: 170, b: 240, a: 255 },
+  disabled: Color = Color{ r: 100, g: 104, b: 112, a: 255 },
+  padding: i32 = 4,
+}
+pub struct Response { hovered: bool, held: bool, focused: bool, activated: bool, changed: bool, captured: bool }
+// Keep one context across frames. Copying a live context does not create a new
+// owner. IDs are caller-assigned, nonzero, stable, and unique within each frame.
+// Overlapping widgets give pointer priority to the first submitted widget.
+struct FocusTarget { bounds: Rect, clip: Rect, color: Color }
+pub struct Context {
+  style: Style = Style{},
+  active: u64, focused: u64, hot: u64,
+  input: Input, previous_down: bool,
+  arena: *mem.Arena, viewport: Rect, clip: Rect,
+  first: *Command, last: *Command, building: bool,
+  active_seen: bool, focus_seen: bool, consumed: bool,
+  first_focus: u64, focus_from: u64, focus_pending: bool, focus_moved: bool,
+  focus_target: FocusTarget, first_target: FocusTarget,
+}
+
+pub fn intersect(a, b: Rect) Rect {
+  x := #cast(i64, a.x)
+  y := #cast(i64, a.y)
+  if b.x > a.x {
+    x = #cast(i64, b.x)
+  }
+  if b.y > a.y {
+    y = #cast(i64, b.y)
+  }
+  right := #cast(i64, a.x) + #cast(i64, a.width)
+  bottom := #cast(i64, a.y) + #cast(i64, a.height)
+  br := #cast(i64, b.x) + #cast(i64, b.width)
+  bb := #cast(i64, b.y) + #cast(i64, b.height)
+  if br < right {
+    right = br
+  }
+  if bb < bottom {
+    bottom = bb
+  }
+  if a.width <= 0 || b.width <= 0 || a.height <= 0 || b.height <= 0 || right <= x || bottom <= y {
+    return Rect{}
+  }
+  return Rect{ x: #cast(i32, x), y: #cast(i32, y), width: #cast(i32, (right - x)), height: #cast(i32, (bottom - y)) }
+}
+pub fn contains(bounds: Rect, x, y: i32) bool {
+  return bounds.width > 0 && bounds.height > 0 && x >= bounds.x && y >= bounds.y &&
+    #cast(i64, x) < #cast(i64, bounds.x) + #cast(i64, bounds.width) &&
+    #cast(i64, y) < #cast(i64, bounds.y) + #cast(i64, bounds.height)
+}
+fn coordinate(value: i64) i32 {
+  if value < -2147483648 {
+    return -2147483648
+  }
+  if value > 2147483647 {
+    return 2147483647
+  }
+  return #cast(i32, value)
+}
+pub fn inset(bounds: Rect, padding: i32) Rect {
+  if padding < 0 {
+    #panic("negative UI padding")
+  }
+  width := #cast(i64, bounds.width) - 2 * #cast(i64, padding)
+  height := #cast(i64, bounds.height) - 2 * #cast(i64, padding)
+  if width <= 0 || height <= 0 {
+    return Rect{}
+  }
+  return Rect{ x: coordinate(#cast(i64, bounds.x) + #cast(i64, padding)), y: coordinate(#cast(i64, bounds.y) + #cast(i64, padding)), width: #cast(i32, width), height: #cast(i32, height) }
+}
+// begin invalidates the old command list. Reset its arena only after rendering.
+// Use an arena whose lifetime does not contain the context itself.
+pub fn begin(context: *Context, arena: *mem.Arena, input: Input, viewport: Rect) {
+  if context.building {
+    #panic("UI frame already begun")
+  }
+  if context.style.padding < 0 {
+    #panic("negative UI padding")
+  }
+  context.input = input
+  context.input.pressed = input.pressed || (input.down && !context.previous_down)
+  context.input.released = input.released || (!input.down && context.previous_down)
+  context.previous_down = input.down
+  context.arena = arena
+  context.viewport = viewport
+  context.clip = viewport
+  context.first = nil
+  context.last = nil
+  context.hot = 0
+  context.active_seen = false
+  context.focus_seen = false
+  context.consumed = false
+  context.first_focus = 0
+  context.focus_from = context.focused
+  context.focus_pending = input.tab && context.focused == 0
+  context.focus_moved = false
+  context.building = true
+}
+pub fn end(context: *Context) {
+  frame(context)
+  if !context.active_seen || context.input.released || !context.input.down {
+    context.active = 0
+  }
+  if context.input.tab && !context.focus_moved {
+    context.focused = context.first_focus
+    context.focus_target = context.first_target
+  }
+  else if !context.focus_seen {
+    context.focused = 0
+  }
+  // Focus can move after an earlier widget was submitted. Draw one final ring
+  // after traversal so Tab never produces two rings or retains the old ring.
+  if context.focused != 0 {
+    saved := context.clip
+    context.clip = context.focus_target.clip
+    outline(context, context.focus_target.bounds, context.focus_target.color)
+    context.clip = saved
+  }
+  context.building = false
+  context.arena = nil
+}
+fn frame(context: *Context) {
+  if !context.building {
+    #panic("UI frame not begun")
+  }
+}
+pub fn first(context: *const Context) *const Command {
+  if context.building {
+    #panic("UI frame not ended")
+  }
+  if context.first == nil {
+    return &nil_command
+  }
+  return context.first
+}
+pub fn next(command: *const Command) *const Command {
+  if command.next == nil {
+    return &nil_command
+  }
+  return command.next
+}
+pub fn push_clip(context: *Context, bounds: Rect) Rect {
+  frame(context)
+  previous := context.clip
+  context.clip = intersect(context.clip, bounds)
+  return previous
+}
+pub fn pop_clip(context: *Context, previous: Rect) {
+  frame(context)
+  context.clip = intersect(context.viewport, previous)
+}
+fn emit(context: *Context, kind: Kind, bounds: Rect, tint: Color, text: []const u8) *Command {
+  frame(context)
+  visible := intersect(bounds, context.clip)
+  if visible.width == 0 || visible.height == 0 || tint.a == 0 || (kind == Kind.Text && #len(text) == 0) {
+    return nil
+  }
+  command := mem.push(Command, context.arena)
+  command.kind = kind
+  command.bounds = bounds
+  command.clip = context.clip
+  command.color = tint
+  if kind == Kind.Text {
+    copied := mem.push_array(u8, context.arena, #len(text))
+    _ = mem.copy(copied, text)
+    command.text = copied
+  }
+  if context.last == nil {
+    context.first = command
+  }
+  else {
+    context.last.next = command
+  }
+  context.last = command
+  return command
+}
+pub fn rectangle(context: *Context, bounds: Rect, tint: Color) {
+  _ = emit(context, Kind.Rectangle, bounds, tint, "")
+}
+
+// A rectangle with corners rounded by radius pixels, clamped to half the
+// shorter side.
+pub fn rounded_rectangle(context: *Context, bounds: Rect, radius: i32, tint: Color) {
+  command := emit(context, Kind.Rectangle, bounds, tint, "")
+  if command != nil {
+    shortest := bounds.width
+    if bounds.height < shortest {
+      shortest = bounds.height
+    }
+    value := radius
+    if value > shortest / 2 {
+      value = shortest / 2
+    }
+    if value < 0 {
+      value = 0
+    }
+    command.radius = value
+  }
+}
+pub fn label(context: *Context, bounds: Rect, text: []const u8, tint: Color) {
+  _ = emit(context, Kind.Text, bounds, tint, text)
+}
+fn interact(context: *Context, id: u64, bounds: Rect, enabled: bool) Response {
+  frame(context)
+  if id == 0 {
+    #panic("UI widget ID must be nonzero")
+  }
+  visible := intersect(bounds, context.clip)
+  if !enabled || visible.width == 0 || visible.height == 0 {
+    if context.active == id {
+      context.active = 0
+    }
+    if context.focused == id {
+      context.focused = 0
+    }
+    return Response{}
+  }
+  if context.first_focus == 0 {
+    context.first_focus = id
+    context.first_target = FocusTarget{ bounds: bounds, clip: context.clip, color: context.style.accent }
+  }
+  if context.input.tab && !context.focus_moved {
+    if context.focus_pending {
+      context.focused = id
+      context.focus_moved = true
+      context.focus_pending = false
+    } else if context.focus_from == id {
+      context.focus_pending = true
+    }
+  }
+  if context.focused == id {
+    context.focus_seen = true
+  }
+  hovered := contains(visible, context.input.x, context.input.y) && (context.hot == 0 || context.hot == id)
+  if hovered {
+    context.hot = id
+  }
+  if hovered && context.input.pressed && context.active == 0 && !context.consumed {
+    context.active = id
+    context.focused = id
+    context.focus_seen = true
+  }
+  if context.focused == id {
+    context.focus_target = FocusTarget{ bounds: bounds, clip: context.clip, color: context.style.accent }
+  }
+  captured := context.active == id
+  if captured {
+    context.active_seen = true
+  }
+  activated := captured && context.input.released && hovered && !context.consumed
+  if context.focused == id && context.input.activate && !context.input.tab && context.active == 0 && !context.consumed {
+    activated = true
+  }
+  if activated {
+    context.consumed = true
+  }
+  if captured && context.input.released {
+    context.active = 0
+  }
+  return Response{ hovered: hovered, held: captured && context.input.down, focused: context.focused == id, activated: activated, captured: captured }
+}
+fn background(context: *Context, response: Response, enabled: bool) Color {
+  if !enabled {
+    return context.style.disabled
+  }
+  if response.held {
+    return context.style.held
+  }
+  if response.hovered {
+    return context.style.hover
+  }
+  return context.style.background
+}
+fn outline(context: *Context, bounds: Rect, tint: Color) {
+  if bounds.width <= 0 || bounds.height <= 0 {
+    return
+  }
+  rectangle(context, Rect{ x: bounds.x, y: bounds.y, width: bounds.width, height: 1 }, tint)
+  rectangle(context, Rect{ x: bounds.x, y: coordinate(#cast(i64, bounds.y) + #cast(i64, bounds.height) - 1), width: bounds.width, height: 1 }, tint)
+  rectangle(context, Rect{ x: bounds.x, y: bounds.y, width: 1, height: bounds.height }, tint)
+  rectangle(context, Rect{ x: coordinate(#cast(i64, bounds.x) + #cast(i64, bounds.width) - 1), y: bounds.y, width: 1, height: bounds.height }, tint)
+}
+pub fn button(context: *Context, id: u64, bounds: Rect, text: []const u8, enabled: bool) Response {
+  response := interact(context, id, bounds, enabled)
+  rectangle(context, bounds, background(context, response, enabled))
+  label(context, inset(bounds, context.style.padding), text, context.style.foreground)
+  return response
+}
+pub fn checkbox(context: *Context, id: u64, bounds: Rect, text: []const u8, value: *bool, enabled: bool) Response {
+  response := interact(context, id, bounds, enabled)
+  if response.activated {
+    value.* = !value.*
+    response.changed = true
+  }
+  size := bounds.height
+  if bounds.width < size {
+    size = bounds.width
+  }
+  box := Rect{ x: bounds.x, y: bounds.y, width: size, height: size }
+  rectangle(context, box, background(context, response, enabled))
+  if value.* {
+    rectangle(context, inset(box, context.style.padding), context.style.accent)
+  }
+  remaining := #cast(i64, bounds.width) - #cast(i64, size) - #cast(i64, context.style.padding)
+  if remaining > 0 {
+    text_bounds := Rect{ x: coordinate(#cast(i64, bounds.x) + #cast(i64, size) + #cast(i64, context.style.padding)), y: bounds.y, width: #cast(i32, remaining), height: bounds.height }
+    label(context, text_bounds, text, context.style.foreground)
+  }
+  return response
+}
+pub fn slider(context: *Context, id: u64, bounds: Rect, value: *i32, low, high: i32, enabled: bool) Response {
+  if low >= high {
+    #panic("invalid UI slider range")
+  }
+  response := interact(context, id, bounds, enabled)
+  before := value.*
+  current := #cast(i64, before)
+  if current < #cast(i64, low) {
+    current = #cast(i64, low)
+  }
+  if current > #cast(i64, high) {
+    current = #cast(i64, high)
+  }
+  range := #cast(i64, high) - #cast(i64, low)
+  if response.captured && bounds.width > 1 {
+    position := #cast(i64, context.input.x) - #cast(i64, bounds.x)
+    width := #cast(i64, bounds.width) - 1
+    if position < 0 {
+      position = 0
+    }
+    if position > width {
+      position = width
+    }
+    current = #cast(i64, low) + (position * range + width / 2) / width
+  }
+  if enabled && response.focused && !context.input.tab {
+    if context.input.left && current > #cast(i64, low) {
+      current -= 1
+    }
+    if context.input.right && current < #cast(i64, high) {
+      current += 1
+    }
+  }
+  if enabled {
+    value.* = #cast(i32, current)
+  }
+  response.changed = value.* != before
+  rectangle(context, bounds, background(context, response, enabled))
+  if bounds.width > 0 {
+    position := (current - #cast(i64, low)) * (#cast(i64, bounds.width) - 1) / range
+    rectangle(context, Rect{ x: coordinate(#cast(i64, bounds.x) + position), y: bounds.y, width: 1, height: bounds.height }, context.style.accent)
+  }
+  return response
+}
+
+// A positioned glyph origin shares the same font top-left convention as Text.
+// Bounds provide a text-region clip and may differ from the glyph's ink bounds.
+pub fn glyph(context: *Context, bounds: Rect, codepoint: u32, x, y: i64, tint: Color) {
+  previous := context.last
+  _ = emit(context, Kind.Glyph, bounds, tint, "")
+  if context.last != previous {
+    context.last.codepoint = codepoint
+    context.last.glyph_x = x
+    context.last.glyph_y = y
+  }
+}
