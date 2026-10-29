@@ -96,7 +96,8 @@ with tempfile.TemporaryDirectory(prefix='dyn-x509-') as directory:
     for flags in (['--debug'],['--release'],['--release','--opt-level','3']):
         output=work/'program'
         subprocess.run([DYN,'build',str(work),*flags,'--quiet','--no-cache','--output',str(output)],check=True,timeout=300)
-        subprocess.run([str(output)],check=True,timeout=30)
+        # Traced debug P256 verification runs ~10x slower on hosted runners.
+        subprocess.run([str(output)],check=True,timeout=120 if flags==['--debug'] else 30)
     for target in ('aarch64-linux','riscv64-linux','x86_64-macos','aarch64-macos','x86_64-windows','aarch64-windows','wasm32-wasi'):
         output=work/target
         subprocess.run([DYN,'build',str(work),'--target',target,'--release','--quiet','--output',str(output)],check=True,timeout=300)
