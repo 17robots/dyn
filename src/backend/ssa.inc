@@ -7317,7 +7317,12 @@ static unsigned ssa_parallel_workers(BackendContext *ctx, const DynSource *sourc
   if (!ssa_enabled(ctx, source) || ctx->rv32 || ctx->t32 || ctx->optimization_remarks) return 1;
   const char *setting = getenv("DYN_BACKEND_JOBS");
   /* Serial emission bounds the speedup; a few workers already keep it busy. */
+#ifdef _WIN32
+  /* Like the frontend pools, Windows stays serial unless asked. */
+  long workers = setting && *setting ? strtol(setting, NULL, 10) : 1;
+#else
   long workers = setting && *setting ? strtol(setting, NULL, 10) : sysconf(_SC_NPROCESSORS_ONLN);
+#endif
   if (!(setting && *setting) && workers > 6) workers = 6;
   if (workers < 1) workers = 1;
   if (workers > 64) workers = 64;

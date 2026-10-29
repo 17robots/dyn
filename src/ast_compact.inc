@@ -896,6 +896,7 @@ typedef struct {
   uint32_t block;  /* first body block of a function, or UINT32_MAX */
   bool block_supported;
 } CompactShape;
+#ifndef _WIN32
 typedef struct {
   CompactShape *items;
   size_t count;
@@ -920,6 +921,7 @@ static void *compact_shape_worker(void *raw) {
     }
   return NULL;
 }
+#endif
 static CompactShape *compact_shapes(DynAstProgram *a, const DynSource *s, size_t partitions) {
 #ifdef _WIN32
   (void)a; (void)s; (void)partitions;
