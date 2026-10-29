@@ -43,15 +43,27 @@ static char *sdk_source_path(const char *path, bool strict_configured) {
   }
   return NULL;
 }
-static DynMathIntrinsic math_identity(const DynSource *source,
+/* Functions of one file share its path; resolve it once. */
+typedef struct {
+  const char *path;
+  char *canonical;
+} CanonicalPath;
+static const char *canonical_path(CanonicalPath *cache, const char *path) {
+  if (!cache->path || (cache->path != path && strcmp(cache->path, path))) {
+    free(cache->canonical);
+    cache->canonical = realpath(path, NULL);
+    cache->path = path;
+  }
+  return cache->canonical;
+}
+static DynMathIntrinsic math_identity(const DynSource *source, CanonicalPath *paths,
                                      const char *source_path, const char *sdk,
                                      const DynIrProgram *ir, const DynIrFunction *fn) {
   if (!sdk || !source_path || fn->foreign || fn->variadic || fn->generic ||
       !fn->is_public || (fn->return_type != DYN_TYPE_F32 && fn->return_type != DYN_TYPE_F64))
     return DYN_MATH_INTRINSIC_NONE;
-  char *canonical = realpath(source_path, NULL);
+  const char *canonical = canonical_path(paths, source_path);
   bool trusted = canonical && !strcmp(canonical, sdk);
-  free(canonical);
   if (!trusted) return DYN_MATH_INTRINSIC_NONE;
   const char *original, *ignored_path;
   size_t length, offset;
@@ -82,7 +94,7 @@ static bool byte_const_slice(const DynAstProgram *a, DynType type) {
 }
 /* Only the current SDK's original ordinary declaration can gain this identity.
    Read AST slice metadata: IR slice entries are populated after functions. */
-static DynByteIntrinsic byte_identity(const DynSource *source,
+static DynByteIntrinsic byte_identity(const DynSource *source, CanonicalPath *paths,
                                      const char *source_path, const char *sdk,
                                      const DynAstProgram *a, const DynIrProgram *ir,
                                      const DynIrFunction *fn) {
@@ -92,9 +104,8 @@ static DynByteIntrinsic byte_identity(const DynSource *source,
       2 > ir->param_count - fn->param_start ||
       !byte_const_slice(a, ir->params[fn->param_start].type))
     return DYN_BYTE_INTRINSIC_NONE;
-  char *canonical = realpath(source_path, NULL);
+  const char *canonical = canonical_path(paths, source_path);
   bool trusted = canonical && !strcmp(canonical, sdk);
-  free(canonical);
   if (!trusted) return DYN_BYTE_INTRINSIC_NONE;
   const char *original, *ignored_path;
   size_t length, offset;
@@ -114,7 +125,7 @@ static DynByteIntrinsic byte_identity(const DynSource *source,
 
 /* The private JSON scanner has a scalar body on every target. Only its exact
    SDK declaration may use the bounded x86 implementation. */
-static DynByteIntrinsic json_byte_identity(const DynSource *source,
+static DynByteIntrinsic json_byte_identity(const DynSource *source, CanonicalPath *paths,
                                           const char *source_path, const char *sdk,
                                           const char *mutable_sdk,
                                           const DynAstProgram *a, const DynIrProgram *ir,
@@ -124,10 +135,9 @@ static DynByteIntrinsic json_byte_identity(const DynSource *source,
       fn->return_type != DYN_TYPE_USIZE || fn->param_count != 1 ||
       fn->param_start >= ir->param_count ||
       !byte_const_slice(a, ir->params[fn->param_start].type)) return DYN_BYTE_INTRINSIC_NONE;
-  char *canonical = realpath(source_path, NULL);
+  const char *canonical = canonical_path(paths, source_path);
   bool trusted = canonical && ((sdk && !strcmp(canonical, sdk)) ||
                                (mutable_sdk && !strcmp(canonical, mutable_sdk)));
-  free(canonical);
   if (!trusted) return DYN_BYTE_INTRINSIC_NONE;
   const char *original, *ignored_path;
   size_t length, offset;
@@ -483,9 +493,12 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
       return false;
     }
   }
-  /* Function locations share line tables instead of rescanning every prefix. If indexing runs out of memory, lookup retains its unindexed fallback. */
-  DynLocationIndex locations = {0};
-  (void)dyn_location_build(&locations, source);
+  /* Function locations share line tables instead of rescanning every prefix.
+     The index stays with the program for later passes. If indexing runs out
+     of memory, lookup retains its unindexed fallback. */
+  (void)dyn_location_build(&ir->locations, source);
+  DynLocationIndex locations = ir->locations;
+  CanonicalPath paths = {0};
   char *math_sdk = proofs ? sdk_source_path("std/math/float.dyn", false) : NULL;
   char *bytes_sdk = proofs ? sdk_source_path("std/bytes/bytes.dyn", true) : NULL;
   char *json_sdk = proofs ? sdk_source_path("std/encoding/json/read/read.dyn", true) : NULL;
@@ -499,7 +512,7 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
       free(json_sdk);
       free(bytes_sdk);
       free(math_sdk);
-      dyn_location_free(&locations);
+      free(paths.canonical);
       dyn_ir_free(ir);
       return false;
     }
@@ -535,7 +548,7 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
       free(json_sdk);
       free(bytes_sdk);
       free(math_sdk);
-      dyn_location_free(&locations);
+      free(paths.canonical);
       dyn_ir_free(ir);
       return false;
     }
@@ -559,16 +572,16 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
     ir->functions[i].is_public = a->functions[i].is_public;
     ir->functions[i].module_owner = a->functions[i].module_owner;
     ir->functions[i].variadic_type = lower_type(a, a->functions[i].variadic_type);
-    ir->functions[i].math_intrinsic = math_identity(source, source_path, math_sdk, ir, &ir->functions[i]);
-    ir->functions[i].byte_intrinsic = byte_identity(source, source_path, bytes_sdk, a, ir, &ir->functions[i]);
+    ir->functions[i].math_intrinsic = math_identity(source, &paths, source_path, math_sdk, ir, &ir->functions[i]);
+    ir->functions[i].byte_intrinsic = byte_identity(source, &paths, source_path, bytes_sdk, a, ir, &ir->functions[i]);
     if (ir->functions[i].byte_intrinsic == DYN_BYTE_INTRINSIC_NONE)
-      ir->functions[i].byte_intrinsic = json_byte_identity(source, source_path, json_sdk, mutable_json_sdk, a, ir, &ir->functions[i]);
+      ir->functions[i].byte_intrinsic = json_byte_identity(source, &paths, source_path, json_sdk, mutable_json_sdk, a, ir, &ir->functions[i]);
   }
   free(mutable_json_sdk);
   free(json_sdk);
   free(bytes_sdk);
   free(math_sdk);
-  dyn_location_free(&locations);
+  free(paths.canonical);
   for (size_t i = 0; i < a->global_count; ++i) {
     size_t n = a->globals[i].name.end_byte - a->globals[i].name.start_byte;
     ir->globals[i].name = malloc(n + 1);

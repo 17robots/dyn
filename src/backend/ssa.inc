@@ -7270,7 +7270,7 @@ static unsigned ssa_parallel_workers(BackendContext *ctx, const DynSource *sourc
   const char *setting = getenv("DYN_BACKEND_JOBS");
   /* Serial emission bounds the speedup; a few workers already keep it busy. */
   long workers = setting && *setting ? strtol(setting, NULL, 10) : sysconf(_SC_NPROCESSORS_ONLN);
-  if (!(setting && *setting) && workers > 4) workers = 4;
+  if (!(setting && *setting) && workers > 6) workers = 6;
   if (workers < 1) workers = 1;
   if (workers > 64) workers = 64;
   if (ir->function_count < 16) return 1;

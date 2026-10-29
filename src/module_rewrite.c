@@ -551,24 +551,19 @@ static bool compact_rewrite_imports(const DynSource *source, Module *module, con
   dyn_imports_close(&reader);
   return ok;
 }
-static bool capture_dependencies(DynSources *sources, Module *modules, size_t count) {
+static bool capture_dependencies(DynSources *sources, Module *modules, size_t count, const size_t *owners) {
   bool reflection = false;
-  size_t *owners = calloc(sources->count, sizeof(*owners));
   bool *selected = calloc(count, sizeof(*selected));
-  if (!owners || !selected) { free(owners); free(selected); return false; }
+  if (!selected) return false;
   for (size_t i = 0; i < count; ++i) modules[i].abi = hash_path(modules[i].dir);
   for (size_t i = 0; i < sources->count; ++i) {
     DynSource *source = &sources->items[i];
-    char *dir = source_dir(source->path);
-    Module *module = dir ? find_module(modules, count, dir) : NULL;
-    free(dir);
-    if (!module) { free(owners); free(selected); return false; }
-    owners[i] = (size_t)(module - modules);
+    Module *module = &modules[owners[i]];
     if (!dyn_source_target_enabled(source)) continue;
     const ExpSnapshotTree *compact = dyn_compact_tree(source);
-    if (!compact) { free(owners); free(selected); return false; }
+    if (!compact) { free(selected); return false; }
     reflection |= source->needs_reflection || source->compact_reflection;
-    if (!compact_rewrite_abi(source, compact, module)) { free(owners); free(selected); return false; }
+    if (!compact_rewrite_abi(source, compact, module)) { free(selected); return false; }
   }
   for (size_t i = 0; i < sources->count; ++i) {
     if (i && owners[i] == owners[i - 1]) continue;
@@ -589,7 +584,7 @@ static bool capture_dependencies(DynSources *sources, Module *modules, size_t co
     size_t needed = 0;
     for (size_t j = 0; j < sources->count; ++j) needed += selected[owners[j]];
     source->dependency_sources = malloc(needed * sizeof(size_t));
-    if (!source->dependency_sources) { free(owners); free(selected); return false; }
+    if (!source->dependency_sources) { free(selected); return false; }
     uint64_t hash = UINT64_C(1469598103934665603);
     hash = rewrite_hash(hash, &reflection, sizeof(reflection));
     for (size_t j = 0; j < count; ++j) if (selected[j])
@@ -603,23 +598,21 @@ static bool capture_dependencies(DynSources *sources, Module *modules, size_t co
       source->dependency_sources[source->dependency_count++] = j;
     source->dependency_hash = hash ? hash : 1;
   }
-  free(owners); free(selected);
+  free(selected);
   return true;
 }
 typedef struct {
   DynSources *sources;
   Module *modules;
   size_t module_count;
+  const size_t *owners;
   atomic_size_t next;
   atomic_bool failed;
 } RewriteJobs;
 /* Each source rewrites independently against the read-only module tables. */
-static bool rewrite_source(DynSource *s, Module *modules, size_t module_count) {
-  char *dir = source_dir(s->path);
-  Module *m = dir ? find_module(modules, module_count, dir) : NULL;
-  free(dir);
+static bool rewrite_source(DynSource *s, Module *m, Module *modules, size_t module_count) {
   const ExpSnapshotTree *tree = dyn_compact_tree(s);
-  if (!m || !tree) return false;
+  if (!tree) return false;
   Edits edits = {0};
   DynScopeIndex locals = {0};
   bool ok = dyn_scope_build(&locals, s) &&
@@ -639,7 +632,7 @@ static void *rewrite_worker(void *raw) {
       return NULL;
     DynSource *s = &jobs->sources->items[i];
     if (dyn_source_target_enabled(s) != 0 &&
-        !rewrite_source(s, jobs->modules, jobs->module_count))
+        !rewrite_source(s, &jobs->modules[jobs->owners[i]], jobs->modules, jobs->module_count))
       atomic_store(&jobs->failed, true);
   }
 }
@@ -675,13 +668,21 @@ int dyn_module_rewrite_project(const char *project_root, DynSources *sources) {
   Module *modules = NULL;
   size_t module_count = 0;
   int result = 0;
+  /* Each source's module, resolved once: resolving a path is several system calls. */
+  size_t *owners = malloc((sources->count ? sources->count : 1) * sizeof(*owners));
+  if (!owners)
+    result = 2;
   for (size_t i = 0; i < sources->count && !result; ++i) {
     char *dir = source_dir(sources->items[i].path);
     if (!dir) {
       result = 2;
       break;
     }
-    if (!find_module(modules, module_count, dir)) {
+    Module *found = find_module(modules, module_count, dir);
+    if (found) {
+      owners[i] = (size_t)(found - modules);
+      free(dir);
+    } else {
       Module *p = realloc(modules, (module_count + 1) * sizeof(*p));
       if (!p) {
         free(dir);
@@ -690,17 +691,14 @@ int dyn_module_rewrite_project(const char *project_root, DynSources *sources) {
       }
       modules = p;
       modules[module_count] = (Module){.dir = dir, .root = !strcmp(dir, root)};
-      ++module_count;
-    } else
-      free(dir);
+      owners[i] = module_count++;
+    }
   }
   for (size_t si = 0; si < sources->count && !result; ++si) {
     if (dyn_source_target_enabled(&sources->items[si]) == 0)
       continue;
     DynSource *s = &sources->items[si];
-    char *dir = source_dir(s->path);
-    Module *m = find_module(modules, module_count, dir);
-    free(dir);
+    Module *m = &modules[owners[si]];
     const ExpSnapshotTree *compact = dyn_compact_tree(s);
     if (!compact || !compact_rewrite_declarations(s, compact, m, false) ||
         !compact_rewrite_imports(s, m, root)) result = 2;
@@ -709,22 +707,21 @@ int dyn_module_rewrite_project(const char *project_root, DynSources *sources) {
     if (dyn_source_target_enabled(&sources->items[si]) == 0)
       continue;
     DynSource *s = &sources->items[si];
-    char *dir = source_dir(s->path);
-    Module *m = find_module(modules, module_count, dir);
-    free(dir);
+    Module *m = &modules[owners[si]];
     const ExpSnapshotTree *compact = dyn_compact_tree(s);
     if (!compact || !compact_rewrite_declarations(s, compact, m, true)) result = 2;
   }
   if (!result) {
     RewriteJobs jobs = {.sources = sources, .modules = modules,
-                        .module_count = module_count};
+                        .module_count = module_count, .owners = owners};
     atomic_init(&jobs.next, 0);
     atomic_init(&jobs.failed, false);
     rewrite_parallel(&jobs, sources);
     if (atomic_load(&jobs.failed))
       result = 2;
   }
-  if (!result && !capture_dependencies(sources, modules, module_count)) result = 2;
+  if (!result && !capture_dependencies(sources, modules, module_count, owners)) result = 2;
+  free(owners);
   free_modules(modules, module_count);
   free(root);
   if (result)

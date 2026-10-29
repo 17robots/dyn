@@ -138,6 +138,15 @@ static bool share_syntax(DynSource *d, const DynSource *s) {
     if (!exp_snapshot_retain(s->compact)) return false;
     d->compact = s->compact;
   }
+  /* An error-free source already holds the facts (reflection, certificate)
+     of this exact snapshot. Budgeted analysis still charges deriving them. */
+  if (s->compact && s->compact_validated && !s->context.work && !d->context.work) {
+    d->compact_root_start = s->compact_root_start;
+    d->compact_root_end = s->compact_root_end;
+    d->compact_validated = d->compact_only = true;
+    d->compact_reflection = s->compact_reflection;
+    return true;
+  }
   /* Facts (reflection, certificate) are derived for the adopted revision. */
   return dyn_source_prepare(d);
 }
@@ -799,32 +808,27 @@ static int visit(Resolver *r, const char *directory,
   return result;
 }
 #ifndef _WIN32
+/* Directories load on a pool of workers as soon as an import names them,
+   instead of level by level, so no level waits for its slowest directory.
+   r->prefetched grows under the lock; its order does not matter because
+   visit looks directories up by name. */
 typedef struct {
   Resolver *resolver;
-  size_t first, count;
-  atomic_size_t next;
-} PrefetchWave;
-static void *prefetch_worker(void *raw) {
-  PrefetchWave *wave = raw;
-  for (;;) {
-    size_t i = atomic_fetch_add(&wave->next, 1);
-    if (i >= wave->count)
-      return NULL;
-    Prefetched *p = &wave->resolver->prefetched[wave->first + i];
-    p->status = dyn_sources_load_quiet(&wave->resolver->context, p->directory,
-                                       &p->sources);
-  }
-}
+  size_t next, active;
+  bool failed;
+  pthread_mutex_t lock;
+  pthread_cond_t changed;
+} PrefetchQueue;
 static bool prefetch_seen(const Resolver *r, const char *directory) {
   for (size_t i = 0; i < r->prefetched_count; ++i)
     if (!strcmp(r->prefetched[i].directory, directory))
       return true;
   return false;
 }
-/* Queue every import target of sources not seen yet. Invalid imports are
-   skipped here; visit reports them. */
-static bool prefetch_imports(Resolver *r, const char *directory,
-                             const DynSources *sources) {
+/* Every import target of sources, resolved but not yet queued. Invalid
+   imports are skipped here; visit reports them. */
+static bool prefetch_targets(Resolver *r, const char *directory, const DynSources *sources,
+                             char ***targets, size_t *target_count) {
   char **paths = NULL;
   size_t path_count = 0;
   bool success = true;
@@ -836,23 +840,22 @@ static bool prefetch_imports(Resolver *r, const char *directory,
     DynImportView item;
     bool ok = true;
     while (dyn_imports_next(&imports, &item)) {
-        char *path = dyn_import_copy(item.path, item.path_length);
-        if (path && has(paths, path_count, path)) { free(path); continue; }
-        if (path && !push(&paths, &path_count, path)) {
-          free(path); ok = false; break;
-        }
-        bool oom = !path && item.path_node;
-        char *target = path ? resolve_checked(r, directory, path, &oom) : NULL;
-        free(path);
-        if (oom) { free(target); ok = false; break; }
-        if (target && dyn_path_is_directory(target) && !prefetch_seen(r, target)) {
-          Prefetched *grown = realloc(r->prefetched,
-              (r->prefetched_count + 1) * sizeof(*grown));
-          if (!grown) { free(target); ok = false; break; }
-          r->prefetched = grown;
-          r->prefetched[r->prefetched_count++] = (Prefetched){.directory = target};
-        } else
-          free(target);
+      char *path = dyn_import_copy(item.path, item.path_length);
+      if (path && has(paths, path_count, path)) { free(path); continue; }
+      if (path && !push(&paths, &path_count, path)) {
+        free(path); ok = false; break;
+      }
+      bool oom = !path && item.path_node;
+      char *target = path ? resolve_checked(r, directory, path, &oom) : NULL;
+      free(path);
+      if (oom) { free(target); ok = false; break; }
+      if (target && dyn_path_is_directory(target) && !has(*targets, *target_count, target)) {
+        char **grown = realloc(*targets, (*target_count + 1) * sizeof(*grown));
+        if (!grown) { free(target); ok = false; break; }
+        *targets = grown;
+        (*targets)[(*target_count)++] = target;
+      } else
+        free(target);
     }
     if (imports.failed) ok = false;
     dyn_imports_close(&imports);
@@ -862,43 +865,82 @@ static bool prefetch_imports(Resolver *r, const char *directory,
   free(paths);
   return success;
 }
-/* Parse the import graph breadth first; each wave loads in parallel.
-   Only allocation failure is an error: anything else is left for visit. */
+/* Queues the targets not seen yet; takes ownership of them. Hold the lock. */
+static bool prefetch_queue(Resolver *r, char **targets, size_t count) {
+  bool ok = true;
+  for (size_t i = 0; i < count; ++i) {
+    if (!ok || prefetch_seen(r, targets[i])) { free(targets[i]); continue; }
+    Prefetched *grown = realloc(r->prefetched, (r->prefetched_count + 1) * sizeof(*grown));
+    if (!grown) { free(targets[i]); ok = false; continue; }
+    r->prefetched = grown;
+    r->prefetched[r->prefetched_count++] = (Prefetched){.directory = targets[i]};
+  }
+  free(targets);
+  return ok;
+}
+static void *prefetch_worker(void *raw) {
+  PrefetchQueue *queue = raw;
+  Resolver *r = queue->resolver;
+  pthread_mutex_lock(&queue->lock);
+  for (;;) {
+    while (!queue->failed && queue->next >= r->prefetched_count && queue->active)
+      pthread_cond_wait(&queue->changed, &queue->lock);
+    if (queue->failed || queue->next >= r->prefetched_count) break;
+    size_t i = queue->next++;
+    const char *directory = r->prefetched[i].directory; /* the string never moves */
+    ++queue->active;
+    pthread_mutex_unlock(&queue->lock);
+    DynSources sources = {0};
+    int status = dyn_sources_load_quiet(&r->context, directory, &sources);
+    char **targets = NULL;
+    size_t target_count = 0;
+    bool ok = status != 2 && (status || prefetch_targets(r, directory, &sources, &targets, &target_count));
+    pthread_mutex_lock(&queue->lock);
+    r->prefetched[i].sources = sources;
+    r->prefetched[i].status = status;
+    if (!ok) {
+      for (size_t k = 0; k < target_count; ++k) free(targets[k]);
+      free(targets);
+      queue->failed = true;
+    } else if (!prefetch_queue(r, targets, target_count))
+      queue->failed = true;
+    --queue->active;
+    pthread_cond_broadcast(&queue->changed);
+  }
+  pthread_cond_broadcast(&queue->changed);
+  pthread_mutex_unlock(&queue->lock);
+  return NULL;
+}
+/* Only allocation failure is an error: anything else is left for visit. */
 static int prefetch(Resolver *r, const DynSources *root_sources) {
   if (r->overrides || r->context.work || r->context.syntax_cache)
     return 0;
   long online = sysconf(_SC_NPROCESSORS_ONLN);
   if (online < 2)
     return 0;
-  if (!prefetch_imports(r, r->root, root_sources))
+  char **targets = NULL;
+  size_t target_count = 0;
+  if (!prefetch_targets(r, r->root, root_sources, &targets, &target_count)) {
+    for (size_t k = 0; k < target_count; ++k) free(targets[k]);
+    free(targets);
     return 2;
-  for (size_t first = 0; first < r->prefetched_count;) {
-    PrefetchWave wave = {.resolver = r, .first = first,
-                         .count = r->prefetched_count - first};
-    atomic_init(&wave.next, 0);
-    size_t workers = wave.count < (size_t)online ? wave.count : (size_t)online;
-    pthread_t threads[256];
-    if (workers > 256)
-      workers = 256;
-    size_t started = 0;
-    for (; started + 1 < workers; ++started)
-      if (pthread_create(&threads[started], NULL, prefetch_worker, &wave))
-        break;
-    prefetch_worker(&wave);
-    for (size_t i = 0; i < started; ++i)
-      pthread_join(threads[i], NULL);
-    size_t end = r->prefetched_count;
-    for (size_t i = first; i < end; ++i) {
-      /* Copies: prefetch_imports may move r->prefetched. */
-      DynSources sources = r->prefetched[i].sources;
-      const char *directory = r->prefetched[i].directory;
-      if (r->prefetched[i].status == 2 ||
-          (!r->prefetched[i].status && !prefetch_imports(r, directory, &sources)))
-        return 2;
-    }
-    first = end;
   }
-  return 0;
+  if (!prefetch_queue(r, targets, target_count)) return 2;
+  PrefetchQueue queue = {.resolver = r};
+  pthread_mutex_init(&queue.lock, NULL);
+  pthread_cond_init(&queue.changed, NULL);
+  size_t workers = online > 64 ? 64 : (size_t)online;
+  pthread_t threads[64];
+  size_t started = 0;
+  for (; started + 1 < workers; ++started)
+    if (pthread_create(&threads[started], NULL, prefetch_worker, &queue))
+      break;
+  prefetch_worker(&queue);
+  for (size_t i = 0; i < started; ++i)
+    pthread_join(threads[i], NULL);
+  pthread_mutex_destroy(&queue.lock);
+  pthread_cond_destroy(&queue.changed);
+  return queue.failed ? 2 : 0;
 }
 #endif
 static void prefetch_free(Resolver *r) {

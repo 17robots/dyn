@@ -186,7 +186,8 @@ static int codegen_prepare(const DynSource *source,
     dyn_ir_free(ir);
     return 2;
   }
-  if (!dyn_location_build(&ir->locations, source)) {
+  /* Lowering normally built the index already. */
+  if (!ir->locations.files && !dyn_location_build(&ir->locations, source)) {
     dyn_ir_free(ir);
     return 2;
   }

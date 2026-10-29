@@ -1,5 +1,45 @@
 # Performance qualification
 
+## Parallel frontend — 2026-10-29
+
+Function bodies lower to the AST on up to four worker threads. Each worker
+lowers a run of bodies into private arrays; the runs merge in function order,
+shifting their ids and interning new types in creation order, which assigns
+exactly the serial ids. A run that reports a diagnostic sends the whole
+program back to serial lowering, so messages keep their order. Structure
+checks of declarations and bodies also run on workers, and each body is
+walked once instead of twice.
+
+Serial work also shrank: type predicates are inline, import rewriting
+resolves each file's directory once instead of four times, and IR lowering
+builds the source location index once and resolves each SDK path once. The
+backend's default worker cap rises from four to six; its smaller window keeps
+the memory cost to about 4 MiB.
+
+DNA, interleaved medians: 140 → 117 ms wall, 334 → 345 ms CPU,
+127 → 132 MiB peak RSS. Stages: import loading 27 → 20.5 ms, AST lowering
+23 → 14.5 ms, type checking 17.4 → 14.7 ms, IR lowering 10.8 → 8.7 ms.
+Objects stay byte-identical on 46 project and target builds.
+
+Runs merge in order as soon as each finishes, so only runs still in flight
+exist beside the program; a run that reports a diagnostic truncates the
+program back to its earlier counts before the serial retry. Worker heap
+arenas would otherwise hold the merged runs' memory for the rest of the
+build, so glibc builds return it with `malloc_trim` after the merge.
+
+Import loading falls from 20.5 to about 17 ms. Imported directories load
+from a work queue as soon as an import names them, instead of level by level
+with a barrier after each level. Sources copied out of the prefetched
+directories keep their snapshot's facts instead of walking every node again.
+
+`dyn check` on DNA falls from 66 to 50 ms; its peak RSS, set during AST
+lowering, rises from 60 to 64 MiB. Linking DNA takes 2.4–5 ms of a full
+release build, so the linker is not a bottleneck.
+A parallel inliner was measured and dropped: rebuilding bodies is memory
+copying, and the merge copied it again for no gain and 10 MiB more peak RSS.
+Type checking stays serial because instantiating generics creates functions
+whose ids later checks depend on.
+
 ## Compiler throughput and memory — 2026-10-29
 
 The native backend now prepares functions on up to four worker threads, at

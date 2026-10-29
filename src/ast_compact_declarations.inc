@@ -543,10 +543,404 @@ static bool compact_add_function_signatures(const DynSource *s,
   }
   return true;
 }
+/* Function bodies lower independently: each appends only expressions, items,
+   statements, children, patterns, case arms, strings, loop ids and interned
+   types. Workers lower contiguous runs of bodies into private arrays that
+   start at the shared counts. The runs merge in function order, shifting
+   the appended ids and interning each new type in its creation order, which
+   assigns exactly the ids a serial lowering assigns. */
+typedef struct {
+  size_t expressions, items, statements, children, patterns, arms, strings;
+  size_t pointers, arrays, slices, fn_types, fn_type_params;
+  uint32_t loops;
+} BodyBase;
+typedef struct {
+  uint32_t function;
+  CompactNode block;
+  uint32_t start, count; /* body in the run's id space */
+} BodyJob;
+typedef struct {
+  DynAstProgram w;
+  DynSource source;
+  unsigned errors;
+  BodyJob *jobs;
+  size_t count;
+} BodyRun;
+static void body_silent(const char *severity, const char *path, unsigned line, unsigned column,
+                        unsigned end_line, unsigned end_column, const char *message, void *data) {
+  (void)severity; (void)path; (void)line; (void)column; (void)end_line; (void)end_column; (void)message;
+  (void)data;
+}
+/* Interning compares against the shared types, so a run starts with a copy
+   of them. Bodies never refer to earlier expressions, statements and the
+   like, so a run numbers its own from zero. */
+static bool body_array(void **array, size_t *capacity, size_t base, size_t element, const void *copy) {
+  size_t n = base + 256;
+  *array = malloc(n * element);
+  if (!*array) return false;
+  if (base) memcpy(*array, copy, base * element);
+  *capacity = n;
+  return true;
+}
+static bool body_run_open(BodyRun *r, const DynAstProgram *a, const DynSource *s) {
+  r->w = *a;
+  r->source = *s;
+  r->source.context.diagnostic = body_silent;
+  r->source.context.diagnostic_data = NULL;
+  DynAstProgram *w = &r->w;
+  w->expressions = NULL; w->items = NULL; w->statements = NULL; w->children = NULL;
+  w->patterns = NULL; w->case_arms = NULL; w->strings = NULL; w->pointers = NULL;
+  w->arrays = NULL; w->slices = NULL; w->fn_types = NULL; w->fn_type_params = NULL;
+  w->expression_count = w->item_count = w->statement_count = w->child_count = 0;
+  w->pattern_count = w->case_arm_count = w->string_count = 0;
+  return body_array((void **)&w->expressions, &w->expression_capacity, 0, sizeof(*w->expressions), NULL) &&
+         body_array((void **)&w->items, &w->item_capacity, 0, sizeof(*w->items), NULL) &&
+         body_array((void **)&w->statements, &w->statement_capacity, 0, sizeof(*w->statements), NULL) &&
+         body_array((void **)&w->children, &w->child_capacity, 0, sizeof(*w->children), NULL) &&
+         body_array((void **)&w->patterns, &w->pattern_capacity, 0, sizeof(*w->patterns), NULL) &&
+         body_array((void **)&w->case_arms, &w->case_arm_capacity, 0, sizeof(*w->case_arms), NULL) &&
+         body_array((void **)&w->strings, &w->string_capacity, 0, sizeof(*w->strings), NULL) &&
+         body_array((void **)&w->pointers, &w->pointer_capacity, a->pointer_count, sizeof(*w->pointers), a->pointers) &&
+         body_array((void **)&w->arrays, &w->array_capacity, a->array_count, sizeof(*w->arrays), a->arrays) &&
+         body_array((void **)&w->slices, &w->slice_capacity, a->slice_count, sizeof(*w->slices), a->slices) &&
+         body_array((void **)&w->fn_types, &w->fn_type_capacity, a->fn_type_count, sizeof(*w->fn_types), a->fn_types) &&
+         body_array((void **)&w->fn_type_params, &w->fn_type_param_capacity, a->fn_type_param_count,
+                    sizeof(*w->fn_type_params), a->fn_type_params);
+}
+static void body_run_close(BodyRun *r, const BodyBase *base) {
+  DynAstProgram *w = &r->w;
+  if (w->strings)
+    for (size_t i = base->strings; i < w->string_count; ++i) free(w->strings[i].data);
+  free(w->expressions); free(w->items); free(w->statements); free(w->children);
+  free(w->patterns); free(w->case_arms); free(w->strings); free(w->pointers);
+  free(w->arrays); free(w->slices); free(w->fn_types); free(w->fn_type_params);
+  free(r->jobs);
+}
+static void body_run(BodyRun *r) {
+  for (size_t i = 0; i < r->count; ++i)
+    compact_block(r->jobs[i].block, &r->source, &r->w, &r->errors, 0, &r->jobs[i].start, &r->jobs[i].count);
+}
+typedef struct {
+  BodyRun *runs;
+  bool *done;
+  size_t count;
+  atomic_size_t next;
+#ifndef _WIN32
+  pthread_mutex_t lock;
+  pthread_cond_t finished;
+#endif
+} BodyPool;
+static void *body_worker(void *raw) {
+  BodyPool *pool = raw;
+  for (size_t i; (i = atomic_fetch_add(&pool->next, 1)) < pool->count;) {
+    body_run(&pool->runs[i]);
+#ifndef _WIN32
+    pthread_mutex_lock(&pool->lock);
+    pool->done[i] = true;
+    pthread_cond_broadcast(&pool->finished);
+    pthread_mutex_unlock(&pool->lock);
+#else
+    pool->done[i] = true;
+#endif
+  }
+  return NULL;
+}
+typedef struct {
+  const BodyBase *base;
+  const DynAstProgram *w;
+  DynType *pointers, *arrays, *slices, *fn_types; /* new worker type -> shared type */
+} BodyTypes;
+/* Shared id of a worker type, or UINT32_MAX for a new one not merged yet. */
+static DynType body_type(const BodyTypes *m, DynType t) {
+  if (t >= DYN_TYPE_POINTER_BASE && t < DYN_TYPE_ARRAY_BASE && t - DYN_TYPE_POINTER_BASE >= m->base->pointers)
+    return m->pointers[t - DYN_TYPE_POINTER_BASE - m->base->pointers];
+  if (t >= DYN_TYPE_ARRAY_BASE && t < DYN_TYPE_SLICE_BASE && t - DYN_TYPE_ARRAY_BASE >= m->base->arrays)
+    return m->arrays[t - DYN_TYPE_ARRAY_BASE - m->base->arrays];
+  if (t >= DYN_TYPE_SLICE_BASE && t < DYN_TYPE_FN_BASE && t - DYN_TYPE_SLICE_BASE >= m->base->slices)
+    return m->slices[t - DYN_TYPE_SLICE_BASE - m->base->slices];
+  if (t >= DYN_TYPE_FN_BASE && t < DYN_TYPE_DISTINCT_BASE && t - DYN_TYPE_FN_BASE >= m->base->fn_types)
+    return m->fn_types[t - DYN_TYPE_FN_BASE - m->base->fn_types];
+  return t;
+}
+/* Interns the run's new types. Ids depend only on the order within each
+   kind, and every type's parts precede it, so advancing each kind in order
+   once its next type's parts are known reproduces the serial ids. */
+static bool body_merge_types(DynAstProgram *a, BodyTypes *m) {
+  const DynAstProgram *w = m->w;
+  const BodyBase *b = m->base;
+  size_t np = w->pointer_count - b->pointers, na = w->array_count - b->arrays;
+  size_t ns = w->slice_count - b->slices, nf = w->fn_type_count - b->fn_types;
+  size_t ip = 0, ia = 0, is = 0, in = 0;
+  while (ip < np || ia < na || is < ns || in < nf) {
+    bool progress = false;
+    while (ip < np) {
+      DynType pointee = body_type(m, w->pointers[b->pointers + ip].pointee);
+      if (pointee == UINT32_MAX) break;
+      m->pointers[ip] = intern_pointer(a, pointee, w->pointers[b->pointers + ip].is_const);
+      ++ip;
+      progress = true;
+    }
+    while (ia < na) {
+      DynType element = body_type(m, w->arrays[b->arrays + ia].element);
+      if (element == UINT32_MAX) break;
+      m->arrays[ia] = intern_array(a, element, w->arrays[b->arrays + ia].length);
+      ++ia;
+      progress = true;
+    }
+    while (is < ns) {
+      DynType element = body_type(m, w->slices[b->slices + is].element);
+      if (element == UINT32_MAX) break;
+      m->slices[is] = intern_slice(a, element, w->slices[b->slices + is].is_const);
+      ++is;
+      progress = true;
+    }
+    while (in < nf) {
+      const DynAstFnType *f = &w->fn_types[b->fn_types + in];
+      DynType params[64], result = body_type(m, f->return_type);
+      bool ready = result != UINT32_MAX && f->param_count <= 64 && !f->variadic;
+      for (uint32_t j = 0; ready && j < f->param_count; ++j)
+        ready = (params[j] = body_type(m, w->fn_type_params[f->param_start + j])) != UINT32_MAX;
+      if (!ready) break;
+      m->fn_types[in++] = intern_fn_type(a, params, f->param_count, result);
+      progress = true;
+    }
+    if (!progress) return false;
+  }
+  return !a->allocation_failed && !a->type_capacity_exceeded;
+}
+static bool body_grow(void **array, size_t *capacity, size_t need, size_t element) {
+  if (need <= *capacity) return true;
+  size_t n = *capacity ? *capacity : 32;
+  while (n < need) n *= 2;
+  void *p = realloc(*array, n * element);
+  if (!p) return false;
+  *array = p;
+  *capacity = n;
+  return true;
+}
+/* Best effort: a failed shrink keeps the larger block. */
+static void body_shrink(void **array, size_t *capacity, size_t count, size_t element) {
+  if (!count || count >= *capacity) return;
+  void *p = realloc(*array, count * element);
+  if (!p) return;
+  *array = p;
+  *capacity = count;
+}
+#define BODY_SHIFT(id, from, by) ((id) != UINT32_MAX && (id) >= (from) ? (id) + (by) : (id))
+static bool body_merge(DynAstProgram *a, BodyRun *r, const BodyBase *b) {
+  DynAstProgram *w = &r->w;
+  BodyTypes m = {b, w, NULL, NULL, NULL, NULL};
+  size_t np = w->pointer_count - b->pointers, na = w->array_count - b->arrays;
+  size_t ns = w->slice_count - b->slices, nf = w->fn_type_count - b->fn_types;
+  m.pointers = malloc((np + 1) * sizeof(DynType));
+  m.arrays = malloc((na + 1) * sizeof(DynType));
+  m.slices = malloc((ns + 1) * sizeof(DynType));
+  m.fn_types = malloc((nf + 1) * sizeof(DynType));
+  bool ok = m.pointers && m.arrays && m.slices && m.fn_types;
+  if (ok) {
+    memset(m.pointers, 0xff, (np + 1) * sizeof(DynType));
+    memset(m.arrays, 0xff, (na + 1) * sizeof(DynType));
+    memset(m.slices, 0xff, (ns + 1) * sizeof(DynType));
+    memset(m.fn_types, 0xff, (nf + 1) * sizeof(DynType));
+  }
+  ok = ok && body_merge_types(a, &m);
+  size_t ne = w->expression_count - b->expressions, ni = w->item_count - b->items;
+  size_t nst = w->statement_count - b->statements, nc = w->child_count - b->children;
+  size_t npt = w->pattern_count - b->patterns, nar = w->case_arm_count - b->arms;
+  size_t nstr = w->string_count - b->strings;
+  ok = ok &&
+       body_grow((void **)&a->expressions, &a->expression_capacity, a->expression_count + ne, sizeof(*a->expressions)) &&
+       body_grow((void **)&a->items, &a->item_capacity, a->item_count + ni, sizeof(*a->items)) &&
+       body_grow((void **)&a->statements, &a->statement_capacity, a->statement_count + nst, sizeof(*a->statements)) &&
+       body_grow((void **)&a->children, &a->child_capacity, a->child_count + nc, sizeof(*a->children)) &&
+       body_grow((void **)&a->patterns, &a->pattern_capacity, a->pattern_count + npt, sizeof(*a->patterns)) &&
+       body_grow((void **)&a->case_arms, &a->case_arm_capacity, a->case_arm_count + nar, sizeof(*a->case_arms)) &&
+       body_grow((void **)&a->strings, &a->string_capacity, a->string_count + nstr, sizeof(*a->strings));
+  if (!ok) {
+    a->allocation_failed = true;
+    goto done;
+  }
+  /* Shifts from the run's ids to the shared ones. */
+  uint32_t de = (uint32_t)(a->expression_count - b->expressions), di = (uint32_t)(a->item_count - b->items);
+  uint32_t ds = (uint32_t)(a->statement_count - b->statements), dc = (uint32_t)(a->child_count - b->children);
+  uint32_t dp = (uint32_t)(a->pattern_count - b->patterns), da = (uint32_t)(a->case_arm_count - b->arms);
+  uint32_t dstr = (uint32_t)(a->string_count - b->strings), dl = a->loop_count - b->loops;
+  uint32_t be = (uint32_t)b->expressions, bi = (uint32_t)b->items, bs = (uint32_t)b->statements;
+  uint32_t bc = (uint32_t)b->children, bp = (uint32_t)b->patterns, ba = (uint32_t)b->arms;
+  for (size_t k = 0; k < ne; ++k) {
+    DynAstExpr e = w->expressions[b->expressions + k];
+    e.type = body_type(&m, e.type);
+    e.left = BODY_SHIFT(e.left, be, de);
+    e.right = BODY_SHIFT(e.right, be, de);
+    if (e.kind != DYN_EXPR_OFFSET) e.item_start = BODY_SHIFT(e.item_start, bi, di);
+    if (e.kind == DYN_EXPR_SLICE) e.integer = BODY_SHIFT((uint32_t)e.integer, be, de);
+    else if (e.kind == DYN_EXPR_STRING) e.integer = (uint32_t)e.integer + dstr;
+    else if (e.kind == DYN_EXPR_CAST || e.kind == DYN_EXPR_BITCAST || e.kind == DYN_EXPR_OFFSET ||
+             ((e.kind == DYN_EXPR_SIZE || e.kind == DYN_EXPR_ALIGN || e.kind == DYN_EXPR_TYPEOF) && e.boolean))
+      e.integer = body_type(&m, (DynType)e.integer);
+    a->expressions[a->expression_count++] = e;
+  }
+  for (size_t k = 0; k < ni; ++k) {
+    DynAstItem item = w->items[b->items + k];
+    item.expression = BODY_SHIFT(item.expression, be, de);
+    a->items[a->item_count++] = item;
+  }
+  for (size_t k = 0; k < nst; ++k) {
+    DynAstStmt st = w->statements[b->statements + k];
+    st.expression = BODY_SHIFT(st.expression, be, de);
+    st.target = BODY_SHIFT(st.target, be, de);
+    st.declared_type = body_type(&m, st.declared_type);
+    st.body_start = BODY_SHIFT(st.body_start, bc, dc);
+    st.else_start = BODY_SHIFT(st.else_start, bc, dc);
+    st.case_arm_start = BODY_SHIFT(st.case_arm_start, ba, da);
+    if (st.kind == DYN_STMT_FOR) st.loop_id += dl;
+    a->statements[a->statement_count++] = st;
+  }
+  for (size_t k = 0; k < nc; ++k)
+    a->children[a->child_count++] = BODY_SHIFT(w->children[b->children + k], bs, ds);
+  for (size_t k = 0; k < npt; ++k) {
+    DynAstPattern pattern = w->patterns[b->patterns + k];
+    pattern.first = BODY_SHIFT(pattern.first, be, de);
+    pattern.last = BODY_SHIFT(pattern.last, be, de);
+    pattern.type = body_type(&m, pattern.type);
+    a->patterns[a->pattern_count++] = pattern;
+  }
+  for (size_t k = 0; k < nar; ++k) {
+    DynAstCaseArm arm = w->case_arms[b->arms + k];
+    arm.pattern_start = BODY_SHIFT(arm.pattern_start, bp, dp);
+    arm.body_start = BODY_SHIFT(arm.body_start, bc, dc);
+    a->case_arms[a->case_arm_count++] = arm;
+  }
+  for (size_t k = 0; k < nstr; ++k) a->strings[a->string_count++] = w->strings[b->strings + k];
+  w->string_count = b->strings; /* ownership moved */
+  a->loop_count += w->loop_count - b->loops;
+  for (size_t k = 0; k < r->count; ++k) {
+    DynAstFn *fn = &a->functions[r->jobs[k].function];
+    fn->body_start = BODY_SHIFT(r->jobs[k].start, bc, dc);
+    fn->body_count = r->jobs[k].count;
+  }
+done:
+  free(m.pointers); free(m.arrays); free(m.slices); free(m.fn_types);
+  return ok;
+}
+static unsigned body_workers(const DynSource *s, size_t jobs) {
+#ifdef _WIN32
+  (void)s; (void)jobs;
+  return 1;
+#else
+  /* Budgeted analysis charges work in order on one context. */
+  if (s->context.work || jobs < 64) return 1;
+  long online = sysconf(_SC_NPROCESSORS_ONLN);
+  return online < 2 ? 1 : online > 4 ? 4 : (unsigned)online;
+#endif
+}
+/* Lowers jobs on worker threads into the program; false leaves it unchanged
+   so the caller lowers serially, which also reports diagnostics in order. */
+static bool body_parallel(const DynSource *s, DynAstProgram *a, BodyJob *jobs, size_t count, unsigned workers) {
+  BodyBase base = {0, 0, 0, 0, 0, 0, 0, a->pointer_count, a->array_count, a->slice_count,
+                   a->fn_type_count, a->fn_type_param_count, a->loop_count};
+  /* Runs of about equal source size, a few per worker for balance. */
+  size_t run_count = 8 * (size_t)workers, total = 0;
+  for (size_t i = 0; i < count; ++i) total += compact_span(jobs[i].block).end_byte - compact_span(jobs[i].block).start_byte;
+  BodyRun *runs = calloc(run_count, sizeof(*runs));
+  if (!runs) return false;
+  size_t used = 0, at = 0;
+  bool ok = true;
+  for (size_t r = 0; r < run_count && at < count && ok; ++r) {
+    size_t first = at, size = 0, goal = total / run_count + 1;
+    while (at < count && (size < goal || r + 1 == run_count)) {
+      size += compact_span(jobs[at].block).end_byte - compact_span(jobs[at].block).start_byte;
+      ++at;
+    }
+    runs[r].jobs = malloc((at - first) * sizeof(*runs[r].jobs));
+    ok = runs[r].jobs && body_run_open(&runs[r], a, s);
+    if (runs[r].jobs) memcpy(runs[r].jobs, jobs + first, (at - first) * sizeof(*jobs));
+    runs[r].count = at - first;
+    used = r + 1;
+  }
+  /* Runs merge in order as soon as they finish, so at most the unmerged
+     runs exist beside the program. Merging only appends; a run reporting a
+     diagnostic truncates the program back to these counts. */
+  size_t before[12] = {a->expression_count, a->item_count, a->statement_count, a->child_count,
+                       a->pattern_count, a->case_arm_count, a->string_count, a->pointer_count,
+                       a->array_count, a->slice_count, a->fn_type_count, a->fn_type_param_count};
+  uint32_t loops = a->loop_count;
+  BodyPool pool = {.runs = runs, .count = used, .done = calloc(used ? used : 1, sizeof(bool))};
+  atomic_init(&pool.next, 0);
+  bool merged = ok && pool.done;
+  bool clean = merged;
+#ifndef _WIN32
+  pthread_t threads[4];
+  unsigned started = 0;
+  if (merged) {
+    pthread_mutex_init(&pool.lock, NULL);
+    pthread_cond_init(&pool.finished, NULL);
+    for (; started < workers; ++started)
+      if (pthread_create(&threads[started], NULL, body_worker, &pool)) break;
+    if (!started) body_worker(&pool);
+  }
+#else
+  if (merged) body_worker(&pool);
+#endif
+  for (size_t r = 0; r < used && merged; ++r) {
+#ifndef _WIN32
+    pthread_mutex_lock(&pool.lock);
+    while (!pool.done[r]) pthread_cond_wait(&pool.finished, &pool.lock);
+    pthread_mutex_unlock(&pool.lock);
+#endif
+    clean = !runs[r].errors && !runs[r].w.allocation_failed && !runs[r].w.type_capacity_exceeded &&
+            !runs[r].w.invalid_array_extent.end_byte;
+    merged = clean && body_merge(a, &runs[r], &base);
+    body_run_close(&runs[r], &base);
+    runs[r] = (BodyRun){0};
+  }
+#ifndef _WIN32
+  if (pool.done) {
+    /* Unmerged runs still finish; the pool hands out no new ones. */
+    atomic_store(&pool.next, used);
+    for (unsigned i = 0; i < started; ++i) pthread_join(threads[i], NULL);
+    if (ok) {
+      pthread_mutex_destroy(&pool.lock);
+      pthread_cond_destroy(&pool.finished);
+    }
+  }
+#endif
+  for (size_t r = 0; r < used; ++r) body_run_close(&runs[r], &base);
+  free(runs);
+  free(pool.done);
+  if (!merged && !a->allocation_failed) {
+    for (size_t i = before[6]; i < a->string_count; ++i) free(a->strings[i].data);
+    a->expression_count = before[0]; a->item_count = before[1]; a->statement_count = before[2];
+    a->child_count = before[3]; a->pattern_count = before[4]; a->case_arm_count = before[5];
+    a->string_count = before[6]; a->pointer_count = before[7]; a->array_count = before[8];
+    a->slice_count = before[9]; a->fn_type_count = before[10]; a->fn_type_param_count = before[11];
+    a->loop_count = loops;
+  }
+  /* Doubling while merging leaves slack the program would keep. */
+  if (merged) {
+    body_shrink((void **)&a->expressions, &a->expression_capacity, a->expression_count, sizeof(*a->expressions));
+    body_shrink((void **)&a->items, &a->item_capacity, a->item_count, sizeof(*a->items));
+    body_shrink((void **)&a->statements, &a->statement_capacity, a->statement_count, sizeof(*a->statements));
+    body_shrink((void **)&a->children, &a->child_capacity, a->child_count, sizeof(*a->children));
+  }
+#ifdef __GLIBC__
+  /* The runs grew in the workers' heap arenas, which later allocations on
+     this thread never reuse; return those pages instead of holding them. */
+  malloc_trim(0);
+#endif
+  /* A failed merge already changed the program; it reports out of memory. */
+  return merged || a->allocation_failed;
+}
 static void compact_lower_function_bodies(const DynSource *s,
                                   DynAstProgram *a, unsigned *errors,
                                   const char *owner_key, DynNameIndex *index) {
   uint64_t wanted = owner_key_value(owner_key);
+  BodyJob *jobs = calloc(a->compact_declaration_count ? a->compact_declaration_count : 1, sizeof(*jobs));
+  if (!jobs) {
+    a->allocation_failed = true;
+    return;
+  }
+  size_t count = 0;
   for (uint32_t i = 0; i < a->compact_declaration_count && dyn_work_step(&s->context, 1); ++i) {
     CompactNode d = compact_first(compact_declaration(a, i));
     if ((compact_kind(d) != SRC_FN) && (compact_kind(d) != SRC_EXTERN_FN))
@@ -568,17 +962,25 @@ static void compact_lower_function_bodies(const DynSource *s,
         break;
       }
     }
-    compact_block(block, s, a, errors, 0, &a->functions[id].body_start,
-                  &a->functions[id].body_count);
-    if (a->functions[id].is_main) {
-      a->span = a->functions[id].span;
-      a->name = a->functions[id].name;
-      a->parameter_count = a->functions[id].param_count;
-      a->has_return_type = a->functions[id].return_type != DYN_TYPE_VOID;
-      a->body_start = a->functions[id].body_start;
-      a->body_count = a->functions[id].body_count;
+    jobs[count++] = (BodyJob){id, block, 0, 0};
+  }
+  unsigned workers = body_workers(s, count);
+  if (workers < 2 || !body_parallel(s, a, jobs, count, workers))
+    for (size_t i = 0; i < count; ++i)
+      compact_block(jobs[i].block, s, a, errors, 0, &a->functions[jobs[i].function].body_start,
+                    &a->functions[jobs[i].function].body_count);
+  for (size_t i = 0; i < count; ++i) {
+    const DynAstFn *fn = &a->functions[jobs[i].function];
+    if (fn->is_main) {
+      a->span = fn->span;
+      a->name = fn->name;
+      a->parameter_count = fn->param_count;
+      a->has_return_type = fn->return_type != DYN_TYPE_VOID;
+      a->body_start = fn->body_start;
+      a->body_count = fn->body_count;
     }
   }
+  free(jobs);
 }
 
 #undef compact_report
