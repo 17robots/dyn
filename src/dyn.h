@@ -30,6 +30,10 @@ typedef struct {
   size_t count, bytes; /* bytes includes an estimated syntax-tree charge. */
   uint64_t hits, misses;
   size_t entry_limit, byte_limit;
+  /* Editor sessions also keep each file's import-rewritten revision; the
+     rewriter owns them and releases them through release_rewrites. */
+  struct DynRewriteEntry *rewrites;
+  void (*release_rewrites)(struct DynRewriteEntry *);
 } DynSyntaxCache;
 void dyn_syntax_cache_clear(DynSyntaxCache *);
 

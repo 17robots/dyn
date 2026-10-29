@@ -30,6 +30,8 @@ typedef struct {
   size_t alias_count;
   bool root;
   uint64_t abi;
+  /* Everything besides a file's own text that its rewrite depends on. */
+  uint64_t rewrite_key;
 } Module;
 typedef struct {
   uint32_t start, end;
@@ -650,6 +652,135 @@ static bool capture_dependencies(DynSources *sources, Module *modules, size_t co
   free(selected);
   return true;
 }
+/* An editor session rewrites every file again on each edit. A file's rewrite
+   depends only on its text and its module's rewrite_key, so the result is
+   kept per path and reused while both are unchanged. */
+struct DynRewriteEntry {
+  struct DynRewriteEntry *next;
+  char *path, *source, *text;
+  size_t source_length, length;
+  uint64_t key;
+  bool edited;
+  DynSourceSpan *spans;
+  size_t span_count;
+  ExpSnapshot *snapshot;
+  uint32_t root_start, root_end;
+  bool reflection;
+};
+static void rewrite_entry_free(struct DynRewriteEntry *entry) {
+  free(entry->path);
+  free(entry->source);
+  free(entry->text);
+  free(entry->spans);
+  exp_snapshot_release(entry->snapshot);
+  free(entry);
+}
+static void rewrite_entries_release(struct DynRewriteEntry *entry) {
+  while (entry) {
+    struct DynRewriteEntry *next = entry->next;
+    rewrite_entry_free(entry);
+    entry = next;
+  }
+}
+static uint64_t rewrite_mix(uint64_t hash, const void *data, size_t length) {
+  const unsigned char *bytes = data;
+  for (size_t i = 0; i < length; ++i) hash = (hash ^ bytes[i]) * UINT64_C(1099511628211);
+  return hash;
+}
+/* Order-independent: declarations and aliases accumulate in source order. */
+static void rewrite_module_keys(Module *modules, size_t count) {
+  for (size_t i = 0; i < count; ++i) {
+    Module *m = &modules[i];
+    uint64_t key = rewrite_mix(UINT64_C(14695981039346656037), m->dir, strlen(m->dir) + 1);
+    key = rewrite_mix(key, &m->root, sizeof(m->root));
+    uint64_t decls = m->decl_count, aliases = m->alias_count;
+    for (size_t d = 0; d < m->decl_count; ++d)
+      decls += rewrite_mix(UINT64_C(1469598103934665603), m->decls[d].name, strlen(m->decls[d].name));
+    for (size_t a = 0; a < m->alias_count; ++a) {
+      const Module *target = find_module(modules, count, m->aliases[a].target);
+      unsigned char shape = target ? 1 + (target->root ? 1 : 0) : 0;
+      uint64_t alias = rewrite_mix(UINT64_C(1469598103934665603), m->aliases[a].name, strlen(m->aliases[a].name) + 1);
+      alias = rewrite_mix(alias, m->aliases[a].target, strlen(m->aliases[a].target) + 1);
+      aliases += rewrite_mix(alias, &shape, 1);
+    }
+    key = rewrite_mix(key, &decls, sizeof(decls));
+    m->rewrite_key = rewrite_mix(key, &aliases, sizeof(aliases));
+  }
+}
+static struct DynRewriteEntry **rewrite_find(DynSyntaxCache *cache, const char *path) {
+  struct DynRewriteEntry **at = &cache->rewrites;
+  while (*at && strcmp((*at)->path, path)) at = &(*at)->next;
+  return at;
+}
+/* Gives s the cached rewrite of its exact text; false leaves s unchanged. */
+static bool rewrite_reuse(DynSyntaxCache *cache, DynSource *s, uint64_t key) {
+  struct DynRewriteEntry *entry = *rewrite_find(cache, s->path);
+  if (!entry || entry->key != key || entry->source_length != s->length || s->original_text ||
+      memcmp(entry->source, s->text, s->length)) return false;
+  if (!entry->edited) return true;
+  char *text = malloc(entry->length + 1);
+  DynSourceSpan *spans = malloc((entry->span_count ? entry->span_count : 1) * sizeof(*spans));
+  if (!text || !spans || !exp_snapshot_retain(entry->snapshot)) {
+    free(text);
+    free(spans);
+    return false;
+  }
+  memcpy(text, entry->text, entry->length + 1);
+  memcpy(spans, entry->spans, entry->span_count * sizeof(*spans));
+  dyn_source_discard_syntax(s);
+  free(s->spans);
+  s->original_text = s->text;
+  s->original_length = s->length;
+  s->text = text;
+  s->length = entry->length;
+  s->spans = spans;
+  s->span_count = entry->span_count;
+  s->compact = entry->snapshot;
+  s->compact_root_start = entry->root_start;
+  s->compact_root_end = entry->root_end;
+  s->compact_validated = s->compact_only = true;
+  s->compact_reflection = entry->reflection;
+  return true;
+}
+/* Keeps the error-free rewrite of source (the text before rewriting). */
+static void rewrite_remember(DynSyntaxCache *cache, const DynSource *s, const char *source, size_t source_length,
+                             uint64_t key) {
+  bool edited = s->original_text != NULL;
+  if (!s->compact || !s->compact_validated) return;
+  struct DynRewriteEntry *entry = calloc(1, sizeof(*entry));
+  if (!entry) return;
+  entry->path = strdup(s->path);
+  entry->source = malloc(source_length + 1);
+  entry->text = edited ? malloc(s->length + 1) : NULL;
+  entry->spans = edited ? malloc((s->span_count ? s->span_count : 1) * sizeof(*entry->spans)) : NULL;
+  if (!entry->path || !entry->source || (edited && (!entry->text || !entry->spans)) ||
+      (edited && !exp_snapshot_retain(s->compact))) {
+    rewrite_entry_free(entry);
+    return;
+  }
+  memcpy(entry->source, source, source_length);
+  entry->source[source_length] = 0;
+  entry->source_length = source_length;
+  entry->key = key;
+  entry->edited = edited;
+  if (edited) {
+    memcpy(entry->text, s->text, s->length + 1);
+    entry->length = s->length;
+    memcpy(entry->spans, s->spans, s->span_count * sizeof(*entry->spans));
+    entry->span_count = s->span_count;
+    entry->snapshot = s->compact;
+    entry->root_start = s->compact_root_start;
+    entry->root_end = s->compact_root_end;
+    entry->reflection = s->compact_reflection;
+  }
+  struct DynRewriteEntry **at = rewrite_find(cache, s->path);
+  if (*at) {
+    entry->next = (*at)->next;
+    rewrite_entry_free(*at);
+  }
+  *at = entry;
+  cache->release_rewrites = rewrite_entries_release;
+}
 typedef struct {
   DynSources *sources;
   Module *modules;
@@ -660,15 +791,21 @@ typedef struct {
 } RewriteJobs;
 /* Each source rewrites independently against the read-only module tables. */
 static bool rewrite_source(DynSource *s, Module *m, Module *modules, size_t module_count) {
+  DynSyntaxCache *cache = s->context.syntax_cache;
+  if (cache && rewrite_reuse(cache, s, m->rewrite_key)) return true;
   const ExpSnapshotTree *tree = dyn_compact_tree(s);
   if (!tree) return false;
   Edits edits = {0};
   DynScopeIndex locals = {0};
+  bool fresh = !s->original_text;
   bool ok = dyn_scope_build(&locals, s) &&
             compact_rewrite_nodes(s, tree, m, modules, module_count, &edits, &locals) &&
             apply_edits(s, &edits);
   edits_free(&edits);
   dyn_scope_free(&locals);
+  if (ok && cache && fresh)
+    rewrite_remember(cache, s, s->original_text ? s->original_text : s->text,
+                     s->original_text ? s->original_length : s->length, m->rewrite_key);
   return ok;
 }
 static void *rewrite_worker(void *raw) {
@@ -758,6 +895,8 @@ int dyn_module_rewrite_project(const char *project_root, DynSources *sources) {
     const ExpSnapshotTree *compact = dyn_compact_tree(s);
     if (!compact || !compact_rewrite_declarations(s, compact, m, true)) result = 2;
   }
+  if (!result && sources->count && sources->items[0].context.syntax_cache)
+    rewrite_module_keys(modules, module_count);
   if (!result) {
     RewriteJobs jobs = {.sources = sources, .modules = modules,
                         .module_count = module_count, .owners = owners};

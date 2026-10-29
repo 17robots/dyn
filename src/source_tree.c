@@ -26,6 +26,8 @@ static void syntax_cache_drop(DynSyntaxCache *cache, DynSyntaxCacheEntry **at) {
 }
 void dyn_syntax_cache_clear(DynSyntaxCache *cache) {
   while (cache->entries) syntax_cache_drop(cache, &cache->entries);
+  if (cache->rewrites && cache->release_rewrites) cache->release_rewrites(cache->rewrites);
+  cache->rewrites = NULL;
 }
 /* Snapshots are immutable; a hit shares one with an extra reference. */
 static void syntax_cache_store(DynSyntaxCache *cache, const DynSource *source,

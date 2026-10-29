@@ -1,5 +1,19 @@
 # Performance qualification
 
+## Editor rewrite reuse — 2026-10-29
+
+`dyn lsp` rewrote the imports of every project file on each edit. A file's
+rewrite depends only on its text and on its module's directory, root flag,
+declared names and import aliases with their targets; each module hashes
+those into a key. The editor's syntax cache now keeps each file's rewritten
+text, source spans and patched tree, and reuses them while the text and key
+match. Batch builds have no syntax cache and are unaffected.
+
+DNA edit-to-diagnostics latency falls from a median of 53 ms to 11 ms. A
+scripted session of seven overlay edits, covering an unknown name, a new
+public declaration in another module, its use, its rename and both reverts,
+publishes identical diagnostics before and after.
+
 ## Allocations, editor latency and debug builds — 2026-10-29
 
 A DNA release build made 720,000 heap allocations; it now makes 212,000.
