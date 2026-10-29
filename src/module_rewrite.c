@@ -252,6 +252,118 @@ static bool copy_spans(const DynSource *s, DynSourceSpan **out, size_t *count,
   }
   return true;
 }
+/* The edits rename a name, or collapse alias.member (an expression field, a
+   type path or a struct literal's type) into one name. Parsing the edited
+   text gives the same tree with those spans moved and each collapsed pair
+   as one name node, so the tree is patched here instead. */
+typedef struct {
+  const ExpNode *old;
+  const Edit *edits;
+  size_t edit_count, matched;
+  int64_t *shift; /* shift[k]: growth of the text through edit k */
+  ExpNode *nodes;
+  uint32_t count;
+  bool failed;
+} TreePatch;
+static const Edit *patch_edit(const TreePatch *p, uint32_t start, uint32_t end) {
+  size_t lo = 0, hi = p->edit_count;
+  while (lo < hi) {
+    size_t mid = (lo + hi) / 2;
+    if (p->edits[mid].start < start) lo = mid + 1; else hi = mid;
+  }
+  return lo < p->edit_count && p->edits[lo].start == start && p->edits[lo].end == end ? &p->edits[lo] : NULL;
+}
+/* Offsets inside an edit belong to nodes the edit removed. */
+static uint32_t patch_offset(TreePatch *p, uint32_t offset) {
+  size_t lo = 0, hi = p->edit_count;
+  while (lo < hi) {
+    size_t mid = (lo + hi) / 2;
+    if (p->edits[mid].end <= offset) lo = mid + 1; else hi = mid;
+  }
+  if (lo < p->edit_count && p->edits[lo].start < offset) p->failed = true;
+  return (uint32_t)((int64_t)offset + (lo ? p->shift[lo - 1] : 0));
+}
+static uint32_t patch_copy(TreePatch *p, uint32_t id, uint32_t parent) {
+  uint32_t at = p->count++;
+  ExpNode node = p->old[id];
+  node.start = patch_offset(p, node.start);
+  node.end = patch_offset(p, node.end);
+  if (node.operator_length) node.operator_start = patch_offset(p, node.operator_start);
+  node.parent = parent;
+  node.first = node.next = UINT32_MAX;
+  p->nodes[at] = node;
+  return at;
+}
+/* A name spanning the replacement of edit, in place of old node id. */
+static uint32_t patch_name(TreePatch *p, uint32_t id, uint32_t parent, const Edit *edit) {
+  uint32_t at = p->count++, start = patch_offset(p, edit->start);
+  ExpNode node = p->old[id];
+  node.kind = EXP_NAME;
+  node.start = start;
+  node.end = start + (uint32_t)strlen(edit->text);
+  node.parent = parent;
+  node.first = node.next = UINT32_MAX;
+  p->nodes[at] = node;
+  ++p->matched;
+  return at;
+}
+static uint32_t patch_node(TreePatch *p, uint32_t id, uint32_t parent) {
+  const ExpNode *old = &p->old[id];
+  const Edit *edit = patch_edit(p, old->start, old->end);
+  if (edit && old->kind == EXP_FIELD) return patch_name(p, id, parent, edit);
+  uint32_t at = patch_copy(p, id, parent), child = old->first, last = UINT32_MAX;
+  if (edit && old->kind == EXP_NAME && old->first == UINT32_MAX) ++p->matched;
+  else if (edit && old->kind == EXP_FIELD_TYPE && child != UINT32_MAX && p->old[child].kind == EXP_NAME) {
+    p->nodes[at].first = patch_name(p, child, at, edit);
+    return at;
+  } else if (old->kind == EXP_STRUCT && child != UINT32_MAX && p->old[child].kind == EXP_NAME) {
+    uint32_t second = p->old[child].next;
+    const Edit *pair = second != UINT32_MAX && p->old[second].kind == EXP_NAME
+                           ? patch_edit(p, p->old[child].start, p->old[second].end) : NULL;
+    if (pair) {
+      last = p->nodes[at].first = patch_name(p, child, at, pair);
+      child = p->old[second].next;
+    }
+  }
+  for (; child != UINT32_MAX && !p->failed; child = p->old[child].next) {
+    uint32_t copy = patch_node(p, child, at);
+    if (last == UINT32_MAX) p->nodes[at].first = copy;
+    else p->nodes[last].next = copy;
+    last = copy;
+  }
+  return at;
+}
+/* NULL when an edit does not fit those shapes, and the caller reparses, or
+   when allocation fails, which sets *oom. */
+static ExpSnapshot *patch_tree(const ExpSnapshotTree *tree, const Edits *e, const char *text, size_t length,
+                               bool *oom) {
+  if (!tree || tree->error_count || tree->root == UINT32_MAX) return NULL;
+  TreePatch p = {.old = tree->nodes, .edits = e->items, .edit_count = e->count};
+  p.shift = malloc(e->count * sizeof(*p.shift));
+  p.nodes = malloc((size_t)tree->count * sizeof(*p.nodes));
+  if (!p.shift || !p.nodes) {
+    free(p.shift);
+    free(p.nodes);
+    *oom = true;
+    return NULL;
+  }
+  int64_t growth = 0;
+  for (size_t i = 0; i < e->count && !p.failed; ++i) {
+    if (e->items[i].start >= e->items[i].end) p.failed = true;
+    growth += (int64_t)strlen(e->items[i].text) - (e->items[i].end - e->items[i].start);
+    p.shift[i] = growth;
+  }
+  uint32_t root = p.failed ? UINT32_MAX : patch_node(&p, tree->root, UINT32_MAX);
+  free(p.shift);
+  if (p.failed || p.matched != e->count) {
+    free(p.nodes);
+    return NULL;
+  }
+  /* Only collapsed pairs drop nodes, so the slack is small. */
+  ExpSnapshot *snapshot = exp_snapshot_adopt(text, length, p.nodes, p.count, root);
+  if (!snapshot) *oom = true;
+  return snapshot;
+}
 static bool apply_edits(DynSource *s, Edits *e) {
   if (!e->count)
     return true;
@@ -327,6 +439,14 @@ static bool apply_edits(DynSource *s, Edits *e) {
   memcpy(out + at, s->text + in, s->length - in);
   at += s->length - in;
   out[at] = 0;
+  /* Budgeted analysis charges parsing work, so it keeps the parse. */
+  bool oom = false;
+  ExpSnapshot *patched = s->context.work ? NULL : patch_tree(dyn_compact_tree(s), e, out, at, &oom);
+  if (oom) {
+    free(out);
+    free(spans);
+    return false;
+  }
   dyn_source_discard_syntax(s);
   free(s->text);
   free(s->spans);
@@ -337,6 +457,7 @@ static bool apply_edits(DynSource *s, Edits *e) {
   /* Rewritten text must not replace the cached parse of the file on disk. */
   DynSyntaxCache *cache = s->context.syntax_cache;
   s->context.syntax_cache = NULL;
+  s->compact = patched;
   bool prepared = dyn_source_prepare(s);
   s->context.syntax_cache = cache;
   return prepared;

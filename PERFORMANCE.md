@@ -1,5 +1,54 @@
 # Performance qualification
 
+## Compiler throughput and memory — 2026-10-29
+
+The native backend now prepares functions on up to four worker threads, at
+most 16 functions per worker ahead of in-order emission on the calling thread.
+`DYN_BACKEND_JOBS` overrides the worker count. String literals prepared on
+workers are interned in encounter order at emission, so objects stay
+byte-identical to serial builds.
+
+Algorithmic changes cut single-threaded work as well:
+
+- The range prover indexes branch facts by value and tests dominance in O(1)
+  with dominator-tree DFS intervals; CSE uses the same test.
+- Liveness groups cross-block uses by value, so no block is walked twice for
+  one value.
+- Optimization rounds stop after five passes in a row change nothing, and
+  operand resolution runs only after a pass that changed something.
+- Range queries are memoized within each prove pass.
+- Load forwarding skips its second region classification when nothing was
+  forwarded, and forwards runs of disjoint same-base stores across
+  straight-line blocks.
+- Import rewriting patches the parsed tree instead of reparsing each file:
+  renames shift offsets and `alias.member` collapses into one name. Edits of
+  any other shape still reparse.
+- The inliner appends to the expression and statement arrays in place instead
+  of copying them first.
+- The parser handles literal tokens before testing keyword spellings, which
+  halves the load time of generated data tables.
+- Struct layout is memoized per object.
+
+Byte fills of global byte arrays now apply at O2 as well as O3 (x86 only).
+They are the only intended code change; all other changes keep objects
+byte-identical on 46 project and target builds.
+
+Interleaved medians, x86_64 Linux, release object builds without caches,
+measured with `tools/bench/compile.py`:
+
+| Project | Before | After | CPU before / after | Peak RSS before / after |
+|---|---|---|---|---|
+| DNA (62k lines) | 461 ms | 141 ms | 550 / 339 ms | 154 / 127 MiB |
+| http-server | 25.3 ms | 13.6 ms | | 36 / 42 MiB |
+| std fixture | 27.4 ms | 16.7 ms | | 26 / 34 MiB |
+
+DNA single-threaded (`DYN_BACKEND_JOBS=1`) falls from 348 to about 230 ms.
+Sieve runtime falls from about 1.23x to 1.17x of `cc -O2`. Small projects use
+a few MiB more peak RSS because the worker threads and their stacks dominate.
+
+The remaining serial cost is the frontend: AST lowering, type checking and IR
+lowering take about 55 ms of DNA's build before the backend can start.
+
 ## Real-application follow-up — 2026-10-20
 
 The real-project matrix covers a 10.8 MB JSON validation input, a PTY-driven

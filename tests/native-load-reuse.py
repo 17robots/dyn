@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Repeated loads must observe overlapping stores, calls, copies and loop writes."""
+"""Repeated loads must observe overlapping stores, calls, copies and loop writes.
+
+A run of stores to disjoint fields of one base supplies later loads of any
+of them; a store through another pointer in between still invalidates them.
+"""
 import os
 from pathlib import Path
 import platform
@@ -49,8 +53,30 @@ fn branch(p: *u64, change: bool) u64 {
   if change { p.* = 37 }
   return a * 100 + p.*
 }
+fn pair_run(p: *Pair, x: u64) u64 {
+  p.a = x
+  p.b = x + 1
+  return p.a * 10 + p.b
+}
+fn pair_alias(p: *Pair, q: *u64, x: u64) u64 {
+  p.a = x
+  p.b = x + 1
+  q.* = 9
+  return p.a * 10 + p.b
+}
+fn pair_checked(p: *Pair, x: u64) u64 {
+  p.a = x
+  p.b = x * 3
+  y := p.b + 5
+  return p.a * 10 + y
+}
 fn main() {
   for i in 1..33 {
+    pair := Pair{}
+    x := #cast(u64, i)
+    if pair_run(&pair, x) != x * 10 + x + 1 { #panic("store run") }
+    if pair_alias(&pair, &pair.a, x) != 90 + x + 1 { #panic("store run alias") }
+    if pair_checked(&pair, x) != x * 10 + x * 3 + 5 { #panic("store run checked") }
     value := #cast(u64, i)
     if repeat(&value) != value * 2 { #panic("repeat") }
     if store(&value, &value) != (#cast(u64, i)) * 100 + 41 { #panic("store alias") }
@@ -99,4 +125,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-load-reuse-') as temporary:
                     body = assembly.split('<repeat>:\n')[1].split('\n\n')[0]
                     reads = re.findall(r'\b(?:mov\w*|add\w*)\s+[^,\n]*\([^\)\n]*\),%', body)
                     assert len(reads) == 1, ('repeated pointer load was not reused', body)
-print('PASS repeated loads: aliasing stores, partial writes, calls, overlap copies, zeroing, loops and branches')
+                    body = assembly.split('<pair_run>:\n')[1].split('\n\n')[0]
+                    reads = re.findall(r'\b(?:mov\w*|add\w*|imul\w*|lea\w*)\s+[^,\n]*\([^\)\n]*\),%', body)
+                    assert not [r for r in reads if not r.startswith('lea')], ('store run was not forwarded', body)
+print('PASS repeated loads: aliasing stores, partial writes, calls, overlap copies, zeroing, loops, branches and disjoint store runs')

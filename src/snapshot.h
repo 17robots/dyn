@@ -28,6 +28,10 @@ ExpSnapshot *exp_snapshot_create(const char *text, size_t length,
 /* Retaining requires an existing live reference or external synchronization
    protecting one. Independent references may be released on separate threads.
    Overflow refuses the retain without changing the reference count. */
+/* A snapshot of text whose error-free tree the caller already built. Takes
+   ownership of nodes, which must be heap storage, even on failure. */
+ExpSnapshot *exp_snapshot_adopt(const char *text, size_t length, ExpNode *nodes,
+                                uint32_t count, uint32_t root);
 bool exp_snapshot_retain(ExpSnapshot *snapshot);
 void exp_snapshot_release(ExpSnapshot *snapshot);
 
