@@ -4,6 +4,7 @@ import argparse
 from contextlib import ExitStack
 import os
 from pathlib import Path
+import random
 import socket
 import struct
 import subprocess
@@ -84,15 +85,26 @@ def receive_exact(connection, size):
 
 
 def paired_sockets():
-    """Reserve UDP first: Windows may reserve much of TCP's ephemeral range
-    for UDP. Retry if the selected UDP port is unavailable to TCP."""
-    for _ in range(50):
+    """Windows may reserve much of either protocol's ephemeral range for the
+    other, so alternate which socket picks the port and also try random ports
+    below the default ephemeral range."""
+    for attempt in range(300):
         tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
-            udp.bind(('127.0.0.1', 0))
-            port = udp.getsockname()[1]
-            tcp.bind(('127.0.0.1', port))
+            kind = attempt % 3
+            if kind == 0:
+                udp.bind(('127.0.0.1', 0))
+                port = udp.getsockname()[1]
+                tcp.bind(('127.0.0.1', port))
+            elif kind == 1:
+                tcp.bind(('127.0.0.1', 0))
+                port = tcp.getsockname()[1]
+                udp.bind(('127.0.0.1', port))
+            else:
+                port = random.randint(20000, 40000)
+                tcp.bind(('127.0.0.1', port))
+                udp.bind(('127.0.0.1', port))
         except OSError:
             udp.close()
             tcp.close()
