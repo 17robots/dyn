@@ -30,15 +30,47 @@ typedef struct {
   size_t alias_count;
   bool root;
   uint64_t abi;
+  /* Everything besides a file's own text that its rewrite depends on. */
+  uint64_t rewrite_key;
 } Module;
 typedef struct {
   uint32_t start, end;
   char *text;
 } Edit;
+/* Replacement texts live in chunks owned by their Edits. */
+typedef struct EditChunk {
+  struct EditChunk *next;
+  size_t used, size;
+  char text[];
+} EditChunk;
 typedef struct {
   Edit *items;
   size_t count, capacity;
+  EditChunk *chunks;
 } Edits;
+static char *edit_text(Edits *e, size_t length) {
+  EditChunk *chunk = e->chunks;
+  if (!chunk || chunk->size - chunk->used < length) {
+    size_t size = length > 4096 ? length : 4096;
+    chunk = malloc(sizeof(EditChunk) + size);
+    if (!chunk) return NULL;
+    chunk->next = e->chunks;
+    chunk->used = 0;
+    chunk->size = size;
+    e->chunks = chunk;
+  }
+  char *text = chunk->text + chunk->used;
+  chunk->used += length;
+  return text;
+}
+static void edits_free(Edits *e) {
+  while (e->chunks) {
+    EditChunk *next = e->chunks->next;
+    free(e->chunks);
+    e->chunks = next;
+  }
+  free(e->items);
+}
 
 static char *source_dir(const char *path) {
   char *full = realpath(path, NULL);
@@ -166,14 +198,17 @@ static uint64_t hash_path(const char *s) {
   }
   return h;
 }
-static char *symbol(const Module *m, const char *name) {
-  if (m->root)
-    return strdup(name);
-  int n = snprintf(NULL, 0, "dyn_m%016llx_%s",
-                   (unsigned long long)hash_path(m->dir), name);
-  char *r = malloc((size_t)n + 1);
+static char *symbol(Edits *e, const Module *m, const char *name) {
+  size_t length = strlen(name);
+  if (m->root) {
+    char *r = edit_text(e, length + 1);
+    if (r) memcpy(r, name, length + 1);
+    return r;
+  }
+  /* "dyn_m" + 16 hex digits + "_" + name */
+  char *r = edit_text(e, 22 + length + 1);
   if (r)
-    snprintf(r, (size_t)n + 1, "dyn_m%016llx_%s",
+    snprintf(r, 22 + length + 1, "dyn_m%016llx_%s",
              (unsigned long long)hash_path(m->dir), name);
   return r;
 }
@@ -183,10 +218,10 @@ static bool append_edit(Edits *e, Edit edit) {
   if (e->count == e->capacity) {
     size_t capacity = e->capacity ? e->capacity * 2 : 32;
     if (capacity < e->capacity || capacity > SIZE_MAX / sizeof(*e->items)) {
-      free(edit.text); return false;
+      return false;
     }
     Edit *items = realloc(e->items, capacity * sizeof(*items));
-    if (!items) { free(edit.text); return false; }
+    if (!items) return false;
     e->items = items; e->capacity = capacity;
   }
   e->items[e->count++] = edit;
@@ -252,6 +287,130 @@ static bool copy_spans(const DynSource *s, DynSourceSpan **out, size_t *count,
   }
   return true;
 }
+/* The edits rename a name, or collapse alias.member (an expression field, a
+   type path or a struct literal's type) into one name. Parsing the edited
+   text gives the same tree with those spans moved and each collapsed pair
+   as one name node, so the tree is patched here instead. */
+typedef struct {
+  const ExpNode *old;
+  const Edit *edits;
+  size_t edit_count, matched;
+  int64_t *shift; /* shift[k]: growth of the text through edit k */
+  ExpNode *nodes;
+  uint32_t count;
+  bool failed;
+  /* Last answers of the two searches; nodes arrive mostly in source order. */
+  size_t start_hint, end_hint;
+} TreePatch;
+static const Edit *patch_edit(TreePatch *p, uint32_t start, uint32_t end) {
+  size_t lo = p->start_hint;
+  if (!((!lo || p->edits[lo - 1].start < start) && (lo == p->edit_count || p->edits[lo].start >= start))) {
+    size_t hi = p->edit_count;
+    lo = 0;
+    while (lo < hi) {
+      size_t mid = (lo + hi) / 2;
+      if (p->edits[mid].start < start) lo = mid + 1; else hi = mid;
+    }
+    p->start_hint = lo;
+  }
+  return lo < p->edit_count && p->edits[lo].start == start && p->edits[lo].end == end ? &p->edits[lo] : NULL;
+}
+/* Offsets inside an edit belong to nodes the edit removed. */
+static uint32_t patch_offset(TreePatch *p, uint32_t offset) {
+  size_t lo = p->end_hint;
+  if (!((!lo || p->edits[lo - 1].end <= offset) && (lo == p->edit_count || p->edits[lo].end > offset))) {
+    size_t hi = p->edit_count;
+    lo = 0;
+    while (lo < hi) {
+      size_t mid = (lo + hi) / 2;
+      if (p->edits[mid].end <= offset) lo = mid + 1; else hi = mid;
+    }
+    p->end_hint = lo;
+  }
+  if (lo < p->edit_count && p->edits[lo].start < offset) p->failed = true;
+  return (uint32_t)((int64_t)offset + (lo ? p->shift[lo - 1] : 0));
+}
+static uint32_t patch_copy(TreePatch *p, uint32_t id, uint32_t parent) {
+  uint32_t at = p->count++;
+  ExpNode node = p->old[id];
+  node.start = patch_offset(p, node.start);
+  node.end = patch_offset(p, node.end);
+  if (node.operator_length) node.operator_start = patch_offset(p, node.operator_start);
+  node.parent = parent;
+  node.first = node.next = UINT32_MAX;
+  p->nodes[at] = node;
+  return at;
+}
+/* A name spanning the replacement of edit, in place of old node id. */
+static uint32_t patch_name(TreePatch *p, uint32_t id, uint32_t parent, const Edit *edit) {
+  uint32_t at = p->count++, start = patch_offset(p, edit->start);
+  ExpNode node = p->old[id];
+  node.kind = EXP_NAME;
+  node.start = start;
+  node.end = start + (uint32_t)strlen(edit->text);
+  node.parent = parent;
+  node.first = node.next = UINT32_MAX;
+  p->nodes[at] = node;
+  ++p->matched;
+  return at;
+}
+static uint32_t patch_node(TreePatch *p, uint32_t id, uint32_t parent) {
+  const ExpNode *old = &p->old[id];
+  const Edit *edit = patch_edit(p, old->start, old->end);
+  if (edit && old->kind == EXP_FIELD) return patch_name(p, id, parent, edit);
+  uint32_t at = patch_copy(p, id, parent), child = old->first, last = UINT32_MAX;
+  if (edit && old->kind == EXP_NAME && old->first == UINT32_MAX) ++p->matched;
+  else if (edit && old->kind == EXP_FIELD_TYPE && child != UINT32_MAX && p->old[child].kind == EXP_NAME) {
+    p->nodes[at].first = patch_name(p, child, at, edit);
+    return at;
+  } else if (old->kind == EXP_STRUCT && child != UINT32_MAX && p->old[child].kind == EXP_NAME) {
+    uint32_t second = p->old[child].next;
+    const Edit *pair = second != UINT32_MAX && p->old[second].kind == EXP_NAME
+                           ? patch_edit(p, p->old[child].start, p->old[second].end) : NULL;
+    if (pair) {
+      last = p->nodes[at].first = patch_name(p, child, at, pair);
+      child = p->old[second].next;
+    }
+  }
+  for (; child != UINT32_MAX && !p->failed; child = p->old[child].next) {
+    uint32_t copy = patch_node(p, child, at);
+    if (last == UINT32_MAX) p->nodes[at].first = copy;
+    else p->nodes[last].next = copy;
+    last = copy;
+  }
+  return at;
+}
+/* NULL when an edit does not fit those shapes, and the caller reparses, or
+   when allocation fails, which sets *oom. */
+static ExpSnapshot *patch_tree(const ExpSnapshotTree *tree, const Edits *e, const char *text, size_t length,
+                               bool *oom) {
+  if (!tree || tree->error_count || tree->root == UINT32_MAX) return NULL;
+  TreePatch p = {.old = tree->nodes, .edits = e->items, .edit_count = e->count};
+  p.shift = malloc(e->count * sizeof(*p.shift));
+  p.nodes = malloc((size_t)tree->count * sizeof(*p.nodes));
+  if (!p.shift || !p.nodes) {
+    free(p.shift);
+    free(p.nodes);
+    *oom = true;
+    return NULL;
+  }
+  int64_t growth = 0;
+  for (size_t i = 0; i < e->count && !p.failed; ++i) {
+    if (e->items[i].start >= e->items[i].end) p.failed = true;
+    growth += (int64_t)strlen(e->items[i].text) - (e->items[i].end - e->items[i].start);
+    p.shift[i] = growth;
+  }
+  uint32_t root = p.failed ? UINT32_MAX : patch_node(&p, tree->root, UINT32_MAX);
+  free(p.shift);
+  if (p.failed || p.matched != e->count) {
+    free(p.nodes);
+    return NULL;
+  }
+  /* Only collapsed pairs drop nodes, so the slack is small. */
+  ExpSnapshot *snapshot = exp_snapshot_adopt(text, length, p.nodes, p.count, root);
+  if (!snapshot) *oom = true;
+  return snapshot;
+}
 static bool apply_edits(DynSource *s, Edits *e) {
   if (!e->count)
     return true;
@@ -262,7 +421,6 @@ static bool apply_edits(DynSource *s, Edits *e) {
         e->items[unique - 1].end == e->items[i].end) {
       /* Duplicate rewrites must agree; never select an arbitrary replacement. */
       if (strcmp(e->items[unique - 1].text, e->items[i].text)) return false;
-      free(e->items[i].text);
     } else e->items[unique++] = e->items[i];
     if (unique - 1 != i) e->items[i].text = NULL;
   }
@@ -327,6 +485,18 @@ static bool apply_edits(DynSource *s, Edits *e) {
   memcpy(out + at, s->text + in, s->length - in);
   at += s->length - in;
   out[at] = 0;
+  bool oom = false;
+  ExpSnapshot *patched = patch_tree(dyn_compact_tree(s), e, out, at, &oom);
+  /* Budgeted analysis pays for the patched tree about what parsing the text
+     would cost: copying and scanning it, plus its nodes. */
+  bool charged = !patched ||
+      dyn_work_step(&s->context, 2 * (uint64_t)at + exp_snapshot_tree(patched)->count);
+  if (oom || !charged) {
+    exp_snapshot_release(patched);
+    free(out);
+    free(spans);
+    return false;
+  }
   dyn_source_discard_syntax(s);
   free(s->text);
   free(s->spans);
@@ -337,6 +507,7 @@ static bool apply_edits(DynSource *s, Edits *e) {
   /* Rewritten text must not replace the cached parse of the file on disk. */
   DynSyntaxCache *cache = s->context.syntax_cache;
   s->context.syntax_cache = NULL;
+  s->compact = patched;
   bool prepared = dyn_source_prepare(s);
   s->context.syntax_cache = cache;
   return prepared;
@@ -399,9 +570,10 @@ static bool compact_rewrite_declarations(const DynSource *source, const ExpSnaps
     if (global != globals) continue;
     uint32_t name = dyn_compact_name(tree, wrapper);
     if (name == UINT32_MAX) continue;
-    char *text = compact_rewrite_text(source, tree, name);
+    DynNameText text_buffer;
+    char *text = compact_rewrite_text(&text_buffer, source, tree, name);
     bool ok = text && add_decl(module, text);
-    free(text);
+    dyn_name_text_free(&text_buffer);
     if (!ok) return false;
   }
   return true;
@@ -430,24 +602,19 @@ static bool compact_rewrite_imports(const DynSource *source, Module *module, con
   dyn_imports_close(&reader);
   return ok;
 }
-static bool capture_dependencies(DynSources *sources, Module *modules, size_t count) {
+static bool capture_dependencies(DynSources *sources, Module *modules, size_t count, const size_t *owners) {
   bool reflection = false;
-  size_t *owners = calloc(sources->count, sizeof(*owners));
   bool *selected = calloc(count, sizeof(*selected));
-  if (!owners || !selected) { free(owners); free(selected); return false; }
+  if (!selected) return false;
   for (size_t i = 0; i < count; ++i) modules[i].abi = hash_path(modules[i].dir);
   for (size_t i = 0; i < sources->count; ++i) {
     DynSource *source = &sources->items[i];
-    char *dir = source_dir(source->path);
-    Module *module = dir ? find_module(modules, count, dir) : NULL;
-    free(dir);
-    if (!module) { free(owners); free(selected); return false; }
-    owners[i] = (size_t)(module - modules);
+    Module *module = &modules[owners[i]];
     if (!dyn_source_target_enabled(source)) continue;
     const ExpSnapshotTree *compact = dyn_compact_tree(source);
-    if (!compact) { free(owners); free(selected); return false; }
+    if (!compact) { free(selected); return false; }
     reflection |= source->needs_reflection || source->compact_reflection;
-    if (!compact_rewrite_abi(source, compact, module)) { free(owners); free(selected); return false; }
+    if (!compact_rewrite_abi(source, compact, module)) { free(selected); return false; }
   }
   for (size_t i = 0; i < sources->count; ++i) {
     if (i && owners[i] == owners[i - 1]) continue;
@@ -468,7 +635,7 @@ static bool capture_dependencies(DynSources *sources, Module *modules, size_t co
     size_t needed = 0;
     for (size_t j = 0; j < sources->count; ++j) needed += selected[owners[j]];
     source->dependency_sources = malloc(needed * sizeof(size_t));
-    if (!source->dependency_sources) { free(owners); free(selected); return false; }
+    if (!source->dependency_sources) { free(selected); return false; }
     uint64_t hash = UINT64_C(1469598103934665603);
     hash = rewrite_hash(hash, &reflection, sizeof(reflection));
     for (size_t j = 0; j < count; ++j) if (selected[j])
@@ -482,32 +649,163 @@ static bool capture_dependencies(DynSources *sources, Module *modules, size_t co
       source->dependency_sources[source->dependency_count++] = j;
     source->dependency_hash = hash ? hash : 1;
   }
-  free(owners); free(selected);
+  free(selected);
   return true;
+}
+/* An editor session rewrites every file again on each edit. A file's rewrite
+   depends only on its text and its module's rewrite_key, so the result is
+   kept per path and reused while both are unchanged. */
+struct DynRewriteEntry {
+  struct DynRewriteEntry *next;
+  char *path, *source, *text;
+  size_t source_length, length;
+  uint64_t key;
+  bool edited;
+  DynSourceSpan *spans;
+  size_t span_count;
+  ExpSnapshot *snapshot;
+  uint32_t root_start, root_end;
+  bool reflection;
+};
+static void rewrite_entry_free(struct DynRewriteEntry *entry) {
+  free(entry->path);
+  free(entry->source);
+  free(entry->text);
+  free(entry->spans);
+  exp_snapshot_release(entry->snapshot);
+  free(entry);
+}
+static void rewrite_entries_release(struct DynRewriteEntry *entry) {
+  while (entry) {
+    struct DynRewriteEntry *next = entry->next;
+    rewrite_entry_free(entry);
+    entry = next;
+  }
+}
+static uint64_t rewrite_mix(uint64_t hash, const void *data, size_t length) {
+  const unsigned char *bytes = data;
+  for (size_t i = 0; i < length; ++i) hash = (hash ^ bytes[i]) * UINT64_C(1099511628211);
+  return hash;
+}
+/* Order-independent: declarations and aliases accumulate in source order. */
+static void rewrite_module_keys(Module *modules, size_t count) {
+  for (size_t i = 0; i < count; ++i) {
+    Module *m = &modules[i];
+    uint64_t key = rewrite_mix(UINT64_C(14695981039346656037), m->dir, strlen(m->dir) + 1);
+    key = rewrite_mix(key, &m->root, sizeof(m->root));
+    uint64_t decls = m->decl_count, aliases = m->alias_count;
+    for (size_t d = 0; d < m->decl_count; ++d)
+      decls += rewrite_mix(UINT64_C(1469598103934665603), m->decls[d].name, strlen(m->decls[d].name));
+    for (size_t a = 0; a < m->alias_count; ++a) {
+      const Module *target = find_module(modules, count, m->aliases[a].target);
+      unsigned char shape = target ? 1 + (target->root ? 1 : 0) : 0;
+      uint64_t alias = rewrite_mix(UINT64_C(1469598103934665603), m->aliases[a].name, strlen(m->aliases[a].name) + 1);
+      alias = rewrite_mix(alias, m->aliases[a].target, strlen(m->aliases[a].target) + 1);
+      aliases += rewrite_mix(alias, &shape, 1);
+    }
+    key = rewrite_mix(key, &decls, sizeof(decls));
+    m->rewrite_key = rewrite_mix(key, &aliases, sizeof(aliases));
+  }
+}
+static struct DynRewriteEntry **rewrite_find(DynSyntaxCache *cache, const char *path) {
+  struct DynRewriteEntry **at = &cache->rewrites;
+  while (*at && strcmp((*at)->path, path)) at = &(*at)->next;
+  return at;
+}
+/* Gives s the cached rewrite of its exact text; false leaves s unchanged. */
+static bool rewrite_reuse(DynSyntaxCache *cache, DynSource *s, uint64_t key) {
+  struct DynRewriteEntry *entry = *rewrite_find(cache, s->path);
+  if (!entry || entry->key != key || entry->source_length != s->length || s->original_text ||
+      memcmp(entry->source, s->text, s->length)) return false;
+  if (!entry->edited) return true;
+  char *text = malloc(entry->length + 1);
+  DynSourceSpan *spans = malloc((entry->span_count ? entry->span_count : 1) * sizeof(*spans));
+  if (!text || !spans || !exp_snapshot_retain(entry->snapshot)) {
+    free(text);
+    free(spans);
+    return false;
+  }
+  memcpy(text, entry->text, entry->length + 1);
+  memcpy(spans, entry->spans, entry->span_count * sizeof(*spans));
+  dyn_source_discard_syntax(s);
+  free(s->spans);
+  s->original_text = s->text;
+  s->original_length = s->length;
+  s->text = text;
+  s->length = entry->length;
+  s->spans = spans;
+  s->span_count = entry->span_count;
+  s->compact = entry->snapshot;
+  s->compact_root_start = entry->root_start;
+  s->compact_root_end = entry->root_end;
+  s->compact_validated = s->compact_only = true;
+  s->compact_reflection = entry->reflection;
+  return true;
+}
+/* Keeps the error-free rewrite of source (the text before rewriting). */
+static void rewrite_remember(DynSyntaxCache *cache, const DynSource *s, const char *source, size_t source_length,
+                             uint64_t key) {
+  bool edited = s->original_text != NULL;
+  if (!s->compact || !s->compact_validated) return;
+  struct DynRewriteEntry *entry = calloc(1, sizeof(*entry));
+  if (!entry) return;
+  entry->path = strdup(s->path);
+  entry->source = malloc(source_length + 1);
+  entry->text = edited ? malloc(s->length + 1) : NULL;
+  entry->spans = edited ? malloc((s->span_count ? s->span_count : 1) * sizeof(*entry->spans)) : NULL;
+  if (!entry->path || !entry->source || (edited && (!entry->text || !entry->spans)) ||
+      (edited && !exp_snapshot_retain(s->compact))) {
+    rewrite_entry_free(entry);
+    return;
+  }
+  memcpy(entry->source, source, source_length);
+  entry->source[source_length] = 0;
+  entry->source_length = source_length;
+  entry->key = key;
+  entry->edited = edited;
+  if (edited) {
+    memcpy(entry->text, s->text, s->length + 1);
+    entry->length = s->length;
+    memcpy(entry->spans, s->spans, s->span_count * sizeof(*entry->spans));
+    entry->span_count = s->span_count;
+    entry->snapshot = s->compact;
+    entry->root_start = s->compact_root_start;
+    entry->root_end = s->compact_root_end;
+    entry->reflection = s->compact_reflection;
+  }
+  struct DynRewriteEntry **at = rewrite_find(cache, s->path);
+  if (*at) {
+    entry->next = (*at)->next;
+    rewrite_entry_free(*at);
+  }
+  *at = entry;
+  cache->release_rewrites = rewrite_entries_release;
 }
 typedef struct {
   DynSources *sources;
   Module *modules;
   size_t module_count;
+  const size_t *owners;
   atomic_size_t next;
   atomic_bool failed;
 } RewriteJobs;
 /* Each source rewrites independently against the read-only module tables. */
-static bool rewrite_source(DynSource *s, Module *modules, size_t module_count) {
-  char *dir = source_dir(s->path);
-  Module *m = dir ? find_module(modules, module_count, dir) : NULL;
-  free(dir);
+static bool rewrite_source(DynSource *s, Module *m, Module *modules, size_t module_count) {
+  DynSyntaxCache *cache = s->context.syntax_cache;
+  if (cache && rewrite_reuse(cache, s, m->rewrite_key)) return true;
   const ExpSnapshotTree *tree = dyn_compact_tree(s);
-  if (!m || !tree) return false;
+  if (!tree) return false;
   Edits edits = {0};
   DynScopeIndex locals = {0};
+  bool fresh = !s->original_text;
   bool ok = dyn_scope_build(&locals, s) &&
             compact_rewrite_nodes(s, tree, m, modules, module_count, &edits, &locals) &&
             apply_edits(s, &edits);
-  for (size_t i = 0; i < edits.count; ++i)
-    free(edits.items[i].text);
-  free(edits.items);
+  edits_free(&edits);
   dyn_scope_free(&locals);
+  if (ok && cache && fresh)
+    rewrite_remember(cache, s, s->original_text ? s->original_text : s->text,
+                     s->original_text ? s->original_length : s->length, m->rewrite_key);
   return ok;
 }
 static void *rewrite_worker(void *raw) {
@@ -518,7 +816,7 @@ static void *rewrite_worker(void *raw) {
       return NULL;
     DynSource *s = &jobs->sources->items[i];
     if (dyn_source_target_enabled(s) != 0 &&
-        !rewrite_source(s, jobs->modules, jobs->module_count))
+        !rewrite_source(s, &jobs->modules[jobs->owners[i]], jobs->modules, jobs->module_count))
       atomic_store(&jobs->failed, true);
   }
 }
@@ -554,13 +852,21 @@ int dyn_module_rewrite_project(const char *project_root, DynSources *sources) {
   Module *modules = NULL;
   size_t module_count = 0;
   int result = 0;
+  /* Each source's module, resolved once: resolving a path is several system calls. */
+  size_t *owners = malloc((sources->count ? sources->count : 1) * sizeof(*owners));
+  if (!owners)
+    result = 2;
   for (size_t i = 0; i < sources->count && !result; ++i) {
     char *dir = source_dir(sources->items[i].path);
     if (!dir) {
       result = 2;
       break;
     }
-    if (!find_module(modules, module_count, dir)) {
+    Module *found = find_module(modules, module_count, dir);
+    if (found) {
+      owners[i] = (size_t)(found - modules);
+      free(dir);
+    } else {
       Module *p = realloc(modules, (module_count + 1) * sizeof(*p));
       if (!p) {
         free(dir);
@@ -569,17 +875,14 @@ int dyn_module_rewrite_project(const char *project_root, DynSources *sources) {
       }
       modules = p;
       modules[module_count] = (Module){.dir = dir, .root = !strcmp(dir, root)};
-      ++module_count;
-    } else
-      free(dir);
+      owners[i] = module_count++;
+    }
   }
   for (size_t si = 0; si < sources->count && !result; ++si) {
     if (dyn_source_target_enabled(&sources->items[si]) == 0)
       continue;
     DynSource *s = &sources->items[si];
-    char *dir = source_dir(s->path);
-    Module *m = find_module(modules, module_count, dir);
-    free(dir);
+    Module *m = &modules[owners[si]];
     const ExpSnapshotTree *compact = dyn_compact_tree(s);
     if (!compact || !compact_rewrite_declarations(s, compact, m, false) ||
         !compact_rewrite_imports(s, m, root)) result = 2;
@@ -588,22 +891,23 @@ int dyn_module_rewrite_project(const char *project_root, DynSources *sources) {
     if (dyn_source_target_enabled(&sources->items[si]) == 0)
       continue;
     DynSource *s = &sources->items[si];
-    char *dir = source_dir(s->path);
-    Module *m = find_module(modules, module_count, dir);
-    free(dir);
+    Module *m = &modules[owners[si]];
     const ExpSnapshotTree *compact = dyn_compact_tree(s);
     if (!compact || !compact_rewrite_declarations(s, compact, m, true)) result = 2;
   }
+  if (!result && sources->count && sources->items[0].context.syntax_cache)
+    rewrite_module_keys(modules, module_count);
   if (!result) {
     RewriteJobs jobs = {.sources = sources, .modules = modules,
-                        .module_count = module_count};
+                        .module_count = module_count, .owners = owners};
     atomic_init(&jobs.next, 0);
     atomic_init(&jobs.failed, false);
     rewrite_parallel(&jobs, sources);
     if (atomic_load(&jobs.failed))
       result = 2;
   }
-  if (!result && !capture_dependencies(sources, modules, module_count)) result = 2;
+  if (!result && !capture_dependencies(sources, modules, module_count, owners)) result = 2;
+  free(owners);
   free_modules(modules, module_count);
   free(root);
   if (result)

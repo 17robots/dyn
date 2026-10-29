@@ -9,6 +9,10 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#ifndef _WIN32
+#include <pthread.h>
+#include <stdatomic.h>
+#endif
 
 /* Bound compiler memory from accidental/generated hostile source inputs. */
 #define DYN_MAX_SOURCE_BYTES (64u * 1024u * 1024u)
@@ -69,9 +73,69 @@ bool dyn_path_is_directory(const char *path) {
 static int source_compare(const void *a, const void *b) {
   return strcmp(((const DynSource *)a)->path, ((const DynSource *)b)->path);
 }
+static int prepare_failure(DynSource *s, bool quiet) {
+  if (!dyn_work_step(&s->context, 0)) {
+    if (!quiet) dyn_diagnostic(&s->context, "error", s->path, 1, 1, 1, 1, "analysis work budget exceeded");
+    return 1;
+  }
+  if (s->syntax_too_deep)
+    if (!quiet) dyn_diagnostic(&s->context, "error", s->path, 1, 1, 1, 1,
+                   "syntax nesting exceeds 1024 tree levels");
+  bool syntax_error = quiet ? s->syntax_error != NULL : dyn_source_report_syntax(s);
+  return s->syntax_too_deep || syntax_error ? 1 : 2;
+}
+#ifndef _WIN32
+typedef struct {
+  DynSources *sources;
+  bool *prepared;
+  atomic_size_t next;
+} PrepareJobs;
+static void *prepare_worker(void *raw) {
+  PrepareJobs *jobs = raw;
+  for (;;) {
+    size_t i = atomic_fetch_add(&jobs->next, 1);
+    if (i >= jobs->sources->count) return NULL;
+    jobs->prepared[i] = dyn_source_prepare(&jobs->sources->items[i]);
+  }
+}
+#endif
+/* Parses every file read by sources_load on several threads, then reports
+   the first failure in directory order, as the serial loop would have. */
+static int prepare_parallel(DynSources *out, bool quiet) {
+  bool *prepared = calloc(out->count ? out->count : 1, sizeof(bool));
+  if (!prepared) return 2;
+#ifndef _WIN32
+  PrepareJobs jobs = {.sources = out, .prepared = prepared};
+  atomic_init(&jobs.next, 0);
+  long online = sysconf(_SC_NPROCESSORS_ONLN);
+  size_t workers = online > 1 ? (size_t)online : 1;
+  if (workers > out->count) workers = out->count;
+  if (workers > 64) workers = 64;
+  pthread_t threads[64];
+  size_t started = 0;
+  for (; started + 1 < workers; ++started)
+    if (pthread_create(&threads[started], NULL, prepare_worker, &jobs)) break;
+  prepare_worker(&jobs);
+  for (size_t i = 0; i < started; ++i) pthread_join(threads[i], NULL);
+#else
+  for (size_t i = 0; i < out->count; ++i) prepared[i] = dyn_source_prepare(&out->items[i]);
+#endif
+  int result = 0;
+  for (size_t i = 0; i < out->count && !result; ++i)
+    if (!prepared[i]) result = prepare_failure(&out->items[i], quiet);
+  free(prepared);
+  return result;
+}
 static int sources_load(const DynContext *context, const char *dir,
                         DynSources *out, bool quiet) {
   memset(out, 0, sizeof(*out));
+  /* Budgeted and cached editor analysis share mutable context state, so
+     only plain command loads parse on several threads. */
+  bool parallel = !quiet && context && !context->work && !context->syntax_cache;
+  /* An error stops the serial loop after parsing every earlier file; report
+     an earlier syntax error first here too. */
+#define EARLIER(skip) do { if (parallel) { size_t all = out->count; out->count -= (skip); \
+    int earlier = prepare_parallel(out, quiet); out->count = all; if (earlier) return earlier; } } while (0)
   DIR *d = opendir(dir);
   if (!d) {
     if (!quiet) fprintf(stderr, "error: cannot open module directory '%s'\n", dir);
@@ -83,8 +147,9 @@ static int sources_load(const DynContext *context, const char *dir,
     if (n < 5 || strcmp(entry->d_name + n - 4, ".dyn") != 0)
       continue;
     if (out->count == DYN_MAX_MODULE_SOURCES) {
-      if (!quiet) fprintf(stderr, "error: module exceeds 4096 source-file limit\n");
       closedir(d);
+      EARLIER(0);
+      if (!quiet) fprintf(stderr, "error: module exceeds 4096 source-file limit\n");
       return 1;
     }
     DynSource *items = realloc(out->items, (out->count + 1) * sizeof(*items));
@@ -106,23 +171,27 @@ static int sources_load(const DynContext *context, const char *dir,
     if (!f) {
       if (!quiet) fprintf(stderr, "error: cannot read '%s'\n", s->path);
       closedir(d);
+      EARLIER(1);
       return 1;
     }
     if (fseek(f, 0, SEEK_END)) {
       fclose(f);
       closedir(d);
+      EARLIER(1);
       return 1;
     }
     long size = ftell(f);
     if (size < 0 || fseek(f, 0, SEEK_SET)) {
       fclose(f);
       closedir(d);
+      EARLIER(1);
       return 1;
     }
     if ((unsigned long)size > DYN_MAX_SOURCE_BYTES) {
       if (!quiet) fprintf(stderr, "error: source '%s' exceeds 64 MiB limit\n", s->path);
       fclose(f);
       closedir(d);
+      EARLIER(1);
       return 1;
     }
     if (!dyn_work_step(&s->context, (uint64_t)size + 1)) {
@@ -140,25 +209,23 @@ static int sources_load(const DynContext *context, const char *dir,
     bool failed = s->length != (size_t)size || ferror(f);
     if (fclose(f))
       failed = true;
-    if (!failed && !dyn_source_prepare(s)) {
-      if (!dyn_work_step(&s->context, 0)) {
-        if (!quiet) dyn_diagnostic(&s->context, "error", s->path, 1, 1, 1, 1, "analysis work budget exceeded");
-        closedir(d); return 1;
-      }
-      if (s->syntax_too_deep)
-        if (!quiet) dyn_diagnostic(&s->context, "error", s->path, 1, 1, 1, 1,
-                       "syntax nesting exceeds 1024 tree levels");
-      bool syntax_error = quiet ? s->syntax_error != NULL : dyn_source_report_syntax(s);
+    if (!failed && !parallel && !dyn_source_prepare(s)) {
       closedir(d);
-      return s->syntax_too_deep || syntax_error ? 1 : 2;
+      return prepare_failure(s, quiet);
     }
     if (failed) {
       if (!quiet) fprintf(stderr, "error: cannot completely read '%s'\n", s->path);
       closedir(d);
+      EARLIER(1);
       return 1;
     }
   }
   closedir(d);
+  if (parallel) {
+    int result = prepare_parallel(out, quiet);
+    if (result) return result;
+  }
+#undef EARLIER
   if (out->count > 1)
     qsort(out->items, out->count, sizeof(*out->items), source_compare);
   return 0;
@@ -431,43 +498,42 @@ int dyn_sources_merge(const DynSources *sources, const char *module_name,
   }
   return 0;
 }
+/* Original offset of local inside the first span containing it, if any.
+   Spans ascend and meet only at their ends. */
+static bool source_span_offset(const DynSourceSpan *spans, size_t count, size_t local, size_t *offset) {
+  size_t lo = 0, hi = count;
+  while (lo < hi) {
+    size_t mid = lo + (hi - lo) / 2;
+    if (spans[mid].generated_end < local) lo = mid + 1; else hi = mid;
+  }
+  if (lo == count || local < spans[lo].generated_start) return false;
+  DynSourceSpan p = spans[lo];
+  size_t gn = p.generated_end - p.generated_start, on = p.original_end - p.original_start;
+  *offset = p.original_start + (gn ? (local - p.generated_start) * on / gn : 0);
+  return true;
+}
 void dyn_source_position(const DynSource *s, size_t byte, const char **path,
                          const char **original, size_t *original_length, size_t *original_offset) {
   const char *text = s->original_text ? s->original_text : s->text;
   size_t length = s->original_text ? s->original_length : s->length,
          offset = byte;
   *path = s->path;
-  for (size_t i = 0; i < s->map_count; ++i)
-    if (byte >= s->maps[i].start && byte <= s->maps[i].end) {
-      const DynSourceMap *m = &s->maps[i];
-      size_t local = byte - m->start;
-      *path = m->path;
-      text = m->original_text;
-      length = m->original_length;
-      offset = local;
-      for (size_t j = 0; j < m->span_count; ++j)
-        if (local >= m->spans[j].generated_start &&
-            local <= m->spans[j].generated_end) {
-          DynSourceSpan p = m->spans[j];
-          size_t gn = p.generated_end - p.generated_start,
-                 on = p.original_end - p.original_start;
-          offset = p.original_start +
-                   (gn ? (local - p.generated_start) * on / gn : 0);
-          break;
-        }
-      break;
-    }
-  if (!s->map_count && s->span_count)
-    for (size_t j = 0; j < s->span_count; ++j)
-      if (byte >= s->spans[j].generated_start &&
-          byte <= s->spans[j].generated_end) {
-        DynSourceSpan p = s->spans[j];
-        size_t gn = p.generated_end - p.generated_start,
-               on = p.original_end - p.original_start;
-        offset =
-            p.original_start + (gn ? (byte - p.generated_start) * on / gn : 0);
-        break;
-      }
+  /* Maps ascend and meet only at their ends: the first with end >= byte is
+     the only candidate. */
+  size_t lo = 0, hi = s->map_count;
+  while (lo < hi) {
+    size_t mid = lo + (hi - lo) / 2;
+    if (s->maps[mid].end < byte) lo = mid + 1; else hi = mid;
+  }
+  if (lo < s->map_count && byte >= s->maps[lo].start) {
+    const DynSourceMap *m = &s->maps[lo];
+    *path = m->path;
+    text = m->original_text;
+    length = m->original_length;
+    offset = byte - m->start;
+    source_span_offset(m->spans, m->span_count, byte - m->start, &offset);
+  }
+  if (!s->map_count && s->span_count) source_span_offset(s->spans, s->span_count, byte, &offset);
   *original = text; *original_length = length; *original_offset = offset;
 }
 void dyn_source_location(const DynSource *s, size_t byte, const char **path,
@@ -477,14 +543,15 @@ void dyn_source_location(const DynSource *s, size_t byte, const char **path,
   dyn_source_position(s, byte, path, &text, &length, &offset);
   if (offset > length)
     offset = length;
-  *line = 1;
-  *column = 1;
-  for (size_t i = 0; i < offset; ++i)
-    if (text[i] == '\n') {
-      ++*line;
-      *column = 1;
-    } else
-      ++*column;
+  /* Columns count bytes after the last newline before offset. */
+  unsigned lines = 1;
+  const char *start = text, *end = text + offset, *newline;
+  while (start < end && (newline = memchr(start, '\n', (size_t)(end - start)))) {
+    ++lines;
+    start = newline + 1;
+  }
+  *line = lines;
+  *column = (unsigned)(end - start) + 1;
 }
 void dyn_source_free(DynSource *s) {
   dyn_source_discard_syntax(s);

@@ -1,15 +1,14 @@
 #ifndef DYN_MODULE_COMPACT_REWRITE_H
 #define DYN_MODULE_COMPACT_REWRITE_H
 #include "dyn_location.h"
+#include "dyn_name_text.h"
 /* Edit selection is independent of parser-owned nodes. Points refer to current
    generated text, never the original-source diagnostic mapping. */
-static char *compact_rewrite_text(const DynSource *source, const ExpSnapshotTree *tree, uint32_t id) {
+static char *compact_rewrite_text(DynNameText *t, const DynSource *source, const ExpSnapshotTree *tree, uint32_t id) {
+  t->text = NULL;
   if (id == UINT32_MAX) return NULL;
   const ExpNode *node=&tree->nodes[id];
-  size_t length=node->end-node->start;
-  char *text=malloc(length+1);
-  if (text) { memcpy(text,source->text+node->start,length); text[length]=0; }
-  return text;
+  return dyn_name_text(t, source->text+node->start, node->end-node->start);
 }
 static uint32_t compact_rewrite_unwrap(const ExpSnapshotTree *tree,uint32_t node) {
   while(node!=UINT32_MAX && tree->nodes[node].first!=UINT32_MAX &&
@@ -27,10 +26,20 @@ static bool compact_rewrite_edit(Edits *edits,uint32_t start,uint32_t end,char *
 }
 static bool compact_rewrite_name(Edits *edits,const DynSource *source,const ExpSnapshotTree *tree,
                                  uint32_t name,Module *module) {
-  char *text=compact_rewrite_text(source,tree,name);
+  DynNameText text_buffer;
+  char *text=compact_rewrite_text(&text_buffer,source,tree,name);
   if(!text) return false;
-  char *replacement=symbol(module,text); free(text);
+  char *replacement=symbol(edits,module,text); dyn_name_text_free(&text_buffer);
   return compact_rewrite_edit(edits,tree->nodes[name].start,tree->nodes[name].end,replacement);
+}
+/* The replacement for module.member: member qualified by target. */
+static char *compact_rewrite_member(Edits *edits,const DynSource *source,const ExpSnapshotTree *tree,
+                                    uint32_t member_id,const Module *target) {
+  DynNameText member_buffer;
+  char *member=compact_rewrite_text(&member_buffer,source,tree,member_id);
+  char *replacement=member ? symbol(edits,target,member) : NULL;
+  dyn_name_text_free(&member_buffer);
+  return replacement;
 }
 static bool compact_rewrite_one(uint32_t id,const DynSource *source,const ExpSnapshotTree *tree,
                                 Module *current,Module *modules,size_t module_count,Edits *edits,
@@ -51,59 +60,59 @@ static bool compact_rewrite_one(uint32_t id,const DynSource *source,const ExpSna
     if(name!=UINT32_MAX && !compact_rewrite_name(edits,source,tree,name,current)) return false;
   }
   if(kind==EXP_FIELD_TYPE) {
-    char *name=compact_rewrite_text(source,tree,first);
+    DynNameText name_buffer;
+    char *name=compact_rewrite_text(&name_buffer,source,tree,first);
     if(first!=UINT32_MAX && !name) return false;
     if(name && compact_rewrite_value_type(tree,id) && dyn_scope_local_at(locals,node->start,name)) {
-      free(name); *skip=true; return true;
+      dyn_name_text_free(&name_buffer); *skip=true; return true;
     }
     uint32_t second=first==UINT32_MAX ? UINT32_MAX : nodes[first].next;
     Module *target=second!=UINT32_MAX ? target_module(modules,module_count,current,name) : NULL;
     if(target) {
-      char *member=compact_rewrite_text(source,tree,second), *replacement=member ? symbol(target,member) : NULL;
-      free(member); free(name); *skip=true;
-      return compact_rewrite_edit(edits,node->start,node->end,replacement);
+      dyn_name_text_free(&name_buffer); *skip=true;
+      return compact_rewrite_edit(edits,node->start,node->end,compact_rewrite_member(edits,source,tree,second,target));
     }
     if(second==UINT32_MAX && name && has_decl(current,name)) {
-      char *replacement=symbol(current,name); free(name); *skip=true;
+      char *replacement=symbol(edits,current,name); dyn_name_text_free(&name_buffer); *skip=true;
       return compact_rewrite_edit(edits,node->start,node->end,replacement);
     }
-    free(name);
+    dyn_name_text_free(&name_buffer);
   }
   if(kind==EXP_STRUCT && first!=UINT32_MAX && nodes[first].kind==EXP_NAME) {
     uint32_t second=nodes[first].next;
-    char *name=compact_rewrite_text(source,tree,first); if(!name) return false;
+    DynNameText name_buffer;
+    char *name=compact_rewrite_text(&name_buffer,source,tree,first); if(!name) return false;
     if(second!=UINT32_MAX && nodes[second].kind==EXP_NAME) {
       Module *target=target_module(modules,module_count,current,name);
       if(target) {
-        char *member=compact_rewrite_text(source,tree,second), *replacement=member ? symbol(target,member) : NULL;
-        free(member); free(name);
-        return compact_rewrite_edit(edits,nodes[first].start,nodes[second].end,replacement);
+        dyn_name_text_free(&name_buffer);
+        return compact_rewrite_edit(edits,nodes[first].start,nodes[second].end,compact_rewrite_member(edits,source,tree,second,target));
       }
     } else if(has_decl(current,name)) {
-      free(name);
+      dyn_name_text_free(&name_buffer);
       return compact_rewrite_name(edits,source,tree,first,current);
     }
-    free(name);
+    dyn_name_text_free(&name_buffer);
   }
   if(kind==EXP_FIELD || kind==EXP_CALL) {
     uint32_t base=compact_rewrite_unwrap(tree,first);
     if(base!=UINT32_MAX && nodes[base].kind==EXP_NAME) {
-      char *name=compact_rewrite_text(source,tree,base); if(!name) return false;
+      DynNameText name_buffer;
+      char *name=compact_rewrite_text(&name_buffer,source,tree,base); if(!name) return false;
       bool local=dyn_scope_local_at(locals,kind==EXP_CALL ? node->start : nodes[base].start,name);
       Module *target=kind==EXP_FIELD ? target_module(modules,module_count,current,name) : NULL;
       if(target && !local) {
-        uint32_t member_id=nodes[first].next;
-        char *member=compact_rewrite_text(source,tree,member_id), *replacement=member ? symbol(target,member) : NULL;
-        free(member); free(name); *skip=true;
-        return compact_rewrite_edit(edits,node->start,node->end,replacement);
+        dyn_name_text_free(&name_buffer); *skip=true;
+        return compact_rewrite_edit(edits,node->start,node->end,compact_rewrite_member(edits,source,tree,nodes[first].next,target));
       }
-      bool declared=has_decl(current,name); free(name);
+      bool declared=has_decl(current,name); dyn_name_text_free(&name_buffer);
       if(declared && !local && !compact_rewrite_name(edits,source,tree,base,current)) return false;
     }
   }
   if(kind==EXP_NAME && (node->flags & EXP_PRIMARY)) {
-    char *name=compact_rewrite_text(source,tree,id); if(!name) return false;
-    bool rewrite=has_decl(current,name) && !dyn_scope_local_at(locals,node->start,name); free(name);
+    DynNameText name_buffer;
+    char *name=compact_rewrite_text(&name_buffer,source,tree,id); if(!name) return false;
+    bool rewrite=has_decl(current,name) && !dyn_scope_local_at(locals,node->start,name); dyn_name_text_free(&name_buffer);
     if(rewrite && !compact_rewrite_name(edits,source,tree,id,current)) return false;
   }
   return true;

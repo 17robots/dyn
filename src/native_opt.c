@@ -300,9 +300,13 @@ static bool profile_read(const char *path, const DynIrProgram *ir,
    contract. A one-shot loop supplies a lexical cleanup boundary and a common
    exit for multiple returns. Arguments are captured before entering that scope.
    Calls outside unconditional expression spines and deferred call captures remain calls. */
+/* Expressions and statements are rebuilt by appending to the arrays they
+   came from, so in reads the original records through view, which follows
+   those arrays when they move. Never hold a pointer into them across an
+   append. */
 typedef struct {
   const DynIrProgram *in;
-  DynIrProgram out;
+  DynIrProgram view, out;
   size_t expressions_cap, statements_cap, items_cap, children_cap, locals_cap,
       arms_cap;
   uint32_t loop_stride, next_loop;
@@ -342,6 +346,8 @@ static bool inline_grow(Inline *b, void **array, size_t *capacity, size_t need,
   }
   *array = p;
   *capacity = n;
+  b->view.expressions = b->out.expressions;
+  b->view.statements = b->out.statements;
   return true;
 }
 #define INLINE_APPEND(b, field, cap, value, result)                            \
@@ -671,7 +677,7 @@ static bool inline_simple_target(const DynIrProgram *ir, DynExprId id) {
    against checks in the arguments or the inlined body. */
 static DynExprId inline_capture_target(Inline *b, const InlineScope *scope,
                                        DynExprId id, InlineList *list) {
-  const DynIrExpr *target = &b->in->expressions[id];
+  const DynIrExpr original = b->in->expressions[id], *target = &original;
   DynType pointer_type = inline_target_pointer(b->in, id);
   DynIrLocal local = {.name = "__inline_target", .type = pointer_type};
   uint32_t local_id;
@@ -704,8 +710,9 @@ static DynExprId inline_capture_target(Inline *b, const InlineScope *scope,
 static void inline_block(Inline *, const InlineScope *, uint32_t, uint32_t,
                          InlineList *, unsigned);
 static bool inline_call(Inline *b, const InlineScope *scope,
-                        const DynIrExpr *call, InlineList *list,
+                        const DynIrExpr *site, InlineList *list,
                         DynExprId *result, unsigned depth) {
+  const DynIrExpr original = *site, *call = &original;
   if (!scope->expand || call->kind != DYN_EXPR_CALL ||
       call->integer >= b->in->function_count || depth > 16 ||
       b->active[call->integer])
@@ -1058,10 +1065,11 @@ static bool inline_dense_loops(DynIrProgram *ir) {
   return true;
 }
 static bool inline_program(DynNativeOptimization *o, bool leaf_only, bool byte_fast) {
-  Inline b = {.in = &o->ir, .out = o->ir, .loop_stride = 1,
+  Inline b = {.view = o->ir, .out = o->ir, .loop_stride = 1,
               .leaf_only = leaf_only, .byte_fast = byte_fast};
-  b.out.expressions = NULL;
-  b.out.statements = NULL;
+  b.in = &b.view;
+  b.expressions_cap = o->ir.expression_count;
+  b.statements_cap = o->ir.statement_count;
   b.out.items = NULL;
   b.out.children = NULL;
   b.out.locals = NULL;
@@ -1114,8 +1122,6 @@ static bool inline_program(DynNativeOptimization *o, bool leaf_only, bool byte_f
         b.in->count)                                                           \
       memcpy(b.out.field, b.in->field, b.in->count * sizeof(*b.out.field));    \
   } while (0)
-  INLINE_COPY(expressions, expression_count, expressions_cap);
-  INLINE_COPY(statements, statement_count, statements_cap);
   INLINE_COPY(items, item_count, items_cap);
   size_t bytes = (b.in->function_count ? b.in->function_count : 1) *
                  sizeof(*b.out.functions);
@@ -1213,16 +1219,15 @@ static bool inline_program(DynNativeOptimization *o, bool leaf_only, bool byte_f
   free(b.active);
   free(b.costs);
   free(b.addressed);
-  if (!b.failed && !b.expansions) {
+  /* The original records are still the prefix of the shared arrays. */
+  o->ir.expressions = b.out.expressions;
+  o->ir.statements = b.out.statements;
+  if (b.failed || !b.expansions) {
+    b.out.expressions = NULL;
+    b.out.statements = NULL;
     inline_free(&b.out);
-    return true;
+    return !b.failed;
   }
-  if (b.failed) {
-    inline_free(&b.out);
-    return false;
-  }
-  free(o->ir.expressions);
-  free(o->ir.statements);
   o->ir = b.out;
   /* Expansion creates new expression/statement indices; function IDs stay stable. */
   o->ir.live.expressions = NULL;
@@ -1244,8 +1249,21 @@ void dyn_native_optimization_free(DynNativeOptimization *o) {
   free(o->ir.statements);
   memset(o, 0, sizeof(*o));
 }
+static bool optimize(const DynSource *source, const DynIrProgram *input, DynIrProgram *owned,
+                     unsigned level, bool allow_ssa_intrinsics, DynNativeOptimization *o);
 bool dyn_native_optimize_for_emission(const DynSource *source, const DynIrProgram *input,
                          unsigned level, bool allow_ssa_intrinsics, DynNativeOptimization *o) {
+  return optimize(source, input, NULL, level, allow_ssa_intrinsics, o);
+}
+/* Like dyn_native_optimize_for_emission, but frees the input's expressions
+   and statements as soon as the optimized copy no longer reads them, so the
+   two never stay alive through inlining and emission together. */
+bool dyn_native_optimize_owned(const DynSource *source, DynIrProgram *input,
+                               unsigned level, bool allow_ssa_intrinsics, DynNativeOptimization *o) {
+  return optimize(source, input, input, level, allow_ssa_intrinsics, o);
+}
+static bool optimize(const DynSource *source, const DynIrProgram *input, DynIrProgram *owned,
+                     unsigned level, bool allow_ssa_intrinsics, DynNativeOptimization *o) {
   memset(o, 0, sizeof(*o));
   o->ir = *input;
   o->ir.expressions = NULL;
@@ -1327,6 +1345,11 @@ bool dyn_native_optimize_for_emission(const DynSource *source, const DynIrProgra
       ++o->branches;
     }
   dyn_timing_phase(&source->context, &optimization_time, "scalar optimization");
+  if (owned) {
+    /* The copy now holds every expression and statement inlining reads. */
+    free(owned->expressions); free(owned->statements);
+    owned->expressions = NULL; owned->statements = NULL;
+  }
   const char *no_ssa = getenv("DYN_NO_SSA");
   bool byte_fast = allow_ssa_intrinsics && !strcmp(dyn_context_target(&source->context)->arch, "x86_64") &&
                   (!no_ssa || !*no_ssa || !strcmp(no_ssa, "0"));

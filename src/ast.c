@@ -4,6 +4,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdatomic.h>
+#ifdef __GLIBC__
+#include <malloc.h>
+#endif
+#ifndef _WIN32
+#include <pthread.h>
+#include <unistd.h>
+#endif
 
 
 bool dyn_span_text_equal(DynSpan a, DynSpan b, const DynSource *s) {
@@ -116,25 +124,6 @@ const char *dyn_type_name(DynType t) {
          : dyn_type_is_slice(t)   ? "slice"
                                   : "struct";
 }
-bool dyn_type_is_struct(DynType t) {
-  return t >= DYN_TYPE_STRUCT_BASE && t < DYN_TYPE_ENUM_BASE;
-}
-bool dyn_type_is_enum(DynType t) {
-  return t >= DYN_TYPE_ENUM_BASE && t < DYN_TYPE_POINTER_BASE;
-}
-bool dyn_type_is_pointer(DynType t) {
-  return t >= DYN_TYPE_POINTER_BASE && t < DYN_TYPE_ARRAY_BASE;
-}
-bool dyn_type_is_array(DynType t) {
-  return t >= DYN_TYPE_ARRAY_BASE && t < DYN_TYPE_SLICE_BASE;
-}
-bool dyn_type_is_slice(DynType t) {
-  return t >= DYN_TYPE_SLICE_BASE && t < DYN_TYPE_FN_BASE;
-}
-bool dyn_type_is_function(DynType t) {
-  return t >= DYN_TYPE_FN_BASE && t < DYN_TYPE_DISTINCT_BASE;
-}
-bool dyn_type_is_distinct(DynType t) { return t >= DYN_TYPE_DISTINCT_BASE && t < DYN_TYPE_PARAM_BASE; }
 static void diagnostic_span(DynSpan p, const DynSource *s, unsigned *errors,
                             const char *message) {
   dyn_diagnostic_source("error", s, p.start_byte, p.end_byte, message);

@@ -103,6 +103,29 @@ ExpSnapshot *exp_snapshot_create(const char *text, size_t length,
   return snapshot;
 }
 
+ExpSnapshot *exp_snapshot_adopt(const char *text, size_t length, ExpNode *nodes,
+                                uint32_t count, uint32_t root) {
+  ExpSnapshot *snapshot = length < UINT32_MAX ? calloc(1, sizeof(*snapshot)) : NULL;
+  if (!snapshot) {
+    free(nodes);
+    return NULL;
+  }
+  atomic_init(&snapshot->references, 1);
+  snapshot->storage.nodes = nodes;
+  snapshot->storage.count = snapshot->storage.capacity = count;
+  snapshot->storage.root = root;
+  snapshot->text = malloc(length + 1);
+  if (!snapshot->text) {
+    exp_snapshot_release(snapshot);
+    return NULL;
+  }
+  memcpy(snapshot->text, text, length);
+  snapshot->text[length] = 0;
+  snapshot->length = length;
+  snapshot->view = (ExpSnapshotTree){nodes, count, root, NULL, 0};
+  return snapshot;
+}
+
 bool exp_snapshot_retain(ExpSnapshot *snapshot) {
   if (!snapshot) return false;
   size_t count = atomic_load_explicit(&snapshot->references, memory_order_relaxed);

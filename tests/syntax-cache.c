@@ -26,7 +26,8 @@ int main(void) {
     dyn_source_discard_syntax(&source);
     dyn_syntax_cache_clear(&cache);
   }
-  DynSyntaxCache cache = {0};
+  /* Small limits keep the eviction checks fast. */
+  DynSyntaxCache cache = {.entry_limit = 64, .byte_limit = 8u * 1024u * 1024u};
   DynSource source = {.path = "main.dyn", .text = "fn aa() {}", .length = 10,
                       .context = {.syntax_cache = &cache}};
   assert(dyn_source_prepare(&source));

@@ -381,13 +381,27 @@ DynType dyn_ast_named_type(DynAstProgram *, DynSpan name, const DynSource *);
 bool dyn_module_name_equal(DynSpan, DynSpan, const DynSource *);
 bool dyn_span_text_equal(DynSpan a, DynSpan b, const DynSource *source);
 const char *dyn_type_name(DynType type);
-bool dyn_type_is_struct(DynType type);
-bool dyn_type_is_enum(DynType type);
-bool dyn_type_is_pointer(DynType type);
-bool dyn_type_is_array(DynType type);
-bool dyn_type_is_slice(DynType type);
-bool dyn_type_is_function(DynType type);
-bool dyn_type_is_distinct(DynType type);
+static inline bool dyn_type_is_struct(DynType t) {
+  return t >= DYN_TYPE_STRUCT_BASE && t < DYN_TYPE_ENUM_BASE;
+}
+static inline bool dyn_type_is_enum(DynType t) {
+  return t >= DYN_TYPE_ENUM_BASE && t < DYN_TYPE_POINTER_BASE;
+}
+static inline bool dyn_type_is_pointer(DynType t) {
+  return t >= DYN_TYPE_POINTER_BASE && t < DYN_TYPE_ARRAY_BASE;
+}
+static inline bool dyn_type_is_array(DynType t) {
+  return t >= DYN_TYPE_ARRAY_BASE && t < DYN_TYPE_SLICE_BASE;
+}
+static inline bool dyn_type_is_slice(DynType t) {
+  return t >= DYN_TYPE_SLICE_BASE && t < DYN_TYPE_FN_BASE;
+}
+static inline bool dyn_type_is_function(DynType t) {
+  return t >= DYN_TYPE_FN_BASE && t < DYN_TYPE_DISTINCT_BASE;
+}
+static inline bool dyn_type_is_distinct(DynType t) {
+  return t >= DYN_TYPE_DISTINCT_BASE && t < DYN_TYPE_PARAM_BASE;
+}
 void dyn_type_format(DynAstProgram *, DynType, const DynSource *, char *, size_t);
 
 #endif

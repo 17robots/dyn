@@ -771,29 +771,31 @@ static bool compact_block(CompactNode block, const DynSource *s, DynAstProgram *
     return true;
   }
   uint32_t n = compact_count(block);
-  uint32_t *ids = malloc(n * sizeof(*ids));
+  /* Most blocks are short; their statement ids fit on the stack. */
+  uint32_t local[32];
+  uint32_t *ids = n <= 32 ? local : malloc(n * sizeof(*ids));
   if (n && !ids) {
     a->allocation_failed = true;
     compact_diagnostic(block, s, errors, "out of memory");
     return false;
   }
   for (CompactNode c = compact_first(block); !compact_null(c); c = compact_next(c)) {
-    if (!dyn_work_step(&s->context, 1)) { free(ids); *count = 0; return false; }
+    if (!dyn_work_step(&s->context, 1)) { if (ids != local) free(ids); *count = 0; return false; }
     uint32_t id = compact_stmt(c, s, a, errors, loop_depth);
-    if (id == UINT32_MAX) { free(ids); *count = 0; return false; }
+    if (id == UINT32_MAX) { if (ids != local) free(ids); *count = 0; return false; }
     ids[(*count)++] = id;
   }
   *start = (uint32_t)a->child_count;
   for (uint32_t i = 0; i < *count; ++i) {
     if (!reserve_child(a)) {
-      free(ids);
+      if (ids != local) free(ids);
       *count = 0;
       compact_diagnostic(block, s, errors, "out of memory");
       return false;
     }
     a->children[a->child_count++] = ids[i];
   }
-  free(ids);
+  if (ids != local) free(ids);
   return true;
 }
 /* Preserve the old reader's treatment of extras in the few raw-child scans
@@ -887,6 +889,68 @@ struct DynCompactBody {
   ExpSnapshot *snapshot;
   uint32_t node, offset, function_start;
 };
+/* Shape checks only read the trees, so batch builds run them on workers. */
+typedef struct {
+  CompactNode declaration;
+  bool shape;
+  uint32_t block;  /* first body block of a function, or UINT32_MAX */
+  bool block_supported;
+} CompactShape;
+#ifndef _WIN32
+typedef struct {
+  CompactShape *items;
+  size_t count;
+  const DynSource *source;
+  atomic_size_t next;
+} CompactShapes;
+static void *compact_shape_worker(void *raw) {
+  CompactShapes *shapes = raw;
+  for (size_t i; (i = atomic_fetch_add(&shapes->next, 64)) < shapes->count;)
+    for (size_t j = i; j < i + 64 && j < shapes->count; ++j) {
+      CompactShape *item = &shapes->items[j];
+      item->shape = compact_shape_supported(item->declaration, shapes->source);
+      item->block = UINT32_MAX;
+      CompactNode fn = compact_first(item->declaration);
+      if (compact_kind(fn) != SRC_FN) continue;
+      for (CompactNode body = compact_first(fn); !compact_null(body); body = compact_next(body))
+        if (compact_kind(body) == SRC_BLOCK) {
+          item->block = body.id;
+          item->block_supported = compact_body_supported(body, shapes->source);
+          break;
+        }
+    }
+  return NULL;
+}
+#endif
+static CompactShape *compact_shapes(DynAstProgram *a, const DynSource *s, size_t partitions) {
+#ifdef _WIN32
+  (void)a; (void)s; (void)partitions;
+  return NULL;
+#else
+  long online = sysconf(_SC_NPROCESSORS_ONLN);
+  if (s->context.work || online < 2 || a->decl_count < 256) return NULL;
+  CompactShapes shapes = {.items = calloc(a->decl_count, sizeof(CompactShape)), .source = s};
+  if (!shapes.items) return NULL;
+  for (size_t i = 0; i < partitions; ++i) {
+    ExpSnapshot *snapshot = s->syntax_part_count ? s->compact_parts[i] : s->compact;
+    const ExpSnapshotTree *tree = exp_snapshot_tree(snapshot);
+    if (!tree) continue;
+    size_t prelude = s->syntax_part_count ? partitions - s->map_count : 0;
+    uint32_t offset = s->syntax_part_count && i >= prelude ? (uint32_t)s->maps[i - prelude].start : 0;
+    CompactNode root = {tree, tree->root, offset, snapshot};
+    for (CompactNode d = compact_first(root); !compact_null(d) && shapes.count < a->decl_count; d = compact_next(d))
+      shapes.items[shapes.count++].declaration = d;
+  }
+  atomic_init(&shapes.next, 0);
+  unsigned workers = online > 4 ? 4 : (unsigned)online, started = 0;
+  pthread_t threads[4];
+  for (; started + 1 < workers; ++started)
+    if (pthread_create(&threads[started], NULL, compact_shape_worker, &shapes)) break;
+  compact_shape_worker(&shapes);
+  for (unsigned i = 0; i < started; ++i) pthread_join(threads[i], NULL);
+  return shapes.items;
+#endif
+}
 static bool compact_prepare_bodies(DynAstProgram *a, const DynSource *s) {
   if (!s->compact && !s->compact_parts) return true;
   size_t partitions = s->syntax_part_count ? s->syntax_part_count : 1;
@@ -896,6 +960,8 @@ static bool compact_prepare_bodies(DynAstProgram *a, const DynSource *s) {
   a->compact_declarations = calloc(a->decl_count ? a->decl_count : 1, sizeof(*a->compact_declarations));
   if (!a->compact_bodies || !a->compact_declarations) { a->allocation_failed = true; return false; }
   a->compact_complete = true;
+  CompactShape *shapes = compact_shapes(a, s, partitions);
+  size_t index = 0;
   for (size_t i = 0; i < partitions; ++i) {
     ExpSnapshot *snapshot = s->syntax_part_count ? s->compact_parts[i] : s->compact;
     const ExpSnapshotTree *tree = exp_snapshot_tree(snapshot);
@@ -904,19 +970,22 @@ static bool compact_prepare_bodies(DynAstProgram *a, const DynSource *s) {
     uint32_t offset = s->syntax_part_count && i >= prelude ? (uint32_t)s->maps[i - prelude].start : 0;
     CompactNode root = {tree, tree->root, offset, snapshot};
     for (CompactNode declaration = compact_first(root); !compact_null(declaration); declaration = compact_next(declaration)) {
-      if (!dyn_work_step(&s->context, 1)) return false;
-
-      if (!compact_shape_supported(declaration, s)) a->compact_complete = false;
-      if (!exp_snapshot_retain(snapshot)) { a->allocation_failed = true; return false; }
+      if (!dyn_work_step(&s->context, 1)) { free(shapes); return false; }
+      const CompactShape *shape = shapes ? &shapes[index++] : NULL;
+      if (!(shape ? shape->shape : compact_shape_supported(declaration, s))) a->compact_complete = false;
+      if (!exp_snapshot_retain(snapshot)) { a->allocation_failed = true; free(shapes); return false; }
       a->compact_declarations[a->compact_declaration_count++].ref = compact_reference(declaration);
       CompactNode fn = compact_first(declaration);
       if (compact_kind(fn) != SRC_FN) continue;
       for (CompactNode body = compact_first(fn); !compact_null(body); body = compact_next(body)) {
-        if (compact_kind(body) != SRC_BLOCK || !compact_body_supported(body, s)) continue;
-        if (!exp_snapshot_retain(snapshot)) { a->allocation_failed = true; return false; }
+        if (compact_kind(body) != SRC_BLOCK) continue;
+        bool supported = shape && shape->block == body.id ? shape->block_supported : compact_body_supported(body, s);
+        if (!supported) continue;
+        if (!exp_snapshot_retain(snapshot)) { a->allocation_failed = true; free(shapes); return false; }
         a->compact_bodies[a->compact_body_count++] = (struct DynCompactBody){snapshot, body.id, offset, compact_span(fn).start_byte};
       }
     }
   }
+  free(shapes);
   return dyn_work_step(&s->context, 0);
 }

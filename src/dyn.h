@@ -21,10 +21,19 @@ const DynTarget *dyn_target_find(const char *name);
 const char *dyn_target_property(const DynTarget *target, const char *key);
 bool dyn_target_syscall_number(const DynTarget *target, uint64_t source, uint64_t *native);
 typedef struct DynSyntaxCacheEntry DynSyntaxCacheEntry;
+/* Zero limits select the defaults, sized so a whole project's sources stay
+   cached between edits: least-recently-used eviction of a project larger
+   than the cache would miss on every file. */
+enum { DYN_SYNTAX_CACHE_ENTRIES = 4096, DYN_SYNTAX_CACHE_BYTES = 128 * 1024 * 1024 };
 typedef struct {
   DynSyntaxCacheEntry *entries;
   size_t count, bytes; /* bytes includes an estimated syntax-tree charge. */
   uint64_t hits, misses;
+  size_t entry_limit, byte_limit;
+  /* Editor sessions also keep each file's import-rewritten revision; the
+     rewriter owns them and releases them through release_rewrites. */
+  struct DynRewriteEntry *rewrites;
+  void (*release_rewrites)(struct DynRewriteEntry *);
 } DynSyntaxCache;
 void dyn_syntax_cache_clear(DynSyntaxCache *);
 

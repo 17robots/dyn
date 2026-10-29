@@ -448,6 +448,14 @@ static uint32_t parse(Parser *p, int minimum) {
   Token token = p->token;
   uint32_t left = NONE;
   bool primary = false;
+  /* Literals match none of the spellings tested below; large data tables
+     are mostly literals. */
+  if (token.kind == NUMBER || token.kind == STRING || token.kind == CHARACTER) {
+    lex(p);
+    left = node(p, token.kind == NUMBER ? EXP_NUMBER : token.kind == STRING ? EXP_STRING : EXP_CHAR,
+                token.start, token.end, NONE, (Token){0});
+    return expression_tail(p, left, false, minimum);
+  }
   if (is(p, "[") || struct_start(p)) {
     left = aggregate(p);
   } else if (take(p, "(")) {

@@ -1,5 +1,141 @@
 # Performance qualification
 
+## Editor rewrite reuse — 2026-10-29
+
+`dyn lsp` rewrote the imports of every project file on each edit. A file's
+rewrite depends only on its text and on its module's directory, root flag,
+declared names and import aliases with their targets; each module hashes
+those into a key. The editor's syntax cache now keeps each file's rewritten
+text, source spans and patched tree, and reuses them while the text and key
+match. Batch builds have no syntax cache and are unaffected.
+
+DNA edit-to-diagnostics latency falls from a median of 53 ms to 11 ms. A
+scripted session of seven overlay edits, covering an unknown name, a new
+public declaration in another module, its use, its rename and both reverts,
+publishes identical diagnostics before and after.
+
+## Allocations, editor latency and debug builds — 2026-10-29
+
+A DNA release build made 720,000 heap allocations; it now makes 212,000.
+Name lookups during import rewriting and reference checks copy names into
+inline buffers instead of the heap. SSA block, predecessor and call argument
+lists come from a per-function arena released at once. Passes take one block
+for all their scratch arrays. IR keeps every declaration and local name in
+one pool. Rewrite replacement texts come from a per-file arena. Short AST
+blocks collect statement ids on the stack.
+
+Editor analysis in `dyn lsp`, measured as the time from a one-character edit
+of DNA's main.dyn to its diagnostics, falls from a median of 192 ms to 53 ms:
+
+- The syntax cache held 64 entries and 8 MiB, fewer than one project's
+  sources, so least-recently-used eviction missed on every file of every
+  edit. It now holds 4096 entries and 128 MiB.
+- Rewritten imports patch their trees under a work budget too, charging about
+  what parsing would cost.
+- Line and column lookup counts newlines with `memchr`, and source maps and
+  edit spans are binary searched.
+
+Interleaved medians for DNA:
+
+| | Before | After |
+|---|---|---|
+| Release build | 140.5 ms, 126 MiB | 112.4 ms, 129 MiB |
+| Debug build | 118.5 ms, 105 MiB | 91.6 ms, 101 MiB |
+| `dyn check` | 67.0 ms, 59 MiB | 50.1 ms, 66 MiB |
+| Editor edit | 192 ms | 53 ms |
+
+Objects stay byte-identical on 46 project and target builds. The debug
+build's tree emitter, about 31 ms, remains serial.
+
+## Parallel frontend — 2026-10-29
+
+Function bodies lower to the AST on up to four worker threads. Each worker
+lowers a run of bodies into private arrays; the runs merge in function order,
+shifting their ids and interning new types in creation order, which assigns
+exactly the serial ids. A run that reports a diagnostic sends the whole
+program back to serial lowering, so messages keep their order. Structure
+checks of declarations and bodies also run on workers, and each body is
+walked once instead of twice.
+
+Serial work also shrank: type predicates are inline, import rewriting
+resolves each file's directory once instead of four times, and IR lowering
+builds the source location index once and resolves each SDK path once. The
+backend's default worker cap rises from four to six; its smaller window keeps
+the memory cost to about 4 MiB.
+
+DNA, interleaved medians: 140 → 117 ms wall, 334 → 345 ms CPU,
+127 → 132 MiB peak RSS. Stages: import loading 27 → 20.5 ms, AST lowering
+23 → 14.5 ms, type checking 17.4 → 14.7 ms, IR lowering 10.8 → 8.7 ms.
+Objects stay byte-identical on 46 project and target builds.
+
+Runs merge in order as soon as each finishes, so only runs still in flight
+exist beside the program; a run that reports a diagnostic truncates the
+program back to its earlier counts before the serial retry. Worker heap
+arenas would otherwise hold the merged runs' memory for the rest of the
+build, so glibc builds return it with `malloc_trim` after the merge.
+
+Import loading falls from 20.5 to about 17 ms. Imported directories load
+from a work queue as soon as an import names them, instead of level by level
+with a barrier after each level. Sources copied out of the prefetched
+directories keep their snapshot's facts instead of walking every node again.
+
+`dyn check` on DNA falls from 66 to 50 ms; its peak RSS, set during AST
+lowering, rises from 60 to 64 MiB. Linking DNA takes 2.4–5 ms of a full
+release build, so the linker is not a bottleneck.
+A parallel inliner was measured and dropped: rebuilding bodies is memory
+copying, and the merge copied it again for no gain and 10 MiB more peak RSS.
+Type checking stays serial because instantiating generics creates functions
+whose ids later checks depend on.
+
+## Compiler throughput and memory — 2026-10-29
+
+The native backend now prepares functions on up to four worker threads, at
+most 16 functions per worker ahead of in-order emission on the calling thread.
+`DYN_BACKEND_JOBS` overrides the worker count. String literals prepared on
+workers are interned in encounter order at emission, so objects stay
+byte-identical to serial builds.
+
+Algorithmic changes cut single-threaded work as well:
+
+- The range prover indexes branch facts by value and tests dominance in O(1)
+  with dominator-tree DFS intervals; CSE uses the same test.
+- Liveness groups cross-block uses by value, so no block is walked twice for
+  one value.
+- Optimization rounds stop after five passes in a row change nothing, and
+  operand resolution runs only after a pass that changed something.
+- Range queries are memoized within each prove pass.
+- Load forwarding skips its second region classification when nothing was
+  forwarded, and forwards runs of disjoint same-base stores across
+  straight-line blocks.
+- Import rewriting patches the parsed tree instead of reparsing each file:
+  renames shift offsets and `alias.member` collapses into one name. Edits of
+  any other shape still reparse.
+- The inliner appends to the expression and statement arrays in place instead
+  of copying them first.
+- The parser handles literal tokens before testing keyword spellings, which
+  halves the load time of generated data tables.
+- Struct layout is memoized per object.
+
+Byte fills of global byte arrays now apply at O2 as well as O3 (x86 only).
+They are the only intended code change; all other changes keep objects
+byte-identical on 46 project and target builds.
+
+Interleaved medians, x86_64 Linux, release object builds without caches,
+measured with `tools/bench/compile.py`:
+
+| Project | Before | After | CPU before / after | Peak RSS before / after |
+|---|---|---|---|---|
+| DNA (62k lines) | 461 ms | 141 ms | 550 / 339 ms | 154 / 127 MiB |
+| http-server | 25.3 ms | 13.6 ms | | 36 / 42 MiB |
+| std fixture | 27.4 ms | 16.7 ms | | 26 / 34 MiB |
+
+DNA single-threaded (`DYN_BACKEND_JOBS=1`) falls from 348 to about 230 ms.
+Sieve runtime falls from about 1.23x to 1.17x of `cc -O2`. Small projects use
+a few MiB more peak RSS because the worker threads and their stacks dominate.
+
+The remaining serial cost is the frontend: AST lowering, type checking and IR
+lowering take about 55 ms of DNA's build before the backend can start.
+
 ## Real-application follow-up — 2026-10-20
 
 The real-project matrix covers a 10.8 MB JSON validation input, a PTY-driven

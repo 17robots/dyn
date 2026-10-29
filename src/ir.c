@@ -43,15 +43,27 @@ static char *sdk_source_path(const char *path, bool strict_configured) {
   }
   return NULL;
 }
-static DynMathIntrinsic math_identity(const DynSource *source,
+/* Functions of one file share its path; resolve it once. */
+typedef struct {
+  const char *path;
+  char *canonical;
+} CanonicalPath;
+static const char *canonical_path(CanonicalPath *cache, const char *path) {
+  if (!cache->path || (cache->path != path && strcmp(cache->path, path))) {
+    free(cache->canonical);
+    cache->canonical = realpath(path, NULL);
+    cache->path = path;
+  }
+  return cache->canonical;
+}
+static DynMathIntrinsic math_identity(const DynSource *source, CanonicalPath *paths,
                                      const char *source_path, const char *sdk,
                                      const DynIrProgram *ir, const DynIrFunction *fn) {
   if (!sdk || !source_path || fn->foreign || fn->variadic || fn->generic ||
       !fn->is_public || (fn->return_type != DYN_TYPE_F32 && fn->return_type != DYN_TYPE_F64))
     return DYN_MATH_INTRINSIC_NONE;
-  char *canonical = realpath(source_path, NULL);
+  const char *canonical = canonical_path(paths, source_path);
   bool trusted = canonical && !strcmp(canonical, sdk);
-  free(canonical);
   if (!trusted) return DYN_MATH_INTRINSIC_NONE;
   const char *original, *ignored_path;
   size_t length, offset;
@@ -82,7 +94,7 @@ static bool byte_const_slice(const DynAstProgram *a, DynType type) {
 }
 /* Only the current SDK's original ordinary declaration can gain this identity.
    Read AST slice metadata: IR slice entries are populated after functions. */
-static DynByteIntrinsic byte_identity(const DynSource *source,
+static DynByteIntrinsic byte_identity(const DynSource *source, CanonicalPath *paths,
                                      const char *source_path, const char *sdk,
                                      const DynAstProgram *a, const DynIrProgram *ir,
                                      const DynIrFunction *fn) {
@@ -92,9 +104,8 @@ static DynByteIntrinsic byte_identity(const DynSource *source,
       2 > ir->param_count - fn->param_start ||
       !byte_const_slice(a, ir->params[fn->param_start].type))
     return DYN_BYTE_INTRINSIC_NONE;
-  char *canonical = realpath(source_path, NULL);
+  const char *canonical = canonical_path(paths, source_path);
   bool trusted = canonical && !strcmp(canonical, sdk);
-  free(canonical);
   if (!trusted) return DYN_BYTE_INTRINSIC_NONE;
   const char *original, *ignored_path;
   size_t length, offset;
@@ -114,7 +125,7 @@ static DynByteIntrinsic byte_identity(const DynSource *source,
 
 /* The private JSON scanner has a scalar body on every target. Only its exact
    SDK declaration may use the bounded x86 implementation. */
-static DynByteIntrinsic json_byte_identity(const DynSource *source,
+static DynByteIntrinsic json_byte_identity(const DynSource *source, CanonicalPath *paths,
                                           const char *source_path, const char *sdk,
                                           const char *mutable_sdk,
                                           const DynAstProgram *a, const DynIrProgram *ir,
@@ -124,10 +135,9 @@ static DynByteIntrinsic json_byte_identity(const DynSource *source,
       fn->return_type != DYN_TYPE_USIZE || fn->param_count != 1 ||
       fn->param_start >= ir->param_count ||
       !byte_const_slice(a, ir->params[fn->param_start].type)) return DYN_BYTE_INTRINSIC_NONE;
-  char *canonical = realpath(source_path, NULL);
+  const char *canonical = canonical_path(paths, source_path);
   bool trusted = canonical && ((sdk && !strcmp(canonical, sdk)) ||
                                (mutable_sdk && !strcmp(canonical, mutable_sdk)));
-  free(canonical);
   if (!trusted) return DYN_BYTE_INTRINSIC_NONE;
   const char *original, *ignored_path;
   size_t length, offset;
@@ -153,15 +163,16 @@ static bool allocate(void **out, size_t count, size_t size) {
   return *out != NULL;
 }
 
-static char *copy_span(DynSpan span, const DynSource *source) {
+/* Copies a name into the program's name pool at *cursor. */
+static char *copy_span(DynSpan span, const DynSource *source, char **cursor) {
   size_t n = span.end_byte - span.start_byte;
-  char *text = malloc(n + 1);
-  if (!text)
-    return NULL;
+  char *text = *cursor;
   memcpy(text, source->text + span.start_byte, n);
   text[n] = 0;
+  *cursor += n + 1;
   return text;
 }
+static size_t span_bytes(DynSpan span) { return span.end_byte - span.start_byte + 1; }
 
 static bool valid_expr_id(const DynIrProgram *ir, DynExprId id) {
   return id == DYN_NO_EXPR || id < ir->expression_count;
@@ -412,6 +423,20 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
     dyn_ir_free(ir);
     return false;
   }
+  /* One pool holds every declaration and local name. */
+  size_t name_bytes = 1;
+  for (size_t i = 0; i < a->field_count; ++i) name_bytes += span_bytes(a->fields[i].name);
+  for (size_t i = 0; i < a->struct_count; ++i) name_bytes += span_bytes(a->structs[i].name);
+  for (size_t i = 0; i < a->enum_count; ++i) name_bytes += span_bytes(a->enums[i].name);
+  for (size_t i = 0; i < a->variant_count; ++i) name_bytes += span_bytes(a->variants[i].name);
+  for (size_t i = 0; i < a->param_count; ++i) name_bytes += span_bytes(a->params[i].name);
+  for (size_t i = 0; i < a->local_count; ++i) name_bytes += span_bytes(a->locals[i].name);
+  ir->names = malloc(name_bytes);
+  if (!ir->names) {
+    dyn_ir_free(ir);
+    return false;
+  }
+  char *cursor = ir->names;
   for (size_t i = 0; i < a->expression_count; ++i)
     ir->expressions[i] = (DynIrExpr){
         a->expressions[i].kind,       lower_type(a, a->expressions[i].type),
@@ -428,15 +453,11 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
     }
   for (size_t i = 0; i < a->item_count; ++i) ir->items[i] = (DynIrItem){a->items[i].expression, a->items[i].field_index};
   for (size_t i = 0; i < a->field_count; ++i) {
-    ir->fields[i] = (DynIrField){.name = copy_span(a->fields[i].name, source), .type = lower_type(a, a->fields[i].type), .default_expression = a->fields[i].default_expression};
-    if (!ir->fields[i].name) {
-      dyn_ir_free(ir);
-      return false;
-    }
+    ir->fields[i] = (DynIrField){.name = copy_span(a->fields[i].name, source, &cursor), .type = lower_type(a, a->fields[i].type), .default_expression = a->fields[i].default_expression};
   }
   for (size_t i = 0; i < a->struct_count; ++i) {
     ir->structs[i] =
-        (DynIrStruct){.name = copy_span(a->structs[i].name, source),
+        (DynIrStruct){.name = copy_span(a->structs[i].name, source, &cursor),
                       .span = a->structs[i].span,
                       .packed = a->structs[i].packed,
                       .is_public = a->structs[i].is_public,
@@ -445,14 +466,10 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
                       .field_count = a->structs[i].field_count,
                       .size = a->structs[i].size,
                       .alignment = a->structs[i].alignment};
-    if (!ir->structs[i].name) {
-      dyn_ir_free(ir);
-      return false;
-    }
   }
   for (size_t i = 0; i < a->enum_count; ++i) {
     ir->enums[i] =
-        (DynIrEnum){.name = copy_span(a->enums[i].name, source),
+        (DynIrEnum){.name = copy_span(a->enums[i].name, source, &cursor),
                     .span = a->enums[i].span,
                     .tag_type = a->enums[i].tag_type,
                     .variant_start = a->enums[i].variant_start,
@@ -464,28 +481,19 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
                     .has_payload = a->enums[i].has_payload,
                     .is_public = a->enums[i].is_public,
                     .module_owner = a->enums[i].module_owner};
-    if (!ir->enums[i].name) {
-      dyn_ir_free(ir);
-      return false;
-    }
   }
   for (size_t i = 0; i < a->variant_count; ++i) {
-    ir->variants[i] = (DynIrVariant){ .name = copy_span(a->variants[i].name, source), .payload_type = lower_type(a, a->variants[i].payload_type), .tag = a->variants[i].tag};
-    if (!ir->variants[i].name) {
-      dyn_ir_free(ir);
-      return false;
-    }
+    ir->variants[i] = (DynIrVariant){ .name = copy_span(a->variants[i].name, source, &cursor), .payload_type = lower_type(a, a->variants[i].payload_type), .tag = a->variants[i].tag};
   }
   for (size_t i = 0; i < a->param_count; ++i) {
-    ir->params[i] = (DynIrParam){.name = copy_span(a->params[i].name, source), .type = lower_type(a, a->params[i].type), .local_id = a->params[i].local_id};
-    if (!ir->params[i].name) {
-      dyn_ir_free(ir);
-      return false;
-    }
+    ir->params[i] = (DynIrParam){.name = copy_span(a->params[i].name, source, &cursor), .type = lower_type(a, a->params[i].type), .local_id = a->params[i].local_id};
   }
-  /* Function locations share line tables instead of rescanning every prefix. If indexing runs out of memory, lookup retains its unindexed fallback. */
-  DynLocationIndex locations = {0};
-  (void)dyn_location_build(&locations, source);
+  /* Function locations share line tables instead of rescanning every prefix.
+     The index stays with the program for later passes. If indexing runs out
+     of memory, lookup retains its unindexed fallback. */
+  (void)dyn_location_build(&ir->locations, source);
+  DynLocationIndex locations = ir->locations;
+  CanonicalPath paths = {0};
   char *math_sdk = proofs ? sdk_source_path("std/math/float.dyn", false) : NULL;
   char *bytes_sdk = proofs ? sdk_source_path("std/bytes/bytes.dyn", true) : NULL;
   char *json_sdk = proofs ? sdk_source_path("std/encoding/json/read/read.dyn", true) : NULL;
@@ -499,7 +507,7 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
       free(json_sdk);
       free(bytes_sdk);
       free(math_sdk);
-      dyn_location_free(&locations);
+      free(paths.canonical);
       dyn_ir_free(ir);
       return false;
     }
@@ -535,7 +543,7 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
       free(json_sdk);
       free(bytes_sdk);
       free(math_sdk);
-      dyn_location_free(&locations);
+      free(paths.canonical);
       dyn_ir_free(ir);
       return false;
     }
@@ -559,16 +567,16 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
     ir->functions[i].is_public = a->functions[i].is_public;
     ir->functions[i].module_owner = a->functions[i].module_owner;
     ir->functions[i].variadic_type = lower_type(a, a->functions[i].variadic_type);
-    ir->functions[i].math_intrinsic = math_identity(source, source_path, math_sdk, ir, &ir->functions[i]);
-    ir->functions[i].byte_intrinsic = byte_identity(source, source_path, bytes_sdk, a, ir, &ir->functions[i]);
+    ir->functions[i].math_intrinsic = math_identity(source, &paths, source_path, math_sdk, ir, &ir->functions[i]);
+    ir->functions[i].byte_intrinsic = byte_identity(source, &paths, source_path, bytes_sdk, a, ir, &ir->functions[i]);
     if (ir->functions[i].byte_intrinsic == DYN_BYTE_INTRINSIC_NONE)
-      ir->functions[i].byte_intrinsic = json_byte_identity(source, source_path, json_sdk, mutable_json_sdk, a, ir, &ir->functions[i]);
+      ir->functions[i].byte_intrinsic = json_byte_identity(source, &paths, source_path, json_sdk, mutable_json_sdk, a, ir, &ir->functions[i]);
   }
   free(mutable_json_sdk);
   free(json_sdk);
   free(bytes_sdk);
   free(math_sdk);
-  dyn_location_free(&locations);
+  free(paths.canonical);
   for (size_t i = 0; i < a->global_count; ++i) {
     size_t n = a->globals[i].name.end_byte - a->globals[i].name.start_byte;
     ir->globals[i].name = malloc(n + 1);
@@ -611,11 +619,7 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
     if (a->strings[i].length) memcpy(ir->strings[i].data, a->strings[i].data, a->strings[i].length);
   }
   for (size_t i = 0; i < a->local_count; ++i) {
-    ir->locals[i] = (DynIrLocal){.name = copy_span(a->locals[i].name, source), .type = lower_type(a, a->locals[i].type)};
-    if (!ir->locals[i].name) {
-      dyn_ir_free(ir);
-      return false;
-    }
+    ir->locals[i] = (DynIrLocal){.name = copy_span(a->locals[i].name, source, &cursor), .type = lower_type(a, a->locals[i].type)};
   }
   for (size_t i = 0; i < a->statement_count; ++i)
     ir->statements[i] = (DynIrStmt){a->statements[i].kind,
@@ -733,12 +737,7 @@ void dyn_ir_free(DynIrProgram *ir) {
   for (size_t i = 0; ir->functions && i < ir->function_count; ++i) free(ir->functions[i].link_name);
   for (size_t i = 0; ir->globals && i < ir->global_count; ++i) free(ir->globals[i].name);
   for (size_t i = 0; ir->globals && i < ir->global_count; ++i) free(ir->globals[i].link_name);
-  for (size_t i = 0; ir->params && i < ir->param_count; ++i) free(ir->params[i].name);
-  for (size_t i = 0; ir->locals && i < ir->local_count; ++i) free(ir->locals[i].name);
-  for (size_t i = 0; ir->fields && i < ir->field_count; ++i) free(ir->fields[i].name);
-  for (size_t i = 0; ir->structs && i < ir->struct_count; ++i) free(ir->structs[i].name);
-  for (size_t i = 0; ir->enums && i < ir->enum_count; ++i) free(ir->enums[i].name);
-  for (size_t i = 0; ir->variants && i < ir->variant_count; ++i) free(ir->variants[i].name);
+  free(ir->names);
   free(ir->expressions);
   free(ir->items);
   free(ir->fields);

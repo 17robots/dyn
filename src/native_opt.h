@@ -14,5 +14,7 @@ bool dyn_native_optimize(const DynSource *, const DynIrProgram *, unsigned,
    disable them while retaining ordinary scalar inlining. */
 bool dyn_native_optimize_for_emission(const DynSource *, const DynIrProgram *, unsigned,
                                       bool, DynNativeOptimization *);
+/* Frees the input's expressions and statements once they are unused. */
+bool dyn_native_optimize_owned(const DynSource *, DynIrProgram *, unsigned, bool, DynNativeOptimization *);
 void dyn_native_optimization_free(DynNativeOptimization *);
 #endif
