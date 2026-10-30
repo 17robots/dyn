@@ -39,3 +39,5 @@ else:
     shutil.copy2(COMPILER/'THIRD_PARTY_NOTICES.md', prefix/'share/dyn/THIRD_PARTY_NOTICES.md')
     shutil.copytree(COMPILER/'std', prefix/'share/dyn', dirs_exist_ok=True)
     shutil.copytree(COMPILER/'vendor', prefix/'share/dyn/vendor', dirs_exist_ok=True)
+    (prefix/'share/gdb').mkdir(parents=True, exist_ok=True)
+    shutil.copy2(COMPILER/'tools/debugger/dyn_gdb.py', prefix/'share/gdb/dyn.py')
