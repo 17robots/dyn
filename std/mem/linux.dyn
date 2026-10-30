@@ -6,6 +6,15 @@ fn mapping_allocate(size: usize) Mapping {
   if address < 0 {
     return Mapping{ error: address }
   }
+  // With transparent huge pages set to "always", the first touch of a large
+  // aligned reservation faults a whole 2 MiB page, so every small arena would
+  // cost 2 MiB resident. Opt only the leading 2 MiB out; bigger arenas still
+  // get huge pages for the rest. Advice failure only loses the saving.
+  head := size
+  if head > 2 * MiB {
+    head = 2 * MiB
+  }
+  _ = #syscall(28, address, head, 15)
   return Mapping{ bytes: (#cast(*u8, address))[..size], committed: size, ok: true }
 }
 fn mapping_release(bytes: []u8) isize {

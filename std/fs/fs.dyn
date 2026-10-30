@@ -218,6 +218,16 @@ pub fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) ReadAllR
   total: usize = 0
   error: isize = 0
   kind := errors.Kind.None
+  // Size the first allocation from the descriptor when it reports a length.
+  // Geometric growth copies into new arena space and retains each earlier
+  // buffer until the caller rewinds, so a 20 MiB file can pin ~40 MiB.
+  // The size is only a hint: growth and EOF probing still handle files that
+  // change length while being read, and pseudo files that report zero.
+  hint: usize = 0
+  info := file_metadata(&opened.value)
+  if info.ok && info.size != 0 && info.size <= #cast(u64, maximum) {
+    hint = #cast(usize, info.size)
+  }
   for {
     capacity := #len(output) - total
     if capacity > 65536 {
@@ -241,7 +251,9 @@ pub fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) ReadAllR
         break
       }
       wanted := maximum
-      if total == 0 {
+      if total == 0 && hint != 0 {
+        wanted = hint
+      } else if total == 0 {
         if wanted > 65536 {
           wanted = 65536
         }
@@ -249,7 +261,10 @@ pub fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) ReadAllR
         wanted = total * 2
       }
       available := memory.arena_remaining(arena)
-      if total == 0 && available != 0 && wanted > available {
+      // A hinted size is kept whole: clamping it to the current block's tail
+      // would force a regrow copy that the hint exists to avoid.
+      exact := hint != 0 && !arena.fixed_buffer
+      if total == 0 && !exact && available != 0 && wanted > available {
         wanted = available
       } else if total != 0 && available != 0 && wanted - total > available {
         wanted = total + available

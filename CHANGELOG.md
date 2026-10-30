@@ -12,6 +12,23 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
+## 0.1.0-preview.29
+
+This release is source compatible with preview.28. No code migrations.
+
+- `fs.read_all` sizes its first allocation from the open file's reported
+  length. Regular files are read into one exact allocation instead of growing
+  geometrically, so earlier copies no longer stay pinned in the arena until
+  the caller rewinds. Files that change length while being read, FIFOs and
+  pseudo files that report zero still use the growing path.
+- Linux arena blocks advise the kernel not to back their first 2 MiB with
+  transparent huge pages. On systems with THP set to `always`, each small
+  arena previously faulted a full 2 MiB page on first use; 32 small arenas
+  now cost about 128 KiB resident instead of 64 MiB. Larger arenas still use
+  huge pages past their first 2 MiB.
+- `#syscall(28, ...)` (`madvise`) is mapped for AArch64 and RISC-V Linux
+  targets.
+
 ## 0.1.0-preview.28
 
 This release preserves preview.27's pointer-handle, chained arena API. Upgrade

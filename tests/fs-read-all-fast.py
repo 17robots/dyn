@@ -90,6 +90,14 @@ fn main() {
  _=mem.push_bytes_uninit(fifo_arena,4096)
  for i in 0..#len(pipe.value) { require(pipe.value[i]==#cast(u8,i%239),"FIFO output lifetime") }
  for byte in fifo_prefix { require(byte==83,"FIFO prefix canary") }
+ // Regular files are sized once: no geometric copies stay pinned in the arena.
+ sized:=mem.arena_create(0)
+ defer mem.arena_release(sized)
+ sized_large:=fs.read_all(sized,"DIR/large",1048576)
+ require(sized_large.ok && #len(sized_large.value)==131073,"sized extent")
+ for i in 0..#len(sized_large.value) { require(sized_large.value[i]==#cast(u8,i%251),"sized payload") }
+ sized_state:=mem.arena_snapshot(sized)
+ require(sized_state.used==131073 && sized_state.peak_used==131073,"sized single allocation")
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-read-all-') as tmp:
