@@ -12,6 +12,18 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
+## 0.1.0-preview.30
+
+This release is source compatible with preview.29. No code migrations.
+
+- "Unknown type in parameter" and "unknown type in global declaration"
+  diagnostics now span the type itself (`*App`), not the `: ` before it.
+  Editors underline the right text.
+- The SDK ships GDB pretty-printers at `share/gdb/dyn.py`. They print strings
+  and slices bounded by `len` (`"hey"`, `len 2 = {1, 2}`) instead of reading
+  `data` as a NUL-terminated C string. Load them with
+  `source <sdk>/share/gdb/dyn.py`; see `docs/guide/debugging.md`.
+
 ## 0.1.0-preview.29
 
 This release is source compatible with preview.28. No code migrations.

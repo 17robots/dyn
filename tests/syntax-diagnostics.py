@@ -18,6 +18,8 @@ CASES = {
     'stray-character': ('fn main() {\n  x := 1;\n}\n', '2:9: error: unexpected character \';\' [range 2:9-2:10]'),
     'invisible-character': ('fn main() {\n  return \u2028\n}\n', '2:10: error: unexpected character U+2028 [range 2:10-2:13]'),
     'trailing-expression': ('fn main() {\n  return 1\n  2\n}\n', '3:3: error: expression is not a statement [range 3:3-3:4]'),
+    # Spans cover the type itself, not the `: ` before it (editors underline this range).
+    'unknown-parameter-type': ('fn f(app: *App) {\n}\nfn main() {}\n', '1:11: error: unknown type in parameter [range 1:11-1:15]'),
 }
 
 with tempfile.TemporaryDirectory(prefix='dyn-syntax-diagnostics-') as temporary:

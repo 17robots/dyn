@@ -70,6 +70,12 @@ with tempfile.TemporaryDirectory(prefix='dyn-native-debugger-') as directory:
                               '-ex', 'break main.dyn:11', '-ex', 'continue', '-ex', 'info locals',
                               '-ex', 'print s.payload.Square', '-ex', 'print s.tag', str(program)],
                              capture_output=True, text=True, timeout=60)
+    printers = subprocess.run(['gdb', '-batch', '-nx', '-ex', 'set debuginfod enabled off',
+                               '-ex', 'source ' + str(ROOT / 'tools/debugger/dyn_gdb.py'),
+                               '-ex', 'break main.dyn:29', '-ex', 'run',
+                               '-ex', 'print name', '-ex', 'print values', str(program)],
+                              capture_output=True, text=True, timeout=60)
+    assert '$1 = "hey"' in printers.stdout, (printers.stdout, printers.stderr)
     output = session.stdout
     for expected in ('add (a=2, b=3) at', 'main.dyn:29', 'c = 5', 'p = {x = 2, y = 3}',
                      'col = Green', '$1 = 3', '$2 = "hey"', '$3 = "\\001\\002\\003"',

@@ -34,6 +34,20 @@ and can become unavailable after leaving its lexical scope. Values are represent
 native machine layout; slices and aggregates may be shown as debugger fields rather than Dyn
 syntax.
 
+GDB prints a slice's `data` as a C string and reads past `len` until a NUL byte. The SDK ships
+pretty-printers that bound strings and slices by `len`:
+
+```text
+(gdb) source <sdk>/share/gdb/dyn.py
+(gdb) print name
+$1 = "hey"
+(gdb) print view
+$2 = len 2 = {1, 2}
+```
+
+Add the `source` line to `~/.gdbinit` to load them in every session. Fields stay available:
+`print view.len`, `print view.data[1]`.
+
 Dyn panic output needs no debugger and reports active functions with declaration locations:
 
 ```text
