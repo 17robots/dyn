@@ -313,7 +313,8 @@ static bool compact_add_globals(const DynSource *s, DynAstProgram *a,
                                         : tq,
                                     s, a);
     if (type == DYN_TYPE_ERROR)
-      compact_report(tq, s, errors, "unknown type in global declaration");
+      compact_report(!(compact_kind(tq) != SRC_QUALIFIER) ? compact_child(tq, 0) : tq, s, errors,
+                     "unknown type in global declaration");
     if (!reserve_global(a)) {
       compact_report(v, s, errors, "out of memory");
       return false;
@@ -425,7 +426,8 @@ static bool compact_add_generic(const DynSource *s, DynAstProgram *a, unsigned *
                        "type parameter declared more than once; write `T`, not `$T`, after its first use");
         ok = false;
       } else if (type == DYN_TYPE_ERROR) {
-        compact_report(qualifier, s, errors, "unknown type in parameter");
+        /* The qualifier spans ": T"; point at the type itself. */
+        compact_report(compact_child(qualifier, 0), s, errors, "unknown type in parameter");
         ok = false;
       }
       for (CompactNode q = compact_child(c, 0); !compact_null(q); q = compact_next(q)) {
@@ -510,7 +512,7 @@ static bool compact_add_function_signatures(const DynSource *s,
                            ? DYN_TYPE_ERROR
                            : compact_type(compact_child(tq, 0), s, a);
         if (type == DYN_TYPE_ERROR)
-          compact_report(compact_null(tq) ? c : tq, s, errors,
+          compact_report(compact_null(tq) ? c : compact_child(tq, 0), s, errors,
                      "unknown type in parameter");
         else if (type == DYN_TYPE_VOID)
           compact_report(tq, s, errors, "parameter requires a non-void type");
