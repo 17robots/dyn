@@ -45,8 +45,8 @@ fn main() {
   large.bytes[39] = 7
   other := large_provider(large)
   if large.value != 41 || other.value != 42 || other.bytes[39] != 7 { #panic("large byval ABI") }
-  packed := packed_provider(Packed{small: 3, wide: 8})
-  if packed.small != 3 || packed.wide != 9 { #panic("packed ABI") }
+  packed_value := packed_provider(Packed{small: 3, wide: 8})
+  if packed_value.small != 3 || packed_value.wide != 9 { #panic("packed ABI") }
   values := [1, 2, 3, 4]
   sum: i32 = 0
   for value in values { sum += value }

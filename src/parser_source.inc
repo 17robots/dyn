@@ -41,13 +41,9 @@ static bool src_next_is(Parser *p, const char *word) {
   Token next = src_peek(p);
   return next.end - next.start == strlen(word) && at(p, next.start, word);
 }
-/* distinct, packed and is are keywords only where they start their construct,
-   so they stay usable as ordinary names everywhere else. */
-static bool src_distinct(Parser *p) { return is(p, "distinct") && src_next_is(p, "type"); }
-static bool src_packed(Parser *p) { return is(p, "packed") && src_next_is(p, "struct"); }
-static bool src_type_pattern(Parser *p) {
-  return is(p, "is") && !src_next_is(p, "=>") && !src_next_is(p, ",") && !src_next_is(p, "..");
-}
+static bool src_distinct(Parser *p) { return is(p, "distinct"); }
+static bool src_packed(Parser *p) { return is(p, "packed"); }
+static bool src_type_pattern(Parser *p) { return is(p, "is"); }
 static uint32_t src_literal(Parser *p, TokenKind token_kind, ExpKind kind) {
   Token token = p->token;
   if (token.kind != token_kind) { fail(p, token.start, "expected literal"); return NONE; }

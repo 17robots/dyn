@@ -171,6 +171,10 @@ fn parse_name(p: *Parser) u32 {
     fail(p, token.start, "expected identifier")
     return None
   }
+  if token_is(p, "distinct") || token_is(p, "packed") || token_is(p, "is") {
+    fail(p, token.start, "reserved keyword cannot be a name")
+    return None
+  }
   lex(p)
   return add_node(p, ExpName, token.start, token.end, None)
 }
@@ -592,6 +596,10 @@ fn parse_operand(p: *Parser, minimum: i32) u32 {
     } else if token.kind == TokenKind.Name && token_is(p, "nil") {
       kind = ExpNil
     } else if token.kind == TokenKind.Name {
+      if token_is(p, "distinct") || token_is(p, "packed") || token_is(p, "is") {
+        fail(p, token.start, "reserved keyword cannot be a name")
+        return None
+      }
       primary = true
     } else if token_is(p, "#reverse") {
       fail(p, token.start, "#reverse is valid only as a for-loop iterable")

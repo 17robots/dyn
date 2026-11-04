@@ -17,6 +17,8 @@ servers so they pick up the new `dyn`.
 - Breaking: struct field defaults are removed. `struct S { n: i32 = 4 }` is now
   a compile error. Every struct starts from zeros on every path, so make zero a
   useful value, set the field in the literal, or use a named constant.
+- Breaking: `distinct`, `packed` and `is` are always reserved. `stb_rect_pack`
+  renames `Rectangle.packed` to `was_packed` and `Result.packed` to `count`.
 - `ui.Style` no longer has built-in colors. Write
   `ui.Context{ style: ui.default_style }`; a zero style draws nothing.
 - Zero is now the safe state for handles. `fs.File`, `net.Connection`,

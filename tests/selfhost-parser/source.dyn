@@ -65,17 +65,16 @@ fn src_next_is(p: *Parser, word: []const u8) bool {
   return #cast(usize, next.end - next.start) == #len(word) && at(p, next.start, word)
 }
 
-// distinct, packed and is are keywords only where they start their construct.
 fn src_distinct(p: *Parser) bool {
-  return token_is(p, "distinct") && src_next_is(p, "type")
+  return token_is(p, "distinct")
 }
 
 fn src_packed(p: *Parser) bool {
-  return token_is(p, "packed") && src_next_is(p, "struct")
+  return token_is(p, "packed")
 }
 
 fn src_type_pattern(p: *Parser) bool {
-  return token_is(p, "is") && !src_next_is(p, "=>") && !src_next_is(p, ",") && !src_next_is(p, "..")
+  return token_is(p, "is")
 }
 
 fn src_literal(p: *Parser, token_kind: TokenKind, kind: u16) u32 {

@@ -34,8 +34,8 @@ fn main() {
   rectangles[1] = atlas.Rectangle{ width: 4, height: 4 }
   rectangles[2] = atlas.Rectangle{ width: 4, height: 4 }
   mark := mem.arena_mark(backing)
-  packed := atlas.pack(backing, 16, 16, rectangles[..])
-  if !packed.ok || packed.packed != 3 || mem.arena_mark(backing) != mark {
+  placed := atlas.pack(backing, 16, 16, rectangles[..])
+  if !placed.ok || placed.count != 3 || mem.arena_mark(backing) != mark {
     #panic("atlas packing")
   }
   i: usize = 0
@@ -55,7 +55,7 @@ fn main() {
     i += 1
   }
   partial := atlas.pack(backing, 4, 4, rectangles[..])
-  if partial.ok || partial.code != 0 || partial.packed != 1 {
+  if partial.ok || partial.code != 0 || partial.count != 1 {
     #panic("atlas partial fit")
   }
   rectangles[0].width = -1

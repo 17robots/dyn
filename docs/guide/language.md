@@ -106,8 +106,7 @@ treating it as text. `const` prevents writes through this view only: another `[]
 same memory can still change the bytes. Character literals contain Unicode scalar values, defaulting to `u8` through 255 and
 `u32` above it; expected `u8`, `u16`, or `u32` may apply when value fits.
 
-`distinct`, `packed` and `is` are keywords only where they begin `distinct type`, `packed
-struct` and a `case` type pattern; elsewhere they are ordinary names. `type` is always reserved.
+`distinct`, `packed`, `is` and `type` are reserved keywords and cannot be names.
 
 `type` creates module-level transparent aliases; aliases may be forward-referenced and
 alias cycles fail. There are no local aliases; declare them at module scope.

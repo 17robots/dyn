@@ -86,9 +86,9 @@ fn fail(data: rawptr, destination: []u8) io.Result {
  return io.Result{ kind: errors.Kind.PermissionDenied, error: state.code, status: io.Status.Error }
 }
 fn results(arena: *mem.Arena, encoded: []const u8, unknown: []const u8, workspace: []u8) {
- packed := z.compress(arena, "portable zstd", 3)
- if !packed.ok || packed.kind != errors.Kind.None || packed.error != 0 { #panic("compress success") }
- unpacked := z.decompress(arena, packed.value)
+ compressed := z.compress(arena, "portable zstd", 3)
+ if !compressed.ok || compressed.kind != errors.Kind.None || compressed.error != 0 { #panic("compress success") }
+ unpacked := z.decompress(arena, compressed.value)
  if !unpacked.ok || unpacked.kind != errors.Kind.None || #len(unpacked.value) != 13 { #panic("roundtrip") }
  mark := mem.arena_used(arena)
  bad := z.decompress(arena, "bad")
