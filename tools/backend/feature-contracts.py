@@ -247,6 +247,7 @@ def main():
                             assert actual == value+extra, (mode,wrapper,value,actual)
                             checks += 1
             for name,value,message in (
+                ('plain',255,'runtime check failed (enum.tag.ok) in plain'),
                 ('pack_order',None,'first variadic argument'),
                 ('any_order',None,'first variadic argument'),
             ):

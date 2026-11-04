@@ -31,6 +31,16 @@ INTEGER_TYPES = {
 }
 
 
+KEYWORDS = set("""distinct packed is union use type struct enum pub fn extern const if else
+for in return break continue defer case true false nil rawptr bool void any string i8 i16 i32
+i64 u8 u16 u32 u64 f32 f64 usize isize""".split())
+
+
+def safe_name(name: str) -> str:
+    """Prefix C names that Dyn reserves; extern link names keep the C spelling."""
+    return "c_" + name if name in KEYWORDS else name
+
+
 def integer_literal(value: str) -> int:
     """C integer literals only; never evaluate arbitrary header expressions."""
     match = re.fullmatch(r"([+-]?)(0[xX][0-9a-fA-F]+|0[0-7]*|[1-9][0-9]*)([uUlL]*)", value.strip())
@@ -258,7 +268,7 @@ def generate(text: str) -> str:
         fields = field_lines(body)
         if fields:
             output.append(f"pub struct {inner} {{")
-            output.extend(f"  {field_name}: {kind}," for field_name, kind in fields)
+            output.extend(f"  {safe_name(field_name)}: {kind}," for field_name, kind in fields)
             output.extend(["}", ""])
             output.extend([f"pub struct {outer} {{", f"  {field}: {inner},", "}", ""])
 
@@ -279,13 +289,13 @@ def generate(text: str) -> str:
                 if raw == "...": variadic = True; continue
                 parsed = parse_parameter(raw)
                 if parsed is None: supported = False; break
-                parameters.append(f"{parsed[0]}: {parsed[1]}")
+                parameters.append(f"{safe_name(parsed[0])}: {parsed[1]}")
         if variadic: parameters.append("...")
         if not supported or returned is None:
             unsupported_functions.append(f"function {name}: parameter or return type is not representable")
             continue
         suffix = "" if returned == "void" else f" {returned}"
-        output.append(f'pub extern fn {name} "{name}"({", ".join(parameters)}){suffix}')
+        output.append(f'pub extern fn {safe_name(name)} "{name}"({", ".join(parameters)}){suffix}')
     if output[-1] != "": output.append("")
 
     comments = unsupported_functions + unsupported_macros + unsupported_enums
@@ -339,7 +349,7 @@ def verify_layout(header: pathlib.Path, source: str, generated: str,
             expressions = [(f"sizeof({ctype})", f"#sizeof({name})"),
                            (f"_Alignof({ctype})", f"#alignof({name})")]
             expressions += [(f"offsetof({ctype},{field})",
-                             f"(#cast(usize, &{variable}.{field}) - #cast(usize, &{variable}))") for field in members]
+                             f"(#cast(usize, &{variable}.{safe_name(field)}) - #cast(usize, &{variable}))") for field in members]
             for cexpr, dexpr in expressions:
                 symbol = f"dyn_binding_layout_{count}"
                 c.append(f"size_t {symbol}(void) {{ return {cexpr}; }}")
