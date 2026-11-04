@@ -3777,6 +3777,14 @@ bool dyn_sema_base(DynAstProgram *a, const DynSource *s, unsigned *errors) {
       const DynAstExpr *e = &a->expressions[i];
       if (e->kind == DYN_EXPR_SYSCALL)
         sema_vet_note(s, e->span, true, "unsafe: #syscall");
+      else if (e->kind == DYN_EXPR_BINARY && e->op == DYN_OP_MUL &&
+               e->left != DYN_NO_EXPR && e->right != DYN_NO_EXPR) {
+        const DynAstExpr *l = &a->expressions[e->left], *r = &a->expressions[e->right];
+        bool left_size = l->span.end_byte - l->span.start_byte > 7 && !memcmp(s->text + l->span.start_byte, "#sizeof", 7);
+        bool right_size = r->span.end_byte - r->span.start_byte > 7 && !memcmp(s->text + r->span.start_byte, "#sizeof", 7);
+        if ((left_size && r->kind != DYN_EXPR_INT) || (right_size && l->kind != DYN_EXPR_INT))
+          sema_vet_note(s, e->span, true, "unsafe: size multiplication wraps; check the count");
+      }
       else if ((e->kind == DYN_EXPR_CAST || e->kind == DYN_EXPR_BITCAST) && e->left != DYN_NO_EXPR) {
         DynType from = a->expressions[e->left].type;
         bool to_pointer = dyn_type_is_pointer(e->type) || e->type == DYN_TYPE_RAWPTR;

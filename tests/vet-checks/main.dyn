@@ -9,3 +9,7 @@ fn main() {
   raw := #cast(rawptr, pointer)
   _ = raw
 }
+
+fn bytes_for(count: usize) usize {
+  return #sizeof(u64) * count
+}

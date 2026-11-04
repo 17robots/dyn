@@ -211,3 +211,11 @@ that are overwritten right away. All three panic when the arena is full, like
 `mem.arena_push`. Code with a strict budget on a fixed arena can use
 `mem.arena_try_push`, `mem.try_push`, or `mem.try_push_array` to report
 exhaustion instead.
+
+## Threads
+
+Share nothing by default. Give each thread its own arena, and pass work between
+threads under a mutex from `std/sync`. Arenas are not
+thread-safe, so a pointer into one thread's arena stays read-only for the others
+until the owner is finished with it. A worker returns results by writing into
+memory the caller handed it, and the caller reads them after the join.

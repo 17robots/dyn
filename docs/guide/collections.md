@@ -1,5 +1,15 @@
 # Arena-backed collections
 
+| Need | Use | Moves items | Allocates on add |
+| --- | --- | --- | --- |
+| Bytes or text | `std/bytes/builder` | Yes, when it grows | Only `append_grow` |
+| Dense list, stable | `mem.append` | Never | Panics at the block end |
+| Dense list, growing | `mem.append_grow` | Yes | Yes |
+| Long list with stable items | Chunk list | Never | One chunk at a time |
+| Links through your own nodes | Intrusive list or tree | Never | No |
+| Lookup by key | `std/container/hash` | Never | No, only the slots |
+| Reusable slots behind stale checks | Generation handles | Never | No |
+
 ## Byte/string builder
 
 `std/bytes/builder` is a byte-oriented builder usable for UTF-8 strings without imposing
@@ -208,3 +218,15 @@ fn damage(enemies: []Enemy, target: slots.Handle) {
   stub. A zero `Handle{}` never resolves.
 - Handles are process-local; they are not IDs to serialize or a security
   capability.
+
+## Sets and priority queues
+
+There is no set type. A set is a hash table whose nodes hold only `key`, `hash`
+and `hash_next`, and membership is a `hash.find` that does not return the stub.
+
+For a priority queue, keep a slice of items and restore order with a binary heap
+in the slice: place a new item at the end and swap it with its parent while it
+sorts first. To pop, move the last item to the front and swap it with its first
+child while it sorts after one. Parents are at `(i - 1) / 2`, children at
+`2 * i + 1` and `2 * i + 2`. A short loop of your own keeps the comparison visible
+and needs no callback.
