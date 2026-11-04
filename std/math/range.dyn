@@ -103,7 +103,7 @@ pub fn rng1i64_dimension(r: Rng1i64) i64 {
 // Integer centers round toward the lower endpoint.
 pub fn rng1i64_center(r: Rng1i64) i64 {
   rng1i64_check(r)
-  return r.min + #cast(i64, #wrap(#cast(u64, r.max) - #cast(u64, r.min)) / 2)
+  return r.min + #cast(i64, (#cast(u64, r.max) - #cast(u64, r.min)) / 2)
 }
 pub fn rng1i64_pad(r: Rng1i64, amount: i64) Rng1i64 {
   rng1i64_check(r)

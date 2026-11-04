@@ -3,6 +3,9 @@
 #include "dyn_ast.h"
 #include "dyn_location.h"
 
+static inline bool dyn_op_wraps(DynOperator op) {
+  return op == DYN_OP_ADD || op == DYN_OP_SUB || op == DYN_OP_MUL || op == DYN_OP_SHL;
+}
 typedef struct {
   bool *functions;
   unsigned char *expressions, *statements;

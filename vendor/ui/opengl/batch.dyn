@@ -151,7 +151,7 @@ struct Cached { entry: *Entry, ok: bool, full: bool }
 
 // The atlas entry for codepoint, rasterizing and uploading it on a miss.
 fn cached(batch: *Batch, font: software.Font, codepoint: u32) Cached {
-  slot := #cast(usize, #wrap(codepoint * 2654435761) % #cast(u32, index_size))
+  slot := #cast(usize, (codepoint * 2654435761) % #cast(u32, index_size))
   for probe in 0..index_size {
     entry := &batch.entries[(slot + probe) % index_size]
     if !entry.used {

@@ -57,7 +57,7 @@ i:u32=0
 for i<n { t:=a
 a=b
 b=t
-i=#wrap(i+1) }
+i=(i+1) }
 return a }
 pub fn localdesc(x:[]const u8) []const u8 { a:=x
 p:=&a

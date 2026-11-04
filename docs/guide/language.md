@@ -121,8 +121,8 @@ Implicit numeric conversion is allowed only when destination represents every so
 value exactly. Constants adapt when their specific value fits, and a literal that does not fit
 its context is a compile error, checked again for each type a generic function is called with.
 An integer literal in a float context is that float when it is exact (up to 2^24 for `f32`,
-2^53 for `f64`), so `x * 2` works for any numeric `T`. Integers use checked
-arithmetic in debug and release. Floats use IEEE-754. Expression evaluation is left-to-right.
+2^53 for `f64`), so `x * 2` works for any numeric `T`. Integer arithmetic
+wraps. Floats use IEEE-754. Expression evaluation is left-to-right.
 Float literals accept trailing dots (`2.`); lexical lookahead keeps `2..3` an integer range.
 Explicit primitive locals without initializers start at zero. Inferred locals require an
 initializer. Local shadowing is forbidden: a local cannot reuse the name of a visible local or
@@ -249,14 +249,12 @@ crosses foreign frames runs Dyn defers but skips cleanup in the C frames between
 ## Numeric rules
 
 Integer widths are fixed except `isize`/`usize`, which match the target pointer width. Signed values
-use two's-complement representation. `+`, `-`, `*`, unary negation, and signed division overflow
-panic at runtime and are rejected when overflowing at compile time. Division/remainder by zero
-panic; the signed minimum divided by `-1` also panics. Shift counts must be nonnegative and less
-than the left operand width. Right shift is arithmetic for signed and logical for unsigned values.
-Bitwise operators require integers. For hashes, random number generators and other code that
-wants modular arithmetic, `#wrap(expression)` makes the `+`, `-`, `*`, unary `-` and `<<`
-written inside it wrap around instead of panicking. Division and shift counts stay checked, and
-calls inside `#wrap` are not affected.
+use two's-complement representation. `+`, `-`, `*`, `<<` and unary negation wrap at runtime; overflow
+in a constant expression is a compile error. Shift counts are masked to the left operand's width, so
+`x << 33` on a `u32` shifts by 1. Right shift is arithmetic for signed and logical for unsigned
+values. Bitwise operators require integers. Division and remainder by zero panic, and the signed
+minimum divided by `-1` panics. `std/math` has `add_overflows`, `sub_overflows`, `mul_overflows` and
+saturating arithmetic for code that wants them.
 
 Untyped integer constants are evaluated exactly for the implemented constant-expression operators,
 then adapted only when their value is representable in the expected type. Runtime implicit numeric
@@ -301,7 +299,7 @@ collections, and ordinary algorithms belong in libraries.
 
 - Conversion: `#cast(Type, value)` and `#bitcast(Type, value)`.
 - Layout and reflection: `#sizeof`, `#alignof`, `#offsetof`, and `#typeof`.
-- Representation and arithmetic: `#len` and `#wrap`.
+- Representation: `#len`.
 - Validation and termination: compile-time `#assert` and runtime `#panic`.
 - Build input and OS boundary: `#load` and `#syscall`.
 - Iteration: `#reverse`, valid only in a `for` iterable.
@@ -325,7 +323,6 @@ Linux x86-64. It does not depend on `std`.
 `#offsetof(Type, field)` is a field's byte offset as a `usize` constant.
 `#assert(condition, "message")` fails compilation when a constant condition is false.
 `#load("file")` embeds a file's bytes as a `[]const u8`; the path is relative to the module directory and may not contain `..`.
-`#wrap(expression)` is described under numeric rules.
 
 `#panic(message)` accepts any `[]const u8` expression; messages need not be literals.
 
@@ -337,7 +334,7 @@ recursive relationships use IDs rather than nested metadata.
 
 ## Removed/deferred syntax
 
-No `inline`, `thread_local`, `as`, wrapping operators such as `+%` (use `#wrap`), `~=`, or C-style casts.
+No `inline`, `thread_local`, `as`, wrapping operators such as `+%`, `~=`, or C-style casts.
 `#cast(T, value)` and `#bitcast(T, value)` are explicit. Unary `!` is bool-only;
 unary `~` is integer-only. Comments do not nest; whitespace is insignificant; semicolons are
 unsupported.
@@ -361,8 +358,8 @@ is not a supported-feature claim:
 
 ## Build modes and syntax stability
 
-Debug and release have identical language correctness semantics. Both retain checked arithmetic,
-division, shifts, bounds, nil, and alignment checks unless proven redundant. Debug records function
+Debug and release have identical language correctness semantics. Both retain division, bounds, nil
+and alignment checks unless proven redundant. Debug records function
 frames for panic diagnostics. Release omits that tracing and enables backend optimization/internal
 linkage; it may therefore show fewer diagnostic frames, never different valid results.
 

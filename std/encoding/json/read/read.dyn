@@ -104,7 +104,7 @@ fn read_number(state: *ReadParser) bool {
           exact = false
         }
         else {
-          integer = #wrap(integer * 10 + n)
+          integer = integer * 10 + n
         }
       }
       at += 1
@@ -152,7 +152,7 @@ fn read_number(state: *ReadParser) bool {
     return true
   }
   if exact && negative && integer != 0 && integer <= 9223372036854775808 {
-    magnitude := #wrap(0 - integer)
+    magnitude := 0 - integer
     index := read_append(state, KindNumber, magnitude)
     state.values[index].tag |= ReadSigned
     return true

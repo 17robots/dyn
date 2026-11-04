@@ -24,7 +24,7 @@ fn autopilot(game: *const breakout.Game) breakout.Input {
 fn hash_pixels(hash: u64, pixels: []const u32) u64 {
   value := hash
   for pixel in pixels {
-    value = #wrap((value ^ #cast(u64, pixel)) * 0x100000001B3)
+    value = ((value ^ #cast(u64, pixel)) * 0x100000001B3)
   }
   return value
 }

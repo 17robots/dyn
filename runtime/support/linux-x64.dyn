@@ -41,7 +41,7 @@ fn unwind_find(rip: u64, landing: *u64) usize {
       return 0
     }
     relative := #cast(i64, #cast(i32, unwind_u32(at + 8)))
-    text := #wrap(#cast(u64, at + 8) + #cast(u64, relative))
+    text := #cast(u64, at + 8) + #cast(u64, relative)
     if rip >= text && rip - text < #cast(u64, unwind_u32(at + 12)) {
       offset := #cast(u32, rip - text)
       functions := #cast(usize, unwind_u32(at + 16))
@@ -96,19 +96,19 @@ fn unwind_walk(slot: *UnwindSlot, state: *UnwindState) {
     frame := state.rbp
     mask := unwind_u32(record + 8)
     if (mask & 1) != 0 {
-      state.rbx = unwind_u64(#wrap(frame + #cast(u64, #cast(i64, #cast(i32, unwind_u32(record + 12))))))
+      state.rbx = unwind_u64(frame + #cast(u64, #cast(i64, #cast(i32, unwind_u32(record + 12)))))
     }
     if (mask & 2) != 0 {
-      state.r12 = unwind_u64(#wrap(frame + #cast(u64, #cast(i64, #cast(i32, unwind_u32(record + 16))))))
+      state.r12 = unwind_u64(frame + #cast(u64, #cast(i64, #cast(i32, unwind_u32(record + 16)))))
     }
     if (mask & 4) != 0 {
-      state.r13 = unwind_u64(#wrap(frame + #cast(u64, #cast(i64, #cast(i32, unwind_u32(record + 20))))))
+      state.r13 = unwind_u64(frame + #cast(u64, #cast(i64, #cast(i32, unwind_u32(record + 20)))))
     }
     if (mask & 8) != 0 {
-      state.r14 = unwind_u64(#wrap(frame + #cast(u64, #cast(i64, #cast(i32, unwind_u32(record + 24))))))
+      state.r14 = unwind_u64(frame + #cast(u64, #cast(i64, #cast(i32, unwind_u32(record + 24)))))
     }
     if (mask & 16) != 0 {
-      state.r15 = unwind_u64(#wrap(frame + #cast(u64, #cast(i64, #cast(i32, unwind_u32(record + 28))))))
+      state.r15 = unwind_u64(frame + #cast(u64, #cast(i64, #cast(i32, unwind_u32(record + 28)))))
     }
     state.rip = unwind_u64(frame + 8)
     state.rsp = frame + 16

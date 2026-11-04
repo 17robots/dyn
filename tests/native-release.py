@@ -12,11 +12,11 @@ with tempfile.TemporaryDirectory(prefix='dyn-native-release-') as directory:
     source = root/'main.dyn'
     output = root/'program'
     # Typed return values force the emitter to respect narrow integer widths.
-    cases = [('u8', '250 + 5', 255), ('u8', '#wrap(250 + 10)', 4),
-             ('u8', '#wrap(1 - 4)', 253), ('u8', '#wrap(200 * 3)', 88),
-             ('i8', '60 + 67', 127), ('i8', '#wrap(120 + 10)', -126),
-             ('i8', '#wrap(100 * 2)', -56), ('u64', '18446744073709551615 - 1', 18446744073709551614),
-             ('u64', '#wrap(18446744073709551615 + 2)', 1),
+    cases = [('u8', '250 + 5', 255), ('u8', '(250 + 10)', 4),
+             ('u8', '(1 - 4)', 253), ('u8', '(200 * 3)', 88),
+             ('i8', '60 + 67', 127), ('i8', '(120 + 10)', -126),
+             ('i8', '(100 * 2)', -56), ('u64', '18446744073709551615 - 1', 18446744073709551614),
+             ('u64', '(18446744073709551615 + 2)', 1),
              ('i64', '(19 + 23) * 2', 84)]
     for ty, expression, expected in cases:
         source.write_text(f'fn value() {ty} {{ return {expression} }}\n'

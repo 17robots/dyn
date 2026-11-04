@@ -499,8 +499,8 @@ static uint32_t parse(Parser *p, int minimum) {
     }
     uint32_t end = p->token.end; expect(p, ")");
     left = node(p, load ? EXP_LOAD : EXP_SYSCALL, token.start, end, first, (Token){0});
-  } else if (is(p, "#wrap") || is(p, "#len")) {
-    ExpKind kind = is(p, "#wrap") ? EXP_WRAP : EXP_LEN;
+  } else if (is(p, "#len")) {
+    ExpKind kind = EXP_LEN;
     lex(p); expect(p, "("); uint32_t child = expression(p, 0); uint32_t end = p->token.end;
     expect(p, ")"); left = node(p, kind, token.start, end, child, (Token){0});
   } else {

@@ -22,7 +22,7 @@ pub fn guarded(s:[]const u8) u64 {
     d:=#cast(u64,digit-48)
     if value>1844674407370955161 { return 18446744073709551615 }
     if value==1844674407370955161 && d>5 { return 18446744073709551615 }
-    value=#wrap(value*10+d)
+    value=(value*10+d)
   }
   return value
 }

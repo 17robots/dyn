@@ -30,7 +30,7 @@ fn churn(seed: u64) u64 {
     #panic("deep panic")
   }
   r := churn(seed + 1)
-  return #wrap(r + a + b + c + d + e + f)
+  return (r + a + b + c + d + e + f)
 }
 fn keeper(seed: u64) u64 {
   x := seed + 1
@@ -40,7 +40,7 @@ fn keeper(seed: u64) u64 {
   v := seed + 5
   defer { show("keeper", x + y * 10 + z * 100 + w * 1000 + v * 10000) }
   r := churn(seed)
-  return #wrap(r + x + y + z + w + v)
+  return (r + x + y + z + w + v)
 }
 fn twice(seed: u64) u64 {
   p := seed * 2

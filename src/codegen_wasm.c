@@ -738,9 +738,9 @@ static unsigned binary(WG *g, DynOperator o, DynType t, DynType rt, unsigned l,
   }
   if (o == DYN_OP_SHL || o == DYN_OP_SHR) {
     get(g, r);
-    icon(g, wsize(g, t) * 8, wvt(g, rt));
-    op(g, wvt(g, rt) == 0x7e ? 0x54 : 0x49);
-    guard(g);
+    icon(g, wsize(g, t) * 8 - 1, wvt(g, rt));
+    op(g, wvt(g, rt) == 0x7e ? 0x83 : 0x71);
+    r = save(g, wvt(g, rt));
     if (wvt(g, rt) != vt) {
       get(g, r);
       op(g, wide ? 0xad : 0xa7);
@@ -1170,28 +1170,6 @@ static unsigned expr(WG *g, DynExprId id) {
     }
     if (wagg(g, e->type))
       return v;
-    if (wen(e->type) && !wen(from)) {
-      DynIrEnum *en = &g->ir->enums[e->type - DYN_TYPE_ENUM_BASE];
-      unsigned ok = constant(g, 0, 0x7f),
-               wide = convert(g, v, from, DYN_TYPE_I64, false);
-      unsigned bits = wsize(g, en->tag_type) * 8;
-      bool sign = wsign(en->tag_type);
-      for (unsigned i = 0; i < en->variant_count; i++) {
-        uint64_t tag = g->ir->variants[en->variant_start + i].tag;
-        if (sign && bits < 64 && (tag & (UINT64_C(1) << (bits - 1))))
-          tag |= UINT64_MAX << bits;
-        if (wsign(from) != sign && (int64_t)tag < 0)
-          continue;
-        get(g, wide);
-        icon(g, tag, 0x7e);
-        op(g, 0x51);
-        get(g, ok);
-        op(g, 0x72);
-        set(g, ok);
-      }
-      get(g, ok);
-      guard(g);
-    }
     return convert(g, v, wtag(g, from), wtag(g, e->type),
                    e->kind == DYN_EXPR_BITCAST);
   }
@@ -1303,7 +1281,7 @@ static void statement(WG *g, const DynIrStmt *s) {
       v = load(g, p, t);
       unsigned r = expr(g, s->expression);
       v = binary(g, s->assignment_op, t, g->ir->expressions[s->expression].type,
-                 v, r, false, false);
+                 v, r, dyn_op_wraps(s->assignment_op), false);
     } else {
       v = expr(g, s->expression);
       if (wagg(g, t)) {

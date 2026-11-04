@@ -16,7 +16,7 @@ fn main() {
   check(fs.map(&closed).kind == errors.Kind.InvalidState)
   content: [5000]u8 = []
   for i in 0..#len(content) {
-    content[i] = #cast(u8, #wrap(i * 7) & 255)
+    content[i] = #cast(u8, (i * 7) & 255)
   }
   check(fs.write_all("map-fixture.bin", content[..]).ok)
   opened := fs.open("map-fixture.bin")

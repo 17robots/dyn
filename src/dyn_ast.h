@@ -130,7 +130,7 @@ typedef struct {
   double floating;
   bool boolean;
   uint32_t item_start, item_count;
-  /* Set inside #wrap(...): integer +, -, *, unary - and << wrap instead of trapping on overflow. */
+  /* Set during lowering for integer +, -, *, unary - and <<. */
   bool wrap;
 } DynAstExpr;
 typedef struct {

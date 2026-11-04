@@ -445,6 +445,14 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
         a->expressions[i].floating,   a->expressions[i].boolean,
         a->expressions[i].item_start, a->expressions[i].item_count,
         a->expressions[i].span,       a->expressions[i].wrap, 0};
+  /* Runtime integer arithmetic wraps. Sema has already rejected constant
+     overflow. Division and shift counts have their own rules. */
+  for (size_t i = 0; i < ir->expression_count; ++i) {
+    DynIrExpr *e = &ir->expressions[i];
+    if ((e->kind == DYN_EXPR_BINARY && dyn_op_wraps(e->op)) ||
+        (e->kind == DYN_EXPR_UNARY && e->op == DYN_OP_NEG))
+      e->wrap = true;
+  }
   for (size_t i = 0; i < ir->expression_count; ++i)
     if (ir->expressions[i].type == DYN_TYPE_INFER) {
       ir->expressions[i].kind = DYN_EXPR_NIL;
@@ -675,7 +683,7 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
     }
     DynType type = ir->expressions[left].type;
     DynExprId binary = (DynExprId)ir->expression_count;
-    ir->expressions[ir->expression_count++] = (DynIrExpr){.kind = DYN_EXPR_BINARY, .type = type, .op = st->assignment_op, .left = left, .right = st->expression, .span = st->span};
+    ir->expressions[ir->expression_count++] = (DynIrExpr){.kind = DYN_EXPR_BINARY, .type = type, .op = st->assignment_op, .wrap = dyn_op_wraps(st->assignment_op), .left = left, .right = st->expression, .span = st->span};
     st->expression = binary;
     st->assignment_op = DYN_OP_NONE;
   }

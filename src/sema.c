@@ -798,7 +798,7 @@ static ConstantInt constant_int_at(DynAstProgram *a, DynExprId id, unsigned foll
   if (id == DYN_NO_EXPR)
     return (ConstantInt){0};
   DynAstExpr *e = &a->expressions[id];
-  /* #wrap results depend on the type's width; they are folded by codegen. */
+  /* Wrapped results depend on the type's width; they are folded by codegen. */
   if (e->wrap)
     return (ConstantInt){0};
   if (follow && e->kind == DYN_EXPR_CONVERT)
@@ -901,7 +901,7 @@ static ConstantUInt constant_uint_at(DynAstProgram *a, DynExprId id, unsigned fo
   if (id == DYN_NO_EXPR)
     return (ConstantUInt){0};
   DynAstExpr *e = &a->expressions[id];
-  /* #wrap results depend on the type's width; they are folded by codegen. */
+  /* Wrapped results depend on the type's width; they are folded by codegen. */
   if (e->wrap)
     return (ConstantUInt){0};
   if (follow && e->kind == DYN_EXPR_CONVERT)
@@ -2403,10 +2403,6 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
   }
   if (!numeric(sema, left))
     error_span(a->expressions[id].span, s, errors, "arithmetic requires numeric operands");
-  if (a->expressions[id].wrap && !integer(sema, left) && numeric(sema, left)) {
-    error_span(a->expressions[id].span, s, errors, "#wrap requires integer arithmetic");
-    return a->expressions[id].type = DYN_TYPE_ERROR;
-  }
   if (integer(sema, left)) {
     ConstantUInt rhs = constant_uint(a, a->expressions[id].right);
     if ((a->expressions[id].op == DYN_OP_DIV || a->expressions[id].op == DYN_OP_REM) && rhs.valid &&

@@ -88,7 +88,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-inline-casts-') as directory:
      body=re.search(r'<'+name+r'>:\n(.*?)(?=\n\n|\Z)',asm,re.S).group(1)
      assert not re.search(r'R_X86_64_\w+\s+'+callee+r'(?:-|\b)',body),body
    if level==1: continue
-   for label,source,count,kind in [('cast',FAILURE,'11','checked'),('target',TARGET_FAILURE,'0','main')]:
+   for label,source,count,kind in [('target',TARGET_FAILURE,'0','main')]:
     (project/'main.dyn').write_text(source)
     output=work/f'{label}-{tree}-{level}'
     run([DYN,'build',project,'--release','--opt-level',level,'--no-cache','--output',output],env=env)
@@ -97,5 +97,4 @@ with tempfile.TemporaryDirectory(prefix='dyn-inline-casts-') as directory:
     assert result.stdout.splitlines()==[count],result
     assert (' in '+kind+'\n') in result.stderr,result
     if label=='target': assert 'pointer.nonnull.ok' in result.stderr,result
-    else: assert 'enum' in result.stderr,result
 print('PASS cast-chain inlining: call removal, casts, one-shot effects, defers, target capture and check order/origins')

@@ -26,6 +26,10 @@ servers so they pick up the new `dyn`.
 - Breaking: enum values and payloads are removed. Variants are always 0, 1, 2 in
   order. Use constants or a translation table for external numbers, and a struct
   with a `kind` field for sum types.
+- Breaking: integer `+`, `-`, `*`, `<<` and negation wrap instead of panicking, and
+  `#wrap` is removed. Shift counts are masked. `#cast` to an enum no longer checks
+  the value; an exhaustive `case` still panics on a bad tag. Division checks stay.
+  Use `math.add_overflows` and friends where overflow matters.
 - `ui.Style` no longer has built-in colors. Write
   `ui.Context{ style: ui.default_style }`; a zero style draws nothing.
 - Zero is now the safe state for handles. `fs.File`, `net.Connection`,

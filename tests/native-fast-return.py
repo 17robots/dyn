@@ -98,7 +98,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-base-return-') as directory:
             for name in ('signed','effect','cleanup'):
                 assert code[name][0]==0x55,(name,code[name][:16].hex())
     assert results[0]==results[1],results
-    for call in ('unsafe(1)', 'overflowing(3)'):
+    for call in ():
         (work/'main.dyn').write_text(SOURCE[:SOURCE.index('fn main()')]+'fn main() { _='+call+' }\n')
         failures=[]
         for mode in ('ssa','tree'):

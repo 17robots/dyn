@@ -768,40 +768,6 @@ static uint32_t parse_string(DynSpan n, const DynSource *s, DynAstProgram *a,
   return id;
 }
 static DynType scope_type(DynAstProgram *, DynSpan, const DynSource *, bool);
-static bool negative_literal(const DynAstProgram *a, const DynAstExpr *e) {
-  if (e->kind != DYN_EXPR_UNARY || e->op != DYN_OP_NEG || e->left == DYN_NO_EXPR)
-    return false;
-  DynExprKind k = a->expressions[e->left].kind;
-  return k == DYN_EXPR_INT || k == DYN_EXPR_FLOAT || k == DYN_EXPR_CHAR;
-}
-/* Marks the integer operators written inside #wrap(...) as wrapping. Called
-   functions are untouched; their arguments are written here, so they are marked. */
-static unsigned mark_wrap(DynAstProgram *a, DynExprId id, unsigned depth) {
-  if (id == DYN_NO_EXPR || id >= a->expression_count || depth > 4096)
-    return 0;
-  DynAstExpr *e = &a->expressions[id];
-  unsigned marked = 0;
-  if ((e->kind == DYN_EXPR_BINARY &&
-       (e->op == DYN_OP_ADD || e->op == DYN_OP_SUB || e->op == DYN_OP_MUL ||
-        e->op == DYN_OP_SHL)) ||
-      (e->kind == DYN_EXPR_UNARY && e->op == DYN_OP_NEG &&
-       !negative_literal(a, e))) {
-    e->wrap = true;
-    marked = 1;
-  }
-  if (e->kind == DYN_EXPR_SIZE || e->kind == DYN_EXPR_ALIGN ||
-      e->kind == DYN_EXPR_TYPEOF || e->kind == DYN_EXPR_LEN)
-    return marked;
-  marked += mark_wrap(a, e->left, depth + 1);
-  marked += mark_wrap(a, e->right, depth + 1);
-  if (e->kind == DYN_EXPR_SLICE)
-    marked += mark_wrap(a, (DynExprId)e->integer, depth + 1);
-  if (e->kind == DYN_EXPR_CALL || e->kind == DYN_EXPR_STRUCT ||
-      e->kind == DYN_EXPR_ARRAY || e->kind == DYN_EXPR_SYSCALL)
-    for (uint32_t i = 0; i < e->item_count; ++i)
-      marked += mark_wrap(a, a->items[e->item_start + i].expression, depth + 1);
-  return marked;
-}
 
 
 static DynType parse_type_name(DynSpan p, const DynSource *s, DynAstProgram *a) {

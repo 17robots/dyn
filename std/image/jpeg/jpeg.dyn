@@ -42,7 +42,7 @@ fn take(bits: *Bits, count: u8) u32 {
       }
       bits.at += 1
     }
-    bits.buffer = #wrap((bits.buffer << 8) | #cast(u32, value))
+    bits.buffer = (bits.buffer << 8) | #cast(u32, value)
     bits.count += 8
   }
   bits.count -= count

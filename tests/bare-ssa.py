@@ -39,19 +39,19 @@ g8: i8
 g16: u16
 g32: i32
 g64: u64
-pub fn add(x:u64,y:u64) u64 { return #wrap(x+y) }
-pub fn sub(x:u64,y:u64) u64 { return #wrap(x-y) }
-pub fn mul(x:u64,y:u64) u64 { return #wrap(x*y) }
+pub fn add(x:u64,y:u64) u64 { return (x+y) }
+pub fn sub(x:u64,y:u64) u64 { return (x-y) }
+pub fn mul(x:u64,y:u64) u64 { return (x*y) }
 pub fn bits(x:u64,y:u64) u64 { return (x & y) ^ (x | ~y) }
-pub fn neg(x:i64) i64 { return #wrap(-x) }
-pub fn sl(x:u64) u64 { return #wrap(x << 33) }
+pub fn neg(x:i64) i64 { return (-x) }
+pub fn sl(x:u64) u64 { return (x << 33) }
 pub fn sr(x:u64) u64 { return x >> 32 }
 pub fn sa(x:i64) i64 { return x >> 63 }
 pub fn cmp(x:i64,y:i64) bool { return x < y }
 pub fn cmpu(x:u64,y:u64) bool { return x >= y }
-pub fn narrow(x:i8,y:u16,z:i32) i64 { return #wrap(#cast(i64,x)+#cast(i64,y)+#cast(i64,z)) }
+pub fn narrow(x:i8,y:u16,z:i32) i64 { return (#cast(i64,x)+#cast(i64,y)+#cast(i64,z)) }
 pub fn split(a:u32,b:u32,c:u32,d:u32,e:u32,f:u32,g:u32,x:u64,y:u32,z:u64) u64 {
-  return #wrap(#cast(u64,a)+#cast(u64,b)+#cast(u64,c)+#cast(u64,d)+#cast(u64,e)+#cast(u64,f)+#cast(u64,g)+x+#cast(u64,y)+z)
+  return (#cast(u64,a)+#cast(u64,b)+#cast(u64,c)+#cast(u64,d)+#cast(u64,e)+#cast(u64,f)+#cast(u64,g)+x+#cast(u64,y)+z)
 }
 pub fn cycle(x:u64,y:u64,n:u32) u64 {
   a:=x
@@ -60,7 +60,7 @@ pub fn cycle(x:u64,y:u64,n:u32) u64 {
   for i<n { t:=a
   a=b
   b=t
-  i=#wrap(i+1) }
+  i=(i+1) }
   return a
 }
 pub fn cycle3(x:u64,y:u64,z:u64,n:u32) u64 {
@@ -72,7 +72,7 @@ pub fn cycle3(x:u64,y:u64,z:u64,n:u32) u64 {
   a=b
   b=c
   c=t
-  i=#wrap(i+1) }
+  i=(i+1) }
   return a
 }
 pub fn branch(x:i64,y:i64) i64 { if x>y { return x }
@@ -82,9 +82,9 @@ pub fn memory(a:i8,b:u16,c:i32,d:u64) u64 {
   g16=b
   g32=c
   g64=d
-  return #wrap(#bitcast(u64,#cast(i64,g8))+#cast(u64,g16)+#bitcast(u64,#cast(i64,g32))+g64)
+  return (#bitcast(u64,#cast(i64,g8))+#cast(u64,g16)+#bitcast(u64,#cast(i64,g32))+g64)
 }
-pub fn readmem() u64 { return #wrap(#bitcast(u64,#cast(i64,g8))+#cast(u64,g16)+#bitcast(u64,#cast(i64,g32))+g64) }
+pub fn readmem() u64 { return (#bitcast(u64,#cast(i64,g8))+#cast(u64,g16)+#bitcast(u64,#cast(i64,g32))+g64) }
 pub fn literal_negative(x:u64) u64 { if x==0 { #panic("fallback literal remains interned") }
 return x }
 pub fn checked(x:u64,y:u64) u64 { return x+y }
@@ -97,9 +97,9 @@ _=io.write_all(io.stdout(),"SSA32 PASS\n") }
 
 pub fn frame(x:u64) u64 { y:=x
 p:=&y
-p.*=#wrap(p.*+1)
+p.*=(p.*+1)
 return y }
-pub fn shiftvar(x:u64,n:u64) u64 { return #wrap(x << (n & 63)) }
+pub fn shiftvar(x:u64,n:u64) u64 { return (x << (n & 63)) }
 pub fn shruvar(x:u64,n:u64) u64 { return x >> (n & 63) }
 pub fn shrsvar(x:i64,n:u64) i64 { return x >> (n & 63) }
 pub fn indirect(p:*u64,x:u64) { p.*=x }
@@ -213,7 +213,7 @@ def main():
             work = Path(temporary)
             # 350 parameter values plus 349 sums exercise a 699-slot SSA frame.
             large = ('pub fn large(' + ','.join(f'x{i}:u64' for i in range(350)) +
-                     ') u64 { return #wrap(' + '+'.join(f'x{i}' for i in range(350)) + ') }\n')
+                     ') u64 { return (' + '+'.join(f'x{i}' for i in range(350)) + ') }\n')
             project = work/'source'
             project.mkdir()
             (project/'main.dyn').write_text(DYN_SOURCE + large)

@@ -106,8 +106,8 @@ pub fn finish(state: *State) Tag {
     carry = g[i] >> 26
     g[i] &= Mask
   }
-  g[4] = #wrap(h[4] + carry - (1 << 26))
-  select := #wrap((g[4] >> 63) - 1)
+  g[4] = h[4] + carry - (1 << 26)
+  select := (g[4] >> 63) - 1
   for i in 0..5 {
     h[i] = (h[i] & ~select) | (g[i] & select)
   }

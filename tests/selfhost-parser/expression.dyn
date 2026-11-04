@@ -13,7 +13,6 @@ const ExpField: u16 = 10
 const ExpCall: u16 = 11
 const ExpIndex: u16 = 12
 const ExpSlice: u16 = 13
-const ExpWrap: u16 = 14
 const ExpLen: u16 = 15
 const ExpType: u16 = 16
 const ExpTypeArgument: u16 = 17
@@ -572,11 +571,8 @@ fn parse_operand(p: *Parser, minimum: i32) u32 {
       kind = ExpLoad
     }
     left = add_node(p, kind, token.start, end, first)
-  } else if token_is(p, "#wrap") || token_is(p, "#len") {
+  } else if token_is(p, "#len") {
     kind := ExpLen
-    if token_is(p, "#wrap") {
-      kind = ExpWrap
-    }
     lex(p)
     expect(p, "(")
     child := expression(p, 0)

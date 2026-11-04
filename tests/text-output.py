@@ -54,8 +54,6 @@ fn main() {
   ptr := &sum
   add(ptr)
   if ptr.* != 14 || callback(3) != 5 { #panic("pointer") }
-  sign := #cast(Sign, -1)
-  if #cast(i8, sign) != -1 { #panic("signed enum") }
   number: f32 = 1.25
   wide := #cast(f64, number)
   if wide + 0.75 != 2.0 || #cast(i32, wide) != 1 { #panic("float") }

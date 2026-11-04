@@ -429,11 +429,6 @@ static DynExprId compact_expr(CompactNode node, const DynSource *s, DynAstProgra
     e.type = DYN_TYPE_STRING;
     e.integer = (uint32_t)a->string_count;
     a->strings[a->string_count++] = (DynAstString){data, length};
-  } else if (!(k != EXP_WRAP)) {
-    DynExprId inner = compact_expr(compact_child(node, 0), s, a, errors);
-    if (inner != DYN_NO_EXPR && !mark_wrap(a, inner, 0))
-      compact_diagnostic(node, s, errors, "#wrap needs +, -, * or << inside");
-    return inner;
   } else if (!(k != EXP_OFFSET)) {
     CompactNode field = compact_child(node, 1);
     e.kind = DYN_EXPR_OFFSET;

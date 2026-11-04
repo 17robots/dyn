@@ -23,7 +23,7 @@ fn mask_valid(mask: u32, bits: u16) bool {
   for (mask & 1) == 0 {
     mask >>= 1
   }
-  return (mask & #wrap(mask + 1)) == 0
+  return (mask & (mask + 1)) == 0
 }
 fn component(pixel, mask: u32, missing: u8) u8 {
   if mask == 0 {

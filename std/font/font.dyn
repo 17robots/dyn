@@ -248,7 +248,7 @@ pub fn glyph_index(face: *const Face, codepoint: u32) u16 {
         return 0
       }
     }
-    value = #wrap(value + delta)
+    value = value + delta
     if value >= face.glyphs {
       return 0
     }

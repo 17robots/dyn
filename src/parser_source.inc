@@ -222,7 +222,7 @@ static bool src_expression_start(Parser *p) {
       is(p, "-") || is(p, "&") || is(p, "!") || is(p, "~") ||
       is(p, "#cast") || is(p, "#bitcast") || is(p, "#sizeof") ||
       is(p, "#alignof") || is(p, "#offsetof") || is(p, "#typeof") ||
-      is(p, "#len") || is(p, "#wrap") || is(p, "#load") || is(p, "#syscall");
+      is(p, "#len") || is(p, "#load") || is(p, "#syscall");
 }
 static uint32_t src_panic(Parser *p) {
   uint32_t start = p->token.start; expect(p, "#panic"); expect(p, "(");

@@ -40,11 +40,11 @@ def run(directory):
 with tempfile.TemporaryDirectory(prefix='dyn-frontend-audit-') as temporary:
     root = Path(temporary)
     run(project(root, 'forward-layout', '''struct Wrapper { value: Later }
-enum Early { Value: Wrapper }
+struct Early { kind: Later, value: Wrapper }
 enum Later { Value }
 fn main() {
-  value := Early.Value(Wrapper{value: Later.Value})
-  case value { Early.Value payload => { if payload.value != Later.Value { #panic("layout") } } }
+  value := Early{value: Wrapper{value: Later.Value}}
+  if value.value.value != Later.Value { #panic("layout") }
 }
 '''))
     run(project(root, 'forward-globals', '''const a := b + 1
@@ -71,7 +71,7 @@ const b: i64 = a
 fn main() {}
 '''), 'constant initializer must be compile-time expression')
     check(project(root, 'layout-cycle', '''struct Wrapper { value: Recursive }
-enum Recursive { Value: Wrapper }
+struct Recursive { value: Wrapper }
 fn main() {}
 '''), 'contains itself by value')
     check(project(root, 'pointer-layout-cycle', '''struct Node { next: *Node }

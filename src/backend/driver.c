@@ -1076,10 +1076,8 @@ static void divide(BackendContext *ctx, const DynIrFunction *f, bool signed_oper
   isa_divide(ctx, signed_operation, remainder);
 }
 static void shift(BackendContext *ctx, const DynIrFunction *f, bool signed_operation, bool left, bool wraps, unsigned bits) {
-  /* Unsigned comparison also rejects negative signed counts. This dominates
-     the redundant narrowed-count check in LLVM's checked_integer lowering. */
-  isa_compare_small(ctx, R_C, (int)bits);
-  guard(ctx, f, CC_B, GUARD_SHIFT); /* original count is in [0, bits) */
+  /* Counts are masked to the operand width, on every target and width. */
+  isa_small_immediate(ctx, R_D, bits - 1); isa_alu(ctx, ALU_AND, R_C, R_D);
   int restore = signed_operation ? SHIFT_ARITHMETIC : SHIFT_RIGHT;
   if (!left) { isa_shift(ctx, R_A, restore); return; }
   if (!wraps) isa_move(ctx, R_D, R_A); /* preserve the original value */
@@ -1742,15 +1740,7 @@ static bool expression_value(BackendContext *ctx, const DynIrProgram *ir, const 
     DynType from=storage_type(ir,ir->expressions[e->left].type);
     if (dyn_type_is_enum(e->type)) {
       if (payload_enum(ir,e->type) || !integer_type(from) || !expression(ctx,ir,f,e->left,depth+1)) return false;
-      const DynIrEnum *en=&ir->enums[e->type-DYN_TYPE_ENUM_BASE];
-      isa_match_begin(ctx);
-      for (unsigned i=0;i<en->variant_count;++i) {
-        uint64_t tag=ir->variants[en->variant_start+i].tag; unsigned bits=integer_bits(en->tag_type);
-        if (signed_scalar(en->tag_type) && bits<64 && (tag>>(bits-1)&1)) tag|=UINT64_MAX<<bits;
-        if (signed_scalar(from)!=signed_scalar(en->tag_type) && (int64_t)tag<0) continue;
-        isa_match_tag(ctx, tag);
-      }
-      isa_match_test(ctx); guard(ctx, f, CC_NE, GUARD_ENUM); normalize(ctx,e->type); return !ctx->text.failed;
+      normalize(ctx,e->type); return !ctx->text.failed;
     }
     bool from_pointer=dyn_type_is_pointer(from)||from==DYN_TYPE_RAWPTR;
     bool to_pointer=dyn_type_is_pointer(e->type)||e->type==DYN_TYPE_RAWPTR;
@@ -2380,7 +2370,7 @@ static bool block_statements_value(BackendContext *ctx, const DynIrProgram *ir, 
           load_memory(ctx, type); isa_push(ctx, R_A);
           if (!expression(ctx, ir,f,s->expression,0)) return false;
           isa_move(ctx, R_C, R_A); isa_pop(ctx, R_A);
-          DynIrExpr op={.type=type,.op=s->assignment_op,.left=s->target,.right=s->expression};
+          DynIrExpr op={.type=type,.op=s->assignment_op,.wrap=dyn_op_wraps(s->assignment_op),.left=s->target,.right=s->expression};
           if (!binary_result(ctx, ir,f,&op)) return false;
         } else if (!expression(ctx, ir,f,s->expression,0)) return false;
         isa_pop(ctx, R_11); store_memory(ctx, type); continue;
@@ -2404,7 +2394,7 @@ static bool block_statements_value(BackendContext *ctx, const DynIrProgram *ir, 
       if (s->assignment_op != DYN_OP_NONE) {
         if (s->target == DYN_NO_EXPR) return false;
         DynIrExpr operation = {.kind=DYN_EXPR_BINARY, .type=type,
-          .op=s->assignment_op, .left=s->target, .right=s->expression};
+          .op=s->assignment_op, .wrap=dyn_op_wraps(s->assignment_op), .left=s->target, .right=s->expression};
         if (!expression_value(ctx, ir, f, &operation, 0)) return false;
       } else if (s->expression == DYN_NO_EXPR && s->kind == DYN_STMT_LOCAL) {
         isa_zero(ctx, R_A);

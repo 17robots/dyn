@@ -106,7 +106,7 @@ fn parse_u64_into(text: []const u8, base: u8, output: *u64) bool {
       return false
     }
     // The quotient/remainder test proves this product and sum fit.
-    value = #wrap(value * radix + wide)
+    value = value * radix + wide
   }
   output.* = value
   return true

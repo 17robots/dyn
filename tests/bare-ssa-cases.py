@@ -53,7 +53,7 @@ for i<n { case x { 0,1=>{t:=a
 a=b
 b=c
 c=t}2=>{a=17}_=>{b=19} }
-i=#wrap(i+1) }
+i=(i+1) }
 return a*100+b*10+c }
 pub fn terminal(x:i64) i64 { case x { 1=>{return 71}9=>{return 79}_=>{return 99} } }
 pub fn protected(x:Key) i64 { defer { _=io.write_all(io.stdout(),"CLEAN\n") }

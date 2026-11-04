@@ -403,7 +403,7 @@ fn src_expression_start(p: *Parser) bool {
   if kind == TokenKind.Name || kind == TokenKind.Number || kind == TokenKind.Text || kind == TokenKind.Character {
     return true
   }
-  starts: [17][]const u8 = ["(", "[", ".", "-", "&", "!", "~", "#cast", "#bitcast", "#sizeof", "#alignof", "#offsetof", "#typeof", "#len", "#wrap", "#load", "#syscall"]
+  starts: [16][]const u8 = ["(", "[", ".", "-", "&", "!", "~", "#cast", "#bitcast", "#sizeof", "#alignof", "#offsetof", "#typeof", "#len", "#load", "#syscall"]
   for candidate in starts {
     if token_is(p, candidate) {
       return true
