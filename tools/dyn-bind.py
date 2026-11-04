@@ -254,7 +254,7 @@ def generate(text: str) -> str:
             unsupported_structs[name] = reason
             continue
         output.append(f"pub struct {name} {{")
-        output.extend(f"  {field}: {kind}," for field, kind in fields)
+        output.extend(f"  {safe_name(field)}: {kind}," for field, kind in fields)
         output.extend(["}", ""])
         emitted.add(name)
 
@@ -270,7 +270,7 @@ def generate(text: str) -> str:
             output.append(f"pub struct {inner} {{")
             output.extend(f"  {safe_name(field_name)}: {kind}," for field_name, kind in fields)
             output.extend(["}", ""])
-            output.extend([f"pub struct {outer} {{", f"  {field}: {inner},", "}", ""])
+            output.extend([f"pub struct {outer} {{", f"  {safe_name(field)}: {inner},", "}", ""])
 
     for match in re.finditer(r"union\s+(\w+)\s*\{.*?\}\s*;", declarations, re.S):
         unsupported_unions.append(match.group(1))
@@ -348,8 +348,8 @@ def verify_layout(header: pathlib.Path, source: str, generated: str,
             checks.append(f"{variable}: {name} = {name}{{}}")
             expressions = [(f"sizeof({ctype})", f"#sizeof({name})"),
                            (f"_Alignof({ctype})", f"#alignof({name})")]
-            expressions += [(f"offsetof({ctype},{field})",
-                             f"(#cast(usize, &{variable}.{safe_name(field)}) - #cast(usize, &{variable}))") for field in members]
+            expressions += [(f"offsetof({ctype},{field.removeprefix('c_') if field.removeprefix('c_') in KEYWORDS else field})",
+                             f"(#cast(usize, &{variable}.{field}) - #cast(usize, &{variable}))") for field in members]
             for cexpr, dexpr in expressions:
                 symbol = f"dyn_binding_layout_{count}"
                 c.append(f"size_t {symbol}(void) {{ return {cexpr}; }}")
