@@ -204,13 +204,13 @@ cases['ffmpeg'] = r'''if raw.AVERROR(11) != -11 || raw.AVUNERROR(-11) != 11 { #p
   if raw.avformat_open_input(&format, #cast(*const c.char, &name[0]), nil, nil) < 0 { #panic("open WAV") }
   defer raw.avformat_close_input(&format)
   if raw.avformat_find_stream_info(format, nil) < 0 || format.nb_streams != 1 { #panic("WAV streams") }
-  streams := format.streams[..format.nb_streams]
+  streams := #slice(format.streams, format.nb_streams)
   if streams[0].codecpar.codec_id != raw.AV_CODEC_ID_PCM_S16LE || streams[0].codecpar.sample_rate != 8000 { #panic("WAV metadata") }
   packet := raw.av_packet_alloc()
   if packet == nil { #panic("packet") }
   defer raw.av_packet_free(&packet)
   if raw.av_read_frame(format, packet) < 0 || packet.size != 8 { #panic("WAV packet") }
-  data := packet.data[..#cast(usize, packet.size)]
+  data := #slice(packet.data, #cast(usize, packet.size))
   if data[0] != 1 || data[6] != 4 { #panic("WAV bytes") }
   raw.av_packet_unref(packet)
   if raw.av_read_frame(format, packet) != raw.AVERROR_EOF { #panic("WAV EOF") }

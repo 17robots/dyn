@@ -1,3 +1,4 @@
+#include <ctype.h>
 #define _POSIX_C_SOURCE 200809L
 #include "dyn.h"
 #include "dyn_scope.h"
@@ -602,7 +603,49 @@ static bool compact_rewrite_imports(const DynSource *source, Module *module, con
   dyn_imports_close(&reader);
   return ok;
 }
+static bool text_uses_alias(const char *text, size_t length, const char *alias, size_t width) {
+  for (size_t at = 0; at + width < length; ++at) {
+    if (memcmp(text + at, alias, width) || text[at + width] != '.') continue;
+    if (!at || !(isalnum((unsigned char)text[at - 1]) || text[at - 1] == '_' || text[at - 1] == '.'))
+      return true;
+  }
+  return false;
+}
+/* A text search: a mention in a comment or string counts as a use, so vet stays
+   silent rather than reporting an import that is needed. */
+static void vet_unused_imports(DynSources *sources, const size_t *owners) {
+  for (size_t i = 0; i < sources->count; ++i) {
+    DynSource *source = &sources->items[i];
+    if (!source->context.vet || !dyn_source_target_enabled(source)) continue;
+    const char *path, *text;
+    size_t length, at;
+    dyn_source_position(source, 0, &path, &text, &length, &at);
+    if (path && (strstr(path, "/std/") || strstr(path, "/share/dyn/") || strstr(path, "/vendor/"))) continue;
+    DynImports reader;
+    if (!dyn_imports_open(&reader, source)) continue;
+    DynImportView view;
+    while (dyn_imports_next(&reader, &view)) {
+      char *import_path = dyn_import_copy(view.path, view.path_length);
+      char *alias = view.alias_node ? dyn_import_copy(view.alias, view.alias_length)
+                                    : dyn_path_basename(import_path ? import_path : "");
+      bool used = !alias;
+      for (size_t j = 0; alias && !used && j < sources->count; ++j)
+        if (owners[j] == owners[i])
+          used = text_uses_alias(sources->items[j].original_text ? sources->items[j].original_text : sources->items[j].text,
+                                 sources->items[j].original_text ? sources->items[j].original_length : sources->items[j].length,
+                                 alias, strlen(alias));
+      if (!used) {
+        dyn_diagnostic_source("warning", source, view.start, view.end, "import is never used");
+        if (source->context.vet_findings) ++*source->context.vet_findings;
+      }
+      free(import_path);
+      free(alias);
+    }
+    dyn_imports_close(&reader);
+  }
+}
 static bool capture_dependencies(DynSources *sources, Module *modules, size_t count, const size_t *owners) {
+  vet_unused_imports(sources, owners);
   bool reflection = false;
   bool *selected = calloc(count, sizeof(*selected));
   if (!selected) return false;
