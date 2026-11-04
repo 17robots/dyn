@@ -42,7 +42,7 @@ static bool src_next_is(Parser *p, const char *word) {
   return next.end - next.start == strlen(word) && at(p, next.start, word);
 }
 static bool src_distinct(Parser *p) { return is(p, "distinct"); }
-static bool src_packed(Parser *p) { return is(p, "packed"); }
+static bool src_packed(Parser *p) { return is(p, "packed") || is(p, "union"); }
 static bool src_type_pattern(Parser *p) { return is(p, "is"); }
 static uint32_t src_literal(Parser *p, TokenKind token_kind, ExpKind kind) {
   Token token = p->token;
@@ -435,7 +435,9 @@ static uint32_t src_function(Parser *p, bool external) {
 }
 static uint32_t src_struct(Parser *p) {
   uint32_t start = p->token.start, first = NONE, last = NONE;
-  bool packed = take(p, "packed"); expect(p, "struct"); append(p, &first, &last, name(p)); expect(p, "{");
+  bool packed = take(p, "packed"), is_union = !packed && take(p, "union");
+  if (!is_union) expect(p, "struct");
+  append(p, &first, &last, name(p)); expect(p, "{");
   while (!is(p, "}") && !p->tree->error) {
     uint32_t begin = p->token.start, mf = NONE, ml = NONE;
     append(p, &mf, &ml, name(p));
@@ -446,7 +448,7 @@ static uint32_t src_struct(Parser *p) {
     if (!take(p, ",")) break;
   }
   uint32_t end = p->token.end; expect(p, "}");
-  return mark(p, src_node(p, SRC_STRUCT, start, end, first), packed ? EXP_PACKED : 0);
+  return mark(p, src_node(p, SRC_STRUCT, start, end, first), (is_union ? EXP_UNION : 0) | (packed ? EXP_PACKED : 0));
 }
 static uint32_t src_enum(Parser *p) {
   uint32_t start = p->token.start, first = NONE, last = NONE;

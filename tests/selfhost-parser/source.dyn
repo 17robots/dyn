@@ -70,7 +70,7 @@ fn src_distinct(p: *Parser) bool {
 }
 
 fn src_packed(p: *Parser) bool {
-  return token_is(p, "packed")
+  return token_is(p, "packed") || token_is(p, "union")
 }
 
 fn src_type_pattern(p: *Parser) bool {
@@ -664,7 +664,10 @@ fn src_struct(p: *Parser) u32 {
   first := None
   last := None
   is_packed := take(p, "packed")
-  expect(p, "struct")
+  is_union := !is_packed && take(p, "union")
+  if !is_union {
+    expect(p, "struct")
+  }
   chain(p, &first, &last, parse_name(p))
   expect(p, "{")
   for !token_is(p, "}") && !p.tree.failed {
@@ -689,6 +692,9 @@ fn src_struct(p: *Parser) u32 {
   flags: u16
   if is_packed {
     flags = FlagPacked
+  }
+  if is_union {
+    flags = FlagUnion
   }
   return mark(p, add_node(p, SrcStruct, start, end, first), flags)
 }

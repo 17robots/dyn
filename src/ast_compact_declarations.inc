@@ -66,6 +66,7 @@ static bool compact_add_struct_names(const DynSource *s, DynAstProgram *a,
         (DynAstStruct){.span = compact_span(d),
                        .name = ns,
                        .packed = packed,
+                       .is_union = compact_flag(d, EXP_UNION),
                        .alignment = 0,
                        .is_public = is_public,
                        .module_owner = declaration_owner(ns, s)};

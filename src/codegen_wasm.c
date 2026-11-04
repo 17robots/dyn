@@ -229,6 +229,8 @@ static unsigned wfield(WG *g, DynType t, unsigned f) {
     return f ? 8 : 0;
   DynIrStruct *s = &g->ir->structs[t - DYN_TYPE_STRUCT_BASE];
   unsigned n = 0;
+  if (s->is_union)
+    return 0;
   for (unsigned i = 0; i <= f; i++) {
     DynType ft = g->ir->fields[s->field_start + i].type;
     n = wal(n, s->packed ? 1 : wa(g, ft));
@@ -288,6 +290,15 @@ static unsigned wsize(WG *g, DynType t) {
     DynIrStruct *s = &g->ir->structs[t - DYN_TYPE_STRUCT_BASE];
     if (!s->field_count)
       return 0;
+    if (s->is_union) {
+      unsigned largest = 0;
+      for (unsigned k = 0; k < s->field_count; k++) {
+        unsigned n = wsize(g, g->ir->fields[s->field_start + k].type);
+        if (n > largest)
+          largest = n;
+      }
+      return wal(largest, wa(g, t));
+    }
     unsigned i = s->field_count - 1;
     return wal(wfield(g, t, i) +
                    wsize(g, g->ir->fields[s->field_start + i].type),

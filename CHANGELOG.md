@@ -32,6 +32,7 @@ servers so they pick up the new `dyn`.
   Use `math.add_overflows` and friends where overflow matters.
 - Breaking: `pointer[..count]` is replaced by `#slice(pointer, count)`.
 - New: `#offset(pointer, count)` and pointer ordering, for walking memory.
+- New: pointer-free `union` types. `union` is now a reserved word.
 - `ui.Style` no longer has built-in colors. Write
   `ui.Context{ style: ui.default_style }`; a zero style draws nothing.
 - Zero is now the safe state for handles. `fs.File`, `net.Connection`,

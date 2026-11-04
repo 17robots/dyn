@@ -1013,6 +1013,11 @@ static bool layout_struct(uint32_t id, DynAstProgram *a, unsigned char *state,
       return false;
     if (align > max_align)
       max_align = align;
+    if (st->is_union) {
+      f->offset = 0;
+      if (field_size > size) size = field_size;
+      continue;
+    }
     if (size > limit - (align - 1)) goto oversized_struct;
     size = (size + align - 1) / align * align;
     f->offset = size;

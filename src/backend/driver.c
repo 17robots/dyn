@@ -579,6 +579,7 @@ static bool field_offset(const DynIrProgram *ir,DynType type,uint32_t field,uint
   uint32_t *cached = ir == layout_program && (uint64_t)record->field_start+record->field_count<=ir->field_count
                      ? &layout_offsets[record->field_start+field] : NULL;
   if (cached && *cached != UINT32_MAX) { *offset=*cached; return true; }
+  if (record->is_union) { *offset=0; if (cached) *cached=0; return true; }
   uint32_t at=0;
   for (uint32_t i=0;i<=field;++i) {
     uint32_t size,alignment;
@@ -637,6 +638,7 @@ static bool array_parts(const DynIrProgram *ir,DynType type,uint32_t offset,Arra
     for (unsigned i=0;i<units;++i) out[(*count)++]=(ArrayPart){unit,offset+base+i*a};
   } else if (dyn_type_is_struct(type)) {
     const DynIrStruct *record=&ir->structs[type-DYN_TYPE_STRUCT_BASE];
+    if (record->is_union) return false; /* members overlap; copy as bytes */
     for (uint32_t i=0;i<record->field_count;++i) { uint32_t at;
       if (!field_offset(ir,type,i,&at) || !array_parts(ir,ir->fields[record->field_start+i].type,offset+at,out,count,depth+1)) return false;
     }

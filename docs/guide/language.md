@@ -106,7 +106,7 @@ treating it as text. `const` prevents writes through this view only: another `[]
 same memory can still change the bytes. Character literals are untyped integer constants holding a Unicode scalar value:
 they take any expected integer type the value fits, and default to `u32`.
 
-`distinct`, `packed`, `is` and `type` are reserved keywords and cannot be names.
+`distinct`, `packed`, `is`, `union` and `type` are reserved keywords and cannot be names.
 
 `type` creates module-level transparent aliases; aliases may be forward-referenced and
 alias cycles fail. There are no local aliases; declare them at module scope.
@@ -159,6 +159,12 @@ explicit literal members. `.{ ... }` requires expected
 struct type. Struct assignment copies by value. Unknown/duplicate fields, duplicate declarations,
 by-value recursion and aggregate comparison fail. Empty structs have size and alignment 1 so arrays
 have stable element stride and distinct elements have distinct addresses.
+
+`union Value { bits: u64, number: f64, bytes: [8]u8 }` overlaps its members at offset 0. Its size
+is the largest member, rounded to the largest alignment. Members cannot hold pointers, slices or
+`any`, so every bit pattern is valid for every member and zero is valid. Reading a member other
+than the last one written reinterprets the bytes. A literal sets at most one member. Passing a
+union by value to foreign code is not a supported C ABI promise; pass a pointer.
 
 Functions may accept and return primitive or struct values. Arguments evaluate left-to-right and
 must match declared parameter count/types, subject to normal lossless conversions. Non-void

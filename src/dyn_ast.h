@@ -145,7 +145,7 @@ typedef struct {
 } DynAstField;
 typedef struct {
   DynSpan span, name;
-  bool packed;
+  bool packed, is_union;
   bool is_public;
   uint64_t module_owner;
   uint32_t field_start, field_count;

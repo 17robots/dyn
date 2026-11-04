@@ -44,6 +44,7 @@ const FlagIteration: u16 = 64
 const FlagPrimary: u16 = 128
 const FlagBitcast: u16 = 256
 const FlagWildcard: u16 = 512
+const FlagUnion: u16 = 1024
 
 fn add_node(p: *Parser, kind: u16, start: u32, end: u32, first: u32) u32 {
   if p.tree.failed {
@@ -171,7 +172,7 @@ fn parse_name(p: *Parser) u32 {
     fail(p, token.start, "expected identifier")
     return None
   }
-  if token_is(p, "distinct") || token_is(p, "packed") || token_is(p, "is") {
+  if token_is(p, "distinct") || token_is(p, "packed") || token_is(p, "is") || token_is(p, "union") {
     fail(p, token.start, "reserved keyword cannot be a name")
     return None
   }
@@ -610,7 +611,7 @@ fn parse_operand(p: *Parser, minimum: i32) u32 {
     } else if token.kind == TokenKind.Name && token_is(p, "nil") {
       kind = ExpNil
     } else if token.kind == TokenKind.Name {
-      if token_is(p, "distinct") || token_is(p, "packed") || token_is(p, "is") {
+      if token_is(p, "distinct") || token_is(p, "packed") || token_is(p, "is") || token_is(p, "union") {
         fail(p, token.start, "reserved keyword cannot be a name")
         return None
       }

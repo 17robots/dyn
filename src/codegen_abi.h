@@ -44,7 +44,8 @@ static bool abi_eightbytes(Gen *g, DynType t, uint64_t offset,
     for (uint32_t i = 0; i < s->field_count; ++i) {
       DynType f = g->ir->fields[s->field_start + i].type;
       uint64_t align = type_alignment(g, f);
-      if (!s->packed) at = abi_align_up(at, align);
+      if (s->is_union) at = 0;
+      else if (!s->packed) at = abi_align_up(at, align);
       if ((offset + at) % align || !abi_eightbytes(g, f, offset + at, cls, floats, depth + 1)) return false;
       at += abi_size(g, f);
     }

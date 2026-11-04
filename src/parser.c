@@ -285,7 +285,7 @@ static void append(Parser *p, uint32_t *first, uint32_t *last, uint32_t child) {
 static uint32_t name(Parser *p) {
   Token token = p->token;
   if (token.kind != NAME) { fail(p, token.start, "expected identifier"); return NONE; }
-  if (is(p, "distinct") || is(p, "packed") || is(p, "is")) { fail(p, token.start, "reserved keyword cannot be a name"); return NONE; }
+  if (is(p, "distinct") || is(p, "packed") || is(p, "is") || is(p, "union")) { fail(p, token.start, "reserved keyword cannot be a name"); return NONE; }
   lex(p);
   return node(p, EXP_NAME, token.start, token.end, NONE, (Token){0});
 }
@@ -512,7 +512,7 @@ static uint32_t parse(Parser *p, int minimum) {
     expect(p, ")"); left = node(p, kind, token.start, end, child, (Token){0});
   } else {
     ExpKind kind = EXP_NAME;
-    if (is(p, "distinct") || is(p, "packed") || is(p, "is")) { fail(p, token.start, "reserved keyword cannot be a name"); return NONE; }
+    if (is(p, "distinct") || is(p, "packed") || is(p, "is") || is(p, "union")) { fail(p, token.start, "reserved keyword cannot be a name"); return NONE; }
     if (token.kind == NUMBER) kind = EXP_NUMBER;
     else if (token.kind == STRING) kind = EXP_STRING;
     else if (token.kind == CHARACTER) kind = EXP_CHAR;
