@@ -1,0 +1,26 @@
+// Dense enum helpers. Variants are 0, 1, 2 in order, so a tag is an index.
+
+pub fn count($E: type) usize {
+  info := #typeof(E)
+  return #len(info.variants)
+}
+
+// The variant with this tag, or the first variant when value is out of range.
+// Use this to bring external numbers into an enum.
+pub fn from_int($E: type, value: u64) E {
+  if value >= #cast(u64, count(E)) {
+    return #cast(E, 0)
+  }
+  return #cast(E, value)
+}
+
+// The variant's source name, or "" for a tag that is not a variant.
+pub fn name(value: $E) []const u8 {
+  index := #cast(u64, value)
+  info := #typeof(E)
+  variants := info.variants
+  if index >= #cast(u64, #len(variants)) {
+    return ""
+  }
+  return variants[index].name
+}

@@ -1363,7 +1363,7 @@ fn client_receive(arena: *memory.Arena, input: stream.Reader, method: []const u8
     if part.status == stream.Status.Error {
       return ClientResponse{ kind: part.kind, detail: ErrorKind.Io, error: part.error }
     }
-    memory.append_many(arena, &response_storage, scratch[..part.transferred])
+    memory.append_many_grow(arena, &response_storage, scratch[..part.transferred])
     used += part.transferred
     ended = part.status == stream.Status.End
     if part.transferred == 0 && !ended {

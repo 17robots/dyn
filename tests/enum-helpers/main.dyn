@@ -1,0 +1,36 @@
+use "std/bytes"
+use "std/enums"
+use "std/math"
+use "std/mem"
+
+enum Key { Null, Space, Shift }
+
+fn main() {
+  if enums.count(Key) != 3 || enums.from_int(Key, 2) != Key.Shift || enums.from_int(Key, 9) != Key.Null {
+    #panic("enums")
+  }
+  if !bytes.equal(enums.name(Key.Space), "Space") {
+    #panic("name")
+  }
+  if math.div_or_zero(7, 0) != 0 || math.rem_or_zero(7, 2) != 1 {
+    #panic("or zero")
+  }
+  if math.float_to_int_sat(i8, 1000.0) != 127 || math.float_to_int_sat(u8, -3.0) != 0 {
+    #panic("saturate")
+  }
+  nan := 0.0
+  nan = nan / nan
+  if math.float_to_int_sat(i32, nan) != 0 {
+    #panic("nan")
+  }
+  arena := mem.arena_create(0)
+  defer mem.arena_release(arena)
+  items: []u32
+  stub: u32 = 99
+  first := mem.try_append(arena, &items, 1, &stub)
+  other := mem.push(u32, arena)
+  second := mem.try_append(arena, &items, 2, &stub)
+  if first.* != 1 || second != &stub || other.* != 0 {
+    #panic("try_append")
+  }
+}
