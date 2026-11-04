@@ -30,7 +30,8 @@ pub fn deadline(timer: *const MachineTimer, ticks: u64) {
 pub fn disarm(timer: *const MachineTimer) {
   deadline(timer, 0xffffffffffffffff)
 }
-pub struct SysTick { base: usize = 0xe000e010 }
+pub struct SysTick { base: usize }
+pub const systick: SysTick = SysTick{ base: 0xe000e010 }
 // periods are 2..2^24 clock ticks. Device initialization, interrupt handler and
 // processor clock frequency remain caller responsibilities. Invalid periods
 // leave registers untouched. CTRL reads clear COUNTFLAG on real hardware.

@@ -130,7 +130,7 @@ typedef struct {
   double floating;
   bool boolean;
   uint32_t item_start, item_count;
-  /* Set inside #wrap(...): integer +, -, *, unary - and << wrap instead of trapping on overflow. */
+  /* Set during lowering for integer +, -, *, unary - and <<. */
   bool wrap;
 } DynAstExpr;
 typedef struct {
@@ -141,12 +141,11 @@ typedef struct {
 typedef struct {
   DynSpan name;
   DynType type;
-  DynExprId default_expression;
   uint64_t offset;
 } DynAstField;
 typedef struct {
   DynSpan span, name;
-  bool packed;
+  bool packed, is_union;
   bool is_public;
   uint64_t module_owner;
   uint32_t field_start, field_count;
@@ -155,7 +154,6 @@ typedef struct {
 } DynAstStruct;
 typedef struct {
   DynSpan name;
-  DynType payload_type;
   /* Two's complement for signed tag types. */
   uint64_t tag;
 } DynAstVariant;
@@ -164,8 +162,7 @@ typedef struct {
   DynType tag_type;
   uint32_t variant_start, variant_count;
   DynNameIndex variant_names;
-  uint64_t size, alignment, payload_size, payload_alignment;
-  bool has_payload;
+  uint64_t size, alignment;
   bool is_public;
   uint64_t module_owner;
 } DynAstEnum;
@@ -275,7 +272,7 @@ typedef struct {
 typedef struct {
   DynSpan name;
   DynType type;
-  bool active, is_const;
+  bool active, is_const, used;
   uint32_t owner_function;
 } DynAstLocal;
 typedef struct {

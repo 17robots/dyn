@@ -19,8 +19,8 @@ fn native_errno() *i32 { #panic("unexpected errno") }
 fn native_fcntl(descriptor: i32, command: i32, minimum: i32) i32 { return descriptor + 10 }
 fn native_close(descriptor: i32) i32 { return 0 }
 fn native_pipe(descriptors: *i32) i32 {
-  descriptors[..2][0] = 3
-  descriptors[..2][1] = 4
+  #slice(descriptors, 2)[0] = 3
+  #slice(descriptors, 2)[1] = 4
   return 0
 }
 fn native_fork() i32 { return 42 }
@@ -50,9 +50,9 @@ fn main() {
   }
   arguments: [3][]const u8 = ["program", "", "café-😀"]
   vector := c_vector(arena, arguments[..])
-  if vector == nil || vector[..4][3].value != nil { #panic("vector sentinel") }
+  if vector == nil || #slice(vector, 4)[3].value != nil { #panic("vector sentinel") }
   for at in 0..3 {
-    item := c.bytes_from_string(vector[..4][at].value, 32)
+    item := c.bytes_from_string(#slice(vector, 4)[at].value, 32)
     if !item.ok || !bytes.equal(item.value, arguments[at]) { #panic("vector bytes") }
   }
   before_spawn := mem.arena_mark(arena)

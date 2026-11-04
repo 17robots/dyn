@@ -74,7 +74,7 @@ fn fixture(encoded_path: []const u8, expected_path: []const u8, wrapped: bool, c
     inflated := deflate.inflate(owned, encoded.value)
     require(inflated.ok && #len(inflated.value) == #len(expected.value), "one-shot inflate")
     for i in 0..#len(inflated.value) { require(inflated.value[i] == expected.value[i], "one-shot output") }
-    destination := memory.arena_push(owned, #len(expected.value), 1)[..#len(expected.value)]
+    destination := #slice(memory.arena_push(owned, #len(expected.value), 1), #len(expected.value))
     result: deflate.Result
     progressive := deflate.InflateState{}
     prefix: usize = 0

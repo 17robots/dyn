@@ -102,12 +102,6 @@ source += ['}']
 negative = [
     'm.rng2i32_overlaps(m.Rng2i32{},m.Rng2i32{min:m.Vec2i{x:2,y:0},max:m.Vec2i{x:1,y:1}})',
     'm.rng2f32_overlaps(m.Rng2f32{},m.Rng2f32{min:m.Vec2{x:#cast(f32,m.nan()),y:0.0},max:m.Vec2{x:1.0,y:1.0}})',
-    'm.rng2i32_dimension(m.Rng2i32{min:m.Vec2i{x:m.min_value(i32),y:0},max:m.Vec2i{x:m.max_value(i32),y:1}})',
-    'm.rng2i32_pad(m.Rng2i32{min:m.Vec2i{x:0,y:0},max:m.Vec2i{x:m.max_value(i32),y:1}},1)',
-
-    'm.rng1i64_dimension(m.Rng1i64{min:2,max:1})',
-    'm.rng1i64_dimension(m.Rng1i64{min:m.min_value(i64),max:m.max_value(i64)})',
-    'm.rng1u64_pad(m.Rng1u64{min:0,max:2},1)',
     'm.rng1f32_pad(m.Rng1f32{min:0.0,max:2.0},-1.0)',
     'm.rng1f32_dimension(m.Rng1f32{min:#cast(f32,m.nan()),max:1.0})',
 ]

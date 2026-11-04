@@ -65,17 +65,16 @@ fn src_next_is(p: *Parser, word: []const u8) bool {
   return #cast(usize, next.end - next.start) == #len(word) && at(p, next.start, word)
 }
 
-// distinct, packed and is are keywords only where they start their construct.
 fn src_distinct(p: *Parser) bool {
-  return token_is(p, "distinct") && src_next_is(p, "type")
+  return token_is(p, "distinct")
 }
 
 fn src_packed(p: *Parser) bool {
-  return token_is(p, "packed") && src_next_is(p, "struct")
+  return token_is(p, "packed") || token_is(p, "union")
 }
 
 fn src_type_pattern(p: *Parser) bool {
-  return token_is(p, "is") && !src_next_is(p, "=>") && !src_next_is(p, ",") && !src_next_is(p, "..")
+  return token_is(p, "is")
 }
 
 fn src_literal(p: *Parser, token_kind: TokenKind, kind: u16) u32 {
@@ -295,6 +294,10 @@ fn src_for(p: *Parser) u32 {
     if p.token.kind == TokenKind.Name {
       binding = parse_name(p)
     }
+    bound_type := None
+    if binding != None && !pointer && take(p, ":") {
+      bound_type = parse_type(p)
+    }
     if binding != None && take(p, "in") {
       flags = FlagIteration
       if pointer {
@@ -304,6 +307,9 @@ fn src_for(p: *Parser) u32 {
         flags |= FlagConst
       }
       chain(p, &condition_first, &condition_last, binding)
+      if bound_type != None {
+        chain(p, &condition_first, &condition_last, bound_type)
+      }
       if token_is(p, "#reverse") {
         reverse_start := p.token.start
         lex(p)
@@ -397,7 +403,7 @@ fn src_expression_start(p: *Parser) bool {
   if kind == TokenKind.Name || kind == TokenKind.Number || kind == TokenKind.Text || kind == TokenKind.Character {
     return true
   }
-  starts: [17][]const u8 = ["(", "[", ".", "-", "&", "!", "~", "#cast", "#bitcast", "#sizeof", "#alignof", "#offsetof", "#typeof", "#len", "#wrap", "#load", "#syscall"]
+  starts: [18][]const u8 = ["(", "[", ".", "-", "&", "!", "~", "#cast", "#bitcast", "#sizeof", "#alignof", "#offsetof", "#typeof", "#len", "#slice", "#offset", "#load", "#syscall"]
   for candidate in starts {
     if token_is(p, candidate) {
       return true
@@ -658,7 +664,10 @@ fn src_struct(p: *Parser) u32 {
   first := None
   last := None
   is_packed := take(p, "packed")
-  expect(p, "struct")
+  is_union := !is_packed && take(p, "union")
+  if !is_union {
+    expect(p, "struct")
+  }
   chain(p, &first, &last, parse_name(p))
   expect(p, "{")
   for !token_is(p, "}") && !p.tree.failed {
@@ -683,6 +692,9 @@ fn src_struct(p: *Parser) u32 {
   flags: u16
   if is_packed {
     flags = FlagPacked
+  }
+  if is_union {
+    flags = FlagUnion
   }
   return mark(p, add_node(p, SrcStruct, start, end, first), flags)
 }

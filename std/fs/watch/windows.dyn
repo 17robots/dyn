@@ -289,8 +289,8 @@ pub fn next(state: *Watcher) EventResult {
       if mask == 0 {
         continue
       }
-      bytes := (#cast(*u8, &slot.buffer[0]))[..4096]
-      names := (#cast(*u16, &bytes[at + 12]))[..length / 2]
+      bytes := #slice(#cast(*u8, &slot.buffer[0]), 4096)
+      names := #slice(#cast(*u16, &bytes[at + 12]), length / 2)
       position: usize = 0
       used: usize = 0
       for position < #len(names) {

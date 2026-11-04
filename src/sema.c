@@ -74,6 +74,21 @@ static bool integer(Sema *sema, DynType t) {
   t = underlying_type(sema->program, t);
   return t >= DYN_TYPE_I8 && t <= DYN_TYPE_USIZE;
 }
+/* Union members overlap, so a pointer member could be forged from bytes. */
+static bool sema_holds_pointer(const DynAstProgram *a, DynType t, unsigned depth) {
+  if (depth > 256 || t == DYN_TYPE_ANY || t == DYN_TYPE_RAWPTR || t == DYN_TYPE_STRING ||
+      dyn_type_is_pointer(t) || dyn_type_is_function(t) || dyn_type_is_slice(t))
+    return true;
+  if (dyn_type_is_array(t))
+    return sema_holds_pointer(a, a->arrays[t - DYN_TYPE_ARRAY_BASE].element, depth + 1);
+  if (dyn_type_is_struct(t)) {
+    const DynAstStruct *record = &a->structs[t - DYN_TYPE_STRUCT_BASE];
+    for (uint32_t i = 0; i < record->field_count; ++i)
+      if (sema_holds_pointer(a, a->fields[record->field_start + i].type, depth + 1))
+        return true;
+  }
+  return false;
+}
 static bool signed_int(Sema *sema, DynType t) {
   t = underlying_type(sema->program, t);
   return (t >= DYN_TYPE_I8 && t <= DYN_TYPE_I64) || t == DYN_TYPE_ISIZE;
@@ -384,7 +399,7 @@ static bool untyped_numeric_literal(const DynAstProgram *a, DynExprId id) {
   while (e->kind == DYN_EXPR_UNARY &&
          (e->op == DYN_OP_NEG || e->op == DYN_OP_BIT_NOT))
     e = &a->expressions[e->left];
-  return e->kind == DYN_EXPR_INT || e->kind == DYN_EXPR_FLOAT;
+  return e->kind == DYN_EXPR_INT || e->kind == DYN_EXPR_FLOAT || e->kind == DYN_EXPR_CHAR;
 }
 static DynSpan sema_unqualified_span(DynSpan name, const DynSource *s) {
   for (uint32_t i = name.start_byte; i < name.end_byte; ++i)
@@ -445,6 +460,15 @@ static uint32_t sema_find_field(DynAstProgram *a, uint32_t sid, DynSpan name,
   return dyn_name_index_find(&st->field_names,
       st->field_count ? &a->fields[st->field_start].name : NULL,
       sizeof(*a->fields), st->field_count, name, s, false, &a->allocation_failed);
+}
+/* Vet reports user code only: std implements these operations on purpose. */
+static void sema_vet_note(const DynSource *s, DynSpan span, bool unsafe_note, const char *message) {
+  if (!s->context.vet || (unsafe_note && !s->context.vet_unsafe)) return;
+  const char *path, *text; size_t length, at;
+  dyn_source_position(s, span.start_byte, &path, &text, &length, &at);
+  if (path && (strstr(path, "/std/") || strstr(path, "/share/dyn/") || strstr(path, "/vendor/"))) return;
+  dyn_diagnostic_source("warning", s, span.start_byte, span.end_byte, message);
+  if (s->context.vet_findings) ++*s->context.vet_findings;
 }
 static bool discard_name(DynSpan n, const DynSource *s) {
   return n.end_byte - n.start_byte == 1 && s->text[n.start_byte] == '_';
@@ -547,7 +571,7 @@ static DynAstFnType *fn_type_info(DynAstProgram *a, DynType t) {
              : NULL;
 }
 /* C ABI storage is explicit. Structs may contain C scalars/pointers and fixed
-   arrays, but never Dyn slice/any descriptors or payload enums. */
+   arrays, but never Dyn slice/any descriptors. */
 static bool sema_c_abi_type(DynAstProgram *a, DynType type, unsigned depth) {
   type = underlying_type(a, type);
   if (depth > 128) return false;
@@ -562,7 +586,7 @@ static bool sema_c_abi_type(DynAstProgram *a, DynType type, unsigned depth) {
     DynAstArray *array = &a->arrays[type - DYN_TYPE_ARRAY_BASE];
     return array->length && sema_c_abi_type(a, array->element, depth + 1);
   }
-  if (dyn_type_is_enum(type)) return !a->enums[type - DYN_TYPE_ENUM_BASE].has_payload;
+  if (dyn_type_is_enum(type)) return true;
   if (dyn_type_is_pointer(type)) {
     DynType pointee = underlying_type(a, a->pointers[type - DYN_TYPE_POINTER_BASE].pointee);
     return !dyn_type_is_function(pointee) || sema_c_abi_type(a, pointee, depth + 1);
@@ -798,7 +822,7 @@ static ConstantInt constant_int_at(DynAstProgram *a, DynExprId id, unsigned foll
   if (id == DYN_NO_EXPR)
     return (ConstantInt){0};
   DynAstExpr *e = &a->expressions[id];
-  /* #wrap results depend on the type's width; they are folded by codegen. */
+  /* Wrapped results depend on the type's width; they are folded by codegen. */
   if (e->wrap)
     return (ConstantInt){0};
   if (follow && e->kind == DYN_EXPR_CONVERT)
@@ -901,7 +925,7 @@ static ConstantUInt constant_uint_at(DynAstProgram *a, DynExprId id, unsigned fo
   if (id == DYN_NO_EXPR)
     return (ConstantUInt){0};
   DynAstExpr *e = &a->expressions[id];
-  /* #wrap results depend on the type's width; they are folded by codegen. */
+  /* Wrapped results depend on the type's width; they are folded by codegen. */
   if (e->wrap)
     return (ConstantUInt){0};
   if (follow && e->kind == DYN_EXPR_CONVERT)
@@ -1222,7 +1246,7 @@ static bool untyped_literal(DynAstProgram *a, DynExprId id) {
   DynAstExpr e = a->expressions[id];
   if (e.kind == DYN_EXPR_UNARY && e.op == DYN_OP_NEG)
     return untyped_literal(a, e.left);
-  return e.kind == DYN_EXPR_INT || e.kind == DYN_EXPR_FLOAT;
+  return e.kind == DYN_EXPR_INT || e.kind == DYN_EXPR_FLOAT || e.kind == DYN_EXPR_CHAR;
 }
 /* Match a parameter pattern against an argument type, binding type
    parameters. Returns false only on a conflicting binding. A shape that does
@@ -1474,35 +1498,12 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
       error_span(a->expressions[id].span, s, errors, "unknown enum variant");
       return a->expressions[id].type = DYN_TYPE_ERROR;
     }
-    DynAstVariant *v = &a->variants[variant];
     bool constructor = a->expressions[id].kind == DYN_EXPR_ENUM;
     a->expressions[id].kind = DYN_EXPR_ENUM;
     a->expressions[id].integer = variant;
     a->expressions[id].type = DYN_TYPE_ENUM_BASE + eid;
-    if (v->payload_type == DYN_TYPE_VOID) {
-      if (constructor || a->expressions[id].item_count)
-        error_span(a->expressions[id].span, s, errors,
-                   "payloadless enum variant is not callable");
-    } else if (!constructor) {
-      if (expected != a->expressions[id].type)
-        error_span(a->expressions[id].span, s, errors,
-                   "payload enum variant requires exactly one argument");
-    } else if (a->expressions[id].item_count != 1)
-      error_span(a->expressions[id].span, s, errors,
-                 "payload enum variant requires exactly one argument");
-    else {
-      uint32_t item_start = a->expressions[id].item_start;
-      DynSpan enum_span = a->expressions[id].span;
-      uint32_t arg_index = item_start;
-      DynType value =
-          check_expr(sema, a, a->items[arg_index].expression, s, errors, v->payload_type);
-      if (value != v->payload_type && value != DYN_TYPE_ERROR) {
-        if (can_convert(sema, a, value, v->payload_type))
-          a->items[arg_index].expression = convert_expr(a, a->items[arg_index].expression, v->payload_type);
-        else
-          error_span(enum_span, s, errors, "enum payload type mismatch");
-      }
-    }
+    if (constructor || a->expressions[id].item_count)
+      error_span(a->expressions[id].span, s, errors, "enum variant is not callable");
     return a->expressions[id].type;
   }
   if (a->expressions[id].kind == DYN_EXPR_CALL) {
@@ -1685,6 +1686,7 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
     uint32_t l = find_local(sema, a, a->expressions[id].span, s);
     if (l != UINT32_MAX) {
       a->expressions[id].integer = l;
+      a->locals[l].used = true;
       return a->expressions[id].type = a->locals[l].type;
     }
     uint32_t global = sema_find_global_name(sema, a, a->expressions[id].span, s);
@@ -1773,14 +1775,49 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
                  "slicing requires array, slice, or pointer range");
       return a->expressions[id].type = DYN_TYPE_ERROR;
     }
-    if (pointer && a->expressions[id].integer == DYN_NO_EXPR) {
+    if (pointer && a->expressions[id].boolean)
+      sema_vet_note(s, a->expressions[id].span, true,
+                    a->expressions[id].op == DYN_OP_ADD ? "unsafe: #offset" : "unsafe: #slice");
+    if (pointer && !a->expressions[id].boolean) {
       error_span(a->expressions[id].span, s, errors,
-                 "pointer slicing requires explicit end bound");
+                 "slice a pointer with #slice(pointer, count)");
+      return a->expressions[id].type = DYN_TYPE_ERROR;
+    }
+    if (!pointer && a->expressions[id].boolean) {
+      error_span(a->expressions[id].span, s, errors, "#slice and #offset require a pointer");
       return a->expressions[id].type = DYN_TYPE_ERROR;
     }
     if (pointer && !sema_type_layout(sema, a, pointer->pointee, false)) {
       error_span(a->expressions[id].span, s, errors, "cannot slice pointer to unsized type");
       return a->expressions[id].type = DYN_TYPE_ERROR;
+    }
+    if (a->expressions[id].boolean && a->expressions[id].op == DYN_OP_ADD) {
+      /* #offset(p, n) is p plus n elements, built from ordinary wrapping
+         address arithmetic so every backend lowers it the same way. */
+      DynType count_type = check_expr(sema, a, (DynExprId)a->expressions[id].integer, s, errors, DYN_TYPE_ISIZE);
+      if (!integer(sema, count_type)) {
+        error_span(a->expressions[id].span, s, errors, "#offset count requires an integer");
+        return a->expressions[id].type = DYN_TYPE_ERROR;
+      }
+      uint64_t stride = sema_type_layout(sema, a, pointer->pointee, false);
+      DynExprId address = convert_expr(a, a->expressions[id].left, DYN_TYPE_USIZE);
+      DynExprId count = convert_expr(a, (DynExprId)a->expressions[id].integer, DYN_TYPE_USIZE);
+      DynExprId size = reflection_expr(a, DYN_EXPR_INT, DYN_TYPE_USIZE, stride);
+      DynExprId bytes = reflection_expr(a, DYN_EXPR_BINARY, DYN_TYPE_USIZE, 0);
+      DynExprId sum = reflection_expr(a, DYN_EXPR_BINARY, DYN_TYPE_USIZE, 0);
+      if (address == DYN_NO_EXPR || count == DYN_NO_EXPR || sum == DYN_NO_EXPR)
+        return a->expressions[id].type = DYN_TYPE_ERROR;
+      a->expressions[bytes].op = DYN_OP_MUL;
+      a->expressions[bytes].left = count;
+      a->expressions[bytes].right = size;
+      a->expressions[sum].op = DYN_OP_ADD;
+      a->expressions[sum].left = address;
+      a->expressions[sum].right = bytes;
+      a->expressions[id].kind = DYN_EXPR_CONVERT;
+      a->expressions[id].left = sum;
+      a->expressions[id].op = DYN_OP_NONE;
+      a->expressions[id].boolean = false;
+      return a->expressions[id].type = base;
     }
     DynType element = ar ? ar->element : sl ? sl->element : pointer->pointee;
     bool element_const = sl ? sl->is_const : pointer && pointer->is_const;
@@ -1947,7 +1984,7 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
         values[11] = DYN_NO_EXPR;
       for (uint32_t i = 0; i < subject->variant_count && names && types; ++i) {
         names[i] = a->variants[subject->variant_start + i].name;
-        types[i] = a->variants[subject->variant_start + i].payload_type;
+        types[i] = DYN_TYPE_VOID;
       }
       if (names && types)
         values[11] = reflection_members(a, s, member_type, member_slice, names,
@@ -2029,10 +2066,8 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
     bool source_ptr = dyn_type_is_pointer(source) || source == DYN_TYPE_RAWPTR;
     bool target_ptr = dyn_type_is_pointer(target) || target == DYN_TYPE_RAWPTR;
     /* Plain enums cast to and from integers; codegen checks integer values. */
-    bool source_tag = dyn_type_is_enum(source) &&
-                      !a->enums[source - DYN_TYPE_ENUM_BASE].has_payload;
-    bool target_tag = dyn_type_is_enum(target) &&
-                      !a->enums[target - DYN_TYPE_ENUM_BASE].has_payload;
+    bool source_tag = dyn_type_is_enum(source);
+    bool target_tag = dyn_type_is_enum(target);
     bool valid = (numeric(sema, source) && numeric(sema, target)) ||
                  (source_ptr && target_ptr) ||
                  (source_ptr && integer(sema, target)) ||
@@ -2142,6 +2177,8 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
                      "struct field initializer type mismatch");
       }
     }
+    if (a->structs[sid].is_union && a->expressions[id].item_count > 1)
+      error_span(a->expressions[id].span, s, errors, "a union literal sets one member");
     return a->expressions[id].type;
   }
   if (a->expressions[id].kind == DYN_EXPR_FIELD) {
@@ -2204,10 +2241,10 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
     return a->expressions[id].type = expected == DYN_TYPE_F64 ? DYN_TYPE_F64 : DYN_TYPE_F32;
   }
   if (a->expressions[id].kind == DYN_EXPR_CHAR) {
-    DynType t = expected == DYN_TYPE_U8 || expected == DYN_TYPE_U16 ||
-                        expected == DYN_TYPE_U32
+    DynType t = expected != DYN_TYPE_INFER && !dyn_type_is_distinct(expected) &&
+                        integer(sema, expected)
                     ? expected
-                    : (a->expressions[id].integer <= 255 ? DYN_TYPE_U8 : DYN_TYPE_U32);
+                    : DYN_TYPE_U32;
     if (!literal_fits(sema, a->expressions[id].integer, t)) {
       error_span(a->expressions[id].span, s, errors,
                  "character literal is not representable in expected type");
@@ -2334,7 +2371,7 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
     return a->expressions[id].type = DYN_TYPE_ERROR;
   if (left != right && dyn_type_is_pointer(left) &&
       dyn_type_is_pointer(right) &&
-      (a->expressions[id].op == DYN_OP_EQ || a->expressions[id].op == DYN_OP_NE)) {
+      a->expressions[id].op >= DYN_OP_EQ && a->expressions[id].op <= DYN_OP_GE) {
     if (can_convert(sema, a, left, right)) {
       DynExprId converted = convert_expr(a, a->expressions[id].left, right);
       a->expressions[id].left = converted;
@@ -2362,17 +2399,13 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
   }
   if (a->expressions[id].op >= DYN_OP_EQ && a->expressions[id].op <= DYN_OP_GE) {
     if (left == DYN_TYPE_STRING || dyn_type_is_struct(left) ||
-        dyn_type_is_array(left) || dyn_type_is_slice(left) ||
-        (dyn_type_is_enum(left) &&
-         a->enums[left - DYN_TYPE_ENUM_BASE].has_payload)) {
+        dyn_type_is_array(left) || dyn_type_is_slice(left)) {
       error_span(a->expressions[id].span, s, errors, "aggregate values are not comparable");
       return a->expressions[id].type = DYN_TYPE_ERROR;
     }
-    if ((dyn_type_is_pointer(left) || dyn_type_is_enum(left)) &&
+    if (dyn_type_is_enum(left) &&
         a->expressions[id].op != DYN_OP_EQ && a->expressions[id].op != DYN_OP_NE) {
-      error_span(a->expressions[id].span, s, errors,
-                 dyn_type_is_enum(left) ? "enums support equality only"
-                                        : "pointers support equality only");
+      error_span(a->expressions[id].span, s, errors, "enums support equality only");
       return a->expressions[id].type = DYN_TYPE_ERROR;
     }
     /* x < 0 and x >= 0 on an unsigned x are constant: almost always a
@@ -2403,10 +2436,6 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
   }
   if (!numeric(sema, left))
     error_span(a->expressions[id].span, s, errors, "arithmetic requires numeric operands");
-  if (a->expressions[id].wrap && !integer(sema, left) && numeric(sema, left)) {
-    error_span(a->expressions[id].span, s, errors, "#wrap requires integer arithmetic");
-    return a->expressions[id].type = DYN_TYPE_ERROR;
-  }
   if (integer(sema, left)) {
     ConstantUInt rhs = constant_uint(a, a->expressions[id].right);
     if ((a->expressions[id].op == DYN_OP_DIV || a->expressions[id].op == DYN_OP_REM) && rhs.valid &&
@@ -2493,7 +2522,7 @@ static void validate_pointer_case_bindings(DynAstProgram *a, DynAstStmt *st,
     if (arm->pointer_binding && !mutable_case_subject(a, st->expression))
       error_span(
           arm->binding, s, errors,
-          "pointer payload binding requires mutable assignable case subject");
+          "pointer binding requires mutable assignable case subject");
   }
 }
 static bool valid_defer_stmt(DynAstProgram *a, uint32_t id, const DynSource *s,
@@ -2771,31 +2800,8 @@ static bool sema_case_v2(Sema *sema, DynAstProgram *a, DynAstStmt *st,
         }
       }
     }
-    bool binding = arm->binding.end_byte > arm->binding.start_byte;
-    if (binding) {
-      if (!enum_case || arm->wildcard || arm->pattern_count != 1 ||
-          !a->patterns[arm->pattern_start].is_enum)
-        error_span(arm->binding, s, errors,
-                   "payload binding requires one enum variant pattern");
-      else {
-        DynAstVariant *v =
-            &a->variants[a->patterns[arm->pattern_start].variant];
-        if (v->payload_type == DYN_TYPE_VOID)
-          error_span(arm->binding, s, errors,
-                     "payloadless variant cannot bind payload");
-        else if (find_local(sema, a, arm->binding, s) != UINT32_MAX)
-          error_span(arm->binding, s, errors,
-                     "shadowing or duplicate local is forbidden");
-        else if (reserve_local(a)) {
-          arm->local_id = (uint32_t)a->local_count;
-          a->locals[a->local_count++] =
-              (DynAstLocal){.name = arm->binding,
-                            .type = v->payload_type,
-                            .active = true,
-                            .owner_function = sema->current_function};
-        }
-      }
-    }
+    if (arm->binding.end_byte > arm->binding.start_byte)
+      error_span(arm->binding, s, errors, "enum variants have nothing to bind");
     all_terminate = sema_block(sema, a, arm->body_start, arm->body_count, s,
                                errors, true) &&
                     all_terminate;
@@ -3035,31 +3041,8 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
           }
         }
       }
-      bool has_binding = arm->binding.end_byte > arm->binding.start_byte;
-      if (has_binding) {
-        if (!enum_case || arm->wildcard || arm->pattern_count != 1 ||
-            !a->patterns[arm->pattern_start].is_enum) {
-          error_span(arm->binding, s, errors,
-                     "payload binding requires one enum variant pattern");
-        } else {
-          DynAstVariant *v =
-              &a->variants[a->patterns[arm->pattern_start].variant];
-          if (v->payload_type == DYN_TYPE_VOID)
-            error_span(arm->binding, s, errors,
-                       "payloadless variant cannot bind payload");
-          else if (find_local(sema, a, arm->binding, s) != UINT32_MAX)
-            error_span(arm->binding, s, errors,
-                       "shadowing or duplicate local is forbidden");
-          else if (reserve_local(a)) {
-            arm->local_id = (uint32_t)a->local_count;
-            a->locals[a->local_count++] =
-                (DynAstLocal){.name = arm->binding,
-                              .type = v->payload_type,
-                              .active = true,
-                              .owner_function = sema->current_function};
-          }
-        }
-      }
+      if (arm->binding.end_byte > arm->binding.start_byte)
+        error_span(arm->binding, s, errors, "enum variants have nothing to bind");
       bool term = sema_block(sema, a, arm->body_start, arm->body_count, s,
                              errors, true);
       all_terminate = all_terminate && term;
@@ -3085,17 +3068,25 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
   }
   if (st->kind == DYN_STMT_IF || st->kind == DYN_STMT_FOR) {
     if (st->kind == DYN_STMT_FOR && st->for_range) {
-      /* A literal bound adapts to the other bound, so `0..count` takes
-         count's type. All-literal ranges count in usize for indexing, or
-         isize when a bound is negative. Bounds evaluate once, in order. */
+      /* A typed binding sets both bounds. Otherwise a literal bound adapts to
+         the other bound, so `0..count` takes count's type, and all-literal
+         ranges count in usize. Bounds evaluate once, in order. */
       DynType type;
       bool first_literal = range_bound_literal(a, st->target),
            last_literal = range_bound_literal(a, st->expression);
-      if (first_literal && last_literal) {
-        type = a->expressions[st->target].kind == DYN_EXPR_UNARY ||
-                       a->expressions[st->expression].kind == DYN_EXPR_UNARY
-                   ? DYN_TYPE_ISIZE
-                   : DYN_TYPE_USIZE;
+      if (st->declared_type != DYN_TYPE_INFER) {
+        type = st->declared_type;
+        if (check_expr(sema, a, st->target, s, errors, type) != type ||
+            check_expr(sema, a, st->expression, s, errors, type) != type)
+          type = DYN_TYPE_ERROR;
+      } else if (first_literal && last_literal) {
+        if (a->expressions[st->target].kind == DYN_EXPR_UNARY ||
+            a->expressions[st->expression].kind == DYN_EXPR_UNARY) {
+          error_span(st->span, s, errors,
+                     "negative literal range needs a typed binding, such as 'for i: i32 in'");
+          return false;
+        }
+        type = DYN_TYPE_USIZE;
         if (check_expr(sema, a, st->target, s, errors, type) != type ||
             check_expr(sema, a, st->expression, s, errors, type) != type)
           type = DYN_TYPE_ERROR;
@@ -3139,6 +3130,10 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
       if (pushed)
         pop_loop(sema);
       a->locals[st->local_id].active = false;
+      return false;
+    }
+    if (st->kind == DYN_STMT_FOR && st->declared_type != DYN_TYPE_INFER) {
+      error_span(st->span, s, errors, "only a range for-in takes a typed binding");
       return false;
     }
     if (st->kind == DYN_STMT_FOR && st->target != DYN_NO_EXPR) {
@@ -3612,19 +3607,12 @@ static bool sema_program(Sema *sema, DynAstProgram *a, const DynSource *s,
     }
   }
   free(type_order);
-  for (uint32_t i = 0; i < a->field_count; ++i)
-    if (a->fields[i].default_expression != DYN_NO_EXPR) {
-      DynType value = check_expr(sema, a, a->fields[i].default_expression, s,
-                                 errors, a->fields[i].type);
-      if (value != a->fields[i].type && value != DYN_TYPE_ERROR) {
-        if (can_convert(sema, a, value, a->fields[i].type))
-          a->fields[i].default_expression = convert_expr(
-              a, a->fields[i].default_expression, a->fields[i].type);
-        else
-          error_span(a->fields[i].name, s, errors,
-                     "struct field default type mismatch");
-      }
-    }
+  for (size_t i = 0; i < a->struct_count; ++i)
+    if (a->structs[i].is_union)
+      for (uint32_t k = 0; k < a->structs[i].field_count; ++k)
+        if (sema_holds_pointer(a, a->fields[a->structs[i].field_start + k].type, 0))
+          error_span(a->fields[a->structs[i].field_start + k].name, s, errors,
+                     "union members cannot hold pointers, slices or any");
   unsigned char *constant_globals = calloc(a->global_count ? a->global_count : 1, 1);
   if (!constant_globals) { a->allocation_failed = true; return false; }
   /* Resolve all global expressions before following constant dependencies;
@@ -3636,11 +3624,6 @@ static bool sema_program(Sema *sema, DynAstProgram *a, const DynSource *s,
       error_span(g->name, s, errors,
                  "constant initializer must be compile-time expression");
   }
-  for (uint32_t i = 0; i < a->field_count && dyn_work_step(&s->context, 1); ++i)
-    if (a->fields[i].default_expression != DYN_NO_EXPR &&
-        !compile_time_expr(a, a->fields[i].default_expression, s, constant_globals))
-      error_span(a->fields[i].name, s, errors,
-                 "struct field default must be compile-time expression");
   free(constant_globals);
   for (size_t i = 0; i < a->assert_count; ++i) {
     DynAstAssert *as = &a->asserts[i];
@@ -3783,6 +3766,34 @@ bool dyn_sema_base(DynAstProgram *a, const DynSource *s, unsigned *errors) {
     error_span((DynSpan){0}, s, errors, "out of memory indexing symbols");
   }
   bool ok = ready && sema_program(&sema, a, s, errors);
+  if (ok && s->context.vet) {
+    for (size_t i = 0; i < a->statement_count; ++i) {
+      const DynAstStmt *st = &a->statements[i];
+      if (st->kind == DYN_STMT_LOCAL && st->local_id < a->local_count &&
+          !a->locals[st->local_id].used && !discard_name(st->name, s))
+        sema_vet_note(s, st->name, false, "local is never used");
+    }
+    for (size_t i = 0; i < a->expression_count; ++i) {
+      const DynAstExpr *e = &a->expressions[i];
+      if (e->kind == DYN_EXPR_SYSCALL)
+        sema_vet_note(s, e->span, true, "unsafe: #syscall");
+      else if (e->kind == DYN_EXPR_BINARY && e->op == DYN_OP_MUL &&
+               e->left != DYN_NO_EXPR && e->right != DYN_NO_EXPR) {
+        const DynAstExpr *l = &a->expressions[e->left], *r = &a->expressions[e->right];
+        bool left_size = l->span.end_byte - l->span.start_byte > 7 && !memcmp(s->text + l->span.start_byte, "#sizeof", 7);
+        bool right_size = r->span.end_byte - r->span.start_byte > 7 && !memcmp(s->text + r->span.start_byte, "#sizeof", 7);
+        if ((left_size && r->kind != DYN_EXPR_INT) || (right_size && l->kind != DYN_EXPR_INT))
+          sema_vet_note(s, e->span, true, "unsafe: size multiplication wraps; check the count");
+      }
+      else if ((e->kind == DYN_EXPR_CAST || e->kind == DYN_EXPR_BITCAST) && e->left != DYN_NO_EXPR) {
+        DynType from = a->expressions[e->left].type;
+        bool to_pointer = dyn_type_is_pointer(e->type) || e->type == DYN_TYPE_RAWPTR;
+        bool from_pointer = dyn_type_is_pointer(from) || from == DYN_TYPE_RAWPTR;
+        if (to_pointer || from_pointer)
+          sema_vet_note(s, e->span, true, "unsafe: pointer cast");
+      }
+    }
+  }
   if (a->type_capacity_exceeded) {
     error_span((DynSpan){0}, s, errors, "interned type capacity exceeded");
     ok = false;

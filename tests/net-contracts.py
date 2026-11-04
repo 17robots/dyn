@@ -37,7 +37,7 @@ fn check_failed(outcome: *net.ConnectionResult) {
   if outcome.ok { #panic("connection unexpectedly succeeded") }
   _ = net.connection_close(&outcome.value)
   if #syscall(72, 0, 1, 0) < 0 { #panic("failed connection closed stdin") }
-  if outcome.value.active || outcome.value.descriptor != -1 { #panic("failed connection active") }
+  if outcome.value.active { #panic("failed connection active") }
 }
 fn main() {
   address := net.ipv4(127, 0, 0, 1, 1)
@@ -63,7 +63,7 @@ fn main() {
   closed := net.listener_close(&outcome.value)
   if closed.ok || closed.kind != errors.Kind.InvalidState { #panic("closed kind") }
   if #syscall(72, 0, 1, 0) < 0 { #panic("failed listener closed stdin") }
-  if outcome.value.active || outcome.value.descriptor != -1 { #panic("failed listener active") }
+  if outcome.value.active { #panic("failed listener active") }
 }
 ''',
     'empty-datagram': '''use "std/net"

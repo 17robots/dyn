@@ -73,7 +73,7 @@ pub fn set_swap_interval(window:*Window, interval:i32) Result {
   if length==65536 {
     return Result{kind:errors.Kind.Capacity}
   }
-  extensions:=pointer[..length]
+  extensions:=#slice(pointer, length)
   if swap_extension(extensions, "GLX_EXT_swap_control") {
     name:="glXSwapIntervalEXT\x00"
     apply:=#cast(fn(rawptr, usize, i32), gl_proc(&name[0]))

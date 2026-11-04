@@ -41,7 +41,7 @@ fn mapping_allocate(size: usize) Mapping {
   }
   region.* = WasmRegion{ pages: pages, requested: size, live: true }
   data := #cast(*u8, (#cast(usize, region) + header))
-  return Mapping{ bytes: data[..size], committed: size, ok: true }
+  return Mapping{ bytes: #slice(data, size), committed: size, ok: true }
 }
 
 fn mapping_release(bytes: []u8) isize {

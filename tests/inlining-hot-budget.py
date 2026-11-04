@@ -126,10 +126,10 @@ int main(void){late(true,false);late(false,false);late(true,true);late(false,tru
 '''
 SOURCE = '''use "std/io"
 state:u64=0
-fn leaf(x:u64) u64 {return #wrap(x+1)}
+fn leaf(x:u64) u64 {return (x+1)}
 fn cold(x:u64) u64 {return leaf(x)}
-fn tiny_hot(x:u64) u64 {return #wrap(x*3+1)}
-fn checked(x:u8) u8 {return x+1}
+fn tiny_hot(x:u64) u64 {return (x*3+1)}
+fn checked(x:u8) u8 {return 1/(x+1)}
 pub fn hot(seed:u64,n:usize) u64 {
  value:=seed
 COLD

@@ -91,7 +91,7 @@ fn main() {
   if rejected.kind != errors.Kind.InvalidInput || mem.arena_mark(arena) != mark { #panic("input overlap") }
   alignment := #alignof([]const u8)
   slot_start := (mark + alignment - 1) & ~(alignment - 1)
-  slots := (#cast(*[]const u8, &arena.data[slot_start]))[..1]
+  slots := #slice(#cast(*[]const u8, &arena.data[slot_start]), 1)
   slots[0] = command
   descriptors := process.capture(arena, command, slots, process.Options{}, process.CaptureOptions{})
   if descriptors.kind != errors.Kind.InvalidInput || mem.arena_mark(arena) != mark { #panic("descriptor overlap") }

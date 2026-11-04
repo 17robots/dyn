@@ -3,6 +3,9 @@
 #include "dyn_ast.h"
 #include "dyn_location.h"
 
+static inline bool dyn_op_wraps(DynOperator op) {
+  return op == DYN_OP_ADD || op == DYN_OP_SUB || op == DYN_OP_MUL || op == DYN_OP_SHL;
+}
 typedef struct {
   bool *functions;
   unsigned char *expressions, *statements;
@@ -30,12 +33,11 @@ typedef struct {
 typedef struct {
   char *name;
   DynType type;
-  DynExprId default_expression;
 } DynIrField;
 typedef struct {
   char *name;
   DynSpan span;
-  bool packed;
+  bool packed, is_union;
   bool is_public;
   uint64_t module_owner;
   uint32_t field_start, field_count;
@@ -43,7 +45,6 @@ typedef struct {
 } DynIrStruct;
 typedef struct {
   char *name;
-  DynType payload_type;
   /* Two's complement for signed tag types. */
   uint64_t tag;
 } DynIrVariant;
@@ -52,8 +53,7 @@ typedef struct {
   DynSpan span;
   DynType tag_type;
   uint32_t variant_start, variant_count;
-  uint64_t size, alignment, payload_size, payload_alignment;
-  bool has_payload;
+  uint64_t size, alignment;
   bool is_public;
   uint64_t module_owner;
 } DynIrEnum;

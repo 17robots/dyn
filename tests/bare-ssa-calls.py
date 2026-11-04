@@ -50,19 +50,19 @@ cvoid(x) }
 pub fn mutate(x:u64) { g=x }
 pub fn state(x:u64) u64 { g=x
 a:=g
-mutate(#wrap(x+1))
-return #wrap(a+g) }
+mutate((x+1))
+return (a+g) }
 pub fn nested(x:u64,y:u64) u64 { a:=cwide(x)
 b:=cwide(cwide(y))
-return #wrap(a+b+x+y) }
+return (a+b+x+y) }
 pub fn phicalls(x:u64,y:u64,n:u32) u64 { a:=x
 b:=y
 i:u32=0
 for i<n { t:=cwide(a)
 a=b
 b=t
-i=#wrap(i+1) }
-return #wrap(a+b) }
+i=(i+1) }
+return (a+b) }
 pub fn checkedcall(x:u64) u64 { return cwide(x)+1 }
 extern fn cfloat(x:f64) f64
 struct Pair { a:u64,b:u64 }

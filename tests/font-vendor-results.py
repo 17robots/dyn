@@ -116,7 +116,7 @@ fn main(){
  run := hb.shape_run(arena,&loaded.api,created.value,"السَلام",hb.Options{direction:hb.RightToLeft,script:1098015074,language:"ar",cluster_level:hb.MonotoneCharacters,flags:hb.BeginningOfText|hb.EndOfText},features)
  check(run.ok)
  save(arena,run.value,"run-actual.bin")
- context_run:=hb.shape_run(arena,&loaded.api,created.value,"بجح",hb.Options{direction:hb.RightToLeft,script:1098015074,language:"ar",cluster_level:1,item_offset:2,item_length:2},features)
+ context_run:=hb.shape_run(arena,&loaded.api,created.value,"بجح",hb.Options{direction:hb.RightToLeft,script:1098015074,language:"ar",cluster_level:1,item_offset:2,has_item_length:true,item_length:2},features)
  check(context_run.ok && #len(context_run.value)>0 && context_run.value[0].cluster==2)
  save(arena,context_run.value,"context-actual.bin")
  unicode := loaded.api.unicode_get_default()
@@ -126,12 +126,12 @@ fn main(){
  check(hb.shape_run(arena,&loaded.api,created.value,"x",hb.Options{flags:256},features).kind==errors.Kind.InvalidInput)
  check(hb.shape_run(arena,&loaded.api,created.value,"x",hb.Options{language:"a\0r"},features).kind==errors.Kind.InvalidInput)
  check(hb.shape_run(arena,&loaded.api,created.value,"x",hb.Options{item_offset:2},features).kind==errors.Kind.InvalidInput)
- check(hb.shape_run(arena,&loaded.api,created.value,"x",hb.Options{item_length:2},features).kind==errors.Kind.InvalidInput)
- check(hb.shape_run(arena,&loaded.api,created.value,"x",hb.Options{item_length: -2},features).kind==errors.Kind.InvalidInput)
+ check(hb.shape_run(arena,&loaded.api,created.value,"x",hb.Options{has_item_length:true,item_length:2},features).kind==errors.Kind.InvalidInput)
+ check(hb.shape_run(arena,&loaded.api,created.value,"x",hb.Options{has_item_length:true,item_length: -2},features).kind==errors.Kind.InvalidInput)
  check(mem.arena_mark(arena)==checkpoint)
  // The FreeType callback consumes shaped glyph IDs with baseline origins.
  adapter := ft.Adapter{font:&font,line_height:40,glyph_ids:true}
- context := ui.Context{}
+ context := ui.Context{ style: ui.default_style }
  viewport := ui.Rect{width:256,height:64}
  ui.begin(&context,arena,ui.Input{},viewport)
  pen: i64 = 20*64

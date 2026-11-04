@@ -696,35 +696,6 @@ static void isa_syscall(BackendContext *ctx) {
   CODE(0x48,0x8b,0x04,0x24,0x48,0x81,0xec); word(ctx,reserved); CODE(0x48,0x89,0x04,0x24);
   runtime_call(ctx,9); CODE(0x48,0x81,0xc4); word(ctx,reserved+56); ctx->stack_slots-=7;
 }
-/* Enum cast validation: R8 accumulates whether A equals any declared tag. */
-static void isa_match_begin(BackendContext *ctx) {
-  if (ctx->t32) { t32_match_begin(ctx); return; }
-  if (ctx->rv32) { r32_match_begin(ctx); return; }
-  if (ctx->rv64) { rv_imm(ctx,14,0); return; }
-  if (ctx->a64) { a64_immediate(ctx, a64_reg[R_8], 0); return; }
-  CODE(0x45,0x31,0xc0);
-}
-static void isa_match_tag(BackendContext *ctx, uint64_t tag) {
-  if (ctx->t32) { t32_match_tag(ctx, tag); return; }
-  if (ctx->rv32) { r32_match_tag(ctx, tag); return; }
-  if (ctx->rv64) { rv_imm(ctx,6,tag);rv_r(ctx,0x33,6,10,6,4,0);rv_i(ctx,0x13,6,6,1,3);rv_r(ctx,0x33,14,14,6,6,0); return; }
-  isa_immediate(ctx, R_C, tag);
-  if (ctx->a64) {
-    a64_word(ctx, 0xeb00001f | a64_reg[R_C] << 16 | a64_reg[R_A] << 5); /* cmp x0, x9 */
-    a64_word(ctx, 0x9a9f17e0 | A64_SCRATCH); /* cset x16, eq */
-    a64_word(ctx, 0xaa000000 | A64_SCRATCH << 16 | a64_reg[R_8] << 5 | a64_reg[R_8]);
-    return;
-  }
-  CODE(0x48,0x39,0xc8,0x0f,0x94,0xc1,0x41,0x08,0xc8);
-}
-static void isa_match_test(BackendContext *ctx) {
-  if (ctx->t32) { t32_match_test(ctx); return; }
-  if (ctx->rv32) { r32_match_test(ctx); return; }
-  if (ctx->rv64) { rv_compare(ctx,14,0); return; }
-  if (ctx->a64) { a64_word(ctx, 0xf100001f | a64_reg[R_8] << 5); return; }
-  CODE(0x45,0x84,0xc0);
-}
-/* Integer bits in A -> floating bits in A (f32 bits zero-extended). */
 static void isa_int_to_float(BackendContext *ctx, bool f32, bool unsigned64) {
   if (ctx->t32) { t32_int_to_float(ctx, f32, unsigned64); return; }
   if (ctx->rv32) { r32_int_to_float(ctx, f32, unsigned64); return; }

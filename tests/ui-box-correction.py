@@ -20,7 +20,7 @@ fn measure(data: rawptr, text: []const u8) f32 { _ = data
 struct App { storage: [64]u8, edit: box.Edit, changed: bool, error: errors.Kind }
 fn frame(state: *box.State, arena: *mem.Arena, app: *App, input: box.Input) {
   mem.arena_reset(arena)
-  context := ui.Context{}
+  context := ui.Context{ style: ui.default_style }
   ui.begin(&context,arena,ui.Input{},ui.Rect{width:400,height:200})
   box.begin(state,arena,input,400.0,200.0,0.02)
   result := box.text_field(state,"field",app.storage[..],&app.edit)

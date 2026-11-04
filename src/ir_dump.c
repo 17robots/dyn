@@ -336,11 +336,11 @@ static void walk(Dump *d,const DynTarget *t) {
   SECTION(fields,field_count) {
     const DynIrField *f=&p->fields[i]; row(d,"field",i);
     name(d,"name",f->name,false); type(d,"type",f->type);
-    EX("default",f->default_expression); END;
+    END;
   }
   SECTION(variants,variant_count) {
     const DynIrVariant *v=&p->variants[i]; row(d,"variant",i);
-    name(d,"name",v->name,false); type(d,"payload_type",v->payload_type);
+    name(d,"name",v->name,false);
     raw(d,"tag",v->tag); END;
   }
   SECTION(globals,global_count) {

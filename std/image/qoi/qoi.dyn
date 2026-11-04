@@ -65,7 +65,7 @@ fn inspect_info(source: []const u8) Info {
   return Info{ width: width, height: height, channels: channels, srgb: source[13] == 0, ok: true }
 }
 
-fn packed(r: u8, g: u8, b: u8, a: u8) u32 {
+fn packed_pixel(r: u8, g: u8, b: u8, a: u8) u32 {
   return #cast(u32, r) * 16777216 + #cast(u32, g) * 65536 + #cast(u32, b) * 256 + #cast(u32, a)
 }
 
@@ -167,7 +167,7 @@ fn decode_into(destination: []u8, source: []const u8) DecodeWork {
           return DecodeWork{ info: info, error: -74, offset: input - 1 }
         }
       }
-      table[hash(red, green, blue, alpha)] = packed(red, green, blue, alpha)
+      table[hash(red, green, blue, alpha)] = packed_pixel(red, green, blue, alpha)
     }
     at := output * 4
     destination[at] = red
@@ -256,7 +256,7 @@ fn encode_into(destination: []u8, pixels: []const u8, width: u32, height: u32, c
         run = 0
       }
       index := hash(red, green, blue, alpha)
-      packed_value := packed(red, green, blue, alpha)
+      packed_value := packed_pixel(red, green, blue, alpha)
       if table[index] == packed_value {
         if output == #len(destination) {
           return EncodeWork{ error: -28 }

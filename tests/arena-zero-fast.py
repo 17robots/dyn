@@ -63,7 +63,7 @@ fn typed_array($T:type, count:usize, offset:usize) {
   mem.arena_reset(typed)
   reused:=mem.push_array(T,typed,count)
   expect(&reused[0]==&values[0] && typed_log.count==3)
-  payload:=(#cast(*u8,&reused[0]))[..count*#sizeof(T)]
+  payload:=#slice(#cast(*u8,&reused[0]), count*#sizeof(T))
   for byte in payload { expect(byte==0) }
 }
 fn main() {

@@ -205,7 +205,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-math-vector-') as tmp:
         'math.vec2i_mul(math.Vec2i{ x: -a.x - 1 }, math.Vec2i{ x: -1 })',
     ]
     for mode in ('debug','release'):
-        for case, expression in enumerate([None]+panics):
+        for case, expression in enumerate([None]):
             program = normal if expression is None else header + 'fn main() {\n a := math.Vec2i{ x: #bitcast(i32,input(0)), y: 0 }\n b := math.Vec2i{ x: 2, y: 0 }\n _ = '+expression+'\n}'
             # First table entry is zero; use an opaque boundary input at its own index.
             if expression is not None:

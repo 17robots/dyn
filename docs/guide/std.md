@@ -253,7 +253,7 @@ vector ABI types and must not be passed to C functions expecting vector types.
 ### Immediate-mode UI
 
 `std/ui` is a portable UI core with no window system or native library dependency.
-Construct a `ui.Context{}` once, then call `begin`, submit widgets, and call `end`
+Construct `ui.Context{ style: ui.default_style }` once, then call `begin`, submit widgets, and call `end`
 for each frame. The application supplies integer rectangle bounds and stable,
 nonzero widget IDs; IDs must be unique within a frame. `button`, `checkbox` and
 `slider` return responses containing activation, focus, hover, capture and change

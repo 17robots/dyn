@@ -1,7 +1,7 @@
 use "std/mem" mem
 use "std/errors" errors
 use "std/encoding/binary" binary
-pub enum Wire { Varint = 0, Fixed64 = 1, Bytes = 2, StartGroup = 3, EndGroup = 4, Fixed32 = 5 }
+pub enum Wire { Varint, Fixed64, Bytes, StartGroup, EndGroup, Fixed32 }
 pub struct Field { number: u32, wire: Wire, value: u64, bytes: []const u8 }
 pub struct FieldResult { value: Field, kind: errors.Kind, error: isize, offset: usize, ok: bool }
 // Input and field bytes are borrowed. Groups are emitted as explicit start/end
@@ -82,10 +82,10 @@ pub fn next(state: *Reader) FieldResult {
   return FieldResult{ value: field, offset: start, ok: true }
 }
 pub fn zigzag(value: i64) u64 {
-  return #wrap(#cast(u64, value) << 1) ^ #cast(u64, value >> 63)
+  return (#cast(u64, value) << 1) ^ #cast(u64, value >> 63)
 }
 pub fn unzigzag(value: u64) i64 {
-  return #cast(i64, (value >> 1) ^ #wrap(#cast(u64, 0) - (value & 1)))
+  return #cast(i64, (value >> 1) ^ (#cast(u64, 0) - (value & 1)))
 }
 fn key(field: Field) u64 {
   return (#cast(u64, field.number) << 3) | #cast(u64, field.wire)

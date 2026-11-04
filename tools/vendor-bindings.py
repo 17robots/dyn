@@ -22,7 +22,7 @@ BUILTINS = {'void':'void','_Bool':'bool','bool':'bool','char':'c.char','signed c
  'long':'c.long','long int':'c.long','unsigned long':'c.unsigned_long',
  'long long':'i64','long long int':'i64','unsigned long long':'u64',
  'float':'f32','double':'f64','__int128':'i128','unsigned __int128':'u128'}
-KEYWORDS=set('use type struct enum pub fn extern const var if else for return break continue defer match case default true false nil rawptr bool void i8 i16 i32 i64 u8 u16 u32 u64 f32 f64 usize isize'.split())
+KEYWORDS=set('distinct packed is union use type struct enum pub fn extern const var if else for return break continue defer match case default true false nil rawptr bool void i8 i16 i32 i64 u8 u16 u32 u64 f32 f64 usize isize'.split())
 def ident(name):
  if name.startswith('dyn_helper_'):name=name[len('dyn_helper_'):]
  return 'c_'+name if name in KEYWORDS or name.startswith('__') else name

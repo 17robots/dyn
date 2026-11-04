@@ -58,7 +58,7 @@ pub fn packet_bytes(packet: Packet) []const u8 {
   if data == nil {
     return ""
   }
-  return data[..size]
+  return #slice(data, size)
 }
 pub fn packet_destroy(packet: Packet) {
   if packet != nil {

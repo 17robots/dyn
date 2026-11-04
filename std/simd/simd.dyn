@@ -37,7 +37,7 @@ pub fn u8x16_store(destination: []u8, value: U8x16) {
 pub fn u8x16_add(a, b: U8x16) U8x16 {
   output: U8x16 = []
   for i in 0..16 {
-    output[i] = #wrap(a[i] + b[i])
+    output[i] = a[i] + b[i]
   }
   return output
 }
@@ -45,7 +45,7 @@ pub fn u8x16_add(a, b: U8x16) U8x16 {
 pub fn u8x16_sub(a, b: U8x16) U8x16 {
   output: U8x16 = []
   for i in 0..16 {
-    output[i] = #wrap(a[i] - b[i])
+    output[i] = a[i] - b[i]
   }
   return output
 }
@@ -53,7 +53,7 @@ pub fn u8x16_sub(a, b: U8x16) U8x16 {
 pub fn u8x16_mul(a, b: U8x16) U8x16 {
   output: U8x16 = []
   for i in 0..16 {
-    output[i] = #wrap(a[i] * b[i])
+    output[i] = a[i] * b[i]
   }
   return output
 }
@@ -134,7 +134,7 @@ pub fn i8x16_store(destination: []i8, value: I8x16) {
 pub fn i8x16_add(a, b: I8x16) I8x16 {
   output: I8x16 = []
   for i in 0..16 {
-    output[i] = #wrap(a[i] + b[i])
+    output[i] = a[i] + b[i]
   }
   return output
 }
@@ -142,7 +142,7 @@ pub fn i8x16_add(a, b: I8x16) I8x16 {
 pub fn i8x16_sub(a, b: I8x16) I8x16 {
   output: I8x16 = []
   for i in 0..16 {
-    output[i] = #wrap(a[i] - b[i])
+    output[i] = a[i] - b[i]
   }
   return output
 }
@@ -150,7 +150,7 @@ pub fn i8x16_sub(a, b: I8x16) I8x16 {
 pub fn i8x16_mul(a, b: I8x16) I8x16 {
   output: I8x16 = []
   for i in 0..16 {
-    output[i] = #wrap(a[i] * b[i])
+    output[i] = a[i] * b[i]
   }
   return output
 }
@@ -231,7 +231,7 @@ pub fn u16x8_store(destination: []u16, value: U16x8) {
 pub fn u16x8_add(a, b: U16x8) U16x8 {
   output: U16x8 = []
   for i in 0..8 {
-    output[i] = #wrap(a[i] + b[i])
+    output[i] = a[i] + b[i]
   }
   return output
 }
@@ -239,7 +239,7 @@ pub fn u16x8_add(a, b: U16x8) U16x8 {
 pub fn u16x8_sub(a, b: U16x8) U16x8 {
   output: U16x8 = []
   for i in 0..8 {
-    output[i] = #wrap(a[i] - b[i])
+    output[i] = a[i] - b[i]
   }
   return output
 }
@@ -247,7 +247,7 @@ pub fn u16x8_sub(a, b: U16x8) U16x8 {
 pub fn u16x8_mul(a, b: U16x8) U16x8 {
   output: U16x8 = []
   for i in 0..8 {
-    output[i] = #wrap(a[i] * b[i])
+    output[i] = a[i] * b[i]
   }
   return output
 }
@@ -328,7 +328,7 @@ pub fn i16x8_store(destination: []i16, value: I16x8) {
 pub fn i16x8_add(a, b: I16x8) I16x8 {
   output: I16x8 = []
   for i in 0..8 {
-    output[i] = #wrap(a[i] + b[i])
+    output[i] = a[i] + b[i]
   }
   return output
 }
@@ -336,7 +336,7 @@ pub fn i16x8_add(a, b: I16x8) I16x8 {
 pub fn i16x8_sub(a, b: I16x8) I16x8 {
   output: I16x8 = []
   for i in 0..8 {
-    output[i] = #wrap(a[i] - b[i])
+    output[i] = a[i] - b[i]
   }
   return output
 }
@@ -344,7 +344,7 @@ pub fn i16x8_sub(a, b: I16x8) I16x8 {
 pub fn i16x8_mul(a, b: I16x8) I16x8 {
   output: I16x8 = []
   for i in 0..8 {
-    output[i] = #wrap(a[i] * b[i])
+    output[i] = a[i] * b[i]
   }
   return output
 }
@@ -425,7 +425,7 @@ pub fn u32x4_store(destination: []u32, value: U32x4) {
 pub fn u32x4_add(a, b: U32x4) U32x4 {
   output: U32x4 = []
   for i in 0..4 {
-    output[i] = #wrap(a[i] + b[i])
+    output[i] = a[i] + b[i]
   }
   return output
 }
@@ -433,7 +433,7 @@ pub fn u32x4_add(a, b: U32x4) U32x4 {
 pub fn u32x4_sub(a, b: U32x4) U32x4 {
   output: U32x4 = []
   for i in 0..4 {
-    output[i] = #wrap(a[i] - b[i])
+    output[i] = a[i] - b[i]
   }
   return output
 }
@@ -441,7 +441,7 @@ pub fn u32x4_sub(a, b: U32x4) U32x4 {
 pub fn u32x4_mul(a, b: U32x4) U32x4 {
   output: U32x4 = []
   for i in 0..4 {
-    output[i] = #wrap(a[i] * b[i])
+    output[i] = a[i] * b[i]
   }
   return output
 }
@@ -522,7 +522,7 @@ pub fn i32x4_store(destination: []i32, value: I32x4) {
 pub fn i32x4_add(a, b: I32x4) I32x4 {
   output: I32x4 = []
   for i in 0..4 {
-    output[i] = #wrap(a[i] + b[i])
+    output[i] = a[i] + b[i]
   }
   return output
 }
@@ -530,7 +530,7 @@ pub fn i32x4_add(a, b: I32x4) I32x4 {
 pub fn i32x4_sub(a, b: I32x4) I32x4 {
   output: I32x4 = []
   for i in 0..4 {
-    output[i] = #wrap(a[i] - b[i])
+    output[i] = a[i] - b[i]
   }
   return output
 }
@@ -538,7 +538,7 @@ pub fn i32x4_sub(a, b: I32x4) I32x4 {
 pub fn i32x4_mul(a, b: I32x4) I32x4 {
   output: I32x4 = []
   for i in 0..4 {
-    output[i] = #wrap(a[i] * b[i])
+    output[i] = a[i] * b[i]
   }
   return output
 }
@@ -619,7 +619,7 @@ pub fn u64x2_store(destination: []u64, value: U64x2) {
 pub fn u64x2_add(a, b: U64x2) U64x2 {
   output: U64x2 = []
   for i in 0..2 {
-    output[i] = #wrap(a[i] + b[i])
+    output[i] = a[i] + b[i]
   }
   return output
 }
@@ -627,7 +627,7 @@ pub fn u64x2_add(a, b: U64x2) U64x2 {
 pub fn u64x2_sub(a, b: U64x2) U64x2 {
   output: U64x2 = []
   for i in 0..2 {
-    output[i] = #wrap(a[i] - b[i])
+    output[i] = a[i] - b[i]
   }
   return output
 }
@@ -635,7 +635,7 @@ pub fn u64x2_sub(a, b: U64x2) U64x2 {
 pub fn u64x2_mul(a, b: U64x2) U64x2 {
   output: U64x2 = []
   for i in 0..2 {
-    output[i] = #wrap(a[i] * b[i])
+    output[i] = a[i] * b[i]
   }
   return output
 }
@@ -716,7 +716,7 @@ pub fn i64x2_store(destination: []i64, value: I64x2) {
 pub fn i64x2_add(a, b: I64x2) I64x2 {
   output: I64x2 = []
   for i in 0..2 {
-    output[i] = #wrap(a[i] + b[i])
+    output[i] = a[i] + b[i]
   }
   return output
 }
@@ -724,7 +724,7 @@ pub fn i64x2_add(a, b: I64x2) I64x2 {
 pub fn i64x2_sub(a, b: I64x2) I64x2 {
   output: I64x2 = []
   for i in 0..2 {
-    output[i] = #wrap(a[i] - b[i])
+    output[i] = a[i] - b[i]
   }
   return output
 }
@@ -732,7 +732,7 @@ pub fn i64x2_sub(a, b: I64x2) I64x2 {
 pub fn i64x2_mul(a, b: I64x2) I64x2 {
   output: I64x2 = []
   for i in 0..2 {
-    output[i] = #wrap(a[i] * b[i])
+    output[i] = a[i] * b[i]
   }
   return output
 }

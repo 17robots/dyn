@@ -1,0 +1,45 @@
+union Value {
+  bits: u64,
+  number: f64,
+  bytes: [8]u8,
+}
+
+enum Kind { Null, Number }
+
+struct Space {
+  kind: Kind,
+  value: Value,
+}
+
+union Small {
+  tag: u8,
+  wide: u32,
+}
+
+fn pass(value: Value) Value {
+  copy := value
+  copy.bits += 1
+  return copy
+}
+
+fn main() {
+  a := Value{ number: 1.0 }
+  if a.bits != 0x3ff0000000000000 || a.bytes[7] != 0x3f {
+    #panic("overlay")
+  }
+  b := pass(a)
+  if b.bits != 0x3ff0000000000001 || a.bits != 0x3ff0000000000000 {
+    #panic("by value")
+  }
+  items: [2]Space = [Space{ kind: Kind.Number, value: Value{ bits: 7 } }, Space{}]
+  if items[0].value.bytes[0] != 7 || items[1].value.bits != 0 {
+    #panic("nested")
+  }
+  if #sizeof(Value) != 8 || #sizeof(Small) != 4 || #alignof(Small) != 4 {
+    #panic("layout")
+  }
+  empty := Value{}
+  if empty.number != 0.0 {
+    #panic("zero")
+  }
+}

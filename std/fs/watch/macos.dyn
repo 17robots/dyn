@@ -180,8 +180,8 @@ fn callback(stream: rawptr, info: rawptr, count: usize, paths: rawptr, flags: *c
     sync.store_u32(&slot.owner.lost, 1)
     count = 1024
   }
-  names := (#cast(**const u8, paths))[..count]
-  kinds := flags[..count]
+  names := #slice(#cast(**const u8, paths), count)
+  kinds := #slice(flags, count)
   for i in 0..count {
     kind := kinds[i]
     // Dropped/coalesced history, root changes, mount changes, or wrapped IDs

@@ -13,7 +13,7 @@ if not shutil.which(NODE):
     print('SKIP Wasm array temporaries: Node unavailable')
     raise SystemExit(0)
 
-SOURCE = r'''struct Defaults { floating: f64 = 1.5, integer: i64 = 9007199254740993, narrow: f32 = -4.25, bytes: [2]u32 = [7, 8] }
+SOURCE = r'''struct Defaults { floating: f64, integer: i64, narrow: f32, bytes: [2]u32 }
 struct Mixed { floating: f64, integer: i64, narrow: f32, bytes: [2]u32 }
 sequence: i32 = 0
 fn effect(value: i32) i32 {
@@ -41,7 +41,7 @@ fn main() {
   views: [2][]u32 = [first[..], second[..]]
   views[0][1] = 99
   if first[1] != 99 || views[1][0] != 20 { #panic("slice storage lifetime") }
-  defaults: [2]Defaults = [Defaults{}, Defaults{ floating: 7.5 }]
+  defaults: [2]Defaults = [Defaults{ floating: 1.5, integer: 9007199254740993, narrow: -4.25, bytes: [7, 8] }, Defaults{ floating: 7.5, integer: 9007199254740993, narrow: -4.25, bytes: [7, 8] }]
   if defaults[0].floating != 1.5 || defaults[1].floating != 7.5 || defaults[1].integer != 9007199254740993 || defaults[0].narrow != -4.25 || defaults[1].bytes[1] != 8 { #panic("mixed default fields") }
   local: [4]f64 = [1.5, 2.5, 3.5, 4.5]
   if local[0] + local[3] != 6.0 { #panic("local floating array") }

@@ -33,7 +33,7 @@ pub struct FontResult { value: rawptr, kind: errors.Kind, ok: bool }
 pub struct ShapeResult { value: []Glyph, kind: errors.Kind, ok: bool }
 // Explicit directional/script run properties. Zero properties are guessed.
 // Cluster levels 0..2 are supported by HarfBuzz >= 0.9.42.
-pub struct Options { direction: u32, script: u32, language: []const u8, cluster_level: u32, flags: u32, item_offset: u32, item_length: i32 = -1 }
+pub struct Options { direction: u32, script: u32, language: []const u8, cluster_level: u32, flags: u32, item_offset: u32, has_item_length: bool, item_length: i32 }
 pub const MonotoneGraphemes: u32 = 0
 pub const MonotoneCharacters: u32 = 1
 pub const Characters: u32 = 2
@@ -96,11 +96,11 @@ pub fn shape_run(arena: *mem.Arena, api: *const Api, font: rawptr, text: []const
   if font == nil || #len(text) > 2147483647 || #cast(u64, #len(features)) > 0xffffffff || (direction != 0 && (direction < 4 || direction > 7)) {
     return ShapeResult{kind:errors.Kind.InvalidInput}
   }
-  if #cast(usize, options.item_offset)>#len(text) || options.item_length< -1 {
+  if #cast(usize, options.item_offset)>#len(text) || (options.has_item_length && options.item_length<0) {
     return ShapeResult{kind:errors.Kind.InvalidInput}
   }
   item_length:=options.item_length
-  if item_length== -1 {
+  if !options.has_item_length {
     item_length=#cast(i32, #len(text)-#cast(usize, options.item_offset))
   }
   if #cast(usize, item_length)>#len(text)-#cast(usize, options.item_offset) {
@@ -151,8 +151,8 @@ pub fn shape_run(arena: *mem.Arena, api: *const Api, font: rawptr, text: []const
     return ShapeResult{kind:errors.Kind.Overflow}
   }
   glyphs := mem.push_array(Glyph, arena, #cast(usize, count))
-  info_view := infos[..#cast(usize, count)]
-  position_view := positions[..#cast(usize, count)]
+  info_view := #slice(infos, #cast(usize, count))
+  position_view := #slice(positions, #cast(usize, count))
   for i in 0..#len(glyphs) {
     info := info_view[i]
     position := position_view[i]

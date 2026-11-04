@@ -285,6 +285,7 @@ static void append(Parser *p, uint32_t *first, uint32_t *last, uint32_t child) {
 static uint32_t name(Parser *p) {
   Token token = p->token;
   if (token.kind != NAME) { fail(p, token.start, "expected identifier"); return NONE; }
+  if (is(p, "distinct") || is(p, "packed") || is(p, "is") || is(p, "union")) { fail(p, token.start, "reserved keyword cannot be a name"); return NONE; }
   lex(p);
   return node(p, EXP_NAME, token.start, token.end, NONE, (Token){0});
 }
@@ -498,12 +499,20 @@ static uint32_t parse(Parser *p, int minimum) {
     }
     uint32_t end = p->token.end; expect(p, ")");
     left = node(p, load ? EXP_LOAD : EXP_SYSCALL, token.start, end, first, (Token){0});
-  } else if (is(p, "#wrap") || is(p, "#len")) {
-    ExpKind kind = is(p, "#wrap") ? EXP_WRAP : EXP_LEN;
+  } else if (is(p, "#slice") || is(p, "#offset")) {
+    unsigned flags = is(p, "#offset") ? EXP_CONST : 0;
+    lex(p); expect(p, "("); uint32_t child = expression(p, 0); expect(p, ",");
+    uint32_t count = expression(p, 0); uint32_t end = p->token.end; expect(p, ")");
+    if (child != NONE && !p->tree->error) p->tree->nodes[child].next = count;
+    left = mark(p, node(p, EXP_POINTER_OP, token.start, end, child, (Token){0}), flags);
+    primary = true;
+  } else if (is(p, "#len")) {
+    ExpKind kind = EXP_LEN;
     lex(p); expect(p, "("); uint32_t child = expression(p, 0); uint32_t end = p->token.end;
     expect(p, ")"); left = node(p, kind, token.start, end, child, (Token){0});
   } else {
     ExpKind kind = EXP_NAME;
+    if (is(p, "distinct") || is(p, "packed") || is(p, "is") || is(p, "union")) { fail(p, token.start, "reserved keyword cannot be a name"); return NONE; }
     if (token.kind == NUMBER) kind = EXP_NUMBER;
     else if (token.kind == STRING) kind = EXP_STRING;
     else if (token.kind == CHARACTER) kind = EXP_CHAR;

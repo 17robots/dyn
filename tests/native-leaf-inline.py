@@ -76,10 +76,10 @@ fn main() {
         assert len(literal_sizes) == 2 and literal_sizes[1] <= literal_sizes[0], literal_sizes
     (module / 'main.dyn').write_text('''
 use "std/io"
-fn add(a: i8, b: i8) i8 { return a + b }
+fn add(a: i8, b: i8) i8 { return a / b }
 fn main() {
   defer { _ = io.println(io.stdout(), "cleanup") }
-  for i in 0..1 { value := add(127, 1)
+  for i in 0..1 { value := add(127, 0)
   _ = value }
 }
 ''')
@@ -89,7 +89,7 @@ fn main() {
             '--no-cache', '--output', output)
         result = run(output, success=False)
         assert result.stdout.splitlines() == ['cleanup'], result.stdout
-        assert 'overflow' in result.stderr, result.stderr
+        assert 'divide' in result.stderr, result.stderr
     # Target checks precede both argument checks and checks in the leaf body.
     for pointer, message in (('nil', 'null'), ('#cast(*i64, #cast(usize, 1))', 'align')):
         (module / 'main.dyn').write_text(f'''
@@ -112,8 +112,8 @@ fn main() {{
         (module / 'main.dyn').write_text(f'''
 limit: i64 = 9223372036854775807
 failure: i64 = {failure}
-fn leaf_add(a: i64, b: i64) i64 {{ return a + b }}
-fn leaf_other(a: i64, b: i64) i64 {{ return a + b }}
+fn leaf_add(a: i64, b: i64) i64 {{ return a / b }}
+fn leaf_other(a: i64, b: i64) i64 {{ return a / b }}
 fn main() {{
   for i in 0..1 {{
     first: i64 = 0
@@ -122,14 +122,14 @@ third: i64 = 0
     if failure != 0 {{ first = 1 }}
     if failure != 1 {{ second = 1 }}
     if failure == 2 {{ third = 1 }}
-    a := leaf_add(limit - first, 1)
-    b := leaf_other(limit - second, 1)
-    value := limit + third
+    a := leaf_add(limit, first)
+    b := leaf_other(limit, second)
+    value := limit / (1 - third)
     if a != limit || b != limit || value != limit {{ #panic("unexpected value") }}
   }}
 }}
 ''')
-        expected = f'runtime check failed (overflow.ok) in {origin}\n'
+        expected = f'runtime check failed (divide.ok) in {origin}\n'
         for tree in (False, True):
             environment = dict(os.environ, DYN_NO_SSA='1' if tree else '0')
             for level in (1, 2, 3):
@@ -139,29 +139,28 @@ third: i64 = 0
                 result = run(output, success=False)
                 assert result.stderr == expected, (level, tree, result.stderr, expected)
     # Nested expansion and compound assignments retain the original callee.
-    # Struct defaults still execute before explicit field initialization.
     for source, origin in (('''
-limit: i64 = 9223372036854775807
-fn leaf_add(a: i64, b: i64) i64 { return a + b }
+limit: i64 = 0
+fn leaf_add(a: i64, b: i64) i64 { return b / a }
 fn nested(a: i64) i64 { return leaf_add(a, 1) }
 fn main() { for i in 0..1 { value := nested(limit)
 _ = value } }
 ''', 'leaf_add'), ('''
-limit: i64 = 9223372036854775807
-struct Defaulted { value: i64 = 5 + 7 }
-fn leaf_default(a: i64) Defaulted { return Defaulted{value: a + 1} }
+limit: i64 = 0
+struct Defaulted { value: i64 }
+fn leaf_default(a: i64) Defaulted { return Defaulted{value: 1 / a} }
 fn main() { for i in 0..1 { value := leaf_default(limit)
 _ = value } }
 ''', 'leaf_default'), ('''
-limit: i64 = 9223372036854775807
+limit: i64 = 0
 fn leaf_compound(a: i64) i64 { result := a
-result += 1
+result = 1 / a
 return result }
 fn main() { for i in 0..1 { value := leaf_compound(limit)
 _ = value } }
 ''', 'leaf_compound')):
         (module / 'main.dyn').write_text(source)
-        expected = f'runtime check failed (overflow.ok) in {origin}\n'
+        expected = f'runtime check failed (divide.ok) in {origin}\n'
         for tree in (False, True):
             environment = dict(os.environ, DYN_NO_SSA='1' if tree else '0')
             for level in (1, 2, 3):
@@ -173,8 +172,8 @@ _ = value } }
     # A caller cleanup that itself fails must not inherit the failed callee's
     # origin while emitting the cleanup ladder.
     (module/'main.dyn').write_text("""
-limit: i64 = 9223372036854775807
-fn leaf_add(a: i64) i64 { return a + 1 }
+limit: i64 = 0
+fn leaf_add(a: i64) i64 { return 1 / a }
 fn main() {
   defer { limit += 1 }
   for i in 0..1 { value := leaf_add(limit)

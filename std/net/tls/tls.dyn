@@ -69,7 +69,7 @@ pub fn certificate_subject(arena: *memory.Arena, certificate: Certificate) TextR
     length += 1
   }
   output := memory.push_bytes_uninit(arena, length)
-  source := formatted.value[..length]
+  source := #slice(formatted.value, length)
   for i in 0..length {
     output[i] = source[i]
   }

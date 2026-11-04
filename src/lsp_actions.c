@@ -171,8 +171,6 @@ static bool lsp_default_value(LspSemantic *semantic, DynType type, char *out,
     bool comma = false;
     for (uint32_t i = 0; i < structure->field_count; ++i) {
       DynAstField *field = &a->fields[structure->field_start + i];
-      if (field->default_expression != DYN_NO_EXPR)
-        continue;
       DEFAULT_APPEND("%s%.*s: ", comma ? ", " : "",
                      (int)(field->name.end_byte - field->name.start_byte),
                      semantic->source.text + field->name.start_byte);
@@ -190,13 +188,6 @@ static bool lsp_default_value(LspSemantic *semantic, DynType type, char *out,
     DEFAULT_APPEND(".%.*s",
                    (int)(variant->name.end_byte - variant->name.start_byte),
                    semantic->source.text + variant->name.start_byte);
-    if (variant->payload_type != DYN_TYPE_VOID) {
-      DEFAULT_APPEND("(");
-      if (!lsp_default_value(semantic, variant->payload_type, out, capacity, at,
-                             depth + 1))
-        return false;
-      DEFAULT_APPEND(")");
-    }
   } else
     return false;
 #undef DEFAULT_APPEND
@@ -260,8 +251,6 @@ static bool lsp_fill_struct_fields(LspDocument *documents, size_t count,
         &semantic.ast.structs[type - DYN_TYPE_STRUCT_BASE];
     for (uint32_t i = 0; i < structure->field_count; ++i) {
       DynAstField *field = &semantic.ast.fields[structure->field_start + i];
-      if (field->default_expression != DYN_NO_EXPR)
-        continue;
       size_t length = field->name.end_byte - field->name.start_byte;
       const char *name = semantic.source.text + field->name.start_byte;
       bool present = false;

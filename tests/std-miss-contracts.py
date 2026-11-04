@@ -13,7 +13,7 @@ use "std/encoding/json" json
 use "std/errors" errors
 fn main() {
   values:[5]i32=[2,4,4,8,10]
-  for input in -2..14 {
+  for input: isize in -2..14 {
     target:=#cast(i32,input)
     result:=sort.search(values[..],target)
     expected:usize=5

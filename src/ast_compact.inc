@@ -380,6 +380,14 @@ static DynExprId compact_expr(CompactNode node, const DynSource *s, DynAstProgra
       if (!compact_null(compact_unwrap(low))) e.right = compact_expr(low, s, a, errors);
       if (!compact_null(compact_unwrap(high))) e.integer = compact_expr(high, s, a, errors);
     }
+  } else if (k == EXP_POINTER_OP) {
+    /* #slice(p, n) is a pointer slice; #offset(p, n) resolves in sema. */
+    e.kind = DYN_EXPR_SLICE;
+    e.boolean = true;
+    e.op = compact_flag(node, EXP_CONST) ? DYN_OP_ADD : DYN_OP_NONE;
+    e.left = compact_expr(compact_child(node, 0), s, a, errors);
+    e.right = DYN_NO_EXPR;
+    e.integer = compact_expr(compact_child(node, 1), s, a, errors);
   } else if (!(k != EXP_LEN)) {
     e.kind = DYN_EXPR_LEN;
     e.left = compact_expr(compact_child(node, 0), s, a, errors);
@@ -429,11 +437,6 @@ static DynExprId compact_expr(CompactNode node, const DynSource *s, DynAstProgra
     e.type = DYN_TYPE_STRING;
     e.integer = (uint32_t)a->string_count;
     a->strings[a->string_count++] = (DynAstString){data, length};
-  } else if (!(k != EXP_WRAP)) {
-    DynExprId inner = compact_expr(compact_child(node, 0), s, a, errors);
-    if (inner != DYN_NO_EXPR && !mark_wrap(a, inner, 0))
-      compact_diagnostic(node, s, errors, "#wrap needs +, -, * or << inside");
-    return inner;
   } else if (!(k != EXP_OFFSET)) {
     CompactNode field = compact_child(node, 1);
     e.kind = DYN_EXPR_OFFSET;
@@ -684,6 +687,7 @@ static uint32_t compact_stmt(CompactNode n, const DynSource *s, DynAstProgram *a
     compact_case(n, s, a, errors, loop_depth, &st);
   } else if (!(k != SRC_FOR)) {
     st.kind = DYN_STMT_FOR;
+    st.declared_type = DYN_TYPE_INFER;
     st.loop_id = a->loop_count++;
     uint32_t count = compact_count(n);
     CompactNode last = compact_last(n);
@@ -702,6 +706,8 @@ static uint32_t compact_stmt(CompactNode n, const DynSource *s, DynAstProgram *a
           st.for_pointer = compact_flag(c, EXP_POINTER_BINDING);
           st.for_const = compact_flag(c, EXP_CONST);
           st.name = compact_span(binder);
+          if (cc == 3)
+            st.declared_type = compact_type(compact_child(c, 1), s, a);
           CompactNode iterable = compact_last(c);
           if (!(compact_kind(iterable) != SRC_REVERSE)) {
             st.for_reverse = true;

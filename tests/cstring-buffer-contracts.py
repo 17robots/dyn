@@ -44,7 +44,7 @@ fn main() {
  _=mem.copy(before[..],backing[..])
  alias_invalid:=c.string_into(backing[1..],backing[..5])
  check(!alias_invalid.ok && alias_invalid.error==c.ErrorKind.InvalidInput && mem.equal(backing[..],before[..]))
- huge:=(&backing[0])[..~#cast(usize,0)]
+ huge:=#slice(&backing[0], ~#cast(usize,0))
  overflow:=c.string_into(backing[..],huge)
  check(!overflow.ok && overflow.error==c.ErrorKind.Overflow && overflow.value==nil && mem.equal(backing[..],before[..]))
  path:[4300]u8=[]

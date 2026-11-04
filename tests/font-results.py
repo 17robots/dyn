@@ -124,7 +124,7 @@ fn main() {
   before := mem.arena_mark(arena)
   check(font.atlas(arena, &face, codepoints[..], 16, 1, 1).kind == errors.Kind.Capacity)
   check(mem.arena_mark(arena) == before)
-  context := ui.Context{}
+  context := ui.Context{ style: ui.default_style }
   ui.begin(&context, frame, ui.Input{}, ui.Rect{ width: 64, height: 32 })
   ui.label(&context, ui.Rect{ width: 64, height: 32 }, "ABC", ui.Color{ r: 200, a: 255 })
   ui.end(&context)

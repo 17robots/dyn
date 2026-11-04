@@ -107,7 +107,9 @@ int dyn_cli_parse(int argc, char **argv, DynOptions *o) {
     } else if (strcmp(a, "--debug-info") == 0) {
       o->debug_info = true;
       o->debug_info_set = true;
-    } else if (strcmp(a, "--quiet") == 0)
+    } else if (strcmp(a, "--unsafe") == 0)
+      o->vet_unsafe = true;
+    else if (strcmp(a, "--quiet") == 0)
       o->quiet = true;
     else if (strcmp(a, "--verbose") == 0)
       o->verbose = true;

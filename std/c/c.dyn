@@ -38,7 +38,7 @@ pub fn string_length(value: string, maximum: usize) usize {
   if value == nil {
     return 0
   }
-  bytes := value[..maximum]
+  bytes := #slice(value, maximum)
   count: usize = 0
   for count < maximum && bytes[count] != 0 {
     count += 1
@@ -54,7 +54,7 @@ pub fn bytes_from_string(value: string, maximum: usize) BytesResult {
   if count == maximum {
     return BytesResult{ error: ErrorKind.Unterminated }
   }
-  return BytesResult{ value: value[..count], ok: true }
+  return BytesResult{ value: #slice(value, count), ok: true }
 }
 
 pub fn errno_from_result(value: isize) isize {
@@ -96,7 +96,7 @@ pub fn string_from_bytes(arena: *memory.Arena, source: []const u8) StringResult 
   }
   mark := memory.arena_mark(arena)
   allocation := memory.arena_push_uninit(arena, #len(source) + 1, 1)
-  result := string_into(allocation[..#len(source) + 1], source)
+  result := string_into(#slice(allocation, #len(source) + 1), source)
   if !result.ok {
     memory.arena_rewind(arena, mark)
   }

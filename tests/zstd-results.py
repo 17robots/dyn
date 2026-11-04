@@ -86,9 +86,9 @@ fn fail(data: rawptr, destination: []u8) io.Result {
  return io.Result{ kind: errors.Kind.PermissionDenied, error: state.code, status: io.Status.Error }
 }
 fn results(arena: *mem.Arena, encoded: []const u8, unknown: []const u8, workspace: []u8) {
- packed := z.compress(arena, "portable zstd", 3)
- if !packed.ok || packed.kind != errors.Kind.None || packed.error != 0 { #panic("compress success") }
- unpacked := z.decompress(arena, packed.value)
+ packed_result := z.compress(arena, "portable zstd", 3)
+ if !packed_result.ok || packed_result.kind != errors.Kind.None || packed_result.error != 0 { #panic("compress success") }
+ unpacked := z.decompress(arena, packed_result.value)
  if !unpacked.ok || unpacked.kind != errors.Kind.None || #len(unpacked.value) != 13 { #panic("roundtrip") }
  mark := mem.arena_used(arena)
  bad := z.decompress(arena, "bad")
@@ -142,7 +142,7 @@ fn main() {
  concatenated := fs.read_all(arena, "DIRECTORY/concatenated", 4000000)
  unknown := fs.read_all(arena, "DIRECTORY/unknown", 2000000)
  if !raw.ok || !encoded.ok || !concatenated.ok || !unknown.ok { #panic("fixtures") }
- workspace := mem.arena_push_uninit(arena, z.decoder_workspace_size(21), 8)[..z.decoder_workspace_size(21)]
+ workspace := #slice(mem.arena_push_uninit(arena, z.decoder_workspace_size(21), 8), z.decoder_workspace_size(21))
  results(arena, encoded.value, unknown.value, workspace)
  verify(raw.value, unknown.value, workspace, 13, 21, false, 1)
  verify(raw.value, encoded.value, workspace, 1, 21, false, 1)

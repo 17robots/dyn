@@ -1,0 +1,15 @@
+fn main() {
+  unused := 1
+  value: i32 = 2
+  pointer := &value
+  view := #slice(pointer, 1)
+  _ = view
+  next := #offset(pointer, 1)
+  _ = next
+  raw := #cast(rawptr, pointer)
+  _ = raw
+}
+
+fn bytes_for(count: usize) usize {
+  return #sizeof(u64) * count
+}

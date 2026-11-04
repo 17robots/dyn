@@ -65,7 +65,7 @@ expect(backing[i+3]==expected) }
         pre += '''mapped:=#syscall(9,0,12288,0,34,-1,0)
 expect(mapped>0)
 expect(#syscall(10,mapped+4096,4096,3)==0)
-page:=(#cast(*u8,mapped+4096))[..4096]
+page:=#slice(#cast(*u8,mapped+4096), 4096)
 '''
         checks += ['expect(#syscall(11,mapped,12288)==0)']
     return '\n'.join(declarations)+ '\nfn main() {\n'+pre+'\n'.join(checks)+'\n_=io.write_all(io.stdout(),"ZERO COPY PASS\\n")\n}\n'

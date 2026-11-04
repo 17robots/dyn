@@ -78,7 +78,7 @@ fn arguments_native(arena: *mem.Arena) ArgumentsResult {
   if raw == nil {
     return ArgumentsResult{ kind: error_kinds.Kind.InvalidState }
   }
-  native := raw[..32767]
+  native := #slice(raw, 32767)
   length: usize = 0
   for length < 32767 && native[length] != 0 {
     length += 1
@@ -86,7 +86,7 @@ fn arguments_native(arena: *mem.Arena) ArgumentsResult {
   if length == 32767 {
     return ArgumentsResult{ kind: error_kinds.Kind.Overflow }
   }
-  command := raw[..length]
+  command := #slice(raw, length)
   empty: []u8
   count: usize = 0
   size: usize = 0
@@ -107,7 +107,7 @@ fn arguments_native(arena: *mem.Arena) ArgumentsResult {
   allocation := mem.arena_push_uninit(arena, size, 1)
   bytes := arena.data[..0]
   if size > 0 {
-    bytes = allocation[..size]
+    bytes = #slice(allocation, size)
   }
   used: usize = 0
   index: usize = 0

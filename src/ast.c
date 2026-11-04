@@ -768,40 +768,6 @@ static uint32_t parse_string(DynSpan n, const DynSource *s, DynAstProgram *a,
   return id;
 }
 static DynType scope_type(DynAstProgram *, DynSpan, const DynSource *, bool);
-static bool negative_literal(const DynAstProgram *a, const DynAstExpr *e) {
-  if (e->kind != DYN_EXPR_UNARY || e->op != DYN_OP_NEG || e->left == DYN_NO_EXPR)
-    return false;
-  DynExprKind k = a->expressions[e->left].kind;
-  return k == DYN_EXPR_INT || k == DYN_EXPR_FLOAT || k == DYN_EXPR_CHAR;
-}
-/* Marks the integer operators written inside #wrap(...) as wrapping. Called
-   functions are untouched; their arguments are written here, so they are marked. */
-static unsigned mark_wrap(DynAstProgram *a, DynExprId id, unsigned depth) {
-  if (id == DYN_NO_EXPR || id >= a->expression_count || depth > 4096)
-    return 0;
-  DynAstExpr *e = &a->expressions[id];
-  unsigned marked = 0;
-  if ((e->kind == DYN_EXPR_BINARY &&
-       (e->op == DYN_OP_ADD || e->op == DYN_OP_SUB || e->op == DYN_OP_MUL ||
-        e->op == DYN_OP_SHL)) ||
-      (e->kind == DYN_EXPR_UNARY && e->op == DYN_OP_NEG &&
-       !negative_literal(a, e))) {
-    e->wrap = true;
-    marked = 1;
-  }
-  if (e->kind == DYN_EXPR_SIZE || e->kind == DYN_EXPR_ALIGN ||
-      e->kind == DYN_EXPR_TYPEOF || e->kind == DYN_EXPR_LEN)
-    return marked;
-  marked += mark_wrap(a, e->left, depth + 1);
-  marked += mark_wrap(a, e->right, depth + 1);
-  if (e->kind == DYN_EXPR_SLICE)
-    marked += mark_wrap(a, (DynExprId)e->integer, depth + 1);
-  if (e->kind == DYN_EXPR_CALL || e->kind == DYN_EXPR_STRUCT ||
-      e->kind == DYN_EXPR_ARRAY || e->kind == DYN_EXPR_SYSCALL)
-    for (uint32_t i = 0; i < e->item_count; ++i)
-      marked += mark_wrap(a, a->items[e->item_start + i].expression, depth + 1);
-  return marked;
-}
 
 
 static DynType parse_type_name(DynSpan p, const DynSource *s, DynAstProgram *a) {
@@ -1012,21 +978,6 @@ static uint64_t declaration_owner(DynSpan name, const DynSource *s) {
   }
   return value;
 }
-static bool tag_fits(DynType t, uint64_t bits, bool negative) {
-  unsigned width = t == DYN_TYPE_I8 || t == DYN_TYPE_U8     ? 8
-                   : t == DYN_TYPE_I16 || t == DYN_TYPE_U16 ? 16
-                   : t == DYN_TYPE_I32 || t == DYN_TYPE_U32 ? 32
-                                                            : 64;
-  bool sign = t == DYN_TYPE_I8 || t == DYN_TYPE_I16 || t == DYN_TYPE_I32 ||
-              t == DYN_TYPE_I64 || t == DYN_TYPE_ISIZE;
-  if (!sign)
-    return !negative && (width == 64 || bits < UINT64_C(1) << width);
-  int64_t value = (int64_t)bits;
-  if (negative != (value < 0))
-    return false;
-  return width == 64 || (value >= -(INT64_C(1) << (width - 1)) &&
-                         value < INT64_C(1) << (width - 1));
-}
 static uint64_t type_layout(DynType t, bool alignment, DynAstProgram *a,
                             unsigned char *state, const DynSource *s,
                             unsigned *errors);
@@ -1062,6 +1013,11 @@ static bool layout_struct(uint32_t id, DynAstProgram *a, unsigned char *state,
       return false;
     if (align > max_align)
       max_align = align;
+    if (st->is_union) {
+      f->offset = 0;
+      if (field_size > size) size = field_size;
+      continue;
+    }
     if (size > limit - (align - 1)) goto oversized_struct;
     size = (size + align - 1) / align * align;
     f->offset = size;
@@ -1133,43 +1089,8 @@ static bool layout_enum(uint32_t id, DynAstProgram *a, unsigned char *state,
   }
   state[slot] = 1;
   DynAstEnum *en = &a->enums[id];
-  uint64_t tag_size = type_layout(en->tag_type, false, a, state, s, errors),
-           tag_align = type_layout(en->tag_type, true, a, state, s, errors);
-  en->payload_alignment = 1;
-  en->payload_size = 0;
-  for (uint32_t j = 0; j < en->variant_count; ++j) {
-    DynType p = a->variants[en->variant_start + j].payload_type;
-    if (p == DYN_TYPE_VOID)
-      continue;
-    if (dyn_type_is_enum(p)) {
-      diagnostic_span(a->variants[en->variant_start + j].name, s, errors,
-                      "enum payload cannot contain enum directly");
-      continue;
-    }
-    uint64_t pa = type_layout(p, true, a, state, s, errors),
-             ps = type_layout(p, false, a, state, s, errors);
-    if (!pa || !ps) {
-      diagnostic_span(a->variants[en->variant_start + j].name, s, errors,
-                      "recursive or incomplete enum payload layout");
-      continue;
-    }
-    if (pa > en->payload_alignment)
-      en->payload_alignment = pa;
-    if (ps > en->payload_size)
-      en->payload_size = ps;
-  }
-  en->alignment =
-      tag_align > en->payload_alignment ? tag_align : en->payload_alignment;
-  uint64_t offset = (tag_size + en->payload_alignment - 1) /
-                    en->payload_alignment * en->payload_alignment;
-  uint64_t limit = dyn_target_pointer_bytes(dyn_context_target(&s->context)) == 4 ? UINT32_MAX : UINT64_MAX;
-  if (en->payload_size > limit - offset ||
-      offset + en->payload_size > limit - (en->alignment - 1)) {
-    diagnostic_span(en->name, s, errors, "enum layout exceeds target address space");
-    return false;
-  }
-  en->size = (offset + en->payload_size + en->alignment - 1) / en->alignment *
-             en->alignment;
+  en->size = type_layout(en->tag_type, false, a, state, s, errors);
+  en->alignment = type_layout(en->tag_type, true, a, state, s, errors);
   state[slot] = 2;
   return true;
 }

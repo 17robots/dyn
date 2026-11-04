@@ -95,7 +95,7 @@ fn json_document(source: []const u8, expected: bool) {
   arena := mem.arena_from_buffer(backing[..])
   prefix := mem.arena_push(arena, 7, 1)
   for i in 0..7 {
-    prefix[..7][i] = 91
+    #slice(prefix, 7)[i] = 91
   }
   mark := mem.arena_mark(arena)
   parsed := json.parse(arena, source)
@@ -105,7 +105,7 @@ fn json_document(source: []const u8, expected: bool) {
   if !parsed.ok && mem.arena_mark(arena) != mark {
     #panic("JSON allocation rollback")
   }
-  for byte in prefix[..7] {
+  for byte in #slice(prefix, 7) {
     if byte != 91 {
       #panic("JSON clobbered prior allocation")
     }

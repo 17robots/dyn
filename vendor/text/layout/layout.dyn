@@ -10,7 +10,7 @@ use "vendor/fribidi" bidi
 // owner; select receives a complete extended grapheme, never a partial mark.
 pub struct Face { data: rawptr, font: rawptr }
 pub struct Font { data: rawptr, select: fn(rawptr, []const u8) Face, line_height: i32, space_advance: f64 }
-pub struct Options { width: i32, wrap: bool = true, tab_columns: usize = 4, base: u32 = bidi.Auto }
+pub struct Options { width: i32, no_wrap: bool, tab_columns: usize, base: u32 }
 pub struct Glyph { id: u32, font: rawptr, start: usize, end: usize, x: f64, y: f64, x_offset: f64, y_offset: f64, advance: f64, rtl: bool, hidden: bool }
 pub struct Line { start: usize, end: usize, glyph_start: usize, glyph_count: usize, width: f64, y: f64, rtl: bool }
 pub struct Layout { text: []const u8, glyphs: []Glyph, lines: []Line, width: f64, height: f64, line_height: i32 }
@@ -118,7 +118,7 @@ fn shape(arena:*mem.Arena, api:*const hb.Api, text:[]const u8, clusters:[]Cluste
       if soft && run.last==last {
         item_length-=1
       }
-      shaped:=hb.shape_run(arena, api, run.face.font, context_text, hb.Options{direction:direction, script:run.script, cluster_level:hb.MonotoneGraphemes, flags:flags, item_offset:#cast(u32, item_offset), item_length:#cast(i32, item_length)}, features[..])
+      shaped:=hb.shape_run(arena, api, run.face.font, context_text, hb.Options{direction:direction, script:run.script, cluster_level:hb.MonotoneGraphemes, flags:flags, item_offset:#cast(u32, item_offset), has_item_length:true, item_length:#cast(i32, item_length)}, features[..])
       if !shaped.ok {
         return Span{kind:shaped.kind}
       }
@@ -398,7 +398,7 @@ fn paragraph(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[
     }
   }
   tab:=font.space_advance*#cast(f64, options.tab_columns)
-  if !options.wrap || options.width==0 || #len(text)==0 {
+  if options.no_wrap || options.width==0 || #len(text)==0 {
     return emit(output, api, bidi_api, text, &resolved.value, clusters, 0, #len(text), base, font, tab)
   }
   breaks:=unicode.line_breaks(work, text)
@@ -425,7 +425,7 @@ fn paragraph(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[
   u:usize=0
   for u<#len(measured.units) {
     end:=#len(measured.units)
-    if options.wrap && options.width>0 {
+    if !options.no_wrap && options.width>0 {
       x:f64=0.0
       last_break:=u
       at:=u
@@ -459,7 +459,7 @@ fn paragraph(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[
         return kind
       }
       line:=temporary.tail.value
-      if options.wrap && options.width>0 && line.width>#cast(f64, options.width) && end>u+1 {
+      if !options.no_wrap && options.width>0 && line.width>#cast(f64, options.width) && end>u+1 {
         end-=1
         continue
       }
@@ -484,7 +484,14 @@ fn separator(cp:u32) bool {
 // Owns the source byte copy and placements in arena. Font handles/data remain
 // caller-owned. Wrapping uses shaped clusters and reshapes each accepted line;
 // an overwide indivisible cluster is emitted intact rather than split.
-pub fn build(arena:*mem.Arena, source:[]const u8, font:Font, api:*const hb.Api, bidi_api:*const bidi.Api, options:Options) Result {
+pub fn build(arena:*mem.Arena, source:[]const u8, font:Font, api:*const hb.Api, bidi_api:*const bidi.Api, requested:Options) Result {
+  options:=requested
+  if options.tab_columns==0 {
+    options.tab_columns=4
+  }
+  if options.base==0 {
+    options.base=bidi.Auto
+  }
   if arena==nil || api==nil || bidi_api==nil || font.select==nil || font.line_height<=0 || !finite(font.space_advance) || font.space_advance<=0.0 || options.width<0 || options.tab_columns==0 || options.tab_columns>256 || !utf8.valid(source) || #len(source)>2147483647 || (options.base!=bidi.Auto && options.base!=bidi.LeftToRight && options.base!=bidi.RightToLeft) {
     return Result{kind:errors.Kind.InvalidInput}
   }

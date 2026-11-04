@@ -67,7 +67,7 @@ fn main() {
   if !net.peer_address(connection.descriptor, &peer).ok || peer.bytes[2] != local.bytes[2] || peer.bytes[3] != local.bytes[3] { #panic("peer address") }
   if !net.connection_write(&connection, "ping").ok { #panic("request write") }
   item := net.PollDescriptor{ descriptor: #cast(net.Descriptor, connection.descriptor), events: net.PollReadable | net.PollError | net.PollHangup }
-  if net.poll((&item)[..1], 2000).value != 1 || !net.poll_has(&item, net.PollReadable) || item.events != 25 { #panic("poll") }
+  if net.poll(#slice(&item, 1), 2000).value != 1 || !net.poll_has(&item, net.PollReadable) || item.events != 25 { #panic("poll") }
   buffer: [4]u8 = []
   at: usize = 0
   for at < 4 {

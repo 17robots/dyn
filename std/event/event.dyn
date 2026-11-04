@@ -18,7 +18,7 @@ struct Entry { descriptor: isize, token: u64, events: u32, active: bool }
 // A native control failure poisons the queue: close and rebuild it, since a
 // platform may have applied part of a multi-filter update.
 pub struct Queue {
-  handle: isize = -1, active: bool, entries: []Entry,
+  handle: isize, active: bool, entries: []Entry,
   failed: bool, kind: errors.Kind, error: isize,
 }
 

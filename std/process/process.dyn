@@ -127,8 +127,9 @@ fn environment_into(name: []const u8, destination: []u8) EnvironmentResult {
   }
   return environment_native(name, destination)
 }
-// Zero limits are unlimited; every negative timeout is infinite.
-pub struct CaptureOptions { timeout_milliseconds: i64 = -1, output_limit: usize, error_limit: usize }
+// Zero limits are unlimited. A zero or negative timeout is infinite; no_wait
+// stops at the first check instead.
+pub struct CaptureOptions { timeout_milliseconds: i64, no_wait: bool, output_limit: usize, error_limit: usize }
 
 // Reject inputs in the arena's unallocated tail before native setup can overwrite
 // them. Already allocated arena inputs stay stable throughout capture.
@@ -137,13 +138,13 @@ fn capture_input_overlap(arena: *mem.Arena, path: []const u8, arguments: [][]con
     return true
   }
   if #len(arguments) > 0 {
-    slots := (#cast(*const u8, &arguments[0]))[..#len(arguments) * #sizeof([]const u8)]
+    slots := #slice(#cast(*const u8, &arguments[0]), #len(arguments) * #sizeof([]const u8))
     if mem.arena_overlaps_unallocated(arena, slots) {
       return true
     }
   }
   if #len(configuration.environment) > 0 {
-    slots := (#cast(*const u8, &configuration.environment[0]))[..#len(configuration.environment) * #sizeof([]const u8)]
+    slots := #slice(#cast(*const u8, &configuration.environment[0]), #len(configuration.environment) * #sizeof([]const u8))
     if mem.arena_overlaps_unallocated(arena, slots) {
       return true
     }
@@ -218,8 +219,13 @@ pub fn capture(arena: *mem.Arena, path: []const u8, arguments: [][]const u8,
       _ = wait(&child.value, false)
     }
   }
+  has_deadline := policy.no_wait || policy.timeout_milliseconds > 0
+  wait_limit: u64 = 0
+  if !policy.no_wait && has_deadline {
+    wait_limit = #cast(u64, policy.timeout_milliseconds)
+  }
   started := MillisecondsResult{ok: true}
-  if policy.timeout_milliseconds >= 0 {
+  if has_deadline {
     started = milliseconds_native()
     if !started.ok {
       return CaptureResult{error: started.error, kind: started.kind}
@@ -299,14 +305,14 @@ pub fn capture(arena: *mem.Arena, path: []const u8, arguments: [][]const u8,
       result.ok = true
       break
     }
-    if policy.timeout_milliseconds >= 0 {
+    if has_deadline {
       now := milliseconds_native()
       if !now.ok {
         result.error = now.error
         result.kind = now.kind
         break
       }
-      if now.value - started.value >= #cast(u64, policy.timeout_milliseconds) {
+      if now.value - started.value >= wait_limit {
         result.timed_out = true
         result.error = -110
         result.kind = error_kinds.Kind.System
@@ -345,5 +351,5 @@ fn argument_slots(arena: *mem.Arena, count: usize) ArgumentsResult {
     return ArgumentsResult{ kind: error_kinds.Kind.Overflow }
   }
   allocation := mem.arena_push_uninit(arena, count * #sizeof([]const u8), #alignof([]const u8))
-  return ArgumentsResult{ value: (#cast(*[]const u8, allocation))[..count], ok: true }
+  return ArgumentsResult{ value: #slice(#cast(*[]const u8, allocation), count), ok: true }
 }

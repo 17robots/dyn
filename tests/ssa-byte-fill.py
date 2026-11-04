@@ -21,11 +21,11 @@ def success_source():
             array = f'data_{n}_{byte}'
             names.append(name)
             lines += [f'{array}: [{n+3}]u8', f'''pub fn {name}(a,b,c,d,e,f,g,h:u64) u64 {{
-  held:=#wrap(a+b*3+c*5+d*7+e*11+f*13+g*17+h*19)
+  held:=(a+b*3+c*5+d*7+e*11+f*13+g*17+h*19)
   before:={array}[0]
   for i in 0..{n} {{ {array}[i]={byte} }}
   after:={array}[0]
-  return #wrap(held+a+b+c+d+e+f+g+h+#cast(u64,before)*257+#cast(u64,after))
+  return (held+a+b+c+d+e+f+g+h+#cast(u64,before)*257+#cast(u64,after))
 }}''']
             held = sum(a*b for a,b in zip(range(11,19), (1,3,5,7,11,13,17,19)))
             checks += [f'''{array}[0]=17

@@ -42,7 +42,7 @@ fn main() {
   if !cached.ok {
     #panic("cannot cache font")
   }
-  context := ui.Context{}
+  context := ui.Context{ style: ui.default_style }
   viewport := ui.Rect{ width: 480, height: 240 }
   count: i32 = 2
   grid := true

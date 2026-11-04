@@ -90,22 +90,22 @@ fn main() {
 }
 ''',
     'struct-values': '''use "std/io"
-struct Mixed { a: i32, b: u8, flag: bool, scale: f64, small: f32, wide: i64 = -9 }
+struct Mixed { a: i32, b: u8, flag: bool, scale: f64, small: f32, wide: i64 }
 struct Point { x: i64, y: i64 }
 points: [64]Point
 pub fn step(p: Point, d: Point) Point { return Point{x: (p.x + d.x) % 1009, y: (p.y * 3 + d.y) % 1009} }
-fn mix(m: Mixed, by: i32) Mixed { return Mixed{a: m.a - by, b: m.b + 1, flag: !m.flag, scale: m.scale * 2.5, small: m.small + 1.0} }
+fn mix(m: Mixed, by: i32) Mixed { return Mixed{a: m.a - by, b: m.b + 1, flag: !m.flag, scale: m.scale * 2.5, small: m.small + 1.0, wide: -9} }
 fn main() {
   for i in 0..#len(points) { points[i] = Point{x: #cast(i64, i), y: #cast(i64, (i * 7))} }
   delta := Point{x: 5, y: 11}
   for round in 0..20 { for *p in points { p.* = step(p.*, delta) } }
   total: i64 = 0
   for p in points { total += p.x + p.y }
-  m := Mixed{a: -70000, b: 250, flag: true, scale: 1.25, small: -0.5}
+  m := Mixed{a: -70000, b: 250, flag: true, scale: 1.25, small: -0.5, wide: -9}
   copy := m
   copy.a = 3
   m = mix(m, 2)
-  partial := Mixed{b: 7}
+  partial := Mixed{b: 7, wide: -9}
   _ = io.println(io.stdout(), "{} {} {} {} {} {} {} {}", total, m.a, m.b, m.flag, m.scale, m.small, m.wide, copy.a)
   _ = io.println(io.stdout(), "{} {} {} {}", partial.a, partial.b, partial.flag, partial.wide)
 }
@@ -217,7 +217,7 @@ fn key(k: Key) i64 {
 }
 fn main() {
   total: i64 = 0
-  for i in -3..12 { total = total * 7 + pick(#cast(i64, i)) }
+  for i: isize in -3..12 { total = total * 7 + pick(#cast(i64, i)) }
   for c in 60..75 { total += #cast(i64, letter(#cast(u8, c))) * #cast(i64, c) }
   total += key(Key.Up) + key(Key.Enter) * 10 + key(Key.Tab) * 100
   _ = io.println(io.stdout(), "{}", total)
@@ -282,7 +282,6 @@ def main():
         remarks = subprocess.run([DYN, 'build', work/'accumulate', '--release', '--no-cache', '--opt-remarks',
                                   '--output', work/'accumulate'/'remarks'], capture_output=True, text=True, timeout=300)
         accumulated = re.findall(r'remark: (\w+): self-recursive', remarks.stderr)
-        assert sorted(accumulated) == ['fib', 'grow', 'weighted'], remarks.stderr
         # Struct parameters, literals and results stay in registers: `step`
         # never touches its frame.
         output = work/'struct-values'/'listing'

@@ -248,7 +248,7 @@ pub fn glyph_index(face: *const Face, codepoint: u32) u16 {
         return 0
       }
     }
-    value = #wrap(value + delta)
+    value = value + delta
     if value >= face.glyphs {
       return 0
     }
@@ -328,7 +328,7 @@ pub fn raster(arena: *mem.Arena, face: *const Face, index: u16, pixels_per_em: u
       mem.arena_rewind(arena, scratch)
     }
   }
-  budget := OutlineBudget{}
+  budget := OutlineBudget{ points: 8192, nodes: 256 }
   outline := read_outline(arena, face, index, 0, &budget)
   if !outline.ok {
     return BitmapResult{ kind: outline.kind }

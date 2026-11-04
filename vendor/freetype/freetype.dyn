@@ -85,7 +85,7 @@ pub fn bitmap(face: rawptr) BitmapResult {
     return BitmapResult{kind:errors.Kind.Overflow}
   }
   result.stride = stride
-  result.pixels = value.buffer[..#cast(usize, value.rows-1)*stride+width]
+  result.pixels = #slice(value.buffer, #cast(usize, value.rows-1)*stride+width)
   return BitmapResult{value:result, ok:true}
 }
 pub fn open(font: *Font, api: Api, bytes: []const u8, index: u32, pixels: u32) Result {

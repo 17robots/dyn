@@ -103,27 +103,26 @@ guarantee UTF-8. Source files and literal text are UTF-8, but `\x` escapes can w
 and bytes read from files, sockets, or the OS arrive unchecked. Text APIs that require UTF-8
 say so and validate; check external input with `utf8.valid` from `std/unicode/utf8` before
 treating it as text. `const` prevents writes through this view only: another `[]u8` alias of the
-same memory can still change the bytes. Character literals contain Unicode scalar values, defaulting to `u8` through 255 and
-`u32` above it; expected `u8`, `u16`, or `u32` may apply when value fits.
+same memory can still change the bytes. Character literals are untyped integer constants holding a Unicode scalar value:
+they take any expected integer type the value fits, and default to `u32`.
 
-`distinct`, `packed` and `is` are keywords only where they begin `distinct type`, `packed
-struct` and a `case` type pattern; elsewhere they are ordinary names. `type` is always reserved.
+`distinct`, `packed`, `is`, `union` and `type` are reserved keywords and cannot be names.
 
 `type` creates module-level transparent aliases; aliases may be forward-referenced and
 alias cycles fail. There are no local aliases; declare them at module scope.
 `distinct type Name = T` creates a nominal numeric type with `T`'s representation. Values cross
 the distinct boundary only through explicit `#cast`; same-type arithmetic preserves the distinct
-type. Structs/enums remain nominal. Struct field defaults must be
-compile-time expressions and cannot reference instance fields. Field defaults
-apply only to struct literals: storage zeroed any other way, such as by
-`mem.push`, holds zeros. Design structs so that zero is a useful value.
+type. Structs/enums remain nominal. Struct fields have no defaults: every path
+that creates a struct starts from zeros, whether a literal, a declaration, an
+omitted field or `mem.push`. Design structs so that zero is a useful value, and
+put other starting values in a named constant.
 
 Implicit numeric conversion is allowed only when destination represents every source-type
 value exactly. Constants adapt when their specific value fits, and a literal that does not fit
 its context is a compile error, checked again for each type a generic function is called with.
 An integer literal in a float context is that float when it is exact (up to 2^24 for `f32`,
-2^53 for `f64`), so `x * 2` works for any numeric `T`. Integers use checked
-arithmetic in debug and release. Floats use IEEE-754. Expression evaluation is left-to-right.
+2^53 for `f64`), so `x * 2` works for any numeric `T`. Integer arithmetic
+wraps. Floats use IEEE-754. Expression evaluation is left-to-right.
 Float literals accept trailing dots (`2.`); lexical lookahead keeps `2..3` an integer range.
 Explicit primitive locals without initializers start at zero. Inferred locals require an
 initializer. Local shadowing is forbidden: a local cannot reuse the name of a visible local or
@@ -141,8 +140,9 @@ the loop-local binding. `for *value` binds a mutable pointer to each source elem
 rejects const slices and requires assignable arrays. `for *const value` binds a const pointer.
 `for i in first..last` counts integers from `first` up to but excluding `last`; `..=` includes
 `last`. Both bounds share one integer type, and a literal bound adapts to the other bound, so
-`0..count` has `count`'s type. When both bounds are literals, `i` is `usize`, or `isize` if a
-bound is negative, so `for i in 0..3 { values[i] }` indexes directly. Bounds evaluate once, first
+`0..count` has `count`'s type. When both bounds are literals, `i` is `usize`, so
+`for i in 0..3 { values[i] }` indexes directly. A typed binding sets the type of both bounds:
+`for i: i32 in -3..3`. A negative literal range needs one. Bounds evaluate once, first
 bound first. An empty range such as `5..2` runs no iterations. `i` is a copy: assigning it does not change iteration, and pointer
 bindings are rejected. Inclusive ranges may end at the type's maximum without overflow.
 `for i in #reverse(first..last)` visits the same values from last to first: `#reverse(0..3)` gives
@@ -154,11 +154,17 @@ Loops may be labeled as `name: for`; `break: name` and `continue: name` target a
 loop with that label. Active labels cannot duplicate. Transfers run defers for every exited scope.
 
 Struct field order determines layout. Packed structs preserve order, remove inter-field padding,
-and have alignment 1 on current Linux x86-64 target. Construction zeroes every field, applies field
-defaults in declaration order, then applies explicit literal members. `.{ ... }` requires expected
+and have alignment 1 on current Linux x86-64 target. Construction zeroes every field, then applies
+explicit literal members. `.{ ... }` requires expected
 struct type. Struct assignment copies by value. Unknown/duplicate fields, duplicate declarations,
 by-value recursion and aggregate comparison fail. Empty structs have size and alignment 1 so arrays
 have stable element stride and distinct elements have distinct addresses.
+
+`union Value { bits: u64, number: f64, bytes: [8]u8 }` overlaps its members at offset 0. Its size
+is the largest member, rounded to the largest alignment. Members cannot hold pointers, slices or
+`any`, so every bit pattern is valid for every member and zero is valid. Reading a member other
+than the last one written reinterprets the bytes. A literal sets at most one member. Passing a
+union by value to foreign code is not a supported C ABI promise; pass a pointer.
 
 Functions may accept and return primitive or struct values. Arguments evaluate left-to-right and
 must match declared parameter count/types, subject to normal lossless conversions. Non-void
@@ -166,22 +172,15 @@ functions must return on every reachable exit. Calling a non-void function as a 
 error; use `_ = call()` to discard its result. Forward calls and direct recursion are supported.
 
 Enums are nominal. Tags default to `u32` or use an explicit integer backing type, as in
-`enum(u8) Op`. Variants receive declaration-order tags starting at 0. A plain enum may give
-variants explicit values: `enum(u8) Op { Add = 1, Sub, Halt = 0xFF }`. Values are integer
-literals that must fit the tag type, and a variant without one is the previous value plus one.
-Duplicate values are errors. Enums with payloads keep implicit values. Every enum needs a
-variant whose value is 0, so zeroed storage (`x: Color`, omitted struct fields, `mem.push`)
-always holds a valid variant. An exhaustive `case` that meets a tag matching no variant, which
-only foreign code or raw pointer writes can produce, panics with `enum.tag.ok`.
-Payload variants hold one typed value and use `Enum.Variant(payload)` construction. Plain
-variants use `Enum.Variant`; the type is always written, never inferred from context. Plain
-enums support equality only; payload enums are not comparable. Enum values copy by value.
-`#cast(u8, op)` gives a plain enum's tag, and `#cast(Op, byte)` converts an integer back,
-panicking when the value is not one of the variants.
-Plain enums have the size/alignment of the backing integer. A payload enum is laid out as its tag,
-padding to the maximum payload alignment, then storage large/aligned enough for the largest payload;
-final size is rounded to the maximum of tag/payload alignment. This is the Dyn ABI, not an automatic
-C enum/union ABI. Every tag value must fit the backing type.
+`enum(u8) Op`. Variants are dense: they take tags 0, 1, 2 and so on in declaration order, and
+there is no way to set a value. Zeroed storage (`x: Color`, omitted struct fields, `mem.push`)
+therefore always holds the first variant, so make that variant mean empty; `Null` is the usual
+name. External numbers stay plain integers at the edge: translate them through a table, so an
+unknown value becomes `Null`. Variants are written `Enum.Variant`; the type is always written,
+never inferred. Enums support equality and copy by value. `#cast(u8, op)` gives the tag and
+`#cast(Op, byte)` converts an integer back. An exhaustive `case` that meets a tag matching no
+variant panics with `enum.tag.ok`. Enums carry no payloads: a sum type is a struct with a `kind`
+field and the fields its kinds use. Enums have the size and alignment of the backing integer.
 
 Bit masks use distinct unsigned integer types, not special flag-enum syntax. Values explicitly
 cast into the mask type; ordinary integer `|`, `&`, `^`, and `~` then preserve its nominal type.
@@ -189,8 +188,9 @@ Enums remain single-choice values.
 
 Pointers are thin and zero-initialize to `nil`. `&value` requires assignable storage; `pointer.*`
 dereferences it. Struct fields automatically dereference struct pointers. Dereference checks nil
-and pointee alignment, then panics on failure. Pointer arithmetic and ordering are forbidden;
-equality with compatible pointers or `nil` is allowed. Mutable pointers implicitly widen to
+and pointee alignment, then panics on failure. Pointers support equality with compatible pointers or `nil`, and ordering with `<`, `<=`, `>` and
+`>=`. `#offset(pointer, count)` moves a pointer by whole elements, and a negative count moves back.
+A pointer from `#offset` has no bounds check; its dereference keeps the nil and alignment checks. Mutable pointers implicitly widen to
 `*const T`, never back to mutable. Shallow const forbids replacing fields through the const pointer,
 while a mutable pointer stored in such a field still permits mutation of its own pointee:
 
@@ -207,14 +207,13 @@ A mutable `*T` converts to `rawptr` implicitly, as C's `void *` does: `free(task
 The reverse, `rawptr` to `*T`, always requires `#cast`. `*const T` does not convert implicitly.
 
 Pointers are thin. Dereference checks nil and alignment, but not lifetime or allocation
-bounds. Pointer comparisons support only equality. Thin pointers cannot be indexed as single values,
-but `pointer[start..end]` constructs a slice and requires an explicit end bound. Slices are `{data, len}` descriptors and are
+bounds. Thin pointers cannot be indexed or sliced with `[..]`. `#slice(pointer, count)` makes a slice
+from a pointer and a length the compiler cannot verify, so a wrong count reads out of bounds. Slices are `{data, len}` descriptors and are
 never comparable. Fixed arrays copy by value; omitted literal elements zero-fill, including typed
 `[]`. Array/slice indexing is bounds-checked. Indexes and slice bounds accept any integer type no wider than `usize`, as in C; a negative signed value fails the bounds check like any other out-of-range index. Use `#cast` for wider types, such as `i64` on 32-bit targets. Exclusive ranges support `[..]`, `[..end]`,
 `[start..]`, and `[start..end]`, checking `start <= end <= len`. `#len` returns `usize`.
 `rawptr` has no direct indexing or slicing. Cast it explicitly to `*T`, then use
-the ordinary bounded pointer-slice form: `(#cast(*T, memory))[..count]`. No second
-raw-pointer range construct is planned.
+`#slice`: `#slice(#cast(*T, memory), count)`.
 `rawptr` has native pointer size/alignment, zero-initializes to `nil`, and supports equality and
 an implicit conversion from mutable typed pointers, and explicit casts to/from compatible typed
 pointers or native-width integers. It has no pointee,
@@ -256,14 +255,12 @@ crosses foreign frames runs Dyn defers but skips cleanup in the C frames between
 ## Numeric rules
 
 Integer widths are fixed except `isize`/`usize`, which match the target pointer width. Signed values
-use two's-complement representation. `+`, `-`, `*`, unary negation, and signed division overflow
-panic at runtime and are rejected when overflowing at compile time. Division/remainder by zero
-panic; the signed minimum divided by `-1` also panics. Shift counts must be nonnegative and less
-than the left operand width. Right shift is arithmetic for signed and logical for unsigned values.
-Bitwise operators require integers. For hashes, random number generators and other code that
-wants modular arithmetic, `#wrap(expression)` makes the `+`, `-`, `*`, unary `-` and `<<`
-written inside it wrap around instead of panicking. Division and shift counts stay checked, and
-calls inside `#wrap` are not affected.
+use two's-complement representation. `+`, `-`, `*`, `<<` and unary negation wrap at runtime; overflow
+in a constant expression is a compile error. Shift counts are masked to the left operand's width, so
+`x << 33` on a `u32` shifts by 1. Right shift is arithmetic for signed and logical for unsigned
+values. Bitwise operators require integers. Division and remainder by zero panic, and the signed
+minimum divided by `-1` panics. `std/math` has `add_overflows`, `sub_overflows`, `mul_overflows` and
+saturating arithmetic for code that wants them.
 
 Untyped integer constants are evaluated exactly for the implemented constant-expression operators,
 then adapted only when their value is representable in the expected type. Runtime implicit numeric
@@ -308,7 +305,7 @@ collections, and ordinary algorithms belong in libraries.
 
 - Conversion: `#cast(Type, value)` and `#bitcast(Type, value)`.
 - Layout and reflection: `#sizeof`, `#alignof`, `#offsetof`, and `#typeof`.
-- Representation and arithmetic: `#len` and `#wrap`.
+- Representation and pointers: `#len`, `#slice` and `#offset`.
 - Validation and termination: compile-time `#assert` and runtime `#panic`.
 - Build input and OS boundary: `#load` and `#syscall`.
 - Iteration: `#reverse`, valid only in a `for` iterable.
@@ -318,7 +315,7 @@ Conversions require exactly two arguments, with the type first. The value may be
 any expression and is evaluated exactly once. The closing parenthesis delimits
 that expression: `#cast(i64, a + b)` converts the sum, while
 `#cast(i64, a) + b` converts only `a`. Cast results accept ordinary postfix
-operations, such as `#cast(*T, memory)[..count]`. The old `#cast(T) value` and
+operations, such as `#cast(*T, memory).field`. The old `#cast(T) value` and
 `#bitcast(T) value` forms are rejected; see the
 [migration guide](../migrations/cast-syntax.md).
 
@@ -332,7 +329,6 @@ Linux x86-64. It does not depend on `std`.
 `#offsetof(Type, field)` is a field's byte offset as a `usize` constant.
 `#assert(condition, "message")` fails compilation when a constant condition is false.
 `#load("file")` embeds a file's bytes as a `[]const u8`; the path is relative to the module directory and may not contain `..`.
-`#wrap(expression)` is described under numeric rules.
 
 `#panic(message)` accepts any `[]const u8` expression; messages need not be literals.
 
@@ -344,7 +340,7 @@ recursive relationships use IDs rather than nested metadata.
 
 ## Removed/deferred syntax
 
-No `inline`, `thread_local`, `as`, wrapping operators such as `+%` (use `#wrap`), `~=`, or C-style casts.
+No `inline`, `thread_local`, `as`, wrapping operators such as `+%`, `~=`, or C-style casts.
 `#cast(T, value)` and `#bitcast(T, value)` are explicit. Unary `!` is bool-only;
 unary `~` is integer-only. Comments do not nest; whitespace is insignificant; semicolons are
 unsupported.
@@ -358,7 +354,7 @@ is not a supported-feature claim:
 | Module-level transparent type alias | Supported |
 | Local type alias inside a function | Reserved; diagnosed as unsupported |
 | Enum declaration-order tags | Supported |
-| Explicit enum values on plain enums | Supported |
+| Explicit enum values and enum payloads | Rejected |
 | `.Variant` without the enum type | Not planned; write `Enum.Variant` |
 | Several imports in one `use`, comma-separated | Supported |
 | Optional import alias followed by a new global | Supported; alias stays on the import line |
@@ -368,8 +364,8 @@ is not a supported-feature claim:
 
 ## Build modes and syntax stability
 
-Debug and release have identical language correctness semantics. Both retain checked arithmetic,
-division, shifts, bounds, nil, and alignment checks unless proven redundant. Debug records function
+Debug and release have identical language correctness semantics. Both retain division, bounds, nil
+and alignment checks unless proven redundant. Debug records function
 frames for panic diagnostics. Release omits that tracing and enables backend optimization/internal
 linkage; it may therefore show fewer diagnostic frames, never different valid results.
 

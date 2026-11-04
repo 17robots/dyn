@@ -4,7 +4,7 @@ use "std/errors" errors
 
 // File{} is unopened. Owners must not be copied: transfer with take(), or borrow().
 // Borrowed files never close the underlying handle. Their owner must outlive them.
-pub struct File { descriptor: isize = -1, active: bool, owned: bool }
+pub struct File { descriptor: isize, active: bool, owned: bool }
 pub struct FileResult { value: File, error: isize, kind: errors.Kind, ok: bool }
 pub struct Result { transferred: usize, error: isize, kind: errors.Kind, ok: bool }
 pub struct OffsetResult { value: usize, error: isize, kind: errors.Kind, ok: bool }
@@ -188,7 +188,7 @@ pub fn map(file: *const File) Mapping {
     return Mapping{ error: address, kind: native_kind(address) }
   }
   bytes := #cast(*const u8, #cast(usize, address))
-  return Mapping{ value: bytes[..size], ok: true }
+  return Mapping{ value: #slice(bytes, size), ok: true }
 }
 
 // Releases a mapping and clears it. Unmapping a zero Mapping succeeds.
@@ -283,7 +283,7 @@ pub fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) ReadAllR
         break
       }
       if total != 0 && memory.arena_try_extend(arena, &output[0], total, wanted - total) {
-        output = (&output[0])[..wanted]
+        output = #slice(&output[0], wanted)
       } else {
         if wanted > available && arena.limit != 0 {
           // A geometric reservation is only a preference. Use the last
@@ -315,7 +315,7 @@ pub fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) ReadAllR
           }
           pointer = allocation.memory
         }
-        next := pointer[..wanted]
+        next := #slice(pointer, wanted)
         _ = memory.copy(next, output[..total])
         output = next
         output_mark = memory.arena_mark(arena) - wanted

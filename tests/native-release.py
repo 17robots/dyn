@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Native release arithmetic preserves checked overflow and wrapping behavior."""
+"""Native release arithmetic folds in range constants and wraps at runtime."""
 import os
 from pathlib import Path
 import subprocess
@@ -12,11 +12,8 @@ with tempfile.TemporaryDirectory(prefix='dyn-native-release-') as directory:
     source = root/'main.dyn'
     output = root/'program'
     # Typed return values force the emitter to respect narrow integer widths.
-    cases = [('u8', '250 + 5', 255), ('u8', '#wrap(250 + 10)', 4),
-             ('u8', '#wrap(1 - 4)', 253), ('u8', '#wrap(200 * 3)', 88),
-             ('i8', '60 + 67', 127), ('i8', '#wrap(120 + 10)', -126),
-             ('i8', '#wrap(100 * 2)', -56), ('u64', '18446744073709551615 - 1', 18446744073709551614),
-             ('u64', '#wrap(18446744073709551615 + 2)', 1),
+    cases = [('u8', '250 + 5', 255), ('i8', '60 + 67', 127),
+             ('u64', '18446744073709551615 - 1', 18446744073709551614),
              ('i64', '(19 + 23) * 2', 84)]
     for ty, expression, expected in cases:
         source.write_text(f'fn value() {ty} {{ return {expression} }}\n'
@@ -24,16 +21,11 @@ with tempfile.TemporaryDirectory(prefix='dyn-native-release-') as directory:
         subprocess.run([str(DYN), 'build', str(root), '--backend', 'native', '--release',
                         '--no-cache', '--quiet', '--output', str(output)], check=True)
         subprocess.run([str(output)], check=True)
-    # Checked overflow must still panic, with deferred cleanup executed first.
-    source.write_text('''use "std/io"
-fn value() u8 { defer { _=io.println(io.stdout(), "cleanup") }
-value:u8=250
-return value + 10 }
-fn main() { _=value() }
+    # Runtime overflow wraps at the type's width.
+    source.write_text('''fn value(start: u8) u8 { return start + 10 }
+fn main() { if value(250) != 4 { #panic("wrap") } }
 ''')
     subprocess.run([str(DYN), 'build', str(root), '--backend', 'native', '--release',
                     '--no-cache', '--quiet', '--output', str(output)], check=True)
-    result = subprocess.run([str(output)], capture_output=True, text=True)
-    assert result.returncode != 0 and 'overflow.ok' in result.stderr, result
-    assert result.stdout == 'cleanup\n', result
-print('PASS native release literal folding, integer boundaries, wrapping and deferred cleanup')
+    subprocess.run([str(output)], check=True)
+print('PASS native release literal folding, integer boundaries and wrapping')

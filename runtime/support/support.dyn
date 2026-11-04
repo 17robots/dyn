@@ -183,13 +183,13 @@ fn unwind_store_message(slot: *UnwindSlot, message: *const u8, length: u64) {
   }
   if copied > 4096 {
     copied = 4096 - #cast(u64, #len(truncated))
-    bytes := message[..#cast(usize, total)]
+    bytes := #slice(message, #cast(usize, total))
     for copied != 0 && (bytes[copied] & 0xc0) == 0x80 {
       copied -= 1
     }
   }
   if copied != 0 {
-    bytes := message[..#cast(usize, total)]
+    bytes := #slice(message, #cast(usize, total))
     for i in 0..copied {
       slot.storage[i] = bytes[i]
     }
@@ -256,15 +256,15 @@ fn append_bytes(buffer: []u8, at: u64, text: []const u8) u64 {
 // Failed runtime checks pass the function name and kind << 24 | name length
 // rather than a full message, so each function stores its name once. The
 // compiler caps names at 800 bytes, so the message always fits.
-pub fn dyn_check_failed(name: *const u8, packed: u64) {
-  length := packed & 0xffffff
+pub fn dyn_check_failed(name: *const u8, packed_value: u64) {
+  length := packed_value & 0xffffff
   storage: [1024]u8 = []
   buffer := storage[..]
   used := append_bytes(buffer, 0, "runtime check failed (")
-  used = append_bytes(buffer, used, check_name(packed >> 24))
+  used = append_bytes(buffer, used, check_name(packed_value >> 24))
   used = append_bytes(buffer, used, ") in ")
   if length != 0 && length <= 800 {
-    used = append_bytes(buffer, used, name[..#cast(usize, length)])
+    used = append_bytes(buffer, used, #slice(name, #cast(usize, length)))
   }
   panic_raw(&storage[0], used)
 }

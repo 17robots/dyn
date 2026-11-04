@@ -77,7 +77,7 @@ fn main() {
     mem.arena_release(output)
     mem.arena_release(frame)
   }
-  context := ui.Context{}
+  context := ui.Context{ style: ui.default_style }
   viewport := ui.Rect{ width: 480, height: 240 }
   count: i32 = 2
   grid := true

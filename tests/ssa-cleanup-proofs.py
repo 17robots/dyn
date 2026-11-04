@@ -19,21 +19,21 @@ fn cleanup() { _=io.write_all(io.stdout(),"D") }
 pub fn local_plain() u64 {
  value:=#cast(u64,opaque(7))
  pointer:=&value
- pointer.*=#wrap(pointer.*+1)
+ pointer.*=(pointer.*+1)
  return pointer.*
 }
 pub fn local_deferred() u64 {
  defer cleanup()
  value:=#cast(u64,opaque(7))
  pointer:=&value
- pointer.*=#wrap(pointer.*+1)
+ pointer.*=(pointer.*+1)
  return pointer.*
 }
 pub fn wrapped_compare() usize {
  defer cleanup()
  value:u64=7
- delta:=opaque(#wrap(0-#cast(usize,&value)))
- view:=(#cast(*u8,&value))[..opaque(~#cast(usize,0))]
+ delta:=opaque((0-#cast(usize,&value)))
+ view:=#slice(#cast(*u8,&value), opaque(~#cast(usize,0)))
  pointer:=&view[delta]
  // Compare the forged address only; never dereference it.
  if pointer==nil { return opaque(11) }
@@ -55,7 +55,7 @@ pub fn incoming(pointer:*u64) u64 {
 pub fn loop_sum(s:[]const u8) u64 {
  defer cleanup()
  sum:u64=0
- for i in 0..#len(s) { sum=#wrap(sum+#cast(u64,s[i])) }
+ for i in 0..#len(s) { sum=(sum+#cast(u64,s[i])) }
  return sum
 }
 pub fn nested(s:[]const u8) u64 {
@@ -63,7 +63,7 @@ pub fn nested(s:[]const u8) u64 {
  sum:u64=0
  for r in 0..opaque(2) {
   for i in 0..#len(s) { if i==opaque(1) { continue }
-  sum=#wrap(sum+#cast(u64,s[i])) }
+  sum=(sum+#cast(u64,s[i])) }
  }
  return sum
 }
@@ -106,7 +106,7 @@ pub fn signed(s:[]const u8,i:isize) u8 {
 }
 pub fn changed(s:[]const u8,i:usize) u8 {
  defer cleanup()
- if i<#len(s) { return s[#wrap(i+1)] }
+ if i<#len(s) { return s[(i+1)] }
  return 0
 }
 pub fn phi(s:[]const u8,i:usize,choose:bool) u8 {

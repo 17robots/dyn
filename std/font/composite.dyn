@@ -1,4 +1,5 @@
-struct Matrix { xx: f64 = 1.0, yx: f64, xy: f64, yy: f64 = 1.0 }
+struct Matrix { xx: f64, yx: f64, xy: f64, yy: f64 }
+const identity_matrix: Matrix = Matrix{ xx: 1.0, yy: 1.0 }
 fn transformed(point: Point, matrix: Matrix) Point {
   return Point{ x: point.x * matrix.xx + point.y * matrix.xy,
     y: point.x * matrix.yx + point.y * matrix.yy, on: point.on }
@@ -59,7 +60,7 @@ fn composite_outline(arena: *mem.Arena, face: *const Face, data: []const u8, ori
       }
     }
     at += length
-    matrix := Matrix{}
+    matrix := identity_matrix
     if forms != 0 {
       size: usize = 2
       if forms == 64 {

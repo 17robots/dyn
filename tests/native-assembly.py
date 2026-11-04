@@ -113,9 +113,9 @@ int main(void) {
   a: [19]u32 = []
   b: [19]u32 = []
   c: [19]u32 = []
-  for i in 0..19 { a[i] = #wrap(seed + (#cast(u32, i)))
+  for i in 0..19 { a[i] = (seed + (#cast(u32, i)))
   b[i] = 4294967295 }
-  for i in 0..19 { c[i] = #wrap(a[i] + b[i]) }
+  for i in 0..19 { c[i] = (a[i] + b[i]) }
   return c[18]
 }''')
     for target in ('x86_64-linux', 'aarch64-linux'):

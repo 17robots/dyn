@@ -4,7 +4,7 @@
 pub fn hash64(source: []const u8) u64 {
   value: u64 = 14695981039346656037
   for byte in source {
-    value = #wrap((value ^ #cast(u64, byte)) * 1099511628211)
+    value = (value ^ #cast(u64, byte)) * 1099511628211
   }
   return value
 }
@@ -87,8 +87,8 @@ fn multiply_wide(a: u64, b: u64) Wide {
   high_low := a_high * b_low
   high_high := a_high * b_high
   middle := (low_low >> 32) + (low_high & 0xffffffff) + (high_low & 0xffffffff)
-  low := (low_low & 0xffffffff) | #wrap(middle << 32)
-  high := #wrap(high_high + (low_high >> 32) + (high_low >> 32) + (middle >> 32))
+  low := (low_low & 0xffffffff) | (middle << 32)
+  high := high_high + (low_high >> 32) + (high_low >> 32) + (middle >> 32)
   return Wide{ low: low, high: high }
 }
 

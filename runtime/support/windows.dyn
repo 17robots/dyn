@@ -24,7 +24,7 @@ fn trace_write(data: *const u8, size: u64) {
     return
   }
   handle := get_handle(4294967284)
-  bytes := data[..#cast(usize, size)]
+  bytes := #slice(data, #cast(usize, size))
   offset: usize = 0
   for offset < #len(bytes) {
     chunk := #len(bytes) - offset

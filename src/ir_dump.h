@@ -36,7 +36,7 @@
  * structs / struct: owner name packed public fields(field range)
  * enums / enum: owner name tag_type public variants(variant range)
  * fields / field: name type default(expression ref)
- * variants / variant: name payload_type tag(bits)
+ * variants / variant: name tag(bits)
  * globals / global: owner name [link_name if foreign] type initializer
  *                   const foreign public
  * global_init_order / global_init: global(global ref)
@@ -98,7 +98,7 @@
  * link_name bytes, field/variant/param/local names and string bytes are verbatim.
  * Internal link_name is redundant with declaration identity and omitted.
  * Capacities, spans, paths (including target dynamic_linker), source locations,
- * interface hashes, liveness, layout sizes/alignments/has_payload, bounds and
+ * interface hashes, liveness, layout sizes/alignments, bounds and
  * overflow proofs, unstable_locals and local_statements are excluded as derived
  * facts. Integer literals/tags/range endpoints/array lengths are raw uint64 bits;
  * no floating conversion or locale-sensitive floating formatting is performed.

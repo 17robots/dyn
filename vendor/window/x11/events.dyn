@@ -25,7 +25,8 @@ fn ordered_open(window: *Window) bool {
   window.wake_descriptor = event_descriptor(0, 526336)
   supported: i32 = 0
   _ = detectable_repeat(window.display, 1, &supported)
-  return window.wake_descriptor >= 0
+  window.wake_active = window.wake_descriptor >= 0
+  return window.wake_active
 }
 // Keysyms encode Unicode directly above 0x01000000. Legacy Latin-1 maps
 // directly; unmapped legacy non-Latin keysyms report key zero, with scancode.
@@ -159,7 +160,7 @@ pub fn next_event(window: *Window, output: *OrderedEvent) bool {
 }
 // Thread-safe wake only. Stop/join wake callers before closing the owner.
 pub fn wake(window: *const Window) Result {
-  if window.display == nil || window.wake_descriptor < 0 {
+  if window.display == nil || !window.wake_active {
     return Result{ kind: errors.Kind.InvalidState }
   }
   one: u64 = 1
@@ -170,7 +171,7 @@ pub fn wake(window: *const Window) Result {
 }
 fn ordered_wakes(window: *Window) {
   value: u64 = 0
-  if window.wake_descriptor >= 0 && event_read(window.wake_descriptor, &value, 8) == 8 {
+  if window.wake_active && event_read(window.wake_descriptor, &value, 8) == 8 {
     ordered_push(window, ordered.Event{ kind: ordered.Kind.Wake })
   }
 }

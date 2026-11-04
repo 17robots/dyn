@@ -33,7 +33,7 @@ fn c_vector(arena: *mem.Arena, values: [][]const u8) *CString {
   }
   allocation := mem.arena_push(arena, (#len(values)+1)*#sizeof(CString), #alignof(CString))
   pointer := #cast(*CString, allocation)
-  slots := pointer[..#len(values)+1]
+  slots := #slice(pointer, #len(values)+1)
   for at in 0..#len(values) {
     slots[at].value = c_string(arena, values[at])
     if slots[at].value == nil {
@@ -262,7 +262,7 @@ fn arguments_native(arena: *mem.Arena) ArgumentsResult {
   if !result.ok {
     return result
   }
-  vector := argument_vector().*[..#cast(usize, count)]
+  vector := #slice(argument_vector().*, #cast(usize, count))
   at: usize = 0
   for at < #cast(usize, count) {
     source := vector[at]
@@ -270,9 +270,9 @@ fn arguments_native(arena: *mem.Arena) ArgumentsResult {
     allocation := mem.arena_push_uninit(arena, size, 1)
     destination := arena.data[..0]
     if size > 0 {
-      destination = allocation[..size]
+      destination = #slice(allocation, size)
     }
-    _ = mem.copy(destination, source[..size])
+    _ = mem.copy(destination, #slice(source, size))
     result.value[at] = destination
     at += 1
   }

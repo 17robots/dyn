@@ -402,7 +402,7 @@ static int64_t ssa_memory_type(const DynIrProgram *ir, DynType type) {
 }
 /* Integer values stay normalized: sign- or zero-extended from their width. */
 static int32_t ssa_normalize(Ssa *s, int32_t v, DynType type) {
-  if (payload_enum(s->ir, type) || float_type(type)) return v;
+  if (float_type(type)) return v;
   type = storage_type(s->ir, type);
   unsigned bits = dyn_type_is_pointer(type) || dyn_type_is_function(type) || type == DYN_TYPE_RAWPTR
                     ? backend_pointer_bits : integer_bits(type);
@@ -638,17 +638,8 @@ static int32_t ssa_cast(Ssa *s, const DynIrExpr *e, unsigned depth) {
   if (e->left >= ir->expression_count) { SSA_GIVE_UP(s); return 0; }
   DynType from = storage_type(ir, ir->expressions[e->left].type);
   if (dyn_type_is_enum(e->type)) {
-    if (payload_enum(ir, e->type) || !integer_type(from)) { SSA_GIVE_UP(s); return 0; }
-    int32_t v = ssa_expr(s, e->left, NULL, depth + 1), any = -1;
-    const DynIrEnum *en = &ir->enums[e->type - DYN_TYPE_ENUM_BASE];
-    for (unsigned i = 0; i < en->variant_count; ++i) {
-      uint64_t tag = ir->variants[en->variant_start + i].tag; unsigned bits = integer_bits(en->tag_type);
-      if (signed_scalar(en->tag_type) && bits < 64 && (tag >> (bits - 1) & 1)) tag |= UINT64_MAX << bits;
-      if (signed_scalar(from) != signed_scalar(en->tag_type) && (int64_t)tag < 0) continue;
-      int32_t match = ssa_compare(s, v, ssa_const(s, tag, SC_INT), CC_E);
-      any = any < 0 ? match : ssa_emit(s, SO_OR, SC_INT, any, match, -1, 0, 0);
-    }
-    ssa_check(s, any < 0 ? ssa_const(s, 0, SC_INT) : any, ssa_const(s, 0, SC_INT), CC_NE, GUARD_ENUM);
+    if (!integer_type(from)) { SSA_GIVE_UP(s); return 0; }
+    int32_t v = ssa_expr(s, e->left, NULL, depth + 1);
     return ssa_normalize(s, v, e->type);
   }
   bool from_pointer = dyn_type_is_pointer(from) || dyn_type_is_function(from) || from == DYN_TYPE_RAWPTR;
@@ -915,28 +906,13 @@ static int32_t ssa_expr_value(Ssa *s, DynExprId id, int32_t *second, unsigned de
   case DYN_EXPR_ENUM: {
     if (!dyn_type_is_enum(e->type) || e->type - DYN_TYPE_ENUM_BASE >= ir->enum_count || e->integer >= ir->variant_count) break;
     const DynIrEnum *en = &ir->enums[e->type - DYN_TYPE_ENUM_BASE];
-    const DynIrVariant *variant = &ir->variants[e->integer];
-    if (!en->has_payload) {
-      uint64_t tag = variant->tag;
-      unsigned bits = integer_bits(en->tag_type);
-      if (bits < 64) {
-        tag &= (UINT64_C(1) << bits) - 1;
-        if (signed_scalar(en->tag_type) && (tag >> (bits - 1) & 1)) tag |= UINT64_MAX << bits;
-      }
-      return ssa_const(s, tag, SC_INT);
+    uint64_t tag = ir->variants[e->integer].tag;
+    unsigned bits = integer_bits(en->tag_type);
+    if (bits < 64) {
+      tag &= (UINT64_C(1) << bits) - 1;
+      if (signed_scalar(en->tag_type) && (tag >> (bits - 1) & 1)) tag |= UINT64_MAX << bits;
     }
-    int32_t address = ssa_temporary(s, e->type);
-    uint32_t size, alignment;
-    if (!layout(ir, e->type, &size, &alignment, 0)) break;
-    ssa_emit(s, SO_ZEROMEM, SC_NONE, address, -1, -1, size, 0);
-    ssa_store(s, address, -1, 1, 0, ssa_memory_type(ir, en->tag_type), ssa_const(s, variant->tag, SC_INT));
-    if (variant->payload_type != DYN_TYPE_VOID) {
-      if (e->item_count != 1 || e->item_start >= ir->item_count) break;
-      uint32_t tag_size = (memory_bits(en->tag_type) + 7) / 8, a = (uint32_t)en->payload_alignment;
-      int32_t payload = ssa_add_offset(s, address, (tag_size + a - 1) & ~(a - 1));
-      ssa_initialize(s, payload, variant->payload_type, ir->items[e->item_start].expression, depth + 1);
-    }
-    return address;
+    return ssa_const(s, tag, SC_INT);
   }
   default:
     break;
@@ -1029,7 +1005,7 @@ static int32_t ssa_binary(Ssa *s, const DynIrExpr *e, int32_t left, int32_t righ
     return ssa_emit(s, e->op == DYN_OP_DIV ? SO_DIV : SO_REM, SC_INT, left, right, -1, 0, sign);
   }
   case DYN_OP_SHL: case DYN_OP_SHR: {
-    ssa_check(s, right, ssa_const(s, bits, SC_INT), CC_B, GUARD_SHIFT);
+    right = ssa_emit(s, SO_AND, SC_INT, right, ssa_const(s, bits - 1, SC_INT), -1, 0, 0); /* counts are masked */
     SsaOp back = sign ? SO_SAR : SO_SHR;
     if (e->op == DYN_OP_SHR) return ssa_emit(s, back, SC_INT, left, right, -1, 0, 0);
     /* An unsigned left shift by a constant k overflows exactly when the
@@ -1576,13 +1552,11 @@ static void ssa_initialize(Ssa *s, int32_t destination, DynType type, DynExprId 
     } else if (value) {
       if (!dyn_type_is_struct(type) || (uint64_t)value->item_start + value->item_count > ir->item_count) { SSA_GIVE_UP(s); return; }
       const DynIrStruct *record = &ir->structs[type - DYN_TYPE_STRUCT_BASE];
-      for (uint32_t i = 0; i < record->field_count + value->item_count; ++i) {
-        uint32_t field = i < record->field_count ? i : ir->items[value->item_start + i - record->field_count].field_index, offset;
+      for (uint32_t i = 0; i < value->item_count; ++i) {
+        uint32_t field = ir->items[value->item_start + i].field_index, offset;
         if (!field_offset(ir, type, field, &offset)) { SSA_GIVE_UP(s); return; }
         const DynIrField *definition = &ir->fields[record->field_start + field];
-        DynExprId expr = i < record->field_count ? definition->default_expression
-                                                 : ir->items[value->item_start + i - record->field_count].expression;
-        if (expr == DYN_NO_EXPR) continue;
+        DynExprId expr = ir->items[value->item_start + i].expression;
         ssa_initialize(s, ssa_add_offset(s, destination, offset), definition->type, expr, depth + 1);
       }
     }
@@ -1622,14 +1596,12 @@ static bool ssa_return_literal(Ssa *s, DynExprId id) {
   uint32_t offsets[64], count = 0, size, alignment;
   int32_t values[64];
   if (!layout(ir, type, &size, &alignment, 0) || size > 64) return false;
-  for (uint32_t i = 0; i < record->field_count + e->item_count; ++i) {
-    uint32_t field = i < record->field_count ? i : ir->items[e->item_start + i - record->field_count].field_index;
+  for (uint32_t i = 0; i < e->item_count; ++i) {
+    uint32_t field = ir->items[e->item_start + i].field_index;
     if (field >= record->field_count) return false;
     const DynIrField *definition = &ir->fields[record->field_start + field];
     if (!scalar(ir, definition->type)) return false;
-    DynExprId expr = i < record->field_count ? definition->default_expression
-                                            : ir->items[e->item_start + i - record->field_count].expression;
-    if (expr == DYN_NO_EXPR) continue;
+    DynExprId expr = ir->items[e->item_start + i].expression;
     if (expr >= ir->expression_count || !field_offset(ir, type, field, &offsets[count])) return false;
     expressions[count] = expr;
     types[count++] = definition->type;
@@ -1764,8 +1736,8 @@ static void ssa_assign(Ssa *s, const DynIrStmt *st) {
     int32_t value, second = -1;
     if (st->assignment_op != DYN_OP_NONE) {
       if (st->target == DYN_NO_EXPR || descriptor(type)) { SSA_GIVE_UP(s); return; }
-      DynIrExpr operation = {.kind = DYN_EXPR_BINARY, .type = type, .op = st->assignment_op,
-                             .left = st->target, .right = st->expression, .wrap = false};
+      DynIrExpr operation = {.kind = DYN_EXPR_BINARY, .type = type, .op = st->assignment_op, .wrap = dyn_op_wraps(st->assignment_op),
+                             .left = st->target, .right = st->expression};
       int32_t left = ssa_expr(s, st->target, NULL, 0);
       int32_t right = ssa_expr(s, st->expression, NULL, 0);
       value = ssa_binary(s, &operation, left, right);
@@ -1796,7 +1768,7 @@ static void ssa_assign(Ssa *s, const DynIrStmt *st) {
     int32_t value, second = -1;
     if (st->assignment_op != DYN_OP_NONE) {
       if (descriptor(type)) { SSA_GIVE_UP(s); return; }
-      DynIrExpr operation = {.kind = DYN_EXPR_BINARY, .type = type, .op = st->assignment_op,
+      DynIrExpr operation = {.kind = DYN_EXPR_BINARY, .type = type, .op = st->assignment_op, .wrap = dyn_op_wraps(st->assignment_op),
                              .left = st->target, .right = st->expression};
       int32_t left = ssa_expr(s, st->target, NULL, 0);
       int32_t right = ssa_expr(s, st->expression, NULL, 0);
@@ -1813,7 +1785,7 @@ static void ssa_assign(Ssa *s, const DynIrStmt *st) {
   if (st->assignment_op != DYN_OP_NONE) {
     int32_t old = ssa_load_value(s, address, type, NULL);
     int32_t right = ssa_expr(s, st->expression, NULL, 0);
-    DynIrExpr operation = {.kind = DYN_EXPR_BINARY, .type = type, .op = st->assignment_op,
+    DynIrExpr operation = {.kind = DYN_EXPR_BINARY, .type = type, .op = st->assignment_op, .wrap = dyn_op_wraps(st->assignment_op),
                            .left = st->target, .right = st->expression};
     value = ssa_binary(s, &operation, old, right);
   } else value = ssa_expr(s, st->expression, &second, 0);
@@ -2024,7 +1996,7 @@ static bool ssa_byte_count(Ssa *s, const DynIrStmt *st) {
   if (type != DYN_TYPE_U64 && type != DYN_TYPE_USIZE) return false;
   const DynIrExpr *one = &ir->expressions[increment->expression];
   if (increment->assignment_op == DYN_OP_NONE) {
-    if (one->kind != DYN_EXPR_BINARY || one->op != DYN_OP_ADD || one->wrap ||
+    if (one->kind != DYN_EXPR_BINARY || one->op != DYN_OP_ADD ||
         one->left >= ir->expression_count || one->right >= ir->expression_count ||
         ir->expressions[one->left].kind != DYN_EXPR_NAME || ir->expressions[one->left].integer != accumulator) return false;
     one = &ir->expressions[one->right];
@@ -2229,31 +2201,16 @@ static void ssa_case(Ssa *s, const DynIrStmt *st, unsigned depth) {
   const DynIrProgram *ir = s->ir;
   if (st->expression >= ir->expression_count) { SSA_GIVE_UP(s); return; }
   DynType type = ir->expressions[st->expression].type;
-  bool payload = payload_enum(ir, type), any = type == DYN_TYPE_ANY, reference = false;
-  if (!payload && !any && !scalar(ir, type)) { SSA_GIVE_UP(s); return; }
+  bool any = type == DYN_TYPE_ANY;
+  if (!any && !scalar(ir, type)) { SSA_GIVE_UP(s); return; }
   if ((uint64_t)st->case_arm_start + st->case_arm_count > ir->case_arm_count) { SSA_GIVE_UP(s); return; }
-  for (uint32_t i = 0; i < st->case_arm_count; ++i) if (ir->case_arms[st->case_arm_start + i].pointer_binding) reference = true;
-  if (reference && !payload) { SSA_GIVE_UP(s); return; }
-  uint32_t payload_offset = 0;
-  int32_t subject, data = -1;
-  if (payload) {
-    const DynIrEnum *en = &ir->enums[type - DYN_TYPE_ENUM_BASE];
-    uint32_t tag_size = (memory_bits(en->tag_type) + 7) / 8, a = (uint32_t)en->payload_alignment;
-    payload_offset = (tag_size + a - 1) & ~(a - 1);
-    if (reference) data = ssa_address(s, st->expression, 0);
-    else {
-      uint32_t size, alignment;
-      if (!layout(ir, type, &size, &alignment, 0)) { SSA_GIVE_UP(s); return; }
-      int32_t value = ssa_expr(s, st->expression, NULL, 0);
-      data = ssa_temporary(s, type);
-      ssa_emit(s, SO_COPYMEM, SC_NONE, data, value, -1, size, 0);
-    }
-    subject = ssa_normalize(s, ssa_load(s, data, -1, 1, 0, ssa_memory_type(ir, type)), storage_type(ir, type));
-  } else subject = ssa_expr(s, st->expression, any ? &data : NULL, 0);
+  for (uint32_t i = 0; i < st->case_arm_count; ++i) if (ir->case_arms[st->case_arm_start + i].pointer_binding) { SSA_GIVE_UP(s); return; }
+  int32_t data = -1;
+  int32_t subject = ssa_expr(s, st->expression, any ? &data : NULL, 0);
   bool sign = signed_scalar(storage_type(ir, type));
   uint32_t done = ssa_block(s);
   if (s->failed) return;
-  if (ssa_case_table(s, st, type, any, subject, payload ? ssa_add_offset(s, data, payload_offset) : data, done, depth)) return;
+  if (ssa_case_table(s, st, type, any, subject, data, done, depth)) return;
   for (uint32_t i = 0; i < st->case_arm_count && !s->unsupported && s->current != UINT32_MAX; ++i) {
     const DynIrCaseArm *arm = &ir->case_arms[st->case_arm_start + i];
     if ((uint64_t)arm->pattern_start + arm->pattern_count > ir->pattern_count) { SSA_GIVE_UP(s); return; }
@@ -2279,7 +2236,7 @@ static void ssa_case(Ssa *s, const DynIrStmt *st, unsigned depth) {
     ssa_jump(s, arm->wildcard ? body : next);
     ssa_seal(s, body);
     s->current = body;
-    ssa_case_body(s, arm, payload ? ssa_add_offset(s, data, payload_offset) : data, done, depth);
+    ssa_case_body(s, arm, data, done, depth);
     ssa_seal(s, next);
     s->current = s->blocks[next].preds.count ? next : UINT32_MAX;
   }

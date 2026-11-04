@@ -68,7 +68,7 @@ fn native_connect(descriptor: isize, address: *const u8, length: usize) isize {
   if length > 2147483647 {
     return -22
   }
-  if win.socket_connect(#cast(usize, descriptor), address[..length]) {
+  if win.socket_connect(#cast(usize, descriptor), #slice(address, length)) {
     return 0
   }
   return win.socket_error()
@@ -161,7 +161,7 @@ fn poll_native(items: []PollDescriptor, milliseconds: i32) isize {
     items[i].events = requested
   }
   // The private saved field uses WSAPOLLFD padding; native stride remains 16.
-  native := (#cast(*win.PollDescriptor, &items[0]))[..#len(items)]
+  native := #slice(#cast(*win.PollDescriptor, &items[0]), #len(items))
   value := win.event_poll(native, milliseconds)
   for i in 0..#len(items) {
     items[i].events = items[i].saved_events

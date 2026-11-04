@@ -34,8 +34,8 @@ fn main() {
   rectangles[1] = atlas.Rectangle{ width: 4, height: 4 }
   rectangles[2] = atlas.Rectangle{ width: 4, height: 4 }
   mark := mem.arena_mark(backing)
-  packed := atlas.pack(backing, 16, 16, rectangles[..])
-  if !packed.ok || packed.packed != 3 || mem.arena_mark(backing) != mark {
+  placed := atlas.pack(backing, 16, 16, rectangles[..])
+  if !placed.ok || placed.count != 3 || mem.arena_mark(backing) != mark {
     #panic("atlas packing")
   }
   i: usize = 0
@@ -55,7 +55,7 @@ fn main() {
     i += 1
   }
   partial := atlas.pack(backing, 4, 4, rectangles[..])
-  if partial.ok || partial.code != 0 || partial.packed != 1 {
+  if partial.ok || partial.code != 0 || partial.count != 1 {
     #panic("atlas partial fit")
   }
   rectangles[0].width = -1
@@ -329,8 +329,8 @@ fn main() {
   triangles: [3]u16 = []
   triangles[1] = 1
   triangles[2] = 2
-  vertex_bytes := (#cast(*const u8, &vertices[0]))[..36]
-  index_bytes := (#cast(*const u8, &triangles[0]))[..6]
+  vertex_bytes := #slice(#cast(*const u8, &vertices[0]), 36)
+  index_bytes := #slice(#cast(*const u8, &triangles[0]), 6)
   if cgltf.buffer_count(mesh.value) != 2 || !strings.equal(cgltf.buffer_uri(mesh.value, 0, 256), "vertices.bin") || cgltf.buffer_size(mesh.value, 0) != 36 || cgltf.attach_buffer(mesh.value, 0, vertex_bytes[..1]) {
     #panic("mesh resource metadata")
   }

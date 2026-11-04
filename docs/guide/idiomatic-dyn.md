@@ -233,7 +233,7 @@ defer { release(resource) }
 ## Control flow and data modeling
 
 Prefer early returns for invalid input and failure. Use `case` when modeling a closed set; every case
-must be exhaustive. Use payload enums when the alternatives carry different data.
+must be exhaustive. Use a kind enum beside a struct when the alternatives carry different data.
 
 ```dyn
 enum State { Pending, Complete: usize }
@@ -283,7 +283,7 @@ extern fn native_read "read"(descriptor: i32, data: rawptr, count: usize) isize
 ```
 
 Pass explicit `--link` inputs. C variadics are only for foreign ABI declarations and accept the C-safe
-promoted types. Do not expose Dyn slices, strings, `any`, or payload enums as if they were C values.
+promoted types. Do not expose Dyn slices, strings, or `any` as if they were C values.
 
 ## Practical rules
 

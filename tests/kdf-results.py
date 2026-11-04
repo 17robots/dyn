@@ -45,7 +45,7 @@ SOURCE+=r''' for i in 0..100 { output[i] = 165 }
  check(!password.pbkdf2_sha256(output[..64],"password","salt",2,output[63..]) && filled(output[..],165))
  check(!password.pbkdf2_sha256(output[..64],"password",scratch[..4],2,scratch[..]))
  check(!password.pbkdf2_sha256(output[..64],scratch[..8],"salt",2,scratch[..]))
- huge := (&key[0])[..~#cast(usize,0)]
+ huge := #slice(&key[0], ~#cast(usize,0))
  check(!kdf.hkdf_expand(output[..64],key[..],huge,scratch[..]) && filled(output[..],165))
  check(!password.pbkdf2_sha256(output[..64],"password",huge,2,scratch[..]) && filled(output[..],165))
  // Raw ChaCha counter exhaustion must reject before reading a forged span.
@@ -53,7 +53,7 @@ SOURCE+=r''' for i in 0..100 { output[i] = 165 }
  check(!chacha.xor(huge,huge,key[..],key[..12],0xffffffff) && bytes.equal(key[..],before[..]))
  if #sizeof(usize) == 8 {
   size: u64 = 2305843009213693952
-  huge_key := (&key[0])[..#cast(usize,size)]
+  huge_key := #slice(&key[0], #cast(usize,size))
   check(#len(hmac.sha256(output[..],huge_key,"message")) == 0 && filled(output[..],165))
  }
 }

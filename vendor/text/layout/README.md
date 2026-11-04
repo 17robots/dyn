@@ -15,7 +15,7 @@ height; `space_advance` is a positive finite pixel advance used for tab stops.
 visual glyph placements and line records in the caller arena. It preserves the
 original UTF-8 bytes without normalization. Invalid input or a shaping error
 rewinds the arena to its original mark. `Options.base` accepts FriBidi Auto, LTR
-or RTL; width zero disables wrapping. CRLF and Unicode paragraph separators
+or RTL, and zero means Auto; width zero or `no_wrap` disables wrapping. CRLF and Unicode paragraph separators
 create distinct lines, including trailing empty lines.
 
 Each paragraph resolves native bidi embedding levels. Each accepted line applies

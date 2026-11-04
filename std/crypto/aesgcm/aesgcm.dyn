@@ -11,14 +11,14 @@ fn multiply(left: u8, right: u8) u8 {
   b := right
   result: u8 = 0
   for i in 0..8 {
-    result ^= a & #wrap(#cast(u8, 0) - (b & 1))
-    a = #wrap(a << 1) ^ (0x1b & #wrap(#cast(u8, 0) - (a >> 7)))
+    result ^= a & (#cast(u8, 0) - (b & 1))
+    a = (a << 1) ^ (0x1b & (#cast(u8, 0) - (a >> 7)))
     b >>= 1
   }
   return result
 }
 fn rotate(value: u8, amount: u32) u8 {
-  return #wrap(value << amount) | (value >> (8 - amount))
+  return (value << amount) | (value >> (8 - amount))
 }
 fn substitute(value: u8) u8 {
   // x^254 in GF(2^8), including 0 -> 0. Fixed addition chain.
@@ -109,11 +109,11 @@ fn product(left: Block, right: Block) Block {
     } else {
       bit = (left.low >> #cast(u64, 127-i)) & 1
     }
-    mask := #wrap(#cast(u64, 0) - bit)
+    mask := #cast(u64, 0) - bit
     z.high ^= v.high & mask
     z.low ^= v.low & mask
-    reduction := 0xe100000000000000 & #wrap(#cast(u64, 0) - (v.low & 1))
-    v.low = (v.low >> 1) | #wrap(v.high << 63)
+    reduction := 0xe100000000000000 & (#cast(u64, 0) - (v.low & 1))
+    v.low = (v.low >> 1) | (v.high << 63)
     v.high = (v.high >> 1) ^ reduction
   }
   return z
@@ -152,7 +152,7 @@ fn transform(key: *const Key, j0: Block, output: []u8, input: []const u8) {
   counter := j0
   at: usize = 0
   for at < #len(input) {
-    low := #wrap(#cast(u32, counter.low) + 1)
+    low := #cast(u32, counter.low) + 1
     counter.low = (counter.low & 0xffffffff00000000) | #cast(u64, low)
     stream := encrypt(key, counter)
     buffer: [16]u8 = []

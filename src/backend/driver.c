@@ -408,12 +408,8 @@ static bool fold_integer(const DynIrProgram *ir, const DynIrExpr *e,
 static DynType storage_type(const DynIrProgram *ir, DynType t) {
   return dyn_type_is_enum(t) && t-DYN_TYPE_ENUM_BASE<ir->enum_count ? ir->enums[t-DYN_TYPE_ENUM_BASE].tag_type : t;
 }
-static bool payload_enum(const DynIrProgram *ir,DynType t) {
-  return dyn_type_is_enum(t) && t-DYN_TYPE_ENUM_BASE<ir->enum_count && ir->enums[t-DYN_TYPE_ENUM_BASE].has_payload;
-}
-static bool raw_aggregate(const DynIrProgram *ir,DynType t) { return dyn_type_is_array(t)||payload_enum(ir,t); }
+static bool raw_aggregate(const DynIrProgram *ir,DynType t) { (void)ir; return dyn_type_is_array(t); }
 static void normalize(BackendContext *ctx, DynType t) {
-  if (payload_enum(ctx->active_ir,t)) return;
   t=storage_type(ctx->active_ir,t);
   isa_extend(ctx, integer_bits(t), signed_scalar(t));
 }
@@ -579,6 +575,7 @@ static bool field_offset(const DynIrProgram *ir,DynType type,uint32_t field,uint
   uint32_t *cached = ir == layout_program && (uint64_t)record->field_start+record->field_count<=ir->field_count
                      ? &layout_offsets[record->field_start+field] : NULL;
   if (cached && *cached != UINT32_MAX) { *offset=*cached; return true; }
+  if (record->is_union) { *offset=0; if (cached) *cached=0; return true; }
   uint32_t at=0;
   for (uint32_t i=0;i<=field;++i) {
     uint32_t size,alignment;
@@ -625,18 +622,9 @@ static bool array_parts(const DynIrProgram *ir,DynType type,uint32_t offset,Arra
     const DynIrArray *array=&ir->arrays[type-DYN_TYPE_ARRAY_BASE]; uint32_t element,a;
     if (!layout(ir,array->element,&element,&a,0)) return false;
     for (uint64_t i=0;i<array->length;++i) if (!array_parts(ir,array->element,offset+(uint32_t)i*element,out,count,depth+1)) return false;
-  } else if (payload_enum(ir,type)) {
-    const DynIrEnum *e=&ir->enums[type-DYN_TYPE_ENUM_BASE];
-    uint32_t tag_size=(memory_bits(e->tag_type)+7)/8, a=(uint32_t)e->payload_alignment;
-    if (!a || a>8 || *count>=512) return false;
-    out[(*count)++]=(ArrayPart){e->tag_type,offset};
-    unsigned units=(unsigned)((e->payload_size+a-1)/a);
-    DynType unit=a==1?DYN_TYPE_U8:a==2?DYN_TYPE_U16:a==4?DYN_TYPE_U32:DYN_TYPE_U64;
-    if (units>512-*count) return false;
-    uint32_t base=(tag_size+a-1)&~(a-1);
-    for (unsigned i=0;i<units;++i) out[(*count)++]=(ArrayPart){unit,offset+base+i*a};
   } else if (dyn_type_is_struct(type)) {
     const DynIrStruct *record=&ir->structs[type-DYN_TYPE_STRUCT_BASE];
+    if (record->is_union) return false; /* members overlap; copy as bytes */
     for (uint32_t i=0;i<record->field_count;++i) { uint32_t at;
       if (!field_offset(ir,type,i,&at) || !array_parts(ir,ir->fields[record->field_start+i].type,offset+at,out,count,depth+1)) return false;
     }
@@ -1076,10 +1064,8 @@ static void divide(BackendContext *ctx, const DynIrFunction *f, bool signed_oper
   isa_divide(ctx, signed_operation, remainder);
 }
 static void shift(BackendContext *ctx, const DynIrFunction *f, bool signed_operation, bool left, bool wraps, unsigned bits) {
-  /* Unsigned comparison also rejects negative signed counts. This dominates
-     the redundant narrowed-count check in LLVM's checked_integer lowering. */
-  isa_compare_small(ctx, R_C, (int)bits);
-  guard(ctx, f, CC_B, GUARD_SHIFT); /* original count is in [0, bits) */
+  /* Counts are masked to the operand width, on every target and width. */
+  isa_small_immediate(ctx, R_D, bits - 1); isa_alu(ctx, ALU_AND, R_C, R_D);
   int restore = signed_operation ? SHIFT_ARITHMETIC : SHIFT_RIGHT;
   if (!left) { isa_shift(ctx, R_A, restore); return; }
   if (!wraps) isa_move(ctx, R_D, R_A); /* preserve the original value */
@@ -1092,7 +1078,7 @@ static void shift(BackendContext *ctx, const DynIrFunction *f, bool signed_opera
 }
 static bool float_type(DynType t) { return t == DYN_TYPE_F32 || t == DYN_TYPE_F64; }
 static bool scalar(const DynIrProgram *ir, DynType t) {
-  return (dyn_type_is_enum(t) && t-DYN_TYPE_ENUM_BASE<ir->enum_count && !payload_enum(ir,t)) || integer_type(t) || float_type(t) || dyn_type_is_function(t) || dyn_type_is_pointer(t) || t==DYN_TYPE_RAWPTR;
+  return (dyn_type_is_enum(t) && t-DYN_TYPE_ENUM_BASE<ir->enum_count) || integer_type(t) || float_type(t) || dyn_type_is_function(t) || dyn_type_is_pointer(t) || t==DYN_TYPE_RAWPTR;
 }
 static bool binary_result(BackendContext *ctx, const DynIrProgram *, const DynIrFunction *, const DynIrExpr *);
 static bool expression_value(BackendContext *ctx, const DynIrProgram *, const DynIrFunction *, const DynIrExpr *, unsigned);
@@ -1598,21 +1584,7 @@ static bool expression_value(BackendContext *ctx, const DynIrProgram *ir, const 
   }
   if (e->kind==DYN_EXPR_ENUM) {
     if (!dyn_type_is_enum(e->type) || e->type-DYN_TYPE_ENUM_BASE>=ir->enum_count || e->integer>=ir->variant_count) return false;
-    const DynIrEnum *en=&ir->enums[e->type-DYN_TYPE_ENUM_BASE];
-    const DynIrVariant *variant=&ir->variants[e->integer];
-    if (!en->has_payload) { isa_immediate(ctx, R_A, variant->tag); normalize(ctx,e->type); return true; }
-    DynExprId id=(DynExprId)(e-ir->expressions); uint32_t offset=ctx->temporary_offsets[id];
-    if (!offset) return false;
-    isa_lea(ctx, R_A, offset);
-    if (!initialize(ctx,ir,f,e->type,DYN_NO_EXPR,depth+1)) return false;
-    isa_lea(ctx, R_11, offset); isa_immediate(ctx, R_A, variant->tag); store_memory(ctx,en->tag_type);
-    if (variant->payload_type!=DYN_TYPE_VOID) {
-      if (e->item_count!=1 || e->item_start>=ir->item_count) return false;
-      uint32_t tag_size=(memory_bits(en->tag_type)+7)/8, a=(uint32_t)en->payload_alignment;
-      isa_lea(ctx, R_A, offset+((tag_size+a-1)&~(a-1)));
-      if (!initialize(ctx,ir,f,variant->payload_type,ir->items[e->item_start].expression,depth+1)) return false;
-    }
-    isa_lea(ctx, R_A, offset); return !ctx->text.failed;
+    isa_immediate(ctx, R_A, ir->variants[e->integer].tag); normalize(ctx,e->type); return true;
   }
   if (e->kind==DYN_EXPR_CONVERT && e->type==DYN_TYPE_ANY) {
     if (e->left>=ir->expression_count) return false;
@@ -1741,16 +1713,8 @@ static bool expression_value(BackendContext *ctx, const DynIrProgram *ir, const 
     if (e->left >= ir->expression_count) return false;
     DynType from=storage_type(ir,ir->expressions[e->left].type);
     if (dyn_type_is_enum(e->type)) {
-      if (payload_enum(ir,e->type) || !integer_type(from) || !expression(ctx,ir,f,e->left,depth+1)) return false;
-      const DynIrEnum *en=&ir->enums[e->type-DYN_TYPE_ENUM_BASE];
-      isa_match_begin(ctx);
-      for (unsigned i=0;i<en->variant_count;++i) {
-        uint64_t tag=ir->variants[en->variant_start+i].tag; unsigned bits=integer_bits(en->tag_type);
-        if (signed_scalar(en->tag_type) && bits<64 && (tag>>(bits-1)&1)) tag|=UINT64_MAX<<bits;
-        if (signed_scalar(from)!=signed_scalar(en->tag_type) && (int64_t)tag<0) continue;
-        isa_match_tag(ctx, tag);
-      }
-      isa_match_test(ctx); guard(ctx, f, CC_NE, GUARD_ENUM); normalize(ctx,e->type); return !ctx->text.failed;
+      if (!integer_type(from) || !expression(ctx,ir,f,e->left,depth+1)) return false;
+      normalize(ctx,e->type); return !ctx->text.failed;
     }
     bool from_pointer=dyn_type_is_pointer(from)||from==DYN_TYPE_RAWPTR;
     bool to_pointer=dyn_type_is_pointer(e->type)||e->type==DYN_TYPE_RAWPTR;
@@ -1853,7 +1817,7 @@ static bool expression_value(BackendContext *ctx, const DynIrProgram *ir, const 
   uint32_t slot;
   if (right->kind == DYN_EXPR_NAME && local_slot(ctx, f, right->integer, &slot) &&
       !ctx->local_alias[right->integer-f->local_start] &&
-      !payload_enum(ir, right->type) && integer_bits(storage_type(ir, right->type)) == 64) {
+      integer_bits(storage_type(ir, right->type)) == 64) {
     isa_load(ctx, R_C, slot);
     return binary_result(ctx, ir,f,e);
   }
@@ -2105,10 +2069,6 @@ static bool expression_scratch(BackendContext *ctx, const DynIrProgram *ir,DynEx
         *slots+=(size+7)/8; if (*slots>MAX_SCRATCH) return false;
         ctx->copy_offsets[argument]=0u-8*(ctx->local_words+*slots); ctx->touched_exprs[ctx->touched_expr_count++]=argument;
       }
-    if (e->kind==DYN_EXPR_STRUCT) {
-      const DynIrStruct *record=&ir->structs[e->type-DYN_TYPE_STRUCT_BASE];
-      for (uint32_t i=0;i<record->field_count;++i) if (!expression_scratch(ctx, ir,ir->fields[record->field_start+i].default_expression,depth+1,slots)) return false;
-    }
   }
   return true;
 }
@@ -2121,9 +2081,6 @@ static bool count_scratch(BackendContext *ctx, const DynIrProgram *ir, const Dyn
     const DynIrStmt *s = &ir->statements[ir->children[start+i]];
     if (!expression_scratch(ctx, ir,s->expression,0,slots) || !expression_scratch(ctx, ir,s->target,0,slots)) return false;
     unsigned needed=s->kind == DYN_STMT_CASE ? 2 : s->kind == DYN_STMT_FOR && s->for_range ? 2 : 0;
-    if (s->kind==DYN_STMT_CASE && payload_enum(ir,ir->expressions[s->expression].type)) {
-      uint32_t size,a; if (!frame_layout(ir,ir->expressions[s->expression].type,&size,&a,0)) return false; needed+=(size+7)/8;
-    }
     if (s->kind==DYN_STMT_FOR && !s->for_range && s->target!=DYN_NO_EXPR) {
       if (s->target>=ir->expression_count) return false;
       DynType collection=ir->expressions[s->target].type; needed=3;
@@ -2201,12 +2158,11 @@ static bool initialize(BackendContext *ctx, const DynIrProgram *ir,const DynIrFu
     } else if (value) {
       if (!dyn_type_is_struct(type) || (uint64_t)value->item_start+value->item_count>ir->item_count) return false;
       const DynIrStruct *record=&ir->structs[type-DYN_TYPE_STRUCT_BASE];
-      for (uint32_t i=0;i<record->field_count+value->item_count;++i) {
-        uint32_t field=i<record->field_count?i:ir->items[value->item_start+i-record->field_count].field_index,offset;
+      for (uint32_t i=0;i<value->item_count;++i) {
+        uint32_t field=ir->items[value->item_start+i].field_index,offset;
         if (!field_offset(ir,type,field,&offset)) return false;
         const DynIrField *definition=&ir->fields[record->field_start+field];
-        DynExprId expr=i<record->field_count?definition->default_expression:ir->items[value->item_start+i-record->field_count].expression;
-        if (expr==DYN_NO_EXPR) continue;
+        DynExprId expr=ir->items[value->item_start+i].expression;
         isa_peek_short(ctx, R_A, 0); isa_add_immediate(ctx, offset);
         if (!initialize(ctx, ir,f,definition->type,expr,depth+1)) return false;
       }
@@ -2385,7 +2341,7 @@ static bool block_statements_value(BackendContext *ctx, const DynIrProgram *ir, 
           load_memory(ctx, type); isa_push(ctx, R_A);
           if (!expression(ctx, ir,f,s->expression,0)) return false;
           isa_move(ctx, R_C, R_A); isa_pop(ctx, R_A);
-          DynIrExpr op={.type=type,.op=s->assignment_op,.left=s->target,.right=s->expression};
+          DynIrExpr op={.type=type,.op=s->assignment_op,.wrap=dyn_op_wraps(s->assignment_op),.left=s->target,.right=s->expression};
           if (!binary_result(ctx, ir,f,&op)) return false;
         } else if (!expression(ctx, ir,f,s->expression,0)) return false;
         isa_pop(ctx, R_11); store_memory(ctx, type); continue;
@@ -2409,7 +2365,7 @@ static bool block_statements_value(BackendContext *ctx, const DynIrProgram *ir, 
       if (s->assignment_op != DYN_OP_NONE) {
         if (s->target == DYN_NO_EXPR) return false;
         DynIrExpr operation = {.kind=DYN_EXPR_BINARY, .type=type,
-          .op=s->assignment_op, .left=s->target, .right=s->expression};
+          .op=s->assignment_op, .wrap=dyn_op_wraps(s->assignment_op), .left=s->target, .right=s->expression};
         if (!expression_value(ctx, ir, f, &operation, 0)) return false;
       } else if (s->expression == DYN_NO_EXPR && s->kind == DYN_STMT_LOCAL) {
         isa_zero(ctx, R_A);
@@ -2423,20 +2379,11 @@ static bool block_statements_value(BackendContext *ctx, const DynIrProgram *ir, 
       if (!expression(ctx, ir, f, s->expression, 0)) return false;
     } else if (s->kind == DYN_STMT_CASE) {
       DynType type=ir->expressions[s->expression].type;
-      bool payload=payload_enum(ir,type), any=type==DYN_TYPE_ANY, reference=false;
-      for (unsigned i=0;i<s->case_arm_count;++i) if (ir->case_arms[s->case_arm_start+i].pointer_binding) reference=true;
-      uint32_t subject=ctx->statement_scratch[id], payload_offset=0;
-      if (payload) {
-        const DynIrEnum *en=&ir->enums[type-DYN_TYPE_ENUM_BASE];
-        uint32_t tag_size=(memory_bits(en->tag_type)+7)/8,a=(uint32_t)en->payload_alignment;
-        payload_offset=(tag_size+a-1)&~(a-1);
-      }
-      if (reference) { if (!payload || !address(ctx,ir,f,s->expression,0)) return false; }
-      else if (!expression(ctx,ir,f,s->expression,0)) return false;
-      if (payload) {
-        if (!reference) { save_struct(ctx,subject+16,type); isa_lea(ctx, R_A, subject+16); }
-        isa_store(ctx, R_A, subject+8); load_memory(ctx,storage_type(ir,type));
-      } else if (any) isa_store(ctx, R_D, subject+8);
+      bool any=type==DYN_TYPE_ANY;
+      for (unsigned i=0;i<s->case_arm_count;++i) if (ir->case_arms[s->case_arm_start+i].pointer_binding) return false;
+      uint32_t subject=ctx->statement_scratch[id];
+      if (!expression(ctx,ir,f,s->expression,0)) return false;
+      if (any) isa_store(ctx, R_D, subject+8);
       isa_store(ctx, R_A, subject);
       bool all_terminate = true;
       size_t done=UINT32_MAX;
@@ -2470,7 +2417,6 @@ static bool block_statements_value(BackendContext *ctx, const DynIrProgram *ir, 
           DynType binding=ir->locals[a->local_id].type;
           if (!pattern->is_type && !pattern->is_enum) return false;
           isa_load(ctx, R_A, subject+8);
-          if (payload) isa_add_immediate(ctx, payload_offset);
           old_alias=ctx->local_alias[a->local_id-f->local_start];
           ctx->local_alias[a->local_id-f->local_start]=a->pointer_binding;
           if (a->pointer_binding) isa_store(ctx, R_A, offset);
@@ -2763,7 +2709,7 @@ static bool static_scalar(const DynIrProgram *ir, DynExprId id, uint64_t *value,
   if (id>=ir->expression_count || depth > MAX_DEPTH) return false;
   const DynIrExpr *e=&ir->expressions[id];
   if (!scalar(ir, e->type)) return false;
-  if (e->kind==DYN_EXPR_ENUM && e->integer<ir->variant_count && !payload_enum(ir,e->type)) *value=ir->variants[e->integer].tag;
+  if (e->kind==DYN_EXPR_ENUM && e->integer<ir->variant_count) *value=ir->variants[e->integer].tag;
   else if (e->kind==DYN_EXPR_INT) *value=e->integer;
   else if (e->kind==DYN_EXPR_BOOL) *value=e->boolean;
   else if (e->kind==DYN_EXPR_NIL && (dyn_type_is_pointer(e->type)||e->type==DYN_TYPE_RAWPTR)) *value=0;
@@ -2832,15 +2778,6 @@ static bool constant_value(BackendContext *ctx,const DynIrProgram *ir,DynType ty
     for (unsigned i=0;i<word;++i) ctx->constants_data.data[offset+word+i]=(unsigned char)(string->length>>(8*i));
     return !ctx->rodata.failed;
   }
-  if (e->kind==DYN_EXPR_ENUM && payload_enum(ir,type) && e->integer<ir->variant_count) {
-    const DynIrEnum *en=&ir->enums[type-DYN_TYPE_ENUM_BASE]; const DynIrVariant *variant=&ir->variants[e->integer];
-    unsigned tag_size=(memory_bits(en->tag_type)+7)/8;
-    for (unsigned i=0;i<tag_size;++i) ctx->constants_data.data[offset+i]=(unsigned char)(variant->tag>>(8*i));
-    if (variant->payload_type==DYN_TYPE_VOID) return true;
-    unsigned a=(unsigned)en->payload_alignment;
-    return e->item_count==1 && e->item_start<ir->item_count && constant_value(ctx,ir,variant->payload_type,
-      ir->items[e->item_start].expression,offset+((tag_size+a-1)&~(a-1)),depth+1);
-  }
   if (e->kind==DYN_EXPR_ARRAY && dyn_type_is_array(type)) {
     const DynIrArray *array=&ir->arrays[type-DYN_TYPE_ARRAY_BASE]; uint32_t element,a;
     if (e->item_count>array->length || (uint64_t)e->item_start+e->item_count>ir->item_count || !layout(ir,array->element,&element,&a,0)) return false;
@@ -2850,22 +2787,11 @@ static bool constant_value(BackendContext *ctx,const DynIrProgram *ir,DynType ty
   if (e->kind==DYN_EXPR_STRUCT && dyn_type_is_struct(type)) {
     const DynIrStruct *record=&ir->structs[type-DYN_TYPE_STRUCT_BASE];
     if ((uint64_t)e->item_start+e->item_count>ir->item_count) return false;
-    for (unsigned i=0;i<record->field_count+e->item_count;++i) {
-      unsigned field=i<record->field_count?i:ir->items[e->item_start+i-record->field_count].field_index; uint32_t at,n,a;
+    for (unsigned i=0;i<e->item_count;++i) {
+      unsigned field=ir->items[e->item_start+i].field_index; uint32_t at;
       if (!field_offset(ir,type,field,&at)) return false;
       const DynIrField *definition=&ir->fields[record->field_start+field];
-      DynExprId value=i<record->field_count?definition->default_expression:ir->items[e->item_start+i-record->field_count].expression;
-      if (value==DYN_NO_EXPR) continue;
-      if (!layout(ir,definition->type,&n,&a,0)) return false;
-      if (i>=record->field_count) {
-        memset(ctx->constants_data.data+offset+at,0,n);
-        for (size_t j=0;j<ctx->constant_relocation_count;) {
-          uint64_t pos=ctx->constant_relocations[j].r_offset;
-          if (pos>=offset+at && pos<offset+at+n) {
-            memmove(&ctx->constant_relocations[j],&ctx->constant_relocations[j+1],(--ctx->constant_relocation_count-j)*sizeof(*ctx->constant_relocations));
-          } else ++j;
-        }
-      }
+      DynExprId value=ir->items[e->item_start+i].expression;
       if (!constant_value(ctx,ir,definition->type,value,offset+at,depth+1)) return false;
     }
     return true;
@@ -3010,20 +2936,6 @@ static unsigned dwarf_type(BackendContext *ctx, const DynIrProgram *ir, DynType 
       backend_dwarf_enumerator(d, tag, i, v->name, (int64_t)v->tag);
     }
     id = tag;
-    if (tag && e->has_payload) {
-      /* Mirrors codegen.c: tag at zero, payload union at the payload alignment. */
-      id = backend_dwarf_struct_type(d, e->name, e->size, 2);
-      unsigned payload = backend_dwarf_union_type(d, "payload", e->payload_size, e->variant_count);
-      for (uint32_t i = 0; payload && i < e->variant_count; ++i) {
-        const DynIrVariant *v = &ir->variants[e->variant_start + i];
-        if (v->payload_type != DYN_TYPE_VOID)
-          backend_dwarf_member(d, payload, i, v->name, dwarf_type(ctx, ir, v->payload_type, depth + 1), 0);
-      }
-      if (id) {
-        backend_dwarf_member(d, id, 0, "tag", tag, 0);
-        if (payload) backend_dwarf_member(d, id, 1, "payload", payload, e->payload_alignment);
-      }
-    }
   }
   ctx->dwarf_types[t] = id + 1;
   return id;

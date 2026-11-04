@@ -34,7 +34,7 @@ fn ring(context: *const ui.Context, x: i32) {
   check(count == 4)
 }
 fn interactions(arena: *mem.Arena) {
-  context := ui.Context{}
+  context := ui.Context{ style: ui.default_style }
   check(context.style.background.a == 255 && context.style.padding == 4)
   response := pair(&context, arena, ui.Input{ x: 5, y: 5, released: true })
   check(!response[0].activated)
@@ -51,7 +51,7 @@ fn interactions(arena: *mem.Arena) {
   check(!response[0].activated)
   response = pair(&context, arena, ui.Input{ x: 5, y: 5, pressed: true, released: true })
   check(response[0].activated && context.active == 0)
-  context = ui.Context{}
+  context = ui.Context{ style: ui.default_style }
   response = pair(&context, arena, ui.Input{ tab: true })
   check(context.focused == 1)
   response = pair(&context, arena, ui.Input{ tab: true })
@@ -78,14 +78,14 @@ fn interactions(arena: *mem.Arena) {
   check(!hidden.hovered && context.active == 0)
 }
 fn widgets(arena: *mem.Arena) {
-  context := ui.Context{}
+  context := ui.Context{ style: ui.default_style }
   toggled := false
   ui.begin(&context, arena, ui.Input{ x: 3, y: 3, pressed: true, released: true }, ui.Rect{ width: 100, height: 60 })
   checkbox := ui.checkbox(&context, 1, ui.Rect{ width: 40, height: 12 }, "on", &toggled, true)
   ui.end(&context)
   check(toggled && checkbox.changed)
   value: i32 = 0
-  context = ui.Context{}
+  context = ui.Context{ style: ui.default_style }
   ui.begin(&context, arena, ui.Input{ x: 20, y: 5, down: true }, ui.Rect{ width: 100, height: 60 })
   response := ui.slider(&context, 9, ui.Rect{ width: 21, height: 10 }, &value, -2147483648, 2147483647, true)
   ui.end(&context)
@@ -116,7 +116,7 @@ fn glyph(raw: rawptr, codepoint: u32) software.Glyph {
   return software.Glyph{ pixels: pixels, width: 2, height: 2, stride: 2, advance: 3, x_offset: trace.bearing, y_offset: trace.vertical }
 }
 fn raster(arena: *mem.Arena) {
-  context := ui.Context{}
+  context := ui.Context{ style: ui.default_style }
   bytes: [80]u8 = []
   for i in 0..80 { bytes[i] = 109 }
   for y in 0..4 { for x in 0..16 { bytes[y * 20 + x] = 0 } }
@@ -222,7 +222,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-ui-results-') as directory:
         'UI widget ID must be nonzero': 'ui.begin(&context, arena, ui.Input{}, bounds)\n _ = ui.button(&context, 0, bounds, "", true)',
     }
     for message, body in failures.items():
-        (work / 'main.dyn').write_text('use "std/ui" ui\nuse "std/mem" mem\nfn main() {\n arena := mem.arena_create(0)\n context := ui.Context{}\n bounds := ui.Rect{ width: 10, height: 10 }\n '+body+'\n}')
+        (work / 'main.dyn').write_text('use "std/ui" ui\nuse "std/mem" mem\nfn main() {\n arena := mem.arena_create(0)\n context := ui.Context{ style: ui.default_style }\n bounds := ui.Rect{ width: 10, height: 10 }\n '+body+'\n}')
         for mode in ('--debug', '--release'):
             output = work / 'invalid'
             subprocess.run([DYN, 'build', str(work), mode, '--quiet', '--output', str(output)], check=True, timeout=300)

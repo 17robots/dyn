@@ -292,18 +292,6 @@ static void r32_store_descriptor(BackendContext *c, bool any) {
   R32_SW(10,16,0);
   if (any) { R32_SW(18,16,4); R32_SW(11,16,8); } else R32_SW(11,16,4);
 }
-static void r32_match_begin(BackendContext *c) { r32_li(c,14,0); r32_li(c,23,0); }
-static void r32_match_tag(BackendContext *c, uint64_t tag) {
-  r32_li(c,R32_T1,(uint32_t)tag); R32_XOR(R32_T1,10,R32_T1);
-  r32_li(c,R32_T2,(uint32_t)(tag >> 32)); R32_XOR(R32_T2,18,R32_T2);
-  R32_OR(R32_T1,R32_T1,R32_T2); R32_SLTIU(R32_T1,R32_T1,1); R32_OR(14,14,R32_T1);
-}
-static void r32_match_test(BackendContext *c) { r32_compare_regs(c,14,0,0,0); }
-/* Software helpers use ordinary ILP32, not the private dyn_rv32 ABI.
-   Preserve all non-A model registers: their high halves are callee-saved,
-   but C's low half (t0) and D..R11 (a1..a6) are caller-saved. The 32-byte
-   save area stays aligned and is balanced without changing stack_slots.
-   a0:a1 receives/returns 64 bits; a2:a3 is the second 64-bit operand. */
 static void r32_soft_helper(BackendContext *c, unsigned runtime, bool input32,
                             bool binary, bool result32) {
   bare_stack_check(c,32);

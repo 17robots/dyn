@@ -106,7 +106,7 @@ SOURCE+=r''' key: [32]u8 = []
  for byte in storage { check(byte == 0) }
  if #sizeof(usize) == 8 {
   oversize_payload: u64 = 274877906881
-  huge := (&key[0])[..#cast(usize,oversize_payload)]
+  huge := #slice(&key[0], #cast(usize,oversize_payload))
   check(!aead.seal(huge,tag[..],huge,"",key[..],nonce[..]))
  }
 
