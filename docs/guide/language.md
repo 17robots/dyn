@@ -113,10 +113,10 @@ struct` and a `case` type pattern; elsewhere they are ordinary names. `type` is 
 alias cycles fail. There are no local aliases; declare them at module scope.
 `distinct type Name = T` creates a nominal numeric type with `T`'s representation. Values cross
 the distinct boundary only through explicit `#cast`; same-type arithmetic preserves the distinct
-type. Structs/enums remain nominal. Struct field defaults must be
-compile-time expressions and cannot reference instance fields. Field defaults
-apply only to struct literals: storage zeroed any other way, such as by
-`mem.push`, holds zeros. Design structs so that zero is a useful value.
+type. Structs/enums remain nominal. Struct fields have no defaults: every path
+that creates a struct starts from zeros, whether a literal, a declaration, an
+omitted field or `mem.push`. Design structs so that zero is a useful value, and
+put other starting values in a named constant.
 
 Implicit numeric conversion is allowed only when destination represents every source-type
 value exactly. Constants adapt when their specific value fits, and a literal that does not fit
@@ -154,8 +154,8 @@ Loops may be labeled as `name: for`; `break: name` and `continue: name` target a
 loop with that label. Active labels cannot duplicate. Transfers run defers for every exited scope.
 
 Struct field order determines layout. Packed structs preserve order, remove inter-field padding,
-and have alignment 1 on current Linux x86-64 target. Construction zeroes every field, applies field
-defaults in declaration order, then applies explicit literal members. `.{ ... }` requires expected
+and have alignment 1 on current Linux x86-64 target. Construction zeroes every field, then applies
+explicit literal members. `.{ ... }` requires expected
 struct type. Struct assignment copies by value. Unknown/duplicate fields, duplicate declarations,
 by-value recursion and aggregate comparison fail. Empty structs have size and alignment 1 so arrays
 have stable element stride and distinct elements have distinct addresses.

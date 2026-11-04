@@ -148,7 +148,7 @@ fn main() { for i in 0..1 { value := nested(limit)
 _ = value } }
 ''', 'leaf_add'), ('''
 limit: i64 = 9223372036854775807
-struct Defaulted { value: i64 = 5 + 7 }
+struct Defaulted { value: i64 }
 fn leaf_default(a: i64) Defaulted { return Defaulted{value: a + 1} }
 fn main() { for i in 0..1 { value := leaf_default(limit)
 _ = value } }

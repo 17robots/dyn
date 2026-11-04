@@ -217,7 +217,7 @@ fn main() {
   refilter(app)
   state := box.create(persistent, measure, atlas, #cast(f32, atlas.line_height))
   state.scale = scale
-  context: ui.Context
+  context := ui.Context{ style: ui.default_style }
   glyphs := font_ui.atlas_renderer(atlas)
   last := time.monotonic_now().value
   text_focus: u64 = 0

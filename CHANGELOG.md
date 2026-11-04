@@ -12,6 +12,29 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
+## Unreleased
+
+- Breaking: struct field defaults are removed. `struct S { n: i32 = 4 }` is now
+  a compile error. Every struct starts from zeros on every path, so make zero a
+  useful value, set the field in the literal, or use a named constant.
+- `ui.Style` no longer has built-in colors. Write
+  `ui.Context{ style: ui.default_style }`; a zero style draws nothing.
+- Zero is now the safe state for handles. `fs.File`, `net.Connection`,
+  `net.Listener`, `signal.Watch` and `watch.Watcher` hold `0` when closed, so
+  test `active` or `is_open`, not `descriptor == -1`.
+- `capability.Directory` needs `active: true`. A zero value fails with EBADF
+  instead of using file descriptor 0.
+- `process.CaptureOptions`: a zero timeout now means infinite, not immediate.
+  Set the new `no_wait` for an immediate timeout.
+- `text.layout.Options`: `wrap` and `normalize` become `no_wrap` and
+  `no_normalize`. Zero `tab_columns` means 4, as it does in the vendor layout,
+  where zero `base` also means Auto.
+- `harfbuzz.Options.item_length` applies only with `has_item_length: true`.
+- `vulkan.open`: a zero limit selects the built-in limit.
+- `timer.SysTick{}` no longer has a base. Use `&timer.systick`.
+- `x509.View.path_length` is meaningful only when the new `has_path_length` is
+  true. It was `-1` when absent.
+
 ## 0.1.0-preview.30
 
 This release is source compatible with preview.29. No code migrations.

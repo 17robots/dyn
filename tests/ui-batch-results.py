@@ -85,7 +85,7 @@ fn main() {
     mem.arena_release(arena)
   }
   state := box.create(persistent_arena, measure, nil, 12.0)
-  context: ui.Context
+  context := ui.Context{ style: ui.default_style }
   build(state, &context, arena)
   build(state, &context, arena)
   font := software.Font{ glyph: bitmap, line_height: 12 }

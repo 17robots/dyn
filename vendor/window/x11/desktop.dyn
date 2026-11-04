@@ -1099,7 +1099,11 @@ pub fn wait(window: *Window, timeout: i32) {
   if window.display == nil || pending(window.display) > 0 || window.events.count != 0 || window.events.dropped != 0 {
     return
   }
-  descriptors: [2]EventPoll = [EventPoll{ fd: connection(window.display), requested: 1 }, EventPoll{ fd: window.wake_descriptor, requested: 1 }]
+  wake_fd: i32 = -1
+  if window.wake_active {
+    wake_fd = window.wake_descriptor
+  }
+  descriptors: [2]EventPoll = [EventPoll{ fd: connection(window.display), requested: 1 }, EventPoll{ fd: wake_fd, requested: 1 }]
   _ = event_poll(&descriptors[0], 2, timeout)
 }
 

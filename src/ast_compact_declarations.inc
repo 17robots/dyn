@@ -154,9 +154,10 @@ static bool compact_add_struct_fields(const DynSource *s, DynAstProgram *a,
           compact_report(c, s, errors, "out of memory");
           return false;
         }
-        DynExprId def = compact_null(init) ? DYN_NO_EXPR
-                                              : compact_expr(init, s, a, errors);
-        a->fields[a->field_count++] = (DynAstField){name, type, def, 0};
+        if (!compact_null(init))
+          compact_report(init, s, errors,
+                         "struct fields have no defaults; set the field in the literal or use a named constant");
+        a->fields[a->field_count++] = (DynAstField){name, type, 0};
         ++st->field_count;
       }
     }

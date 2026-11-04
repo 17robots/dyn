@@ -453,7 +453,7 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
     }
   for (size_t i = 0; i < a->item_count; ++i) ir->items[i] = (DynIrItem){a->items[i].expression, a->items[i].field_index};
   for (size_t i = 0; i < a->field_count; ++i) {
-    ir->fields[i] = (DynIrField){.name = copy_span(a->fields[i].name, source, &cursor), .type = lower_type(a, a->fields[i].type), .default_expression = a->fields[i].default_expression};
+    ir->fields[i] = (DynIrField){.name = copy_span(a->fields[i].name, source, &cursor), .type = lower_type(a, a->fields[i].type)};
   }
   for (size_t i = 0; i < a->struct_count; ++i) {
     ir->structs[i] =

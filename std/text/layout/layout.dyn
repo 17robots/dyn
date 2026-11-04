@@ -6,7 +6,7 @@ use "std/math" math
 
 pub enum Align { Left, Center, Right }
 pub struct Font { data: rawptr, advance: fn(rawptr, u32) f64, kerning: fn(rawptr, u32, u32) f64, line_height: i32 }
-pub struct Options { width: i32, wrap: bool = true, normalize: bool = true, alignment: Align, tab_columns: usize = 4 }
+pub struct Options { width: i32, no_wrap: bool, no_normalize: bool, alignment: Align, tab_columns: usize }
 // Offsets refer to Layout.text, an owned NFC copy by default. A grapheme's
 // placements share one byte range, so wrapping never splits that grapheme.
 pub struct Glyph { codepoint: u32, start: usize, end: usize, x: f64, y: f64 }
@@ -39,7 +39,11 @@ fn step(cluster: Cluster, x: f64) f64 {
 // pair kerning. UAX #14 break opportunities and UAX #29 graphemes are reused.
 // Bidi reordering, OpenType substitutions and complex-script shaping belong to
 // the caller/provider (for example HarfBuzz), not this simple layout engine.
-pub fn build(arena: *mem.Arena, source: []const u8, font: Font, options: Options) Result {
+pub fn build(arena: *mem.Arena, source: []const u8, font: Font, requested: Options) Result {
+  options := requested
+  if options.tab_columns == 0 {
+    options.tab_columns = 4
+  }
   if font.advance == nil || font.line_height <= 0 || options.width < 0 || options.tab_columns == 0 || options.tab_columns > 256 ||
     (options.alignment != Align.Left && options.alignment != Align.Center && options.alignment != Align.Right) {
     return Result{ kind: errors.Kind.InvalidInput }
@@ -52,7 +56,7 @@ pub fn build(arena: *mem.Arena, source: []const u8, font: Font, options: Options
     }
   }
   text: []const u8
-  if options.normalize {
+  if !options.no_normalize {
     normalized := unicode.normalize(arena, source, unicode.Form.NFC)
     if !normalized.ok {
       return Result{ kind: normalized.kind, error: normalized.error, offset: normalized.offset }
@@ -164,7 +168,7 @@ pub fn build(arena: *mem.Arena, source: []const u8, font: Font, options: Options
         return Result{ kind: errors.Kind.InvalidInput, offset: cluster.start }
       }
       next_width := width + adjustment + step(cluster, width + adjustment)
-      if options.wrap && options.width > 0 && next_width > #cast(f64, options.width) && cursor > begin {
+      if !options.no_wrap && options.width > 0 && next_width > #cast(f64, options.width) && cursor > begin {
         if candidate > begin {
           cursor = candidate
           selected_break = true

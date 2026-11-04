@@ -5,7 +5,7 @@ use "std/math" math
 // Interleaved and separate scans, restart markers, 1..4 sampling factors.
 // No progressive/arithmetic/lossless, CMYK, DNL or color-profile processing.
 // Chroma uses nearest-neighbor upsampling. IDCT is a portable f64 reference.
-pub struct Info { width: u32, height: u32, channels: u8 = 4 }
+pub struct Info { width: u32, height: u32, channels: u8 }
 pub struct Image { info: Info, pixels: []u8 }
 pub struct Result { value: Image, kind: errors.Kind, error: isize, offset: usize, ok: bool }
 struct Huffman { counts: [16]u16, first: [16]u32, offsets: [16]u16, values: [256]u8, valid: bool }
@@ -15,7 +15,8 @@ struct Decoder {
   width: u32, height: u32, count: usize, hmax: u8, vmax: u8,
   components: [3]Component, quant: [4][64]u16, quant_valid: [4]bool,
   dc: [4]Huffman, ac: [4]Huffman, basis: [64]f64, restart: usize,
-  adobe: i32 = -1,
+  has_adobe: bool,
+  adobe: i32,
 }
 struct Bits { source: []const u8, at: usize, buffer: u32, count: u8, failed: bool }
 const Zigzag: [64]usize = [0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63]
@@ -466,10 +467,10 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Result {
           return Result{ kind: errors.Kind.InvalidInput, offset: decoder.at }
         }
       }
-      if decoder.adobe > 1 {
+      if decoder.has_adobe && decoder.adobe > 1 {
         return Result{ kind: errors.Kind.Unsupported, offset: decoder.at }
       }
-      direct := decoder.adobe == 0
+      direct := decoder.has_adobe && decoder.adobe == 0
       indices: [3]usize = [0, 1, 2]
       if decoder.count == 3 {
         rgb: [3]usize = [3, 3, 3]
@@ -565,6 +566,7 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Result {
         decoder.restart = #cast(usize, be16(payload, 0))
       }
     } else if marker == 238 && #len(payload) >= 12 && payload[0] == 65 && payload[1] == 100 && payload[2] == 111 && payload[3] == 98 && payload[4] == 101 {
+      decoder.has_adobe = true
       decoder.adobe = #cast(i32, payload[11])
     }
     else if marker >= 193 && marker <= 207 && marker != 196 && marker != 200 && marker != 204 {

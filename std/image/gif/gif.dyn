@@ -4,7 +4,7 @@ use "std/encoding/binary" binary
 // Decodes the first composited GIF87a/89a image, including interlace and
 // transparency. consumed ends after that image's data; later animation frames
 // remain available to the caller. No animation timing/disposal is performed.
-pub struct Info { width: u32, height: u32, channels: u8 = 4 }
+pub struct Info { width: u32, height: u32, channels: u8 }
 pub struct Image { info: Info, pixels: []u8 }
 pub struct Result { value: Image, consumed: usize, kind: errors.Kind, error: isize, offset: usize, ok: bool }
 struct Bits { source: []const u8, at: usize, remaining: usize, buffer: u32, count: u8, ended: bool, failed: bool }

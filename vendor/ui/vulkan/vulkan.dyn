@@ -8,7 +8,8 @@ use "std/errors" errors
 // software renderer, including straight alpha over transparent destinations.
 // No window/swapchain is owned. Render writes caller RGBA bytes after GPU wait.
 // Native device/pipeline/buffer allocations belong to Renderer; do not copy it.
-pub struct Limits { draws: usize = 65536, coverage_bytes: usize = 67108864 }
+// A zero limit passed to open selects 65536 draws or 64 MiB of coverage.
+pub struct Limits { draws: usize, coverage_bytes: usize }
 pub struct Renderer { handle: rawptr, limits: Limits }
 pub struct Result { kind: errors.Kind, ok: bool }
 extern fn native_open "dyn_ui_vk_open"() rawptr
@@ -24,7 +25,14 @@ pub fn open(renderer: *Renderer, limits: Limits) Result {
   if handle == nil {
     return Result{kind:errors.Kind.System}
   }
-  renderer.* = Renderer{handle:handle, limits:limits}
+  chosen := limits
+  if chosen.draws==0 {
+    chosen.draws = 65536
+  }
+  if chosen.coverage_bytes==0 {
+    chosen.coverage_bytes = 67108864
+  }
+  renderer.* = Renderer{handle:handle, limits:chosen}
   return Result{ok:true}
 }
 pub fn close(renderer: *Renderer) {

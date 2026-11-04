@@ -2105,10 +2105,6 @@ static bool expression_scratch(BackendContext *ctx, const DynIrProgram *ir,DynEx
         *slots+=(size+7)/8; if (*slots>MAX_SCRATCH) return false;
         ctx->copy_offsets[argument]=0u-8*(ctx->local_words+*slots); ctx->touched_exprs[ctx->touched_expr_count++]=argument;
       }
-    if (e->kind==DYN_EXPR_STRUCT) {
-      const DynIrStruct *record=&ir->structs[e->type-DYN_TYPE_STRUCT_BASE];
-      for (uint32_t i=0;i<record->field_count;++i) if (!expression_scratch(ctx, ir,ir->fields[record->field_start+i].default_expression,depth+1,slots)) return false;
-    }
   }
   return true;
 }
@@ -2201,12 +2197,11 @@ static bool initialize(BackendContext *ctx, const DynIrProgram *ir,const DynIrFu
     } else if (value) {
       if (!dyn_type_is_struct(type) || (uint64_t)value->item_start+value->item_count>ir->item_count) return false;
       const DynIrStruct *record=&ir->structs[type-DYN_TYPE_STRUCT_BASE];
-      for (uint32_t i=0;i<record->field_count+value->item_count;++i) {
-        uint32_t field=i<record->field_count?i:ir->items[value->item_start+i-record->field_count].field_index,offset;
+      for (uint32_t i=0;i<value->item_count;++i) {
+        uint32_t field=ir->items[value->item_start+i].field_index,offset;
         if (!field_offset(ir,type,field,&offset)) return false;
         const DynIrField *definition=&ir->fields[record->field_start+field];
-        DynExprId expr=i<record->field_count?definition->default_expression:ir->items[value->item_start+i-record->field_count].expression;
-        if (expr==DYN_NO_EXPR) continue;
+        DynExprId expr=ir->items[value->item_start+i].expression;
         isa_peek_short(ctx, R_A, 0); isa_add_immediate(ctx, offset);
         if (!initialize(ctx, ir,f,definition->type,expr,depth+1)) return false;
       }
@@ -2850,22 +2845,11 @@ static bool constant_value(BackendContext *ctx,const DynIrProgram *ir,DynType ty
   if (e->kind==DYN_EXPR_STRUCT && dyn_type_is_struct(type)) {
     const DynIrStruct *record=&ir->structs[type-DYN_TYPE_STRUCT_BASE];
     if ((uint64_t)e->item_start+e->item_count>ir->item_count) return false;
-    for (unsigned i=0;i<record->field_count+e->item_count;++i) {
-      unsigned field=i<record->field_count?i:ir->items[e->item_start+i-record->field_count].field_index; uint32_t at,n,a;
+    for (unsigned i=0;i<e->item_count;++i) {
+      unsigned field=ir->items[e->item_start+i].field_index; uint32_t at;
       if (!field_offset(ir,type,field,&at)) return false;
       const DynIrField *definition=&ir->fields[record->field_start+field];
-      DynExprId value=i<record->field_count?definition->default_expression:ir->items[e->item_start+i-record->field_count].expression;
-      if (value==DYN_NO_EXPR) continue;
-      if (!layout(ir,definition->type,&n,&a,0)) return false;
-      if (i>=record->field_count) {
-        memset(ctx->constants_data.data+offset+at,0,n);
-        for (size_t j=0;j<ctx->constant_relocation_count;) {
-          uint64_t pos=ctx->constant_relocations[j].r_offset;
-          if (pos>=offset+at && pos<offset+at+n) {
-            memmove(&ctx->constant_relocations[j],&ctx->constant_relocations[j+1],(--ctx->constant_relocation_count-j)*sizeof(*ctx->constant_relocations));
-          } else ++j;
-        }
-      }
+      DynExprId value=ir->items[e->item_start+i].expression;
       if (!constant_value(ctx,ir,definition->type,value,offset+at,depth+1)) return false;
     }
     return true;

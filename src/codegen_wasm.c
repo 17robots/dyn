@@ -1075,17 +1075,6 @@ static unsigned expr(WG *g, DynExprId id) {
     p = slot(g, wsize(g, e->type), wa(g, e->type));
     zero(g, p, wsize(g, e->type));
     size_t element_temps = g->temp_cursor;
-    if (e->kind == DYN_EXPR_STRUCT) {
-      DynIrStruct *s = &g->ir->structs[e->integer];
-      for (unsigned i = 0; i < s->field_count; i++) {
-        DynIrField *f = &g->ir->fields[s->field_start + i];
-        if (f->default_expression != DYN_NO_EXPR) {
-          store(g, offset(g, p, wfield(g, e->type, i)),
-                expr(g, f->default_expression), f->type);
-          g->temp_cursor = element_temps;
-        }
-      }
-    }
     for (unsigned i = 0; i < e->item_count; i++) {
       DynIrItem *it = &g->ir->items[e->item_start + i];
       DynType t = g->ir->expressions[it->expression].type;

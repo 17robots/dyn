@@ -30,7 +30,6 @@ typedef struct {
 typedef struct {
   char *name;
   DynType type;
-  DynExprId default_expression;
 } DynIrField;
 typedef struct {
   char *name;

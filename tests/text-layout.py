@@ -46,7 +46,7 @@ fn main() {
   check(result.ok && #len(result.value.lines) == 2 && #len(result.value.glyphs) == 4)
   check(result.value.lines[0].width == 18.0 && result.value.lines[1].width == 18.0 && result.value.height == 24.0)
   check(result.value.glyphs[1].x == 8.0 && result.value.glyphs[2].x == 0.0 && result.value.glyphs[2].y == 12.0)
-  context := ui.Context{}
+  context := ui.Context{ style: ui.default_style }
   ui.begin(&context, arena, ui.Input{}, ui.Rect{ width: 32, height: 32 })
   ui_text.label(&context, ui.Rect{ x: 2, y: 3, width: 28, height: 28 }, &result.value, ui.Color{ r: 255, a: 255 })
   ui.end(&context)
@@ -64,7 +64,7 @@ fn main() {
   check(result.ok && #len(result.value.lines) == 4 && result.value.height == 48.0 && #len(result.value.glyphs) == 2)
   result = layout.build(arena, "A\xcc\x8a", font, layout.Options{})
   check(result.ok && bytes.equal(result.value.text, "\xc3\x85") && #len(result.value.glyphs) == 1 && result.value.glyphs[0].end == 2)
-  result = layout.build(arena, "A\xcc\x8aV", font, layout.Options{ width: 12, normalize: false })
+  result = layout.build(arena, "A\xcc\x8aV", font, layout.Options{ width: 12, no_normalize: true })
   check(result.ok && #len(result.value.lines) == 2 && #len(result.value.glyphs) == 3)
   check(result.value.glyphs[0].start == 0 && result.value.glyphs[0].end == 3 && result.value.glyphs[1].start == 0 && result.value.glyphs[1].end == 3)
   check(result.value.glyphs[1].y == 0.0 && result.value.glyphs[2].y == 12.0)

@@ -50,9 +50,9 @@ fn main() {
     run(project(root, 'forward-globals', '''const a := b + 1
 const b := c
 const c := 41
-struct Defaults { value: i64 = a }
+struct Defaults { value: i64 }
 fn main() {
-  value := Defaults{}
+  value := Defaults{ value: a }
   if a != 42 || b != 41 || value.value != 42 { #panic("forward global") }
 }
 '''))

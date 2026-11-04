@@ -3612,19 +3612,6 @@ static bool sema_program(Sema *sema, DynAstProgram *a, const DynSource *s,
     }
   }
   free(type_order);
-  for (uint32_t i = 0; i < a->field_count; ++i)
-    if (a->fields[i].default_expression != DYN_NO_EXPR) {
-      DynType value = check_expr(sema, a, a->fields[i].default_expression, s,
-                                 errors, a->fields[i].type);
-      if (value != a->fields[i].type && value != DYN_TYPE_ERROR) {
-        if (can_convert(sema, a, value, a->fields[i].type))
-          a->fields[i].default_expression = convert_expr(
-              a, a->fields[i].default_expression, a->fields[i].type);
-        else
-          error_span(a->fields[i].name, s, errors,
-                     "struct field default type mismatch");
-      }
-    }
   unsigned char *constant_globals = calloc(a->global_count ? a->global_count : 1, 1);
   if (!constant_globals) { a->allocation_failed = true; return false; }
   /* Resolve all global expressions before following constant dependencies;
@@ -3636,11 +3623,6 @@ static bool sema_program(Sema *sema, DynAstProgram *a, const DynSource *s,
       error_span(g->name, s, errors,
                  "constant initializer must be compile-time expression");
   }
-  for (uint32_t i = 0; i < a->field_count && dyn_work_step(&s->context, 1); ++i)
-    if (a->fields[i].default_expression != DYN_NO_EXPR &&
-        !compile_time_expr(a, a->fields[i].default_expression, s, constant_globals))
-      error_span(a->fields[i].name, s, errors,
-                 "struct field default must be compile-time expression");
   free(constant_globals);
   for (size_t i = 0; i < a->assert_count; ++i) {
     DynAstAssert *as = &a->asserts[i];

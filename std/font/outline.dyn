@@ -1,5 +1,5 @@
 struct Outline { points: []Point, ends: []usize, origin: Point, advance: Point, kind: errors.Kind, ok: bool }
-struct OutlineBudget { points: usize = 8192, nodes: usize = 256, path: [17]u16 }
+struct OutlineBudget { points: usize, nodes: usize, path: [17]u16 }
 fn metric_origin(face: *const Face, index: u16, xmin: i16) Point {
   at := #cast(usize, index) * 4 + 2
   if index >= face.metrics {

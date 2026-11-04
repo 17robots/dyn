@@ -4,7 +4,7 @@ use "std/errors" errors
 
 // File{} is unopened. Owners must not be copied: transfer with take(), or borrow().
 // Borrowed files never close the underlying handle. Their owner must outlive them.
-pub struct File { descriptor: isize = -1, active: bool, owned: bool }
+pub struct File { descriptor: isize, active: bool, owned: bool }
 pub struct FileResult { value: File, error: isize, kind: errors.Kind, ok: bool }
 pub struct Result { transferred: usize, error: isize, kind: errors.Kind, ok: bool }
 pub struct OffsetResult { value: usize, error: isize, kind: errors.Kind, ok: bool }

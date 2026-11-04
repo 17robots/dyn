@@ -26,8 +26,8 @@ pub struct Address { bytes: [128]u8, length: usize }
 // `error` keeps the native code; `kind` is its portable category.
 pub struct Result { value: isize, error: isize, kind: errors.Kind, ok: bool }
 // `active` makes zeroed storage a closed handle; descriptor 0 is a valid descriptor.
-pub struct Connection { descriptor: isize = -1, active: bool }
-pub struct Listener { descriptor: isize = -1, active: bool }
+pub struct Connection { descriptor: isize, active: bool }
+pub struct Listener { descriptor: isize, active: bool }
 
 // Wraps an open socket descriptor; the result owns it and must be closed once.
 pub fn connection_from_descriptor(descriptor: isize) Connection {

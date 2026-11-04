@@ -12,7 +12,7 @@ pub struct Window {
   width: i32, height: i32, input: ui.Input, close_requested: bool,
   // Desktop input for std/ui/box, reset by each poll; see desktop.dyn.
   desktop: Desktop,
-  events: ordered.Queue, events_enabled: bool, wake_descriptor: i32 = -1, ordered_pressed: [256]u8,
+  events: ordered.Queue, events_enabled: bool, wake_active: bool, wake_descriptor: i32, ordered_pressed: [256]u8,
 }
 pub struct Result { kind: errors.Kind, ok: bool }
 struct Visual { visual: rawptr, id: usize, screen: i32, depth: i32, class: i32, red: usize, green: usize, blue: usize, colormap_size: i32, bits: i32 }
@@ -256,9 +256,9 @@ pub fn close(window: *Window) {
   if window.display == nil {
     return
   }
-  if window.wake_descriptor >= 0 {
+  if window.wake_active {
     _ = event_close(window.wake_descriptor)
-    window.wake_descriptor = -1
+    window.wake_active = false
   }
   desktop_close(window)
   if window.context != nil {

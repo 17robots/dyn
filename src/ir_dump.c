@@ -336,7 +336,7 @@ static void walk(Dump *d,const DynTarget *t) {
   SECTION(fields,field_count) {
     const DynIrField *f=&p->fields[i]; row(d,"field",i);
     name(d,"name",f->name,false); type(d,"type",f->type);
-    EX("default",f->default_expression); END;
+    END;
   }
   SECTION(variants,variant_count) {
     const DynIrVariant *v=&p->variants[i]; row(d,"variant",i);

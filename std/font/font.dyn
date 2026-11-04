@@ -328,7 +328,7 @@ pub fn raster(arena: *mem.Arena, face: *const Face, index: u16, pixels_per_em: u
       mem.arena_rewind(arena, scratch)
     }
   }
-  budget := OutlineBudget{}
+  budget := OutlineBudget{ points: 8192, nodes: 256 }
   outline := read_outline(arena, face, index, 0, &budget)
   if !outline.ok {
     return BitmapResult{ kind: outline.kind }

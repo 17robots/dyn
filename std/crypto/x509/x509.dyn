@@ -18,7 +18,7 @@ pub struct View {
   envelope: certificate.Certificate, issuer: []const u8, subject: []const u8,
   public_key: []const u8, key_algorithm: Algorithm, signature_algorithm: Algorithm,
   not_before: i64, not_after: i64, ca: bool, basic_constraints: bool,
-  basic_critical: bool, path_length: i64 = -1, has_usage: bool, usage: u16,
+  basic_critical: bool, has_path_length: bool, path_length: i64, has_usage: bool, usage: u16,
   has_extended_usage: bool, server: bool, client: bool, san: []const u8,
   san_critical: bool,
 }
@@ -341,6 +341,7 @@ fn basic(source: []const u8, critical: bool, view: *View) bool {
   if !view.ca || !value.ok || value.value.tag != 2 {
     return false
   }
+  view.has_path_length = true
   view.path_length = small(value.value.content)
   return view.path_length >= 0 && der.finished(&cursor)
 }
@@ -751,7 +752,7 @@ fn signed(child: *const View, parent: *const View) bool {
   return p256.verify(raw[..], child.envelope.tbs, parent.public_key)
 }
 fn constraints(view: *const View, purpose: Purpose, ca: bool, below: usize) bool {
-  if ca && (!view.ca || !view.basic_constraints || !view.basic_critical || (view.has_usage && (view.usage & 0x0400) == 0) || (view.path_length >= 0 && #cast(u64, below) > #cast(u64, view.path_length))) {
+  if ca && (!view.ca || !view.basic_constraints || !view.basic_critical || (view.has_usage && (view.usage & 0x0400) == 0) || (view.has_path_length && #cast(u64, below) > #cast(u64, view.path_length))) {
     return false
   }
   if purpose != Purpose.Any && view.has_extended_usage {

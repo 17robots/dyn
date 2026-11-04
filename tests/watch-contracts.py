@@ -70,7 +70,7 @@ fn exhausted_open() {
     opened := watch.open(storage[..])
     if !opened.ok {
       require(opened.error < 0, "open failure error")
-      require(opened.value.descriptor == -1, "failed syscall owns stdin")
+      require(!opened.value.active, "failed syscall owns stdin")
       require(watch.close(&opened.value).ok, "close syscall failure")
       require(#syscall(72,0,1,0) >= 0, "syscall failure closed stdin")
       failed = true
@@ -84,7 +84,7 @@ fn exhausted_open() {
 }
 fn main() {
   unopened := watch.Watcher{}
-  require(unopened.descriptor == -1, "default watcher is open")
+  require(!unopened.active, "default watcher is open")
   require(watch.close(&unopened).ok && watch.close(&unopened).ok, "unopened close")
   require(#syscall(72,0,1,0) >= 0, "unopened close clobbered stdin")
   require(!watch.add(&unopened,".",watch.Create).ok, "add unopened")

@@ -29,7 +29,7 @@ fn main() {
   frame := mem.arena_create(0)
   defer { mem.arena_release(frame)
     mem.arena_release(persistent) }
-  context: ui.Context
+  context := ui.Context{ style: ui.default_style }
   state := box.create(persistent, measure, nil, 16.0)
   state.reduced_motion = true
   selected: usize = 0

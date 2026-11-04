@@ -3,7 +3,7 @@ use "std/errors" errors
 use "std/encoding/binary" binary
 // Windows DIB headers, uncompressed indexed/BGR and contiguous bitfields.
 // RLE, embedded JPEG/PNG and OS/2 DIB variants return Unsupported.
-pub struct Info { width: u32, height: u32, channels: u8 = 4 }
+pub struct Info { width: u32, height: u32, channels: u8 }
 pub struct Image { info: Info, pixels: []u8 }
 pub struct Result { value: Image, kind: errors.Kind, error: isize, offset: usize, ok: bool }
 pub struct EncodeResult { value: []u8, kind: errors.Kind, error: isize, ok: bool }

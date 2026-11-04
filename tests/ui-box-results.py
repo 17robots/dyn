@@ -74,7 +74,7 @@ fn main() {
     mem.arena_release(arena)
   }
   state := box.create(persistent, measure, nil, 16.0)
-  context: ui.Context
+  context := ui.Context{ style: ui.default_style }
   app := App{}
   frame(state, &context, arena, &app, box.Input{})
   // Rectangles read while building come from the previous frame's layout.
@@ -144,7 +144,7 @@ fn main() {
 // and asks the window for text input at the caret.
 fn composing(persistent: *mem.Arena, arena: *mem.Arena) {
   state := box.create(persistent, measure, nil, 16.0)
-  context: ui.Context
+  context := ui.Context{ style: ui.default_style }
   storage: [64]u8 = []
   edit := box.Edit{}
   inputs: [5]box.Input = [
@@ -180,7 +180,7 @@ fn composing(persistent: *mem.Arena, arena: *mem.Arena) {
 // multiplies pixel sizes and padding.
 fn duplicates(persistent: *mem.Arena, arena: *mem.Arena) {
   state := box.create(persistent, measure, nil, 16.0)
-  context: ui.Context
+  context := ui.Context{ style: ui.default_style }
   for round in 0..3 {
     mem.arena_reset(arena)
     ui.begin(&context, arena, ui.Input{}, ui.Rect{ width: 200, height: 200 })

@@ -1576,13 +1576,11 @@ static void ssa_initialize(Ssa *s, int32_t destination, DynType type, DynExprId 
     } else if (value) {
       if (!dyn_type_is_struct(type) || (uint64_t)value->item_start + value->item_count > ir->item_count) { SSA_GIVE_UP(s); return; }
       const DynIrStruct *record = &ir->structs[type - DYN_TYPE_STRUCT_BASE];
-      for (uint32_t i = 0; i < record->field_count + value->item_count; ++i) {
-        uint32_t field = i < record->field_count ? i : ir->items[value->item_start + i - record->field_count].field_index, offset;
+      for (uint32_t i = 0; i < value->item_count; ++i) {
+        uint32_t field = ir->items[value->item_start + i].field_index, offset;
         if (!field_offset(ir, type, field, &offset)) { SSA_GIVE_UP(s); return; }
         const DynIrField *definition = &ir->fields[record->field_start + field];
-        DynExprId expr = i < record->field_count ? definition->default_expression
-                                                 : ir->items[value->item_start + i - record->field_count].expression;
-        if (expr == DYN_NO_EXPR) continue;
+        DynExprId expr = ir->items[value->item_start + i].expression;
         ssa_initialize(s, ssa_add_offset(s, destination, offset), definition->type, expr, depth + 1);
       }
     }
@@ -1622,14 +1620,12 @@ static bool ssa_return_literal(Ssa *s, DynExprId id) {
   uint32_t offsets[64], count = 0, size, alignment;
   int32_t values[64];
   if (!layout(ir, type, &size, &alignment, 0) || size > 64) return false;
-  for (uint32_t i = 0; i < record->field_count + e->item_count; ++i) {
-    uint32_t field = i < record->field_count ? i : ir->items[e->item_start + i - record->field_count].field_index;
+  for (uint32_t i = 0; i < e->item_count; ++i) {
+    uint32_t field = ir->items[e->item_start + i].field_index;
     if (field >= record->field_count) return false;
     const DynIrField *definition = &ir->fields[record->field_start + field];
     if (!scalar(ir, definition->type)) return false;
-    DynExprId expr = i < record->field_count ? definition->default_expression
-                                            : ir->items[e->item_start + i - record->field_count].expression;
-    if (expr == DYN_NO_EXPR) continue;
+    DynExprId expr = ir->items[e->item_start + i].expression;
     if (expr >= ir->expression_count || !field_offset(ir, type, field, &offsets[count])) return false;
     expressions[count] = expr;
     types[count++] = definition->type;

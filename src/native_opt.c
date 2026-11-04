@@ -426,16 +426,6 @@ static bool inline_shared_expr(const DynIrProgram *ir, DynExprId id,
   case DYN_EXPR_GLOBAL: case DYN_EXPR_FUNCTION:
     return true;
   case DYN_EXPR_STRUCT:
-    /* Defaults run even when explicit fields subsequently replace them. */
-    if (needs_origin) {
-      if (!dyn_type_is_struct(e->type) ||
-          e->type - DYN_TYPE_STRUCT_BASE >= ir->struct_count)
-        return false;
-      const DynIrStruct *record = &ir->structs[e->type - DYN_TYPE_STRUCT_BASE];
-      for (uint32_t i = 0; i < record->field_count; ++i)
-        if (ir->fields[record->field_start + i].default_expression != DYN_NO_EXPR)
-          return false;
-    }
     break;
   case DYN_EXPR_ARRAY:
     break;

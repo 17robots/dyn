@@ -141,7 +141,6 @@ typedef struct {
 typedef struct {
   DynSpan name;
   DynType type;
-  DynExprId default_expression;
   uint64_t offset;
 } DynAstField;
 typedef struct {

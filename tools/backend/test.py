@@ -603,7 +603,7 @@ return defer_panic_call(a) }
 """
 
 SOURCE += """
-struct Storage { tag:u8=3, wide:u64=7, small:i16=-2, values:[3]u64 }
+struct Storage { tag:u8, wide:u64, small:i16, values:[3]u64 }
 struct NestedStorage { first:u8, item:Storage, last:u16 }
 pub fn array_local(a:u64,i:usize) u64 { x:[3]u64=[a,2]
 x[2]=4
@@ -623,12 +623,12 @@ return y[0]+y[1]+y[2] }
 pub fn array_pointer(p:*[3]u16,i:usize,a:u16) u16 { p.*[i]=a
 return p.*[i] }
 pub fn array_copy(dst:*[3]u16,src:*[3]u16) { dst.*=src.* }
-pub fn struct_local(a:u64) u64 { x:=Storage{wide:a,values:[1,2,3]}
+pub fn struct_local(a:u64) u64 { x:=Storage{tag:3,wide:a,small:-2,values:[1,2,3]}
 y:=x
 x.wide+=2
 y.values[1]=9
 return x.wide+y.wide+#cast(u64, x.tag)+y.values[1] }
-pub fn struct_nested(a:u64) u64 { x:=NestedStorage{first:1,item:Storage{wide:a},last:2}
+pub fn struct_nested(a:u64) u64 { x:=NestedStorage{first:1,item:Storage{tag:3,wide:a,small:-2},last:2}
 x.item.wide+=3
 return x.item.wide+#cast(u64, x.last) }
 pub fn struct_zero() u64 { x:Storage
