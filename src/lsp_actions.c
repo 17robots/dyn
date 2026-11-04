@@ -188,13 +188,6 @@ static bool lsp_default_value(LspSemantic *semantic, DynType type, char *out,
     DEFAULT_APPEND(".%.*s",
                    (int)(variant->name.end_byte - variant->name.start_byte),
                    semantic->source.text + variant->name.start_byte);
-    if (variant->payload_type != DYN_TYPE_VOID) {
-      DEFAULT_APPEND("(");
-      if (!lsp_default_value(semantic, variant->payload_type, out, capacity, at,
-                             depth + 1))
-        return false;
-      DEFAULT_APPEND(")");
-    }
   } else
     return false;
 #undef DEFAULT_APPEND

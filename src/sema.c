@@ -571,7 +571,7 @@ static DynAstFnType *fn_type_info(DynAstProgram *a, DynType t) {
              : NULL;
 }
 /* C ABI storage is explicit. Structs may contain C scalars/pointers and fixed
-   arrays, but never Dyn slice/any descriptors or payload enums. */
+   arrays, but never Dyn slice/any descriptors. */
 static bool sema_c_abi_type(DynAstProgram *a, DynType type, unsigned depth) {
   type = underlying_type(a, type);
   if (depth > 128) return false;
@@ -586,7 +586,7 @@ static bool sema_c_abi_type(DynAstProgram *a, DynType type, unsigned depth) {
     DynAstArray *array = &a->arrays[type - DYN_TYPE_ARRAY_BASE];
     return array->length && sema_c_abi_type(a, array->element, depth + 1);
   }
-  if (dyn_type_is_enum(type)) return !a->enums[type - DYN_TYPE_ENUM_BASE].has_payload;
+  if (dyn_type_is_enum(type)) return true;
   if (dyn_type_is_pointer(type)) {
     DynType pointee = underlying_type(a, a->pointers[type - DYN_TYPE_POINTER_BASE].pointee);
     return !dyn_type_is_function(pointee) || sema_c_abi_type(a, pointee, depth + 1);
@@ -1498,35 +1498,12 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
       error_span(a->expressions[id].span, s, errors, "unknown enum variant");
       return a->expressions[id].type = DYN_TYPE_ERROR;
     }
-    DynAstVariant *v = &a->variants[variant];
     bool constructor = a->expressions[id].kind == DYN_EXPR_ENUM;
     a->expressions[id].kind = DYN_EXPR_ENUM;
     a->expressions[id].integer = variant;
     a->expressions[id].type = DYN_TYPE_ENUM_BASE + eid;
-    if (v->payload_type == DYN_TYPE_VOID) {
-      if (constructor || a->expressions[id].item_count)
-        error_span(a->expressions[id].span, s, errors,
-                   "payloadless enum variant is not callable");
-    } else if (!constructor) {
-      if (expected != a->expressions[id].type)
-        error_span(a->expressions[id].span, s, errors,
-                   "payload enum variant requires exactly one argument");
-    } else if (a->expressions[id].item_count != 1)
-      error_span(a->expressions[id].span, s, errors,
-                 "payload enum variant requires exactly one argument");
-    else {
-      uint32_t item_start = a->expressions[id].item_start;
-      DynSpan enum_span = a->expressions[id].span;
-      uint32_t arg_index = item_start;
-      DynType value =
-          check_expr(sema, a, a->items[arg_index].expression, s, errors, v->payload_type);
-      if (value != v->payload_type && value != DYN_TYPE_ERROR) {
-        if (can_convert(sema, a, value, v->payload_type))
-          a->items[arg_index].expression = convert_expr(a, a->items[arg_index].expression, v->payload_type);
-        else
-          error_span(enum_span, s, errors, "enum payload type mismatch");
-      }
-    }
+    if (constructor || a->expressions[id].item_count)
+      error_span(a->expressions[id].span, s, errors, "enum variant is not callable");
     return a->expressions[id].type;
   }
   if (a->expressions[id].kind == DYN_EXPR_CALL) {
@@ -2007,7 +1984,7 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
         values[11] = DYN_NO_EXPR;
       for (uint32_t i = 0; i < subject->variant_count && names && types; ++i) {
         names[i] = a->variants[subject->variant_start + i].name;
-        types[i] = a->variants[subject->variant_start + i].payload_type;
+        types[i] = DYN_TYPE_VOID;
       }
       if (names && types)
         values[11] = reflection_members(a, s, member_type, member_slice, names,
@@ -2089,10 +2066,8 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
     bool source_ptr = dyn_type_is_pointer(source) || source == DYN_TYPE_RAWPTR;
     bool target_ptr = dyn_type_is_pointer(target) || target == DYN_TYPE_RAWPTR;
     /* Plain enums cast to and from integers; codegen checks integer values. */
-    bool source_tag = dyn_type_is_enum(source) &&
-                      !a->enums[source - DYN_TYPE_ENUM_BASE].has_payload;
-    bool target_tag = dyn_type_is_enum(target) &&
-                      !a->enums[target - DYN_TYPE_ENUM_BASE].has_payload;
+    bool source_tag = dyn_type_is_enum(source);
+    bool target_tag = dyn_type_is_enum(target);
     bool valid = (numeric(sema, source) && numeric(sema, target)) ||
                  (source_ptr && target_ptr) ||
                  (source_ptr && integer(sema, target)) ||
@@ -2424,9 +2399,7 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
   }
   if (a->expressions[id].op >= DYN_OP_EQ && a->expressions[id].op <= DYN_OP_GE) {
     if (left == DYN_TYPE_STRING || dyn_type_is_struct(left) ||
-        dyn_type_is_array(left) || dyn_type_is_slice(left) ||
-        (dyn_type_is_enum(left) &&
-         a->enums[left - DYN_TYPE_ENUM_BASE].has_payload)) {
+        dyn_type_is_array(left) || dyn_type_is_slice(left)) {
       error_span(a->expressions[id].span, s, errors, "aggregate values are not comparable");
       return a->expressions[id].type = DYN_TYPE_ERROR;
     }
@@ -2549,7 +2522,7 @@ static void validate_pointer_case_bindings(DynAstProgram *a, DynAstStmt *st,
     if (arm->pointer_binding && !mutable_case_subject(a, st->expression))
       error_span(
           arm->binding, s, errors,
-          "pointer payload binding requires mutable assignable case subject");
+          "pointer binding requires mutable assignable case subject");
   }
 }
 static bool valid_defer_stmt(DynAstProgram *a, uint32_t id, const DynSource *s,
@@ -2827,31 +2800,8 @@ static bool sema_case_v2(Sema *sema, DynAstProgram *a, DynAstStmt *st,
         }
       }
     }
-    bool binding = arm->binding.end_byte > arm->binding.start_byte;
-    if (binding) {
-      if (!enum_case || arm->wildcard || arm->pattern_count != 1 ||
-          !a->patterns[arm->pattern_start].is_enum)
-        error_span(arm->binding, s, errors,
-                   "payload binding requires one enum variant pattern");
-      else {
-        DynAstVariant *v =
-            &a->variants[a->patterns[arm->pattern_start].variant];
-        if (v->payload_type == DYN_TYPE_VOID)
-          error_span(arm->binding, s, errors,
-                     "payloadless variant cannot bind payload");
-        else if (find_local(sema, a, arm->binding, s) != UINT32_MAX)
-          error_span(arm->binding, s, errors,
-                     "shadowing or duplicate local is forbidden");
-        else if (reserve_local(a)) {
-          arm->local_id = (uint32_t)a->local_count;
-          a->locals[a->local_count++] =
-              (DynAstLocal){.name = arm->binding,
-                            .type = v->payload_type,
-                            .active = true,
-                            .owner_function = sema->current_function};
-        }
-      }
-    }
+    if (arm->binding.end_byte > arm->binding.start_byte)
+      error_span(arm->binding, s, errors, "enum variants have nothing to bind");
     all_terminate = sema_block(sema, a, arm->body_start, arm->body_count, s,
                                errors, true) &&
                     all_terminate;
@@ -3091,31 +3041,8 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
           }
         }
       }
-      bool has_binding = arm->binding.end_byte > arm->binding.start_byte;
-      if (has_binding) {
-        if (!enum_case || arm->wildcard || arm->pattern_count != 1 ||
-            !a->patterns[arm->pattern_start].is_enum) {
-          error_span(arm->binding, s, errors,
-                     "payload binding requires one enum variant pattern");
-        } else {
-          DynAstVariant *v =
-              &a->variants[a->patterns[arm->pattern_start].variant];
-          if (v->payload_type == DYN_TYPE_VOID)
-            error_span(arm->binding, s, errors,
-                       "payloadless variant cannot bind payload");
-          else if (find_local(sema, a, arm->binding, s) != UINT32_MAX)
-            error_span(arm->binding, s, errors,
-                       "shadowing or duplicate local is forbidden");
-          else if (reserve_local(a)) {
-            arm->local_id = (uint32_t)a->local_count;
-            a->locals[a->local_count++] =
-                (DynAstLocal){.name = arm->binding,
-                              .type = v->payload_type,
-                              .active = true,
-                              .owner_function = sema->current_function};
-          }
-        }
-      }
+      if (arm->binding.end_byte > arm->binding.start_byte)
+        error_span(arm->binding, s, errors, "enum variants have nothing to bind");
       bool term = sema_block(sema, a, arm->body_start, arm->body_count, s,
                              errors, true);
       all_terminate = all_terminate && term;

@@ -58,7 +58,7 @@ storage and hidden result pointers as required by the target.
 
 Struct fields may contain C scalars, pointers, supported enums, nested structs,
 and fixed nonempty arrays. Packed storage must match the C declaration exactly.
-Slices, strings, `any`, payload enums, direct array parameters/results, empty
+Slices, strings, `any`, direct array parameters/results, empty
 structs and aggregate C varargs are not supported C boundaries. These are rejected
 when a foreign function is called or its address is taken. Unsupported C unions,
 bitfields, vectors, extended floating types and special calling conventions still

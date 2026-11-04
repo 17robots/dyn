@@ -1504,14 +1504,9 @@ static void lsp_enum_hover(LspSemantic *semantic, uint32_t index, char *out,
   uint32_t shown = e->variant_count < 8 ? e->variant_count : 8;
   for (uint32_t i = 0; i < shown && at < capacity; ++i) {
     DynAstVariant *v = &a->variants[e->variant_start + i];
-    char payload[128] = {0};
-    if (v->payload_type != DYN_TYPE_VOID)
-      dyn_type_format(a, v->payload_type, &semantic->source, payload,
-                      sizeof(payload));
-    int n = snprintf(out + at, capacity - at, "\n  %.*s%s%s",
+    int n = snprintf(out + at, capacity - at, "\n  %.*s",
                      (int)(v->name.end_byte - v->name.start_byte),
-                     semantic->source.text + v->name.start_byte,
-                     *payload ? " " : "", payload);
+                     semantic->source.text + v->name.start_byte);
     if (n > 0)
       at += (size_t)n < capacity - at ? (size_t)n : capacity - at - 1;
   }

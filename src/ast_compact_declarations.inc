@@ -201,7 +201,6 @@ static bool compact_add_enum_variants(const DynSource *s, DynAstProgram *a,
         compact_report(name, s, errors, "duplicate enum variant");
         continue;
       }
-      DynType payload = DYN_TYPE_VOID;
       uint64_t value = en->variant_count;
       for (CompactNode part = compact_child(c, 1); !compact_null(part); part = compact_next(part))
         compact_report(part, s, errors,
@@ -212,10 +211,8 @@ static bool compact_add_enum_variants(const DynSource *s, DynAstProgram *a,
         compact_report(c, s, errors, "out of memory");
         return false;
       }
-      a->variants[a->variant_count++] = (DynAstVariant){compact_span(name), payload, value};
+      a->variants[a->variant_count++] = (DynAstVariant){compact_span(name), value};
       ++en->variant_count;
-      if (payload != DYN_TYPE_VOID)
-        en->has_payload = true;
     }
     if (!en->variant_count)
       compact_report(d, s, errors, "enum requires at least one variant");
