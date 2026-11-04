@@ -248,7 +248,7 @@ static int execute_command(DynOptions *options, const char *compiler) {
   DynWork work = {.remaining = options->max_work};
   unsigned vet_findings = 0;
   bool vet = is_command(options, "vet");
-  DynContext context = {.work = options->max_work ? &work : NULL, .target = dyn_target_find(options->target), .optimization = &options->optimization, .runtime_support = options->runtime_support, .json_diagnostics = options->json_diagnostics, .vet = vet, .vet_findings = &vet_findings, .timings = options->timings, .strict_syntax = true};
+  DynContext context = {.work = options->max_work ? &work : NULL, .target = dyn_target_find(options->target), .optimization = &options->optimization, .runtime_support = options->runtime_support, .json_diagnostics = options->json_diagnostics, .vet = vet, .vet_unsafe = options->vet_unsafe, .vet_findings = &vet_findings, .timings = options->timings, .strict_syntax = true};
   if (is_command(options, "help")) {
     dyn_cli_help(options->input);
     return 0;

@@ -461,6 +461,15 @@ static uint32_t sema_find_field(DynAstProgram *a, uint32_t sid, DynSpan name,
       st->field_count ? &a->fields[st->field_start].name : NULL,
       sizeof(*a->fields), st->field_count, name, s, false, &a->allocation_failed);
 }
+/* Vet reports user code only: std implements these operations on purpose. */
+static void sema_vet_note(const DynSource *s, DynSpan span, bool unsafe_note, const char *message) {
+  if (!s->context.vet || (unsafe_note && !s->context.vet_unsafe)) return;
+  const char *path, *text; size_t length, at;
+  dyn_source_position(s, span.start_byte, &path, &text, &length, &at);
+  if (path && (strstr(path, "/std/") || strstr(path, "/share/dyn/") || strstr(path, "/vendor/"))) return;
+  dyn_diagnostic_source("warning", s, span.start_byte, span.end_byte, message);
+  if (s->context.vet_findings) ++*s->context.vet_findings;
+}
 static bool discard_name(DynSpan n, const DynSource *s) {
   return n.end_byte - n.start_byte == 1 && s->text[n.start_byte] == '_';
 }
@@ -1700,6 +1709,7 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
     uint32_t l = find_local(sema, a, a->expressions[id].span, s);
     if (l != UINT32_MAX) {
       a->expressions[id].integer = l;
+      a->locals[l].used = true;
       return a->expressions[id].type = a->locals[l].type;
     }
     uint32_t global = sema_find_global_name(sema, a, a->expressions[id].span, s);
@@ -1788,6 +1798,9 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
                  "slicing requires array, slice, or pointer range");
       return a->expressions[id].type = DYN_TYPE_ERROR;
     }
+    if (pointer && a->expressions[id].boolean)
+      sema_vet_note(s, a->expressions[id].span, true,
+                    a->expressions[id].op == DYN_OP_ADD ? "unsafe: #offset" : "unsafe: #slice");
     if (pointer && !a->expressions[id].boolean) {
       error_span(a->expressions[id].span, s, errors,
                  "slice a pointer with #slice(pointer, count)");
@@ -3826,6 +3839,26 @@ bool dyn_sema_base(DynAstProgram *a, const DynSource *s, unsigned *errors) {
     error_span((DynSpan){0}, s, errors, "out of memory indexing symbols");
   }
   bool ok = ready && sema_program(&sema, a, s, errors);
+  if (ok && s->context.vet) {
+    for (size_t i = 0; i < a->statement_count; ++i) {
+      const DynAstStmt *st = &a->statements[i];
+      if (st->kind == DYN_STMT_LOCAL && st->local_id < a->local_count &&
+          !a->locals[st->local_id].used && !discard_name(st->name, s))
+        sema_vet_note(s, st->name, false, "local is never used");
+    }
+    for (size_t i = 0; i < a->expression_count; ++i) {
+      const DynAstExpr *e = &a->expressions[i];
+      if (e->kind == DYN_EXPR_SYSCALL)
+        sema_vet_note(s, e->span, true, "unsafe: #syscall");
+      else if ((e->kind == DYN_EXPR_CAST || e->kind == DYN_EXPR_BITCAST) && e->left != DYN_NO_EXPR) {
+        DynType from = a->expressions[e->left].type;
+        bool to_pointer = dyn_type_is_pointer(e->type) || e->type == DYN_TYPE_RAWPTR;
+        bool from_pointer = dyn_type_is_pointer(from) || from == DYN_TYPE_RAWPTR;
+        if (to_pointer || from_pointer)
+          sema_vet_note(s, e->span, true, "unsafe: pointer cast");
+      }
+    }
+  }
   if (a->type_capacity_exceeded) {
     error_span((DynSpan){0}, s, errors, "interned type capacity exceeded");
     ok = false;

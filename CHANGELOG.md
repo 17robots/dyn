@@ -36,6 +36,7 @@ servers so they pick up the new `dyn`.
 - Breaking: `mem.append` never moves a list and panics at the end of its block.
   `mem.append_grow` keeps the old moving behavior; `mem.try_append` returns a stub.
 - New: `std/enums`, `math.div_or_zero`, `math.rem_or_zero`, `math.float_to_int_sat`.
+- `dyn vet` reports unused locals. `dyn vet --unsafe` lists unsafe operations.
 - `ui.Style` no longer has built-in colors. Write
   `ui.Context{ style: ui.default_style }`; a zero style draws nothing.
 - Zero is now the safe state for handles. `fs.File`, `net.Connection`,

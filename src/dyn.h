@@ -65,7 +65,7 @@ typedef struct {
   bool runtime_support; /* Internal freestanding support-object compilation. */
   DynDiagnosticSink diagnostic;
   void *diagnostic_data;
-  bool json_diagnostics, vet;
+  bool json_diagnostics, vet, vet_unsafe;
   /* `dyn vet`: run the vet checks, counting findings when vet_findings is set. */
   unsigned *vet_findings;
   bool timings;
@@ -96,7 +96,7 @@ typedef enum { DYN_BACKEND_AUTO, DYN_BACKEND_NATIVE, DYN_BACKEND_LLVM } DynBacke
 typedef struct {
   const char *command, *input, *output, *target;
   DynOptimization optimization;
-  bool release, debug_info, debug_info_set, quiet, verbose, runtime_support, emit_object, emit_asm, emit_ir, no_link, shared, timings, no_cache;
+  bool vet_unsafe, release, debug_info, debug_info_set, quiet, verbose, runtime_support, emit_object, emit_asm, emit_ir, no_link, shared, timings, no_cache;
   DynBackend backend;
   bool native_backend; /* Resolved for this command; part of the build cache key. */
   bool format_check, docs_json, json_diagnostics;

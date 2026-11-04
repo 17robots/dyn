@@ -274,7 +274,7 @@ typedef struct {
 typedef struct {
   DynSpan name;
   DynType type;
-  bool active, is_const;
+  bool active, is_const, used;
   uint32_t owner_function;
 } DynAstLocal;
 typedef struct {
