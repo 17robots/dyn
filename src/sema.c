@@ -2204,10 +2204,10 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
     return a->expressions[id].type = expected == DYN_TYPE_F64 ? DYN_TYPE_F64 : DYN_TYPE_F32;
   }
   if (a->expressions[id].kind == DYN_EXPR_CHAR) {
-    DynType t = expected == DYN_TYPE_U8 || expected == DYN_TYPE_U16 ||
-                        expected == DYN_TYPE_U32
+    DynType t = expected != DYN_TYPE_INFER && !dyn_type_is_distinct(expected) &&
+                        integer(sema, expected)
                     ? expected
-                    : (a->expressions[id].integer <= 255 ? DYN_TYPE_U8 : DYN_TYPE_U32);
+                    : DYN_TYPE_U32;
     if (!literal_fits(sema, a->expressions[id].integer, t)) {
       error_span(a->expressions[id].span, s, errors,
                  "character literal is not representable in expected type");

@@ -103,8 +103,8 @@ guarantee UTF-8. Source files and literal text are UTF-8, but `\x` escapes can w
 and bytes read from files, sockets, or the OS arrive unchecked. Text APIs that require UTF-8
 say so and validate; check external input with `utf8.valid` from `std/unicode/utf8` before
 treating it as text. `const` prevents writes through this view only: another `[]u8` alias of the
-same memory can still change the bytes. Character literals contain Unicode scalar values, defaulting to `u8` through 255 and
-`u32` above it; expected `u8`, `u16`, or `u32` may apply when value fits.
+same memory can still change the bytes. Character literals are untyped integer constants holding a Unicode scalar value:
+they take any expected integer type the value fits, and default to `u32`.
 
 `distinct`, `packed`, `is` and `type` are reserved keywords and cannot be names.
 

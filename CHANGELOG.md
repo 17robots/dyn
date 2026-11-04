@@ -19,6 +19,8 @@ servers so they pick up the new `dyn`.
   useful value, set the field in the literal, or use a named constant.
 - Breaking: `distinct`, `packed` and `is` are always reserved. `stb_rect_pack`
   renames `Rectangle.packed` to `was_packed` and `Result.packed` to `count`.
+- Breaking: a character literal with no expected type is now `u32`, never `u8`.
+  It adapts to any integer type the value fits.
 - `ui.Style` no longer has built-in colors. Write
   `ui.Context{ style: ui.default_style }`; a zero style draws nothing.
 - Zero is now the safe state for handles. `fs.File`, `net.Connection`,
