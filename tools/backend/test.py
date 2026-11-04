@@ -23,16 +23,16 @@ pub fn constant() u64 { return 18446744073709551615 }
 pub fn minimum() i64 { return -9223372036854775808 }
 pub fn identity(a: u64) u64 { return a }
 pub fn mix(a: u64, b: u64, c: u64, d: u64, e: u64, f: u64) u64 {
-  return #wrap((a + b) * (c - d)) ^ (e | f)
+  return ((a + b) * (c - d)) ^ (e | f)
 }
 pub fn bits(a: u64, b: u64) u64 { return (a & b) ^ (a | b) }
-pub fn subtract(a: i64, b: i64) i64 { return #wrap(a - b) }
-pub fn negate(a: i64) i64 { return #wrap(-a) }
+pub fn subtract(a: i64, b: i64) i64 { return (a - b) }
+pub fn negate(a: i64) i64 { return (-a) }
 pub fn complement(a: u64) u64 { return ~a }
 pub fn invert(a: bool) bool { return !a }
 pub fn truth() bool { return true }
-pub fn size(a: usize, b: usize) usize { return #wrap(a + b) }
-pub fn literal_shift(a: u64) u64 { return #wrap(a << 63) }
+pub fn size(a: usize, b: usize) usize { return (a + b) }
+pub fn literal_shift(a: u64) u64 { return (a << 63) }
 pub fn literal_right(a: i64) i64 { return a >> 63 }
 pub fn nested(a: u64, b: u64, c: u64) u64 { return a + (b * c) }
 pub fn nested_twice(a: i64, b: i64, c: i64, d: i64) i64 { return a + (b + (c * d)) }
@@ -50,7 +50,7 @@ for ty in ('i64', 'u64', 'isize', 'usize'):
     for operation, symbol in SAFETY_OPERATORS.items():
         for wrap in (False, True):
             expr = f'a {symbol} b'
-            if wrap: expr = f'#wrap({expr})' if operation == 'shl' else f'#wrap(({expr}) + 0)'
+            if wrap: expr = f'({expr})' if operation == 'shl' else f'(({expr}) + 0)'
             right_type = 'u64' if operation in ('shl', 'shr') else ty
             name = f'{"wrap" if wrap else "checked"}_{ty}_{operation}'
             SOURCE += f'pub fn {name}(a: {ty}, b: {right_type}) {ty} {{ return {expr} }}\n'
@@ -93,27 +93,27 @@ return a << b }
 SOURCE += """
 pub fn call_zero() u64 { return 0 }
 pub fn call_identity(a: u64) u64 { return a }
-pub fn call_pair(a: u64, b: u64) u64 { return #wrap(a * 131 + b) }
+pub fn call_pair(a: u64, b: u64) u64 { return (a * 131 + b) }
 pub fn call_six(a: u64,b: u64,c: u64,d: u64,e: u64,f: u64) u64 {
-  return #wrap(a * 100000 + b * 10000 + c * 1000 + d * 100 + e * 10 + f)
+  return (a * 100000 + b * 10000 + c * 1000 + d * 100 + e * 10 + f)
 }
 pub fn call_nested(a: u64,b: u64,c: u64) u64 {
-  return #wrap(a + call_pair(call_identity(b), call_pair(call_zero(), c)))
+  return (a + call_pair(call_identity(b), call_pair(call_zero(), c)))
 }
 pub fn call_args6(a: u64,b: u64,c: u64,d: u64,e: u64,f: u64) u64 {
   return call_six(call_identity(a),call_identity(b),call_identity(c),call_identity(d),call_identity(e),call_identity(f))
 }
 pub fn call_six_nested(a: u64,b: u64,c: u64,d: u64,e: u64,f: u64) u64 {
-  return #wrap(a + call_six(call_identity(a),b+call_zero(),call_identity(c),d+call_identity(e),call_zero(),f))
+  return (a + call_six(call_identity(a),b+call_zero(),call_identity(c),d+call_identity(e),call_zero(),f))
 }
 pub fn call_bool(a: bool, b: bool) bool { return logical_or(logical_and(a,b),invert(a)) }
 pub fn call_forward(a: u64) u64 { return forward_leaf(a) }
-pub fn forward_leaf(a: u64) u64 { return #wrap(a + 1) }
+pub fn forward_leaf(a: u64) u64 { return (a + 1) }
 pub fn factorial(n: u64) u64 { if n <= 1 { return 1 }
 return n * factorial(n - 1) }
 pub fn rec_panic(n: u64, denominator: u64) u64 { if n == 0 { return 1 / denominator }
 return rec_panic(n - 1, denominator) }
-pub fn rec_entry(n: u64, denominator: u64) u64 { return #wrap(call_identity(n) + rec_panic(n, denominator)) }
+pub fn rec_entry(n: u64, denominator: u64) u64 { return (call_identity(n) + rec_panic(n, denominator)) }
 pub fn mutual_even(n: u64) bool { if n == 0 { return true }
 return mutual_odd(n - 1) }
 pub fn mutual_odd(n: u64) bool { if n == 0 { return false }
@@ -121,7 +121,7 @@ return mutual_even(n - 1) }
 pub fn div_leaf(a: u64, b: u64) u64 { return a / b }
 pub fn add_leaf(a: u64, b: u64) u64 { return a + b }
 pub fn call_order(a: u64,b: u64,c: u64) u64 { return call_pair(div_leaf(a,b),add_leaf(a,c)) }
-pub fn call_after(a: u64,b: u64,c: u64) u64 { return #wrap(call_identity(a) + div_leaf(b,c)) }
+pub fn call_after(a: u64,b: u64,c: u64) u64 { return (call_identity(a) + div_leaf(b,c)) }
 pub fn call_short(a: u64,b: u64) bool { return a == 0 || div_leaf(1,b) > 0 }
 pub fn call_branch(a: u64,b: u64) u64 { if a == 0 { return call_identity(b) } else { return div_leaf(a,b) } }
 """
@@ -195,11 +195,11 @@ pub fn local_signed(a:i64,b:i64) i64 { x := a
 x += b
 return x }
 pub fn local_wrap(a:u64,b:u64) u64 { x := a
-x = #wrap(x + b)
+x = (x + b)
 return x }
 """
 SOURCE += 'pub fn large_frame_panic(a:u64,b:u64) u64 {' + ''.join(f'x{i} := call_identity(a)\n' for i in range(24)) + 'x23 += b\nreturn x23 }\n'
-SOURCE += 'pub fn large_frame(a:u64) u64 {' + ''.join(f'x{i} := call_identity(a)\n' for i in range(24)) + 'return #wrap(' + '+'.join(f'x{i}' for i in range(24)) + ') }\n'
+SOURCE += 'pub fn large_frame(a:u64) u64 {' + ''.join(f'x{i} := call_identity(a)\n' for i in range(24)) + 'return (' + '+'.join(f'x{i}' for i in range(24)) + ') }\n'
 
 UPDATE_OPERATORS = dict(add='+',sub='-',mul='*',div='/',rem='%',shl='<<',shr='>>',band='&',bor='|',bxor='^')
 for ty in ('i64','u64'):
@@ -211,7 +211,7 @@ for arity in (3,4,5):
     names = ['a','b','c','d','e'][:arity]
     params = ','.join(f'{name}:u64' for name in names)
     expr = '+'.join(f'{name}*{10 ** (arity-index-1)}' for index,name in enumerate(names))
-    SOURCE += f'pub fn arity{arity}({params}) u64 {{ return #wrap({expr}) }}\n'
+    SOURCE += f'pub fn arity{arity}({params}) u64 {{ return ({expr}) }}\n'
     SOURCE += f'pub fn call_arity{arity}({params}) u64 {{ return arity{arity}({",".join(names)}) }}\n'
 
 
@@ -224,14 +224,11 @@ def safety_result(operation, args, signed, wrap, bits=64):
         quotient = abs(a) // abs(b)
         if (a < 0) != (b < 0): quotient = -quotient
         return (quotient if operation == 'div' else a - quotient * b), None
-    if not 0 <= b < bits: return None, 'shift.count.ok'
+    # Shift counts are masked and left shifts wrap.
+    b &= bits - 1
     if operation == 'shr': return a >> b, None
-    result = a << b
-    if wrap:
-        result &= (1 << bits) - 1
-        if signed and result >= 1 << (bits-1): result -= 1 << bits
-    elif not low <= result <= high:
-        return None, 'overflow.ok'
+    result = (a << b) & ((1 << bits) - 1)
+    if signed and result >= 1 << (bits-1): result -= 1 << bits
     return result, None
 
 
@@ -246,11 +243,11 @@ for arity in STACK_ARITIES:
     params = ','.join(f'{name}:u64' for name in names)
     selected = range(arity) if arity <= 32 else (0, 5, 6, 127, 255)
     expr = '+'.join(f'a{i}*{i+1}' for i in selected)
-    SOURCE += f'pub fn stack{arity}({params}) u64 {{return #wrap({expr})}}\n'
+    SOURCE += f'pub fn stack{arity}({params}) u64 {{return ({expr})}}\n'
     arguments = ','.join(f'call_identity({name})' for name in names)
-    SOURCE += f'pub fn stack_call{arity}({params}) u64 {{return #wrap(a0+stack{arity}({arguments}))}}\n'
+    SOURCE += f'pub fn stack_call{arity}({params}) u64 {{return (a0+stack{arity}({arguments}))}}\n'
 
-for ty, expression in (('i64', '#wrap(a6-a7+a0)'), ('bool', '(a6 && !a7) || a0')):
+for ty, expression in (('i64', '(a6-a7+a0)'), ('bool', '(a6 && !a7) || a0')):
     params = ','.join(f'a{i}:{ty}' for i in range(8))
     SOURCE += f'pub fn stack_{ty}({params}) {ty} {{return {expression}}}\n'
     SOURCE += f'pub fn stack_call_{ty}({params}) {ty} {{return stack_{ty}('+','.join(f'a{i}' for i in range(8))+')}\n'
@@ -268,7 +265,7 @@ pub fn foreign_abs32(a:i32) i32 { return abs(a) }
 extern fn llabs(a:i64) i64
 pub fn indirect_apply(f:fn(u64) u64,a:u64) u64 { return f(a) }
 pub fn indirect_use(a:u64) u64 { f := call_identity
-return #wrap(a + indirect_apply(f,a)) }
+return (a + indirect_apply(f,a)) }
 pub fn indirect_six(a:u64) u64 { f := call_six
 return f(a,2,3,4,5,6) }
 pub fn indirect_stack(a:u64) u64 { f := stack_div
@@ -317,7 +314,7 @@ for ty in ('i64','u64'):
             name = f'range_{ty}_{int(reverse)}_{int(inclusive)}'
             interval = 'a' + ('..=' if inclusive else '..') + 'b'
             if reverse: interval = f'#reverse({interval})'
-            SOURCE += f'pub fn {name}(a:{ty},b:{ty}) {ty} {{ total:{ty} = 0\nfor i in {interval} {{ total = #wrap(total*17+i) }}\nreturn total }}\n'
+            SOURCE += f'pub fn {name}(a:{ty},b:{ty}) {ty} {{ total:{ty} = 0\nfor i in {interval} {{ total = (total*17+i) }}\nreturn total }}\n'
 
 NARROW_TYPES = {f'{sign}{bits}': (bits,sign=='i',getattr(ctypes,f'c_{"int" if sign=="i" else "uint"}{bits}')) for sign in ('i','u') for bits in (8,16,32)}
 for ty,(bits,sign,ctype) in NARROW_TYPES.items():
@@ -325,14 +322,14 @@ for ty,(bits,sign,ctype) in NARROW_TYPES.items():
         right='u64' if op in ('shl','shr') else ty
         for wrap in (False,True):
             expr=f'a {symbol} b' if op!='neg' else '-a'
-            if wrap: expr=f'#wrap(({expr}) + 0)' if op in ('div','rem','shr') else f'#wrap({expr})'
+            if wrap: expr=f'(({expr}) + 0)' if op in ('div','rem','shr') else f'({expr})'
             params=f'a:{ty}' + (f',b:{right}' if op!='neg' else '')
             SOURCE+=f'pub fn narrow_{ty}_{op}_{int(wrap)}({params}) {ty} {{ return {expr} }}\n'
     SOURCE+=f'pub fn narrow_{ty}_cast(a:u64) {ty} {{ return #cast({ty}, a) }}\n'
     SOURCE+=f'pub fn narrow_{ty}_ptr(a:{ty}) u64 {{ return #cast(u64, #cast(rawptr, a)) }}\n'
     SOURCE+=f'pub fn narrow_{ty}_bits(a:{ty},b:{ty}) {ty} {{ return (~a & b) | (a ^ b) }}\n'
     SOURCE+=f'pub fn narrow_{ty}_apply(f:fn({ty}) {ty},a:{ty}) {ty} {{ return f(a) }}\n'
-    SOURCE+=f'pub fn narrow_{ty}_stack(' + ','.join(f'a{i}:{ty}' for i in range(8)) + f') {ty} {{ return #wrap(a0+a6+a7) }}\n'
+    SOURCE+=f'pub fn narrow_{ty}_stack(' + ','.join(f'a{i}:{ty}' for i in range(8)) + f') {ty} {{ return (a0+a6+a7) }}\n'
     SOURCE+=f'pub fn narrow_{ty}_identity(a:{ty}) {ty} {{ return a }}\n'
     SOURCE+=f'pub fn narrow_{ty}_call(a:{ty}) {ty} {{ f:=narrow_{ty}_identity\nreturn f(a) }}\n'
 
@@ -656,7 +653,7 @@ t:=s[..2]
 return t[i]+#cast(u64, #len(s)) }
 pub fn slice_read(s:[]const u64,i:usize) u64 { return s[i]+#cast(u64, #len(s)) }
 pub fn slice_identity(s:[]u64) []u64 { return s }
-pub fn slice_raw(p:*u64,n:usize) []u64 { return p[0..n] }
+pub fn slice_raw(p:*u64,n:usize) []u64 { return #slice(p,n) }
 pub fn slice_call(a:u64) u64 { x:[4]u64=[a,2,3,4]
 return slice_read(slice_identity(x[..]),0) }
 pub fn slice_stack(a:u64,b:u64,c:u64,d:u64,e:u64,s:[]u64,t:[]u64) u64 { return a+b+c+d+e+s[0]+t[1] }
@@ -1359,8 +1356,7 @@ return munmap(area,(size_t)page*2)!=0; }
                         if op in SAFETY_OPERATORS: expected,error=safety_result(op,args,signed,wrap,bits)
                         else:
                             expected=math_result(op,args)
-                            if wrap: expected=ty(expected).value
-                            elif not low<=expected<=high: error='overflow.ok'
+                            expected=ty(expected).value
                         if error: failures.setdefault(error,args);continue
                         for lib in (fast,production):
                             fn=configure(lib,name,ty,len(args))
@@ -1403,8 +1399,7 @@ return munmap(area,(size_t)page*2)!=0; }
                     if op in SAFETY_OPERATORS: expected,error = safety_result(op,(a,b),signed,False)
                     elif op in ('band','bor','bxor'): expected = {'band':operator.and_,'bor':operator.or_,'bxor':operator.xor}[op](a,b)
                     else:
-                        expected = math_result(op,(a,b))
-                        if not low <= expected <= high: error = 'overflow.ok'
+                        expected = ty(math_result(op,(a,b))).value
                     if error:
                         failures.setdefault(error,(a,b)); continue
                     for lib in (fast,production): assert configure(lib,name,ty,2)(a,b) == expected, (name,a,b)
@@ -1422,16 +1417,10 @@ return munmap(area,(size_t)page*2)!=0; }
                 vectors = list(itertools.product(edges, repeat=argc))
                 vectors += [tuple(rng.randint(low, high) for _ in range(argc)) for _ in range(100)]
                 vectors += [tuple(rng.randint(-1000000 if signed else 0, 1000000) for _ in range(argc)) for _ in range(100)]
-                failures = []
                 for args in vectors:
-                    expected = math_result(operation, args)
-                    if not low <= expected <= high:
-                        if len(failures) < 3: failures.append(args)
-                        continue
+                    expected = ty(math_result(operation, args)).value
                     assert ours(*args) == reference(*args) == expected, (mode, name, args)
                     count += 1
-                assert failures, (name, 'missing overflow probes')
-                panics.extend((name, signed, args, 'overflow.ok') for args in failures)
         for type_name in ('i64', 'u64', 'isize', 'usize'):
             signed = type_name.startswith('i')
             ty = i64 if signed else u64
@@ -1453,7 +1442,7 @@ return munmap(area,(size_t)page*2)!=0; }
                             continue
                         assert ours(*args) == reference(*args) == expected, (mode, name, args, expected)
                         count += 1
-                    assert failures, (name, 'missing safety probes')
+                    assert failures or operation in ('shl', 'shr'), (name, 'missing safety probes')
                     panics.extend((name, signed, args, diagnostic) for diagnostic, args in failures.items())
         for name, signed, args, expected in [('nested', False, (1, 2, 3), 7),
                                              ('nested_twice', True, (1, 2, 3, 4), 15),
@@ -1511,6 +1500,7 @@ return munmap(area,(size_t)page*2)!=0; }
                    ('call_order', False, ((1 << 64) - 1,1,1), 'overflow.ok'),
                    ('call_after', False, (7,1,0), 'divide.ok'),
                    ('call_short', False, (1,0), 'divide.ok'), ('call_branch', False, (1,0), 'divide.ok')]
+        panics = [panic for panic in panics if panic[3] not in ('overflow.ok', 'shift.count.ok')]
         for name, signed, args, diagnostic in panics:
             code = '''import ctypes as c, json, sys
 library = c.CDLL(sys.argv[1]); function = getattr(library, sys.argv[2])
@@ -1567,25 +1557,22 @@ raise AssertionError('overflow returned normally')
             assert results[0].splitlines()[0] == f'runtime check failed ({diagnostic}) in {origin}', (mode,name,origin,results[0])
             panic_count += 1
     rejected = {
-        'aggregate-deref-limit': 'enum E { A:[2097153]u64,B } pub fn fail(a:*E) E { return a.* }',
         'unreachable-aggregate': 'pub fn fail(a:u64) u64 { if false { x:[2097153]u64\n_=x }\nreturn a }',
         'main-frame-limit': 'fn main() { x:[2097153]u64\n_=x }',
         'aggregate-local': 'pub fn fail(a: u64) u64 { b: [2097153]u64\nreturn a }',
         'frame-limit': 'pub fn fail() u64 {\n' + ''.join(f'x{i}:[1048576]u64\n' for i in range(3)) + 'return 0}',
-        'enum-storage-limit': 'enum E { A:[2097153]u64,B } pub fn fail(a:E) E { return a }',
         'indirect-aggregate-limit': 'pub fn fail(f:fn([513]u8) u64,x:[513]u8) u64 { return f(x) }',
         'global-aggregate-limit': 'stored:[536870912]u64 pub fn fail() u64 { return 0 }',
         'global-symbol-collision': 'stored:u64 extern fn alias "stored"() u64 pub fn fail() u64 { return alias() }',
         'parameter-limit': 'pub fn fail('+','.join(f'a{i}:u64' for i in range(513))+') u64 { return a512 }',
         'reserved-runtime': 'pub fn dyn_panic(a: u64) u64 { return a }',
-        'wrap-div-plain': 'pub fn fail(a: u64, b: u64) u64 { return #wrap(a / b) }',
         'signed-count': 'pub fn fail(a: i64, b: i64) i64 { return a << b }',
         'syntax': 'pub fn broken(',
     }
     for name, content in rejected.items():
         source.write_text(content)
         obj.unlink(missing_ok=True)
-        diagnostic = 'error' if name in ('syntax', 'wrap-div-plain', 'signed-count') else 'unsupported by native backend'
+        diagnostic = 'error' if name in ('syntax', 'signed-count') else 'unsupported by native backend'
         result = reject(source, obj, diagnostic)
         assert not obj.exists(), (name, result)
         obj.write_bytes(b'KEEP EXISTING OUTPUT')

@@ -12,7 +12,7 @@ DYN=Path(os.environ.get('DYN',ROOT/'build/dyn')).resolve()
 CC=shlex.split(os.environ.get('CC','cc'))
 SOURCE='''
 struct Pair { a:u64,b:u64 }
-enum Box { Empty, Value:Pair }
+struct Box { value:Pair }
 pub counter:u64
 fn next() u64 { counter+=1
 return counter }
@@ -21,7 +21,7 @@ pub first:u64=next()
 pub second:u64=next()
 pub items:[3]u64=[next(),next(),next()]
 pub pair:Pair=Pair{a:next(),b:next()}
-pub payload:Box=Box.Value(Pair{a:8,b:9})
+pub payload:Box=Box{value:Pair{a:8,b:9}}
 pub text:[]const u8="ok"
 pub callback:fn(u64) u64=plus
 extern foreign_value "backend_foreign_value":u64
@@ -37,7 +37,7 @@ pub fn constants() u64 {
 pub fn frozen_pointer() rawptr { return #cast(rawptr, &frozen) }
 pub fn state() u64 {
   total:=counter+first+second+items[0]+items[1]+items[2]+pair.a+pair.b+#cast(u64, #len(text))+callback(1)+foreign_value
-  case payload { Box.Value p=>{return total+p.a+p.b} _=>{return 0} }
+  return total+payload.value.a+payload.value.b
 }
 pub fn mutate(value:u64) u64 { pair.a=value
 items[1]=value
