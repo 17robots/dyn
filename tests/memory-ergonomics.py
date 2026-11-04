@@ -17,7 +17,7 @@ fn main() {
   size := mem.size_for(count, #sizeof(Item))
   expect(size.ok)
   allocation := mem.arena_push_array(created, count, #sizeof(Item), #alignof(Item))
-  items := (#cast(*Item, allocation))[..count]
+  items := #slice(#cast(*Item, allocation), count)
   for *item in items {
     expect(item.tag == 0 && item.value == 0)
     item.value = 42

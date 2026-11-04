@@ -380,6 +380,14 @@ static DynExprId compact_expr(CompactNode node, const DynSource *s, DynAstProgra
       if (!compact_null(compact_unwrap(low))) e.right = compact_expr(low, s, a, errors);
       if (!compact_null(compact_unwrap(high))) e.integer = compact_expr(high, s, a, errors);
     }
+  } else if (k == EXP_POINTER_OP) {
+    /* #slice(p, n) is a pointer slice; #offset(p, n) resolves in sema. */
+    e.kind = DYN_EXPR_SLICE;
+    e.boolean = true;
+    e.op = compact_flag(node, EXP_CONST) ? DYN_OP_ADD : DYN_OP_NONE;
+    e.left = compact_expr(compact_child(node, 0), s, a, errors);
+    e.right = DYN_NO_EXPR;
+    e.integer = compact_expr(compact_child(node, 1), s, a, errors);
   } else if (!(k != EXP_LEN)) {
     e.kind = DYN_EXPR_LEN;
     e.left = compact_expr(compact_child(node, 0), s, a, errors);

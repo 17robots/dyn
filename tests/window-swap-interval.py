@@ -71,7 +71,7 @@ fn sgi(interval:i32)i32 {calls+=1
  return mock_status}
 fn gl_proc(name:*const u8)rawptr {
  lookups+=1
- value:=name[..c.string_length(name,256)]
+ value:=#slice(name, c.string_length(name,256))
  if bytes.equal(value,"glXSwapIntervalEXT") && ext_present {return #cast(rawptr,ext)}
  if bytes.equal(value,"glXSwapIntervalMESA") && mesa_present {return #cast(rawptr,mesa)}
  if bytes.equal(value,"glXSwapIntervalSGI") && sgi_present {return #cast(rawptr,sgi)}

@@ -151,8 +151,8 @@ pub fn shape_run(arena: *mem.Arena, api: *const Api, font: rawptr, text: []const
     return ShapeResult{kind:errors.Kind.Overflow}
   }
   glyphs := mem.push_array(Glyph, arena, #cast(usize, count))
-  info_view := infos[..#cast(usize, count)]
-  position_view := positions[..#cast(usize, count)]
+  info_view := #slice(infos, #cast(usize, count))
+  position_view := #slice(positions, #cast(usize, count))
   for i in 0..#len(glyphs) {
     info := info_view[i]
     position := position_view[i]

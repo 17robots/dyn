@@ -165,7 +165,7 @@ pub fn selected_alpn(connection: Connection) []const u8 {
     return ""
   }
   bytes := #cast(*const u8, selected)
-  return bytes[..#cast(usize, length)]
+  return #slice(bytes, #cast(usize, length))
 }
 
 // Caller owns the returned reference and must call certificate_free_owned.

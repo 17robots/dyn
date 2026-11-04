@@ -138,13 +138,13 @@ fn capture_input_overlap(arena: *mem.Arena, path: []const u8, arguments: [][]con
     return true
   }
   if #len(arguments) > 0 {
-    slots := (#cast(*const u8, &arguments[0]))[..#len(arguments) * #sizeof([]const u8)]
+    slots := #slice(#cast(*const u8, &arguments[0]), #len(arguments) * #sizeof([]const u8))
     if mem.arena_overlaps_unallocated(arena, slots) {
       return true
     }
   }
   if #len(configuration.environment) > 0 {
-    slots := (#cast(*const u8, &configuration.environment[0]))[..#len(configuration.environment) * #sizeof([]const u8)]
+    slots := #slice(#cast(*const u8, &configuration.environment[0]), #len(configuration.environment) * #sizeof([]const u8))
     if mem.arena_overlaps_unallocated(arena, slots) {
       return true
     }
@@ -351,5 +351,5 @@ fn argument_slots(arena: *mem.Arena, count: usize) ArgumentsResult {
     return ArgumentsResult{ kind: error_kinds.Kind.Overflow }
   }
   allocation := mem.arena_push_uninit(arena, count * #sizeof([]const u8), #alignof([]const u8))
-  return ArgumentsResult{ value: (#cast(*[]const u8, allocation))[..count], ok: true }
+  return ArgumentsResult{ value: #slice(#cast(*[]const u8, allocation), count), ok: true }
 }

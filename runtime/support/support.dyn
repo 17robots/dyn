@@ -183,13 +183,13 @@ fn unwind_store_message(slot: *UnwindSlot, message: *const u8, length: u64) {
   }
   if copied > 4096 {
     copied = 4096 - #cast(u64, #len(truncated))
-    bytes := message[..#cast(usize, total)]
+    bytes := #slice(message, #cast(usize, total))
     for copied != 0 && (bytes[copied] & 0xc0) == 0x80 {
       copied -= 1
     }
   }
   if copied != 0 {
-    bytes := message[..#cast(usize, total)]
+    bytes := #slice(message, #cast(usize, total))
     for i in 0..copied {
       slot.storage[i] = bytes[i]
     }
@@ -264,7 +264,7 @@ pub fn dyn_check_failed(name: *const u8, packed_value: u64) {
   used = append_bytes(buffer, used, check_name(packed_value >> 24))
   used = append_bytes(buffer, used, ") in ")
   if length != 0 && length <= 800 {
-    used = append_bytes(buffer, used, name[..#cast(usize, length)])
+    used = append_bytes(buffer, used, #slice(name, #cast(usize, length)))
   }
   panic_raw(&storage[0], used)
 }

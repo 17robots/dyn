@@ -77,7 +77,7 @@ fn main() {
   mapped:=#syscall(9,0,12288,0,34,-1,0)
   expect(mapped>0)
   expect(#syscall(10,mapped+4096,4096,3)==0)
-  page:=(#cast(*u8,mapped+4096))[..4096]
+  page:=#slice(#cast(*u8,mapped+4096), 4096)
   for i in 0..4096 { page[i]=0 }
   for size in 0..129 {
     left:=page[..size]

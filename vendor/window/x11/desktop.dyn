@@ -148,7 +148,7 @@ fn styles_supported(method: rawptr) usize {
   // over-the-spot (the method draws it at the spot), then neither.
   wanted: [3]usize = [0x402, 0x404, 0x408]
   for choice in wanted {
-    listed := styles.styles[..#cast(usize, styles.count)]
+    listed := #slice(styles.styles, #cast(usize, styles.count))
     for i in 0..#len(listed) {
       if listed[i] == choice && found == 0 {
         found = choice
@@ -354,7 +354,7 @@ fn preedit_draw(context: rawptr, data: rawptr, call: *PreeditDraw) {
       desktop_loss(desktop)
     }
     if call.text.wide != 0 {
-      wide := #cast(*const u32, call.text.string)[..wanted]
+      wide := #slice(#cast(*const u32, call.text.string), wanted)
       for i in 0..wanted {
         if wide[i] == 0 || utf8.encoded_width(wide[i]) == 0 {
           desktop_loss(desktop)
@@ -373,7 +373,7 @@ fn preedit_draw(context: rawptr, data: rawptr, call: *PreeditDraw) {
       at: usize = 0
       for count < wanted && at < 4096 {
         point: u32 = 0
-        result := decode_multibyte(&point, &bytes[..4096][at], 1, &state)
+        result := decode_multibyte(&point, #offset(bytes, at), 1, &state)
         at += 1
         if result == #cast(usize, -2) {
           continue
@@ -874,7 +874,7 @@ fn clipboard_read(window: *Window, incremental: bool) {
     if desktop.incoming_arena == nil {
       desktop.incoming_arena = mem.arena_create_bounded(clipboard_limit + mem.ArenaHeader, clipboard_limit + mem.ArenaHeader)
     }
-    _ = mem.copy(mem.push_bytes_uninit(desktop.incoming_arena, count), data[..count])
+    _ = mem.copy(mem.push_bytes_uninit(desktop.incoming_arena, count), #slice(data, count))
   }
   if data != nil {
     _ = free(data)

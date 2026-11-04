@@ -49,7 +49,7 @@ pub fn error_name(code: usize, maximum: usize) []const u8 {
   if pointer == nil {
     return ""
   }
-  bytes := pointer[..maximum]
+  bytes := #slice(pointer, maximum)
   length: usize = 0
   for length < maximum && bytes[length] != 0 {
     length += 1

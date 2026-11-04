@@ -84,8 +84,8 @@ pub fn arguments(arena: *mem.Arena) Arguments {
     mem.arena_rewind(arena, mark)
     return Arguments{ error: error }
   }
-  raw := (#cast(**u8, pointers))[..count]
-  values := (#cast(*[]const u8, slices))[..count]
+  raw := #slice(#cast(**u8, pointers), count)
+  values := #slice(#cast(*[]const u8, slices), count)
   i: usize = 0
   for i < count {
     offset := #cast(usize, raw[i]) - #cast(usize, bytes)
@@ -93,7 +93,7 @@ pub fn arguments(arena: *mem.Arena) Arguments {
       mem.arena_rewind(arena, mark)
       return Arguments{ error: 28 }
     }
-    tail := raw[i][..size - offset]
+    tail := #slice(raw[i], size - offset)
     length: usize = 0
     for length < #len(tail) && tail[length] != 0 {
       length += 1

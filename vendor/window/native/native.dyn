@@ -177,7 +177,7 @@ pub fn box_input(window: *const Window) box.Input {
     copy: keys & 2048 != 0, cut: keys & 4096 != 0, paste: keys & 8192 != 0,
   }
   if value.paste && desktop.clipboard != nil {
-    value.clipboard = desktop.clipboard[..#cast(usize, desktop.clipboard_length)]
+    value.clipboard = #slice(desktop.clipboard, #cast(usize, desktop.clipboard_length))
   }
   value.composition_cursor = -1
   if window.composition.active != 0 && window.composition.text_length <= 256 {
@@ -241,7 +241,7 @@ pub fn clipboard(window: *const Window) []const u8 {
   if text == nil {
     return ""
   }
-  return text[..#cast(usize, length)]
+  return #slice(text, #cast(usize, length))
 }
 
 pub type Surrounding = surrounding_edit.Context

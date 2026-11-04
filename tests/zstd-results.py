@@ -142,7 +142,7 @@ fn main() {
  concatenated := fs.read_all(arena, "DIRECTORY/concatenated", 4000000)
  unknown := fs.read_all(arena, "DIRECTORY/unknown", 2000000)
  if !raw.ok || !encoded.ok || !concatenated.ok || !unknown.ok { #panic("fixtures") }
- workspace := mem.arena_push_uninit(arena, z.decoder_workspace_size(21), 8)[..z.decoder_workspace_size(21)]
+ workspace := #slice(mem.arena_push_uninit(arena, z.decoder_workspace_size(21), 8), z.decoder_workspace_size(21))
  results(arena, encoded.value, unknown.value, workspace)
  verify(raw.value, unknown.value, workspace, 13, 21, false, 1)
  verify(raw.value, encoded.value, workspace, 1, 21, false, 1)

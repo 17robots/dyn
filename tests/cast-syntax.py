@@ -22,7 +22,7 @@ fn main() {
   if #cast(Op, #cast(u8, 2)) != Op.Write { #panic("enum") }
   storage: [2]i32 = [4, 5]
   memory: rawptr = &storage[0]
-  if #cast(*i32, memory)[..2][1] != 5 { #panic("postfix slice") }
+  if #slice(#cast(*i32, memory), 2)[1] != 5 { #panic("postfix slice") }
   item := Item{value: 9}
   erased: rawptr = &item
   if #cast(*Item, erased).value != 9 { #panic("postfix field") }

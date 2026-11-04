@@ -21,7 +21,7 @@ pub fn grayscale(data: *u8, count: usize) {
   if count > 16384 {
     #panic("image exceeds demo capacity")
   }
-  pixels := data[..count * 4]
+  pixels := #slice(data, count * 4)
   i: usize = 0
   for i < #len(pixels) {
     light := (#cast(u32, pixels[i]) * 77 + #cast(u32, pixels[i + 1]) * 150 + #cast(u32, pixels[i + 2]) * 29) >> 8

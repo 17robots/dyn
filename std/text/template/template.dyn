@@ -59,7 +59,7 @@ pub fn parse(arena: *memory.Arena, source: []const u8) ParseResult {
   }
   retained: []u8
   if #len(source) > 0 {
-    retained = memory.arena_push(arena, #len(source), 1)[..#len(source)]
+    retained = #slice(memory.arena_push(arena, #len(source), 1), #len(source))
     for i in 0..#len(source) {
       retained[i] = source[i]
     }

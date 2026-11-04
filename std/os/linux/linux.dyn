@@ -13,7 +13,7 @@ fn result(value: isize) Result {
 
 fn no_arguments() [][]const u8 {
   pointer: *[]const u8 = nil
-  return pointer[..0]
+  return #slice(pointer, 0)
 }
 
 // Linux exposes argv as NUL-separated bytes through procfs. Returned slices live
@@ -51,9 +51,9 @@ pub fn process_arguments(arena: *memory.Arena) [][]const u8 {
 
   bytes_allocation := memory.arena_push_uninit(arena, used, 1)
   slots_allocation := memory.arena_push_uninit(arena, count * #sizeof([]const u8), #alignof([]const u8))
-  bytes := bytes_allocation[..used]
+  bytes := #slice(bytes_allocation, used)
   _ = memory.copy(bytes, temporary[..used])
-  arguments := (#cast(*[]const u8, slots_allocation))[..count]
+  arguments := #slice(#cast(*[]const u8, slots_allocation), count)
   start: usize = 0
   at: usize = 0
   i = 0
@@ -121,7 +121,7 @@ pub fn fork_process() Result {
 fn terminate(arena: *memory.Arena, text: []const u8) *u8 {
   allocation := memory.arena_push_uninit(arena, #len(text) + 1, 1)
   raw := allocation
-  bytes := raw[..#len(text) + 1]
+  bytes := #slice(raw, #len(text) + 1)
   for i in 0..#len(text) {
     bytes[i] = text[i]
   }
@@ -154,7 +154,7 @@ pub fn execute(arena: *memory.Arena, path: []const u8, arguments: [][]const u8) 
   length := #len(arguments)
   slots := memory.arena_push_uninit(arena, (length + 1) * #sizeof(CStringPointer), #alignof(CStringPointer))
   raw := #cast(*CStringPointer, slots)
-  pointers := raw[..length + 1]
+  pointers := #slice(raw, length + 1)
   for i in 0..length {
     pointers[i] = CStringPointer{ value: terminate(arena, arguments[i]) }
     if pointers[i].value == nil {
@@ -209,7 +209,7 @@ pub fn spawn_environment(
   count := #len(arguments)
   allocation := memory.arena_push_uninit(arena, (count + 1) * #sizeof(CStringPointer), #alignof(CStringPointer))
   raw := #cast(*CStringPointer, allocation)
-  pointers := raw[..count + 1]
+  pointers := #slice(raw, count + 1)
   for index in 0..count {
     pointers[index].value = terminate(arena, arguments[index])
     if pointers[index].value == nil {
@@ -219,7 +219,7 @@ pub fn spawn_environment(
   pointers[count].value = nil
   env_allocation := memory.arena_push_uninit(arena, (#len(environment) + 1) * #sizeof(CStringPointer), #alignof(CStringPointer))
   environment_raw := #cast(*CStringPointer, env_allocation)
-  environment_pointers := environment_raw[..#len(environment) + 1]
+  environment_pointers := #slice(environment_raw, #len(environment) + 1)
   env_index: usize = 0
   for env_index < #len(environment) {
     for env_byte in environment[env_index] {

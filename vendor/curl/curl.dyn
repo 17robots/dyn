@@ -29,7 +29,7 @@ fn receive(data: *const u8, size: usize, count: usize, context: rawptr) usize {
     if data == nil {
       return 0
     }
-    _ = mem.copy(sink.destination[sink.used..], data[..length])
+    _ = mem.copy(sink.destination[sink.used..], #slice(data, length))
     sink.used += length
   }
   return length

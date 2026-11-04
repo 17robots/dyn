@@ -198,5 +198,5 @@ pub fn column(statement: *const Statement, index: i32) Column {
   if length == 0 {
     return Column{ kind: result_kind, bytes: "", ok: true }
   }
-  return Column{ kind: result_kind, bytes: pointer[..#cast(usize, length)], ok: true }
+  return Column{ kind: result_kind, bytes: #slice(pointer, #cast(usize, length)), ok: true }
 }

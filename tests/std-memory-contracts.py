@@ -97,14 +97,14 @@ fn main() {
   expect(list.free_pop(&first_free, &nil_slot) == one && first_free == nil)
 
   growing := mem.arena_create_bounded(256, mem.KiB)
-  initial := mem.arena_push(growing, 32, 1)[..32]
+  initial := #slice(mem.arena_push(growing, 32, 1), 32)
   expect(initial[0] == 0 && initial[31] == 0)
   for i in 0..#len(initial) { initial[i] = 165 }
   mem.arena_reset(growing)
-  reused := mem.arena_push_uninit(growing, 32, 1)[..32]
+  reused := #slice(mem.arena_push_uninit(growing, 32, 1), 32)
   expect(reused[0] == 165 && reused[31] == 165)
   mem.arena_reset(growing)
-  cleared := mem.arena_push(growing, 32, 1)[..32]
+  cleared := #slice(mem.arena_push(growing, 32, 1), 32)
   expect(cleared[0] == 0 && cleared[31] == 0)
   expect(mem.arena_snapshot(growing).blocks == 1)
   mem.arena_release(growing)

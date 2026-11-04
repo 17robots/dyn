@@ -42,7 +42,7 @@ pub fn count_union(source:[]const u8, initial:u64) u64 {
  return count
 }
 pub fn count_rounds(p:*const u8,n:usize,rounds:usize) u64 {
- source:=p[..n]
+ source:=#slice(p, n)
  count:u64=0
  for round in 0..rounds {
   for i in 0..n { b:=source[i]
@@ -141,7 +141,7 @@ pub fn rejected_cleanup(source:[]const u8) u64 {
  return count
 }
 pub fn rejected_mutated_stop(p:*const u8,n:usize,rounds:usize) u64 {
- source:=p[..n]
+ source:=#slice(p, n)
  stop:=n
  count:u64=0
  for round in 0..rounds {
@@ -151,11 +151,11 @@ pub fn rejected_mutated_stop(p:*const u8,n:usize,rounds:usize) u64 {
  return count
 }
 pub fn rejected_mutated_source(p:*const u8,n:usize,rounds:usize) u64 {
- source:=p[..n]
+ source:=#slice(p, n)
  count:u64=0
  for round in 0..rounds {
   for i in 0..n { if source[i]==34 { count+=1 } }
-  source=p[..n]
+  source=#slice(p, n)
  }
  return count
 }
@@ -282,7 +282,7 @@ fn main() { if oracle()!=0 { #panic("byte count oracle") } }
     budget_project.mkdir()
     (budget_project / 'main.dyn').write_text('''extern fn effect(value:u8) bool
 pub fn rejected_proof_budget(p:*const u8,n:usize,rounds:usize) u64 {
- source:=p[..n]
+ source:=#slice(p, n)
  count:u64=0
  for round in 0..rounds {
   for i in 0..n { if source[i]==34 { count+=1 } }

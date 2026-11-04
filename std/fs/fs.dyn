@@ -188,7 +188,7 @@ pub fn map(file: *const File) Mapping {
     return Mapping{ error: address, kind: native_kind(address) }
   }
   bytes := #cast(*const u8, #cast(usize, address))
-  return Mapping{ value: bytes[..size], ok: true }
+  return Mapping{ value: #slice(bytes, size), ok: true }
 }
 
 // Releases a mapping and clears it. Unmapping a zero Mapping succeeds.
@@ -283,7 +283,7 @@ pub fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) ReadAllR
         break
       }
       if total != 0 && memory.arena_try_extend(arena, &output[0], total, wanted - total) {
-        output = (&output[0])[..wanted]
+        output = #slice(&output[0], wanted)
       } else {
         if wanted > available && arena.limit != 0 {
           // A geometric reservation is only a preference. Use the last
@@ -315,7 +315,7 @@ pub fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) ReadAllR
           }
           pointer = allocation.memory
         }
-        next := pointer[..wanted]
+        next := #slice(pointer, wanted)
         _ = memory.copy(next, output[..total])
         output = next
         output_mark = memory.arena_mark(arena) - wanted

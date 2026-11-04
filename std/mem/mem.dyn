@@ -478,7 +478,7 @@ fn arena_try_push_impl(arena: *Arena, size: usize, alignment: usize, zero_memory
         }
         arena_event(arena, observe.Kind.Allocated, size)
         if zero_memory {
-          zero_bytes_fast(memory[..size])
+          zero_bytes_fast(#slice(memory, size))
         }
         return Allocation{ memory: memory, size: size, ok: true }
       }
@@ -584,7 +584,7 @@ pub fn push_array($T: type, arena: *Arena, count: usize) []T {
   if !size.ok {
     #panic("arena size overflow")
   }
-  return (#cast(*T, arena_push(arena, size.bytes, #alignof(T))))[..count]
+  return #slice(#cast(*T, arena_push(arena, size.bytes, #alignof(T))), count)
 }
 
 // Pushes one zeroed T, or returns nil when the arena is exhausted. Never panics
@@ -609,7 +609,7 @@ pub fn try_push_array($T: type, arena: *Arena, count: usize) []T {
   if !allocation.ok {
     return empty
   }
-  return (#cast(*T, allocation.memory))[..count]
+  return #slice(#cast(*T, allocation.memory), count)
 }
 
 // Appends value to items, a slice that owns the rest of arena: its elements
@@ -630,7 +630,7 @@ pub fn append(arena: *Arena, items: *[]$T, value: T) *T {
     _ = copy(moved, items.*)
     items.* = moved
   } else {
-    items.* = (&items.*[0])[..count + 1]
+    items.* = #slice(&items.*[0], count + 1)
   }
   slot := &items.*[count]
   slot.* = value
@@ -652,7 +652,7 @@ pub fn append_many(arena: *Arena, items: *[]$T, values: []const T) {
     _ = copy(moved, items.*)
     items.* = moved
   } else {
-    items.* = (&items.*[0])[..count + extra]
+    items.* = #slice(&items.*[0], count + extra)
   }
   for i in 0..extra {
     items.*[count + i] = values[i]
@@ -700,7 +700,7 @@ pub fn push_bytes_uninit(arena: *Arena, count: usize) []u8 {
     empty: []u8
     return empty
   }
-  return arena_push_uninit(arena, count, 1)[..count]
+  return #slice(arena_push_uninit(arena, count, 1), count)
 }
 
 fn arena_must(allocation: Allocation) *u8 {
@@ -714,7 +714,7 @@ fn arena_must(allocation: Allocation) *u8 {
 // Rewind/reset of parent invalidates the child and everything pushed into it.
 // Panics when the parent is exhausted or capacity cannot hold the header.
 pub fn arena_sub(parent: *Arena, capacity: usize) *Arena {
-  return arena_from_buffer((#cast(*u8, arena_push_uninit(parent, capacity, 16)))[..capacity])
+  return arena_from_buffer(#slice(#cast(*u8, arena_push_uninit(parent, capacity, 16)), capacity))
 }
 
 pub struct Scratch {
@@ -867,7 +867,7 @@ pub fn zero(items: []$T) {
 // Zeroes the value behind a pointer byte by byte, without a temporary copy,
 // so it is safe for structs too large for the stack.
 pub fn clear(value: *$T) {
-  zero((#cast(*u8, value))[..#sizeof(T)])
+  zero(#slice(#cast(*u8, value), #sizeof(T)))
 }
 
 pub fn fill(items: []$T, value: T) {

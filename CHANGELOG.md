@@ -30,6 +30,8 @@ servers so they pick up the new `dyn`.
   `#wrap` is removed. Shift counts are masked. `#cast` to an enum no longer checks
   the value; an exhaustive `case` still panics on a bad tag. Division checks stay.
   Use `math.add_overflows` and friends where overflow matters.
+- Breaking: `pointer[..count]` is replaced by `#slice(pointer, count)`.
+- New: `#offset(pointer, count)` and pointer ordering, for walking memory.
 - `ui.Style` no longer has built-in colors. Write
   `ui.Context{ style: ui.default_style }`; a zero style draws nothing.
 - Zero is now the safe state for handles. `fs.File`, `net.Connection`,

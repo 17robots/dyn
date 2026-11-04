@@ -42,11 +42,11 @@ pub fn reserve(state: *Builder, arena: *memory.Arena, capacity: usize) ErrorKind
   }
   if #len(state.storage) > 0 && memory.arena_try_extend(arena, &state.storage[0],
     #len(state.storage), capacity - #len(state.storage)) {
-    state.storage = (&state.storage[0])[..capacity]
+    state.storage = #slice(&state.storage[0], capacity)
     return ErrorKind.None
   }
   allocated := memory.arena_push_uninit(arena, capacity, 1)
-  storage := allocated[..capacity]
+  storage := #slice(allocated, capacity)
   _ = memory.move(storage, state.storage[..state.length])
   state.storage = storage
   return ErrorKind.None

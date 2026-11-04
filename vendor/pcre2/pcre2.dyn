@@ -55,7 +55,7 @@ pub fn capture(data: MatchData, index: u32) Span {
     return Span{}
   }
   offsets := native_offsets(data)
-  pair := offsets[..#cast(usize, native_count(data)) * 2]
+  pair := #slice(offsets, #cast(usize, native_count(data)) * 2)
   start := pair[#cast(usize, index) * 2]
   end := pair[#cast(usize, index) * 2 + 1]
   return Span{ start: start, end: end, set: start != #cast(usize, -1) && end != #cast(usize, -1) }

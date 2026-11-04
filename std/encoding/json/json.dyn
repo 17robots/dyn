@@ -496,7 +496,7 @@ fn decoded_string(arena: *memory.Arena, cursor: *Cursor) []const u8 {
   }
   mark := memory.arena_mark(arena)
   allocation := memory.arena_push_uninit(arena, end - start, 1)
-  output := allocation[..end - start]
+  output := #slice(allocation, end - start)
   if !has_escape {
     _ = memory.copy(output, source[start..end])
     cursor.at = end + 1

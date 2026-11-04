@@ -73,7 +73,7 @@ fn handle_add(response: *http.Response, request: *const http.Request) http.Resul
   digits: [21 + mem.ArenaBufferOverhead]u8
   scratch := mem.arena_from_buffer(digits[..])
   number := fmt.u64_decimal(scratch, #cast(u64, count))
-  payload := (#cast(*u8, &number[0]))[..#len(number) + 1]
+  payload := #slice(#cast(*u8, &number[0]), #len(number) + 1)
   payload[#len(number)] = '\n'
   return text(response, http.StatusOk, payload)
 }

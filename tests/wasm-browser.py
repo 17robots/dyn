@@ -34,7 +34,7 @@ pub fn big(a: i64) i64 { return a + 1 }
 pub fn alloc(n: usize) rawptr { return #cast(rawptr, mem.arena_try_push(arena, n, 4).memory) }
 pub fn reset() { mem.arena_reset(arena) }
 pub fn total(data: *u32, n: usize) u32 {
-  values := data[..n]
+  values := #slice(data, n)
   result: u32 = 0
   for value in values { result += value }
   return result

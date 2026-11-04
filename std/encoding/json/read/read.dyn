@@ -43,13 +43,13 @@ fn read_append(state: *ReadParser, kind: u8, bits: u64) usize {
       #panic("JSON compact node bound")
     }
     if memory.arena_try_extend(state.arena, #cast(*u8, &state.values[0]), old * 16, (capacity - old) * 16) {
-      state.values = (&state.values[0])[..capacity]
+      state.values = #slice(&state.values[0], capacity)
     }
     else {
       // Parsing retains indexes, not node pointers. Moving the complete tape
       // preserves relative subtree spans; string pointers refer to stable buffer.
       storage := memory.arena_push_uninit(state.arena, capacity * 16, 8)
-      replacement := #cast(*Value, storage)[..capacity]
+      replacement := #slice(#cast(*Value, storage), capacity)
       _ = memory.copy(replacement[..state.used], state.values[..state.used])
       state.values = replacement
     }
@@ -301,7 +301,7 @@ pub fn parse(arena: *memory.Arena, source: []const u8) ParseResult {
     return ParseResult{ root: &nil_value, kind: errors.Kind.InvalidInput, detail: ErrorKind.Overlap }
   }
   copy := memory.arena_push_uninit(arena, #len(source), 1)
-  buffer := copy[..#len(source)]
+  buffer := #slice(copy, #len(source))
   _ = memory.copy(buffer, source)
   capacity := #len(source) / 2 + 1
   if capacity > 32 {
@@ -313,7 +313,7 @@ pub fn parse(arena: *memory.Arena, source: []const u8) ParseResult {
     capacity = 1
   }
   storage := memory.arena_push_uninit(arena, capacity * 16, 8)
-  values := #cast(*Value, storage)[..capacity]
+  values := #slice(#cast(*Value, storage), capacity)
   state := ReadParser{ cursor: probe, buffer: buffer, values: values, limit: limit, arena: arena }
   ok := read_value(&state, 0)
   read_skip(&state.cursor)
@@ -362,7 +362,7 @@ pub fn as_text(value: *const Value) []const u8 {
   if length == 0 {
     return ""
   }
-  return #cast(*const u8, #cast(usize, value.bits))[..length]
+  return #slice(#cast(*const u8, #cast(usize, value.bits)), length)
 }
 pub fn as_f64(value: *const Value) f64 {
   if value == nil || (value.tag & 255) != #cast(u64, KindNumber) {
@@ -400,7 +400,7 @@ pub fn get(object: *const Value, key: []const u8) *const Value {
       if length == 0 {
         return value
       }
-      name := #cast(*const u8, #cast(usize, at.bits))[..length]
+      name := #slice(#cast(*const u8, #cast(usize, at.bits)), length)
       if text.equal(name, key) {
         return value
       }

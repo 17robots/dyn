@@ -54,7 +54,7 @@ SOURCE = '''use "std/unicode/utf8" utf8
 use "std/io" io
 extern fn exercise(check:fn(*const u8,usize) i32) i32
 fn check(data:*const u8,length:usize) i32 {
-  if utf8.valid(data[..length]) { return 1 }
+  if utf8.valid(#slice(data, length)) { return 1 }
   return 0
 }
 fn main() {

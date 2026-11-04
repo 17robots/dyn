@@ -14,7 +14,7 @@ fn main() {
   first := memory.arena_try_push(arena, 13, 8)
   if !first.ok || first.size != 13 { #panic("arena allocation failed") }
   if (#cast(usize, first.memory) & 7) != 0 { #panic("arena alignment failed") }
-  first_bytes := first.memory[..first.size]
+  first_bytes := #slice(first.memory, first.size)
   i: usize = 0
   for i < first.size {
     if first_bytes[i] != 0 { #panic("arena allocation was not zeroed") }

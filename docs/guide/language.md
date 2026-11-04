@@ -182,8 +182,9 @@ Enums remain single-choice values.
 
 Pointers are thin and zero-initialize to `nil`. `&value` requires assignable storage; `pointer.*`
 dereferences it. Struct fields automatically dereference struct pointers. Dereference checks nil
-and pointee alignment, then panics on failure. Pointer arithmetic and ordering are forbidden;
-equality with compatible pointers or `nil` is allowed. Mutable pointers implicitly widen to
+and pointee alignment, then panics on failure. Pointers support equality with compatible pointers or `nil`, and ordering with `<`, `<=`, `>` and
+`>=`. `#offset(pointer, count)` moves a pointer by whole elements, and a negative count moves back.
+A pointer from `#offset` has no bounds check; its dereference keeps the nil and alignment checks. Mutable pointers implicitly widen to
 `*const T`, never back to mutable. Shallow const forbids replacing fields through the const pointer,
 while a mutable pointer stored in such a field still permits mutation of its own pointee:
 
@@ -200,14 +201,13 @@ A mutable `*T` converts to `rawptr` implicitly, as C's `void *` does: `free(task
 The reverse, `rawptr` to `*T`, always requires `#cast`. `*const T` does not convert implicitly.
 
 Pointers are thin. Dereference checks nil and alignment, but not lifetime or allocation
-bounds. Pointer comparisons support only equality. Thin pointers cannot be indexed as single values,
-but `pointer[start..end]` constructs a slice and requires an explicit end bound. Slices are `{data, len}` descriptors and are
+bounds. Thin pointers cannot be indexed or sliced with `[..]`. `#slice(pointer, count)` makes a slice
+from a pointer and a length the compiler cannot verify, so a wrong count reads out of bounds. Slices are `{data, len}` descriptors and are
 never comparable. Fixed arrays copy by value; omitted literal elements zero-fill, including typed
 `[]`. Array/slice indexing is bounds-checked. Indexes and slice bounds accept any integer type no wider than `usize`, as in C; a negative signed value fails the bounds check like any other out-of-range index. Use `#cast` for wider types, such as `i64` on 32-bit targets. Exclusive ranges support `[..]`, `[..end]`,
 `[start..]`, and `[start..end]`, checking `start <= end <= len`. `#len` returns `usize`.
 `rawptr` has no direct indexing or slicing. Cast it explicitly to `*T`, then use
-the ordinary bounded pointer-slice form: `(#cast(*T, memory))[..count]`. No second
-raw-pointer range construct is planned.
+`#slice`: `#slice(#cast(*T, memory), count)`.
 `rawptr` has native pointer size/alignment, zero-initializes to `nil`, and supports equality and
 an implicit conversion from mutable typed pointers, and explicit casts to/from compatible typed
 pointers or native-width integers. It has no pointee,
@@ -299,7 +299,7 @@ collections, and ordinary algorithms belong in libraries.
 
 - Conversion: `#cast(Type, value)` and `#bitcast(Type, value)`.
 - Layout and reflection: `#sizeof`, `#alignof`, `#offsetof`, and `#typeof`.
-- Representation: `#len`.
+- Representation and pointers: `#len`, `#slice` and `#offset`.
 - Validation and termination: compile-time `#assert` and runtime `#panic`.
 - Build input and OS boundary: `#load` and `#syscall`.
 - Iteration: `#reverse`, valid only in a `for` iterable.
@@ -309,7 +309,7 @@ Conversions require exactly two arguments, with the type first. The value may be
 any expression and is evaluated exactly once. The closing parenthesis delimits
 that expression: `#cast(i64, a + b)` converts the sum, while
 `#cast(i64, a) + b` converts only `a`. Cast results accept ordinary postfix
-operations, such as `#cast(*T, memory)[..count]`. The old `#cast(T) value` and
+operations, such as `#cast(*T, memory).field`. The old `#cast(T) value` and
 `#bitcast(T) value` forms are rejected; see the
 [migration guide](../migrations/cast-syntax.md).
 

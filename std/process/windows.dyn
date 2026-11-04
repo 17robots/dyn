@@ -61,7 +61,7 @@ fn wide(arena: *mem.Arena, source: []const u8) Wide {
     return Wide{}
   }
   allocation := mem.arena_push_uninit(arena, (#len(source)+1)*2, 2)
-  destination := (#cast(*u16, allocation))[..#len(source)+1]
+  destination := #slice(#cast(*u16, allocation), #len(source)+1)
   length := encode_wide(destination, source)
   if length == 0 {
     return Wide{}
@@ -91,7 +91,7 @@ fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, co
     capacity += #len(argument)*2+3
   }
   allocation := mem.arena_push_uninit(arena, capacity*2, 2)
-  command := (#cast(*u16, allocation))[..capacity]
+  command := #slice(#cast(*u16, allocation), capacity)
   used: usize = 0
   argument_index: usize = 0
   for argument_text in arguments {
@@ -153,11 +153,11 @@ fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, co
     environment_capacity += #len(item)+1
   }
   environment_allocation := mem.arena_push(arena, environment_capacity*2, 2)
-  environment := (#cast(*u16, environment_allocation))[..environment_capacity]
+  environment := #slice(#cast(*u16, environment_allocation), environment_capacity)
   environment_used: usize = 0
   // Keep a valid backing pointer even for the supported empty environment.
   entries_allocation := mem.arena_push(arena, (#len(configuration.environment)+1)*#sizeof(Wide), #alignof(Wide))
-  entries := (#cast(*Wide, entries_allocation))[..#len(configuration.environment)]
+  entries := #slice(#cast(*Wide, entries_allocation), #len(configuration.environment))
   entry_index: usize = 0
   for entry in configuration.environment {
     converted := wide(arena, entry)

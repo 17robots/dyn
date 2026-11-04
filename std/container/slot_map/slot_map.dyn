@@ -15,7 +15,7 @@ pub struct Handle { index: u32, generation: u32 }
 // marks the slot live.
 pub fn reset(node: *$T) {
   generation := node.generation
-  bytes := (#cast(*u8, node))[..#sizeof(T)]
+  bytes := #slice(#cast(*u8, node), #sizeof(T))
   for i in 0..#len(bytes) {
     bytes[i] = 0
   }

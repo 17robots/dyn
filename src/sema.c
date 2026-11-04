@@ -1773,14 +1773,46 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
                  "slicing requires array, slice, or pointer range");
       return a->expressions[id].type = DYN_TYPE_ERROR;
     }
-    if (pointer && a->expressions[id].integer == DYN_NO_EXPR) {
+    if (pointer && !a->expressions[id].boolean) {
       error_span(a->expressions[id].span, s, errors,
-                 "pointer slicing requires explicit end bound");
+                 "slice a pointer with #slice(pointer, count)");
+      return a->expressions[id].type = DYN_TYPE_ERROR;
+    }
+    if (!pointer && a->expressions[id].boolean) {
+      error_span(a->expressions[id].span, s, errors, "#slice and #offset require a pointer");
       return a->expressions[id].type = DYN_TYPE_ERROR;
     }
     if (pointer && !sema_type_layout(sema, a, pointer->pointee, false)) {
       error_span(a->expressions[id].span, s, errors, "cannot slice pointer to unsized type");
       return a->expressions[id].type = DYN_TYPE_ERROR;
+    }
+    if (a->expressions[id].boolean && a->expressions[id].op == DYN_OP_ADD) {
+      /* #offset(p, n) is p plus n elements, built from ordinary wrapping
+         address arithmetic so every backend lowers it the same way. */
+      DynType count_type = check_expr(sema, a, (DynExprId)a->expressions[id].integer, s, errors, DYN_TYPE_ISIZE);
+      if (!integer(sema, count_type)) {
+        error_span(a->expressions[id].span, s, errors, "#offset count requires an integer");
+        return a->expressions[id].type = DYN_TYPE_ERROR;
+      }
+      uint64_t stride = sema_type_layout(sema, a, pointer->pointee, false);
+      DynExprId address = convert_expr(a, a->expressions[id].left, DYN_TYPE_USIZE);
+      DynExprId count = convert_expr(a, (DynExprId)a->expressions[id].integer, DYN_TYPE_USIZE);
+      DynExprId size = reflection_expr(a, DYN_EXPR_INT, DYN_TYPE_USIZE, stride);
+      DynExprId bytes = reflection_expr(a, DYN_EXPR_BINARY, DYN_TYPE_USIZE, 0);
+      DynExprId sum = reflection_expr(a, DYN_EXPR_BINARY, DYN_TYPE_USIZE, 0);
+      if (address == DYN_NO_EXPR || count == DYN_NO_EXPR || sum == DYN_NO_EXPR)
+        return a->expressions[id].type = DYN_TYPE_ERROR;
+      a->expressions[bytes].op = DYN_OP_MUL;
+      a->expressions[bytes].left = count;
+      a->expressions[bytes].right = size;
+      a->expressions[sum].op = DYN_OP_ADD;
+      a->expressions[sum].left = address;
+      a->expressions[sum].right = bytes;
+      a->expressions[id].kind = DYN_EXPR_CONVERT;
+      a->expressions[id].left = sum;
+      a->expressions[id].op = DYN_OP_NONE;
+      a->expressions[id].boolean = false;
+      return a->expressions[id].type = base;
     }
     DynType element = ar ? ar->element : sl ? sl->element : pointer->pointee;
     bool element_const = sl ? sl->is_const : pointer && pointer->is_const;
@@ -2334,7 +2366,7 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
     return a->expressions[id].type = DYN_TYPE_ERROR;
   if (left != right && dyn_type_is_pointer(left) &&
       dyn_type_is_pointer(right) &&
-      (a->expressions[id].op == DYN_OP_EQ || a->expressions[id].op == DYN_OP_NE)) {
+      a->expressions[id].op >= DYN_OP_EQ && a->expressions[id].op <= DYN_OP_GE) {
     if (can_convert(sema, a, left, right)) {
       DynExprId converted = convert_expr(a, a->expressions[id].left, right);
       a->expressions[id].left = converted;
@@ -2368,11 +2400,9 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
       error_span(a->expressions[id].span, s, errors, "aggregate values are not comparable");
       return a->expressions[id].type = DYN_TYPE_ERROR;
     }
-    if ((dyn_type_is_pointer(left) || dyn_type_is_enum(left)) &&
+    if (dyn_type_is_enum(left) &&
         a->expressions[id].op != DYN_OP_EQ && a->expressions[id].op != DYN_OP_NE) {
-      error_span(a->expressions[id].span, s, errors,
-                 dyn_type_is_enum(left) ? "enums support equality only"
-                                        : "pointers support equality only");
+      error_span(a->expressions[id].span, s, errors, "enums support equality only");
       return a->expressions[id].type = DYN_TYPE_ERROR;
     }
     /* x < 0 and x >= 0 on an unsigned x are constant: almost always a

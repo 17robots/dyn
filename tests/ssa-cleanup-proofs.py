@@ -33,7 +33,7 @@ pub fn wrapped_compare() usize {
  defer cleanup()
  value:u64=7
  delta:=opaque((0-#cast(usize,&value)))
- view:=(#cast(*u8,&value))[..opaque(~#cast(usize,0))]
+ view:=#slice(#cast(*u8,&value), opaque(~#cast(usize,0)))
  pointer:=&view[delta]
  // Compare the forged address only; never dereference it.
  if pointer==nil { return opaque(11) }
