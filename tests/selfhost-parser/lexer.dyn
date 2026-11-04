@@ -6,7 +6,7 @@ use "std/mem"
 const None: u32 = 0xFFFFFFFF
 const MaxDepth: u32 = 1024
 
-enum(u8) TokenKind { End = 0, Name, Number, Text, Character, Punct, Bad }
+enum(u8) TokenKind { End, Name, Number, Text, Character, Punct, Bad }
 
 struct Token {
   start: u32,
@@ -14,7 +14,7 @@ struct Token {
   kind: TokenKind,
 }
 
-enum(u8) ErrorKind { Ok = 0, Syntax, Allocation, Limit }
+enum(u8) ErrorKind { Ok, Syntax, Allocation, Limit }
 
 struct Node {
   start: u32,

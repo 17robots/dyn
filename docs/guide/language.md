@@ -166,22 +166,15 @@ functions must return on every reachable exit. Calling a non-void function as a 
 error; use `_ = call()` to discard its result. Forward calls and direct recursion are supported.
 
 Enums are nominal. Tags default to `u32` or use an explicit integer backing type, as in
-`enum(u8) Op`. Variants receive declaration-order tags starting at 0. A plain enum may give
-variants explicit values: `enum(u8) Op { Add = 1, Sub, Halt = 0xFF }`. Values are integer
-literals that must fit the tag type, and a variant without one is the previous value plus one.
-Duplicate values are errors. Enums with payloads keep implicit values. Every enum needs a
-variant whose value is 0, so zeroed storage (`x: Color`, omitted struct fields, `mem.push`)
-always holds a valid variant. An exhaustive `case` that meets a tag matching no variant, which
-only foreign code or raw pointer writes can produce, panics with `enum.tag.ok`.
-Payload variants hold one typed value and use `Enum.Variant(payload)` construction. Plain
-variants use `Enum.Variant`; the type is always written, never inferred from context. Plain
-enums support equality only; payload enums are not comparable. Enum values copy by value.
-`#cast(u8, op)` gives a plain enum's tag, and `#cast(Op, byte)` converts an integer back,
-panicking when the value is not one of the variants.
-Plain enums have the size/alignment of the backing integer. A payload enum is laid out as its tag,
-padding to the maximum payload alignment, then storage large/aligned enough for the largest payload;
-final size is rounded to the maximum of tag/payload alignment. This is the Dyn ABI, not an automatic
-C enum/union ABI. Every tag value must fit the backing type.
+`enum(u8) Op`. Variants are dense: they take tags 0, 1, 2 and so on in declaration order, and
+there is no way to set a value. Zeroed storage (`x: Color`, omitted struct fields, `mem.push`)
+therefore always holds the first variant, so make that variant mean empty; `Null` is the usual
+name. External numbers stay plain integers at the edge: translate them through a table, so an
+unknown value becomes `Null`. Variants are written `Enum.Variant`; the type is always written,
+never inferred. Enums support equality and copy by value. `#cast(u8, op)` gives the tag and
+`#cast(Op, byte)` converts an integer back. An exhaustive `case` that meets a tag matching no
+variant panics with `enum.tag.ok`. Enums carry no payloads: a sum type is a struct with a `kind`
+field and the fields its kinds use. Enums have the size and alignment of the backing integer.
 
 Bit masks use distinct unsigned integer types, not special flag-enum syntax. Values explicitly
 cast into the mask type; ordinary integer `|`, `&`, `^`, and `~` then preserve its nominal type.
@@ -358,7 +351,7 @@ is not a supported-feature claim:
 | Module-level transparent type alias | Supported |
 | Local type alias inside a function | Reserved; diagnosed as unsupported |
 | Enum declaration-order tags | Supported |
-| Explicit enum values on plain enums | Supported |
+| Explicit enum values and enum payloads | Rejected |
 | `.Variant` without the enum type | Not planned; write `Enum.Variant` |
 | Several imports in one `use`, comma-separated | Supported |
 | Optional import alias followed by a new global | Supported; alias stays on the import line |

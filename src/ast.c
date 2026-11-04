@@ -1012,21 +1012,6 @@ static uint64_t declaration_owner(DynSpan name, const DynSource *s) {
   }
   return value;
 }
-static bool tag_fits(DynType t, uint64_t bits, bool negative) {
-  unsigned width = t == DYN_TYPE_I8 || t == DYN_TYPE_U8     ? 8
-                   : t == DYN_TYPE_I16 || t == DYN_TYPE_U16 ? 16
-                   : t == DYN_TYPE_I32 || t == DYN_TYPE_U32 ? 32
-                                                            : 64;
-  bool sign = t == DYN_TYPE_I8 || t == DYN_TYPE_I16 || t == DYN_TYPE_I32 ||
-              t == DYN_TYPE_I64 || t == DYN_TYPE_ISIZE;
-  if (!sign)
-    return !negative && (width == 64 || bits < UINT64_C(1) << width);
-  int64_t value = (int64_t)bits;
-  if (negative != (value < 0))
-    return false;
-  return width == 64 || (value >= -(INT64_C(1) << (width - 1)) &&
-                         value < INT64_C(1) << (width - 1));
-}
 static uint64_t type_layout(DynType t, bool alignment, DynAstProgram *a,
                             unsigned char *state, const DynSource *s,
                             unsigned *errors);

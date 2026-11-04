@@ -13,7 +13,7 @@ return 7 }
 fn identity(value: i32) i32 { return value }
 fn generic(value: $T) i64 { return #cast(i64, value) }
 struct Item { value: i32 }
-enum(u8) Op { None = 0, Read = 1, Write = 2 }
+enum(u8) Op { None, Read, Write }
 fn main() {
   if #cast(i64, next() + 2) * 3 != 27 || calls != 1 { #panic("evaluation") }
   if #cast(u8, 257) != 1 || generic(#cast(i16, -7)) != -7 { #panic("numeric") }

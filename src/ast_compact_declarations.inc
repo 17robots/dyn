@@ -164,23 +164,9 @@ static bool compact_add_struct_fields(const DynSource *s, DynAstProgram *a,
   }
   return true;
 }
-/* Integer, character or negated integer literal, as two's complement bits. */
-static bool compact_enum_literal(CompactNode node, const DynSource *s, DynAstProgram *a,
-                         unsigned *errors, uint64_t *bits, bool *negative) {
-  DynExprId id = compact_expr(node, s, a, errors);
-  if (id == DYN_NO_EXPR)
-    return false;
-  const DynAstExpr *e = &a->expressions[id];
-  *negative = negative_literal(a, e);
-  if (*negative)
-    e = &a->expressions[e->left];
-  if (e->kind != DYN_EXPR_INT && e->kind != DYN_EXPR_CHAR)
-    return false;
-  if (*negative && e->integer > UINT64_C(1) << 63)
-    return false;
-  *negative = *negative && e->integer != 0;
-  *bits = *negative ? UINT64_C(0) - e->integer : e->integer;
-  return true;
+static bool dyn_type_tag_signed(DynType t) {
+  return t == DYN_TYPE_I8 || t == DYN_TYPE_I16 || t == DYN_TYPE_I32 ||
+         t == DYN_TYPE_I64 || t == DYN_TYPE_ISIZE;
 }
 static bool compact_add_enum_variants(const DynSource *s, DynAstProgram *a,
                               unsigned *errors) {
@@ -191,10 +177,7 @@ static bool compact_add_enum_variants(const DynSource *s, DynAstProgram *a,
       continue;
     DynAstEnum *en = &a->enums[ei++];
     en->variant_start = (uint32_t)a->variant_count;
-    bool saw_name = false, any_explicit = false;
-    /* The next implicit value; exhausted once the previous was the maximum. */
-    uint64_t next = 0;
-    bool next_negative = false, exhausted = false;
+    bool saw_name = false;
     for (CompactNode c = compact_child(d, 0); !compact_null(c); c = compact_next(c)) {
       uint16_t k = compact_kind(c);
       if (!saw_name && !(k != EXP_PRIMITIVE)) {
@@ -218,37 +201,16 @@ static bool compact_add_enum_variants(const DynSource *s, DynAstProgram *a,
         continue;
       }
       DynType payload = DYN_TYPE_VOID;
-      bool explicit_value = false, negative = next_negative;
-      uint64_t value = next;
-      for (CompactNode part = compact_child(c, 1); !compact_null(part); part = compact_next(part)) {
-        if (!(compact_kind(part) != SRC_QUALIFIER)) {
-          payload = compact_type(compact_child(part, 0), s, a);
-          continue;
-        }
-        explicit_value = true;
-        if (!compact_enum_literal(part, s, a, errors, &value, &negative))
-          compact_report(part, s, errors, "enum value must be an integer literal");
-      }
-      if (explicit_value)
-        any_explicit = true;
-      if ((!explicit_value && exhausted) ||
-          (en->tag_type >= DYN_TYPE_I8 && en->tag_type <= DYN_TYPE_USIZE &&
-           !tag_fits(en->tag_type, value, negative))) {
-        compact_report(c, s, errors, "enum value does not fit the tag type");
-        continue;
-      }
+      uint64_t value = en->variant_count;
+      for (CompactNode part = compact_child(c, 1); !compact_null(part); part = compact_next(part))
+        compact_report(part, s, errors,
+                       compact_kind(part) == SRC_QUALIFIER
+                           ? "enum variants have no payloads; use a kind field in a struct"
+                           : "enum variants have no explicit values; use constants for external numbers");
       if (!reserve_variant(a)) {
         compact_report(c, s, errors, "out of memory");
         return false;
       }
-      for (uint32_t q = 0; q < en->variant_count; ++q)
-        if (a->variants[en->variant_start + q].tag == value) {
-          compact_report(c, s, errors, "duplicate enum value");
-          break;
-        }
-      exhausted = !negative && value == UINT64_MAX;
-      next = value + 1;
-      next_negative = negative && next != 0;
       a->variants[a->variant_count++] = (DynAstVariant){compact_span(name), payload, value};
       ++en->variant_count;
       if (payload != DYN_TYPE_VOID)
@@ -256,14 +218,6 @@ static bool compact_add_enum_variants(const DynSource *s, DynAstProgram *a,
     }
     if (!en->variant_count)
       compact_report(d, s, errors, "enum requires at least one variant");
-    /* Zeroed storage must hold a valid variant. */
-    bool has_zero = false;
-    for (uint32_t q = 0; q < en->variant_count; ++q)
-      if (a->variants[en->variant_start + q].tag == 0)
-        has_zero = true;
-    if (en->variant_count && !has_zero)
-      compact_report(en->name, s, errors,
-                 "enum requires a variant with value 0 so zeroed storage is valid");
     unsigned width =
         en->tag_type == DYN_TYPE_I8 || en->tag_type == DYN_TYPE_U8     ? 8
         : en->tag_type == DYN_TYPE_I16 || en->tag_type == DYN_TYPE_U16 ? 16
@@ -271,12 +225,10 @@ static bool compact_add_enum_variants(const DynSource *s, DynAstProgram *a,
                                                                        : 64;
     if (en->tag_type < DYN_TYPE_I8 || en->tag_type > DYN_TYPE_USIZE)
       compact_report(en->name, s, errors, "enum tag type must be integer");
-    else if (width < 64 && en->variant_count > (UINT64_C(1) << width))
+    else if (width < 64 && en->variant_count >
+             (UINT64_C(1) << (dyn_type_tag_signed(en->tag_type) ? width - 1 : width)))
       compact_report(en->name, s, errors,
                  "enum has too many variants for tag type");
-    else if (any_explicit && en->has_payload)
-      compact_report(en->name, s, errors,
-                 "enums with payloads cannot have explicit values");
   }
   return true;
 }

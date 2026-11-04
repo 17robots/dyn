@@ -23,6 +23,9 @@ servers so they pick up the new `dyn`.
   It adapts to any integer type the value fits.
 - Range loops accept a typed binding: `for i: i32 in -3..3`. Breaking: a range
   with two literal bounds and a negative one needs it. It no longer picks `isize`.
+- Breaking: enum values and payloads are removed. Variants are always 0, 1, 2 in
+  order. Use constants or a translation table for external numbers, and a struct
+  with a `kind` field for sum types.
 - `ui.Style` no longer has built-in colors. Write
   `ui.Context{ style: ui.default_style }`; a zero style draws nothing.
 - Zero is now the safe state for handles. `fs.File`, `net.Connection`,

@@ -15,7 +15,6 @@ struct Pair { integer: i64, real: f64 }
 struct Large { bytes: [40]u8, value: i64 }
 struct Floats { x:f32, y:f32 }
 packed struct Packed { small: u8, wide: i64 }
-enum(i8) Sign { Minus = -1, Zero = 0, Plus = 1 }
 extern fn provider "provider"(x: Pair) Pair
 extern fn floats_provider "floats_provider"(x:Floats) Floats
 extern fn large_provider "large_provider"(x: Large) Large
