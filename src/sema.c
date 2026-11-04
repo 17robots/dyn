@@ -384,7 +384,7 @@ static bool untyped_numeric_literal(const DynAstProgram *a, DynExprId id) {
   while (e->kind == DYN_EXPR_UNARY &&
          (e->op == DYN_OP_NEG || e->op == DYN_OP_BIT_NOT))
     e = &a->expressions[e->left];
-  return e->kind == DYN_EXPR_INT || e->kind == DYN_EXPR_FLOAT;
+  return e->kind == DYN_EXPR_INT || e->kind == DYN_EXPR_FLOAT || e->kind == DYN_EXPR_CHAR;
 }
 static DynSpan sema_unqualified_span(DynSpan name, const DynSource *s) {
   for (uint32_t i = name.start_byte; i < name.end_byte; ++i)
@@ -1222,7 +1222,7 @@ static bool untyped_literal(DynAstProgram *a, DynExprId id) {
   DynAstExpr e = a->expressions[id];
   if (e.kind == DYN_EXPR_UNARY && e.op == DYN_OP_NEG)
     return untyped_literal(a, e.left);
-  return e.kind == DYN_EXPR_INT || e.kind == DYN_EXPR_FLOAT;
+  return e.kind == DYN_EXPR_INT || e.kind == DYN_EXPR_FLOAT || e.kind == DYN_EXPR_CHAR;
 }
 /* Match a parameter pattern against an argument type, binding type
    parameters. Returns false only on a conflicting binding. A shape that does
@@ -3085,17 +3085,25 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
   }
   if (st->kind == DYN_STMT_IF || st->kind == DYN_STMT_FOR) {
     if (st->kind == DYN_STMT_FOR && st->for_range) {
-      /* A literal bound adapts to the other bound, so `0..count` takes
-         count's type. All-literal ranges count in usize for indexing, or
-         isize when a bound is negative. Bounds evaluate once, in order. */
+      /* A typed binding sets both bounds. Otherwise a literal bound adapts to
+         the other bound, so `0..count` takes count's type, and all-literal
+         ranges count in usize. Bounds evaluate once, in order. */
       DynType type;
       bool first_literal = range_bound_literal(a, st->target),
            last_literal = range_bound_literal(a, st->expression);
-      if (first_literal && last_literal) {
-        type = a->expressions[st->target].kind == DYN_EXPR_UNARY ||
-                       a->expressions[st->expression].kind == DYN_EXPR_UNARY
-                   ? DYN_TYPE_ISIZE
-                   : DYN_TYPE_USIZE;
+      if (st->declared_type != DYN_TYPE_INFER) {
+        type = st->declared_type;
+        if (check_expr(sema, a, st->target, s, errors, type) != type ||
+            check_expr(sema, a, st->expression, s, errors, type) != type)
+          type = DYN_TYPE_ERROR;
+      } else if (first_literal && last_literal) {
+        if (a->expressions[st->target].kind == DYN_EXPR_UNARY ||
+            a->expressions[st->expression].kind == DYN_EXPR_UNARY) {
+          error_span(st->span, s, errors,
+                     "negative literal range needs a typed binding, such as 'for i: i32 in'");
+          return false;
+        }
+        type = DYN_TYPE_USIZE;
         if (check_expr(sema, a, st->target, s, errors, type) != type ||
             check_expr(sema, a, st->expression, s, errors, type) != type)
           type = DYN_TYPE_ERROR;
@@ -3139,6 +3147,10 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
       if (pushed)
         pop_loop(sema);
       a->locals[st->local_id].active = false;
+      return false;
+    }
+    if (st->kind == DYN_STMT_FOR && st->declared_type != DYN_TYPE_INFER) {
+      error_span(st->span, s, errors, "only a range for-in takes a typed binding");
       return false;
     }
     if (st->kind == DYN_STMT_FOR && st->target != DYN_NO_EXPR) {

@@ -21,6 +21,8 @@ servers so they pick up the new `dyn`.
   renames `Rectangle.packed` to `was_packed` and `Result.packed` to `count`.
 - Breaking: a character literal with no expected type is now `u32`, never `u8`.
   It adapts to any integer type the value fits.
+- Range loops accept a typed binding: `for i: i32 in -3..3`. Breaking: a range
+  with two literal bounds and a negative one needs it. It no longer picks `isize`.
 - `ui.Style` no longer has built-in colors. Write
   `ui.Context{ style: ui.default_style }`; a zero style draws nothing.
 - Zero is now the safe state for handles. `fs.File`, `net.Connection`,

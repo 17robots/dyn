@@ -294,6 +294,10 @@ fn src_for(p: *Parser) u32 {
     if p.token.kind == TokenKind.Name {
       binding = parse_name(p)
     }
+    bound_type := None
+    if binding != None && !pointer && take(p, ":") {
+      bound_type = parse_type(p)
+    }
     if binding != None && take(p, "in") {
       flags = FlagIteration
       if pointer {
@@ -303,6 +307,9 @@ fn src_for(p: *Parser) u32 {
         flags |= FlagConst
       }
       chain(p, &condition_first, &condition_last, binding)
+      if bound_type != None {
+        chain(p, &condition_first, &condition_last, bound_type)
+      }
       if token_is(p, "#reverse") {
         reverse_start := p.token.start
         lex(p)

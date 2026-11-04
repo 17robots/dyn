@@ -105,7 +105,7 @@ src+='extern fn cpacr() u32\nfn main(){'+''.join(f'if {ch} {{ #panic("case {i}")
 cases={
 'bool':'x:=true', 'rawptr':'x:=#cast(rawptr,0)', 'array':'x:[2]u32=[1,2]',
 'aggregate':'x:=S{a:1}', 'string':'x:="abc"', 'slice':'a:[2]u32=[1,2]\nx:=a[0..2]',
-'pointer':'p:=packed\n_=p(1)', 'any':'',
+'pointer':'p:=packed_call\n_=p(1)', 'any':'',
 }
 
 def run_guest(command):
@@ -134,7 +134,7 @@ def rejections(base):
         for name, body in cases.items():
             work = base/(target+'-'+name)
             work.mkdir()
-            source = 'struct S { a:u32 }\nextern fn cv(n:u32,...) u32\nfn packed(x:...u32) u32 { return 0 }\nfn main(){'+body+('\n_=cv(1,x)' if name!='pointer' else '')+'}\n'
+            source = 'struct S { a:u32 }\nextern fn cv(n:u32,...) u32\nfn packed_call(x:...u32) u32 { return 0 }\nfn main(){'+body+('\n_=cv(1,x)' if name!='pointer' else '')+'}\n'
             if name == 'any':
                 source = 'extern fn cv(n:u32,...) u32\npub fn rejected(x:any){_=cv(1,x)}\nfn main(){}\n'
             (work/'main.dyn').write_text(source)

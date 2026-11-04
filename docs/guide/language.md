@@ -140,8 +140,9 @@ the loop-local binding. `for *value` binds a mutable pointer to each source elem
 rejects const slices and requires assignable arrays. `for *const value` binds a const pointer.
 `for i in first..last` counts integers from `first` up to but excluding `last`; `..=` includes
 `last`. Both bounds share one integer type, and a literal bound adapts to the other bound, so
-`0..count` has `count`'s type. When both bounds are literals, `i` is `usize`, or `isize` if a
-bound is negative, so `for i in 0..3 { values[i] }` indexes directly. Bounds evaluate once, first
+`0..count` has `count`'s type. When both bounds are literals, `i` is `usize`, so
+`for i in 0..3 { values[i] }` indexes directly. A typed binding sets the type of both bounds:
+`for i: i32 in -3..3`. A negative literal range needs one. Bounds evaluate once, first
 bound first. An empty range such as `5..2` runs no iterations. `i` is a copy: assigning it does not change iteration, and pointer
 bindings are rejected. Inclusive ranges may end at the type's maximum without overflow.
 `for i in #reverse(first..last)` visits the same values from last to first: `#reverse(0..3)` gives

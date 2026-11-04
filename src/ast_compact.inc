@@ -684,6 +684,7 @@ static uint32_t compact_stmt(CompactNode n, const DynSource *s, DynAstProgram *a
     compact_case(n, s, a, errors, loop_depth, &st);
   } else if (!(k != SRC_FOR)) {
     st.kind = DYN_STMT_FOR;
+    st.declared_type = DYN_TYPE_INFER;
     st.loop_id = a->loop_count++;
     uint32_t count = compact_count(n);
     CompactNode last = compact_last(n);
@@ -702,6 +703,8 @@ static uint32_t compact_stmt(CompactNode n, const DynSource *s, DynAstProgram *a
           st.for_pointer = compact_flag(c, EXP_POINTER_BINDING);
           st.for_const = compact_flag(c, EXP_CONST);
           st.name = compact_span(binder);
+          if (cc == 3)
+            st.declared_type = compact_type(compact_child(c, 1), s, a);
           CompactNode iterable = compact_last(c);
           if (!(compact_kind(iterable) != SRC_REVERSE)) {
             st.for_reverse = true;

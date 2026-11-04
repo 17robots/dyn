@@ -61,7 +61,7 @@ class Contracts(unittest.TestCase):
     total += i
   }
   negative: isize = 0
-  for i in -2..0 {
+  for i: isize in -2..0 {
     negative += i
   }
   top: u8 = 255
@@ -149,7 +149,7 @@ class Contracts(unittest.TestCase):
     count += 1
   }
   signed: isize = 0
-  for i in #reverse(-2..1) {
+  for i: isize in #reverse(-2..1) {
     signed = signed * 10 + i
   }
   values: [4]i32 = [1, 2, 3, 4]

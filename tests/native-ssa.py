@@ -217,7 +217,7 @@ fn key(k: Key) i64 {
 }
 fn main() {
   total: i64 = 0
-  for i in -3..12 { total = total * 7 + pick(#cast(i64, i)) }
+  for i: isize in -3..12 { total = total * 7 + pick(#cast(i64, i)) }
   for c in 60..75 { total += #cast(i64, letter(#cast(u8, c))) * #cast(i64, c) }
   total += key(Key.Up) + key(Key.Enter) * 10 + key(Key.Tab) * 100
   _ = io.println(io.stdout(), "{}", total)
