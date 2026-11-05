@@ -1,5 +1,5 @@
 use "std/mem" mem
-use "std/errors" errors
+use "std/io" errors
 use "std/encoding/binary" binary
 pub enum Wire { Varint, Fixed64, Bytes, StartGroup, EndGroup, Fixed32 }
 pub struct Field { number: u32, wire: Wire, value: u64, bytes: []const u8 }

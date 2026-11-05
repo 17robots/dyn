@@ -15,6 +15,7 @@ DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 ENV = dict(os.environ, DYN_SDK=str(ROOT))
 
 SOURCE = r'''use "std/c" c
+use "std/io" io
 use "std/mem" mem
 use "std/fs" fs
 fn check(ok:bool) { if !ok { #panic("CString buffer contract") } }
@@ -50,7 +51,7 @@ fn main() {
  path:[4300]u8=[]
  mem.fill(path[..],'a')
  removed:=fs.remove(path[..])
- check(!removed.ok)
+ check(removed.failure.kind != io.Kind.Ok)
  for byte in path { check(byte=='a') }
 }
 '''
@@ -87,6 +88,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-cstring-buffers-') as temporary:
                        (ROOT / 'vendor/opengl/opengl.dyn').read_text())
     assert names and len(set(names)) == len(names)
     gl = '''use "vendor/opengl" gl
+use "std/io" io
 use "std/c" c
 use "std/mem" mem
 const names:[COUNT][]const u8=[NAMES]

@@ -57,6 +57,7 @@ use "std/image/tga" tga
 use "std/image/gif" gif
 use "std/image/jpeg" jpeg
 use "std/encoding/toml" toml
+use "std/io" io
 use "std/mem" mem
 use "std/bytes" bytes
 fn check(ok: bool) { if !ok { #panic("host formats") } }

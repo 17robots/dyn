@@ -8,9 +8,10 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 SOURCE = r'''use "std/mem"
+use "std/io" io
 use "std/strings"
 use "std/encoding/ini"
-use "std/errors"
+use "std/io" errors
 use "std/container/list" list
 struct Slot { free_next: *Slot, value: u64 }
 const nil_slot: Slot = Slot{}

@@ -53,11 +53,11 @@ fn server_check(wire: []const u8) {
       storage: [65536]u8 = []
       state := http.server(io.Reader{ data: #cast(rawptr, &feed), read: read_feed }, io.Writer{ write: sink }, storage[..])
       first := http.receive(&state)
-      if !first.ok || !bytes.equal(first.request.body, "abc") || !bytes.equal(first.request.target, "/one") { #panic("first request") }
+      if first.failure.kind != io.Kind.Ok || !bytes.equal(first.request.body, "abc") || !bytes.equal(first.request.target, "/one") { #panic("first request") }
       second := http.receive(&state)
-      if !second.ok || !bytes.equal(second.request.body, "") || !bytes.equal(second.request.target, "/two") { #panic("second request") }
+      if second.failure.kind != io.Kind.Ok || !bytes.equal(second.request.body, "") || !bytes.equal(second.request.target, "/two") { #panic("second request") }
       last := http.receive(&state)
-      if last.ok || last.detail != http.ErrorKind.End { #panic("request eof") }
+      if last.detail != http.ErrorKind.End { #panic("request eof") }
     }
   }
 }
@@ -66,7 +66,7 @@ fn server_invalid(wire: []const u8) {
   storage: [256]u8 = []
   state := http.server(io.Reader{ data: #cast(rawptr, &feed), read: read_feed }, io.Writer{ write: sink }, storage[..])
   got := http.receive(&state)
-  if got.ok || got.detail != http.ErrorKind.Invalid { #panic("invalid request") }
+  if got.failure.kind == io.Kind.Ok || got.detail != http.ErrorKind.Invalid { #panic("invalid request") }
 }
 fn main() {
 '''

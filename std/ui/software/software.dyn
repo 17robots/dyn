@@ -1,5 +1,5 @@
 use "std/ui" ui
-use "std/errors" errors
+use "std/io" errors
 use "std/unicode/utf8" utf8
 use "std/math" math
 
@@ -13,7 +13,7 @@ pub struct Glyph { pixels: []const u8, width: i32, height: i32, stride: usize, x
 // survive until the next callback. Missing glyph policy belongs to the callback.
 // No font files, platform APIs, native dependencies, or shaping are hidden here.
 pub struct Font { data: rawptr, glyph: fn(rawptr, u32) Glyph, line_height: i32 }
-pub struct Result { kind: errors.Kind, error: isize, ok: bool }
+pub struct Result { failure: errors.Failure }
 fn valid_surface(surface: *const Surface) bool {
   if surface.width < 0 || surface.height < 0 {
     return false
@@ -152,7 +152,7 @@ fn draw_glyph(surface: *Surface, clip: ui.Rect, tint: ui.Color, font: Font, code
 }
 fn text(surface: *Surface, command: *const ui.Command, clip: ui.Rect, font: Font) Result {
   if font.glyph == nil || font.line_height <= 0 {
-    return Result{ kind: errors.Kind.InvalidInput }
+    return Result{ failure: errors.Failure{ kind: errors.Kind.InvalidInput } }
   }
   x := #cast(i64, command.bounds.x)
   y := #cast(i64, command.bounds.y)
@@ -184,21 +184,21 @@ fn text(surface: *Surface, command: *const ui.Command, clip: ui.Rect, font: Font
     }
     drawn := draw_glyph(surface, clip, command.color, font, codepoint, x, y)
     if !drawn.ok {
-      return Result{ kind: errors.Kind.InvalidInput }
+      return Result{ failure: errors.Failure{ kind: errors.Kind.InvalidInput } }
     }
     x += #cast(i64, drawn.advance)
   }
-  return Result{ ok: true }
+  return Result{}
 }
 // Render in order after ui.end. Changes pixels in place; malformed glyph or
 // surface data returns InvalidInput. A glyph failure may leave earlier draws
 // visible. This renderer clips text without wrapping, kerning or shaping.
 pub fn render(surface: *Surface, commands: *const ui.Command, font: Font) Result {
   if !valid_surface(surface) {
-    return Result{ kind: errors.Kind.InvalidInput }
+    return Result{ failure: errors.Failure{ kind: errors.Kind.InvalidInput } }
   }
   if surface.width == 0 || surface.height == 0 {
-    return Result{ ok: true }
+    return Result{}
   }
   viewport := ui.Rect{ width: surface.width, height: surface.height }
   command := commands
@@ -216,17 +216,17 @@ pub fn render(surface: *Surface, commands: *const ui.Command, font: Font) Result
       else if command.kind == ui.Kind.Glyph {
         drawn := draw_glyph(surface, clip, command.color, font, command.codepoint, #cast(i64, command.glyph_x), #cast(i64, command.glyph_y))
         if !drawn.ok {
-          return Result{ kind: errors.Kind.InvalidInput }
+          return Result{ failure: errors.Failure{ kind: errors.Kind.InvalidInput } }
         }
       }
       else if command.kind == ui.Kind.Text {
         outcome := text(surface, command, clip, font)
-        if !outcome.ok {
+        if outcome.failure.kind != errors.Kind.Ok {
           return outcome
         }
       }
     }
     command = ui.next(command)
   }
-  return Result{ ok: true }
+  return Result{}
 }

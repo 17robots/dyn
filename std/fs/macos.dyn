@@ -1,4 +1,5 @@
 #target(kernel: darwin)
+use "std/io" io
 use "std/mem" mem
 use "std/c" cstrings
 
@@ -16,7 +17,7 @@ fn native_open(path: []const u8, mode: u8) FileResult {
   storage: [4096 + mem.ArenaBufferOverhead]u8 = []
   name := terminated(path, storage[..])
   if name == nil {
-    return FileResult{ kind: errors.Kind.InvalidInput }
+    return FileResult{ failure: io.Failure{ kind: errors.Kind.InvalidInput } }
   }
   flags: usize = 16777216 // O_CLOEXEC
   if mode == 1 {
@@ -30,9 +31,9 @@ fn native_open(path: []const u8, mode: u8) FileResult {
   } // O_WRONLY | O_CREAT | O_EXCL
   value := #syscall(5, name, flags, 420)
   if value < 0 {
-    return FileResult{ error: value, kind: native_kind(value) }
+    return FileResult{ failure: io.Failure{ kind: native_kind(value), native: value } }
   }
-  return FileResult{ value: owned_file(value), ok: true }
+  return FileResult{ value: owned_file(value) }
 }
 fn native_close(handle: isize) isize {
   return #syscall(6, handle)

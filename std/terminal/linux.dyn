@@ -1,3 +1,4 @@
+use "std/io" io
 #target(kernel: linux)
 
 // The terminal settings of descriptor. ok is false when it is not a terminal.
@@ -13,13 +14,13 @@ pub fn read_state(descriptor: isize) Read {
 
 pub fn restore(descriptor: isize, saved: *const State) Result {
   if saved == nil {
-    return Result{ kind: errors.Kind.InvalidInput }
+    return Result{ failure: io.Failure{ kind: errors.Kind.InvalidInput } }
   }
   code := #syscall(16, descriptor, 21506, &saved.bytes[0])
   if code < 0 {
-    return Result{ kind: errors.linux(code), error: code }
+    return Result{ failure: io.Failure{ kind: errors.linux(code), native: code } }
   }
-  return Result{ ok: true }
+  return Result{}
 }
 
 // Clears IGNBRK, BRKINT, ICRNL, IXON, OPOST-adjacent input bits, ISIG,

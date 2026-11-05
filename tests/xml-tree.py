@@ -12,9 +12,10 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 DYN = Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve()
 source = '''use "std/encoding/xml" xml
+use "std/io" io
 use "std/mem" mem
 use "std/bytes" bytes
-use "std/errors" errors
+use "std/io" errors
 fn check(ok: bool) { if !ok { #panic("xml tree contract") } }
 fn main() {
   arena := mem.arena_create(0)
@@ -23,7 +24,7 @@ fn main() {
   check(xml.is_nil(&zero) && xml.is_nil(nil))
   check(xml.child(nil, "x") == &xml.nil_node && xml.at(nil, 0) == &xml.nil_node && xml.next_sibling(nil) == &xml.nil_node)
   r := xml.parse(arena, "<?xml version='1.0'?>\\n<!--before--><root a='&amp;' b=\\"2\\"><leaf/>raw&amp;<!--hi--><![CDATA[<raw>]]><?pi body  ?></root> ")
-  check(r.ok && r.kind == errors.Kind.None && r.error == 0)
+  check(r.ok && r.kind == errors.Kind.Ok && r.error == 0)
   check(r.root.kind == xml.NodeKind.Document && r.root.parent == nil)
   check(xml.at(r.root, 0).kind == xml.NodeKind.Processing && bytes.equal(xml.at(r.root, 0).text, " version='1.0'"))
   root := xml.child(r.root, "root")
@@ -108,6 +109,7 @@ source += '''
 with tempfile.TemporaryDirectory(prefix='dyn-xml-tree-') as temporary:
     work = Path(temporary)
     for name, code in [('main', source), ('capacity', '''use "std/encoding/xml" xml
+use "std/io" io
 use "std/mem" mem
 fn main() {
   backing: [8]u8

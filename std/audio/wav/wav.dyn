@@ -1,5 +1,5 @@
 use "std/mem" mem
-use "std/errors" errors
+use "std/io" errors
 use "std/math" math
 pub enum Encoding { Pcm8, Pcm16, Pcm24, Pcm32, Float32 }
 // Interleaved normalized samples; floating WAV samples are preserved, including

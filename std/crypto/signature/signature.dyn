@@ -1,8 +1,7 @@
 use "std/crypto/p256" p256
 use "std/crypto/ed25519" native
 use "std/bytes"
-use "std/errors"
-
+use "std/io" errors
 // Fixed-size keys and signatures use caller storage by exception. Successful
 // values borrow destination; failures return an empty value. Validation leaves
 // storage untouched. Arithmetic failures clear only the intended output prefix.

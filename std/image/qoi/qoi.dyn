@@ -1,5 +1,5 @@
 use "std/mem" mem
-use "std/errors" errors
+use "std/io" errors
 pub struct Info { width: u32, height: u32, channels: u8, srgb: bool, ok: bool }
 // Result.ok / InfoResult.ok are authoritative. Info.ok is legacy parser state:
 // true inside successful values, false in the zero failure value.

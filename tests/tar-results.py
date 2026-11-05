@@ -28,7 +28,7 @@ def literal(data):
 
 
 SOURCE = r'''use "std/archive/tar" tar
-use "std/errors" errors
+use "std/io" errors
 use "std/io" io
 use "std/bytes" bytes
 fn check(ok: bool) { if !ok { #panic("tar fixture") } }
@@ -61,19 +61,19 @@ fn main() {
  for archive in [data, PAX, GNU] {
    state := tar.reader(archive)
    first := tar.next(&state)
-   check(first.status == tar.Status.Entry && first.kind == errors.Kind.None && first.error == 0 && first.detail == tar.ErrorKind.None)
+   check(first.status == tar.Status.Entry && first.kind == errors.Kind.Ok && first.error == 0 && first.detail == tar.ErrorKind.None)
    check(bytes.equal(first.entry.data,"hello") && first.entry.kind == '0')
    empty := tar.next(&state)
    check(empty.status == tar.Status.Entry && #len(empty.entry.data) == 0)
    end := tar.next(&state)
-   check(end.status == tar.Status.End && end.kind == errors.Kind.None && end.error == 0)
+   check(end.status == tar.Status.End && end.kind == errors.Kind.Ok && end.error == 0)
    check(tar.next(&state).status == tar.Status.End)
    header: [512]u8 = []
    metadata: [2048]u8 = []
    cursor := io.cursor(archive)
    stream := tar.stream_reader(io.cursor_reader(&cursor),header[..],metadata[..])
    item := tar.next_stream(&stream)
-   check(item.ok && item.kind == errors.Kind.None && item.error == 0 && item.typeflag == '0' && item.size == 5)
+   check(item.ok && item.kind == errors.Kind.Ok && item.error == 0 && item.typeflag == '0' && item.size == 5)
    check(bytes.equal(item.name,first.entry.name))
    payload: [8]u8 = []
    loaded := tar.read_stream(&stream,payload[..])
@@ -88,13 +88,13 @@ fn main() {
    state := tar.reader(source)
    result := tar.next(&state)
    for result.status == tar.Status.Entry { result = tar.next(&state) }
-   check(result.status == tar.Status.End && result.kind == errors.Kind.None)
+   check(result.status == tar.Status.End && result.kind == errors.Kind.Ok)
    header: [512]u8 = []
    cursor := io.cursor(source)
    stream := tar.stream_reader(io.cursor_reader(&cursor),header[..],header[..0])
    item := tar.next_stream(&stream)
    for item.ok { item = tar.next_stream(&stream) }
-   check(item.kind == errors.Kind.None && item.error == 0 && item.offset == #len(source))
+   check(item.kind == errors.Kind.Ok && item.error == 0 && item.offset == #len(source))
    check(tar.next_stream(&stream).offset == item.offset)
  }
  // Native zero is an error, even when a callback fills the requested slice.

@@ -6,7 +6,7 @@
 // Arena rewind/reset/release invalidates affected nodes, text and iterators.
 // Iterator must be zero-initialized or created by iterator(); advance only
 // through next(). Copying an iterator copies its position and borrowed view.
-use "std/errors" errors
+use "std/io" errors
 use "std/mem" memory
 use "std/strings" text
 use "std/unicode/utf8" utf8

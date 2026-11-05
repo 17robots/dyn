@@ -5,7 +5,7 @@
 use "std/time" time
 use "std/mem" mem
 use "std/bytes" bytes
-use "std/errors" errors
+use "std/io" errors
 use "std/strings" strings
 
 // One local-time type: seconds east of UTC, daylight flag and abbreviation.
@@ -33,7 +33,7 @@ pub struct Zone {
   end: Rule,
 }
 
-pub struct ZoneResult { value: Zone, kind: errors.Kind, error: isize, ok: bool }
+pub struct ZoneResult { value: Zone, failure: errors.Failure }
 
 // A local time with the type in effect at that instant.
 pub struct Local { value: time.DateTime, offset: i32, dst: bool, abbreviation: []const u8 }
@@ -168,7 +168,7 @@ fn read_i64(data: []const u8, at: usize) i64 {
 }
 
 fn invalid() ZoneResult {
-  return ZoneResult{ kind: errors.Kind.InvalidInput }
+  return ZoneResult{ failure: errors.Failure{ kind: errors.Kind.InvalidInput } }
 }
 
 // Parses a TZif file (RFC 8536, versions 1 through 4) into arena storage. The
@@ -254,7 +254,7 @@ pub fn parse_tzif(arena: *mem.Arena, name: []const u8, data: []const u8) ZoneRes
       }
       if close < #len(data) && close > footer + 1 {
         rule := parse_posix(arena, data[footer + 1..close])
-        if !rule.ok {
+        if rule.failure.kind != errors.Kind.Ok {
           mem.arena_rewind(arena, mark)
           return invalid()
         }
@@ -267,7 +267,7 @@ pub fn parse_tzif(arena: *mem.Arena, name: []const u8, data: []const u8) ZoneRes
       }
     }
   }
-  return ZoneResult{ value: zone, ok: true }
+  return ZoneResult{ value: zone }
 }
 
 struct Cursor { text: []const u8, at: usize, ok: bool }
@@ -421,7 +421,7 @@ pub fn parse_posix(arena: *mem.Arena, text: []const u8) ZoneResult {
     mem.arena_rewind(arena, mark)
     return invalid()
   }
-  return ZoneResult{ value: zone, ok: true }
+  return ZoneResult{ value: zone }
 }
 
 // The zone named by an IANA name such as "Europe/Berlin", read from the

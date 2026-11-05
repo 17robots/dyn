@@ -100,9 +100,9 @@ use "vendor/sdl3" sdl
 use "vendor/sdl3/microui" backend
 use "std/mem"
 use "std/os/linux"
+use "std/io" io
 use "std/strings"
 use "std/time"
-use "std/io"
 fn main() {
   arena := mem.arena_create(1024 * 1024)
   defer {
@@ -186,9 +186,9 @@ fn main() {
     'audio-playback': r'''use "vendor/miniaudio" audio
 use "std/mem"
 use "std/os/linux"
+use "std/io" io
 use "std/strings"
 use "std/time"
-use "std/io"
 fn main() {
   arena := mem.arena_create(2 * 1024 * 1024)
   defer {
@@ -220,10 +220,10 @@ fn main() {
   deadline := time.deadline_after(60 * time.Second)
   samples: [2048]f32 = []
   heard := false
-  if !deadline.ok { #panic("deadline clock failed") }
+  if deadline.failure.kind != io.Kind.Ok { #panic("deadline clock failed") }
   for !audio.sound_ended(sound.value) {
     deadline_status := time.deadline_expired(&deadline.value)
-    if !deadline_status.ok { #panic("deadline clock failed") }
+    if deadline_status.failure.kind != io.Kind.Ok { #panic("deadline clock failed") }
     if deadline_status.value { break }
     if offline {
       result := audio.mix(engine.value, samples[..])
@@ -250,8 +250,8 @@ fn main() {
 }
 ''',
     'lz4': r'''use "vendor/lz4"
+use "std/io" io
 use "std/strings"
-use "std/io"
 fn main() {
   compressed: [128]u8 = []
   output: [128]u8 = []
@@ -285,8 +285,8 @@ fn main() {
 }
 ''',
     'cgltf': r'''use "vendor/cgltf"
+use "std/io" io
 use "std/strings"
-use "std/io"
 use "std/mem"
 use "std/fs"
 use "std/os/linux"
@@ -356,7 +356,7 @@ fn main() {
   args := linux.process_arguments(backing)
   if #len(args) == 2 {
     file := fs.read_all(backing, args[1], 1024 * 1024)
-    if !file.ok {
+    if file.failure.kind != io.Kind.Ok {
       #panic("GLB read")
     }
     binary := cgltf.parse_owned(file.value)
@@ -448,8 +448,8 @@ fn main() {
 ''',
     'microui': r'''use "vendor/microui" ui
 use "std/mem"
+use "std/io" io
 use "std/strings"
-use "std/io"
 fn main() {
   storage := mem.arena_create(1024 * 1024)
   defer {
@@ -504,8 +504,8 @@ fn main() {
 ''',
     'enet': r'''use "vendor/enet"
 use "std/time"
+use "std/io" io
 use "std/strings"
-use "std/io"
 fn main() {
   if !enet.init() {
     #panic("ENet init")
@@ -531,10 +531,10 @@ fn main() {
   }
   deadline := time.deadline_after(5 * time.Second)
   done := false
-  if !deadline.ok { #panic("deadline clock failed") }
+  if deadline.failure.kind != io.Kind.Ok { #panic("deadline clock failed") }
   for !done {
     deadline_status := time.deadline_expired(&deadline.value)
-    if !deadline_status.ok { #panic("deadline clock failed") }
+    if deadline_status.failure.kind != io.Kind.Ok { #panic("deadline clock failed") }
     if deadline_status.value { break }
     remote := enet.service(server, 0)
     if !remote.ok {
@@ -577,10 +577,10 @@ fn main() {
   server_closed := false
   client_closed := false
   deadline = time.deadline_after(5 * time.Second)
-  if !deadline.ok { #panic("deadline clock failed") }
+  if deadline.failure.kind != io.Kind.Ok { #panic("deadline clock failed") }
   for (!server_closed || !client_closed) {
     deadline_status := time.deadline_expired(&deadline.value)
-    if !deadline_status.ok { #panic("deadline clock failed") }
+    if deadline_status.failure.kind != io.Kind.Ok { #panic("deadline clock failed") }
     if deadline_status.value { break }
     server_event := enet.service(server, 0)
     client_event := enet.service(client, 0)
@@ -626,7 +626,7 @@ fn main() {
     #panic("WAV path required")
   }
   bytes := fs.read_all(storage, args[1], 1024 * 1024)
-  if !bytes.ok {
+  if bytes.failure.kind != io.Kind.Ok {
     #panic("WAV read")
   }
   mark := mem.arena_mark(storage)
@@ -712,7 +712,7 @@ fn main() {
     #panic("WAV path required")
   }
   bytes := fs.read_all(storage, args[1], 1024 * 1024)
-  if !bytes.ok {
+  if bytes.failure.kind != io.Kind.Ok {
     #panic("WAV read")
   }
   if !mixer.init() {

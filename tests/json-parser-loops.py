@@ -58,8 +58,9 @@ for raw in [b'-', b'1.', b'1e', b'1e+', b'1e-', b'1.e2', b'1e.2']:
       require(token.kind == json.TokenKind.Invalid && token.offset == 0 && state.offset == 1 && #len(token.text) == 1, "invalid tokenizer progress")
     }''' % quote(raw))
 source = '''use "std/encoding/json" json
+use "std/io" io
 use "std/mem" mem
-use "std/errors" errors
+use "std/io" errors
 fn require(ok: bool, message: []const u8) { if !ok { #panic(message) } }
 fn main() {
   arena := mem.arena_create(0)

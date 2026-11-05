@@ -12,7 +12,7 @@ fn stdin_read(data: rawptr, destination: []u8) Result {
     value = #syscall(3, 0, &destination[0], #len(destination))
   }
   if value < 0 {
-    return Result{ transferred: 0, error: value, kind: errors.darwin(value), status: Status.Error }
+    return Result{ transferred: 0, error: value, kind: darwin(value), status: Status.Error }
   }
   status := Status.Complete
   if value == 0 {
@@ -30,7 +30,7 @@ fn write_descriptor(descriptor: isize, source: []const u8) Result {
       if value == 0 {
         value = -5
       }
-      return Result{ transferred: written, error: value, kind: errors.darwin(value), status: Status.Error }
+      return Result{ transferred: written, error: value, kind: darwin(value), status: Status.Error }
     }
     else {
       written += #cast(usize, value)

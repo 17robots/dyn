@@ -1,6 +1,5 @@
 use "std/io"
-use "std/errors"
-
+use "std/io" errors
 // The first error is sticky; later writes and flushes transfer nothing.
 pub struct Writer {
   destination: io.Writer,
@@ -19,7 +18,7 @@ pub fn writer_buffered(state: *const Writer) usize {
 }
 
 pub fn writer_flush(state: *Writer) io.Result {
-  if state.kind != errors.Kind.None {
+  if state.kind != errors.Kind.Ok {
     return io.Result{ transferred: 0, error: state.error, kind: state.kind, status: io.Status.Error }
   }
   if state.used > #len(state.storage) {
@@ -47,7 +46,7 @@ pub fn writer_flush(state: *Writer) io.Result {
 
 fn writer_write(data: rawptr, source: []const u8) io.Result {
   state := #cast(*Writer, data)
-  if state.kind != errors.Kind.None {
+  if state.kind != errors.Kind.Ok {
     return io.Result{ transferred: 0, error: state.error, kind: state.kind, status: io.Status.Error }
   }
   if state.used > #len(state.storage) {
@@ -121,7 +120,7 @@ pub fn reader(source: io.Reader, storage: []u8) Reader {
 
 fn reader_read(data: rawptr, destination: []u8) io.Result {
   state := #cast(*Reader, data)
-  if state.kind != errors.Kind.None {
+  if state.kind != errors.Kind.Ok {
     return io.Result{ error: state.error, kind: state.kind, status: io.Status.Error }
   }
   if state.start > state.end || state.end > #len(state.storage) || state.pending_count > 2 {
@@ -138,7 +137,7 @@ fn reader_read(data: rawptr, destination: []u8) io.Result {
       continue
     }
     if state.start == state.end {
-      if state.kind != errors.Kind.None {
+      if state.kind != errors.Kind.Ok {
         return io.Result{ transferred: total, error: state.error, kind: state.kind, status: io.Status.Error }
       }
       if state.ended {
@@ -208,7 +207,7 @@ fn unread(state: *Reader, byte: u8) {
 }
 
 fn read_record(state: *Reader, destination: []u8, delimiter: u8, line: bool) ReadResult {
-  if state.kind != errors.Kind.None {
+  if state.kind != errors.Kind.Ok {
     return ReadResult{ error: state.error, kind: state.kind, status: ReadStatus.Error }
   }
   if #len(destination) == 0 {

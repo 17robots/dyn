@@ -1,4 +1,5 @@
 #target(kernel: windows)
+use "std/io" io
 use "std/unicode/utf8" utf8
 use "std/unicode/utf16" utf16
 extern fn win_open "dyn_fs_open"(path: *const u16, access: u32, share: u32, security: rawptr, creation: u32, flags: u32, template: rawptr) rawptr
@@ -39,16 +40,16 @@ fn native_open(path: []const u8, mode: u8) FileResult {
   at: usize = 0
   used: usize = 0
   if #len(path) == 0 {
-    return FileResult{ kind: errors.Kind.InvalidInput }
+    return FileResult{ failure: io.Failure{ kind: errors.Kind.InvalidInput } }
   }
   for at < #len(path) {
     codepoint := utf8.decode(path, at)
     if !codepoint.ok || codepoint.codepoint == 0 {
-      return FileResult{ kind: errors.Kind.InvalidInput }
+      return FileResult{ failure: io.Failure{ kind: errors.Kind.InvalidInput } }
     }
     width := utf16.encode(storage[used..32767], codepoint.codepoint)
     if width == 0 {
-      return FileResult{ kind: errors.Kind.Capacity }
+      return FileResult{ failure: io.Failure{ kind: errors.Kind.Capacity } }
     }
     used += width
     at += codepoint.width
@@ -71,9 +72,9 @@ fn native_open(path: []const u8, mode: u8) FileResult {
   handle := #cast(isize, #cast(usize, win_open(&storage[0], access, 7, nil, creation, 128, nil)))
   if !native_valid(handle) {
     code := last_error()
-    return FileResult{ error: code, kind: native_kind(code) }
+    return FileResult{ failure: io.Failure{ kind: native_kind(code), native: code } }
   }
-  return FileResult{ value: owned_file(handle), ok: true }
+  return FileResult{ value: owned_file(handle) }
 }
 fn native_close(handle: isize) isize {
   if win_close(pointer(handle)) == 0 {

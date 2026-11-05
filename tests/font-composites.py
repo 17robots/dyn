@@ -101,8 +101,9 @@ def fixture():
     for tag,data in tables.items(): directory+=tag.encode()+u32(0)+u32(offset)+u32(len(data));body+=data;offset+=len(data)
     return u32(0x10000)+u16(len(tables))+b'\0'*6+directory+body
 SOURCE='''use "std/font" font
+use "std/io" io
 use "std/mem" mem
-use "std/errors" errors
+use "std/io" errors
 fn check(ok: bool) { if !ok { #panic("composite contract") } }
 fn same(arena: *mem.Arena, face: *const font.Face, a, b: u16, size: u16) {
   mark := mem.arena_mark(arena)

@@ -31,32 +31,32 @@ mock_resets: i32 = 0
 mock_reads: i32 = 0
 fn require(ok: bool) { if !ok { #panic("windows mock") } }
 fn main() {
- require(failure(-5).kind == errors.Kind.PermissionDenied)
- require(validation_failure(-95).kind == errors.Kind.Unsupported)
+ require(failure(-5).failure.kind == errors.Kind.PermissionDenied)
+ require(validation_failure(-95).failure.kind == errors.Kind.Unsupported)
  closed := Watcher{}
- require(next(&closed).kind == errors.Kind.InvalidState)
+ require(next(&closed).failure.kind == errors.Kind.InvalidState)
  backing: [272]u8 = []
  opened := open(backing[..])
  state := opened.value
  added := add(&state, "test", Create)
- require(!added.ok && added.error == 0 && added.kind == errors.Kind.System)
+ require(added.failure.kind != errors.Kind.Ok && added.failure.native == 0 && added.failure.kind == errors.Kind.System)
  require(mock_resets == 1 && mock_reads == 0)
  mock_reset = 1
  added = add(&state, "test", Create)
- require(!added.ok && added.error == 0 && added.kind == errors.Kind.System)
+ require(added.failure.kind != errors.Kind.Ok && added.failure.native == 0 && added.failure.kind == errors.Kind.System)
  require(mock_reads == 1)
  slot := &state.native.slots[0]
  slot.id = 1
  slot.handle = #cast(rawptr, 1)
  slot.event = #cast(rawptr, 2)
  first := next(&state)
- require(first.status == Status.Error && first.error == 0 && first.kind == errors.Kind.System)
+ require(first.status == Status.Error && first.failure.native == 0 && first.failure.kind == errors.Kind.System)
  reads := mock_reads
  mock_code = 5
  repeated := next(&state)
- require(repeated.error == 0 && repeated.kind == errors.Kind.System && mock_reads == reads)
- require(close(&state).ok)
- require(next(&state).error == 0)
+ require(repeated.failure.native == 0 && repeated.failure.kind == errors.Kind.System && mock_reads == reads)
+ require(close(&state).failure.kind == errors.Kind.Ok)
+ require(next(&state).failure.native == 0)
 }
 '''
 run('windows',s)
@@ -78,26 +78,26 @@ fn require(ok: bool) { if !ok { #panic("macos mock") } }
 fn main() {
  owner := mem.arena_create(0)
  live := Watcher{arena: owner, state: mem.push(State, owner)}
- require(close(&live).ok)
+ require(close(&live).failure.kind == errors.Kind.Ok)
  require(live.arena == nil && live.state == nil)
- require(close(&live).ok)
+ require(close(&live).failure.kind == errors.Kind.Ok)
  partial := Watcher{arena: mem.arena_create(0)}
- require(close(&partial).ok && partial.arena == nil)
- require(close(&partial).ok)
+ require(close(&partial).failure.kind == errors.Kind.Ok && partial.arena == nil)
+ require(close(&partial).failure.kind == errors.Kind.Ok)
  empty := Watcher{}
- require(close(&empty).ok && close(&empty).ok)
+ require(close(&empty).failure.kind == errors.Kind.Ok && close(&empty).failure.kind == errors.Kind.Ok)
  backing: [272]u8 = []
  opened := open(backing[..])
- require(!opened.ok && opened.error == -95 && opened.kind == errors.Kind.Unsupported)
+ require(opened.failure.kind != errors.Kind.Ok && opened.failure.native == -95 && opened.failure.kind == errors.Kind.Unsupported)
  state := State{api: API{canonical: canonical_mock}}
  watcher := Watcher{state: &state}
  unsupported := add(&watcher, "test", CloseWrite)
- require(!unsupported.ok && unsupported.error == -95 && unsupported.kind == errors.Kind.Unsupported)
+ require(unsupported.failure.kind != errors.Kind.Ok && unsupported.failure.native == -95 && unsupported.failure.kind == errors.Kind.Unsupported)
  denied := add(&watcher, "test", Create)
- require(!denied.ok && denied.error == -13 && denied.kind == errors.Kind.PermissionDenied)
+ require(denied.failure.kind != errors.Kind.Ok && denied.failure.native == -13 && denied.failure.kind == errors.Kind.PermissionDenied)
  mock_errno = 63
  long := add(&watcher, "test", Create)
- require(!long.ok && long.error == -63 && long.kind == errors.Kind.InvalidInput)
+ require(long.failure.kind != errors.Kind.Ok && long.failure.native == -63 && long.failure.kind == errors.Kind.InvalidInput)
 }
 '''
 run('macos',s)

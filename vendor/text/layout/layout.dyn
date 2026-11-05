@@ -1,5 +1,5 @@
 use "std/mem" mem
-use "std/errors" errors
+use "std/io" errors
 use "std/math" math
 use "std/unicode/utf8" utf8
 use "std/unicode/text" unicode
@@ -335,7 +335,7 @@ fn emit(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[]cons
     }
   }
   line_append(output, Line{start:base+start, end:base+end, glyph_start:glyph_start, glyph_count:output.glyph_count-glyph_start, width:x, y:y, rtl:paragraph.base==bidi.RightToLeft})
-  return errors.Kind.None
+  return errors.Kind.Ok
 }
 fn paragraph(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[]const u8, base:usize, font:Font, options:Options) errors.Kind {
   work:=mem.arena_create(0)
@@ -454,7 +454,7 @@ fn paragraph(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[
       mem.arena_reset(candidate)
       temporary:=Output{arena:candidate, line_count:output.line_count}
       kind:=emit(&temporary, api, bidi_api, text, &resolved.value, clusters, measured.units[u].start, measured.units[end-1].end, base, font, tab)
-      if kind!=errors.Kind.None {
+      if kind!=errors.Kind.Ok {
         mem.arena_release(candidate)
         return kind
       }
@@ -476,7 +476,7 @@ fn paragraph(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[
     mem.arena_release(candidate)
     u=end
   }
-  return errors.Kind.None
+  return errors.Kind.Ok
 }
 fn separator(cp:u32) bool {
   return cp==10 || cp==13 || cp==11 || cp==12 || cp==28 || cp==29 || cp==30 || cp==133 || cp==8232 || cp==8233
@@ -514,7 +514,7 @@ pub fn build(arena:*mem.Arena, source:[]const u8, font:Font, api:*const hb.Api, 
     decoded:=utf8.decode(source, at)
     if separator(decoded.codepoint) {
       kind:=paragraph(&output, api, bidi_api, source[begin..at], begin, font, options)
-      if kind!=errors.Kind.None {
+      if kind!=errors.Kind.Ok {
         return Result{kind:kind, offset:begin}
       }
       at+=decoded.width
@@ -527,7 +527,7 @@ pub fn build(arena:*mem.Arena, source:[]const u8, font:Font, api:*const hb.Api, 
     }
   }
   kind:=paragraph(&output, api, bidi_api, source[begin..], begin, font, options)
-  if kind!=errors.Kind.None {
+  if kind!=errors.Kind.Ok {
     return Result{kind:kind, offset:begin}
   }
   text:=mem.push_bytes_uninit(arena, #len(source))

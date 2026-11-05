@@ -16,9 +16,10 @@ ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build' /
                           ('dyn-release.exe' if os.name == 'nt' else 'dyn-release'))).resolve())
 IMPORTS = '''use "std/thread" thread
+use "std/io" io
 use "std/mem" mem
 use "std/sync" sync
-use "std/errors" errors
+use "std/io" errors
 '''
 SOURCE = IMPORTS + r'''
 struct Shared { gate: sync.AtomicU32, arrived: sync.AtomicU32, value: u32 }
@@ -30,19 +31,19 @@ fn worker(context: rawptr) isize {
   return 0
 }
 fn invalid(result: thread.SpawnResult, arena: *mem.Arena, mark: usize) {
-  if result.ok || result.value != nil || result.error != 0 || result.kind != errors.Kind.InvalidInput || mem.arena_mark(arena) != mark {
+  if result.value != nil || result.failure.native != 0 || result.failure.kind != errors.Kind.InvalidInput || mem.arena_mark(arena) != mark {
     #panic("invalid input result/rollback")
   }
 }
 fn joined(value: *thread.Thread) {
   result := thread.join(value)
-  if !result.ok || result.kind != errors.Kind.None || result.error != 0 || result.value != 0 || thread.id(value) != 0 { #panic("join result") }
+  if result.failure.kind != errors.Kind.Ok || result.failure.native != 0 || result.value != 0 || thread.id(value) != 0 { #panic("join result") }
 }
 fn main() {
   zero := thread.SpawnResult{}
-  if zero.ok || zero.value != nil || zero.kind != errors.Kind.None || zero.error != 0 { #panic("zero spawn result") }
+  if zero.value != nil || zero.failure.kind != errors.Kind.Ok || zero.failure.native != 0 { #panic("zero spawn result") }
   result := thread.Result{}
-  if result.ok || result.value != 0 || result.kind != errors.Kind.None || result.error != 0 { #panic("zero result") }
+  if result.value != 0 || result.failure.kind != errors.Kind.Ok || result.failure.native != 0 { #panic("zero result") }
   empty := thread.Thread{}
   if thread.id(&empty) != 0 { #panic("zero id") }
   joined(&empty)
@@ -61,11 +62,11 @@ fn main() {
   first := Shared{}
   second := Shared{}
   owned := thread.spawn_with_size(arena, 131072, worker, #cast(rawptr, &first))
-  if !owned.ok || owned.value == nil || owned.kind != errors.Kind.None || owned.error != 0 { #panic("owned spawn") }
+  if owned.failure.kind != errors.Kind.Ok || owned.value == nil || owned.failure.kind != errors.Kind.Ok || owned.failure.native != 0 { #panic("owned spawn") }
   stable := owned.value
   owned_mark := mem.arena_mark(arena)
   borrowed := thread.spawn(arena, stack[..], worker, #cast(rawptr, &second))
-  if !borrowed.ok || borrowed.value == nil || borrowed.kind != errors.Kind.None || borrowed.error != 0 { #panic("borrowed spawn") }
+  if borrowed.failure.kind != errors.Kind.Ok || borrowed.value == nil || borrowed.failure.kind != errors.Kind.Ok || borrowed.failure.native != 0 { #panic("borrowed spawn") }
   if borrowed.value == stable || owned.value != stable || owned_mark <= mark { #panic("stable distinct nodes") }
   for sync.load_u32(&first.arrived) == 0 || sync.load_u32(&second.arrived) == 0 { _ = thread.yield_now() }
   if thread.id(stable) == 0 || thread.id(borrowed.value) == 0 || thread.id(stable) == thread.id(borrowed.value) { #panic("two active ids") }

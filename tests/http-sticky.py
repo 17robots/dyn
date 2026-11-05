@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DYN = Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve()
 SOURCE = r'''
 use "std/io" io
-use "std/errors" errors
+use "std/io" errors
 use "std/net/http" http
 struct Sink { calls: usize, fail: usize, code: isize, partial: bool }
 fn write(raw: rawptr, source: []const u8) io.Result {
@@ -30,7 +30,7 @@ fn read(raw: rawptr, dest: []u8) io.Result {
   return io.Result{ transferred: count, status: io.Status.End }
 }
 fn same(r: http.Result, code: isize) {
-  if r.ok || r.detail != http.ErrorKind.Io || r.error != code { #panic("first HTTP error") }
+  if r.failure.kind == io.Kind.Ok || r.detail != http.ErrorKind.Io || r.failure.native != code { #panic("first HTTP error") }
 }
 fn main() {
   for native in [0, -73] {
@@ -63,7 +63,7 @@ fn main() {
       sink := Sink{}
       response := http.Response{ output: io.Writer{ data: &sink, write: write } }
       opened := http.respond_stream(&response, http.ResponseOptions{})
-      if !opened.ok { #panic("open body") }
+      if opened.failure.kind != io.Kind.Ok { #panic("open body") }
       sink.fail = sink.calls + #cast(usize, segment)
       sink.code = code
       writer := http.body_writer(&opened.body)
@@ -92,7 +92,7 @@ fn main() {
     state := http.server(io.Reader{ data: &feed, read: read }, io.Writer{ data: &sink, write: write }, storage[..])
     first := http.receive(&state)
     again := http.receive(&state)
-    if first.detail != http.ErrorKind.Io || again.error != code || feed.calls != 1 { #panic("receive IO replay") }
+    if first.detail != http.ErrorKind.Io || again.failure.native != code || feed.calls != 1 { #panic("receive IO replay") }
     state = http.server(io.Reader{ data: &feed, read: read }, io.Writer{ data: &sink, write: write }, storage[..])
     _ = http.receive(&state)
     if feed.calls != 2 { #panic("constructor reset") }
@@ -103,10 +103,10 @@ fn main() {
     storage: [64]u8 = []
     state := http.server(io.Reader{ data: &feed, read: read }, io.Writer{ data: &sink, write: write }, storage[..])
     first := http.receive(&state)
-    if first.ok { first = http.receive(&state) }
+    if first.detail == http.ErrorKind.None { first = http.receive(&state) }
     calls := feed.calls
     again := http.receive(&state)
-    if first.ok || again.error != first.error || feed.calls != calls { #panic("receive terminal replay") }
+    if first.detail == http.ErrorKind.None || again.failure.native != first.failure.native || feed.calls != calls { #panic("receive terminal replay") }
   }
   feed := Feed{ wire: "GET / HTTP/1.1\r\n\r\n" }
   sink_zero := Sink{}
@@ -119,14 +119,14 @@ fn main() {
   if http.respond(&response, "", http.ResponseOptions{}).detail != http.ErrorKind.Invalid { #panic("zero response") }
   body := http.Body{}
   writer := http.body_writer(&body)
-  if writer.write(writer.data, "").status != io.Status.Error || http.body_abort(&body).ok || http.body_finish(&body).ok { #panic("zero body") }
+  if writer.write(writer.data, "").status != io.Status.Error || http.body_abort(&body).failure.kind == io.Kind.Ok || http.body_finish(&body).failure.kind == io.Kind.Ok { #panic("zero body") }
   // Successful partial writes and empty callbacks remain usable.
   sink := Sink{ partial: true }
   response = http.Response{ output: io.Writer{ data: &sink, write: write } }
   opened := http.respond_stream(&response, http.ResponseOptions{})
   writer = http.body_writer(&opened.body)
   if writer.write(writer.data, "").status == io.Status.Error || io.write_all(writer, "abc").transferred != 3 { #panic("partial success") }
-  if !http.body_finish(&opened.body).ok { #panic("finish success") }
+  if http.body_finish(&opened.body).failure.kind != io.Kind.Ok { #panic("finish success") }
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-http-sticky-') as temporary:

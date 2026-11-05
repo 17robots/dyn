@@ -10,6 +10,7 @@ def run(args, **kw):
     if result.returncode: raise RuntimeError(shlex.join(map(str,args))+"\n"+result.stdout+result.stderr)
     return result
 source = r'''
+use "std/io" io
 use "std/mem" mem
 use "std/container/list" list
 struct Slot { free_next: *Slot, value: u32 }

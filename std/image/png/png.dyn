@@ -1,5 +1,5 @@
 use "std/mem" mem
-use "std/errors" errors
+use "std/io" errors
 use "std/compress/deflate" deflate
 
 pub struct Info { width: u32, height: u32, channels: u8, ok: bool }

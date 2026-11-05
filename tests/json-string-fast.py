@@ -61,6 +61,7 @@ for n, raw in enumerate(invalid):
     require(mem.arena_mark(arena) == mark, "rollback {n}")
   }}''')
 source = '''use "std/encoding/json" json
+use "std/io" io
 use "std/mem" mem
 fn require(ok: bool, message: []const u8) { if !ok { #panic(message) } }
 fn main() {

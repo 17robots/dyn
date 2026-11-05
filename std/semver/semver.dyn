@@ -1,5 +1,4 @@
-use "std/errors" errors
-
+use "std/io" errors
 // Semantic Versioning 2.0 values. Prerelease/build slices borrow input.
 
 pub struct Version {
@@ -124,7 +123,7 @@ pub fn parse(text: []const u8) ParseResult {
   if at != #len(text) {
     return ParseResult{ offset: at, ok: false, kind: kind, error: 0 }
   }
-  return ParseResult{ value: version, offset: at, ok: true, kind: errors.Kind.None, error: 0 }
+  return ParseResult{ value: version, offset: at, ok: true, kind: errors.Kind.Ok, error: 0 }
 }
 
 fn bytes_compare(a: []const u8, b: []const u8) i32 {

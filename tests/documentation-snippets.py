@@ -10,7 +10,8 @@ ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 # Historical "before" code and proposals for syntax Dyn does not have.
 SKIP = ('docs/migrations/', 'docs/internals/generics-design.md',
-        'docs/internals/std-standardization.md')
+        'docs/internals/std-standardization.md',
+        'docs/internals/result-shape-std.md')
 
 
 def parses(directory, source):

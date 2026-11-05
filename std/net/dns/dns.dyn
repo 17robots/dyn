@@ -1,6 +1,6 @@
 use "std/mem" mem
 use "std/net" network
-use "std/errors"
+use "std/io" errors
 use "std/crypto/random" random
 use "std/time" time
 use "std/bytes" bytes
@@ -10,8 +10,8 @@ pub struct Ipv6 { bytes: [16]u8 }
 // error is a native transport code or negative DNS rcode; parser validation
 // uses zero. kind is portable; offset is zero when no packet location applies.
 struct Result { value: usize, error: isize, kind: errors.Kind, ok: bool, offset: usize }
-pub struct Ipv4Result { value: []Ipv4, ok: bool, kind: errors.Kind, error: isize, offset: usize }
-pub struct Ipv6Result { value: []Ipv6, ok: bool, kind: errors.Kind, error: isize, offset: usize }
+pub struct Ipv4Result { value: []Ipv4, offset: usize, failure: errors.Failure }
+pub struct Ipv6Result { value: []Ipv6, offset: usize, failure: errors.Failure }
 
 // Reject borrowed input anywhere in pending backing, before typed pushes zero it.
 fn conflicts(arena: *mem.Arena, input: []const u8) bool {
@@ -162,41 +162,41 @@ fn query(destination: []u8, name: []const u8, identifier: u16, kind: u16) []u8 {
 // the malformed record start (or header/question field); error retains DNS rcode.
 pub fn parse_ipv4(arena: *mem.Arena, packet: []const u8, identifier: u16, name: []const u8) Ipv4Result {
   if conflicts(arena, packet) || conflicts(arena, name) {
-    return Ipv4Result{kind: errors.Kind.InvalidInput}
+    return Ipv4Result{ failure: errors.Failure{ kind: errors.Kind.InvalidInput } }
   }
   empty4: []Ipv4
   empty6: []Ipv6
   measured := parse(packet, identifier, name, empty4, empty6, 1, false)
   if !measured.ok {
-    return Ipv4Result{error: measured.error, kind: measured.kind, offset: measured.offset}
+    return Ipv4Result{ offset: measured.offset, failure: errors.Failure{ kind: measured.kind, native: measured.error } }
   }
   mark := mem.arena_mark(arena)
   output := mem.push_array(Ipv4, arena, measured.value)
   result := parse(packet, identifier, name, output, empty6, 1, true)
   if !result.ok {
     mem.arena_rewind(arena, mark)
-    return Ipv4Result{error: result.error, kind: result.kind, offset: result.offset}
+    return Ipv4Result{ offset: result.offset, failure: errors.Failure{ kind: result.kind, native: result.error } }
   }
-  return Ipv4Result{value: output, ok: true}
+  return Ipv4Result{ value: output }
 }
 pub fn parse_ipv6(arena: *mem.Arena, packet: []const u8, identifier: u16, name: []const u8) Ipv6Result {
   if conflicts(arena, packet) || conflicts(arena, name) {
-    return Ipv6Result{kind: errors.Kind.InvalidInput}
+    return Ipv6Result{ failure: errors.Failure{ kind: errors.Kind.InvalidInput } }
   }
   empty4: []Ipv4
   empty6: []Ipv6
   measured := parse(packet, identifier, name, empty4, empty6, 28, false)
   if !measured.ok {
-    return Ipv6Result{error: measured.error, kind: measured.kind, offset: measured.offset}
+    return Ipv6Result{ offset: measured.offset, failure: errors.Failure{ kind: measured.kind, native: measured.error } }
   }
   mark := mem.arena_mark(arena)
   output := mem.push_array(Ipv6, arena, measured.value)
   result := parse(packet, identifier, name, empty4, output, 28, true)
   if !result.ok {
     mem.arena_rewind(arena, mark)
-    return Ipv6Result{error: result.error, kind: result.kind, offset: result.offset}
+    return Ipv6Result{ offset: result.offset, failure: errors.Failure{ kind: result.kind, native: result.error } }
   }
-  return Ipv6Result{value: output, ok: true}
+  return Ipv6Result{ value: output }
 }
 fn same_name(left: []const u8, right: []const u8) bool {
   if #len(left) != #len(right) {
@@ -377,24 +377,24 @@ fn parse(packet: []const u8, identifier: u16, name: []const u8, addresses: []Ipv
 pub fn resolve_ipv4(arena: *mem.Arena, name: []const u8, server: *const network.Ipv4Address,
   timeout_milliseconds: i32) Ipv4Result {
   if conflicts(arena, name) {
-    return Ipv4Result{kind: errors.Kind.InvalidInput}
+    return Ipv4Result{ failure: errors.Failure{ kind: errors.Kind.InvalidInput } }
   }
   packet: [65535]u8 = []
   received := exchange(name, server, packet[..], timeout_milliseconds, 1)
   if !received.ok {
-    return Ipv4Result{error: received.error, kind: received.kind}
+    return Ipv4Result{ failure: errors.Failure{ kind: received.kind, native: received.error } }
   }
   return parse_ipv4(arena, packet[..received.length], received.identifier, name)
 }
 pub fn resolve_ipv6(arena: *mem.Arena, name: []const u8, server: *const network.Ipv4Address,
   timeout_milliseconds: i32) Ipv6Result {
   if conflicts(arena, name) {
-    return Ipv6Result{kind: errors.Kind.InvalidInput}
+    return Ipv6Result{ failure: errors.Failure{ kind: errors.Kind.InvalidInput } }
   }
   packet: [65535]u8 = []
   received := exchange(name, server, packet[..], timeout_milliseconds, 28)
   if !received.ok {
-    return Ipv6Result{error: received.error, kind: received.kind}
+    return Ipv6Result{ failure: errors.Failure{ kind: received.kind, native: received.error } }
   }
   return parse_ipv6(arena, packet[..received.length], received.identifier, name)
 }
@@ -411,22 +411,22 @@ fn ready(descriptor: isize, events: i16, deadline: *const time.Deadline, finite:
   timeout: i32 = -1
   if finite {
     remaining := time.deadline_remaining(deadline)
-    if !remaining.ok {
-      return network.Result{error: remaining.error, kind: remaining.kind}
+    if remaining.failure.kind != errors.Kind.Ok {
+      return network.Result{ failure: errors.Failure{ kind: remaining.failure.kind, native: remaining.failure.native } }
     }
     if remaining.value == 0 {
-      return network.Result{error: -110, kind: errors.Kind.System}
+      return network.Result{ failure: errors.Failure{ kind: errors.Kind.System, native: -110 } }
     }
     timeout = #cast(i32, ((remaining.value + time.Millisecond - 1) / time.Millisecond))
   }
   result := network.wait(descriptor, events, timeout)
-  if !result.ok {
+  if result.failure.kind != errors.Kind.Ok {
     return result
   }
   if result.value == 0 {
-    return network.Result{error: -110, kind: errors.Kind.System}
+    return network.Result{ failure: errors.Failure{ kind: errors.Kind.System, native: -110 } }
   }
-  return network.Result{ok: true}
+  return network.Result{}
 }
 fn transfer(descriptor: isize, buffer: []u8, sending: bool, deadline: *const time.Deadline, finite: bool) network.Result {
   at: usize = 0
@@ -436,7 +436,7 @@ fn transfer(descriptor: isize, buffer: []u8, sending: bool, deadline: *const tim
       events = network.PollWritable
     }
     error := ready(descriptor, events, deadline, finite)
-    if !error.ok {
+    if error.failure.kind != errors.Kind.Ok {
       return error
     }
     result := network.Result{}
@@ -446,18 +446,18 @@ fn transfer(descriptor: isize, buffer: []u8, sending: bool, deadline: *const tim
     else {
       result = network.receive(descriptor, buffer[at..], 0)
     }
-    if !result.ok {
-      if result.error == -4 || network.would_block(&result) {
+    if result.failure.kind != errors.Kind.Ok {
+      if result.failure.native == -4 || network.would_block(&result) {
         continue
       }
       return result
     }
     if result.value == 0 {
-      return network.Result{error: -74, kind: errors.Kind.InvalidInput}
+      return network.Result{ failure: errors.Failure{ kind: errors.Kind.InvalidInput, native: -74 } }
     }
     at += #cast(usize, result.value)
   }
-  return network.Result{ok: true}
+  return network.Result{}
 }
 fn tcp(name: []const u8, server: *const network.Ipv4Address, packet: []u8,
   identifier: u16, kind: u16, deadline: *const time.Deadline, finite: bool) Packet {
@@ -466,43 +466,43 @@ fn tcp(name: []const u8, server: *const network.Ipv4Address, packet: []u8,
     return Packet{ error: -22, kind: errors.Kind.InvalidInput }
   }
   opened := network.socket(network.AddressFamilyIpv4, network.SocketStream, 0)
-  if !opened.ok {
-    return Packet{ error: opened.error, kind: opened.kind }
+  if opened.failure.kind != errors.Kind.Ok {
+    return Packet{ error: opened.failure.native, kind: opened.failure.kind }
   }
   descriptor := opened.value
   defer {
     _ = network.close(descriptor)
   }
   mode := network.nonblocking(descriptor, true)
-  if !mode.ok {
-    return Packet{ error: mode.error, kind: mode.kind }
+  if mode.failure.kind != errors.Kind.Ok {
+    return Packet{ error: mode.failure.native, kind: mode.failure.kind }
   }
   connected := network.connect_ipv4(descriptor, server)
-  if !connected.ok {
+  if connected.failure.kind != errors.Kind.Ok {
     if !network.would_block(&connected) {
-      return Packet{ error: connected.error, kind: connected.kind }
+      return Packet{ error: connected.failure.native, kind: connected.failure.kind }
     }
     error := ready(descriptor, network.PollWritable, deadline, finite)
-    if !error.ok {
-      return Packet{ error: error.error, kind: error.kind }
+    if error.failure.kind != errors.Kind.Ok {
+      return Packet{ error: error.failure.native, kind: error.failure.kind }
     }
     checked := network.socket_error(descriptor)
-    if !checked.ok {
-      return Packet{ error: checked.error, kind: checked.kind }
+    if checked.failure.kind != errors.Kind.Ok {
+      return Packet{ error: checked.failure.native, kind: checked.failure.kind }
     }
   }
   prefix: [2]u8 = []
   store_u16(prefix[..], 0, #cast(u16, #len(request)))
   sent := transfer(descriptor, prefix[..], true, deadline, finite)
-  if sent.ok {
+  if sent.failure.kind == errors.Kind.Ok {
     sent = transfer(descriptor, request, true, deadline, finite)
   }
-  if !sent.ok {
-    return Packet{ error: sent.error, kind: sent.kind }
+  if sent.failure.kind != errors.Kind.Ok {
+    return Packet{ error: sent.failure.native, kind: sent.failure.kind }
   }
   received := transfer(descriptor, prefix[..], false, deadline, finite)
-  if !received.ok {
-    return Packet{ error: received.error, kind: received.kind }
+  if received.failure.kind != errors.Kind.Ok {
+    return Packet{ error: received.failure.native, kind: received.failure.kind }
   }
   length := #cast(usize, load_u16(prefix[..], 0))
   if length > #len(packet) {
@@ -512,8 +512,8 @@ fn tcp(name: []const u8, server: *const network.Ipv4Address, packet: []u8,
     return Packet{ error: -74, kind: errors.Kind.InvalidInput }
   }
   received = transfer(descriptor, packet[..length], false, deadline, finite)
-  if !received.ok {
-    return Packet{ error: received.error, kind: received.kind }
+  if received.failure.kind != errors.Kind.Ok {
+    return Packet{ error: received.failure.native, kind: received.failure.kind }
   }
   return Packet{ length: length, identifier: identifier, ok: true }
 }
@@ -523,8 +523,8 @@ fn exchange(name: []const u8, server: *const network.Ipv4Address, packet: []u8,
   deadline := time.Deadline{}
   if finite {
     created := time.deadline_after(#cast(i64, timeout_milliseconds) * time.Millisecond)
-    if !created.ok {
-      return Packet{error: created.error, kind: created.kind}
+    if created.failure.kind != errors.Kind.Ok {
+      return Packet{error: created.failure.native, kind: created.failure.kind}
     }
     deadline = created.value
   }
@@ -538,39 +538,39 @@ fn exchange(name: []const u8, server: *const network.Ipv4Address, packet: []u8,
     return Packet{ error: -22, kind: errors.Kind.InvalidInput }
   }
   opened := network.socket(network.AddressFamilyIpv4, network.SocketDatagram, 0)
-  if !opened.ok {
-    return Packet{ error: opened.error, kind: opened.kind }
+  if opened.failure.kind != errors.Kind.Ok {
+    return Packet{ error: opened.failure.native, kind: opened.failure.kind }
   }
   descriptor := opened.value
   defer {
     _ = network.close(descriptor)
   }
   mode := network.nonblocking(descriptor, true)
-  if !mode.ok {
-    return Packet{ error: mode.error, kind: mode.kind }
+  if mode.failure.kind != errors.Kind.Ok {
+    return Packet{ error: mode.failure.native, kind: mode.failure.kind }
   }
   connected := network.connect_ipv4(descriptor, server)
-  if !connected.ok {
-    return Packet{ error: connected.error, kind: connected.kind }
+  if connected.failure.kind != errors.Kind.Ok {
+    return Packet{ error: connected.failure.native, kind: connected.failure.kind }
   }
   sent := network.send(descriptor, request, 0)
-  if !sent.ok {
-    return Packet{ error: sent.error, kind: sent.kind }
+  if sent.failure.kind != errors.Kind.Ok {
+    return Packet{ error: sent.failure.native, kind: sent.failure.kind }
   }
   if #cast(usize, sent.value) != #len(request) {
     return Packet{ error: -5, kind: errors.Kind.System }
   }
   for {
     error := ready(descriptor, network.PollReadable, &deadline, finite)
-    if !error.ok {
-      return Packet{ error: error.error, kind: error.kind }
+    if error.failure.kind != errors.Kind.Ok {
+      return Packet{ error: error.failure.native, kind: error.failure.kind }
     }
     received := network.receive_packet(descriptor, packet)
-    if !received.ok {
-      if received.error == -4 || network.would_block(&received) {
+    if received.failure.kind != errors.Kind.Ok {
+      if received.failure.native == -4 || network.would_block(&received) {
         continue
       }
-      return Packet{ error: received.error, kind: received.kind }
+      return Packet{ error: received.failure.native, kind: received.failure.kind }
     }
     length := #cast(usize, received.value)
     stored := length

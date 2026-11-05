@@ -69,7 +69,7 @@ fn zero_net_handles() {
   defer mem.arena_release(arena)
   connection := mem.push(net.Connection, arena)
   listener := mem.push(net.Listener, arena)
-  if net.connection_close(connection).ok || net.listener_close(listener).ok {
+  if net.connection_close(connection).failure.kind == io.Kind.Ok || net.listener_close(listener).failure.kind == io.Kind.Ok {
     #panic("zero net handle closed")
   }
 }

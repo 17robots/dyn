@@ -1,16 +1,17 @@
+use "std/io" io
 #target(kernel: darwin)
 struct Kevent { ident: u64, filter: i16, flags: u16, filter_flags: u32, data: i64, user: u64 }
 struct Timeout { seconds: i64, nanoseconds: i64 }
 fn native_open() net.Result {
   value := #syscall(362)
   if value < 0 {
-    return net.Result{ kind: errors.darwin(value), error: value }
+    return net.Result{ failure: io.Failure{ kind: errors.darwin(value), native: value } }
   }
-  return net.Result{ value: value, ok: true }
+  return net.Result{ value: value }
 }
 fn native_close(handle: isize) Result {
   code := #syscall(6, handle)
-  return Result{ kind: errors.darwin(code), error: code, ok: code >= 0 }
+  return Result{ failure: io.Failure{ kind: errors.darwin(code), native: code } }
 }
 fn native_control(queue: *Queue, index: usize, entry: Entry) Result {
   old := queue.entries[index]
@@ -38,9 +39,9 @@ fn native_control(queue: *Queue, index: usize, entry: Entry) Result {
   }
   code := #syscall(363, queue.handle, &changes[0], count, 0, 0, 0)
   if code < 0 {
-    return Result{ kind: errors.darwin(code), error: code }
+    return Result{ failure: io.Failure{ kind: errors.darwin(code), native: code } }
   }
-  return Result{ ok: true }
+  return Result{}
 }
 fn native_wait(arena: *mem.Arena, queue: *Queue, milliseconds: i32) WaitResult {
   native := mem.push_array(Kevent, arena, #len(queue.entries))
@@ -53,7 +54,7 @@ fn native_wait(arena: *mem.Arena, queue: *Queue, milliseconds: i32) WaitResult {
   }
   code := #syscall(363, queue.handle, 0, 0, &native[0], #len(native), pointer)
   if code < 0 {
-    return WaitResult{ kind: errors.darwin(code), error: code }
+    return WaitResult{ failure: io.Failure{ kind: errors.darwin(code), native: code } }
   }
   events := mem.push_array(Event, arena, #cast(usize, code))
   for i in 0..#len(events) {
@@ -70,5 +71,5 @@ fn native_wait(arena: *mem.Arena, queue: *Queue, milliseconds: i32) WaitResult {
     }
     events[i] = Event{ descriptor: entry.descriptor, token: entry.token, events: flags }
   }
-  return WaitResult{ value: events, ok: true }
+  return WaitResult{ value: events }
 }

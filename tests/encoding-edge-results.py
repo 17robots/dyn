@@ -23,7 +23,8 @@ def literal(data):
 SOURCE = '''use "std/encoding/base64" b
 use "std/encoding/hex" h
 use "std/encoding" codec
-use "std/errors" errors
+use "std/io" errors
+use "std/io" io
 use "std/mem" mem
 use "std/bytes" bytes
 fn good(raw: []const u8, hx: []const u8, upper: []const u8, b64: []const u8) {
@@ -36,7 +37,7 @@ fn good(raw: []const u8, hx: []const u8, upper: []const u8, b64: []const u8) {
   y: b.Decoded = b.decode(a, b64)
   z := h.decode(a, upper)
   if !x.ok || !y.ok || !z.ok || !bytes.equal(x.value, raw) || !bytes.equal(y.value, raw) || !bytes.equal(z.value, raw) { #panic("decode oracle") }
-  if x.kind != errors.Kind.None || y.kind != errors.Kind.None || z.kind != errors.Kind.None ||
+  if x.kind != errors.Kind.Ok || y.kind != errors.Kind.Ok || z.kind != errors.Kind.Ok ||
      x.error != 0 || y.error != 0 || z.error != 0 || x.offset != 0 || y.offset != 0 || z.offset != 0 ||
      x.detail != codec.ErrorKind.None || y.detail != codec.ErrorKind.None || z.detail != codec.ErrorKind.None { #panic("success diagnostics") }
   if mem.arena_mark(a) != mem.arena_start(a) + 7 + 3 * #len(raw) { #panic("exact decode allocation") }
@@ -87,7 +88,7 @@ fn main() {
   z := b.Decoded{}
   q := h.Decoded{}
   if z.ok || q.ok || #len(z.value) != 0 || #len(q.value) != 0 ||
-     z.kind != errors.Kind.None || q.kind != errors.Kind.None || z.error != 0 || q.error != 0 ||
+     z.kind != errors.Kind.Ok || q.kind != errors.Kind.Ok || z.error != 0 || q.error != 0 ||
      z.offset != 0 || q.offset != 0 || z.detail != codec.ErrorKind.None || q.detail != codec.ErrorKind.None { #panic("zero initialization") }
 '''
 
@@ -156,7 +157,7 @@ if x.ok || y.ok || x.offset != 4 || y.offset != 4 || x.error != 0 || y.error != 
 x = b.decode(a, "")
 y = h.decode(a, "")
 if !x.ok || !y.ok || #len(x.value) != 0 || #len(y.value) != 0 || x.error != 0 || y.error != 0 ||
-   x.kind != errors.Kind.None || y.kind != errors.Kind.None || x.offset != 0 || y.offset != 0 ||
+   x.kind != errors.Kind.Ok || y.kind != errors.Kind.Ok || x.offset != 0 || y.offset != 0 ||
    x.detail != codec.ErrorKind.None || y.detail != codec.ErrorKind.None || mem.arena_mark(a) != mem.arena_start(a) { #panic("empty at capacity") }
 }
 '''

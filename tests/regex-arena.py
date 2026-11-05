@@ -35,8 +35,9 @@ for index, (pattern, text) in enumerate(cases):
     }}
   }}''')
 source = '''use "std/text/regex" regex
+use "std/io" io
 use "std/mem" mem
-use "std/errors" errors
+use "std/io" errors
 fn require(ok: bool, message: []const u8) { if !ok { #panic(message) } }
 fn main() {
   arena := mem.arena_create(0)

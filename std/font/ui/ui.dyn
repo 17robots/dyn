@@ -2,8 +2,7 @@ use "std/font" font
 use "std/ui/software" software
 use "std/mem" mem
 use "std/math" math
-use "std/errors" errors
-
+use "std/io" errors
 // Keep this state at a stable address while rendering. Face and its bytes outlive
 // the adapter; arena stores bitmaps until reset. A failure is sticky until reset
 // by the caller. The software renderer receives an invalid glyph on failure.

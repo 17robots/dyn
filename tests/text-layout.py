@@ -11,8 +11,9 @@ SOURCE=r'''use "std/text/layout" layout
 use "std/ui" ui
 use "std/ui/text" ui_text
 use "std/ui/software" software
+use "std/io" io
 use "std/mem" mem
-use "std/errors" errors
+use "std/io" errors
 use "std/bytes" bytes
 fn check(ok: bool) { if !ok { #panic("layout contract") } }
 fn advance(raw: rawptr, cp: u32) f64 {
@@ -52,7 +53,7 @@ fn main() {
   ui.end(&context)
   pixels: [4096]u8 = []
   surface := software.Surface{ pixels: pixels[..], width: 32, height: 32, stride: 128 }
-  check(software.render(&surface, ui.first(&context), software.Font{ glyph: glyph, line_height: 12 }).ok)
+  check(software.render(&surface, ui.first(&context), software.Font{ glyph: glyph, line_height: 12 }).failure.kind == errors.Kind.Ok)
   check(pixels[(3 * 32 + 2) * 4] == 255 && pixels[(3 * 32 + 10) * 4] == 255 && pixels[(15 * 32 + 2) * 4] == 255)
   result = layout.build(arena, "AV", font, layout.Options{ width: 30, alignment: layout.Align.Center })
   check(result.ok && result.value.glyphs[0].x == 6.0 && result.value.glyphs[1].x == 14.0)
@@ -91,11 +92,11 @@ fn main() {
   ui_text.label(&context, ui.Rect{ width: 32, height: 32 }, &result.value, ui.Color{ r: 255, a: 255 })
   ui.end(&context)
   for i in 0..#len(pixels) { pixels[i] = 0 }
-  check(software.render(&surface, ui.first(&context), software.Font{ glyph: big_glyph, line_height: 1 }).ok && pixels[0] == 0)
+  check(software.render(&surface, ui.first(&context), software.Font{ glyph: big_glyph, line_height: 1 }).failure.kind == errors.Kind.Ok && pixels[0] == 0)
   ui.begin(&context, arena, ui.Input{}, ui.Rect{ width: 32, height: 32 })
   ui.glyph(&context, ui.Rect{ width: 32, height: 32 }, 65, 2147483648, 0, ui.Color{ r: 255, a: 255 })
   ui.end(&context)
-  check(software.render(&surface, ui.first(&context), software.Font{ glyph: big_glyph, line_height: 1 }).ok && pixels[4] == 255)
+  check(software.render(&surface, ui.first(&context), software.Font{ glyph: big_glyph, line_height: 1 }).failure.kind == errors.Kind.Ok && pixels[4] == 255)
   before := mem.arena_mark(arena)
   bad := layout.build(arena, "ok\xff", font, layout.Options{})
   check(!bad.ok && bad.kind == errors.Kind.InvalidInput && bad.offset == 2 && mem.arena_mark(arena) == before)

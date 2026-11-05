@@ -1,6 +1,5 @@
 use "std/mem" mem
-use "std/errors" errors
-
+use "std/io" errors
 pub struct Match { start: usize, end: usize, ok: bool }
 pub enum CompileError { None, Syntax, Capacity, Depth }
 struct Instruction { op: u8, byte: u8, x: usize, y: usize, z: usize }

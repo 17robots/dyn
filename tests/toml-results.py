@@ -12,17 +12,17 @@ import tomllib
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 CLI='''use "std/encoding/toml" toml
+use "std/io" io
 use "std/mem" mem
 use "std/fs" fs
 use "std/process" process
-use "std/io" io
 fn main() {
  arena := mem.arena_create(0)
  defer { mem.arena_release(arena) }
  args := process.arguments(arena)
- if !args.ok || #len(args.value) != 3 { #panic("arguments") }
+ if args.failure.kind != io.Kind.Ok || #len(args.value) != 3 { #panic("arguments") }
  source := fs.read_all(arena,args.value[1],16777216)
- if !source.ok { #panic("read") }
+ if source.failure.kind != io.Kind.Ok { #panic("read") }
  mark := mem.arena_mark(arena)
  parsed := toml.parse(arena,source.value)
  if !parsed.ok {
@@ -32,7 +32,7 @@ fn main() {
  }
  encoded := toml.encode(arena,parsed.root)
  if !encoded.ok { #panic("encode") }
- if !fs.write_all(args.value[2],encoded.value).ok { #panic("write") }
+ if fs.write_all(args.value[2],encoded.value).failure.kind != io.Kind.Ok { #panic("write") }
  _ = io.println(io.stdout(),"OK")
 }
 '''

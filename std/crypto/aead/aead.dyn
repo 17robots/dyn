@@ -1,8 +1,7 @@
 use "std/crypto/aesgcm" aes
 use "std/mem" mem
 use "std/crypto/chacha20poly1305" native
-use "std/errors" errors
-
+use "std/io" errors
 pub enum Cipher { Aes256Gcm, Chacha20Poly1305 }
 pub struct Sealed { ciphertext: []u8, tag: []u8 }
 pub struct SealResult { value: Sealed, ok: bool, kind: errors.Kind, error: isize, provider_code: u64 }

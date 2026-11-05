@@ -11,7 +11,7 @@ SOURCE = r'''use "std/text/template" text
 use "std/html/template" html
 use "std/io" io
 use "std/mem" mem
-use "std/errors" errors
+use "std/io" errors
 use "std/bytes" bytes
 fn check(ok: bool) { if !ok { #panic("template results") } }
 struct Sink { calls: usize, code: isize }
@@ -28,13 +28,13 @@ fn main() {
   arena := mem.arena_from_buffer(storage[..])
   pzero: text.ParseResult
   rzero: html.RenderResult
-  check(!pzero.ok && pzero.kind == errors.Kind.None && pzero.error == 0 && pzero.detail == text.ErrorKind.None && pzero.offset == 0 && #len(pzero.value.source) == 0)
-  check(!rzero.ok && rzero.kind == errors.Kind.None && rzero.error == 0 && rzero.detail == html.ErrorKind.None && rzero.offset == 0)
+  check(!pzero.ok && pzero.kind == errors.Kind.Ok && pzero.error == 0 && pzero.detail == text.ErrorKind.None && pzero.offset == 0 && #len(pzero.value.source) == 0)
+  check(!rzero.ok && rzero.kind == errors.Kind.Ok && rzero.error == 0 && rzero.detail == html.ErrorKind.None && rzero.offset == 0)
   empty: text.Template
   writer: io.Writer
   fields: [1]text.Field = [text.Field{ name: "x", value: "<&>\"'" }]
   ready := text.render(writer, &empty, fields[..])
-  check(ready.ok && ready.kind == errors.Kind.None && ready.error == 0 && ready.detail == text.ErrorKind.None && ready.offset == 0)
+  check(ready.ok && ready.kind == errors.Kind.Ok && ready.error == 0 && ready.detail == text.ErrorKind.None && ready.offset == 0)
   check(html.render(writer, &empty, fields[..]).ok)
   for mode in 0..2 {
     // Validation and empty input need no storage, even in a full fixed arena.
@@ -51,7 +51,7 @@ fn main() {
     mark := mem.arena_mark(arena)
     parsed := text.ParseResult{}
     if mode == 0 { parsed = text.parse(arena, "") } else { parsed = html.parse(arena, "") }
-    check(parsed.ok && #len(parsed.value.source) == 0 && parsed.kind == errors.Kind.None && parsed.error == 0 && parsed.detail == text.ErrorKind.None && parsed.offset == 0 && mem.arena_mark(arena) == mark)
+    check(parsed.ok && #len(parsed.value.source) == 0 && parsed.kind == errors.Kind.Ok && parsed.error == 0 && parsed.detail == text.ErrorKind.None && parsed.offset == 0 && mem.arena_mark(arena) == mark)
     invalid: [3][]const u8 = ["{{", "ab{{ }}", "a{{x!}}"]
     offsets: [3]usize = [0, 2, 1]
     for i in 0..3 {
@@ -60,14 +60,14 @@ fn main() {
     }
     source: [10]u8 = ['<','b','>','{','{','x','}','}','!','!']
     if mode == 0 { parsed = text.parse(arena, source[..]) } else { parsed = html.parse(arena, source[..]) }
-    check(parsed.ok && parsed.kind == errors.Kind.None && parsed.error == 0 && parsed.detail == text.ErrorKind.None && parsed.offset == 0)
+    check(parsed.ok && parsed.kind == errors.Kind.Ok && parsed.error == 0 && parsed.detail == text.ErrorKind.None && parsed.offset == 0)
     source[0] = '?'
     check(parsed.value.source[0] == '<') // parse owns an arena copy.
     output: [128]u8 = []
     buffer := io.buffer_writer(output[..])
     rendered := text.RenderResult{}
     if mode == 0 { rendered = text.render(io.buffer_writer_adapter(&buffer), &parsed.value, fields[..]) } else { rendered = html.render(io.buffer_writer_adapter(&buffer), &parsed.value, fields[..]) }
-    check(rendered.ok && rendered.kind == errors.Kind.None && rendered.error == 0 && rendered.detail == text.ErrorKind.None && rendered.offset == 0)
+    check(rendered.ok && rendered.kind == errors.Kind.Ok && rendered.error == 0 && rendered.detail == text.ErrorKind.None && rendered.offset == 0)
     if mode == 0 { check(bytes.equal(io.buffer_writer_bytes(&buffer), "<b><&>\"'!!")) } else { check(bytes.equal(io.buffer_writer_bytes(&buffer), "<b>&lt;&amp;&gt;&quot;&#39;!!")) }
     for code in [0, -91] {
       sink := Sink{ code: code }

@@ -44,6 +44,7 @@ def face(family, style='Regular', weight=400, italic=False, mono=False):
     return u32(65536) + u16(len(tables)) + bytes(6) + directory + body
 
 SOURCE = r'''use "std/font/system" system
+use "std/io" io
 use "std/mem" mem
 use "std/bytes" bytes
 fn check(ok: bool, label: []const u8) { if !ok { #panic(label) } }
@@ -74,6 +75,7 @@ fn main() {
   check(bytes.equal(regular.family, "Test 😀"), "check 59")
 }'''
 SCAN_SOURCE = r'''use "std/font/system" system
+use "std/io" io
 use "std/mem" mem
 fn check(ok: bool) { if !ok { #panic("font scan contract") } }
 fn main() {

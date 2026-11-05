@@ -1,3 +1,4 @@
+use "std/io" io
 #target(kernel: darwin)
 
 extern fn native_open "dlopen"(path: *const u8, flags: i32) rawptr
@@ -9,9 +10,9 @@ fn platform_open(path: *const u8, flags: i32) OpenResult {
   _ = native_error()
   value := native_open(path, flags)
   if value == nil {
-    return OpenResult{ kind: errors.Kind.System, message: native_error() }
+    return OpenResult{ message: native_error(), failure: io.Failure{ kind: errors.Kind.System } }
   }
-  return OpenResult{ value: value, ok: true }
+  return OpenResult{ value: value }
 }
 
 fn platform_symbol(handle: Handle, name: *const u8) SymbolResult {
@@ -20,17 +21,17 @@ fn platform_symbol(handle: Handle, name: *const u8) SymbolResult {
   value := native_symbol(handle, name)
   error := native_error()
   if error != nil {
-    return SymbolResult{ value: value, kind: errors.Kind.System, message: error }
+    return SymbolResult{ value: value, message: error, failure: io.Failure{ kind: errors.Kind.System } }
   }
-  return SymbolResult{ value: value, ok: true }
+  return SymbolResult{ value: value }
 }
 
 fn platform_close(handle: Handle) Result {
   _ = native_error()
   if native_close(handle) != 0 {
-    return Result{ kind: errors.Kind.System, message: native_error() }
+    return Result{ message: native_error(), failure: io.Failure{ kind: errors.Kind.System } }
   }
-  return Result{ ok: true }
+  return Result{}
 }
 
 fn platform_error() *const u8 {

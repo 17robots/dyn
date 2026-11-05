@@ -1,7 +1,7 @@
 // Revision-tagged UTF-8 replacement. Publish one tracker per native window;
 // keep it alive across widget focus changes so tokens are never reused.
 use "std/mem" mem
-use "std/errors" errors
+use "std/io" errors
 use "std/unicode/utf8" utf8
 
 pub const context_limit: usize = 4096

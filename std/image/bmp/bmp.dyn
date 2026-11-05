@@ -1,5 +1,5 @@
 use "std/mem" mem
-use "std/errors" errors
+use "std/io" errors
 use "std/encoding/binary" binary
 // Windows DIB headers, uncompressed indexed/BGR and contiguous bitfields.
 // RLE, embedded JPEG/PNG and OS/2 DIB variants return Unsupported.

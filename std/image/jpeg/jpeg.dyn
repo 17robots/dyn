@@ -1,5 +1,5 @@
 use "std/mem" mem
-use "std/errors" errors
+use "std/io" errors
 use "std/math" math
 // ITU-T T.81 baseline sequential Huffman JPEG, 8-bit gray/RGB/YCbCr.
 // Interleaved and separate scans, restart markers, 1..4 sampling factors.

@@ -1,5 +1,5 @@
 use "std/mem" mem
-use "std/errors" errors
+use "std/io" errors
 use "std/encoding/binary" binary
 // True-color and gray TGA, including RLE and all origin directions. Color-map
 // images, 15/16-bit true color, and interleaving return Unsupported.

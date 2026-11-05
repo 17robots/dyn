@@ -1,4 +1,4 @@
-use "std/errors" errors
+use "std/io" errors
 use "std/bytes" byte_ops
 use "std/mem"
 // Allocation-free INI scanner. Names and values borrow the input.

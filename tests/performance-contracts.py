@@ -15,7 +15,7 @@ use "std/container/hash" hash
 use "std/io" io
 use "std/bufio" bufio
 use "std/bytes/builder" builder
-use "std/errors" errors
+use "std/io" errors
 struct Sink { calls: usize, used: usize, fail_after: usize, fail: bool, bytes: [64]u8 }
 struct Entry { key: []const u8, hash: u64, hash_next: *Entry, bytes: [1]u8, value: usize }
 const nil_entry: Entry = Entry{}
@@ -131,15 +131,16 @@ fn main() {''']
         # Target isolation must preserve the existing Linux temporary helpers.
         (src/'main.dyn').write_text('''use "std/testing" t
 use "std/fs" fs
+use "std/io" io
 use "std/mem" mem
 fn main() {
   arena := mem.arena_create(0)
   created := t.temporary_directory(arena, "dyn-performance-contract")
-  t.expect(created.ok && created.value.active, "temporary directory")
+  t.expect(created.failure.kind == io.Kind.Ok && created.value.active, "temporary directory")
   frames: [4]fs.RemovalFrame = []
   scratch: [4096]u8 = []
   removed := t.remove_temporary(&created.value, frames[..], scratch[..])
-  t.expect(removed.ok && !created.value.active, "remove temporary directory")
+  t.expect(removed.failure.kind == io.Kind.Ok && !created.value.active, "remove temporary directory")
 }
 ''')
         for flags in ([], ['--release']):

@@ -8,8 +8,9 @@ import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 SOURCE=r'''use "std/encoding/cbor" cbor
+use "std/io" io
 use "std/mem" mem
-use "std/errors" errors
+use "std/io" errors
 use "std/bytes" bytes
 fn check(ok: bool) { if !ok { #panic("CBOR contract") } }
 fn bad(source: []const u8) {
@@ -32,7 +33,7 @@ fn main() {
  for item.ok { tokens[count] = item.value
  count += 1
  item = cbor.next(&state) }
- check(item.kind == errors.Kind.None && count == 7)
+ check(item.kind == errors.Kind.Ok && count == 7)
  encoded := cbor.encode(arena,tokens[..count])
  check(encoded.ok && bytes.equal(encoded.value,golden))
  golden = "\x9f\x01\x82\x02\x03\x04\x05\xff"
@@ -42,7 +43,7 @@ fn main() {
  for item.ok { tokens[count] = item.value
  count += 1
  item = cbor.next(&state) }
- check(item.kind == errors.Kind.None && count == 8)
+ check(item.kind == errors.Kind.Ok && count == 8)
  encoded = cbor.encode(arena,tokens[..count])
  check(encoded.ok && bytes.equal(encoded.value,golden))
  golden = "\xbf\x61a\x5f\x42ab\x41c\xff\x61b\x7f\x61d\x62ef\xff\xff"
@@ -52,7 +53,7 @@ fn main() {
  for item.ok { tokens[count] = item.value
  count += 1
  item = cbor.next(&state) }
- check(item.kind == errors.Kind.None)
+ check(item.kind == errors.Kind.Ok)
  encoded = cbor.encode(arena,tokens[..count])
  check(encoded.ok && bytes.equal(encoded.value,golden))
  // Tags wrap one child, including nested containers and other tags.
@@ -63,7 +64,7 @@ fn main() {
  for item.ok { tokens[count] = item.value
  count += 1
  item = cbor.next(&state) }
- check(item.kind == errors.Kind.None && count == 5)
+ check(item.kind == errors.Kind.Ok && count == 5)
  encoded = cbor.encode(arena,tokens[..count])
  check(encoded.ok && bytes.equal(encoded.value,golden))
  floats := "\xf9\x3e\x00\xfa\xbf\xc0\x00\x00\xfb\x3f\xf8\x00\x00\x00\x00\x00\x00\xf9\x00\x01\xf9\x80\x00\xf9\x7c\x00\xf9\x7e\x00"
@@ -112,7 +113,7 @@ fn main() {
   state = cbor.reader(raw[..])
   actual := cbor.next(&state)
   for actual.ok { actual = cbor.next(&state) }
-  check(actual.kind == errors.Kind.None || actual.kind == errors.Kind.InvalidInput)
+  check(actual.kind == errors.Kind.Ok || actual.kind == errors.Kind.InvalidInput)
  }
 }
 '''

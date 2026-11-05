@@ -11,8 +11,9 @@ ENV = dict(os.environ, DYN_SDK=str(ROOT))
 SOURCE = r'''
 use "std/image/png" png
 use "std/image/qoi" qoi
+use "std/io" io
 use "std/mem" mem
-use "std/errors" errors
+use "std/io" errors
 fn main() {
   storage: [8192]u8 = []
   arena := mem.arena_from_buffer(storage[..])
@@ -42,12 +43,12 @@ fn main() {
   rgb := qoi.encode(arena, pixels[..3], 1, 1, 3, false)
   rgbd := qoi.decode(arena, rgb.value)
   if !rgb.ok || !rgbd.ok || rgbd.value.info.srgb || rgbd.value.pixels[3] != 255 { #panic("QOI RGB") }
-  if p.kind != errors.Kind.None || p.offset != 0 ||
-    pi.kind != errors.Kind.None || pi.error != 0 || pi.offset != 0 || pi.detail != 0 ||
-    pd.kind != errors.Kind.None || pd.error != 0 || pd.offset != 0 || pd.detail != 0 ||
-    q.kind != errors.Kind.None || q.error != 0 || q.offset != 0 || q.detail != 0 ||
-    qi.kind != errors.Kind.None || qi.error != 0 || qi.offset != 0 || qi.detail != 0 ||
-    qd.kind != errors.Kind.None || qd.error != 0 || qd.offset != 0 || qd.detail != 0 {
+  if p.kind != errors.Kind.Ok || p.offset != 0 ||
+    pi.kind != errors.Kind.Ok || pi.error != 0 || pi.offset != 0 || pi.detail != 0 ||
+    pd.kind != errors.Kind.Ok || pd.error != 0 || pd.offset != 0 || pd.detail != 0 ||
+    q.kind != errors.Kind.Ok || q.error != 0 || q.offset != 0 || q.detail != 0 ||
+    qi.kind != errors.Kind.Ok || qi.error != 0 || qi.offset != 0 || qi.detail != 0 ||
+    qd.kind != errors.Kind.Ok || qd.error != 0 || qd.offset != 0 || qd.detail != 0 {
     #panic("success metadata")
   }
   if pi.value.height != 1 || pi.value.channels != 4 || !pd.value.info.ok ||
@@ -66,7 +67,7 @@ fn main() {
     pzero.value.info.ok || qzero.value.info.ok || pizero.value.ok || qizero.value.ok ||
     #len(pzero.value.pixels) != 0 || #len(qzero.value.pixels) != 0 ||
     #len(pezero.value) != 0 || #len(qezero.value) != 0 ||
-    pzero.kind != errors.Kind.None || qzero.kind != errors.Kind.None ||
+    pzero.kind != errors.Kind.Ok || qzero.kind != errors.Kind.Ok ||
     pzero.error != 0 || qzero.error != 0 || pzero.offset != 0 || qzero.offset != 0 ||
     pzero.detail != 0 || qzero.detail != 0 { #panic("zero results") }
   mark := mem.arena_mark(arena)
@@ -119,6 +120,7 @@ with tempfile.TemporaryDirectory(prefix="dyn-image-results-") as directory:
 # Fixed arena exhaustion is a programming error, not an external-input result.
 PANIC_SOURCE = '''use "std/image/png" png
 use "std/image/qoi" qoi
+use "std/io" io
 use "std/mem" mem
 fn main() {
   backing: [mem.ArenaBufferOverhead+1]u8

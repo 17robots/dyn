@@ -14,7 +14,8 @@ use "vendor/opengl" gl
 use "vendor/ui/opengl" gpu
 use "std/ui" ui
 use "std/ui/software" software
-use "std/errors" errors
+use "std/io" errors
+use "std/io" io
 use "std/mem" mem
 fn check(ok: bool) { if !ok { #panic("native GPU UI contract") } }
 fn bitmap(data: rawptr, codepoint: u32) software.Glyph {
@@ -53,7 +54,7 @@ fn main() {
  pixels: [4096]u8 = []
  surface := software.Surface{pixels:pixels[..],width:32,height:32,stride:128}
  font := software.Font{glyph:bitmap,line_height:3}
- check(software.render(&surface,&commands[0],font).ok)
+ check(software.render(&surface,&commands[0],font).failure.kind == errors.Kind.Ok)
  loaded.api.enable(gl.FramebufferSrgb)
  loaded.api.enable(gl.ColorLogicOp)
  loaded.api.enable(gl.RasterizerDiscard)
@@ -139,7 +140,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-native-ui-') as directory:
     if sys.platform.startswith('linux') and os.environ.get('DISPLAY'):
         shim=work/'glx-failure.so'
         subprocess.run([*shlex.split(os.environ.get('CC','cc')),'-shared','-fPIC','-Wall','-Wextra','-Werror',str(ROOT/'tests/x11-context-failure.c'),'-ldl','-o',str(shim)],check=True,timeout=60)
-        (work/'main.dyn').write_text('use "vendor/window" window\nuse "std/errors" errors\nfn main(){ host := window.Window{}\n result := window.open(&host,"Expected failure",32,32)\n if result.ok || result.kind != errors.Kind.System || host.display != nil { #panic("GLX error was not recovered") }\n window.close(&host)\n}\n', encoding='utf-8')
+        (work/'main.dyn').write_text('use "vendor/window" window\nuse "std/io" errors\nfn main(){ host := window.Window{}\n result := window.open(&host,"Expected failure",32,32)\n if result.ok || result.kind != errors.Kind.System || host.display != nil { #panic("GLX error was not recovered") }\n window.close(&host)\n}\n', encoding='utf-8')
         output=work/'context-failure'
         subprocess.run([DYN,'build',str(work),'--debug','--quiet','--output',str(output)],check=True,timeout=300)
         subprocess.run([str(output)],env={**os.environ,'LD_PRELOAD':str(shim)},check=True,timeout=60)

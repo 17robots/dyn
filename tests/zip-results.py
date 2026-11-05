@@ -20,7 +20,7 @@ data = buffer.getvalue()
 literal = '"' + "".join(f"\\x{byte:02x}" for byte in data) + '"'
 
 SOURCE = r'''use "std/archive/zip" zip
-use "std/errors" errors
+use "std/io" errors
 use "std/io" io
 use "std/mem" mem
 use "std/bytes" bytes
@@ -56,9 +56,9 @@ fn main() {
  arena := mem.arena_create(0)
  state := zip.open(data)
  first := zip.next(&state)
- check(first.ok && first.kind == errors.Kind.None && first.error == 0 && first.offset == 36)
+ check(first.ok && first.kind == errors.Kind.Ok && first.error == 0 && first.offset == 36)
  decoded := zip.extract(arena,first.value)
- check(decoded.ok && bytes.equal(decoded.value,"hello") && decoded.kind == errors.Kind.None)
+ check(decoded.ok && bytes.equal(decoded.value,"hello") && decoded.kind == errors.Kind.Ok)
  mark := mem.arena_used(arena)
  bad := first.value
  bad.checksum = 0
@@ -67,7 +67,7 @@ fn main() {
  empty := zip.next(&state)
  check(empty.ok && zip.extract(arena,empty.value).ok)
  end := zip.next(&state)
- check(!end.ok && end.kind == errors.Kind.None && end.error == 0 && end.detail == zip.ErrorKind.End)
+ check(!end.ok && end.kind == errors.Kind.Ok && end.error == 0 && end.detail == zip.ErrorKind.End)
  opened := zip.open_checked(data)
  check(opened.ok)
  indexed := zip.next(&opened.value)
@@ -99,7 +99,7 @@ fn main() {
    cursor := io.cursor(data[..limit])
    stream := zip.stream_reader(io.cursor_reader(&cursor),header[..],name[..],payload[..])
    item := zip.next_stream(&stream)
-   if limit == 0 { check(item.kind == errors.Kind.None && item.detail == zip.ErrorKind.End) }
+   if limit == 0 { check(item.kind == errors.Kind.Ok && item.detail == zip.ErrorKind.End) }
    else { check(item.kind == errors.Kind.InvalidInput && item.detail == zip.ErrorKind.Syntax) }
    check(item.offset == limit && !item.ok)
    again := zip.next_stream(&stream)
@@ -123,7 +123,7 @@ fn main() {
  eof_input := Input{ source: "", fail: 100 }
  eof_stream := zip.stream_reader(io.Reader{ data: &eof_input, read: read },header[..],name[..],payload[..])
  eof := zip.next_stream(&eof_stream)
- check(!eof.ok && eof.kind == errors.Kind.None && eof.error == 0 && eof.detail == zip.ErrorKind.End)
+ check(!eof.ok && eof.kind == errors.Kind.Ok && eof.error == 0 && eof.detail == zip.ErrorKind.End)
  check(zip.next_stream(&eof_stream).detail == zip.ErrorKind.End && eof_input.calls == 1)
  empty_checked := zip.open_checked(data[#len(data)-22..])
  check(!empty_checked.ok)
@@ -141,7 +141,7 @@ fn main() {
  zero: zip.EntryResult
  zero_extract: zip.ExtractResult
  zero_open: zip.OpenResult
- check(!zero.ok && zero.kind == errors.Kind.None && zero.error == 0 && zero.offset == 0 && zero.detail == zip.ErrorKind.None)
+ check(!zero.ok && zero.kind == errors.Kind.Ok && zero.error == 0 && zero.offset == 0 && zero.detail == zip.ErrorKind.None)
  check(!zero_extract.ok && #len(zero_extract.value) == 0 && !zero_open.ok)
  zero_reader: zip.ArchiveReader
  check(zip.next(&zero_reader).detail == zip.ErrorKind.End)

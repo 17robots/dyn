@@ -77,7 +77,7 @@ fn verify(raw: []const u8, encoded: []const u8, workspace: []u8, chunk: usize, w
 '''
 source = SOURCE
 source = source.replace('mem.arena_push_or_panic', 'mem.arena_push_uninit')
-source = source.replace('use "std/bytes" bytes', 'use "std/bytes" bytes\nuse "std/errors" errors')
+source = source.replace('use "std/bytes" bytes', 'use "std/bytes" bytes\nuse "std/io" errors')
 extra = '''
 struct Failure { calls: usize, code: isize }
 fn fail(data: rawptr, destination: []u8) io.Result {
@@ -87,14 +87,14 @@ fn fail(data: rawptr, destination: []u8) io.Result {
 }
 fn results(arena: *mem.Arena, encoded: []const u8, unknown: []const u8, workspace: []u8) {
  packed_result := z.compress(arena, "portable zstd", 3)
- if !packed_result.ok || packed_result.kind != errors.Kind.None || packed_result.error != 0 { #panic("compress success") }
+ if !packed_result.ok || packed_result.kind != errors.Kind.Ok || packed_result.error != 0 { #panic("compress success") }
  unpacked := z.decompress(arena, packed_result.value)
- if !unpacked.ok || unpacked.kind != errors.Kind.None || #len(unpacked.value) != 13 { #panic("roundtrip") }
+ if !unpacked.ok || unpacked.kind != errors.Kind.Ok || #len(unpacked.value) != 13 { #panic("roundtrip") }
  mark := mem.arena_used(arena)
  bad := z.decompress(arena, "bad")
  if bad.ok || bad.kind != errors.Kind.InvalidInput || bad.error != 0 || #len(bad.value) != 0 || mem.arena_used(arena) != mark { #panic("malformed result") }
  size := z.frame_size(unknown)
- if !size.ok || size.known || size.kind != errors.Kind.None { #panic("unknown valid frame") }
+ if !size.ok || size.known || size.kind != errors.Kind.Ok { #panic("unknown valid frame") }
  unsupported := z.decompress(arena, unknown)
  if unsupported.ok || unsupported.kind != errors.Kind.Unsupported || unsupported.error != 0 || mem.arena_used(arena) != mark { #panic("unknown arena unsupported") }
  // Header retains a valid known size, while truncation fails after allocation.
@@ -141,7 +141,7 @@ fn main() {
  encoded := fs.read_all(arena, "DIRECTORY/encoded", 2000000)
  concatenated := fs.read_all(arena, "DIRECTORY/concatenated", 4000000)
  unknown := fs.read_all(arena, "DIRECTORY/unknown", 2000000)
- if !raw.ok || !encoded.ok || !concatenated.ok || !unknown.ok { #panic("fixtures") }
+ if raw.failure.kind != io.Kind.Ok || encoded.failure.kind != io.Kind.Ok || concatenated.failure.kind != io.Kind.Ok || unknown.failure.kind != io.Kind.Ok { #panic("fixtures") }
  workspace := #slice(mem.arena_push_uninit(arena, z.decoder_workspace_size(21), 8), z.decoder_workspace_size(21))
  results(arena, encoded.value, unknown.value, workspace)
  verify(raw.value, unknown.value, workspace, 13, 21, false, 1)

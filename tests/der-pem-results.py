@@ -11,14 +11,15 @@ DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 SOURCE = r'''use "std/crypto/der" der
 use "std/crypto/pem" pem
 use "std/crypto/certificate" certificate
+use "std/io" io
 use "std/mem" mem
-use "std/errors" errors
+use "std/io" errors
 use "std/strings" strings
 fn check(ok: bool) { if !ok { #panic("DER/PEM result regression") } }
 fn main() {
   certificate_bytes:[10]u8=[48,8,48,0,48,0,3,2,0,170]
   certificate_result:=certificate.parse(certificate_bytes[..])
-  check(certificate_result.ok && certificate_result.kind==errors.Kind.None && certificate_result.error==0 && certificate_result.value.signature_bits[0]==170)
+  check(certificate_result.ok && certificate_result.kind==errors.Kind.Ok && certificate_result.error==0 && certificate_result.value.signature_bits[0]==170)
   for i in 0..10 {
     broken:=certificate.parse(certificate_bytes[..i])
     check(!broken.ok && broken.kind==errors.Kind.InvalidInput && broken.error==0 && #len(broken.value.encoded)==0 && broken.offset<=i)
@@ -37,7 +38,7 @@ fn main() {
   child := der.enter(element.value)
   check(der.next(&child).value.content[0] == 7 && der.finished(&child))
   eof := der.next(&c)
-  check(!eof.ok && eof.kind == errors.Kind.None && eof.error == 0 && eof.offset == 5 && der.finished(&c))
+  check(!eof.ok && eof.kind == errors.Kind.Ok && eof.error == 0 && eof.offset == 5 && der.finished(&c))
   storage: [4096]u8 = []
   arena := mem.arena_from_buffer(storage[..])
   prefix := mem.push_bytes_uninit(arena, 7)
@@ -48,7 +49,7 @@ fn main() {
   check(#len(valid.value) == 3)
   mem.arena_rewind(arena, mark)
   empty := pem.decode(arena, "-----BEGIN TEST-----\n-----END TEST-----")
-  check(empty.ok && #len(empty.value) == 0 && strings.equal(empty.label, "TEST") && empty.kind == errors.Kind.None && empty.error == 0)
+  check(empty.ok && #len(empty.value) == 0 && strings.equal(empty.label, "TEST") && empty.kind == errors.Kind.Ok && empty.error == 0)
   mem.arena_rewind(arena, mark)
   bad := pem.decode(arena, "-----BEGIN TEST-----\n!!!!\n-----END TEST-----")
   check(!bad.ok)
@@ -56,9 +57,9 @@ fn main() {
   
   z: der.Result
   p: pem.Result
-  check(!z.ok && z.kind == errors.Kind.None && z.error == 0 && z.offset == 0 && #len(z.value.content) == 0)
-  check(!p.ok && p.kind == errors.Kind.None && p.error == 0 && p.offset == 0 && #len(p.value) == 0)
-  check(der.next(&c).kind == errors.Kind.None)
+  check(!z.ok && z.kind == errors.Kind.Ok && z.error == 0 && z.offset == 0 && #len(z.value.content) == 0)
+  check(!p.ok && p.kind == errors.Kind.Ok && p.error == 0 && p.offset == 0 && #len(p.value) == 0)
+  check(der.next(&c).kind == errors.Kind.Ok)
   malformed: [6][]const u8 = ["\x02", "\x1f\x00", "\x02\x80", "\x02\x82\x01", "\x02\x81\x00", "\x02\x03\x01"]
   offsets: [6]usize = [0, 0, 1, 1, 2, 2]
   for i in 0..6 {

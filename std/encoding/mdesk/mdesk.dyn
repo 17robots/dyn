@@ -1,4 +1,4 @@
-use "std/errors" errors
+use "std/io" errors
 use "std/bytes"
 use "std/mem"
 
@@ -68,7 +68,7 @@ pub fn parse(arena: *mem.Arena, source: []const u8) ParseResult {
   }
   return ParseResult{
     root: root,
-    kind: errors.Kind.None,
+    kind: errors.Kind.Ok,
     error: 0,
     detail: ErrorKind.None,
     offset: parser.error_offset,

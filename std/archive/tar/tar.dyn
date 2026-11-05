@@ -1,6 +1,5 @@
 use "std/io" stream
-use "std/errors" errors
-
+use "std/io" errors
 pub struct Entry {
   name: []const u8,
   prefix: []const u8,

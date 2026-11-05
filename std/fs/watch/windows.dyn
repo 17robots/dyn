@@ -1,5 +1,5 @@
 #target(kernel: windows)
-use "std/errors"
+use "std/io" errors
 use "std/mem" mem
 use "std/unicode/utf8" utf8
 use "std/unicode/utf16" utf16
@@ -30,11 +30,11 @@ struct Native { slots: [16]Slot, next_id: i32, cursor: usize }
 // Windows reports paired rename actions without cookies, and cannot distinguish
 // close-write, directory flags, or deletion/movement of the watched directory.
 pub struct Watcher { native: *Native, owner: *mem.Arena, storage: []u8, rescan_required: bool, failed: bool, error: isize, kind: errors.Kind }
-pub struct OpenResult { value: Watcher, error: isize, kind: errors.Kind, ok: bool }
+pub struct OpenResult { value: Watcher, failure: errors.Failure }
 // `error` keeps the native code; `kind` is its portable category.
-pub struct Result { value: i32, error: isize, kind: errors.Kind, ok: bool }
+pub struct Result { value: i32, failure: errors.Failure }
 pub struct Event { watch: i32, mask: u32, cookie: u32, name: []const u8, rescan: bool }
-pub struct EventResult { event: Event, status: Status, kind: errors.Kind, error: isize, ok: bool }
+pub struct EventResult { event: Event, status: Status, failure: errors.Failure }
 extern fn native_open "dyn_watch_open"(name: *const u16, access: u32, share: u32, security: rawptr, creation: u32, flags: u32, template: rawptr) rawptr
 extern fn native_close "dyn_watch_close"(handle: rawptr) i32
 extern fn native_error "dyn_watch_error"() u32
@@ -60,16 +60,16 @@ fn arm(slot: *Slot) Result {
     }
   }
   slot.pending = true
-  return Result{ ok: true }
+  return Result{}
 }
 pub fn open(storage: []u8) OpenResult {
   if #len(storage) < 272 {
-    return OpenResult{ value: Watcher{}, error: -28, kind: errors.Kind.Capacity }
+    return OpenResult{ value: Watcher{}, failure: errors.Failure{ kind: errors.Kind.Capacity, native: -28 } }
   }
   owner := mem.arena_create(#sizeof(Native))
   native := mem.push(Native, owner)
   native.next_id = 1
-  return OpenResult{ value: Watcher{ native: native, owner: owner, storage: storage }, ok: true }
+  return OpenResult{ value: Watcher{ native: native, owner: owner, storage: storage } }
 }
 fn retire(slot: *Slot) isize {
   if slot.pending {
@@ -152,14 +152,14 @@ pub fn add(state: *Watcher, path: []const u8, mask: u32) Result {
     return failure(code)
   }
   armed := arm(slot)
-  if !armed.ok {
+  if armed.failure.kind != errors.Kind.Ok {
     _ = retire(slot)
     return armed
   }
   slot.id = state.native.next_id
   state.native.next_id += 1
   slot.mask = mask
-  return Result{ value: slot.id, ok: true }
+  return Result{ value: slot.id }
 }
 pub fn remove(state: *Watcher, watch: i32) Result {
   if state.native == nil || watch <= 0 {
@@ -175,7 +175,7 @@ pub fn remove(state: *Watcher, watch: i32) Result {
 }
 pub fn close(state: *Watcher) Result {
   if state.native == nil {
-    return Result{ ok: true }
+    return Result{}
   }
   for i in 0..16 {
     code := retire(&state.native.slots[i])
@@ -186,11 +186,11 @@ pub fn close(state: *Watcher) Result {
   mem.arena_release(state.owner)
   state.native = nil
   state.storage = state.storage[..0]
-  return Result{ ok: true }
+  return Result{}
 }
 fn rescan(state: *Watcher, id: i32) EventResult {
   state.rescan_required = true
-  return EventResult{ status: Status.Event, ok: true, event: Event{ watch: id, rescan: true } }
+  return EventResult{ status: Status.Event, event: Event{ watch: id, rescan: true } }
 }
 // Terminal failures are sticky. Empty and rescan events remain protocol states.
 fn event_failure(state: *Watcher, code: isize, kind: errors.Kind) EventResult {
@@ -198,11 +198,11 @@ fn event_failure(state: *Watcher, code: isize, kind: errors.Kind) EventResult {
     state.failed = true
     state.error = code
     state.kind = kind
-    if state.kind == errors.Kind.None {
+    if state.kind == errors.Kind.Ok {
       state.kind = errors.Kind.System
     }
   }
-  return EventResult{ status: Status.Error, error: state.error, kind: state.kind }
+  return EventResult{ status: Status.Error, failure: errors.Failure{ kind: state.kind, native: state.error } }
 }
 pub fn next(state: *Watcher) EventResult {
   if state.failed {
@@ -220,8 +220,8 @@ pub fn next(state: *Watcher) EventResult {
     }
     if !slot.pending && slot.offset == slot.used {
       armed := arm(slot)
-      if !armed.ok {
-        return event_failure(state, armed.error, armed.kind)
+      if armed.failure.kind != errors.Kind.Ok {
+        return event_failure(state, armed.failure.native, armed.failure.kind)
       }
     }
     if slot.pending {
@@ -305,7 +305,7 @@ pub fn next(state: *Watcher) EventResult {
         used += width
         position += decoded.width
       }
-      return EventResult{ status: Status.Event, ok: true, event: Event{ watch: slot.id, mask: mask, name: state.storage[..used] } }
+      return EventResult{ status: Status.Event, event: Event{ watch: slot.id, mask: mask, name: state.storage[..used] } }
     }
   }
   return EventResult{ status: Status.Empty }
@@ -316,18 +316,18 @@ pub fn acknowledge_rescan(state: *Watcher) {
 
 fn failure(code: isize) Result {
   kind := errors.windows(code)
-  if kind == errors.Kind.None {
+  if kind == errors.Kind.Ok {
     kind = errors.Kind.System
   }
-  return Result{ error: code, kind: kind }
+  return Result{ failure: errors.Failure{ kind: kind, native: code } }
 }
 fn status(code: isize) Result {
   if code == 0 {
-    return Result{ ok: true }
+    return Result{}
   }
   return failure(code)
 }
 // Validation codes retain their errno-style namespace separately from Win32.
 fn validation_failure(code: isize) Result {
-  return Result{ error: code, kind: errors.linux(code) }
+  return Result{ failure: errors.Failure{ kind: errors.linux(code), native: code } }
 }

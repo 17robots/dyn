@@ -1,6 +1,6 @@
 #target(kernel: linux)
 use "std/mem" mem
-use "std/errors"
+use "std/io" errors
 use "std/fs" fs
 use "std/c" c
 
@@ -27,23 +27,23 @@ pub enum Status { Event, Empty, Error }
 // Ownership: a live watcher is not an independent owner when copied. Keep one
 // stable owner and close it before its storage is released or reused.
 pub struct Watcher { descriptor: isize, active: bool, storage: []u8, used: usize, offset: usize, rescan_required: bool, failed: bool, error: isize, kind: errors.Kind }
-pub struct OpenResult { value: Watcher, error: isize, kind: errors.Kind, ok: bool }
+pub struct OpenResult { value: Watcher, failure: errors.Failure }
 // `error` keeps the native code; `kind` is its portable category.
-pub struct Result { value: i32, error: isize, kind: errors.Kind, ok: bool }
+pub struct Result { value: i32, failure: errors.Failure }
 pub struct Event { watch: i32, mask: u32, cookie: u32, name: []const u8, rescan: bool }
-pub struct EventResult { event: Event, status: Status, kind: errors.Kind, error: isize, ok: bool }
+pub struct EventResult { event: Event, status: Status, failure: errors.Failure }
 
 // Watches are non-recursive. Register each directory explicitly. Names borrow
 // storage until next refill. An overflow invalidates all cached workspace state.
 pub fn open(storage: []u8) OpenResult {
   if #len(storage) < 272 {
-    return OpenResult{ value: Watcher{}, error: -28, kind: errors.linux(-28) }
+    return OpenResult{ value: Watcher{}, failure: errors.Failure{ kind: errors.linux(-28), native: -28 } }
   }
   descriptor := #syscall(294, 526336)
   if descriptor < 0 {
-    return OpenResult{ value: Watcher{}, error: descriptor, kind: errors.linux(descriptor) }
+    return OpenResult{ value: Watcher{}, failure: errors.Failure{ kind: errors.linux(descriptor), native: descriptor } }
   }
-  return OpenResult{ value: Watcher{ descriptor: descriptor, active: true, storage: storage }, ok: true }
+  return OpenResult{ value: Watcher{ descriptor: descriptor, active: true, storage: storage } }
 }
 pub fn add(state: *Watcher, path: []const u8, mask: u32) Result {
   storage: [4096 + mem.ArenaBufferOverhead]u8 = []
@@ -55,7 +55,7 @@ pub fn add(state: *Watcher, path: []const u8, mask: u32) Result {
   if value < 0 {
     return failure(value)
   }
-  return Result{ value: #cast(i32, value), ok: true }
+  return Result{ value: #cast(i32, value) }
 }
 pub fn remove(state: *Watcher, watch: i32) Result {
   if !state.active {
@@ -66,7 +66,7 @@ pub fn remove(state: *Watcher, watch: i32) Result {
 }
 pub fn close(state: *Watcher) Result {
   if !state.active {
-    return Result{ ok: true }
+    return Result{}
   }
   value := #syscall(3, state.descriptor)
   state.descriptor = 0
@@ -88,11 +88,11 @@ fn event_error(state: *Watcher, kind: errors.Kind, code: isize) EventResult {
     state.failed = true
     state.error = code
     state.kind = kind
-    if state.kind == errors.Kind.None {
+    if state.kind == errors.Kind.Ok {
       state.kind = errors.Kind.System
     }
   }
-  return EventResult{ status: Status.Error, error: state.error, kind: state.kind }
+  return EventResult{ status: Status.Error, failure: errors.Failure{ kind: state.kind, native: state.error } }
 }
 pub fn next(state: *Watcher) EventResult {
   if state.failed {
@@ -107,11 +107,11 @@ pub fn next(state: *Watcher) EventResult {
     }
     file := fs.borrow_handle(state.descriptor)
     result := fs.read(&file, state.storage)
-    if !result.ok {
-      if result.error == -11 {
+    if result.failure.kind != errors.Kind.Ok {
+      if result.failure.native == -11 {
         return EventResult{ status: Status.Empty }
       }
-      return event_error(state, result.kind, result.error)
+      return event_error(state, result.failure.kind, result.failure.native)
     }
     if result.transferred == 0 {
       return event_failure(state, -5)
@@ -146,7 +146,7 @@ pub fn next(state: *Watcher) EventResult {
   if rescan {
     state.rescan_required = true
   }
-  return EventResult{ status: Status.Event, ok: true, event: Event{ watch: watch, mask: mask,
+  return EventResult{ status: Status.Event, event: Event{ watch: watch, mask: mask,
     cookie: load(state.storage, at+8), name: name[..end], rescan: rescan } }
 }
 // Call only after rebuilding the snapshot; events may continue arriving during
@@ -156,11 +156,11 @@ pub fn acknowledge_rescan(state: *Watcher) {
 }
 
 fn failure(code: isize) Result {
-  return Result{ error: code, kind: errors.linux(code) }
+  return Result{ failure: errors.Failure{ kind: errors.linux(code), native: code } }
 }
 fn status(code: isize) Result {
   if code == 0 {
-    return Result{ ok: true }
+    return Result{}
   }
   return failure(code)
 }

@@ -3,7 +3,7 @@ use "std/crypto/der" der
 use "std/crypto/ed25519" ed
 use "std/crypto/p256" p256
 use "std/bytes" bytes
-use "std/errors" errors
+use "std/io" errors
 use "std/unicode/utf8" utf8
 // Strict, allocation-free ordered-path profile of RFC5280/RFC8410/RFC9525.
 // This is not path discovery or a browser trust store. Caller supplies leaf-first

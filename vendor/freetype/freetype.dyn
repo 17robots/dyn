@@ -1,5 +1,5 @@
 use "std/dynlib" dynlib
-use "std/errors" errors
+use "std/io" errors
 use "std/ui/software" software
 // Dynamic FreeType 2 bindings. The caller owns the loader handle and keeps it
 // open until all faces/libraries and tables are dead. Memory faces borrow bytes.

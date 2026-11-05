@@ -1,5 +1,4 @@
-use "std/errors" errors
-
+use "std/io" errors
 // Process signals as events, not handlers. watch routes the chosen signals to
 // a queue that the program reads at a safe point; no code runs inside a signal
 // handler. On Linux and macOS, call watch on the main thread before starting
@@ -16,13 +15,13 @@ pub struct Set { interrupt: bool, terminate: bool, hangup: bool }
 // An open watch. handle is the readable descriptor (signalfd or kqueue) or the
 // Windows event handle, for use with an event loop.
 pub struct Watch { handle: isize, set: Set, active: bool }
-pub struct WatchResult { value: Watch, kind: errors.Kind, error: isize, ok: bool }
+pub struct WatchResult { value: Watch, failure: errors.Failure }
 pub struct Next { value: Kind, kind: errors.Kind, error: isize, ok: bool }
-pub struct Result { kind: errors.Kind, error: isize, ok: bool }
+pub struct Result { failure: errors.Failure }
 
 pub fn watch(set: Set) WatchResult {
   if !set.interrupt && !set.terminate && !set.hangup {
-    return WatchResult{ kind: errors.Kind.InvalidInput }
+    return WatchResult{ failure: errors.Failure{ kind: errors.Kind.InvalidInput } }
   }
   return platform_watch(set)
 }
@@ -48,13 +47,13 @@ pub fn wait(state: *Watch) Next {
 // Watch succeeds.
 pub fn close(state: *Watch) Result {
   if state == nil {
-    return Result{ kind: errors.Kind.InvalidInput }
+    return Result{ failure: errors.Failure{ kind: errors.Kind.InvalidInput } }
   }
   if !state.active {
-    return Result{ ok: true }
+    return Result{}
   }
   closed := platform_close(state)
-  if closed.ok {
+  if closed.failure.kind == errors.Kind.Ok {
     state.* = Watch{}
   }
   return closed

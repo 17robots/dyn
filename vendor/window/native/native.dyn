@@ -5,7 +5,7 @@ pub type EventKind = ordered.Kind
 use "std/mem" mem
 use "std/c" c
 use "std/unicode/utf8" utf8
-use "std/errors" errors
+use "std/io" errors
 use "std/ui" ui
 use "std/ui/box" box
 #link("dyn_window")

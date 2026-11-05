@@ -1,3 +1,4 @@
+use "std/io" io
 #target(kernel: darwin)
 
 // Darwin ioctl is syscall 54. Requests: TIOCGETA, TIOCSETA and TIOCGWINSZ.
@@ -19,13 +20,13 @@ pub fn read_state(descriptor: isize) Read {
 
 pub fn restore(descriptor: isize, saved: *const State) Result {
   if saved == nil {
-    return Result{ kind: errors.Kind.InvalidInput }
+    return Result{ failure: io.Failure{ kind: errors.Kind.InvalidInput } }
   }
   code := control(descriptor, 2152231956, &saved.bytes[0])
   if code < 0 {
-    return Result{ kind: errors.darwin(code), error: code }
+    return Result{ failure: io.Failure{ kind: errors.darwin(code), native: code } }
   }
-  return Result{ ok: true }
+  return Result{}
 }
 
 // cfmakeraw in the Darwin termios layout: 64-bit iflag, oflag, cflag and

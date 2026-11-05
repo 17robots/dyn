@@ -1,3 +1,4 @@
+use "std/io" io
 #target(kernel: linux)
 
 // Blocked signals are read from a signalfd. Numbers: SIGHUP 1, SIGINT 2,
@@ -20,15 +21,15 @@ fn platform_watch(set: Set) WatchResult {
   mask := mask_of(set)
   code := #syscall(14, 0, &mask, 0, 8)
   if code < 0 {
-    return WatchResult{ kind: errors.linux(code), error: code }
+    return WatchResult{ failure: io.Failure{ kind: errors.linux(code), native: code } }
   }
   // SFD_NONBLOCK | SFD_CLOEXEC.
   descriptor := #syscall(289, -1, &mask, 8, 526336)
   if descriptor < 0 {
     _ = #syscall(14, 1, &mask, 0, 8)
-    return WatchResult{ kind: errors.linux(descriptor), error: descriptor }
+    return WatchResult{ failure: io.Failure{ kind: errors.linux(descriptor), native: descriptor } }
   }
-  return WatchResult{ value: Watch{ handle: descriptor, set: set, active: true }, ok: true }
+  return WatchResult{ value: Watch{ handle: descriptor, set: set, active: true } }
 }
 
 fn kind_of(number: u32) Kind {
@@ -82,9 +83,9 @@ fn platform_next(state: *Watch, block: bool) Next {
 fn platform_close(state: *Watch) Result {
   code := #syscall(3, state.handle)
   if code < 0 {
-    return Result{ kind: errors.linux(code), error: code }
+    return Result{ failure: io.Failure{ kind: errors.linux(code), native: code } }
   }
   mask := mask_of(state.set)
   _ = #syscall(14, 1, &mask, 0, 8)
-  return Result{ ok: true }
+  return Result{}
 }

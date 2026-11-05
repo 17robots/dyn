@@ -15,7 +15,7 @@ DYN = Path(os.environ.get("DYN", ROOT / "build/dyn-release")).resolve()
 SOURCE = r'''use "std/encoding/csv" csv
 use "std/encoding/xml" xml
 use "std/io" io
-use "std/errors" errors
+use "std/io" errors
 use "std/bytes" bytes
 struct Probe { calls: usize, code: isize, mode: usize }
 fn check(ok: bool) { if !ok { #panic("CSV/XML diagnostic contract") } }
@@ -72,12 +72,12 @@ fn callback_contracts() {
   eof := Probe{ mode: 1 }
   c := csv.stream_scanner(io.Reader{ data: #cast(rawptr, &eof), read: read })
   f := csv.next_stream(&c, scratch[..])
-  check(f.ok && #len(f.text) == 1 && f.end_input && f.kind == errors.Kind.None && f.error == 0)
+  check(f.ok && #len(f.text) == 1 && f.end_input && f.kind == errors.Kind.Ok && f.error == 0)
   check(!csv.next_stream(&c, scratch[..]).ok && eof.calls == 1)
   eof.calls = 0
   x := xml.stream_scanner(io.Reader{ data: #cast(rawptr, &eof), read: read }, scratch[..])
   xe := xml.next_stream(&x)
-  check(xe.ok && xe.kind == errors.Kind.None && xe.error == 0 && xe.detail == xml.ErrorKind.None && bytes.equal(xe.value.text, "x"))
+  check(xe.ok && xe.kind == errors.Kind.Ok && xe.error == 0 && xe.detail == xml.ErrorKind.None && bytes.equal(xe.value.text, "x"))
   check(!xml.next_stream(&x).ok && eof.calls == 1)
   bad := csv.scanner("a,b\"c")
   check(csv.next(&bad, scratch[..]).ok)
@@ -107,12 +107,12 @@ fn additional_contracts() {
   reader := io.Reader{data: #cast(rawptr, &p), read: read}
   c := csv.stream_scanner(reader)
   f := csv.next_stream(&c, scratch[..0])
-  check(f.ok && #len(f.text) == 0 && f.end_input && f.end_record && f.kind == errors.Kind.None && f.error == 0 && f.detail == csv.ErrorKind.None)
+  check(f.ok && #len(f.text) == 0 && f.end_input && f.end_record && f.kind == errors.Kind.Ok && f.error == 0 && f.detail == csv.ErrorKind.None)
   check(!csv.next_stream(&c, scratch[..0]).ok && p.calls == 1 && c.error == csv.ErrorKind.None)
   p.calls = 0
   x := xml.stream_scanner(reader, scratch[..])
   r := xml.next_stream(&x)
-  check(!r.ok && r.kind == errors.Kind.None && r.error == 0 && r.detail == xml.ErrorKind.None)
+  check(!r.ok && r.kind == errors.Kind.Ok && r.error == 0 && r.detail == xml.ErrorKind.None)
   check(!xml.next_stream(&x).ok && p.calls == 1 && x.error == xml.ErrorKind.None)
   // A zero-sized XML buffer reports capacity before any callback.
   p.calls = 0
@@ -122,16 +122,16 @@ fn additional_contracts() {
   check(!xml.next_stream(&xs).ok && p.calls == 0 && xs.kind == cap.kind && xs.error == cap.detail && xs.system_error == 0)
   empty := xml.scanner("")
   end := xml.next(&empty)
-  check(!end.ok && end.kind == errors.Kind.None && end.error == 0 && end.detail == xml.ErrorKind.None)
+  check(!end.ok && end.kind == errors.Kind.Ok && end.error == 0 && end.detail == xml.ErrorKind.None)
   attrs := xml.attributes(xml.Event{})
   attr := xml.next_attribute(&attrs)
-  check(!attr.ok && attr.kind == errors.Kind.None && attr.error == 0 && attr.detail == xml.ErrorKind.None)
+  check(!attr.ok && attr.kind == errors.Kind.Ok && attr.error == 0 && attr.detail == xml.ErrorKind.None)
   zero_field: csv.Field
   zero_result: xml.Result
   zero_attribute: xml.Attribute
-  check(!zero_field.ok && zero_field.kind == errors.Kind.None && zero_field.error == 0 && zero_field.detail == csv.ErrorKind.None)
-  check(!zero_result.ok && zero_result.kind == errors.Kind.None && zero_result.error == 0 && zero_result.detail == xml.ErrorKind.None)
-  check(!zero_attribute.ok && zero_attribute.kind == errors.Kind.None && zero_attribute.error == 0 && zero_attribute.detail == xml.ErrorKind.None)
+  check(!zero_field.ok && zero_field.kind == errors.Kind.Ok && zero_field.error == 0 && zero_field.detail == csv.ErrorKind.None)
+  check(!zero_result.ok && zero_result.kind == errors.Kind.Ok && zero_result.error == 0 && zero_result.detail == xml.ErrorKind.None)
+  check(!zero_attribute.ok && zero_attribute.kind == errors.Kind.Ok && zero_attribute.error == 0 && zero_attribute.detail == xml.ErrorKind.None)
   // CSV diagnostics retain the field's starting byte offset.
   bad := csv.scanner("a,\"unfinished")
   check(csv.next(&bad, scratch[..]).ok)
@@ -154,8 +154,8 @@ fn additional_contracts() {
   clean_csv := csv.writer(io.Writer{data: #cast(rawptr, &p), write: write})
   clean_xml := xml.writer(io.Writer{data: #cast(rawptr, &p), write: write})
   check(csv.write_field(&clean_csv, "", false) && xml.write_text(&clean_xml, "") && p.calls == 0)
-  check(clean_csv.kind == errors.Kind.None && clean_csv.error == 0 && clean_csv.detail == csv.ErrorKind.None)
-  check(clean_xml.kind == errors.Kind.None && clean_xml.error == 0 && clean_xml.detail == xml.ErrorKind.None)
+  check(clean_csv.kind == errors.Kind.Ok && clean_csv.error == 0 && clean_csv.detail == csv.ErrorKind.None)
+  check(clean_xml.kind == errors.Kind.Ok && clean_xml.error == 0 && clean_xml.detail == xml.ErrorKind.None)
   // Zero writers reject real output, then also reject empty output.
   zwc: csv.Writer
   zwx: xml.Writer

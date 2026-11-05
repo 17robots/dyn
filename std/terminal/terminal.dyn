@@ -1,13 +1,12 @@
 use "std/unicode/utf8"
-use "std/errors" errors
-
+use "std/io" errors
 // Saved terminal settings. The layout is private to each platform: Linux and
 // macOS store termios, Windows stores the console mode.
 pub struct State { bytes: [72]u8 }
 pub struct Size { columns: usize, rows: usize, kind: errors.Kind, error: isize, ok: bool }
 
 pub struct Read { value: State, kind: errors.Kind, error: isize, ok: bool }
-pub struct Result { kind: errors.Kind, error: isize, ok: bool }
+pub struct Result { failure: errors.Failure }
 
 // Descriptors 0, 1 and 2 are the standard streams on every platform. On
 // Windows any other value is a console handle.
@@ -27,8 +26,8 @@ pub fn raw(descriptor: isize) Read {
   changed := saved.value
   make_raw(descriptor, &changed)
   applied := restore(descriptor, &changed)
-  if !applied.ok {
-    return Read{ kind: applied.kind, error: applied.error }
+  if applied.failure.kind != errors.Kind.Ok {
+    return Read{ kind: applied.failure.kind, error: applied.failure.native }
   }
   return saved
 }

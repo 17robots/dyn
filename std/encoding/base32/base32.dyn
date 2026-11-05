@@ -1,4 +1,4 @@
-use "std/errors" errors
+use "std/io" errors
 use "std/mem" mem
 use "std/encoding" codec
 use "std/bytes" bytes

@@ -10,7 +10,7 @@ ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 SOURCE=r'''use "vendor/window/native" window
 use "std/text/edit" edit
-use "std/errors" errors
+use "std/io" errors
 extern fn calls "probe_calls"() i32
 extern fn set_status "probe_status"(status: i32)
 fn check(ok: bool) { if !ok { #panic("surrounding native ABI") } }

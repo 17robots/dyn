@@ -7,7 +7,8 @@ import subprocess
 import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
-MOCK=r'''use "std/errors" errors
+MOCK=r'''use "std/io" errors
+use "std/io" io
 use "std/c" c
 use "std/bytes" bytes
 pub struct Window {display:rawptr,context:rawptr,handle:usize}
@@ -155,7 +156,7 @@ fn main(){
 }
 '''
 NATIVE=r'''use "vendor/window/x11" window
-use "std/errors" errors
+use "std/io" errors
 use "std/io" io
 fn check(ok:bool){if !ok {#panic("native swap interval")}}
 fn main(){

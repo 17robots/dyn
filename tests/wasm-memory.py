@@ -5,6 +5,7 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 DYN=os.environ.get('DYN',str(ROOT/'build/dyn'))
 source=r'''
+use "std/io" io
 use "std/mem" mem
 arenas: [8]*mem.Arena
 pub fn allocate(slot: usize, size: usize) usize {

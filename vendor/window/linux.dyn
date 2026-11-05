@@ -1,4 +1,4 @@
-use "std/errors" errors
+use "std/io" errors
 use "std/text/edit" surrounding_edit
 #target(kernel: linux)
 use "vendor/window/x11" x11

@@ -1,5 +1,6 @@
 #target(kernel: windows)
 
+use "std/io" io
 use "std/unicode/utf8" utf8
 use "std/unicode/utf16" utf16
 
@@ -17,7 +18,7 @@ fn read_link(path: []const u8, storage: []u8) isize {
 fn platform_load(arena: *mem.Arena, name: []const u8) ZoneResult {
   _ = arena
   _ = name
-  return ZoneResult{ kind: errors.Kind.Unsupported }
+  return ZoneResult{ failure: io.Failure{ kind: errors.Kind.Unsupported } }
 }
 
 fn word(data: []const u8, at: usize) u16 {
@@ -68,7 +69,7 @@ fn platform_system(arena: *mem.Arena) ZoneResult {
   data: [432]u8 = []
   if zone_information(&data[0]) == 4294967295 {
     code := #cast(isize, last_error())
-    return ZoneResult{ kind: errors.windows(code), error: code }
+    return ZoneResult{ failure: io.Failure{ kind: errors.windows(code), native: code } }
   }
   bias := long(data[..], 0)
   zone := Zone{ name: name(arena, data[..], 172, 128), has_rule: true }
@@ -80,5 +81,5 @@ fn platform_system(arena: *mem.Arena) ZoneResult {
     zone.start = windows_rule(data[..], 152)
     zone.end = windows_rule(data[..], 68)
   }
-  return ZoneResult{ value: zone, ok: true }
+  return ZoneResult{ value: zone }
 }

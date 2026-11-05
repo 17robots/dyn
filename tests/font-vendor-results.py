@@ -13,11 +13,12 @@ SOURCE=r'''use "vendor/freetype" ft
 use "vendor/harfbuzz" hb
 use "std/dynlib" dynlib
 use "std/fs" fs
+use "std/io" io
 use "std/mem" mem
 use "std/encoding/binary" binary
 use "std/ui" ui
 use "std/ui/software" software
-use "std/errors" errors
+use "std/io" errors
 fn check(ok: bool){if !ok {#panic("font vendor contract")}}
 fn save(arena: *mem.Arena, glyphs: []const hb.Glyph, path: []const u8){
  output := mem.push_array(u8,arena,4+#len(glyphs)*24)
@@ -25,7 +26,7 @@ fn save(arena: *mem.Arena, glyphs: []const hb.Glyph, path: []const u8){
  for i in 0..#len(glyphs){glyph := glyphs[i]
  values: [6]u32 = [glyph.index,glyph.cluster,#cast(u32,glyph.x_advance),#cast(u32,glyph.y_advance),#cast(u32,glyph.x_offset),#cast(u32,glyph.y_offset)]
  for j in 0..6 {binary.store_u32_le(output[4+i*24+j*4..8+i*24+j*4],values[j])}}
- check(fs.write_all(path,output).ok)
+ check(fs.write_all(path,output).failure.kind == errors.Kind.Ok)
 }
 empty_face: rawptr
 empty_face_destroyed: u32
@@ -52,12 +53,12 @@ fn main(){
  arena := mem.arena_create(0)
  defer {mem.arena_release(arena)}
  library := dynlib.open("FT_LIBRARY",dynlib.Now)
- check(library.ok)
+ check(library.failure.kind == errors.Kind.Ok)
  defer {_ = dynlib.close(&library.value)}
  ft_loaded := ft.load(library.value)
  check(ft_loaded.ok && !ft.load(nil).ok)
  font_bytes := fs.read_all(arena,"font.ttf",10000000)
- check(font_bytes.ok)
+ check(font_bytes.failure.kind == errors.Kind.Ok)
  font := ft.Font{}
  check(ft.open(&font,ft_loaded.api,font_bytes.value,0,32).ok)
  defer {ft.close(&font)}
@@ -71,16 +72,16 @@ fn main(){
  fields: [6]u32 = [#cast(u32,value.width),#cast(u32,value.height),#cast(u32,value.left),#cast(u32,value.top),#cast(u32,value.advance_x),#cast(u32,value.advance_y)]
  for i in 0..6 {binary.store_u32_le(output[i*4..i*4+4],fields[i])}
  for row in 0..value.height {for x in 0..value.width {output[24+#cast(usize,row*value.width+x)] = value.pixels[#cast(usize,row)*value.stride+#cast(usize,x)]}}
- check(fs.write_all("ft-actual.bin",output).ok)
+ check(fs.write_all("ft-actual.bin",output).failure.kind == errors.Kind.Ok)
  metrics:=ft.face_metrics(font.face)
  check(metrics.ok && ft.face_metrics(nil).kind==errors.Kind.InvalidInput)
  values:=metrics.value
  metric_fields:[7]u32=[#cast(u32,values.units_per_em),#cast(u32,#cast(i32,values.ascent)),#cast(u32,#cast(i32,values.descent)),#cast(u32,#cast(i32,values.height)),values.glyph_count,values.face_count,values.face_index]
  metric_bytes:[28]u8=[]
  for i in 0..7 {binary.store_u32_le(metric_bytes[i*4..i*4+4],metric_fields[i])}
- check(fs.write_all("metrics-actual.bin",metric_bytes[..]).ok)
+ check(fs.write_all("metrics-actual.bin",metric_bytes[..]).failure.kind == errors.Kind.Ok)
  shaping := dynlib.open("HB_LIBRARY",dynlib.Now)
- check(shaping.ok)
+ check(shaping.failure.kind == errors.Kind.Ok)
  defer {_ = dynlib.close(&shaping.value)}
  loaded := hb.load(shaping.value)
  check(loaded.ok && !hb.load(nil).ok)
@@ -140,10 +141,10 @@ fn main(){
  ui.end(&context)
  pixels := mem.push_array(u8,arena,#cast(usize,256*64*4))
  surface := software.Surface{pixels:pixels,width:256,height:64,stride:256*4}
- check(software.render(&surface,ui.first(&context),ft.renderer(&adapter)).ok)
+ check(software.render(&surface,ui.first(&context),ft.renderer(&adapter)).failure.kind == errors.Kind.Ok)
  ink: usize = 0
  for pixel in pixels {if pixel != 0 {ink += 1}}
- check(ink > 100 && adapter.kind == errors.Kind.None)
+ check(ink > 100 && adapter.kind == errors.Kind.Ok)
  bad := ft.Font{}
  check(!ft.open(&bad,ft_loaded.api,"broken",0,32).ok && bad.face == nil && bad.library == nil)
  check(hb.font_owned(&loaded.api,"broken",0).kind == errors.Kind.InvalidInput)

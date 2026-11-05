@@ -8,9 +8,10 @@ import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 SOURCE=r'''use "std/encoding/protobuf" pb
+use "std/io" io
 use "std/mem" mem
 use "std/bytes" bytes
-use "std/errors" errors
+use "std/io" errors
 fn check(ok: bool) { if !ok { #panic("protobuf contract") } }
 fn bad(source: []const u8) {
   state := pb.reader(source)
@@ -38,7 +39,7 @@ fn main() {
     result := pb.next(&state)
     check(result.ok && result.value.number == expected.number && result.value.wire == expected.wire && result.value.value == expected.value && bytes.equal(result.value.bytes,expected.bytes))
   }
-  check(!pb.next(&state).ok && pb.next(&state).kind == errors.Kind.None)
+  check(!pb.next(&state).ok && pb.next(&state).kind == errors.Kind.Ok)
   integers: [7]i64 = [-9223372036854775808,-500,-1,0,1,500,9223372036854775807]
   for value in integers { check(pb.unzigzag(pb.zigzag(value)) == value) }
   check(pb.zigzag(-1) == 1 && pb.zigzag(500) == 1000 && pb.zigzag(-9223372036854775808) == 0xffffffffffffffff)
@@ -73,7 +74,7 @@ fn main() {
     state = pb.reader(golden[..length])
     item := pb.next(&state)
     for item.ok { item = pb.next(&state) }
-    check(item.kind == errors.Kind.None || item.kind == errors.Kind.InvalidInput)
+    check(item.kind == errors.Kind.Ok || item.kind == errors.Kind.InvalidInput)
   }
 }
 '''

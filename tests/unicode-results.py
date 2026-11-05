@@ -16,13 +16,14 @@ def literal(value):
 
 
 SOURCE = '''use "std/unicode/text" text
+use "std/io" io
 use "std/mem" mem
 use "std/bytes" bytes
-use "std/errors" errors
+use "std/io" errors
 fn require(ok: bool, message: []const u8) { if !ok { #panic(message) } }
 fn converted(r: text.Converted, expected: []const u8) {
  require(r.ok && bytes.equal(r.value, expected), "conversion golden")
- require(r.kind == errors.Kind.None && r.error == 0 && r.offset == 0 && r.detail == text.ErrorKind.None, "success diagnostics")
+ require(r.kind == errors.Kind.Ok && r.error == 0 && r.offset == 0 && r.detail == text.ErrorKind.None, "success diagnostics")
 }
 fn convert(a: *mem.Arena, input: []const u8, mode: usize) text.Converted {
  if mode == 4 { return text.case_fold(a, input) }
@@ -102,10 +103,10 @@ fn overlap(start: usize, mode: usize) {
  require(mem.arena_mark(a) == mem.arena_start(a) + 8 && bytes.equal(payload, snapshot[..#len(payload)]), "overlap preserved bytes and mark")
 }
 fn end(r: text.GraphemeResult) {
- require(!r.ok && #len(r.value) == 0 && r.kind == errors.Kind.None && r.error == 0 && r.offset == 0 && r.detail == text.ErrorKind.None, "ordinary EOF")
+ require(!r.ok && #len(r.value) == 0 && r.kind == errors.Kind.Ok && r.error == 0 && r.offset == 0 && r.detail == text.ErrorKind.None, "ordinary EOF")
 }
 fn cluster(r: text.GraphemeResult, expected: []const u8) {
- require(r.ok && bytes.equal(r.value, expected) && r.kind == errors.Kind.None && r.error == 0 && r.offset == 0 && r.detail == text.ErrorKind.None, "grapheme value")
+ require(r.ok && bytes.equal(r.value, expected) && r.kind == errors.Kind.Ok && r.error == 0 && r.offset == 0 && r.detail == text.ErrorKind.None, "grapheme value")
 }
 fn sticky(input: []const u8, off: usize, start: usize) {
  g := text.graphemes(input)
@@ -118,7 +119,7 @@ fn sticky(input: []const u8, off: usize, start: usize) {
 }
 fn main() {
  z := text.Converted{}
- require(!z.ok && #len(z.value) == 0 && z.kind == errors.Kind.None && z.error == 0 && z.offset == 0 && z.detail == text.ErrorKind.None, "zero Converted")
+ require(!z.ok && #len(z.value) == 0 && z.kind == errors.Kind.Ok && z.error == 0 && z.offset == 0 && z.detail == text.ErrorKind.None, "zero Converted")
  end(text.GraphemeResult{})
  empty := text.graphemes("")
  end(text.next_grapheme(&empty))

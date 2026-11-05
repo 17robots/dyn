@@ -1,26 +1,27 @@
+use "std/io" io
 #target(kernel: darwin)
 
 // Directory listing through getdirentries64, with the Linux API shape.
 // Entry kinds use dirent values: 4 directory, 8 regular file, 10 link.
 pub struct Directory { file: File, storage: []u8, offset: usize, used: usize, base: i64 }
-pub struct DirectoryResult { value: Directory, error: isize, kind: errors.Kind, ok: bool }
+pub struct DirectoryResult { value: Directory, failure: io.Failure }
 pub struct DirectoryEntry { name: []const u8, kind: u8, ok: bool, error: isize, error_kind: errors.Kind }
 
 pub fn open_directory(path: []const u8, storage: []u8) DirectoryResult {
   if #len(storage) < 1048 {
-    return DirectoryResult{ error: -22, kind: errors.Kind.InvalidInput }
+    return DirectoryResult{ failure: io.Failure{ kind: errors.Kind.InvalidInput, native: -22 } }
   }
   space: [4096]u8 = []
   name := terminated(path, space[..])
   if name == nil {
-    return DirectoryResult{ error: -22, kind: errors.Kind.InvalidInput }
+    return DirectoryResult{ failure: io.Failure{ kind: errors.Kind.InvalidInput, native: -22 } }
   }
   // O_RDONLY | O_DIRECTORY | O_CLOEXEC.
   descriptor := #syscall(5, name, 17825792, 0)
   if descriptor < 0 {
-    return DirectoryResult{ error: descriptor, kind: errors.darwin(descriptor) }
+    return DirectoryResult{ failure: io.Failure{ kind: errors.darwin(descriptor), native: descriptor } }
   }
-  return DirectoryResult{ value: Directory{ file: owned_file(descriptor), storage: storage }, ok: true }
+  return DirectoryResult{ value: Directory{ file: owned_file(descriptor), storage: storage } }
 }
 
 // Entry name borrows directory storage until the next call.
@@ -117,13 +118,13 @@ fn path_call(number: isize, path: []const u8, argument: usize) Result {
   space: [4096]u8 = []
   name := terminated(path, space[..])
   if name == nil {
-    return Result{ error: -22, kind: errors.Kind.InvalidInput }
+    return Result{ failure: io.Failure{ kind: errors.Kind.InvalidInput, native: -22 } }
   }
   value := #syscall(number, name, argument)
   if value < 0 {
     return failure(value)
   }
-  return Result{ ok: true }
+  return Result{}
 }
 
 pub fn remove(path: []const u8) Result {
@@ -144,11 +145,11 @@ pub fn rename(old_path: []const u8, new_path: []const u8) Result {
   old_name := terminated(old_path, old_space[..])
   new_name := terminated(new_path, new_space[..])
   if old_name == nil || new_name == nil {
-    return Result{ error: -22, kind: errors.Kind.InvalidInput }
+    return Result{ failure: io.Failure{ kind: errors.Kind.InvalidInput, native: -22 } }
   }
   value := #syscall(128, old_name, new_name)
   if value < 0 {
     return failure(value)
   }
-  return Result{ ok: true }
+  return Result{}
 }

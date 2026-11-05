@@ -1,4 +1,5 @@
 // Usage: font-ui-demo FONT.ttf OUTPUT.png. No platform font service is used.
+use "std/io" io
 use "std/ui" ui
 use "std/ui/software" software
 use "std/mem" mem
@@ -18,11 +19,11 @@ fn main() {
     mem.arena_release(frame)
   }
   arguments := process.arguments(output)
-  if !arguments.ok || #len(arguments.value) != 3 {
+  if arguments.failure.kind != io.Kind.Ok || #len(arguments.value) != 3 {
     #panic("usage: font-ui-demo FONT.ttf OUTPUT.png")
   }
   bytes := fs.read_all(output, arguments.value[1], 64000000)
-  if !bytes.ok {
+  if bytes.failure.kind != io.Kind.Ok {
     #panic("cannot read font")
   }
   opened := font.open(bytes.value)
@@ -76,11 +77,11 @@ fn main() {
   pixels := mem.push_array(u8, output, #cast(usize, 480 * 240 * 4))
   surface := software.Surface{ pixels: pixels, width: 480, height: 240, stride: 480 * 4 }
   rendered := software.render(&surface, ui.first(&context), font_ui.atlas_renderer(&cached.value))
-  if !rendered.ok || count != 3 {
+  if rendered.failure.kind != io.Kind.Ok || count != 3 {
     #panic("UI demo render")
   }
   encoded := png.encode(output, pixels, 480, 240, 4)
-  if !encoded.ok || !fs.write_all(arguments.value[2], encoded.value).ok {
+  if !encoded.ok || fs.write_all(arguments.value[2], encoded.value).failure.kind != io.Kind.Ok {
     #panic("UI demo output")
   }
 }

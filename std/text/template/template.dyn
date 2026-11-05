@@ -1,8 +1,7 @@
 use "std/bytes" byte_ops
 use "std/io" stream
 use "std/mem" memory
-use "std/errors" errors
-
+use "std/io" errors
 pub enum ErrorKind { None, Syntax, OutOfMemory, Io }
 
 pub struct Template { source: []const u8 }
@@ -64,7 +63,7 @@ pub fn parse(arena: *memory.Arena, source: []const u8) ParseResult {
       retained[i] = source[i]
     }
   }
-  return ParseResult{ value: Template{ source: retained }, kind: errors.Kind.None, ok: true }
+  return ParseResult{ value: Template{ source: retained }, kind: errors.Kind.Ok, ok: true }
 }
 
 fn value(fields: []const Field, name: []const u8) []const u8 {
@@ -81,7 +80,7 @@ fn write(destination: stream.Writer, source: []const u8) RenderResult {
   if result.status == stream.Status.Error {
     return RenderResult{ kind: result.kind, error: result.error, detail: ErrorKind.Io, ok: false }
   }
-  return RenderResult{ kind: errors.Kind.None, ok: true }
+  return RenderResult{ kind: errors.Kind.Ok, ok: true }
 }
 
 // Literal output maps directly to source bytes, unlike expanded field values.
@@ -134,5 +133,5 @@ pub fn render_with(destination: stream.Writer, template: *const Template, fields
   if literal < #len(template.source) {
     return write_literal(destination, template.source[literal..], literal)
   }
-  return RenderResult{ kind: errors.Kind.None, ok: true }
+  return RenderResult{ kind: errors.Kind.Ok, ok: true }
 }

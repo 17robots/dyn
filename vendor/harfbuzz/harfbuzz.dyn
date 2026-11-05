@@ -1,6 +1,6 @@
 use "std/dynlib" dynlib
 use "std/mem" mem
-use "std/errors" errors
+use "std/io" errors
 // Dynamic HarfBuzz OpenType shaping. Keep the loader handle open for every
 // table/object lifetime. Buffer glyphs borrow native storage until mutation;
 // shape copies them into the caller arena. HarfBuzz shapes one directional run:

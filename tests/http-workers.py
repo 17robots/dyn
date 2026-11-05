@@ -10,16 +10,17 @@ ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 ENV = dict(os.environ, DYN_SDK=str(ROOT))
 COMMON = '''use "std/net/http" http
+use "std/io" io
 use "std/net" net
 use "std/mem" mem
-use "std/errors" errors
+use "std/io" errors
 use "std/thread" thread
 use "std/sync" sync
 use "MODULE" workers
 fn handler(response: *http.Response, request: *const http.Request) http.Result {
   _ = response
   _ = request
-  return http.Result{ ok: true }
+  return http.Result{}
 }
 '''
 NATIVE = COMMON.replace('MODULE', 'std/net/http/concurrent') + r'''
@@ -31,27 +32,27 @@ fn main() {
   stacks: [262144]u8 = []
   workers.stop(pool[..])
   zero := workers.join(pool[..])
-  if !zero.ok || zero.kind != errors.Kind.None || zero.error != 0 { #panic("zero lifecycle") }
+  if zero.failure.kind != errors.Kind.Ok || zero.failure.native != 0 { #panic("zero lifecycle") }
   listener := http.Listener{}
   for size in [0, 255] {
     bad := workers.start(arena, pool[..], &listener, receive[..], 4096, stacks[..], #cast(usize, size), handler)
-    if bad.ok || bad.kind != errors.Kind.InvalidInput || bad.error != 0 || bad.started != 0 || mem.arena_mark(arena) != mem.arena_start(arena) { #panic("validation") }
+    if bad.failure.kind == errors.Kind.Ok || bad.failure.kind != errors.Kind.InvalidInput || bad.failure.native != 0 || bad.started != 0 || mem.arena_mark(arena) != mem.arena_start(arena) { #panic("validation") }
   }
   bad := workers.start(arena, pool[..0], &listener, receive[..], 4096, stacks[..], 131072, handler)
-  if bad.ok || bad.kind != errors.Kind.InvalidInput { #panic("empty validation") }
+  if bad.failure.kind == errors.Kind.Ok || bad.failure.kind != errors.Kind.InvalidInput { #panic("empty validation") }
   address := net.ipv4(127, 0, 0, 1, 0)
   listening := net.tcp_listen_ipv4(&address, 4)
-  if !listening.ok { #panic("listen") }
+  if listening.failure.kind != errors.Kind.Ok { #panic("listen") }
   listener = listening.value
   started := workers.start_context(arena, pool[..], &listener, receive[..], 4096, stacks[..], 131072, handler, nil)
-  if !started.ok || started.started != 2 || pool[0].thread == nil || pool[0].thread == pool[1].thread { #panic("start") }
+  if started.failure.kind != errors.Kind.Ok || started.started != 2 || pool[0].thread == nil || pool[0].thread == pool[1].thread { #panic("start") }
   busy := workers.start(arena, pool[..], &listener, receive[..], 4096, stacks[..], 131072, handler)
-  if busy.ok || busy.kind != errors.Kind.InvalidState || busy.error != 0 { #panic("busy") }
+  if busy.failure.kind == errors.Kind.Ok || busy.failure.kind != errors.Kind.InvalidState || busy.failure.native != 0 { #panic("busy") }
   bound := net.Address{}
-  if !net.local_address(listener.descriptor, &bound).ok { #panic("local address") }
+  if net.local_address(listener.descriptor, &bound).failure.kind != errors.Kind.Ok { #panic("local address") }
   for i in 0..16 { address.bytes[i] = bound.bytes[i] }
   client := net.tcp_connect_ipv4(&address)
-  if !client.ok { #panic("connect") }
+  if client.failure.kind != errors.Kind.Ok { #panic("connect") }
   connection := client.value
   // One worker blocks in a request read, the other in accept. Every process
   // has a Python timeout, including this synchronization loop.
@@ -66,19 +67,20 @@ fn main() {
   }
   workers.stop(pool[..])
   done := workers.join(pool[..])
-  if !done.ok || done.started != 2 || pool[0].thread != nil || pool[1].thread != nil { #panic("join") }
+  if done.failure.kind != errors.Kind.Ok || done.started != 2 || pool[0].thread != nil || pool[1].thread != nil { #panic("join") }
   _ = net.connection_close(&connection)
   _ = net.listener_close(&listener)
   workers.stop(pool[..])
-  if !workers.join(pool[..]).ok { #panic("repeated join") }
+  if workers.join(pool[..]).failure.kind != errors.Kind.Ok { #panic("repeated join") }
 }
 '''
 MOCK_THREAD = r'''
+use "std/io" io
 use "std/mem" mem
-use "std/errors" errors
+use "std/io" errors
 pub struct Thread { index: usize }
-pub struct SpawnResult { value: *Thread, ok: bool, kind: errors.Kind, error: isize }
-pub struct Result { ok: bool, kind: errors.Kind, error: isize }
+pub struct SpawnResult { value: *Thread, failure: errors.Failure }
+pub struct Result { failure: errors.Failure }
 pub struct State { spawns: usize, joins: usize, fail_at: usize, fail_join: bool }
 pub state: State
 pub fn spawn(arena: *mem.Arena, stack: []u8, entry: fn(rawptr) isize, context: rawptr) SpawnResult {
@@ -86,15 +88,15 @@ pub fn spawn(arena: *mem.Arena, stack: []u8, entry: fn(rawptr) isize, context: r
   _ = entry
   _ = context
   state.spawns += 1
-  if state.fail_at == state.spawns { return SpawnResult{ kind: errors.Kind.Capacity, error: -12 } }
+  if state.fail_at == state.spawns { return SpawnResult{ failure: errors.Failure{ kind: errors.Kind.Capacity, native: -12 } } }
   node := mem.push(Thread, arena)
   node.index = state.spawns
-  return SpawnResult{ value: node, ok: true }
+  return SpawnResult{ value: node }
 }
 pub fn join(node: *Thread) Result {
   state.joins += 1
-  if state.fail_join && node.index == 1 { return Result{ kind: errors.Kind.System, error: -5 } }
-  return Result{ ok: true }
+  if state.fail_join && node.index == 1 { return Result{ failure: errors.Failure{ kind: errors.Kind.System, native: -5 } } }
+  return Result{}
 }
 '''
 MOCK_NET = r'''
@@ -127,21 +129,21 @@ fn main() {
   listener := http.Listener{ descriptor: 55, active: true }
   mock.state = mock.State{ fail_at: 3 }
   failed := workers.start(arena, pool[..], &listener, receive[..], 1024, stacks[..], 256, handler)
-  if failed.ok || failed.kind != errors.Kind.Capacity || failed.error != -12 || failed.started != 2 { #panic("spawn failure result") }
+  if failed.failure.kind == errors.Kind.Ok || failed.failure.kind != errors.Kind.Capacity || failed.failure.native != -12 || failed.started != 2 { #panic("spawn failure result") }
   if mock.state.joins != 2 || counter.calls != 3 || pool[0].thread != nil || pool[1].thread != nil { #panic("rollback drain") }
   mock.state = mock.State{}
   started := workers.start(arena, pool[..], &listener, receive[..], 1024, stacks[..], 256, handler)
-  if !started.ok { #panic("mock start") }
-  pool[0].error = workers.Result{ kind: errors.Kind.InvalidInput, error: 0 }
-  pool[1].error = workers.Result{ kind: errors.Kind.System, error: -9 }
+  if started.failure.kind != errors.Kind.Ok { #panic("mock start") }
+  pool[0].error = workers.Result{ failure: errors.Failure{ kind: errors.Kind.InvalidInput } }
+  pool[1].error = workers.Result{ failure: errors.Failure{ kind: errors.Kind.System, native: -9 } }
   done := workers.join(pool[..])
-  if done.ok || done.kind != errors.Kind.InvalidInput || done.error != 0 || done.started != 3 || mock.state.joins != 3 { #panic("first native zero error/all joins") }
+  if done.failure.kind == errors.Kind.Ok || done.failure.kind != errors.Kind.InvalidInput || done.failure.native != 0 || done.started != 3 || mock.state.joins != 3 { #panic("first native zero error/all joins") }
   mock.state = mock.State{ fail_join: true }
   _ = workers.start(arena, pool[..], &listener, receive[..], 1024, stacks[..], 256, handler)
   done = workers.join(pool[..])
-  if done.ok || done.error != -5 || done.started != 2 || mock.state.joins != 3 || pool[0].thread == nil { #panic("failed join retains node/all joins") }
+  if done.failure.kind == errors.Kind.Ok || done.failure.native != -5 || done.started != 2 || mock.state.joins != 3 || pool[0].thread == nil { #panic("failed join retains node/all joins") }
   mock.state.fail_join = false
-  if !workers.join(pool[..]).ok { #panic("retry join") }
+  if workers.join(pool[..]).failure.kind != io.Kind.Ok { #panic("retry join") }
 }
 '''
 

@@ -1,6 +1,7 @@
 #target(kernel: darwin)
 #link("System")
 // Native Darwin adapter. libSystem handles OS calls; buffers use the caller arena.
+use "std/io" io
 use "std/c" c
 extern fn native_chdir "chdir"(path: *const u8) i32
 extern fn native_fork "fork"() i32
@@ -49,13 +50,13 @@ fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, co
   argv := c_vector(arena, arguments)
   env := c_vector(arena, configuration.environment)
   if executable == nil || argv == nil || env == nil {
-    return SpawnResult{ error: -28, kind: error_kinds.Kind.Capacity }
+    return SpawnResult{ failure: io.Failure{ kind: error_kinds.Kind.Capacity, native: -28 } }
   }
   directory: *const u8 = nil
   if #len(configuration.directory) > 0 {
     directory = c_string(arena, configuration.directory)
     if directory == nil {
-      return SpawnResult{ error: -28, kind: error_kinds.Kind.Capacity }
+      return SpawnResult{ failure: io.Failure{ kind: error_kinds.Kind.Capacity, native: -28 } }
     }
   }
   sources: [3]isize = [native_stream(configuration.input), native_stream(configuration.output), native_stream(configuration.error)]
@@ -72,14 +73,14 @@ fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, co
       copies[source_index] = native_fcntl(#cast(i32, sources[source_index]), 67, 3)
       if copies[source_index] < 0 {
         duplicate_error := mac_error()
-        return SpawnResult{ error: duplicate_error, kind: error_kinds.darwin(duplicate_error) }
+        return SpawnResult{ failure: io.Failure{ kind: error_kinds.darwin(duplicate_error), native: duplicate_error } }
       }
     }
   }
   channel: [2]i32 = []
   if native_pipe(&channel[0]) != 0 {
     pipe_error := mac_error()
-    return SpawnResult{ error: pipe_error, kind: error_kinds.darwin(pipe_error) }
+    return SpawnResult{ failure: io.Failure{ kind: error_kinds.darwin(pipe_error), native: pipe_error } }
   }
   reader := native_fcntl(channel[0], 67, 3)
   writer := native_fcntl(channel[1], 67, 3)
@@ -92,14 +93,14 @@ fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, co
     if writer >= 0 {
       _ = native_close(writer)
     }
-    return SpawnResult{ error: -24, kind: error_kinds.darwin(-24) }
+    return SpawnResult{ failure: io.Failure{ kind: error_kinds.darwin(-24), native: -24 } }
   }
   child := native_fork()
   if child < 0 {
     failure := mac_error()
     _ = native_close(reader)
     _ = native_close(writer)
-    return SpawnResult{ error: failure, kind: error_kinds.darwin(failure) }
+    return SpawnResult{ failure: io.Failure{ kind: error_kinds.darwin(failure), native: failure } }
   }
   if child == 0 {
     _ = native_close(reader)
@@ -138,9 +139,9 @@ fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, co
     if amount != #cast(isize, #sizeof(isize)) {
       reported = -5
     }
-    return SpawnResult{ error: reported, kind: error_kinds.darwin(reported) }
+    return SpawnResult{ failure: io.Failure{ kind: error_kinds.darwin(reported), native: reported } }
   }
-  return SpawnResult{ value: Child{ handle: #cast(isize, child), active: true }, ok: true }
+  return SpawnResult{ value: Child{ handle: #cast(isize, child), active: true } }
 }
 fn wait_native(child: *Child, nonblocking: bool) ExitResult {
   status: i32 = 0
@@ -154,44 +155,44 @@ fn wait_native(child: *Child, nonblocking: bool) ExitResult {
   }
   if value < 0 {
     wait_error := mac_error()
-    return ExitResult{ error: wait_error, kind: error_kinds.darwin(wait_error) }
+    return ExitResult{ failure: io.Failure{ kind: error_kinds.darwin(wait_error), native: wait_error } }
   }
   if value == 0 {
-    return ExitResult{ ok: true }
+    return ExitResult{}
   }
   child.active = false
   if (status & 127) == 0 {
-    return ExitResult{ code: #cast(u32, ((status >> 8) & 255)), finished: true, ok: true }
+    return ExitResult{ code: #cast(u32, ((status >> 8) & 255)), finished: true }
   }
-  return ExitResult{ signal: #cast(u32, (status & 127)), finished: true, ok: true }
+  return ExitResult{ signal: #cast(u32, (status & 127)), finished: true }
 }
 fn terminate_native(child: *Child) Status {
   if native_kill(#cast(i32, child.handle), 9) < 0 {
     terminate_error := mac_error()
-    return Status{ error: terminate_error, kind: error_kinds.darwin(terminate_error) }
+    return Status{ failure: io.Failure{ kind: error_kinds.darwin(terminate_error), native: terminate_error } }
   }
-  return Status{ ok: true }
+  return Status{}
 }
 fn close_native(handle: isize) Status {
   if native_close(#cast(i32, handle)) < 0 {
     close_error := mac_error()
-    return Status{ error: close_error, kind: error_kinds.darwin(close_error) }
+    return Status{ failure: io.Failure{ kind: error_kinds.darwin(close_error), native: close_error } }
   }
-  return Status{ ok: true }
+  return Status{}
 }
 fn pipe_native() Pipe {
   descriptors: [2]i32 = []
   if native_pipe(&descriptors[0]) != 0 {
     pipe_error := mac_error()
-    return Pipe{ error: pipe_error, kind: error_kinds.darwin(pipe_error) }
+    return Pipe{ failure: io.Failure{ kind: error_kinds.darwin(pipe_error), native: pipe_error } }
   }
   if native_fcntl(descriptors[0], 2, 1) < 0 || native_fcntl(descriptors[1], 2, 1) < 0 || native_fcntl(descriptors[0], 4, 4) < 0 {
     failure := mac_error()
     _ = native_close(descriptors[0])
     _ = native_close(descriptors[1])
-    return Pipe{ error: failure, kind: error_kinds.darwin(failure) }
+    return Pipe{ failure: io.Failure{ kind: error_kinds.darwin(failure), native: failure } }
   }
-  return Pipe{ input: #cast(isize, descriptors[0]), output: #cast(isize, descriptors[1]), ok: true }
+  return Pipe{ input: #cast(isize, descriptors[0]), output: #cast(isize, descriptors[1]) }
 }
 fn read_native(handle: isize, destination: []u8) ReadResult {
   amount := native_read(#cast(i32, handle), &destination[0], #len(destination))
@@ -223,22 +224,22 @@ fn environment_native(name: []const u8, destination: []u8) EnvironmentResult {
   buffer: [4096]u8 = []
   key := c.string_into(buffer[..], name)
   if !key.ok {
-    return EnvironmentResult{ error: -28, kind: error_kinds.Kind.Capacity }
+    return EnvironmentResult{ failure: io.Failure{ kind: error_kinds.Kind.Capacity, native: -28 } }
   }
   value := native_environment(key.value)
   if value == nil {
-    return EnvironmentResult{ value: destination[..0], ok: true }
+    return EnvironmentResult{ value: destination[..0] }
   }
   parsed := c.bytes_from_string(value, #len(destination)+1)
   if !parsed.ok || #len(parsed.value) > #len(destination) {
-    return EnvironmentResult{ error: -28, kind: error_kinds.Kind.Capacity }
+    return EnvironmentResult{ failure: io.Failure{ kind: error_kinds.Kind.Capacity, native: -28 } }
   }
   i: usize = 0
   for i < #len(parsed.value) {
     destination[i] = parsed.value[i]
     i += 1
   }
-  return EnvironmentResult{ value: destination[..i], found: true, ok: true }
+  return EnvironmentResult{ value: destination[..i], found: true }
 }
 
 fn duplicate_native(value: isize) HandleResult {
@@ -256,10 +257,10 @@ extern fn argument_vector "dyn_arguments_vector"() ***const u8
 fn arguments_native(arena: *mem.Arena) ArgumentsResult {
   count := argument_count().*
   if count < 0 {
-    return ArgumentsResult{ kind: error_kinds.Kind.InvalidState }
+    return ArgumentsResult{ failure: io.Failure{ kind: error_kinds.Kind.InvalidState } }
   }
   result := argument_slots(arena, #cast(usize, count))
-  if !result.ok {
+  if result.failure.kind != io.Kind.Ok {
     return result
   }
   vector := #slice(argument_vector().*, #cast(usize, count))

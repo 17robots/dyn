@@ -8,8 +8,8 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 DYN = Path(os.environ.get('DYN', ROOT / 'build' / ('dyn-release.exe' if os.name == 'nt' else 'dyn-release'))).resolve()
 SOURCE = r'''use "std/text/regex" regex
-use "std/mem" memory
 use "std/io" io
+use "std/mem" memory
 fn require(ok:bool,message:[]const u8){ if !ok { #panic(message) } }
 fn compile(arena:*memory.Arena,pattern:[]const u8) regex.Program {
   result:=regex.compile(arena,pattern)

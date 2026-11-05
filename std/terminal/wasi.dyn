@@ -1,3 +1,4 @@
+use "std/io" io
 #target(kernel: wasi)
 
 // WASI Preview 1 has no terminal control. Descriptors are never terminals;
@@ -10,9 +11,9 @@ pub fn read_state(descriptor: isize) Read {
 pub fn restore(descriptor: isize, saved: *const State) Result {
   _ = descriptor
   if saved == nil {
-    return Result{ kind: errors.Kind.InvalidInput }
+    return Result{ failure: io.Failure{ kind: errors.Kind.InvalidInput } }
   }
-  return Result{ kind: errors.Kind.Unsupported }
+  return Result{ failure: io.Failure{ kind: errors.Kind.Unsupported } }
 }
 
 fn make_raw(descriptor: isize, state: *State) {

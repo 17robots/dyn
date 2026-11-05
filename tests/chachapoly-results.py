@@ -10,6 +10,7 @@ DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 import random
 SOURCE=r'''use "std/crypto/chacha20poly1305" aead
 use "std/bytes" bytes
+use "std/io" io
 use "std/mem" mem
 fn check(ok: bool) { if !ok { #panic("native AEAD contract") } }
 fn vector(key: []const u8, nonce: []const u8, aad: []const u8, message: []const u8, cipher: []const u8, expected: []const u8) {

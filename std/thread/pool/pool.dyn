@@ -5,8 +5,7 @@
 use "std/mem" mem
 use "std/sync" sync
 use "std/thread" thread
-use "std/errors" errors
-
+use "std/io" errors
 // One unit of work. run receives data on a worker thread.
 pub struct Task { run: fn(rawptr), data: rawptr }
 
@@ -25,8 +24,8 @@ pub struct Pool {
   started: usize,
 }
 
-pub struct StartResult { value: *Pool, kind: errors.Kind, error: isize, ok: bool }
-pub struct Result { kind: errors.Kind, error: isize, ok: bool }
+pub struct StartResult { value: *Pool, failure: errors.Failure }
+pub struct Result { failure: errors.Failure }
 
 fn worker(context: rawptr) isize {
   pool := #cast(*Pool, context)
@@ -59,7 +58,7 @@ fn worker(context: rawptr) isize {
 // rewound and any started workers are stopped.
 pub fn start(arena: *mem.Arena, workers: usize, capacity: usize, stack_size: usize) StartResult {
   if workers == 0 || capacity == 0 || stack_size < 256 {
-    return StartResult{ kind: errors.Kind.InvalidInput }
+    return StartResult{ failure: errors.Failure{ kind: errors.Kind.InvalidInput } }
   }
   mark := mem.arena_mark(arena)
   pool := mem.push(Pool, arena)
@@ -70,15 +69,15 @@ pub fn start(arena: *mem.Arena, workers: usize, capacity: usize, stack_size: usi
   pool.workers = mem.push_array(*thread.Thread, arena, workers)
   for i in 0..workers {
     spawned := thread.spawn_with_size(arena, stack_size, worker, pool)
-    if !spawned.ok {
+    if spawned.failure.kind != errors.Kind.Ok {
       _ = stop(pool)
       mem.arena_rewind(arena, mark)
-      return StartResult{ kind: spawned.kind, error: spawned.error }
+      return StartResult{ failure: errors.Failure{ kind: spawned.failure.kind, native: spawned.failure.native } }
     }
     pool.workers[i] = spawned.value
     pool.started += 1
   }
-  return StartResult{ value: pool, ok: true }
+  return StartResult{ value: pool }
 }
 
 // Queues task. Returns false, queuing nothing, when the queue is full or the
@@ -116,7 +115,7 @@ pub fn wait(pool: *Pool) {
 // may be reclaimed after a successful stop.
 pub fn stop(pool: *Pool) Result {
   if pool == nil {
-    return Result{ kind: errors.Kind.InvalidInput }
+    return Result{ failure: errors.Failure{ kind: errors.Kind.InvalidInput } }
   }
   sync.lock(&pool.lock)
   pool.stopping = true
@@ -124,12 +123,12 @@ pub fn stop(pool: *Pool) Result {
   sync.unlock(&pool.lock)
   for i in 0..pool.started {
     joined := thread.join(pool.workers[i])
-    if !joined.ok {
-      return Result{ kind: joined.kind, error: joined.error }
+    if joined.failure.kind != errors.Kind.Ok {
+      return Result{ failure: errors.Failure{ kind: joined.failure.kind, native: joined.failure.native } }
     }
   }
   pool.started = 0
-  return Result{ ok: true }
+  return Result{}
 }
 
 // A counter that waiters block on until it returns to zero, for fan-out work

@@ -2,8 +2,7 @@ use "std/mem" mem
 use "std/compress/deflate" deflate
 use "std/hash" hashing
 use "std/io" stream
-use "std/errors" errors
-
+use "std/io" errors
 pub enum ErrorKind { None, End, Syntax, Unsupported, Capacity, Checksum, Overlap }
 pub struct Entry {
   name: []const u8,
@@ -44,7 +43,7 @@ pub fn stream_reader(input: stream.Reader, header_storage: []u8, name_storage: [
 
 fn portable(detail: ErrorKind) errors.Kind {
   if detail == ErrorKind.None || detail == ErrorKind.End {
-    return errors.Kind.None
+    return errors.Kind.Ok
   }
   if detail == ErrorKind.Unsupported {
     return errors.Kind.Unsupported

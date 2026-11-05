@@ -1,5 +1,5 @@
 use "std/mem" mem
-use "std/errors" errors
+use "std/io" errors
 use "std/math" math
 
 // A face borrows immutable font bytes. Keep them alive for every lookup/raster.

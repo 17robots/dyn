@@ -32,19 +32,19 @@ fn await_event(state: *watch.Watcher, id: i32, name: []const u8, mask: u32, rena
 fn main() {
   watch.audit_callbacks()
   empty := watch.Watcher{}
-  require(watch.close(&empty).ok,"default close")
+  require(watch.close(&empty).failure.kind == io.Kind.Ok,"default close")
   require(watch.next(&empty).status == watch.Status.Error,"default next")
   storage: [1024]u8 = []
   failed := watch.open(storage[..271])
-  require(!failed.ok && watch.close(&failed.value).ok,"short buffer")
+  require(failed.failure.kind != io.Kind.Ok && watch.close(&failed.value).failure.kind == io.Kind.Ok,"short buffer")
   opened := watch.open(storage[..])
-  require(opened.ok,"FSEvents open")
+  require(opened.failure.kind == io.Kind.Ok,"FSEvents open")
   defer { _ = watch.close(&opened.value) }
-  require(!watch.add(&opened.value,"missing-directory",watch.Changes).ok,"missing path")
-  require(!watch.add(&opened.value,"existing",watch.Changes).ok,"file path")
+  require(watch.add(&opened.value,"missing-directory",watch.Changes).failure.kind != io.Kind.Ok,"missing path")
+  require(watch.add(&opened.value,"existing",watch.Changes).failure.kind != io.Kind.Ok,"file path")
   added := watch.add(&opened.value,".",watch.Changes)
   other := watch.add(&opened.value,"other",watch.Changes)
-  require(added.ok && other.ok && added.value != other.value,"multiple watches")
+  require(added.failure.kind == io.Kind.Ok && other.failure.kind == io.Kind.Ok && added.value != other.value,"multiple watches")
   require(watch.add(&opened.value,".",watch.Changes).value == added.value,"repeat add identity")
   stage("create")
   await_event(&opened.value,added.value,"café-😀",watch.Create,false)
@@ -58,8 +58,8 @@ fn main() {
   await_event(&opened.value,added.value,"renamed",watch.Delete,false)
   stage("other")
   await_event(&opened.value,other.value,"second",watch.Create,false)
-  require(watch.remove(&opened.value,added.value).ok,"remove")
-  require(!watch.remove(&opened.value,added.value).ok,"stale remove")
+  require(watch.remove(&opened.value,added.value).failure.kind == io.Kind.Ok,"remove")
+  require(watch.remove(&opened.value,added.value).failure.kind != io.Kind.Ok,"stale remove")
   stage("removed")
   await_event(&opened.value,other.value,"third",watch.Create,false)
   for attempt in 0..50 {
@@ -72,12 +72,12 @@ fn main() {
   // Each close invalidates pending callbacks before freeing/reusing contexts.
   for iteration in 0..16 {
     pending := watch.open(storage[..])
-    require(pending.ok,"pending open")
-    require(watch.add(&pending.value,".",watch.Changes).ok,"pending add")
+    require(pending.failure.kind == io.Kind.Ok,"pending open")
+    require(watch.add(&pending.value,".",watch.Changes).failure.kind == io.Kind.Ok,"pending add")
     _ = time.sleep(time.Millisecond*5)
-    require(watch.close(&pending.value).ok && watch.close(&pending.value).ok,"pending close")
+    require(watch.close(&pending.value).failure.kind == io.Kind.Ok && watch.close(&pending.value).failure.kind == io.Kind.Ok,"pending close")
   }
-  require(watch.close(&opened.value).ok,"final close")
+  require(watch.close(&opened.value).failure.kind == io.Kind.Ok,"final close")
   stage("passed")
 }
 '''

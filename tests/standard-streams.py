@@ -32,7 +32,7 @@ use "std/bufio"
 use "std/time"
 fn main() {
   clock := time.monotonic_now()
-  if !clock.ok { #panic("clock failed") }
+  if clock.failure.kind != io.Kind.Ok { #panic("clock failed") }
   scratch: [8]u8 = []
   input := bufio.reader(io.stdin(), scratch[..])
   line: [64]u8 = []

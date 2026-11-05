@@ -1,7 +1,6 @@
 use "std/mem" mem
 use "std/c" cabi
-use "std/errors" errors
-
+use "std/io" errors
 // Dynamic-loader adapter for Linux, macOS and Windows. Handles own loader
 // references; symbols borrow them. Symbols are invalid after the library is
 // successfully closed. On Linux, linking requires libc (or libdl on older
@@ -13,37 +12,37 @@ pub const Now: i32 = 2
 pub const Local: i32 = 0
 pub const Global: i32 = 256
 
-pub struct OpenResult { value: Handle, kind: errors.Kind, error: isize, message: *const u8, ok: bool }
-pub struct SymbolResult { value: rawptr, kind: errors.Kind, error: isize, message: *const u8, ok: bool }
+pub struct OpenResult { value: Handle, message: *const u8, failure: errors.Failure }
+pub struct SymbolResult { value: rawptr, message: *const u8, failure: errors.Failure }
 
 // Loader messages borrow storage until the next loader operation.
 // POSIX dlerror supplies text, not a native integer code; error remains zero.
 // Windows supplies a GetLastError code in error; message stays nil.
-pub struct Result { ok: bool, kind: errors.Kind, error: isize, message: *const u8 }
+pub struct Result { message: *const u8, failure: errors.Failure }
 
 pub fn open(path: []const u8, flags: i32) OpenResult {
   storage: [4096 + mem.ArenaBufferOverhead]u8 = []
   if #len(path) >= #len(storage) {
-    return OpenResult{ kind: errors.Kind.InvalidInput }
+    return OpenResult{ failure: errors.Failure{ kind: errors.Kind.InvalidInput } }
   }
   name := cabi.string_into(storage[..], path)
   if !name.ok {
-    return OpenResult{ kind: errors.Kind.InvalidInput }
+    return OpenResult{ failure: errors.Failure{ kind: errors.Kind.InvalidInput } }
   }
   return platform_open(name.value, flags)
 }
 
 pub fn symbol(handle: Handle, name: []const u8) SymbolResult {
   if handle == nil {
-    return SymbolResult{ kind: errors.Kind.InvalidState }
+    return SymbolResult{ failure: errors.Failure{ kind: errors.Kind.InvalidState } }
   }
   storage: [4096 + mem.ArenaBufferOverhead]u8 = []
   if #len(name) >= #len(storage) {
-    return SymbolResult{ kind: errors.Kind.InvalidInput }
+    return SymbolResult{ failure: errors.Failure{ kind: errors.Kind.InvalidInput } }
   }
   native_name := cabi.string_into(storage[..], name)
   if !native_name.ok {
-    return SymbolResult{ kind: errors.Kind.InvalidInput }
+    return SymbolResult{ failure: errors.Failure{ kind: errors.Kind.InvalidInput } }
   }
   return platform_symbol(handle, native_name.value)
 }
@@ -51,14 +50,14 @@ pub fn symbol(handle: Handle, name: []const u8) SymbolResult {
 // Clears the owned handle only after a successful close. Failure retains ownership.
 pub fn close(handle: *Handle) Result {
   if handle == nil {
-    return Result{ kind: errors.Kind.InvalidInput }
+    return Result{ failure: errors.Failure{ kind: errors.Kind.InvalidInput } }
   }
   value := handle.*
   if value == nil {
-    return Result{ kind: errors.Kind.InvalidState }
+    return Result{ failure: errors.Failure{ kind: errors.Kind.InvalidState } }
   }
   closed := platform_close(value)
-  if closed.ok {
+  if closed.failure.kind == errors.Kind.Ok {
     handle.* = nil
   }
   return closed

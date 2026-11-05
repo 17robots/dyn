@@ -8,10 +8,11 @@ ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 SOURCE=r'''use "std/archive/zip" zip
 use "std/unicode/text" text
+use "std/io" io
 use "std/mem" mem
 use "std/hash" hashing
 use "std/bytes" bytes
-use "std/errors" errors
+use "std/io" errors
 fn main() {
   buffer:[4+mem.ArenaBufferOverhead]u8=[]
   pad:=(16-(#cast(usize,&buffer[0])&15))&15

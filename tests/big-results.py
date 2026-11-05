@@ -54,8 +54,8 @@ for a, b in cases:
     out += [pow(a, exponent, modulus) if modulus > 0 else 'none']
     expected.append(' '.join(str(x) for x in out))
 SOURCE = '''use "std/math/big" big
-use "std/mem" mem
 use "std/io" io
+use "std/mem" mem
 use "std/bytes" bytes
 
 const data: []const u8 = #load("cases.txt")

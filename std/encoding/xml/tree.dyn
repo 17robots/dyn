@@ -1,6 +1,5 @@
 use "std/mem" tree_memory
-use "std/errors" tree_errors
-
+use "std/io" tree_errors
 // Arena-owned links, borrowed source slices. This is the scanner's XML stream
 // subset: raw text/entities and raw attributes, no decoding, DTD expansion or
 // namespace resolution. Processing instructions retain their raw body in text.

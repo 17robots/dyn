@@ -4,8 +4,7 @@
 // limbs and is never negative.
 
 use "std/mem" mem
-use "std/errors" errors
-
+use "std/io" errors
 pub struct Int { limbs: []const u32, negative: bool }
 
 pub struct ParseResult { value: Int, kind: errors.Kind, offset: usize, ok: bool }

@@ -33,8 +33,8 @@ for key, suffix in [('PKG_CONFIG_PATH', 'lib/pkgconfig'), ('DYN_LIBRARY_PATH', '
 dyn = str(Path(env.get('DYN', BUILD/'dyn-release')).resolve())
 FIXTURES = {
     'tree-sitter-example': r'''use "vendor/tree_sitter" ts
+use "std/io" io
 use "std/strings"
-use "std/io"
 // Grammar is separate from runtime. This example uses the packaged C grammar.
 #link("tree-sitter-c")
 extern fn language "tree_sitter_c"() ts.Language
@@ -95,8 +95,8 @@ fn main() {
 }
 ''',
     'regex-example': r'''use "vendor/pcre2" regex
+use "std/io" io
 use "std/strings"
-use "std/io"
 fn main() {
   compiled := regex.compile_owned("name=([a-z]+)", 0)
   if !compiled.ok {
@@ -151,8 +151,8 @@ fn main() {
 }
 ''',
     'lua-example': r'''use "vendor/lua"
+use "std/io" io
 use "std/strings"
-use "std/io"
 fn main() {
   state := lua.create_owned()
   if state == nil {
@@ -214,7 +214,7 @@ fn main() {
     return
   }
   loaded := fs.read_all(storage, args[1], 8 * 1024 * 1024)
-  if !loaded.ok {
+  if loaded.failure.kind != io.Kind.Ok {
     #panic("read archive")
   }
   opened := archive.open_memory_owned(loaded.value)
@@ -300,7 +300,7 @@ fn main() {
   }
   defer sdl3.surface_destroy_owned(surface.value)
   bytes := fs.read_all(storage, args[1], 8 * 1024 * 1024)
-  if !bytes.ok {
+  if bytes.failure.kind != io.Kind.Ok {
     #panic("image read")
   }
   decoded := image.decode_owned(bytes.value)
@@ -360,8 +360,8 @@ fn main() {
 use "vendor/opengl" gl
 use "std/mem"
 use "std/os/linux"
+use "std/io" io
 use "std/strings"
-use "std/io"
 use "std/c" c
 fn shader(api: *gl.Api, kind: u32, source: []const u8) u32 {
   value := api.create_shader(kind)
@@ -629,6 +629,7 @@ fn main() {
     'curl-contract': r'''use "vendor/curl"
 use "std/mem"
 use "std/os/linux"
+use "std/io" io
 use "std/strings"
 fn main() {
   backing: [65536]u8 = []

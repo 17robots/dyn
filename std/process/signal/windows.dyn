@@ -1,5 +1,6 @@
 #target(kernel: windows)
 
+use "std/io" io
 use "std/sync" sync
 
 // Console control events arrive on a thread that Windows creates. The handler
@@ -22,7 +23,7 @@ event_handle: sync.AtomicU64
 
 fn failure() WatchResult {
   code := #cast(isize, last_error())
-  return WatchResult{ kind: errors.windows(code), error: code }
+  return WatchResult{ failure: io.Failure{ kind: errors.windows(code), native: code } }
 }
 
 fn console_event(event: u32) i32 {
@@ -56,7 +57,7 @@ fn platform_watch(set: Set) WatchResult {
     bits |= terminate_bit
   }
   if sync.load_u32(&watched) != 0 {
-    return WatchResult{ kind: errors.Kind.InvalidState }
+    return WatchResult{ failure: io.Failure{ kind: errors.Kind.InvalidState } }
   }
   event := create_event(nil, 0, 0, nil)
   if event == nil {
@@ -71,7 +72,7 @@ fn platform_watch(set: Set) WatchResult {
     _ = close_handle(event)
     return failed
   }
-  return WatchResult{ value: Watch{ handle: #cast(isize, #cast(usize, event)), set: set, active: true }, ok: true }
+  return WatchResult{ value: Watch{ handle: #cast(isize, #cast(usize, event)), set: set, active: true } }
 }
 
 fn take() Kind {
@@ -112,9 +113,9 @@ fn platform_next(state: *Watch, block: bool) Next {
 fn platform_close(state: *Watch) Result {
   if console_handler(console_event, 0) == 0 {
     code := #cast(isize, last_error())
-    return Result{ kind: errors.windows(code), error: code }
+    return Result{ failure: io.Failure{ kind: errors.windows(code), native: code } }
   }
   sync.store_u32(&watched, 0)
   _ = close_handle(#cast(rawptr, #cast(usize, state.handle)))
-  return Result{ ok: true }
+  return Result{}
 }

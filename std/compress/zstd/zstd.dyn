@@ -1,7 +1,7 @@
 use "vendor/zstd" provider
 use "std/io" stream
 use "std/mem" memory
-use "std/errors" errors
+use "std/io" errors
 pub struct SizeResult { size: u64, known: bool, kind: errors.Kind, error: isize, offset: usize, ok: bool }
 pub struct BufferResult { value: []u8, provider_code: usize, kind: errors.Kind, error: isize, offset: usize, ok: bool }
 pub struct Decoder {

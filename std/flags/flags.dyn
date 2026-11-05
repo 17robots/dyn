@@ -1,8 +1,7 @@
 use "std/strings"
 use "std/mem" memory
 use "std/bytes" bytes
-use "std/errors" errors
-
+use "std/io" errors
 // Command-line parser. Option definitions and returned strings are borrowed.
 pub enum Kind { Bool, String, Integer, Float, Choice }
 pub enum ErrorKind { None, Unknown, MissingValue, UnexpectedValue, Capacity, InvalidValue, Required, Overflow, Overlap }

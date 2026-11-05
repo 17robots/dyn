@@ -3,8 +3,7 @@
 // caller checks state.kind once after the loop. Scanner state.error is module
 // detail; system_error is the native I/O code (which may be zero).
 use "std/io" stream
-use "std/errors" errors
-
+use "std/io" errors
 pub enum ErrorKind { None, Syntax, Capacity, Io }
 pub struct Scanner { source: []const u8, offset: usize, finished: bool, error: ErrorKind, kind: errors.Kind, error_offset: usize }
 pub struct StreamScanner { input: stream.Reader, lookahead: u8, has_lookahead: bool, record_ended: bool, ended: bool, finished: bool, error: ErrorKind, kind: errors.Kind, system_error: isize }

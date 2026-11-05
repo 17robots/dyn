@@ -1,5 +1,5 @@
 use "std/mem" mem
-use "std/errors" errors
+use "std/io" errors
 // MessagePack specification: https://github.com/msgpack/msgpack/blob/master/spec.md
 // Flattened preorder tokens. Array/map values give element/pair counts
 // there
@@ -50,7 +50,7 @@ fn accept(state: *Reader, token: Token) errors.Kind {
       state.depth += 1
     }
   }
-  return errors.Kind.None
+  return errors.Kind.Ok
 }
 fn complete(state: *Reader) bool {
   for state.depth > 0 && state.remaining[state.depth - 1] == 0 {
@@ -180,7 +180,7 @@ pub fn next(state: *Reader) Result {
     }
   }
   kind := accept(state, token)
-  if kind != errors.Kind.None {
+  if kind != errors.Kind.Ok {
     return fail(state, start, kind)
   }
   state.offset = at
@@ -318,7 +318,7 @@ pub fn encode(arena: *mem.Arena, tokens: []const Token) EncodeResult {
       return EncodeResult{ kind: errors.Kind.InvalidInput, offset: i }
     }
     kind := accept(&state, token)
-    if kind != errors.Kind.None {
+    if kind != errors.Kind.Ok {
       return EncodeResult{ kind: kind, offset: i }
     }
     count := 1 + extra(header(token))

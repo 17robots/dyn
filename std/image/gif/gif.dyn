@@ -1,5 +1,5 @@
 use "std/mem" mem
-use "std/errors" errors
+use "std/io" errors
 use "std/encoding/binary" binary
 // Decodes the first composited GIF87a/89a image, including interlace and
 // transparency. consumed ends after that image's data; later animation frames

@@ -15,7 +15,7 @@ use "std/io" io
 use "std/net/http" http
 use "std/bytes" bytes
 use "std/mem" mem
-use "std/errors" errors
+use "std/io" errors
 struct Oracle { expected: []const u8, at: usize }
 fn oracle_write(raw: rawptr, data: []const u8) io.Result {
   oracle := #cast(*Oracle, raw)
@@ -125,9 +125,9 @@ fn decode_check(wire: []const u8, expected: []const u8, valid: bool, offset: usi
   _ = mem.push_bytes_uninit(arena, 5)
   mark := mem.arena_mark(arena)
   got := http.decode_chunked(arena, wire)
-  if got.ok != valid { #panic("decode validity") }
+  if got.failure.kind == io.Kind.Ok != valid { #panic("decode validity") }
   if valid && (!bytes.equal(got.value, expected) || got.count != #len(expected)) { #panic("decode bytes") }
-  if !valid && (#len(got.value) != 0 || got.offset != offset || got.error != 0 || mem.arena_mark(arena) != mark) { #panic("decode rollback") }
+  if !valid && (#len(got.value) != 0 || got.offset != offset || got.failure.native != 0 || mem.arena_mark(arena) != mark) { #panic("decode rollback") }
   mem.arena_release(arena)
 }
 fn live_alias_check() {
@@ -136,7 +136,7 @@ fn live_alias_check() {
   borrowed := mem.push_bytes_uninit(arena, #len(wire))
   _ = mem.copy(borrowed, wire)
   got := http.decode_chunked(arena, borrowed)
-  if !got.ok || got.consumed != 13 || got.count != 3 || !bytes.equal(got.value, "abc") || !bytes.equal(borrowed, wire) { #panic("live decode alias") }
+  if got.failure.kind != io.Kind.Ok || got.consumed != 13 || got.count != 3 || !bytes.equal(got.value, "abc") || !bytes.equal(borrowed, wire) { #panic("live decode alias") }
   method := mem.push_bytes_uninit(arena, 4)
   _ = mem.copy(method, "HEAD")
   feed := Feed{ data: "HTTP/1.1 200 OK\r\nContent-Length: 999999\r\n\r\n", step: 1 }

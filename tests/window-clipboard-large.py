@@ -21,9 +21,10 @@ pub fn clipboard_inject(reader: *Window, kind: usize, format: i32, data: *const 
 '''
 SOURCE=r'''use "probe" window
 use "vendor/window/events" events
+use "std/io" io
 use "std/mem" mem
 use "std/bytes" bytes
-use "std/errors" errors
+use "std/io" errors
 checks: usize
 extern fn report "printf"(format: *const u8, ...) i32
 extern fn flush "fflush"(stream: rawptr) i32

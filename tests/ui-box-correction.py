@@ -9,9 +9,10 @@ ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 SOURCE=r'''use "std/ui/box" box
 use "std/ui" ui
+use "std/io" io
 use "std/mem" mem
 use "std/text/edit" edit
-use "std/errors" errors
+use "std/io" errors
 use "std/bytes" bytes
 use "vendor/window/events" events
 fn check(ok: bool, why: []const u8) { if !ok { #panic(why) } }
@@ -54,7 +55,7 @@ fn main() {
   check(state.text_context.token == published,"idle redraw keeps context token")
   change := correction(&collector,published,0,3,"the")
   frame(state,arena,&app,box.Input{correction:&change})
-  check(app.changed && app.error == errors.Kind.None && bytes.equal(app.storage[..app.edit.length],"the cat") && app.edit.cursor == 3,"owned edit reaches widget")
+  check(app.changed && app.error == errors.Kind.Ok && bytes.equal(app.storage[..app.edit.length],"the cat") && app.edit.cursor == 3,"owned edit reaches widget")
   check(state.text_context.token != published && state.text_context.cause == edit.Cause.InputMethod,"correction publishes fresh IME context")
   frame(state,arena,&app,box.Input{correction:&change})
   check(!app.changed && app.error == errors.Kind.InvalidState && bytes.equal(app.storage[..app.edit.length],"the cat"),"replay does not change buffer")

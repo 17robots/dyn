@@ -52,8 +52,9 @@ SOURCE = r'''use "std/font" font
 use "std/font/ui" font_ui
 use "std/ui" ui
 use "std/ui/software" software
+use "std/io" io
 use "std/mem" mem
-use "std/errors" errors
+use "std/io" errors
 fn check(ok: bool) { if !ok { #panic("font contract") } }
 fn main() {
   arena := mem.arena_create(0)
@@ -132,18 +133,18 @@ fn main() {
   surface := software.Surface{ pixels: pixels[..], width: 64, height: 32, stride: 256 }
   adapter := font_ui.Adapter{ face: &face, arena: arena, pixels_per_em: 16 }
   result := software.render(&surface, ui.first(&context), font_ui.renderer(&adapter))
-  check(result.ok && !adapter.failed && pixels[3] == 255)
+  check(result.failure.kind == errors.Kind.Ok && !adapter.failed && pixels[3] == 255)
   expected := pixels
   for i in 0..#len(pixels) { pixels[i] = 0 }
   before = mem.arena_mark(arena)
-  check(software.render(&surface, ui.first(&context), font_ui.atlas_renderer(&cached.value)).ok)
+  check(software.render(&surface, ui.first(&context), font_ui.atlas_renderer(&cached.value)).failure.kind == errors.Kind.Ok)
   check(mem.arena_mark(arena) == before)
   for i in 0..#len(pixels) { check(pixels[i] == expected[i]) }
   ui.begin(&context, frame, ui.Input{}, ui.Rect{ width: 64, height: 32 })
   ui.label(&context, ui.Rect{ width: 64, height: 32 }, "D", ui.Color{ a: 255 })
   ui.end(&context)
   result = software.render(&surface, ui.first(&context), font_ui.renderer(&adapter))
-  check(!result.ok && adapter.failed && adapter.kind == errors.Kind.InvalidInput)
+  check(result.failure.kind != errors.Kind.Ok && adapter.failed && adapter.kind == errors.Kind.InvalidInput)
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-font-results-') as directory:

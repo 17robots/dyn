@@ -8,8 +8,9 @@ import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 SOURCE=r'''use "std/encoding/msgpack" mp
+use "std/io" io
 use "std/mem" mem
-use "std/errors" errors
+use "std/io" errors
 use "std/bytes" bytes
 fn check(ok: bool) { if !ok { #panic("msgpack contract") } }
 fn bad(source: []const u8) {
@@ -31,7 +32,7 @@ fn main() {
  for item.ok { tokens[count] = item.value
  count += 1
  item = mp.next(&state) }
- check(item.kind == errors.Kind.None && count == 8)
+ check(item.kind == errors.Kind.Ok && count == 8)
  check(tokens[0].kind == mp.Kind.Map && tokens[0].value == 2)
  check(tokens[2].kind == mp.Kind.Array && tokens[2].value == 3)
  check(tokens[5].integer == -1 && bytes.equal(tokens[7].bytes,"hi"))
@@ -42,7 +43,7 @@ fn main() {
   value := mp.next(&state)
   check(value.ok && value.value.kind == token.kind && value.value.value == token.value && value.value.integer == token.integer && bytes.equal(value.value.bytes,token.bytes))
  }
- check(mp.next(&state).kind == errors.Kind.None && !mp.next(&state).ok)
+ check(mp.next(&state).kind == errors.Kind.Ok && !mp.next(&state).ok)
  // Every header is either complete or a structured failure, never a trap.
  raw: [20]u8 = []
  for tag in 0..256 {
@@ -50,7 +51,7 @@ fn main() {
   state = mp.reader(raw[..])
   result := mp.next(&state)
   for result.ok { result = mp.next(&state) }
-  check(result.kind == errors.Kind.None || result.kind == errors.Kind.InvalidInput)
+  check(result.kind == errors.Kind.Ok || result.kind == errors.Kind.InvalidInput)
  }
  bad("\xc1")
  bad("\x91")

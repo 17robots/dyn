@@ -1,5 +1,5 @@
 use "std/text/edit" edits
-use "std/errors" edit_errors
+use "std/io" edit_errors
 use "std/unicode/utf8" edit_utf8
 
 // Ordered GUI events. listen_events(window,true) opts in before polling.

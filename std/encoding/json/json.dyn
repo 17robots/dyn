@@ -1,4 +1,4 @@
-use "std/errors" errors
+use "std/io" errors
 use "std/mem" memory
 use "std/strings" text
 use "std/io" stream
@@ -715,7 +715,7 @@ pub fn parse(arena: *memory.Arena, source: []const u8) ParseResult {
     }
     return ParseResult{ root: &nil_value, offset: cursor.at, kind: errors.Kind.InvalidInput, error: 0, detail: error, ok: false }
   }
-  return ParseResult{ root: root, offset: 0, kind: errors.Kind.None, error: 0, detail: ErrorKind.None, ok: true }
+  return ParseResult{ root: root, offset: 0, kind: errors.Kind.Ok, error: 0, detail: ErrorKind.None, ok: true }
 }
 
 pub fn make_null(arena: *memory.Arena) *Value {

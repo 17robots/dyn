@@ -1,5 +1,4 @@
-use "std/errors" errors
-
+use "std/io" errors
 pub struct Element { tag: u8, content: []const u8, encoded: []const u8, constructed: bool }
 pub struct Cursor { source: []const u8, offset: usize, kind: errors.Kind, error: isize, error_offset: usize }
 pub struct Result { value: Element, offset: usize, kind: errors.Kind, error: isize, ok: bool }
@@ -14,7 +13,7 @@ fn fail(state: *Cursor, kind: errors.Kind, offset: usize) Result {
 }
 // EOF has ok=false and kind=None. Parse failures remain sticky on the cursor.
 pub fn next(state: *Cursor) Result {
-  if state.kind != errors.Kind.None {
+  if state.kind != errors.Kind.Ok {
     return Result{ kind: state.kind, error: state.error, offset: state.error_offset }
   }
   start := state.offset
@@ -68,5 +67,5 @@ pub fn enter(element: Element) Cursor {
   return cursor(element.content)
 }
 pub fn finished(state: *const Cursor) bool {
-  return state.kind == errors.Kind.None && state.offset == #len(state.source)
+  return state.kind == errors.Kind.Ok && state.offset == #len(state.source)
 }

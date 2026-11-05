@@ -19,8 +19,8 @@ if platform.system() != 'Linux':
 
 CASES = {
     'lua': ('lua5.4', r'''use "vendor/lua"
+use "std/io" io
 use "std/strings"
-use "std/io"
 fn main() {
   state := lua.create_owned()
   if state == nil {
@@ -67,8 +67,8 @@ fn main() {
 }
 ''', 'Lua: 42; protected syntax/runtime failures; balanced stack'),
     'pcre2': ('libpcre2-8', r'''use "vendor/pcre2" regex
+use "std/io" io
 use "std/strings"
-use "std/io"
 fn main() {
   compiled := regex.compile_owned("name=([a-z]+)", 0)
   if !compiled.ok {
@@ -159,8 +159,8 @@ fn main() {
 }
 ''', 'sqlite ok'),
     'lz4': ('liblz4', r'''use "vendor/lz4"
+use "std/io" io
 use "std/strings"
-use "std/io"
 fn main() {
   compressed: [128]u8 = []
   output: [128]u8 = []

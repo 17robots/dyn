@@ -1,5 +1,5 @@
 use "std/mem" mem
-use "std/errors" errors
+use "std/io" errors
 // P2/P3/P5/P6 portable graymaps/pixmaps. Samples up to 65535 are rounded
 // to 8 bits, without changing transfer functions. decode reads one image
 

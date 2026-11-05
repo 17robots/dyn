@@ -2,7 +2,7 @@ use "std/mem" mem
 use "std/ui" ui
 use "std/ui/software" software
 use "std/unicode/utf8" utf8
-use "std/errors" errors
+use "std/io" errors
 #link("dyn_ui_vulkan")
 // Headless Vulkan compute renderer. Ordered integer compositing matches the
 // software renderer, including straight alpha over transparent destinations.
@@ -174,7 +174,7 @@ pub fn render(renderer: *Renderer, scratch: *mem.Arena, surface: *software.Surfa
           } else if codepoint != 13 && x < #cast(i64, command.bounds.x)+#cast(i64, command.bounds.width)+2147483648 {
             x += glyph(&build, clip, command.color, font, codepoint, x, y)
           }
-          if build.kind != errors.Kind.None {
+          if build.kind != errors.Kind.Ok {
             return Result{kind:build.kind}
           }
         }
@@ -182,7 +182,7 @@ pub fn render(renderer: *Renderer, scratch: *mem.Arena, surface: *software.Surfa
         return Result{kind:errors.Kind.InvalidInput}
       }
     }
-    if build.kind != errors.Kind.None {
+    if build.kind != errors.Kind.Ok {
       return Result{kind:build.kind}
     }
     command = command.next

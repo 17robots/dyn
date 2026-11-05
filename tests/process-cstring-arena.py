@@ -11,7 +11,7 @@ macos = (ROOT / 'std/process/macos.dyn').read_text()
 process = (ROOT / 'std/process/process.dyn').read_text()
 # Compile the production conversion/setup bodies, replacing only OS entry points.
 adapter = ('use "std/mem" mem\nuse "std/c" c\nuse "std/bytes" bytes\n'
-           'use "std/errors" error_kinds\n'
+           'use "std/io" error_kinds\nuse "std/io" io\n'
            + process[process.index('pub struct Redirect'):process.index('pub struct ExitResult')]
            + macos[macos.index('struct CString'):macos.index('fn wait_native')])
 MOCKS = '''
@@ -58,11 +58,11 @@ fn main() {
   before_spawn := mem.arena_mark(arena)
   environment: [1][]const u8 = ["KEY=value"]
   result := spawn_native(arena, "/program", arguments[..], Options{environment: environment[..], directory: "/tmp"})
-  if !result.ok || result.value.handle != 42 || mem.arena_mark(arena) != before_spawn {
+  if result.failure.kind != io.Kind.Ok || result.value.handle != 42 || mem.arena_mark(arena) != before_spawn {
     #panic("spawn setup and rewind")
   }
   rejected := spawn_native(arena, invalid[..], arguments[..], Options{})
-  if rejected.ok || mem.arena_mark(arena) != before_spawn { #panic("failed setup rewind") }
+  if rejected.failure.kind == io.Kind.Ok || mem.arena_mark(arena) != before_spawn { #panic("failed setup rewind") }
   if !bytes.equal(c.bytes_from_string(text, 16).value, "café-😀") { #panic("live allocation") }
 }
 '''

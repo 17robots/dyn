@@ -1,6 +1,6 @@
 use "std/mmio" mmio
-use "std/errors" errors
-pub struct Result { kind: errors.Kind, error: isize, ok: bool }
+use "std/io" errors
+pub struct Result { failure: errors.Failure }
 // Little-endian split 64-bit MTIME/MTIMECMP registers. These descriptors borrow
 // hardware registers; clock frequency and hart ownership belong to the caller.
 // Split accesses require strongly ordered device I/O (the RISC-V MTIMER
@@ -37,7 +37,7 @@ pub const systick: SysTick = SysTick{ base: 0xe000e010 }
 // leave registers untouched. CTRL reads clear COUNTFLAG on real hardware.
 pub fn start(timer: *const SysTick, period: u32, interrupt: bool, processor_clock: bool) Result {
   if period < 2 || period > 16777216 {
-    return Result{ kind: errors.Kind.InvalidInput }
+    return Result{ failure: errors.Failure{ kind: errors.Kind.InvalidInput } }
   }
   control: u32 = 1
   if interrupt {
@@ -50,7 +50,7 @@ pub fn start(timer: *const SysTick, period: u32, interrupt: bool, processor_cloc
   mmio.store_u32(timer.base + 4, period - 1)
   mmio.store_u32(timer.base + 8, 0)
   mmio.store_u32(timer.base, control)
-  return Result{ ok: true }
+  return Result{}
 }
 pub fn stop(timer: *const SysTick) {
   mmio.store_u32(timer.base, 0)

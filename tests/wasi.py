@@ -5,9 +5,9 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 DYN=os.environ.get('DYN',str(ROOT/'build/dyn'))
 source=r'''
+use "std/io" io
 use "std/mem" mem
 use "std/os/wasi" wasi
-use "std/io" io
 use "std/terminal" terminal
 fn main() {
   arena := mem.arena_create(65536)

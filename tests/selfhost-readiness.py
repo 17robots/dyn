@@ -99,7 +99,7 @@ fn main() {
   storage: [16384]u8 = []
   arena := mem.arena_from_buffer(storage[..])
   arguments := process.arguments(arena)
-  if !arguments.ok || #len(arguments.value) != 2 { #panic("arguments") }
+  if arguments.failure.kind != io.Kind.Ok || #len(arguments.value) != 2 { #panic("arguments") }
   symbols := Symbols{}
   if !insert(&symbols, "alpha", '4') || !insert(&symbols, "beta", '7') { #panic("insert") }
   if insert(&symbols, "alpha", '8') || lookup(&symbols, "absent").ok { #panic("symbols") }

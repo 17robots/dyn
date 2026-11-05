@@ -9,58 +9,59 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 SOURCE = r'''use "std/event" event
+use "std/io" io
 use "std/net" net
 use "std/mem" mem
-use "std/errors" errors
+use "std/io" errors
 fn check(ok: bool) { if !ok { #panic("event readiness") } }
 fn main() {
   arena := mem.arena_create(0)
   scratch := mem.arena_create(0)
   defer { mem.arena_release(scratch)
     mem.arena_release(arena) }
-  check(event.open(arena, 0).kind == errors.Kind.InvalidInput)
+  check(event.open(arena, 0).failure.kind == errors.Kind.InvalidInput)
   opened := event.open(arena, 1)
-  check(opened.ok)
+  check(opened.failure.kind == io.Kind.Ok)
   queue := opened.value
-  check(event.wait(scratch, &queue, 0).ok)
+  check(event.wait(scratch, &queue, 0).failure.kind == errors.Kind.Ok)
   socket := net.socket(net.AddressFamilyIpv4, net.SocketDatagram, 0)
-  check(socket.ok)
+  check(socket.failure.kind == errors.Kind.Ok)
   descriptor := socket.value
   address := net.ipv4(127, 0, 0, 1, 0)
-  check(net.bind_ipv4(descriptor, &address).ok)
+  check(net.bind_ipv4(descriptor, &address).failure.kind == errors.Kind.Ok)
   local := net.Address{}
-  check(net.local_address(descriptor, &local).ok)
-  check(net.nonblocking(descriptor, true).ok)
-  check(event.add(&queue, descriptor, 0, 0).kind == errors.Kind.InvalidInput)
-  check(event.add(&queue, descriptor, event.Readable, 42).ok)
-  check(event.add(&queue, descriptor, event.Readable, 9).kind == errors.Kind.AlreadyExists)
+  check(net.local_address(descriptor, &local).failure.kind == errors.Kind.Ok)
+  check(net.nonblocking(descriptor, true).failure.kind == errors.Kind.Ok)
+  check(event.add(&queue, descriptor, 0, 0).failure.kind == errors.Kind.InvalidInput)
+  check(event.add(&queue, descriptor, event.Readable, 42).failure.kind == errors.Kind.Ok)
+  check(event.add(&queue, descriptor, event.Readable, 9).failure.kind == errors.Kind.AlreadyExists)
   other := net.socket(net.AddressFamilyIpv4, net.SocketDatagram, 0)
-  check(other.ok)
-  check(event.add(&queue, other.value, event.Readable, 1).kind == errors.Kind.Capacity)
-  check(net.close(other.value).ok)
+  check(other.failure.kind == io.Kind.Ok)
+  check(event.add(&queue, other.value, event.Readable, 1).failure.kind == errors.Kind.Capacity)
+  check(net.close(other.value).failure.kind == errors.Kind.Ok)
   empty := event.wait(scratch, &queue, 5)
-  check(empty.ok && #len(empty.value) == 0)
-  check(net.send_to(descriptor, "x", 0, local.bytes[..local.length]).ok)
+  check(empty.failure.kind == errors.Kind.Ok && #len(empty.value) == 0)
+  check(net.send_to(descriptor, "x", 0, local.bytes[..local.length]).failure.kind == errors.Kind.Ok)
   ready := event.wait(scratch, &queue, 1000)
-  check(ready.ok && #len(ready.value) == 1)
+  check(ready.failure.kind == errors.Kind.Ok && #len(ready.value) == 1)
   check(ready.value[0].descriptor == descriptor && ready.value[0].token == 42 && (ready.value[0].events & event.Readable) != 0)
   ready = event.wait(scratch, &queue, 0)
-  check(ready.ok && #len(ready.value) == 1)
-  check(event.modify(&queue, descriptor, event.Writable, 18446744073709551615).ok)
+  check(ready.failure.kind == errors.Kind.Ok && #len(ready.value) == 1)
+  check(event.modify(&queue, descriptor, event.Writable, 18446744073709551615).failure.kind == errors.Kind.Ok)
   ready = event.wait(scratch, &queue, 1000)
-  check(ready.ok && #len(ready.value) == 1 && ready.value[0].token == 18446744073709551615 && (ready.value[0].events & event.Writable) != 0)
-  check(event.remove(&queue, descriptor).ok)
-  check(event.remove(&queue, descriptor).kind == errors.Kind.NotFound)
-  check(event.modify(&queue, descriptor, event.Readable, 0).kind == errors.Kind.NotFound)
-  check(event.wait(scratch, &queue, 0).ok)
-  check(event.add(&queue, descriptor, event.Readable, 7).ok)
+  check(ready.failure.kind == errors.Kind.Ok && #len(ready.value) == 1 && ready.value[0].token == 18446744073709551615 && (ready.value[0].events & event.Writable) != 0)
+  check(event.remove(&queue, descriptor).failure.kind == errors.Kind.Ok)
+  check(event.remove(&queue, descriptor).failure.kind == errors.Kind.NotFound)
+  check(event.modify(&queue, descriptor, event.Readable, 0).failure.kind == errors.Kind.NotFound)
+  check(event.wait(scratch, &queue, 0).failure.kind == errors.Kind.Ok)
+  check(event.add(&queue, descriptor, event.Readable, 7).failure.kind == errors.Kind.Ok)
   ready = event.wait(scratch, &queue, 0)
-  check(ready.ok && #len(ready.value) == 1 && ready.value[0].token == 7)
-  check(event.remove(&queue, descriptor).ok)
-  check(event.close(&queue).ok && event.close(&queue).ok)
-  check(event.wait(scratch, &queue, 0).kind == errors.Kind.InvalidState)
+  check(ready.failure.kind == errors.Kind.Ok && #len(ready.value) == 1 && ready.value[0].token == 7)
+  check(event.remove(&queue, descriptor).failure.kind == errors.Kind.Ok)
+  check(event.close(&queue).failure.kind == errors.Kind.Ok && event.close(&queue).failure.kind == errors.Kind.Ok)
+  check(event.wait(scratch, &queue, 0).failure.kind == errors.Kind.InvalidState)
   // The queue never closes registered descriptors.
-  check(net.close(descriptor).ok)
+  check(net.close(descriptor).failure.kind == errors.Kind.Ok)
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-event-results-') as directory:
@@ -69,13 +70,13 @@ with tempfile.TemporaryDirectory(prefix='dyn-event-results-') as directory:
     (work / 'posix.dyn').write_text('''#target(kernel: linux)
 fn fault(arena: *mem.Arena, scratch: *mem.Arena) {
   opened := event.open(arena, 1)
-  check(opened.ok)
+  check(opened.failure.kind == io.Kind.Ok)
   queue := opened.value
   failed := event.add(&queue, 2147483647, event.Readable, 0)
-  check(!failed.ok && failed.error != 0)
+  check(failed.failure.kind != io.Kind.Ok && failed.failure.native != 0)
   again := event.wait(scratch, &queue, 0)
-  check(!again.ok && again.kind == failed.kind && again.error == failed.error)
-  check(event.close(&queue).ok)
+  check(again.failure.kind != io.Kind.Ok && again.failure.kind == failed.failure.kind && again.failure.native == failed.failure.native)
+  check(event.close(&queue).failure.kind == io.Kind.Ok)
 }
 ''')
     (work / 'macos.dyn').write_text((work / 'posix.dyn').read_text().replace('kernel: linux', 'kernel: darwin'))

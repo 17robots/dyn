@@ -4,6 +4,7 @@
 // Faces that std/font cannot open (CFF-flavored OpenType and collections)
 // are skipped.
 
+use "std/io" io
 use "std/mem" mem
 use "std/fs" fs
 use "std/font" font
@@ -243,7 +244,7 @@ fn visit(arena: *mem.Arena, scratch: *mem.Arena, walk: *Walk, directory: []const
   }
   storage: [8192]u8 = []
   opened := fs.open_directory(directory, storage[..])
-  if !opened.ok {
+  if opened.failure.kind != io.Kind.Ok {
     return
   }
   listing := opened.value
@@ -261,11 +262,11 @@ fn visit(arena: *mem.Arena, scratch: *mem.Arena, walk: *Walk, directory: []const
     }
     else if font_file(item.name) && walk.count < #len(walk.entries) {
       file := fs.open(path)
-      if file.ok {
+      if file.failure.kind == io.Kind.Ok {
         handle := fs.take(&file.value)
         mapped := fs.map(&handle)
         _ = fs.close(&handle)
-        if mapped.ok {
+        if mapped.failure.kind == io.Kind.Ok {
           entry_mark := mem.arena_mark(arena)
           entry := describe(arena, path, mapped.value)
           _ = fs.unmap(&mapped)
@@ -314,7 +315,7 @@ pub fn scan(arena: *mem.Arena, limit: usize) []Entry {
 
 fn home(arena: *mem.Arena) []const u8 {
   found := process.environment(arena, "HOME")
-  if found.ok && found.found {
+  if found.failure.kind == io.Kind.Ok && found.found {
     return found.value
   }
   return ""
@@ -417,13 +418,13 @@ pub fn covering(entries: []const Entry, codepoint: u32, regular_only: bool) *con
       continue
     }
     file := fs.open(entry.path)
-    if !file.ok {
+    if file.failure.kind != io.Kind.Ok {
       continue
     }
     handle := fs.take(&file.value)
     mapped := fs.map(&handle)
     _ = fs.close(&handle)
-    if !mapped.ok {
+    if mapped.failure.kind != io.Kind.Ok {
       continue
     }
     face := font.open(mapped.value)

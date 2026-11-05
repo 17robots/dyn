@@ -1,5 +1,5 @@
 use "std/mem" mem
-use "std/errors" errors
+use "std/io" errors
 use "std/unicode/utf8" utf8
 // RFC 8949: https://www.rfc-editor.org/rfc/rfc8949.html
 // Borrowed preorder tokens, with End only for indefinite containers/strings.
@@ -31,7 +31,7 @@ fn accept(state: *Reader, token: Token) errors.Kind {
       return errors.Kind.InvalidInput
     }
     state.depth -= 1
-    return errors.Kind.None
+    return errors.Kind.Ok
   }
   if token.indefinite && token.kind != Kind.Array && token.kind != Kind.Map && token.kind != Kind.Bytes && token.kind != Kind.Text {
     return errors.Kind.InvalidInput
@@ -79,7 +79,7 @@ fn accept(state: *Reader, token: Token) errors.Kind {
       state.depth += 1
     }
   }
-  return errors.Kind.None
+  return errors.Kind.Ok
 }
 fn fail(state: *Reader, offset: usize, kind: errors.Kind) Result {
   state.failed = true
@@ -196,7 +196,7 @@ pub fn next(state: *Reader) Result {
     }
   }
   kind := accept(state, token)
-  if kind != errors.Kind.None {
+  if kind != errors.Kind.Ok {
     return fail(state, start, kind)
   }
   state.offset = at
@@ -247,7 +247,7 @@ pub fn encode(arena: *mem.Arena, tokens: []const Token) EncodeResult {
   for i in 0..#len(tokens) {
     token := tokens[i]
     kind := accept(&state, token)
-    if kind != errors.Kind.None {
+    if kind != errors.Kind.Ok {
       return EncodeResult{ kind: kind, offset: i }
     }
     count := size(token)

@@ -11,9 +11,10 @@ import wave
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 source=r'''use "std/audio/wav" wav
+use "std/io" io
 use "std/mem" mem
 use "std/fs" fs
-use "std/errors" errors
+use "std/io" errors
 fn check(ok: bool) { if !ok { #panic("WAV contract") } }
 fn main() {
   arena := mem.arena_create(0)
@@ -24,7 +25,7 @@ fn main() {
   paths: [5][]const u8 = ["8.wav","16.wav","24.wav","32.wav","float.wav"]
   for i in 0..5 {
     encoded := wav.encode(arena, &audio, formats[i])
-    check(encoded.ok && fs.write_all(paths[i],encoded.value).ok)
+    check(encoded.ok && fs.write_all(paths[i],encoded.value).failure.kind == errors.Kind.Ok)
     decoded := wav.decode(arena, encoded.value)
     check(decoded.ok && decoded.value.rate == 48000 && decoded.value.channels == 2 && #len(decoded.value.samples) == 6)
     for j in 0..6 {
@@ -42,7 +43,7 @@ fn main() {
   check(extended.ok)
   decoded := wav.decode(arena, extended.value)
   check(decoded.ok && decoded.value.channel_mask == 3)
-  check(fs.write_all("extended.wav",extended.value).ok)
+  check(fs.write_all("extended.wav",extended.value).failure.kind == errors.Kind.Ok)
   floating := wav.encode(arena, &audio, wav.Encoding.Float32)
   check(floating.ok && wav.decode(arena, floating.value).ok)
   before := mem.arena_mark(arena)
@@ -50,7 +51,7 @@ fn main() {
   check(wav.encode(arena, &audio, wav.Encoding.Pcm16).kind == errors.Kind.InvalidInput)
   check(mem.arena_mark(arena) == before)
   reference := fs.read_all(arena,"reference.wav",10000)
-  check(reference.ok)
+  check(reference.failure.kind == errors.Kind.Ok)
   decoded = wav.decode(arena, reference.value)
   check(decoded.ok && #len(decoded.value.samples) == 5)
   expected: [5]f32 = [-1.0,-0.5,0.0,0.5,0.999969482421875]
@@ -97,6 +98,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-wav-') as directory:
         with wave.open(str(work/'extended.wav'),'rb') as extended:
             assert extended.getnchannels()==2 and extended.getsampwidth()==3
     core = r'''use "std/audio/wav" wav
+use "std/io" io
 use "std/mem" mem
 fn check(ok: bool) { if !ok { #panic("WAV portable") } }
 fn main() {

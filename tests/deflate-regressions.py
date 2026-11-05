@@ -61,7 +61,7 @@ fn fixture(encoded_path: []const u8, expected_path: []const u8, wrapped: bool, c
   owned := memory.arena_create(4000000)
   encoded := fs.read_all(owned, encoded_path, 1000000)
   expected := fs.read_all(owned, expected_path, 1000000)
-  require(encoded.ok && expected.ok, "read fixture")
+  require(encoded.failure.kind == io.Kind.Ok && expected.failure.kind == io.Kind.Ok, "read fixture")
   chunks: [5]usize = [1, 257, 258, 33025, 65536]
   for chunk in chunks {
     check(encoded.value, expected.value, wrapped, corrupt, chunk, 7, 33026)

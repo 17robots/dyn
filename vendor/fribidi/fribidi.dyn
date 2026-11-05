@@ -1,6 +1,6 @@
 use "std/dynlib" dynlib
 use "std/mem" mem
-use "std/errors" errors
+use "std/io" errors
 use "std/unicode/utf8" utf8
 
 // FriBidi's fixed-width public C ABI. The API table borrows a caller-owned

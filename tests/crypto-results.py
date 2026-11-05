@@ -16,14 +16,15 @@ DYN = str(Path(os.environ.get("DYN", ROOT / "build/dyn-release")).resolve())
 
 AEAD = r'''use "std/crypto/aead" aead
 use "std/crypto/aes" aes
+use "std/io" io
 use "std/mem" mem
-use "std/errors" errors
+use "std/io" errors
 fn check(ok: bool) { if !ok { #panic("fixture failed") } }
 fn main() {
  zs: aead.SealResult
  zo: aead.OpenResult
- check(!zs.ok && zs.kind == errors.Kind.None && zs.error == 0 && zs.provider_code == 0 && #len(zs.value.ciphertext) == 0 && #len(zs.value.tag) == 0)
- check(!zo.ok && zo.kind == errors.Kind.None && zo.error == 0 && zo.provider_code == 0 && #len(zo.value) == 0)
+ check(!zs.ok && zs.kind == errors.Kind.Ok && zs.error == 0 && zs.provider_code == 0 && #len(zs.value.ciphertext) == 0 && #len(zs.value.tag) == 0)
+ check(!zo.ok && zo.kind == errors.Kind.Ok && zo.error == 0 && zo.provider_code == 0 && #len(zo.value) == 0)
  backing: [1024]u8
  mem.fill(backing[..], 165)
  arena := mem.arena_from_buffer(backing[..])
@@ -33,7 +34,7 @@ fn main() {
  nonce: [12]u8
  plain: [16]u8
  sealed := aes.gcm_seal(arena, plain[..], "", key[..], nonce[..])
- check(sealed.ok && sealed.kind == errors.Kind.None && sealed.error == 0 && sealed.provider_code == 0)
+ check(sealed.ok && sealed.kind == errors.Kind.Ok && sealed.error == 0 && sealed.provider_code == 0)
  check(mem.equal(sealed.value.ciphertext, "\xce\xa7\x40\x3d\x4d\x60\x6b\x6e\x07\x4e\xc5\xd3\xba\xf3\x9d\x18") && mem.equal(sealed.value.tag, "\xd0\xd1\xc8\xa7\x99\x99\x6b\xf0\x26\x5b\x98\xb5\xd4\x8a\xb9\x19"))
  opened := aes.gcm_open(arena, sealed.value.ciphertext, sealed.value.tag, "", key[..], nonce[..])
  check(opened.ok && mem.equal(opened.value, plain[..]) && mem.arena_used(arena) == 55)
@@ -135,7 +136,7 @@ fn main() {
 KEYS = r'''use "std/crypto/exchange" ex
 use "std/crypto/signature" sig
 use "std/bytes"
-use "std/errors"
+use "std/io" errors
 fn check(ok: bool) { if !ok { #panic("key contract") } }
 fn filled(data: []const u8, value: u8) bool { for i in 0..#len(data) { if data[i] != value { return false } }
 return true }
@@ -152,11 +153,11 @@ fn main() {
   zero: [32]u8 = []
   zex := ex.Result{}
   zsig := sig.Result{}
-  check(!zex.ok && #len(zex.value) == 0 && zex.kind == errors.Kind.None && zex.error == 0 && zex.provider_code == 0)
-  check(!zsig.ok && #len(zsig.value) == 0 && zsig.kind == errors.Kind.None && zsig.error == 0 && zsig.provider_code == 0)
+  check(!zex.ok && #len(zex.value) == 0 && zex.kind == errors.Kind.Ok && zex.error == 0 && zex.provider_code == 0)
+  check(!zsig.ok && #len(zsig.value) == 0 && zsig.kind == errors.Kind.Ok && zsig.error == 0 && zsig.provider_code == 0)
   fill(output[..])
   if true { r := ex.x25519_public(output[..], alice[..])
-    check(r.ok && r.kind == errors.Kind.None && r.error == 0 && r.provider_code == 0)
+    check(r.ok && r.kind == errors.Kind.Ok && r.error == 0 && r.provider_code == 0)
     check(#len(r.value) == 32 && bytes.equal(r.value, alice_public[..]) && filled(output[32..], 165))
     check(&r.value[0] == &output[0])
     r.value[0] = 19
@@ -164,7 +165,7 @@ fn main() {
   }
   fill(output[..])
   if true { r := ex.x25519(output[..], alice[..], bob_public[..])
-    check(r.ok && r.kind == errors.Kind.None && r.error == 0 && r.provider_code == 0)
+    check(r.ok && r.kind == errors.Kind.Ok && r.error == 0 && r.provider_code == 0)
     check(#len(r.value) == 32 && bytes.equal(r.value, shared[..]) && filled(output[32..], 165))
     check(&r.value[0] == &output[0])
     r.value[0] = 19
@@ -172,7 +173,7 @@ fn main() {
   }
   fill(output[..])
   if true { r := sig.ed25519_public(output[..], seed[..])
-    check(r.ok && r.kind == errors.Kind.None && r.error == 0 && r.provider_code == 0)
+    check(r.ok && r.kind == errors.Kind.Ok && r.error == 0 && r.provider_code == 0)
     check(#len(r.value) == 32 && bytes.equal(r.value, public[..]) && filled(output[32..], 165))
     check(&r.value[0] == &output[0])
     r.value[0] = 19
@@ -180,7 +181,7 @@ fn main() {
   }
   fill(output[..])
   if true { r := sig.ed25519_sign(output[..], "", seed[..])
-    check(r.ok && r.kind == errors.Kind.None && r.error == 0 && r.provider_code == 0)
+    check(r.ok && r.kind == errors.Kind.Ok && r.error == 0 && r.provider_code == 0)
     check(#len(r.value) == 64 && bytes.equal(r.value, signature[..]) && filled(output[64..], 165))
     check(&r.value[0] == &output[0])
     r.value[0] = 19

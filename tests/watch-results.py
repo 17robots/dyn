@@ -8,29 +8,29 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT/'build/dyn-release')).resolve())
 PORTABLE = '''use "std/fs/watch" watch
-use "std/errors" errors
+use "std/io" errors
 fn require(ok: bool) { if !ok { #panic("watch result contract") } }
 fn main() {
  state := watch.Watcher{}
  first := watch.next(&state)
- require(!first.ok && first.status == watch.Status.Error && first.error == -9 && first.kind == errors.Kind.InvalidState)
+ require(first.failure.kind != errors.Kind.Ok && first.status == watch.Status.Error && first.failure.native == -9 && first.failure.kind == errors.Kind.InvalidState)
  for i in 0..3 {
   next := watch.next(&state)
-  require(!next.ok && next.status == first.status && next.error == first.error && next.kind == first.kind)
+  require(next.failure.kind != errors.Kind.Ok && next.status == first.status && next.failure.native == first.failure.native && next.failure.kind == first.failure.kind)
  }
- require(watch.close(&state).ok)
+ require(watch.close(&state).failure.kind == errors.Kind.Ok)
  again := watch.next(&state)
- require(!again.ok && again.error == first.error && again.kind == first.kind)
+ require(again.failure.kind != errors.Kind.Ok && again.failure.native == first.failure.native && again.failure.kind == first.failure.kind)
 }
 '''
 LINUX = '''use "std/fs/watch" watch
-use "std/errors" errors
+use "std/io" errors
 fn require(ok: bool) { if !ok { #panic("watch read after failure") } }
 fn main() {
  backing: [272]u8 = []
  state := watch.Watcher{descriptor: 999999, active: true, storage: backing[..]}
  first := watch.next(&state)
- require(!first.ok && first.error == -9 && first.kind == errors.Kind.InvalidState)
+ require(first.failure.kind != errors.Kind.Ok && first.failure.native == -9 && first.failure.kind == errors.Kind.InvalidState)
  descriptors: [2]i32 = []
  require(#syscall(293, &descriptors[0], 2048) == 0)
  defer { _ = #syscall(3, descriptors[0])
@@ -40,16 +40,16 @@ fn main() {
  state.descriptor = #cast(isize, descriptors[0])
  for i in 0..3 {
   result := watch.next(&state)
-  require(!result.ok && result.error == first.error && result.kind == first.kind && state.used == 0)
+  require(result.failure.kind != errors.Kind.Ok && result.failure.native == first.failure.native && result.failure.kind == first.failure.kind && state.used == 0)
  }
  byte[0] = 0
  require(#syscall(0, descriptors[0], &byte[0], 1) == 1 && byte[0] == 91)
  state = watch.Watcher{storage: backing[..], used: 273}
  malformed := watch.next(&state)
- require(!malformed.ok && malformed.error == -74 && malformed.kind == errors.Kind.System)
+ require(malformed.failure.kind != errors.Kind.Ok && malformed.failure.native == -74 && malformed.failure.kind == errors.Kind.System)
  state.used = 0
  repeated := watch.next(&state)
- require(repeated.error == -74 && repeated.kind == malformed.kind)
+ require(repeated.failure.native == -74 && repeated.failure.kind == malformed.failure.kind)
 }
 '''
 

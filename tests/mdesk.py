@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 SOURCE = r'''use "std/bytes"
 use "std/encoding/mdesk"
-use "std/errors"
+use "std/io" errors
 use "std/mem"
 
 fn expect(condition: bool, message: []const u8) {

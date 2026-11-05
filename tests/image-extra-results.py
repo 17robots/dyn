@@ -10,19 +10,19 @@ import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 CLI='''use "std/image/FORMAT" codec
+use "std/io" io
 use "std/mem" mem
 use "std/fs" fs
 use "std/process" process
-use "std/io" io
 use "std/strings" strings
 fn main() {
   arena := mem.arena_create(0)
   defer { mem.arena_release(arena) }
   args := process.arguments(arena)
-  if !args.ok || #len(args.value) != 4 { #panic("image arguments") }
+  if args.failure.kind != io.Kind.Ok || #len(args.value) != 4 { #panic("image arguments") }
   ENCODER
   source := fs.read_all(arena, args.value[2], 64000000)
-  if !source.ok { #panic("image source") }
+  if source.failure.kind != io.Kind.Ok { #panic("image source") }
   before := mem.arena_mark(arena)
   result := codec.decode(arena, source.value)
   if !result.ok {
@@ -30,7 +30,7 @@ fn main() {
     _ = io.println(io.stdout(), "ERR {}", #cast(u32, result.kind))
     return
   }
-  if !fs.write_all(args.value[3], result.value.pixels).ok { #panic("image output") }
+  if fs.write_all(args.value[3], result.value.pixels).failure.kind != io.Kind.Ok { #panic("image output") }
   _ = io.println(io.stdout(), "{} {}", result.value.info.width, result.value.info.height)
 }
 '''
@@ -39,7 +39,7 @@ ENCODER='''if strings.starts_with(args.value[1], "encode") {
   pixels: [16]u8 = []
   for i in 0..4 { for j in 0..#cast(usize, channels) { pixels[i * #cast(usize, channels) + j] = #cast(u8, (i * 51 + j * 37)) } }
   result := codec.encode(arena, pixels[..4 * #cast(usize, channels)], 2, 2, channels)
-  if !result.ok || !fs.write_all(args.value[2], result.value).ok { #panic("image encode") }
+  if !result.ok || fs.write_all(args.value[2], result.value).failure.kind != io.Kind.Ok { #panic("image encode") }
   return
 }'''
 u16=lambda x:struct.pack('<H',x)

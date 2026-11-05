@@ -1,7 +1,7 @@
 use "std/mem" mem
 use "std/unicode/utf8" utf8
 use "std/bytes" bytes
-use "std/errors" errors
+use "std/io" errors
 pub const UnicodeVersion: []const u8 = "17.0.0"
 pub enum ErrorKind { None, InvalidUtf8, Capacity, Overlap }
 struct Result { written: usize, error: ErrorKind, ok: bool }

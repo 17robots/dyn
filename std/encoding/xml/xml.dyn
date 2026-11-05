@@ -1,5 +1,5 @@
 use "std/io" stream
-use "std/errors" errors
+use "std/io" errors
 use "std/unicode/utf8" utf8
 use "std/bytes" bytes
 

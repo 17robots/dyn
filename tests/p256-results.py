@@ -41,7 +41,7 @@ def vector(key,message):
  return b'\4'+b''.join(x.to_bytes(32,'big') for x in public),r.to_bytes(32,'big')+s.to_bytes(32,'big')
 def literal(value):return '"'+''.join('\\x%02x'%b for b in value)+'"'
 s='''use "std/crypto/signature" facade
-use "std/errors" errors
+use "std/io" errors
 use "std/crypto/p256" p
 use "std/bytes" bytes
 fn check(ok: bool) { if !ok { #panic("P256 contract") } }

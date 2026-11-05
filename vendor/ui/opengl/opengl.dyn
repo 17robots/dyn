@@ -2,7 +2,7 @@ use "vendor/opengl" gl
 use "std/ui" ui
 use "std/ui/software" software
 use "std/unicode/utf8" utf8
-use "std/errors" errors
+use "std/io" errors
 // Explicit GL ownership; create/render/close on the current owning context.
 // Rendering owns GL state: viewport, program, VAO, VBO, texture unit zero,
 // blending, scissor, depth/cull/stencil and unpack state. Caller resets as needed.

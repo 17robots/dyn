@@ -1,7 +1,7 @@
 #target(kernel: linux)
 use "std/mem" mem
 use "std/c" c
-use "std/errors" errors
+use "std/io" errors
 use "std/ui" ui
 #link("X11")
 #link("GL")

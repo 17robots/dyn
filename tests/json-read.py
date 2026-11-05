@@ -152,6 +152,7 @@ if '--cross' in sys.argv:
   return ns
  arm=helpers('thumb-soft.py');rv=helpers('rv32-soft.py')
  cross_source=r'''use "std/encoding/json/read" json
+use "std/io" io
 use "std/mem" mem
 use "std/io"
 pub fn json_read_selected_kind(v:*const json.Value) u8 { return json.kind(v) }

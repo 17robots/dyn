@@ -1,16 +1,17 @@
+use "std/io" io
 #target(kernel: linux)
 
 fn open_flags(path: []const u8, flags: usize, mode: usize) FileResult {
   storage: [4096]u8 = []
   raw := terminated(path, storage[..])
   if raw == nil {
-    return FileResult{ error: -36, kind: errors.Kind.InvalidInput }
+    return FileResult{ failure: io.Failure{ kind: errors.Kind.InvalidInput, native: -36 } }
   }
   descriptor := #syscall(257, -100, raw, flags | 524288, mode)
   if descriptor < 0 {
-    return FileResult{ error: descriptor, kind: errors.linux(descriptor) }
+    return FileResult{ failure: io.Failure{ kind: errors.linux(descriptor), native: descriptor } }
   }
-  return FileResult{ value: owned_file(descriptor), error: 0, ok: true }
+  return FileResult{ value: owned_file(descriptor) }
 }
 
 fn native_open_read(path: []const u8) FileResult {

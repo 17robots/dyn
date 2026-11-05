@@ -1,4 +1,4 @@
-use "std/errors" errors
+use "std/io" errors
 use "std/crypto/der" der
 use "std/crypto/core" crypto_core
 
@@ -12,7 +12,7 @@ pub fn parse(encoded: []const u8) Result {
   outer := der.next(&outer_cursor)
   if !outer.ok {
     kind:=outer.kind
-    if kind==errors.Kind.None {
+    if kind==errors.Kind.Ok {
       kind=errors.Kind.InvalidInput
     }
     return Result{kind:kind, offset:outer.offset}
@@ -29,7 +29,7 @@ pub fn parse(encoded: []const u8) Result {
   tbs:=der.next(&children)
   if !tbs.ok {
     kind:=tbs.kind
-    if kind==errors.Kind.None {
+    if kind==errors.Kind.Ok {
       kind=errors.Kind.InvalidInput
     }
     return Result{kind:kind, offset:header+tbs.offset}
@@ -41,7 +41,7 @@ pub fn parse(encoded: []const u8) Result {
   algorithm:=der.next(&children)
   if !algorithm.ok {
     kind:=algorithm.kind
-    if kind==errors.Kind.None {
+    if kind==errors.Kind.Ok {
       kind=errors.Kind.InvalidInput
     }
     return Result{kind:kind, offset:header+algorithm.offset}
@@ -53,7 +53,7 @@ pub fn parse(encoded: []const u8) Result {
   signature:=der.next(&children)
   if !signature.ok {
     kind:=signature.kind
-    if kind==errors.Kind.None {
+    if kind==errors.Kind.Ok {
       kind=errors.Kind.InvalidInput
     }
     return Result{kind:kind, offset:header+signature.offset}

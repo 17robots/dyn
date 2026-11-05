@@ -20,6 +20,7 @@ def literal(data):
 
 
 SOURCE = f'''use "std/mem" mem
+use "std/io" io
 use "std/strings" strings
 use "std/fmt" fmt
 use "std/encoding/base64" base64

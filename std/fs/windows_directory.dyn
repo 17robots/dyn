@@ -1,3 +1,4 @@
+use "std/io" io
 #target(kernel: windows)
 
 extern fn find_first "dyn_fs_find_first"(pattern: *const u16, data: *u8) rawptr
@@ -8,12 +9,12 @@ extern fn find_close "dyn_fs_find_close"(handle: rawptr) i32
 // names are UTF-8 in caller storage; kinds use dirent values: 4 directory,
 // 8 regular file, 10 reparse point (links).
 pub struct Directory { handle: rawptr, storage: []u8, data: [592]u8, pending: bool, active: bool }
-pub struct DirectoryResult { value: Directory, error: isize, kind: errors.Kind, ok: bool }
+pub struct DirectoryResult { value: Directory, failure: io.Failure }
 pub struct DirectoryEntry { name: []const u8, kind: u8, ok: bool, error: isize, error_kind: errors.Kind }
 
 pub fn open_directory(path: []const u8, storage: []u8) DirectoryResult {
   if #len(storage) < 1040 || #len(path) == 0 || #len(path) > 32000 {
-    return DirectoryResult{ error: -22, kind: errors.Kind.InvalidInput }
+    return DirectoryResult{ failure: io.Failure{ kind: errors.Kind.InvalidInput, native: -22 } }
   }
   wide: [32768]u16 = []
   count: usize = 0
@@ -21,7 +22,7 @@ pub fn open_directory(path: []const u8, storage: []u8) DirectoryResult {
   for at < #len(path) {
     decoded := utf8.decode(path, at)
     if !decoded.ok || count + 4 >= #len(wide) {
-      return DirectoryResult{ error: -22, kind: errors.Kind.InvalidInput }
+      return DirectoryResult{ failure: io.Failure{ kind: errors.Kind.InvalidInput, native: -22 } }
     }
     count += utf16.encode(wide[count..], decoded.codepoint)
     at += decoded.width
@@ -40,12 +41,12 @@ pub fn open_directory(path: []const u8, storage: []u8) DirectoryResult {
     // An empty directory reports no files.
     if code == -2 || code == -18 {
       result.pending = false
-      return DirectoryResult{ value: result, ok: true }
+      return DirectoryResult{ value: result }
     }
-    return DirectoryResult{ error: code, kind: native_kind(code) }
+    return DirectoryResult{ failure: io.Failure{ kind: native_kind(code), native: code } }
   }
   result.handle = handle
-  return DirectoryResult{ value: result, ok: true }
+  return DirectoryResult{ value: result }
 }
 
 // Entry name borrows directory storage until the next call.
@@ -105,7 +106,7 @@ pub fn close_directory(directory: *Directory) Result {
     _ = find_close(directory.handle)
   }
   directory.* = Directory{}
-  return Result{ ok: true }
+  return Result{}
 }
 
 extern fn win_make_directory "dyn_fs_make_directory"(path: *const u16, security: rawptr) i32
@@ -195,14 +196,14 @@ fn wide_result(ok: i32) Result {
   if ok == 0 {
     return failure(last_error())
   }
-  return Result{ ok: true }
+  return Result{}
 }
 
 pub fn remove(path: []const u8) Result {
   wide := WidePath{}
   wide_path(path, &wide)
   if !wide.ok {
-    return Result{ error: -22, kind: errors.Kind.InvalidInput }
+    return Result{ failure: io.Failure{ kind: errors.Kind.InvalidInput, native: -22 } }
   }
   return wide_result(win_delete(&wide.units[0]))
 }
@@ -213,7 +214,7 @@ pub fn make_directory(path: []const u8, mode: usize) Result {
   wide := WidePath{}
   wide_path(path, &wide)
   if !wide.ok {
-    return Result{ error: -22, kind: errors.Kind.InvalidInput }
+    return Result{ failure: io.Failure{ kind: errors.Kind.InvalidInput, native: -22 } }
   }
   return wide_result(win_make_directory(&wide.units[0], nil))
 }
@@ -222,7 +223,7 @@ pub fn remove_directory(path: []const u8) Result {
   wide := WidePath{}
   wide_path(path, &wide)
   if !wide.ok {
-    return Result{ error: -22, kind: errors.Kind.InvalidInput }
+    return Result{ failure: io.Failure{ kind: errors.Kind.InvalidInput, native: -22 } }
   }
   return wide_result(win_remove_directory(&wide.units[0]))
 }
@@ -234,7 +235,7 @@ pub fn rename(old_path: []const u8, new_path: []const u8) Result {
   wide_path(old_path, &from)
   wide_path(new_path, &to)
   if !from.ok || !to.ok {
-    return Result{ error: -22, kind: errors.Kind.InvalidInput }
+    return Result{ failure: io.Failure{ kind: errors.Kind.InvalidInput, native: -22 } }
   }
   // MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED.
   return wide_result(win_move(&from.units[0], &to.units[0], 3))

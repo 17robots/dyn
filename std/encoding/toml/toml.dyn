@@ -1,5 +1,5 @@
 use "std/mem" mem
-use "std/errors" errors
+use "std/io" errors
 use "std/strings" strings
 use "std/unicode/utf8" utf8
 // TOML 1.0 tree. All parsed strings, keys and scalar lexemes are arena-owned.
