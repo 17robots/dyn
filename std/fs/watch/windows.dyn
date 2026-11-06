@@ -129,7 +129,7 @@ pub fn add(state: *Watcher, path: []const u8, mask: u32) Result {
   used: usize = 0
   for at < #len(path) {
     decoded := utf8.decode(path, at)
-    if !decoded.ok || decoded.codepoint == 0 {
+    if !decoded.valid || decoded.codepoint == 0 {
       return validation_failure(-22)
     }
     width := utf16.encode(wide[used..4095], decoded.codepoint)
@@ -295,7 +295,7 @@ pub fn next(state: *Watcher) EventResult {
       used: usize = 0
       for position < #len(names) {
         decoded := utf16.decode(names, position)
-        if !decoded.ok {
+        if !decoded.valid {
           return rescan(state, slot.id)
         }
         width := utf8.encode(state.storage[used..], decoded.codepoint)

@@ -1,6 +1,6 @@
 use "std/parse" parse
 use "std/mem" mem
-pub struct Info { width: u32, height: u32, channels: u8, srgb: bool, ok: bool }
+pub struct Info { width: u32, height: u32, channels: u8, srgb: bool, valid: bool }
 // Result.ok / InfoResult.ok are authoritative. Info.ok is legacy parser state:
 // true inside successful values, false in the zero failure value.
 // On failure value is zero. error is zero: codec details are not native errors.
@@ -24,7 +24,7 @@ fn codec_kind(detail: isize) parse.Kind {
 
 pub fn inspect(source: []const u8) InfoResult {
   info := inspect_info(source)
-  if !info.ok {
+  if !info.valid {
     return InfoResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   return InfoResult{ value: info }
@@ -62,7 +62,7 @@ fn inspect_info(source: []const u8) Info {
   if width == 0 || height == 0 || (channels != 3 && channels != 4) || source[13] > 1 {
     return Info{}
   }
-  return Info{ width: width, height: height, channels: channels, srgb: source[13] == 0, ok: true }
+  return Info{ width: width, height: height, channels: channels, srgb: source[13] == 0, valid: true }
 }
 
 fn packed_pixel(r: u8, g: u8, b: u8, a: u8) u32 {
@@ -86,7 +86,7 @@ fn add(byte_value: u8, amount: i16) u8 {
 
 fn decode_into(destination: []u8, source: []const u8) DecodeWork {
   info := inspect_info(source)
-  if !info.ok {
+  if !info.valid {
     return DecodeWork{ error: -22 }
   }
   count := #cast(usize, info.width) * #cast(usize, info.height)
@@ -324,7 +324,7 @@ fn encode_into(destination: []u8, pixels: []const u8, width: u32, height: u32, c
 // Decodes QOI into RGBA8 pixels in arena. Failure pushes nothing.
 fn decode_work(arena: *mem.Arena, source: []const u8) DecodeWork {
   info := inspect_info(source)
-  if !info.ok {
+  if !info.valid {
     return DecodeWork{ error: -22 }
   }
   mark := mem.arena_mark(arena)
@@ -365,7 +365,7 @@ fn pixel_count(width: u32, height: u32, channels: u8) usize {
 
 pub fn decode(arena: *mem.Arena, source: []const u8) Result {
   info := inspect_info(source)
-  if !info.ok {
+  if !info.valid {
     return Result{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   size := pixel_count(info.width, info.height, 4)

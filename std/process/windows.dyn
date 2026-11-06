@@ -41,7 +41,7 @@ fn encode_wide(destination: []u16, source: []const u8) usize {
   at: usize = 0
   for at < #len(source) {
     decoded := utf8.decode(source, at)
-    if !decoded.ok {
+    if !decoded.valid {
       return 0
     }
     width := utf16.encode(destination[used..], decoded.codepoint)
@@ -128,7 +128,7 @@ fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, co
         slashes -= 1
       }
       decoded := utf8.decode(argument_text, at)
-      if !decoded.ok {
+      if !decoded.valid {
         return SpawnResult{ failure: io.Failure{ kind: error_kinds.Kind.InvalidInput, native: -22 } }
       }
       width := utf16.encode(command[used..], decoded.codepoint)
@@ -338,7 +338,7 @@ fn environment_native(name: []const u8, destination: []u8) EnvironmentResult {
   used: usize = 0
   for at < #cast(usize, length) {
     decoded := utf16.decode(value[..#cast(usize, length)], at)
-    if !decoded.ok {
+    if !decoded.valid {
       return EnvironmentResult{ failure: io.Failure{ kind: error_kinds.Kind.InvalidInput, native: -22 } }
     }
     width := utf8.encode(destination[used..], decoded.codepoint)

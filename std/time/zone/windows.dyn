@@ -42,7 +42,7 @@ fn name(arena: *mem.Arena, data: []const u8, at: usize, units: usize) []const u8
   index: usize = 0
   for index < count {
     decoded := utf16.decode(wide[..count], index)
-    if !decoded.ok {
+    if !decoded.valid {
       break
     }
     used += utf8.encode(output[used..], decoded.codepoint)

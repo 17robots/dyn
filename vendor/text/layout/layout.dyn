@@ -137,7 +137,7 @@ fn shape(arena:*mem.Arena, api:*const hb.Api, text:[]const u8, clusters:[]Cluste
       previous:=run.end
       for i<#len(run.glyphs) {
         source:=run.start+#cast(usize, run.glyphs[i].cluster)
-        if source<run.start || source>=run.end || !utf8.decode(text, source).ok {
+        if source<run.start || source>=run.end || !utf8.decode(text, source).valid {
           return Span{kind:errors.Kind.InvalidInput}
         }
         next:=i+1

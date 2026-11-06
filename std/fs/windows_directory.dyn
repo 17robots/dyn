@@ -21,7 +21,7 @@ pub fn open_directory(path: []const u8, storage: []u8) DirectoryResult {
   at: usize = 0
   for at < #len(path) {
     decoded := utf8.decode(path, at)
-    if !decoded.ok || count + 4 >= #len(wide) {
+    if !decoded.valid || count + 4 >= #len(wide) {
       return DirectoryResult{ failure: io.Failure{ kind: errors.Kind.InvalidInput, native: -22 } }
     }
     count += utf16.encode(wide[count..], decoded.codepoint)
@@ -78,7 +78,7 @@ pub fn directory_next(directory: *Directory) DirectoryEntry {
     position: usize = 0
     for position < count {
       decoded := utf16.decode(units[..count], position)
-      if !decoded.ok || used + 4 > #len(directory.storage) {
+      if !decoded.valid || used + 4 > #len(directory.storage) {
         break
       }
       used += utf8.encode(directory.storage[used..], decoded.codepoint)
@@ -131,7 +131,7 @@ fn wide_path(path: []const u8, output: *WidePath) {
   }
   for at < #len(path) {
     decoded := utf8.decode(path, at)
-    if !decoded.ok || decoded.codepoint == 0 || count + 3 >= 32768 {
+    if !decoded.valid || decoded.codepoint == 0 || count + 3 >= 32768 {
       return
     }
     count += utf16.encode(output.units[count..], decoded.codepoint)

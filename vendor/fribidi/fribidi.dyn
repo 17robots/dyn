@@ -67,7 +67,7 @@ pub fn resolve(arena: *mem.Arena, api: *const Api, text: []const u8, base: u32) 
   offset: usize = 0
   for offset < #len(text) {
     decoded := utf8.decode(text, offset)
-    if !decoded.ok || separator(decoded.codepoint) {
+    if !decoded.valid || separator(decoded.codepoint) {
       return Result{kind:errors.Kind.InvalidInput}
     }
     count += 1

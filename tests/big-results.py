@@ -83,7 +83,7 @@ fn main() {
     show(arena, big.subtract(arena, a, b))
     show(arena, big.multiply(arena, a, b))
     divided := big.divide(arena, a, b)
-    if divided.ok {
+    if divided.valid {
       show(arena, divided.quotient)
       show(arena, divided.remainder)
     }
@@ -100,7 +100,7 @@ fn main() {
     show(arena, big.gcd(arena, a, b))
     exponent := big.divide(arena, big.absolute(a), big.from_u64(arena, 4096)).remainder
     powered := big.power_mod(arena, a, exponent, big.absolute(b))
-    if powered.ok {
+    if powered.valid {
       _ = io.println(io.stdout(), "{}", big.format(arena, powered.value, 10))
     }
     else {

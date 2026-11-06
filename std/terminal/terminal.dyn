@@ -42,7 +42,7 @@ pub fn key_decode(bytes: []const u8) Key {
   }
   if bytes[0] != 27 {
     decoded := utf8.decode(bytes, 0)
-    if decoded.ok {
+    if decoded.valid {
       return Key{ kind: KeyKind.Text, codepoint: decoded.codepoint, consumed: decoded.width }
     }
     width: usize = 1

@@ -192,7 +192,7 @@ fn string(cursor: *Cursor) bool {
     }
     if byte >= 128 {
       decoded := utf8.decode(cursor.source, cursor.at - 1)
-      if !decoded.ok {
+      if !decoded.valid {
         return false
       }
       cursor.at += decoded.width - 1

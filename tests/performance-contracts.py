@@ -39,7 +39,7 @@ fn main() {''']
     for text, needle in cases:
         body += ['if true {',f'text := {literal(text)}',f'needle := {literal(needle)}',
                  'table: [64]usize = []','p := search.prepare(needle, table[..])',
-                 't.expect(p.ok, "prepare")',
+                 't.expect(p.valid, "prepare")',
                  f't.expect(search.find(p.pattern, text) == {position(text.find(needle), text)}, "KMP oracle")',
                  f't.expect(bytes.find(text, needle) == {position(text.find(needle), text)}, "find oracle")',
                  f't.expect(bytes.find_last(text, needle) == {position(text.rfind(needle), text)}, "rfind oracle")','}']
@@ -76,7 +76,7 @@ fn main() {''']
     }
   }
   table: [1]usize = [99]
-  t.expect(!search.prepare("ab", table[..]).ok && table[0] == 99, "prepare failure atomic")
+  t.expect(!search.prepare("ab", table[..]).valid && table[0] == 99, "prepare failure atomic")
   backing: [8192]u8 = []
   arena := mem.arena_from_buffer(backing[..])
   built := builder.from_buffer(backing[..0])
@@ -113,9 +113,9 @@ fn main() {''']
   }
   values: [10]i64 = [10,9,8,7,6,5,4,3,2,1]
   stats := t.summarize(values[..])
-  t.expect(stats.ok && stats.minimum == 1 && stats.median == 5 && stats.p90 == 9 && stats.maximum == 10, "samples")
+  t.expect(stats.valid && stats.minimum == 1 && stats.median == 5 && stats.p90 == 9 && stats.maximum == 10, "samples")
   invalid: [2]i64 = [5,-1]
-  t.expect(!t.summarize(invalid[..]).ok && invalid[0] == 5, "invalid sample atomic")
+  t.expect(!t.summarize(invalid[..]).valid && invalid[0] == 5, "invalid sample atomic")
 }
 ''']
     (src/'main.dyn').write_text('\n'.join(body))

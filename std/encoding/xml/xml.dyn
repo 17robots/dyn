@@ -214,13 +214,13 @@ fn name_start(value: u32) bool {
 fn name_end(source: []const u8, start: usize) usize {
   at := start
   first := utf8.decode(source, at)
-  if !first.ok || !name_start(first.codepoint) {
+  if !first.valid || !name_start(first.codepoint) {
     return start
   }
   at += first.width
   for at < #len(source) {
     part := utf8.decode(source, at)
-    if !part.ok {
+    if !part.valid {
       break
     }
     value := part.codepoint
@@ -239,7 +239,7 @@ fn valid_characters(text: []const u8) bool {
   at: usize = 0
   for at < #len(text) {
     decoded := utf8.decode(text, at)
-    if !decoded.ok || !xml_character(decoded.codepoint) {
+    if !decoded.valid || !xml_character(decoded.codepoint) {
       return false
     }
     at += decoded.width
@@ -251,7 +251,7 @@ fn valid_text(text: []const u8, attribute: bool) bool {
   at: usize = 0
   for at < #len(text) {
     decoded := utf8.decode(text, at)
-    if !decoded.ok || !xml_character(decoded.codepoint) {
+    if !decoded.valid || !xml_character(decoded.codepoint) {
       return false
     }
     if attribute && text[at] == '<' {

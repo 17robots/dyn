@@ -3,8 +3,8 @@ use "std/encoding/binary" binary
 // Five base-2^26 limbs; secret arithmetic has fixed loop bounds, no secret
 // indexes, and no secret-dependent branches. Message lengths are public.
 // Compiler/machine constant-time qualification is tracked separately.
-pub struct State { r: [5]u64, h: [5]u64, pad: [4]u32, buffer: [16]u8, used: usize, ok: bool }
-pub struct Tag { value: [16]u8, ok: bool }
+pub struct State { r: [5]u64, h: [5]u64, pad: [4]u32, buffer: [16]u8, used: usize, valid: bool }
+pub struct Tag { value: [16]u8, valid: bool }
 const Mask: u64 = 0x3ffffff
 fn load(source: []const u8, at: usize) u64 {
   return #cast(u64, binary.load_u32_le(source[at..at+4]))
@@ -13,7 +13,7 @@ pub fn init(key: []const u8) State {
   if #len(key) != 32 {
     return State{}
   }
-  state := State{ ok: true }
+  state := State{ valid: true }
   state.r[0] = load(key, 0) & 0x3ffffff
   state.r[1] = (load(key, 3) >> 2) & 0x3ffff03
   state.r[2] = (load(key, 6) >> 4) & 0x3ffc0ff
@@ -52,7 +52,7 @@ fn block(state: *State, input: []const u8, high: u64) {
   state.h[0] &= Mask
 }
 pub fn update(state: *State, input: []const u8) bool {
-  if !state.ok {
+  if !state.valid {
     return false
   }
   at: usize = 0
@@ -80,7 +80,7 @@ pub fn update(state: *State, input: []const u8) bool {
 }
 // finish consumes the state. A second finish or update is rejected.
 pub fn finish(state: *State) Tag {
-  if !state.ok {
+  if !state.valid {
     return Tag{}
   }
   if state.used != 0 {
@@ -112,7 +112,7 @@ pub fn finish(state: *State) Tag {
     h[i] = (h[i] & ~select) | (g[i] & select)
   }
   words: [4]u64 = [(h[0] | (h[1] << 26)) & 0xffffffff, ((h[1] >> 6) | (h[2] << 20)) & 0xffffffff, ((h[2] >> 12) | (h[3] << 14)) & 0xffffffff, ((h[3] >> 18) | (h[4] << 8)) & 0xffffffff]
-  result := Tag{ ok: true }
+  result := Tag{ valid: true }
   carry = 0
   for i in 0..4 {
     word := words[i] + #cast(u64, state.pad[i]) + carry

@@ -58,7 +58,7 @@ fn main() {{
   check(member.failure.kind == parse.Kind.Ok && #len(member.value) == {len(PAYLOAD)} && member.consumed == {len(GZIPPED)}, "gunzip")
   check(deflate.inflate(arena, "\\xff\\xff").failure.kind != parse.Kind.Ok, "corrupt inflate")
   joined := path.join(arena, "a/b", "c")
-  check(joined.ok && strings.equal(joined.value, "a/b/c"), "path join")
+  check(joined.valid && strings.equal(joined.value, "a/b/c"), "path join")
 }}
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-arena-producers-') as temporary:

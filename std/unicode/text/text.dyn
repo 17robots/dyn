@@ -156,7 +156,7 @@ fn case_fold_into(destination: []u8, source: []const u8) Result {
   written: usize = 0
   for at < #len(source) {
     decoded := utf8.decode(source, at)
-    if !decoded.ok {
+    if !decoded.valid {
       return Result{ written: written, error: parse.Kind.Syntax }
     }
     values := mapping(Folding[..], decoded.codepoint)
@@ -223,7 +223,7 @@ fn normalize_into(destination: []u8, source: []const u8, form: Form, work: []u32
   count: usize = 0
   for at < #len(source) {
     decoded := utf8.decode(source, at)
-    if !decoded.ok {
+    if !decoded.valid {
       return Result{ error: parse.Kind.Syntax }
     }
     scalar: [3]u32 = [decoded.codepoint, 0, 0]
@@ -338,7 +338,7 @@ fn invalid_utf8_offset(source: []const u8, start: usize) usize {
   at := start
   for at < #len(source) {
     decoded := utf8.decode(source, at)
-    if !decoded.ok {
+    if !decoded.valid {
       return at
     }
     at += decoded.width
@@ -380,7 +380,7 @@ pub fn normalize(arena: *mem.Arena, source: []const u8, form: Form) Converted {
   for capacity > 0 {
     mark := mem.arena_mark(arena)
     work_size := mem.size_for(capacity, 2 * #sizeof(u32))
-    if !work_size.ok {
+    if !work_size.valid {
       #panic("arena size overflow")
     }
     work_count := work_size.bytes / #sizeof(u32)

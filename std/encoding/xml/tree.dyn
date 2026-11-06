@@ -80,7 +80,7 @@ pub fn parse(arena: *tree_memory.Arena, source: []const u8) ParseResult {
   position: usize = 0
   for position < #len(source) {
     decoded := utf8.decode(source, position)
-    if !decoded.ok || !xml_character(decoded.codepoint) {
+    if !decoded.valid || !xml_character(decoded.codepoint) {
       return tree_failure(arena, mark, position, "")
     }
     position += decoded.width

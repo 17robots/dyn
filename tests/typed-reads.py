@@ -46,7 +46,7 @@ fn main() {
   count: usize = 0
   for {
     piece := bytes.split_next(&parts)
-    if !piece.ok {
+    if !piece.found {
       break
     }
     count += 1
@@ -55,8 +55,8 @@ fn main() {
   lines := strings.scanner("one\r\ntwo")
   first := strings.scan_line(&lines)
   second := strings.scan_line(&lines)
-  check(first.ok && strings.equal(first.value, "one") && strings.equal(second.value, "two"), "scanner")
-  check(!strings.scan_line(&lines).ok, "scanner end")
+  check(first.found && strings.equal(first.value, "one") && strings.equal(second.value, "two"), "scanner")
+  check(!strings.scan_line(&lines).found, "scanner end")
   fields := text.Scanner{ source: "a  bc" }
   check(strings.equal(text.next_field(&fields).value, "a") && strings.equal(text.next_field(&fields).value, "bc"), "fields")
   doc := json.parse(arena, "{\"x\": 2.5, \"name\": \"boss\", \"hp\": 40, \"alive\": true, \"tags\": [1, 2]}")
@@ -72,11 +72,11 @@ fn main() {
   check(broken.failure.kind != parse.Kind.Ok && broken.root == &json.nil_value && json.get(i32, broken.root, "x") == 0, "json failed root")
   decoded := hex.decode(arena, "abcd")
   check(decoded.failure.kind == parse.Kind.Ok && #len(decoded.value) == 2 && decoded.value[0] == 171 && hex.decode(arena, "abc").failure.kind != parse.Kind.Ok, "hex decode")
-  check(utf8.codepoint_count("h\xc3\xa9").value == 2 && !utf8.codepoint_count("\xff").ok, "codepoints")
+  check(utf8.codepoint_count("h\xc3\xa9").value == 2 && !utf8.codepoint_count("\xff").valid, "codepoints")
   walker := utf8.iterator("\xc3\xa9")
-  check(utf8.next(&walker).value == 233 && !utf8.next(&walker).ok, "utf8 next")
+  check(utf8.next(&walker).value == 233 && !utf8.next(&walker).valid, "utf8 next")
   date := time.parse_iso8601("2024-02-29T12:34:56Z")
-  check(date.ok && date.value.day == 29 && !time.parse_iso8601("2024-02-30").ok, "iso8601")
+  check(date.valid && date.value.day == 29 && !time.parse_iso8601("2024-02-30").valid, "iso8601")
   state := rand.State{ value: 1 }
   check(rand.below(&state, 10) < 10, "rand below")
 }

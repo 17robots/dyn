@@ -12,7 +12,7 @@ SOURCE=r'''use "std/crypto/poly1305" poly
 fn check(ok: bool) { if !ok { #panic("Poly1305 contract") } }
 fn vector(key: []const u8, message: []const u8, expected: []const u8) {
  tag := poly.authenticate(message,key)
- check(tag.ok && poly.equal(tag.value[..],expected))
+ check(tag.valid && poly.equal(tag.value[..],expected))
  for i in 0..16 {
   changed := tag.value
   changed[i] ^= 1
@@ -25,18 +25,18 @@ fn vector(key: []const u8, message: []const u8, expected: []const u8) {
   check(poly.update(&byte_state,message[i..i+1]))
  }
  bytewise := poly.finish(&byte_state)
- check(bytewise.ok && poly.equal(bytewise.value[..],expected))
+ check(bytewise.valid && poly.equal(bytewise.value[..],expected))
  for split in 0..#len(message)+1 {
   state := poly.init(key)
   check(poly.update(&state,message[..split]))
   check(poly.update(&state,message[split..]))
   streamed := poly.finish(&state)
-  check(streamed.ok && poly.equal(streamed.value[..],expected))
-  check(!poly.finish(&state).ok && !poly.update(&state,""))
+  check(streamed.valid && poly.equal(streamed.value[..],expected))
+  check(!poly.finish(&state).valid && !poly.update(&state,""))
  }
 }
 fn main() {
- check(!poly.init("bad").ok && !poly.authenticate("","").ok)
+ check(!poly.init("bad").valid && !poly.authenticate("","").valid)
 '''
 
 def oracle(key,message):

@@ -30,7 +30,7 @@ pub fn next(state: *Reader) FieldResult {
   }
   start := state.offset
   key := binary.uleb128_decode(state.source[start..])
-  if !key.ok || (key.value >> 3) == 0 || (key.value >> 3) > 536870911 || (key.value & 7) > 5 {
+  if !key.valid || (key.value >> 3) == 0 || (key.value >> 3) > 536870911 || (key.value & 7) > 5 {
     return fail(state, start, parse.Kind.Syntax)
   }
   at := start + key.consumed
@@ -38,7 +38,7 @@ pub fn next(state: *Reader) FieldResult {
   field := Field{ number: #cast(u32, key.value >> 3), wire: #cast(Wire, wire) }
   if field.wire == Wire.Varint {
     value := binary.uleb128_decode(state.source[at..])
-    if !value.ok {
+    if !value.valid {
       return fail(state, at, parse.Kind.Syntax)
     }
     field.value = value.value
@@ -57,7 +57,7 @@ pub fn next(state: *Reader) FieldResult {
     at += 4
   } else if field.wire == Wire.Bytes {
     length := binary.uleb128_decode(state.source[at..])
-    if !length.ok {
+    if !length.valid {
       return fail(state, at, parse.Kind.Syntax)
     }
     at += length.consumed

@@ -21,7 +21,7 @@ pub fn next_grapheme(state: *Graphemes) GraphemeResult {
   }
   start := state.offset
   first := utf8.decode(state.source, start)
-  if !first.ok {
+  if !first.valid {
     state.error = parse.Kind.Syntax
     state.error_offset = start
     return GraphemeResult{ offset: start, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: start } }
@@ -40,7 +40,7 @@ pub fn next_grapheme(state: *Graphemes) GraphemeResult {
   at := start + first.width
   for at < #len(state.source) {
     decoded := utf8.decode(state.source, at)
-    if !decoded.ok {
+    if !decoded.valid {
       state.error = parse.Kind.Syntax
       state.error_offset = at
       return GraphemeResult{ offset: at, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: at } }

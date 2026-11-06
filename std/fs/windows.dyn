@@ -44,7 +44,7 @@ fn native_open(path: []const u8, mode: u8) FileResult {
   }
   for at < #len(path) {
     codepoint := utf8.decode(path, at)
-    if !codepoint.ok || codepoint.codepoint == 0 {
+    if !codepoint.valid || codepoint.codepoint == 0 {
       return FileResult{ failure: io.Failure{ kind: errors.Kind.InvalidInput } }
     }
     width := utf16.encode(storage[used..32767], codepoint.codepoint)

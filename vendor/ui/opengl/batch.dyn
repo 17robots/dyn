@@ -341,7 +341,7 @@ pub fn render_batch(batch: *Batch, commands: *const ui.Command, width, height: i
           decoded := utf8.decode(command.text, offset)
           offset += decoded.width
           codepoint := decoded.codepoint
-          if !decoded.ok {
+          if !decoded.valid {
             codepoint = 65533
           }
           if codepoint == 10 {

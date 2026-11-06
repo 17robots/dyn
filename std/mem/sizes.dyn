@@ -4,7 +4,7 @@ pub const KiB: usize = 1024
 pub const MiB: usize = 1024 * KiB
 pub const GiB: usize = 1024 * MiB
 
-pub struct SizeResult { bytes: usize, ok: bool }
+pub struct SizeResult { bytes: usize, valid: bool }
 
 // Computes array payload size without panicking on overflow. Does not include
 // allocation alignment padding or container metadata. Zero count/size succeeds.
@@ -13,5 +13,5 @@ pub fn size_for(count: usize, element_size: usize) SizeResult {
   if element_size != 0 && count > (#cast(usize, -1)) / element_size {
     return SizeResult{}
   }
-  return SizeResult{ bytes: count * element_size, ok: true }
+  return SizeResult{ bytes: count * element_size, valid: true }
 }

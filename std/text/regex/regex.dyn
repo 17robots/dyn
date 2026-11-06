@@ -5,7 +5,7 @@ struct Instruction { op: u8, byte: u8, x: usize, y: usize, z: usize }
 // All slices belong to the compile arena, including the retained pattern bytes.
 // Copies share mutable workspace: serialize find/next calls on a program and its
 // copies. Compile separately for concurrent use. Reset/release invalidates all.
-pub struct Program { pattern: []const u8, code: []Instruction, start: usize, groups: usize, workspace: []usize, captures: []Match, error: parse.Kind, ok: bool }
+pub struct Program { pattern: []const u8, code: []Instruction, start: usize, groups: usize, workspace: []usize, captures: []Match, error: parse.Kind, valid: bool }
 pub struct Result { value: Program, offset: usize, failure: parse.Failure }
 // failure names a broken program. value.found distinguishes a match from a miss.
 // Capture slices are borrowed until the next operation on this program.
@@ -486,7 +486,7 @@ fn compile_into(pattern: []const u8, storage: []Instruction, workspace: []Instru
   storage[used] = Instruction{ op: Accept }
   patch_list(storage, scratch[1], used)
   used += 1
-  return Program{ pattern: pattern, code: storage[..used], start: start, groups: state.groups, error: parse.Kind.Ok, ok: true }
+  return Program{ pattern: pattern, code: storage[..used], start: start, groups: state.groups, error: parse.Kind.Ok, valid: true }
 }
 
 // Arena exhaustion/size overflow panics, like other arena producers. Syntax
@@ -541,7 +541,7 @@ pub fn compile(arena: *mem.Arena, pattern: []const u8) Result {
   scratch := mem.push_array(usize, arena, count.used * 2)
   program := compile_into(retained, storage, tokens, scratch)
   mem.arena_rewind(arena, mark)
-  if !program.ok {
+  if !program.valid {
     #panic("regex compiler sizing invariant")
   }
   required := workspace_size(program, program.groups)
@@ -624,7 +624,7 @@ fn expand(program: Program, text: []const u8, at: usize, seed: []usize,
 // Private workspace sizing. Zero means invalid
 // program or size overflow. Space depends on the program, never on input length.
 fn workspace_size(program: Program, capture_count: usize) usize {
-  if !program.ok || #len(program.code) == 0 {
+  if !program.valid || #len(program.code) == 0 {
     return 0
   }
   groups := capture_count
@@ -654,7 +654,7 @@ fn execute(program: Program, text: []const u8, captures: []Match, workspace: []u
     captures[i] = Match{}
   }
   required := workspace_size(program, #len(captures))
-  if !program.ok {
+  if !program.valid {
     return Match{}
   }
   if required == 0 || #len(workspace) < required {
@@ -734,7 +734,7 @@ pub fn find(program: Program, text: []const u8) MatchResult {
   return find_from(program, text, 0)
 }
 fn find_from(program: Program, text: []const u8, from: usize) MatchResult {
-  if !program.ok {
+  if !program.valid {
     return MatchResult{ failure: parse.Failure{ kind: parse.Kind.Syntax, message: "program not compiled" } }
   }
   value := execute(program, text, program.captures, program.workspace, from)
@@ -858,7 +858,7 @@ pub fn iterator(program: Program, text: []const u8) Iterator {
   return Iterator{ program: program, text: text }
 }
 pub fn next(state: *Iterator) MatchResult {
-  if !state.program.ok {
+  if !state.program.valid {
     return MatchResult{ failure: parse.Failure{ kind: parse.Kind.Syntax, message: "program not compiled" } }
   }
   if state.done || state.offset > #len(state.text) {

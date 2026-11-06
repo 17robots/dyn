@@ -155,7 +155,7 @@ pub fn scanner_rest(state: *const Scanner) []const u8 {
   return state.text[state.offset..]
 }
 
-pub struct Scanned { value: []const u8, ok: bool }
+pub struct Scanned { value: []const u8, found: bool }
 
 // The text up to the next delimiter, which is consumed, or the rest of the
 // text. ok is false once the text is used up.
@@ -171,7 +171,7 @@ pub fn scan_until(state: *Scanner, delimiter: u8) Scanned {
   } else {
     state.offset = start + found + 1
   }
-  return Scanned{ value: rest[..found], ok: true }
+  return Scanned{ value: rest[..found], found: true }
 }
 
 // The next run of non-whitespace bytes. ok is false when only whitespace is left.
@@ -186,7 +186,7 @@ pub fn scan_field(state: *Scanner) Scanned {
   for state.offset < #len(state.text) && !ascii_is_whitespace(state.text[state.offset]) {
     state.offset += 1
   }
-  return Scanned{ value: state.text[start..state.offset], ok: true }
+  return Scanned{ value: state.text[start..state.offset], found: true }
 }
 
 // Binary64 decimal conversion uses bounded integer arithmetic. Every binary64

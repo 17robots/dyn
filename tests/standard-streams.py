@@ -119,7 +119,7 @@ use "std/time"
 fn main() {
   parsed := time.parse_iso8601("2024-02-29T12:34:56Z")
   date := parsed.value
-  if !parsed.ok || !time.valid(&date) { #panic("date failed") }
+  if !parsed.valid || !time.valid(&date) { #panic("date failed") }
   cursor := io.cursor("ok")
   bytes: [2]u8 = []
   result := io.read_exact(io.cursor_reader(&cursor), bytes[..])

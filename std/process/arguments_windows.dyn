@@ -55,7 +55,7 @@ fn argument_token(command: []const u16, start: usize, first: bool, destination: 
       continue
     }
     decoded := utf16.decode(command, at)
-    if !decoded.ok {
+    if !decoded.valid {
       return ArgumentToken{}
     }
     width := argument_emit(destination, used, decoded.codepoint, writing)

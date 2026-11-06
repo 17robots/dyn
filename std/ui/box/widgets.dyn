@@ -186,7 +186,7 @@ fn next_boundary(text: []const u8, at: usize) usize {
     return #len(text)
   }
   decoded := utf8.decode(text, at)
-  if !decoded.ok {
+  if !decoded.valid {
     return at + 1
   }
   return at + decoded.width

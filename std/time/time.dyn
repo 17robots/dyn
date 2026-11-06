@@ -166,7 +166,7 @@ fn decimal(byte: u8) bool {
 fn read_two(input: []const u8, at: usize) u8 {
   return (input[at] - '0') * 10 + input[at + 1] - '0'
 }
-pub struct Parsed { value: DateTime, ok: bool }
+pub struct Parsed { value: DateTime, valid: bool }
 
 // Parses YYYY-MM-DDTHH:MM:SSZ. ok is false, with a zero value, for anything else.
 pub fn parse_iso8601(input: []const u8) Parsed {
@@ -174,7 +174,7 @@ pub fn parse_iso8601(input: []const u8) Parsed {
   if !parse_iso8601_into(input, &value) {
     return Parsed{}
   }
-  return Parsed{ value: value, ok: true }
+  return Parsed{ value: value, valid: true }
 }
 
 fn parse_iso8601_into(input: []const u8, output: *DateTime) bool {

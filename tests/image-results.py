@@ -22,14 +22,14 @@ fn main() {
   p := png.encode(arena, pixels[..], 2, 1, 4)
   if p.failure.kind != parse.Kind.Ok { #panic("PNG encode") }
   pi := png.inspect(p.value)
-  if pi.failure.kind != parse.Kind.Ok || !pi.value.ok || pi.value.width != 2 { #panic("PNG inspect") }
+  if pi.failure.kind != parse.Kind.Ok || !pi.value.valid || pi.value.width != 2 { #panic("PNG inspect") }
   pd := png.decode(arena, p.value)
   if pd.failure.kind != parse.Kind.Ok || pd.value.info.width != 2 || #len(pd.value.pixels) != 8 { #panic("PNG decode") }
   for i in 0..8 { if pd.value.pixels[i] != pixels[i] { #panic("PNG pixels") } }
   q := qoi.encode(arena, pixels[..], 2, 1, 4, true)
   qi := qoi.inspect(q.value)
   qd := qoi.decode(arena, q.value)
-  if q.failure.kind != parse.Kind.Ok || qi.failure.kind != parse.Kind.Ok || qd.failure.kind != parse.Kind.Ok || !qi.value.ok || qd.value.info.width != 2 { #panic("QOI roundtrip") }
+  if q.failure.kind != parse.Kind.Ok || qi.failure.kind != parse.Kind.Ok || qd.failure.kind != parse.Kind.Ok || !qi.value.valid || qd.value.info.width != 2 { #panic("QOI roundtrip") }
   for i in 0..8 { if qd.value.pixels[i] != pixels[i] { #panic("QOI pixels") } }
   external: [70]u8 = [137,80,78,71,13,10,26,10,0,0,0,13,73,72,68,82,0,0,0,1,0,0,0,1,8,6,0,0,0,31,21,196,137,0,0,0,13,73,68,65,84,120,156,99,248,207,192,240,31,0,5,0,1,255,137,153,61,29,0,0,0,0,73,69,78,68,174,66,96,130]
   independent := png.decode(arena, external[..])
@@ -52,10 +52,10 @@ fn main() {
     qd.failure.kind != parse.Kind.Ok || qd.offset != 0 {
     #panic("success metadata")
   }
-  if pi.value.height != 1 || pi.value.channels != 4 || !pd.value.info.ok ||
+  if pi.value.height != 1 || pi.value.channels != 4 || !pd.value.info.valid ||
     pd.value.info.height != 1 || pd.value.info.channels != 4 ||
     qi.value.width != 2 || qi.value.height != 1 || qi.value.channels != 4 || !qi.value.srgb ||
-    !qd.value.info.ok || qd.value.info.height != 1 || qd.value.info.channels != 4 || !qd.value.info.srgb {
+    !qd.value.info.valid || qd.value.info.height != 1 || qd.value.info.channels != 4 || !qd.value.info.srgb {
     #panic("success image info")
   }
   pzero: png.Result
@@ -64,7 +64,7 @@ fn main() {
   qizero: qoi.InfoResult
   pezero: png.EncodeResult
   qezero: qoi.EncodeResult
-  if pzero.value.info.ok || qzero.value.info.ok || pizero.value.ok || qizero.value.ok ||
+  if pzero.value.info.valid || qzero.value.info.valid || pizero.value.valid || qizero.value.valid ||
     #len(pzero.value.pixels) != 0 || #len(qzero.value.pixels) != 0 ||
     #len(pezero.value) != 0 || #len(qezero.value) != 0 ||
     pzero.failure.kind != parse.Kind.Ok || qzero.failure.kind != parse.Kind.Ok ||
@@ -84,16 +84,16 @@ fn main() {
   if trailingbad.failure.kind == parse.Kind.Ok || trailingbad.failure.kind != parse.Kind.Syntax || #len(trailingbad.value.pixels) != 0 || mem.arena_mark(arena) != mark { #panic("QOI trailing payload") }
   p.value[29] ^= 1
   bad := png.decode(arena, p.value)
-  if bad.failure.kind == parse.Kind.Ok || bad.failure.kind != parse.Kind.Syntax || bad.offset != 29 || #len(bad.value.pixels) != 0 || bad.value.info.ok || mem.arena_mark(arena) != mark { #panic("PNG malformed rollback") }
+  if bad.failure.kind == parse.Kind.Ok || bad.failure.kind != parse.Kind.Syntax || bad.offset != 29 || #len(bad.value.pixels) != 0 || bad.value.info.valid || mem.arena_mark(arena) != mark { #panic("PNG malformed rollback") }
   truncated: [22]u8 = ['q','o','i','f',0,0,0,1,0,0,0,1,4,0,0,0,0,0,0,0,0,1]
   qb := qoi.decode(arena, truncated[..])
-  if qb.failure.kind == parse.Kind.Ok || qb.offset != 14 || qb.value.info.ok || #len(qb.value.pixels) != 0 || mem.arena_mark(arena) != mark { #panic("QOI malformed rollback") }
+  if qb.failure.kind == parse.Kind.Ok || qb.offset != 14 || qb.value.info.valid || #len(qb.value.pixels) != 0 || mem.arena_mark(arena) != mark { #panic("QOI malformed rollback") }
   empty: [0]u8 = []
   pbad := png.inspect(empty[..])
   qbad := qoi.inspect(empty[..])
   if pbad.failure.kind == parse.Kind.Ok || qbad.failure.kind == parse.Kind.Ok || pbad.failure.kind != parse.Kind.Syntax || qbad.failure.kind != parse.Kind.Syntax ||
     pbad.offset != 0 || qbad.offset != 0 ||
-    pbad.value.ok || qbad.value.ok ||
+    pbad.value.valid || qbad.value.valid ||
     pbad.value.width != 0 || qbad.value.width != 0 { #panic("inspect malformed") }
   pe := png.encode(arena, empty[..], 0, 1, 4)
   qe := qoi.encode(arena, empty[..], 1, 1, 4, true)

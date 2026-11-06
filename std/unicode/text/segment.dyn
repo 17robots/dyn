@@ -109,7 +109,7 @@ fn first_invalid(text: []const u8) usize {
   offset: usize = 0
   for offset < #len(text) {
     decoded := utf8.decode(text, offset)
-    if !decoded.ok {
+    if !decoded.valid {
       return offset
     }
     offset += decoded.width
@@ -158,7 +158,7 @@ fn mid_num_q(class: u8) bool {
 // text is not empty. Invalid UTF-8 fails with its offset and allocates nothing.
 pub fn word_breaks(arena: *mem.Arena, text: []const u8) Breaks {
   count := utf8.codepoint_count(text)
-  if !count.ok {
+  if !count.valid {
     return Breaks{ offset: first_invalid(text), failure: parse.Failure{ kind: parse.Kind.Syntax, offset: first_invalid(text) } }
   }
   n := count.value
@@ -534,7 +534,7 @@ fn line_decision(units: []Unit, values: []u32, u: usize) u8 {
 // follow hard line breaks (BK, CR, LF, NL).
 pub fn line_breaks(arena: *mem.Arena, text: []const u8) LineBreaks {
   count := utf8.codepoint_count(text)
-  if !count.ok {
+  if !count.valid {
     return LineBreaks{ offset: first_invalid(text), failure: parse.Failure{ kind: parse.Kind.Syntax, offset: first_invalid(text) } }
   }
   n := count.value

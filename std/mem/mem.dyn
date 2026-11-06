@@ -547,7 +547,7 @@ pub fn arena_push(arena: *Arena, size: usize, alignment: usize) *u8 {
 // Thread safety: caller synchronizes access to the arena.
 pub fn arena_push_array(arena: *Arena, count: usize, element_size: usize, alignment: usize) *u8 {
   size := size_for(count, element_size)
-  if !size.ok {
+  if !size.valid {
     #panic("arena size overflow")
   }
   return arena_push(arena, size.bytes, alignment)
@@ -581,7 +581,7 @@ pub fn push_array($T: type, arena: *Arena, count: usize) []T {
     return empty
   }
   size := size_for(count, #sizeof(T))
-  if !size.ok {
+  if !size.valid {
     #panic("arena size overflow")
   }
   return #slice(#cast(*T, arena_push(arena, size.bytes, #alignof(T))), count)
@@ -602,7 +602,7 @@ pub fn try_push($T: type, arena: *Arena) *T {
 pub fn try_push_array($T: type, arena: *Arena, count: usize) []T {
   empty: []T
   size := size_for(count, #sizeof(T))
-  if count == 0 || !size.ok {
+  if count == 0 || !size.valid {
     return empty
   }
   allocation := arena_try_push(arena, size.bytes, #alignof(T))
