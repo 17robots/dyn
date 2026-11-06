@@ -63,7 +63,7 @@ fn main() {
  sealed:=aead.seal(f.arena,aead.Cipher.Aes256Gcm,"hello","",key[..],nonce[..])
  check(sealed.failure.kind == parse.Kind.Ok)
  opened:=aead.open(f.arena,aead.Cipher.Aes256Gcm,sealed.value.ciphertext,sealed.value.tag,"",key[..],nonce[..])
- check(opened.failure.kind == parse.Kind.Ok && bytes.equal(opened.value,"hello"))
+ check(opened.valid && bytes.equal(opened.value,"hello"))
  PROCESS_CASE
  intact(f)
 }

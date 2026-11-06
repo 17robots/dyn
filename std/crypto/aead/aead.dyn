@@ -5,7 +5,8 @@ use "std/crypto/chacha20poly1305" native
 pub enum Cipher { Aes256Gcm, Chacha20Poly1305 }
 pub struct Sealed { ciphertext: []u8, tag: []u8 }
 pub struct SealResult { value: Sealed, provider_code: u64, failure: parse.Failure }
-pub struct OpenResult { value: []u8, provider_code: u64, failure: parse.Failure }
+// valid is true only after the tag verifies, so a zero result is never plaintext.
+pub struct OpenResult { value: []u8, valid: bool, provider_code: u64, failure: parse.Failure }
 
 fn valid(kind: Cipher, count: usize, additional: []const u8, key: []const u8, nonce: []const u8) bool {
   if kind != Cipher.Aes256Gcm && kind != Cipher.Chacha20Poly1305 {
@@ -102,5 +103,5 @@ pub fn open(arena: *mem.Arena, kind: Cipher, ciphertext: []const u8, tag: []cons
     mem.arena_rewind(arena, mark)
     return OpenResult{ failure: parse.Failure{ kind: parse.Kind.Checksum } }
   }
-  return OpenResult{ value: plaintext }
+  return OpenResult{ value: plaintext, valid: true }
 }

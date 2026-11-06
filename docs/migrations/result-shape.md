@@ -41,6 +41,9 @@ Pure results that cannot fail by the world say what they mean: `valid` for
 checked values (`utf8.Decode`, `path.Result`, `time.Parsed`, matrix results) and
 `found` for scans (`bytes.Piece`, `path.Component`, `ring.Popped`).
 
+`aead.OpenResult` adds `valid`, and `x509.Validation` keeps it: check `valid`
+before using plaintext or trusting a certificate.
+
 A zero result now reads as success. Code that used a zero result to mean
 failure must keep its own state. `deflate.Result` keeps `done`, because `resume`
 can stop for more input without failing.
