@@ -1,3 +1,4 @@
+use "std/parse" parse
 #target(kernel: linux)
 use "std/mem" mem
 use "std/c" c
@@ -72,7 +73,7 @@ pub fn open(window: *Window, title: []const u8, width, height: i32) Result {
   }
   storage: [4096]u8 = []
   name := c.string_into(storage[..], title)
-  if !name.ok {
+  if name.failure.kind != parse.Kind.Ok {
     return Result{kind:errors.Kind.InvalidInput}
   }
   display := display_open(nil)

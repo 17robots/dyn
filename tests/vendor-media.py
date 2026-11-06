@@ -33,6 +33,7 @@ for key, suffix in [('PKG_CONFIG_PATH', 'lib/pkgconfig'), ('DYN_LIBRARY_PATH', '
 dyn = str(Path(env.get('DYN', BUILD/'dyn-release')).resolve())
 FIXTURES = {
     'tree-sitter-example': r'''use "vendor/tree_sitter" ts
+use "std/parse" parse
 use "std/io" io
 use "std/strings"
 // Grammar is separate from runtime. This example uses the packaged C grammar.
@@ -54,7 +55,7 @@ fn main() {
   defer ts.tree_destroy_owned(parsed.tree)
   node := ts.root(parsed.tree)
   kind := ts.node_type(node, 128)
-  if !kind.ok || !strings.equal(kind.value, "translation_unit") || ts.node_has_error(node) {
+  if kind.failure.kind != parse.Kind.Ok || !strings.equal(kind.value, "translation_unit") || ts.node_has_error(node) {
     #panic("root")
   }
   if ts.node_end(node) != 6 || ts.child_count(node) != 1 {
@@ -198,7 +199,8 @@ fn main() {
   _ = io.println(io.stdout(), "Lua: 42; protected syntax/runtime failures; balanced stack")
 }
 ''',
-    'archive-example': r'''use "vendor/archive"
+    'archive-example': r'''use "std/parse" parse
+use "vendor/archive"
 use "std/mem"
 use "std/fs"
 use "std/os/linux"
@@ -234,7 +236,7 @@ fn main() {
       #panic("archive header")
     }
     name := archive.entry_name(entry.entry, 4096)
-    if !name.ok {
+    if name.failure.kind != parse.Kind.Ok {
       #panic("archive name")
     }
     _ = io.println(io.stdout(), "{}", name.value)
@@ -363,6 +365,7 @@ use "std/os/linux"
 use "std/io" io
 use "std/strings"
 use "std/c" c
+use "std/parse" parse
 fn shader(api: *gl.Api, kind: u32, source: []const u8) u32 {
   value := api.create_shader(kind)
   if value == 0 {
@@ -475,7 +478,7 @@ fn atlas_smoke(api: *gl.Api) {
 }
 fn missing_texture_proc(name: *const u8) rawptr {
   bytes := c.bytes_from_string(name, 64)
-  if bytes.ok && strings.equal(bytes.value, "glTexImage2D") { return nil }
+  if bytes.failure.kind == parse.Kind.Ok && strings.equal(bytes.value, "glTexImage2D") { return nil }
   return sdl3.gl_proc(name)
 }
 fn main() {

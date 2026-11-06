@@ -1,3 +1,4 @@
+use "std/parse" parse
 use "std/mem" mem
 use "std/c" cabi
 use "std/io" errors
@@ -26,7 +27,7 @@ pub fn open(path: []const u8, flags: i32) OpenResult {
     return OpenResult{ failure: errors.Failure{ kind: errors.Kind.InvalidInput } }
   }
   name := cabi.string_into(storage[..], path)
-  if !name.ok {
+  if name.failure.kind != parse.Kind.Ok {
     return OpenResult{ failure: errors.Failure{ kind: errors.Kind.InvalidInput } }
   }
   return platform_open(name.value, flags)
@@ -41,7 +42,7 @@ pub fn symbol(handle: Handle, name: []const u8) SymbolResult {
     return SymbolResult{ failure: errors.Failure{ kind: errors.Kind.InvalidInput } }
   }
   native_name := cabi.string_into(storage[..], name)
-  if !native_name.ok {
+  if native_name.failure.kind != parse.Kind.Ok {
     return SymbolResult{ failure: errors.Failure{ kind: errors.Kind.InvalidInput } }
   }
   return platform_symbol(handle, native_name.value)

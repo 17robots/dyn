@@ -1,3 +1,4 @@
+use "std/parse" parse
 #target(kernel: windows)
 
 use "std/mem" mem
@@ -54,7 +55,7 @@ fn terminated(path: []const u8, storage: []u8) *const u8 {
     return nil
   }
   result := cstrings.string_into(storage, path)
-  if !result.ok {
+  if result.failure.kind != parse.Kind.Ok {
     return nil
   }
   return result.value

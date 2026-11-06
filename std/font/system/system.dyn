@@ -251,7 +251,7 @@ fn visit(arena: *mem.Arena, scratch: *mem.Arena, walk: *Walk, directory: []const
   listing := opened.value
   for walk.count < #len(walk.entries) {
     item := fs.directory_next(&listing)
-    if !item.ok {
+    if !item.found {
       break
     }
     mark := mem.arena_mark(scratch)

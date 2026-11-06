@@ -99,12 +99,12 @@ fn platform_next(state: *Watch, block: bool) Next {
   for true {
     kind := take()
     if kind != Kind.None || !block {
-      return Next{ value: kind, ok: true }
+      return Next{ value: kind, found: true }
     }
     // INFINITE; WAIT_FAILED is 0xffffffff.
     if wait_one(#cast(rawptr, #cast(usize, state.handle)), 4294967295) == 4294967295 {
       code := #cast(isize, last_error())
-      return Next{ kind: errors.windows(code), error: code }
+      return Next{ failure: errors.Failure{ kind: errors.windows(code), native: code } }
     }
   }
   return Next{}

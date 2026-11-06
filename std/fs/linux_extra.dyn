@@ -1,10 +1,11 @@
+use "std/parse" parse
 #target(kernel: linux)
 use "std/io" io
 use "std/mem" mem
 use "std/c" cstrings
 use "std/os/linux" platform
 
-pub struct Metadata { size: u64, inode: u64, device: u64, mode: u16, error: isize, kind: errors.Kind, ok: bool }
+pub struct Metadata { size: u64, inode: u64, device: u64, mode: u16, failure: errors.Failure }
 pub struct PathResult { value: []u8, failure: io.Failure }
 pub enum AppDirectory { Home, Config, Cache, Data, Runtime }
 pub struct Directory {
@@ -14,14 +15,14 @@ pub struct Directory {
   used: usize,
 }
 pub struct DirectoryResult { value: Directory, failure: io.Failure }
-pub struct DirectoryEntry { name: []const u8, kind: u8, ok: bool, error: isize, error_kind: errors.Kind }
+pub struct DirectoryEntry { name: []const u8, kind: u8, found: bool, failure: errors.Failure }
 
 fn terminated(path: []const u8, storage: []u8) *const u8 {
   if #len(path) == 0 {
     return nil
   }
   result := cstrings.string_into(storage, path)
-  if !result.ok {
+  if result.failure.kind != parse.Kind.Ok {
     return nil
   }
   return result.value
@@ -41,7 +42,7 @@ pub fn open_directory(path: []const u8, storage: []u8) DirectoryResult {
 // Entry name borrows directory storage and may be invalidated by next refill.
 pub fn directory_next(directory: *Directory) DirectoryEntry {
   if !is_open(&directory.file) || #len(directory.storage) < 24 {
-    return DirectoryEntry{ error: -9 , error_kind: errors.linux(-9) }
+    return DirectoryEntry{ failure: errors.Failure{ kind: errors.linux(-9), native: -9 } }
   }
   for {
     if directory.offset >= directory.used {
@@ -50,22 +51,22 @@ pub fn directory_next(directory: *Directory) DirectoryEntry {
         value = #syscall(217, directory.file.descriptor, &directory.storage[0], #len(directory.storage))
       }
       if value < 0 {
-        return DirectoryEntry{ error: value, error_kind: errors.linux(value), ok: false }
+        return DirectoryEntry{ failure: errors.Failure{ kind: errors.linux(value), native: value } }
       }
       if value == 0 {
-        return DirectoryEntry{ error: 0, error_kind: errors.linux(0), ok: false }
+        return DirectoryEntry{}
       }
       directory.offset = 0
       directory.used = #cast(usize, value)
     }
     if directory.offset + 19 > directory.used {
-      return DirectoryEntry{ error: -5, error_kind: errors.linux(-5), ok: false }
+      return DirectoryEntry{ failure: errors.Failure{ kind: errors.linux(-5), native: -5 } }
     }
     low := #cast(usize, directory.storage[directory.offset + 16])
     high := #cast(usize, directory.storage[directory.offset + 17])
     record_length := low + high * 256
     if record_length < 20 || directory.offset + record_length > directory.used {
-      return DirectoryEntry{ error: -5, error_kind: errors.linux(-5), ok: false }
+      return DirectoryEntry{ failure: errors.Failure{ kind: errors.linux(-5), native: -5 } }
     }
     name_start := directory.offset + 19
     name_end := name_start
@@ -78,7 +79,7 @@ pub fn directory_next(directory: *Directory) DirectoryEntry {
     dot := #len(name) == 1 && name[0] == '.'
     dot_dot := #len(name) == 2 && name[0] == '.' && name[1] == '.'
     if !dot && !dot_dot {
-      return DirectoryEntry{ name: name, kind: kind, error: 0, error_kind: errors.linux(0), ok: true }
+      return DirectoryEntry{ name: name, kind: kind, found: true }
     }
   }
   return DirectoryEntry{}
@@ -106,11 +107,11 @@ pub fn copy_file(source: []const u8, destination: []const u8, scratch: []u8) Res
   source_info := file_metadata(&input.value)
   destination_info := file_metadata(&output_file.value)
   validation_error: isize = 0
-  if !source_info.ok {
-    validation_error = source_info.error
+  if source_info.failure.kind != io.Kind.Ok {
+    validation_error = source_info.failure.native
   }
-  else if !destination_info.ok {
-    validation_error = destination_info.error
+  else if destination_info.failure.kind != io.Kind.Ok {
+    validation_error = destination_info.failure.native
   }
   else if source_info.device == destination_info.device && source_info.inode == destination_info.inode {
     validation_error = -22
@@ -145,31 +146,31 @@ pub fn copy_file(source: []const u8, destination: []const u8, scratch: []u8) Res
 // Descriptor lookup avoids path replacement races and does not change file position.
 pub fn file_metadata(file: *const File) Metadata {
   if !is_open(file) {
-    return Metadata{ error: -9, kind: errors.linux(-9) }
+    return Metadata{ failure: errors.Failure{ kind: errors.linux(-9), native: -9 } }
   }
   raw: [32]u64 = []
   empty: [1]u8 = []
   result := #syscall(332, file.descriptor, &empty[0], 4096, 2047, &raw[0])
   if result < 0 {
-    return Metadata{ error: result, kind: errors.linux(result) }
+    return Metadata{ failure: errors.Failure{ kind: errors.linux(result), native: result } }
   }
   if (raw[0] & 769) != 769 {
-    return Metadata{ error: -95, kind: errors.linux(-95) }
+    return Metadata{ failure: errors.Failure{ kind: errors.linux(-95), native: -95 } }
   }
-  return Metadata{ size: raw[5], inode: raw[4], device: raw[17], mode: #cast(u16, (raw[3] >> 32)), ok: true }
+  return Metadata{ size: raw[5], inode: raw[4], device: raw[17], mode: #cast(u16, (raw[3] >> 32)) }
 }
 pub fn metadata(path: []const u8) Metadata {
   opened := open(path)
   if opened.failure.kind != io.Kind.Ok {
-    return Metadata{ error: opened.failure.native, kind: errors.linux(opened.failure.native) }
+    return Metadata{ failure: errors.Failure{ kind: errors.linux(opened.failure.native), native: opened.failure.native } }
   }
   info := file_metadata(&opened.value)
   closed := close(&opened.value)
-  if !info.ok {
+  if info.failure.kind != io.Kind.Ok {
     return info
   }
   if closed.failure.kind != io.Kind.Ok {
-    return Metadata{ error: closed.failure.native, kind: errors.linux(closed.failure.native) }
+    return Metadata{ failure: errors.Failure{ kind: errors.linux(closed.failure.native), native: closed.failure.native } }
   }
   return info
 }

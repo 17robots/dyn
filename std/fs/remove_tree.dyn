@@ -53,10 +53,10 @@ pub fn remove_tree(path: []const u8, frames: []RemovalFrame, scratch: []u8) Resu
   }
   for depth > 0 {
     item := directory_next(&frames[depth - 1].directory)
-    if item.error != 0 {
-      return Result{ failure: io.Failure{ kind: errors.linux(item.error), native: item.error } }
+    if item.failure.native != 0 {
+      return Result{ failure: io.Failure{ kind: errors.linux(item.failure.native), native: item.failure.native } }
     }
-    if !item.ok {
+    if !item.found {
       frame := &frames[depth - 1]
       removed_directory := unlink_at(frame.parent, frame.name, true)
       if removed_directory != 0 {

@@ -6,9 +6,8 @@ pub fn read_state(descriptor: isize) Read {
   result: Read
   code := #syscall(16, descriptor, 21505, &result.value.bytes[0])
   if code < 0 {
-    return Read{ kind: errors.linux(code), error: code }
+    return Read{ failure: errors.Failure{ kind: errors.linux(code), native: code } }
   }
-  result.ok = true
   return result
 }
 
@@ -39,9 +38,9 @@ pub fn size(descriptor: isize) Size {
   bytes: [8]u8 = []
   code := #syscall(16, descriptor, 21523, &bytes[0])
   if code < 0 {
-    return Size{ kind: errors.linux(code), error: code }
+    return Size{ failure: errors.Failure{ kind: errors.linux(code), native: code } }
   }
   rows := #cast(usize, bytes[0]) + #cast(usize, bytes[1]) * 256
   columns := #cast(usize, bytes[2]) + #cast(usize, bytes[3]) * 256
-  return Size{ columns: columns, rows: rows, ok: true }
+  return Size{ columns: columns, rows: rows }
 }

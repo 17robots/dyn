@@ -24,7 +24,8 @@ libc = Path(libc_query).resolve()
 if libc_query == 'libc.so.6' or not libc.is_file():
     raise RuntimeError('C compiler did not resolve libc.so.6: ' + libc_query)
 
-SOURCE = r'''use "std/dynlib" dl
+SOURCE = r'''use "std/parse" parse
+use "std/dynlib" dl
 use "std/io" errors
 #link("c")
 fn check(ok: bool) { if !ok { #panic("dynlib results") } }
@@ -54,7 +55,7 @@ fn main() {
   check(missing.failure.kind != errors.Kind.Ok && missing.value == nil && missing.failure.kind == errors.Kind.System && missing.failure.native == 0 && missing.message != nil)
   // Inspect borrowed loader storage before any subsequent loader operation.
   description := dl.error_bytes(missing.message, 8192)
-  check(description.ok && #len(description.value) > 0)
+  check(description.failure.kind == parse.Kind.Ok && #len(description.value) > 0)
   library := dl.open(LIBC_PATH, dl.Now | dl.Local)
   check(library.failure.kind == errors.Kind.Ok && library.value != nil && library.failure.kind == errors.Kind.Ok && library.failure.native == 0 && library.message == nil)
   invalid_symbol(dl.symbol(library.value, "bad\x00symbol"), errors.Kind.InvalidInput)
@@ -62,7 +63,7 @@ fn main() {
   absent := dl.symbol(library.value, "dyn_regression_nonexistent_symbol_17robots")
   check(absent.failure.kind != errors.Kind.Ok && absent.value == nil && absent.failure.kind == errors.Kind.System && absent.failure.native == 0 && absent.message != nil)
   borrowed := dl.error_bytes(absent.message, 8192)
-  check(borrowed.ok && #len(borrowed.value) > 0)
+  check(borrowed.failure.kind == parse.Kind.Ok && #len(borrowed.value) > 0)
   found := dl.symbol(library.value, "malloc")
   check(found.failure.kind == errors.Kind.Ok && found.value != nil && found.failure.kind == errors.Kind.Ok && found.failure.native == 0 && found.message == nil)
   closed := dl.close(&library.value)
@@ -83,7 +84,8 @@ ORACLE = r'''
 '''
 
 # Only this child process preloads the shim; production std sources are untouched.
-CLOSE_SOURCE = r'''use "std/dynlib" dl
+CLOSE_SOURCE = r'''use "std/parse" parse
+use "std/dynlib" dl
 use "std/io" errors
 #link("c")
 fn check(ok: bool) { if !ok { #panic("dynlib close failure") } }
@@ -94,7 +96,7 @@ fn main() {
   failed := dl.close(&library.value)
   check(failed.failure.kind != errors.Kind.Ok && failed.failure.kind == errors.Kind.System && failed.failure.native == 0 && failed.message != nil && library.value == owner)
   message := dl.error_bytes(failed.message, 4096)
-  check(message.ok && #len(message.value) > 0)
+  check(message.failure.kind == parse.Kind.Ok && #len(message.value) > 0)
   closed := dl.close(&library.value)
   check(closed.failure.kind == errors.Kind.Ok && closed.failure.native == 0 && closed.message == nil && library.value == nil)
   twice := dl.close(&library.value)

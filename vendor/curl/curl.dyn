@@ -1,3 +1,4 @@
+use "std/parse" parse
 use "std/c"
 use "std/mem"
 #link("curl")
@@ -43,7 +44,7 @@ pub fn get_into(url: []const u8, url_buffer: []u8, destination: []u8, timeout_ms
     return Result{ code: -1 }
   }
   encoded := c.string_into(url_buffer, url)
-  if !encoded.ok {
+  if encoded.failure.kind != parse.Kind.Ok {
     return Result{ code: -1 }
   }
   easy := native_easy_init()

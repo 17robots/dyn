@@ -1,3 +1,4 @@
+use "std/parse" parse
 #target(kernel: linux)
 use "std/c"
 use "std/mem"
@@ -82,7 +83,7 @@ pub fn server_context_create_owned(certificate: []const u8, key: []const u8,
   certificate_buffer: []u8, key_buffer: []u8) ContextResult {
   certificate_path := c.string_into(certificate_buffer, certificate)
   key_path := c.string_into(key_buffer, key)
-  if !certificate_path.ok || !key_path.ok {
+  if certificate_path.failure.kind != parse.Kind.Ok || key_path.failure.kind != parse.Kind.Ok {
     return ContextResult{ error: ErrorKind.InvalidArgument }
   }
   return server_context_from_paths(certificate_path.value, key_path.value)
@@ -113,7 +114,7 @@ pub fn server_context_create(arena: *mem.Arena, certificate: []const u8, key: []
   defer mem.arena_rewind(arena, mark)
   certificate_path := c.string_from_bytes(arena, certificate)
   key_path := c.string_from_bytes(arena, key)
-  if !certificate_path.ok || !key_path.ok {
+  if certificate_path.failure.kind != parse.Kind.Ok || key_path.failure.kind != parse.Kind.Ok {
     return ContextResult{ error: ErrorKind.InvalidArgument }
   }
   return server_context_from_paths(certificate_path.value, key_path.value)
@@ -202,7 +203,7 @@ pub fn connection_create_owned(context: Context, descriptor: i32, hostname: []co
     return ConnectionResult{ value: nil, error: ErrorKind.InvalidArgument, provider_code: 0, ok: false }
   }
   name := c.string_into(name_buffer, hostname)
-  if !name.ok {
+  if name.failure.kind != parse.Kind.Ok {
     return ConnectionResult{ value: nil, error: ErrorKind.InvalidArgument, provider_code: 0, ok: false }
   }
   return connection_from_name(context, descriptor, name.value, #len(hostname))
@@ -237,7 +238,7 @@ pub fn connection_create(arena: *mem.Arena, context: Context, descriptor: i32, h
   mark := mem.arena_mark(arena)
   defer mem.arena_rewind(arena, mark)
   name := c.string_from_bytes(arena, hostname)
-  if !name.ok {
+  if name.failure.kind != parse.Kind.Ok {
     return ConnectionResult{ error: ErrorKind.InvalidArgument }
   }
   return connection_from_name(context, descriptor, name.value, #len(hostname))

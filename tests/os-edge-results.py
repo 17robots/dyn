@@ -15,24 +15,24 @@ use "std/bytes" bytes
 fn require(ok: bool) { if !ok { #panic("OS edge result contract") } }
 fn main() {
  r := terminal.read_state(-1)
- require(!r.ok && r.error == -9 && r.kind == errors.Kind.InvalidState)
+ require(r.failure.kind != errors.Kind.Ok && r.failure.native == -9 && r.failure.kind == errors.Kind.InvalidState)
  s := terminal.size(-1)
- require(!s.ok && s.error == -9 && s.kind == errors.Kind.InvalidState && s.rows == 0 && s.columns == 0)
+ require(s.failure.kind != errors.Kind.Ok && s.failure.native == -9 && s.failure.kind == errors.Kind.InvalidState && s.rows == 0 && s.columns == 0)
  saved := terminal.State{}
  restored := terminal.restore(-1, &saved)
  require(restored.failure.kind != errors.Kind.Ok && restored.failure.native == -9 && restored.failure.kind == errors.Kind.InvalidState)
  restored = terminal.restore(-1, nil)
  require(restored.failure.kind != errors.Kind.Ok && restored.failure.native == 0 && restored.failure.kind == errors.Kind.InvalidInput)
  r = terminal.raw(-1)
- require(!r.ok && r.error == -9 && r.kind == errors.Kind.InvalidState)
+ require(r.failure.kind != errors.Kind.Ok && r.failure.native == -9 && r.failure.kind == errors.Kind.InvalidState)
  require(!terminal.is_attached(-1))
  r = terminal.read_state(PTY_DESCRIPTOR)
- require(r.ok && r.error == 0 && r.kind == errors.Kind.Ok)
+ require(r.failure.kind == errors.Kind.Ok && r.failure.native == 0 && r.failure.kind == errors.Kind.Ok)
  changed := terminal.raw(PTY_DESCRIPTOR)
- require(changed.ok && changed.error == 0 && changed.kind == errors.Kind.Ok)
+ require(changed.failure.kind == errors.Kind.Ok && changed.failure.native == 0 && changed.failure.kind == errors.Kind.Ok)
  require(terminal.restore(PTY_DESCRIPTOR, &changed.value).failure.kind == errors.Kind.Ok)
  after := terminal.read_state(PTY_DESCRIPTOR)
- require(after.ok && bytes.equal(r.value.bytes[..], after.value.bytes[..]))
+ require(after.failure.kind == errors.Kind.Ok && bytes.equal(r.value.bytes[..], after.value.bytes[..]))
  output: [32]u8 = []
  directory := cap.Directory{descriptor: DIRECTORY_DESCRIPTOR, active: true}
  read := cap.read(&directory, "ok", output[..])

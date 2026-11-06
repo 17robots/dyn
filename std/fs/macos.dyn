@@ -1,3 +1,4 @@
+use "std/parse" parse
 #target(kernel: darwin)
 use "std/io" io
 use "std/mem" mem
@@ -8,7 +9,7 @@ fn terminated(path: []const u8, storage: []u8) *const u8 {
     return nil
   }
   value := cstrings.string_into(storage, path)
-  if !value.ok {
+  if value.failure.kind != parse.Kind.Ok {
     return nil
   }
   return value.value

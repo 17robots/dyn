@@ -22,19 +22,19 @@ fn check(ok: bool) {
 
 fn main() {
   zero: signal.Watch
-  check(signal.poll(&zero).kind == errors.Kind.InvalidState)
+  check(signal.poll(&zero).failure.kind == errors.Kind.InvalidState)
   check(signal.close(&zero).failure.kind == io.Kind.Ok)
   check(signal.watch(signal.Set{}).failure.kind == errors.Kind.InvalidInput)
   opened := signal.watch(signal.Set{ interrupt: true, terminate: true, hangup: HANGUP })
   check(opened.failure.kind == io.Kind.Ok)
   state := opened.value
   first := signal.poll(&state)
-  check(first.ok && first.value == signal.Kind.None)
+  check(first.found && first.value == signal.Kind.None)
   if WAIT {
     _ = io.println(io.stdout(), "ready")
     for i in 0..3 {
       next := signal.wait(&state)
-      check(next.ok)
+      check(next.found)
       _ = io.println(io.stdout(), "{}", #cast(u32, next.value))
     }
   }

@@ -75,13 +75,13 @@ fn platform_next(state: *Watch, block: bool) Next {
       else if event.ident == 15 {
         kind = Kind.Terminate
       }
-      return Next{ value: kind, ok: true }
+      return Next{ value: kind, found: true }
     }
     if code == 0 && !block {
-      return Next{ ok: true }
+      return Next{ found: true }
     }
     if code < 0 && code != -4 {
-      return Next{ kind: errors.darwin(code), error: code }
+      return Next{ failure: errors.Failure{ kind: errors.darwin(code), native: code } }
     }
   }
   return Next{}

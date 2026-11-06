@@ -10,7 +10,7 @@ DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 macos = (ROOT / 'std/process/macos.dyn').read_text()
 process = (ROOT / 'std/process/process.dyn').read_text()
 # Compile the production conversion/setup bodies, replacing only OS entry points.
-adapter = ('use "std/mem" mem\nuse "std/c" c\nuse "std/bytes" bytes\n'
+adapter = ('use "std/mem" mem\nuse "std/c" c\nuse "std/parse" parse\nuse "std/bytes" bytes\n'
            'use "std/io" error_kinds\nuse "std/io" io\n'
            + process[process.index('pub struct Redirect'):process.index('pub struct ExitResult')]
            + macos[macos.index('struct CString'):macos.index('fn wait_native')])
@@ -42,7 +42,7 @@ fn main() {
   }
   text := c_string(arena, "café-😀")
   parsed := c.bytes_from_string(text, 16)
-  if !parsed.ok || !bytes.equal(parsed.value, "café-😀") { #panic("CString bytes") }
+  if parsed.failure.kind != parse.Kind.Ok || !bytes.equal(parsed.value, "café-😀") { #panic("CString bytes") }
   before_invalid := mem.arena_mark(arena)
   invalid: [3]u8 = ['a', 0, 'b']
   if c_string(arena, invalid[..]) != nil || mem.arena_mark(arena) != before_invalid {
@@ -53,7 +53,7 @@ fn main() {
   if vector == nil || #slice(vector, 4)[3].value != nil { #panic("vector sentinel") }
   for at in 0..3 {
     item := c.bytes_from_string(#slice(vector, 4)[at].value, 32)
-    if !item.ok || !bytes.equal(item.value, arguments[at]) { #panic("vector bytes") }
+    if item.failure.kind != parse.Kind.Ok || !bytes.equal(item.value, arguments[at]) { #panic("vector bytes") }
   }
   before_spawn := mem.arena_mark(arena)
   environment: [1][]const u8 = ["KEY=value"]

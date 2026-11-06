@@ -224,7 +224,7 @@ pub fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) ReadAllR
   // change length while being read, and pseudo files that report zero.
   hint: usize = 0
   info := file_metadata(&opened.value)
-  if info.ok && info.size != 0 && info.size <= #cast(u64, maximum) {
+  if info.failure.kind == stream.Kind.Ok && info.size != 0 && info.size <= #cast(u64, maximum) {
     hint = #cast(usize, info.size)
   }
   for {

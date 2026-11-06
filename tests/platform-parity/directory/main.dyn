@@ -32,8 +32,8 @@ fn main() {
   count := 0
   for true {
     entry := fs.directory_next(&directory)
-    if !entry.ok {
-      check(entry.error == 0, "listing error")
+    if !entry.found {
+      check(entry.failure.native == 0, "listing error")
       break
     }
     count += 1
@@ -52,15 +52,15 @@ fn main() {
   empty := fs.open_directory("listing/inner", storage[..])
   check(empty.failure.kind == io.Kind.Ok, "open empty")
   inner := empty.value
-  check(!fs.directory_next(&inner).ok, "empty directory")
+  check(!fs.directory_next(&inner).found, "empty directory")
   _ = fs.close_directory(&inner)
   check(fs.open_directory("missing-directory", storage[..]).failure.kind != io.Kind.Ok, "missing")
   info := fs.metadata("listing/alpha.txt")
-  check(info.ok && info.size == 1 && info.mode & 0o170000 == 0o100000, "file metadata")
+  check(info.failure.kind == io.Kind.Ok && info.size == 1 && info.mode & 0o170000 == 0o100000, "file metadata")
   folder := fs.metadata("listing/inner")
-  check(folder.ok && folder.mode & 0o170000 == 0o040000, "directory metadata")
+  check(folder.failure.kind == io.Kind.Ok && folder.mode & 0o170000 == 0o040000, "directory metadata")
   check(fs.rename("listing/alpha.txt", "listing/renamed.txt").failure.kind == io.Kind.Ok, "rename")
-  check(!fs.metadata("listing/alpha.txt").ok && fs.metadata("listing/renamed.txt").ok, "renamed")
+  check(fs.metadata("listing/alpha.txt").failure.kind != io.Kind.Ok && fs.metadata("listing/renamed.txt").failure.kind == io.Kind.Ok, "renamed")
   clean()
-  check(!fs.metadata("listing").ok, "cleaned up")
+  check(fs.metadata("listing").failure.kind != io.Kind.Ok, "cleaned up")
 }

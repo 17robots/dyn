@@ -1,3 +1,4 @@
+use "std/parse" parse
 #target(kernel: darwin)
 use "std/io" errors
 use "std/mem" mem
@@ -64,7 +65,7 @@ extern fn queue_release "dispatch_release"(queue: rawptr)
 fn symbol(handle: rawptr, name: []const u8) rawptr {
   backing: [128 + mem.ArenaBufferOverhead]u8 = []
   value := c.string_into(backing[..], name)
-  if handle == nil || !value.ok {
+  if handle == nil || value.failure.kind != parse.Kind.Ok {
     return nil
   }
   return library_symbol(handle, value.value)
@@ -72,7 +73,7 @@ fn symbol(handle: rawptr, name: []const u8) rawptr {
 fn library(path: []const u8) rawptr {
   backing: [256 + mem.ArenaBufferOverhead]u8 = []
   value := c.string_into(backing[..], path)
-  if !value.ok {
+  if value.failure.kind != parse.Kind.Ok {
     return nil
   }
   return library_open(value.value, 2)
@@ -191,7 +192,7 @@ fn callback(stream: rawptr, info: rawptr, count: usize, paths: rawptr, flags: *c
       sync.store_u32(&slot.owner.lost, 1)
     }
     native := c.bytes_from_string(names[i], 1024)
-    if !native.ok || !utf8.valid(native.value) {
+    if native.failure.kind != parse.Kind.Ok || !utf8.valid(native.value) {
       sync.store_u32(&slot.owner.lost, 1)
       continue
     }
@@ -261,7 +262,7 @@ pub fn add(watcher: *Watcher, path: []const u8, mask: u32) Result {
   }
   input: [1024 + mem.ArenaBufferOverhead]u8 = []
   terminated := c.string_into(input[..], path)
-  if !terminated.ok {
+  if terminated.failure.kind != parse.Kind.Ok {
     return failure(-22)
   }
   canonical: [1024]u8 = []
@@ -270,7 +271,7 @@ pub fn add(watcher: *Watcher, path: []const u8, mask: u32) Result {
     return failure(code)
   }
   rooted := c.bytes_from_string(&canonical[0], 1024)
-  if !rooted.ok || !utf8.valid(rooted.value) {
+  if rooted.failure.kind != parse.Kind.Ok || !utf8.valid(rooted.value) {
     return failure(-22)
   }
   // FSEvents watches trees; this adapter promises only direct directory children.

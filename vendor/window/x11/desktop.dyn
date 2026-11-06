@@ -1,3 +1,4 @@
+use "std/parse" parse
 #target(kernel: linux)
 use "std/ui/box" box
 use "std/math" math
@@ -489,7 +490,7 @@ fn read_scale(display: rawptr) f32 {
     return 1.0
   }
   found := c.bytes_from_string(raw, 1048576)
-  if !found.ok {
+  if found.failure.kind != parse.Kind.Ok {
     return 1.0
   }
   text := found.value
@@ -1145,7 +1146,7 @@ pub fn set_title(window: *Window, title: []const u8) Result {
   }
   storage: [4096]u8 = []
   name := c.string_into(storage[..], title)
-  if !name.ok {
+  if name.failure.kind != parse.Kind.Ok {
     return Result{kind:errors.Kind.InvalidInput}
   }
   _ = store_name(window.display, window.handle, name.value)

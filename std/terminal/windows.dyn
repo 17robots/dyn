@@ -47,9 +47,9 @@ pub fn read_state(descriptor: isize) Read {
   mode: u32 = 0
   if get_mode(handle_of(descriptor), &mode) == 0 {
     failed := failure()
-    return Read{ kind: failed.failure.kind, error: failed.failure.native }
+    return Read{ failure: errors.Failure{ kind: failed.failure.kind, native: failed.failure.native } }
   }
-  result := Read{ ok: true }
+  result := Read{}
   set_mode_bytes(&result.value, mode)
   return result
 }
@@ -88,7 +88,7 @@ pub fn size(descriptor: isize) Size {
   info: [22]u8 = []
   if buffer_info(handle, &info[0]) == 0 {
     failed := failure()
-    return Size{ kind: failed.failure.kind, error: failed.failure.native }
+    return Size{ failure: errors.Failure{ kind: failed.failure.kind, native: failed.failure.native } }
   }
   left := #cast(i16, #cast(u16, info[10]) | #cast(u16, info[11]) << 8)
   top := #cast(i16, #cast(u16, info[12]) | #cast(u16, info[13]) << 8)
@@ -96,5 +96,5 @@ pub fn size(descriptor: isize) Size {
   bottom := #cast(i16, #cast(u16, info[16]) | #cast(u16, info[17]) << 8)
   columns := #cast(usize, right - left + 1)
   rows := #cast(usize, bottom - top + 1)
-  return Size{ columns: columns, rows: rows, ok: true }
+  return Size{ columns: columns, rows: rows }
 }

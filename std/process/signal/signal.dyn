@@ -16,7 +16,7 @@ pub struct Set { interrupt: bool, terminate: bool, hangup: bool }
 // Windows event handle, for use with an event loop.
 pub struct Watch { handle: isize, set: Set, active: bool }
 pub struct WatchResult { value: Watch, failure: errors.Failure }
-pub struct Next { value: Kind, kind: errors.Kind, error: isize, ok: bool }
+pub struct Next { value: Kind, found: bool, failure: errors.Failure }
 pub struct Result { failure: errors.Failure }
 
 pub fn watch(set: Set) WatchResult {
@@ -30,7 +30,7 @@ pub fn watch(set: Set) WatchResult {
 // pending.
 pub fn poll(state: *Watch) Next {
   if state == nil || !state.active {
-    return Next{ kind: errors.Kind.InvalidState }
+    return Next{ failure: errors.Failure{ kind: errors.Kind.InvalidState } }
   }
   return platform_next(state, false)
 }
@@ -38,7 +38,7 @@ pub fn poll(state: *Watch) Next {
 // Blocks until a watched signal arrives.
 pub fn wait(state: *Watch) Next {
   if state == nil || !state.active {
-    return Next{ kind: errors.Kind.InvalidState }
+    return Next{ failure: errors.Failure{ kind: errors.Kind.InvalidState } }
   }
   return platform_next(state, true)
 }
