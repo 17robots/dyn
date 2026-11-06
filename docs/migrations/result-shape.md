@@ -48,5 +48,11 @@ can stop for more input without failing.
 `std/os` and `std/mem` keep `ok` and `error`. They sit below `std/io`, and
 `std/os` is the raw system layer.
 
+`close` returns nothing and can be called twice: `fs.close`, `net.close`,
+`net.connection_close`, `net.listener_close`, `http.close`, `watch.close`,
+`event.close`, `signal.close`, `fs.close_directory` and `process.close_pipe`.
+Call `sync` first when a write must be durable. `dynlib.close` still returns a
+failure, because `dlclose` can leave a library loaded.
+
 The compiler names the type and the old field in each error
 (`Result has no field 'ok'`).

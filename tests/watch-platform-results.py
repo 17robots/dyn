@@ -55,7 +55,7 @@ fn main() {
  mock_code = 5
  repeated := next(&state)
  require(repeated.failure.native == 0 && repeated.failure.kind == errors.Kind.System && mock_reads == reads)
- require(close(&state).failure.kind == errors.Kind.Ok)
+ close(&state)
  require(next(&state).failure.native == 0)
 }
 '''
@@ -78,14 +78,16 @@ fn require(ok: bool) { if !ok { #panic("macos mock") } }
 fn main() {
  owner := mem.arena_create(0)
  live := Watcher{arena: owner, state: mem.push(State, owner)}
- require(close(&live).failure.kind == errors.Kind.Ok)
+ close(&live)
  require(live.arena == nil && live.state == nil)
- require(close(&live).failure.kind == errors.Kind.Ok)
+ close(&live)
  partial := Watcher{arena: mem.arena_create(0)}
- require(close(&partial).failure.kind == errors.Kind.Ok && partial.arena == nil)
- require(close(&partial).failure.kind == errors.Kind.Ok)
+ close(&partial)
+ require(partial.arena == nil)
+ close(&partial)
  empty := Watcher{}
- require(close(&empty).failure.kind == errors.Kind.Ok && close(&empty).failure.kind == errors.Kind.Ok)
+ close(&empty)
+ close(&empty)
  backing: [272]u8 = []
  opened := open(backing[..])
  require(opened.failure.kind != errors.Kind.Ok && opened.failure.native == -95 && opened.failure.kind == errors.Kind.Unsupported)

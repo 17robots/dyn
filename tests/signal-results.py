@@ -23,7 +23,7 @@ fn check(ok: bool) {
 fn main() {
   zero: signal.Watch
   check(signal.poll(&zero).failure.kind == errors.Kind.InvalidState)
-  check(signal.close(&zero).failure.kind == io.Kind.Ok)
+  signal.close(&zero)
   check(signal.watch(signal.Set{}).failure.kind == errors.Kind.InvalidInput)
   opened := signal.watch(signal.Set{ interrupt: true, terminate: true, hangup: HANGUP })
   check(opened.failure.kind == io.Kind.Ok)
@@ -38,7 +38,8 @@ fn main() {
       _ = io.println(io.stdout(), "{}", #cast(u32, next.value))
     }
   }
-  check(signal.close(&state).failure.kind == io.Kind.Ok && !state.active)
+  signal.close(&state)
+  check(!state.active)
   _ = io.println(io.stdout(), "closed")
 }
 '''

@@ -18,7 +18,7 @@ fn main() {
   next := watch.next(&state)
   require(next.failure.kind != errors.Kind.Ok && next.status == first.status && next.failure.native == first.failure.native && next.failure.kind == first.failure.kind)
  }
- require(watch.close(&state).failure.kind == errors.Kind.Ok)
+ watch.close(&state)
  again := watch.next(&state)
  require(again.failure.kind != errors.Kind.Ok && again.failure.native == first.failure.native && again.failure.kind == first.failure.kind)
 }

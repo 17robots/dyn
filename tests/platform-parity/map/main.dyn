@@ -26,7 +26,7 @@ fn main() {
   mapping := fs.map(&file)
   check(mapping.failure.kind == errors.Kind.Ok && bytes.equal(mapping.value, content[..]))
   check(fs.seek(&file, 0, 1).value == 3)
-  check(fs.close(&file).failure.kind == errors.Kind.Ok)
+  fs.close(&file)
   // The view stays valid after its file closes.
   check(mapping.value[4999] == content[4999])
   check(fs.unmap(&mapping).failure.kind == errors.Kind.Ok && #len(mapping.value) == 0 && mapping.failure.kind == errors.Kind.Ok)
@@ -37,5 +37,5 @@ fn main() {
   empty := fs.map(&empty_handle)
   check(empty.failure.kind == errors.Kind.Ok && #len(empty.value) == 0)
   check(fs.unmap(&empty).failure.kind == errors.Kind.Ok)
-  check(fs.close(&empty_handle).failure.kind == errors.Kind.Ok)
+  fs.close(&empty_handle)
 }

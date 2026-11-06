@@ -32,14 +32,15 @@ fn await_event(state: *watch.Watcher, id: i32, name: []const u8, mask: u32, rena
 fn main() {
   watch.audit_callbacks()
   empty := watch.Watcher{}
-  require(watch.close(&empty).failure.kind == io.Kind.Ok,"default close")
+  watch.close(&empty)
   require(watch.next(&empty).status == watch.Status.Error,"default next")
   storage: [1024]u8 = []
   failed := watch.open(storage[..271])
-  require(failed.failure.kind != io.Kind.Ok && watch.close(&failed.value).failure.kind == io.Kind.Ok,"short buffer")
+  watch.close(&failed.value)
+  require(failed.failure.kind != io.Kind.Ok,"short buffer")
   opened := watch.open(storage[..])
   require(opened.failure.kind == io.Kind.Ok,"FSEvents open")
-  defer { _ = watch.close(&opened.value) }
+  defer { watch.close(&opened.value) }
   require(watch.add(&opened.value,"missing-directory",watch.Changes).failure.kind != io.Kind.Ok,"missing path")
   require(watch.add(&opened.value,"existing",watch.Changes).failure.kind != io.Kind.Ok,"file path")
   added := watch.add(&opened.value,".",watch.Changes)
@@ -75,9 +76,10 @@ fn main() {
     require(pending.failure.kind == io.Kind.Ok,"pending open")
     require(watch.add(&pending.value,".",watch.Changes).failure.kind == io.Kind.Ok,"pending add")
     _ = time.sleep(time.Millisecond*5)
-    require(watch.close(&pending.value).failure.kind == io.Kind.Ok && watch.close(&pending.value).failure.kind == io.Kind.Ok,"pending close")
+    watch.close(&pending.value)
+    watch.close(&pending.value)
   }
-  require(watch.close(&opened.value).failure.kind == io.Kind.Ok,"final close")
+  watch.close(&opened.value)
   stage("passed")
 }
 '''

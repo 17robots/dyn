@@ -41,7 +41,7 @@ fn worker_main(context: rawptr) isize {
     socket := accepted.value
     sync.lock(&worker.control)
     if sync.load_u32(&worker.stopping) != 0 {
-      _ = http.close(&socket)
+      http.close(&socket)
       sync.unlock(&worker.control)
       return 0
     }
@@ -51,10 +51,10 @@ fn worker_main(context: rawptr) isize {
     handled := http.serve_connection_context(&socket, worker.storage, worker.handler, worker.context)
     // Serialize shutdown and close so stop cannot act on a recycled descriptor.
     sync.lock(&worker.control)
-    close_error := http.close(&socket)
+    http.close(&socket)
     worker.active_socket = false
     sync.unlock(&worker.control)
-    if handled.failure.kind != errors.Kind.Ok || close_error.failure.kind != errors.Kind.Ok {
+    if handled.failure.kind != errors.Kind.Ok {
       worker.request_errors += 1
     }
   }

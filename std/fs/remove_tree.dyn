@@ -48,7 +48,7 @@ pub fn remove_tree(path: []const u8, frames: []RemovalFrame, scratch: []u8) Resu
   defer {
     for depth > 0 {
       depth -= 1
-      _ = close_directory(&frames[depth].directory)
+      close_directory(&frames[depth].directory)
     }
   }
   for depth > 0 {
@@ -62,7 +62,7 @@ pub fn remove_tree(path: []const u8, frames: []RemovalFrame, scratch: []u8) Resu
       if removed_directory != 0 {
         return Result{ failure: io.Failure{ kind: errors.linux(removed_directory), native: removed_directory } }
       }
-      _ = close_directory(&frame.directory)
+      close_directory(&frame.directory)
       depth -= 1
       continue
     }

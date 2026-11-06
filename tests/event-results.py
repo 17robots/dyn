@@ -38,7 +38,7 @@ fn main() {
   other := net.socket(net.AddressFamilyIpv4, net.SocketDatagram, 0)
   check(other.failure.kind == io.Kind.Ok)
   check(event.add(&queue, other.value, event.Readable, 1).failure.kind == errors.Kind.Capacity)
-  check(net.close(other.value).failure.kind == errors.Kind.Ok)
+  net.close(other.value)
   empty := event.wait(scratch, &queue, 5)
   check(empty.failure.kind == errors.Kind.Ok && #len(empty.value) == 0)
   check(net.send_to(descriptor, "x", 0, local.bytes[..local.length]).failure.kind == errors.Kind.Ok)
@@ -58,10 +58,11 @@ fn main() {
   ready = event.wait(scratch, &queue, 0)
   check(ready.failure.kind == errors.Kind.Ok && #len(ready.value) == 1 && ready.value[0].token == 7)
   check(event.remove(&queue, descriptor).failure.kind == errors.Kind.Ok)
-  check(event.close(&queue).failure.kind == errors.Kind.Ok && event.close(&queue).failure.kind == errors.Kind.Ok)
+  event.close(&queue)
+  event.close(&queue)
   check(event.wait(scratch, &queue, 0).failure.kind == errors.Kind.InvalidState)
   // The queue never closes registered descriptors.
-  check(net.close(descriptor).failure.kind == errors.Kind.Ok)
+  net.close(descriptor)
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-event-results-') as directory:
@@ -76,7 +77,7 @@ fn fault(arena: *mem.Arena, scratch: *mem.Arena) {
   check(failed.failure.kind != io.Kind.Ok && failed.failure.native != 0)
   again := event.wait(scratch, &queue, 0)
   check(again.failure.kind != io.Kind.Ok && again.failure.kind == failed.failure.kind && again.failure.native == failed.failure.native)
-  check(event.close(&queue).failure.kind == io.Kind.Ok)
+  event.close(&queue)
 }
 ''')
     (work / 'macos.dyn').write_text((work / 'posix.dyn').read_text().replace('kernel: linux', 'kernel: darwin'))

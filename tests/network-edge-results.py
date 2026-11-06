@@ -101,8 +101,7 @@ fn main() {
   ws_zero := ws.Result{}
   if ws_zero.failure.kind != errors.Kind.Ok || ws_zero.failure.native != 0 || ws_zero.offset != 0 { #panic("zero WS result") }
   connection := http.Connection{}
-  closed := http.close(&connection)
-  if closed.failure.kind == io.Kind.Ok || closed.failure.kind != errors.Kind.InvalidState || closed.failure.native != -9 || closed.offset != 0 { #panic("HTTP close result") }
+  http.close(&connection)
   routes: [1]http.Route = []
   router := http.router(routes[..], nil)
   route := http.route(&router, "GET", "/", nil)

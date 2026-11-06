@@ -54,18 +54,14 @@ pub fn create_exclusive(path: []const u8) FileResult {
 fn failure(code: isize) Result {
   return Result{ failure: stream.Failure{ kind: native_kind(code), native: code } }
 }
-pub fn close(file: *File) Result {
+pub fn close(file: *File) {
   if !is_open(file) || !file.owned {
-    return Result{ failure: stream.Failure{ kind: errors.Kind.InvalidState } }
+    return
   }
   handle := file.descriptor
   // Never retry close on a possibly reused native handle, including after EINTR.
   file.* = File{}
-  code := native_close(handle)
-  if code < 0 {
-    return failure(code)
-  }
-  return Result{}
+  _ = native_close(handle)
 }
 // Destination borrows caller storage. Zero bytes on a successful nonempty read means EOF.
 pub fn read(file: *File, destination: []u8) Result {
@@ -334,11 +330,7 @@ pub fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) ReadAllR
       break
     }
   }
-  closed := close(&opened.value)
-  if kind == errors.Kind.Ok && closed.failure.kind != stream.Kind.Ok {
-    error = closed.failure.native
-    kind = closed.failure.kind
-  }
+  close(&opened.value)
   if kind != errors.Kind.Ok {
     memory.arena_rewind(arena, mark)
     return ReadAllResult{ failure: stream.Failure{ kind: kind, native: error } }
@@ -355,13 +347,7 @@ pub fn write_all(path: []const u8, source: []const u8) Result {
     return Result{ failure: stream.Failure{ kind: created.failure.kind, native: created.failure.native } }
   }
   result := write(&created.value, source)
-  closed := close(&created.value)
-  if result.failure.kind != stream.Kind.Ok {
-    return result
-  }
-  if closed.failure.kind != stream.Kind.Ok {
-    return closed
-  }
+  close(&created.value)
   return result
 }
 

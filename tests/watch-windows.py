@@ -16,10 +16,11 @@ use "std/time" time
 fn require(value: bool) { if !value { #panic("Windows watch contract") } }
 fn main() {
   empty := watch.Watcher{}
-  require(watch.close(&empty).failure.kind == io.Kind.Ok)
+  watch.close(&empty)
   tiny: [1]u8 = []
   failed := watch.open(tiny[..])
-  require(failed.failure.kind != io.Kind.Ok && watch.close(&failed.value).failure.kind == io.Kind.Ok)
+  watch.close(&failed.value)
+  require(failed.failure.kind != io.Kind.Ok)
   scratch: [1024]u8 = []
   opened := watch.open(scratch[..])
   require(opened.failure.kind == io.Kind.Ok)
@@ -44,7 +45,8 @@ fn main() {
   require(replacement.failure.kind == io.Kind.Ok && replacement.value != ids[0])
   require(watch.remove(&capacity.value,ids[0]).failure.kind != io.Kind.Ok)
   // Closing all remaining idle watches must cancel pending native requests.
-  require(watch.close(&capacity.value).failure.kind == io.Kind.Ok && watch.close(&capacity.value).failure.kind == io.Kind.Ok)
+  watch.close(&capacity.value)
+  watch.close(&capacity.value)
   _ = io.println(io.stdout(),"READY")
   seen_first: u32 = 0
   seen_second: u32 = 0
@@ -72,10 +74,10 @@ fn main() {
   require(seen_second == (watch.Create | watch.Delete))
   require(watch.remove(&opened.value,first.value).failure.kind == io.Kind.Ok)
   require(watch.remove(&opened.value,second.value).failure.kind == io.Kind.Ok)
-  require(watch.close(&opened.value).failure.kind == io.Kind.Ok)
+  watch.close(&opened.value)
   reopened := watch.open(scratch[..])
   require(reopened.failure.kind == io.Kind.Ok && watch.add(&reopened.value,"one",watch.Changes).failure.kind == io.Kind.Ok)
-  require(watch.close(&reopened.value).failure.kind == io.Kind.Ok)
+  watch.close(&reopened.value)
   _ = io.println(io.stdout(),"DONE")
 }
 '''

@@ -22,7 +22,7 @@ fn worker(context: rawptr) isize {
   accepted := net.listener_accept(&shared.listener)
   if accepted.failure.kind != io.Kind.Ok { #panic("accept") }
   connection := accepted.value
-  defer { _ = net.connection_close(&connection) }
+  defer { net.connection_close(&connection) }
   buffer: [4]u8 = []
   at: usize = 0
   for at < 4 {
@@ -48,7 +48,7 @@ fn main() {
   opened := net.tcp_listen_ipv4(&address, 4)
   if opened.failure.kind != io.Kind.Ok { #panic("listen") }
   shared := Context{ listener: opened.value }
-  defer { _ = net.listener_close(&shared.listener) }
+  defer { net.listener_close(&shared.listener) }
   local := net.Address{}
   if net.local_address(shared.listener.descriptor, &local).failure.kind != io.Kind.Ok || local.length != 16 { #panic("local address") }
   port := (#cast(u16, local.bytes[2]) << 8) | #cast(u16, local.bytes[3])
@@ -77,11 +77,12 @@ fn main() {
     at += #cast(usize, part.value)
   }
   if !bytes.equal(buffer[..], "pong") { #panic("response") }
-  if net.connection_close(&connection).failure.kind != io.Kind.Ok || net.connection_close(&connection).failure.kind == io.Kind.Ok { #panic("connection close") }
+  net.connection_close(&connection)
+  net.connection_close(&connection)
   if thread.join(active).failure.kind != io.Kind.Ok || thread.join(active).failure.kind != io.Kind.Ok || thread.id(active) != 0 || sync.load_u64(&shared.count) != 10000 { #panic("join visibility") }
   udp := net.socket(net.AddressFamilyIpv4, net.SocketDatagram, 0)
   if udp.failure.kind != io.Kind.Ok { #panic("udp socket") }
-  defer { _ = net.close(udp.value) }
+  defer { net.close(udp.value) }
   address = net.ipv4(127, 0, 0, 1, 0)
   if net.bind_ipv4(udp.value, &address).failure.kind != io.Kind.Ok || net.local_address(udp.value, &local).failure.kind != io.Kind.Ok { #panic("udp bind") }
   if net.nonblocking(udp.value, true).failure.kind != io.Kind.Ok { #panic("nonblocking") }
@@ -98,7 +99,7 @@ fn main() {
   ipv6 := net.ipv6(loopback, 0, 0)
   v6 := net.socket(net.AddressFamilyIpv6, net.SocketDatagram, 0)
   if v6.failure.kind != io.Kind.Ok { #panic("ipv6 socket") }
-  defer { _ = net.close(v6.value) }
+  defer { net.close(v6.value) }
   if net.bind_ipv6(v6.value, &ipv6).failure.kind != io.Kind.Ok || net.local_address(v6.value, &local).failure.kind != io.Kind.Ok || local.length != 28 { #panic("ipv6 bind") }
 }
 '''

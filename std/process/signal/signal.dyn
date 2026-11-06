@@ -45,16 +45,15 @@ pub fn wait(state: *Watch) Next {
 
 // Restores default signal behavior and releases the handle. Closing a zero
 // Watch succeeds.
-pub fn close(state: *Watch) Result {
+pub fn close(state: *Watch) {
   if state == nil {
-    return Result{ failure: errors.Failure{ kind: errors.Kind.InvalidInput } }
+    return
   }
   if !state.active {
-    return Result{}
+    return
   }
   closed := platform_close(state)
   if closed.failure.kind == errors.Kind.Ok {
     state.* = Watch{}
   }
-  return closed
 }

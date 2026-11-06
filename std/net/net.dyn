@@ -64,8 +64,8 @@ pub fn socket(family: usize, kind: usize, protocol: usize) Result {
   return result(native_socket(family, kind, protocol))
 }
 
-pub fn close(descriptor: isize) Result {
-  return result(native_close(descriptor))
+pub fn close(descriptor: isize) {
+  _ = result(native_close(descriptor))
 }
 pub fn listen(descriptor: isize, backlog: usize) Result {
   return result(native_listen(descriptor, backlog))
@@ -187,18 +187,18 @@ fn stream_listen(family: usize, address: []const u8, backlog: usize) ListenerRes
   if family != AddressFamilyUnix {
     reused := reuse_address(descriptor, true)
     if reused.failure.kind != errors.Kind.Ok {
-      _ = close(descriptor)
+      close(descriptor)
       return ListenerResult{ value: Listener{}, failure: errors.Failure{ kind: reused.failure.kind, native: reused.failure.native } }
     }
   }
   bound := bind(descriptor, address)
   if bound.failure.kind != errors.Kind.Ok {
-    _ = close(descriptor)
+    close(descriptor)
     return ListenerResult{ value: Listener{}, failure: errors.Failure{ kind: bound.failure.kind, native: bound.failure.native } }
   }
   listening := listen(descriptor, backlog)
   if listening.failure.kind != errors.Kind.Ok {
-    _ = close(descriptor)
+    close(descriptor)
     return ListenerResult{ value: Listener{}, failure: errors.Failure{ kind: listening.failure.kind, native: listening.failure.native } }
   }
   return ListenerResult{ value: listener_from_descriptor(descriptor) }
@@ -212,7 +212,7 @@ fn stream_connect(family: usize, address: []const u8) ConnectionResult {
   descriptor := result_value(&opened)
   connected := connect(descriptor, address)
   if connected.failure.kind != errors.Kind.Ok {
-    _ = close(descriptor)
+    close(descriptor)
     return ConnectionResult{ value: Connection{}, failure: errors.Failure{ kind: connected.failure.kind, native: connected.failure.native } }
   }
   return ConnectionResult{ value: connection_from_descriptor(descriptor) }
@@ -303,24 +303,24 @@ pub fn connection_take(connection: *Connection) Connection {
   return result
 }
 
-pub fn listener_close(listener: *Listener) Result {
+pub fn listener_close(listener: *Listener) {
   if !listener.active {
-    return Result{ failure: errors.Failure{ kind: errors.Kind.InvalidState, native: -9 } }
+    return
   }
   descriptor := listener.descriptor
   // Never retry close: after a failure the descriptor may already be reused.
   listener.* = Listener{}
-  return close(descriptor)
+  close(descriptor)
 }
 
-pub fn connection_close(connection: *Connection) Result {
+pub fn connection_close(connection: *Connection) {
   if !connection.active {
-    return Result{ failure: errors.Failure{ kind: errors.Kind.InvalidState, native: -9 } }
+    return
   }
   descriptor := connection.descriptor
   // Never retry close: after a failure the descriptor may already be reused.
   connection.* = Connection{}
-  return close(descriptor)
+  close(descriptor)
 }
 
 pub fn connection_read(connection: *Connection, destination: []u8) Result {

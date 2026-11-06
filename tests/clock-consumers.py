@@ -53,7 +53,7 @@ fn main() {
   require(polled.failure.kind != errors.Kind.Ok && polled.failure.native == -1 && polled.failure.kind == errors.Kind.PermissionDenied)
   queue := net.event_queue()
   require(queue.failure.kind == errors.Kind.Ok)
-  defer _ = net.close(queue.value)
+  defer net.close(queue.value)
   notifications: [1]net.Event = []
   waited := net.event_wait(queue.value, notifications[..], 10)
   require(waited.failure.kind != errors.Kind.Ok && waited.failure.native == -1 && waited.failure.kind == errors.Kind.PermissionDenied)

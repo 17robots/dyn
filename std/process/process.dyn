@@ -92,8 +92,8 @@ pub fn terminate(child: *Child) Status {
 pub fn pipe() Pipe {
   return pipe_native()
 }
-pub fn close_pipe(handle: isize) Status {
-  return close_native(handle)
+pub fn close_pipe(handle: isize) {
+  _ = close_native(handle)
 }
 // The value of environment variable name, in arena. A missing variable is ok
 // with found false.

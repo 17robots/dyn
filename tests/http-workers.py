@@ -68,8 +68,8 @@ fn main() {
   workers.stop(pool[..])
   done := workers.join(pool[..])
   if done.failure.kind != errors.Kind.Ok || done.started != 2 || pool[0].thread != nil || pool[1].thread != nil { #panic("join") }
-  _ = net.connection_close(&connection)
-  _ = net.listener_close(&listener)
+  net.connection_close(&connection)
+  net.listener_close(&listener)
   workers.stop(pool[..])
   if workers.join(pool[..]).failure.kind != errors.Kind.Ok { #panic("repeated join") }
 }

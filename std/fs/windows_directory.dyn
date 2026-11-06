@@ -101,12 +101,11 @@ pub fn directory_next(directory: *Directory) DirectoryEntry {
   return DirectoryEntry{}
 }
 
-pub fn close_directory(directory: *Directory) Result {
+pub fn close_directory(directory: *Directory) {
   if directory.handle != nil {
     _ = find_close(directory.handle)
   }
   directory.* = Directory{}
-  return Result{}
 }
 
 extern fn win_make_directory "dyn_fs_make_directory"(path: *const u16, security: rawptr) i32

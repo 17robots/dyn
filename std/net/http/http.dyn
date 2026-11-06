@@ -19,9 +19,8 @@ pub fn accept(listener: *Listener) AcceptResult {
   accepted := network.listener_accept(listener)
   return AcceptResult{ value: accepted.value, failure: errors.Failure{ kind: accepted.failure.kind, native: accepted.failure.native } }
 }
-pub fn close(connection: *Connection) Result {
-  result := network.connection_close(connection)
-  return Result{ failure: errors.Failure{ kind: result.failure.kind, native: result.failure.native } }
+pub fn close(connection: *Connection) {
+  network.connection_close(connection)
 }
 
 pub enum Framing { None, Length, Chunked, Close }

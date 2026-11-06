@@ -342,12 +342,12 @@ pub fn remove(watcher: *Watcher, id: i32) Result {
   }
   return failure(-22)
 }
-pub fn close(watcher: *Watcher) Result {
+pub fn close(watcher: *Watcher) {
   state := watcher.state
   if state == nil {
     mem.arena_release(watcher.arena)
     watcher.arena = nil
-    return Result{}
+    return
   }
   for i in 0..16 {
     discard_slot(state, &state.slots[i])
@@ -358,7 +358,6 @@ pub fn close(watcher: *Watcher) Result {
   watcher.arena = nil
   watcher.state = nil
   watcher.rescan_required = false
-  return Result{}
 }
 // Terminal failures are sticky. Empty and rescan events remain protocol states.
 fn event_failure(watcher: *Watcher, code: isize) EventResult {

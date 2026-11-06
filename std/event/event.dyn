@@ -145,11 +145,10 @@ pub fn wait(arena: *mem.Arena, queue: *Queue, timeout_milliseconds: i32) WaitRes
   }
   return WaitResult{ failure: errors.Failure{ kind: errors.Kind.System } }
 }
-pub fn close(queue: *Queue) Result {
+pub fn close(queue: *Queue) {
   if !queue.active {
-    return Result{}
+    return
   }
   outcome := native_close(queue.handle)
   queue.* = Queue{}
-  return outcome
 }

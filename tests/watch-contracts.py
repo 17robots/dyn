@@ -26,7 +26,7 @@ fn require(ok: bool, message: []const u8) { if !ok { #panic(message) } }
 fn create(path: []const u8) {
   opened := fs.create(path)
   require(opened.failure.kind == io.Kind.Ok, "create file")
-  require(fs.close(&opened.value).failure.kind == io.Kind.Ok, "close file")
+  fs.close(&opened.value)
 }
 fn malformed(storage: []u8, used: usize) {
   // Buffered records are the public seam; this never reads or owns descriptor 0.
@@ -72,7 +72,7 @@ fn exhausted_open() {
     if opened.failure.kind != io.Kind.Ok {
       require(opened.failure.native < 0, "open failure error")
       require(!opened.value.active, "failed syscall owns stdin")
-      require(watch.close(&opened.value).failure.kind == io.Kind.Ok, "close syscall failure")
+      watch.close(&opened.value)
       require(#syscall(72,0,1,0) >= 0, "syscall failure closed stdin")
       failed = true
       break
@@ -80,13 +80,14 @@ fn exhausted_open() {
     states[count] = opened.value
     count += 1
   }
-  for i in 0..count { require(watch.close(&states[i]).failure.kind == io.Kind.Ok, "close exhausted watchers") }
+  for i in 0..count { watch.close(&states[i]) }
   require(failed, "descriptor limit did not force open failure")
 }
 fn main() {
   unopened := watch.Watcher{}
   require(!unopened.active, "default watcher is open")
-  require(watch.close(&unopened).failure.kind == io.Kind.Ok && watch.close(&unopened).failure.kind == io.Kind.Ok, "unopened close")
+  watch.close(&unopened)
+  watch.close(&unopened)
   require(#syscall(72,0,1,0) >= 0, "unopened close clobbered stdin")
   require(watch.add(&unopened,".",watch.Create).failure.kind != io.Kind.Ok, "add unopened")
   require(watch.remove(&unopened,0).failure.kind != io.Kind.Ok, "remove unopened")
@@ -95,13 +96,13 @@ fn main() {
   for length in 0..272 {
     failed := watch.open(storage[..length])
     require(failed.failure.kind != io.Kind.Ok && failed.failure.native == -28, "short backing")
-    require(watch.close(&failed.value).failure.kind == io.Kind.Ok, "close failed open")
+    watch.close(&failed.value)
     require(#syscall(72,0,1,0) >= 0, "failed open closed stdin")
   }
   opened := watch.open(storage[..])
   require(opened.failure.kind == io.Kind.Ok, "open watcher")
   state := opened.value
-  defer { _ = watch.close(&state) }
+  defer { watch.close(&state) }
   require(watch.next(&state).status == watch.Status.Empty, "empty nonblocking read")
   require(watch.add(&state,"",watch.Create).failure.kind != io.Kind.Ok, "empty path")
   invalid: [3]u8 = ['.',0,'x']
@@ -128,9 +129,9 @@ fn main() {
   create("fourth")
   require(watch.next(&state).status == watch.Status.Event, "re-added watch")
   descriptor := state.descriptor
-  require(watch.close(&state).failure.kind == io.Kind.Ok, "close watcher")
+  watch.close(&state)
   require(#syscall(72,descriptor,1,0) == -9, "descriptor leaked")
-  require(watch.close(&state).failure.kind == io.Kind.Ok, "repeated close")
+  watch.close(&state)
   require(watch.next(&state).status == watch.Status.Error, "read closed watcher")
   records()
   exhausted_open()

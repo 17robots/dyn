@@ -173,20 +173,19 @@ pub fn remove(state: *Watcher, watch: i32) Result {
   }
   return validation_failure(-22)
 }
-pub fn close(state: *Watcher) Result {
+pub fn close(state: *Watcher) {
   if state.native == nil {
-    return Result{}
+    return
   }
   for i in 0..16 {
     code := retire(&state.native.slots[i])
     if code != 0 {
-      return failure(code)
+      return
     }
   }
   mem.arena_release(state.owner)
   state.native = nil
   state.storage = state.storage[..0]
-  return Result{}
 }
 fn rescan(state: *Watcher, id: i32) EventResult {
   state.rescan_required = true

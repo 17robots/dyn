@@ -471,7 +471,7 @@ fn tcp(name: []const u8, server: *const network.Ipv4Address, packet: []u8,
   }
   descriptor := opened.value
   defer {
-    _ = network.close(descriptor)
+    network.close(descriptor)
   }
   mode := network.nonblocking(descriptor, true)
   if mode.failure.kind != errors.Kind.Ok {
@@ -543,7 +543,7 @@ fn exchange(name: []const u8, server: *const network.Ipv4Address, packet: []u8,
   }
   descriptor := opened.value
   defer {
-    _ = network.close(descriptor)
+    network.close(descriptor)
   }
   mode := network.nonblocking(descriptor, true)
   if mode.failure.kind != errors.Kind.Ok {

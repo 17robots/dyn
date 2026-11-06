@@ -20,25 +20,23 @@ CASES = {
 use "std/net"
 fn main() {
   connection := net.Connection{}
-  closed := net.connection_close(&connection)
+  net.connection_close(&connection)
   if #syscall(72, 0, 1, 0) < 0 { #panic("closed stdin") }
-  if closed.failure.kind == io.Kind.Ok { #panic("closed unopened connection") }
 }
 ''',
     'unopened-listener': '''use "std/io" io
 use "std/net"
 fn main() {
   listener := net.Listener{}
-  closed := net.listener_close(&listener)
+  net.listener_close(&listener)
   if #syscall(72, 0, 1, 0) < 0 { #panic("closed stdin") }
-  if closed.failure.kind == io.Kind.Ok { #panic("closed unopened listener") }
 }
 ''',
     'failed-connection': '''use "std/io" io
 use "std/net"
 fn check_failed(outcome: *net.ConnectionResult) {
   if outcome.failure.kind == io.Kind.Ok { #panic("connection unexpectedly succeeded") }
-  _ = net.connection_close(&outcome.value)
+  net.connection_close(&outcome.value)
   if #syscall(72, 0, 1, 0) < 0 { #panic("failed connection closed stdin") }
   if outcome.value.active { #panic("failed connection active") }
 }
@@ -64,8 +62,7 @@ fn main() {
   address.bytes[0] = 255
   outcome := net.tcp_listen_ipv4(&address, 1)
   if outcome.failure.kind == errors.Kind.Ok { #panic("listener unexpectedly succeeded") }
-  closed := net.listener_close(&outcome.value)
-  if closed.failure.kind == errors.Kind.Ok || closed.failure.kind != errors.Kind.InvalidState { #panic("closed kind") }
+  net.listener_close(&outcome.value)
   if #syscall(72, 0, 1, 0) < 0 { #panic("failed listener closed stdin") }
   if outcome.value.active { #panic("failed listener active") }
 }
@@ -76,7 +73,7 @@ fn main() {
   opened := net.socket(net.AddressFamilyIpv4, net.SocketDatagram, 0)
   if opened.failure.kind != io.Kind.Ok { #panic("socket") }
   descriptor := opened.value
-  defer { _ = net.close(descriptor) }
+  defer { net.close(descriptor) }
   address := net.ipv4(127, 0, 0, 1, 0)
   if net.bind_ipv4(descriptor, &address).failure.kind != io.Kind.Ok { #panic("bind") }
   bound := net.Address{}
@@ -161,7 +158,7 @@ fn main() {
   if descriptor < 0 { #panic("signal helper") }
   queue := net.event_queue()
   if queue.failure.kind != io.Kind.Ok { #panic("queue") }
-  defer { _ = net.close(queue.value) }
+  defer { net.close(queue.value) }
   if net.event_add(queue.value, #cast(isize, descriptor), net.EventReadable, 42).failure.kind != io.Kind.Ok { #panic("event add") }
   items: [1]net.PollDescriptor = [net.PollDescriptor{ descriptor: descriptor, events: net.PollReadable }]
   events: [1]net.Event = []

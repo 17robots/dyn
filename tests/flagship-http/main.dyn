@@ -128,7 +128,7 @@ fn main() {
   }
   concurrent.stop(workers)
   joined := concurrent.join(workers)
-  _ = net.listener_close(&listener)
+  net.listener_close(&listener)
   if joined.failure.kind != io.Kind.Ok {
     #panic("worker failed")
   }

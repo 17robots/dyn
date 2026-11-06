@@ -41,7 +41,8 @@ fn main() {
   exited := process.wait(&spawned.value, false)
   check(exited.failure.kind == io.Kind.Ok && exited.code == 0, "zero options inherit")
   idle: watch.Watcher
-  check(watch.close(&idle).failure.kind == io.Kind.Ok && !idle.active, "zero watcher closes nothing")
+  watch.close(&idle)
+  check(!idle.active, "zero watcher closes nothing")
 }
 '''
 if not sys.platform.startswith('linux'):

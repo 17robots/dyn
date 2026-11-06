@@ -4,8 +4,8 @@ fn native_open() net.Result {
   return net.event_queue()
 }
 fn native_close(handle: isize) Result {
-  outcome := net.close(handle)
-  return Result{ failure: io.Failure{ kind: outcome.failure.kind, native: outcome.failure.native } }
+  net.close(handle)
+  return Result{}
 }
 fn native_control(queue: *Queue, index: usize, entry: Entry) Result {
   old := queue.entries[index]

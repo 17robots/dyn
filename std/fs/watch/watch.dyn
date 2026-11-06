@@ -65,16 +65,16 @@ pub fn remove(state: *Watcher, watch: i32) Result {
   value := #syscall(255, state.descriptor, watch)
   return status(value)
 }
-pub fn close(state: *Watcher) Result {
+pub fn close(state: *Watcher) {
   if !state.active {
-    return Result{}
+    return
   }
   value := #syscall(3, state.descriptor)
   state.descriptor = 0
   state.active = false
   state.used = 0
   state.offset = 0
-  return status(value)
+  _ = status(value)
 }
 fn load(bytes: []const u8, at: usize) u32 {
   return #cast(u32, bytes[at]) | (#cast(u32, bytes[at+1]) << 8) | (#cast(u32, bytes[at+2]) << 16) | (#cast(u32, bytes[at+3]) << 24)

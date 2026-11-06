@@ -22,9 +22,9 @@ fn exchange(listener: *net.Listener, connection: *net.Connection) {
   buffer: [4]u8 = []
   got := net.connection_read(&peer, buffer[..])
   check(got.failure.kind == errors.Kind.Ok && got.value == 4 && buffer[0] == 112 && buffer[3] == 103)
-  check(net.connection_close(&peer).failure.kind == errors.Kind.Ok)
-  check(net.connection_close(connection).failure.kind == errors.Kind.Ok)
-  check(net.listener_close(listener).failure.kind == errors.Kind.Ok)
+  net.connection_close(&peer)
+  net.connection_close(connection)
+  net.listener_close(listener)
 }
 fn main() {
   check(net.unix("").length == 0 && net.unix("bad\x00path").length == 0)
@@ -83,7 +83,7 @@ fn main() {
   check(received.failure.kind == errors.Kind.Ok && received.value == 5 && data[0] == 103 && data[4] == 112)
   check(net.multicast_leave_ipv4(descriptor, group, interface).failure.kind == errors.Kind.Ok)
   check(net.multicast_loop_ipv4(descriptor, false).failure.kind == errors.Kind.Ok)
-  check(net.close(descriptor).failure.kind == errors.Kind.Ok)
+  net.close(descriptor)
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-net-extras-') as directory:

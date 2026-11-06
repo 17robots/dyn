@@ -266,7 +266,7 @@ fn visit(arena: *mem.Arena, scratch: *mem.Arena, walk: *Walk, directory: []const
       if file.failure.kind == io.Kind.Ok {
         handle := fs.take(&file.value)
         mapped := fs.map(&handle)
-        _ = fs.close(&handle)
+        fs.close(&handle)
         if mapped.failure.kind == io.Kind.Ok {
           entry_mark := mem.arena_mark(arena)
           entry := describe(arena, path, mapped.value)
@@ -283,7 +283,7 @@ fn visit(arena: *mem.Arena, scratch: *mem.Arena, walk: *Walk, directory: []const
     }
     mem.arena_rewind(scratch, mark)
   }
-  _ = fs.close_directory(&listing)
+  fs.close_directory(&listing)
 }
 
 // Walks explicit directories, at most limit entries and eight levels deep.
@@ -424,7 +424,7 @@ pub fn covering(entries: []const Entry, codepoint: u32, regular_only: bool) *con
     }
     handle := fs.take(&file.value)
     mapped := fs.map(&handle)
-    _ = fs.close(&handle)
+    fs.close(&handle)
     if mapped.failure.kind != io.Kind.Ok {
       continue
     }

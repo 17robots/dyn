@@ -48,12 +48,12 @@ fn main() {
     }
   }
   check(count == 3 && seen_alpha && seen_beta && seen_inner, "entries")
-  check(fs.close_directory(&directory).failure.kind == io.Kind.Ok, "close")
+  fs.close_directory(&directory)
   empty := fs.open_directory("listing/inner", storage[..])
   check(empty.failure.kind == io.Kind.Ok, "open empty")
   inner := empty.value
   check(!fs.directory_next(&inner).found, "empty directory")
-  _ = fs.close_directory(&inner)
+  fs.close_directory(&inner)
   check(fs.open_directory("missing-directory", storage[..]).failure.kind != io.Kind.Ok, "missing")
   info := fs.metadata("listing/alpha.txt")
   check(info.failure.kind == io.Kind.Ok && info.size == 1 && info.mode & 0o170000 == 0o100000, "file metadata")

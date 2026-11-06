@@ -65,10 +65,10 @@ pub fn directory_next(directory: *Directory) DirectoryEntry {
   return DirectoryEntry{}
 }
 
-pub fn close_directory(directory: *Directory) Result {
+pub fn close_directory(directory: *Directory) {
   directory.offset = 0
   directory.used = 0
-  return close(&directory.file)
+  close(&directory.file)
 }
 
 // Size, inode, device and the POSIX mode (type and permission bits).
