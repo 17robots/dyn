@@ -66,7 +66,7 @@ PANICS = {
 }
 ERRORS = {
   'enum A { X = 1, Y }': 'no explicit values',
-  'enum Shape { Circle: f32, Box }': 'no payloads',
+  'enum Shape { Circle: f32, Box }': 'first enum variant has no payload',
   'fn f() u8 {\n  return #wrap(1)\n}': 'each statement',
   'const K: u8 = 255 + 1': 'overflows',
 }

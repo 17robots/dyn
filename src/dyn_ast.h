@@ -154,6 +154,7 @@ typedef struct {
 } DynAstStruct;
 typedef struct {
   DynSpan name;
+  DynType payload_type;
   /* Two's complement for signed tag types. */
   uint64_t tag;
 } DynAstVariant;
@@ -162,7 +163,8 @@ typedef struct {
   DynType tag_type;
   uint32_t variant_start, variant_count;
   DynNameIndex variant_names;
-  uint64_t size, alignment;
+  uint64_t size, alignment, payload_size, payload_alignment;
+  bool has_payload;
   bool is_public;
   uint64_t module_owner;
 } DynAstEnum;

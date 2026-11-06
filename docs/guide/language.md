@@ -179,8 +179,15 @@ name. External numbers stay plain integers at the edge: translate them through a
 unknown value becomes `Null`. Variants are written `Enum.Variant`; the type is always written,
 never inferred. Enums support equality and copy by value. `#cast(u8, op)` gives the tag and
 `#cast(Op, byte)` converts an integer back. An exhaustive `case` that meets a tag matching no
-variant panics with `enum.tag.ok`. Enums carry no payloads: a sum type is a struct with a `kind`
-field and the fields its kinds use. Enums have the size and alignment of the backing integer.
+variant panics with `enum.tag.ok`. Enums without payloads have the size and alignment of the
+backing integer.
+
+A variant may hold one typed value: `enum Node { Null, Number: f64, Link: *Node }`. Build one with
+`Node.Number(2.5)`. The first variant takes no payload, so zeroed storage stays valid. A `case` arm
+is the only way to reach a payload: `Node.Number value` copies it, and `Node.Number *value` aliases
+it and needs a mutable subject. Replacing the enum while an alias is live leaves the alias on the
+old variant's storage, the same class of error as a dangling pointer. Enums with payloads have
+no `#cast` and no `==`; they are laid out as the tag followed by the largest payload.
 
 Bit masks use distinct unsigned integer types, not special flag-enum syntax. Values explicitly
 cast into the mask type; ordinary integer `|`, `&`, `^`, and `~` then preserve its nominal type.
@@ -355,7 +362,7 @@ is not a supported-feature claim:
 | Module-level transparent type alias | Supported |
 | Local type alias inside a function | Reserved; diagnosed as unsupported |
 | Enum declaration-order tags | Supported |
-| Explicit enum values and enum payloads | Rejected |
+| Explicit enum values | Rejected |
 | `.Variant` without the enum type | Not planned; write `Enum.Variant` |
 | Several imports in one `use`, comma-separated | Supported |
 | Optional import alias followed by a new global | Supported; alias stays on the import line |

@@ -41,7 +41,7 @@ def build(root, source, output, *flags):
 def faults(command):
     # qemu writes core files into the working directory.
     result = subprocess.run(command, capture_output=True, timeout=30, cwd=Path(command[-1]).parent)
-    return result.returncode in (-11, 139) or b'Segmentation fault' in result.stderr
+    return result.returncode in (-11, 139) or b'Segmentation fault' in result.stderr or b'memory fault' in result.stderr
 
 
 def macho_constant_segment(path):

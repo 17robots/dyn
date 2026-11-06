@@ -1087,12 +1087,24 @@ static void lsp_completion_enum_variants(LspDocument *documents, size_t count,
             &semantic.ast.variants[value->variant_start + j];
         size_t length = variant->name.end_byte - variant->name.start_byte;
         const char *label = semantic.source.text + variant->name.start_byte;
-        *at += (size_t)lsp_bounded_printf(
-            body + *at, capacity - *at,
-            "%s{\"label\":\"%.*s\",\"kind\":20,\"detail\":\"enum "
-            "variant\",\"insertText\":\"%s%s%.*s\"}",
-            *comma ? "," : "", (int)length, label, qualify ? name : "",
-            qualify ? "." : "", (int)length, label);
+        if (variant->payload_type == DYN_TYPE_VOID)
+          *at += (size_t)lsp_bounded_printf(
+              body + *at, capacity - *at,
+              "%s{\"label\":\"%.*s\",\"kind\":20,\"detail\":\"enum "
+              "variant\",\"insertText\":\"%s%s%.*s\"}",
+              *comma ? "," : "", (int)length, label, qualify ? name : "",
+              qualify ? "." : "", (int)length, label);
+        else {
+          char type[128];
+          dyn_type_format(&semantic.ast, variant->payload_type,
+                          &semantic.source, type, sizeof(type));
+          *at += (size_t)lsp_bounded_printf(
+              body + *at, capacity - *at,
+              "%s{\"label\":\"%.*s\",\"kind\":20,\"detail\":\"%s\","
+              "\"insertText\":\"%s%s%.*s(${1:value})\",\"insertTextFormat\":2}",
+              *comma ? "," : "", (int)length, label, type, qualify ? name : "",
+              qualify ? "." : "", (int)length, label);
+        }
         *comma = true;
       }
       break;

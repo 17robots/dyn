@@ -340,7 +340,7 @@ static void walk(Dump *d,const DynTarget *t) {
   }
   SECTION(variants,variant_count) {
     const DynIrVariant *v=&p->variants[i]; row(d,"variant",i);
-    name(d,"name",v->name,false);
+    name(d,"name",v->name,false); type(d,"payload_type",v->payload_type);
     raw(d,"tag",v->tag); END;
   }
   SECTION(globals,global_count) {

@@ -125,7 +125,7 @@ x86-64 Linux and macOS follow System V.
 AArch64 follows AAPCS64 for C-visible types: eight GP and eight FP argument
 registers, HFAs in consecutive FP registers, other composites up to 16 bytes in
 GP pairs, larger composites through a pointer to a caller-owned copy, and X8 for
-indirect results. Dyn-only arrays are passed as flattened
+indirect results. Dyn-only arrays and payload enums are passed as flattened
 leaves and returned through memory, since every function in a build is emitted
 by the same backend. Apple's variant packs stack arguments narrower than eight
 bytes at their natural size and passes every C variadic argument on the stack.

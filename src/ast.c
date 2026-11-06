@@ -1089,8 +1089,43 @@ static bool layout_enum(uint32_t id, DynAstProgram *a, unsigned char *state,
   }
   state[slot] = 1;
   DynAstEnum *en = &a->enums[id];
-  en->size = type_layout(en->tag_type, false, a, state, s, errors);
-  en->alignment = type_layout(en->tag_type, true, a, state, s, errors);
+  uint64_t tag_size = type_layout(en->tag_type, false, a, state, s, errors),
+           tag_align = type_layout(en->tag_type, true, a, state, s, errors);
+  en->payload_alignment = 1;
+  en->payload_size = 0;
+  for (uint32_t j = 0; j < en->variant_count; ++j) {
+    DynType p = a->variants[en->variant_start + j].payload_type;
+    if (p == DYN_TYPE_VOID)
+      continue;
+    if (dyn_type_is_enum(p)) {
+      diagnostic_span(a->variants[en->variant_start + j].name, s, errors,
+                      "enum payload cannot contain enum directly");
+      continue;
+    }
+    uint64_t pa = type_layout(p, true, a, state, s, errors),
+             ps = type_layout(p, false, a, state, s, errors);
+    if (!pa || !ps) {
+      diagnostic_span(a->variants[en->variant_start + j].name, s, errors,
+                      "recursive or incomplete enum payload layout");
+      continue;
+    }
+    if (pa > en->payload_alignment)
+      en->payload_alignment = pa;
+    if (ps > en->payload_size)
+      en->payload_size = ps;
+  }
+  en->alignment =
+      tag_align > en->payload_alignment ? tag_align : en->payload_alignment;
+  uint64_t offset = (tag_size + en->payload_alignment - 1) /
+                    en->payload_alignment * en->payload_alignment;
+  uint64_t limit = dyn_target_pointer_bytes(dyn_context_target(&s->context)) == 4 ? UINT32_MAX : UINT64_MAX;
+  if (en->payload_size > limit - offset ||
+      offset + en->payload_size > limit - (en->alignment - 1)) {
+    diagnostic_span(en->name, s, errors, "enum layout exceeds target address space");
+    return false;
+  }
+  en->size = (offset + en->payload_size + en->alignment - 1) / en->alignment *
+             en->alignment;
   state[slot] = 2;
   return true;
 }

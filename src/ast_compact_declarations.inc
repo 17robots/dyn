@@ -201,18 +201,26 @@ static bool compact_add_enum_variants(const DynSource *s, DynAstProgram *a,
         compact_report(name, s, errors, "duplicate enum variant");
         continue;
       }
+      DynType payload = DYN_TYPE_VOID;
       uint64_t value = en->variant_count;
-      for (CompactNode part = compact_child(c, 1); !compact_null(part); part = compact_next(part))
-        compact_report(part, s, errors,
-                       compact_kind(part) == SRC_QUALIFIER
-                           ? "enum variants have no payloads; use a kind field in a struct"
-                           : "enum variants have no explicit values; use constants for external numbers");
+      for (CompactNode part = compact_child(c, 1); !compact_null(part); part = compact_next(part)) {
+        if (compact_kind(part) != SRC_QUALIFIER) {
+          compact_report(part, s, errors, "enum variants have no explicit values; use constants for external numbers");
+          continue;
+        }
+        payload = compact_type(compact_child(part, 0), s, a);
+        /* Zeroed storage holds the first variant, so it must be complete. */
+        if (!en->variant_count)
+          compact_report(part, s, errors, "the first enum variant has no payload, so zeroed storage is valid");
+      }
       if (!reserve_variant(a)) {
         compact_report(c, s, errors, "out of memory");
         return false;
       }
-      a->variants[a->variant_count++] = (DynAstVariant){compact_span(name), value};
+      a->variants[a->variant_count++] = (DynAstVariant){compact_span(name), payload, value};
       ++en->variant_count;
+      if (payload != DYN_TYPE_VOID)
+        en->has_payload = true;
     }
     if (!en->variant_count)
       compact_report(d, s, errors, "enum requires at least one variant");

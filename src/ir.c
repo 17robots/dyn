@@ -484,11 +484,14 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
                     .variant_count = a->enums[i].variant_count,
                     .size = a->enums[i].size,
                     .alignment = a->enums[i].alignment,
+                    .payload_size = a->enums[i].payload_size,
+                    .payload_alignment = a->enums[i].payload_alignment,
+                    .has_payload = a->enums[i].has_payload,
                     .is_public = a->enums[i].is_public,
                     .module_owner = a->enums[i].module_owner};
   }
   for (size_t i = 0; i < a->variant_count; ++i) {
-    ir->variants[i] = (DynIrVariant){ .name = copy_span(a->variants[i].name, source, &cursor), .tag = a->variants[i].tag};
+    ir->variants[i] = (DynIrVariant){ .name = copy_span(a->variants[i].name, source, &cursor), .payload_type = lower_type(a, a->variants[i].payload_type), .tag = a->variants[i].tag};
   }
   for (size_t i = 0; i < a->param_count; ++i) {
     ir->params[i] = (DynIrParam){.name = copy_span(a->params[i].name, source, &cursor), .type = lower_type(a, a->params[i].type), .local_id = a->params[i].local_id};

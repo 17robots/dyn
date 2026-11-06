@@ -1,7 +1,7 @@
 #ifndef DYN_H
 #define DYN_H
 
-#define DYN_FRONTEND_VERSION "11"
+#define DYN_FRONTEND_VERSION "10"
 #define DYN_FRONTEND_STAMP "dyn-c-frontend-" DYN_FRONTEND_VERSION
 
 #include <stdbool.h>

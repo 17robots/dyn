@@ -252,7 +252,14 @@ static unsigned wa(WG *g, DynType t) {
     return s->packed ? 1 : a;
   }
   if (wen(t)) {
-    return wa(g, g->ir->enums[t - DYN_TYPE_ENUM_BASE].tag_type);
+    DynIrEnum *e = &g->ir->enums[t - DYN_TYPE_ENUM_BASE];
+    unsigned a = wa(g, e->tag_type);
+    for (unsigned i = 0; i < e->variant_count; i++) {
+      unsigned x = wa(g, g->ir->variants[e->variant_start + i].payload_type);
+      if (x > a)
+        a = x;
+    }
+    return a;
   }
   if (war(t))
     return wa(g, g->ir->arrays[t - DYN_TYPE_ARRAY_BASE].element);
@@ -265,6 +272,16 @@ static unsigned wa(WG *g, DynType t) {
   if (t == DYN_TYPE_I16 || t == DYN_TYPE_U16)
     return 2;
   return 4;
+}
+static unsigned wpayload(WG *g, DynType t) {
+  DynIrEnum *e = &g->ir->enums[t - DYN_TYPE_ENUM_BASE];
+  unsigned a = 1;
+  for (unsigned i = 0; i < e->variant_count; i++) {
+    unsigned x = wa(g, g->ir->variants[e->variant_start + i].payload_type);
+    if (x > a)
+      a = x;
+  }
+  return wal(wsize(g, e->tag_type), a);
 }
 static unsigned wsize(WG *g, DynType t) {
   if (t == DYN_TYPE_VOID)
@@ -288,7 +305,16 @@ static unsigned wsize(WG *g, DynType t) {
                wa(g, t));
   }
   if (wen(t)) {
-    return wsize(g, g->ir->enums[t - DYN_TYPE_ENUM_BASE].tag_type);
+    DynIrEnum *e = &g->ir->enums[t - DYN_TYPE_ENUM_BASE];
+    if (!e->has_payload)
+      return wsize(g, e->tag_type);
+    unsigned n = 0;
+    for (unsigned i = 0; i < e->variant_count; i++) {
+      unsigned x = wsize(g, g->ir->variants[e->variant_start + i].payload_type);
+      if (x > n)
+        n = x;
+    }
+    return wal(wpayload(g, t) + n, wa(g, t));
   }
   if (war(t)) {
     DynIrArray *a = &g->ir->arrays[t - DYN_TYPE_ARRAY_BASE];
@@ -306,8 +332,8 @@ static unsigned wsize(WG *g, DynType t) {
   return wa(g, t);
 }
 static bool wagg(WG *g, DynType t) {
-  (void)g;
-  return wst(t) || war(t) || wsl(t) || t == DYN_TYPE_ANY;
+  return wst(t) || war(t) || wsl(t) || t == DYN_TYPE_ANY ||
+         (wen(t) && g->ir->enums[t - DYN_TYPE_ENUM_BASE].has_payload);
 }
 static unsigned wvt(WG *g, DynType t) {
   t = wtag(g, t);
@@ -1094,7 +1120,15 @@ static unsigned expr(WG *g, DynExprId id) {
   case DYN_EXPR_ENUM: {
     DynIrVariant *x = &g->ir->variants[e->integer];
     DynIrEnum *en = &g->ir->enums[e->type - DYN_TYPE_ENUM_BASE];
-    return constant(g, x->tag, wvt(g, en->tag_type));
+    if (!en->has_payload)
+      return constant(g, x->tag, wvt(g, en->tag_type));
+    p = slot(g, wsize(g, e->type), wa(g, e->type));
+    zero(g, p, wsize(g, e->type));
+    store(g, p, constant(g, x->tag, wvt(g, en->tag_type)), en->tag_type);
+    if (x->payload_type != DYN_TYPE_VOID)
+      store(g, offset(g, p, wpayload(g, e->type)),
+            expr(g, g->ir->items[e->item_start].expression), x->payload_type);
+    return p;
   }
   case DYN_EXPR_LEN: {
     DynType t = g->ir->expressions[e->left].type;
@@ -1516,8 +1550,10 @@ static void statement(WG *g, const DynIrStmt *s) {
       get(g, ok);
       begin(g, 4, 0x40);
       if (a->local_id != UINT32_MAX) {
+        DynIrPattern *x = &g->ir->patterns[a->pattern_start];
         DynType bt = g->ir->locals[a->local_id].type;
-        p = load(g, offset(g, subject, 8), DYN_TYPE_RAWPTR);
+        p = x->is_type ? load(g, offset(g, subject, 8), DYN_TYPE_RAWPTR)
+                       : offset(g, subject, wpayload(g, t));
         if (a->pointer_binding)
           g->localalias[a->local_id] = p;
         else {

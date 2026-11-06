@@ -14,6 +14,9 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- Enum payloads are back: `enum Node { Null, Number: f64 }`, built with
+  `Node.Number(2.5)` and read only through `case`. The first variant has no payload,
+  and explicit enum values stay removed.
 - Linux debug builds report memory faults with a stack trace and exit 101.
 - Debug builds report the source line of a failed runtime check.
 - Breaking: float to integer `#cast` saturates on every target, and NaN gives 0.
