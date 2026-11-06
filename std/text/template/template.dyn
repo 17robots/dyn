@@ -1,14 +1,13 @@
 use "std/bytes" byte_ops
 use "std/io" stream
 use "std/mem" memory
-use "std/io" errors
-pub enum ErrorKind { None, Syntax, OutOfMemory, Io }
+use "std/parse" parse
 
 pub struct Template { source: []const u8 }
 pub struct Field { name: []const u8, value: []const u8 }
 // Offsets identify source positions when known; zero also represents unknown.
-pub struct ParseResult { value: Template, kind: errors.Kind, error: isize, detail: ErrorKind, offset: usize, ok: bool }
-pub struct RenderResult { kind: errors.Kind, error: isize, detail: ErrorKind, offset: usize, ok: bool }
+pub struct ParseResult { value: Template, offset: usize, failure: parse.Failure }
+pub struct RenderResult { offset: usize, failure: parse.StreamFailure }
 
 
 
@@ -49,7 +48,7 @@ pub fn parse(arena: *memory.Arena, source: []const u8) ParseResult {
         end += 1
       }
       if end + 1 >= #len(source) || !valid_name(trim(source[cursor + 2..end])) {
-        return ParseResult{ kind: errors.Kind.InvalidInput, detail: ErrorKind.Syntax, offset: cursor, ok: false }
+        return ParseResult{ offset: cursor, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: cursor } }
       }
       cursor = end + 2
     } else {
@@ -63,7 +62,7 @@ pub fn parse(arena: *memory.Arena, source: []const u8) ParseResult {
       retained[i] = source[i]
     }
   }
-  return ParseResult{ value: Template{ source: retained }, kind: errors.Kind.Ok, ok: true }
+  return ParseResult{ value: Template{ source: retained } }
 }
 
 fn value(fields: []const Field, name: []const u8) []const u8 {
@@ -78,19 +77,18 @@ fn value(fields: []const Field, name: []const u8) []const u8 {
 fn write(destination: stream.Writer, source: []const u8) RenderResult {
   result := stream.write_all(destination, source)
   if result.status == stream.Status.Error {
-    return RenderResult{ kind: result.kind, error: result.error, detail: ErrorKind.Io, ok: false }
+    return RenderResult{ failure: parse.io_failure(result.kind, result.error) }
   }
-  return RenderResult{ kind: errors.Kind.Ok, ok: true }
+  return RenderResult{}
 }
 
 // Literal output maps directly to source bytes, unlike expanded field values.
 fn write_literal(destination: stream.Writer, source: []const u8, offset: usize) RenderResult {
   result := stream.write_all(destination, source)
   if result.status == stream.Status.Error {
-    return RenderResult{ kind: result.kind, error: result.error, detail: ErrorKind.Io,
-      offset: offset + result.transferred }
+    return RenderResult{ offset: offset + result.transferred, failure: parse.io_failure(result.kind, result.error) }
   }
-  return RenderResult{ ok: true }
+  return RenderResult{}
 }
 
 pub fn render(destination: stream.Writer, template: *const Template, fields: []const Field) RenderResult {
@@ -101,7 +99,7 @@ pub fn render(destination: stream.Writer, template: *const Template, fields: []c
 pub fn render_with(destination: stream.Writer, template: *const Template, fields: []const Field,
   render_field: fn(stream.Writer, []const u8) RenderResult) RenderResult {
   if template == nil || render_field == nil {
-    return RenderResult{ kind: errors.Kind.InvalidInput, detail: ErrorKind.Syntax }
+    return RenderResult{ failure: parse.parse_failure(parse.Kind.Syntax, 0, "") }
   }
   cursor: usize = 0
   literal: usize = 0
@@ -109,7 +107,7 @@ pub fn render_with(destination: stream.Writer, template: *const Template, fields
     if cursor + 1 < #len(template.source) && template.source[cursor] == '{' && template.source[cursor + 1] == '{' {
       if cursor > literal {
         literal_result := write_literal(destination, template.source[literal..cursor], literal)
-        if !literal_result.ok {
+        if literal_result.failure.kind != parse.StreamKind.Ok {
           return literal_result
         }
       }
@@ -118,10 +116,10 @@ pub fn render_with(destination: stream.Writer, template: *const Template, fields
         end += 1
       }
       if end + 1 >= #len(template.source) || !valid_name(trim(template.source[cursor + 2..end])) {
-        return RenderResult{ kind: errors.Kind.InvalidInput, detail: ErrorKind.Syntax, offset: cursor }
+        return RenderResult{ offset: cursor, failure: parse.parse_failure(parse.Kind.Syntax, cursor, "") }
       }
       field_result := render_field(destination, value(fields, trim(template.source[cursor + 2..end])))
-      if !field_result.ok {
+      if field_result.failure.kind != parse.StreamKind.Ok {
         return field_result
       }
       cursor = end + 2
@@ -133,5 +131,5 @@ pub fn render_with(destination: stream.Writer, template: *const Template, fields
   if literal < #len(template.source) {
     return write_literal(destination, template.source[literal..], literal)
   }
-  return RenderResult{ kind: errors.Kind.Ok, ok: true }
+  return RenderResult{}
 }

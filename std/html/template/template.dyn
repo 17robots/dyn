@@ -1,9 +1,9 @@
+use "std/parse" parse
 use "std/io" errors
 use "std/io" stream
 use "std/mem" memory
 use "std/text/template" core
 
-pub type ErrorKind = core.ErrorKind
 pub type Template = core.Template
 pub type Field = core.Field
 pub type ParseResult = core.ParseResult
@@ -20,9 +20,9 @@ fn write(destination: stream.Writer, source: []const u8) RenderResult {
     if kind==errors.Kind.Ok {
       kind=errors.Kind.System
     }
-    return RenderResult{ kind: kind, error: result.error, detail: ErrorKind.Io, ok: false }
+    return RenderResult{ failure: parse.io_failure(kind, result.error) }
   }
-  return RenderResult{ ok: true }
+  return RenderResult{}
 }
 
 fn write_escaped(destination: stream.Writer, source: []const u8) RenderResult {
@@ -47,12 +47,12 @@ fn write_escaped(destination: stream.Writer, source: []const u8) RenderResult {
     if #len(replacement) > 0 {
       if i > start {
         literal_result := write(destination, source[start..i])
-        if !literal_result.ok {
+        if literal_result.failure.kind != parse.StreamKind.Ok {
           return literal_result
         }
       }
       replacement_result := write(destination, replacement)
-      if !replacement_result.ok {
+      if replacement_result.failure.kind != parse.StreamKind.Ok {
         return replacement_result
       }
       start = i + 1
@@ -61,7 +61,7 @@ fn write_escaped(destination: stream.Writer, source: []const u8) RenderResult {
   if start < #len(source) {
     return write(destination, source[start..])
   }
-  return RenderResult{ ok: true }
+  return RenderResult{}
 }
 
 // Escapes text and quoted attribute values. Not a JS/CSS/URL-context sanitizer.
