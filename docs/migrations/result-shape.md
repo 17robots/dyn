@@ -1,29 +1,52 @@
 # One result shape
 
-Results at the edges use the same field names everywhere:
+If the world can make a function fail, it returns `{ value, failure }`. With
+nothing to return, it returns the failure alone. `.value` is always safe to
+read, and a zero failure means success.
 
 ```dyn
 opened := fs.open(path, fs.Read)
-if !opened.ok {
-  report(opened.kind) // portable category; opened.error is the native code
+if opened.failure.kind != io.Kind.Ok {
+  report(opened.failure.kind) // opened.failure.native is the native code
 }
-file := opened.value // was opened.file
+file := opened.value
 ```
 
-Renamed payload fields, all now `value`: `FileResult.file`,
-`OffsetResult.offset`, `ReadAllResult.data`, `PathResult.path`,
-`DirectoryResult.directory`, `AtomicResult.transaction`,
-`ConnectionResult.connection`, `ListenerResult.listener`,
-`AcceptResult.connection`, `SpawnResult.child`, `ArgumentsResult.values`,
-`TemporaryResult.directory`, `watch.OpenResult.watcher`, zip `entry`, `data`
-and `reader`, `dns.Result.count`, `xml.Result.event`, `ini.Result.entry`,
-`semver.ParseResult.version`, `template.ParseResult.template`,
-`der.Result.element`, `certificate.Result.certificate`.
+`std/errors` is gone. Its contents live in `std/io`:
 
-Parser errors are `kind` and positions `offset`: JSON and Mdesk
-`ParseResult.error` and `error_offset`, template and DER results, and
-`url.ParseResult.error_offset`. INI `ParseResult` is `{value, kind, line, ok}`.
-Network, watch and temporary-directory results gain `kind`.
+- Effects report `io.Failure { kind, native }`.
+- Parsers and decoders report `parse.Failure { kind, offset, message }`.
+- Decoders over a stream report `parse.StreamFailure { kind, parse, io }`, with
+  `parse.StreamKind { Ok, Parse, Io }` naming the source.
 
-Renaming is mechanical: the compiler names the type and the old field in
-each error (`FileResult has no field 'file'`).
+| Before | After |
+|---|---|
+| `r.ok` | `r.failure.kind == io.Kind.Ok` or `parse.Kind.Ok` |
+| `r.kind` | `r.failure.kind` |
+| `r.error` | `r.failure.native` |
+| `r.detail` | `r.failure.kind`, plus `r.failure.message` for text |
+| `errors.Kind.InvalidInput` from a parser | `parse.Kind.Syntax` |
+
+Module `ErrorKind` enums are gone from parsers. For example, JSON `TrailingData`
+is `Syntax` with the message `"trailing data"`, and an unterminated string in
+Mdesk is `Truncated`.
+
+Scanners and iterators report `found`. `found` false with no failure is the end
+of input: `csv.Field`, `ini.Result`, `xml.Result`, `xml.Attribute`, `tar.Result`,
+`tar.StreamEntry`, `zip.EntryResult`, `http.HttpHeader`, `regex.Match`,
+`signal.Next`, `fs.DirectoryEntry`, and the CBOR, MessagePack, Protobuf and DER
+readers. `tar.Status` and `zip.ErrorKind.End` are gone.
+
+Pure results that cannot fail by the world say what they mean: `valid` for
+checked values (`utf8.Decode`, `path.Result`, `time.Parsed`, matrix results) and
+`found` for scans (`bytes.Piece`, `path.Component`, `ring.Popped`).
+
+A zero result now reads as success. Code that used a zero result to mean
+failure must keep its own state. `deflate.Result` keeps `done`, because `resume`
+can stop for more input without failing.
+
+`std/os` and `std/mem` keep `ok` and `error`. They sit below `std/io`, and
+`std/os` is the raw system layer.
+
+The compiler names the type and the old field in each error
+(`Result has no field 'ok'`).

@@ -1,7 +1,8 @@
 # Result shape: every std result, before and after
 
-Status: proposal. No std code has changed. This document shows the shape decided
-on 2026-11-05 applied to every result type in `std`. The mapping and the
+Status: applied, with the changes listed in `docs/migrations/result-shape.md`.
+This document shows the shape decided on 2026-11-05 applied to every result type
+in `std`. The mapping and the
 signature lists are generated from the source, then reviewed by rule, not
 function by function. Signatures that return a type through an import alias are
 not listed, so the lists are a lower bound.

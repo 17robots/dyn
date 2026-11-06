@@ -18,14 +18,13 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
   `process.Options{}` (inherit every stream), and scanners given only their
   `source`. Arena handles are pointers to backing headers and require
   `arena_create` or `arena_from_buffer`; a nil arena handle does not allocate.
-- **Errors are values, in one shape.** Results at the edges (OS, files,
-  network, processes) are `{value, ok, kind, error}`: `value` is the payload,
-  `kind` a portable `std/errors` category and `error` the native code. Test
-  `ok` first, then branch on `kind`; compare `error` only for platform-specific
-  handling. Parsers of external input use the same portable `kind` and native `error`,
-  plus an `offset`. Pure parsers use native error `0`; an optional `detail`
-  preserves a module-specific diagnostic. Tree parsers (`json`, `mdesk`) name
-  the payload `root` and return a usable stub on failure. Migration status
+- **Errors are values, in one shape.** If the world can make a function fail,
+  it returns `{value, failure}`; with nothing to return, the failure alone.
+  Effects use `io.Failure {kind, native}`. Parsers use `parse.Failure {kind,
+  offset, message}`, and stream decoders use `parse.StreamFailure`. Zero means
+  success. Scanners add `found`, and end of input is `found` false with no
+  failure. Tree parsers (`json`, `mdesk`) name the payload `root` and return a
+  usable stub on failure. Migration status
   and remaining exceptions are tracked in [std standardization](../internals/std-standardization.md).
   Scanners and writers keep their first error in their state and turn later
   calls into no-ops, so callers check once at the end. Predicates return
@@ -102,7 +101,7 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
 | `std/terminal` | Raw mode, terminal size and key decoding |
 | `std/dynlib` | Dynamic library loading (on Linux, link libc explicitly) |
 | `std/os/linux`, `macos`, `windows`, `wasi` | Platform services; prefer the portable packages above |
-| `std/errors` | Portable error categories that accompany native codes |
+| `std/parse` | Shared failures for parsers, decoders and stream decoders |
 | `std/c` | C ABI scalar aliases and C-string helpers |
 
 ### Networking and crypto

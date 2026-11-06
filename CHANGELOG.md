@@ -14,6 +14,9 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- Breaking: std results use one shape. `std/errors` moves into `std/io`, effects
+  report `io.Failure`, and parsers report the new `parse.Failure`. See
+  `docs/migrations/result-shape.md`.
 - Breaking: struct field defaults are removed. `struct S { n: i32 = 4 }` is now
   a compile error. Every struct starts from zeros on every path, so make zero a
   useful value, set the field in the literal, or use a named constant.
