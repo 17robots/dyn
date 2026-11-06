@@ -20,7 +20,7 @@ pub type Composition = ordered.Composition
 // Mirrors dyn_window_desktop in window.h.
 struct Desktop { text: [256]u8, text_length: u32, keys: u32, scroll_x: f32, scroll_y: f32, scale: f32, clipboard: *const u8, clipboard_length: u32 }
 pub enum Cursor { Arrow, Text, Hand, ResizeX, ResizeY }
-pub struct Result { kind: io.Kind, ok: bool }
+pub type Result = io.Failure
 struct Frame { width: i32, height: i32, x: i32, y: i32, flags: u32 }
 extern fn native_open "dyn_window_open"(title: *const u8, width: i32, height: i32) rawptr
 extern fn native_close "dyn_window_close"(handle: rawptr)
@@ -65,11 +65,11 @@ pub fn open(window: *Window, title: []const u8, width, height: i32) Result {
   }
   window.* = Window{handle:handle, width:width, height:height}
   opened := poll(window)
-  if !opened.ok {
+  if opened.kind != io.Kind.Ok {
     close(window)
     return opened
   }
-  return Result{ok:true}
+  return Result{}
 }
 pub fn close(window: *Window) {
   if window.handle != nil {
@@ -95,7 +95,7 @@ pub fn poll(window: *Window) Result {
   if previous_composition || window.composition.active != 0 {
     window.desktop.keys |= 32768
   }
-  return Result{ok:true}
+  return Result{}
 }
 pub fn make_current(window: *Window) Result {
   if window.handle == nil {
@@ -104,7 +104,7 @@ pub fn make_current(window: *Window) Result {
   if native_current(window.handle) == 0 {
     return Result{kind:io.Kind.System}
   }
-  return Result{ok:true}
+  return Result{}
 }
 pub fn swap(window: *Window) Result {
   if window.handle == nil {
@@ -113,7 +113,7 @@ pub fn swap(window: *Window) Result {
   if native_swap(window.handle) == 0 {
     return Result{kind:io.Kind.System}
   }
-  return Result{ok:true}
+  return Result{}
 }
 
 // Offers text on the clipboard; longer text is truncated to 64 KiB.
@@ -200,7 +200,7 @@ pub fn wake(window: *const Window) Result {
   if native_wake(window.handle) == 0 {
     return Result{kind:io.Kind.System}
   }
-  return Result{ok:true}
+  return Result{}
 }
 
 // Opt-in before poll. Toggling clears queued events; disabled by default.
@@ -272,7 +272,7 @@ pub fn set_surrounding_text(window: *Window, context: Surrounding) Result {
   }
   status := native_surrounding(window.handle, pointer, #cast(u32, #len(context.text)), #cast(u32, context.cursor), #cast(u32, context.anchor), context.token, cause)
   if status == 1 {
-    return Result{ ok: true }
+    return Result{}
   }
   if status == -1 {
     return Result{ kind: io.Kind.Unsupported }
@@ -285,7 +285,7 @@ pub fn set_surrounding_text(window: *Window, context: Surrounding) Result {
 
 fn checked_status(status: i32) Result {
   if status == 1 {
-    return Result{ok:true}
+    return Result{}
   }
   if status == -1 {
     return Result{kind:io.Kind.Unsupported}
@@ -331,7 +331,7 @@ pub fn set_size(window: *Window, width, height: i32) Result {
     return Result{kind:io.Kind.InvalidInput}
   }
   result := checked_status(native_set_size(window.handle, width, height))
-  if !result.ok {
+  if result.kind != io.Kind.Ok {
     return result
   }
   return poll(window)

@@ -142,13 +142,13 @@ pub struct EditBuffer {
   used: usize,
   active: bool,
 }
-pub struct EditResult { value: edits.Replacement, ready: bool, kind: io.Kind, ok: bool }
+pub struct EditResult { value: edits.Replacement, ready: bool, failure: io.Failure }
 
 fn edit_failure(buffer: *EditBuffer, kind: io.Kind) EditResult {
   buffer.active = false
   buffer.used = 0
   buffer.token = 0
-  return EditResult{ kind: kind }
+  return EditResult{ failure: io.Failure{ kind: kind  } }
 }
 
 // A ready value borrows buffer until its next Edit chunk. Other event kinds
@@ -161,7 +161,7 @@ pub fn collect_edit(buffer: *EditBuffer, event: *const Event) EditResult {
     if buffer.active {
       return edit_failure(buffer, io.Kind.InvalidState)
     }
-    return EditResult{ ok: true }
+    return EditResult{}
   }
   token := #cast(u64, event.key) | (#cast(u64, event.modifiers) << 32)
   if event.x < 0 || event.y < event.x || event.width < 0 || event.width > 4096 || event.text_length > 256 || token == 0 || event.button > 1 {
@@ -193,8 +193,8 @@ pub fn collect_edit(buffer: *EditBuffer, event: *const Event) EditResult {
   }
   buffer.used += count
   if event.button == 0 {
-    return EditResult{ ok: true }
+    return EditResult{}
   }
   buffer.active = false
-  return EditResult{ value: edits.Replacement{ text: buffer.bytes[..total], start: buffer.start, end: buffer.end, token: token }, ready: true, ok: true }
+  return EditResult{ value: edits.Replacement{ text: buffer.bytes[..total], start: buffer.start, end: buffer.end, token: token }, ready: true }
 }

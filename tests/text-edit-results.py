@@ -61,7 +61,7 @@ fn main() {
   event := events.Event{kind:events.Kind.Edit,key:17,modifiers:2,x:0,y:3,width:260,text_length:256}
   for i in 0..256 { event.text[i] = 'x' }
   partial := events.collect_edit(&collector,&event)
-  check(partial.ok && !partial.ready,"partial transaction")
+  check(partial.failure.kind == errors.Kind.Ok && !partial.ready,"partial transaction")
   event.scancode = 256
   event.text_length = 4
   event.text[0] = 0xf0
@@ -71,19 +71,19 @@ fn main() {
   event.button = 1
   complete := events.collect_edit(&collector,&event)
   event.text[0] = 'z'
-  check(complete.ok && complete.ready && #len(complete.value.text)==260 && complete.value.token == 8589934609 && complete.value.text[256] == 0xf0,"owned complete transaction")
+  check(complete.failure.kind == errors.Kind.Ok && complete.ready && #len(complete.value.text)==260 && complete.value.token == 8589934609 && complete.value.text[256] == 0xf0,"owned complete transaction")
   large: [512]u8 = []
   _ = mem.copy(large[..3],"old")
   buffer = edit.Buffer{storage:large[..],length:3,cursor:3,anchor:3,token:complete.value.token}
   check(edit.apply(arena,&buffer,&complete.value).kind == errors.Kind.Ok && buffer.length==260 && large[259]==0x80,"assembled transaction applies")
   event = events.Event{kind:events.Kind.Edit,key:1,width:2,text_length:1}
   event.text[0] = 'a'
-  check(events.collect_edit(&collector,&event).ok,"new transaction")
+  check(events.collect_edit(&collector,&event).failure.kind == errors.Kind.Ok,"new transaction")
   event.kind = events.Kind.Overflow
-  check(!events.collect_edit(&collector,&event).ok && !collector.active,"overflow discards partial edit")
+  check(events.collect_edit(&collector,&event).failure.kind != errors.Kind.Ok && !collector.active,"overflow discards partial edit")
   event = events.Event{kind:events.Kind.Edit,key:1,width:2,scancode:1,text_length:1,button:1}
   event.text[0] = 'b'
-  check(!events.collect_edit(&collector,&event).ok,"orphan final rejected")
+  check(events.collect_edit(&collector,&event).failure.kind != errors.Kind.Ok,"orphan final rejected")
   golden(arena)
 }
 '''

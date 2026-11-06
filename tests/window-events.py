@@ -52,7 +52,8 @@ void *dyn_wake_thread(int (*wake)(void*),void *context) {
 }
 int dyn_join_wake(void*p){Work*w=p;pthread_join(w->thread,NULL);int result=w->result;free(w);return result;}
 '''
-X11 = r'''use "vendor/window" window
+X11 = r'''use "std/io" io
+use "vendor/window" window
 use "vendor/window/events" events
 use "std/time" time
 #link("pthread")
@@ -63,7 +64,7 @@ extern fn wake_thread "dyn_wake_thread"(callback:fn(rawptr)i32,context:rawptr) r
 extern fn join_wake "dyn_join_wake"(worker:rawptr) i32
 fn check(ok:bool) { if !ok { #panic("ordered X11 events") } }
 fn callback(context:rawptr) i32 {
-  if window.wake(#cast(*window.Window,context)).ok { return 1 }
+  if window.wake(#cast(*window.Window,context)).kind == io.Kind.Ok { return 1 }
   return 0
 }
 fn drain(host:*window.Window) {
@@ -72,13 +73,13 @@ fn drain(host:*window.Window) {
 }
 fn main() {
  host := window.Window{}
- check(window.open(&host,"ordered events",80,80).ok)
+ check(window.open(&host,"ordered events",80,80).kind == io.Kind.Ok)
  defer { window.close(&host) }
  _ = window.poll(&host)
  event := window.Event{}
  // Listening is explicitly opt-in; legacy summary clients accumulate nothing.
  key(host.display,host.handle,0x61,0,1)
- check(window.poll(&host).ok && !window.next_event(&host,&event))
+ check(window.poll(&host).kind == io.Kind.Ok && !window.next_event(&host,&event))
  key(host.display,host.handle,0x61,0,0)
  _ = window.poll(&host)
  window.listen_events(&host,true)
@@ -86,7 +87,7 @@ fn main() {
  key(host.display,host.handle,0x61,0,0)
  key(host.display,host.handle,0xff51,4,1)
  key(host.display,host.handle,0xff51,4,0)
- check(window.poll(&host).ok)
+ check(window.poll(&host).kind == io.Kind.Ok)
  check(window.next_event(&host,&event) && event.kind == events.Kind.KeyDown && event.key == 97 && event.repeated == 0 && event.scancode != 0)
  check(window.next_event(&host,&event) && event.kind == events.Kind.Text && event.text_length == 1 && event.text[0] == 97)
  saved := event
@@ -96,7 +97,7 @@ fn main() {
  check(!window.next_event(&host,&event) && saved.text[0] == 97)
  key(host.display,host.handle,0x62,0,1)
  key(host.display,host.handle,0x62,0,1)
- check(window.poll(&host).ok)
+ check(window.poll(&host).kind == io.Kind.Ok)
  check(window.next_event(&host,&event) && event.kind == events.Kind.KeyDown && event.repeated == 0)
  check(window.next_event(&host,&event) && event.kind == events.Kind.Text && event.text[0] == 98)
  check(window.next_event(&host,&event) && event.kind == events.Kind.KeyDown && event.repeated == 1)
@@ -107,7 +108,7 @@ fn main() {
  drain(&host)
  for i in 0..200 { _ = i
    key(host.display,host.handle,0xff51,0,1) }
- check(window.poll(&host).ok)
+ check(window.poll(&host).kind == io.Kind.Ok)
  for i in 0..128 { _ = i
    check(window.next_event(&host,&event) && event.kind == events.Kind.KeyDown && event.key == events.Left) }
  check(window.next_event(&host,&event) && event.kind == events.Kind.Overflow && event.dropped == 72)
@@ -124,17 +125,18 @@ fn main() {
  found := false
  for !found {
    window.wait(&host,1000)
-   check(window.poll(&host).ok)
+   check(window.poll(&host).kind == io.Kind.Ok)
    for window.next_event(&host,&event) { if event.kind == events.Kind.Wake { found = true } }
    check(time.elapsed(now,time.monotonic_now().value).value < 500000000)
  }
  check(join_wake(worker) == 1)
  close_event(host.display,host.handle,host.protocol_atom,host.close_atom)
- check(window.poll(&host).ok && host.close_requested)
+ check(window.poll(&host).kind == io.Kind.Ok && host.close_requested)
  check(window.next_event(&host,&event) && event.kind == events.Kind.Close)
 }
 '''
-WAYLAND_WAKE = r'''use "vendor/window/wayland" window
+WAYLAND_WAKE = r'''use "std/io" io
+use "vendor/window/wayland" window
 use "vendor/window/events" events
 use "std/time" time
 #link("pthread")
@@ -142,14 +144,14 @@ use "std/time" time
 extern fn wake_thread "dyn_wake_thread"(callback:fn(rawptr)i32,context:rawptr) rawptr
 extern fn join_wake "dyn_join_wake"(worker:rawptr) i32
 fn check(ok:bool){if !ok{#panic("Wayland external wake")}}
-fn callback(context:rawptr)i32 { if window.wake(#cast(*window.Window,context)).ok{return 1}
+fn callback(context:rawptr)i32 { if window.wake(#cast(*window.Window,context)).kind == io.Kind.Ok{return 1}
  return 0 }
 fn main(){
  host:=window.Window{}
- check(window.open(&host,"Wayland external wake",64,64).ok)
+ check(window.open(&host,"Wayland external wake",64,64).kind == io.Kind.Ok)
  defer{window.close(&host)}
  window.listen_events(&host,true)
- check(window.poll(&host).ok)
+ check(window.poll(&host).kind == io.Kind.Ok)
  event:=window.Event{}
  for window.next_event(&host,&event){}
  worker:=wake_thread(callback,&host)
@@ -158,7 +160,7 @@ fn main(){
  found:=false
  for !found {
   window.wait(&host,1000)
-  check(window.poll(&host).ok)
+  check(window.poll(&host).kind == io.Kind.Ok)
   for window.next_event(&host,&event){if event.kind==events.Kind.Wake {found=true}}
   check(time.elapsed(started,time.monotonic_now().value).value<500000000)
  }
@@ -179,7 +181,8 @@ int Xutf8LookupString(XIC context,XKeyPressedEvent *event,char *buffer,int capac
  *status=XLookupBoth;return needed;
 }
 '''
-XIM_SOURCE = r'''use "vendor/window" window
+XIM_SOURCE = r'''use "std/io" io
+use "vendor/window" window
 use "vendor/window/events" events
 use "std/unicode/utf8" utf8
 use "std/process" process
@@ -191,7 +194,7 @@ fn main(){
  defer{mem.arena_release(arena)}
  split:=process.environment(arena,"DYN_TEST_SPLIT_COMMIT").found
  host:=window.Window{}
- check(window.open(&host,"XIM commit bounds",64,64).ok)
+ check(window.open(&host,"XIM commit bounds",64,64).kind == io.Kind.Ok)
  defer{window.close(&host)}
  _=window.poll(&host)
  window.listen_events(&host,true)
@@ -201,7 +204,7 @@ fn main(){
  host.desktop.context=#cast(rawptr,1)
  key(host.display,host.handle,0x61,0,1)
  if split {key(host.display,host.handle,0x62,0,1)}
- check(window.poll(&host).ok)
+ check(window.poll(&host).kind == io.Kind.Ok)
  host.desktop.context=original
  event:=window.Event{}
  check(window.next_event(&host,&event)&&event.kind==events.Kind.KeyDown)

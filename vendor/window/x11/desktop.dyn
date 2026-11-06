@@ -763,7 +763,7 @@ fn clipboard_finish(window: *Window, deferred: bool) {
     desktop.incoming_arena = nil
     desktop.received = clipboard_bytes(desktop.received_arena)
     desktop.received_length = #len(desktop.received)
-    desktop.paste_result = Result{ok:true}
+    desktop.paste_result = Result{}
     if deferred {
       desktop.paste_ready = true
     }
@@ -1070,7 +1070,7 @@ pub fn try_set_clipboard(window: *Window, text: []const u8) Result {
   desktop.owned_length = #len(owned)
   desktop.owns = true
   _ = flush(window.display)
-  return Result{ok:true}
+  return Result{}
 }
 pub fn set_clipboard(window: *Window, text: []const u8) {
   _ = try_set_clipboard(window, text)
@@ -1153,7 +1153,7 @@ pub fn set_title(window: *Window, title: []const u8) Result {
   modern := atom(window.display, "_NET_WM_NAME\x00")
   unicode := atom(window.display, "UTF8_STRING\x00")
   _ = change_property(window.display, window.handle, modern, unicode, 8, 0, name.value, #cast(i32, #len(title)))
-  return Result{ok:true}
+  return Result{}
 }
 extern fn resize_window "XResizeWindow"(display:rawptr, window:usize, width, height:u32) i32
 pub fn set_size(window:*Window, width, height:i32) Result {

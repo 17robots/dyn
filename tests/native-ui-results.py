@@ -33,8 +33,8 @@ fn no_textures(count: i32, output: *u32) { _ = count
  output.* = 0 }
 fn main() {
  host := window.Window{}
- check(!window.open(&host,"bad",0,32).ok)
- check(window.open(&host,"Dyn native renderer test",32,32).ok)
+ check(window.open(&host,"bad",0,32).kind != errors.Kind.Ok)
+ check(window.open(&host,"Dyn native renderer test",32,32).kind == errors.Kind.Ok)
  defer { window.close(&host) }
  check(window.open(&host,"duplicate",32,32).kind == errors.Kind.InvalidState)
  loaded := gl.load(window.gl_proc)
@@ -93,7 +93,7 @@ fn main() {
  broken.gen_textures = no_textures
  rejected := gpu.Renderer{}
  check(gpu.open(&rejected,broken).kind == errors.Kind.System && rejected.program == 0)
- check(window.poll(&host).ok && window.swap(&host).ok)
+ check(window.poll(&host).kind == errors.Kind.Ok && window.swap(&host).kind == errors.Kind.Ok)
  bad := commands[3]
  bad.codepoint = 0
  check(gpu.render(&renderer,&bad,32,32,font).kind == errors.Kind.InvalidInput)
@@ -102,7 +102,7 @@ fn main() {
  check(gpu.render(&renderer,&commands[0],32,32,font).kind == errors.Kind.InvalidState)
  window.close(&host)
  window.close(&host)
- check(!window.poll(&host).ok && !window.swap(&host).ok)
+ check(window.poll(&host).kind != errors.Kind.Ok && window.swap(&host).kind != errors.Kind.Ok)
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-native-ui-') as directory:
@@ -139,7 +139,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-native-ui-') as directory:
     if sys.platform.startswith('linux') and os.environ.get('DISPLAY'):
         shim=work/'glx-failure.so'
         subprocess.run([*shlex.split(os.environ.get('CC','cc')),'-shared','-fPIC','-Wall','-Wextra','-Werror',str(ROOT/'tests/x11-context-failure.c'),'-ldl','-o',str(shim)],check=True,timeout=60)
-        (work/'main.dyn').write_text('use "vendor/window" window\nuse "std/io" errors\nfn main(){ host := window.Window{}\n result := window.open(&host,"Expected failure",32,32)\n if result.ok || result.kind != errors.Kind.System || host.display != nil { #panic("GLX error was not recovered") }\n window.close(&host)\n}\n', encoding='utf-8')
+        (work/'main.dyn').write_text('use "vendor/window" window\nuse "std/io" errors\nfn main(){ host := window.Window{}\n result := window.open(&host,"Expected failure",32,32)\n if result.kind == errors.Kind.Ok || result.kind != errors.Kind.System || host.display != nil { #panic("GLX error was not recovered") }\n window.close(&host)\n}\n', encoding='utf-8')
         output=work/'context-failure'
         subprocess.run([DYN,'build',str(work),'--debug','--quiet','--output',str(output)],check=True,timeout=300)
         subprocess.run([str(output)],env={**os.environ,'LD_PRELOAD':str(shim)},check=True,timeout=60)

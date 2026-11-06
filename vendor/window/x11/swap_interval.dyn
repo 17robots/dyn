@@ -57,7 +57,7 @@ pub fn set_swap_interval(window:*Window, interval:i32) Result {
   // Drain old requests before attributing errors to the interval operation.
   _=sync(window.display, 0)
   context_error_seen=false
-  if !make_current(window).ok {
+  if make_current(window).kind != io.Kind.Ok {
     _=sync(window.display, 0)
     return Result{kind:io.Kind.System}
   }
@@ -83,7 +83,7 @@ pub fn set_swap_interval(window:*Window, interval:i32) Result {
       if context_error_seen {
         return Result{kind:io.Kind.System}
       }
-      return Result{ok:true}
+      return Result{}
     }
   }
   if swap_extension(extensions, "GLX_MESA_swap_control") {
@@ -95,7 +95,7 @@ pub fn set_swap_interval(window:*Window, interval:i32) Result {
       if status!=0 || context_error_seen {
         return Result{kind:io.Kind.System}
       }
-      return Result{ok:true}
+      return Result{}
     }
   }
   if interval==1 && swap_extension(extensions, "GLX_SGI_swap_control") {
@@ -107,7 +107,7 @@ pub fn set_swap_interval(window:*Window, interval:i32) Result {
       if status!=0 || context_error_seen {
         return Result{kind:io.Kind.System}
       }
-      return Result{ok:true}
+      return Result{}
     }
   }
   _=sync(window.display, 0)

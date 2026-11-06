@@ -12,7 +12,7 @@ use "std/io" io
 use "std/c" c
 use "std/bytes" bytes
 pub struct Window {display:rawptr,context:rawptr,handle:usize}
-pub struct Result {kind:errors.Kind,ok:bool}
+pub type Result = errors.Failure
 context_error_display:rawptr
 context_error_seen:bool
 context_previous_handler:fn(rawptr,rawptr)i32
@@ -50,7 +50,8 @@ fn screen(display:rawptr)i32 {_=display
  return 7}
 fn make_current(window:*Window)Result {_=window
  make_calls+=1
- return Result{ok:make_ok}}
+ if make_ok {return Result{}}
+ return Result{kind:errors.Kind.System}}
 fn swap_extensions(display:rawptr,screen_id:i32)*const u8 {
  check(display==#cast(rawptr,1) && screen_id==7)
  if query_error {_=handler(display,nil)}
@@ -106,23 +107,23 @@ fn main(){
  restored()
  reset()
  mock_extensions="GLX_SGI_swap_control GLX_MESA_swap_control GLX_EXT_swap_control\x00"
- check(set_swap_interval(&host,0).ok && calls==1 && lookups==1 && last==0 && make_calls==1)
+ check(set_swap_interval(&host,0).kind==errors.Kind.Ok && calls==1 && lookups==1 && last==0 && make_calls==1)
  restored()
- check(set_swap_interval(&host,1).ok && last==1)
+ check(set_swap_interval(&host,1).kind==errors.Kind.Ok && last==1)
  reset()
  ext_present=false
- check(set_swap_interval(&host,0).ok && lookups==2 && calls==1 && last==0)
+ check(set_swap_interval(&host,0).kind==errors.Kind.Ok && lookups==2 && calls==1 && last==0)
  restored()
  reset()
  mock_extensions="  GLX_MESA_swap_control  \x00"
- check(set_swap_interval(&host,1).ok && calls==1 && lookups==1 && last==1)
+ check(set_swap_interval(&host,1).kind==errors.Kind.Ok && calls==1 && lookups==1 && last==1)
  mock_status=5
  check(set_swap_interval(&host,0).kind==errors.Kind.System)
  restored()
  reset()
  mock_extensions="GLX_SGI_swap_control\x00"
  check(set_swap_interval(&host,0).kind==errors.Kind.Unsupported && lookups==0 && calls==0)
- check(set_swap_interval(&host,1).ok && calls==1 && last==1)
+ check(set_swap_interval(&host,1).kind==errors.Kind.Ok && calls==1 && last==1)
  mock_status=2
  check(set_swap_interval(&host,1).kind==errors.Kind.System)
  restored()
@@ -161,26 +162,26 @@ use "std/io" io
 fn check(ok:bool){if !ok {#panic("native swap interval")}}
 fn main(){
  host:=window.Window{}
- check(window.open(&host,"swap interval oracle",96,72).ok)
+ check(window.open(&host,"swap interval oracle",96,72).kind == errors.Kind.Ok)
  defer window.close(&host)
  other:=window.Window{}
- check(window.open(&other,"swap interval other context",64,64).ok)
+ check(window.open(&other,"swap interval other context",64,64).kind == errors.Kind.Ok)
  defer window.close(&other)
  context_name:="glXGetCurrentContext\x00"
  native_context:=#cast(fn()rawptr,window.gl_proc(&context_name[0]))
  check(native_context!=nil)
  check(native_context()==other.context)
  immediate:=window.set_swap_interval(&host,0)
- check(immediate.ok || immediate.kind==errors.Kind.Unsupported)
+ check(immediate.kind==errors.Kind.Ok || immediate.kind==errors.Kind.Unsupported)
  check(native_context()==host.context)
  synced:=window.set_swap_interval(&host,1)
- check(synced.ok || synced.kind==errors.Kind.Unsupported)
+ check(synced.kind==errors.Kind.Ok || synced.kind==errors.Kind.Unsupported)
  restored:=window.set_swap_interval(&host,0)
- check(restored.ok || restored.kind==errors.Kind.Unsupported)
- for frame in 0..8 {check(window.swap(&host).ok)}
- if immediate.ok {_=io.write_all(io.stdout(),"PASS native GLX immediate interval available\n")}
+ check(restored.kind==errors.Kind.Ok || restored.kind==errors.Kind.Unsupported)
+ for frame in 0..8 {check(window.swap(&host).kind == errors.Kind.Ok)}
+ if immediate.kind==errors.Kind.Ok {_=io.write_all(io.stdout(),"PASS native GLX immediate interval available\n")}
  else {_=io.write_all(io.stdout(),"PASS native GLX reports immediate interval unsupported\n")}
- if synced.ok {_=io.write_all(io.stdout(),"PASS native GLX one-refresh interval available\n")}
+ if synced.kind==errors.Kind.Ok {_=io.write_all(io.stdout(),"PASS native GLX one-refresh interval available\n")}
  else {_=io.write_all(io.stdout(),"PASS native GLX reports one-refresh interval unsupported\n")}
 }
 '''

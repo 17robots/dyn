@@ -189,7 +189,7 @@ fn main() {
     codepoints[c] = #cast(u32, c + 32)
   }
   host := window.Window{}
-  if !window.open(&host, "Dyn box viewer", 1100, 700).ok {
+  if window.open(&host, "Dyn box viewer", 1100, 700).kind != io.Kind.Ok {
     #panic("cannot open a window")
   }
   defer {

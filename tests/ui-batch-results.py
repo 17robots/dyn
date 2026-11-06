@@ -69,7 +69,7 @@ fn main() {
     }
   }
   host := window.Window{}
-  check(window.open(&host, "Dyn batched UI test", 160, 96).ok, "window")
+  check(window.open(&host, "Dyn batched UI test", 160, 96).kind == errors.Kind.Ok, "window")
   defer {
     window.close(&host)
   }
@@ -125,12 +125,13 @@ fn main() {
   check(gpu.render_batch(batch, ui.first(&context), 160, 96, font, tiny[..]).ok, "tiny stream")
   check(batch.draw_calls - calls > 5, "tiny stream flushes often")
   check(gpu.render_batch(batch, ui.first(&context), 160, 96, font, tiny[..10]).kind == errors.Kind.InvalidInput, "stream too small")
-  check(window.poll(&host).ok && window.swap(&host).ok, "present")
+  check(window.poll(&host).kind == errors.Kind.Ok && window.swap(&host).kind == errors.Kind.Ok, "present")
 }
 
 persistent_arena: *mem.Arena
 '''
-CLIPBOARD = r'''use "vendor/window" window
+CLIPBOARD = r'''use "std/io" errors
+use "vendor/window" window
 use "std/bytes" bytes
 use "std/time" time
 
@@ -143,11 +144,11 @@ fn check(ok: bool, message: []const u8) {
 fn main() {
   source := window.Window{}
   target := window.Window{}
-  check(window.open(&source, "source", 64, 64).ok, "source")
+  check(window.open(&source, "source", 64, 64).kind == errors.Kind.Ok, "source")
   defer {
     window.close(&source)
   }
-  check(window.open(&target, "target", 64, 64).ok, "target")
+  check(window.open(&target, "target", 64, 64).kind == errors.Kind.Ok, "target")
   defer {
     window.close(&target)
   }

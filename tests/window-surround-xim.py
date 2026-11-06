@@ -12,7 +12,7 @@ ORACLE=r'''fn surround_check(ok: bool, reason: []const u8) { if !ok { #panic(rea
 pub fn surround_oracle() {
   host := Window{}
   result := set_surrounding_text(&host,"text",4,4,1)
-  surround_check(!result.ok && result.kind == io.Kind.InvalidState,"closed window")
+  surround_check(result.kind != io.Kind.Ok && result.kind == io.Kind.InvalidState,"closed window")
   // Sentinel native handles intentionally cannot be called. This backend
   // must not attempt to register an unqualified string-conversion callback.
   host.display = #cast(rawptr,1)
@@ -32,33 +32,33 @@ pub fn surround_oracle() {
   host.desktop.text_length = 1
   host.desktop.text[0] = 'x'
   result = set_surrounding_text(&host,"text",4,4,1)
-  surround_check(!result.ok && result.kind == io.Kind.InvalidState,"ordered consumer required")
+  surround_check(result.kind != io.Kind.Ok && result.kind == io.Kind.InvalidState,"ordered consumer required")
   host.events_enabled = true
   ordered_push(&host,ordered.Event{kind:ordered.Kind.Wake,x:37})
   result = set_surrounding_text(&host,"hé😀",3,7,0x100000001)
-  surround_check(!result.ok && result.kind == io.Kind.Unsupported,"valid publication unsupported")
+  surround_check(result.kind != io.Kind.Ok && result.kind == io.Kind.Unsupported,"valid publication unsupported")
   result = set_surrounding_text(&host,"",0,0,1)
-  surround_check(!result.ok && result.kind == io.Kind.Unsupported,"empty valid context unsupported")
+  surround_check(result.kind != io.Kind.Ok && result.kind == io.Kind.Unsupported,"empty valid context unsupported")
   result = set_surrounding_text(&host,"abc",4,0,1)
-  surround_check(!result.ok && result.kind == io.Kind.InvalidInput,"cursor range")
+  surround_check(result.kind != io.Kind.Ok && result.kind == io.Kind.InvalidInput,"cursor range")
   result = set_surrounding_text(&host,"abc",0,4,1)
-  surround_check(!result.ok && result.kind == io.Kind.InvalidInput,"anchor range")
+  surround_check(result.kind != io.Kind.Ok && result.kind == io.Kind.InvalidInput,"anchor range")
   result = set_surrounding_text(&host,"hé",2,0,1)
-  surround_check(!result.ok && result.kind == io.Kind.InvalidInput,"cursor boundary")
+  surround_check(result.kind != io.Kind.Ok && result.kind == io.Kind.InvalidInput,"cursor boundary")
   result = set_surrounding_text(&host,"hé",0,2,1)
-  surround_check(!result.ok && result.kind == io.Kind.InvalidInput,"anchor boundary")
+  surround_check(result.kind != io.Kind.Ok && result.kind == io.Kind.InvalidInput,"anchor boundary")
   result = set_surrounding_text(&host,"\xff",0,0,1)
-  surround_check(!result.ok && result.kind == io.Kind.InvalidInput,"invalid UTF8")
+  surround_check(result.kind != io.Kind.Ok && result.kind == io.Kind.InvalidInput,"invalid UTF8")
   result = set_surrounding_text(&host,"a\0b",0,0,1)
-  surround_check(!result.ok && result.kind == io.Kind.InvalidInput,"native string NUL")
+  surround_check(result.kind != io.Kind.Ok && result.kind == io.Kind.InvalidInput,"native string NUL")
   result = set_surrounding_text(&host,"abc",0,0,0)
-  surround_check(!result.ok && result.kind == io.Kind.InvalidInput,"zero revision")
+  surround_check(result.kind != io.Kind.Ok && result.kind == io.Kind.InvalidInput,"zero revision")
   large: [4097]u8 = []
   for i in 0..#len(large) { large[i] = 'a' }
   result = set_surrounding_text(&host,large[..],0,0,1)
-  surround_check(!result.ok && result.kind == io.Kind.Capacity,"context byte cap")
+  surround_check(result.kind != io.Kind.Ok && result.kind == io.Kind.Capacity,"context byte cap")
   result = set_surrounding_text(&host,large[..4096],4096,0,1)
-  surround_check(!result.ok && result.kind == io.Kind.Unsupported,"maximum valid context")
+  surround_check(result.kind != io.Kind.Ok && result.kind == io.Kind.Unsupported,"maximum valid context")
   surround_check(host.desktop.context == #cast(rawptr,2) && host.desktop.method == #cast(rawptr,3) && host.desktop.text_input && host.desktop.style == 0x402,"focus and method unchanged")
   surround_check(host.desktop.preedit_count == 2 && host.desktop.preedit[0] == 'a' && host.desktop.preedit[1] == 'b' && host.desktop.composition.active == 1 && host.desktop.composition.text_length == 2 && host.desktop.composition.text[1] == 'b',"preedit unchanged")
   surround_check(host.desktop.text_length == 1 && host.desktop.text[0] == 'x',"legacy commit unchanged")

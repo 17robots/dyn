@@ -15,7 +15,7 @@ pub struct Window {
   desktop: Desktop,
   events: ordered.Queue, events_enabled: bool, wake_active: bool, wake_descriptor: i32, ordered_pressed: [256]u8,
 }
-pub struct Result { kind: io.Kind, ok: bool }
+pub type Result = io.Failure
 struct Visual { visual: rawptr, id: usize, screen: i32, depth: i32, class: i32, red: usize, green: usize, blue: usize, colormap_size: i32, bits: i32 }
 struct Attributes { background_pixmap: usize, background_pixel: usize, border_pixmap: usize, border_pixel: usize, bit_gravity: i32, win_gravity: i32, backing_store: i32, backing_planes: usize, backing_pixel: usize, save_under: i32, event_mask: isize, propagate: isize, override_redirect: i32, colormap: usize, cursor: usize }
 struct Event { kind: i32, serial: usize, sent: i32, display: rawptr, window: usize, rest: [19]usize }
@@ -118,7 +118,7 @@ pub fn open(window: *Window, title: []const u8, width, height: i32) Result {
   _ = sync(display, 0)
   _ = free(info)
   _ = free(configs)
-  if window.handle == 0 || window.context == nil || context_error_seen || !make_current(window).ok {
+  if window.handle == 0 || window.context == nil || context_error_seen || make_current(window).kind != io.Kind.Ok {
     close(window)
     return Result{kind:io.Kind.System}
   }
@@ -140,7 +140,7 @@ pub fn open(window: *Window, title: []const u8, width, height: i32) Result {
     close(window)
     return Result{kind:io.Kind.System}
   }
-  return Result{ok:true}
+  return Result{}
 }
 pub fn make_current(window: *Window) Result {
   if window.display == nil || window.context == nil || window.handle == 0 {
@@ -149,14 +149,14 @@ pub fn make_current(window: *Window) Result {
   if current(window.display, window.handle, window.context) == 0 {
     return Result{kind:io.Kind.System}
   }
-  return Result{ok:true}
+  return Result{}
 }
 pub fn swap(window: *Window) Result {
   if window.display == nil || window.context == nil {
     return Result{kind:io.Kind.InvalidState}
   }
   swap_buffers(window.display, window.handle)
-  return Result{ok:true}
+  return Result{}
 }
 pub fn poll(window: *Window) Result {
   if window.display == nil {
@@ -251,7 +251,7 @@ pub fn poll(window: *Window) Result {
       desktop_selection(window, &event)
     }
   }
-  return Result{ok:true}
+  return Result{}
 }
 pub fn close(window: *Window) {
   if window.display == nil {
