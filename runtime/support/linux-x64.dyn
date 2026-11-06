@@ -3,6 +3,23 @@
 fn unwind_owner_offset() usize {
   return 72
 }
+fn exit_number() i64 {
+  return 231
+}
+fn sigaltstack_number() i64 {
+  return 131
+}
+fn sigaction_number() i64 {
+  return 13
+}
+fn signal_restorer_flag() u64 {
+  return 0x04000000
+}
+fn signal_restorer(handler: usize) usize {
+  return handler
+}
+// The assembly runtime keeps its own trace slots and dumps them before exiting.
+extern fn fault_report "dyn_fault_report"()
 fn thread_number() i64 {
   return 186
 }

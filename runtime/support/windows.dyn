@@ -66,3 +66,5 @@ pub fn dyn_unwind_continue() {
   }
   panic_raw(nil, 0)
 }
+fn trace_thread_started() {
+}

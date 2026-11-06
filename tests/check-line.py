@@ -20,4 +20,11 @@ with tempfile.TemporaryDirectory(prefix='dyn-check-line-') as temporary:
     result = subprocess.run([DYN, 'check', str(source)], capture_output=True, text=True, timeout=30)
     assert result.returncode != 0 and 'mismatched types' in result.stderr, result.stderr
     assert result.stderr.count('error:') == 1, result.stderr
+    fault = Path(temporary) / 'fault'
+    fault.mkdir()
+    (fault / 'main.dyn').write_text('fn touch(address: usize) i32 {\n  return #cast(*i32, address).*\n}\nfn main() {\n  _ = touch(4096)\n}\n')
+    program = Path(temporary) / 'fault-program'
+    subprocess.run([DYN, 'build', str(fault), '--debug', '--quiet', '--no-cache', '--output', str(program)], check=True, timeout=120)
+    result = subprocess.run([str(program)], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 101 and 'memory fault' in result.stderr and 'at touch' in result.stderr, result
 print('PASS failed checks report their line; one error reports once')

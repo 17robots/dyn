@@ -60,3 +60,9 @@ stack trace:
 Native FFI libraries remain visible through their own debug information. Debugger expression
 parsers do not understand Dyn expressions, so use simple variable names, fields, addresses, and
 the debugger's C-like casts when inspecting values.
+
+## Memory faults
+
+On Linux, a debug program that touches an invalid address prints `memory fault`
+and its stack trace, then exits with status 101. It runs on a separate signal stack,
+so it reports stack overflows too. Release programs install no handler.

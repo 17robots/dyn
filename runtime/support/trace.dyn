@@ -32,6 +32,7 @@ fn trace_slot(id: u64, claim: bool) *TraceSlot {
           return slot
         }
         if claim && seen == 0 && atomic_claim(&slot.tid, 0, id) {
+          trace_thread_started()
           return slot
         }
       }
