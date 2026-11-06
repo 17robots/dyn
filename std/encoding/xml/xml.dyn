@@ -7,16 +7,13 @@ pub enum Kind { Start, End, Text, Comment, Processing, Cdata }
 // Scanners keep their first error: next returns ok false from then on, and the
 // caller checks state.kind once after the loop. Scanner state.error is module
 // detail; system_error is the native I/O code (which may be zero).
-// A failure comes from the document or from the stream that carries it.
-pub enum FailureKind { Ok, Parse, Io }
-pub struct Failure { kind: FailureKind, parse: parse.Failure, io: stream.Failure }
 pub struct Event { kind: Kind, name: []const u8, text: []const u8, attributes: []const u8, self_closing: bool }
-pub struct Scanner { source: []const u8, offset: usize, failure: Failure }
-pub struct StreamScanner { input: stream.Reader, storage: []u8, used: usize, consumed: usize, scanned: usize, quote: u8, ended: bool, failure: Failure }
-pub struct Result { value: Event, found: bool, failure: Failure }
+pub struct Scanner { source: []const u8, offset: usize, failure: parse.StreamFailure }
+pub struct StreamScanner { input: stream.Reader, storage: []u8, used: usize, consumed: usize, scanned: usize, quote: u8, ended: bool, failure: parse.StreamFailure }
+pub struct Result { value: Event, found: bool, failure: parse.StreamFailure }
 pub struct AttributeScanner { source: []const u8, offset: usize, failure: parse.Failure }
 pub struct Attribute { name: []const u8, value: []const u8, found: bool, failure: parse.Failure }
-pub struct Writer { sink: stream.Writer, failed: bool, failure: Failure }
+pub struct Writer { sink: stream.Writer, failed: bool, failure: parse.StreamFailure }
 
 pub fn scanner(source: []const u8) Scanner {
   return Scanner{ source: source }
@@ -39,14 +36,14 @@ fn shift_stream(state: *StreamScanner) {
   state.quote = 0
 }
 
-fn stream_fail(state: *StreamScanner, failure: Failure) Result {
+fn stream_fail(state: *StreamScanner, failure: parse.StreamFailure) Result {
   state.failure = failure
   return Result{ failure: failure }
 }
 
 // Events borrow storage until the next call. Text may be returned in multiple events.
 pub fn next_stream(state: *StreamScanner) Result {
-  if state.failure.kind != FailureKind.Ok {
+  if state.failure.kind != parse.StreamKind.Ok {
     return Result{ failure: state.failure }
   }
   shift_stream(state)
@@ -87,7 +84,7 @@ pub fn next_stream(state: *StreamScanner) Result {
         if parsed.found {
           state.consumed = candidate.offset
         }
-        else if candidate.failure.kind != FailureKind.Ok {
+        else if candidate.failure.kind != parse.StreamKind.Ok {
           state.failure = candidate.failure
         }
         return parsed
@@ -96,14 +93,14 @@ pub fn next_stream(state: *StreamScanner) Result {
       return Result{}
     }
     if state.used == #len(state.storage) {
-      return stream_fail(state, Failure{ kind: FailureKind.Parse, parse: parse.Failure{ kind: parse.Kind.Capacity } })
+      return stream_fail(state, parse.parse_failure(parse.Kind.Capacity, 0, ""))
     }
     input_result := stream.read(state.input, state.storage[state.used..])
     if input_result.status == stream.Status.Error {
-      return stream_fail(state, Failure{ kind: FailureKind.Io, io: stream.Failure{ kind: input_result.kind, native: input_result.error } })
+      return stream_fail(state, parse.io_failure(input_result.kind, input_result.error))
     }
     if input_result.transferred > #len(state.storage) - state.used {
-      return stream_fail(state, Failure{ kind: FailureKind.Io, io: stream.Failure{ kind: stream.Kind.System, native: -5 } })
+      return stream_fail(state, parse.io_failure(stream.Kind.System, -5))
     }
     state.used += input_result.transferred
     if input_result.status == stream.Status.End || input_result.transferred == 0 {
@@ -123,7 +120,7 @@ fn emit(state: *Writer, bytes: []const u8) bool {
   result := stream.write_all(state.sink, bytes)
   if result.status == stream.Status.Error {
     state.failed = true
-    state.failure = Failure{ kind: FailureKind.Io, io: stream.Failure{ kind: result.kind, native: result.error } }
+    state.failure = parse.io_failure(result.kind, result.error)
     return false
   }
   return true
@@ -167,7 +164,7 @@ fn writer_valid(state: *Writer, valid: bool) bool {
   }
   if !valid {
     state.failed = true
-    state.failure = Failure{ kind: FailureKind.Parse, parse: parse.Failure{ kind: parse.Kind.Syntax } }
+    state.failure = parse.parse_failure(parse.Kind.Syntax, 0, "")
     return false
   }
   return true
@@ -202,7 +199,7 @@ fn starts(source: []const u8, at: usize, expected: []const u8) bool {
   return bytes.equal(source[at..at + #len(expected)], expected)
 }
 fn fail(state: *Scanner, at: usize) Result {
-  state.failure = Failure{ kind: FailureKind.Parse, parse: parse.Failure{ kind: parse.Kind.Syntax, offset: at } }
+  state.failure = parse.parse_failure(parse.Kind.Syntax, at, "")
   return Result{ failure: state.failure }
 }
 
@@ -317,7 +314,7 @@ fn valid_text(text: []const u8, attribute: bool) bool {
 }
 
 pub fn next(state: *Scanner) Result {
-  if state.failure.kind != FailureKind.Ok || state.offset == #len(state.source) {
+  if state.failure.kind != parse.StreamKind.Ok || state.offset == #len(state.source) {
     return Result{ failure: state.failure }
   }
   start := state.offset
@@ -509,7 +506,7 @@ pub fn valid(source: []const u8, stack: [][]const u8) bool {
   for {
     item := next(&state)
     if !item.found {
-      return state.failure.kind == FailureKind.Ok && depth == 0 && roots == 1
+      return state.failure.kind == parse.StreamKind.Ok && depth == 0 && roots == 1
     }
     if item.value.kind == Kind.Text && !valid_text(item.value.text, false) {
       return false

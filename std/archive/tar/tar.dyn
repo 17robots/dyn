@@ -1,5 +1,5 @@
 use "std/io" stream
-use "std/io" errors
+use "std/parse" parse
 pub struct Entry {
   name: []const u8,
   prefix: []const u8,
@@ -20,14 +20,12 @@ pub struct StreamReader {
   padding: usize,
   active: bool,
   ended: bool,
-  error: isize,
-  kind: errors.Kind,
-  detail: ErrorKind,
   offset: usize,
   failed: bool,
+  failure: parse.StreamFailure,
 }
 
-// typeflag is the TAR protocol byte; kind is the portable error category.
+// typeflag is the TAR protocol byte.
 // offset counts source bytes consumed, including partial reads on failure.
 pub struct StreamEntry {
   name: []const u8,
@@ -35,16 +33,14 @@ pub struct StreamEntry {
   link_name: []const u8,
   size: u64,
   typeflag: u8,
-  kind: errors.Kind,
-  error: isize,
   offset: usize,
-  detail: ErrorKind,
-  ok: bool,
+  found: bool,
+  failure: parse.StreamFailure,
 }
 
 pub fn stream_reader(input: stream.Reader, header_storage: []u8, metadata: []u8) StreamReader {
   if bytes.overlaps(header_storage, metadata) {
-    return StreamReader{ failed: true, kind: errors.Kind.InvalidInput, detail: ErrorKind.Overlap }
+    return StreamReader{ failed: true, failure: parse.parse_failure(parse.Kind.Overlap, 0, "") }
   }
   half := #len(metadata) / 2
   return StreamReader{ source_reader: input, header_storage: header_storage, metadata: metadata[..half], spare: metadata[half..half * 2] }
@@ -91,26 +87,39 @@ fn parse_header(header: []const u8) Header {
 
 // Every read contributes to the absolute input cursor, including partial errors.
 // The failed flag, rather than a native-code sentinel, preserves native zero.
-fn stream_failure(state: *StreamReader, kind: errors.Kind, detail: ErrorKind) StreamEntry {
+fn stream_failure(state: *StreamReader, failure: parse.StreamFailure) StreamEntry {
   if !state.failed {
     state.failed = true
-    state.kind = kind
-    state.detail = detail
+    state.failure = failure
   }
-  return StreamEntry{ kind: state.kind, error: state.error, offset: state.offset, detail: state.detail }
+  return StreamEntry{ offset: state.offset, failure: state.failure }
+}
+fn syntax_failure(state: *StreamReader, kind: parse.Kind, message: []const u8) StreamEntry {
+  return stream_failure(state, parse.parse_failure(kind, state.offset, message))
+}
+// Payload reads speak stream.Result, so parse failures map to the nearest io kind.
+fn failed_read(state: *StreamReader, transferred: usize) stream.Result {
+  kind := stream.Kind.InvalidInput
+  if state.failure.kind == parse.StreamKind.Io {
+    kind = state.failure.io.kind
+  } else if state.failure.parse.kind == parse.Kind.Capacity {
+    kind = stream.Kind.Capacity
+  } else if state.failure.parse.kind == parse.Kind.Overflow {
+    kind = stream.Kind.Overflow
+  }
+  return stream.Result{ transferred: transferred, error: state.failure.io.native, kind: kind, status: stream.Status.Error }
 }
 fn read_exact(state: *StreamReader, destination: []u8) stream.Result {
   if state.failed {
-    return stream.Result{ kind: state.kind, error: state.error, status: stream.Status.Error }
+    return failed_read(state, 0)
   }
   result := stream.read_exact(state.source_reader, destination)
   if result.status == stream.Status.Error {
-    state.error = result.error
-    _ = stream_failure(state, result.kind, ErrorKind.Truncated)
+    _ = stream_failure(state, parse.io_failure(result.kind, result.error))
   }
   if result.transferred > (~#cast(usize, 0)) - state.offset {
-    _ = stream_failure(state, errors.Kind.Overflow, ErrorKind.InvalidOffset)
-    return stream.Result{ transferred: result.transferred, error: state.error, kind: state.kind, status: stream.Status.Error }
+    _ = syntax_failure(state, parse.Kind.Overflow, "invalid offset")
+    return failed_read(state, result.transferred)
   }
   state.offset += result.transferred
   return result
@@ -124,7 +133,7 @@ fn discard(state: *StreamReader, amount: usize) bool {
     }
     result := read_exact(state, state.header_storage[..take])
     if result.status != stream.Status.Complete {
-      _ = stream_failure(state, errors.Kind.InvalidInput, ErrorKind.Truncated)
+      _ = syntax_failure(state, parse.Kind.Truncated, "")
       return false
     }
     left -= take
@@ -145,7 +154,7 @@ fn retain_name(destination: []u8, used: *usize, source: []const u8) []const u8 {
 fn compact_metadata(state: *StreamReader, local: *Overrides) bool {
   required := #len(state.defaults.path) + #len(state.defaults.link) + #len(local.path) + #len(local.link)
   if required > #len(state.spare) {
-    _ = stream_failure(state, errors.Kind.Capacity, ErrorKind.Capacity)
+    _ = syntax_failure(state, parse.Kind.Capacity, "")
     return false
   }
   used: usize = 0
@@ -164,24 +173,24 @@ fn compact_metadata(state: *StreamReader, local: *Overrides) bool {
 // names plus the next extension payload. Empty metadata accepts plain TAR only.
 pub fn next_stream(state: *StreamReader) StreamEntry {
   if state.failed {
-    return stream_failure(state, state.kind, state.detail)
+    return StreamEntry{ offset: state.offset, failure: state.failure }
   }
   if state.ended {
     return StreamEntry{ offset: state.offset }
   }
   if #len(state.header_storage) < 512 {
-    return stream_failure(state, errors.Kind.Capacity, ErrorKind.Capacity)
+    return syntax_failure(state, parse.Kind.Capacity, "")
   }
   if state.active {
     if !discard(state, state.remaining + state.padding) {
-      return stream_failure(state, state.kind, state.detail)
+      return StreamEntry{ offset: state.offset, failure: state.failure }
     }
     state.active = false
   }
   local := Overrides{}
   pending: bool = false
   if !compact_metadata(state, &local) {
-    return stream_failure(state, state.kind, state.detail)
+    return StreamEntry{ offset: state.offset, failure: state.failure }
   }
   for {
     header_result := read_exact(state, state.header_storage[..512])
@@ -190,15 +199,15 @@ pub fn next_stream(state: *StreamReader) StreamEntry {
       return StreamEntry{ offset: state.offset }
     }
     if header_result.status != stream.Status.Complete {
-      return stream_failure(state, errors.Kind.InvalidInput, ErrorKind.Truncated)
+      return syntax_failure(state, parse.Kind.Truncated, "")
     }
     parsed := parse_header(state.header_storage[..512])
     if !parsed.ok {
-      return stream_failure(state, errors.Kind.InvalidInput, ErrorKind.Header)
+      return syntax_failure(state, parse.Kind.Syntax, "invalid header")
     }
     if parsed.ended {
       if pending {
-        return stream_failure(state, errors.Kind.InvalidInput, ErrorKind.Header)
+        return syntax_failure(state, parse.Kind.Syntax, "invalid header")
       }
       state.ended = true
       return StreamEntry{ offset: state.offset }
@@ -209,45 +218,45 @@ pub fn next_stream(state: *StreamReader) StreamEntry {
       apply_overrides(&entry, combined_overrides(state.defaults, local))
     }
     if entry.size > 18446744073709551104 {
-      return stream_failure(state, errors.Kind.InvalidInput, ErrorKind.Header)
+      return syntax_failure(state, parse.Kind.Syntax, "invalid header")
     }
     state.remaining = #cast(usize, entry.size)
     state.padding = (512 - state.remaining % 512) % 512
     if !extension {
       state.active = true
       return StreamEntry{ name: entry.name, prefix: entry.prefix, link_name: entry.link_name,
-        size: entry.size, typeflag: entry.kind, offset: state.offset, ok: true }
+        size: entry.size, typeflag: entry.kind, offset: state.offset, found: true }
     }
     pending = true
     if state.remaining > #len(state.metadata) - state.metadata_used {
-      return stream_failure(state, errors.Kind.Capacity, ErrorKind.Capacity)
+      return syntax_failure(state, parse.Kind.Capacity, "")
     }
     payload := state.metadata[state.metadata_used..state.metadata_used + state.remaining]
     loaded := read_exact(state, payload)
     if loaded.status != stream.Status.Complete {
-      return stream_failure(state, errors.Kind.InvalidInput, ErrorKind.Truncated)
+      return syntax_failure(state, parse.Kind.Truncated, "")
     }
     if !discard(state, state.padding) {
-      return stream_failure(state, state.kind, state.detail)
+      return StreamEntry{ offset: state.offset, failure: state.failure }
     }
     if entry.kind == 'x' {
       if !pax(payload, &local, false) {
-        return stream_failure(state, errors.Kind.InvalidInput, ErrorKind.Header)
+        return syntax_failure(state, parse.Kind.Syntax, "invalid header")
       }
     }
     else if entry.kind == 'g' {
       if !pax(payload, &state.defaults, true) {
-        return stream_failure(state, errors.Kind.InvalidInput, ErrorKind.Header)
+        return syntax_failure(state, parse.Kind.Syntax, "invalid header")
       }
     }
     else {
       if #len(payload) == 0 || payload[#len(payload) - 1] != 0 {
-        return stream_failure(state, errors.Kind.InvalidInput, ErrorKind.Header)
+        return syntax_failure(state, parse.Kind.Syntax, "invalid header")
       }
       value := payload[..#len(payload) - 1]
       for byte in value {
         if byte == 0 {
-          return stream_failure(state, errors.Kind.InvalidInput, ErrorKind.Header)
+          return syntax_failure(state, parse.Kind.Syntax, "invalid header")
         }
       }
       if entry.kind == 'L' {
@@ -260,20 +269,20 @@ pub fn next_stream(state: *StreamReader) StreamEntry {
       }
     }
     if !compact_metadata(state, &local) {
-      return stream_failure(state, state.kind, state.detail)
+      return StreamEntry{ offset: state.offset, failure: state.failure }
     }
   }
-  return stream_failure(state, errors.Kind.InvalidInput, ErrorKind.Header)
+  return syntax_failure(state, parse.Kind.Syntax, "invalid header")
 }
 
 // Reads entry payload incrementally. End means this entry is complete, not archive EOF.
 pub fn read_stream(state: *StreamReader, destination: []u8) stream.Result {
   if state.failed {
-    return stream.Result{ kind: state.kind, error: state.error, status: stream.Status.Error }
+    return failed_read(state, 0)
   }
   if !state.active {
-    _ = stream_failure(state, errors.Kind.InvalidState, ErrorKind.InvalidState)
-    return stream.Result{ kind: state.kind, error: state.error, status: stream.Status.Error }
+    _ = stream_failure(state, parse.io_failure(stream.Kind.InvalidState, 0))
+    return failed_read(state, 0)
   }
   if #len(destination) == 0 {
     return stream.Result{}
@@ -287,8 +296,8 @@ pub fn read_stream(state: *StreamReader, destination: []u8) stream.Result {
   }
   result := read_exact(state, destination[..take])
   if result.status != stream.Status.Complete {
-    _ = stream_failure(state, errors.Kind.InvalidInput, ErrorKind.Truncated)
-    return stream.Result{ transferred: result.transferred, kind: state.kind, error: state.error, status: stream.Status.Error }
+    _ = syntax_failure(state, parse.Kind.Truncated, "")
+    return failed_read(state, result.transferred)
   }
   state.remaining -= take
   status := stream.Status.Complete
@@ -331,8 +340,6 @@ fn octal(bytes: []const u8, output: *u64) bool {
 }
 
 // Slices borrow archive. End and Error leave offset unchanged, so both repeat.
-pub enum Status { Entry, End, Error }
-pub enum ErrorKind { None, InvalidOffset, Truncated, Header, Capacity, Overlap, InvalidState }
 // Buffered parser errors retain their module category in detail. offset is the
 // absolute offending header (or first missing byte for truncation).
-pub struct Result { entry: Entry, status: Status, kind: errors.Kind, error: isize, offset: usize, detail: ErrorKind, ok: bool }
+pub struct Result { entry: Entry, offset: usize, found: bool, failure: parse.Failure }

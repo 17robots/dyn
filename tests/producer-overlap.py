@@ -9,6 +9,7 @@ DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 SOURCE=r'''use "std/archive/zip" zip
 use "std/unicode/text" text
 use "std/io" io
+use "std/parse" parse
 use "std/mem" mem
 use "std/hash" hashing
 use "std/bytes" bytes
@@ -23,7 +24,7 @@ fn main() {
   mark:=mem.arena_mark(arena)
   entry:=zip.Entry{payload:payload[..3],compressed_size:3,uncompressed_size:3,checksum:hashing.crc32(payload[..3])}
   result:=zip.extract(arena,entry)
-  if result.ok || result.kind!=errors.Kind.InvalidInput || result.detail!=zip.ErrorKind.Overlap || result.error!=0 || #len(result.value)!=0 || mem.arena_mark(arena)!=mark || !bytes.equal(payload[..3],"abc") { #panic("ZIP overlap preflight") }
+  if result.failure.kind != parse.Kind.Overlap || #len(result.value)!=0 || mem.arena_mark(arena)!=mark || !bytes.equal(payload[..3],"abc") { #panic("ZIP overlap preflight") }
   backing:[1024+mem.ArenaBufferOverhead]u8=[]
   unicodearena:=mem.arena_from_buffer(backing[..])
   text_payload:=unicodearena.data[mem.ArenaHeader..]

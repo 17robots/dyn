@@ -3,14 +3,11 @@
 // the caller checks state.failure once after the loop.
 use "std/io" stream
 use "std/parse" parse
-// A failure comes from the input text or from the stream that carries it.
-pub enum FailureKind { Ok, Parse, Io }
-pub struct Failure { kind: FailureKind, parse: parse.Failure, io: stream.Failure }
-pub struct Scanner { source: []const u8, offset: usize, finished: bool, failure: Failure }
-pub struct StreamScanner { input: stream.Reader, lookahead: u8, has_lookahead: bool, record_ended: bool, ended: bool, finished: bool, failure: Failure }
-pub struct Field { text: []u8, end_record: bool, end_input: bool, found: bool, failure: Failure }
+pub struct Scanner { source: []const u8, offset: usize, finished: bool, failure: parse.StreamFailure }
+pub struct StreamScanner { input: stream.Reader, lookahead: u8, has_lookahead: bool, record_ended: bool, ended: bool, finished: bool, failure: parse.StreamFailure }
+pub struct Field { text: []u8, end_record: bool, end_input: bool, found: bool, failure: parse.StreamFailure }
 struct ByteResult { value: u8, end: bool, ok: bool }
-pub struct Writer { sink: stream.Writer, fields: usize, failed: bool, failure: stream.Failure }
+pub struct Writer { sink: stream.Writer, fields: usize, failed: bool, failure: parse.StreamFailure }
 
 pub fn scanner(source: []const u8) Scanner {
   return Scanner{ source: source }
@@ -30,7 +27,7 @@ fn stream_byte(state: *StreamScanner) ByteResult {
   byte: [1]u8 = []
   result := stream.read(state.input, byte[..])
   if result.status == stream.Status.Error {
-    state.failure = Failure{ kind: FailureKind.Io, io: stream.Failure{ kind: result.kind, native: result.error } }
+    state.failure = parse.io_failure(result.kind, result.error)
     state.finished = true
     return ByteResult{}
   }
@@ -47,7 +44,7 @@ fn stream_unread(state: *StreamScanner, value: u8) {
 }
 
 fn stream_fail(state: *StreamScanner, kind: parse.Kind) Field {
-  state.failure = Failure{ kind: FailureKind.Parse, parse: parse.Failure{ kind: kind } }
+  state.failure = parse.parse_failure(kind, 0, "")
   state.finished = true
   return Field{ failure: state.failure }
 }
@@ -153,7 +150,7 @@ fn write_all(state: *Writer, bytes: []const u8) bool {
   result := stream.write_all(state.sink, bytes)
   if result.status == stream.Status.Error {
     state.failed = true
-    state.failure = stream.Failure{ kind: result.kind, native: result.error }
+    state.failure = parse.io_failure(result.kind, result.error)
     return false
   }
   return true
@@ -206,7 +203,7 @@ pub fn write_field(state: *Writer, value: []const u8, end_record: bool) bool {
 }
 
 fn fail(state: *Scanner, destination: []u8, kind: parse.Kind) Field {
-  state.failure = Failure{ kind: FailureKind.Parse, parse: parse.Failure{ kind: kind, offset: state.offset } }
+  state.failure = parse.parse_failure(kind, state.offset, "")
   state.finished = true
   return Field{ text: destination[..0], failure: state.failure }
 }

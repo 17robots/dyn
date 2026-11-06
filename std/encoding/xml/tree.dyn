@@ -94,7 +94,7 @@ pub fn parse(arena: *tree_memory.Arena, source: []const u8) ParseResult {
     start := scan.offset
     result := next(&scan)
     if !result.found {
-      if scan.failure.kind != FailureKind.Ok {
+      if scan.failure.kind != parse.StreamKind.Ok {
         return tree_failure(arena, mark, scan.failure.parse.offset, scan.failure.parse.message)
       }
       if parent != document {

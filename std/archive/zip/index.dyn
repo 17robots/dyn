@@ -3,11 +3,11 @@
 // ZIP64, encryption, multi-disk and self-extracting offset correction are unsupported.
 use "std/bytes" bytes
 
-pub struct OpenResult { value: ArchiveReader, kind: errors.Kind, error: isize, offset: usize, detail: ErrorKind, ok: bool }
-struct Central { entry: Entry, next: usize, error: ErrorKind, ok: bool }
+pub struct OpenResult { value: ArchiveReader, offset: usize, failure: parse.Failure }
+struct Central { entry: Entry, next: usize, error: parse.Kind, ok: bool }
 fn central_entry(source: []const u8, at: usize, limit: usize, data_limit: usize) Central {
   if data_limit > limit || at < data_limit || at > limit || limit > #len(source) || limit - at < 46 || u32le(source, at) != 33639248 {
-    return Central{ error: ErrorKind.Syntax }
+    return Central{ error: parse.Kind.Syntax }
   }
   flags := u16le(source, at + 8)
   method := u16le(source, at + 10)
@@ -15,44 +15,44 @@ fn central_entry(source: []const u8, at: usize, limit: usize, data_limit: usize)
   size := #cast(usize, u32le(source, at + 24))
   local := #cast(usize, u32le(source, at + 42))
   if (flags & 8257) != 0 || compressed == 4294967295 || size == 4294967295 || local == 4294967295 || u16le(source, at + 34) != 0 {
-    return Central{ error: ErrorKind.Unsupported }
+    return Central{ error: parse.Kind.Unsupported }
   }
   name_length := #cast(usize, u16le(source, at + 28))
   tail := name_length + #cast(usize, u16le(source, at + 30)) + #cast(usize, u16le(source, at + 32))
   if tail > limit - at - 46 {
-    return Central{ error: ErrorKind.Syntax }
+    return Central{ error: parse.Kind.Syntax }
   }
   name := source[at + 46..at + 46 + name_length]
   if local > data_limit || data_limit - local < 30 || u32le(source, local) != 67324752 {
-    return Central{ error: ErrorKind.Syntax }
+    return Central{ error: parse.Kind.Syntax }
   }
   local_name := #cast(usize, u16le(source, local + 26))
   extra := #cast(usize, u16le(source, local + 28))
   if local_name + extra > data_limit - local - 30 {
-    return Central{ error: ErrorKind.Syntax }
+    return Central{ error: parse.Kind.Syntax }
   }
   if flags != u16le(source, local + 6) || method != u16le(source, local + 8) || !bytes.equal(name, source[local + 30..local + 30 + local_name]) {
-    return Central{ error: ErrorKind.Syntax }
+    return Central{ error: parse.Kind.Syntax }
   }
   payload := local + 30 + local_name + extra
   if compressed > data_limit - payload {
-    return Central{ error: ErrorKind.Syntax }
+    return Central{ error: parse.Kind.Syntax }
   }
   checksum := u32le(source, at + 16)
   if (flags & 8) == 0 {
     if checksum != u32le(source, local + 14) || compressed != #cast(usize, u32le(source, local + 18)) || size != #cast(usize, u32le(source, local + 22)) {
-      return Central{ error: ErrorKind.Syntax }
+      return Central{ error: parse.Kind.Syntax }
     }
   } else {
     descriptor := payload + compressed
     if data_limit - descriptor < 12 {
-      return Central{ error: ErrorKind.Syntax }
+      return Central{ error: parse.Kind.Syntax }
     }
     // A CRC may itself equal the optional signature: try the unsigned form first.
     unsigned := u32le(source, descriptor) == checksum && #cast(usize, u32le(source, descriptor + 4)) == compressed && #cast(usize, u32le(source, descriptor + 8)) == size
     if !unsigned {
       if data_limit - descriptor < 16 || u32le(source, descriptor) != 134695760 || u32le(source, descriptor + 4) != checksum || #cast(usize, u32le(source, descriptor + 8)) != compressed || #cast(usize, u32le(source, descriptor + 12)) != size {
-        return Central{ error: ErrorKind.Syntax }
+        return Central{ error: parse.Kind.Syntax }
       }
     }
   }
@@ -65,10 +65,10 @@ fn central_entry(source: []const u8, at: usize, limit: usize, data_limit: usize)
 // Payload CRCs are verified by extract, without allocating or decompressing here.
 pub fn open_checked(source: []const u8) OpenResult {
   if #len(source) > ((~#cast(usize, 0)) >> 1) {
-    return OpenResult{ kind: errors.Kind.Overflow, detail: ErrorKind.Syntax }
+    return OpenResult{ failure: parse.Failure{ kind: parse.Kind.Overflow } }
   }
   if #len(source) < 22 {
-    return OpenResult{ kind: portable(ErrorKind.Syntax), detail: ErrorKind.Syntax }
+    return OpenResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   end := #len(source) - 22
   floor: usize = 0
@@ -87,41 +87,41 @@ pub fn open_checked(source: []const u8) OpenResult {
     end -= 1
   }
   if !found {
-    return OpenResult{ kind: portable(ErrorKind.Syntax), offset: end, detail: ErrorKind.Syntax }
+    return OpenResult{ offset: end, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: end } }
   }
   error := end_record(source[end..])
-  if error != ErrorKind.None {
-    return OpenResult{ kind: portable(error), offset: end, detail: error }
+  if error != parse.Kind.Ok {
+    return OpenResult{ offset: end, failure: parse.Failure{ kind: error, offset: end } }
   }
   start := #cast(usize, u32le(source, end + 16))
   size := #cast(usize, u32le(source, end + 12))
   if start == 4294967295 || size == 4294967295 {
-    return OpenResult{ kind: portable(ErrorKind.Unsupported), offset: end, detail: ErrorKind.Unsupported }
+    return OpenResult{ offset: end, failure: parse.Failure{ kind: parse.Kind.Unsupported, offset: end } }
   }
   if start > end || size != end - start {
-    return OpenResult{ kind: portable(ErrorKind.Syntax), offset: end, detail: ErrorKind.Syntax }
+    return OpenResult{ offset: end, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: end } }
   }
   count := #cast(usize, u16le(source, end + 10))
   cursor := start
   for i in 0..count {
     entry := central_entry(source, cursor, end, start)
     if !entry.ok {
-      return OpenResult{ kind: portable(entry.error), offset: cursor, detail: entry.error }
+      return OpenResult{ offset: cursor, failure: parse.Failure{ kind: entry.error, offset: cursor } }
     }
     cursor = entry.next
   }
   if cursor != end {
-    return OpenResult{ kind: portable(ErrorKind.Syntax), offset: end, detail: ErrorKind.Syntax }
+    return OpenResult{ offset: end, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: end } }
   }
   return OpenResult{ value: ArchiveReader{ source: source, offset: start, indexed: true,
-    directory_start: start, directory_end: end, remaining: count }, offset: start, ok: true }
+    directory_start: start, directory_end: end, remaining: count }, offset: start }
 }
 fn next_indexed(state: *ArchiveReader) EntryResult {
   if state.failed {
-    return archive_failure(state, state.detail)
+    return archive_failure(state, state.failure.parse.kind)
   }
   if state.remaining == 0 {
-    return EntryResult{ detail: ErrorKind.End, offset: state.offset }
+    return EntryResult{ offset: state.offset }
   }
   item := central_entry(state.source, state.offset, state.directory_end, state.directory_start)
   if !item.ok {
@@ -129,5 +129,5 @@ fn next_indexed(state: *ArchiveReader) EntryResult {
   }
   state.offset = item.next
   state.remaining -= 1
-  return EntryResult{ value: item.entry, offset: state.offset, ok: true }
+  return EntryResult{ value: item.entry, offset: state.offset, found: true }
 }
