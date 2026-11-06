@@ -2231,6 +2231,8 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
       return a->expressions[id].type = expected;
     }
     if (a->expressions[id].integer > INT32_MAX) {
+      /* The operand that gave this context already reported its error. */
+      if (expected == DYN_TYPE_ERROR) return a->expressions[id].type = DYN_TYPE_ERROR;
       error_span(a->expressions[id].span, s, errors,
                  "integer literal does not fit default i32");
       return a->expressions[id].type = DYN_TYPE_ERROR;
