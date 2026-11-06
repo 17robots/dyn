@@ -1,0 +1,8 @@
+fn divide(top: i32, bottom: i32) i32 {
+  first := top + 1
+  return first / bottom
+}
+fn main() {
+  _ = divide(1, 1)
+  _ = divide(1, 0)
+}

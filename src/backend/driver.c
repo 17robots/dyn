@@ -150,6 +150,8 @@ typedef struct {
   unsigned *dwarf_types; /* DynType -> DWARF type id + 1 for this object; 1 means unknown */
   size_t message_offsets[GUARD_COUNT], message_lengths[GUARD_COUNT];
   uint32_t check_origin, message_origins[GUARD_COUNT], stub_origins[GUARD_COUNT];
+  /* Debug builds name the failing statement, so its line keys messages and stubs. */
+  uint32_t check_byte, message_bytes[GUARD_COUNT], stub_bytes[GUARD_COUNT];
   /* Per function, the failure path of each runtime check without pending
      defers is emitted once; later checks of that kind branch to it. */
   size_t guard_stubs[GUARD_COUNT];
@@ -487,8 +489,10 @@ static void store_memory(BackendContext *ctx, DynType type) {
 }
 static const char *function_name(const DynIrFunction *f) { return f->foreign ? f->link_name : f->name; }
 static void guard(BackendContext *ctx, const DynIrFunction *f, Cond success, unsigned check) {
-  if (ctx->message_offsets[check] == SIZE_MAX || ctx->message_origins[check] != ctx->check_origin) {
+  if (ctx->message_offsets[check] == SIZE_MAX || ctx->message_origins[check] != ctx->check_origin ||
+      ctx->message_bytes[check] != ctx->check_byte) {
     ctx->message_origins[check] = ctx->check_origin;
+    ctx->message_bytes[check] = ctx->check_byte;
     /* dyn_check_failed builds "runtime check failed (KIND) in NAME" from the
        name and kind << 24 | name length, so each name is stored once. */
     const DynIrFunction *origin = ctx->check_origin && ctx->check_origin <= ctx->active_ir->function_count
@@ -496,6 +500,16 @@ static void guard(BackendContext *ctx, const DynIrFunction *f, Cond success, uns
     const char *name = function_name(origin);
     size_t length = strlen(name);
     if (length > 800) length = 800;
+    char located[801];
+    if (ctx->debug_mode && ctx->debug_locations) {
+      const char *path; unsigned line, column;
+      dyn_location_get(ctx->debug_locations, ctx->debug_source, ctx->check_byte, &path, &line, &column);
+      int written = snprintf(located, sizeof(located), "%.*s at %s:%u", (int)length, name, path, line);
+      if (written > 0) {
+        name = located;
+        length = (size_t)written < sizeof(located) ? (size_t)written : sizeof(located) - 1;
+      }
+    }
     ctx->message_lengths[check] = (size_t)check << 24 | length;
     ctx->message_offsets[check] = literal(ctx, name, length);
   }
@@ -503,7 +517,8 @@ static void guard(BackendContext *ctx, const DynIrFunction *f, Cond success, uns
      Restore the fixed frame before calling the noreturn runtime: nested
      expression pushes may otherwise leave the call stack misaligned. */
   bool plain = ctx->unwinding || !ctx->defer_count;
-  if (plain && ctx->guard_stubs[check] != SIZE_MAX && ctx->stub_origins[check] == ctx->check_origin) {
+  if (plain && ctx->guard_stubs[check] != SIZE_MAX && ctx->stub_origins[check] == ctx->check_origin &&
+      ctx->stub_bytes[check] == ctx->check_byte) {
     /* x86-64 branches straight to the shared failure path on the inverse
        condition; elsewhere a success branch skips a jump to it. */
     static const signed char inverse[] = {1, 0, 3, 2, 5, 4, 7, 6, 9, 8, -1, 2};
@@ -517,7 +532,7 @@ static void guard(BackendContext *ctx, const DynIrFunction *f, Cond success, uns
     return;
   }
   size_t branch = isa_branch(ctx, success);
-  if (plain) { ctx->guard_stubs[check] = ctx->text.n; ctx->stub_origins[check] = ctx->check_origin; }
+  if (plain) { ctx->guard_stubs[check] = ctx->text.n; ctx->stub_origins[check] = ctx->check_origin; ctx->stub_bytes[check] = ctx->check_byte; }
   bool held = ctx->holding; ctx->holding = false; /* the failure path never returns */
   isa_reset_stack(ctx);
   unsigned saved_stack=ctx->stack_slots; ctx->stack_slots=0;
@@ -2293,6 +2308,7 @@ static bool block_statements_value(BackendContext *ctx, const DynIrProgram *ir, 
     ctx->check_origin = s->check_origin ? s->check_origin : enclosing_origin;
     if (previous) statement_scopes(ctx, ir, f, previous, previous_start);
     previous = s; previous_start = ctx->text.n;
+    if (ctx->debug_mode) ctx->check_byte = (uint32_t)s->span.start_byte;
     if (ctx->dwarf) {
       const char *path; unsigned line,column;
       dyn_location_get(ctx->debug_locations,ctx->debug_source,s->span.start_byte,&path,&line,&column);
