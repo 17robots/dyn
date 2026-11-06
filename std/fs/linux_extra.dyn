@@ -91,6 +91,7 @@ pub fn close_directory(directory: *Directory) {
   close(&directory.file)
 }
 
+// A failed close is not reported. Sync the destination when it must be durable.
 pub fn copy_file(source: []const u8, destination: []const u8, scratch: []u8) Result {
   if #len(scratch) == 0 {
     return Result{ failure: io.Failure{ kind: io.linux(-22), native: -22 } }

@@ -341,6 +341,7 @@ pub fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) ReadAllR
   return ReadAllResult{ value: output[..total] }
 }
 
+// A failed close is not reported. Use sync when the write must be durable.
 pub fn write_all(path: []const u8, source: []const u8) Result {
   created := create(path)
   if created.failure.kind != stream.Kind.Ok {
