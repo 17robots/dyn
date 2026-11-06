@@ -1,4 +1,5 @@
 // Usage: font-ui-demo FONT.ttf OUTPUT.png. No platform font service is used.
+use "std/parse" parse
 use "std/io" io
 use "std/ui" ui
 use "std/ui/software" software
@@ -27,7 +28,7 @@ fn main() {
     #panic("cannot read font")
   }
   opened := font.open(bytes.value)
-  if !opened.ok {
+  if opened.failure.kind != parse.Kind.Ok {
     #panic("unsupported or malformed TrueType font")
   }
   codepoints: [100]u32 = []
@@ -40,7 +41,7 @@ fn main() {
   codepoints[98] = 241
   codepoints[99] = 252
   cached := font.atlas(output, &opened.value, codepoints[..], 24, 512, 256)
-  if !cached.ok {
+  if cached.failure.kind != parse.Kind.Ok {
     #panic("cannot cache font")
   }
   context := ui.Context{ style: ui.default_style }
@@ -81,7 +82,7 @@ fn main() {
     #panic("UI demo render")
   }
   encoded := png.encode(output, pixels, 480, 240, 4)
-  if !encoded.ok || fs.write_all(arguments.value[2], encoded.value).failure.kind != io.Kind.Ok {
+  if encoded.failure.kind != parse.Kind.Ok || fs.write_all(arguments.value[2], encoded.value).failure.kind != io.Kind.Ok {
     #panic("UI demo output")
   }
 }

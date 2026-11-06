@@ -45,6 +45,7 @@ def face(family, style='Regular', weight=400, italic=False, mono=False):
 
 SOURCE = r'''use "std/font/system" system
 use "std/io" io
+use "std/parse" parse
 use "std/mem" mem
 use "std/bytes" bytes
 fn check(ok: bool, label: []const u8) { if !ok { #panic(label) } }

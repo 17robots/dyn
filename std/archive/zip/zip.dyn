@@ -277,7 +277,7 @@ fn extract_into(destination: []u8, archive_entry: Entry) ExtractResult {
   } else if archive_entry.method == 8 {
     inflater := deflate.InflateState{}
     result := deflate.resume(&inflater, destination[..archive_entry.uncompressed_size], archive_entry.payload)
-    if !result.ok || result.written != archive_entry.uncompressed_size || result.consumed != archive_entry.compressed_size {
+    if !result.done || result.written != archive_entry.uncompressed_size || result.consumed != archive_entry.compressed_size {
       return ExtractResult{ offset: result.consumed, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: result.consumed } }
     }
     written = result.written

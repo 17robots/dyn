@@ -1,5 +1,5 @@
+use "std/parse" parse
 use "std/mem" mem
-use "std/io" errors
 use "std/math" math
 
 // A face borrows immutable font bytes. Keep them alive for every lookup/raster.
@@ -10,9 +10,9 @@ pub struct Face {
   ascent: i16, descent: i16, line_gap: i16,
   kern: []const u8,
 }
-pub struct FaceResult { value: Face, kind: errors.Kind, error: isize, offset: usize, ok: bool }
+pub struct FaceResult { value: Face, offset: usize, failure: parse.Failure }
 pub struct Bitmap { pixels: []u8, width: i32, height: i32, x_offset: i32, y_offset: i32, advance: i32 }
-pub struct BitmapResult { value: Bitmap, kind: errors.Kind, error: isize, offset: usize, ok: bool }
+pub struct BitmapResult { value: Bitmap, offset: usize, failure: parse.Failure }
 struct Table { value: []const u8, offset: usize, ok: bool }
 fn u16be(bytes: []const u8, at: usize) u16 {
   return (#cast(u16, bytes[at]) << 8) | #cast(u16, bytes[at + 1])
@@ -43,17 +43,17 @@ fn table(data: []const u8, tag: u32) Table {
 }
 pub fn open(data: []const u8) FaceResult {
   if #len(data) < 12 {
-    return FaceResult{ kind: errors.Kind.InvalidInput }
+    return FaceResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   signature := u32be(data, 0)
   if signature != 65536 {
     if signature == 0x4f54544f || signature == 0x74746366 || signature == 0x74727565 || signature == 0x74797031 {
-      return FaceResult{ kind: errors.Kind.Unsupported }
+      return FaceResult{ failure: parse.Failure{ kind: parse.Kind.Unsupported } }
     }
-    return FaceResult{ kind: errors.Kind.InvalidInput }
+    return FaceResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   if #cast(usize, u16be(data, 4)) > (#len(data) - 12) / 16 {
-    return FaceResult{ kind: errors.Kind.InvalidInput, offset: 4 }
+    return FaceResult{ offset: 4, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: 4 } }
   }
   head := table(data, 0x68656164)
   maxp := table(data, 0x6d617870)
@@ -64,14 +64,14 @@ pub fn open(data: []const u8) FaceResult {
   cmap := table(data, 0x636d6170)
   if !head.ok || !maxp.ok || !hhea.ok || !hmtx.ok || !loca.ok || !glyf.ok || !cmap.ok ||
     #len(head.value) < 54 || #len(maxp.value) < 6 || #len(hhea.value) < 36 || #len(cmap.value) < 4 {
-    return FaceResult{ kind: errors.Kind.InvalidInput }
+    return FaceResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   units := u16be(head.value, 18)
   format := i16be(head.value, 50)
   glyphs := u16be(maxp.value, 4)
   metrics := u16be(hhea.value, 34)
   if units < 16 || units > 16384 || glyphs == 0 || metrics == 0 || metrics > glyphs || (format != 0 && format != 1) {
-    return FaceResult{ kind: errors.Kind.InvalidInput }
+    return FaceResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   stride: usize = 2
   if format == 1 {
@@ -79,7 +79,7 @@ pub fn open(data: []const u8) FaceResult {
   }
   if (#cast(usize, glyphs) + 1) > #len(loca.value) / stride ||
     #cast(usize, metrics) * 4 + (#cast(usize, glyphs) - #cast(usize, metrics)) * 2 > #len(hmtx.value) {
-    return FaceResult{ kind: errors.Kind.InvalidInput }
+    return FaceResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   face := Face{ data: data, glyf: glyf.value, loca: loca.value, hmtx: hmtx.value,
     units_per_em: units, glyphs: glyphs, metrics: metrics, long_loca: format == 1,
@@ -88,13 +88,13 @@ pub fn open(data: []const u8) FaceResult {
   for i in 0..#cast(usize, glyphs) + 1 {
     current := location(&face, i)
     if current < previous || current > #len(face.glyf) {
-      return FaceResult{ kind: errors.Kind.InvalidInput, offset: loca.offset + i * stride }
+      return FaceResult{ offset: loca.offset + i * stride, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: loca.offset + i * stride } }
     }
     previous = current
   }
   count := #cast(usize, u16be(cmap.value, 2))
   if count > (#len(cmap.value) - 4) / 8 {
-    return FaceResult{ kind: errors.Kind.InvalidInput, offset: cmap.offset + 2 }
+    return FaceResult{ offset: cmap.offset + 2, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: cmap.offset + 2 } }
   }
   selected: []const u8
   best: u16 = 0
@@ -107,12 +107,12 @@ pub fn open(data: []const u8) FaceResult {
     }
     offset := #cast(usize, u32be(cmap.value, at + 4))
     if !fits(cmap.value, offset, 2) {
-      return FaceResult{ kind: errors.Kind.InvalidInput, offset: cmap.offset + at + 4 }
+      return FaceResult{ offset: cmap.offset + at + 4, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: cmap.offset + at + 4 } }
     }
     sub := cmap.value[offset..]
     kind := u16be(sub, 0)
     if (kind == 4 || kind == 12) && #len(sub) < 16 {
-      return FaceResult{ kind: errors.Kind.InvalidInput, offset: cmap.offset + offset }
+      return FaceResult{ offset: cmap.offset + offset, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: cmap.offset + offset } }
     }
     length: usize = 0
     if kind == 4 && #len(sub) >= 16 {
@@ -125,35 +125,35 @@ pub fn open(data: []const u8) FaceResult {
       continue
     }
     if length < 16 || length > #len(sub) {
-      return FaceResult{ kind: errors.Kind.InvalidInput, offset: cmap.offset + offset }
+      return FaceResult{ offset: cmap.offset + offset, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: cmap.offset + offset } }
     }
     sub = sub[..length]
     if kind == 4 {
       segments := #cast(usize, u16be(sub, 6)) / 2
       if segments == 0 || (u16be(sub, 6) & 1) != 0 || segments > (length - 16) / 8 {
-        return FaceResult{ kind: errors.Kind.InvalidInput }
+        return FaceResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
       }
       prior: u16 = 0
       for j in 0..segments {
         end := u16be(sub, 14 + j * 2)
         start := u16be(sub, 16 + segments * 2 + j * 2)
         if start > end || (j != 0 && start <= prior) {
-          return FaceResult{ kind: errors.Kind.InvalidInput }
+          return FaceResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
         }
         range_at := 16 + segments * 6 + j * 2
         range := #cast(usize, u16be(sub, range_at))
         if range != 0 && ((range & 1) != 0 || range > length - range_at || !fits(sub, range_at + range, (#cast(usize, end) - #cast(usize, start)) * 2 + 2)) {
-          return FaceResult{ kind: errors.Kind.InvalidInput }
+          return FaceResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
         }
         prior = end
       }
       if prior != 65535 {
-        return FaceResult{ kind: errors.Kind.InvalidInput }
+        return FaceResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
       }
     } else {
       groups := #cast(usize, u32be(sub, 12))
       if groups > (length - 16) / 12 {
-        return FaceResult{ kind: errors.Kind.InvalidInput }
+        return FaceResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
       }
       prior: u32 = 0
       for j in 0..groups {
@@ -161,7 +161,7 @@ pub fn open(data: []const u8) FaceResult {
         end := u32be(sub, 20 + j * 12)
         base := u32be(sub, 24 + j * 12)
         if start > end || end > 1114111 || (j != 0 && start <= prior) || base >= #cast(u32, glyphs) || end - start >= #cast(u32, glyphs) - base {
-          return FaceResult{ kind: errors.Kind.InvalidInput }
+          return FaceResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
         }
         prior = end
       }
@@ -172,23 +172,23 @@ pub fn open(data: []const u8) FaceResult {
     }
   }
   if best == 0 {
-    return FaceResult{ kind: errors.Kind.Unsupported }
+    return FaceResult{ failure: parse.Failure{ kind: parse.Kind.Unsupported } }
   }
   kern := table(data, 0x6b65726e)
   if !kern.ok && kern.offset != 0 {
-    return FaceResult{ kind: errors.Kind.InvalidInput, offset: kern.offset }
+    return FaceResult{ offset: kern.offset, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: kern.offset } }
   }
   if kern.ok {
     checked := validate_kern(kern.value, glyphs)
     if !checked.ok {
-      return FaceResult{ kind: errors.Kind.InvalidInput, offset: kern.offset + checked.offset }
+      return FaceResult{ offset: kern.offset + checked.offset, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: kern.offset + checked.offset } }
     }
     if #len(kern.value) >= 4 && u16be(kern.value, 0) == 0 {
       face.kern = kern.value
     }
   }
   face.cmap = selected
-  return FaceResult{ value: face, ok: true }
+  return FaceResult{ value: face }
 }
 fn location(face: *const Face, index: usize) usize {
   if face.long_loca {
@@ -272,7 +272,7 @@ fn edge(edges: []Edge, used: *usize, a, b: Point) {
 // Output belongs to arena; temporary outline storage is rewound on completion.
 pub fn raster(arena: *mem.Arena, face: *const Face, index: u16, pixels_per_em: u16) BitmapResult {
   if index >= face.glyphs || face.units_per_em == 0 || pixels_per_em == 0 || pixels_per_em > 256 {
-    return BitmapResult{ kind: errors.Kind.InvalidInput }
+    return BitmapResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   scale := #cast(f64, pixels_per_em) / #cast(f64, face.units_per_em)
   advance := #cast(i32, math.floor64(metric_advance(face, index).x * scale + 0.5))
@@ -280,25 +280,25 @@ pub fn raster(arena: *mem.Arena, face: *const Face, index: u16, pixels_per_em: u
   end := location(face, #cast(usize, index) + 1)
   bitmap := Bitmap{ advance: advance }
   if start == end {
-    return BitmapResult{ value: bitmap, ok: true }
+    return BitmapResult{ value: bitmap }
   }
   data := face.glyf[start..end]
   if #len(data) < 10 {
-    return BitmapResult{ kind: errors.Kind.InvalidInput }
+    return BitmapResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   contours := i16be(data, 0)
   if contours == 0 {
-    return BitmapResult{ value: bitmap, ok: true }
+    return BitmapResult{ value: bitmap }
   }
   if contours > 0 && !fits(data, 10, #cast(usize, contours) * 2 + 2) {
-    return BitmapResult{ kind: errors.Kind.InvalidInput }
+    return BitmapResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   x0 := i16be(data, 2)
   y0 := i16be(data, 4)
   x1 := i16be(data, 6)
   y1 := i16be(data, 8)
   if x0 > x1 || y0 > y1 {
-    return BitmapResult{ kind: errors.Kind.InvalidInput }
+    return BitmapResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   metric_base := metric_origin(face, index, x0)
   left := math.floor64((#cast(f64, x0) - metric_base.x) * scale)
@@ -310,7 +310,7 @@ pub fn raster(arena: *mem.Arena, face: *const Face, index: u16, pixels_per_em: u
   width := #cast(usize, bitmap.width)
   height := #cast(usize, bitmap.height)
   if width > 4096 || height > 4096 || (width != 0 && height > 1048576 / width) {
-    return BitmapResult{ kind: errors.Kind.Capacity }
+    return BitmapResult{ failure: parse.Failure{ kind: parse.Kind.Capacity } }
   }
   mark := mem.arena_mark(arena)
   success := false
@@ -331,10 +331,10 @@ pub fn raster(arena: *mem.Arena, face: *const Face, index: u16, pixels_per_em: u
   budget := OutlineBudget{ points: 8192, nodes: 256 }
   outline := read_outline(arena, face, index, 0, &budget)
   if !outline.ok {
-    return BitmapResult{ kind: outline.kind }
+    return BitmapResult{ failure: parse.Failure{ kind: outline.kind } }
   }
   if outline.advance.x < 0.0 || outline.advance.y != 0.0 {
-    return BitmapResult{ kind: errors.Kind.Unsupported }
+    return BitmapResult{ failure: parse.Failure{ kind: parse.Kind.Unsupported } }
   }
   bitmap.advance = #cast(i32, math.floor64(outline.advance.x * scale + 0.5))
   points := outline.points
@@ -343,7 +343,7 @@ pub fn raster(arena: *mem.Arena, face: *const Face, index: u16, pixels_per_em: u
   if count == 0 {
     // No output allocation survives. Let the failure-cleanup branch rewind
     // all scratch; rewinding here would invalidate the later scratch mark.
-    return BitmapResult{ value: Bitmap{ advance: bitmap.advance }, ok: true }
+    return BitmapResult{ value: Bitmap{ advance: bitmap.advance } }
   }
   left = math.floor64((#cast(f64, x0) - outline.origin.x) * scale)
   top = math.floor64((outline.origin.y - #cast(f64, y1)) * scale)
@@ -354,12 +354,12 @@ pub fn raster(arena: *mem.Arena, face: *const Face, index: u16, pixels_per_em: u
   width = #cast(usize, bitmap.width)
   height = #cast(usize, bitmap.height)
   if width > 4096 || height > 4096 || (width != 0 && height > 1048576 / width) {
-    return BitmapResult{ kind: errors.Kind.Capacity }
+    return BitmapResult{ failure: parse.Failure{ kind: parse.Kind.Capacity } }
   }
   bitmap.pixels = bitmap.pixels[..width * height]
   for *point in points {
     if point.x < #cast(f64, x0) || point.x > #cast(f64, x1) || point.y < #cast(f64, y0) || point.y > #cast(f64, y1) {
-      return BitmapResult{ kind: errors.Kind.InvalidInput }
+      return BitmapResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
     }
     point.x = (point.x - outline.origin.x) * scale - left
     point.y = (outline.origin.y - point.y) * scale - top
@@ -367,7 +367,7 @@ pub fn raster(arena: *mem.Arena, face: *const Face, index: u16, pixels_per_em: u
   // Each off-curve point produces at most 128 flattened edges; on-curve
   // segments need one. Bound this temporary expansion explicitly.
   if count > 8192 {
-    return BitmapResult{ kind: errors.Kind.Capacity }
+    return BitmapResult{ failure: parse.Failure{ kind: parse.Kind.Capacity } }
   }
   edges := mem.push_array(Edge, arena, count * 129 + #len(ends))
   used: usize = 0
@@ -427,7 +427,7 @@ pub fn raster(arena: *mem.Arena, face: *const Face, index: u16, pixels_per_em: u
     first = last + 1
   }
   if used != 0 && width * height > 16777216 / used {
-    return BitmapResult{ kind: errors.Kind.Capacity }
+    return BitmapResult{ failure: parse.Failure{ kind: parse.Kind.Capacity } }
   }
   for y in 0..height {
     for x in 0..width {
@@ -458,29 +458,29 @@ pub fn raster(arena: *mem.Arena, face: *const Face, index: u16, pixels_per_em: u
     }
   }
   success = true
-  return BitmapResult{ value: bitmap, ok: true }
+  return BitmapResult{ value: bitmap }
 }
 
 pub struct AtlasGlyph { codepoint: u32, x: i32, y: i32, width: i32, height: i32, x_offset: i32, y_offset: i32, advance: i32 }
 // Glyphs are sorted by codepoint. The final entry is glyph zero, used on a miss.
 pub struct Atlas { pixels: []u8, width: i32, height: i32, line_height: i32, glyphs: []AtlasGlyph }
-pub struct AtlasResult { value: Atlas, kind: errors.Kind, error: isize, offset: usize, ok: bool }
+pub struct AtlasResult { value: Atlas, offset: usize, failure: parse.Failure }
 // Shelf packing with one transparent padding pixel. Requested codepoints must
 // be strictly increasing Unicode scalars. Caller chooses dimensions, 1..4096.
 // Entire output belongs to arena. A failure rewinds all allocations from this call.
 pub fn atlas(arena: *mem.Arena, face: *const Face, codepoints: []const u32, pixels_per_em: u16, width, height: i32) AtlasResult {
   if width <= 0 || height <= 0 || width > 4096 || height > 4096 || face.units_per_em == 0 || pixels_per_em == 0 || pixels_per_em > 256 || #len(codepoints) > 65536 {
-    return AtlasResult{ kind: errors.Kind.InvalidInput }
+    return AtlasResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   for i in 0..#len(codepoints) {
     cp := codepoints[i]
     if cp > 1114111 || (cp >= 55296 && cp <= 57343) || (i != 0 && cp <= codepoints[i - 1]) {
-      return AtlasResult{ kind: errors.Kind.InvalidInput }
+      return AtlasResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
     }
   }
   line := #cast(i32, face.ascent) - #cast(i32, face.descent) + #cast(i32, face.line_gap)
   if line <= 0 {
-    return AtlasResult{ kind: errors.Kind.InvalidInput }
+    return AtlasResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   scale := #cast(f64, pixels_per_em) / #cast(f64, face.units_per_em)
   mark := mem.arena_mark(arena)
@@ -505,12 +505,12 @@ pub fn atlas(arena: *mem.Arena, face: *const Face, codepoints: []const u32, pixe
       index = glyph_index(face, cp)
     }
     rendered := raster(arena, face, index, pixels_per_em)
-    if !rendered.ok {
-      return AtlasResult{ kind: rendered.kind, error: rendered.error, offset: rendered.offset }
+    if rendered.failure.kind != parse.Kind.Ok {
+      return AtlasResult{ offset: rendered.offset, failure: rendered.failure }
     }
     glyph := rendered.value
     if glyph.width > width || glyph.height > height {
-      return AtlasResult{ kind: errors.Kind.Capacity }
+      return AtlasResult{ failure: parse.Failure{ kind: parse.Kind.Capacity } }
     }
     place_x: i32 = 0
     place_y: i32 = 0
@@ -521,7 +521,7 @@ pub fn atlas(arena: *mem.Arena, face: *const Face, codepoints: []const u32, pixe
         row = 0
       }
       if y > height - glyph.height {
-        return AtlasResult{ kind: errors.Kind.Capacity }
+        return AtlasResult{ failure: parse.Failure{ kind: parse.Kind.Capacity } }
       }
       place_x = x
       place_y = y
@@ -542,7 +542,7 @@ pub fn atlas(arena: *mem.Arena, face: *const Face, codepoints: []const u32, pixe
     mem.arena_rewind(arena, scratch)
   }
   success = true
-  return AtlasResult{ value: value, ok: true }
+  return AtlasResult{ value: value }
 }
 pub nil_glyph: AtlasGlyph
 pub fn atlas_glyph(value: *const Atlas, codepoint: u32) *const AtlasGlyph {

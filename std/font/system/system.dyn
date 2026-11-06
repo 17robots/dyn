@@ -4,6 +4,7 @@
 // Faces that std/font cannot open (CFF-flavored OpenType and collections)
 // are skipped.
 
+use "std/parse" parse
 use "std/io" io
 use "std/mem" mem
 use "std/fs" fs
@@ -192,7 +193,7 @@ fn describe_data(arena: *mem.Arena, path: []const u8, data: []const u8) Entry {
     }
   }
   opened := font.open(data)
-  if !opened.ok {
+  if opened.failure.kind != parse.Kind.Ok {
     return nil_entry
   }
   names := table(data, 0x6e616d65)
@@ -428,7 +429,7 @@ pub fn covering(entries: []const Entry, codepoint: u32, regular_only: bool) *con
       continue
     }
     face := font.open(mapped.value)
-    found := face.ok && font.glyph_index(&face.value, codepoint) != 0
+    found := face.failure.kind == parse.Kind.Ok && font.glyph_index(&face.value, codepoint) != 0
     _ = fs.unmap(&mapped)
     if found {
       return entry

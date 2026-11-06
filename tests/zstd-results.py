@@ -77,7 +77,7 @@ fn verify(raw: []const u8, encoded: []const u8, workspace: []u8, chunk: usize, w
 '''
 source = SOURCE
 source = source.replace('mem.arena_push_or_panic', 'mem.arena_push_uninit')
-source = source.replace('use "std/bytes" bytes', 'use "std/bytes" bytes\nuse "std/io" errors')
+source = source.replace('use "std/bytes" bytes', 'use "std/bytes" bytes\nuse "std/io" errors\nuse "std/parse" parse')
 extra = '''
 struct Failure { calls: usize, code: isize }
 fn fail(data: rawptr, destination: []u8) io.Result {
@@ -87,19 +87,19 @@ fn fail(data: rawptr, destination: []u8) io.Result {
 }
 fn results(arena: *mem.Arena, encoded: []const u8, unknown: []const u8, workspace: []u8) {
  packed_result := z.compress(arena, "portable zstd", 3)
- if !packed_result.ok || packed_result.kind != errors.Kind.Ok || packed_result.error != 0 { #panic("compress success") }
+ if packed_result.failure.kind != parse.Kind.Ok { #panic("compress success") }
  unpacked := z.decompress(arena, packed_result.value)
- if !unpacked.ok || unpacked.kind != errors.Kind.Ok || #len(unpacked.value) != 13 { #panic("roundtrip") }
+ if unpacked.failure.kind != parse.Kind.Ok || #len(unpacked.value) != 13 { #panic("roundtrip") }
  mark := mem.arena_used(arena)
  bad := z.decompress(arena, "bad")
- if bad.ok || bad.kind != errors.Kind.InvalidInput || bad.error != 0 || #len(bad.value) != 0 || mem.arena_used(arena) != mark { #panic("malformed result") }
+ if bad.failure.kind != parse.Kind.Syntax || #len(bad.value) != 0 || mem.arena_used(arena) != mark { #panic("malformed result") }
  size := z.frame_size(unknown)
- if !size.ok || size.known || size.kind != errors.Kind.Ok { #panic("unknown valid frame") }
+ if size.failure.kind != parse.Kind.Ok || size.known { #panic("unknown valid frame") }
  unsupported := z.decompress(arena, unknown)
- if unsupported.ok || unsupported.kind != errors.Kind.Unsupported || unsupported.error != 0 || mem.arena_used(arena) != mark { #panic("unknown arena unsupported") }
+ if unsupported.failure.kind != parse.Kind.Unsupported || mem.arena_used(arena) != mark { #panic("unknown arena unsupported") }
  // Header retains a valid known size, while truncation fails after allocation.
  broken := z.decompress(arena, encoded[..#len(encoded)-1])
- if broken.ok || broken.kind != errors.Kind.InvalidInput || broken.provider_code == 0 || broken.error != 0 || #len(broken.value) != 0 || mem.arena_used(arena) != mark { #panic("provider rollback") }
+ if broken.failure.kind != parse.Kind.Syntax || broken.provider_code == 0 || #len(broken.value) != 0 || mem.arena_used(arena) != mark { #panic("provider rollback") }
  code: isize = 0
  for code < 2 {
   upstream := Failure{ code: code }

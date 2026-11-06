@@ -1,5 +1,5 @@
+use "std/parse" parse
 use "std/mem" mem
-use "std/io" errors
 // P2/P3/P5/P6 portable graymaps/pixmaps. Samples up to 65535 are rounded
 // to 8 bits, without changing transfer functions. decode reads one image
 
@@ -8,8 +8,8 @@ use "std/io" errors
 // See https://netpbm.sourceforge.net/doc/ppm.html and ../pgm.html.
 pub struct Info { width: u32, height: u32, channels: u8 }
 pub struct Image { info: Info, pixels: []u8 }
-pub struct Result { value: Image, consumed: usize, kind: errors.Kind, offset: usize, ok: bool }
-pub struct EncodeResult { value: []u8, kind: errors.Kind, ok: bool }
+pub struct Result { value: Image, consumed: usize, offset: usize, failure: parse.Failure }
+pub struct EncodeResult { value: []u8, failure: parse.Failure }
 struct Cursor { source: []const u8, at: usize, failed: bool }
 fn whitespace(c: u8) bool {
   return c == ' ' || (c >= 9 && c <= 13)
@@ -53,7 +53,7 @@ fn decimal(cursor: *Cursor) u32 {
 }
 pub fn decode(arena: *mem.Arena, source: []const u8) Result {
   if #len(source) < 3 || source[0] != 'P' || (source[1] != '2' && source[1] != '3' && source[1] != '5' && source[1] != '6') || !whitespace(source[2]) {
-    return Result{ kind: errors.Kind.InvalidInput }
+    return Result{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   cursor := Cursor{ source: source, at: 2 }
   width := decimal(&cursor)
@@ -67,14 +67,14 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Result {
     }
   }
   if cursor.failed || width == 0 || height == 0 || maxval == 0 || maxval > 65535 || cursor.at == #len(source) || !whitespace(source[cursor.at]) {
-    return Result{ kind: errors.Kind.InvalidInput, offset: cursor.at }
+    return Result{ offset: cursor.at, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: cursor.at } }
   }
   channels: usize = 1
   if source[1] == '3' || source[1] == '6' {
     channels = 3
   }
   if #cast(u64, width) * #cast(u64, height) > #cast(u64, ~#cast(usize, 0) / channels) {
-    return Result{ kind: errors.Kind.Overflow, offset: cursor.at }
+    return Result{ offset: cursor.at, failure: parse.Failure{ kind: parse.Kind.Overflow, offset: cursor.at } }
   }
   count := #cast(usize, width) * #cast(usize, height) * channels
   plain := source[1] == '2' || source[1] == '3'
@@ -87,7 +87,7 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Result {
   // before allocating
   // malformed input never causes dimension-sized storage.
   if (!plain && count > (#len(source) - cursor.at) / stride) || (plain && count > #len(source) - cursor.at) {
-    return Result{ kind: errors.Kind.InvalidInput, offset: cursor.at }
+    return Result{ offset: cursor.at, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: cursor.at } }
   }
   mark := mem.arena_mark(arena)
   pixels := mem.push_array(u8, arena, count)
@@ -106,14 +106,14 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Result {
     }
     if cursor.failed || value > maxval {
       mem.arena_rewind(arena, mark)
-      return Result{ kind: errors.Kind.InvalidInput, offset: cursor.at }
+      return Result{ offset: cursor.at, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: cursor.at } }
     }
     pixels[i] = #cast(u8, (value * 255 + maxval / 2) / maxval)
   }
   if plain {
     skip(&cursor)
   }
-  return Result{ value: Image{ info: Info{ width: width, height: height, channels: #cast(u8, channels) }, pixels: pixels }, consumed: cursor.at, ok: true }
+  return Result{ value: Image{ info: Info{ width: width, height: height, channels: #cast(u8, channels) }, pixels: pixels }, consumed: cursor.at }
 }
 fn digits(value: u32) usize {
   count: usize = 1
@@ -135,15 +135,15 @@ fn write_decimal(output: []u8, at: *usize, value: u32) {
 // Input must not borrow unused output-arena storage. Failure allocates nothing.
 pub fn encode(arena: *mem.Arena, pixels: []const u8, width: u32, height: u32, channels: u8) EncodeResult {
   if width == 0 || height == 0 || (channels != 1 && channels != 3) {
-    return EncodeResult{ kind: errors.Kind.InvalidInput }
+    return EncodeResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   header := 9 + digits(width) + digits(height)
   if #cast(u64, width) * #cast(u64, height) > #cast(u64, (~#cast(usize, 0) - header) / #cast(usize, channels)) {
-    return EncodeResult{ kind: errors.Kind.Overflow }
+    return EncodeResult{ failure: parse.Failure{ kind: parse.Kind.Overflow } }
   }
   count := #cast(usize, width) * #cast(usize, height) * #cast(usize, channels)
   if #len(pixels) != count {
-    return EncodeResult{ kind: errors.Kind.InvalidInput }
+    return EncodeResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   output := mem.push_array(u8, arena, header + count)
   output[0] = 'P'
@@ -168,5 +168,5 @@ pub fn encode(arena: *mem.Arena, pixels: []const u8, width: u32, height: u32, ch
     output[at] = byte
     at += 1
   }
-  return EncodeResult{ value: output, ok: true }
+  return EncodeResult{ value: output }
 }

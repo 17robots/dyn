@@ -18,3 +18,16 @@ pub fn parse_failure(kind: Kind, offset: usize, message: []const u8) StreamFailu
 pub fn io_failure(kind: io.Kind, native: isize) StreamFailure {
   return StreamFailure{ kind: StreamKind.Io, io: io.Failure{ kind: kind, native: native } }
 }
+
+// Payload readers speak io.Result, so a parse failure maps to the nearest io kind.
+pub fn stream_result(failure: StreamFailure, transferred: usize) io.Result {
+  kind := io.Kind.InvalidInput
+  if failure.kind == StreamKind.Io {
+    kind = failure.io.kind
+  } else if failure.parse.kind == Kind.Capacity {
+    kind = io.Kind.Capacity
+  } else if failure.parse.kind == Kind.Overflow {
+    kind = io.Kind.Overflow
+  }
+  return io.Result{ transferred: transferred, error: failure.io.native, kind: kind, status: io.Status.Error }
+}

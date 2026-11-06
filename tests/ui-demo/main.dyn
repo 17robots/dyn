@@ -1,5 +1,6 @@
 // Headless UI example. Writes ui-demo.png in the working directory.
 // The tiny bitmap alphabet is example-owned; no platform font service is used.
+use "std/parse" parse
 use "std/io" io
 use "std/ui" ui
 use "std/ui/software" software
@@ -110,7 +111,7 @@ fn main() {
     #panic("UI demo render")
   }
   encoded := png.encode(output, pixels, 480, 240, 4)
-  if !encoded.ok || fs.write_all("ui-demo.png", encoded.value).failure.kind != io.Kind.Ok {
+  if encoded.failure.kind != parse.Kind.Ok || fs.write_all("ui-demo.png", encoded.value).failure.kind != io.Kind.Ok {
     #panic("UI demo output")
   }
 }

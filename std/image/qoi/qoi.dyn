@@ -1,47 +1,47 @@
+use "std/parse" parse
 use "std/mem" mem
-use "std/io" errors
 pub struct Info { width: u32, height: u32, channels: u8, srgb: bool, ok: bool }
 // Result.ok / InfoResult.ok are authoritative. Info.ok is legacy parser state:
 // true inside successful values, false in the zero failure value.
 // On failure value is zero. error is zero: codec details are not native errors.
 // offset is a source byte offset when known, otherwise zero (also for encoding).
 pub struct Image { info: Info, pixels: []u8 }
-pub struct Result { value: Image, ok: bool, kind: errors.Kind, error: isize, offset: usize, detail: isize }
-pub struct InfoResult { value: Info, ok: bool, kind: errors.Kind, error: isize, offset: usize, detail: isize }
+pub struct Result { value: Image, offset: usize, failure: parse.Failure }
+pub struct InfoResult { value: Info, offset: usize, failure: parse.Failure }
 struct DecodeWork { info: Info, pixels: []u8, error: isize, ok: bool, offset: usize }
-pub struct EncodeResult { value: []u8, ok: bool, kind: errors.Kind, error: isize, offset: usize, detail: isize }
+pub struct EncodeResult { value: []u8, offset: usize, failure: parse.Failure }
 struct EncodeWork { data: []u8, error: isize, ok: bool }
 
-fn codec_kind(detail: isize) errors.Kind {
+fn codec_kind(detail: isize) parse.Kind {
   if detail == -75 {
-    return errors.Kind.Overflow
+    return parse.Kind.Overflow
   }
   if detail == -28 {
-    return errors.Kind.Capacity
+    return parse.Kind.Capacity
   }
-  return errors.Kind.InvalidInput
+  return parse.Kind.Syntax
 }
 
 pub fn inspect(source: []const u8) InfoResult {
   info := inspect_info(source)
   if !info.ok {
-    return InfoResult{ kind: errors.Kind.InvalidInput, detail: -22 }
+    return InfoResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
-  return InfoResult{ value: info, ok: true }
+  return InfoResult{ value: info }
 }
 
 fn decode_result(work: DecodeWork) Result {
   if !work.ok {
-    return Result{ kind: codec_kind(work.error), detail: work.error, offset: work.offset }
+    return Result{ offset: work.offset, failure: parse.Failure{ kind: codec_kind(work.error), offset: work.offset } }
   }
-  return Result{ value: Image{ info: work.info, pixels: work.pixels }, ok: true }
+  return Result{ value: Image{ info: work.info, pixels: work.pixels } }
 }
 
 fn encode_result(work: EncodeWork) EncodeResult {
   if !work.ok {
-    return EncodeResult{ kind: codec_kind(work.error), detail: work.error }
+    return EncodeResult{ failure: parse.Failure{ kind: codec_kind(work.error) } }
   }
-  return EncodeResult{ value: work.data, ok: true }
+  return EncodeResult{ value: work.data }
 }
 
 fn u32be(source: []const u8, at: usize) u32 {
@@ -366,26 +366,26 @@ fn pixel_count(width: u32, height: u32, channels: u8) usize {
 pub fn decode(arena: *mem.Arena, source: []const u8) Result {
   info := inspect_info(source)
   if !info.ok {
-    return Result{ kind: errors.Kind.InvalidInput, detail: -22 }
+    return Result{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   size := pixel_count(info.width, info.height, 4)
   if size == 0 {
-    return Result{ kind: errors.Kind.Overflow, detail: -75 }
+    return Result{ failure: parse.Failure{ kind: parse.Kind.Overflow } }
   }
   return decode_result(decode_work(arena, source))
 }
 
 pub fn encode(arena: *mem.Arena, pixels: []const u8, width: u32, height: u32, channels: u8, srgb: bool) EncodeResult {
   if width == 0 || height == 0 || (channels != 3 && channels != 4) {
-    return EncodeResult{ kind: errors.Kind.InvalidInput, detail: -22 }
+    return EncodeResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   size := pixel_count(width, height, channels)
   bound_pixels := pixel_count(width, height, channels + 1)
   if size == 0 || bound_pixels == 0 || bound_pixels > (~#cast(usize, 0)) - 22 {
-    return EncodeResult{ kind: errors.Kind.Overflow, detail: -75 }
+    return EncodeResult{ failure: parse.Failure{ kind: parse.Kind.Overflow } }
   }
   if size != #len(pixels) {
-    return EncodeResult{ kind: errors.Kind.InvalidInput, detail: -28 }
+    return EncodeResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   return encode_result(encode_work(arena, pixels, width, height, channels, srgb))
 }

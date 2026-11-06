@@ -12,6 +12,7 @@ ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 source=r'''use "std/audio/wav" wav
 use "std/io" io
+use "std/parse" parse
 use "std/mem" mem
 use "std/fs" fs
 use "std/io" errors
@@ -25,9 +26,9 @@ fn main() {
   paths: [5][]const u8 = ["8.wav","16.wav","24.wav","32.wav","float.wav"]
   for i in 0..5 {
     encoded := wav.encode(arena, &audio, formats[i])
-    check(encoded.ok && fs.write_all(paths[i],encoded.value).failure.kind == errors.Kind.Ok)
+    check(encoded.failure.kind == parse.Kind.Ok && fs.write_all(paths[i],encoded.value).failure.kind == errors.Kind.Ok)
     decoded := wav.decode(arena, encoded.value)
-    check(decoded.ok && decoded.value.rate == 48000 && decoded.value.channels == 2 && #len(decoded.value.samples) == 6)
+    check(decoded.failure.kind == parse.Kind.Ok && decoded.value.rate == 48000 && decoded.value.channels == 2 && #len(decoded.value.samples) == 6)
     for j in 0..6 {
       difference := decoded.value.samples[j] - samples[j]
       check(difference >= -0.008 && difference <= 0.008)
@@ -35,25 +36,25 @@ fn main() {
     before := mem.arena_mark(arena)
     for length in 0..#len(encoded.value) {
       bad := wav.decode(arena, encoded.value[..length])
-      check(!bad.ok && mem.arena_mark(arena) == before)
+      check(bad.failure.kind != parse.Kind.Ok && mem.arena_mark(arena) == before)
     }
   }
   audio.channel_mask = 3
   extended := wav.encode(arena, &audio, wav.Encoding.Pcm24)
-  check(extended.ok)
+  check(extended.failure.kind == parse.Kind.Ok)
   decoded := wav.decode(arena, extended.value)
-  check(decoded.ok && decoded.value.channel_mask == 3)
+  check(decoded.failure.kind == parse.Kind.Ok && decoded.value.channel_mask == 3)
   check(fs.write_all("extended.wav",extended.value).failure.kind == errors.Kind.Ok)
   floating := wav.encode(arena, &audio, wav.Encoding.Float32)
-  check(floating.ok && wav.decode(arena, floating.value).ok)
+  check(floating.failure.kind == parse.Kind.Ok && wav.decode(arena, floating.value).failure.kind == parse.Kind.Ok)
   before := mem.arena_mark(arena)
   audio.channel_mask = 1
-  check(wav.encode(arena, &audio, wav.Encoding.Pcm16).kind == errors.Kind.InvalidInput)
+  check(wav.encode(arena, &audio, wav.Encoding.Pcm16).failure.kind == parse.Kind.Syntax)
   check(mem.arena_mark(arena) == before)
   reference := fs.read_all(arena,"reference.wav",10000)
   check(reference.failure.kind == errors.Kind.Ok)
   decoded = wav.decode(arena, reference.value)
-  check(decoded.ok && #len(decoded.value.samples) == 5)
+  check(decoded.failure.kind == parse.Kind.Ok && #len(decoded.value.samples) == 5)
   expected: [5]f32 = [-1.0,-0.5,0.0,0.5,0.999969482421875]
   for i in 0..5 { check(decoded.value.samples[i] == expected[i]) }
   // Every individual header/data mutation must return or decode, never trap.
@@ -97,7 +98,8 @@ with tempfile.TemporaryDirectory(prefix='dyn-wav-') as directory:
         assert data[58:]==struct.pack('<6f',-1,-.5,0,.25,.5,1)
         with wave.open(str(work/'extended.wav'),'rb') as extended:
             assert extended.getnchannels()==2 and extended.getsampwidth()==3
-    core = r'''use "std/audio/wav" wav
+    core = r'''use "std/parse" parse
+use "std/audio/wav" wav
 use "std/io" io
 use "std/mem" mem
 fn check(ok: bool) { if !ok { #panic("WAV portable") } }
@@ -109,9 +111,9 @@ fn main() {
   formats: [5]wav.Encoding = [wav.Encoding.Pcm8,wav.Encoding.Pcm16,wav.Encoding.Pcm24,wav.Encoding.Pcm32,wav.Encoding.Float32]
   for encoding in formats {
     encoded := wav.encode(arena,&audio,encoding)
-    check(encoded.ok)
+    check(encoded.failure.kind == parse.Kind.Ok)
     decoded := wav.decode(arena,encoded.value)
-    check(decoded.ok && decoded.value.channels == 2 && decoded.value.rate == 48000 && decoded.value.channel_mask == 3)
+    check(decoded.failure.kind == parse.Kind.Ok && decoded.value.channels == 2 && decoded.value.rate == 48000 && decoded.value.channel_mask == 3)
     for i in 0..6 { difference := samples[i] - decoded.value.samples[i]
       check(difference <= 0.008 && difference >= -0.008) }
   }

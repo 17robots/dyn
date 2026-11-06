@@ -11,7 +11,8 @@ import zlib
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = Path(os.environ.get('DYN', ROOT / 'build' / ('dyn-release.exe' if os.name == 'nt' else 'dyn-release'))).resolve()
-SOURCE = r'''use "std/compress/deflate" deflate
+SOURCE = r'''use "std/parse" parse
+use "std/compress/deflate" deflate
 use "std/compress/gzip" gzip
 use "std/io" io
 use "std/fs" fs
@@ -72,7 +73,7 @@ fn fixture(encoded_path: []const u8, expected_path: []const u8, wrapped: bool, c
   }
   if !wrapped && !corrupt {
     inflated := deflate.inflate(owned, encoded.value)
-    require(inflated.ok && #len(inflated.value) == #len(expected.value), "one-shot inflate")
+    require(inflated.failure.kind == parse.Kind.Ok && #len(inflated.value) == #len(expected.value), "one-shot inflate")
     for i in 0..#len(inflated.value) { require(inflated.value[i] == expected.value[i], "one-shot output") }
     destination := #slice(memory.arena_push(owned, #len(expected.value), 1), #len(expected.value))
     result: deflate.Result
@@ -84,12 +85,12 @@ fn fixture(encoded_path: []const u8, expected_path: []const u8, wrapped: bool, c
       result = deflate.resume(&progressive, destination, encoded.value[..prefix])
       require(progressive.error == 0, "linear resume error")
     }
-    require(result.ok && result.written == #len(expected.value), "linear resume completion")
+    require(result.done && result.written == #len(expected.value), "linear resume completion")
     for i in 0..#len(destination) { require(destination[i] == expected.value[i], "linear resume output") }
     tiny: [1]u8 = []
     capacity := deflate.InflateState{}
     result = deflate.resume(&capacity, tiny[..], encoded.value)
-    require(!result.ok && capacity.error == -28, "linear output capacity")
+    require(!result.done && capacity.error == -28, "linear output capacity")
   }
   memory.arena_release(owned)
 }

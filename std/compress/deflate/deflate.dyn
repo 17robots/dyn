@@ -1,7 +1,10 @@
 use "std/mem" mem
 use "std/io" stream
+use "std/parse" parse
 
-pub struct Result { written: usize, consumed: usize, ok: bool }
+// done is false while the codec needs more input or output space; state.error
+// tells those cases from malformed input.
+pub struct Result { written: usize, consumed: usize, done: bool }
 // Both buffers and this state must remain alive and disjoint while reading.
 // 1024 input bytes and 33026 history bytes suffice regardless of stream length.
 // Smaller buffers work for streams whose headers/history fit; capacity is explicit.
@@ -15,6 +18,7 @@ pub struct Decoder {
   source_ended: bool,
   finished: bool,
   error: isize,
+  source_kind: stream.Kind,
   gzip: bool,
   phase: u8,
   flags: u8,
@@ -50,6 +54,7 @@ fn refill(state: *Decoder) bool {
   state.compressed_used += result.transferred
   if result.status == stream.Status.Error {
     state.error = result.error
+    state.source_kind = result.kind
     return false
   }
   if result.status == stream.Status.End || result.transferred == 0 {
@@ -206,7 +211,7 @@ fn decoder_read(data: rawptr, destination: []u8) stream.Result {
     if result.written > before {
       break
     }
-    if result.ok {
+    if result.done {
       continue
     }
     if state.engine.output_full {
@@ -221,7 +226,14 @@ fn decoder_read(data: rawptr, destination: []u8) stream.Result {
     }
   }
   if state.error != 0 {
-    return stream.Result{ error: state.error, status: stream.Status.Error }
+    kind := state.source_kind
+    if kind == stream.Kind.Ok {
+      kind = stream.Kind.InvalidInput
+      if state.error == -28 {
+        kind = stream.Kind.Capacity
+      }
+    }
+    return stream.Result{ error: state.error, kind: kind, status: stream.Status.Error }
   }
   remaining := state.engine.written - state.offset
   amount := remaining
@@ -276,10 +288,10 @@ pub fn deflate_stored_chunk(destination: []u8, input: []const u8, final: bool) R
     written += amount + overhead
     read += amount
     if #len(input) == 0 {
-      return Result{ written: written, consumed: 0, ok: true }
+      return Result{ written: written, consumed: 0, done: true }
     }
   }
-  return Result{ written: written, consumed: read, ok: true }
+  return Result{ written: written, consumed: read, done: true }
 }
 
 struct BitWriter { destination: []u8, written: usize, value: u32, count: usize, ok: bool }
@@ -525,7 +537,7 @@ fn deflate_huffman_chunk(destination: []u8, input: []const u8, final: bool,
       writer.written += 1
     }
   }
-  return Result{ written: writer.written, consumed: at, ok: writer.ok }
+  return Result{ written: writer.written, consumed: at, done: writer.ok }
 }
 
 pub fn deflate_fixed_chunk(destination: []u8, input: []const u8, final: bool,
@@ -972,11 +984,10 @@ fn resume_impl(state: *InflateState, destination: []u8, input: []const u8, parti
       }
     }
   }
-  return Result{ written: state.written, consumed: state.reader.at, ok: state.stage == 3 && state.error == 0 }
+  return Result{ written: state.written, consumed: state.reader.at, done: state.stage == 3 && state.error == 0 }
 }
-// Output in arena and the input bytes used. ok is false, with nothing pushed,
-// when the input is not valid.
-pub struct Inflated { value: []u8, consumed: usize, ok: bool }
+// Output in arena and the input bytes used. Invalid input fails with nothing pushed.
+pub struct Inflated { value: []u8, consumed: usize, failure: parse.Failure }
 
 // RFC 1951 stored, fixed-Huffman, and dynamic-Huffman DEFLATE, into arena.
 pub fn inflate(arena: *mem.Arena, input: []const u8) Inflated {
@@ -1007,13 +1018,13 @@ fn grow_until_done(arena: *mem.Arena, input: []const u8, gzip: bool) Inflated {
       result = resume(&engine, space, input)
       full = engine.error == -28
     }
-    if result.ok {
+    if result.done {
       mem.arena_rewind(arena, mark + result.written)
-      return Inflated{ value: space[..result.written], consumed: result.consumed, ok: true }
+      return Inflated{ value: space[..result.written], consumed: result.consumed }
     }
     mem.arena_rewind(arena, mark)
     if !full {
-      return Inflated{}
+      return Inflated{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
     }
     capacity = mem.trial_next(arena, capacity)
   }
@@ -1112,7 +1123,7 @@ pub fn resume_gzip(state: *GzipState, destination: []u8, input: []const u8) Resu
     state.error = state.engine.error
   }
   trailer := state.at + body.consumed
-  if !body.ok || #len(input) - trailer < 8 {
+  if !body.done || #len(input) - trailer < 8 {
     return Result{ written: body.written, consumed: trailer }
   }
   if state.stage != 6 {
@@ -1122,7 +1133,7 @@ pub fn resume_gzip(state: *GzipState, destination: []u8, input: []const u8) Resu
     }
     state.stage = 6
   }
-  return Result{ written: body.written, consumed: trailer + 8, ok: true }
+  return Result{ written: body.written, consumed: trailer + 8, done: true }
 }
 // RFC 1952 single member; consumed identifies any following member/trailing data.
 fn gunzip_internal(destination: []u8, input: []const u8) Result {

@@ -4,6 +4,7 @@
 //
 // Usage: box-viewer [FONT.ttf] [--frames N] [--screenshot OUT.png]
 
+use "std/parse" parse
 use "vendor/window" window
 use "vendor/opengl" gl
 use "vendor/ui/opengl" gpu
@@ -136,7 +137,7 @@ fn save(api: *const gl.Api, arena: *mem.Arena, path: []const u8, width, height: 
     _ = mem.copy(rows[y * stride..(y + 1) * stride], raw[(#cast(usize, height) - 1 - y) * stride..(#cast(usize, height) - y) * stride])
   }
   encoded := png.encode(arena, rows, #cast(u32, width), #cast(u32, height), 4)
-  if !encoded.ok || fs.write_all(path, encoded.value).failure.kind != io.Kind.Ok {
+  if encoded.failure.kind != parse.Kind.Ok || fs.write_all(path, encoded.value).failure.kind != io.Kind.Ok {
     #panic("cannot write the screenshot")
   }
 }
@@ -180,7 +181,7 @@ fn main() {
     #panic("cannot read the font; pass a TrueType file")
   }
   face := font.open(data.value)
-  if !face.ok {
+  if face.failure.kind != parse.Kind.Ok {
     #panic("not a TrueType font")
   }
   codepoints: [95]u32 = []
@@ -196,7 +197,7 @@ fn main() {
   }
   scale := window.scale(&host)
   built := font.atlas(persistent, &face.value, codepoints[..], #cast(u16, 16.0 * scale + 0.5), 1024, 1024)
-  if !built.ok {
+  if built.failure.kind != parse.Kind.Ok {
     #panic("font atlas")
   }
   atlas := mem.push(font.Atlas, persistent)

@@ -53,6 +53,7 @@ use "std/font/ui" font_ui
 use "std/ui" ui
 use "std/ui/software" software
 use "std/io" io
+use "std/parse" parse
 use "std/mem" mem
 use "std/io" errors
 fn check(ok: bool) { if !ok { #panic("font contract") } }
@@ -62,23 +63,23 @@ fn main() {
   defer { mem.arena_release(frame)
     mem.arena_release(arena) }
   opened := font.open(data[..])
-  check(opened.ok)
+  check(opened.failure.kind == parse.Kind.Ok)
   face := opened.value
   check(font.glyph_index(&face, 65) == 1 && font.glyph_index(&face, 68) == 4 && font.glyph_index(&face, 69) == 0)
   check(font.glyph_index(&face, 0xd800) == 0 && font.glyph_index(&face, 0x110000) == 0)
-  for length in 0..#len(data) { check(!font.open(data[..length]).ok) }
+  for length in 0..#len(data) { check(font.open(data[..length]).failure.kind != parse.Kind.Ok) }
   solid := font.raster(arena, &face, 1, 16)
-  check(solid.ok && solid.value.width == 16 && solid.value.height == 16 && solid.value.y_offset == -16 && solid.value.advance == 11)
+  check(solid.failure.kind == parse.Kind.Ok && solid.value.width == 16 && solid.value.height == 16 && solid.value.y_offset == -16 && solid.value.advance == 11)
   for pixel in solid.value.pixels { check(pixel == 255) }
   hole := font.raster(arena, &face, 2, 16)
-  check(hole.ok)
+  check(hole.failure.kind == parse.Kind.Ok)
   for y in 0..16 { for x in 0..16 {
     expected: u8 = 255
     if x >= 4 && x < 12 && y >= 4 && y < 12 { expected = 0 }
     check(hole.value.pixels[y * 16 + x] == expected)
   } }
   curve := font.raster(arena, &face, 3, 16)
-  check(curve.ok)
+  check(curve.failure.kind == parse.Kind.Ok)
   // Analytic quadratic parabola, independent of the edge flattener.
   partial := false
   for y in 0..16 { for x in 0..16 {
@@ -94,11 +95,11 @@ fn main() {
     if actual > 0 && actual < 255 { partial = true }
   } }
   check(partial)
-  check(font.raster(arena, &face, 0, 16).ok)
+  check(font.raster(arena, &face, 0, 16).failure.kind == parse.Kind.Ok)
   mark := mem.arena_mark(arena)
-  check(font.raster(arena, &face, 4, 16).kind == errors.Kind.InvalidInput)
-  check(font.raster(arena, &face, 5, 16).kind == errors.Kind.InvalidInput)
-  check(font.raster(arena, &face, 1, 0).kind == errors.Kind.InvalidInput)
+  check(font.raster(arena, &face, 4, 16).failure.kind == parse.Kind.Syntax)
+  check(font.raster(arena, &face, 5, 16).failure.kind == parse.Kind.Syntax)
+  check(font.raster(arena, &face, 1, 0).failure.kind == parse.Kind.Syntax)
   check(mem.arena_mark(arena) == mark)
   // Corrupt every byte through deterministic mutations; valid parses must also
   // survive bounded rasterization without a language bounds/overflow trap.
@@ -107,11 +108,11 @@ fn main() {
     index := (iteration * 37) % #len(work)
     work[index] ^= #cast(u8, (1 << (iteration % 8)))
     parsed := font.open(work[..])
-    if parsed.ok {
+    if parsed.failure.kind == parse.Kind.Ok {
       for glyph in 0..5 {
         before := mem.arena_mark(arena)
         result := font.raster(arena, &parsed.value, #cast(u16, glyph), 16)
-        if !result.ok { check(mem.arena_mark(arena) == before) }
+        if result.failure.kind != parse.Kind.Ok { check(mem.arena_mark(arena) == before) }
         mem.arena_rewind(arena, mark)
       }
     }
@@ -119,11 +120,11 @@ fn main() {
   }
   codepoints: [3]u32 = [65, 66, 67]
   cached := font.atlas(arena, &face, codepoints[..], 16, 64, 16)
-  check(cached.ok && cached.value.line_height == 20)
+  check(cached.failure.kind == parse.Kind.Ok && cached.value.line_height == 20)
   check(font.atlas_glyph(&cached.value, 65).advance == 11)
   check(font.atlas_glyph(&cached.value, 999).advance == 16)
   before := mem.arena_mark(arena)
-  check(font.atlas(arena, &face, codepoints[..], 16, 1, 1).kind == errors.Kind.Capacity)
+  check(font.atlas(arena, &face, codepoints[..], 16, 1, 1).failure.kind == parse.Kind.Capacity)
   check(mem.arena_mark(arena) == before)
   context := ui.Context{ style: ui.default_style }
   ui.begin(&context, frame, ui.Input{}, ui.Rect{ width: 64, height: 32 })
@@ -144,7 +145,7 @@ fn main() {
   ui.label(&context, ui.Rect{ width: 64, height: 32 }, "D", ui.Color{ a: 255 })
   ui.end(&context)
   result = software.render(&surface, ui.first(&context), font_ui.renderer(&adapter))
-  check(result.failure.kind != errors.Kind.Ok && adapter.failed && adapter.kind == errors.Kind.InvalidInput)
+  check(result.failure.kind != errors.Kind.Ok && adapter.failed && adapter.failure.kind == parse.Kind.Syntax)
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-font-results-') as directory:
