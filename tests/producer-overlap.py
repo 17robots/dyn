@@ -30,10 +30,10 @@ fn main() {
   text_payload:=unicodearena.data[mem.ArenaHeader..]
   text_payload[0]='a'
   converted:=text.normalize(unicodearena,text_payload[..1],text.Form.NFC)
-  if converted.ok || mem.arena_mark(unicodearena)!=mem.arena_start(unicodearena) || text_payload[0]!='a' { #panic("normalization work overlap") }
+  if converted.failure.kind == parse.Kind.Ok || mem.arena_mark(unicodearena)!=mem.arena_start(unicodearena) || text_payload[0]!='a' { #panic("normalization work overlap") }
   text_payload[144]='A'
   converted=text.normalize(unicodearena,text_payload[144..145],text.Form.NFC)
-  if converted.ok || mem.arena_mark(unicodearena)!=mem.arena_start(unicodearena) || text_payload[144]!='A' { #panic("normalization output overlap") }
+  if converted.failure.kind == parse.Kind.Ok || mem.arena_mark(unicodearena)!=mem.arena_start(unicodearena) || text_payload[144]!='A' { #panic("normalization output overlap") }
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-producer-overlap-') as directory:

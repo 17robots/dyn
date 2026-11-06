@@ -1,9 +1,8 @@
 // source and returned values borrow caller storage; keep it alive and unchanged.
 // error retains the legacy text diagnostic; offset advances only on success.
-pub struct Graphemes { source: []const u8, offset: usize, error: ErrorKind, error_offset: usize }
-// error is a native code (zero); detail is the legacy text diagnostic.
+pub struct Graphemes { source: []const u8, offset: usize, error: parse.Kind, error_offset: usize }
 // offset is the first invalid UTF-8 sequence byte offset, otherwise zero.
-pub struct GraphemeResult { value: []const u8, ok: bool, kind: errors.Kind, error: isize, offset: usize, detail: ErrorKind }
+pub struct GraphemeResult { value: []const u8, found: bool, offset: usize, failure: parse.Failure }
 pub fn graphemes(source: []const u8) Graphemes {
   return Graphemes{ source: source }
 }
@@ -14,8 +13,8 @@ fn control(property: u32) bool {
 // a sticky error; End has ok=false/kind=None. Failure leaves offset unchanged.
 // Repeated failure returns the first diagnostic without modifying state.
 pub fn next_grapheme(state: *Graphemes) GraphemeResult {
-  if state.error != ErrorKind.None {
-    return GraphemeResult{ kind: errors.Kind.InvalidInput, offset: state.error_offset, detail: state.error }
+  if state.error != parse.Kind.Ok {
+    return GraphemeResult{ offset: state.error_offset, failure: parse.Failure{ kind: state.error, offset: state.error_offset } }
   }
   if state.offset == #len(state.source) {
     return GraphemeResult{}
@@ -23,9 +22,9 @@ pub fn next_grapheme(state: *Graphemes) GraphemeResult {
   start := state.offset
   first := utf8.decode(state.source, start)
   if !first.ok {
-    state.error = ErrorKind.InvalidUtf8
+    state.error = parse.Kind.Syntax
     state.error_offset = start
-    return GraphemeResult{ kind: errors.Kind.InvalidInput, offset: start, detail: state.error }
+    return GraphemeResult{ offset: start, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: start } }
   }
   bits := properties(first.codepoint)
   previous := (bits >> 13) & 15
@@ -42,9 +41,9 @@ pub fn next_grapheme(state: *Graphemes) GraphemeResult {
   for at < #len(state.source) {
     decoded := utf8.decode(state.source, at)
     if !decoded.ok {
-      state.error = ErrorKind.InvalidUtf8
+      state.error = parse.Kind.Syntax
       state.error_offset = at
-      return GraphemeResult{ kind: errors.Kind.InvalidInput, offset: at, detail: state.error }
+      return GraphemeResult{ offset: at, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: at } }
     }
     next_bits := properties(decoded.codepoint)
     current := (next_bits >> 13) & 15
@@ -107,5 +106,5 @@ pub fn next_grapheme(state: *Graphemes) GraphemeResult {
     at += decoded.width
   }
   state.offset = at
-  return GraphemeResult{ value: state.source[start..at], ok: true }
+  return GraphemeResult{ value: state.source[start..at], found: true }
 }

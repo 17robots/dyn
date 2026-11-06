@@ -96,10 +96,10 @@ const FlagFinal: u32 = 16384
 const FlagUnassigned: u32 = 32768
 const FlagDottedCircle: u32 = 65536
 
-pub struct Breaks { value: []usize, kind: errors.Kind, offset: usize, ok: bool }
+pub struct Breaks { value: []usize, offset: usize, failure: parse.Failure }
 
 pub struct LineBreak { offset: usize, mandatory: bool }
-pub struct LineBreaks { value: []LineBreak, kind: errors.Kind, offset: usize, ok: bool }
+pub struct LineBreaks { value: []LineBreak, offset: usize, failure: parse.Failure }
 
 // One unit after attaching marks: base class and flags, first and last code
 // point indexes, and its starting byte.
@@ -159,11 +159,11 @@ fn mid_num_q(class: u8) bool {
 pub fn word_breaks(arena: *mem.Arena, text: []const u8) Breaks {
   count := utf8.codepoint_count(text)
   if !count.ok {
-    return Breaks{ kind: errors.Kind.InvalidInput, offset: first_invalid(text) }
+    return Breaks{ offset: first_invalid(text), failure: parse.Failure{ kind: parse.Kind.Syntax, offset: first_invalid(text) } }
   }
   n := count.value
   if n == 0 {
-    return Breaks{ ok: true }
+    return Breaks{}
   }
   result := mem.push_array(usize, arena, n)
   mark := mem.arena_mark(arena)
@@ -267,7 +267,7 @@ pub fn word_breaks(arena: *mem.Arena, text: []const u8) Breaks {
   result[used] = #len(text)
   used += 1
   mem.arena_rewind(arena, mark - (n - used) * #sizeof(usize))
-  return Breaks{ value: result[..used], ok: true }
+  return Breaks{ value: result[..used] }
 }
 
 fn unit_class(units: []Unit, index: usize) u8 {
@@ -535,11 +535,11 @@ fn line_decision(units: []Unit, values: []u32, u: usize) u8 {
 pub fn line_breaks(arena: *mem.Arena, text: []const u8) LineBreaks {
   count := utf8.codepoint_count(text)
   if !count.ok {
-    return LineBreaks{ kind: errors.Kind.InvalidInput, offset: first_invalid(text) }
+    return LineBreaks{ offset: first_invalid(text), failure: parse.Failure{ kind: parse.Kind.Syntax, offset: first_invalid(text) } }
   }
   n := count.value
   if n == 0 {
-    return LineBreaks{ ok: true }
+    return LineBreaks{}
   }
   result := mem.push_array(LineBreak, arena, n)
   mark := mem.arena_mark(arena)
@@ -583,5 +583,5 @@ pub fn line_breaks(arena: *mem.Arena, text: []const u8) LineBreaks {
   result[used] = LineBreak{ offset: #len(text), mandatory: true }
   used += 1
   mem.arena_rewind(arena, mark - (n - used) * #sizeof(LineBreak))
-  return LineBreaks{ value: result[..used], ok: true }
+  return LineBreaks{ value: result[..used] }
 }

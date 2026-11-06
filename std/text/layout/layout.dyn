@@ -1,3 +1,4 @@
+use "std/parse" parse
 use "std/mem" mem
 use "std/io" errors
 use "std/unicode/utf8" utf8
@@ -12,7 +13,7 @@ pub struct Options { width: i32, no_wrap: bool, no_normalize: bool, alignment: A
 pub struct Glyph { codepoint: u32, start: usize, end: usize, x: f64, y: f64 }
 pub struct Line { start: usize, end: usize, glyph_start: usize, glyph_count: usize, width: f64, y: f64 }
 pub struct Layout { text: []const u8, glyphs: []Glyph, lines: []Line, width: f64, height: f64, line_height: i32 }
-pub struct Result { value: Layout, kind: errors.Kind, error: isize, offset: usize, ok: bool }
+pub struct Result { value: Layout, offset: usize, failure: parse.Failure }
 struct Cluster { start: usize, end: usize, first: usize, count: usize, advance: f64, first_cp: u32, last_cp: u32, break_after: bool, hard: bool, space: bool, tab: bool, soft: bool }
 fn valid_metric(value: f64) bool {
   return value == value && value >= -2147483647.0 && value <= 2147483647.0
@@ -46,7 +47,7 @@ pub fn build(arena: *mem.Arena, source: []const u8, font: Font, requested: Optio
   }
   if font.advance == nil || font.line_height <= 0 || options.width < 0 || options.tab_columns == 0 || options.tab_columns > 256 ||
     (options.alignment != Align.Left && options.alignment != Align.Center && options.alignment != Align.Right) {
-    return Result{ kind: errors.Kind.InvalidInput }
+    return Result{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   mark := mem.arena_mark(arena)
   success := false
@@ -58,8 +59,8 @@ pub fn build(arena: *mem.Arena, source: []const u8, font: Font, requested: Optio
   text: []const u8
   if !options.no_normalize {
     normalized := unicode.normalize(arena, source, unicode.Form.NFC)
-    if !normalized.ok {
-      return Result{ kind: normalized.kind, error: normalized.error, offset: normalized.offset }
+    if normalized.failure.kind != parse.Kind.Ok {
+      return Result{ offset: normalized.offset, failure: parse.Failure{ kind: normalized.failure.kind, offset: normalized.offset } }
     }
     text = normalized.value
   } else {
@@ -68,8 +69,8 @@ pub fn build(arena: *mem.Arena, source: []const u8, font: Font, requested: Optio
     text = copied
   }
   breaks := unicode.line_breaks(arena, text)
-  if !breaks.ok {
-    return Result{ kind: breaks.kind, offset: breaks.offset }
+  if breaks.failure.kind != parse.Kind.Ok {
+    return Result{ offset: breaks.offset, failure: parse.Failure{ kind: breaks.failure.kind, offset: breaks.offset } }
   }
   count := utf8.codepoint_count(text)
   work := mem.push_array(Glyph, arena, count.value)
@@ -81,8 +82,8 @@ pub fn build(arena: *mem.Arena, source: []const u8, font: Font, requested: Optio
   for iterator.offset < #len(text) {
     start := iterator.offset
     run := unicode.next_grapheme(&iterator)
-    if !run.ok {
-      return Result{ kind: run.kind, offset: run.offset }
+    if !run.found {
+      return Result{ offset: run.offset, failure: parse.Failure{ kind: run.failure.kind, offset: run.offset } }
     }
     first := utf8.decode(text, start).codepoint
     cluster := Cluster{ start: start, end: iterator.offset, first: used, space: first == 32 || first == 9 || first == 0x200b,
@@ -97,7 +98,7 @@ pub fn build(arena: *mem.Arena, source: []const u8, font: Font, requested: Optio
     if cluster.tab {
       width := font.advance(font.data, 32)
       if !valid_metric(width) || width < 0.0 {
-        return Result{ kind: errors.Kind.InvalidInput, offset: start }
+        return Result{ offset: start, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: start } }
       }
       cluster.advance = width * #cast(f64, options.tab_columns)
     } else if !cluster.hard && first != 0x200b {
@@ -112,7 +113,7 @@ pub fn build(arena: *mem.Arena, source: []const u8, font: Font, requested: Optio
         }
         advance := font.advance(font.data, cp)
         if !valid_metric(advance) || advance < 0.0 {
-          return Result{ kind: errors.Kind.InvalidInput, offset: at }
+          return Result{ offset: at, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: at } }
         }
         combining := unicode.combining_class(cp) != 0
         adjustment: f64 = 0.0
@@ -120,7 +121,7 @@ pub fn build(arena: *mem.Arena, source: []const u8, font: Font, requested: Optio
           adjustment = kern(font, previous, cp)
         }
         if !valid_metric(adjustment) {
-          return Result{ kind: errors.Kind.InvalidInput, offset: at }
+          return Result{ offset: at, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: at } }
         }
         cluster.advance += adjustment
         work[used] = Glyph{ codepoint: cp, start: cluster.start, end: cluster.end, x: cluster.advance }
@@ -165,7 +166,7 @@ pub fn build(arena: *mem.Arena, source: []const u8, font: Font, requested: Optio
         adjustment = kern(font, previous, cluster.first_cp)
       }
       if !valid_metric(adjustment) {
-        return Result{ kind: errors.Kind.InvalidInput, offset: cluster.start }
+        return Result{ offset: cluster.start, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: cluster.start } }
       }
       next_width := width + adjustment + step(cluster, width + adjustment)
       if !options.no_wrap && options.width > 0 && next_width > #cast(f64, options.width) && cursor > begin {
@@ -193,7 +194,7 @@ pub fn build(arena: *mem.Arena, source: []const u8, font: Font, requested: Optio
             soft_adjustment = kern(font, previous, cluster.first_cp)
           }
           if !valid_metric(soft_adjustment) {
-            return Result{ kind: errors.Kind.InvalidInput, offset: cluster.start }
+            return Result{ offset: cluster.start, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: cluster.start } }
           }
           break_width += cluster.advance + soft_adjustment
         }
@@ -225,7 +226,7 @@ pub fn build(arena: *mem.Arena, source: []const u8, font: Font, requested: Optio
         adjustment = kern(font, previous, cluster.first_cp)
       }
       if !valid_metric(adjustment) {
-        return Result{ kind: errors.Kind.InvalidInput, offset: cluster.start }
+        return Result{ offset: cluster.start, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: cluster.start } }
       }
       x += adjustment
       for j in 0..cluster.count {
@@ -293,5 +294,5 @@ pub fn build(arena: *mem.Arena, source: []const u8, font: Font, requested: Optio
   }
   success = true
   return Result{ value: Layout{ text: text, glyphs: glyphs[..glyph_count], lines: lines[..line_count], width: maximum,
-    height: #cast(f64, line_count) * #cast(f64, font.line_height), line_height: font.line_height }, ok: true }
+    height: #cast(f64, line_count) * #cast(f64, font.line_height), line_height: font.line_height } }
 }

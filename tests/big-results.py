@@ -53,7 +53,8 @@ for a, b in cases:
     exponent = abs(a) % 4096
     out += [pow(a, exponent, modulus) if modulus > 0 else 'none']
     expected.append(' '.join(str(x) for x in out))
-SOURCE = '''use "std/math/big" big
+SOURCE = '''use "std/parse" parse
+use "std/math/big" big
 use "std/io" io
 use "std/mem" mem
 use "std/bytes" bytes
@@ -108,11 +109,11 @@ fn main() {
     mem.arena_rewind(arena, mark)
   }
   bad := big.parse(arena, "12x4", 10)
-  if bad.ok || bad.offset != 2 {
+  if bad.failure.kind == parse.Kind.Ok || bad.offset != 2 {
     #panic("parse failure")
   }
   hex := big.parse(arena, "-FfeE", 16)
-  if !hex.ok || !mem.equal(big.format(arena, hex.value, 36), "-1ejy") {
+  if hex.failure.kind != parse.Kind.Ok || !mem.equal(big.format(arena, hex.value, 36), "-1ejy") {
     #panic("bases")
   }
 }

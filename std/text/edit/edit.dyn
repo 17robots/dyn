@@ -11,8 +11,8 @@ pub struct Replacement { text: []const u8, start: usize, end: usize, token: u64 
 // token zero means unpublished. A successful application invalidates it;
 // publish a fresh context before accepting another correction.
 pub struct Buffer { storage: []u8, length: usize, cursor: usize, anchor: usize, token: u64 }
-pub struct Status { kind: errors.Kind, ok: bool }
-pub struct ContextResult { value: Context, kind: errors.Kind, ok: bool }
+pub type Status = errors.Failure
+pub struct ContextResult { value: Context, failure: errors.Failure }
 pub struct Tracker {
   serial: u64,
   token: u64,
@@ -38,7 +38,7 @@ pub fn validate(context: *const Context) Status {
     (context.cause != Cause.Other && context.cause != Cause.InputMethod) {
     return Status{ kind: errors.Kind.InvalidInput }
   }
-  return Status{ ok: true }
+  return Status{}
 }
 
 // The returned view borrows tracker until its next changed snapshot. Equal
@@ -46,11 +46,11 @@ pub fn validate(context: *const Context) Status {
 pub fn snapshot(tracker: *Tracker, owner: u64, text: []const u8, cursor, anchor: usize, cause: Cause) ContextResult {
   if #len(text) > context_limit {
     invalidate(tracker)
-    return ContextResult{ kind: errors.Kind.Capacity }
+    return ContextResult{ failure: errors.Failure{ kind: errors.Kind.Capacity } }
   }
   if !utf8.valid(text) || !boundary(text, cursor) || !boundary(text, anchor) || (cause != Cause.Other && cause != Cause.InputMethod) {
     invalidate(tracker)
-    return ContextResult{ kind: errors.Kind.InvalidInput }
+    return ContextResult{ failure: errors.Failure{ kind: errors.Kind.InvalidInput } }
   }
   equal := tracker.token != 0 && tracker.owner == owner && tracker.length == #len(text) && tracker.cursor == cursor && tracker.anchor == anchor
   if equal {
@@ -64,7 +64,7 @@ pub fn snapshot(tracker: *Tracker, owner: u64, text: []const u8, cursor, anchor:
   if !equal {
     if tracker.serial == 18446744073709551615 {
       invalidate(tracker)
-      return ContextResult{ kind: errors.Kind.Overflow }
+      return ContextResult{ failure: errors.Failure{ kind: errors.Kind.Overflow } }
     }
     tracker.serial += 1
     tracker.token = tracker.serial
@@ -75,7 +75,7 @@ pub fn snapshot(tracker: *Tracker, owner: u64, text: []const u8, cursor, anchor:
     tracker.anchor = anchor
     _ = mem.move(tracker.bytes[..#len(text)], text)
   }
-  return ContextResult{ value: Context{ text: tracker.bytes[..tracker.length], cursor: cursor, anchor: anchor, token: tracker.token, cause: tracker.cause }, ok: true }
+  return ContextResult{ value: Context{ text: tracker.bytes[..tracker.length], cursor: cursor, anchor: anchor, token: tracker.token, cause: tracker.cause } }
 }
 
 // Invalidates a published identity without resetting the monotonic clock.
@@ -139,5 +139,5 @@ pub fn apply(scratch: *mem.Arena, buffer: *Buffer, replacement: *const Replaceme
   buffer.cursor = destination
   buffer.anchor = destination
   buffer.token = 0
-  return Status{ ok: true }
+  return Status{}
 }

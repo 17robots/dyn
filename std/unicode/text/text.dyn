@@ -1,10 +1,9 @@
+use "std/parse" parse
 use "std/mem" mem
 use "std/unicode/utf8" utf8
 use "std/bytes" bytes
-use "std/io" errors
 pub const UnicodeVersion: []const u8 = "17.0.0"
-pub enum ErrorKind { None, InvalidUtf8, Capacity, Overlap }
-struct Result { written: usize, error: ErrorKind, ok: bool }
+struct Result { written: usize, error: parse.Kind, ok: bool }
 pub enum Form { NFD, NFC, NFKD, NFKC }
 pub enum Category { Cn, Lu, Ll, Lt, Lm, Lo, Mn, Mc, Me, Nd, Nl, No, Pc, Pd, Ps, Pe, Pi, Pf, Po, Sm, Sc, Sk, So, Zs, Zl, Zp, Cc, Cf, Cs, Co }
 fn properties(codepoint: u32) u32 {
@@ -151,14 +150,14 @@ fn mapping(table: []const u32, codepoint: u32) []const u32 {
 // Overlap is rejected before writing. Other failures report a complete UTF-8 prefix.
 fn case_fold_into(destination: []u8, source: []const u8) Result {
   if bytes.overlaps(destination, source) {
-    return Result{ error: ErrorKind.Overlap }
+    return Result{ error: parse.Kind.Overlap }
   }
   at: usize = 0
   written: usize = 0
   for at < #len(source) {
     decoded := utf8.decode(source, at)
     if !decoded.ok {
-      return Result{ written: written, error: ErrorKind.InvalidUtf8 }
+      return Result{ written: written, error: parse.Kind.Syntax }
     }
     values := mapping(Folding[..], decoded.codepoint)
     scalar: [1]u32 = [decoded.codepoint]
@@ -168,7 +167,7 @@ fn case_fold_into(destination: []u8, source: []const u8) Result {
     for value in values {
       width := utf8.encode(destination[written..], value)
       if width == 0 {
-        return Result{ written: written, error: ErrorKind.Capacity }
+        return Result{ written: written, error: parse.Kind.Capacity }
       }
       written += width
     }
@@ -205,12 +204,12 @@ fn compose(left: u32, right: u32) u32 {
 // Errors may modify storage; written reports only the complete output prefix.
 fn normalize_into(destination: []u8, source: []const u8, form: Form, work: []u32) Result {
   if bytes.overlaps(destination, source) {
-    return Result{ error: ErrorKind.Overlap }
+    return Result{ error: parse.Kind.Overlap }
   }
   if #len(work) > 0 {
     workspace := #slice(#cast(*u8, &work[0]), #len(work) * 4)
     if bytes.overlaps(workspace, source) || bytes.overlaps(workspace, destination) {
-      return Result{ error: ErrorKind.Overlap }
+      return Result{ error: parse.Kind.Overlap }
     }
   }
   capacity := #len(work) / 2
@@ -225,7 +224,7 @@ fn normalize_into(destination: []u8, source: []const u8, form: Form, work: []u32
   for at < #len(source) {
     decoded := utf8.decode(source, at)
     if !decoded.ok {
-      return Result{ error: ErrorKind.InvalidUtf8 }
+      return Result{ error: parse.Kind.Syntax }
     }
     scalar: [3]u32 = [decoded.codepoint, 0, 0]
     mapped := mapping(table, decoded.codepoint)
@@ -242,7 +241,7 @@ fn normalize_into(destination: []u8, source: []const u8, form: Form, work: []u32
       mapped = scalar[..1]
     }
     if #len(mapped) > capacity - count {
-      return Result{ error: ErrorKind.Capacity }
+      return Result{ error: parse.Kind.Capacity }
     }
     for value in mapped {
       values[count] = value
@@ -320,7 +319,7 @@ fn normalize_into(destination: []u8, source: []const u8, form: Form, work: []u32
   for scalar_value in values[..count] {
     width := utf8.encode(destination[written..], scalar_value)
     if width == 0 {
-      return Result{ written: written, error: ErrorKind.Capacity }
+      return Result{ written: written, error: parse.Kind.Capacity }
     }
     written += width
   }
@@ -331,7 +330,7 @@ fn normalize_into(destination: []u8, source: []const u8, form: Form, work: []u32
 // leave the arena mark unchanged. kind is portable; error is zero (no native
 // failure), detail preserves the text diagnostic. offset is the first invalid
 // UTF-8 sequence's byte offset, or zero for other outcomes. Exhaustion panics.
-pub struct Converted { value: []u8, ok: bool, kind: errors.Kind, error: isize, offset: usize, detail: ErrorKind }
+pub struct Converted { value: []u8, offset: usize, failure: parse.Failure }
 
 // Return source length when valid, otherwise the first undecodable byte offset.
 // Preflight must run before allocation, including for an empty fixed arena.
@@ -351,7 +350,7 @@ fn invalid_utf8_offset(source: []const u8, start: usize) usize {
 pub fn case_fold(arena: *mem.Arena, source: []const u8) Converted {
   invalid := invalid_utf8_offset(source, 0)
   if invalid != #len(source) {
-    return Converted{ kind: errors.Kind.InvalidInput, offset: invalid, detail: ErrorKind.InvalidUtf8 }
+    return Converted{ offset: invalid, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: invalid } }
   }
   capacity := mem.trial_size(arena, 2 * #len(source) + 16)
   for capacity > 0 {
@@ -360,11 +359,11 @@ pub fn case_fold(arena: *mem.Arena, source: []const u8) Converted {
     result := case_fold_into(space, source)
     if result.ok {
       mem.arena_rewind(arena, mark + result.written)
-      return Converted{ value: space[..result.written], ok: true }
+      return Converted{ value: space[..result.written] }
     }
     mem.arena_rewind(arena, mark)
-    if result.error != ErrorKind.Capacity {
-      return Converted{ kind: errors.Kind.InvalidInput, detail: result.error }
+    if result.error != parse.Kind.Capacity {
+      return Converted{ failure: parse.Failure{ kind: result.error } }
     }
     capacity = mem.trial_next(arena, capacity)
   }
@@ -375,7 +374,7 @@ pub fn case_fold(arena: *mem.Arena, source: []const u8) Converted {
 pub fn normalize(arena: *mem.Arena, source: []const u8, form: Form) Converted {
   invalid := invalid_utf8_offset(source, 0)
   if invalid != #len(source) {
-    return Converted{ kind: errors.Kind.InvalidInput, offset: invalid, detail: ErrorKind.InvalidUtf8 }
+    return Converted{ offset: invalid, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: invalid } }
   }
   capacity := mem.trial_size(arena, 2 * #len(source) + 16)
   for capacity > 0 {
@@ -405,13 +404,13 @@ pub fn normalize(arena: *mem.Arena, source: []const u8, form: Form) Converted {
       _ = mem.move(allocation[..result.written], space[..result.written])
       mem.arena_rewind(arena, mark + result.written)
       if result.written == 0 {
-        return Converted{ok: true}
+        return Converted{}
       }
-      return Converted{ value: allocation[..result.written], ok: true }
+      return Converted{ value: allocation[..result.written] }
     }
     mem.arena_rewind(arena, mark)
-    if result.error != ErrorKind.Capacity {
-      return Converted{ kind: errors.Kind.InvalidInput, detail: result.error }
+    if result.error != parse.Kind.Capacity {
+      return Converted{ failure: parse.Failure{ kind: result.error } }
     }
     capacity = mem.trial_next(arena, capacity)
   }

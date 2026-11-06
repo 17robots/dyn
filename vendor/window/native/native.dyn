@@ -252,7 +252,7 @@ pub fn set_surrounding_text(window: *Window, context: Surrounding) Result {
     return Result{ kind: errors.Kind.InvalidState }
   }
   checked := surrounding_edit.validate(&context)
-  if !checked.ok {
+  if checked.kind != errors.Kind.Ok {
     return Result{ kind: checked.kind }
   }
   for byte in context.text {

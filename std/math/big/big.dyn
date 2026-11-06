@@ -3,11 +3,12 @@
 // 32-bit, least significant first, with no leading zero limbs; zero has no
 // limbs and is never negative.
 
+use "std/parse" parse
 use "std/mem" mem
 use "std/io" errors
 pub struct Int { limbs: []const u32, negative: bool }
 
-pub struct ParseResult { value: Int, kind: errors.Kind, offset: usize, ok: bool }
+pub struct ParseResult { value: Int, offset: usize, failure: parse.Failure }
 pub struct Division { quotient: Int, remainder: Int, ok: bool }
 
 fn trimmed(limbs: []u32, negative: bool) Int {
@@ -403,7 +404,7 @@ fn digit_value(byte: u8) u32 {
 // invalid byte, reporting its offset, and allocates nothing then.
 pub fn parse(arena: *mem.Arena, text: []const u8, base: u32) ParseResult {
   if base < 2 || base > 36 {
-    return ParseResult{ kind: errors.Kind.InvalidInput }
+    return ParseResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   at: usize = 0
   negative := false
@@ -412,11 +413,11 @@ pub fn parse(arena: *mem.Arena, text: []const u8, base: u32) ParseResult {
     at += 1
   }
   if at == #len(text) {
-    return ParseResult{ kind: errors.Kind.InvalidInput, offset: at }
+    return ParseResult{ offset: at, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: at } }
   }
   for i in at..#len(text) {
     if digit_value(text[i]) >= base {
-      return ParseResult{ kind: errors.Kind.InvalidInput, offset: i }
+      return ParseResult{ offset: i, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: i } }
     }
   }
   // Each digit needs at most log2(36) < 6 bits.
@@ -434,7 +435,7 @@ pub fn parse(arena: *mem.Arena, text: []const u8, base: u32) ParseResult {
       used += 1
     }
   }
-  return ParseResult{ value: trimmed(limbs[..used], negative), ok: true }
+  return ParseResult{ value: trimmed(limbs[..used], negative) }
 }
 
 // The value's digits in base 2 through 36, lowercase, with a leading '-' when
