@@ -65,7 +65,7 @@ fn posix_system(arena: *mem.Arena) ZoneResult {
     return parse_posix(arena, text)
   }
   loaded := read_zone(arena, local_name(arena), "/etc/localtime")
-  if loaded.failure.kind != io.Kind.Ok && loaded.failure.kind == errors.Kind.NotFound {
+  if loaded.failure.kind != io.Kind.Ok && loaded.failure.kind == io.Kind.NotFound {
     return ZoneResult{ value: utc() }
   }
   return loaded

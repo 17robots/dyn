@@ -10,7 +10,6 @@ DYN = str(Path(os.environ.get('DYN', ROOT/'build/dyn-release')).resolve())
 SOURCE = '''use "std/time" time
 use "std/profile" profile
 use "std/testing" testing
-use "std/io" io
 use "std/net" net
 use "std/net/dns" dns
 use "std/process" process

@@ -10,7 +10,6 @@ DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 SOURCE=r'''use "vendor/ui/vulkan" gpu
 use "std/ui" ui
 use "std/ui/software" software
-use "std/io" io
 use "std/mem" mem
 use "std/io" errors
 fn check(ok: bool) { if !ok { #panic("Vulkan UI contract") } }

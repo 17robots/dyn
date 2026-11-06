@@ -13,7 +13,6 @@ SOURCE=r'''use "vendor/freetype" ft
 use "vendor/harfbuzz" hb
 use "std/dynlib" dynlib
 use "std/fs" fs
-use "std/io" io
 use "std/mem" mem
 use "std/encoding/binary" binary
 use "std/ui" ui

@@ -88,69 +88,69 @@ fn main() {
   zero_deadline := DeadlineResult{}
   zero_expired := ExpiredResult{}
   zero_duration := DurationResult{}
-  require(zero_clock.failure.kind == errors.Kind.Ok && zero_clock.failure.native == 0)
-  require(zero_sleep.failure.kind == errors.Kind.Ok && zero_sleep.failure.native == 0)
-  require(zero_deadline.failure.kind == errors.Kind.Ok && zero_deadline.failure.native == 0)
-  require(zero_expired.failure.kind == errors.Kind.Ok && zero_expired.failure.native == 0)
-  require(zero_duration.failure.kind == errors.Kind.Ok && zero_duration.failure.native == 0)
+  require(zero_clock.failure.kind == io.Kind.Ok && zero_clock.failure.native == 0)
+  require(zero_sleep.failure.kind == io.Kind.Ok && zero_sleep.failure.native == 0)
+  require(zero_deadline.failure.kind == io.Kind.Ok && zero_deadline.failure.native == 0)
+  require(zero_expired.failure.kind == io.Kind.Ok && zero_expired.failure.native == 0)
+  require(zero_duration.failure.kind == io.Kind.Ok && zero_duration.failure.native == 0)
   zero := Deadline{}
   for native in [0, -73] {
-    mock = ClockResult{ failure: errors.Failure{ kind: errors.Kind.PermissionDenied, native: #cast(isize, native) } }
+    mock = ClockResult{ failure: io.Failure{ kind: io.Kind.PermissionDenied, native: #cast(isize, native) } }
     mono := monotonic_now()
     wall := realtime_now()
-    require(mono.failure.kind != errors.Kind.Ok && mono.failure.kind == mock.failure.kind && mono.failure.native == mock.failure.native)
-    require(wall.failure.kind != errors.Kind.Ok && wall.failure.kind == mock.failure.kind && wall.failure.native == mock.failure.native)
+    require(mono.failure.kind != io.Kind.Ok && mono.failure.kind == mock.failure.kind && mono.failure.native == mock.failure.native)
+    require(wall.failure.kind != io.Kind.Ok && wall.failure.kind == mock.failure.kind && wall.failure.native == mock.failure.native)
     after := deadline_after(1)
-    require(after.failure.kind != errors.Kind.Ok && after.failure.kind == mock.failure.kind && after.failure.native == mock.failure.native && after.value.at.seconds == 0 && after.value.at.nanoseconds == 0)
+    require(after.failure.kind != io.Kind.Ok && after.failure.kind == mock.failure.kind && after.failure.native == mock.failure.native && after.value.at.seconds == 0 && after.value.at.nanoseconds == 0)
     expired := deadline_expired(&zero)
-    require(expired.failure.kind != errors.Kind.Ok && !expired.value && expired.failure.kind == mock.failure.kind && expired.failure.native == mock.failure.native)
+    require(expired.failure.kind != io.Kind.Ok && !expired.value && expired.failure.kind == mock.failure.kind && expired.failure.native == mock.failure.native)
     remaining := deadline_remaining(&zero)
-    require(remaining.failure.kind != errors.Kind.Ok && remaining.value == 0 && remaining.failure.kind == mock.failure.kind && remaining.failure.native == mock.failure.native)
-    sleep_mock = SleepResult{ failure: errors.Failure{ kind: errors.Kind.Interrupted, native: #cast(isize, native) } }
+    require(remaining.failure.kind != io.Kind.Ok && remaining.value == 0 && remaining.failure.kind == mock.failure.kind && remaining.failure.native == mock.failure.native)
+    sleep_mock = SleepResult{ failure: io.Failure{ kind: io.Kind.Interrupted, native: #cast(isize, native) } }
     slept := sleep(1)
-    require(slept.failure.kind != errors.Kind.Ok && slept.failure.kind == sleep_mock.failure.kind && slept.failure.native == sleep_mock.failure.native)
+    require(slept.failure.kind != io.Kind.Ok && slept.failure.kind == sleep_mock.failure.kind && slept.failure.native == sleep_mock.failure.native)
   }
   require(sleep_calls == 2)
-  require(sleep(0).failure.kind == errors.Kind.Ok && sleep(-1).failure.kind == errors.Kind.Ok && sleep_calls == 2)
+  require(sleep(0).failure.kind == io.Kind.Ok && sleep(-1).failure.kind == io.Kind.Ok && sleep_calls == 2)
   sleep_mock = SleepResult{}
-  require(sleep(1).failure.kind == errors.Kind.Ok && sleep_calls == 3)
-  require(deadline_expired(nil).failure.kind == errors.Kind.InvalidInput)
+  require(sleep(1).failure.kind == io.Kind.Ok && sleep_calls == 3)
+  require(deadline_expired(nil).failure.kind == io.Kind.InvalidInput)
   require(deadline_expired(nil).failure.native == 0)
-  require(deadline_remaining(nil).failure.kind == errors.Kind.InvalidInput)
+  require(deadline_remaining(nil).failure.kind == io.Kind.InvalidInput)
   require(deadline_remaining(nil).failure.native == 0)
   max: i64 = 9223372036854775807
   min: i64 = -9223372036854775807 - 1
   add := checked_add(max, 1)
   sub := checked_sub(min, 1)
-  require(add.failure.kind == errors.Kind.Overflow && add.failure.native == 0)
-  require(sub.failure.kind == errors.Kind.Overflow && sub.failure.native == 0)
+  require(add.failure.kind == io.Kind.Overflow && add.failure.native == 0)
+  require(sub.failure.kind == io.Kind.Overflow && sub.failure.native == 0)
   require(checked_sub(-1, min).value == max)
-  require(checked_sub(0, min).failure.kind != errors.Kind.Ok)
-  require(elapsed(Instant{seconds: min}, Instant{seconds: max}).failure.kind != errors.Kind.Ok)
+  require(checked_sub(0, min).failure.kind != io.Kind.Ok)
+  require(elapsed(Instant{seconds: min}, Instant{seconds: max}).failure.kind != io.Kind.Ok)
   mock = ClockResult{}
-  require(deadline_expired(&zero).failure.kind == errors.Kind.Ok && deadline_expired(&zero).value)
-  require(deadline_remaining(&zero).failure.kind == errors.Kind.Ok && deadline_remaining(&zero).value == 0)
+  require(deadline_expired(&zero).failure.kind == io.Kind.Ok && deadline_expired(&zero).value)
+  require(deadline_remaining(&zero).failure.kind == io.Kind.Ok && deadline_remaining(&zero).value == 0)
   past := deadline_after(-1)
-  require(past.failure.kind == errors.Kind.Ok && past.value.at.seconds == -1 && past.value.at.nanoseconds == Second - 1)
+  require(past.failure.kind == io.Kind.Ok && past.value.at.seconds == -1 && past.value.at.nanoseconds == Second - 1)
   require(deadline_expired(&past.value).value && deadline_remaining(&past.value).value == 0)
   future := deadline_after(Second + 1)
-  require(future.failure.kind == errors.Kind.Ok && future.value.at.seconds == 1 && future.value.at.nanoseconds == 1)
+  require(future.failure.kind == io.Kind.Ok && future.value.at.seconds == 1 && future.value.at.nanoseconds == 1)
   require(!deadline_expired(&future.value).value && deadline_remaining(&future.value).value == Second + 1)
   far := Deadline{at: Instant{seconds: max}}
   overflow := deadline_remaining(&far)
-  require(overflow.failure.kind != errors.Kind.Ok && overflow.failure.kind == errors.Kind.Overflow && overflow.failure.native == 0)
+  require(overflow.failure.kind != io.Kind.Ok && overflow.failure.kind == io.Kind.Overflow && overflow.failure.native == 0)
   mock = ClockResult{value: Instant{seconds: max, nanoseconds: Second - 1}}
   after := deadline_after(1)
-  require(after.failure.kind != errors.Kind.Ok && after.failure.kind == errors.Kind.Overflow && after.failure.native == 0)
+  require(after.failure.kind != io.Kind.Ok && after.failure.kind == io.Kind.Overflow && after.failure.native == 0)
   mock = ClockResult{value: Instant{seconds: min}}
   after = deadline_after(-1)
-  require(after.failure.kind != errors.Kind.Ok && after.failure.kind == errors.Kind.Overflow && after.failure.native == 0)
+  require(after.failure.kind != io.Kind.Ok && after.failure.kind == io.Kind.Overflow && after.failure.native == 0)
   mock = ClockResult{value: Instant{seconds: 4, nanoseconds: Second - 1}}
   after = deadline_after(1)
-  require(after.failure.kind == errors.Kind.Ok && after.value.at.seconds == 5 && after.value.at.nanoseconds == 0)
+  require(after.failure.kind == io.Kind.Ok && after.value.at.seconds == 5 && after.value.at.nanoseconds == 0)
   mock = ClockResult{value: Instant{seconds: 4}}
   after = deadline_after(-1)
-  require(after.failure.kind == errors.Kind.Ok && after.value.at.seconds == 3 && after.value.at.nanoseconds == Second - 1)
+  require(after.failure.kind == io.Kind.Ok && after.value.at.seconds == 3 && after.value.at.nanoseconds == Second - 1)
 }
 '''
 

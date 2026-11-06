@@ -8,7 +8,6 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT/'build/dyn-release')).resolve())
 SOURCE = r'''use "std/ui/box" box
-use "std/io" io
 use "std/mem" mem
 fn check(ok: bool, why: []const u8) { if !ok { #panic(why) } }
 fn measure(data: rawptr, text: []const u8) f32 { _ = data

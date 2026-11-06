@@ -17,10 +17,8 @@ def literal(value):
 
 SOURCE = '''use "std/parse" parse
 use "std/unicode/text" text
-use "std/io" io
 use "std/mem" mem
 use "std/bytes" bytes
-use "std/io" errors
 fn require(ok: bool, message: []const u8) { if !ok { #panic(message) } }
 fn converted(r: text.Converted, expected: []const u8) {
  require(r.failure.kind == parse.Kind.Ok && bytes.equal(r.value, expected), "conversion golden")

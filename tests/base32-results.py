@@ -12,9 +12,7 @@ def literal(data): return '"'+''.join('\\x%02x'%b for b in data)+'"'
 source='''use "std/parse" parse
 use "std/encoding/base32" codec
 use "std/encoding" encoding
-use "std/io" io
 use "std/mem" mem
-use "std/io" errors
 use "std/bytes" bytes
 fn good(raw,encoded:[]const u8) {
   backing:[2048 + mem.ArenaBufferOverhead]u8

@@ -21,7 +21,6 @@ pub fn clipboard_inject(reader: *Window, kind: usize, format: i32, data: *const 
 '''
 SOURCE=r'''use "probe" window
 use "vendor/window/events" events
-use "std/io" io
 use "std/mem" mem
 use "std/bytes" bytes
 use "std/io" errors

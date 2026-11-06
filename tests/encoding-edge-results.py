@@ -24,8 +24,6 @@ SOURCE = '''use "std/parse" parse
 use "std/encoding/base64" b
 use "std/encoding/hex" h
 use "std/encoding" codec
-use "std/io" errors
-use "std/io" io
 use "std/mem" mem
 use "std/bytes" bytes
 fn good(raw: []const u8, hx: []const u8, upper: []const u8, b64: []const u8) {

@@ -9,7 +9,6 @@ import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 SOURCE=r'''use "std/text/edit" edit
-use "std/io" io
 use "std/mem" mem
 use "std/bytes" bytes
 use "std/io" errors

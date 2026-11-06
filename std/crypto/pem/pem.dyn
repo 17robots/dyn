@@ -1,6 +1,6 @@
 use "std/parse" parse
 use "std/mem" mem
-use "std/io" errors
+use "std/io" io
 use "std/encoding/base64" base64
 
 pub struct Result { value: []u8, label: []const u8, consumed: usize, offset: usize, failure: parse.Failure }

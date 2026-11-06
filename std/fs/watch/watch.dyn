@@ -1,7 +1,7 @@
 use "std/parse" parse
 #target(kernel: linux)
 use "std/mem" mem
-use "std/io" errors
+use "std/io" io
 use "std/fs" fs
 use "std/c" c
 
@@ -27,22 +27,22 @@ pub enum Status { Event, Empty, Error }
 // Zero is a closed watcher: active is false.
 // Ownership: a live watcher is not an independent owner when copied. Keep one
 // stable owner and close it before its storage is released or reused.
-pub struct Watcher { descriptor: isize, active: bool, storage: []u8, used: usize, offset: usize, rescan_required: bool, failed: bool, error: isize, kind: errors.Kind }
-pub struct OpenResult { value: Watcher, failure: errors.Failure }
+pub struct Watcher { descriptor: isize, active: bool, storage: []u8, used: usize, offset: usize, rescan_required: bool, failed: bool, error: isize, kind: io.Kind }
+pub struct OpenResult { value: Watcher, failure: io.Failure }
 // `error` keeps the native code; `kind` is its portable category.
-pub struct Result { value: i32, failure: errors.Failure }
+pub struct Result { value: i32, failure: io.Failure }
 pub struct Event { watch: i32, mask: u32, cookie: u32, name: []const u8, rescan: bool }
-pub struct EventResult { event: Event, status: Status, failure: errors.Failure }
+pub struct EventResult { event: Event, status: Status, failure: io.Failure }
 
 // Watches are non-recursive. Register each directory explicitly. Names borrow
 // storage until next refill. An overflow invalidates all cached workspace state.
 pub fn open(storage: []u8) OpenResult {
   if #len(storage) < 272 {
-    return OpenResult{ value: Watcher{}, failure: errors.Failure{ kind: errors.linux(-28), native: -28 } }
+    return OpenResult{ value: Watcher{}, failure: io.Failure{ kind: io.linux(-28), native: -28 } }
   }
   descriptor := #syscall(294, 526336)
   if descriptor < 0 {
-    return OpenResult{ value: Watcher{}, failure: errors.Failure{ kind: errors.linux(descriptor), native: descriptor } }
+    return OpenResult{ value: Watcher{}, failure: io.Failure{ kind: io.linux(descriptor), native: descriptor } }
   }
   return OpenResult{ value: Watcher{ descriptor: descriptor, active: true, storage: storage } }
 }
@@ -82,18 +82,18 @@ fn load(bytes: []const u8, at: usize) u32 {
 // Buffered records are returned first; reading more needs an active watcher.
 // Terminal failures are sticky. Empty and rescan events remain protocol states.
 fn event_failure(state: *Watcher, code: isize) EventResult {
-  return event_error(state, errors.linux(code), code)
+  return event_error(state, io.linux(code), code)
 }
-fn event_error(state: *Watcher, kind: errors.Kind, code: isize) EventResult {
+fn event_error(state: *Watcher, kind: io.Kind, code: isize) EventResult {
   if !state.failed {
     state.failed = true
     state.error = code
     state.kind = kind
-    if state.kind == errors.Kind.Ok {
-      state.kind = errors.Kind.System
+    if state.kind == io.Kind.Ok {
+      state.kind = io.Kind.System
     }
   }
-  return EventResult{ status: Status.Error, failure: errors.Failure{ kind: state.kind, native: state.error } }
+  return EventResult{ status: Status.Error, failure: io.Failure{ kind: state.kind, native: state.error } }
 }
 pub fn next(state: *Watcher) EventResult {
   if state.failed {
@@ -108,7 +108,7 @@ pub fn next(state: *Watcher) EventResult {
     }
     file := fs.borrow_handle(state.descriptor)
     result := fs.read(&file, state.storage)
-    if result.failure.kind != errors.Kind.Ok {
+    if result.failure.kind != io.Kind.Ok {
       if result.failure.native == -11 {
         return EventResult{ status: Status.Empty }
       }
@@ -157,7 +157,7 @@ pub fn acknowledge_rescan(state: *Watcher) {
 }
 
 fn failure(code: isize) Result {
-  return Result{ failure: errors.Failure{ kind: errors.linux(code), native: code } }
+  return Result{ failure: io.Failure{ kind: io.linux(code), native: code } }
 }
 fn status(code: isize) Result {
   if code == 0 {

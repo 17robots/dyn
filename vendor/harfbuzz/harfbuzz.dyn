@@ -1,6 +1,6 @@
 use "std/dynlib" dynlib
 use "std/mem" mem
-use "std/io" errors
+use "std/io" io
 // Dynamic HarfBuzz OpenType shaping. Keep the loader handle open for every
 // table/object lifetime. Buffer glyphs borrow native storage until mutation;
 // shape copies them into the caller arena. HarfBuzz shapes one directional run:
@@ -29,8 +29,8 @@ pub struct Api {
   glyph_positions: fn(rawptr, *u32)*const GlyphPosition,
 }
 pub struct LoadResult { api: Api, missing: []const u8, ok: bool }
-pub struct FontResult { value: rawptr, kind: errors.Kind, ok: bool }
-pub struct ShapeResult { value: []Glyph, kind: errors.Kind, ok: bool }
+pub struct FontResult { value: rawptr, kind: io.Kind, ok: bool }
+pub struct ShapeResult { value: []Glyph, kind: io.Kind, ok: bool }
 // Explicit directional/script run properties. Zero properties are guessed.
 // Cluster levels 0..2 are supported by HarfBuzz >= 0.9.42.
 pub struct Options { direction: u32, script: u32, language: []const u8, cluster_level: u32, flags: u32, item_offset: u32, has_item_length: bool, item_length: i32 }
@@ -43,14 +43,14 @@ pub const EndOfText: u32 = 2
 // references and is destroyed with api.font_destroy. Scale uses caller units.
 pub fn font_owned(api: *const Api, bytes: []const u8, face_index: u32) FontResult {
   if #len(bytes) == 0 || #cast(u64, #len(bytes)) > 0xffffffff {
-    return FontResult{kind:errors.Kind.InvalidInput}
+    return FontResult{kind:io.Kind.InvalidInput}
   }
   blob := api.blob_create(&bytes[0], #cast(u32, #len(bytes)), 0, nil, nil)
   if blob == nil || api.blob_length(blob) != #cast(u32, #len(bytes)) {
     if blob != nil {
       api.blob_destroy(blob)
     }
-    return FontResult{kind:errors.Kind.System}
+    return FontResult{kind:io.Kind.System}
   }
   face := api.face_create(blob, face_index)
   api.blob_destroy(blob)
@@ -58,11 +58,11 @@ pub fn font_owned(api: *const Api, bytes: []const u8, face_index: u32) FontResul
     if face != nil {
       api.face_destroy(face)
     }
-    return FontResult{kind:errors.Kind.System}
+    return FontResult{kind:io.Kind.System}
   }
   if api.face_glyph_count(face) == 0 {
     api.face_destroy(face)
-    return FontResult{kind:errors.Kind.InvalidInput}
+    return FontResult{kind:io.Kind.InvalidInput}
   }
   font := api.font_create(face)
   api.face_destroy(face)
@@ -70,7 +70,7 @@ pub fn font_owned(api: *const Api, bytes: []const u8, face_index: u32) FontResul
     if font != nil {
       api.font_destroy(font)
     }
-    return FontResult{kind:errors.Kind.System}
+    return FontResult{kind:io.Kind.System}
   }
   api.ot_font_set_funcs(font)
   return FontResult{value:font, ok:true}
@@ -86,29 +86,29 @@ pub fn shape(arena: *mem.Arena, api: *const Api, font: rawptr, text: []const u8,
 pub fn shape_run(arena: *mem.Arena, api: *const Api, font: rawptr, text: []const u8, options: Options, features: []const Feature) ShapeResult {
   direction:=options.direction
   if options.cluster_level>2 || options.flags&~#cast(u32, 255)!=0 || #len(options.language)>2147483647 {
-    return ShapeResult{kind:errors.Kind.InvalidInput}
+    return ShapeResult{kind:io.Kind.InvalidInput}
   }
   for byte in options.language {
     if byte==0 {
-      return ShapeResult{kind:errors.Kind.InvalidInput}
+      return ShapeResult{kind:io.Kind.InvalidInput}
     }
   }
   if font == nil || #len(text) > 2147483647 || #cast(u64, #len(features)) > 0xffffffff || (direction != 0 && (direction < 4 || direction > 7)) {
-    return ShapeResult{kind:errors.Kind.InvalidInput}
+    return ShapeResult{kind:io.Kind.InvalidInput}
   }
   if #cast(usize, options.item_offset)>#len(text) || (options.has_item_length && options.item_length<0) {
-    return ShapeResult{kind:errors.Kind.InvalidInput}
+    return ShapeResult{kind:io.Kind.InvalidInput}
   }
   item_length:=options.item_length
   if !options.has_item_length {
     item_length=#cast(i32, #len(text)-#cast(usize, options.item_offset))
   }
   if #cast(usize, item_length)>#len(text)-#cast(usize, options.item_offset) {
-    return ShapeResult{kind:errors.Kind.InvalidInput}
+    return ShapeResult{kind:io.Kind.InvalidInput}
   }
   buffer := api.buffer_create()
   if buffer == nil {
-    return ShapeResult{kind:errors.Kind.System}
+    return ShapeResult{kind:io.Kind.System}
   }
   defer {
     api.buffer_destroy(buffer)
@@ -125,7 +125,7 @@ pub fn shape_run(arena: *mem.Arena, api: *const Api, font: rawptr, text: []const
   if #len(options.language)!=0 {
     language:=api.language_from_string(&options.language[0], #cast(i32, #len(options.language)))
     if language==nil {
-      return ShapeResult{kind:errors.Kind.InvalidInput}
+      return ShapeResult{kind:io.Kind.InvalidInput}
     }
     api.buffer_set_language(buffer, language)
   }
@@ -138,17 +138,17 @@ pub fn shape_run(arena: *mem.Arena, api: *const Api, font: rawptr, text: []const
   }
   api.shape(font, buffer, feature_pointer, #cast(u32, #len(features)))
   if api.buffer_allocation_successful(buffer) == 0 {
-    return ShapeResult{kind:errors.Kind.System}
+    return ShapeResult{kind:io.Kind.System}
   }
   count: u32 = 0
   positions_count: u32 = 0
   infos := api.glyph_infos(buffer, &count)
   positions := api.glyph_positions(buffer, &positions_count)
   if count != positions_count || (count != 0 && (infos == nil || positions == nil)) {
-    return ShapeResult{kind:errors.Kind.System}
+    return ShapeResult{kind:io.Kind.System}
   }
   if #cast(u64, count) > #cast(u64, ~#cast(usize, 0)/#sizeof(Glyph)) {
-    return ShapeResult{kind:errors.Kind.Overflow}
+    return ShapeResult{kind:io.Kind.Overflow}
   }
   glyphs := mem.push_array(Glyph, arena, #cast(usize, count))
   info_view := #slice(infos, #cast(usize, count))

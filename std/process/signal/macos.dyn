@@ -34,7 +34,7 @@ fn platform_watch(set: Set) WatchResult {
   count := numbers(set, chosen[..])
   queue := #syscall(362)
   if queue < 0 {
-    return WatchResult{ failure: io.Failure{ kind: errors.darwin(queue), native: queue } }
+    return WatchResult{ failure: io.Failure{ kind: io.darwin(queue), native: queue } }
   }
   changes: [3]Event = []
   for i in 0..count {
@@ -44,7 +44,7 @@ fn platform_watch(set: Set) WatchResult {
   code := #syscall(363, queue, &changes[0], count, 0, 0, 0)
   if code < 0 {
     _ = #syscall(6, queue)
-    return WatchResult{ failure: io.Failure{ kind: errors.darwin(code), native: code } }
+    return WatchResult{ failure: io.Failure{ kind: io.darwin(code), native: code } }
   }
   for i in 0..count {
     // SIG_IGN is 1.
@@ -81,7 +81,7 @@ fn platform_next(state: *Watch, block: bool) Next {
       return Next{ found: true }
     }
     if code < 0 && code != -4 {
-      return Next{ failure: errors.Failure{ kind: errors.darwin(code), native: code } }
+      return Next{ failure: io.Failure{ kind: io.darwin(code), native: code } }
     }
   }
   return Next{}
@@ -95,7 +95,7 @@ fn platform_close(state: *Watch) Result {
   }
   code := #syscall(6, state.handle)
   if code < 0 {
-    return Result{ failure: io.Failure{ kind: errors.darwin(code), native: code } }
+    return Result{ failure: io.Failure{ kind: io.darwin(code), native: code } }
   }
   return Result{}
 }

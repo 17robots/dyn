@@ -1,15 +1,15 @@
 #target(kernel: linux)
 
 use "std/observe" observe
-use "std/io" errors
+use "std/io" io
 // A borrowed directory descriptor limits file lookup through this interface.
 // Set active: true with the descriptor; a zero Directory fails with EBADF.
 // Descriptor owner keeps it open; do not close/reuse it while a capability exists.
 // This is not a sandbox for native code with unrestricted syscall access.
 pub struct Directory { descriptor: isize, active: bool, events: *observe.Log, resource: u64 }
-pub struct ReadResult { value: usize, failure: errors.Failure }
+pub type ReadResult = io.Count
 fn failure(code: isize) ReadResult {
-  return ReadResult{ failure: errors.Failure{ kind: errors.linux(code), native: code } }
+  return ReadResult{ failure: io.Failure{ kind: io.linux(code), native: code } }
 }
 struct OpenHow { flags: u64, mode: u64, resolve: u64 }
 

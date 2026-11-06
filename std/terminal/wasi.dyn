@@ -5,15 +5,15 @@ use "std/io" io
 // key_decode still works on bytes read from standard input.
 pub fn read_state(descriptor: isize) Read {
   _ = descriptor
-  return Read{ failure: errors.Failure{ kind: errors.Kind.Unsupported } }
+  return Read{ failure: io.Failure{ kind: io.Kind.Unsupported } }
 }
 
 pub fn restore(descriptor: isize, saved: *const State) Result {
   _ = descriptor
   if saved == nil {
-    return Result{ failure: io.Failure{ kind: errors.Kind.InvalidInput } }
+    return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
-  return Result{ failure: io.Failure{ kind: errors.Kind.Unsupported } }
+  return Result{ failure: io.Failure{ kind: io.Kind.Unsupported } }
 }
 
 fn make_raw(descriptor: isize, state: *State) {
@@ -23,5 +23,5 @@ fn make_raw(descriptor: isize, state: *State) {
 
 pub fn size(descriptor: isize) Size {
   _ = descriptor
-  return Size{ failure: errors.Failure{ kind: errors.Kind.Unsupported } }
+  return Size{ failure: io.Failure{ kind: io.Kind.Unsupported } }
 }

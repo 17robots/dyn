@@ -35,13 +35,13 @@ pub fn spawn(arena: *mem.Arena, stack: []u8, entry: fn(rawptr) isize, context: r
 }
 pub fn spawn_with_size(arena: *mem.Arena, stack_size: usize, entry: fn(rawptr) isize, context: rawptr) SpawnResult {
   if stack_size < 256 || entry == nil || stack_size > (~#cast(usize, 0)) - 16383 {
-    return SpawnResult{ failure: io.Failure{ kind: errors.Kind.InvalidInput } }
+    return SpawnResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
   attributes := Attributes{}
   error := attr_init(&attributes)
   if error != 0 {
     code := 0 - #cast(isize, error)
-    return SpawnResult{ failure: io.Failure{ kind: errors.darwin(code), native: code } }
+    return SpawnResult{ failure: io.Failure{ kind: io.darwin(code), native: code } }
   }
   defer {
     _ = attr_destroy(&attributes)
@@ -50,7 +50,7 @@ pub fn spawn_with_size(arena: *mem.Arena, stack_size: usize, entry: fn(rawptr) i
   error = attr_size(&attributes, size)
   if error != 0 {
     code := 0 - #cast(isize, error)
-    return SpawnResult{ failure: io.Failure{ kind: errors.darwin(code), native: code } }
+    return SpawnResult{ failure: io.Failure{ kind: io.darwin(code), native: code } }
   }
   mark := mem.arena_mark(arena)
   thread := mem.push(Thread, arena)
@@ -62,7 +62,7 @@ pub fn spawn_with_size(arena: *mem.Arena, stack_size: usize, entry: fn(rawptr) i
   if error != 0 {
     mem.arena_rewind(arena, mark)
     code := 0 - #cast(isize, error)
-    return SpawnResult{ failure: io.Failure{ kind: errors.darwin(code), native: code } }
+    return SpawnResult{ failure: io.Failure{ kind: io.darwin(code), native: code } }
   }
   thread.handle = handle
   thread.identifier = native_id(handle)
@@ -81,7 +81,7 @@ pub fn join(thread: *Thread) Result {
   error := wait(thread.handle, &value)
   if error != 0 {
     code := 0 - #cast(isize, error)
-    return Result{ failure: io.Failure{ kind: errors.darwin(code), native: code } }
+    return Result{ failure: io.Failure{ kind: io.darwin(code), native: code } }
   }
   thread.handle = nil
   thread.identifier = 0
@@ -97,7 +97,7 @@ pub fn id(thread: *const Thread) u32 {
 pub fn yield_now() Result {
   if native_yield() != 0 {
     error := 0 - #cast(isize, native_errno().*)
-    return Result{ failure: io.Failure{ kind: errors.darwin(error), native: error } }
+    return Result{ failure: io.Failure{ kind: io.darwin(error), native: error } }
   }
   return Result{}
 }

@@ -8,7 +8,6 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 SOURCE = '''use "std/mem" mem
-use "std/io" io
 use "std/strings" strings
 
 fn main() {

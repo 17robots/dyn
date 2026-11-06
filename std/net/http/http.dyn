@@ -1,5 +1,5 @@
 use "std/parse" parse
-use "std/io" errors
+use "std/io" io
 use "std/mem" memory
 use "std/io" stream
 use "std/net" network
@@ -13,11 +13,11 @@ pub type StreamResult = stream.Result
 pub type Listener = network.Listener
 pub type Connection = network.Connection
 
-pub struct AcceptResult { value: Connection, failure: errors.Failure }
+pub struct AcceptResult { value: Connection, failure: io.Failure }
 
 pub fn accept(listener: *Listener) AcceptResult {
   accepted := network.listener_accept(listener)
-  return AcceptResult{ value: accepted.value, failure: errors.Failure{ kind: accepted.failure.kind, native: accepted.failure.native } }
+  return AcceptResult{ value: accepted.value, failure: io.Failure{ kind: accepted.failure.kind, native: accepted.failure.native } }
 }
 pub fn close(connection: *Connection) {
   network.connection_close(connection)
@@ -30,7 +30,7 @@ pub struct HttpHead { offset: usize, framing: Framing, code: u16, header_length:
 pub struct HttpHeader { offset: usize, name: []const u8, value: []const u8, found: bool, failure: parse.Failure }
 pub struct Url { offset: usize, scheme: []const u8, host: []const u8, port: u16, target: []const u8, secure: bool, failure: parse.Failure }
 
-pub struct HttpIoResult { value: []u8, offset: usize, consumed: usize, count: usize, failure: errors.Failure }
+pub struct HttpIoResult { value: []u8, offset: usize, consumed: usize, count: usize, failure: io.Failure }
 
 fn append_bytes(destination: []u8, offset: usize, source: []const u8) usize {
   if offset > #len(destination) || #len(source) > #len(destination) - offset {
@@ -365,20 +365,20 @@ fn chunk_progress(state: *ChunkProgress, input: []const u8) HttpIoResult {
   for {
     if state.phase == 1 {
       if state.size > #len(input) - state.cursor {
-        return HttpIoResult{ offset: #len(input), failure: errors.Failure{ kind: errors.Kind.WouldBlock, native: 0 } }
+        return HttpIoResult{ offset: #len(input), failure: io.Failure{ kind: io.Kind.WouldBlock, native: 0 } }
       }
       end := state.cursor + state.size
       if #len(input) - end < 2 {
-        return HttpIoResult{ offset: #len(input), failure: errors.Failure{ kind: errors.Kind.WouldBlock, native: 0 } }
+        return HttpIoResult{ offset: #len(input), failure: io.Failure{ kind: io.Kind.WouldBlock, native: 0 } }
       }
       if input[end] != '\r' {
-        return HttpIoResult{ offset: end, failure: errors.Failure{ kind: errors.Kind.InvalidInput, native: 0 } }
+        return HttpIoResult{ offset: end, failure: io.Failure{ kind: io.Kind.InvalidInput, native: 0 } }
       }
       if input[end + 1] != '\n' {
-        return HttpIoResult{ offset: end + 1, failure: errors.Failure{ kind: errors.Kind.InvalidInput, native: 0 } }
+        return HttpIoResult{ offset: end + 1, failure: io.Failure{ kind: io.Kind.InvalidInput, native: 0 } }
       }
       if state.size > ~#cast(usize, 0) - state.count {
-        return HttpIoResult{ offset: state.line_scan, failure: errors.Failure{ kind: errors.Kind.Capacity, native: 0 } }
+        return HttpIoResult{ offset: state.line_scan, failure: io.Failure{ kind: io.Kind.Capacity, native: 0 } }
       }
       state.count += state.size
       state.cursor = end + 2
@@ -394,29 +394,29 @@ fn chunk_progress(state: *ChunkProgress, input: []const u8) HttpIoResult {
         if !state.extension && byte != ';' {
           value := hex(byte)
           if value < 0 || state.size > (~#cast(usize, 0) - #cast(usize, value)) / 16 {
-            return HttpIoResult{ offset: state.line_scan, failure: errors.Failure{ kind: errors.Kind.InvalidInput, native: 0 } }
+            return HttpIoResult{ offset: state.line_scan, failure: io.Failure{ kind: io.Kind.InvalidInput, native: 0 } }
           }
           state.size = state.size * 16 + #cast(usize, value)
           state.digits = true
         } else {
           if !state.digits || byte < 32 || byte == 127 {
-            return HttpIoResult{ offset: state.line_scan, failure: errors.Failure{ kind: errors.Kind.InvalidInput, native: 0 } }
+            return HttpIoResult{ offset: state.line_scan, failure: io.Failure{ kind: io.Kind.InvalidInput, native: 0 } }
           }
           state.extension = true
         }
         state.line_scan += 1
       }
       if state.line_scan == #len(input) {
-        return HttpIoResult{ offset: #len(input), failure: errors.Failure{ kind: errors.Kind.WouldBlock, native: 0 } }
+        return HttpIoResult{ offset: #len(input), failure: io.Failure{ kind: io.Kind.WouldBlock, native: 0 } }
       }
       if !state.digits {
-        return HttpIoResult{ offset: state.line_scan, failure: errors.Failure{ kind: errors.Kind.InvalidInput, native: 0 } }
+        return HttpIoResult{ offset: state.line_scan, failure: io.Failure{ kind: io.Kind.InvalidInput, native: 0 } }
       }
       if state.line_scan + 1 >= #len(input) {
-        return HttpIoResult{ offset: #len(input), failure: errors.Failure{ kind: errors.Kind.WouldBlock, native: 0 } }
+        return HttpIoResult{ offset: #len(input), failure: io.Failure{ kind: io.Kind.WouldBlock, native: 0 } }
       }
       if input[state.line_scan + 1] != '\n' {
-        return HttpIoResult{ offset: state.line_scan + 1, failure: errors.Failure{ kind: errors.Kind.InvalidInput, native: 0 } }
+        return HttpIoResult{ offset: state.line_scan + 1, failure: io.Failure{ kind: io.Kind.InvalidInput, native: 0 } }
       }
       state.cursor = state.line_scan + 2
       state.line_scan = state.cursor
@@ -429,7 +429,7 @@ fn chunk_progress(state: *ChunkProgress, input: []const u8) HttpIoResult {
         state.line_scan += 1
       }
       if state.line_scan + 1 >= #len(input) {
-        return HttpIoResult{ offset: #len(input), failure: errors.Failure{ kind: errors.Kind.WouldBlock, native: 0 } }
+        return HttpIoResult{ offset: #len(input), failure: io.Failure{ kind: io.Kind.WouldBlock, native: 0 } }
       }
       end := state.line_scan
       if end == state.cursor {
@@ -440,22 +440,22 @@ fn chunk_progress(state: *ChunkProgress, input: []const u8) HttpIoResult {
         colon += 1
       }
       if colon == state.cursor || colon == end || input[colon] != ':' {
-        return HttpIoResult{ offset: colon, failure: errors.Failure{ kind: errors.Kind.InvalidInput, native: 0 } }
+        return HttpIoResult{ offset: colon, failure: io.Failure{ kind: io.Kind.InvalidInput, native: 0 } }
       }
       for value_at in colon + 1..end {
         byte := input[value_at]
         if (byte < 32 && byte != '\t') || byte == 127 {
-          return HttpIoResult{ offset: value_at, failure: errors.Failure{ kind: errors.Kind.InvalidInput, native: 0 } }
+          return HttpIoResult{ offset: value_at, failure: io.Failure{ kind: io.Kind.InvalidInput, native: 0 } }
         }
       }
       if ascii_equal(input[state.cursor..colon], "Content-Length") || ascii_equal(input[state.cursor..colon], "Transfer-Encoding") {
-        return HttpIoResult{ offset: state.cursor, failure: errors.Failure{ kind: errors.Kind.InvalidInput, native: 0 } }
+        return HttpIoResult{ offset: state.cursor, failure: io.Failure{ kind: io.Kind.InvalidInput, native: 0 } }
       }
       state.cursor = end + 2
       state.line_scan = state.cursor
     }
   }
-  return HttpIoResult{ failure: errors.Failure{ kind: errors.Kind.System } }
+  return HttpIoResult{ failure: io.Failure{ kind: io.Kind.System } }
 }
 
 // Retain the last three bytes so a header terminator may cross reads.
@@ -479,29 +479,29 @@ fn scan_chunked(input: []const u8, destination: []u8, write: bool) HttpIoResult 
     for cursor < #len(input) && input[cursor] != '\r' && input[cursor] != ';' {
       value := hex(input[cursor])
       if value < 0 || size > (~#cast(usize, 0) - #cast(usize, value)) / 16 {
-        return HttpIoResult{ offset: cursor, failure: errors.Failure{ kind: errors.Kind.InvalidInput, native: 0 } }
+        return HttpIoResult{ offset: cursor, failure: io.Failure{ kind: io.Kind.InvalidInput, native: 0 } }
       }
       size = size * 16 + #cast(usize, value)
       cursor += 1
       digits += 1
     }
     if cursor == #len(input) {
-      return HttpIoResult{ offset: #len(input), failure: errors.Failure{ kind: errors.Kind.WouldBlock, native: 0 } }
+      return HttpIoResult{ offset: #len(input), failure: io.Failure{ kind: io.Kind.WouldBlock, native: 0 } }
     }
     if digits == 0 {
-      return HttpIoResult{ offset: cursor, failure: errors.Failure{ kind: errors.Kind.InvalidInput, native: 0 } }
+      return HttpIoResult{ offset: cursor, failure: io.Failure{ kind: io.Kind.InvalidInput, native: 0 } }
     }
     for cursor < #len(input) && input[cursor] != '\r' {
       if input[cursor] < 32 || input[cursor] == 127 {
-        return HttpIoResult{ offset: cursor, failure: errors.Failure{ kind: errors.Kind.InvalidInput, native: 0 } }
+        return HttpIoResult{ offset: cursor, failure: io.Failure{ kind: io.Kind.InvalidInput, native: 0 } }
       }
       cursor += 1
     }
     if cursor + 1 >= #len(input) {
-      return HttpIoResult{ offset: #len(input), failure: errors.Failure{ kind: errors.Kind.WouldBlock, native: 0 } }
+      return HttpIoResult{ offset: #len(input), failure: io.Failure{ kind: io.Kind.WouldBlock, native: 0 } }
     }
     if input[cursor + 1] != '\n' {
-      return HttpIoResult{ offset: cursor + 1, failure: errors.Failure{ kind: errors.Kind.InvalidInput, native: 0 } }
+      return HttpIoResult{ offset: cursor + 1, failure: io.Failure{ kind: io.Kind.InvalidInput, native: 0 } }
     }
     cursor += 2
     if size == 0 {
@@ -511,7 +511,7 @@ fn scan_chunked(input: []const u8, destination: []u8, write: bool) HttpIoResult 
           end += 1
         }
         if end + 1 >= #len(input) {
-          return HttpIoResult{ offset: #len(input), failure: errors.Failure{ kind: errors.Kind.WouldBlock, native: 0 } }
+          return HttpIoResult{ offset: #len(input), failure: io.Failure{ kind: io.Kind.WouldBlock, native: 0 } }
         }
         if end == cursor {
           return HttpIoResult{ count: output, consumed: end + 2 }
@@ -521,29 +521,29 @@ fn scan_chunked(input: []const u8, destination: []u8, write: bool) HttpIoResult 
           colon += 1
         }
         if colon == cursor || colon == end || input[colon] != ':' {
-          return HttpIoResult{ offset: colon, failure: errors.Failure{ kind: errors.Kind.InvalidInput, native: 0 } }
+          return HttpIoResult{ offset: colon, failure: io.Failure{ kind: io.Kind.InvalidInput, native: 0 } }
         }
         for value_at in colon + 1..end {
           byte := input[value_at]
           if (byte < 32 && byte != '\t') || byte == 127 {
-            return HttpIoResult{ offset: value_at, failure: errors.Failure{ kind: errors.Kind.InvalidInput, native: 0 } }
+            return HttpIoResult{ offset: value_at, failure: io.Failure{ kind: io.Kind.InvalidInput, native: 0 } }
           }
         }
         if ascii_equal(input[cursor..colon], "Content-Length") || ascii_equal(input[cursor..colon], "Transfer-Encoding") {
-          return HttpIoResult{ offset: cursor, failure: errors.Failure{ kind: errors.Kind.InvalidInput, native: 0 } }
+          return HttpIoResult{ offset: cursor, failure: io.Failure{ kind: io.Kind.InvalidInput, native: 0 } }
         }
         cursor = end + 2
       }
     }
     if size > #len(input) - cursor {
-      return HttpIoResult{ offset: #len(input), failure: errors.Failure{ kind: errors.Kind.WouldBlock, native: 0 } }
+      return HttpIoResult{ offset: #len(input), failure: io.Failure{ kind: io.Kind.WouldBlock, native: 0 } }
     }
     if size > ~#cast(usize, 0) - output {
-      return HttpIoResult{ offset: cursor, failure: errors.Failure{ kind: errors.Kind.Capacity, native: 0 } }
+      return HttpIoResult{ offset: cursor, failure: io.Failure{ kind: io.Kind.Capacity, native: 0 } }
     }
     if write {
       if size > #len(destination) - output {
-        return HttpIoResult{ offset: cursor, failure: errors.Failure{ kind: errors.Kind.Capacity, native: 0 } }
+        return HttpIoResult{ offset: cursor, failure: io.Failure{ kind: io.Kind.Capacity, native: 0 } }
       }
       for i in 0..size {
         destination[output + i] = input[cursor + i]
@@ -552,17 +552,17 @@ fn scan_chunked(input: []const u8, destination: []u8, write: bool) HttpIoResult 
     cursor += size
     output += size
     if cursor + 1 >= #len(input) {
-      return HttpIoResult{ offset: #len(input), failure: errors.Failure{ kind: errors.Kind.WouldBlock, native: 0 } }
+      return HttpIoResult{ offset: #len(input), failure: io.Failure{ kind: io.Kind.WouldBlock, native: 0 } }
     }
     if input[cursor] != '\r' {
-      return HttpIoResult{ offset: cursor, failure: errors.Failure{ kind: errors.Kind.InvalidInput, native: 0 } }
+      return HttpIoResult{ offset: cursor, failure: io.Failure{ kind: io.Kind.InvalidInput, native: 0 } }
     }
     if input[cursor + 1] != '\n' {
-      return HttpIoResult{ offset: cursor + 1, failure: errors.Failure{ kind: errors.Kind.InvalidInput, native: 0 } }
+      return HttpIoResult{ offset: cursor + 1, failure: io.Failure{ kind: io.Kind.InvalidInput, native: 0 } }
     }
     cursor += 2
   }
-  return HttpIoResult{ failure: errors.Failure{ kind: errors.Kind.System } }
+  return HttpIoResult{ failure: io.Failure{ kind: io.Kind.System } }
 }
 // Borrowed inputs may live below the mark, but must not overlap future writes.
 fn validate_borrow(arena: *memory.Arena, input: []const u8) {
@@ -575,7 +575,7 @@ fn validate_borrow(arena: *memory.Arena, input: []const u8) {
 pub fn decode_chunked(arena: *memory.Arena, input: []const u8) HttpIoResult {
   validate_borrow(arena, input)
   scanned := scan_chunked(input, arena.data[..0], false)
-  if scanned.failure.kind != errors.Kind.Ok {
+  if scanned.failure.kind != io.Kind.Ok {
     return scanned
   }
   destination := memory.push_bytes_uninit(arena, scanned.count)
@@ -660,17 +660,17 @@ pub const StatusPayloadTooLarge: u16 = 413
 pub const StatusInternalServerError: u16 = 500
 
 pub enum ErrorKind { None, End, Invalid, Capacity, Io }
-fn http_kind(detail: ErrorKind) errors.Kind {
+fn http_kind(detail: ErrorKind) io.Kind {
   if detail == ErrorKind.Invalid {
-    return errors.Kind.InvalidInput
+    return io.Kind.InvalidInput
   }
   if detail == ErrorKind.Capacity {
-    return errors.Kind.Capacity
+    return io.Kind.Capacity
   }
   if detail == ErrorKind.Io {
-    return errors.Kind.System
+    return io.Kind.System
   }
-  return errors.Kind.Ok
+  return io.Kind.Ok
 }
 
 pub struct Request {
@@ -713,9 +713,9 @@ pub struct Server {
   context: rawptr,
 }
 
-pub struct ReceiveResult { request: Request, response: Response, detail: ErrorKind, offset: usize, failure: errors.Failure }
+pub struct ReceiveResult { request: Request, response: Response, detail: ErrorKind, offset: usize, failure: io.Failure }
 
-pub struct Result { detail: ErrorKind, offset: usize, failure: errors.Failure }
+pub struct Result { detail: ErrorKind, offset: usize, failure: io.Failure }
 
 pub struct Body {
   failed: bool,
@@ -725,7 +725,7 @@ pub struct Body {
   finished: bool,
 }
 
-pub struct BodyResult { detail: ErrorKind, body: Body, result: Result, failure: errors.Failure }
+pub struct BodyResult { detail: ErrorKind, body: Body, result: Result, failure: io.Failure }
 
 pub type Handler = fn(*Response, *const Request) Result
 
@@ -747,7 +747,7 @@ pub struct ClientResponse {
   status: u16,
   detail: ErrorKind,
   offset: usize,
-  failure: errors.Failure,
+  failure: io.Failure,
 }
 
 
@@ -758,10 +758,10 @@ pub fn router(storage: []Route, fallback: Handler) Router {
 
 pub fn route(state: *Router, method: []const u8, target: []const u8, handler: Handler) Result {
   if handler == nil {
-    return Result{ detail: ErrorKind.Invalid, failure: errors.Failure{ kind: errors.Kind.InvalidInput } }
+    return Result{ detail: ErrorKind.Invalid, failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
   if state.count >= #len(state.routes) {
-    return Result{ detail: ErrorKind.Capacity, failure: errors.Failure{ kind: errors.Kind.Capacity } }
+    return Result{ detail: ErrorKind.Capacity, failure: io.Failure{ kind: io.Kind.Capacity } }
   }
   state.routes[state.count] = Route{ method: method, target: target, handler: handler }
   state.count += 1
@@ -833,9 +833,9 @@ fn request_parts(input: []const u8, head: HttpHead) Request {
 fn receive_failure(state: *Server, detail: ErrorKind, native: isize) ReceiveResult {
   if !state.failed {
     state.failed = true
-    state.first = Result{ detail: detail, failure: errors.Failure{ kind: http_kind(detail), native: native } }
+    state.first = Result{ detail: detail, failure: io.Failure{ kind: http_kind(detail), native: native } }
   }
-  return ReceiveResult{ detail: state.first.detail, offset: state.first.offset, failure: errors.Failure{ kind: state.first.failure.kind, native: state.first.failure.native } }
+  return ReceiveResult{ detail: state.first.detail, offset: state.first.offset, failure: io.Failure{ kind: state.first.failure.kind, native: state.first.failure.native } }
 }
 
 // Returned request slices borrow state.storage and remain valid only until the next receive call.
@@ -918,7 +918,7 @@ pub fn receive(state: *Server) ReceiveResult {
       return failure
     }
   }
-  return ReceiveResult{ failure: errors.Failure{ kind: errors.Kind.System } }
+  return ReceiveResult{ failure: io.Failure{ kind: io.Kind.System } }
 }
 
 fn status_reason(status: u16) []const u8 {
@@ -959,7 +959,7 @@ fn decimal(destination: []u8, value: usize) []const u8 {
 fn write_output(destination: stream.Writer, bytes: []const u8) Result {
   written := stream.write_all(destination, bytes)
   if written.status == stream.Status.Error {
-    return Result{ detail: ErrorKind.Io, failure: errors.Failure{ kind: written.kind, native: written.error } }
+    return Result{ detail: ErrorKind.Io, failure: io.Failure{ kind: written.kind, native: written.error } }
   }
   return Result{ detail: ErrorKind.None }
 }
@@ -969,7 +969,7 @@ fn response_failure(response: *Response, result: Result) Result {
     response.failed = true
     response.first = result
     if response.first_stream.status != stream.Status.Error {
-      response.first_stream = stream.Result{ error: 0, kind: errors.Kind.InvalidState, status: stream.Status.Error }
+      response.first_stream = stream.Result{ error: 0, kind: io.Kind.InvalidState, status: stream.Status.Error }
     }
   }
   return response.first
@@ -982,7 +982,7 @@ fn response_output(response: *Response, source: []const u8) Result {
   written := stream.write_all(response.output, source)
   if written.status == stream.Status.Error {
     response.first_stream = stream.Result{ error: written.error, kind: written.kind, status: stream.Status.Error }
-    return response_failure(response, Result{ detail: ErrorKind.Io, failure: errors.Failure{ kind: written.kind, native: written.error } })
+    return response_failure(response, Result{ detail: ErrorKind.Io, failure: io.Failure{ kind: written.kind, native: written.error } })
   }
   return Result{}
 }
@@ -992,7 +992,7 @@ fn response_begin(response: *Response, options: ResponseOptions, body_length: us
     return response.first
   }
   if response.started || response.finished || response.output.write == nil {
-    return response_failure(response, Result{ detail: ErrorKind.Invalid, failure: errors.Failure{ kind: errors.Kind.InvalidState } })
+    return response_failure(response, Result{ detail: ErrorKind.Invalid, failure: io.Failure{ kind: io.Kind.InvalidState } })
   }
   status := options.status
   if status == 0 {
@@ -1008,18 +1008,18 @@ fn response_begin(response: *Response, options: ResponseOptions, body_length: us
   }
   number_storage: [20]u8 = []
   status_text := decimal(number_storage[..], #cast(usize, status))
-  if response_output(response, "HTTP/1.1 ").failure.kind != errors.Kind.Ok || response_output(response, status_text).failure.kind != errors.Kind.Ok ||
-    response_output(response, " ").failure.kind != errors.Kind.Ok || response_output(response, reason).failure.kind != errors.Kind.Ok ||
-    response_output(response, "\r\nContent-Type: ").failure.kind != errors.Kind.Ok || response_output(response, content_type).failure.kind != errors.Kind.Ok {
+  if response_output(response, "HTTP/1.1 ").failure.kind != io.Kind.Ok || response_output(response, status_text).failure.kind != io.Kind.Ok ||
+    response_output(response, " ").failure.kind != io.Kind.Ok || response_output(response, reason).failure.kind != io.Kind.Ok ||
+    response_output(response, "\r\nContent-Type: ").failure.kind != io.Kind.Ok || response_output(response, content_type).failure.kind != io.Kind.Ok {
     return response.first
   }
   if chunked {
-    if response_output(response, "\r\nTransfer-Encoding: chunked").failure.kind != errors.Kind.Ok {
+    if response_output(response, "\r\nTransfer-Encoding: chunked").failure.kind != io.Kind.Ok {
       return response.first
     }
   } else {
     length_text := decimal(number_storage[..], body_length)
-    if response_output(response, "\r\nContent-Length: ").failure.kind != errors.Kind.Ok || response_output(response, length_text).failure.kind != errors.Kind.Ok {
+    if response_output(response, "\r\nContent-Length: ").failure.kind != io.Kind.Ok || response_output(response, length_text).failure.kind != io.Kind.Ok {
       return response.first
     }
   }
@@ -1028,7 +1028,7 @@ fn response_begin(response: *Response, options: ResponseOptions, body_length: us
     connection = "\r\nConnection: close\r\n\r\n"
   }
   result := response_output(response, connection)
-  if result.failure.kind == errors.Kind.Ok {
+  if result.failure.kind == io.Kind.Ok {
     response.started = true
   }
   return result
@@ -1036,11 +1036,11 @@ fn response_begin(response: *Response, options: ResponseOptions, body_length: us
 
 pub fn respond(response: *Response, body: []const u8, options: ResponseOptions) Result {
   started := response_begin(response, options, #len(body), false)
-  if started.failure.kind != errors.Kind.Ok {
+  if started.failure.kind != io.Kind.Ok {
     return started
   }
   written := response_output(response, body)
-  if written.failure.kind == errors.Kind.Ok {
+  if written.failure.kind == io.Kind.Ok {
     response.finished = true
   }
   return written
@@ -1048,8 +1048,8 @@ pub fn respond(response: *Response, body: []const u8, options: ResponseOptions) 
 
 pub fn respond_stream(response: *Response, options: ResponseOptions) BodyResult {
   started := response_begin(response, options, 0, true)
-  if started.failure.kind != errors.Kind.Ok {
-    return BodyResult{ detail: started.detail, body: Body{ failed: true, first: started, first_stream: response.first_stream }, result: started, failure: errors.Failure{ kind: started.failure.kind, native: started.failure.native } }
+  if started.failure.kind != io.Kind.Ok {
+    return BodyResult{ detail: started.detail, body: Body{ failed: true, first: started, first_stream: response.first_stream }, result: started, failure: io.Failure{ kind: started.failure.kind, native: started.failure.native } }
   }
   response.finished = true
   return BodyResult{ body: Body{ output: response.output }, result: Result{ detail: ErrorKind.None } }
@@ -1084,7 +1084,7 @@ fn body_failure(body: *Body, result: Result, native: stream.Result) Result {
 }
 
 fn body_invalid(body: *Body) Result {
-  return body_failure(body, Result{ detail: ErrorKind.Invalid, failure: errors.Failure{ kind: errors.Kind.InvalidState } }, stream.Result{ error: 0, kind: errors.Kind.InvalidState, status: stream.Status.Error })
+  return body_failure(body, Result{ detail: ErrorKind.Invalid, failure: io.Failure{ kind: io.Kind.InvalidState } }, stream.Result{ error: 0, kind: io.Kind.InvalidState, status: stream.Status.Error })
 }
 
 fn body_output(body: *Body, source: []const u8) stream.Result {
@@ -1093,7 +1093,7 @@ fn body_output(body: *Body, source: []const u8) stream.Result {
   }
   result := stream.write_all(body.output, source)
   if result.status == stream.Status.Error {
-    _ = body_failure(body, Result{ detail: ErrorKind.Io, failure: errors.Failure{ kind: result.kind, native: result.error } }, result)
+    _ = body_failure(body, Result{ detail: ErrorKind.Io, failure: io.Failure{ kind: result.kind, native: result.error } }, result)
   }
   return result
 }
@@ -1180,7 +1180,7 @@ pub fn serve_stream(input: stream.Reader, output: stream.Writer, storage: []u8, 
 // the handler casts back to its own type. The caller keeps it alive.
 pub fn serve_stream_context(input: stream.Reader, output: stream.Writer, storage: []u8, handler: Handler, context: rawptr) Result {
   if handler == nil || #len(storage) == 0 {
-    return Result{ detail: ErrorKind.Invalid, failure: errors.Failure{ kind: errors.Kind.InvalidInput } }
+    return Result{ detail: ErrorKind.Invalid, failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
   state := connection_server(input, output, storage)
   state.context = context
@@ -1202,10 +1202,10 @@ pub fn serve_stream_context(input: stream.Reader, output: stream.Writer, storage
         }
         _ = respond(&rejected, body, options)
       }
-      return Result{ detail: received.detail, offset: received.offset, failure: errors.Failure{ kind: received.failure.kind, native: received.failure.native } }
+      return Result{ detail: received.detail, offset: received.offset, failure: io.Failure{ kind: received.failure.kind, native: received.failure.native } }
     }
     handled := handler(&received.response, &received.request)
-    if handled.failure.kind != errors.Kind.Ok {
+    if handled.failure.kind != io.Kind.Ok {
       return handled
     }
     if !received.request.keep_alive {
@@ -1227,10 +1227,10 @@ pub fn client_do(arena: *memory.Arena, input: stream.Reader, output: stream.Writ
   sent := stream.write_all(output, request_bytes)
   memory.arena_rewind(arena, mark)
   if sent.status == stream.Status.Error {
-    return ClientResponse{ detail: ErrorKind.Io, failure: errors.Failure{ kind: sent.kind, native: sent.error } }
+    return ClientResponse{ detail: ErrorKind.Io, failure: io.Failure{ kind: sent.kind, native: sent.error } }
   }
   result := client_receive(arena, input, method)
-  if result.failure.kind != errors.Kind.Ok {
+  if result.failure.kind != io.Kind.Ok {
     memory.arena_rewind(arena, mark)
   }
   return result
@@ -1249,7 +1249,7 @@ fn client_receive(arena: *memory.Arena, input: stream.Reader, method: []const u8
       head = parse_response(response_storage[..used])
       head_checked = true
       if head.failure.kind != parse.Kind.Ok {
-        return ClientResponse{ offset: head.offset, detail: ErrorKind.Invalid, failure: errors.Failure{ kind: errors.Kind.InvalidInput } }
+        return ClientResponse{ offset: head.offset, detail: ErrorKind.Invalid, failure: io.Failure{ kind: io.Kind.InvalidInput } }
       }
     }
     if head_checked {
@@ -1283,15 +1283,15 @@ fn client_receive(arena: *memory.Arena, input: stream.Reader, method: []const u8
       else if framing == Framing.Chunked {
         scanned := chunk_progress(&chunks, response_storage[head.header_length..used])
         decoded := scanned
-        if scanned.failure.kind == errors.Kind.Ok {
+        if scanned.failure.kind == io.Kind.Ok {
           decoded = scan_chunked(response_storage[head.header_length..used], response_storage[head.header_length..], true)
         }
-        if decoded.failure.kind == errors.Kind.Ok {
+        if decoded.failure.kind == io.Kind.Ok {
           body_length = decoded.count
           complete = true
         }
-        else if decoded.failure.kind != errors.Kind.WouldBlock {
-          return ClientResponse{ offset: head.header_length + decoded.offset, detail: ErrorKind.Invalid, failure: errors.Failure{ kind: decoded.failure.kind, native: decoded.failure.native } }
+        else if decoded.failure.kind != io.Kind.WouldBlock {
+          return ClientResponse{ offset: head.header_length + decoded.offset, detail: ErrorKind.Invalid, failure: io.Failure{ kind: decoded.failure.kind, native: decoded.failure.native } }
         }
       }
       if complete {
@@ -1304,24 +1304,24 @@ fn client_receive(arena: *memory.Arena, input: stream.Reader, method: []const u8
       }
     }
     if ended {
-      return ClientResponse{ offset: used, detail: ErrorKind.Invalid, failure: errors.Failure{ kind: errors.Kind.InvalidInput } }
+      return ClientResponse{ offset: used, detail: ErrorKind.Invalid, failure: io.Failure{ kind: io.Kind.InvalidInput } }
     }
     scratch: [4096]u8 = []
     part := stream.read(input, scratch[..])
     if part.transferred > #len(scratch) {
-      return ClientResponse{ detail: ErrorKind.Io, failure: errors.Failure{ kind: errors.Kind.System } }
+      return ClientResponse{ detail: ErrorKind.Io, failure: io.Failure{ kind: io.Kind.System } }
     }
     if part.status == stream.Status.Error {
-      return ClientResponse{ detail: ErrorKind.Io, failure: errors.Failure{ kind: part.kind, native: part.error } }
+      return ClientResponse{ detail: ErrorKind.Io, failure: io.Failure{ kind: part.kind, native: part.error } }
     }
     memory.append_many_grow(arena, &response_storage, scratch[..part.transferred])
     used += part.transferred
     ended = part.status == stream.Status.End
     if part.transferred == 0 && !ended {
-      return ClientResponse{ detail: ErrorKind.Io, failure: errors.Failure{ kind: errors.Kind.System } }
+      return ClientResponse{ detail: ErrorKind.Io, failure: io.Failure{ kind: io.Kind.System } }
     }
   }
-  return ClientResponse{ detail: ErrorKind.Io, failure: errors.Failure{ kind: errors.Kind.System } }
+  return ClientResponse{ detail: ErrorKind.Io, failure: io.Failure{ kind: io.Kind.System } }
 }
 
 pub fn client_do_connection(arena: *memory.Arena, connection: *network.Connection,

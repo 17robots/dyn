@@ -5,7 +5,7 @@ use "std/net" network
 use "std/thread" threading
 use "std/sync" sync
 use "std/mem" mem
-use "std/io" errors
+use "std/io" io
 pub struct Worker {
   thread: *threading.Thread,
   listener: *http.Listener,
@@ -19,22 +19,22 @@ pub struct Worker {
   active_socket: bool,
   request_errors: usize,
 }
-pub struct Result { started: usize, failure: errors.Failure }
+pub struct Result { started: usize, failure: io.Failure }
 
 fn worker_main(context: rawptr) isize {
   worker := #cast(*Worker, context)
   for sync.load_u32(&worker.stopping) == 0 {
     accepted := http.accept(worker.listener)
-    if accepted.failure.kind != errors.Kind.Ok {
+    if accepted.failure.kind != io.Kind.Ok {
       if sync.load_u32(&worker.stopping) != 0 {
         return 0
       }
-      if accepted.failure.kind == errors.Kind.Interrupted {
+      if accepted.failure.kind == io.Kind.Interrupted {
         continue
       }
-      worker.error = Result{ failure: errors.Failure{ kind: accepted.failure.kind, native: accepted.failure.native } }
-      if worker.error.failure.kind == errors.Kind.Ok {
-        worker.error.failure.kind = errors.Kind.System
+      worker.error = Result{ failure: io.Failure{ kind: accepted.failure.kind, native: accepted.failure.native } }
+      if worker.error.failure.kind == io.Kind.Ok {
+        worker.error.failure.kind = io.Kind.System
       }
       return accepted.failure.native
     }
@@ -54,7 +54,7 @@ fn worker_main(context: rawptr) isize {
     http.close(&socket)
     worker.active_socket = false
     sync.unlock(&worker.control)
-    if handled.failure.kind != errors.Kind.Ok {
+    if handled.failure.kind != io.Kind.Ok {
       worker.request_errors += 1
     }
   }
@@ -94,11 +94,11 @@ pub fn start_context(arena: *mem.Arena, workers: []Worker, listener: *http.Liste
   worker_storage_size: usize, stacks: []u8, stack_size: usize, handler: http.Handler, context: rawptr) Result {
   if #len(workers) == 0 || listener == nil || handler == nil || worker_storage_size == 0 || stack_size < 256 ||
     worker_storage_size > #len(receive_storage) / #len(workers) || stack_size > #len(stacks) / #len(workers) {
-    return Result{ failure: errors.Failure{ kind: errors.Kind.InvalidInput } }
+    return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
   for *worker in workers {
     if worker.thread != nil {
-      return Result{ failure: errors.Failure{ kind: errors.Kind.InvalidState } }
+      return Result{ failure: io.Failure{ kind: io.Kind.InvalidState } }
     }
   }
   i: usize = 0
@@ -107,10 +107,10 @@ pub fn start_context(arena: *mem.Arena, workers: []Worker, listener: *http.Liste
       storage: receive_storage[i * worker_storage_size..(i + 1) * worker_storage_size] }
     spawned := threading.spawn(arena, stacks[i * stack_size..(i + 1) * stack_size],
       worker_main, &workers[i])
-    if spawned.failure.kind != errors.Kind.Ok {
+    if spawned.failure.kind != io.Kind.Ok {
       stop(workers[..i])
       _ = join(workers[..i])
-      return Result{ started: i, failure: errors.Failure{ kind: spawned.failure.kind, native: spawned.failure.native } }
+      return Result{ started: i, failure: io.Failure{ kind: spawned.failure.kind, native: spawned.failure.native } }
     }
     workers[i].thread = spawned.value
     i += 1
@@ -125,10 +125,10 @@ pub fn join(workers: []Worker) Result {
     completed := true
     if worker.thread != nil {
       joined := threading.join(worker.thread)
-      completed = joined.failure.kind == errors.Kind.Ok
-      if joined.failure.kind == errors.Kind.Ok {
+      completed = joined.failure.kind == io.Kind.Ok
+      if joined.failure.kind == io.Kind.Ok {
         worker.thread = nil
-      } else if result.failure.kind == errors.Kind.Ok {
+      } else if result.failure.kind == io.Kind.Ok {
         result.failure.kind = joined.failure.kind
         result.failure.native = joined.failure.native
       }
@@ -137,7 +137,7 @@ pub fn join(workers: []Worker) Result {
     if completed {
       result.started += 1
       // Read worker state only after join has established completion.
-      if result.failure.kind == errors.Kind.Ok && worker.error.failure.kind != errors.Kind.Ok {
+      if result.failure.kind == io.Kind.Ok && worker.error.failure.kind != io.Kind.Ok {
         result.failure.kind = worker.error.failure.kind
         result.failure.native = worker.error.failure.native
       }

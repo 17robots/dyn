@@ -10,7 +10,6 @@ DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 SOURCE = r'''use "std/parse" parse
 use "std/bytes"
 use "std/encoding/mdesk"
-use "std/io" errors
 use "std/mem"
 
 fn expect(condition: bool, message: []const u8) {

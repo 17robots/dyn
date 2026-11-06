@@ -14,7 +14,6 @@ use "vendor/ui/opengl" gpu
 use "std/ui" ui
 use "std/ui/box" box
 use "std/ui/software" software
-use "std/io" io
 use "std/mem" mem
 use "std/io" errors
 

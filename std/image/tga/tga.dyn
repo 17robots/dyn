@@ -6,7 +6,7 @@ use "std/encoding/binary" binary
 pub struct Info { width: u32, height: u32, channels: u8 }
 pub struct Image { info: Info, pixels: []u8 }
 pub struct Result { value: Image, offset: usize, failure: parse.Failure }
-pub struct EncodeResult { value: []u8, failure: parse.Failure }
+pub type EncodeResult = parse.Bytes
 // Ownership: pixels borrow arena backing; source is read only during this call.
 // Inputs must not borrow unused backing of the output arena.
 // Invalid/unsupported input restores the arena mark. Allocation exhaustion panics.

@@ -11,10 +11,8 @@ ENV = dict(os.environ, DYN_SDK=str(ROOT))
 SOURCE = r'''
 use "std/image/png" png
 use "std/image/qoi" qoi
-use "std/io" io
 use "std/parse" parse
 use "std/mem" mem
-use "std/io" errors
 fn main() {
   storage: [8192]u8 = []
   arena := mem.arena_from_buffer(storage[..])
@@ -120,7 +118,6 @@ with tempfile.TemporaryDirectory(prefix="dyn-image-results-") as directory:
 # Fixed arena exhaustion is a programming error, not an external-input result.
 PANIC_SOURCE = '''use "std/image/png" png
 use "std/image/qoi" qoi
-use "std/io" io
 use "std/mem" mem
 fn main() {
   backing: [mem.ArenaBufferOverhead+1]u8

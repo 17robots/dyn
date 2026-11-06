@@ -1,4 +1,4 @@
-use "std/io" errors
+use "std/io" io
 // Process signals as events, not handlers. watch routes the chosen signals to
 // a queue that the program reads at a safe point; no code runs inside a signal
 // handler. On Linux and macOS, call watch on the main thread before starting
@@ -15,13 +15,13 @@ pub struct Set { interrupt: bool, terminate: bool, hangup: bool }
 // An open watch. handle is the readable descriptor (signalfd or kqueue) or the
 // Windows event handle, for use with an event loop.
 pub struct Watch { handle: isize, set: Set, active: bool }
-pub struct WatchResult { value: Watch, failure: errors.Failure }
-pub struct Next { value: Kind, found: bool, failure: errors.Failure }
-pub struct Result { failure: errors.Failure }
+pub struct WatchResult { value: Watch, failure: io.Failure }
+pub struct Next { value: Kind, found: bool, failure: io.Failure }
+pub struct Result { failure: io.Failure }
 
 pub fn watch(set: Set) WatchResult {
   if !set.interrupt && !set.terminate && !set.hangup {
-    return WatchResult{ failure: errors.Failure{ kind: errors.Kind.InvalidInput } }
+    return WatchResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
   return platform_watch(set)
 }
@@ -30,7 +30,7 @@ pub fn watch(set: Set) WatchResult {
 // pending.
 pub fn poll(state: *Watch) Next {
   if state == nil || !state.active {
-    return Next{ failure: errors.Failure{ kind: errors.Kind.InvalidState } }
+    return Next{ failure: io.Failure{ kind: io.Kind.InvalidState } }
   }
   return platform_next(state, false)
 }
@@ -38,7 +38,7 @@ pub fn poll(state: *Watch) Next {
 // Blocks until a watched signal arrives.
 pub fn wait(state: *Watch) Next {
   if state == nil || !state.active {
-    return Next{ failure: errors.Failure{ kind: errors.Kind.InvalidState } }
+    return Next{ failure: io.Failure{ kind: io.Kind.InvalidState } }
   }
   return platform_next(state, true)
 }
@@ -53,7 +53,7 @@ pub fn close(state: *Watch) {
     return
   }
   closed := platform_close(state)
-  if closed.failure.kind == errors.Kind.Ok {
+  if closed.failure.kind == io.Kind.Ok {
     state.* = Watch{}
   }
 }

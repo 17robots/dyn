@@ -1,6 +1,6 @@
 use "std/parse" parse
 use "std/mem" mem
-use "std/io" errors
+use "std/io" io
 // MessagePack specification: https://github.com/msgpack/msgpack/blob/master/spec.md
 // Flattened preorder tokens. Array/map values give element/pair counts
 // there

@@ -16,7 +16,6 @@ DYN = str(Path(os.environ.get("DYN", ROOT / "build/dyn-release")).resolve())
 
 AEAD = r'''use "std/crypto/aead" aead
 use "std/crypto/aes" aes
-use "std/io" io
 use "std/parse" parse
 use "std/mem" mem
 use "std/io" errors

@@ -13,10 +13,8 @@ ROOT = Path(__file__).resolve().parents[1]
 DYN = Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve()
 source = '''use "std/parse" parse
 use "std/encoding/xml" xml
-use "std/io" io
 use "std/mem" mem
 use "std/bytes" bytes
-use "std/io" errors
 fn check(ok: bool) { if !ok { #panic("xml tree contract") } }
 fn main() {
   arena := mem.arena_create(0)
@@ -110,7 +108,6 @@ source += '''
 with tempfile.TemporaryDirectory(prefix='dyn-xml-tree-') as temporary:
     work = Path(temporary)
     for name, code in [('main', source), ('capacity', '''use "std/encoding/xml" xml
-use "std/io" io
 use "std/mem" mem
 fn main() {
   backing: [8]u8

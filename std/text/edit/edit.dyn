@@ -1,7 +1,7 @@
 // Revision-tagged UTF-8 replacement. Publish one tracker per native window;
 // keep it alive across widget focus changes so tokens are never reused.
 use "std/mem" mem
-use "std/io" errors
+use "std/io" io
 use "std/unicode/utf8" utf8
 
 pub const context_limit: usize = 4096
@@ -11,8 +11,8 @@ pub struct Replacement { text: []const u8, start: usize, end: usize, token: u64 
 // token zero means unpublished. A successful application invalidates it;
 // publish a fresh context before accepting another correction.
 pub struct Buffer { storage: []u8, length: usize, cursor: usize, anchor: usize, token: u64 }
-pub type Status = errors.Failure
-pub struct ContextResult { value: Context, failure: errors.Failure }
+pub type Status = io.Failure
+pub struct ContextResult { value: Context, failure: io.Failure }
 pub struct Tracker {
   serial: u64,
   token: u64,
@@ -32,11 +32,11 @@ pub fn boundary(text: []const u8, offset: usize) bool {
 // require text without embedded NUL; generic UTF-8 buffers may contain it.
 pub fn validate(context: *const Context) Status {
   if #len(context.text) > context_limit {
-    return Status{ kind: errors.Kind.Capacity }
+    return Status{ kind: io.Kind.Capacity }
   }
   if context.token == 0 || !utf8.valid(context.text) || !boundary(context.text, context.cursor) || !boundary(context.text, context.anchor) ||
     (context.cause != Cause.Other && context.cause != Cause.InputMethod) {
-    return Status{ kind: errors.Kind.InvalidInput }
+    return Status{ kind: io.Kind.InvalidInput }
   }
   return Status{}
 }
@@ -46,11 +46,11 @@ pub fn validate(context: *const Context) Status {
 pub fn snapshot(tracker: *Tracker, owner: u64, text: []const u8, cursor, anchor: usize, cause: Cause) ContextResult {
   if #len(text) > context_limit {
     invalidate(tracker)
-    return ContextResult{ failure: errors.Failure{ kind: errors.Kind.Capacity } }
+    return ContextResult{ failure: io.Failure{ kind: io.Kind.Capacity } }
   }
   if !utf8.valid(text) || !boundary(text, cursor) || !boundary(text, anchor) || (cause != Cause.Other && cause != Cause.InputMethod) {
     invalidate(tracker)
-    return ContextResult{ failure: errors.Failure{ kind: errors.Kind.InvalidInput } }
+    return ContextResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
   equal := tracker.token != 0 && tracker.owner == owner && tracker.length == #len(text) && tracker.cursor == cursor && tracker.anchor == anchor
   if equal {
@@ -64,7 +64,7 @@ pub fn snapshot(tracker: *Tracker, owner: u64, text: []const u8, cursor, anchor:
   if !equal {
     if tracker.serial == 18446744073709551615 {
       invalidate(tracker)
-      return ContextResult{ failure: errors.Failure{ kind: errors.Kind.Overflow } }
+      return ContextResult{ failure: io.Failure{ kind: io.Kind.Overflow } }
     }
     tracker.serial += 1
     tracker.token = tracker.serial
@@ -99,31 +99,31 @@ fn overlaps(left, right: []const u8) bool {
 // the replacement may alias storage. Buffer metadata is unchanged on error.
 pub fn apply(scratch: *mem.Arena, buffer: *Buffer, replacement: *const Replacement) Status {
   if buffer.token == 0 || replacement.token != buffer.token {
-    return Status{ kind: errors.Kind.InvalidState }
+    return Status{ kind: io.Kind.InvalidState }
   }
   if buffer.length > #len(buffer.storage) || replacement.start > replacement.end || replacement.end > buffer.length {
-    return Status{ kind: errors.Kind.InvalidInput }
+    return Status{ kind: io.Kind.InvalidInput }
   }
   original := buffer.storage[..buffer.length]
   if !utf8.valid(original) || !utf8.valid(replacement.text) || !boundary(original, replacement.start) || !boundary(original, replacement.end) ||
     !boundary(original, buffer.cursor) || !boundary(original, buffer.anchor) {
-    return Status{ kind: errors.Kind.InvalidInput }
+    return Status{ kind: io.Kind.InvalidInput }
   }
   retained := buffer.length - (replacement.end - replacement.start)
   if #len(replacement.text) > #len(buffer.storage) - retained {
-    return Status{ kind: errors.Kind.Capacity }
+    return Status{ kind: io.Kind.Capacity }
   }
   // Reject output borrowed from the pending scratch region before allocating:
   // even a later rewind can scribble it when diagnostic poisoning is enabled.
   if scratch.offset > #len(scratch.data) {
-    return Status{ kind: errors.Kind.InvalidState }
+    return Status{ kind: io.Kind.InvalidState }
   }
   pending := #len(scratch.data) - scratch.offset
   if pending > #len(replacement.text) {
     pending = #len(replacement.text)
   }
   if overlaps(scratch.data[scratch.offset..scratch.offset + pending], buffer.storage) {
-    return Status{ kind: errors.Kind.InvalidInput }
+    return Status{ kind: io.Kind.InvalidInput }
   }
   mark := mem.arena_mark(scratch)
   defer {

@@ -10,7 +10,6 @@ CASES = {
     'json-format': r'''
 use "std/parse" parse
 use "std/encoding/json" json
-use "std/io" io
 use "std/mem" memory
 use "std/fmt" fmt
 use "std/bytes" bytes
@@ -54,7 +53,6 @@ fn main() {
 }
 ''',
     'containers': r'''
-use "std/io" io
 use "std/mem" mem
 use "std/container/hash" hash
 use "std/container/list" list

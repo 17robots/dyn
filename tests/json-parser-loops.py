@@ -59,9 +59,7 @@ for raw in [b'-', b'1.', b'1e', b'1e+', b'1e-', b'1.e2', b'1e.2']:
     }''' % quote(raw))
 source = '''use "std/parse" parse
 use "std/encoding/json" json
-use "std/io" io
 use "std/mem" mem
-use "std/io" errors
 fn require(ok: bool, message: []const u8) { if !ok { #panic(message) } }
 fn main() {
   arena := mem.arena_create(0)

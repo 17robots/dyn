@@ -12,7 +12,6 @@ use "std/text/layout" layout
 use "std/ui" ui
 use "std/ui/text" ui_text
 use "std/ui/software" software
-use "std/io" io
 use "std/mem" mem
 use "std/io" errors
 use "std/bytes" bytes

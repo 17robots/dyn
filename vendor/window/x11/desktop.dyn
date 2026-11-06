@@ -736,7 +736,7 @@ fn clipboard_deliver(window: *Window) {
 
 pub fn paste_status(window: *const Window) Result {
   if window.desktop.paste_pending {
-    return Result{kind:errors.Kind.InvalidState}
+    return Result{kind:io.Kind.InvalidState}
   }
   return window.desktop.paste_result
 }
@@ -783,7 +783,7 @@ fn clipboard_fail(desktop: *Desktop) {
     desktop_loss(desktop)
   }
   desktop.incoming_failed = true
-  desktop.paste_result = Result{kind:errors.Kind.InvalidInput}
+  desktop.paste_result = Result{kind:io.Kind.InvalidInput}
 }
 
 // Asynchronous, including empty replies. The previous completed snapshot stays
@@ -807,7 +807,7 @@ fn clipboard_request(window: *Window, emit_ordered: bool) {
   }
   desktop.paste_ordered = emit_ordered
   desktop.incoming_failed = false
-  desktop.paste_result = Result{kind:errors.Kind.InvalidState}
+  desktop.paste_result = Result{kind:io.Kind.InvalidState}
   desktop.incoming = false
   mem.arena_release(desktop.incoming_arena)
   desktop.incoming_arena = nil
@@ -830,7 +830,7 @@ fn clipboard_request(window: *Window, emit_ordered: bool) {
   desktop.paste_pending = true
   if !clipboard_guard_end(window.display) {
     clipboard_fail(desktop)
-    desktop.paste_result = Result{kind:errors.Kind.System}
+    desktop.paste_result = Result{kind:io.Kind.System}
     clipboard_finish(window, true)
   }
   _ = flush(window.display)
@@ -846,7 +846,7 @@ fn clipboard_read(window: *Window, incremental: bool) {
   status := get_property(window.display, window.handle, desktop.property_atom, 0, #cast(isize, clipboard_limit / 4 + 1), 1, 0, &actual_kind, &actual_format, &count, &after, &data)
   if status != 0 {
     clipboard_fail(desktop)
-    desktop.paste_result = Result{kind:errors.Kind.System}
+    desktop.paste_result = Result{kind:io.Kind.System}
     clipboard_finish(window, false)
     return
   }
@@ -855,7 +855,7 @@ fn clipboard_read(window: *Window, incremental: bool) {
     if actual_format != 32 || count != 1 || data == nil || #cast(*usize, data).* > clipboard_limit || after != 0 {
       clipboard_fail(desktop)
       if actual_format == 32 && count == 1 && data != nil && #cast(*usize, data).* > clipboard_limit {
-        desktop.paste_result = Result{kind:errors.Kind.Capacity}
+        desktop.paste_result = Result{kind:io.Kind.Capacity}
       }
     }
     if data != nil {
@@ -868,7 +868,7 @@ fn clipboard_read(window: *Window, incremental: bool) {
   if actual_kind != desktop.utf8_atom || actual_format != 8 || after != 0 || count > clipboard_limit - clipboard_incoming_used(desktop) || (count != 0 && data == nil) {
     clipboard_fail(desktop)
     if count > clipboard_limit - clipboard_incoming_used(desktop) || after != 0 {
-      desktop.paste_result = Result{kind:errors.Kind.Capacity}
+      desktop.paste_result = Result{kind:io.Kind.Capacity}
     }
   }
   if !desktop.incoming_failed && count != 0 {
@@ -948,7 +948,7 @@ fn desktop_selection(window: *Window, event: *Event) {
     destroyed := #cast(*Configure, event)
     if desktop.paste_pending && destroyed.window == desktop.paste_owner {
       clipboard_fail(desktop)
-      desktop.paste_result = Result{kind:errors.Kind.System}
+      desktop.paste_result = Result{kind:io.Kind.System}
       clipboard_finish(window, false)
     }
     for i in 0..clipboard_transfers {
@@ -1025,7 +1025,7 @@ fn desktop_selection(window: *Window, event: *Event) {
     }
     if notify.property == 0 {
       clipboard_fail(desktop)
-      desktop.paste_result = Result{kind:errors.Kind.Unsupported}
+      desktop.paste_result = Result{kind:io.Kind.Unsupported}
       clipboard_finish(window, false)
       return
     }
@@ -1040,17 +1040,17 @@ fn desktop_selection(window: *Window, event: *Event) {
 // bytes; in-flight INCR transfers retain their own independent snapshots.
 pub fn try_set_clipboard(window: *Window, text: []const u8) Result {
   if window.display == nil {
-    return Result{kind:errors.Kind.InvalidState}
+    return Result{kind:io.Kind.InvalidState}
   }
   if #len(text) > clipboard_limit {
-    return Result{kind:errors.Kind.Capacity}
+    return Result{kind:io.Kind.Capacity}
   }
   if !utf8.valid(text) {
-    return Result{kind:errors.Kind.InvalidInput}
+    return Result{kind:io.Kind.InvalidInput}
   }
   for byte in text {
     if byte == 0 {
-      return Result{kind:errors.Kind.InvalidInput}
+      return Result{kind:io.Kind.InvalidInput}
     }
   }
   arena := clipboard_arena(#len(text))
@@ -1060,7 +1060,7 @@ pub fn try_set_clipboard(window: *Window, text: []const u8) Result {
   _ = set_owner(window.display, desktop.clipboard_atom, window.handle, 0)
   if get_owner(window.display, desktop.clipboard_atom) != window.handle {
     mem.arena_release(arena)
-    return Result{kind:errors.Kind.System}
+    return Result{kind:io.Kind.System}
   }
   mem.arena_release(desktop.owned_arena)
   desktop.owned_arena = nil
@@ -1136,18 +1136,18 @@ pub fn box_input(window: *const Window) box.Input {
 // GUI-thread window metadata changes. Dimensions remain bounded before Xlib.
 pub fn set_title(window: *Window, title: []const u8) Result {
   if window.display == nil || window.handle == 0 {
-    return Result{kind:errors.Kind.InvalidState}
+    return Result{kind:io.Kind.InvalidState}
   }
   if #len(title)>4095 {
-    return Result{kind:errors.Kind.Capacity}
+    return Result{kind:io.Kind.Capacity}
   }
   if !utf8.valid(title) {
-    return Result{kind:errors.Kind.InvalidInput}
+    return Result{kind:io.Kind.InvalidInput}
   }
   storage: [4096]u8 = []
   name := c.string_into(storage[..], title)
   if name.failure.kind != parse.Kind.Ok {
-    return Result{kind:errors.Kind.InvalidInput}
+    return Result{kind:io.Kind.InvalidInput}
   }
   _ = store_name(window.display, window.handle, name.value)
   modern := atom(window.display, "_NET_WM_NAME\x00")
@@ -1158,10 +1158,10 @@ pub fn set_title(window: *Window, title: []const u8) Result {
 extern fn resize_window "XResizeWindow"(display:rawptr, window:usize, width, height:u32) i32
 pub fn set_size(window:*Window, width, height:i32) Result {
   if window.display==nil || window.handle==0 {
-    return Result{kind:errors.Kind.InvalidState}
+    return Result{kind:io.Kind.InvalidState}
   }
   if width<=0 || height<=0 || width>16384 || height>16384 {
-    return Result{kind:errors.Kind.InvalidInput}
+    return Result{kind:io.Kind.InvalidInput}
   }
   _ = resize_window(window.display, window.handle, #cast(u32, width), #cast(u32, height))
   _ = sync(window.display, 0)

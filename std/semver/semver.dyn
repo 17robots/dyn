@@ -1,5 +1,5 @@
 use "std/parse" parse
-use "std/io" errors
+use "std/io" io
 // Semantic Versioning 2.0 values. Prerelease/build slices borrow input.
 
 pub struct Version {

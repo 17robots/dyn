@@ -49,7 +49,6 @@ int main(int argc, char **argv) {
 
 COMMON = r'''
 use "std/net/tls" tls
-use "std/io" io
 use "std/mem" mem
 use "std/io" errors
 fn check(ok: bool) { if !ok { #panic("TLS result contract") } }

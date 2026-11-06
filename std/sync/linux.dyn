@@ -30,8 +30,8 @@ fn native_wait_timeout(address: *AtomicU32, expected: u32, duration: i64) isize 
   }
   return code
 }
-fn native_sync_error(code: isize) errors.Kind {
-  return errors.linux(code)
+fn native_sync_error(code: isize) io.Kind {
+  return io.linux(code)
 }
 
 fn native_wait_interrupted(code: isize) bool {

@@ -12,18 +12,18 @@ pub fn read_state(descriptor: isize) Read {
   result: Read
   code := control(descriptor, 1078490131, &result.value.bytes[0])
   if code < 0 {
-    return Read{ failure: errors.Failure{ kind: errors.darwin(code), native: code } }
+    return Read{ failure: io.Failure{ kind: io.darwin(code), native: code } }
   }
   return result
 }
 
 pub fn restore(descriptor: isize, saved: *const State) Result {
   if saved == nil {
-    return Result{ failure: io.Failure{ kind: errors.Kind.InvalidInput } }
+    return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
   code := control(descriptor, 2152231956, &saved.bytes[0])
   if code < 0 {
-    return Result{ failure: io.Failure{ kind: errors.darwin(code), native: code } }
+    return Result{ failure: io.Failure{ kind: io.darwin(code), native: code } }
   }
   return Result{}
 }
@@ -46,7 +46,7 @@ pub fn size(descriptor: isize) Size {
   bytes: [8]u8 = []
   code := control(descriptor, 1074295912, &bytes[0])
   if code < 0 {
-    return Size{ failure: errors.Failure{ kind: errors.darwin(code), native: code } }
+    return Size{ failure: io.Failure{ kind: io.darwin(code), native: code } }
   }
   rows := #cast(usize, bytes[0]) + #cast(usize, bytes[1]) * 256
   columns := #cast(usize, bytes[2]) + #cast(usize, bytes[3]) * 256

@@ -8,11 +8,9 @@ ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 SOURCE=r'''use "std/parse" parse
 use "std/sort" sort
-use "std/io" io
 use "std/mem" mem
 use "std/encoding/mdesk" mdesk
 use "std/encoding/json" json
-use "std/io" errors
 fn main() {
   values:[5]i32=[2,4,4,8,10]
   for input: isize in -2..14 {

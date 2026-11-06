@@ -16,7 +16,6 @@ ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build' /
                           ('dyn-release.exe' if os.name == 'nt' else 'dyn-release'))).resolve())
 IMPORTS = '''use "std/thread" thread
-use "std/io" io
 use "std/mem" mem
 use "std/sync" sync
 use "std/io" errors

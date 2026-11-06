@@ -52,7 +52,6 @@ SOURCE = r'''use "std/font" font
 use "std/font/ui" font_ui
 use "std/ui" ui
 use "std/ui/software" software
-use "std/io" io
 use "std/parse" parse
 use "std/mem" mem
 use "std/io" errors

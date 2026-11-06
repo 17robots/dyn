@@ -3,35 +3,35 @@ use "std/fmt" format
 use "std/os/linux" platform
 use "std/sync"
 use "std/fs" fs
-use "std/io" errors
+use "std/io" io
 use "std/mem" mem
 pub struct TemporaryDirectory { path: []const u8, active: bool }
-pub struct TemporaryResult { value: TemporaryDirectory, failure: errors.Failure }
+pub struct TemporaryResult { value: TemporaryDirectory, failure: io.Failure }
 // Reserves a private 0700 directory. Its path is in arena.
 pub fn temporary_directory(arena: *mem.Arena, prefix: []const u8) TemporaryResult {
   for byte in prefix {
     if byte == 0 || byte == '/' {
-      return TemporaryResult{ failure: errors.Failure{ kind: errors.linux(-22), native: -22 } }
+      return TemporaryResult{ failure: io.Failure{ kind: io.linux(-22), native: -22 } }
     }
   }
   for attempt in 0..128 {
     path := temporary_path(arena, prefix, "")
     created := fs.make_directory(path, 448)
-    if created.failure.kind == errors.Kind.Ok {
+    if created.failure.kind == io.Kind.Ok {
       return TemporaryResult{ value: TemporaryDirectory{ path: path, active: true } }
     }
     if created.failure.native != -17 {
-      return TemporaryResult{ failure: errors.Failure{ kind: created.failure.kind, native: created.failure.native } }
+      return TemporaryResult{ failure: io.Failure{ kind: created.failure.kind, native: created.failure.native } }
     }
   }
-  return TemporaryResult{ failure: errors.Failure{ kind: errors.linux(-17), native: -17 } }
+  return TemporaryResult{ failure: io.Failure{ kind: io.linux(-17), native: -17 } }
 }
 pub fn remove_temporary(directory: *TemporaryDirectory, frames: []fs.RemovalFrame, scratch: []u8) fs.Result {
   if !directory.active {
     return fs.Result{}
   }
   result := fs.remove_tree(directory.path, frames, scratch)
-  if result.failure.kind == errors.Kind.Ok {
+  if result.failure.kind == io.Kind.Ok {
     directory.active = false
   }
   return result

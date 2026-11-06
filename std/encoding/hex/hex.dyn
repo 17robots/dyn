@@ -2,7 +2,7 @@ use "std/parse" parse
 use "std/mem" mem
 use "std/encoding" codec
 use "std/bytes" bytes
-use "std/io" errors
+use "std/io" io
 type Result = codec.Result
 
 // Source and destination must not overlap. All failures leave destination unchanged.
@@ -105,7 +105,7 @@ fn decoded_size(source: []const u8) Size {
   return Size{ value: measured.required, ok: measured.failure.kind == parse.Kind.Ok, offset: offset }
 }
 
-pub struct Decoded { value: []u8, failure: parse.Failure }
+pub type Decoded = parse.Bytes
 
 // Encodes source into arena. Size overflow or overlapping input/output panics.
 pub fn encode(arena: *mem.Arena, source: []const u8, uppercase: bool) []u8 {

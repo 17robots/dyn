@@ -62,7 +62,6 @@ for n, raw in enumerate(invalid):
   }}''')
 source = '''use "std/parse" parse
 use "std/encoding/json" json
-use "std/io" io
 use "std/mem" mem
 fn require(ok: bool, message: []const u8) { if !ok { #panic(message) } }
 fn main() {

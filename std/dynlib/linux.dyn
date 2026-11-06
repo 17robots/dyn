@@ -10,7 +10,7 @@ fn platform_open(path: *const u8, flags: i32) OpenResult {
   _ = native_error()
   value := native_open(path, flags)
   if value == nil {
-    return OpenResult{ message: native_error(), failure: io.Failure{ kind: errors.Kind.System } }
+    return OpenResult{ message: native_error(), failure: io.Failure{ kind: io.Kind.System } }
   }
   return OpenResult{ value: value }
 }
@@ -21,7 +21,7 @@ fn platform_symbol(handle: Handle, name: *const u8) SymbolResult {
   value := native_symbol(handle, name)
   error := native_error()
   if error != nil {
-    return SymbolResult{ value: value, message: error, failure: io.Failure{ kind: errors.Kind.System } }
+    return SymbolResult{ value: value, message: error, failure: io.Failure{ kind: io.Kind.System } }
   }
   return SymbolResult{ value: value }
 }
@@ -29,7 +29,7 @@ fn platform_symbol(handle: Handle, name: *const u8) SymbolResult {
 fn platform_close(handle: Handle) Result {
   _ = native_error()
   if native_close(handle) != 0 {
-    return Result{ message: native_error(), failure: io.Failure{ kind: errors.Kind.System } }
+    return Result{ message: native_error(), failure: io.Failure{ kind: io.Kind.System } }
   }
   return Result{}
 }

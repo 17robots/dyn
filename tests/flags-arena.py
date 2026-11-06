@@ -10,8 +10,6 @@ DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 SOURCE = '''use "std/parse" parse
 use "std/mem" mem
 use "std/flags" flags
-use "std/io" errors
-use "std/io" io
 use "std/strings" strings
 fn check(ok: bool, message: []const u8) { if !ok { #panic(message) } }
 fn main() {

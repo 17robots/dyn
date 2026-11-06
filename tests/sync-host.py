@@ -11,7 +11,6 @@ SOURCE = r'''use "std/sync"
 use "std/thread"
 use "std/io" io
 use "std/mem" mem
-use "std/io" errors
 struct Shared {
   mutex: sync.Mutex, condition: sync.Condition, gate: sync.Semaphore,
   once: sync.Once, arrived: u32, completed: u32, total: u64, value: u64

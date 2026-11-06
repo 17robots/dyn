@@ -9,9 +9,7 @@ ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 SOURCE=r'''use "std/parse" parse
 use "std/encoding/cbor" cbor
-use "std/io" io
 use "std/mem" mem
-use "std/io" errors
 use "std/bytes" bytes
 fn check(ok: bool) { if !ok { #panic("CBOR contract") } }
 fn bad(source: []const u8) {

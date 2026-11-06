@@ -9,7 +9,7 @@ fn native_clock(monotonic: bool) ClockResult {
     counter: i64 = 0
     frequency: i64 = 0
     if clock_counter(&counter) == 0 || clock_frequency(&frequency) == 0 || frequency <= 0 || counter < 0 {
-      return ClockResult{ failure: io.Failure{ kind: errors.Kind.System } }
+      return ClockResult{ failure: io.Failure{ kind: io.Kind.System } }
     }
     // Divide before scaling; double conversion bounds the remainder without integer overflow.
     remainder := counter % frequency

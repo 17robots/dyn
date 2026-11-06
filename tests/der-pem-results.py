@@ -12,9 +12,7 @@ SOURCE = r'''use "std/parse" parse
 use "std/crypto/der" der
 use "std/crypto/pem" pem
 use "std/crypto/certificate" certificate
-use "std/io" io
 use "std/mem" mem
-use "std/io" errors
 use "std/strings" strings
 fn check(ok: bool) { if !ok { #panic("DER/PEM result regression") } }
 fn main() {

@@ -9,10 +9,8 @@ ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 SOURCE=r'''use "std/parse" parse
 use "std/encoding/protobuf" pb
-use "std/io" io
 use "std/mem" mem
 use "std/bytes" bytes
-use "std/io" errors
 fn check(ok: bool) { if !ok { #panic("protobuf contract") } }
 fn bad(source: []const u8) {
   state := pb.reader(source)

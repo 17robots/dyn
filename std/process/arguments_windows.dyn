@@ -77,7 +77,7 @@ fn argument_skip(command: []const u16, at: usize) usize {
 fn arguments_native(arena: *mem.Arena) ArgumentsResult {
   raw := argument_command()
   if raw == nil {
-    return ArgumentsResult{ failure: io.Failure{ kind: error_kinds.Kind.InvalidState } }
+    return ArgumentsResult{ failure: io.Failure{ kind: io.Kind.InvalidState } }
   }
   native := #slice(raw, 32767)
   length: usize = 0
@@ -85,7 +85,7 @@ fn arguments_native(arena: *mem.Arena) ArgumentsResult {
     length += 1
   }
   if length == 32767 {
-    return ArgumentsResult{ failure: io.Failure{ kind: error_kinds.Kind.Overflow } }
+    return ArgumentsResult{ failure: io.Failure{ kind: io.Kind.Overflow } }
   }
   command := #slice(raw, length)
   empty: []u8
@@ -95,7 +95,7 @@ fn arguments_native(arena: *mem.Arena) ArgumentsResult {
   for at < length {
     token := argument_token(command, at, count == 0, empty, false)
     if !token.ok {
-      return ArgumentsResult{ failure: io.Failure{ kind: error_kinds.Kind.InvalidInput } }
+      return ArgumentsResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
     }
     size += token.length
     count += 1
@@ -116,7 +116,7 @@ fn arguments_native(arena: *mem.Arena) ArgumentsResult {
   for at < length {
     copied := argument_token(command, at, index == 0, bytes[used..], true)
     if !copied.ok {
-      return ArgumentsResult{ failure: io.Failure{ kind: error_kinds.Kind.InvalidInput } }
+      return ArgumentsResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
     }
     result.value[index] = bytes[used..used + copied.length]
     used += copied.length

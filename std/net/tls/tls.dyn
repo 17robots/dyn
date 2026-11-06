@@ -1,7 +1,7 @@
 use "vendor/openssl/tls" provider
 use "std/io" stream
 use "std/mem" memory
-use "std/io" errors
+use "std/io" io
 pub type Context = provider.Context
 pub type Connection = provider.Connection
 pub type Certificate = provider.Certificate
@@ -12,20 +12,20 @@ pub struct ContextResult { value: Context, detail: ErrorKind, provider_code: u64
 pub struct ConnectionResult { value: Connection, detail: ErrorKind, provider_code: u64, failure: stream.Failure }
 pub struct Result { count: usize, detail: ErrorKind, provider_code: u64, provider_status: i32, failure: stream.Failure }
 pub struct TextResult { value: []u8, provider_code: u64, failure: stream.Failure }
-fn portable(detail: ErrorKind) errors.Kind {
+fn portable(detail: ErrorKind) io.Kind {
   if detail == ErrorKind.None {
-    return errors.Kind.Ok
+    return io.Kind.Ok
   }
   if detail == ErrorKind.InvalidArgument {
-    return errors.Kind.InvalidInput
+    return io.Kind.InvalidInput
   }
   if detail == ErrorKind.WantRead || detail == ErrorKind.WantWrite {
-    return errors.Kind.WouldBlock
+    return io.Kind.WouldBlock
   }
   if detail == ErrorKind.Verification {
-    return errors.Kind.PermissionDenied
+    return io.Kind.PermissionDenied
   }
-  return errors.Kind.System
+  return io.Kind.System
 }
 fn result(value: provider.Result) Result {
   return Result{ count: value.count, detail: value.error, provider_code: value.provider_code, provider_status: value.provider_status, failure: stream.Failure{ kind: portable(value.error) } }
@@ -55,11 +55,11 @@ pub fn certificate_release(certificate: *Certificate) {
 // https://github.com/openssl/openssl/blob/master/crypto/x509/x509_obj.c
 pub fn certificate_subject(arena: *memory.Arena, certificate: Certificate) TextResult {
   if certificate == nil {
-    return TextResult{ failure: stream.Failure{ kind: errors.Kind.InvalidInput } }
+    return TextResult{ failure: stream.Failure{ kind: io.Kind.InvalidInput } }
   }
   formatted := provider.subject_text_owned(certificate)
   if !formatted.ok {
-    return TextResult{ provider_code: formatted.provider_code, failure: stream.Failure{ kind: errors.Kind.System } }
+    return TextResult{ provider_code: formatted.provider_code, failure: stream.Failure{ kind: io.Kind.System } }
   }
   defer provider.subject_text_free_owned(formatted.value)
   length: usize = 0

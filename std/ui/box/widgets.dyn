@@ -168,7 +168,7 @@ pub struct Edit {
   // Horizontal scroll in physical pixels; managed by text_field.
   scroll_x: f32,
 }
-pub struct FieldSignal { signal: Signal, focused: bool, changed: bool, submitted: bool, correction_error: errors.Kind }
+pub struct FieldSignal { signal: Signal, focused: bool, changed: bool, submitted: bool, correction_error: io.Kind }
 
 fn previous_boundary(text: []const u8, at: usize) usize {
   index := at
@@ -363,16 +363,16 @@ pub fn text_field(state: *State, label: []const u8, storage: []u8, edit: *Edit) 
           invalid = true
         }
       }
-      if before.failure.kind != errors.Kind.Ok {
+      if before.failure.kind != io.Kind.Ok {
         result.correction_error = before.failure.kind
       }
       else if invalid {
-        result.correction_error = errors.Kind.InvalidInput
+        result.correction_error = io.Kind.InvalidInput
       }
       else {
         buffer := text_edits.Buffer{ storage: storage, length: edit.length, cursor: edit.cursor, anchor: anchor, token: before.value.token }
         applied := text_edits.apply(state.frame, &buffer, replacement)
-        if applied.kind == errors.Kind.Ok {
+        if applied.kind == io.Kind.Ok {
           edit.length = buffer.length
           edit.cursor = buffer.cursor
           edit.anchor = buffer.anchor
@@ -586,7 +586,7 @@ pub fn text_field(state: *State, label: []const u8, storage: []u8, edit: *Edit) 
       anchor = edit.anchor
     }
     context := text_edits.snapshot(&state.text_tracker, box.key, storage[..edit.length], edit.cursor, anchor, cause)
-    if context.failure.kind == errors.Kind.Ok {
+    if context.failure.kind == io.Kind.Ok {
       state.text_context = context.value
     }
     else {

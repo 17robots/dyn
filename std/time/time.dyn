@@ -1,5 +1,5 @@
 use "std/mem" mem
-use "std/io" errors
+use "std/io" io
 pub const Nanosecond: i64 = 1
 pub const Microsecond: i64 = 1000
 pub const Millisecond: i64 = 1000000
@@ -8,7 +8,7 @@ pub const Minute: i64 = 60000000000
 pub const Hour: i64 = 3600000000000
 
 pub struct Instant { seconds: i64, nanoseconds: i64 }
-pub struct DurationResult { value: i64, failure: errors.Failure }
+pub struct DurationResult { value: i64, failure: io.Failure }
 pub struct Deadline { at: Instant }
 pub struct DateTime {
   year: i32, month: u8, day: u8,
@@ -18,17 +18,17 @@ pub struct DateTime {
 
 pub fn checked_add(a, b: i64) DurationResult {
   if b > 0 && a > 9223372036854775807 - b {
-    return DurationResult{ failure: errors.Failure{ kind: errors.Kind.Overflow } }
+    return DurationResult{ failure: io.Failure{ kind: io.Kind.Overflow } }
   }
   if b < 0 && a < -9223372036854775807 - 1 - b {
-    return DurationResult{ failure: errors.Failure{ kind: errors.Kind.Overflow } }
+    return DurationResult{ failure: io.Failure{ kind: io.Kind.Overflow } }
   }
   return DurationResult{ value: a + b }
 }
 pub fn checked_sub(a, b: i64) DurationResult {
   if b == -9223372036854775807 - 1 {
     if a >= 0 {
-      return DurationResult{ failure: errors.Failure{ kind: errors.Kind.Overflow } }
+      return DurationResult{ failure: io.Failure{ kind: io.Kind.Overflow } }
     }
     return DurationResult{ value: a - b }
   }
@@ -36,25 +36,25 @@ pub fn checked_sub(a, b: i64) DurationResult {
 }
 pub fn elapsed(start, end: Instant) DurationResult {
   seconds := checked_sub(end.seconds, start.seconds)
-  if seconds.failure.kind != errors.Kind.Ok {
-    return DurationResult{ failure: errors.Failure{ kind: errors.Kind.Overflow } }
+  if seconds.failure.kind != io.Kind.Ok {
+    return DurationResult{ failure: io.Failure{ kind: io.Kind.Overflow } }
   }
   scaled: i64 = 0
   if seconds.value > 9223372036 || seconds.value < -9223372036 {
-    return DurationResult{ failure: errors.Failure{ kind: errors.Kind.Overflow } }
+    return DurationResult{ failure: io.Failure{ kind: io.Kind.Overflow } }
   }
   scaled = seconds.value * Second
   nanos := checked_sub(end.nanoseconds, start.nanoseconds)
-  if nanos.failure.kind != errors.Kind.Ok {
-    return DurationResult{ failure: errors.Failure{ kind: errors.Kind.Overflow } }
+  if nanos.failure.kind != io.Kind.Ok {
+    return DurationResult{ failure: io.Failure{ kind: io.Kind.Overflow } }
   }
   return checked_add(scaled, nanos.value)
 }
 
-pub struct ClockResult { value: Instant, failure: errors.Failure }
-pub struct SleepResult { failure: errors.Failure }
-pub struct DeadlineResult { value: Deadline, failure: errors.Failure }
-pub struct ExpiredResult { value: bool, failure: errors.Failure }
+pub struct ClockResult { value: Instant, failure: io.Failure }
+pub struct SleepResult { failure: io.Failure }
+pub struct DeadlineResult { value: Deadline, failure: io.Failure }
+pub struct ExpiredResult { value: bool, failure: io.Failure }
 // Monotonic instants are for elapsed time/deadlines; realtime instants use Unix epoch.
 pub fn monotonic_now() ClockResult {
   return native_clock(true)
@@ -70,8 +70,8 @@ pub fn sleep(duration: i64) SleepResult {
 }
 pub fn deadline_after(duration: i64) DeadlineResult {
   now := monotonic_now()
-  if now.failure.kind != errors.Kind.Ok {
-    return DeadlineResult{ failure: errors.Failure{ kind: now.failure.kind, native: now.failure.native } }
+  if now.failure.kind != io.Kind.Ok {
+    return DeadlineResult{ failure: io.Failure{ kind: now.failure.kind, native: now.failure.native } }
   }
   seconds := duration / Second
   nanos := now.value.nanoseconds + duration % Second
@@ -84,37 +84,37 @@ pub fn deadline_after(duration: i64) DeadlineResult {
     nanos += Second
   }
   sum := checked_add(now.value.seconds, seconds)
-  if sum.failure.kind != errors.Kind.Ok {
-    return DeadlineResult{ failure: errors.Failure{ kind: errors.Kind.Overflow } }
+  if sum.failure.kind != io.Kind.Ok {
+    return DeadlineResult{ failure: io.Failure{ kind: io.Kind.Overflow } }
   }
   return DeadlineResult{ value: Deadline{ at: Instant{ seconds: sum.value, nanoseconds: nanos } } }
 }
 pub fn deadline_expired(deadline: *const Deadline) ExpiredResult {
   if deadline == nil {
-    return ExpiredResult{ failure: errors.Failure{ kind: errors.Kind.InvalidInput } }
+    return ExpiredResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
   now := monotonic_now()
-  if now.failure.kind != errors.Kind.Ok {
-    return ExpiredResult{ failure: errors.Failure{ kind: now.failure.kind, native: now.failure.native } }
+  if now.failure.kind != io.Kind.Ok {
+    return ExpiredResult{ failure: io.Failure{ kind: now.failure.kind, native: now.failure.native } }
   }
   return ExpiredResult{ value: now.value.seconds > deadline.at.seconds ||
       (now.value.seconds == deadline.at.seconds && now.value.nanoseconds >= deadline.at.nanoseconds) }
 }
 pub fn deadline_remaining(deadline: *const Deadline) DurationResult {
   if deadline == nil {
-    return DurationResult{ failure: errors.Failure{ kind: errors.Kind.InvalidInput } }
+    return DurationResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
   now := monotonic_now()
-  if now.failure.kind != errors.Kind.Ok {
-    return DurationResult{ failure: errors.Failure{ kind: now.failure.kind, native: now.failure.native } }
+  if now.failure.kind != io.Kind.Ok {
+    return DurationResult{ failure: io.Failure{ kind: now.failure.kind, native: now.failure.native } }
   }
   if now.value.seconds > deadline.at.seconds ||
     (now.value.seconds == deadline.at.seconds && now.value.nanoseconds >= deadline.at.nanoseconds) {
     return DurationResult{}
   }
   result := elapsed(now.value, deadline.at)
-  if result.failure.kind != errors.Kind.Ok {
-    return DurationResult{ failure: errors.Failure{ kind: errors.Kind.Overflow } }
+  if result.failure.kind != io.Kind.Ok {
+    return DurationResult{ failure: io.Failure{ kind: io.Kind.Overflow } }
   }
   return result
 }

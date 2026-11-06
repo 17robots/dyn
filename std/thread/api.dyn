@@ -1,4 +1,4 @@
 use "std/mem" mem
-use "std/io" errors
-pub struct SpawnResult { value: *Thread, failure: errors.Failure }
-pub struct Result { value: isize, failure: errors.Failure }
+use "std/io" io
+pub struct SpawnResult { value: *Thread, failure: io.Failure }
+pub struct Result { value: isize, failure: io.Failure }

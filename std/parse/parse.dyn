@@ -31,3 +31,6 @@ pub fn stream_result(failure: StreamFailure, transferred: usize) io.Result {
   }
   return io.Result{ transferred: transferred, error: failure.io.native, kind: kind, status: io.Status.Error }
 }
+
+// Decoded or encoded bytes, for codecs with nothing else to report.
+pub struct Bytes { value: []u8, failure: Failure }

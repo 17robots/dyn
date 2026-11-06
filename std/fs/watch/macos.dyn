@@ -1,6 +1,6 @@
 use "std/parse" parse
 #target(kernel: darwin)
-use "std/io" errors
+use "std/io" io
 use "std/mem" mem
 use "std/c" c
 use "std/sync" sync
@@ -26,16 +26,16 @@ pub const HasDirectoryFlag: bool = true
 pub const FixedWatchCapacity: usize = 16
 pub enum Status { Event, Empty, Error }
 // `error` keeps the native code; `kind` is its portable category.
-pub struct Result { value: i32, failure: errors.Failure }
+pub struct Result { value: i32, failure: io.Failure }
 pub struct Event { watch: i32, mask: u32, cookie: u32, name: []const u8, rescan: bool }
-pub struct EventResult { event: Event, status: Status, failure: errors.Failure }
+pub struct EventResult { event: Event, status: Status, failure: io.Failure }
 // Owns one bounded allocation: at most 16 streams and 63 queued names (1023 bytes).
 // Do not copy a live owner. Public operations are confined to one caller thread.
 // The caller output buffer must outlive the watcher; names expire on next Event.
 // FSEvents coalesces changes. Rename has both move bits, cookie=0 and rescan=true;
 // CloseWrite is unavailable. Rescan must rebuild/reconcile the watched snapshot.
-pub struct Watcher { state: *State, storage: []u8, arena: *mem.Arena, rescan_required: bool, failed: bool, error: isize, kind: errors.Kind }
-pub struct OpenResult { value: Watcher, failure: errors.Failure }
+pub struct Watcher { state: *State, storage: []u8, arena: *mem.Arena, rescan_required: bool, failed: bool, error: isize, kind: io.Kind }
+pub struct OpenResult { value: Watcher, failure: io.Failure }
 struct Context { version: isize, info: rawptr, retain: rawptr, release: rawptr, describe: rawptr }
 type Callback = fn(rawptr, rawptr, usize, rawptr, *const u32, *const u64)
 struct API {
@@ -135,20 +135,20 @@ fn discard_slot(state: *State, slot: *Slot) {
 }
 pub fn open(storage: []u8) OpenResult {
   if #len(storage) < 272 {
-    return OpenResult{ failure: errors.Failure{ kind: errors.darwin(-28), native: -28 } }
+    return OpenResult{ failure: io.Failure{ kind: io.darwin(-28), native: -28 } }
   }
   arena := mem.arena_create(#sizeof(State))
   state := mem.push(State, arena)
   if !load(&state.api) {
     unload(&state.api)
     mem.arena_release(arena)
-    return OpenResult{ failure: errors.Failure{ kind: errors.Kind.Unsupported, native: -95 } }
+    return OpenResult{ failure: io.Failure{ kind: io.Kind.Unsupported, native: -95 } }
   }
   state.queue = queue_create(nil, nil)
   if state.queue == nil {
     unload(&state.api)
     mem.arena_release(arena)
-    return OpenResult{ failure: errors.Failure{ kind: errors.darwin(-12), native: -12 } }
+    return OpenResult{ failure: io.Failure{ kind: io.darwin(-12), native: -12 } }
   }
   return OpenResult{ value: Watcher{ state: state, storage: storage, arena: arena } }
 }
@@ -258,7 +258,7 @@ pub fn add(watcher: *Watcher, path: []const u8, mask: u32) Result {
     return failure(-22)
   }
   if (mask & SupportedEvents) == 0 {
-    return Result{ failure: errors.Failure{ kind: errors.Kind.Unsupported, native: -95 } }
+    return Result{ failure: io.Failure{ kind: io.Kind.Unsupported, native: -95 } }
   }
   input: [1024 + mem.ArenaBufferOverhead]u8 = []
   terminated := c.string_into(input[..], path)
@@ -364,12 +364,12 @@ fn event_failure(watcher: *Watcher, code: isize) EventResult {
   if !watcher.failed {
     watcher.failed = true
     watcher.error = code
-    watcher.kind = errors.darwin(code)
-    if watcher.kind == errors.Kind.Ok {
-      watcher.kind = errors.Kind.System
+    watcher.kind = io.darwin(code)
+    if watcher.kind == io.Kind.Ok {
+      watcher.kind = io.Kind.System
     }
   }
-  return EventResult{ status: Status.Error, failure: errors.Failure{ kind: watcher.kind, native: watcher.error } }
+  return EventResult{ status: Status.Error, failure: io.Failure{ kind: watcher.kind, native: watcher.error } }
 }
 pub fn next(watcher: *Watcher) EventResult {
   if watcher.failed {
@@ -418,7 +418,7 @@ pub fn acknowledge_rescan(watcher: *Watcher) {
 }
 
 fn failure(code: isize) Result {
-  return Result{ failure: errors.Failure{ kind: errors.darwin(code), native: code } }
+  return Result{ failure: io.Failure{ kind: io.darwin(code), native: code } }
 }
 fn status(code: isize) Result {
   if code == 0 {

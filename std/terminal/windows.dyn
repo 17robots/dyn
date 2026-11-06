@@ -28,7 +28,7 @@ fn handle_of(descriptor: isize) rawptr {
 
 fn failure() Result {
   code := #cast(isize, last_error())
-  return Result{ failure: io.Failure{ kind: errors.windows(code), native: code } }
+  return Result{ failure: io.Failure{ kind: io.windows(code), native: code } }
 }
 
 fn mode_of(state: *const State) u32 {
@@ -47,7 +47,7 @@ pub fn read_state(descriptor: isize) Read {
   mode: u32 = 0
   if get_mode(handle_of(descriptor), &mode) == 0 {
     failed := failure()
-    return Read{ failure: errors.Failure{ kind: failed.failure.kind, native: failed.failure.native } }
+    return Read{ failure: io.Failure{ kind: failed.failure.kind, native: failed.failure.native } }
   }
   result := Read{}
   set_mode_bytes(&result.value, mode)
@@ -56,7 +56,7 @@ pub fn read_state(descriptor: isize) Read {
 
 pub fn restore(descriptor: isize, saved: *const State) Result {
   if saved == nil {
-    return Result{ failure: io.Failure{ kind: errors.Kind.InvalidInput } }
+    return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
   if set_mode(handle_of(descriptor), mode_of(saved)) == 0 {
     return failure()
@@ -88,7 +88,7 @@ pub fn size(descriptor: isize) Size {
   info: [22]u8 = []
   if buffer_info(handle, &info[0]) == 0 {
     failed := failure()
-    return Size{ failure: errors.Failure{ kind: failed.failure.kind, native: failed.failure.native } }
+    return Size{ failure: io.Failure{ kind: failed.failure.kind, native: failed.failure.native } }
   }
   left := #cast(i16, #cast(u16, info[10]) | #cast(u16, info[11]) << 8)
   top := #cast(i16, #cast(u16, info[12]) | #cast(u16, info[13]) << 8)

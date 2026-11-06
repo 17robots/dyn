@@ -14,7 +14,6 @@ CASES=[('',64),('plain Latin 123',64),('سلام',64),('אבג',64),('abc سلا
 def lit(data): return '"'+''.join(f'\\x{x:02x}' for x in data)+'"'
 SOURCE=r'''use "vendor/fribidi" bidi
 use "std/dynlib" dynlib
-use "std/io" io
 use "std/mem" mem
 use "std/fs" fs
 use "std/encoding/binary" binary

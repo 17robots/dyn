@@ -1,6 +1,6 @@
 use "std/parse" parse
 use "std/mem" mem
-use "std/io" errors
+use "std/io" io
 use "std/unicode/utf8" utf8
 use "std/unicode/text" unicode
 use "std/math" math

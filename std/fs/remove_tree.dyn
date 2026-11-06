@@ -19,12 +19,12 @@ fn open_removal(parent: isize, name: []const u8, storage: []u8) DirectoryResult 
   path: [4096]u8 = []
   raw := terminated(name, path[..])
   if raw == nil {
-    return DirectoryResult{ failure: io.Failure{ kind: errors.linux(-36), native: -36 } }
+    return DirectoryResult{ failure: io.Failure{ kind: io.linux(-36), native: -36 } }
   }
   // O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC. Never descend through symlinks.
   descriptor := #syscall(257, parent, raw, 720896, 0)
   if descriptor < 0 {
-    return DirectoryResult{ failure: io.Failure{ kind: errors.linux(descriptor), native: descriptor } }
+    return DirectoryResult{ failure: io.Failure{ kind: io.linux(descriptor), native: descriptor } }
   }
   return DirectoryResult{ value: Directory{ file: adopt_handle(descriptor), storage: storage } }
 }
@@ -32,16 +32,16 @@ fn open_removal(parent: isize, name: []const u8, storage: []u8) DirectoryResult 
 // a partially removed tree. Concurrent mutation may fail; it never follows links.
 pub fn remove_tree(path: []const u8, frames: []RemovalFrame, scratch: []u8) Result {
   if #len(frames) == 0 || #len(scratch) / #len(frames) < 280 {
-    return Result{ failure: io.Failure{ kind: errors.linux(-28), native: -28 } }
+    return Result{ failure: io.Failure{ kind: io.linux(-28), native: -28 } }
   }
   stride := #len(scratch) / #len(frames)
   root := open_removal(-100, path, scratch[..stride])
   if root.failure.kind != io.Kind.Ok {
     if root.failure.native != -20 && root.failure.native != -40 {
-      return Result{ failure: io.Failure{ kind: errors.linux(root.failure.native), native: root.failure.native } }
+      return Result{ failure: io.Failure{ kind: io.linux(root.failure.native), native: root.failure.native } }
     }
     removed := unlink_at(-100, path, false)
-    return Result{ failure: io.Failure{ kind: errors.linux(removed), native: removed } }
+    return Result{ failure: io.Failure{ kind: io.linux(removed), native: removed } }
   }
   frames[0] = RemovalFrame{ directory: root.value, name: path, parent: -100 }
   depth: usize = 1
@@ -54,13 +54,13 @@ pub fn remove_tree(path: []const u8, frames: []RemovalFrame, scratch: []u8) Resu
   for depth > 0 {
     item := directory_next(&frames[depth - 1].directory)
     if item.failure.native != 0 {
-      return Result{ failure: io.Failure{ kind: errors.linux(item.failure.native), native: item.failure.native } }
+      return Result{ failure: io.Failure{ kind: io.linux(item.failure.native), native: item.failure.native } }
     }
     if !item.found {
       frame := &frames[depth - 1]
       removed_directory := unlink_at(frame.parent, frame.name, true)
       if removed_directory != 0 {
-        return Result{ failure: io.Failure{ kind: errors.linux(removed_directory), native: removed_directory } }
+        return Result{ failure: io.Failure{ kind: io.linux(removed_directory), native: removed_directory } }
       }
       close_directory(&frame.directory)
       depth -= 1
@@ -73,14 +73,14 @@ pub fn remove_tree(path: []const u8, frames: []RemovalFrame, scratch: []u8) Resu
       continue
     }
     if removed_file != -21 {
-      return Result{ failure: io.Failure{ kind: errors.linux(removed_file), native: removed_file } }
+      return Result{ failure: io.Failure{ kind: io.linux(removed_file), native: removed_file } }
     }
     if depth == #len(frames) {
-      return Result{ failure: io.Failure{ kind: errors.linux(-28), native: -28 } }
+      return Result{ failure: io.Failure{ kind: io.linux(-28), native: -28 } }
     }
     child := open_removal(parent, item.name, scratch[depth * stride..(depth + 1) * stride])
     if child.failure.kind != io.Kind.Ok {
-      return Result{ failure: io.Failure{ kind: errors.linux(child.failure.native), native: child.failure.native } }
+      return Result{ failure: io.Failure{ kind: io.linux(child.failure.native), native: child.failure.native } }
     }
     frames[depth] = RemovalFrame{ directory: child.value, name: item.name, parent: parent }
     depth += 1

@@ -5,21 +5,21 @@ use "std/io" io
 // Entry kinds use dirent values: 4 directory, 8 regular file, 10 link.
 pub struct Directory { file: File, storage: []u8, offset: usize, used: usize, base: i64 }
 pub struct DirectoryResult { value: Directory, failure: io.Failure }
-pub struct DirectoryEntry { name: []const u8, kind: u8, found: bool, failure: errors.Failure }
+pub struct DirectoryEntry { name: []const u8, kind: u8, found: bool, failure: io.Failure }
 
 pub fn open_directory(path: []const u8, storage: []u8) DirectoryResult {
   if #len(storage) < 1048 {
-    return DirectoryResult{ failure: io.Failure{ kind: errors.Kind.InvalidInput, native: -22 } }
+    return DirectoryResult{ failure: io.Failure{ kind: io.Kind.InvalidInput, native: -22 } }
   }
   space: [4096]u8 = []
   name := terminated(path, space[..])
   if name == nil {
-    return DirectoryResult{ failure: io.Failure{ kind: errors.Kind.InvalidInput, native: -22 } }
+    return DirectoryResult{ failure: io.Failure{ kind: io.Kind.InvalidInput, native: -22 } }
   }
   // O_RDONLY | O_DIRECTORY | O_CLOEXEC.
   descriptor := #syscall(5, name, 17825792, 0)
   if descriptor < 0 {
-    return DirectoryResult{ failure: io.Failure{ kind: errors.darwin(descriptor), native: descriptor } }
+    return DirectoryResult{ failure: io.Failure{ kind: io.darwin(descriptor), native: descriptor } }
   }
   return DirectoryResult{ value: Directory{ file: owned_file(descriptor), storage: storage } }
 }
@@ -27,7 +27,7 @@ pub fn open_directory(path: []const u8, storage: []u8) DirectoryResult {
 // Entry name borrows directory storage until the next call.
 pub fn directory_next(directory: *Directory) DirectoryEntry {
   if !is_open(&directory.file) {
-    return DirectoryEntry{ failure: errors.Failure{ kind: errors.Kind.InvalidState, native: -9 } }
+    return DirectoryEntry{ failure: io.Failure{ kind: io.Kind.InvalidState, native: -9 } }
   }
   for true {
     if directory.offset >= directory.used {
@@ -36,7 +36,7 @@ pub fn directory_next(directory: *Directory) DirectoryEntry {
         value = #syscall(344, directory.file.descriptor, &directory.storage[0], #len(directory.storage), &directory.base)
       }
       if value < 0 {
-        return DirectoryEntry{ failure: errors.Failure{ kind: errors.darwin(value), native: value } }
+        return DirectoryEntry{ failure: io.Failure{ kind: io.darwin(value), native: value } }
       }
       if value == 0 {
         return DirectoryEntry{}
@@ -46,12 +46,12 @@ pub fn directory_next(directory: *Directory) DirectoryEntry {
     }
     at := directory.offset
     if at + 21 > directory.used {
-      return DirectoryEntry{ failure: errors.Failure{ kind: errors.Kind.System, native: -5 } }
+      return DirectoryEntry{ failure: io.Failure{ kind: io.Kind.System, native: -5 } }
     }
     record := #cast(usize, directory.storage[at + 16]) | #cast(usize, directory.storage[at + 17]) << 8
     length := #cast(usize, directory.storage[at + 18]) | #cast(usize, directory.storage[at + 19]) << 8
     if record < 21 || at + record > directory.used || 21 + length > record {
-      return DirectoryEntry{ failure: errors.Failure{ kind: errors.Kind.System, native: -5 } }
+      return DirectoryEntry{ failure: io.Failure{ kind: io.Kind.System, native: -5 } }
     }
     kind := directory.storage[at + 20]
     name := directory.storage[at + 21..at + 21 + length]
@@ -72,7 +72,7 @@ pub fn close_directory(directory: *Directory) {
 }
 
 // Size, inode, device and the POSIX mode (type and permission bits).
-pub struct Metadata { size: u64, inode: u64, device: u64, mode: u16, failure: errors.Failure }
+pub struct Metadata { size: u64, inode: u64, device: u64, mode: u16, failure: io.Failure }
 
 fn stat_metadata(raw: *const [144]u8) Metadata {
   bytes := raw.*
@@ -92,24 +92,24 @@ pub fn metadata(path: []const u8) Metadata {
   space: [4096]u8 = []
   name := terminated(path, space[..])
   if name == nil {
-    return Metadata{ failure: errors.Failure{ kind: errors.Kind.InvalidInput, native: -22 } }
+    return Metadata{ failure: io.Failure{ kind: io.Kind.InvalidInput, native: -22 } }
   }
   raw: [144]u8 = []
   value := #syscall(338, name, &raw[0])
   if value < 0 {
-    return Metadata{ failure: errors.Failure{ kind: errors.darwin(value), native: value } }
+    return Metadata{ failure: io.Failure{ kind: io.darwin(value), native: value } }
   }
   return stat_metadata(&raw)
 }
 
 pub fn file_metadata(file: *const File) Metadata {
   if !is_open(file) {
-    return Metadata{ failure: errors.Failure{ kind: errors.Kind.InvalidState, native: -9 } }
+    return Metadata{ failure: io.Failure{ kind: io.Kind.InvalidState, native: -9 } }
   }
   raw: [144]u8 = []
   value := #syscall(339, file.descriptor, &raw[0])
   if value < 0 {
-    return Metadata{ failure: errors.Failure{ kind: errors.darwin(value), native: value } }
+    return Metadata{ failure: io.Failure{ kind: io.darwin(value), native: value } }
   }
   return stat_metadata(&raw)
 }
@@ -118,7 +118,7 @@ fn path_call(number: isize, path: []const u8, argument: usize) Result {
   space: [4096]u8 = []
   name := terminated(path, space[..])
   if name == nil {
-    return Result{ failure: io.Failure{ kind: errors.Kind.InvalidInput, native: -22 } }
+    return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput, native: -22 } }
   }
   value := #syscall(number, name, argument)
   if value < 0 {
@@ -145,7 +145,7 @@ pub fn rename(old_path: []const u8, new_path: []const u8) Result {
   old_name := terminated(old_path, old_space[..])
   new_name := terminated(new_path, new_space[..])
   if old_name == nil || new_name == nil {
-    return Result{ failure: io.Failure{ kind: errors.Kind.InvalidInput, native: -22 } }
+    return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput, native: -22 } }
   }
   value := #syscall(128, old_name, new_name)
   if value < 0 {

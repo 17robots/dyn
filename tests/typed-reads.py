@@ -8,7 +8,6 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 SOURCE = r'''use "std/mem" mem
-use "std/io" io
 use "std/strings" strings
 use "std/bytes" bytes
 use "std/encoding/json" json

@@ -9,7 +9,7 @@ use "std/mem" mem
 pub struct Info { width: u32, height: u32, channels: u8 }
 pub struct Image { info: Info, pixels: []u8 }
 pub struct Result { value: Image, consumed: usize, offset: usize, failure: parse.Failure }
-pub struct EncodeResult { value: []u8, failure: parse.Failure }
+pub type EncodeResult = parse.Bytes
 struct Cursor { source: []const u8, at: usize, failed: bool }
 fn whitespace(c: u8) bool {
   return c == ' ' || (c >= 9 && c <= 13)

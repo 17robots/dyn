@@ -21,13 +21,13 @@ fn platform_watch(set: Set) WatchResult {
   mask := mask_of(set)
   code := #syscall(14, 0, &mask, 0, 8)
   if code < 0 {
-    return WatchResult{ failure: io.Failure{ kind: errors.linux(code), native: code } }
+    return WatchResult{ failure: io.Failure{ kind: io.linux(code), native: code } }
   }
   // SFD_NONBLOCK | SFD_CLOEXEC.
   descriptor := #syscall(289, -1, &mask, 8, 526336)
   if descriptor < 0 {
     _ = #syscall(14, 1, &mask, 0, 8)
-    return WatchResult{ failure: io.Failure{ kind: errors.linux(descriptor), native: descriptor } }
+    return WatchResult{ failure: io.Failure{ kind: io.linux(descriptor), native: descriptor } }
   }
   return WatchResult{ value: Watch{ handle: descriptor, set: set, active: true } }
 }
@@ -67,14 +67,14 @@ fn platform_next(state: *Watch, block: bool) Next {
       entry[4] = 1
       waited := #syscall(271, &entry[0], 1, 0, 0, 8)
       if waited < 0 && waited != -4 {
-        return Next{ failure: errors.Failure{ kind: errors.linux(waited), native: waited } }
+        return Next{ failure: io.Failure{ kind: io.linux(waited), native: waited } }
       }
     }
     else if count != -4 {
       if count >= 0 {
-        return Next{ failure: errors.Failure{ kind: errors.Kind.System } }
+        return Next{ failure: io.Failure{ kind: io.Kind.System } }
       }
-      return Next{ failure: errors.Failure{ kind: errors.linux(count), native: count } }
+      return Next{ failure: io.Failure{ kind: io.linux(count), native: count } }
     }
   }
   return Next{}
@@ -83,7 +83,7 @@ fn platform_next(state: *Watch, block: bool) Next {
 fn platform_close(state: *Watch) Result {
   code := #syscall(3, state.handle)
   if code < 0 {
-    return Result{ failure: io.Failure{ kind: errors.linux(code), native: code } }
+    return Result{ failure: io.Failure{ kind: io.linux(code), native: code } }
   }
   mask := mask_of(state.set)
   _ = #syscall(14, 1, &mask, 0, 8)

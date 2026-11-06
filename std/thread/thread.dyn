@@ -23,14 +23,14 @@ extern fn spawn_raw "dyn_thread_spawn"(
 // controls each returned Thread's lifecycle.
 pub fn spawn(arena: *mem.Arena, stack: []u8, entry: fn(rawptr) isize, context: rawptr) SpawnResult {
   if #len(stack) < 256 || entry == nil {
-    return SpawnResult{ failure: io.Failure{ kind: errors.Kind.InvalidInput } }
+    return SpawnResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
   mark := mem.arena_mark(arena)
   thread := mem.push(Thread, arena)
   value := spawn_raw(&stack[0], #len(stack), entry, context, &thread.tid)
   if value < 0 {
     mem.arena_rewind(arena, mark)
-    return SpawnResult{ failure: io.Failure{ kind: errors.linux(value), native: value } }
+    return SpawnResult{ failure: io.Failure{ kind: io.linux(value), native: value } }
   }
   return SpawnResult{ value: thread }
 }
@@ -39,7 +39,7 @@ pub fn spawn(arena: *mem.Arena, stack: []u8, entry: fn(rawptr) isize, context: r
 // stack until successful join; failed creation releases it and rewinds the node.
 pub fn spawn_with_size(arena: *mem.Arena, size: usize, entry: fn(rawptr) isize, context: rawptr) SpawnResult {
   if size < 256 || entry == nil {
-    return SpawnResult{ failure: io.Failure{ kind: errors.Kind.InvalidInput } }
+    return SpawnResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
   mark := mem.arena_mark(arena)
   thread := mem.push(Thread, arena)
@@ -50,7 +50,7 @@ pub fn spawn_with_size(arena: *mem.Arena, size: usize, entry: fn(rawptr) isize, 
   if value < 0 {
     mem.arena_release(thread.stack_owner)
     mem.arena_rewind(arena, mark)
-    return SpawnResult{ failure: io.Failure{ kind: errors.linux(value), native: value } }
+    return SpawnResult{ failure: io.Failure{ kind: io.linux(value), native: value } }
   }
   return SpawnResult{ value: thread }
 }
@@ -69,7 +69,7 @@ pub fn join(thread: *Thread) Result {
     }
     result := #syscall(202, &thread.tid, 0, tid, 0, 0, 0)
     if result < 0 && result != -4 && result != -11 {
-      return Result{ failure: io.Failure{ kind: errors.linux(result), native: result } }
+      return Result{ failure: io.Failure{ kind: io.linux(result), native: result } }
     }
   }
   return Result{}
@@ -81,7 +81,7 @@ pub fn id(thread: *const Thread) u32 {
 pub fn yield_now() Result {
   value := #syscall(24)
   if value < 0 {
-    return Result{ failure: io.Failure{ kind: errors.linux(value), native: value } }
+    return Result{ failure: io.Failure{ kind: io.linux(value), native: value } }
   }
   return Result{ value: value }
 }

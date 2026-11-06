@@ -1,6 +1,6 @@
 use "std/parse" parse
 use "std/mem" mem
-use "std/io" errors
+use "std/io" io
 pub struct URL {
   scheme: []const u8,
   authority: []const u8,

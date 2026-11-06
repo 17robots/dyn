@@ -183,7 +183,6 @@ XIM_SOURCE = r'''use "vendor/window" window
 use "vendor/window/events" events
 use "std/unicode/utf8" utf8
 use "std/process" process
-use "std/io" io
 use "std/mem" mem
 extern fn key "dyn_send_key"(display:rawptr,handle:usize,symbol:usize,modifiers:u32,down:i32)
 fn check(ok:bool){if !ok{#panic("XIM commit bounds")}}

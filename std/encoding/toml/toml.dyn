@@ -9,7 +9,7 @@ pub enum Kind { Missing, String, Integer, Float, Bool, DateTime, Array, Table }
 pub struct Value { kind: Kind, text: []const u8, boolean: bool, key: []const u8, first: *Value, last: *Value, next: *Value, defined: bool, header_defined: bool, sealed: bool, table_array: bool }
 pub const nil_value: Value = Value{}
 pub struct ParseResult { root: *const Value, offset: usize, failure: parse.Failure }
-pub struct EncodeResult { value: []u8, failure: parse.Failure }
+pub type EncodeResult = parse.Bytes
 struct Parser { arena: *mem.Arena, source: []const u8, at: usize, failed: bool, depth: usize }
 fn copy(arena: *mem.Arena, source: []const u8) []u8 {
   result := mem.push_array(u8, arena, #len(source))

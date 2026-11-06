@@ -6,7 +6,7 @@ use "std/encoding/binary" binary
 pub struct Info { width: u32, height: u32, channels: u8 }
 pub struct Image { info: Info, pixels: []u8 }
 pub struct Result { value: Image, offset: usize, failure: parse.Failure }
-pub struct EncodeResult { value: []u8, failure: parse.Failure }
+pub type EncodeResult = parse.Bytes
 fn le16(data: []const u8, at: usize) u16 {
   return binary.load_u16_le(data[at..])
 }

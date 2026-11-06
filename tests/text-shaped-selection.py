@@ -16,7 +16,6 @@ def lit(text): return '"'+''.join(f'\\x{x:02x}' for x in text.encode())+'"'
 SOURCE=r'''use "vendor/text/layout" layout
 use "vendor/harfbuzz" hb
 use "vendor/fribidi" bidi
-use "std/io" io
 use "std/mem" mem
 use "std/fs" fs
 use "std/dynlib" dynlib

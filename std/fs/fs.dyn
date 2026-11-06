@@ -1,13 +1,13 @@
 use "std/io" stream
 use "std/mem" memory
-use "std/io" errors
+use "std/io" io
 // File{} is unopened. Owners must not be copied: transfer with take(), or borrow().
 // Borrowed files never close the underlying handle. Their owner must outlive them.
 pub struct File { descriptor: isize, active: bool, owned: bool }
 pub struct FileResult { value: File, failure: stream.Failure }
 pub struct Result { transferred: usize, failure: stream.Failure }
-pub struct OffsetResult { value: usize, failure: stream.Failure }
-pub struct ReadAllResult { value: []u8, failure: stream.Failure }
+pub type OffsetResult = stream.Count
+pub type ReadAllResult = stream.Bytes
 fn owned_file(handle: isize) File {
   return File{ descriptor: handle, active: true, owned: true }
 }
@@ -66,7 +66,7 @@ pub fn close(file: *File) {
 // Destination borrows caller storage. Zero bytes on a successful nonempty read means EOF.
 pub fn read(file: *File, destination: []u8) Result {
   if !is_open(file) {
-    return Result{ failure: stream.Failure{ kind: errors.Kind.InvalidState } }
+    return Result{ failure: stream.Failure{ kind: io.Kind.InvalidState } }
   }
   if #len(destination) == 0 {
     return Result{}
@@ -82,7 +82,7 @@ pub fn read(file: *File, destination: []u8) Result {
 }
 pub fn write(file: *File, source: []const u8) Result {
   if !is_open(file) {
-    return Result{ failure: stream.Failure{ kind: errors.Kind.InvalidState } }
+    return Result{ failure: stream.Failure{ kind: io.Kind.InvalidState } }
   }
   written: usize = 0
   for written < #len(source) {
@@ -94,7 +94,7 @@ pub fn write(file: *File, source: []const u8) Result {
       return Result{ transferred: written, failure: stream.Failure{ kind: native_kind(value), native: value } }
     }
     if value == 0 {
-      return Result{ transferred: written, failure: stream.Failure{ kind: errors.Kind.System } }
+      return Result{ transferred: written, failure: stream.Failure{ kind: io.Kind.System } }
     }
     written += #cast(usize, value)
   }
@@ -128,10 +128,10 @@ pub fn writer(file: *File) stream.Writer {
 // origin: 0 start, 1 current, 2 end.
 pub fn seek(file: *File, offset: isize, origin: usize) OffsetResult {
   if !is_open(file) {
-    return OffsetResult{ failure: stream.Failure{ kind: errors.Kind.InvalidState } }
+    return OffsetResult{ failure: stream.Failure{ kind: io.Kind.InvalidState } }
   }
   if origin > 2 {
-    return OffsetResult{ failure: stream.Failure{ kind: errors.Kind.InvalidInput } }
+    return OffsetResult{ failure: stream.Failure{ kind: io.Kind.InvalidInput } }
   }
   value := native_seek(file.descriptor, offset, origin)
   if value < 0 {
@@ -141,7 +141,7 @@ pub fn seek(file: *File, offset: isize, origin: usize) OffsetResult {
 }
 pub fn sync(file: *File) Result {
   if !is_open(file) {
-    return Result{ failure: stream.Failure{ kind: errors.Kind.InvalidState } }
+    return Result{ failure: stream.Failure{ kind: io.Kind.InvalidState } }
   }
   value := native_sync(file.descriptor)
   if value < 0 {
@@ -160,7 +160,7 @@ pub struct Mapping { value: []const u8, failure: stream.Failure }
 // closed while the mapping stays valid.
 pub fn map(file: *const File) Mapping {
   if !is_open(file) {
-    return Mapping{ failure: stream.Failure{ kind: errors.Kind.InvalidState } }
+    return Mapping{ failure: stream.Failure{ kind: io.Kind.InvalidState } }
   }
   current := native_seek(file.descriptor, 0, 1)
   if current < 0 {
@@ -189,7 +189,7 @@ pub fn map(file: *const File) Mapping {
 // Releases a mapping and clears it. Unmapping a zero Mapping succeeds.
 pub fn unmap(mapping: *Mapping) Result {
   if mapping == nil {
-    return Result{ failure: stream.Failure{ kind: errors.Kind.InvalidInput } }
+    return Result{ failure: stream.Failure{ kind: io.Kind.InvalidInput } }
   }
   if #len(mapping.value) != 0 {
     value := native_unmap(#cast(usize, &mapping.value[0]), #len(mapping.value))
@@ -212,7 +212,7 @@ pub fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) ReadAllR
   output_mark := mark
   total: usize = 0
   error: isize = 0
-  kind := errors.Kind.Ok
+  kind := io.Kind.Ok
   // Size the first allocation from the descriptor when it reports a length.
   // Geometric growth copies into new arena space and retains each earlier
   // buffer until the caller rewinds, so a 20 MiB file can pin ~40 MiB.
@@ -242,7 +242,7 @@ pub fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) ReadAllR
         break
       }
       if total == maximum {
-        kind = errors.Kind.Overflow
+        kind = io.Kind.Overflow
         break
       }
       wanted := maximum
@@ -266,7 +266,7 @@ pub fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) ReadAllR
       }
       if arena.fixed_buffer {
         if total != 0 {
-          kind = errors.Kind.Capacity
+          kind = io.Kind.Capacity
           break
         }
         if wanted > memory.arena_remaining(arena) {
@@ -274,7 +274,7 @@ pub fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) ReadAllR
         }
       }
       if wanted <= total {
-        kind = errors.Kind.Capacity
+        kind = io.Kind.Capacity
         break
       }
       if total != 0 && memory.arena_try_extend(arena, &output[0], total, wanted - total) {
@@ -285,7 +285,7 @@ pub fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) ReadAllR
           // bounded block when it can still hold the complete output.
           backing_left := arena.limit - arena.backing
           if backing_left <= memory.ArenaHeader || backing_left - memory.ArenaHeader <= total {
-            kind = errors.Kind.Capacity
+            kind = io.Kind.Capacity
             break
           }
           if wanted > backing_left - memory.ArenaHeader {
@@ -298,12 +298,12 @@ pub fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) ReadAllR
         } else {
           allocation := memory.arena_try_push(arena, wanted, 1)
           if !allocation.ok {
-            kind = errors.Kind.Capacity
+            kind = io.Kind.Capacity
             if allocation.error == memory.ErrorKind.Overflow {
-              kind = errors.Kind.Overflow
+              kind = io.Kind.Overflow
             }
             if allocation.error == memory.ErrorKind.System {
-              kind = errors.Kind.System
+              kind = io.Kind.System
             }
             error = allocation.code
             break
@@ -331,7 +331,7 @@ pub fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) ReadAllR
     }
   }
   close(&opened.value)
-  if kind != errors.Kind.Ok {
+  if kind != io.Kind.Ok {
     memory.arena_rewind(arena, mark)
     return ReadAllResult{ failure: stream.Failure{ kind: kind, native: error } }
   }

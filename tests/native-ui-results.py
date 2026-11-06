@@ -15,7 +15,6 @@ use "vendor/ui/opengl" gpu
 use "std/ui" ui
 use "std/ui/software" software
 use "std/io" errors
-use "std/io" io
 use "std/mem" mem
 fn check(ok: bool) { if !ok { #panic("native GPU UI contract") } }
 fn bitmap(data: rawptr, codepoint: u32) software.Glyph {

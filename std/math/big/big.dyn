@@ -5,7 +5,7 @@
 
 use "std/parse" parse
 use "std/mem" mem
-use "std/io" errors
+use "std/io" io
 pub struct Int { limbs: []const u32, negative: bool }
 
 pub struct ParseResult { value: Int, offset: usize, failure: parse.Failure }

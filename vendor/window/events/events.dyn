@@ -1,5 +1,5 @@
 use "std/text/edit" edits
-use "std/io" edit_errors
+use "std/io" io
 use "std/unicode/utf8" edit_utf8
 
 // Ordered GUI events. listen_events(window,true) opts in before polling.
@@ -142,9 +142,9 @@ pub struct EditBuffer {
   used: usize,
   active: bool,
 }
-pub struct EditResult { value: edits.Replacement, ready: bool, kind: edit_errors.Kind, ok: bool }
+pub struct EditResult { value: edits.Replacement, ready: bool, kind: io.Kind, ok: bool }
 
-fn edit_failure(buffer: *EditBuffer, kind: edit_errors.Kind) EditResult {
+fn edit_failure(buffer: *EditBuffer, kind: io.Kind) EditResult {
   buffer.active = false
   buffer.used = 0
   buffer.token = 0
@@ -155,28 +155,28 @@ fn edit_failure(buffer: *EditBuffer, kind: edit_errors.Kind) EditResult {
 // are ignored unless they interrupt a partial transaction. Overflow clears it.
 pub fn collect_edit(buffer: *EditBuffer, event: *const Event) EditResult {
   if event.kind == Kind.Overflow {
-    return edit_failure(buffer, edit_errors.Kind.Capacity)
+    return edit_failure(buffer, io.Kind.Capacity)
   }
   if event.kind != Kind.Edit {
     if buffer.active {
-      return edit_failure(buffer, edit_errors.Kind.InvalidState)
+      return edit_failure(buffer, io.Kind.InvalidState)
     }
     return EditResult{ ok: true }
   }
   token := #cast(u64, event.key) | (#cast(u64, event.modifiers) << 32)
   if event.x < 0 || event.y < event.x || event.width < 0 || event.width > 4096 || event.text_length > 256 || token == 0 || event.button > 1 {
-    return edit_failure(buffer, edit_errors.Kind.InvalidInput)
+    return edit_failure(buffer, io.Kind.InvalidInput)
   }
   offset := #cast(usize, event.scancode)
   total := #cast(usize, event.width)
   count := #cast(usize, event.text_length)
   if offset > total || count > total - offset || (count == 0 && (total != 0 || event.button != 1)) ||
     (event.button == 1) != (offset + count == total) || !edit_utf8.valid(event.text[..count]) {
-    return edit_failure(buffer, edit_errors.Kind.InvalidInput)
+    return edit_failure(buffer, io.Kind.InvalidInput)
   }
   if !buffer.active {
     if offset != 0 {
-      return edit_failure(buffer, edit_errors.Kind.InvalidState)
+      return edit_failure(buffer, io.Kind.InvalidState)
     }
     buffer.token = token
     buffer.start = #cast(usize, event.x)
@@ -186,7 +186,7 @@ pub fn collect_edit(buffer: *EditBuffer, event: *const Event) EditResult {
     buffer.active = true
   }
   if buffer.token != token || buffer.start != #cast(usize, event.x) || buffer.end != #cast(usize, event.y) || buffer.total != total || buffer.used != offset {
-    return edit_failure(buffer, edit_errors.Kind.InvalidState)
+    return edit_failure(buffer, io.Kind.InvalidState)
   }
   for i in 0..count {
     buffer.bytes[offset + i] = event.text[i]

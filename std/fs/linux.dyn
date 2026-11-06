@@ -5,11 +5,11 @@ fn open_flags(path: []const u8, flags: usize, mode: usize) FileResult {
   storage: [4096]u8 = []
   raw := terminated(path, storage[..])
   if raw == nil {
-    return FileResult{ failure: io.Failure{ kind: errors.Kind.InvalidInput, native: -36 } }
+    return FileResult{ failure: io.Failure{ kind: io.Kind.InvalidInput, native: -36 } }
   }
   descriptor := #syscall(257, -100, raw, flags | 524288, mode)
   if descriptor < 0 {
-    return FileResult{ failure: io.Failure{ kind: errors.linux(descriptor), native: descriptor } }
+    return FileResult{ failure: io.Failure{ kind: io.linux(descriptor), native: descriptor } }
   }
   return FileResult{ value: owned_file(descriptor) }
 }
@@ -54,8 +54,8 @@ fn native_seek(handle: isize, offset: isize, origin: usize) isize {
 fn native_sync(handle: isize) isize {
   return #syscall(74, handle)
 }
-fn native_kind(code: isize) errors.Kind {
-  return errors.linux(code)
+fn native_kind(code: isize) io.Kind {
+  return io.linux(code)
 }
 fn native_valid(handle: isize) bool {
   return handle >= 0

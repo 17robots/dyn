@@ -1,5 +1,5 @@
 use "std/parse" parse
-use "std/io" errors
+use "std/io" io
 pub struct Element { tag: u8, content: []const u8, encoded: []const u8, constructed: bool }
 pub struct Cursor { source: []const u8, offset: usize, kind: parse.Kind, error: isize, error_offset: usize }
 pub struct Result { value: Element, offset: usize, found: bool, failure: parse.Failure }

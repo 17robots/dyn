@@ -13,14 +13,14 @@ pub fn spawn(arena: *mem.Arena, stack: []u8, entry: fn(rawptr) isize, context: r
 }
 pub fn spawn_with_size(arena: *mem.Arena, stack_size: usize, entry: fn(rawptr) isize, context: rawptr) SpawnResult {
   if stack_size < 256 || entry == nil {
-    return SpawnResult{ failure: io.Failure{ kind: errors.Kind.InvalidInput } }
+    return SpawnResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
   mark := mem.arena_mark(arena)
   thread := mem.push(Thread, arena)
   if !win.thread_spawn(&thread.native, stack_size, entry, context) {
     error := win.thread_error()
     mem.arena_rewind(arena, mark)
-    return SpawnResult{ failure: io.Failure{ kind: errors.windows(error), native: error } }
+    return SpawnResult{ failure: io.Failure{ kind: io.windows(error), native: error } }
   }
   return SpawnResult{ value: thread }
 }
@@ -33,7 +33,7 @@ pub fn join(thread: *Thread) Result {
   }
   if !win.thread_join(&thread.native) {
     error := win.thread_error()
-    return Result{ failure: io.Failure{ kind: errors.windows(error), native: error } }
+    return Result{ failure: io.Failure{ kind: io.windows(error), native: error } }
   }
   return Result{}
 }

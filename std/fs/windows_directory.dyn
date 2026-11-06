@@ -10,11 +10,11 @@ extern fn find_close "dyn_fs_find_close"(handle: rawptr) i32
 // 8 regular file, 10 reparse point (links).
 pub struct Directory { handle: rawptr, storage: []u8, data: [592]u8, pending: bool, active: bool }
 pub struct DirectoryResult { value: Directory, failure: io.Failure }
-pub struct DirectoryEntry { name: []const u8, kind: u8, found: bool, failure: errors.Failure }
+pub struct DirectoryEntry { name: []const u8, kind: u8, found: bool, failure: io.Failure }
 
 pub fn open_directory(path: []const u8, storage: []u8) DirectoryResult {
   if #len(storage) < 1040 || #len(path) == 0 || #len(path) > 32000 {
-    return DirectoryResult{ failure: io.Failure{ kind: errors.Kind.InvalidInput, native: -22 } }
+    return DirectoryResult{ failure: io.Failure{ kind: io.Kind.InvalidInput, native: -22 } }
   }
   wide: [32768]u16 = []
   count: usize = 0
@@ -22,7 +22,7 @@ pub fn open_directory(path: []const u8, storage: []u8) DirectoryResult {
   for at < #len(path) {
     decoded := utf8.decode(path, at)
     if !decoded.valid || count + 4 >= #len(wide) {
-      return DirectoryResult{ failure: io.Failure{ kind: errors.Kind.InvalidInput, native: -22 } }
+      return DirectoryResult{ failure: io.Failure{ kind: io.Kind.InvalidInput, native: -22 } }
     }
     count += utf16.encode(wide[count..], decoded.codepoint)
     at += decoded.width
@@ -52,7 +52,7 @@ pub fn open_directory(path: []const u8, storage: []u8) DirectoryResult {
 // Entry name borrows directory storage until the next call.
 pub fn directory_next(directory: *Directory) DirectoryEntry {
   if !directory.active {
-    return DirectoryEntry{ failure: errors.Failure{ kind: errors.Kind.InvalidState, native: -9 } }
+    return DirectoryEntry{ failure: io.Failure{ kind: io.Kind.InvalidState, native: -9 } }
   }
   for true {
     if !directory.pending {
@@ -117,7 +117,7 @@ extern fn win_information "dyn_fs_information"(handle: rawptr, data: *u8) i32
 
 // Size, file index, volume serial and a POSIX-style mode: 0o040000 for
 // directories, 0o100000 for files, with write bits unless read-only.
-pub struct Metadata { size: u64, inode: u64, device: u64, mode: u16, failure: errors.Failure }
+pub struct Metadata { size: u64, inode: u64, device: u64, mode: u16, failure: io.Failure }
 
 struct WidePath { units: [32768]u16, ok: bool }
 
@@ -159,13 +159,13 @@ pub fn metadata(path: []const u8) Metadata {
   wide := WidePath{}
   wide_path(path, &wide)
   if !wide.ok {
-    return Metadata{ failure: errors.Failure{ kind: errors.Kind.InvalidInput, native: -22 } }
+    return Metadata{ failure: io.Failure{ kind: io.Kind.InvalidInput, native: -22 } }
   }
   // WIN32_FILE_ATTRIBUTE_DATA: attributes, three FILETIMEs, size high, low.
   data: [36]u8 = []
   if win_attributes(&wide.units[0], 0, &data[0]) == 0 {
     code := last_error()
-    return Metadata{ failure: errors.Failure{ kind: native_kind(code), native: code } }
+    return Metadata{ failure: io.Failure{ kind: native_kind(code), native: code } }
   }
   attributes := word32(data[..], 0)
   size := #cast(u64, word32(data[..], 28)) << 32 | #cast(u64, word32(data[..], 32))
@@ -174,13 +174,13 @@ pub fn metadata(path: []const u8) Metadata {
 
 pub fn file_metadata(file: *const File) Metadata {
   if !is_open(file) {
-    return Metadata{ failure: errors.Failure{ kind: errors.Kind.InvalidState, native: -9 } }
+    return Metadata{ failure: io.Failure{ kind: io.Kind.InvalidState, native: -9 } }
   }
   // BY_HANDLE_FILE_INFORMATION.
   data: [52]u8 = []
   if win_information(pointer(file.descriptor), &data[0]) == 0 {
     code := last_error()
-    return Metadata{ failure: errors.Failure{ kind: native_kind(code), native: code } }
+    return Metadata{ failure: io.Failure{ kind: native_kind(code), native: code } }
   }
   attributes := word32(data[..], 0)
   return Metadata{ size: #cast(u64, word32(data[..], 32)) << 32 | #cast(u64, word32(data[..], 36)), inode: #cast(u64, word32(data[..], 44)) << 32 | #cast(u64, word32(data[..], 48)), device: #cast(u64, word32(data[..], 28)), mode: mode_of(attributes) }
@@ -197,7 +197,7 @@ pub fn remove(path: []const u8) Result {
   wide := WidePath{}
   wide_path(path, &wide)
   if !wide.ok {
-    return Result{ failure: io.Failure{ kind: errors.Kind.InvalidInput, native: -22 } }
+    return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput, native: -22 } }
   }
   return wide_result(win_delete(&wide.units[0]))
 }
@@ -208,7 +208,7 @@ pub fn make_directory(path: []const u8, mode: usize) Result {
   wide := WidePath{}
   wide_path(path, &wide)
   if !wide.ok {
-    return Result{ failure: io.Failure{ kind: errors.Kind.InvalidInput, native: -22 } }
+    return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput, native: -22 } }
   }
   return wide_result(win_make_directory(&wide.units[0], nil))
 }
@@ -217,7 +217,7 @@ pub fn remove_directory(path: []const u8) Result {
   wide := WidePath{}
   wide_path(path, &wide)
   if !wide.ok {
-    return Result{ failure: io.Failure{ kind: errors.Kind.InvalidInput, native: -22 } }
+    return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput, native: -22 } }
   }
   return wide_result(win_remove_directory(&wide.units[0]))
 }
@@ -229,7 +229,7 @@ pub fn rename(old_path: []const u8, new_path: []const u8) Result {
   wide_path(old_path, &from)
   wide_path(new_path, &to)
   if !from.ok || !to.ok {
-    return Result{ failure: io.Failure{ kind: errors.Kind.InvalidInput, native: -22 } }
+    return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput, native: -22 } }
   }
   // MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED.
   return wide_result(win_move(&from.units[0], &to.units[0], 3))

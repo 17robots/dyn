@@ -161,11 +161,11 @@ pub fn next_event(window: *Window, output: *OrderedEvent) bool {
 // Thread-safe wake only. Stop/join wake callers before closing the owner.
 pub fn wake(window: *const Window) Result {
   if window.display == nil || !window.wake_active {
-    return Result{ kind: errors.Kind.InvalidState }
+    return Result{ kind: io.Kind.InvalidState }
   }
   one: u64 = 1
   if event_write(window.wake_descriptor, &one, 8) != 8 {
-    return Result{ kind: errors.Kind.System }
+    return Result{ kind: io.Kind.System }
   }
   return Result{ ok: true }
 }
