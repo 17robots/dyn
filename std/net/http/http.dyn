@@ -1,3 +1,4 @@
+use "std/parse" parse
 use "std/io" errors
 use "std/mem" memory
 use "std/io" stream
@@ -596,8 +597,8 @@ pub fn decode_chunked(arena: *memory.Arena, input: []const u8) HttpIoResult {
 
 pub fn parse_url(input: []const u8) Url {
   parsed := urls.parse(input)
-  if parsed.failure.kind != errors.Kind.Ok {
-    return Url{ kind: parsed.failure.kind, error: parsed.failure.native, offset: parsed.offset }
+  if parsed.failure.kind != parse.Kind.Ok {
+    return Url{ kind: errors.Kind.InvalidInput, offset: parsed.offset }
   }
   value := parsed.value
   secure := ascii_equal(value.scheme, "https")

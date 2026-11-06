@@ -1,8 +1,9 @@
+use "std/parse" parse
 use "std/mem" mem
 use "std/io" errors
 use "std/encoding/base64" base64
 
-pub struct Result { value: []u8, label: []const u8, consumed: usize, offset: usize, kind: errors.Kind, error: isize, ok: bool }
+pub struct Result { value: []u8, label: []const u8, consumed: usize, offset: usize, failure: parse.Failure }
 fn equal_at(source: []const u8, at: usize, expected: []const u8) bool {
   if at > #len(source) || #len(expected) > #len(source) - at {
     return false
@@ -25,9 +26,9 @@ fn append(destination: []u8, at: *usize, source: []const u8) bool {
   return true
 }
 
-fn fail(arena: *mem.Arena, mark: usize, offset: usize, kind: errors.Kind) Result {
+fn fail(arena: *mem.Arena, mark: usize, offset: usize, kind: parse.Kind) Result {
   mem.arena_rewind(arena, mark)
-  return Result{ kind: kind, offset: offset }
+  return Result{ offset: offset, failure: parse.Failure{ kind: kind, offset: offset } }
 }
 // Decodes the first PEM block. value is arena-owned; label borrows source.
 // Failure returns an empty payload and restores the entry arena mark.
@@ -41,7 +42,7 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Result {
     start += 1
   }
   if start + #len(begin) > #len(source) {
-    return fail(arena, mark, #len(source), errors.Kind.InvalidInput)
+    return fail(arena, mark, #len(source), parse.Kind.Syntax)
   }
   label_start := start + #len(begin)
   label_end := label_start
@@ -49,7 +50,7 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Result {
     label_end += 1
   }
   if label_end == label_start || label_end + 5 > #len(source) {
-    return fail(arena, mark, label_end, errors.Kind.InvalidInput)
+    return fail(arena, mark, label_end, parse.Kind.Syntax)
   }
   label := source[label_start..label_end]
   at := label_end + 5
@@ -57,7 +58,7 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Result {
     at += 1
   }
   if at >= #len(source) || source[at] != '\n' {
-    return fail(arena, mark, at, errors.Kind.InvalidInput)
+    return fail(arena, mark, at, parse.Kind.Syntax)
   }
   at += 1
   body_start := at
@@ -71,7 +72,7 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Result {
     line := source[line_start..at]
     if #len(line) >= #len(end_prefix) && equal_at(line, 0, end_prefix) {
       if #len(line) != #len(end_prefix) + #len(label) + 5 || !equal_at(line, #len(end_prefix), label) || !equal_at(line, #len(end_prefix) + #len(label), "-----") {
-        return fail(arena, mark, line_start, errors.Kind.InvalidInput)
+        return fail(arena, mark, line_start, parse.Kind.Syntax)
       }
       found_end = true
       if at < #len(source) && source[at] == '\r' {
@@ -83,7 +84,7 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Result {
       break
     }
     if !append(base64_storage, &encoded_length, line) {
-      return fail(arena, mark, line_start, errors.Kind.InvalidInput)
+      return fail(arena, mark, line_start, parse.Kind.Syntax)
     }
     if at < #len(source) && source[at] == '\r' {
       at += 1
@@ -93,11 +94,11 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Result {
     }
   }
   if !found_end {
-    return fail(arena, mark, at, errors.Kind.InvalidInput)
+    return fail(arena, mark, at, parse.Kind.Syntax)
   }
   decoded := base64.decode(arena, base64_storage[..encoded_length])
-  if !decoded.ok {
-    return fail(arena, mark, body_start, errors.Kind.InvalidInput)
+  if decoded.failure.kind != parse.Kind.Ok {
+    return fail(arena, mark, body_start, parse.Kind.Syntax)
   }
-  return Result{ value: decoded.value, label: label, consumed: at, ok: true }
+  return Result{ value: decoded.value, label: label, consumed: at }
 }

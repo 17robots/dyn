@@ -1,0 +1,7 @@
+// Shared failure for parsers and decoders. Input decides the result, so a
+// failure names where the input went wrong instead of a system error code.
+pub enum Kind { Ok, Syntax, Truncated, Overflow, Capacity, Unsupported, Checksum, Overlap }
+
+// Kind.Ok is the zero value, so a zero Failure means success. The message is
+// static text; offset counts bytes from the start of the input.
+pub struct Failure { kind: Kind, offset: usize, message: []const u8 }

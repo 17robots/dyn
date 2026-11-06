@@ -23,6 +23,7 @@ SOURCE = f'''use "std/mem" mem
 use "std/io" io
 use "std/strings" strings
 use "std/fmt" fmt
+use "std/parse" parse
 use "std/encoding/base64" base64
 use "std/encoding/json" json
 use "std/compress/deflate" deflate
@@ -44,7 +45,7 @@ fn main() {{
   encoded := base64.encode(arena, "hello")
   check(strings.equal(encoded, "aGVsbG8="), "base64 encode")
   before := mem.arena_used(arena)
-  check(!base64.decode(arena, "a!==").ok && mem.arena_used(arena) == before, "failed decode pushes nothing")
+  check(base64.decode(arena, "a!==").failure.kind != parse.Kind.Ok && mem.arena_used(arena) == before, "failed decode pushes nothing")
   check(strings.equal(base64.decode(arena, encoded).value, "hello"), "base64 decode")
   doc := json.make_object(arena)
   _ = json.add_member(doc, "name", json.make_string(arena, "boss"))

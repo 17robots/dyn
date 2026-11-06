@@ -1,3 +1,4 @@
+use "std/parse" parse
 use "std/io" errors
 use "std/mem" mem
 use "std/encoding" codec
@@ -179,7 +180,7 @@ fn decoded_size(source: []const u8) Size {
   return Size{ value: measured.required, ok: measured.ok, offset: offset }
 }
 
-pub struct Decoded { value: []u8, ok: bool, kind: errors.Kind, error: isize, offset: usize, detail: codec.ErrorKind }
+pub struct Decoded { value: []u8, failure: parse.Failure }
 
 // Encodes source into arena. Size overflow or overlapping input/output panics.
 pub fn encode(arena: *mem.Arena, source: []const u8) []u8 {
@@ -202,24 +203,33 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Decoded {
   mark := mem.arena_mark(arena)
   size := decoded_size(source)
   if !size.ok {
-    return Decoded{ kind: errors.Kind.InvalidInput, offset: size.offset, detail: ErrorKind.InvalidInput }
+    return Decoded{ failure: parse.Failure{ kind: parse.Kind.Syntax, offset: size.offset } }
   }
   if size.value > (~#cast(usize, 0)) - mark {
-    return Decoded{ kind: errors.Kind.Overflow, detail: ErrorKind.Overflow }
+    return Decoded{ failure: parse.Failure{ kind: parse.Kind.Overflow } }
   }
   // Check borrowed backing before allocation or rewind can modify aliased input.
   if mem.arena_overlaps_unallocated(arena, source) {
-    return Decoded{ kind: errors.Kind.InvalidInput, detail: ErrorKind.Overlap }
+    return Decoded{ failure: parse.Failure{ kind: parse.Kind.Overlap } }
   }
   output := mem.push_bytes_uninit(arena, size.value)
   result := decode_into(output, source)
   if !result.ok {
     mem.arena_rewind(arena, mark)
-    kind := errors.Kind.InvalidInput
-    if result.error == ErrorKind.Overflow {
-      kind = errors.Kind.Overflow
-    }
-    return Decoded{ kind: kind, detail: result.error }
+    return Decoded{ failure: parse.Failure{ kind: failure_kind(result.error) } }
   }
-  return Decoded{ value: output, ok: true }
+  return Decoded{ value: output }
+}
+
+fn failure_kind(detail: ErrorKind) parse.Kind {
+  if detail == ErrorKind.Overflow {
+    return parse.Kind.Overflow
+  }
+  if detail == ErrorKind.Capacity {
+    return parse.Kind.Capacity
+  }
+  if detail == ErrorKind.Overlap {
+    return parse.Kind.Overlap
+  }
+  return parse.Kind.Syntax
 }

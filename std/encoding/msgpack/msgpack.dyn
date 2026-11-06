@@ -1,3 +1,4 @@
+use "std/parse" parse
 use "std/mem" mem
 use "std/io" errors
 // MessagePack specification: https://github.com/msgpack/msgpack/blob/master/spec.md
@@ -8,17 +9,17 @@ use "std/io" errors
 // Extension payloads (including timestamps) remain opaque.
 pub enum Kind { Nil, Bool, Unsigned, Signed, Float, Text, Bytes, Array, Map, Extension }
 pub struct Token { kind: Kind, value: u64, integer: i64, real: f64, boolean: bool, bytes: []const u8, extension: i8 }
-pub struct Result { value: Token, kind: errors.Kind, offset: usize, ok: bool }
-pub struct Reader { source: []const u8, offset: usize, remaining: [64]u64, depth: usize, failed: bool, error_kind: errors.Kind, error_offset: usize }
-pub struct EncodeResult { value: []u8, kind: errors.Kind, offset: usize, ok: bool }
+pub struct Result { value: Token, offset: usize, found: bool, failure: parse.Failure }
+pub struct Reader { source: []const u8, offset: usize, remaining: [64]u64, depth: usize, failed: bool, error_kind: parse.Kind, error_offset: usize }
+pub struct EncodeResult { value: []u8, offset: usize, failure: parse.Failure }
 pub fn reader(source: []const u8) Reader {
   return Reader{ source: source }
 }
-fn fail(state: *Reader, offset: usize, kind: errors.Kind) Result {
+fn fail(state: *Reader, offset: usize, kind: parse.Kind) Result {
   state.failed = true
   state.error_kind = kind
   state.error_offset = offset
-  return Result{ kind: kind, offset: offset }
+  return Result{ offset: offset, failure: parse.Failure{ kind: kind, offset: offset } }
 }
 fn number(source: []const u8) u64 {
   value: u64 = 0
@@ -27,7 +28,7 @@ fn number(source: []const u8) u64 {
   }
   return value
 }
-fn accept(state: *Reader, token: Token) errors.Kind {
+fn accept(state: *Reader, token: Token) parse.Kind {
   for state.depth > 0 && state.remaining[state.depth - 1] == 0 {
     state.depth -= 1
   }
@@ -36,7 +37,7 @@ fn accept(state: *Reader, token: Token) errors.Kind {
   }
   if token.kind == Kind.Array || token.kind == Kind.Map {
     if token.value > 0xffffffff {
-      return errors.Kind.InvalidInput
+      return parse.Kind.Syntax
     }
     count := token.value
     if token.kind == Kind.Map {
@@ -44,13 +45,13 @@ fn accept(state: *Reader, token: Token) errors.Kind {
     }
     if count != 0 {
       if state.depth == #len(state.remaining) {
-        return errors.Kind.Capacity
+        return parse.Kind.Capacity
       }
       state.remaining[state.depth] = count
       state.depth += 1
     }
   }
-  return errors.Kind.Ok
+  return parse.Kind.Ok
 }
 fn complete(state: *Reader) bool {
   for state.depth > 0 && state.remaining[state.depth - 1] == 0 {
@@ -60,12 +61,12 @@ fn complete(state: *Reader) bool {
 }
 pub fn next(state: *Reader) Result {
   if state.failed {
-    return Result{ kind: state.error_kind, offset: state.error_offset }
+    return Result{ offset: state.error_offset, failure: parse.Failure{ kind: state.error_kind, offset: state.error_offset } }
   }
   start := state.offset
   if start == #len(state.source) {
     if !complete(state) {
-      return fail(state, start, errors.Kind.InvalidInput)
+      return fail(state, start, parse.Kind.Syntax)
     }
     return Result{ offset: start }
   }
@@ -93,7 +94,7 @@ pub fn next(state: *Reader) Result {
   } else if tag == 0xc0 {
     token.kind = Kind.Nil
   } else if tag == 0xc1 {
-    return fail(state, start, errors.Kind.InvalidInput)
+    return fail(state, start, parse.Kind.Syntax)
   } else if tag == 0xc2 || tag == 0xc3 {
     token.kind = Kind.Bool
     token.boolean = tag == 0xc3
@@ -135,7 +136,7 @@ pub fn next(state: *Reader) Result {
     }
   }
   if size > #len(state.source) - at {
-    return fail(state, at, errors.Kind.InvalidInput)
+    return fail(state, at, parse.Kind.Syntax)
   }
   if size != 0 {
     raw := number(state.source[at..at+size])
@@ -156,14 +157,14 @@ pub fn next(state: *Reader) Result {
   }
   if token.kind == Kind.Extension {
     if at == #len(state.source) {
-      return fail(state, at, errors.Kind.InvalidInput)
+      return fail(state, at, parse.Kind.Syntax)
     }
     token.extension = #cast(i8, state.source[at])
     at += 1
   }
   if payload {
     if token.value > #cast(u64, #len(state.source) - at) {
-      return fail(state, at, errors.Kind.InvalidInput)
+      return fail(state, at, parse.Kind.Syntax)
     }
     count := #cast(usize, token.value)
     token.bytes = state.source[at..at+count]
@@ -176,15 +177,15 @@ pub fn next(state: *Reader) Result {
       minimum *= 2
     }
     if minimum > #cast(u64, #len(state.source) - at) {
-      return fail(state, at, errors.Kind.InvalidInput)
+      return fail(state, at, parse.Kind.Syntax)
     }
   }
   kind := accept(state, token)
-  if kind != errors.Kind.Ok {
+  if kind != parse.Kind.Ok {
     return fail(state, start, kind)
   }
   state.offset = at
-  return Result{ value: token, offset: start, ok: true }
+  return Result{ value: token, offset: start, found: true }
 }
 fn put(output: []u8, at: *usize, value: u64, size: usize) {
   for i in 0..size {
@@ -315,11 +316,11 @@ pub fn encode(arena: *mem.Arena, tokens: []const Token) EncodeResult {
   for i in 0..#len(tokens) {
     token := tokens[i]
     if #cast(u32, token.kind) > #cast(u32, Kind.Extension) || #cast(u64, #len(token.bytes)) > 0xffffffff {
-      return EncodeResult{ kind: errors.Kind.InvalidInput, offset: i }
+      return EncodeResult{ offset: i, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: i } }
     }
     kind := accept(&state, token)
-    if kind != errors.Kind.Ok {
-      return EncodeResult{ kind: kind, offset: i }
+    if kind != parse.Kind.Ok {
+      return EncodeResult{ offset: i, failure: parse.Failure{ kind: kind, offset: i } }
     }
     count := 1 + extra(header(token))
     if token.kind == Kind.Extension {
@@ -327,17 +328,17 @@ pub fn encode(arena: *mem.Arena, tokens: []const Token) EncodeResult {
     }
     if token.kind == Kind.Text || token.kind == Kind.Bytes || token.kind == Kind.Extension {
       if #len(token.bytes) > ~#cast(usize, 0) - count {
-        return EncodeResult{ kind: errors.Kind.Overflow, offset: i }
+        return EncodeResult{ offset: i, failure: parse.Failure{ kind: parse.Kind.Overflow, offset: i } }
       }
       count += #len(token.bytes)
     }
     if count > ~#cast(usize, 0) - size {
-      return EncodeResult{ kind: errors.Kind.Overflow, offset: i }
+      return EncodeResult{ offset: i, failure: parse.Failure{ kind: parse.Kind.Overflow, offset: i } }
     }
     size += count
   }
   if !complete(&state) {
-    return EncodeResult{ kind: errors.Kind.InvalidInput, offset: #len(tokens) }
+    return EncodeResult{ offset: #len(tokens), failure: parse.Failure{ kind: parse.Kind.Syntax, offset: #len(tokens) } }
   }
   output := mem.push_array(u8, arena, size)
   at: usize = 0
@@ -367,5 +368,5 @@ pub fn encode(arena: *mem.Arena, tokens: []const Token) EncodeResult {
       }
     }
   }
-  return EncodeResult{ value: output, ok: true }
+  return EncodeResult{ value: output }
 }

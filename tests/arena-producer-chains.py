@@ -12,6 +12,7 @@ use "std/bytes"
 use "std/io" errors
 use "std/encoding"
 use "std/encoding/base32" b32
+use "std/parse" parse
 use "std/encoding/base64" b64
 use "std/encoding/hex"
 use "std/encoding/json"
@@ -45,7 +46,7 @@ fn main() {
  _=mem.copy(tail,"YQ==")
  mark:=mem.arena_mark(f.arena)
  rejected:=b64.decode(f.arena,tail[..4])
- check(!rejected.ok && rejected.detail==encoding.ErrorKind.Overlap && mem.arena_mark(f.arena)==mark)
+ check(rejected.failure.kind==parse.Kind.Overlap && mem.arena_mark(f.arena)==mark)
  check(bytes.equal(tail[..4],"YQ=="))
  check(bytes.equal(b64.decode(f.arena,"aGVsbG8=").value,"hello"))
  check(bytes.equal(b32.decode(f.arena,"NBSWY3DP").value,"hello"))

@@ -1,3 +1,4 @@
+use "std/parse" parse
 use "std/io" errors
 // Semantic Versioning 2.0 values. Prerelease/build slices borrow input.
 
@@ -9,14 +10,14 @@ pub struct Version {
   build: []const u8,
 }
 
-pub struct ParseResult { value: Version, ok: bool, kind: errors.Kind, error: isize, offset: usize }
+pub struct ParseResult { value: Version, offset: usize, failure: parse.Failure }
 
 fn identifier_byte(byte: u8) bool {
   return (byte >= '0' && byte <= '9') || (byte >= 'a' && byte <= 'z') ||
     (byte >= 'A' && byte <= 'Z') || byte == '-'
 }
 
-fn parse_number(text: []const u8, offset: *usize, output: *u32, kind: *errors.Kind) bool {
+fn parse_number(text: []const u8, offset: *usize, output: *u32, kind: *parse.Kind) bool {
   start := offset.*
   for offset.* < #len(text) && text[offset.*] >= '0' && text[offset.*] <= '9' {
     offset.* += 1
@@ -33,7 +34,7 @@ fn parse_number(text: []const u8, offset: *usize, output: *u32, kind: *errors.Ki
   for i < offset.* {
     value = value * 10 + #cast(u64, (text[i] - '0'))
     if value > 4294967295 {
-      kind.* = errors.Kind.Overflow
+      kind.* = parse.Kind.Overflow
       offset.* = i
       return false
     }
@@ -80,23 +81,23 @@ fn valid_identifiers(text: []const u8, prerelease: bool, failure: *usize) bool {
 pub fn parse(text: []const u8) ParseResult {
   at: usize = 0
   version: Version
-  kind := errors.Kind.InvalidInput
+  kind := parse.Kind.Syntax
   if !parse_number(text, &at, &version.major, &kind) {
-    return ParseResult{ offset: at, ok: false, kind: kind, error: 0 }
+    return ParseResult{ offset: at, failure: parse.Failure{ kind: kind, offset: at } }
   }
   if at == #len(text) || text[at] != '.' {
-    return ParseResult{ offset: at, ok: false, kind: kind, error: 0 }
+    return ParseResult{ offset: at, failure: parse.Failure{ kind: kind, offset: at } }
   }
   at += 1
   if !parse_number(text, &at, &version.minor, &kind) {
-    return ParseResult{ offset: at, ok: false, kind: kind, error: 0 }
+    return ParseResult{ offset: at, failure: parse.Failure{ kind: kind, offset: at } }
   }
   if at == #len(text) || text[at] != '.' {
-    return ParseResult{ offset: at, ok: false, kind: kind, error: 0 }
+    return ParseResult{ offset: at, failure: parse.Failure{ kind: kind, offset: at } }
   }
   at += 1
   if !parse_number(text, &at, &version.patch, &kind) {
-    return ParseResult{ offset: at, ok: false, kind: kind, error: 0 }
+    return ParseResult{ offset: at, failure: parse.Failure{ kind: kind, offset: at } }
   }
   if at < #len(text) && text[at] == '-' {
     at += 1
@@ -107,7 +108,7 @@ pub fn parse(text: []const u8) ParseResult {
     version.prerelease = text[prerelease_start..at]
     failure: usize = 0
     if !valid_identifiers(version.prerelease, true, &failure) {
-      return ParseResult{ offset: prerelease_start + failure, ok: false, kind: errors.Kind.InvalidInput, error: 0 }
+      return ParseResult{ offset: prerelease_start + failure, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: prerelease_start + failure } }
     }
   }
   if at < #len(text) && text[at] == '+' {
@@ -117,13 +118,13 @@ pub fn parse(text: []const u8) ParseResult {
     version.build = text[build_start..at]
     failure: usize = 0
     if !valid_identifiers(version.build, false, &failure) {
-      return ParseResult{ offset: build_start + failure, ok: false, kind: errors.Kind.InvalidInput, error: 0 }
+      return ParseResult{ offset: build_start + failure, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: build_start + failure } }
     }
   }
   if at != #len(text) {
-    return ParseResult{ offset: at, ok: false, kind: kind, error: 0 }
+    return ParseResult{ offset: at, failure: parse.Failure{ kind: kind, offset: at } }
   }
-  return ParseResult{ value: version, offset: at, ok: true, kind: errors.Kind.Ok, error: 0 }
+  return ParseResult{ value: version, offset: at }
 }
 
 fn bytes_compare(a: []const u8, b: []const u8) i32 {

@@ -12,6 +12,7 @@ use "std/io" io
 use "std/strings" strings
 use "std/bytes" bytes
 use "std/encoding/json" json
+use "std/parse" parse
 use "std/encoding/hex" hex
 use "std/unicode/utf8" utf8
 use "std/time" time
@@ -70,7 +71,7 @@ fn main() {
   broken := json.parse(arena, "{\"x\": ")
   check(!broken.ok && broken.root == &json.nil_value && json.get(i32, broken.root, "x") == 0, "json failed root")
   decoded := hex.decode(arena, "abcd")
-  check(decoded.ok && #len(decoded.value) == 2 && decoded.value[0] == 171 && !hex.decode(arena, "abc").ok, "hex decode")
+  check(decoded.failure.kind == parse.Kind.Ok && #len(decoded.value) == 2 && decoded.value[0] == 171 && hex.decode(arena, "abc").failure.kind != parse.Kind.Ok, "hex decode")
   check(utf8.codepoint_count("h\xc3\xa9").value == 2 && !utf8.codepoint_count("\xff").ok, "codepoints")
   walker := utf8.iterator("\xc3\xa9")
   check(utf8.next(&walker).value == 233 && !utf8.next(&walker).ok, "utf8 next")

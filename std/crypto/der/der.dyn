@@ -1,31 +1,32 @@
+use "std/parse" parse
 use "std/io" errors
 pub struct Element { tag: u8, content: []const u8, encoded: []const u8, constructed: bool }
-pub struct Cursor { source: []const u8, offset: usize, kind: errors.Kind, error: isize, error_offset: usize }
-pub struct Result { value: Element, offset: usize, kind: errors.Kind, error: isize, ok: bool }
+pub struct Cursor { source: []const u8, offset: usize, kind: parse.Kind, error: isize, error_offset: usize }
+pub struct Result { value: Element, offset: usize, found: bool, failure: parse.Failure }
 
 pub fn cursor(source: []const u8) Cursor {
   return Cursor{ source: source }
 }
-fn fail(state: *Cursor, kind: errors.Kind, offset: usize) Result {
+fn fail(state: *Cursor, kind: parse.Kind, offset: usize) Result {
   state.kind = kind
   state.error_offset = offset
-  return Result{ kind: kind, offset: offset }
+  return Result{ offset: offset, failure: parse.Failure{ kind: kind, offset: offset } }
 }
 // EOF has ok=false and kind=None. Parse failures remain sticky on the cursor.
 pub fn next(state: *Cursor) Result {
-  if state.kind != errors.Kind.Ok {
-    return Result{ kind: state.kind, error: state.error, offset: state.error_offset }
+  if state.kind != parse.Kind.Ok {
+    return Result{ offset: state.error_offset, failure: parse.Failure{ kind: state.kind, offset: state.error_offset } }
   }
   start := state.offset
   if start == #len(state.source) {
     return Result{ offset: start }
   }
   if start > #len(state.source) || #len(state.source) - start < 2 {
-    return fail(state, errors.Kind.InvalidInput, start)
+    return fail(state, parse.Kind.Syntax, start)
   }
   tag := state.source[start]
   if (tag & 31) == 31 {
-    return fail(state, errors.Kind.InvalidInput, start)
+    return fail(state, parse.Kind.Syntax, start)
   }
   at := start + 1
   first_length := state.source[at]
@@ -37,35 +38,35 @@ pub fn next(state: *Cursor) Result {
   else {
     count := #cast(usize, (first_length & 127))
     if count == 0 || count > #len(state.source) - at {
-      return fail(state, errors.Kind.InvalidInput, at - 1)
+      return fail(state, parse.Kind.Syntax, at - 1)
     }
     if count > #sizeof(usize) {
-      return fail(state, errors.Kind.Overflow, at - 1)
+      return fail(state, parse.Kind.Overflow, at - 1)
     }
     if state.source[at] == 0 {
-      return fail(state, errors.Kind.InvalidInput, at)
+      return fail(state, parse.Kind.Syntax, at)
     }
     for i in 0..count {
       if length > (~#cast(usize, 0) - #cast(usize, state.source[at + i])) / 256 {
-        return fail(state, errors.Kind.Overflow, at + i)
+        return fail(state, parse.Kind.Overflow, at + i)
       }
       length = length * 256 + #cast(usize, state.source[at + i])
     }
     if length < 128 {
-      return fail(state, errors.Kind.InvalidInput, at)
+      return fail(state, parse.Kind.Syntax, at)
     }
     at += count
   }
   if length > #len(state.source) - at {
-    return fail(state, errors.Kind.InvalidInput, at)
+    return fail(state, parse.Kind.Syntax, at)
   }
   finish := at + length
   state.offset = finish
-  return Result{ value: Element{ tag: tag, content: state.source[at..finish], encoded: state.source[start..finish], constructed: (tag & 32) != 0 }, ok: true }
+  return Result{ value: Element{ tag: tag, content: state.source[at..finish], encoded: state.source[start..finish], constructed: (tag & 32) != 0 }, found: true }
 }
 pub fn enter(element: Element) Cursor {
   return cursor(element.content)
 }
 pub fn finished(state: *const Cursor) bool {
-  return state.kind == errors.Kind.Ok && state.offset == #len(state.source)
+  return state.kind == parse.Kind.Ok && state.offset == #len(state.source)
 }
