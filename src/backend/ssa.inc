@@ -633,6 +633,44 @@ static void ssa_store_value(Ssa *s, int32_t address, DynType type, int32_t value
   }
   ssa_store(s, address, -1, 1, 0, ssa_memory_type(s->ir, type), value);
 }
+/* In-range values convert directly; the cold paths give the clamped result. */
+static int32_t ssa_saturating_float_to_int(Ssa *s, int32_t value, DynType to) {
+  uint8_t cls = s->values[value].cls;
+  bool f32 = cls == SC_F32;
+  uint32_t high = ssa_block(s), convert = ssa_block(s), outside = ssa_block(s);
+  uint32_t above = ssa_block(s), join = ssa_block(s);
+  if (s->failed) return 0;
+  uint32_t variable = s->variable_count + s->hidden_variables++;
+  int32_t low_bound = ssa_const(s, float_cast_low(f32, to), cls);
+  int32_t fits = ssa_emit(s, SO_FCMP, SC_INT, value, low_bound, -1, DYN_OP_GE - DYN_OP_EQ, 0);
+  ssa_branch(s, fits, high, outside);
+  ssa_seal(s, high);
+  s->current = high;
+  int32_t high_bound = ssa_const(s, float_cast_high(f32, to), cls);
+  fits = ssa_emit(s, SO_FCMP, SC_INT, value, high_bound, -1, DYN_OP_LT - DYN_OP_EQ, 0);
+  ssa_branch(s, fits, convert, outside);
+  ssa_seal(s, convert);
+  ssa_seal(s, outside);
+  s->current = convert;
+  ssa_write(s, variable, ssa_emit(s, SO_FTOI, SC_INT, value, -1, -1, !signed_scalar(to) && integer_bits(to) == 64, 0));
+  ssa_jump(s, join);
+  s->current = outside;
+  int32_t zero = ssa_const(s, 0, cls);
+  int32_t negative = ssa_emit(s, SO_FCMP, SC_INT, value, zero, -1, DYN_OP_LT - DYN_OP_EQ, 0);
+  ssa_write(s, variable, ssa_const(s, integer_minimum(to), SC_INT));
+  ssa_branch(s, negative, join, above);
+  ssa_seal(s, above);
+  s->current = above;
+  /* NaN is the only value unequal to itself; it converts to zero. */
+  int32_t number = ssa_emit(s, SO_FCMP, SC_INT, value, value, -1, 0, 0);
+  int32_t largest = ssa_const(s, integer_maximum(to), SC_INT);
+  int32_t mask = ssa_emit(s, SO_NEG, SC_INT, number, -1, -1, 0, 0);
+  ssa_write(s, variable, ssa_emit(s, SO_AND, SC_INT, largest, mask, -1, 0, 0));
+  ssa_jump(s, join);
+  ssa_seal(s, join);
+  s->current = join;
+  return ssa_read(s, variable, join, SC_INT);
+}
 static int32_t ssa_cast(Ssa *s, const DynIrExpr *e, unsigned depth) {
   const DynIrProgram *ir = s->ir;
   if (e->left >= ir->expression_count) { SSA_GIVE_UP(s); return 0; }
@@ -653,8 +691,7 @@ static int32_t ssa_cast(Ssa *s, const DynIrExpr *e, unsigned depth) {
   if (integer_float)
     return ssa_emit(s, SO_ITOF, ssa_class(e->type), v, -1, -1, !signed_scalar(from) && integer_bits(from) == 64, 0);
   if (float_integer) {
-    v = ssa_emit(s, SO_FTOI, SC_INT, v, -1, -1, !signed_scalar(e->type) && integer_bits(e->type) == 64, 0);
-    return ssa_normalize(s, v, e->type);
+    return ssa_normalize(s, ssa_saturating_float_to_int(s, v, e->type), e->type);
   }
   if (to_pointer && integer_type(from) && integer_bits(from) < backend_pointer_bits)
     v = ssa_emit(s, SO_EXT, SC_INT, v, -1, -1, integer_bits(from), 0);

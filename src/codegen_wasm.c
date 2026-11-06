@@ -845,6 +845,25 @@ static unsigned convert(WG *g, unsigned v, DynType from, DynType to,
   unsigned a = wvt(g, from), b = wvt(g, to);
   if (a == b)
     return normalize(g, v, to);
+  if (!bitcast && (a == 0x7d || a == 0x7c) && (b == 0x7f || b == 0x7e)) {
+    /* trunc_sat clamps at 32 and 64 bits and gives 0 for NaN. Narrower types
+       clamp first; min and max keep NaN, so it still reaches trunc_sat. */
+    unsigned size = wsize(g, to);
+    if (size < 4) {
+      double high = wsign(to) ? (size == 1 ? 127.0 : 32767.0) : (size == 1 ? 255.0 : 65535.0);
+      double low = wsign(to) ? -high - 1.0 : 0.0;
+      unsigned low_bound = float_constant(g, low, a), high_bound = float_constant(g, high, a);
+      get(g, v);
+      get(g, low_bound);
+      op(g, a == 0x7d ? 0x97 : 0xa5);
+      get(g, high_bound);
+      op(g, a == 0x7d ? 0x96 : 0xa4);
+    } else
+      get(g, v);
+    op(g, 0xfc);
+    wu(&g->body, (b == 0x7e ? 4u : 0u) + (a == 0x7c ? 2u : 0u) + (wsign(to) ? 0u : 1u));
+    return normalize(g, save(g, b), to);
+  }
   get(g, v);
   unsigned c = 0;
   if (bitcast)

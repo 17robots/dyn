@@ -265,8 +265,9 @@ saturating arithmetic for code that wants them.
 Untyped integer constants are evaluated exactly for the implemented constant-expression operators,
 then adapted only when their value is representable in the expected type. Runtime implicit numeric
 conversion is allowed only when every source-type value is exactly representable. `#cast` permits
-intentional narrowing and uses destination-width two's-complement/modulo representation for integers;
-float-to-integer conversion requires a finite in-range value. `#bitcast` preserves bits and requires
+intentional narrowing and uses destination-width two's-complement/modulo representation for integers.
+Float-to-integer conversion truncates toward zero and saturates: an out-of-range value gives the
+type's minimum or maximum, and NaN gives 0, on every target. `#bitcast` preserves bits and requires
 equal-sized scalar representations. Boolean/numeric conversion is never implicit.
 
 Empty or partially specified fixed-array constants zero-fill omitted elements. Compiler work and IR

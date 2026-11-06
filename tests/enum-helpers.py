@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""std/enums, zero-result division, saturating casts and try_append (debug/release)."""
+"""std/enums, zero-result division and try_append (debug/release)."""
 import os
 from pathlib import Path
 import subprocess
@@ -13,4 +13,4 @@ with tempfile.TemporaryDirectory(prefix='dyn-enum-helpers-') as temporary:
         subprocess.run([DYN, 'build', str(ROOT / 'tests/enum-helpers'), mode, '--quiet', '--no-cache',
                         '--output', str(program)], check=True, timeout=120)
         subprocess.run([str(program)], check=True, timeout=30)
-print('PASS enums, or_zero division, saturating casts and try_append (debug/release)')
+print('PASS enums, or_zero division and try_append (debug/release)')

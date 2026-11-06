@@ -322,19 +322,3 @@ pub fn rem_or_zero(a, b: $T) T {
   }
   return a % b
 }
-// Clamps a float into T's range; NaN gives 0. A plain #cast of an out-of-range
-// float gives a target-defined result.
-pub fn float_to_int_sat($T: type, value: f64) T {
-  if value != value {
-    return 0
-  }
-  low := #cast(f64, min_value(T))
-  high := #cast(f64, max_value(T))
-  if value <= low {
-    return min_value(T)
-  }
-  if value >= high {
-    return max_value(T)
-  }
-  return #cast(T, value)
-}

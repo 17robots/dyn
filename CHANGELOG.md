@@ -14,6 +14,9 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- Breaking: float to integer `#cast` saturates on every target, and NaN gives 0.
+  It was target-defined, and trapped on Wasm. `math.float_to_int_sat` is removed;
+  use `#cast`.
 - Breaking: std results use one shape. `std/errors` moves into `std/io`, effects
   report `io.Failure`, and parsers report the new `parse.Failure`. See
   `docs/migrations/result-shape.md`.
@@ -38,7 +41,7 @@ servers so they pick up the new `dyn`.
 - New: pointer-free `union` types. `union` is now a reserved word.
 - Breaking: `mem.append` never moves a list and panics at the end of its block.
   `mem.append_grow` keeps the old moving behavior; `mem.try_append` returns a stub.
-- New: `std/enums`, `math.div_or_zero`, `math.rem_or_zero`, `math.float_to_int_sat`.
+- New: `std/enums`, `math.div_or_zero`, `math.rem_or_zero`.
 - `dyn vet` reports unused locals and imports. `dyn vet --unsafe` lists unsafe operations,
   including size multiplication that can wrap.
 - See `docs/migrations/prefreeze-language.md`.

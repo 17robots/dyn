@@ -11,6 +11,7 @@ work only when semantics remain unchanged.
 | slice index | none | bounds check plus access unless proven safe |
 | pointer dereference | none | nil/alignment checks plus access unless proven safe |
 | integer arithmetic | none | modular operation; division keeps its zero check |
+| float to integer `#cast` | none | two float compares and a branch, then the conversion |
 | `arena_push`, `mem.push` | caller arena | constant-time bookkeeping in the current block plus zeroing proportional to bytes; growth adds a backing block and may require OS reservation/commitment/page faults; panics when exhausted |
 | `arena_push_uninit` | caller arena | constant-time bookkeeping in the current block without zeroing; growth may add a block and require OS reservation/commitment/page faults |
 | `arena_create` / `arena_create_bounded` | OS backing | reserve and initialize a header in the first block; `arena_create(0)` selects the target default; Wasm obtains backed linear memory |
@@ -34,7 +35,7 @@ are reused when threads finish, and further blocks are added past 64 concurrent
 threads. Programs without cleanup frames reserve nothing. Bare-metal targets use
 one fixed slot instead. Debug tracing uses the same scheme.
 
-Release omits diagnostic function tracing. It does not disable overflow, shift, bounds, nil, or
-alignment correctness checks. Benchmark matched algorithms, ownership, and I/O strategies before
+Release omits diagnostic function tracing. It does not disable division, bounds, nil or
+alignment checks. Integer overflow and shift counts have defined results, not checks. Benchmark matched algorithms, ownership, and I/O strategies before
 attributing a difference to the language.
 

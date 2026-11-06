@@ -1,0 +1,50 @@
+fn check(ok: bool, message: []const u8) {
+  if !ok {
+    #panic(message)
+  }
+}
+fn wide(value: f64) f64 {
+  return value
+}
+fn narrow(value: f32) f32 {
+  return value
+}
+fn main() {
+  huge := wide(1e300)
+  tiny := wide(-1e300)
+  zero := wide(0.0)
+  nan := zero / zero
+  infinity := wide(1.0) / zero
+  check(#cast(i8, huge) == 127, "i8 high")
+  check(#cast(i8, tiny) == -128, "i8 low")
+  check(#cast(u8, huge) == 255, "u8 high")
+  check(#cast(u8, tiny) == 0, "u8 low")
+  check(#cast(i16, huge) == 32767, "i16 high")
+  check(#cast(u16, huge) == 65535, "u16 high")
+  check(#cast(i32, huge) == 2147483647, "i32 high")
+  check(#cast(i32, tiny) == -2147483648, "i32 low")
+  check(#cast(u32, huge) == 4294967295, "u32 high")
+  check(#cast(i64, huge) == 9223372036854775807, "i64 high")
+  check(#cast(i64, tiny) == -9223372036854775807 - 1, "i64 low")
+  check(#cast(u64, huge) == 18446744073709551615, "u64 high")
+  check(#cast(u64, tiny) == 0, "u64 low")
+  check(#cast(i32, nan) == 0, "i32 nan")
+  check(#cast(u64, nan) == 0, "u64 nan")
+  check(#cast(i8, nan) == 0, "i8 nan")
+  check(#cast(i32, infinity) == 2147483647, "i32 infinity")
+  check(#cast(i32, -infinity) == -2147483648, "i32 negative infinity")
+  check(#cast(i8, wide(127.9)) == 127, "i8 truncates at the top")
+  check(#cast(i8, wide(-128.9)) == -128, "i8 truncates at the bottom")
+  check(#cast(i8, wide(128.0)) == 127, "i8 first value above")
+  check(#cast(u8, wide(-0.5)) == 0, "u8 just below zero")
+  check(#cast(u8, wide(255.5)) == 255, "u8 truncates at the top")
+  check(#cast(u8, wide(256.0)) == 255, "u8 first value above")
+  check(#cast(i32, wide(-3.9)) == -3, "truncates toward zero")
+  check(#cast(i64, wide(-9223372036854775808.0)) == -9223372036854775807 - 1, "i64 exact minimum")
+  check(#cast(u64, wide(9223372036854775808.0)) == 9223372036854775808, "u64 top half")
+  check(#cast(i32, narrow(3000000000.0)) == 2147483647, "f32 to i32 high")
+  check(#cast(i8, narrow(-1000.0)) == -128, "f32 to i8 low")
+  check(#cast(u64, narrow(1e30)) == 18446744073709551615, "f32 to u64 high")
+  nan32 := narrow(0.0) / narrow(0.0)
+  check(#cast(u8, nan32) == 0, "f32 nan")
+}

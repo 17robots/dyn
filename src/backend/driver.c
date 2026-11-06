@@ -413,6 +413,64 @@ static void normalize(BackendContext *ctx, DynType t) {
   t=storage_type(ctx->active_ir,t);
   isa_extend(ctx, integer_bits(t), signed_scalar(t));
 }
+/* Exclusive range of a float cast: values in [low, high) truncate into the
+   type, for both float widths, since every bound is a power of two or zero. */
+static uint64_t float_power_bits(bool f32, unsigned power, bool negative) {
+  if (f32) return (uint64_t)(127 + power) << 23 | (uint64_t)negative << 31;
+  return (uint64_t)(1023 + power) << 52 | (uint64_t)negative << 63;
+}
+static uint64_t float_cast_low(bool f32, DynType to) {
+  return signed_scalar(to) ? float_power_bits(f32, integer_bits(to) - 1, true) : 0;
+}
+static uint64_t float_cast_high(bool f32, DynType to) {
+  return float_power_bits(f32, integer_bits(to) - (signed_scalar(to) ? 1 : 0), false);
+}
+static uint64_t integer_minimum(DynType to) {
+  return signed_scalar(to) ? ~UINT64_C(0) << (integer_bits(to) - 1) : 0;
+}
+static uint64_t integer_maximum(DynType to) {
+  unsigned bits = integer_bits(to) - (signed_scalar(to) ? 1 : 0);
+  return bits == 64 ? UINT64_MAX : (UINT64_C(1) << bits) - 1;
+}
+/* A holds float bits and receives the integer. The value stays on the stack
+   until the single pop at the end, so every path has the same stack depth. */
+static void saturating_float_to_int(BackendContext *ctx, bool f32, DynType to) {
+  isa_push(ctx, R_A);
+  isa_immediate(ctx, R_C, float_cast_low(f32, to));
+  isa_float_operands(ctx, f32); isa_float_compare(ctx, f32, DYN_OP_GE - DYN_OP_EQ);
+  isa_test(ctx, R_A);
+  size_t below = isa_branch(ctx, CC_E);
+  isa_pop(ctx, R_A); isa_push(ctx, R_A);
+  isa_immediate(ctx, R_C, float_cast_high(f32, to));
+  isa_float_operands(ctx, f32); isa_float_compare(ctx, f32, DYN_OP_LT - DYN_OP_EQ);
+  isa_test(ctx, R_A);
+  size_t above = isa_branch(ctx, CC_E);
+  isa_pop(ctx, R_A); isa_push(ctx, R_A);
+  isa_float_to_int(ctx, f32, !signed_scalar(to) && integer_bits(to) == 64);
+  size_t done_converted = isa_branch(ctx, -1);
+  isa_patch(ctx, below, ctx->text.n); isa_patch(ctx, above, ctx->text.n);
+  isa_pop(ctx, R_A); isa_push(ctx, R_A);
+  isa_immediate(ctx, R_C, 0);
+  isa_float_operands(ctx, f32); isa_float_compare(ctx, f32, DYN_OP_LT - DYN_OP_EQ);
+  isa_test(ctx, R_A);
+  size_t not_negative = isa_branch(ctx, CC_E);
+  isa_immediate(ctx, R_A, integer_minimum(to));
+  size_t done_minimum = isa_branch(ctx, -1);
+  isa_patch(ctx, not_negative, ctx->text.n);
+  isa_pop(ctx, R_A); isa_push(ctx, R_A);
+  isa_move(ctx, R_C, R_A);
+  isa_float_operands(ctx, f32); isa_float_compare(ctx, f32, 0);
+  isa_test(ctx, R_A);
+  size_t not_a_number = isa_branch(ctx, CC_E);
+  isa_immediate(ctx, R_A, integer_maximum(to));
+  size_t done_maximum = isa_branch(ctx, -1);
+  isa_patch(ctx, not_a_number, ctx->text.n);
+  isa_immediate(ctx, R_A, 0);
+  isa_patch(ctx, done_converted, ctx->text.n);
+  isa_patch(ctx, done_minimum, ctx->text.n);
+  isa_patch(ctx, done_maximum, ctx->text.n);
+  isa_pop(ctx, R_C);
+}
 static unsigned memory_bits(DynType type) {
   if (dyn_type_is_pointer(type) || dyn_type_is_function(type) || type==DYN_TYPE_RAWPTR) return backend_pointer_bits;
   return type==DYN_TYPE_F32?32:integer_bits(type);
@@ -1728,7 +1786,7 @@ static bool expression_value(BackendContext *ctx, const DynIrProgram *ir, const 
       return !ctx->text.failed;
     }
     if (float_integer) {
-      isa_float_to_int(ctx, from==DYN_TYPE_F32, !signed_scalar(e->type) && integer_bits(e->type)==64);
+      saturating_float_to_int(ctx, from==DYN_TYPE_F32, e->type);
       normalize(ctx, e->type); return !ctx->text.failed;
     }
     /* Pointer values use the target width, independently of integer registers.
