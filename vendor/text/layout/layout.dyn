@@ -1,3 +1,4 @@
+use "std/parse" parse
 use "std/mem" mem
 use "std/io" errors
 use "std/math" math
@@ -353,8 +354,8 @@ fn paragraph(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[
   for iterator.offset<#len(text) {
     start:=iterator.offset
     grapheme:=unicode.next_grapheme(&iterator)
-    if !grapheme.ok {
-      return grapheme.kind
+    if !grapheme.found {
+      return errors.Kind.InvalidInput
     }
     face:=font.select(font.data, grapheme.value)
     if face.font==nil {
@@ -402,8 +403,8 @@ fn paragraph(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[
     return emit(output, api, bidi_api, text, &resolved.value, clusters, 0, #len(text), base, font, tab)
   }
   breaks:=unicode.line_breaks(work, text)
-  if !breaks.ok {
-    return breaks.kind
+  if breaks.failure.kind != parse.Kind.Ok {
+    return errors.Kind.InvalidInput
   }
   spans:=mem.arena_create(0)
   defer mem.arena_release(spans)

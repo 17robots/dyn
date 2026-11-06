@@ -40,7 +40,7 @@ fn check(wire: []const u8, expected: []const u8, valid: bool, method: []const u8
       arena := mem.arena_create(0)
       defer mem.arena_release(arena)
       got := http.client_do(arena, io.Reader{ data: #cast(rawptr, &feed), read: read_feed }, io.Writer{ write: sink }, method, "/", "host", "")
-      if got.ok != valid { #panic("response validity") }
+      if (got.failure.kind == io.Kind.Ok) != valid { #panic("response validity") }
       if valid && !bytes.equal(got.body, expected) { #panic("response body") }
       if !valid && got.detail != http.ErrorKind.Invalid { #panic("response error") }
     }

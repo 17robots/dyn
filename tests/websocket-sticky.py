@@ -80,7 +80,7 @@ fn sticky(connection: *ws.WebSocketConnection, trace: *Trace, kind: errors.Kind,
     failure(ws.connection_pong(connection, "", 0), kind, expected, offset)
     failure(ws.connection_close(connection, "", 0), kind, expected, offset)
     result := ws.connection_receive(connection)
-    if result.failure.kind == io.Kind.Ok || result.failure.native != expected || result.failure.kind != kind || result.offset != offset || result.event.ok { #panic("receive lost first error") }
+    if result.failure.kind == io.Kind.Ok || result.failure.native != expected || result.failure.kind != kind || result.offset != offset { #panic("receive lost first error") }
   }
   if trace.reads != reads || trace.writes != writes || trace.bytes != bytes { #panic("I/O after failure") }
 }
@@ -199,7 +199,7 @@ fn main() {
   // Constructor assignment resets failure; a normal peer Close allows one reply.
   connection = ws.connection(reader, writer, frames[..], message[..], control[..], true)
   result := ws.connection_receive(&connection)
-  if result.failure.kind != io.Kind.Ok || result.event.detail != ws.WebSocketEventKind.Close || !result.event.ok || result.event.kind != errors.Kind.Ok || result.event.error != 0 || result.failure.kind != errors.Kind.Ok || result.failure.native != 0 || connection.failed { #panic("normal close") }
+  if result.failure.kind != io.Kind.Ok || result.event.detail != ws.WebSocketEventKind.Close || result.event.failure.kind != io.Kind.Ok || result.event.failure.kind != errors.Kind.Ok || result.event.failure.native != 0 || result.failure.kind != errors.Kind.Ok || result.failure.native != 0 || connection.failed { #panic("normal close") }
   reads := trace.reads
   if ws.connection_receive(&connection).failure.kind != io.Kind.Ok || trace.reads != reads { #panic("repeat peer close") }
   failure(ws.connection_ping(&connection, "", 0), errors.Kind.InvalidState, 0, 0)

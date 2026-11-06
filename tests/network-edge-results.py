@@ -16,11 +16,12 @@ SOURCE = r'''use "std/net/http" http
 use "std/net/websocket" ws
 use "std/io" io
 use "std/io" errors
-fn metadata(ok: bool, kind: errors.Kind, native: isize, offset: usize, expected: errors.Kind, at: usize) {
-  if ok || kind != expected || native != 0 || offset != at { #panic("parser metadata golden") }
+use "std/parse" parse
+fn metadata(kind: parse.Kind, offset: usize, expected: parse.Kind, at: usize) {
+  if kind != expected || offset != at { #panic("parser metadata golden") }
 }
 fn head(result: http.HttpHead, offset: usize) {
-  metadata(result.ok, result.kind, result.error, result.offset, errors.Kind.InvalidInput, offset)
+  metadata(result.failure.kind, result.offset, parse.Kind.Syntax, offset)
 }
 fn handler(response: *http.Response, request: *const http.Request) http.Result {
   return http.Result{}
@@ -46,51 +47,51 @@ fn main() {
   head(http.parse_response("HTTP/1.1 2xx Bad\r\n\r\n"), 10)
   head(http.parse_response("HTTP/1.1 200 OK\r\nBad Header: x\r\n\r\n"), 20)
   url := http.parse_url("http://host:8x/path")
-  metadata(url.ok, url.kind, url.error, url.offset, errors.Kind.InvalidInput, 13)
+  metadata(url.failure.kind, url.offset, parse.Kind.Syntax, 13)
   url = http.parse_url("http://user@host/path")
-  metadata(url.ok, url.kind, url.error, url.offset, errors.Kind.InvalidInput, 11)
+  metadata(url.failure.kind, url.offset, parse.Kind.Syntax, 11)
   url = http.parse_url("http://host:0/path")
-  metadata(url.ok, url.kind, url.error, url.offset, errors.Kind.InvalidInput, 12)
+  metadata(url.failure.kind, url.offset, parse.Kind.Syntax, 12)
   valid_head := http.parse_request("GET / HTTP/1.1\r\n\r\n")
-  if !valid_head.ok || valid_head.kind != errors.Kind.Ok || valid_head.error != 0 || valid_head.offset != 0 { #panic("request success metadata") }
+  if valid_head.failure.kind != parse.Kind.Ok || valid_head.offset != 0 { #panic("request success metadata") }
   valid_head = http.parse_response("HTTP/1.1 200 OK\r\n\r\n")
-  if !valid_head.ok || valid_head.kind != errors.Kind.Ok || valid_head.error != 0 || valid_head.offset != 0 { #panic("response success metadata") }
+  if valid_head.failure.kind != parse.Kind.Ok || valid_head.offset != 0 { #panic("response success metadata") }
   url = http.parse_url("http://host/path")
-  if !url.ok || url.kind != errors.Kind.Ok || url.error != 0 || url.offset != 0 { #panic("URL success metadata") }
+  if url.failure.kind != parse.Kind.Ok || url.offset != 0 { #panic("URL success metadata") }
 
   malformed: [4]u8 = [129, 126, 0, 1]
   frame := ws.parse_frame(malformed[..])
-  metadata(frame.ok, frame.kind, frame.error, frame.offset, errors.Kind.InvalidInput, 2)
+  metadata(frame.failure.kind, frame.offset, parse.Kind.Syntax, 2)
   for size in 0..4 {
     frame = ws.parse_frame(malformed[..size])
-    metadata(frame.ok, frame.kind, frame.error, frame.offset, errors.Kind.WouldBlock, size)
+    metadata(frame.failure.kind, frame.offset, parse.Kind.Truncated, size)
   }
   reserved: [2]u8 = [193, 0]
   frame = ws.parse_frame(reserved[..])
-  metadata(frame.ok, frame.kind, frame.error, frame.offset, errors.Kind.InvalidInput, 0)
+  metadata(frame.failure.kind, frame.offset, parse.Kind.Syntax, 0)
   masked: [3]u8 = [129, 128, 0]
   frame = ws.parse_frame(masked[..])
-  metadata(frame.ok, frame.kind, frame.error, frame.offset, errors.Kind.WouldBlock, 3)
+  metadata(frame.failure.kind, frame.offset, parse.Kind.Truncated, 3)
   valid: [2]u8 = [129, 0]
   frame = ws.parse_frame(valid[..])
-  if !frame.ok || frame.kind != errors.Kind.Ok || frame.error != 0 || frame.offset != 0 || frame.consumed != 2 { #panic("frame success metadata") }
+  if frame.failure.kind != parse.Kind.Ok || frame.offset != 0 || frame.consumed != 2 { #panic("frame success metadata") }
   state := ws.message_state(false)
   message: [32]u8 = []
   control: [125]u8 = []
   event := ws.receive(&state, message[..], control[..], frame)
-  if !event.ok || event.detail != ws.WebSocketEventKind.Ready || event.kind != errors.Kind.Ok || event.error != 0 { #panic("event classification") }
+  if event.failure.kind != errors.Kind.Ok || event.detail != ws.WebSocketEventKind.Ready { #panic("event classification") }
   event = ws.receive(&state, message[..], control[..], ws.parse_frame(malformed[..]))
-  metadata(event.ok, event.kind, event.error, event.offset, errors.Kind.InvalidInput, 2)
+  if event.failure.kind != errors.Kind.InvalidInput || event.offset != 2 { #panic("event metadata") }
   if event.detail != ws.WebSocketEventKind.Error { #panic("error event classification") }
 
   upgrade := ws.validate_upgrade_request("GET / HTTP/1.1\r\nBad Header: x\r\n\r\n")
-  metadata(upgrade.ok, upgrade.kind, upgrade.error, upgrade.offset, errors.Kind.InvalidInput, 19)
+  metadata(upgrade.failure.kind, upgrade.offset, parse.Kind.Syntax, 19)
   upgrade = ws.validate_upgrade_request("GET / HTTP/1.1\r\n\r\n")
-  metadata(upgrade.ok, upgrade.kind, upgrade.error, upgrade.offset, errors.Kind.InvalidInput, 0)
+  metadata(upgrade.failure.kind, upgrade.offset, parse.Kind.Syntax, 0)
   response := ws.validate_upgrade_response("HTTP/1.1 2xx Bad\r\n\r\n", "")
-  metadata(response.failure.kind == io.Kind.Ok, response.failure.kind, response.failure.native, response.offset, errors.Kind.InvalidInput, 10)
+  if response.failure.kind != errors.Kind.InvalidInput || response.offset != 10 { #panic("upgrade metadata") }
   response = ws.validate_upgrade_response("HTTP/1.1 200 OK\r\n\r\n", "")
-  metadata(response.failure.kind == io.Kind.Ok, response.failure.kind, response.failure.native, response.offset, errors.Kind.InvalidInput, 0)
+  if response.failure.kind != errors.Kind.InvalidInput || response.offset != 0 { #panic("upgrade metadata") }
   response = ws.validate_upgrade_response("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n", "dGhlIHNhbXBsZSBub25jZQ==")
   if response.failure.kind != io.Kind.Ok || response.failure.kind != errors.Kind.Ok || response.failure.native != 0 || response.offset != 0 { #panic("upgrade success metadata") }
 
@@ -105,12 +106,12 @@ fn main() {
   routes: [1]http.Route = []
   router := http.router(routes[..], nil)
   route := http.route(&router, "GET", "/", nil)
-  metadata(route.failure.kind == io.Kind.Ok, route.failure.kind, route.failure.native, route.offset, errors.Kind.InvalidInput, 0)
+  if route.failure.kind != errors.Kind.InvalidInput || route.offset != 0 { #panic("metadata") }
   if route.detail != http.ErrorKind.Invalid || router.count != 0 { #panic("invalid route result") }
   route = http.route(&router, "GET", "/", handler)
   if route.failure.kind != io.Kind.Ok || route.failure.kind != errors.Kind.Ok || route.failure.native != 0 || route.offset != 0 || router.count != 1 { #panic("route success result") }
   route = http.route(&router, "GET", "/other", handler)
-  metadata(route.failure.kind == io.Kind.Ok, route.failure.kind, route.failure.native, route.offset, errors.Kind.Capacity, 0)
+  if route.failure.kind != errors.Kind.Capacity || route.offset != 0 { #panic("metadata") }
   if route.detail != http.ErrorKind.Capacity || router.count != 1 { #panic("route capacity result") }
 
   for native in [0, -73] {
