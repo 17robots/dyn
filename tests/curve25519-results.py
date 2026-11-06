@@ -10,6 +10,7 @@ use "std/crypto/ed25519" ed
 use "std/crypto/exchange" exchange
 use "std/crypto/signature" signature
 use "std/crypto/sha512" sha
+use "std/io" errors
 use "std/bytes" bytes
 fn check(ok: bool) { if !ok { #panic("curve contract") } }
 fn hash(message: []const u8,expected: []const u8) {
@@ -24,19 +25,19 @@ fn hash(message: []const u8,expected: []const u8) {
 fn curve(private: []const u8,peer: []const u8,public: []const u8,secret: []const u8) {
  output: [40]u8
  for i in 0..40 { output[i]=165 }
- check(exchange.x25519_public(output[..],private).ok && bytes.equal(output[..32],public))
- check(exchange.x25519(output[..],private,peer).ok && bytes.equal(output[..32],secret))
+ check(exchange.x25519_public(output[..],private).failure.kind == errors.Kind.Ok && bytes.equal(output[..32],public))
+ check(exchange.x25519(output[..],private,peer).failure.kind == errors.Kind.Ok && bytes.equal(output[..32],secret))
  for i in 32..40 { check(output[i]==165) }
  zero: [32]u8
- check(!exchange.x25519(output[..],private,zero[..]).ok)
+ check(exchange.x25519(output[..],private,zero[..]).failure.kind != errors.Kind.Ok)
  for i in 0..32 { check(output[i]==0) }
  for i in 32..40 { check(output[i]==165) }
 }
 fn sign(key: []const u8,message: []const u8,public: []const u8,expected: []const u8) {
  output: [72]u8
  for i in 0..72 { output[i]=165 }
- check(signature.ed25519_public(output[..],key).ok && bytes.equal(output[..32],public))
- check(signature.ed25519_sign(output[..],message,key).ok && bytes.equal(output[..64],expected))
+ check(signature.ed25519_public(output[..],key).failure.kind == errors.Kind.Ok && bytes.equal(output[..32],public))
+ check(signature.ed25519_sign(output[..],message,key).failure.kind == errors.Kind.Ok && bytes.equal(output[..64],expected))
  check(ed.valid_public_key(public))
  check(signature.ed25519_verify(output[..64],message,public))
  for i in 64..72 { check(output[i]==165) }
@@ -73,9 +74,9 @@ for index in range(16):
  s+=' curve('+','.join(map(literal,[key,peer_public,public,shared]))+')\n'
 s+=''' key: [32]u8
  output: [96]u8
- check(!exchange.x25519_public(output[..],output[64..96]).ok)
- check(!signature.ed25519_sign(output[..],output[80..81],key[..]).ok)
- check(!signature.ed25519_public(output[..31],key[..]).ok)
+ check(exchange.x25519_public(output[..],output[64..96]).failure.kind != errors.Kind.Ok)
+ check(signature.ed25519_sign(output[..],output[80..81],key[..]).failure.kind != errors.Kind.Ok)
+ check(signature.ed25519_public(output[..31],key[..]).failure.kind != errors.Kind.Ok)
  identity: [32]u8
  identity[0]=1
  signature_bytes: [64]u8

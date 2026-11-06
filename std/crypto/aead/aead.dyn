@@ -1,11 +1,11 @@
+use "std/parse" parse
 use "std/crypto/aesgcm" aes
 use "std/mem" mem
 use "std/crypto/chacha20poly1305" native
-use "std/io" errors
 pub enum Cipher { Aes256Gcm, Chacha20Poly1305 }
 pub struct Sealed { ciphertext: []u8, tag: []u8 }
-pub struct SealResult { value: Sealed, ok: bool, kind: errors.Kind, error: isize, provider_code: u64 }
-pub struct OpenResult { value: []u8, ok: bool, kind: errors.Kind, error: isize, provider_code: u64 }
+pub struct SealResult { value: Sealed, provider_code: u64, failure: parse.Failure }
+pub struct OpenResult { value: []u8, provider_code: u64, failure: parse.Failure }
 
 fn valid(kind: Cipher, count: usize, additional: []const u8, key: []const u8, nonce: []const u8) bool {
   if kind != Cipher.Aes256Gcm && kind != Cipher.Chacha20Poly1305 {
@@ -51,11 +51,11 @@ fn conflicts(arena: *mem.Arena, count: usize, first: []const u8, second: []const
 pub fn seal(arena: *mem.Arena, kind: Cipher, plaintext: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) SealResult {
   count := #len(plaintext)
   if !valid(kind, count, additional, key, nonce) || count > ~#cast(usize, 0) - 16 {
-    return SealResult{kind: errors.Kind.InvalidInput}
+    return SealResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   empty: []const u8
   if conflicts(arena, count + 16, plaintext, empty, additional, key, nonce) {
-    return SealResult{kind: errors.Kind.InvalidInput}
+    return SealResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   mark := mem.arena_mark(arena)
   output := mem.push_bytes_uninit(arena, count + 16)
@@ -71,9 +71,9 @@ pub fn seal(arena: *mem.Arena, kind: Cipher, plaintext: []const u8, additional: 
   if !ok {
     mem.zero(output)
     mem.arena_rewind(arena, mark)
-    return SealResult{kind: errors.Kind.InvalidInput}
+    return SealResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
-  return SealResult{value: Sealed{ciphertext: ciphertext, tag: tag}, ok: true}
+  return SealResult{ value: Sealed{ciphertext: ciphertext, tag: tag} }
 }
 
 // Produces arena-owned authenticated plaintext of ciphertext length. Same
@@ -83,10 +83,10 @@ pub fn seal(arena: *mem.Arena, kind: Cipher, plaintext: []const u8, additional: 
 pub fn open(arena: *mem.Arena, kind: Cipher, ciphertext: []const u8, tag: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) OpenResult {
   count := #len(ciphertext)
   if !valid(kind, count, additional, key, nonce) || #len(tag) != 16 {
-    return OpenResult{kind: errors.Kind.InvalidInput}
+    return OpenResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   if conflicts(arena, count, ciphertext, tag, additional, key, nonce) {
-    return OpenResult{kind: errors.Kind.InvalidInput}
+    return OpenResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   mark := mem.arena_mark(arena)
   plaintext := mem.push_bytes_uninit(arena, count)
@@ -100,7 +100,7 @@ pub fn open(arena: *mem.Arena, kind: Cipher, ciphertext: []const u8, tag: []cons
   if !ok {
     mem.zero(plaintext)
     mem.arena_rewind(arena, mark)
-    return OpenResult{kind: errors.Kind.InvalidInput}
+    return OpenResult{ failure: parse.Failure{ kind: parse.Kind.Checksum } }
   }
-  return OpenResult{value: plaintext, ok: true}
+  return OpenResult{ value: plaintext }
 }
