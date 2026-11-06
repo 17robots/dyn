@@ -1,3 +1,4 @@
+use "std/os/windows" native_windows
 #target(kernel: windows)
 
 use "std/io" io
@@ -10,9 +11,6 @@ use "std/sync" sync
 extern fn console_handler "dyn_signal_console_handler"(handler: fn(u32) i32, add: i32) i32
 extern fn create_event "dyn_signal_create_event"(security: rawptr, manual: i32, initial: i32, name: *const u16) rawptr
 extern fn set_event "dyn_signal_set_event"(event: rawptr) i32
-extern fn wait_one "dyn_win_wait"(handle: rawptr, milliseconds: u32) u32
-extern fn close_handle "dyn_win_close_handle"(handle: rawptr) i32
-extern fn last_error "dyn_win_last_error"() u32
 
 const interrupt_bit: u32 = 1
 const terminate_bit: u32 = 2
@@ -22,7 +20,7 @@ watched: sync.AtomicU32
 event_handle: sync.AtomicU64
 
 fn failure() WatchResult {
-  code := #cast(isize, last_error())
+  code := #cast(isize, native_windows.last_error_raw())
   return WatchResult{ failure: io.Failure{ kind: io.windows(code), native: code } }
 }
 
@@ -69,7 +67,7 @@ fn platform_watch(set: Set) WatchResult {
   if console_handler(console_event, 1) == 0 {
     failed := failure()
     sync.store_u32(&watched, 0)
-    _ = close_handle(event)
+    _ = native_windows.close_handle_raw(event)
     return failed
   }
   return WatchResult{ value: Watch{ handle: #cast(isize, #cast(usize, event)), set: set, active: true } }
@@ -102,8 +100,8 @@ fn platform_next(state: *Watch, block: bool) Next {
       return Next{ value: kind, found: true }
     }
     // INFINITE; WAIT_FAILED is 0xffffffff.
-    if wait_one(#cast(rawptr, #cast(usize, state.handle)), 4294967295) == 4294967295 {
-      code := #cast(isize, last_error())
+    if native_windows.wait_raw(#cast(rawptr, #cast(usize, state.handle)), 4294967295) == 4294967295 {
+      code := #cast(isize, native_windows.last_error_raw())
       return Next{ failure: io.Failure{ kind: io.windows(code), native: code } }
     }
   }
@@ -112,10 +110,10 @@ fn platform_next(state: *Watch, block: bool) Next {
 
 fn platform_close(state: *Watch) Result {
   if console_handler(console_event, 0) == 0 {
-    code := #cast(isize, last_error())
+    code := #cast(isize, native_windows.last_error_raw())
     return Result{ failure: io.Failure{ kind: io.windows(code), native: code } }
   }
   sync.store_u32(&watched, 0)
-  _ = close_handle(#cast(rawptr, #cast(usize, state.handle)))
+  _ = native_windows.close_handle_raw(#cast(rawptr, #cast(usize, state.handle)))
   return Result{}
 }

@@ -1,10 +1,10 @@
+use "std/os/windows" native_windows
 use "std/io" io
 #target(kernel: windows)
 
 extern fn get_mode "dyn_terminal_get_mode"(handle: rawptr, mode: *u32) i32
 extern fn set_mode "dyn_terminal_set_mode"(handle: rawptr, mode: u32) i32
 extern fn buffer_info "dyn_terminal_buffer_info"(handle: rawptr, info: *u8) i32
-extern fn last_error "dyn_win_last_error"() u32
 
 const line_input: u32 = 2
 const echo_input: u32 = 4
@@ -27,7 +27,7 @@ fn handle_of(descriptor: isize) rawptr {
 }
 
 fn failure() Result {
-  code := #cast(isize, last_error())
+  code := #cast(isize, native_windows.last_error_raw())
   return Result{ failure: io.Failure{ kind: io.windows(code), native: code } }
 }
 

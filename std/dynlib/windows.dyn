@@ -1,13 +1,13 @@
+use "std/os/windows" native_windows
 use "std/io" io
 #target(kernel: windows)
 
 extern fn native_open "dyn_win_load_library"(path: *const u8) rawptr
 extern fn native_symbol "dyn_win_get_symbol"(handle: rawptr, name: *const u8) rawptr
 extern fn native_close "dyn_win_free_library"(handle: rawptr) i32
-extern fn native_error "dyn_win_last_error"() u32
 
 fn failure_code() isize {
-  return #cast(isize, native_error())
+  return #cast(isize, native_windows.last_error_raw())
 }
 
 // LoadLibraryA takes the active code page; ASCII paths are portable.
