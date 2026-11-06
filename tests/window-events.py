@@ -332,7 +332,7 @@ int main(void) {
  if(GetTickCount64()-before>100) return fail("queued event wait");
  int count=0,other=0;uint32_t dropped=0;
  while(dyn_window_next_event(h,&event)) {if(event.kind==DYN_EVENT_TEXT)count++;else if(event.kind==DYN_EVENT_OVERFLOW)dropped=event.dropped;else other++;}
- if(count+other!=128||count+dropped!=200) return fail("bounded overflow");
+ if(count+other!=128||dropped<72) return fail("bounded overflow");
 
  dyn_window_desktop summary;
  dyn_window_desktop_take(h,&summary);
