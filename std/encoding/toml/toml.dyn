@@ -1,5 +1,5 @@
 use "std/mem" mem
-use "std/io" errors
+use "std/parse" parse
 use "std/strings" strings
 use "std/unicode/utf8" utf8
 // TOML 1.0 tree. All parsed strings, keys and scalar lexemes are arena-owned.
@@ -8,8 +8,8 @@ use "std/unicode/utf8" utf8
 pub enum Kind { Missing, String, Integer, Float, Bool, DateTime, Array, Table }
 pub struct Value { kind: Kind, text: []const u8, boolean: bool, key: []const u8, first: *Value, last: *Value, next: *Value, defined: bool, header_defined: bool, sealed: bool, table_array: bool }
 pub const nil_value: Value = Value{}
-pub struct ParseResult { root: *const Value, kind: errors.Kind, error: isize, offset: usize, ok: bool }
-pub struct EncodeResult { value: []u8, kind: errors.Kind, error: isize, ok: bool }
+pub struct ParseResult { root: *const Value, offset: usize, failure: parse.Failure }
+pub struct EncodeResult { value: []u8, failure: parse.Failure }
 struct Parser { arena: *mem.Arena, source: []const u8, at: usize, failed: bool, depth: usize }
 fn copy(arena: *mem.Arena, source: []const u8) []u8 {
   result := mem.push_array(u8, arena, #len(source))
@@ -682,7 +682,7 @@ fn bounded(value: *const Value, depth: usize) bool {
 // exhausted arenas panic.
 pub fn parse(arena: *mem.Arena, source: []const u8) ParseResult {
   if !utf8.valid(source) {
-    return ParseResult{ root: &nil_value, kind: errors.Kind.InvalidInput }
+    return ParseResult{ root: &nil_value, failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   mark := mem.arena_mark(arena)
   parser := Parser{ arena: arena, source: source }
@@ -708,9 +708,9 @@ pub fn parse(arena: *mem.Arena, source: []const u8) ParseResult {
   }
   if parser.failed {
     mem.arena_rewind(arena, mark)
-    return ParseResult{ root: &nil_value, kind: errors.Kind.InvalidInput, offset: parser.at }
+    return ParseResult{ root: &nil_value, offset: parser.at, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: parser.at } }
   }
-  return ParseResult{ root: root, ok: true }
+  return ParseResult{ root: root }
 }
 fn emit_string(arena: *mem.Arena, output: *[]u8, text: []const u8) {
   _ = mem.append_grow(arena, output, #cast(u8, 34))
@@ -812,7 +812,7 @@ fn emit(arena: *mem.Arena, output: *[]u8, current: *const Value, depth: usize) b
 // malformed/manual trees return InvalidInput and rewind.
 pub fn encode(arena: *mem.Arena, root: *const Value) EncodeResult {
   if root == nil || root.kind != Kind.Table || !valid_children(root) {
-    return EncodeResult{ kind: errors.Kind.InvalidInput }
+    return EncodeResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   mark := mem.arena_mark(arena)
   output: []u8
@@ -820,16 +820,16 @@ pub fn encode(arena: *mem.Arena, root: *const Value) EncodeResult {
   for child != nil {
     if !utf8.valid(child.key) {
       mem.arena_rewind(arena, mark)
-      return EncodeResult{ kind: errors.Kind.InvalidInput }
+      return EncodeResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
     }
     emit_string(arena, &output, child.key)
     mem.append_many_grow(arena, &output, " = ")
     if !emit(arena, &output, child, 0) {
       mem.arena_rewind(arena, mark)
-      return EncodeResult{ kind: errors.Kind.InvalidInput }
+      return EncodeResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
     }
     _ = mem.append_grow(arena, &output, #cast(u8, 10))
     child = child.next
   }
-  return EncodeResult{ value: output, ok: true }
+  return EncodeResult{ value: output }
 }

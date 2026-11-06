@@ -12,7 +12,8 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 DYN = Path(os.environ.get("DYN", ROOT / "build/dyn-release")).resolve()
 
-SOURCE = r'''use "std/encoding/csv" csv
+SOURCE = r'''use "std/parse" parse
+use "std/encoding/csv" csv
 use "std/encoding/xml" xml
 use "std/io" io
 use "std/io" errors
@@ -42,61 +43,61 @@ fn callback_contracts() {
     sink := io.Writer{ data: #cast(rawptr, &p), write: write }
     c := csv.stream_scanner(reader)
     f := csv.next_stream(&c, scratch[..])
-    check(!f.ok && f.kind == errors.Kind.PermissionDenied && f.error == p.code && f.detail == csv.ErrorKind.Io)
+    check(!f.found && f.failure.kind == csv.FailureKind.Io && f.failure.io.kind == errors.Kind.PermissionDenied && f.failure.io.native == p.code)
     p.code = -99
     again := csv.next_stream(&c, scratch[..])
-    check(!again.ok && again.kind == f.kind && again.error == f.error && p.calls == 1 && c.kind == f.kind && c.system_error == f.error && c.error == csv.ErrorKind.Io && again.detail == f.detail)
+    check(!again.found && again.failure.io.native == f.failure.io.native && p.calls == 1 && c.failure.kind == csv.FailureKind.Io && c.failure.io.native == f.failure.io.native)
     p.code = 0 - #cast(isize, code * 13)
     p.calls = 0
     x := xml.stream_scanner(reader, scratch[..])
     r := xml.next_stream(&x)
-    check(!r.ok && r.kind == errors.Kind.PermissionDenied && r.error == p.code && r.detail == xml.ErrorKind.Io)
+    check(!r.found && r.failure.kind == xml.FailureKind.Io && r.failure.io.kind == errors.Kind.PermissionDenied && r.failure.io.native == p.code)
     p.code = -99
     r2 := xml.next_stream(&x)
-    check(!r2.ok && r2.kind == r.kind && r2.error == r.error && p.calls == 1 && x.kind == r.kind && x.system_error == r.error && x.error == xml.ErrorKind.Io && r2.detail == r.detail)
+    check(!r2.found && r2.failure.io.native == r.failure.io.native && p.calls == 1 && x.failure.kind == xml.FailureKind.Io && x.failure.io.native == r.failure.io.native)
     p.code = 0 - #cast(isize, code * 13)
     p.calls = 0
     cw := csv.writer(sink)
     check(!csv.write_field(&cw, "x", false))
     saved := p.code
     p.code = -99
-    check(!csv.write_field(&cw, "", true) && !csv.write_field(&cw, "later", false) && p.calls == 1 && cw.kind == errors.Kind.PermissionDenied && cw.error == saved && cw.detail == csv.ErrorKind.Io)
+    check(!csv.write_field(&cw, "", true) && !csv.write_field(&cw, "later", false) && p.calls == 1 && cw.failure.kind == errors.Kind.PermissionDenied && cw.failure.native == saved)
     p.code = saved
     p.calls = 0
     xw := xml.writer(sink)
     check(!xml.write_text(&xw, "x"))
     p.code = -99
     check(!xml.write_text(&xw, "") && !xml.write_start(&xw, "") && !xml.write_attribute(&xw, "", "") && !xml.write_end(&xw, "") && !xml.write_start_end(&xw, true) && !xml.write_start_end(&xw, false) && p.calls == 1)
-    check(xw.kind == errors.Kind.PermissionDenied && xw.error == saved && xw.detail == xml.ErrorKind.Io)
+    check(xw.failure.kind == xml.FailureKind.Io && xw.failure.io.kind == errors.Kind.PermissionDenied && xw.failure.io.native == saved)
   }
   eof := Probe{ mode: 1 }
   c := csv.stream_scanner(io.Reader{ data: #cast(rawptr, &eof), read: read })
   f := csv.next_stream(&c, scratch[..])
-  check(f.ok && #len(f.text) == 1 && f.end_input && f.kind == errors.Kind.Ok && f.error == 0)
-  check(!csv.next_stream(&c, scratch[..]).ok && eof.calls == 1)
+  check(f.found && #len(f.text) == 1 && f.end_input && f.failure.kind == csv.FailureKind.Ok)
+  check(!csv.next_stream(&c, scratch[..]).found && eof.calls == 1)
   eof.calls = 0
   x := xml.stream_scanner(io.Reader{ data: #cast(rawptr, &eof), read: read }, scratch[..])
   xe := xml.next_stream(&x)
-  check(xe.ok && xe.kind == errors.Kind.Ok && xe.error == 0 && xe.detail == xml.ErrorKind.None && bytes.equal(xe.value.text, "x"))
-  check(!xml.next_stream(&x).ok && eof.calls == 1)
+  check(xe.found && xe.failure.kind == xml.FailureKind.Ok && bytes.equal(xe.value.text, "x"))
+  check(!xml.next_stream(&x).found && eof.calls == 1)
   bad := csv.scanner("a,b\"c")
-  check(csv.next(&bad, scratch[..]).ok)
+  check(csv.next(&bad, scratch[..]).found)
   cf := csv.next(&bad, scratch[..])
-  check(!cf.ok && cf.kind == errors.Kind.InvalidInput && cf.error == 0 && cf.detail == csv.ErrorKind.Syntax && bad.error_offset == 2)
+  check(!cf.found && cf.failure.kind == csv.FailureKind.Parse && cf.failure.parse.kind == parse.Kind.Syntax && bad.failure.parse.offset == 2)
   short := csv.scanner("abc")
   cap := csv.next(&short, scratch[..0])
-  check(!cap.ok && cap.kind == errors.Kind.Capacity && cap.error == 0 && cap.detail == csv.ErrorKind.Capacity)
+  check(!cap.found && cap.failure.parse.kind == parse.Kind.Capacity)
   xb := xml.scanner("<a")
   xr := xml.next(&xb)
-  check(!xr.ok && xr.kind == errors.Kind.InvalidInput && xr.error == 0 && xr.detail == xml.ErrorKind.Syntax && xb.error_offset == 2)
-  check(xml.next(&xb).kind == xr.kind)
+  check(!xr.found && xr.failure.kind == xml.FailureKind.Parse && xr.failure.parse.kind == parse.Kind.Syntax && xb.failure.parse.offset == 2)
+  check(xml.next(&xb).failure.kind == xr.failure.kind)
   attr := xml.attributes(xml.Event{ attributes: " a=bad" })
   ar := xml.next_attribute(&attr)
-  check(!ar.ok && ar.kind == errors.Kind.InvalidInput && ar.error == 0 && ar.detail == xml.ErrorKind.Syntax)
-  check(xml.next_attribute(&attr).kind == ar.kind)
+  check(!ar.found && ar.failure.kind == parse.Kind.Syntax)
+  check(xml.next_attribute(&attr).failure.kind == ar.failure.kind)
   p := Probe{}
   w := xml.writer(io.Writer{ data: #cast(rawptr, &p), write: write })
-  check(!xml.write_start(&w, "") && w.failed && w.kind == errors.Kind.InvalidInput && w.error == 0 && w.detail == xml.ErrorKind.Syntax)
+  check(!xml.write_start(&w, "") && w.failed && w.failure.kind == xml.FailureKind.Parse && w.failure.parse.kind == parse.Kind.Syntax)
   check(!xml.write_text(&w, "later") && p.calls == 0)
 }
 
@@ -107,62 +108,62 @@ fn additional_contracts() {
   reader := io.Reader{data: #cast(rawptr, &p), read: read}
   c := csv.stream_scanner(reader)
   f := csv.next_stream(&c, scratch[..0])
-  check(f.ok && #len(f.text) == 0 && f.end_input && f.end_record && f.kind == errors.Kind.Ok && f.error == 0 && f.detail == csv.ErrorKind.None)
-  check(!csv.next_stream(&c, scratch[..0]).ok && p.calls == 1 && c.error == csv.ErrorKind.None)
+  check(f.found && #len(f.text) == 0 && f.end_input && f.end_record && f.failure.kind == csv.FailureKind.Ok)
+  check(!csv.next_stream(&c, scratch[..0]).found && p.calls == 1 && c.failure.kind == csv.FailureKind.Ok)
   p.calls = 0
   x := xml.stream_scanner(reader, scratch[..])
   r := xml.next_stream(&x)
-  check(!r.ok && r.kind == errors.Kind.Ok && r.error == 0 && r.detail == xml.ErrorKind.None)
-  check(!xml.next_stream(&x).ok && p.calls == 1 && x.error == xml.ErrorKind.None)
+  check(!r.found && r.failure.kind == xml.FailureKind.Ok)
+  check(!xml.next_stream(&x).found && p.calls == 1 && x.failure.kind == xml.FailureKind.Ok)
   // A zero-sized XML buffer reports capacity before any callback.
   p.calls = 0
   xs := xml.stream_scanner(reader, scratch[..0])
   cap := xml.next_stream(&xs)
-  check(!cap.ok && cap.kind == errors.Kind.Capacity && cap.error == 0 && cap.detail == xml.ErrorKind.Capacity)
-  check(!xml.next_stream(&xs).ok && p.calls == 0 && xs.kind == cap.kind && xs.error == cap.detail && xs.system_error == 0)
+  check(!cap.found && cap.failure.parse.kind == parse.Kind.Capacity)
+  check(!xml.next_stream(&xs).found && p.calls == 0 && xs.failure.parse.kind == parse.Kind.Capacity)
   empty := xml.scanner("")
   end := xml.next(&empty)
-  check(!end.ok && end.kind == errors.Kind.Ok && end.error == 0 && end.detail == xml.ErrorKind.None)
+  check(!end.found && end.failure.kind == xml.FailureKind.Ok)
   attrs := xml.attributes(xml.Event{})
   attr := xml.next_attribute(&attrs)
-  check(!attr.ok && attr.kind == errors.Kind.Ok && attr.error == 0 && attr.detail == xml.ErrorKind.None)
+  check(!attr.found && attr.failure.kind == parse.Kind.Ok)
   zero_field: csv.Field
   zero_result: xml.Result
   zero_attribute: xml.Attribute
-  check(!zero_field.ok && zero_field.kind == errors.Kind.Ok && zero_field.error == 0 && zero_field.detail == csv.ErrorKind.None)
-  check(!zero_result.ok && zero_result.kind == errors.Kind.Ok && zero_result.error == 0 && zero_result.detail == xml.ErrorKind.None)
-  check(!zero_attribute.ok && zero_attribute.kind == errors.Kind.Ok && zero_attribute.error == 0 && zero_attribute.detail == xml.ErrorKind.None)
+  check(!zero_field.found && zero_field.failure.kind == csv.FailureKind.Ok)
+  check(!zero_result.found && zero_result.failure.kind == xml.FailureKind.Ok)
+  check(!zero_attribute.found && zero_attribute.failure.kind == parse.Kind.Ok)
   // CSV diagnostics retain the field's starting byte offset.
   bad := csv.scanner("a,\"unfinished")
-  check(csv.next(&bad, scratch[..]).ok)
+  check(csv.next(&bad, scratch[..]).found)
   failure := csv.next(&bad, scratch[..])
-  check(!failure.ok && failure.kind == errors.Kind.InvalidInput && failure.error == 0 && failure.detail == csv.ErrorKind.Syntax && bad.error_offset == 2)
-  check(csv.next(&bad, scratch[..0]).detail == failure.detail && bad.error_offset == 2)
+  check(!failure.found && failure.failure.kind == csv.FailureKind.Parse && failure.failure.parse.kind == parse.Kind.Syntax && bad.failure.parse.offset == 2)
+  check(csv.next(&bad, scratch[..0]).failure.parse.kind == failure.failure.parse.kind && bad.failure.parse.offset == 2)
   // XML diagnostics use byte offsets, including an incomplete UTF-8 name.
   partial: [3]u8 = ['<', 226, 130]
   xb := xml.scanner(partial[..])
   xr := xml.next(&xb)
-  check(!xr.ok && xr.kind == errors.Kind.InvalidInput && xr.error == 0 && xr.detail == xml.ErrorKind.Syntax && xb.error_offset == 1)
+  check(!xr.found && xr.failure.kind == xml.FailureKind.Parse && xr.failure.parse.kind == parse.Kind.Syntax && xb.failure.parse.offset == 1)
   eof := xml.scanner("<a x='")
   er := xml.next(&eof)
-  check(!er.ok && er.error == 0 && er.kind == errors.Kind.InvalidInput && er.detail == xml.ErrorKind.Syntax && eof.error_offset == 6)
+  check(!er.found && er.failure.kind == xml.FailureKind.Parse && er.failure.parse.kind == parse.Kind.Syntax && eof.failure.parse.offset == 6)
   invalid: [1]u8 = [255]
   w := xml.writer(io.Writer{data: #cast(rawptr, &p), write: write})
-  check(!xml.write_text(&w, invalid[..]) && w.failed && w.kind == errors.Kind.InvalidInput && w.error == 0 && w.detail == xml.ErrorKind.Syntax)
+  check(!xml.write_text(&w, invalid[..]) && w.failed && w.failure.kind == xml.FailureKind.Parse && w.failure.parse.kind == parse.Kind.Syntax)
   check(!xml.write_text(&w, "") && !xml.write_attribute(&w, "a", "") && !xml.write_end(&w, "a") && !xml.write_start_end(&w, false) && p.calls == 0)
   // Empty writes succeed before failure without touching the sink.
   clean_csv := csv.writer(io.Writer{data: #cast(rawptr, &p), write: write})
   clean_xml := xml.writer(io.Writer{data: #cast(rawptr, &p), write: write})
   check(csv.write_field(&clean_csv, "", false) && xml.write_text(&clean_xml, "") && p.calls == 0)
-  check(clean_csv.kind == errors.Kind.Ok && clean_csv.error == 0 && clean_csv.detail == csv.ErrorKind.None)
-  check(clean_xml.kind == errors.Kind.Ok && clean_xml.error == 0 && clean_xml.detail == xml.ErrorKind.None)
+  check(clean_csv.failure.kind == errors.Kind.Ok)
+  check(clean_xml.failure.kind == xml.FailureKind.Ok)
   // Zero writers reject real output, then also reject empty output.
   zwc: csv.Writer
   zwx: xml.Writer
-  check(!csv.write_field(&zwc, "x", false) && zwc.kind == errors.Kind.InvalidInput && zwc.error == -22 && zwc.detail == csv.ErrorKind.Io)
-  check(!csv.write_field(&zwc, "", false) && zwc.error == -22 && zwc.kind == errors.Kind.InvalidInput)
-  check(!xml.write_text(&zwx, "x") && zwx.kind == errors.Kind.InvalidInput && zwx.error == -22 && zwx.detail == xml.ErrorKind.Io)
-  check(!xml.write_text(&zwx, "") && !xml.write_start(&zwx, "") && zwx.error == -22 && zwx.detail == xml.ErrorKind.Io)
+  check(!csv.write_field(&zwc, "x", false) && zwc.failure.kind == errors.Kind.InvalidInput && zwc.failure.native == -22)
+  check(!csv.write_field(&zwc, "", false) && zwc.failure.native == -22 && zwc.failure.kind == errors.Kind.InvalidInput)
+  check(!xml.write_text(&zwx, "x") && zwx.failure.kind == xml.FailureKind.Io && zwx.failure.io.kind == errors.Kind.InvalidInput && zwx.failure.io.native == -22)
+  check(!xml.write_text(&zwx, "") && !xml.write_start(&zwx, "") && zwx.failure.io.native == -22)
   stack: [4][]const u8
   check(xml.valid("<a/>", stack[..]) && !xml.valid("<a x=bad/>", stack[..]) && !xml.valid("<a>&unknown;</a>", stack[..]))
 }
@@ -203,15 +204,15 @@ fn csv_check(source: []const u8, expected: bool) {
       b: [32]u8 = []
       first := csv.next(&direct, a[..capacity])
       second := csv.next_stream(&streamed, b[..capacity])
-      if first.kind != second.kind || first.error != 0 || second.error != 0 || first.detail != direct.error || second.detail != streamed.error || first.ok != second.ok || (capacity == 4 && first.ok != expected) || direct.error != streamed.error {
+      if first.failure.parse.kind != second.failure.parse.kind || first.failure.parse.kind != direct.failure.parse.kind || second.failure.parse.kind != streamed.failure.parse.kind || first.found != second.found || (capacity == 4 && first.found != expected) {
         #panic("CSV scanner acceptance mismatch")
       }
-      if !second.ok {
+      if !second.found {
         calls := chunk.calls
         repeated := csv.next_stream(&streamed, b[..0])
-        check(!repeated.ok && repeated.kind == second.kind && repeated.error == second.error && repeated.detail == second.detail && chunk.calls == calls)
+        check(!repeated.found && repeated.failure.parse.kind == second.failure.parse.kind && chunk.calls == calls)
       }
-      if first.ok && (!bytes.equal(first.text, second.text) || first.end_record != second.end_record) {
+      if first.found && (!bytes.equal(first.text, second.text) || first.end_record != second.end_record) {
         #panic("CSV field mismatch")
       }
     }
@@ -220,7 +221,7 @@ fn csv_check(source: []const u8, expected: bool) {
 fn xml_check(source: []const u8, expected: bool) {
   direct := xml.scanner(source)
   original := xml.next(&direct)
-  if original.ok != expected {
+  if original.found != expected {
     #panic("XML fixture invalid")
   }
   if expected {
@@ -229,7 +230,7 @@ fn xml_check(source: []const u8, expected: bool) {
       storage: [128]u8 = []
       streamed := xml.stream_scanner(input(&chunk), storage[..capacity])
       event := xml.next_stream(&streamed)
-      if event.ok || event.kind != errors.Kind.Capacity || event.error != 0 || event.detail != xml.ErrorKind.Capacity || streamed.kind != event.kind || streamed.error != xml.ErrorKind.Capacity {
+      if event.found || event.failure.parse.kind != parse.Kind.Capacity || streamed.failure.parse.kind != parse.Kind.Capacity {
         #panic("XML short storage")
       }
     }
@@ -244,15 +245,15 @@ fn xml_check(source: []const u8, expected: bool) {
       }
       streamed := xml.stream_scanner(input(&chunk), storage[..capacity])
       event := xml.next_stream(&streamed)
-      if event.kind != original.kind || event.error != 0 || original.error != 0 || event.detail != streamed.error || original.detail != direct.error || event.ok != original.ok || streamed.error != direct.error {
+      if event.failure.parse.kind != original.failure.parse.kind || event.failure.parse.kind != streamed.failure.parse.kind || original.failure.parse.kind != direct.failure.parse.kind || event.found != original.found {
         #panic("XML chunk acceptance mismatch")
       }
-      if !event.ok {
+      if !event.found {
         calls := chunk.calls
         repeated := xml.next_stream(&streamed)
-        check(!repeated.ok && repeated.kind == event.kind && repeated.error == event.error && repeated.detail == event.detail && chunk.calls == calls)
+        check(!repeated.found && repeated.failure.parse.kind == event.failure.parse.kind && chunk.calls == calls)
       }
-      if event.ok && (event.value.kind != original.value.kind || !bytes.equal(event.value.name, original.value.name) || !bytes.equal(event.value.text, original.value.text) || !bytes.equal(event.value.attributes, original.value.attributes)) {
+      if event.found && (event.value.kind != original.value.kind || !bytes.equal(event.value.name, original.value.name) || !bytes.equal(event.value.text, original.value.text) || !bytes.equal(event.value.attributes, original.value.attributes)) {
         #panic("XML chunk contents mismatch")
       }
     }

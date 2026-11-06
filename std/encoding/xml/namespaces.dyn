@@ -6,7 +6,7 @@ pub struct Namespaces {
   bindings: []NamespaceBinding, frames: []NamespaceFrame, storage: []u8,
   count: usize, depth: usize, used: usize,
 }
-pub struct ExpandedName { prefix: []const u8, local: []const u8, uri: []const u8, error: ErrorKind, ok: bool }
+pub struct ExpandedName { prefix: []const u8, local: []const u8, uri: []const u8, failure: parse.Failure }
 const XmlNamespace: []const u8 = "http://www.w3.org/XML/1998/namespace"
 const XmlnsNamespace: []const u8 = "http://www.w3.org/2000/xmlns/"
 pub fn namespaces(bindings: []NamespaceBinding, frames: []NamespaceFrame, storage: []u8) Namespaces {
@@ -16,28 +16,28 @@ fn qualified(name: []const u8) ExpandedName {
   colon := #len(name)
   i: usize = 0
   if #len(name) == 0 || name_end(name, 0) != #len(name) {
-    return ExpandedName{ error: ErrorKind.Syntax }
+    return ExpandedName{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   for i < #len(name) {
     if name[i] == ':' {
       if colon != #len(name) {
-        return ExpandedName{ error: ErrorKind.Syntax }
+        return ExpandedName{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
       }
       colon = i
     }
     i += 1
   }
   if colon == #len(name) {
-    return ExpandedName{ local: name, ok: true }
+    return ExpandedName{ local: name }
   }
   if colon == 0 || colon + 1 == #len(name) || name_end(name, colon + 1) != #len(name) {
-    return ExpandedName{ error: ErrorKind.Syntax }
+    return ExpandedName{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
-  return ExpandedName{ prefix: name[..colon], local: name[colon + 1..], ok: true }
+  return ExpandedName{ prefix: name[..colon], local: name[colon + 1..] }
 }
 pub fn namespace_resolve(state: *const Namespaces, name: []const u8, attribute: bool) ExpandedName {
   result := qualified(name)
-  if !result.ok {
+  if result.failure.kind != parse.Kind.Ok {
     return result
   }
   if bytes.equal(result.prefix, "xmlns") || (attribute && bytes.equal(name, "xmlns")) {
@@ -60,7 +60,7 @@ pub fn namespace_resolve(state: *const Namespaces, name: []const u8, attribute: 
     }
   }
   if #len(result.prefix) != 0 {
-    return ExpandedName{ error: ErrorKind.Syntax }
+    return ExpandedName{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   return result
 }
@@ -144,10 +144,10 @@ fn namespace_uri(state: *Namespaces, source: []const u8) []const u8 {
 }
 fn namespace_enter_impl(state: *Namespaces, event: Event) ExpandedName {
   if event.kind != Kind.Start || !valid_attributes(event) {
-    return ExpandedName{ error: ErrorKind.Syntax }
+    return ExpandedName{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   if state.depth == #len(state.frames) || #len(event.name) > #len(state.storage) - state.used {
-    return ExpandedName{ error: ErrorKind.Capacity }
+    return ExpandedName{ failure: parse.Failure{ kind: parse.Kind.Capacity } }
   }
   previous_count := state.count
   previous_used := state.used
@@ -155,11 +155,11 @@ fn namespace_enter_impl(state: *Namespaces, event: Event) ExpandedName {
   attributes_state := attributes(event)
   for {
     item := next_attribute(&attributes_state)
-    if !item.ok {
+    if !item.found {
       break
     }
     split := qualified(item.name)
-    if !split.ok {
+    if split.failure.kind != parse.Kind.Ok {
       return split
     }
     declaration := bytes.equal(item.name, "xmlns") || bytes.equal(split.prefix, "xmlns")
@@ -169,41 +169,41 @@ fn namespace_enter_impl(state: *Namespaces, event: Event) ExpandedName {
         prefix = ""
       }
       if state.count == #len(state.bindings) || #len(prefix) + #len(item.value) > #len(state.storage) - state.used {
-        return ExpandedName{ error: ErrorKind.Capacity }
+        return ExpandedName{ failure: parse.Failure{ kind: parse.Kind.Capacity } }
       }
       owned_prefix := namespace_copy(state, prefix)
       uri := namespace_uri(state, item.value)
       if bytes.equal(prefix, "xmlns") || bytes.equal(uri, XmlnsNamespace) || (bytes.equal(prefix, "xml") != bytes.equal(uri, XmlNamespace)) || (#len(prefix) > 0 && #len(uri) == 0) {
-        return ExpandedName{ error: ErrorKind.Syntax }
+        return ExpandedName{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
       }
       state.bindings[state.count] = NamespaceBinding{ prefix: owned_prefix, uri: uri }
       state.count += 1
     }
   }
   resolved := namespace_resolve(state, copied, false)
-  if !resolved.ok || bytes.equal(resolved.prefix, "xmlns") {
-    return ExpandedName{ error: ErrorKind.Syntax }
+  if resolved.failure.kind != parse.Kind.Ok || bytes.equal(resolved.prefix, "xmlns") {
+    return ExpandedName{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   scan := attributes(event)
   for {
     before := scan.offset
     attribute_item := next_attribute(&scan)
-    if !attribute_item.ok {
+    if !attribute_item.found {
       break
     }
     current := namespace_resolve(state, attribute_item.name, true)
-    if !current.ok {
+    if current.failure.kind != parse.Kind.Ok {
       return current
     }
     prior := attributes(event)
     for prior.offset < before {
       other := next_attribute(&prior)
-      if !other.ok {
+      if !other.found {
         break
       }
       expanded := namespace_resolve(state, other.name, true)
       if bytes.equal(current.uri, expanded.uri) && bytes.equal(current.local, expanded.local) {
-        return ExpandedName{ error: ErrorKind.Syntax }
+        return ExpandedName{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
       }
     }
   }
@@ -216,13 +216,13 @@ fn namespace_enter_impl(state: *Namespaces, event: Event) ExpandedName {
 // Expanded element slices last until scope exit.
 pub fn namespace_enter(state: *Namespaces, event: Event) ExpandedName {
   if bytes.overlaps(state.storage, event.name) || bytes.overlaps(state.storage, event.attributes) {
-    return ExpandedName{ error: ErrorKind.Overlap }
+    return ExpandedName{ failure: parse.Failure{ kind: parse.Kind.Overlap } }
   }
   count := state.count
   used := state.used
   depth := state.depth
   result := namespace_enter_impl(state, event)
-  if !result.ok {
+  if result.failure.kind != parse.Kind.Ok {
     state.count = count
     state.used = used
     state.depth = depth

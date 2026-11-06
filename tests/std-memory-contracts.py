@@ -7,7 +7,8 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
-SOURCE = r'''use "std/mem"
+SOURCE = r'''use "std/parse" parse
+use "std/mem"
 use "std/io" io
 use "std/strings"
 use "std/encoding/ini"
@@ -74,16 +75,16 @@ fn main() {
   parts: [2][]const u8 = ["one", "two"]
   expect(strings.equal(strings.join(arena, parts[..], "/"), "one/two"))
   parsed := ini.parse(arena, "[window]\nwidth=80\nheight=25\n")
-  expect(parsed.ok && #len(parsed.value) == 3)
+  expect(parsed.failure.kind == parse.Kind.Ok && #len(parsed.value) == 3)
   expect(strings.equal(parsed.value[2].section, "window") && strings.equal(parsed.value[2].value, "25"))
   before := mem.arena_used(arena)
   syntax := ini.parse(arena, "x=1\ninvalid\n")
-  expect(!syntax.ok && syntax.kind == errors.Kind.InvalidInput && syntax.error == 0 && syntax.detail == ini.ErrorKind.Syntax && syntax.offset == 4 && syntax.line == 2)
+  expect(syntax.failure.kind == parse.Kind.Syntax && syntax.offset == 4 && syntax.line == 2)
   expect(mem.arena_used(arena) == before)
   tiny_storage: [mem.ArenaBufferOverhead]u8
   tiny := mem.arena_from_buffer(tiny_storage[..])
   tiny = mem.arena_from_buffer(tiny.data[..mem.ArenaHeader])
-  expect(ini.parse(tiny, "# empty").ok)
+  expect(ini.parse(tiny, "# empty").failure.kind == parse.Kind.Ok)
   expect(#len(strings.clone(tiny, "")) == 0)
   expect(mem.arena_used(tiny) == 0)
 

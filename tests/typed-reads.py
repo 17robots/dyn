@@ -60,7 +60,7 @@ fn main() {
   fields := text.Scanner{ source: "a  bc" }
   check(strings.equal(text.next_field(&fields).value, "a") && strings.equal(text.next_field(&fields).value, "bc"), "fields")
   doc := json.parse(arena, "{\"x\": 2.5, \"name\": \"boss\", \"hp\": 40, \"alive\": true, \"tags\": [1, 2]}")
-  check(doc.ok, "json parse")
+  check(doc.failure.kind == parse.Kind.Ok, "json parse")
   check(json.get(f32, doc.root, "x") == 2.5 && json.get(i32, doc.root, "hp") == 40, "json numbers")
   check(strings.equal(json.get([]const u8, doc.root, "name"), "boss") && json.get(bool, doc.root, "alive"), "json text")
   tags := json.get(*const json.Value, doc.root, "tags")
@@ -69,7 +69,7 @@ fn main() {
   nothing := json.get(*const json.Value, json.get(*const json.Value, doc.root, "a"), "b")
   check(nothing == &json.nil_value && json.is_missing(nothing) && !json.is_null(nothing), "json chained miss")
   broken := json.parse(arena, "{\"x\": ")
-  check(!broken.ok && broken.root == &json.nil_value && json.get(i32, broken.root, "x") == 0, "json failed root")
+  check(broken.failure.kind != parse.Kind.Ok && broken.root == &json.nil_value && json.get(i32, broken.root, "x") == 0, "json failed root")
   decoded := hex.decode(arena, "abcd")
   check(decoded.failure.kind == parse.Kind.Ok && #len(decoded.value) == 2 && decoded.value[0] == 171 && hex.decode(arena, "abc").failure.kind != parse.Kind.Ok, "hex decode")
   check(utf8.codepoint_count("h\xc3\xa9").value == 2 && !utf8.codepoint_count("\xff").ok, "codepoints")

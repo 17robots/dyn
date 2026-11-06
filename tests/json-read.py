@@ -24,58 +24,58 @@ def check(node,v,label):
 values=[None,True,False,0,-0.0,1,-1,2**64-1,-2**63,2**53-1,1.25,1e300,1e-300,'','ascii','é😀','a\0b\n\\"',{'é😀':'café','a\0b':[True,None]},[],{},[1,2,{'x':'y'}]]
 values.append({'é😀':'café','a\0b':[True,None]})
 for i in range(60):values.append({'id':i,'key'+str(i):['x'*(i%17),'é😀',i%2==0,None,{'nested':i*19}],'escaped':'a\nb\t"\\'})
-lines=['use "std/encoding/json/read" json','use "std/encoding/json" mutable','use "std/mem" mem','use "std/io"','fn require(ok:bool,label:[]const u8) { if !ok { #panic(label) } }','fn main() {','require(#sizeof(json.Value)==16,"compact value size")','arena:=mem.arena_create(mem.MiB)\ndefer mem.arena_release(arena)','_=mem.push_bytes_uninit(arena,3)\nprefix_mark:=mem.arena_mark(arena)']
+lines=['use "std/parse" parse\nuse "std/encoding/json/read" json','use "std/encoding/json" mutable','use "std/mem" mem','use "std/io"','fn require(ok:bool,label:[]const u8) { if !ok { #panic(label) } }','fn main() {','require(#sizeof(json.Value)==16,"compact value size")','arena:=mem.arena_create(mem.MiB)\ndefer mem.arena_release(arena)','_=mem.push_bytes_uninit(arena,3)\nprefix_mark:=mem.arena_mark(arena)']
 for i,v in enumerate(values):
- raw=json.dumps(v,ensure_ascii=i%2==0,separators=(',',':')).encode();lines+=['if true {',f'original:={quote(raw)}','input:=mem.push_bytes_uninit(arena,#len(original))\n_=mem.copy(input,original)','mark:=mem.arena_mark(arena)','result:=json.parse(arena,input)','require(result.ok && result.kind==json.Kind.None && result.error==0,"valid metadata")','for i in 0..#len(input) { input[i]=255 }']
+ raw=json.dumps(v,ensure_ascii=i%2==0,separators=(',',':')).encode();lines+=['if true {',f'original:={quote(raw)}','input:=mem.push_bytes_uninit(arena,#len(original))\n_=mem.copy(input,original)','mark:=mem.arena_mark(arena)','result:=json.parse(arena,input)','require(result.failure.kind == parse.Kind.Ok && result.failure.kind==json.Kind.None,"valid metadata")','for i in 0..#len(input) { input[i]=255 }']
  # errors is not re-exported as Kind; use zero enum via cast.
- lines[-2]=lines[-2].replace('result.kind==json.Kind.None','#cast(usize,result.kind)==0')
+ lines[-2]=lines[-2].replace('result.failure.kind==json.Kind.None','#cast(usize,result.failure.kind)==0')
  lines+=check('result.root',v,'value '+str(i));lines+=['mem.arena_rewind(arena,mark)','mem.arena_rewind(arena,prefix_mark)','}']
 invalid=[b'',b' ',b'01',b'1.',b'1e',b'-',b'true false',b'"x" trailing',b'{"a":}',b'[1,]',b'{"a" 1}',b'"unterminated',b'"bad\\q"',b'"bad\\"',b'"\\u12"',b'"\\u00xz"',b'"\\ud800"',b'"\\udc00"',b'"\\ud800\\u0041"',b'"\xc0\xaf"',b'"\xed\xa0\x80"',b'"\xf4\x90\x80\x80"',b'"\xe2\x82"',b'"\x80"',b'['*257+b'0'+b']'*257,b'1e9999']+[b'"a'+bytes([x])+b'b"' for x in range(32)]
 invalid += [b'['*n for n in range(1,258)] + [b'{\"x\":'*n for n in range(1,65)]
-for i,raw in enumerate(invalid):lines+=['if true {',f'result:=json.parse(arena,{quote(raw)})','require(!result.ok && json.kind(result.root)==json.KindMissing && mem.arena_mark(arena)==prefix_mark,"invalid rollback")','}']
+for i,raw in enumerate(invalid):lines+=['if true {',f'result:=json.parse(arena,{quote(raw)})','require(result.failure.kind != parse.Kind.Ok && json.kind(result.root)==json.KindMissing && mem.arena_mark(arena)==prefix_mark,"invalid rollback")','}']
 large=json.dumps(list(range(1000)),separators=(',',':')).encode();deep=b'['*256+b'0'+b']'*256
-lines += ['if true {',f'result:=json.parse(arena,{quote(large)})','require(result.ok && json.length(result.root)==1000,"growth array")','for i in 0..1000 { require(json.as_f64(json.at(result.root,i))==#cast(f64,i),"contiguous growth") }','require(result.root.bits==1001,"subtree span")','mem.arena_rewind(arena,prefix_mark)','}',f'require(json.parse(arena,{quote(deep)}).ok,"depth 256")','mem.arena_rewind(arena,prefix_mark)','if true {','backing:[512]u8=[]\nfixed:=mem.arena_from_buffer(backing[..])','result:=json.parse(fixed,"{\\"x\\":1}")','require(result.ok && json.as_f64(json.get(result.root,"x"))==1.0,"fixed buffer")','}', 'if true {','storage:[1024]u8=[]\nfixed:=mem.arena_from_buffer(storage[..])','input:=fixed.data[mem.ArenaHeader+10..mem.ArenaHeader+20]\n_=mem.copy(input,"[1,2,3,4] ")','result:=json.parse(fixed,input)','require(!result.ok && mem.arena_mark(fixed)==mem.arena_start(fixed) && mem.equal(input,"[1,2,3,4] "),"alias rejection")','}', 'require(json.kind(nil)==json.KindMissing && json.kind(json.get(nil,"x"))==json.KindMissing,"nil navigation")','}']
+lines += ['if true {',f'result:=json.parse(arena,{quote(large)})','require(result.failure.kind == parse.Kind.Ok && json.length(result.root)==1000,"growth array")','for i in 0..1000 { require(json.as_f64(json.at(result.root,i))==#cast(f64,i),"contiguous growth") }','require(result.root.bits==1001,"subtree span")','mem.arena_rewind(arena,prefix_mark)','}',f'require(json.parse(arena,{quote(deep)}).failure.kind == parse.Kind.Ok,"depth 256")','mem.arena_rewind(arena,prefix_mark)','if true {','backing:[512]u8=[]\nfixed:=mem.arena_from_buffer(backing[..])','result:=json.parse(fixed,"{\\"x\\":1}")','require(result.failure.kind == parse.Kind.Ok && json.as_f64(json.get(result.root,"x"))==1.0,"fixed buffer")','}', 'if true {','storage:[1024]u8=[]\nfixed:=mem.arena_from_buffer(storage[..])','input:=fixed.data[mem.ArenaHeader+10..mem.ArenaHeader+20]\n_=mem.copy(input,"[1,2,3,4] ")','result:=json.parse(fixed,input)','require(result.failure.kind != parse.Kind.Ok && mem.arena_mark(fixed)==mem.arena_start(fixed) && mem.equal(input,"[1,2,3,4] "),"alias rejection")','}', 'require(json.kind(nil)==json.KindMissing && json.kind(json.get(nil,"x"))==json.KindMissing,"nil navigation")','}']
 edge_source = r'''
 if true {
   value:=json.parse(arena,"-0")
-  require(value.ok && #bitcast(u64,json.as_f64(value.root))==9223372036854775808,"negative integer zero")
+  require(value.failure.kind == parse.Kind.Ok && #bitcast(u64,json.as_f64(value.root))==9223372036854775808,"negative integer zero")
   mem.arena_rewind(arena,prefix_mark)
 }
 if true {
   value:=json.parse(arena,"{\"\":1,\"dup\":2,\"dup\":3}")
-  require(value.ok && json.as_u64(json.get(value.root,""))==1 && json.as_u64(json.get(value.root,"dup"))==2,"empty and duplicate keys")
+  require(value.failure.kind == parse.Kind.Ok && json.as_u64(json.get(value.root,""))==1 && json.as_u64(json.get(value.root,"dup"))==2,"empty and duplicate keys")
   it:=json.iterator(value.root)
-  require(json.next(&it).ok && json.next(&it).ok && json.next(&it).ok && !json.next(&it).ok,"object iterator count")
+  require(json.next(&it).found && json.next(&it).found && json.next(&it).found && !json.next(&it).found,"object iterator count")
   mem.arena_rewind(arena,prefix_mark)
 }
 if true {
   value:=json.parse(arena,"18446744073709551615")
-  require(value.ok && json.as_u64(value.root)==18446744073709551615 && json.as_i64(value.root)==0,"unsigned maximum")
+  require(value.failure.kind == parse.Kind.Ok && json.as_u64(value.root)==18446744073709551615 && json.as_i64(value.root)==0,"unsigned maximum")
   mem.arena_rewind(arena,prefix_mark)
   value=json.parse(arena,"-9223372036854775808")
-  require(value.ok && json.as_i64(value.root)==-9223372036854775807-1 && json.as_u64(value.root)==0,"signed minimum")
+  require(value.failure.kind == parse.Kind.Ok && json.as_i64(value.root)==-9223372036854775807-1 && json.as_u64(value.root)==0,"signed minimum")
   mem.arena_rewind(arena,prefix_mark)
   value=json.parse(arena,"-1e9999")
-  require(!value.ok && value.detail==json.ErrorKind.NumberOverflow && value.error==0,"real negative overflow")
+  require(value.failure.kind != parse.Kind.Ok && value.failure.kind == parse.Kind.Overflow,"real negative overflow")
   require(mem.arena_mark(arena)==prefix_mark,"real overflow rollback")
 }
 for pad in 0..16 {
   backing:[4096]u8=[]
   fixed:=mem.arena_from_buffer(backing[pad..])
   result:=json.parse(fixed,"{\"x\":[0,true,\"a\\u0000b\"],\"y\":-1.25}")
-  require(result.ok && (#cast(usize,result.root)&7)==0,"misaligned backing")
+  require(result.failure.kind == parse.Kind.Ok && (#cast(usize,result.root)&7)==0,"misaligned backing")
   require(json.length(json.get(result.root,"x"))==3 && json.as_f64(json.get(result.root,"y"))==-1.25,"misaligned values")
   it:=json.iterator(json.get(result.root,"x"))
   require(json.as_u64(json.next(&it).value)==0 && json.as_bool(json.next(&it).value),"array iterator")
   item:=json.next(&it)
-  require(item.ok && mem.equal(json.as_text(item.value),"a\x00b") && !json.next(&it).ok,"iterator decoded bytes")
+  require(item.found && mem.equal(json.as_text(item.value),"a\x00b") && !json.next(&it).found,"iterator decoded bytes")
 }
 if true {
   backing:[80+mem.ArenaBufferOverhead]u8=[]
   pad:=(16-(#cast(usize,&backing[0])&15))&15
   fixed:=mem.arena_from_buffer(backing[pad..pad+mem.ArenaHeader+80])
   result:=json.parse(fixed,"\"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\"")
-  require(result.ok && mem.arena_used(fixed)==80 && fixed.peak_used==80,"scalar exact capacity")
+  require(result.failure.kind == parse.Kind.Ok && mem.arena_used(fixed)==80 && fixed.peak_used==80,"scalar exact capacity")
 }
 '''
 # Keys and scalar values remain permitted at the maximum container depth.
@@ -84,9 +84,9 @@ if true {
 key_edges=[]
 for scalar,kind in [(b'""','String'),(b'"value"','String'),(b'null','Null'),(b'true','Bool'),(b'42','Number')]:
  raw=b'['*255+b'{"\\u006b":'+scalar+b'}'+b']'*255
- key_edges += ['if true {',f'raw:={quote(raw)}','result:=json.parse(arena,raw)','require(result.ok,"maximum-depth object key and scalar")','node:=result.root','for depth in 0..255 { node=json.at(node,0) }',f'require(json.kind(json.get(node,"k"))==json.Kind{kind},"maximum-depth scalar kind")','mem.arena_rewind(arena,prefix_mark)','other:=mutable.parse(arena,raw)','require(other.ok,"mutable maximum-depth control")','mem.arena_rewind(arena,prefix_mark)','}']
+ key_edges += ['if true {',f'raw:={quote(raw)}','result:=json.parse(arena,raw)','require(result.failure.kind == parse.Kind.Ok,"maximum-depth object key and scalar")','node:=result.root','for depth in 0..255 { node=json.at(node,0) }',f'require(json.kind(json.get(node,"k"))==json.Kind{kind},"maximum-depth scalar kind")','mem.arena_rewind(arena,prefix_mark)','other:=mutable.parse(arena,raw)','require(other.failure.kind == parse.Kind.Ok,"mutable maximum-depth control")','mem.arena_rewind(arena,prefix_mark)','}']
 for raw in [b'{"\\q":0}',b'{"\\ud800":0}',b'{"\\u006b" 0}',b'['*255+b'{"\\q":0}'+b']'*255,b'['*256+b'{"k":0}'+b']'*256]:
- key_edges += ['if true {',f'raw:={quote(raw)}','result:=json.parse(arena,raw)','require(!result.ok && json.is_missing(result.root) && mem.arena_mark(arena)==prefix_mark,"key failure rollback")','other:=mutable.parse(arena,raw)','require(!other.ok && result.offset==other.offset && result.kind==other.kind && result.error==other.error,"key failure diagnostics")','require(mem.arena_mark(arena)==prefix_mark,"mutable key rollback")','}']
+ key_edges += ['if true {',f'raw:={quote(raw)}','result:=json.parse(arena,raw)','require(result.failure.kind != parse.Kind.Ok && json.is_missing(result.root) && mem.arena_mark(arena)==prefix_mark,"key failure rollback")','other:=mutable.parse(arena,raw)','require(other.failure.kind != parse.Kind.Ok && result.offset==other.offset && result.failure.kind==other.failure.kind && result.failure.kind == other.failure.kind,"key failure diagnostics")','require(mem.arena_mark(arena)==prefix_mark,"mutable key rollback")','}']
 # Small blocks exercise tape relocation and virtual marks, including arenas
 # already on a later block before parsing. Relative tape spans must survive copies.
 chain_objects = [{'name': 'item '+str(i), 'escaped': 'a\nb\t"\\é😀',
@@ -104,27 +104,27 @@ chain_source = [
  'saved_mark:=mem.arena_mark(chain)',
  'saved:=mem.arena_snapshot(chain)',
  f'large:=json.parse(chain,{quote(large)})',
- 'require(large.ok && json.length(large.root)==1000 && large.root.bits==1001,"chained large tape")',
+ 'require(large.failure.kind == parse.Kind.Ok && json.length(large.root)==1000 && large.root.bits==1001,"chained large tape")',
  'for i in 0..1000 { require(json.as_u64(json.at(large.root,i))==#cast(u64,i),"chained tape relocation values") }',
  'require(mem.arena_snapshot(chain).blocks>saved.blocks,"parser added blocks")',
  'retained:=mem.arena_mark(chain)',
  'tail:=chain.current.data[chain.current.offset..chain.current.offset+7]',
  '_=mem.copy(tail,"[0,1,2]")',
  'overlap:=json.parse(chain,tail)',
- 'require(!overlap.ok && overlap.detail==json.ErrorKind.Overlap && mem.arena_mark(chain)==retained && mem.equal(tail,"[0,1,2]"),"chained overlap preflight")',
+ 'require(overlap.failure.kind != parse.Kind.Ok && overlap.failure.kind == parse.Kind.Overlap && mem.arena_mark(chain)==retained && mem.equal(tail,"[0,1,2]"),"chained overlap preflight")',
  'mem.arena_rewind(chain,saved_mark)',
  'require(mem.arena_mark(chain)==saved_mark && mem.arena_snapshot(chain).blocks==saved.blocks && mem.arena_snapshot(chain).capacity==saved.capacity,"chained success rewind")',
  f'input_data: [{len(chain_raw)}]u8 = [{",".join(map(str,chain_raw))}]',
  'owned:=json.parse(chain,input_data[..])',
- 'require(owned.ok,"chained object document")',
+ 'require(owned.failure.kind == parse.Kind.Ok,"chained object document")',
  'mem.fill(input_data[..],255)',
  'it:=json.iterator(owned.root)',
- 'for i in 0..80 { entry:=json.next(&it)\nrequire(entry.ok && json.as_u64(json.at(json.get(entry.value,"nested"),0))==#cast(u64,i),"chained iterator subtree") }',
- 'require(!json.next(&it).ok,"chained iterator end")',
+ 'for i in 0..80 { entry:=json.next(&it)\nrequire(entry.found && json.as_u64(json.at(json.get(entry.value,"nested"),0))==#cast(u64,i),"chained iterator subtree") }',
+ 'require(!json.next(&it).found,"chained iterator end")',
  *check('owned.root', chain_objects, 'chained object/string ownership'),
  'mem.arena_rewind(chain,saved_mark)',
  f'bad:=json.parse(chain,{quote(b"["*257+b"0"+b"]"*257)})',
- 'require(!bad.ok && json.is_missing(bad.root) && mem.arena_mark(chain)==saved_mark && mem.arena_snapshot(chain).blocks==saved.blocks && mem.arena_snapshot(chain).capacity==saved.capacity,"chained failure rollback")',
+ 'require(bad.failure.kind != parse.Kind.Ok && json.is_missing(bad.root) && mem.arena_mark(chain)==saved_mark && mem.arena_snapshot(chain).blocks==saved.blocks && mem.arena_snapshot(chain).capacity==saved.capacity,"chained failure rollback")',
  'for byte in prefix { require(byte==91,"chained prefix canary") }',
  'mem.arena_release(chain)',
  'chain=nil',
@@ -169,17 +169,17 @@ fn main() {
  require(#bitcast(u64,json.as_f64(json.get(root,"real")))==4608308318706860032)
  require(mem.equal(json.as_text(json.get(root,"utf")),"caf\xc3\xa9"))
  it:=json.iterator(json.get(root,""))
- require(json.next(&it).ok && json.as_bool(json.next(&it).value))
+ require(json.next(&it).found && json.as_bool(json.next(&it).value))
  item:=json.next(&it)
- require(item.ok && mem.equal(json.as_text(item.value),"a\x00b") && !json.next(&it).ok)
+ require(item.found && mem.equal(json.as_text(item.value),"a\x00b") && !json.next(&it).found)
  mem.arena_reset(arena)
  zero:=json.parse(arena,"-0")
  require(zero.ok && #bitcast(u64,json.as_f64(zero.root))==9223372036854775808)
  mem.arena_reset(arena)
  mark:=mem.arena_mark(arena)
  bad:=json.parse(arena,"[1,]")
- require(!bad.ok && json.is_missing(bad.root) && mem.arena_mark(arena)==mark)
- require(!json.parse(arena,"1e9999").ok && mem.arena_mark(arena)==mark)
+ require(bad.failure.kind != parse.Kind.Ok && json.is_missing(bad.root) && mem.arena_mark(arena)==mark)
+ require(json.parse(arena,"1e9999").failure.kind != parse.Kind.Ok && mem.arena_mark(arena)==mark)
  _=io.println(io.stdout(),"JSON READ TARGET PASS")
 }
 '''
@@ -192,12 +192,12 @@ fn main() {
   'before:=mem.arena_mark(chain)',
   'before_blocks:=mem.arena_snapshot(chain).blocks',
   f'large:=json.parse(chain,{quote(large)})',
-  'require(large.ok && json.length(large.root)==1000 && large.root.bits==1001)',
+  'require(large.failure.kind == parse.Kind.Ok && json.length(large.root)==1000 && large.root.bits==1001)',
   'for i in 0..1000 { require(json.as_u64(json.at(large.root,i))==#cast(u64,i)) }',
   'mem.arena_rewind(chain,before)',
   'require(mem.arena_mark(chain)==before && mem.arena_snapshot(chain).blocks==before_blocks)',
   'owned:=json.parse(chain,"{\\"key\\":[\\"a\\\\u0000b\\",{\\"last\\":42}]}")',
-  'require(owned.ok && json.as_u64(json.get(json.at(json.get(owned.root,"key"),1),"last"))==42)',
+  'require(owned.failure.kind == parse.Kind.Ok && json.as_u64(json.get(json.at(json.get(owned.root,"key"),1),"last"))==42)',
   'require(mem.equal(json.as_text(json.at(json.get(owned.root,"key"),0)),"a\\x00b"))',
   'mem.arena_rewind(chain,before)',
   'failed:=json.parse(chain,"[1,]")',

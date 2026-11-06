@@ -1,10 +1,10 @@
-use "std/io" errors
+use "std/parse" parse
 use "std/mem" memory
 use "std/strings" text
 use "std/io" stream
 use "std/unicode/utf8" utf8
 
-struct Cursor { source: []const u8, at: usize, error: ErrorKind }
+struct Cursor { source: []const u8, at: usize, error: parse.Kind }
 
 // Kind zero is a missing value: the nil_value stub that lookups return on a
 // miss. It is not a JSON null.
@@ -21,7 +21,6 @@ pub enum TokenKind {
   ArrayBegin, ArrayEnd, ObjectBegin, ObjectEnd, Colon, Comma,
 }
 
-pub enum ErrorKind { None, Syntax, TrailingData }
 
 pub struct Tokenizer { source: []const u8, offset: usize }
 pub struct Token { kind: TokenKind, text: []const u8, offset: usize }
@@ -44,7 +43,7 @@ pub struct Value {
 pub const nil_value: Value = Value{}
 
 // root is the stub when parsing fails, so lookups work before ok is checked.
-pub struct ParseResult { root: *const Value, offset: usize, kind: errors.Kind, error: isize, detail: ErrorKind, ok: bool }
+pub struct ParseResult { root: *const Value, offset: usize, failure: parse.Failure }
 
 pub fn tokenizer(source: []const u8) Tokenizer {
   return Tokenizer{ source: source, offset: 0 }
@@ -424,8 +423,8 @@ fn write_string_into(destination: []u8, source: []const u8) []u8 {
 }
 
 fn failed_string(cursor: *Cursor) []const u8 {
-  if cursor.error == ErrorKind.None {
-    cursor.error = ErrorKind.Syntax
+  if cursor.error == parse.Kind.Ok {
+    cursor.error = parse.Kind.Syntax
   }
   return cursor.source[..0]
 }
@@ -627,7 +626,7 @@ fn parse_node(arena: *memory.Arena, cursor: *Cursor, depth: usize) *Value {
   }
   if byte == '"' {
     text := decoded_string(arena, cursor)
-    if cursor.error != ErrorKind.None {
+    if cursor.error != parse.Kind.Ok {
       return nil
     }
     string_node := node(arena, KindString)
@@ -657,7 +656,7 @@ fn parse_node(arena: *memory.Arena, cursor: *Cursor, depth: usize) *Value {
       key: []const u8 = cursor.source[..0]
       if object {
         key = decoded_string(arena, cursor)
-        if cursor.error != ErrorKind.None {
+        if cursor.error != parse.Kind.Ok {
           return nil
         }
         skip(cursor)
@@ -706,16 +705,13 @@ pub fn parse(arena: *memory.Arena, source: []const u8) ParseResult {
   skip(&cursor)
   if root == nil || cursor.at != #len(source) {
     memory.arena_rewind(arena, mark)
-    error := cursor.error
-    if error == ErrorKind.None {
-      error = ErrorKind.Syntax
-    }
+    message: []const u8 = ""
     if root != nil {
-      error = ErrorKind.TrailingData
+      message = "trailing data"
     }
-    return ParseResult{ root: &nil_value, offset: cursor.at, kind: errors.Kind.InvalidInput, error: 0, detail: error, ok: false }
+    return ParseResult{ root: &nil_value, offset: cursor.at, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: cursor.at, message: message } }
   }
-  return ParseResult{ root: root, offset: 0, kind: errors.Kind.Ok, error: 0, detail: ErrorKind.None, ok: true }
+  return ParseResult{ root: root }
 }
 
 pub fn make_null(arena: *memory.Arena) *Value {

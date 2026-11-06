@@ -1,15 +1,14 @@
-use "std/io" errors
+use "std/parse" parse
 use "std/bytes" byte_ops
 use "std/mem"
 // Allocation-free INI scanner. Names and values borrow the input.
 // The first malformed line stops scanning and records its error and line.
-// Later calls do nothing. Check state.error after the loop.
+// Later calls do nothing. Check state.failure after the loop.
 pub enum Kind { Section, Pair }
-pub enum ErrorKind { None, Syntax, Overflow }
 pub struct Entry { section: []const u8, key: []const u8, value: []const u8, kind: Kind, line: usize }
 // line counts the lines read so far, so a zero Scanner{ source: text } is ready to use.
-pub struct Scanner { source: []const u8, offset: usize, line: usize, section: []const u8, error: ErrorKind, error_line: usize, error_offset: usize, errors: usize }
-pub struct Result { value: Entry, ok: bool }
+pub struct Scanner { source: []const u8, offset: usize, line: usize, section: []const u8, failure: parse.Failure, error_line: usize, errors: usize }
+pub struct Result { value: Entry, found: bool, failure: parse.Failure }
 
 pub fn scanner(source: []const u8) Scanner {
   return Scanner{ source: source }
@@ -30,17 +29,16 @@ fn trim(source: []const u8) []const u8 {
 }
 
 fn record(state: *Scanner, line: usize, offset: usize) {
-  if state.error == ErrorKind.None {
-    state.error = ErrorKind.Syntax
+  if state.failure.kind == parse.Kind.Ok {
+    state.failure = parse.Failure{ kind: parse.Kind.Syntax, offset: offset }
     state.error_line = line
-    state.error_offset = offset
   }
   state.errors += 1
 }
 
 pub fn next(state: *Scanner) Result {
-  if state.error != ErrorKind.None {
-    return Result{}
+  if state.failure.kind != parse.Kind.Ok {
+    return Result{ failure: state.failure }
   }
   for state.offset < #len(state.source) {
     start := state.offset
@@ -65,10 +63,10 @@ pub fn next(state: *Scanner) Result {
       }
       if #len(section_name) == 0 {
         record(state, line_number, start)
-        return Result{}
+        return Result{ failure: state.failure }
       } else {
         state.section = section_name
-        return Result{ value: Entry{ section: section_name, kind: Kind.Section, line: line_number }, ok: true }
+        return Result{ value: Entry{ section: section_name, kind: Kind.Section, line: line_number }, found: true }
       }
     } else {
       separator := #len(line)
@@ -87,10 +85,10 @@ pub fn next(state: *Scanner) Result {
       }
       if #len(key_name) == 0 {
         record(state, line_number, start)
-        return Result{}
+        return Result{ failure: state.failure }
       } else {
         pair_value := trim(line[separator + 1..])
-        return Result{ value: Entry{ section: state.section, key: key_name, value: pair_value, kind: Kind.Pair, line: line_number }, ok: true }
+        return Result{ value: Entry{ section: state.section, key: key_name, value: pair_value, kind: Kind.Pair, line: line_number }, found: true }
       }
     }
   }
@@ -101,7 +99,7 @@ pub fn find(source: []const u8, section: []const u8, key: []const u8) []const u8
   state := scanner(source)
   for {
     item := next(&state)
-    if !item.ok {
+    if !item.found {
       return source[..0]
     }
     if item.value.kind == Kind.Pair && byte_ops.equal(item.value.section, section) && byte_ops.equal(item.value.key, key) {
@@ -116,12 +114,9 @@ pub fn find(source: []const u8, section: []const u8, key: []const u8) []const u8
 // Any malformed line fails the whole parse; error_line is the first one.
 pub struct ParseResult {
   value: []Entry,
-  kind: errors.Kind,
-  error: isize,
-  detail: ErrorKind,
   offset: usize,
   line: usize,
-  ok: bool,
+  failure: parse.Failure,
 }
 
 // Ownership: table borrows the arena; entry text separately borrows source.
@@ -132,22 +127,22 @@ pub struct ParseResult {
 pub fn parse(arena: *mem.Arena, source: []const u8) ParseResult {
   state := scanner(source)
   count: usize = 0
-  for next(&state).ok {
+  for next(&state).found {
     if count == #cast(usize, -1) {
-      return ParseResult{ kind: errors.Kind.Overflow, detail: ErrorKind.Overflow, offset: state.offset }
+      return ParseResult{ offset: state.offset, failure: parse.Failure{ kind: parse.Kind.Overflow, offset: state.offset } }
     }
     count += 1
   }
-  if state.error != ErrorKind.None {
-    return ParseResult{ kind: errors.Kind.InvalidInput, detail: state.error, offset: state.error_offset, line: state.error_line }
+  if state.failure.kind != parse.Kind.Ok {
+    return ParseResult{ offset: state.failure.offset, line: state.error_line, failure: state.failure }
   }
   if count == 0 {
-    return ParseResult{ ok: true }
+    return ParseResult{}
   }
   entries := mem.push_array(Entry, arena, count)
   state = scanner(source)
   for i in 0..count {
     entries[i] = next(&state).value
   }
-  return ParseResult{ value: entries, ok: true }
+  return ParseResult{ value: entries }
 }

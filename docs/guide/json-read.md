@@ -8,12 +8,13 @@ for the existing mutable tree, constructors, or writer.
 ```dyn
 use "std/encoding/json/read" json
 use "std/mem"
+use "std/parse" parse
 
 fn main() {
   arena := mem.arena_create(mem.MiB)
   defer mem.arena_release(arena)
   parsed := json.parse(arena, "{\"count\":12}")
-  if !parsed.ok {
+  if parsed.failure.kind != parse.Kind.Ok {
     return
   }
   count := json.as_u64(json.get(parsed.root, "count"))
@@ -21,8 +22,8 @@ fn main() {
 }
 ```
 
-`parse` returns `{root, ok, kind, error, offset, detail}`. Library errors have
-native `error` zero; check `ok` and portable `kind`. A failed parse returns
+`parse` returns `{root, offset, failure}`, where `failure` is a `parse.Failure`.
+A zero `failure.kind` is `parse.Kind.Ok`. A failed parse returns
 `&json.nil_value` and rewinds its allocations. Arena exhaustion panics.
 `offset` is the parser cursor; errors within strings may identify the beginning
 of the string's contents rather than the exact offending escape byte.
@@ -54,7 +55,7 @@ through `next`. Copying an iterator copies its position and borrowed document.
 Positive integers through `u64::MAX` and negative integers through `i64::MIN`
 are retained exactly. Other integers and decimal/exponent forms become binary64,
 with its rounding and signed-zero behavior. Nonfinite real overflow is rejected
-with portable `Overflow` and `NumberOverflow` detail. Original number spelling
+with `parse.Kind.Overflow`. Original number spelling
 and arbitrary-precision integers are not retained. These rules differ from the
 mutable parser, which preserves number text. Strict UTF-8 and paired Unicode
 surrogates are required; maximum container nesting is 256.

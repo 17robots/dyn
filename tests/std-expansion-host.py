@@ -58,6 +58,7 @@ use "std/image/gif" gif
 use "std/image/jpeg" jpeg
 use "std/encoding/toml" toml
 use "std/io" io
+use "std/parse" parse
 use "std/mem" mem
 use "std/bytes" bytes
 fn check(ok: bool) { if !ok { #panic("host formats") } }
@@ -83,14 +84,14 @@ fn main() {
  check(!gif.decode(arena,"GIF89a").ok && mem.arena_mark(arena)==mark)
  check(!jpeg.decode(arena,"\xff\xd8").ok && mem.arena_mark(arena)==mark)
  document := toml.parse(arena,"[owner]\nname='Dyn'\nports=[8000,8001]\n[[products]]\nx=1979-05-27T07:32:00Z\n")
- check(document.ok)
+ check(document.failure.kind == parse.Kind.Ok)
  owner := toml.member(document.root,"owner")
  check(bytes.equal(toml.member(owner,"name").text,"Dyn"))
  check(bytes.equal(toml.index(toml.member(owner,"ports"),1).text,"8001"))
  encoded := toml.encode(arena,document.root)
- check(encoded.ok && toml.parse(arena,encoded.value).ok)
+ check(encoded.failure.kind == parse.Kind.Ok && toml.parse(arena,encoded.value).failure.kind == parse.Kind.Ok)
  before := mem.arena_mark(arena)
- check(!toml.parse(arena,"a=1\na=2").ok && mem.arena_mark(arena)==before)
+ check(toml.parse(arena,"a=1\na=2").failure.kind != parse.Kind.Ok && mem.arena_mark(arena)==before)
 }
 '''.replace('GIF_BYTES', dyn_bytes(gif)).replace('JPEG_BYTES', dyn_bytes(jpeg))
 

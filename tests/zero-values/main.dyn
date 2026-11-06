@@ -46,7 +46,7 @@ fn zero_scanners() {
   empty := csv.StreamScanner{ input: io.Reader{ read: read_nothing } }
   storage: [4]u8 = []
   field := csv.next_stream(&empty, storage[..])
-  if !field.ok || #len(field.text) != 0 || !field.end_input {
+  if !field.found || #len(field.text) != 0 || !field.end_input {
     #panic("zero CSV stream scanner")
   }
 }

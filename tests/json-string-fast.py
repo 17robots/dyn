@@ -37,7 +37,7 @@ deep = b'[' * 257 + b'"plain"' + b']' * 257
 checks.append(f'''  if true {{
     data: [{len(deep)}]u8 = {literal(deep)}
     result := json.parse(arena, data[..])
-    require(!result.ok && result.detail == json.ErrorKind.Syntax && mem.arena_mark(arena) == mem.arena_start(arena), "depth rollback")
+    require(result.failure.kind != parse.Kind.Ok && result.failure.kind == parse.Kind.Syntax && mem.arena_mark(arena) == mem.arena_start(arena), "depth rollback")
   }}''')
 for n, (raw, expected) in enumerate(valid):
     # Both object keys and values must survive mutation of all source bytes.
@@ -46,7 +46,7 @@ for n, (raw, expected) in enumerate(valid):
     data: [{len(doc)}]u8 = {literal(doc)}
     expected: [{len(expected)}]u8 = {literal(expected)}
     result := json.parse(arena, data[..])
-    require(result.ok, "valid {n}")
+    require(result.failure.kind == parse.Kind.Ok, "valid {n}")
     member := result.root.first
     for i in 0..#len(data) {{ data[i] = 255 }}
     require(mem.equal(member.key, expected[..]) && mem.equal(member.text, expected[..]), "owned key/value {n}")
@@ -57,10 +57,11 @@ for n, raw in enumerate(invalid):
     data: [{len(raw)}]u8 = {literal(raw)}
     mark := mem.arena_mark(arena)
     result := json.parse(arena, data[..])
-    require(!result.ok && result.offset == 1 && result.detail == json.ErrorKind.Syntax && json.is_missing(result.root), "invalid {n}")
+    require(result.failure.kind != parse.Kind.Ok && result.offset == 1 && result.failure.kind == parse.Kind.Syntax && json.is_missing(result.root), "invalid {n}")
     require(mem.arena_mark(arena) == mark, "rollback {n}")
   }}''')
-source = '''use "std/encoding/json" json
+source = '''use "std/parse" parse
+use "std/encoding/json" json
 use "std/io" io
 use "std/mem" mem
 fn require(ok: bool, message: []const u8) { if !ok { #panic(message) } }
@@ -69,7 +70,7 @@ fn main() {
   defer mem.arena_release(arena)
 ''' + '\n'.join(checks) + '''
   trailing := json.parse(arena, "\\\"abc\\\" x")
-  require(!trailing.ok && trailing.offset == 6 && trailing.detail == json.ErrorKind.TrailingData && mem.arena_mark(arena) == mem.arena_start(arena), "trailing rollback")
+  require(trailing.failure.kind != parse.Kind.Ok && trailing.offset == 6 && mem.equal(trailing.failure.message, "trailing data") && mem.arena_mark(arena) == mem.arena_start(arena), "trailing rollback")
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-json-string-') as directory:
