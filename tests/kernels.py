@@ -9,7 +9,7 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
-BUDGETS = {'nbody': 3.0, 'sum': 6.5, 'matmul': 1.5, 'structs': 5.6, 'pairs': 3.4}
+BUDGETS = {'nbody': 3.0, 'sum': 6.5, 'matmul': 1.5, 'structs': 2.8, 'pairs': 2.0}
 failed = []
 with tempfile.TemporaryDirectory(prefix='dyn-kernels-') as temporary:
     for name, budget in BUDGETS.items():

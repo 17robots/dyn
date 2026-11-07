@@ -3389,20 +3389,30 @@ static bool ssa_float_loads(Ssa *s, const uint32_t *order, uint32_t n) {
       if (load < 0 || s->values[load].op != SO_LOAD || s->values[load].cls != SC_INT) continue;
       unsigned bits = v->cls == SC_F32 ? 32 : 64;
       if (s->values[load].aux2 != SSA_MEM(bits, 0, 0)) continue;
-      /* kept - 1 is v; compacted slots below it are the live values. */
-      for (uint32_t back = kept - 1, steps = 0; back-- > 0 && steps < 64; ++steps) {
-        int32_t id = (int32_t)block->values.items[back];
-        const SsaValue *between = &s->values[id];
-        if (id == load) {
-          SsaValue copy = *between;
-          int cls = v->cls;
-          *v = copy;
-          v->cls = cls;
-          v->aux2 = SSA_MEM(bits, 0, 1);
-          changed = true;
-          break;
+      /* kept - 1 is v; compacted slots below it are the live values. Plain
+         fall-through blocks left by proven checks count as this block. */
+      const SsaBlock *at = block;
+      uint32_t back = kept - 1, steps = 0;
+      bool searching = true;
+      while (searching && steps < 64) {
+        while (back-- > 0 && searching && steps++ < 64) {
+          int32_t id = (int32_t)at->values.items[back];
+          const SsaValue *between = &s->values[id];
+          if (id == load) {
+            SsaValue copy = *between;
+            int cls = v->cls;
+            *v = copy;
+            v->cls = cls;
+            v->aux2 = SSA_MEM(bits, 0, 1);
+            changed = true;
+            searching = false;
+          } else if (between->effect && between->op != SO_LOAD && between->op != SO_CHECK && between->op != SO_CHECK_SHL)
+            searching = false;
         }
-        if (between->effect && between->op != SO_LOAD && between->op != SO_CHECK && between->op != SO_CHECK_SHL) break;
+        if (!searching || steps >= 64 || at->preds.count != 1) break;
+        at = &s->blocks[at->preds.items[0]];
+        if (at->kind != SB_PLAIN) break;
+        back = at->values.count;
       }
     }
     block->values.count = kept;
