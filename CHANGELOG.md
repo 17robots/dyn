@@ -16,6 +16,7 @@ servers so they pick up the new `dyn`.
 
 - Breaking: `io.Result` is now `io.Transfer`. `io.Result(T)` and `parse.Result(T)` are the
   generic `{value, failure}` results, and named result types are aliases of them.
+- `std/container/map`: `map.Map(K, V)`, a growing hash map for any key type.
 - `chunk.List(T)` replaces the two structs a chunk list needed.
 - Generic structs: `struct Box($T: type) { value: T }`, used as `Box(i32)`.
 - Debug builds report memory faults with a stack trace on macOS and Windows too.

@@ -7,7 +7,8 @@
 | Dense list, growing | `mem.append_grow` | Yes | Yes |
 | Long list with stable items | Chunk list | Never | One chunk at a time |
 | Links through your own nodes | Intrusive list or tree | Never | No |
-| Lookup by key | `std/container/hash` | Never | No, only the slots |
+| Lookup by key | `std/container/map` | Yes, when it grows | Yes |
+| Lookup through your own nodes | `std/container/hash` | Never | No, only the slots |
 | Reusable slots behind stale checks | Generation handles | Never | No |
 
 ## Byte/string builder
@@ -41,8 +42,9 @@ fn main() {
   only after all builder uses and borrowed views have ended.
 - Do not independently mutate copies of a builder sharing storage. No internal locking.
 
-Dyn has no container types. Collections are slices and plain structs that you
-declare, and std supplies generic functions that work on them. Each job has one
+Most collections are slices and plain structs that you declare, and std supplies
+generic functions that work on them. `chunk.List(T)` and `map.Map(K, V)` are the
+generic types. Each job has one
 shape:
 
 | Job | Shape |
@@ -51,7 +53,8 @@ shape:
 | Growing list | a slice that owns its arena, grown with `mem.append` |
 | Growing list on a shared arena | a chunk list (`std/container/chunk`) |
 | Trees, free lists, an item in several lists | intrusive links (`std/container/list`) |
-| Lookup by key | hash slots chained through `hash_next` (`std/container/hash`) |
+| Lookup by key | `map.text(V)`, `map.integers(V)` or `map.create` (`std/container/map`) |
+| Lookup through your own nodes | hash slots chained through `hash_next` (`std/container/hash`) |
 | References that survive deletion | generation handles (`std/container/slot_map`) |
 
 Lookups that can miss take a stub and return it instead of nil. A stub is a
@@ -160,6 +163,28 @@ fn reuse(first_free: **Node, root: *Node, arena: *mem.Arena) *Node {
 
 ## Hash tables
 
+`std/container/map` is the everyday map. It grows, takes any key type, and needs
+no node struct:
+
+```dyn
+use "std/container/map"
+use "std/mem"
+
+fn main() {
+  arena := mem.arena_create(0)
+  ages := map.text(i32)
+  _ = map.put(arena, &ages, "ada", 36)
+  age := map.find(&ages, "ada")
+  if age != nil {
+    age.* += 1
+  }
+}
+```
+
+`find` returns a pointer or nil, and that pointer goes stale at the next `put`. Text
+keys are borrowed. For keys an attacker chooses, pass a seeded hash to `map.create`.
+
+The intrusive table below allocates nothing after its slots and never moves nodes.
 A table is a slot slice, `[]*T`, and nodes chain through `key`, `hash` and
 `hash_next`. Nothing is allocated after the slots:
 

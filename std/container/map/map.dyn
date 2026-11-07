@@ -1,0 +1,162 @@
+// Growing hash maps on an arena, for keys of any type. Make one with text or
+// integers, or with create and your own hash and equality functions:
+//
+//   ages := map.text(i32)
+//   map.put(arena, &ages, "ada", 36)
+//   age := map.find(&ages, "ada")
+//
+// find returns a pointer to the value, or nil when the key is absent. The
+// pointer goes stale at the next put. Text keys are borrowed, not copied, so
+// they must outlive the map. Growth leaves the old slots in the arena.
+//
+// The built-in hashes use a fixed seed. For keys an attacker chooses, use create
+// with a hash seeded from std/crypto/random. Slots are in no useful order; walk
+// them with `for slot in m.slots` and skip those without used set.
+
+use "std/container/hash" hash
+use "std/mem" mem
+
+pub struct Slot($K: type, $V: type) { key: K, value: V, code: u64, used: bool }
+pub struct Map($K: type, $V: type) {
+  slots: []Slot(K, V),
+  count: usize,
+  hash_key: fn(K) u64,
+  equal_key: fn(K, K) bool,
+}
+
+// An empty map. Nothing is allocated until the first put.
+pub fn create($K: type, $V: type, hash_key: fn(K) u64, equal_key: fn(K, K) bool) Map(K, V) {
+  result: Map(K, V)
+  result.hash_key = hash_key
+  result.equal_key = equal_key
+  return result
+}
+
+fn text_hash(key: []const u8) u64 {
+  return hash.hash_bytes(0x243f6a8885a308d3, key)
+}
+
+fn text_equal(left: []const u8, right: []const u8) bool {
+  if #len(left) != #len(right) {
+    return false
+  }
+  for i in 0..#len(left) {
+    if left[i] != right[i] {
+      return false
+    }
+  }
+  return true
+}
+
+// Finalizer from MurmurHash3: sequential integers must not cluster.
+fn integer_hash(key: u64) u64 {
+  mixed := key ^ (key >> 33)
+  mixed = mixed * 0xff51afd7ed558ccd
+  mixed = mixed ^ (mixed >> 33)
+  mixed = mixed * 0xc4ceb9fe1a85ec53
+  return mixed ^ (mixed >> 33)
+}
+
+fn integer_equal(left: u64, right: u64) bool {
+  return left == right
+}
+
+// A map from text.
+pub fn text($V: type) Map([]const u8, V) {
+  return create([]const u8, V, text_hash, text_equal)
+}
+
+// A map from u64. Cast other integer keys to u64.
+pub fn integers($V: type) Map(u64, V) {
+  return create(u64, V, integer_hash, integer_equal)
+}
+
+// The slot holding key, or the empty slot where it belongs.
+fn locate(m: *const Map($K, $V), key: K, code: u64) usize {
+  mask := #len(m.slots) - 1
+  at := #cast(usize, code) & mask
+  for m.slots[at].used {
+    if m.slots[at].code == code && m.equal_key(m.slots[at].key, key) {
+      return at
+    }
+    at = (at + 1) & mask
+  }
+  return at
+}
+
+fn grow(arena: *mem.Arena, m: *Map($K, $V)) {
+  capacity := #len(m.slots) * 2
+  if capacity == 0 {
+    capacity = 8
+  }
+  old := m.slots
+  m.slots = mem.push_array(Slot(K, V), arena, capacity)
+  mask := capacity - 1
+  for slot in old {
+    if slot.used {
+      at := #cast(usize, slot.code) & mask
+      for m.slots[at].used {
+        at = (at + 1) & mask
+      }
+      m.slots[at] = slot
+    }
+  }
+}
+
+// Sets key to value, adding it when absent. Returns the value's address.
+pub fn put(arena: *mem.Arena, m: *Map($K, $V), key: K, value: V) *V {
+  if m.hash_key == nil {
+    #panic("make a map with map.text, map.integers or map.create")
+  }
+  if (m.count + 1) * 4 > #len(m.slots) * 3 {
+    grow(arena, m)
+  }
+  code := m.hash_key(key)
+  at := locate(m, key, code)
+  if !m.slots[at].used {
+    m.slots[at].used = true
+    m.slots[at].key = key
+    m.slots[at].code = code
+    m.count += 1
+  }
+  m.slots[at].value = value
+  return &m.slots[at].value
+}
+
+// The value for key, or nil when key is absent.
+pub fn find(m: *const Map($K, $V), key: K) *V {
+  if m.count == 0 {
+    return nil
+  }
+  at := locate(m, key, m.hash_key(key))
+  if !m.slots[at].used {
+    return nil
+  }
+  return #cast(*V, &m.slots[at].value)
+}
+
+// Removes key. Returns false when it was absent. Later entries of the probe run
+// shift back, so no tombstones build up.
+pub fn remove(m: *Map($K, $V), key: K) bool {
+  if m.count == 0 {
+    return false
+  }
+  at := locate(m, key, m.hash_key(key))
+  if !m.slots[at].used {
+    return false
+  }
+  mask := #len(m.slots) - 1
+  next := (at + 1) & mask
+  for m.slots[next].used {
+    home := #cast(usize, m.slots[next].code) & mask
+    if ((next - home) & mask) >= ((next - at) & mask) {
+      m.slots[at] = m.slots[next]
+      at = next
+    }
+    next = (next + 1) & mask
+  }
+  empty: Slot(K, V)
+  m.slots[at] = empty
+  m.count -= 1
+  return true
+}
