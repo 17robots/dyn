@@ -29,13 +29,22 @@ static bool compact_add_enum_names(const DynSource *s, DynAstProgram *a,
       compact_report(d, s, errors, "out of memory");
       return false;
     }
+    uint32_t template_parameters = 0;
+    for (CompactNode c = compact_next(name); !compact_null(c); c = compact_next(c))
+      if (compact_kind(c) == EXP_TYPE_PARAMETER) ++template_parameters;
+    if (template_parameters > DYN_MAX_TYPE_PARAMS) {
+      compact_report(d, s, errors, "too many type parameters");
+      continue;
+    }
     a->enums[a->enum_count++] =
         (DynAstEnum){.span = compact_span(d),
                      .name = ns,
                      .tag_type = DYN_TYPE_U32,
                      .alignment = 1,
                      .is_public = is_public,
-                     .module_owner = declaration_owner(ns, s)};
+                     .module_owner = declaration_owner(ns, s),
+                     .is_template = template_parameters != 0,
+                     .type_param_count = template_parameters};
   }
   return true;
 }
@@ -197,9 +206,12 @@ static bool compact_add_enum_variants(const DynSource *s, DynAstProgram *a,
     CompactNode d = compact_first(compact_declaration(a, i));
     if ((compact_kind(d) != SRC_ENUM))
       continue;
-    DynAstEnum *en = &a->enums[ei++];
+    uint32_t enum_id = ei++;
+    DynAstEnum *en = &a->enums[enum_id];
     en->variant_start = (uint32_t)a->variant_count;
     bool saw_name = false;
+    a->scope_count = 0;
+    a->declaring_generic = en->is_template;
     for (CompactNode c = compact_child(d, 0); !compact_null(c); c = compact_next(c)) {
       uint16_t k = compact_kind(c);
       if (!saw_name && !(k != EXP_PRIMITIVE)) {
@@ -208,6 +220,13 @@ static bool compact_add_enum_variants(const DynSource *s, DynAstProgram *a,
       }
       if (!saw_name && !(k != EXP_NAME)) {
         saw_name = true;
+        continue;
+      }
+      if (k == EXP_TYPE_PARAMETER) {
+        DynSpan parameter = compact_span(c);
+        ++parameter.start_byte;
+        if (scope_type(a, parameter, s, true) == DYN_TYPE_ERROR)
+          compact_report(c, s, errors, "duplicate or too many type parameters");
         continue;
       }
       if ((k != SRC_ENUM_MEMBER))
@@ -230,6 +249,7 @@ static bool compact_add_enum_variants(const DynSource *s, DynAstProgram *a,
           continue;
         }
         payload = compact_type(compact_child(part, 0), s, a);
+        en = &a->enums[enum_id]; /* an instance may have moved the table */
         /* Zeroed storage holds the first variant, so it must be complete. */
         if (!en->variant_count)
           compact_report(part, s, errors, "the first enum variant has no payload, so zeroed storage is valid");
@@ -243,6 +263,8 @@ static bool compact_add_enum_variants(const DynSource *s, DynAstProgram *a,
       if (payload != DYN_TYPE_VOID)
         en->has_payload = true;
     }
+    a->scope_count = 0;
+    a->declaring_generic = false;
     if (!en->variant_count)
       compact_report(d, s, errors, "enum requires at least one variant");
     unsigned width =
@@ -919,8 +941,8 @@ static void compact_create_instances(CompactNode n, const DynSource *s, DynAstPr
   if (kind == EXP_GENERIC_TYPE) (void)compact_type(n, s, a);
   else if (kind == EXP_CALL) {
     CompactNode callee = compact_first(n);
-    uint32_t id = compact_null(callee) ? UINT32_MAX : find_struct(a, compact_span(callee), s);
-    if (id != UINT32_MAX && a->structs[id].is_template) (void)compact_instance(callee, compact_next(callee), s, a);
+    if (!compact_null(callee) && compact_template(a, compact_span(callee), s, NULL, NULL))
+      (void)compact_instance(callee, compact_next(callee), s, a);
   }
   for (CompactNode c = compact_first(n); !compact_null(c); c = compact_next(c))
     compact_create_instances(c, s, a, depth + 1);

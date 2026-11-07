@@ -212,6 +212,12 @@ it and needs a mutable subject. Replacing the enum while an alias is live leaves
 old variant's storage, the same class of error as a dangling pointer. Enums with payloads have
 no `#cast` and no `==`; they are laid out as the tag followed by the largest payload.
 
+An enum can take type parameters: `enum Slot($T: type) { Empty, Full: T }`. Write the arguments
+everywhere the enum is named: `Slot(i32).Full(7)` builds one, and a `case` arm reads
+`Slot(i32).Full value`. Inside a generic function, use `Slot(T)`. `type IntSlot = Slot(i32)` gives
+a shorter name, and `IntSlot.Full(7)` works. A generic function can infer `T` from a parameter such
+as `slot: Slot($T)`.
+
 Bit masks use distinct unsigned integer types, not special flag-enum syntax. Values explicitly
 cast into the mask type; ordinary integer `|`, `&`, `^`, and `~` then preserve its nominal type.
 Enums remain single-choice values.

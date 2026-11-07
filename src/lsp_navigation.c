@@ -1758,7 +1758,7 @@ bool lsp_type_definition_span(LspSemantic *semantic, uint32_t offset,
   if (dyn_type_is_enum(type)) {
     uint32_t i = type - DYN_TYPE_ENUM_BASE;
     if (i < a->enum_count) {
-      *definition = a->enums[i].name;
+      *definition = a->enums[a->enums[i].template_of ? a->enums[i].template_of - 1 : i].name;
       return true;
     }
   }

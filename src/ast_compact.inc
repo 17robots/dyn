@@ -153,19 +153,32 @@ static bool compact_extent(CompactNode n, const DynSource *s, DynAstProgram *a, 
   default: return false;
   }
 }
+/* The generic struct or enum with this name. */
+static bool compact_template(DynAstProgram *a, DynSpan name, const DynSource *s,
+                             uint32_t *id, bool *is_enum) {
+  uint32_t found = find_struct(a, name, s), first_enum = DYN_TYPE_ENUM_BASE - DYN_TYPE_STRUCT_BASE;
+  if (found == UINT32_MAX) return false;
+  bool enumeration = found >= first_enum;
+  if (enumeration) found -= first_enum;
+  if (id) *id = found;
+  if (is_enum) *is_enum = enumeration;
+  return enumeration ? a->enums[found].is_template : a->structs[found].is_template;
+}
 static DynType compact_instance(CompactNode path, CompactNode argument, const DynSource *s, DynAstProgram *a) {
-  uint32_t id = find_struct(a, compact_span(path), s);
-  if (id == UINT32_MAX || !a->structs[id].is_template) return DYN_TYPE_ERROR;
+  uint32_t id;
+  bool enumeration;
+  if (!compact_template(a, compact_span(path), s, &id, &enumeration)) return DYN_TYPE_ERROR;
+  uint32_t expected = enumeration ? a->enums[id].type_param_count : a->structs[id].type_param_count;
   DynType args[DYN_MAX_TYPE_PARAMS] = {0};
   uint32_t count = 0;
   for (; !compact_null(argument); argument = compact_next(argument)) {
-    if (count == a->structs[id].type_param_count) return DYN_TYPE_ERROR;
+    if (count == expected) return DYN_TYPE_ERROR;
     DynType type = compact_type(argument, s, a);
     if (type == DYN_TYPE_ERROR) return type;
     args[count++] = type;
   }
-  if (count != a->structs[id].type_param_count) return DYN_TYPE_ERROR;
-  return dyn_ast_struct_instance(a, id, args);
+  if (count != expected) return DYN_TYPE_ERROR;
+  return enumeration ? dyn_ast_enum_instance(a, id, args) : dyn_ast_struct_instance(a, id, args);
 }
 static DynType compact_type(CompactNode n, const DynSource *s, DynAstProgram *a) {
   if (!dyn_work_step(&s->context, 1)) return DYN_TYPE_ERROR;
@@ -209,11 +222,32 @@ static DynType compact_type(CompactNode n, const DynSource *s, DynAstProgram *a)
     CompactNode path = compact_first(n);
     return compact_instance(path, compact_next(path), s, a);
   }
+  /* Box(Box(i32)) as a call argument parses its inner type as a call. */
+  if (kind == EXP_CALL && compact_template(a, compact_span(compact_first(n)), s, NULL, NULL))
+    return compact_instance(compact_first(n), compact_next(compact_first(n)), s, a);
   DynType named = parse_type_name(compact_span(n), s, a);
   /* A template names no type until it has arguments. */
   if (dyn_type_is_struct(named) && a->structs[named - DYN_TYPE_STRUCT_BASE].is_template)
     return DYN_TYPE_ERROR;
+  if (dyn_type_is_enum(named) && a->enums[named - DYN_TYPE_ENUM_BASE].is_template)
+    return DYN_TYPE_ERROR;
   return named;
+}
+/* Slot(i32) before a variant name is the enum instance, not a call. */
+static DynExprId compact_enum_owner(CompactNode n, const DynSource *s, DynAstProgram *a, unsigned *errors) {
+  CompactNode call = compact_unwrap(n);
+  bool enumeration = false;
+  if (compact_kind(call) == EXP_CALL && compact_kind(compact_first(call)) != EXP_FIELD &&
+      compact_template(a, compact_span(compact_first(call)), s, NULL, &enumeration) && enumeration) {
+    DynType type = compact_instance(compact_first(call), compact_next(compact_first(call)), s, a);
+    if (type != DYN_TYPE_ERROR) {
+      if (!reserve_expr(a)) { compact_diagnostic(n, s, errors, "out of memory"); return DYN_NO_EXPR; }
+      a->expressions[a->expression_count] = (DynAstExpr){.kind = DYN_EXPR_TYPE, .type = type,
+        .span = compact_span(n), .left = DYN_NO_EXPR, .right = DYN_NO_EXPR};
+      return (DynExprId)a->expression_count++;
+    }
+  }
+  return compact_expr(n, s, a, errors);
 }
 static DynExprId compact_argument(CompactNode n, const DynSource *s, DynAstProgram *a, unsigned *errors) {
   bool type = compact_kind(n) == EXP_TYPE_ARGUMENT;
@@ -224,10 +258,7 @@ static DynExprId compact_argument(CompactNode n, const DynSource *s, DynAstProgr
   /* Box(i32) in an argument parses as a call; a template callee makes it a type. */
   CompactNode unwrapped = compact_unwrap(n);
   bool instance = !type && compact_kind(unwrapped) == EXP_CALL;
-  if (instance) {
-    uint32_t template_id = find_struct(a, compact_span(compact_first(unwrapped)), s);
-    instance = template_id != UINT32_MAX && a->structs[template_id].is_template;
-  }
+  if (instance) instance = compact_template(a, compact_span(compact_first(unwrapped)), s, NULL, NULL);
   if (!type && !instance) return compact_expr(n, s, a, errors);
   DynType parsed = instance
       ? compact_instance(compact_first(unwrapped), compact_next(compact_first(unwrapped)), s, a)
@@ -307,7 +338,7 @@ static DynExprId compact_expr(CompactNode node, const DynSource *s, DynAstProgra
   } else if (!(k != EXP_FIELD)) {
     e.kind = DYN_EXPR_FIELD;
     e.type = DYN_TYPE_INFER;
-    e.left = compact_expr(compact_child(node, 0), s, a, errors);
+    e.left = compact_enum_owner(compact_child(node, 0), s, a, errors);
     e.span = compact_span(compact_child(node, 1));
   } else if (!(k != EXP_CALL)) {
     CompactNode callee = compact_unwrap(compact_child(node, 0));
@@ -315,7 +346,7 @@ static DynExprId compact_expr(CompactNode node, const DynSource *s, DynAstProgra
       e.kind = DYN_EXPR_ENUM;
       e.type = DYN_TYPE_INFER;
       e.boolean = true;
-      e.left = compact_expr(compact_child(callee, 0), s, a, errors);
+      e.left = compact_enum_owner(compact_child(callee, 0), s, a, errors);
       e.right = compact_expr(callee, s, a, errors);
       e.span = compact_span(compact_child(callee, 1));
     } else if (!(compact_kind(callee) != EXP_NAME)) {

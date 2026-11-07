@@ -18,6 +18,8 @@ servers so they pick up the new `dyn`.
   generic `{value, failure}` results, and named result types are aliases of them.
 - `chunk.List(T)` replaces the two structs a chunk list needed.
 - Generic structs: `struct Box($T: type) { value: T }`, used as `Box(i32)`.
+- Generic enums: `enum Slot($T: type) { Empty, Full: T }`, used as `Slot(i32).Full(7)`.
+- An enum payload may be another enum.
 - Enum payloads are back: `enum Node { Null, Number: f64 }`, built with
   `Node.Number(2.5)` and read only through `case`. The first variant has no payload,
   and explicit enum values stay removed.

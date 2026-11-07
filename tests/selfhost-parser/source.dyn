@@ -659,6 +659,24 @@ fn src_function(p: *Parser, external: bool) u32 {
   return add_node(p, kind, start, end, first)
 }
 
+fn src_type_parameters(p: *Parser, first: *u32, last: *u32) {
+  if !take(p, "(") {
+    return
+  }
+  for !token_is(p, ")") && !p.tree.failed {
+    if !at(p, p.token.start, "$") {
+      fail(p, p.token.start, "expected a `$T: type` parameter")
+    }
+    chain(p, first, last, type_body(p))
+    expect(p, ":")
+    expect(p, "type")
+    if !take(p, ",") {
+      break
+    }
+  }
+  expect(p, ")")
+}
+
 fn src_struct(p: *Parser) u32 {
   start := p.token.start
   first := None
@@ -669,20 +687,7 @@ fn src_struct(p: *Parser) u32 {
     expect(p, "struct")
   }
   chain(p, &first, &last, parse_name(p))
-  if take(p, "(") {
-    for !token_is(p, ")") && !p.tree.failed {
-      if !at(p, p.token.start, "$") {
-        fail(p, p.token.start, "expected a `$T: type` parameter")
-      }
-      chain(p, &first, &last, type_body(p))
-      expect(p, ":")
-      expect(p, "type")
-      if !take(p, ",") {
-        break
-      }
-    }
-    expect(p, ")")
-  }
+  src_type_parameters(p, &first, &last)
   expect(p, "{")
   for !token_is(p, "}") && !p.tree.failed {
     begin := p.token.start
@@ -726,6 +731,7 @@ fn src_enum(p: *Parser) u32 {
     expect(p, ")")
   }
   chain(p, &first, &last, parse_name(p))
+  src_type_parameters(p, &first, &last)
   expect(p, "{")
   for !token_is(p, "}") && !p.tree.failed {
     begin := p.token.start

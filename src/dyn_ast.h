@@ -173,6 +173,10 @@ typedef struct {
   bool has_payload;
   bool is_public;
   uint64_t module_owner;
+  /* Generic enums follow generic structs: see DynAstStruct. */
+  bool is_template, open_instance;
+  uint32_t template_of, type_param_count;
+  DynType type_args[DYN_MAX_TYPE_PARAMS];
 } DynAstEnum;
 typedef struct {
   DynSpan name;
@@ -373,7 +377,8 @@ typedef struct {
   bool declaring_generic;
   /* Until layouts run, instances only queue; later each is finished at once. */
   bool structs_open, filling_instances;
-  uint32_t instances_filled;
+  uint32_t instances_filled, enums_filled;
+  DynType bind_conflict; /* the actual type a failed generic binding met */
   const DynSource *instance_source;
   unsigned instance_errors;
   /* Top-level declarations of every root, valid only while lowering. */
@@ -384,6 +389,7 @@ bool dyn_ast_lower_compact(const DynSource *, DynAstProgram *, unsigned *, const
 void dyn_ast_program_free(DynAstProgram *ast);
 /* The struct type for a template and arguments, created on first use. */
 DynType dyn_ast_struct_instance(DynAstProgram *, uint32_t template_id, const DynType *args);
+DynType dyn_ast_enum_instance(DynAstProgram *, uint32_t template_id, const DynType *args);
 /* Whether a type still names a type parameter. */
 bool dyn_ast_type_is_open(DynAstProgram *, DynType);
 /* Add an instance of a generic with concrete type arguments. The body is lowered later by dyn_ast_lower_instance. Returns the function id. */

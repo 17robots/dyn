@@ -868,12 +868,34 @@ bool dyn_ast_type_is_open(DynAstProgram *a, DynType t) {
   if (dyn_type_is_pointer(t)) return dyn_ast_type_is_open(a, a->pointers[t - DYN_TYPE_POINTER_BASE].pointee);
   if (dyn_type_is_slice(t)) return dyn_ast_type_is_open(a, a->slices[t - DYN_TYPE_SLICE_BASE].element);
   if (dyn_type_is_array(t)) return dyn_ast_type_is_open(a, a->arrays[t - DYN_TYPE_ARRAY_BASE].element);
+  if (dyn_type_is_enum(t)) return a->enums[t - DYN_TYPE_ENUM_BASE].open_instance;
   return dyn_type_is_struct(t) && a->structs[t - DYN_TYPE_STRUCT_BASE].open_instance;
 }
 static bool layout_struct(uint32_t, DynAstProgram *, unsigned char *, const DynSource *, unsigned *);
+static bool layout_enum(uint32_t, DynAstProgram *, unsigned char *, const DynSource *, unsigned *);
 static void fill_instances(DynAstProgram *a) {
   if (a->filling_instances) return;
   a->filling_instances = true;
+  /* Filling one instance may create more of either kind. */
+  while (a->instances_filled < a->struct_count || a->enums_filled < a->enum_count) {
+  for (uint32_t i = a->enums_filled; i < a->enum_count; ++i) {
+    DynAstEnum en = a->enums[i];
+    if (!en.template_of || en.open_instance) continue;
+    DynAstEnum model = a->enums[en.template_of - 1];
+    uint32_t start = (uint32_t)a->variant_count;
+    for (uint32_t v = 0; v < model.variant_count && !a->allocation_failed; ++v) {
+      if (!reserve_variant(a)) { a->allocation_failed = true; break; }
+      DynAstVariant variant = a->variants[model.variant_start + v];
+      if (variant.payload_type != DYN_TYPE_VOID)
+        variant.payload_type = dyn_ast_substitute(a, variant.payload_type, en.type_args);
+      a->variants[a->variant_count++] = variant;
+    }
+    a->enums[i].variant_start = start;
+    a->enums[i].variant_count = model.variant_count;
+    a->enums[i].has_payload = model.has_payload;
+    a->enums[i].tag_type = model.tag_type;
+  }
+  a->enums_filled = (uint32_t)a->enum_count;
   for (uint32_t i = a->instances_filled; i < a->struct_count; ++i) {
     DynAstStruct st = a->structs[i];
     if (!st.template_of || st.open_instance) continue;
@@ -889,6 +911,7 @@ static void fill_instances(DynAstProgram *a) {
     a->structs[i].field_count = model.field_count;
   }
   a->instances_filled = (uint32_t)a->struct_count;
+  }
   a->filling_instances = false;
 }
 /* Layouts of instances created after the declaration pass. */
@@ -898,9 +921,16 @@ static void layout_instances(DynAstProgram *a) {
   if (!state) { a->allocation_failed = true; return; }
   for (uint32_t i = 0; i < a->struct_count; ++i)
     if (a->structs[i].size || a->structs[i].is_template || a->structs[i].open_instance) state[i] = 2;
-  for (uint32_t i = 0; i < a->enum_count; ++i) state[a->struct_count + i] = 2;
+  for (uint32_t i = 0; i < a->enum_count; ++i)
+    if (a->enums[i].size || a->enums[i].is_template || a->enums[i].open_instance)
+      state[a->struct_count + i] = 2;
+  for (uint32_t i = 0; i < a->enum_count; ++i)
+    layout_enum(i, a, state, a->instance_source, &a->instance_errors);
   for (uint32_t i = 0; i < a->struct_count; ++i)
     layout_struct(i, a, state, a->instance_source, &a->instance_errors);
+  for (uint32_t i = 0; i < a->enum_count; ++i)
+    if (!a->enums[i].size && !a->enums[i].is_template && !a->enums[i].open_instance)
+      a->enums[i].size = a->enums[i].alignment = 1;
   /* A failed layout reports once. */
   for (uint32_t i = 0; i < a->struct_count; ++i)
     if (!a->structs[i].size && !a->structs[i].is_template && !a->structs[i].open_instance)
@@ -933,9 +963,42 @@ DynType dyn_ast_struct_instance(DynAstProgram *a, uint32_t template_id, const Dy
   }
   return DYN_TYPE_STRUCT_BASE + id;
 }
+DynType dyn_ast_enum_instance(DynAstProgram *a, uint32_t template_id, const DynType *args) {
+  uint32_t count = a->enums[template_id].type_param_count;
+  for (uint32_t i = 0; i < a->enum_count; ++i)
+    if (a->enums[i].template_of == template_id + 1 &&
+        !memcmp(a->enums[i].type_args, args, count * sizeof(*args)))
+      return DYN_TYPE_ENUM_BASE + i;
+  if (a->enum_count >= DYN_TYPE_POINTER_BASE - DYN_TYPE_ENUM_BASE || !reserve_enum(a)) {
+    a->allocation_failed = true;
+    return DYN_TYPE_ERROR;
+  }
+  DynAstEnum model = a->enums[template_id];
+  DynAstEnum en = {.span = model.span, .tag_type = model.tag_type, .alignment = 1,
+                   .is_public = model.is_public, .module_owner = model.module_owner,
+                   .template_of = template_id + 1, .type_param_count = count};
+  for (uint32_t i = 0; i < count; ++i) {
+    en.type_args[i] = args[i];
+    en.open_instance |= dyn_ast_type_is_open(a, args[i]);
+  }
+  uint32_t id = (uint32_t)a->enum_count;
+  a->enums[a->enum_count++] = en;
+  if (!a->structs_open && !a->filling_instances) {
+    fill_instances(a);
+    layout_instances(a);
+  }
+  return DYN_TYPE_ENUM_BASE + id;
+}
 DynType dyn_ast_substitute(DynAstProgram *a, DynType t, const DynType *args) {
   if (dyn_type_is_param(t))
     return args[t - DYN_TYPE_PARAM_BASE];
+  if (dyn_type_is_enum(t) && a->enums[t - DYN_TYPE_ENUM_BASE].open_instance) {
+    DynAstEnum en = a->enums[t - DYN_TYPE_ENUM_BASE];
+    DynType concrete[DYN_MAX_TYPE_PARAMS];
+    for (uint32_t i = 0; i < en.type_param_count; ++i)
+      concrete[i] = dyn_ast_substitute(a, en.type_args[i], args);
+    return dyn_ast_enum_instance(a, en.template_of - 1, concrete);
+  }
   if (dyn_type_is_struct(t) && a->structs[t - DYN_TYPE_STRUCT_BASE].open_instance) {
     DynAstStruct st = a->structs[t - DYN_TYPE_STRUCT_BASE];
     DynType concrete[DYN_MAX_TYPE_PARAMS];
@@ -1162,6 +1225,7 @@ static uint64_t type_layout(DynType t, bool alignment, DynAstProgram *a,
 static bool layout_enum(uint32_t id, DynAstProgram *a, unsigned char *state,
                         const DynSource *s, unsigned *errors) {
   size_t slot = a->struct_count + id;
+  if (a->enums[id].is_template || a->enums[id].open_instance) state[slot] = 2;
   if (state[slot] == 2) return true;
   if (state[slot] == 1) {
     diagnostic_span(a->enums[id].name, s, errors,
@@ -1178,11 +1242,6 @@ static bool layout_enum(uint32_t id, DynAstProgram *a, unsigned char *state,
     DynType p = a->variants[en->variant_start + j].payload_type;
     if (p == DYN_TYPE_VOID)
       continue;
-    if (dyn_type_is_enum(p)) {
-      diagnostic_span(a->variants[en->variant_start + j].name, s, errors,
-                      "enum payload cannot contain enum directly");
-      continue;
-    }
     uint64_t pa = type_layout(p, true, a, state, s, errors),
              ps = type_layout(p, false, a, state, s, errors);
     if (!pa || !ps) {

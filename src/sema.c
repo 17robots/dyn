@@ -442,6 +442,8 @@ static uint32_t sema_expr_enum(DynAstProgram *a, DynExprId id,
   if (id == DYN_NO_EXPR)
     return UINT32_MAX;
   DynAstExpr *e = &a->expressions[id];
+  if (e->kind == DYN_EXPR_TYPE)
+    return dyn_type_is_enum(e->type) ? e->type - DYN_TYPE_ENUM_BASE : UINT32_MAX;
   return e->kind == DYN_EXPR_NAME || e->kind == DYN_EXPR_FIELD
              ? sema_find_enum(a, e->span, s)
              : UINT32_MAX;
@@ -1056,7 +1058,7 @@ static void type_name_into(DynAstProgram *a, DynType t, const DynSource *s,
   if (dyn_type_is_struct(t) || dyn_type_is_enum(t)) {
     DynSpan p = dyn_type_is_struct(t)
                     ? a->structs[a->structs[t - DYN_TYPE_STRUCT_BASE].template_of ? a->structs[t - DYN_TYPE_STRUCT_BASE].template_of - 1 : t - DYN_TYPE_STRUCT_BASE].name
-                    : a->enums[t - DYN_TYPE_ENUM_BASE].name;
+                    : a->enums[a->enums[t - DYN_TYPE_ENUM_BASE].template_of ? a->enums[t - DYN_TYPE_ENUM_BASE].template_of - 1 : t - DYN_TYPE_ENUM_BASE].name;
     size_t begin = p.start_byte, length = p.end_byte - p.start_byte;
     if (length > 22 && !memcmp(s->text + begin, "dyn_m", 5) &&
         s->text[begin + 21] == '_')
@@ -1066,12 +1068,20 @@ static void type_name_into(DynAstProgram *a, DynType t, const DynSource *s,
       n = cap - 1;
     memcpy(out, s->text + begin, n);
     out[n] = 0;
+    uint32_t type_args = 0;
+    const DynType *arguments = NULL;
     if (dyn_type_is_struct(t) && a->structs[t - DYN_TYPE_STRUCT_BASE].template_of) {
-      DynAstStruct st = a->structs[t - DYN_TYPE_STRUCT_BASE];
+      type_args = a->structs[t - DYN_TYPE_STRUCT_BASE].type_param_count;
+      arguments = a->structs[t - DYN_TYPE_STRUCT_BASE].type_args;
+    } else if (dyn_type_is_enum(t) && a->enums[t - DYN_TYPE_ENUM_BASE].template_of) {
+      type_args = a->enums[t - DYN_TYPE_ENUM_BASE].type_param_count;
+      arguments = a->enums[t - DYN_TYPE_ENUM_BASE].type_args;
+    }
+    if (type_args) {
       size_t used = n;
-      for (uint32_t i = 0; i < st.type_param_count && used + 2 < cap; ++i) {
+      for (uint32_t i = 0; i < type_args && used + 2 < cap; ++i) {
         char argument[128];
-        type_name_into(a, st.type_args[i], s, argument, sizeof(argument));
+        type_name_into(a, arguments[i], s, argument, sizeof(argument));
         used += (size_t)snprintf(out + used, cap - used, "%s%s", i ? ", " : "(", argument);
       }
       if (used + 2 < cap) snprintf(out + used, cap - used, ")");
@@ -1271,6 +1281,7 @@ static bool bind_pattern(DynAstProgram *a, DynType pattern, DynType actual,
       args[k] = actual;
     else if (args[k] != actual) {
       *conflict = k;
+      a->bind_conflict = actual;
       return false;
     }
     return true;
@@ -1278,6 +1289,14 @@ static bool bind_pattern(DynAstProgram *a, DynType pattern, DynType actual,
   if (dyn_type_is_struct(pattern) && dyn_type_is_struct(actual)) {
     DynAstStruct p = a->structs[pattern - DYN_TYPE_STRUCT_BASE],
                  v = a->structs[actual - DYN_TYPE_STRUCT_BASE];
+    if (!p.open_instance || p.template_of != v.template_of) return true;
+    for (uint32_t i = 0; i < p.type_param_count; ++i)
+      if (!bind_pattern(a, p.type_args[i], v.type_args[i], args, conflict)) return false;
+    return true;
+  }
+  if (dyn_type_is_enum(pattern) && dyn_type_is_enum(actual)) {
+    DynAstEnum p = a->enums[pattern - DYN_TYPE_ENUM_BASE],
+               v = a->enums[actual - DYN_TYPE_ENUM_BASE];
     if (!p.open_instance || p.template_of != v.template_of) return true;
     for (uint32_t i = 0; i < p.type_param_count; ++i)
       if (!bind_pattern(a, p.type_args[i], v.type_args[i], args, conflict)) return false;
@@ -1324,8 +1343,15 @@ static uint64_t instance_hash_type(DynAstProgram *a, const DynSource *s,
     }
     name = st.name;
   } else if (dyn_type_is_enum(type)) {
+    DynAstEnum en = a->enums[type - DYN_TYPE_ENUM_BASE];
     hash = instance_hash_word(hash, DYN_TYPE_ENUM_BASE);
-    name = a->enums[type - DYN_TYPE_ENUM_BASE].name;
+    if (en.template_of) {
+      hash = instance_hash_type(a, s, DYN_TYPE_ENUM_BASE + en.template_of - 1, hash);
+      for (uint32_t i = 0; i < en.type_param_count; ++i)
+        hash = instance_hash_type(a, s, en.type_args[i], hash);
+      return hash;
+    }
+    name = en.name;
   } else if (dyn_type_is_distinct(type)) {
     hash = instance_hash_word(hash, DYN_TYPE_DISTINCT_BASE);
     name = a->aliases[type - DYN_TYPE_DISTINCT_BASE].name;
@@ -1432,7 +1458,7 @@ static DynType check_generic_call(Sema *sema, DynAstProgram *a, DynExprId id,
       if (!bind_pattern(a, p.pattern, values[i], args, &conflict)) {
         char first[128], second[128], message[384];
         dyn_type_format(a, args[conflict], s, first, sizeof(first));
-        dyn_type_format(a, values[i], s, second, sizeof(second));
+        dyn_type_format(a, a->bind_conflict, s, second, sizeof(second));
         DynSpan name = g.type_names[conflict];
         snprintf(message, sizeof(message), "%.*s is both %s and %s in this call",
                  (int)(name.end_byte - name.start_byte), s->text + name.start_byte,
@@ -1516,6 +1542,11 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
   }
   if (a->expressions[id].kind == DYN_EXPR_ENUM ||
       (a->expressions[id].kind == DYN_EXPR_FIELD && qualified_enum != UINT32_MAX)) {
+    if (a->enums[qualified_enum].is_template) {
+      error_span(a->expressions[id].span, s, errors,
+                 "a generic enum needs its type arguments here");
+      return a->expressions[id].type = DYN_TYPE_ERROR;
+    }
     uint32_t eid = qualified_enum,
              variant = sema_find_variant(a, eid, a->expressions[id].span, s);
     a->expressions[id].left = DYN_NO_EXPR;
@@ -2769,7 +2800,9 @@ static bool sema_case_v2(Sema *sema, DynAstProgram *a, DynAstStmt *st,
     return false;
   }
   bool wildcard = false, all_terminate = true;
-  DynAstEnum *en = enum_case ? &a->enums[subject - DYN_TYPE_ENUM_BASE] : NULL;
+  /* Copied: checking an arm may instantiate a generic and move the table. */
+  DynAstEnum en_value = enum_case ? a->enums[subject - DYN_TYPE_ENUM_BASE] : (DynAstEnum){0};
+  DynAstEnum *en = &en_value;
   bool *seen = enum_case ? calloc(en->variant_count, 1) : NULL;
   for (uint32_t i = 0; i < st->case_arm_count; ++i) {
     DynAstCaseArm *arm = &a->case_arms[st->case_arm_start + i];
