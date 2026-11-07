@@ -669,6 +669,20 @@ fn src_struct(p: *Parser) u32 {
     expect(p, "struct")
   }
   chain(p, &first, &last, parse_name(p))
+  if take(p, "(") {
+    for !token_is(p, ")") && !p.tree.failed {
+      if !at(p, p.token.start, "$") {
+        fail(p, p.token.start, "expected a `$T: type` parameter")
+      }
+      chain(p, &first, &last, type_body(p))
+      expect(p, ":")
+      expect(p, "type")
+      if !take(p, ",") {
+        break
+      }
+    }
+    expect(p, ")")
+  }
   expect(p, "{")
   for !token_is(p, "}") && !p.tree.failed {
     begin := p.token.start

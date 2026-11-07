@@ -863,9 +863,86 @@ DynType dyn_ast_named_type(DynAstProgram *a, DynSpan name, const DynSource *s) {
   uint32_t id = find_struct(a, name, s);
   return id == UINT32_MAX ? DYN_TYPE_ERROR : DYN_TYPE_STRUCT_BASE + id;
 }
+bool dyn_ast_type_is_open(DynAstProgram *a, DynType t) {
+  if (dyn_type_is_param(t)) return true;
+  if (dyn_type_is_pointer(t)) return dyn_ast_type_is_open(a, a->pointers[t - DYN_TYPE_POINTER_BASE].pointee);
+  if (dyn_type_is_slice(t)) return dyn_ast_type_is_open(a, a->slices[t - DYN_TYPE_SLICE_BASE].element);
+  if (dyn_type_is_array(t)) return dyn_ast_type_is_open(a, a->arrays[t - DYN_TYPE_ARRAY_BASE].element);
+  return dyn_type_is_struct(t) && a->structs[t - DYN_TYPE_STRUCT_BASE].open_instance;
+}
+static bool layout_struct(uint32_t, DynAstProgram *, unsigned char *, const DynSource *, unsigned *);
+static void fill_instances(DynAstProgram *a) {
+  if (a->filling_instances) return;
+  a->filling_instances = true;
+  for (uint32_t i = a->instances_filled; i < a->struct_count; ++i) {
+    DynAstStruct st = a->structs[i];
+    if (!st.template_of || st.open_instance) continue;
+    DynAstStruct model = a->structs[st.template_of - 1];
+    uint32_t start = (uint32_t)a->field_count;
+    for (uint32_t f = 0; f < model.field_count && !a->allocation_failed; ++f) {
+      if (!reserve_field(a)) { a->allocation_failed = true; break; }
+      DynAstField field = a->fields[model.field_start + f];
+      field.type = dyn_ast_substitute(a, field.type, st.type_args);
+      a->fields[a->field_count++] = field;
+    }
+    a->structs[i].field_start = start;
+    a->structs[i].field_count = model.field_count;
+  }
+  a->instances_filled = (uint32_t)a->struct_count;
+  a->filling_instances = false;
+}
+/* Layouts of instances created after the declaration pass. */
+static void layout_instances(DynAstProgram *a) {
+  size_t count = a->struct_count + a->enum_count;
+  unsigned char *state = calloc(count, 1);
+  if (!state) { a->allocation_failed = true; return; }
+  for (uint32_t i = 0; i < a->struct_count; ++i)
+    if (a->structs[i].size || a->structs[i].is_template || a->structs[i].open_instance) state[i] = 2;
+  for (uint32_t i = 0; i < a->enum_count; ++i) state[a->struct_count + i] = 2;
+  for (uint32_t i = 0; i < a->struct_count; ++i)
+    layout_struct(i, a, state, a->instance_source, &a->instance_errors);
+  /* A failed layout reports once. */
+  for (uint32_t i = 0; i < a->struct_count; ++i)
+    if (!a->structs[i].size && !a->structs[i].is_template && !a->structs[i].open_instance)
+      a->structs[i].size = a->structs[i].alignment = 1;
+  free(state);
+}
+DynType dyn_ast_struct_instance(DynAstProgram *a, uint32_t template_id, const DynType *args) {
+  uint32_t count = a->structs[template_id].type_param_count;
+  for (uint32_t i = 0; i < a->struct_count; ++i)
+    if (a->structs[i].template_of == template_id + 1 &&
+        !memcmp(a->structs[i].type_args, args, count * sizeof(*args)))
+      return DYN_TYPE_STRUCT_BASE + i;
+  if (a->struct_count >= DYN_TYPE_ENUM_BASE - DYN_TYPE_STRUCT_BASE || !reserve_struct(a)) {
+    a->allocation_failed = true;
+    return DYN_TYPE_ERROR;
+  }
+  DynAstStruct model = a->structs[template_id];
+  DynAstStruct st = {.span = model.span, .packed = model.packed, .is_union = model.is_union,
+                     .is_public = model.is_public, .module_owner = model.module_owner,
+                     .template_of = template_id + 1, .type_param_count = count};
+  for (uint32_t i = 0; i < count; ++i) {
+    st.type_args[i] = args[i];
+    st.open_instance |= dyn_ast_type_is_open(a, args[i]);
+  }
+  uint32_t id = (uint32_t)a->struct_count;
+  a->structs[a->struct_count++] = st;
+  if (!a->structs_open && !a->filling_instances) {
+    fill_instances(a);
+    layout_instances(a);
+  }
+  return DYN_TYPE_STRUCT_BASE + id;
+}
 DynType dyn_ast_substitute(DynAstProgram *a, DynType t, const DynType *args) {
   if (dyn_type_is_param(t))
     return args[t - DYN_TYPE_PARAM_BASE];
+  if (dyn_type_is_struct(t) && a->structs[t - DYN_TYPE_STRUCT_BASE].open_instance) {
+    DynAstStruct st = a->structs[t - DYN_TYPE_STRUCT_BASE];
+    DynType concrete[DYN_MAX_TYPE_PARAMS];
+    for (uint32_t i = 0; i < st.type_param_count; ++i)
+      concrete[i] = dyn_ast_substitute(a, st.type_args[i], args);
+    return dyn_ast_struct_instance(a, st.template_of - 1, concrete);
+  }
   if (dyn_type_is_pointer(t)) {
     DynAstPointer p = a->pointers[t - DYN_TYPE_POINTER_BASE];
     DynType pointee = dyn_ast_substitute(a, p.pointee, args);
@@ -991,6 +1068,10 @@ static bool layout_struct(uint32_t id, DynAstProgram *a, unsigned char *state,
     diagnostic_span(a->structs[id].span, s, errors,
                     "struct contains itself by value");
     return false;
+  }
+  if (a->structs[id].is_template || a->structs[id].open_instance) {
+    state[id] = 2;
+    return true;
   }
   state[id] = 1;
   DynAstStruct *st = &a->structs[id];
@@ -1194,14 +1275,25 @@ static uint64_t owner_key_value(const char *owner_key) {
 }
 #include "ast_compact_declarations.inc"
 
+static bool compact_close_structs(DynAstProgram *a) {
+  fill_instances(a);
+  return !a->allocation_failed;
+}
+static bool compact_open_late_instances(DynAstProgram *a) {
+  a->structs_open = false;
+  return true;
+}
 static bool lower_declarations(DynSpan root, const DynSource *s, DynAstProgram *a,
                                unsigned *errors, const char *owner_key) {
   unsigned before = *errors;
   DynNameIndex functions = {0}, globals = {0};
+  a->structs_open = true;
+  a->instance_source = s;
   bool declarations_ok = compact_add_enum_names(s, a, errors) &&
       compact_add_struct_names(s, a, errors) && compact_add_alias_names(s, a, errors) &&
       compact_add_struct_fields(s, a, errors) && compact_add_enum_variants(s, a, errors) &&
-      compute_layouts_v2(a, s, errors) && compact_add_globals(s, a, errors, &globals) &&
+      compact_close_structs(a) &&
+      compute_layouts_v2(a, s, errors) && compact_open_late_instances(a) && compact_add_globals(s, a, errors, &globals) &&
       compact_add_asserts(s, a, errors) && compact_add_function_signatures(s, a, errors, &functions, &globals);
   if (!declarations_ok) {
     ast_name_index_free(&functions);
@@ -1214,6 +1306,8 @@ static bool lower_declarations(DynSpan root, const DynSource *s, DynAstProgram *
     return false;
   }
   compact_lower_function_bodies(s, a, errors, owner_key, &functions);
+  *errors += a->instance_errors;
+  a->instance_errors = 0;
   if (a->invalid_array_extent.end_byte)
     diagnostic(a->invalid_array_extent, s, errors,
         "array length requires nonnegative integer constant arithmetic (no runtime values, cycles, overflow, or division by zero)");

@@ -92,9 +92,32 @@ fn max(a: $T, b: T) T {
 one instance, and the compiler checks each instance's body as ordinary code: a body that is invalid
 for a type is an error at the call that created the instance. There are no constraints, traits,
 interfaces, operator overloading or compile-time execution, and types are inferred only from
-arguments, never from the expected result. Structs, enums and unions never take type parameters. The
+arguments, never from the expected result. The
 [generics design](../internals/generics-design.md) records the rules and what is deliberately left
 out.
+
+A struct may take type parameters, and each set of arguments makes one concrete struct:
+
+```dyn
+struct Box($T: type) { value: T, failed: bool }
+type IntBox = Box(i32)
+
+fn wrap($T: type, value: T) Box(T) {
+  result: Box(T)
+  result.value = value
+  return result
+}
+
+fn read(box: Box($T)) T {
+  return box.value
+}
+
+a: Box(f64) = .{ value: 1.5 }
+```
+
+Type arguments are always written, and parameters are types only. There is no `Box(i32){...}`
+literal, because it would read like a call before a block: use `.{ ... }` with an expected type, or
+an alias. `mem.push(Box(i32), arena)` passes the instance as a type.
 
 ## Values and types
 
@@ -358,7 +381,7 @@ is not a supported-feature claim:
 
 | Syntax | Compiler status |
 | --- | --- |
-| Struct literals with type arguments, such as `Box(i32){...}` | Rejected syntax in compiler and editors |
+| Struct literals with type arguments, such as `Box(i32){...}` | Rejected; use `.{...}` or an alias |
 | Module-level transparent type alias | Supported |
 | Local type alias inside a function | Reserved; diagnosed as unsupported |
 | Enum declaration-order tags | Supported |

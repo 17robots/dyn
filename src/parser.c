@@ -334,6 +334,19 @@ static uint32_t type_body(Parser *p) {
     append(p, &first, &last, name(p));
     while (take(p, ".") && !p->tree->error) append(p, &first, &last, name(p));
     if (last != NONE) end = p->tree->nodes[last].end;
+    /* An adjacent parenthesis takes type arguments: List(Enemy). */
+    if (end < p->length && p->text[end] == '(' && is(p, "(")) {
+      uint32_t path = node(p, EXP_FIELD_TYPE, token.start, end, first, (Token){0});
+      first = last = NONE;
+      append(p, &first, &last, path);
+      lex(p);
+      while (!is(p, ")") && !p->tree->error) {
+        append(p, &first, &last, type(p));
+        if (!take(p, ",")) break;
+      }
+      end = p->token.end; expect(p, ")");
+      kind = EXP_GENERIC_TYPE;
+    }
   } else { fail(p, token.start, "expected type"); return NONE; }
   return mark(p, node(p, kind, token.start, end, first, (Token){0}), flags);
 }

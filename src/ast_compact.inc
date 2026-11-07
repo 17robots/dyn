@@ -56,6 +56,7 @@ static bool compact_flag(CompactNode n, unsigned flag) {
   return !compact_null(n) && (compact_data(n)->flags & flag) != 0;
 }
 static DynType compact_type(CompactNode, const DynSource *, DynAstProgram *);
+static DynType compact_instance(CompactNode, CompactNode, const DynSource *, DynAstProgram *);
 static DynExprId compact_expr(CompactNode, const DynSource *, DynAstProgram *, unsigned *);
 static CompactNode compact_parent(CompactNode n) {
   if (!compact_null(n)) n.id = compact_data(n)->parent;
@@ -152,6 +153,20 @@ static bool compact_extent(CompactNode n, const DynSource *s, DynAstProgram *a, 
   default: return false;
   }
 }
+static DynType compact_instance(CompactNode path, CompactNode argument, const DynSource *s, DynAstProgram *a) {
+  uint32_t id = find_struct(a, compact_span(path), s);
+  if (id == UINT32_MAX || !a->structs[id].is_template) return DYN_TYPE_ERROR;
+  DynType args[DYN_MAX_TYPE_PARAMS] = {0};
+  uint32_t count = 0;
+  for (; !compact_null(argument); argument = compact_next(argument)) {
+    if (count == a->structs[id].type_param_count) return DYN_TYPE_ERROR;
+    DynType type = compact_type(argument, s, a);
+    if (type == DYN_TYPE_ERROR) return type;
+    args[count++] = type;
+  }
+  if (count != a->structs[id].type_param_count) return DYN_TYPE_ERROR;
+  return dyn_ast_struct_instance(a, id, args);
+}
 static DynType compact_type(CompactNode n, const DynSource *s, DynAstProgram *a) {
   if (!dyn_work_step(&s->context, 1)) return DYN_TYPE_ERROR;
   n = compact_unwrap(n);
@@ -190,7 +205,15 @@ static DynType compact_type(CompactNode n, const DynSource *s, DynAstProgram *a)
     }
     return intern_slice(a, element, compact_flag(n, EXP_CONST));
   }
-  return parse_type_name(compact_span(n), s, a);
+  if (kind == EXP_GENERIC_TYPE) {
+    CompactNode path = compact_first(n);
+    return compact_instance(path, compact_next(path), s, a);
+  }
+  DynType named = parse_type_name(compact_span(n), s, a);
+  /* A template names no type until it has arguments. */
+  if (dyn_type_is_struct(named) && a->structs[named - DYN_TYPE_STRUCT_BASE].is_template)
+    return DYN_TYPE_ERROR;
+  return named;
 }
 static DynExprId compact_argument(CompactNode n, const DynSource *s, DynAstProgram *a, unsigned *errors) {
   bool type = compact_kind(n) == EXP_TYPE_ARGUMENT;
@@ -198,8 +221,17 @@ static DynExprId compact_argument(CompactNode n, const DynSource *s, DynAstProgr
     n = compact_unwrap(n);
     type = compact_kind(n) == EXP_NAME && scope_type(a, compact_span(n), s, false) != DYN_TYPE_ERROR;
   }
-  if (!type) return compact_expr(n, s, a, errors);
-  DynType parsed = compact_type(n, s, a);
+  /* Box(i32) in an argument parses as a call; a template callee makes it a type. */
+  CompactNode unwrapped = compact_unwrap(n);
+  bool instance = !type && compact_kind(unwrapped) == EXP_CALL;
+  if (instance) {
+    uint32_t template_id = find_struct(a, compact_span(compact_first(unwrapped)), s);
+    instance = template_id != UINT32_MAX && a->structs[template_id].is_template;
+  }
+  if (!type && !instance) return compact_expr(n, s, a, errors);
+  DynType parsed = instance
+      ? compact_instance(compact_first(unwrapped), compact_next(compact_first(unwrapped)), s, a)
+      : compact_type(n, s, a);
   if (parsed == DYN_TYPE_ERROR) { compact_diagnostic(n, s, errors, "unknown type"); return DYN_NO_EXPR; }
   if (!reserve_expr(a)) { compact_diagnostic(n, s, errors, "out of memory"); return DYN_NO_EXPR; }
   a->expressions[a->expression_count] = (DynAstExpr){.kind = DYN_EXPR_TYPE, .type = parsed,

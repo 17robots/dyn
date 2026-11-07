@@ -1055,7 +1055,7 @@ static void type_name_into(DynAstProgram *a, DynType t, const DynSource *s,
   }
   if (dyn_type_is_struct(t) || dyn_type_is_enum(t)) {
     DynSpan p = dyn_type_is_struct(t)
-                    ? a->structs[t - DYN_TYPE_STRUCT_BASE].name
+                    ? a->structs[a->structs[t - DYN_TYPE_STRUCT_BASE].template_of ? a->structs[t - DYN_TYPE_STRUCT_BASE].template_of - 1 : t - DYN_TYPE_STRUCT_BASE].name
                     : a->enums[t - DYN_TYPE_ENUM_BASE].name;
     size_t begin = p.start_byte, length = p.end_byte - p.start_byte;
     if (length > 22 && !memcmp(s->text + begin, "dyn_m", 5) &&
@@ -1265,6 +1265,14 @@ static bool bind_pattern(DynAstProgram *a, DynType pattern, DynType actual,
     }
     return true;
   }
+  if (dyn_type_is_struct(pattern) && dyn_type_is_struct(actual)) {
+    DynAstStruct p = a->structs[pattern - DYN_TYPE_STRUCT_BASE],
+                 v = a->structs[actual - DYN_TYPE_STRUCT_BASE];
+    if (!p.open_instance || p.template_of != v.template_of) return true;
+    for (uint32_t i = 0; i < p.type_param_count; ++i)
+      if (!bind_pattern(a, p.type_args[i], v.type_args[i], args, conflict)) return false;
+    return true;
+  }
   if (dyn_type_is_pointer(pattern) && dyn_type_is_pointer(actual)) {
     DynAstPointer p = a->pointers[pattern - DYN_TYPE_POINTER_BASE],
                   v = a->pointers[actual - DYN_TYPE_POINTER_BASE];
@@ -1297,7 +1305,14 @@ static uint64_t instance_hash_type(DynAstProgram *a, const DynSource *s,
   DynSpan name = {0};
   if (dyn_type_is_struct(type)) {
     hash = instance_hash_word(hash, DYN_TYPE_STRUCT_BASE);
-    name = a->structs[type - DYN_TYPE_STRUCT_BASE].name;
+    DynAstStruct st = a->structs[type - DYN_TYPE_STRUCT_BASE];
+    if (st.template_of) {
+      hash = instance_hash_type(a, s, DYN_TYPE_STRUCT_BASE + st.template_of - 1, hash);
+      for (uint32_t i = 0; i < st.type_param_count; ++i)
+        hash = instance_hash_type(a, s, st.type_args[i], hash);
+      return hash;
+    }
+    name = st.name;
   } else if (dyn_type_is_enum(type)) {
     hash = instance_hash_word(hash, DYN_TYPE_ENUM_BASE);
     name = a->enums[type - DYN_TYPE_ENUM_BASE].name;
@@ -3833,7 +3848,8 @@ bool dyn_sema_base(DynAstProgram *a, const DynSource *s, unsigned *errors) {
                .current_function = UINT32_MAX,
                .current_return_type = DYN_TYPE_VOID};
   for (size_t i = 0; i < a->array_count; ++i) {
-    if (a->arrays[i].length && !sema_type_layout(&sema, a, DYN_TYPE_ARRAY_BASE + (DynType)i, false))
+    if (a->arrays[i].length && !dyn_ast_type_is_open(a, a->arrays[i].element) &&
+        !sema_type_layout(&sema, a, DYN_TYPE_ARRAY_BASE + (DynType)i, false))
       error_span((DynSpan){0}, s, errors, "array layout exceeds target address space or has an unsized element");
   }
   bool ready = sema_names_build(&sema.functions, a, s, true) &&

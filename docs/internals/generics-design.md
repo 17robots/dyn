@@ -2,7 +2,7 @@
 
 Status: phase 1 is implemented: generic functions, std phase 1, and
 arena-only allocation replacing `Allocator` and the `#alloc*` builtins.
-Generic structs were rejected on 2026-10-22; see
+Generic structs were accepted on 2026-11-06 and are in the language reference. They were rejected on 2026-10-22; see
 [Decided: no generic types](#decided-no-generic-types). See
 [Implementation status](#implementation-status).
 

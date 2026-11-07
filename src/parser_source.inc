@@ -437,7 +437,17 @@ static uint32_t src_struct(Parser *p) {
   uint32_t start = p->token.start, first = NONE, last = NONE;
   bool packed = take(p, "packed"), is_union = !packed && take(p, "union");
   if (!is_union) expect(p, "struct");
-  append(p, &first, &last, name(p)); expect(p, "{");
+  append(p, &first, &last, name(p));
+  if (take(p, "(")) {
+    while (!is(p, ")") && !p->tree->error) {
+      if (!at(p, p->token.start, "$")) fail(p, p->token.start, "expected a `$T: type` parameter");
+      append(p, &first, &last, type_body(p));
+      expect(p, ":"); expect(p, "type");
+      if (!take(p, ",")) break;
+    }
+    expect(p, ")");
+  }
+  expect(p, "{");
   while (!is(p, "}") && !p->tree->error) {
     uint32_t begin = p->token.start, mf = NONE, ml = NONE;
     append(p, &mf, &ml, name(p));

@@ -33,6 +33,7 @@ const ExpSyscall: u16 = 30
 const ExpStruct: u16 = 31
 const ExpMember: u16 = 32
 const ExpArray: u16 = 33
+const ExpGenericType: u16 = 34
 
 const FlagConst: u16 = 1
 const FlagPublic: u16 = 2
@@ -252,6 +253,22 @@ fn type_body(p: *Parser) u32 {
     }
     if last != None {
       end = node_end(p, last)
+    }
+    if #cast(usize, end) < #len(p.text) && p.text[end] == '(' && token_is(p, "(") {
+      path := add_node(p, ExpFieldType, token.start, end, first)
+      first = None
+      last = None
+      chain(p, &first, &last, path)
+      lex(p)
+      for !token_is(p, ")") && !p.tree.failed {
+        chain(p, &first, &last, parse_type(p))
+        if !take(p, ",") {
+          break
+        }
+      }
+      end = p.token.end
+      expect(p, ")")
+      kind = ExpGenericType
     }
   } else {
     fail(p, token.start, "expected type")

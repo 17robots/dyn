@@ -62,11 +62,20 @@ static bool compact_add_struct_names(const DynSource *s, DynAstProgram *a,
       return false;
     }
     bool packed = compact_flag(d, EXP_PACKED);
+    uint32_t template_parameters = 0;
+    for (CompactNode c = compact_child(d, 1); !compact_null(c); c = compact_next(c))
+      if (compact_kind(c) == EXP_TYPE_PARAMETER) ++template_parameters;
+    if (template_parameters > DYN_MAX_TYPE_PARAMS) {
+      compact_report(d, s, errors, "too many type parameters");
+      continue;
+    }
     a->structs[a->struct_count++] =
         (DynAstStruct){.span = compact_span(d),
                        .name = ns,
                        .packed = packed,
                        .is_union = compact_flag(d, EXP_UNION),
+                       .is_template = template_parameters != 0,
+                       .type_param_count = template_parameters,
                        .alignment = 0,
                        .is_public = is_public,
                        .module_owner = declaration_owner(ns, s)};
@@ -119,9 +128,18 @@ static bool compact_add_struct_fields(const DynSource *s, DynAstProgram *a,
       continue;
     if (si >= a->struct_count)
       break;
-    DynAstStruct *st = &a->structs[si++];
+    uint32_t struct_id = si++;
+    DynAstStruct *st = &a->structs[struct_id];
     st->field_start = (uint32_t)a->field_count;
+    a->scope_count = 0;
+    a->declaring_generic = st->is_template;
     for (CompactNode m = compact_child(d, 1); !compact_null(m); m = compact_next(m)) {
+      if (compact_kind(m) == EXP_TYPE_PARAMETER) {
+        DynSpan parameter = compact_span(m);
+        ++parameter.start_byte;
+        if (scope_type(a, parameter, s, true) == DYN_TYPE_ERROR)
+          compact_report(m, s, errors, "duplicate or too many type parameters");
+      }
       if ((compact_kind(m) != SRC_STRUCT_MEMBER))
         continue;
       CompactNode tq = {0}, init = {0};
@@ -137,6 +155,7 @@ static bool compact_add_struct_fields(const DynSource *s, DynAstProgram *a,
       DynType type = compact_null(tq)
                          ? DYN_TYPE_ERROR
                          : compact_type(compact_child(tq, 0), s, a);
+      st = &a->structs[struct_id]; /* an instance may have moved the table */
       if (type == DYN_TYPE_ERROR)
         compact_report(tq, s, errors, "unknown or unsupported struct field type");
       for (CompactNode c = compact_first(m); !compact_null(c); c = compact_next(c)) {
@@ -162,6 +181,8 @@ static bool compact_add_struct_fields(const DynSource *s, DynAstProgram *a,
         ++st->field_count;
       }
     }
+    a->scope_count = 0;
+    a->declaring_generic = false;
   }
   return true;
 }

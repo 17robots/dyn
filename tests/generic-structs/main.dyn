@@ -1,0 +1,64 @@
+use "std/mem"
+struct Pair($A: type, $B: type) { first: A, second: B }
+struct Box($T: type) { value: T, failed: bool }
+struct Node($T: type) { next: *Node(T), value: T }
+struct Chunk($T: type) { next: *Chunk(T), count: usize, items: [4]T }
+struct List($T: type) { first: *Chunk(T), last: *Chunk(T), total: usize }
+type IntBox = Box(i32)
+#assert(#sizeof(Box(u8)) == 2, "layout")
+fn make($T: type, value: T) Box(T) {
+  result: Box(T)
+  result.value = value
+  return result
+}
+fn unwrap(box: Box($T)) T {
+  return box.value
+}
+fn push(arena: *mem.Arena, list: *List($T), value: T) {
+  if list.last == nil || list.last.count == 4 {
+    chunk := mem.push(Chunk(T), arena)
+    if list.last == nil {
+      list.first = chunk
+    } else {
+      list.last.next = chunk
+    }
+    list.last = chunk
+  }
+  list.last.items[list.last.count] = value
+  list.last.count += 1
+  list.total += 1
+}
+fn sum(list: *const List(i64)) i64 {
+  total: i64 = 0
+  chunk := list.first
+  for chunk != nil {
+    for i in 0..chunk.count {
+      total += chunk.items[i]
+    }
+    chunk = chunk.next
+  }
+  return total
+}
+fn main() {
+  a: Box(i32) = .{ value: 7 }
+  b := make(f64, 2.5)
+  c: Pair(i32, []const u8) = .{ first: 1, second: "abc" }
+  d: IntBox = make(i32, 9)
+  if a.value != 7 || unwrap(b) != 2.5 || c.first != 1 || #len(c.second) != 3 || d.value != 9 {
+    #panic("values")
+  }
+  arena := mem.arena_create(0)
+  list: List(i64)
+  for i in 0..10 {
+    push(arena, &list, #cast(i64, i))
+  }
+  if sum(&list) != 45 || list.total != 10 {
+    #panic("list")
+  }
+  node: Node(u32)
+  node.value = 3
+  other: Node(u32) = .{ next: &node, value: 4 }
+  if other.next.value + other.value != 7 {
+    #panic("node")
+  }
+}

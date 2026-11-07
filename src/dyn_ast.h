@@ -151,6 +151,12 @@ typedef struct {
   uint32_t field_start, field_count;
   DynNameIndex field_names;
   uint64_t size, alignment;
+  /* A template is never laid out or emitted; each instance is an ordinary
+     struct. template_of is the template's id plus one. An instance whose
+     arguments still name type parameters only appears in generic signatures. */
+  bool is_template, open_instance;
+  uint32_t template_of, type_param_count;
+  DynType type_args[DYN_MAX_TYPE_PARAMS];
 } DynAstStruct;
 typedef struct {
   DynSpan name;
@@ -365,12 +371,21 @@ typedef struct {
   DynType scope_types[DYN_MAX_TYPE_PARAMS];
   uint32_t scope_count;
   bool declaring_generic;
+  /* Until layouts run, instances only queue; later each is finished at once. */
+  bool structs_open, filling_instances;
+  uint32_t instances_filled;
+  const DynSource *instance_source;
+  unsigned instance_errors;
   /* Top-level declarations of every root, valid only while lowering. */
   uint32_t decl_count;
 } DynAstProgram;
 
 bool dyn_ast_lower_compact(const DynSource *, DynAstProgram *, unsigned *, const char *owner_key);
 void dyn_ast_program_free(DynAstProgram *ast);
+/* The struct type for a template and arguments, created on first use. */
+DynType dyn_ast_struct_instance(DynAstProgram *, uint32_t template_id, const DynType *args);
+/* Whether a type still names a type parameter. */
+bool dyn_ast_type_is_open(DynAstProgram *, DynType);
 /* Add an instance of a generic with concrete type arguments. The body is lowered later by dyn_ast_lower_instance. Returns the function id. */
 uint32_t dyn_ast_instantiate(DynAstProgram *, const DynSource *, uint32_t generic, const DynType *args, uint32_t depth, DynSpan call, uint64_t hash);
 bool dyn_ast_lower_instance(DynAstProgram *, const DynSource *, uint32_t function, unsigned *errors);
