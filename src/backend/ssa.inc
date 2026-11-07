@@ -3258,6 +3258,53 @@ static SsaPlace ssa_place(Ssa *s, const SsaValue *v) {
 static bool ssa_same_place(SsaPlace x, SsaPlace y) {
   return x.base == y.base && x.index == y.index && x.scale == y.scale && x.displacement == y.displacement;
 }
+/* An integer load whose bits go straight to a float register loads the float
+   directly when no memory effect lies between; the integer load then dies. */
+static bool ssa_float_loads(Ssa *s, const uint32_t *order, uint32_t n) {
+  bool changed = false;
+  for (uint32_t i = 0; i < n; ++i) {
+    SsaBlock *block = &s->blocks[order[i]];
+    uint32_t kept = 0;
+    for (uint32_t k = 0; k < block->values.count; ++k) {
+      uint32_t self = block->values.items[k];
+      SsaValue *v = &s->values[self];
+      block->values.items[kept++] = self;
+      if (v->op != SO_BITS || (v->cls != SC_F32 && v->cls != SC_F64)) continue;
+      int32_t load = ssa_resolve(s, v->a);
+      /* Bits out of a float and straight back are that float. */
+      if (load >= 0 && s->values[load].op == SO_BITS) {
+        int32_t origin = ssa_resolve(s, s->values[load].a);
+        if (origin >= 0 && s->values[origin].cls == v->cls) {
+          ssa_replace(s, (int32_t)self, origin);
+          v->dead = true;
+          --kept;
+          changed = true;
+        }
+        continue;
+      }
+      if (load < 0 || s->values[load].op != SO_LOAD || s->values[load].cls != SC_INT) continue;
+      unsigned bits = v->cls == SC_F32 ? 32 : 64;
+      if (s->values[load].aux2 != SSA_MEM(bits, 0, 0)) continue;
+      /* kept - 1 is v; compacted slots below it are the live values. */
+      for (uint32_t back = kept - 1, steps = 0; back-- > 0 && steps < 64; ++steps) {
+        int32_t id = (int32_t)block->values.items[back];
+        const SsaValue *between = &s->values[id];
+        if (id == load) {
+          SsaValue copy = *between;
+          int cls = v->cls;
+          *v = copy;
+          v->cls = cls;
+          v->aux2 = SSA_MEM(bits, 0, 1);
+          changed = true;
+          break;
+        }
+        if (between->effect && between->op != SO_CHECK && between->op != SO_CHECK_SHL) break;
+      }
+    }
+    block->values.count = kept;
+  }
+  return changed;
+}
 /* Reuse exact loads only inside one basic block and between memory effects.
    An exact full-width store also supplies subsequent loads until a barrier.
    Every store/call/copy is a barrier, including stores through const aliases,
@@ -3297,6 +3344,17 @@ static bool ssa_reuse_loads(Ssa *s, const uint32_t *order, uint32_t n) {
         for (uint32_t r = store_count; r-- > 0 && !replaced;) {
           SsaValue *store = &s->values[stores[r]];
           int32_t value = ssa_resolve(s, store->c);
+          /* A 32-bit word of a float store is its bits; a struct copy reads
+             float fields this way. */
+          if (value >= 0 && s->values[value].cls == SC_F32 && v->cls == SC_INT && !s->ctx->rv32 && !s->ctx->t32 &&
+              store->aux2 == SSA_MEM(32, 0, 1) && v->aux2 == SSA_MEM(32, 0, 0) &&
+              ssa_same_place(ssa_place(s, store), ssa_place(s, v))) {
+            v->op = SO_BITS; v->a = value; v->b = v->c = -1; v->aux = v->aux2 = 0; v->scale = 1; v->effect = false;
+            ++forwarded;
+            replaced = true;
+            block->values.items[kept++] = id;
+            continue;
+          }
           /* Narrow integers require truncation/extension; f32 is deliberately
              excluded rather than introducing a rounding conversion here. */
           if (value >= 0 && s->values[value].cls == v->cls &&
@@ -7316,6 +7374,11 @@ static void ssa_prepare(SsaPrepared *p, BackendContext *ctx, const DynSource *so
   if (!order || s->failed) goto done;
   ssa_addressing(s, order, n);
   ssa_dce(s, order, n);
+  /* After dce: dead frame stores no longer stand between load and use. */
+  if (!ctx->rv32 && !ctx->t32 && ssa_float_loads(s, order, n)) {
+    ssa_resolve_all(s);
+    ssa_dce(s, order, n);
+  }
   if (ctx->rv32 || ctx->t32) {
     p->optimize_ms += backend_timing(&source->context, &phase);
     p->ready = true;
