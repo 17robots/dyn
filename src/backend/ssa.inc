@@ -244,6 +244,11 @@ static int32_t ssa_emit(Ssa *s, SsaOp op, uint8_t cls, int32_t a, int32_t b, int
 static int32_t ssa_const(Ssa *s, uint64_t bits, uint8_t cls) {
   return ssa_emit(s, SO_CONST, cls, -1, -1, -1, (int64_t)bits, 0);
 }
+/* The copy records the type's alignment, which gives its widest field. */
+static void ssa_copy_aggregate(Ssa *s, int32_t destination, int32_t source, uint32_t size, uint32_t alignment) {
+  int32_t copy = ssa_emit(s, SO_COPYMEM, SC_NONE, destination, source, -1, size, 0);
+  if (!s->failed) s->values[copy].scale = alignment > 255 ? 255 : (uint8_t)alignment;
+}
 static uint32_t ssa_list(Ssa *s, const int32_t *items, uint32_t count) {
   s->lists = ssa_grow(s->lists, &s->list_capacity, s->list_count + count, sizeof(uint32_t), &s->failed);
   if (s->failed) return 0;
@@ -628,7 +633,7 @@ static void ssa_store_value(Ssa *s, int32_t address, DynType type, int32_t value
   if (aggregate(s->ir, type)) {
     uint32_t size, alignment;
     if (!layout(s->ir, type, &size, &alignment, 0)) { SSA_GIVE_UP(s); return; }
-    ssa_emit(s, SO_COPYMEM, SC_NONE, address, value, -1, size, 0);
+    ssa_copy_aggregate(s, address, value, size, alignment);
     return;
   }
   ssa_store(s, address, -1, 1, 0, ssa_memory_type(s->ir, type), value);
@@ -1164,7 +1169,7 @@ static void ssa_pass(Ssa *s, SsaArguments *list, DynType type, int32_t value, in
     if (count && parts[0].cls < 0) {
       /* Memory class: a snapshot now, copied to the outgoing area at the call. */
       int32_t copy = ssa_temporary(s, type);
-      ssa_emit(s, SO_COPYMEM, SC_NONE, copy, value, -1, size, 0);
+      ssa_copy_aggregate(s, copy, value, size, alignment);
       ssa_argument(s, list, copy, SSA_STACK + (int32_t)*stack, (int32_t)size);
       *stack += (size + 7) / 8 * 8;
       return;
@@ -1512,7 +1517,7 @@ static int32_t ssa_call(Ssa *s, const DynIrExpr *e, int32_t *second, unsigned de
       uint32_t size, alignment;
       if (!layout(ir, type, &size, &alignment, 0)) { SSA_GIVE_UP(s); break; }
       int32_t copy = ssa_temporary(s, type);
-      ssa_emit(s, SO_COPYMEM, SC_NONE, copy, value, -1, size, 0);
+      ssa_copy_aggregate(s, copy, value, size, alignment);
       if (ctx->rv32 || ctx->t32) {
         if (list.count / 3 >= 512) { SSA_GIVE_UP(s); break; }
         ssa_argument(s, &list, copy, SSA_ILP32_PART + parts[0].cls, DYN_TYPE_RAWPTR);
@@ -1615,7 +1620,7 @@ static void ssa_initialize(Ssa *s, int32_t destination, DynType type, DynExprId 
     return;
   }
   int32_t source = ssa_expr(s, id, NULL, depth + 1);
-  ssa_emit(s, SO_COPYMEM, SC_NONE, destination, source, -1, size, 0);
+  ssa_copy_aggregate(s, destination, source, size, alignment);
 }
 
 /* ---- Statements ---- */
@@ -1690,7 +1695,7 @@ static void ssa_return_value(Ssa *s, int32_t value, int32_t second) {
   if (!aggregate(ir, type) || !layout(ir, type, &size, &alignment, 0)) { SSA_GIVE_UP(s); return; }
   if (s->return_slot != UINT32_MAX) {
     int32_t pointer = ssa_load(s, ssa_frame(s, s->return_slot), -1, 1, 0, SSA_MEM((s->ctx->rv32 || s->ctx->t32) ? 32 : 64, 0, 0));
-    ssa_emit(s, SO_COPYMEM, SC_NONE, pointer, value, -1, size, 0);
+    ssa_copy_aggregate(s, pointer, value, size, alignment);
     ssa_return(s, pointer, -1);
     return;
   }
@@ -1771,7 +1776,7 @@ static void ssa_assign(Ssa *s, const DynIrStmt *st) {
         uint32_t size, alignment;
         if (!layout(ir, type, &size, &alignment, 0)) { SSA_GIVE_UP(s); return; }
         int32_t source = ssa_expr(s, st->expression, NULL, 0);
-        ssa_emit(s, SO_COPYMEM, SC_NONE, address, source, -1, size, 0);
+        ssa_copy_aggregate(s, address, source, size, alignment);
       } else {
         const DynIrExpr *value = st->expression < ir->expression_count ? &ir->expressions[st->expression] : NULL;
         if (!s->unwinding && value && value->kind == DYN_EXPR_CALL && value->type == type &&
@@ -1808,7 +1813,7 @@ static void ssa_assign(Ssa *s, const DynIrStmt *st) {
     if (!layout(ir, type, &size, &alignment, 0)) { SSA_GIVE_UP(s); return; }
     int32_t address = ssa_address(s, st->target, 0);
     int32_t source = ssa_expr(s, st->expression, NULL, 0);
-    ssa_emit(s, SO_COPYMEM, SC_NONE, address, source, -1, size, 0);
+    ssa_copy_aggregate(s, address, source, size, alignment);
     return;
   }
   if (target->kind == DYN_EXPR_GLOBAL && (target->integer >= ir->global_count || ir->globals[target->integer].is_const)) {
@@ -2270,7 +2275,7 @@ static void ssa_case(Ssa *s, const DynIrStmt *st, unsigned depth) {
       if (!layout(ir, type, &size, &alignment, 0)) { SSA_GIVE_UP(s); return; }
       int32_t value = ssa_expr(s, st->expression, NULL, 0);
       data = ssa_temporary(s, type);
-      ssa_emit(s, SO_COPYMEM, SC_NONE, data, value, -1, size, 0);
+      ssa_copy_aggregate(s, data, value, size, alignment);
     }
     subject = ssa_normalize(s, ssa_load(s, data, -1, 1, 0, ssa_memory_type(ir, type)), storage_type(ir, type));
   } else subject = ssa_expr(s, st->expression, any ? &data : NULL, 0);
@@ -2342,7 +2347,7 @@ static void ssa_capture(Ssa *s, DynExprId id, unsigned depth) {
     uint32_t size, alignment;
     if (!layout(ir, type, &size, &alignment, 0)) { SSA_GIVE_UP(s); return; }
     int32_t copy = ssa_temporary(s, type);
-    ssa_emit(s, SO_COPYMEM, SC_NONE, copy, value, -1, size, 0);
+    ssa_copy_aggregate(s, copy, value, size, alignment);
     value = copy;
   }
   s->captures = ssa_grow(s->captures, &s->capture_capacity, s->capture_count + 1, sizeof(SsaCapture), &s->failed);
@@ -2428,7 +2433,7 @@ static void ssa_statement_value(Ssa *s, const DynIrStmt *st, unsigned depth) {
         uint32_t size, alignment;
         if (!layout(ir, s->f->return_type, &size, &alignment, 0)) { SSA_GIVE_UP(s); return; }
         int32_t copy = ssa_temporary(s, s->f->return_type);
-        ssa_emit(s, SO_COPYMEM, SC_NONE, copy, value, -1, size, 0);
+        ssa_copy_aggregate(s, copy, value, size, alignment);
         value = copy;
       }
       ssa_run_defers(s, 0);
@@ -3547,7 +3552,7 @@ static bool ssa_snapshot_copy(Ssa *s, uint32_t b, uint32_t k) {
   /* Copying a struct of 32-bit fields in 64-bit words would miss store
      forwarding from the field stores before it. */
   bool x86 = !s->ctx->rv32 && !s->ctx->t32;
-  uint32_t width = original.aux % 8 == 0 ? 8 : 4;
+  uint32_t width = original.aux % 8 == 0 && (!x86 || original.scale != 4) ? 8 : 4;
   if (original.aux % width || (width == 4 && !x86)) return false;
   int32_t items[16], loads[8];
   uint32_t words = (uint32_t)original.aux / width, count = 0;
@@ -3682,13 +3687,20 @@ static bool ssa_forward(Ssa *s, const uint32_t *order, uint32_t n) {
         }
         int32_t e = bytes[0];
         if (e < 0 || known[e].offset != at || known[e].width != size) continue;
-        /* Across blocks only constants: other values would stay live
-           through the gap and cost registers or spills. */
-        if ((uint32_t)e < local && s->values[known[e].value].op != SO_CONST) continue;
+        /* Across blocks only constants and small structs: other values would
+           stay live through the gap and cost registers or spills. */
+        if ((uint32_t)e < local && s->values[known[e].value].op != SO_CONST && s->regions[r].size > 32) continue;
         bool whole = true;
         for (uint32_t j = 0; j < size; ++j) whole = whole && bytes[j] == e;
         int64_t stored = known[e].type;
-        if (!whole || (stored >> 9 & 1) != floating || (stored & 0xff) != bits) continue;
+        if (!whole || (stored & 0xff) != bits) continue;
+        /* A snapshot stores float fields through integer registers. */
+        if (floating && !(stored >> 9 & 1) && (bits == 32 || bits == 64) && s->values[known[e].value].cls == SC_INT) {
+          v->op = SO_BITS; v->a = known[e].value; v->b = v->c = -1; v->aux = v->aux2 = 0; v->effect = false;
+          changed = true;
+          continue;
+        }
+        if ((stored >> 9 & 1) != floating) continue;
         if (floating || bits == 64) ssa_replace(s, id, known[e].value);
         else { v->op = SO_EXT; v->a = known[e].value; v->b = v->c = -1; v->aux = bits; v->aux2 = sign; v->effect = false; v->cls = SC_INT; }
         changed = true;
