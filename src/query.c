@@ -92,7 +92,7 @@ int dyn_query_sources(const DynSources *sources, const char *main_path) {
   for (size_t i = 0; i < a.function_count; ++i) QUERY_SYMBOL("function",i,a.functions[i].name,a.functions[i].span,a.functions[i].return_type,a.functions[i].is_public);
   for (size_t i = 0; i < a.global_count; ++i) QUERY_SYMBOL("global",i,a.globals[i].name,a.globals[i].name,a.globals[i].type,a.globals[i].is_public);
   for (size_t i = 0; i < a.local_count; ++i) QUERY_SYMBOL("local",i,a.locals[i].name,a.locals[i].name,a.locals[i].type,false);
-  for (size_t i = 0; i < a.struct_count; ++i) QUERY_SYMBOL("struct",i,a.structs[i].name,a.structs[i].span,DYN_TYPE_STRUCT_BASE+(DynType)i,a.structs[i].is_public);
+  for (size_t i = 0; i < a.struct_count; ++i) if (!a.structs[i].template_of) QUERY_SYMBOL("struct",i,a.structs[i].name,a.structs[i].span,DYN_TYPE_STRUCT_BASE+(DynType)i,a.structs[i].is_public);
   for (size_t i = 0; i < a.enum_count; ++i) QUERY_SYMBOL("enum",i,a.enums[i].name,a.enums[i].span,DYN_TYPE_ENUM_BASE+(DynType)i,a.enums[i].is_public);
   for (size_t i = 0; i < a.alias_count; ++i) QUERY_SYMBOL("alias",i,a.aliases[i].name,a.aliases[i].name,a.aliases[i].target,a.aliases[i].is_public);
 #undef QUERY_SYMBOL

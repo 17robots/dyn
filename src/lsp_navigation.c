@@ -1475,7 +1475,11 @@ static void lsp_struct_hover(LspSemantic *semantic, uint32_t index, char *out,
   } while (0)
   APPEND_STRUCT("%s%sstruct %.*s {", s->is_public ? "pub " : "",
                 s->packed ? "packed " : "",
-                (int)(s->name.end_byte - s->name.start_byte),
+                /* A template's name runs on through its parameters. */
+                (int)(s->is_template
+                          ? (size_t)(strchr(semantic->source.text + s->name.end_byte, ')') + 1 -
+                                     (semantic->source.text + s->name.start_byte))
+                          : s->name.end_byte - s->name.start_byte),
                 semantic->source.text + s->name.start_byte);
   uint32_t shown = s->field_count < 8 ? s->field_count : 8;
   for (uint32_t i = 0; i < shown; ++i) {

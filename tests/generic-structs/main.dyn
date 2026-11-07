@@ -68,6 +68,10 @@ fn main() {
   if counted.value != 3 || counted.failure.kind != io.Kind.Ok {
     #panic("result")
   }
+  info := #typeof(Box(i32))
+  if #len(info.name) != 8 || info.name[3] != '(' {
+    #panic("reflection name")
+  }
   node: Node(u32)
   node.value = 3
   other: Node(u32) = .{ next: &node, value: 4 }

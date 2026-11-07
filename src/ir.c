@@ -164,6 +164,14 @@ static bool allocate(void **out, size_t count, size_t size) {
 }
 
 /* Copies a name into the program's name pool at *cursor. */
+enum { IR_INSTANCE_NAME = 256 };
+/* An instance has no source name, so reflection reports its full spelling. */
+static char *copy_instance_name(const DynAstProgram *a, size_t id, const DynSource *source, char **cursor) {
+  char *text = *cursor;
+  dyn_type_format((DynAstProgram *)a, DYN_TYPE_STRUCT_BASE + (DynType)id, source, text, IR_INSTANCE_NAME);
+  *cursor += strlen(text) + 1;
+  return text;
+}
 static char *copy_span(DynSpan span, const DynSource *source, char **cursor) {
   size_t n = span.end_byte - span.start_byte;
   char *text = *cursor;
@@ -426,7 +434,8 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
   /* One pool holds every declaration and local name. */
   size_t name_bytes = 1;
   for (size_t i = 0; i < a->field_count; ++i) name_bytes += span_bytes(a->fields[i].name);
-  for (size_t i = 0; i < a->struct_count; ++i) name_bytes += span_bytes(a->structs[i].name);
+  for (size_t i = 0; i < a->struct_count; ++i)
+    name_bytes += a->structs[i].template_of ? IR_INSTANCE_NAME : span_bytes(a->structs[i].name);
   for (size_t i = 0; i < a->enum_count; ++i) name_bytes += span_bytes(a->enums[i].name);
   for (size_t i = 0; i < a->variant_count; ++i) name_bytes += span_bytes(a->variants[i].name);
   for (size_t i = 0; i < a->param_count; ++i) name_bytes += span_bytes(a->params[i].name);
@@ -465,7 +474,8 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
   }
   for (size_t i = 0; i < a->struct_count; ++i) {
     ir->structs[i] =
-        (DynIrStruct){.name = copy_span(a->structs[i].name, source, &cursor),
+        (DynIrStruct){.name = a->structs[i].template_of ? copy_instance_name(a, i, source, &cursor)
+                                                        : copy_span(a->structs[i].name, source, &cursor),
                       .span = a->structs[i].span,
                       .packed = a->structs[i].packed, .is_union = a->structs[i].is_union,
                       .is_public = a->structs[i].is_public,
