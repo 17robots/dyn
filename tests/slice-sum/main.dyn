@@ -40,6 +40,20 @@ fn plain_u64(xs: []u64) u64 {
   }
   return t
 }
+fn indexed_i32(xs: []i32) i32 {
+  t: i32 = 0
+  for i in 0..#len(xs) {
+    t += xs[i]
+  }
+  return t
+}
+fn indexed_square(xs: []u32, n: usize) u32 {
+  t: u32 = 0
+  for i in 0..n {
+    t += xs[i] * xs[i]
+  }
+  return t
+}
 fn check(ok: bool) {
   if !ok {
     #panic("sum")
@@ -77,6 +91,8 @@ fn main() {
     check(start_u32(b[0..n], 7) == expect_u32)
     check(square_i32(a[0..n]) == expect_square)
     check(square_u32(b[0..n]) == expect_square_u32)
+    check(indexed_i32(a[0..n]) == expect_i32)
+    check(indexed_square(b[0..n], n) == expect_square_u32)
     check(plain_i64(c[0..n]) == expect_i64)
     check(plain_u64(d[0..n]) == expect_u64)
   }

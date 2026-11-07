@@ -288,6 +288,96 @@ static void a64s_store_outgoing(SsaEmit *e, int32_t value, uint32_t offset, unsi
   if (floating && width < 4) width = 4;
   a64s_memory(e->ctx, width * 8, false, floating, true, floating ? a64s_v(reg) : reg, (SsaMemory){A64_SP, -1, 1, (int32_t)offset});
 }
+/* A placeholder branch, patched once its target is known. */
+static size_t a64s_later(BackendContext *ctx) {
+  size_t at = ctx->text.n;
+  a64_word(ctx, 0);
+  return at;
+}
+static void a64s_conditional(BackendContext *ctx, size_t at, size_t target, unsigned condition) {
+  patch_word(ctx, at, 0x54000000u | (uint32_t)(((int64_t)target - (int64_t)at) / 4 & 0x7ffff) << 5 | condition);
+}
+static void a64s_if_zero(BackendContext *ctx, size_t at, size_t target, unsigned reg) {
+  patch_word(ctx, at, 0xb4000000u | (uint32_t)(((int64_t)target - (int64_t)at) / 4 & 0x7ffff) << 5 | reg);
+}
+static void a64s_back(BackendContext *ctx, size_t target, unsigned condition) {
+  size_t at = a64s_later(ctx);
+  a64s_conditional(ctx, at, target, condition);
+}
+/* Whole lanes sum in v29, then the tail runs one element at a time. */
+static void a64s_sum(SsaEmit *e, SsaValue *v) {
+  BackendContext *ctx = e->ctx;
+  unsigned data = a64s_get(e, v->a, A_S1), count = a64s_get(e, v->b, A_S2), initial = a64s_get(e, v->c, A_S3);
+  /* Operands sit in allocated registers or their own scratch. */
+  a64s_mov(ctx, A_S1, data); a64s_mov(ctx, A_S2, count); a64s_mov(ctx, A_S3, initial);
+  unsigned bytes = (unsigned)v->aux, lanes = 16 / bytes;
+  bool wide = bytes == 8, square = v->aux2 & 1, sign = v->aux2 & 2;
+  a64_word(ctx, 0x4f00e400u | A_F3); /* movi v29.16b, #0 */
+  size_t loop = ctx->text.n;
+  a64_word(ctx, 0xf100001fu | lanes << 10 | A_S2 << 5);
+  size_t after = a64s_later(ctx);
+  a64_word(ctx, 0x3cc10400u | A_S1 << 5 | A_F1); /* ldr q31, [x16], #16 */
+  if (square) a64_word(ctx, 0x4ea09c00u | A_F1 << 16 | A_F1 << 5 | A_F1); /* mul */
+  a64_word(ctx, (wide ? 0x4ee08400u : 0x4ea08400u) | A_F1 << 16 | A_F3 << 5 | A_F3);
+  a64_word(ctx, 0xd1000000u | lanes << 10 | A_S2 << 5 | A_S2);
+  a64_word(ctx, 0x14000000u | (uint32_t)(((int64_t)loop - (int64_t)ctx->text.n) / 4 & 0x3ffffff));
+  a64s_conditional(ctx, after, ctx->text.n, 3); /* b.lo */
+  if (wide) {
+    a64_word(ctx, 0x5ef1b800u | A_F3 << 5 | A_F1); /* addp d31, v29.2d */
+    a64_word(ctx, 0x9e660000u | A_F1 << 5 | A_S4);
+  } else {
+    a64_word(ctx, 0x4eb1b800u | A_F3 << 5 | A_F1); /* addv s31, v29.4s */
+    a64_word(ctx, 0x1e260000u | A_F1 << 5 | A_S4);
+  }
+  a64_word(ctx, 0x8b000000u | A_S4 << 16 | A_S3 << 5 | A_S3);
+  size_t empty = a64s_later(ctx), scalar = ctx->text.n;
+  a64_word(ctx, (wide ? 0xf8408400u : 0xb8404400u) | A_S1 << 5 | A_S4);
+  if (square) a64_word(ctx, 0x1b007c00u | A_S4 << 16 | A_S4 << 5 | A_S4);
+  a64_word(ctx, 0x8b000000u | A_S4 << 16 | A_S3 << 5 | A_S3);
+  a64_word(ctx, 0xf1000400u | A_S2 << 5 | A_S2);
+  a64s_back(ctx, scalar, 1); /* b.ne */
+  a64s_if_zero(ctx, empty, ctx->text.n, A_S2);
+  if (!wide) a64_word(ctx, sign ? 0x93407c00u | A_S3 << 5 | A_S3 : 0x2a0003e0u | A_S3 << 16 | A_S3);
+  unsigned d = a64s_target(v);
+  a64s_mov(ctx, d, A_S3);
+  a64s_put(e, v, d);
+}
+/* See ssa_axpy_emit: dst just above src runs one element at a time. */
+static void a64s_axpy(SsaEmit *e, SsaValue *v) {
+  BackendContext *ctx = e->ctx;
+  a64s_add_immediate(ctx, A_S4, A64_FP, (int32_t)e->s->values[v->a].aux);
+  unsigned bytes = (unsigned)v->aux, lanes = 16 / bytes;
+  bool wide = bytes == 8, minus = v->aux2 == DYN_OP_SUB;
+  a64_word(ctx, 0xf9400000u | 0u << 10 | A_S4 << 5 | A_S1);
+  a64_word(ctx, 0xf9400000u | 1u << 10 | A_S4 << 5 | A_S2);
+  a64_word(ctx, 0xf9400000u | 2u << 10 | A_S4 << 5 | A_S3);
+  a64_word(ctx, wide ? 0xfd400000u | 3u << 10 | A_S4 << 5 | A_F3 : 0xbd400000u | 6u << 10 | A_S4 << 5 | A_F3);
+  a64_word(ctx, (wide ? 0x4e080400u : 0x4e040400u) | A_F3 << 5 | A_F3); /* dup */
+  a64_word(ctx, 0xcb000000u | A_S2 << 16 | A_S1 << 5 | A_S4);
+  a64_word(ctx, 0xd1000400u | A_S4 << 5 | A_S4);
+  a64_word(ctx, 0xf100001fu | 15u << 10 | A_S4 << 5);
+  size_t overlap = a64s_later(ctx), loop = ctx->text.n;
+  a64_word(ctx, 0xf100001fu | lanes << 10 | A_S3 << 5);
+  size_t tail = a64s_later(ctx);
+  a64_word(ctx, 0x3cc10400u | A_S2 << 5 | A_F1);
+  a64_word(ctx, (wide ? 0x6e60dc00u : 0x6e20dc00u) | A_F3 << 16 | A_F1 << 5 | A_F1); /* fmul */
+  a64_word(ctx, 0x3dc00000u | A_S1 << 5 | A_F2);
+  a64_word(ctx, (minus ? (wide ? 0x4ee0d400u : 0x4ea0d400u) : (wide ? 0x4e60d400u : 0x4e20d400u)) | A_F1 << 16 | A_F2 << 5 | A_F2);
+  a64_word(ctx, 0x3c810400u | A_S1 << 5 | A_F2);
+  a64_word(ctx, 0xd1000000u | lanes << 10 | A_S3 << 5 | A_S3);
+  a64_word(ctx, 0x14000000u | (uint32_t)(((int64_t)loop - (int64_t)ctx->text.n) / 4 & 0x3ffffff));
+  a64s_conditional(ctx, overlap, ctx->text.n, 3);
+  a64s_conditional(ctx, tail, ctx->text.n, 3);
+  size_t empty = a64s_later(ctx), scalar = ctx->text.n;
+  a64_word(ctx, (wide ? 0xfc408400u : 0xbc404400u) | A_S2 << 5 | A_F1);
+  a64_word(ctx, (wide ? 0x1e600800u : 0x1e200800u) | A_F3 << 16 | A_F1 << 5 | A_F1);
+  a64_word(ctx, (wide ? 0xfd400000u : 0xbd400000u) | A_S1 << 5 | A_F2);
+  a64_word(ctx, (minus ? (wide ? 0x1e603800u : 0x1e203800u) : (wide ? 0x1e602800u : 0x1e202800u)) | A_F1 << 16 | A_F2 << 5 | A_F2);
+  a64_word(ctx, (wide ? 0xfc008400u : 0xbc004400u) | A_S1 << 5 | A_F2);
+  a64_word(ctx, 0xf1000400u | A_S3 << 5 | A_S3);
+  a64s_back(ctx, scalar, 1);
+  a64s_if_zero(ctx, empty, ctx->text.n, A_S3);
+}
 static void a64s_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
   Ssa *s = e->s; BackendContext *ctx = e->ctx;
   uint32_t id = block->values.items[*k];
@@ -519,6 +609,8 @@ static void a64s_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
     a64_word(ctx, 0x54000001u | (uint32_t)(((int64_t)begin - (int64_t)ctx->text.n) / 4 & 0x7ffff) << 5); /* b.ne */
     return;
   }
+  case SO_SUM: a64s_sum(e, v); return;
+  case SO_AXPY: a64s_axpy(e, v); return;
   case SO_TRAP: isa_trap(ctx); return;
   case SO_COPYMEM: a64s_copy_memory(e, v); return;
   case SO_ZEROMEM: a64s_zero_memory(e, v); return;

@@ -2108,6 +2108,9 @@ static bool ssa_axpy_pure(Ssa *s, DynExprId id, uint64_t index, unsigned depth) 
   if (e->type != DYN_TYPE_USIZE) return false;
   if (e->kind == DYN_EXPR_INT) return true;
   if (e->kind == DYN_EXPR_NAME) return e->integer != index && ssa_byte_count_private(s, e->integer);
+  if (e->kind == DYN_EXPR_LEN)
+    return e->left < ir->expression_count && ir->expressions[e->left].kind == DYN_EXPR_NAME &&
+           dyn_type_is_slice(ir->expressions[e->left].type) && ssa_byte_count_private(s, ir->expressions[e->left].integer);
   return e->kind == DYN_EXPR_BINARY && (e->op == DYN_OP_ADD || e->op == DYN_OP_SUB || e->op == DYN_OP_MUL) &&
          ssa_axpy_pure(s, e->left, index, depth + 1) && ssa_axpy_pure(s, e->right, index, depth + 1);
 }
@@ -2143,7 +2146,7 @@ static void ssa_axpy_guard(Ssa *s, int32_t a, int32_t b, uint32_t scalar_path) {
    whole range is in bounds; every other case takes the ordinary loop. */
 static bool ssa_axpy(Ssa *s, const DynIrStmt *st, unsigned depth) {
   const DynIrProgram *ir = s->ir;
-  if (s->scalar_loop == st || !s->ctx->vectorize || s->ctx->a64 || s->ctx->rv64 || s->ctx->rv32 || s->ctx->t32 ||
+  if (s->scalar_loop == st || !s->ctx->vectorize || s->ctx->rv64 || s->ctx->rv32 || s->ctx->t32 ||
       !st->for_range || st->for_reverse || st->for_inclusive || st->for_pointer || st->body_count != 1 ||
       st->body_start >= ir->child_count || st->target >= ir->expression_count ||
       st->expression >= ir->expression_count || !ssa_byte_count_private(s, st->local_id)) return false;
@@ -2203,14 +2206,24 @@ static bool ssa_axpy(Ssa *s, const DynIrStmt *st, unsigned depth) {
 }
 /* `for x in xs { t += x }` and `t += x * x` over a slice of 32- or 64-bit
    integers. Squares stay 32-bit: SSE2 has no 64-bit lane multiply. */
-static bool ssa_sum(Ssa *s, const DynIrStmt *st) {
+static bool ssa_sum(Ssa *s, const DynIrStmt *st, unsigned depth) {
   const DynIrProgram *ir = s->ir;
-  if (!s->ctx->vectorize || s->ctx->a64 || s->ctx->rv64 || s->ctx->rv32 || s->ctx->t32 ||
-      st->for_range || st->for_reverse || st->for_pointer || st->body_count != 1 ||
+  if (s->scalar_loop == st || !s->ctx->vectorize || s->ctx->rv64 || s->ctx->rv32 || s->ctx->t32 ||
+      st->for_reverse || st->for_pointer || st->for_inclusive || st->body_count != 1 ||
       st->body_start >= ir->child_count || st->target >= ir->expression_count ||
-      !dyn_type_is_slice(ir->expressions[st->target].type) || !ssa_byte_count_private(s, st->local_id)) return false;
-  DynType element = ir->slices[ir->expressions[st->target].type - DYN_TYPE_SLICE_BASE].element;
-  if (element != DYN_TYPE_I32 && element != DYN_TYPE_U32 && element != DYN_TYPE_I64 && element != DYN_TYPE_U64) return false;
+      !ssa_byte_count_private(s, st->local_id)) return false;
+  /* `for x in xs` reads every element; `for i in 0..n` reads xs[i] and takes
+     the ordinary loop when n passes the end, which must panic. */
+  bool indexed = st->for_range;
+  uint32_t slice = UINT32_MAX;
+  DynType element = DYN_TYPE_VOID;
+  if (indexed) {
+    const DynIrExpr *start = &ir->expressions[st->target];
+    if (start->kind != DYN_EXPR_INT || start->integer || !ssa_axpy_pure(s, st->expression, st->local_id, 0)) return false;
+  } else {
+    if (!dyn_type_is_slice(ir->expressions[st->target].type)) return false;
+    element = ir->slices[ir->expressions[st->target].type - DYN_TYPE_SLICE_BASE].element;
+  }
   const DynIrStmt *add = &ir->statements[ir->children[st->body_start]];
   if (add->kind != DYN_STMT_ASSIGN || add->expression >= ir->expression_count) return false;
   uint64_t accumulator = add->local_id;
@@ -2218,30 +2231,64 @@ static bool ssa_sum(Ssa *s, const DynIrStmt *st) {
     if (add->target >= ir->expression_count || ir->expressions[add->target].kind != DYN_EXPR_NAME) return false;
     accumulator = ir->expressions[add->target].integer;
   }
-  if (accumulator == st->local_id || !ssa_byte_count_private(s, accumulator) || ir->locals[accumulator].type != element) return false;
-  const DynIrExpr *term = &ir->expressions[add->expression];
+  if (accumulator == st->local_id || !ssa_byte_count_private(s, accumulator)) return false;
+  DynExprId term_id = add->expression;
+  const DynIrExpr *term = &ir->expressions[term_id];
   if (add->assignment_op == DYN_OP_NONE) {
-    if (term->kind != DYN_EXPR_BINARY || term->op != DYN_OP_ADD || term->type != element ||
-        term->left >= ir->expression_count || term->right >= ir->expression_count ||
+    if (term->kind != DYN_EXPR_BINARY || term->op != DYN_OP_ADD || term->left >= ir->expression_count || term->right >= ir->expression_count ||
         ir->expressions[term->left].kind != DYN_EXPR_NAME || ir->expressions[term->left].integer != accumulator) return false;
-    term = &ir->expressions[term->right];
+    term_id = term->right;
+    term = &ir->expressions[term_id];
   } else if (add->assignment_op != DYN_OP_ADD) return false;
-  bool square = false;
-  if (term->kind == DYN_EXPR_BINARY) {
-    if (term->op != DYN_OP_MUL || term->left >= ir->expression_count || term->right >= ir->expression_count ||
-        element == DYN_TYPE_I64 || element == DYN_TYPE_U64) return false;
-    const DynIrExpr *left = &ir->expressions[term->left], *right = &ir->expressions[term->right];
+  bool square = term->kind == DYN_EXPR_BINARY;
+  DynExprId first = term_id, second = term_id;
+  if (square) {
+    if (term->op != DYN_OP_MUL || term->left >= ir->expression_count || term->right >= ir->expression_count) return false;
+    first = term->left;
+    second = term->right;
+  }
+  if (indexed) {
+    uint32_t other;
+    DynExprId offset, other_offset;
+    DynType other_element;
+    if (!ssa_axpy_element(s, first, st->local_id, &slice, &offset, &element) ||
+        !ssa_axpy_element(s, second, st->local_id, &other, &other_offset, &other_element) ||
+        slice != other || offset != DYN_NO_EXPR || other_offset != DYN_NO_EXPR) return false;
+  } else {
+    const DynIrExpr *left = &ir->expressions[first], *right = &ir->expressions[second];
     if (left->kind != DYN_EXPR_NAME || right->kind != DYN_EXPR_NAME || left->integer != st->local_id ||
         right->integer != st->local_id) return false;
-    square = true;
-  } else if (term->kind != DYN_EXPR_NAME || term->integer != st->local_id) return false;
-  int32_t length = -1, data = ssa_expr(s, st->target, &length, 0);
-  if (s->failed || length < 0) return false;
-  uint32_t local = (uint32_t)(accumulator - s->f->local_start);
-  int32_t initial = ssa_read(s, 2 * local, s->current, SC_INT);
+  }
+  if ((element != DYN_TYPE_I32 && element != DYN_TYPE_U32 && element != DYN_TYPE_I64 && element != DYN_TYPE_U64) ||
+      ir->locals[accumulator].type != element) return false;
   unsigned bytes = element == DYN_TYPE_I32 || element == DYN_TYPE_U32 ? 4 : 8;
+  if (square && bytes == 8) return false;
   bool sign = element == DYN_TYPE_I32 || element == DYN_TYPE_I64;
-  ssa_set_local(s, local, ssa_emit(s, SO_SUM, SC_INT, data, length, initial, bytes, (square ? 1 : 0) | (sign ? 2 : 0)), -1);
+  uint32_t local = (uint32_t)(accumulator - s->f->local_start);
+  int64_t flags = (square ? 1 : 0) | (sign ? 2 : 0);
+  if (!indexed) {
+    int32_t length = -1, data = ssa_expr(s, st->target, &length, 0);
+    if (s->failed || length < 0) return false;
+    int32_t initial = ssa_read(s, 2 * local, s->current, SC_INT);
+    ssa_set_local(s, local, ssa_emit(s, SO_SUM, SC_INT, data, length, initial, bytes, flags), -1);
+  } else {
+    uint32_t scalar_path = ssa_block(s), join = ssa_block(s);
+    int32_t count = ssa_expr(s, st->expression, NULL, 0);
+    ssa_axpy_guard(s, count, ssa_read(s, 2 * slice + 1, s->current, SC_INT), scalar_path);
+    int32_t initial = ssa_read(s, 2 * local, s->current, SC_INT);
+    ssa_set_local(s, local, ssa_emit(s, SO_SUM, SC_INT, ssa_read(s, 2 * slice, s->current, SC_INT), count, initial, bytes, flags), -1);
+    ssa_jump(s, join);
+    ssa_seal(s, scalar_path);
+    s->current = scalar_path;
+    const DynIrStmt *outer = s->scalar_loop;
+    s->scalar_loop = st;
+    ssa_statement_value(s, st, depth);
+    s->scalar_loop = outer;
+    if (s->failed) return true;
+    if (s->current != UINT32_MAX) ssa_jump(s, join);
+    ssa_seal(s, join);
+    s->current = s->blocks[join].preds.count ? join : UINT32_MAX;
+  }
   ++s->vectorized;
   if (s->ctx->optimization_remarks) fprintf(stderr, "remark: %s: vectorized slice sum\n", s->f->name);
   return true;
@@ -2632,7 +2679,7 @@ static void ssa_statement_value(Ssa *s, const DynIrStmt *st, unsigned depth) {
     if (ssa_byte_fill(s, st)) return;
     if (ssa_byte_count(s, st)) return;
     if (ssa_vector(s, st)) return;
-    if (ssa_sum(s, st)) return;
+    if (ssa_sum(s, st, depth)) return;
     if (ssa_axpy(s, st, depth)) return;
     uint32_t counter = s->variable_count + s->hidden_variables++;
     ++s->loop_depth;
