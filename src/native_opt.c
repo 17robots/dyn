@@ -699,6 +699,9 @@ static DynExprId inline_capture_target(Inline *b, const InlineScope *scope,
 }
 static void inline_block(Inline *, const InlineScope *, uint32_t, uint32_t,
                          InlineList *, unsigned);
+static bool inline_cast_call(Inline *b, const InlineScope *scope,
+                             DynExprId id, InlineList *list,
+                             DynExprId *result, unsigned depth);
 static bool inline_call(Inline *b, const InlineScope *scope,
                         const DynIrExpr *site, InlineList *list,
                         DynExprId *result, unsigned depth) {
@@ -754,8 +757,18 @@ static bool inline_call(Inline *b, const InlineScope *scope,
     DynIrStmt s = inline_empty(DYN_STMT_LOCAL, call->span);
     s.local_id =
         inline_local(b, &nested, b->in->params[f->param_start + i].local_id);
-    s.expression =
-        inline_expr(b, scope, b->in->items[call->item_start + i].expression, 0);
+    /* Arguments run in order before the body, so a call in one expands like
+       a statement of the caller. */
+    DynExprId argument = b->in->items[call->item_start + i].expression;
+    InlineList expansion = {0};
+    DynExprId value = DYN_NO_EXPR;
+    bool expanded = inline_cast_call(b, scope, argument, &expansion, &value, depth + 1);
+    for (size_t j = 0; j < expansion.count; ++j)
+      inline_list(b, list, expansion.ids[j]);
+    free(expansion.ids);
+    if (b->failed)
+      return true;
+    s.expression = expanded ? value : inline_expr(b, scope, argument, 0);
     inline_statement(b, list, s);
   }
   InlineList body = {0};

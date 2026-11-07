@@ -3505,6 +3505,8 @@ static bool ssa_copy_known(Ssa *s, uint32_t b, uint32_t k, const int32_t *owner,
   int32_t zero = -1;
   unsigned alignment = 0;
   if (!ssa_address_facts(s, destination, &alignment, 0)) alignment = 0;
+  /* x86-64 scalar stores work at any address. */
+  if (!s->ctx->a64 && !s->ctx->rv64 && !s->ctx->rv32 && !s->ctx->t32) alignment = 3;
   while (at < size) {
     int32_t owned = owner[at];
     uint32_t width;
@@ -3541,15 +3543,21 @@ static bool ssa_copy_known(Ssa *s, uint32_t b, uint32_t k, const int32_t *owner,
    word loads; other targets retain their existing copy lowering. */
 static bool ssa_snapshot_copy(Ssa *s, uint32_t b, uint32_t k) {
   SsaValue original = s->values[s->blocks[b].values.items[k]];
-  if (s->ctx->a64 || s->ctx->rv64 || original.aux <= 0 || original.aux > 32 || original.aux % 8) return false;
-  int32_t items[8], loads[4];
-  uint32_t words = (uint32_t)original.aux / 8, count = 0;
+  if (s->ctx->a64 || s->ctx->rv64 || original.aux <= 0 || original.aux > 32) return false;
+  /* Copying a struct of 32-bit fields in 64-bit words would miss store
+     forwarding from the field stores before it. */
+  bool x86 = !s->ctx->rv32 && !s->ctx->t32;
+  uint32_t width = original.aux % 8 == 0 ? 8 : 4;
+  if (original.aux % width || (width == 4 && !x86)) return false;
+  int32_t items[16], loads[8];
+  uint32_t words = (uint32_t)original.aux / width, count = 0;
+  int64_t type = SSA_MEM(width * 8, 0, 0);
   for (uint32_t i = 0; i < words; ++i) {
-    loads[i] = ssa_value(s, b, SO_LOAD, SC_INT, original.b, -1, -1, i * 8, SSA_MEM(64, 0, 0));
+    loads[i] = ssa_value(s, b, SO_LOAD, SC_INT, original.b, -1, -1, i * width, type);
     items[count++] = loads[i];
   }
   for (uint32_t i = 0; i < words; ++i)
-    items[count++] = ssa_value(s, b, SO_STORE, SC_NONE, original.a, -1, loads[i], i * 8, SSA_MEM(64, 0, 0));
+    items[count++] = ssa_value(s, b, SO_STORE, SC_NONE, original.a, -1, loads[i], i * width, type);
   if (s->failed) return false;
   s->values[s->blocks[b].values.items[k]].dead = true;
   ssa_splice(s, b, k, items, count);
