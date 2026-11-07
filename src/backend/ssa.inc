@@ -80,6 +80,7 @@ typedef struct {
   int32_t a, b, c;
   int64_t aux, aux2;
   uint32_t block, list, count, uses, check_origin;
+  bool element_address; /* &xs[i]: bounds-checked, so neither nil nor misaligned */
   /* ILP32 calls retain original signature identity and {type, first, count}
      groups separately from the optimizer's flattened operand triples. */
   uint32_t abi_expr, abi_groups, abi_group_count;
@@ -487,6 +488,7 @@ static bool ssa_local_index(Ssa *s, uint64_t id, uint32_t *local) {
 /* Pointer checks of checked_address: non-nil, then aligned for the pointee. */
 static void ssa_checked_address(Ssa *s, int32_t pointer, DynType pointee) {
   uint32_t size, alignment;
+  if (pointer >= 0 && s->values[pointer].element_address) return;
   if (!layout(s->ir, pointee, &size, &alignment, 0)) { SSA_GIVE_UP(s); return; }
   ssa_check(s, pointer, ssa_const(s, 0, SC_INT), CC_NE, GUARD_NONNULL);
   if (alignment > 1) {
@@ -711,7 +713,10 @@ static int32_t ssa_unary(Ssa *s, const DynIrExpr *e, int32_t *second, unsigned d
   if (e->op == DYN_OP_ADDRESS) {
     if (e->left < ir->expression_count && ir->expressions[e->left].kind == DYN_EXPR_FUNCTION)
       return ssa_expr(s, e->left, NULL, depth + 1);
-    return ssa_address(s, e->left, depth + 1);
+    int32_t address = ssa_address(s, e->left, depth + 1);
+    if (!s->failed && address >= 0 && e->left < ir->expression_count && ir->expressions[e->left].kind == DYN_EXPR_INDEX)
+      s->values[address].element_address = true;
+    return address;
   }
   if (e->op == DYN_OP_DEREF) {
     if (dyn_type_is_function(e->type)) { SSA_GIVE_UP(s); return 0; }

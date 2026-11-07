@@ -11,12 +11,13 @@
 //
 // The built-in hashes use a fixed seed. For keys an attacker chooses, use create
 // with a hash seeded from std/crypto/random. Slots are in no useful order; walk
-// them with `for slot in m.slots` and skip those without used set.
+// them with `for slot in m.slots` and skip those whose code is 0.
 
 use "std/container/hash" hash
 use "std/mem" mem
 
-pub struct Slot($K: type, $V: type) { key: K, value: V, code: u64, used: bool }
+// code is the key's hash with the top bit set, or 0 for an empty slot.
+pub struct Slot($K: type, $V: type) { key: K, value: V, code: u64 }
 pub struct Map($K: type, $V: type) {
   slots: []Slot(K, V),
   count: usize,
@@ -71,17 +72,26 @@ pub fn integers($V: type) Map(u64, V) {
   return create(u64, V, integer_hash, integer_equal)
 }
 
+fn code_of(m: *const Map($K, $V), key: K) u64 {
+  return m.hash_key(key) | 0x8000000000000000
+}
+
 // The slot holding key, or the empty slot where it belongs.
-fn locate(m: *const Map($K, $V), key: K, code: u64) usize {
-  mask := #len(m.slots) - 1
+fn locate(m: *const Map($K, $V), key: K, code: u64) *Slot(K, V) {
+  slots := m.slots
+  mask := #len(slots) - 1
   at := #cast(usize, code) & mask
-  for m.slots[at].used {
-    if m.slots[at].code == code && m.equal_key(m.slots[at].key, key) {
-      return at
+  for true {
+    slot := &slots[at]
+    if slot.code == 0 {
+      return #cast(*Slot(K, V), slot)
+    }
+    if slot.code == code && m.equal_key(slot.key, key) {
+      return #cast(*Slot(K, V), slot)
     }
     at = (at + 1) & mask
   }
-  return at
+  return nil
 }
 
 fn grow(arena: *mem.Arena, m: *Map($K, $V)) {
@@ -90,17 +100,18 @@ fn grow(arena: *mem.Arena, m: *Map($K, $V)) {
     capacity = 8
   }
   old := m.slots
-  m.slots = mem.push_array(Slot(K, V), arena, capacity)
+  fresh := mem.push_array(Slot(K, V), arena, capacity)
   mask := capacity - 1
   for slot in old {
-    if slot.used {
+    if slot.code != 0 {
       at := #cast(usize, slot.code) & mask
-      for m.slots[at].used {
+      for fresh[at].code != 0 {
         at = (at + 1) & mask
       }
-      m.slots[at] = slot
+      fresh[at] = slot
     }
   }
+  m.slots = fresh
 }
 
 // Sets key to value, adding it when absent. Returns the value's address.
@@ -111,16 +122,15 @@ pub fn put(arena: *mem.Arena, m: *Map($K, $V), key: K, value: V) *V {
   if (m.count + 1) * 4 > #len(m.slots) * 3 {
     grow(arena, m)
   }
-  code := m.hash_key(key)
-  at := locate(m, key, code)
-  if !m.slots[at].used {
-    m.slots[at].used = true
-    m.slots[at].key = key
-    m.slots[at].code = code
+  code := code_of(m, key)
+  slot := locate(m, key, code)
+  if slot.code == 0 {
+    slot.key = key
+    slot.code = code
     m.count += 1
   }
-  m.slots[at].value = value
-  return &m.slots[at].value
+  slot.value = value
+  return &slot.value
 }
 
 // The value for key, or nil when key is absent.
@@ -128,11 +138,11 @@ pub fn find(m: *const Map($K, $V), key: K) *V {
   if m.count == 0 {
     return nil
   }
-  at := locate(m, key, m.hash_key(key))
-  if !m.slots[at].used {
+  slot := locate(m, key, code_of(m, key))
+  if slot.code == 0 {
     return nil
   }
-  return #cast(*V, &m.slots[at].value)
+  return &slot.value
 }
 
 // Removes key. Returns false when it was absent. Later entries of the probe run
@@ -141,22 +151,27 @@ pub fn remove(m: *Map($K, $V), key: K) bool {
   if m.count == 0 {
     return false
   }
-  at := locate(m, key, m.hash_key(key))
-  if !m.slots[at].used {
-    return false
+  slots := m.slots
+  mask := #len(slots) - 1
+  code := code_of(m, key)
+  at := #cast(usize, code) & mask
+  for slots[at].code != code || !m.equal_key(slots[at].key, key) {
+    if slots[at].code == 0 {
+      return false
+    }
+    at = (at + 1) & mask
   }
-  mask := #len(m.slots) - 1
   next := (at + 1) & mask
-  for m.slots[next].used {
-    home := #cast(usize, m.slots[next].code) & mask
+  for slots[next].code != 0 {
+    home := #cast(usize, slots[next].code) & mask
     if ((next - home) & mask) >= ((next - at) & mask) {
-      m.slots[at] = m.slots[next]
+      slots[at] = slots[next]
       at = next
     }
     next = (next + 1) & mask
   }
   empty: Slot(K, V)
-  m.slots[at] = empty
+  slots[at] = empty
   m.count -= 1
   return true
 }

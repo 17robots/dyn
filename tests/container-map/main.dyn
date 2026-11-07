@@ -58,7 +58,7 @@ fn main() {
   }
   walked: usize = 0
   for slot in numbers.slots {
-    if slot.used {
+    if slot.code != 0 {
       walked += 1
     }
   }
