@@ -689,6 +689,8 @@ static DynExprId inline_capture_target(Inline *b, const InlineScope *scope,
   DynIrExpr dereference = {.kind = DYN_EXPR_UNARY, .op = DYN_OP_DEREF,
                             .type = target->type, .left = DYN_NO_EXPR,
                             .right = DYN_NO_EXPR, .span = target->span,
+                            /* The capture above already checked this address. */
+                            .boolean = true,
                             .check_origin = target->check_origin};
   if (!dereference.check_origin)
     dereference.check_origin = scope->check_origin;

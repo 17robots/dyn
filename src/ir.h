@@ -18,7 +18,7 @@ typedef struct {
   DynExprId left, right;
   uint64_t integer;
   double floating;
-  bool boolean;
+  bool boolean; /* A literal's value; on a dereference, its checks already ran. */
   uint32_t item_start, item_count;
   DynSpan span;
   bool wrap;

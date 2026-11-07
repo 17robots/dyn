@@ -541,7 +541,7 @@ static int32_t ssa_address_value(Ssa *s, DynExprId id, unsigned depth) {
   if (e->kind == DYN_EXPR_UNARY && e->op == DYN_OP_DEREF) {
     if (dyn_type_is_function(e->type)) { SSA_GIVE_UP(s); return 0; }
     int32_t pointer = ssa_expr(s, e->left, NULL, depth + 1);
-    ssa_checked_address(s, pointer, e->type);
+    if (!e->boolean) ssa_checked_address(s, pointer, e->type);
     return pointer;
   }
   if (e->kind == DYN_EXPR_FIELD) {
@@ -713,7 +713,7 @@ static int32_t ssa_unary(Ssa *s, const DynIrExpr *e, int32_t *second, unsigned d
   if (e->op == DYN_OP_DEREF) {
     if (dyn_type_is_function(e->type)) { SSA_GIVE_UP(s); return 0; }
     int32_t pointer = ssa_expr(s, e->left, NULL, depth + 1);
-    ssa_checked_address(s, pointer, e->type);
+    if (!e->boolean) ssa_checked_address(s, pointer, e->type);
     return ssa_load_value(s, pointer, e->type, second);
   }
   if (float_type(e->type)) {
