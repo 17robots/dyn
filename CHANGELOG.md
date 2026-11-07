@@ -20,6 +20,7 @@ servers so they pick up the new `dyn`.
 - Generic structs: `struct Box($T: type) { value: T }`, used as `Box(i32)`.
 - Generic enums: `enum Slot($T: type) { Empty, Full: T }`, used as `Slot(i32).Full(7)`.
 - Release builds at opt-level 3 vectorize `for x in xs { t += x }` and `t += x * x` over 32- and 64-bit integer slices on x86-64 (squares are 32-bit only).
+- Opt-level 3 also vectorizes `for j in 0..n { c[p + j] += v * b[q + j] }` over `f32` and `f64` slices on x86-64, when the range is in bounds. Results match the scalar loop exactly.
 - An enum payload may be another enum.
 - Enum payloads are back: `enum Node { Null, Number: f64 }`, built with
   `Node.Number(2.5)` and read only through `case`. The first variant has no payload,

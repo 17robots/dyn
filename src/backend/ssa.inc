@@ -56,6 +56,7 @@ typedef enum {
   SO_FIND,       /* x86 only: four list operands: hay ptr/len, needle ptr/len */
   SO_JSON_ASCII_PREFIX, /* x86 only: safe JSON ASCII prefix in a[0..b]; memory read */
   SO_BYTE_COUNT, /* x86 only: count predicate matches in a[0..b], starting at c */
+  SO_AXPY,       /* x86 only: dst[i] +/- v * src[i]; a: frame {dst, src, count, v}; aux: bytes, aux2: operator */
   SO_SUM,        /* x86 only: wrapping sum of a[0..b] from c; aux: bytes, aux2: bit 0 squares, bit 1 signed */
   SO_PANIC,      /* dyn_panic(a, b) */
   SO_VECTOR,     /* SIMD loop over frame arrays a = b op c; aux: elements, aux2: op | bytes << 8 */
@@ -132,6 +133,7 @@ typedef struct {
   uint32_t return_slot; /* sret pointer, saved on entry */
   uint32_t outgoing;   /* bytes reserved at SP for stack arguments */
   unsigned vectorized, reason;
+  const DynIrStmt *scalar_loop; /* versioned loop now lowering its scalar path */
   bool calls;
   uint32_t check_origin;
   /* Pending defers, innermost last; while they run, `unwinding` is set and
@@ -232,7 +234,7 @@ static int32_t ssa_value(Ssa *s, uint32_t block, SsaOp op, uint8_t cls, int32_t 
   v->check_origin = s->check_origin;
   v->block = block; v->reg = v->slot = -1; v->hint = -1; v->scale = 1;
   v->effect = op == SO_CHECK || op == SO_CHECK_SHL || op == SO_ADDO || op == SO_SUBO || op == SO_MULO ||
-              op == SO_LOAD || op == SO_STORE || op == SO_CALL || op == SO_COPYMEM || op == SO_ZEROMEM || op == SO_FILLMEM || op == SO_FIND_BYTE || op == SO_FIND || op == SO_JSON_ASCII_PREFIX || op == SO_BYTE_COUNT || op == SO_SUM ||
+              op == SO_LOAD || op == SO_STORE || op == SO_CALL || op == SO_COPYMEM || op == SO_ZEROMEM || op == SO_FILLMEM || op == SO_FIND_BYTE || op == SO_FIND || op == SO_JSON_ASCII_PREFIX || op == SO_BYTE_COUNT || op == SO_SUM || op == SO_AXPY ||
               op == SO_PANIC || op == SO_DIV || op == SO_REM || op == SO_RESULT || op == SO_PARAM || op == SO_VECTOR || op == SO_TRAP || op == SO_FAIL || op == SO_CONTINUE;
   return (int32_t)s->value_count++;
 }
@@ -1627,6 +1629,7 @@ static void ssa_initialize(Ssa *s, int32_t destination, DynType type, DynExprId 
 /* ---- Statements ---- */
 
 static void ssa_statements(Ssa *s, uint32_t start, uint32_t count, unsigned depth);
+static void ssa_statement_value(Ssa *, const DynIrStmt *, unsigned);
 static void ssa_return(Ssa *s, int32_t value, int32_t second) {
   if (s->current == UINT32_MAX) return;
   SsaBlock *b = &s->blocks[s->current];
@@ -2097,6 +2100,107 @@ static bool ssa_byte_count(Ssa *s, const DynIrStmt *st) {
   if (s->ctx->optimization_remarks) fprintf(stderr, "remark: %s: vectorized byte predicate count (%u terms)\n", s->f->name, count);
   return true;
 }
+/* An index expression free of the loop variable and of memory. */
+static bool ssa_axpy_pure(Ssa *s, DynExprId id, uint64_t index, unsigned depth) {
+  const DynIrProgram *ir = s->ir;
+  if (id >= ir->expression_count || depth > 8) return false;
+  const DynIrExpr *e = &ir->expressions[id];
+  if (e->type != DYN_TYPE_USIZE) return false;
+  if (e->kind == DYN_EXPR_INT) return true;
+  if (e->kind == DYN_EXPR_NAME) return e->integer != index && ssa_byte_count_private(s, e->integer);
+  return e->kind == DYN_EXPR_BINARY && (e->op == DYN_OP_ADD || e->op == DYN_OP_SUB || e->op == DYN_OP_MUL) &&
+         ssa_axpy_pure(s, e->left, index, depth + 1) && ssa_axpy_pure(s, e->right, index, depth + 1);
+}
+/* slice[offset + index] or slice[index]; offset is DYN_NO_EXPR for none. */
+static bool ssa_axpy_element(Ssa *s, DynExprId id, uint64_t index, uint32_t *slice, DynExprId *offset, DynType *element) {
+  const DynIrProgram *ir = s->ir;
+  if (id >= ir->expression_count) return false;
+  const DynIrExpr *e = &ir->expressions[id];
+  if (e->kind != DYN_EXPR_INDEX || e->left >= ir->expression_count || e->right >= ir->expression_count) return false;
+  const DynIrExpr *base = &ir->expressions[e->left], *at = &ir->expressions[e->right];
+  if (base->kind != DYN_EXPR_NAME || !dyn_type_is_slice(base->type) || !ssa_byte_count_private(s, base->integer)) return false;
+  *slice = (uint32_t)(base->integer - s->f->local_start);
+  *element = ir->slices[base->type - DYN_TYPE_SLICE_BASE].element;
+  *offset = DYN_NO_EXPR;
+  if (at->kind == DYN_EXPR_NAME) return at->integer == index;
+  if (at->kind != DYN_EXPR_BINARY || at->op != DYN_OP_ADD || at->left >= ir->expression_count || at->right >= ir->expression_count) return false;
+  const DynIrExpr *left = &ir->expressions[at->left], *right = &ir->expressions[at->right];
+  if (right->kind == DYN_EXPR_NAME && right->integer == index) *offset = at->left;
+  else if (left->kind == DYN_EXPR_NAME && left->integer == index) *offset = at->right;
+  else return false;
+  return ssa_axpy_pure(s, *offset, index, 0);
+}
+/* Branch to the scalar path when a <= b fails, unsigned. */
+static void ssa_axpy_guard(Ssa *s, int32_t a, int32_t b, uint32_t scalar_path) {
+  uint32_t next = ssa_block(s);
+  ssa_branch(s, ssa_compare(s, a, b, CC_A), scalar_path, next);
+  ssa_seal(s, next);
+  s->current = next;
+}
+/* `for j in 0..n { c[p + j] += v * b[q + j] }`. Elements stay independent, so
+   float results match the scalar loop bit for bit. An out-of-range index must
+   still panic after the earlier writes, so the vector path runs only when the
+   whole range is in bounds; every other case takes the ordinary loop. */
+static bool ssa_axpy(Ssa *s, const DynIrStmt *st, unsigned depth) {
+  const DynIrProgram *ir = s->ir;
+  if (s->scalar_loop == st || !s->ctx->vectorize || s->ctx->a64 || s->ctx->rv64 || s->ctx->rv32 || s->ctx->t32 ||
+      !st->for_range || st->for_reverse || st->for_inclusive || st->for_pointer || st->body_count != 1 ||
+      st->body_start >= ir->child_count || st->target >= ir->expression_count ||
+      st->expression >= ir->expression_count || !ssa_byte_count_private(s, st->local_id)) return false;
+  const DynIrExpr *start = &ir->expressions[st->target];
+  if (start->kind != DYN_EXPR_INT || start->integer || !ssa_axpy_pure(s, st->expression, st->local_id, 0)) return false;
+  const DynIrStmt *assign = &ir->statements[ir->children[st->body_start]];
+  if (assign->kind != DYN_STMT_ASSIGN || assign->target == DYN_NO_EXPR || assign->expression >= ir->expression_count ||
+      (assign->assignment_op != DYN_OP_ADD && assign->assignment_op != DYN_OP_SUB)) return false;
+  const DynIrExpr *product = &ir->expressions[assign->expression];
+  if (product->kind != DYN_EXPR_BINARY || product->op != DYN_OP_MUL || product->left >= ir->expression_count ||
+      product->right >= ir->expression_count) return false;
+  DynExprId factor = product->left, source = product->right;
+  if (ir->expressions[factor].kind != DYN_EXPR_NAME) { factor = product->right; source = product->left; }
+  const DynIrExpr *scale = &ir->expressions[factor];
+  if (scale->kind != DYN_EXPR_NAME || scale->integer == st->local_id || !ssa_byte_count_private(s, scale->integer)) return false;
+  uint32_t destination, from;
+  DynExprId destination_offset, source_offset;
+  DynType type, other;
+  if (!ssa_axpy_element(s, assign->target, st->local_id, &destination, &destination_offset, &type) ||
+      !ssa_axpy_element(s, source, st->local_id, &from, &source_offset, &other) ||
+      type != other || (type != DYN_TYPE_F64 && type != DYN_TYPE_F32) || scale->type != type) return false;
+  unsigned bytes = type == DYN_TYPE_F64 ? 8 : 4;
+  uint32_t scalar_path = ssa_block(s), join = ssa_block(s), factor_local = (uint32_t)(scale->integer - s->f->local_start);
+  int32_t count = ssa_expr(s, st->expression, NULL, 0), zero = ssa_const(s, 0, SC_INT);
+  int32_t p = destination_offset == DYN_NO_EXPR ? zero : ssa_expr(s, destination_offset, NULL, 0);
+  int32_t q = source_offset == DYN_NO_EXPR ? zero : ssa_expr(s, source_offset, NULL, 0);
+  int32_t destination_length = ssa_read(s, 2 * destination + 1, s->current, SC_INT);
+  int32_t source_length = ssa_read(s, 2 * from + 1, s->current, SC_INT);
+  ssa_axpy_guard(s, count, destination_length, scalar_path);
+  ssa_axpy_guard(s, count, source_length, scalar_path);
+  ssa_axpy_guard(s, p, ssa_emit(s, SO_SUB, SC_INT, destination_length, count, -1, 0, 0), scalar_path);
+  ssa_axpy_guard(s, q, ssa_emit(s, SO_SUB, SC_INT, source_length, count, -1, 0, 0), scalar_path);
+  int64_t word = SSA_MEM(64, 0, 0);
+  int32_t frame = ssa_frame(s, ssa_reserve(s, 32, 8));
+  int32_t size = ssa_const(s, bytes, SC_INT);
+  ssa_store(s, frame, -1, 1, 0, word, ssa_emit(s, SO_ADD, SC_INT, ssa_read(s, 2 * destination, s->current, SC_INT),
+                                               ssa_emit(s, SO_MUL, SC_INT, p, size, -1, 0, 0), -1, 0, 0));
+  ssa_store(s, frame, -1, 1, 8, word, ssa_emit(s, SO_ADD, SC_INT, ssa_read(s, 2 * from, s->current, SC_INT),
+                                               ssa_emit(s, SO_MUL, SC_INT, q, size, -1, 0, 0), -1, 0, 0));
+  ssa_store(s, frame, -1, 1, 16, word, count);
+  ssa_store(s, frame, -1, 1, 24, SSA_MEM(bytes * 8, 0, 1), ssa_read(s, 2 * factor_local, s->current, ssa_class(type)));
+  ssa_emit(s, SO_AXPY, SC_NONE, frame, -1, -1, bytes, assign->assignment_op);
+  ssa_jump(s, join);
+  ssa_seal(s, scalar_path);
+  s->current = scalar_path;
+  const DynIrStmt *outer = s->scalar_loop;
+  s->scalar_loop = st;
+  ssa_statement_value(s, st, depth);
+  s->scalar_loop = outer;
+  if (s->failed) return true;
+  if (s->current != UINT32_MAX) ssa_jump(s, join);
+  ssa_seal(s, join);
+  s->current = s->blocks[join].preds.count ? join : UINT32_MAX;
+  ++s->vectorized;
+  if (s->ctx->optimization_remarks) fprintf(stderr, "remark: %s: vectorized float element loop\n", s->f->name);
+  return true;
+}
 /* `for x in xs { t += x }` and `t += x * x` over a slice of 32- or 64-bit
    integers. Squares stay 32-bit: SSE2 has no 64-bit lane multiply. */
 static bool ssa_sum(Ssa *s, const DynIrStmt *st) {
@@ -2452,7 +2556,6 @@ static void ssa_loop_body(Ssa *s, const DynIrStmt *st, uint32_t latch, uint32_t 
   --s->loop_count;
   ssa_jump(s, latch);
 }
-static void ssa_statement_value(Ssa *, const DynIrStmt *, unsigned);
 static void ssa_statement(Ssa *s, const DynIrStmt *st, unsigned depth) {
   uint32_t saved_origin = s->check_origin;
   if (st->check_origin) s->check_origin = st->check_origin;
@@ -2530,6 +2633,7 @@ static void ssa_statement_value(Ssa *s, const DynIrStmt *st, unsigned depth) {
     if (ssa_byte_count(s, st)) return;
     if (ssa_vector(s, st)) return;
     if (ssa_sum(s, st)) return;
+    if (ssa_axpy(s, st, depth)) return;
     uint32_t counter = s->variable_count + s->hidden_variables++;
     ++s->loop_depth;
     uint32_t header = ssa_block(s), body = ssa_block(s), latch = ssa_block(s), exit = ssa_block(s);
@@ -3298,7 +3402,7 @@ static bool ssa_float_loads(Ssa *s, const uint32_t *order, uint32_t n) {
           changed = true;
           break;
         }
-        if (between->effect && between->op != SO_CHECK && between->op != SO_CHECK_SHL) break;
+        if (between->effect && between->op != SO_LOAD && between->op != SO_CHECK && between->op != SO_CHECK_SHL) break;
       }
     }
     block->values.count = kept;
@@ -3569,7 +3673,7 @@ static void ssa_classify_regions(Ssa *s, const uint32_t *order, uint32_t n, uint
                                       ssa_access_size(v), &at, &inside);
         if (!memory || !inside) {
           state[r] |= REGION_ESCAPED;
-          if (((v->op == SO_FIND_BYTE || v->op == SO_JSON_ASCII_PREFIX || v->op == SO_BYTE_COUNT || v->op == SO_SUM) && address) || (v->op == SO_FIND && (j == 0 || j == 2))) state[r] |= REGION_READ;
+          if (((v->op == SO_FIND_BYTE || v->op == SO_JSON_ASCII_PREFIX || v->op == SO_BYTE_COUNT || v->op == SO_SUM || v->op == SO_AXPY) && address) || (v->op == SO_FIND && (j == 0 || j == 2))) state[r] |= REGION_READ;
           continue;
         }
         if (v->op == SO_LOAD || source) state[r] |= REGION_READ;
@@ -5150,6 +5254,7 @@ static uint64_t ssa_clobbers(Ssa *s, const SsaValue *v) {
   case SO_JSON_ASCII_PREFIX: return UINT64_C(1) << X_RAX | UINT64_C(1) << X_RCX | UINT64_C(1) << X_RDX |
                                   UINT64_C(1) << X_R10 | UINT64_C(1) << X_R11;
   case SO_SUM:
+  case SO_AXPY:
   case SO_BYTE_COUNT: return UINT64_C(1) << X_RAX | UINT64_C(1) << X_RCX | UINT64_C(1) << X_RDX |
                             UINT64_C(1) << X_R10 | UINT64_C(1) << X_R11;
   case SO_FIND_BYTE: return UINT64_C(1) << X_RAX | UINT64_C(1) << X_RCX |
@@ -6023,6 +6128,46 @@ static void ssa_byte_count_emit(SsaEmit *e, SsaValue *v) {
   isa_patch(ctx, empty, ctx->text.n);
   ssa_put(e, v, X_RCX);
 }
+/* Lanes match the scalar order unless dst sits less than one vector above src;
+   then a later element reads an earlier write, and every element runs alone. */
+static void ssa_axpy_emit(SsaEmit *e, SsaValue *v) {
+  BackendContext *ctx = e->ctx;
+  int32_t frame = (int32_t)e->s->values[v->a].aux;
+  unsigned bytes = (unsigned)v->aux, lanes = 16 / bytes, one = SSA_XS1 - X_XMM0, two = SSA_XS2 - X_XMM0, factor = SSA_XS3 - X_XMM0;
+  bool wide = bytes == 8;
+  int packed = wide ? 0x66 : -1, single = wide ? 0xf2 : 0xf3;
+  unsigned char op = v->aux2 == DYN_OP_SUB ? 0x5c : 0x58;
+  x86_mem_op(ctx, -1, true, OP1(0x8b), X_R10, (SsaMemory){X_RBP,-1,1,frame}, false);
+  x86_mem_op(ctx, -1, true, OP1(0x8b), X_R11, (SsaMemory){X_RBP,-1,1,frame + 8}, false);
+  x86_mem_op(ctx, -1, true, OP1(0x8b), X_RCX, (SsaMemory){X_RBP,-1,1,frame + 16}, false);
+  x86_mem_op(ctx, single, false, OP2(0x0f,0x10), factor, (SsaMemory){X_RBP,-1,1,frame + 24}, false);
+  if (wide) x86_reg_op(ctx, 0x66, false, OP2(0x0f,0x14), factor, factor, false);
+  else { x86_reg_op(ctx, -1, false, OP2(0x0f,0xc6), factor, factor, false); byte(ctx, 0); }
+  CODE(0x4c,0x89,0xd0,0x4c,0x29,0xd8,0x48,0x8d,0x50,0xff,0x48,0x83,0xfa,0x0f); /* rdx = dst - src - 1; cmp 15 */
+  size_t overlap = isa_branch(ctx, CC_B), loop = ctx->text.n;
+  CODE(0x48,0x83,0xf9); byte(ctx, lanes);
+  size_t tail = isa_branch(ctx, CC_B);
+  x86_mem_op(ctx, -1, false, OP2(0x0f,0x10), one, (SsaMemory){X_R11,-1,1,0}, false);
+  x86_reg_op(ctx, packed, false, OP2(0x0f,0x59), one, factor, false);
+  x86_mem_op(ctx, -1, false, OP2(0x0f,0x10), two, (SsaMemory){X_R10,-1,1,0}, false);
+  x86_reg_op(ctx, packed, false, OP2(0x0f,op), two, one, false);
+  x86_mem_op(ctx, -1, false, OP2(0x0f,0x11), two, (SsaMemory){X_R10,-1,1,0}, false);
+  CODE(0x49,0x83,0xc2,0x10,0x49,0x83,0xc3,0x10,0x48,0x83,0xe9); byte(ctx, lanes);
+  isa_patch(ctx, isa_branch(ctx, -1), loop);
+  isa_patch(ctx, overlap, ctx->text.n); isa_patch(ctx, tail, ctx->text.n);
+  CODE(0x48,0x85,0xc9);
+  size_t done = isa_branch(ctx, CC_E), scalar = ctx->text.n;
+  x86_mem_op(ctx, single, false, OP2(0x0f,0x10), one, (SsaMemory){X_R11,-1,1,0}, false);
+  x86_reg_op(ctx, single, false, OP2(0x0f,0x59), one, factor, false);
+  x86_mem_op(ctx, single, false, OP2(0x0f,0x10), two, (SsaMemory){X_R10,-1,1,0}, false);
+  x86_reg_op(ctx, single, false, OP2(0x0f,op), two, one, false);
+  x86_mem_op(ctx, single, false, OP2(0x0f,0x11), two, (SsaMemory){X_R10,-1,1,0}, false);
+  CODE(0x49,0x83,0xc2); byte(ctx, bytes);
+  CODE(0x49,0x83,0xc3); byte(ctx, bytes);
+  CODE(0x48,0xff,0xc9);
+  isa_patch(ctx, isa_branch(ctx, CC_NE), scalar);
+  isa_patch(ctx, done, ctx->text.n);
+}
 /* Wrapping integer addition is associative, so whole lanes sum in XS3. SSE2 has
    no 32-bit lane multiply: odd and even lanes square separately and recombine. */
 static void ssa_sum_emit(SsaEmit *e, SsaValue *v) {
@@ -6710,6 +6855,7 @@ static void ssa_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
   case SO_FIND_BYTE: ssa_find_byte(e, v); return;
   case SO_BYTE_COUNT: ssa_byte_count_emit(e, v); return;
   case SO_SUM: ssa_sum_emit(e, v); return;
+  case SO_AXPY: ssa_axpy_emit(e, v); return;
   case SO_JSON_ASCII_PREFIX: ssa_json_ascii_prefix(e, v); return;
   case SO_FIND: ssa_find(e, v); return;
   case SO_CALL:
