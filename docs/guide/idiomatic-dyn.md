@@ -298,3 +298,31 @@ promoted types. Do not expose Dyn slices, strings, or `any` as if they were C va
 - Keep imported names qualified and publish only the module's intended API.
 - Use `_ = function()` when intentionally discarding a non-void result.
 - Compile with `dyn check DIR`; test debug and release builds.
+
+## Check errors once
+
+When several steps can fail, keep the first failure in one place and check it at the end. Each step
+does nothing once a failure is recorded:
+
+```dyn
+use "std/fs"
+use "std/io"
+
+struct Writer { file: fs.File, failure: io.Failure }
+
+fn put(writer: *Writer, text: []const u8) {
+  if writer.failure.kind != io.Kind.Ok {
+    return
+  }
+  writer.failure = fs.write(&writer.file, text).failure
+}
+
+fn save(file: fs.File) io.Failure {
+  writer := Writer{ file: file }
+  put(&writer, "name: ")
+  put(&writer, "dyn\n")
+  return writer.failure
+}
+```
+
+The code stays straight, a failure stops the remaining work, and there is one `if` at the end.

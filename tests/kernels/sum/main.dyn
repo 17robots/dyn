@@ -1,0 +1,22 @@
+use "std/io"
+use "std/mem"
+fn sum(xs: []i32) i32 {
+  t: i32 = 0
+  for x in xs {
+    t += x * x
+  }
+  return t
+}
+fn main() {
+  arena := mem.arena_create(0)
+  xs := mem.push_array(i32, arena, 100000)
+  for i in 0..#len(xs) {
+    xs[i] = #cast(i32, i)
+  }
+  t: i32 = 0
+  for r in 0..200000 {
+    xs[r % 100000] += 1
+    t += sum(xs)
+  }
+  _ = io.println(io.stdout(), "{}", t)
+}

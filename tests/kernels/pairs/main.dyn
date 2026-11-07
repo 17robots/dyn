@@ -1,0 +1,30 @@
+use "std/io"
+use "std/mem"
+struct V { x: f32, y: f32 }
+fn add(a: V, b: V) V {
+  return V{ x: a.x + b.x, y: a.y + b.y }
+}
+fn scale(a: V, s: f32) V {
+  return V{ x: a.x * s, y: a.y * s }
+}
+fn dot(a: V, b: V) f32 {
+  return a.x * b.x + a.y * b.y
+}
+fn main() {
+  arena := mem.arena_create(0)
+  ps := mem.push_array(V, arena, 10000)
+  vs := mem.push_array(V, arena, 10000)
+  for i in 0..10000 {
+    f := #cast(f32, i)
+    ps[i] = V{ x: f, y: 1.0 }
+    vs[i] = V{ x: 1.0, y: f * 0.001 }
+  }
+  e: f32 = 0.0
+  for r in 0..100000 {
+    for i in 0..10000 {
+      ps[i] = add(ps[i], scale(vs[i], 0.0001))
+      e += dot(ps[i], vs[i]) * 0.000001
+    }
+  }
+  _ = io.println(io.stdout(), "{}", #cast(i64, e))
+}

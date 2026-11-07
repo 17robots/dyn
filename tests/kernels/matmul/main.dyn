@@ -1,0 +1,25 @@
+use "std/io"
+use "std/mem"
+fn mul(a: []f64, b: []f64, c: []f64, n: usize) {
+  for i in 0..n {
+    for k in 0..n {
+      v := a[i * n + k]
+      for j in 0..n {
+        c[i * n + j] += v * b[k * n + j]
+      }
+    }
+  }
+}
+fn main() {
+  arena := mem.arena_create(0)
+  n: usize = 1500
+  a := mem.push_array(f64, arena, n * n)
+  b := mem.push_array(f64, arena, n * n)
+  c := mem.push_array(f64, arena, n * n)
+  for i in 0..n * n {
+    a[i] = #cast(f64, i % 7)
+    b[i] = #cast(f64, i % 11)
+  }
+  mul(a, b, c, n)
+  _ = io.println(io.stdout(), "{}", #cast(i64, c[17]))
+}
