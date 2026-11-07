@@ -19,6 +19,7 @@ servers so they pick up the new `dyn`.
 - `chunk.List(T)` replaces the two structs a chunk list needed.
 - Generic structs: `struct Box($T: type) { value: T }`, used as `Box(i32)`.
 - Generic enums: `enum Slot($T: type) { Empty, Full: T }`, used as `Slot(i32).Full(7)`.
+- Release builds at opt-level 3 vectorize `for x in xs { t += x }` and `t += x * x` over 32- and 64-bit integer slices on x86-64 (squares are 32-bit only).
 - An enum payload may be another enum.
 - Enum payloads are back: `enum Node { Null, Number: f64 }`, built with
   `Node.Number(2.5)` and read only through `case`. The first variant has no payload,

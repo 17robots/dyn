@@ -56,6 +56,7 @@ typedef enum {
   SO_FIND,       /* x86 only: four list operands: hay ptr/len, needle ptr/len */
   SO_JSON_ASCII_PREFIX, /* x86 only: safe JSON ASCII prefix in a[0..b]; memory read */
   SO_BYTE_COUNT, /* x86 only: count predicate matches in a[0..b], starting at c */
+  SO_SUM,        /* x86 only: wrapping sum of a[0..b] from c; aux: bytes, aux2: bit 0 squares, bit 1 signed */
   SO_PANIC,      /* dyn_panic(a, b) */
   SO_VECTOR,     /* SIMD loop over frame arrays a = b op c; aux: elements, aux2: op | bytes << 8 */
   SO_MULOK32,   /* paired targets: checked product fits, without a guard */
@@ -231,7 +232,7 @@ static int32_t ssa_value(Ssa *s, uint32_t block, SsaOp op, uint8_t cls, int32_t 
   v->check_origin = s->check_origin;
   v->block = block; v->reg = v->slot = -1; v->hint = -1; v->scale = 1;
   v->effect = op == SO_CHECK || op == SO_CHECK_SHL || op == SO_ADDO || op == SO_SUBO || op == SO_MULO ||
-              op == SO_LOAD || op == SO_STORE || op == SO_CALL || op == SO_COPYMEM || op == SO_ZEROMEM || op == SO_FILLMEM || op == SO_FIND_BYTE || op == SO_FIND || op == SO_JSON_ASCII_PREFIX || op == SO_BYTE_COUNT ||
+              op == SO_LOAD || op == SO_STORE || op == SO_CALL || op == SO_COPYMEM || op == SO_ZEROMEM || op == SO_FILLMEM || op == SO_FIND_BYTE || op == SO_FIND || op == SO_JSON_ASCII_PREFIX || op == SO_BYTE_COUNT || op == SO_SUM ||
               op == SO_PANIC || op == SO_DIV || op == SO_REM || op == SO_RESULT || op == SO_PARAM || op == SO_VECTOR || op == SO_TRAP || op == SO_FAIL || op == SO_CONTINUE;
   return (int32_t)s->value_count++;
 }
@@ -2096,6 +2097,51 @@ static bool ssa_byte_count(Ssa *s, const DynIrStmt *st) {
   if (s->ctx->optimization_remarks) fprintf(stderr, "remark: %s: vectorized byte predicate count (%u terms)\n", s->f->name, count);
   return true;
 }
+/* `for x in xs { t += x }` and `t += x * x` over a slice of 32- or 64-bit
+   integers. Squares stay 32-bit: SSE2 has no 64-bit lane multiply. */
+static bool ssa_sum(Ssa *s, const DynIrStmt *st) {
+  const DynIrProgram *ir = s->ir;
+  if (!s->ctx->vectorize || s->ctx->a64 || s->ctx->rv64 || s->ctx->rv32 || s->ctx->t32 ||
+      st->for_range || st->for_reverse || st->for_pointer || st->body_count != 1 ||
+      st->body_start >= ir->child_count || st->target >= ir->expression_count ||
+      !dyn_type_is_slice(ir->expressions[st->target].type) || !ssa_byte_count_private(s, st->local_id)) return false;
+  DynType element = ir->slices[ir->expressions[st->target].type - DYN_TYPE_SLICE_BASE].element;
+  if (element != DYN_TYPE_I32 && element != DYN_TYPE_U32 && element != DYN_TYPE_I64 && element != DYN_TYPE_U64) return false;
+  const DynIrStmt *add = &ir->statements[ir->children[st->body_start]];
+  if (add->kind != DYN_STMT_ASSIGN || add->expression >= ir->expression_count) return false;
+  uint64_t accumulator = add->local_id;
+  if (add->target != DYN_NO_EXPR) {
+    if (add->target >= ir->expression_count || ir->expressions[add->target].kind != DYN_EXPR_NAME) return false;
+    accumulator = ir->expressions[add->target].integer;
+  }
+  if (accumulator == st->local_id || !ssa_byte_count_private(s, accumulator) || ir->locals[accumulator].type != element) return false;
+  const DynIrExpr *term = &ir->expressions[add->expression];
+  if (add->assignment_op == DYN_OP_NONE) {
+    if (term->kind != DYN_EXPR_BINARY || term->op != DYN_OP_ADD || term->type != element ||
+        term->left >= ir->expression_count || term->right >= ir->expression_count ||
+        ir->expressions[term->left].kind != DYN_EXPR_NAME || ir->expressions[term->left].integer != accumulator) return false;
+    term = &ir->expressions[term->right];
+  } else if (add->assignment_op != DYN_OP_ADD) return false;
+  bool square = false;
+  if (term->kind == DYN_EXPR_BINARY) {
+    if (term->op != DYN_OP_MUL || term->left >= ir->expression_count || term->right >= ir->expression_count ||
+        element == DYN_TYPE_I64 || element == DYN_TYPE_U64) return false;
+    const DynIrExpr *left = &ir->expressions[term->left], *right = &ir->expressions[term->right];
+    if (left->kind != DYN_EXPR_NAME || right->kind != DYN_EXPR_NAME || left->integer != st->local_id ||
+        right->integer != st->local_id) return false;
+    square = true;
+  } else if (term->kind != DYN_EXPR_NAME || term->integer != st->local_id) return false;
+  int32_t length = -1, data = ssa_expr(s, st->target, &length, 0);
+  if (s->failed || length < 0) return false;
+  uint32_t local = (uint32_t)(accumulator - s->f->local_start);
+  int32_t initial = ssa_read(s, 2 * local, s->current, SC_INT);
+  unsigned bytes = element == DYN_TYPE_I32 || element == DYN_TYPE_U32 ? 4 : 8;
+  bool sign = element == DYN_TYPE_I32 || element == DYN_TYPE_I64;
+  ssa_set_local(s, local, ssa_emit(s, SO_SUM, SC_INT, data, length, initial, bytes, (square ? 1 : 0) | (sign ? 2 : 0)), -1);
+  ++s->vectorized;
+  if (s->ctx->optimization_remarks) fprintf(stderr, "remark: %s: vectorized slice sum\n", s->f->name);
+  return true;
+}
 static bool ssa_vector(Ssa *s, const DynIrStmt *st) {
   const DynIrProgram *ir = s->ir;
   if (!s->ctx->vectorize || !st->for_range || st->for_reverse || st->for_inclusive || st->for_pointer ||
@@ -2483,6 +2529,7 @@ static void ssa_statement_value(Ssa *s, const DynIrStmt *st, unsigned depth) {
     if (ssa_byte_fill(s, st)) return;
     if (ssa_byte_count(s, st)) return;
     if (ssa_vector(s, st)) return;
+    if (ssa_sum(s, st)) return;
     uint32_t counter = s->variable_count + s->hidden_variables++;
     ++s->loop_depth;
     uint32_t header = ssa_block(s), body = ssa_block(s), latch = ssa_block(s), exit = ssa_block(s);
@@ -3464,7 +3511,7 @@ static void ssa_classify_regions(Ssa *s, const uint32_t *order, uint32_t n, uint
                                       ssa_access_size(v), &at, &inside);
         if (!memory || !inside) {
           state[r] |= REGION_ESCAPED;
-          if (((v->op == SO_FIND_BYTE || v->op == SO_JSON_ASCII_PREFIX || v->op == SO_BYTE_COUNT) && address) || (v->op == SO_FIND && (j == 0 || j == 2))) state[r] |= REGION_READ;
+          if (((v->op == SO_FIND_BYTE || v->op == SO_JSON_ASCII_PREFIX || v->op == SO_BYTE_COUNT || v->op == SO_SUM) && address) || (v->op == SO_FIND && (j == 0 || j == 2))) state[r] |= REGION_READ;
           continue;
         }
         if (v->op == SO_LOAD || source) state[r] |= REGION_READ;
@@ -5044,6 +5091,7 @@ static uint64_t ssa_clobbers(Ssa *s, const SsaValue *v) {
                        UINT64_C(1) << X_R8 | UINT64_C(1) << X_R9 | UINT64_C(1) << X_R10 | UINT64_C(1) << X_R11;
   case SO_JSON_ASCII_PREFIX: return UINT64_C(1) << X_RAX | UINT64_C(1) << X_RCX | UINT64_C(1) << X_RDX |
                                   UINT64_C(1) << X_R10 | UINT64_C(1) << X_R11;
+  case SO_SUM:
   case SO_BYTE_COUNT: return UINT64_C(1) << X_RAX | UINT64_C(1) << X_RCX | UINT64_C(1) << X_RDX |
                             UINT64_C(1) << X_R10 | UINT64_C(1) << X_R11;
   case SO_FIND_BYTE: return UINT64_C(1) << X_RAX | UINT64_C(1) << X_RCX |
@@ -5917,6 +5965,57 @@ static void ssa_byte_count_emit(SsaEmit *e, SsaValue *v) {
   isa_patch(ctx, empty, ctx->text.n);
   ssa_put(e, v, X_RCX);
 }
+/* Wrapping integer addition is associative, so whole lanes sum in XS3. SSE2 has
+   no 32-bit lane multiply: odd and even lanes square separately and recombine. */
+static void ssa_sum_emit(SsaEmit *e, SsaValue *v) {
+  BackendContext *ctx = e->ctx;
+  SsaMove moves[3] = {ssa_source(e, v->a), ssa_source(e, v->b), ssa_source(e, v->c)};
+  unsigned registers[3] = {X_R10, X_R11, X_RCX};
+  for (unsigned i = 0; i < 3; ++i) {
+    moves[i].dst_kind = L_REG; moves[i].dst = registers[i]; moves[i].cls = SC_INT;
+  }
+  ssa_parallel(e, moves, 3);
+  unsigned bytes = (unsigned)v->aux, lanes = 16 / bytes, one = SSA_XS1 - X_XMM0, two = SSA_XS2 - X_XMM0, total = SSA_XS3 - X_XMM0;
+  bool wide = bytes == 8, square = v->aux2 & 1, sign = v->aux2 & 2;
+  unsigned char add = wide ? 0xd4 : 0xfe;
+  x86_reg_op(ctx, 0x66, false, OP2(0x0f,0xef), total, total, false);
+  CODE(0x49,0x83,0xfb); byte(ctx, lanes);
+  size_t short_input = isa_branch(ctx, CC_B), loop = ctx->text.n;
+  x86_mem_op(ctx, 0xf3, false, OP2(0x0f,0x6f), one, (SsaMemory){X_R10,-1,1,0}, false);
+  if (square) {
+    x86_reg_op(ctx, 0x66, false, OP2(0x0f,0x70), two, one, false); byte(ctx, 0xf5);
+    x86_reg_op(ctx, 0x66, false, OP2(0x0f,0xf4), one, one, false);
+    x86_reg_op(ctx, 0x66, false, OP2(0x0f,0xf4), two, two, false);
+    x86_reg_op(ctx, 0x66, false, OP2(0x0f,0x70), one, one, false); byte(ctx, 0x08);
+    x86_reg_op(ctx, 0x66, false, OP2(0x0f,0x70), two, two, false); byte(ctx, 0x08);
+    x86_reg_op(ctx, 0x66, false, OP2(0x0f,0x62), one, two, false);
+  }
+  x86_reg_op(ctx, 0x66, false, OP2(0x0f,add), total, one, false);
+  CODE(0x49,0x83,0xc2,0x10,0x49,0x83,0xeb); byte(ctx, lanes);
+  CODE(0x49,0x83,0xfb); byte(ctx, lanes);
+  isa_patch(ctx, isa_branch(ctx, CC_AE), loop);
+  isa_patch(ctx, short_input, ctx->text.n);
+  x86_reg_op(ctx, 0x66, false, OP2(0x0f,0x70), one, total, false); byte(ctx, 0x4e);
+  x86_reg_op(ctx, 0x66, false, OP2(0x0f,add), total, one, false);
+  if (!wide) {
+    x86_reg_op(ctx, 0x66, false, OP2(0x0f,0x70), one, total, false); byte(ctx, 0xb1);
+    x86_reg_op(ctx, 0x66, false, OP2(0x0f,add), total, one, false);
+  }
+  x86_reg_op(ctx, 0x66, wide, OP2(0x0f,0x7e), total, X_RAX, false);
+  if (wide) byte(ctx, 0x48);
+  CODE(0x01,0xc1);
+  CODE(0x4d,0x85,0xdb);
+  size_t empty = isa_branch(ctx, CC_E), scalar = ctx->text.n;
+  x86_mem_op(ctx, -1, wide, OP1(0x8b), X_RAX, (SsaMemory){X_R10,-1,1,0}, false);
+  if (square) CODE(0x0f,0xaf,0xc0);
+  if (wide) byte(ctx, 0x48);
+  CODE(0x01,0xc1,0x49,0x83,0xc2); byte(ctx, bytes);
+  CODE(0x49,0xff,0xcb);
+  isa_patch(ctx, isa_branch(ctx, CC_NE), scalar);
+  isa_patch(ctx, empty, ctx->text.n);
+  if (!wide) { if (sign) CODE(0x48,0x63,0xc9); else CODE(0x89,0xc9); }
+  ssa_put(e, v, X_RCX);
+}
 static void ssa_json_ascii_prefix(SsaEmit *e, SsaValue *v) {
   BackendContext *ctx = e->ctx;
   SsaMove moves[2] = {ssa_source(e, v->a), ssa_source(e, v->b)};
@@ -6552,6 +6651,7 @@ static void ssa_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
   case SO_FILLMEM: ssa_fill_memory(e, v); return;
   case SO_FIND_BYTE: ssa_find_byte(e, v); return;
   case SO_BYTE_COUNT: ssa_byte_count_emit(e, v); return;
+  case SO_SUM: ssa_sum_emit(e, v); return;
   case SO_JSON_ASCII_PREFIX: ssa_json_ascii_prefix(e, v); return;
   case SO_FIND: ssa_find(e, v); return;
   case SO_CALL:
