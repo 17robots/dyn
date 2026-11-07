@@ -156,10 +156,10 @@ fn gzip_header(state: *Decoder) bool {
   }
   return state.error == 0
 }
-fn decoder_read(data: rawptr, destination: []u8) stream.Result {
+fn decoder_read(data: rawptr, destination: []u8) stream.Transfer {
   state := #cast(*Decoder, data)
   if #len(destination) == 0 {
-    return stream.Result{}
+    return stream.Transfer{}
   }
   for state.offset == state.engine.written && !state.finished && state.error == 0 {
     if state.gzip && state.phase < 6 {
@@ -233,7 +233,7 @@ fn decoder_read(data: rawptr, destination: []u8) stream.Result {
         kind = stream.Kind.Capacity
       }
     }
-    return stream.Result{ error: state.error, kind: kind, status: stream.Status.Error }
+    return stream.Transfer{ error: state.error, kind: kind, status: stream.Status.Error }
   }
   remaining := state.engine.written - state.offset
   amount := remaining
@@ -248,7 +248,7 @@ fn decoder_read(data: rawptr, destination: []u8) stream.Result {
   if state.finished && amount == remaining {
     status = stream.Status.End
   }
-  return stream.Result{ transferred: amount, status: status }
+  return stream.Transfer{ transferred: amount, status: status }
 }
 pub fn decoder_reader(state: *Decoder) stream.Reader {
   return stream.Reader{ data: state, read: decoder_read }

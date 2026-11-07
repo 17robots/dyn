@@ -24,7 +24,7 @@ pub struct Pool {
   started: usize,
 }
 
-pub struct StartResult { value: *Pool, failure: io.Failure }
+pub type StartResult = io.Result(*Pool)
 pub struct Result { failure: io.Failure }
 
 fn worker(context: rawptr) isize {

@@ -141,26 +141,26 @@ pub fn connection_release(connection: *Connection) {
   provider.connection_free_owned(value)
 }
 
-fn reader_read(data: rawptr, destination: []u8) stream.Result {
+fn reader_read(data: rawptr, destination: []u8) stream.Transfer {
   connection := #cast(*Connection, data)
   result := read(connection.*, destination)
   if result.failure.kind != stream.Kind.Ok {
-    return stream.Result{ kind: result.failure.kind, error: result.failure.native, status: stream.Status.Error }
+    return stream.Transfer{ kind: result.failure.kind, error: result.failure.native, status: stream.Status.Error }
   }
   status := stream.Status.Complete
   if result.count == 0 {
     status = stream.Status.End
   }
-  return stream.Result{ transferred: result.count, status: status }
+  return stream.Transfer{ transferred: result.count, status: status }
 }
 
-fn writer_write(data: rawptr, source: []const u8) stream.Result {
+fn writer_write(data: rawptr, source: []const u8) stream.Transfer {
   connection := #cast(*Connection, data)
   result := write(connection.*, source)
   if result.failure.kind != stream.Kind.Ok {
-    return stream.Result{ transferred: result.count, kind: result.failure.kind, error: result.failure.native, status: stream.Status.Error }
+    return stream.Transfer{ transferred: result.count, kind: result.failure.kind, error: result.failure.native, status: stream.Status.Error }
   }
-  return stream.Result{ transferred: result.count, status: stream.Status.Complete }
+  return stream.Transfer{ transferred: result.count, status: stream.Status.Complete }
 }
 
 // Blocking I/O adapters borrow the Connection slot and its live handle.

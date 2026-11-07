@@ -17,12 +17,12 @@ use "std/bytes" bytes
 use "std/mem" mem
 use "std/io" errors
 struct Oracle { expected: []const u8, at: usize }
-fn oracle_write(raw: rawptr, data: []const u8) io.Result {
+fn oracle_write(raw: rawptr, data: []const u8) io.Transfer {
   oracle := #cast(*Oracle, raw)
   if #len(data) > #len(oracle.expected) - oracle.at { #panic("extra request bytes") }
   if !bytes.equal(data, oracle.expected[oracle.at..oracle.at + #len(data)]) { #panic("request wire") }
   oracle.at += #len(data)
-  return io.Result{ transferred: #len(data), status: io.Status.Complete }
+  return io.Transfer{ transferred: #len(data), status: io.Status.Complete }
 }
 fn request_check(body: []const u8, expected: []const u8) {
   arena := mem.arena_create(0)
@@ -32,15 +32,15 @@ fn request_check(body: []const u8, expected: []const u8) {
   if got.failure.kind != errors.Kind.Ok || oracle.at != #len(expected) { #panic("large request") }
   mem.arena_release(arena)
 }
-fn error_read(raw: rawptr, data: []u8) io.Result {
+fn error_read(raw: rawptr, data: []u8) io.Transfer {
   _ = raw
   _ = data
-  return io.Result{ kind: errors.Kind.PermissionDenied, error: 0, status: io.Status.Error }
+  return io.Transfer{ kind: errors.Kind.PermissionDenied, error: 0, status: io.Status.Error }
 }
-fn error_write(raw: rawptr, data: []const u8) io.Result {
+fn error_write(raw: rawptr, data: []const u8) io.Transfer {
   _ = raw
   _ = data
-  return io.Result{ kind: errors.Kind.PermissionDenied, error: 0, status: io.Status.Error }
+  return io.Transfer{ kind: errors.Kind.PermissionDenied, error: 0, status: io.Status.Error }
 }
 fn io_check(write_failure: bool) {
   arena := mem.arena_create(0)
@@ -53,7 +53,7 @@ fn io_check(write_failure: bool) {
   mem.arena_release(arena)
 }
 struct Feed { data: []const u8, at: usize, cut: usize, step: usize }
-fn read_feed(raw: rawptr, destination: []u8) io.Result {
+fn read_feed(raw: rawptr, destination: []u8) io.Transfer {
   feed := #cast(*Feed, raw)
   count := #len(feed.data) - feed.at
   if feed.at < feed.cut && count > feed.cut - feed.at { count = feed.cut - feed.at }
@@ -61,12 +61,12 @@ fn read_feed(raw: rawptr, destination: []u8) io.Result {
   if count > #len(destination) { count = #len(destination) }
   for i in 0..count { destination[i] = feed.data[feed.at + i] }
   feed.at += count
-  if feed.at == #len(feed.data) { return io.Result{ transferred: count, status: io.Status.End } }
-  return io.Result{ transferred: count, status: io.Status.Complete }
+  if feed.at == #len(feed.data) { return io.Transfer{ transferred: count, status: io.Status.End } }
+  return io.Transfer{ transferred: count, status: io.Status.Complete }
 }
-fn sink(raw: rawptr, data: []const u8) io.Result {
+fn sink(raw: rawptr, data: []const u8) io.Transfer {
   _ = raw
-  return io.Result{ transferred: #len(data), status: io.Status.Complete }
+  return io.Transfer{ transferred: #len(data), status: io.Status.Complete }
 }
 fn check(wire: []const u8, expected: []const u8, valid: bool, method: []const u8, capacity: usize) {
   splits := #len(wire) + 1

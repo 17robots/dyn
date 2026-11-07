@@ -5,7 +5,7 @@ use "std/io" io
 pub struct State { bytes: [72]u8 }
 pub struct Size { columns: usize, rows: usize, failure: io.Failure }
 
-pub struct Read { value: State, failure: io.Failure }
+pub type Read = io.Result(State)
 pub struct Result { failure: io.Failure }
 
 // Descriptors 0, 1 and 2 are the standard streams on every platform. On

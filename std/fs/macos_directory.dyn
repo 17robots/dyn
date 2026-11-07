@@ -4,7 +4,7 @@ use "std/io" io
 // Directory listing through getdirentries64, with the Linux API shape.
 // Entry kinds use dirent values: 4 directory, 8 regular file, 10 link.
 pub struct Directory { file: File, storage: []u8, offset: usize, used: usize, base: i64 }
-pub struct DirectoryResult { value: Directory, failure: io.Failure }
+pub type DirectoryResult = io.Result(Directory)
 pub struct DirectoryEntry { name: []const u8, kind: u8, found: bool, failure: io.Failure }
 
 pub fn open_directory(path: []const u8, storage: []u8) DirectoryResult {

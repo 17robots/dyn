@@ -82,7 +82,7 @@ pub fn decoder(input: stream.Reader, compressed_bytes: []u8, workspace: []u8, wi
   }
   return state
 }
-fn decoder_read(data: rawptr, destination: []u8) stream.Result {
+fn decoder_read(data: rawptr, destination: []u8) stream.Transfer {
   state := #cast(*Decoder, data)
   if state.failed {
     return parse.stream_result(state.failure, 0)
@@ -93,10 +93,10 @@ fn decoder_read(data: rawptr, destination: []u8) stream.Result {
     return parse.stream_result(state.failure, 0)
   }
   if #len(destination) == 0 {
-    return stream.Result{}
+    return stream.Transfer{}
   }
   if state.finished {
-    return stream.Result{ status: stream.Status.End }
+    return stream.Transfer{ status: stream.Status.End }
   }
   for {
     // First flush provider output, even with no new input. Reading the next chunk
@@ -117,7 +117,7 @@ fn decoder_read(data: rawptr, destination: []u8) stream.Result {
       state.frame_ended = false
     }
     if decoded.written != 0 {
-      return stream.Result{ transferred: decoded.written }
+      return stream.Transfer{ transferred: decoded.written }
     }
     if state.offset < state.used {
       if decoded.consumed == 0 {
@@ -130,7 +130,7 @@ fn decoder_read(data: rawptr, destination: []u8) stream.Result {
     if state.source_ended {
       if state.saw_frame && state.frame_ended {
         state.finished = true
-        return stream.Result{ status: stream.Status.End }
+        return stream.Transfer{ status: stream.Status.End }
       }
       state.failed = true
       state.failure = parse.parse_failure(parse.Kind.Syntax, state.offset, "")

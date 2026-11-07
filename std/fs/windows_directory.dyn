@@ -9,7 +9,7 @@ extern fn find_close "dyn_fs_find_close"(handle: rawptr) i32
 // names are UTF-8 in caller storage; kinds use dirent values: 4 directory,
 // 8 regular file, 10 reparse point (links).
 pub struct Directory { handle: rawptr, storage: []u8, data: [592]u8, pending: bool, active: bool }
-pub struct DirectoryResult { value: Directory, failure: io.Failure }
+pub type DirectoryResult = io.Result(Directory)
 pub struct DirectoryEntry { name: []const u8, kind: u8, found: bool, failure: io.Failure }
 
 pub fn open_directory(path: []const u8, storage: []u8) DirectoryResult {

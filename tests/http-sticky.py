@@ -11,23 +11,23 @@ use "std/io" io
 use "std/io" errors
 use "std/net/http" http
 struct Sink { calls: usize, fail: usize, code: isize, partial: bool }
-fn write(raw: rawptr, source: []const u8) io.Result {
+fn write(raw: rawptr, source: []const u8) io.Transfer {
   s := #cast(*Sink, raw)
   s.calls += 1
-  if s.calls == s.fail { return io.Result{ transferred: 1, error: s.code, kind: errors.Kind.InvalidInput, status: io.Status.Error } }
+  if s.calls == s.fail { return io.Transfer{ transferred: 1, error: s.code, kind: errors.Kind.InvalidInput, status: io.Status.Error } }
   count := #len(source)
   if s.partial && count > 1 { count = 1 }
-  return io.Result{ transferred: count }
+  return io.Transfer{ transferred: count }
 }
 struct Feed { calls: usize, wire: []const u8, code: isize, fail: bool }
-fn read(raw: rawptr, dest: []u8) io.Result {
+fn read(raw: rawptr, dest: []u8) io.Transfer {
   f := #cast(*Feed, raw)
   f.calls += 1
-  if f.fail { return io.Result{ error: f.code, status: io.Status.Error } }
+  if f.fail { return io.Transfer{ error: f.code, status: io.Status.Error } }
   count := #len(f.wire)
   if count > #len(dest) { count = #len(dest) }
   for i in 0..count { dest[i] = f.wire[i] }
-  return io.Result{ transferred: count, status: io.Status.End }
+  return io.Transfer{ transferred: count, status: io.Status.End }
 }
 fn same(r: http.Result, code: isize) {
   if r.failure.kind == io.Kind.Ok || r.detail != http.ErrorKind.Io || r.failure.native != code { #panic("first HTTP error") }

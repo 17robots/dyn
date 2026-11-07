@@ -14,7 +14,7 @@ pub struct Directory {
   offset: usize,
   used: usize,
 }
-pub struct DirectoryResult { value: Directory, failure: io.Failure }
+pub type DirectoryResult = io.Result(Directory)
 pub struct DirectoryEntry { name: []const u8, kind: u8, found: bool, failure: io.Failure }
 
 fn terminated(path: []const u8, storage: []u8) *const u8 {
@@ -268,7 +268,7 @@ pub struct AtomicFile {
   temporary: []const u8,
   active: bool,
 }
-pub struct AtomicResult { value: AtomicFile, failure: io.Failure }
+pub type AtomicResult = io.Result(AtomicFile)
 
 // Both paths are borrowed until commit/abort. Temporary must be a sibling chosen by caller.
 pub fn atomic_begin(destination: []const u8, temporary: []const u8) AtomicResult {

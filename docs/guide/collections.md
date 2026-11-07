@@ -96,16 +96,13 @@ fn spawn(level: *Level) {
 
 ## Chunk lists
 
-A chunk list grows on any arena, including one shared with other data. You write
-two small structs per element type; `chunk` works through their field names:
+A chunk list grows on any arena, including one shared with other data. For a
+different chunk size, declare your own structs with the same field names:
 
 ```dyn
 use "std/container/chunk"
 
-struct EnemyChunk { next: *EnemyChunk, count: usize, items: [64]Enemy }
-struct EnemyList { first: *EnemyChunk, last: *EnemyChunk, total: usize }
-
-fn spawn(arena: *mem.Arena, enemies: *EnemyList) {
+fn spawn(arena: *mem.Arena, enemies: *chunk.List(Enemy)) {
   enemy := chunk.push(arena, enemies, Enemy{hp: 10})
   enemy.hp += 1
   it := enemies.first

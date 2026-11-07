@@ -35,7 +35,7 @@ use "std/mem" mem
 use "std/fs" fs
 use "std/bytes" bytes
 struct Input { source: []const u8, at: usize, chunk: usize }
-fn read(data: rawptr, destination: []u8) io.Result {
+fn read(data: rawptr, destination: []u8) io.Transfer {
  state := #cast(*Input, data)
  amount := #len(state.source) - state.at
  if amount > state.chunk { amount = state.chunk }
@@ -44,7 +44,7 @@ fn read(data: rawptr, destination: []u8) io.Result {
  state.at += amount
  status := io.Status.Complete
  if state.at == #len(state.source) { status = io.Status.End }
- return io.Result{ transferred: amount, status: status }
+ return io.Transfer{ transferred: amount, status: status }
 }
 fn verify(raw: []const u8, encoded: []const u8, workspace: []u8, chunk: usize, window: u32, bad: bool, repeats: usize) {
  input := Input{ source: encoded, chunk: chunk }
@@ -80,10 +80,10 @@ source = source.replace('mem.arena_push_or_panic', 'mem.arena_push_uninit')
 source = source.replace('use "std/bytes" bytes', 'use "std/bytes" bytes\nuse "std/io" errors\nuse "std/parse" parse')
 extra = '''
 struct Failure { calls: usize, code: isize }
-fn fail(data: rawptr, destination: []u8) io.Result {
+fn fail(data: rawptr, destination: []u8) io.Transfer {
  state := #cast(*Failure, data)
  state.calls += 1
- return io.Result{ kind: errors.Kind.PermissionDenied, error: state.code, status: io.Status.Error }
+ return io.Transfer{ kind: errors.Kind.PermissionDenied, error: state.code, status: io.Status.Error }
 }
 fn results(arena: *mem.Arena, encoded: []const u8, unknown: []const u8, workspace: []u8) {
  packed_result := z.compress(arena, "portable zstd", 3)

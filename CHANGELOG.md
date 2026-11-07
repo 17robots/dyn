@@ -14,6 +14,9 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- Breaking: `io.Result` is now `io.Transfer`. `io.Result(T)` and `parse.Result(T)` are the
+  generic `{value, failure}` results, and named result types are aliases of them.
+- `chunk.List(T)` replaces the two structs a chunk list needed.
 - Generic structs: `struct Box($T: type) { value: T }`, used as `Box(i32)`.
 - Enum payloads are back: `enum Node { Null, Number: f64 }`, built with
   `Node.Number(2.5)` and read only through `case`. The first variant has no payload,

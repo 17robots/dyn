@@ -24,7 +24,7 @@ pub struct UnixAddress { bytes: [110]u8, length: usize }
 pub struct Address { bytes: [128]u8, length: usize }
 
 // `error` keeps the native code; `kind` is its portable category.
-pub struct Result { value: isize, failure: io.Failure }
+pub type Result = io.Result(isize)
 // `active` makes zeroed storage a closed handle; descriptor 0 is a valid descriptor.
 pub struct Connection { descriptor: isize, active: bool }
 pub struct Listener { descriptor: isize, active: bool }
@@ -36,8 +36,8 @@ pub fn connection_from_descriptor(descriptor: isize) Connection {
 pub fn listener_from_descriptor(descriptor: isize) Listener {
   return Listener{ descriptor: descriptor, active: descriptor >= 0 }
 }
-pub struct ConnectionResult { value: Connection, failure: io.Failure }
-pub struct ListenerResult { value: Listener, failure: io.Failure }
+pub type ConnectionResult = io.Result(Connection)
+pub type ListenerResult = io.Result(Listener)
 pub fn result_value(outcome: *const Result) isize {
   return outcome.value
 }
@@ -348,28 +348,28 @@ pub fn connection_write(connection: *Connection, source: []const u8) Result {
   return Result{ value: #cast(isize, total) }
 }
 
-fn connection_reader_read(data: rawptr, destination: []u8) stream.Result {
+fn connection_reader_read(data: rawptr, destination: []u8) stream.Transfer {
   outcome := connection_read(#cast(*Connection, data), destination)
   if outcome.failure.kind != io.Kind.Ok {
-    return stream.Result{ error: outcome.failure.native, status: stream.Status.Error }
+    return stream.Transfer{ error: outcome.failure.native, status: stream.Status.Error }
   }
   status := stream.Status.Complete
   if outcome.value == 0 {
     status = stream.Status.End
   }
-  return stream.Result{ transferred: #cast(usize, outcome.value), status: status }
+  return stream.Transfer{ transferred: #cast(usize, outcome.value), status: status }
 }
 
-fn connection_writer_write(data: rawptr, source: []const u8) stream.Result {
+fn connection_writer_write(data: rawptr, source: []const u8) stream.Transfer {
   outcome := connection_write(#cast(*Connection, data), source)
   if outcome.failure.kind != io.Kind.Ok {
     transferred: usize = 0
     if outcome.value > 0 {
       transferred = #cast(usize, outcome.value)
     }
-    return stream.Result{ transferred: transferred, error: outcome.failure.native, status: stream.Status.Error }
+    return stream.Transfer{ transferred: transferred, error: outcome.failure.native, status: stream.Status.Error }
   }
-  return stream.Result{ transferred: #cast(usize, outcome.value), status: stream.Status.Complete }
+  return stream.Transfer{ transferred: #cast(usize, outcome.value), status: stream.Status.Complete }
 }
 
 pub fn connection_reader(connection: *Connection) stream.Reader {

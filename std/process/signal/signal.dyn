@@ -15,7 +15,7 @@ pub struct Set { interrupt: bool, terminate: bool, hangup: bool }
 // An open watch. handle is the readable descriptor (signalfd or kqueue) or the
 // Windows event handle, for use with an event loop.
 pub struct Watch { handle: isize, set: Set, active: bool }
-pub struct WatchResult { value: Watch, failure: io.Failure }
+pub type WatchResult = io.Result(Watch)
 pub struct Next { value: Kind, found: bool, failure: io.Failure }
 pub struct Result { failure: io.Failure }
 

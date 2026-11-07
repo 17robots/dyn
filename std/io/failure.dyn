@@ -1,8 +1,11 @@
 // Portable categories accompany (and never replace) the original native code.
 // A library validation failure may have no native code. Test kind/ok/status first.
 pub struct Failure { kind: Kind, native: isize }
-pub struct Bytes { value: []u8, failure: Failure }
-pub struct Count { value: usize, failure: Failure }
+// A value and how getting it went. value is always safe to read: zero or a
+// documented partial result on failure.
+pub struct Result($T: type) { value: T, failure: Failure }
+pub type Bytes = Result([]u8)
+pub type Count = Result(usize)
 
 pub enum Kind { Ok, InvalidInput, InvalidState, NotFound, PermissionDenied, AlreadyExists, Capacity, Overflow, Interrupted, WouldBlock, Unsupported, System }
 

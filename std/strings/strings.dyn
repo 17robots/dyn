@@ -750,10 +750,10 @@ pub fn glob_match(pattern: []const u8, text: []const u8) bool {
   return p == #len(pattern)
 }
 
-fn count_write(data: rawptr, source: []const u8) io.Result {
+fn count_write(data: rawptr, source: []const u8) io.Transfer {
   total := #cast(*usize, data)
   total.* += #len(source)
-  return io.Result{ transferred: #len(source), status: io.Status.Complete }
+  return io.Transfer{ transferred: #len(source), status: io.Status.Complete }
 }
 
 // Formats into arena using the io.print template language: {} inserts a value,

@@ -27,15 +27,15 @@ fn handler(response: *http.Response, request: *const http.Request) http.Result {
   return http.Result{}
 }
 struct Trace { calls: usize, native: isize }
-fn read(raw: rawptr, dest: []u8) io.Result {
+fn read(raw: rawptr, dest: []u8) io.Transfer {
   trace := #cast(*Trace, raw)
   trace.calls += 1
-  return io.Result{ kind: errors.Kind.PermissionDenied, error: trace.native, status: io.Status.Error }
+  return io.Transfer{ kind: errors.Kind.PermissionDenied, error: trace.native, status: io.Status.Error }
 }
-fn write(raw: rawptr, source: []const u8) io.Result {
+fn write(raw: rawptr, source: []const u8) io.Transfer {
   trace := #cast(*Trace, raw)
   trace.calls += 1
-  return io.Result{ kind: errors.Kind.PermissionDenied, error: trace.native, status: io.Status.Error }
+  return io.Transfer{ kind: errors.Kind.PermissionDenied, error: trace.native, status: io.Status.Error }
 }
 fn main() {
   head(http.parse_request("GET / HTTP/1.1\r\nBad Header: x\r\n\r\n"), 19)

@@ -34,7 +34,7 @@ use "std/io" io
 use "std/bytes" bytes
 fn check(ok: bool) { if !ok { #panic("tar fixture") } }
 struct Input { source: []const u8, offset: usize, fail: usize, calls: usize, native: isize }
-fn read(data: rawptr, destination: []u8) io.Result {
+fn read(data: rawptr, destination: []u8) io.Transfer {
  s := #cast(*Input,data)
  s.calls += 1
  take := #len(destination)
@@ -42,9 +42,9 @@ fn read(data: rawptr, destination: []u8) io.Result {
  if take > #len(s.source) - s.offset { take = #len(s.source) - s.offset }
  for i in 0..take { destination[i] = s.source[s.offset+i] }
  s.offset += take
- if s.offset == s.fail { return io.Result{ transferred: take, status: io.Status.Error, kind: errors.Kind.PermissionDenied, error: s.native } }
- if s.offset == #len(s.source) { return io.Result{ transferred: take, status: io.Status.End } }
- return io.Result{ transferred: take }
+ if s.offset == s.fail { return io.Transfer{ transferred: take, status: io.Status.Error, kind: errors.Kind.PermissionDenied, error: s.native } }
+ if s.offset == #len(s.source) { return io.Transfer{ transferred: take, status: io.Status.End } }
+ return io.Transfer{ transferred: take }
 }
 fn replay(state: *tar.StreamReader, input: *Input, native: isize, offset: usize) {
  calls := input.calls

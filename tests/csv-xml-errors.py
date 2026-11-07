@@ -20,20 +20,20 @@ use "std/io" errors
 use "std/bytes" bytes
 struct Probe { calls: usize, code: isize, mode: usize }
 fn check(ok: bool) { if !ok { #panic("CSV/XML diagnostic contract") } }
-fn read(data: rawptr, destination: []u8) io.Result {
+fn read(data: rawptr, destination: []u8) io.Transfer {
   p := #cast(*Probe, data)
   p.calls += 1
   check(p.calls == 1)
-  if p.mode == 2 { return io.Result{} }
+  if p.mode == 2 { return io.Transfer{} }
   if p.mode == 1 { destination[0] = 'x'
-  return io.Result{ transferred: 1, status: io.Status.End } }
-  return io.Result{ status: io.Status.Error, kind: errors.Kind.PermissionDenied, error: p.code }
+  return io.Transfer{ transferred: 1, status: io.Status.End } }
+  return io.Transfer{ status: io.Status.Error, kind: errors.Kind.PermissionDenied, error: p.code }
 }
-fn write(data: rawptr, source: []const u8) io.Result {
+fn write(data: rawptr, source: []const u8) io.Transfer {
   p := #cast(*Probe, data)
   p.calls += 1
   check(p.calls == 1)
-  return io.Result{ status: io.Status.Error, kind: errors.Kind.PermissionDenied, error: p.code }
+  return io.Transfer{ status: io.Status.Error, kind: errors.Kind.PermissionDenied, error: p.code }
 }
 fn callback_contracts() {
   scratch: [32]u8 = []
@@ -169,11 +169,11 @@ fn additional_contracts() {
 }
 
 struct Chunk { calls: usize, source: []const u8, at: usize, split: usize, limit: usize }
-fn read_chunk(data: rawptr, destination: []u8) io.Result {
+fn read_chunk(data: rawptr, destination: []u8) io.Transfer {
   state := #cast(*Chunk, data)
   state.calls += 1
   if state.at == #len(state.source) {
-    return io.Result{ status: io.Status.End }
+    return io.Transfer{ status: io.Status.End }
   }
   take := #len(state.source) - state.at
   if state.at < state.split && take > state.split - state.at {
@@ -189,7 +189,7 @@ fn read_chunk(data: rawptr, destination: []u8) io.Result {
     destination[i] = state.source[state.at + i]
   }
   state.at += take
-  return io.Result{ transferred: take }
+  return io.Transfer{ transferred: take }
 }
 fn input(state: *Chunk) io.Reader {
   return io.Reader{ data: #cast(rawptr, state), read: read_chunk }

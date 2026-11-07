@@ -6,7 +6,7 @@ use "std/fs" fs
 use "std/io" io
 use "std/mem" mem
 pub struct TemporaryDirectory { path: []const u8, active: bool }
-pub struct TemporaryResult { value: TemporaryDirectory, failure: io.Failure }
+pub type TemporaryResult = io.Result(TemporaryDirectory)
 // Reserves a private 0700 directory. Its path is in arena.
 pub fn temporary_directory(arena: *mem.Arena, prefix: []const u8) TemporaryResult {
   for byte in prefix {

@@ -10,8 +10,8 @@ pub const Error: u32 = 8
 pub const Hangup: u32 = 16
 pub struct Event { descriptor: isize, token: u64, events: u32 }
 pub struct Result { failure: io.Failure }
-pub struct OpenResult { value: Queue, failure: io.Failure }
-pub struct WaitResult { value: []Event, failure: io.Failure }
+pub type OpenResult = io.Result(Queue)
+pub type WaitResult = io.Result([]Event)
 struct Entry { descriptor: isize, token: u64, events: u32, active: bool }
 // One owner, one thread. Storage belongs to the opening arena. Remove each
 // descriptor before closing/reusing it. A queue never owns its descriptors.

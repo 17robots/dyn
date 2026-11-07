@@ -9,11 +9,11 @@ use "std/net/url" urls
 
 pub type StreamReader = stream.Reader
 pub type StreamWriter = stream.Writer
-pub type StreamResult = stream.Result
+pub type StreamResult = stream.Transfer
 pub type Listener = network.Listener
 pub type Connection = network.Connection
 
-pub struct AcceptResult { value: Connection, failure: io.Failure }
+pub type AcceptResult = io.Result(Connection)
 
 pub fn accept(listener: *Listener) AcceptResult {
   accepted := network.listener_accept(listener)
@@ -687,7 +687,7 @@ pub struct Request {
 pub struct Response {
   failed: bool,
   first: Result,
-  first_stream: stream.Result,
+  first_stream: stream.Transfer,
   output: stream.Writer,
   started: bool,
   finished: bool,
@@ -720,7 +720,7 @@ pub struct Result { detail: ErrorKind, offset: usize, failure: io.Failure }
 pub struct Body {
   failed: bool,
   first: Result,
-  first_stream: stream.Result,
+  first_stream: stream.Transfer,
   output: stream.Writer,
   finished: bool,
 }
@@ -969,7 +969,7 @@ fn response_failure(response: *Response, result: Result) Result {
     response.failed = true
     response.first = result
     if response.first_stream.status != stream.Status.Error {
-      response.first_stream = stream.Result{ error: 0, kind: io.Kind.InvalidState, status: stream.Status.Error }
+      response.first_stream = stream.Transfer{ error: 0, kind: io.Kind.InvalidState, status: stream.Status.Error }
     }
   }
   return response.first
@@ -981,7 +981,7 @@ fn response_output(response: *Response, source: []const u8) Result {
   }
   written := stream.write_all(response.output, source)
   if written.status == stream.Status.Error {
-    response.first_stream = stream.Result{ error: written.error, kind: written.kind, status: stream.Status.Error }
+    response.first_stream = stream.Transfer{ error: written.error, kind: written.kind, status: stream.Status.Error }
     return response_failure(response, Result{ detail: ErrorKind.Io, failure: io.Failure{ kind: written.kind, native: written.error } })
   }
   return Result{}
@@ -1074,20 +1074,20 @@ fn hex_size(destination: []u8, value: usize) []const u8 {
   return destination[end..]
 }
 
-fn body_failure(body: *Body, result: Result, native: stream.Result) Result {
+fn body_failure(body: *Body, result: Result, native: stream.Transfer) Result {
   if !body.failed {
     body.failed = true
     body.first = result
-    body.first_stream = stream.Result{ error: native.error, kind: native.kind, status: stream.Status.Error }
+    body.first_stream = stream.Transfer{ error: native.error, kind: native.kind, status: stream.Status.Error }
   }
   return body.first
 }
 
 fn body_invalid(body: *Body) Result {
-  return body_failure(body, Result{ detail: ErrorKind.Invalid, failure: io.Failure{ kind: io.Kind.InvalidState } }, stream.Result{ error: 0, kind: io.Kind.InvalidState, status: stream.Status.Error })
+  return body_failure(body, Result{ detail: ErrorKind.Invalid, failure: io.Failure{ kind: io.Kind.InvalidState } }, stream.Transfer{ error: 0, kind: io.Kind.InvalidState, status: stream.Status.Error })
 }
 
-fn body_output(body: *Body, source: []const u8) stream.Result {
+fn body_output(body: *Body, source: []const u8) stream.Transfer {
   if body.failed {
     return body.first_stream
   }
@@ -1098,7 +1098,7 @@ fn body_output(body: *Body, source: []const u8) stream.Result {
   return result
 }
 
-fn body_write(data: rawptr, source: []const u8) stream.Result {
+fn body_write(data: rawptr, source: []const u8) stream.Transfer {
   body := #cast(*Body, data)
   if body.failed {
     return body.first_stream
@@ -1108,7 +1108,7 @@ fn body_write(data: rawptr, source: []const u8) stream.Result {
     return body.first_stream
   }
   if #len(source) == 0 {
-    return stream.Result{ status: stream.Status.Complete }
+    return stream.Transfer{ status: stream.Status.Complete }
   }
   size_storage: [16]u8 = []
   size := hex_size(size_storage[..], #len(source))
@@ -1128,7 +1128,7 @@ fn body_write(data: rawptr, source: []const u8) stream.Result {
   if ending.status == stream.Status.Error {
     return ending
   }
-  return stream.Result{ transferred: #len(source), status: stream.Status.Complete }
+  return stream.Transfer{ transferred: #len(source), status: stream.Status.Complete }
 }
 
 // Borrows a stable Body slot: do not move or destroy it during the writer's lifetime.

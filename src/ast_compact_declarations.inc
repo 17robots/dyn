@@ -913,6 +913,18 @@ static bool body_parallel(const DynSource *s, DynAstProgram *a, BodyJob *jobs, s
   /* A failed merge already changed the program; it reports out of memory. */
   return merged || a->allocation_failed;
 }
+static void compact_create_instances(CompactNode n, const DynSource *s, DynAstProgram *a, unsigned depth) {
+  if (compact_null(n) || depth > 2048 || !dyn_work_step(&s->context, 1)) return;
+  uint16_t kind = compact_kind(n);
+  if (kind == EXP_GENERIC_TYPE) (void)compact_type(n, s, a);
+  else if (kind == EXP_CALL) {
+    CompactNode callee = compact_first(n);
+    uint32_t id = compact_null(callee) ? UINT32_MAX : find_struct(a, compact_span(callee), s);
+    if (id != UINT32_MAX && a->structs[id].is_template) (void)compact_instance(callee, compact_next(callee), s, a);
+  }
+  for (CompactNode c = compact_first(n); !compact_null(c); c = compact_next(c))
+    compact_create_instances(c, s, a, depth + 1);
+}
 static void compact_lower_function_bodies(const DynSource *s,
                                   DynAstProgram *a, unsigned *errors,
                                   const char *owner_key, DynNameIndex *index) {
@@ -946,6 +958,10 @@ static void compact_lower_function_bodies(const DynSource *s,
     }
     jobs[count++] = (BodyJob){id, block, 0, 0};
   }
+  /* Workers lower bodies on private copies and merge by id, so every struct
+     instance must exist before they start. */
+  for (size_t i = 0; i < count; ++i)
+    compact_create_instances(jobs[i].block, s, a, 0);
   unsigned workers = body_workers(s, count);
   if (workers < 2 || !body_parallel(s, a, jobs, count, workers))
     for (size_t i = 0; i < count; ++i)

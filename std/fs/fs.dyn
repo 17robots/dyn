@@ -4,7 +4,7 @@ use "std/io" io
 // File{} is unopened. Owners must not be copied: transfer with take(), or borrow().
 // Borrowed files never close the underlying handle. Their owner must outlive them.
 pub struct File { descriptor: isize, active: bool, owned: bool }
-pub struct FileResult { value: File, failure: stream.Failure }
+pub type FileResult = stream.Result(File)
 pub struct Result { transferred: usize, failure: stream.Failure }
 pub type OffsetResult = stream.Count
 pub type ReadAllResult = stream.Bytes
@@ -100,23 +100,23 @@ pub fn write(file: *File, source: []const u8) Result {
   }
   return Result{ transferred: written }
 }
-fn adapter_read(data: rawptr, destination: []u8) stream.Result {
+fn adapter_read(data: rawptr, destination: []u8) stream.Transfer {
   result := read(#cast(*File, data), destination)
   if result.failure.kind != stream.Kind.Ok {
-    return stream.Result{ transferred: result.transferred, error: result.failure.native, kind: result.failure.kind, status: stream.Status.Error }
+    return stream.Transfer{ transferred: result.transferred, error: result.failure.native, kind: result.failure.kind, status: stream.Status.Error }
   }
   status := stream.Status.Complete
   if result.transferred == 0 && #len(destination) != 0 {
     status = stream.Status.End
   }
-  return stream.Result{ transferred: result.transferred, status: status }
+  return stream.Transfer{ transferred: result.transferred, status: status }
 }
-fn adapter_write(data: rawptr, source: []const u8) stream.Result {
+fn adapter_write(data: rawptr, source: []const u8) stream.Transfer {
   result := write(#cast(*File, data), source)
   if result.failure.kind != stream.Kind.Ok {
-    return stream.Result{ transferred: result.transferred, error: result.failure.native, kind: result.failure.kind, status: stream.Status.Error }
+    return stream.Transfer{ transferred: result.transferred, error: result.failure.native, kind: result.failure.kind, status: stream.Status.Error }
   }
-  return stream.Result{ transferred: result.transferred }
+  return stream.Transfer{ transferred: result.transferred }
 }
 // Adapters borrow the File itself: keep it alive and unmoved until I/O completes.
 pub fn reader(file: *File) stream.Reader {
@@ -154,7 +154,7 @@ pub fn sync(file: *File) Result {
 // bytes reflect the file when mapped; another writer may change them later.
 // Truncating the file while mapped can fault on access. A zero-length file
 // maps to an empty value without a native mapping.
-pub struct Mapping { value: []const u8, failure: stream.Failure }
+pub type Mapping = stream.Result([]const u8)
 
 // Maps the whole file. The file position is unchanged, and the file may be
 // closed while the mapping stays valid.

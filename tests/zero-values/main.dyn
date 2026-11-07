@@ -6,8 +6,8 @@ use "std/text/scanner" text
 use "std/net"
 
 
-fn read_nothing(data: rawptr, destination: []u8) io.Result {
-  return io.Result{ status: io.Status.End }
+fn read_nothing(data: rawptr, destination: []u8) io.Transfer {
+  return io.Transfer{ status: io.Status.End }
 }
 
 // Explicit default arenas initialize zeroed payload; replacement follows release.

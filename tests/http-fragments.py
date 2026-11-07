@@ -16,7 +16,7 @@ use "std/net/http" http
 use "std/bytes" bytes
 use "std/mem" mem
 struct Feed { data: []const u8, at: usize, cut: usize, step: usize }
-fn read_feed(raw: rawptr, destination: []u8) io.Result {
+fn read_feed(raw: rawptr, destination: []u8) io.Transfer {
   feed := #cast(*Feed, raw)
   count := #len(feed.data) - feed.at
   if feed.at < feed.cut && count > feed.cut - feed.at { count = feed.cut - feed.at }
@@ -24,12 +24,12 @@ fn read_feed(raw: rawptr, destination: []u8) io.Result {
   if count > #len(destination) { count = #len(destination) }
   for i in 0..count { destination[i] = feed.data[feed.at + i] }
   feed.at += count
-  if feed.at == #len(feed.data) { return io.Result{ transferred: count, status: io.Status.End } }
-  return io.Result{ transferred: count, status: io.Status.Complete }
+  if feed.at == #len(feed.data) { return io.Transfer{ transferred: count, status: io.Status.End } }
+  return io.Transfer{ transferred: count, status: io.Status.Complete }
 }
-fn sink(raw: rawptr, data: []const u8) io.Result {
+fn sink(raw: rawptr, data: []const u8) io.Transfer {
   _ = raw
-  return io.Result{ transferred: #len(data), status: io.Status.Complete }
+  return io.Transfer{ transferred: #len(data), status: io.Status.Complete }
 }
 fn check(wire: []const u8, expected: []const u8, valid: bool, method: []const u8) {
   splits := #len(wire) + 1

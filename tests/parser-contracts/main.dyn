@@ -8,10 +8,10 @@ use "std/encoding/json" json
 use "std/mem" mem
 use "std/unicode/utf8" utf8
 struct Chunk { source: []const u8, at: usize, split: usize, limit: usize }
-fn read_chunk(data: rawptr, destination: []u8) io.Result {
+fn read_chunk(data: rawptr, destination: []u8) io.Transfer {
   state := #cast(*Chunk, data)
   if state.at == #len(state.source) {
-    return io.Result{ status: io.Status.End }
+    return io.Transfer{ status: io.Status.End }
   }
   take := #len(state.source) - state.at
   if state.at < state.split && take > state.split - state.at {
@@ -27,7 +27,7 @@ fn read_chunk(data: rawptr, destination: []u8) io.Result {
     destination[i] = state.source[state.at + i]
   }
   state.at += take
-  return io.Result{ transferred: take }
+  return io.Transfer{ transferred: take }
 }
 fn input(state: *Chunk) io.Reader {
   return io.Reader{ data: #cast(rawptr, state), read: read_chunk }

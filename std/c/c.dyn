@@ -30,7 +30,7 @@ pub struct StringResult {
   failure: parse.Failure,
 }
 
-pub struct BytesResult { value: []const u8, failure: parse.Failure }
+pub type BytesResult = parse.Result([]const u8)
 
 // Bounded scan: never reads beyond `maximum`; callers retain source ownership.
 pub fn string_length(value: string, maximum: usize) usize {

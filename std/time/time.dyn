@@ -8,7 +8,7 @@ pub const Minute: i64 = 60000000000
 pub const Hour: i64 = 3600000000000
 
 pub struct Instant { seconds: i64, nanoseconds: i64 }
-pub struct DurationResult { value: i64, failure: io.Failure }
+pub type DurationResult = io.Result(i64)
 pub struct Deadline { at: Instant }
 pub struct DateTime {
   year: i32, month: u8, day: u8,
@@ -51,10 +51,10 @@ pub fn elapsed(start, end: Instant) DurationResult {
   return checked_add(scaled, nanos.value)
 }
 
-pub struct ClockResult { value: Instant, failure: io.Failure }
+pub type ClockResult = io.Result(Instant)
 pub struct SleepResult { failure: io.Failure }
-pub struct DeadlineResult { value: Deadline, failure: io.Failure }
-pub struct ExpiredResult { value: bool, failure: io.Failure }
+pub type DeadlineResult = io.Result(Deadline)
+pub type ExpiredResult = io.Result(bool)
 // Monotonic instants are for elapsed time/deadlines; realtime instants use Unix epoch.
 pub fn monotonic_now() ClockResult {
   return native_clock(true)

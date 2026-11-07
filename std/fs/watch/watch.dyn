@@ -28,9 +28,9 @@ pub enum Status { Event, Empty, Error }
 // Ownership: a live watcher is not an independent owner when copied. Keep one
 // stable owner and close it before its storage is released or reused.
 pub struct Watcher { descriptor: isize, active: bool, storage: []u8, used: usize, offset: usize, rescan_required: bool, failed: bool, error: isize, kind: io.Kind }
-pub struct OpenResult { value: Watcher, failure: io.Failure }
+pub type OpenResult = io.Result(Watcher)
 // `error` keeps the native code; `kind` is its portable category.
-pub struct Result { value: i32, failure: io.Failure }
+pub type Result = io.Result(i32)
 pub struct Event { watch: i32, mask: u32, cookie: u32, name: []const u8, rescan: bool }
 pub struct EventResult { event: Event, status: Status, failure: io.Failure }
 

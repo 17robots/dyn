@@ -1066,6 +1066,16 @@ static void type_name_into(DynAstProgram *a, DynType t, const DynSource *s,
       n = cap - 1;
     memcpy(out, s->text + begin, n);
     out[n] = 0;
+    if (dyn_type_is_struct(t) && a->structs[t - DYN_TYPE_STRUCT_BASE].template_of) {
+      DynAstStruct st = a->structs[t - DYN_TYPE_STRUCT_BASE];
+      size_t used = n;
+      for (uint32_t i = 0; i < st.type_param_count && used + 2 < cap; ++i) {
+        char argument[128];
+        type_name_into(a, st.type_args[i], s, argument, sizeof(argument));
+        used += (size_t)snprintf(out + used, cap - used, "%s%s", i ? ", " : "(", argument);
+      }
+      if (used + 2 < cap) snprintf(out + used, cap - used, ")");
+    }
     return;
   }
   char inner[384];

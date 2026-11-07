@@ -19,7 +19,7 @@ use "std/fs" fs
 use "std/mem" memory
 fn require(ok: bool, message: []const u8) { if !ok { #panic(message) } }
 struct Source { bytes: []const u8, at: usize, chunk: usize }
-fn source_read(data: rawptr, destination: []u8) io.Result {
+fn source_read(data: rawptr, destination: []u8) io.Transfer {
   source := #cast(*Source, data)
   amount := #len(source.bytes) - source.at
   if amount > #len(destination) { amount = #len(destination) }
@@ -28,7 +28,7 @@ fn source_read(data: rawptr, destination: []u8) io.Result {
   source.at += amount
   status := io.Status.Complete
   if source.at == #len(source.bytes) { status = io.Status.End }
-  return io.Result{ transferred: amount, status: status }
+  return io.Transfer{ transferred: amount, status: status }
 }
 fn check(encoded: []const u8, expected: []const u8, wrapped: bool, corrupt: bool, chunk: usize, source_chunk: usize, history_size: usize) {
   source := Source{ bytes: encoded, chunk: source_chunk }

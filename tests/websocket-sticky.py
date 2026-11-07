@@ -16,52 +16,52 @@ SOURCE = r'''use "std/net/websocket" ws
 use "std/io" io
 use "std/io" errors
 struct Trace { reads: usize, writes: usize, mode: usize, bytes: usize }
-fn read(data: rawptr, destination: []u8) io.Result {
+fn read(data: rawptr, destination: []u8) io.Transfer {
   trace := #cast(*Trace, data)
   trace.reads += 1
-  if trace.mode == 0 { return io.Result{ error: -71, kind: errors.Kind.System, status: io.Status.Error } }
-  if trace.mode == 1 { return io.Result{ status: io.Status.End } }
-  if trace.mode == 2 { return io.Result{ transferred: #len(destination) + 1 } }
-  if trace.mode == 3 { return io.Result{ error: 0, kind: errors.Kind.System, status: io.Status.Error } }
+  if trace.mode == 0 { return io.Transfer{ error: -71, kind: errors.Kind.System, status: io.Status.Error } }
+  if trace.mode == 1 { return io.Transfer{ status: io.Status.End } }
+  if trace.mode == 2 { return io.Transfer{ transferred: #len(destination) + 1 } }
+  if trace.mode == 3 { return io.Transfer{ error: 0, kind: errors.Kind.System, status: io.Status.Error } }
   if trace.mode == 8 {
     // A valid length prefix whose payload exceeds the frame buffer.
     for i in 0..#len(destination) { destination[i] = 0 }
     destination[0] = 130
     destination[1] = 126
     destination[3] = 126
-    return io.Result{ transferred: #len(destination) }
+    return io.Transfer{ transferred: #len(destination) }
   }
   if trace.mode == 9 {
     destination[0] = 129
     destination[1] = 126
     destination[2] = 0
     destination[3] = 1
-    return io.Result{ transferred: 4 }
+    return io.Transfer{ transferred: 4 }
   }
   destination[0] = 136
   destination[1] = 0
   if trace.mode == 4 { destination[0] = 129
   destination[1] = 128 }
-  if trace.mode == 5 { return io.Result{ transferred: 2, error: -72, status: io.Status.Error } }
+  if trace.mode == 5 { return io.Transfer{ transferred: 2, error: -72, status: io.Status.Error } }
   if trace.mode == 6 { destination[0] = 0
   destination[1] = 0 }
-  if trace.mode == 7 { return io.Result{} }
-  return io.Result{ transferred: 2 }
+  if trace.mode == 7 { return io.Transfer{} }
+  return io.Transfer{ transferred: 2 }
 }
-fn write(data: rawptr, source: []const u8) io.Result {
+fn write(data: rawptr, source: []const u8) io.Transfer {
   trace := #cast(*Trace, data)
   trace.writes += 1
-  if trace.mode == 10 { return io.Result{ error: -73, status: io.Status.Error } }
-  if trace.mode == 11 { return io.Result{} }
-  if trace.mode == 12 { return io.Result{ transferred: #len(source) + 1 } }
-  if trace.mode == 13 { return io.Result{ error: 0, kind: errors.Kind.System, status: io.Status.Error } }
+  if trace.mode == 10 { return io.Transfer{ error: -73, status: io.Status.Error } }
+  if trace.mode == 11 { return io.Transfer{} }
+  if trace.mode == 12 { return io.Transfer{ transferred: #len(source) + 1 } }
+  if trace.mode == 13 { return io.Transfer{ error: 0, kind: errors.Kind.System, status: io.Status.Error } }
   if trace.mode == 14 {
     if trace.writes == 1 { trace.bytes += 1
-    return io.Result{ transferred: 1 } }
-    return io.Result{ error: -74, status: io.Status.Error }
+    return io.Transfer{ transferred: 1 } }
+    return io.Transfer{ error: -74, status: io.Status.Error }
   }
   trace.bytes += #len(source)
-  return io.Result{ transferred: #len(source) }
+  return io.Transfer{ transferred: #len(source) }
 }
 fn failure(result: ws.Result, kind: errors.Kind, native: isize, offset: usize) {
   if result.failure.kind == io.Kind.Ok || result.failure.kind != kind || result.failure.native != native || result.offset != offset { #panic("structured failure metadata") }
@@ -85,7 +85,7 @@ fn sticky(connection: *ws.WebSocketConnection, trace: *Trace, kind: errors.Kind,
   if trace.reads != reads || trace.writes != writes || trace.bytes != bytes { #panic("I/O after failure") }
 }
 struct Wire { data: []const u8, at: usize, step: usize, calls: usize }
-fn wire_read(raw: rawptr, destination: []u8) io.Result {
+fn wire_read(raw: rawptr, destination: []u8) io.Transfer {
   wire := #cast(*Wire, raw)
   wire.calls += 1
   count := #len(wire.data) - wire.at
@@ -93,8 +93,8 @@ fn wire_read(raw: rawptr, destination: []u8) io.Result {
   if count > #len(destination) { count = #len(destination) }
   for i in 0..count { destination[i] = wire.data[wire.at + i] }
   wire.at += count
-  if count == 0 { return io.Result{status: io.Status.End} }
-  return io.Result{transferred: count}
+  if count == 0 { return io.Transfer{status: io.Status.End} }
+  return io.Transfer{transferred: count}
 }
 fn coalesced() {
   isolated := Wire{data: "\x81\x01a", step: 32}

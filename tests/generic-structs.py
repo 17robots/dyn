@@ -41,4 +41,9 @@ with tempfile.TemporaryDirectory(prefix='dyn-generic-structs-') as temporary:
         (directory / 'main.dyn').write_text(text)
         result = subprocess.run([DYN, 'check', str(directory)], capture_output=True, text=True, timeout=30)
         assert result.returncode != 0 and expected in result.stderr, (name, result.stderr)
+    named = root / 'named'
+    named.mkdir()
+    (named / 'main.dyn').write_text('struct Box($T: type) { value: T }\nfn main() {\n  x: Box(i32)\n  y: Box(u8) = x\n  _ = y\n}\n')
+    result = subprocess.run([DYN, 'check', str(named)], capture_output=True, text=True, timeout=30)
+    assert 'Box(u8)' in result.stderr and 'Box(i32)' in result.stderr, result.stderr
 print('PASS generic structs, imports and diagnostics')

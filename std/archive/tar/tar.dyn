@@ -97,7 +97,7 @@ fn stream_failure(state: *StreamReader, failure: parse.StreamFailure) StreamEntr
 fn syntax_failure(state: *StreamReader, kind: parse.Kind, message: []const u8) StreamEntry {
   return stream_failure(state, parse.parse_failure(kind, state.offset, message))
 }
-fn read_exact(state: *StreamReader, destination: []u8) stream.Result {
+fn read_exact(state: *StreamReader, destination: []u8) stream.Transfer {
   if state.failed {
     return parse.stream_result(state.failure, 0)
   }
@@ -264,7 +264,7 @@ pub fn next_stream(state: *StreamReader) StreamEntry {
 }
 
 // Reads entry payload incrementally. End means this entry is complete, not archive EOF.
-pub fn read_stream(state: *StreamReader, destination: []u8) stream.Result {
+pub fn read_stream(state: *StreamReader, destination: []u8) stream.Transfer {
   if state.failed {
     return parse.stream_result(state.failure, 0)
   }
@@ -273,14 +273,14 @@ pub fn read_stream(state: *StreamReader, destination: []u8) stream.Result {
     return parse.stream_result(state.failure, 0)
   }
   if #len(destination) == 0 {
-    return stream.Result{}
+    return stream.Transfer{}
   }
   take := state.remaining
   if take > #len(destination) {
     take = #len(destination)
   }
   if take == 0 {
-    return stream.Result{ status: stream.Status.End }
+    return stream.Transfer{ status: stream.Status.End }
   }
   result := read_exact(state, destination[..take])
   if result.status != stream.Status.Complete {
@@ -292,7 +292,7 @@ pub fn read_stream(state: *StreamReader, destination: []u8) stream.Result {
   if state.remaining == 0 {
     status = stream.Status.End
   }
-  return stream.Result{ transferred: take, status: status }
+  return stream.Transfer{ transferred: take, status: status }
 }
 
 fn string_end(bytes: []const u8) usize {

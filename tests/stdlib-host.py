@@ -38,15 +38,15 @@ fn lines(text: []const u8, expected: []const u8, capacity: usize, buffering: usi
   }
   require(bytes.equal(result[..used], expected), "stdlib assertion 35")
 }
-fn error_read(data: rawptr, destination: []u8) io.Result {
+fn error_read(data: rawptr, destination: []u8) io.Transfer {
   _ = data
   destination[0] = 'x'
-  return io.Result{ transferred: 1, kind: errors.Kind.PermissionDenied, status: io.Status.Error }
+  return io.Transfer{ transferred: 1, kind: errors.Kind.PermissionDenied, status: io.Status.Error }
 }
-fn error_write(data: rawptr, source: []const u8) io.Result {
+fn error_write(data: rawptr, source: []const u8) io.Transfer {
   _ = data
   _ = source
-  return io.Result{ kind: errors.Kind.PermissionDenied, status: io.Status.Error }
+  return io.Transfer{ kind: errors.Kind.PermissionDenied, status: io.Status.Error }
 }
 fn main() {
   counter32 := sync.atomic_u32(7)

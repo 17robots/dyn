@@ -33,7 +33,7 @@ pub struct Zone {
   end: Rule,
 }
 
-pub struct ZoneResult { value: Zone, failure: io.Failure }
+pub type ZoneResult = io.Result(Zone)
 
 // A local time with the type in effect at that instant.
 pub struct Local { value: time.DateTime, offset: i32, dst: bool, abbreviation: []const u8 }

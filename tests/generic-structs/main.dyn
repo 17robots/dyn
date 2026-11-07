@@ -1,4 +1,6 @@
 use "std/mem"
+use "std/container/chunk"
+use "std/io"
 struct Pair($A: type, $B: type) { first: A, second: B }
 struct Box($T: type) { value: T, failed: bool }
 struct Node($T: type) { next: *Node(T), value: T }
@@ -54,6 +56,17 @@ fn main() {
   }
   if sum(&list) != 45 || list.total != 10 {
     #panic("list")
+  }
+  shared: chunk.List(i32)
+  for i in 0..100 {
+    _ = chunk.push(arena, &shared, #cast(i32, i))
+  }
+  if shared.total != 100 || shared.first.next.items[0] != 64 {
+    #panic("chunk list")
+  }
+  counted: io.Result(i32) = .{ value: 3 }
+  if counted.value != 3 || counted.failure.kind != io.Kind.Ok {
+    #panic("result")
   }
   node: Node(u32)
   node.value = 3

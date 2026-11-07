@@ -26,7 +26,7 @@ pub const HasDirectoryFlag: bool = true
 pub const FixedWatchCapacity: usize = 16
 pub enum Status { Event, Empty, Error }
 // `error` keeps the native code; `kind` is its portable category.
-pub struct Result { value: i32, failure: io.Failure }
+pub type Result = io.Result(i32)
 pub struct Event { watch: i32, mask: u32, cookie: u32, name: []const u8, rescan: bool }
 pub struct EventResult { event: Event, status: Status, failure: io.Failure }
 // Owns one bounded allocation: at most 16 streams and 63 queued names (1023 bytes).
@@ -35,7 +35,7 @@ pub struct EventResult { event: Event, status: Status, failure: io.Failure }
 // FSEvents coalesces changes. Rename has both move bits, cookie=0 and rescan=true;
 // CloseWrite is unavailable. Rescan must rebuild/reconcile the watched snapshot.
 pub struct Watcher { state: *State, storage: []u8, arena: *mem.Arena, rescan_required: bool, failed: bool, error: isize, kind: io.Kind }
-pub struct OpenResult { value: Watcher, failure: io.Failure }
+pub type OpenResult = io.Result(Watcher)
 struct Context { version: isize, info: rawptr, retain: rawptr, release: rawptr, describe: rawptr }
 type Callback = fn(rawptr, rawptr, usize, rawptr, *const u32, *const u64)
 struct API {

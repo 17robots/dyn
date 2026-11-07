@@ -12,7 +12,7 @@ pub struct Replacement { text: []const u8, start: usize, end: usize, token: u64 
 // publish a fresh context before accepting another correction.
 pub struct Buffer { storage: []u8, length: usize, cursor: usize, anchor: usize, token: u64 }
 pub type Status = io.Failure
-pub struct ContextResult { value: Context, failure: io.Failure }
+pub type ContextResult = io.Result(Context)
 pub struct Tracker {
   serial: u64,
   token: u64,

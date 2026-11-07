@@ -19,8 +19,8 @@ pub fn io_failure(kind: io.Kind, native: isize) StreamFailure {
   return StreamFailure{ kind: StreamKind.Io, io: io.Failure{ kind: kind, native: native } }
 }
 
-// Payload readers speak io.Result, so a parse failure maps to the nearest io kind.
-pub fn stream_result(failure: StreamFailure, transferred: usize) io.Result {
+// Payload readers speak io.Transfer, so a parse failure maps to the nearest io kind.
+pub fn stream_result(failure: StreamFailure, transferred: usize) io.Transfer {
   kind := io.Kind.InvalidInput
   if failure.kind == StreamKind.Io {
     kind = failure.io.kind
@@ -29,8 +29,10 @@ pub fn stream_result(failure: StreamFailure, transferred: usize) io.Result {
   } else if failure.parse.kind == Kind.Overflow {
     kind = io.Kind.Overflow
   }
-  return io.Result{ transferred: transferred, error: failure.io.native, kind: kind, status: io.Status.Error }
+  return io.Transfer{ transferred: transferred, error: failure.io.native, kind: kind, status: io.Status.Error }
 }
 
+// A value and how decoding went. value is zero or partial on failure.
+pub struct Result($T: type) { value: T, failure: Failure }
 // Decoded or encoded bytes, for codecs with nothing else to report.
-pub struct Bytes { value: []u8, failure: Failure }
+pub type Bytes = Result([]u8)

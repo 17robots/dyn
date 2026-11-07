@@ -10,30 +10,30 @@ extern fn native_random "dyn_wasi_random"(data: rawptr, length: usize) u32
 pub extern fn clock_time "dyn_wasi_clock"(clock: u32, precision: u64, time: *u64) u32
 
 // Errors are WASI errno values; stream adapters expose their negative value.
-pub fn write(fd: u32, bytes: []const u8) io.Result {
+pub fn write(fd: u32, bytes: []const u8) io.Transfer {
   if #len(bytes) == 0 {
-    return io.Result{ status: io.Status.Complete }
+    return io.Transfer{ status: io.Status.Complete }
   }
   count: usize = 0
   error := wasi_raw.write(fd, #cast(rawptr, &bytes[0]), #len(bytes), &count)
   if error != 0 {
-    return io.Result{ transferred: count, error: 0 - #cast(isize, error), status: io.Status.Error }
+    return io.Transfer{ transferred: count, error: 0 - #cast(isize, error), status: io.Status.Error }
   }
-  return io.Result{ transferred: count, status: io.Status.Complete }
+  return io.Transfer{ transferred: count, status: io.Status.Complete }
 }
-pub fn read(fd: u32, bytes: []u8) io.Result {
+pub fn read(fd: u32, bytes: []u8) io.Transfer {
   if #len(bytes) == 0 {
-    return io.Result{ status: io.Status.Complete }
+    return io.Transfer{ status: io.Status.Complete }
   }
   count: usize = 0
   error := wasi_raw.read(fd, &bytes[0], #len(bytes), &count)
   if error != 0 {
-    return io.Result{ transferred: count, error: 0 - #cast(isize, error), status: io.Status.Error }
+    return io.Transfer{ transferred: count, error: 0 - #cast(isize, error), status: io.Status.Error }
   }
   if count == 0 {
-    return io.Result{ status: io.Status.End }
+    return io.Transfer{ status: io.Status.End }
   }
-  return io.Result{ transferred: count, status: io.Status.Complete }
+  return io.Transfer{ transferred: count, status: io.Status.Complete }
 }
 pub struct OpenResult { fd: u32, error: u32, ok: bool }
 // Relative to a directory descriptor granted by the host. No implicit preopens.

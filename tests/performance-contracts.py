@@ -19,15 +19,15 @@ use "std/io" errors
 struct Sink { calls: usize, used: usize, fail_after: usize, fail: bool, bytes: [64]u8 }
 struct Entry { key: []const u8, hash: u64, hash_next: *Entry, bytes: [1]u8, value: usize }
 const nil_entry: Entry = Entry{}
-fn sink_write(data: rawptr, source: []const u8) io.Result {
+fn sink_write(data: rawptr, source: []const u8) io.Transfer {
   state := #cast(*Sink, data)
   state.calls += 1
-  if state.fail || (state.fail_after > 0 && state.calls > state.fail_after) { return io.Result{transferred: 0, status: io.Status.Error, kind: errors.Kind.PermissionDenied, error: -13} }
+  if state.fail || (state.fail_after > 0 && state.calls > state.fail_after) { return io.Transfer{transferred: 0, status: io.Status.Error, kind: errors.Kind.PermissionDenied, error: -13} }
   amount := #len(source)
   if amount > 3 { amount = 3 }
   for i in 0..amount { state.bytes[state.used + i] = source[i] }
   state.used += amount
-  return io.Result{transferred: amount, status: io.Status.Complete}
+  return io.Transfer{transferred: amount, status: io.Status.Complete}
 }
 fn main() {''']
     randomizer=random.Random(124)
