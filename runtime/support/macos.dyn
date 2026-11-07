@@ -56,5 +56,30 @@ pub fn dyn_unwind_continue() {
   }
   panic_raw(nil, 0)
 }
+// Debug programs report a memory fault like a panic. The handler runs on its
+// own stack, so a stack overflow reports too, and never returns.
+struct SignalAction { handler: usize, mask: u32, flags: i32 }
+struct SignalStack { base: usize, size: usize, flags: i32 }
+extern fn signal_action "sigaction"(signal: i32, action: *const SignalAction, previous: rawptr) i32
+extern fn signal_stack "sigaltstack"(stack: *const SignalStack, previous: rawptr) i32
+extern fn exit_now "_exit"(code: i32)
+const fault_stack_size: u64 = 65536
+const signal_on_stack: i32 = 1
+const signal_bus: i32 = 10
+const signal_segv: i32 = 11
+fn fault_handler() {
+  write_string("memory fault: invalid address\n")
+  trace_dump()
+  exit_now(101)
+}
 fn trace_thread_started() {
+  base := runtime_pages(fault_stack_size)
+  if base == 0 {
+    return
+  }
+  stack := SignalStack{ base: #cast(usize, base), size: #cast(usize, fault_stack_size) }
+  _ = signal_stack(&stack, nil)
+  action := SignalAction{ handler: #cast(usize, #cast(rawptr, fault_handler)), flags: signal_on_stack }
+  _ = signal_action(signal_segv, &action, nil)
+  _ = signal_action(signal_bus, &action, nil)
 }

@@ -356,6 +356,7 @@ kernel_lookup:
     thunk GetStdHandle
     thunk GetCurrentProcess
     thunk GetCurrentThreadId
+    thunk SetUnhandledExceptionFilter
     thunk DuplicateHandle
     thunk InitializeProcThreadAttributeList
     thunk UpdateProcThreadAttribute
@@ -459,6 +460,8 @@ iat GetStdHandle
 iat GetCurrentProcess
 .global __imp_GetCurrentThreadId
 iat GetCurrentThreadId
+.global __imp_SetUnhandledExceptionFilter
+iat SetUnhandledExceptionFilter
 iat DuplicateHandle
 iat InitializeProcThreadAttributeList
 iat UpdateProcThreadAttribute
@@ -557,6 +560,7 @@ hint Sleep
 hint GetStdHandle
 hint GetCurrentProcess
 hint GetCurrentThreadId
+hint SetUnhandledExceptionFilter
 hint DuplicateHandle
 hint InitializeProcThreadAttributeList
 hint UpdateProcThreadAttribute

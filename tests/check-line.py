@@ -2,6 +2,7 @@
 """Debug builds name a failed check's line, and one type error reports once."""
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 
@@ -27,4 +28,11 @@ with tempfile.TemporaryDirectory(prefix='dyn-check-line-') as temporary:
     subprocess.run([DYN, 'build', str(fault), '--debug', '--quiet', '--no-cache', '--output', str(program)], check=True, timeout=120)
     result = subprocess.run([str(program)], capture_output=True, text=True, timeout=30)
     assert result.returncode == 101 and 'memory fault' in result.stderr and 'at touch' in result.stderr, result
+    windows = Path(temporary) / 'fault.exe'
+    subprocess.run([DYN, 'build', str(fault), '--target', 'x86_64-windows', '--debug', '--quiet', '--no-cache', '--output', str(windows)], check=True, timeout=120)
+    if shutil.which('wine'):
+        result = subprocess.run(['wine', str(windows)], capture_output=True, text=True, timeout=120, env={**os.environ, 'WINEDEBUG': '-all'})
+        assert result.returncode == 101 and 'memory fault' in result.stdout + result.stderr, result
+    for target in ('aarch64-windows', 'aarch64-macos', 'x86_64-macos'):
+        subprocess.run([DYN, 'build', str(fault), '--target', target, '--debug', '--quiet', '--no-cache', '--output', str(Path(temporary) / target)], check=True, timeout=120)
 print('PASS failed checks report their line; one error reports once')

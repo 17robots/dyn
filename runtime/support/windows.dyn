@@ -66,5 +66,16 @@ pub fn dyn_unwind_continue() {
   }
   panic_raw(nil, 0)
 }
+// Debug programs report a memory fault like a panic. The filter covers every
+// thread of the process, so one installation is enough.
+extern fn set_exception_filter "SetUnhandledExceptionFilter"(filter: rawptr) rawptr
+extern fn exit_process "ExitProcess"(code: u32)
+fn fault_filter(information: rawptr) i32 {
+  write_string("memory fault: invalid address\n")
+  trace_dump()
+  exit_process(101)
+  return 1
+}
 fn trace_thread_started() {
+  _ = set_exception_filter(#cast(rawptr, fault_filter))
 }

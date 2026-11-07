@@ -647,6 +647,11 @@ GetCurrentThreadId:
     adrp x16, __imp_GetCurrentThreadId
     ldr x16, [x16, :lo12:__imp_GetCurrentThreadId]
     br x16
+.global SetUnhandledExceptionFilter
+SetUnhandledExceptionFilter:
+    adrp x16, __imp_SetUnhandledExceptionFilter
+    ldr x16, [x16, :lo12:__imp_SetUnhandledExceptionFilter]
+    br x16
 .global GetStdHandle
 GetStdHandle:
     adrp x16, __imp_GetStdHandle
@@ -742,6 +747,7 @@ kernel_lookup:
     thunk GetStdHandle
     thunk GetCurrentProcess
     thunk GetCurrentThreadId
+    thunk SetUnhandledExceptionFilter
     thunk DuplicateHandle
     thunk InitializeProcThreadAttributeList
     thunk UpdateProcThreadAttribute
@@ -843,6 +849,8 @@ iat Sleep
 .global __imp_GetStdHandle
 iat GetStdHandle
 iat GetCurrentProcess
+.global __imp_SetUnhandledExceptionFilter
+iat SetUnhandledExceptionFilter
 .global __imp_GetCurrentThreadId
 iat GetCurrentThreadId
 iat DuplicateHandle
@@ -943,6 +951,7 @@ hint Sleep
 hint GetStdHandle
 hint GetCurrentProcess
 hint GetCurrentThreadId
+hint SetUnhandledExceptionFilter
 hint DuplicateHandle
 hint InitializeProcThreadAttributeList
 hint UpdateProcThreadAttribute
