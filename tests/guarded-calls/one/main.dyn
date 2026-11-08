@@ -1,0 +1,22 @@
+// A user-written container that stores a function: only one function of this
+// type is ever taken, so release builds call it directly behind a guard.
+struct Counter { step: fn(u64) u64, total: u64 }
+
+fn double(x: u64) u64 {
+  return x * 2
+}
+
+fn run(c: *Counter, n: u64) {
+  for i in 0..n {
+    c.total += c.step(i)
+  }
+}
+
+fn main() {
+  c: Counter
+  c.step = double
+  run(&c, 1000)
+  if c.total != 999000 {
+    #panic("one")
+  }
+}

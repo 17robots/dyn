@@ -18,6 +18,8 @@ servers so they pick up the new `dyn`.
   generic `{value, failure}` results, and named result types are aliases of them.
 - `std/container/map`: `map.Map(K, V)`, a growing hash map for any key type. Set it up with
   `map.init(&m, arena, hash, equal)`, then `insert`, `get` and `remove`.
+- Release builds call a stored function directly, and inline it, when it is the only function of
+  its type the program ever takes. A comparison keeps any other value correct.
 - `chunk.List(T)` replaces the two structs a chunk list needed.
 - Generic structs: `struct Box($T: type) { value: T }`, used as `Box(i32)`.
 - Debug builds report memory faults with a stack trace on macOS and Windows too.

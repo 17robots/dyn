@@ -82,6 +82,7 @@ fn code_of(m: *const Map($K, $V), key: K) u64 {
 // The slot holding key, or the empty slot where it belongs.
 fn locate(m: *const Map($K, $V), key: K, code: u64) *Slot(K, V) {
   slots := m.slots
+  equal_key := m.equal_key
   mask := #len(slots) - 1
   at := #cast(usize, code) & mask
   for true {
@@ -89,8 +90,9 @@ fn locate(m: *const Map($K, $V), key: K, code: u64) *Slot(K, V) {
     if slot.code == 0 {
       return slot
     }
+    // Apart from the &&, so the compiler can inline equal_key.
     if slot.code == code {
-      if m.equal_key(slot.key, key) {
+      if equal_key(slot.key, key) {
         return slot
       }
     }
