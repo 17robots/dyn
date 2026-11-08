@@ -3472,6 +3472,52 @@ static bool ssa_unswitch(Ssa *s, const uint32_t *order, uint32_t n) {
   free(inside); free(work);
   return done;
 }
+/* Counter replacement, as LLVM's loop strength reduction does: when the
+   counter i (step 1, from a start no greater than the bound) is otherwise
+   only compared unsigned against a constant bound N, and the header tests
+   it on every iteration, i < N becomes j < N * c for the reduced j = i * c.
+   No value of i reaches past N, and N * c does not wrap, so the order of
+   every compared pair is kept; i itself then dies. */
+static void ssa_replace_counter(Ssa *s, const uint32_t *order, uint32_t n, uint32_t header, uint32_t entry_block,
+                                int32_t phi, int32_t next, int32_t reduced, int32_t advanced, int32_t start,
+                                uint64_t step, uint64_t factor) {
+  uint64_t first, bound = 0, scaled;
+  if (step != 1 || !ssa_is_const(s, start, &first)) return;
+  uint32_t compares[16], count = 0;
+  bool tested = false, have_bound = false;
+  for (uint32_t i = 0; i < n; ++i) {
+    SsaBlock *block = &s->blocks[order[i]];
+    int32_t controls[4] = {block->control, block->control2, block->control3, block->control4};
+    for (unsigned c = 0; c < 4; ++c) if (controls[c] == phi || controls[c] == next) return;
+    for (uint32_t k = 0; k < block->values.count; ++k) {
+      uint32_t id = block->values.items[k];
+      SsaValue *v = &s->values[id];
+      if (v->dead || (int32_t)id == next || (int32_t)id == phi) continue;
+      uint32_t operands = ssa_operands(s, id, ssa_slots, SSA_MAX_OPERANDS);
+      bool uses = false;
+      for (uint32_t o = 0; o < operands; ++o) uses |= *ssa_slots[o] == phi || *ssa_slots[o] == next;
+      if (!uses) continue;
+      uint64_t limit;
+      if (v->op != SO_CMP || (v->cond != CC_B && v->cond != CC_AE) || (v->a != phi && v->a != next) ||
+          !ssa_is_const(s, v->b, &limit) || count == 16) return;
+      if (have_bound && limit != bound) return;
+      bound = limit; have_bound = true;
+      compares[count++] = id;
+      if (order[i] == header) tested = true;
+    }
+  }
+  /* The phi's own operands are next and the start; next feeds only the phi. */
+  if (!count || !tested || first > bound || __builtin_mul_overflow(bound, factor, &scaled)) return;
+  int32_t limit = ssa_value(s, entry_block, SO_CONST, SC_INT, -1, -1, -1, (int64_t)scaled, 0);
+  if (s->failed) return;
+  ssa_push(s, &s->blocks[entry_block].values, (uint32_t)limit);
+  if (s->failed) return;
+  for (uint32_t i = 0; i < count; ++i) {
+    SsaValue *v = &s->values[compares[i]];
+    v->a = v->a == phi ? reduced : advanced;
+    v->b = limit;
+  }
+}
 /* Strength reduction: in a loop whose header carries i = phi(start, i + step),
    each i * c with a constant c that is no power of two becomes a phi of its
    own, j = phi(start * c, j + step * c). Wrapping arithmetic keeps j equal to
@@ -3499,7 +3545,7 @@ static bool ssa_strength(Ssa *s, const uint32_t *order, uint32_t n) {
       if (!(s->values[next].a == phi && ssa_is_const(s, s->values[next].b, &step)) &&
           !(s->values[next].b == phi && ssa_is_const(s, s->values[next].a, &step))) continue;
       uint32_t next_block = s->values[next].block;
-      int32_t reduced = -1;
+      int32_t reduced = -1, advanced = -1;
       uint64_t factor = 0;
       for (uint32_t b = 0; b < n && !s->failed; ++b) {
         SsaBlock *block = &s->blocks[order[b]];
@@ -3522,7 +3568,7 @@ static bool ssa_strength(Ssa *s, const uint32_t *order, uint32_t n) {
             reduced = ssa_new_phi(s, header, SC_INT);
             int32_t increment = ssa_value(s, next_block, SO_CONST, SC_INT, -1, -1, -1, (int64_t)(step * c), 0);
             if (!s->failed) ssa_push(s, &s->blocks[next_block].values, (uint32_t)increment);
-            int32_t advanced = ssa_value(s, next_block, SO_ADD, SC_INT, reduced, increment, -1, 0, 0);
+            advanced = ssa_value(s, next_block, SO_ADD, SC_INT, reduced, increment, -1, 0, 0);
             if (!s->failed) ssa_push(s, &s->blocks[next_block].values, (uint32_t)advanced);
             if (s->failed) return changed;
             int32_t items[2];
@@ -3537,6 +3583,7 @@ static bool ssa_strength(Ssa *s, const uint32_t *order, uint32_t n) {
           changed = true;
         }
       }
+      if (reduced >= 0) ssa_replace_counter(s, order, n, header, entry_block, phi, next, reduced, advanced, start, step, factor);
     }
   }
   if (changed && s->ctx->optimization_remarks) fprintf(stderr, "remark: %s: loop multiplies strength-reduced\n", s->f->name);

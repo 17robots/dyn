@@ -24,7 +24,8 @@ servers so they pick up the new `dyn`.
   branches, and skip pointer checks on element addresses that flow through a variable. Branches
   on a boolean that comes through several paths jump straight to their targets, and jumps
   through empty blocks go straight to where they land. A loop counter times a constant, such as
-  an index scaled by a struct size, steps by an add instead of a multiply. A loop that branches on
+  an index scaled by a struct size, steps by an add instead of a multiply, and a counter kept only
+  for its bound test is replaced by the scaled one. A loop that branches on
   a value fixed before it runs as two copies, and register allocation treats paths that can only
   end in a failure as cold. Calls inside loops inline at up to twice the usual size, including
   calls whose result is dereferenced, such as `map.get(&m, key).*`.

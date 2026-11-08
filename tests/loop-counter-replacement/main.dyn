@@ -1,0 +1,34 @@
+use "std/io"
+struct P { x: u64, y: u64, z: u64 }
+fn total(ps: []P, from: usize, to: usize) u64 {
+  t: u64 = 0
+  for i in from..to {
+    t += ps[i].x * 3 + #cast(u64, i) * 5
+  }
+  return t
+}
+fn scaled(n: u64) u64 {
+  t: u64 = 0
+  for i in 0..n {
+    t += i * 3
+    if i == 4 {
+      break
+    }
+  }
+  return t
+}
+fn huge() u64 {
+  t: u64 = 0
+  for i in 0..10 {
+    t += #cast(u64, i) * 0x2000000000000001
+  }
+  return t
+}
+fn main() {
+  ps: [6]P
+  for r in 0..6 {
+    ps[r].x = #cast(u64, r) + 1
+  }
+  _ = io.println(io.stdout(), "{} {} {} {} {}", total(ps[0..6], 0, 6), total(ps[0..6], 4, 2), total(ps[0..6], 3, 3), scaled(100), scaled(2))
+  _ = io.println(io.stdout(), "{}", huge())
+}
