@@ -23,7 +23,8 @@ servers so they pick up the new `dyn`.
 - Release builds keep more values in registers around rarely taken calls, reuse loads across
   branches, and skip pointer checks on element addresses that flow through a variable. Branches
   on a boolean that comes through several paths jump straight to their targets, and jumps
-  through empty blocks go straight to where they land.
+  through empty blocks go straight to where they land. A loop counter times a constant, such as
+  an index scaled by a struct size, steps by an add instead of a multiply.
 - `chunk.List(T)` replaces the two structs a chunk list needed.
 - Generic structs: `struct Box($T: type) { value: T }`, used as `Box(i32)`.
 - Debug builds report memory faults with a stack trace on macOS and Windows too.

@@ -3134,6 +3134,76 @@ static uint32_t *ssa_order(Ssa *s, uint32_t *count) {
    itself, which is available at its end. A comparison used only there
    then fuses into the branch instead of being materialized and tested. */
 static void ssa_replace(Ssa *s, uint32_t id, int32_t with);
+/* Strength reduction: in a loop whose header carries i = phi(start, i + step),
+   each i * c with a constant c that is no power of two becomes a phi of its
+   own, j = phi(start * c, j + step * c). Wrapping arithmetic keeps j equal to
+   i * c at every point the header dominates, so a multiply per iteration
+   becomes an add. */
+static bool ssa_strength(Ssa *s, const uint32_t *order, uint32_t n) {
+  bool changed = false;
+  for (uint32_t i = 0; i < n && !s->failed; ++i) {
+    uint32_t header = order[i];
+    if (s->blocks[header].preds.count != 2) continue;
+    uint32_t phis = 0;
+    while (phis < s->blocks[header].values.count && s->values[s->blocks[header].values.items[phis]].op == SO_PHI) ++phis;
+    for (uint32_t k = 0; k < phis && !s->failed; ++k) {
+      SsaBlock *h = &s->blocks[header];
+      int32_t phi = (int32_t)h->values.items[k];
+      SsaValue *v = &s->values[phi];
+      if (v->dead || v->cls != SC_INT || v->count != 2) continue;
+      unsigned back = s->blocks[h->preds.items[0]].order >= h->order ? 0 : 1;
+      uint32_t entry_block = h->preds.items[1 - back], back_block = h->preds.items[back];
+      if (s->blocks[entry_block].order >= h->order || s->blocks[back_block].order < h->order) continue;
+      int32_t start = ssa_resolve(s, (int32_t)s->lists[v->list + 1 - back]);
+      int32_t next = ssa_resolve(s, (int32_t)s->lists[v->list + back]);
+      uint64_t step, c, first;
+      if (next < 0 || s->values[next].op != SO_ADD) continue;
+      if (!(s->values[next].a == phi && ssa_is_const(s, s->values[next].b, &step)) &&
+          !(s->values[next].b == phi && ssa_is_const(s, s->values[next].a, &step))) continue;
+      uint32_t next_block = s->values[next].block;
+      int32_t reduced = -1;
+      uint64_t factor = 0;
+      for (uint32_t b = 0; b < n && !s->failed; ++b) {
+        SsaBlock *block = &s->blocks[order[b]];
+        for (uint32_t q = 0; q < block->values.count && !s->failed; ++q) {
+          uint32_t id = block->values.items[q];
+          SsaValue *m = &s->values[id];
+          if (m->dead || m->op != SO_MUL || m->cls != SC_INT) continue;
+          if (!(m->a == phi && ssa_is_const(s, m->b, &c)) && !(m->b == phi && ssa_is_const(s, m->a, &c))) continue;
+          if (c < 3 || !(c & (c - 1)) || (reduced >= 0 && c != factor)) continue;
+          if (reduced < 0) {
+            /* j's start in the entry block, its step after i's. */
+            int32_t initial;
+            if (ssa_is_const(s, start, &first)) initial = ssa_value(s, entry_block, SO_CONST, SC_INT, -1, -1, -1, (int64_t)(first * c), 0);
+            else {
+              int32_t multiplier = ssa_value(s, entry_block, SO_CONST, SC_INT, -1, -1, -1, (int64_t)c, 0);
+              if (!s->failed) ssa_push(s, &s->blocks[entry_block].values, (uint32_t)multiplier);
+              initial = ssa_value(s, entry_block, SO_MUL, SC_INT, start, multiplier, -1, 0, 0);
+            }
+            if (!s->failed) ssa_push(s, &s->blocks[entry_block].values, (uint32_t)initial);
+            reduced = ssa_new_phi(s, header, SC_INT);
+            int32_t increment = ssa_value(s, next_block, SO_CONST, SC_INT, -1, -1, -1, (int64_t)(step * c), 0);
+            if (!s->failed) ssa_push(s, &s->blocks[next_block].values, (uint32_t)increment);
+            int32_t advanced = ssa_value(s, next_block, SO_ADD, SC_INT, reduced, increment, -1, 0, 0);
+            if (!s->failed) ssa_push(s, &s->blocks[next_block].values, (uint32_t)advanced);
+            if (s->failed) return changed;
+            int32_t items[2];
+            items[1 - back] = initial; items[back] = advanced;
+            s->values[reduced].list = ssa_list(s, items, 2);
+            s->values[reduced].count = 2;
+            factor = c;
+            ++phis; ++k; /* the new phi leads the header */
+            block = &s->blocks[order[b]];
+          }
+          ssa_replace(s, id, reduced);
+          changed = true;
+        }
+      }
+    }
+  }
+  if (changed && s->ctx->optimization_remarks) fprintf(stderr, "remark: %s: loop multiplies strength-reduced\n", s->f->name);
+  return changed;
+}
 static void ssa_thread_edge(Ssa *s, uint32_t from, uint32_t via, uint32_t to) {
   SsaBlock *target = &s->blocks[to];
   uint32_t index = UINT32_MAX;
@@ -7833,6 +7903,7 @@ static void ssa_prepare(SsaPrepared *p, BackendContext *ctx, const DynSource *so
     ssa_cse(s, order, n);
     ssa_resolve_all(s);
   }
+  if (ssa_strength(s, order, n)) ssa_resolve_all(s);
   if (ssa_thread_conditions(s, order, n)) ssa_resolve_all(s);
   if (s->failed) goto done;
   ssa_split_edges(s);
