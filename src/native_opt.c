@@ -732,7 +732,10 @@ static bool inline_admits(const Inline *b, const InlineScope *scope, uint64_t id
   unsigned resources = 4 * cost + 3 * f->local_count +
                        2 * f->param_count + 16;
   bool hot = !b->leaf_only && !scope->returns && scope->in_loop && cost <= 16;
-  return !(cost > 64 || growth > b->budget || resources > b->resource_budget ||
+  /* Like LLVM's threshold bonus for calls in loops: a call that repeats
+     may be twice the size, still within the caller's growth budget. */
+  unsigned limit = scope->in_loop && !b->leaf_only ? 128 : 64;
+  return !(cost > limit || growth > b->budget || resources > b->resource_budget ||
            (!hot && (growth > b->budget - b->reserved_growth ||
                      resources > b->resource_budget - b->reserved_resources)));
 }
@@ -960,8 +963,9 @@ static DynExprId inline_spine(const DynIrProgram *ir, const bool *addressed, Dyn
     const DynIrExpr *e = &ir->expressions[id];
     bool conversion = e->kind == DYN_EXPR_CAST || e->kind == DYN_EXPR_CONVERT ||
                       e->kind == DYN_EXPR_BITCAST;
+    /* A dereference of the call's result still follows the call. */
     bool unary = e->kind == DYN_EXPR_UNARY &&
-                 (e->op == DYN_OP_NEG || e->op == DYN_OP_NOT || e->op == DYN_OP_BIT_NOT);
+                 (e->op == DYN_OP_NEG || e->op == DYN_OP_NOT || e->op == DYN_OP_BIT_NOT || e->op == DYN_OP_DEREF);
     bool binary = e->kind == DYN_EXPR_BINARY;
     if (!conversion && !unary && !binary) break;
     if (count == 32 || e->item_count || (!binary && e->right != DYN_NO_EXPR))
