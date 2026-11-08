@@ -81,6 +81,7 @@ typedef struct {
   int64_t aux, aux2;
   uint32_t block, list, count, uses, check_origin;
   bool element_address; /* &xs[i]: bounds-checked, so neither nil nor misaligned */
+  uint8_t element_align; /* log2 of that element's alignment */
   /* ILP32 calls retain original signature identity and {type, first, count}
      groups separately from the optimizer's flattened operand triples. */
   uint32_t abi_expr, abi_groups, abi_group_count;
@@ -486,6 +487,7 @@ static bool ssa_local_index(Ssa *s, uint64_t id, uint32_t *local) {
   return true;
 }
 /* Pointer checks of checked_address: non-nil, then aligned for the pointee. */
+static unsigned ssa_low_zero_bits(uint64_t x, unsigned cap);
 static void ssa_checked_address(Ssa *s, int32_t pointer, DynType pointee) {
   uint32_t size, alignment;
   if (pointer >= 0 && s->values[pointer].element_address) return;
@@ -714,8 +716,12 @@ static int32_t ssa_unary(Ssa *s, const DynIrExpr *e, int32_t *second, unsigned d
     if (e->left < ir->expression_count && ir->expressions[e->left].kind == DYN_EXPR_FUNCTION)
       return ssa_expr(s, e->left, NULL, depth + 1);
     int32_t address = ssa_address(s, e->left, depth + 1);
-    if (!s->failed && address >= 0 && e->left < ir->expression_count && ir->expressions[e->left].kind == DYN_EXPR_INDEX)
+    uint32_t size, alignment;
+    if (!s->failed && address >= 0 && e->left < ir->expression_count && ir->expressions[e->left].kind == DYN_EXPR_INDEX &&
+        layout(ir, ir->expressions[e->left].type, &size, &alignment, 0)) {
       s->values[address].element_address = true;
+      s->values[address].element_align = (uint8_t)ssa_low_zero_bits(alignment, 6);
+    }
     return address;
   }
   if (e->op == DYN_OP_DEREF) {
@@ -3471,12 +3477,12 @@ static bool ssa_float_loads(Ssa *s, const uint32_t *order, uint32_t n) {
   }
   return changed;
 }
-/* Reuse exact loads only inside one basic block and between memory effects.
+/* Reuse exact loads only along a chain of blocks and between memory effects.
    An exact full-width store also supplies subsequent loads until a barrier.
    Every store/call/copy is a barrier, including stores through const aliases,
    except that consecutive stores through one base and index at disjoint
    constant offsets cannot overwrite each other, so each still supplies loads.
-   Both carry into a block reached only by falling out of the previous one.
+   Both carry into a block whose only predecessor is the previous one.
    Checks may fail, but cannot change memory on the path that continues here. */
 static bool ssa_reuse_loads(Ssa *s, const uint32_t *order, uint32_t n) {
   uint32_t largest = 0, capacity = 64, reused = 0, forwarded = 0;
@@ -3495,11 +3501,11 @@ static bool ssa_reuse_loads(Ssa *s, const uint32_t *order, uint32_t n) {
   int32_t stores[STORE_RUN]; uint32_t store_count = 0;
   for (uint32_t i = 0; i < n; ++i) {
     SsaBlock *block = &s->blocks[order[i]];
-    /* A block entered only by falling out of the previous one, which has no
-       other successor, sees exactly that block's memory at its end. */
+    /* A block whose only predecessor is the previous one, a plain block or
+       a branch, sees exactly that block's memory at its end. */
     SsaBlock *previous = i ? &s->blocks[order[i - 1]] : NULL;
     bool continues = previous && block->preds.count == 1 && block->preds.items[0] == order[i - 1] &&
-                     previous->kind == SB_PLAIN && previous->succ[0] == order[i];
+                     (previous->kind == SB_PLAIN || previous->kind == SB_IF);
     if (!continues) { ++epoch; store_count = 0; }
     uint32_t kept = 0;
     for (uint32_t k = 0; k < block->values.count; ++k) {
@@ -3757,7 +3763,7 @@ static void ssa_splice(Ssa *s, uint32_t b, uint32_t k, const int32_t *items, uin
   memmove(list->items + k + count, list->items + k + 1, (list->count - k - count) * sizeof(uint32_t));
   for (uint32_t i = 0; i < count; ++i) list->items[k + i] = (uint32_t)items[i];
 }
-static bool ssa_address_facts(Ssa *s, int32_t id, unsigned *align, unsigned depth);
+static bool ssa_address_facts(Ssa *s, int32_t id, unsigned *align, bool guard, unsigned depth);
 /* A copy out of a region whose bytes are all known becomes stores; returns
    whether it did. */
 static bool ssa_copy_known(Ssa *s, uint32_t b, uint32_t k, const int32_t *owner, const SsaKnown *known) {
@@ -3780,7 +3786,7 @@ static bool ssa_copy_known(Ssa *s, uint32_t b, uint32_t k, const int32_t *owner,
   int32_t items[2 * SSA_TRACKED + 1];
   int32_t zero = -1;
   unsigned alignment = 0;
-  if (!ssa_address_facts(s, destination, &alignment, 0)) alignment = 0;
+  if (!ssa_address_facts(s, destination, &alignment, false, 0)) alignment = 0;
   /* x86-64 scalar stores work at any address. */
   if (!s->ctx->a64 && !s->ctx->rv64 && !s->ctx->rv32 && !s->ctx->t32) alignment = 3;
   while (at < size) {
@@ -4313,11 +4319,30 @@ static bool ssa_defined_global(Ssa *s, const SsaValue *v) {
     if ((uint64_t)v->aux == s->ctx->global_symbols[i]) return !s->ir->globals[i].foreign;
   return false;
 }
-static bool ssa_address_facts(Ssa *s, int32_t id, unsigned *align, unsigned depth) {
+/* guard: for the compiler's own pointer checks before an access. Those
+   also trust element addresses, which a checked index keeps valid, through
+   phis; a program's own comparisons may see a forged wrapping address. */
+static bool ssa_address_facts(Ssa *s, int32_t id, unsigned *align, bool guard, unsigned depth) {
   if (id < 0 || depth > 8) return false;
   SsaValue *v = &s->values[id];
   switch (v->op) {
-  case SO_COPY: return ssa_address_facts(s, v->a, align, depth + 1);
+  case SO_COPY: return ssa_address_facts(s, v->a, align, guard, depth + 1);
+  case SO_PHI: {
+    /* Every incoming address, ignoring the phi itself around a loop. */
+    if (!guard) return false;
+    unsigned least = 6;
+    bool any = false;
+    for (uint32_t p = 0; p < v->count; ++p) {
+      int32_t op = (int32_t)s->lists[v->list + p];
+      unsigned each;
+      if (op == id) continue;
+      if (!ssa_address_facts(s, op, &each, guard, depth + 1)) return false;
+      if (each < least) least = each;
+      any = true;
+    }
+    *align = least;
+    return any;
+  }
   case SO_FRAME: *align = ssa_low_zero_bits((uint64_t)v->aux, 4); return true;
   case SO_SYMBOL:
     if (!ssa_defined_global(s, v)) return false;
@@ -4325,7 +4350,8 @@ static bool ssa_address_facts(Ssa *s, int32_t id, unsigned *align, unsigned dept
     return true;
   case SO_LEA: {
     unsigned base;
-    if (!ssa_address_facts(s, v->a, &base, depth + 1)) return false;
+    if (guard && v->element_address) { *align = v->element_align; return true; }
+    if (!ssa_address_facts(s, v->a, &base, guard, depth + 1)) return false;
     unsigned index = v->b >= 0 ? ssa_low_zero_bits(v->scale, 3) + ssa_zero_bits(s, v->b, 0) : 6;
     unsigned offset = ssa_low_zero_bits((uint64_t)v->aux, 6);
     *align = base < index ? base : index;
@@ -4401,7 +4427,7 @@ static bool ssa_address_comparison(Ssa *s, const SsaValue *cmp, bool *holds) {
   if (ssa_is_const(s, bits->b, &mask)) base = bits->a;
   else if (ssa_is_const(s, bits->a, &mask)) base = bits->b;
   else return false;
-  if (!ssa_address_facts(s, base, &align, 0) || (mask & ~((UINT64_C(1) << align) - 1))) return false;
+  if (!ssa_address_facts(s, base, &align, false, 0) || (mask & ~((UINT64_C(1) << align) - 1))) return false;
   *holds = cmp->cond == CC_E;
   return true;
 }
@@ -4445,9 +4471,9 @@ static bool ssa_prove(Ssa *s, const uint32_t *order, uint32_t n) {
         default: break;
         }
         unsigned align;
-        if (v->aux == GUARD_NONNULL && ssa_address_facts(s, v->a, &align, 0)) proven = true;
+        if (v->aux == GUARD_NONNULL && ssa_address_facts(s, v->a, &align, true, 0)) proven = true;
         if (v->aux == GUARD_ALIGNED && s->values[v->a].op == SO_AND && ssa_is_const(s, s->values[v->a].b, &blo) &&
-            ssa_address_facts(s, s->values[v->a].a, &align, 0) && !(blo & ~((UINT64_C(1) << align) - 1))) proven = true;
+            ssa_address_facts(s, s->values[v->a].a, &align, true, 0) && !(blo & ~((UINT64_C(1) << align) - 1))) proven = true;
         if (proven) { changed = true; continue; }
       } else if (v->op == SO_ITOF && v->aux) {
         ssa_range(s, v->a, b, &alo, &ahi, 0);
