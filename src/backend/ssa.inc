@@ -98,6 +98,7 @@ typedef struct {
   uint32_t succ[2];
   uint8_t kind;
   bool sealed, reachable;
+  bool cold;           /* every path from here ends in a failure exit */
   int32_t control;     /* SB_IF: condition; SB_RETURN: value or -1 */
   int32_t control2;    /* SB_RETURN: second word of a descriptor result */
   int32_t control3, control4; /* SB_RETURN: third and fourth result parts (AArch64 HFAs) */
@@ -3134,6 +3135,343 @@ static uint32_t *ssa_order(Ssa *s, uint32_t *count) {
    itself, which is available at its end. A comparison used only there
    then fuses into the branch instead of being materialized and tested. */
 static void ssa_replace(Ssa *s, uint32_t id, int32_t with);
+/* Removes pred `from` of block b with its phi operands. A phi left with
+   one incoming value becomes that value: an edge from a branch moves no
+   phis. */
+static void ssa_drop_pred(Ssa *s, uint32_t b, uint32_t from) {
+  SsaBlock *block = &s->blocks[b];
+  for (uint32_t j = 0; j < block->preds.count; ++j) {
+    if (block->preds.items[j] != from) continue;
+    for (uint32_t k = 0; k < block->values.count; ++k) {
+      SsaValue *phi = &s->values[block->values.items[k]];
+      if (phi->op != SO_PHI) break;
+      for (uint32_t p = j; p + 1 < phi->count; ++p) s->lists[phi->list + p] = s->lists[phi->list + p + 1];
+      --phi->count;
+    }
+    for (uint32_t p = j; p + 1 < block->preds.count; ++p) block->preds.items[p] = block->preds.items[p + 1];
+    --block->preds.count;
+    break;
+  }
+  if (block->preds.count != 1) return;
+  for (uint32_t k = 0; k < block->values.count; ++k) {
+    uint32_t id = block->values.items[k];
+    if (s->values[id].op != SO_PHI) break;
+    ssa_replace(s, id, (int32_t)s->lists[s->values[id].list]);
+  }
+}
+/* Loop unswitching, as LLVM's does without a profile: a loop that branches
+   on a value computed before it runs as two copies, one per outcome, after
+   a single test in the preheader. Only one small loop per function, whose
+   exits are reached from the loop alone and see its values only through
+   their phis, so no new phis are needed. */
+static bool ssa_dominates(Ssa *s, uint32_t a, uint32_t b);
+/* One use of a loop value after the loop: operand `index` of value `id`,
+   or control `index` of block `id` when `control`; `at` is where it is used
+   (a phi's predecessor). */
+typedef struct { uint32_t id, index, at; bool control; } SsaOutsideUse;
+/* LCSSA for one loop value: a phi in every exit, and one in a join whose
+   predecessors each lie below an exit, then each use after the loop reads
+   the phi that dominates it. False, changing nothing, when some use is
+   below neither. */
+static bool ssa_close_value(Ssa *s, const uint32_t *order, uint32_t n, const bool *inside, int32_t value,
+                            const uint32_t *exits, uint32_t exit_count, bool apply) {
+  SsaOutsideUse uses[64]; uint32_t count = 0;
+  for (uint32_t q = 0; q < n; ++q) {
+    uint32_t ob = order[q];
+    if (inside[ob]) continue;
+    SsaBlock *block = &s->blocks[ob];
+    int32_t controls[4] = {block->control, block->control2, block->control3, block->control4};
+    for (unsigned c = 0; c < 4; ++c) {
+      if (controls[c] != value) continue;
+      if (count == 64) return false;
+      uses[count++] = (SsaOutsideUse){ob, c, ob, true};
+    }
+    for (uint32_t m = 0; m < block->values.count; ++m) {
+      uint32_t id = block->values.items[m];
+      SsaValue *v = &s->values[id];
+      uint32_t operands = ssa_operands(s, id, ssa_slots, SSA_MAX_OPERANDS);
+      for (uint32_t o = 0; o < operands; ++o) {
+        if (*ssa_slots[o] != value) continue;
+        uint32_t at = v->op == SO_PHI ? block->preds.items[o] : ob;
+        if (inside[at]) continue;
+        if (count == 64) return false;
+        uses[count++] = (SsaOutsideUse){id, o, at, false};
+      }
+    }
+  }
+  if (!count) return true;
+  /* Each use lies below one exit, or below the join. */
+  uint32_t join = UINT32_MAX;
+  for (uint32_t u = 0; u < count; ++u) {
+    bool below = false;
+    for (uint32_t e = 0; e < exit_count && !below; ++e) below = ssa_dominates(s, exits[e], uses[u].at);
+    if (below) continue;
+    uint32_t candidate = uses[u].at;
+    for (unsigned depth = 0; depth < 64; ++depth) {
+      SsaBlock *c = &s->blocks[candidate];
+      bool fed = c->preds.count > 1;
+      for (uint32_t p = 0; p < c->preds.count && fed; ++p) {
+        bool from_exit = false;
+        for (uint32_t e = 0; e < exit_count && !from_exit; ++e) from_exit = ssa_dominates(s, exits[e], c->preds.items[p]);
+        fed = from_exit;
+      }
+      if (fed) break;
+      if (c->idom == candidate || c->idom == UINT32_MAX) { candidate = UINT32_MAX; break; }
+      candidate = c->idom;
+    }
+    if (candidate == UINT32_MAX || (join != UINT32_MAX && join != candidate)) return false;
+    join = candidate;
+  }
+  if (exit_count > 16 || (join != UINT32_MAX && s->blocks[join].preds.count > 64)) return false;
+  for (uint32_t e = 0; e < exit_count; ++e) if (s->blocks[exits[e]].preds.count > 64) return false;
+  if (!apply) return true;
+  /* The phis, then the rewrite. */
+  int32_t exit_phis[16];
+  uint8_t cls = s->values[value].cls;
+  for (uint32_t e = 0; e < exit_count; ++e) {
+    int32_t items[64];
+    uint32_t preds = s->blocks[exits[e]].preds.count;
+    if (preds > 64) return false;
+    for (uint32_t p = 0; p < preds; ++p) items[p] = value;
+    exit_phis[e] = ssa_new_phi(s, exits[e], cls);
+    if (s->failed) return false;
+    s->values[exit_phis[e]].list = ssa_list(s, items, preds);
+    s->values[exit_phis[e]].count = preds;
+  }
+  int32_t join_phi = -1;
+  if (join != UINT32_MAX) {
+    int32_t items[64];
+    uint32_t preds = s->blocks[join].preds.count;
+    if (preds > 64) return false;
+    for (uint32_t p = 0; p < preds; ++p)
+      for (uint32_t e = 0; e < exit_count; ++e)
+        if (ssa_dominates(s, exits[e], s->blocks[join].preds.items[p])) { items[p] = exit_phis[e]; break; }
+    join_phi = ssa_new_phi(s, join, cls);
+    if (s->failed) return false;
+    s->values[join_phi].list = ssa_list(s, items, preds);
+    s->values[join_phi].count = preds;
+  }
+  for (uint32_t u = 0; u < count; ++u) {
+    int32_t with = -1;
+    if (join != UINT32_MAX && ssa_dominates(s, join, uses[u].at)) with = join_phi;
+    for (uint32_t e = 0; e < exit_count && with < 0; ++e)
+      if (ssa_dominates(s, exits[e], uses[u].at)) with = exit_phis[e];
+    if (with < 0) { s->failed = true; return false; }
+    if (uses[u].control) {
+      SsaBlock *block = &s->blocks[uses[u].id];
+      int32_t *controls[4] = {&block->control, &block->control2, &block->control3, &block->control4};
+      *controls[uses[u].index] = with;
+    } else {
+      ssa_operands(s, uses[u].id, ssa_slots, SSA_MAX_OPERANDS);
+      *ssa_slots[uses[u].index] = with;
+    }
+  }
+  return true;
+}
+static bool ssa_unswitch(Ssa *s, const uint32_t *order, uint32_t n) {
+  if (s->ctx->rv32 || s->ctx->t32) return false;
+  for (uint32_t i = 0; i < n; ++i) {
+    SsaBlock *block = &s->blocks[order[i]];
+    for (uint32_t k = 0; k < block->values.count; ++k) s->values[block->values.items[k]].block = order[i];
+  }
+  enum { UNSWITCH_VALUES = 192 };
+  bool *inside = calloc(s->block_count + 1, sizeof(bool));
+  uint32_t *work = malloc((s->block_count + 1) * sizeof(uint32_t));
+  if (!inside || !work) { free(inside); free(work); s->failed = true; return false; }
+  bool done = false;
+  for (uint32_t i = 0; i < n && !done && !s->failed; ++i) {
+    uint32_t header = order[i];
+    SsaBlock *h = &s->blocks[header];
+    /* One entry from a plain preheader; the rest are back edges. */
+    uint32_t preheader = UINT32_MAX, entries = 0, latches = 0;
+    for (uint32_t p = 0; p < h->preds.count; ++p) {
+      uint32_t pred = h->preds.items[p];
+      if (s->blocks[pred].order < h->order) { preheader = pred; ++entries; }
+      else ++latches;
+    }
+    if (entries != 1 || !latches || s->blocks[preheader].kind != SB_PLAIN) continue;
+    /* The loop: blocks that reach a back edge without passing the header. */
+    for (uint32_t b = 0; b < s->block_count; ++b) inside[b] = false;
+    uint32_t top = 0, blocks = 0, values = 0;
+    inside[header] = true;
+    for (uint32_t p = 0; p < h->preds.count; ++p) {
+      uint32_t pred = h->preds.items[p];
+      if (pred != preheader && !inside[pred]) { inside[pred] = true; work[top++] = pred; }
+    }
+    bool fits = true;
+    while (top && fits) {
+      uint32_t x = work[--top];
+      if (!ssa_dominates(s, header, x)) fits = false;
+      SsaBlock *xb = &s->blocks[x];
+      for (uint32_t p = 0; p < xb->preds.count; ++p) {
+        uint32_t pred = xb->preds.items[p];
+        if (!inside[pred]) { inside[pred] = true; work[top++] = pred; }
+      }
+    }
+    int32_t condition = -1;
+    uint32_t branch = UINT32_MAX;
+    for (uint32_t j = 0; j < n && fits; ++j) {
+      uint32_t b = order[j];
+      if (!inside[b]) continue;
+      SsaBlock *block = &s->blocks[b];
+      ++blocks; values += block->values.count;
+      if (block->kind == SB_SWITCH || block->kind == SB_CALL || block->kind == SB_RETURN) fits = false;
+      for (uint32_t k = 0; k < block->values.count && fits; ++k) {
+        SsaValue *v = &s->values[block->values.items[k]];
+        if (v->op == SO_CALL && v->abi_group_count) fits = false;
+        if (v->op == SO_CALL && v->cond) fits = false;
+      }
+      uint64_t constant;
+      if (branch == UINT32_MAX && block->kind == SB_IF && block->control >= 0 && !ssa_is_const(s, block->control, &constant) &&
+          !inside[s->values[block->control].block] && block->succ[0] != block->succ[1]) {
+        branch = b; condition = block->control;
+      }
+    }
+    if (!fits || branch == UINT32_MAX || values > UNSWITCH_VALUES) continue;
+    /* Exits come only from the loop. */
+    for (uint32_t j = 0; j < n && fits; ++j) {
+      uint32_t b = order[j];
+      SsaBlock *block = &s->blocks[b];
+      if (!inside[b]) continue;
+      for (unsigned k = 0; k < ssa_successors(s, block); ++k) {
+        uint32_t succ = ssa_successor(s, block, k);
+        if (succ == UINT32_MAX || inside[succ]) continue;
+        SsaBlock *exit = &s->blocks[succ];
+        for (uint32_t p = 0; p < exit->preds.count; ++p) if (!inside[exit->preds.items[p]]) fits = false;
+      }
+    }
+    /* Loop values leave only through exit phis (LCSSA). */
+    uint32_t exits[16], exit_count = 0;
+    for (uint32_t j = 0; j < n && fits; ++j) {
+      uint32_t b = order[j];
+      SsaBlock *block = &s->blocks[b];
+      if (inside[b] || !block->preds.count || !inside[block->preds.items[0]]) continue;
+      if (exit_count == 16) fits = false;
+      else exits[exit_count++] = b;
+    }
+    /* Check every value first: phis go in only once the loop will be cloned. */
+    for (unsigned apply = 0; apply < 2 && fits && !s->failed; ++apply)
+      for (uint32_t j = 0; j < n && fits && !s->failed; ++j) {
+        uint32_t b = order[j];
+        if (!inside[b]) continue;
+        uint32_t original = s->blocks[b].values.count;
+        for (uint32_t k = 0; k < original && fits && !s->failed; ++k) {
+          int32_t value = (int32_t)s->blocks[b].values.items[k];
+          if (s->values[value].cls != SC_NONE &&
+              !ssa_close_value(s, order, n, inside, value, exits, exit_count, apply != 0)) fits = false;
+        }
+      }
+    if (s->failed) break;
+    if (!fits) continue;
+    /* Clone blocks, then values, then remap operands, preds and successors. */
+    uint32_t *block_map = malloc((s->block_count + 1) * sizeof(uint32_t));
+    uint32_t value_base = s->value_count;
+    uint32_t *value_map = malloc(((size_t)s->value_count + 1) * sizeof(uint32_t));
+    if (!block_map || !value_map) { free(block_map); free(value_map); s->failed = true; break; }
+    uint32_t original_blocks = s->block_count;
+    for (uint32_t b = 0; b < original_blocks; ++b) block_map[b] = b;
+    for (uint32_t v = 0; v < value_base; ++v) value_map[v] = v;
+    for (uint32_t j = 0; j < n && !s->failed; ++j) {
+      uint32_t b = order[j];
+      if (!inside[b]) continue;
+      uint32_t copy = ssa_block(s);
+      if (s->failed) break;
+      SsaBlock *source = &s->blocks[b], *target = &s->blocks[copy];
+      SsaList kept_values = {0}, kept_preds = {0};
+      *target = *source;
+      target->values = kept_values; target->preds = kept_preds;
+      block_map[b] = copy;
+    }
+    for (uint32_t j = 0; j < n && !s->failed; ++j) {
+      uint32_t b = order[j];
+      if (!inside[b]) continue;
+      for (uint32_t k = 0; k < s->blocks[b].values.count && !s->failed; ++k) {
+        uint32_t id = s->blocks[b].values.items[k];
+        int32_t copy = ssa_value(s, block_map[b], SO_CONST, SC_INT, -1, -1, -1, 0, 0);
+        if (s->failed) break;
+        s->values[copy] = s->values[id];
+        s->values[copy].block = block_map[b];
+        SsaValue *v = &s->values[copy];
+        uint32_t words = v->op == SO_PHI || v->op == SO_FIND ? v->count : v->op == SO_CALL ? 3 * v->count : 0;
+        if (words) {
+          int32_t *items = malloc(words * sizeof(int32_t));
+          if (!items) { s->failed = true; break; }
+          for (uint32_t w = 0; w < words; ++w) items[w] = (int32_t)s->lists[s->values[copy].list + w];
+          uint32_t list = ssa_list(s, items, words);
+          free(items);
+          s->values[copy].list = list;
+        }
+        value_map[id] = (uint32_t)copy;
+        ssa_push(s, &s->blocks[block_map[b]].values, (uint32_t)copy);
+      }
+    }
+    if (s->failed) { free(block_map); free(value_map); break; }
+    for (uint32_t v = value_base; v < s->value_count; ++v) {
+      uint32_t count = ssa_operands(s, v, ssa_slots, SSA_MAX_OPERANDS);
+      for (uint32_t q = 0; q < count; ++q)
+        if (*ssa_slots[q] >= 0 && (uint32_t)*ssa_slots[q] < value_base) *ssa_slots[q] = (int32_t)value_map[*ssa_slots[q]];
+    }
+    for (uint32_t j = 0; j < n && !s->failed; ++j) {
+      uint32_t b = order[j];
+      SsaBlock *source = &s->blocks[b];
+      if (inside[b]) {
+        SsaBlock *copy = &s->blocks[block_map[b]];
+        int32_t *controls[4] = {&copy->control, &copy->control2, &copy->control3, &copy->control4};
+        for (unsigned c = 0; c < 4; ++c) if (*controls[c] >= 0) *controls[c] = (int32_t)value_map[*controls[c]];
+        for (unsigned k = 0; k < 2; ++k) if (copy->succ[k] != UINT32_MAX) copy->succ[k] = block_map[copy->succ[k]];
+        for (uint32_t p = 0; p < source->preds.count; ++p) {
+          uint32_t pred = source->preds.items[p];
+          ssa_push(s, &s->blocks[block_map[b]].preds, block_map[pred]);
+        }
+        continue;
+      }
+      /* An exit gains the copy's edges, with the copy's incoming values. */
+      uint32_t preds = source->preds.count;
+      bool exit = false;
+      for (uint32_t p = 0; p < preds; ++p) if (inside[source->preds.items[p]]) exit = true;
+      if (!exit) continue;
+      for (uint32_t p = 0; p < preds && !s->failed; ++p) {
+        uint32_t pred = s->blocks[b].preds.items[p];
+        ssa_push(s, &s->blocks[b].preds, block_map[pred]);
+      }
+      for (uint32_t k = 0; k < s->blocks[b].values.count && !s->failed; ++k) {
+        SsaValue *phi = &s->values[s->blocks[b].values.items[k]];
+        if (phi->op != SO_PHI) break;
+        int32_t *items = malloc(2 * preds * sizeof(int32_t));
+        if (!items) { s->failed = true; break; }
+        for (uint32_t p = 0; p < preds; ++p) {
+          int32_t op = (int32_t)s->lists[phi->list + p];
+          items[p] = op;
+          items[preds + p] = op >= 0 && (uint32_t)op < value_base ? (int32_t)value_map[op] : op;
+        }
+        uint32_t list = ssa_list(s, items, 2 * preds);
+        free(items);
+        phi = &s->values[s->blocks[b].values.items[k]];
+        phi->list = list; phi->count = 2 * preds;
+      }
+    }
+    /* The preheader tests once: the original loop takes the true side. */
+    uint32_t copy_header = block_map[header], copy_branch = block_map[branch];
+    SsaBlock *pre = &s->blocks[preheader];
+    pre->kind = SB_IF; pre->control = condition;
+    pre->succ[0] = header; pre->succ[1] = copy_header;
+    SsaBlock *ch = &s->blocks[copy_header];
+    for (uint32_t p = 0; p < ch->preds.count; ++p) if (ch->preds.items[p] == block_map[preheader]) ch->preds.items[p] = preheader;
+    uint32_t yes = s->blocks[branch].succ[0], no = s->blocks[branch].succ[1];
+    s->blocks[branch].kind = SB_PLAIN; s->blocks[branch].control = -1;
+    ssa_drop_pred(s, no, branch);
+    uint32_t copy_yes = s->blocks[copy_branch].succ[0];
+    s->blocks[copy_branch].kind = SB_PLAIN; s->blocks[copy_branch].control = -1;
+    s->blocks[copy_branch].succ[0] = s->blocks[copy_branch].succ[1];
+    ssa_drop_pred(s, copy_yes, copy_branch);
+    (void)yes;
+    free(block_map); free(value_map);
+    done = true;
+    if (s->ctx->optimization_remarks) fprintf(stderr, "remark: %s: loop unswitched (%u blocks)\n", s->f->name, blocks);
+  }
+  free(inside); free(work);
+  return done;
+}
 /* Strength reduction: in a loop whose header carries i = phi(start, i + step),
    each i * c with a constant c that is no power of two becomes a phi of its
    own, j = phi(start * c, j + step * c). Wrapping arithmetic keeps j equal to
@@ -5511,6 +5849,34 @@ static uint64_t ssa_clobbers(Ssa *s, const SsaValue *v) {
   default: return 0;
   }
 }
+/* Static block frequency in the way LLVM estimates it without a profile: a
+   block every path from which ends in a failure exit is cold. The entry
+   block never is. */
+static void ssa_mark_cold(Ssa *s, const uint32_t *order, uint32_t n) {
+  for (uint32_t i = 0; i < n; ++i) s->blocks[order[i]].cold = false;
+  for (bool changed = true; changed;) {
+    changed = false;
+    for (uint32_t i = n; i-- > 1;) {
+      SsaBlock *block = &s->blocks[order[i]];
+      if (block->cold) continue;
+      bool now = block->kind == SB_EXIT;
+      uint32_t count = ssa_successors(s, block);
+      if (!now && count && block->kind != SB_RETURN) {
+        now = true;
+        for (uint32_t j = 0; j < count && now; ++j) {
+          uint32_t succ = ssa_successor(s, block, j);
+          now = succ != UINT32_MAX && s->blocks[succ].cold;
+        }
+      }
+      if (now) { block->cold = true; changed = true; }
+    }
+  }
+}
+/* Relative execution cost of a block: 4 per loop level, 1 when cold. */
+static uint64_t ssa_block_cost(const SsaBlock *b) {
+  if (b->cold) return 1;
+  return UINT64_C(1) << (2 * (b->loop_depth < 5 ? b->loop_depth : 5));
+}
 typedef struct {
   Ssa *s;
   const uint32_t *order; uint32_t n;
@@ -5598,7 +5964,7 @@ static bool ssa_intervals(SsaAlloc *a) {
       if (mask) {
         a->clobbers = ssa_grow(a->clobbers, &clobber_capacity, a->clobber_count + 1, sizeof(SsaClobber), &s->failed);
         if (s->failed) { free(stamp); free(work); return false; }
-        uint64_t cost = UINT64_C(1) << (2 * (block->loop_depth < 5 ? block->loop_depth : 5));
+        uint64_t cost = ssa_block_cost(block);
         a->clobbers[a->clobber_count++] = (SsaClobber){position, mask, b, block->values.items[k], cost,
                                                        v->op == SO_CALL && !v->cond};
       }
@@ -5783,7 +6149,7 @@ static bool ssa_allocate(SsaAlloc *a) {
   /* Weight actual uses in loops; cap the depth estimate. */
   for (uint32_t i = 0; i < a->n; ++i) {
     SsaBlock *b = &s->blocks[a->order[i]];
-    uint64_t cost = UINT64_C(1) << (2 * (b->loop_depth < 5 ? b->loop_depth : 5));
+    uint64_t cost = ssa_block_cost(b);
     if (b->control >= 0) weight[b->control] += cost;
     for (uint32_t k = 0; k < b->values.count; ++k) {
       uint32_t id = b->values.items[k];
@@ -7474,30 +7840,10 @@ static void ssa_x86_base_return(SsaEmit *e) {
    is cold. The entry block stays first. */
 static uint32_t *ssa_cold_layout(Ssa *s, const uint32_t *order, uint32_t n) {
   uint32_t *layout = malloc((n + 1) * sizeof(uint32_t));
-  bool *cold = calloc(s->block_count + 1, sizeof(bool));
-  if (!layout || !cold) { free(layout); free(cold); s->failed = true; return NULL; }
-  for (bool changed = true; changed;) {
-    changed = false;
-    for (uint32_t i = n; i-- > 1;) {
-      uint32_t b = order[i];
-      if (cold[b]) continue;
-      SsaBlock *block = &s->blocks[b];
-      bool now = block->kind == SB_EXIT;
-      uint32_t count = ssa_successors(s, block);
-      if (!now && count && block->kind != SB_RETURN) {
-        now = true;
-        for (uint32_t j = 0; j < count && now; ++j) {
-          uint32_t succ = ssa_successor(s, block, j);
-          now = succ != UINT32_MAX && cold[succ];
-        }
-      }
-      if (now) { cold[b] = true; changed = true; }
-    }
-  }
+  if (!layout) { s->failed = true; return NULL; }
   uint32_t at = 0;
-  for (uint32_t i = 0; i < n; ++i) if (i == 0 || !cold[order[i]]) layout[at++] = order[i];
-  for (uint32_t i = 1; i < n; ++i) if (cold[order[i]]) layout[at++] = order[i];
-  free(cold);
+  for (uint32_t i = 0; i < n; ++i) if (i == 0 || !s->blocks[order[i]].cold) layout[at++] = order[i];
+  for (uint32_t i = 1; i < n; ++i) if (s->blocks[order[i]].cold) layout[at++] = order[i];
   return layout;
 }
 static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
@@ -7903,6 +8249,28 @@ static void ssa_prepare(SsaPrepared *p, BackendContext *ctx, const DynSource *so
     ssa_cse(s, order, n);
     ssa_resolve_all(s);
   }
+  if (ssa_unswitch(s, order, n)) {
+    free(order);
+    order = ssa_order(s, &n);
+    if (!order || s->failed) goto done;
+    /* The copy's untaken side is unreachable now; a phi that lost its
+       other edges is the value on the one left. */
+    for (unsigned i = 0; i < n; ++i) {
+      SsaBlock *block = &s->blocks[order[i]];
+      if (block->preds.count != 1) continue;
+      for (uint32_t k = 0; k < block->values.count; ++k) {
+        uint32_t id = block->values.items[k];
+        if (s->values[id].op != SO_PHI) break;
+        ssa_replace(s, id, (int32_t)s->lists[s->values[id].list]);
+      }
+    }
+    ssa_resolve_all(s);
+    ssa_dominators(s, order, n);
+    for (unsigned i = 0; i < n; ++i) {
+      SsaBlock *block = &s->blocks[order[i]];
+      for (uint32_t k = 0; k < block->values.count; ++k) s->values[block->values.items[k]].block = order[i];
+    }
+  }
   if (ssa_strength(s, order, n)) ssa_resolve_all(s);
   if (ssa_thread_conditions(s, order, n)) ssa_resolve_all(s);
   if (s->failed) goto done;
@@ -7923,6 +8291,7 @@ static void ssa_prepare(SsaPrepared *p, BackendContext *ctx, const DynSource *so
     goto done;
   }
   ssa_fuse(s, order, n);
+  ssa_mark_cold(s, order, n);
   p->optimize_ms += backend_timing(&source->context, &phase);
   p->alloc.order = order; p->alloc.n = n;
   if (!ssa_intervals(&p->alloc) || s->failed) goto done;

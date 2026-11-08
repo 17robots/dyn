@@ -1,0 +1,40 @@
+use "std/io"
+struct Slot { tid: u64, top: u64 }
+fn find(slots: []Slot, tid: u64, claim: bool, grows: *u64) *Slot {
+  for true {
+    empty: *Slot = nil
+    for i in 0..#len(slots) {
+      slot := &slots[i]
+      seen := slot.tid
+      if seen == tid {
+        return slot
+      }
+      if seen == 0 && empty == nil {
+        empty = slot
+      }
+    }
+    if !claim {
+      return nil
+    }
+    if empty == nil {
+      if grows.* > 2 {
+        return nil
+      }
+      grows.* += 1
+    }
+    else {
+      empty.tid = tid
+      return empty
+    }
+  }
+  return nil
+}
+fn main() {
+  slots: [4]Slot
+  g: u64 = 0
+  a := find(slots[0..4], 7, true, &g)
+  b := find(slots[0..4], 7, false, &g)
+  c := find(slots[0..4], 9, false, &g)
+  d := find(slots[0..4], 9, true, &g)
+  _ = io.println(io.stdout(), "{} {} {} {} {}", a != nil, b != nil, c == nil, d != nil, slots[1].tid)
+}
