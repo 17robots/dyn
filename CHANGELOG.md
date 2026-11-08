@@ -36,7 +36,10 @@ servers so they pick up the new `dyn`.
   for its bound test is replaced by the scaled one. A loop that branches on
   a value fixed before it runs as two copies, and register allocation treats paths that can only
   end in a failure as cold. Calls inside loops inline at up to twice the usual size, including
-  calls whose result is dereferenced, such as `map.get(&m, key).*`.
+  calls whose result is dereferenced, such as `map.get(&m, key).*`. At `-O3` the inliner ranks
+  call sites by how often they run for their size, so a call in a loop gets the budget before a
+  rarely run one that comes first, and a large callee behind a branch, such as a resize, stays a
+  call.
 - `chunk.List(T)` replaces the two structs a chunk list needed.
 - Generic structs: `struct Box($T: type) { value: T }`, used as `Box(i32)`.
 - Debug builds report memory faults with a stack trace on macOS and Windows too.

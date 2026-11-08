@@ -1,0 +1,46 @@
+use "std/io"
+
+struct Table {
+  items: [64]u64,
+  count: usize,
+  grown: u64,
+}
+
+// Large and behind a rare branch: should stay a call.
+fn rebuild(t: *Table) {
+  for i in 0..64 {
+    t.items[i] = t.items[i] * 3 + 1
+    t.items[i] = t.items[i] ^ (t.items[i] >> 7)
+    t.items[i] = t.items[i] * 5 + 2
+    t.items[i] = t.items[i] ^ (t.items[i] >> 9)
+    t.items[i] = t.items[i] * 7 + 3
+    t.items[i] = t.items[i] ^ (t.items[i] >> 11)
+  }
+  t.grown += 1
+}
+
+// Small and hot: should be inlined.
+fn bump(t: *Table, value: u64) {
+  t.items[t.count % 64] += value
+  t.count += 1
+}
+
+fn note(t: *Table) {
+  t.grown += 100
+}
+
+fn main() {
+  t: Table
+  for i in 0..100000 {
+    if i % 50000 == 49999 {
+      rebuild(&t)
+    }
+    bump(&t, #cast(u64, i))
+  }
+  _ = note(&t)
+  sum: u64 = 0
+  for x in t.items {
+    sum ^= x
+  }
+  _ = io.println(io.stdout(), "{} {} {}", t.count, t.grown, sum)
+}

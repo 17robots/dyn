@@ -321,10 +321,30 @@ typedef struct {
   DynType *guess_types;
   uint32_t *guess_functions;
   size_t guess_count, guess_capacity;
+  /* The ranked plan for the caller being rebuilt; see inline_plan. */
+  struct InlinePlan *plan;
+  size_t plan_count, plan_capacity;
+  /* The plan node a synthesized call stands for (a guarded call's direct
+     expansion), when overridden. */
+  uint32_t override_node;
+  bool overridden;
 } Inline;
+/* One possible expansion: the call at `site` within the body that node
+   `parent` expands (node 0 is the caller itself). */
+typedef struct InlinePlan {
+  uint32_t parent, function;
+  DynExprId site;
+  double weight;
+  unsigned growth, resources;
+  /* used: an expansion visit consumed this node. Visits follow the walk's
+     order, so a site repeated in a body (shared IR) takes the next node. */
+  bool chosen, closed, used;
+} InlinePlan;
 typedef struct {
   const DynIrFunction *function;
   uint32_t local_base, loop_base, exit_loop, result_local, check_origin;
+  /* 1 + the plan node this body belongs to, or 0 for unplanned bodies. */
+  uint32_t plan;
   bool returns, expand, in_loop;
 } InlineScope;
 typedef struct {
@@ -710,10 +730,26 @@ static bool inline_cast_call(Inline *b, const InlineScope *scope,
                              DynExprId id, InlineList *list,
                              DynExprId *result, unsigned depth);
 /* Whether a call of function id with count arguments may expand here. */
+/* The original expression a call site is, for planning. */
+static DynExprId inline_site(const Inline *b, const DynIrExpr *site) {
+  if (site >= b->in->expressions && site < b->in->expressions + b->in->expression_count)
+    return (DynExprId)(site - b->in->expressions);
+  return DYN_NO_EXPR;
+}
+/* The next unconsumed plan node for site within the body of scope, or 0
+   when unplanned. */
+static uint32_t inline_plan_node(const Inline *b, const InlineScope *scope, DynExprId site) {
+  if (!scope->plan || site == DYN_NO_EXPR) return 0;
+  for (size_t i = 1; i < b->plan_count; ++i)
+    if (b->plan[i].parent == scope->plan - 1 && b->plan[i].site == site && !b->plan[i].used) return (uint32_t)i;
+  return 0;
+}
 static bool inline_admits(const Inline *b, const InlineScope *scope, uint64_t id,
-                          uint32_t count, unsigned depth) {
+                          uint32_t count, unsigned depth, uint32_t node) {
   if (!scope->expand || id >= b->in->function_count || depth > 16 || b->active[id])
     return false;
+  /* A planned site expands exactly when the plan chose it. */
+  if (node) return b->plan[node].chosen && b->plan[node].function == id;
   const DynIrFunction *f = &b->in->functions[id];
   if (f->foreign || f->generic || f->variadic || f->is_main ||
       f->local_count > 128 || count != f->param_count ||
@@ -731,7 +767,7 @@ static bool inline_admits(const Inline *b, const InlineScope *scope, uint64_t id
   unsigned growth = cost + f->param_count + 2;
   unsigned resources = 4 * cost + 3 * f->local_count +
                        2 * f->param_count + 16;
-  bool hot = !b->leaf_only && !scope->returns && scope->in_loop && cost <= 16;
+  bool hot = !scope->plan && !b->leaf_only && !scope->returns && scope->in_loop && cost <= 16;
   /* Like LLVM's threshold bonus for calls in loops: a call that repeats
      may be twice the size, still within the caller's growth budget. */
   unsigned limit = scope->in_loop && !b->leaf_only ? 128 : 64;
@@ -744,16 +780,24 @@ static bool inline_call_bound(Inline *b, const InlineScope *scope,
                               const DynIrExpr *site, InlineList *list,
                               DynExprId *result, unsigned depth, const DynExprId *bound) {
   const DynIrExpr original = *site, *call = &original;
-  if (call->kind != DYN_EXPR_CALL ||
-      (uint64_t)call->item_start + call->item_count > b->in->item_count ||
-      !inline_admits(b, scope, call->integer, call->item_count, depth))
+  bool overridden = b->overridden;
+  uint32_t node = overridden ? b->override_node : 0;
+  b->overridden = false;
+  if (call->kind != DYN_EXPR_CALL || (uint64_t)call->item_start + call->item_count > b->in->item_count)
+    return false;
+  if (!overridden && scope->expand) {
+    node = inline_plan_node(b, scope, inline_site(b, site));
+    if (node) b->plan[node].used = true;
+  }
+  if (!inline_admits(b, scope, call->integer, call->item_count, depth, node))
     return false;
   const DynIrFunction *f = &b->in->functions[call->integer];
   unsigned cost = b->costs[call->integer];
   unsigned growth = cost + f->param_count + 2;
   unsigned resources = 4 * cost + 3 * f->local_count +
                        2 * f->param_count + 16;
-  bool hot = !b->leaf_only && !scope->returns && scope->in_loop && cost <= 16;
+  /* A planned expansion spends the growth its plan reserved. */
+  bool hot = node || (!scope->plan && !b->leaf_only && !scope->returns && scope->in_loop && cost <= 16);
   if (hot) {
     b->reserved_growth -= growth < b->reserved_growth ? growth : b->reserved_growth;
     b->reserved_resources -= resources < b->reserved_resources ? resources : b->reserved_resources;
@@ -766,6 +810,7 @@ static bool inline_call_bound(Inline *b, const InlineScope *scope,
                         .returns = true,
                         .check_origin = (uint32_t)call->integer + 1,
                         .expand = true,
+                        .plan = node ? node + 1 : 0,
                         .result_local = UINT32_MAX};
   nested.exit_loop = inline_loop_base(b);
   if (f->return_type != DYN_TYPE_VOID) {
@@ -861,7 +906,9 @@ static bool inline_guarded_call(Inline *b, const InlineScope *scope,
     return false;
   DynType pointer = b->in->expressions[call.left].type;
   uint32_t guess = inline_guess(b, pointer);
-  if (guess == UINT32_MAX || !inline_admits(b, scope, guess, call.item_count, depth) ||
+  uint32_t node = guess == UINT32_MAX || !scope->expand ? 0 : inline_plan_node(b, scope, inline_site(b, site));
+  if (node) b->plan[node].used = true;
+  if (guess == UINT32_MAX || !inline_admits(b, scope, guess, call.item_count, depth, node) ||
       b->in->functions[guess].return_type != call.type)
     return false;
   DynIrLocal holder = {.name = "__guard_callee", .type = pointer};
@@ -903,6 +950,8 @@ static bool inline_guarded_call(Inline *b, const InlineScope *scope,
   known.kind = DYN_EXPR_CALL;
   known.integer = guess;
   DynExprId value = DYN_NO_EXPR;
+  b->override_node = node;
+  b->overridden = true;
   if (!inline_call_bound(b, scope, &known, &direct, &value, depth, names))
     value = inline_call_of(b, &call, DYN_EXPR_CALL, guess, DYN_NO_EXPR, names);
   for (int branch = 0; branch < 2; ++branch) {
@@ -1062,6 +1111,122 @@ static bool inline_reserve_hot(Inline *b, uint32_t start, uint32_t count,
   }
   return true;
 }
+/* Ranked inlining, in the manner of LLVM's priority inliner. Before a
+   caller is rebuilt, its possible expansions form a tree: each call site it
+   would expand, and inside each callee the sites that expansion would
+   expand in turn. A site's weight estimates how often it runs: 8 for each
+   enclosing loop and a half for each enclosing branch, multiplied down the
+   tree. Sites are chosen best first by weight over growth, a site only once
+   the expansion containing it is chosen, until the caller's budget is
+   spent. A rarely run call can then no longer take the budget a hot one
+   needs merely because it comes first. */
+enum { INLINE_PLAN_NODES = 2048, INLINE_PLAN_VISITS = 65536 };
+static void inline_plan_add(Inline *b, uint32_t parent, DynExprId site, uint32_t function, double weight) {
+  if (b->plan_count >= INLINE_PLAN_NODES) return;
+  if (!inline_grow(b, (void **)&b->plan, &b->plan_capacity, b->plan_count + 1, sizeof(*b->plan))) return;
+  InlinePlan node = {.parent = parent, .function = function, .site = site, .weight = weight};
+  b->plan[b->plan_count++] = node;
+}
+static void inline_plan_walk(Inline *b, uint32_t parent, uint32_t start, uint32_t count, double weight,
+                             bool expand, unsigned depth, unsigned *visits) {
+  if (depth > 64 || (uint64_t)start + count > b->in->child_count) return;
+  for (uint32_t i = 0; i < count; ++i) {
+    if (!*visits) return;
+    --*visits;
+    uint32_t id = b->in->children[start + i];
+    if (id >= b->in->statement_count) return;
+    const DynIrStmt *s = &b->in->statements[id];
+    bool eligible = s->kind == DYN_STMT_LOCAL || s->kind == DYN_STMT_RETURN ||
+                    s->kind == DYN_STMT_EXPR || s->kind == DYN_STMT_IF ||
+                    (s->kind == DYN_STMT_ASSIGN && s->assignment_op == DYN_OP_NONE &&
+                     inline_simple_target(b->in, s->target)) ||
+                    (s->kind == DYN_STMT_ASSIGN && s->assignment_op != DYN_OP_NONE &&
+                     inline_stable_operand(b->in, b->addressed, s->target));
+    if (expand && eligible && s->expression < b->in->expression_count) {
+      DynExprId wrappers[32]; bool right[32]; unsigned n = 0;
+      DynExprId e = inline_spine(b->in, b->addressed, s->expression, wrappers, right, &n);
+      if (e < b->in->expression_count) {
+        const DynIrExpr *call = &b->in->expressions[e];
+        if (call->kind == DYN_EXPR_CALL && call->integer < b->in->function_count)
+          inline_plan_add(b, parent, e, (uint32_t)call->integer, weight);
+        else if (call->kind == DYN_EXPR_INDIRECT_CALL && call->left < b->in->expression_count) {
+          uint32_t guess = inline_guess(b, b->in->expressions[call->left].type);
+          if (guess != UINT32_MAX) inline_plan_add(b, parent, e, guess, weight);
+        }
+      }
+    }
+    bool child_expand = expand && s->kind != DYN_STMT_DEFER;
+    double body = s->kind == DYN_STMT_FOR ? weight * 8 : s->kind == DYN_STMT_IF ? weight / 2 : weight;
+    double otherwise = s->kind == DYN_STMT_IF ? weight / 2 : body;
+    if (body > 1e6) body = 1e6;
+    inline_plan_walk(b, parent, s->body_start, s->body_count, body, child_expand, depth + 1, visits);
+    inline_plan_walk(b, parent, s->else_start, s->else_count, otherwise, child_expand, depth + 1, visits);
+    if ((uint64_t)s->case_arm_start + s->case_arm_count > b->in->case_arm_count) return;
+    for (uint32_t j = 0; j < s->case_arm_count; ++j) {
+      const DynIrCaseArm *arm = &b->in->case_arms[s->case_arm_start + j];
+      inline_plan_walk(b, parent, arm->body_start, arm->body_count, weight / 2, expand, depth + 1, visits);
+    }
+  }
+}
+/* Whether node may expand at all, apart from the budget. */
+static bool inline_plan_fits(const Inline *b, uint32_t node) {
+  const InlinePlan *x = &b->plan[node];
+  const DynIrFunction *f = &b->in->functions[x->function];
+  const DynIrExpr *call = &b->in->expressions[x->site];
+  if (f->foreign || f->generic || f->variadic || f->is_main || f->local_count > 128 ||
+      call->item_count != f->param_count || (uint64_t)f->param_start + f->param_count > b->in->param_count ||
+      (b->byte_fast && f->byte_intrinsic != DYN_BYTE_INTRINSIC_NONE))
+    return false;
+  /* A repeating site may be twice the size, like LLVM's bonus for loops,
+     when it runs often for its size: a large callee behind a branch, such
+     as a resize, stays a call. */
+  unsigned cost = b->costs[x->function];
+  if (cost > 128 || (cost > 64 && !(x->weight >= 8 && x->weight * 2 >= (double)x->growth))) return false;
+  /* No recursion along the chain, and at most 16 deep. */
+  unsigned depth = 0;
+  for (uint32_t at = x->parent; ; at = b->plan[at].parent) {
+    if (b->plan[at].function == x->function || ++depth > 16) return false;
+    if (at == 0) break;
+  }
+  return true;
+}
+static void inline_plan(Inline *b, uint32_t caller) {
+  const DynIrFunction *root = &b->in->functions[caller];
+  b->plan_count = 0;
+  inline_plan_add(b, 0, DYN_NO_EXPR, caller, 1);
+  if (!b->plan_count) return;
+  b->plan[0].chosen = b->plan[0].closed = true;
+  unsigned visits = INLINE_PLAN_VISITS;
+  inline_plan_walk(b, 0, root->body_start, root->body_count, 1, true, 0, &visits);
+  unsigned growth_left = b->budget, resources_left = b->resource_budget;
+  b->reserved_growth = b->reserved_resources = 0;
+  for (;;) {
+    uint32_t best = 0;
+    double best_score = 0;
+    for (size_t i = 1; i < b->plan_count; ++i) {
+      InlinePlan *x = &b->plan[i];
+      if (x->closed) continue;
+      const DynIrFunction *f = &b->in->functions[x->function];
+      unsigned cost = b->costs[x->function];
+      x->growth = cost + f->param_count + 2;
+      x->resources = 4 * cost + 3 * f->local_count + 2 * f->param_count + 16;
+      double score = x->weight / (double)x->growth;
+      if (!best || score > best_score) { best = (uint32_t)i; best_score = score; }
+    }
+    if (!best) break;
+    InlinePlan *x = &b->plan[best];
+    x->closed = true;
+    if (!inline_plan_fits(b, best) || x->growth > growth_left || x->resources > resources_left) continue;
+    x->chosen = true;
+    growth_left -= x->growth;
+    resources_left -= x->resources;
+    b->reserved_growth += x->growth;
+    b->reserved_resources += x->resources;
+    const DynIrFunction *f = &b->in->functions[x->function];
+    double weight = x->weight;
+    inline_plan_walk(b, best, f->body_start, f->body_count, weight, true, 0, &visits);
+  }
+}
 static void inline_block(Inline *b, const InlineScope *scope, uint32_t start,
                          uint32_t count, InlineList *list, unsigned depth) {
   if (b->failed)
@@ -1103,7 +1268,8 @@ static void inline_block(Inline *b, const InlineScope *scope, uint32_t start,
     free(expansion.ids);
     if (b->failed)
       return;
-    if (expanded && s.kind == DYN_STMT_EXPR && value == DYN_NO_EXPR)
+    /* An expanded call with no value has run; `_ = f()` of one is done too. */
+    if (expanded && (s.kind == DYN_STMT_EXPR || s.kind == DYN_STMT_ASSIGN) && value == DYN_NO_EXPR)
       continue;
     s.expression = expanded ? value : inline_expr(b, scope, s.expression, 0);
     if (!captured)
@@ -1359,10 +1525,12 @@ static bool inline_program(DynNativeOptimization *o, bool leaf_only, bool byte_f
     b.resource_budget = 8 * b.budget;
     b.reserved_growth = b.reserved_resources = 0;
     b.active[i] = true;
+    /* The ranked plan replaces inline_reserve_hot's quarter reservation for
+       tiny loop calls; that remains for unplanned (harness) use. */
+    (void)inline_reserve_hot;
     if (!leaf_only) {
-      unsigned visits = 4096;
-      if (!inline_reserve_hot(&b, f->body_start, f->body_count, false, true, 0, &visits))
-        b.reserved_growth = b.reserved_resources = 0;
+      inline_plan(&b, (uint32_t)i);
+      scope.plan = 1;
     }
     InlineList body = {0};
     inline_block(&b, &scope, f->body_start, f->body_count, &body, 0);
@@ -1391,6 +1559,7 @@ static bool inline_program(DynNativeOptimization *o, bool leaf_only, bool byte_f
   free(b.addressed);
   free(b.guess_types);
   free(b.guess_functions);
+  free(b.plan);
   /* The original records are still the prefix of the shared arrays. */
   o->ir.expressions = b.out.expressions;
   o->ir.statements = b.out.statements;
