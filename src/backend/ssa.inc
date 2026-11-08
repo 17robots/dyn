@@ -6219,23 +6219,21 @@ static bool ssa_allocate(SsaAlloc *a) {
       if (chosen >= 0) saved[id] = true;
     }
     if (chosen < 0) {
-      /* Keep the farthest-end policy, but protect substantially hotter
-         values from eviction by a cold temporary. */
-      int victim = -1, hot_victim = -1;
+      /* Spill weight as LLVM's greedy allocator defines it: uses scaled by
+         block frequency over the length of the interval. The value of the
+         lowest density spills, which may be the incoming one. A constant
+         that can be rematerialized at each use spills first. */
+      int victim = -1;
+      double lowest = v->op == SO_CONST ? -1.0 : (double)weight[id] / (double)(v->end - v->start + 1);
       for (uint32_t j = 0; j < actives; ++j) {
         SsaValue *w = &s->values[active[j]];
         if (w->reg < 0 || (w->reg >= X_XMM0) != floating || ssa_clobbered(a, (unsigned)w->reg, v->start, v->end, id)) continue;
-        if (weight[active[j]] > 4 * weight[id]) continue;
-        if (victim < 0 || w->end > s->values[active[victim]].end) victim = (int)j;
-        /* A long-lived incoming loop value should not spill merely because
-           every cold interval ends sooner. Keep the original policy first;
-           use strict weight dominance only when it cannot shorten a spill.
-           Division expresses incoming > 4 * victim without overflow. */
-        if (weight[id] && weight[active[j]] <= (weight[id] - 1) / 4 &&
-            (hot_victim < 0 || w->end > s->values[active[hot_victim]].end)) hot_victim = (int)j;
+        double density = w->op == SO_CONST ? -1.0 : (double)weight[active[j]] / (double)(w->end - w->start + 1);
+        if (density < lowest || (density == lowest && victim >= 0 && w->end > s->values[active[victim]].end)) {
+          lowest = density; victim = (int)j;
+        }
       }
-      if ((victim < 0 || s->values[active[victim]].end <= v->end) && hot_victim >= 0) victim = hot_victim;
-      if (victim >= 0 && (s->values[active[victim]].end > v->end || victim == hot_victim)) {
+      if (victim >= 0) {
         SsaValue *w = &s->values[active[victim]];
         chosen = w->reg;
         w->reg = -1;
