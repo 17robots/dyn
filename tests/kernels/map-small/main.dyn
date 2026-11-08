@@ -8,7 +8,7 @@ fn main() {
   t: u64 = 0
   for r in 0..20000 {
     for i in 0..1000 {
-      _ = map.insert(&m, #cast(u64, i) * 7, #cast(u64, i))
+      map.insert(&m, #cast(u64, i) * 7, #cast(u64, i))
     }
     for i in 0..1000 {
       t += map.get(&m, #cast(u64, i) * 7).*

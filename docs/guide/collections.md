@@ -3,6 +3,7 @@
 | Need | Use | Moves items | Allocates on add |
 | --- | --- | --- | --- |
 | Bytes or text | `std/bytes/builder` | Yes, when it grows | Only `append_grow` |
+| Everyday growing list | `array.Array(T)` (`std/container/array`) | Yes, when it grows | Yes |
 | Dense list, stable | `mem.append` | Never | Panics at the block end |
 | Dense list, growing | `mem.append_grow` | Yes | Yes |
 | Long list with stable items | Chunk list | Never | One chunk at a time |
@@ -43,14 +44,15 @@ fn main() {
 - Do not independently mutate copies of a builder sharing storage. No internal locking.
 
 Most collections are slices and plain structs that you declare, and std supplies
-generic functions that work on them. `chunk.List(T)` and `map.Map(K, V)` are the
-generic types. Each job has one
+generic functions that work on them. `array.Array(T)`, `chunk.List(T)` and
+`map.Map(K, V)` are the generic types. Each job has one
 shape:
 
 | Job | Shape |
 | --- | --- |
 | Fixed list | a slice from `mem.push_array(T, &arena, n)` |
-| Growing list | a slice that owns its arena, grown with `mem.append` |
+| Growing list | `array.Array(T)` with `array.init` (`std/container/array`) |
+| Growing list whose items never move | a slice that owns its arena, grown with `mem.append` |
 | Growing list on a shared arena | a chunk list (`std/container/chunk`) |
 | Trees, free lists, an item in several lists | intrusive links (`std/container/list`) |
 | Lookup by key | `map.Map(K, V)` with `map.init` (`std/container/map`) |
@@ -64,9 +66,47 @@ constant, so reading it is safe and writing through it is a compile error:
 const nil_entity: Entity = Entity{}
 ```
 
-## Growing lists
+## Arrays
 
-A growing list is a slice whose elements are the newest allocation on its own
+`std/container/array` is the everyday growing list. Like a map, it takes its arena
+once, and arrays can share one:
+
+```dyn
+use "std/container/array"
+use "std/mem"
+
+struct Enemy {
+  hp: i32,
+}
+
+fn main() {
+  arena := mem.arena_create(0)
+  enemies: array.Array(Enemy)
+  array.init(&enemies, arena)
+  array.push(&enemies, Enemy{ hp: 10 })
+  boss := array.push_ref(&enemies, Enemy{ hp: 300 })
+  boss.hp -= 50
+  first := array.get(&enemies, 0)
+  if first != nil {
+    first.hp += 1
+  }
+  for e in enemies.items {
+    _ = e.hp
+  }
+}
+```
+
+- `items` is an ordinary slice: index it, walk it, pass it on.
+- `push` adds to the end; `push_ref` also returns the new element. `push_all`
+  adds a slice, `pop` removes the last element as a `{value, ok}` result, and
+  `clear` empties the array.
+- `get` returns nil past the end.
+- A full array moves to storage twice the size, so element pointers and copies
+  of `items` go stale at the next push. The old storage stays in the arena.
+
+## Growing lists whose items never move
+
+A growing list can also be a slice whose elements are the newest allocation on its own
 arena. `mem.append` pushes the next element directly after the last one, so
 nothing is copied and element addresses never change:
 
@@ -174,10 +214,17 @@ fn main() {
   arena := mem.arena_create(0)
   ages: map.Map([]const u8, i32)
   map.init(&ages, arena, map.text_hash, map.text_equal)
-  _ = map.insert(&ages, "ada", 36)
+  map.insert(&ages, "ada", 36)
   age := map.get(&ages, "ada")
   if age != nil {
     age.* += 1
+  }
+  visits: map.Map([]const u8, u64)
+  map.init(&visits, arena, map.text_hash, map.text_equal)
+  map.upsert(&visits, "ada", 0).* += 1
+  it := map.walk(&visits)
+  for map.next(&it) {
+    _ = it.entry.value
   }
 }
 ```
@@ -190,17 +237,12 @@ keys, write a pair: `fn(seed: u64, key: K) u64` and `fn(a: K, b: K) bool`.
 keys are borrowed. For keys an attacker chooses, use `map.init_seeded` with a seed from
 `std/crypto/random`.
 
-Each entry has a one-byte tag in `m.tags`, 0 when the entry is empty, beside its key
-and value in `m.entries`. A lookup reads tags first and only reads an entry whose tag
-matches, so large maps touch less memory. Walk a map by index:
+`insert` sets a value. `upsert(&m, key, initial)` returns the value for key, adding
+`initial` first when it is absent, so counting takes one lookup. `walk` and `next`
+visit every entry, in no useful order, through `it.entry`.
 
-```dyn
-for i in 0..#len(ages.tags) {
-  if ages.tags[i] != 0 {
-    use(ages.entries[i].key, ages.entries[i].value)
-  }
-}
-```
+Each entry has a one-byte tag beside its key and value. A lookup reads tags first and
+only reads an entry whose tag matches, so large maps touch less memory.
 
 The intrusive table below allocates nothing after its slots and never moves nodes.
 A table is a slot slice, `[]*T`, and nodes chain through `key`, `hash` and

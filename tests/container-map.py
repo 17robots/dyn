@@ -20,9 +20,9 @@ with tempfile.TemporaryDirectory(prefix='dyn-container-map-') as temporary:
     unset = Path(temporary) / 'unset'
     unset.mkdir()
     (unset / 'main.dyn').write_text('use "std/container/map"\n'
-        'fn main() {\n  m: map.Map(u64, i32)\n  _ = map.insert(&m, 1, 2)\n}\n')
+        'fn main() {\n  m: map.Map(u64, i32)\n  map.insert(&m, 1, 2)\n}\n')
     subprocess.run([DYN, 'build', str(unset), '--quiet', '--no-cache', '--output', str(unset / 'program')],
                    check=True, timeout=120)
     result = subprocess.run([str(unset / 'program')], capture_output=True, text=True, timeout=30)
-    assert result.returncode != 0 and 'call map.init before map.insert' in result.stderr, result
+    assert result.returncode != 0 and 'call map.init before adding to a map' in result.stderr, result
 print('PASS container map')

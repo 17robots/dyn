@@ -5,6 +5,7 @@
 //   map.init(&ages, arena, map.text_hash, map.text_equal)
 //   map.insert(&ages, "ada", 36)
 //   age := map.get(&ages, "ada")
+//   map.upsert(&counts, word, 0).* += 1
 //
 // For other keys, write your own pair: fn(seed: u64, key: K) u64 and
 // fn(a: K, b: K) bool. get returns a pointer to the value, or nil when the key
@@ -12,9 +13,12 @@
 // not copied, so they must outlive the map. Growth leaves old arrays in the arena.
 //
 // init uses a fixed seed. For keys an attacker chooses, use init_seeded with a
-// seed from std/crypto/random. Entries are in no useful order; walk them with
-// `for i in 0..#len(m.tags)`, skipping those whose tag is 0, and read
-// m.entries[i].key and m.entries[i].value.
+// seed from std/crypto/random. Walk the entries, in no useful order, with
+//
+//   it := map.walk(&ages)
+//   for map.next(&it) {
+//     use(it.entry.key, it.entry.value)
+//   }
 
 use "std/container/hash" hash
 use "std/mem" mem
@@ -132,10 +136,10 @@ fn grow(m: *Map($K, $V)) {
   m.entries = entries
 }
 
-// Sets key to value, adding it when absent. Returns the value's address.
-pub fn insert(m: *Map($K, $V), key: K, value: V) *V {
+// The index of key, adding the key when absent; the caller sets the value.
+fn place(m: *Map($K, $V), key: K) usize {
   if m.arena == nil {
-    #panic("call map.init before map.insert")
+    #panic("call map.init before adding to a map")
   }
   if (m.count + 1) * 4 > #len(m.tags) * 3 {
     grow(m)
@@ -147,8 +151,37 @@ pub fn insert(m: *Map($K, $V), key: K, value: V) *V {
     m.entries[at].key = key
     m.count += 1
   }
+  return at
+}
+
+// Sets key to value, adding it when absent.
+pub fn insert(m: *Map($K, $V), key: K, value: V) {
+  if m.arena == nil {
+    #panic("call map.init before adding to a map")
+  }
+  if (m.count + 1) * 4 > #len(m.tags) * 3 {
+    grow(m)
+  }
+  code := m.hash_key(m.seed, key)
+  at := locate(m, key, code)
   entry := &m.entries[at]
+  if m.tags[at] == 0 {
+    m.tags[at] = tag_of(code)
+    entry.key = key
+    m.count += 1
+  }
   entry.value = value
+}
+
+// The value for key, added as initial when absent: one lookup for counting,
+// as in map.upsert(&counts, word, 0).* += 1. The pointer goes stale at the
+// next insert or upsert.
+pub fn upsert(m: *Map($K, $V), key: K, initial: V) *V {
+  before := m.count
+  entry := &m.entries[place(m, key)]
+  if m.count != before {
+    entry.value = initial
+  }
   return &entry.value
 }
 
@@ -188,4 +221,29 @@ pub fn remove(m: *Map($K, $V), key: K) bool {
   m.tags[at] = 0
   m.count -= 1
   return true
+}
+
+// A walk over a map's entries. Adding or removing entries during a walk may
+// skip or repeat some.
+pub struct Walk($K: type, $V: type) { map: *const Map(K, V), at: usize, entry: *Entry(K, V) }
+
+pub fn walk(m: *const Map($K, $V)) Walk(K, V) {
+  it: Walk(K, V)
+  it.map = m
+  return it
+}
+
+// Moves to the next entry and sets it.entry, or returns false at the end.
+pub fn next(it: *Walk($K, $V)) bool {
+  tags := it.map.tags
+  for it.at < #len(tags) {
+    at := it.at
+    it.at += 1
+    if tags[at] != 0 {
+      it.entry = &it.map.entries[at]
+      return true
+    }
+  }
+  it.entry = nil
+  return false
 }

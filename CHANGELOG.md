@@ -17,9 +17,15 @@ servers so they pick up the new `dyn`.
 - Breaking: `io.Result` is now `io.Transfer`. `io.Result(T)` and `parse.Result(T)` are the
   generic `{value, failure}` results, and named result types are aliases of them.
 - `std/container/map`: `map.Map(K, V)`, a growing hash map for any key type. Set it up with
-  `map.init(&m, arena, hash, equal)`, then `insert`, `get` and `remove`. Each entry has a
-  one-byte tag in `m.tags` beside its key and value in `m.entries`; walk a map by index
-  and skip tags of 0.
+  `map.init(&m, arena, hash, equal)`, then `insert`, `get`, `upsert` and `remove`.
+  `upsert(&m, key, initial)` returns the value, adding `initial` when absent, so
+  `map.upsert(&counts, word, 0).* += 1` counts in one lookup. Walk a map with
+  `it := map.walk(&m)` and `for map.next(&it) { ... it.entry ... }`. `insert` returns
+  nothing; use `upsert` or `get` for the value's address.
+- `std/container/array`: `array.Array(T)`, the everyday growing list. `array.init(&a, arena)`,
+  then `push`, `push_ref`, `push_all`, `get`, `pop` (a `{value, ok}` result) and `clear`;
+  `a.items` is a plain slice.
+  Arrays share arenas and double when full.
 - Release builds call a stored function directly, and inline it, when it is the only function of
   its type the program ever takes. A comparison keeps any other value correct.
 - Release builds keep more values in registers around rarely taken calls, reuse loads across

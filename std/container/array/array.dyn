@@ -1,0 +1,107 @@
+// Growing arrays on an arena. init takes the arena once; push adds to the end:
+//
+//   enemies: array.Array(Enemy)
+//   array.init(&enemies, arena)
+//   array.push(&enemies, Enemy{ hp: 10 })
+//   first := array.get(&enemies, 0)
+//   for e in enemies.items {
+//     use(e)
+//   }
+//
+// items is an ordinary slice: index it, walk it, pass it on. get returns nil
+// past the end. Arrays share arenas freely. When one is full it moves to
+// storage twice the size, so element pointers and copies of items go stale
+// at the next push, and the old storage stays in the arena. For items that
+// must never move, give a slice its own arena and use mem.append, or use a
+// chunk list.
+
+use "std/mem" mem
+
+// items is the used front of storage.
+pub struct Array($T: type) {
+  items: []T,
+  storage: []T,
+  arena: *mem.Arena,
+}
+
+// Sets up an empty array. Nothing is allocated until the first push.
+pub fn init(a: *Array($T), arena: *mem.Arena) {
+  empty: Array(T)
+  a.* = empty
+  a.arena = arena
+}
+
+// Adds value at the end.
+pub fn push(a: *Array($T), value: T) {
+  _ = push_ref(a, value)
+}
+
+// Adds value at the end and returns its address, which goes stale at the
+// next push.
+pub fn push_ref(a: *Array($T), value: T) *T {
+  count := #len(a.items)
+  if count == #len(a.storage) {
+    grow(a, count + 1)
+  }
+  a.storage[count] = value
+  a.items = a.storage[..count + 1]
+  return &a.storage[count]
+}
+
+// Room for at least need elements, doubling.
+fn grow(a: *Array($T), need: usize) {
+  if a.arena == nil {
+    #panic("call array.init before array.push")
+  }
+  capacity := #len(a.storage) * 2
+  if capacity < 8 {
+    capacity = 8
+  }
+  if capacity < need {
+    capacity = need
+  }
+  fresh := mem.push_array(T, a.arena, capacity)
+  _ = mem.copy(fresh, a.items)
+  a.storage = fresh
+  a.items = fresh[..#len(a.items)]
+}
+
+// Adds every value at the end.
+pub fn push_all(a: *Array($T), values: []const T) {
+  count := #len(a.items)
+  if count + #len(values) > #len(a.storage) {
+    grow(a, count + #len(values))
+  }
+  for i in 0..#len(values) {
+    a.storage[count + i] = values[i]
+  }
+  a.items = a.storage[..count + #len(values)]
+}
+
+// The element at index, or nil past the end.
+pub fn get(a: *const Array($T), index: usize) *T {
+  if index >= #len(a.items) {
+    return nil
+  }
+  return &a.items[index]
+}
+
+// The last element, removed: ok is false when the array was empty.
+pub struct Popped($T: type) { value: T, ok: bool }
+
+pub fn pop(a: *Array($T)) Popped(T) {
+  result: Popped(T)
+  count := #len(a.items)
+  if count == 0 {
+    return result
+  }
+  result.value = a.items[count - 1]
+  result.ok = true
+  a.items = a.items[..count - 1]
+  return result
+}
+
+// Empties the array. Its storage stays in the arena.
+pub fn clear(a: *Array($T)) {
+  a.items = a.items[..0]
+}
