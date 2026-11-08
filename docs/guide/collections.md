@@ -190,6 +190,18 @@ keys, write a pair: `fn(seed: u64, key: K) u64` and `fn(a: K, b: K) bool`.
 keys are borrowed. For keys an attacker chooses, use `map.init_seeded` with a seed from
 `std/crypto/random`.
 
+Each entry has a one-byte tag in `m.tags`, 0 when the entry is empty, beside its key
+and value in `m.entries`. A lookup reads tags first and only reads an entry whose tag
+matches, so large maps touch less memory. Walk a map by index:
+
+```dyn
+for i in 0..#len(ages.tags) {
+  if ages.tags[i] != 0 {
+    use(ages.entries[i].key, ages.entries[i].value)
+  }
+}
+```
+
 The intrusive table below allocates nothing after its slots and never moves nodes.
 A table is a slot slice, `[]*T`, and nodes chain through `key`, `hash` and
 `hash_next`. Nothing is allocated after the slots:

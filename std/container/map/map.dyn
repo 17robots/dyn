@@ -9,19 +9,23 @@
 // For other keys, write your own pair: fn(seed: u64, key: K) u64 and
 // fn(a: K, b: K) bool. get returns a pointer to the value, or nil when the key
 // is absent; the pointer goes stale at the next insert. Text keys are borrowed,
-// not copied, so they must outlive the map. Growth leaves old slots in the arena.
+// not copied, so they must outlive the map. Growth leaves old arrays in the arena.
 //
 // init uses a fixed seed. For keys an attacker chooses, use init_seeded with a
-// seed from std/crypto/random. Slots are in no useful order; walk them with
-// `for slot in m.slots` and skip those whose code is 0.
+// seed from std/crypto/random. Entries are in no useful order; walk them with
+// `for i in 0..#len(m.tags)`, skipping those whose tag is 0, and read
+// m.entries[i].key and m.entries[i].value.
 
 use "std/container/hash" hash
 use "std/mem" mem
 
-// code is the key's hash with the top bit set, or 0 for an empty slot.
-pub struct Slot($K: type, $V: type) { key: K, value: V, code: u64 }
+pub struct Entry($K: type, $V: type) { key: K, value: V }
+// Two parallel arrays. A tag is 0 for an empty entry, else 0x80 with the top
+// 7 bits of the key's hash, so most probes read one byte and never touch an
+// entry that cannot match.
 pub struct Map($K: type, $V: type) {
-  slots: []Slot(K, V),
+  tags: []u8,
+  entries: []Entry(K, V),
   count: usize,
   arena: *mem.Arena,
   seed: u64,
@@ -75,50 +79,57 @@ pub fn integer_equal(left: u64, right: u64) bool {
   return left == right
 }
 
-fn code_of(m: *const Map($K, $V), key: K) u64 {
-  return m.hash_key(m.seed, key) | 0x8000000000000000
+fn tag_of(code: u64) u8 {
+  return #cast(u8, (code >> 57) | 0x80)
 }
 
-// The slot holding key, or the empty slot where it belongs.
-fn locate(m: *const Map($K, $V), key: K, code: u64) *Slot(K, V) {
-  slots := m.slots
+// The index holding key, or the empty index where it belongs.
+fn locate(m: *const Map($K, $V), key: K, code: u64) usize {
+  tags := m.tags
+  entries := m.entries
   equal_key := m.equal_key
-  mask := #len(slots) - 1
+  mask := #len(tags) - 1
+  want := #cast(u8, (code >> 57) | 0x80)
   at := #cast(usize, code) & mask
   for true {
-    slot := &slots[at]
-    if slot.code == 0 {
-      return slot
+    tag := tags[at]
+    if tag == 0 {
+      return at
     }
     // Apart from the &&, so the compiler can inline equal_key.
-    if slot.code == code {
-      if equal_key(slot.key, key) {
-        return slot
+    if tag == want {
+      if equal_key(entries[at].key, key) {
+        return at
       }
     }
     at = (at + 1) & mask
   }
-  return nil
+  return 0
 }
 
 fn grow(m: *Map($K, $V)) {
-  capacity := #len(m.slots) * 2
+  capacity := #len(m.tags) * 2
   if capacity == 0 {
     capacity = 8
   }
-  old := m.slots
-  fresh := mem.push_array(Slot(K, V), m.arena, capacity)
+  old_tags := m.tags
+  old_entries := m.entries
+  tags := mem.push_array(u8, m.arena, capacity)
+  entries := mem.push_array(Entry(K, V), m.arena, capacity)
   mask := capacity - 1
-  for slot in old {
-    if slot.code != 0 {
-      at := #cast(usize, slot.code) & mask
-      for fresh[at].code != 0 {
+  for i in 0..#len(old_tags) {
+    if old_tags[i] != 0 {
+      code := m.hash_key(m.seed, old_entries[i].key)
+      at := #cast(usize, code) & mask
+      for tags[at] != 0 {
         at = (at + 1) & mask
       }
-      fresh[at] = slot
+      tags[at] = old_tags[i]
+      entries[at] = old_entries[i]
     }
   }
-  m.slots = fresh
+  m.tags = tags
+  m.entries = entries
 }
 
 // Sets key to value, adding it when absent. Returns the value's address.
@@ -126,18 +137,19 @@ pub fn insert(m: *Map($K, $V), key: K, value: V) *V {
   if m.arena == nil {
     #panic("call map.init before map.insert")
   }
-  if (m.count + 1) * 4 > #len(m.slots) * 3 {
+  if (m.count + 1) * 4 > #len(m.tags) * 3 {
     grow(m)
   }
-  code := code_of(m, key)
-  slot := locate(m, key, code)
-  if slot.code == 0 {
-    slot.key = key
-    slot.code = code
+  code := m.hash_key(m.seed, key)
+  at := locate(m, key, code)
+  if m.tags[at] == 0 {
+    m.tags[at] = tag_of(code)
+    m.entries[at].key = key
     m.count += 1
   }
-  slot.value = value
-  return &slot.value
+  entry := &m.entries[at]
+  entry.value = value
+  return &entry.value
 }
 
 // The value for key, or nil when key is absent. An empty map needs no init.
@@ -145,11 +157,11 @@ pub fn get(m: *const Map($K, $V), key: K) *V {
   if m.count == 0 {
     return nil
   }
-  slot := locate(m, key, code_of(m, key))
-  if slot.code == 0 {
+  at := locate(m, key, m.hash_key(m.seed, key))
+  if m.tags[at] == 0 {
     return nil
   }
-  return &slot.value
+  return &m.entries[at].value
 }
 
 // Removes key. Returns false when it was absent. Later entries of the probe run
@@ -158,27 +170,22 @@ pub fn remove(m: *Map($K, $V), key: K) bool {
   if m.count == 0 {
     return false
   }
-  slots := m.slots
-  mask := #len(slots) - 1
-  code := code_of(m, key)
-  at := #cast(usize, code) & mask
-  for slots[at].code != code || !m.equal_key(slots[at].key, key) {
-    if slots[at].code == 0 {
-      return false
-    }
-    at = (at + 1) & mask
+  at := locate(m, key, m.hash_key(m.seed, key))
+  if m.tags[at] == 0 {
+    return false
   }
+  mask := #len(m.tags) - 1
   next := (at + 1) & mask
-  for slots[next].code != 0 {
-    home := #cast(usize, slots[next].code) & mask
+  for m.tags[next] != 0 {
+    home := #cast(usize, m.hash_key(m.seed, m.entries[next].key)) & mask
     if ((next - home) & mask) >= ((next - at) & mask) {
-      slots[at] = slots[next]
+      m.tags[at] = m.tags[next]
+      m.entries[at] = m.entries[next]
       at = next
     }
     next = (next + 1) & mask
   }
-  empty: Slot(K, V)
-  slots[at] = empty
+  m.tags[at] = 0
   m.count -= 1
   return true
 }

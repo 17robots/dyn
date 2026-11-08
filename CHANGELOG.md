@@ -17,7 +17,9 @@ servers so they pick up the new `dyn`.
 - Breaking: `io.Result` is now `io.Transfer`. `io.Result(T)` and `parse.Result(T)` are the
   generic `{value, failure}` results, and named result types are aliases of them.
 - `std/container/map`: `map.Map(K, V)`, a growing hash map for any key type. Set it up with
-  `map.init(&m, arena, hash, equal)`, then `insert`, `get` and `remove`.
+  `map.init(&m, arena, hash, equal)`, then `insert`, `get` and `remove`. Each entry has a
+  one-byte tag in `m.tags` beside its key and value in `m.entries`; walk a map by index
+  and skip tags of 0.
 - Release builds call a stored function directly, and inline it, when it is the only function of
   its type the program ever takes. A comparison keeps any other value correct.
 - Release builds keep more values in registers around rarely taken calls, reuse loads across

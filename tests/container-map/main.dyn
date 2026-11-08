@@ -61,8 +61,9 @@ fn main() {
     }
   }
   walked: usize = 0
-  for slot in numbers.slots {
-    if slot.code != 0 {
+  for i in 0..#len(numbers.tags) {
+    if numbers.tags[i] != 0 {
+      check(map.get(&numbers, numbers.entries[i].key) == &numbers.entries[i].value)
       walked += 1
     }
   }
