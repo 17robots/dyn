@@ -5896,6 +5896,37 @@ static uint64_t ssa_clobbers(Ssa *s, const SsaValue *v) {
   default: return 0;
   }
 }
+/* Loop depth from the control flow, as LLVM's LoopInfo has it: the number of
+   natural loops, each a header with back edges, that contain the block. A
+   one-shot loop, such as the frame of an inlined call, never branches back
+   and adds nothing. */
+static void ssa_loop_depths(Ssa *s, const uint32_t *order, uint32_t n) {
+  uint32_t *work = malloc((s->block_count + 1) * sizeof(uint32_t));
+  uint32_t *seen = calloc(s->block_count + 1, sizeof(uint32_t));
+  if (!work || !seen) { free(work); free(seen); return; }
+  for (uint32_t i = 0; i < n; ++i) s->blocks[order[i]].loop_depth = 0;
+  for (uint32_t i = 0; i < n; ++i) {
+    uint32_t header = order[i];
+    SsaBlock *h = &s->blocks[header];
+    uint32_t top = 0, mark = i + 1;
+    for (uint32_t p = 0; p < h->preds.count; ++p) {
+      uint32_t pred = h->preds.items[p];
+      if (s->blocks[pred].order >= h->order && seen[pred] != mark) { seen[pred] = mark; work[top++] = pred; }
+    }
+    if (!top) continue;
+    seen[header] = mark;
+    ++h->loop_depth;
+    while (top) {
+      uint32_t x = work[--top];
+      ++s->blocks[x].loop_depth;
+      for (uint32_t p = 0; p < s->blocks[x].preds.count; ++p) {
+        uint32_t pred = s->blocks[x].preds.items[p];
+        if (seen[pred] != mark && s->blocks[pred].reachable) { seen[pred] = mark; work[top++] = pred; }
+      }
+    }
+  }
+  free(work); free(seen);
+}
 /* Static block frequency in the way LLVM estimates it without a profile: a
    block every path from which ends in a failure exit is cold. The entry
    block never is. */
@@ -5932,7 +5963,14 @@ typedef struct {
   uint64_t used_callee;   /* callee-saved registers to preserve */
   uint32_t spill_slots;
   SsaSave *saves; uint32_t save_count; /* sorted by call */
+  /* Spilled values cached in a register through one loop; see ssa_cache_loops. */
+  struct SsaCache *caches; uint32_t cache_count;
+  uint8_t *cache_member; /* cache_count rows of block_count: 1 in the loop, 2 an exit */
 } SsaAlloc;
+/* value holds reg inside its loop. evicted, when not UINT32_MAX, held reg
+   through the loop without a use there: it goes to evicted_slot at the
+   preheader and comes back at each exit. */
+typedef struct SsaCache { uint32_t value, preheader, evicted; int reg; int32_t evicted_slot; } SsaCache;
 /* Whether id is used in block at or after position. */
 static bool ssa_used_from(SsaAlloc *a, uint32_t block, uint32_t position, uint32_t id) {
   Ssa *s = a->s;
@@ -6322,6 +6360,161 @@ static bool ssa_allocate(SsaAlloc *a) {
   return !s->failed;
 }
 
+/* Live range splitting around loops, in the spirit of LLVM's region
+   splitting. A value spilled for its whole interval, defined before a loop
+   and used in it, gets a register of its own through the loop when one is
+   free there and no call in the loop takes it: the preheader loads it once
+   and every use in the loop reads the register. SSA values never change,
+   so the slot stays valid and the loop's exits need no stores. */
+enum { SSA_CACHES = 64 };
+static bool ssa_cache_free(SsaAlloc *a, unsigned reg, uint32_t from, uint32_t to, uint32_t except) {
+  Ssa *s = a->s;
+  for (uint32_t i = 0; i < a->n; ++i) {
+    SsaBlock *block = &s->blocks[a->order[i]];
+    for (uint32_t k = 0; k < block->values.count; ++k) {
+      uint32_t id = block->values.items[k];
+      SsaValue *w = &s->values[id];
+      if (id != except && w->reg == (int)reg && !w->dead && w->start <= to && w->end >= from) return false;
+    }
+  }
+  for (uint32_t c = 0; c < a->cache_count; ++c) {
+    if (a->caches[c].reg != (int)reg) continue;
+    for (uint32_t i = 0; i < a->n; ++i) {
+      uint32_t b = a->order[i];
+      bool member = a->cache_member[(size_t)c * s->block_count + b] || b == a->caches[c].preheader;
+      if (a->caches[c].evicted == except && except != UINT32_MAX) continue;
+      if (member && a->block_start[b] <= to && a->block_end[b] >= from) return false;
+    }
+  }
+  return !ssa_clobbered(a, reg, from, to, UINT32_MAX);
+}
+static void ssa_cache_loops(SsaAlloc *a) {
+  Ssa *s = a->s;
+  if (s->ctx->rv32 || s->ctx->t32) return;
+  bool *member = calloc(s->block_count + 1, sizeof(bool));
+  uint32_t *work = malloc((s->block_count + 1) * sizeof(uint32_t));
+  uint32_t *uses = malloc(((size_t)s->value_count + 1) * sizeof(uint32_t));
+  bool *exit_block = calloc(s->block_count + 1, sizeof(bool));
+  if (!member || !work || !uses || !exit_block) { free(member); free(work); free(uses); free(exit_block); return; }
+  /* Innermost loops first: they hold the hottest uses. */
+  for (unsigned depth = 6; depth-- > 1 && a->cache_count < SSA_CACHES;) {
+    for (uint32_t i = 0; i < a->n && a->cache_count < SSA_CACHES; ++i) {
+      uint32_t header = a->order[i];
+      SsaBlock *h = &s->blocks[header];
+      if (h->loop_depth != depth) continue;
+      uint32_t preheader = UINT32_MAX, entries = 0, latches = 0;
+      for (uint32_t p = 0; p < h->preds.count; ++p) {
+        uint32_t pred = h->preds.items[p];
+        if (s->blocks[pred].order < h->order) { preheader = pred; ++entries; } else ++latches;
+      }
+      if (entries != 1 || !latches || s->blocks[preheader].kind != SB_PLAIN || s->blocks[preheader].succ[0] != header) continue;
+      /* The loop: blocks that reach a back edge without passing the header. */
+      for (uint32_t b = 0; b < s->block_count; ++b) member[b] = false;
+      uint32_t top = 0;
+      member[header] = true;
+      bool natural = true;
+      for (uint32_t p = 0; p < h->preds.count; ++p) {
+        uint32_t pred = h->preds.items[p];
+        if (pred != preheader && !member[pred]) { member[pred] = true; work[top++] = pred; }
+      }
+      while (top && natural) {
+        uint32_t x = work[--top];
+        if (s->blocks[x].order < h->order) natural = false;
+        for (uint32_t p = 0; p < s->blocks[x].preds.count; ++p) {
+          uint32_t pred = s->blocks[x].preds.items[p];
+          if (pred == preheader) natural = false;
+          if (!member[pred]) { member[pred] = true; work[top++] = pred; }
+        }
+      }
+      if (!natural) continue;
+      /* Exits: blocks outside the loop with a predecessor in it. An eviction
+         reloads in each, so each must be entered from the loop alone. */
+      bool exits_closed = true;
+      for (uint32_t b = 0; b < s->block_count; ++b) exit_block[b] = false;
+      for (uint32_t b = 0; b < s->block_count; ++b) {
+        if (!member[b] || !s->blocks[b].reachable) continue;
+        for (unsigned k = 0; k < ssa_successors(s, &s->blocks[b]); ++k) {
+          uint32_t succ = ssa_successor(s, &s->blocks[b], k);
+          if (succ == UINT32_MAX || member[succ]) continue;
+          exit_block[succ] = true;
+          for (uint32_t p = 0; p < s->blocks[succ].preds.count; ++p)
+            if (!member[s->blocks[succ].preds.items[p]]) exits_closed = false;
+        }
+      }
+      uint32_t from = a->block_end[preheader], to = 0;
+      for (uint32_t b = 0; b < s->block_count; ++b)
+        if (member[b] && s->blocks[b].reachable && a->block_end[b] > to) to = a->block_end[b];
+      /* Spilled values defined outside and used inside, hottest first. */
+      for (uint32_t v = 0; v < s->value_count; ++v) uses[v] = 0;
+      for (uint32_t j = 0; j < a->n; ++j) {
+        uint32_t b = a->order[j];
+        if (!member[b]) continue;
+        SsaBlock *block = &s->blocks[b];
+        int32_t controls[4] = {block->control, block->control2, block->control3, block->control4};
+        for (unsigned c = 0; c < 4; ++c) if (controls[c] >= 0) ++uses[controls[c]];
+        for (uint32_t k = 0; k < block->values.count; ++k) {
+          uint32_t count = ssa_operands(s, block->values.items[k], ssa_slots, SSA_MAX_OPERANDS);
+          for (uint32_t o = 0; o < count; ++o) if (*ssa_slots[o] >= 0) ++uses[*ssa_slots[o]];
+        }
+      }
+      for (;;) {
+        if (a->cache_count >= SSA_CACHES) break;
+        int32_t best = -1;
+        uint32_t best_uses = 0;
+        for (uint32_t id = 0; id < s->value_count; ++id) {
+          SsaValue *v = &s->values[id];
+          if (uses[id] <= best_uses || v->reg >= 0 || v->slot < 0 || v->dead || member[v->block] ||
+              !ssa_located(v)) continue;
+          best = (int32_t)id; best_uses = uses[id];
+        }
+        if (best < 0) break;
+        SsaValue *v = &s->values[best];
+        bool floating = v->cls == SC_F64 || v->cls == SC_F32;
+        int chosen = -1;
+        uint32_t evicted = UINT32_MAX;
+        for (unsigned r = 0; r < 64 && chosen < 0; ++r) {
+          if ((r >= X_XMM0) != floating || !ssa_allocatable(s->ctx, r)) continue;
+          if (ssa_cache_free(a, r, from, to, UINT32_MAX)) chosen = (int)r;
+        }
+        /* Or take the register of a value live through the loop and unused
+           in it, when every exit is entered only from the loop. */
+        for (uint32_t j = 0; j < a->n && chosen < 0 && exits_closed; ++j) {
+          SsaBlock *block = &s->blocks[a->order[j]];
+          for (uint32_t k = 0; k < block->values.count && chosen < 0; ++k) {
+            uint32_t id = block->values.items[k];
+            SsaValue *w = &s->values[id];
+            if (w->dead || w->reg < 0 || (w->reg >= X_XMM0) != floating || uses[id] || w->cls != v->cls) continue;
+            if (!(w->start < from && w->end > to) || member[w->block]) continue;
+            bool busy = false;
+            for (uint32_t c = 0; c < a->cache_count && !busy; ++c)
+              busy = a->caches[c].value == id || a->caches[c].evicted == id;
+            for (uint32_t q = 0; q < a->save_count && !busy; ++q) busy = a->saves[q].value == id;
+            if (busy || !ssa_cache_free(a, (unsigned)w->reg, from, to, id)) continue;
+            chosen = w->reg;
+            evicted = id;
+          }
+        }
+        uses[best] = 0;
+        if (chosen < 0) continue;
+        SsaCache *grown = realloc(a->caches, (a->cache_count + 1) * sizeof(SsaCache));
+        if (grown) a->caches = grown;
+        uint8_t *rows = grown ? realloc(a->cache_member, (size_t)(a->cache_count + 1) * s->block_count) : NULL;
+        if (rows) a->cache_member = rows;
+        if (!grown || !rows) { s->failed = true; break; }
+        a->caches[a->cache_count] = (SsaCache){(uint32_t)best, preheader, evicted, chosen,
+                                               evicted == UINT32_MAX ? -1 : (int32_t)a->spill_slots++};
+        uint8_t *row = &a->cache_member[(size_t)a->cache_count * s->block_count];
+        for (uint32_t b = 0; b < s->block_count; ++b) row[b] = member[b] ? 1 : exit_block[b] ? 2 : 0;
+        ++a->cache_count;
+        if (chosen >= 0 && (s->ctx->a64 ? (A64_CALLEE_SAVED >> chosen & 1) : s->ctx->rv64 ? (RV_CALLEE_SAVED >> chosen & 1)
+                            : s->ctx->win64 ? (chosen == X_RSI || chosen == X_RDI || chosen == X_RBX || chosen == X_R12)
+                            : (chosen == X_RBX || (chosen >= X_R12 && chosen <= X_R15))))
+          a->used_callee |= UINT64_C(1) << chosen;
+      }
+    }
+  }
+  free(member); free(work); free(uses); free(exit_block);
+}
 /* ---- x86-64 emission ---- */
 
 typedef struct { int base, index; unsigned scale; int32_t disp; } SsaMemory;
@@ -6585,9 +6778,19 @@ static bool ssa_edge_moves_nothing(SsaEmit *e, uint32_t from, uint32_t to) {
   }
   return true;
 }
+/* Whether b emits loop cache moves (a preheader's loads or an exit's
+   reloads), so jumps cannot pass through it. */
+static bool ssa_cache_moves(SsaEmit *e, uint32_t b) {
+  for (uint32_t c = 0; c < e->alloc->cache_count; ++c)
+    if (e->alloc->caches[c].preheader == b ||
+        (e->alloc->caches[c].evicted != UINT32_MAX && e->alloc->cache_member[(size_t)c * e->s->block_count + b] == 2))
+      return true;
+  return false;
+}
 static uint32_t ssa_landing(SsaEmit *e, uint32_t b) {
   Ssa *s = e->s;
   for (unsigned hops = 0; hops < 16 && b < s->block_count; ++hops) {
+    if (ssa_cache_moves(e, b)) return b;
     SsaBlock *block = &s->blocks[b];
     if (block->kind != SB_PLAIN || block->succ[0] == b || block->succ[0] >= s->block_count) return b;
     for (uint32_t k = 0; k < block->values.count; ++k) {
@@ -7977,6 +8180,17 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
     /* A block that only forwards emits nothing: every jump to it lands on
        its target, and its address becomes the target's below. */
     if (i && ssa_landing(e, b) != b) continue;
+    /* Values cached through a loop live in their register inside it; a value
+       they evicted lives in its slot there and comes back at each exit. */
+    for (uint32_t c = 0; c < a->cache_count; ++c) {
+      uint8_t place = a->cache_member[(size_t)c * s->block_count + b];
+      s->values[a->caches[c].value].reg = place == 1 ? a->caches[c].reg : -1;
+      if (a->caches[c].evicted != UINT32_MAX) {
+        SsaValue *w = &s->values[a->caches[c].evicted];
+        w->reg = place == 1 ? -1 : a->caches[c].reg;
+        w->slot = place == 1 ? a->caches[c].evicted_slot : -1;
+      }
+    }
     /* Loop headers start on a 16-byte boundary, so short loops do not
        straddle fetch lines; the padding is one multi-byte NOP run. */
     if (!ctx->a64 && !ctx->rv64) {
@@ -7991,6 +8205,11 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
       }
     }
     block->at = ctx->text.n;
+    for (uint32_t c = 0; c < a->cache_count; ++c) {
+      if (a->caches[c].evicted == UINT32_MAX || a->cache_member[(size_t)c * s->block_count + b] != 2) continue;
+      SsaValue *w = &s->values[a->caches[c].evicted];
+      ssa_transfer(e, L_REG, a->caches[c].reg, L_SLOT, (int32_t)(e->spill_base - 8 * (uint32_t)a->caches[c].evicted_slot), w->cls, X_R11);
+    }
     for (uint32_t k = 0; k < block->values.count; ++k) {
       if (ctx->a64) a64s_emit_value(e, block, &k);
       else if (ctx->rv64) rvs_emit_value(e, block, &k);
@@ -8003,6 +8222,14 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
 #define SSA_NEXT(b) (ssa_landing(e, (b)) == next)
     if (block->kind == SB_PLAIN) {
       ssa_phi_moves(e, b, block->succ[0]);
+      for (uint32_t c = 0; c < a->cache_count; ++c) {
+        if (a->caches[c].preheader != b) continue;
+        SsaValue *v = &s->values[a->caches[c].value];
+        if (a->caches[c].evicted != UINT32_MAX)
+          ssa_transfer(e, L_SLOT, (int32_t)(e->spill_base - 8 * (uint32_t)a->caches[c].evicted_slot), L_REG,
+                       a->caches[c].reg, v->cls, X_R11);
+        ssa_transfer(e, L_REG, a->caches[c].reg, L_SLOT, (int32_t)(e->spill_base - 8 * (uint32_t)v->slot), v->cls, X_R11);
+      }
       SsaBlock *target = &s->blocks[block->succ[0]];
       /* A back edge to a header that only compares and branches repeats the
          comparison here, saving a jump per iteration (loop rotation). */
@@ -8195,6 +8422,15 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
     }
     isa_patch(ctx, at, target);
   }
+  /* Cached values are spilled outside their loops; the next emission pass
+     sets their registers again block by block. */
+  for (uint32_t c = 0; c < a->cache_count; ++c) {
+    s->values[a->caches[c].value].reg = -1;
+    if (a->caches[c].evicted != UINT32_MAX) {
+      s->values[a->caches[c].evicted].reg = a->caches[c].reg;
+      s->values[a->caches[c].evicted].slot = -1;
+    }
+  }
   return !ctx->text.failed && !ctx->rodata.failed && !ctx->relocation_failed && !s->failed;
 }
 #undef SSA_NEXT
@@ -8336,12 +8572,15 @@ static void ssa_prepare(SsaPrepared *p, BackendContext *ctx, const DynSource *so
     goto done;
   }
   ssa_fuse(s, order, n);
+  ssa_loop_depths(s, order, n);
   ssa_mark_cold(s, order, n);
   p->optimize_ms += backend_timing(&source->context, &phase);
   p->alloc.order = order; p->alloc.n = n;
   if (!ssa_intervals(&p->alloc) || s->failed) goto done;
   ssa_hints(&p->alloc);
   if (!ssa_allocate(&p->alloc) || s->failed) goto done;
+  ssa_cache_loops(&p->alloc);
+  if (s->failed) goto done;
   p->allocate_ms += backend_timing(&source->context, &phase);
   p->ready = true;
 done:
@@ -8359,9 +8598,11 @@ done:
 static void ssa_prepared_free(SsaPrepared *p) {
   free(p->order);
   free(p->alloc.block_start); free(p->alloc.block_end); free(p->alloc.clobbers); free(p->alloc.saves);
+  free(p->alloc.caches); free(p->alloc.cache_member);
   free(p->s.literal_uses);
   ssa_free(&p->s);
   p->order = NULL; p->alloc.block_start = p->alloc.block_end = NULL; p->alloc.clobbers = NULL; p->alloc.saves = NULL; p->alloc.save_count = 0;
+  p->alloc.caches = NULL; p->alloc.cache_member = NULL; p->alloc.cache_count = 0;
   p->s.literal_uses = NULL;
 }
 /* Interns deferred literals exactly as ssa_build would have, then gives
@@ -8460,7 +8701,7 @@ static int ssa_function(BackendContext *ctx, const DynSource *source, const DynI
     ctx->text.failed = ctx->rodata.failed = ctx->relocation_failed = false;
   }
   if (result == SSA_EMITTED && source->context.optimization && source->context.optimization->remarks)
-    fprintf(stderr, "remark: %s: SSA code generation, %u spill slots\n", f->name, alloc->spill_slots);
+    fprintf(stderr, "remark: %s: SSA code generation, %u spill slots, %u loop-cached values\n", f->name, alloc->spill_slots, alloc->cache_count);
 done:
   /* Paired-target preflight emits no instructions. Keep any literals interned
      during SSA construction, just as on the normal build-time fallback path. */

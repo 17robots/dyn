@@ -39,7 +39,9 @@ servers so they pick up the new `dyn`.
   calls whose result is dereferenced, such as `map.get(&m, key).*`. At `-O3` the inliner ranks
   call sites by how often they run for their size, so a call in a loop gets the budget before a
   rarely run one that comes first, and a large callee behind a branch, such as a resize, stays a
-  call.
+  call. Register allocation counts loop depth from real loops, so an inlined call's frame no longer
+  looks like a loop, and a spilled value a loop reads gets a register through that loop, taken
+  if need be from a value the loop does not use, which goes back at the loop's exits.
 - `chunk.List(T)` replaces the two structs a chunk list needed.
 - Generic structs: `struct Box($T: type) { value: T }`, used as `Box(i32)`.
 - Debug builds report memory faults with a stack trace on macOS and Windows too.
