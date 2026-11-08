@@ -5282,7 +5282,12 @@ static int ssa_location_register(const BackendContext *ctx, int location) {
 #define SSA_CALLER_SAVED ((UINT64_C(1) << X_RAX) | (UINT64_C(1) << X_RCX) | (UINT64_C(1) << X_RDX) | (UINT64_C(1) << X_RSI) | \
                           (UINT64_C(1) << X_RDI) | (UINT64_C(1) << X_R8) | (UINT64_C(1) << X_R9) | (UINT64_C(1) << X_R10) | \
                           (UINT64_C(1) << X_R11) | UINT64_C(0xffff) << X_XMM0)
-typedef struct { uint32_t position; uint64_t mask; uint32_t block; } SsaClobber;
+/* A register clobber at position. A saveable one is an unprotected call:
+   a value may keep a clobbered register across it when the call saves and
+   restores that register around itself, at cost per crossing. */
+typedef struct { uint32_t position; uint64_t mask; uint32_t block, value; uint64_t cost; bool saveable; } SsaClobber;
+/* A value the call at `call` saves before itself and restores after. */
+typedef struct { uint32_t call, value; int32_t slot; } SsaSave;
 
 /* Hardware register of result part aux: 0 and 1 the integer result
    registers, X_XMM0 + n floating result register n. */
@@ -5331,6 +5336,7 @@ typedef struct {
   SsaClobber *clobbers; uint32_t clobber_count;
   uint64_t used_callee;   /* callee-saved registers to preserve */
   uint32_t spill_slots;
+  SsaSave *saves; uint32_t save_count; /* sorted by call */
 } SsaAlloc;
 /* Whether id is used in block at or after position. */
 static bool ssa_used_from(SsaAlloc *a, uint32_t block, uint32_t position, uint32_t id) {
@@ -5347,6 +5353,28 @@ static bool ssa_used_from(SsaAlloc *a, uint32_t block, uint32_t position, uint32
       if (*ssa_slots[j] == (int32_t)id) return true;
   }
   return false;
+}
+/* Whether clobber i takes reg from value id. */
+static bool ssa_clobber_hits(SsaAlloc *a, uint32_t i, unsigned reg, uint32_t id) {
+  if (!(a->clobbers[i].mask >> reg & 1)) return false;
+  SsaBlock *b = &a->s->blocks[a->clobbers[i].block];
+  return !(b->kind == SB_EXIT && id != UINT32_MAX && !ssa_used_from(a, a->clobbers[i].block, a->clobbers[i].position, id));
+}
+static uint32_t ssa_first_clobber(SsaAlloc *a, uint32_t start) {
+  uint32_t low = 0, high = a->clobber_count;
+  while (low < high) { uint32_t mid = (low + high) / 2; if (a->clobbers[mid].position <= start) low = mid + 1; else high = mid; }
+  return low;
+}
+/* Cost of keeping reg across (start, end) by saving it around each call
+   that clobbers it, or UINT64_MAX when another clobber takes it. */
+static uint64_t ssa_save_cost(SsaAlloc *a, unsigned reg, uint32_t start, uint32_t end, uint32_t id) {
+  uint64_t cost = 0;
+  for (uint32_t i = ssa_first_clobber(a, start); i < a->clobber_count && a->clobbers[i].position < end; ++i) {
+    if (!ssa_clobber_hits(a, i, reg, id)) continue;
+    if (!a->clobbers[i].saveable) return UINT64_MAX;
+    cost += 2 * a->clobbers[i].cost;
+  }
+  return cost;
 }
 static bool ssa_clobbered(SsaAlloc *a, unsigned reg, uint32_t start, uint32_t end, uint32_t id) {
   /* Any clobber of reg strictly inside (start, end)? Clobbers are sorted.
@@ -5388,7 +5416,9 @@ static bool ssa_intervals(SsaAlloc *a) {
       if (mask) {
         a->clobbers = ssa_grow(a->clobbers, &clobber_capacity, a->clobber_count + 1, sizeof(SsaClobber), &s->failed);
         if (s->failed) { free(stamp); free(work); return false; }
-        a->clobbers[a->clobber_count++] = (SsaClobber){position, mask, b};
+        uint64_t cost = UINT64_C(1) << (2 * (block->loop_depth < 5 ? block->loop_depth : 5));
+        a->clobbers[a->clobber_count++] = (SsaClobber){position, mask, b, block->values.items[k], cost,
+                                                       v->op == SO_CALL && !v->cond};
       }
       position += 2;
     }
@@ -5556,12 +5586,18 @@ static int ssa_sort_start(const void *x, const void *y) {
   if (v[a].start != v[b].start) return v[a].start < v[b].start ? -1 : 1;
   return a < b ? -1 : a > b;
 }
+static int ssa_save_order(const void *x, const void *y) {
+  const SsaSave *a = x, *b = y;
+  if (a->call != b->call) return a->call < b->call ? -1 : 1;
+  return a->value < b->value ? -1 : a->value > b->value;
+}
 static bool ssa_allocate(SsaAlloc *a) {
   Ssa *s = a->s;
   uint32_t *list = malloc((s->value_count + 1) * sizeof(uint32_t)), count = 0;
   uint32_t *active = malloc((s->value_count + 1) * sizeof(uint32_t)), actives = 0;
   uint64_t *weight = calloc((size_t)s->value_count + 1, sizeof(uint64_t));
-  if (!list || !active || !weight) { free(list); free(active); free(weight); return false; }
+  bool *saved = calloc((size_t)s->value_count + 1, sizeof(bool));
+  if (!list || !active || !weight || !saved) { free(list); free(active); free(weight); free(saved); return false; }
   /* Weight actual uses in loops; cap the depth estimate. */
   for (uint32_t i = 0; i < a->n; ++i) {
     SsaBlock *b = &s->blocks[a->order[i]];
@@ -5624,6 +5660,17 @@ static bool ssa_allocate(SsaAlloc *a) {
       }
     }
     if (chosen < 0) {
+      /* A caller-saved register saved around the calls it crosses, when
+         that costs less than reloading the value at every use. */
+      uint64_t best = weight[id] + 1;
+      for (unsigned r = 0; r < 64; ++r) {
+        if (owner[r] != UINT32_MAX || (r >= X_XMM0) != floating || !ssa_allocatable(s->ctx, r)) continue;
+        uint64_t cost = ssa_save_cost(a, r, v->start, v->end, id);
+        if (cost < best) { best = cost; chosen = (int)r; }
+      }
+      if (chosen >= 0) saved[id] = true;
+    }
+    if (chosen < 0) {
       /* Keep the farthest-end policy, but protect substantially hotter
          values from eviction by a cold temporary. */
       int victim = -1, hot_victim = -1;
@@ -5663,8 +5710,23 @@ static bool ssa_allocate(SsaAlloc *a) {
                          : (v->reg == X_RBX || (v->reg >= X_R12 && v->reg <= X_R15)))
       a->used_callee |= UINT64_C(1) << v->reg;
   }
-  free(list); free(active); free(weight);
-  return true;
+  /* Each saved value gets a slot and an entry at every call it crosses. */
+  uint32_t save_capacity = 0;
+  for (uint32_t i = 0; i < count && !s->failed; ++i) {
+    uint32_t id = list[i];
+    SsaValue *v = &s->values[id];
+    if (!saved[id] || v->reg < 0) continue;
+    int32_t slot = (int32_t)a->spill_slots++;
+    for (uint32_t c = ssa_first_clobber(a, v->start); c < a->clobber_count && a->clobbers[c].position < v->end; ++c) {
+      if (!ssa_clobber_hits(a, c, (unsigned)v->reg, id)) continue;
+      a->saves = ssa_grow(a->saves, &save_capacity, a->save_count + 1, sizeof(SsaSave), &s->failed);
+      if (s->failed) break;
+      a->saves[a->save_count++] = (SsaSave){a->clobbers[c].value, id, slot};
+    }
+  }
+  if (a->save_count > 1) qsort(a->saves, a->save_count, sizeof(SsaSave), ssa_save_order);
+  free(list); free(active); free(weight); free(saved);
+  return !s->failed;
 }
 
 /* ---- x86-64 emission ---- */
@@ -6475,6 +6537,19 @@ static void ssa_call_emit(SsaEmit *e, SsaBlock *block, uint32_t *k) {
   SsaValue *v = &s->values[id];
   SsaMove moves[1100]; uint32_t count = 0;
   if (v->count > 1000) { ctx->text.failed = true; return; }
+  /* Values kept in caller-saved registers across this call. */
+  SsaAlloc *alloc = e->alloc;
+  uint32_t first_save = 0, high = alloc->save_count;
+  while (first_save < high) {
+    uint32_t mid = (first_save + high) / 2;
+    if (alloc->saves[mid].call < id) first_save = mid + 1; else high = mid;
+  }
+  uint32_t end_save = first_save;
+  while (end_save < alloc->save_count && alloc->saves[end_save].call == id) ++end_save;
+  for (uint32_t i = first_save; i < end_save; ++i) {
+    SsaValue *w = &s->values[alloc->saves[i].value];
+    ssa_transfer(e, L_SLOT, (int32_t)(e->spill_base - 8 * (uint32_t)alloc->saves[i].slot), L_REG, w->reg, w->cls, X_R11);
+  }
   /* Memory-class arguments copy into the outgoing area first; registers
      still hold every other argument. */
   for (uint32_t i = 0; i < v->count; ++i) {
@@ -6538,6 +6613,10 @@ static void ssa_call_emit(SsaEmit *e, SsaBlock *block, uint32_t *k) {
     moves[count++] = m;
   }
   ssa_parallel(e, moves, count);
+  for (uint32_t i = first_save; i < end_save; ++i) {
+    SsaValue *w = &s->values[alloc->saves[i].value];
+    ssa_transfer(e, L_REG, w->reg, L_SLOT, (int32_t)(e->spill_base - 8 * (uint32_t)alloc->saves[i].slot), w->cls, X_R11);
+  }
 }
 static void ssa_frame_argument(SsaEmit *e, uint32_t offset) {
   x86_mem_op(e->ctx, -1, true, OP1(0x8d), (unsigned)ssa_location_register(e->ctx, 0), (SsaMemory){X_RBP, -1, 1, (int32_t)offset}, false);
@@ -7614,10 +7693,10 @@ done:
 }
 static void ssa_prepared_free(SsaPrepared *p) {
   free(p->order);
-  free(p->alloc.block_start); free(p->alloc.block_end); free(p->alloc.clobbers);
+  free(p->alloc.block_start); free(p->alloc.block_end); free(p->alloc.clobbers); free(p->alloc.saves);
   free(p->s.literal_uses);
   ssa_free(&p->s);
-  p->order = NULL; p->alloc.block_start = p->alloc.block_end = NULL; p->alloc.clobbers = NULL;
+  p->order = NULL; p->alloc.block_start = p->alloc.block_end = NULL; p->alloc.clobbers = NULL; p->alloc.saves = NULL; p->alloc.save_count = 0;
   p->s.literal_uses = NULL;
 }
 /* Interns deferred literals exactly as ssa_build would have, then gives
