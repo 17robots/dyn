@@ -3,15 +3,16 @@ use "std/mem"
 
 struct Point { x: i32, y: i32 }
 
-fn point_hash(key: Point) u64 {
-  return #cast(u64, key.x) * 31 + #cast(u64, key.y)
+fn point_hash(seed: u64, key: Point) u64 {
+  return map.integer_hash(seed, #cast(u64, key.x) * 31 + #cast(u64, key.y))
 }
 
 fn point_equal(left: Point, right: Point) bool {
   return left.x == right.x && left.y == right.y
 }
 
-fn colliding_hash(key: u64) u64 {
+fn colliding_hash(seed: u64, key: u64) u64 {
+  _ = seed
   return key & 1
 }
 
@@ -27,20 +28,23 @@ fn check(ok: bool) {
 
 fn main() {
   arena := mem.arena_create(0)
-  ages := map.text(i32)
-  check(map.find(&ages, "ada") == nil)
+  ages: map.Map([]const u8, i32)
+  check(map.get(&ages, "ada") == nil)
+  map.init(&ages, arena, map.text_hash, map.text_equal)
+  check(map.get(&ages, "ada") == nil)
   check(!map.remove(&ages, "ada"))
-  _ = map.put(arena, &ages, "ada", 36)
-  _ = map.put(arena, &ages, "alan", 41)
-  _ = map.put(arena, &ages, "ada", 37)
-  check(ages.count == 2 && map.find(&ages, "ada").* == 37)
-  map.find(&ages, "alan").* += 1
-  check(map.find(&ages, "alan").* == 42)
-  check(map.remove(&ages, "ada") && map.find(&ages, "ada") == nil && ages.count == 1)
+  _ = map.insert(&ages, "ada", 36)
+  _ = map.insert(&ages, "alan", 41)
+  _ = map.insert(&ages, "ada", 37)
+  check(ages.count == 2 && map.get(&ages, "ada").* == 37)
+  map.get(&ages, "alan").* += 1
+  check(map.get(&ages, "alan").* == 42)
+  check(map.remove(&ages, "ada") && map.get(&ages, "ada") == nil && ages.count == 1)
 
-  numbers := map.integers(u64)
+  numbers: map.Map(u64, u64)
+  map.init_seeded(&numbers, arena, 12345, map.integer_hash, map.integer_equal)
   for i in 0..10000 {
-    _ = map.put(arena, &numbers, #cast(u64, i), #cast(u64, i) * 3)
+    _ = map.insert(&numbers, #cast(u64, i), #cast(u64, i) * 3)
   }
   check(numbers.count == 10000)
   for i in 0..10000 {
@@ -49,7 +53,7 @@ fn main() {
     }
   }
   for i in 0..10000 {
-    found := map.find(&numbers, #cast(u64, i))
+    found := map.get(&numbers, #cast(u64, i))
     if i % 3 == 0 {
       check(found == nil)
     } else {
@@ -65,23 +69,25 @@ fn main() {
   check(walked == numbers.count)
 
   /* Every key in two probe runs: removal must keep the rest reachable. */
-  crowded := map.create(u64, i32, colliding_hash, colliding_equal)
+  crowded: map.Map(u64, i32)
+  map.init(&crowded, arena, colliding_hash, colliding_equal)
   for i in 0..200 {
-    _ = map.put(arena, &crowded, #cast(u64, i), #cast(i32, i))
+    _ = map.insert(&crowded, #cast(u64, i), #cast(i32, i))
   }
   for i in 0..100 {
     check(map.remove(&crowded, #cast(u64, i * 2)))
   }
   for i in 0..100 {
-    check(map.find(&crowded, #cast(u64, i * 2)) == nil)
-    check(map.find(&crowded, #cast(u64, i * 2 + 1)).* == #cast(i32, i * 2 + 1))
+    check(map.get(&crowded, #cast(u64, i * 2)) == nil)
+    check(map.get(&crowded, #cast(u64, i * 2 + 1)).* == #cast(i32, i * 2 + 1))
   }
 
-  points := map.create(Point, []const u8, point_hash, point_equal)
-  _ = map.put(arena, &points, Point{ x: 1, y: 2 }, "home")
-  check(#len(map.find(&points, Point{ x: 1, y: 2 }).*) == 4)
-  check(map.find(&points, Point{ x: 2, y: 1 }) == nil)
+  points: map.Map(Point, []const u8)
+  map.init(&points, arena, point_hash, point_equal)
+  _ = map.insert(&points, Point{ x: 1, y: 2 }, "home")
+  check(#len(map.get(&points, Point{ x: 1, y: 2 }).*) == 4)
+  check(map.get(&points, Point{ x: 2, y: 1 }) == nil)
 
   unset: map.Map(u64, i32)
-  check(map.find(&unset, 1) == nil)
+  check(map.get(&unset, 1) == nil && !map.remove(&unset, 1))
 }

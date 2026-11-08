@@ -1,17 +1,19 @@
-// Growing hash maps on an arena, for keys of any type. Make one with text or
-// integers, or with create and your own hash and equality functions:
+// Growing hash maps on an arena, for keys of any type. init takes the arena and
+// the key's hash and equality functions; std has them for text and integers:
 //
-//   ages := map.text(i32)
-//   map.put(arena, &ages, "ada", 36)
-//   age := map.find(&ages, "ada")
+//   ages: map.Map([]const u8, i32)
+//   map.init(&ages, arena, map.text_hash, map.text_equal)
+//   map.insert(&ages, "ada", 36)
+//   age := map.get(&ages, "ada")
 //
-// find returns a pointer to the value, or nil when the key is absent. The
-// pointer goes stale at the next put. Text keys are borrowed, not copied, so
-// they must outlive the map. Growth leaves the old slots in the arena.
+// For other keys, write your own pair: fn(seed: u64, key: K) u64 and
+// fn(a: K, b: K) bool. get returns a pointer to the value, or nil when the key
+// is absent; the pointer goes stale at the next insert. Text keys are borrowed,
+// not copied, so they must outlive the map. Growth leaves old slots in the arena.
 //
-// The built-in hashes use a fixed seed. For keys an attacker chooses, use create
-// with a hash seeded from std/crypto/random. Slots are in no useful order; walk
-// them with `for slot in m.slots` and skip those whose code is 0.
+// init uses a fixed seed. For keys an attacker chooses, use init_seeded with a
+// seed from std/crypto/random. Slots are in no useful order; walk them with
+// `for slot in m.slots` and skip those whose code is 0.
 
 use "std/container/hash" hash
 use "std/mem" mem
@@ -21,23 +23,32 @@ pub struct Slot($K: type, $V: type) { key: K, value: V, code: u64 }
 pub struct Map($K: type, $V: type) {
   slots: []Slot(K, V),
   count: usize,
-  hash_key: fn(K) u64,
+  arena: *mem.Arena,
+  seed: u64,
+  hash_key: fn(u64, K) u64,
   equal_key: fn(K, K) bool,
 }
 
-// An empty map. Nothing is allocated until the first put.
-pub fn create($K: type, $V: type, hash_key: fn(K) u64, equal_key: fn(K, K) bool) Map(K, V) {
-  result: Map(K, V)
-  result.hash_key = hash_key
-  result.equal_key = equal_key
-  return result
+// Sets up an empty map. Nothing is allocated until the first insert.
+pub fn init(m: *Map($K, $V), arena: *mem.Arena, hash_key: fn(u64, K) u64, equal_key: fn(K, K) bool) {
+  init_seeded(m, arena, 0x243f6a8885a308d3, hash_key, equal_key)
 }
 
-fn text_hash(key: []const u8) u64 {
-  return hash.hash_bytes(0x243f6a8885a308d3, key)
+// init with a chosen seed, passed to every hash_key call.
+pub fn init_seeded(m: *Map($K, $V), arena: *mem.Arena, seed: u64, hash_key: fn(u64, K) u64, equal_key: fn(K, K) bool) {
+  empty: Map(K, V)
+  m.* = empty
+  m.arena = arena
+  m.seed = seed
+  m.hash_key = hash_key
+  m.equal_key = equal_key
 }
 
-fn text_equal(left: []const u8, right: []const u8) bool {
+pub fn text_hash(seed: u64, key: []const u8) u64 {
+  return hash.hash_bytes(seed, key)
+}
+
+pub fn text_equal(left: []const u8, right: []const u8) bool {
   if #len(left) != #len(right) {
     return false
   }
@@ -49,31 +60,23 @@ fn text_equal(left: []const u8, right: []const u8) bool {
   return true
 }
 
-// Finalizer from MurmurHash3: sequential integers must not cluster.
-fn integer_hash(key: u64) u64 {
-  mixed := key ^ (key >> 33)
+// Finalizer from MurmurHash3: sequential integers must not cluster. Cast other
+// integer keys to u64.
+pub fn integer_hash(seed: u64, key: u64) u64 {
+  mixed := key ^ seed
+  mixed = mixed ^ (mixed >> 33)
   mixed = mixed * 0xff51afd7ed558ccd
   mixed = mixed ^ (mixed >> 33)
   mixed = mixed * 0xc4ceb9fe1a85ec53
   return mixed ^ (mixed >> 33)
 }
 
-fn integer_equal(left: u64, right: u64) bool {
+pub fn integer_equal(left: u64, right: u64) bool {
   return left == right
 }
 
-// A map from text.
-pub fn text($V: type) Map([]const u8, V) {
-  return create([]const u8, V, text_hash, text_equal)
-}
-
-// A map from u64. Cast other integer keys to u64.
-pub fn integers($V: type) Map(u64, V) {
-  return create(u64, V, integer_hash, integer_equal)
-}
-
 fn code_of(m: *const Map($K, $V), key: K) u64 {
-  return m.hash_key(key) | 0x8000000000000000
+  return m.hash_key(m.seed, key) | 0x8000000000000000
 }
 
 // The slot holding key, or the empty slot where it belongs.
@@ -84,23 +87,25 @@ fn locate(m: *const Map($K, $V), key: K, code: u64) *Slot(K, V) {
   for true {
     slot := &slots[at]
     if slot.code == 0 {
-      return #cast(*Slot(K, V), slot)
+      return slot
     }
-    if slot.code == code && m.equal_key(slot.key, key) {
-      return #cast(*Slot(K, V), slot)
+    if slot.code == code {
+      if m.equal_key(slot.key, key) {
+        return slot
+      }
     }
     at = (at + 1) & mask
   }
   return nil
 }
 
-fn grow(arena: *mem.Arena, m: *Map($K, $V)) {
+fn grow(m: *Map($K, $V)) {
   capacity := #len(m.slots) * 2
   if capacity == 0 {
     capacity = 8
   }
   old := m.slots
-  fresh := mem.push_array(Slot(K, V), arena, capacity)
+  fresh := mem.push_array(Slot(K, V), m.arena, capacity)
   mask := capacity - 1
   for slot in old {
     if slot.code != 0 {
@@ -115,12 +120,12 @@ fn grow(arena: *mem.Arena, m: *Map($K, $V)) {
 }
 
 // Sets key to value, adding it when absent. Returns the value's address.
-pub fn put(arena: *mem.Arena, m: *Map($K, $V), key: K, value: V) *V {
-  if m.hash_key == nil {
-    #panic("make a map with map.text, map.integers or map.create")
+pub fn insert(m: *Map($K, $V), key: K, value: V) *V {
+  if m.arena == nil {
+    #panic("call map.init before map.insert")
   }
   if (m.count + 1) * 4 > #len(m.slots) * 3 {
-    grow(arena, m)
+    grow(m)
   }
   code := code_of(m, key)
   slot := locate(m, key, code)
@@ -133,8 +138,8 @@ pub fn put(arena: *mem.Arena, m: *Map($K, $V), key: K, value: V) *V {
   return &slot.value
 }
 
-// The value for key, or nil when key is absent.
-pub fn find(m: *const Map($K, $V), key: K) *V {
+// The value for key, or nil when key is absent. An empty map needs no init.
+pub fn get(m: *const Map($K, $V), key: K) *V {
   if m.count == 0 {
     return nil
   }

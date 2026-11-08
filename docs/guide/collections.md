@@ -53,7 +53,7 @@ shape:
 | Growing list | a slice that owns its arena, grown with `mem.append` |
 | Growing list on a shared arena | a chunk list (`std/container/chunk`) |
 | Trees, free lists, an item in several lists | intrusive links (`std/container/list`) |
-| Lookup by key | `map.text(V)`, `map.integers(V)` or `map.create` (`std/container/map`) |
+| Lookup by key | `map.Map(K, V)` with `map.init` (`std/container/map`) |
 | Lookup through your own nodes | hash slots chained through `hash_next` (`std/container/hash`) |
 | References that survive deletion | generation handles (`std/container/slot_map`) |
 
@@ -172,17 +172,23 @@ use "std/mem"
 
 fn main() {
   arena := mem.arena_create(0)
-  ages := map.text(i32)
-  _ = map.put(arena, &ages, "ada", 36)
-  age := map.find(&ages, "ada")
+  ages: map.Map([]const u8, i32)
+  map.init(&ages, arena, map.text_hash, map.text_equal)
+  _ = map.insert(&ages, "ada", 36)
+  age := map.get(&ages, "ada")
   if age != nil {
     age.* += 1
   }
 }
 ```
 
-`find` returns a pointer or nil, and that pointer goes stale at the next `put`. Text
-keys are borrowed. For keys an attacker chooses, pass a seeded hash to `map.create`.
+`init` takes the arena and the key's hash and equality functions. Std has `text_hash`
+and `text_equal` for text, and `integer_hash` and `integer_equal` for `u64`. For other
+keys, write a pair: `fn(seed: u64, key: K) u64` and `fn(a: K, b: K) bool`.
+
+`get` returns a pointer or nil, and that pointer goes stale at the next `insert`. Text
+keys are borrowed. For keys an attacker chooses, use `map.init_seeded` with a seed from
+`std/crypto/random`.
 
 The intrusive table below allocates nothing after its slots and never moves nodes.
 A table is a slot slice, `[]*T`, and nodes chain through `key`, `hash` and
