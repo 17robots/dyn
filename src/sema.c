@@ -37,6 +37,8 @@ static bool target_gap_reported(DynSpan span, const DynSource *s) {
   dyn_diagnostic_source("error", s, span.start_byte, span.end_byte, message);
   return true;
 }
+static int assert_value(DynAstProgram *a, DynExprId id, unsigned depth);
+static DynExprId sema_push_expr(DynAstProgram *a, DynAstExpr e);
 static void error_span(DynSpan span, const DynSource *s, unsigned *e,
                        const char *m) {
   ++*e;
@@ -1427,7 +1429,12 @@ static DynType check_generic_call(Sema *sema, DynAstProgram *a, DynExprId id,
   DynSpan call = a->expressions[id].span;
   uint32_t item_start = a->expressions[id].item_start,
            item_count = a->expressions[id].item_count;
-  if (item_count != g.param_count) {
+  /* f(T) with only the leading type arguments names that instance as a
+     function value: `hash := key_hash(u32)`. */
+  bool value_form = item_count == g.type_param_count && item_count < g.param_count;
+  for (uint32_t i = 0; value_form && i < item_count; ++i)
+    value_form = a->generic_params[g.param_start + i].is_type;
+  if (item_count != g.param_count && !value_form) {
     error_span(call, s, errors, "function argument count mismatch");
     return a->expressions[id].type = DYN_TYPE_ERROR;
   }
@@ -1523,6 +1530,14 @@ static DynType check_generic_call(Sema *sema, DynAstProgram *a, DynExprId id,
       error_span(call, s, errors, "out of memory");
       return a->expressions[id].type = DYN_TYPE_ERROR;
     }
+  }
+  if (value_form) {
+    DynAstExpr *e = &a->expressions[id];
+    e->kind = DYN_EXPR_FUNCTION;
+    e->integer = function;
+    e->left = DYN_NO_EXPR;
+    e->item_count = 0;
+    return e->type = function_pointer_type(a, function);
   }
   /* Check value arguments against the concrete parameters, dropping type
      arguments from the call. */
@@ -2213,6 +2228,7 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
           (DynAstItem){.expression = values[i], .field_index = i};
     }
     a->expressions[id].kind = DYN_EXPR_STRUCT;
+    a->expressions[id].boolean_reflection = true;
     a->expressions[id].type = DYN_TYPE_STRUCT_BASE + info;
     a->expressions[id].integer = info;
     a->expressions[id].left = a->expressions[id].right = DYN_NO_EXPR;
@@ -3253,6 +3269,30 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
                        true);
     return false;
   }
+  if (st->kind == DYN_STMT_ASSERT) {
+    /* Checked when the body is: in a generic function, once per instance.
+       What remains is a statement that does nothing. */
+    DynType type = check_expr(sema, a, st->expression, s, errors, DYN_TYPE_BOOL);
+    if (type != DYN_TYPE_ERROR) {
+      int value = type == DYN_TYPE_BOOL ? assert_value(a, st->expression, 0) : -1;
+      if (type != DYN_TYPE_BOOL)
+        error_span(st->span, s, errors, "#assert condition must be bool");
+      else if (value < 0)
+        error_span(st->span, s, errors, "#assert condition must be a compile-time constant");
+      else if (!value) {
+        char message[512];
+        DynSpan m = st->label;
+        bool quoted = m.end_byte > m.start_byte + 1;
+        snprintf(message, sizeof(message), "#assert failed%s%.*s", quoted ? ": " : "",
+                 quoted ? (int)(m.end_byte - m.start_byte - 2) : 0, quoted ? s->text + m.start_byte + 1 : "");
+        error_span(st->span, s, errors, message);
+      }
+    }
+    st->kind = DYN_STMT_EXPR;
+    st->expression = sema_push_expr(a, (DynAstExpr){.kind = DYN_EXPR_BOOL, .type = DYN_TYPE_BOOL, .boolean = true,
+                                                     .left = DYN_NO_EXPR, .right = DYN_NO_EXPR, .span = st->span});
+    return false;
+  }
   if (st->kind == DYN_STMT_PANIC) {
     DynType message_type = sema_intern_slice(a, DYN_TYPE_U8, true);
     DynType value =
@@ -3940,7 +3980,17 @@ static DynExprId assert_operand(DynAstProgram *a, DynExprId id) {
     else if (e->kind == DYN_EXPR_GLOBAL && e->integer < a->global_count &&
              a->globals[e->integer].is_const)
       id = a->globals[e->integer].initializer;
-    else
+    else if (e->kind == DYN_EXPR_FIELD && e->left != DYN_NO_EXPR &&
+             a->expressions[e->left].kind == DYN_EXPR_STRUCT && a->expressions[e->left].boolean_reflection) {
+      /* A field of #typeof(T): its compile-time value. */
+      const DynAstExpr *info = &a->expressions[e->left];
+      DynExprId field = DYN_NO_EXPR;
+      for (uint32_t i = 0; i < info->item_count; ++i)
+        if (a->items[info->item_start + i].field_index == e->integer)
+          field = a->items[info->item_start + i].expression;
+      if (field == DYN_NO_EXPR) return DYN_NO_EXPR;
+      id = field;
+    } else
       return id;
   }
   return DYN_NO_EXPR;
@@ -3969,6 +4019,10 @@ static int assert_value(DynAstProgram *a, DynExprId id, unsigned depth) {
   DynExprId left = assert_operand(a, e->left), right = assert_operand(a, e->right);
   if (left == DYN_NO_EXPR || right == DYN_NO_EXPR)
     return -1;
+  /* Enum constants, such as #typeof(T).kind == TypeKind.Integer. */
+  if (a->expressions[left].kind == DYN_EXPR_ENUM && a->expressions[right].kind == DYN_EXPR_ENUM &&
+      (e->op == DYN_OP_EQ || e->op == DYN_OP_NE) && !a->expressions[left].item_count && !a->expressions[right].item_count)
+    return (a->expressions[left].integer == a->expressions[right].integer) == (e->op == DYN_OP_EQ);
   int order;
   if (assert_signed(a->expressions[e->left].type) ||
       assert_signed(a->expressions[e->right].type)) {
@@ -4307,6 +4361,46 @@ bool dyn_sema_base(DynAstProgram *a, const DynSource *s, unsigned *errors) {
     error_span((DynSpan){0}, s, errors, "out of memory indexing symbols");
   }
   bool ok = ready && sema_program(&sema, a, s, errors);
+  /* #typeof(T).kind and the other scalar fields are constants: fold them so
+     generic code branching on them compiles to the one branch it takes. */
+  for (size_t i = 0; ok && i < a->expression_count; ++i) {
+    DynAstExpr *e = &a->expressions[i];
+    if (e->kind != DYN_EXPR_FIELD || e->left == DYN_NO_EXPR) continue;
+    const DynAstExpr *info = &a->expressions[e->left];
+    if (info->kind != DYN_EXPR_STRUCT || !info->boolean_reflection) continue;
+    for (uint32_t k = 0; k < info->item_count; ++k) {
+      if (a->items[info->item_start + k].field_index != e->integer) continue;
+      const DynAstExpr *value = &a->expressions[a->items[info->item_start + k].expression];
+      if (value->kind == DYN_EXPR_INT || value->kind == DYN_EXPR_ENUM) {
+        DynSpan span = e->span;
+        *e = *value;
+        e->span = span;
+      }
+      break;
+    }
+  }
+  /* An if on a compile-time condition keeps only the branch it takes:
+     `if #typeof(K).kind == TypeKind.Slice` in a generic body costs nothing. */
+  for (size_t i = 0; ok && i < a->statement_count; ++i) {
+    DynAstStmt *st = &a->statements[i];
+    if (st->kind != DYN_STMT_IF || st->expression == DYN_NO_EXPR) continue;
+    int value = assert_value(a, st->expression, 0);
+    if (value < 0) continue;
+    DynExprId literal = sema_push_expr(a, (DynAstExpr){.kind = DYN_EXPR_BOOL, .type = DYN_TYPE_BOOL,
+                                                        .boolean = value != 0, .left = DYN_NO_EXPR,
+                                                        .right = DYN_NO_EXPR, .span = a->expressions[st->expression].span});
+    if (literal == DYN_NO_EXPR) break;
+    st = &a->statements[i];
+    st->expression = literal;
+    if (value) st->else_count = 0;
+    else st->body_count = 0;
+    /* Gone entirely where possible, so inlining costs see only live code. */
+    if (value && st->body_count == 1 && a->children[st->body_start] != i)
+      *st = a->statements[a->children[st->body_start]];
+    else if (!value && st->else_count == 0)
+      *st = (DynAstStmt){.kind = DYN_STMT_EXPR, .span = st->span, .expression = literal,
+                         .target = DYN_NO_EXPR, .assignment_op = DYN_OP_NONE};
+  }
   if (ok) {
     unsigned before = *errors;
     sema_main_init(a, s, errors);

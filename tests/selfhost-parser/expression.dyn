@@ -597,6 +597,9 @@ fn parse_operand(p: *Parser, minimum: i32) u32 {
     end := p.token.end
     expect(p, ")")
     left = add_node(p, kind, token.start, end, child)
+    if kind == ExpTypeof {
+      primary = true
+    }
   } else if token_is(p, "#load") || token_is(p, "#syscall") {
     load := token_is(p, "#load")
     lex(p)

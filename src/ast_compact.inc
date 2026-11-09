@@ -892,6 +892,12 @@ static uint32_t compact_stmt(CompactNode n, const DynSource *s, DynAstProgram *a
         a->children[a->child_count++] = deferred;
       st.body_count = 1;
     }
+  } else if (k == SRC_ASSERT) {
+    st.kind = DYN_STMT_ASSERT;
+    if (compact_count(n))
+      st.expression = compact_expr(compact_child(n, 0), s, a, errors);
+    if (compact_count(n) > 1)
+      st.label = compact_span(compact_child(n, 1));
   } else if (!(k != SRC_PANIC)) {
     st.kind = DYN_STMT_PANIC;
     if (compact_count(n))

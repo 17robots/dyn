@@ -9,6 +9,10 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 ERRORS = {
+    'use "std/container/map"\nuse "std/mem"\nstruct P { x: i32 }\nfn main() {\n  m: map.Map(P, i32)\n  map.init(&m, mem.arena_create(0))\n}\n':
+        'map.init: keys must be integers, enums, bools, pointers or text; use map.init_with for other keys',
+    'fn only($K: type, key: K) K {\n  #assert(#typeof(K).kind == TypeKind.Integer, "only integers")\n  return key\n}\nfn main() {\n  _ = only(bool, true)\n}\n':
+        '#assert failed: only integers',
     'fn main() {\n  big: u64 = 1\n  at: usize = big\n  _ = at\n}\n':
         'initializer type mismatch',
     'fn main() {\n  n: u32 = 1\n  at: isize = n\n  _ = at\n}\n':

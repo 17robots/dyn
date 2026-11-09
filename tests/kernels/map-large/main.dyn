@@ -4,7 +4,7 @@ use "std/mem"
 fn main() {
   arena := mem.arena_create(0)
   m: map.Map(u64, u64)
-  map.init_integer(&m, arena)
+  map.init(&m, arena)
   t: u64 = 0
   for r in 0..20 {
     for i in 0..1000000 {

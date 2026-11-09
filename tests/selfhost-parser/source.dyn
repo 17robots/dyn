@@ -466,6 +466,9 @@ fn src_statement_body(p: *Parser) u32 {
   if token_is(p, "#panic") {
     return src_panic(p)
   }
+  if token_is(p, "#assert") {
+    return src_assert(p)
+  }
   if token_is(p, "defer") {
     lex(p)
     child := None

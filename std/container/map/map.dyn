@@ -2,7 +2,7 @@
 // the key's hash and equality functions; std has them for text and integers:
 //
 //   ages: map.Map([]const u8, i32)
-//   map.init_text(&ages, arena)
+//   map.init(&ages, arena)
 //   map.insert(&ages, "ada", 36)
 //   age := map.get(&ages, "ada")
 //   map.upsert(&counts, word, 0).* += 1
@@ -37,24 +37,63 @@ pub struct Map($K: type, $V: type) {
   equal_key: fn(K, K) bool,
 }
 
-// Sets up an empty map. Nothing is allocated until the first insert.
-pub fn init(m: *Map($K, $V), arena: *mem.Arena, hash_key: fn(u64, K) u64, equal_key: fn(K, K) bool) {
-  init_seeded(m, arena, 0x243f6a8885a308d3, hash_key, equal_key)
+// Sets up an empty map. Nothing is allocated until the first insert. Keys
+// that are integers, enums, bools, pointers or text ([]u8, []const u8) hash
+// and compare by value; any other key type is a compile error, so give
+// init_with its hash and equality.
+pub fn init(m: *Map($K, $V), arena: *mem.Arena) {
+  init_seeded_with(m, arena, 0x243f6a8885a308d3, default_hash(K), default_equal(K))
 }
 
-// Sets up an empty map with u64 keys, hashed by integer_hash. Cast other
-// integer keys to u64.
-pub fn init_integer(m: *Map(u64, $V), arena: *mem.Arena) {
-  init(m, arena, integer_hash, integer_equal)
+// init with a chosen seed, for keys an attacker may choose.
+pub fn init_seeded(m: *Map($K, $V), arena: *mem.Arena, seed: u64) {
+  init_seeded_with(m, arena, seed, default_hash(K), default_equal(K))
 }
 
-// Sets up an empty map with text keys, compared by content.
-pub fn init_text(m: *Map([]const u8, $V), arena: *mem.Arena) {
-  init(m, arena, text_hash, text_equal)
+// init with the key's hash and equality: fn(seed, key) u64 and fn(a, b) bool.
+pub fn init_with(m: *Map($K, $V), arena: *mem.Arena, hash_key: fn(u64, K) u64, equal_key: fn(K, K) bool) {
+  init_seeded_with(m, arena, 0x243f6a8885a308d3, hash_key, equal_key)
 }
 
-// init with a chosen seed, passed to every hash_key call.
-pub fn init_seeded(m: *Map($K, $V), arena: *mem.Arena, seed: u64, hash_key: fn(u64, K) u64, equal_key: fn(K, K) bool) {
+// The default hash of a key: text by content, other keys by value.
+fn default_hash($K: type, seed: u64, key: K) u64 {
+  #assert(#typeof(K).kind == TypeKind.Integer || #typeof(K).kind == TypeKind.Enum ||
+      #typeof(K).kind == TypeKind.Bool || #typeof(K).kind == TypeKind.Pointer ||
+      (#typeof(K).kind == TypeKind.Slice && #typeof(K).element_id == #typeof(u8).id),
+    "map.init: keys must be integers, enums, bools, pointers or text; use map.init_with for other keys")
+  if #typeof(K).kind == TypeKind.Slice {
+    return text_hash(seed, #cast(*const []const u8, &key).*)
+  }
+  if #sizeof(K) == 8 {
+    return integer_hash(seed, #cast(*const u64, &key).*)
+  }
+  if #sizeof(K) == 4 {
+    return integer_hash(seed, #cast(u64, #cast(*const u32, &key).*))
+  }
+  if #sizeof(K) == 2 {
+    return integer_hash(seed, #cast(u64, #cast(*const u16, &key).*))
+  }
+  return integer_hash(seed, #cast(u64, #cast(*const u8, &key).*))
+}
+
+fn default_equal($K: type, left: K, right: K) bool {
+  if #typeof(K).kind == TypeKind.Slice {
+    return text_equal(#cast(*const []const u8, &left).*, #cast(*const []const u8, &right).*)
+  }
+  if #sizeof(K) == 8 {
+    return #cast(*const u64, &left).* == #cast(*const u64, &right).*
+  }
+  if #sizeof(K) == 4 {
+    return #cast(*const u32, &left).* == #cast(*const u32, &right).*
+  }
+  if #sizeof(K) == 2 {
+    return #cast(*const u16, &left).* == #cast(*const u16, &right).*
+  }
+  return #cast(*const u8, &left).* == #cast(*const u8, &right).*
+}
+
+// init_with and a chosen seed, passed to every hash_key call.
+pub fn init_seeded_with(m: *Map($K, $V), arena: *mem.Arena, seed: u64, hash_key: fn(u64, K) u64, equal_key: fn(K, K) bool) {
   empty: Map(K, V)
   m.* = empty
   m.arena = arena

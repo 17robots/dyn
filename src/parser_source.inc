@@ -229,6 +229,7 @@ static bool src_expression_start(Parser *p) {
       is(p, "#alignof") || is(p, "#offsetof") || is(p, "#typeof") ||
       is(p, "#len") || is(p, "#init") || is(p, "#slice") || is(p, "#offset") || is(p, "#load") || is(p, "#syscall");
 }
+static uint32_t src_assert(Parser *p);
 static uint32_t src_panic(Parser *p) {
   uint32_t start = p->token.start; expect(p, "#panic"); expect(p, "(");
   uint32_t child = expression(p, 0), end = p->token.end; expect(p, ")");
@@ -252,6 +253,7 @@ static uint32_t src_statement_body(Parser *p) {
   if (is(p, "const")) return src_const(p);
   if (is(p, "type") || src_distinct(p)) return src_alias(p);
   if (is(p, "#panic")) return src_panic(p);
+  if (is(p, "#assert")) return src_assert(p);
   if (is(p, "defer")) {
     lex(p); uint32_t child = is(p, "{") ? src_block(p) : src_statement(p);
     if (child != NONE) {

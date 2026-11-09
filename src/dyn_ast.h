@@ -131,6 +131,7 @@ typedef struct {
   uint64_t integer;
   double floating;
   bool boolean;
+  bool boolean_reflection; /* a #typeof(T) result: its fields are compile-time values */
   uint32_t item_start, item_count;
   /* Set during lowering for integer +, -, *, unary - and <<. */
   bool wrap;
@@ -279,7 +280,8 @@ typedef enum {
   DYN_STMT_CONTINUE,
   DYN_STMT_CASE,
   DYN_STMT_DEFER,
-  DYN_STMT_PANIC
+  DYN_STMT_PANIC,
+  DYN_STMT_ASSERT /* #assert in a body; sema checks it per instance and leaves a no-op */
 } DynStmtKind;
 typedef struct {
   DynStmtKind kind;

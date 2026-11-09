@@ -213,14 +213,14 @@ use "std/mem"
 fn main() {
   arena := mem.arena_create(0)
   ages: map.Map([]const u8, i32)
-  map.init_text(&ages, arena)
+  map.init(&ages, arena)
   map.insert(&ages, "ada", 36)
   age := map.get(&ages, "ada")
   if age != nil {
     age.* += 1
   }
   visits: map.Map([]const u8, u64)
-  map.init_text(&visits, arena)
+  map.init(&visits, arena)
   map.upsert(&visits, "ada", 0).* += 1
   it := map.walk(&visits)
   for map.next(&it) {
@@ -229,12 +229,13 @@ fn main() {
 }
 ```
 
-`map.init_text(&m, arena)` sets up text keys and `map.init_integer(&m, arena)` sets up
-`u64` keys; cast other integers to `u64`. For any other key, `map.init(&m, arena, hash, equal)`
-takes a pair: `fn(seed: u64, key: K) u64` and `fn(a: K, b: K) bool`.
+`map.init(&m, arena)` works for keys that are integers, enums, bools, pointers or text
+(`[]u8`, `[]const u8`): they hash and compare by value, text by content. Any other key type is a
+compile error at that `init`; give `map.init_with(&m, arena, hash, equal)` a pair instead:
+`fn(seed: u64, key: K) u64` and `fn(a: K, b: K) bool`.
 
 `get` returns a pointer or nil, and that pointer goes stale at the next `insert`. Text
-keys are borrowed. For keys an attacker chooses, use `map.init_seeded` with a seed from
+keys are borrowed. For keys an attacker chooses, use `map.init_seeded(&m, arena, seed)` with a seed from
 `std/crypto/random`.
 
 `insert` sets a value. `upsert(&m, key, initial)` returns the value for key, adding

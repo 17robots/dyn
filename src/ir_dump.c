@@ -267,7 +267,7 @@ static void statement(Dump *d,const DynIrStmt *s) {
       EX("value",s->expression); EX("target",s->target);
       if (s->target==DYN_NO_EXPR) LOCAL("local",s->local_id);
       op(d,"op",s->assignment_op); break;
-    case DYN_STMT_RETURN: case DYN_STMT_EXPR: case DYN_STMT_PANIC:
+    case DYN_STMT_RETURN: case DYN_STMT_EXPR: case DYN_STMT_PANIC: case DYN_STMT_ASSERT:
       EX("expression",s->expression); break;
     case DYN_STMT_IF:
       EX("condition",s->expression); BODY("body",s->body_start,s->body_count);

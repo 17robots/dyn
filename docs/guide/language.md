@@ -117,6 +117,23 @@ arguments, never from the expected result. The
 [generics design](../internals/generics-design.md) records the rules and what is deliberately left
 out.
 
+Naming only the leading type arguments makes an instance a function value: `hash := key_hash(u32)`
+has type `fn(u64, u32) u64` when `key_hash` is `fn($K: type, seed: u64, key: K) u64`.
+
+`#assert` also works in a function body, where it is checked when the body is: in a generic
+function, once per instance. With `#typeof`, whose scalar fields (`kind`, `size`, `id`,
+`element_id` and the rest) are compile-time constants, it states what a generic function accepts:
+
+```dyn
+fn bits($K: type, key: K) u64 {
+  #assert(#typeof(K).kind == TypeKind.Integer, "bits: K must be an integer")
+  return #cast(u64, key)
+}
+```
+
+An `if` whose condition is a compile-time constant compiles to the branch it takes; both branches
+must still type-check for the instance.
+
 A struct may take type parameters, and each set of arguments makes one concrete struct:
 
 ```dyn
@@ -416,7 +433,8 @@ Linux x86-64. It does not depend on `std`.
 `#offsetof(Type, field)` is a field's byte offset as a `usize` constant.
 `#init(pointer)` is a statement that writes `T`'s field defaults through a mutable `*T`; for a type
 without defaults it only evaluates the pointer.
-`#assert(condition, "message")` fails compilation when a constant condition is false.
+`#assert(condition, "message")` fails compilation when a constant condition is false, at top level
+or in a function body.
 `#load("file")` embeds a file's bytes as a `[]const u8`; the path is relative to the module directory and may not contain `..`.
 
 `#panic(message)` accepts any `[]const u8` expression; messages need not be literals.

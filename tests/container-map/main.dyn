@@ -30,7 +30,7 @@ fn main() {
   arena := mem.arena_create(0)
   ages: map.Map([]const u8, i32)
   check(map.get(&ages, "ada") == nil)
-  map.init(&ages, arena, map.text_hash, map.text_equal)
+  map.init(&ages, arena)
   check(map.get(&ages, "ada") == nil)
   check(!map.remove(&ages, "ada"))
   map.insert(&ages, "ada", 36)
@@ -42,7 +42,7 @@ fn main() {
   check(map.remove(&ages, "ada") && map.get(&ages, "ada") == nil && ages.count == 1)
 
   numbers: map.Map(u64, u64)
-  map.init_seeded(&numbers, arena, 12345, map.integer_hash, map.integer_equal)
+  map.init_seeded(&numbers, arena, 12345)
   for i in 0..10000 {
     map.insert(&numbers, #cast(u64, i), #cast(u64, i) * 3)
   }
@@ -70,7 +70,7 @@ fn main() {
 
   /* upsert adds with the initial value once, then returns the same entry. */
   tally: map.Map(u64, u64)
-  map.init(&tally, arena, map.integer_hash, map.integer_equal)
+  map.init(&tally, arena)
   for i in 0..30 {
     map.upsert(&tally, #cast(u64, i) % 4, 100).* += 1
   }
@@ -80,7 +80,7 @@ fn main() {
 
   /* Every key in two probe runs: removal must keep the rest reachable. */
   crowded: map.Map(u64, i32)
-  map.init(&crowded, arena, colliding_hash, colliding_equal)
+  map.init_with(&crowded, arena, colliding_hash, colliding_equal)
   for i in 0..200 {
     map.insert(&crowded, #cast(u64, i), #cast(i32, i))
   }
@@ -93,7 +93,7 @@ fn main() {
   }
 
   points: map.Map(Point, []const u8)
-  map.init(&points, arena, point_hash, point_equal)
+  map.init_with(&points, arena, point_hash, point_equal)
   map.insert(&points, Point{ x: 1, y: 2 }, "home")
   check(#len(map.get(&points, Point{ x: 1, y: 2 }).*) == 4)
   check(map.get(&points, Point{ x: 2, y: 1 }) == nil)

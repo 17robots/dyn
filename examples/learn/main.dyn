@@ -431,7 +431,7 @@ fn collections() {
   array.push(&names, "ada")
   // A hash map: you pass the arena and the hash and equality functions.
   counts: map.Map([]const u8, u32)
-  map.init_text(&counts, arena)
+  map.init(&counts, arena)
   for name in names.items {
     map.upsert(&counts, name, 0).* += 1   // one lookup, adds when missing
   }

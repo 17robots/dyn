@@ -25,8 +25,14 @@ servers so they pick up the new `dyn`.
   of that one file, which stands for `main.dyn`. Other files beside it are not loaded.
 - A missing comma between items on separate lines says so:
   "expected ',' or '}', found 'tag': is a comma missing at the end of the line above?".
-- `map.init_text(&m, arena)` and `map.init_integer(&m, arena)` set up text and `u64` keys without
-  naming the hash and equality functions.
+- Breaking: `map.init(&m, arena)` takes no functions. Integer, enum, bool, pointer and text keys
+  hash and compare by value, text by content; another key type is a compile error there.
+  `map.init_with(&m, arena, hash, equal)` takes the functions, and `map.init_seeded(&m, arena,
+  seed)` and `map.init_seeded_with` take a seed. Migrate `map.init(&m, a, h, e)` to `init_with`.
+- `#assert` works in function bodies, checked once per generic instance, and `#typeof(T).kind`
+  and the other scalar fields are compile-time constants. `f(T)` with only the leading type
+  arguments is that instance as a function value. An `if` on a constant takes its branch at
+  compile time.
 - Migration notes for the changes below: `docs/migrations/language-rules-20261108.md`.
 - Breaking: type patterns drop `is`. Write `i64 n => { ... }`, `Point p => { ... }` and
   `[]const u8 s => { ... }` in a type case; a name that resolves to a type is a type pattern.

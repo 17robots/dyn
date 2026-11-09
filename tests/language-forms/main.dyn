@@ -1,5 +1,6 @@
 // Type patterns, chained comparisons, generic struct literals, single-line
 // blocks and constants that adapt to their use.
+use "std/container/map"
 use "std/enums"
 use "std/io"
 use "std/mem"
@@ -128,5 +129,30 @@ fn main() {
   narrow: u32 = 9
   at: usize = narrow
   check(widened + #cast(u64, at) == 12, "size widening")
+  // Generic instances as function values, and default map keys.
+  twice := doubled(u32)
+  check(twice(21) == 42, "instance value")
+  arena2 := mem.arena_create(0)
+  by_errno: map.Map(Errno, u32)
+  map.init(&by_errno, arena2)
+  map.insert(&by_errno, Errno.Io, 5)
+  switches: map.Map(u16, bool)
+  map.init(&switches, arena2)
+  map.insert(&switches, 7, true)
+  names: map.Map([]const u8, u32)
+  map.init(&names, arena2)
+  map.insert(&names, "ada", 3)
+  spelled := mem.push_array(u8, arena2, 3)
+  spelled[0] = 'a'
+  spelled[1] = 'd'
+  spelled[2] = 'a'
+  same: []const u8 = spelled
+  check(map.get(&names, same) != nil && #typeof([]const u8).kind == TypeKind.Slice, "text keys by content")
+  check(map.get(&by_errno, Errno.Io).* == 5 && map.get(&switches, 7).* && map.get(&switches, 8) == nil, "map keys")
   io.println("{} {}", "ok", 1)
+}
+
+fn doubled($T: type, value: T) T {
+  #assert(#typeof(T).kind == TypeKind.Integer, "doubled: integers only")
+  return value * 2
 }

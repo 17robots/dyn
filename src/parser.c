@@ -522,6 +522,8 @@ static uint32_t parse(Parser *p, int minimum) {
     }
     uint32_t end = p->token.end; expect(p, ")");
     left = node(p, kind, token.start, end, child, (Token){0});
+    /* #typeof(T).kind: reflection reads fields directly. */
+    if (kind == EXP_TYPEOF) primary = true;
   } else if (is(p, "#load") || is(p, "#syscall")) {
     bool load = is(p, "#load"); lex(p); expect(p, "(");
     uint32_t first = NONE, last = NONE;
