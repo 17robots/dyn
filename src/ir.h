@@ -121,9 +121,6 @@ typedef struct {
   DynType variadic_type;
   DynMathIntrinsic math_intrinsic;
   DynByteIntrinsic byte_intrinsic;
-  /* Returns fresh memory, as LLVM's noalias return: two results of separate
-     calls never overlap while both are live. Only the SDK's arena_push. */
-  bool fresh_result;
 } DynIrFunction;
 typedef struct {
   DynStmtKind kind;

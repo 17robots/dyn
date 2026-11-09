@@ -68,9 +68,6 @@ servers so they pick up the new `dyn`.
   built from the same operations on each field becomes one 8-byte load, lanewise SSE arithmetic and
   one 8-byte store, and `a.x * b.x + a.y * b.y` over such pairs a lanewise multiply and an in-order
   add. Results match the scalar code bit for bit.
-- Release builds know that two `mem.arena_push` results from one arena never overlap, as LLVM
-  knows for `malloc`, so a store into one array no longer forces reloads from another.
-  Arenas built on another arena's buffer get no such assumption.
 - Release builds keep a loop total and its update in one register when the total is read after
   the loop, so `e += x` in a loop no longer copies the total twice per iteration.
 - Release builds inline a call to the right of an operand the call may change, as in

@@ -86,7 +86,6 @@ typedef struct {
   int64_t aux, aux2;
   uint32_t block, list, count, uses, check_origin;
   bool element_address; /* &xs[i]: bounds-checked, so neither nil nor misaligned */
-  bool fresh;           /* the result of a call that returns fresh memory (arena_push) */
   uint8_t element_align; /* log2 of that element's alignment */
   /* ILP32 calls retain original signature identity and {type, first, count}
      groups separately from the optimizer's flattened operand triples. */
@@ -1596,7 +1595,6 @@ static int32_t ssa_call(Ssa *s, const DynIrExpr *e, int32_t *second, unsigned de
     return address;
   }
   int32_t v = ssa_emit(s, SO_RESULT, ssa_class(result), call, -1, -1, float_type(result) ? X_XMM0 : 0, (ctx->rv32 || ctx->t32) ? result : 0);
-  if (!s->failed && !indirect && callee && callee->fresh_result) s->values[v].fresh = true;
   return ssa_normalize(s, v, result);
 }
 static void ssa_initialize(Ssa *s, int32_t destination, DynType type, DynExprId id, unsigned depth) {
@@ -3965,36 +3963,6 @@ static SsaPlace ssa_place(Ssa *s, const SsaValue *v) {
   }
   return p;
 }
-/* The fresh-memory call result an address derives from by offsets, or -1. */
-static int32_t ssa_fresh_root(Ssa *s, int32_t id) {
-  for (unsigned depth = 0; id >= 0 && depth < 8; ++depth) {
-    id = ssa_resolve(s, id);
-    const SsaValue *v = &s->values[id];
-    if (v->fresh) return id;
-    if (v->op == SO_LEA) { id = v->a; continue; }
-    if (v->op == SO_ADD) {
-      int32_t left = v->a >= 0 ? ssa_fresh_root(s, v->a) : -1, right = v->b >= 0 ? ssa_fresh_root(s, v->b) : -1;
-      return left >= 0 && right >= 0 ? -1 : left >= 0 ? left : right;
-    }
-    return -1;
-  }
-  return -1;
-}
-/* The arena a fresh-memory result came from: its call's first argument. */
-static int32_t ssa_fresh_arena(Ssa *s, int32_t root) {
-  const SsaValue *call = &s->values[s->values[root].a];
-  if (call->op != SO_CALL || !call->count) return -1;
-  return ssa_resolve(s, (int32_t)s->lists[call->list]);
-}
-/* Two places inside the results of two different pushes on one arena. An
-   arena built on another's buffer hands out memory inside that buffer, so
-   results of different arenas may overlap. */
-static bool ssa_fresh_apart(Ssa *s, SsaPlace x, SsaPlace y) {
-  int32_t a = ssa_fresh_root(s, x.base), b = ssa_fresh_root(s, y.base);
-  if (a < 0 || b < 0 || a == b) return false;
-  int32_t arena = ssa_fresh_arena(s, a);
-  return arena >= 0 && arena == ssa_fresh_arena(s, b);
-}
 static bool ssa_same_place(SsaPlace x, SsaPlace y) {
   return x.base == y.base && x.index == y.index && x.scale == y.scale && x.displacement == y.displacement;
 }
@@ -4075,10 +4043,9 @@ static bool ssa_reuse_loads(Ssa *s, const uint32_t *order, uint32_t n) {
   LoadEntry *table = calloc(capacity, sizeof(*table));
   if (!table) { s->failed = true; return false; }
   uint64_t epoch = 0;
-  enum { STORE_RUN = 8, RECENT = 32 };
+  enum { STORE_RUN = 8 };
   int32_t stores[STORE_RUN]; uint32_t store_count = 0;
-  /* Loads of this epoch, which a store into other fresh memory keeps. */
-  int32_t recent[RECENT]; uint32_t recent_count = 0;
+
   for (uint32_t i = 0; i < n; ++i) {
     SsaBlock *block = &s->blocks[order[i]];
     /* A block whose only predecessor is the previous one, a plain block or
@@ -4086,7 +4053,7 @@ static bool ssa_reuse_loads(Ssa *s, const uint32_t *order, uint32_t n) {
     SsaBlock *previous = i ? &s->blocks[order[i - 1]] : NULL;
     bool continues = previous && block->preds.count == 1 && block->preds.items[0] == order[i - 1] &&
                      (previous->kind == SB_PLAIN || previous->kind == SB_IF);
-    if (!continues) { ++epoch; store_count = 0; recent_count = 0; }
+    if (!continues) { ++epoch; store_count = 0; }
     uint32_t kept = 0;
     for (uint32_t k = 0; k < block->values.count; ++k) {
       uint32_t id = block->values.items[k];
@@ -4131,26 +4098,10 @@ static bool ssa_reuse_loads(Ssa *s, const uint32_t *order, uint32_t n) {
           continue;
         }
         table[slot] = (LoadEntry){epoch, (int32_t)id};
-        if (recent_count < RECENT) recent[recent_count++] = (int32_t)id;
       } else if (v->effect && v->op != SO_CHECK && v->op != SO_CHECK_SHL &&
                  v->op != SO_ADDO && v->op != SO_SUBO && v->op != SO_MULO &&
                  v->op != SO_DIV && v->op != SO_REM) {
-        /* A store into fresh memory leaves loads from other fresh memory. */
-        uint32_t kept_loads = 0;
-        if (v->op == SO_STORE && ssa_fresh_root(s, v->a) >= 0) {
-          SsaPlace place = ssa_place(s, v);
-          for (uint32_t r = 0; r < recent_count; ++r)
-            if (ssa_fresh_apart(s, ssa_place(s, &s->values[recent[r]]), place)) recent[kept_loads++] = recent[r];
-        }
-        recent_count = 0;
         ++epoch;
-        for (uint32_t r = 0; r < kept_loads; ++r) {
-          SsaValue *load = &s->values[recent[r]];
-          uint32_t slot = (uint32_t)ssa_key(load) & (capacity - 1);
-          while (table[slot].epoch == epoch) slot = (slot + 1) & (capacity - 1);
-          table[slot] = (LoadEntry){epoch, recent[r]};
-          recent[recent_count++] = recent[r];
-        }
         if (v->op != SO_STORE) store_count = 0;
         else {
           /* Join the run only when no earlier store in it can overlap. */
@@ -4161,10 +4112,9 @@ static bool ssa_reuse_loads(Ssa *s, const uint32_t *order, uint32_t n) {
             SsaValue *other = &s->values[stores[r]];
             SsaPlace at = ssa_place(s, other);
             uint64_t other_bytes = ((uint64_t)other->aux2 & 0xff) / 8;
-            disjoint = ssa_fresh_apart(s, at, place) ||
-                       (at.base == place.base && at.index == place.index && at.scale == place.scale && bytes && other_bytes &&
-                        (place.displacement + (int64_t)bytes <= at.displacement ||
-                         at.displacement + (int64_t)other_bytes <= place.displacement));
+            disjoint = at.base == place.base && at.index == place.index && at.scale == place.scale && bytes && other_bytes &&
+                       (place.displacement + (int64_t)bytes <= at.displacement ||
+                        at.displacement + (int64_t)other_bytes <= place.displacement);
           }
           if (!disjoint) store_count = 0;
           stores[store_count++] = (int32_t)id;
@@ -5785,14 +5735,12 @@ static bool ssa_pairs_loads(SsaPairs *p, int32_t x, int32_t y, uint32_t *block, 
   uint32_t i = ssa_pairs_index(s, blk, x), j = ssa_pairs_index(s, blk, y);
   if (i == UINT32_MAX || j == UINT32_MAX) return false;
   if (blk == p->block && (i >= p->at || j >= p->at)) return false;
-  SsaPlace place = ssa_place(s, &s->values[x]);
   SsaBlock *b = &s->blocks[blk];
   uint32_t low = i < j ? i : j, high = i < j ? j : i;
   for (uint32_t k = low + 1; k < high; ++k) {
     SsaValue *w = &s->values[b->values.items[k]];
     if (w->dead || !w->effect || w->op == SO_LOAD || w->op == SO_CHECK || w->op == SO_CHECK_SHL ||
         w->op == SO_ADDO || w->op == SO_SUBO || w->op == SO_MULO || w->op == SO_DIV || w->op == SO_REM) continue;
-    if (w->op == SO_STORE && ssa_fresh_apart(s, ssa_place(s, w), place)) continue;
     return false;
   }
   *block = blk; *anchor = high;
