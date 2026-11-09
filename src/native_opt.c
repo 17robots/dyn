@@ -1004,6 +1004,24 @@ static bool inline_stable_operand(const DynIrProgram *ir, const bool *addressed,
   return addressed && e->kind == DYN_EXPR_NAME && (uint64_t)e->integer < ir->local_count &&
          !addressed[e->integer];
 }
+/* Whether id may contain a call, within a small bound; unknown counts as yes. */
+static bool inline_has_call(const DynIrProgram *ir, DynExprId id, unsigned *budget) {
+  if (id == DYN_NO_EXPR) return false;
+  if (id >= ir->expression_count || !*budget) return true;
+  --*budget;
+  const DynIrExpr *e = &ir->expressions[id];
+  if (e->kind == DYN_EXPR_CALL || e->kind == DYN_EXPR_INDIRECT_CALL || e->item_count) return true;
+  return inline_has_call(ir, e->left, budget) || inline_has_call(ir, e->right, budget);
+}
+/* A scalar operand without calls: capturing it first keeps the order, and a
+   call inside it is left for the spine to expand instead. */
+static bool inline_scalar_operand(const DynIrProgram *ir, DynExprId id) {
+  unsigned budget = 32;
+  if (id >= ir->expression_count || inline_has_call(ir, id, &budget)) return false;
+  DynType t = ir->expressions[id].type;
+  return (t >= DYN_TYPE_BOOL && t <= DYN_TYPE_F64) || t == DYN_TYPE_RAWPTR ||
+         dyn_type_is_pointer(t) || dyn_type_is_enum(t);
+}
 static DynExprId inline_spine(const DynIrProgram *ir, const bool *addressed, DynExprId id,
                                DynExprId wrappers[32], bool right[32],
                                unsigned *wrapper_count) {
@@ -1019,8 +1037,11 @@ static DynExprId inline_spine(const DynIrProgram *ir, const bool *addressed, Dyn
     if (!conversion && !unary && !binary) break;
     if (count == 32 || e->item_count || (!binary && e->right != DYN_NO_EXPR))
       return DYN_NO_EXPR;
-    bool descend_right = binary && inline_stable_operand(ir, addressed, e->left) &&
-                         e->op != DYN_OP_LOGICAL_AND && e->op != DYN_OP_LOGICAL_OR;
+    /* Any other scalar left operand is captured in a local first, so it is
+       still read before the call runs, as SSA form orders it for LLVM. */
+    bool descend_right = binary && e->op != DYN_OP_LOGICAL_AND && e->op != DYN_OP_LOGICAL_OR &&
+                         (inline_stable_operand(ir, addressed, e->left) ||
+                          inline_scalar_operand(ir, e->left));
     wrappers[count] = id;
     right[count++] = descend_right;
     id = descend_right ? e->right : e->left;
@@ -1035,16 +1056,58 @@ static bool inline_cast_call(Inline *b, const InlineScope *scope,
   bool right[32];
   unsigned count = 0;
   id = inline_spine(b->in, b->addressed, id, wrappers, right, &count);
-  if (id >= b->in->expression_count ||
-      (!inline_call(b, scope, &b->in->expressions[id], list, result, depth) &&
-       !inline_guarded_call(b, scope, &b->in->expressions[id], list, result, depth)))
-    return false;
+  if (id >= b->in->expression_count) return false;
+  const DynIrExpr *site = &b->in->expressions[id];
+  if (site->kind != DYN_EXPR_CALL && site->kind != DYN_EXPR_INDIRECT_CALL) return false;
+  /* Capture only for a call that will expand, so a kept call costs nothing. */
+  bool needs_capture = false;
+  for (unsigned i = 0; i < count; ++i)
+    if (right[i] && !inline_stable_operand(b->in, b->addressed, b->in->expressions[wrappers[i]].left))
+      needs_capture = true;
+  if (needs_capture) {
+    uint64_t target = site->integer;
+    if (site->kind == DYN_EXPR_INDIRECT_CALL)
+      target = site->left < b->in->expression_count
+                   ? inline_guess(b, b->in->expressions[site->left].type) : UINT32_MAX;
+    if (target == UINT32_MAX ||
+        !inline_admits(b, scope, target, site->item_count, depth,
+                       inline_plan_node(b, scope, inline_site(b, site))))
+      return false;
+  }
+  /* Read each unstable left operand into a local, outermost first, before the call. */
+  uint32_t hoisted[32];
+  InlineList captures = {0}, body = {0};
+  for (unsigned i = 0; i < count && !b->failed; ++i) {
+    hoisted[i] = UINT32_MAX;
+    const DynIrExpr *w = &b->in->expressions[wrappers[i]];
+    if (!right[i] || inline_stable_operand(b->in, b->addressed, w->left)) continue;
+    DynIrLocal value = {.name = "__inline_operand", .type = b->in->expressions[w->left].type};
+    INLINE_APPEND(b, local, locals_cap, value, hoisted[i]);
+    if (b->failed) break;
+    DynIrStmt capture = inline_empty(DYN_STMT_LOCAL, w->span);
+    capture.check_origin = scope->check_origin;
+    capture.local_id = hoisted[i];
+    capture.expression = inline_expr(b, scope, w->left, 0);
+    inline_statement(b, &captures, capture);
+  }
+  /* A call that does not expand leaves no captures behind. */
+  bool expanded = !b->failed &&
+                  (inline_call(b, scope, site, &body, result, depth) ||
+                   inline_guarded_call(b, scope, site, &body, result, depth));
+  if (expanded || b->failed) {
+    for (size_t i = 0; i < captures.count; ++i) inline_list(b, list, captures.ids[i]);
+    for (size_t i = 0; i < body.count; ++i) inline_list(b, list, body.ids[i]);
+  }
+  free(captures.ids);
+  free(body.ids);
+  if (!expanded) return b->failed;
   while (count && !b->failed) {
     --count;
     DynIrExpr e = b->in->expressions[wrappers[count]];
     if (!e.check_origin) e.check_origin = scope->check_origin;
     if (right[count]) {
-      e.left = inline_expr(b, scope, e.left, 0);
+      e.left = hoisted[count] != UINT32_MAX ? inline_name(b, hoisted[count], e.span)
+                                            : inline_expr(b, scope, e.left, 0);
       e.right = *result;
     } else {
       e.left = *result;

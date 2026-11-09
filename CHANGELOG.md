@@ -51,7 +51,7 @@ servers so they pick up the new `dyn`.
   reports and exits, for logs and crash reports. Panics remain unrecoverable.
   On Wasm a panic still traps at once, so the handler does not run there.
 - A body-less declaration's return type must start on the same line as its `)`, so
-  `extern fn f(x: i32)` followed by a global on the next line no longer misparses.
+  `extern fn f(x: i32)` followed by a global on the next line no longer misparses, in the compiler and in editors.
 - Breaking: `io.Result` is now `io.Transfer`. `io.Result(T)` and `parse.Result(T)` are the
   generic `{value, failure}` results, and named result types are aliases of them.
 - `std/container/map`: `map.Map(K, V)`, a growing hash map for any key type. Set it up with
@@ -64,6 +64,8 @@ servers so they pick up the new `dyn`.
   then `push`, `push_ref`, `push_all`, `get`, `pop` (a `{value, ok}` result) and `clear`;
   `a.items` is a plain slice.
   Arrays share arenas and double when full.
+- Release builds inline a call to the right of an operand the call may change, as in
+  `total + step()`: the operand is read into a temporary first, so the order is unchanged.
 - Release builds call a stored function directly, and inline it, when it is the only function of
   its type the program ever takes. A comparison keeps any other value correct.
 - Release builds keep more values in registers around rarely taken calls, reuse loads across
