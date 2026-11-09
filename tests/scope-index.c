@@ -68,7 +68,7 @@ int main(void) {
     "fn main() {\nconst constant := 1\n_ = constant\nif true {\nm := constant\n_ = m.value\n}\n_ = m.value\n}",
     "fn helper(values: []i32) {\nfor item in values {\n_ = item\n_ = values\n}\n_ = item\n}",
     "fn helper(values: []i32) {\nfor *item in values { _ = item }\n_ = item\n}",
-    "fn helper(value: any) {\ncase value {\nis i32 item => { _ = item }\n_ => { _ = item }\n}\n_ = item\n}",
+    "fn helper(value: any) {\ncase value {\ni32 item => { _ = item }\n_ => { _ = item }\n}\n_ = item\n}",
     "enum Choice { Item: i32, None }\nfn helper(value: Choice) {\ncase value {\nChoice.Item item => { _ = item }\nChoice.None => {}\n}\n}",
     "// 😀\nfn helper(m: i32) { /* comment */ _ = m }",
     "fn helper(m: i32) { _ = m\n x := )\n _ = m }", // Recovered statements bind nothing.

@@ -432,6 +432,9 @@ static uint32_t aggregate(Parser *p) {
       Parser probe = *p; ExpTree scratch = {0}; probe.tree = &scratch;
       lex(&probe);
       while (take(&probe, ".") && probe.token.kind == NAME) lex(&probe);
+      /* The lookahead charges the shared budget: keep its cancellation. */
+      if (resource_error(&probe)) { propagate_error(p, &scratch); free(scratch.nodes); return NONE; }
+      free(scratch.nodes);
       if (is(&probe, "(")) append(p, &first, &last, type_body(p));
       else {
         append(p, &first, &last, name(p));
