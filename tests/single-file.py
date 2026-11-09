@@ -39,9 +39,9 @@ with tempfile.TemporaryDirectory(prefix='dyn-single-') as directory:
     result = dyn('run', str(work / 'maps.dyn'))
     assert result.stdout.endswith('4 3\n'), result
     (work / 'entry.dyn').write_text('use "std/container/array"\nuse "std/io"\nuse "std/process"\n\n'
-        'fn main(init: process.Init) i32 {\n  words: array.Array([]const u8)\n  array.init(&words, init.arena)\n'
-        '  for arg in init.args[1..] {\n    array.push(&words, arg)\n  }\n'
-        '  io.println("{} {}", #len(words.items), words.items[0])\n  return #cast(i32, #len(init.args))\n}\n')
+        'fn main(program: process.Program) i32 {\n  words: array.Array([]const u8)\n  array.init(&words, program.arena)\n'
+        '  for arg in program.args[1..] {\n    array.push(&words, arg)\n  }\n'
+        '  io.println("{} {}", #len(words.items), words.items[0])\n  return #cast(i32, #len(program.args))\n}\n')
     result = dyn('run', str(work / 'entry.dyn'), '--', 'alpha', 'beta')
     assert result.returncode == 3 and result.stdout.endswith('2 alpha\n'), result
     for flags in (['--release'], ['--release', '--opt-level', '3']):
@@ -50,5 +50,11 @@ with tempfile.TemporaryDirectory(prefix='dyn-single-') as directory:
         assert run.returncode == 2 and run.stdout == '1 x\n', run
     (work / 'badentry.dyn').write_text('fn main(count: i32) {\n  _ = count\n}\n')
     result = dyn('check', str(work / 'badentry.dyn'))
-    assert "main's parameter must be an Init struct" in result.stderr, result.stderr
+    assert "main's parameter must be a struct T whose module has `pub fn start() T`" in result.stderr, result.stderr
+    # Any module, std or not, may provide a startup type.
+    (work / 'custom.dyn').write_text('use "std/io"\n\nstruct App {\n  lives: i32,\n  name: []const u8\n}\n\n'
+        'pub fn start() App {\n  return App{ lives: 3, name: "demo" }\n}\n\n'
+        'fn main(app: App) i32 {\n  io.println("{} {}", app.name, app.lives)\n  return app.lives\n}\n')
+    result = dyn('run', str(work / 'custom.dyn'))
+    assert result.returncode == 3 and result.stdout.endswith('demo 3\n'), result
 print('PASS single file: run, check, build and fmt a lone file; missing comma named')

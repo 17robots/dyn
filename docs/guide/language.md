@@ -8,19 +8,20 @@ Dyn well, read [idiomatic Dyn](idiomatic-dyn.md) first.
 A directory is one module; its immediate `.dyn` files share one namespace. Files are
 sorted canonically for deterministic processing. `dyn build DIR` requires `DIR/main.dyn`
 containing `fn main()` (optional `pub`). `fn main() i32` returns the process exit code; plain
-`fn main()` exits 0. `fn main(init: process.Init)` receives an arena that lives for the whole
-program and the arguments: the compiler calls `pub fn start() Init` from the module that declares
-`Init` on entry, so any library may provide its own `Init`. `dyn check` also accepts library
+`fn main()` exits 0. `fn main(program: process.Program)` receives an arena that lives for the whole
+program and the arguments. In general `main` may take one parameter of any struct type `T`; on
+entry the compiler calls the `pub fn start() T` of the module that declares `T`. That is the whole
+rule: std has no special status, so a library (or your own module) can provide a startup type. `dyn check` also accepts library
 modules.
 
 ```dyn
 use "std/io"
 use "std/process"
 
-fn main(init: process.Init) i32 {
+fn main(program: process.Program) i32 {
   name: []const u8 = "world"
-  if #len(init.args) > 1 {
-    name = init.args[1]
+  if #len(program.args) > 1 {
+    name = program.args[1]
   }
   io.println("hello {}", name)
   return 0

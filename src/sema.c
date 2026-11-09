@@ -4296,9 +4296,9 @@ static DynExprId sema_push_expr(DynAstProgram *a, DynAstExpr e) {
   a->expressions[a->expression_count] = e;
   return (DynExprId)a->expression_count++;
 }
-/* fn main(init: Init): the parameter becomes a local set on entry by the
-   start() of the module that declares Init, which must be
-   `pub fn start() Init`. std/process provides one; so may any library. */
+/* fn main(x: T): the parameter becomes a local set on entry by the start()
+   of the module that declares struct T, which must be `pub fn start() T`.
+   std/process provides process.Program; any module may provide its own. */
 static void sema_main_init(DynAstProgram *a, const DynSource *s, unsigned *errors) {
   for (size_t i = 0; i < a->function_count; ++i) {
     DynAstFn *f = &a->functions[i];
@@ -4308,8 +4308,7 @@ static void sema_main_init(DynAstProgram *a, const DynSource *s, unsigned *error
     uint32_t start = UINT32_MAX;
     if (f->param_count == 1 && dyn_type_is_struct(type) && type - DYN_TYPE_STRUCT_BASE < a->struct_count) {
       DynAstStruct *init = &a->structs[type - DYN_TYPE_STRUCT_BASE];
-      if (sema_name_is(s, init->name, "Init"))
-        for (size_t j = 0; j < a->function_count && start == UINT32_MAX; ++j) {
+      for (size_t j = 0; j < a->function_count && start == UINT32_MAX; ++j) {
           DynAstFn *g = &a->functions[j];
           if (g->module_owner == init->module_owner && g->is_public && !g->param_count &&
               g->return_type == type && sema_name_is(s, g->name, "start"))
@@ -4317,7 +4316,7 @@ static void sema_main_init(DynAstProgram *a, const DynSource *s, unsigned *error
         }
     }
     if (start == UINT32_MAX) {
-      error_span(f->name, s, errors, "main's parameter must be an Init struct whose module has `pub fn start() Init`, such as process.Init");
+      error_span(f->name, s, errors, "main's parameter must be a struct T whose module has `pub fn start() T`, such as process.Program");
       continue;
     }
     DynExprId call = sema_push_expr(a, (DynAstExpr){.kind = DYN_EXPR_CALL, .type = type, .integer = start,

@@ -14,9 +14,10 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
-- `fn main() i32` returns the exit code. `fn main(init: process.Init)` receives `init.arena`, an
-  arena for the whole program, and `init.args`; the compiler calls the `pub fn start() Init` of
-  the module declaring `Init`, so libraries may define their own. `dyn run X -- a b` passes
+- `fn main() i32` returns the exit code. `fn main(program: process.Program)` receives
+  `program.arena`, an arena for the whole program, and `program.args`. Generally `main` may take
+  one parameter of any struct `T`; the compiler calls the `pub fn start() T` of the module
+  declaring `T`, so libraries and programs may define their own startup types. `dyn run X -- a b` passes
   arguments and returns the program's exit code.
 - `usize` widens to `u64` and `u32` to `usize` without `#cast`: implicit conversions are those
   lossless on every target, counting `usize`/`isize` as 32 to 64 bits. `u32` to `isize` now needs
