@@ -115,7 +115,7 @@ void dyn_syntax_error_message(const char *text, size_t length, uint32_t offset,
   /* A list item on the next line where the list should close: a comma is
      missing at the end of the line above. */
   bool next_line = false;
-  if (expected && (!strcmp(expected, "}") || !strcmp(expected, ")") || !strcmp(expected, "]")) &&
+  if (expected && !strcmp(expected, "}") &&
       start < length && (isalnum((unsigned char)text[start]) || text[start] == '_' || text[start] == '.' ||
                          text[start] == '"' || text[start] == '-')) {
     size_t back = start;
@@ -123,7 +123,7 @@ void dyn_syntax_error_message(const char *text, size_t length, uint32_t offset,
     next_line = back && text[back - 1] == '\n';
   }
   if (next_line)
-    snprintf(message, capacity, "expected ',' or '%s', found %s: items on separate lines still need a comma between them",
+    snprintf(message, capacity, "expected ',' or '%s', found %s: is a comma missing at the end of the line above?",
              expected, found);
   else if (expected)
     snprintf(message, capacity, "expected '%s', found %s", expected, found);

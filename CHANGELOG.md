@@ -14,10 +14,17 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- `fn main() i32` returns the exit code. `fn main(init: process.Init)` receives `init.arena`, an
+  arena for the whole program, and `init.args`; the compiler calls the `pub fn start() Init` of
+  the module declaring `Init`, so libraries may define their own. `dyn run X -- a b` passes
+  arguments and returns the program's exit code.
+- `usize` widens to `u64` and `u32` to `usize` without `#cast`: implicit conversions are those
+  lossless on every target, counting `usize`/`isize` as 32 to 64 bits. `u32` to `isize` now needs
+  `#cast`, since it loses on 32-bit targets.
 - `dyn run hello.dyn`, `dyn check`, `dyn build` and `dyn fmt` take a single `.dyn` file: a module
   of that one file, which stands for `main.dyn`. Other files beside it are not loaded.
 - A missing comma between items on separate lines says so:
-  "expected ',' or '}', found 'tag': items on separate lines still need a comma between them".
+  "expected ',' or '}', found 'tag': is a comma missing at the end of the line above?".
 - `map.init_text(&m, arena)` and `map.init_integer(&m, arena)` set up text and `u64` keys without
   naming the hash and equality functions.
 - Migration notes for the changes below: `docs/migrations/language-rules-20261108.md`.
@@ -70,7 +77,10 @@ servers so they pick up the new `dyn`.
   then `push`, `push_ref`, `push_all`, `get`, `pop` (a `{value, ok}` result) and `clear`;
   `a.items` is a plain slice.
   Arrays share arenas and double when full.
-- Opt-level 3 on x86-64 computes pairs of adjacent `f32` fields together: `ps[i] = V{x: ..., y: ...}`
+- The vectorized `c[p + j] += v * b[q + j]` loop runs on one index with one branch per vector, as
+  GCC and LLVM lay it out: matmul now runs level with `cc -O2`. Small struct copies split into
+  word moves on AArch64 too, so field stores there reach forwarding and pairing.
+- Opt-level 3 on x86-64 and AArch64 computes pairs of adjacent `f32` fields together: `ps[i] = V{x: ..., y: ...}`
   built from the same operations on each field becomes one 8-byte load, lanewise SSE arithmetic and
   one 8-byte store, and `a.x * b.x + a.y * b.y` over such pairs a lanewise multiply and an in-order
   add. Results match the scalar code bit for bit.

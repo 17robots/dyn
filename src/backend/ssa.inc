@@ -1702,7 +1702,8 @@ static void ssa_return_value(Ssa *s, int32_t value, int32_t second) {
   const DynIrProgram *ir = s->ir;
   DynType type = s->f->return_type;
   if (s->current == UINT32_MAX) return;
-  if (s->f->is_main) { ssa_return(s, ssa_const(s, 0, SC_INT), -1); return; }
+  /* fn main() exits 0; fn main() i32 exits with its result. */
+  if (s->f->is_main && (type != DYN_TYPE_I32 || value < 0)) { ssa_return(s, ssa_const(s, 0, SC_INT), -1); return; }
   if (type == DYN_TYPE_VOID || value_type(ir, type)) {
     if (scalar(ir, type) && value >= 0) value = ssa_rv_word(s, value, type);
     if ((s->ctx->rv32 || s->ctx->t32) && descriptor(type)) {
@@ -4368,11 +4369,11 @@ static bool ssa_copy_known(Ssa *s, uint32_t b, uint32_t k, const int32_t *owner,
 }
 /* Expose small aggregate snapshots to forwarding. Read the complete source
    before writing the private destination, preserving overlap and snapshot
-   semantics even if later code changes the source. x86 permits these unaligned
-   word loads; other targets retain their existing copy lowering. */
+   semantics even if later code changes the source. x86 and AArch64 permit
+   these unaligned word loads; other targets retain their copy lowering. */
 static bool ssa_snapshot_copy(Ssa *s, uint32_t b, uint32_t k) {
   SsaValue original = s->values[s->blocks[b].values.items[k]];
-  if (s->ctx->a64 || s->ctx->rv64 || original.aux <= 0 || original.aux > 32) return false;
+  if (s->ctx->rv64 || original.aux <= 0 || original.aux > 32) return false;
   /* Copying a struct of 32-bit fields in 64-bit words would miss store
      forwarding from the field stores before it. */
   bool x86 = !s->ctx->rv32 && !s->ctx->t32;
@@ -5746,6 +5747,11 @@ static bool ssa_pairs_loads(SsaPairs *p, int32_t x, int32_t y, uint32_t *block, 
   *block = blk; *anchor = high;
   return true;
 }
+/* y reads the four bytes right after x's. */
+static bool ssa_pairs_adjacent(Ssa *s, const SsaValue *x, const SsaValue *y) {
+  SsaPlace a = ssa_place(s, x), b = ssa_place(s, y);
+  return a.base == b.base && a.index == b.index && a.scale == b.scale && b.displacement == a.displacement + 4;
+}
 static int32_t ssa_pairs_pack(SsaPairs *p, int32_t x, int32_t y, unsigned depth, bool *free_pack) {
   Ssa *s = p->s;
   x = ssa_resolve(s, x); y = ssa_resolve(s, y);
@@ -5768,10 +5774,10 @@ static int32_t ssa_pairs_pack(SsaPairs *p, int32_t x, int32_t y, unsigned depth,
     if (vx.block != p->block && k != UINT32_MAX) { blk = vx.block; anchor = k; }
     v = ssa_pairs_add(p, blk, anchor, SO_CONST, SC_F64, -1, -1, (int64_t)(bits | bits << 32), 0);
   } else if (vx.op == SO_LOAD && vy.op == SO_LOAD && vx.aux2 == SSA_MEM(32, 0, 1) && vy.aux2 == vx.aux2 &&
-             vx.a == vy.a && vx.b == vy.b && vx.scale == vy.scale && vy.aux == vx.aux + 4 &&
-             ssa_pairs_loads(p, x, y, &blk, &anchor)) {
-    v = ssa_pairs_add(p, blk, anchor, SO_LOAD, SC_F64, vx.a, vx.b, vx.aux, SSA_MEM(64, 0, 1));
-    if (v >= 0) { s->values[v].scale = vx.scale; s->values[v].effect = true; ++p->gains; }
+             ssa_pairs_adjacent(s, &vx, &vy) && ssa_pairs_loads(p, x, y, &blk, &anchor)) {
+    SsaPlace at = ssa_place(s, &vx);
+    v = ssa_pairs_add(p, blk, anchor, SO_LOAD, SC_F64, at.base, at.index, at.displacement, SSA_MEM(64, 0, 1));
+    if (v >= 0) { s->values[v].scale = (uint8_t)at.scale; s->values[v].effect = true; ++p->gains; }
   } else if (vx.op == vy.op && (vx.op == SO_FADD || vx.op == SO_FSUB || vx.op == SO_FMUL) && depth < 8) {
     bool free_a, free_b;
     int32_t a = ssa_pairs_pack(p, vx.a, vy.a, depth + 1, &free_a);
@@ -5821,8 +5827,10 @@ static bool ssa_pairs(Ssa *s, const uint32_t *order, uint32_t n) {
       if (m == b->values.count) continue;
       int32_t second = (int32_t)b->values.items[m];
       SsaValue *s2 = &s->values[second];
-      if (s2->op != SO_STORE || s2->aux2 != s1->aux2 || s2->a != s1->a || s2->b != s1->b ||
-          s2->scale != s1->scale || s2->aux != s1->aux + 4) continue;
+      if (s2->op != SO_STORE || s2->aux2 != s1->aux2) continue;
+      SsaPlace p1 = ssa_place(s, s1), p2 = ssa_place(s, s2);
+      if (p1.base != p2.base || p1.index != p2.index || p1.scale != p2.scale ||
+          p2.displacement != p1.displacement + 4) continue;
       int32_t x = ssa_resolve(s, s1->c), y = ssa_resolve(s, s2->c);
       p.at = k;
       if (!ssa_pairs_before(&p, y)) continue;
@@ -7382,16 +7390,27 @@ static void ssa_axpy_emit(SsaEmit *e, SsaValue *v) {
   if (wide) x86_reg_op(ctx, 0x66, false, OP2(0x0f,0x14), factor, factor, false);
   else { x86_reg_op(ctx, -1, false, OP2(0x0f,0xc6), factor, factor, false); byte(ctx, 0); }
   CODE(0x4c,0x89,0xd0,0x4c,0x29,0xd8,0x48,0x8d,0x50,0xff,0x48,0x83,0xfa,0x0f); /* rdx = dst - src - 1; cmp 15 */
-  size_t overlap = isa_branch(ctx, CC_B), loop = ctx->text.n;
-  CODE(0x48,0x83,0xf9); byte(ctx, lanes);
-  size_t tail = isa_branch(ctx, CC_B);
-  x86_mem_op(ctx, -1, false, OP2(0x0f,0x10), one, (SsaMemory){X_R11,-1,1,0}, false);
+  size_t overlap = isa_branch(ctx, CC_B);
+  /* Whole vectors with one byte index into both arrays and one bottom-tested
+     branch, as LLVM and GCC lay this loop out; the pointers and the count
+     move past them once, after the loop. */
+  CODE(0x48,0x89,0xc8);                       /* mov rax, rcx */
+  CODE(0x48,0x83,0xe0); byte(ctx, 256 - lanes); /* and rax, -lanes */
+  CODE(0x48,0xc1,0xe0); byte(ctx, wide ? 3 : 2); /* shl rax, log2(bytes) */
+  CODE(0x48,0x85,0xc0);                       /* test rax, rax */
+  size_t tail = isa_branch(ctx, CC_E);
+  CODE(0x31,0xd2);                            /* xor edx, edx */
+  size_t loop = ctx->text.n;
+  x86_mem_op(ctx, -1, false, OP2(0x0f,0x10), one, (SsaMemory){X_R11,X_RDX,1,0}, false);
   x86_reg_op(ctx, packed, false, OP2(0x0f,0x59), one, factor, false);
-  x86_mem_op(ctx, -1, false, OP2(0x0f,0x10), two, (SsaMemory){X_R10,-1,1,0}, false);
+  x86_mem_op(ctx, -1, false, OP2(0x0f,0x10), two, (SsaMemory){X_R10,X_RDX,1,0}, false);
   x86_reg_op(ctx, packed, false, OP2(0x0f,op), two, one, false);
-  x86_mem_op(ctx, -1, false, OP2(0x0f,0x11), two, (SsaMemory){X_R10,-1,1,0}, false);
-  CODE(0x49,0x83,0xc2,0x10,0x49,0x83,0xc3,0x10,0x48,0x83,0xe9); byte(ctx, lanes);
-  isa_patch(ctx, isa_branch(ctx, -1), loop);
+  x86_mem_op(ctx, -1, false, OP2(0x0f,0x11), two, (SsaMemory){X_R10,X_RDX,1,0}, false);
+  CODE(0x48,0x83,0xc2,0x10);                  /* add rdx, 16 */
+  CODE(0x48,0x39,0xc2);                       /* cmp rdx, rax */
+  isa_patch(ctx, isa_branch(ctx, CC_B), loop);
+  CODE(0x49,0x01,0xc2,0x49,0x01,0xc3);        /* add r10, rax; add r11, rax */
+  CODE(0x48,0x83,0xe1); byte(ctx, lanes - 1); /* and rcx, lanes - 1 */
   isa_patch(ctx, overlap, ctx->text.n); isa_patch(ctx, tail, ctx->text.n);
   CODE(0x48,0x85,0xc9);
   size_t done = isa_branch(ctx, CC_E), scalar = ctx->text.n;
@@ -8893,7 +8912,7 @@ static void ssa_prepare(SsaPrepared *p, BackendContext *ctx, const DynSource *so
     p->ready = true;
     goto done;
   }
-  if (ctx->vectorize && !ctx->a64 && !ctx->rv64 && ssa_pairs(s, order, n)) {
+  if (ctx->vectorize && !ctx->rv64 && ssa_pairs(s, order, n)) {
     ssa_resolve_all(s);
     /* Two trees may load the same pair. */
     if (ssa_reuse_loads(s, order, n)) ssa_resolve_all(s);

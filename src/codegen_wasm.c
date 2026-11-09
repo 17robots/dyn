@@ -1341,7 +1341,7 @@ static void statement(WG *g, const DynIrStmt *s) {
     else if (wagg(g, t))
       v = load(g, v, wflat(g, t));
     restore(g);
-    if (g->function && g->function->is_main)
+    if (g->function && g->function->is_main && t != DYN_TYPE_I32)
       icon(g, 0, 0x7f);
     else if (t != DYN_TYPE_VOID &&
              !(wagg(g, t) && wflat(g, t) == DYN_TYPE_VOID))
@@ -1841,7 +1841,7 @@ static int wasm_object_impl(const DynSource *source, const DynIrProgram *ir,
     }
     block(&g, f->body_start, f->body_count);
     restore(&g);
-    if (f->is_main)
+    if (f->is_main && f->return_type == DYN_TYPE_VOID)
       icon(&g, 0, 0x7f);
     else if (f->return_type != DYN_TYPE_VOID)
       op(&g, 0);

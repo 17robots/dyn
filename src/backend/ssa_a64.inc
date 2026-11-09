@@ -493,6 +493,33 @@ static void a64s_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
     a64s_put(e, v, d);
     return;
   }
+  /* Two f32 lanes in the low 64 bits of a vector register. */
+  case SO_VPAIR: {
+    unsigned d = a64s_target(v), ra = a64s_get(e, v->a, X_XMM0 + A_F1), rb = a64s_get(e, v->b, X_XMM0 + A_F2);
+    uint32_t opcode = v->aux == 0x58 ? 0x0e20d400u : v->aux == 0x5c ? 0x0ea0d400u : 0x2e20dc00u; /* fadd/fsub/fmul .2s */
+    a64_word(e->ctx, opcode | a64s_v(rb) << 16 | a64s_v(ra) << 5 | a64s_v(d));
+    a64s_put(e, v, d);
+    return;
+  }
+  case SO_VPACK: {
+    unsigned d = a64s_target(v), ra = a64s_get(e, v->a, X_XMM0 + A_F1), rb = a64s_get(e, v->b, X_XMM0 + A_F2);
+    a64_word(e->ctx, 0x0e803800u | a64s_v(rb) << 16 | a64s_v(ra) << 5 | a64s_v(d)); /* zip1 .2s */
+    a64s_put(e, v, d);
+    return;
+  }
+  case SO_VLANE: {
+    unsigned d = a64s_target(v), ra = a64s_get(e, v->a, X_XMM0 + A_F1);
+    if (v->aux == 0) a64s_mov(e->ctx, d, ra);
+    else a64_word(e->ctx, 0x5e0c0400u | a64s_v(ra) << 5 | a64s_v(d)); /* dup s, v.s[1] */
+    a64s_put(e, v, d);
+    return;
+  }
+  case SO_VHADD: {
+    unsigned d = a64s_target(v), ra = a64s_get(e, v->a, X_XMM0 + A_F1);
+    a64_word(e->ctx, 0x7e30d800u | a64s_v(ra) << 5 | a64s_v(d)); /* faddp s, v.2s */
+    a64s_put(e, v, d);
+    return;
+  }
   case SO_FADD: a64s_float_binary(e, v, 0x1e602800u); return;
   case SO_FSUB: a64s_float_binary(e, v, 0x1e603800u); return;
   case SO_FMUL: a64s_float_binary(e, v, 0x1e600800u); return;

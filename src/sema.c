@@ -548,10 +548,14 @@ static bool lossless(Sema *sema, DynType from, DynType to) {
     return true;
   if (dyn_type_is_distinct(from) || dyn_type_is_distinct(to))
     return false;
+  /* Lossless on every target: usize and isize are 32 to 64 bits wide, so
+     usize -> u64 and u32 -> usize are implicit, u64 -> usize is not. */
   if (integer(sema, from) && integer(sema, to)) {
-    unsigned f = bits(sema, from), t = bits(sema, to);
+    bool from_size = from == DYN_TYPE_USIZE || from == DYN_TYPE_ISIZE;
+    bool to_size = to == DYN_TYPE_USIZE || to == DYN_TYPE_ISIZE;
+    unsigned f = from_size ? 64 : bits(sema, from), t = to_size ? 32 : bits(sema, to);
     if (signed_int(sema, from) == signed_int(sema, to))
-      return t > f;
+      return t >= f && (t > f || from_size || to_size);
     if (!signed_int(sema, from) && signed_int(sema, to))
       return t > f;
     return false;
@@ -560,7 +564,8 @@ static bool lossless(Sema *sema, DynType from, DynType to) {
     return true;
   if (integer(sema, from) && (to == DYN_TYPE_F32 || to == DYN_TYPE_F64)) {
     unsigned precision = to == DYN_TYPE_F32 ? 24 : 53;
-    unsigned needed = bits(sema, from) - (signed_int(sema, from) ? 1u : 0u);
+    unsigned width = from == DYN_TYPE_USIZE || from == DYN_TYPE_ISIZE ? 64 : bits(sema, from);
+    unsigned needed = width - (signed_int(sema, from) ? 1u : 0u);
     return needed <= precision;
   }
   return false;
@@ -4214,6 +4219,77 @@ static bool sema_program(Sema *sema, DynAstProgram *a, const DynSource *s,
   sema->current_function = UINT32_MAX;
   return *errors == 0;
 }
+/* Whether a declared name's text ends in word, after any module prefix. */
+static bool sema_name_is(const DynSource *s, DynSpan span, const char *word) {
+  size_t n = strlen(word), length = span.end_byte - span.start_byte;
+  if (length < n || memcmp(s->text + span.end_byte - n, word, n)) return false;
+  return length == n || s->text[span.end_byte - n - 1] == '_';
+}
+static DynExprId sema_push_expr(DynAstProgram *a, DynAstExpr e) {
+  if (a->expression_count == a->expression_capacity) {
+    size_t c = a->expression_capacity ? a->expression_capacity * 2 : 32;
+    void *p = realloc(a->expressions, c * sizeof(*a->expressions));
+    if (!p) { a->allocation_failed = true; return DYN_NO_EXPR; }
+    a->expressions = p; a->expression_capacity = c;
+  }
+  a->expressions[a->expression_count] = e;
+  return (DynExprId)a->expression_count++;
+}
+/* fn main(init: Init): the parameter becomes a local set on entry by the
+   start() of the module that declares Init, which must be
+   `pub fn start() Init`. std/process provides one; so may any library. */
+static void sema_main_init(DynAstProgram *a, const DynSource *s, unsigned *errors) {
+  for (size_t i = 0; i < a->function_count; ++i) {
+    DynAstFn *f = &a->functions[i];
+    if (!f->is_main || !f->param_count) continue;
+    DynAstParam param = a->params[f->param_start];
+    DynType type = param.type;
+    uint32_t start = UINT32_MAX;
+    if (f->param_count == 1 && dyn_type_is_struct(type) && type - DYN_TYPE_STRUCT_BASE < a->struct_count) {
+      DynAstStruct *init = &a->structs[type - DYN_TYPE_STRUCT_BASE];
+      if (sema_name_is(s, init->name, "Init"))
+        for (size_t j = 0; j < a->function_count && start == UINT32_MAX; ++j) {
+          DynAstFn *g = &a->functions[j];
+          if (g->module_owner == init->module_owner && g->is_public && !g->param_count &&
+              g->return_type == type && sema_name_is(s, g->name, "start"))
+            start = (uint32_t)j;
+        }
+    }
+    if (start == UINT32_MAX) {
+      error_span(f->name, s, errors, "main's parameter must be an Init struct whose module has `pub fn start() Init`, such as process.Init");
+      continue;
+    }
+    DynExprId call = sema_push_expr(a, (DynAstExpr){.kind = DYN_EXPR_CALL, .type = type, .integer = start,
+                                                     .left = DYN_NO_EXPR, .right = DYN_NO_EXPR, .span = f->name});
+    if (call == DYN_NO_EXPR) return;
+    if (a->statement_count == a->statement_capacity) {
+      size_t c = a->statement_capacity ? a->statement_capacity * 2 : 32;
+      void *p = realloc(a->statements, c * sizeof(*a->statements));
+      if (!p) { a->allocation_failed = true; return; }
+      a->statements = p; a->statement_capacity = c;
+    }
+    uint32_t stmt = (uint32_t)a->statement_count;
+    a->statements[a->statement_count++] = (DynAstStmt){.kind = DYN_STMT_LOCAL, .span = f->name, .name = param.name,
+                                                       .declared_type = type, .local_id = param.local_id,
+                                                       .expression = call, .target = DYN_NO_EXPR,
+                                                       .assignment_op = DYN_OP_NONE};
+    size_t need = a->child_count + f->body_count + 1;
+    if (need > a->child_capacity) {
+      size_t c = a->child_capacity ? a->child_capacity : 32;
+      while (c < need) c *= 2;
+      void *p = realloc(a->children, c * sizeof(*a->children));
+      if (!p) { a->allocation_failed = true; return; }
+      a->children = p; a->child_capacity = c;
+    }
+    uint32_t body = (uint32_t)a->child_count;
+    a->children[a->child_count++] = stmt;
+    for (uint32_t k = 0; k < f->body_count; ++k) a->children[a->child_count++] = a->children[f->body_start + k];
+    f->body_start = body;
+    f->body_count += 1;
+    f->param_count = 0;
+    a->locals[param.local_id].used = true;
+  }
+}
 bool dyn_sema_base(DynAstProgram *a, const DynSource *s, unsigned *errors) {
   Sema sema = {.program = a,
                .pointer_bytes = dyn_target_pointer_bytes(dyn_context_target(&s->context)),
@@ -4231,6 +4307,11 @@ bool dyn_sema_base(DynAstProgram *a, const DynSource *s, unsigned *errors) {
     error_span((DynSpan){0}, s, errors, "out of memory indexing symbols");
   }
   bool ok = ready && sema_program(&sema, a, s, errors);
+  if (ok) {
+    unsigned before = *errors;
+    sema_main_init(a, s, errors);
+    ok = *errors == before && !a->allocation_failed;
+  }
   if (ok && s->context.vet) {
     for (size_t i = 0; i < a->statement_count; ++i) {
       const DynAstStmt *st = &a->statements[i];

@@ -9,6 +9,10 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 ERRORS = {
+    'fn main() {\n  big: u64 = 1\n  at: usize = big\n  _ = at\n}\n':
+        'initializer type mismatch',
+    'fn main() {\n  n: u32 = 1\n  at: isize = n\n  _ = at\n}\n':
+        'initializer type mismatch',
     'fn main() {\n  f: u32 = 1\n  if f & 1 == 0 { }\n}\n':
         'mixing a bitwise operator with a comparison needs parentheses',
     'fn main() {\n  a := 1\n  b := 2\n  if a < b > 0 { }\n}\n':

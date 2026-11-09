@@ -330,6 +330,21 @@ pub fn capture(arena: *mem.Arena, path: []const u8, arguments: [][]const u8,
   return result
 }
 
+// What `fn main(init: process.Init)` receives: an arena that lives for the
+// whole program and the arguments, argv[0] first, stored in it.
+pub struct Init { arena: *mem.Arena, args: [][]const u8 }
+
+// Builds main's Init. The compiler calls it on entry to a main that takes an
+// Init; it panics only when the arguments cannot be read.
+pub fn start() Init {
+  arena := mem.arena_create(0)
+  result := arguments(arena)
+  if result.failure.kind != io.Kind.Ok {
+    #panic("process.start: cannot read the program arguments")
+  }
+  return Init{ arena: arena, args: result.value }
+}
+
 // Includes argv[0]. Descriptors and argument bytes belong to arena.
 // Unix preserves native bytes; Windows converts UTF-16 to UTF-8.
 // Failure rewinds arena; success lives until its next reset/rewind/destroy.

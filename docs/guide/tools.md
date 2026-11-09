@@ -7,7 +7,7 @@
 | `dyn check DIR` | Parse and type-check a module; libraries need no `main` |
 | `dyn vet DIR` | Check, then report suspicious but valid code; exits 1 on findings |
 | `dyn build DIR` | Build an executable (`--debug` default, or `--release`) |
-| `dyn run DIR` | Build and run |
+| `dyn run DIR` | Build and run; `dyn run DIR -- a b` passes `a b` to the program and returns its exit code |
 | `dyn fmt DIR` | Format every file in the module: one statement per line, two-space indentation, a space after commas; `--check` only reports |
 | `dyn docs DIR` | Print public declarations and their contracts; `--json` for tools |
 | `dyn query DIR` | Export a semantic program index as JSON |

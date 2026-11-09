@@ -122,5 +122,11 @@ fn main() {
   errno := enums.from_int(Errno, 5)
   check(#cast(i32, Errno.NoMem) == 12 && errno == Errno.Io && enums.from_int(Errno, 3) == Errno.Ok, "enum values")
   check(#len(enums.name(Errno.Intr)) == 4 && #len(enums.name(errno)) == 2, "enum names")
+  // usize widens to u64 and u32 to usize on every target.
+  index: usize = 3
+  widened: u64 = index
+  narrow: u32 = 9
+  at: usize = narrow
+  check(widened + #cast(u64, at) == 12, "size widening")
   io.println("{} {}", "ok", 1)
 }

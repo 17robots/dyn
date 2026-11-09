@@ -103,6 +103,9 @@ typedef struct {
   unsigned jobs;
   uint64_t max_work;
   uint64_t compiler_hash; /* Command-scoped cache identity, inherited by workers. */
+  /* dyn run X -- a b: arguments after -- go to the program. */
+  char **run_arguments;
+  size_t run_argument_count;
   const char *link_inputs[64];
   size_t link_input_count;
   size_t explicit_link_input_count; /* --link inputs; #link discoveries follow them. */

@@ -7,8 +7,25 @@ Dyn well, read [idiomatic Dyn](idiomatic-dyn.md) first.
 
 A directory is one module; its immediate `.dyn` files share one namespace. Files are
 sorted canonically for deterministic processing. `dyn build DIR` requires `DIR/main.dyn`
-containing exactly `fn main()` (optional `pub`, no arguments or return value). `dyn check`
-also accepts library modules.
+containing `fn main()` (optional `pub`). `fn main() i32` returns the process exit code; plain
+`fn main()` exits 0. `fn main(init: process.Init)` receives an arena that lives for the whole
+program and the arguments: the compiler calls `pub fn start() Init` from the module that declares
+`Init` on entry, so any library may provide its own `Init`. `dyn check` also accepts library
+modules.
+
+```dyn
+use "std/io"
+use "std/process"
+
+fn main(init: process.Init) i32 {
+  name: []const u8 = "world"
+  if #len(init.args) > 1 {
+    name = init.args[1]
+  }
+  io.println("hello {}", name)
+  return 0
+}
+```
 
 Compiler resource contract currently limits one source file to 64 MiB, one module to 4096 source
 files, one merged module to 256 MiB, and syntax nesting to 1024 levels. Exceeding a limit is a diagnostic, not an allocation
@@ -326,7 +343,9 @@ saturating arithmetic for code that wants them.
 
 Untyped integer constants are evaluated exactly for the implemented constant-expression operators,
 then adapted only when their value is representable in the expected type. Runtime implicit numeric
-conversion is allowed only when every source-type value is exactly representable. `#cast` permits
+conversion is allowed only when every source-type value is exactly representable on every
+target, counting `usize` and `isize` as anywhere from 32 to 64 bits: `usize` widens to `u64` and
+`u32` to `usize` implicitly, while `u64` to `usize` needs `#cast`. `#cast` permits
 intentional narrowing and uses destination-width two's-complement/modulo representation for integers.
 Float-to-integer conversion truncates toward zero and saturates: an out-of-range value gives the
 type's minimum or maximum, and NaN gives 0, on every target. `#bitcast` preserves bits and requires

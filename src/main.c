@@ -569,8 +569,15 @@ static int execute_command(DynOptions *options, const char *compiler) {
   }
   if (!result && !options->quiet) printf("built %s\n", options->no_link ? object : output);
   if (!result && run) {
-    char *arguments[] = {(char *)output, NULL};
-    result = dyn_host_spawn(arguments);
+    char **arguments = calloc(options->run_argument_count + 2, sizeof(char *));
+    if (!arguments) result = 2;
+    else {
+      fflush(stdout);
+      arguments[0] = (char *)output;
+      for (size_t k = 0; k < options->run_argument_count; ++k) arguments[k + 1] = options->run_arguments[k];
+      result = dyn_host_spawn(arguments);
+      free(arguments);
+    }
     remove(output);
   }
   dyn_sources_free(&sources);

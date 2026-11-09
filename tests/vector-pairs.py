@@ -33,14 +33,14 @@ fn swapped(ps: []V, vs: []V) {
 fn between(ps: []V, vs: []V) {
   for i in 0..#len(ps) {
     a := vs[i].x
-    vs[i].y = a * 2.0
+    vs[i].y = a * 0.5
     ps[i] = V{ x: a + ps[i].x, y: vs[i].y + ps[i].y }
   }
 }
 
 fn shifted(ps: []V) {
   for i in 1..#len(ps) {
-    ps[i] = V{ x: ps[i - 1].x + ps[i].x, y: ps[i - 1].y * ps[i].y }
+    ps[i] = V{ x: ps[i - 1].x * 0.25 + ps[i].x * 0.5, y: ps[i - 1].y * 0.25 + ps[i].y * 0.5 }
   }
 }
 
@@ -60,7 +60,7 @@ fn main() {
   for i in 0..257 {
     f := #cast(f32, i)
     ps[i] = V{ x: f * 0.37 - 41.0, y: 1.0 / (f + 0.5) }
-    vs[i] = V{ x: 0.001 * f * f, y: -f * 1.0e-30 }
+    vs[i] = V{ x: 0.001 * f, y: -f * 1.0e-3 }
   }
   e: f32 = 0.0
   for r in 0..50 {
@@ -87,6 +87,8 @@ with tempfile.TemporaryDirectory(prefix='dyn-pairs-') as directory:
             remarks = result.stderr
         outputs.append(subprocess.run([str(program)], capture_output=True, text=True, timeout=60, check=True).stdout)
     assert outputs[0] == outputs[1] == outputs[2], outputs
+    # A finite total, so the comparison is of real values, not NaN.
+    assert (int(outputs[0].split()[0]) >> 23) & 0xff != 0xff, outputs
     if os.uname().machine == 'x86_64':
         assert re.search(r'paired [1-9]\d* f32 stores and [1-9]\d* dot products', remarks), remarks
 print('PASS vector pairs: lanes match debug bit for bit, dot products paired')

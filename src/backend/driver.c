@@ -2394,7 +2394,7 @@ static bool block_statements_value(BackendContext *ctx, const DynIrProgram *ir, 
         }
       }
       if (!jumped) {
-        if (f->is_main) isa_zero(ctx, R_A);
+        if (f->is_main && f->return_type != DYN_TYPE_I32) isa_zero(ctx, R_A);
         return_value(ctx,f->is_main?DYN_TYPE_I32:f->return_type);
       }
       reachable = false;
