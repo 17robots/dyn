@@ -187,6 +187,7 @@ int dyn_sources_load(const DynContext *context, const char *directory,
 int dyn_sources_load_quiet(const DynContext *context, const char *dir, DynSources *out);
 void dyn_sources_free(DynSources *sources);
 int dyn_source_target_enabled(const DynSource *source);
+void dyn_sources_single_file(const char *directory, const char *name);
 int dyn_sources_merge(const DynSources *sources, const char *module_name, DynSource *merged);
 bool dyn_source_target_gap(const DynSource *source, size_t byte, char *message, size_t capacity);
 /* Whether the module in directory has platform files but none for the target. */

@@ -12,6 +12,10 @@
 | `dyn docs DIR` | Print public declarations and their contracts; `--json` for tools |
 | `dyn query DIR` | Export a semantic program index as JSON |
 | `dyn lsp` | Run the language server on stdio |
+
+`check`, `build`, `run` and `fmt` also take a single file: `dyn run hello.dyn` builds a
+module of that one file, which needs `fn main()` like a `main.dyn`. `dyn build hello.dyn`
+writes `./hello`.
 | `dyn cache` | Inspect or clean the shared compilation cache |
 
 `dyn help` lists every option. Useful ones: `--target` to cross-compile,

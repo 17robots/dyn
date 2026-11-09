@@ -213,14 +213,14 @@ use "std/mem"
 fn main() {
   arena := mem.arena_create(0)
   ages: map.Map([]const u8, i32)
-  map.init(&ages, arena, map.text_hash, map.text_equal)
+  map.init_text(&ages, arena)
   map.insert(&ages, "ada", 36)
   age := map.get(&ages, "ada")
   if age != nil {
     age.* += 1
   }
   visits: map.Map([]const u8, u64)
-  map.init(&visits, arena, map.text_hash, map.text_equal)
+  map.init_text(&visits, arena)
   map.upsert(&visits, "ada", 0).* += 1
   it := map.walk(&visits)
   for map.next(&it) {
@@ -229,9 +229,9 @@ fn main() {
 }
 ```
 
-`init` takes the arena and the key's hash and equality functions. Std has `text_hash`
-and `text_equal` for text, and `integer_hash` and `integer_equal` for `u64`. For other
-keys, write a pair: `fn(seed: u64, key: K) u64` and `fn(a: K, b: K) bool`.
+`map.init_text(&m, arena)` sets up text keys and `map.init_integer(&m, arena)` sets up
+`u64` keys; cast other integers to `u64`. For any other key, `map.init(&m, arena, hash, equal)`
+takes a pair: `fn(seed: u64, key: K) u64` and `fn(a: K, b: K) bool`.
 
 `get` returns a pointer or nil, and that pointer goes stale at the next `insert`. Text
 keys are borrowed. For keys an attacker chooses, use `map.init_seeded` with a seed from

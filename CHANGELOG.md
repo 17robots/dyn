@@ -14,6 +14,12 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- `dyn run hello.dyn`, `dyn check`, `dyn build` and `dyn fmt` take a single `.dyn` file: a module
+  of that one file, which stands for `main.dyn`. Other files beside it are not loaded.
+- A missing comma between items on separate lines says so:
+  "expected ',' or '}', found 'tag': items on separate lines still need a comma between them".
+- `map.init_text(&m, arena)` and `map.init_integer(&m, arena)` set up text and `u64` keys without
+  naming the hash and equality functions.
 - Migration notes for the changes below: `docs/migrations/language-rules-20261108.md`.
 - Breaking: type patterns drop `is`. Write `i64 n => { ... }`, `Point p => { ... }` and
   `[]const u8 s => { ... }` in a type case; a name that resolves to a type is a type pattern.

@@ -244,6 +244,35 @@ static int emit_ir_dump(const DynSources *sources, const char *main_path,
   dyn_source_free(&merged);
   return result;
 }
+/* A lone source file is a module of one file: its directory, with only
+   that file loaded and standing for main.dyn. */
+static char single_file_directory[4096], single_file_output[4096];
+static const char *single_file_name;
+static bool single_file_module(DynOptions *options) {
+  size_t length = strlen(options->input);
+  if (length < 5 || strcmp(options->input + length - 4, ".dyn")) return false;
+  FILE *f = fopen(options->input, "rb");
+  if (!f) return false;
+  fclose(f);
+  const char *slash = strrchr(options->input, '/');
+#ifdef _WIN32
+  const char *back = strrchr(options->input, '\\');
+  if (back && (!slash || back > slash)) slash = back;
+#endif
+  const char *name = slash ? slash + 1 : options->input;
+  if (slash) snprintf(single_file_directory, sizeof(single_file_directory), "%.*s", (int)(slash - options->input), options->input);
+  else snprintf(single_file_directory, sizeof(single_file_directory), ".");
+  if (!single_file_directory[0]) snprintf(single_file_directory, sizeof(single_file_directory), "/");
+  /* `dyn build hello.dyn` writes ./hello, as for a directory named hello. */
+  if (!options->output) {
+    snprintf(single_file_output, sizeof(single_file_output), "%.*s", (int)(strlen(name) - 4), name);
+    options->output = single_file_output;
+  }
+  single_file_name = name;
+  dyn_sources_single_file(single_file_directory, name);
+  options->input = single_file_directory;
+  return true;
+}
 static int execute_command(DynOptions *options, const char *compiler) {
   DynWork work = {.remaining = options->max_work};
   unsigned vet_findings = 0;
@@ -263,8 +292,8 @@ static int execute_command(DynOptions *options, const char *compiler) {
   }
   if (is_command(options, "cache")) return dyn_cache_command(options->input);
   if (is_command(options, "fmt") || is_command(options, "docs")) {
-    if (!options->input || !dyn_path_is_directory(options->input)) {
-      fprintf(stderr, "error: %s requires a module directory\n", options->command);
+    if (!options->input || (!dyn_path_is_directory(options->input) && !single_file_module(options))) {
+      fprintf(stderr, "error: %s requires a module directory or a .dyn file\n", options->command);
       return 2;
     }
     return is_command(options, "fmt") ? dyn_format_directory(options->input, options->format_check) : dyn_docs_directory(options->input, options->docs_json);
@@ -290,8 +319,8 @@ static int execute_command(DynOptions *options, const char *compiler) {
     fprintf(stderr, "error: --shared --no-link requires --emit-object\n");
     return 2;
   }
-  if (!dyn_path_is_directory(options->input)) {
-    fprintf(stderr, "error: input must be a module directory: '%s'\n", options->input);
+  if (!dyn_path_is_directory(options->input) && !single_file_module(options)) {
+    fprintf(stderr, "error: input must be a module directory or a .dyn file: '%s'\n", options->input);
     return 2;
   }
   if (!context.target) {
@@ -383,7 +412,7 @@ static int execute_command(DynOptions *options, const char *compiler) {
       }
   }
   if (options->timings) fprintf(stderr, "timing load %.3f ms\n", elapsed_ms(phase));
-  char *main_path = dyn_path_join(options->input, "main.dyn");
+  char *main_path = dyn_path_join(options->input, single_file_name ? single_file_name : "main.dyn");
   if (options->emit_ir) {
     result = main_path ? emit_ir_dump(&sources, main_path, options) : 2;
     dyn_sources_free(&sources);
