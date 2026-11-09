@@ -9,6 +9,9 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 ERRORS = {
+    # A branch on a constant is still type-checked: folding is not `when`.
+    'fn count($K: type, key: K) usize {\n  if #typeof(K).kind == TypeKind.Slice {\n    return #len(key)\n  }\n  return 1\n}\nfn main() {\n  _ = count(u32, 4)\n}\n':
+        '#len requires array or slice',
     'use "std/container/map"\nuse "std/mem"\nstruct P { x: i32 }\nfn main() {\n  m: map.Map(P, i32)\n  map.init(&m, mem.arena_create(0))\n}\n':
         'map.init: keys must be integers, enums, bools, pointers or text; use map.init_with for other keys',
     'fn only($K: type, key: K) K {\n  #assert(#typeof(K).kind == TypeKind.Integer, "only integers")\n  return key\n}\nfn main() {\n  _ = only(bool, true)\n}\n':

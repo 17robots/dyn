@@ -131,8 +131,10 @@ fn bits($K: type, key: K) u64 {
 }
 ```
 
-An `if` whose condition is a compile-time constant compiles to the branch it takes; both branches
-must still type-check for the instance.
+When an `#assert` in a body fails, that function's other errors are not reported: they would only
+restate that its type arguments are wrong. An `if` whose condition is a compile-time constant
+compiles to the branch it takes; both branches must still type-check for the instance, so this
+removes dead code but never chooses code by type.
 
 A struct may take type parameters, and each set of arguments makes one concrete struct:
 

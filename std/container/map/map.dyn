@@ -64,6 +64,14 @@ fn default_hash($K: type, seed: u64, key: K) u64 {
   if #typeof(K).kind == TypeKind.Slice {
     return text_hash(seed, #cast(*const []const u8, &key).*)
   }
+  // A bool hashes by its truth as the language reads it, not its byte.
+  if #typeof(K).kind == TypeKind.Bool {
+    truth: u64 = 0
+    if #cast(*const bool, &key).* {
+      truth = 1
+    }
+    return integer_hash(seed, truth)
+  }
   if #sizeof(K) == 8 {
     return integer_hash(seed, #cast(*const u64, &key).*)
   }
@@ -79,6 +87,9 @@ fn default_hash($K: type, seed: u64, key: K) u64 {
 fn default_equal($K: type, left: K, right: K) bool {
   if #typeof(K).kind == TypeKind.Slice {
     return text_equal(#cast(*const []const u8, &left).*, #cast(*const []const u8, &right).*)
+  }
+  if #typeof(K).kind == TypeKind.Bool {
+    return #cast(*const bool, &left).* == #cast(*const bool, &right).*
   }
   if #sizeof(K) == 8 {
     return #cast(*const u64, &left).* == #cast(*const u64, &right).*

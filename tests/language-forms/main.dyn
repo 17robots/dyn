@@ -149,7 +149,29 @@ fn main() {
   same: []const u8 = spelled
   check(map.get(&names, same) != nil && #typeof([]const u8).kind == TypeKind.Slice, "text keys by content")
   check(map.get(&by_errno, Errno.Io).* == 5 && map.get(&switches, 7).* && map.get(&switches, 8) == nil, "map keys")
+  // #typeof fields are constants, and an if on one takes its branch.
+  check(classify(u8) == 1 && classify(i64) == 8 && classify([]const u8) == 100 && classify(Errno) == 200, "constant branches")
+  check(#typeof([]u8).element_id == #typeof(u8).id && #typeof(u16).size == 2, "reflection constants")
+  // Bool keys compare by truth as the language reads it, not by byte.
+  truths: map.Map(bool, u32)
+  map.init(&truths, arena2)
+  map.insert(&truths, true, 1)
+  stored: u8 = 3
+  odd_true := #cast(*const bool, &stored).*
+  check(odd_true && map.get(&truths, odd_true) != nil && map.get(&truths, false) == nil, "bool keys")
   io.println("{} {}", "ok", 1)
+}
+
+fn classify($T: type) usize {
+  if #typeof(T).kind == TypeKind.Slice {
+    return 100
+  } else if #typeof(T).kind == TypeKind.Enum {
+    return 200
+  }
+  if #sizeof(T) == 8 {
+    return 8
+  }
+  return #sizeof(T)
 }
 
 fn doubled($T: type, value: T) T {

@@ -39,9 +39,13 @@ static bool target_gap_reported(DynSpan span, const DynSource *s) {
 }
 static int assert_value(DynAstProgram *a, DynExprId id, unsigned depth);
 static DynExprId sema_push_expr(DynAstProgram *a, DynAstExpr e);
+/* Set once a body's #assert fails: the function's other errors would only
+   restate that its type arguments are wrong, so they go unreported. */
+static bool sema_assert_failed;
 static void error_span(DynSpan span, const DynSource *s, unsigned *e,
                        const char *m) {
   ++*e;
+  if (sema_assert_failed) return;
   if (target_gap_reported(span, s)) return;
   dyn_diagnostic_source("error", s, span.start_byte, span.end_byte, m);
 }
@@ -3286,6 +3290,7 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
         snprintf(message, sizeof(message), "#assert failed%s%.*s", quoted ? ": " : "",
                  quoted ? (int)(m.end_byte - m.start_byte - 2) : 0, quoted ? s->text + m.start_byte + 1 : "");
         error_span(st->span, s, errors, message);
+        sema_assert_failed = true;
       }
     }
     st->kind = DYN_STMT_EXPR;
@@ -4220,6 +4225,7 @@ static bool sema_program(Sema *sema, DynAstProgram *a, const DynSource *s,
       fn = &a->functions[f];
     }
     sema->current_function = f;
+    sema_assert_failed = false;
     sema->block_depth = 0;
     sema->current_return_type = fn->return_type;
     fn->local_start = (uint32_t)a->local_count;
@@ -4270,6 +4276,7 @@ static bool sema_program(Sema *sema, DynAstProgram *a, const DynSource *s,
     if (fn->is_instance && *errors != errors_before)
       instance_trace(a, s, fn->instance);
   }
+  sema_assert_failed = false;
   sema->current_function = UINT32_MAX;
   return *errors == 0;
 }
