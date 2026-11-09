@@ -15,8 +15,8 @@ use "std/mem"
 fn show(label: []const u8, value: u64) {
   storage: [64 + mem.ArenaBufferOverhead]u8 = []
   arena := mem.arena_from_buffer(storage[..])
-  _ = io.println(io.stdout(), label)
-  _ = io.println(io.stdout(), fmt.u64_decimal(arena, value))
+  io.println(label)
+  io.println(fmt.u64_decimal(arena, value))
 }
 fn churn(seed: u64) u64 {
   // Many live values push the allocator onto callee-saved registers.

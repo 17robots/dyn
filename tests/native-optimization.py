@@ -183,9 +183,9 @@ WebAssembly.instantiate(fs.readFileSync(process.argv[1]),{}).then(({instance})=>
 }).catch(e=>{console.error(e);process.exit(1)});''', wasm)
 
     (module/'main.dyn').write_text('''use "std/io" io
-fn fail() { defer { _ = io.println(io.stdout(), "inner") }
+fn fail() { defer { io.println("inner") }
 #panic("inline panic") }
-fn main() { defer { _ = io.println(io.stdout(), "outer") }
+fn main() { defer { io.println("outer") }
 fail() }
 ''')
     for level in (2, 3):

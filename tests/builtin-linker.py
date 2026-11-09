@@ -62,7 +62,7 @@ fn main() {
     state = mix(state + #cast(u64, i)) % 1000003
     values[i] = #cast(u8, state)
   }
-  _ = io.println(io.stdout(), "{}", state)
+  io.println("{}", state)
   mem.arena_release(arena)
 }
 '''

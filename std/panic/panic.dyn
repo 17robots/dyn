@@ -1,0 +1,26 @@
+// A process panic handler. It runs once, after cleanups, right before a panic
+// that nothing handles reports its message and exits. It cannot recover the
+// program: use it to log, write a crash report or flush files. A panic inside
+// the handler reports and exits without running it again.
+
+handler: fn([]const u8)
+
+extern fn set_hook "dyn_set_panic_hook"(hook: fn(*const u8, u64))
+
+fn run(message: *const u8, length: u64) {
+  callback := handler
+  if callback == nil {
+    return
+  }
+  if message == nil {
+    callback("")
+    return
+  }
+  callback(#slice(message, #cast(usize, length)))
+}
+
+// Installs the handler, replacing any earlier one.
+pub fn set_handler(callback: fn(message: []const u8)) {
+  handler = callback
+  set_hook(run)
+}

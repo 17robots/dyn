@@ -71,7 +71,7 @@ pub fn deadfloat() { _=cfloat(1.0) }
 pub fn deadagg() { _=cagg(Pair{a:1,b:2}) }
 fn main() { cb=cwide
 status:=oracle()
-if status!=0 { _=io.println(io.stdout(),"oracle {}",status)
+if status!=0 { io.println("oracle {}",status)
 #panic("oracle") }
 _=io.write_all(io.stdout(),"CALLS OK\n") }
 '''

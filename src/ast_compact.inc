@@ -482,7 +482,8 @@ static DynExprId compact_expr(CompactNode node, const DynSource *s, DynAstProgra
     e.right = DYN_NO_EXPR;
     e.integer = compact_expr(compact_child(node, 1), s, a, errors);
   } else if (!(k != EXP_LEN)) {
-    e.kind = DYN_EXPR_LEN;
+    e.kind = e.span.end_byte - e.span.start_byte > 5 &&
+             !memcmp(s->text + e.span.start_byte, "#init", 5) ? DYN_EXPR_INIT : DYN_EXPR_LEN;
     e.left = compact_expr(compact_child(node, 0), s, a, errors);
   } else if (!(k != EXP_SIZE) || !(k != EXP_ALIGN) ||
              !(k != EXP_TYPEOF)) {
@@ -898,7 +899,8 @@ static uint32_t compact_stmt(CompactNode n, const DynSource *s, DynAstProgram *a
   } else if (!(k != EXP_SYSCALL)) {
     st.kind = DYN_STMT_EXPR;
     st.expression = compact_expr(n, s, a, errors);
-  } else if (!(k != EXP_CALL)) {
+  } else if (!(k != EXP_CALL) || k == EXP_LEN) {
+    /* A call, or #init(pointer), which the parser admits as a statement. */
     st.kind = DYN_STMT_EXPR;
     st.expression = compact_expr(n, s, a, errors);
   } else if (!(k != SRC_ALIAS)) {

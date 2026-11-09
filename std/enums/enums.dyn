@@ -1,14 +1,30 @@
-// Dense enum helpers. Variants are 0, 1, 2 in order, so a tag is an index.
+// Enum helpers. Tags count 0, 1, 2 in order unless a variant sets one
+// (Ok = 0, NoEnt = 2); reflection reports each variant's tag. Dense enums
+// index directly; enums with set values search their variants.
 
 pub fn count($E: type) usize {
   info := #typeof(E)
   return #len(info.variants)
 }
 
-// The variant with this tag, or the first variant when value is out of range.
+fn index_of($E: type, tag: u64) usize {
+  info := #typeof(E)
+  variants := info.variants
+  total := #len(variants)
+  if variants[total - 1].value == #cast(u64, total - 1) {
+    if tag < #cast(u64, total) { return #cast(usize, tag) }
+    return total
+  }
+  for i in 0..total {
+    if variants[i].value == tag { return i }
+  }
+  return total
+}
+
+// The variant with this tag, or the first variant when no variant has it.
 // Use this to bring external numbers into an enum.
 pub fn from_int($E: type, value: u64) E {
-  if value >= #cast(u64, count(E)) {
+  if index_of(E, value) == count(E) {
     return #cast(E, 0)
   }
   return #cast(E, value)
@@ -16,11 +32,10 @@ pub fn from_int($E: type, value: u64) E {
 
 // The variant's source name, or "" for a tag that is not a variant.
 pub fn name(value: $E) []const u8 {
-  index := #cast(u64, value)
+  index := index_of(E, #cast(u64, value))
   info := #typeof(E)
-  variants := info.variants
-  if index >= #cast(u64, #len(variants)) {
+  if index == #len(info.variants) {
     return ""
   }
-  return variants[index].name
+  return info.variants[index].name
 }

@@ -36,5 +36,5 @@ fn main() {
   b := find(slots[0..4], 7, false, &g)
   c := find(slots[0..4], 9, false, &g)
   d := find(slots[0..4], 9, true, &g)
-  _ = io.println(io.stdout(), "{} {} {} {} {}", a != nil, b != nil, c == nil, d != nil, slots[1].tid)
+  io.println("{} {} {} {} {}", a != nil, b != nil, c == nil, d != nil, slots[1].tid)
 }

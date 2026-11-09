@@ -28,11 +28,11 @@ fn main() {
   result := codec.decode(arena, source.value)
   if result.failure.kind != parse.Kind.Ok {
     if mem.arena_mark(arena) != before { #panic("image rollback") }
-    _ = io.println(io.stdout(), "ERR {}", #cast(u32, result.failure.kind))
+    io.println("ERR {}", #cast(u32, result.failure.kind))
     return
   }
   if fs.write_all(args.value[3], result.value.pixels).failure.kind != io.Kind.Ok { #panic("image output") }
-  _ = io.println(io.stdout(), "{} {}", result.value.info.width, result.value.info.height)
+  io.println("{} {}", result.value.info.width, result.value.info.height)
 }
 '''
 ENCODER='''if strings.starts_with(args.value[1], "encode") {

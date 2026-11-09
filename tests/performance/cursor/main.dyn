@@ -26,5 +26,5 @@ fn main() {
     if cursor.at != #len(bytes) { #panic("cursor position") }
   }
   if total != expected * 100 { #panic("cursor checksum") }
-  _ = io.println(io.stdout(), "{}", total)
+  io.println("{}", total)
 }

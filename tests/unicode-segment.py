@@ -62,16 +62,16 @@ fn main() {
     if kind == 0 {
       found := text.word_breaks(arena, sample)
       for offset in found.value {
-        _ = io.print(io.stdout(), "{} ", offset)
+        io.print("{} ", offset)
       }
     }
     else {
       found := text.line_breaks(arena, sample)
       for entry in found.value {
-        _ = io.print(io.stdout(), "{} ", entry.offset)
+        io.print("{} ", entry.offset)
       }
     }
-    _ = io.println(io.stdout(), "")
+    io.println("")
     mem.arena_rewind(arena, mark)
   }
 }

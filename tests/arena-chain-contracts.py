@@ -165,7 +165,7 @@ fn main() {
   chain()
   failures()
   buffers()
-  _ = io.println(io.stdout(), "ARENA CHAIN PASS")
+  io.println("ARENA CHAIN PASS")
 }
 '''
 

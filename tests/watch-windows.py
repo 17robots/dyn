@@ -47,7 +47,7 @@ fn main() {
   // Closing all remaining idle watches must cancel pending native requests.
   watch.close(&capacity.value)
   watch.close(&capacity.value)
-  _ = io.println(io.stdout(),"READY")
+  io.println("READY")
   seen_first: u32 = 0
   seen_second: u32 = 0
   for attempt in 0..1000 {
@@ -78,7 +78,7 @@ fn main() {
   reopened := watch.open(scratch[..])
   require(reopened.failure.kind == io.Kind.Ok && watch.add(&reopened.value,"one",watch.Changes).failure.kind == io.Kind.Ok)
   watch.close(&reopened.value)
-  _ = io.println(io.stdout(),"DONE")
+  io.println("DONE")
 }
 '''
 

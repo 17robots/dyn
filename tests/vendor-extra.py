@@ -92,7 +92,7 @@ fn main() {
   if image.resize(short_arena, source[..], 2, 2, destination[..], 4, 4, 4, false) || mem.arena_mark(short_arena) != mem.arena_start(short_arena) || atlas.pack(short_arena, 16, 16, rectangles[..]).code != -1 || mem.arena_mark(short_arena) != mem.arena_start(short_arena) {
     #panic("short scratch arena")
   }
-  _ = io.println(io.stdout(), "stb atlas and resize passed")
+  io.println("stb atlas and resize passed")
 }
 ''',
     'microui-sdl3': r'''use "vendor/microui" ui
@@ -180,7 +180,7 @@ fn main() {
   if smoke && !clicked {
     #panic("UI mouse click not delivered")
   }
-  _ = io.println(io.stdout(), "microui SDL rendering passed")
+  io.println("microui SDL rendering passed")
 }
 ''',
     'audio-playback': r'''use "vendor/miniaudio" audio
@@ -246,7 +246,7 @@ fn main() {
   if audio.sound_start(sound.value) == 0 {
     #panic("closed sound accepted")
   }
-  _ = io.println(io.stdout(), "audio playback completion passed")
+  io.println("audio playback completion passed")
 }
 ''',
     'lz4': r'''use "vendor/lz4"
@@ -281,7 +281,7 @@ fn main() {
   if lz4.compress_bound(lz4.MaxInput + 1) != 0 {
     #panic("oversized input accepted")
   }
-  _ = io.println(io.stdout(), "LZ4 bounded roundtrip passed")
+  io.println("LZ4 bounded roundtrip passed")
 }
 ''',
     'cgltf': r'''use "vendor/cgltf"
@@ -368,7 +368,7 @@ fn main() {
       #panic("GLB accessor")
     }
   }
-  _ = io.println(io.stdout(), "cgltf embedded accessor passed")
+  io.println("cgltf embedded accessor passed")
 }
 ''',
     'box2d': r'''use "vendor/box2d" physics
@@ -443,7 +443,7 @@ fn main() {
   if !physics.body_destroy(falling) || physics.position(falling).ok || physics.body_destroy(falling) {
     #panic("stale body ID")
   }
-  _ = io.println(io.stdout(), "Box2D falling box passed")
+  io.println("Box2D falling box passed")
 }
 ''',
     'microui': r'''use "vendor/microui" ui
@@ -499,7 +499,7 @@ fn main() {
     }
     frame += 1
   }
-  _ = io.println(io.stdout(), "microui arena draw commands passed")
+  io.println("microui arena draw commands passed")
 }
 ''',
     'enet': r'''use "vendor/enet"
@@ -607,7 +607,7 @@ fn main() {
   if !server_closed || !client_closed {
     #panic("disconnect deadline")
   }
-  _ = io.println(io.stdout(), "ENet reliable loopback passed")
+  io.println("ENet reliable loopback passed")
 }
 ''',
     'miniaudio': r'''use "vendor/miniaudio" audio
@@ -694,7 +694,7 @@ fn main() {
   if !heard {
     #panic("engine produced no audio")
   }
-  _ = io.println(io.stdout(), "miniaudio decode and offline mixing passed")
+  io.println("miniaudio decode and offline mixing passed")
 }
 ''',
     'sdl3-mixer': r'''use "vendor/sdl3/mixer"
@@ -778,7 +778,7 @@ fn main() {
     #panic("mixer playback device")
   }
   defer mixer.destroy_owned(device)
-  _ = io.println(io.stdout(), "SDL_mixer offline playback passed")
+  io.println("SDL_mixer offline playback passed")
 }
 ''',
 }

@@ -62,7 +62,7 @@ use "std/bytes" bytes
 const data: []const u8 = #load("cases.txt")
 
 fn show(arena: *mem.Arena, value: big.Int) {
-  _ = io.print(io.stdout(), "{} ", big.format(arena, value, 10))
+  io.print("{} ", big.format(arena, value, 10))
 }
 
 fn main() {
@@ -88,23 +88,23 @@ fn main() {
       show(arena, divided.remainder)
     }
     else {
-      _ = io.print(io.stdout(), "none none ")
+      io.print("none none ")
     }
     shift_bits := big.divide(arena, big.absolute(b), big.from_u64(arena, 300)).remainder
     shift := big.to_u64(shift_bits).value
     show(arena, big.shift_left(arena, a, #cast(usize, shift)))
     show(arena, big.shift_right(arena, a, #cast(usize, shift)))
-    _ = io.print(io.stdout(), "{} {} ", big.compare(a, b), big.bit_length(a))
-    _ = io.print(io.stdout(), "{} {} ", big.format(arena, a, 16), big.format(arena, a, 2))
+    io.print("{} {} ", big.compare(a, b), big.bit_length(a))
+    io.print("{} {} ", big.format(arena, a, 16), big.format(arena, a, 2))
     show(arena, big.from_bytes(arena, big.to_bytes(arena, a)))
     show(arena, big.gcd(arena, a, b))
     exponent := big.divide(arena, big.absolute(a), big.from_u64(arena, 4096)).remainder
     powered := big.power_mod(arena, a, exponent, big.absolute(b))
     if powered.valid {
-      _ = io.println(io.stdout(), "{}", big.format(arena, powered.value, 10))
+      io.println("{}", big.format(arena, powered.value, 10))
     }
     else {
-      _ = io.println(io.stdout(), "none")
+      io.println("none")
     }
     mem.arena_rewind(arena, mark)
   }

@@ -92,7 +92,7 @@ fn main() {
   if !ts.node_has_error(ts.root(malformed.tree)) {
     #panic("syntax error missing")
   }
-  _ = io.println(io.stdout(), "Tree-sitter: parsed, traversed, copied and incrementally reparsed C")
+  io.println("Tree-sitter: parsed, traversed, copied and incrementally reparsed C")
 }
 ''',
     'regex-example': r'''use "vendor/pcre2" regex
@@ -148,7 +148,7 @@ fn main() {
   if !empty_match.ok || !empty_match.matched || regex.capture(unicode_data, 1).set {
     #panic("unset capture")
   }
-  _ = io.println(io.stdout(), "PCRE2: captured ada; no-match and invalid pattern handled")
+  io.println("PCRE2: captured ada; no-match and invalid pattern handled")
 }
 ''',
     'lua-example': r'''use "vendor/lua"
@@ -196,7 +196,7 @@ fn main() {
     #panic("Lua result validation")
   }
   _ = lua.pop(state, 1)
-  _ = io.println(io.stdout(), "Lua: 42; protected syntax/runtime failures; balanced stack")
+  io.println("Lua: 42; protected syntax/runtime failures; balanced stack")
 }
 ''',
     'archive-example': r'''use "std/parse" parse
@@ -212,7 +212,7 @@ fn main() {
   }
   args := linux.process_arguments(storage)
   if #len(args) != 2 {
-    _ = io.println(io.stdout(), "usage: archive-example ARCHIVE")
+    io.println("usage: archive-example ARCHIVE")
     return
   }
   loaded := fs.read_all(storage, args[1], 8 * 1024 * 1024)
@@ -239,7 +239,7 @@ fn main() {
     if name.failure.kind != parse.Kind.Ok {
       #panic("archive name")
     }
-    _ = io.println(io.stdout(), "{}", name.value)
+    io.println("{}", name.value)
     for true {
       read := archive.read(opened.reader, buffer[..])
       if !read.ok {
@@ -262,7 +262,7 @@ fn main() {
   arena := mem.arena_from_buffer(storage[..])
   args := linux.process_arguments(arena)
   if #len(args) != 2 {
-    _ = io.println(io.stdout(), "usage: curl-example URL")
+    io.println("usage: curl-example URL")
     return
   }
   if curl.init() != 0 {
@@ -275,7 +275,7 @@ fn main() {
   if !result.ok {
     #panic("HTTP transfer failed or buffer full")
   }
-  _ = io.println(io.stdout(), "HTTP {}", result.http_status)
+  io.println("HTTP {}", result.http_status)
   _ = io.write(io.stdout(), response[..result.written])
 }
 ''',
@@ -292,7 +292,7 @@ fn main() {
   }
   args := linux.process_arguments(storage)
   if #len(args) != 2 {
-    _ = io.println(io.stdout(), "usage: sdl3-image-example IMAGE")
+    io.println("usage: sdl3-image-example IMAGE")
     return
   }
   path: [4096]u8 = []
@@ -313,7 +313,7 @@ fn main() {
   if image.decode_owned("not an image").ok {
     #panic("malformed image accepted")
   }
-  _ = io.println(io.stdout(), "SDL_image: loaded file and decoded caller buffer")
+  io.println("SDL_image: loaded file and decoded caller buffer")
 }
 ''',
     'sdl3-font-example': r'''use "vendor/sdl3"
@@ -326,7 +326,7 @@ fn main() {
   arena := mem.arena_from_buffer(storage[..])
   args := linux.process_arguments(arena)
   if #len(args) != 2 {
-    _ = io.println(io.stdout(), "usage: sdl3-font-example FONT.ttf")
+    io.println("usage: sdl3-font-example FONT.ttf")
     return
   }
   if !ttf.init() {
@@ -355,7 +355,7 @@ fn main() {
   if ttf.open_owned(args[1], path[..], 0.0).ok {
     #panic("font size validation")
   }
-  _ = io.println(io.stdout(), "SDL_ttf: measured and rendered text")
+  io.println("SDL_ttf: measured and rendered text")
 }
 ''',
     'opengl-example': r'''use "vendor/sdl3"
@@ -382,7 +382,7 @@ fn shader(api: *gl.Api, kind: u32, source: []const u8) u32 {
     written: i32 = 0
     api.get_shader_log(value, 2048, &written, &log[0])
     if written > 0 && written <= 2048 {
-      _ = io.println(io.stderr(), "{}", log[..#cast(usize, written)])
+      io.eprintln("{}", log[..#cast(usize, written)])
     }
     api.delete_shader(value)
     #panic("compile shader")
@@ -518,7 +518,7 @@ fn main() {
   }
   loaded := gl.load(sdl3.gl_proc)
   if !loaded.ok {
-    _ = io.println(io.stderr(), "missing {}", loaded.missing)
+    io.eprintln("missing {}", loaded.missing)
     #panic("GL load")
   }
   absent_texture := gl.load(missing_texture_proc)
@@ -626,7 +626,7 @@ fn main() {
       running = false
     }
   }
-  _ = io.println(io.stdout(), "OpenGL: triangle rendered; resources released on exit")
+  io.println("OpenGL: triangle rendered; resources released on exit")
 }
 ''',
     'curl-contract': r'''use "vendor/curl"

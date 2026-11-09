@@ -131,7 +131,7 @@ chain_source = [
  '}', '}', '}'
 ]
 
-lines[-1:-1] = [edge_source, *key_edges, *chain_source, '_=io.println(io.stdout(),"JSON READ PASS")']
+lines[-1:-1] = [edge_source, *key_edges, *chain_source, 'io.println("JSON READ PASS")']
 (P/'main.dyn').write_text('\n'.join(lines)+'\n')
 for name,flags in [('debug',[]),('release',['--release'])]:
  binary=W/('proof-'+name);p=subprocess.run([str(DYN),'build',str(P),'--no-cache','--quiet','--output',str(binary),*flags],env=env,capture_output=True,timeout=120);assert p.returncode==0,p.stderr.decode();p=subprocess.run([str(binary)],capture_output=True,timeout=30);assert p.returncode==0 and p.stdout==b'JSON READ PASS\n',(name,p.returncode,p.stdout,p.stderr);print('PASS JSON read',name,len(values),'independent trees,',len(invalid),'invalids, numeric/iterator/ownership/alignment/growth/depth checks',flush=True)
@@ -180,7 +180,7 @@ fn main() {
  bad:=json.parse(arena,"[1,]")
  require(bad.failure.kind != parse.Kind.Ok && json.is_missing(bad.root) && mem.arena_mark(arena)==mark)
  require(json.parse(arena,"1e9999").failure.kind != parse.Kind.Ok && mem.arena_mark(arena)==mark)
- _=io.println(io.stdout(),"JSON READ TARGET PASS")
+ io.println("JSON READ TARGET PASS")
 }
 '''
  cross_chain = '\n'.join([
@@ -206,8 +206,8 @@ fn main() {
   'mem.arena_release(chain)',
   'chain=nil',
  ])
- assert ' _=io.println(io.stdout(),"JSON READ TARGET PASS")' in cross_source
- cross_source = cross_source.replace(' _=io.println(io.stdout(),"JSON READ TARGET PASS")', cross_chain+'\n _=io.println(io.stdout(),"JSON READ TARGET PASS")')
+ assert ' io.println("JSON READ TARGET PASS")' in cross_source
+ cross_source = cross_source.replace(' io.println("JSON READ TARGET PASS")', cross_chain+'\n io.println("JSON READ TARGET PASS")')
  (P/'main.dyn').write_text(cross_source)
  for arch,variable,program in [('riscv32','DYN_QEMU_RISCV32','qemu-system-riscv32'),('thumbv7em','DYN_QEMU_ARM','qemu-system-arm')]:
   qemu=shlex.split(os.environ.get(variable,'')) or [shutil.which(program) or program]

@@ -62,7 +62,7 @@ fn main(){
   program=compile(arena,"(a)*")
   result=regex.find(program,"aaa")
   require(result.failure.kind == parse.Kind.Ok && result.value.end==3 && result.captures[0].start==2,"reused workspace")
-  _=io.println(io.stdout(),"regex passed")
+  io.println("regex passed")
 }
 '''
 

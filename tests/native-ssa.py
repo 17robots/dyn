@@ -75,7 +75,7 @@ small: i32 = -5
 bytes: [4]i8 = [-1, 2, -3, 4]
 halves: [2]i16 = [-30000, 30000]
 fn main() {
-  _ = io.println(io.stdout(), "{} {} {} {} {}", big, small, bytes[0] + bytes[2], halves[0], #cast(u64, (-(big + 1))))
+  io.println("{} {} {} {} {}", big, small, bytes[0] + bytes[2], halves[0], #cast(u64, (-(big + 1))))
 }
 ''',
     'large-frame': '''use "std/io"
@@ -86,7 +86,7 @@ fn main() {
   index: usize = 0
   for index < 6000 { text[index] = seed + #cast(u8, (index % 7))
   index += 1 }
-  _ = io.println(io.stdout(), "{} {} {}", text[0], text[4100], text[5999])
+  io.println("{} {} {}", text[0], text[4100], text[5999])
 }
 ''',
     'struct-values': '''use "std/io"
@@ -106,8 +106,8 @@ fn main() {
   copy.a = 3
   m = mix(m, 2)
   partial := Mixed{b: 7, wide: -9}
-  _ = io.println(io.stdout(), "{} {} {} {} {} {} {} {}", total, m.a, m.b, m.flag, m.scale, m.small, m.wide, copy.a)
-  _ = io.println(io.stdout(), "{} {} {} {}", partial.a, partial.b, partial.flag, partial.wide)
+  io.println("{} {} {} {} {} {} {} {}", total, m.a, m.b, m.flag, m.scale, m.small, m.wide, copy.a)
+  io.println("{} {} {} {}", partial.a, partial.b, partial.flag, partial.wide)
 }
 ''',
     'unroll-jam': '''use "std/io"
@@ -151,7 +151,7 @@ fn main() {
   total: f64 = 0.0
   for value in c { total += value }
   for value in e { total += value }
-  _ = io.println(io.stdout(), "{} {} {}", total, small, c[100])
+  io.println("{} {} {}", total, small, c[100])
 }
 ''',
     'accumulate': '''use "std/io"
@@ -178,9 +178,9 @@ fn grow(n: u64) u64 {
   return grow(n - 1) + 6148914691236517205
 }
 fn main() {
-  _ = io.println(io.stdout(), "{} {} {} {} {}", fib(30), weighted(50, 7), signed(20), noisy(40), count)
-  _ = io.println(io.stdout(), "{}", grow(2))
-  _ = io.println(io.stdout(), "{}", grow(4))
+  io.println("{} {} {} {} {}", fib(30), weighted(50, 7), signed(20), noisy(40), count)
+  io.println("{}", grow(2))
+  io.println("{}", grow(4))
 }
 ''',
     'jump-tables': '''use "std/io"
@@ -220,7 +220,7 @@ fn main() {
   for i: isize in -3..12 { total = total * 7 + pick(#cast(i64, i)) }
   for c in 60..75 { total += #cast(i64, letter(#cast(u8, c))) * #cast(i64, c) }
   total += key(Key.Up) + key(Key.Enter) * 10 + key(Key.Tab) * 100
-  _ = io.println(io.stdout(), "{}", total)
+  io.println("{}", total)
 }
 ''',
     'stack-arguments': '''use "std/io"
@@ -235,7 +235,7 @@ fn floats(a: f64, b: f64, c: f64, d: f64, e: f64, f: f64, g: f64, h: f64, i: f32
 fn main() {
   x := many(1, -2, 3, 4, 5, -6, 7, 8, 9, -10, 1.5, 2.25, Pair{a: 11, b: 0.5}, Wide{a: 12, b: 13, c: 14})
   y := floats(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.5, 10.0, 11.5)
-  _ = io.println(io.stdout(), "{} {}", #cast(i64, (x * 4.0)), #cast(i64, (y * 2.0)))
+  io.println("{} {}", #cast(i64, (x * 4.0)), #cast(i64, (y * 2.0)))
 }
 ''',
 }

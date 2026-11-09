@@ -14,5 +14,5 @@ fn main() {
       t += map.get(&m, #cast(u64, i) * 7).*
     }
   }
-  _ = io.println(io.stdout(), "{}", t)
+  io.println("{}", t)
 }

@@ -16,7 +16,7 @@ use "std/io" io
 use "std/time" time
 use "std/bytes" bytes
 fn require(ok: bool, message: []const u8) { if !ok { #panic(message) } }
-fn stage(name: []const u8) { _ = io.println(io.stdout(),"{}",name) }
+fn stage(name: []const u8) { io.println("{}",name) }
 fn await_event(state: *watch.Watcher, id: i32, name: []const u8, mask: u32, renamed: bool) {
   for attempt in 0..1500 {
     result := watch.next(state)

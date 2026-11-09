@@ -97,8 +97,8 @@ class Contracts(unittest.TestCase):
 }
 """
         invalid = [
-            ('fn main() { i := 0\n_ = i\nfor i in 0..3 { _ = i } }', 'shadowing or duplicate local is forbidden'),
-            ('fn main() { for i in 0..3 { for i in 0..2 { _ = i } } }', 'shadowing or duplicate local is forbidden'),
+            ('fn main() { i := 0\n_ = i\ni := 1\n_ = i }', 'only a nested block may shadow it'),
+            ('fn main() { for i in 0..3 { for i in 0..2 { _ = i } } }', 'cannot shadow a loop variable inside its loop'),
             ('fn main() { for i in 0..3 { _ = i }\n_ = i }', 'unknown name'),
             ('fn main() { a: u8 = 1\nb: u32 = 5\nfor i in a..b { _ = i } }', 'range bounds require the same integer type'),
             ('fn main() { for *i in 0..3 { _ = i } }', 'range for-in binds values; remove the pointer binding'),

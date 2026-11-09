@@ -90,7 +90,7 @@ fn main() {
   }
   total: i64 = 0
   for p in points { total += p.x + p.y }
-  _ = io.println(io.stdout(), "{}", total + twice(callback, 10))
+  io.println("{}", total + twice(callback, 10))
 }
 '''
 WASI_JS = r'''

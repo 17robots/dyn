@@ -38,6 +38,6 @@ fn main() {
       found += counts[at]
     }
   }
-  _ = io.println(io.stdout(), "{}", found)
+  io.println("{}", found)
   mem.arena_release(arena)
 }

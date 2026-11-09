@@ -285,9 +285,9 @@ with tempfile.TemporaryDirectory(prefix='dyn-unwind-registers-') as temporary:
     native.mkdir()
     (native / 'main.dyn').write_text('use "std/io"\n' + SOURCE.replace(
         'extern fn cleanup "audit_cleanup"(v: f64)', '''fn cleanup(v: f64) {
-  if v == 2.25 { _ = io.println(io.stdout(), "child") }
-  else if v == 1.25 { _ = io.println(io.stdout(), "parent") }
-  else { _ = io.println(io.stdout(), "corrupted") }
+  if v == 2.25 { io.println("child") }
+  else if v == 1.25 { io.println("parent") }
+  else { io.println("corrupted") }
 }'''))
     (native / 'input.c').write_text('double audit_input(void) { return 1.25; }\n'
                                   'void audit_opaque(void) {}\n')

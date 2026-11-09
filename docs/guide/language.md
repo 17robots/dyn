@@ -28,7 +28,11 @@ the local namespace. Qualified enum construction and patterns use `module.Enum.V
 
 Top-level variable syntax also declares globals. Globals are zero-initialized before optional
 runtime initialization and may be mutated; imported globals require `pub` and qualified access.
-Constants require compile-time expressions and cannot be assigned after declaration.
+Constants require compile-time expressions and cannot be assigned after declaration. An inferred
+constant built only from literals and other such constants, `const LIMIT := 64` or
+`const MASK := 1 << 12`, adapts to each use like a literal: it fits a `u8`, a `u64` or an `f64`
+where one is expected, a value that does not fit is an error at that use, and with no expected
+type it is `i32`. A constant with an explicit type, `const LIMIT: u8 = 64`, has that type.
 Fixed-array lengths accept integer literals, integer constants, parentheses, and
 nonnegative integer arithmetic. Runtime values and calls are not allowed in array
 lengths. See [memory patterns](memory-patterns.md) for supported
@@ -115,9 +119,9 @@ fn read(box: Box($T)) T {
 a: Box(f64) = .{ value: 1.5 }
 ```
 
-Type arguments are always written, and parameters are types only. There is no `Box(i32){...}`
-literal, because it would read like a call before a block: use `.{ ... }` with an expected type, or
-an alias. `mem.push(Box(i32), arena)` passes the instance as a type.
+Type arguments are always written, and parameters are types only. A literal names its instance
+directly, `Box(i32){value: 1}`, with the brace right after the arguments; `.{ ... }` with an
+expected type and aliases work too. `mem.push(Box(i32), arena)` passes the instance as a type.
 
 ## Values and types
 
@@ -129,16 +133,22 @@ treating it as text. `const` prevents writes through this view only: another `[]
 same memory can still change the bytes. Character literals are untyped integer constants holding a Unicode scalar value:
 they take any expected integer type the value fits, and default to `u32`.
 
-`distinct`, `packed`, `is`, `union` and `type` are reserved keywords and cannot be names.
+`distinct`, `packed`, `union` and `type` are reserved keywords and cannot be names.
 
 `type` creates module-level transparent aliases; aliases may be forward-referenced and
 alias cycles fail. There are no local aliases; declare them at module scope.
 `distinct type Name = T` creates a nominal numeric type with `T`'s representation. Values cross
 the distinct boundary only through explicit `#cast`; same-type arithmetic preserves the distinct
-type. Structs/enums remain nominal. Struct fields have no defaults: every path
-that creates a struct starts from zeros, whether a literal, a declaration, an
-omitted field or `mem.push`. Design structs so that zero is a useful value, and
-put other starting values in a named constant.
+type. Structs/enums remain nominal.
+
+A struct field may declare a default: `struct Player { health: i32 = 100, armor: i32 }`. Defaults
+are compile-time values. Every fresh value of the struct takes them: a literal's omitted fields
+(`Player{}` or `Player{armor: 5}`), a declaration without an initializer (`p: Player`), and
+`mem.push(Player, arena)`. A field without a default is zero, and an omitted struct-typed field is
+that struct's own fresh value. `#init(pointer)` writes the defaults through a `*T`, which is how
+`mem.push` and custom allocators make fresh values; it compiles to nothing for a type without
+defaults. Zeroed bulk memory (`mem.push_array`, fixed arrays, `[]` initializers) stays zero: write
+a loop when its elements need defaults. Unions have no defaults.
 
 Implicit numeric conversion is allowed only when destination represents every source-type
 value exactly. Constants adapt when their specific value fits, and a literal that does not fit
@@ -148,9 +158,12 @@ An integer literal in a float context is that float when it is exact (up to 2^24
 wraps. Floats use IEEE-754. Expression evaluation is left-to-right.
 Float literals accept trailing dots (`2.`); lexical lookahead keeps `2..3` an integer range.
 Explicit primitive locals without initializers start at zero. Inferred locals require an
-initializer. Local shadowing is forbidden: a local cannot reuse the name of a visible local or
-parameter. A name becomes reusable after its block or loop ends, so sibling blocks and consecutive
-loops may each declare `value`. Assignments copy values; compound assignments use
+initializer. A local may shadow an outer local or parameter only inside a nested block or loop:
+`if ready { x := parse(x) }` works, while a second `x` in the same block, or a parameter
+redeclared at the top of its function body, is an error. A loop variable cannot be shadowed
+inside its own loop. Locals never shadow globals, functions or module names. A name becomes
+reusable after its block or loop ends, so sibling blocks and consecutive loops may each declare
+`value`. Assignments copy values; compound assignments use
 the same checked operators as ordinary expressions. An assignment evaluates its target (indexes,
 pointer operands) before its value: in `a[i()] = f()`, `i()` runs first. A compound assignment
 evaluates its target once, so `a[i()] += f()` calls `i()` once. Struct literal fields evaluate in
@@ -163,9 +176,12 @@ the loop-local binding. `for *value` binds a mutable pointer to each source elem
 rejects const slices and requires assignable arrays. `for *const value` binds a const pointer.
 `for i in first..last` counts integers from `first` up to but excluding `last`; `..=` includes
 `last`. Both bounds share one integer type, and a literal bound adapts to the other bound, so
-`0..count` has `count`'s type. When both bounds are literals, `i` is `usize`, so
-`for i in 0..3 { values[i] }` indexes directly. A typed binding sets the type of both bounds:
-`for i: i32 in -3..3`. A negative literal range needs one. Bounds evaluate once, first
+`0..count` has `count`'s type. When both bounds are literals, `i` takes the type of its first
+use that meets a known integer type: `total += i` with `total: i32` counts in `i32`, as do
+passing it to an `i32` parameter or returning it from an `i32` function. With no such use it
+counts in `usize`, so `for i in 0..3 { values[i] }` indexes directly; indexes accept any integer
+type either way. A typed binding sets the type of both bounds: `for i: i32 in -3..3`. A negative
+literal range needs a typed binding or a use that sets a signed type. Bounds evaluate once, first
 bound first. An empty range such as `5..2` runs no iterations. `i` is a copy: assigning it does not change iteration, and pointer
 bindings are rejected. Inclusive ranges may end at the type's maximum without overflow.
 `for i in #reverse(first..last)` visits the same values from last to first: `#reverse(0..3)` gives
@@ -195,11 +211,14 @@ functions must return on every reachable exit. Calling a non-void function as a 
 error; use `_ = call()` to discard its result. Forward calls and direct recursion are supported.
 
 Enums are nominal. Tags default to `u32` or use an explicit integer backing type, as in
-`enum(u8) Op`. Variants are dense: they take tags 0, 1, 2 and so on in declaration order, and
-there is no way to set a value. Zeroed storage (`x: Color`, omitted struct fields, `mem.push`)
-therefore always holds the first variant, so make that variant mean empty; `Null` is the usual
-name. External numbers stay plain integers at the edge: translate them through a table, so an
-unknown value becomes `Null`. Variants are written `Enum.Variant`; the type is always written,
+`enum(u8) Op`. Variants take tags 0, 1, 2 and so on in declaration order. A plain enum may set
+tags to match external numbers: `enum(i32) Errno { Ok = 0, NoEnt = 2, Intr = 4, Io, NoMem = 12 }`,
+where an unset tag is the previous one plus one (`Io` is 5). Set tags are constant integers, must
+increase, and the first must be 0, so zeroed storage (`x: Color`, omitted struct fields,
+`mem.push`) always holds the first variant; make that variant mean empty, `Null` or `Ok`. Enums
+with payloads keep automatic tags. `enums.from_int(Errno, n)` turns an external number into the
+variant with that tag, or the first variant when none has it; dense enums check a range and enums
+with set tags search their variants. Variants are written `Enum.Variant`; the type is always written,
 never inferred. Enums support equality and copy by value. `#cast(u8, op)` gives the tag and
 `#cast(Op, byte)` converts an integer back. An exhaustive `case` that meets a tag matching no
 variant panics with `enum.tag.ok`. Enums without payloads have the size and alignment of the
@@ -276,15 +295,22 @@ overlaps, unreachable `_`, and redundant `_` fail. `Variant payload` copies its 
 mutable assignable case subject. The alias exists only inside its arm.
 Enum cases may be exhaustive by listing every variant. Integer cases may be exhaustive by covering
 the whole representable interval. Because the set of Dyn types is open, an `any` type case always
-requires `_`. Type patterns neither implicitly cast nor match aliases by spelling: they compare the
-boxed concrete type identity and bind a copied value of that exact type.
+requires `_`. Type patterns are written as the type, then an optional binding:
+`i64 n => { ... }`, `[]const u8 text => { ... }`, `Point p => { ... }`; a pattern that names a type
+is a type pattern. They neither implicitly cast nor match aliases by spelling: they compare the
+boxed concrete type identity and bind a copied value of that exact type. A literal boxed into
+`any` takes a default type, as in Go and Odin: an integer is `i32`, a float `f64`, a string
+`[]const u8`, a character `u32`.
 
 `defer` runs at enclosing-block exit in LIFO order. Direct-call arguments evaluate at defer
 site. Deferred blocks observe captured storage at execution. Deferred statements exclude
 `return`, `break`, `continue`, declarations, and nested `defer`. Double panic aborts cleanup.
 
 Panic runs active defers through caller frames. Cleanup uses fixed stack records and performs no
-allocation. A panic raised by a defer aborts remaining cleanup. There is no recovery mechanism. A panic that
+allocation. A panic raised by a defer aborts remaining cleanup. There is no recovery mechanism:
+a panic is a bug, and expected failures are values. `std/panic` installs one process handler,
+`panic.set_handler(report)`, that runs once after cleanups and before the panic reports and exits,
+for logging, crash reports or flushing; it cannot resume the program. A panic that
 crosses foreign frames runs Dyn defers but skips cleanup in the C frames between them; see
 [FFI](ffi.md).
 
@@ -330,9 +356,14 @@ Binary operators, tightest first. Every binary operator is left-associative.
 | 9 | `&&` |
 | 10 | <code>&#124;&#124;</code> |
 
-Unlike C, bitwise operators bind tighter than comparisons: `flags & mask == 0` means
-`(flags & mask) == 0`. Comparisons do not chain: `a < b < c` compares a `bool` with `c` and
-fails to type-check.
+Mixing a bitwise operator (`&`, `^`, `|`) with a comparison needs parentheses:
+`flags & mask == 0` is an error and `(flags & mask) == 0` is required, so the expression means
+the same thing to readers from every language.
+
+Relational comparisons chain in one direction, as in Python: `0 <= i < n` means
+`0 <= i && i < n`, and `hi > x >= lo` works the same way. The middle operand is evaluated once per
+comparison, so it must be a name, field or literal. Mixed directions (`a < b > c`) and `==` or
+`!=` chains are errors; write `(a == b) == c` when that is meant.
 
 ## Builtins
 
@@ -364,6 +395,8 @@ requires equal-sized compatible numeric representations or compatible pointer re
 `#syscall(number, args...)` returns `isize` and accepts at most six integer/pointer arguments on
 Linux x86-64. It does not depend on `std`.
 `#offsetof(Type, field)` is a field's byte offset as a `usize` constant.
+`#init(pointer)` is a statement that writes `T`'s field defaults through a mutable `*T`; for a type
+without defaults it only evaluates the pointer.
 `#assert(condition, "message")` fails compilation when a constant condition is false.
 `#load("file")` embeds a file's bytes as a `[]const u8`; the path is relative to the module directory and may not contain `..`.
 
@@ -387,7 +420,6 @@ is not a supported-feature claim:
 
 | Syntax | Compiler status |
 | --- | --- |
-| Struct literals with type arguments, such as `Box(i32){...}` | Rejected; use `.{...}` or an alias |
 | Module-level transparent type alias | Supported |
 | Local type alias inside a function | Reserved; diagnosed as unsupported |
 | Enum declaration-order tags | Supported |

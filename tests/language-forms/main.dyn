@@ -1,6 +1,8 @@
 // Type patterns, chained comparisons, generic struct literals, single-line
 // blocks and constants that adapt to their use.
+use "std/enums"
 use "std/io"
+use "std/mem"
 
 struct Point { x: i32, y: i32 }
 struct Box($T: type) { value: T }
@@ -16,6 +18,49 @@ fn describe(value: any) i64 {
     []const u8 text => { return #cast(i64, #len(text)) }
     bool => { return 1 }
     _ => { return 0 }
+  }
+}
+
+struct Stats { count: i64 }
+
+const MAX_HEALTH := 100
+
+struct Speed { value: f32 = 1.5, level: u8 = 1 }
+struct Player { name: []const u8 = "anon", health: i32 = MAX_HEALTH, armor: i32, speed: Speed }
+
+enum(i32) Errno { Ok = 0, NoEnt = 2, Intr = 4, Io, NoMem = 12 }
+
+fn parse(x: i32) i32 { return x * 2 }
+
+fn shadowed(x: i32) i32 {
+  if x > 0 {
+    x := parse(x)
+    return x
+  }
+  for i in 0..3 {
+    y := i
+    _ = y
+  }
+  y := 5
+  return y + x
+}
+
+fn take(v: u8) u8 { return v }
+
+fn root(n: i32) i32 {
+  for i in 0..10 {
+    if i * i == n { return i }
+  }
+  return -1
+}
+
+fn kind_of(value: any) i32 {
+  case value {
+    i32 n => { return n }
+    f64 => { return 100 }
+    []const u8 s => { return #cast(i32, #len(s)) }
+    bool => { return 1000 }
+    _ => { return -1 }
   }
 }
 
@@ -44,5 +89,38 @@ fn main() {
   const local := 3
   sum: i64 = DOUBLE + local
   check(small == 64 && wide == 4096 && real == 128.0 && sum == 131, "adapting constants")
-  _ = io.write_all(io.stdout(), "ok\n")
+  // Literal ranges count in the type their binding meets first.
+  total: i32 = 0
+  for i in 0..5 { total += i }
+  stats := Stats{count: 0}
+  for i in 0..3 { stats.count += i }
+  tiny: u8 = 0
+  for i in 0..4 { tiny += take(i) }
+  negative: i32 = 0
+  for i in -3..0 { negative += i }
+  check(total == 10 && stats.count == 3 && tiny == 6 && negative == -6 && root(49) == 7, "ranges")
+  // Literals boxed into any take i32, f64, []const u8 and bool.
+  check(kind_of(5) + kind_of(2.5) + kind_of("hey") + kind_of(true) == 1108, "boxed literals")
+  // A nested block may shadow; the same block may not.
+  check(shadowed(2) == 4 && shadowed(-1) == 4, "shadowing")
+  // Field defaults: literals, declarations, mem.push and #init.
+  fresh := Player{}
+  given := Player{health: 5, speed: Speed{level: 9}}
+  declared: Player
+  check(fresh.health == 100 && fresh.armor == 0 && fresh.speed.level == 1 && #len(fresh.name) == 4, "literal defaults")
+  check(given.health == 5 && given.speed.level == 9 && given.speed.value == 1.5, "partial defaults")
+  check(declared.health == 100 && declared.speed.level == 1, "declared defaults")
+  storage: [4096]u8
+  arena := mem.arena_from_buffer(storage[..])
+  pushed := mem.push(Player, arena)
+  plain := mem.push(Stats, arena)
+  check(pushed.health == 100 && pushed.speed.value == 1.5 && plain.count == 0, "pushed defaults")
+  pushed.health = 1
+  #init(pushed)
+  check(pushed.health == 100, "#init")
+  // Explicit enum values.
+  errno := enums.from_int(Errno, 5)
+  check(#cast(i32, Errno.NoMem) == 12 && errno == Errno.Io && enums.from_int(Errno, 3) == Errno.Ok, "enum values")
+  check(#len(enums.name(Errno.Intr)) == 4 && #len(enums.name(errno)) == 2, "enum names")
+  io.println("{} {}", "ok", 1)
 }

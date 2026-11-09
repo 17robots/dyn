@@ -40,6 +40,6 @@ fn main() {
     value.* = state >> 1
   }
   quicksort(values)
-  _ = io.println(io.stdout(), "{} {} {}", values[0], values[Count / 2], values[Count - 1])
+  io.println("{} {} {}", values[0], values[Count / 2], values[Count - 1])
   mem.arena_release(arena)
 }

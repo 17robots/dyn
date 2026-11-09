@@ -47,7 +47,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-runtime-support-') as directory:
     # A C callback may initiate a panic without a message; cleanup still runs.
     module=work/'module'
     module.mkdir()
-    (module/'main.dyn').write_text('use "std/io"\nextern fn fail "null_panic"()\nfn main() { defer { _ = io.println(io.stdout(), "cleanup") }\nfail() }\n')
+    (module/'main.dyn').write_text('use "std/io"\nextern fn fail "null_panic"()\nfn main() { defer { io.println("cleanup") }\nfail() }\n')
     (work/'callback.c').write_text('#include <stdint.h>\nextern void dyn_panic(const void *,uint64_t); void null_panic(void) { dyn_panic(0,0); }\n')
     subprocess.run([*shlex.split(os.environ.get('CC','cc')), '-c', str(work/'callback.c'),
                     '-o',str(work/'callback.o')],check=True)

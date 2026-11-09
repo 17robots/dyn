@@ -25,5 +25,5 @@ fn main() {
   for p in points {
     total += p.x + p.y
   }
-  _ = io.println(io.stdout(), "{}", total)
+  io.println("{}", total)
 }

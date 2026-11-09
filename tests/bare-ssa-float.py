@@ -30,7 +30,7 @@ spec = importlib.util.spec_from_file_location('bare_ssa', ROOT/'tests/bare-ssa.p
 b = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(b)
 
-src='use "std/io"\nextern fn oracle() i32\nfn main() { status:=oracle()\nif status!=0 { _=io.println(io.stdout(),"oracle {}",status)\n#panic("oracle") }\n_=io.write_all(io.stdout(),"FLOAT OK\\n") }\n'
+src='use "std/io"\nextern fn oracle() i32\nfn main() { status:=oracle()\nif status!=0 { io.println("oracle {}",status)\n#panic("oracle") }\n_=io.write_all(io.stdout(),"FLOAT OK\\n") }\n'
 c='typedef unsigned long long U; typedef long long I; typedef unsigned W;\n'
 checks=[];names=[]
 def add(name,args,ret,body,ctargs,ctret):

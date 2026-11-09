@@ -42,5 +42,5 @@ fn main() {
   for x in t.items {
     sum ^= x
   }
-  _ = io.println(io.stdout(), "{} {} {}", t.count, t.grown, sum)
+  io.println("{} {} {}", t.count, t.grown, sum)
 }

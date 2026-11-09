@@ -31,16 +31,16 @@ fn main() {
   first := signal.poll(&state)
   check(first.found && first.value == signal.Kind.None)
   if WAIT {
-    _ = io.println(io.stdout(), "ready")
+    io.println("ready")
     for i in 0..3 {
       next := signal.wait(&state)
       check(next.found)
-      _ = io.println(io.stdout(), "{}", #cast(u32, next.value))
+      io.println("{}", #cast(u32, next.value))
     }
   }
   signal.close(&state)
   check(!state.active)
-  _ = io.println(io.stdout(), "closed")
+  io.println("closed")
 }
 '''
 

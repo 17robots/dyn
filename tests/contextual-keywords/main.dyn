@@ -1,4 +1,4 @@
-// distinct, packed and is are reserved keywords.
+// distinct, packed and union are reserved keywords; is is an ordinary name.
 use "std/io"
 
 distinct type Meters = i64

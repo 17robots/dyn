@@ -18,7 +18,7 @@ errors; importing the same module under multiple aliases within one file is a
 use "std/io"
 
 fn greeting(name: []const u8) {
-  _ = io.println(io.stdout(), "hello, {}", name)
+  io.println("hello, {}", name)
 }
 
 fn main() {
@@ -265,12 +265,16 @@ storage. None of these require printing to be a compiler builtin or allocate imp
 ```dyn
 use "std/io" io
 
-result := io.println(io.stdout(), "count: {}", count)
-if result.status == io.Status.Error { #panic("stdout write failed") }
+io.println("count: {}", count)
+result := io.println_to(log_file, "count: {}", count)
+if result.status == io.Status.Error { #panic("log write failed") }
 ```
 
-`io.print` supports `{}` substitutions and `{{`/`}}` literal braces. Pass `io.stdout()`
-or `io.stderr()` to `io.print` or `io.println`. `std/terminal` provides terminal controls.
+`io.print` and `io.println` write to standard output and return nothing, so a terminal print needs
+no `_ =`; `io.eprint` and `io.eprintln` write to standard error. They ignore write failures such
+as a closed pipe. `io.print_to` and `io.println_to` take any writer and return the `Transfer`, so
+a discarded result there stays visible as `_ =`. All of them support `{}` substitutions and
+`{{`/`}}` literal braces. `std/terminal` provides terminal controls.
 Treat partial operations and native errors as ordinary results. Do not assume text is C-compatible;
 use `std/c` helpers at explicit FFI boundaries.
 

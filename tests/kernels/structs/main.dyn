@@ -26,5 +26,5 @@ fn main() {
       e += dot(ps[i], vs[i]) * 0.000001
     }
   }
-  _ = io.println(io.stdout(), "{}", #cast(i64, e))
+  io.println("{}", #cast(i64, e))
 }

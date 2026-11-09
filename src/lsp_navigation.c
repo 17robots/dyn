@@ -915,6 +915,11 @@ void lsp_inlay_hints(long id, LspDocument *documents, size_t count,
 static DynSpan lsp_expr_definition(DynAstProgram *a, DynAstExpr *e) {
   if (e->type == DYN_TYPE_ERROR || e->type == DYN_TYPE_INFER)
     return (DynSpan){0};
+  bool global;
+  uint32_t target;
+  if (dyn_ast_expansion(a, (size_t)(e - a->expressions), &global, &target))
+    return global ? (target < a->global_count ? a->globals[target].name : (DynSpan){0})
+                  : (target < a->local_count ? a->locals[target].name : (DynSpan){0});
   if (e->kind == DYN_EXPR_NAME && e->integer < a->local_count)
     return a->locals[e->integer].name;
   if (e->kind == DYN_EXPR_GLOBAL && e->integer < a->global_count)

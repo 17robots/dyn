@@ -374,7 +374,7 @@ def build_program(rng, per_function):
         for combo in sorted(combos, key=str):
             locals_ = '\n'.join(f'v{k}: {t} = {v}' for k, (t, v) in enumerate(zip(types, combo)))
             call = f'{name}(' + ', '.join(f'v{k}' for k in range(len(types))) + ')'
-            body = f'_ = io.println(io.stdout(), "{{}}", {call})' if result else f'{call}\n_ = io.println(io.stdout(), "void")'
+            body = f'io.println("{{}}", {call})' if result else f'{call}\nio.println("void")'
             cases.append(f'{locals_}\n{body}')
     # Keep the dispatcher below object-format function/unwind size limits while
     # retaining every generated case. Large-frame functions remain in the corpus.

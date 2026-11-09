@@ -228,9 +228,13 @@ pub fn print_arguments(writer: Writer, template: []const u8, arguments: []const 
   return Transfer{ transferred: total, error: 0, status: Status.Complete }
 }
 
-pub fn print(writer: Writer, template: []const u8, arguments: ...any) Transfer {
+// Checked formatting to any writer: {} takes the next argument.
+pub fn print_to(writer: Writer, template: []const u8, arguments: ...any) Transfer {
   return print_arguments(writer, template, arguments)
 }
+
+// Terminal output, print/println/eprint/eprintln, lives with stdout() in each
+// platform file; targets without standard streams have neither.
 
 pub fn println_arguments(writer: Writer, template: []const u8, arguments: []const any) Transfer {
   result := print_arguments(writer, template, arguments)
@@ -246,7 +250,7 @@ pub fn println_arguments(writer: Writer, template: []const u8, arguments: []cons
   }
 }
 
-pub fn println(writer: Writer, template: []const u8, arguments: ...any) Transfer {
+pub fn println_to(writer: Writer, template: []const u8, arguments: ...any) Transfer {
   return println_arguments(writer, template, arguments)
 }
 

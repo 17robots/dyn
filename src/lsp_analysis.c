@@ -149,6 +149,13 @@ static void lsp_binding_index(LspUsage *usage) {
              id < ast->function_count)
       usage->bindings[ast->local_count + ast->global_count + id].used = true;
   }
+  for (size_t i = 0; i < ast->expansion_count; ++i) {
+    uint32_t target = ast->expansions[i].target;
+    if (ast->expansions[i].global && target < ast->global_count)
+      usage->bindings[ast->local_count + target].used = true;
+    else if (!ast->expansions[i].global && target < ast->local_count)
+      usage->bindings[target].used = true;
+  }
   qsort(usage->bindings, count, sizeof(*usage->bindings), lsp_binding_compare);
 }
 

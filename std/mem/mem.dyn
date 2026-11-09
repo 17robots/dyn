@@ -569,9 +569,12 @@ pub fn arena_try_push_uninit(arena: *Arena, size: usize, alignment: usize) Alloc
   return arena_try_push_impl(arena, size, alignment, false)
 }
 
-// Pushes one zeroed T. Panics when the arena is exhausted.
+// Pushes one fresh T: zeroed, then T's field defaults. Panics when the arena
+// is exhausted. Types without defaults pay nothing beyond the zeroing.
 pub fn push($T: type, arena: *Arena) *T {
-  return #cast(*T, arena_push(arena, #sizeof(T), #alignof(T)))
+  value := #cast(*T, arena_push(arena, #sizeof(T), #alignof(T)))
+  #init(value)
+  return value
 }
 
 // Pushes count zeroed elements. Panics when the arena is exhausted or the size overflows.

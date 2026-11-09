@@ -10,6 +10,6 @@ fn pick(xs: []u64, n: usize) *u64 {
 }
 fn main() {
   xs: [4]u64 = [1, 2, 3, 4]
-  _ = io.println(io.stdout(), "{}", pick(xs[0..4], 2).*)
-  _ = io.println(io.stdout(), "{}", pick(xs[0..4], 9).*)
+  io.println("{}", pick(xs[0..4], 2).*)
+  io.println("{}", pick(xs[0..4], 9).*)
 }

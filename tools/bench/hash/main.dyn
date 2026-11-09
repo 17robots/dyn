@@ -19,5 +19,5 @@ fn main() {
     text[round] = #cast(u8, round)
     total = (total + fnv(text[..]))
   }
-  _ = io.println(io.stdout(), "{}", total)
+  io.println("{}", total)
 }

@@ -25,7 +25,7 @@ fn swap_extension(list: []const u8, wanted: []const u8) bool {
 }
 use "std/io"
 fn show(l: []const u8, w: []const u8) {
-  _ = io.println(io.stdout(), "{}", swap_extension(l, w))
+  io.println("{}", swap_extension(l, w))
 }
 fn main() {
   show("GLX_EXT_swap_control_tear GLX_MESA_swap_control_suffix XGLX_SGI_swap_control", "GLX_EXT_swap_control")

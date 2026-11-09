@@ -8,5 +8,5 @@ fn fib(n: u64) u64 {
 }
 
 fn main() {
-  _ = io.println(io.stdout(), "{}", fib(40))
+  io.println("{}", fib(40))
 }

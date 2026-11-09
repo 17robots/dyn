@@ -21,5 +21,5 @@ fn main() {
     }
     total += count + #cast(u64, round)
   }
-  _ = io.println(io.stdout(), "{}", total)
+  io.println("{}", total)
 }

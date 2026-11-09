@@ -15,7 +15,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-contextual-keywords-') as temporary
                         '--output', str(program)] + (['--release'] if release else []), check=True, timeout=120)
         result = subprocess.run([str(program)], capture_output=True, text=True, timeout=30)
         assert result.returncode == 0 and result.stdout == 'ok\n', result
-    for word in ('distinct', 'packed', 'is'):
+    for word in ('distinct', 'packed', 'union'):
         for source in (f'fn main() {{\n  {word} := 1\n  _ = {word}\n}}\n', f'struct S {{ {word}: i32 }}\nfn main() {{}}\n',
                        f'fn {word}() {{}}\nfn main() {{}}\n'):
             module = root / 'bad'
@@ -23,4 +23,4 @@ with tempfile.TemporaryDirectory(prefix='dyn-contextual-keywords-') as temporary
             (module / 'main.dyn').write_text(source)
             checked = subprocess.run([DYN, 'check', str(module)], capture_output=True, text=True, timeout=60)
             assert checked.returncode != 0 and 'reserved keyword' in checked.stderr, (word, source, checked.stderr)
-print('PASS reserved keywords: distinct, packed and is reject names and work as keywords (debug/release)')
+print('PASS reserved keywords: distinct, packed and union reject names and work as keywords (debug/release)')

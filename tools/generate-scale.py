@@ -133,7 +133,7 @@ def main():
     main_lines = ['use "std/io"'] + [f'use "m{r}"' for r in roots]
     main_lines += ['', 'fn main() {', '  t: i64 = 0']
     main_lines += [f'  t += m{r}.run({i})' for i, r in enumerate(roots)]
-    main_lines += ['  _ = io.println(io.stdout(), "{}", t)', '}', '']
+    main_lines += ['  io.println("{}", t)', '}', '']
     (args.output / 'main.dyn').write_text('\n'.join(main_lines))
     if args.helpers:
         (args.output / 'helpers').mkdir()

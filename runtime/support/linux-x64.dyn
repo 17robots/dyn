@@ -137,10 +137,12 @@ fn unwind_walk(slot: *UnwindSlot, state: *UnwindState) {
 pub fn dyn_unwind_begin_state(message: *const u8, length: u64, state: *UnwindState) {
   slot := unwind_slot(true)
   if slot == nil || slot.unwinding != 0 {
+    run_panic_hook(message, length)
     return
   }
   unwind_store_message(slot, message, length)
   unwind_walk(slot, state)
+  run_panic_hook(slot.message, slot.length)
 }
 // Called by dyn_unwind_continue with the registers of the cleanup's frame.
 pub fn dyn_unwind_resume(state: *UnwindState) {

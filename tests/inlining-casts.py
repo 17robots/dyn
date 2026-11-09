@@ -49,7 +49,7 @@ return x }
 enum Choice { A, B }
 fn checked(x:u64) Choice { return #cast(Choice,side(x)) }
 fn main() {
- defer { _=io.println(io.stdout(),"{}",calls) }
+ defer { io.println("{}",calls) }
  value:=checked(256)
  calls+=100
  _=value
@@ -61,7 +61,7 @@ calls:u64
 fn side(x:u64) u64 { calls+=1
 return x }
 fn main() {
- defer { _=io.println(io.stdout(),"{}",calls) }
+ defer { io.println("{}",calls) }
  pointer:*u8=nil
  pointer.*=#cast(u8,side(256))
  calls+=100

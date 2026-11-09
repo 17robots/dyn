@@ -78,7 +78,7 @@ fn main() {
 use "std/io"
 fn add(a: i8, b: i8) i8 { return a / b }
 fn main() {
-  defer { _ = io.println(io.stdout(), "cleanup") }
+  defer { io.println("cleanup") }
   for i in 0..1 { value := add(127, 0)
   _ = value }
 }

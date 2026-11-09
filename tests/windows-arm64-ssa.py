@@ -36,7 +36,7 @@ fn main() {
   y := floats(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.5, 10.0, 11.5)
   if y != 516.0 { #panic("Windows ARM64 SSA floating stack arguments") }
   if #cast(i64, x * 4.0) != 293 || retained(7) != 60 { #panic("Windows ARM64 SSA ABI") }
-  _ = io.println(io.stdout(), "Windows ARM64 SSA ready")
+  io.println("Windows ARM64 SSA ready")
 }
 '''
 

@@ -87,7 +87,9 @@ typedef enum {
   /* A type passed as a call argument; type holds the type. */
   DYN_EXPR_TYPE,
   /* #offsetof: integer holds the struct type, item_start/item_count the field name's byte span. Sema folds it to an integer. */
-  DYN_EXPR_OFFSET
+  DYN_EXPR_OFFSET,
+  /* #init(pointer): a statement sema rewrites before lowering. */
+  DYN_EXPR_INIT
 } DynExprKind;
 static inline bool dyn_type_is_param(DynType t) {
   return t >= DYN_TYPE_PARAM_BASE && t < DYN_TYPE_PARAM_BASE + DYN_MAX_TYPE_PARAMS;
@@ -142,6 +144,10 @@ typedef struct {
   DynSpan name;
   DynType type;
   uint64_t offset;
+  /* name: T = value. Sema keeps an unchecked copy that each new value of
+     the struct copies again. */
+  bool has_default;
+  DynExprId default_value;
 } DynAstField;
 typedef struct {
   DynSpan span, name;
@@ -171,6 +177,8 @@ typedef struct {
   DynNameIndex variant_names;
   uint64_t size, alignment, payload_size, payload_alignment;
   bool has_payload;
+  /* Some variant sets its tag: Ok = 0, NoEnt = 2. Tags still increase. */
+  bool explicit_tags;
   bool is_public;
   uint64_t module_owner;
   /* Generic enums follow generic structs: see DynAstStruct. */
@@ -288,8 +296,10 @@ typedef struct {
 typedef struct {
   DynSpan name;
   DynType type;
-  bool active, is_const, used, has_untyped;
+  bool active, is_const, used, has_untyped, loop_variable;
   DynExprId untyped;
+  /* Block nesting where the name lives; a nested block may shadow it. */
+  uint32_t depth;
   uint32_t owner_function;
 } DynAstLocal;
 typedef struct {
@@ -366,6 +376,10 @@ typedef struct {
   size_t child_count, child_capacity;
   DynAstLocal *locals;
   size_t local_count, local_capacity;
+  /* Uses of literal constants that sema expanded in place, kept so tools
+     still see which constant each use names. */
+  struct DynAstExpansion { DynExprId expression; uint32_t target; bool global; } *expansions;
+  size_t expansion_count, expansion_capacity;
   uint32_t loop_count;
   DynNameIndex struct_names, enum_names, alias_names;
   /* Generic nodes borrow the syntax trees, which outlive semantic analysis. */
@@ -429,4 +443,16 @@ static inline bool dyn_type_is_distinct(DynType t) {
 }
 void dyn_type_format(DynAstProgram *, DynType, const DynSource *, char *, size_t);
 
+
+/* The constant an expanded literal use names: a global or a local index. */
+static inline bool dyn_ast_expansion(const DynAstProgram *a, size_t expression, bool *global,
+                                     uint32_t *target) {
+  for (size_t i = 0; i < a->expansion_count; ++i)
+    if (a->expansions[i].expression == expression) {
+      *global = a->expansions[i].global;
+      *target = a->expansions[i].target;
+      return true;
+    }
+  return false;
+}
 #endif

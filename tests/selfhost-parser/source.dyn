@@ -406,7 +406,7 @@ fn src_expression_start(p: *Parser) bool {
   if kind == TokenKind.Name || kind == TokenKind.Number || kind == TokenKind.Text || kind == TokenKind.Character {
     return true
   }
-  starts: [18][]const u8 = ["(", "[", ".", "-", "&", "!", "~", "#cast", "#bitcast", "#sizeof", "#alignof", "#offsetof", "#typeof", "#len", "#slice", "#offset", "#load", "#syscall"]
+  starts: [19][]const u8 = ["(", "[", ".", "-", "&", "!", "~", "#cast", "#bitcast", "#sizeof", "#alignof", "#offsetof", "#typeof", "#len", "#init", "#slice", "#offset", "#load", "#syscall"]
   for candidate in starts {
     if token_is(p, candidate) {
       return true
@@ -542,7 +542,7 @@ fn src_statement_body(p: *Parser) u32 {
     p.tree.nodes[value].next = right
     return add_node(p, SrcAssignment, start, node_end(p, right), value)
   }
-  if p.tree.nodes[value].kind != ExpCall && p.tree.nodes[value].kind != ExpSyscall {
+  if p.tree.nodes[value].kind != ExpCall && p.tree.nodes[value].kind != ExpSyscall && !(p.tree.nodes[value].kind == ExpLen && at(p, start, "#init")) {
     fail(p, start, "expression is not a statement")
     return None
   }

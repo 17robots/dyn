@@ -27,6 +27,28 @@ servers so they pick up the new `dyn`.
   `const LIMIT := 64` fits a `u8`, a `u64` or an `f64`, and a value that does not fit is an
   error at that use.
 - `dyn fmt` keeps a one-statement block written on one line: `0 => { return "none" }`.
+- Breaking: `io.print` and `io.println` print to standard output and return nothing:
+  `io.println("total {}", n)`. `io.eprint`/`io.eprintln` print to standard error. The checked,
+  writer-taking forms are `io.print_to(writer, ...)` and `io.println_to(writer, ...)`, which
+  return the `Transfer`. Migrate `_ = io.println(io.stdout(), ...)` to `io.println(...)` and other
+  writers to `println_to`.
+- Struct fields may declare defaults again: `struct Player { health: i32 = 100 }`. Literals fill
+  omitted fields, `p: Player` starts from the defaults, and `mem.push` writes them; types without
+  defaults pay nothing. `#init(pointer)` writes a type's defaults for custom allocators.
+  `mem.push_array` and fixed arrays stay zeroed.
+- Plain enums may set tags: `enum(i32) Errno { Ok = 0, NoEnt = 2, Io = 5 }`. Tags increase and
+  start at 0; an unset tag follows the previous one. Reflection's `TypeMember` gains `value`,
+  the variant's tag, and `enums.from_int`/`enums.name` respect set tags.
+- A nested block may shadow an outer local or parameter: `if ready { x := parse(x) }`. A second
+  local with the same name in one block, or shadowing a loop variable inside its loop, is still
+  an error. `is` is no longer reserved.
+- A literal range takes its type from the loop variable's first typed use: in
+  `for i in 0..5 { total += i }` with `total: i32`, `i` is `i32`. Otherwise it is still `usize`.
+- Literals boxed into `any` take default types, as in Go and Odin: `i32`, `f64`, `[]const u8`.
+- `std/panic`: `panic.set_handler(report)` runs once after cleanups and before an unhandled panic
+  reports and exits, for logs and crash reports. Panics remain unrecoverable.
+- A body-less declaration's return type must start on the same line as its `)`, so
+  `extern fn f(x: i32)` followed by a global on the next line no longer misparses.
 - Breaking: `io.Result` is now `io.Transfer`. `io.Result(T)` and `parse.Result(T)` are the
   generic `{value, failure}` results, and named result types are aliases of them.
 - `std/container/map`: `map.Map(K, V)`, a growing hash map for any key type. Set it up with

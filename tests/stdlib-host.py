@@ -16,7 +16,7 @@ use "std/mem"
 use "std/bytes"
 use "std/io" errors
 use "std/sync"
-fn require(value: bool, message: []const u8) { if !value { _ = io.println(io.stderr(), "{}", message)
+fn require(value: bool, message: []const u8) { if !value { io.eprintln("{}", message)
 #panic(message) } }
 fn lines(text: []const u8, expected: []const u8, capacity: usize, buffering: usize) {
   cursor := io.cursor(text)
@@ -159,7 +159,7 @@ fn main() {
   finished := time.monotonic_now()
   require(finished.failure.kind == errors.Kind.Ok && time.elapsed(started.value, finished.value).value >= time.Millisecond, "stdlib assertion 139")
   require(time.sleep(0).failure.kind == errors.Kind.Ok, "stdlib assertion 140")
-  require(io.println(io.stdout(), "stdlib passed").status == io.Status.Complete, "stdlib assertion 141")
+  require(io.println_to(io.stdout(), "stdlib passed").status == io.Status.Complete, "stdlib assertion 141")
 }
 '''
 

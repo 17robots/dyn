@@ -29,6 +29,6 @@ fn main() {
   for r in 0..6 {
     ps[r].x = #cast(u64, r) + 1
   }
-  _ = io.println(io.stdout(), "{} {} {} {} {}", total(ps[0..6], 0, 6), total(ps[0..6], 4, 2), total(ps[0..6], 3, 3), scaled(100), scaled(2))
-  _ = io.println(io.stdout(), "{}", huge())
+  io.println("{} {} {} {} {}", total(ps[0..6], 0, 6), total(ps[0..6], 4, 2), total(ps[0..6], 3, 3), scaled(100), scaled(2))
+  io.println("{}", huge())
 }

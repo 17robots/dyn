@@ -38,7 +38,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-chunk-cache-') as temporary:
     (project/'main.dyn').write_text(f'''use "std/io"
 fn main() {{
   total := {calls}
-  _ = io.println(io.stdout(), "{{}}", total)
+  io.println("{{}}", total)
 }}
 ''')
     # Validate body/interface invalidation in both native build modes.

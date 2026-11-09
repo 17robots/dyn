@@ -160,7 +160,7 @@ fn main() {
         run(DYN,'build',src,'--release',*args,ok=False)
     run(DYN,'build',src,'--opt-level','3',ok=False)
     if platform.system()=='Linux' and platform.machine()=='x86_64':
-        (src/'main.dyn').write_text('use "std/io" io\nfn main() {\n state: u64 = 1729\n for i in 0..1000 {\n state = (state * 48271) % 2147483647\n }\n _ = io.println(io.stdout(), "{}", state)\n}\n')
+        (src/'main.dyn').write_text('use "std/io" io\nfn main() {\n state: u64 = 1729\n for i in 0..1000 {\n state = (state * 48271) % 2147483647\n }\n io.println("{}", state)\n}\n')
         profile=root/'sample.prof'; profile.write_text('main:10000:1\n'+''.join(f' {i}: 1000\n' for i in range(1,7)))
         profiled=build('--sample-profile',profile,'--opt-remarks'); run(output)
         assert 'samples from profile' in profiled.stdout + profiled.stderr, profiled.stdout + profiled.stderr

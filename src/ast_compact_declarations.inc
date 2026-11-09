@@ -183,10 +183,14 @@ static bool compact_add_struct_fields(const DynSource *s, DynAstProgram *a,
           compact_report(c, s, errors, "out of memory");
           return false;
         }
-        if (!compact_null(init))
-          compact_report(init, s, errors,
-                         "struct fields have no defaults; set the field in the literal or use a named constant");
-        a->fields[a->field_count++] = (DynAstField){name, type, 0};
+        DynAstField field = {.name = name, .type = type, .default_value = DYN_NO_EXPR};
+        if (!compact_null(init)) {
+          if (st->is_union) compact_report(init, s, errors, "union members have no defaults");
+          field.has_default = true;
+          field.default_value = compact_expr(init, s, a, errors);
+          st = &a->structs[struct_id];
+        }
+        a->fields[a->field_count++] = field;
         ++st->field_count;
       }
     }
@@ -242,10 +246,35 @@ static bool compact_add_enum_variants(const DynSource *s, DynAstProgram *a,
         continue;
       }
       DynType payload = DYN_TYPE_VOID;
-      uint64_t value = en->variant_count;
+      /* Tags count up from the previous variant; Name = value sets one. */
+      uint64_t value = en->variant_count
+                           ? a->variants[en->variant_start + en->variant_count - 1].tag + 1
+                           : 0;
       for (CompactNode part = compact_child(c, 1); !compact_null(part); part = compact_next(part)) {
         if (compact_kind(part) != SRC_QUALIFIER) {
-          compact_report(part, s, errors, "enum variants have no explicit values; use constants for external numbers");
+          uint64_t explicit_value = 0;
+          unsigned remaining = 4096;
+          CompactNode operand = compact_unwrap(part);
+          bool negative = compact_kind(operand) == EXP_PREFIX &&
+                          s->text[compact_span(operand).start_byte] == '-';
+          if (negative) operand = compact_child(operand, 0);
+          if (!compact_extent(operand, s, a, &explicit_value, 0, &remaining)) {
+            compact_report(part, s, errors, "an enum value must be a constant integer");
+            continue;
+          }
+          if (negative && !dyn_type_tag_signed(en->tag_type)) {
+            compact_report(part, s, errors, "a negative enum value needs a signed tag type, such as enum(i32)");
+            continue;
+          }
+          uint64_t tag = negative ? (uint64_t)0 - explicit_value : explicit_value;
+          if (!en->variant_count && tag != 0)
+            compact_report(part, s, errors, "the first enum variant must be 0, so zeroed storage is valid");
+          else if (en->variant_count && (dyn_type_tag_signed(en->tag_type)
+                                             ? (int64_t)tag <= (int64_t)(value - 1)
+                                             : tag < value))
+            compact_report(part, s, errors, "enum values must increase in declaration order");
+          value = tag;
+          en->explicit_tags = true;
           continue;
         }
         payload = compact_type(compact_child(part, 0), s, a);
@@ -278,6 +307,20 @@ static bool compact_add_enum_variants(const DynSource *s, DynAstProgram *a,
              (UINT64_C(1) << (dyn_type_tag_signed(en->tag_type) ? width - 1 : width)))
       compact_report(en->name, s, errors,
                  "enum has too many variants for tag type");
+    else if (en->explicit_tags && en->has_payload)
+      compact_report(en->name, s, errors, "an enum with payloads cannot set variant values");
+    else if (en->explicit_tags && width < 64)
+      for (uint32_t v = 0; v < en->variant_count; ++v) {
+        uint64_t tag = a->variants[en->variant_start + v].tag;
+        bool fits = dyn_type_tag_signed(en->tag_type)
+                        ? (int64_t)tag >= -(INT64_C(1) << (width - 1)) &&
+                              (int64_t)tag < (INT64_C(1) << (width - 1))
+                        : tag < (UINT64_C(1) << width);
+        if (!fits) {
+          compact_report(en->name, s, errors, "an enum value does not fit the tag type");
+          break;
+        }
+      }
   }
   return true;
 }

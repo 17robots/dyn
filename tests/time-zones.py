@@ -28,24 +28,24 @@ lines = ['use "std/time" time', 'use "std/time/zone" zone', 'use "std/mem" mem',
          f'const days: [{len(calendar_days)}]i64 = [{", ".join(map(str, calendar_days))}]', '',
          'fn main() {', '  arena := mem.arena_create(16777216)', '  defer {', '    mem.arena_release(arena)', '  }',
          '  for day in days {', '    date := time.civil_from_days(day)',
-         '    _ = io.println(io.stdout(), "day {} {} {} {} {} {}", day, date.year, date.month, date.day, time.days_from_civil(date.year, date.month, date.day), #cast(u8, time.weekday(&date)))',
+         '    io.println("day {} {} {} {} {} {}", day, date.year, date.month, date.day, time.days_from_civil(date.year, date.month, date.day), #cast(u8, time.weekday(&date)))',
          '  }']
 for index, name in enumerate(ZONES):
     lines += [f'  loaded{index} := zone.load(arena, "{name}")', f'  if loaded{index}.failure.kind != io.Kind.Ok {{', f'    #panic("load {name}")', '  }',
               '  for seconds in instants {',
               f'    shown := zone.local(&loaded{index}.value, time.Instant{{ seconds: seconds }})',
               f'    back := zone.instant_of_local(&loaded{index}.value, &shown.value)',
-              f'    _ = io.println(io.stdout(), "{name} {{}} {{}} {{}} {{}} {{}}-{{}}-{{}} {{}}:{{}}:{{}} {{}}", seconds, shown.offset, shown.dst, shown.abbreviation, shown.value.year, shown.value.month, shown.value.day, shown.value.hour, shown.value.minute, shown.value.second, back.seconds)',
+              f'    io.println("{name} {{}} {{}} {{}} {{}} {{}}-{{}}-{{}} {{}}:{{}}:{{}} {{}}", seconds, shown.offset, shown.dst, shown.abbreviation, shown.value.year, shown.value.month, shown.value.day, shown.value.hour, shown.value.minute, shown.value.second, back.seconds)',
               '  }']
 lines += ['  posix := zone.parse_posix(arena, "CET-1CEST,M3.5.0,M10.5.0/3")', '  if posix.failure.kind != io.Kind.Ok {', '    #panic("posix")', '  }',
           '  for seconds in instants {', '    shown := zone.local(&posix.value, time.Instant{ seconds: seconds })',
-          '    _ = io.println(io.stdout(), "posix {} {} {}", seconds, shown.offset, shown.abbreviation)', '  }',
+          '    io.println("posix {} {} {}", seconds, shown.offset, shown.abbreviation)', '  }',
           '  bad := zone.parse_posix(arena, "CET-1CEST,M13.5.0")', '  if bad.failure.kind == io.Kind.Ok {', '    #panic("bad posix")', '  }',
           '  for seconds in instants {', '    shown := zone.local(&loaded0.value, time.Instant{ seconds: seconds })',
-          '    _ = io.println(io.stdout(), "format {} {} {}", seconds, zone.format(arena, "%Y-%m-%d %H:%M:%S %j %a %A %b %B %Z %z %%", &shown), zone.format_rfc3339(arena, &shown))', '  }',
+          '    io.println("format {} {} {}", seconds, zone.format(arena, "%Y-%m-%d %H:%M:%S %j %a %A %b %B %Z %z %%", &shown), zone.format_rfc3339(arena, &shown))', '  }',
           '  bad_format := zone.local(&loaded0.value, time.Instant{})', '  if #len(zone.format(arena, "%Q", &bad_format)) != 0 {', '    #panic("bad format")', '  }',
           '  system := zone.system(arena)', '  if system.failure.kind != io.Kind.Ok {', '    #panic("system")', '  }',
-          '  _ = io.println(io.stdout(), "system {}", system.value.name)', '}']
+          '  io.println("system {}", system.value.name)', '}']
 
 
 def expected():

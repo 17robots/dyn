@@ -28,13 +28,13 @@ fn main() {
  parsed := toml.parse(arena,source.value)
  if parsed.failure.kind != parse.Kind.Ok {
   if mem.arena_mark(arena) != mark { #panic("rollback") }
-  _ = io.println(io.stdout(),"ERR {}",parsed.offset)
+  io.println("ERR {}",parsed.offset)
   return
  }
  encoded := toml.encode(arena,parsed.root)
  if encoded.failure.kind != parse.Kind.Ok { #panic("encode") }
  if fs.write_all(args.value[2],encoded.value).failure.kind != io.Kind.Ok { #panic("write") }
- _ = io.println(io.stdout(),"OK")
+ io.println("OK")
 }
 '''
 VALID=[b'',b'x=1\n',b'''title = "TOML Example"

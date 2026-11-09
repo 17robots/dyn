@@ -851,6 +851,7 @@ void dyn_ast_program_free(DynAstProgram *a) {
   free(a->case_arms);
   free(a->children);
   free(a->locals);
+  free(a->expansions);
   free(a->generics);
   free(a->generic_params);
   free(a->instances);

@@ -113,7 +113,7 @@ LAYOUT
   ts.tree_destroy_owned(nil)
   ts.parser_destroy_owned(nil)
   require(!ts.parse(nil, nil, "").ok)
-  _ = io.println(io.stdout(), "tree-sitter provider ok")
+  io.println("tree-sitter provider ok")
 }
 '''
 report = {'provider': 'tree-sitter', 'pkg_config_version': version,

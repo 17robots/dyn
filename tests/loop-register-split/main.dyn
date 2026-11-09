@@ -179,9 +179,9 @@ fn main() {
   ]
   hash: u64 = 0
   walk(tree[..], 0, &hash)
-  _ = io.println(io.stdout(), "{}", hash)
-  _ = io.println(io.stdout(), "{} {}", halves(3, 5000), halves(11, 0))
-  _ = io.println(io.stdout(), "{} {} {}", through(5, 10000, 1000004), through(9, 10000, 17), through(1, 0, 0))
-  _ = io.println(io.stdout(), "{} {}", mix(3, 1000), mix(77, 0))
-  _ = io.println(io.stdout(), "{}", #cast(i64, wave(1.5, 1000)))
+  io.println("{}", hash)
+  io.println("{} {}", halves(3, 5000), halves(11, 0))
+  io.println("{} {} {}", through(5, 10000, 1000004), through(9, 10000, 17), through(1, 0, 0))
+  io.println("{} {}", mix(3, 1000), mix(77, 0))
+  io.println("{}", #cast(i64, wave(1.5, 1000)))
 }

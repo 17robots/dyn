@@ -109,8 +109,8 @@ fn main() {
   expression(&p, &symbols, 0)
   space(&p)
   if p.cursor != #len(p.source) { fail(&p, p.cursor) }
-  if p.failed { _ = io.println(io.stdout(), "error:{}", p.offset) }
-  else { _ = io.println(io.stdout(), "{}", p.code[..p.used]) }
+  if p.failed { io.println("error:{}", p.offset) }
+  else { io.println("{}", p.code[..p.used]) }
 }
 '''
 

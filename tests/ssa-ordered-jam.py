@@ -51,8 +51,8 @@ fn main() {{
   }}
   totals[0] = total
   totals[1] = other
-  _ = io.println(io.stdout(), "{{}} {{}}", #bitcast({u}, totals[0]), #bitcast({u}, totals[1]))
-  for j in 0..{bound} {{ _ = io.println(io.stdout(), "{{}}", #bitcast({u}, c[j])) }}
+  io.println("{{}} {{}}", #bitcast({u}, totals[0]), #bitcast({u}, totals[1]))
+  for j in 0..{bound} {{ io.println("{{}}", #bitcast({u}, c[j])) }}
 }}
 '''
 

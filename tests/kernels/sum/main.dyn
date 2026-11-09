@@ -18,5 +18,5 @@ fn main() {
     xs[r % 100000] += 1
     t += sum(xs)
   }
-  _ = io.println(io.stdout(), "{}", t)
+  io.println("{}", t)
 }

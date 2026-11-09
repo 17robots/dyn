@@ -327,7 +327,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-thumb-soft-') as tmp:
         print(f'PASS thumb-soft {mode}: arithmetic/conversions, recursive frame bank, CPACR disabled, clang ABI, explicit mixed ABI rejection; {instructions} non-VFP instructions', flush=True)
     # Checked bounds panic unwinds recursively through live f64/u64 locals.
     # Release disables bounds checks; debug is the contract exercised here.
-    (source / 'main.dyn').write_text('use "std/io"\nextern fn cpacr() u32\nfn cleanup(x:f64, wide:u64) {\n  if x != 7.5 || wide != 0x123456789abcdef0 || cpacr() & 0x00f00000 != 0 { #panic("unwind bank corrupt") }\n  _ = io.println(io.stdout(), "UNWIND BANK PASS")\n}\nfn descend(n:i32, index:usize) {\n  x:f64 = 7.5\n  wide:u64 = 0x123456789abcdef0\n  defer cleanup(x,wide)\n  if n != 0 { descend(n-1,index)\n  return }\n  values:[1]u8 = [7]\n  _ = values[index]\n}\nfn main() { descend(3,2) }\n')
+    (source / 'main.dyn').write_text('use "std/io"\nextern fn cpacr() u32\nfn cleanup(x:f64, wide:u64) {\n  if x != 7.5 || wide != 0x123456789abcdef0 || cpacr() & 0x00f00000 != 0 { #panic("unwind bank corrupt") }\n  io.println("UNWIND BANK PASS")\n}\nfn descend(n:i32, index:usize) {\n  x:f64 = 7.5\n  wide:u64 = 0x123456789abcdef0\n  defer cleanup(x,wide)\n  if n != 0 { descend(n-1,index)\n  return }\n  values:[1]u8 = [7]\n  _ = values[index]\n}\nfn main() { descend(3,2) }\n')
     image = work / 'panic.elf'
     run([DYN, 'build', str(source), '--target', 'thumbv7em-none-soft', '--no-cache', '--quiet', '--debug', '--link', str(obj), '--output', str(image)])
     check_image(image)

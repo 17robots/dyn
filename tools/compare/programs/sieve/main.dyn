@@ -17,6 +17,6 @@ fn main() {
       }
     }
   }
-  _ = io.println(io.stdout(), "{}", count)
+  io.println("{}", count)
   mem.arena_release(arena)
 }

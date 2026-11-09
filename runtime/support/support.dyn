@@ -160,9 +160,23 @@ pub fn dyn_unwind_unlink(frame: *Unwind) {
     }
   }
 }
+// The process panic hook, set through std/process.on_panic. It runs once,
+// after cleanups, right before an unhandled panic reports and exits.
+panic_hook: fn(*const u8, u64)
+pub fn dyn_set_panic_hook(hook: fn(*const u8, u64)) {
+  panic_hook = hook
+}
+fn run_panic_hook(message: *const u8, length: u64) {
+  hook := panic_hook
+  if hook != nil {
+    panic_hook = nil
+    hook(message, length)
+  }
+}
 pub fn dyn_unwind_begin(message: *const u8, length: u64) {
   slot := unwind_slot(true)
   if slot == nil || slot.unwinding != 0 || slot.top == nil {
+    run_panic_hook(message, length)
     return
   }
   unwind_store_message(slot, message, length)

@@ -21,7 +21,7 @@ fn main() {
   file := wasi.open_read(3, "input.txt")
   if #len(arguments.values[1]) == 4 {
     if file.ok { #panic("unexpected preopen") }
-    _ = io.println(io.stdout(), "denied")
+    io.println("denied")
     return
   }
   if !file.ok { #panic("open") }

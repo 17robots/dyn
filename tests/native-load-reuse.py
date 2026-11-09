@@ -95,7 +95,7 @@ fn main() {
     if branch(&value, false) != 505 { #panic("branch read") }
     if branch(&value, true) != 537 { #panic("branch store") }
   }
-  _ = io.println(io.stdout(), "load reuse passed")
+  io.println("load reuse passed")
 }
 '''
 

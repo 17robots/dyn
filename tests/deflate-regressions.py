@@ -96,7 +96,7 @@ fn fixture(encoded_path: []const u8, expected_path: []const u8, wrapped: bool, c
 }
 fn main() {
 CALLS
-  _ = io.println(io.stdout(), "deflate passed")
+  io.println("deflate passed")
 }
 '''
 

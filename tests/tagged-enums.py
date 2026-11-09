@@ -17,7 +17,7 @@ RUNNERS = {None: [], 'aarch64-linux': ['qemu-aarch64'], 'riscv64-linux': ['qemu-
            'wasm32-wasi': ['node', '--no-warnings', '-e', WASI]}
 REJECTED = {
     'first variant': ('enum E { A: i32, B }\nfn main() {\n}\n', 'first enum variant has no payload'),
-    'explicit value': ('enum E { Null, A = 4 }\nfn main() {\n}\n', 'no explicit values'),
+    'explicit value': ('enum E { Null, A: i32 = 4 }\nfn main() {\n}\n', 'payloads cannot set variant values'),
     'cast': ('enum E { Null, A: i32 }\nfn main() {\n  _ = #cast(E, 1)\n}\n', 'cast'),
     'equality': ('enum E { Null, A: i32 }\nfn f(e: E) bool {\n  return e == E.Null\n}\nfn main() {\n  _ = f(E.Null)\n}\n', ''),
 }

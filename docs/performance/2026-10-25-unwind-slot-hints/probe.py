@@ -4,7 +4,7 @@ W=Path(__file__).resolve().parent; R=W.parents[1]
 base=(R/'build/hot-inline-20261024/extended-source.dyn').read_text()
 start=base.index('else if bytes.equal(mode,"allocate")')
 body=base[start:base.index('}else {#panic("mode")}',start)+1]
-variants={'typed':base,'raw':base.replace('mem.push_array(u64,&arena,8)','(#cast(*u64,mem.arena_push(&arena,64,8)))[..8]'),'uninit':base.replace('mem.push_array(u64,&arena,8)','(#cast(*u64,mem.arena_push_uninit(&arena,64,8)))[..8]'),'no-defer':base.replace('defer mem.arena_release(&arena)','').replace('_=io.println(io.stdout(),"{}",sum)','mem.arena_release(&arena)\n_=io.println(io.stdout(),"{}",sum)')}
+variants={'typed':base,'raw':base.replace('mem.push_array(u64,&arena,8)','(#cast(*u64,mem.arena_push(&arena,64,8)))[..8]'),'uninit':base.replace('mem.push_array(u64,&arena,8)','(#cast(*u64,mem.arena_push_uninit(&arena,64,8)))[..8]'),'no-defer':base.replace('defer mem.arena_release(&arena)','').replace('io.println("{}",sum)','mem.arena_release(&arena)\nio.println("{}",sum)')}
 alloc_body=body[len('else if bytes.equal(mode,"allocate") {'):-1]
 helper='fn allocation_batch(arena:*mem.Arena,n,rounds:usize,seed:u32) u64 {\nsum:u64=0\n'+alloc_body.replace('&arena','arena')+'\nreturn sum\n}\n'
 variants['outlined']=helper+base.replace(body,'else if bytes.equal(mode,"allocate") {sum=allocation_batch(&arena,n,rounds,seed)}')

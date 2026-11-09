@@ -371,7 +371,7 @@ int dyn_sources_merge(const DynSources *sources, const char *module_name,
   static const char reflection_prelude[] =
       "enum TypeKind { Invalid, Void, Bool, Integer, Float, Pointer, Array, "
       "Slice, Struct, Enum, Function }\n"
-      "struct TypeMember { name: []const u8, type_id: u64 }\n"
+      "struct TypeMember { name: []const u8, type_id: u64, value: u64 }\n"
       "struct TypeInfo { id: u64, kind: "
       "TypeKind, name: []const u8, size: usize, alignment: usize, "
       "element_id: u64, length: usize, member_count: usize, "

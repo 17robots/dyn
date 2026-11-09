@@ -46,14 +46,14 @@ pub fn cleanup(n:u64) u64 { defer { count+=1 }
 if n<2 { return n }
 return cleanup(n-1)+cleanup(n-2) }
 fn main() {
-  _=io.println(io.stdout(),"{} {} {} {} {} {} {} {} {} {} {}",less(0),less(1),less(15),
+  io.println("{} {} {} {} {} {} {} {} {} {} {}",less(0),less(1),less(15),
     equal(0,7),equal(6,7),different(0),above(199),above(18446744073709551615),
     at_least(125),at_most(3,4,5,6,7,5),signed(15))
-  _=io.println(io.stdout(),"{} {} {} {} {}",less(2),less(3),less(7),less(8),alternate(9))
+  io.println("{} {} {} {} {}",less(2),less(3),less(7),less(8),alternate(9))
   _=later(7)
   _=effect(7)
   _=cleanup(7)
-  _=io.println(io.stdout(),"{}",count)
+  io.println("{}",count)
 }
 '''
 

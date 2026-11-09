@@ -14,7 +14,7 @@ typedef struct {
   unsigned pointer_bytes;
   SemaNames functions, globals, locals;
   size_t indexed_locals;
-  uint32_t current_function;
+  uint32_t current_function, block_depth;
   DynType current_return_type;
   DynAstStmt **active_loops;
   size_t active_loop_count, active_loop_capacity;
@@ -324,13 +324,14 @@ static uint32_t sema_local_lookup(Sema *sema, DynAstProgram *a, DynSpan name,
     for (uint32_t entry = index->buckets[sema_name_hash(name, s) & index->mask];
          entry; entry = index->next[entry - 1]) {
       uint32_t id = (uint32_t)first + entry - 1;
-      if (id < found && (!active_only || a->locals[id].active) &&
+      if ((found == UINT32_MAX || id > found) && (!active_only || a->locals[id].active) &&
           dyn_span_text_equal(name, a->locals[id].name, s)) found = id;
     }
     return found;
   }
   if (count >= 32) a->allocation_failed = true;
-  for (size_t i = first; i < a->local_count; ++i)
+  /* The newest active local wins: an inner block's name shadows outer ones. */
+  for (size_t i = a->local_count; i-- > first;)
     if ((!active_only || a->locals[i].active) &&
         dyn_span_text_equal(name, a->locals[i].name, s)) return (uint32_t)i;
   return UINT32_MAX;
@@ -338,6 +339,18 @@ static uint32_t sema_local_lookup(Sema *sema, DynAstProgram *a, DynSpan name,
 static uint32_t find_local(Sema *sema, DynAstProgram *a, DynSpan name,
                            const DynSource *s) {
   return sema_local_lookup(sema, a, name, s, true);
+}
+/* A nested block may reuse an outer local's name. A second local in the same
+   block, or a shadowed loop variable inside its own loop, is an error. */
+static const char *local_name_conflict(Sema *sema, DynAstProgram *a, DynSpan name,
+                                       const DynSource *s, bool binding) {
+  uint32_t l = find_local(sema, a, name, s);
+  if (l == UINT32_MAX) return NULL;
+  if (a->locals[l].loop_variable)
+    return "cannot shadow a loop variable inside its loop";
+  if (a->locals[l].depth >= sema->block_depth + (binding ? 1 : 0))
+    return "this name is already declared in this block; only a nested block may shadow it";
+  return NULL;
 }
 static uint32_t sema_find_global_name(Sema *sema, DynAstProgram *a,
                                       DynSpan name, const DynSource *s) {
@@ -1210,10 +1223,11 @@ static DynExprId reflection_string(DynAstProgram *a, DynType type,
 static DynExprId reflection_members(DynAstProgram *a, const DynSource *s,
                                     DynType member_type, DynType slice_type,
                                     const DynSpan *names, const DynType *types,
-                                    uint32_t count, const char *const *builtin_names) {
+                                    uint32_t count, const char *const *builtin_names,
+                                    const DynAstVariant *variants) {
   if (!count)
     return reflection_expr(a, DYN_EXPR_NIL, slice_type, 0);
-  if (!reserve_reflection_items(a, (size_t)count * 3))
+  if (!reserve_reflection_items(a, (size_t)count * 4))
     return DYN_NO_EXPR;
   uint32_t array_start = (uint32_t)a->item_count;
   a->item_count += count;
@@ -1230,19 +1244,23 @@ static DynExprId reflection_members(DynAstProgram *a, const DynSource *s,
     DynExprId type_id = reflection_expr(
         a, DYN_EXPR_INT, DYN_TYPE_U64,
         types[i] == DYN_TYPE_VOID ? 0 : reflection_id(type_name));
-    if (name == DYN_NO_EXPR || type_id == DYN_NO_EXPR)
+    /* An enum variant's tag; other members report 0. */
+    DynExprId value = reflection_expr(a, DYN_EXPR_INT, DYN_TYPE_U64, variants ? variants[i].tag : 0);
+    if (name == DYN_NO_EXPR || type_id == DYN_NO_EXPR || value == DYN_NO_EXPR)
       return DYN_NO_EXPR;
     uint32_t fields = (uint32_t)a->item_count;
     a->items[a->item_count++] =
         (DynAstItem){.expression = name, .field_index = 0};
     a->items[a->item_count++] =
         (DynAstItem){.expression = type_id, .field_index = 1};
+    a->items[a->item_count++] =
+        (DynAstItem){.expression = value, .field_index = 2};
     DynExprId member = reflection_expr(a, DYN_EXPR_STRUCT, member_type,
                                        member_type - DYN_TYPE_STRUCT_BASE);
     if (member == DYN_NO_EXPR)
       return DYN_NO_EXPR;
     a->expressions[member].item_start = fields;
-    a->expressions[member].item_count = 2;
+    a->expressions[member].item_count = 3;
     a->items[array_start + i] = (DynAstItem){.expression = member};
   }
   DynType array_type = sema_intern_array(a, member_type, count);
@@ -1556,18 +1574,59 @@ static DynExprId copy_untyped(DynAstProgram *a, DynExprId id) {
   DynAstExpr e = a->expressions[id];
   e.left = copy_untyped(a, e.left);
   e.right = copy_untyped(a, e.right);
+  if (e.item_count && (e.kind == DYN_EXPR_STRUCT || e.kind == DYN_EXPR_ARRAY ||
+                       e.kind == DYN_EXPR_CALL)) {
+    uint32_t start = (uint32_t)a->item_count;
+    if (!reserve_reflection_items(a, e.item_count)) return DYN_NO_EXPR;
+    a->item_count += e.item_count;
+    for (uint32_t i = 0; i < e.item_count; ++i) {
+      DynAstItem item = a->items[e.item_start + i];
+      item.expression = copy_untyped(a, item.expression);
+      a->items[start + i] = item;
+    }
+    e.item_start = start;
+  }
   if (a->allocation_failed || !sema_reserve_expr(a)) return DYN_NO_EXPR;
   a->expressions[a->expression_count] = e;
   return (DynExprId)a->expression_count++;
 }
 /* A use of an untyped constant becomes a fresh copy of its literal value. */
+/* A struct whose fields, or nested struct fields, declare defaults. */
+static bool struct_has_defaults(DynAstProgram *a, DynType type, unsigned depth) {
+  if (!dyn_type_is_struct(type) || depth > 64) return false;
+  DynAstStruct *st = &a->structs[type - DYN_TYPE_STRUCT_BASE];
+  if (st->is_union) return false;
+  for (uint32_t i = 0; i < st->field_count; ++i) {
+    DynAstField *f = &a->fields[st->field_start + i];
+    if (f->has_default || struct_has_defaults(a, f->type, depth + 1)) return true;
+  }
+  return false;
+}
+/* T{}: a fresh value that the literal check fills with defaults. */
+static DynExprId fresh_struct(DynAstProgram *a, DynType type, DynSpan span) {
+  if (!sema_reserve_expr(a)) return DYN_NO_EXPR;
+  a->expressions[a->expression_count] = (DynAstExpr){.kind = DYN_EXPR_STRUCT, .type = type,
+      .span = span, .left = DYN_NO_EXPR, .right = DYN_NO_EXPR,
+      .item_start = (uint32_t)a->item_count};
+  return (DynExprId)a->expression_count++;
+}
 static DynType expand_untyped(Sema *sema, DynAstProgram *a, DynExprId id, DynExprId value,
-                              const DynSource *s, unsigned *errors, DynType expected) {
+                              const DynSource *s, unsigned *errors, DynType expected,
+                              bool global, uint32_t target) {
   DynSpan span = a->expressions[id].span;
+  if (a->expansion_count == a->expansion_capacity) {
+    size_t capacity = a->expansion_capacity ? a->expansion_capacity * 2 : 16;
+    void *grown = realloc(a->expansions, capacity * sizeof(*a->expansions));
+    if (!grown) { a->allocation_failed = true; return a->expressions[id].type = DYN_TYPE_ERROR; }
+    a->expansions = grown;
+    a->expansion_capacity = capacity;
+  }
+  a->expansions[a->expansion_count++] = (struct DynAstExpansion){id, target, global};
   DynExprId copy = copy_untyped(a, value);
   if (copy == DYN_NO_EXPR) return a->expressions[id].type = DYN_TYPE_ERROR;
   a->expressions[id] = a->expressions[copy];
-  a->expressions[id].span = span;
+  /* A name keeps its own spelling, which is how it resolves. */
+  if (a->expressions[id].kind != DYN_EXPR_NAME) a->expressions[id].span = span;
   return check_expr(sema, a, id, s, errors, expected);
 }
 static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
@@ -1810,13 +1869,13 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
     if (l != UINT32_MAX) {
       a->locals[l].used = true;
       if (a->locals[l].has_untyped)
-        return expand_untyped(sema, a, id, a->locals[l].untyped, s, errors, expected);
+        return expand_untyped(sema, a, id, a->locals[l].untyped, s, errors, expected, false, l);
       a->expressions[id].integer = l;
       return a->expressions[id].type = a->locals[l].type;
     }
     uint32_t global = sema_find_global_name(sema, a, a->expressions[id].span, s);
     if (global != UINT32_MAX && a->globals[global].has_untyped)
-      return expand_untyped(sema, a, id, a->globals[global].untyped, s, errors, expected);
+      return expand_untyped(sema, a, id, a->globals[global].untyped, s, errors, expected, true, global);
     if (global != UINT32_MAX) {
       a->expressions[id].kind = DYN_EXPR_GLOBAL;
       a->expressions[id].integer = global;
@@ -1961,6 +2020,10 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
     }
     return a->expressions[id].type = sema_intern_slice(a, element, element_const);
   }
+  if (a->expressions[id].kind == DYN_EXPR_INIT) {
+    error_span(a->expressions[id].span, s, errors, "#init(pointer) is a statement, not a value");
+    return a->expressions[id].type = DYN_TYPE_ERROR;
+  }
   if (a->expressions[id].kind == DYN_EXPR_LEN) {
     DynType base = check_expr(sema, a, a->expressions[id].left, s, errors, DYN_TYPE_INFER);
     if (!dyn_type_is_array(base) && !dyn_type_is_slice(base)) {
@@ -1999,7 +2062,7 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
     DynAstStruct *st = &a->structs[info];
     DynAstEnum *en = &a->enums[kind_enum];
     bool abi =
-        st->field_count == 13 && a->structs[member].field_count == 2 &&
+        st->field_count == 13 && a->structs[member].field_count == 3 &&
         en->variant_count >= 11 &&
         a->fields[st->field_start].type == DYN_TYPE_U64 &&
         a->fields[st->field_start + 1].type == DYN_TYPE_ENUM_BASE + kind_enum &&
@@ -2100,7 +2163,7 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
       }
       if (names && types)
         values[10] = reflection_members(a, s, member_type, member_slice, names,
-                                        types, subject->field_count, NULL);
+                                        types, subject->field_count, NULL, NULL);
       free(names);
       free(types);
     } else if (dyn_type_is_enum(operand)) {
@@ -2115,7 +2178,8 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
       }
       if (names && types)
         values[11] = reflection_members(a, s, member_type, member_slice, names,
-                                        types, subject->variant_count, NULL);
+                                        types, subject->variant_count, NULL,
+                                        &a->variants[subject->variant_start]);
       free(names);
       free(types);
     } else if (dyn_type_is_function(operand)) {
@@ -2131,7 +2195,7 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
       }
       if (names && types)
         values[12] = reflection_members(a, s, member_type, member_slice, names,
-                                        types, signature->param_count, NULL);
+                                        types, signature->param_count, NULL, NULL);
       free(names);
       free(types);
     }
@@ -2284,6 +2348,39 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
     }
     a->expressions[id].integer = sid;
     a->expressions[id].type = DYN_TYPE_STRUCT_BASE + sid;
+    if (!a->structs[sid].is_union && struct_has_defaults(a, DYN_TYPE_STRUCT_BASE + sid, 0)) {
+      /* Omitted fields take their defaults; omitted struct fields their own. */
+      DynAstStruct *model = &a->structs[sid];
+      uint32_t given = a->expressions[id].item_count, extra = 0;
+      for (uint32_t f = 0; f < model->field_count; ++f) {
+        DynAstField *field = &a->fields[model->field_start + f];
+        bool named = false;
+        for (uint32_t i = 0; i < given && !named; ++i)
+          named = dyn_span_text_equal(a->items[a->expressions[id].item_start + i].name, field->name, s);
+        if (!named && (field->has_default || struct_has_defaults(a, field->type, 0))) ++extra;
+      }
+      if (extra && reserve_reflection_items(a, given + extra)) {
+        uint32_t start = (uint32_t)a->item_count;
+        for (uint32_t i = 0; i < given; ++i)
+          a->items[start + i] = a->items[a->expressions[id].item_start + i];
+        a->item_count += given;
+        model = &a->structs[sid];
+        for (uint32_t f = 0; f < model->field_count; ++f) {
+          DynAstField field = a->fields[model->field_start + f];
+          bool named = false;
+          for (uint32_t i = 0; i < given && !named; ++i)
+            named = dyn_span_text_equal(a->items[start + i].name, field.name, s);
+          if (named || !(field.has_default || struct_has_defaults(a, field.type, 0))) continue;
+          DynExprId value = field.has_default ? copy_untyped(a, field.default_value)
+                                              : fresh_struct(a, field.type, a->expressions[id].span);
+          if (value == DYN_NO_EXPR) break;
+          a->items[a->item_count++] = (DynAstItem){.name = field.name, .expression = value,
+                                                   .field_index = UINT32_MAX};
+        }
+        a->expressions[id].item_start = start;
+        a->expressions[id].item_count = (uint32_t)(a->item_count - start);
+      }
+    }
     DynAstStruct *st = &a->structs[sid];
     for (uint32_t i = 0; i < a->expressions[id].item_count; ++i) {
       uint32_t item_index = a->expressions[id].item_start + i;
@@ -2371,7 +2468,7 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
     return a->expressions[id].type = DYN_TYPE_I32;
   }
   if (a->expressions[id].kind == DYN_EXPR_FLOAT) {
-    return a->expressions[id].type = expected == DYN_TYPE_F64 ? DYN_TYPE_F64 : DYN_TYPE_F32;
+    return a->expressions[id].type = expected == DYN_TYPE_F64 || expected == DYN_TYPE_ANY ? DYN_TYPE_F64 : DYN_TYPE_F32;
   }
   if (a->expressions[id].kind == DYN_EXPR_CHAR) {
     DynType t = expected != DYN_TYPE_INFER && !dyn_type_is_distinct(expected) &&
@@ -2386,7 +2483,8 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
     return a->expressions[id].type = t;
   }
   if (a->expressions[id].kind == DYN_EXPR_STRING) {
-    if (expected == DYN_TYPE_INFER)
+    /* Boxed into any, a string literal is []const u8, as Go and Odin do. */
+    if (expected == DYN_TYPE_INFER || expected == DYN_TYPE_ANY)
       return a->expressions[id].type = sema_intern_slice(a, DYN_TYPE_U8, true);
     DynAstSlice *target = slice_info(a, expected);
     if (!target || target->element != DYN_TYPE_U8 || !target->is_const) {
@@ -2625,6 +2723,104 @@ static bool lvalue_const(DynAstProgram *a, DynExprId id) {
     return e->integer < a->global_count && a->globals[e->integer].is_const;
   return false;
 }
+/* An all-literal range takes its binding's type from the first use that meets
+   a known integer type: a typed target, operand, parameter or return. */
+typedef struct {
+  Sema *sema;
+  DynAstProgram *a;
+  const DynSource *s;
+  DynSpan name;
+  DynType hint;
+  unsigned work;
+} RangeHint;
+static bool range_mentions(RangeHint *h, DynExprId id, unsigned depth) {
+  if (id == DYN_NO_EXPR || depth > 32) return false;
+  const DynAstExpr *e = &h->a->expressions[id];
+  if (e->kind == DYN_EXPR_NAME) return dyn_span_text_equal(e->span, h->name, h->s);
+  if (e->kind == DYN_EXPR_UNARY)
+    return (e->op == DYN_OP_NEG || e->op == DYN_OP_BIT_NOT) && range_mentions(h, e->left, depth + 1);
+  if (e->kind != DYN_EXPR_BINARY || e->op < DYN_OP_ADD) return false;
+  if (e->op >= DYN_OP_EQ && e->op <= DYN_OP_LOGICAL_OR) return false;
+  if (e->op == DYN_OP_SHL || e->op == DYN_OP_SHR) return range_mentions(h, e->left, depth + 1);
+  return range_mentions(h, e->left, depth + 1) || range_mentions(h, e->right, depth + 1);
+}
+static DynType range_known_name(RangeHint *h, DynSpan name) {
+  if (dyn_span_text_equal(name, h->name, h->s)) return DYN_TYPE_INFER;
+  uint32_t l = find_local(h->sema, h->a, name, h->s);
+  if (l != UINT32_MAX) return h->a->locals[l].has_untyped ? DYN_TYPE_INFER : h->a->locals[l].type;
+  uint32_t g = sema_find_global_name(h->sema, h->a, name, h->s);
+  if (g != UINT32_MAX) return h->a->globals[g].has_untyped ? DYN_TYPE_INFER : h->a->globals[g].type;
+  return DYN_TYPE_INFER;
+}
+static DynType range_known(RangeHint *h, DynExprId id) {
+  if (id == DYN_NO_EXPR) return DYN_TYPE_INFER;
+  const DynAstExpr *e = &h->a->expressions[id];
+  if (e->kind == DYN_EXPR_LEN) return DYN_TYPE_USIZE;
+  if (e->kind == DYN_EXPR_NAME) return range_known_name(h, e->span);
+  if (e->kind == DYN_EXPR_CALL) {
+    uint32_t fn = sema_find_function(h->sema, h->a, e->span, h->s);
+    return fn == UINT32_MAX || h->a->functions[fn].is_generic ? DYN_TYPE_INFER
+                                                              : h->a->functions[fn].return_type;
+  }
+  if (e->kind == DYN_EXPR_FIELD && e->left != DYN_NO_EXPR) {
+    DynType base = range_known(h, e->left);
+    DynAstPointer *pointer = pointer_info(h->a, base);
+    if (pointer) base = pointer->pointee;
+    if (!dyn_type_is_struct(base)) return DYN_TYPE_INFER;
+    uint32_t sid = base - DYN_TYPE_STRUCT_BASE;
+    uint32_t field = sema_find_field(h->a, sid, e->span, h->s);
+    return field == UINT32_MAX ? DYN_TYPE_INFER
+                               : h->a->fields[h->a->structs[sid].field_start + field].type;
+  }
+  return DYN_TYPE_INFER;
+}
+static void range_offer(RangeHint *h, DynType type) {
+  if (h->hint == DYN_TYPE_INFER && type != DYN_TYPE_INFER && type != DYN_TYPE_ERROR &&
+      integer(h->sema, type))
+    h->hint = type;
+}
+static void range_expr(RangeHint *h, DynExprId id, unsigned depth) {
+  if (id == DYN_NO_EXPR || h->hint != DYN_TYPE_INFER || depth > 64 || ++h->work > 100000) return;
+  DynAstExpr e = h->a->expressions[id];
+  if (e.kind == DYN_EXPR_BINARY) {
+    if (range_mentions(h, e.left, 0)) range_offer(h, range_known(h, e.right));
+    if (range_mentions(h, e.right, 0)) range_offer(h, range_known(h, e.left));
+  }
+  if (e.kind == DYN_EXPR_CALL) {
+    uint32_t fn = sema_find_function(h->sema, h->a, e.span, h->s);
+    if (fn != UINT32_MAX && !h->a->functions[fn].is_generic)
+      for (uint32_t i = 0; i < e.item_count && i < h->a->functions[fn].param_count; ++i)
+        if (range_mentions(h, h->a->items[e.item_start + i].expression, 0))
+          range_offer(h, h->a->params[h->a->functions[fn].param_start + i].type);
+  }
+  range_expr(h, e.left, depth + 1);
+  range_expr(h, e.right, depth + 1);
+  if (e.kind == DYN_EXPR_CALL || e.kind == DYN_EXPR_STRUCT || e.kind == DYN_EXPR_ARRAY)
+    for (uint32_t i = 0; i < e.item_count; ++i)
+      range_expr(h, h->a->items[e.item_start + i].expression, depth + 1);
+}
+static void range_block(RangeHint *h, uint32_t start, uint32_t count, unsigned depth) {
+  for (uint32_t i = 0; i < count && h->hint == DYN_TYPE_INFER && depth < 64; ++i) {
+    const DynAstStmt *st = &h->a->statements[h->a->children[start + i]];
+    if (st->kind == DYN_STMT_ASSIGN && range_mentions(h, st->expression, 0))
+      range_offer(h, st->target != DYN_NO_EXPR ? range_known(h, st->target)
+                                               : range_known_name(h, st->name));
+    if (st->kind == DYN_STMT_LOCAL && st->declared_type != DYN_TYPE_INFER &&
+        range_mentions(h, st->expression, 0))
+      range_offer(h, st->declared_type);
+    if (st->kind == DYN_STMT_RETURN && h->sema->current_function != UINT32_MAX &&
+        range_mentions(h, st->expression, 0))
+      range_offer(h, h->a->functions[h->sema->current_function].return_type);
+    range_expr(h, st->target, 0);
+    range_expr(h, st->expression, 0);
+    range_block(h, st->body_start, st->body_count, depth + 1);
+    range_block(h, st->else_start, st->else_count, depth + 1);
+    for (uint32_t k = 0; k < st->case_arm_count; ++k) {
+      const DynAstCaseArm *arm = &h->a->case_arms[st->case_arm_start + k];
+      range_block(h, arm->body_start, arm->body_count, depth + 1);
+    }
+  }
+}
 static bool sema_block(Sema *sema, DynAstProgram *, uint32_t, uint32_t,
                        const DynSource *, unsigned *, bool);
 static bool mutable_case_subject(DynAstProgram *a, DynExprId id) {
@@ -2830,6 +3026,7 @@ static bool sema_case_v2(Sema *sema, DynAstProgram *a, DynAstStmt *st,
           arm->local_id = (uint32_t)a->local_count;
           a->locals[a->local_count++] =
               (DynAstLocal){.name = arm->binding,
+                          .depth = sema->block_depth + 1,
                             .type = p->type,
                             .active = true,
                             .owner_function = sema->current_function};
@@ -2949,13 +3146,14 @@ static bool sema_case_v2(Sema *sema, DynAstProgram *a, DynAstStmt *st,
         if (v->payload_type == DYN_TYPE_VOID)
           error_span(arm->binding, s, errors,
                      "payloadless variant cannot bind payload");
-        else if (find_local(sema, a, arm->binding, s) != UINT32_MAX)
+        else if (local_name_conflict(sema, a, arm->binding, s, true))
           error_span(arm->binding, s, errors,
-                     "shadowing or duplicate local is forbidden");
+                     local_name_conflict(sema, a, arm->binding, s, true));
         else if (reserve_local(a)) {
           arm->local_id = (uint32_t)a->local_count;
           a->locals[a->local_count++] =
               (DynAstLocal){.name = arm->binding,
+                          .depth = sema->block_depth + 1,
                             .type = v->payload_type,
                             .active = true,
                             .owner_function = sema->current_function};
@@ -3091,6 +3289,34 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
     }
     return true;
   }
+  if (st->kind == DYN_STMT_EXPR && a->expressions[st->expression].kind == DYN_EXPR_INIT) {
+    /* #init(p) writes T's field defaults through p, so allocators can make
+       fresh values. With no defaults it only evaluates p. */
+    DynExprId pointer = a->expressions[st->expression].left;
+    DynType type = check_expr(sema, a, pointer, s, errors, DYN_TYPE_INFER);
+    DynAstPointer *info = pointer_info(a, type);
+    if (type != DYN_TYPE_ERROR && (!info || info->is_const)) {
+      error_span(st->span, s, errors, "#init needs a mutable pointer, such as *T");
+      return false;
+    }
+    if (type == DYN_TYPE_ERROR) return false;
+    DynType pointee = info->pointee;
+    if (!struct_has_defaults(a, pointee, 0)) {
+      st->expression = pointer;
+      return false;
+    }
+    DynSpan span = st->span;
+    DynExprId fresh = fresh_struct(a, pointee, span);
+    if (fresh == DYN_NO_EXPR || !sema_reserve_expr(a)) return false;
+    DynExprId target = (DynExprId)a->expression_count;
+    a->expressions[a->expression_count++] = (DynAstExpr){.kind = DYN_EXPR_UNARY, .op = DYN_OP_DEREF,
+        .span = span, .left = pointer, .right = DYN_NO_EXPR};
+    st->kind = DYN_STMT_ASSIGN;
+    st->target = target;
+    st->expression = fresh;
+    st->assignment_op = DYN_OP_NONE;
+    return sema_stmt(sema, a, st, s, errors);
+  }
   if (st->kind == DYN_STMT_EXPR) {
     DynExprKind original = a->expressions[st->expression].kind;
     DynType value =
@@ -3215,13 +3441,14 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
           if (v->payload_type == DYN_TYPE_VOID)
             error_span(arm->binding, s, errors,
                        "payloadless variant cannot bind payload");
-          else if (find_local(sema, a, arm->binding, s) != UINT32_MAX)
+          else if (local_name_conflict(sema, a, arm->binding, s, true))
             error_span(arm->binding, s, errors,
-                       "shadowing or duplicate local is forbidden");
+                       local_name_conflict(sema, a, arm->binding, s, true));
           else if (reserve_local(a)) {
             arm->local_id = (uint32_t)a->local_count;
             a->locals[a->local_count++] =
                 (DynAstLocal){.name = arm->binding,
+                          .depth = sema->block_depth + 1,
                               .type = v->payload_type,
                               .active = true,
                               .owner_function = sema->current_function};
@@ -3265,13 +3492,16 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
             check_expr(sema, a, st->expression, s, errors, type) != type)
           type = DYN_TYPE_ERROR;
       } else if (first_literal && last_literal) {
-        if (a->expressions[st->target].kind == DYN_EXPR_UNARY ||
-            a->expressions[st->expression].kind == DYN_EXPR_UNARY) {
+        RangeHint hint = {sema, a, s, st->name, DYN_TYPE_INFER, 0};
+        range_block(&hint, st->body_start, st->body_count, 0);
+        if (hint.hint == DYN_TYPE_INFER &&
+            (a->expressions[st->target].kind == DYN_EXPR_UNARY ||
+             a->expressions[st->expression].kind == DYN_EXPR_UNARY)) {
           error_span(st->span, s, errors,
                      "negative literal range needs a typed binding, such as 'for i: i32 in'");
           return false;
         }
-        type = DYN_TYPE_USIZE;
+        type = hint.hint == DYN_TYPE_INFER ? DYN_TYPE_USIZE : hint.hint;
         if (check_expr(sema, a, st->target, s, errors, type) != type ||
             check_expr(sema, a, st->expression, s, errors, type) != type)
           type = DYN_TYPE_ERROR;
@@ -3294,9 +3524,8 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
                    "range for-in binds values; remove the pointer binding");
         return false;
       }
-      if (find_local(sema, a, st->name, s) != UINT32_MAX) {
-        error_span(st->name, s, errors,
-                   "shadowing or duplicate local is forbidden");
+      if (local_name_conflict(sema, a, st->name, s, true)) {
+        error_span(st->name, s, errors, local_name_conflict(sema, a, st->name, s, true));
         return false;
       }
       if (!reserve_local(a)) {
@@ -3308,6 +3537,8 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
           (DynAstLocal){.name = st->name,
                         .type = type,
                         .active = true,
+                        .depth = sema->block_depth + 1,
+                        .loop_variable = true,
                         .owner_function = sema->current_function};
       bool pushed = push_loop(sema, st, s, errors);
       (void)sema_block(sema, a, st->body_start, st->body_count, s, errors,
@@ -3345,9 +3576,8 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
                    "mutable pointer for-in requires mutable collection");
         return false;
       }
-      if (find_local(sema, a, st->name, s) != UINT32_MAX) {
-        error_span(st->name, s, errors,
-                   "shadowing or duplicate local is forbidden");
+      if (local_name_conflict(sema, a, st->name, s, true)) {
+        error_span(st->name, s, errors, local_name_conflict(sema, a, st->name, s, true));
         return false;
       }
       if (!reserve_local(a)) {
@@ -3369,6 +3599,8 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
           (DynAstLocal){.name = st->name,
                         .type = binding,
                         .active = true,
+                        .depth = sema->block_depth + 1,
+                        .loop_variable = true,
                         .owner_function = sema->current_function};
       bool pushed = push_loop(sema, st, s, errors);
       (void)sema_block(sema, a, st->body_start, st->body_count, s, errors,
@@ -3396,10 +3628,11 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
     return st->else_count && body && other;
   }
   if (st->kind == DYN_STMT_LOCAL) {
-    if (find_local(sema, a, st->name, s) != UINT32_MAX ||
-        shadows_global(sema, a, st->name, s)) {
-      error_span(st->name, s, errors,
-                 "shadowing or duplicate local is forbidden");
+    const char *conflict = local_name_conflict(sema, a, st->name, s, false);
+    if (!conflict && shadows_global(sema, a, st->name, s))
+      conflict = "a local cannot shadow a global, function or module name";
+    if (conflict) {
+      error_span(st->name, s, errors, conflict);
       return false;
     }
     DynType type = st->declared_type;
@@ -3407,6 +3640,9 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
       error_span(st->span, s, errors, "inferred local requires initializer");
       return false;
     }
+    /* p: Player starts as Player{}, so declared fields take their defaults. */
+    if (st->expression == DYN_NO_EXPR && struct_has_defaults(a, type, 0))
+      st->expression = fresh_struct(a, type, st->span);
     DynExprId pristine = DYN_NO_EXPR;
     if (st->expression != DYN_NO_EXPR && st->is_const && type == DYN_TYPE_INFER &&
         untyped_constant(sema, a, st->expression, s, 0))
@@ -3442,6 +3678,7 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
                       .type = type,
                       .active = true,
                       .is_const = st->is_const,
+                      .depth = sema->block_depth,
                       .has_untyped = pristine != DYN_NO_EXPR,
                       .untyped = pristine,
                       .owner_function = sema->current_function};
@@ -3549,6 +3786,7 @@ static bool sema_block(Sema *sema, DynAstProgram *a, uint32_t start,
                        bool scoped) {
   size_t base = a->local_count;
   bool terminated = false;
+  if (scoped) ++sema->block_depth;
   for (uint32_t i = 0; i < count; ++i) {
     DynAstStmt *st = &a->statements[a->children[start + i]];
     if (terminated) {
@@ -3557,9 +3795,11 @@ static bool sema_block(Sema *sema, DynAstProgram *a, uint32_t start,
     }
     terminated = sema_stmt(sema, a, st, s, errors);
   }
-  if (scoped)
+  if (scoped) {
+    --sema->block_depth;
     for (size_t i = base; i < a->local_count; ++i)
       a->locals[i].active = false;
+  }
   return terminated;
 }
 static bool foreign_symbol_valid(DynSpan name, const DynSource *s) {
@@ -3780,6 +4020,11 @@ static bool sema_program(Sema *sema, DynAstProgram *a, const DynSource *s,
     if (g->type == DYN_TYPE_ANY)
       error_span(g->name, s, errors,
                  "global any would escape borrowed storage");
+    if (g->initializer == DYN_NO_EXPR && !g->is_const && struct_has_defaults(a, g->type, 0)) {
+      DynExprId fresh = fresh_struct(a, g->type, g->name);
+      g = &a->globals[i];
+      g->initializer = fresh;
+    }
     if (g->initializer == DYN_NO_EXPR) {
       if (g->is_const)
         error_span(g->name, s, errors, "constant requires initializer");
@@ -3823,6 +4068,24 @@ static bool sema_program(Sema *sema, DynAstProgram *a, const DynSource *s,
         !compile_time_expr(a, g->initializer, s, constant_globals))
       error_span(g->name, s, errors,
                  "constant initializer must be compile-time expression");
+  }
+  /* Each default is checked once on its own copy; uses copy it again. */
+  for (uint32_t i = 0; i < a->struct_count && dyn_work_step(&s->context, 1); ++i) {
+    if (a->structs[i].is_template) continue;
+    for (uint32_t f = 0; f < a->structs[i].field_count; ++f) {
+      DynAstField field = a->fields[a->structs[i].field_start + f];
+      if (!field.has_default) continue;
+      DynExprId copy = copy_untyped(a, field.default_value);
+      if (copy == DYN_NO_EXPR) continue;
+      DynType value = check_expr(sema, a, copy, s, errors, field.type);
+      if (value != field.type && value != DYN_TYPE_ERROR && field.type != DYN_TYPE_ERROR &&
+          !can_convert(sema, a, value, field.type))
+        error_types(a, a->expressions[copy].span, s, errors, "field default type mismatch",
+                    field.type, value);
+      else if (value != DYN_TYPE_ERROR && !compile_time_expr(a, copy, s, constant_globals))
+        error_span(a->expressions[copy].span, s, errors,
+                   "a field default must be a compile-time value");
+    }
   }
   free(constant_globals);
   for (size_t i = 0; i < a->assert_count; ++i) {
@@ -3898,6 +4161,7 @@ static bool sema_program(Sema *sema, DynAstProgram *a, const DynSource *s,
       fn = &a->functions[f];
     }
     sema->current_function = f;
+    sema->block_depth = 0;
     sema->current_return_type = fn->return_type;
     fn->local_start = (uint32_t)a->local_count;
     for (uint32_t i = 0; i < fn->param_count; ++i) {

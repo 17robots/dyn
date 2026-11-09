@@ -20,7 +20,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-native-cache-') as directory:
     source = work/'app'
     source.mkdir()
     (source/'main.dyn').write_text('use "std/io"\nextern fn value "value"() i32\n'
-                                  'fn main() { _ = io.println(io.stdout(), "{}", value()) }\n')
+                                  'fn main() { io.println("{}", value()) }\n')
     provider = work/'provider.c'
     obj = work/'provider.o'
     script = work/'exports.map'

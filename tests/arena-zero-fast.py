@@ -140,7 +140,7 @@ fn main() {
   fill(backing[..])
   mem.zero(backing[..])
   for b in backing { expect(b == 0) }
-  _ = io.println(io.stdout(), "ARENA ZERO PASS")
+  io.println("ARENA ZERO PASS")
 }
 '''
 
@@ -188,7 +188,7 @@ use "std/observe"
 use "std/io"
 fn cleanup(arena:*mem.Arena, log:*observe.Log) {
  if arena.offset!=mem.arena_start(arena)+3 || arena.allocation_failures!=FAILURES || log.count!=EVENTS { #panic("typed array failure state") }
- _=io.println(io.stdout(),"FAILURE STATE PASS")
+ io.println("FAILURE STATE PASS")
 }
 fn main() {
  backing:[mem.ArenaBufferOverhead+16]u8=[]

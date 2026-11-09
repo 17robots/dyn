@@ -233,7 +233,7 @@ static void expression(Dump *d, const DynIrExpr *e) {
       break;
     case DYN_EXPR_INDEX: EX("base",e->left); EX("index",e->right); break;
     case DYN_EXPR_CONVERT: case DYN_EXPR_CAST: case DYN_EXPR_BITCAST:
-    case DYN_EXPR_LEN: EX("operand",e->left); break;
+    case DYN_EXPR_LEN: case DYN_EXPR_INIT: EX("operand",e->left); break;
     case DYN_EXPR_SIZE: case DYN_EXPR_ALIGN: case DYN_EXPR_TYPEOF:
       flag(d,"type_operand",e->boolean);
       if(e->boolean) {

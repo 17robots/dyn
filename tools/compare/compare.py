@@ -117,7 +117,7 @@ def write_dyn(root, modules, roots):
         (root / f'm{number}').mkdir()
         (root / f'm{number}' / f'm{number}.dyn').write_text('\n'.join(out))
     main = ['use "std/io"'] + [f'use "m{r}"' for r in roots] + ['', 'fn main() {', '  t: i64 = 0']
-    main += [f'  t += m{r}.run({i})' for i, r in enumerate(roots)] + ['  _ = io.println(io.stdout(), "{}", t)', '}', '']
+    main += [f'  t += m{r}.run({i})' for i, r in enumerate(roots)] + ['  io.println("{}", t)', '}', '']
     (root / 'main.dyn').write_text('\n'.join(main))
 
 

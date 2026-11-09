@@ -65,7 +65,7 @@ PANICS = {
   'enum corrupted tag': ('enum Color { Red, Green }\nfn name(c: Color) i64 {\n  case c {\n    Color.Red => { return 1 }\n    Color.Green => { return 2 }\n  }\n}\nfn main() {\n  c: Color = Color.Red\n  bits: *u32 = #cast(*u32, #cast(rawptr, &c))\n  bits.* = 7\n  _ = name(c)', 'enum.tag.ok'),
 }
 ERRORS = {
-  'enum A { X = 1, Y }': 'no explicit values',
+  'enum A { X = 1, Y }': 'first enum variant must be 0',
   'enum Shape { Circle: f32, Box }': 'first enum variant has no payload',
   'fn f() u8 {\n  return #wrap(1)\n}': 'each statement',
   'const K: u8 = 255 + 1': 'overflows',

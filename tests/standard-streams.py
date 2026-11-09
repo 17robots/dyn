@@ -40,7 +40,7 @@ fn main() {
     result := bufio.read_line(&input, line[..])
     if result.status == bufio.ReadStatus.Error { #panic("input failed") }
     if result.transferred > 0 || result.status != bufio.ReadStatus.End {
-      written := io.println(io.stdout(), "[{}]", line[..result.transferred])
+      written := io.println_to(io.stdout(), "[{}]", line[..result.transferred])
       if written.status == io.Status.Error { #panic("output failed") }
     }
     if result.status == bufio.ReadStatus.End { break }

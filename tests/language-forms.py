@@ -21,6 +21,18 @@ ERRORS = {
         'type patterns do not use `is`',
     'const BIG := 300\nfn main() {\n  x: u8 = BIG\n  _ = x\n}\n':
         'integer literal is not representable in expected type',
+    'fn main() {\n  a := 1\n  a := 2\n  _ = a\n}\n':
+        'only a nested block may shadow it',
+    'fn main() {\n  for i in 0..3 {\n    i := 4\n    _ = i\n  }\n}\n':
+        'cannot shadow a loop variable inside its loop',
+    'fn f() i32 { return 1 }\nstruct S { x: i32 = f() }\nfn main() {}\n':
+        'a field default must be a compile-time value',
+    'enum E { A = 1, B }\nfn main() {}\n':
+        'the first enum variant must be 0',
+    'enum E { A, B = 5, C = 3 }\nfn main() {}\n':
+        'enum values must increase',
+    'enum E { A, B: i32 = 4 }\nfn main() {}\n':
+        'an enum with payloads cannot set variant values',
 }
 with tempfile.TemporaryDirectory(prefix='dyn-language-forms-') as temporary:
     for name, flags in (('debug', ['--debug']), ('release', ['--release', '--opt-level', '3'])):
@@ -28,13 +40,26 @@ with tempfile.TemporaryDirectory(prefix='dyn-language-forms-') as temporary:
         subprocess.run([DYN, 'build', str(ROOT / 'tests/language-forms'), *flags, '--quiet', '--no-cache',
                         '--output', str(program)], check=True, timeout=120)
         result = subprocess.run([str(program)], capture_output=True, text=True, timeout=30)
-        assert result.returncode == 0 and result.stdout == 'ok\n', (name, result)
+        assert result.returncode == 0 and result.stdout == 'ok 1\n', (name, result)
     for index, (source, message) in enumerate(ERRORS.items()):
         project = Path(temporary) / f'error-{index}'
         project.mkdir()
         (project / 'main.dyn').write_text(source)
         result = subprocess.run([DYN, 'check', str(project)], capture_output=True, text=True, timeout=60)
         assert result.returncode != 0 and message in result.stderr, (source, result.stderr)
+    # The panic handler runs after cleanups, then the panic reports and exits.
+    crash = Path(temporary) / 'crash'
+    crash.mkdir()
+    (crash / 'main.dyn').write_text('use "std/io"\nuse "std/panic"\n'
+        'fn report(message: []const u8) { io.eprintln("report: {}", message) }\n'
+        'fn work() {\n  defer io.eprintln("cleanup")\n  #panic("disk full")\n}\n'
+        'fn main() {\n  panic.set_handler(report)\n  work()\n}\n')
+    for name, flags in (('debug', ['--debug']), ('release', ['--release'])):
+        program = crash / name
+        subprocess.run([DYN, 'build', str(crash), *flags, '--quiet', '--no-cache', '--output', str(program)],
+                       check=True, timeout=120)
+        result = subprocess.run([str(program)], capture_output=True, text=True, timeout=30)
+        assert result.returncode == 101 and result.stderr.startswith('cleanup\nreport: disk full\ndisk full\n'), result
     # One-statement blocks written on one line keep their line.
     result = subprocess.run([DYN, 'fmt', '--check', str(ROOT / 'tests/language-forms')],
                             capture_output=True, text=True, timeout=60)

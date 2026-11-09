@@ -49,7 +49,7 @@ pub fn raw() [3]u64 { return [7,8,9] }
 pub fn desc() []const u8 { return "ok" }
 pub fn checked(p:*u64,q:*u64) Triple { return Triple{a:p.*,b:q.*,c:mark(5)} }
 fn main() { r:=oracle()
-if r!=0 { _=io.println(io.stderr(),"oracle {}",r)
+if r!=0 { io.eprintln("oracle {}",r)
 #panic("C aggregate oracle") } }
 '''
 

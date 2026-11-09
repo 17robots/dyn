@@ -76,9 +76,16 @@ void dyn_unwind_unlink(DynUnwind *frame) {
       __atomic_store_n(&slot->tid, 0, __ATOMIC_RELEASE);
   }
 }
+static void (*dyn_panic_hook)(const unsigned char *, uint64_t);
+void dyn_set_panic_hook(void (*hook)(const unsigned char *, uint64_t)) { dyn_panic_hook = hook; }
+static void run_panic_hook(const unsigned char *message, uint64_t length) {
+  void (*hook)(const unsigned char *, uint64_t) = dyn_panic_hook;
+  dyn_panic_hook = 0;
+  if (hook) hook(message, length);
+}
 void dyn_unwind_begin(const unsigned char *message, uint64_t length) {
   DynUnwindSlot *slot = unwind_slot(1);
-  if (!slot || slot->unwinding || !slot->top) return;
+  if (!slot || slot->unwinding || !slot->top) { run_panic_hook(message, length); return; }
   slot->unwinding = 1;
   /* Cleanup can release the message's arena or overwrite its stack frame.
      Own a bounded copy before jumping; panic handling must not allocate. */

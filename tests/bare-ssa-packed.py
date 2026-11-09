@@ -76,7 +76,7 @@ fn('anycall','x:any','u32','return anypack(#cast(i32,17),#cast(f64,3.5),"ok",x)'
 # Caller supplies an actual any; the packed fourth entry must box its descriptor.
 src+='extern fn anyoracle() u32\n'
 checks.append('anyoracle()!=0')
-src+='pub fn anydebug() { _=io.println(io.stdout(),"any={}",anyoracle()) }\n'
+src+='pub fn anydebug() { io.println("any={}",anyoracle()) }\n'
 c='''typedef unsigned W; typedef unsigned long long U;
 extern W anycall(U,W);
 W inspect(W p,W n) { if(n!=4 || (p&7))return 1; unsigned char *a=(void*)p;
