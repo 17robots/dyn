@@ -42,11 +42,27 @@ static DynExprId sema_push_expr(DynAstProgram *a, DynAstExpr e);
 /* Set once a body's #assert fails: the function's other errors would only
    restate that its type arguments are wrong, so they go unreported. */
 static bool sema_assert_failed;
+/* While checking a generic instance that program code required, errors that
+   land inside std or vendor code are reported at the program's call, with
+   the library location as a note: the call is what the reader can change. */
+static bool sema_has_origin;
+static DynSpan sema_origin;
+static bool span_in_library(const DynSource *s, DynSpan span) {
+  const char *path, *text;
+  size_t length, at;
+  dyn_source_position(s, span.start_byte, &path, &text, &length, &at);
+  return path && (strstr(path, "/std/") || strstr(path, "/vendor/") || strstr(path, "/share/dyn/"));
+}
 static void error_span(DynSpan span, const DynSource *s, unsigned *e,
                        const char *m) {
   ++*e;
   if (sema_assert_failed) return;
   if (target_gap_reported(span, s)) return;
+  if (sema_has_origin && span_in_library(s, span)) {
+    dyn_diagnostic_source("error", s, sema_origin.start_byte, sema_origin.end_byte, m);
+    dyn_diagnostic_source("note", s, span.start_byte, span.end_byte, "reported inside the library here");
+    return;
+  }
   dyn_diagnostic_source("error", s, span.start_byte, span.end_byte, m);
 }
 static void note_span(DynSpan span, const DynSource *s, const char *m) {
@@ -1443,6 +1459,10 @@ static DynType check_generic_call(Sema *sema, DynAstProgram *a, DynExprId id,
     return a->expressions[id].type = DYN_TYPE_ERROR;
   }
   DynType args[DYN_MAX_TYPE_PARAMS] = {0}, values[64];
+  /* The argument that first fixed each type parameter, for conflict errors. */
+  DynExprId binder[DYN_MAX_TYPE_PARAMS];
+  bool given[DYN_MAX_TYPE_PARAMS] = {0};
+  for (uint32_t k = 0; k < DYN_MAX_TYPE_PARAMS; ++k) binder[k] = DYN_NO_EXPR;
   if (item_count > 64) {
     error_span(call, s, errors, "too many arguments for a generic function");
     return a->expressions[id].type = DYN_TYPE_ERROR;
@@ -1473,8 +1493,11 @@ static DynType check_generic_call(Sema *sema, DynAstProgram *a, DynExprId id,
         continue;
       }
       if (is_type) {
-        if (pass == 0)
+        if (pass == 0) {
           args[p.pattern - DYN_TYPE_PARAM_BASE] = a->expressions[arg].type;
+          binder[p.pattern - DYN_TYPE_PARAM_BASE] = arg;
+          given[p.pattern - DYN_TYPE_PARAM_BASE] = true;
+        }
         continue;
       }
       if ((pass == 0) == untyped_literal(a, arg))
@@ -1489,16 +1512,36 @@ static DynType check_generic_call(Sema *sema, DynAstProgram *a, DynExprId id,
       }
       values[i] = check_expr(sema, a, arg, s, errors, expected);
       uint32_t conflict = 0;
+      DynType before[DYN_MAX_TYPE_PARAMS];
+      memcpy(before, args, sizeof(before));
       if (!bind_pattern(a, p.pattern, values[i], args, &conflict)) {
-        char first[128], second[128], message[384];
+        char first[128], second[128], message[640];
         dyn_type_format(a, args[conflict], s, first, sizeof(first));
         dyn_type_format(a, a->bind_conflict, s, second, sizeof(second));
         DynSpan name = g.type_names[conflict];
-        snprintf(message, sizeof(message), "%.*s is both %s and %s in this call",
-                 (int)(name.end_byte - name.start_byte), s->text + name.start_byte,
-                 first, second);
+        int n = (int)(name.end_byte - name.start_byte);
+        const char *tname = s->text + name.start_byte;
+        if (given[conflict]) {
+          snprintf(message, sizeof(message), "%.*s is given as %s, but this argument makes it %s",
+                   n, tname, first, second);
+        } else if (binder[conflict] != DYN_NO_EXPR) {
+          DynSpan from = a->expressions[binder[conflict]].span;
+          int m = (int)(from.end_byte - from.start_byte);
+          if (m > 40) m = 40;
+          snprintf(message, sizeof(message),
+                   "%.*s is %s from `%.*s`%s, but this argument makes it %s",
+                   n, tname, first, m, s->text + from.start_byte,
+                   from.end_byte - from.start_byte > 40 ? "..." : "", second);
+        } else {
+          snprintf(message, sizeof(message), "%.*s is both %s and %s in this call",
+                   n, tname, first, second);
+        }
         error_span(a->expressions[arg].span, s, errors, message);
         failed = true;
+      } else {
+        for (uint32_t k = 0; k < g.type_param_count; ++k)
+          if (before[k] == DYN_TYPE_INFER && args[k] != DYN_TYPE_INFER && binder[k] == DYN_NO_EXPR)
+            binder[k] = arg;
       }
     }
   for (uint32_t k = 0; !failed && k < g.type_param_count; ++k)
@@ -3935,6 +3978,17 @@ failed:
   free(stack); free(state); free(order);
   return NULL;
 }
+/* The instance whose body contains this instance's call, or UINT32_MAX. */
+static uint32_t instance_caller(DynAstProgram *a, uint32_t instance) {
+  DynAstInstance in = a->instances[instance];
+  for (size_t f = 0; f < a->function_count; ++f) {
+    DynAstFn *fn = &a->functions[f];
+    if (fn->is_instance && fn->span.start_byte <= in.call.start_byte &&
+        in.call.end_byte <= fn->span.end_byte && a->instances[fn->instance].depth + 1 == in.depth)
+      return fn->instance;
+  }
+  return UINT32_MAX;
+}
 /* Name the instance and the calls that required it, innermost first. */
 static void instance_trace(DynAstProgram *a, const DynSource *s, uint32_t instance) {
   for (unsigned line = 0; instance != UINT32_MAX; ++line) {
@@ -3960,16 +4014,7 @@ static void instance_trace(DynAstProgram *a, const DynSource *s, uint32_t instan
     if (at < sizeof(message))
       snprintf(message + at, sizeof(message) - at, ") required here");
     note_span(in.call, s, message);
-    /* The caller is the function whose body contains the call. */
-    instance = UINT32_MAX;
-    for (size_t f = 0; f < a->function_count; ++f) {
-      DynAstFn *fn = &a->functions[f];
-      if (fn->is_instance && fn->span.start_byte <= in.call.start_byte &&
-          in.call.end_byte <= fn->span.end_byte && a->instances[fn->instance].depth + 1 == in.depth) {
-        instance = fn->instance;
-        break;
-      }
-    }
+    instance = instance_caller(a, instance);
   }
 }
 /* Folds an #assert operand. Sides of a comparison may be integer literals,
@@ -4261,8 +4306,20 @@ static bool sema_program(Sema *sema, DynAstProgram *a, const DynSource *s,
                                                     .owner_function = f};
       }
     }
+    sema_has_origin = false;
+    if (fn->is_instance) {
+      uint32_t outer = fn->instance;
+      for (unsigned guard = 0; guard < 64; ++guard) {
+        uint32_t next = instance_caller(a, outer);
+        if (next == UINT32_MAX) break;
+        outer = next;
+      }
+      sema_origin = a->instances[outer].call;
+      sema_has_origin = !span_in_library(s, sema_origin);
+    }
     bool terminated =
         sema_block(sema, a, fn->body_start, fn->body_count, s, errors, false);
+    sema_has_origin = false;
     fn = &a->functions[f];
     fn->local_count = (uint32_t)a->local_count - fn->local_start;
     life_check_function(sema,a,s,errors,fn);
@@ -4280,12 +4337,6 @@ static bool sema_program(Sema *sema, DynAstProgram *a, const DynSource *s,
   sema->current_function = UINT32_MAX;
   return *errors == 0;
 }
-/* Whether a declared name's text ends in word, after any module prefix. */
-static bool sema_name_is(const DynSource *s, DynSpan span, const char *word) {
-  size_t n = strlen(word), length = span.end_byte - span.start_byte;
-  if (length < n || memcmp(s->text + span.end_byte - n, word, n)) return false;
-  return length == n || s->text[span.end_byte - n - 1] == '_';
-}
 static DynExprId sema_push_expr(DynAstProgram *a, DynAstExpr e) {
   if (a->expression_count == a->expression_capacity) {
     size_t c = a->expression_capacity ? a->expression_capacity * 2 : 32;
@@ -4296,58 +4347,13 @@ static DynExprId sema_push_expr(DynAstProgram *a, DynAstExpr e) {
   a->expressions[a->expression_count] = e;
   return (DynExprId)a->expression_count++;
 }
-/* fn main(x: T): the parameter becomes a local set on entry by the start()
-   of the module that declares struct T, which must be `pub fn start() T`.
-   std/process provides process.Program; any module may provide its own. */
+/* main takes nothing: a program that wants its arguments calls
+   process.start() itself, so nothing runs before main's first line. */
 static void sema_main_init(DynAstProgram *a, const DynSource *s, unsigned *errors) {
   for (size_t i = 0; i < a->function_count; ++i) {
     DynAstFn *f = &a->functions[i];
-    if (!f->is_main || !f->param_count) continue;
-    DynAstParam param = a->params[f->param_start];
-    DynType type = param.type;
-    uint32_t start = UINT32_MAX;
-    if (f->param_count == 1 && dyn_type_is_struct(type) && type - DYN_TYPE_STRUCT_BASE < a->struct_count) {
-      DynAstStruct *init = &a->structs[type - DYN_TYPE_STRUCT_BASE];
-      for (size_t j = 0; j < a->function_count && start == UINT32_MAX; ++j) {
-          DynAstFn *g = &a->functions[j];
-          if (g->module_owner == init->module_owner && g->is_public && !g->param_count &&
-              g->return_type == type && sema_name_is(s, g->name, "start"))
-            start = (uint32_t)j;
-        }
-    }
-    if (start == UINT32_MAX) {
-      error_span(f->name, s, errors, "main's parameter must be a struct T whose module has `pub fn start() T`, such as process.Program");
-      continue;
-    }
-    DynExprId call = sema_push_expr(a, (DynAstExpr){.kind = DYN_EXPR_CALL, .type = type, .integer = start,
-                                                     .left = DYN_NO_EXPR, .right = DYN_NO_EXPR, .span = f->name});
-    if (call == DYN_NO_EXPR) return;
-    if (a->statement_count == a->statement_capacity) {
-      size_t c = a->statement_capacity ? a->statement_capacity * 2 : 32;
-      void *p = realloc(a->statements, c * sizeof(*a->statements));
-      if (!p) { a->allocation_failed = true; return; }
-      a->statements = p; a->statement_capacity = c;
-    }
-    uint32_t stmt = (uint32_t)a->statement_count;
-    a->statements[a->statement_count++] = (DynAstStmt){.kind = DYN_STMT_LOCAL, .span = f->name, .name = param.name,
-                                                       .declared_type = type, .local_id = param.local_id,
-                                                       .expression = call, .target = DYN_NO_EXPR,
-                                                       .assignment_op = DYN_OP_NONE};
-    size_t need = a->child_count + f->body_count + 1;
-    if (need > a->child_capacity) {
-      size_t c = a->child_capacity ? a->child_capacity : 32;
-      while (c < need) c *= 2;
-      void *p = realloc(a->children, c * sizeof(*a->children));
-      if (!p) { a->allocation_failed = true; return; }
-      a->children = p; a->child_capacity = c;
-    }
-    uint32_t body = (uint32_t)a->child_count;
-    a->children[a->child_count++] = stmt;
-    for (uint32_t k = 0; k < f->body_count; ++k) a->children[a->child_count++] = a->children[f->body_start + k];
-    f->body_start = body;
-    f->body_count += 1;
-    f->param_count = 0;
-    a->locals[param.local_id].used = true;
+    if (f->is_main && f->param_count)
+      error_span(f->name, s, errors, "main takes no parameters; call process.start() for the arguments and an arena");
   }
 }
 bool dyn_sema_base(DynAstProgram *a, const DynSource *s, unsigned *errors) {

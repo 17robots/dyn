@@ -330,12 +330,12 @@ pub fn capture(arena: *mem.Arena, path: []const u8, arguments: [][]const u8,
   return result
 }
 
-// What `fn main(program: process.Program)` receives: an arena that lives for the
+// What process.start() returns: an arena that lives for the
 // whole program and the arguments, argv[0] first, stored in it.
 pub struct Program { arena: *mem.Arena, args: [][]const u8 }
 
-// Builds main's Program. The compiler calls it on entry to a main that takes a
-// Program; it panics only when the arguments cannot be read.
+// Call it on main's first line: `program := process.start()`. It panics only
+// when the arguments cannot be read.
 pub fn start() Program {
   arena := mem.arena_create(0)
   result := arguments(arena)

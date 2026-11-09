@@ -389,9 +389,12 @@ static int lsp_load_semantic_project(LspDocument *documents, size_t count,
         if (!dyn_source_prepare(&roots.items[i]))
           loaded = 2;
       }
-    if (!loaded)
-      loaded =
-          dyn_module_load_project_overlay(root, &roots, &overrides, project);
+    if (!loaded) {
+      /* Imports resolve from the directory, also for a lone program file. */
+      char *directory = lsp_root_directory(root);
+      loaded = directory ? dyn_module_load_project_overlay(directory, &roots, &overrides, project) : 2;
+      free(directory);
+    }
   }
   free(override_items); dyn_sources_free(&roots);
   return loaded;
@@ -461,10 +464,15 @@ static bool lsp_module_analyses(LspModuleAnalyses *all, LspDocument *documents,
     for (const unsigned char *p = (const unsigned char *)dir; *p; ++p)
       hash = (hash ^ *p) * UINT64_C(1099511628211);
     char owner[32];
-    if (!strcmp(dir, root)) strcpy(owner, "root");
+    char *root_dir = lsp_root_directory(root);
+    bool at_root = root_dir && !strcmp(dir, root_dir);
+    free(root_dir);
+    if (at_root) strcpy(owner, "root");
     else snprintf(owner, sizeof(owner), "dyn_m%016llx", (unsigned long long)hash);
     free(dir);
-    char *entry = dyn_path_join(root, "main.dyn");
+    size_t root_length = strlen(root);
+    char *entry = root_length > 4 && !strcmp(root + root_length - 4, ".dyn") ? strdup(root)
+                                                                              : dyn_path_join(root, "main.dyn");
     if (!entry) return false;
     semantic->source.context = context;
     DynAnalysisResult result = dyn_analyze(&semantic->source, &semantic->ast,
@@ -707,7 +715,9 @@ LspSemantic lsp_semantic_project(LspDocument *documents, size_t count,
     semantic.source.context = context;
     char *main_path = dyn_path_join(root, "main.dyn");
     char *module_path = dyn_path_join(root, "module.dyn");
-    const char *entry = main_path && !access(main_path, F_OK) ? main_path
+    size_t root_length = strlen(root);
+    bool lone = root_length > 4 && !strcmp(root + root_length - 4, ".dyn");
+    const char *entry = lone ? root : main_path && !access(main_path, F_OK) ? main_path
                         : module_path && !access(module_path, F_OK)
                             ? module_path
                             : "";

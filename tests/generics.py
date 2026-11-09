@@ -147,7 +147,7 @@ fn deep(x: $T) {
 ERRORS = {
     'aggregate values are not comparable': '  r := Rect{w: 1}\n  _ = min(r, r)',
     'in instance min(Rect) required here': '  r := Rect{w: 1}\n  _ = min(r, r)',
-    'T is both u32 and i64 in this call': '  x: u32 = 1\n  y: i64 = 2\n  _ = min(x, y)',
+    'T is u32 from `x`, but this argument makes it i64': '  x: u32 = 1\n  y: i64 = 2\n  _ = min(x, y)',
     'expected a type argument': '  _ = make(3)',
     'a type is not a value': '  _ = min(Rect, 2)',
     'a generic function can only be called': '  f := min',

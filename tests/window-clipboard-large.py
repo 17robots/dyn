@@ -160,9 +160,42 @@ fn main() {
  check(!window.paste_pending(&reader) && window.paste_status(&reader).kind==errors.Kind.System,105)
 }
 '''
+# CLIPBOARD belongs to the whole X server: on a desktop, other copies of this
+# test, other window tests, a clipboard manager or Xwayland's Wayland bridge
+# can take it mid-transfer. A private Xvfb isolates the run; without one, the
+# shared display is locked against our own parallel runs and an interrupted
+# run is retried.
+server = None
+if shutil.which('Xvfb'):
+    read, write = os.pipe()
+    server = subprocess.Popen(['Xvfb', '-displayfd', str(write), '-nolisten', 'tcp', '-screen', '0', '640x480x24'],
+                              pass_fds=(write,), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    os.close(write)
+    with os.fdopen(read) as stream:
+        number = stream.readline().strip()
+    if number:
+        os.environ['DISPLAY'] = ':' + number
+    else:
+        server.kill(); server = None
 if not os.environ.get('DISPLAY'):
     print('SKIP large X11 clipboard: DISPLAY unavailable')
     raise SystemExit(0)
+lock = None
+if server is None:
+    import fcntl
+    lock = open(Path(tempfile.gettempdir()) / f'dyn-x11-clipboard-{os.getuid()}.lock', 'w')
+    fcntl.flock(lock, fcntl.LOCK_EX)
+attempts = 1 if server else 3
+
+def run_runner(output):
+    for attempt in range(attempts):
+        result = subprocess.run([str(output)], capture_output=True, text=True, timeout=60)
+        if result.returncode == 0:
+            return
+        if attempt + 1 < attempts and 'failed clipboard check' in result.stdout + result.stderr:
+            print(f'note: shared display clipboard was interrupted; retrying ({attempt + 2}/{attempts})', flush=True)
+            continue
+        raise SystemExit(f'clipboard runner failed:\n{result.stdout}{result.stderr}')
 with tempfile.TemporaryDirectory(prefix='dyn-clipboard-large-') as directory:
     work=Path(directory);(work/'main.dyn').write_text(SOURCE)
     shutil.copytree(ROOT/'vendor/window/x11',work/'probe')
@@ -170,7 +203,9 @@ with tempfile.TemporaryDirectory(prefix='dyn-clipboard-large-') as directory:
     for flags in (['--debug'],['--release'],['--release','--opt-level','3']):
         output=work/'runner'
         subprocess.run([DYN,'build',str(work),*flags,'--quiet','--output',str(output)],check=True,timeout=180)
-        subprocess.run([str(output)],check=True,timeout=60)
+        run_runner(output)
     for target in ('aarch64-linux','riscv64-linux'):
         subprocess.run([DYN,'build',str(work),'--release','--target',target,'--emit-object','--no-link','--quiet','--output',str(work/(target+'.o'))],check=True,timeout=180)
+if server:
+    server.terminate(); server.wait()
 print('PASS X11 clipboard: 1.2 MB self/cross-window INCR snapshots, in-flight ownership, atomic ordered overflow, snapshot-only delivery, capacity/UTF8 rejection, empty replies and peer destruction (debug/O2/O3)')

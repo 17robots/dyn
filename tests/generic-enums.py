@@ -20,7 +20,7 @@ REJECTED = {
     'not exhaustive': (SLOT + 'fn main() {\n  x: Slot(i32)\n  case x {\n    Slot(i32).Empty => { }\n  }\n}\n', 'exhaustive'),
     'other instance': (SLOT + 'fn main() {\n  x: Slot(i32)\n  y: Slot(u8) = x\n  _ = y\n}\n', 'mismatch'),
     'conflict names part': ('struct Box($T: type) { value: T }\nfn f($T: type, b: Box(T)) { }\n'
-                            'fn main() {\n  a: Box(i32)\n  f(f64, a)\n}\n', 'T is both f64 and i32'),
+                            'fn main() {\n  a: Box(i32)\n  f(f64, a)\n}\n', 'T is given as f64, but this argument makes it i32'),
 }
 with tempfile.TemporaryDirectory(prefix='dyn-generic-enums-') as temporary:
     root = Path(temporary)

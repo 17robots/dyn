@@ -139,6 +139,32 @@ char *lsp_directory(const char *path) {
   return r;
 }
 
+/* Whether a file on disk other than main.dyn declares `fn main`. */
+static bool lsp_declares_main(const char *path) {
+  const char *slash = strrchr(path, '/');
+  const char *name = slash ? slash + 1 : path;
+  size_t n = strlen(name);
+  if (n < 5 || strcmp(name + n - 4, ".dyn") || !strcmp(name, "main.dyn")) return false;
+  FILE *f = fopen(path, "rb");
+  if (!f) return false;
+  char line[512];
+  bool found = false;
+  while (!found && fgets(line, sizeof(line), f)) {
+    const char *at = line;
+    if (!strncmp(at, "pub ", 4)) at += 4;
+    found = !strncmp(at, "fn main(", 8);
+  }
+  fclose(f);
+  return found;
+}
+
+/* A root naming a .dyn file is a lone program; its directory holds it. */
+char *lsp_root_directory(const char *root) {
+  size_t n = strlen(root);
+  if (n > 4 && !strcmp(root + n - 4, ".dyn")) return lsp_directory(root);
+  return strdup(root);
+}
+
 char *lsp_project_root(const char *uri) {
   char *at = lsp_directory(lsp_file_path(uri)), *candidate = NULL;
   if (!at)
@@ -162,7 +188,13 @@ char *lsp_project_root(const char *uri) {
     *slash = 0;
   }
   free(at);
-  return candidate ? candidate : lsp_directory(lsp_file_path(uri));
+  if (candidate) return candidate;
+  /* No project and no main.dyn: a file that declares main is a program of
+     its own, as `dyn run hello.dyn` treats it, and its neighbours are other
+     programs. The file path itself is then the root. */
+  const char *path = lsp_file_path(uri);
+  if (lsp_declares_main(path)) return strdup(path);
+  return lsp_directory(path);
 }
 
 size_t lsp_imports(const LspDocument *document, LspImport *imports,
