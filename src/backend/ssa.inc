@@ -70,6 +70,7 @@ typedef enum {
   SO_VPACK,      /* f32 a in lane 0, f32 b in lane 1 */
   SO_VLANE,      /* f32 lane aux of a */
   SO_VHADD,      /* f32 lane 0 + lane 1 of a, in that order */
+  SO_VLOOP,      /* x86-64 SysV: four-lane f32 loop; a: frame {i, end, bases, sums, inputs}; list: program */
   SO_COUNT
 } SsaOp;
 enum { SC_NONE, SC_INT, SC_F64, SC_F32 };
@@ -242,7 +243,7 @@ static int32_t ssa_value(Ssa *s, uint32_t block, SsaOp op, uint8_t cls, int32_t 
   v->check_origin = s->check_origin;
   v->block = block; v->reg = v->slot = -1; v->hint = -1; v->scale = 1;
   v->effect = op == SO_CHECK || op == SO_CHECK_SHL || op == SO_ADDO || op == SO_SUBO || op == SO_MULO ||
-              op == SO_LOAD || op == SO_STORE || op == SO_CALL || op == SO_COPYMEM || op == SO_ZEROMEM || op == SO_FILLMEM || op == SO_FIND_BYTE || op == SO_FIND || op == SO_JSON_ASCII_PREFIX || op == SO_BYTE_COUNT || op == SO_SUM || op == SO_AXPY ||
+              op == SO_LOAD || op == SO_STORE || op == SO_CALL || op == SO_COPYMEM || op == SO_ZEROMEM || op == SO_FILLMEM || op == SO_FIND_BYTE || op == SO_FIND || op == SO_JSON_ASCII_PREFIX || op == SO_BYTE_COUNT || op == SO_SUM || op == SO_AXPY || op == SO_VLOOP ||
               op == SO_PANIC || op == SO_DIV || op == SO_REM || op == SO_RESULT || op == SO_PARAM || op == SO_VECTOR || op == SO_TRAP || op == SO_FAIL || op == SO_CONTINUE;
   return (int32_t)s->value_count++;
 }
@@ -5688,6 +5689,433 @@ static bool ssa_retain_loop_constant(Ssa *s, const uint32_t *order, uint32_t n,
   }
   return true;
 }
+/* Four-lane f32 loops, the loop vectorizer LLVM and GCC run at -O2/-O3.
+
+   A counted loop `for i in a..b` whose body, after inlining and scalar
+   replacement, only loads and stores f32 fields at [base + i*stride + k],
+   does f32 arithmetic on them and adds results into running sums runs four
+   iterations at a time first. Each lane computes exactly what its scalar
+   iteration would; sums add the four lane results one by one in iteration
+   order, so every float result matches the scalar loop bit for bit.
+
+   Iterations touch disjoint elements of each array, so only different arrays
+   can interfere. The vector part runs only when every stored array's range
+   is disjoint from every other array's range, checked at run time as LLVM's
+   loop versioning does; otherwise, and for the last few iterations, the
+   original scalar loop runs, starting where the vector part stopped. */
+enum { VP_LOAD = 1, VP_STORE, VP_STORE2, VP_STORE3, VP_BCAST, VP_CONST, VP_ADD, VP_SUB, VP_MUL, VP_DIV, VP_SUM };
+enum { VP_HEADER = 18, VP_WORDS = 6, VP_MAX_OPS = 64, VP_MAX_BASES = 4, VP_MAX_INPUTS = 8, VP_MAX_SUMS = 4,
+       VP_TEMP = 14 /* xmm14 and xmm15 are the emitter's temporaries */ };
+typedef struct { uint32_t op, dst, x, y, base, off; } VpOp;
+typedef struct {
+  Ssa *s;
+  bool *in_loop;
+  int32_t index, map_count;
+  int32_t bases[VP_MAX_BASES]; uint32_t strides[VP_MAX_BASES], scales[VP_MAX_BASES], base_count;
+  uint64_t step; /* the address index's increment; element stride = step * address scale */
+  /* The loop counter the test reads, and an address index stepping with it
+     when strength reduction made one. */
+  int32_t primary, second; uint64_t primary_step, second_step;
+  int32_t inputs[VP_MAX_INPUTS]; uint32_t input_count;
+  int32_t sums[VP_MAX_SUMS], sum_next[VP_MAX_SUMS]; uint32_t sum_count;
+  /* Index checks against invariant lengths: the vector part runs only when
+     its last index passes them all, so no check fails inside it. */
+  int32_t lengths[VP_MAX_BASES]; uint32_t length_count;
+  VpOp ops[VP_MAX_OPS]; uint32_t op_count;
+  int32_t *map; /* SSA value -> op index + 1 */
+  /* Field values known in this iteration: loaded or stored. Arrays are
+     disjoint in the vector part, so only a store to the same array changes
+     them. */
+  struct { uint32_t base, off; int32_t op; } known[32]; uint32_t known_count;
+} Vp;
+static bool vp_invariant(Vp *p, int32_t id) {
+  return id >= 0 && !p->in_loop[p->s->values[id].block];
+}
+static int32_t vp_push(Vp *p, VpOp op) {
+  if (p->op_count == VP_MAX_OPS) return -1;
+  p->ops[p->op_count] = op;
+  return (int32_t)p->op_count++;
+}
+/* The op computing SSA value id: a body value, an invariant f32 broadcast or
+   an f32 constant. */
+static int32_t vp_operand(Vp *p, int32_t id) {
+  if (id < 0) return -1;
+  if (p->map[id]) return p->map[id] - 1;
+  SsaValue *v = &p->s->values[id];
+  if (v->cls != SC_F32 || !vp_invariant(p, id)) return -1;
+  int32_t op;
+  if (v->op == SO_CONST) op = vp_push(p, (VpOp){VP_CONST, 0, 0, 0, 0, (uint32_t)v->aux});
+  else {
+    if (p->input_count == VP_MAX_INPUTS) return -1;
+    p->inputs[p->input_count] = id;
+    op = vp_push(p, (VpOp){VP_BCAST, 0, 0, 0, p->input_count++, 0});
+  }
+  if (op >= 0) p->map[id] = op + 1;
+  return op;
+}
+static int32_t vp_base(Vp *p, const SsaValue *v) {
+  uint64_t stride = p->step * v->scale;
+  if (!vp_invariant(p, v->a) || v->b != p->index || (stride != 4 && stride != 8 && stride != 12) ||
+      v->aux < 0 || (uint64_t)v->aux >= stride || v->aux % 4 || v->aux2 != SSA_MEM(32, 0, 1)) return -1;
+  for (uint32_t k = 0; k < p->base_count; ++k)
+    if (p->bases[k] == v->a) return p->strides[k] == stride && p->scales[k] == v->scale ? (int32_t)k : -1;
+  if (p->base_count == VP_MAX_BASES) return -1;
+  p->bases[p->base_count] = v->a; p->strides[p->base_count] = (uint32_t)stride; p->scales[p->base_count] = v->scale;
+  return (int32_t)p->base_count++;
+}
+static int32_t vp_known(Vp *p, uint32_t base, uint32_t off) {
+  for (uint32_t k = 0; k < p->known_count; ++k)
+    if (p->known[k].base == base && p->known[k].off == off) return p->known[k].op;
+  return -1;
+}
+static void vp_learn(Vp *p, uint32_t base, uint32_t off, int32_t op) {
+  for (uint32_t k = 0; k < p->known_count; ++k)
+    if (p->known[k].base == base && p->known[k].off == off) { p->known[k].op = op; return; }
+  if (p->known_count < 32) { p->known[p->known_count].base = base; p->known[p->known_count].off = off; p->known[p->known_count++].op = op; }
+}
+static bool vp_body(Vp *p, const uint32_t *body, uint32_t body_count, int32_t step) {
+  Ssa *s = p->s;
+  for (uint32_t b = 0; b < body_count; ++b) {
+    SsaBlock *block = &s->blocks[body[b]];
+    for (uint32_t k = 0; k < block->values.count; ++k) {
+      int32_t id = (int32_t)block->values.items[k];
+      SsaValue *v = &s->values[id];
+      if (v->dead || id == step || (p->second >= 0 && s->values[id].op == SO_ADD &&
+                                     (s->values[id].a == p->primary || s->values[id].a == p->second))) continue;
+      if (v->op == SO_CONST) {
+        if (v->cls == SC_F32) { int32_t op = vp_operand(p, id); if (op < 0) return false; }
+        continue; /* integer constants serve the step */
+      }
+      if (v->op == SO_CHECK && v->a == p->primary && v->cond == CC_B && p->primary_step == 1 && vp_invariant(p, v->b)) {
+        uint32_t k = 0;
+        while (k < p->length_count && p->lengths[k] != v->b) ++k;
+        if (k == p->length_count) {
+          if (k == VP_MAX_BASES) return false;
+          p->lengths[p->length_count++] = v->b;
+        }
+        continue;
+      }
+      if (v->op == SO_LOAD) {
+        int32_t base = vp_base(p, v);
+        if (base < 0) return false;
+        uint32_t stride = p->strides[base], off = (uint32_t)v->aux;
+        int32_t op = vp_known(p, (uint32_t)base, off);
+        if (op < 0) {
+          /* All fields of a stride-8 or stride-12 element come from the
+             same loads, so they are loaded together, in field order. */
+          for (uint32_t f = 0; f < stride / 4 && (stride > 4 || !f); ++f) {
+            uint32_t at = stride == 4 ? off : 4 * f;
+            if (vp_known(p, (uint32_t)base, at) >= 0) continue;
+            int32_t field = vp_push(p, (VpOp){VP_LOAD, 0, 0, 0, (uint32_t)base, at});
+            if (field < 0) return false;
+            vp_learn(p, (uint32_t)base, at, field);
+          }
+          op = vp_known(p, (uint32_t)base, off);
+          if (op < 0) return false;
+        }
+        p->map[id] = op + 1;
+        continue;
+      }
+      if (v->op == SO_STORE) {
+        int32_t base = vp_base(p, v), x = vp_operand(p, v->c);
+        if (base < 0 || x < 0 || vp_push(p, (VpOp){VP_STORE, 0, (uint32_t)x, 0, (uint32_t)base, (uint32_t)v->aux}) < 0) return false;
+        /* A store changes only its own field of this element. */
+        vp_learn(p, (uint32_t)base, (uint32_t)v->aux, x);
+        continue;
+      }
+      if ((v->op == SO_FADD || v->op == SO_FSUB) && v->cls == SC_F32) {
+        int32_t sum = -1;
+        for (uint32_t r = 0; r < p->sum_count; ++r)
+          if (p->sum_next[r] == id) sum = (int32_t)r;
+        if (sum >= 0) {
+          int32_t term = v->a == p->sums[sum] ? v->b : v->op == SO_FADD && v->b == p->sums[sum] ? v->a : -1;
+          int32_t x = vp_operand(p, term);
+          if (x < 0 || vp_push(p, (VpOp){VP_SUM, 0, (uint32_t)x, 0, (uint32_t)sum, v->op == SO_FSUB}) < 0) return false;
+          continue;
+        }
+      }
+      uint32_t kind = v->cls != SC_F32 ? 0 : v->op == SO_FADD ? VP_ADD : v->op == SO_FSUB ? VP_SUB :
+                      v->op == SO_FMUL ? VP_MUL : v->op == SO_FDIV ? VP_DIV : 0;
+      if (!kind) return false;
+      int32_t x = vp_operand(p, v->a), y = vp_operand(p, v->b);
+      int32_t op = x < 0 || y < 0 ? -1 : vp_push(p, (VpOp){kind, 0, (uint32_t)x, (uint32_t)y, 0, 0});
+      if (op < 0) return false;
+      p->map[id] = op + 1;
+    }
+  }
+  return true;
+}
+/* Stride-8 stores interleave both fields at once: each field-0 store meets
+   the field-1 store of the same array with no access to it between. Stride
+   12 stores all three fields in one group the same way. */
+static bool vp_group_stores(Vp *p) {
+  for (uint32_t i = 0; i < p->op_count; ++i) {
+    VpOp *a = &p->ops[i];
+    if (a->op != VP_STORE || p->strides[a->base] != 12) continue;
+    uint32_t field[3] = {UINT32_MAX, UINT32_MAX, UINT32_MAX}, at[3] = {0}, j = i;
+    unsigned seen = 0;
+    for (; j < p->op_count && seen < 3; ++j) {
+      VpOp *b = &p->ops[j];
+      if (b->op == VP_LOAD && b->base == a->base) return false;
+      if (b->op != VP_STORE || b->base != a->base) continue;
+      uint32_t f = b->off / 4;
+      if (field[f] != UINT32_MAX) return false;
+      field[f] = b->x; at[f] = j; ++seen;
+    }
+    if (seen != 3) return false;
+    uint32_t end = at[0] > at[1] ? at[0] : at[1];
+    if (at[2] > end) end = at[2];
+    for (unsigned f = 0; f < 3; ++f) if (at[f] != end) p->ops[at[f]].op = 0;
+    p->ops[end] = (VpOp){VP_STORE3, 0, field[0], field[1], a->base, field[2]};
+  }
+  return true;
+}
+static bool vp_pair_stores(Vp *p) {
+  if (!vp_group_stores(p)) return false;
+  for (uint32_t i = 0; i < p->op_count; ++i) {
+    VpOp *a = &p->ops[i];
+    if (a->op != VP_STORE || p->strides[a->base] != 8) continue;
+    uint32_t j = i + 1;
+    for (; j < p->op_count; ++j) {
+      VpOp *b = &p->ops[j];
+      if ((b->op == VP_LOAD || b->op == VP_STORE) && b->base == a->base) break;
+    }
+    if (j == p->op_count || p->ops[j].op != VP_STORE || p->ops[j].off == a->off) return false;
+    VpOp *b = &p->ops[j];
+    uint32_t first = a->off ? b->x : a->x, second = a->off ? a->x : b->x;
+    *b = (VpOp){VP_STORE2, 0, first, second, a->base, 0};
+    a->op = 0;
+  }
+  return true;
+}
+/* Registers xmm0-13: constants, broadcasts and sums for the whole loop, the
+   rest freed after their last use. */
+static bool vp_registers(Vp *p) {
+  uint32_t last[VP_MAX_OPS] = {0};
+  bool needed[VP_MAX_OPS] = {0};
+  for (uint32_t i = 0; i < p->op_count; ++i) {
+    VpOp *o = &p->ops[i];
+    bool two = o->op >= VP_ADD && o->op <= VP_DIV;
+    if (o->op == VP_STORE || o->op == VP_STORE2 || o->op == VP_STORE3 || o->op == VP_SUM || two) needed[o->x] = true;
+    if (o->op == VP_STORE2 || o->op == VP_STORE3 || two) needed[o->y] = true;
+    if (o->op == VP_STORE3) needed[o->off] = true;
+  }
+  /* A three-field group loads together, so its unused fields stay. */
+  for (uint32_t i = 0; i < p->op_count; ++i)
+    if (p->ops[i].op == VP_LOAD && !needed[i] && p->strides[p->ops[i].base] != 12) p->ops[i].op = 0;
+  for (uint32_t i = 0; i < p->op_count; ++i) {
+    VpOp *o = &p->ops[i];
+    if (!o->op) continue;
+    bool two = o->op >= VP_ADD && o->op <= VP_DIV;
+    if (o->op == VP_STORE || o->op == VP_STORE2 || o->op == VP_STORE3 || o->op == VP_SUM || two) last[o->x] = i;
+    if (o->op == VP_STORE2 || o->op == VP_STORE3 || two) last[o->y] = i;
+    if (o->op == VP_STORE3) last[o->off] = i;
+  }
+  bool used[VP_TEMP] = {0};
+  uint32_t sum_regs[VP_MAX_SUMS];
+  for (uint32_t r = 0; r < p->sum_count; ++r) {
+    uint32_t reg = 0;
+    while (reg < VP_TEMP && used[reg]) ++reg;
+    if (reg == VP_TEMP) return false;
+    used[reg] = true; sum_regs[r] = reg;
+  }
+  for (uint32_t i = 0; i < p->op_count; ++i) {
+    VpOp *o = &p->ops[i];
+    if (o->op != VP_CONST && o->op != VP_BCAST) continue;
+    uint32_t reg = 0;
+    while (reg < VP_TEMP && used[reg]) ++reg;
+    if (reg == VP_TEMP) return false;
+    used[reg] = true; o->dst = reg;
+  }
+  for (uint32_t i = 0; i < p->op_count; ++i) {
+    VpOp *o = &p->ops[i];
+    if (!o->op || o->op == VP_CONST || o->op == VP_BCAST) continue;
+    if (o->op == VP_SUM) { o->dst = sum_regs[o->base]; }
+    bool two = o->op >= VP_ADD && o->op <= VP_DIV;
+    uint32_t prefer = UINT32_MAX, avoid = UINT32_MAX;
+    if (o->op == VP_STORE || o->op == VP_STORE2 || o->op == VP_STORE3 || o->op == VP_SUM || two) {
+      VpOp *x = &p->ops[o->x];
+      if (last[o->x] == i && x->op != VP_CONST && x->op != VP_BCAST) { used[x->dst] = false; prefer = x->dst; }
+    }
+    if (o->op == VP_STORE2 || o->op == VP_STORE3 || two) {
+      VpOp *y = &p->ops[o->y];
+      avoid = y->dst;
+      if (last[o->y] == i && o->y != o->x && y->op != VP_CONST && y->op != VP_BCAST) used[y->dst] = false;
+    }
+    if (o->op == VP_STORE3) {
+      VpOp *z = &p->ops[o->off];
+      if (last[o->off] == i && o->off != o->x && o->off != o->y && z->op != VP_CONST && z->op != VP_BCAST) used[z->dst] = false;
+    }
+    if (o->op == VP_LOAD || two) {
+      uint32_t reg = prefer != UINT32_MAX && !used[prefer] ? prefer : 0;
+      if (reg != prefer) while (reg < VP_TEMP && (used[reg] || reg == avoid)) ++reg;
+      if (reg == VP_TEMP) return false;
+      used[reg] = true; o->dst = reg;
+    }
+  }
+  return true;
+}
+static bool ssa_vloops(Ssa *s, const uint32_t *order, uint32_t n) {
+  BackendContext *ctx = s->ctx;
+  if (!ctx->vectorize || ctx->a64 || ctx->rv64 || ctx->rv32 || ctx->t32 || ctx->win64) return false;
+  bool changed = false;
+  bool *in_loop = calloc(s->block_count ? s->block_count : 1, sizeof(bool));
+  int32_t *map = calloc(s->value_count ? s->value_count : 1, sizeof(int32_t));
+  uint32_t *body = malloc((s->block_count ? s->block_count : 1) * sizeof(uint32_t));
+  if (!in_loop || !map || !body) { free(in_loop); free(map); free(body); s->failed = true; return false; }
+  uint32_t value_limit = s->value_count;
+  for (uint32_t i = 0; i < n; ++i) {
+    uint32_t h = order[i];
+    SsaBlock *head = &s->blocks[h];
+    if (head->kind != SB_IF || head->preds.count != 2 || head->control < 0) continue;
+    SsaValue *test = &s->values[head->control];
+    if (test->op != SO_CMP || test->cond != CC_AE || test->a < 0 || s->values[test->a].op != SO_PHI ||
+        s->values[test->a].block != h) continue;
+    /* The body: single-entry plain blocks from the stay edge back to the head. */
+    uint32_t body_count = 0, at = head->succ[1], latch = UINT32_MAX;
+    bool shape = true;
+    while (shape) {
+      SsaBlock *b = &s->blocks[at];
+      if (b->kind != SB_PLAIN || b->preds.count != 1 || body_count == s->block_count) { shape = false; break; }
+      body[body_count++] = at;
+      if (b->succ[0] == h) { latch = at; break; }
+      at = b->succ[0];
+    }
+    if (!shape || latch == UINT32_MAX) continue;
+    uint32_t outside = head->preds.items[0] == latch ? 1 : 0, inside = 1 - outside;
+    if (head->preds.items[inside] != latch) continue;
+    uint32_t pre = head->preds.items[outside];
+    SsaBlock *preheader = &s->blocks[pre];
+    if (preheader->kind != SB_PLAIN || preheader->succ[0] != h) continue;
+    memset(in_loop, 0, s->block_count * sizeof(bool));
+    in_loop[h] = true;
+    for (uint32_t b = 0; b < body_count; ++b) in_loop[body[b]] = true;
+    Vp p = {.s = s, .in_loop = in_loop, .index = test->a, .primary = test->a, .second = -1, .map = map};
+    if (!vp_invariant(&p, test->b)) continue;
+    /* Phis: the index stepping by one, and sums. */
+    int32_t step = -1, second_step = -1;
+    bool ok = true;
+    for (uint32_t k = 0; k < head->values.count && ok; ++k) {
+      int32_t id = (int32_t)head->values.items[k];
+      SsaValue *v = &s->values[id];
+      if (v->dead || id == head->control) continue;
+      if (v->op != SO_PHI || v->count != 2) { ok = false; break; }
+      int32_t next = (int32_t)s->lists[v->list + inside];
+      SsaValue *w = &s->values[next];
+      uint64_t by = 0;
+      bool counter = v->cls == SC_INT && w->op == SO_ADD && w->a == id && ssa_is_const(s, w->b, &by) &&
+                     by >= 1 && by <= 12 && in_loop[w->block];
+      if (id == p.primary) {
+        ok = counter;
+        p.primary_step = by;
+        step = next;
+      } else if (counter && p.second < 0) {
+        p.second = id; p.second_step = by; second_step = next;
+      } else if (v->cls == SC_F32 && p.sum_count < VP_MAX_SUMS && (w->op == SO_FADD || w->op == SO_FSUB) && in_loop[w->block]) {
+        p.sums[p.sum_count] = id; p.sum_next[p.sum_count++] = next;
+      } else ok = false;
+    }
+    if (!ok || step < 0) continue;
+    /* Memory goes through one of the two counters. */
+    p.index = -1;
+    for (uint32_t b = 0; b < body_count && ok; ++b) {
+      SsaBlock *block = &s->blocks[body[b]];
+      for (uint32_t k = 0; k < block->values.count && ok; ++k) {
+        SsaValue *v = &s->values[block->values.items[k]];
+        if (v->dead || (v->op != SO_LOAD && v->op != SO_STORE)) continue;
+        if (p.index < 0) p.index = v->b;
+        ok = v->b == p.index && (v->b == p.primary || v->b == p.second);
+      }
+    }
+    if (!ok || p.index < 0) continue;
+    p.step = p.index == p.primary ? p.primary_step : p.second_step;
+    for (uint32_t j = 0; j < value_limit; ++j) map[j] = 0;
+    if (!vp_body(&p, body, body_count, p.index == p.second ? second_step : step) || !vp_pair_stores(&p)) continue;
+    /* The index feeds only addresses, its step and the test; a sum feeds only
+       its own addition. */
+    for (uint32_t b = 0; b < body_count && ok; ++b) {
+      SsaBlock *block = &s->blocks[body[b]];
+      for (uint32_t k = 0; k < block->values.count && ok; ++k) {
+        SsaValue *v = &s->values[block->values.items[k]];
+        if (v->dead) continue;
+        int32_t operands[3] = {v->a, v->b, v->c};
+        for (unsigned j = 0; j < 3; ++j) {
+          if (operands[j] < 0) continue;
+          int32_t self = (int32_t)block->values.items[k];
+          bool address = j == 1 && (v->op == SO_LOAD || v->op == SO_STORE) && operands[j] == p.index;
+          if (operands[j] == p.primary && !address && !(j == 0 && v->op == SO_CHECK) && self != step) ok = false;
+          if (p.second >= 0 && operands[j] == p.second && !address && self != second_step) ok = false;
+          for (uint32_t r = 0; r < p.sum_count; ++r)
+            if (operands[j] == p.sums[r] && (int32_t)block->values.items[k] != p.sum_next[r]) ok = false;
+        }
+      }
+    }
+    bool any_work = false;
+    for (uint32_t j = 0; j < p.op_count; ++j) any_work |= p.ops[j].op >= VP_ADD;
+    /* The emitter loads a 12-byte element's three fields as one group. */
+    for (uint32_t j = 0; j < p.op_count && ok; ++j) {
+      VpOp *o = &p.ops[j];
+      if (o->op != VP_LOAD || p.strides[o->base] != 12) continue;
+      ok = o->off == 0 && j + 2 < p.op_count && p.ops[j + 1].op == VP_LOAD && p.ops[j + 1].base == o->base &&
+           p.ops[j + 1].off == 4 && p.ops[j + 2].op == VP_LOAD && p.ops[j + 2].base == o->base && p.ops[j + 2].off == 8;
+      j += 2;
+    }
+    if (!ok || !any_work || !vp_registers(&p)) continue;
+    /* Frame: {i, end, bases, sums, inputs}; the vector part leaves i and the
+       sums where the scalar loop resumes. */
+    uint32_t sums_at = 24 + 8 * p.base_count, inputs_at = sums_at + 4 * p.sum_count;
+    uint32_t lengths_at = (inputs_at + 4 * p.input_count + 7) & ~7u;
+    uint32_t size = lengths_at + 8 * p.length_count;
+    uint32_t saved = s->current;
+    s->current = pre;
+    int32_t frame = ssa_frame(s, ssa_reserve(s, size, 8));
+    ssa_store(s, frame, -1, 1, 0, SSA_MEM(64, 0, 0), (int32_t)s->lists[s->values[p.index].list + outside]);
+    ssa_store(s, frame, -1, 1, 8, SSA_MEM(64, 0, 0), test->b);
+    ssa_store(s, frame, -1, 1, 16, SSA_MEM(64, 0, 0), (int32_t)s->lists[s->values[p.index].list + outside]);
+    for (uint32_t k = 0; k < p.base_count; ++k) ssa_store(s, frame, -1, 1, 24 + 8 * k, SSA_MEM(64, 0, 0), p.bases[k]);
+    for (uint32_t r = 0; r < p.sum_count; ++r)
+      ssa_store(s, frame, -1, 1, sums_at + 4 * r, SSA_MEM(32, 0, 1), (int32_t)s->lists[s->values[p.sums[r]].list + outside]);
+    for (uint32_t k = 0; k < p.input_count; ++k) ssa_store(s, frame, -1, 1, inputs_at + 4 * k, SSA_MEM(32, 0, 1), p.inputs[k]);
+    for (uint32_t k = 0; k < p.length_count; ++k) ssa_store(s, frame, -1, 1, lengths_at + 8 * k, SSA_MEM(64, 0, 0), p.lengths[k]);
+    uint32_t words[VP_HEADER + VP_WORDS * VP_MAX_OPS] = {p.base_count, p.sum_count, p.input_count, 0,
+                                                         0, 0, 0, 0, sums_at, inputs_at, p.length_count, lengths_at,
+                                                         0, 0, 0, 0, 0, 0};
+    uint32_t count = VP_HEADER;
+    for (uint32_t k = 0; k < p.base_count; ++k) { words[4 + k] = p.strides[k]; words[12 + k] = p.scales[k]; }
+    words[16] = (uint32_t)p.step; words[17] = (uint32_t)p.primary_step;
+    for (uint32_t j = 0; j < p.op_count; ++j) {
+      VpOp *o = &p.ops[j];
+      if (!o->op) continue;
+      uint32_t x = o->x, y = o->y;
+      /* Operands as registers. */
+      uint32_t xr = p.ops[x].dst, yr = p.ops[y].dst;
+      uint32_t w[VP_WORDS] = {o->op, o->dst, xr, yr, o->base, o->op == VP_STORE3 ? p.ops[o->off].dst : o->off};
+      memcpy(words + count, w, sizeof(w));
+      count += VP_WORDS; ++words[3];
+    }
+    uint32_t list = ssa_list(s, (const int32_t *)words, count);
+    int32_t loop = ssa_emit(s, SO_VLOOP, SC_NONE, frame, -1, -1, 0, 0);
+    if (s->failed) break;
+    s->values[loop].list = list; s->values[loop].count = count;
+    int32_t resume = ssa_load(s, frame, -1, 1, 0, SSA_MEM(64, 0, 0));
+    s->lists[s->values[p.primary].list + outside] = (uint32_t)resume;
+    if (p.index != p.primary) {
+      int32_t address = ssa_load(s, frame, -1, 1, 16, SSA_MEM(64, 0, 0));
+      s->lists[s->values[p.index].list + outside] = (uint32_t)address;
+    }
+    for (uint32_t r = 0; r < p.sum_count; ++r) {
+      int32_t sum = ssa_load(s, frame, -1, 1, sums_at + 4 * r, SSA_MEM(32, 0, 1));
+      s->lists[s->values[p.sums[r]].list + outside] = (uint32_t)sum;
+    }
+    s->current = saved;
+    changed = true;
+    ++s->vectorized;
+    if (ctx->optimization_remarks)
+      fprintf(stderr, "remark: %s: vectorized f32 loop (4 lanes, %u ops, %u arrays)\n", s->f->name, words[3], p.base_count);
+  }
+  free(in_loop); free(map); free(body);
+  return changed;
+}
 /* Pairs of f32 lanes, a small SLP vectorizer in the manner of LLVM's: two
    adjacent f32 stores whose values come from the same operations on
    adjacent loads become one 8-byte store of lanewise operations, which use
@@ -6082,6 +6510,7 @@ static bool ssa_located(const SsaValue *v) {
 static uint64_t ssa_clobbers(Ssa *s, const SsaValue *v) {
   if ((s->ctx->a64 || s->ctx->rv64) && v->op != SO_CALL && v->op != SO_PANIC) return 0;
   switch (v->op) {
+  case SO_VLOOP: return SSA_CALLER_SAVED;
   case SO_CALL: case SO_PANIC:
     return s->ctx->a64 ? A64_CALLER_SAVED : s->ctx->rv64 ? RV_CALLER_SAVED : s->ctx->win64 ? WIN64_CALLER_SAVED : SSA_CALLER_SAVED;
   case SO_DIV: case SO_REM: case SO_MULH: return UINT64_C(1) << X_RAX | UINT64_C(1) << X_RDX;
@@ -7376,6 +7805,195 @@ static void ssa_byte_count_emit(SsaEmit *e, SsaValue *v) {
 }
 /* Lanes match the scalar order unless dst sits less than one vector above src;
    then a later element reads an earlier write, and every element runs alone. */
+/* SO_VLOOP: rcx is the index, rdx the end of the vector part, r8-r11 the
+   arrays, xmm14/xmm15 temporaries; the program assigned xmm0-13. */
+static void vp_sse(BackendContext *ctx, int prefix, unsigned opcode, unsigned to, unsigned from) {
+  x86_reg_op(ctx, prefix, false, OP2(0x0f, opcode), to, from, false);
+}
+/* shufps to, from: lanes a, b of to, then c, d of from. */
+static void vp_shuffle(BackendContext *ctx, unsigned to, unsigned from, unsigned a, unsigned b, unsigned c, unsigned d) {
+  vp_sse(ctx, -1, 0xc6, to, from); byte(ctx, a | b << 2 | c << 4 | d << 6);
+}
+static void vp_copy(BackendContext *ctx, unsigned to, unsigned from) {
+  if (to != from) vp_sse(ctx, -1, 0x28, to, from);
+}
+static void vp_element(BackendContext *ctx, unsigned opcode, unsigned reg, unsigned base, unsigned scale, int32_t at) {
+  x86_mem_op(ctx, -1, false, OP2(0x0f, opcode), reg, (SsaMemory){(int)(X_R8 + base), X_RCX, scale, at}, false);
+}
+static void ssa_vloop_emit(SsaEmit *e, SsaValue *v) {
+  BackendContext *ctx = e->ctx;
+  const uint32_t *w = &e->s->lists[v->list];
+  int32_t frame = (int32_t)e->s->values[v->a].aux;
+  uint32_t bases = w[0], sums_at = w[8], inputs_at = w[9], ops = w[3], step = w[16];
+  const uint32_t *stride = w + 4, *scale = w + 12, *program = w + VP_HEADER;
+  const unsigned t1 = 14, t2 = 15;
+  uint32_t counter_step = w[17];
+  x86_mem_op(ctx, -1, true, OP1(0x8b), X_RAX, (SsaMemory){X_RBP, -1, 1, frame}, false);
+  x86_mem_op(ctx, -1, true, OP1(0x8b), X_RDX, (SsaMemory){X_RBP, -1, 1, frame + 8}, false);
+  x86_reg_op(ctx, -1, true, OP1(0x39), X_RDX, X_RAX, false);              /* cmp rax, rdx */
+  size_t skips[2 + VP_MAX_BASES + VP_MAX_BASES * VP_MAX_BASES]; unsigned skip_count = 0;
+  skips[skip_count++] = isa_branch(ctx, CC_AE);
+  /* The scalar loop runs ceil((end - i) / step) times; the vector part runs
+     rdi of them, whole groups of four. */
+  x86_reg_op(ctx, -1, true, OP1(0x29), X_RAX, X_RDX, false);              /* sub rdx, rax */
+  x86_reg_op(ctx, -1, true, OP1(0x89), X_RDX, X_RAX, false);              /* mov rax, rdx */
+  if (counter_step > 1) {
+    CODE(0x48, 0x83, 0xc0); byte(ctx, counter_step - 1);                  /* add rax, step - 1 */
+    x86_move_immediate(ctx, X_RSI, counter_step);
+    CODE(0x31, 0xd2);                                                     /* xor edx, edx */
+    CODE(0x48, 0xf7, 0xf6);                                               /* div rsi */
+  }
+  CODE(0x48, 0x83, 0xe0, 0xfc);                                           /* and rax, -4 */
+  skips[skip_count++] = isa_branch(ctx, CC_E);
+  x86_reg_op(ctx, -1, true, OP1(0x89), X_RAX, X_RDI, false);              /* mov rdi, rax */
+  /* Every checked index of the vector part is below i + rdi <= length. */
+  for (uint32_t k = 0; k < w[10]; ++k) {
+    x86_mem_op(ctx, -1, true, OP1(0x8b), X_RSI, (SsaMemory){X_RBP, -1, 1, frame}, false);
+    x86_reg_op(ctx, -1, true, OP1(0x01), X_RDI, X_RSI, false);            /* add rsi, rdi */
+    x86_mem_op(ctx, -1, true, OP1(0x3b), X_RSI, (SsaMemory){X_RBP, -1, 1, frame + (int32_t)(w[11] + 8 * k)}, false);
+    skips[skip_count++] = isa_branch(ctx, CC_A);
+  }
+  /* rcx walks the address index from its start to rdx. */
+  x86_mem_op(ctx, -1, true, OP1(0x8b), X_RCX, (SsaMemory){X_RBP, -1, 1, frame + 16}, false);
+  x86_reg_op(ctx, -1, true, OP1(0x89), X_RDI, X_RDX, false);              /* mov rdx, rdi */
+  if (step > 1) { CODE(0x48, 0x6b, 0xd2); byte(ctx, step); }             /* imul rdx, rdx, step */
+  x86_reg_op(ctx, -1, true, OP1(0x01), X_RCX, X_RDX, false);              /* add rdx, rcx */
+  for (uint32_t k = 0; k < bases; ++k)
+    x86_mem_op(ctx, -1, true, OP1(0x8b), X_R8 + k, (SsaMemory){X_RBP, -1, 1, frame + 24 + 8 * (int32_t)k}, false);
+  /* Each stored array's bytes over the vector part, [base + rcx*scale,
+     base + rdx*scale), against every other array's. */
+  for (uint32_t a = 0; a < bases; ++a) {
+    bool stored = false;
+    for (uint32_t j = 0; j < ops; ++j) {
+      const uint32_t *o = program + VP_WORDS * j;
+      stored |= (o[0] == VP_STORE || o[0] == VP_STORE2 || o[0] == VP_STORE3) && o[4] == a;
+    }
+    if (!stored) continue;
+    for (uint32_t b = 0; b < bases; ++b) {
+      if (b == a) continue;
+      x86_mem_op(ctx, -1, true, OP1(0x8d), X_RAX, (SsaMemory){(int)(X_R8 + a), X_RCX, scale[a], 0}, false);
+      x86_mem_op(ctx, -1, true, OP1(0x8d), X_RSI, (SsaMemory){(int)(X_R8 + b), X_RDX, scale[b], 0}, false);
+      x86_reg_op(ctx, -1, true, OP1(0x39), X_RSI, X_RAX, false);          /* cmp rax, rsi */
+      size_t fine = isa_branch(ctx, CC_AE);
+      x86_mem_op(ctx, -1, true, OP1(0x8d), X_RAX, (SsaMemory){(int)(X_R8 + b), X_RCX, scale[b], 0}, false);
+      x86_mem_op(ctx, -1, true, OP1(0x8d), X_RSI, (SsaMemory){(int)(X_R8 + a), X_RDX, scale[a], 0}, false);
+      x86_reg_op(ctx, -1, true, OP1(0x39), X_RSI, X_RAX, false);
+      skips[skip_count++] = isa_branch(ctx, CC_B);
+      isa_patch(ctx, fine, ctx->text.n);
+    }
+  }
+  for (uint32_t j = 0; j < ops; ++j) {
+    const uint32_t *o = program + VP_WORDS * j;
+    if (o[0] == VP_CONST) {
+      x86_move_immediate(ctx, X_RAX, o[5]);
+      x86_reg_op(ctx, 0x66, false, OP2(0x0f, 0x6e), o[1], X_RAX, false);  /* movd */
+      vp_shuffle(ctx, o[1], o[1], 0, 0, 0, 0);
+    } else if (o[0] == VP_BCAST) {
+      x86_mem_op(ctx, 0xf3, false, OP2(0x0f, 0x10), o[1], (SsaMemory){X_RBP, -1, 1, frame + (int32_t)(inputs_at + 4 * o[4])}, false);
+      vp_shuffle(ctx, o[1], o[1], 0, 0, 0, 0);
+    } else if (o[0] == VP_SUM) {
+      x86_mem_op(ctx, 0xf3, false, OP2(0x0f, 0x10), o[1], (SsaMemory){X_RBP, -1, 1, frame + (int32_t)(sums_at + 4 * o[4])}, false);
+    }
+  }
+  size_t loop = ctx->text.n;
+  for (uint32_t j = 0; j < ops; ++j) {
+    const uint32_t *o = program + VP_WORDS * j;
+    unsigned d = o[1], x = o[2], y = o[3], base = o[4], sc = scale[base];
+    switch (o[0]) {
+    case VP_LOAD:
+      if (stride[base] == 4) vp_element(ctx, 0x10, d, base, sc, 0);
+      else if (stride[base] == 8) {
+        /* The other field of the same elements, next in the program, shares
+           the two loads. */
+        const uint32_t *next = j + 1 < ops ? o + VP_WORDS : NULL;
+        bool pair = next && next[0] == VP_LOAD && next[4] == base && next[5] == (o[5] ^ 4);
+        vp_element(ctx, 0x10, d, base, sc, 0);
+        vp_element(ctx, 0x10, t1, base, sc, 16);
+        if (pair) vp_copy(ctx, next[1], d);
+        vp_sse(ctx, -1, 0xc6, d, t1); byte(ctx, o[5] ? 0xdd : 0x88);
+        if (pair) { vp_sse(ctx, -1, 0xc6, next[1], t1); byte(ctx, next[5] ? 0xdd : 0x88); ++j; }
+      } else {
+        /* Fields 0, 4 and 8 of four 12-byte elements: a = x0 y0 z0 x1,
+           b = y1 z1 x2 y2, c = z2 x3 y3 z3. */
+        unsigned rx = d, ry = o[VP_WORDS + 1], rz = o[2 * VP_WORDS + 1];
+        vp_element(ctx, 0x10, rx, base, sc, 0);
+        vp_element(ctx, 0x10, ry, base, sc, 16);
+        vp_element(ctx, 0x10, rz, base, sc, 32);
+        vp_copy(ctx, t1, rx); vp_shuffle(ctx, t1, ry, 1, 1, 0, 0);       /* a1 a1 b0 b0 */
+        vp_copy(ctx, t2, ry); vp_shuffle(ctx, t2, rz, 3, 3, 2, 2);       /* b3 b3 c2 c2 */
+        vp_shuffle(ctx, t1, t2, 0, 2, 0, 2);                             /* y */
+        vp_copy(ctx, t2, ry); vp_shuffle(ctx, t2, rz, 2, 0, 1, 0);       /* b2 b0 c1 c0 */
+        vp_shuffle(ctx, ry, rx, 1, 1, 2, 2);                             /* b1 b1 a2 a2 */
+        vp_shuffle(ctx, rz, rz, 0, 0, 3, 3);                             /* c0 c0 c3 c3 */
+        vp_shuffle(ctx, ry, rz, 2, 0, 0, 2);                             /* z */
+        vp_shuffle(ctx, rx, t2, 0, 3, 0, 2);                             /* x */
+        vp_copy(ctx, rz, ry);
+        vp_copy(ctx, ry, t1);
+        j += 2;
+      }
+      break;
+    case VP_STORE:
+      vp_element(ctx, 0x11, x, base, sc, 0);
+      break;
+    case VP_STORE2:
+      vp_copy(ctx, t1, x); vp_sse(ctx, -1, 0x14, t1, y);
+      vp_element(ctx, 0x11, t1, base, sc, 0);
+      vp_copy(ctx, t1, x); vp_sse(ctx, -1, 0x15, t1, y);
+      vp_element(ctx, 0x11, t1, base, sc, 16);
+      break;
+    case VP_STORE3: {
+      unsigned z = o[5];
+      vp_copy(ctx, t1, x); vp_shuffle(ctx, t1, y, 0, 0, 0, 0);           /* x0 x0 y0 y0 */
+      vp_copy(ctx, t2, z); vp_shuffle(ctx, t2, x, 0, 0, 1, 1);           /* z0 z0 x1 x1 */
+      vp_shuffle(ctx, t1, t2, 0, 2, 0, 2);
+      vp_element(ctx, 0x11, t1, base, sc, 0);
+      vp_copy(ctx, t1, y); vp_shuffle(ctx, t1, z, 1, 1, 1, 1);           /* y1 y1 z1 z1 */
+      vp_copy(ctx, t2, x); vp_shuffle(ctx, t2, y, 2, 2, 2, 2);           /* x2 x2 y2 y2 */
+      vp_shuffle(ctx, t1, t2, 0, 2, 0, 2);
+      vp_element(ctx, 0x11, t1, base, sc, 16);
+      vp_copy(ctx, t1, z); vp_shuffle(ctx, t1, x, 2, 2, 3, 3);           /* z2 z2 x3 x3 */
+      vp_copy(ctx, t2, y); vp_shuffle(ctx, t2, z, 3, 3, 3, 3);           /* y3 y3 z3 z3 */
+      vp_shuffle(ctx, t1, t2, 0, 2, 0, 2);
+      vp_element(ctx, 0x11, t1, base, sc, 32);
+      break;
+    }
+    case VP_ADD: case VP_SUB: case VP_MUL: case VP_DIV: {
+      static const unsigned char codes[] = {0x58, 0x5c, 0x59, 0x5e};
+      unsigned code = codes[o[0] - VP_ADD];
+      if (d == x) vp_sse(ctx, -1, code, d, y);
+      else if (d == y && (o[0] == VP_ADD || o[0] == VP_MUL)) vp_sse(ctx, -1, code, d, x);
+      else if (d == y) { vp_copy(ctx, t2, x); vp_sse(ctx, -1, code, t2, y); vp_copy(ctx, d, t2); }
+      else { vp_copy(ctx, d, x); vp_sse(ctx, -1, code, d, y); }
+      break;
+    }
+    case VP_SUM: {
+      /* Lane 0, then lanes 1, 2 and 3: the scalar loop's order. */
+      unsigned code = o[5] ? 0x5c : 0x58;
+      vp_sse(ctx, 0xf3, code, d, x);
+      for (unsigned lane = 1; lane < 4; ++lane) {
+        vp_sse(ctx, 0x66, 0x70, t1, x); byte(ctx, lane * 0x55);          /* pshufd t1, x, lane */
+        vp_sse(ctx, 0xf3, code, d, t1);
+      }
+      break;
+    }
+    default: break;
+    }
+  }
+  CODE(0x48, 0x83, 0xc1); byte(ctx, 4 * step);                            /* add rcx, 4 * step */
+  x86_reg_op(ctx, -1, true, OP1(0x39), X_RDX, X_RCX, false);              /* cmp rcx, rdx */
+  isa_patch(ctx, isa_branch(ctx, CC_B), loop);
+  /* Where the scalar loop resumes: the address index, and the counter
+     advanced by rdi iterations. */
+  x86_mem_op(ctx, -1, true, OP1(0x89), X_RCX, (SsaMemory){X_RBP, -1, 1, frame + 16}, false);
+  if (counter_step > 1) { CODE(0x48, 0x6b, 0xff); byte(ctx, counter_step); } /* imul rdi, rdi, step */
+  x86_mem_op(ctx, -1, true, OP1(0x01), X_RDI, (SsaMemory){X_RBP, -1, 1, frame}, false); /* add [i], rdi */
+  for (uint32_t j = 0; j < ops; ++j) {
+    const uint32_t *o = program + VP_WORDS * j;
+    if (o[0] == VP_SUM)
+      x86_mem_op(ctx, 0xf3, false, OP2(0x0f, 0x11), o[1], (SsaMemory){X_RBP, -1, 1, frame + (int32_t)(sums_at + 4 * o[4])}, false);
+  }
+  for (unsigned k = 0; k < skip_count; ++k) isa_patch(ctx, skips[k], ctx->text.n);
+}
 static void ssa_axpy_emit(SsaEmit *e, SsaValue *v) {
   BackendContext *ctx = e->ctx;
   int32_t frame = (int32_t)e->s->values[v->a].aux;
@@ -8171,6 +8789,7 @@ static void ssa_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
   case SO_BYTE_COUNT: ssa_byte_count_emit(e, v); return;
   case SO_SUM: ssa_sum_emit(e, v); return;
   case SO_AXPY: ssa_axpy_emit(e, v); return;
+  case SO_VLOOP: ssa_vloop_emit(e, v); return;
   case SO_JSON_ASCII_PREFIX: ssa_json_ascii_prefix(e, v); return;
   case SO_FIND: ssa_find(e, v); return;
   case SO_CALL:
@@ -8912,6 +9531,7 @@ static void ssa_prepare(SsaPrepared *p, BackendContext *ctx, const DynSource *so
     p->ready = true;
     goto done;
   }
+  if (ssa_vloops(s, order, n)) ssa_dce(s, order, n);
   if (ctx->vectorize && !ctx->rv64 && ssa_pairs(s, order, n)) {
     ssa_resolve_all(s);
     /* Two trees may load the same pair. */

@@ -14,6 +14,12 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- `--opt-level 3` on x86-64 runs counted f32 loops four iterations at a time: loads and stores
+  of one-, two- and three-float elements, f32 arithmetic and running sums, which add the lanes in
+  iteration order so results match the scalar loop bit for bit. The vector part runs only when
+  the arrays it writes don't overlap the others and every checked index is in range, both checked
+  at run time; otherwise, and for the last few iterations, the scalar loop runs. The `pairs`
+  kernel now matches `cc -O2`, and `structs` is 1.14x it, from 1.19x and 1.26x.
 - Executables keep only what `main` reaches, in debug builds as well as release: unused
   functions, constants and globals from imported modules are no longer emitted, so an unused
   `use` adds nothing to the binary. Globals whose initializer calls a function are kept, since

@@ -1,0 +1,103 @@
+use "std/io"
+use "std/mem"
+
+struct V {
+  x: f32,
+  y: f32
+}
+
+struct W {
+  x: f32,
+  y: f32,
+  z: f32
+}
+
+fn bits(f: f32) u32 {
+  return #bitcast(u32, f)
+}
+
+// Two fields, a running sum, a division and checked indices from start.
+fn step(ps: []V, vs: []V, start: usize, end: usize, k: f32) f32 {
+  e: f32 = 0.5
+  for i in start..end {
+    ps[i] = V{ x: ps[i].x + vs[i].x * k, y: ps[i].y / (vs[i].y + 3.0) }
+    e += ps[i].x * vs[i].y - ps[i].y
+  }
+  return e
+}
+
+// One field per element and a subtracted sum.
+fn flat(a: []f32, b: []f32, n: usize, k: f32) f32 {
+  t: f32 = 1.0
+  for i in 0..n {
+    a[i] = a[i] * k - b[i]
+    t -= a[i]
+  }
+  return t
+}
+
+// Three fields per element.
+fn spin(ws: []W, us: []W, k: f32) f32 {
+  e: f32 = 0.0
+  for i in 0..#len(ws) {
+    ws[i] = W{ x: ws[i].x + us[i].z * k, y: ws[i].y - us[i].x, z: ws[i].z * us[i].y }
+    e += ws[i].x * us[i].x + ws[i].y * us[i].y + ws[i].z * us[i].z
+  }
+  return e
+}
+
+fn main() {
+  arena := mem.arena_create(0)
+  buffer := mem.push_array(V, arena, 64)
+  other := mem.push_array(V, arena, 64)
+  for i in 0..64 {
+    f := #cast(f32, i)
+    buffer[i] = V{ x: f * 0.37, y: 1.0 / (f + 1.0) }
+    other[i] = V{ x: 2.0 - f, y: f * f * 0.01 }
+  }
+  other[9].y = 0.0 / 0.0
+  ends: [9]usize = [0, 1, 3, 4, 5, 7, 8, 13, 64]
+  for end in ends {
+    for first in 0..3 {
+      start := #cast(usize, first)
+      if start <= end {
+        e := step(buffer, other, start, end, 0.25)
+        io.println("{} {} {} {} {}", start, end, bits(e), bits(buffer[end / 2].x), bits(buffer[end / 2].y))
+      }
+    }
+  }
+  // Overlapping arrays take the scalar loop.
+  e := step(buffer[1..], buffer[..63], 0, 63, 1.5)
+  io.println("overlap {} {} {}", bits(e), bits(buffer[30].x), bits(buffer[62].y))
+  floats := mem.push_array(f32, arena, 41)
+  more := mem.push_array(f32, arena, 41)
+  for i in 0..41 {
+    floats[i] = #cast(f32, i) * 1.1
+    more[i] = 0.3 * #cast(f32, i)
+  }
+  counts: [5]usize = [0, 3, 4, 9, 41]
+  for n in counts {
+    t := flat(floats, more, n, 1.0001)
+    io.println("flat {} {} {}", n, bits(t), bits(floats[n / 2]))
+  }
+  t := flat(floats[2..], floats, 39, 0.5)
+  io.println("flat overlap {} {}", bits(t), bits(floats[20]))
+  ws := mem.push_array(W, arena, 40)
+  us := mem.push_array(W, arena, 40)
+  sizes: [6]usize = [0, 1, 4, 6, 9, 40]
+  for n in sizes {
+    for i in 0..40 {
+      f := #cast(f32, i)
+      ws[i] = W{ x: f, y: 1.0 / (f + 2.0), z: f * 0.5 - 3.0 }
+      us[i] = W{ x: 0.25 * f, y: 3.0 - f, z: f * f * 0.001 }
+    }
+    s := spin(ws[..n], us[..n], 0.75)
+    io.println("spin {} {} {} {}", n, bits(s), bits(ws[n / 2].y), bits(ws[n / 2].z))
+  }
+  s := spin(ws[1..], ws[..39], 2.0)
+  io.println("spin overlap {} {}", bits(s), bits(ws[20].x))
+  // An index past the end panics after the earlier iterations' writes.
+  short := buffer[..5]
+  io.println("last {}", bits(step(buffer, short, 0, 5, 1.0)))
+  io.println("past {}", bits(step(buffer, short, 0, 9, 1.0)))
+}
