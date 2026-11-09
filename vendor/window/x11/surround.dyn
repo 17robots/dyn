@@ -14,7 +14,7 @@ pub fn set_surrounding_text(window: *Window, text: []const u8, cursor, anchor: u
   if token == 0 || cursor > #len(text) || anchor > #len(text) || !utf8.valid(text) {
     return Result{ kind: io.Kind.InvalidInput }
   }
-  if (cursor < #len(text) && text[cursor] & 0xc0 == 0x80) || (anchor < #len(text) && text[anchor] & 0xc0 == 0x80) {
+  if (cursor < #len(text) && (text[cursor] & 0xc0) == 0x80) || (anchor < #len(text) && (text[anchor] & 0xc0) == 0x80) {
     return Result{ kind: io.Kind.InvalidInput }
   }
   for byte in text {

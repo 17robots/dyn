@@ -103,7 +103,7 @@ fn shape(arena:*mem.Arena, api:*const hb.Api, text:[]const u8, clusters:[]Cluste
       unit_count+=1
     } else {
       direction:=hb.LeftToRight
-      if run.level&1!=0 {
+      if (run.level&1)!=0 {
         direction=hb.RightToLeft
       }
       features:[0]hb.Feature=[]
@@ -149,7 +149,7 @@ fn shape(arena:*mem.Arena, api:*const hb.Api, text:[]const u8, clusters:[]Cluste
           advance+=#cast(f64, run.glyphs[j].x_advance)/64.0
         }
         end:=run.end
-        if run.level&1!=0 {
+        if (run.level&1)!=0 {
           end=previous
         }
         else if next<#len(run.glyphs) {
@@ -174,7 +174,7 @@ fn shape(arena:*mem.Arena, api:*const hb.Api, text:[]const u8, clusters:[]Cluste
         previous=source
         i=next
       }
-      if run.level&1!=0 {
+      if (run.level&1)!=0 {
         count:=unit_count-begin_units
         for j in 0..count/2 {
           saved:=units[begin_units+j]
@@ -286,12 +286,12 @@ fn emit(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[]cons
     run:=span.runs[ordered]
     if run.tab {
       width:=(math.floor64(x/tab)+1.0)*tab-x
-      append(output, Glyph{font:run.face.data, start:base+run.start, end:base+run.end, x:x, y:y, advance:width, rtl:run.level&1!=0, hidden:true})
+      append(output, Glyph{font:run.face.data, start:base+run.start, end:base+run.end, x:x, y:y, advance:width, rtl:(run.level&1)!=0, hidden:true})
       x+=width
       continue
     }
     if #len(run.glyphs)==0 {
-      append(output, Glyph{font:run.face.data, start:base+run.start, end:base+run.end, x:x, y:y, rtl:run.level&1!=0, hidden:true})
+      append(output, Glyph{font:run.face.data, start:base+run.start, end:base+run.end, x:x, y:y, rtl:(run.level&1)!=0, hidden:true})
     }
     previous:=run.end
     i:usize=0
@@ -302,7 +302,7 @@ fn emit(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[]cons
         next+=1
       }
       cluster_end:=run.end
-      if run.level&1!=0 {
+      if (run.level&1)!=0 {
         cluster_end=previous
       }
       else if next<#len(run.glyphs) {
@@ -328,7 +328,7 @@ fn emit(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[]cons
       for j in i..next {
         g:=run.glyphs[j]
         width:=#cast(f64, g.x_advance)/64.0
-        append(output, Glyph{id:g.index, font:run.face.data, start:base+snapped_start, end:base+snapped_end, x:x, y:y, x_offset:#cast(f64, g.x_offset)/64.0, y_offset:0.0-#cast(f64, g.y_offset)/64.0, advance:width, rtl:run.level&1!=0})
+        append(output, Glyph{id:g.index, font:run.face.data, start:base+snapped_start, end:base+snapped_end, x:x, y:y, x_offset:#cast(f64, g.x_offset)/64.0, y_offset:0.0-#cast(f64, g.y_offset)/64.0, advance:width, rtl:(run.level&1)!=0})
         x+=width
       }
       previous=source
@@ -670,7 +670,7 @@ pub fn at_point(layout:*const Layout, x, y:f64) Hit {
 pub struct SelectionRect { line: usize, start: usize, end: usize, x: f64, y: f64, width: f64, height: f64 }
 pub struct SelectionResult { value: []SelectionRect, kind: io.Kind, ok: bool }
 fn selection_boundary(text: []const u8, offset: usize) bool {
-  return offset<=#len(text) && (offset==#len(text) || text[offset]&0xc0!=0x80)
+  return offset<=#len(text) && (offset==#len(text) || (text[offset]&0xc0)!=0x80)
 }
 fn selection_store(destination: []SelectionRect, count: usize, rect: SelectionRect) {
   if count<#len(destination) {

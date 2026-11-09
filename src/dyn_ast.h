@@ -188,6 +188,10 @@ typedef struct {
   DynType type;
   DynExprId initializer;
   bool is_const, foreign, is_public;
+  /* An inferred constant built from literals adapts at each use like a
+     literal; untyped holds an unchecked copy of its initializer. */
+  bool has_untyped;
+  DynExprId untyped;
   uint64_t module_owner;
 } DynAstGlobal;
 /* Top-level #assert: condition must be a compile-time bool. */
@@ -284,7 +288,8 @@ typedef struct {
 typedef struct {
   DynSpan name;
   DynType type;
-  bool active, is_const, used;
+  bool active, is_const, used, has_untyped;
+  DynExprId untyped;
   uint32_t owner_function;
 } DynAstLocal;
 typedef struct {

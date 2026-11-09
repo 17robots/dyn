@@ -86,7 +86,7 @@ fn inverse(value: Number, modulus: Number) Number {
     i:=255-step
     result=multiply(result, result, modulus)
     // The exponent is public and fixed by the chosen modulus.
-    if (exponent.limbs[i/32]>>#cast(u32, i%32))&1!=0 {
+    if ((exponent.limbs[i/32]>>#cast(u32, i%32))&1)!=0 {
       result=multiply(result, value, modulus)
     }
   }

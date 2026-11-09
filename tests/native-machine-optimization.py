@@ -80,7 +80,7 @@ fn {function}() {{
   for i in 0..{n} {{ a[i] = #cast({t}, i)
 b[i] = #cast({t}, -1) }}
   for i in 0..{n} {{ c[i] = {operation} }}
-  for i in 0..{n} {{ if c[i] != {operation} {{ #panic("SIMD scalar oracle") }} }}
+  for i in 0..{n} {{ if c[i] != ({operation}) {{ #panic("SIMD scalar oracle") }} }}
   // Same-array destinations are safe because every lane uses the same index.
   for i in 0..{n} {{ a[i] = {operation} }}
   for i in 0..{n} {{ if a[i] != c[i] {{ #panic("SIMD same-array alias") }} }}

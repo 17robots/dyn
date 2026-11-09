@@ -1,0 +1,48 @@
+// Type patterns, chained comparisons, generic struct literals, single-line
+// blocks and constants that adapt to their use.
+use "std/io"
+
+struct Point { x: i32, y: i32 }
+struct Box($T: type) { value: T }
+
+const LIMIT := 64
+const MASK := 1 << 12
+const DOUBLE := LIMIT * 2
+
+fn describe(value: any) i64 {
+  case value {
+    i64 number => { return number }
+    Point p => { return #cast(i64, p.x + p.y) }
+    []const u8 text => { return #cast(i64, #len(text)) }
+    bool => { return 1 }
+    _ => { return 0 }
+  }
+}
+
+fn check(ok: bool, message: []const u8) {
+  if !ok { #panic(message) }
+}
+
+fn main() {
+  ten: i64 = 10
+  point := Point{x: 3, y: 4}
+  text: []const u8 = "abcd"
+  check(describe(ten) + describe(true) + describe(point) + describe(text) == 22, "type patterns")
+  x: i32 = 5
+  check(0 <= x < 10, "chain")
+  check(10 > x >= 5, "descending chain")
+  check(!(0 < x < 3), "chain fails")
+  check(point.x < x <= point.x + point.y + 2, "field chain")
+  flags: u32 = 6
+  check((flags & 2) != 0, "parenthesized mask")
+  b := Box(i32){value: 41}
+  nested := Box(Box(i32)){value: Box(i32){value: 1}}
+  check(b.value + nested.value.value == 42, "generic literals")
+  small: u8 = LIMIT
+  wide: u64 = MASK
+  real: f64 = DOUBLE
+  const local := 3
+  sum: i64 = DOUBLE + local
+  check(small == 64 && wide == 4096 && real == 128.0 && sum == 131, "adapting constants")
+  _ = io.write_all(io.stdout(), "ok\n")
+}

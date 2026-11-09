@@ -220,7 +220,7 @@ fn describe_data(arena: *mem.Arena, path: []const u8, data: []const u8) Entry {
       entry.weight = value
     }
     // fsSelection bit 0 is italic.
-    entry.italic = u16be(os2.value, 62) & 1 != 0
+    entry.italic = (u16be(os2.value, 62) & 1) != 0
   }
   post := table(data, 0x706f7374)
   if post.ok && #len(post.value) >= 16 {

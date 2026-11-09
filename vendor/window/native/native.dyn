@@ -171,11 +171,11 @@ pub fn box_input(window: *const Window) box.Input {
     x: #cast(f32, window.input.x), y: #cast(f32, window.input.y), down: window.input.down,
     scroll_x: desktop.scroll_x, scroll_y: desktop.scroll_y,
     text: desktop.text[..#cast(usize, desktop.text_length)],
-    backspace: keys & 1 != 0, delete: keys & 2 != 0, left: keys & 4 != 0, right: keys & 8 != 0,
-    home: keys & 16 != 0, end: keys & 32 != 0, enter: keys & 64 != 0, escape: keys & 128 != 0,
-    tab: keys & 256 != 0, shift: keys & 512 != 0, control: keys & 16384 != 0, select_all: keys & 1024 != 0,
-    composition_handled: keys & 32768 != 0,
-    copy: keys & 2048 != 0, cut: keys & 4096 != 0, paste: keys & 8192 != 0,
+    backspace: (keys & 1) != 0, delete: (keys & 2) != 0, left: (keys & 4) != 0, right: (keys & 8) != 0,
+    home: (keys & 16) != 0, end: (keys & 32) != 0, enter: (keys & 64) != 0, escape: (keys & 128) != 0,
+    tab: (keys & 256) != 0, shift: (keys & 512) != 0, control: (keys & 16384) != 0, select_all: (keys & 1024) != 0,
+    composition_handled: (keys & 32768) != 0,
+    copy: (keys & 2048) != 0, cut: (keys & 4096) != 0, paste: (keys & 8192) != 0,
   }
   if value.paste && desktop.clipboard != nil {
     value.clipboard = #slice(desktop.clipboard, #cast(usize, desktop.clipboard_length))

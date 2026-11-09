@@ -63,7 +63,7 @@ fn multiple_of_pow5(value: u64, p: i64) bool {
 }
 
 fn multiple_of_pow2(value: u64, p: i64) bool {
-  return value & ((#cast(u64, 1) << #cast(u64, p)) - 1) == 0
+  return (value & ((#cast(u64, 1) << #cast(u64, p)) - 1)) == 0
 }
 
 struct Decimal { mantissa: u64, exponent: i64 }
@@ -80,7 +80,7 @@ fn shortest_decimal(mantissa_bits: u64, exponent_bits: u64) Decimal {
     e2 = #cast(i64, exponent_bits) - 1023 - 52 - 2
     m2 = 4503599627370496 | mantissa_bits
   }
-  accept_bounds := m2 & 1 == 0
+  accept_bounds := (m2 & 1) == 0
   mv := 4 * m2
   mm_shift: u64 = 0
   if mantissa_bits != 0 || exponent_bits <= 1 {

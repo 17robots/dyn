@@ -43,7 +43,12 @@ static bool src_next_is(Parser *p, const char *word) {
 }
 static bool src_distinct(Parser *p) { return is(p, "distinct"); }
 static bool src_packed(Parser *p) { return is(p, "packed") || is(p, "union"); }
-static bool src_type_pattern(Parser *p) { return is(p, "is"); }
+/* A pattern that can only be a type: i32, []const u8, *Node, fn(..), $T.
+   Named types (Point, geo.Point, Box(i32)) parse as value patterns and the
+   AST resolves them, since only names know whether they are types. */
+static bool src_type_pattern(Parser *p) {
+  return primitive(p) || is(p, "*") || is(p, "[") || fn_type_start(p) || at(p, p->token.start, "$");
+}
 static uint32_t src_literal(Parser *p, TokenKind token_kind, ExpKind kind) {
   Token token = p->token;
   if (token.kind != token_kind) { fail(p, token.start, "expected literal"); return NONE; }
@@ -188,8 +193,8 @@ static uint32_t src_case(Parser *p) {
   while (!is(p, "}") && !p->tree->error) {
     uint32_t begin = p->token.start, af = NONE, al = NONE;
     bool wildcard = false;
+    if (is(p, "is")) { fail(p, p->token.start, "type patterns do not use `is`: write `i64 n =>`"); break; }
     if (src_type_pattern(p)) {
-      lex(p);
       uint32_t pf = NONE, pl = NONE;
       append(p, &pf, &pl, type(p));
       if (p->token.kind == NAME) append(p, &pf, &pl, name(p));

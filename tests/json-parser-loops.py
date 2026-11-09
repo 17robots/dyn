@@ -71,7 +71,7 @@ fn main() {
     accepted := byte == 32 || byte == 9 || byte == 10 || byte == 13
     data: [5]u8 = [byte, 'n', 'u', 'l', 'l']
     result := json.parse(arena, data[..])
-    require(result.failure.kind == parse.Kind.Ok == accepted, "all-byte whitespace acceptance")
+    require((result.failure.kind == parse.Kind.Ok) == accepted, "all-byte whitespace acceptance")
     state := json.tokenizer(data[..])
     token := json.token_next(&state)
     if accepted {
@@ -84,12 +84,12 @@ fn main() {
     mem.arena_rewind(arena, mark)
     suffix: [5]u8 = ['n', 'u', 'l', 'l', byte]
     result = json.parse(arena, suffix[..])
-    require(result.failure.kind == parse.Kind.Ok == accepted, "all-byte trailing whitespace")
+    require((result.failure.kind == parse.Kind.Ok) == accepted, "all-byte trailing whitespace")
     mem.arena_rewind(arena, mark)
     numeric: [2]u8 = ['1', byte]
     result = json.parse(arena, numeric[..])
     decimal := byte >= '0' && byte <= '9'
-    require(result.failure.kind == parse.Kind.Ok == (accepted || decimal), "all-byte numeric continuation")
+    require((result.failure.kind == parse.Kind.Ok) == (accepted || decimal), "all-byte numeric continuation")
     if result.failure.kind == parse.Kind.Ok {
       expected_width: usize = 1
       if decimal { expected_width = 2 }

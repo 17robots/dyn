@@ -55,6 +55,21 @@ static DynOperator compact_operator(CompactNode n, const DynSource *s) {
 static bool compact_flag(CompactNode n, unsigned flag) {
   return !compact_null(n) && (compact_data(n)->flags & flag) != 0;
 }
+static bool compact_comparison(DynOperator op) {
+  return op == DYN_OP_EQ || op == DYN_OP_NE || op == DYN_OP_LT || op == DYN_OP_LE ||
+      op == DYN_OP_GT || op == DYN_OP_GE;
+}
+static bool compact_bitwise(DynOperator op) {
+  return op == DYN_OP_BIT_AND || op == DYN_OP_BIT_OR || op == DYN_OP_BIT_XOR;
+}
+static int compact_direction(DynOperator op) {
+  return op == DYN_OP_LT || op == DYN_OP_LE ? 1 : op == DYN_OP_GT || op == DYN_OP_GE ? -1 : 0;
+}
+static bool compact_chain_operand(CompactNode n) {
+  uint16_t kind = compact_kind(n);
+  if (kind == EXP_NAME || kind == EXP_NUMBER || kind == EXP_CHAR) return true;
+  return kind == EXP_FIELD && compact_chain_operand(compact_unwrap(compact_first(n)));
+}
 static DynType compact_type(CompactNode, const DynSource *, DynAstProgram *);
 static DynType compact_instance(CompactNode, CompactNode, const DynSource *, DynAstProgram *);
 static DynExprId compact_expr(CompactNode, const DynSource *, DynAstProgram *, unsigned *);
@@ -249,6 +264,15 @@ static DynExprId compact_enum_owner(CompactNode n, const DynSource *s, DynAstPro
   }
   return compact_expr(n, s, a, errors);
 }
+/* A case pattern spelled as a name is a type when the name resolves to one. */
+static DynType compact_case_type(CompactNode n, const DynSource *s, DynAstProgram *a) {
+  uint16_t kind = compact_kind(n);
+  if (kind == EXP_CALL) {
+    if (!compact_template(a, compact_span(compact_first(n)), s, NULL, NULL)) return DYN_TYPE_ERROR;
+    return compact_instance(compact_first(n), compact_next(compact_first(n)), s, a);
+  }
+  return parse_type_name(compact_span(n), s, a);
+}
 static DynExprId compact_argument(CompactNode n, const DynSource *s, DynAstProgram *a, unsigned *errors) {
   bool type = compact_kind(n) == EXP_TYPE_ARGUMENT;
   if (!type && a->scope_count) {
@@ -383,6 +407,12 @@ static DynExprId compact_expr(CompactNode node, const DynSource *s, DynAstProgra
     e.kind = DYN_EXPR_STRUCT;
     e.type = DYN_TYPE_INFER;
     uint32_t first = 0, count = compact_count(node);
+    if (count && compact_kind(compact_child(node, 0)) == EXP_GENERIC_TYPE) {
+      /* Box(i32){...} names its instance directly. */
+      e.type = compact_type(compact_child(node, 0), s, a);
+      if (e.type == DYN_TYPE_ERROR) compact_diagnostic(compact_child(node, 0), s, errors, "unknown type");
+      first = 1;
+    } else
     while (
         first < count &&
         !(compact_kind(compact_child(node, first)) != EXP_NAME))
@@ -544,8 +574,45 @@ static DynExprId compact_expr(CompactNode node, const DynSource *s, DynAstProgra
   } else if (!(k != EXP_BINARY)) {
     e.kind = DYN_EXPR_BINARY;
     e.op = compact_operator(node, s);
-    e.left = compact_expr(compact_child(node, 0), s, a, errors);
-    e.right = compact_expr(compact_child(node, 1), s, a, errors);
+    CompactNode lhs = compact_child(node, 0), rhs = compact_child(node, 1);
+    if (compact_comparison(e.op)) {
+      CompactNode sides[2] = {lhs, rhs};
+      for (int i = 0; i < 2; ++i)
+        if (compact_kind(sides[i]) == EXP_BINARY && compact_bitwise(compact_operator(sides[i], s))) {
+          compact_diagnostic(sides[i], s, errors,
+              "mixing a bitwise operator with a comparison needs parentheses: write (a & b) == c");
+          break;
+        }
+    }
+    int direction = compact_direction(e.op);
+    DynOperator inner_op = compact_kind(lhs) == EXP_BINARY ? compact_operator(lhs, s) : DYN_OP_NONE;
+    if (compact_comparison(e.op) && compact_comparison(inner_op)) {
+      /* a < b <= c means a < b && b <= c; b is evaluated twice, so it must
+         be a name, field or literal. */
+      CompactNode middle = compact_unwrap(compact_child(lhs, 1));
+      if (!direction || compact_direction(inner_op) != direction) {
+        compact_diagnostic(node, s, errors,
+            "only <, <= or >, >= chains in one direction; == and != do not chain");
+      } else if (!compact_chain_operand(middle))
+        compact_diagnostic(middle, s, errors,
+            "a chained comparison's middle operand must be a name, field or literal; bind it first");
+      DynExprId first = compact_expr(lhs, s, a, errors);
+      DynExprId again = compact_expr(middle, s, a, errors);
+      DynExprId last = compact_expr(rhs, s, a, errors);
+      if (!reserve_expr(a)) {
+        compact_diagnostic(node, s, errors, "out of memory");
+        return DYN_NO_EXPR;
+      }
+      DynExprId second = (DynExprId)a->expression_count;
+      a->expressions[a->expression_count++] = (DynAstExpr){.kind = DYN_EXPR_BINARY, .op = e.op,
+          .span = e.span, .left = again, .right = last};
+      e.op = DYN_OP_LOGICAL_AND;
+      e.left = first;
+      e.right = second;
+    } else {
+      e.left = compact_expr(lhs, s, a, errors);
+      e.right = compact_expr(rhs, s, a, errors);
+    }
   } else {
     compact_diagnostic(node, s, errors,
                "expression is not implemented in bootstrap compiler");
@@ -621,7 +688,20 @@ static void compact_case(CompactNode n, const DynSource *s, DynAstProgram *a,
         }
         DynAstPattern pat = {
             .span = compact_span(p), .first = DYN_NO_EXPR, .last = DYN_NO_EXPR};
-        if (!(compact_kind(p) != SRC_RANGE)) {
+        uint16_t pk = compact_kind(p);
+        DynType named = DYN_TYPE_ERROR;
+        if (!pointer && arm.pattern_count == 0 &&
+            (pk == EXP_NAME || pk == EXP_FIELD || pk == EXP_CALL))
+          named = compact_case_type(p, s, a);
+        if (named != DYN_TYPE_ERROR) {
+          /* A named type is a type pattern: Point p => on an any subject. */
+          pat.type = named;
+          pat.is_type = true;
+          a->patterns[a->pattern_count++] = pat;
+          arm.pattern_count = 1;
+          continue;
+        }
+        if (!(pk != SRC_RANGE)) {
           pat.range = true;
           pat.first = compact_expr(compact_child(p, 0), s, a, errors);
           pat.last = compact_expr(compact_child(p, 1), s, a, errors);

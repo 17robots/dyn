@@ -117,7 +117,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-font-kerning-') as directory:
         source = ('use "std/parse" parse\nuse "std/font" font\nuse "std/math" math\n'
                   'data: []const u8 = "' + ''.join('\\x%02x' % byte for byte in data) + '"\n'
                   'fn main() {\n  face := font.open(data)\n')
-        source += f'  if face.failure.kind == parse.Kind.Ok != {str(ok).lower()} {{ #panic("{name}: status") }}\n'
+        source += f'  if (face.failure.kind == parse.Kind.Ok) != {str(ok).lower()} {{ #panic("{name}: status") }}\n'
         if ok:
             source += f'  if face.failure.kind != parse.Kind.Ok || face.offset != 0 {{ #panic("{name}: metadata") }}\n'
             source += f'  if font.glyph_index(&face.value, 65) != 1 {{ #panic("{name}: cmap compatibility") }}\n'

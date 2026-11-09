@@ -85,7 +85,7 @@ pub fn shape(arena: *mem.Arena, api: *const Api, font: rawptr, text: []const u8,
 // clients that preserve editor offsets must validate UTF-8 before calling.
 pub fn shape_run(arena: *mem.Arena, api: *const Api, font: rawptr, text: []const u8, options: Options, features: []const Feature) ShapeResult {
   direction:=options.direction
-  if options.cluster_level>2 || options.flags&~#cast(u32, 255)!=0 || #len(options.language)>2147483647 {
+  if options.cluster_level>2 || (options.flags&~#cast(u32, 255))!=0 || #len(options.language)>2147483647 {
     return ShapeResult{kind:io.Kind.InvalidInput}
   }
   for byte in options.language {

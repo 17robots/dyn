@@ -201,7 +201,7 @@ pub fn word_breaks(arena: *mem.Arena, text: []const u8) Breaks {
     else if a == WCR || a == WLF || a == WNewline || b == WCR || b == WLF || b == WNewline {
       joined = false
     }
-    else if last_raw == WZWJ && values[units[u].first] & FlagPictographic != 0 {
+    else if last_raw == WZWJ && (values[units[u].first] & FlagPictographic) != 0 {
       joined = true
     }
     else if last_raw == WSpace && units[u - 1].first == units[u - 1].last && b == WSpace {
@@ -287,7 +287,7 @@ fn korean(class: u8) bool {
 }
 
 fn aksara(unit: *const Unit) bool {
-  return unit.class == LAK || unit.class == LAS || unit.flags & FlagDottedCircle != 0
+  return unit.class == LAK || unit.class == LAS || (unit.flags & FlagDottedCircle) != 0
 }
 
 fn hard(class: u8) bool {
@@ -371,7 +371,7 @@ fn line_decision(units: []Unit, values: []u32, u: usize) u8 {
   }
   // LB15a: an initial quote after a break context, then spaces.
   quote := before_spaces(units, u - 1)
-  if quote < n && units[quote].class == LQU && units[quote].flags & FlagInitial != 0 {
+  if quote < n && units[quote].class == LQU && (units[quote].flags & FlagInitial) != 0 {
     if quote == 0 {
       return 0
     }
@@ -381,7 +381,7 @@ fn line_decision(units: []Unit, values: []u32, u: usize) u8 {
     }
   }
   // LB15b: a final quote before a closing context or the end.
-  if b == LQU && right.flags & FlagFinal != 0 {
+  if b == LQU && (right.flags & FlagFinal) != 0 {
     if u + 1 == n {
       return 0
     }
@@ -406,22 +406,22 @@ fn line_decision(units: []Unit, values: []u32, u: usize) u8 {
   if a == LSP {
     return 1
   }
-  if b == LQU && right.flags & FlagInitial == 0 {
+  if b == LQU && (right.flags & FlagInitial) == 0 {
     return 0
   }
-  if a == LQU && left.flags & FlagFinal == 0 {
+  if a == LQU && (left.flags & FlagFinal) == 0 {
     return 0
   }
-  if b == LQU && left.flags & FlagEastAsian == 0 {
+  if b == LQU && (left.flags & FlagEastAsian) == 0 {
     return 0
   }
-  if b == LQU && (u + 1 == n || units[u + 1].flags & FlagEastAsian == 0) {
+  if b == LQU && (u + 1 == n || (units[u + 1].flags & FlagEastAsian) == 0) {
     return 0
   }
-  if a == LQU && right.flags & FlagEastAsian == 0 {
+  if a == LQU && (right.flags & FlagEastAsian) == 0 {
     return 0
   }
-  if a == LQU && (u == 1 || units[u - 2].flags & FlagEastAsian == 0) {
+  if a == LQU && (u == 1 || (units[u - 2].flags & FlagEastAsian) == 0) {
     return 0
   }
   if b == LCB || a == LCB {
@@ -496,7 +496,7 @@ fn line_decision(units: []Unit, values: []u32, u: usize) u8 {
   if aksara(left) && (b == LVF || b == LVI) {
     return 0
   }
-  if a == LVI && u >= 2 && aksara(&units[u - 2]) && (b == LAK || right.flags & FlagDottedCircle != 0) {
+  if a == LVI && u >= 2 && aksara(&units[u - 2]) && (b == LAK || (right.flags & FlagDottedCircle) != 0) {
     return 0
   }
   if aksara(left) && aksara(right) && u + 1 < n && units[u + 1].class == LVF {
@@ -505,10 +505,10 @@ fn line_decision(units: []Unit, values: []u32, u: usize) u8 {
   if a == LIS && alphabetic(b) {
     return 0
   }
-  if (alphabetic(a) || a == LNU) && b == LOP && right.flags & FlagEastAsian == 0 {
+  if (alphabetic(a) || a == LNU) && b == LOP && (right.flags & FlagEastAsian) == 0 {
     return 0
   }
-  if a == LCP && left.flags & FlagEastAsian == 0 && (alphabetic(b) || b == LNU) {
+  if a == LCP && (left.flags & FlagEastAsian) == 0 && (alphabetic(b) || b == LNU) {
     return 0
   }
   if a == LRI && b == LRI {
@@ -523,7 +523,7 @@ fn line_decision(units: []Unit, values: []u32, u: usize) u8 {
     }
     return 1
   }
-  if b == LEM && (a == LEB || left.flags & FlagPictographic != 0 && left.flags & FlagUnassigned != 0) {
+  if b == LEM && (a == LEB || (left.flags & FlagPictographic) != 0 && (left.flags & FlagUnassigned) != 0) {
     return 0
   }
   return 1

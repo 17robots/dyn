@@ -70,6 +70,13 @@ static uint32_t format_row(const FormatTree *t, size_t offset) {
   return (uint32_t)low;
 }
 
+static bool format_holds_block(const ExpNode *nodes, uint32_t id) {
+  if (nodes[id].kind == SRC_BLOCK) return true;
+  for (uint32_t child = nodes[id].first; child != UINT32_MAX; child = nodes[child].next)
+    if (format_holds_block(nodes, child)) return true;
+  return false;
+}
+
 /* Same rules as the grammar walk: commas are found lexically, and every
    child of a block is a statement because comments are not tree nodes. */
 static void format_layout_compact(FormatEdits *edits, const FormatTree *t,
@@ -82,6 +89,12 @@ static void format_layout_compact(FormatEdits *edits, const FormatTree *t,
     return;
   }
   uint32_t row = format_row(t, node->start);
+  /* A block written on one line with one simple statement stays there:
+     0 => { return "none" }. Statements holding blocks always expand. */
+  uint32_t only = node->first;
+  if (only != UINT32_MAX && nodes[only].next == UINT32_MAX &&
+      format_row(t, node->end - 1) == row && !format_holds_block(nodes, only))
+    return;
   unsigned base = row == anchor_row ? anchor_indent
                                     : format_line_indent(edits->text, node->start);
   uint32_t previous = row;

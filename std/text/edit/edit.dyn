@@ -25,7 +25,7 @@ pub struct Tracker {
 }
 
 pub fn boundary(text: []const u8, offset: usize) bool {
-  return offset <= #len(text) && (offset == #len(text) || text[offset] & 0xc0 != 0x80)
+  return offset <= #len(text) && (offset == #len(text) || (text[offset] & 0xc0) != 0x80)
 }
 
 // Validates the shared bounded context. Native window protocols additionally

@@ -1526,6 +1526,50 @@ static DynType check_generic_call(Sema *sema, DynAstProgram *a, DynExprId id,
   a->expressions[id].integer = function;
   return a->expressions[id].type = a->functions[function].return_type;
 }
+/* Literal-only constant expressions: 64, -1, 1 << 12, LIMIT * 2. */
+static bool untyped_constant(Sema *sema, DynAstProgram *a, DynExprId id, const DynSource *s,
+                             unsigned depth) {
+  if (id == DYN_NO_EXPR || depth > 64) return false;
+  DynAstExpr e = a->expressions[id];
+  switch (e.kind) {
+  case DYN_EXPR_INT: case DYN_EXPR_FLOAT: case DYN_EXPR_CHAR: return true;
+  case DYN_EXPR_UNARY:
+    return (e.op == DYN_OP_NEG || e.op == DYN_OP_BIT_NOT) &&
+        untyped_constant(sema, a, e.left, s, depth + 1);
+  case DYN_EXPR_BINARY:
+    if (e.op < DYN_OP_ADD || e.op == DYN_OP_EQ || e.op == DYN_OP_NE || e.op == DYN_OP_LT ||
+        e.op == DYN_OP_LE || e.op == DYN_OP_GT || e.op == DYN_OP_GE ||
+        e.op == DYN_OP_LOGICAL_AND || e.op == DYN_OP_LOGICAL_OR) return false;
+    return untyped_constant(sema, a, e.left, s, depth + 1) &&
+        untyped_constant(sema, a, e.right, s, depth + 1);
+  case DYN_EXPR_NAME: {
+    uint32_t l = find_local(sema, a, e.span, s);
+    if (l != UINT32_MAX) return a->locals[l].has_untyped;
+    uint32_t g = sema_find_global_name(sema, a, e.span, s);
+    return g != UINT32_MAX && a->globals[g].has_untyped;
+  }
+  default: return false;
+  }
+}
+static DynExprId copy_untyped(DynAstProgram *a, DynExprId id) {
+  if (id == DYN_NO_EXPR) return id;
+  DynAstExpr e = a->expressions[id];
+  e.left = copy_untyped(a, e.left);
+  e.right = copy_untyped(a, e.right);
+  if (a->allocation_failed || !sema_reserve_expr(a)) return DYN_NO_EXPR;
+  a->expressions[a->expression_count] = e;
+  return (DynExprId)a->expression_count++;
+}
+/* A use of an untyped constant becomes a fresh copy of its literal value. */
+static DynType expand_untyped(Sema *sema, DynAstProgram *a, DynExprId id, DynExprId value,
+                              const DynSource *s, unsigned *errors, DynType expected) {
+  DynSpan span = a->expressions[id].span;
+  DynExprId copy = copy_untyped(a, value);
+  if (copy == DYN_NO_EXPR) return a->expressions[id].type = DYN_TYPE_ERROR;
+  a->expressions[id] = a->expressions[copy];
+  a->expressions[id].span = span;
+  return check_expr(sema, a, id, s, errors, expected);
+}
 static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
                           const DynSource *s, unsigned *errors,
                           DynType expected) {
@@ -1764,11 +1808,15 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
   if (a->expressions[id].kind == DYN_EXPR_NAME) {
     uint32_t l = find_local(sema, a, a->expressions[id].span, s);
     if (l != UINT32_MAX) {
-      a->expressions[id].integer = l;
       a->locals[l].used = true;
+      if (a->locals[l].has_untyped)
+        return expand_untyped(sema, a, id, a->locals[l].untyped, s, errors, expected);
+      a->expressions[id].integer = l;
       return a->expressions[id].type = a->locals[l].type;
     }
     uint32_t global = sema_find_global_name(sema, a, a->expressions[id].span, s);
+    if (global != UINT32_MAX && a->globals[global].has_untyped)
+      return expand_untyped(sema, a, id, a->globals[global].untyped, s, errors, expected);
     if (global != UINT32_MAX) {
       a->expressions[id].kind = DYN_EXPR_GLOBAL;
       a->expressions[id].integer = global;
@@ -2222,7 +2270,9 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
     return a->expressions[id].type = expected;
   }
   if (a->expressions[id].kind == DYN_EXPR_STRUCT) {
-    uint32_t sid = a->expressions[id].boolean && dyn_type_is_struct(expected)
+    DynType named = a->expressions[id].type;
+    uint32_t sid = dyn_type_is_struct(named) ? named - DYN_TYPE_STRUCT_BASE
+                   : a->expressions[id].boolean && dyn_type_is_struct(expected)
                        ? expected - DYN_TYPE_STRUCT_BASE
                        : sema_find_struct(a, a->expressions[id].span, s);
     if (sid == UINT32_MAX || sid >= a->struct_count) {
@@ -3357,6 +3407,10 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
       error_span(st->span, s, errors, "inferred local requires initializer");
       return false;
     }
+    DynExprId pristine = DYN_NO_EXPR;
+    if (st->expression != DYN_NO_EXPR && st->is_const && type == DYN_TYPE_INFER &&
+        untyped_constant(sema, a, st->expression, s, 0))
+      pristine = copy_untyped(a, st->expression);
     if (st->expression != DYN_NO_EXPR) {
       DynType value = check_expr(sema, a, st->expression, s, errors, type);
       if (type == DYN_TYPE_INFER)
@@ -3388,6 +3442,8 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
                       .type = type,
                       .active = true,
                       .is_const = st->is_const,
+                      .has_untyped = pristine != DYN_NO_EXPR,
+                      .untyped = pristine,
                       .owner_function = sema->current_function};
     return false;
   }
@@ -3731,7 +3787,16 @@ static bool sema_program(Sema *sema, DynAstProgram *a, const DynSource *s,
         error_span(g->name, s, errors, "inferred global requires initializer");
       continue;
     }
+    DynExprId pristine = DYN_NO_EXPR;
+    if (g->is_const && g->type == DYN_TYPE_INFER &&
+        untyped_constant(sema, a, g->initializer, s, 0))
+      pristine = copy_untyped(a, g->initializer);
     DynType value = check_expr(sema, a, g->initializer, s, errors, g->type);
+    if (pristine != DYN_NO_EXPR && value != DYN_TYPE_ERROR) {
+      g = &a->globals[i];
+      g->has_untyped = true;
+      g->untyped = pristine;
+    }
     if (g->type == DYN_TYPE_INFER)
       g->type = value;
     else if (value != g->type && value != DYN_TYPE_ERROR) {

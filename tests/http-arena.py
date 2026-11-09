@@ -125,7 +125,7 @@ fn decode_check(wire: []const u8, expected: []const u8, valid: bool, offset: usi
   _ = mem.push_bytes_uninit(arena, 5)
   mark := mem.arena_mark(arena)
   got := http.decode_chunked(arena, wire)
-  if got.failure.kind == io.Kind.Ok != valid { #panic("decode validity") }
+  if (got.failure.kind == io.Kind.Ok) != valid { #panic("decode validity") }
   if valid && (!bytes.equal(got.value, expected) || got.count != #len(expected)) { #panic("decode bytes") }
   if !valid && (#len(got.value) != 0 || got.offset != offset || got.failure.native != 0 || mem.arena_mark(arena) != mark) { #panic("decode rollback") }
   mem.arena_release(arena)

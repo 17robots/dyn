@@ -44,7 +44,7 @@ pub fn face_metrics(face: rawptr) FaceMetricsResult {
     return FaceMetricsResult{kind:io.Kind.InvalidInput}
   }
   prefix:=#cast(*FacePrefix, face)
-  if prefix.face_flags&1==0 || prefix.units_per_em==0 {
+  if (prefix.face_flags&1)==0 || prefix.units_per_em==0 {
     return FaceMetricsResult{kind:io.Kind.Unsupported}
   }
   if prefix.num_glyphs<0 || prefix.num_faces<=0 || prefix.face_index<0 {

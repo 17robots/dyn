@@ -431,9 +431,20 @@ fn aggregate(p: *Parser) u32 {
   array := take(p, "[")
   if !array {
     if !take(p, ".") {
-      chain(p, &first, &last, parse_name(p))
-      for take(p, ".") && !p.tree.failed {
+      probe := p.*
+      scratch := Tree{}
+      probe.tree = &scratch
+      lex(&probe)
+      for take(&probe, ".") && probe.token.kind == TokenKind.Name {
+        lex(&probe)
+      }
+      if token_is(&probe, "(") {
+        chain(p, &first, &last, type_body(p))
+      } else {
         chain(p, &first, &last, parse_name(p))
+        for take(p, ".") && !p.tree.failed {
+          chain(p, &first, &last, parse_name(p))
+        }
       }
     }
     expect(p, "{")
@@ -493,6 +504,18 @@ fn struct_start(p: *Parser) bool {
       return false
     }
     lex(&probe)
+  }
+  // Box(i32){...}: adjacent arguments that parse as types, then the brace.
+  if token_is(&probe, "(") && probe.token.start > 0 && p.text[probe.token.start - 1] != ' ' {
+    typed := p.*
+    types := Tree{}
+    typed.tree = &types
+    _ = type_body(&typed)
+    ok := !types.failed && token_is(&typed, "{") && typed.token.start != p.block_brace
+    if resource_error(&typed) {
+      propagate_error(p, &types)
+    }
+    return ok
   }
   propagate_error(p, &scratch)
   return !scratch.failed && token_is(&probe, "{") && probe.token.start != p.block_brace

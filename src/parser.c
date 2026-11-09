@@ -421,8 +421,14 @@ static uint32_t aggregate(Parser *p) {
   bool array = take(p, "[");
   if (!array) {
     if (!take(p, ".")) {
-      append(p, &first, &last, name(p));
-      while (take(p, ".") && !p->tree->error) append(p, &first, &last, name(p));
+      Parser probe = *p; ExpTree scratch = {0}; probe.tree = &scratch;
+      lex(&probe);
+      while (take(&probe, ".") && probe.token.kind == NAME) lex(&probe);
+      if (is(&probe, "(")) append(p, &first, &last, type_body(p));
+      else {
+        append(p, &first, &last, name(p));
+        while (take(p, ".") && !p->tree->error) append(p, &first, &last, name(p));
+      }
     }
     expect(p, "{");
   }
@@ -454,6 +460,15 @@ static bool struct_start(Parser *p) {
   while (take(&probe, ".") && !scratch.error) {
     if (probe.token.kind != NAME) return false;
     lex(&probe);
+  }
+  /* Box(i32){...}: adjacent arguments that parse as types, then the brace. */
+  if (is(&probe, "(") && probe.token.start > 0 && p->text[probe.token.start - 1] != ' ') {
+    Parser typed = *p; ExpTree types = {0}; typed.tree = &types;
+    type_body(&typed);
+    bool ok = !types.error && is(&typed, "{") && typed.token.start != p->block_brace;
+    free(types.nodes); free(types.errors);
+    if (resource_error(&typed)) propagate_error(p, &types);
+    return ok;
   }
   propagate_error(p, &scratch);
   return !scratch.error && is(&probe, "{") && probe.token.start != p->block_brace;

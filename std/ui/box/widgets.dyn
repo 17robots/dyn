@@ -174,7 +174,7 @@ fn previous_boundary(text: []const u8, at: usize) usize {
   index := at
   for index > 0 {
     index -= 1
-    if text[index] & 0xc0 != 0x80 {
+    if (text[index] & 0xc0) != 0x80 {
       return index
     }
   }
@@ -321,13 +321,13 @@ pub fn text_field(state: *State, label: []const u8, storage: []u8, edit: *Edit) 
   if edit.cursor > edit.length {
     edit.cursor = edit.length
   }
-  for edit.cursor > 0 && edit.cursor < edit.length && storage[edit.cursor] & 0xc0 == 0x80 {
+  for edit.cursor > 0 && edit.cursor < edit.length && (storage[edit.cursor] & 0xc0) == 0x80 {
     edit.cursor -= 1
   }
   if edit.anchor > edit.length {
     edit.anchor = edit.length
   }
-  for edit.anchor > 0 && edit.anchor < edit.length && storage[edit.anchor] & 0xc0 == 0x80 {
+  for edit.anchor > 0 && edit.anchor < edit.length && (storage[edit.anchor] & 0xc0) == 0x80 {
     edit.anchor -= 1
   }
   if !edit.selecting {
@@ -539,7 +539,7 @@ pub fn text_field(state: *State, label: []const u8, storage: []u8, edit: *Edit) 
     if state.input.composition_cursor >= 0 && #cast(usize, state.input.composition_cursor) <= #len(composing) {
       cursor = #cast(usize, state.input.composition_cursor)
     }
-    for cursor > 0 && cursor < #len(composing) && composing[cursor] & 0xc0 == 0x80 {
+    for cursor > 0 && cursor < #len(composing) && (composing[cursor] & 0xc0) == 0x80 {
       cursor -= 1
     }
     caret_offset = state.measure(state.measure_data, composing[..cursor])

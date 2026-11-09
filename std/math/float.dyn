@@ -250,7 +250,7 @@ pub fn sqrt64(x: f64) f64 {
   if (ix0 & 0x7ff00000) == 0x7ff00000 {
     return x * x + x
   }
-  if (ix0 & ~sign) | ix1 == 0 {
+  if ((ix0 & ~sign) | ix1) == 0 {
     return x
   }
   if (ix0 & sign) != 0 {

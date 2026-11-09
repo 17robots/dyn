@@ -183,7 +183,7 @@ pub fn multiply(arena: *mem.Arena, a: Int, b: Int) Int {
 fn leading_zeros(value: u32) u32 {
   count: u32 = 0
   probe := value
-  for probe & 0x80000000 == 0 {
+  for (probe & 0x80000000) == 0 {
     probe <<= 1
     count += 1
   }
@@ -365,7 +365,7 @@ pub fn power_mod(arena: *mem.Arena, base: Int, exponent: Int, modulus: Int) ModR
   current := reduce(arena, base, modulus)
   bits := bit_length(exponent)
   for i in 0..bits {
-    if exponent.limbs[i / 32] >> #cast(u32, i % 32) & 1 != 0 {
+    if (exponent.limbs[i / 32] >> #cast(u32, i % 32) & 1) != 0 {
       result = reduce(arena, multiply(arena, result, current), modulus)
     }
     if i + 1 < bits {

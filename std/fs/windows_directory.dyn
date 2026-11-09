@@ -89,10 +89,10 @@ pub fn directory_next(directory: *Directory) DirectoryEntry {
     dot_dot := #len(name) == 2 && name[0] == '.' && name[1] == '.'
     if !dot && !dot_dot {
       kind: u8 = 8
-      if attributes & 1024 != 0 {
+      if (attributes & 1024) != 0 {
         kind = 10
       }
-      else if attributes & 16 != 0 {
+      else if (attributes & 16) != 0 {
         kind = 4
       }
       return DirectoryEntry{ name: name, kind: kind, found: true }
@@ -146,10 +146,10 @@ fn word32(bytes: []const u8, at: usize) u32 {
 
 fn mode_of(attributes: u32) u16 {
   mode: u16 = 0o100444
-  if attributes & 16 != 0 {
+  if (attributes & 16) != 0 {
     mode = 0o040555
   }
-  if attributes & 1 == 0 {
+  if (attributes & 1) == 0 {
     mode |= 0o222
   }
   return mode

@@ -14,6 +14,19 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- Breaking: type patterns drop `is`. Write `i64 n => { ... }`, `Point p => { ... }` and
+  `[]const u8 s => { ... }` in a type case; a name that resolves to a type is a type pattern.
+  Old code fails with "type patterns do not use `is`"; delete the keyword.
+- Breaking: mixing a bitwise operator (`&`, `|`, `^`) with a comparison needs parentheses:
+  `(flags & mask) == 0`. The meaning never changes silently, whichever language you came from.
+- Comparisons chain in one direction: `0 <= i < n` means `0 <= i && i < n`. The middle operand
+  must be a name, field or literal. Mixed directions and `==`/`!=` chains are errors, so
+  `a == b == c` now needs parentheses: `(a == b) == c`.
+- Generic struct literals: `Box(i32){value: 1}`.
+- An inferred constant built from literals adapts to each use like a literal:
+  `const LIMIT := 64` fits a `u8`, a `u64` or an `f64`, and a value that does not fit is an
+  error at that use.
+- `dyn fmt` keeps a one-statement block written on one line: `0 => { return "none" }`.
 - Breaking: `io.Result` is now `io.Transfer`. `io.Result(T)` and `parse.Result(T)` are the
   generic `{value, failure}` results, and named result types are aliases of them.
 - `std/container/map`: `map.Map(K, V)`, a growing hash map for any key type. Set it up with

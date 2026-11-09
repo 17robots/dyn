@@ -520,25 +520,25 @@ fn parse_into(text: []const u8, base: u8, target: any) bool {
   wide: i64
   natural: u64
   case target {
-    is *i8 p => {
+    *i8 p => {
       ok := signed_into(text, base, -128, 127, &wide)
       p.* = #cast(i8, wide)
       return ok
     }
-    is *i16 p => {
+    *i16 p => {
       ok := signed_into(text, base, -32768, 32767, &wide)
       p.* = #cast(i16, wide)
       return ok
     }
-    is *i32 p => {
+    *i32 p => {
       ok := signed_into(text, base, -2147483648, 2147483647, &wide)
       p.* = #cast(i32, wide)
       return ok
     }
-    is *i64 p => {
+    *i64 p => {
       return parse_i64_into(text, base, p)
     }
-    is *isize p => {
+    *isize p => {
       ok := parse_i64_into(text, base, &wide)
       if !ok || wide < #cast(i64, isize_minimum()) || wide > #cast(i64, isize_maximum()) {
         return false
@@ -546,33 +546,33 @@ fn parse_into(text: []const u8, base: u8, target: any) bool {
       p.* = #cast(isize, wide)
       return true
     }
-    is *u8 p => {
+    *u8 p => {
       ok := unsigned_into(text, base, 255, &natural)
       p.* = #cast(u8, natural)
       return ok
     }
-    is *u16 p => {
+    *u16 p => {
       ok := unsigned_into(text, base, 65535, &natural)
       p.* = #cast(u16, natural)
       return ok
     }
-    is *u32 p => {
+    *u32 p => {
       ok := unsigned_into(text, base, 4294967295, &natural)
       p.* = #cast(u32, natural)
       return ok
     }
-    is *u64 p => {
+    *u64 p => {
       return unsigned_into(text, base, 18446744073709551615, p)
     }
-    is *usize p => {
+    *usize p => {
       ok := unsigned_into(text, base, #cast(u64, usize_maximum()), &natural)
       p.* = #cast(usize, natural)
       return ok
     }
-    is *f64 p => {
+    *f64 p => {
       return base == 10 && parse_f64_into(text, p)
     }
-    is *f32 p => {
+    *f32 p => {
       value: f64
       if base != 10 || !parse_f64_into(text, &value) {
         return false
@@ -580,7 +580,7 @@ fn parse_into(text: []const u8, base: u8, target: any) bool {
       p.* = #cast(f32, value)
       return true
     }
-    is *bool p => {
+    *bool p => {
       if equal(text, "true") {
         p.* = true
         return true

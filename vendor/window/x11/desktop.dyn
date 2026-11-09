@@ -552,8 +552,8 @@ fn desktop_filter(window: *Window, event: *Event) bool {
   if event.kind == 2 || event.kind == 3 {
     key_event := #cast(*KeyEvent, event)
     desktop := &window.desktop
-    desktop.shift = key_event.state & 1 != 0
-    desktop.control = key_event.state & 4 != 0
+    desktop.shift = (key_event.state & 1) != 0
+    desktop.control = (key_event.state & 4) != 0
     key := keysym(event, 0)
     if key == 0xffe1 || key == 0xffe2 {
       desktop.shift = event.kind == 2
@@ -576,7 +576,7 @@ fn append_text(desktop: *Desktop, bytes: []const u8) {
     count = remaining
   }
   if count < #len(bytes) {
-    for count > 0 && bytes[count] & 0xc0 == 0x80 {
+    for count > 0 && (bytes[count] & 0xc0) == 0x80 {
       count -= 1
     }
   }
@@ -620,7 +620,7 @@ fn desktop_key(window: *Window, event: *Event) {
       }
     }
   }
-  control := key_event.state & 4 != 0
+  control := (key_event.state & 4) != 0
   if key == 0xff08 {
     desktop.backspace = true
   } else if key == 0xffff {
@@ -716,7 +716,7 @@ fn clipboard_deliver(window: *Window) {
       count := desktop.received_length - at
       if count > 256 {
         count = 256
-        for count > 0 && desktop.received[at + count] & 0xc0 == 0x80 {
+        for count > 0 && (desktop.received[at + count] & 0xc0) == 0x80 {
           count -= 1
         }
         if count == 0 {

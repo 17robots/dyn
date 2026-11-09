@@ -19,7 +19,7 @@ for t, n in [('u8',16), ('i8',16), ('u16',8), ('i16',8), ('u32',4), ('i32',4), (
     source.append(f'  check(#sizeof(simd.{typename}) == 16)')
     for operation, symbol in [('add','+'), ('sub','-'), ('mul','*')]+([('div','/')] if t[0]=='f' else [('and','&'), ('or','|'), ('xor','^')]):
         oracle = f'a[i] {symbol} b[i]'
-        if t[0]!='f' and operation in ('add','sub','mul'):
+        if operation in ('and','or','xor') or (t[0]!='f' and operation in ('add','sub','mul')):
             oracle = f'({oracle})'
         source.append(f'  {operation} := simd.{prefix}_{operation}(a, b)\n  for i in 0..{n} {{ check({operation}[i] == {oracle}) }}')
     source.append(f'  copy := simd.{prefix}_load(a[..])\n  destination: [{n+2}]{t} = []\n  simd.{prefix}_store(destination[1..], copy)\n  check(destination[0] == 0 && destination[{n+1}] == 0)\n  for i in 0..{n} {{ check(destination[i+1] == a[i]) }}')

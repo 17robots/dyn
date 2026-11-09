@@ -74,7 +74,7 @@ fn src_packed(p: *Parser) bool {
 }
 
 fn src_type_pattern(p: *Parser) bool {
-  return token_is(p, "is")
+  return primitive(p) || token_is(p, "*") || token_is(p, "[") || fn_type_start(p) || at(p, p.token.start, "$")
 }
 
 fn src_literal(p: *Parser, token_kind: TokenKind, kind: u16) u32 {
@@ -346,8 +346,11 @@ fn src_case(p: *Parser) u32 {
     arm_first := None
     arm_last := None
     wildcard := false
+    if token_is(p, "is") {
+      fail(p, p.token.start, "type patterns do not use `is`: write `i64 n =>`")
+      break
+    }
     if src_type_pattern(p) {
-      lex(p)
       pattern_first := None
       pattern_last := None
       chain(p, &pattern_first, &pattern_last, parse_type(p))

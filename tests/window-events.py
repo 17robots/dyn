@@ -92,7 +92,7 @@ fn main() {
  check(window.next_event(&host,&event) && event.kind == events.Kind.Text && event.text_length == 1 && event.text[0] == 97)
  saved := event
  check(window.next_event(&host,&event) && event.kind == events.Kind.KeyUp && event.key == 97)
- check(window.next_event(&host,&event) && event.kind == events.Kind.KeyDown && event.key == events.Left && event.modifiers & events.Control != 0)
+ check(window.next_event(&host,&event) && event.kind == events.Kind.KeyDown && event.key == events.Left && (event.modifiers & events.Control) != 0)
  check(window.next_event(&host,&event) && event.kind == events.Kind.KeyUp && event.key == events.Left)
  check(!window.next_event(&host,&event) && saved.text[0] == 97)
  key(host.display,host.handle,0x62,0,1)
