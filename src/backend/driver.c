@@ -74,6 +74,8 @@ typedef struct {
   size_t constant_relocation_count, constant_relocation_capacity;
   bool global_static[MAX_SYMBOLS];
   bool function_live[MAX_SYMBOLS];
+  bool global_live[MAX_SYMBOLS];
+  unsigned char *expression_live; /* reachability's expression marks; null keeps all */
   double ssa_build_ms, ssa_optimize_ms, ssa_allocate_ms, ssa_emit_ms, serialization_ms;
   /* SSA preparations made ahead on worker threads, indexed by function, and
      each IR string's first index with identical contents. */
@@ -2942,7 +2944,8 @@ static bool constant_literals(BackendContext *ctx, const DynIrProgram *ir) {
   for (size_t id = 0; id < ir->expression_count; ++id) {
     const DynIrExpr *e = &ir->expressions[id];
     uint32_t size, alignment;
-    if ((e->kind != DYN_EXPR_STRUCT && e->kind != DYN_EXPR_ARRAY) || nested[id] || !aggregate(ir, e->type) ||
+    if ((ctx->expression_live && !ctx->expression_live[id]) ||
+        (e->kind != DYN_EXPR_STRUCT && e->kind != DYN_EXPR_ARRAY) || nested[id] || !aggregate(ir, e->type) ||
         !layout(ir, e->type, &size, &alignment, 0) || size < 16 || size > 512 || alignment > 8) continue;
     size_t previous = ctx->constants_data.n, at = align8(previous), rodata = ctx->rodata.n;
     size_t relocations = ctx->constant_relocation_count;
@@ -2982,6 +2985,7 @@ static bool global_initializer(BackendContext *ctx,const DynIrProgram *ir) {
   for (size_t i=0;i<ir->global_init_count;++i) {
     uint32_t id=ir->global_init_order[i]; if (id>=ir->global_count) return false;
     const DynIrGlobal *g=&ir->globals[id];
+    if (!ctx->global_live[id]) continue;
     if (!g->foreign && !ctx->global_static[id] && !expression_scratch(ctx,ir,g->initializer,0,&slots)) return false;
   }
   ctx->frame_bytes=((slots*8+15)/16)*16; if (!ctx->frame_bytes) ctx->frame_bytes=16;
@@ -2990,7 +2994,7 @@ static bool global_initializer(BackendContext *ctx,const DynIrProgram *ir) {
   size_t done=isa_once(ctx);
   for (size_t i=0;i<ir->global_init_count;++i) {
     uint32_t id=ir->global_init_order[i]; const DynIrGlobal *g=&ir->globals[id];
-    if (g->foreign || ctx->global_static[id] || g->initializer==DYN_NO_EXPR) continue;
+    if (!ctx->global_live[id] || g->foreign || ctx->global_static[id] || g->initializer==DYN_NO_EXPR) continue;
     char name[64];
     if (!strncmp(g->name,"dyn_m",5) && strlen(g->name)>21 && g->name[21]=='_') snprintf(name,sizeof(name),"__dyn_init_%.21s",g->name);
     else snprintf(name,sizeof(name),"__dyn_init_root");
@@ -3131,9 +3135,9 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
   for (size_t i=0;i<ir->function_count;++i)
     ctx->function_symbols[i]=ctx->function_live[i]?(unsigned)ctx->runtime_base++:0;
 
-  for (size_t i=0;i<ir->global_count;++i) ctx->global_symbols[i]=(unsigned)ctx->runtime_base++;
+  for (size_t i=0;i<ir->global_count;++i) ctx->global_symbols[i]=ctx->global_live[i]?(unsigned)ctx->runtime_base++:0;
   for (size_t i=0;i<ir->global_count;++i) {
-    const DynIrGlobal *g=&ir->globals[i]; if (!g->is_const || g->foreign) continue;
+    const DynIrGlobal *g=&ir->globals[i]; if (!ctx->global_live[i] || !g->is_const || g->foreign) continue;
     uint32_t size,a; if (!layout(ir,g->type,&size,&a,0)) { dyn_location_free(&locations); return false; }
     size_t previous=ctx->constants_data.n, at=align_global(previous,g->type,size), rodata=ctx->rodata.n, relocations=ctx->constant_relocation_count;
     if (at>LIMIT || size>LIMIT-at || !reserve(&ctx->constants_data,at+size)) { dyn_location_free(&locations); return false; }
@@ -3144,8 +3148,10 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
       ctx->constants_data.n=previous; ctx->rodata.n=rodata; ctx->constant_relocation_count=relocations;
     }
   }
-  if (!constant_literals(ctx, ir)) { dyn_location_free(&locations); return false; }
-  for (size_t i=0;i<ir->global_count;++i) if (!ir->globals[i].foreign && !ctx->global_static[i] && ir->globals[i].initializer!=DYN_NO_EXPR) {
+  bool literals = constant_literals(ctx, ir);
+  free(ctx->expression_live); ctx->expression_live = NULL;
+  if (!literals) { dyn_location_free(&locations); return false; }
+  for (size_t i=0;i<ir->global_count;++i) if (ctx->global_live[i] && !ir->globals[i].foreign && !ctx->global_static[i] && ir->globals[i].initializer!=DYN_NO_EXPR) {
     ctx->initializer_symbol=(unsigned)ctx->runtime_base++;
     ctx->initializer_flag_symbol=(unsigned)ctx->runtime_base++; break;
   }
@@ -3173,7 +3179,7 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
     }
     for (size_t i=0;i<ir->global_count;++i) {
       const DynIrGlobal *g=&ir->globals[i];
-      if ((unsigned)(g->foreign||g->is_public)!=pass) continue;
+      if (!ctx->global_live[i] || (unsigned)(g->foreign||g->is_public)!=pass) continue;
       unsigned old=ctx->global_symbols[i]; ctx->global_symbols[i]=next; remap[old]=next++;
     }
     if (pass && ctx->dll_entry_symbol) {
@@ -3227,6 +3233,7 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
   }
   bool ok = false;
   for (size_t i=0;i<ir->global_count;++i) {
+    if (!ctx->global_live[i]) continue;
     const DynIrGlobal *g=&ir->globals[i]; const char *name=g->foreign?g->link_name:g->name;
     uint32_t size,alignment;
     if (!layout(ir,g->type,&size,&alignment,0)) {
@@ -3512,6 +3519,7 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
   free(data);
 done:
   ssa_pipeline_stop(ctx);
+  free(ctx->expression_live); ctx->expression_live = NULL;
   free(unwind_blob);
   if (serializing) ctx->serialization_ms += backend_timing(&source->context, &serialization);
   backend_dwarf_output_free(&debug);
@@ -3584,7 +3592,7 @@ static bool object_target_mode(const DynSource *source, const DynIrProgram *ir,
   free(ctx->strings);
   free(ctx->relocations); free(ctx->constant_relocations);
   free(ctx->frame_records); free(ctx->landing_records);
-  free(ctx);
+  free(ctx->expression_live); free(ctx);
   return ok;
 }
 static bool object_target(const DynSource *source, const DynIrProgram *ir,

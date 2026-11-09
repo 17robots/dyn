@@ -14,6 +14,10 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- Executables keep only what `main` reaches, in debug builds as well as release: unused
+  functions, constants and globals from imported modules are no longer emitted, so an unused
+  `use` adds nothing to the binary. Globals whose initializer calls a function are kept, since
+  the call may have effects. `dyn vet` still reports the unused import.
 - `fn main() i32` returns the exit code. `fn main(program: process.Program)` receives
   `program.arena`, an arena for the whole program, and `program.args`. Generally `main` may take
   one parameter of any struct `T`; the compiler calls the `pub fn start() T` of the module

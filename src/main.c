@@ -535,7 +535,7 @@ static int execute_command(DynOptions *options, const char *compiler) {
     /* Explicit objects, libraries and --link inputs preserve public ABI roots.
        Libraries discovered from #link are C providers that reach Dyn code only
        through function values, so they do not keep public functions alive. */
-    if (!result && native && options->release && !options->shared &&
+    if (!result && native && !options->shared &&
         !options->emit_object && !options->emit_asm && !options->no_link &&
         !options->runtime_support && !options->explicit_link_input_count) {
       struct timespec pruning = timer_start();
