@@ -6224,13 +6224,77 @@ static int ssa_save_order(const void *x, const void *y) {
   if (a->call != b->call) return a->call < b->call ? -1 : 1;
   return a->value < b->value ? -1 : a->value > b->value;
 }
+/* Whether value v, the operand phi p takes along a loop's back edge, may
+   share p's register although p's interval covers v's. A single interval
+   cannot show the hole after v where p is dead, as LLVM's segmented live
+   ranges do: from v to the back edge nothing reads p and nothing leaves the
+   loop or jumps back into it before v, so the register holds v there and p
+   again everywhere else, the phi move becomes nothing. */
+static bool ssa_phi_hole(SsaAlloc *a, uint32_t phi, uint32_t id) {
+  Ssa *s = a->s;
+  SsaValue *p = &s->values[phi], *v = &s->values[id];
+  if (p->op != SO_PHI || v->op == SO_PHI || p->block == v->block) return false;
+  SsaBlock *header = &s->blocks[p->block];
+  uint32_t latch = UINT32_MAX;
+  for (uint32_t j = 0; j < p->count; ++j)
+    if (s->lists[p->list + j] == id) {
+      if (latch != UINT32_MAX) return false;
+      latch = header->preds.items[j];
+    }
+  if (latch == UINT32_MAX || a->block_end[latch] < v->start) return false;
+  uint32_t from = v->start, to = a->block_end[latch];
+  if (to - from > 4096) return false;
+  for (uint32_t i = 0; i < a->n; ++i) {
+    uint32_t b = a->order[i];
+    SsaBlock *block = &s->blocks[b];
+    bool inside = a->block_end[b] > from && a->block_start[b] <= to;
+    if (inside) {
+      if (block->kind != SB_PLAIN && block->kind != SB_IF) return false;
+      for (uint32_t j = 0; j < ssa_successors(s, block); ++j) {
+        uint32_t next = ssa_successor(s, block, j);
+        if (next != p->block && !(a->block_start[next] > from && a->block_start[next] <= to)) return false;
+      }
+    }
+    /* No read of p inside the hole. */
+    for (uint32_t k = 0; k <= block->values.count; ++k) {
+      int32_t operands[SSA_MAX_OPERANDS]; uint32_t count = 0; bool is_phi = false; uint32_t at = a->block_end[b];
+      if (k < block->values.count) {
+        uint32_t user = block->values.items[k];
+        if (s->values[user].dead) continue;
+        uint32_t c = ssa_operands(s, user, ssa_slots, SSA_MAX_OPERANDS);
+        for (uint32_t j = 0; j < c; ++j) operands[count++] = *ssa_slots[j];
+        is_phi = s->values[user].op == SO_PHI;
+        at = s->values[user].start;
+      } else {
+        if (block->control >= 0) operands[count++] = block->control;
+        if (block->control2 >= 0) operands[count++] = block->control2;
+        if (block->control3 >= 0) operands[count++] = block->control3;
+        if (block->control4 >= 0) operands[count++] = block->control4;
+      }
+      for (uint32_t j = 0; j < count; ++j) {
+        if (operands[j] != (int32_t)phi) continue;
+        uint32_t use = is_phi ? a->block_end[block->preds.items[j]] : at;
+        if (use > from && use <= to) return false;
+      }
+    }
+  }
+  /* No call or other clobber in the hole: a save of p there would restore
+     over v. */
+  for (uint32_t c = ssa_first_clobber(a, from); c < a->clobber_count && a->clobbers[c].position <= to; ++c)
+    if (ssa_clobber_hits(a, c, (unsigned)p->reg, phi)) return false;
+  return true;
+}
 static bool ssa_allocate(SsaAlloc *a) {
   Ssa *s = a->s;
   uint32_t *list = malloc((s->value_count + 1) * sizeof(uint32_t)), count = 0;
   uint32_t *active = malloc((s->value_count + 1) * sizeof(uint32_t)), actives = 0;
   uint64_t *weight = calloc((size_t)s->value_count + 1, sizeof(uint64_t));
   bool *saved = calloc((size_t)s->value_count + 1, sizeof(bool));
-  if (!list || !active || !weight || !saved) { free(list); free(active); free(weight); free(saved); return false; }
+  /* shares[v]: the phi whose register v holds through that phi's hole, plus one. */
+  uint32_t *shares = calloc((size_t)s->value_count + 1, sizeof(uint32_t));
+  if (!list || !active || !weight || !saved || !shares) {
+    free(list); free(active); free(weight); free(saved); free(shares); return false;
+  }
   /* Weight actual uses in loops; cap the depth estimate. */
   for (uint32_t i = 0; i < a->n; ++i) {
     SsaBlock *b = &s->blocks[a->order[i]];
@@ -6264,7 +6328,13 @@ static bool ssa_allocate(SsaAlloc *a) {
     uint32_t kept = 0;
     for (uint32_t j = 0; j < actives; ++j) {
       SsaValue *w = &s->values[active[j]];
-      if (w->end < v->start || (w->end == v->start && v->op != SO_PHI)) { if (w->reg >= 0) owner[w->reg] = UINT32_MAX; }
+      if (w->end < v->start || (w->end == v->start && v->op != SO_PHI)) {
+        if (w->reg >= 0 && owner[w->reg] == active[j]) {
+          /* The phi whose hole this value filled has the register back. */
+          uint32_t back = shares[active[j]] ? shares[active[j]] - 1 : UINT32_MAX;
+          owner[w->reg] = back != UINT32_MAX && s->values[back].reg == w->reg && s->values[back].end > v->start ? back : UINT32_MAX;
+        }
+      }
       else active[kept++] = active[j];
     }
     actives = kept;
@@ -6276,6 +6346,13 @@ static bool ssa_allocate(SsaAlloc *a) {
     if (want >= 0 && (want >= X_XMM0) == floating && owner[want] == UINT32_MAX &&
         !ssa_clobbered(a, (unsigned)want, v->start, v->end, id))
       chosen = want;
+    /* The back-edge operand of a phi may fill the phi's hole. */
+    if (chosen < 0 && want >= 0 && v->hint >= 0 && owner[want] == (uint32_t)v->hint && !saved[v->hint] &&
+        (want >= X_XMM0) == floating && !ssa_clobbered(a, (unsigned)want, v->start, v->end, id) &&
+        ssa_phi_hole(a, (uint32_t)v->hint, id)) {
+      chosen = want;
+      shares[id] = (uint32_t)v->hint + 1;
+    }
     if (chosen >= 0) {}
     else if (floating) {
       unsigned count = s->ctx->a64 ? sizeof(a64_fp_order) : s->ctx->rv64 ? sizeof(rv_fp_order) : s->ctx->win64 ? 3 : 13;
@@ -6313,6 +6390,8 @@ static bool ssa_allocate(SsaAlloc *a) {
       for (uint32_t j = 0; j < actives; ++j) {
         SsaValue *w = &s->values[active[j]];
         if (w->reg < 0 || (w->reg >= X_XMM0) != floating || ssa_clobbered(a, (unsigned)w->reg, v->start, v->end, id)) continue;
+        /* A shared register stays with both of its values. */
+        if (shares[active[j]] || owner[w->reg] != active[j]) continue;
         double density = w->op == SO_CONST ? -1.0 : (double)weight[active[j]] / (double)(w->end - w->start + 1);
         if (density < lowest || (density == lowest && victim >= 0 && w->end > s->values[active[victim]].end)) {
           lowest = density; victim = (int)j;
@@ -6356,7 +6435,7 @@ static bool ssa_allocate(SsaAlloc *a) {
     }
   }
   if (a->save_count > 1) qsort(a->saves, a->save_count, sizeof(SsaSave), ssa_save_order);
-  free(list); free(active); free(weight); free(saved);
+  free(list); free(active); free(weight); free(saved); free(shares);
   return !s->failed;
 }
 

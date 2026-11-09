@@ -64,6 +64,8 @@ servers so they pick up the new `dyn`.
   then `push`, `push_ref`, `push_all`, `get`, `pop` (a `{value, ok}` result) and `clear`;
   `a.items` is a plain slice.
   Arrays share arenas and double when full.
+- Release builds keep a loop total and its update in one register when the total is read after
+  the loop, so `e += x` in a loop no longer copies the total twice per iteration.
 - Release builds inline a call to the right of an operand the call may change, as in
   `total + step()`: the operand is read into a temporary first, so the order is unchanged.
 - Release builds call a stored function directly, and inline it, when it is the only function of
