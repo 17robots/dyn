@@ -65,6 +65,11 @@ typedef enum {
   SO_TRAP,       /* unreachable: no case arm matched */
   SO_FAIL,       /* dyn_check_failed for check kind aux, after cleanup */
   SO_CONTINUE,   /* dyn_unwind_continue after cleanup */
+  /* Two f32 lanes in the low 64 bits of a float register (class SC_F64). */
+  SO_VPAIR,      /* lanewise a op b; aux: the SSE opcode (add, sub, mul) */
+  SO_VPACK,      /* f32 a in lane 0, f32 b in lane 1 */
+  SO_VLANE,      /* f32 lane aux of a */
+  SO_VHADD,      /* f32 lane 0 + lane 1 of a, in that order */
   SO_COUNT
 } SsaOp;
 enum { SC_NONE, SC_INT, SC_F64, SC_F32 };
@@ -5732,6 +5737,204 @@ static bool ssa_retain_loop_constant(Ssa *s, const uint32_t *order, uint32_t n,
   }
   return true;
 }
+/* Pairs of f32 lanes, a small SLP vectorizer in the manner of LLVM's: two
+   adjacent f32 stores whose values come from the same operations on
+   adjacent loads become one 8-byte store of lanewise operations, which use
+   the low half of a float register. Each lane computes exactly what its
+   scalar did, and a + b over the two products of a pair adds them in the
+   source's order, so results match the scalar code bit for bit. */
+typedef struct { int32_t x, y, v; uint32_t block, anchor; } SsaPairMemo;
+typedef struct { int32_t id; uint32_t block, anchor; } SsaPairAdded;
+typedef struct {
+  Ssa *s; uint32_t block, at;
+  SsaPairMemo memo[64]; uint32_t memo_count;
+  SsaPairAdded *added; uint32_t added_count, added_capacity;
+  unsigned gains;
+} SsaPairs;
+static uint32_t ssa_pairs_index(Ssa *s, uint32_t block, int32_t id) {
+  SsaBlock *b = &s->blocks[block];
+  for (uint32_t k = 0; k < b->values.count; ++k) if ((int32_t)b->values.items[k] == id) return k;
+  return UINT32_MAX;
+}
+static int32_t ssa_pairs_add(SsaPairs *p, uint32_t block, uint32_t anchor, SsaOp op, uint8_t cls,
+                             int32_t a, int32_t b, int64_t aux, int64_t aux2) {
+  Ssa *s = p->s;
+  int32_t id = ssa_value(s, block, op, cls, a, b, -1, aux, aux2);
+  if (s->failed) return -1;
+  p->added = ssa_grow(p->added, &p->added_capacity, p->added_count + 1, sizeof(*p->added), &s->failed);
+  if (s->failed) return -1;
+  p->added[p->added_count++] = (SsaPairAdded){id, block, anchor};
+  return id;
+}
+/* Whether a value exists before at: one of this block before it, or of a
+   dominating block, as every operand reaching this block is. */
+static bool ssa_pairs_before(SsaPairs *p, int32_t id) {
+  Ssa *s = p->s;
+  for (uint32_t j = 0; j < p->added_count; ++j)
+    if (p->added[j].id == id)
+      return !s->values[id].dead && (p->added[j].block != p->block || p->added[j].anchor <= p->at);
+  if (s->values[id].block != p->block) return true;
+  uint32_t k = ssa_pairs_index(s, p->block, id);
+  return k != UINT32_MAX && k < p->at;
+}
+/* Whether nothing between loads x and y of one block writes memory they read. */
+static bool ssa_pairs_loads(SsaPairs *p, int32_t x, int32_t y, uint32_t *block, uint32_t *anchor) {
+  Ssa *s = p->s;
+  uint32_t blk = s->values[x].block;
+  if (s->values[y].block != blk) return false;
+  uint32_t i = ssa_pairs_index(s, blk, x), j = ssa_pairs_index(s, blk, y);
+  if (i == UINT32_MAX || j == UINT32_MAX) return false;
+  if (blk == p->block && (i >= p->at || j >= p->at)) return false;
+  SsaPlace place = ssa_place(s, &s->values[x]);
+  SsaBlock *b = &s->blocks[blk];
+  uint32_t low = i < j ? i : j, high = i < j ? j : i;
+  for (uint32_t k = low + 1; k < high; ++k) {
+    SsaValue *w = &s->values[b->values.items[k]];
+    if (w->dead || !w->effect || w->op == SO_LOAD || w->op == SO_CHECK || w->op == SO_CHECK_SHL ||
+        w->op == SO_ADDO || w->op == SO_SUBO || w->op == SO_MULO || w->op == SO_DIV || w->op == SO_REM) continue;
+    if (w->op == SO_STORE && ssa_fresh_apart(s, ssa_place(s, w), place)) continue;
+    return false;
+  }
+  *block = blk; *anchor = high;
+  return true;
+}
+static int32_t ssa_pairs_pack(SsaPairs *p, int32_t x, int32_t y, unsigned depth, bool *free_pack) {
+  Ssa *s = p->s;
+  x = ssa_resolve(s, x); y = ssa_resolve(s, y);
+  *free_pack = true;
+  for (uint32_t i = 0; i < p->memo_count; ++i)
+    if (p->memo[i].x == x && p->memo[i].y == y && (p->memo[i].block != p->block || p->memo[i].anchor <= p->at)) {
+      *free_pack = s->values[p->memo[i].v].op != SO_VPACK;
+      return p->memo[i].v;
+    }
+  SsaValue vx = s->values[x], vy = s->values[y];
+  if (vx.cls != SC_F32 || vy.cls != SC_F32) return -1;
+  int32_t v = -1;
+  uint32_t blk = p->block, anchor = p->at;
+  if (vx.op == SO_VLANE && vy.op == SO_VLANE && vx.a == vy.a && vx.aux == 0 && vy.aux == 1 &&
+      ssa_pairs_before(p, vx.a)) v = vx.a;
+  else if (x == y && vx.op == SO_CONST) {
+    /* Beside the scalar constant, which hoisting may have moved out of a loop. */
+    uint64_t bits = (uint64_t)vx.aux & 0xffffffffu;
+    uint32_t k = ssa_pairs_index(s, vx.block, x);
+    if (vx.block != p->block && k != UINT32_MAX) { blk = vx.block; anchor = k; }
+    v = ssa_pairs_add(p, blk, anchor, SO_CONST, SC_F64, -1, -1, (int64_t)(bits | bits << 32), 0);
+  } else if (vx.op == SO_LOAD && vy.op == SO_LOAD && vx.aux2 == SSA_MEM(32, 0, 1) && vy.aux2 == vx.aux2 &&
+             vx.a == vy.a && vx.b == vy.b && vx.scale == vy.scale && vy.aux == vx.aux + 4 &&
+             ssa_pairs_loads(p, x, y, &blk, &anchor)) {
+    v = ssa_pairs_add(p, blk, anchor, SO_LOAD, SC_F64, vx.a, vx.b, vx.aux, SSA_MEM(64, 0, 1));
+    if (v >= 0) { s->values[v].scale = vx.scale; s->values[v].effect = true; ++p->gains; }
+  } else if (vx.op == vy.op && (vx.op == SO_FADD || vx.op == SO_FSUB || vx.op == SO_FMUL) && depth < 8) {
+    bool free_a, free_b;
+    int32_t a = ssa_pairs_pack(p, vx.a, vy.a, depth + 1, &free_a);
+    int32_t b = a >= 0 ? ssa_pairs_pack(p, vx.b, vy.b, depth + 1, &free_b) : -1;
+    if (a >= 0 && b >= 0) {
+      v = ssa_pairs_add(p, p->block, p->at, SO_VPAIR, SC_F64, a, b, vx.op == SO_FADD ? 0x58 : vx.op == SO_FSUB ? 0x5c : 0x59, 0);
+      if (v >= 0) ++p->gains;
+    }
+  }
+  if (v < 0 && ssa_pairs_before(p, x) && ssa_pairs_before(p, y)) {
+    v = ssa_pairs_add(p, p->block, p->at, SO_VPACK, SC_F64, x, y, 0, 0);
+    *free_pack = false;
+    blk = p->block; anchor = p->at;
+  }
+  if (v >= 0 && p->memo_count < 64) p->memo[p->memo_count++] = (SsaPairMemo){x, y, v, blk, anchor};
+  return v;
+}
+/* Whether a value of this block before at reads id. */
+static bool ssa_pairs_read_before(SsaPairs *p, int32_t id) {
+  Ssa *s = p->s;
+  SsaBlock *b = &s->blocks[p->block];
+  for (uint32_t k = 0; k < p->at; ++k) {
+    uint32_t n = ssa_operands(s, b->values.items[k], ssa_slots, SSA_MAX_OPERANDS);
+    for (uint32_t j = 0; j < n; ++j) if (ssa_resolve(s, *ssa_slots[j]) == id) return true;
+  }
+  return false;
+}
+static void ssa_pairs_undo(SsaPairs *p, uint32_t mark, uint32_t memo_mark, unsigned gains) {
+  for (uint32_t j = mark; j < p->added_count; ++j) p->s->values[p->added[j].id].dead = true;
+  p->added_count = mark; p->memo_count = memo_mark; p->gains = gains;
+}
+static bool ssa_pairs(Ssa *s, const uint32_t *order, uint32_t n) {
+  unsigned stores = 0, sums = 0;
+  SsaPairs p = {.s = s};
+  for (uint32_t i = 0; i < n && !s->failed; ++i) {
+    uint32_t block_id = order[i];
+    if (s->blocks[block_id].values.count > 512) continue;
+    p.block = block_id; p.memo_count = 0;
+    for (uint32_t k = 0; k + 1 < s->blocks[block_id].values.count && !s->failed; ++k) {
+      SsaBlock *b = &s->blocks[block_id];
+      int32_t first = (int32_t)b->values.items[k];
+      SsaValue *s1 = &s->values[first];
+      if (s1->dead || s1->op != SO_STORE || s1->aux2 != SSA_MEM(32, 0, 1)) continue;
+      /* The partner store follows with only pure values between. */
+      uint32_t m = k + 1;
+      while (m < b->values.count && !s->values[b->values.items[m]].effect) ++m;
+      if (m == b->values.count) continue;
+      int32_t second = (int32_t)b->values.items[m];
+      SsaValue *s2 = &s->values[second];
+      if (s2->op != SO_STORE || s2->aux2 != s1->aux2 || s2->a != s1->a || s2->b != s1->b ||
+          s2->scale != s1->scale || s2->aux != s1->aux + 4) continue;
+      int32_t x = ssa_resolve(s, s1->c), y = ssa_resolve(s, s2->c);
+      p.at = k;
+      if (!ssa_pairs_before(&p, y)) continue;
+      uint32_t mark = p.added_count, memo_mark = p.memo_count; unsigned gains = p.gains;
+      bool free_pack;
+      int32_t v = ssa_pairs_pack(&p, x, y, 0, &free_pack);
+      if (v < 0 || p.gains - gains < 2) { ssa_pairs_undo(&p, mark, memo_mark, gains); continue; }
+      s1 = &s->values[first]; s2 = &s->values[second];
+      s1->c = v; s1->aux2 = SSA_MEM(64, 0, 1);
+      s2->dead = true;
+      ++stores;
+      /* Later scalar reads of the stored values read their lanes. */
+      if (s->values[v].op == SO_VPAIR && x != y && !ssa_pairs_read_before(&p, x) && !ssa_pairs_read_before(&p, y)) {
+        int32_t lane0 = ssa_pairs_add(&p, block_id, k, SO_VLANE, SC_F32, v, -1, 0, 0);
+        int32_t lane1 = ssa_pairs_add(&p, block_id, k, SO_VLANE, SC_F32, v, -1, 1, 0);
+        if (lane0 >= 0 && lane1 >= 0) { ssa_replace(s, (uint32_t)x, lane0); ssa_replace(s, (uint32_t)y, lane1); }
+      }
+    }
+    /* Dot products: a.x * b.x + a.y * b.y whose pairs come for free. */
+    for (uint32_t k = 0; k < s->blocks[block_id].values.count && !s->failed; ++k) {
+      int32_t id = (int32_t)s->blocks[block_id].values.items[k];
+      SsaValue add = s->values[id];
+      if (add.dead || add.op != SO_FADD || add.cls != SC_F32) continue;
+      int32_t l = ssa_resolve(s, add.a), r = ssa_resolve(s, add.b);
+      SsaValue lv = s->values[l], rv = s->values[r];
+      if (lv.op != SO_FMUL || rv.op != SO_FMUL || lv.cls != SC_F32 || rv.cls != SC_F32) continue;
+      p.at = k;
+      uint32_t mark = p.added_count, memo_mark = p.memo_count; unsigned gains = p.gains;
+      bool free_a = false, free_b = false;
+      int32_t a = ssa_pairs_pack(&p, lv.a, rv.a, 1, &free_a);
+      int32_t b = a >= 0 ? ssa_pairs_pack(&p, lv.b, rv.b, 1, &free_b) : -1;
+      if (a < 0 || b < 0 || !free_a || !free_b) { ssa_pairs_undo(&p, mark, memo_mark, gains); continue; }
+      int32_t product = ssa_pairs_add(&p, block_id, k, SO_VPAIR, SC_F64, a, b, 0x59, 0);
+      int32_t sum = product >= 0 ? ssa_pairs_add(&p, block_id, k, SO_VHADD, SC_F32, product, -1, 0, 0) : -1;
+      if (sum < 0) break;
+      ssa_replace(s, (uint32_t)id, sum);
+      ++sums;
+    }
+  }
+  /* Splice the new values in before their anchors, block by block. */
+  for (uint32_t i = 0; i < n && !s->failed && p.added_count; ++i) {
+    uint32_t block_id = order[i], extra = 0;
+    for (uint32_t j = 0; j < p.added_count; ++j) extra += p.added[j].block == block_id;
+    if (!extra) continue;
+    SsaBlock *b = &s->blocks[block_id];
+    uint32_t total = b->values.count + extra, *items = ssa_words(s, total), out = 0;
+    if (!items) break;
+    for (uint32_t k = 0; k <= b->values.count; ++k) {
+      for (uint32_t j = 0; j < p.added_count; ++j)
+        if (p.added[j].block == block_id && p.added[j].anchor == k && !s->values[p.added[j].id].dead)
+          items[out++] = (uint32_t)p.added[j].id;
+      if (k < b->values.count && !s->values[b->values.items[k]].dead) items[out++] = b->values.items[k];
+    }
+    b->values.items = items; b->values.count = out; b->values.capacity = total;
+  }
+  free(p.added);
+  if ((stores || sums) && s->ctx->optimization_remarks)
+    fprintf(stderr, "remark: %s: paired %u f32 stores and %u dot products into two-lane vectors\n", s->f->name, stores, sums);
+  return stores || sums;
+}
 static bool ssa_hoist(Ssa *s, const uint32_t *order, uint32_t n) {
   uint32_t *stamp = calloc(s->block_count, sizeof(uint32_t)), *work = malloc((s->block_count + 1) * sizeof(uint32_t));
   if (!stamp || !work) { free(stamp); free(work); s->failed = true; return false; }
@@ -6215,7 +6418,7 @@ static void ssa_hints(SsaAlloc *a) {
         break;
       case SO_ADD: case SO_SUB: case SO_MUL: case SO_AND: case SO_OR: case SO_XOR: case SO_SHL: case SO_SHR:
       case SO_SAR: case SO_NEG: case SO_NOT: case SO_EXT: case SO_ADDO: case SO_SUBO: case SO_FADD: case SO_FSUB:
-      case SO_FMUL: case SO_FDIV: case SO_FNEG: case SO_MATH: case SO_LEA:
+      case SO_FMUL: case SO_FDIV: case SO_FNEG: case SO_MATH: case SO_LEA: case SO_VPAIR: case SO_VPACK:
         if (v->hint == -1 && v->a >= 0 && s->values[v->a].op != SO_CONST && s->values[v->a].op != SO_FRAME &&
             s->values[v->a].end == v->start)
           v->hint = v->a;
@@ -7767,6 +7970,47 @@ static void ssa_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
     ssa_put(e, v, d);
     return;
   }
+  case SO_VPAIR: {
+    /* addps/subps/mulps: ssa_float_op's form without a scalar prefix. */
+    int32_t a = v->a, b = v->b;
+    unsigned opcode = (unsigned)v->aux;
+    d = ssa_target(e, v);
+    SsaValue *vb = &s->values[b];
+    if (vb->reg >= 0 && (unsigned)vb->reg == d && a != b) {
+      if (opcode != 0x5c) { int32_t t = a; a = b; b = t; vb = &s->values[b]; }
+      else { x86_mov(ctx, SSA_XS2, d); x86_mov(ctx, d, ssa_get(e, a, d)); x86_reg_op(ctx, -1, false, OP2(0x0f, opcode), d - X_XMM0, SSA_XS2 - X_XMM0, false); ssa_put(e, v, d); return; }
+    }
+    x86_mov(ctx, d, ssa_get(e, a, d));
+    x86_reg_op(ctx, -1, false, OP2(0x0f, opcode), d - X_XMM0, ssa_get(e, b, SSA_XS2) - X_XMM0, false);
+    ssa_put(e, v, d);
+    return;
+  }
+  case SO_VPACK: {
+    d = ssa_target(e, v);
+    unsigned second = ssa_get(e, v->b, SSA_XS2);
+    if (second == d && v->a != v->b) { x86_mov(ctx, SSA_XS2, d); second = SSA_XS2; }
+    x86_mov(ctx, d, ssa_get(e, v->a, d));
+    x86_reg_op(ctx, -1, false, OP2(0x0f, 0x14), d - X_XMM0, second - X_XMM0, false); /* unpcklps */
+    ssa_put(e, v, d);
+    return;
+  }
+  case SO_VLANE: {
+    d = ssa_target(e, v);
+    unsigned source = ssa_get(e, v->a, d);
+    if (v->aux == 0) x86_mov(ctx, d, source);
+    else { x86_reg_op(ctx, 0x66, false, OP2(0x0f, 0x70), d - X_XMM0, source - X_XMM0, false); byte(ctx, 0x55); } /* pshufd */
+    ssa_put(e, v, d);
+    return;
+  }
+  case SO_VHADD: {
+    d = ssa_target(e, v);
+    unsigned source = ssa_get(e, v->a, SSA_XS1);
+    x86_reg_op(ctx, 0x66, false, OP2(0x0f, 0x70), SSA_XS2 - X_XMM0, source - X_XMM0, false); byte(ctx, 0x55);
+    x86_mov(ctx, d, source);
+    x86_reg_op(ctx, 0xf3, false, OP2(0x0f, 0x58), d - X_XMM0, SSA_XS2 - X_XMM0, false); /* addss */
+    ssa_put(e, v, d);
+    return;
+  }
   case SO_FADD: ssa_float_op(e, v, 0x58, true); ssa_put(e, v, ssa_target(e, v)); return;
   case SO_FSUB: ssa_float_op(e, v, 0x5c, false); ssa_put(e, v, ssa_target(e, v)); return;
   case SO_FMUL: ssa_float_op(e, v, 0x59, true); ssa_put(e, v, ssa_target(e, v)); return;
@@ -8700,6 +8944,12 @@ static void ssa_prepare(SsaPrepared *p, BackendContext *ctx, const DynSource *so
     p->optimize_ms += backend_timing(&source->context, &phase);
     p->ready = true;
     goto done;
+  }
+  if (ctx->vectorize && !ctx->a64 && !ctx->rv64 && ssa_pairs(s, order, n)) {
+    ssa_resolve_all(s);
+    /* Two trees may load the same pair. */
+    if (ssa_reuse_loads(s, order, n)) ssa_resolve_all(s);
+    ssa_dce(s, order, n);
   }
   ssa_fuse(s, order, n);
   ssa_loop_depths(s, order, n);

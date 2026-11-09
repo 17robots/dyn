@@ -64,6 +64,10 @@ servers so they pick up the new `dyn`.
   then `push`, `push_ref`, `push_all`, `get`, `pop` (a `{value, ok}` result) and `clear`;
   `a.items` is a plain slice.
   Arrays share arenas and double when full.
+- Opt-level 3 on x86-64 computes pairs of adjacent `f32` fields together: `ps[i] = V{x: ..., y: ...}`
+  built from the same operations on each field becomes one 8-byte load, lanewise SSE arithmetic and
+  one 8-byte store, and `a.x * b.x + a.y * b.y` over such pairs a lanewise multiply and an in-order
+  add. Results match the scalar code bit for bit.
 - Release builds know that two `mem.arena_push` results from one arena never overlap, as LLVM
   knows for `malloc`, so a store into one array no longer forces reloads from another.
   Arenas built on another arena's buffer get no such assumption.
