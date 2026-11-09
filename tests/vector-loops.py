@@ -7,6 +7,7 @@ which still panics after the earlier iterations."""
 import os
 from pathlib import Path
 import platform
+import shutil
 import subprocess
 import tempfile
 
@@ -28,4 +29,21 @@ with tempfile.TemporaryDirectory(prefix='dyn-vector-loops-') as directory:
     assert results['debug'][0] != 0 and 'index.ok' in results['debug'][2], results['debug']
     assert results['debug'][1].count('\n') == 39, results['debug'][1]
     assert results['o2'] == results['debug'] and results['o3'] == results['debug'], (results['debug'], results['o3'])
+    # AArch64 runs the same programs under QEMU when it is installed.
+    if shutil.which('qemu-aarch64'):
+        arm = {}
+        for name, flags in (('debug', ['--debug']), ('o3', ['--release', '--opt-level', '3'])):
+            build = subprocess.run([DYN, 'build', str(SOURCE), '--target', 'aarch64-linux', *flags, '--no-cache', '--quiet',
+                                    '--opt-remarks', '--output', str(work / ('arm-' + name))], capture_output=True, text=True, timeout=300)
+            assert build.returncode == 0, build.stderr
+            if name == 'o3':
+                for function in ('step', 'spin'):
+                    assert f'remark: {function}: vectorized f32 loop' in build.stderr, build.stderr
+            run = subprocess.run(['qemu-aarch64', str(work / ('arm-' + name))], capture_output=True, text=True, timeout=120)
+            arm[name] = (run.returncode, run.stdout)
+        # Generated NaNs differ by architecture (x86 sets the sign bit), so
+        # AArch64 is compared with itself.
+        assert arm['o3'] == arm['debug'] and arm['debug'][1].count('\n') == 39, arm
+    else:
+        print('SKIP vector loops on AArch64: qemu-aarch64 unavailable')
 print('PASS vector loops: four-lane f32 loops match scalar results bit for bit, overlap and bounds included')

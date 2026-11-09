@@ -4336,8 +4336,9 @@ static bool ssa_copy_known(Ssa *s, uint32_t b, uint32_t k, const int32_t *owner,
   int32_t zero = -1;
   unsigned alignment = 0;
   if (!ssa_address_facts(s, destination, &alignment, false, 0)) alignment = 0;
-  /* x86-64 scalar stores work at any address. */
-  if (!s->ctx->a64 && !s->ctx->rv64 && !s->ctx->rv32 && !s->ctx->t32) alignment = 3;
+  /* x86-64 and AArch64 scalar stores work at any address, as LLVM assumes
+     for both without strict alignment. */
+  if (!s->ctx->rv64 && !s->ctx->rv32 && !s->ctx->t32) alignment = 3;
   while (at < size) {
     int32_t owned = owner[at];
     uint32_t width;
@@ -5957,7 +5958,7 @@ static bool vp_registers(Vp *p) {
 }
 static bool ssa_vloops(Ssa *s, const uint32_t *order, uint32_t n) {
   BackendContext *ctx = s->ctx;
-  if (!ctx->vectorize || ctx->a64 || ctx->rv64 || ctx->rv32 || ctx->t32 || ctx->win64) return false;
+  if (!ctx->vectorize || ctx->rv64 || ctx->rv32 || ctx->t32 || ctx->win64) return false;
   bool changed = false;
   bool *in_loop = calloc(s->block_count ? s->block_count : 1, sizeof(bool));
   int32_t *map = calloc(s->value_count ? s->value_count : 1, sizeof(int32_t));
@@ -6508,6 +6509,7 @@ static bool ssa_located(const SsaValue *v) {
   return !v->dead && v->cls != SC_NONE && !constant && v->op != SO_FRAME && !v->fused;
 }
 static uint64_t ssa_clobbers(Ssa *s, const SsaValue *v) {
+  if (s->ctx->a64 && v->op == SO_VLOOP) return A64_CALLER_SAVED;
   if ((s->ctx->a64 || s->ctx->rv64) && v->op != SO_CALL && v->op != SO_PANIC) return 0;
   switch (v->op) {
   case SO_VLOOP: return SSA_CALLER_SAVED;
@@ -9519,6 +9521,7 @@ static void ssa_prepare(SsaPrepared *p, BackendContext *ctx, const DynSource *so
   free(order);
   order = ssa_order(s, &n);
   if (!order || s->failed) goto done;
+  /* AArch64 addressing makes element addresses values of their own. */
   ssa_addressing(s, order, n);
   ssa_dce(s, order, n);
   /* After dce: dead frame stores no longer stand between load and use. */
