@@ -204,8 +204,10 @@ mean unspecified, not safe or allocation-free.
 
 ## Typed arena pushes
 
-`mem.push(T, arena)` and `mem.push_array(T, arena, count)` return zeroed `*T`
-and `[]T` with the type's size and alignment, so call sites need no casts.
+`mem.push(T, arena)` returns a `*T` that is zeroed and then given the type's field
+defaults. `mem.push_array(T, arena, count)` returns a zeroed `[]T`, and
+`mem.push_array_init(T, arena, count)` also writes the defaults into every element.
+All use the type's size and alignment, so call sites need no casts.
 `mem.push_bytes_uninit(arena, count)` returns uninitialized `[]u8` for buffers
 that are overwritten right away. All three panic when the arena is full, like
 `mem.arena_push`. Code with a strict budget on a fixed arena can use

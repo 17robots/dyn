@@ -1575,8 +1575,33 @@ bool lsp_typed_symbol(LspSemantic *semantic, uint32_t offset, char *hover,
   const char *kind = "value";
   uint32_t function = UINT32_MAX, structure = UINT32_MAX,
            enumeration = UINT32_MAX, alias = UINT32_MAX, global = UINT32_MAX;
+  bool expanded = false;
   if (best) {
     type = best->type;
+    /* A constant that adapted to its use was replaced by a copy of its value;
+       hover still names the constant. */
+    for (size_t i = 0; i < a->expansion_count && !expanded; ++i) {
+      DynExprId id = a->expansions[i].expression;
+      if (id >= a->expression_count)
+        continue;
+      DynSpan use = a->expressions[id].span;
+      if (offset < use.start_byte || offset >= use.end_byte)
+        continue;
+      uint32_t target = a->expansions[i].target;
+      type = a->expressions[id].type;
+      if (a->expansions[i].global && target < a->global_count) {
+        global = target;
+        declared = a->globals[target].name;
+        kind = a->globals[target].is_const ? "const" : "global";
+        expanded = true;
+      } else if (!a->expansions[i].global && target < a->local_count) {
+        declared = a->locals[target].name;
+        kind = a->locals[target].is_const ? "const" : "variable";
+        expanded = true;
+      }
+    }
+  }
+  if (best && !expanded) {
     if (best->kind == DYN_EXPR_NAME && best->integer < a->local_count) {
       declared = a->locals[best->integer].name;
       kind = a->locals[best->integer].is_const ? "const" : "variable";

@@ -1,0 +1,25 @@
+hello 321
+numbers: 200 44 66.666667 true
+saturate: 255
+ada has 15 hp
+distance^2 25
+copy 0 original 15 fresh 100
+no target
+color tag 2 op is Sub true errno 5
+areas 28.274311 6
+1.0 as bits 4607182418800017408
+C
+in range, odd flags
+control 25 -2 true four
+len 5 sum 56 middle 30
+memory bob 100 99 1 7
+config missing
+counter after defers 2
+generics 9 1.5 0 2 7
+functions 10 42
+variadics 6 an i32 text a Vec2
+ada appears 2 times
+  grace -> 1
+  ada -> 2
+layout Player 40 8
+grid 1 width 2.5

@@ -1,6 +1,7 @@
 # Dyn documentation
 
-Start with [idiomatic Dyn](guide/idiomatic-dyn.md), then keep the
+Read [the tour](../examples/learn/main.dyn), a single program that runs, for the whole
+language in one sitting. Then read [idiomatic Dyn](guide/idiomatic-dyn.md) and keep the
 [language reference](guide/language.md) and [standard library](guide/std.md)
 pages at hand. `dyn docs std/<module>` prints any module's declarations and
 contracts straight from the source.
@@ -46,3 +47,4 @@ contracts straight from the source.
 - [Readiness review](internals/readiness-20261024.md)
 - [Structural IR snapshot](internals/ir-dump.md)
 - [Std contract migration](migrations/std-contracts-20261024.md)
+- [Language rules, 2026-11-08](migrations/language-rules-20261108.md)

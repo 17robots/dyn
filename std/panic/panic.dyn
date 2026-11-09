@@ -2,10 +2,11 @@
 // that nothing handles reports its message and exits. It cannot recover the
 // program: use it to log, write a crash report or flush files. A panic inside
 // the handler reports and exits without running it again.
+//
+// On Wasm a panic traps at once, with no cleanups and no report, so the
+// handler never runs there.
 
 handler: fn([]const u8)
-
-extern fn set_hook "dyn_set_panic_hook"(hook: fn(*const u8, u64))
 
 fn run(message: *const u8, length: u64) {
   callback := handler
@@ -22,5 +23,5 @@ fn run(message: *const u8, length: u64) {
 // Installs the handler, replacing any earlier one.
 pub fn set_handler(callback: fn(message: []const u8)) {
   handler = callback
-  set_hook(run)
+  install()
 }

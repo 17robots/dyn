@@ -60,6 +60,11 @@ with tempfile.TemporaryDirectory(prefix='dyn-language-forms-') as temporary:
                        check=True, timeout=120)
         result = subprocess.run([str(program)], capture_output=True, text=True, timeout=30)
         assert result.returncode == 101 and result.stderr.startswith('cleanup\nreport: disk full\ndisk full\n'), result
+    # Wasm traps on a panic without a hook; the handler module still links there.
+    wasm = crash / 'crash.wasm'
+    subprocess.run([DYN, 'build', str(crash), '--target', 'wasm32-wasi', '--quiet', '--no-cache', '--output', str(wasm)],
+                   check=True, timeout=120)
+    assert b'dyn_set_panic_hook' not in wasm.read_bytes()
     # One-statement blocks written on one line keep their line.
     result = subprocess.run([DYN, 'fmt', '--check', str(ROOT / 'tests/language-forms')],
                             capture_output=True, text=True, timeout=60)

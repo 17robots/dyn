@@ -590,14 +590,26 @@ pub fn push_array($T: type, arena: *Arena, count: usize) []T {
   return #slice(#cast(*T, arena_push(arena, size.bytes, #alignof(T))), count)
 }
 
-// Pushes one zeroed T, or returns nil when the arena is exhausted. Never panics
+// Pushes count elements, each zeroed and then given T's field defaults. The
+// loop over the elements is the cost push_array leaves out.
+pub fn push_array_init($T: type, arena: *Arena, count: usize) []T {
+  items := push_array(T, arena, count)
+  for i in 0..count {
+    #init(&items[i])
+  }
+  return items
+}
+
+// Pushes one fresh T, zeroed and then given T's field defaults, or returns nil when the arena is exhausted. Never panics
 // on exhaustion; on failure the offset and existing bytes are unchanged.
 pub fn try_push($T: type, arena: *Arena) *T {
   allocation := arena_try_push(arena, #sizeof(T), #alignof(T))
   if !allocation.ok {
     return nil
   }
-  return #cast(*T, allocation.memory)
+  value := #cast(*T, allocation.memory)
+  #init(value)
+  return value
 }
 
 // Pushes count zeroed elements, or returns an empty slice when the arena is

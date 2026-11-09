@@ -1,0 +1,487 @@
+// Learn Dyn in Y minutes. This file compiles and runs: dyn build . && ./learn
+//
+// Dyn is a small, explicit systems language. No hidden allocation, no hidden
+// runtime, no garbage collector, no exceptions. Memory comes from arenas you
+// pass around. What you read is what runs.
+
+// ---------------------------------------------------------------- Modules ---
+// A directory is a module; this file is its main.dyn. `use` binds the module
+// by its last path segment. Names are always qualified: io.println, mem.push.
+use "std/io"
+use "std/mem"
+use "std/container/array"
+use "std/container/map"
+use "std/fs" files       // an import can be renamed
+use "std/panic"
+
+// --------------------------------------------------- Constants and globals ---
+const SCREEN_WIDTH := 320           // adapts like a literal: fits u16, i64, f32...
+const GREETING := "hello"           // []const u8
+const MAX_HEALTH: i32 = 100         // or give a constant its type
+global_counter: u64 = 0             // a mutable global, zeroed before main
+
+// Fixed-array lengths may use constant arithmetic.
+const CELLS: usize = 4 * 4
+board: [CELLS]u8
+
+// -------------------------------------------------------------- Functions ---
+// Parameters are typed; the result type follows the parameter list.
+fn add(a: i32, b: i32) i32 {
+  return a + b
+}
+
+// No result type means void.
+fn bump() {
+  global_counter += 1
+}
+
+// ------------------------------------------------------------------ Types ---
+// Integers: i8 i16 i32 i64 isize, u8 u16 u32 u64 usize. Floats: f32 f64.
+// bool. Strings are []const u8: a pointer and a length, not zero-terminated.
+// Implicit conversions only widen losslessly; everything else is #cast.
+fn numbers() {
+  small: u8 = 200
+  wide: u32 = small                  // fine: u8 always fits in u32
+  narrow := #cast(u8, wide + 100)    // explicit, wraps: 300 becomes 44
+  ratio := #cast(f64, wide) / 3.0
+  bits := #bitcast(u64, ratio)       // same size, bits unchanged
+  io.println("numbers: {} {} {} {}", wide, narrow, ratio, bits != 0)
+  // Integer arithmetic wraps; division by zero panics. Floats are IEEE-754.
+  // Float to integer casts saturate, and NaN becomes 0, on every target.
+  io.println("saturate: {}", #cast(u8, 1000.0))
+}
+
+// distinct makes a new numeric type with the same representation.
+distinct type Meters = f64
+
+// type makes a transparent alias, declared at module scope.
+type Grid = [CELLS]u8
+
+// ---------------------------------------------------------------- Structs ---
+// A field may have a default; the rest start at zero. Literals, declarations
+// and mem.push all start from the defaults.
+struct Vec2 {
+  x: f32,
+  y: f32,
+}
+
+struct Player {
+  name: []const u8,
+  position: Vec2,
+  health: i32 = MAX_HEALTH,
+  target: *Player,   // pointers start as nil
+}
+
+fn length_squared(v: Vec2) f32 {
+  return v.x * v.x + v.y * v.y
+}
+
+// A pointer parameter lets the callee change the caller's value.
+// Fields reach through pointers automatically: p.health, not p.*.health.
+fn heal(p: *Player, amount: i32) {
+  p.health += amount
+}
+
+// *const T: read-only through this pointer.
+fn describe(p: *const Player) {
+  io.println("{} has {} hp", p.name, p.health)
+}
+
+fn structs() {
+  hero := Player{ name: "ada", health: 10 }   // omitted fields take defaults or zero
+  fresh: Player                               // health 100: declarations use defaults too
+  hero.position = .{ x: 3.0, y: 4.0 }         // .{} takes the expected type
+  heal(&hero, 5)
+  describe(&hero)
+  io.println("distance^2 {}", length_squared(hero.position))
+  copy := hero            // assignment copies the whole struct
+  copy.health = 0
+  io.println("copy {} original {} fresh {}", copy.health, hero.health, fresh.health)
+  if hero.target == nil {
+    io.println("no target")
+  }
+}
+
+// ----------------------------------------------------------------- Unions ---
+// A union overlaps its members. No pointers allowed inside, so every bit
+// pattern is valid. Reading another member reinterprets the bytes.
+union Word {
+  bits: u64,
+  number: f64,
+}
+
+// ------------------------------------------------------------------ Enums ---
+// Variants are numbered 0, 1, 2 in order. The first variant is the zero
+// value, so it should mean "nothing". Always write Enum.Variant.
+enum Color {
+  Null,
+  Red,
+  Green,
+  Blue,
+}
+
+// An explicit backing type, and #cast to and from the tag.
+enum(u8) Op {
+  Nop,
+  Add,
+  Sub,
+}
+
+// A plain enum may set tags to match outside numbers. They increase from 0,
+// and an unset one follows the previous (Io is 5).
+enum(i32) Errno {
+  Ok = 0,
+  NoEnt = 2,
+  Intr = 4,
+  Io,
+}
+
+// A variant may carry one value. The first variant carries nothing.
+enum Shape {
+  Null,
+  Circle: f32,          // radius
+  Rect: Vec2,           // width, height
+}
+
+// case must be exhaustive, or end with _. Arms are blocks, no commas; a
+// one-statement block may stay on one line.
+fn area(s: Shape) f32 {
+  case s {
+    Shape.Null => { return 0.0 }
+    Shape.Circle r => { return 3.14159 * r * r }
+    Shape.Rect size => { return size.x * size.y }
+  }
+}
+
+// `Variant *name` aliases the payload so the arm can change it in place.
+fn grow(s: *Shape) {
+  case s.* {
+    Shape.Circle *r => {
+      r += 1.0
+    }
+    _ => {}
+  }
+}
+
+fn enums() {
+  c := Color.Green
+  op := #cast(Op, 2)
+  io.println("color tag {} op is Sub {} errno {}", #cast(u32, c), op == Op.Sub, #cast(i32, Errno.Io))
+  circle := Shape.Circle(2.0)
+  grow(&circle)
+  io.println("areas {} {}", area(circle), area(Shape.Rect(.{ x: 2.0, y: 3.0 })))
+  w: Word
+  w.number = 1.0
+  io.println("1.0 as bits {}", w.bits)
+}
+
+// ------------------------------------------------------------ Control flow ---
+fn control() {
+  // if needs a bool; no truthiness.
+  score := 72
+  if score >= 90 {
+    io.println("A")
+  } else if score >= 70 {
+    io.println("C")
+  } else {
+    io.println("F")
+  }
+  // Comparisons chain in one direction: 0 <= score < 100. Mixing & or | with
+  // a comparison needs parentheses: (flags & 1) != 0.
+  flags: u32 = 5
+  if 0 <= score < 100 && (flags & 1) != 0 {
+    io.println("in range, odd flags")
+  }
+  // for over a half-open range; ..= includes the end. A literal range counts
+  // in the type its variable first meets (usize here, from total).
+  total: usize = 0
+  for i in 0..5 {
+    total += i
+  }
+  for i in 1..=3 {
+    total += i
+  }
+  // Ranges backwards, and typed bindings for negative ranges.
+  for i in #reverse(0..3) {
+    total += i
+  }
+  for i: i32 in -2..2 {
+    total += #cast(usize, i + 2)
+  }
+  // for as while, and bare for as an infinite loop.
+  n := 10
+  for n > 0 {
+    n -= 3
+  }
+  steps := 0
+  for {
+    steps += 1
+    if steps == 4 {
+      break
+    }
+  }
+  // Labels break out of nested loops.
+  found := false
+  outer: for row in 0..4 {
+    for col in 0..4 {
+      if row * col == 6 {
+        found = true
+        break: outer
+      }
+    }
+  }
+  // case on integers: patterns are constants, and _ takes the rest.
+  kind := ""
+  case steps {
+    0 => { kind = "none" }
+    4 => { kind = "four" }
+    _ => { kind = "other" }
+  }
+  // A nested block may shadow an outer name; the same block may not.
+  if found {
+    n := n * 2
+    _ = n
+  }
+  io.println("control {} {} {} {}", total, n, found, kind)
+}
+
+// ------------------------------------------------------- Arrays and slices ---
+fn sum(values: []const i32) i32 {
+  total: i32 = 0
+  for v in values {           // copies each element
+    total += v
+  }
+  return total
+}
+
+fn arrays() {
+  primes: [5]i32 = [2, 3, 5, 7, 11]   // fixed array: a value, copied on assign
+  middle := primes[1..4]              // a slice: {pointer, length}, a view
+  for *p in primes[..] {              // *p points at each element
+    p.* *= 2
+  }
+  // middle sees the doubled values: a slice shares the array's storage.
+  io.println("len {} sum {} middle {}", #len(primes), sum(primes[..]), sum(middle))
+  // Indexing is bounds-checked: primes[9] panics with index.ok.
+}
+
+// ---------------------------------------------------------------- Memory ---
+// Arenas own memory. Allocate from one, free everything at once.
+// mem.push gives a fresh value (zeros plus field defaults); nothing is freed
+// one object at a time.
+fn memory() {
+  arena := mem.arena_create(0)
+  defer mem.arena_release(arena)      // runs when this block exits
+  p := mem.push(Player, arena)        // a *Player with health 100
+  p.name = "bob"
+  scores := mem.push_array(u32, arena, 8)
+  scores[0] = 99
+  // #slice makes a slice from a pointer and a count you vouch for.
+  raw := mem.arena_push(arena, 4, 1)
+  bytes := #slice(#cast(*u8, raw), 4)
+  bytes[3] = 7
+  // #offset moves a pointer by whole elements.
+  second := #offset(&scores[0], 1)
+  second.* = 1
+  io.println("memory {} {} {} {} {}", p.name, p.health, scores[0], scores[1], bytes[3])
+}
+
+// --------------------------------------------------- Errors are values ---
+// No exceptions. Fallible calls return a result with a failure you check.
+fn read_config(arena: *mem.Arena) {
+  file := files.read_all(arena, "does-not-exist.conf", 1 << 20)
+  if file.failure.kind == io.Kind.NotFound {
+    io.println("config missing")
+    return
+  }
+  if file.failure.kind != io.Kind.Ok {
+    io.println("config unreadable")
+    return
+  }
+  io.println("config {} bytes", #len(file.value))
+}
+
+// ---------------------------------------------------------------- Defer ---
+// Defers run in reverse order when their block ends, on any exit,
+// including a panic. There is no recovery from a panic: it is a bug, and
+// expected failures are values. panic.set_handler runs one function after
+// cleanups, before the panic reports and exits, for logs or crash reports.
+fn crash_report(message: []const u8) {
+  io.eprintln("crash: {}", message)
+}
+
+fn cleanup() {
+  defer bump()
+  defer bump()
+  if global_counter > 100 {
+    return
+  }
+}
+
+// ------------------------------------------------------------- Generics ---
+// $T declares a type parameter, inferred from the argument. No constraints:
+// each instance is checked as ordinary code.
+fn largest(values: []const $T) T {
+  best := values[0]
+  for v in values {
+    if v > best {
+      best = v
+    }
+  }
+  return best
+}
+
+// A type parameter can also be passed explicitly.
+fn zeroed($T: type) T {
+  value: T
+  return value
+}
+
+// Generic structs and enums write their type arguments everywhere, including
+// literals: Pair(u8){ first: 1, second: 2 }.
+struct Pair($T: type) {
+  first: T,
+  second: T,
+}
+
+enum Slot($T: type) {
+  Empty,
+  Full: T,
+}
+
+fn swap(p: Pair($T)) Pair(T) {
+  result: Pair(T)
+  result.first = p.second
+  result.second = p.first
+  return result
+}
+
+fn generics() {
+  ints: [3]i32 = [4, 9, 2]
+  floats: [2]f64 = [1.5, -2.0]
+  pair := Pair(u8){ first: 1, second: 2 }
+  flipped := swap(pair)
+  slot := Slot(i32).Full(7)
+  inside: i32 = 0
+  case slot {
+    Slot(i32).Empty => {}
+    Slot(i32).Full value => {
+      inside = value
+    }
+  }
+  io.println("generics {} {} {} {} {}", largest(ints[..]), largest(floats[..]),
+    zeroed(u16), flipped.first, inside)
+}
+
+// ------------------------------------------------------ Function values ---
+// A function's name is its value. fn(...) R is the type.
+fn double(x: i32) i32 {
+  return x * 2
+}
+
+fn apply(f: fn(i32) i32, x: i32) i32 {
+  return f(x)
+}
+
+struct Button {
+  on_click: fn(i32) i32,   // stored functions are plain fields
+}
+
+fn functions() {
+  b := Button{ on_click: double }
+  io.println("functions {} {}", apply(double, 5), b.on_click(21))
+}
+
+// ------------------------------------------------- Variadics and any ---
+// A final `name: ...T` takes any number of T, as a borrowed []T.
+fn total(values: ...i32) i32 {
+  t: i32 = 0
+  for v in values {
+    t += v
+  }
+  return t
+}
+
+// any is {type, pointer}. A type case is the only way back to a value: each
+// arm names a type. It always needs _, since any type can arrive.
+fn kind_of(value: any) []const u8 {
+  case value {
+    i32 n => { return "an i32" }
+    []const u8 text => { return "text" }
+    Vec2 v => { return "a Vec2" }
+    _ => { return "something else" }
+  }
+}
+
+fn variadics() {
+  // Literals boxed into any take default types: i32, f64, []const u8.
+  io.println("variadics {} {} {} {}", total(1, 2, 3), kind_of(5), kind_of("hi"),
+    kind_of(Vec2{ x: 1.0, y: 2.0 }))
+}
+
+// ------------------------------------------------- Collections in std ---
+fn collections() {
+  arena := mem.arena_create(0)
+  defer mem.arena_release(arena)
+  // A growing array that keeps its arena.
+  names: array.Array([]const u8)
+  array.init(&names, arena)
+  array.push(&names, "ada")
+  array.push(&names, "grace")
+  array.push(&names, "ada")
+  // A hash map: you pass the arena and the hash and equality functions.
+  counts: map.Map([]const u8, u32)
+  map.init(&counts, arena, map.text_hash, map.text_equal)
+  for name in names.items {
+    map.upsert(&counts, name, 0).* += 1   // one lookup, adds when missing
+  }
+  ada := map.get(&counts, "ada")          // a pointer, or nil when absent
+  if ada != nil {
+    io.println("ada appears {} times", ada.*)
+  }
+  it := map.walk(&counts)
+  for map.next(&it) {
+    io.println("  {} -> {}", it.entry.key, it.entry.value)
+  }
+}
+
+// ------------------------------------------------------- Compile time ---
+// #assert checks constants at compile time; #sizeof and friends are constants.
+#assert(#sizeof(Vec2) == 8, "Vec2 is two f32")
+#assert(#offsetof(Player, name) == 0, "name comes first")
+
+fn layout() {
+  info := #typeof(Player)
+  io.println("layout {} {} {}", info.name, #sizeof(Player), #alignof(Player))
+}
+
+// ---------------------------------------------------- Foreign functions ---
+// extern fn names a C symbol; programs gain no C dependency unless used.
+// extern fn c_puts "puts"(text: *const u8) i32
+
+// ------------------------------------------------------------------ main ---
+// io.println prints to stdout and returns nothing. io.println_to(writer, ...)
+// returns the result, and a discarded result is written _ = so it shows.
+fn main() {
+  panic.set_handler(crash_report)
+  io.println("{} {}", GREETING, add(SCREEN_WIDTH, 1))
+  numbers()
+  structs()
+  enums()
+  control()
+  arrays()
+  memory()
+  arena := mem.arena_create(0)
+  read_config(arena)
+  mem.arena_release(arena)
+  cleanup()
+  io.println("counter after defers {}", global_counter)
+  generics()
+  functions()
+  variadics()
+  collections()
+  layout()
+  board[0] = 1
+  grid: Grid = board
+  io.println("grid {} width {}", grid[0], #cast(f64, #cast(Meters, 2.5)))
+}
