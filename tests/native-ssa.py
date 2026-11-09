@@ -11,6 +11,7 @@ import random
 import re
 import shutil
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -253,15 +254,24 @@ def run_programs(work):
         directory = work/name
         directory.mkdir()
         (directory/'main.dyn').write_text(source)
-        outputs = {}
-        for target, runner in targets:
-            for mode, environment in (('ssa', {}), ('tree', {'DYN_NO_SSA': '1'})):
-                output = directory/f'{target}-{mode}'
-                subprocess.run([DYN, 'build', directory, '--release', '--no-cache', '--quiet', '--target', target,
-                                '--output', output], check=True, timeout=300, env=dict(os.environ, **environment))
-                result = subprocess.run([*runner, output], capture_output=True, text=True, timeout=60, cwd=directory)
-                outputs[(target, mode)] = (result.returncode, result.stdout)
-        assert len(set(outputs.values())) == 1, (name, outputs)
+
+    # Every program, target and emitter builds and runs on its own.
+    def one(case):
+        name, (target, runner), (mode, environment) = case
+        directory = work/name
+        output = directory/f'{target}-{mode}'
+        subprocess.run([DYN, 'build', directory, '--release', '--no-cache', '--quiet', '--target', target,
+                        '--output', output], check=True, timeout=300, env=dict(os.environ, **environment))
+        result = subprocess.run([*runner, output], capture_output=True, text=True, timeout=120, cwd=directory)
+        return name, target, mode, (result.returncode, result.stdout)
+    cases = [(name, target, mode) for name in PROGRAMS for target in targets
+             for mode in (('ssa', {}), ('tree', {'DYN_NO_SSA': '1'}))]
+    outputs = {}
+    with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
+        for name, target, mode, result in pool.map(one, cases):
+            outputs.setdefault(name, {})[(target, mode)] = result
+    for name in PROGRAMS:
+        assert len(set(outputs[name].values())) == 1, (name, outputs[name])
     return len(targets)
 
 

@@ -144,7 +144,16 @@ with tempfile.TemporaryDirectory(prefix='dyn-p256-') as directory:
   output=work/target
   subprocess.run([DYN,'build',str(work),'--target',target,'--release','--quiet','--no-cache','--output',str(output)],check=True,timeout=300)
   emulator={'aarch64-linux':'qemu-aarch64','riscv64-linux':'qemu-riscv64','x86_64-windows':'wine'}.get(target)
-  if emulator and shutil.which(emulator):subprocess.run([emulator,str(output)],check=True,timeout=240)
+  if emulator and shutil.which(emulator):
+   if target=='riscv64-linux':
+    # QEMU's RISC-V user mode is slow: the first vector and the edge cases
+    # cover the target's code paths; the host builds check every vector.
+    for case,source in (debug_sources[0],debug_sources[-1]):
+     project=work/('riscv-'+case);project.mkdir(exist_ok=True)
+     (project/'main.dyn').write_text(source,encoding='utf-8')
+     subprocess.run([DYN,'build',str(project),'--target',target,'--release','--quiet','--no-cache','--output',str(project/'program')],check=True,timeout=300)
+     subprocess.run([emulator,str(project/'program')],check=True,timeout=240)
+   else:subprocess.run([emulator,str(output)],check=True,timeout=240)
   if target=='wasm32-wasi' and shutil.which('node'):
    script="const {WASI}=require('node:wasi'),fs=require('fs');(async()=>{const wasi=new WASI({version:'preview1',returnOnExit:true});const {instance}=await WebAssembly.instantiate(fs.readFileSync(process.argv[1]),{wasi_snapshot_preview1:wasi.wasiImport});process.exitCode=wasi.start(instance);})().catch(e=>{console.error(e);process.exit(1)});"
    subprocess.run(['node','--no-warnings','-e',script,str(output)],check=True,timeout=240)

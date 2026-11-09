@@ -4,10 +4,16 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 ROOT=Path(__file__).resolve().parents[1]
 BUILD=Path(os.environ.get('BUILD',ROOT/'build')).resolve()
+TIMES=os.environ.get('DYN_TEST_TIMES')
 def run(*command, timeout=300):
+    started=time.monotonic()
     subprocess.run(list(map(str,command)),cwd=ROOT,check=True,timeout=timeout)
+    if TIMES:
+        with open(TIMES,'a') as out:
+            out.write(f'{time.monotonic()-started:.2f} {" ".join(Path(str(c)).name for c in command[1:3])}\n')
 run(sys.executable, ROOT/'tests/ci-setup.py')
 run(sys.executable, ROOT/'tests/import-sdk-diagnostics.py')
 run(sys.executable, ROOT/'tests/file-imports.py')
