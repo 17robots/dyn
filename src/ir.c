@@ -123,6 +123,23 @@ static DynByteIntrinsic byte_identity(const DynSource *source, CanonicalPath *pa
   return DYN_BYTE_INTRINSIC_NONE;
 }
 
+/* std/mem's arena_push hands out bytes no earlier live push returned. */
+static bool fresh_identity(const DynSource *source, CanonicalPath *paths, const char *source_path,
+                           const char *sdk, const DynIrProgram *ir, const DynIrFunction *fn) {
+  if (!sdk || !source_path || fn->foreign || fn->variadic || fn->generic || fn->instance ||
+      !fn->is_public || !dyn_type_is_pointer(fn->return_type) || fn->param_count != 3 ||
+      fn->param_start > ir->param_count || 3 > ir->param_count - fn->param_start)
+    return false;
+  const char *canonical = canonical_path(paths, source_path);
+  if (!canonical || strcmp(canonical, sdk)) return false;
+  const char *original, *ignored_path;
+  size_t length, offset;
+  dyn_source_position(source, fn->source_offset, &ignored_path, &original, &length, &offset);
+  return offset + 10 <= length && !memcmp(original + offset, "arena_push", 10) &&
+         (offset + 10 == length || !(original[offset + 10] == '_' ||
+                                     (original[offset + 10] >= 'a' && original[offset + 10] <= 'z')));
+}
+
 /* The private JSON scanner has a scalar body on every target. Only its exact
    SDK declaration may use the bounded x86 implementation. */
 static DynByteIntrinsic json_byte_identity(const DynSource *source, CanonicalPath *paths,
@@ -516,6 +533,7 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
   CanonicalPath paths = {0};
   char *math_sdk = proofs ? sdk_source_path("std/math/float.dyn", false) : NULL;
   char *bytes_sdk = proofs ? sdk_source_path("std/bytes/bytes.dyn", true) : NULL;
+  char *mem_sdk = proofs ? sdk_source_path("std/mem/mem.dyn", true) : NULL;
   char *json_sdk = proofs ? sdk_source_path("std/encoding/json/read/read.dyn", true) : NULL;
   char *mutable_json_sdk = proofs ? sdk_source_path("std/encoding/json/json.dyn", true) : NULL;
   for (size_t i = 0; i < a->function_count; ++i) {
@@ -526,6 +544,7 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
       free(mutable_json_sdk);
       free(json_sdk);
       free(bytes_sdk);
+  free(mem_sdk);
       free(math_sdk);
       free(paths.canonical);
       dyn_ir_free(ir);
@@ -589,6 +608,7 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
     ir->functions[i].variadic_type = lower_type(a, a->functions[i].variadic_type);
     ir->functions[i].math_intrinsic = math_identity(source, &paths, source_path, math_sdk, ir, &ir->functions[i]);
     ir->functions[i].byte_intrinsic = byte_identity(source, &paths, source_path, bytes_sdk, a, ir, &ir->functions[i]);
+    ir->functions[i].fresh_result = fresh_identity(source, &paths, source_path, mem_sdk, ir, &ir->functions[i]);
     if (ir->functions[i].byte_intrinsic == DYN_BYTE_INTRINSIC_NONE)
       ir->functions[i].byte_intrinsic = json_byte_identity(source, &paths, source_path, json_sdk, mutable_json_sdk, a, ir, &ir->functions[i]);
   }
