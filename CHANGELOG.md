@@ -34,8 +34,8 @@ Upgrade guide: [0.1.0-preview.31](docs/migrations/0.1.0-preview.31.md).
   scalarizes small aggregate copies to unaligned destinations, as x86-64 already did.
 - Executables keep only what `main` reaches, in debug builds as well as release: unused
   functions, constants and globals from imported modules are no longer emitted, so an unused
-  `use` adds nothing to the binary. Globals whose initializer calls a function are kept, since
-  the call may have effects. `dyn vet` still reports the unused import.
+  `use` adds nothing to the binary. A global is kept when its initializer could do anything
+  besides produce a value (a call, a division, an index or a dereference). `dyn vet` still reports the unused import.
 - `fn main() i32` returns the exit code. `process.start()` returns a `process.Program` holding
   `arena`, an arena for the whole program, and `args`. `main` takes no parameters. `dyn run X --
   a b` passes arguments and returns the program's exit code.

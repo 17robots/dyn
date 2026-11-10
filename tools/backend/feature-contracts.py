@@ -260,7 +260,9 @@ def main():
                     result = subprocess.run([sys.executable,'-c',code,str(path),name,str(value)],
                                             capture_output=True,text=True,timeout=10)
                     assert result.returncode == 101, (mode,name,path,result.returncode,result.stderr)
-                    assert result.stderr.splitlines()[0] == message, (mode,name,result.stderr)
+                    # Debug builds also name the source line: "... in f at main.dyn:12".
+                    first = result.stderr.splitlines()[0]
+                    assert first == message or first.startswith(message + ' at '), (mode,name,result.stderr)
                     outputs.append((result.stdout,result.stderr))
                     panics += 1
                 assert len(set(outputs)) == 1, (mode,name,outputs)

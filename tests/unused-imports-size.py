@@ -2,7 +2,7 @@
 """Unused imports cost nothing: debug and release executables keep only the
 functions and globals that main reaches, so importing modules a program never
 calls leaves the loaded code and data the same size. A global whose
-initializer calls a function stays, since that call may have effects."""
+initializer may have effects, such as a call, stays."""
 import os
 from pathlib import Path
 import subprocess

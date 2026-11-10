@@ -1554,7 +1554,10 @@ raise AssertionError('overflow returned normally')
                       'float_panic' if name == 'float_panic_call' else
                       'void_work' if name == 'void_caller' else
                       'div_leaf' if name in ('call_after','call_short','call_branch','loop_call_div','indirect_panic') else name)
-            assert results[0].splitlines()[0] == f'runtime check failed ({diagnostic}) in {origin}', (mode,name,origin,results[0])
+            # Debug builds also name the source line: "... in f at main.dyn:12".
+            first = results[0].splitlines()[0]
+            assert first == f'runtime check failed ({diagnostic}) in {origin}' or \
+                first.startswith(f'runtime check failed ({diagnostic}) in {origin} at '), (mode,name,origin,results[0])
             panic_count += 1
     rejected = {
         'unreachable-aggregate': 'pub fn fail(a:u64) u64 { if false { x:[2097153]u64\n_=x }\nreturn a }',
@@ -1562,8 +1565,9 @@ raise AssertionError('overflow returned normally')
         'aggregate-local': 'pub fn fail(a: u64) u64 { b: [2097153]u64\nreturn a }',
         'frame-limit': 'pub fn fail() u64 {\n' + ''.join(f'x{i}:[1048576]u64\n' for i in range(3)) + 'return 0}',
         'indirect-aggregate-limit': 'pub fn fail(f:fn([513]u8) u64,x:[513]u8) u64 { return f(x) }',
-        'global-aggregate-limit': 'stored:[536870912]u64 pub fn fail() u64 { return 0 }',
-        'global-symbol-collision': 'stored:u64 extern fn alias "stored"() u64 pub fn fail() u64 { return alias() }',
+        # The globals are used: an unused internal global is dropped before emission.
+        'global-aggregate-limit': 'stored:[536870912]u64 pub fn fail() u64 { return stored[0] }',
+        'global-symbol-collision': 'stored:u64 extern fn alias "stored"() u64 pub fn fail() u64 { stored = 1\nreturn alias() }',
         'parameter-limit': 'pub fn fail('+','.join(f'a{i}:u64' for i in range(513))+') u64 { return a512 }',
         'reserved-runtime': 'pub fn dyn_panic(a: u64) u64 { return a }',
         'signed-count': 'pub fn fail(a: i64, b: i64) i64 { return a << b }',
