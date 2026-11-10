@@ -26,5 +26,5 @@ fn main() {
   lua.lua_pop(state, 1)
   // No use of borrowed/pointer beyond this point.
   if lua.lua_gettop(state) != 0 || !strings.equal(retained, "retained result") { #panic("lifetime contract") }
-  _ = io.println(io.stdout(), retained)
+  io.println("{}", retained)
 }

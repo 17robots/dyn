@@ -31,6 +31,6 @@ fn main() {
   if av.avcodec_receive_frame(context, frame) < 0 || frame.nb_samples != 4 { #panic("decode failed") }
   samples := #slice(#cast(*const i16, frame.data[0]), 4)
   if samples[0] != 1 || samples[3] != 4 { #panic("sample mismatch") }
-  _ = io.println(io.stdout(), "decoded {} samples", frame.nb_samples)
+  io.println("decoded {} samples", frame.nb_samples)
   // samples is borrowed from frame; never retain it after frame unref/free.
 }
