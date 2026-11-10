@@ -652,6 +652,11 @@ SetUnhandledExceptionFilter:
     adrp x16, __imp_SetUnhandledExceptionFilter
     ldr x16, [x16, :lo12:__imp_SetUnhandledExceptionFilter]
     br x16
+.global AddVectoredExceptionHandler
+AddVectoredExceptionHandler:
+    adrp x16, __imp_AddVectoredExceptionHandler
+    ldr x16, [x16, :lo12:__imp_AddVectoredExceptionHandler]
+    br x16
 .global GetStdHandle
 GetStdHandle:
     adrp x16, __imp_GetStdHandle
@@ -748,6 +753,7 @@ kernel_lookup:
     thunk GetCurrentProcess
     thunk GetCurrentThreadId
     thunk SetUnhandledExceptionFilter
+    thunk AddVectoredExceptionHandler
     thunk DuplicateHandle
     thunk InitializeProcThreadAttributeList
     thunk UpdateProcThreadAttribute
@@ -853,6 +859,8 @@ iat GetCurrentProcess
 iat GetCurrentThreadId
 .global __imp_SetUnhandledExceptionFilter
 iat SetUnhandledExceptionFilter
+.global __imp_AddVectoredExceptionHandler
+iat AddVectoredExceptionHandler
 iat DuplicateHandle
 iat InitializeProcThreadAttributeList
 iat UpdateProcThreadAttribute
@@ -952,6 +960,7 @@ hint GetStdHandle
 hint GetCurrentProcess
 hint GetCurrentThreadId
 hint SetUnhandledExceptionFilter
+hint AddVectoredExceptionHandler
 hint DuplicateHandle
 hint InitializeProcThreadAttributeList
 hint UpdateProcThreadAttribute

@@ -10,6 +10,9 @@ ExitProcess:
 .global SetUnhandledExceptionFilter
 SetUnhandledExceptionFilter:
     jmp *__imp_SetUnhandledExceptionFilter(%rip)
+.global AddVectoredExceptionHandler
+AddVectoredExceptionHandler:
+    jmp *__imp_AddVectoredExceptionHandler(%rip)
 .global GetStdHandle
 .set GetStdHandle, dyn_stdio_handle
 .global WriteFile
