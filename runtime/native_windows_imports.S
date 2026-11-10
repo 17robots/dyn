@@ -10,6 +10,9 @@ ExitProcess:
 .global SetUnhandledExceptionFilter
 SetUnhandledExceptionFilter:
     jmp *__imp_SetUnhandledExceptionFilter(%rip)
+.global SetThreadStackGuarantee
+SetThreadStackGuarantee:
+    jmp *__imp_SetThreadStackGuarantee(%rip)
 .global GetStdHandle
 .set GetStdHandle, dyn_stdio_handle
 .global WriteFile
