@@ -1,0 +1,28 @@
+// Two functions of the same type: no single guess, every call stays correct.
+struct Counter { step: fn(u64) u64, total: u64 }
+
+fn double(x: u64) u64 {
+  return x * 2
+}
+
+fn triple(x: u64) u64 {
+  return x * 3
+}
+
+fn run(c: *Counter, n: u64) {
+  for i in 0..n {
+    c.total += c.step(i)
+  }
+}
+
+fn main() {
+  a: Counter
+  a.step = double
+  b: Counter
+  b.step = triple
+  run(&a, 1000)
+  run(&b, 1000)
+  if a.total != 999000 || b.total != 1498500 {
+    #panic("two")
+  }
+}

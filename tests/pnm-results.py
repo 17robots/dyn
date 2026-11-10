@@ -8,37 +8,37 @@ import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 SOURCE=r'''use "std/image/pnm" pnm
+use "std/parse" parse
 use "std/mem" mem
 use "std/bytes" bytes
-use "std/errors" errors
 fn check(ok: bool) { if !ok { #panic("PNM contract") } }
 fn main() {
  arena := mem.arena_create(0)
  defer { mem.arena_release(arena) }
  decoded := pnm.decode(arena,"P3\n# comment\n2 1\n15\n15 0 7 0 15 15\n")
- check(decoded.ok && decoded.value.info.width == 2 && decoded.value.info.height == 1 && decoded.value.info.channels == 3 && bytes.equal(decoded.value.pixels,"\xff\x00\x77\x00\xff\xff"))
+ check(decoded.failure.kind == parse.Kind.Ok && decoded.value.info.width == 2 && decoded.value.info.height == 1 && decoded.value.info.channels == 3 && bytes.equal(decoded.value.pixels,"\xff\x00\x77\x00\xff\xff"))
  encoded := pnm.encode(arena,decoded.value.pixels,2,1,3)
- check(encoded.ok && bytes.equal(encoded.value,"P6\n2 1\n255\n\xff\x00\x77\x00\xff\xff"))
- check(pnm.decode(arena,encoded.value).ok)
+ check(encoded.failure.kind == parse.Kind.Ok && bytes.equal(encoded.value,"P6\n2 1\n255\n\xff\x00\x77\x00\xff\xff"))
+ check(pnm.decode(arena,encoded.value).failure.kind == parse.Kind.Ok)
  decoded = pnm.decode(arena,"P5\n3 1\n65535\n\x00\x00\x80\x00\xff\xff")
- check(decoded.ok && bytes.equal(decoded.value.pixels,"\x00\x80\xff"))
+ check(decoded.failure.kind == parse.Kind.Ok && bytes.equal(decoded.value.pixels,"\x00\x80\xff"))
  decoded = pnm.decode(arena,"P5\n3 1\n255\n\n# ")
- check(decoded.ok && bytes.equal(decoded.value.pixels,"\n# "))
+ check(decoded.failure.kind == parse.Kind.Ok && bytes.equal(decoded.value.pixels,"\n# "))
  encoded = pnm.encode(arena,decoded.value.pixels,3,1,1)
- check(encoded.ok && bytes.equal(encoded.value,"P5\n3 1\n255\n\n# "))
+ check(encoded.failure.kind == parse.Kind.Ok && bytes.equal(encoded.value,"P5\n3 1\n255\n\n# "))
  decoded = pnm.decode(arena,"P2\n3 1\n10\n0 5 10\n")
- check(decoded.ok && bytes.equal(decoded.value.pixels,"\x00\x80\xff"))
+ check(decoded.failure.kind == parse.Kind.Ok && bytes.equal(decoded.value.pixels,"\x00\x80\xff"))
  decoded = pnm.decode(arena,"P5\n1 1\n255#comment\n\x7f")
- check(decoded.ok && bytes.equal(decoded.value.pixels,"\x7f"))
+ check(decoded.failure.kind == parse.Kind.Ok && bytes.equal(decoded.value.pixels,"\x7f"))
  mark := mem.arena_mark(arena)
- check(!pnm.decode(arena,"P2\n1 1\n2\n3").ok && mem.arena_mark(arena) == mark)
- check(!pnm.decode(arena,"P6\n4294967295 4294967295\n255\n").ok && mem.arena_mark(arena) == mark)
- check(!pnm.decode(arena,"P5\n1 1\n65536\n\x00").ok && mem.arena_mark(arena) == mark)
- check(!pnm.decode(arena,"P5\n0 1\n255\n").ok && mem.arena_mark(arena) == mark)
- check(!pnm.decode(arena,"P5\n1 1\n255\n").ok && mem.arena_mark(arena) == mark)
- check(!pnm.decode(arena,"P2\n2 1\n255\n1").ok && mem.arena_mark(arena) == mark)
+ check(pnm.decode(arena,"P2\n1 1\n2\n3").failure.kind != parse.Kind.Ok && mem.arena_mark(arena) == mark)
+ check(pnm.decode(arena,"P6\n4294967295 4294967295\n255\n").failure.kind != parse.Kind.Ok && mem.arena_mark(arena) == mark)
+ check(pnm.decode(arena,"P5\n1 1\n65536\n\x00").failure.kind != parse.Kind.Ok && mem.arena_mark(arena) == mark)
+ check(pnm.decode(arena,"P5\n0 1\n255\n").failure.kind != parse.Kind.Ok && mem.arena_mark(arena) == mark)
+ check(pnm.decode(arena,"P5\n1 1\n255\n").failure.kind != parse.Kind.Ok && mem.arena_mark(arena) == mark)
+ check(pnm.decode(arena,"P2\n2 1\n255\n1").failure.kind != parse.Kind.Ok && mem.arena_mark(arena) == mark)
  golden := "P6\n2 1\n255\n\xff\x00\x77\x00\xff\xff"
- for cut in 0..#len(golden) { check(!pnm.decode(arena,golden[..cut]).ok && mem.arena_mark(arena) == mark) }
+ for cut in 0..#len(golden) { check(pnm.decode(arena,golden[..cut]).failure.kind != parse.Kind.Ok && mem.arena_mark(arena) == mark) }
  for i in 0..#len(golden) {
   for bit in 0..8 {
    data := mem.push_array(u8,arena,#len(golden))
@@ -48,7 +48,7 @@ fn main() {
    mem.arena_rewind(arena,mark)
   }
  }
- check(pnm.encode(arena,"",1,1,4).kind == errors.Kind.InvalidInput && mem.arena_mark(arena) == mark)
+ check(pnm.encode(arena,"",1,1,4).failure.kind == parse.Kind.Syntax && mem.arena_mark(arena) == mark)
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-pnm-') as directory:

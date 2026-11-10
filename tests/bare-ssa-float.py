@@ -30,7 +30,7 @@ spec = importlib.util.spec_from_file_location('bare_ssa', ROOT/'tests/bare-ssa.p
 b = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(b)
 
-src='use "std/io"\nextern fn oracle() i32\nfn main() { status:=oracle()\nif status!=0 { _=io.println(io.stdout(),"oracle {}",status)\n#panic("oracle") }\n_=io.write_all(io.stdout(),"FLOAT OK\\n") }\n'
+src='use "std/io"\nextern fn oracle() i32\nfn main() { status:=oracle()\nif status!=0 { io.println("oracle {}",status)\n#panic("oracle") }\n_=io.write_all(io.stdout(),"FLOAT OK\\n") }\n'
 c='typedef unsigned long long U; typedef long long I; typedef unsigned W;\n'
 checks=[];names=[]
 def add(name,args,ret,body,ctargs,ctret):
@@ -51,7 +51,7 @@ for width,ct,ut in [(32,'float','W'),(64,'double','U')]:
  src+=f'g{s}:{t}\n'
  add('mem'+s,f'x:{t},y:{t}',t,f'g{s}=x\nold:=g{s}\ng{s}=y\nreturn old+g{s}',ct+','+ct,ct)
  add('frame'+s,f'x:{t},y:{t}',t,'z:=x\np:=&z\np.*=p.*+y\nreturn z',ct+','+ct,ct)
- add('cycle'+s,f'x:{t},y:{t},z:{t},n:u32',t,'a:=x\nb:=y\nd:=z\ni:u32=0\nfor i<n { t:=a\na=b\nb=d\nd=t\ni=#wrap(i+1) }\nreturn a',ct+','+ct+','+ct+',W',ct)
+ add('cycle'+s,f'x:{t},y:{t},z:{t},n:u32',t,'a:=x\nb:=y\nd:=z\ni:u32=0\nfor i<n { t:=a\na=b\nb=d\nd=t\ni=(i+1) }\nreturn a',ct+','+ct+','+ct+',W',ct)
  for sign,ctype in [('i64','I'),('u64','U')]:
   add('to'+sign+s,f'x:{t}',sign,f'return #cast({sign},x)',ct,ctype)
   add('from'+sign+s,f'x:{sign}',t,f'return #cast({t},x)',ctype,ct)

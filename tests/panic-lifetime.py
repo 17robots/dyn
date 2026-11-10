@@ -10,7 +10,7 @@ cases = {
     'bounds': '''use "std/io"
 fn checked(index: usize) u8 { values: [1]u8 = [7]
 return values[index] }
-fn main() { defer { _ = io.println(io.stdout(), "cleanup") }
+fn main() { defer { io.println("cleanup") }
 _ = checked(2) }''',
     'direct': 'fn main() { #panic("owned panic message") }',
     'local': '''use "std/io"
@@ -18,8 +18,8 @@ use "std/mem"
 fn main() {
   owned := mem.arena_create(64)
   defer { mem.arena_release(owned)
-  _ = io.println(io.stdout(), "cleanup") }
-  text := mem.arena_push(owned, 32, 1)[..32]
+  io.println("cleanup") }
+  text := #slice(mem.arena_push(owned, 32, 1), 32)
   _ = mem.copy(text, "owned panic message")
   #panic(text[..19])
 }''',
@@ -29,17 +29,17 @@ fn fail(text: []const u8) { #panic(text) }
 fn main() {
   owned := mem.arena_create(64)
   defer { mem.arena_release(owned)
-  _ = io.println(io.stdout(), "cleanup") }
-  text := mem.arena_push(owned, 32, 1)[..32]
+  io.println("cleanup") }
+  text := #slice(mem.arena_push(owned, 32, 1), 32)
   _ = mem.copy(text, "owned panic message")
   fail(text[..19])
 }''',
 }
 cases['nested-cleanup'] = cases['caller'].replace(
-    '_ = io.println(io.stdout(), "cleanup")', 'cleanup()') + '''
+    'io.println("cleanup")', 'cleanup()') + '''
 fn cleanup() {
-  defer { _ = io.println(io.stdout(), "cleanup") }
-  _ = io.println(io.stdout(), "nested cleanup call")
+  defer { io.println("cleanup") }
+  io.println("nested cleanup call")
 }
 '''
 cases['bounded'] = '''use "std/io"
@@ -48,12 +48,12 @@ fn main() {
   index: usize = 0
   for index < 6000 { text[index] = 120
   index += 1 }
-  defer { _ = io.println(io.stdout(), "cleanup") }
+  defer { io.println("cleanup") }
   #panic(text[..])
 }
 '''
 cases['unicode-bound'] = ('use "std/io"\nfn main() { '
-    'defer { _ = io.println(io.stdout(), "cleanup") }\n#panic("' +
+    'defer { io.println("cleanup") }\n#panic("' +
     'x' + '🙂' * 1100 + '") }\n')
 with tempfile.TemporaryDirectory(prefix='dyn-panic-lifetime-') as temporary:
     root = Path(temporary)

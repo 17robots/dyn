@@ -1,7 +1,7 @@
 #ifndef DYN_H
 #define DYN_H
 
-#define DYN_FRONTEND_VERSION "9"
+#define DYN_FRONTEND_VERSION "10"
 #define DYN_FRONTEND_STAMP "dyn-c-frontend-" DYN_FRONTEND_VERSION
 
 #include <stdbool.h>
@@ -65,7 +65,7 @@ typedef struct {
   bool runtime_support; /* Internal freestanding support-object compilation. */
   DynDiagnosticSink diagnostic;
   void *diagnostic_data;
-  bool json_diagnostics, vet;
+  bool json_diagnostics, vet, vet_unsafe;
   /* `dyn vet`: run the vet checks, counting findings when vet_findings is set. */
   unsigned *vet_findings;
   bool timings;
@@ -96,13 +96,16 @@ typedef enum { DYN_BACKEND_AUTO, DYN_BACKEND_NATIVE, DYN_BACKEND_LLVM } DynBacke
 typedef struct {
   const char *command, *input, *output, *target;
   DynOptimization optimization;
-  bool release, debug_info, debug_info_set, quiet, verbose, runtime_support, emit_object, emit_asm, emit_ir, no_link, shared, timings, no_cache;
+  bool vet_unsafe, release, debug_info, debug_info_set, quiet, verbose, runtime_support, emit_object, emit_asm, emit_ir, no_link, shared, timings, no_cache;
   DynBackend backend;
   bool native_backend; /* Resolved for this command; part of the build cache key. */
   bool format_check, docs_json, json_diagnostics;
   unsigned jobs;
   uint64_t max_work;
   uint64_t compiler_hash; /* Command-scoped cache identity, inherited by workers. */
+  /* dyn run X -- a b: arguments after -- go to the program. */
+  char **run_arguments;
+  size_t run_argument_count;
   const char *link_inputs[64];
   size_t link_input_count;
   size_t explicit_link_input_count; /* --link inputs; #link discoveries follow them. */
@@ -187,6 +190,7 @@ int dyn_sources_load(const DynContext *context, const char *directory,
 int dyn_sources_load_quiet(const DynContext *context, const char *dir, DynSources *out);
 void dyn_sources_free(DynSources *sources);
 int dyn_source_target_enabled(const DynSource *source);
+void dyn_sources_single_file(const char *directory, const char *name);
 int dyn_sources_merge(const DynSources *sources, const char *module_name, DynSource *merged);
 bool dyn_source_target_gap(const DynSource *source, size_t byte, char *message, size_t capacity);
 /* Whether the module in directory has platform files but none for the target. */

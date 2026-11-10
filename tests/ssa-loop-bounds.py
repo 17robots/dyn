@@ -11,7 +11,7 @@ DYN = str(Path(os.environ.get('DYN', ROOT/'build/dyn-release')).resolve())
 FUNCTIONS = '''use "std/io"
 pub fn loop_sum(s:[]const u8) u64 {
   sum:u64=0
-  for i in 0..#len(s) { sum=#wrap(sum+#cast(u64,s[i])) }
+  for i in 0..#len(s) { sum=(sum+#cast(u64,s[i])) }
   return sum
 }
 pub fn reversed(s:[]const u8,i:usize) u8 {
@@ -35,7 +35,7 @@ pub fn signed(s:[]const u8,i:isize) u8 {
   return 0
 }
 pub fn changed(s:[]const u8,i:usize) u8 {
-  if i<#len(s) { return s[#wrap(i+1)] }
+  if i<#len(s) { return s[(i+1)] }
   return 0
 }
 pub fn phi(s:[]const u8,i:usize,choose:bool) u8 {

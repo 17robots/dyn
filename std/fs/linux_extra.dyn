@@ -1,10 +1,12 @@
+use "std/parse" parse
 #target(kernel: linux)
+use "std/io" io
 use "std/mem" mem
 use "std/c" cstrings
 use "std/os/linux" platform
 
-pub struct Metadata { size: u64, inode: u64, device: u64, mode: u16, error: isize, kind: errors.Kind, ok: bool }
-pub struct PathResult { value: []u8, error: isize, kind: errors.Kind, ok: bool }
+pub struct Metadata { size: u64, inode: u64, device: u64, mode: u16, failure: io.Failure }
+pub type PathResult = io.Bytes
 pub enum AppDirectory { Home, Config, Cache, Data, Runtime }
 pub struct Directory {
   file: File,
@@ -12,15 +14,15 @@ pub struct Directory {
   offset: usize,
   used: usize,
 }
-pub struct DirectoryResult { value: Directory, error: isize, kind: errors.Kind, ok: bool }
-pub struct DirectoryEntry { name: []const u8, kind: u8, ok: bool, error: isize, error_kind: errors.Kind }
+pub type DirectoryResult = io.Result(Directory)
+pub struct DirectoryEntry { name: []const u8, kind: u8, found: bool, failure: io.Failure }
 
 fn terminated(path: []const u8, storage: []u8) *const u8 {
   if #len(path) == 0 {
     return nil
   }
   result := cstrings.string_into(storage, path)
-  if !result.ok {
+  if result.failure.kind != parse.Kind.Ok {
     return nil
   }
   return result.value
@@ -28,23 +30,19 @@ fn terminated(path: []const u8, storage: []u8) *const u8 {
 
 pub fn open_directory(path: []const u8, storage: []u8) DirectoryResult {
   if #len(storage) < 24 {
-    return DirectoryResult{ error: -22, kind: errors.linux(-22), ok: false }
+    return DirectoryResult{ failure: io.Failure{ kind: io.linux(-22), native: -22 } }
   }
   opened := open_flags(path, directory_flag, 0)
-  if !opened.ok {
-    return DirectoryResult{ error: opened.error, kind: errors.linux(opened.error), ok: false }
+  if opened.failure.kind != io.Kind.Ok {
+    return DirectoryResult{ failure: io.Failure{ kind: io.linux(opened.failure.native), native: opened.failure.native } }
   }
-  return DirectoryResult{
-    value: Directory{ file: opened.value, storage: storage, offset: 0, used: 0 },
-    error: 0,
-    ok: true,
-  }
+  return DirectoryResult{ value: Directory{ file: opened.value, storage: storage, offset: 0, used: 0 } }
 }
 
 // Entry name borrows directory storage and may be invalidated by next refill.
 pub fn directory_next(directory: *Directory) DirectoryEntry {
   if !is_open(&directory.file) || #len(directory.storage) < 24 {
-    return DirectoryEntry{ error: -9 , error_kind: errors.linux(-9) }
+    return DirectoryEntry{ failure: io.Failure{ kind: io.linux(-9), native: -9 } }
   }
   for {
     if directory.offset >= directory.used {
@@ -53,22 +51,22 @@ pub fn directory_next(directory: *Directory) DirectoryEntry {
         value = #syscall(217, directory.file.descriptor, &directory.storage[0], #len(directory.storage))
       }
       if value < 0 {
-        return DirectoryEntry{ error: value, error_kind: errors.linux(value), ok: false }
+        return DirectoryEntry{ failure: io.Failure{ kind: io.linux(value), native: value } }
       }
       if value == 0 {
-        return DirectoryEntry{ error: 0, error_kind: errors.linux(0), ok: false }
+        return DirectoryEntry{}
       }
       directory.offset = 0
       directory.used = #cast(usize, value)
     }
     if directory.offset + 19 > directory.used {
-      return DirectoryEntry{ error: -5, error_kind: errors.linux(-5), ok: false }
+      return DirectoryEntry{ failure: io.Failure{ kind: io.linux(-5), native: -5 } }
     }
     low := #cast(usize, directory.storage[directory.offset + 16])
     high := #cast(usize, directory.storage[directory.offset + 17])
     record_length := low + high * 256
     if record_length < 20 || directory.offset + record_length > directory.used {
-      return DirectoryEntry{ error: -5, error_kind: errors.linux(-5), ok: false }
+      return DirectoryEntry{ failure: io.Failure{ kind: io.linux(-5), native: -5 } }
     }
     name_start := directory.offset + 19
     name_end := name_start
@@ -81,39 +79,40 @@ pub fn directory_next(directory: *Directory) DirectoryEntry {
     dot := #len(name) == 1 && name[0] == '.'
     dot_dot := #len(name) == 2 && name[0] == '.' && name[1] == '.'
     if !dot && !dot_dot {
-      return DirectoryEntry{ name: name, kind: kind, error: 0, error_kind: errors.linux(0), ok: true }
+      return DirectoryEntry{ name: name, kind: kind, found: true }
     }
   }
   return DirectoryEntry{}
 }
 
-pub fn close_directory(directory: *Directory) Result {
+pub fn close_directory(directory: *Directory) {
   directory.offset = 0
   directory.used = 0
-  return close(&directory.file)
+  close(&directory.file)
 }
 
+// A failed close is not reported. Sync the destination when it must be durable.
 pub fn copy_file(source: []const u8, destination: []const u8, scratch: []u8) Result {
   if #len(scratch) == 0 {
-    return Result{ error: -22, kind: errors.linux(-22) }
+    return Result{ failure: io.Failure{ kind: io.linux(-22), native: -22 } }
   }
   input := open(source)
-  if !input.ok {
-    return Result{ error: input.error, kind: errors.linux(input.error), ok: false }
+  if input.failure.kind != io.Kind.Ok {
+    return Result{ failure: io.Failure{ kind: io.linux(input.failure.native), native: input.failure.native } }
   }
   output_file := open_flags(destination, 65, 420)
-  if !output_file.ok {
-    _ = close(&input.value)
-    return Result{ error: output_file.error, kind: errors.linux(output_file.error), ok: false }
+  if output_file.failure.kind != io.Kind.Ok {
+    close(&input.value)
+    return Result{ failure: io.Failure{ kind: io.linux(output_file.failure.native), native: output_file.failure.native } }
   }
   source_info := file_metadata(&input.value)
   destination_info := file_metadata(&output_file.value)
   validation_error: isize = 0
-  if !source_info.ok {
-    validation_error = source_info.error
+  if source_info.failure.kind != io.Kind.Ok {
+    validation_error = source_info.failure.native
   }
-  else if !destination_info.ok {
-    validation_error = destination_info.error
+  else if destination_info.failure.kind != io.Kind.Ok {
+    validation_error = destination_info.failure.native
   }
   else if source_info.device == destination_info.device && source_info.inode == destination_info.inode {
     validation_error = -22
@@ -125,54 +124,45 @@ pub fn copy_file(source: []const u8, destination: []const u8, scratch: []u8) Res
     validation_error = #syscall(77, output_file.value.descriptor, 0)
   }
   if validation_error != 0 {
-    _ = close(&input.value)
-    _ = close(&output_file.value)
-    return Result{ error: validation_error, kind: errors.linux(validation_error) }
+    close(&input.value)
+    close(&output_file.value)
+    return Result{ failure: io.Failure{ kind: io.linux(validation_error), native: validation_error } }
   }
   copied := stream.copy(writer(&output_file.value), reader(&input.value), scratch)
-  input_closed := close(&input.value)
-  output_closed := close(&output_file.value)
+  close(&input.value)
+  close(&output_file.value)
   if copied.status == stream.Status.Error {
-    return Result{ transferred: copied.transferred, error: copied.error, kind: copied.kind, ok: false }
+    return Result{ transferred: copied.transferred, failure: io.Failure{ kind: copied.kind, native: copied.error } }
   }
-  if !input_closed.ok {
-    return input_closed
-  }
-  if !output_closed.ok {
-    return output_closed
-  }
-  return Result{ transferred: copied.transferred, ok: true }
+  return Result{ transferred: copied.transferred }
 }
 
 // statx has one fixed layout on supported Linux architectures (Linux 4.11+).
 // Descriptor lookup avoids path replacement races and does not change file position.
 pub fn file_metadata(file: *const File) Metadata {
   if !is_open(file) {
-    return Metadata{ error: -9, kind: errors.linux(-9) }
+    return Metadata{ failure: io.Failure{ kind: io.linux(-9), native: -9 } }
   }
   raw: [32]u64 = []
   empty: [1]u8 = []
   result := #syscall(332, file.descriptor, &empty[0], 4096, 2047, &raw[0])
   if result < 0 {
-    return Metadata{ error: result, kind: errors.linux(result) }
+    return Metadata{ failure: io.Failure{ kind: io.linux(result), native: result } }
   }
   if (raw[0] & 769) != 769 {
-    return Metadata{ error: -95, kind: errors.linux(-95) }
+    return Metadata{ failure: io.Failure{ kind: io.linux(-95), native: -95 } }
   }
-  return Metadata{ size: raw[5], inode: raw[4], device: raw[17], mode: #cast(u16, (raw[3] >> 32)), ok: true }
+  return Metadata{ size: raw[5], inode: raw[4], device: raw[17], mode: #cast(u16, (raw[3] >> 32)) }
 }
 pub fn metadata(path: []const u8) Metadata {
   opened := open(path)
-  if !opened.ok {
-    return Metadata{ error: opened.error, kind: errors.linux(opened.error) }
+  if opened.failure.kind != io.Kind.Ok {
+    return Metadata{ failure: io.Failure{ kind: io.linux(opened.failure.native), native: opened.failure.native } }
   }
   info := file_metadata(&opened.value)
-  closed := close(&opened.value)
-  if !info.ok {
+  close(&opened.value)
+  if info.failure.kind != io.Kind.Ok {
     return info
-  }
-  if !closed.ok {
-    return Metadata{ error: closed.error, kind: errors.linux(closed.error) }
   }
   return info
 }
@@ -181,13 +171,13 @@ pub fn remove(path: []const u8) Result {
   storage: [4096 + mem.ArenaBufferOverhead]u8 = []
   raw := terminated(path, storage[..])
   if raw == nil {
-    return Result{ transferred: 0, error: -36, kind: errors.linux(-36), ok: false }
+    return Result{ transferred: 0, failure: io.Failure{ kind: io.linux(-36), native: -36 } }
   }
   value := #syscall(263, -100, raw, 0)
   if value < 0 {
-    return Result{ transferred: 0, error: value, kind: errors.linux(value), ok: false }
+    return Result{ transferred: 0, failure: io.Failure{ kind: io.linux(value), native: value } }
   }
-  return Result{ transferred: 0, error: 0, kind: errors.linux(0), ok: true }
+  return Result{ transferred: 0, failure: io.Failure{ kind: io.linux(0), native: 0 } }
 }
 
 pub fn rename(old_path: []const u8, new_path: []const u8) Result {
@@ -196,39 +186,39 @@ pub fn rename(old_path: []const u8, new_path: []const u8) Result {
   old_raw := terminated(old_path, old_storage[..])
   new_raw := terminated(new_path, new_storage[..])
   if old_raw == nil || new_raw == nil {
-    return Result{ transferred: 0, error: -36, kind: errors.linux(-36), ok: false }
+    return Result{ transferred: 0, failure: io.Failure{ kind: io.linux(-36), native: -36 } }
   }
   value := #syscall(264, -100, old_raw, -100, new_raw)
   if value < 0 {
-    return Result{ transferred: 0, error: value, kind: errors.linux(value), ok: false }
+    return Result{ transferred: 0, failure: io.Failure{ kind: io.linux(value), native: value } }
   }
-  return Result{ transferred: 0, error: 0, kind: errors.linux(0), ok: true }
+  return Result{ transferred: 0, failure: io.Failure{ kind: io.linux(0), native: 0 } }
 }
 
 pub fn make_directory(path: []const u8, mode: usize) Result {
   storage: [4096 + mem.ArenaBufferOverhead]u8 = []
   raw := terminated(path, storage[..])
   if raw == nil {
-    return Result{ transferred: 0, error: -36, kind: errors.linux(-36), ok: false }
+    return Result{ transferred: 0, failure: io.Failure{ kind: io.linux(-36), native: -36 } }
   }
   value := #syscall(258, -100, raw, mode)
   if value < 0 {
-    return Result{ transferred: 0, error: value, kind: errors.linux(value), ok: false }
+    return Result{ transferred: 0, failure: io.Failure{ kind: io.linux(value), native: value } }
   }
-  return Result{ transferred: 0, error: 0, kind: errors.linux(0), ok: true }
+  return Result{ transferred: 0, failure: io.Failure{ kind: io.linux(0), native: 0 } }
 }
 
 pub fn remove_directory(path: []const u8) Result {
   storage: [4096 + mem.ArenaBufferOverhead]u8 = []
   raw := terminated(path, storage[..])
   if raw == nil {
-    return Result{ transferred: 0, error: -36, kind: errors.linux(-36), ok: false }
+    return Result{ transferred: 0, failure: io.Failure{ kind: io.linux(-36), native: -36 } }
   }
   value := #syscall(263, -100, raw, 512)
   if value < 0 {
-    return Result{ transferred: 0, error: value, kind: errors.linux(value), ok: false }
+    return Result{ transferred: 0, failure: io.Failure{ kind: io.linux(value), native: value } }
   }
-  return Result{ transferred: 0, error: 0, kind: errors.linux(0), ok: true }
+  return Result{ transferred: 0, failure: io.Failure{ kind: io.linux(0), native: 0 } }
 }
 
 pub fn symbolic_link(target: []const u8, link: []const u8) Result {
@@ -237,42 +227,39 @@ pub fn symbolic_link(target: []const u8, link: []const u8) Result {
   target_raw := terminated(target, target_storage[..])
   link_raw := terminated(link, link_storage[..])
   if target_raw == nil || link_raw == nil {
-    return Result{ error: -36, kind: errors.linux(-36), ok: false }
+    return Result{ failure: io.Failure{ kind: io.linux(-36), native: -36 } }
   }
   value := #syscall(266, target_raw, -100, link_raw)
   if value < 0 {
-    return Result{ error: value, kind: errors.linux(value), ok: false }
+    return Result{ failure: io.Failure{ kind: io.linux(value), native: value } }
   }
-  return Result{ ok: true }
+  return Result{}
 }
 
 fn read_link_into(path: []const u8, destination: []u8) PathResult {
   storage: [4096 + mem.ArenaBufferOverhead]u8 = []
   raw := terminated(path, storage[..])
   if raw == nil {
-    return PathResult{ value: destination[..0], error: -36, kind: errors.linux(-36), ok: false }
+    return PathResult{ value: destination[..0], failure: io.Failure{ kind: io.linux(-36), native: -36 } }
   }
   if #len(destination) == 0 {
-    return PathResult{ value: destination[..0], error: -22, kind: errors.linux(-22), ok: false }
+    return PathResult{ value: destination[..0], failure: io.Failure{ kind: io.linux(-22), native: -22 } }
   }
   value := #syscall(267, -100, raw, &destination[0], #len(destination))
   if value < 0 {
-    return PathResult{ value: destination[..0], error: value, kind: errors.linux(value), ok: false }
+    return PathResult{ value: destination[..0], failure: io.Failure{ kind: io.linux(value), native: value } }
   }
-  return PathResult{ value: destination[..#cast(usize, value)], error: 0, kind: errors.linux(0), ok: true }
+  return PathResult{ value: destination[..#cast(usize, value)], failure: io.Failure{ kind: io.linux(0), native: 0 } }
 }
 
 pub fn sync_directory(path: []const u8) Result {
   opened := open_flags(path, directory_flag, 0)
-  if !opened.ok {
-    return Result{ error: opened.error, kind: errors.linux(opened.error), ok: false }
+  if opened.failure.kind != io.Kind.Ok {
+    return Result{ failure: io.Failure{ kind: io.linux(opened.failure.native), native: opened.failure.native } }
   }
   synced := sync(&opened.value)
-  closed := close(&opened.value)
-  if !synced.ok {
-    return synced
-  }
-  return closed
+  close(&opened.value)
+  return synced
 }
 
 pub struct AtomicFile {
@@ -281,43 +268,36 @@ pub struct AtomicFile {
   temporary: []const u8,
   active: bool,
 }
-pub struct AtomicResult { value: AtomicFile, error: isize, kind: errors.Kind, ok: bool }
+pub type AtomicResult = io.Result(AtomicFile)
 
 // Both paths are borrowed until commit/abort. Temporary must be a sibling chosen by caller.
 pub fn atomic_begin(destination: []const u8, temporary: []const u8) AtomicResult {
   if #len(destination) == 0 || #len(temporary) == 0 {
-    return AtomicResult{ error: -22, kind: errors.linux(-22), ok: false }
+    return AtomicResult{ failure: io.Failure{ kind: io.linux(-22), native: -22 } }
   }
   created := create_exclusive(temporary)
-  if !created.ok {
-    return AtomicResult{ error: created.error, kind: errors.linux(created.error), ok: false }
+  if created.failure.kind != io.Kind.Ok {
+    return AtomicResult{ failure: io.Failure{ kind: io.linux(created.failure.native), native: created.failure.native } }
   }
-  return AtomicResult{
-    value: AtomicFile{
-      file: created.value,
-      destination: destination,
-      temporary: temporary,
-      active: true,
-    },
-    error: 0,
-    ok: true,
-  }
+  return AtomicResult{ value: AtomicFile{
+    file: created.value,
+    destination: destination,
+    temporary: temporary,
+    active: true,
+  } }
 }
 
 pub fn atomic_commit(transaction: *AtomicFile) Result {
   if !transaction.active {
-    return Result{ transferred: 0, error: -22, kind: errors.linux(-22), ok: false }
+    return Result{ transferred: 0, failure: io.Failure{ kind: io.linux(-22), native: -22 } }
   }
   synced := sync(&transaction.file)
-  if !synced.ok {
+  if synced.failure.kind != io.Kind.Ok {
     return synced
   }
-  closed := close(&transaction.file)
-  if !closed.ok {
-    return closed
-  }
+  close(&transaction.file)
   renamed := rename(transaction.temporary, transaction.destination)
-  if renamed.ok {
+  if renamed.failure.kind == io.Kind.Ok {
     transaction.active = false
   }
   return renamed
@@ -327,7 +307,7 @@ pub fn atomic_commit(transaction: *AtomicFile) Result {
 // which honor fsync for files and directories.
 pub fn atomic_commit_durable(transaction: *AtomicFile, parent_directory: []const u8) Result {
   committed := atomic_commit(transaction)
-  if !committed.ok {
+  if committed.failure.kind != io.Kind.Ok {
     return committed
   }
   return sync_directory(parent_directory)
@@ -335,13 +315,13 @@ pub fn atomic_commit_durable(transaction: *AtomicFile, parent_directory: []const
 
 pub fn atomic_abort(transaction: *AtomicFile) Result {
   if !transaction.active {
-    return Result{ transferred: 0, error: -22, kind: errors.linux(-22), ok: false }
+    return Result{ transferred: 0, failure: io.Failure{ kind: io.linux(-22), native: -22 } }
   }
   if is_open(&transaction.file) {
-    _ = close(&transaction.file)
+    close(&transaction.file)
   }
   removed := remove(transaction.temporary)
-  if removed.ok {
+  if removed.failure.kind == io.Kind.Ok {
     transaction.active = false
   }
   return removed
@@ -350,39 +330,39 @@ pub fn atomic_abort(transaction: *AtomicFile) Result {
 // Writes through an explicitly named sibling temporary file and atomically renames it.
 pub fn write_atomic(destination: []const u8, temporary: []const u8, source: []const u8) Result {
   transaction_result := atomic_begin(destination, temporary)
-  if !transaction_result.ok {
-    return Result{ error: transaction_result.error, kind: errors.linux(transaction_result.error), ok: false }
+  if transaction_result.failure.kind != io.Kind.Ok {
+    return Result{ failure: io.Failure{ kind: io.linux(transaction_result.failure.native), native: transaction_result.failure.native } }
   }
   transaction := transaction_result.value
   written := write(&transaction.file, source)
-  if !written.ok {
+  if written.failure.kind != io.Kind.Ok {
     _ = atomic_abort(&transaction)
     return written
   }
   committed := atomic_commit(&transaction)
-  if !committed.ok {
+  if committed.failure.kind != io.Kind.Ok {
     if transaction.active {
       _ = atomic_abort(&transaction)
     }
     return committed
   }
-  return Result{ transferred: written.transferred, ok: true }
+  return Result{ transferred: written.transferred }
 }
 
 fn environment_get(name: []const u8, destination: []u8) PathResult {
   result := platform.environment_get(name, destination)
   if !result.ok {
-    return PathResult{ value: destination[..0], error: result.error, kind: errors.linux(result.error) }
+    return PathResult{ value: destination[..0], failure: io.Failure{ kind: io.linux(result.error), native: result.error } }
   }
   if !result.found {
-    return PathResult{ value: destination[..0], error: -2, kind: errors.linux(-2) }
+    return PathResult{ value: destination[..0], failure: io.Failure{ kind: io.linux(-2), native: -2 } }
   }
-  return PathResult{ value: result.value, ok: true }
+  return PathResult{ value: result.value }
 }
 
 fn append_suffix(destination: []u8, base: []const u8, suffix: []const u8) PathResult {
   if #len(base) + #len(suffix) > #len(destination) {
-    return PathResult{ value: destination[..0], error: -28, kind: errors.linux(-28), ok: false }
+    return PathResult{ value: destination[..0], failure: io.Failure{ kind: io.linux(-28), native: -28 } }
   }
   i: usize = 0
   for i < #len(base) {
@@ -392,21 +372,21 @@ fn append_suffix(destination: []u8, base: []const u8, suffix: []const u8) PathRe
   for j in 0..#len(suffix) {
     destination[i + j] = suffix[j]
   }
-  return PathResult{ value: destination[..#len(base) + #len(suffix)], error: 0, kind: errors.linux(0), ok: true }
+  return PathResult{ value: destination[..#len(base) + #len(suffix)], failure: io.Failure{ kind: io.linux(0), native: 0 } }
 }
 
 fn app_directory_into(kind: AppDirectory, destination: []u8) PathResult {
   if kind == AppDirectory.Home {
     direct_home := environment_get("HOME", destination)
-    if direct_home.ok && #len(direct_home.value) == 0 {
-      return PathResult{ value: destination[..0], error: -2, kind: errors.linux(-2), ok: false }
+    if direct_home.failure.kind == io.Kind.Ok && #len(direct_home.value) == 0 {
+      return PathResult{ value: destination[..0], failure: io.Failure{ kind: io.linux(-2), native: -2 } }
     }
     return direct_home
   }
   if kind == AppDirectory.Runtime {
     runtime := environment_get("XDG_RUNTIME_DIR", destination)
-    if runtime.ok && #len(runtime.value) == 0 {
-      return PathResult{ value: destination[..0], error: -2, kind: errors.linux(-2), ok: false }
+    if runtime.failure.kind == io.Kind.Ok && #len(runtime.value) == 0 {
+      return PathResult{ value: destination[..0], failure: io.Failure{ kind: io.linux(-2), native: -2 } }
     }
     return runtime
   }
@@ -421,48 +401,48 @@ fn app_directory_into(kind: AppDirectory, destination: []u8) PathResult {
     suffix = "/.local/share"
   }
   configured := environment_get(variable, destination)
-  if configured.ok && #len(configured.value) > 0 {
+  if configured.failure.kind == io.Kind.Ok && #len(configured.value) > 0 {
     return configured
   }
   home_storage: [4096]u8 = []
   fallback_home := environment_get("HOME", home_storage[..])
-  if !fallback_home.ok {
-    return PathResult{ value: destination[..0], error: fallback_home.error, kind: errors.linux(fallback_home.error), ok: false }
+  if fallback_home.failure.kind != io.Kind.Ok {
+    return PathResult{ value: destination[..0], failure: io.Failure{ kind: io.linux(fallback_home.failure.native), native: fallback_home.failure.native } }
   }
   return append_suffix(destination, fallback_home.value, suffix)
 }
 
 pub fn lock(file: *File, operation: usize) Result {
   if !is_open(file) {
-    return Result{ error: -9, kind: errors.Kind.InvalidState }
+    return Result{ failure: io.Failure{ kind: io.Kind.InvalidState, native: -9 } }
   }
   value := #syscall(73, file.descriptor, operation)
   for value == -4 {
     value = #syscall(73, file.descriptor, operation)
   }
   if value < 0 {
-    return Result{ error: value, kind: errors.linux(value) }
+    return Result{ failure: io.Failure{ kind: io.linux(value), native: value } }
   }
-  return Result{ ok: true }
+  return Result{}
 }
 pub fn truncate(path: []const u8, length: usize) Result {
   if length > 9223372036854775807 {
-    return Result{ error: -22, kind: errors.linux(-22) }
+    return Result{ failure: io.Failure{ kind: io.linux(-22), native: -22 } }
   }
   storage: [4096 + mem.ArenaBufferOverhead]u8 = []
   name := terminated(path, storage[..])
   if name == nil {
-    return Result{ error: -36, kind: errors.linux(-36) }
+    return Result{ failure: io.Failure{ kind: io.linux(-36), native: -36 } }
   }
   value := #syscall(76, name, length)
   if value < 0 {
-    return Result{ error: value, kind: errors.linux(value) }
+    return Result{ failure: io.Failure{ kind: io.linux(value), native: value } }
   }
-  return Result{ ok: true }
+  return Result{}
 }
 
 fn kept(arena: *mem.Arena, mark: usize, result: PathResult) PathResult {
-  if !result.ok {
+  if result.failure.kind != io.Kind.Ok {
     mem.arena_rewind(arena, mark)
     return result
   }

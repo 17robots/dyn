@@ -311,7 +311,7 @@ use "std/crypto/chacha20" chacha
 fn main() {
   key: [32]u8
   nonce: [12]u8
-  forged := (&key[0])[..~#cast(usize, 0)]
+  forged := #slice(&key[0], ~#cast(usize, 0))
   if chacha.xor(forged, forged, key[..], nonce[..], 4294967295) { #panic("counter") }
   for byte in key { if byte != 0 { #panic("storage") } }
 }

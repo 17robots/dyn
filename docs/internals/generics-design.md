@@ -2,7 +2,7 @@
 
 Status: phase 1 is implemented: generic functions, std phase 1, and
 arena-only allocation replacing `Allocator` and the `#alloc*` builtins.
-Generic structs were rejected on 2026-10-22; see
+Generic structs were accepted on 2026-11-06 and are in the language reference. They were rejected on 2026-10-22; see
 [Decided: no generic types](#decided-no-generic-types). See
 [Implementation status](#implementation-status).
 
@@ -44,7 +44,7 @@ language decision, not an extension of this design.
 - Operator overloading. Operators keep their fixed built-in meaning.
 - Specialization: no different body for a particular type, and no overloading
   by parameter type.
-- Generic structs, enums and unions, generic methods, and generic type aliases.
+- Generic unions, generic methods, and generic type aliases.
 - Value parameters (`$N: usize`) and compile-time function execution.
 - Higher-kinded parameters (a parameter that is itself a generic type).
 
@@ -127,13 +127,11 @@ No unification beyond this, no inference from the return type, and no
 implicit conversion to make inference succeed (a `u32` argument does not widen
 to match an `i64` one). Add a cast at the call.
 
-### Decided: no generic types
+### Reversed: generic structs and enums
 
-Structs, enums and unions never take type parameters. Storage is always the
-caller's own concrete struct, and generic functions do the plumbing through
-its fields. This is how Ryan Fleury's macros (`SLLQueuePush`,
-`DLLPushBack`) work, but checked: a body may use any field the instance type
-has, and a missing field is an error at the call.
+This design first ruled out generic types. That was reversed on 2026-11-06:
+`struct Box($T: type)` and `enum Slot($T: type)` take type parameters, and
+`Box(i32)` names one concrete instance. Type arguments are always written.
 
 ```dyn
 pub fn sll_stack_push(first: **$T, node: *T) {

@@ -10,28 +10,29 @@ import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 CLI='''use "std/image/FORMAT" codec
+use "std/io" io
+use "std/parse" parse
 use "std/mem" mem
 use "std/fs" fs
 use "std/process" process
-use "std/io" io
 use "std/strings" strings
 fn main() {
   arena := mem.arena_create(0)
   defer { mem.arena_release(arena) }
   args := process.arguments(arena)
-  if !args.ok || #len(args.value) != 4 { #panic("image arguments") }
+  if args.failure.kind != io.Kind.Ok || #len(args.value) != 4 { #panic("image arguments") }
   ENCODER
   source := fs.read_all(arena, args.value[2], 64000000)
-  if !source.ok { #panic("image source") }
+  if source.failure.kind != io.Kind.Ok { #panic("image source") }
   before := mem.arena_mark(arena)
   result := codec.decode(arena, source.value)
-  if !result.ok {
+  if result.failure.kind != parse.Kind.Ok {
     if mem.arena_mark(arena) != before { #panic("image rollback") }
-    _ = io.println(io.stdout(), "ERR {}", #cast(u32, result.kind))
+    io.println("ERR {}", #cast(u32, result.failure.kind))
     return
   }
-  if !fs.write_all(args.value[3], result.value.pixels).ok { #panic("image output") }
-  _ = io.println(io.stdout(), "{} {}", result.value.info.width, result.value.info.height)
+  if fs.write_all(args.value[3], result.value.pixels).failure.kind != io.Kind.Ok { #panic("image output") }
+  io.println("{} {}", result.value.info.width, result.value.info.height)
 }
 '''
 ENCODER='''if strings.starts_with(args.value[1], "encode") {
@@ -39,7 +40,7 @@ ENCODER='''if strings.starts_with(args.value[1], "encode") {
   pixels: [16]u8 = []
   for i in 0..4 { for j in 0..#cast(usize, channels) { pixels[i * #cast(usize, channels) + j] = #cast(u8, (i * 51 + j * 37)) } }
   result := codec.encode(arena, pixels[..4 * #cast(usize, channels)], 2, 2, channels)
-  if !result.ok || !fs.write_all(args.value[2], result.value).ok { #panic("image encode") }
+  if result.failure.kind != parse.Kind.Ok || fs.write_all(args.value[2], result.value).failure.kind != io.Kind.Ok { #panic("image encode") }
   return
 }'''
 u16=lambda x:struct.pack('<H',x)
@@ -189,7 +190,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-image-extra-') as directory:
     if shutil.which('cjpeg'):fixture_data['jpeg']=data
     for kind,fixture in fixture_data.items():
         project=work/(kind+'-portable');project.mkdir()
-        source='use "std/image/'+kind+'" codec\nuse "std/mem" mem\nfn main() { arena := mem.arena_create(0); defer { mem.arena_release(arena) }; source: ['+str(len(fixture))+']u8 = ['+','.join(map(str,fixture))+']; result := codec.decode(arena,source[..]); if !result.ok || result.value.info.width == 0 { #panic("portable image") } }'
+        source='use "std/image/'+kind+'" codec\nuse \"std/parse\" parse\nuse "std/mem" mem\nfn main() { arena := mem.arena_create(0); defer { mem.arena_release(arena) }; source: ['+str(len(fixture))+']u8 = ['+','.join(map(str,fixture))+']; result := codec.decode(arena,source[..]); if result.failure.kind != parse.Kind.Ok || result.value.info.width == 0 { #panic("portable image") } }'
         (project/'main.dyn').write_text(source.replace('; ', '\n'))
         for target in ('aarch64-linux','riscv64-linux','x86_64-macos','aarch64-macos','x86_64-windows','aarch64-windows','wasm32-wasi'):
             subprocess.run([DYN,'build',str(project),'--release','--target',target,'--quiet','--output',str(work/(kind+'-'+target))],check=True,timeout=300)

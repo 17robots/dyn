@@ -768,40 +768,6 @@ static uint32_t parse_string(DynSpan n, const DynSource *s, DynAstProgram *a,
   return id;
 }
 static DynType scope_type(DynAstProgram *, DynSpan, const DynSource *, bool);
-static bool negative_literal(const DynAstProgram *a, const DynAstExpr *e) {
-  if (e->kind != DYN_EXPR_UNARY || e->op != DYN_OP_NEG || e->left == DYN_NO_EXPR)
-    return false;
-  DynExprKind k = a->expressions[e->left].kind;
-  return k == DYN_EXPR_INT || k == DYN_EXPR_FLOAT || k == DYN_EXPR_CHAR;
-}
-/* Marks the integer operators written inside #wrap(...) as wrapping. Called
-   functions are untouched; their arguments are written here, so they are marked. */
-static unsigned mark_wrap(DynAstProgram *a, DynExprId id, unsigned depth) {
-  if (id == DYN_NO_EXPR || id >= a->expression_count || depth > 4096)
-    return 0;
-  DynAstExpr *e = &a->expressions[id];
-  unsigned marked = 0;
-  if ((e->kind == DYN_EXPR_BINARY &&
-       (e->op == DYN_OP_ADD || e->op == DYN_OP_SUB || e->op == DYN_OP_MUL ||
-        e->op == DYN_OP_SHL)) ||
-      (e->kind == DYN_EXPR_UNARY && e->op == DYN_OP_NEG &&
-       !negative_literal(a, e))) {
-    e->wrap = true;
-    marked = 1;
-  }
-  if (e->kind == DYN_EXPR_SIZE || e->kind == DYN_EXPR_ALIGN ||
-      e->kind == DYN_EXPR_TYPEOF || e->kind == DYN_EXPR_LEN)
-    return marked;
-  marked += mark_wrap(a, e->left, depth + 1);
-  marked += mark_wrap(a, e->right, depth + 1);
-  if (e->kind == DYN_EXPR_SLICE)
-    marked += mark_wrap(a, (DynExprId)e->integer, depth + 1);
-  if (e->kind == DYN_EXPR_CALL || e->kind == DYN_EXPR_STRUCT ||
-      e->kind == DYN_EXPR_ARRAY || e->kind == DYN_EXPR_SYSCALL)
-    for (uint32_t i = 0; i < e->item_count; ++i)
-      marked += mark_wrap(a, a->items[e->item_start + i].expression, depth + 1);
-  return marked;
-}
 
 
 static DynType parse_type_name(DynSpan p, const DynSource *s, DynAstProgram *a) {
@@ -885,6 +851,7 @@ void dyn_ast_program_free(DynAstProgram *a) {
   free(a->case_arms);
   free(a->children);
   free(a->locals);
+  free(a->expansions);
   free(a->generics);
   free(a->generic_params);
   free(a->instances);
@@ -897,9 +864,149 @@ DynType dyn_ast_named_type(DynAstProgram *a, DynSpan name, const DynSource *s) {
   uint32_t id = find_struct(a, name, s);
   return id == UINT32_MAX ? DYN_TYPE_ERROR : DYN_TYPE_STRUCT_BASE + id;
 }
+bool dyn_ast_type_is_open(DynAstProgram *a, DynType t) {
+  if (dyn_type_is_param(t)) return true;
+  if (dyn_type_is_pointer(t)) return dyn_ast_type_is_open(a, a->pointers[t - DYN_TYPE_POINTER_BASE].pointee);
+  if (dyn_type_is_slice(t)) return dyn_ast_type_is_open(a, a->slices[t - DYN_TYPE_SLICE_BASE].element);
+  if (dyn_type_is_array(t)) return dyn_ast_type_is_open(a, a->arrays[t - DYN_TYPE_ARRAY_BASE].element);
+  if (dyn_type_is_enum(t)) return a->enums[t - DYN_TYPE_ENUM_BASE].open_instance;
+  return dyn_type_is_struct(t) && a->structs[t - DYN_TYPE_STRUCT_BASE].open_instance;
+}
+static bool layout_struct(uint32_t, DynAstProgram *, unsigned char *, const DynSource *, unsigned *);
+static bool layout_enum(uint32_t, DynAstProgram *, unsigned char *, const DynSource *, unsigned *);
+static void fill_instances(DynAstProgram *a) {
+  if (a->filling_instances) return;
+  a->filling_instances = true;
+  /* Filling one instance may create more of either kind. */
+  while (a->instances_filled < a->struct_count || a->enums_filled < a->enum_count) {
+  for (uint32_t i = a->enums_filled; i < a->enum_count; ++i) {
+    DynAstEnum en = a->enums[i];
+    if (!en.template_of || en.open_instance) continue;
+    DynAstEnum model = a->enums[en.template_of - 1];
+    uint32_t start = (uint32_t)a->variant_count;
+    for (uint32_t v = 0; v < model.variant_count && !a->allocation_failed; ++v) {
+      if (!reserve_variant(a)) { a->allocation_failed = true; break; }
+      DynAstVariant variant = a->variants[model.variant_start + v];
+      if (variant.payload_type != DYN_TYPE_VOID)
+        variant.payload_type = dyn_ast_substitute(a, variant.payload_type, en.type_args);
+      a->variants[a->variant_count++] = variant;
+    }
+    a->enums[i].variant_start = start;
+    a->enums[i].variant_count = model.variant_count;
+    a->enums[i].has_payload = model.has_payload;
+    a->enums[i].tag_type = model.tag_type;
+  }
+  a->enums_filled = (uint32_t)a->enum_count;
+  for (uint32_t i = a->instances_filled; i < a->struct_count; ++i) {
+    DynAstStruct st = a->structs[i];
+    if (!st.template_of || st.open_instance) continue;
+    DynAstStruct model = a->structs[st.template_of - 1];
+    uint32_t start = (uint32_t)a->field_count;
+    for (uint32_t f = 0; f < model.field_count && !a->allocation_failed; ++f) {
+      if (!reserve_field(a)) { a->allocation_failed = true; break; }
+      DynAstField field = a->fields[model.field_start + f];
+      field.type = dyn_ast_substitute(a, field.type, st.type_args);
+      a->fields[a->field_count++] = field;
+    }
+    a->structs[i].field_start = start;
+    a->structs[i].field_count = model.field_count;
+  }
+  a->instances_filled = (uint32_t)a->struct_count;
+  }
+  a->filling_instances = false;
+}
+/* Layouts of instances created after the declaration pass. */
+static void layout_instances(DynAstProgram *a) {
+  size_t count = a->struct_count + a->enum_count;
+  unsigned char *state = calloc(count, 1);
+  if (!state) { a->allocation_failed = true; return; }
+  for (uint32_t i = 0; i < a->struct_count; ++i)
+    if (a->structs[i].size || a->structs[i].is_template || a->structs[i].open_instance) state[i] = 2;
+  for (uint32_t i = 0; i < a->enum_count; ++i)
+    if (a->enums[i].size || a->enums[i].is_template || a->enums[i].open_instance)
+      state[a->struct_count + i] = 2;
+  for (uint32_t i = 0; i < a->enum_count; ++i)
+    layout_enum(i, a, state, a->instance_source, &a->instance_errors);
+  for (uint32_t i = 0; i < a->struct_count; ++i)
+    layout_struct(i, a, state, a->instance_source, &a->instance_errors);
+  for (uint32_t i = 0; i < a->enum_count; ++i)
+    if (!a->enums[i].size && !a->enums[i].is_template && !a->enums[i].open_instance)
+      a->enums[i].size = a->enums[i].alignment = 1;
+  /* A failed layout reports once. */
+  for (uint32_t i = 0; i < a->struct_count; ++i)
+    if (!a->structs[i].size && !a->structs[i].is_template && !a->structs[i].open_instance)
+      a->structs[i].size = a->structs[i].alignment = 1;
+  free(state);
+}
+DynType dyn_ast_struct_instance(DynAstProgram *a, uint32_t template_id, const DynType *args) {
+  uint32_t count = a->structs[template_id].type_param_count;
+  for (uint32_t i = 0; i < a->struct_count; ++i)
+    if (a->structs[i].template_of == template_id + 1 &&
+        !memcmp(a->structs[i].type_args, args, count * sizeof(*args)))
+      return DYN_TYPE_STRUCT_BASE + i;
+  if (a->struct_count >= DYN_TYPE_ENUM_BASE - DYN_TYPE_STRUCT_BASE || !reserve_struct(a)) {
+    a->allocation_failed = true;
+    return DYN_TYPE_ERROR;
+  }
+  DynAstStruct model = a->structs[template_id];
+  DynAstStruct st = {.span = model.span, .packed = model.packed, .is_union = model.is_union,
+                     .is_public = model.is_public, .module_owner = model.module_owner,
+                     .template_of = template_id + 1, .type_param_count = count};
+  for (uint32_t i = 0; i < count; ++i) {
+    st.type_args[i] = args[i];
+    st.open_instance |= dyn_ast_type_is_open(a, args[i]);
+  }
+  uint32_t id = (uint32_t)a->struct_count;
+  a->structs[a->struct_count++] = st;
+  if (!a->structs_open && !a->filling_instances) {
+    fill_instances(a);
+    layout_instances(a);
+  }
+  return DYN_TYPE_STRUCT_BASE + id;
+}
+DynType dyn_ast_enum_instance(DynAstProgram *a, uint32_t template_id, const DynType *args) {
+  uint32_t count = a->enums[template_id].type_param_count;
+  for (uint32_t i = 0; i < a->enum_count; ++i)
+    if (a->enums[i].template_of == template_id + 1 &&
+        !memcmp(a->enums[i].type_args, args, count * sizeof(*args)))
+      return DYN_TYPE_ENUM_BASE + i;
+  if (a->enum_count >= DYN_TYPE_POINTER_BASE - DYN_TYPE_ENUM_BASE || !reserve_enum(a)) {
+    a->allocation_failed = true;
+    return DYN_TYPE_ERROR;
+  }
+  DynAstEnum model = a->enums[template_id];
+  DynAstEnum en = {.span = model.span, .tag_type = model.tag_type, .alignment = 1,
+                   .is_public = model.is_public, .module_owner = model.module_owner,
+                   .template_of = template_id + 1, .type_param_count = count};
+  for (uint32_t i = 0; i < count; ++i) {
+    en.type_args[i] = args[i];
+    en.open_instance |= dyn_ast_type_is_open(a, args[i]);
+  }
+  uint32_t id = (uint32_t)a->enum_count;
+  a->enums[a->enum_count++] = en;
+  if (!a->structs_open && !a->filling_instances) {
+    fill_instances(a);
+    layout_instances(a);
+  }
+  return DYN_TYPE_ENUM_BASE + id;
+}
 DynType dyn_ast_substitute(DynAstProgram *a, DynType t, const DynType *args) {
   if (dyn_type_is_param(t))
     return args[t - DYN_TYPE_PARAM_BASE];
+  if (dyn_type_is_enum(t) && a->enums[t - DYN_TYPE_ENUM_BASE].open_instance) {
+    DynAstEnum en = a->enums[t - DYN_TYPE_ENUM_BASE];
+    DynType concrete[DYN_MAX_TYPE_PARAMS];
+    for (uint32_t i = 0; i < en.type_param_count; ++i)
+      concrete[i] = dyn_ast_substitute(a, en.type_args[i], args);
+    return dyn_ast_enum_instance(a, en.template_of - 1, concrete);
+  }
+  if (dyn_type_is_struct(t) && a->structs[t - DYN_TYPE_STRUCT_BASE].open_instance) {
+    DynAstStruct st = a->structs[t - DYN_TYPE_STRUCT_BASE];
+    DynType concrete[DYN_MAX_TYPE_PARAMS];
+    for (uint32_t i = 0; i < st.type_param_count; ++i)
+      concrete[i] = dyn_ast_substitute(a, st.type_args[i], args);
+    return dyn_ast_struct_instance(a, st.template_of - 1, concrete);
+  }
   if (dyn_type_is_pointer(t)) {
     DynAstPointer p = a->pointers[t - DYN_TYPE_POINTER_BASE];
     DynType pointee = dyn_ast_substitute(a, p.pointee, args);
@@ -1012,21 +1119,6 @@ static uint64_t declaration_owner(DynSpan name, const DynSource *s) {
   }
   return value;
 }
-static bool tag_fits(DynType t, uint64_t bits, bool negative) {
-  unsigned width = t == DYN_TYPE_I8 || t == DYN_TYPE_U8     ? 8
-                   : t == DYN_TYPE_I16 || t == DYN_TYPE_U16 ? 16
-                   : t == DYN_TYPE_I32 || t == DYN_TYPE_U32 ? 32
-                                                            : 64;
-  bool sign = t == DYN_TYPE_I8 || t == DYN_TYPE_I16 || t == DYN_TYPE_I32 ||
-              t == DYN_TYPE_I64 || t == DYN_TYPE_ISIZE;
-  if (!sign)
-    return !negative && (width == 64 || bits < UINT64_C(1) << width);
-  int64_t value = (int64_t)bits;
-  if (negative != (value < 0))
-    return false;
-  return width == 64 || (value >= -(INT64_C(1) << (width - 1)) &&
-                         value < INT64_C(1) << (width - 1));
-}
 static uint64_t type_layout(DynType t, bool alignment, DynAstProgram *a,
                             unsigned char *state, const DynSource *s,
                             unsigned *errors);
@@ -1040,6 +1132,10 @@ static bool layout_struct(uint32_t id, DynAstProgram *a, unsigned char *state,
     diagnostic_span(a->structs[id].span, s, errors,
                     "struct contains itself by value");
     return false;
+  }
+  if (a->structs[id].is_template || a->structs[id].open_instance) {
+    state[id] = 2;
+    return true;
   }
   state[id] = 1;
   DynAstStruct *st = &a->structs[id];
@@ -1062,6 +1158,11 @@ static bool layout_struct(uint32_t id, DynAstProgram *a, unsigned char *state,
       return false;
     if (align > max_align)
       max_align = align;
+    if (st->is_union) {
+      f->offset = 0;
+      if (field_size > size) size = field_size;
+      continue;
+    }
     if (size > limit - (align - 1)) goto oversized_struct;
     size = (size + align - 1) / align * align;
     f->offset = size;
@@ -1125,6 +1226,7 @@ static uint64_t type_layout(DynType t, bool alignment, DynAstProgram *a,
 static bool layout_enum(uint32_t id, DynAstProgram *a, unsigned char *state,
                         const DynSource *s, unsigned *errors) {
   size_t slot = a->struct_count + id;
+  if (a->enums[id].is_template || a->enums[id].open_instance) state[slot] = 2;
   if (state[slot] == 2) return true;
   if (state[slot] == 1) {
     diagnostic_span(a->enums[id].name, s, errors,
@@ -1141,11 +1243,6 @@ static bool layout_enum(uint32_t id, DynAstProgram *a, unsigned char *state,
     DynType p = a->variants[en->variant_start + j].payload_type;
     if (p == DYN_TYPE_VOID)
       continue;
-    if (dyn_type_is_enum(p)) {
-      diagnostic_span(a->variants[en->variant_start + j].name, s, errors,
-                      "enum payload cannot contain enum directly");
-      continue;
-    }
     uint64_t pa = type_layout(p, true, a, state, s, errors),
              ps = type_layout(p, false, a, state, s, errors);
     if (!pa || !ps) {
@@ -1238,14 +1335,25 @@ static uint64_t owner_key_value(const char *owner_key) {
 }
 #include "ast_compact_declarations.inc"
 
+static bool compact_close_structs(DynAstProgram *a) {
+  fill_instances(a);
+  return !a->allocation_failed;
+}
+static bool compact_open_late_instances(DynAstProgram *a) {
+  a->structs_open = false;
+  return true;
+}
 static bool lower_declarations(DynSpan root, const DynSource *s, DynAstProgram *a,
                                unsigned *errors, const char *owner_key) {
   unsigned before = *errors;
   DynNameIndex functions = {0}, globals = {0};
+  a->structs_open = true;
+  a->instance_source = s;
   bool declarations_ok = compact_add_enum_names(s, a, errors) &&
       compact_add_struct_names(s, a, errors) && compact_add_alias_names(s, a, errors) &&
       compact_add_struct_fields(s, a, errors) && compact_add_enum_variants(s, a, errors) &&
-      compute_layouts_v2(a, s, errors) && compact_add_globals(s, a, errors, &globals) &&
+      compact_close_structs(a) &&
+      compute_layouts_v2(a, s, errors) && compact_open_late_instances(a) && compact_add_globals(s, a, errors, &globals) &&
       compact_add_asserts(s, a, errors) && compact_add_function_signatures(s, a, errors, &functions, &globals);
   if (!declarations_ok) {
     ast_name_index_free(&functions);
@@ -1258,6 +1366,8 @@ static bool lower_declarations(DynSpan root, const DynSource *s, DynAstProgram *
     return false;
   }
   compact_lower_function_bodies(s, a, errors, owner_key, &functions);
+  *errors += a->instance_errors;
+  a->instance_errors = 0;
   if (a->invalid_array_extent.end_byte)
     diagnostic(a->invalid_array_extent, s, errors,
         "array length requires nonnegative integer constant arithmetic (no runtime values, cycles, overflow, or division by zero)");

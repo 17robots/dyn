@@ -42,6 +42,7 @@ void dyn_unwind_jump(void *p) { (void)p;abort(); }
 uintptr_t dyn_unwind_tables_start(void) { return 0; }
 uintptr_t dyn_unwind_tables_stop(void) { return 0; }
 void dyn_panic(const char *p,uint64_t n) { (void)p;(void)n;abort(); }
+void dyn_fault_report(void) { abort(); }
 static void exercise(void) {
  for(unsigned k=0;k<1000;k++) {
   struct frame a,b;memset(&a,0xa5,sizeof a);memset(&b,0x5a,sizeof b);

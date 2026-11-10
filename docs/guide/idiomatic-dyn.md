@@ -18,7 +18,7 @@ errors; importing the same module under multiple aliases within one file is a
 use "std/io"
 
 fn greeting(name: []const u8) {
-  _ = io.println(io.stdout(), "hello, {}", name)
+  io.println("hello, {}", name)
 }
 
 fn main() {
@@ -233,7 +233,7 @@ defer { release(resource) }
 ## Control flow and data modeling
 
 Prefer early returns for invalid input and failure. Use `case` when modeling a closed set; every case
-must be exhaustive. Use payload enums when the alternatives carry different data.
+must be exhaustive. Use a kind enum beside a struct when the alternatives carry different data.
 
 ```dyn
 enum State { Pending, Complete: usize }
@@ -265,12 +265,16 @@ storage. None of these require printing to be a compiler builtin or allocate imp
 ```dyn
 use "std/io" io
 
-result := io.println(io.stdout(), "count: {}", count)
-if result.status == io.Status.Error { #panic("stdout write failed") }
+io.println("count: {}", count)
+result := io.println_to(log_file, "count: {}", count)
+if result.status == io.Status.Error { #panic("log write failed") }
 ```
 
-`io.print` supports `{}` substitutions and `{{`/`}}` literal braces. Pass `io.stdout()`
-or `io.stderr()` to `io.print` or `io.println`. `std/terminal` provides terminal controls.
+`io.print` and `io.println` write to standard output and return nothing, so a terminal print needs
+no `_ =`; `io.eprint` and `io.eprintln` write to standard error. They ignore write failures such
+as a closed pipe. `io.print_to` and `io.println_to` take any writer and return the `Transfer`, so
+a discarded result there stays visible as `_ =`. All of them support `{}` substitutions and
+`{{`/`}}` literal braces. `std/terminal` provides terminal controls.
 Treat partial operations and native errors as ordinary results. Do not assume text is C-compatible;
 use `std/c` helpers at explicit FFI boundaries.
 
@@ -283,7 +287,7 @@ extern fn native_read "read"(descriptor: i32, data: rawptr, count: usize) isize
 ```
 
 Pass explicit `--link` inputs. C variadics are only for foreign ABI declarations and accept the C-safe
-promoted types. Do not expose Dyn slices, strings, `any`, or payload enums as if they were C values.
+promoted types. Do not expose Dyn slices, strings, or `any` as if they were C values.
 
 ## Practical rules
 
@@ -298,3 +302,31 @@ promoted types. Do not expose Dyn slices, strings, `any`, or payload enums as if
 - Keep imported names qualified and publish only the module's intended API.
 - Use `_ = function()` when intentionally discarding a non-void result.
 - Compile with `dyn check DIR`; test debug and release builds.
+
+## Check errors once
+
+When several steps can fail, keep the first failure in one place and check it at the end. Each step
+does nothing once a failure is recorded:
+
+```dyn
+use "std/fs"
+use "std/io"
+
+struct Writer { file: fs.File, failure: io.Failure }
+
+fn put(writer: *Writer, text: []const u8) {
+  if writer.failure.kind != io.Kind.Ok {
+    return
+  }
+  writer.failure = fs.write(&writer.file, text).failure
+}
+
+fn save(file: fs.File) io.Failure {
+  writer := Writer{ file: file }
+  put(&writer, "name: ")
+  put(&writer, "dyn\n")
+  return writer.failure
+}
+```
+
+The code stays straight, a failure stops the remaining work, and there is one `if` at the end.

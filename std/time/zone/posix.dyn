@@ -1,3 +1,4 @@
+use "std/io" io
 use "std/fs" fs
 use "std/process" process
 
@@ -7,12 +8,12 @@ const tzif_limit: usize = 1048576
 fn read_zone(arena: *mem.Arena, name: []const u8, path: []const u8) ZoneResult {
   mark := mem.arena_mark(arena)
   file := fs.read_all(arena, path, tzif_limit)
-  if !file.ok {
+  if file.failure.kind != io.Kind.Ok {
     mem.arena_rewind(arena, mark)
-    return ZoneResult{ kind: file.kind, error: file.error }
+    return ZoneResult{ failure: io.Failure{ kind: file.failure.kind, native: file.failure.native } }
   }
   parsed := parse_tzif(arena, name, file.value)
-  if !parsed.ok {
+  if parsed.failure.kind != io.Kind.Ok {
     mem.arena_rewind(arena, mark)
   }
   return parsed
@@ -25,7 +26,7 @@ fn posix_load(arena: *mem.Arena, name: []const u8) ZoneResult {
   path[#len(zoneinfo_root)] = '/'
   _ = mem.copy(path[#len(zoneinfo_root) + 1..], name)
   loaded := read_zone(arena, name, path)
-  if !loaded.ok {
+  if loaded.failure.kind != io.Kind.Ok {
     mem.arena_rewind(arena, mark)
   }
   return loaded
@@ -49,7 +50,7 @@ fn local_name(arena: *mem.Arena) []const u8 {
 
 fn posix_system(arena: *mem.Arena) ZoneResult {
   variable := process.environment(arena, "TZ")
-  if variable.ok && variable.found && #len(variable.value) != 0 {
+  if variable.failure.kind == io.Kind.Ok && variable.found && #len(variable.value) != 0 {
     text := variable.value[..]
     if text[0] == ':' {
       text = text[1..]
@@ -58,14 +59,14 @@ fn posix_system(arena: *mem.Arena) ZoneResult {
       return read_zone(arena, text, text)
     }
     loaded := load(arena, text)
-    if loaded.ok {
+    if loaded.failure.kind == io.Kind.Ok {
       return loaded
     }
     return parse_posix(arena, text)
   }
   loaded := read_zone(arena, local_name(arena), "/etc/localtime")
-  if !loaded.ok && loaded.kind == errors.Kind.NotFound {
-    return ZoneResult{ value: utc(), ok: true }
+  if loaded.failure.kind != io.Kind.Ok && loaded.failure.kind == io.Kind.NotFound {
+    return ZoneResult{ value: utc() }
   }
   return loaded
 }

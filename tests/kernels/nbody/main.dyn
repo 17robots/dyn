@@ -1,0 +1,38 @@
+use "std/io"
+use "std/mem"
+struct Body { x: f64, y: f64, z: f64, vx: f64, vy: f64, vz: f64, m: f64 }
+fn step(b: []Body, dt: f64) {
+  n := #len(b)
+  for i in 0..n {
+    for j in (i + 1)..n {
+      dx := b[i].x - b[j].x
+      dy := b[i].y - b[j].y
+      dz := b[i].z - b[j].z
+      d2 := dx * dx + dy * dy + dz * dz + 0.01
+      mag := dt / (d2 * d2)
+      b[i].vx -= dx * b[j].m * mag
+      b[i].vy -= dy * b[j].m * mag
+      b[i].vz -= dz * b[j].m * mag
+      b[j].vx += dx * b[i].m * mag
+      b[j].vy += dy * b[i].m * mag
+      b[j].vz += dz * b[i].m * mag
+    }
+  }
+  for *p in b {
+    p.x += dt * p.vx
+    p.y += dt * p.vy
+    p.z += dt * p.vz
+  }
+}
+fn main() {
+  arena := mem.arena_create(0)
+  bodies := mem.push_array(Body, arena, 64)
+  for i in 0..64 {
+    v := #cast(f64, i)
+    bodies[i] = Body{ x: v, y: v * 0.5, z: v * 0.25, m: 1.0 + v }
+  }
+  for s in 0..200000 {
+    step(bodies, 0.001)
+  }
+  io.println("{}", #cast(i64, bodies[3].x * 1000000.0))
+}

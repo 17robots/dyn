@@ -1,0 +1,38 @@
+use "std/io" io
+// Shared failure for parsers and decoders. Input decides the result, so a
+// failure names where the input went wrong instead of a system error code.
+pub enum Kind { Ok, Syntax, Truncated, Overflow, Capacity, Unsupported, Checksum, Overlap }
+
+// Kind.Ok is the zero value, so a zero Failure means success. The message is
+// static text; offset counts bytes from the start of the input.
+pub struct Failure { kind: Kind, offset: usize, message: []const u8 }
+
+// A stream decoder fails on its input text or on the stream that carries it.
+pub enum StreamKind { Ok, Parse, Io }
+pub struct StreamFailure { kind: StreamKind, parse: Failure, io: io.Failure }
+
+pub fn parse_failure(kind: Kind, offset: usize, message: []const u8) StreamFailure {
+  return StreamFailure{ kind: StreamKind.Parse, parse: Failure{ kind: kind, offset: offset, message: message } }
+}
+
+pub fn io_failure(kind: io.Kind, native: isize) StreamFailure {
+  return StreamFailure{ kind: StreamKind.Io, io: io.Failure{ kind: kind, native: native } }
+}
+
+// Payload readers speak io.Transfer, so a parse failure maps to the nearest io kind.
+pub fn stream_result(failure: StreamFailure, transferred: usize) io.Transfer {
+  kind := io.Kind.InvalidInput
+  if failure.kind == StreamKind.Io {
+    kind = failure.io.kind
+  } else if failure.parse.kind == Kind.Capacity {
+    kind = io.Kind.Capacity
+  } else if failure.parse.kind == Kind.Overflow {
+    kind = io.Kind.Overflow
+  }
+  return io.Transfer{ transferred: transferred, error: failure.io.native, kind: kind, status: io.Status.Error }
+}
+
+// A value and how decoding went. value is zero or partial on failure.
+pub struct Result($T: type) { value: T, failure: Failure }
+// Decoded or encoded bytes, for codecs with nothing else to report.
+pub type Bytes = Result([]u8)

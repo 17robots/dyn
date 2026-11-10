@@ -1,0 +1,103 @@
+fn plain_i32(xs: []i32) i32 {
+  t: i32 = 0
+  for x in xs {
+    t += x
+  }
+  return t
+}
+fn start_u32(xs: []u32, start: u32) u32 {
+  t := start
+  for x in xs {
+    t = t + x
+  }
+  return t
+}
+fn square_i32(xs: []i32) i32 {
+  t: i32 = 0
+  for x in xs {
+    t += x * x
+  }
+  return t
+}
+fn square_u32(xs: []u32) u32 {
+  t: u32 = 0
+  for x in xs {
+    t += x * x
+  }
+  return t
+}
+fn plain_i64(xs: []i64) i64 {
+  t: i64 = 0
+  for x in xs {
+    t += x
+  }
+  return t
+}
+fn plain_u64(xs: []u64) u64 {
+  t: u64 = 0
+  for x in xs {
+    t += x
+  }
+  return t
+}
+fn indexed_i32(xs: []i32) i32 {
+  t: i32 = 0
+  for i in 0..#len(xs) {
+    t += xs[i]
+  }
+  return t
+}
+fn indexed_square(xs: []u32, n: usize) u32 {
+  t: u32 = 0
+  for i in 0..n {
+    t += xs[i] * xs[i]
+  }
+  return t
+}
+fn check(ok: bool) {
+  if !ok {
+    #panic("sum")
+  }
+}
+fn main() {
+  a: [23]i32
+  b: [23]u32
+  c: [23]i64
+  d: [23]u64
+  for n in 0..24 {
+    expect_i32: i32 = 0
+    expect_square: i32 = 0
+    expect_u32: u32 = 7
+    expect_square_u32: u32 = 0
+    expect_i64: i64 = 0
+    expect_u64: u64 = 0
+    for i in 0..n {
+      a[i] = #cast(i32, i) * 123456789 - 40000
+      b[i] = #cast(u32, a[i])
+      c[i] = #cast(i64, a[i]) * 1000000
+      d[i] = #cast(u64, c[i])
+      expect_i32 = expect_i32 + a[i]
+      square := a[i]
+      square = square * a[i]
+      expect_square = expect_square + square
+      expect_u32 = expect_u32 + b[i]
+      square_u := b[i]
+      square_u = square_u * b[i]
+      expect_square_u32 = expect_square_u32 + square_u
+      expect_i64 = expect_i64 + c[i]
+      expect_u64 = expect_u64 + d[i]
+    }
+    check(plain_i32(a[0..n]) == expect_i32)
+    check(start_u32(b[0..n], 7) == expect_u32)
+    check(square_i32(a[0..n]) == expect_square)
+    check(square_u32(b[0..n]) == expect_square_u32)
+    check(indexed_i32(a[0..n]) == expect_i32)
+    check(indexed_square(b[0..n], n) == expect_square_u32)
+    check(plain_i64(c[0..n]) == expect_i64)
+    check(plain_u64(d[0..n]) == expect_u64)
+  }
+  a[0] = 5
+  before := plain_i32(a[0..1])
+  a[0] = 6
+  check(before == 5 && plain_i32(a[0..1]) == 6)
+}

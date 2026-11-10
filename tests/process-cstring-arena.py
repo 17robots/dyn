@@ -10,8 +10,8 @@ DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 macos = (ROOT / 'std/process/macos.dyn').read_text()
 process = (ROOT / 'std/process/process.dyn').read_text()
 # Compile the production conversion/setup bodies, replacing only OS entry points.
-adapter = ('use "std/mem" mem\nuse "std/c" c\nuse "std/bytes" bytes\n'
-           'use "std/errors" error_kinds\n'
+adapter = ('use "std/mem" mem\nuse "std/c" c\nuse "std/parse" parse\nuse "std/bytes" bytes\n'
+           'use "std/io" error_kinds\nuse "std/io" io\n'
            + process[process.index('pub struct Redirect'):process.index('pub struct ExitResult')]
            + macos[macos.index('struct CString'):macos.index('fn wait_native')])
 MOCKS = '''
@@ -19,8 +19,8 @@ fn native_errno() *i32 { #panic("unexpected errno") }
 fn native_fcntl(descriptor: i32, command: i32, minimum: i32) i32 { return descriptor + 10 }
 fn native_close(descriptor: i32) i32 { return 0 }
 fn native_pipe(descriptors: *i32) i32 {
-  descriptors[..2][0] = 3
-  descriptors[..2][1] = 4
+  #slice(descriptors, 2)[0] = 3
+  #slice(descriptors, 2)[1] = 4
   return 0
 }
 fn native_fork() i32 { return 42 }
@@ -42,7 +42,7 @@ fn main() {
   }
   text := c_string(arena, "café-😀")
   parsed := c.bytes_from_string(text, 16)
-  if !parsed.ok || !bytes.equal(parsed.value, "café-😀") { #panic("CString bytes") }
+  if parsed.failure.kind != parse.Kind.Ok || !bytes.equal(parsed.value, "café-😀") { #panic("CString bytes") }
   before_invalid := mem.arena_mark(arena)
   invalid: [3]u8 = ['a', 0, 'b']
   if c_string(arena, invalid[..]) != nil || mem.arena_mark(arena) != before_invalid {
@@ -50,19 +50,19 @@ fn main() {
   }
   arguments: [3][]const u8 = ["program", "", "café-😀"]
   vector := c_vector(arena, arguments[..])
-  if vector == nil || vector[..4][3].value != nil { #panic("vector sentinel") }
+  if vector == nil || #slice(vector, 4)[3].value != nil { #panic("vector sentinel") }
   for at in 0..3 {
-    item := c.bytes_from_string(vector[..4][at].value, 32)
-    if !item.ok || !bytes.equal(item.value, arguments[at]) { #panic("vector bytes") }
+    item := c.bytes_from_string(#slice(vector, 4)[at].value, 32)
+    if item.failure.kind != parse.Kind.Ok || !bytes.equal(item.value, arguments[at]) { #panic("vector bytes") }
   }
   before_spawn := mem.arena_mark(arena)
   environment: [1][]const u8 = ["KEY=value"]
   result := spawn_native(arena, "/program", arguments[..], Options{environment: environment[..], directory: "/tmp"})
-  if !result.ok || result.value.handle != 42 || mem.arena_mark(arena) != before_spawn {
+  if result.failure.kind != io.Kind.Ok || result.value.handle != 42 || mem.arena_mark(arena) != before_spawn {
     #panic("spawn setup and rewind")
   }
   rejected := spawn_native(arena, invalid[..], arguments[..], Options{})
-  if rejected.ok || mem.arena_mark(arena) != before_spawn { #panic("failed setup rewind") }
+  if rejected.failure.kind == io.Kind.Ok || mem.arena_mark(arena) != before_spawn { #panic("failed setup rewind") }
   if !bytes.equal(c.bytes_from_string(text, 16).value, "café-😀") { #panic("live allocation") }
 }
 '''

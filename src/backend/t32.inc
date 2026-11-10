@@ -116,10 +116,6 @@ static void t32_mla(BackendContext *c, unsigned d, unsigned n, unsigned m, unsig
 static void t32_mls(BackendContext *c, unsigned d, unsigned n, unsigned m, unsigned a) { t32w(c,0xFB00|n,a<<12|d<<8|0x10|m); }
 static void t32_umull(BackendContext *c, unsigned lo, unsigned hi, unsigned n, unsigned m) { t32w(c,0xFBA0|n,lo<<12|hi<<8|m); }
 static void t32_udiv(BackendContext *c, unsigned d, unsigned n, unsigned m) { t32w(c,0xFBB0|n,0xF0F0|d<<8|m); }
-static void t32_clz(BackendContext *c, unsigned d, unsigned m) { t32w(c,0xFAB0|m,0xF080|d<<8|m); }
-/* Soft mode replaces s16-s31 with a fixed 64-byte bank immediately
-   below the unbiased frame base. Locals move down by 64; saved core
-   registers, incoming stack arguments and T32_BIAS do not move. */
 static void t32_soft_slot(BackendContext *c, bool load, unsigned r, unsigned s);
 /* VFP transfers. */
 static void t32_to_s(BackendContext *c, unsigned s, unsigned r) { if (c->soft_float) { t32_soft_slot(c,false,r,s); return; } t32w(c,0xEE00|s>>1,r<<12|0x0A10|(s&1)<<7); }
@@ -447,17 +443,6 @@ static void t32_store_descriptor(BackendContext *c, bool any) {
   t32_mem(c,T32_STR,0,9,0);
   if (any) { t32_mem(c,T32_STR,4,9,4); t32_mem(c,T32_STR,1,9,8); } else t32_mem(c,T32_STR,1,9,4);
 }
-static void t32_match_begin(BackendContext *c) { t32_li(c,7,0); t32_high_imm(c,R_8,0); }
-static void t32_match_tag(BackendContext *c, uint64_t tag) {
-  t32_li(c,T32_T1,(uint32_t)tag); T32_OP(T32_EOR,T32_T1,0,T32_T1);
-  t32_li(c,T32_T2,(uint32_t)(tag >> 32)); T32_OP(T32_EOR,T32_T2,4,T32_T2);
-  T32_OP(T32_ORR,T32_T1,T32_T1,T32_T2); t32_clz(c,T32_T1,T32_T1);
-  t32_shift_imm(c,T32_LSR,T32_T1,T32_T1,5); T32_OP(T32_ORR,7,7,T32_T1);
-}
-static void t32_match_test(BackendContext *c) { t32_li(c,T32_T2,0); t32_compare_regs(c,7,T32_T2,T32_T2,T32_T2); }
-/* Ordinary integer AAPCS helpers clobber r0-r3/r12/lr. Preserve C,
-   D and SI low words; other logical words live in callee-saved registers
-   or this frame's private bank. Keep eight-byte stack alignment. */
 static void t32_soft_helper(BackendContext *c, unsigned runtime, bool input32,
                             bool binary, bool result32) {
   bare_stack_check(c,16);

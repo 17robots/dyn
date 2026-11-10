@@ -30,9 +30,9 @@ fn name(level: Level) []const u8 {
   }
   return "error"
 }
-pub fn write(target: *Logger, level: Level, message: []const u8, fields: []const Field) stream.Result {
+pub fn write(target: *Logger, level: Level, message: []const u8, fields: []const Field) stream.Transfer {
   if !enabled(level, target.minimum) {
-    return stream.Result{ status: stream.Status.Complete }
+    return stream.Transfer{ status: stream.Status.Complete }
   }
   total: usize = 0
   first := stream.write_all(target.output, name(level))
@@ -74,5 +74,5 @@ pub fn write(target: *Logger, level: Level, message: []const u8, fields: []const
     ending.transferred += total
     return ending
   }
-  return stream.Result{ transferred: total + ending.transferred, status: stream.Status.Complete }
+  return stream.Transfer{ transferred: total + ending.transferred, status: stream.Status.Complete }
 }

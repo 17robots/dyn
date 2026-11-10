@@ -81,5 +81,24 @@ class EditorContract(unittest.TestCase):
             self.assertTrue(diagnostics[-1],diagnostics)
             self.assertEqual(path.read_text(),source,'LSP must not save an unsaved buffer')
 
+    def test_hover_names_an_adapting_constant(self):
+        with tempfile.TemporaryDirectory(prefix='dyn editor ') as directory:
+            root = Path(directory).resolve()
+            path = root/'main.dyn'
+            source = 'const LIMIT := 64\n\nfn main() {\n  small: u8 = LIMIT\n  if small != 64 {\n    #panic("wrong")\n  }\n}\n'
+            path.write_text(source)
+            doc = {'uri':path.as_uri()}
+            position = {'line':3,'character':15}
+            responses = run([
+                message('textDocument/didOpen',{'textDocument':dict(doc,languageId='dyn',version=1,text=source)}),
+                message('textDocument/hover',{'textDocument':doc,'position':position},2),
+                message('textDocument/definition',{'textDocument':doc,'position':position},3),
+            ], root)
+            by_id = {r['id']:r for r in responses if 'id' in r}
+            hover = json.dumps(by_id[2]['result'])
+            self.assertIn('LIMIT',hover)
+            self.assertIn('const',hover)
+            self.assertEqual(by_id[3]['result']['range']['start']['line'],0,by_id[3])
+
 if __name__ == '__main__':
     unittest.main()

@@ -17,7 +17,7 @@ fn mapping_allocate(size: usize) Mapping {
   if size == 0 || aligned < size || aligned > capacity - bare_used {
     return Mapping{ error: -12 }
   }
-  bytes := (#cast(*u8, start + bare_used))[..size]
+  bytes := #slice(#cast(*u8, start + bare_used), size)
   bare_used += aligned
   return Mapping{ bytes: bytes, committed: size, ok: true }
 }

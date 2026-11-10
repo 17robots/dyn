@@ -23,7 +23,7 @@ use "std/io"
 enum Error { None, Bad }
 struct Result { error:Error, code:i64, memory:rawptr, size:u64, ok:bool }
 struct Triple { a:u64, b:u64, c:u64 }
-struct Defaults { a:u64=10, b:u64=20, c:u64 }
+struct Defaults { a:u64, b:u64, c:u64 }
 struct Mixed { a:f64, b:u64 }
 struct Floats { a:f64, b:f32, c:u64 }
 struct Nested { a:[3]u64, text:[]const u8 }
@@ -35,7 +35,7 @@ pub fn allocation(memory:rawptr,size:u64) Result {
 }
 pub fn overlap(p:*Triple) Triple { return Triple{a:p.b,b:p.c,c:p.a} }
 pub fn effects(p:*u64) Triple { return Triple{c:p.*,a:mutate(p),b:p.*} }
-pub fn defaults() Defaults { return Defaults{b:mark(3),c:mark(4)} }
+pub fn defaults() Defaults { return Defaults{a:10,b:mark(3),c:mark(4)} }
 pub fn cleanup(p:*Triple) Triple {
   defer { p.a=99
   p.b=98
@@ -49,7 +49,7 @@ pub fn raw() [3]u64 { return [7,8,9] }
 pub fn desc() []const u8 { return "ok" }
 pub fn checked(p:*u64,q:*u64) Triple { return Triple{a:p.*,b:q.*,c:mark(5)} }
 fn main() { r:=oracle()
-if r!=0 { _=io.println(io.stderr(),"oracle {}",r)
+if r!=0 { io.eprintln("oracle {}",r)
 #panic("C aggregate oracle") } }
 '''
 

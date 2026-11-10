@@ -107,6 +107,7 @@ void lsp_declaration_documents(LspDocument *documents, size_t count);
 const char *lsp_file_path(const char *uri);
 char *lsp_directory(const char *path);
 char *lsp_project_root(const char *uri);
+char *lsp_root_directory(const char *root);
 size_t lsp_imports(const LspDocument *document, LspImport *imports,
                    size_t capacity);
 char *lsp_resolve_import(const LspDocument *document, const char *path);

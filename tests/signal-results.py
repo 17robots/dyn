@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 SOURCE = '''use "std/process/signal" signal
 use "std/io" io
-use "std/errors" errors
+use "std/io" errors
 
 fn check(ok: bool) {
   if !ok {
@@ -22,24 +22,25 @@ fn check(ok: bool) {
 
 fn main() {
   zero: signal.Watch
-  check(signal.poll(&zero).kind == errors.Kind.InvalidState)
-  check(signal.close(&zero).ok)
-  check(signal.watch(signal.Set{}).kind == errors.Kind.InvalidInput)
+  check(signal.poll(&zero).failure.kind == errors.Kind.InvalidState)
+  signal.close(&zero)
+  check(signal.watch(signal.Set{}).failure.kind == errors.Kind.InvalidInput)
   opened := signal.watch(signal.Set{ interrupt: true, terminate: true, hangup: HANGUP })
-  check(opened.ok)
+  check(opened.failure.kind == io.Kind.Ok)
   state := opened.value
   first := signal.poll(&state)
-  check(first.ok && first.value == signal.Kind.None)
+  check(first.found && first.value == signal.Kind.None)
   if WAIT {
-    _ = io.println(io.stdout(), "ready")
+    io.println("ready")
     for i in 0..3 {
       next := signal.wait(&state)
-      check(next.ok)
-      _ = io.println(io.stdout(), "{}", #cast(u32, next.value))
+      check(next.found)
+      io.println("{}", #cast(u32, next.value))
     }
   }
-  check(signal.close(&state).ok && !state.active)
-  _ = io.println(io.stdout(), "closed")
+  signal.close(&state)
+  check(!state.active)
+  io.println("closed")
 }
 '''
 

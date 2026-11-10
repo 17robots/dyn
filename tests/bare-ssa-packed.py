@@ -76,7 +76,7 @@ fn('anycall','x:any','u32','return anypack(#cast(i32,17),#cast(f64,3.5),"ok",x)'
 # Caller supplies an actual any; the packed fourth entry must box its descriptor.
 src+='extern fn anyoracle() u32\n'
 checks.append('anyoracle()!=0')
-src+='pub fn anydebug() { _=io.println(io.stdout(),"any={}",anyoracle()) }\n'
+src+='pub fn anydebug() { io.println("any={}",anyoracle()) }\n'
 c='''typedef unsigned W; typedef unsigned long long U;
 extern W anycall(U,W);
 W inspect(W p,W n) { if(n!=4 || (p&7))return 1; unsigned char *a=(void*)p;
@@ -94,10 +94,10 @@ src+='fn main() {\nanydebug()\n'+''.join(f'if {x} {{ #panic("case{i}") }}\n' for
 
 cases={
 'anyreturn':'pub fn bad(x:any) any { return x }\nfn main() {}',
-'pointer':'fn packed(x:...u32) u32 { return #cast(u32,#len(x)) }\nfn main() { p:=packed\n_=p(1) }',
-'generic':'fn packed(x:...$T) u32 { return #cast(u32,#len(x)) }\nfn main() { _=packed(1) }',
-'groups512':'pub fn packed('+','.join(f'a{i}:u32' for i in range(512))+',x:...u32) u32 { return #cast(u32,#len(x)) }\nfn main() { _=packed('+','.join(['1']*512)+') }',
-'extras513':'pub fn packed(x:...u32) u32 { return #cast(u32,#len(x)) }\nfn main() { _=packed('+','.join(['1']*513)+') }'
+'pointer':'fn packed_call(x:...u32) u32 { return #cast(u32,#len(x)) }\nfn main() { p:=packed_call\n_=p(1) }',
+'generic':'fn packed_call(x:...$T) u32 { return #cast(u32,#len(x)) }\nfn main() { _=packed_call(1) }',
+'groups512':'pub fn packed_call('+','.join(f'a{i}:u32' for i in range(512))+',x:...u32) u32 { return #cast(u32,#len(x)) }\nfn main() { _=packed_call('+','.join(['1']*512)+') }',
+'extras513':'pub fn packed_call(x:...u32) u32 { return #cast(u32,#len(x)) }\nfn main() { _=packed_call('+','.join(['1']*513)+') }'
 }
 
 def run_guest(command):

@@ -15,32 +15,32 @@ use "std/io" io
 use "std/net/http" http
 use "std/bytes" bytes
 use "std/mem" mem
-use "std/errors" errors
+use "std/io" errors
 struct Oracle { expected: []const u8, at: usize }
-fn oracle_write(raw: rawptr, data: []const u8) io.Result {
+fn oracle_write(raw: rawptr, data: []const u8) io.Transfer {
   oracle := #cast(*Oracle, raw)
   if #len(data) > #len(oracle.expected) - oracle.at { #panic("extra request bytes") }
   if !bytes.equal(data, oracle.expected[oracle.at..oracle.at + #len(data)]) { #panic("request wire") }
   oracle.at += #len(data)
-  return io.Result{ transferred: #len(data), status: io.Status.Complete }
+  return io.Transfer{ transferred: #len(data), status: io.Status.Complete }
 }
 fn request_check(body: []const u8, expected: []const u8) {
   arena := mem.arena_create(0)
   feed := Feed{ data: "HTTP/1.1 204 No Content\r\n\r\n", step: 1 }
   oracle := Oracle{ expected: expected }
   got := http.client_do(arena, io.Reader{ data: &feed, read: read_feed }, io.Writer{ data: &oracle, write: oracle_write }, "POST", "?x", "host", body)
-  if !got.ok || oracle.at != #len(expected) { #panic("large request") }
+  if got.failure.kind != errors.Kind.Ok || oracle.at != #len(expected) { #panic("large request") }
   mem.arena_release(arena)
 }
-fn error_read(raw: rawptr, data: []u8) io.Result {
+fn error_read(raw: rawptr, data: []u8) io.Transfer {
   _ = raw
   _ = data
-  return io.Result{ kind: errors.Kind.PermissionDenied, error: 0, status: io.Status.Error }
+  return io.Transfer{ kind: errors.Kind.PermissionDenied, error: 0, status: io.Status.Error }
 }
-fn error_write(raw: rawptr, data: []const u8) io.Result {
+fn error_write(raw: rawptr, data: []const u8) io.Transfer {
   _ = raw
   _ = data
-  return io.Result{ kind: errors.Kind.PermissionDenied, error: 0, status: io.Status.Error }
+  return io.Transfer{ kind: errors.Kind.PermissionDenied, error: 0, status: io.Status.Error }
 }
 fn io_check(write_failure: bool) {
   arena := mem.arena_create(0)
@@ -49,11 +49,11 @@ fn io_check(write_failure: bool) {
   writer := io.Writer{ write: sink }
   if write_failure { writer.write = error_write }
   got := http.client_do(arena, io.Reader{ read: error_read }, writer, "GET", "/", "host", "")
-  if got.ok || got.kind != errors.Kind.PermissionDenied || got.error != 0 || got.detail != http.ErrorKind.Io || #len(got.raw) != 0 || #len(got.body) != 0 || mem.arena_mark(arena) != mark { #panic("I/O rollback") }
+  if got.failure.kind != errors.Kind.PermissionDenied || got.detail != http.ErrorKind.Io || #len(got.raw) != 0 || #len(got.body) != 0 || mem.arena_mark(arena) != mark { #panic("I/O rollback") }
   mem.arena_release(arena)
 }
 struct Feed { data: []const u8, at: usize, cut: usize, step: usize }
-fn read_feed(raw: rawptr, destination: []u8) io.Result {
+fn read_feed(raw: rawptr, destination: []u8) io.Transfer {
   feed := #cast(*Feed, raw)
   count := #len(feed.data) - feed.at
   if feed.at < feed.cut && count > feed.cut - feed.at { count = feed.cut - feed.at }
@@ -61,12 +61,12 @@ fn read_feed(raw: rawptr, destination: []u8) io.Result {
   if count > #len(destination) { count = #len(destination) }
   for i in 0..count { destination[i] = feed.data[feed.at + i] }
   feed.at += count
-  if feed.at == #len(feed.data) { return io.Result{ transferred: count, status: io.Status.End } }
-  return io.Result{ transferred: count, status: io.Status.Complete }
+  if feed.at == #len(feed.data) { return io.Transfer{ transferred: count, status: io.Status.End } }
+  return io.Transfer{ transferred: count, status: io.Status.Complete }
 }
-fn sink(raw: rawptr, data: []const u8) io.Result {
+fn sink(raw: rawptr, data: []const u8) io.Transfer {
   _ = raw
-  return io.Result{ transferred: #len(data), status: io.Status.Complete }
+  return io.Transfer{ transferred: #len(data), status: io.Status.Complete }
 }
 fn check(wire: []const u8, expected: []const u8, valid: bool, method: []const u8, capacity: usize) {
   splits := #len(wire) + 1
@@ -79,7 +79,7 @@ fn check(wire: []const u8, expected: []const u8, valid: bool, method: []const u8
       mark := mem.arena_mark(arena)
       _ = capacity
       got := http.client_do(arena, io.Reader{ data: #cast(rawptr, &feed), read: read_feed }, io.Writer{ write: sink }, method, "/", "host", "")
-      if got.ok != valid { #panic("response validity") }
+      if (got.failure.kind == errors.Kind.Ok) != valid { #panic("response validity") }
       if valid && !bytes.equal(got.body, expected) { #panic("response body") }
       if !valid && got.detail != http.ErrorKind.Invalid { #panic("response error") }
       if !valid && (#len(got.raw) != 0 || #len(got.body) != 0 || mem.arena_mark(arena) != mark) { #panic("response rollback") }
@@ -100,7 +100,7 @@ fn chain_check(wire: []const u8, expected: []const u8, valid: bool) {
       if blocks!=2 { #panic("prior forced chain") }
       feed := Feed{data:wire,step:#cast(usize,step)}
       got := http.client_do(arena,io.Reader{data:&feed,read:read_feed},io.Writer{write:sink},"GET","/","host","")
-      if got.ok!=valid { #panic("chain response validity") }
+      if (got.failure.kind == errors.Kind.Ok) != valid { #panic("chain response validity") }
       if valid {
         if !bytes.equal(got.body,expected) || got.status!=200 { #panic("chain response body") }
         checksum:usize=0
@@ -111,7 +111,7 @@ fn chain_check(wire: []const u8, expected: []const u8, valid: bool) {
         after:usize=0
         for byte in got.raw { after+=#cast(usize,byte) }
         if !bytes.equal(got.body,expected) || #len(got.raw)<#len(expected) || after!=checksum { #panic("chain retained response") }
-      } else if got.kind!=errors.Kind.InvalidInput || got.error!=0 || mem.arena_mark(arena)!=mark || mem.arena_snapshot(arena).blocks!=blocks || #len(got.raw)!=0 || #len(got.body)!=0 {
+      } else if got.failure.kind!=errors.Kind.InvalidInput || mem.arena_mark(arena)!=mark || mem.arena_snapshot(arena).blocks!=blocks || #len(got.raw)!=0 || #len(got.body)!=0 {
         #panic("chain failure rollback")
       }
       for byte in first { if byte!=71 { #panic("chain first prefix") } }
@@ -125,9 +125,9 @@ fn decode_check(wire: []const u8, expected: []const u8, valid: bool, offset: usi
   _ = mem.push_bytes_uninit(arena, 5)
   mark := mem.arena_mark(arena)
   got := http.decode_chunked(arena, wire)
-  if got.ok != valid { #panic("decode validity") }
+  if (got.failure.kind == io.Kind.Ok) != valid { #panic("decode validity") }
   if valid && (!bytes.equal(got.value, expected) || got.count != #len(expected)) { #panic("decode bytes") }
-  if !valid && (#len(got.value) != 0 || got.offset != offset || got.error != 0 || mem.arena_mark(arena) != mark) { #panic("decode rollback") }
+  if !valid && (#len(got.value) != 0 || got.offset != offset || got.failure.native != 0 || mem.arena_mark(arena) != mark) { #panic("decode rollback") }
   mem.arena_release(arena)
 }
 fn live_alias_check() {
@@ -136,12 +136,12 @@ fn live_alias_check() {
   borrowed := mem.push_bytes_uninit(arena, #len(wire))
   _ = mem.copy(borrowed, wire)
   got := http.decode_chunked(arena, borrowed)
-  if !got.ok || got.consumed != 13 || got.count != 3 || !bytes.equal(got.value, "abc") || !bytes.equal(borrowed, wire) { #panic("live decode alias") }
+  if got.failure.kind != io.Kind.Ok || got.consumed != 13 || got.count != 3 || !bytes.equal(got.value, "abc") || !bytes.equal(borrowed, wire) { #panic("live decode alias") }
   method := mem.push_bytes_uninit(arena, 4)
   _ = mem.copy(method, "HEAD")
   feed := Feed{ data: "HTTP/1.1 200 OK\r\nContent-Length: 999999\r\n\r\n", step: 1 }
   result := http.client_do(arena, io.Reader{ data: &feed, read: read_feed }, io.Writer{ write: sink }, method, "/", "host", "")
-  if !result.ok || #len(result.body) != 0 || !bytes.equal(method, "HEAD") { #panic("live method alias") }
+  if result.failure.kind != errors.Kind.Ok || #len(result.body) != 0 || !bytes.equal(method, "HEAD") { #panic("live method alias") }
   mem.arena_release(arena)
 }
 fn main() {

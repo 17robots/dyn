@@ -23,5 +23,5 @@ fn main() {
       }
     }
   }
-  _ = io.println(io.stdout(), "{}", inside)
+  io.println("{}", inside)
 }

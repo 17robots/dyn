@@ -1,0 +1,28 @@
+#!/usr/bin/env python3
+"""std/container/array behaves the same in debug, release and on AArch64."""
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import tempfile
+
+ROOT = Path(__file__).resolve().parents[1]
+DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
+with tempfile.TemporaryDirectory(prefix='dyn-container-array-') as temporary:
+    for name, flags, emulator in (('debug', ['--debug'], []), ('release', ['--release', '--opt-level', '3'], []),
+                                  ('arm', ['--target', 'aarch64-linux', '--release'], ['qemu-aarch64'])):
+        program = Path(temporary) / name
+        subprocess.run([DYN, 'build', str(ROOT / 'tests/container-array'), *flags, '--quiet', '--no-cache',
+                        '--output', str(program)], check=True, timeout=120)
+        if not emulator or shutil.which(emulator[0]):
+            subprocess.run([*emulator, str(program)], check=True, timeout=60)
+    # push before init names the fix.
+    unset = Path(temporary) / 'unset'
+    unset.mkdir()
+    (unset / 'main.dyn').write_text('use "std/container/array"\n'
+        'fn main() {\n  a: array.Array(i32)\n  array.push(&a, 2)\n}\n')
+    subprocess.run([DYN, 'build', str(unset), '--quiet', '--no-cache', '--output', str(unset / 'program')],
+                   check=True, timeout=120)
+    result = subprocess.run([str(unset / 'program')], capture_output=True, text=True, timeout=30)
+    assert result.returncode != 0 and 'call array.init before array.push' in result.stderr, result
+print('PASS container array')

@@ -24,7 +24,7 @@ static void analysis_main(const DynSource *s, const char *main_path, uint32_t na
     ++r->errors;
   }
   if (has_signature) {
-    dyn_diagnostic_source("error", s, start, end, "entry signature must be exactly 'fn main()'");
+    dyn_diagnostic_source("error", s, start, end, "entry signature must be 'fn main()', optionally with one Init parameter and an i32 result");
     ++r->errors;
   }
 }
@@ -45,6 +45,10 @@ static CompactDeclarationStatus analysis_compact_tree(
     for (uint32_t child = name->next; child != UINT32_MAX; child = nodes[child].next) {
       if (!dyn_work_step(&s->context, 1)) goto cancelled;
       const ExpNode *n = &nodes[child];
+      /* main may return an i32 exit code. */
+      if (n->kind == EXP_TYPE && n->end - n->start == 3 && !memcmp(s->text + start + n->start, "i32", 3)) continue;
+      /* One parameter, an Init struct, is checked by sema. */
+      if (n->kind == SRC_FN_PARAM && (n->next == UINT32_MAX || nodes[n->next].kind != SRC_FN_PARAM)) continue;
       if (n->kind == SRC_FN_PARAM || n->kind == EXP_TYPE) { signature = true; break; }
     }
     analysis_main(s, main_path, start + name->start, start + name->end, start + declaration->start, start + declaration->end, signature, r);

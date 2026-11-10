@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Every dyn code block in the docs parses, as written or as the body of main."""
+"""Every dyn code block in the docs parses, and complete programs type-check."""
 import os
 from pathlib import Path
 import re
@@ -10,7 +10,8 @@ ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 # Historical "before" code and proposals for syntax Dyn does not have.
 SKIP = ('docs/migrations/', 'docs/internals/generics-design.md',
-        'docs/internals/std-standardization.md')
+        'docs/internals/std-standardization.md',
+        'docs/internals/result-shape-std.md')
 
 
 def parses(directory, source):
@@ -20,6 +21,7 @@ def parses(directory, source):
 
 
 checked = 0
+complete = 0
 failures = []
 with tempfile.TemporaryDirectory(prefix='dyn-doc-snippets-') as directory:
     for document in sorted((ROOT / 'docs').rglob('*.md')) + [ROOT / 'README.md']:
@@ -29,6 +31,13 @@ with tempfile.TemporaryDirectory(prefix='dyn-doc-snippets-') as directory:
         for match in re.finditer(r'```dyn\n(.*?)```', document.read_text(), re.S):
             block = match.group(1)
             checked += 1
+            if re.search(r'^fn main\(\)', block, re.M) and 'use "vendor/' not in block:
+                (Path(directory) / 'main.dyn').write_text(block)
+                result = subprocess.run([DYN, 'check', directory], capture_output=True, text=True, timeout=30,
+                                        env={**os.environ, 'DYN_SDK': str(ROOT)})
+                complete += 1
+                if result.returncode:
+                    failures.append(f'{relative}: {result.stderr.strip().splitlines()[0]}')
             ok, error = parses(directory, block)
             if ok:
                 continue
@@ -39,4 +48,4 @@ with tempfile.TemporaryDirectory(prefix='dyn-doc-snippets-') as directory:
             if not ok:
                 failures.append(f'{relative}: {error.strip().splitlines()[0]}')
 assert not failures, '\n'.join(failures)
-print(f'PASS {checked} documentation snippets parse')
+print(f'PASS {checked} documentation snippets parse, {complete} complete programs type-check')

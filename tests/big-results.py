@@ -53,15 +53,16 @@ for a, b in cases:
     exponent = abs(a) % 4096
     out += [pow(a, exponent, modulus) if modulus > 0 else 'none']
     expected.append(' '.join(str(x) for x in out))
-SOURCE = '''use "std/math/big" big
-use "std/mem" mem
+SOURCE = '''use "std/parse" parse
+use "std/math/big" big
 use "std/io" io
+use "std/mem" mem
 use "std/bytes" bytes
 
 const data: []const u8 = #load("cases.txt")
 
 fn show(arena: *mem.Arena, value: big.Int) {
-  _ = io.print(io.stdout(), "{} ", big.format(arena, value, 10))
+  io.print("{} ", big.format(arena, value, 10))
 }
 
 fn main() {
@@ -82,37 +83,37 @@ fn main() {
     show(arena, big.subtract(arena, a, b))
     show(arena, big.multiply(arena, a, b))
     divided := big.divide(arena, a, b)
-    if divided.ok {
+    if divided.valid {
       show(arena, divided.quotient)
       show(arena, divided.remainder)
     }
     else {
-      _ = io.print(io.stdout(), "none none ")
+      io.print("none none ")
     }
     shift_bits := big.divide(arena, big.absolute(b), big.from_u64(arena, 300)).remainder
     shift := big.to_u64(shift_bits).value
     show(arena, big.shift_left(arena, a, #cast(usize, shift)))
     show(arena, big.shift_right(arena, a, #cast(usize, shift)))
-    _ = io.print(io.stdout(), "{} {} ", big.compare(a, b), big.bit_length(a))
-    _ = io.print(io.stdout(), "{} {} ", big.format(arena, a, 16), big.format(arena, a, 2))
+    io.print("{} {} ", big.compare(a, b), big.bit_length(a))
+    io.print("{} {} ", big.format(arena, a, 16), big.format(arena, a, 2))
     show(arena, big.from_bytes(arena, big.to_bytes(arena, a)))
     show(arena, big.gcd(arena, a, b))
     exponent := big.divide(arena, big.absolute(a), big.from_u64(arena, 4096)).remainder
     powered := big.power_mod(arena, a, exponent, big.absolute(b))
-    if powered.ok {
-      _ = io.println(io.stdout(), "{}", big.format(arena, powered.value, 10))
+    if powered.valid {
+      io.println("{}", big.format(arena, powered.value, 10))
     }
     else {
-      _ = io.println(io.stdout(), "none")
+      io.println("none")
     }
     mem.arena_rewind(arena, mark)
   }
   bad := big.parse(arena, "12x4", 10)
-  if bad.ok || bad.offset != 2 {
+  if bad.failure.kind == parse.Kind.Ok || bad.offset != 2 {
     #panic("parse failure")
   }
   hex := big.parse(arena, "-FfeE", 16)
-  if !hex.ok || !mem.equal(big.format(arena, hex.value, 36), "-1ejy") {
+  if hex.failure.kind != parse.Kind.Ok || !mem.equal(big.format(arena, hex.value, 36), "-1ejy") {
     #panic("bases")
   }
 }

@@ -2,9 +2,9 @@ use "std/mem"
 #link("dyn_stb")
 // Integer skyline packing, no rotation. Caller owns rectangles; scratch arena is
 // rewound before return. Inputs must not overlap newly allocated scratch storage.
-pub struct Rectangle { width: i32, height: i32, x: i32, y: i32, packed: i32 }
-// code=-1 invalid input/storage, 0 partial fit, 1 all fit. packed counts successes.
-pub struct Result { packed: usize, code: i32, ok: bool }
+pub struct Rectangle { width: i32, height: i32, x: i32, y: i32, was_packed: i32 }
+// code=-1 invalid input/storage, 0 partial fit, 1 all fit. count is the successes.
+pub struct Result { count: usize, code: i32, ok: bool }
 pub fn pack(scratch: *mem.Arena, width: i32, height: i32, rectangles: []Rectangle) Result {
   if scratch == nil {
     return Result{ code: -1 }
@@ -27,12 +27,12 @@ pub fn pack(scratch: *mem.Arena, width: i32, height: i32, rectangles: []Rectangl
   count: usize = 0
   if code >= 0 {
     for rectangle in rectangles {
-      if rectangle.packed != 0 {
+      if rectangle.was_packed != 0 {
         count += 1
       }
     }
   }
-  return Result{ packed: count, code: code, ok: code == 1 }
+  return Result{ count: count, code: code, ok: code == 1 }
 }
 extern fn native_size "dyn_stb_pack_size"(width: i32, count: usize) usize
 extern fn native_pack "dyn_stb_pack"(width: i32, height: i32, rectangles: *Rectangle, count: usize, work: rawptr, size: usize) i32

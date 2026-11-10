@@ -15,8 +15,8 @@ use "std/mem"
 fn show(label: []const u8, value: u64) {
   storage: [64 + mem.ArenaBufferOverhead]u8 = []
   arena := mem.arena_from_buffer(storage[..])
-  _ = io.println(io.stdout(), label)
-  _ = io.println(io.stdout(), fmt.u64_decimal(arena, value))
+  io.println(label)
+  io.println(fmt.u64_decimal(arena, value))
 }
 fn churn(seed: u64) u64 {
   // Many live values push the allocator onto callee-saved registers.
@@ -30,7 +30,7 @@ fn churn(seed: u64) u64 {
     #panic("deep panic")
   }
   r := churn(seed + 1)
-  return #wrap(r + a + b + c + d + e + f)
+  return (r + a + b + c + d + e + f)
 }
 fn keeper(seed: u64) u64 {
   x := seed + 1
@@ -40,7 +40,7 @@ fn keeper(seed: u64) u64 {
   v := seed + 5
   defer { show("keeper", x + y * 10 + z * 100 + w * 1000 + v * 10000) }
   r := churn(seed)
-  return #wrap(r + x + y + z + w + v)
+  return (r + x + y + z + w + v)
 }
 fn twice(seed: u64) u64 {
   p := seed * 2

@@ -20,10 +20,10 @@ def literal(data):
     return '"' + ''.join('\\x%02x' % byte for byte in data) + '"'
 
 
-SOURCE = '''use "std/encoding/base64" b
+SOURCE = '''use "std/parse" parse
+use "std/encoding/base64" b
 use "std/encoding/hex" h
 use "std/encoding" codec
-use "std/errors" errors
 use "std/mem" mem
 use "std/bytes" bytes
 fn good(raw: []const u8, hx: []const u8, upper: []const u8, b64: []const u8) {
@@ -35,10 +35,9 @@ fn good(raw: []const u8, hx: []const u8, upper: []const u8, b64: []const u8) {
   x: h.Decoded = h.decode(a, hx)
   y: b.Decoded = b.decode(a, b64)
   z := h.decode(a, upper)
-  if !x.ok || !y.ok || !z.ok || !bytes.equal(x.value, raw) || !bytes.equal(y.value, raw) || !bytes.equal(z.value, raw) { #panic("decode oracle") }
-  if x.kind != errors.Kind.None || y.kind != errors.Kind.None || z.kind != errors.Kind.None ||
-     x.error != 0 || y.error != 0 || z.error != 0 || x.offset != 0 || y.offset != 0 || z.offset != 0 ||
-     x.detail != codec.ErrorKind.None || y.detail != codec.ErrorKind.None || z.detail != codec.ErrorKind.None { #panic("success diagnostics") }
+  if x.failure.kind != parse.Kind.Ok || y.failure.kind != parse.Kind.Ok || z.failure.kind != parse.Kind.Ok || !bytes.equal(x.value, raw) || !bytes.equal(y.value, raw) || !bytes.equal(z.value, raw) { #panic("decode oracle") }
+  if x.failure.offset != 0 || y.failure.offset != 0 || z.failure.offset != 0 ||
+     x.failure.kind != parse.Kind.Ok || y.failure.kind != parse.Kind.Ok || z.failure.kind != parse.Kind.Ok { #panic("success diagnostics") }
   if mem.arena_mark(a) != mem.arena_start(a) + 7 + 3 * #len(raw) { #panic("exact decode allocation") }
   if !bytes.equal(h.encode(a, raw, false), hx) || !bytes.equal(h.encode(a, raw, true), upper) || !bytes.equal(b.encode(a, raw), b64) { #panic("encode oracle") }
   for c in prefix { if c != 99 { #panic("success changed prefix") } }
@@ -51,10 +50,10 @@ fn bad(input: []const u8, off: usize, hex: bool) {
   a.poison_on_rewind = true
   if hex {
     r := h.decode(a, input)
-    if r.ok || #len(r.value) != 0 || r.kind != errors.Kind.InvalidInput || r.error != 0 || r.offset != off || r.detail != codec.ErrorKind.InvalidInput { #panic("hex invalid diagnostics") }
+    if #len(r.value) != 0 || r.failure.offset != off || r.failure.kind != parse.Kind.Syntax { #panic("hex invalid diagnostics") }
   } else {
     r := b.decode(a, input)
-    if r.ok || #len(r.value) != 0 || r.kind != errors.Kind.InvalidInput || r.error != 0 || r.offset != off || r.detail != codec.ErrorKind.InvalidInput { #panic("base64 invalid diagnostics") }
+    if #len(r.value) != 0 || r.failure.offset != off || r.failure.kind != parse.Kind.Syntax { #panic("base64 invalid diagnostics") }
   }
   if mem.arena_mark(a) != mem.arena_start(a) + 7 { #panic("invalid rollback") }
   for c in a.data[mem.ArenaHeader..] { if c != 99 { #panic("invalid touched dirty arena") } }
@@ -72,23 +71,22 @@ fn overlap(hex: bool, invalid: bool, start: usize) {
   _ = mem.copy(snapshot[..], payload)
   _ = mem.push_bytes_uninit(a, 4)
   a.poison_on_rewind = true
-  detail := codec.ErrorKind.Overlap
-  if invalid { detail = codec.ErrorKind.InvalidInput }
+  detail := parse.Kind.Overlap
+  if invalid { detail = parse.Kind.Syntax }
   if hex {
     r := h.decode(a, payload[start..start + 4])
-    if r.ok || #len(r.value) != 0 || r.kind != errors.Kind.InvalidInput || r.error != 0 || r.offset != 0 || r.detail != detail { #panic("hex overlap preflight") }
+    if #len(r.value) != 0 || r.failure.offset != 0 || r.failure.kind != detail { #panic("hex overlap preflight") }
   } else {
     r := b.decode(a, payload[start..start + 4])
-    if r.ok || #len(r.value) != 0 || r.kind != errors.Kind.InvalidInput || r.error != 0 || r.offset != 0 || r.detail != detail { #panic("base64 overlap preflight") }
+    if #len(r.value) != 0 || r.failure.offset != 0 || r.failure.kind != detail { #panic("base64 overlap preflight") }
   }
   if mem.arena_mark(a) != mem.arena_start(a) + 4 || !bytes.equal(payload, snapshot[..]) { #panic("overlap changed source or arena") }
 }
 fn main() {
   z := b.Decoded{}
   q := h.Decoded{}
-  if z.ok || q.ok || #len(z.value) != 0 || #len(q.value) != 0 ||
-     z.kind != errors.Kind.None || q.kind != errors.Kind.None || z.error != 0 || q.error != 0 ||
-     z.offset != 0 || q.offset != 0 || z.detail != codec.ErrorKind.None || q.detail != codec.ErrorKind.None { #panic("zero initialization") }
+  if q.failure.kind != parse.Kind.Ok || #len(z.value) != 0 || #len(q.value) != 0 ||
+     z.failure.offset != 0 || q.failure.offset != 0 || z.failure.kind != parse.Kind.Ok || q.failure.kind != parse.Kind.Ok { #panic("zero initialization") }
 '''
 
 
@@ -149,15 +147,14 @@ a := mem.arena_from_buffer(empty_backing[..])
 a = mem.arena_from_buffer(a.data[..mem.ArenaHeader])
 x := b.decode(a, "AAAA!!!!")
 y := h.decode(a, "6162!!")
-if x.ok || y.ok || x.offset != 4 || y.offset != 4 || x.error != 0 || y.error != 0 ||
-   x.kind != errors.Kind.InvalidInput || y.kind != errors.Kind.InvalidInput ||
-   x.detail != codec.ErrorKind.InvalidInput || y.detail != codec.ErrorKind.InvalidInput ||
+if x.failure.offset != 4 || y.failure.offset != 4 ||
+   x.failure.kind != parse.Kind.Syntax || y.failure.kind != parse.Kind.Syntax ||
    #len(x.value) != 0 || #len(y.value) != 0 || mem.arena_mark(a) != mem.arena_start(a) { #panic("validation before exhaustion") }
 x = b.decode(a, "")
 y = h.decode(a, "")
-if !x.ok || !y.ok || #len(x.value) != 0 || #len(y.value) != 0 || x.error != 0 || y.error != 0 ||
-   x.kind != errors.Kind.None || y.kind != errors.Kind.None || x.offset != 0 || y.offset != 0 ||
-   x.detail != codec.ErrorKind.None || y.detail != codec.ErrorKind.None || mem.arena_mark(a) != mem.arena_start(a) { #panic("empty at capacity") }
+if x.failure.kind != parse.Kind.Ok || y.failure.kind != parse.Kind.Ok || #len(x.value) != 0 || #len(y.value) != 0 ||
+   x.failure.offset != 0 || y.failure.offset != 0 ||
+   x.failure.kind != parse.Kind.Ok || y.failure.kind != parse.Kind.Ok || mem.arena_mark(a) != mem.arena_start(a) { #panic("empty at capacity") }
 }
 '''
     return program, len(cases)

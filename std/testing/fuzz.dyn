@@ -164,7 +164,7 @@ pub fn take_u8(state: *Source) u8 {
 }
 
 pub fn take_bool(state: *Source) bool {
-  return take_u8(state) & 1 != 0
+  return (take_u8(state) & 1) != 0
 }
 
 // Little-endian, zero-filled past the end.

@@ -78,7 +78,7 @@ pub fn slicefail(a:usize,b:usize) usize { x:="abcdef"
 return #len(x[a..b]) }
 extern fn oracle() i32
 fn main() { n:=oracle()
-if n!=0 { _=io.println(io.stdout(),"BAD {}",n)
+if n!=0 { io.println("BAD {}",n)
 #panic("oracle") }
 _=io.write_all(io.stdout(),"LOCALS OK\n") }
 '''
@@ -138,7 +138,7 @@ GUARDS = [
     ('orderedslice', 'sliceorder(7,2)', 'sliceorder', 'slice.order.ok', 'MARK 7\nMARK 2\n'),
 ]
 ORDERED = r'''
-pub fn mark(x:usize) usize { _=io.println(io.stdout(),"MARK {}",x)
+pub fn mark(x:usize) usize { io.println("MARK {}",x)
 return x }
 pub fn ordered(i:usize) u8 { a:[3]u8=[1,2,3]
 return a[mark(i)] }

@@ -3,6 +3,25 @@
 fn unwind_owner_offset() usize {
   return 0
 }
+fn exit_number() i64 {
+  return 94
+}
+fn sigaltstack_number() i64 {
+  return 132
+}
+fn sigaction_number() i64 {
+  return 134
+}
+fn signal_restorer_flag() u64 {
+  return 0
+}
+fn signal_restorer(handler: usize) usize {
+  return 0
+}
+fn fault_report() {
+  trace_dump()
+  _ = syscall_raw(exit_number(), 101, 0, 0, 0, 0, 0)
+}
 fn thread_number() i64 {
   return 178
 }

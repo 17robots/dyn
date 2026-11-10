@@ -7,18 +7,18 @@ import subprocess
 import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
-SOURCE=r'''use "std/encoding/protobuf" pb
+SOURCE=r'''use "std/parse" parse
+use "std/encoding/protobuf" pb
 use "std/mem" mem
 use "std/bytes" bytes
-use "std/errors" errors
 fn check(ok: bool) { if !ok { #panic("protobuf contract") } }
 fn bad(source: []const u8) {
   state := pb.reader(source)
   result := pb.next(&state)
-  for result.ok { result = pb.next(&state) }
-  check(result.kind == errors.Kind.InvalidInput)
+  for result.found { result = pb.next(&state) }
+  check(result.failure.kind == parse.Kind.Syntax)
   again := pb.next(&state)
-  check(again.kind == result.kind && again.offset == result.offset)
+  check(again.failure.kind == result.failure.kind && again.offset == result.offset)
 }
 fn main() {
   arena := mem.arena_create(0)
@@ -32,13 +32,13 @@ fn main() {
     pb.Field{ number: 5, wire: pb.Wire.EndGroup }]
   encoded := pb.encode(arena,fields[..])
   golden := "\x08\x96\x01\x11\xef\xcd\xab\x89\x67\x45\x23\x01\x1a\x03hi\x00\x25\xef\xcd\xab\x89\x2b\x08\xff\xff\xff\xff\xff\xff\xff\xff\xff\x01\x2c"
-  check(encoded.ok && bytes.equal(encoded.value,golden))
+  check(encoded.failure.kind == parse.Kind.Ok && bytes.equal(encoded.value,golden))
   state := pb.reader(golden)
   for expected in fields {
     result := pb.next(&state)
-    check(result.ok && result.value.number == expected.number && result.value.wire == expected.wire && result.value.value == expected.value && bytes.equal(result.value.bytes,expected.bytes))
+    check(result.found && result.value.number == expected.number && result.value.wire == expected.wire && result.value.value == expected.value && bytes.equal(result.value.bytes,expected.bytes))
   }
-  check(!pb.next(&state).ok && pb.next(&state).kind == errors.Kind.None)
+  check(!pb.next(&state).found && pb.next(&state).failure.kind == parse.Kind.Ok)
   integers: [7]i64 = [-9223372036854775808,-500,-1,0,1,500,9223372036854775807]
   for value in integers { check(pb.unzigzag(pb.zigzag(value)) == value) }
   check(pb.zigzag(-1) == 1 && pb.zigzag(500) == 1000 && pb.zigzag(-9223372036854775808) == 0xffffffffffffffff)
@@ -54,26 +54,26 @@ fn main() {
   deep: [65]u8 = []
   for i in 0..65 { deep[i] = 11 }
   state = pb.reader(deep[..])
-  for i in 0..64 { check(pb.next(&state).ok) }
-  check(pb.next(&state).kind == errors.Kind.Capacity && pb.next(&state).kind == errors.Kind.Capacity)
+  for i in 0..64 { check(pb.next(&state).found) }
+  check(pb.next(&state).failure.kind == parse.Kind.Capacity && pb.next(&state).failure.kind == parse.Kind.Capacity)
   mark := mem.arena_mark(arena)
   invalid: [1]pb.Field = [pb.Field{ number: 0 }]
-  check(pb.encode(arena,invalid[..]).kind == errors.Kind.InvalidInput && mem.arena_mark(arena) == mark)
+  check(pb.encode(arena,invalid[..]).failure.kind == parse.Kind.Syntax && mem.arena_mark(arena) == mark)
   invalid[0] = pb.Field{ number: 1, wire: pb.Wire.Fixed32, value: 0x100000000 }
-  check(pb.encode(arena,invalid[..]).kind == errors.Kind.InvalidInput && mem.arena_mark(arena) == mark)
+  check(pb.encode(arena,invalid[..]).failure.kind == parse.Kind.Syntax && mem.arena_mark(arena) == mark)
   invalid[0] = pb.Field{ number: 1, wire: pb.Wire.StartGroup }
-  check(pb.encode(arena,invalid[..]).kind == errors.Kind.InvalidInput && mem.arena_mark(arena) == mark)
+  check(pb.encode(arena,invalid[..]).failure.kind == parse.Kind.Syntax && mem.arena_mark(arena) == mark)
   fields[0] = pb.Field{ number: 536870911, value: 0xffffffffffffffff }
   encoded = pb.encode(arena,fields[..1])
   state = pb.reader(encoded.value)
   result := pb.next(&state)
-  check(encoded.ok && result.ok && result.value.number == 536870911 && result.value.value == 0xffffffffffffffff)
+  check(encoded.failure.kind == parse.Kind.Ok && result.found && result.value.number == 536870911 && result.value.value == 0xffffffffffffffff)
   // Every cut is either a complete shorter message or a structured failure.
   for length in 0..#len(golden) {
     state = pb.reader(golden[..length])
     item := pb.next(&state)
-    for item.ok { item = pb.next(&state) }
-    check(item.kind == errors.Kind.None || item.kind == errors.Kind.InvalidInput)
+    for item.found { item = pb.next(&state) }
+    check(item.failure.kind == parse.Kind.Ok || item.failure.kind == parse.Kind.Syntax)
   }
 }
 '''

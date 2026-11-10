@@ -15,9 +15,9 @@ fn main() {
   defer { mem.arena_release(created) }
   count: usize = 7
   size := mem.size_for(count, #sizeof(Item))
-  expect(size.ok)
+  expect(size.valid)
   allocation := mem.arena_push_array(created, count, #sizeof(Item), #alignof(Item))
-  items := (#cast(*Item, allocation))[..count]
+  items := #slice(#cast(*Item, allocation), count)
   for *item in items {
     expect(item.tag == 0 && item.value == 0)
     item.value = 42
@@ -25,17 +25,17 @@ fn main() {
   expect(items[6].value == 42)
   maximum := #cast(usize, -1)
   edge := mem.size_for(maximum / 8, 8)
-  expect(edge.ok && edge.bytes == maximum - maximum % 8)
+  expect(edge.valid && edge.bytes == maximum - maximum % 8)
   before := mem.arena_used(created)
   overflow := mem.size_for(maximum / 8 + 1, 8)
-  expect(!overflow.ok && overflow.bytes == 0)
+  expect(!overflow.valid && overflow.bytes == 0)
   expect(mem.arena_used(created) == before && items[6].value == 42)
   exact := mem.size_for(maximum, 1)
-  expect(exact.ok && exact.bytes == maximum)
+  expect(exact.valid && exact.bytes == maximum)
   zero_count := mem.size_for(0, maximum)
   zero_size := mem.size_for(maximum, 0)
-  expect(zero_count.ok && zero_count.bytes == 0)
-  expect(zero_size.ok && zero_size.bytes == 0)
+  expect(zero_count.valid && zero_count.bytes == 0)
+  expect(zero_size.valid && zero_size.bytes == 0)
   expect(mem.MiB == 1024 * mem.KiB && mem.GiB == 1024 * mem.MiB)
 
   chain := mem.arena_create_bounded(512, 4 * mem.KiB)

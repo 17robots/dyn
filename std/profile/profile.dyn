@@ -1,6 +1,5 @@
 use "std/time" clock
-use "std/errors" errors
-
+use "std/io" io
 // Caller-backed monotonic profiling. Event names are borrowed.
 pub struct Event {
   name: []const u8,
@@ -9,7 +8,7 @@ pub struct Event {
 }
 
 pub struct Span { name: []const u8, started: clock.ClockResult }
-pub struct Result {kind: errors.Kind, error: isize, ok: bool}
+pub struct Result { failure: io.Failure }
 
 pub struct Trace {
   events: []Event,
@@ -17,7 +16,7 @@ pub struct Trace {
   dropped: usize,
   failed: bool,
   error: isize,
-  kind: errors.Kind,
+  kind: io.Kind,
 }
 
 pub fn trace(events: []Event) Trace {
@@ -28,41 +27,41 @@ pub fn begin(name: []const u8) Span {
   return Span{ name: name, started: clock.monotonic_now() }
 }
 
-fn fail(destination: *Trace, kind: errors.Kind, code: isize) Result {
+fn fail(destination: *Trace, kind: io.Kind, code: isize) Result {
   destination.failed = true
   destination.kind = kind
-  if destination.kind == errors.Kind.None {
-    destination.kind = errors.Kind.InvalidState
+  if destination.kind == io.Kind.Ok {
+    destination.kind = io.Kind.InvalidState
   }
   destination.error = code
-  return Result{kind: destination.kind, error: code}
+  return Result{ failure: io.Failure{ kind: destination.kind, native: code } }
 }
 pub fn finish(destination: *Trace, span: Span) Result {
   if destination.failed {
-    return Result{kind: destination.kind, error: destination.error}
+    return Result{ failure: io.Failure{ kind: destination.kind, native: destination.error } }
   }
-  if !span.started.ok {
-    return fail(destination, span.started.kind, span.started.error)
+  if span.started.failure.kind != io.Kind.Ok {
+    return fail(destination, span.started.failure.kind, span.started.failure.native)
   }
   if destination.count >= #len(destination.events) {
     destination.dropped += 1
-    return Result{kind: errors.Kind.Capacity}
+    return Result{ failure: io.Failure{ kind: io.Kind.Capacity } }
   }
   finished := clock.monotonic_now()
-  if !finished.ok {
-    return fail(destination, finished.kind, finished.error)
+  if finished.failure.kind != io.Kind.Ok {
+    return fail(destination, finished.failure.kind, finished.failure.native)
   }
   duration := clock.elapsed(span.started.value, finished.value)
-  if !duration.ok {
-    return fail(destination, errors.Kind.Overflow, 0)
+  if duration.failure.kind != io.Kind.Ok {
+    return fail(destination, io.Kind.Overflow, 0)
   }
   scaled := span.started.value.seconds
   if scaled > 9223372036 || scaled < -9223372036 {
-    return fail(destination, errors.Kind.Overflow, 0)
+    return fail(destination, io.Kind.Overflow, 0)
   }
   absolute := clock.checked_add(scaled * clock.Second, span.started.value.nanoseconds)
-  if !absolute.ok {
-    return fail(destination, errors.Kind.Overflow, 0)
+  if absolute.failure.kind != io.Kind.Ok {
+    return fail(destination, io.Kind.Overflow, 0)
   }
   destination.events[destination.count] = Event{
     name: span.name,
@@ -70,7 +69,7 @@ pub fn finish(destination: *Trace, span: Span) Result {
     duration_nanoseconds: duration.value,
   }
   destination.count += 1
-  return Result{ok: true}
+  return Result{}
 }
 
 pub fn recorded(value: *Trace) []Event {
@@ -81,5 +80,5 @@ pub fn clear(value: *Trace) {
   value.dropped = 0
   value.failed = false
   value.error = 0
-  value.kind = errors.Kind.None
+  value.kind = io.Kind.Ok
 }

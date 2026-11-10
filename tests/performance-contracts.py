@@ -15,19 +15,19 @@ use "std/container/hash" hash
 use "std/io" io
 use "std/bufio" bufio
 use "std/bytes/builder" builder
-use "std/errors" errors
+use "std/io" errors
 struct Sink { calls: usize, used: usize, fail_after: usize, fail: bool, bytes: [64]u8 }
 struct Entry { key: []const u8, hash: u64, hash_next: *Entry, bytes: [1]u8, value: usize }
 const nil_entry: Entry = Entry{}
-fn sink_write(data: rawptr, source: []const u8) io.Result {
+fn sink_write(data: rawptr, source: []const u8) io.Transfer {
   state := #cast(*Sink, data)
   state.calls += 1
-  if state.fail || (state.fail_after > 0 && state.calls > state.fail_after) { return io.Result{transferred: 0, status: io.Status.Error, kind: errors.Kind.PermissionDenied, error: -13} }
+  if state.fail || (state.fail_after > 0 && state.calls > state.fail_after) { return io.Transfer{transferred: 0, status: io.Status.Error, kind: errors.Kind.PermissionDenied, error: -13} }
   amount := #len(source)
   if amount > 3 { amount = 3 }
   for i in 0..amount { state.bytes[state.used + i] = source[i] }
   state.used += amount
-  return io.Result{transferred: amount, status: io.Status.Complete}
+  return io.Transfer{transferred: amount, status: io.Status.Complete}
 }
 fn main() {''']
     randomizer=random.Random(124)
@@ -39,7 +39,7 @@ fn main() {''']
     for text, needle in cases:
         body += ['if true {',f'text := {literal(text)}',f'needle := {literal(needle)}',
                  'table: [64]usize = []','p := search.prepare(needle, table[..])',
-                 't.expect(p.ok, "prepare")',
+                 't.expect(p.valid, "prepare")',
                  f't.expect(search.find(p.pattern, text) == {position(text.find(needle), text)}, "KMP oracle")',
                  f't.expect(bytes.find(text, needle) == {position(text.find(needle), text)}, "find oracle")',
                  f't.expect(bytes.find_last(text, needle) == {position(text.rfind(needle), text)}, "rfind oracle")','}']
@@ -76,7 +76,7 @@ fn main() {''']
     }
   }
   table: [1]usize = [99]
-  t.expect(!search.prepare("ab", table[..]).ok && table[0] == 99, "prepare failure atomic")
+  t.expect(!search.prepare("ab", table[..]).valid && table[0] == 99, "prepare failure atomic")
   backing: [8192]u8 = []
   arena := mem.arena_from_buffer(backing[..])
   built := builder.from_buffer(backing[..0])
@@ -113,9 +113,9 @@ fn main() {''']
   }
   values: [10]i64 = [10,9,8,7,6,5,4,3,2,1]
   stats := t.summarize(values[..])
-  t.expect(stats.ok && stats.minimum == 1 && stats.median == 5 && stats.p90 == 9 && stats.maximum == 10, "samples")
+  t.expect(stats.valid && stats.minimum == 1 && stats.median == 5 && stats.p90 == 9 && stats.maximum == 10, "samples")
   invalid: [2]i64 = [5,-1]
-  t.expect(!t.summarize(invalid[..]).ok && invalid[0] == 5, "invalid sample atomic")
+  t.expect(!t.summarize(invalid[..]).valid && invalid[0] == 5, "invalid sample atomic")
 }
 ''']
     (src/'main.dyn').write_text('\n'.join(body))
@@ -131,15 +131,16 @@ fn main() {''']
         # Target isolation must preserve the existing Linux temporary helpers.
         (src/'main.dyn').write_text('''use "std/testing" t
 use "std/fs" fs
+use "std/io" io
 use "std/mem" mem
 fn main() {
   arena := mem.arena_create(0)
   created := t.temporary_directory(arena, "dyn-performance-contract")
-  t.expect(created.ok && created.value.active, "temporary directory")
+  t.expect(created.failure.kind == io.Kind.Ok && created.value.active, "temporary directory")
   frames: [4]fs.RemovalFrame = []
   scratch: [4096]u8 = []
   removed := t.remove_temporary(&created.value, frames[..], scratch[..])
-  t.expect(removed.ok && !created.value.active, "remove temporary directory")
+  t.expect(removed.failure.kind == io.Kind.Ok && !created.value.active, "remove temporary directory")
 }
 ''')
         for flags in ([], ['--release']):
@@ -159,7 +160,7 @@ fn main() {
         run(DYN,'build',src,'--release',*args,ok=False)
     run(DYN,'build',src,'--opt-level','3',ok=False)
     if platform.system()=='Linux' and platform.machine()=='x86_64':
-        (src/'main.dyn').write_text('use "std/io" io\nfn main() {\n state: u64 = 1729\n for i in 0..1000 {\n state = (state * 48271) % 2147483647\n }\n _ = io.println(io.stdout(), "{}", state)\n}\n')
+        (src/'main.dyn').write_text('use "std/io" io\nfn main() {\n state: u64 = 1729\n for i in 0..1000 {\n state = (state * 48271) % 2147483647\n }\n io.println("{}", state)\n}\n')
         profile=root/'sample.prof'; profile.write_text('main:10000:1\n'+''.join(f' {i}: 1000\n' for i in range(1,7)))
         profiled=build('--sample-profile',profile,'--opt-remarks'); run(output)
         assert 'samples from profile' in profiled.stdout + profiled.stderr, profiled.stdout + profiled.stderr

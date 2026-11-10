@@ -8,6 +8,7 @@ import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 ORACLE=r'''#target(kernel: linux)
+use "std/io" errors
 pub fn clipboard_inject_wake(reader: *Window) { ordered_push(reader, ordered.Event{kind:ordered.Kind.Wake}) }
 pub fn clipboard_inject(reader: *Window, kind: usize, format: i32, data: *const u8, count: i32, notify: bool) {
  _ = change_property(reader.display,reader.handle,reader.desktop.property_atom,kind,format,0,data,count)
@@ -16,14 +17,14 @@ pub fn clipboard_inject(reader: *Window, kind: usize, format: i32, data: *const 
   _ = send_event(reader.display,reader.handle,0,0,&reply)
  }
  _ = sync(reader.display,0)
- if !poll(reader).ok { #panic("clipboard injection poll") }
+ if poll(reader).kind != errors.Kind.Ok { #panic("clipboard injection poll") }
 }
 '''
 SOURCE=r'''use "probe" window
 use "vendor/window/events" events
 use "std/mem" mem
 use "std/bytes" bytes
-use "std/errors" errors
+use "std/io" errors
 checks: usize
 extern fn report "printf"(format: *const u8, ...) i32
 extern fn flush "fflush"(stream: rawptr) i32
@@ -34,8 +35,8 @@ fn check(ok: bool, case_id: usize) { checks += 1
    #panic("large X11 clipboard") } }
 fn complete(owner, reader: *window.Window) {
   for i in 0..5000 {
-    check(window.poll(owner).ok && window.poll(reader).ok,16)
-    if !window.paste_pending(reader) { check(window.paste_status(reader).ok,17)
+    check(window.poll(owner).kind == errors.Kind.Ok && window.poll(reader).kind == errors.Kind.Ok,16)
+    if !window.paste_pending(reader) { check(window.paste_status(reader).kind == errors.Kind.Ok,17)
       return }
     window.wait(reader, 1)
   }
@@ -44,17 +45,17 @@ fn complete(owner, reader: *window.Window) {
 fn main() {
  owner := window.Window{}
  reader := window.Window{}
- check(window.open(&owner,"clipboard owner",80,80).ok,26)
+ check(window.open(&owner,"clipboard owner",80,80).kind == errors.Kind.Ok,26)
  defer { window.close(&owner) }
- check(window.open(&reader,"clipboard reader",80,80).ok,28)
+ check(window.open(&reader,"clipboard reader",80,80).kind == errors.Kind.Ok,28)
  defer { window.close(&reader) }
  arena := mem.arena_create(0)
  defer { mem.arena_release(arena) }
  large := mem.push_bytes_uninit(arena, 1200000)
  for i in 0..#len(large) { large[i] = #cast(u8, 32 + i % 90) }
- check(window.try_set_clipboard(&owner,large).ok,34)
+ check(window.try_set_clipboard(&owner,large).kind == errors.Kind.Ok,34)
  window.request_paste(&owner)
- check(!window.paste_pending(&owner) && window.paste_status(&owner).ok && bytes.equal(window.clipboard(&owner),large),36)
+ check(!window.paste_pending(&owner) && window.paste_status(&owner).kind == errors.Kind.Ok && bytes.equal(window.clipboard(&owner),large),36)
  window.listen_events(&reader,true)
  // Discard window-creation events before testing reply queue atomicity.
  _ = window.poll(&reader)
@@ -62,10 +63,10 @@ fn main() {
  for window.next_event(&reader,&event) {}
  window.request_paste(&reader)
  check(window.paste_pending(&reader),43)
- check(window.poll(&owner).ok,44)
+ check(window.poll(&owner).kind == errors.Kind.Ok,44)
  // A new offer and SelectionClear cannot alter the outgoing INCR snapshot.
- check(window.try_set_clipboard(&owner,"new offer").ok,46)
- check(window.try_set_clipboard(&reader,"take ownership").ok,47)
+ check(window.try_set_clipboard(&owner,"new offer").kind == errors.Kind.Ok,46)
+ check(window.try_set_clipboard(&reader,"take ownership").kind == errors.Kind.Ok,47)
  complete(&owner,&reader)
  check(bytes.equal(window.clipboard(&reader),large),49)
  clipboard_count: usize = 0
@@ -77,7 +78,7 @@ fn main() {
  check(clipboard_count == 0 && overflow_count == 1,56)
  // Snapshot-only request retains unrelated input and never queues payload
  // chunks or overflow merely because the successful snapshot is large.
- check(window.try_set_clipboard(&owner,large).ok,1007)
+ check(window.try_set_clipboard(&owner,large).kind == errors.Kind.Ok,1007)
  window.clipboard_inject_wake(&reader)
  window.request_paste_snapshot(&reader)
  // A concurrent request cannot change the pending snapshot's delivery mode.
@@ -93,7 +94,7 @@ fn main() {
    if event.kind==events.Kind.Wake { found_wake=true }
  }
  check(found_wake,1010)
- check(window.try_set_clipboard(&owner,"new offer").ok,57)
+ check(window.try_set_clipboard(&owner,"new offer").kind == errors.Kind.Ok,57)
  // Rejection leaves current offer unchanged.
  oversized := mem.push_bytes_uninit(arena,16777217)
  check(window.try_set_clipboard(&owner,oversized).kind==errors.Kind.Capacity,60)
@@ -101,7 +102,7 @@ fn main() {
  complete(&owner,&reader)
  check(bytes.equal(window.clipboard(&reader),"new offer"),63)
  for window.next_event(&reader,&event) {}
- check(window.try_set_clipboard(&owner,"").ok,65)
+ check(window.try_set_clipboard(&owner,"").kind == errors.Kind.Ok,65)
  window.request_paste(&reader)
  complete(&owner,&reader)
  check(#len(window.clipboard(&reader))==0,68)
@@ -111,7 +112,7 @@ fn main() {
      found=true }
  }
  check(found,74)
- check(window.try_set_clipboard(&owner,"h\xc3\xa9\xf0\x9f\x98\x80").ok,75)
+ check(window.try_set_clipboard(&owner,"h\xc3\xa9\xf0\x9f\x98\x80").kind == errors.Kind.Ok,75)
  window.request_paste(&reader)
  complete(&owner,&reader)
  check(bytes.equal(window.clipboard(&reader),"h\xc3\xa9\xf0\x9f\x98\x80"),78)
@@ -129,39 +130,72 @@ fn main() {
      check(window.paste_pending(&reader),1001)
      window.clipboard_inject(&reader,reader.desktop.utf8_atom,8,nil,0,false)
    }
-   check(!window.paste_pending(&reader) && !window.paste_status(&reader).ok,1002)
+   check(!window.paste_pending(&reader) && window.paste_status(&reader).kind != errors.Kind.Ok,1002)
    check(bytes.equal(window.clipboard(&reader),"h\xc3\xa9\xf0\x9f\x98\x80"),1003)
-   check(window.poll(&owner).ok && window.poll(&reader).ok,1004)
+   check(window.poll(&owner).kind == errors.Kind.Ok && window.poll(&reader).kind == errors.Kind.Ok,1004)
    for window.next_event(&reader,&event) {}
  }
  check(window.try_set_clipboard(&owner,"bad\0text").kind==errors.Kind.InvalidInput,1005)
  check(window.try_set_clipboard(&owner,"\xc0\x80").kind==errors.Kind.InvalidInput,1006)
  // Destroy a requestor after INCR starts. Sender cleanup must not raise a
  // fatal asynchronous BadWindow error or retain its copied snapshot.
- check(window.try_set_clipboard(&owner,large).ok,84)
+ check(window.try_set_clipboard(&owner,large).kind == errors.Kind.Ok,84)
  window.request_paste(&reader)
- check(window.poll(&owner).ok,86)
+ check(window.poll(&owner).kind == errors.Kind.Ok,86)
  window.close(&reader)
- for i in 0..10 { check(window.poll(&owner).ok,88) }
+ for i in 0..10 { check(window.poll(&owner).kind == errors.Kind.Ok,88) }
  for i in 0..4 { check(owner.desktop.outgoing[i].requestor==0,89) }
- check(window.open(&reader,"clipboard reader 2",80,80).ok,90)
+ check(window.open(&reader,"clipboard reader 2",80,80).kind == errors.Kind.Ok,90)
  window.request_paste(&reader)
- check(window.poll(&owner).ok,92)
- check(window.poll(&reader).ok,93)
+ check(window.poll(&owner).kind == errors.Kind.Ok,92)
+ check(window.poll(&reader).kind == errors.Kind.Ok,93)
  // Destroy the owner during an incremental reply. Preserve the last completed
  // snapshot and complete the request with an explicit failure.
  window.close(&owner)
  for i in 0..1000 {
-   check(window.poll(&reader).ok,101)
+   check(window.poll(&reader).kind == errors.Kind.Ok,101)
    if !window.paste_pending(&reader) { break }
    window.wait(&reader,1)
  }
  check(!window.paste_pending(&reader) && window.paste_status(&reader).kind==errors.Kind.System,105)
 }
 '''
+# CLIPBOARD belongs to the whole X server: on a desktop, other copies of this
+# test, other window tests, a clipboard manager or Xwayland's Wayland bridge
+# can take it mid-transfer. A private Xvfb isolates the run; without one, the
+# shared display is locked against our own parallel runs and an interrupted
+# run is retried.
+server = None
+if shutil.which('Xvfb'):
+    read, write = os.pipe()
+    server = subprocess.Popen(['Xvfb', '-displayfd', str(write), '-nolisten', 'tcp', '-screen', '0', '640x480x24'],
+                              pass_fds=(write,), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    os.close(write)
+    with os.fdopen(read) as stream:
+        number = stream.readline().strip()
+    if number:
+        os.environ['DISPLAY'] = ':' + number
+    else:
+        server.kill(); server = None
 if not os.environ.get('DISPLAY'):
     print('SKIP large X11 clipboard: DISPLAY unavailable')
     raise SystemExit(0)
+lock = None
+if server is None:
+    import fcntl
+    lock = open(Path(tempfile.gettempdir()) / f'dyn-x11-clipboard-{os.getuid()}.lock', 'w')
+    fcntl.flock(lock, fcntl.LOCK_EX)
+attempts = 1 if server else 3
+
+def run_runner(output):
+    for attempt in range(attempts):
+        result = subprocess.run([str(output)], capture_output=True, text=True, timeout=60)
+        if result.returncode == 0:
+            return
+        if attempt + 1 < attempts and 'failed clipboard check' in result.stdout + result.stderr:
+            print(f'note: shared display clipboard was interrupted; retrying ({attempt + 2}/{attempts})', flush=True)
+            continue
+        raise SystemExit(f'clipboard runner failed:\n{result.stdout}{result.stderr}')
 with tempfile.TemporaryDirectory(prefix='dyn-clipboard-large-') as directory:
     work=Path(directory);(work/'main.dyn').write_text(SOURCE)
     shutil.copytree(ROOT/'vendor/window/x11',work/'probe')
@@ -169,7 +203,9 @@ with tempfile.TemporaryDirectory(prefix='dyn-clipboard-large-') as directory:
     for flags in (['--debug'],['--release'],['--release','--opt-level','3']):
         output=work/'runner'
         subprocess.run([DYN,'build',str(work),*flags,'--quiet','--output',str(output)],check=True,timeout=180)
-        subprocess.run([str(output)],check=True,timeout=60)
+        run_runner(output)
     for target in ('aarch64-linux','riscv64-linux'):
         subprocess.run([DYN,'build',str(work),'--release','--target',target,'--emit-object','--no-link','--quiet','--output',str(work/(target+'.o'))],check=True,timeout=180)
+if server:
+    server.terminate(); server.wait()
 print('PASS X11 clipboard: 1.2 MB self/cross-window INCR snapshots, in-flight ownership, atomic ordered overflow, snapshot-only delivery, capacity/UTF8 rejection, empty replies and peer destruction (debug/O2/O3)')

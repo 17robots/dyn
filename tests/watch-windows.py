@@ -16,36 +16,38 @@ use "std/time" time
 fn require(value: bool) { if !value { #panic("Windows watch contract") } }
 fn main() {
   empty := watch.Watcher{}
-  require(watch.close(&empty).ok)
+  watch.close(&empty)
   tiny: [1]u8 = []
   failed := watch.open(tiny[..])
-  require(!failed.ok && watch.close(&failed.value).ok)
+  watch.close(&failed.value)
+  require(failed.failure.kind != io.Kind.Ok)
   scratch: [1024]u8 = []
   opened := watch.open(scratch[..])
-  require(opened.ok)
-  require(!watch.add(&opened.value,"missing-directory",watch.Changes).ok)
-  require(!watch.add(&opened.value,".",watch.CloseWrite).ok)
+  require(opened.failure.kind == io.Kind.Ok)
+  require(watch.add(&opened.value,"missing-directory",watch.Changes).failure.kind != io.Kind.Ok)
+  require(watch.add(&opened.value,".",watch.CloseWrite).failure.kind != io.Kind.Ok)
   first := watch.add(&opened.value,"one",watch.Changes)
   second := watch.add(&opened.value,"two",watch.Changes)
-  require(first.ok && second.ok && first.value != second.value)
+  require(first.failure.kind == io.Kind.Ok && second.failure.kind == io.Kind.Ok && first.value != second.value)
   require(!watch.HasCloseWrite && !watch.HasMoveCookies && !watch.HasDirectoryFlag)
   capacity_scratch: [272]u8 = []
   capacity := watch.open(capacity_scratch[..])
-  require(capacity.ok)
+  require(capacity.failure.kind == io.Kind.Ok)
   ids: [16]i32 = []
   for i in 0..16 {
     added := watch.add(&capacity.value,".",watch.Changes)
-    require(added.ok)
+    require(added.failure.kind == io.Kind.Ok)
     ids[i] = added.value
   }
-  require(!watch.add(&capacity.value,".",watch.Changes).ok)
-  require(watch.remove(&capacity.value,ids[0]).ok)
+  require(watch.add(&capacity.value,".",watch.Changes).failure.kind != io.Kind.Ok)
+  require(watch.remove(&capacity.value,ids[0]).failure.kind == io.Kind.Ok)
   replacement := watch.add(&capacity.value,".",watch.Changes)
-  require(replacement.ok && replacement.value != ids[0])
-  require(!watch.remove(&capacity.value,ids[0]).ok)
+  require(replacement.failure.kind == io.Kind.Ok && replacement.value != ids[0])
+  require(watch.remove(&capacity.value,ids[0]).failure.kind != io.Kind.Ok)
   // Closing all remaining idle watches must cancel pending native requests.
-  require(watch.close(&capacity.value).ok && watch.close(&capacity.value).ok)
-  _ = io.println(io.stdout(),"READY")
+  watch.close(&capacity.value)
+  watch.close(&capacity.value)
+  io.println("READY")
   seen_first: u32 = 0
   seen_second: u32 = 0
   for attempt in 0..1000 {
@@ -66,17 +68,17 @@ fn main() {
       }
     }
     if seen_first == (watch.Create | watch.MoveFrom | watch.MoveTo | watch.Delete) && seen_second == (watch.Create | watch.Delete) { break }
-    if event.status == watch.Status.Empty { require(time.sleep(10000000).ok) }
+    if event.status == watch.Status.Empty { require(time.sleep(10000000).failure.kind == io.Kind.Ok) }
   }
   require(seen_first == (watch.Create | watch.MoveFrom | watch.MoveTo | watch.Delete))
   require(seen_second == (watch.Create | watch.Delete))
-  require(watch.remove(&opened.value,first.value).ok)
-  require(watch.remove(&opened.value,second.value).ok)
-  require(watch.close(&opened.value).ok)
+  require(watch.remove(&opened.value,first.value).failure.kind == io.Kind.Ok)
+  require(watch.remove(&opened.value,second.value).failure.kind == io.Kind.Ok)
+  watch.close(&opened.value)
   reopened := watch.open(scratch[..])
-  require(reopened.ok && watch.add(&reopened.value,"one",watch.Changes).ok)
-  require(watch.close(&reopened.value).ok)
-  _ = io.println(io.stdout(),"DONE")
+  require(reopened.failure.kind == io.Kind.Ok && watch.add(&reopened.value,"one",watch.Changes).failure.kind == io.Kind.Ok)
+  watch.close(&reopened.value)
+  io.println("DONE")
 }
 '''
 

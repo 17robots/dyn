@@ -1,10 +1,10 @@
-use "std/errors" errors
+use "std/parse" parse
 use "std/mem" memory
 use "std/strings" text
 use "std/io" stream
 use "std/unicode/utf8" utf8
 
-struct Cursor { source: []const u8, at: usize, error: ErrorKind }
+struct Cursor { source: []const u8, at: usize, error: parse.Kind }
 
 // Kind zero is a missing value: the nil_value stub that lookups return on a
 // miss. It is not a JSON null.
@@ -21,7 +21,6 @@ pub enum TokenKind {
   ArrayBegin, ArrayEnd, ObjectBegin, ObjectEnd, Colon, Comma,
 }
 
-pub enum ErrorKind { None, Syntax, TrailingData }
 
 pub struct Tokenizer { source: []const u8, offset: usize }
 pub struct Token { kind: TokenKind, text: []const u8, offset: usize }
@@ -44,7 +43,7 @@ pub struct Value {
 pub const nil_value: Value = Value{}
 
 // root is the stub when parsing fails, so lookups work before ok is checked.
-pub struct ParseResult { root: *const Value, offset: usize, kind: errors.Kind, error: isize, detail: ErrorKind, ok: bool }
+pub struct ParseResult { root: *const Value, offset: usize, failure: parse.Failure }
 
 pub fn tokenizer(source: []const u8) Tokenizer {
   return Tokenizer{ source: source, offset: 0 }
@@ -193,7 +192,7 @@ fn string(cursor: *Cursor) bool {
     }
     if byte >= 128 {
       decoded := utf8.decode(cursor.source, cursor.at - 1)
-      if !decoded.ok {
+      if !decoded.valid {
         return false
       }
       cursor.at += decoded.width - 1
@@ -424,8 +423,8 @@ fn write_string_into(destination: []u8, source: []const u8) []u8 {
 }
 
 fn failed_string(cursor: *Cursor) []const u8 {
-  if cursor.error == ErrorKind.None {
-    cursor.error = ErrorKind.Syntax
+  if cursor.error == parse.Kind.Ok {
+    cursor.error = parse.Kind.Syntax
   }
   return cursor.source[..0]
 }
@@ -496,7 +495,7 @@ fn decoded_string(arena: *memory.Arena, cursor: *Cursor) []const u8 {
   }
   mark := memory.arena_mark(arena)
   allocation := memory.arena_push_uninit(arena, end - start, 1)
-  output := allocation[..end - start]
+  output := #slice(allocation, end - start)
   if !has_escape {
     _ = memory.copy(output, source[start..end])
     cursor.at = end + 1
@@ -627,7 +626,7 @@ fn parse_node(arena: *memory.Arena, cursor: *Cursor, depth: usize) *Value {
   }
   if byte == '"' {
     text := decoded_string(arena, cursor)
-    if cursor.error != ErrorKind.None {
+    if cursor.error != parse.Kind.Ok {
       return nil
     }
     string_node := node(arena, KindString)
@@ -657,7 +656,7 @@ fn parse_node(arena: *memory.Arena, cursor: *Cursor, depth: usize) *Value {
       key: []const u8 = cursor.source[..0]
       if object {
         key = decoded_string(arena, cursor)
-        if cursor.error != ErrorKind.None {
+        if cursor.error != parse.Kind.Ok {
           return nil
         }
         skip(cursor)
@@ -706,16 +705,13 @@ pub fn parse(arena: *memory.Arena, source: []const u8) ParseResult {
   skip(&cursor)
   if root == nil || cursor.at != #len(source) {
     memory.arena_rewind(arena, mark)
-    error := cursor.error
-    if error == ErrorKind.None {
-      error = ErrorKind.Syntax
-    }
+    message: []const u8 = ""
     if root != nil {
-      error = ErrorKind.TrailingData
+      message = "trailing data"
     }
-    return ParseResult{ root: &nil_value, offset: cursor.at, kind: errors.Kind.InvalidInput, error: 0, detail: error, ok: false }
+    return ParseResult{ root: &nil_value, offset: cursor.at, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: cursor.at, message: message } }
   }
-  return ParseResult{ root: root, offset: 0, kind: errors.Kind.None, error: 0, detail: ErrorKind.None, ok: true }
+  return ParseResult{ root: root }
 }
 
 pub fn make_null(arena: *memory.Arena) *Value {
@@ -818,73 +814,73 @@ pub fn as($T: type, value: *const Value) T {
 
 fn read_into(value: *const Value, target: any) {
   case target {
-    is *[]const u8 p => {
+    *[]const u8 p => {
       if value.kind == KindString {
         p.* = value.text
       }
     }
-    is *bool p => {
+    *bool p => {
       p.* = value.kind == KindBool && value.boolean
     }
-    is **const Value p => {
+    **const Value p => {
       p.* = value
     }
-    is *f64 p => {
+    *f64 p => {
       if value.kind == KindNumber {
         p.* = text.parse(f64, value.text)
       }
     }
-    is *f32 p => {
+    *f32 p => {
       if value.kind == KindNumber {
         p.* = text.parse(f32, value.text)
       }
     }
-    is *i64 p => {
+    *i64 p => {
       if value.kind == KindNumber {
         p.* = text.parse(i64, value.text)
       }
     }
-    is *i32 p => {
+    *i32 p => {
       if value.kind == KindNumber {
         p.* = text.parse(i32, value.text)
       }
     }
-    is *i16 p => {
+    *i16 p => {
       if value.kind == KindNumber {
         p.* = text.parse(i16, value.text)
       }
     }
-    is *i8 p => {
+    *i8 p => {
       if value.kind == KindNumber {
         p.* = text.parse(i8, value.text)
       }
     }
-    is *isize p => {
+    *isize p => {
       if value.kind == KindNumber {
         p.* = text.parse(isize, value.text)
       }
     }
-    is *u64 p => {
+    *u64 p => {
       if value.kind == KindNumber {
         p.* = text.parse(u64, value.text)
       }
     }
-    is *u32 p => {
+    *u32 p => {
       if value.kind == KindNumber {
         p.* = text.parse(u32, value.text)
       }
     }
-    is *u16 p => {
+    *u16 p => {
       if value.kind == KindNumber {
         p.* = text.parse(u16, value.text)
       }
     }
-    is *u8 p => {
+    *u8 p => {
       if value.kind == KindNumber {
         p.* = text.parse(u8, value.text)
       }
     }
-    is *usize p => {
+    *usize p => {
       if value.kind == KindNumber {
         p.* = text.parse(usize, value.text)
       }
@@ -1109,7 +1105,7 @@ fn encode_pretty_into(destination: []u8, value: *const Value, indent: usize) []u
   return destination[..at]
 }
 
-fn stream_bytes(destination: stream.Writer, source: []const u8) stream.Result {
+fn stream_bytes(destination: stream.Writer, source: []const u8) stream.Transfer {
   return stream.write_all(destination, source)
 }
 
@@ -1120,9 +1116,9 @@ fn hex_digit(value: u8) u8 {
   return value - 10 + 'a'
 }
 
-fn stream_string(destination: stream.Writer, source: []const u8) stream.Result {
+fn stream_string(destination: stream.Writer, source: []const u8) stream.Transfer {
   if !utf8.valid(source) {
-    return stream.Result{ error: -22, status: stream.Status.Error }
+    return stream.Transfer{ error: -22, kind: stream.Kind.InvalidInput, status: stream.Status.Error }
   }
   total: usize = 0
   opening := stream_bytes(destination, "\"")
@@ -1160,7 +1156,7 @@ fn stream_string(destination: stream.Writer, source: []const u8) stream.Result {
         literal_result := stream_bytes(destination, source[start..i])
         total += literal_result.transferred
         if literal_result.status == stream.Status.Error {
-          return stream.Result{ transferred: total, error: literal_result.error, status: stream.Status.Error }
+          return stream.Transfer{ transferred: total, error: literal_result.error, kind: literal_result.kind, status: stream.Status.Error }
         }
       }
       if byte < 32 && #len(escaped) == 0 {
@@ -1170,13 +1166,13 @@ fn stream_string(destination: stream.Writer, source: []const u8) stream.Result {
         control_result := stream_bytes(destination, control[..])
         total += control_result.transferred
         if control_result.status == stream.Status.Error {
-          return stream.Result{ transferred: total, error: control_result.error, status: stream.Status.Error }
+          return stream.Transfer{ transferred: total, error: control_result.error, kind: control_result.kind, status: stream.Status.Error }
         }
       } else {
         escaped_result := stream_bytes(destination, escaped)
         total += escaped_result.transferred
         if escaped_result.status == stream.Status.Error {
-          return stream.Result{ transferred: total, error: escaped_result.error, status: stream.Status.Error }
+          return stream.Transfer{ transferred: total, error: escaped_result.error, kind: escaped_result.kind, status: stream.Status.Error }
         }
       }
       start = i + 1
@@ -1186,20 +1182,20 @@ fn stream_string(destination: stream.Writer, source: []const u8) stream.Result {
     tail_result := stream_bytes(destination, source[start..])
     total += tail_result.transferred
     if tail_result.status == stream.Status.Error {
-      return stream.Result{ transferred: total, error: tail_result.error, status: stream.Status.Error }
+      return stream.Transfer{ transferred: total, error: tail_result.error, kind: tail_result.kind, status: stream.Status.Error }
     }
   }
   closing := stream_bytes(destination, "\"")
   total += closing.transferred
   if closing.status == stream.Status.Error {
-    return stream.Result{ transferred: total, error: closing.error, status: stream.Status.Error }
+    return stream.Transfer{ transferred: total, error: closing.error, kind: closing.kind, status: stream.Status.Error }
   }
-  return stream.Result{ transferred: total, status: stream.Status.Complete }
+  return stream.Transfer{ transferred: total, status: stream.Status.Complete }
 }
 
-fn stream_value(destination: stream.Writer, value: *const Value, depth: usize) stream.Result {
+fn stream_value(destination: stream.Writer, value: *const Value, depth: usize) stream.Transfer {
   if value == nil || depth > MaximumDepth {
-    return stream.Result{ error: -22, status: stream.Status.Error }
+    return stream.Transfer{ error: -22, kind: stream.Kind.InvalidInput, status: stream.Status.Error }
   }
   if value.kind == KindNull {
     return stream_bytes(destination, "null")
@@ -1235,25 +1231,25 @@ fn stream_value(destination: stream.Writer, value: *const Value, depth: usize) s
       comma_result := stream_bytes(destination, ",")
       total += comma_result.transferred
       if comma_result.status == stream.Status.Error {
-        return stream.Result{ transferred: total, error: comma_result.error, status: stream.Status.Error }
+        return stream.Transfer{ transferred: total, error: comma_result.error, kind: comma_result.kind, status: stream.Status.Error }
       }
     }
     if value.kind == KindObject {
       key_result := stream_string(destination, child.key)
       total += key_result.transferred
       if key_result.status == stream.Status.Error {
-        return stream.Result{ transferred: total, error: key_result.error, status: stream.Status.Error }
+        return stream.Transfer{ transferred: total, error: key_result.error, kind: key_result.kind, status: stream.Status.Error }
       }
       colon_result := stream_bytes(destination, ":")
       total += colon_result.transferred
       if colon_result.status == stream.Status.Error {
-        return stream.Result{ transferred: total, error: colon_result.error, status: stream.Status.Error }
+        return stream.Transfer{ transferred: total, error: colon_result.error, kind: colon_result.kind, status: stream.Status.Error }
       }
     }
     child_result := stream_value(destination, child, depth + 1)
     total += child_result.transferred
     if child_result.status == stream.Status.Error {
-      return stream.Result{ transferred: total, error: child_result.error, status: stream.Status.Error }
+      return stream.Transfer{ transferred: total, error: child_result.error, kind: child_result.kind, status: stream.Status.Error }
     }
     first = false
     child = child.next
@@ -1261,12 +1257,12 @@ fn stream_value(destination: stream.Writer, value: *const Value, depth: usize) s
   close_result := stream_bytes(destination, closing)
   total += close_result.transferred
   if close_result.status == stream.Status.Error {
-    return stream.Result{ transferred: total, error: close_result.error, status: stream.Status.Error }
+    return stream.Transfer{ transferred: total, error: close_result.error, kind: close_result.kind, status: stream.Status.Error }
   }
-  return stream.Result{ transferred: total, status: stream.Status.Complete }
+  return stream.Transfer{ transferred: total, status: stream.Status.Complete }
 }
 
-pub fn write(destination: stream.Writer, value: *const Value) stream.Result {
+pub fn write(destination: stream.Writer, value: *const Value) stream.Transfer {
   return stream_value(destination, value, 0)
 }
 

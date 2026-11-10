@@ -1,17 +1,15 @@
 use "std/mem" mem
-use "std/errors" errors
-
-pub struct Match { start: usize, end: usize, ok: bool }
-pub enum CompileError { None, Syntax, Capacity, Depth }
+use "std/parse" parse
+pub struct Match { start: usize, end: usize, found: bool }
 struct Instruction { op: u8, byte: u8, x: usize, y: usize, z: usize }
 // All slices belong to the compile arena, including the retained pattern bytes.
 // Copies share mutable workspace: serialize find/next calls on a program and its
 // copies. Compile separately for concurrent use. Reset/release invalidates all.
-pub struct Program { pattern: []const u8, code: []Instruction, start: usize, groups: usize, workspace: []usize, captures: []Match, error: CompileError, ok: bool }
-pub struct Result { value: Program, ok: bool, kind: errors.Kind, error: isize, offset: usize, detail: CompileError }
-// ok means an operation succeeded. value.ok distinguishes a match from a miss.
+pub struct Program { pattern: []const u8, code: []Instruction, start: usize, groups: usize, workspace: []usize, captures: []Match, error: parse.Kind, valid: bool }
+pub struct Result { value: Program, offset: usize, failure: parse.Failure }
+// failure names a broken program. value.found distinguishes a match from a miss.
 // Capture slices are borrowed until the next operation on this program.
-pub struct MatchResult { value: Match, captures: []Match, ok: bool, kind: errors.Kind, error: isize, offset: usize }
+pub struct MatchResult { value: Match, captures: []Match, failure: parse.Failure }
 
 const Char: u8 = 1
 const Any: u8 = 2
@@ -392,7 +390,7 @@ fn compile_into(pattern: []const u8, storage: []Instruction, workspace: []Instru
     else if !in_class && byte == '(' {
       nesting += 1
       if nesting > 128 {
-        return Program{ error: CompileError.Depth }
+        return Program{ error: parse.Kind.Capacity }
       }
     }
     else if !in_class && byte == ')' && nesting > 0 {
@@ -402,9 +400,9 @@ fn compile_into(pattern: []const u8, storage: []Instruction, workspace: []Instru
   state := CompileState{ pattern: pattern, tokens: workspace, ok: true }
   if #len(pattern) == 0 || !expression(&state, 0, #len(pattern)) || !state.ok {
     if state.capacity {
-      return Program{ error: CompileError.Capacity }
+      return Program{ error: parse.Kind.Capacity }
     }
-    return Program{ error: CompileError.Syntax }
+    return Program{ error: parse.Kind.Syntax }
   }
   top: usize = 0
   used: usize = 0
@@ -413,7 +411,7 @@ fn compile_into(pattern: []const u8, storage: []Instruction, workspace: []Instru
     item := workspace[i]
     if item.op < ConcatToken {
       if used >= #len(storage) || top * 2 + 1 >= #len(scratch) {
-        return Program{ error: CompileError.Capacity }
+        return Program{ error: parse.Kind.Capacity }
       }
       storage[used] = item
       part: usize = 0
@@ -429,7 +427,7 @@ fn compile_into(pattern: []const u8, storage: []Instruction, workspace: []Instru
       top += 1
     } else if item.op == ConcatToken {
       if top < 2 {
-        return Program{ error: CompileError.Syntax }
+        return Program{ error: parse.Kind.Syntax }
       }
       right := Fragment{ start: scratch[(top - 1) * 2], out: scratch[(top - 1) * 2 + 1] }
       left := Fragment{ start: scratch[(top - 2) * 2], out: scratch[(top - 2) * 2 + 1] }
@@ -439,10 +437,10 @@ fn compile_into(pattern: []const u8, storage: []Instruction, workspace: []Instru
       scratch[(top - 1) * 2 + 1] = right.out
     } else if item.op == AlternateToken {
       if top < 2 {
-        return Program{ error: CompileError.Syntax }
+        return Program{ error: parse.Kind.Syntax }
       }
       if used >= #len(storage) {
-        return Program{ error: CompileError.Capacity }
+        return Program{ error: parse.Kind.Capacity }
       }
       right2 := Fragment{ start: scratch[(top - 1) * 2], out: scratch[(top - 1) * 2 + 1] }
       left2 := Fragment{ start: scratch[(top - 2) * 2], out: scratch[(top - 2) * 2 + 1] }
@@ -454,10 +452,10 @@ fn compile_into(pattern: []const u8, storage: []Instruction, workspace: []Instru
       used += 1
     } else if item.op == StarToken || item.op == PlusToken || item.op == OptionalToken {
       if top < 1 {
-        return Program{ error: CompileError.Syntax }
+        return Program{ error: parse.Kind.Syntax }
       }
       if used >= #len(storage) {
-        return Program{ error: CompileError.Capacity }
+        return Program{ error: parse.Kind.Capacity }
       }
       value := Fragment{ start: scratch[(top - 1) * 2], out: scratch[(top - 1) * 2 + 1] }
       storage[used] = Instruction{ op: Split, x: value.start }
@@ -479,16 +477,16 @@ fn compile_into(pattern: []const u8, storage: []Instruction, workspace: []Instru
     i += 1
   }
   if top != 1 {
-    return Program{ error: CompileError.Syntax }
+    return Program{ error: parse.Kind.Syntax }
   }
   if used >= #len(storage) {
-    return Program{ error: CompileError.Capacity }
+    return Program{ error: parse.Kind.Capacity }
   }
   start := scratch[0]
   storage[used] = Instruction{ op: Accept }
   patch_list(storage, scratch[1], used)
   used += 1
-  return Program{ pattern: pattern, code: storage[..used], start: start, groups: state.groups, error: CompileError.None, ok: true }
+  return Program{ pattern: pattern, code: storage[..used], start: start, groups: state.groups, error: parse.Kind.Ok, valid: true }
 }
 
 // Arena exhaustion/size overflow panics, like other arena producers. Syntax
@@ -515,7 +513,7 @@ pub fn compile(arena: *mem.Arena, pattern: []const u8) Result {
     else if !in_class && b == '(' {
       depth += 1
       if depth > 128 {
-        return Result{ kind: errors.Kind.InvalidInput, offset: i, detail: CompileError.Depth }
+        return Result{ offset: i, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: i, message: "nesting too deep" } }
       }
     }
     else if !in_class && b == ')' && depth > 0 {
@@ -527,7 +525,7 @@ pub fn compile(arena: *mem.Arena, pattern: []const u8) Result {
     if count.capacity {
       #panic("regex compile size overflow")
     }
-    return Result{ kind: errors.Kind.InvalidInput, offset: count.offset, detail: CompileError.Syntax }
+    return Result{ offset: count.offset, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: count.offset } }
   }
   if count.used > (NoPatch - 1) / 2 {
     #panic("regex compile size overflow")
@@ -543,7 +541,7 @@ pub fn compile(arena: *mem.Arena, pattern: []const u8) Result {
   scratch := mem.push_array(usize, arena, count.used * 2)
   program := compile_into(retained, storage, tokens, scratch)
   mem.arena_rewind(arena, mark)
-  if !program.ok {
+  if !program.valid {
     #panic("regex compiler sizing invariant")
   }
   required := workspace_size(program, program.groups)
@@ -552,7 +550,7 @@ pub fn compile(arena: *mem.Arena, pattern: []const u8) Result {
   }
   program.workspace = mem.push_array(usize, arena, required)
   program.captures = mem.push_array(Match, arena, program.groups)
-  return Result{ value: program, ok: true }
+  return Result{ value: program }
 }
 
 fn class_matches(program: Program, instruction: Instruction, byte: u8) bool {
@@ -626,7 +624,7 @@ fn expand(program: Program, text: []const u8, at: usize, seed: []usize,
 // Private workspace sizing. Zero means invalid
 // program or size overflow. Space depends on the program, never on input length.
 fn workspace_size(program: Program, capture_count: usize) usize {
-  if !program.ok || #len(program.code) == 0 {
+  if !program.valid || #len(program.code) == 0 {
     return 0
   }
   groups := capture_count
@@ -656,7 +654,7 @@ fn execute(program: Program, text: []const u8, captures: []Match, workspace: []u
     captures[i] = Match{}
   }
   required := workspace_size(program, #len(captures))
-  if !program.ok {
+  if !program.valid {
     return Match{}
   }
   if required == 0 || #len(workspace) < required {
@@ -694,11 +692,11 @@ fn execute(program: Program, text: []const u8, captures: []Match, workspace: []u
         row := current[i * stride..(i + 1) * stride]
         instruction := program.code[row[0]]
         if instruction.op == Accept {
-          found = Match{ start: start, end: at, ok: true }
+          found = Match{ start: start, end: at, found: true }
           for group in 0..groups {
             captures[group] = Match{}
             if row[group * 2 + 2] != NoPatch {
-              captures[group] = Match{ start: row[group * 2 + 1], end: row[group * 2 + 2], ok: true }
+              captures[group] = Match{ start: row[group * 2 + 1], end: row[group * 2 + 2], found: true }
             }
           }
           break
@@ -722,7 +720,7 @@ fn execute(program: Program, text: []const u8, captures: []Match, workspace: []u
       count = next_count
       at += 1
     }
-    if found.ok {
+    if found.found {
       return found
     }
     start += 1
@@ -736,14 +734,14 @@ pub fn find(program: Program, text: []const u8) MatchResult {
   return find_from(program, text, 0)
 }
 fn find_from(program: Program, text: []const u8, from: usize) MatchResult {
-  if !program.ok {
-    return MatchResult{ kind: errors.Kind.InvalidState }
+  if !program.valid {
+    return MatchResult{ failure: parse.Failure{ kind: parse.Kind.Syntax, message: "program not compiled" } }
   }
   value := execute(program, text, program.captures, program.workspace, from)
-  return MatchResult{ value: value, captures: program.captures, ok: true }
+  return MatchResult{ value: value, captures: program.captures }
 }
 pub fn matches(program: Program, text: []const u8) bool {
-  return find(program, text).value.ok
+  return find(program, text).value.found
 }
 
 fn atom(pattern: []const u8, at: usize, byte: u8) bool {
@@ -860,14 +858,14 @@ pub fn iterator(program: Program, text: []const u8) Iterator {
   return Iterator{ program: program, text: text }
 }
 pub fn next(state: *Iterator) MatchResult {
-  if !state.program.ok {
-    return MatchResult{ kind: errors.Kind.InvalidState }
+  if !state.program.valid {
+    return MatchResult{ failure: parse.Failure{ kind: parse.Kind.Syntax, message: "program not compiled" } }
   }
   if state.done || state.offset > #len(state.text) {
-    return MatchResult{ ok: true }
+    return MatchResult{}
   }
   result := find_from(state.program, state.text, state.offset)
-  if !result.value.ok {
+  if !result.value.found {
     state.done = true
     return result
   }

@@ -15,7 +15,7 @@ fn mapping_allocate(size: usize) Mapping {
     head = 2 * MiB
   }
   _ = #syscall(28, address, head, 15)
-  return Mapping{ bytes: (#cast(*u8, address))[..size], committed: size, ok: true }
+  return Mapping{ bytes: #slice(#cast(*u8, address), size), committed: size, ok: true }
 }
 fn mapping_release(bytes: []u8) isize {
   return #syscall(11, &bytes[0], #len(bytes))

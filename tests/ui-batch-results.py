@@ -15,7 +15,7 @@ use "std/ui" ui
 use "std/ui/box" box
 use "std/ui/software" software
 use "std/mem" mem
-use "std/errors" errors
+use "std/io" errors
 
 fn check(ok: bool, message: []const u8) {
   if !ok {
@@ -69,7 +69,7 @@ fn main() {
     }
   }
   host := window.Window{}
-  check(window.open(&host, "Dyn batched UI test", 160, 96).ok, "window")
+  check(window.open(&host, "Dyn batched UI test", 160, 96).kind == errors.Kind.Ok, "window")
   defer {
     window.close(&host)
   }
@@ -85,13 +85,13 @@ fn main() {
     mem.arena_release(arena)
   }
   state := box.create(persistent_arena, measure, nil, 12.0)
-  context: ui.Context
+  context := ui.Context{ style: ui.default_style }
   build(state, &context, arena)
   build(state, &context, arena)
   font := software.Font{ glyph: bitmap, line_height: 12 }
   pixels := mem.push_array(u8, persistent_arena, #cast(usize, 61440))
   surface := software.Surface{ pixels: pixels, width: 160, height: 96, stride: 640 }
-  check(software.render(&surface, ui.first(&context), font).ok, "software")
+  check(software.render(&surface, ui.first(&context), font).failure.kind == errors.Kind.Ok, "software")
   vertices := mem.push_array(f32, persistent_arena, #cast(usize, 86016))
   loaded.api.clear_color(0.0, 0.0, 0.0, 0.0)
   loaded.api.clear(gl.ColorBufferBit)
@@ -125,12 +125,13 @@ fn main() {
   check(gpu.render_batch(batch, ui.first(&context), 160, 96, font, tiny[..]).ok, "tiny stream")
   check(batch.draw_calls - calls > 5, "tiny stream flushes often")
   check(gpu.render_batch(batch, ui.first(&context), 160, 96, font, tiny[..10]).kind == errors.Kind.InvalidInput, "stream too small")
-  check(window.poll(&host).ok && window.swap(&host).ok, "present")
+  check(window.poll(&host).kind == errors.Kind.Ok && window.swap(&host).kind == errors.Kind.Ok, "present")
 }
 
 persistent_arena: *mem.Arena
 '''
-CLIPBOARD = r'''use "vendor/window" window
+CLIPBOARD = r'''use "std/io" errors
+use "vendor/window" window
 use "std/bytes" bytes
 use "std/time" time
 
@@ -143,11 +144,11 @@ fn check(ok: bool, message: []const u8) {
 fn main() {
   source := window.Window{}
   target := window.Window{}
-  check(window.open(&source, "source", 64, 64).ok, "source")
+  check(window.open(&source, "source", 64, 64).kind == errors.Kind.Ok, "source")
   defer {
     window.close(&source)
   }
-  check(window.open(&target, "target", 64, 64).ok, "target")
+  check(window.open(&target, "target", 64, 64).kind == errors.Kind.Ok, "target")
   defer {
     window.close(&target)
   }

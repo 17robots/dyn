@@ -11,7 +11,7 @@ SOURCE=r'''use "std/ui/box" box
 use "std/ui" ui
 use "std/mem" mem
 use "std/text/edit" edit
-use "std/errors" errors
+use "std/io" errors
 use "std/bytes" bytes
 use "vendor/window/events" events
 fn check(ok: bool, why: []const u8) { if !ok { #panic(why) } }
@@ -20,7 +20,7 @@ fn measure(data: rawptr, text: []const u8) f32 { _ = data
 struct App { storage: [64]u8, edit: box.Edit, changed: bool, error: errors.Kind }
 fn frame(state: *box.State, arena: *mem.Arena, app: *App, input: box.Input) {
   mem.arena_reset(arena)
-  context := ui.Context{}
+  context := ui.Context{ style: ui.default_style }
   ui.begin(&context,arena,ui.Input{},ui.Rect{width:400,height:200})
   box.begin(state,arena,input,400.0,200.0,0.02)
   result := box.text_field(state,"field",app.storage[..],&app.edit)
@@ -34,7 +34,7 @@ fn correction(collector: *events.EditBuffer, token: u64, start, end: i32, text: 
   event := events.Event{kind:events.Kind.Edit,key:#cast(u32,token & 4294967295),modifiers:#cast(u32,token>>32),x:start,y:end,width:#cast(i32,#len(text)),text_length:#cast(u32,#len(text)),button:1}
   for i in 0..#len(text) { event.text[i] = text[i] }
   result := events.collect_edit(collector,&event)
-  check(result.ok && result.ready,"native edit assembly")
+  check(result.failure.kind == errors.Kind.Ok && result.ready,"native edit assembly")
   return result.value
 }
 fn main() {
@@ -54,7 +54,7 @@ fn main() {
   check(state.text_context.token == published,"idle redraw keeps context token")
   change := correction(&collector,published,0,3,"the")
   frame(state,arena,&app,box.Input{correction:&change})
-  check(app.changed && app.error == errors.Kind.None && bytes.equal(app.storage[..app.edit.length],"the cat") && app.edit.cursor == 3,"owned edit reaches widget")
+  check(app.changed && app.error == errors.Kind.Ok && bytes.equal(app.storage[..app.edit.length],"the cat") && app.edit.cursor == 3,"owned edit reaches widget")
   check(state.text_context.token != published && state.text_context.cause == edit.Cause.InputMethod,"correction publishes fresh IME context")
   frame(state,arena,&app,box.Input{correction:&change})
   check(!app.changed && app.error == errors.Kind.InvalidState && bytes.equal(app.storage[..app.edit.length],"the cat"),"replay does not change buffer")

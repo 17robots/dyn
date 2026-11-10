@@ -1,5 +1,6 @@
+use "std/parse" parse
 #target(kernel: darwin)
-use "std/errors"
+use "std/io" io
 use "std/mem" mem
 use "std/c" c
 use "std/sync" sync
@@ -25,16 +26,16 @@ pub const HasDirectoryFlag: bool = true
 pub const FixedWatchCapacity: usize = 16
 pub enum Status { Event, Empty, Error }
 // `error` keeps the native code; `kind` is its portable category.
-pub struct Result { value: i32, error: isize, kind: errors.Kind, ok: bool }
+pub type Result = io.Result(i32)
 pub struct Event { watch: i32, mask: u32, cookie: u32, name: []const u8, rescan: bool }
-pub struct EventResult { event: Event, status: Status, kind: errors.Kind, error: isize, ok: bool }
+pub struct EventResult { event: Event, status: Status, failure: io.Failure }
 // Owns one bounded allocation: at most 16 streams and 63 queued names (1023 bytes).
 // Do not copy a live owner. Public operations are confined to one caller thread.
 // The caller output buffer must outlive the watcher; names expire on next Event.
 // FSEvents coalesces changes. Rename has both move bits, cookie=0 and rescan=true;
 // CloseWrite is unavailable. Rescan must rebuild/reconcile the watched snapshot.
-pub struct Watcher { state: *State, storage: []u8, arena: *mem.Arena, rescan_required: bool, failed: bool, error: isize, kind: errors.Kind }
-pub struct OpenResult { value: Watcher, error: isize, kind: errors.Kind, ok: bool }
+pub struct Watcher { state: *State, storage: []u8, arena: *mem.Arena, rescan_required: bool, failed: bool, error: isize, kind: io.Kind }
+pub type OpenResult = io.Result(Watcher)
 struct Context { version: isize, info: rawptr, retain: rawptr, release: rawptr, describe: rawptr }
 type Callback = fn(rawptr, rawptr, usize, rawptr, *const u32, *const u64)
 struct API {
@@ -64,7 +65,7 @@ extern fn queue_release "dispatch_release"(queue: rawptr)
 fn symbol(handle: rawptr, name: []const u8) rawptr {
   backing: [128 + mem.ArenaBufferOverhead]u8 = []
   value := c.string_into(backing[..], name)
-  if handle == nil || !value.ok {
+  if handle == nil || value.failure.kind != parse.Kind.Ok {
     return nil
   }
   return library_symbol(handle, value.value)
@@ -72,7 +73,7 @@ fn symbol(handle: rawptr, name: []const u8) rawptr {
 fn library(path: []const u8) rawptr {
   backing: [256 + mem.ArenaBufferOverhead]u8 = []
   value := c.string_into(backing[..], path)
-  if !value.ok {
+  if value.failure.kind != parse.Kind.Ok {
     return nil
   }
   return library_open(value.value, 2)
@@ -134,22 +135,22 @@ fn discard_slot(state: *State, slot: *Slot) {
 }
 pub fn open(storage: []u8) OpenResult {
   if #len(storage) < 272 {
-    return OpenResult{ error: -28, kind: errors.darwin(-28) }
+    return OpenResult{ failure: io.Failure{ kind: io.darwin(-28), native: -28 } }
   }
   arena := mem.arena_create(#sizeof(State))
   state := mem.push(State, arena)
   if !load(&state.api) {
     unload(&state.api)
     mem.arena_release(arena)
-    return OpenResult{ error: -95, kind: errors.Kind.Unsupported }
+    return OpenResult{ failure: io.Failure{ kind: io.Kind.Unsupported, native: -95 } }
   }
   state.queue = queue_create(nil, nil)
   if state.queue == nil {
     unload(&state.api)
     mem.arena_release(arena)
-    return OpenResult{ error: -12, kind: errors.darwin(-12) }
+    return OpenResult{ failure: io.Failure{ kind: io.darwin(-12), native: -12 } }
   }
-  return OpenResult{ value: Watcher{ state: state, storage: storage, arena: arena }, ok: true }
+  return OpenResult{ value: Watcher{ state: state, storage: storage, arena: arena } }
 }
 fn publish(slot: *Slot, name: []const u8, mask: u32, rescan: bool) {
   state := slot.owner
@@ -180,8 +181,8 @@ fn callback(stream: rawptr, info: rawptr, count: usize, paths: rawptr, flags: *c
     sync.store_u32(&slot.owner.lost, 1)
     count = 1024
   }
-  names := (#cast(**const u8, paths))[..count]
-  kinds := flags[..count]
+  names := #slice(#cast(**const u8, paths), count)
+  kinds := #slice(flags, count)
   for i in 0..count {
     kind := kinds[i]
     // Dropped/coalesced history, root changes, mount changes, or wrapped IDs
@@ -191,7 +192,7 @@ fn callback(stream: rawptr, info: rawptr, count: usize, paths: rawptr, flags: *c
       sync.store_u32(&slot.owner.lost, 1)
     }
     native := c.bytes_from_string(names[i], 1024)
-    if !native.ok || !utf8.valid(native.value) {
+    if native.failure.kind != parse.Kind.Ok || !utf8.valid(native.value) {
       sync.store_u32(&slot.owner.lost, 1)
       continue
     }
@@ -257,11 +258,11 @@ pub fn add(watcher: *Watcher, path: []const u8, mask: u32) Result {
     return failure(-22)
   }
   if (mask & SupportedEvents) == 0 {
-    return Result{ error: -95, kind: errors.Kind.Unsupported }
+    return Result{ failure: io.Failure{ kind: io.Kind.Unsupported, native: -95 } }
   }
   input: [1024 + mem.ArenaBufferOverhead]u8 = []
   terminated := c.string_into(input[..], path)
-  if !terminated.ok {
+  if terminated.failure.kind != parse.Kind.Ok {
     return failure(-22)
   }
   canonical: [1024]u8 = []
@@ -270,7 +271,7 @@ pub fn add(watcher: *Watcher, path: []const u8, mask: u32) Result {
     return failure(code)
   }
   rooted := c.bytes_from_string(&canonical[0], 1024)
-  if !rooted.ok || !utf8.valid(rooted.value) {
+  if rooted.failure.kind != parse.Kind.Ok || !utf8.valid(rooted.value) {
     return failure(-22)
   }
   // FSEvents watches trees; this adapter promises only direct directory children.
@@ -289,7 +290,7 @@ pub fn add(watcher: *Watcher, path: []const u8, mask: u32) Result {
       // or racing a callback. Preserve the existing watch identifier.
       update := MaskUpdate{ slot: &state.slots[i], mask: mask }
       queue_sync(state.queue, &update, update_mask)
-      return Result{ value: state.slots[i].id, ok: true }
+      return Result{ value: state.slots[i].id }
     }
   }
   if index == 16 || state.serial == 2147483647 {
@@ -326,7 +327,7 @@ pub fn add(watcher: *Watcher, path: []const u8, mask: u32) Result {
     return failure(-5)
   }
   slot.started = true
-  return Result{ value: slot.id, ok: true }
+  return Result{ value: slot.id }
 }
 pub fn remove(watcher: *Watcher, id: i32) Result {
   state := watcher.state
@@ -336,17 +337,17 @@ pub fn remove(watcher: *Watcher, id: i32) Result {
   for i in 0..16 {
     if state.slots[i].stream != nil && state.slots[i].id == id {
       discard_slot(state, &state.slots[i])
-      return Result{ ok: true }
+      return Result{}
     }
   }
   return failure(-22)
 }
-pub fn close(watcher: *Watcher) Result {
+pub fn close(watcher: *Watcher) {
   state := watcher.state
   if state == nil {
     mem.arena_release(watcher.arena)
     watcher.arena = nil
-    return Result{ ok: true }
+    return
   }
   for i in 0..16 {
     discard_slot(state, &state.slots[i])
@@ -357,19 +358,18 @@ pub fn close(watcher: *Watcher) Result {
   watcher.arena = nil
   watcher.state = nil
   watcher.rescan_required = false
-  return Result{ ok: true }
 }
 // Terminal failures are sticky. Empty and rescan events remain protocol states.
 fn event_failure(watcher: *Watcher, code: isize) EventResult {
   if !watcher.failed {
     watcher.failed = true
     watcher.error = code
-    watcher.kind = errors.darwin(code)
-    if watcher.kind == errors.Kind.None {
-      watcher.kind = errors.Kind.System
+    watcher.kind = io.darwin(code)
+    if watcher.kind == io.Kind.Ok {
+      watcher.kind = io.Kind.System
     }
   }
-  return EventResult{ status: Status.Error, error: watcher.error, kind: watcher.kind }
+  return EventResult{ status: Status.Error, failure: io.Failure{ kind: watcher.kind, native: watcher.error } }
 }
 pub fn next(watcher: *Watcher) EventResult {
   if watcher.failed {
@@ -381,7 +381,7 @@ pub fn next(watcher: *Watcher) EventResult {
   }
   if sync.exchange_u32(&state.lost, 0) != 0 {
     watcher.rescan_required = true
-    return EventResult{ status: Status.Event, ok: true, event: Event{ watch: -1, name: watcher.storage[..0], rescan: true } }
+    return EventResult{ status: Status.Event, event: Event{ watch: -1, name: watcher.storage[..0], rescan: true } }
   }
   for attempts in 0..64 {
     read := sync.load_u32(&state.read)
@@ -401,7 +401,7 @@ pub fn next(watcher: *Watcher) EventResult {
     }
     if record.length > #len(watcher.storage) {
       watcher.rescan_required = true
-      return EventResult{ status: Status.Event, ok: true, event: Event{ watch: record.watch, name: watcher.storage[..0], rescan: true } }
+      return EventResult{ status: Status.Event, event: Event{ watch: record.watch, name: watcher.storage[..0], rescan: true } }
     }
     for i in 0..record.length {
       watcher.storage[i] = record.name[i]
@@ -409,7 +409,7 @@ pub fn next(watcher: *Watcher) EventResult {
     if record.rescan {
       watcher.rescan_required = true
     }
-    return EventResult{ status: Status.Event, ok: true, event: Event{ watch: record.watch, mask: record.mask, name: watcher.storage[..record.length], rescan: record.rescan } }
+    return EventResult{ status: Status.Event, event: Event{ watch: record.watch, mask: record.mask, name: watcher.storage[..record.length], rescan: record.rescan } }
   }
   return EventResult{ status: Status.Empty }
 }
@@ -418,11 +418,11 @@ pub fn acknowledge_rescan(watcher: *Watcher) {
 }
 
 fn failure(code: isize) Result {
-  return Result{ error: code, kind: errors.darwin(code) }
+  return Result{ failure: io.Failure{ kind: io.darwin(code), native: code } }
 }
 fn status(code: isize) Result {
   if code == 0 {
-    return Result{ ok: true }
+    return Result{}
   }
   return failure(code)
 }

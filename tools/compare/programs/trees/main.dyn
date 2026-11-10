@@ -38,6 +38,6 @@ fn main() {
     }
     depth += 2
   }
-  _ = io.println(io.stdout(), "{}", total)
+  io.println("{}", total)
   mem.arena_release(arena)
 }

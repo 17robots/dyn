@@ -1,0 +1,310 @@
+// Growing hash maps on an arena, for keys of any type. init takes the arena and
+// the key's hash and equality functions; std has them for text and integers:
+//
+//   ages: map.Map([]const u8, i32)
+//   map.init(&ages, arena)
+//   map.insert(&ages, "ada", 36)
+//   age := map.get(&ages, "ada")
+//   map.upsert(&counts, word, 0).* += 1
+//
+// For other keys, write your own pair: fn(seed: u64, key: K) u64 and
+// fn(a: K, b: K) bool. get returns a pointer to the value, or nil when the key
+// is absent; the pointer goes stale at the next insert. Text keys are borrowed,
+// not copied, so they must outlive the map. Growth leaves old arrays in the arena.
+//
+// init uses a fixed seed. For keys an attacker chooses, use init_seeded with a
+// seed from std/crypto/random. Walk the entries, in no useful order, with
+//
+//   it := map.walk(&ages)
+//   for map.next(&it) {
+//     use(it.entry.key, it.entry.value)
+//   }
+
+use "std/container/hash" hash
+use "std/mem" mem
+
+pub struct Entry($K: type, $V: type) { key: K, value: V }
+// Two parallel arrays. A tag is 0 for an empty entry, else 0x80 with the top
+// 7 bits of the key's hash, so most probes read one byte and never touch an
+// entry that cannot match.
+pub struct Map($K: type, $V: type) {
+  tags: []u8,
+  entries: []Entry(K, V),
+  count: usize,
+  arena: *mem.Arena,
+  seed: u64,
+  hash_key: fn(u64, K) u64,
+  equal_key: fn(K, K) bool,
+}
+
+// Sets up an empty map. Nothing is allocated until the first insert. Keys
+// that are integers, enums, bools, pointers or text ([]u8, []const u8) hash
+// and compare by value; any other key type is a compile error, so give
+// init_with its hash and equality.
+pub fn init(m: *Map($K, $V), arena: *mem.Arena) {
+  init_seeded_with(m, arena, 0x243f6a8885a308d3, default_hash(K), default_equal(K))
+}
+
+// init with a chosen seed, for keys an attacker may choose.
+pub fn init_seeded(m: *Map($K, $V), arena: *mem.Arena, seed: u64) {
+  init_seeded_with(m, arena, seed, default_hash(K), default_equal(K))
+}
+
+// init with the key's hash and equality: fn(seed, key) u64 and fn(a, b) bool.
+pub fn init_with(m: *Map($K, $V), arena: *mem.Arena, hash_key: fn(u64, K) u64, equal_key: fn(K, K) bool) {
+  init_seeded_with(m, arena, 0x243f6a8885a308d3, hash_key, equal_key)
+}
+
+// The default hash of a key: text by content, other keys by value.
+fn default_hash($K: type, seed: u64, key: K) u64 {
+  #assert(#typeof(K).kind == TypeKind.Integer || #typeof(K).kind == TypeKind.Enum ||
+      #typeof(K).kind == TypeKind.Bool || #typeof(K).kind == TypeKind.Pointer ||
+      (#typeof(K).kind == TypeKind.Slice && #typeof(K).element_id == #typeof(u8).id),
+    "map.init: keys must be integers, enums, bools, pointers or text; use map.init_with for other keys")
+  if #typeof(K).kind == TypeKind.Slice {
+    return text_hash(seed, #cast(*const []const u8, &key).*)
+  }
+  // A bool hashes by its truth as the language reads it, not its byte.
+  if #typeof(K).kind == TypeKind.Bool {
+    truth: u64 = 0
+    if #cast(*const bool, &key).* {
+      truth = 1
+    }
+    return integer_hash(seed, truth)
+  }
+  if #sizeof(K) == 8 {
+    return integer_hash(seed, #cast(*const u64, &key).*)
+  }
+  if #sizeof(K) == 4 {
+    return integer_hash(seed, #cast(u64, #cast(*const u32, &key).*))
+  }
+  if #sizeof(K) == 2 {
+    return integer_hash(seed, #cast(u64, #cast(*const u16, &key).*))
+  }
+  return integer_hash(seed, #cast(u64, #cast(*const u8, &key).*))
+}
+
+fn default_equal($K: type, left: K, right: K) bool {
+  if #typeof(K).kind == TypeKind.Slice {
+    return text_equal(#cast(*const []const u8, &left).*, #cast(*const []const u8, &right).*)
+  }
+  if #typeof(K).kind == TypeKind.Bool {
+    return #cast(*const bool, &left).* == #cast(*const bool, &right).*
+  }
+  if #sizeof(K) == 8 {
+    return #cast(*const u64, &left).* == #cast(*const u64, &right).*
+  }
+  if #sizeof(K) == 4 {
+    return #cast(*const u32, &left).* == #cast(*const u32, &right).*
+  }
+  if #sizeof(K) == 2 {
+    return #cast(*const u16, &left).* == #cast(*const u16, &right).*
+  }
+  return #cast(*const u8, &left).* == #cast(*const u8, &right).*
+}
+
+// init_with and a chosen seed, passed to every hash_key call.
+pub fn init_seeded_with(m: *Map($K, $V), arena: *mem.Arena, seed: u64, hash_key: fn(u64, K) u64, equal_key: fn(K, K) bool) {
+  empty: Map(K, V)
+  m.* = empty
+  m.arena = arena
+  m.seed = seed
+  m.hash_key = hash_key
+  m.equal_key = equal_key
+}
+
+pub fn text_hash(seed: u64, key: []const u8) u64 {
+  return hash.hash_bytes(seed, key)
+}
+
+pub fn text_equal(left: []const u8, right: []const u8) bool {
+  if #len(left) != #len(right) {
+    return false
+  }
+  for i in 0..#len(left) {
+    if left[i] != right[i] {
+      return false
+    }
+  }
+  return true
+}
+
+// Finalizer from MurmurHash3: sequential integers must not cluster. Cast other
+// integer keys to u64.
+pub fn integer_hash(seed: u64, key: u64) u64 {
+  mixed := key ^ seed
+  mixed = mixed ^ (mixed >> 33)
+  mixed = mixed * 0xff51afd7ed558ccd
+  mixed = mixed ^ (mixed >> 33)
+  mixed = mixed * 0xc4ceb9fe1a85ec53
+  return mixed ^ (mixed >> 33)
+}
+
+pub fn integer_equal(left: u64, right: u64) bool {
+  return left == right
+}
+
+fn tag_of(code: u64) u8 {
+  return #cast(u8, (code >> 57) | 0x80)
+}
+
+// The index holding key, or the empty index where it belongs.
+fn locate(m: *const Map($K, $V), key: K, code: u64) usize {
+  tags := m.tags
+  entries := m.entries
+  equal_key := m.equal_key
+  mask := #len(tags) - 1
+  want := #cast(u8, (code >> 57) | 0x80)
+  at := #cast(usize, code) & mask
+  for true {
+    tag := tags[at]
+    if tag == 0 {
+      return at
+    }
+    // Apart from the &&, so the compiler can inline equal_key.
+    if tag == want {
+      if equal_key(entries[at].key, key) {
+        return at
+      }
+    }
+    at = (at + 1) & mask
+  }
+  return 0
+}
+
+fn grow(m: *Map($K, $V)) {
+  capacity := #len(m.tags) * 2
+  if capacity == 0 {
+    capacity = 8
+  }
+  old_tags := m.tags
+  old_entries := m.entries
+  tags := mem.push_array(u8, m.arena, capacity)
+  entries := mem.push_array(Entry(K, V), m.arena, capacity)
+  mask := capacity - 1
+  for i in 0..#len(old_tags) {
+    if old_tags[i] != 0 {
+      code := m.hash_key(m.seed, old_entries[i].key)
+      at := #cast(usize, code) & mask
+      for tags[at] != 0 {
+        at = (at + 1) & mask
+      }
+      tags[at] = old_tags[i]
+      entries[at] = old_entries[i]
+    }
+  }
+  m.tags = tags
+  m.entries = entries
+}
+
+// The index of key, adding the key when absent; the caller sets the value.
+fn place(m: *Map($K, $V), key: K) usize {
+  if m.arena == nil {
+    #panic("call map.init before adding to a map")
+  }
+  if (m.count + 1) * 4 > #len(m.tags) * 3 {
+    grow(m)
+  }
+  code := m.hash_key(m.seed, key)
+  at := locate(m, key, code)
+  if m.tags[at] == 0 {
+    m.tags[at] = tag_of(code)
+    m.entries[at].key = key
+    m.count += 1
+  }
+  return at
+}
+
+// Sets key to value, adding it when absent.
+pub fn insert(m: *Map($K, $V), key: K, value: V) {
+  if m.arena == nil {
+    #panic("call map.init before adding to a map")
+  }
+  if (m.count + 1) * 4 > #len(m.tags) * 3 {
+    grow(m)
+  }
+  code := m.hash_key(m.seed, key)
+  at := locate(m, key, code)
+  entry := &m.entries[at]
+  if m.tags[at] == 0 {
+    m.tags[at] = tag_of(code)
+    entry.key = key
+    m.count += 1
+  }
+  entry.value = value
+}
+
+// The value for key, added as initial when absent: one lookup for counting,
+// as in map.upsert(&counts, word, 0).* += 1. The pointer goes stale at the
+// next insert or upsert.
+pub fn upsert(m: *Map($K, $V), key: K, initial: V) *V {
+  before := m.count
+  entry := &m.entries[place(m, key)]
+  if m.count != before {
+    entry.value = initial
+  }
+  return &entry.value
+}
+
+// The value for key, or nil when key is absent. An empty map needs no init.
+pub fn get(m: *const Map($K, $V), key: K) *V {
+  if m.count == 0 {
+    return nil
+  }
+  at := locate(m, key, m.hash_key(m.seed, key))
+  if m.tags[at] == 0 {
+    return nil
+  }
+  return &m.entries[at].value
+}
+
+// Removes key. Returns false when it was absent. Later entries of the probe run
+// shift back, so no tombstones build up.
+pub fn remove(m: *Map($K, $V), key: K) bool {
+  if m.count == 0 {
+    return false
+  }
+  at := locate(m, key, m.hash_key(m.seed, key))
+  if m.tags[at] == 0 {
+    return false
+  }
+  mask := #len(m.tags) - 1
+  next := (at + 1) & mask
+  for m.tags[next] != 0 {
+    home := #cast(usize, m.hash_key(m.seed, m.entries[next].key)) & mask
+    if ((next - home) & mask) >= ((next - at) & mask) {
+      m.tags[at] = m.tags[next]
+      m.entries[at] = m.entries[next]
+      at = next
+    }
+    next = (next + 1) & mask
+  }
+  m.tags[at] = 0
+  m.count -= 1
+  return true
+}
+
+// A walk over a map's entries. Adding or removing entries during a walk may
+// skip or repeat some.
+pub struct Walk($K: type, $V: type) { map: *const Map(K, V), at: usize, entry: *Entry(K, V) }
+
+pub fn walk(m: *const Map($K, $V)) Walk(K, V) {
+  it: Walk(K, V)
+  it.map = m
+  return it
+}
+
+// Moves to the next entry and sets it.entry, or returns false at the end.
+pub fn next(it: *Walk($K, $V)) bool {
+  tags := it.map.tags
+  for it.at < #len(tags) {
+    at := it.at
+    it.at += 1
+    if tags[at] != 0 {
+      it.entry = &it.map.entries[at]
+      return true
+    }
+  }
+  it.entry = nil
+  return false
+}

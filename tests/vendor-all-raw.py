@@ -81,16 +81,16 @@ cases = {
   exhausted := mem.arena_from_buffer(tiny[pad..pad+mem.ArenaHeader+1])
   if image.resize(exhausted, input[..], 2, 2, output[..], 4, 4, 1, false) { #panic("arena allocator replaced") }''',
     'vulkan': '''library := dynlib.open("libvulkan.so.1", dynlib.Now)
-  if !library.ok { #panic("loader") }
+  if library.failure.kind != io.Kind.Ok { #panic("loader") }
   symbol := dynlib.symbol(library.value, "vkEnumerateInstanceVersion")
-  if !symbol.ok { #panic("procedure") }
+  if symbol.failure.kind != io.Kind.Ok { #panic("procedure") }
   version: u32 = 0
   if raw.vkEnumerateInstanceVersion(#cast(raw.Procedure_vkEnumerateInstanceVersion, symbol.value), &version) != raw.VK_SUCCESS || version == 0 { #panic("dispatch") }
   _ = dynlib.close(&library.value)''',
     'opengl': '''library := dynlib.open("libGL.so.1", dynlib.Now)
-  if !library.ok { #panic("loader") }
+  if library.failure.kind != io.Kind.Ok { #panic("loader") }
   symbol := dynlib.symbol(library.value, "glGetError")
-  if !symbol.ok { #panic("procedure") }
+  if symbol.failure.kind != io.Kind.Ok { #panic("procedure") }
   raw.glClear(record_clear, #cast(u32, raw.GL_COLOR_BUFFER_BIT))
   if recorded_mask != #cast(u32, raw.GL_COLOR_BUFFER_BIT) { #panic("dispatch") }
   _ = dynlib.close(&library.value)''',
@@ -204,13 +204,13 @@ cases['ffmpeg'] = r'''if raw.AVERROR(11) != -11 || raw.AVUNERROR(-11) != 11 { #p
   if raw.avformat_open_input(&format, #cast(*const c.char, &name[0]), nil, nil) < 0 { #panic("open WAV") }
   defer raw.avformat_close_input(&format)
   if raw.avformat_find_stream_info(format, nil) < 0 || format.nb_streams != 1 { #panic("WAV streams") }
-  streams := format.streams[..format.nb_streams]
+  streams := #slice(format.streams, format.nb_streams)
   if streams[0].codecpar.codec_id != raw.AV_CODEC_ID_PCM_S16LE || streams[0].codecpar.sample_rate != 8000 { #panic("WAV metadata") }
   packet := raw.av_packet_alloc()
   if packet == nil { #panic("packet") }
   defer raw.av_packet_free(&packet)
   if raw.av_read_frame(format, packet) < 0 || packet.size != 8 { #panic("WAV packet") }
-  data := packet.data[..#cast(usize, packet.size)]
+  data := #slice(packet.data, #cast(usize, packet.size))
   if data[0] != 1 || data[6] != 4 { #panic("WAV bytes") }
   raw.av_packet_unref(packet)
   if raw.av_read_frame(format, packet) != raw.AVERROR_EOF { #panic("WAV EOF") }
@@ -233,7 +233,7 @@ try:
             module = manifest[name]['module']
             imports = 'use "vendor/' + module + '" raw\nuse "std/c"\n'
             if name in ('vulkan', 'opengl'):
-                imports += 'use "std/dynlib"\n#link("c")\n'
+                imports += 'use "std/dynlib"\nuse "std/io"\n#link("c")\n'
             if name == 'sdl3':
                 imports += 'fn event_filter(data: rawptr, event: *raw.SDL_Event) bool {\n_ = event\nreturn data != nil\n}\n'
             if name == 'opengl':

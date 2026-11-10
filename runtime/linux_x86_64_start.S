@@ -73,6 +73,9 @@ dyn_panic:
     mov $2, %edi
     mov $1, %eax
     syscall
+.global dyn_fault_report
+.type dyn_fault_report,@function
+dyn_fault_report:
 .Ldyn_panic_stack:
     lea .Ldyn_panic_trace(%rip), %rsi
     mov $13, %edx
@@ -111,6 +114,11 @@ dyn_panic:
     mov $1, %eax
     syscall
     jmp .Ldyn_panic_frame
+#endif
+#ifdef DYN_RELEASE
+.global dyn_fault_report
+.type dyn_fault_report,@function
+dyn_fault_report:
 #endif
 .Ldyn_panic_exit:
     # A panic ends every thread, without atexit handlers (state may be broken).
@@ -270,11 +278,15 @@ dyn_trace_pop:
     je .Ldyn_trace_slot_claimed
     xor %eax, %eax
     lock cmpxchg %r8, (%rdx)
-    je .Ldyn_trace_slot_claimed
+    je .Ldyn_trace_slot_new
     add $1040, %rdx
     loop .Ldyn_trace_slot_claim_loop
     xor %eax, %eax
     ret
+.Ldyn_trace_slot_new:
+    push %rdx
+    call dyn_fault_install
+    pop %rdx
 .Ldyn_trace_slot_claimed:
     mov %rdx, %rax
     ret

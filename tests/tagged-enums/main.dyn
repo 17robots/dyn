@@ -1,0 +1,28 @@
+struct Pair { a: i32, b: i32 }
+enum Node { Null, Number: f64, Name: []const u8, Link: *Node, Both: Pair }
+fn show(n: Node) f64 {
+  case n {
+    Node.Null => { return 0.0 }
+    Node.Number v => { return v }
+    Node.Name s => { return #cast(f64, #len(s)) }
+    Node.Link p => { return show(p.*) + 1.0 }
+    Node.Both *p => { return #cast(f64, p.a + p.b) }
+  }
+}
+fn bump(n: *Node) {
+  case n.* {
+    Node.Number *v => { v += 1.0 }
+    _ => { }
+  }
+}
+fn main() {
+  a := Node.Number(2.5)
+  bump(&a)
+  b := Node.Link(&a)
+  c := Node.Name("abc")
+  d := Node.Both(Pair{ a: 3, b: 4 })
+  zero: Node
+  if show(a) != 3.5 || show(b) != 4.5 || show(c) != 3.0 || show(d) != 7.0 || show(zero) != 0.0 {
+    #panic("payload values")
+  }
+}

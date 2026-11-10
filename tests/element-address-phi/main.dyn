@@ -1,0 +1,15 @@
+use "std/io"
+fn pick(xs: []u64, n: usize) *u64 {
+  p: *u64 = nil
+  for i in 0..#len(xs) {
+    if i == n {
+      p = &xs[i]
+    }
+  }
+  return p
+}
+fn main() {
+  xs: [4]u64 = [1, 2, 3, 4]
+  io.println("{}", pick(xs[0..4], 2).*)
+  io.println("{}", pick(xs[0..4], 9).*)
+}

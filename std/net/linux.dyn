@@ -94,8 +94,8 @@ pub fn receive_packet(descriptor: isize, bytes: []u8) Result {
   return result(value)
 }
 
-fn native_kind(code: isize) errors.Kind {
-  return errors.linux(code)
+fn native_kind(code: isize) io.Kind {
+  return io.linux(code)
 }
 
 const MulticastJoinOption: usize = 35

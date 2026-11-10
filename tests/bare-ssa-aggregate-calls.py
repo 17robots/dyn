@@ -95,7 +95,7 @@ source+=f'pub fn capacitycallee({pars}) Large {{ return Large{{a:#cast(u64,a0),b
 names+=['capacitycallee','capacitycall']
 c+='extern unsigned long long capacitycall(void*);extern void capacitycallee(void);\n'
 checks+=['if(capacitycall((void*)capacitycallee)!=510)return 107;']
-source+='extern fn oracle() u32\nfn main() { n:=oracle()\nif n!=0 { _=io.println(io.stdout(),"BAD {}",n)\n#panic("oracle") }\n_=io.write_all(io.stdout(),"ABI OK\\n") }\n'
+source+='extern fn oracle() u32\nfn main() { n:=oracle()\nif n!=0 { io.println("BAD {}",n)\n#panic("oracle") }\n_=io.write_all(io.stdout(),"ABI OK\\n") }\n'
 c+='unsigned oracle(void){'+''.join(checks)+'return 0;}\n'
 
 

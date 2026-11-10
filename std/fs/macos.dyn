@@ -1,4 +1,6 @@
+use "std/parse" parse
 #target(kernel: darwin)
+use "std/io" io
 use "std/mem" mem
 use "std/c" cstrings
 
@@ -7,7 +9,7 @@ fn terminated(path: []const u8, storage: []u8) *const u8 {
     return nil
   }
   value := cstrings.string_into(storage, path)
-  if !value.ok {
+  if value.failure.kind != parse.Kind.Ok {
     return nil
   }
   return value.value
@@ -16,7 +18,7 @@ fn native_open(path: []const u8, mode: u8) FileResult {
   storage: [4096 + mem.ArenaBufferOverhead]u8 = []
   name := terminated(path, storage[..])
   if name == nil {
-    return FileResult{ kind: errors.Kind.InvalidInput }
+    return FileResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
   flags: usize = 16777216 // O_CLOEXEC
   if mode == 1 {
@@ -30,9 +32,9 @@ fn native_open(path: []const u8, mode: u8) FileResult {
   } // O_WRONLY | O_CREAT | O_EXCL
   value := #syscall(5, name, flags, 420)
   if value < 0 {
-    return FileResult{ error: value, kind: native_kind(value) }
+    return FileResult{ failure: io.Failure{ kind: native_kind(value), native: value } }
   }
-  return FileResult{ value: owned_file(value), ok: true }
+  return FileResult{ value: owned_file(value) }
 }
 fn native_close(handle: isize) isize {
   return #syscall(6, handle)
@@ -49,8 +51,8 @@ fn native_seek(handle: isize, offset: isize, origin: usize) isize {
 fn native_sync(handle: isize) isize {
   return #syscall(95, handle)
 }
-fn native_kind(code: isize) errors.Kind {
-  return errors.darwin(code)
+fn native_kind(code: isize) io.Kind {
+  return io.darwin(code)
 }
 fn native_valid(handle: isize) bool {
   return handle >= 0

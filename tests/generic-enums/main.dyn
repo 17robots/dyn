@@ -1,0 +1,98 @@
+enum Slot($T: type) { Empty, Full: T }
+enum(u8) Either($A: type, $B: type) { Neither, Left: A, Right: B }
+enum Tree($T: type) { Leaf, Node: *Branch(T) }
+enum Color { Red, Green }
+struct Branch($T: type) { left: Tree(T), right: Tree(T), value: T }
+struct Holder { slot: Slot(i64), other: Slot(u8) }
+type IntSlot = Slot(i32)
+
+fn full($T: type, value: T) Slot(T) {
+  return Slot(T).Full(value)
+}
+
+fn get(slot: Slot($T), fallback: T) T {
+  case slot {
+    Slot(T).Empty => {
+      return fallback
+    }
+    Slot(T).Full value => {
+      return value
+    }
+  }
+}
+
+fn bump(slot: *Slot(i32)) {
+  case slot.* {
+    Slot(i32).Empty => { }
+    Slot(i32).Full *value => {
+      value += 1
+    }
+  }
+}
+
+fn sum(tree: Tree(i32)) i32 {
+  case tree {
+    Tree(i32).Leaf => {
+      return 0
+    }
+    Tree(i32).Node branch => {
+      return sum(branch.left) + branch.value + sum(branch.right)
+    }
+  }
+}
+
+fn main() {
+  a := Slot(i32).Full(7)
+  empty := Slot(i32).Empty
+  if get(a, 0) != 7 || get(empty, 3) != 3 {
+    #panic("get")
+  }
+  bump(&a)
+  if get(a, 0) != 8 {
+    #panic("alias")
+  }
+  b: Slot(f64) = full(f64, 1.5)
+  if get(b, 0.0) != 1.5 {
+    #panic("f64")
+  }
+  c: IntSlot = IntSlot.Full(9)
+  if get(c, 0) != 9 {
+    #panic("alias type")
+  }
+  nested := Slot(Slot(i32)).Full(Slot(i32).Full(5))
+  if get(get(nested, Slot(i32).Empty), 0) != 5 {
+    #panic("nested")
+  }
+  color := Slot(Color).Full(Color.Green)
+  if get(color, Color.Red) != Color.Green {
+    #panic("plain enum payload")
+  }
+  e := Either(i32, []const u8).Right("hi")
+  case e {
+    Either(i32, []const u8).Neither => {
+      #panic("neither")
+    }
+    Either(i32, []const u8).Left => {
+      #panic("left")
+    }
+    Either(i32, []const u8).Right text => {
+      if #len(text) != 2 {
+        #panic("text")
+      }
+    }
+  }
+  left: Branch(i32) = .{ value: 2 }
+  right: Branch(i32) = .{ value: 3 }
+  root: Branch(i32) = .{ left: Tree(i32).Node(&left), right: Tree(i32).Node(&right), value: 1 }
+  if sum(Tree(i32).Node(&root)) != 6 {
+    #panic("tree")
+  }
+  zero: Holder
+  if get(zero.slot, 4) != 4 {
+    #panic("zero is the first variant")
+  }
+  zero.other = Slot(u8).Full(200)
+  if get(zero.other, 0) != 200 {
+    #panic("field")
+  }
+}

@@ -21,10 +21,10 @@ fn zero_bit(a: Number) u64 {
   for i in 0..8 {
     word|=a.limbs[i]
   }
-  return 1-#cast(u64, (word|#wrap(0-word))>>31)
+  return 1-#cast(u64, (word|(0-word))>>31)
 }
 fn choose(a: Number, b: Number, bit: u64) Number {
-  mask:=#cast(u32, #wrap(0-bit))
+  mask:=#cast(u32, (0-bit))
   result: Number
   for i in 0..8 {
     result.limbs[i]=(a.limbs[i]&~mask)|(b.limbs[i]&mask)
@@ -57,7 +57,7 @@ fn plus(a: Number, b: Number, modulus: Number) Number {
 fn minus(a: Number, b: Number, modulus: Number) Number {
   borrow: u64
   result:=subtract(a, b, &borrow)
-  mask:=#cast(u32, #wrap(0-borrow))
+  mask:=#cast(u32, (0-borrow))
   carry: u64
   for i in 0..8 {
     wide:=#cast(u64, result.limbs[i])+#cast(u64, modulus.limbs[i]&mask)+carry
@@ -86,7 +86,7 @@ fn inverse(value: Number, modulus: Number) Number {
     i:=255-step
     result=multiply(result, result, modulus)
     // The exponent is public and fixed by the chosen modulus.
-    if (exponent.limbs[i/32]>>#cast(u32, i%32))&1!=0 {
+    if ((exponent.limbs[i/32]>>#cast(u32, i%32))&1)!=0 {
       result=multiply(result, value, modulus)
     }
   }

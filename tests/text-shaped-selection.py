@@ -19,7 +19,7 @@ use "vendor/fribidi" bidi
 use "std/mem" mem
 use "std/fs" fs
 use "std/dynlib" dynlib
-use "std/errors" errors
+use "std/io" errors
 use "std/encoding/binary" binary
 fn check(ok:bool) {if !ok {#panic("shaped selection")}}
 fn select(data:rawptr,text:[]const u8) layout.Face {return layout.Face{font:data,data:data}}
@@ -32,7 +32,7 @@ fn save(arena:*mem.Arena,rects:[]const layout.SelectionRect,path:[]const u8) {
   fields:[7]u32=[#cast(u32,r.line),#cast(u32,r.start),#cast(u32,r.end),#cast(u32,#cast(i32,r.x*64.0)),#cast(u32,#cast(i32,r.y*64.0)),#cast(u32,#cast(i32,r.width*64.0)),#cast(u32,#cast(i32,r.height*64.0))]
   for j in 0..7 {binary.store_u32_le(output[4+i*28+j*4..8+i*28+j*4],fields[j])}
  }
- check(fs.write_all(path,output).ok)
+ check(fs.write_all(path,output).failure.kind == errors.Kind.Ok)
 }
 fn main() {
  owner:=mem.arena_create(0)
@@ -41,14 +41,14 @@ fn main() {
   mem.arena_release(owner)}
  library:=dynlib.open("HB_LIBRARY",dynlib.Now)
  bidi_library:=dynlib.open("BIDI_LIBRARY",dynlib.Now)
- check(library.ok && bidi_library.ok)
+ check(library.failure.kind == errors.Kind.Ok && bidi_library.failure.kind == errors.Kind.Ok)
  defer {_=dynlib.close(&library.value)
   _=dynlib.close(&bidi_library.value)}
  h:=hb.load(library.value)
  b:=bidi.load(bidi_library.value)
  check(h.ok && b.ok)
  bytes:=fs.read_all(owner,"font.ttf",10000000)
- check(bytes.ok)
+ check(bytes.failure.kind == errors.Kind.Ok)
  font:=hb.font_owned(&h.api,bytes.value,0)
  check(font.ok)
  defer h.api.font_destroy(font.value)

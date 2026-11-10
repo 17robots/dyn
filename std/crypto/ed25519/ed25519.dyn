@@ -167,7 +167,7 @@ fn decode(input: []const u8) Decoded {
   if !f.equal(f.multiply(f.square(x), den), num) {
     return Decoded{}
   }
-  if f.equal(x, f.number(0)) && input[31]&128!=0 {
+  if f.equal(x, f.number(0)) && (input[31]&128)!=0 {
     return Decoded{}
   }
   // Decode the negated point, for [S]B-[h]A.

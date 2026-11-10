@@ -12,7 +12,7 @@ DYN=Path(os.environ.get('DYN',ROOT/'build/dyn')).resolve()
 CC=shlex.split(os.environ.get('CC','cc'))
 SOURCE='''
 struct Pair { a:u64,b:u64 }
-enum Box { Empty, Value:Pair }
+struct Box { value:Pair }
 pub counter:u64
 fn next() u64 { counter+=1
 return counter }
@@ -21,7 +21,7 @@ pub first:u64=next()
 pub second:u64=next()
 pub items:[3]u64=[next(),next(),next()]
 pub pair:Pair=Pair{a:next(),b:next()}
-pub payload:Box=Box.Value(Pair{a:8,b:9})
+pub payload:Box=Box{value:Pair{a:8,b:9}}
 pub text:[]const u8="ok"
 pub callback:fn(u64) u64=plus
 extern foreign_value "backend_foreign_value":u64
@@ -37,7 +37,7 @@ pub fn constants() u64 {
 pub fn frozen_pointer() rawptr { return #cast(rawptr, &frozen) }
 pub fn state() u64 {
   total:=counter+first+second+items[0]+items[1]+items[2]+pair.a+pair.b+#cast(u64, #len(text))+callback(1)+foreign_value
-  case payload { Box.Value p=>{return total+p.a+p.b} _=>{return 0} }
+  return total+payload.value.a+payload.value.b
 }
 pub fn mutate(value:u64) u64 { pair.a=value
 items[1]=value
@@ -82,7 +82,8 @@ def main():
                 result=run([sys.executable,'-c',code,path]);assert result.stdout=='ok',result.stdout;checks+=1
                 code='import ctypes,sys;lib=ctypes.CDLL(sys.argv[1]);lib.frozen_pointer.restype=ctypes.c_void_p;ctypes.c_uint64.from_address(lib.frozen_pointer()).value=0'
                 result=subprocess.run([sys.executable,'-c',code,str(path)],capture_output=True,text=True,timeout=10)
-                assert result.returncode==-11,(mode,path,result.returncode,result.stderr);checks+=1
+                # Debug builds report the fault and exit 101; release dies by the signal.
+                assert result.returncode==-11 or (result.returncode==101 and result.stderr.startswith('memory fault')),(mode,path,result.returncode,result.stderr);checks+=1
             # Freestanding runtime calls main directly; no CRT constructor walker.
             source.write_text(SOURCE+'\nfn main() { if state()!=76 { #panic("global startup") }\n_=write_text()\nreturn }\n')
             executable=root/(mode+'-compiler');run([DYN,'build',root,'--'+mode,'--no-cache','--jobs','1','--link',provider_obj,'--link',collisions_obj,'--output',executable])

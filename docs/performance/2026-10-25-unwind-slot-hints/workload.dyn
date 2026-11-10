@@ -76,4 +76,4 @@ blocks[i][0]=#cast(u64,next(&x))
 blocks[i][7]=#cast(u64,next(&x))}
 for b in blocks {sum=#wrap(sum+b[0]+b[7])}
 mem.arena_rewind(&arena,mark)}}else {#panic("mode")}
-_=io.println(io.stdout(),"{}",sum)}
+io.println("{}",sum)}

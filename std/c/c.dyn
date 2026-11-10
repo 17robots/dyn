@@ -1,3 +1,4 @@
+use "std/parse" parse
 use "std/mem" memory
 
 // C ABI names. Target files select long width and plain-char signedness. No wrappers,
@@ -22,23 +23,21 @@ pub type string = *const u8
 pub type mutable_string = *u8
 pub type pointer = rawptr
 
-pub enum ErrorKind { None, InvalidInput, Capacity, Overflow, Unterminated }
 
 pub struct StringResult {
-  error: ErrorKind,
   required: usize,
   value: string,
-  ok: bool,
+  failure: parse.Failure,
 }
 
-pub struct BytesResult { value: []const u8, error: ErrorKind, ok: bool }
+pub type BytesResult = parse.Result([]const u8)
 
 // Bounded scan: never reads beyond `maximum`; callers retain source ownership.
 pub fn string_length(value: string, maximum: usize) usize {
   if value == nil {
     return 0
   }
-  bytes := value[..maximum]
+  bytes := #slice(value, maximum)
   count: usize = 0
   for count < maximum && bytes[count] != 0 {
     count += 1
@@ -48,13 +47,13 @@ pub fn string_length(value: string, maximum: usize) usize {
 
 pub fn bytes_from_string(value: string, maximum: usize) BytesResult {
   if value == nil {
-    return BytesResult{ error: ErrorKind.InvalidInput }
+    return BytesResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   count := string_length(value, maximum)
   if count == maximum {
-    return BytesResult{ error: ErrorKind.Unterminated }
+    return BytesResult{ failure: parse.Failure{ kind: parse.Kind.Truncated } }
   }
-  return BytesResult{ value: value[..count], ok: true }
+  return BytesResult{ value: #slice(value, count) }
 }
 
 pub fn errno_from_result(value: isize) isize {
@@ -72,32 +71,32 @@ pub fn succeeded(value: isize) bool {
 // adapter allocates nothing; use string_from_bytes for arena-owned strings.
 pub fn string_into(destination: []u8, source: []const u8) StringResult {
   if #len(source) == #cast(usize, -1) {
-    return StringResult{ error: ErrorKind.Overflow }
+    return StringResult{ failure: parse.Failure{ kind: parse.Kind.Overflow } }
   }
   for byte in source {
     if byte == 0 {
-      return StringResult{ error: ErrorKind.InvalidInput }
+      return StringResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
     }
   }
   required := #len(source) + 1
   if #len(destination) < required {
-    return StringResult{ error: ErrorKind.Capacity, required: required }
+    return StringResult{ failure: parse.Failure{ kind: parse.Kind.Capacity }, required: required }
   }
   _ = memory.move(destination, source)
   destination[#len(source)] = 0
-  return StringResult{ value: &destination[0], required: required, ok: true }
+  return StringResult{ value: &destination[0], required: required }
 }
 
 // source with a NUL appended, in arena. Embedded NUL is invalid input; failure
 // pushes nothing.
 pub fn string_from_bytes(arena: *memory.Arena, source: []const u8) StringResult {
   if #len(source) == #cast(usize, -1) {
-    return StringResult{ error: ErrorKind.Overflow }
+    return StringResult{ failure: parse.Failure{ kind: parse.Kind.Overflow } }
   }
   mark := memory.arena_mark(arena)
   allocation := memory.arena_push_uninit(arena, #len(source) + 1, 1)
-  result := string_into(allocation[..#len(source) + 1], source)
-  if !result.ok {
+  result := string_into(#slice(allocation, #len(source) + 1), source)
+  if result.failure.kind != parse.Kind.Ok {
     memory.arena_rewind(arena, mark)
   }
   return result

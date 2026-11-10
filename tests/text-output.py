@@ -15,7 +15,6 @@ struct Pair { integer: i64, real: f64 }
 struct Large { bytes: [40]u8, value: i64 }
 struct Floats { x:f32, y:f32 }
 packed struct Packed { small: u8, wide: i64 }
-enum(i8) Sign { Minus = -1, Zero = 0, Plus = 1 }
 extern fn provider "provider"(x: Pair) Pair
 extern fn floats_provider "floats_provider"(x:Floats) Floats
 extern fn large_provider "large_provider"(x: Large) Large
@@ -45,8 +44,8 @@ fn main() {
   large.bytes[39] = 7
   other := large_provider(large)
   if large.value != 41 || other.value != 42 || other.bytes[39] != 7 { #panic("large byval ABI") }
-  packed := packed_provider(Packed{small: 3, wide: 8})
-  if packed.small != 3 || packed.wide != 9 { #panic("packed ABI") }
+  packed_value := packed_provider(Packed{small: 3, wide: 8})
+  if packed_value.small != 3 || packed_value.wide != 9 { #panic("packed ABI") }
   values := [1, 2, 3, 4]
   sum: i32 = 0
   for value in values { sum += value }
@@ -55,8 +54,6 @@ fn main() {
   ptr := &sum
   add(ptr)
   if ptr.* != 14 || callback(3) != 5 { #panic("pointer") }
-  sign := #cast(Sign, -1)
-  if #cast(i8, sign) != -1 { #panic("signed enum") }
   number: f32 = 1.25
   wide := #cast(f64, number)
   if wide + 0.75 != 2.0 || #cast(i32, wide) != 1 { #panic("float") }

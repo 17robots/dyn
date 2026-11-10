@@ -1,0 +1,52 @@
+use "std/container/array"
+use "std/mem"
+
+fn check(ok: bool) {
+  if !ok {
+    #panic("container array")
+  }
+}
+
+struct Enemy {
+  hp: i32,
+}
+
+fn main() {
+  arena := mem.arena_create(0)
+  enemies: array.Array(Enemy)
+  array.init(&enemies, arena)
+  check(#len(enemies.items) == 0 && array.get(&enemies, 0) == nil)
+  for i in 0..1000 {
+    array.push(&enemies, Enemy{ hp: #cast(i32, i) })
+  }
+  check(#len(enemies.items) == 1000 && array.get(&enemies, 999).hp == 999)
+  check(array.get(&enemies, 1000) == nil)
+
+  /* push_ref: the new element, writable until the next push. */
+  boss := array.push_ref(&enemies, Enemy{ hp: 300 })
+  boss.hp -= 50
+  check(enemies.items[1000].hp == 250)
+
+  /* Growth on a shared arena: other allocations between pushes. */
+  other: array.Array(u64)
+  array.init(&other, arena)
+  for i in 0..500 {
+    array.push(&other, #cast(u64, i))
+    array.push(&enemies, Enemy{ hp: -1 })
+  }
+  for i in 0..500 {
+    check(other.items[i] == #cast(u64, i))
+  }
+  check(enemies.items[999].hp == 999 && #len(enemies.items) == 1501)
+
+  extra: [3]u64 = [7, 8, 9]
+  array.push_all(&other, extra[..])
+  check(#len(other.items) == 503 && other.items[502] == 9)
+
+  last := array.pop(&other)
+  check(last.ok && last.value == 9 && #len(other.items) == 502)
+  array.clear(&other)
+  check(#len(other.items) == 0 && !array.pop(&other).ok)
+  array.push(&other, 42)
+  check(other.items[0] == 42)
+}

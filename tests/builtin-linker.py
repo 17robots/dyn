@@ -56,13 +56,13 @@ fn mix(x: u64) u64 {
 }
 fn main() {
   arena := mem.arena_create(4096)
-  values := mem.arena_push(arena, 64, 8)[..64]
+  values := #slice(mem.arena_push(arena, 64, 8), 64)
   state: u64 = 1
   for i in 0..64 {
     state = mix(state + #cast(u64, i)) % 1000003
     values[i] = #cast(u8, state)
   }
-  _ = io.println(io.stdout(), "{}", state)
+  io.println("{}", state)
   mem.arena_release(arena)
 }
 '''
@@ -306,13 +306,11 @@ with tempfile.TemporaryDirectory(prefix='dyn-builtin-linker-') as temporary:
 
         ours = root/'windows-builtin.exe'
         run(DYN, 'build', root/'release', '--target', 'x86_64-windows', '--output', ours, env=dict(bare, DYN_CACHE_DIR=str(root/'win-a')))
-        objects = root/'windows.o'
-        run(DYN, 'build', root/'release', '--target', 'x86_64-windows', '--emit-object', '--no-link', '--output', objects,
-            env=dict(os.environ, DYN_CACHE_DIR=str(root/'win-b')))
-        build = Path(DYN).parent
+        # The same executable object, linked by GNU ld: a standalone
+        # --emit-object keeps public functions, an executable does not.
         reference = root/'windows-ld.exe'
-        run('ld', '-mi386pep', '--entry=dyn_start', '--subsystem', 'console', '-o', reference,
-            build/'dynrt_windows_start.o', build/'dynrt_windows_support.o', str(objects) + '.o')
+        run(DYN, 'build', root/'release', '--target', 'x86_64-windows', '--output', reference,
+            env=dict(os.environ, DYN_LINKER='external', DYN_CACHE_DIR=str(root/'win-b')))
         assert pe_code(ours) == pe_code(reference), 'Windows: built-in link differs from GNU ld'
         assert imports(ours) == imports(reference), 'Windows: import tables differ'
         # Windows refuses an image with an empty section; release objects

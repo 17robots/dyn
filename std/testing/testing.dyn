@@ -1,6 +1,5 @@
 use "std/time" clock
-use "std/errors" benchmark_errors
-
+use "std/io" io
 pub fn expect(condition: bool, message: []const u8) {
   if !condition {
     #panic(message)
@@ -77,36 +76,36 @@ pub fn random_below(generator: *Random, bound: usize) usize {
 }
 
 // Clock failures are retained by the benchmark and returned by later queries.
-pub struct Benchmark { started: clock.ClockResult, iterations: usize, failed: bool, error: isize, kind: benchmark_errors.Kind }
+pub struct Benchmark { started: clock.ClockResult, iterations: usize, failed: bool, error: isize, kind: io.Kind }
 pub fn benchmark_start(iterations: usize) Benchmark {
   now := clock.monotonic_now()
-  return Benchmark{ started: now, iterations: iterations, failed: !now.ok, error: now.error, kind: now.kind }
+  return Benchmark{ started: now, iterations: iterations, failed: now.failure.kind != io.Kind.Ok, error: now.failure.native, kind: now.failure.kind }
 }
-fn benchmark_failure(benchmark: *Benchmark, kind: benchmark_errors.Kind, code: isize) clock.DurationResult {
+fn benchmark_failure(benchmark: *Benchmark, kind: io.Kind, code: isize) clock.DurationResult {
   if !benchmark.failed {
     benchmark.failed = true
     benchmark.kind = kind
     benchmark.error = code
   }
-  if benchmark.kind == benchmark_errors.Kind.None {
-    benchmark.kind = benchmark_errors.Kind.InvalidState
+  if benchmark.kind == io.Kind.Ok {
+    benchmark.kind = io.Kind.InvalidState
   }
-  return clock.DurationResult{kind: benchmark.kind, error: benchmark.error}
+  return clock.DurationResult{ failure: io.Failure{ kind: benchmark.kind, native: benchmark.error } }
 }
 pub fn benchmark_elapsed(benchmark: *Benchmark) clock.DurationResult {
   if benchmark.failed {
     return benchmark_failure(benchmark, benchmark.kind, benchmark.error)
   }
-  if !benchmark.started.ok {
-    return benchmark_failure(benchmark, benchmark.started.kind, benchmark.started.error)
+  if benchmark.started.failure.kind != io.Kind.Ok {
+    return benchmark_failure(benchmark, benchmark.started.failure.kind, benchmark.started.failure.native)
   }
   finished := clock.monotonic_now()
-  if !finished.ok {
-    return benchmark_failure(benchmark, finished.kind, finished.error)
+  if finished.failure.kind != io.Kind.Ok {
+    return benchmark_failure(benchmark, finished.failure.kind, finished.failure.native)
   }
   duration := clock.elapsed(benchmark.started.value, finished.value)
-  if !duration.ok {
-    return benchmark_failure(benchmark, benchmark_errors.Kind.Overflow, 0)
+  if duration.failure.kind != io.Kind.Ok {
+    return benchmark_failure(benchmark, io.Kind.Overflow, 0)
   }
   return duration
 }
@@ -114,14 +113,14 @@ pub fn benchmark_nanoseconds_each(benchmark: *Benchmark) clock.DurationResult {
   if benchmark.failed {
     return benchmark_failure(benchmark, benchmark.kind, benchmark.error)
   }
-  if !benchmark.started.ok && (benchmark.started.kind != benchmark_errors.Kind.None || benchmark.started.error != 0) {
-    return benchmark_failure(benchmark, benchmark.started.kind, benchmark.started.error)
+  if benchmark.started.failure.kind != io.Kind.Ok && (benchmark.started.failure.kind != io.Kind.Ok || benchmark.started.failure.native != 0) {
+    return benchmark_failure(benchmark, benchmark.started.failure.kind, benchmark.started.failure.native)
   }
   if benchmark.iterations == 0 {
-    return clock.DurationResult{ok: true}
+    return clock.DurationResult{}
   }
   duration := benchmark_elapsed(benchmark)
-  if !duration.ok {
+  if duration.failure.kind != io.Kind.Ok {
     return duration
   }
   duration.value /= #cast(i64, benchmark.iterations)

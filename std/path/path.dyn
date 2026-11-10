@@ -2,7 +2,7 @@ use "std/strings"
 use "std/mem" mem
 
 // Slash-separated lexical paths. Operations do not access filesystem.
-pub struct Result { value: []u8, ok: bool }
+pub struct Result { value: []u8, valid: bool }
 
 pub fn basename(path: []const u8) []const u8 {
   end := #len(path)
@@ -56,17 +56,17 @@ fn join_into(destination: []u8, left: []const u8, right: []const u8) Result {
   separator := #len(left) > 0 && left[#len(left) - 1] != '/' && #len(right) > 0 && right[0] != '/'
   maximum := ~#cast(usize, 0)
   if #len(left) > maximum - #len(right) {
-    return Result{ value: destination[..0], ok: false }
+    return Result{ value: destination[..0], valid: false }
   }
   needed := #len(left) + #len(right)
   if separator {
     if needed == maximum {
-      return Result{ value: destination[..0], ok: false }
+      return Result{ value: destination[..0], valid: false }
     }
     needed += 1
   }
   if needed > #len(destination) {
-    return Result{ value: destination[..0], ok: false }
+    return Result{ value: destination[..0], valid: false }
   }
   at: usize = 0
   for left_byte in left {
@@ -81,12 +81,12 @@ fn join_into(destination: []u8, left: []const u8, right: []const u8) Result {
     destination[at] = right_byte
     at += 1
   }
-  return Result{ value: destination[..at], ok: true }
+  return Result{ value: destination[..at], valid: true }
 }
 
 fn clean_into(destination: []u8, path: []const u8) Result {
   if #len(destination) == 0 {
-    return Result{ value: destination[..0], ok: false }
+    return Result{ value: destination[..0], valid: false }
   }
   absolute := is_absolute(path)
   at: usize = 0
@@ -123,13 +123,13 @@ fn clean_into(destination: []u8, path: []const u8) Result {
       } else if !absolute {
         if at > 0 {
           if at == #len(destination) {
-            return Result{ value: destination[..0], ok: false }
+            return Result{ value: destination[..0], valid: false }
           }
           destination[at] = '/'
           at += 1
         }
         if at + 2 > #len(destination) {
-          return Result{ value: destination[..0], ok: false }
+          return Result{ value: destination[..0], valid: false }
         }
         destination[at] = '.'
         destination[at + 1] = '.'
@@ -138,13 +138,13 @@ fn clean_into(destination: []u8, path: []const u8) Result {
     } else {
       if at > 0 && destination[at - 1] != '/' {
         if at == #len(destination) {
-          return Result{ value: destination[..0], ok: false }
+          return Result{ value: destination[..0], valid: false }
         }
         destination[at] = '/'
         at += 1
       }
       if length > #len(destination) - at {
-        return Result{ value: destination[..0], ok: false }
+        return Result{ value: destination[..0], valid: false }
       }
       for j in 0..length {
         destination[at] = path[start + j]
@@ -156,23 +156,23 @@ fn clean_into(destination: []u8, path: []const u8) Result {
     destination[0] = '.'
     at = 1
   }
-  return Result{ value: destination[..at], ok: true }
+  return Result{ value: destination[..at], valid: true }
 }
 
 fn safe_join_into(destination: []u8, root: []const u8, child: []const u8) Result {
   if is_absolute(child) {
-    return Result{ value: destination[..0], ok: false }
+    return Result{ value: destination[..0], valid: false }
   }
   temporary: [4096]u8 = []
   root_storage: [4096]u8 = []
   combined := join_into(temporary[..], root, child)
-  if !combined.ok {
-    return Result{ value: destination[..0], ok: false }
+  if !combined.valid {
+    return Result{ value: destination[..0], valid: false }
   }
   normalized := clean_into(destination, combined.value)
   normalized_root := clean_into(root_storage[..], root)
-  if !normalized.ok || !normalized_root.ok || #len(normalized.value) < #len(normalized_root.value) {
-    return Result{ value: destination[..0], ok: false }
+  if !normalized.valid || !normalized_root.valid || #len(normalized.value) < #len(normalized_root.value) {
+    return Result{ value: destination[..0], valid: false }
   }
   if strings.equal(normalized_root.value, ".") {
     if strings.equal(normalized.value, "..") || (#len(normalized.value) >= 3 && strings.equal(normalized.value[..3], "../")) {
@@ -183,21 +183,21 @@ fn safe_join_into(destination: []u8, root: []const u8, child: []const u8) Result
   i: usize = 0
   for i < #len(normalized_root.value) {
     if normalized.value[i] != normalized_root.value[i] {
-      return Result{ value: destination[..0], ok: false }
+      return Result{ value: destination[..0], valid: false }
     }
     i += 1
   }
   if #len(normalized.value) > #len(normalized_root.value) &&
     normalized_root.value[#len(normalized_root.value) - 1] != '/' &&
     normalized.value[#len(normalized_root.value)] != '/' {
-    return Result{ value: destination[..0], ok: false }
+    return Result{ value: destination[..0], valid: false }
   }
   return normalized
 }
 
 pub struct Components { text: []const u8, offset: usize }
 // ok is false after the last component.
-pub struct Component { value: []const u8, offset: usize, ok: bool }
+pub struct Component { value: []const u8, offset: usize, found: bool }
 pub fn components(text: []const u8) Components {
   return Components{ text: text }
 }
@@ -209,7 +209,7 @@ pub fn component_next(state: *Components) Component {
   for state.offset < #len(state.text) && state.text[state.offset] != '/' {
     state.offset += 1
   }
-  return Component{ value: state.text[start..state.offset], offset: start, ok: start != state.offset }
+  return Component{ value: state.text[start..state.offset], offset: start, found: start != state.offset }
 }
 
 // Lexical relative path, for normalized inputs up to 4096 bytes each.
@@ -219,7 +219,7 @@ fn relative_into(destination: []u8, base: []const u8, target: []const u8) Result
   target_storage: [4096]u8 = []
   left := clean_into(base_storage[..], base)
   right := clean_into(target_storage[..], target)
-  if !left.ok || !right.ok || is_absolute(left.value) != is_absolute(right.value) {
+  if !left.valid || !right.valid || is_absolute(left.value) != is_absolute(right.value) {
     return Result{ value: destination[..0] }
   }
   left_text: []const u8 = left.value
@@ -237,19 +237,19 @@ fn relative_into(destination: []u8, base: []const u8, target: []const u8) Result
   for {
     left_part := component_next(&left_parts)
     right_part := component_next(&right_parts)
-    if left_part.ok && right_part.ok && strings.equal(left_part.value, right_part.value) {
+    if left_part.found && right_part.found && strings.equal(left_part.value, right_part.value) {
       continue
     }
-    if left_part.ok && strings.equal(left_part.value, "..") {
+    if left_part.found && strings.equal(left_part.value, "..") {
       return Result{ value: destination[..0] }
     }
-    if left_part.ok {
+    if left_part.found {
       parents = 1
     }
-    for component_next(&left_parts).ok {
+    for component_next(&left_parts).found {
       parents += 1
     }
-    if right_part.ok {
+    if right_part.found {
       remainder = right_text[right_part.offset..]
     }
     break
@@ -282,12 +282,12 @@ fn relative_into(destination: []u8, base: []const u8, target: []const u8) Result
     destination[at] = '.'
     at += 1
   }
-  return Result{ value: destination[..at], ok: true }
+  return Result{ value: destination[..at], valid: true }
 }
 
 // Keeps only the bytes a bounded producer used, or nothing on failure.
 fn finish(arena: *mem.Arena, mark: usize, result: Result) Result {
-  if !result.ok {
+  if !result.valid {
     mem.arena_rewind(arena, mark)
     return Result{}
   }

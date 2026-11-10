@@ -4,6 +4,7 @@
 //
 // Usage: box-viewer [FONT.ttf] [--frames N] [--screenshot OUT.png]
 
+use "std/parse" parse
 use "vendor/window" window
 use "vendor/opengl" gl
 use "vendor/ui/opengl" gpu
@@ -14,6 +15,7 @@ use "std/font" font
 use "std/font/system" system_fonts
 use "std/font/ui" font_ui
 use "std/fs" fs
+use "std/io" io
 use "std/mem" mem
 use "std/process" process
 use "std/strings" strings
@@ -135,7 +137,7 @@ fn save(api: *const gl.Api, arena: *mem.Arena, path: []const u8, width, height: 
     _ = mem.copy(rows[y * stride..(y + 1) * stride], raw[(#cast(usize, height) - 1 - y) * stride..(#cast(usize, height) - y) * stride])
   }
   encoded := png.encode(arena, rows, #cast(u32, width), #cast(u32, height), 4)
-  if !encoded.ok || !fs.write_all(path, encoded.value).ok {
+  if encoded.failure.kind != parse.Kind.Ok || fs.write_all(path, encoded.value).failure.kind != io.Kind.Ok {
     #panic("cannot write the screenshot")
   }
 }
@@ -175,11 +177,11 @@ fn main() {
     }
   }
   data := fs.read_all(persistent, path, 67108864)
-  if !data.ok {
+  if data.failure.kind != io.Kind.Ok {
     #panic("cannot read the font; pass a TrueType file")
   }
   face := font.open(data.value)
-  if !face.ok {
+  if face.failure.kind != parse.Kind.Ok {
     #panic("not a TrueType font")
   }
   codepoints: [95]u32 = []
@@ -187,7 +189,7 @@ fn main() {
     codepoints[c] = #cast(u32, c + 32)
   }
   host := window.Window{}
-  if !window.open(&host, "Dyn box viewer", 1100, 700).ok {
+  if window.open(&host, "Dyn box viewer", 1100, 700).kind != io.Kind.Ok {
     #panic("cannot open a window")
   }
   defer {
@@ -195,7 +197,7 @@ fn main() {
   }
   scale := window.scale(&host)
   built := font.atlas(persistent, &face.value, codepoints[..], #cast(u16, 16.0 * scale + 0.5), 1024, 1024)
-  if !built.ok {
+  if built.failure.kind != parse.Kind.Ok {
     #panic("font atlas")
   }
   atlas := mem.push(font.Atlas, persistent)
@@ -217,7 +219,7 @@ fn main() {
   refilter(app)
   state := box.create(persistent, measure, atlas, #cast(f32, atlas.line_height))
   state.scale = scale
-  context: ui.Context
+  context := ui.Context{ style: ui.default_style }
   glyphs := font_ui.atlas_renderer(atlas)
   last := time.monotonic_now().value
   text_focus: u64 = 0

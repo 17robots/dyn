@@ -1,36 +1,34 @@
 use "vendor/openssl/tls" provider
 use "std/io" stream
 use "std/mem" memory
-use "std/errors" errors
-
+use "std/io" io
 pub type Context = provider.Context
 pub type Connection = provider.Connection
 pub type Certificate = provider.Certificate
 pub type ErrorKind = provider.ErrorKind
 // Provider diagnostics are not OS errno values. error remains zero; detail and
 // the exact unsigned provider_code/provider_status retain provider information.
-pub struct ContextResult { value: Context, kind: errors.Kind, error: isize, detail: ErrorKind, provider_code: u64, ok: bool }
-pub struct ConnectionResult { value: Connection, kind: errors.Kind, error: isize, detail: ErrorKind, provider_code: u64, ok: bool }
-pub struct Result { count: usize, kind: errors.Kind, error: isize, detail: ErrorKind, provider_code: u64, provider_status: i32, ok: bool }
-pub struct TextResult { value: []u8, kind: errors.Kind, error: isize, provider_code: u64, ok: bool }
-fn portable(detail: ErrorKind) errors.Kind {
+pub struct ContextResult { value: Context, detail: ErrorKind, provider_code: u64, failure: stream.Failure }
+pub struct ConnectionResult { value: Connection, detail: ErrorKind, provider_code: u64, failure: stream.Failure }
+pub struct Result { count: usize, detail: ErrorKind, provider_code: u64, provider_status: i32, failure: stream.Failure }
+pub struct TextResult { value: []u8, provider_code: u64, failure: stream.Failure }
+fn portable(detail: ErrorKind) io.Kind {
   if detail == ErrorKind.None {
-    return errors.Kind.None
+    return io.Kind.Ok
   }
   if detail == ErrorKind.InvalidArgument {
-    return errors.Kind.InvalidInput
+    return io.Kind.InvalidInput
   }
   if detail == ErrorKind.WantRead || detail == ErrorKind.WantWrite {
-    return errors.Kind.WouldBlock
+    return io.Kind.WouldBlock
   }
   if detail == ErrorKind.Verification {
-    return errors.Kind.PermissionDenied
+    return io.Kind.PermissionDenied
   }
-  return errors.Kind.System
+  return io.Kind.System
 }
 fn result(value: provider.Result) Result {
-  return Result{count: value.count, kind: portable(value.error), detail: value.error,
-    provider_code: value.provider_code, provider_status: value.provider_status, ok: value.ok}
+  return Result{ count: value.count, detail: value.error, provider_code: value.provider_code, provider_status: value.provider_status, failure: stream.Failure{ kind: portable(value.error) } }
 }
 
 // The provider copies the protocol wire bytes during this call.
@@ -57,11 +55,11 @@ pub fn certificate_release(certificate: *Certificate) {
 // https://github.com/openssl/openssl/blob/master/crypto/x509/x509_obj.c
 pub fn certificate_subject(arena: *memory.Arena, certificate: Certificate) TextResult {
   if certificate == nil {
-    return TextResult{kind: errors.Kind.InvalidInput}
+    return TextResult{ failure: stream.Failure{ kind: io.Kind.InvalidInput } }
   }
   formatted := provider.subject_text_owned(certificate)
   if !formatted.ok {
-    return TextResult{kind: errors.Kind.System, provider_code: formatted.provider_code}
+    return TextResult{ provider_code: formatted.provider_code, failure: stream.Failure{ kind: io.Kind.System } }
   }
   defer provider.subject_text_free_owned(formatted.value)
   length: usize = 0
@@ -69,11 +67,11 @@ pub fn certificate_subject(arena: *memory.Arena, certificate: Certificate) TextR
     length += 1
   }
   output := memory.push_bytes_uninit(arena, length)
-  source := formatted.value[..length]
+  source := #slice(formatted.value, length)
   for i in 0..length {
     output[i] = source[i]
   }
-  return TextResult{value: output, ok: true}
+  return TextResult{ value: output }
 }
 pub fn handshake(connection: Connection) Result {
   return result(provider.handshake(connection))
@@ -107,7 +105,7 @@ pub fn error_string(arena: *memory.Arena, code: u64) []u8 {
 
 pub fn client_config_create() ContextResult {
   value := provider.context_create_owned()
-  return ContextResult{value: value.value, kind: portable(value.error), detail: value.error, provider_code: value.provider_code, ok: value.ok}
+  return ContextResult{ value: value.value, detail: value.error, provider_code: value.provider_code, failure: stream.Failure{ kind: portable(value.error) } }
 }
 pub fn server_config_create(
   arena: *memory.Arena,
@@ -115,7 +113,7 @@ pub fn server_config_create(
   key: []const u8,
 ) ContextResult {
   value := provider.server_context_create(arena, certificate, key)
-  return ContextResult{value: value.value, kind: portable(value.error), detail: value.error, provider_code: value.provider_code, ok: value.ok}
+  return ContextResult{ value: value.value, detail: value.error, provider_code: value.provider_code, failure: stream.Failure{ kind: portable(value.error) } }
 }
 // Frees the configuration and clears the handle; releasing a cleared handle does nothing.
 pub fn config_release(context: *Context) {
@@ -130,11 +128,11 @@ pub fn client_connection_create(
   hostname: []const u8,
 ) ConnectionResult {
   value := provider.connection_create(arena, context, descriptor, hostname)
-  return ConnectionResult{value: value.value, kind: portable(value.error), detail: value.error, provider_code: value.provider_code, ok: value.ok}
+  return ConnectionResult{ value: value.value, detail: value.error, provider_code: value.provider_code, failure: stream.Failure{ kind: portable(value.error) } }
 }
 pub fn server_connection_create(context: Context, descriptor: i32) ConnectionResult {
   value := provider.server_connection_create_owned(context, descriptor)
-  return ConnectionResult{value: value.value, kind: portable(value.error), detail: value.error, provider_code: value.provider_code, ok: value.ok}
+  return ConnectionResult{ value: value.value, detail: value.error, provider_code: value.provider_code, failure: stream.Failure{ kind: portable(value.error) } }
 }
 // Frees the connection state and clears the handle. The socket stays open; close it separately.
 pub fn connection_release(connection: *Connection) {
@@ -143,26 +141,26 @@ pub fn connection_release(connection: *Connection) {
   provider.connection_free_owned(value)
 }
 
-fn reader_read(data: rawptr, destination: []u8) stream.Result {
+fn reader_read(data: rawptr, destination: []u8) stream.Transfer {
   connection := #cast(*Connection, data)
   result := read(connection.*, destination)
-  if !result.ok {
-    return stream.Result{ kind: result.kind, error: result.error, status: stream.Status.Error }
+  if result.failure.kind != stream.Kind.Ok {
+    return stream.Transfer{ kind: result.failure.kind, error: result.failure.native, status: stream.Status.Error }
   }
   status := stream.Status.Complete
   if result.count == 0 {
     status = stream.Status.End
   }
-  return stream.Result{ transferred: result.count, status: status }
+  return stream.Transfer{ transferred: result.count, status: status }
 }
 
-fn writer_write(data: rawptr, source: []const u8) stream.Result {
+fn writer_write(data: rawptr, source: []const u8) stream.Transfer {
   connection := #cast(*Connection, data)
   result := write(connection.*, source)
-  if !result.ok {
-    return stream.Result{ transferred: result.count, kind: result.kind, error: result.error, status: stream.Status.Error }
+  if result.failure.kind != stream.Kind.Ok {
+    return stream.Transfer{ transferred: result.count, kind: result.failure.kind, error: result.failure.native, status: stream.Status.Error }
   }
-  return stream.Result{ transferred: result.count, status: stream.Status.Complete }
+  return stream.Transfer{ transferred: result.count, status: stream.Status.Complete }
 }
 
 // Blocking I/O adapters borrow the Connection slot and its live handle.

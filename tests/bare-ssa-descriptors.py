@@ -57,7 +57,7 @@ i:u32=0
 for i<n { t:=a
 a=b
 b=t
-i=#wrap(i+1) }
+i=(i+1) }
 return a }
 pub fn localdesc(x:[]const u8) []const u8 { a:=x
 p:=&a
@@ -71,7 +71,7 @@ fn paircheck(x:[]const u8,y:[]const u8) u32 { return #cast(fn([]const u8,[]const
 pub fn isolation(x:[]const u8) u32 { state=x
 return paircheck(state,mutate()) }
 fn main() { r:=oracle()
-if r!=0 { _=io.println(io.stdout(),"oracle {}",r)
+if r!=0 { io.println("oracle {}",r)
 #panic("oracle") }
 _=io.write_all(io.stdout(),"DESCRIPTORS OK\n") }
 extern fn touch(p:rawptr)

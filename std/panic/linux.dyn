@@ -1,0 +1,7 @@
+#target(kernel: linux)
+
+extern fn set_hook "dyn_set_panic_hook"(hook: fn(*const u8, u64))
+
+fn install() {
+  set_hook(run)
+}

@@ -161,13 +161,13 @@ fn main() {
   if count.* != 3 { #panic("variable") }
   count.* = 5
   if T_count_address().* != 5 { #panic("variable write") }
-  packed := T_Packed{}
-  T_Packed_word_set(&packed, 1234)
-  if T_Packed_word_get(&packed) != 1234 { #panic("packed field") }
+  packed_value := T_Packed{}
+  T_Packed_word_set(&packed_value, 1234)
+  if T_Packed_word_get(&packed_value) != 1234 { #panic("packed field") }
   bytes: T_Bytes = [1, 2, 3]
   result: T_Bytes = []
-  T_Packed_bytes_set(&packed, &bytes)
-  T_Packed_bytes_get(&packed, &result)
+  T_Packed_bytes_set(&packed_value, &bytes)
+  T_Packed_bytes_get(&packed_value, &result)
   if result[2] != 3 || result[7] != 0 { #panic("packed array") }
   state := T_EnumField{ state: T_StateLarge }
   if state.state != 2147483648 { #panic("anonymous enum field") }
@@ -181,12 +181,12 @@ fn main() {
   T_Bits_low_set(&bits, 6)
   T_Bits_high_set(&bits, -3)
   if T_Bits_low_get(&bits) != 6 || T_Bits_high_get(&bits) != -3 { #panic("bitfields") }
-  union := T_Union{}
-  T_Union_bytes_set(&union, &bytes)
-  T_Union_bytes_get(&union, &result)
+  union_value := T_Union{}
+  T_Union_bytes_set(&union_value, &bytes)
+  T_Union_bytes_get(&union_value, &result)
   if result[0] != 1 { #panic("union array typedef") }
-  T_Union_view_set(&union, text)
-  if T_Union_view_get(&union) != text { #panic("mutable pointer to const field") }
+  T_Union_view_set(&union_value, text)
+  if T_Union_view_get(&union_value) != text { #panic("mutable pointer to const field") }
 }
 '''
     program = re.sub(r'\bT_\w+', lambda match: 'raw.' + match[0], program).replace('verify_layout()', 'raw.verify_layout()')

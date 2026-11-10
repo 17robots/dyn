@@ -1,3 +1,4 @@
+use "std/io" io
 #target(kernel: linux)
 // Linux epoll. Target-specific Event storage follows the kernel UAPI layout.
 pub const EventReadable: u32 = 1
@@ -80,13 +81,13 @@ pub fn event_remove(queue: isize, descriptor: isize) Result {
 
 pub fn event_wait(queue: isize, events: []Event, timeout_milliseconds: i32) Result {
   if #len(events) == 0 {
-    return Result{ value: -1, error: -22, ok: false }
+    return Result{ value: -1, failure: io.Failure{ native: -22 } }
   }
   start := clock.ClockResult{}
   if timeout_milliseconds > 0 {
     start = clock.monotonic_now()
-    if !start.ok {
-      return Result{ value: start.error, error: start.error, kind: start.kind }
+    if start.failure.kind != io.Kind.Ok {
+      return Result{ value: start.failure.native, failure: io.Failure{ kind: start.failure.kind, native: start.failure.native } }
     }
   }
   remaining := timeout_milliseconds
@@ -94,7 +95,7 @@ pub fn event_wait(queue: isize, events: []Event, timeout_milliseconds: i32) Resu
   for value == -4 {
     if timeout_milliseconds > 0 {
       retry := interrupted_timeout(start.value, timeout_milliseconds)
-      if !retry.ok || retry.value == 0 {
+      if retry.failure.kind != io.Kind.Ok || retry.value == 0 {
         return retry
       }
       remaining = #cast(i32, retry.value)

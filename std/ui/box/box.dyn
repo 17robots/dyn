@@ -15,8 +15,7 @@ use "std/hash" hash
 use "std/math" math
 use "std/ui" ui
 use "std/text/edit" text_edits
-use "std/errors" errors
-
+use "std/io" io
 pub const Clickable: u32 = 1
 pub const DrawBackground: u32 = 2
 pub const DrawBorder: u32 = 4
@@ -188,11 +187,11 @@ pub struct State {
   // Publish this bounded context to a native input method before enabling the
   // focused field. Tracker lifetime must match one window, not one widget.
   text_context: text_edits.Context,
-  text_context_error: errors.Kind,
+  text_context_error: io.Kind,
   text_tracker: text_edits.Tracker,
 }
 
-pub struct StateResult { value: *State, ok: bool }
+pub struct StateResult { value: *State, valid: bool }
 
 // A state in arena. measure returns the pixel width of a text run.
 pub fn create(arena: *mem.Arena, measure: fn(rawptr, []const u8) f32, measure_data: rawptr, line_height: f32) *State {
@@ -407,7 +406,7 @@ fn focus_order(box: *const Box, focused: u64, order: *FocusOrder) {
   if box == nil {
     return
   }
-  if box.flags & Focusable != 0 {
+  if (box.flags & Focusable) != 0 {
     if order.first == 0 {
       order.first = box.key
     }
@@ -464,7 +463,7 @@ pub fn begin(state: *State, frame: *mem.Arena, input: Input, width: f32, height:
   state.text_input = false
   state.text_input_anchor = nil
   state.text_context = text_edits.Context{}
-  state.text_context_error = errors.Kind.None
+  state.text_context_error = io.Kind.Ok
   if input.down && !state.previous_down {
     // A press anywhere clears focus unless a focusable box claims it.
     state.focus_claimed = false
@@ -493,14 +492,14 @@ pub fn signal(state: *State, box: *Box) Signal {
   over := inside(box.visible, input.x, input.y)
   pressed_now := input.down && !state.previous_down
   released_now := !input.down && state.previous_down
-  if box.flags & Clickable != 0 {
+  if (box.flags & Clickable) != 0 {
     if over && (state.active == 0 || state.active == box.key) {
       state.next_hot = box.key
     }
     result.hovered = state.hot == box.key && over
     if result.hovered && pressed_now {
       state.active = box.key
-      if box.flags & Focusable != 0 {
+      if (box.flags & Focusable) != 0 {
         state.focused = box.key
         state.focus_claimed = true
       }
@@ -519,14 +518,14 @@ pub fn signal(state: *State, box: *Box) Signal {
       }
     }
   }
-  if box.flags & Focusable != 0 && state.focused == box.key && input.enter && !input.tab && input.correction == nil && !input.composition_handled && #len(input.composition) == 0 {
+  if (box.flags & Focusable) != 0 && state.focused == box.key && input.enter && !input.tab && input.correction == nil && !input.composition_handled && #len(input.composition) == 0 {
     result.clicked = true
   }
-  if box.flags & (ScrollX | ScrollY) != 0 && over {
-    if box.flags & ScrollX != 0 {
+  if (box.flags & (ScrollX | ScrollY)) != 0 && over {
+    if (box.flags & ScrollX) != 0 {
       box.view_target[0] += input.scroll_x
     }
-    if box.flags & ScrollY != 0 {
+    if (box.flags & ScrollY) != 0 {
       box.view_target[1] += input.scroll_y
     }
   }
@@ -542,16 +541,16 @@ fn size_of(box: *const Box, axis: usize) Size {
 
 fn floating(box: *const Box, axis: usize) bool {
   if axis == 0 {
-    return box.flags & (FloatingX | AbsoluteX) != 0
+    return (box.flags & (FloatingX | AbsoluteX)) != 0
   }
-  return box.flags & (FloatingY | AbsoluteY) != 0
+  return (box.flags & (FloatingY | AbsoluteY)) != 0
 }
 
 fn scrolls(box: *const Box, axis: usize) bool {
   if axis == 0 {
-    return box.flags & ScrollX != 0
+    return (box.flags & ScrollX) != 0
   }
-  return box.flags & ScrollY != 0
+  return (box.flags & ScrollY) != 0
 }
 
 fn standalone(state: *State, box: *Box, axis: usize) {
@@ -638,7 +637,7 @@ fn violations(box: *Box, axis: usize) {
         child = child.next
       }
       excess := total - available
-      if excess > 0.0 && box.flags & GreedyShrink != 0 {
+      if excess > 0.0 && (box.flags & GreedyShrink) != 0 {
         child = box.first
         for child != nil && excess > 0.0 {
           if !floating(child, axis) && size_of(child, axis).strictness == 0.0 {
@@ -710,7 +709,7 @@ fn positions(box: *Box, axis: usize) {
       }
     }
     child.rect[axis] = box.rect[axis] + child.position[axis] - box.view[axis]
-    if (axis == 0 && child.flags & AbsoluteX != 0) || (axis == 1 && child.flags & AbsoluteY != 0) {
+    if (axis == 0 && (child.flags & AbsoluteX) != 0) || (axis == 1 && (child.flags & AbsoluteY) != 0) {
       child.rect[axis] = child.floating[axis]
     }
     child.rect[axis + 2] = child.rect[axis] + child.size[axis]
@@ -755,7 +754,7 @@ fn approach(current, target, rate: f32) f32 {
 fn finish(state: *State, box: *Box, clip: [4]f32, rate: f32) {
   box.visible = intersect(box.rect, clip)
   inner := clip
-  if box.flags & Clip != 0 {
+  if (box.flags & Clip) != 0 {
     inner = box.visible
   }
   for axis in 0..2 {
@@ -845,27 +844,27 @@ fn area(rect: [4]f32) ui.Rect {
 
 fn draw(state: *State, context: *ui.Context, box: *const Box) {
   bounds := area(box.rect)
-  if box.flags & DrawBackground != 0 {
+  if (box.flags & DrawBackground) != 0 {
     tint := box.background
-    if box.flags & Focusable != 0 && state.focused == box.key {
+    if (box.flags & Focusable) != 0 && state.focused == box.key {
       tint = box.hot_color
     }
-    if box.flags & HotAnimation != 0 {
+    if (box.flags & HotAnimation) != 0 {
       tint = mix(tint, box.hot_color, box.hot_t)
     }
-    if box.flags & ActiveAnimation != 0 {
+    if (box.flags & ActiveAnimation) != 0 {
       tint = mix(tint, box.active_color, box.active_t)
     }
     ui.rounded_rectangle(context, bounds, box.radius, tint)
   }
-  if box.flags & DrawBorder != 0 && box.radius == 0 {
+  if (box.flags & DrawBorder) != 0 && box.radius == 0 {
     ui.rectangle(context, ui.Rect{ x: bounds.x, y: bounds.y, width: bounds.width, height: 1 }, box.border)
     ui.rectangle(context, ui.Rect{ x: bounds.x, y: bounds.y + bounds.height - 1, width: bounds.width, height: 1 }, box.border)
     ui.rectangle(context, ui.Rect{ x: bounds.x, y: bounds.y, width: 1, height: bounds.height }, box.border)
     ui.rectangle(context, ui.Rect{ x: bounds.x + bounds.width - 1, y: bounds.y, width: 1, height: bounds.height }, box.border)
   }
   saved := context.clip
-  if box.flags & Clip != 0 {
+  if (box.flags & Clip) != 0 {
     _ = ui.push_clip(context, bounds)
   }
   if box.selection[1] > box.selection[0] {
@@ -873,10 +872,10 @@ fn draw(state: *State, context: *ui.Context, box: *const Box) {
       y: whole(box.rect[1] + (box.size[1] - state.line_height) / 2.0),
       width: whole(box.selection[1] - box.selection[0]), height: whole(state.line_height) }, box.active_color)
   }
-  if box.flags & DrawText != 0 && #len(box.text) != 0 {
+  if (box.flags & DrawText) != 0 && #len(box.text) != 0 {
     width := state.measure(state.measure_data, box.text)
     x := box.rect[0] + 4.0 - box.text_offset
-    if box.flags & CenterText != 0 {
+    if (box.flags & CenterText) != 0 {
       x = box.rect[0] + (box.size[0] - width) / 2.0
     }
     y := box.rect[1] + (box.size[1] - state.line_height) / 2.0
@@ -887,7 +886,7 @@ fn draw(state: *State, context: *ui.Context, box: *const Box) {
     draw(state, context, child)
     child = child.next
   }
-  if box.flags & Clip != 0 {
+  if (box.flags & Clip) != 0 {
     ui.pop_clip(context, saved)
   }
 }
@@ -951,11 +950,11 @@ fn hit_box(box: *const Box, x, y: f32) u64 {
   if box == nil {
     return 0
   }
-  if box.flags & Clip != 0 && !inside(box.visible, x, y) {
+  if (box.flags & Clip) != 0 && !inside(box.visible, x, y) {
     return 0
   }
   found: u64 = 0
-  if box.flags & Clickable != 0 && inside(box.visible, x, y) {
+  if (box.flags & Clickable) != 0 && inside(box.visible, x, y) {
     found = box.key
   }
   child := box.first

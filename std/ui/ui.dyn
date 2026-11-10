@@ -16,13 +16,22 @@ pub struct Input {
   tab: bool, activate: bool, left: bool, right: bool,
 }
 pub struct Style {
-  background: Color = Color{ r: 48, g: 52, b: 60, a: 255 },
-  hover: Color = Color{ r: 64, g: 76, b: 92, a: 255 },
-  held: Color = Color{ r: 38, g: 105, b: 165, a: 255 },
-  foreground: Color = Color{ r: 235, g: 239, b: 244, a: 255 },
-  accent: Color = Color{ r: 80, g: 170, b: 240, a: 255 },
-  disabled: Color = Color{ r: 100, g: 104, b: 112, a: 255 },
-  padding: i32 = 4,
+  background: Color,
+  hover: Color,
+  held: Color,
+  foreground: Color,
+  accent: Color,
+  disabled: Color,
+  padding: i32,
+}
+pub const default_style: Style = Style{
+  background: Color{ r: 48, g: 52, b: 60, a: 255 },
+  hover: Color{ r: 64, g: 76, b: 92, a: 255 },
+  held: Color{ r: 38, g: 105, b: 165, a: 255 },
+  foreground: Color{ r: 235, g: 239, b: 244, a: 255 },
+  accent: Color{ r: 80, g: 170, b: 240, a: 255 },
+  disabled: Color{ r: 100, g: 104, b: 112, a: 255 },
+  padding: 4,
 }
 pub struct Response { hovered: bool, held: bool, focused: bool, activated: bool, changed: bool, captured: bool }
 // Keep one context across frames. Copying a live context does not create a new
@@ -30,7 +39,7 @@ pub struct Response { hovered: bool, held: bool, focused: bool, activated: bool,
 // Overlapping widgets give pointer priority to the first submitted widget.
 struct FocusTarget { bounds: Rect, clip: Rect, color: Color }
 pub struct Context {
-  style: Style = Style{},
+  style: Style,
   active: u64, focused: u64, hot: u64,
   input: Input, previous_down: bool,
   arena: *mem.Arena, viewport: Rect, clip: Rect,

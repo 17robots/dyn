@@ -204,10 +204,20 @@ mean unspecified, not safe or allocation-free.
 
 ## Typed arena pushes
 
-`mem.push(T, arena)` and `mem.push_array(T, arena, count)` return zeroed `*T`
-and `[]T` with the type's size and alignment, so call sites need no casts.
+`mem.push(T, arena)` returns a `*T` that is zeroed and then given the type's field
+defaults. `mem.push_array(T, arena, count)` returns a zeroed `[]T`, and
+`mem.push_array_init(T, arena, count)` also writes the defaults into every element.
+All use the type's size and alignment, so call sites need no casts.
 `mem.push_bytes_uninit(arena, count)` returns uninitialized `[]u8` for buffers
 that are overwritten right away. All three panic when the arena is full, like
 `mem.arena_push`. Code with a strict budget on a fixed arena can use
 `mem.arena_try_push`, `mem.try_push`, or `mem.try_push_array` to report
 exhaustion instead.
+
+## Threads
+
+Share nothing by default. Give each thread its own arena, and pass work between
+threads under a mutex from `std/sync`. Arenas are not
+thread-safe, so a pointer into one thread's arena stays read-only for the others
+until the owner is finished with it. A worker returns results by writing into
+memory the caller handed it, and the caller reads them after the join.

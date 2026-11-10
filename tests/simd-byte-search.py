@@ -64,7 +64,7 @@ pub fn mutation() usize {
 }
 fn main() { if mutation()!=53523720 { #panic("search memory effects") }
 result:=oracle()
-if result!=0 { _=io.println(io.stderr(),"oracle {}",result)
+if result!=0 { io.eprintln("oracle {}",result)
 #panic("SSE byte oracle") } }
 '''
 C=r'''
@@ -165,7 +165,7 @@ return source }
 fn needle_effect() u8 { observed=observed*10+2
 return 0 }
 pub fn protected(source:[]const u8) {
- defer { _=io.println(io.stdout(),"cleanup {}",observed) }
+ defer { io.println("cleanup {}",observed) }
  _=bytes.find_byte(source_effect(source),needle_effect())
  observed+=100
 }

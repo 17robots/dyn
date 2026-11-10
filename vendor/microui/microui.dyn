@@ -1,3 +1,4 @@
+use "std/parse" parse
 use "std/mem"
 use "std/c"
 #link("dyn_microui")
@@ -30,7 +31,7 @@ pub fn window(context: Context, title: []const u8, buffer: []u8, bounds: Rectang
     return false
   }
   encoded := c.string_into(buffer, title)
-  return encoded.ok && native_window(context, encoded.value, bounds.x, bounds.y, bounds.width, bounds.height)
+  return encoded.failure.kind == parse.Kind.Ok && native_window(context, encoded.value, bounds.x, bounds.y, bounds.width, bounds.height)
 }
 pub extern fn window_end "dyn_mu_window_end"(context: Context) bool
 pub fn label(context: Context, text: []const u8, buffer: []u8) bool {
@@ -38,7 +39,7 @@ pub fn label(context: Context, text: []const u8, buffer: []u8) bool {
     return false
   }
   encoded := c.string_into(buffer, text)
-  return encoded.ok && native_label(context, encoded.value)
+  return encoded.failure.kind == parse.Kind.Ok && native_label(context, encoded.value)
 }
 // -1 invalid/full, 0 idle, 1 clicked. Inputs must arrive before begin().
 pub fn button(context: Context, text: []const u8, buffer: []u8) i32 {
@@ -46,7 +47,7 @@ pub fn button(context: Context, text: []const u8, buffer: []u8) i32 {
     return -1
   }
   encoded := c.string_into(buffer, text)
-  if !encoded.ok {
+  if encoded.failure.kind != parse.Kind.Ok {
     return -1
   }
   return native_button(context, encoded.value)
@@ -59,7 +60,7 @@ pub extern fn next "dyn_mu_next"(context: Context) Command
 pub extern fn kind "dyn_mu_kind"(command: Command) i32
 pub fn text(command: Command) []const u8 {
   value := c.bytes_from_string(native_text(command), 4097)
-  if !value.ok {
+  if value.failure.kind != parse.Kind.Ok {
     return ""
   }
   return value.value

@@ -1,3 +1,4 @@
+use "std/io" io
 use "std/dynlib" dl
 
 fn check(ok: bool) {
@@ -8,14 +9,14 @@ fn check(ok: bool) {
 
 pub fn main() {
   missing := dl.open("missing-library-xyz", dl.Now)
-  check(!missing.ok)
+  check(missing.failure.kind != io.Kind.Ok)
   library := dl.open(library_path, dl.Now)
-  check(library.ok)
+  check(library.failure.kind == io.Kind.Ok)
   found := dl.symbol(library.value, symbol_name)
-  check(found.ok && found.value != nil)
+  check(found.failure.kind == io.Kind.Ok && found.value != nil)
   absent := dl.symbol(library.value, "no_such_symbol_xyz")
-  check(!absent.ok)
+  check(absent.failure.kind != io.Kind.Ok)
   handle := library.value
-  check(dl.close(&handle).ok)
+  check(dl.close(&handle).failure.kind == io.Kind.Ok)
   check(handle == nil)
 }

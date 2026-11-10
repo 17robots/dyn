@@ -9,14 +9,14 @@ fn main() {
   // This limit includes the header and exactly 128 payload bytes.
   arena := mem.arena_create_bounded(mem.ArenaHeader + 128, mem.ArenaHeader + 128)
   allocation := mem.arena_push(arena, 128, 1)
-  allocated_bytes := allocation[..128]
+  allocated_bytes := #slice(allocation, 128)
   expect(allocated_bytes[0] == 0 && allocated_bytes[127] == 0, "owned zeroed storage")
   allocation.* = 42
   expect(!mem.arena_try_push(arena, 1, 1).ok, "fixed owned arena must not grow")
   expect(mem.arena_used(arena) == 128, "failed fixed push preserves offset")
   mem.arena_reset(arena)
   repeated := mem.arena_push(arena, 128, 1)
-  expect(repeated[..128][0] == 0 && repeated[..128][127] == 0 && mem.arena_used(arena) == 128, "owned reset reuse and zero")
+  expect(#slice(repeated, 128)[0] == 0 && #slice(repeated, 128)[127] == 0 && mem.arena_used(arena) == 128, "owned reset reuse and zero")
   saved := mem.arena_snapshot(arena)
   mem.arena_release(arena)
   arena = nil

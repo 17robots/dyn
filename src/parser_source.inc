@@ -41,12 +41,13 @@ static bool src_next_is(Parser *p, const char *word) {
   Token next = src_peek(p);
   return next.end - next.start == strlen(word) && at(p, next.start, word);
 }
-/* distinct, packed and is are keywords only where they start their construct,
-   so they stay usable as ordinary names everywhere else. */
-static bool src_distinct(Parser *p) { return is(p, "distinct") && src_next_is(p, "type"); }
-static bool src_packed(Parser *p) { return is(p, "packed") && src_next_is(p, "struct"); }
+static bool src_distinct(Parser *p) { return is(p, "distinct"); }
+static bool src_packed(Parser *p) { return is(p, "packed") || is(p, "union"); }
+/* A pattern that can only be a type: i32, []const u8, *Node, fn(..), $T.
+   Named types (Point, geo.Point, Box(i32)) parse as value patterns and the
+   AST resolves them, since only names know whether they are types. */
 static bool src_type_pattern(Parser *p) {
-  return is(p, "is") && !src_next_is(p, "=>") && !src_next_is(p, ",") && !src_next_is(p, "..");
+  return primitive(p) || is(p, "*") || is(p, "[") || fn_type_start(p) || at(p, p->token.start, "$");
 }
 static uint32_t src_literal(Parser *p, TokenKind token_kind, ExpKind kind) {
   Token token = p->token;
@@ -166,9 +167,12 @@ static uint32_t src_for(Parser *p) {
     bool constant = pointer && take(p, "const");
     unsigned flags = 0;
     uint32_t binding = p->token.kind == NAME ? name(p) : NONE;
+    uint32_t bound_type = NONE;
+    if (binding != NONE && !pointer && take(p, ":")) bound_type = type(p);
     if (binding != NONE && take(p, "in")) {
       flags = EXP_ITERATION | (pointer ? EXP_POINTER_BINDING : 0) | (constant ? EXP_CONST : 0);
       append(p, &cf, &cl, binding);
+      if (bound_type != NONE) append(p, &cf, &cl, bound_type);
       if (is(p, "#reverse")) {
         uint32_t reverse_start = p->token.start; lex(p); expect(p, "(");
         uint32_t value = src_range(p, false), end = p->token.end; expect(p, ")");
@@ -189,8 +193,8 @@ static uint32_t src_case(Parser *p) {
   while (!is(p, "}") && !p->tree->error) {
     uint32_t begin = p->token.start, af = NONE, al = NONE;
     bool wildcard = false;
+    if (is(p, "is")) { fail(p, p->token.start, "type patterns do not use `is`: write `i64 n =>`"); break; }
     if (src_type_pattern(p)) {
-      lex(p);
       uint32_t pf = NONE, pl = NONE;
       append(p, &pf, &pl, type(p));
       if (p->token.kind == NAME) append(p, &pf, &pl, name(p));
@@ -223,8 +227,9 @@ static bool src_expression_start(Parser *p) {
       is(p, "-") || is(p, "&") || is(p, "!") || is(p, "~") ||
       is(p, "#cast") || is(p, "#bitcast") || is(p, "#sizeof") ||
       is(p, "#alignof") || is(p, "#offsetof") || is(p, "#typeof") ||
-      is(p, "#len") || is(p, "#wrap") || is(p, "#load") || is(p, "#syscall");
+      is(p, "#len") || is(p, "#init") || is(p, "#slice") || is(p, "#offset") || is(p, "#load") || is(p, "#syscall");
 }
+static uint32_t src_assert(Parser *p);
 static uint32_t src_panic(Parser *p) {
   uint32_t start = p->token.start; expect(p, "#panic"); expect(p, "(");
   uint32_t child = expression(p, 0), end = p->token.end; expect(p, ")");
@@ -248,6 +253,7 @@ static uint32_t src_statement_body(Parser *p) {
   if (is(p, "const")) return src_const(p);
   if (is(p, "type") || src_distinct(p)) return src_alias(p);
   if (is(p, "#panic")) return src_panic(p);
+  if (is(p, "#assert")) return src_assert(p);
   if (is(p, "defer")) {
     lex(p); uint32_t child = is(p, "{") ? src_block(p) : src_statement(p);
     if (child != NONE) {
@@ -297,7 +303,8 @@ static uint32_t src_statement_body(Parser *p) {
     p->tree->nodes[value].next = right;
     return node(p, (ExpKind)SRC_ASSIGNMENT, start, p->tree->nodes[right].end, value, operator);
   }
-  if (p->tree->nodes[value].kind != EXP_CALL && p->tree->nodes[value].kind != EXP_SYSCALL) {
+  if (p->tree->nodes[value].kind != EXP_CALL && p->tree->nodes[value].kind != EXP_SYSCALL &&
+      !(p->tree->nodes[value].kind == EXP_LEN && at(p, start, "#init"))) {
     fail(p, start, "expression is not a statement"); return NONE;
   }
   p->tree->nodes[value].flags &= ~EXP_PRIMARY;
@@ -434,9 +441,23 @@ static uint32_t src_function(Parser *p, bool external) {
   }
   return src_node(p, external ? SRC_EXTERN_FN : SRC_FN, start, end, first);
 }
+static void src_type_parameters(Parser *p, uint32_t *first, uint32_t *last) {
+  if (!take(p, "(")) return;
+  while (!is(p, ")") && !p->tree->error) {
+    if (!at(p, p->token.start, "$")) fail(p, p->token.start, "expected a `$T: type` parameter");
+    append(p, first, last, type_body(p));
+    expect(p, ":"); expect(p, "type");
+    if (!take(p, ",")) break;
+  }
+  expect(p, ")");
+}
 static uint32_t src_struct(Parser *p) {
   uint32_t start = p->token.start, first = NONE, last = NONE;
-  bool packed = take(p, "packed"); expect(p, "struct"); append(p, &first, &last, name(p)); expect(p, "{");
+  bool packed = take(p, "packed"), is_union = !packed && take(p, "union");
+  if (!is_union) expect(p, "struct");
+  append(p, &first, &last, name(p));
+  src_type_parameters(p, &first, &last);
+  expect(p, "{");
   while (!is(p, "}") && !p->tree->error) {
     uint32_t begin = p->token.start, mf = NONE, ml = NONE;
     append(p, &mf, &ml, name(p));
@@ -447,7 +468,7 @@ static uint32_t src_struct(Parser *p) {
     if (!take(p, ",")) break;
   }
   uint32_t end = p->token.end; expect(p, "}");
-  return mark(p, src_node(p, SRC_STRUCT, start, end, first), packed ? EXP_PACKED : 0);
+  return mark(p, src_node(p, SRC_STRUCT, start, end, first), (is_union ? EXP_UNION : 0) | (packed ? EXP_PACKED : 0));
 }
 static uint32_t src_enum(Parser *p) {
   uint32_t start = p->token.start, first = NONE, last = NONE;
@@ -456,7 +477,9 @@ static uint32_t src_enum(Parser *p) {
     if (!primitive(p) && p->token.kind != NAME) fail(p, p->token.start, "invalid enum tag type");
     append(p, &first, &last, type_body(p)); expect(p, ")");
   }
-  append(p, &first, &last, name(p)); expect(p, "{");
+  append(p, &first, &last, name(p));
+  src_type_parameters(p, &first, &last);
+  expect(p, "{");
   while (!is(p, "}") && !p->tree->error) {
     uint32_t begin = p->token.start, mf = NONE, ml = NONE;
     append(p, &mf, &ml, name(p));

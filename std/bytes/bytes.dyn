@@ -143,7 +143,7 @@ pub fn splitter(value: []const u8, separator: []const u8) Splitter {
   return Splitter{ value: value, separator: separator, offset: 0, done: false }
 }
 
-pub struct Piece { value: []const u8, ok: bool }
+pub struct Piece { value: []const u8, found: bool }
 
 // The next piece, or ok false after the last one. A value without the
 // separator is one piece; a trailing separator gives a final empty piece.
@@ -156,12 +156,12 @@ pub fn split_next(state: *Splitter) Piece {
   if found == #len(rest) {
     state.offset = #len(state.value)
     state.done = true
-    return Piece{ value: rest, ok: true }
+    return Piece{ value: rest, found: true }
   }
   end := state.offset + found
   piece := state.value[state.offset..end]
   state.offset = end + #len(state.separator)
-  return Piece{ value: piece, ok: true }
+  return Piece{ value: piece, found: true }
 }
 
 pub struct Cursor {

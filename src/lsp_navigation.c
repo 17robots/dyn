@@ -915,6 +915,11 @@ void lsp_inlay_hints(long id, LspDocument *documents, size_t count,
 static DynSpan lsp_expr_definition(DynAstProgram *a, DynAstExpr *e) {
   if (e->type == DYN_TYPE_ERROR || e->type == DYN_TYPE_INFER)
     return (DynSpan){0};
+  bool global;
+  uint32_t target;
+  if (dyn_ast_expansion(a, (size_t)(e - a->expressions), &global, &target))
+    return global ? (target < a->global_count ? a->globals[target].name : (DynSpan){0})
+                  : (target < a->local_count ? a->locals[target].name : (DynSpan){0});
   if (e->kind == DYN_EXPR_NAME && e->integer < a->local_count)
     return a->locals[e->integer].name;
   if (e->kind == DYN_EXPR_GLOBAL && e->integer < a->global_count)
@@ -1475,7 +1480,11 @@ static void lsp_struct_hover(LspSemantic *semantic, uint32_t index, char *out,
   } while (0)
   APPEND_STRUCT("%s%sstruct %.*s {", s->is_public ? "pub " : "",
                 s->packed ? "packed " : "",
-                (int)(s->name.end_byte - s->name.start_byte),
+                /* A template's name runs on through its parameters. */
+                (int)(s->is_template
+                          ? (size_t)(strchr(semantic->source.text + s->name.end_byte, ')') + 1 -
+                                     (semantic->source.text + s->name.start_byte))
+                          : s->name.end_byte - s->name.start_byte),
                 semantic->source.text + s->name.start_byte);
   uint32_t shown = s->field_count < 8 ? s->field_count : 8;
   for (uint32_t i = 0; i < shown; ++i) {
@@ -1566,8 +1575,33 @@ bool lsp_typed_symbol(LspSemantic *semantic, uint32_t offset, char *hover,
   const char *kind = "value";
   uint32_t function = UINT32_MAX, structure = UINT32_MAX,
            enumeration = UINT32_MAX, alias = UINT32_MAX, global = UINT32_MAX;
+  bool expanded = false;
   if (best) {
     type = best->type;
+    /* A constant that adapted to its use was replaced by a copy of its value;
+       hover still names the constant. */
+    for (size_t i = 0; i < a->expansion_count && !expanded; ++i) {
+      DynExprId id = a->expansions[i].expression;
+      if (id >= a->expression_count)
+        continue;
+      DynSpan use = a->expressions[id].span;
+      if (offset < use.start_byte || offset >= use.end_byte)
+        continue;
+      uint32_t target = a->expansions[i].target;
+      type = a->expressions[id].type;
+      if (a->expansions[i].global && target < a->global_count) {
+        global = target;
+        declared = a->globals[target].name;
+        kind = a->globals[target].is_const ? "const" : "global";
+        expanded = true;
+      } else if (!a->expansions[i].global && target < a->local_count) {
+        declared = a->locals[target].name;
+        kind = a->locals[target].is_const ? "const" : "variable";
+        expanded = true;
+      }
+    }
+  }
+  if (best && !expanded) {
     if (best->kind == DYN_EXPR_NAME && best->integer < a->local_count) {
       declared = a->locals[best->integer].name;
       kind = a->locals[best->integer].is_const ? "const" : "variable";
@@ -1754,7 +1788,7 @@ bool lsp_type_definition_span(LspSemantic *semantic, uint32_t offset,
   if (dyn_type_is_enum(type)) {
     uint32_t i = type - DYN_TYPE_ENUM_BASE;
     if (i < a->enum_count) {
-      *definition = a->enums[i].name;
+      *definition = a->enums[a->enums[i].template_of ? a->enums[i].template_of - 1 : i].name;
       return true;
     }
   }

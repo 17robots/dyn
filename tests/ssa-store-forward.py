@@ -116,7 +116,7 @@ fn main() {
     f: f32 = 0.0
     if #bitcast(u32, cb_floating32(&f, #bitcast(f32, r))) != r { #panic("float32 bits") }
   }
-  _ = io.println(io.stdout(), "store forwarding passed")
+  io.println("store forwarding passed")
 }
 '''
 PANIC = '''global: u64 = 0

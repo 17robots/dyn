@@ -71,6 +71,7 @@ for dyn, (native, fields) in LAYOUTS.items():
         C += f'printf("{dyn}.{field} %zu\\n", offsetof({native}, {field}));\n'
 C += '}\n'
 SOURCE = r'''use "vendor/tree_sitter" ts
+use "std/parse" parse
 use "std/bytes"
 use "std/io"
 extern fn grammar "tree_sitter_dyn"() ts.Language
@@ -91,7 +92,7 @@ LAYOUT
     require(ts.node_start(node) == 0 && ts.node_end(node) == 12)
     require(ts.child_count(node) == 1)
     kind := ts.node_type(node, 64)
-    require(kind.ok && bytes.equal(kind.value, "source_file"))
+    require(kind.failure.kind == parse.Kind.Ok && bytes.equal(kind.value, "source_file"))
     copy := ts.tree_copy_owned(parsed.tree)
     require(copy != nil)
     ts.tree_destroy_owned(parsed.tree)
@@ -112,7 +113,7 @@ LAYOUT
   ts.tree_destroy_owned(nil)
   ts.parser_destroy_owned(nil)
   require(!ts.parse(nil, nil, "").ok)
-  _ = io.println(io.stdout(), "tree-sitter provider ok")
+  io.println("tree-sitter provider ok")
 }
 '''
 report = {'provider': 'tree-sitter', 'pkg_config_version': version,

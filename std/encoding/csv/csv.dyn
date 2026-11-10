@@ -1,16 +1,13 @@
 // RFC 4180-style, allocation-free field scanner and streaming writer.
-// Scanners keep their first error: next returns ok false from then on, and the
-// caller checks state.kind once after the loop. Scanner state.error is module
-// detail; system_error is the native I/O code (which may be zero).
+// Scanners keep their first failure: next returns found false from then on, and
+// the caller checks state.failure once after the loop.
 use "std/io" stream
-use "std/errors" errors
-
-pub enum ErrorKind { None, Syntax, Capacity, Io }
-pub struct Scanner { source: []const u8, offset: usize, finished: bool, error: ErrorKind, kind: errors.Kind, error_offset: usize }
-pub struct StreamScanner { input: stream.Reader, lookahead: u8, has_lookahead: bool, record_ended: bool, ended: bool, finished: bool, error: ErrorKind, kind: errors.Kind, system_error: isize }
-pub struct Field { text: []u8, end_record: bool, end_input: bool, kind: errors.Kind, error: isize, detail: ErrorKind, ok: bool }
+use "std/parse" parse
+pub struct Scanner { source: []const u8, offset: usize, finished: bool, failure: parse.StreamFailure }
+pub struct StreamScanner { input: stream.Reader, lookahead: u8, has_lookahead: bool, record_ended: bool, ended: bool, finished: bool, failure: parse.StreamFailure }
+pub struct Field { text: []u8, end_record: bool, end_input: bool, found: bool, failure: parse.StreamFailure }
 struct ByteResult { value: u8, end: bool, ok: bool }
-pub struct Writer { sink: stream.Writer, fields: usize, failed: bool, error: isize, kind: errors.Kind, detail: ErrorKind }
+pub struct Writer { sink: stream.Writer, fields: usize, failed: bool, failure: parse.StreamFailure }
 
 pub fn scanner(source: []const u8) Scanner {
   return Scanner{ source: source }
@@ -30,9 +27,7 @@ fn stream_byte(state: *StreamScanner) ByteResult {
   byte: [1]u8 = []
   result := stream.read(state.input, byte[..])
   if result.status == stream.Status.Error {
-    state.error = ErrorKind.Io
-    state.kind = result.kind
-    state.system_error = result.error
+    state.failure = parse.io_failure(result.kind, result.error)
     state.finished = true
     return ByteResult{}
   }
@@ -48,28 +43,24 @@ fn stream_unread(state: *StreamScanner, value: u8) {
   state.has_lookahead = true
 }
 
-fn stream_fail(state: *StreamScanner, kind: ErrorKind) Field {
-  state.error = kind
-  state.kind = errors.Kind.InvalidInput
-  if kind == ErrorKind.Capacity {
-    state.kind = errors.Kind.Capacity
-  }
+fn stream_fail(state: *StreamScanner, kind: parse.Kind) Field {
+  state.failure = parse.parse_failure(kind, 0, "")
   state.finished = true
-  return Field{ kind: state.kind, error: state.system_error, detail: state.error }
+  return Field{ failure: state.failure }
 }
 
 // Reads one field from an arbitrarily chunked input stream.
 pub fn next_stream(state: *StreamScanner, destination: []u8) Field {
   if state.finished {
-    return Field{ kind: state.kind, error: state.system_error, detail: state.error }
+    return Field{ failure: state.failure }
   }
   first := stream_byte(state)
   if !first.ok {
-    return Field{ kind: state.kind, error: state.system_error, detail: state.error }
+    return Field{ failure: state.failure }
   }
   if first.end {
     state.finished = true
-    return Field{ text: destination[..0], end_record: true, end_input: true, ok: !state.record_ended }
+    return Field{ text: destination[..0], end_record: true, end_input: true, found: !state.record_ended }
   }
   quoted := first.value == '"'
   if !quoted {
@@ -82,7 +73,7 @@ pub fn next_stream(state: *StreamScanner, destination: []u8) Field {
   for true {
     item := stream_byte(state)
     if !item.ok {
-      return Field{ kind: state.kind, error: state.system_error, detail: state.error }
+      return Field{ failure: state.failure }
     }
     if item.end {
       input_ended = true
@@ -93,7 +84,7 @@ pub fn next_stream(state: *StreamScanner, destination: []u8) Field {
       if byte == '"' {
         after := stream_byte(state)
         if !after.ok {
-          return Field{ kind: state.kind, error: state.system_error, detail: state.error }
+          return Field{ failure: state.failure }
         }
         if after.end {
           closed = true
@@ -110,29 +101,29 @@ pub fn next_stream(state: *StreamScanner, destination: []u8) Field {
         }
       }
     } else if byte == '"' {
-      return stream_fail(state, ErrorKind.Syntax)
+      return stream_fail(state, parse.Kind.Syntax)
     }
     else if byte == ',' || byte == '\r' || byte == '\n' {
       delimiter = byte
       break
     }
     if used == #len(destination) {
-      return stream_fail(state, ErrorKind.Capacity)
+      return stream_fail(state, parse.Kind.Capacity)
     }
     destination[used] = byte
     used += 1
   }
   if !closed {
-    return stream_fail(state, ErrorKind.Syntax)
+    return stream_fail(state, parse.Kind.Syntax)
   }
   if quoted && !input_ended && delimiter != ',' && delimiter != '\r' && delimiter != '\n' {
-    return stream_fail(state, ErrorKind.Syntax)
+    return stream_fail(state, parse.Kind.Syntax)
   }
   end_record := input_ended || delimiter == '\r' || delimiter == '\n'
   if delimiter == '\r' {
     after_cr := stream_byte(state)
     if !after_cr.ok {
-      return Field{ kind: state.kind, error: state.system_error, detail: state.error }
+      return Field{ failure: state.failure }
     }
     if after_cr.end {
       input_ended = true
@@ -145,7 +136,7 @@ pub fn next_stream(state: *StreamScanner, destination: []u8) Field {
   if input_ended {
     state.finished = true
   }
-  return Field{ text: destination[..used], end_record: end_record, end_input: state.finished, ok: true }
+  return Field{ text: destination[..used], end_record: end_record, end_input: state.finished, found: true }
 }
 
 pub fn writer(destination_writer: stream.Writer) Writer {
@@ -159,9 +150,7 @@ fn write_all(state: *Writer, bytes: []const u8) bool {
   result := stream.write_all(state.sink, bytes)
   if result.status == stream.Status.Error {
     state.failed = true
-    state.error = result.error
-    state.kind = result.kind
-    state.detail = ErrorKind.Io
+    state.failure = parse.io_failure(result.kind, result.error)
     return false
   }
   return true
@@ -213,20 +202,15 @@ pub fn write_field(state: *Writer, value: []const u8, end_record: bool) bool {
   return true
 }
 
-fn fail(state: *Scanner, destination: []u8, kind: ErrorKind) Field {
-  state.error = kind
-  state.kind = errors.Kind.InvalidInput
-  if kind == ErrorKind.Capacity {
-    state.kind = errors.Kind.Capacity
-  }
-  state.error_offset = state.offset
+fn fail(state: *Scanner, destination: []u8, kind: parse.Kind) Field {
+  state.failure = parse.parse_failure(kind, state.offset, "")
   state.finished = true
-  return Field{ text: destination[..0], kind: state.kind, detail: state.error }
+  return Field{ text: destination[..0], failure: state.failure }
 }
 
 pub fn next(state: *Scanner, destination: []u8) Field {
   if state.finished {
-    return Field{ text: destination[..0], kind: state.kind, detail: state.error }
+    return Field{ text: destination[..0], failure: state.failure }
   }
   at := state.offset
   output_at: usize = 0
@@ -241,7 +225,7 @@ pub fn next(state: *Scanner, destination: []u8) Field {
       if byte == '"' {
         if at + 1 < #len(state.source) && state.source[at + 1] == '"' {
           if output_at == #len(destination) {
-            return fail(state, destination, ErrorKind.Capacity)
+            return fail(state, destination, parse.Kind.Capacity)
           }
           destination[output_at] = '"'
           output_at += 1
@@ -253,7 +237,7 @@ pub fn next(state: *Scanner, destination: []u8) Field {
         }
       } else {
         if output_at == #len(destination) {
-          return fail(state, destination, ErrorKind.Capacity)
+          return fail(state, destination, parse.Kind.Capacity)
         }
         destination[output_at] = byte
         output_at += 1
@@ -264,10 +248,10 @@ pub fn next(state: *Scanner, destination: []u8) Field {
         break
       }
       if byte == '"' {
-        return fail(state, destination, ErrorKind.Syntax)
+        return fail(state, destination, parse.Kind.Syntax)
       }
       if output_at == #len(destination) {
-        return fail(state, destination, ErrorKind.Capacity)
+        return fail(state, destination, parse.Kind.Capacity)
       }
       destination[output_at] = byte
       output_at += 1
@@ -275,10 +259,10 @@ pub fn next(state: *Scanner, destination: []u8) Field {
     }
   }
   if !closed {
-    return fail(state, destination, ErrorKind.Syntax)
+    return fail(state, destination, parse.Kind.Syntax)
   }
   if quoted && at < #len(state.source) && state.source[at] != ',' && state.source[at] != '\n' && state.source[at] != '\r' {
-    return fail(state, destination, ErrorKind.Syntax)
+    return fail(state, destination, parse.Kind.Syntax)
   }
   end_record := false
   if at == #len(state.source) {
@@ -304,5 +288,5 @@ pub fn next(state: *Scanner, destination: []u8) Field {
     }
   }
   state.offset = at
-  return Field{ text: destination[..output_at], end_record: end_record, end_input: state.finished, ok: true }
+  return Field{ text: destination[..output_at], end_record: end_record, end_input: state.finished, found: true }
 }

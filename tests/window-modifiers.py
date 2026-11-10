@@ -19,7 +19,8 @@ int dyn_test_send_key(Display *d, Window w, unsigned long sym, unsigned int stat
  int r=XSendEvent(d,w,False,pressed?KeyPressMask:KeyReleaseMask,&e); XSync(d,False); return r;
 }''')
  subprocess.run(['cc','-fno-stack-protector','-c',str(p/'send.c'),'-o',str(p/'send.o')],check=True)
- (p/'main.dyn').write_text('''use "vendor/window" window
+ (p/'main.dyn').write_text('''use "std/io" io
+use "vendor/window" window
 extern fn send "dyn_test_send_key"(display: rawptr, window: usize, symbol: usize, state: u32, pressed: i32) i32
 fn check(ok: bool) { if !ok { #panic("X11 word modifier contract") } }
 fn key(host: *window.Window, symbol: usize, state: u32, pressed: i32) {
@@ -28,7 +29,7 @@ fn key(host: *window.Window, symbol: usize, state: u32, pressed: i32) {
 }
 fn main() {
  host := window.Window{}
- check(window.open(&host, "modifier oracle", 64, 64).ok)
+ check(window.open(&host, "modifier oracle", 64, 64).kind == io.Kind.Ok)
  defer { window.close(&host) }
  _ = window.poll(&host)
  key(&host, 0xff51, 4, 1)

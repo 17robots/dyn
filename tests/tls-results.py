@@ -50,7 +50,7 @@ int main(int argc, char **argv) {
 COMMON = r'''
 use "std/net/tls" tls
 use "std/mem" mem
-use "std/errors" errors
+use "std/io" errors
 fn check(ok: bool) { if !ok { #panic("TLS result contract") } }
 '''
 REAL = COMMON + r'''
@@ -63,24 +63,24 @@ fn main() {
   c: tls.ContextResult
   n: tls.ConnectionResult
   t: tls.TextResult
-  check(!z.ok && z.kind == errors.Kind.None && z.error == 0 && z.detail == tls.ErrorKind.None && z.provider_code == 0 && z.provider_status == 0 && z.count == 0)
-  check(!c.ok && c.value == nil && c.error == 0 && c.kind == errors.Kind.None && c.detail == tls.ErrorKind.None && c.provider_code == 0)
-  check(!n.ok && n.value == nil && n.error == 0 && n.kind == errors.Kind.None && n.detail == tls.ErrorKind.None && n.provider_code == 0)
-  check(!t.ok && #len(t.value) == 0 && t.kind == errors.Kind.None && t.error == 0 && t.provider_code == 0)
+  check(z.failure.kind == errors.Kind.Ok && z.failure.native == 0 && z.detail == tls.ErrorKind.None && z.provider_code == 0 && z.provider_status == 0 && z.count == 0)
+  check(c.value == nil && c.failure.native == 0 && c.failure.kind == errors.Kind.Ok && c.detail == tls.ErrorKind.None && c.provider_code == 0)
+  check(n.value == nil && n.failure.native == 0 && n.failure.kind == errors.Kind.Ok && n.detail == tls.ErrorKind.None && n.provider_code == 0)
+  check(#len(t.value) == 0 && t.failure.kind == errors.Kind.Ok && t.failure.native == 0 && t.provider_code == 0)
   backing: [16384]u8
   mem.fill(backing[..], 165)
   arena := mem.arena_from_buffer(backing[..])
   prefix := mem.push_bytes_uninit(arena, 7)
   mark := mem.arena_mark(arena)
   invalid := tls.client_connection_create(arena, nil, -1, "host")
-  check(!invalid.ok && invalid.value == nil && invalid.kind == errors.Kind.InvalidInput && invalid.detail == tls.ErrorKind.InvalidArgument && invalid.error == 0 && invalid.provider_code == 0)
+  check(invalid.failure.kind != errors.Kind.Ok && invalid.value == nil && invalid.failure.kind == errors.Kind.InvalidInput && invalid.detail == tls.ErrorKind.InvalidArgument && invalid.failure.native == 0 && invalid.provider_code == 0)
   config := tls.server_config_create(arena, "/dyn/no-certificate.pem", "/dyn/no-key.pem")
-  check(!config.ok && config.value == nil && config.kind == errors.Kind.System && config.detail == tls.ErrorKind.Provider && config.error == 0 && config.provider_code != 0)
+  check(config.failure.kind != errors.Kind.Ok && config.value == nil && config.failure.kind == errors.Kind.System && config.detail == tls.ErrorKind.Provider && config.failure.native == 0 && config.provider_code != 0)
   bad := tls.handshake(nil)
-  check(!bad.ok && bad.kind == errors.Kind.InvalidInput && bad.detail == tls.ErrorKind.InvalidArgument && bad.count == 0 && bad.error == 0 && bad.provider_code == 0 && bad.provider_status == 0)
-  check(!tls.server_handshake(nil).ok && !tls.shutdown(nil).ok && !tls.set_alpn_protocols(nil, "\x02h2").ok)
+  check(bad.failure.kind != errors.Kind.Ok && bad.failure.kind == errors.Kind.InvalidInput && bad.detail == tls.ErrorKind.InvalidArgument && bad.count == 0 && bad.failure.native == 0 && bad.provider_code == 0 && bad.provider_status == 0)
+  check(tls.server_handshake(nil).failure.kind != errors.Kind.Ok && tls.shutdown(nil).failure.kind != errors.Kind.Ok && tls.set_alpn_protocols(nil, "\x02h2").failure.kind != errors.Kind.Ok)
   missing := tls.certificate_subject(arena, nil)
-  check(!missing.ok && missing.kind == errors.Kind.InvalidInput && missing.error == 0 && missing.provider_code == 0 && #len(missing.value) == 0 && mem.arena_mark(arena) == mark)
+  check(missing.failure.kind != errors.Kind.Ok && missing.failure.kind == errors.Kind.InvalidInput && missing.failure.native == 0 && missing.provider_code == 0 && #len(missing.value) == 0 && mem.arena_mark(arena) == mark)
   for byte in prefix { check(byte == 165) }
   pem: []const u8 = PEM
   bio := bio_new(&pem[0], #cast(i32, #len(pem)))
@@ -89,7 +89,7 @@ fn main() {
   _ = bio_free(bio)
   check(cert != nil)
   subject := tls.certificate_subject(arena, cert)
-  check(subject.ok && subject.kind == errors.Kind.None && subject.error == 0 && subject.provider_code == 0 && #len(subject.value) > 1023 && mem.equal(subject.value, ORACLE))
+  check(subject.failure.kind == errors.Kind.Ok && subject.failure.kind == errors.Kind.Ok && subject.failure.native == 0 && subject.provider_code == 0 && #len(subject.value) > 1023 && mem.equal(subject.value, ORACLE))
   check(mem.arena_mark(arena) == mark + #len(subject.value))
   tls.certificate_release(&cert)
   tls.certificate_release(&cert)
@@ -114,23 +114,23 @@ fn main() {
     data: [4]u8
     rd := tls.read(conn, data[..])
     wr := tls.write(conn, "test")
-    check(rd.kind == r.kind && rd.detail == r.detail && rd.error == 0 && rd.provider_code == r.provider_code && rd.provider_status == r.provider_status && rd.count == 0 && !rd.ok)
-    check(wr.kind == r.kind && wr.detail == r.detail && wr.error == 0 && wr.provider_code == r.provider_code && wr.provider_status == r.provider_status && wr.count == 0 && !wr.ok)
+    check(rd.failure.kind == r.failure.kind && rd.detail == r.detail && rd.failure.native == 0 && rd.provider_code == r.provider_code && rd.provider_status == r.provider_status && rd.count == 0 && rd.failure.kind != errors.Kind.Ok)
+    check(wr.failure.kind == r.failure.kind && wr.detail == r.detail && wr.failure.native == 0 && wr.provider_code == r.provider_code && wr.provider_status == r.provider_status && wr.count == 0 && wr.failure.kind != errors.Kind.Ok)
     expected := errors.Kind.WouldBlock
     if mode == 3 { expected = errors.Kind.PermissionDenied }
     if mode == 4 { expected = errors.Kind.System }
-    check(!r.ok && r.kind == expected && r.error == 0 && r.provider_code == 18446744073709551615 && r.provider_status == -7 && r.count == 0)
+    check(r.failure.kind != errors.Kind.Ok && r.failure.kind == expected && r.failure.native == 0 && r.provider_code == 18446744073709551615 && r.provider_status == -7 && r.count == 0)
     if mode == 1 { check(r.detail == tls.ErrorKind.WantRead) }
     if mode == 2 { check(r.detail == tls.ErrorKind.WantWrite) }
     if mode == 3 { check(r.detail == tls.ErrorKind.Verification) }
     if mode == 4 { check(r.detail == tls.ErrorKind.Provider) }
   }
   alpn := tls.set_alpn_protocols(#cast(rawptr, 1), "\x02h2")
-  check(alpn.ok && alpn.kind == errors.Kind.None && alpn.detail == tls.ErrorKind.None && alpn.error == 0 && alpn.provider_code == 0)
+  check(alpn.failure.kind == errors.Kind.Ok && alpn.failure.kind == errors.Kind.Ok && alpn.detail == tls.ErrorKind.None && alpn.failure.native == 0 && alpn.provider_code == 0)
   pending := tls.shutdown(#cast(rawptr, 1))
-  check(!pending.ok && pending.kind == errors.Kind.WouldBlock && pending.detail == tls.ErrorKind.WantRead && pending.error == 0 && pending.provider_status == 0)
+  check(pending.failure.kind != errors.Kind.Ok && pending.failure.kind == errors.Kind.WouldBlock && pending.detail == tls.ErrorKind.WantRead && pending.failure.native == 0 && pending.provider_status == 0)
   failed := tls.certificate_subject(arena, #cast(rawptr, 1))
-  check(!failed.ok && failed.kind == errors.Kind.System && failed.error == 0 && failed.provider_code == 18446744073709551615 && #len(failed.value) == 0 && mem.arena_used(arena) == 7)
+  check(failed.failure.kind != errors.Kind.Ok && failed.failure.kind == errors.Kind.System && failed.failure.native == 0 && failed.provider_code == 18446744073709551615 && #len(failed.value) == 0 && mem.arena_used(arena) == 7)
   for byte in storage { check(byte == 165) }
 }
 '''

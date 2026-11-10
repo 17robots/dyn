@@ -1,3 +1,4 @@
+use "std/parse" parse
 use "std/c"
 use "std/mem"
 #link("SDL3")
@@ -34,7 +35,7 @@ pub fn window_create(title: []const u8, title_buffer: []u8, width: i32, height: 
     return WindowResult{}
   }
   native_title := c.string_into(title_buffer, title)
-  if !native_title.ok {
+  if native_title.failure.kind != parse.Kind.Ok {
     return WindowResult{}
   }
   value := native_create_window(native_title.value, width, height, flags)

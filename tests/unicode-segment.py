@@ -38,8 +38,8 @@ sources = {
 }
 assert any('17.0.0' in line for line in sources['line'][:3]), 'expected Unicode 17 test data'
 SOURCE = '''use "std/unicode/text" text
-use "std/mem" mem
 use "std/io" io
+use "std/mem" mem
 
 const data: []const u8 = #load("cases.bin")
 
@@ -62,16 +62,16 @@ fn main() {
     if kind == 0 {
       found := text.word_breaks(arena, sample)
       for offset in found.value {
-        _ = io.print(io.stdout(), "{} ", offset)
+        io.print("{} ", offset)
       }
     }
     else {
       found := text.line_breaks(arena, sample)
       for entry in found.value {
-        _ = io.print(io.stdout(), "{} ", entry.offset)
+        io.print("{} ", entry.offset)
       }
     }
-    _ = io.println(io.stdout(), "")
+    io.println("")
     mem.arena_rewind(arena, mark)
   }
 }

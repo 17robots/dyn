@@ -22,6 +22,7 @@ def literal(data):
 SOURCE = f'''use "std/mem" mem
 use "std/strings" strings
 use "std/fmt" fmt
+use "std/parse" parse
 use "std/encoding/base64" base64
 use "std/encoding/json" json
 use "std/compress/deflate" deflate
@@ -43,20 +44,20 @@ fn main() {{
   encoded := base64.encode(arena, "hello")
   check(strings.equal(encoded, "aGVsbG8="), "base64 encode")
   before := mem.arena_used(arena)
-  check(!base64.decode(arena, "a!==").ok && mem.arena_used(arena) == before, "failed decode pushes nothing")
+  check(base64.decode(arena, "a!==").failure.kind != parse.Kind.Ok && mem.arena_used(arena) == before, "failed decode pushes nothing")
   check(strings.equal(base64.decode(arena, encoded).value, "hello"), "base64 decode")
   doc := json.make_object(arena)
   _ = json.add_member(doc, "name", json.make_string(arena, "boss"))
   check(strings.equal(json.encode(arena, doc), "{{\\"name\\":\\"boss\\"}}"), "json encode")
   mark := mem.arena_used(arena)
   big := deflate.inflate(arena, {literal(DEFLATED)})
-  check(big.ok && #len(big.value) == {len(PAYLOAD)} && big.value[{len(PAYLOAD) - 1}] == {PAYLOAD[-1]}, "inflate grows")
+  check(big.failure.kind == parse.Kind.Ok && #len(big.value) == {len(PAYLOAD)} && big.value[{len(PAYLOAD) - 1}] == {PAYLOAD[-1]}, "inflate grows")
   check(mem.arena_used(arena) == mark + {len(PAYLOAD)}, "retries leave only the output")
   member := gzip.decompress(arena, {literal(GZIPPED)})
-  check(member.ok && #len(member.value) == {len(PAYLOAD)} && member.consumed == {len(GZIPPED)}, "gunzip")
-  check(!deflate.inflate(arena, "\\xff\\xff").ok, "corrupt inflate")
+  check(member.failure.kind == parse.Kind.Ok && #len(member.value) == {len(PAYLOAD)} && member.consumed == {len(GZIPPED)}, "gunzip")
+  check(deflate.inflate(arena, "\\xff\\xff").failure.kind != parse.Kind.Ok, "corrupt inflate")
   joined := path.join(arena, "a/b", "c")
-  check(joined.ok && strings.equal(joined.value, "a/b/c"), "path join")
+  check(joined.valid && strings.equal(joined.value, "a/b/c"), "path join")
 }}
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-arena-producers-') as temporary:

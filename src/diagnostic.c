@@ -1,3 +1,4 @@
+#include <ctype.h>
 #include "dyn.h"
 #include "dyn_compact.h"
 #include <stdio.h>
@@ -111,7 +112,20 @@ void dyn_syntax_error_message(const char *text, size_t length, uint32_t offset,
       snprintf(found, sizeof(found), "U+%04X", value);
     } else snprintf(found, sizeof(found), "'%.*s'", (int)(end - start), text + start);
   }
-  if (expected)
+  /* A list item on the next line where the list should close: a comma is
+     missing at the end of the line above. */
+  bool next_line = false;
+  if (expected && !strcmp(expected, "}") &&
+      start < length && (isalnum((unsigned char)text[start]) || text[start] == '_' || text[start] == '.' ||
+                         text[start] == '"' || text[start] == '-')) {
+    size_t back = start;
+    while (back && (text[back - 1] == ' ' || text[back - 1] == '\t' || text[back - 1] == '\r')) --back;
+    next_line = back && text[back - 1] == '\n';
+  }
+  if (next_line)
+    snprintf(message, capacity, "expected ',' or '%s', found %s: is a comma missing at the end of the line above?",
+             expected, found);
+  else if (expected)
     snprintf(message, capacity, "expected '%s', found %s", expected, found);
   else if (!strcmp(error, "unexpected token"))
     snprintf(message, capacity, "unexpected %s", found);

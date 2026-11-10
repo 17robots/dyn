@@ -1,4 +1,4 @@
-use "std/errors" errors
+use "std/parse" parse
 use "std/bytes"
 use "std/mem"
 
@@ -22,7 +22,6 @@ use "std/mem"
 
 pub enum Kind { Nil, Root, Main, Tag }
 pub enum Label { None, Identifier, Number, String, Symbol }
-pub enum ErrorKind { None, Unclosed, Unexpected, UnterminatedString, UnterminatedComment, MissingTagName }
 
 pub struct Node {
   kind: Kind,
@@ -42,14 +41,13 @@ pub struct Node {
 }
 
 // root is never nil. Failure returns the read-only nil_node stub.
-pub struct ParseResult { root: *Node, kind: errors.Kind, error: isize, detail: ErrorKind, offset: usize, ok: bool }
+pub struct ParseResult { root: *Node, offset: usize, failure: parse.Failure }
 
 struct Parser {
   arena: *mem.Arena,
   source: []const u8,
   at: usize,
-  error: ErrorKind,
-  error_offset: usize,
+  failure: parse.Failure,
 }
 
 // The read-only stub returned for every miss. All fields are zero.
@@ -62,18 +60,11 @@ pub fn parse(arena: *mem.Arena, source: []const u8) ParseResult {
   root := mem.push(Node, arena)
   root.kind = Kind.Root
   parse_children(&parser, root, 0)
-  if parser.error != ErrorKind.None {
+  if parser.failure.kind != parse.Kind.Ok {
     mem.arena_rewind(arena, mark)
-    return ParseResult{root: #cast(*Node, &nil_node), kind: errors.Kind.InvalidInput, error: 0, detail: parser.error, offset: parser.error_offset}
+    return ParseResult{ root: #cast(*Node, &nil_node), offset: parser.failure.offset, failure: parser.failure }
   }
-  return ParseResult{
-    root: root,
-    kind: errors.Kind.None,
-    error: 0,
-    detail: ErrorKind.None,
-    offset: parser.error_offset,
-    ok: parser.error == ErrorKind.None,
-  }
+  return ParseResult{ root: root }
 }
 
 // The shared nil node. Its fields are all zero.
@@ -159,10 +150,9 @@ pub fn line_of(source: []const u8, offset: usize) usize {
   return line
 }
 
-fn fail(parser: *Parser, error: ErrorKind, offset: usize) {
-  if parser.error == ErrorKind.None {
-    parser.error = error
-    parser.error_offset = offset
+fn fail(parser: *Parser, kind: parse.Kind, message: []const u8, offset: usize) {
+  if parser.failure.kind == parse.Kind.Ok {
+    parser.failure = parse.Failure{ kind: kind, offset: offset, message: message }
   }
 }
 
@@ -208,7 +198,7 @@ fn skip(parser: *Parser, separators: bool) {
         parser.at += 1
       }
       if parser.at >= #len(source) {
-        fail(parser, ErrorKind.UnterminatedComment, start)
+        fail(parser, parse.Kind.Truncated, "unterminated comment", start)
         return
       }
       parser.at += 2
@@ -248,7 +238,7 @@ fn read_string(parser: *Parser, node: *Node, quote: u8) {
     }
     parser.at += 1
   }
-  fail(parser, ErrorKind.UnterminatedString, start)
+  fail(parser, parse.Kind.Truncated, "unterminated string", start)
 }
 
 fn read_label(parser: *Parser, node: *Node) {
@@ -304,12 +294,12 @@ fn parse_children(parser: *Parser, parent: *Node, close: u8) {
   }
   for true {
     skip(parser, true)
-    if parser.error != ErrorKind.None {
+    if parser.failure.kind != parse.Kind.Ok {
       return
     }
     if parser.at >= #len(parser.source) {
       if close != 0 {
-        fail(parser, ErrorKind.Unclosed, start)
+        fail(parser, parse.Kind.Truncated, "unclosed scope", start)
       }
       return
     }
@@ -319,7 +309,7 @@ fn parse_children(parser: *Parser, parent: *Node, close: u8) {
       return
     }
     if closer(byte) {
-      fail(parser, ErrorKind.Unexpected, parser.at)
+      fail(parser, parse.Kind.Syntax, "unexpected token", parser.at)
       return
     }
     append(parent, parse_node(parser))
@@ -348,7 +338,7 @@ fn parse_node(parser: *Parser) *Node {
     tag_offset := parser.at
     parser.at += 1
     if parser.at >= #len(source) || !letter(source[parser.at]) {
-      fail(parser, ErrorKind.MissingTagName, tag_offset)
+      fail(parser, parse.Kind.Syntax, "missing tag name", tag_offset)
       return node
     }
     tag_node := mem.push(Node, parser.arena)
@@ -361,11 +351,11 @@ fn parse_node(parser: *Parser) *Node {
     append_tag(node, tag_node)
     skip(parser, false)
   }
-  if parser.error != ErrorKind.None {
+  if parser.failure.kind != parse.Kind.Ok {
     return node
   }
   if parser.at >= #len(source) || closer(source[parser.at]) || source[parser.at] == ':' {
-    fail(parser, ErrorKind.Unexpected, parser.at)
+    fail(parser, parse.Kind.Syntax, "unexpected token", parser.at)
     return node
   }
   node.offset = parser.at
@@ -379,7 +369,7 @@ fn parse_node(parser: *Parser) *Node {
     parser.at += 1
     skip(parser, false)
     if parser.at >= #len(source) || closer(source[parser.at]) {
-      fail(parser, ErrorKind.Unexpected, parser.at)
+      fail(parser, parse.Kind.Syntax, "unexpected token", parser.at)
     } else if opener(source[parser.at]) {
       parse_group(parser, node)
     } else {

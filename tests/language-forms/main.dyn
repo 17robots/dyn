@@ -1,0 +1,180 @@
+// Type patterns, chained comparisons, generic struct literals, single-line
+// blocks and constants that adapt to their use.
+use "std/container/map"
+use "std/enums"
+use "std/io"
+use "std/mem"
+
+struct Point { x: i32, y: i32 }
+struct Box($T: type) { value: T }
+
+const LIMIT := 64
+const MASK := 1 << 12
+const DOUBLE := LIMIT * 2
+
+fn describe(value: any) i64 {
+  case value {
+    i64 number => { return number }
+    Point p => { return #cast(i64, p.x + p.y) }
+    []const u8 text => { return #cast(i64, #len(text)) }
+    bool => { return 1 }
+    _ => { return 0 }
+  }
+}
+
+struct Stats { count: i64 }
+
+const MAX_HEALTH := 100
+
+struct Speed { value: f32 = 1.5, level: u8 = 1 }
+struct Player { name: []const u8 = "anon", health: i32 = MAX_HEALTH, armor: i32, speed: Speed }
+
+enum(i32) Errno { Ok = 0, NoEnt = 2, Intr = 4, Io, NoMem = 12 }
+
+fn parse(x: i32) i32 { return x * 2 }
+
+fn shadowed(x: i32) i32 {
+  if x > 0 {
+    x := parse(x)
+    return x
+  }
+  for i in 0..3 {
+    y := i
+    _ = y
+  }
+  y := 5
+  return y + x
+}
+
+fn take(v: u8) u8 { return v }
+
+fn root(n: i32) i32 {
+  for i in 0..10 {
+    if i * i == n { return i }
+  }
+  return -1
+}
+
+fn kind_of(value: any) i32 {
+  case value {
+    i32 n => { return n }
+    f64 => { return 100 }
+    []const u8 s => { return #cast(i32, #len(s)) }
+    bool => { return 1000 }
+    _ => { return -1 }
+  }
+}
+
+fn check(ok: bool, message: []const u8) {
+  if !ok { #panic(message) }
+}
+
+fn main() {
+  ten: i64 = 10
+  point := Point{x: 3, y: 4}
+  text: []const u8 = "abcd"
+  check(describe(ten) + describe(true) + describe(point) + describe(text) == 22, "type patterns")
+  x: i32 = 5
+  check(0 <= x < 10, "chain")
+  check(10 > x >= 5, "descending chain")
+  check(!(0 < x < 3), "chain fails")
+  check(point.x < x <= point.x + point.y + 2, "field chain")
+  flags: u32 = 6
+  check((flags & 2) != 0, "parenthesized mask")
+  b := Box(i32){value: 41}
+  nested := Box(Box(i32)){value: Box(i32){value: 1}}
+  check(b.value + nested.value.value == 42, "generic literals")
+  small: u8 = LIMIT
+  wide: u64 = MASK
+  real: f64 = DOUBLE
+  const local := 3
+  sum: i64 = DOUBLE + local
+  check(small == 64 && wide == 4096 && real == 128.0 && sum == 131, "adapting constants")
+  // Literal ranges count in the type their binding meets first.
+  total: i32 = 0
+  for i in 0..5 { total += i }
+  stats := Stats{count: 0}
+  for i in 0..3 { stats.count += i }
+  tiny: u8 = 0
+  for i in 0..4 { tiny += take(i) }
+  negative: i32 = 0
+  for i in -3..0 { negative += i }
+  check(total == 10 && stats.count == 3 && tiny == 6 && negative == -6 && root(49) == 7, "ranges")
+  // Literals boxed into any take i32, f64, []const u8 and bool.
+  check(kind_of(5) + kind_of(2.5) + kind_of("hey") + kind_of(true) == 1108, "boxed literals")
+  // A nested block may shadow; the same block may not.
+  check(shadowed(2) == 4 && shadowed(-1) == 4, "shadowing")
+  // Field defaults: literals, declarations, mem.push and #init.
+  fresh := Player{}
+  given := Player{health: 5, speed: Speed{level: 9}}
+  declared: Player
+  check(fresh.health == 100 && fresh.armor == 0 && fresh.speed.level == 1 && #len(fresh.name) == 4, "literal defaults")
+  check(given.health == 5 && given.speed.level == 9 && given.speed.value == 1.5, "partial defaults")
+  check(declared.health == 100 && declared.speed.level == 1, "declared defaults")
+  storage: [4096]u8
+  arena := mem.arena_from_buffer(storage[..])
+  pushed := mem.push(Player, arena)
+  plain := mem.push(Stats, arena)
+  check(pushed.health == 100 && pushed.speed.value == 1.5 && plain.count == 0, "pushed defaults")
+  pushed.health = 1
+  #init(pushed)
+  check(pushed.health == 100, "#init")
+  // Explicit enum values.
+  errno := enums.from_int(Errno, 5)
+  check(#cast(i32, Errno.NoMem) == 12 && errno == Errno.Io && enums.from_int(Errno, 3) == Errno.Ok, "enum values")
+  check(#len(enums.name(Errno.Intr)) == 4 && #len(enums.name(errno)) == 2, "enum names")
+  // usize widens to u64 and u32 to usize on every target.
+  index: usize = 3
+  widened: u64 = index
+  narrow: u32 = 9
+  at: usize = narrow
+  check(widened + #cast(u64, at) == 12, "size widening")
+  // Generic instances as function values, and default map keys.
+  twice := doubled(u32)
+  check(twice(21) == 42, "instance value")
+  arena2 := mem.arena_create(0)
+  by_errno: map.Map(Errno, u32)
+  map.init(&by_errno, arena2)
+  map.insert(&by_errno, Errno.Io, 5)
+  switches: map.Map(u16, bool)
+  map.init(&switches, arena2)
+  map.insert(&switches, 7, true)
+  names: map.Map([]const u8, u32)
+  map.init(&names, arena2)
+  map.insert(&names, "ada", 3)
+  spelled := mem.push_array(u8, arena2, 3)
+  spelled[0] = 'a'
+  spelled[1] = 'd'
+  spelled[2] = 'a'
+  same: []const u8 = spelled
+  check(map.get(&names, same) != nil && #typeof([]const u8).kind == TypeKind.Slice, "text keys by content")
+  check(map.get(&by_errno, Errno.Io).* == 5 && map.get(&switches, 7).* && map.get(&switches, 8) == nil, "map keys")
+  // #typeof fields are constants, and an if on one takes its branch.
+  check(classify(u8) == 1 && classify(i64) == 8 && classify([]const u8) == 100 && classify(Errno) == 200, "constant branches")
+  check(#typeof([]u8).element_id == #typeof(u8).id && #typeof(u16).size == 2, "reflection constants")
+  // Bool keys compare by truth as the language reads it, not by byte.
+  truths: map.Map(bool, u32)
+  map.init(&truths, arena2)
+  map.insert(&truths, true, 1)
+  stored: u8 = 3
+  odd_true := #cast(*const bool, &stored).*
+  check(odd_true && map.get(&truths, odd_true) != nil && map.get(&truths, false) == nil, "bool keys")
+  io.println("{} {}", "ok", 1)
+}
+
+fn classify($T: type) usize {
+  if #typeof(T).kind == TypeKind.Slice {
+    return 100
+  } else if #typeof(T).kind == TypeKind.Enum {
+    return 200
+  }
+  if #sizeof(T) == 8 {
+    return 8
+  }
+  return #sizeof(T)
+}
+
+fn doubled($T: type, value: T) T {
+  #assert(#typeof(T).kind == TypeKind.Integer, "doubled: integers only")
+  return value * 2
+}

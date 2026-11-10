@@ -1,3 +1,4 @@
+use "std/parse" parse
 use "std/encoding/csv" csv
 use "std/encoding/xml" xml
 use "std/encoding/ini" ini
@@ -7,10 +8,10 @@ use "std/encoding/json" json
 use "std/mem" mem
 use "std/unicode/utf8" utf8
 struct Chunk { source: []const u8, at: usize, split: usize, limit: usize }
-fn read_chunk(data: rawptr, destination: []u8) io.Result {
+fn read_chunk(data: rawptr, destination: []u8) io.Transfer {
   state := #cast(*Chunk, data)
   if state.at == #len(state.source) {
-    return io.Result{ status: io.Status.End }
+    return io.Transfer{ status: io.Status.End }
   }
   take := #len(state.source) - state.at
   if state.at < state.split && take > state.split - state.at {
@@ -26,7 +27,7 @@ fn read_chunk(data: rawptr, destination: []u8) io.Result {
     destination[i] = state.source[state.at + i]
   }
   state.at += take
-  return io.Result{ transferred: take }
+  return io.Transfer{ transferred: take }
 }
 fn input(state: *Chunk) io.Reader {
   return io.Reader{ data: #cast(rawptr, state), read: read_chunk }
@@ -41,10 +42,10 @@ fn csv_check(source: []const u8, expected: bool) {
       b: [32]u8 = []
       first := csv.next(&direct, a[..capacity])
       second := csv.next_stream(&streamed, b[..capacity])
-      if first.ok != second.ok || (capacity == 4 && first.ok != expected) || direct.error != streamed.error {
+      if first.found != second.found || (capacity == 4 && first.found != expected) || direct.failure.parse.kind != streamed.failure.parse.kind {
         #panic("CSV scanner acceptance mismatch")
       }
-      if first.ok && (!bytes.equal(first.text, second.text) || first.end_record != second.end_record) {
+      if first.found && (!bytes.equal(first.text, second.text) || first.end_record != second.end_record) {
         #panic("CSV field mismatch")
       }
     }
@@ -53,7 +54,7 @@ fn csv_check(source: []const u8, expected: bool) {
 fn xml_check(source: []const u8, expected: bool) {
   direct := xml.scanner(source)
   original := xml.next(&direct)
-  if original.ok != expected {
+  if original.found != expected {
     #panic("XML fixture invalid")
   }
   if expected {
@@ -62,7 +63,7 @@ fn xml_check(source: []const u8, expected: bool) {
       storage: [128]u8 = []
       streamed := xml.stream_scanner(input(&chunk), storage[..capacity])
       event := xml.next_stream(&streamed)
-      if event.ok || streamed.error != xml.ErrorKind.Capacity {
+      if event.found || streamed.failure.parse.kind != parse.Kind.Capacity {
         #panic("XML short storage")
       }
     }
@@ -77,10 +78,10 @@ fn xml_check(source: []const u8, expected: bool) {
       }
       streamed := xml.stream_scanner(input(&chunk), storage[..capacity])
       event := xml.next_stream(&streamed)
-      if event.ok != original.ok || streamed.error != direct.error {
+      if event.found != original.found || streamed.failure.parse.kind != direct.failure.parse.kind {
         #panic("XML chunk acceptance mismatch")
       }
-      if event.ok && (event.value.kind != original.value.kind || !bytes.equal(event.value.name, original.value.name) || !bytes.equal(event.value.text, original.value.text) || !bytes.equal(event.value.attributes, original.value.attributes)) {
+      if event.found && (event.value.kind != original.value.kind || !bytes.equal(event.value.name, original.value.name) || !bytes.equal(event.value.text, original.value.text) || !bytes.equal(event.value.attributes, original.value.attributes)) {
         #panic("XML chunk contents mismatch")
       }
     }
@@ -95,17 +96,17 @@ fn json_document(source: []const u8, expected: bool) {
   arena := mem.arena_from_buffer(backing[..])
   prefix := mem.arena_push(arena, 7, 1)
   for i in 0..7 {
-    prefix[..7][i] = 91
+    #slice(prefix, 7)[i] = 91
   }
   mark := mem.arena_mark(arena)
   parsed := json.parse(arena, source)
-  if parsed.ok != expected {
+  if (parsed.failure.kind == parse.Kind.Ok) != expected {
     #panic("JSON parse UTF8 result")
   }
-  if !parsed.ok && mem.arena_mark(arena) != mark {
+  if parsed.failure.kind != parse.Kind.Ok && mem.arena_mark(arena) != mark {
     #panic("JSON allocation rollback")
   }
-  for byte in prefix[..7] {
+  for byte in #slice(prefix, 7) {
     if byte != 91 {
       #panic("JSON clobbered prior allocation")
     }
@@ -204,31 +205,31 @@ fn recorded_errors() {
   keys: usize = 0
   for {
     item := ini.next(&scan)
-    if !item.ok {
+    if !item.found {
       break
     }
     if item.value.kind == ini.Kind.Pair {
       keys += 1
     }
   }
-  if keys != 1 || scan.error != ini.ErrorKind.Syntax || scan.error_line != 2 || scan.errors != 1 {
+  if keys != 1 || scan.failure.kind != parse.Kind.Syntax || scan.error_line != 2 || scan.errors != 1 {
     #panic("INI stops at the first error")
   }
   fields := csv.scanner("a,b\"c,d")
   buffer: [8]u8 = []
   count: usize = 0
-  for csv.next(&fields, buffer[..]).ok {
+  for csv.next(&fields, buffer[..]).found {
     count += 1
   }
-  if count != 1 || fields.error != csv.ErrorKind.Syntax || fields.error_offset != 2 || csv.next(&fields, buffer[..]).ok {
+  if count != 1 || fields.failure.parse.kind != parse.Kind.Syntax || fields.failure.parse.offset != 2 || csv.next(&fields, buffer[..]).found {
     #panic("CSV error is sticky")
   }
   events := xml.scanner("<a></b <c/>")
   seen: usize = 0
-  for xml.next(&events).ok {
+  for xml.next(&events).found {
     seen += 1
   }
-  if seen != 1 || events.error != xml.ErrorKind.Syntax || xml.next(&events).ok {
+  if seen != 1 || events.failure.parse.kind != parse.Kind.Syntax || xml.next(&events).found {
     #panic("XML error is sticky")
   }
 }

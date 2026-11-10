@@ -1,0 +1,6 @@
+#target(arch: wasm32)
+
+// A Wasm panic traps without reaching the runtime, so there is no hook to set.
+fn install() {
+  _ = run
+}

@@ -2,6 +2,7 @@
 """RFC7748/8032 plus independent OpenSSL-backed curve and hashlib oracles."""
 import hashlib,os,random,shutil,subprocess,tempfile
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 def literal(b):return '"'+''.join('\\x%02x'%x for x in b)+'"'
@@ -10,6 +11,7 @@ use "std/crypto/ed25519" ed
 use "std/crypto/exchange" exchange
 use "std/crypto/signature" signature
 use "std/crypto/sha512" sha
+use "std/io" errors
 use "std/bytes" bytes
 fn check(ok: bool) { if !ok { #panic("curve contract") } }
 fn hash(message: []const u8,expected: []const u8) {
@@ -24,19 +26,19 @@ fn hash(message: []const u8,expected: []const u8) {
 fn curve(private: []const u8,peer: []const u8,public: []const u8,secret: []const u8) {
  output: [40]u8
  for i in 0..40 { output[i]=165 }
- check(exchange.x25519_public(output[..],private).ok && bytes.equal(output[..32],public))
- check(exchange.x25519(output[..],private,peer).ok && bytes.equal(output[..32],secret))
+ check(exchange.x25519_public(output[..],private).failure.kind == errors.Kind.Ok && bytes.equal(output[..32],public))
+ check(exchange.x25519(output[..],private,peer).failure.kind == errors.Kind.Ok && bytes.equal(output[..32],secret))
  for i in 32..40 { check(output[i]==165) }
  zero: [32]u8
- check(!exchange.x25519(output[..],private,zero[..]).ok)
+ check(exchange.x25519(output[..],private,zero[..]).failure.kind != errors.Kind.Ok)
  for i in 0..32 { check(output[i]==0) }
  for i in 32..40 { check(output[i]==165) }
 }
 fn sign(key: []const u8,message: []const u8,public: []const u8,expected: []const u8) {
  output: [72]u8
  for i in 0..72 { output[i]=165 }
- check(signature.ed25519_public(output[..],key).ok && bytes.equal(output[..32],public))
- check(signature.ed25519_sign(output[..],message,key).ok && bytes.equal(output[..64],expected))
+ check(signature.ed25519_public(output[..],key).failure.kind == errors.Kind.Ok && bytes.equal(output[..32],public))
+ check(signature.ed25519_sign(output[..],message,key).failure.kind == errors.Kind.Ok && bytes.equal(output[..64],expected))
  check(ed.valid_public_key(public))
  check(signature.ed25519_verify(output[..64],message,public))
  for i in 64..72 { check(output[i]==165) }
@@ -73,9 +75,9 @@ for index in range(16):
  s+=' curve('+','.join(map(literal,[key,peer_public,public,shared]))+')\n'
 s+=''' key: [32]u8
  output: [96]u8
- check(!exchange.x25519_public(output[..],output[64..96]).ok)
- check(!signature.ed25519_sign(output[..],output[80..81],key[..]).ok)
- check(!signature.ed25519_public(output[..31],key[..]).ok)
+ check(exchange.x25519_public(output[..],output[64..96]).failure.kind != errors.Kind.Ok)
+ check(signature.ed25519_sign(output[..],output[80..81],key[..]).failure.kind != errors.Kind.Ok)
+ check(signature.ed25519_public(output[..31],key[..]).failure.kind != errors.Kind.Ok)
  identity: [32]u8
  identity[0]=1
  signature_bytes: [64]u8
@@ -91,12 +93,28 @@ with tempfile.TemporaryDirectory(prefix='dyn-curves-') as directory:
   output=work/'program'
   subprocess.run([DYN,'build',str(work),*flags,'--quiet','--no-cache','--output',str(output)],check=True,timeout=300)
   subprocess.run([str(output)],check=True,timeout=120)
- for target in ('aarch64-linux','riscv64-linux','x86_64-macos','aarch64-macos','x86_64-windows','aarch64-windows','wasm32-wasi'):
-  output=work/target
-  subprocess.run([DYN,'build',str(work),'--target',target,'--release','--quiet','--no-cache','--output',str(output)],check=True,timeout=300)
-  emulator={'aarch64-linux':'qemu-aarch64','riscv64-linux':'qemu-riscv64','x86_64-windows':'wine'}.get(target)
-  if emulator and shutil.which(emulator):subprocess.run([emulator,str(output)],check=True,timeout=180)
-  if target=='wasm32-wasi' and shutil.which('node'):
-   script="const {WASI}=require('node:wasi'),fs=require('fs');(async()=>{const wasi=new WASI({version:'preview1',returnOnExit:true});const {instance}=await WebAssembly.instantiate(fs.readFileSync(process.argv[1]),{wasi_snapshot_preview1:wasi.wasiImport});process.exitCode=wasi.start(instance);})().catch(e=>{console.error(e);process.exit(1)});"
-   subprocess.run(['node','--no-warnings','-e',script,str(output)],check=True,timeout=180)
+ def cross(target):
+   output=work/target
+   subprocess.run([DYN,'build',str(work),'--target',target,'--release','--quiet','--no-cache','--output',str(output)],check=True,timeout=300)
+   emulator={'aarch64-linux':'qemu-aarch64','riscv64-linux':'qemu-riscv64','x86_64-windows':'wine'}.get(target)
+   if emulator and shutil.which(emulator) and target=='riscv64-linux':
+    # QEMU's RISC-V user mode is slow: a few vectors of each kind cover the
+    # target's code paths; the host builds above check every vector.
+    seen={}
+    def keep(line):
+     kind='sign' if line.startswith(' sign(') else 'curve' if line.startswith(' curve(') else None
+     if not kind:return True
+     seen[kind]=seen.get(kind,0)+1
+     return seen[kind]<=(2 if kind=='sign' else 3)
+    small=work/'riscv';small.mkdir(exist_ok=True)
+    (small/'main.dyn').write_text('\n'.join(line for line in s.split('\n') if keep(line)))
+    subprocess.run([DYN,'build',str(small),'--target',target,'--release','--quiet','--no-cache','--output',str(small/'program')],check=True,timeout=300)
+    subprocess.run([emulator,str(small/'program')],check=True,timeout=180)
+   elif emulator and shutil.which(emulator):subprocess.run([emulator,str(output)],check=True,timeout=180)
+   if target=='wasm32-wasi' and shutil.which('node'):
+    script="const {WASI}=require('node:wasi'),fs=require('fs');(async()=>{const wasi=new WASI({version:'preview1',returnOnExit:true});const {instance}=await WebAssembly.instantiate(fs.readFileSync(process.argv[1]),{wasi_snapshot_preview1:wasi.wasiImport});process.exitCode=wasi.start(instance);})().catch(e=>{console.error(e);process.exit(1)});"
+    subprocess.run(['node','--no-warnings','-e',script,str(output)],check=True,timeout=180)
+ # Targets build and run independently, all at once.
+ with ThreadPoolExecutor(max_workers=os.cpu_count() or 1) as pool:
+  list(pool.map(cross,('aarch64-linux','riscv64-linux','x86_64-macos','aarch64-macos','x86_64-windows','aarch64-windows','wasm32-wasi')))
 print('PASS native X25519, Ed25519, SHA512: independent vectors, streaming, rejection, cross-targets')

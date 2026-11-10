@@ -77,7 +77,7 @@ pub fn bytes(state: State, index: i32) BytesResult {
   if pointer == nil {
     return BytesResult{}
   }
-  return BytesResult{ value: pointer[..length], ok: true }
+  return BytesResult{ value: #slice(pointer, length), ok: true }
 }
 extern fn native_new "luaL_newstate"() State
 extern fn native_close "lua_close"(state: State)

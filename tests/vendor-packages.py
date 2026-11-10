@@ -19,8 +19,8 @@ if platform.system() != 'Linux':
 
 CASES = {
     'lua': ('lua5.4', r'''use "vendor/lua"
+use "std/io" io
 use "std/strings"
-use "std/io"
 fn main() {
   state := lua.create_owned()
   if state == nil {
@@ -63,12 +63,12 @@ fn main() {
     #panic("Lua result validation")
   }
   _ = lua.pop(state, 1)
-  _ = io.println(io.stdout(), "Lua: 42; protected syntax/runtime failures; balanced stack")
+  io.println("Lua: 42; protected syntax/runtime failures; balanced stack")
 }
 ''', 'Lua: 42; protected syntax/runtime failures; balanced stack'),
     'pcre2': ('libpcre2-8', r'''use "vendor/pcre2" regex
+use "std/io" io
 use "std/strings"
-use "std/io"
 fn main() {
   compiled := regex.compile_owned("name=([a-z]+)", 0)
   if !compiled.ok {
@@ -119,7 +119,7 @@ fn main() {
   if !empty_match.ok || !empty_match.matched || regex.capture(unicode_data, 1).set {
     #panic("unset capture")
   }
-  _ = io.println(io.stdout(), "PCRE2: captured ada; no-match and invalid pattern handled")
+  io.println("PCRE2: captured ada; no-match and invalid pattern handled")
 }
 ''', 'PCRE2: captured ada; no-match and invalid pattern handled'),
     'sqlite': ('sqlite3', r'''use "vendor/sqlite" sqlite
@@ -155,12 +155,12 @@ fn main() {
   if sqlite.finalize(&query) != 0 || query.handle != nil || sqlite.finalize(&query) != 0 { #panic("query ownership") }
   if sqlite.finalize(&insert) != 0 || insert.handle != nil { #panic("insert ownership") }
   if sqlite.close(opened.database) != 0 { #panic("database leaked statements") }
-  _ = io.println(io.stdout(), "sqlite ok")
+  io.println("sqlite ok")
 }
 ''', 'sqlite ok'),
     'lz4': ('liblz4', r'''use "vendor/lz4"
+use "std/io" io
 use "std/strings"
-use "std/io"
 fn main() {
   compressed: [128]u8 = []
   output: [128]u8 = []
@@ -190,7 +190,7 @@ fn main() {
   if lz4.compress_bound(lz4.MaxInput + 1) != 0 {
     #panic("oversized input accepted")
   }
-  _ = io.println(io.stdout(), "LZ4 bounded roundtrip passed")
+  io.println("LZ4 bounded roundtrip passed")
 }
 ''', 'LZ4 bounded roundtrip passed'),
 }

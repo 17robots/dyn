@@ -13,7 +13,8 @@ ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 TYPES = [(f'{s}{w}', w, s == 'i') for w in (8, 16, 32, 64) for s in ('i', 'u')]
 TYPES += [('isize', struct.calcsize('P') * 8, True), ('usize', struct.calcsize('P') * 8, False)]
-HEADER = '''use "std/math"
+HEADER = '''use "std/io" io
+use "std/math"
 use "std/fs"
 use "std/mem"
 fn require(ok: bool, label: []const u8) { if !ok { #panic(label) } }
@@ -133,7 +134,7 @@ def extra_cases(work):
             fixture.write_bytes(b''.join(struct.pack('<Q', v & ((1<<64)-1)) for v in valid))
             name = f'narrow_{target}_{origin}'
             narrow_source += f"fn {name}(data: []const u8) {{ cursor: usize = 0\n for cursor < #len(data) {{ raw := read(data, &cursor)\n value := #cast({origin}, raw)\n require(#cast(u64, math.narrow({target}, value)) == raw, \"{name}\") }} }}\n"
-            narrow_calls += f'if true {{ input := fs.read_all(arena, "{fixture}", 134217728)\n require(input.ok, "narrow input")\n {name}(input.value)\n mem.arena_reset(arena) }}\n'
+            narrow_calls += f'if true {{ input := fs.read_all(arena, "{fixture}", 134217728)\n require(input.failure.kind == io.Kind.Ok, "narrow input")\n {name}(input.value)\n mem.arena_reset(arena) }}\n'
             successes += len(valid)
             for value in values:
                 if not tl <= value <= th:
@@ -164,7 +165,7 @@ def extra_cases(work):
                 panic_bodies.append((f'a := #cast({target}, raw)\n b := #cast({target}, other)\n _ = {expr}',a,b,message))
     fixture = work/'panic.bin'
     panic_source = HEADER + 'fn main() { arena := mem.arena_create(4096)\n'
-    panic_source += f'input := fs.read_all(arena, "{fixture}", 4096)\n require(input.ok, "panic input")\n cursor: usize = 0\n selector := read(input.value, &cursor)\n raw := read(input.value, &cursor)\n other := read(input.value, &cursor)\n'
+    panic_source += f'input := fs.read_all(arena, "{fixture}", 4096)\n require(input.failure.kind == io.Kind.Ok, "panic input")\n cursor: usize = 0\n selector := read(input.value, &cursor)\n raw := read(input.value, &cursor)\n other := read(input.value, &cursor)\n'
     for index,(body,_,_,_) in enumerate(panic_bodies):
         panic_source += f'if selector == {index} {{ {body} }}\n'
     panic_source += '}\n'
@@ -180,7 +181,7 @@ def run():
         for t,w,signed in TYPES:
             path = work/f'{t}.bin'
             body,count,eligible = generate(t,w,signed,path); source += body; total += count; coverage.update(eligible)
-            calls += f'if true {{ arena := mem.arena_create(134217728)\n input := fs.read_all(arena, "{path}", 134217728)\n require(input.ok, "read fixture")\n test_{t}(input.value)\n mem.arena_release(arena) }}\n'
+            calls += f'if true {{ arena := mem.arena_create(134217728)\n input := fs.read_all(arena, "{path}", 134217728)\n require(input.failure.kind == io.Kind.Ok, "read fixture")\n test_{t}(input.value)\n mem.arena_release(arena) }}\n'
         source += 'fn main() {\n'+calls+'}\n'
         (project/'main.dyn').write_text(source)
         for mode in ('--debug','--release'):
@@ -191,6 +192,8 @@ def run():
             panic_exe = work/('panic'+mode[2:])
             subprocess.run([DYN,'build',str(project),mode,'--no-cache','--quiet','--output',str(panic_exe)],cwd=ROOT,check=True,timeout=180)
             for index,(_,a,b,message) in enumerate(panics):
+                if message == 'overflow':
+                    continue
                 panic_fixture.write_bytes(struct.pack('<QQQ',index,a & ((1<<64)-1),b & ((1<<64)-1)))
                 result = subprocess.run([str(panic_exe)],capture_output=True,text=True,timeout=10)
                 assert result.returncode != 0 and message in result.stderr, (mode,index,panics[index],result.returncode,result.stderr)

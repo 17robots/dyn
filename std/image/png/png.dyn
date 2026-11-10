@@ -1,49 +1,49 @@
+use "std/parse" parse
 use "std/mem" mem
-use "std/errors" errors
 use "std/compress/deflate" deflate
 
-pub struct Info { width: u32, height: u32, channels: u8, ok: bool }
+pub struct Info { width: u32, height: u32, channels: u8, valid: bool }
 // Result.ok / InfoResult.ok are authoritative. Info.ok is legacy parser state:
 // true inside successful values, false in the zero failure value.
 // On failure value is zero. error is zero: codec details are not native errors.
 // offset is a source byte offset when known, otherwise zero (also for encoding).
 pub struct Image { info: Info, pixels: []u8 }
-pub struct Result { value: Image, ok: bool, kind: errors.Kind, error: isize, offset: usize, detail: isize }
-pub struct InfoResult { value: Info, ok: bool, kind: errors.Kind, error: isize, offset: usize, detail: isize }
+pub struct Result { value: Image, offset: usize, failure: parse.Failure }
+pub struct InfoResult { value: Info, offset: usize, failure: parse.Failure }
 struct DecodeWork { info: Info, pixels: []u8, error: isize, ok: bool, offset: usize }
-pub struct EncodeResult { value: []u8, ok: bool, kind: errors.Kind, error: isize, offset: usize, detail: isize }
+pub struct EncodeResult { value: []u8, offset: usize, failure: parse.Failure }
 struct EncodeWork { data: []u8, error: isize, ok: bool }
 
-fn codec_kind(detail: isize) errors.Kind {
+fn codec_kind(detail: isize) parse.Kind {
   if detail == -75 {
-    return errors.Kind.Overflow
+    return parse.Kind.Overflow
   }
   if detail == -28 {
-    return errors.Kind.Capacity
+    return parse.Kind.Capacity
   }
-  return errors.Kind.InvalidInput
+  return parse.Kind.Syntax
 }
 
 pub fn inspect(source: []const u8) InfoResult {
   info := inspect_info(source)
-  if !info.ok {
-    return InfoResult{ kind: errors.Kind.InvalidInput, detail: -22 }
+  if !info.valid {
+    return InfoResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
-  return InfoResult{ value: info, ok: true }
+  return InfoResult{ value: info }
 }
 
 fn decode_result(work: DecodeWork) Result {
   if !work.ok {
-    return Result{ kind: codec_kind(work.error), detail: work.error, offset: work.offset }
+    return Result{ offset: work.offset, failure: parse.Failure{ kind: codec_kind(work.error), offset: work.offset } }
   }
-  return Result{ value: Image{ info: work.info, pixels: work.pixels }, ok: true }
+  return Result{ value: Image{ info: work.info, pixels: work.pixels } }
 }
 
 fn encode_result(work: EncodeWork) EncodeResult {
   if !work.ok {
-    return EncodeResult{ kind: codec_kind(work.error), detail: work.error }
+    return EncodeResult{ failure: parse.Failure{ kind: codec_kind(work.error) } }
   }
-  return EncodeResult{ value: work.data, ok: true }
+  return EncodeResult{ value: work.data }
 }
 
 fn u32be(source: []const u8, at: usize) u32 {
@@ -114,7 +114,7 @@ fn inspect_info(source: []const u8) Info {
   if width == 0 || height == 0 || channels == 0 || source[24] != 8 || source[26] != 0 || source[27] != 0 || source[28] != 0 {
     return Info{}
   }
-  return Info{ width: width, height: height, channels: channels, ok: true }
+  return Info{ width: width, height: height, channels: channels, valid: true }
 }
 
 fn paeth(a: u8, b: u8, c: u8) u8 {
@@ -151,7 +151,7 @@ fn add_byte(value: u8, predictor: u8) u8 {
 // Decodes non-interlaced 8-bit grayscale, grayscale-alpha, RGB, and RGBA PNG.
 fn decode_into(pixels: []u8, compressed: []u8, scanlines: []u8, source: []const u8) DecodeWork {
   info := inspect_info(source)
-  if !info.ok {
+  if !info.valid {
     return DecodeWork{ error: -22 }
   }
   row_size := #cast(usize, info.width) * #cast(usize, info.channels)
@@ -202,7 +202,7 @@ fn decode_into(pixels: []u8, compressed: []u8, scanlines: []u8, source: []const 
   }
   inflater := deflate.InflateState{}
   inflated := deflate.resume(&inflater, scanlines[..scanline_size], compressed[2..compressed_used - 4])
-  if !inflated.ok || inflated.written != scanline_size || adler32(scanlines[..scanline_size]) != u32be(compressed, compressed_used - 4) {
+  if !inflated.done || inflated.written != scanline_size || adler32(scanlines[..scanline_size]) != u32be(compressed, compressed_used - 4) {
     return DecodeWork{ info: info, error: -74 }
   }
   y: usize = 0
@@ -301,7 +301,7 @@ fn encode_into(destination: []u8, scanlines: []u8, compressed: []u8, pixels: []c
   compressed[0] = 120
   compressed[1] = 1
   encoded := deflate.deflate_stored_chunk(compressed[2..#len(compressed) - 4], scanlines[..scanline_size], true)
-  if !encoded.ok {
+  if !encoded.done {
     return EncodeWork{ error: -28 }
   }
   zlib_size: usize = encoded.written + 6
@@ -341,7 +341,7 @@ fn encode_into(destination: []u8, scanlines: []u8, compressed: []u8, pixels: []c
 // Pixels are in arena; failure pushes nothing.
 fn decode_work(arena: *mem.Arena, source: []const u8) DecodeWork {
   info := inspect_info(source)
-  if !info.ok {
+  if !info.valid {
     return DecodeWork{ error: -22 }
   }
   row_size := #cast(usize, info.width) * #cast(usize, info.channels)
@@ -396,45 +396,45 @@ fn pixel_count(width: u32, height: u32, channels: u8) usize {
 
 pub fn decode(arena: *mem.Arena, source: []const u8) Result {
   info := inspect_info(source)
-  if !info.ok {
-    return Result{ kind: errors.Kind.InvalidInput, detail: -22 }
+  if !info.valid {
+    return Result{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   size := pixel_count(info.width, info.height, info.channels)
   limit := ~#cast(usize, 0)
   if size == 0 || size > limit - #cast(usize, info.height) {
-    return Result{ kind: errors.Kind.Overflow, detail: -75 }
+    return Result{ failure: parse.Failure{ kind: parse.Kind.Overflow } }
   }
   scan := size + #cast(usize, info.height)
   if size > limit - scan || #len(source) > limit - size - scan {
-    return Result{ kind: errors.Kind.Overflow, detail: -75 }
+    return Result{ failure: parse.Failure{ kind: parse.Kind.Overflow } }
   }
   return decode_result(decode_work(arena, source))
 }
 
 pub fn encode(arena: *mem.Arena, pixels: []const u8, width: u32, height: u32, channels: u8) EncodeResult {
   if width == 0 || height == 0 || channels < 1 || channels > 4 {
-    return EncodeResult{ kind: errors.Kind.InvalidInput, detail: -22 }
+    return EncodeResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   size := pixel_count(width, height, channels)
   limit := ~#cast(usize, 0)
   if size == 0 || size > limit - #cast(usize, height) {
-    return EncodeResult{ kind: errors.Kind.Overflow, detail: -75 }
+    return EncodeResult{ failure: parse.Failure{ kind: parse.Kind.Overflow } }
   }
   if size != #len(pixels) {
-    return EncodeResult{ kind: errors.Kind.InvalidInput, detail: -28 }
+    return EncodeResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   scan := size + #cast(usize, height)
   overhead := (scan / 65535 + 1) * 5 + 6
   if scan > limit - overhead {
-    return EncodeResult{ kind: errors.Kind.Overflow, detail: -75 }
+    return EncodeResult{ failure: parse.Failure{ kind: parse.Kind.Overflow } }
   }
   compressed := scan + overhead
   if scan > limit - 64 || compressed > (limit - 64 - scan) / 2 {
-    return EncodeResult{ kind: errors.Kind.Overflow, detail: -75 }
+    return EncodeResult{ failure: parse.Failure{ kind: parse.Kind.Overflow } }
   }
   // PNG stores its IDAT length in a u32.
   if compressed > 4294967295 {
-    return EncodeResult{ kind: errors.Kind.Overflow, detail: -75 }
+    return EncodeResult{ failure: parse.Failure{ kind: parse.Kind.Overflow } }
   }
   return encode_result(encode_work(arena, pixels, width, height, channels))
 }

@@ -1,21 +1,22 @@
+use "std/parse" parse
 use "std/mem" mem
-use "std/errors" errors
 use "std/math" math
 // ITU-T T.81 baseline sequential Huffman JPEG, 8-bit gray/RGB/YCbCr.
 // Interleaved and separate scans, restart markers, 1..4 sampling factors.
 // No progressive/arithmetic/lossless, CMYK, DNL or color-profile processing.
 // Chroma uses nearest-neighbor upsampling. IDCT is a portable f64 reference.
-pub struct Info { width: u32, height: u32, channels: u8 = 4 }
+pub struct Info { width: u32, height: u32, channels: u8 }
 pub struct Image { info: Info, pixels: []u8 }
-pub struct Result { value: Image, kind: errors.Kind, error: isize, offset: usize, ok: bool }
+pub struct Result { value: Image, offset: usize, failure: parse.Failure }
 struct Huffman { counts: [16]u16, first: [16]u32, offsets: [16]u16, values: [256]u8, valid: bool }
 struct Component { id: u8, h: u8, v: u8, quant: u8, dc_table: u8, ac_table: u8, prediction: i32, stride: usize, rows: usize, pixels: []u8, decoded: bool }
 struct Decoder {
-  source: []const u8, at: usize, kind: errors.Kind,
+  source: []const u8, at: usize, kind: parse.Kind,
   width: u32, height: u32, count: usize, hmax: u8, vmax: u8,
   components: [3]Component, quant: [4][64]u16, quant_valid: [4]bool,
   dc: [4]Huffman, ac: [4]Huffman, basis: [64]f64, restart: usize,
-  adobe: i32 = -1,
+  has_adobe: bool,
+  adobe: i32,
 }
 struct Bits { source: []const u8, at: usize, buffer: u32, count: u8, failed: bool }
 const Zigzag: [64]usize = [0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63]
@@ -23,7 +24,7 @@ fn be16(data: []const u8, at: usize) u16 {
   return (#cast(u16, data[at]) << 8) | #cast(u16, data[at + 1])
 }
 fn invalid(decoder: *Decoder) bool {
-  decoder.kind = errors.Kind.InvalidInput
+  decoder.kind = parse.Kind.Syntax
   return false
 }
 fn take(bits: *Bits, count: u8) u32 {
@@ -41,7 +42,7 @@ fn take(bits: *Bits, count: u8) u32 {
       }
       bits.at += 1
     }
-    bits.buffer = #wrap((bits.buffer << 8) | #cast(u32, value))
+    bits.buffer = (bits.buffer << 8) | #cast(u32, value)
     bits.count += 8
   }
   bits.count -= count
@@ -171,7 +172,7 @@ fn quantization(decoder: *Decoder, payload: []const u8) bool {
     descriptor := payload[at]
     at += 1
     if (descriptor >> 4) != 0 {
-      decoder.kind = errors.Kind.Unsupported
+      decoder.kind = parse.Kind.Unsupported
       return false
     }
     id := #cast(usize, descriptor & 15)
@@ -237,25 +238,25 @@ fn frame(arena: *mem.Arena, decoder: *Decoder, payload: []const u8) bool {
     return invalid(decoder)
   }
   if payload[0] != 8 {
-    decoder.kind = errors.Kind.Unsupported
+    decoder.kind = parse.Kind.Unsupported
     return false
   }
   decoder.height = #cast(u32, be16(payload, 1))
   decoder.width = #cast(u32, be16(payload, 3))
   count := #cast(usize, payload[5])
   if decoder.width == 0 || decoder.height == 0 {
-    decoder.kind = errors.Kind.Unsupported
+    decoder.kind = parse.Kind.Unsupported
     return false
   }
   if count != 1 && count != 3 {
-    decoder.kind = errors.Kind.Unsupported
+    decoder.kind = parse.Kind.Unsupported
     return false
   }
   if #len(payload) != 6 + count * 3 {
     return invalid(decoder)
   }
   if #cast(u64, decoder.width) * #cast(u64, decoder.height) > 16777216 {
-    decoder.kind = errors.Kind.Capacity
+    decoder.kind = parse.Kind.Capacity
     return false
   }
   blocks: usize = 0
@@ -298,7 +299,7 @@ fn allocate_planes(arena: *mem.Arena, decoder: *Decoder) bool {
     component.rows = rows * #cast(usize, component.v) * 8
     size := #cast(u64, component.stride) * #cast(u64, component.rows)
     if size > 67108864 - total {
-      decoder.kind = errors.Kind.Capacity
+      decoder.kind = parse.Kind.Capacity
       return false
     }
     total += size
@@ -319,7 +320,7 @@ fn scan(decoder: *Decoder, payload: []const u8) bool {
     return invalid(decoder)
   }
   if payload[1 + count * 2] != 0 || payload[2 + count * 2] != 63 || payload[3 + count * 2] != 0 {
-    decoder.kind = errors.Kind.Unsupported
+    decoder.kind = parse.Kind.Unsupported
     return false
   }
   selected: [3]usize = []
@@ -422,7 +423,7 @@ fn channel(decoder: *const Decoder, index: usize, x, y: u32) i32 {
 // Invalid/unsupported input restores the arena mark. Allocation exhaustion panics.
 pub fn decode(arena: *mem.Arena, source: []const u8) Result {
   if #len(source) < 4 || source[0] != 255 || source[1] != 216 {
-    return Result{ kind: errors.Kind.InvalidInput }
+    return Result{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   decoder := Decoder{ source: source, at: 2 }
   for x in 0..8 {
@@ -447,29 +448,29 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Result {
   pixels: []u8
   for decoder.at < #len(source) {
     if source[decoder.at] != 255 {
-      return Result{ kind: errors.Kind.InvalidInput, offset: decoder.at }
+      return Result{ offset: decoder.at, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: decoder.at } }
     }
     for decoder.at < #len(source) && source[decoder.at] == 255 {
       decoder.at += 1
     }
     if decoder.at == #len(source) {
-      return Result{ kind: errors.Kind.InvalidInput, offset: decoder.at }
+      return Result{ offset: decoder.at, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: decoder.at } }
     }
     marker := source[decoder.at]
     decoder.at += 1
     if marker == 217 {
       if decoder.count == 0 {
-        return Result{ kind: errors.Kind.InvalidInput, offset: decoder.at }
+        return Result{ offset: decoder.at, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: decoder.at } }
       }
       for i in 0..decoder.count {
         if !decoder.components[i].decoded {
-          return Result{ kind: errors.Kind.InvalidInput, offset: decoder.at }
+          return Result{ offset: decoder.at, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: decoder.at } }
         }
       }
-      if decoder.adobe > 1 {
-        return Result{ kind: errors.Kind.Unsupported, offset: decoder.at }
+      if decoder.has_adobe && decoder.adobe > 1 {
+        return Result{ offset: decoder.at, failure: parse.Failure{ kind: parse.Kind.Unsupported, offset: decoder.at } }
       }
-      direct := decoder.adobe == 0
+      direct := decoder.has_adobe && decoder.adobe == 0
       indices: [3]usize = [0, 1, 2]
       if decoder.count == 3 {
         rgb: [3]usize = [3, 3, 3]
@@ -526,17 +527,17 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Result {
         }
       }
       success = true
-      return Result{ value: Image{ info: Info{ width: decoder.width, height: decoder.height, channels: 4 }, pixels: pixels }, ok: true }
+      return Result{ value: Image{ info: Info{ width: decoder.width, height: decoder.height, channels: 4 }, pixels: pixels } }
     }
     if marker == 0 || marker == 216 || marker == 1 || (marker >= 208 && marker <= 215) {
-      return Result{ kind: errors.Kind.InvalidInput, offset: decoder.at - 1 }
+      return Result{ offset: decoder.at - 1, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: decoder.at - 1 } }
     }
     if #len(source) - decoder.at < 2 {
-      return Result{ kind: errors.Kind.InvalidInput, offset: decoder.at }
+      return Result{ offset: decoder.at, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: decoder.at } }
     }
     length := #cast(usize, be16(source, decoder.at))
     if length < 2 || length > #len(source) - decoder.at {
-      return Result{ kind: errors.Kind.InvalidInput, offset: decoder.at }
+      return Result{ offset: decoder.at, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: decoder.at } }
     }
     payload := source[decoder.at + 2..decoder.at + length]
     decoder.at += length
@@ -565,18 +566,19 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Result {
         decoder.restart = #cast(usize, be16(payload, 0))
       }
     } else if marker == 238 && #len(payload) >= 12 && payload[0] == 65 && payload[1] == 100 && payload[2] == 111 && payload[3] == 98 && payload[4] == 101 {
+      decoder.has_adobe = true
       decoder.adobe = #cast(i32, payload[11])
     }
     else if marker >= 193 && marker <= 207 && marker != 196 && marker != 200 && marker != 204 {
-      decoder.kind = errors.Kind.Unsupported
+      decoder.kind = parse.Kind.Unsupported
       ok = false
     } else if marker == 204 || marker == 220 {
-      decoder.kind = errors.Kind.Unsupported
+      decoder.kind = parse.Kind.Unsupported
       ok = false
     }
     if !ok {
-      return Result{ kind: decoder.kind, offset: decoder.at }
+      return Result{ offset: decoder.at, failure: parse.Failure{ kind: decoder.kind, offset: decoder.at } }
     }
   }
-  return Result{ kind: errors.Kind.InvalidInput, offset: decoder.at }
+  return Result{ offset: decoder.at, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: decoder.at } }
 }

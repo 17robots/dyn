@@ -1,0 +1,187 @@
+use "std/io"
+
+fn opaque(x: u64) u64 {
+  return x ^ 0
+}
+
+// Twenty values live across a call and a loop: more than the registers,
+// so some spill and the loop reads them from cached registers.
+fn mix(seed: u64, rounds: usize) u64 {
+  a := opaque(seed + 1)
+  b := opaque(seed + 2)
+  c := opaque(seed + 3)
+  d := opaque(seed + 4)
+  e := opaque(seed + 5)
+  f := opaque(seed + 6)
+  g := opaque(seed + 7)
+  h := opaque(seed + 8)
+  i := opaque(seed + 9)
+  j := opaque(seed + 10)
+  k := opaque(seed + 11)
+  l := opaque(seed + 12)
+  m := opaque(seed + 13)
+  n := opaque(seed + 14)
+  o := opaque(seed + 15)
+  p := opaque(seed + 16)
+  q := opaque(seed + 17)
+  r := opaque(seed + 18)
+  s := opaque(seed + 19)
+  t := opaque(seed + 20)
+  total: u64 = opaque(0)
+  for x in 0..rounds {
+    v := #cast(u64, x)
+    total += (a * v) ^ (b + v) ^ (c * 3) ^ (d + v * 5)
+    total += (e ^ v) + (f * v) + (g ^ (v << 1)) + h
+    total ^= (i + j * v) ^ (k + l) ^ (m * v + n)
+    total += (o ^ p) + (q * v) + (r ^ s) + t
+  }
+  // Every value is still needed after the loop.
+  return total + a + b + c + d + e + f + g + h + i + j + k + l + m + n + o + p + q + r + s + t
+}
+
+// Floats spill and cache too.
+fn wave(seed: f64, rounds: usize) f64 {
+  a := seed + 0.5
+  b := seed * 1.5
+  c := seed - 2.0
+  d := seed + 3.25
+  e := seed * 0.75
+  f := seed + 7.0
+  g := seed * 2.5
+  h := seed - 1.125
+  i := seed + 9.5
+  j := seed * 3.0
+  k := seed + 11.0
+  l := seed * 0.25
+  m := seed + 13.5
+  n := seed - 4.0
+  o := seed * 5.0
+  p := seed + 16.0
+  q := seed * 0.5
+  total: f64 = 0.0
+  for x in 0..rounds {
+    v := #cast(f64, x)
+    total += a * v + b - c * v + d + e * v - f + g + h * v
+    total += i - j + k * v + l + m - n * v + o + p - q
+  }
+  return total + a + b + c + d + e + f + g + h + i + j + k + l + m + n + o + p + q
+}
+
+// Values live through the hot loop but unused in it give their registers
+// to the values the loop reads; they come back after it, on every exit.
+fn through(seed: u64, rounds: usize, stop: u64) u64 {
+  a := opaque(seed + 1)
+  b := opaque(seed + 2)
+  c := opaque(seed + 3)
+  d := opaque(seed + 4)
+  e := opaque(seed + 5)
+  f := opaque(seed + 6)
+  g := opaque(seed + 7)
+  h := opaque(seed + 8)
+  i := opaque(seed + 9)
+  j := opaque(seed + 10)
+  k := opaque(seed + 11)
+  l := opaque(seed + 12)
+  m := opaque(seed + 13)
+  n := opaque(seed + 14)
+  hot1 := opaque(seed * 3)
+  hot2 := opaque(seed * 5)
+  hot3 := opaque(seed * 7)
+  total: u64 = opaque(0)
+  for x in 0..rounds {
+    v := #cast(u64, x)
+    total += hot1 * v + (hot2 ^ v) + hot3
+    if total % 1000003 == stop {
+      break
+    }
+  }
+  return total + a + b + c + d + e + f + g + h + i + j + k + l + m + n + hot1 + hot2 + hot3
+}
+
+// Two loops, each hot on its own ten values, all twenty live across both:
+// each loop takes registers from the values only the other one reads.
+fn halves(seed: u64, rounds: usize) u64 {
+  x0 := opaque(seed + 1)
+  x1 := opaque(seed + 2)
+  x2 := opaque(seed + 3)
+  x3 := opaque(seed + 4)
+  x4 := opaque(seed + 5)
+  x5 := opaque(seed + 6)
+  x6 := opaque(seed + 7)
+  x7 := opaque(seed + 8)
+  x8 := opaque(seed + 9)
+  x9 := opaque(seed + 10)
+  y0 := opaque(seed * 2)
+  y1 := opaque(seed * 3)
+  y2 := opaque(seed * 4)
+  y3 := opaque(seed * 5)
+  y4 := opaque(seed * 6)
+  y5 := opaque(seed * 7)
+  y6 := opaque(seed * 8)
+  y7 := opaque(seed * 9)
+  y8 := opaque(seed * 10)
+  y9 := opaque(seed * 11)
+  first: u64 = opaque(0)
+  for i in 0..rounds {
+    v := #cast(u64, i)
+    first += (x0 * v) ^ (x1 + v) ^ (x2 * v) ^ (x3 + v) ^ (x4 * v)
+    first += (x5 ^ v) + (x6 * v) + (x7 ^ v) + (x8 * v) + (x9 ^ v)
+  }
+  second: u64 = opaque(1)
+  for i in 0..rounds {
+    v := #cast(u64, i)
+    second += (y0 * v) ^ (y1 + v) ^ (y2 * v) ^ (y3 + v) ^ (y4 * v)
+    second += (y5 ^ v) + (y6 * v) + (y7 ^ v) + (y8 * v) + (y9 ^ v)
+    if second == 12345 {
+      break
+    }
+  }
+  return first + second + x0 + x1 + x2 + x3 + x4 + x5 + x6 + x7 + x8 + x9 +
+         y0 + y1 + y2 + y3 + y4 + y5 + y6 + y7 + y8 + y9
+}
+
+struct Node {
+  first: u32,
+  next: u32,
+  parent: u32,
+  value: u32,
+}
+
+// A tree walk whose inner climb loop is entered through an empty block:
+// the climb's preheader load must not be jumped over.
+fn walk(nodes: []Node, root: u32, out: *u64) {
+  id := root
+  for {
+    found := nodes[id]
+    out.* = out.* * 31 + #cast(u64, found.value)
+    if found.first != 0xffffffff {
+      id = found.first
+      continue
+    }
+    for id != root && nodes[id].next == 0xffffffff {
+      id = nodes[id].parent
+    }
+    if id == root {
+      return
+    }
+    id = nodes[id].next
+  }
+}
+
+fn main() {
+  tree: [6]Node = [
+    Node{ first: 1, next: 0xffffffff, parent: 0xffffffff, value: 1 },
+    Node{ first: 3, next: 2, parent: 0, value: 2 },
+    Node{ first: 5, next: 0xffffffff, parent: 0, value: 3 },
+    Node{ first: 0xffffffff, next: 4, parent: 1, value: 4 },
+    Node{ first: 0xffffffff, next: 0xffffffff, parent: 1, value: 5 },
+    Node{ first: 0xffffffff, next: 0xffffffff, parent: 2, value: 6 },
+  ]
+  hash: u64 = 0
+  walk(tree[..], 0, &hash)
+  io.println("{}", hash)
+  io.println("{} {}", halves(3, 5000), halves(11, 0))
+  io.println("{} {} {}", through(5, 10000, 1000004), through(9, 10000, 17), through(1, 0, 0))
+  io.println("{} {}", mix(3, 1000), mix(77, 0))
+  io.println("{}", #cast(i64, wave(1.5, 1000)))
+}

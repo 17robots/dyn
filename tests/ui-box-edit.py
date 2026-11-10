@@ -122,7 +122,7 @@ fn main() {
   check(flexible.rect[0] == 10.0 && flexible.rect[1] == 5.0 && footer.rect[1] == 35.0, "padding geometry")
   check(absolute.rect[0] == 150.0 && absolute.rect[1] == 100.0, "screen absolute")
   check(box.hit(state, 155.0, 105.0) == absolute.key, "unclipped absolute child hit")
-  context := ui.Context{}
+  context := ui.Context{ style: ui.default_style }
   ui.begin(&context, arena, ui.Input{}, ui.Rect{ width: 300, height: 200 })
   box.render(state, &context)
   ui.end(&context)

@@ -33,8 +33,9 @@ for key, suffix in [('PKG_CONFIG_PATH', 'lib/pkgconfig'), ('DYN_LIBRARY_PATH', '
 dyn = str(Path(env.get('DYN', BUILD/'dyn-release')).resolve())
 FIXTURES = {
     'tree-sitter-example': r'''use "vendor/tree_sitter" ts
+use "std/parse" parse
+use "std/io" io
 use "std/strings"
-use "std/io"
 // Grammar is separate from runtime. This example uses the packaged C grammar.
 #link("tree-sitter-c")
 extern fn language "tree_sitter_c"() ts.Language
@@ -54,7 +55,7 @@ fn main() {
   defer ts.tree_destroy_owned(parsed.tree)
   node := ts.root(parsed.tree)
   kind := ts.node_type(node, 128)
-  if !kind.ok || !strings.equal(kind.value, "translation_unit") || ts.node_has_error(node) {
+  if kind.failure.kind != parse.Kind.Ok || !strings.equal(kind.value, "translation_unit") || ts.node_has_error(node) {
     #panic("root")
   }
   if ts.node_end(node) != 6 || ts.child_count(node) != 1 {
@@ -91,12 +92,12 @@ fn main() {
   if !ts.node_has_error(ts.root(malformed.tree)) {
     #panic("syntax error missing")
   }
-  _ = io.println(io.stdout(), "Tree-sitter: parsed, traversed, copied and incrementally reparsed C")
+  io.println("Tree-sitter: parsed, traversed, copied and incrementally reparsed C")
 }
 ''',
     'regex-example': r'''use "vendor/pcre2" regex
+use "std/io" io
 use "std/strings"
-use "std/io"
 fn main() {
   compiled := regex.compile_owned("name=([a-z]+)", 0)
   if !compiled.ok {
@@ -147,12 +148,12 @@ fn main() {
   if !empty_match.ok || !empty_match.matched || regex.capture(unicode_data, 1).set {
     #panic("unset capture")
   }
-  _ = io.println(io.stdout(), "PCRE2: captured ada; no-match and invalid pattern handled")
+  io.println("PCRE2: captured ada; no-match and invalid pattern handled")
 }
 ''',
     'lua-example': r'''use "vendor/lua"
+use "std/io" io
 use "std/strings"
-use "std/io"
 fn main() {
   state := lua.create_owned()
   if state == nil {
@@ -195,10 +196,11 @@ fn main() {
     #panic("Lua result validation")
   }
   _ = lua.pop(state, 1)
-  _ = io.println(io.stdout(), "Lua: 42; protected syntax/runtime failures; balanced stack")
+  io.println("Lua: 42; protected syntax/runtime failures; balanced stack")
 }
 ''',
-    'archive-example': r'''use "vendor/archive"
+    'archive-example': r'''use "std/parse" parse
+use "vendor/archive"
 use "std/mem"
 use "std/fs"
 use "std/os/linux"
@@ -210,11 +212,11 @@ fn main() {
   }
   args := linux.process_arguments(storage)
   if #len(args) != 2 {
-    _ = io.println(io.stdout(), "usage: archive-example ARCHIVE")
+    io.println("usage: archive-example ARCHIVE")
     return
   }
   loaded := fs.read_all(storage, args[1], 8 * 1024 * 1024)
-  if !loaded.ok {
+  if loaded.failure.kind != io.Kind.Ok {
     #panic("read archive")
   }
   opened := archive.open_memory_owned(loaded.value)
@@ -234,10 +236,10 @@ fn main() {
       #panic("archive header")
     }
     name := archive.entry_name(entry.entry, 4096)
-    if !name.ok {
+    if name.failure.kind != parse.Kind.Ok {
       #panic("archive name")
     }
-    _ = io.println(io.stdout(), "{}", name.value)
+    io.println("{}", name.value)
     for true {
       read := archive.read(opened.reader, buffer[..])
       if !read.ok {
@@ -260,7 +262,7 @@ fn main() {
   arena := mem.arena_from_buffer(storage[..])
   args := linux.process_arguments(arena)
   if #len(args) != 2 {
-    _ = io.println(io.stdout(), "usage: curl-example URL")
+    io.println("usage: curl-example URL")
     return
   }
   if curl.init() != 0 {
@@ -273,7 +275,7 @@ fn main() {
   if !result.ok {
     #panic("HTTP transfer failed or buffer full")
   }
-  _ = io.println(io.stdout(), "HTTP {}", result.http_status)
+  io.println("HTTP {}", result.http_status)
   _ = io.write(io.stdout(), response[..result.written])
 }
 ''',
@@ -290,7 +292,7 @@ fn main() {
   }
   args := linux.process_arguments(storage)
   if #len(args) != 2 {
-    _ = io.println(io.stdout(), "usage: sdl3-image-example IMAGE")
+    io.println("usage: sdl3-image-example IMAGE")
     return
   }
   path: [4096]u8 = []
@@ -300,7 +302,7 @@ fn main() {
   }
   defer sdl3.surface_destroy_owned(surface.value)
   bytes := fs.read_all(storage, args[1], 8 * 1024 * 1024)
-  if !bytes.ok {
+  if bytes.failure.kind != io.Kind.Ok {
     #panic("image read")
   }
   decoded := image.decode_owned(bytes.value)
@@ -311,7 +313,7 @@ fn main() {
   if image.decode_owned("not an image").ok {
     #panic("malformed image accepted")
   }
-  _ = io.println(io.stdout(), "SDL_image: loaded file and decoded caller buffer")
+  io.println("SDL_image: loaded file and decoded caller buffer")
 }
 ''',
     'sdl3-font-example': r'''use "vendor/sdl3"
@@ -324,7 +326,7 @@ fn main() {
   arena := mem.arena_from_buffer(storage[..])
   args := linux.process_arguments(arena)
   if #len(args) != 2 {
-    _ = io.println(io.stdout(), "usage: sdl3-font-example FONT.ttf")
+    io.println("usage: sdl3-font-example FONT.ttf")
     return
   }
   if !ttf.init() {
@@ -353,16 +355,17 @@ fn main() {
   if ttf.open_owned(args[1], path[..], 0.0).ok {
     #panic("font size validation")
   }
-  _ = io.println(io.stdout(), "SDL_ttf: measured and rendered text")
+  io.println("SDL_ttf: measured and rendered text")
 }
 ''',
     'opengl-example': r'''use "vendor/sdl3"
 use "vendor/opengl" gl
 use "std/mem"
 use "std/os/linux"
+use "std/io" io
 use "std/strings"
-use "std/io"
 use "std/c" c
+use "std/parse" parse
 fn shader(api: *gl.Api, kind: u32, source: []const u8) u32 {
   value := api.create_shader(kind)
   if value == 0 {
@@ -379,7 +382,7 @@ fn shader(api: *gl.Api, kind: u32, source: []const u8) u32 {
     written: i32 = 0
     api.get_shader_log(value, 2048, &written, &log[0])
     if written > 0 && written <= 2048 {
-      _ = io.println(io.stderr(), "{}", log[..#cast(usize, written)])
+      io.eprintln("{}", log[..#cast(usize, written)])
     }
     api.delete_shader(value)
     #panic("compile shader")
@@ -475,7 +478,7 @@ fn atlas_smoke(api: *gl.Api) {
 }
 fn missing_texture_proc(name: *const u8) rawptr {
   bytes := c.bytes_from_string(name, 64)
-  if bytes.ok && strings.equal(bytes.value, "glTexImage2D") { return nil }
+  if bytes.failure.kind == parse.Kind.Ok && strings.equal(bytes.value, "glTexImage2D") { return nil }
   return sdl3.gl_proc(name)
 }
 fn main() {
@@ -515,7 +518,7 @@ fn main() {
   }
   loaded := gl.load(sdl3.gl_proc)
   if !loaded.ok {
-    _ = io.println(io.stderr(), "missing {}", loaded.missing)
+    io.eprintln("missing {}", loaded.missing)
     #panic("GL load")
   }
   absent_texture := gl.load(missing_texture_proc)
@@ -623,12 +626,13 @@ fn main() {
       running = false
     }
   }
-  _ = io.println(io.stdout(), "OpenGL: triangle rendered; resources released on exit")
+  io.println("OpenGL: triangle rendered; resources released on exit")
 }
 ''',
     'curl-contract': r'''use "vendor/curl"
 use "std/mem"
 use "std/os/linux"
+use "std/io" io
 use "std/strings"
 fn main() {
   backing: [65536]u8 = []

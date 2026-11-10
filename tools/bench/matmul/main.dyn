@@ -25,5 +25,5 @@ fn main() {
   for value in c {
     total += value
   }
-  _ = io.println(io.stdout(), "{}", #cast(u64, total))
+  io.println("{}", #cast(u64, total))
 }

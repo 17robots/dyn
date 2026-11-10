@@ -12,6 +12,188 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
+## 0.1.0-preview.31
+
+Upgrade guide: [0.1.0-preview.31](docs/migrations/0.1.0-preview.31.md).
+
+- Generic call errors point at your code: a type conflict names the argument that fixed the
+  type, and a failure inside a std instance, such as an unsupported map key, is reported at
+  your call with the std line as a note.
+- The language server treats a lone file that declares `main`, in a directory without
+  `main.dyn` or `dyn.project`, as its own program, as `dyn run hello.dyn` does.
+- Editor analysis keeps a cancellation that arrives during a struct-literal lookahead instead
+  of reporting a syntax error.
+- `--opt-level 3` on x86-64 and AArch64 runs counted loops several iterations at a time: four
+  `f32` or `i32` lanes, or two `f64` lanes. It covers loads and stores of one-, two- and
+  three-field elements, arithmetic (wrapping add, subtract, multiply and bitwise ops for `i32`;
+  multiply needs SSE4.1 on x86-64), `f32(i)` of the counter, and running sums. Float sums add
+  the lanes in iteration order, so results match the scalar loop bit for bit. The vector part runs only when
+  the arrays it writes don't overlap the others and every checked index is in range, both checked
+  at run time; otherwise, and for the last few iterations, the scalar loop runs. The `pairs`
+  kernel now matches `cc -O2`, and `structs` is 1.14x it, from 1.19x and 1.26x. AArch64 also
+  scalarizes small aggregate copies to unaligned destinations, as x86-64 already did.
+- Executables keep only what `main` reaches, in debug builds as well as release: unused
+  functions, constants and globals from imported modules are no longer emitted, so an unused
+  `use` adds nothing to the binary. A global is kept when its initializer could do anything
+  besides produce a value (a call, a division, an index or a dereference). `dyn vet` still reports the unused import.
+- `fn main() i32` returns the exit code. `process.start()` returns a `process.Program` holding
+  `arena`, an arena for the whole program, and `args`. `main` takes no parameters. `dyn run X --
+  a b` passes arguments and returns the program's exit code.
+- `usize` widens to `u64` and `u32` to `usize` without `#cast`: implicit conversions are those
+  lossless on every target, counting `usize`/`isize` as 32 to 64 bits. `u32` to `isize` now needs
+  `#cast`, since it loses on 32-bit targets.
+- `dyn run hello.dyn`, `dyn check`, `dyn build` and `dyn fmt` take a single `.dyn` file: a module
+  of that one file, which stands for `main.dyn`. Other files beside it are not loaded.
+- A missing comma between items on separate lines says so:
+  "expected ',' or '}', found 'tag': is a comma missing at the end of the line above?".
+- Breaking: `map.init(&m, arena)` takes no functions. Integer, enum, bool, pointer and text keys
+  hash and compare by value, text by content; another key type is a compile error there.
+  `map.init_with(&m, arena, hash, equal)` takes the functions, and `map.init_seeded(&m, arena,
+  seed)` and `map.init_seeded_with` take a seed. Migrate `map.init(&m, a, h, e)` to `init_with`.
+- `#assert` works in function bodies, checked once per generic instance, and `#typeof(T).kind`
+  and the other scalar fields are compile-time constants. `f(T)` with only the leading type
+  arguments is that instance as a function value. An `if` on a constant takes its branch at
+  compile time.
+- Migration notes for the changes below: `docs/migrations/language-rules-20261108.md`.
+- Breaking: type patterns drop `is`. Write `i64 n => { ... }`, `Point p => { ... }` and
+  `[]const u8 s => { ... }` in a type case; a name that resolves to a type is a type pattern.
+  Old code fails with "type patterns do not use `is`"; delete the keyword.
+- Breaking: mixing a bitwise operator (`&`, `|`, `^`) with a comparison needs parentheses:
+  `(flags & mask) == 0`. The meaning never changes silently, whichever language you came from.
+- Comparisons chain in one direction: `0 <= i < n` means `0 <= i && i < n`. The middle operand
+  must be a name, field or literal. Mixed directions and `==`/`!=` chains are errors, so
+  `a == b == c` now needs parentheses: `(a == b) == c`.
+- Generic struct literals: `Box(i32){value: 1}`.
+- An inferred constant built from literals adapts to each use like a literal:
+  `const LIMIT := 64` fits a `u8`, a `u64` or an `f64`, and a value that does not fit is an
+  error at that use.
+- `dyn fmt` keeps a one-statement block written on one line: `0 => { return "none" }`.
+- Breaking: `io.print` and `io.println` print to standard output and return nothing:
+  `io.println("total {}", n)`. `io.eprint`/`io.eprintln` print to standard error. The checked,
+  writer-taking forms are `io.print_to(writer, ...)` and `io.println_to(writer, ...)`, which
+  return the `Transfer`. Migrate `_ = io.println(io.stdout(), ...)` to `io.println(...)` and other
+  writers to `println_to`.
+- Struct fields may declare defaults again: `struct Player { health: i32 = 100 }`. Literals fill
+  omitted fields, `p: Player` starts from the defaults, and `mem.push` writes them; types without
+  defaults pay nothing. `#init(pointer)` writes a type's defaults for custom allocators.
+  `mem.try_push` writes them too. `mem.push_array` and fixed arrays stay zeroed;
+  `mem.push_array_init` gives every element the defaults, with the loop visible at the call.
+- Plain enums may set tags: `enum(i32) Errno { Ok = 0, NoEnt = 2, Io = 5 }`. Tags increase and
+  start at 0; an unset tag follows the previous one. Reflection's `TypeMember` gains `value`,
+  the variant's tag, and `enums.from_int`/`enums.name` respect set tags.
+- A nested block may shadow an outer local or parameter: `if ready { x := parse(x) }`. A second
+  local with the same name in one block, or shadowing a loop variable inside its loop, is still
+  an error. `is` is no longer reserved.
+- A literal range takes its type from the loop variable's first typed use: in
+  `for i in 0..5 { total += i }` with `total: i32`, `i` is `i32`. Otherwise it is still `usize`.
+- Literals boxed into `any` take default types, as in Go and Odin: `i32`, `f64`, `[]const u8`.
+- `std/panic`: `panic.set_handler(report)` runs once after cleanups and before an unhandled panic
+  reports and exits, for logs and crash reports. Panics remain unrecoverable.
+  On Wasm a panic still traps at once, so the handler does not run there.
+- A body-less declaration's return type must start on the same line as its `)`, so
+  `extern fn f(x: i32)` followed by a global on the next line no longer misparses, in the compiler and in editors.
+- Breaking: `io.Result` is now `io.Transfer`. `io.Result(T)` and `parse.Result(T)` are the
+  generic `{value, failure}` results, and named result types are aliases of them.
+- `std/container/map`: `map.Map(K, V)`, a growing hash map for any key type. Set it up with
+  `map.init(&m, arena, hash, equal)`, then `insert`, `get`, `upsert` and `remove`.
+  `upsert(&m, key, initial)` returns the value, adding `initial` when absent, so
+  `map.upsert(&counts, word, 0).* += 1` counts in one lookup. Walk a map with
+  `it := map.walk(&m)` and `for map.next(&it) { ... it.entry ... }`. `insert` returns
+  nothing; use `upsert` or `get` for the value's address.
+- `std/container/array`: `array.Array(T)`, the everyday growing list. `array.init(&a, arena)`,
+  then `push`, `push_ref`, `push_all`, `get`, `pop` (a `{value, ok}` result) and `clear`;
+  `a.items` is a plain slice.
+  Arrays share arenas and double when full.
+- The vectorized `c[p + j] += v * b[q + j]` loop runs on one index with one branch per vector, as
+  GCC and LLVM lay it out: matmul now runs level with `cc -O2`. Small struct copies split into
+  word moves on AArch64 too, so field stores there reach forwarding and pairing.
+- Opt-level 3 on x86-64 and AArch64 computes pairs of adjacent `f32` fields together: `ps[i] = V{x: ..., y: ...}`
+  built from the same operations on each field becomes one 8-byte load, lanewise SSE arithmetic and
+  one 8-byte store, and `a.x * b.x + a.y * b.y` over such pairs a lanewise multiply and an in-order
+  add. Results match the scalar code bit for bit.
+- Release builds keep a loop total and its update in one register when the total is read after
+  the loop, so `e += x` in a loop no longer copies the total twice per iteration.
+- Release builds inline a call to the right of an operand the call may change, as in
+  `total + step()`: the operand is read into a temporary first, so the order is unchanged.
+- Release builds call a stored function directly, and inline it, when it is the only function of
+  its type the program ever takes. A comparison keeps any other value correct.
+- Release builds keep more values in registers around rarely taken calls, reuse loads across
+  branches, and skip pointer checks on element addresses that flow through a variable. Branches
+  on a boolean that comes through several paths jump straight to their targets, and jumps
+  through empty blocks go straight to where they land. A loop counter times a constant, such as
+  an index scaled by a struct size, steps by an add instead of a multiply, and a counter kept only
+  for its bound test is replaced by the scaled one. A loop that branches on
+  a value fixed before it runs as two copies, and register allocation treats paths that can only
+  end in a failure as cold. Calls inside loops inline at up to twice the usual size, including
+  calls whose result is dereferenced, such as `map.get(&m, key).*`. At `-O3` the inliner ranks
+  call sites by how often they run for their size, so a call in a loop gets the budget before a
+  rarely run one that comes first, and a large callee behind a branch, such as a resize, stays a
+  call. Register allocation counts loop depth from real loops, so an inlined call's frame no longer
+  looks like a loop, and a spilled value a loop reads gets a register through that loop, taken
+  if need be from a value the loop does not use, which goes back at the loop's exits.
+- `chunk.List(T)` replaces the two structs a chunk list needed.
+- Generic structs: `struct Box($T: type) { value: T }`, used as `Box(i32)`.
+- Debug builds report memory faults with a stack trace on macOS and Windows too. On Windows a
+  stack overflow still ends the process (0xC00000FD) without the report.
+- The documentation test now type-checks complete examples.
+- Generic enums: `enum Slot($T: type) { Empty, Full: T }`, used as `Slot(i32).Full(7)`.
+- Release builds at opt-level 3 vectorize `for x in xs { t += x }` and `t += x * x` and `for i in 0..n { t += xs[i] }` over 32- and 64-bit integer slices on x86-64 and AArch64 (squares are 32-bit only).
+- Opt-level 3 also vectorizes `for j in 0..n { c[p + j] += v * b[q + j] }` over `f32` and `f64` slices, when the range is in bounds. Results match the scalar loop exactly.
+- An enum payload may be another enum.
+- Enum payloads are back: `enum Node { Null, Number: f64 }`, built with
+  `Node.Number(2.5)` and read only through `case`. The first variant has no payload,
+  and explicit enum values stay removed.
+- Linux debug builds report memory faults with a stack trace and exit 101.
+- Debug builds report the source line of a failed runtime check.
+- Breaking: float to integer `#cast` saturates on every target, and NaN gives 0.
+  It was target-defined, and trapped on Wasm. `math.float_to_int_sat` is removed;
+  use `#cast`.
+- Breaking: std results use one shape. `std/errors` moves into `std/io`, effects
+  report `io.Failure`, and parsers report the new `parse.Failure`. See
+  `docs/migrations/result-shape.md`.
+- Breaking: struct field defaults are removed. `struct S { n: i32 = 4 }` is now
+  a compile error. Every struct starts from zeros on every path, so make zero a
+  useful value, set the field in the literal, or use a named constant.
+- Breaking: `distinct`, `packed` and `is` are always reserved. `stb_rect_pack`
+  renames `Rectangle.packed` to `was_packed` and `Result.packed` to `count`.
+- Breaking: a character literal with no expected type is now `u32`, never `u8`.
+  It adapts to any integer type the value fits.
+- Range loops accept a typed binding: `for i: i32 in -3..3`. Breaking: a range
+  with two literal bounds and a negative one needs it. It no longer picks `isize`.
+- Breaking: enum values and payloads are removed. Variants are always 0, 1, 2 in
+  order. Use constants or a translation table for external numbers, and a struct
+  with a `kind` field for sum types.
+- Breaking: integer `+`, `-`, `*`, `<<` and negation wrap instead of panicking, and
+  `#wrap` is removed. Shift counts are masked. `#cast` to an enum no longer checks
+  the value; an exhaustive `case` still panics on a bad tag. Division checks stay.
+  Use `math.add_overflows` and friends where overflow matters.
+- Breaking: `pointer[..count]` is replaced by `#slice(pointer, count)`.
+- New: `#offset(pointer, count)` and pointer ordering, for walking memory.
+- New: pointer-free `union` types. `union` is now a reserved word.
+- Breaking: `mem.append` never moves a list and panics at the end of its block.
+  `mem.append_grow` keeps the old moving behavior; `mem.try_append` returns a stub.
+- New: `std/enums`, `math.div_or_zero`, `math.rem_or_zero`.
+- `dyn vet` reports unused locals and imports. `dyn vet --unsafe` lists unsafe operations,
+  including size multiplication that can wrap.
+- See `docs/migrations/prefreeze-language.md`.
+- `ui.Style` no longer has built-in colors. Write
+  `ui.Context{ style: ui.default_style }`; a zero style draws nothing.
+- Zero is now the safe state for handles. `fs.File`, `net.Connection`,
+  `net.Listener`, `signal.Watch` and `watch.Watcher` hold `0` when closed, so
+  test `active` or `is_open`, not `descriptor == -1`.
+- `capability.Directory` needs `active: true`. A zero value fails with EBADF
+  instead of using file descriptor 0.
+- `process.CaptureOptions`: a zero timeout now means infinite, not immediate.
+  Set the new `no_wait` for an immediate timeout.
+- `text.layout.Options`: `wrap` and `normalize` become `no_wrap` and
+  `no_normalize`. Zero `tab_columns` means 4, as it does in the vendor layout,
+  where zero `base` also means Auto.
+- `harfbuzz.Options.item_length` applies only with `has_item_length: true`.
+- `vulkan.open`: a zero limit selects the built-in limit.
+- `timer.SysTick{}` no longer has a base. Use `&timer.systick`.
+- `x509.View.path_length` is meaningful only when the new `has_path_length` is
+  true. It was `-1` when absent.
+
 ## 0.1.0-preview.30
 
 This release is source compatible with preview.29. No code migrations.

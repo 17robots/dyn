@@ -1,5 +1,5 @@
 use "std/dynlib" dynlib
-use "std/errors" errors
+use "std/io" io
 use "std/ui/software" software
 // Dynamic FreeType 2 bindings. The caller owns the loader handle and keeps it
 // open until all faces/libraries and tables are dead. Memory faces borrow bytes.
@@ -32,26 +32,26 @@ pub struct Api {
 }
 pub struct LoadResult { api: Api, missing: []const u8, ok: bool }
 pub struct Font { api: Api, library: rawptr, face: rawptr, bytes: []const u8 }
-pub struct Result { kind: errors.Kind, error: isize, ok: bool }
+pub struct Result { kind: io.Kind, error: isize, ok: bool }
 pub struct BitmapView { pixels: []const u8, width: i32, height: i32, stride: usize, left: i32, top: i32, advance_x: i64, advance_y: i64 }
-pub struct BitmapResult { value: BitmapView, kind: errors.Kind, ok: bool }
+pub struct BitmapResult { value: BitmapView, kind: io.Kind, ok: bool }
 // Unscaled metrics from a live scalable FT_Face. Faces and their font bytes
 // remain caller-owned; variation changes can change these values.
 pub struct FaceMetrics { units_per_em: u16, ascent: i16, descent: i16, height: i16, glyph_count: u32, face_count: u32, face_index: u32 }
-pub struct FaceMetricsResult { value: FaceMetrics, kind: errors.Kind, ok: bool }
+pub struct FaceMetricsResult { value: FaceMetrics, kind: io.Kind, ok: bool }
 pub fn face_metrics(face: rawptr) FaceMetricsResult {
   if face==nil {
-    return FaceMetricsResult{kind:errors.Kind.InvalidInput}
+    return FaceMetricsResult{kind:io.Kind.InvalidInput}
   }
   prefix:=#cast(*FacePrefix, face)
-  if prefix.face_flags&1==0 || prefix.units_per_em==0 {
-    return FaceMetricsResult{kind:errors.Kind.Unsupported}
+  if (prefix.face_flags&1)==0 || prefix.units_per_em==0 {
+    return FaceMetricsResult{kind:io.Kind.Unsupported}
   }
   if prefix.num_glyphs<0 || prefix.num_faces<=0 || prefix.face_index<0 {
-    return FaceMetricsResult{kind:errors.Kind.InvalidState}
+    return FaceMetricsResult{kind:io.Kind.InvalidState}
   }
   if #cast(u64, prefix.num_glyphs)>4294967295 || #cast(u64, prefix.num_faces)>4294967295 || #cast(u64, prefix.face_index)>4294967295 {
-    return FaceMetricsResult{kind:errors.Kind.Overflow}
+    return FaceMetricsResult{kind:io.Kind.Overflow}
   }
   return FaceMetricsResult{value:FaceMetrics{units_per_em:prefix.units_per_em, ascent:prefix.ascender, descent:prefix.descender, height:prefix.height, glyph_count:#cast(u32, prefix.num_glyphs), face_count:#cast(u32, prefix.num_faces), face_index:#cast(u32, prefix.face_index)}, ok:true}
 }
@@ -61,56 +61,56 @@ pub fn face_metrics(face: rawptr) FaceMetricsResult {
 // bitmap pixel modes or negative-pitch storage return Unsupported.
 pub fn bitmap(face: rawptr) BitmapResult {
   if face == nil {
-    return BitmapResult{kind:errors.Kind.InvalidInput}
+    return BitmapResult{kind:io.Kind.InvalidInput}
   }
   prefix := #cast(*FacePrefix, face)
   if prefix.glyph == nil {
-    return BitmapResult{kind:errors.Kind.InvalidState}
+    return BitmapResult{kind:io.Kind.InvalidState}
   }
   slot := #cast(*SlotPrefix, prefix.glyph)
   value := slot.bitmap
   if value.width > 2147483647 || value.rows > 2147483647 {
-    return BitmapResult{kind:errors.Kind.Overflow}
+    return BitmapResult{kind:io.Kind.Overflow}
   }
   result := BitmapView{width:#cast(i32, value.width), height:#cast(i32, value.rows), left:slot.bitmap_left, top:slot.bitmap_top, advance_x:#cast(i64, slot.advance.x), advance_y:#cast(i64, slot.advance.y)}
   if value.width == 0 || value.rows == 0 {
     return BitmapResult{value:result, ok:true}
   }
   if slot.format != 0x62697473 || value.pixel_mode != 2 || value.num_grays != 256 || value.pitch < 0 || #cast(u32, value.pitch) < value.width || value.buffer == nil {
-    return BitmapResult{kind:errors.Kind.Unsupported}
+    return BitmapResult{kind:io.Kind.Unsupported}
   }
   stride := #cast(usize, value.pitch)
   width := #cast(usize, value.width)
   if #cast(usize, value.rows-1) > (~#cast(usize, 0)-width)/stride {
-    return BitmapResult{kind:errors.Kind.Overflow}
+    return BitmapResult{kind:io.Kind.Overflow}
   }
   result.stride = stride
-  result.pixels = value.buffer[..#cast(usize, value.rows-1)*stride+width]
+  result.pixels = #slice(value.buffer, #cast(usize, value.rows-1)*stride+width)
   return BitmapResult{value:result, ok:true}
 }
 pub fn open(font: *Font, api: Api, bytes: []const u8, index: u32, pixels: u32) Result {
   if font.library != nil || font.face != nil {
-    return Result{kind:errors.Kind.InvalidState}
+    return Result{kind:io.Kind.InvalidState}
   }
   if #len(bytes) == 0 || #cast(u64, #len(bytes)) > #cast(u64, (~#cast(ULong, 0))>>1) || pixels == 0 || #cast(u64, index) > #cast(u64, (~#cast(ULong, 0))>>1) {
-    return Result{kind:errors.Kind.InvalidInput}
+    return Result{kind:io.Kind.InvalidInput}
   }
   library: rawptr
   error := api.init(&library)
   if error != 0 {
-    return Result{kind:errors.Kind.System, error:#cast(isize, error)}
+    return Result{kind:io.Kind.System, error:#cast(isize, error)}
   }
   face: rawptr
   error = api.new_memory_face(library, &bytes[0], #cast(Long, #len(bytes)), #cast(Long, index), &face)
   if error != 0 {
     _ = api.done(library)
-    return Result{kind:errors.Kind.System, error:#cast(isize, error)}
+    return Result{kind:io.Kind.System, error:#cast(isize, error)}
   }
   error = api.set_pixel_sizes(face, 0, pixels)
   if error != 0 {
     _ = api.done_face(face)
     _ = api.done(library)
-    return Result{kind:errors.Kind.System, error:#cast(isize, error)}
+    return Result{kind:io.Kind.System, error:#cast(isize, error)}
   }
   font.* = Font{api:api, library:library, face:face, bytes:bytes}
   return Result{ok:true}
@@ -127,11 +127,11 @@ pub fn close(font: *Font) {
 // Stable adapter address; font and its borrowed bytes outlive rendering.
 // baseline is relative to the pen; set to zero for baseline-positioned glyphs.
 // glyph_ids selects shaped glyph IDs instead of Unicode code points.
-pub struct Adapter { font: *Font, baseline: i32, line_height: i32, glyph_ids: bool, kind: errors.Kind, error: isize }
+pub struct Adapter { font: *Font, baseline: i32, line_height: i32, glyph_ids: bool, kind: io.Kind, error: isize }
 fn glyph(data: rawptr, codepoint: u32) software.Glyph {
   adapter := #cast(*Adapter, data)
   if adapter.font == nil || adapter.font.face == nil {
-    adapter.kind = errors.Kind.InvalidState
+    adapter.kind = io.Kind.InvalidState
     return software.Glyph{width:-1}
   }
   index := codepoint
@@ -140,7 +140,7 @@ fn glyph(data: rawptr, codepoint: u32) software.Glyph {
   }
   error := adapter.font.api.load_glyph(adapter.font.face, index, LoadRender)
   if error != 0 {
-    adapter.kind = errors.Kind.System
+    adapter.kind = io.Kind.System
     adapter.error = #cast(isize, error)
     return software.Glyph{width:-1}
   }
@@ -153,14 +153,14 @@ fn glyph(data: rawptr, codepoint: u32) software.Glyph {
   advance := value.advance_x/64
   offset := #cast(i64, adapter.baseline)-#cast(i64, value.top)
   if advance < 0 || advance > 2147483647 || offset < -2147483648 || offset > 2147483647 {
-    adapter.kind = errors.Kind.Overflow
+    adapter.kind = io.Kind.Overflow
     return software.Glyph{width:-1}
   }
   return software.Glyph{pixels:value.pixels, width:value.width, height:value.height, stride:value.stride, x_offset:value.left, y_offset:#cast(i32, offset), advance:#cast(i32, advance)}
 }
 pub fn renderer(adapter: *Adapter) software.Font {
   if adapter.font == nil || adapter.font.face == nil || adapter.line_height <= 0 {
-    adapter.kind = errors.Kind.InvalidInput
+    adapter.kind = io.Kind.InvalidInput
     return software.Font{}
   }
   return software.Font{data:adapter, glyph:glyph, line_height:adapter.line_height}

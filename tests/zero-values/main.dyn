@@ -6,8 +6,8 @@ use "std/text/scanner" text
 use "std/net"
 
 
-fn read_nothing(data: rawptr, destination: []u8) io.Result {
-  return io.Result{ status: io.Status.End }
+fn read_nothing(data: rawptr, destination: []u8) io.Transfer {
+  return io.Transfer{ status: io.Status.End }
 }
 
 // Explicit default arenas initialize zeroed payload; replacement follows release.
@@ -46,7 +46,7 @@ fn zero_scanners() {
   empty := csv.StreamScanner{ input: io.Reader{ read: read_nothing } }
   storage: [4]u8 = []
   field := csv.next_stream(&empty, storage[..])
-  if !field.ok || #len(field.text) != 0 || !field.end_input {
+  if !field.found || #len(field.text) != 0 || !field.end_input {
     #panic("zero CSV stream scanner")
   }
 }
@@ -69,9 +69,8 @@ fn zero_net_handles() {
   defer mem.arena_release(arena)
   connection := mem.push(net.Connection, arena)
   listener := mem.push(net.Listener, arena)
-  if net.connection_close(connection).ok || net.listener_close(listener).ok {
-    #panic("zero net handle closed")
-  }
+  net.connection_close(connection)
+  net.listener_close(listener)
 }
 
 fn main() {

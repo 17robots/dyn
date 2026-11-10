@@ -10,14 +10,14 @@ ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 SOURCE=r'''use "vendor/window/native" window
 use "std/text/edit" edit
-use "std/errors" errors
+use "std/io" errors
 extern fn calls "probe_calls"() i32
 extern fn set_status "probe_status"(status: i32)
 fn check(ok: bool) { if !ok { #panic("surrounding native ABI") } }
 fn main() {
   host := window.Window{handle:#cast(rawptr,1)}
   context := edit.Context{text:"hé😀",cursor:3,anchor:7,token:1234605616436508552,cause:edit.Cause.InputMethod}
-  check(window.set_surrounding_text(&host,context).ok && calls()==1)
+  check(window.set_surrounding_text(&host,context).kind == errors.Kind.Ok && calls()==1)
   context.cursor = 2
   check(window.set_surrounding_text(&host,context).kind==errors.Kind.InvalidInput && calls()==1)
   context.cursor = 3
@@ -26,16 +26,16 @@ fn main() {
   context.token = 3
   check(window.set_surrounding_text(&host,context).kind==errors.Kind.Capacity && calls()==3)
   context = edit.Context{text:"",token:9}
-  check(window.set_surrounding_text(&host,context).ok && calls()==4)
+  check(window.set_surrounding_text(&host,context).kind == errors.Kind.Ok && calls()==4)
   context = edit.Context{text:"a\0b",cursor:0,anchor:0,token:10}
   check(window.set_surrounding_text(&host,context).kind==errors.Kind.InvalidInput && calls()==4)
-  check(window.set_title(&host,"hé").ok)
-  check(window.set_size(&host,20,30).ok && host.width==20 && host.height==30)
-  check(window.set_swap_interval(&host,1).ok)
-  check(window.try_set_clipboard(&host,"hé").ok)
+  check(window.set_title(&host,"hé").kind == errors.Kind.Ok)
+  check(window.set_size(&host,20,30).kind == errors.Kind.Ok && host.width==20 && host.height==30)
+  check(window.set_swap_interval(&host,1).kind == errors.Kind.Ok)
+  check(window.try_set_clipboard(&host,"hé").kind == errors.Kind.Ok)
   check(!window.paste_pending(&host))
   window.request_paste_snapshot(&host)
-  check(window.paste_status(&host).ok)
+  check(window.paste_status(&host).kind == errors.Kind.Ok)
   set_status(-1)
   check(window.set_title(&host,"title").kind==errors.Kind.Unsupported)
   set_status(-2)

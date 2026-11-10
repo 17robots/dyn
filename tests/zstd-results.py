@@ -35,7 +35,7 @@ use "std/mem" mem
 use "std/fs" fs
 use "std/bytes" bytes
 struct Input { source: []const u8, at: usize, chunk: usize }
-fn read(data: rawptr, destination: []u8) io.Result {
+fn read(data: rawptr, destination: []u8) io.Transfer {
  state := #cast(*Input, data)
  amount := #len(state.source) - state.at
  if amount > state.chunk { amount = state.chunk }
@@ -44,7 +44,7 @@ fn read(data: rawptr, destination: []u8) io.Result {
  state.at += amount
  status := io.Status.Complete
  if state.at == #len(state.source) { status = io.Status.End }
- return io.Result{ transferred: amount, status: status }
+ return io.Transfer{ transferred: amount, status: status }
 }
 fn verify(raw: []const u8, encoded: []const u8, workspace: []u8, chunk: usize, window: u32, bad: bool, repeats: usize) {
  input := Input{ source: encoded, chunk: chunk }
@@ -77,29 +77,29 @@ fn verify(raw: []const u8, encoded: []const u8, workspace: []u8, chunk: usize, w
 '''
 source = SOURCE
 source = source.replace('mem.arena_push_or_panic', 'mem.arena_push_uninit')
-source = source.replace('use "std/bytes" bytes', 'use "std/bytes" bytes\nuse "std/errors" errors')
+source = source.replace('use "std/bytes" bytes', 'use "std/bytes" bytes\nuse "std/io" errors\nuse "std/parse" parse')
 extra = '''
 struct Failure { calls: usize, code: isize }
-fn fail(data: rawptr, destination: []u8) io.Result {
+fn fail(data: rawptr, destination: []u8) io.Transfer {
  state := #cast(*Failure, data)
  state.calls += 1
- return io.Result{ kind: errors.Kind.PermissionDenied, error: state.code, status: io.Status.Error }
+ return io.Transfer{ kind: errors.Kind.PermissionDenied, error: state.code, status: io.Status.Error }
 }
 fn results(arena: *mem.Arena, encoded: []const u8, unknown: []const u8, workspace: []u8) {
- packed := z.compress(arena, "portable zstd", 3)
- if !packed.ok || packed.kind != errors.Kind.None || packed.error != 0 { #panic("compress success") }
- unpacked := z.decompress(arena, packed.value)
- if !unpacked.ok || unpacked.kind != errors.Kind.None || #len(unpacked.value) != 13 { #panic("roundtrip") }
+ packed_result := z.compress(arena, "portable zstd", 3)
+ if packed_result.failure.kind != parse.Kind.Ok { #panic("compress success") }
+ unpacked := z.decompress(arena, packed_result.value)
+ if unpacked.failure.kind != parse.Kind.Ok || #len(unpacked.value) != 13 { #panic("roundtrip") }
  mark := mem.arena_used(arena)
  bad := z.decompress(arena, "bad")
- if bad.ok || bad.kind != errors.Kind.InvalidInput || bad.error != 0 || #len(bad.value) != 0 || mem.arena_used(arena) != mark { #panic("malformed result") }
+ if bad.failure.kind != parse.Kind.Syntax || #len(bad.value) != 0 || mem.arena_used(arena) != mark { #panic("malformed result") }
  size := z.frame_size(unknown)
- if !size.ok || size.known || size.kind != errors.Kind.None { #panic("unknown valid frame") }
+ if size.failure.kind != parse.Kind.Ok || size.known { #panic("unknown valid frame") }
  unsupported := z.decompress(arena, unknown)
- if unsupported.ok || unsupported.kind != errors.Kind.Unsupported || unsupported.error != 0 || mem.arena_used(arena) != mark { #panic("unknown arena unsupported") }
+ if unsupported.failure.kind != parse.Kind.Unsupported || mem.arena_used(arena) != mark { #panic("unknown arena unsupported") }
  // Header retains a valid known size, while truncation fails after allocation.
  broken := z.decompress(arena, encoded[..#len(encoded)-1])
- if broken.ok || broken.kind != errors.Kind.InvalidInput || broken.provider_code == 0 || broken.error != 0 || #len(broken.value) != 0 || mem.arena_used(arena) != mark { #panic("provider rollback") }
+ if broken.failure.kind != parse.Kind.Syntax || broken.provider_code == 0 || #len(broken.value) != 0 || mem.arena_used(arena) != mark { #panic("provider rollback") }
  code: isize = 0
  for code < 2 {
   upstream := Failure{ code: code }
@@ -141,8 +141,8 @@ fn main() {
  encoded := fs.read_all(arena, "DIRECTORY/encoded", 2000000)
  concatenated := fs.read_all(arena, "DIRECTORY/concatenated", 4000000)
  unknown := fs.read_all(arena, "DIRECTORY/unknown", 2000000)
- if !raw.ok || !encoded.ok || !concatenated.ok || !unknown.ok { #panic("fixtures") }
- workspace := mem.arena_push_uninit(arena, z.decoder_workspace_size(21), 8)[..z.decoder_workspace_size(21)]
+ if raw.failure.kind != io.Kind.Ok || encoded.failure.kind != io.Kind.Ok || concatenated.failure.kind != io.Kind.Ok || unknown.failure.kind != io.Kind.Ok { #panic("fixtures") }
+ workspace := #slice(mem.arena_push_uninit(arena, z.decoder_workspace_size(21), 8), z.decoder_workspace_size(21))
  results(arena, encoded.value, unknown.value, workspace)
  verify(raw.value, unknown.value, workspace, 13, 21, false, 1)
  verify(raw.value, encoded.value, workspace, 1, 21, false, 1)

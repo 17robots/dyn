@@ -1,5 +1,4 @@
 use "std/mem" mem
-use "std/errors" errors
-
-pub struct SpawnResult { value: *Thread, ok: bool, kind: errors.Kind, error: isize }
-pub struct Result { value: isize, ok: bool, kind: errors.Kind, error: isize }
+use "std/io" io
+pub type SpawnResult = io.Result(*Thread)
+pub type Result = io.Result(isize)

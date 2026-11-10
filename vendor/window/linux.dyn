@@ -1,4 +1,4 @@
-use "std/errors" errors
+use "std/io" io
 use "std/text/edit" surrounding_edit
 #target(kernel: linux)
 use "vendor/window/x11" x11
@@ -75,7 +75,7 @@ pub fn clipboard(window: *const Window) []const u8 {
 pub type Surrounding = surrounding_edit.Context
 pub fn set_surrounding_text(window: *Window, context: Surrounding) Result {
   if context.cause != surrounding_edit.Cause.Other && context.cause != surrounding_edit.Cause.InputMethod {
-    return Result{ kind: errors.Kind.InvalidInput }
+    return Result{ kind: io.Kind.InvalidInput }
   }
   return x11.set_surrounding_text(window, context.text, context.cursor, context.anchor, context.token)
 }

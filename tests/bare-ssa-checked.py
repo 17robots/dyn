@@ -30,7 +30,7 @@ funcs = ''
 for ty in ['u64', 'i64', 'u32', 'i32', 'u8', 'i8']:
     for name, op in [('add', '+'), ('sub', '-'), ('mul', '*'), ('div', '/'), ('rem', '%')]:
         funcs += f'pub fn {name}_{ty}(a:{ty},b:{ty}) {ty} {{ return a{op}b }}\n'
-funcs += 'pub fn preserved(a:u64,b:u64,c:u64) u64 { x:=a/b\ny:=a%b\nz:=b*c\nreturn #wrap(x+y+z+a+b+c) }\n'
+funcs += 'pub fn preserved(a:u64,b:u64,c:u64) u64 { x:=a/b\ny:=a%b\nz:=b*c\nreturn (x+y+z+a+b+c) }\n'
 success = []
 for ty in ['u64', 'i64', 'u32', 'i32', 'u8', 'i8']:
     for name, a, b, want in [('add', 50, 7, 57), ('sub', 50, 7, 43), ('mul', 12, 7, 84), ('div', 50, 7, 7), ('rem', 50, 7, 1)]:

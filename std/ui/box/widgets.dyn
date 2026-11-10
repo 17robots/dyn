@@ -1,3 +1,4 @@
+use "std/parse" parse
 // Widgets are builder code over boxes. Each returns its Signal; state such as
 // a checkbox value or text buffer belongs to the caller.
 
@@ -167,13 +168,13 @@ pub struct Edit {
   // Horizontal scroll in physical pixels; managed by text_field.
   scroll_x: f32,
 }
-pub struct FieldSignal { signal: Signal, focused: bool, changed: bool, submitted: bool, correction_error: errors.Kind }
+pub struct FieldSignal { signal: Signal, focused: bool, changed: bool, submitted: bool, correction_error: io.Kind }
 
 fn previous_boundary(text: []const u8, at: usize) usize {
   index := at
   for index > 0 {
     index -= 1
-    if text[index] & 0xc0 != 0x80 {
+    if (text[index] & 0xc0) != 0x80 {
       return index
     }
   }
@@ -185,7 +186,7 @@ fn next_boundary(text: []const u8, at: usize) usize {
     return #len(text)
   }
   decoded := utf8.decode(text, at)
-  if !decoded.ok {
+  if !decoded.valid {
     return at + 1
   }
   return at + decoded.width
@@ -259,7 +260,7 @@ fn word_boundary(state: *State, text: []const u8, at: usize, forward: bool) usiz
     mem.arena_rewind(state.frame, mark)
   }
   boundaries := unicode_text.word_breaks(state.frame, text)
-  if !boundaries.ok {
+  if boundaries.failure.kind != parse.Kind.Ok {
     return at
   }
   if forward {
@@ -320,13 +321,13 @@ pub fn text_field(state: *State, label: []const u8, storage: []u8, edit: *Edit) 
   if edit.cursor > edit.length {
     edit.cursor = edit.length
   }
-  for edit.cursor > 0 && edit.cursor < edit.length && storage[edit.cursor] & 0xc0 == 0x80 {
+  for edit.cursor > 0 && edit.cursor < edit.length && (storage[edit.cursor] & 0xc0) == 0x80 {
     edit.cursor -= 1
   }
   if edit.anchor > edit.length {
     edit.anchor = edit.length
   }
-  for edit.anchor > 0 && edit.anchor < edit.length && storage[edit.anchor] & 0xc0 == 0x80 {
+  for edit.anchor > 0 && edit.anchor < edit.length && (storage[edit.anchor] & 0xc0) == 0x80 {
     edit.anchor -= 1
   }
   if !edit.selecting {
@@ -362,16 +363,16 @@ pub fn text_field(state: *State, label: []const u8, storage: []u8, edit: *Edit) 
           invalid = true
         }
       }
-      if !before.ok {
-        result.correction_error = before.kind
+      if before.failure.kind != io.Kind.Ok {
+        result.correction_error = before.failure.kind
       }
       else if invalid {
-        result.correction_error = errors.Kind.InvalidInput
+        result.correction_error = io.Kind.InvalidInput
       }
       else {
         buffer := text_edits.Buffer{ storage: storage, length: edit.length, cursor: edit.cursor, anchor: anchor, token: before.value.token }
         applied := text_edits.apply(state.frame, &buffer, replacement)
-        if applied.ok {
+        if applied.kind == io.Kind.Ok {
           edit.length = buffer.length
           edit.cursor = buffer.cursor
           edit.anchor = buffer.anchor
@@ -538,7 +539,7 @@ pub fn text_field(state: *State, label: []const u8, storage: []u8, edit: *Edit) 
     if state.input.composition_cursor >= 0 && #cast(usize, state.input.composition_cursor) <= #len(composing) {
       cursor = #cast(usize, state.input.composition_cursor)
     }
-    for cursor > 0 && cursor < #len(composing) && composing[cursor] & 0xc0 == 0x80 {
+    for cursor > 0 && cursor < #len(composing) && (composing[cursor] & 0xc0) == 0x80 {
       cursor -= 1
     }
     caret_offset = state.measure(state.measure_data, composing[..cursor])
@@ -585,12 +586,12 @@ pub fn text_field(state: *State, label: []const u8, storage: []u8, edit: *Edit) 
       anchor = edit.anchor
     }
     context := text_edits.snapshot(&state.text_tracker, box.key, storage[..edit.length], edit.cursor, anchor, cause)
-    if context.ok {
+    if context.failure.kind == io.Kind.Ok {
       state.text_context = context.value
     }
     else {
       state.text_context = text_edits.Context{}
-      state.text_context_error = context.kind
+      state.text_context_error = context.failure.kind
     }
     state.text_input_rect[0] = box.rect[0] + caret.floating[0]
     state.text_input_rect[1] = box.rect[1] + (box.size[1] - state.line_height) / 2.0

@@ -3,6 +3,23 @@
 fn unwind_owner_offset() usize {
   return 72
 }
+fn exit_number() i64 {
+  return 231
+}
+fn sigaltstack_number() i64 {
+  return 131
+}
+fn sigaction_number() i64 {
+  return 13
+}
+fn signal_restorer_flag() u64 {
+  return 0x04000000
+}
+fn signal_restorer(handler: usize) usize {
+  return handler
+}
+// The assembly runtime keeps its own trace slots and dumps them before exiting.
+extern fn fault_report "dyn_fault_report"()
 fn thread_number() i64 {
   return 186
 }
@@ -41,7 +58,7 @@ fn unwind_find(rip: u64, landing: *u64) usize {
       return 0
     }
     relative := #cast(i64, #cast(i32, unwind_u32(at + 8)))
-    text := #wrap(#cast(u64, at + 8) + #cast(u64, relative))
+    text := #cast(u64, at + 8) + #cast(u64, relative)
     if rip >= text && rip - text < #cast(u64, unwind_u32(at + 12)) {
       offset := #cast(u32, rip - text)
       functions := #cast(usize, unwind_u32(at + 16))
@@ -96,19 +113,19 @@ fn unwind_walk(slot: *UnwindSlot, state: *UnwindState) {
     frame := state.rbp
     mask := unwind_u32(record + 8)
     if (mask & 1) != 0 {
-      state.rbx = unwind_u64(#wrap(frame + #cast(u64, #cast(i64, #cast(i32, unwind_u32(record + 12))))))
+      state.rbx = unwind_u64(frame + #cast(u64, #cast(i64, #cast(i32, unwind_u32(record + 12)))))
     }
     if (mask & 2) != 0 {
-      state.r12 = unwind_u64(#wrap(frame + #cast(u64, #cast(i64, #cast(i32, unwind_u32(record + 16))))))
+      state.r12 = unwind_u64(frame + #cast(u64, #cast(i64, #cast(i32, unwind_u32(record + 16)))))
     }
     if (mask & 4) != 0 {
-      state.r13 = unwind_u64(#wrap(frame + #cast(u64, #cast(i64, #cast(i32, unwind_u32(record + 20))))))
+      state.r13 = unwind_u64(frame + #cast(u64, #cast(i64, #cast(i32, unwind_u32(record + 20)))))
     }
     if (mask & 8) != 0 {
-      state.r14 = unwind_u64(#wrap(frame + #cast(u64, #cast(i64, #cast(i32, unwind_u32(record + 24))))))
+      state.r14 = unwind_u64(frame + #cast(u64, #cast(i64, #cast(i32, unwind_u32(record + 24)))))
     }
     if (mask & 16) != 0 {
-      state.r15 = unwind_u64(#wrap(frame + #cast(u64, #cast(i64, #cast(i32, unwind_u32(record + 28))))))
+      state.r15 = unwind_u64(frame + #cast(u64, #cast(i64, #cast(i32, unwind_u32(record + 28)))))
     }
     state.rip = unwind_u64(frame + 8)
     state.rsp = frame + 16
@@ -120,10 +137,12 @@ fn unwind_walk(slot: *UnwindSlot, state: *UnwindState) {
 pub fn dyn_unwind_begin_state(message: *const u8, length: u64, state: *UnwindState) {
   slot := unwind_slot(true)
   if slot == nil || slot.unwinding != 0 {
+    run_panic_hook(message, length)
     return
   }
   unwind_store_message(slot, message, length)
   unwind_walk(slot, state)
+  run_panic_hook(slot.message, slot.length)
 }
 // Called by dyn_unwind_continue with the registers of the cleanup's frame.
 pub fn dyn_unwind_resume(state: *UnwindState) {

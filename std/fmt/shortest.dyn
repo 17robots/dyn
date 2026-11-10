@@ -17,8 +17,8 @@ fn multiply_wide(a: u64, b: u64) Wide {
   high_low := a_high * b_low
   high_high := a_high * b_high
   middle := (low_low >> 32) + (low_high & 0xffffffff) + (high_low & 0xffffffff)
-  low := (low_low & 0xffffffff) | #wrap(middle << 32)
-  high := #wrap(high_high + (low_high >> 32) + (high_low >> 32) + (middle >> 32))
+  low := (low_low & 0xffffffff) | (middle << 32)
+  high := high_high + (low_high >> 32) + (high_low >> 32) + (middle >> 32)
   return Wide{ low: low, high: high }
 }
 
@@ -26,14 +26,14 @@ fn multiply_wide(a: u64, b: u64) Wide {
 fn multiply_shift(m: u64, low: u64, high: u64, j: i64) u64 {
   b0 := multiply_wide(m, low)
   b2 := multiply_wide(m, high)
-  sum_low := #wrap(b2.low + b0.high)
+  sum_low := b2.low + b0.high
   carry: u64 = 0
   if sum_low < b2.low {
     carry = 1
   }
-  sum_high := #wrap(b2.high + carry)
+  sum_high := b2.high + carry
   distance := #cast(u64, j - 64)
-  return #wrap(sum_high << (64 - distance)) | (sum_low >> distance)
+  return (sum_high << (64 - distance)) | (sum_low >> distance)
 }
 
 fn pow5_bits(e: i64) i64 {
@@ -63,7 +63,7 @@ fn multiple_of_pow5(value: u64, p: i64) bool {
 }
 
 fn multiple_of_pow2(value: u64, p: i64) bool {
-  return value & (#wrap((#cast(u64, 1) << #cast(u64, p)) - 1)) == 0
+  return (value & ((#cast(u64, 1) << #cast(u64, p)) - 1)) == 0
 }
 
 struct Decimal { mantissa: u64, exponent: i64 }
@@ -80,7 +80,7 @@ fn shortest_decimal(mantissa_bits: u64, exponent_bits: u64) Decimal {
     e2 = #cast(i64, exponent_bits) - 1023 - 52 - 2
     m2 = 4503599627370496 | mantissa_bits
   }
-  accept_bounds := m2 & 1 == 0
+  accept_bounds := (m2 & 1) == 0
   mv := 4 * m2
   mm_shift: u64 = 0
   if mantissa_bits != 0 || exponent_bits <= 1 {

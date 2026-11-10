@@ -48,7 +48,7 @@ fn main() {
  value:u64=first
  pair:=Pair{first:identity(value),second:23}
  if pair.first+pair.second!=42 { #panic("native computation") }
- _=io.println(io.stdout(), "no LLVM")
+ _=io.println_to(io.stdout(), "no LLVM")
 }
 ''')
     output = root / 'program'

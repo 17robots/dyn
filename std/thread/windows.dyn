@@ -1,5 +1,6 @@
 #target(kernel: windows)
 
+use "std/io" io
 use "std/os/windows" win
 
 pub struct Thread { native: win.Thread }
@@ -12,29 +13,29 @@ pub fn spawn(arena: *mem.Arena, stack: []u8, entry: fn(rawptr) isize, context: r
 }
 pub fn spawn_with_size(arena: *mem.Arena, stack_size: usize, entry: fn(rawptr) isize, context: rawptr) SpawnResult {
   if stack_size < 256 || entry == nil {
-    return SpawnResult{ kind: errors.Kind.InvalidInput }
+    return SpawnResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
   mark := mem.arena_mark(arena)
   thread := mem.push(Thread, arena)
   if !win.thread_spawn(&thread.native, stack_size, entry, context) {
     error := win.thread_error()
     mem.arena_rewind(arena, mark)
-    return SpawnResult{ error: error, kind: errors.windows(error) }
+    return SpawnResult{ failure: io.Failure{ kind: io.windows(error), native: error } }
   }
-  return SpawnResult{ value: thread, ok: true }
+  return SpawnResult{ value: thread }
 }
 
 // Success clears the native owner. Failure retains it for retry; keep the
 // arena/thread/context alive until success. One caller controls this descriptor.
 pub fn join(thread: *Thread) Result {
   if thread.native.handle == nil {
-    return Result{ ok: true }
+    return Result{}
   }
   if !win.thread_join(&thread.native) {
     error := win.thread_error()
-    return Result{ error: error, kind: errors.windows(error) }
+    return Result{ failure: io.Failure{ kind: io.windows(error), native: error } }
   }
-  return Result{ ok: true }
+  return Result{}
 }
 
 // Identifies an unjoined thread; this is not a portable liveness check.
@@ -48,5 +49,5 @@ pub fn id(thread: *const Thread) u32 {
 // SwitchToThread returning false means no other thread ran, not an error.
 pub fn yield_now() Result {
   win.thread_yield()
-  return Result{ ok: true }
+  return Result{}
 }

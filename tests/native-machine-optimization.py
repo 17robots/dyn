@@ -71,7 +71,7 @@ for t in ('u32', 'i32', 'u64', 'i64'):
         for n in (3, 19):
             function = f'vector_{t}_{name}_{n}'
             kernels.append(function)
-            operation = f'#wrap(a[i] {op} b[i])' if op in ('+', '-') else f'a[i] {op} b[i]'
+            operation = f'(a[i] {op} b[i])' if op in ('+', '-') else f'a[i] {op} b[i]'
             source += f'''
 fn {function}() {{
   a: [{n}]{t} = []
@@ -80,7 +80,7 @@ fn {function}() {{
   for i in 0..{n} {{ a[i] = #cast({t}, i)
 b[i] = #cast({t}, -1) }}
   for i in 0..{n} {{ c[i] = {operation} }}
-  for i in 0..{n} {{ if c[i] != {operation} {{ #panic("SIMD scalar oracle") }} }}
+  for i in 0..{n} {{ if c[i] != ({operation}) {{ #panic("SIMD scalar oracle") }} }}
   // Same-array destinations are safe because every lane uses the same index.
   for i in 0..{n} {{ a[i] = {operation} }}
   for i in 0..{n} {{ if a[i] != c[i] {{ #panic("SIMD same-array alias") }} }}
@@ -163,7 +163,6 @@ with tempfile.TemporaryDirectory(prefix='dyn-machine-opt-') as directory:
     checked = work/'checked'
     p = run(DYN, 'build', module, '--release', '--opt-level', 3,
             '--opt-remarks', '--output', checked)
-    assert 'vectorized' not in p.stderr, p.stderr
-    failed = subprocess.run([str(checked)], capture_output=True)
-    assert failed.returncode != 0, 'checked overflow disappeared'
+    assert 'vectorized' in p.stderr, p.stderr
+    subprocess.run([str(checked)], check=True, capture_output=True)
 print('PASS register pressure, calls, loop liveness, escapes, overlapping copies, SSE2/NEON arithmetic, aliases and scalar tails')

@@ -164,6 +164,14 @@ static bool allocate(void **out, size_t count, size_t size) {
 }
 
 /* Copies a name into the program's name pool at *cursor. */
+enum { IR_INSTANCE_NAME = 256 };
+/* An instance has no source name, so reflection reports its full spelling. */
+static char *copy_instance_name(const DynAstProgram *a, DynType type, const DynSource *source, char **cursor) {
+  char *text = *cursor;
+  dyn_type_format((DynAstProgram *)a, type, source, text, IR_INSTANCE_NAME);
+  *cursor += strlen(text) + 1;
+  return text;
+}
 static char *copy_span(DynSpan span, const DynSource *source, char **cursor) {
   size_t n = span.end_byte - span.start_byte;
   char *text = *cursor;
@@ -426,8 +434,10 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
   /* One pool holds every declaration and local name. */
   size_t name_bytes = 1;
   for (size_t i = 0; i < a->field_count; ++i) name_bytes += span_bytes(a->fields[i].name);
-  for (size_t i = 0; i < a->struct_count; ++i) name_bytes += span_bytes(a->structs[i].name);
-  for (size_t i = 0; i < a->enum_count; ++i) name_bytes += span_bytes(a->enums[i].name);
+  for (size_t i = 0; i < a->struct_count; ++i)
+    name_bytes += a->structs[i].template_of ? IR_INSTANCE_NAME : span_bytes(a->structs[i].name);
+  for (size_t i = 0; i < a->enum_count; ++i)
+    name_bytes += a->enums[i].template_of ? IR_INSTANCE_NAME : span_bytes(a->enums[i].name);
   for (size_t i = 0; i < a->variant_count; ++i) name_bytes += span_bytes(a->variants[i].name);
   for (size_t i = 0; i < a->param_count; ++i) name_bytes += span_bytes(a->params[i].name);
   for (size_t i = 0; i < a->local_count; ++i) name_bytes += span_bytes(a->locals[i].name);
@@ -445,6 +455,14 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
         a->expressions[i].floating,   a->expressions[i].boolean,
         a->expressions[i].item_start, a->expressions[i].item_count,
         a->expressions[i].span,       a->expressions[i].wrap, 0};
+  /* Runtime integer arithmetic wraps. Sema has already rejected constant
+     overflow. Division and shift counts have their own rules. */
+  for (size_t i = 0; i < ir->expression_count; ++i) {
+    DynIrExpr *e = &ir->expressions[i];
+    if ((e->kind == DYN_EXPR_BINARY && dyn_op_wraps(e->op)) ||
+        (e->kind == DYN_EXPR_UNARY && e->op == DYN_OP_NEG))
+      e->wrap = true;
+  }
   for (size_t i = 0; i < ir->expression_count; ++i)
     if (ir->expressions[i].type == DYN_TYPE_INFER) {
       ir->expressions[i].kind = DYN_EXPR_NIL;
@@ -453,13 +471,14 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
     }
   for (size_t i = 0; i < a->item_count; ++i) ir->items[i] = (DynIrItem){a->items[i].expression, a->items[i].field_index};
   for (size_t i = 0; i < a->field_count; ++i) {
-    ir->fields[i] = (DynIrField){.name = copy_span(a->fields[i].name, source, &cursor), .type = lower_type(a, a->fields[i].type), .default_expression = a->fields[i].default_expression};
+    ir->fields[i] = (DynIrField){.name = copy_span(a->fields[i].name, source, &cursor), .type = lower_type(a, a->fields[i].type)};
   }
   for (size_t i = 0; i < a->struct_count; ++i) {
     ir->structs[i] =
-        (DynIrStruct){.name = copy_span(a->structs[i].name, source, &cursor),
+        (DynIrStruct){.name = a->structs[i].template_of ? copy_instance_name(a, DYN_TYPE_STRUCT_BASE + (DynType)i, source, &cursor)
+                                                        : copy_span(a->structs[i].name, source, &cursor),
                       .span = a->structs[i].span,
-                      .packed = a->structs[i].packed,
+                      .packed = a->structs[i].packed, .is_union = a->structs[i].is_union,
                       .is_public = a->structs[i].is_public,
                       .module_owner = a->structs[i].module_owner,
                       .field_start = a->structs[i].field_start,
@@ -469,7 +488,8 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
   }
   for (size_t i = 0; i < a->enum_count; ++i) {
     ir->enums[i] =
-        (DynIrEnum){.name = copy_span(a->enums[i].name, source, &cursor),
+        (DynIrEnum){.name = a->enums[i].template_of ? copy_instance_name(a, DYN_TYPE_ENUM_BASE + (DynType)i, source, &cursor)
+                                                    : copy_span(a->enums[i].name, source, &cursor),
                     .span = a->enums[i].span,
                     .tag_type = a->enums[i].tag_type,
                     .variant_start = a->enums[i].variant_start,
@@ -675,7 +695,7 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
     }
     DynType type = ir->expressions[left].type;
     DynExprId binary = (DynExprId)ir->expression_count;
-    ir->expressions[ir->expression_count++] = (DynIrExpr){.kind = DYN_EXPR_BINARY, .type = type, .op = st->assignment_op, .left = left, .right = st->expression, .span = st->span};
+    ir->expressions[ir->expression_count++] = (DynIrExpr){.kind = DYN_EXPR_BINARY, .type = type, .op = st->assignment_op, .wrap = dyn_op_wraps(st->assignment_op), .left = left, .right = st->expression, .span = st->span};
     st->expression = binary;
     st->assignment_op = DYN_OP_NONE;
   }

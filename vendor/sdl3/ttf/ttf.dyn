@@ -1,3 +1,4 @@
+use "std/parse" parse
 use "std/c"
 use "vendor/sdl3"
 #link("SDL3_ttf")
@@ -17,7 +18,7 @@ pub fn open_owned(path: []const u8, buffer: []u8, points: f32) FontResult {
     return FontResult{}
   }
   encoded := c.string_into(buffer, path)
-  if !encoded.ok {
+  if encoded.failure.kind != parse.Kind.Ok {
     return FontResult{}
   }
   value := native_open(encoded.value, points)

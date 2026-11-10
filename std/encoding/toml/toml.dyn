@@ -1,5 +1,5 @@
 use "std/mem" mem
-use "std/errors" errors
+use "std/parse" parse
 use "std/strings" strings
 use "std/unicode/utf8" utf8
 // TOML 1.0 tree. All parsed strings, keys and scalar lexemes are arena-owned.
@@ -8,8 +8,8 @@ use "std/unicode/utf8" utf8
 pub enum Kind { Missing, String, Integer, Float, Bool, DateTime, Array, Table }
 pub struct Value { kind: Kind, text: []const u8, boolean: bool, key: []const u8, first: *Value, last: *Value, next: *Value, defined: bool, header_defined: bool, sealed: bool, table_array: bool }
 pub const nil_value: Value = Value{}
-pub struct ParseResult { root: *const Value, kind: errors.Kind, error: isize, offset: usize, ok: bool }
-pub struct EncodeResult { value: []u8, kind: errors.Kind, error: isize, ok: bool }
+pub struct ParseResult { root: *const Value, offset: usize, failure: parse.Failure }
+pub type EncodeResult = parse.Bytes
 struct Parser { arena: *mem.Arena, source: []const u8, at: usize, failed: bool, depth: usize }
 fn copy(arena: *mem.Arena, source: []const u8) []u8 {
   result := mem.push_array(u8, arena, #len(source))
@@ -154,12 +154,12 @@ fn quoted(parser: *Parser, key: bool) []const u8 {
           return output
         }
         for i in 3..count {
-          _ = mem.append(parser.arena, &output, quote)
+          _ = mem.append_grow(parser.arena, &output, quote)
         }
         return output
       }
       for i in 0..count {
-        _ = mem.append(parser.arena, &output, quote)
+        _ = mem.append_grow(parser.arena, &output, quote)
       }
       continue
     }
@@ -168,7 +168,7 @@ fn quoted(parser: *Parser, key: bool) []const u8 {
         parser.failed = true
         return output
       }
-      _ = mem.append(parser.arena, &output, #cast(u8, 10))
+      _ = mem.append_grow(parser.arena, &output, #cast(u8, 10))
       continue
     }
     if (c < 32 && c != 9) || c == 127 {
@@ -240,7 +240,7 @@ fn quoted(parser: *Parser, key: bool) []const u8 {
           parser.failed = true
           return output
         }
-        mem.append_many(parser.arena, &output, encoded[..width])
+        mem.append_many_grow(parser.arena, &output, encoded[..width])
         continue
       }
       else if c != 34 && c != 92 {
@@ -248,7 +248,7 @@ fn quoted(parser: *Parser, key: bool) []const u8 {
         return output
       }
     }
-    _ = mem.append(parser.arena, &output, c)
+    _ = mem.append_grow(parser.arena, &output, c)
   }
   parser.failed = true
   return output
@@ -682,7 +682,7 @@ fn bounded(value: *const Value, depth: usize) bool {
 // exhausted arenas panic.
 pub fn parse(arena: *mem.Arena, source: []const u8) ParseResult {
   if !utf8.valid(source) {
-    return ParseResult{ root: &nil_value, kind: errors.Kind.InvalidInput }
+    return ParseResult{ root: &nil_value, failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   mark := mem.arena_mark(arena)
   parser := Parser{ arena: arena, source: source }
@@ -708,26 +708,26 @@ pub fn parse(arena: *mem.Arena, source: []const u8) ParseResult {
   }
   if parser.failed {
     mem.arena_rewind(arena, mark)
-    return ParseResult{ root: &nil_value, kind: errors.Kind.InvalidInput, offset: parser.at }
+    return ParseResult{ root: &nil_value, offset: parser.at, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: parser.at } }
   }
-  return ParseResult{ root: root, ok: true }
+  return ParseResult{ root: root }
 }
 fn emit_string(arena: *mem.Arena, output: *[]u8, text: []const u8) {
-  _ = mem.append(arena, output, #cast(u8, 34))
+  _ = mem.append_grow(arena, output, #cast(u8, 34))
   hexes := "0123456789abcdef"
   for c in text {
     if c == 34 || c == 92 {
-      _ = mem.append(arena, output, #cast(u8, 92))
-      _ = mem.append(arena, output, c)
+      _ = mem.append_grow(arena, output, #cast(u8, 92))
+      _ = mem.append_grow(arena, output, c)
     } else if c < 32 || c == 127 {
-      mem.append_many(arena, output, "\\u00")
-      _ = mem.append(arena, output, hexes[#cast(usize, c >> 4)])
-      _ = mem.append(arena, output, hexes[#cast(usize, c & 15)])
+      mem.append_many_grow(arena, output, "\\u00")
+      _ = mem.append_grow(arena, output, hexes[#cast(usize, c >> 4)])
+      _ = mem.append_grow(arena, output, hexes[#cast(usize, c & 15)])
     } else {
-      _ = mem.append(arena, output, c)
+      _ = mem.append_grow(arena, output, c)
     }
   }
-  _ = mem.append(arena, output, #cast(u8, 34))
+  _ = mem.append_grow(arena, output, #cast(u8, 34))
 }
 fn valid_children(current: *const Value) bool {
   slow := current.first
@@ -776,33 +776,33 @@ fn emit(arena: *mem.Arena, output: *[]u8, current: *const Value, depth: usize) b
       opening = 123
       closing = 125
     }
-    _ = mem.append(arena, output, opening)
+    _ = mem.append_grow(arena, output, opening)
     child := current.first
     for child != nil {
       if current.kind == Kind.Table {
         emit_string(arena, output, child.key)
-        mem.append_many(arena, output, " = ")
+        mem.append_many_grow(arena, output, " = ")
       }
       if !emit(arena, output, child, depth + 1) {
         return false
       }
       child = child.next
       if child != nil {
-        mem.append_many(arena, output, ", ")
+        mem.append_many_grow(arena, output, ", ")
       }
     }
-    _ = mem.append(arena, output, closing)
+    _ = mem.append_grow(arena, output, closing)
   } else if current.kind == Kind.Bool {
     if current.boolean {
-      mem.append_many(arena, output, "true")
+      mem.append_many_grow(arena, output, "true")
     } else {
-      mem.append_many(arena, output, "false")
+      mem.append_many_grow(arena, output, "false")
     }
   } else {
     if current.kind == Kind.Missing || scalar_kind(current.text) != current.kind {
       return false
     }
-    mem.append_many(arena, output, current.text)
+    mem.append_many_grow(arena, output, current.text)
   }
   return true
 }
@@ -812,7 +812,7 @@ fn emit(arena: *mem.Arena, output: *[]u8, current: *const Value, depth: usize) b
 // malformed/manual trees return InvalidInput and rewind.
 pub fn encode(arena: *mem.Arena, root: *const Value) EncodeResult {
   if root == nil || root.kind != Kind.Table || !valid_children(root) {
-    return EncodeResult{ kind: errors.Kind.InvalidInput }
+    return EncodeResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   mark := mem.arena_mark(arena)
   output: []u8
@@ -820,16 +820,16 @@ pub fn encode(arena: *mem.Arena, root: *const Value) EncodeResult {
   for child != nil {
     if !utf8.valid(child.key) {
       mem.arena_rewind(arena, mark)
-      return EncodeResult{ kind: errors.Kind.InvalidInput }
+      return EncodeResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
     }
     emit_string(arena, &output, child.key)
-    mem.append_many(arena, &output, " = ")
+    mem.append_many_grow(arena, &output, " = ")
     if !emit(arena, &output, child, 0) {
       mem.arena_rewind(arena, mark)
-      return EncodeResult{ kind: errors.Kind.InvalidInput }
+      return EncodeResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
     }
-    _ = mem.append(arena, &output, #cast(u8, 10))
+    _ = mem.append_grow(arena, &output, #cast(u8, 10))
     child = child.next
   }
-  return EncodeResult{ value: output, ok: true }
+  return EncodeResult{ value: output }
 }

@@ -74,6 +74,8 @@ typedef struct {
   size_t constant_relocation_count, constant_relocation_capacity;
   bool global_static[MAX_SYMBOLS];
   bool function_live[MAX_SYMBOLS];
+  bool global_live[MAX_SYMBOLS];
+  unsigned char *expression_live; /* reachability's expression marks; null keeps all */
   double ssa_build_ms, ssa_optimize_ms, ssa_allocate_ms, ssa_emit_ms, serialization_ms;
   /* SSA preparations made ahead on worker threads, indexed by function, and
      each IR string's first index with identical contents. */
@@ -150,6 +152,8 @@ typedef struct {
   unsigned *dwarf_types; /* DynType -> DWARF type id + 1 for this object; 1 means unknown */
   size_t message_offsets[GUARD_COUNT], message_lengths[GUARD_COUNT];
   uint32_t check_origin, message_origins[GUARD_COUNT], stub_origins[GUARD_COUNT];
+  /* Debug builds name the failing statement, so its line keys messages and stubs. */
+  uint32_t check_byte, message_bytes[GUARD_COUNT], stub_bytes[GUARD_COUNT];
   /* Per function, the failure path of each runtime check without pending
      defers is emitted once; later checks of that kind branch to it. */
   size_t guard_stubs[GUARD_COUNT];
@@ -417,6 +421,64 @@ static void normalize(BackendContext *ctx, DynType t) {
   t=storage_type(ctx->active_ir,t);
   isa_extend(ctx, integer_bits(t), signed_scalar(t));
 }
+/* Exclusive range of a float cast: values in [low, high) truncate into the
+   type, for both float widths, since every bound is a power of two or zero. */
+static uint64_t float_power_bits(bool f32, unsigned power, bool negative) {
+  if (f32) return (uint64_t)(127 + power) << 23 | (uint64_t)negative << 31;
+  return (uint64_t)(1023 + power) << 52 | (uint64_t)negative << 63;
+}
+static uint64_t float_cast_low(bool f32, DynType to) {
+  return signed_scalar(to) ? float_power_bits(f32, integer_bits(to) - 1, true) : 0;
+}
+static uint64_t float_cast_high(bool f32, DynType to) {
+  return float_power_bits(f32, integer_bits(to) - (signed_scalar(to) ? 1 : 0), false);
+}
+static uint64_t integer_minimum(DynType to) {
+  return signed_scalar(to) ? ~UINT64_C(0) << (integer_bits(to) - 1) : 0;
+}
+static uint64_t integer_maximum(DynType to) {
+  unsigned bits = integer_bits(to) - (signed_scalar(to) ? 1 : 0);
+  return bits == 64 ? UINT64_MAX : (UINT64_C(1) << bits) - 1;
+}
+/* A holds float bits and receives the integer. The value stays on the stack
+   until the single pop at the end, so every path has the same stack depth. */
+static void saturating_float_to_int(BackendContext *ctx, bool f32, DynType to) {
+  isa_push(ctx, R_A);
+  isa_immediate(ctx, R_C, float_cast_low(f32, to));
+  isa_float_operands(ctx, f32); isa_float_compare(ctx, f32, DYN_OP_GE - DYN_OP_EQ);
+  isa_test(ctx, R_A);
+  size_t below = isa_branch(ctx, CC_E);
+  isa_pop(ctx, R_A); isa_push(ctx, R_A);
+  isa_immediate(ctx, R_C, float_cast_high(f32, to));
+  isa_float_operands(ctx, f32); isa_float_compare(ctx, f32, DYN_OP_LT - DYN_OP_EQ);
+  isa_test(ctx, R_A);
+  size_t above = isa_branch(ctx, CC_E);
+  isa_pop(ctx, R_A); isa_push(ctx, R_A);
+  isa_float_to_int(ctx, f32, !signed_scalar(to) && integer_bits(to) == 64);
+  size_t done_converted = isa_branch(ctx, -1);
+  isa_patch(ctx, below, ctx->text.n); isa_patch(ctx, above, ctx->text.n);
+  isa_pop(ctx, R_A); isa_push(ctx, R_A);
+  isa_immediate(ctx, R_C, 0);
+  isa_float_operands(ctx, f32); isa_float_compare(ctx, f32, DYN_OP_LT - DYN_OP_EQ);
+  isa_test(ctx, R_A);
+  size_t not_negative = isa_branch(ctx, CC_E);
+  isa_immediate(ctx, R_A, integer_minimum(to));
+  size_t done_minimum = isa_branch(ctx, -1);
+  isa_patch(ctx, not_negative, ctx->text.n);
+  isa_pop(ctx, R_A); isa_push(ctx, R_A);
+  isa_move(ctx, R_C, R_A);
+  isa_float_operands(ctx, f32); isa_float_compare(ctx, f32, 0);
+  isa_test(ctx, R_A);
+  size_t not_a_number = isa_branch(ctx, CC_E);
+  isa_immediate(ctx, R_A, integer_maximum(to));
+  size_t done_maximum = isa_branch(ctx, -1);
+  isa_patch(ctx, not_a_number, ctx->text.n);
+  isa_immediate(ctx, R_A, 0);
+  isa_patch(ctx, done_converted, ctx->text.n);
+  isa_patch(ctx, done_minimum, ctx->text.n);
+  isa_patch(ctx, done_maximum, ctx->text.n);
+  isa_pop(ctx, R_C);
+}
 static unsigned memory_bits(DynType type) {
   if (dyn_type_is_pointer(type) || dyn_type_is_function(type) || type==DYN_TYPE_RAWPTR) return backend_pointer_bits;
   return type==DYN_TYPE_F32?32:integer_bits(type);
@@ -433,8 +495,10 @@ static void store_memory(BackendContext *ctx, DynType type) {
 }
 static const char *function_name(const DynIrFunction *f) { return f->foreign ? f->link_name : f->name; }
 static void guard(BackendContext *ctx, const DynIrFunction *f, Cond success, unsigned check) {
-  if (ctx->message_offsets[check] == SIZE_MAX || ctx->message_origins[check] != ctx->check_origin) {
+  if (ctx->message_offsets[check] == SIZE_MAX || ctx->message_origins[check] != ctx->check_origin ||
+      ctx->message_bytes[check] != ctx->check_byte) {
     ctx->message_origins[check] = ctx->check_origin;
+    ctx->message_bytes[check] = ctx->check_byte;
     /* dyn_check_failed builds "runtime check failed (KIND) in NAME" from the
        name and kind << 24 | name length, so each name is stored once. */
     const DynIrFunction *origin = ctx->check_origin && ctx->check_origin <= ctx->active_ir->function_count
@@ -442,6 +506,16 @@ static void guard(BackendContext *ctx, const DynIrFunction *f, Cond success, uns
     const char *name = function_name(origin);
     size_t length = strlen(name);
     if (length > 800) length = 800;
+    char located[801];
+    if (ctx->debug_mode && ctx->debug_locations) {
+      const char *path; unsigned line, column;
+      dyn_location_get(ctx->debug_locations, ctx->debug_source, ctx->check_byte, &path, &line, &column);
+      int written = snprintf(located, sizeof(located), "%.*s at %s:%u", (int)length, name, path, line);
+      if (written > 0) {
+        name = located;
+        length = (size_t)written < sizeof(located) ? (size_t)written : sizeof(located) - 1;
+      }
+    }
     ctx->message_lengths[check] = (size_t)check << 24 | length;
     ctx->message_offsets[check] = literal(ctx, name, length);
   }
@@ -449,7 +523,8 @@ static void guard(BackendContext *ctx, const DynIrFunction *f, Cond success, uns
      Restore the fixed frame before calling the noreturn runtime: nested
      expression pushes may otherwise leave the call stack misaligned. */
   bool plain = ctx->unwinding || !ctx->defer_count;
-  if (plain && ctx->guard_stubs[check] != SIZE_MAX && ctx->stub_origins[check] == ctx->check_origin) {
+  if (plain && ctx->guard_stubs[check] != SIZE_MAX && ctx->stub_origins[check] == ctx->check_origin &&
+      ctx->stub_bytes[check] == ctx->check_byte) {
     /* x86-64 branches straight to the shared failure path on the inverse
        condition; elsewhere a success branch skips a jump to it. */
     static const signed char inverse[] = {1, 0, 3, 2, 5, 4, 7, 6, 9, 8, -1, 2};
@@ -463,7 +538,7 @@ static void guard(BackendContext *ctx, const DynIrFunction *f, Cond success, uns
     return;
   }
   size_t branch = isa_branch(ctx, success);
-  if (plain) { ctx->guard_stubs[check] = ctx->text.n; ctx->stub_origins[check] = ctx->check_origin; }
+  if (plain) { ctx->guard_stubs[check] = ctx->text.n; ctx->stub_origins[check] = ctx->check_origin; ctx->stub_bytes[check] = ctx->check_byte; }
   bool held = ctx->holding; ctx->holding = false; /* the failure path never returns */
   isa_reset_stack(ctx);
   unsigned saved_stack=ctx->stack_slots; ctx->stack_slots=0;
@@ -579,6 +654,7 @@ static bool field_offset(const DynIrProgram *ir,DynType type,uint32_t field,uint
   uint32_t *cached = ir == layout_program && (uint64_t)record->field_start+record->field_count<=ir->field_count
                      ? &layout_offsets[record->field_start+field] : NULL;
   if (cached && *cached != UINT32_MAX) { *offset=*cached; return true; }
+  if (record->is_union) { *offset=0; if (cached) *cached=0; return true; }
   uint32_t at=0;
   for (uint32_t i=0;i<=field;++i) {
     uint32_t size,alignment;
@@ -637,6 +713,7 @@ static bool array_parts(const DynIrProgram *ir,DynType type,uint32_t offset,Arra
     for (unsigned i=0;i<units;++i) out[(*count)++]=(ArrayPart){unit,offset+base+i*a};
   } else if (dyn_type_is_struct(type)) {
     const DynIrStruct *record=&ir->structs[type-DYN_TYPE_STRUCT_BASE];
+    if (record->is_union) return false; /* members overlap; copy as bytes */
     for (uint32_t i=0;i<record->field_count;++i) { uint32_t at;
       if (!field_offset(ir,type,i,&at) || !array_parts(ir,ir->fields[record->field_start+i].type,offset+at,out,count,depth+1)) return false;
     }
@@ -1076,10 +1153,8 @@ static void divide(BackendContext *ctx, const DynIrFunction *f, bool signed_oper
   isa_divide(ctx, signed_operation, remainder);
 }
 static void shift(BackendContext *ctx, const DynIrFunction *f, bool signed_operation, bool left, bool wraps, unsigned bits) {
-  /* Unsigned comparison also rejects negative signed counts. This dominates
-     the redundant narrowed-count check in LLVM's checked_integer lowering. */
-  isa_compare_small(ctx, R_C, (int)bits);
-  guard(ctx, f, CC_B, GUARD_SHIFT); /* original count is in [0, bits) */
+  /* Counts are masked to the operand width, on every target and width. */
+  isa_small_immediate(ctx, R_D, bits - 1); isa_alu(ctx, ALU_AND, R_C, R_D);
   int restore = signed_operation ? SHIFT_ARITHMETIC : SHIFT_RIGHT;
   if (!left) { isa_shift(ctx, R_A, restore); return; }
   if (!wraps) isa_move(ctx, R_D, R_A); /* preserve the original value */
@@ -1742,15 +1817,7 @@ static bool expression_value(BackendContext *ctx, const DynIrProgram *ir, const 
     DynType from=storage_type(ir,ir->expressions[e->left].type);
     if (dyn_type_is_enum(e->type)) {
       if (payload_enum(ir,e->type) || !integer_type(from) || !expression(ctx,ir,f,e->left,depth+1)) return false;
-      const DynIrEnum *en=&ir->enums[e->type-DYN_TYPE_ENUM_BASE];
-      isa_match_begin(ctx);
-      for (unsigned i=0;i<en->variant_count;++i) {
-        uint64_t tag=ir->variants[en->variant_start+i].tag; unsigned bits=integer_bits(en->tag_type);
-        if (signed_scalar(en->tag_type) && bits<64 && (tag>>(bits-1)&1)) tag|=UINT64_MAX<<bits;
-        if (signed_scalar(from)!=signed_scalar(en->tag_type) && (int64_t)tag<0) continue;
-        isa_match_tag(ctx, tag);
-      }
-      isa_match_test(ctx); guard(ctx, f, CC_NE, GUARD_ENUM); normalize(ctx,e->type); return !ctx->text.failed;
+      normalize(ctx,e->type); return !ctx->text.failed;
     }
     bool from_pointer=dyn_type_is_pointer(from)||from==DYN_TYPE_RAWPTR;
     bool to_pointer=dyn_type_is_pointer(e->type)||e->type==DYN_TYPE_RAWPTR;
@@ -1764,7 +1831,7 @@ static bool expression_value(BackendContext *ctx, const DynIrProgram *ir, const 
       return !ctx->text.failed;
     }
     if (float_integer) {
-      isa_float_to_int(ctx, from==DYN_TYPE_F32, !signed_scalar(e->type) && integer_bits(e->type)==64);
+      saturating_float_to_int(ctx, from==DYN_TYPE_F32, e->type);
       normalize(ctx, e->type); return !ctx->text.failed;
     }
     /* Pointer values use the target width, independently of integer registers.
@@ -2105,10 +2172,6 @@ static bool expression_scratch(BackendContext *ctx, const DynIrProgram *ir,DynEx
         *slots+=(size+7)/8; if (*slots>MAX_SCRATCH) return false;
         ctx->copy_offsets[argument]=0u-8*(ctx->local_words+*slots); ctx->touched_exprs[ctx->touched_expr_count++]=argument;
       }
-    if (e->kind==DYN_EXPR_STRUCT) {
-      const DynIrStruct *record=&ir->structs[e->type-DYN_TYPE_STRUCT_BASE];
-      for (uint32_t i=0;i<record->field_count;++i) if (!expression_scratch(ctx, ir,ir->fields[record->field_start+i].default_expression,depth+1,slots)) return false;
-    }
   }
   return true;
 }
@@ -2201,12 +2264,11 @@ static bool initialize(BackendContext *ctx, const DynIrProgram *ir,const DynIrFu
     } else if (value) {
       if (!dyn_type_is_struct(type) || (uint64_t)value->item_start+value->item_count>ir->item_count) return false;
       const DynIrStruct *record=&ir->structs[type-DYN_TYPE_STRUCT_BASE];
-      for (uint32_t i=0;i<record->field_count+value->item_count;++i) {
-        uint32_t field=i<record->field_count?i:ir->items[value->item_start+i-record->field_count].field_index,offset;
+      for (uint32_t i=0;i<value->item_count;++i) {
+        uint32_t field=ir->items[value->item_start+i].field_index,offset;
         if (!field_offset(ir,type,field,&offset)) return false;
         const DynIrField *definition=&ir->fields[record->field_start+field];
-        DynExprId expr=i<record->field_count?definition->default_expression:ir->items[value->item_start+i-record->field_count].expression;
-        if (expr==DYN_NO_EXPR) continue;
+        DynExprId expr=ir->items[value->item_start+i].expression;
         isa_peek_short(ctx, R_A, 0); isa_add_immediate(ctx, offset);
         if (!initialize(ctx, ir,f,definition->type,expr,depth+1)) return false;
       }
@@ -2279,6 +2341,7 @@ static bool block_statements_value(BackendContext *ctx, const DynIrProgram *ir, 
     ctx->check_origin = s->check_origin ? s->check_origin : enclosing_origin;
     if (previous) statement_scopes(ctx, ir, f, previous, previous_start);
     previous = s; previous_start = ctx->text.n;
+    if (ctx->debug_mode) ctx->check_byte = (uint32_t)s->span.start_byte;
     if (ctx->dwarf) {
       const char *path; unsigned line,column;
       dyn_location_get(ctx->debug_locations,ctx->debug_source,s->span.start_byte,&path,&line,&column);
@@ -2333,7 +2396,7 @@ static bool block_statements_value(BackendContext *ctx, const DynIrProgram *ir, 
         }
       }
       if (!jumped) {
-        if (f->is_main) isa_zero(ctx, R_A);
+        if (f->is_main && f->return_type != DYN_TYPE_I32) isa_zero(ctx, R_A);
         return_value(ctx,f->is_main?DYN_TYPE_I32:f->return_type);
       }
       reachable = false;
@@ -2385,7 +2448,7 @@ static bool block_statements_value(BackendContext *ctx, const DynIrProgram *ir, 
           load_memory(ctx, type); isa_push(ctx, R_A);
           if (!expression(ctx, ir,f,s->expression,0)) return false;
           isa_move(ctx, R_C, R_A); isa_pop(ctx, R_A);
-          DynIrExpr op={.type=type,.op=s->assignment_op,.left=s->target,.right=s->expression};
+          DynIrExpr op={.type=type,.op=s->assignment_op,.wrap=dyn_op_wraps(s->assignment_op),.left=s->target,.right=s->expression};
           if (!binary_result(ctx, ir,f,&op)) return false;
         } else if (!expression(ctx, ir,f,s->expression,0)) return false;
         isa_pop(ctx, R_11); store_memory(ctx, type); continue;
@@ -2409,7 +2472,7 @@ static bool block_statements_value(BackendContext *ctx, const DynIrProgram *ir, 
       if (s->assignment_op != DYN_OP_NONE) {
         if (s->target == DYN_NO_EXPR) return false;
         DynIrExpr operation = {.kind=DYN_EXPR_BINARY, .type=type,
-          .op=s->assignment_op, .left=s->target, .right=s->expression};
+          .op=s->assignment_op, .wrap=dyn_op_wraps(s->assignment_op), .left=s->target, .right=s->expression};
         if (!expression_value(ctx, ir, f, &operation, 0)) return false;
       } else if (s->expression == DYN_NO_EXPR && s->kind == DYN_STMT_LOCAL) {
         isa_zero(ctx, R_A);
@@ -2850,22 +2913,11 @@ static bool constant_value(BackendContext *ctx,const DynIrProgram *ir,DynType ty
   if (e->kind==DYN_EXPR_STRUCT && dyn_type_is_struct(type)) {
     const DynIrStruct *record=&ir->structs[type-DYN_TYPE_STRUCT_BASE];
     if ((uint64_t)e->item_start+e->item_count>ir->item_count) return false;
-    for (unsigned i=0;i<record->field_count+e->item_count;++i) {
-      unsigned field=i<record->field_count?i:ir->items[e->item_start+i-record->field_count].field_index; uint32_t at,n,a;
+    for (unsigned i=0;i<e->item_count;++i) {
+      unsigned field=ir->items[e->item_start+i].field_index; uint32_t at;
       if (!field_offset(ir,type,field,&at)) return false;
       const DynIrField *definition=&ir->fields[record->field_start+field];
-      DynExprId value=i<record->field_count?definition->default_expression:ir->items[e->item_start+i-record->field_count].expression;
-      if (value==DYN_NO_EXPR) continue;
-      if (!layout(ir,definition->type,&n,&a,0)) return false;
-      if (i>=record->field_count) {
-        memset(ctx->constants_data.data+offset+at,0,n);
-        for (size_t j=0;j<ctx->constant_relocation_count;) {
-          uint64_t pos=ctx->constant_relocations[j].r_offset;
-          if (pos>=offset+at && pos<offset+at+n) {
-            memmove(&ctx->constant_relocations[j],&ctx->constant_relocations[j+1],(--ctx->constant_relocation_count-j)*sizeof(*ctx->constant_relocations));
-          } else ++j;
-        }
-      }
+      DynExprId value=ir->items[e->item_start+i].expression;
       if (!constant_value(ctx,ir,definition->type,value,offset+at,depth+1)) return false;
     }
     return true;
@@ -2892,7 +2944,8 @@ static bool constant_literals(BackendContext *ctx, const DynIrProgram *ir) {
   for (size_t id = 0; id < ir->expression_count; ++id) {
     const DynIrExpr *e = &ir->expressions[id];
     uint32_t size, alignment;
-    if ((e->kind != DYN_EXPR_STRUCT && e->kind != DYN_EXPR_ARRAY) || nested[id] || !aggregate(ir, e->type) ||
+    if ((ctx->expression_live && !ctx->expression_live[id]) ||
+        (e->kind != DYN_EXPR_STRUCT && e->kind != DYN_EXPR_ARRAY) || nested[id] || !aggregate(ir, e->type) ||
         !layout(ir, e->type, &size, &alignment, 0) || size < 16 || size > 512 || alignment > 8) continue;
     size_t previous = ctx->constants_data.n, at = align8(previous), rodata = ctx->rodata.n;
     size_t relocations = ctx->constant_relocation_count;
@@ -2932,6 +2985,7 @@ static bool global_initializer(BackendContext *ctx,const DynIrProgram *ir) {
   for (size_t i=0;i<ir->global_init_count;++i) {
     uint32_t id=ir->global_init_order[i]; if (id>=ir->global_count) return false;
     const DynIrGlobal *g=&ir->globals[id];
+    if (!ctx->global_live[id]) continue;
     if (!g->foreign && !ctx->global_static[id] && !expression_scratch(ctx,ir,g->initializer,0,&slots)) return false;
   }
   ctx->frame_bytes=((slots*8+15)/16)*16; if (!ctx->frame_bytes) ctx->frame_bytes=16;
@@ -2940,7 +2994,7 @@ static bool global_initializer(BackendContext *ctx,const DynIrProgram *ir) {
   size_t done=isa_once(ctx);
   for (size_t i=0;i<ir->global_init_count;++i) {
     uint32_t id=ir->global_init_order[i]; const DynIrGlobal *g=&ir->globals[id];
-    if (g->foreign || ctx->global_static[id] || g->initializer==DYN_NO_EXPR) continue;
+    if (!ctx->global_live[id] || g->foreign || ctx->global_static[id] || g->initializer==DYN_NO_EXPR) continue;
     char name[64];
     if (!strncmp(g->name,"dyn_m",5) && strlen(g->name)>21 && g->name[21]=='_') snprintf(name,sizeof(name),"__dyn_init_%.21s",g->name);
     else snprintf(name,sizeof(name),"__dyn_init_root");
@@ -3081,9 +3135,9 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
   for (size_t i=0;i<ir->function_count;++i)
     ctx->function_symbols[i]=ctx->function_live[i]?(unsigned)ctx->runtime_base++:0;
 
-  for (size_t i=0;i<ir->global_count;++i) ctx->global_symbols[i]=(unsigned)ctx->runtime_base++;
+  for (size_t i=0;i<ir->global_count;++i) ctx->global_symbols[i]=ctx->global_live[i]?(unsigned)ctx->runtime_base++:0;
   for (size_t i=0;i<ir->global_count;++i) {
-    const DynIrGlobal *g=&ir->globals[i]; if (!g->is_const || g->foreign) continue;
+    const DynIrGlobal *g=&ir->globals[i]; if (!ctx->global_live[i] || !g->is_const || g->foreign) continue;
     uint32_t size,a; if (!layout(ir,g->type,&size,&a,0)) { dyn_location_free(&locations); return false; }
     size_t previous=ctx->constants_data.n, at=align_global(previous,g->type,size), rodata=ctx->rodata.n, relocations=ctx->constant_relocation_count;
     if (at>LIMIT || size>LIMIT-at || !reserve(&ctx->constants_data,at+size)) { dyn_location_free(&locations); return false; }
@@ -3094,8 +3148,10 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
       ctx->constants_data.n=previous; ctx->rodata.n=rodata; ctx->constant_relocation_count=relocations;
     }
   }
-  if (!constant_literals(ctx, ir)) { dyn_location_free(&locations); return false; }
-  for (size_t i=0;i<ir->global_count;++i) if (!ir->globals[i].foreign && !ctx->global_static[i] && ir->globals[i].initializer!=DYN_NO_EXPR) {
+  bool literals = constant_literals(ctx, ir);
+  free(ctx->expression_live); ctx->expression_live = NULL;
+  if (!literals) { dyn_location_free(&locations); return false; }
+  for (size_t i=0;i<ir->global_count;++i) if (ctx->global_live[i] && !ir->globals[i].foreign && !ctx->global_static[i] && ir->globals[i].initializer!=DYN_NO_EXPR) {
     ctx->initializer_symbol=(unsigned)ctx->runtime_base++;
     ctx->initializer_flag_symbol=(unsigned)ctx->runtime_base++; break;
   }
@@ -3123,7 +3179,7 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
     }
     for (size_t i=0;i<ir->global_count;++i) {
       const DynIrGlobal *g=&ir->globals[i];
-      if ((unsigned)(g->foreign||g->is_public)!=pass) continue;
+      if (!ctx->global_live[i] || (unsigned)(g->foreign||g->is_public)!=pass) continue;
       unsigned old=ctx->global_symbols[i]; ctx->global_symbols[i]=next; remap[old]=next++;
     }
     if (pass && ctx->dll_entry_symbol) {
@@ -3177,6 +3233,7 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
   }
   bool ok = false;
   for (size_t i=0;i<ir->global_count;++i) {
+    if (!ctx->global_live[i]) continue;
     const DynIrGlobal *g=&ir->globals[i]; const char *name=g->foreign?g->link_name:g->name;
     uint32_t size,alignment;
     if (!layout(ir,g->type,&size,&alignment,0)) {
@@ -3462,6 +3519,7 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
   free(data);
 done:
   ssa_pipeline_stop(ctx);
+  free(ctx->expression_live); ctx->expression_live = NULL;
   free(unwind_blob);
   if (serializing) ctx->serialization_ms += backend_timing(&source->context, &serialization);
   backend_dwarf_output_free(&debug);
@@ -3534,7 +3592,7 @@ static bool object_target_mode(const DynSource *source, const DynIrProgram *ir,
   free(ctx->strings);
   free(ctx->relocations); free(ctx->constant_relocations);
   free(ctx->frame_records); free(ctx->landing_records);
-  free(ctx);
+  free(ctx->expression_live); free(ctx);
   return ok;
 }
 static bool object_target(const DynSource *source, const DynIrProgram *ir,

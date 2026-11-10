@@ -1,15 +1,15 @@
 #target(kernel: linux)
 
 use "std/observe" observe
-use "std/errors" errors
-
+use "std/io" io
 // A borrowed directory descriptor limits file lookup through this interface.
+// Set active: true with the descriptor; a zero Directory fails with EBADF.
 // Descriptor owner keeps it open; do not close/reuse it while a capability exists.
 // This is not a sandbox for native code with unrestricted syscall access.
-pub struct Directory { descriptor: isize = -1, events: *observe.Log, resource: u64 }
-pub struct ReadResult { value: usize, kind: errors.Kind, error: isize, ok: bool }
+pub struct Directory { descriptor: isize, active: bool, events: *observe.Log, resource: u64 }
+pub type ReadResult = io.Count
 fn failure(code: isize) ReadResult {
-  return ReadResult{ kind: errors.linux(code), error: code }
+  return ReadResult{ failure: io.Failure{ kind: io.linux(code), native: code } }
 }
 struct OpenHow { flags: u64, mode: u64, resolve: u64 }
 
@@ -19,7 +19,13 @@ struct OpenHow { flags: u64, mode: u64, resolve: u64 }
 // Destination receives at most one read; partial reads are ordinary progress.
 // ENOSYS is reported on kernels lacking openat2; no insecure fallback.
 pub fn read(directory: *const Directory, path: []const u8, destination: []u8) ReadResult {
-  if directory == nil || #len(path) == 0 || #len(path) > 4095 || path[0] == '/' {
+  if directory == nil {
+    return failure(-22)
+  }
+  if !directory.active {
+    return failure(-9)
+  }
+  if #len(path) == 0 || #len(path) > 4095 || path[0] == '/' {
     return failure(-22)
   }
   name: [4096]u8 = []
@@ -58,5 +64,5 @@ pub fn read(directory: *const Directory, path: []const u8, destination: []u8) Re
   if closed < 0 {
     return failure(closed)
   }
-  return ReadResult{ value: #cast(usize, value), ok: true }
+  return ReadResult{ value: #cast(usize, value) }
 }

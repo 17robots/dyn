@@ -37,10 +37,10 @@ fn swap_extension(list: []const u8, wanted: []const u8) bool {
 // Only immediate (0) and one-refresh (1) intervals are part of this contract.
 pub fn set_swap_interval(window:*Window, interval:i32) Result {
   if window==nil || window.display==nil || window.context==nil || window.handle==0 {
-    return Result{kind:errors.Kind.InvalidState}
+    return Result{kind:io.Kind.InvalidState}
   }
   if interval!=0 && interval!=1 {
-    return Result{kind:errors.Kind.InvalidInput}
+    return Result{kind:io.Kind.InvalidInput}
   }
   saved_display:=context_error_display
   saved_seen:=context_error_seen
@@ -57,23 +57,23 @@ pub fn set_swap_interval(window:*Window, interval:i32) Result {
   // Drain old requests before attributing errors to the interval operation.
   _=sync(window.display, 0)
   context_error_seen=false
-  if !make_current(window).ok {
+  if make_current(window).kind != io.Kind.Ok {
     _=sync(window.display, 0)
-    return Result{kind:errors.Kind.System}
+    return Result{kind:io.Kind.System}
   }
   pointer:=swap_extensions(window.display, screen(window.display))
   _=sync(window.display, 0)
   if context_error_seen {
-    return Result{kind:errors.Kind.System}
+    return Result{kind:io.Kind.System}
   }
   if pointer==nil {
-    return Result{kind:errors.Kind.Unsupported}
+    return Result{kind:io.Kind.Unsupported}
   }
   length:=c.string_length(pointer, 65536)
   if length==65536 {
-    return Result{kind:errors.Kind.Capacity}
+    return Result{kind:io.Kind.Capacity}
   }
-  extensions:=pointer[..length]
+  extensions:=#slice(pointer, length)
   if swap_extension(extensions, "GLX_EXT_swap_control") {
     name:="glXSwapIntervalEXT\x00"
     apply:=#cast(fn(rawptr, usize, i32), gl_proc(&name[0]))
@@ -81,9 +81,9 @@ pub fn set_swap_interval(window:*Window, interval:i32) Result {
       apply(window.display, window.handle, interval)
       _=sync(window.display, 0)
       if context_error_seen {
-        return Result{kind:errors.Kind.System}
+        return Result{kind:io.Kind.System}
       }
-      return Result{ok:true}
+      return Result{}
     }
   }
   if swap_extension(extensions, "GLX_MESA_swap_control") {
@@ -93,9 +93,9 @@ pub fn set_swap_interval(window:*Window, interval:i32) Result {
       status:=apply(#cast(u32, interval))
       _=sync(window.display, 0)
       if status!=0 || context_error_seen {
-        return Result{kind:errors.Kind.System}
+        return Result{kind:io.Kind.System}
       }
-      return Result{ok:true}
+      return Result{}
     }
   }
   if interval==1 && swap_extension(extensions, "GLX_SGI_swap_control") {
@@ -105,14 +105,14 @@ pub fn set_swap_interval(window:*Window, interval:i32) Result {
       status:=apply(interval)
       _=sync(window.display, 0)
       if status!=0 || context_error_seen {
-        return Result{kind:errors.Kind.System}
+        return Result{kind:io.Kind.System}
       }
-      return Result{ok:true}
+      return Result{}
     }
   }
   _=sync(window.display, 0)
   if context_error_seen {
-    return Result{kind:errors.Kind.System}
+    return Result{kind:io.Kind.System}
   }
-  return Result{kind:errors.Kind.Unsupported}
+  return Result{kind:io.Kind.Unsupported}
 }

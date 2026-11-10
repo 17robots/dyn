@@ -9,9 +9,10 @@ ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 SOURCE=r'''use "std/mem"
 use "std/bytes"
-use "std/errors"
+use "std/io" errors
 use "std/encoding"
 use "std/encoding/base32" b32
+use "std/parse" parse
 use "std/encoding/base64" b64
 use "std/encoding/hex"
 use "std/encoding/json"
@@ -45,30 +46,30 @@ fn main() {
  _=mem.copy(tail,"YQ==")
  mark:=mem.arena_mark(f.arena)
  rejected:=b64.decode(f.arena,tail[..4])
- check(!rejected.ok && rejected.detail==encoding.ErrorKind.Overlap && mem.arena_mark(f.arena)==mark)
+ check(rejected.failure.kind==parse.Kind.Overlap && mem.arena_mark(f.arena)==mark)
  check(bytes.equal(tail[..4],"YQ=="))
  check(bytes.equal(b64.decode(f.arena,"aGVsbG8=").value,"hello"))
  check(bytes.equal(b32.decode(f.arena,"NBSWY3DP").value,"hello"))
  check(bytes.equal(hex.decode(f.arena,"68656c6c6f").value,"hello"))
  parsed:=json.parse(f.arena,"{\"answer\":42,\"text\":\"hello\"}")
- check(parsed.ok && json.get(i64,parsed.root,"answer")==42)
+ check(parsed.failure.kind == parse.Kind.Ok && json.get(i64,parsed.root,"answer")==42)
  chunked:=http.decode_chunked(f.arena,"5\r\nhello\r\n0\r\n\r\n")
- check(chunked.ok && bytes.equal(chunked.value,"hello"))
+ check(chunked.failure.kind == errors.Kind.Ok && bytes.equal(chunked.value,"hello"))
  packet:[46]u8=[18,52,129,128,0,1,0,1,0,0,0,0,7,101,120,97,109,112,108,101,4,116,101,115,116,0,0,1,0,1,192,12,0,1,0,1,0,0,0,1,0,4,1,2,3,4]
  answers:=dns.parse_ipv4(f.arena,packet[..],0x1234,"example.test")
- check(answers.ok && #len(answers.value)==1 && answers.value[0].a==1 && answers.value[0].d==4)
+ check(answers.failure.kind == errors.Kind.Ok && #len(answers.value)==1 && answers.value[0].a==1 && answers.value[0].d==4)
  key:[32]u8=[]
  nonce:[12]u8=[]
  sealed:=aead.seal(f.arena,aead.Cipher.Aes256Gcm,"hello","",key[..],nonce[..])
- check(sealed.ok)
+ check(sealed.failure.kind == parse.Kind.Ok)
  opened:=aead.open(f.arena,aead.Cipher.Aes256Gcm,sealed.value.ciphertext,sealed.value.tag,"",key[..],nonce[..])
- check(opened.ok && bytes.equal(opened.value,"hello"))
+ check(opened.valid && bytes.equal(opened.value,"hello"))
  PROCESS_CASE
  intact(f)
 }
 '''
 def main():
-    source=SOURCE.replace('PROCESS_CASE', 'arguments:[3][]const u8=["/bin/sh","-c","printf chain"]\n captured:=process.capture(f.arena,"/bin/sh",arguments[..],process.Options{},process.CaptureOptions{timeout_milliseconds:2000})\n check(captured.ok && captured.exit.code==0 && bytes.equal(captured.output,"chain"))' if sys.platform=='linux' else '_=process.Options{}')
+    source=SOURCE.replace('PROCESS_CASE', 'arguments:[3][]const u8=["/bin/sh","-c","printf chain"]\n captured:=process.capture(f.arena,"/bin/sh",arguments[..],process.Options{},process.CaptureOptions{timeout_milliseconds:2000})\n check(captured.failure.kind == errors.Kind.Ok && captured.exit.code==0 && bytes.equal(captured.output,"chain"))' if sys.platform=='linux' else '_=process.Options{}')
     with tempfile.TemporaryDirectory(prefix='dyn-chain-producers-') as temporary:
         project=Path(temporary)
         (project/'main.dyn').write_text(source)

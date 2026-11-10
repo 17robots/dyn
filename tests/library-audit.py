@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get("DYN", ROOT / "build/dyn-release")).resolve())
 CASES = {
     'json-format': r'''
+use "std/parse" parse
 use "std/encoding/json" json
 use "std/mem" memory
 use "std/fmt" fmt
@@ -29,7 +30,7 @@ fn main() {
     written:=json.write_string(encoded_arena,control[..])
     if #len(written)==0 { #panic("control escape") }
     parsed:=json.parse(arena,written)
-    if !parsed.ok || #len(parsed.root.text)!=1 || parsed.root.text[0]!=control[0] { #panic("control roundtrip") }
+    if parsed.failure.kind != parse.Kind.Ok || #len(parsed.root.text)!=1 || parsed.root.text[0]!=control[0] { #panic("control roundtrip") }
     roundtrip:[16 + memory.ArenaBufferOverhead]u8=[]
     roundtrip_arena:=memory.arena_from_buffer(roundtrip[..])
     if !bytes.equal(json.encode(roundtrip_arena,parsed.root),written) { #panic("node encode") }
@@ -40,7 +41,7 @@ fn main() {
   for i in 0..1000 { _=memory.copy(source[1+i*6..],"\\u0061") }
   source[6001]='"'
   parsed:=json.parse(arena,source[..])
-  if !parsed.ok || #len(parsed.root.text)!=1000 || memory.arena_used(arena)!=#sizeof(json.Value)+1000 { #panic("retained string size") }
+  if parsed.failure.kind != parse.Kind.Ok || #len(parsed.root.text)!=1000 || memory.arena_used(arena)!=#sizeof(json.Value)+1000 { #panic("retained string size") }
   for byte in parsed.root.text { if byte!='a' { #panic("rewind changed retained bytes") } }
   expect_decimal(4503599627370497.0,0,"4503599627370497")
   expect_decimal(9007199254740991.0,0,"9007199254740991")

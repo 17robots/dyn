@@ -126,8 +126,29 @@ static int prepare_parallel(DynSources *out, bool quiet) {
   free(prepared);
   return result;
 }
+/* Set by `dyn run file.dyn`: in that directory, load only that file. */
+static const char *single_directory, *single_name;
+void dyn_sources_single_file(const char *directory, const char *name) {
+  single_directory = directory;
+  single_name = name;
+}
 static int sources_load(const DynContext *context, const char *dir,
                         DynSources *out, bool quiet) {
+  /* A path naming one .dyn file loads that file alone, as a module of one:
+     the editor's view of `dyn run hello.dyn`. */
+  char parent[4096];
+  const char *only = NULL;
+  size_t dir_length = strlen(dir);
+  if (dir_length > 4 && !strcmp(dir + dir_length - 4, ".dyn") && !dyn_path_is_directory(dir)) {
+    const char *slash = strrchr(dir, '/');
+    if (slash && (size_t)(slash - dir) < sizeof(parent)) {
+      snprintf(parent, sizeof(parent), "%.*s", slash == dir ? 1 : (int)(slash - dir), dir);
+      only = slash + 1;
+      dir = parent;
+    }
+  }
+  bool single = only || (single_directory && !strcmp(dir, single_directory));
+  const char *single_file = only ? only : single_name;
   memset(out, 0, sizeof(*out));
   /* Budgeted and cached editor analysis share mutable context state, so
      only plain command loads parse on several threads. */
@@ -146,6 +167,7 @@ static int sources_load(const DynContext *context, const char *dir,
     size_t n = strlen(entry->d_name);
     if (n < 5 || strcmp(entry->d_name + n - 4, ".dyn") != 0)
       continue;
+    if (single && strcmp(entry->d_name, single_file)) continue;
     if (out->count == DYN_MAX_MODULE_SOURCES) {
       closedir(d);
       EARLIER(0);
@@ -371,7 +393,7 @@ int dyn_sources_merge(const DynSources *sources, const char *module_name,
   static const char reflection_prelude[] =
       "enum TypeKind { Invalid, Void, Bool, Integer, Float, Pointer, Array, "
       "Slice, Struct, Enum, Function }\n"
-      "struct TypeMember { name: []const u8, type_id: u64 }\n"
+      "struct TypeMember { name: []const u8, type_id: u64, value: u64 }\n"
       "struct TypeInfo { id: u64, kind: "
       "TypeKind, name: []const u8, size: usize, alignment: usize, "
       "element_id: u64, length: usize, member_count: usize, "

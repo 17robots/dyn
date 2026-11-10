@@ -107,7 +107,9 @@ int dyn_cli_parse(int argc, char **argv, DynOptions *o) {
     } else if (strcmp(a, "--debug-info") == 0) {
       o->debug_info = true;
       o->debug_info_set = true;
-    } else if (strcmp(a, "--quiet") == 0)
+    } else if (strcmp(a, "--unsafe") == 0)
+      o->vet_unsafe = true;
+    else if (strcmp(a, "--quiet") == 0)
       o->quiet = true;
     else if (strcmp(a, "--verbose") == 0)
       o->verbose = true;
@@ -132,6 +134,11 @@ int dyn_cli_parse(int argc, char **argv, DynOptions *o) {
       o->no_link = true;
     else if (strcmp(a, "--shared") == 0)
       o->shared = true;
+    else if (strcmp(a, "--") == 0 && !strcmp(o->command, "run")) {
+      o->run_arguments = argv + i + 1;
+      o->run_argument_count = (size_t)(argc - i - 1);
+      break;
+    }
     else if (a[0] == '-') {
       fprintf(stderr, "error: unknown option '%s'\n", a);
       return 2;

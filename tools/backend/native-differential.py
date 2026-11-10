@@ -44,13 +44,14 @@ struct Floats { x: f32, y: f32 }
 struct Doubles { a: f64, b: f64, c: f64 }
 struct Mixed { f: f64, n: i32 }
 struct Large { a: u64, b: u64, c: u64, d: u64, e: u8 }
-enum Shape { Circle: f64, Square: i64, Point: Pair, Empty }
+enum ShapeKind { Circle, Square, Point, Empty }
+struct Shape { kind: ShapeKind, radius: f64, side: i64, point: Pair }
 fn small_make(a: u8, b: u16, c: u32) Small { return Small{ a: a, b: b, c: c } }
 fn small_sum(s: Small) u64 { return #cast(u64, s.a) + #cast(u64, s.b) + #cast(u64, s.c) }
 pub fn agg_small(a: u8, b: u16, c: u32) u64 { return small_sum(small_make(a, b, c)) }
 fn pair_swap(p: Pair) Pair { return Pair{ x: p.y, y: p.x } }
 pub fn agg_pair(a: i64, b: i64) i64 { q := pair_swap(Pair{ x: a, y: b })
-return #wrap(q.x * 3 - q.y) }
+return (q.x * 3 - q.y) }
 fn floats_scale(f: Floats, k: f32) Floats { return Floats{ x: f.x * k, y: f.y + k } }
 pub fn agg_floats(a: f32, b: f32) f32 { r := floats_scale(Floats{ x: a, y: b }, 2.0)
 return r.x - r.y }
@@ -98,26 +99,26 @@ pub fn agg_string(a: u64) u64 { text := "hello, native arm"
 part := text[a % 5..]
 return #cast(u64, part[0]) + #cast(u64, #len(part)) }
 fn shape_area(s: Shape) i64 {
-  case s {
-    Shape.Square side => { return side * side }
-    Shape.Point p => { return p.x + p.y }
-    Shape.Circle r => { return #cast(i64, (r * 3.0)) }
+  case s.kind {
+    ShapeKind.Square => { return s.side * s.side }
+    ShapeKind.Point => { return s.point.x + s.point.y }
+    ShapeKind.Circle => { return #cast(i64, (s.radius * 3.0)) }
     _ => { return -1 }
   }
 }
 pub fn agg_enum(a: i64, b: u64) i64 {
   k := b % 4
-  if k == 0 { return shape_area(Shape.Square(a % 1000)) }
-  if k == 1 { return shape_area(Shape.Point(Pair{ x: a % 50, y: 3 })) }
-  if k == 2 { return shape_area(Shape.Circle(2.5)) }
-  return shape_area(Shape.Empty)
+  if k == 0 { return shape_area(Shape{ kind: ShapeKind.Square, side: a % 1000 }) }
+  if k == 1 { return shape_area(Shape{ kind: ShapeKind.Point, point: Pair{ x: a % 50, y: 3 } }) }
+  if k == 2 { return shape_area(Shape{ kind: ShapeKind.Circle, radius: 2.5 }) }
+  return shape_area(Shape{ kind: ShapeKind.Empty })
 }
 fn any_kind(v: any) u64 {
   case v {
-    is i64 n => { return #cast(u64, (n % 100)) + 1000 }
-    is f64 n => { _ = n
+    i64 n => { return #cast(u64, (n % 100)) + 1000 }
+    f64 n => { _ = n
     return 2000 }
-    is Pair p => { return #cast(u64, (p.x % 10)) + 3000 }
+    Pair p => { return #cast(u64, (p.x % 10)) + 3000 }
     _ => { return 9 }
   }
 }
@@ -160,7 +161,7 @@ pub fn agg_globals(a: u64) u64 { table[a % 4] += a % 100
 return table[0] + table[3] + computed }
 fn apply_pair(f: fn(Pair) Pair, p: Pair) Pair { return f(p) }
 pub fn agg_indirect(a: i64, b: i64) i64 { r := apply_pair(pair_swap, Pair{ x: a, y: b })
-return #wrap(r.x - r.y) }
+return (r.x - r.y) }
 fn large_echo(l: Large) Large { return l }
 pub fn agg_large_indirect(a: u64) u64 { f := large_echo
 r := f(Large{ a: a % 1000, b: 2, c: 3, d: 4, e: 5 })
@@ -373,7 +374,7 @@ def build_program(rng, per_function):
         for combo in sorted(combos, key=str):
             locals_ = '\n'.join(f'v{k}: {t} = {v}' for k, (t, v) in enumerate(zip(types, combo)))
             call = f'{name}(' + ', '.join(f'v{k}' for k in range(len(types))) + ')'
-            body = f'_ = io.println(io.stdout(), "{{}}", {call})' if result else f'{call}\n_ = io.println(io.stdout(), "void")'
+            body = f'io.println("{{}}", {call})' if result else f'{call}\nio.println("void")'
             cases.append(f'{locals_}\n{body}')
     # Keep the dispatcher below object-format function/unwind size limits while
     # retaining every generated case. Large-frame functions remain in the corpus.
@@ -398,7 +399,7 @@ fn main() {{
   backing: [65536]u8 = []
   arena := mem.arena_from_buffer(backing[..])
   arguments := process.arguments(arena)
-  if !arguments.ok || #len(arguments.value) < 2 {{ #panic("case index required") }}
+  if arguments.failure.kind != io.Kind.Ok || #len(arguments.value) < 2 {{ #panic("case index required") }}
   if !strings.valid(u64, arguments.value[1]) {{ #panic("bad case index") }}
   index := strings.parse(u64, arguments.value[1])
   case index / 128 {{
@@ -479,7 +480,10 @@ def build(args, root, program):
 
 def outcome(status, stdout, stderr):
     """Fatal faults compare as 'crash' across hosts: a POSIX signal (negative
-    status) or a Windows NTSTATUS error such as 0xC00000FD, stack overflow."""
+    status) or a Windows NTSTATUS error. Windows ends a stack overflow with
+    0xC00000FD before the fault report can run, so that one stays apart."""
+    if status == 0xC00000FD:
+        return 'stack overflow', stdout, b''
     if isinstance(status, int) and (status < 0 or status >= 0xC0000000):
         return 'crash', stdout, b''
     return status, stdout, stderr
@@ -516,7 +520,14 @@ def compare(target, prefix, binary, expected, directory, jobs):
     native = run_cases(prefix, binary, count, directory, jobs)
     # Equal timeouts do not prove equal behavior either. Every case must finish.
     timed = [i for i in range(count) if 'timeout' in (native[i][0], expected[i][0])]
-    failures = [i for i in range(count) if native[i] != expected[i] or i in timed]
+    # Debug builds on Linux report a stack overflow as a memory fault (101);
+    # Windows terminates the process instead. Those are the same case.
+    def same(mine, theirs):
+        if mine[0] == 'stack overflow':
+            return theirs[0] in ('crash', 101) and (theirs[0] == 'crash' or theirs[2].startswith(b'memory fault')) \
+                and mine[1] == theirs[1]
+        return mine == theirs
+    failures = [i for i in range(count) if not same(native[i], expected[i]) or i in timed]
     panics = sum(1 for r in expected if r[0] == 101)
     for i in failures[:20]:
         label = 'TIMEOUT' if i in timed else 'MISMATCH'

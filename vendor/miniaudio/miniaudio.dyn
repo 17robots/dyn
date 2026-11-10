@@ -1,3 +1,4 @@
+use "std/parse" parse
 use "std/mem"
 use "std/c"
 #link("dyn_miniaudio")
@@ -56,7 +57,7 @@ pub fn play_file(engine: rawptr, path: []const u8, buffer: []u8) bool {
     return false
   }
   encoded := c.string_into(buffer, path)
-  return encoded.ok && native_play(engine, encoded.value) == 0
+  return encoded.failure.kind == parse.Kind.Ok && native_play(engine, encoded.value) == 0
 }
 // Offline engine only. Outputs interleaved stereo f32 at 48 kHz.
 pub fn mix(engine: rawptr, output: []f32) Read {
@@ -85,7 +86,7 @@ pub fn sound_create(arena: *mem.Arena, engine: rawptr, path: []const u8, buffer:
     return Context{ code: -2 }
   }
   encoded := c.string_into(buffer, path)
-  if !encoded.ok {
+  if encoded.failure.kind != parse.Kind.Ok {
     return Context{ code: -2 }
   }
   mark := mem.arena_mark(arena)

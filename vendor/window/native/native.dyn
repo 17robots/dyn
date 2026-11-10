@@ -1,3 +1,4 @@
+use "std/parse" parse
 use "std/text/edit" surrounding_edit
 use "vendor/window/events" ordered
 pub type OrderedEvent = ordered.Event
@@ -5,7 +6,7 @@ pub type EventKind = ordered.Kind
 use "std/mem" mem
 use "std/c" c
 use "std/unicode/utf8" utf8
-use "std/errors" errors
+use "std/io" io
 use "std/ui" ui
 use "std/ui/box" box
 #link("dyn_window")
@@ -19,7 +20,7 @@ pub type Composition = ordered.Composition
 // Mirrors dyn_window_desktop in window.h.
 struct Desktop { text: [256]u8, text_length: u32, keys: u32, scroll_x: f32, scroll_y: f32, scale: f32, clipboard: *const u8, clipboard_length: u32 }
 pub enum Cursor { Arrow, Text, Hand, ResizeX, ResizeY }
-pub struct Result { kind: errors.Kind, ok: bool }
+pub type Result = io.Failure
 struct Frame { width: i32, height: i32, x: i32, y: i32, flags: u32 }
 extern fn native_open "dyn_window_open"(title: *const u8, width: i32, height: i32) rawptr
 extern fn native_close "dyn_window_close"(handle: rawptr)
@@ -48,27 +49,27 @@ extern fn native_next_event "dyn_window_next_event"(handle: rawptr, event: *Orde
 extern fn native_wake "dyn_window_wake"(handle: rawptr) i32
 pub fn open(window: *Window, title: []const u8, width, height: i32) Result {
   if window.handle != nil {
-    return Result{kind:errors.Kind.InvalidState}
+    return Result{kind:io.Kind.InvalidState}
   }
   if width <= 0 || height <= 0 || #len(title) > 4095 {
-    return Result{kind:errors.Kind.InvalidInput}
+    return Result{kind:io.Kind.InvalidInput}
   }
   storage: [4096]u8 = []
   name := c.string_into(storage[..], title)
-  if !name.ok {
-    return Result{kind:errors.Kind.InvalidInput}
+  if name.failure.kind != parse.Kind.Ok {
+    return Result{kind:io.Kind.InvalidInput}
   }
   handle := native_open(name.value, width, height)
   if handle == nil {
-    return Result{kind:errors.Kind.System}
+    return Result{kind:io.Kind.System}
   }
   window.* = Window{handle:handle, width:width, height:height}
   opened := poll(window)
-  if !opened.ok {
+  if opened.kind != io.Kind.Ok {
     close(window)
     return opened
   }
-  return Result{ok:true}
+  return Result{}
 }
 pub fn close(window: *Window) {
   if window.handle != nil {
@@ -78,12 +79,12 @@ pub fn close(window: *Window) {
 }
 pub fn poll(window: *Window) Result {
   if window.handle == nil {
-    return Result{kind:errors.Kind.InvalidState}
+    return Result{kind:io.Kind.InvalidState}
   }
   previous_composition := window.composition.active != 0
   frame := Frame{}
   if native_poll(window.handle, &frame) == 0 {
-    return Result{kind:errors.Kind.System}
+    return Result{kind:io.Kind.System}
   }
   window.width = frame.width
   window.height = frame.height
@@ -94,25 +95,25 @@ pub fn poll(window: *Window) Result {
   if previous_composition || window.composition.active != 0 {
     window.desktop.keys |= 32768
   }
-  return Result{ok:true}
+  return Result{}
 }
 pub fn make_current(window: *Window) Result {
   if window.handle == nil {
-    return Result{kind:errors.Kind.InvalidState}
+    return Result{kind:io.Kind.InvalidState}
   }
   if native_current(window.handle) == 0 {
-    return Result{kind:errors.Kind.System}
+    return Result{kind:io.Kind.System}
   }
-  return Result{ok:true}
+  return Result{}
 }
 pub fn swap(window: *Window) Result {
   if window.handle == nil {
-    return Result{kind:errors.Kind.InvalidState}
+    return Result{kind:io.Kind.InvalidState}
   }
   if native_swap(window.handle) == 0 {
-    return Result{kind:errors.Kind.System}
+    return Result{kind:io.Kind.System}
   }
-  return Result{ok:true}
+  return Result{}
 }
 
 // Offers text on the clipboard; longer text is truncated to 64 KiB.
@@ -170,14 +171,14 @@ pub fn box_input(window: *const Window) box.Input {
     x: #cast(f32, window.input.x), y: #cast(f32, window.input.y), down: window.input.down,
     scroll_x: desktop.scroll_x, scroll_y: desktop.scroll_y,
     text: desktop.text[..#cast(usize, desktop.text_length)],
-    backspace: keys & 1 != 0, delete: keys & 2 != 0, left: keys & 4 != 0, right: keys & 8 != 0,
-    home: keys & 16 != 0, end: keys & 32 != 0, enter: keys & 64 != 0, escape: keys & 128 != 0,
-    tab: keys & 256 != 0, shift: keys & 512 != 0, control: keys & 16384 != 0, select_all: keys & 1024 != 0,
-    composition_handled: keys & 32768 != 0,
-    copy: keys & 2048 != 0, cut: keys & 4096 != 0, paste: keys & 8192 != 0,
+    backspace: (keys & 1) != 0, delete: (keys & 2) != 0, left: (keys & 4) != 0, right: (keys & 8) != 0,
+    home: (keys & 16) != 0, end: (keys & 32) != 0, enter: (keys & 64) != 0, escape: (keys & 128) != 0,
+    tab: (keys & 256) != 0, shift: (keys & 512) != 0, control: (keys & 16384) != 0, select_all: (keys & 1024) != 0,
+    composition_handled: (keys & 32768) != 0,
+    copy: (keys & 2048) != 0, cut: (keys & 4096) != 0, paste: (keys & 8192) != 0,
   }
   if value.paste && desktop.clipboard != nil {
-    value.clipboard = desktop.clipboard[..#cast(usize, desktop.clipboard_length)]
+    value.clipboard = #slice(desktop.clipboard, #cast(usize, desktop.clipboard_length))
   }
   value.composition_cursor = -1
   if window.composition.active != 0 && window.composition.text_length <= 256 {
@@ -194,12 +195,12 @@ pub fn next_event(window: *Window, output: *OrderedEvent) bool {
 // Thread-safe; join all wake callers before close. Wakes may coalesce.
 pub fn wake(window: *const Window) Result {
   if window.handle == nil {
-    return Result{kind:errors.Kind.InvalidState}
+    return Result{kind:io.Kind.InvalidState}
   }
   if native_wake(window.handle) == 0 {
-    return Result{kind:errors.Kind.System}
+    return Result{kind:io.Kind.System}
   }
-  return Result{ok:true}
+  return Result{}
 }
 
 // Opt-in before poll. Toggling clears queued events; disabled by default.
@@ -241,7 +242,7 @@ pub fn clipboard(window: *const Window) []const u8 {
   if text == nil {
     return ""
   }
-  return text[..#cast(usize, length)]
+  return #slice(text, #cast(usize, length))
 }
 
 pub type Surrounding = surrounding_edit.Context
@@ -249,15 +250,15 @@ pub type Surrounding = surrounding_edit.Context
 // field. The protocol copies text synchronously. Failure preserves old context.
 pub fn set_surrounding_text(window: *Window, context: Surrounding) Result {
   if window.handle == nil {
-    return Result{ kind: errors.Kind.InvalidState }
+    return Result{ kind: io.Kind.InvalidState }
   }
   checked := surrounding_edit.validate(&context)
-  if !checked.ok {
+  if checked.kind != io.Kind.Ok {
     return Result{ kind: checked.kind }
   }
   for byte in context.text {
     if byte == 0 {
-      return Result{ kind: errors.Kind.InvalidInput }
+      return Result{ kind: io.Kind.InvalidInput }
     }
   }
   empty: [1]u8 = []
@@ -271,48 +272,48 @@ pub fn set_surrounding_text(window: *Window, context: Surrounding) Result {
   }
   status := native_surrounding(window.handle, pointer, #cast(u32, #len(context.text)), #cast(u32, context.cursor), #cast(u32, context.anchor), context.token, cause)
   if status == 1 {
-    return Result{ ok: true }
+    return Result{}
   }
   if status == -1 {
-    return Result{ kind: errors.Kind.Unsupported }
+    return Result{ kind: io.Kind.Unsupported }
   }
   if status == -2 {
-    return Result{ kind: errors.Kind.Capacity }
+    return Result{ kind: io.Kind.Capacity }
   }
-  return Result{ kind: errors.Kind.InvalidState }
+  return Result{ kind: io.Kind.InvalidState }
 }
 
 fn checked_status(status: i32) Result {
   if status == 1 {
-    return Result{ok:true}
+    return Result{}
   }
   if status == -1 {
-    return Result{kind:errors.Kind.Unsupported}
+    return Result{kind:io.Kind.Unsupported}
   }
   if status == -2 {
-    return Result{kind:errors.Kind.Capacity}
+    return Result{kind:io.Kind.Capacity}
   }
   if status == -3 {
-    return Result{kind:errors.Kind.InvalidInput}
+    return Result{kind:io.Kind.InvalidInput}
   }
   if status == -4 {
-    return Result{kind:errors.Kind.InvalidState}
+    return Result{kind:io.Kind.InvalidState}
   }
-  return Result{kind:errors.Kind.System}
+  return Result{kind:io.Kind.System}
 }
 pub fn set_title(window: *Window, title: []const u8) Result {
   if window.handle == nil {
-    return Result{kind:errors.Kind.InvalidState}
+    return Result{kind:io.Kind.InvalidState}
   }
   if #len(title) > 4096 {
-    return Result{kind:errors.Kind.Capacity}
+    return Result{kind:io.Kind.Capacity}
   }
   if !utf8.valid(title) {
-    return Result{kind:errors.Kind.InvalidInput}
+    return Result{kind:io.Kind.InvalidInput}
   }
   for byte in title {
     if byte == 0 {
-      return Result{kind:errors.Kind.InvalidInput}
+      return Result{kind:io.Kind.InvalidInput}
     }
   }
   empty: [1]u8 = []
@@ -324,33 +325,33 @@ pub fn set_title(window: *Window, title: []const u8) Result {
 }
 pub fn set_size(window: *Window, width, height: i32) Result {
   if window.handle == nil {
-    return Result{kind:errors.Kind.InvalidState}
+    return Result{kind:io.Kind.InvalidState}
   }
   if width <= 0 || height <= 0 {
-    return Result{kind:errors.Kind.InvalidInput}
+    return Result{kind:io.Kind.InvalidInput}
   }
   result := checked_status(native_set_size(window.handle, width, height))
-  if !result.ok {
+  if result.kind != io.Kind.Ok {
     return result
   }
   return poll(window)
 }
 pub fn set_swap_interval(window: *Window, interval: i32) Result {
   if window.handle == nil {
-    return Result{kind:errors.Kind.InvalidState}
+    return Result{kind:io.Kind.InvalidState}
   }
   if interval < 0 {
-    return Result{kind:errors.Kind.InvalidInput}
+    return Result{kind:io.Kind.InvalidInput}
   }
   return checked_status(native_swap_interval(window.handle, interval))
 }
 // Checked publication copies all text or reports failure; no truncation.
 pub fn try_set_clipboard(window: *Window, text: []const u8) Result {
   if window.handle == nil {
-    return Result{kind:errors.Kind.InvalidState}
+    return Result{kind:io.Kind.InvalidState}
   }
   if #len(text) > 4294967295 {
-    return Result{kind:errors.Kind.Capacity}
+    return Result{kind:io.Kind.Capacity}
   }
   empty: [1]u8 = []
   pointer: *const u8 = &empty[0]
@@ -370,7 +371,7 @@ pub fn paste_pending(window: *const Window) bool {
 }
 pub fn paste_status(window: *const Window) Result {
   if window.handle == nil {
-    return Result{kind:errors.Kind.InvalidState}
+    return Result{kind:io.Kind.InvalidState}
   }
   return checked_status(native_paste_status(window.handle))
 }

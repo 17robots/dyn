@@ -34,8 +34,8 @@ fn main() {
   rectangles[1] = atlas.Rectangle{ width: 4, height: 4 }
   rectangles[2] = atlas.Rectangle{ width: 4, height: 4 }
   mark := mem.arena_mark(backing)
-  packed := atlas.pack(backing, 16, 16, rectangles[..])
-  if !packed.ok || packed.packed != 3 || mem.arena_mark(backing) != mark {
+  placed := atlas.pack(backing, 16, 16, rectangles[..])
+  if !placed.ok || placed.count != 3 || mem.arena_mark(backing) != mark {
     #panic("atlas packing")
   }
   i: usize = 0
@@ -55,7 +55,7 @@ fn main() {
     i += 1
   }
   partial := atlas.pack(backing, 4, 4, rectangles[..])
-  if partial.ok || partial.code != 0 || partial.packed != 1 {
+  if partial.ok || partial.code != 0 || partial.count != 1 {
     #panic("atlas partial fit")
   }
   rectangles[0].width = -1
@@ -92,7 +92,7 @@ fn main() {
   if image.resize(short_arena, source[..], 2, 2, destination[..], 4, 4, 4, false) || mem.arena_mark(short_arena) != mem.arena_start(short_arena) || atlas.pack(short_arena, 16, 16, rectangles[..]).code != -1 || mem.arena_mark(short_arena) != mem.arena_start(short_arena) {
     #panic("short scratch arena")
   }
-  _ = io.println(io.stdout(), "stb atlas and resize passed")
+  io.println("stb atlas and resize passed")
 }
 ''',
     'microui-sdl3': r'''use "vendor/microui" ui
@@ -100,9 +100,9 @@ use "vendor/sdl3" sdl
 use "vendor/sdl3/microui" backend
 use "std/mem"
 use "std/os/linux"
+use "std/io" io
 use "std/strings"
 use "std/time"
-use "std/io"
 fn main() {
   arena := mem.arena_create(1024 * 1024)
   defer {
@@ -180,15 +180,15 @@ fn main() {
   if smoke && !clicked {
     #panic("UI mouse click not delivered")
   }
-  _ = io.println(io.stdout(), "microui SDL rendering passed")
+  io.println("microui SDL rendering passed")
 }
 ''',
     'audio-playback': r'''use "vendor/miniaudio" audio
 use "std/mem"
 use "std/os/linux"
+use "std/io" io
 use "std/strings"
 use "std/time"
-use "std/io"
 fn main() {
   arena := mem.arena_create(2 * 1024 * 1024)
   defer {
@@ -220,10 +220,10 @@ fn main() {
   deadline := time.deadline_after(60 * time.Second)
   samples: [2048]f32 = []
   heard := false
-  if !deadline.ok { #panic("deadline clock failed") }
+  if deadline.failure.kind != io.Kind.Ok { #panic("deadline clock failed") }
   for !audio.sound_ended(sound.value) {
     deadline_status := time.deadline_expired(&deadline.value)
-    if !deadline_status.ok { #panic("deadline clock failed") }
+    if deadline_status.failure.kind != io.Kind.Ok { #panic("deadline clock failed") }
     if deadline_status.value { break }
     if offline {
       result := audio.mix(engine.value, samples[..])
@@ -246,12 +246,12 @@ fn main() {
   if audio.sound_start(sound.value) == 0 {
     #panic("closed sound accepted")
   }
-  _ = io.println(io.stdout(), "audio playback completion passed")
+  io.println("audio playback completion passed")
 }
 ''',
     'lz4': r'''use "vendor/lz4"
+use "std/io" io
 use "std/strings"
-use "std/io"
 fn main() {
   compressed: [128]u8 = []
   output: [128]u8 = []
@@ -281,12 +281,12 @@ fn main() {
   if lz4.compress_bound(lz4.MaxInput + 1) != 0 {
     #panic("oversized input accepted")
   }
-  _ = io.println(io.stdout(), "LZ4 bounded roundtrip passed")
+  io.println("LZ4 bounded roundtrip passed")
 }
 ''',
     'cgltf': r'''use "vendor/cgltf"
+use "std/io" io
 use "std/strings"
-use "std/io"
 use "std/mem"
 use "std/fs"
 use "std/os/linux"
@@ -329,8 +329,8 @@ fn main() {
   triangles: [3]u16 = []
   triangles[1] = 1
   triangles[2] = 2
-  vertex_bytes := (#cast(*const u8, &vertices[0]))[..36]
-  index_bytes := (#cast(*const u8, &triangles[0]))[..6]
+  vertex_bytes := #slice(#cast(*const u8, &vertices[0]), 36)
+  index_bytes := #slice(#cast(*const u8, &triangles[0]), 6)
   if cgltf.buffer_count(mesh.value) != 2 || !strings.equal(cgltf.buffer_uri(mesh.value, 0, 256), "vertices.bin") || cgltf.buffer_size(mesh.value, 0) != 36 || cgltf.attach_buffer(mesh.value, 0, vertex_bytes[..1]) {
     #panic("mesh resource metadata")
   }
@@ -356,7 +356,7 @@ fn main() {
   args := linux.process_arguments(backing)
   if #len(args) == 2 {
     file := fs.read_all(backing, args[1], 1024 * 1024)
-    if !file.ok {
+    if file.failure.kind != io.Kind.Ok {
       #panic("GLB read")
     }
     binary := cgltf.parse_owned(file.value)
@@ -368,7 +368,7 @@ fn main() {
       #panic("GLB accessor")
     }
   }
-  _ = io.println(io.stdout(), "cgltf embedded accessor passed")
+  io.println("cgltf embedded accessor passed")
 }
 ''',
     'box2d': r'''use "vendor/box2d" physics
@@ -443,13 +443,13 @@ fn main() {
   if !physics.body_destroy(falling) || physics.position(falling).ok || physics.body_destroy(falling) {
     #panic("stale body ID")
   }
-  _ = io.println(io.stdout(), "Box2D falling box passed")
+  io.println("Box2D falling box passed")
 }
 ''',
     'microui': r'''use "vendor/microui" ui
 use "std/mem"
+use "std/io" io
 use "std/strings"
-use "std/io"
 fn main() {
   storage := mem.arena_create(1024 * 1024)
   defer {
@@ -499,13 +499,13 @@ fn main() {
     }
     frame += 1
   }
-  _ = io.println(io.stdout(), "microui arena draw commands passed")
+  io.println("microui arena draw commands passed")
 }
 ''',
     'enet': r'''use "vendor/enet"
 use "std/time"
+use "std/io" io
 use "std/strings"
-use "std/io"
 fn main() {
   if !enet.init() {
     #panic("ENet init")
@@ -531,10 +531,10 @@ fn main() {
   }
   deadline := time.deadline_after(5 * time.Second)
   done := false
-  if !deadline.ok { #panic("deadline clock failed") }
+  if deadline.failure.kind != io.Kind.Ok { #panic("deadline clock failed") }
   for !done {
     deadline_status := time.deadline_expired(&deadline.value)
-    if !deadline_status.ok { #panic("deadline clock failed") }
+    if deadline_status.failure.kind != io.Kind.Ok { #panic("deadline clock failed") }
     if deadline_status.value { break }
     remote := enet.service(server, 0)
     if !remote.ok {
@@ -577,10 +577,10 @@ fn main() {
   server_closed := false
   client_closed := false
   deadline = time.deadline_after(5 * time.Second)
-  if !deadline.ok { #panic("deadline clock failed") }
+  if deadline.failure.kind != io.Kind.Ok { #panic("deadline clock failed") }
   for (!server_closed || !client_closed) {
     deadline_status := time.deadline_expired(&deadline.value)
-    if !deadline_status.ok { #panic("deadline clock failed") }
+    if deadline_status.failure.kind != io.Kind.Ok { #panic("deadline clock failed") }
     if deadline_status.value { break }
     server_event := enet.service(server, 0)
     client_event := enet.service(client, 0)
@@ -607,7 +607,7 @@ fn main() {
   if !server_closed || !client_closed {
     #panic("disconnect deadline")
   }
-  _ = io.println(io.stdout(), "ENet reliable loopback passed")
+  io.println("ENet reliable loopback passed")
 }
 ''',
     'miniaudio': r'''use "vendor/miniaudio" audio
@@ -626,7 +626,7 @@ fn main() {
     #panic("WAV path required")
   }
   bytes := fs.read_all(storage, args[1], 1024 * 1024)
-  if !bytes.ok {
+  if bytes.failure.kind != io.Kind.Ok {
     #panic("WAV read")
   }
   mark := mem.arena_mark(storage)
@@ -694,7 +694,7 @@ fn main() {
   if !heard {
     #panic("engine produced no audio")
   }
-  _ = io.println(io.stdout(), "miniaudio decode and offline mixing passed")
+  io.println("miniaudio decode and offline mixing passed")
 }
 ''',
     'sdl3-mixer': r'''use "vendor/sdl3/mixer"
@@ -712,7 +712,7 @@ fn main() {
     #panic("WAV path required")
   }
   bytes := fs.read_all(storage, args[1], 1024 * 1024)
-  if !bytes.ok {
+  if bytes.failure.kind != io.Kind.Ok {
     #panic("WAV read")
   }
   if !mixer.init() {
@@ -778,7 +778,7 @@ fn main() {
     #panic("mixer playback device")
   }
   defer mixer.destroy_owned(device)
-  _ = io.println(io.stdout(), "SDL_mixer offline playback passed")
+  io.println("SDL_mixer offline playback passed")
 }
 ''',
 }

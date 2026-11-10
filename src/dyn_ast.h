@@ -87,7 +87,9 @@ typedef enum {
   /* A type passed as a call argument; type holds the type. */
   DYN_EXPR_TYPE,
   /* #offsetof: integer holds the struct type, item_start/item_count the field name's byte span. Sema folds it to an integer. */
-  DYN_EXPR_OFFSET
+  DYN_EXPR_OFFSET,
+  /* #init(pointer): a statement sema rewrites before lowering. */
+  DYN_EXPR_INIT
 } DynExprKind;
 static inline bool dyn_type_is_param(DynType t) {
   return t >= DYN_TYPE_PARAM_BASE && t < DYN_TYPE_PARAM_BASE + DYN_MAX_TYPE_PARAMS;
@@ -129,8 +131,9 @@ typedef struct {
   uint64_t integer;
   double floating;
   bool boolean;
+  bool boolean_reflection; /* a #typeof(T) result: its fields are compile-time values */
   uint32_t item_start, item_count;
-  /* Set inside #wrap(...): integer +, -, *, unary - and << wrap instead of trapping on overflow. */
+  /* Set during lowering for integer +, -, *, unary - and <<. */
   bool wrap;
 } DynAstExpr;
 typedef struct {
@@ -141,17 +144,26 @@ typedef struct {
 typedef struct {
   DynSpan name;
   DynType type;
-  DynExprId default_expression;
   uint64_t offset;
+  /* name: T = value. Sema keeps an unchecked copy that each new value of
+     the struct copies again. */
+  bool has_default;
+  DynExprId default_value;
 } DynAstField;
 typedef struct {
   DynSpan span, name;
-  bool packed;
+  bool packed, is_union;
   bool is_public;
   uint64_t module_owner;
   uint32_t field_start, field_count;
   DynNameIndex field_names;
   uint64_t size, alignment;
+  /* A template is never laid out or emitted; each instance is an ordinary
+     struct. template_of is the template's id plus one. An instance whose
+     arguments still name type parameters only appears in generic signatures. */
+  bool is_template, open_instance;
+  uint32_t template_of, type_param_count;
+  DynType type_args[DYN_MAX_TYPE_PARAMS];
 } DynAstStruct;
 typedef struct {
   DynSpan name;
@@ -166,8 +178,14 @@ typedef struct {
   DynNameIndex variant_names;
   uint64_t size, alignment, payload_size, payload_alignment;
   bool has_payload;
+  /* Some variant sets its tag: Ok = 0, NoEnt = 2. Tags still increase. */
+  bool explicit_tags;
   bool is_public;
   uint64_t module_owner;
+  /* Generic enums follow generic structs: see DynAstStruct. */
+  bool is_template, open_instance;
+  uint32_t template_of, type_param_count;
+  DynType type_args[DYN_MAX_TYPE_PARAMS];
 } DynAstEnum;
 typedef struct {
   DynSpan name;
@@ -179,6 +197,10 @@ typedef struct {
   DynType type;
   DynExprId initializer;
   bool is_const, foreign, is_public;
+  /* An inferred constant built from literals adapts at each use like a
+     literal; untyped holds an unchecked copy of its initializer. */
+  bool has_untyped;
+  DynExprId untyped;
   uint64_t module_owner;
 } DynAstGlobal;
 /* Top-level #assert: condition must be a compile-time bool. */
@@ -258,7 +280,8 @@ typedef enum {
   DYN_STMT_CONTINUE,
   DYN_STMT_CASE,
   DYN_STMT_DEFER,
-  DYN_STMT_PANIC
+  DYN_STMT_PANIC,
+  DYN_STMT_ASSERT /* #assert in a body; sema checks it per instance and leaves a no-op */
 } DynStmtKind;
 typedef struct {
   DynStmtKind kind;
@@ -275,7 +298,10 @@ typedef struct {
 typedef struct {
   DynSpan name;
   DynType type;
-  bool active, is_const;
+  bool active, is_const, used, has_untyped, loop_variable;
+  DynExprId untyped;
+  /* Block nesting where the name lives; a nested block may shadow it. */
+  uint32_t depth;
   uint32_t owner_function;
 } DynAstLocal;
 typedef struct {
@@ -352,6 +378,10 @@ typedef struct {
   size_t child_count, child_capacity;
   DynAstLocal *locals;
   size_t local_count, local_capacity;
+  /* Uses of literal constants that sema expanded in place, kept so tools
+     still see which constant each use names. */
+  struct DynAstExpansion { DynExprId expression; uint32_t target; bool global; } *expansions;
+  size_t expansion_count, expansion_capacity;
   uint32_t loop_count;
   DynNameIndex struct_names, enum_names, alias_names;
   /* Generic nodes borrow the syntax trees, which outlive semantic analysis. */
@@ -366,12 +396,23 @@ typedef struct {
   DynType scope_types[DYN_MAX_TYPE_PARAMS];
   uint32_t scope_count;
   bool declaring_generic;
+  /* Until layouts run, instances only queue; later each is finished at once. */
+  bool structs_open, filling_instances;
+  uint32_t instances_filled, enums_filled;
+  DynType bind_conflict; /* the actual type a failed generic binding met */
+  const DynSource *instance_source;
+  unsigned instance_errors;
   /* Top-level declarations of every root, valid only while lowering. */
   uint32_t decl_count;
 } DynAstProgram;
 
 bool dyn_ast_lower_compact(const DynSource *, DynAstProgram *, unsigned *, const char *owner_key);
 void dyn_ast_program_free(DynAstProgram *ast);
+/* The struct type for a template and arguments, created on first use. */
+DynType dyn_ast_struct_instance(DynAstProgram *, uint32_t template_id, const DynType *args);
+DynType dyn_ast_enum_instance(DynAstProgram *, uint32_t template_id, const DynType *args);
+/* Whether a type still names a type parameter. */
+bool dyn_ast_type_is_open(DynAstProgram *, DynType);
 /* Add an instance of a generic with concrete type arguments. The body is lowered later by dyn_ast_lower_instance. Returns the function id. */
 uint32_t dyn_ast_instantiate(DynAstProgram *, const DynSource *, uint32_t generic, const DynType *args, uint32_t depth, DynSpan call, uint64_t hash);
 bool dyn_ast_lower_instance(DynAstProgram *, const DynSource *, uint32_t function, unsigned *errors);
@@ -404,4 +445,16 @@ static inline bool dyn_type_is_distinct(DynType t) {
 }
 void dyn_type_format(DynAstProgram *, DynType, const DynSource *, char *, size_t);
 
+
+/* The constant an expanded literal use names: a global or a local index. */
+static inline bool dyn_ast_expansion(const DynAstProgram *a, size_t expression, bool *global,
+                                     uint32_t *target) {
+  for (size_t i = 0; i < a->expansion_count; ++i)
+    if (a->expansions[i].expression == expression) {
+      *global = a->expansions[i].global;
+      *target = a->expansions[i].target;
+      return true;
+    }
+  return false;
+}
 #endif

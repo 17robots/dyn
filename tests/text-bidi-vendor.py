@@ -17,7 +17,7 @@ use "std/dynlib" dynlib
 use "std/mem" mem
 use "std/fs" fs
 use "std/encoding/binary" binary
-use "std/errors" errors
+use "std/io" errors
 fn check(ok:bool) { if !ok { #panic("FriBidi binding contract") } }
 fn append(out:[]u8,at:*usize,value:u32) {
  binary.store_u32_le(out[at.*..at.*+4],value)
@@ -54,7 +54,7 @@ fn save(arena:*mem.Arena,api:*const bidi.Api,text:[]const u8,base:u32,path:[]con
    append(out,&at,#cast(u32,line.value.levels[i]))
   }
  }
- check(fs.write_all(path,out[..at]).ok)
+ check(fs.write_all(path,out[..at]).failure.kind == errors.Kind.Ok)
 }
 fn fail_resolve(input:*const u32,n:i32,base:*u32,visual:*u32,lv:*i32,vl:*i32,levels:*i8) i8 {
  _=input
@@ -81,7 +81,7 @@ fn main() {
  arena:=mem.arena_create(0)
  defer mem.arena_release(arena)
  library:=dynlib.open("LIBRARY",dynlib.Now)
- check(library.ok)
+ check(library.failure.kind == errors.Kind.Ok)
  loaded:=bidi.load(library.value)
  check(loaded.ok)
  api:=loaded.api
@@ -112,7 +112,7 @@ fn main() {
  broken=api
  broken.reorder_line=fail_reorder
  check(bidi.reorder(arena,&broken,&paragraph,0,2).kind==errors.Kind.System && mem.arena_mark(arena)==mark)
- check(dynlib.close(&library.value).ok)
+ check(dynlib.close(&library.value).failure.kind == errors.Kind.Ok)
  check(paragraph.logical[1]==1488 && paragraph.starts[1]==1 && paragraph.ends[1]==3 && paragraph.levels[1]==saved_level)
 }
 '''

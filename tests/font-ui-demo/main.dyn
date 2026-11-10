@@ -1,4 +1,6 @@
 // Usage: font-ui-demo FONT.ttf OUTPUT.png. No platform font service is used.
+use "std/parse" parse
+use "std/io" io
 use "std/ui" ui
 use "std/ui/software" software
 use "std/mem" mem
@@ -18,15 +20,15 @@ fn main() {
     mem.arena_release(frame)
   }
   arguments := process.arguments(output)
-  if !arguments.ok || #len(arguments.value) != 3 {
+  if arguments.failure.kind != io.Kind.Ok || #len(arguments.value) != 3 {
     #panic("usage: font-ui-demo FONT.ttf OUTPUT.png")
   }
   bytes := fs.read_all(output, arguments.value[1], 64000000)
-  if !bytes.ok {
+  if bytes.failure.kind != io.Kind.Ok {
     #panic("cannot read font")
   }
   opened := font.open(bytes.value)
-  if !opened.ok {
+  if opened.failure.kind != parse.Kind.Ok {
     #panic("unsupported or malformed TrueType font")
   }
   codepoints: [100]u32 = []
@@ -39,10 +41,10 @@ fn main() {
   codepoints[98] = 241
   codepoints[99] = 252
   cached := font.atlas(output, &opened.value, codepoints[..], 24, 512, 256)
-  if !cached.ok {
+  if cached.failure.kind != parse.Kind.Ok {
     #panic("cannot cache font")
   }
-  context := ui.Context{}
+  context := ui.Context{ style: ui.default_style }
   viewport := ui.Rect{ width: 480, height: 240 }
   count: i32 = 2
   grid := true
@@ -68,7 +70,7 @@ fn main() {
   ui.label(&context, ui.Rect{ x: 32, y: 64, width: 416, height: 24 }, fmt.bytes(&label), context.style.accent)
   metrics := font_ui.LayoutAdapter{ atlas: &cached.value, face: &opened.value, pixels_per_em: 24 }
   positioned := layout.build(frame, "AV Café Å ñ ü Ç", font_ui.layout_font(&metrics), layout.Options{ width: 416 })
-  if !positioned.ok {
+  if positioned.failure.kind != parse.Kind.Ok {
     #panic("font text layout")
   }
   ui_text.label(&context, ui.Rect{ x: 32, y: 188, width: 416, height: 28 }, &positioned.value, context.style.foreground)
@@ -76,11 +78,11 @@ fn main() {
   pixels := mem.push_array(u8, output, #cast(usize, 480 * 240 * 4))
   surface := software.Surface{ pixels: pixels, width: 480, height: 240, stride: 480 * 4 }
   rendered := software.render(&surface, ui.first(&context), font_ui.atlas_renderer(&cached.value))
-  if !rendered.ok || count != 3 {
+  if rendered.failure.kind != io.Kind.Ok || count != 3 {
     #panic("UI demo render")
   }
   encoded := png.encode(output, pixels, 480, 240, 4)
-  if !encoded.ok || !fs.write_all(arguments.value[2], encoded.value).ok {
+  if encoded.failure.kind != parse.Kind.Ok || fs.write_all(arguments.value[2], encoded.value).failure.kind != io.Kind.Ok {
     #panic("UI demo output")
   }
 }

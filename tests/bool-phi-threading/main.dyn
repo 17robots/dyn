@@ -1,0 +1,38 @@
+fn swap_extension(list: []const u8, wanted: []const u8) bool {
+  at:usize=0
+  for at<#len(list) {
+    for at<#len(list) && list[at]==32 {
+      at+=1
+    }
+    first:=at
+    for at<#len(list) && list[at]!=32 {
+      at+=1
+    }
+    if at-first==#len(wanted) {
+      equal:=true
+      for i in 0..#len(wanted) {
+        if list[first+i]!=wanted[i] {
+          equal=false
+          break
+        }
+      }
+      if equal {
+        return true
+      }
+    }
+  }
+  return false
+}
+use "std/io"
+fn show(l: []const u8, w: []const u8) {
+  io.println("{}", swap_extension(l, w))
+}
+fn main() {
+  show("GLX_EXT_swap_control_tear GLX_MESA_swap_control_suffix XGLX_SGI_swap_control", "GLX_EXT_swap_control")
+  show("GLX_EXT_swap_control_tear GLX_MESA_swap_control_suffix XGLX_SGI_swap_control", "GLX_MESA_swap_control")
+  show("GLX_EXT_swap_control_tear GLX_MESA_swap_control_suffix XGLX_SGI_swap_control", "GLX_SGI_swap_control")
+  show("GLX_SGI_swap_control GLX_MESA_swap_control GLX_EXT_swap_control", "GLX_EXT_swap_control")
+  show("  GLX_MESA_swap_control  ", "GLX_MESA_swap_control")
+  show("GLX_SGI_swap_control", "GLX_SGI_swap_control")
+  show("", "GLX_SGI_swap_control")
+}

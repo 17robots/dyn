@@ -71,14 +71,14 @@ paired([component(1,flags=35|256),component(1,1000,0)],square+transformed(square
 paired([component(0)],[],[])
 paired([component(0,flags=35),component(1)],square,[3])
 invalid_records=[component(1,0,0,0),component(1)[:-2],component(65535),component(1,flags=3|8|64,matrix=(.5,.5)),component(1,flags=3|128,matrix=(1,0,0,1))[:-2],component(1,flags=3|256)+u16(6)+b'abc',component(1,flags=3|16)]
-for data in invalid_records: failures.append((add(header(-1,(0,0,1000,1000))+data),'InvalidInput'))
+for data in invalid_records: failures.append((add(header(-1,(0,0,1000,1000))+data),'Syntax'))
 # Invalid anchors versus unsupported phantom-point anchors.
-failures.append((add(header(-1,(0,0,1000,1000))+base+component(1,100,0,1)),'InvalidInput'))
+failures.append((add(header(-1,(0,0,1000,1000))+base+component(1,100,0,1)),'Syntax'))
 failures.append((add(header(-1,(0,0,1000,1000))+base+component(1,4,0,1)),'Unsupported'))
-cycle=len(glyphs);failures.append((add(header(-1,(0,0,1000,1000))+component(cycle)),'InvalidInput'))
+cycle=len(glyphs);failures.append((add(header(-1,(0,0,1000,1000))+component(cycle)),'Syntax'))
 first=len(glyphs)
 add(header(-1,(0,0,1000,1000))+component(first+1))
-failures.append((add(header(-1,(0,0,1000,1000))+component(first)),'InvalidInput'))
+failures.append((add(header(-1,(0,0,1000,1000))+component(first)),'Syntax'))
 previous=1
 for _ in range(18): previous=add(header(-1,(0,0,1000,1000))+component(previous))
 failures.append((previous,'Capacity'))
@@ -101,14 +101,14 @@ def fixture():
     for tag,data in tables.items(): directory+=tag.encode()+u32(0)+u32(offset)+u32(len(data));body+=data;offset+=len(data)
     return u32(0x10000)+u16(len(tables))+b'\0'*6+directory+body
 SOURCE='''use "std/font" font
+use "std/parse" parse
 use "std/mem" mem
-use "std/errors" errors
 fn check(ok: bool) { if !ok { #panic("composite contract") } }
 fn same(arena: *mem.Arena, face: *const font.Face, a, b: u16, size: u16) {
   mark := mem.arena_mark(arena)
   left := font.raster(arena, face, a, size)
   right := font.raster(arena, face, b, size)
-  check(left.ok && right.ok)
+  check(left.failure.kind == parse.Kind.Ok && right.failure.kind == parse.Kind.Ok)
   check(left.value.width == right.value.width && left.value.height == right.value.height)
   check(left.value.x_offset == right.value.x_offset && left.value.y_offset == right.value.y_offset && left.value.advance == right.value.advance)
   check(#len(left.value.pixels) == #len(right.value.pixels))
@@ -119,12 +119,12 @@ fn main() {
   arena := mem.arena_create(0)
   defer { mem.arena_release(arena) }
   parsed := font.open(data[..])
-  check(parsed.ok)
+  check(parsed.failure.kind == parse.Kind.Ok)
 '''
 for a,b in pairs:
     for size in (16,25): SOURCE+=f'  same(arena, &parsed.value, {a}, {b}, {size})\n'
 for index,kind in failures:
-    SOURCE+=f'  before_{index} := mem.arena_mark(arena)\n  check(font.raster(arena, &parsed.value, {index}, 16).kind == errors.Kind.{kind})\n  check(mem.arena_mark(arena) == before_{index})\n'
+    SOURCE+=f'  before_{index} := mem.arena_mark(arena)\n  check(font.raster(arena, &parsed.value, {index}, 16).failure.kind == parse.Kind.{kind})\n  check(mem.arena_mark(arena) == before_{index})\n'
 SOURCE+='}\n'
 with tempfile.TemporaryDirectory(prefix='dyn-composite-results-') as directory:
     work=Path(directory);data=fixture()

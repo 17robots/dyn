@@ -3,17 +3,17 @@
 // no input, so stdin reports end of input.
 extern fn console_write "dyn_console_write"(data: *const u8, size: u64)
 
-fn stdin_read(data: rawptr, destination: []u8) Result {
+fn stdin_read(data: rawptr, destination: []u8) Transfer {
   _ = data
-  return Result{ transferred: 0, error: 0, status: Status.End }
+  return Transfer{ transferred: 0, error: 0, status: Status.End }
 }
 
-fn console_writer_write(data: rawptr, source: []const u8) Result {
+fn console_writer_write(data: rawptr, source: []const u8) Transfer {
   _ = data
   if #len(source) != 0 {
     console_write(&source[0], #cast(u64, #len(source)))
   }
-  return Result{ transferred: #len(source), error: 0, status: Status.Complete }
+  return Transfer{ transferred: #len(source), error: 0, status: Status.Complete }
 }
 
 pub fn stdin() Reader {
@@ -24,4 +24,22 @@ pub fn stdout() Writer {
 }
 pub fn stderr() Writer {
   return Writer{ data: nil, write: console_writer_write }
+}
+
+// Terminal output. These ignore write failures, such as a closed pipe, so a
+// call needs no `_ =`; use print_to or println_to to check the result.
+pub fn print(template: []const u8, arguments: ...any) {
+  _ = print_arguments(stdout(), template, arguments)
+}
+
+pub fn println(template: []const u8, arguments: ...any) {
+  _ = println_arguments(stdout(), template, arguments)
+}
+
+pub fn eprint(template: []const u8, arguments: ...any) {
+  _ = print_arguments(stderr(), template, arguments)
+}
+
+pub fn eprintln(template: []const u8, arguments: ...any) {
+  _ = println_arguments(stderr(), template, arguments)
 }

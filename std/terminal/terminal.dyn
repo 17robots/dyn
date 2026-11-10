@@ -1,18 +1,17 @@
 use "std/unicode/utf8"
-use "std/errors" errors
-
+use "std/io" io
 // Saved terminal settings. The layout is private to each platform: Linux and
 // macOS store termios, Windows stores the console mode.
 pub struct State { bytes: [72]u8 }
-pub struct Size { columns: usize, rows: usize, kind: errors.Kind, error: isize, ok: bool }
+pub struct Size { columns: usize, rows: usize, failure: io.Failure }
 
-pub struct Read { value: State, kind: errors.Kind, error: isize, ok: bool }
-pub struct Result { kind: errors.Kind, error: isize, ok: bool }
+pub type Read = io.Result(State)
+pub struct Result { failure: io.Failure }
 
 // Descriptors 0, 1 and 2 are the standard streams on every platform. On
 // Windows any other value is a console handle.
 pub fn is_attached(descriptor: isize) bool {
-  return read_state(descriptor).ok
+  return read_state(descriptor).failure.kind == io.Kind.Ok
 }
 
 // Applies a small cfmakeraw equivalent: no echo, no line buffering, no signal
@@ -21,14 +20,14 @@ pub fn is_attached(descriptor: isize) bool {
 // or the change failed.
 pub fn raw(descriptor: isize) Read {
   saved := read_state(descriptor)
-  if !saved.ok {
+  if saved.failure.kind != io.Kind.Ok {
     return saved
   }
   changed := saved.value
   make_raw(descriptor, &changed)
   applied := restore(descriptor, &changed)
-  if !applied.ok {
-    return Read{ kind: applied.kind, error: applied.error }
+  if applied.failure.kind != io.Kind.Ok {
+    return Read{ failure: io.Failure{ kind: applied.failure.kind, native: applied.failure.native } }
   }
   return saved
 }
@@ -43,7 +42,7 @@ pub fn key_decode(bytes: []const u8) Key {
   }
   if bytes[0] != 27 {
     decoded := utf8.decode(bytes, 0)
-    if decoded.ok {
+    if decoded.valid {
       return Key{ kind: KeyKind.Text, codepoint: decoded.codepoint, consumed: decoded.width }
     }
     width: usize = 1

@@ -96,7 +96,7 @@ fn buffers() {
     for alignment in [1, 2, 8, 32, 256] {
       pushed := mem.arena_try_push(arena, 7, #cast(usize, alignment))
       check(pushed.ok && #cast(usize, pushed.memory) % #cast(usize, alignment) == 0, "payload over-alignment")
-      for byte in pushed.memory[..7] { check(byte == 0, "caller payload zeroed") }
+      for byte in #slice(pushed.memory, 7) { check(byte == 0, "caller payload zeroed") }
     }
     before := mem.arena_mark(arena)
     failed := mem.arena_try_push(arena, 1400, 1)
@@ -165,7 +165,7 @@ fn main() {
   chain()
   failures()
   buffers()
-  _ = io.println(io.stdout(), "ARENA CHAIN PASS")
+  io.println("ARENA CHAIN PASS")
 }
 '''
 

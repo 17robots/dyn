@@ -5,6 +5,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,11 +22,11 @@ def success_source():
             array = f'data_{n}_{byte}'
             names.append(name)
             lines += [f'{array}: [{n+3}]u8', f'''pub fn {name}(a,b,c,d,e,f,g,h:u64) u64 {{
-  held:=#wrap(a+b*3+c*5+d*7+e*11+f*13+g*17+h*19)
+  held:=(a+b*3+c*5+d*7+e*11+f*13+g*17+h*19)
   before:={array}[0]
   for i in 0..{n} {{ {array}[i]={byte} }}
   after:={array}[0]
-  return #wrap(held+a+b+c+d+e+f+g+h+#cast(u64,before)*257+#cast(u64,after))
+  return (held+a+b+c+d+e+f+g+h+#cast(u64,before)*257+#cast(u64,after))
 }}''']
             held = sum(a*b for a,b in zip(range(11,19), (1,3,5,7,11,13,17,19)))
             checks += [f'''{array}[0]=17
@@ -94,54 +95,63 @@ def main():
                                ('x86_64-windows', 'wine')]:
         if shutil.which(executable):
             targets.append((target, [executable]))
+    # Each target and emitter checks in its own directory, all at once.
+    def one(job):
+        (target, runner), mode, work = job
+        env = dict(os.environ, DYN_SDK=str(ROOT), WINEDEBUG='-all')
+        env.pop('DYN_NO_SSA', None)
+        if mode == 'tree':
+            env['DYN_NO_SSA'] = '1'
+        for name, source, names, panic, stdout in CASES:
+            (work/'main.dyn').write_text(source)
+            binary = work/('test.exe' if target.endswith('windows') else 'test')
+            build = subprocess.run([DYN, 'build', str(work), '--release', '--opt-level', '3',
+                '--opt-remarks', '--no-cache', '--quiet', '--target', target, '--output', str(binary)],
+                env=env, capture_output=True, text=True, timeout=120)
+            assert build.returncode == 0, (target, mode, name, build.stderr)
+            bulk = 'bulk byte fill' in build.stderr
+            expected = mode == 'ssa' and target.startswith('x86_64') and name == 'success'
+            assert bulk == expected, (target, mode, name, build.stderr)
+            if expected:
+                assert 'bulk byte fill 129 elements with 128' in build.stderr, build.stderr
+                for function in names:
+                    assert re.search(r'remark: '+function+r': bulk byte fill ', build.stderr), build.stderr
+                    assert re.search(r'remark: '+function+r': SSA code generation,', build.stderr), build.stderr
+                inspect = binary
+                if target.endswith('windows'):
+                    # Linked PE images omit the COFF symbol table.
+                    inspect = work/'inspect.o'
+                    subprocess.run([DYN, 'build', str(work), '--release', '--opt-level', '3',
+                        '--no-cache', '--quiet', '--target', target, '--emit-object', '--no-link',
+                        '--output', str(work/'inspect')], env=env, check=True,
+                        capture_output=True, text=True, timeout=120)
+                dis = subprocess.run(['objdump', '-d', '-Mintel', str(inspect)], check=True,
+                                     capture_output=True, text=True, timeout=15).stdout
+                functions = re.split(r'\n(?=[0-9a-f]+ <)', dis)
+                for function in names:
+                    bodies = [f for f in functions if re.match(r'[0-9a-f]+ <'+function+r'>:', f)]
+                    assert len(bodies) == 1 and 'rep stos' in bodies[0], (function, bodies)
+                    if target.endswith('windows'):
+                        assert re.search(r'\bpush\s+rdi\b', bodies[0]), bodies[0]
+                        assert re.search(r'\bpop\s+rdi\b', bodies[0]), bodies[0]
+            result = subprocess.run([*runner, str(binary)], env=env, capture_output=True,
+                                    text=True, timeout=45)
+            assert result.stdout.replace('\r\n','\n') == stdout, (target, mode, name, result)
+            if panic:
+                assert result.returncode != 0 and panic in result.stderr.lower(), (target, mode, name, result)
+            else:
+                assert result.returncode == 0, (target, mode, name, result)
+        print(f'PASS byte fill {target} {mode}: extents, bytes, live values, barriers and fallbacks', flush=True)
     with tempfile.TemporaryDirectory(prefix='dyn-byte-fill-') as temporary:
-        work = Path(temporary)
+        jobs = []
         for target, runner in targets:
             for mode in ('ssa', 'tree'):
-                env = dict(os.environ, DYN_SDK=str(ROOT), WINEDEBUG='-all')
-                env.pop('DYN_NO_SSA', None)
-                if mode == 'tree':
-                    env['DYN_NO_SSA'] = '1'
-                for name, source, names, panic, stdout in CASES:
-                    (work/'main.dyn').write_text(source)
-                    binary = work/('test.exe' if target.endswith('windows') else 'test')
-                    build = subprocess.run([DYN, 'build', str(work), '--release', '--opt-level', '3',
-                        '--opt-remarks', '--no-cache', '--quiet', '--target', target, '--output', str(binary)],
-                        env=env, capture_output=True, text=True, timeout=120)
-                    assert build.returncode == 0, (target, mode, name, build.stderr)
-                    bulk = 'bulk byte fill' in build.stderr
-                    expected = mode == 'ssa' and target.startswith('x86_64') and name == 'success'
-                    assert bulk == expected, (target, mode, name, build.stderr)
-                    if expected:
-                        assert 'bulk byte fill 129 elements with 128' in build.stderr, build.stderr
-                        for function in names:
-                            assert re.search(r'remark: '+function+r': bulk byte fill ', build.stderr), build.stderr
-                            assert re.search(r'remark: '+function+r': SSA code generation,', build.stderr), build.stderr
-                        inspect = binary
-                        if target.endswith('windows'):
-                            # Linked PE images omit the COFF symbol table.
-                            inspect = work/'inspect.o'
-                            subprocess.run([DYN, 'build', str(work), '--release', '--opt-level', '3',
-                                '--no-cache', '--quiet', '--target', target, '--emit-object', '--no-link',
-                                '--output', str(work/'inspect')], env=env, check=True,
-                                capture_output=True, text=True, timeout=120)
-                        dis = subprocess.run(['objdump', '-d', '-Mintel', str(inspect)], check=True,
-                                             capture_output=True, text=True, timeout=15).stdout
-                        functions = re.split(r'\n(?=[0-9a-f]+ <)', dis)
-                        for function in names:
-                            bodies = [f for f in functions if re.match(r'[0-9a-f]+ <'+function+r'>:', f)]
-                            assert len(bodies) == 1 and 'rep stos' in bodies[0], (function, bodies)
-                            if target.endswith('windows'):
-                                assert re.search(r'\bpush\s+rdi\b', bodies[0]), bodies[0]
-                                assert re.search(r'\bpop\s+rdi\b', bodies[0]), bodies[0]
-                    result = subprocess.run([*runner, str(binary)], env=env, capture_output=True,
-                                            text=True, timeout=45)
-                    assert result.stdout.replace('\r\n','\n') == stdout, (target, mode, name, result)
-                    if panic:
-                        assert result.returncode != 0 and panic in result.stderr.lower(), (target, mode, name, result)
-                    else:
-                        assert result.returncode == 0, (target, mode, name, result)
-                print(f'PASS byte fill {target} {mode}: extents, bytes, live values, barriers and fallbacks', flush=True)
+                work = Path(temporary)/f'{target}-{mode}'
+                work.mkdir()
+                jobs.append(((target, runner), mode, work))
+        with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
+            list(pool.map(one, jobs))
+
 
 if __name__ == '__main__':
     main()

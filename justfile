@@ -27,6 +27,10 @@ smoke: release
 test: smoke
     python3 tests/run.py
 
+# Release kernels against time budgets; run on a quiet machine.
+kernels:
+    python3 tests/kernels.py
+
 # Full regression suite against an ASan/UBSan compiler in build/sanitize.
 sanitize-test:
     # Only the compiler is instrumented: C helpers the tests build for Dyn

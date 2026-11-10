@@ -13,7 +13,7 @@ return 7 }
 fn identity(value: i32) i32 { return value }
 fn generic(value: $T) i64 { return #cast(i64, value) }
 struct Item { value: i32 }
-enum(u8) Op { None = 0, Read = 1, Write = 2 }
+enum(u8) Op { None, Read, Write }
 fn main() {
   if #cast(i64, next() + 2) * 3 != 27 || calls != 1 { #panic("evaluation") }
   if #cast(u8, 257) != 1 || generic(#cast(i16, -7)) != -7 { #panic("numeric") }
@@ -22,7 +22,7 @@ fn main() {
   if #cast(Op, #cast(u8, 2)) != Op.Write { #panic("enum") }
   storage: [2]i32 = [4, 5]
   memory: rawptr = &storage[0]
-  if #cast(*i32, memory)[..2][1] != 5 { #panic("postfix slice") }
+  if #slice(#cast(*i32, memory), 2)[1] != 5 { #panic("postfix slice") }
   item := Item{value: 9}
   erased: rawptr = &item
   if #cast(*Item, erased).value != 9 { #panic("postfix field") }

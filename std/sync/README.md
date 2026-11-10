@@ -6,7 +6,7 @@ protected predicate after a successful return:
 sync.lock(&mutex)
 for !ready {
   waited := sync.condition_wait_timeout(&condition, &mutex, 250000000)
-  if !waited.ok { break }
+  if waited.failure.kind != io.Kind.Ok { break }
   if waited.status == sync.ConditionWaitStatus.TimedOut { break }
 }
 sync.unlock(&mutex)

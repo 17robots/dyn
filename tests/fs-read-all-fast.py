@@ -7,51 +7,51 @@ SOURCE=r'''use "std/fs"
 use "std/mem"
 use "std/bytes"
 use "std/process"
-use "std/errors"
+use "std/io" errors
 fn require(value: bool, message: []const u8) { if !value { #panic(message) } }
 fn main() {
  zero := mem.arena_create(0)
  defer mem.arena_release(zero)
  missing := fs.read_all(zero,"DIR/missing",100)
- require(!missing.ok && missing.kind == errors.Kind.NotFound && mem.arena_used(zero)==0,"missing state")
+ require(missing.failure.kind != errors.Kind.Ok && missing.failure.kind == errors.Kind.NotFound && mem.arena_used(zero)==0,"missing state")
  none := fs.read_all(zero,"DIR/empty",0)
- require(none.ok && #len(none.value)==0 && mem.arena_used(zero)==0,"zero max empty")
+ require(none.failure.kind == errors.Kind.Ok && #len(none.value)==0 && mem.arena_used(zero)==0,"zero max empty")
  extra := fs.read_all(zero,"DIR/small",0)
- require(!extra.ok && extra.kind==errors.Kind.Overflow && mem.arena_used(zero)==0,"zero max overflow")
+ require(extra.failure.kind != errors.Kind.Ok && extra.failure.kind==errors.Kind.Overflow && mem.arena_used(zero)==0,"zero max overflow")
  result := fs.read_all(zero,"DIR/small",6)
- require(result.ok && bytes.equal(result.value,"abcdef"),"lazy read")
+ require(result.failure.kind == errors.Kind.Ok && bytes.equal(result.value,"abcdef"),"lazy read")
  require(mem.arena_mark(zero)==mem.arena_start(zero)+6,"exact mark")
  argv := mem.arena_create(0)
  defer mem.arena_release(argv)
  arguments := process.arguments(argv)
- require(arguments.ok && #len(arguments.value)>0,"lazy arguments")
+ require(arguments.failure.kind == errors.Kind.Ok && #len(arguments.value)>0,"lazy arguments")
  prefix := mem.push_array(u8,zero,8)
  for i in 0..8 { prefix[i]=77 }
  mark := mem.arena_mark(zero)
  overflow := fs.read_all(zero,"DIR/large",65537)
- require(!overflow.ok && overflow.kind==errors.Kind.Overflow && mem.arena_mark(zero)==mark,"limit rollback")
+ require(overflow.failure.kind != errors.Kind.Ok && overflow.failure.kind==errors.Kind.Overflow && mem.arena_mark(zero)==mark,"limit rollback")
  for byte in prefix { require(byte==77,"prefix") }
  large := fs.read_all(zero,"DIR/large",131073)
- require(large.ok && #len(large.value)==131073,"large extent")
+ require(large.failure.kind == errors.Kind.Ok && #len(large.value)==131073,"large extent")
  for i in 0..#len(large.value) { require(large.value[i]==#cast(u8,i%251),"large payload") }
  storage: [5 + mem.ArenaBufferOverhead]u8 = []
  fixed := mem.arena_from_buffer(storage[..])
  fixed.data = fixed.data[..mem.ArenaHeader + 5]
  short := fs.read_all(fixed,"DIR/small",100)
- require(!short.ok && short.kind==errors.Kind.Capacity && mem.arena_mark(fixed)== mem.arena_start(fixed),"fixed rollback")
+ require(short.failure.kind != errors.Kind.Ok && short.failure.kind==errors.Kind.Capacity && mem.arena_mark(fixed)== mem.arena_start(fixed),"fixed rollback")
  fixed_empty := mem.arena_from_buffer(storage[..])
  fixed_empty.data = fixed_empty.data[..mem.ArenaHeader]
  empty := fs.read_all(fixed_empty,"DIR/empty",100)
- require(empty.ok && #len(empty.value)==0 && fixed_empty.fixed_buffer && !fixed_empty.owns_memory,"fixed empty")
+ require(empty.failure.kind == errors.Kind.Ok && #len(empty.value)==0 && fixed_empty.fixed_buffer && !fixed_empty.owns_memory,"fixed empty")
  full := fs.read_all(fixed_empty,"DIR/small",100)
- require(!full.ok && full.kind==errors.Kind.Capacity && fixed_empty.fixed_buffer && !fixed_empty.owns_memory,"fixed empty capacity")
+ require(full.failure.kind != errors.Kind.Ok && full.failure.kind==errors.Kind.Capacity && fixed_empty.fixed_buffer && !fixed_empty.owns_memory,"fixed empty capacity")
  bounded := mem.arena_create_bounded(160,160)
  defer mem.arena_release(bounded)
  bounded_small:=fs.read_all(bounded,"DIR/small",100)
- require(bounded_small.ok && bytes.equal(bounded_small.value,"abcdef"),"bounded preferred capacity")
+ require(bounded_small.failure.kind == errors.Kind.Ok && bytes.equal(bounded_small.value,"abcdef"),"bounded preferred capacity")
  bounded_mark:=mem.arena_mark(bounded)
  bounded_large:=fs.read_all(bounded,"DIR/large",100)
- require(!bounded_large.ok && bounded_large.kind==errors.Kind.Capacity && mem.arena_mark(bounded)==bounded_mark,"bounded rollback")
+ require(bounded_large.failure.kind != errors.Kind.Ok && bounded_large.failure.kind==errors.Kind.Capacity && mem.arena_mark(bounded)==bounded_mark,"bounded rollback")
  require(bytes.equal(bounded_small.value,"abcdef"),"bounded retained payload")
  chained := mem.arena_create(160)
  defer mem.arena_release(chained)
@@ -63,15 +63,15 @@ fn main() {
  chain_mark:=mem.arena_mark(chained)
  chain_blocks:=mem.arena_snapshot(chained).blocks
  chain_empty:=fs.read_all(chained,"DIR/empty",100)
- require(chain_empty.ok && #len(chain_empty.value)==0 && mem.arena_mark(chained)==chain_mark,"chain empty")
+ require(chain_empty.failure.kind == errors.Kind.Ok && #len(chain_empty.value)==0 && mem.arena_mark(chained)==chain_mark,"chain empty")
  chain_overflow:=fs.read_all(chained,"DIR/large",65537)
- require(!chain_overflow.ok && chain_overflow.kind==errors.Kind.Overflow && mem.arena_mark(chained)==chain_mark && mem.arena_snapshot(chained).blocks==chain_blocks,"chain rollback")
+ require(chain_overflow.failure.kind != errors.Kind.Ok && chain_overflow.failure.kind==errors.Kind.Overflow && mem.arena_mark(chained)==chain_mark && mem.arena_snapshot(chained).blocks==chain_blocks,"chain rollback")
  directory_error:=fs.read_all(chained,"DIR",100)
- require(!directory_error.ok && mem.arena_mark(chained)==chain_mark && mem.arena_snapshot(chained).blocks==chain_blocks,"I/O error rollback")
+ require(directory_error.failure.kind != errors.Kind.Ok && mem.arena_mark(chained)==chain_mark && mem.arena_snapshot(chained).blocks==chain_blocks,"I/O error rollback")
  chain_small:=fs.read_all(chained,"DIR/small",6)
- require(chain_small.ok && bytes.equal(chain_small.value,"abcdef"),"chain small payload")
+ require(chain_small.failure.kind == errors.Kind.Ok && bytes.equal(chain_small.value,"abcdef"),"chain small payload")
  chain_large:=fs.read_all(chained,"DIR/large",131073)
- require(chain_large.ok && #len(chain_large.value)==131073,"chain large extent")
+ require(chain_large.failure.kind == errors.Kind.Ok && #len(chain_large.value)==131073,"chain large extent")
  for i in 0..#len(chain_large.value) { require(chain_large.value[i]==#cast(u8,i%251),"chain large payload") }
  // Another block must not move earlier output or overwrite independent data.
  tail:=mem.push_bytes_uninit(chained,4096)
@@ -85,7 +85,7 @@ fn main() {
  for *byte in fifo_prefix { byte.*=83 }
  _=mem.push_bytes_uninit(fifo_arena,17)
  pipe := fs.read_all(fifo_arena,"DIR/pipe",70003)
- require(pipe.ok && #len(pipe.value)==70003,"FIFO short reads")
+ require(pipe.failure.kind == errors.Kind.Ok && #len(pipe.value)==70003,"FIFO short reads")
  for i in 0..#len(pipe.value) { require(pipe.value[i]==#cast(u8,i%239),"FIFO payload") }
  _=mem.push_bytes_uninit(fifo_arena,4096)
  for i in 0..#len(pipe.value) { require(pipe.value[i]==#cast(u8,i%239),"FIFO output lifetime") }
@@ -94,7 +94,7 @@ fn main() {
  sized:=mem.arena_create(0)
  defer mem.arena_release(sized)
  sized_large:=fs.read_all(sized,"DIR/large",1048576)
- require(sized_large.ok && #len(sized_large.value)==131073,"sized extent")
+ require(sized_large.failure.kind == errors.Kind.Ok && #len(sized_large.value)==131073,"sized extent")
  for i in 0..#len(sized_large.value) { require(sized_large.value[i]==#cast(u8,i%251),"sized payload") }
  sized_state:=mem.arena_snapshot(sized)
  require(sized_state.used==131073 && sized_state.peak_used==131073,"sized single allocation")

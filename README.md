@@ -142,7 +142,7 @@ Create `hello/main.dyn` in your project directory:
 use "std/io"
 
 fn main() {
-  result := io.println(io.stdout(), "Hello, Dyn!")
+  result := io.println_to(io.stdout(), "Hello, Dyn!")
   if result.status == io.Status.Error { #panic("could not write output") }
 }
 ```

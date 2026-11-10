@@ -7,10 +7,10 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
-SOURCE = r'''use "std/mem"
+SOURCE = r'''use "std/parse" parse
+use "std/mem"
 use "std/strings"
 use "std/encoding/ini"
-use "std/errors"
 use "std/container/list" list
 struct Slot { free_next: *Slot, value: u64 }
 const nil_slot: Slot = Slot{}
@@ -73,16 +73,16 @@ fn main() {
   parts: [2][]const u8 = ["one", "two"]
   expect(strings.equal(strings.join(arena, parts[..], "/"), "one/two"))
   parsed := ini.parse(arena, "[window]\nwidth=80\nheight=25\n")
-  expect(parsed.ok && #len(parsed.value) == 3)
+  expect(parsed.failure.kind == parse.Kind.Ok && #len(parsed.value) == 3)
   expect(strings.equal(parsed.value[2].section, "window") && strings.equal(parsed.value[2].value, "25"))
   before := mem.arena_used(arena)
   syntax := ini.parse(arena, "x=1\ninvalid\n")
-  expect(!syntax.ok && syntax.kind == errors.Kind.InvalidInput && syntax.error == 0 && syntax.detail == ini.ErrorKind.Syntax && syntax.offset == 4 && syntax.line == 2)
+  expect(syntax.failure.kind == parse.Kind.Syntax && syntax.offset == 4 && syntax.line == 2)
   expect(mem.arena_used(arena) == before)
   tiny_storage: [mem.ArenaBufferOverhead]u8
   tiny := mem.arena_from_buffer(tiny_storage[..])
   tiny = mem.arena_from_buffer(tiny.data[..mem.ArenaHeader])
-  expect(ini.parse(tiny, "# empty").ok)
+  expect(ini.parse(tiny, "# empty").failure.kind == parse.Kind.Ok)
   expect(#len(strings.clone(tiny, "")) == 0)
   expect(mem.arena_used(tiny) == 0)
 
@@ -97,14 +97,14 @@ fn main() {
   expect(list.free_pop(&first_free, &nil_slot) == one && first_free == nil)
 
   growing := mem.arena_create_bounded(256, mem.KiB)
-  initial := mem.arena_push(growing, 32, 1)[..32]
+  initial := #slice(mem.arena_push(growing, 32, 1), 32)
   expect(initial[0] == 0 && initial[31] == 0)
   for i in 0..#len(initial) { initial[i] = 165 }
   mem.arena_reset(growing)
-  reused := mem.arena_push_uninit(growing, 32, 1)[..32]
+  reused := #slice(mem.arena_push_uninit(growing, 32, 1), 32)
   expect(reused[0] == 165 && reused[31] == 165)
   mem.arena_reset(growing)
-  cleared := mem.arena_push(growing, 32, 1)[..32]
+  cleared := #slice(mem.arena_push(growing, 32, 1), 32)
   expect(cleared[0] == 0 && cleared[31] == 0)
   expect(mem.arena_snapshot(growing).blocks == 1)
   mem.arena_release(growing)

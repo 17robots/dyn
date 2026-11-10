@@ -37,7 +37,7 @@ and [clusters](https://harfbuzz.github.io/working-with-harfbuzz-clusters.html).
 For paragraph bidi, script runs, wrapping and source cluster queries, use
 [`vendor/text/layout`](../text/layout/README.md) with a FriBidi API table.
 
-`Options.item_offset` and `item_length` select a UTF-8 byte range while retaining
+`Options.item_offset` and `item_length` (with `has_item_length` set) select a UTF-8 byte range while retaining
 the full `text` as shaping context. Length -1 means the remaining bytes. Bounds
 are checked before allocation. Returned clusters remain offsets into the full
 text, so normalize them only when exposing a run-relative API. This permits

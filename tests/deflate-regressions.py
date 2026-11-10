@@ -11,14 +11,15 @@ import zlib
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = Path(os.environ.get('DYN', ROOT / 'build' / ('dyn-release.exe' if os.name == 'nt' else 'dyn-release'))).resolve()
-SOURCE = r'''use "std/compress/deflate" deflate
+SOURCE = r'''use "std/parse" parse
+use "std/compress/deflate" deflate
 use "std/compress/gzip" gzip
 use "std/io" io
 use "std/fs" fs
 use "std/mem" memory
 fn require(ok: bool, message: []const u8) { if !ok { #panic(message) } }
 struct Source { bytes: []const u8, at: usize, chunk: usize }
-fn source_read(data: rawptr, destination: []u8) io.Result {
+fn source_read(data: rawptr, destination: []u8) io.Transfer {
   source := #cast(*Source, data)
   amount := #len(source.bytes) - source.at
   if amount > #len(destination) { amount = #len(destination) }
@@ -27,7 +28,7 @@ fn source_read(data: rawptr, destination: []u8) io.Result {
   source.at += amount
   status := io.Status.Complete
   if source.at == #len(source.bytes) { status = io.Status.End }
-  return io.Result{ transferred: amount, status: status }
+  return io.Transfer{ transferred: amount, status: status }
 }
 fn check(encoded: []const u8, expected: []const u8, wrapped: bool, corrupt: bool, chunk: usize, source_chunk: usize, history_size: usize) {
   source := Source{ bytes: encoded, chunk: source_chunk }
@@ -61,7 +62,7 @@ fn fixture(encoded_path: []const u8, expected_path: []const u8, wrapped: bool, c
   owned := memory.arena_create(4000000)
   encoded := fs.read_all(owned, encoded_path, 1000000)
   expected := fs.read_all(owned, expected_path, 1000000)
-  require(encoded.ok && expected.ok, "read fixture")
+  require(encoded.failure.kind == io.Kind.Ok && expected.failure.kind == io.Kind.Ok, "read fixture")
   chunks: [5]usize = [1, 257, 258, 33025, 65536]
   for chunk in chunks {
     check(encoded.value, expected.value, wrapped, corrupt, chunk, 7, 33026)
@@ -72,9 +73,9 @@ fn fixture(encoded_path: []const u8, expected_path: []const u8, wrapped: bool, c
   }
   if !wrapped && !corrupt {
     inflated := deflate.inflate(owned, encoded.value)
-    require(inflated.ok && #len(inflated.value) == #len(expected.value), "one-shot inflate")
+    require(inflated.failure.kind == parse.Kind.Ok && #len(inflated.value) == #len(expected.value), "one-shot inflate")
     for i in 0..#len(inflated.value) { require(inflated.value[i] == expected.value[i], "one-shot output") }
-    destination := memory.arena_push(owned, #len(expected.value), 1)[..#len(expected.value)]
+    destination := #slice(memory.arena_push(owned, #len(expected.value), 1), #len(expected.value))
     result: deflate.Result
     progressive := deflate.InflateState{}
     prefix: usize = 0
@@ -84,18 +85,18 @@ fn fixture(encoded_path: []const u8, expected_path: []const u8, wrapped: bool, c
       result = deflate.resume(&progressive, destination, encoded.value[..prefix])
       require(progressive.error == 0, "linear resume error")
     }
-    require(result.ok && result.written == #len(expected.value), "linear resume completion")
+    require(result.done && result.written == #len(expected.value), "linear resume completion")
     for i in 0..#len(destination) { require(destination[i] == expected.value[i], "linear resume output") }
     tiny: [1]u8 = []
     capacity := deflate.InflateState{}
     result = deflate.resume(&capacity, tiny[..], encoded.value)
-    require(!result.ok && capacity.error == -28, "linear output capacity")
+    require(!result.done && capacity.error == -28, "linear output capacity")
   }
   memory.arena_release(owned)
 }
 fn main() {
 CALLS
-  _ = io.println(io.stdout(), "deflate passed")
+  io.println("deflate passed")
 }
 '''
 

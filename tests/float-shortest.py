@@ -35,7 +35,7 @@ fn main() {{
     if !fmt.write_f64_shortest(&state, #bitcast(f64, bits)) {{
       #panic("shortest")
     }}
-    _ = io.println(io.stdout(), "{{}}", fmt.bytes(&state))
+    io.println("{{}}", fmt.bytes(&state))
   }}
   tiny: [3]u8 = []
   small := fmt.buffer(tiny[..])

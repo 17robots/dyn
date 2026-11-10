@@ -1,6 +1,6 @@
 // Fixed-width endian and unsigned LEB128 encoding.
 
-pub struct Decode { value: u64, consumed: usize, ok: bool }
+pub struct Decode { value: u64, consumed: usize, valid: bool }
 
 pub fn load_u16_le(source: []const u8) u16 {
   if #len(source) < 2 {
@@ -129,7 +129,7 @@ pub fn uleb128_decode(source: []const u8) Decode {
       value += #cast(u64, (byte & 127)) * factor
     }
     if byte < 128 {
-      return Decode{ value: value, consumed: i + 1, ok: true }
+      return Decode{ value: value, consumed: i + 1, valid: true }
     }
     if i < 8 {
       factor *= 128

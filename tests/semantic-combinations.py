@@ -46,12 +46,13 @@ fn main() {{
             subprocess.run(command,check=True,timeout=30)
             subprocess.run([str(output)],check=True,timeout=5)
             rows.append(dict(alias=alias,comment=bool(comment),expression=expression,release=release,cached=cached,status='passed'))
-    # Forward constants and field defaults are validated after all names resolve.
-    (root/'main.dyn').write_text('const First: i64 = Second + 1\nconst Second: i64 = #cast(i64, 41)\nstruct Defaults { value: i64 = First }\nconst Arithmetic: i64 = '+ '+'.join(['1']*40)+'\nfn main() { value := Defaults{}\nif value.value != 42 || Arithmetic != 40 { #panic("constants") } }\n')
+    # Forward constants are validated after all names resolve.
+    (root/'main.dyn').write_text('const First: i64 = Second + 1\nconst Second: i64 = #cast(i64, 41)\nstruct Holder { value: i64 }\nconst Arithmetic: i64 = '+ '+'.join(['1']*40)+'\nfn main() { value := Holder{ value: First }\nif value.value != 42 || Arithmetic != 40 { #panic("constants") } }\n')
     for release in (False,True):
         subprocess.run([DYN,'build',str(root),'--quiet','--no-cache','--output',str(root/'run')]+(['--release'] if release else []),check=True)
         subprocess.run([str(root/'run')],check=True)
-    for source in ('use "./lib" data\nconst Bad: data.Count = 1.5\nfn main() {}',
+    for source in ('struct Bad { value: i64 = 1.5 }\nfn main() {}',
+                   'use "./lib" data\nconst Bad: data.Count = 1.5\nfn main() {}',
                    'const A: i64 = B\nconst B: i64 = A\nfn main() {}',
                    'use "./lib" data\nfn main() { _ = data.Pair(i32)\n{value: 1} }',
                    'use "./lib" data\nfn f(x: data.Pair) data.Pair { return x }\nfn main() { callback: fn(i32) i32 = f\n_ = callback(1) }'):
@@ -63,11 +64,11 @@ fn main() {{
     # defer must run even though the intervening C function has no cleanup hook.
     (root/'provider.c').write_text('void invoke(void (*callback)(void)) { callback(); }\n')
     subprocess.run(['cc','-fno-stack-protector','-c',str(root/'provider.c'),'-o',str(root/'provider.o')],check=True)
-    (root/'main.dyn').write_text('use "std/io"\nextern fn invoke "invoke"(callback: fn())\nfn fails() { #panic("callback failure") }\nfn main() { defer { _ = io.println(io.stdout(),"caller cleanup") }\ninvoke(fails) }\n')
+    (root/'main.dyn').write_text('use "std/io"\nextern fn invoke "invoke"(callback: fn())\nfn fails() { #panic("callback failure") }\nfn main() { defer { io.println("caller cleanup") }\ninvoke(fails) }\n')
     for release in (False,True):
         subprocess.run([DYN,'build',str(root),'--quiet','--no-cache','--link',str(root/'provider.o'),'--output',str(root/'run')]+(['--release'] if release else []),check=True)
         r=subprocess.run([str(root/'run')],capture_output=True,text=True,timeout=5)
         assert r.returncode==101 and 'caller cleanup' in r.stdout and 'callback failure' in r.stderr,(r.returncode,r.stdout,r.stderr)
 (ROOT/'build/readiness').mkdir(parents=True,exist_ok=True)
 (ROOT/'build/readiness/semantic-combinations.json').write_text(json.dumps(rows,indent=2)+'\n')
-print(f'PASS {len(rows)} semantic combinations, eight negative check/build cases, forward constants and field defaults, foreign callback panic/defer debug/release')
+print(f'PASS {len(rows)} semantic combinations, eight negative check/build cases, forward constants, rejected field defaults, foreign callback panic/defer debug/release')

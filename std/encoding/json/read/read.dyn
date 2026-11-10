@@ -6,7 +6,7 @@
 // Arena rewind/reset/release invalidates affected nodes, text and iterators.
 // Iterator must be zero-initialized or created by iterator(); advance only
 // through next(). Copying an iterator copies its position and borrowed view.
-use "std/errors" errors
+use "std/parse" parse
 use "std/mem" memory
 use "std/strings" text
 use "std/unicode/utf8" utf8
@@ -18,15 +18,14 @@ pub const KindNumber: u8 = 3
 pub const KindString: u8 = 4
 pub const KindArray: u8 = 5
 pub const KindObject: u8 = 6
-pub enum ErrorKind { None, Syntax, TrailingData, NumberOverflow, Overlap, SizeOverflow }
-struct Cursor { source: []const u8, at: usize, error: ErrorKind }
+struct Cursor { source: []const u8, at: usize, error: parse.Kind }
 const MaximumDepth: usize = 256
 
 // Experimental read-only DOM. Inspired by compact tagged-value layouts;
 // no yyjson implementation code is copied.
 pub struct Value { tag: u64, bits: u64 }
 pub const nil_value: Value = Value{}
-pub struct ParseResult { root: *const Value, ok: bool, kind: errors.Kind, error: isize, offset: usize, detail: ErrorKind }
+pub struct ParseResult { root: *const Value, offset: usize, failure: parse.Failure }
 struct ReadParser { cursor: Cursor, buffer: []u8, values: []Value, used: usize, limit: usize, arena: *memory.Arena }
 const ReadUnsigned: u64 = 256
 const ReadSigned: u64 = 512
@@ -43,13 +42,13 @@ fn read_append(state: *ReadParser, kind: u8, bits: u64) usize {
       #panic("JSON compact node bound")
     }
     if memory.arena_try_extend(state.arena, #cast(*u8, &state.values[0]), old * 16, (capacity - old) * 16) {
-      state.values = (&state.values[0])[..capacity]
+      state.values = #slice(&state.values[0], capacity)
     }
     else {
       // Parsing retains indexes, not node pointers. Moving the complete tape
       // preserves relative subtree spans; string pointers refer to stable buffer.
       storage := memory.arena_push_uninit(state.arena, capacity * 16, 8)
-      replacement := #cast(*Value, storage)[..capacity]
+      replacement := #slice(#cast(*Value, storage), capacity)
       _ = memory.copy(replacement[..state.used], state.values[..state.used])
       state.values = replacement
     }
@@ -104,7 +103,7 @@ fn read_number(state: *ReadParser) bool {
           exact = false
         }
         else {
-          integer = #wrap(integer * 10 + n)
+          integer = integer * 10 + n
         }
       }
       at += 1
@@ -152,14 +151,14 @@ fn read_number(state: *ReadParser) bool {
     return true
   }
   if exact && negative && integer != 0 && integer <= 9223372036854775808 {
-    magnitude := #wrap(0 - integer)
+    magnitude := 0 - integer
     index := read_append(state, KindNumber, magnitude)
     state.values[index].tag |= ReadSigned
     return true
   }
   value := text.parse(f64, source[start..at])
   if value > 1.7976931348623157e308 || value < -1.7976931348623157e308 {
-    state.cursor.error = ErrorKind.NumberOverflow
+    state.cursor.error = parse.Kind.Overflow
     return false
   }
   index := read_append(state, KindNumber, #bitcast(u64, value))
@@ -171,7 +170,7 @@ fn read_number(state: *ReadParser) bool {
 // values share the same decoding, allocation and node representation.
 fn read_string_value(state: *ReadParser) bool {
   value := read_decoded_string(state)
-  if state.cursor.error != ErrorKind.None {
+  if state.cursor.error != parse.Kind.Ok {
     return false
   }
   pointer: u64 = 0
@@ -288,20 +287,20 @@ fn read_value(state: *ReadParser, depth: usize) bool {
 pub fn parse(arena: *memory.Arena, source: []const u8) ParseResult {
   mark := memory.arena_mark(arena)
   if #len(source) == 0 {
-    return ParseResult{ root: &nil_value, kind: errors.Kind.InvalidInput, detail: ErrorKind.Syntax }
+    return ParseResult{ root: &nil_value, failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   maximum := ~#cast(usize, 0)
   // Incomplete containers can consume one node per input byte before failure.
   // The smaller complete-document estimate is only an initial capacity hint.
   limit := #len(source)
   if limit > maximum / 16 || #cast(u64, #len(source)) > 0x00ffffffffffffff {
-    return ParseResult{ root: &nil_value, kind: errors.Kind.Overflow, detail: ErrorKind.SizeOverflow }
+    return ParseResult{ root: &nil_value, failure: parse.Failure{ kind: parse.Kind.Overflow, message: "input too large" } }
   }
   if memory.arena_overlaps_unallocated(arena, source) {
-    return ParseResult{ root: &nil_value, kind: errors.Kind.InvalidInput, detail: ErrorKind.Overlap }
+    return ParseResult{ root: &nil_value, failure: parse.Failure{ kind: parse.Kind.Overlap } }
   }
   copy := memory.arena_push_uninit(arena, #len(source), 1)
-  buffer := copy[..#len(source)]
+  buffer := #slice(copy, #len(source))
   _ = memory.copy(buffer, source)
   capacity := #len(source) / 2 + 1
   if capacity > 32 {
@@ -313,29 +312,27 @@ pub fn parse(arena: *memory.Arena, source: []const u8) ParseResult {
     capacity = 1
   }
   storage := memory.arena_push_uninit(arena, capacity * 16, 8)
-  values := #cast(*Value, storage)[..capacity]
+  values := #slice(#cast(*Value, storage), capacity)
   state := ReadParser{ cursor: probe, buffer: buffer, values: values, limit: limit, arena: arena }
   ok := read_value(&state, 0)
   read_skip(&state.cursor)
   if !ok || state.cursor.at != #len(source) {
     offset := state.cursor.at
-    detail := state.cursor.error
-    if detail == ErrorKind.None {
-      detail = ErrorKind.Syntax
+    kind := state.cursor.error
+    if kind == parse.Kind.Ok {
+      kind = parse.Kind.Syntax
     }
+    message: []const u8 = ""
     if ok {
-      detail = ErrorKind.TrailingData
+      kind = parse.Kind.Syntax
+      message = "trailing data"
     }
     memory.arena_rewind(arena, mark)
-    category := errors.Kind.InvalidInput
-    if detail == ErrorKind.NumberOverflow {
-      category = errors.Kind.Overflow
-    }
-    return ParseResult{ root: &nil_value, kind: category, offset: offset, detail: detail }
+    return ParseResult{ root: &nil_value, offset: offset, failure: parse.Failure{ kind: kind, offset: offset, message: message } }
   }
   unused := (#len(state.values) - state.used) * 16
   memory.arena_rewind(arena, memory.arena_mark(arena) - unused)
-  return ParseResult{ root: &state.values[0], ok: true }
+  return ParseResult{ root: &state.values[0] }
 }
 
 pub fn kind(value: *const Value) u8 {
@@ -362,7 +359,7 @@ pub fn as_text(value: *const Value) []const u8 {
   if length == 0 {
     return ""
   }
-  return #cast(*const u8, #cast(usize, value.bits))[..length]
+  return #slice(#cast(*const u8, #cast(usize, value.bits)), length)
 }
 pub fn as_f64(value: *const Value) f64 {
   if value == nil || (value.tag & 255) != #cast(u64, KindNumber) {
@@ -400,7 +397,7 @@ pub fn get(object: *const Value, key: []const u8) *const Value {
       if length == 0 {
         return value
       }
-      name := #cast(*const u8, #cast(usize, at.bits))[..length]
+      name := #slice(#cast(*const u8, #cast(usize, at.bits)), length)
       if text.equal(name, key) {
         return value
       }
@@ -612,8 +609,8 @@ fn literal(cursor: *Cursor, text: []const u8) bool {
 }
 
 fn failed_string(cursor: *Cursor) []const u8 {
-  if cursor.error == ErrorKind.None {
-    cursor.error = ErrorKind.Syntax
+  if cursor.error == parse.Kind.Ok {
+    cursor.error = parse.Kind.Syntax
   }
   return cursor.source[..0]
 }
@@ -674,7 +671,7 @@ pub fn is_missing(value: *const Value) bool {
 }
 
 pub struct Iterator { cursor: *const Value, remaining: usize, object: bool }
-pub struct Entry { value: *const Value, key: []const u8, ok: bool }
+pub struct Entry { value: *const Value, key: []const u8, found: bool }
 // @ownership Iterator and entries borrow the document's arena storage.
 // Iteration is linear; repeated at(array, index) traversal can be quadratic.
 pub fn iterator(container: *const Value) Iterator {
@@ -696,5 +693,5 @@ pub fn next(state: *Iterator) Entry {
   }
   state.cursor = read_after(value)
   state.remaining -= 1
-  return Entry{ value: value, key: key, ok: true }
+  return Entry{ value: value, key: key, found: true }
 }

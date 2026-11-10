@@ -1,6 +1,6 @@
 pub const Replacement: u32 = 65533
 
-pub struct Decode { codepoint: u32, width: usize, ok: bool }
+pub struct Decode { codepoint: u32, width: usize, valid: bool }
 
 pub fn decode(source: []const u16, offset: usize) Decode {
   if offset >= #len(source) {
@@ -8,18 +8,18 @@ pub fn decode(source: []const u16, offset: usize) Decode {
   }
   first := source[offset]
   if first < 55296 || first > 57343 {
-    return Decode{ codepoint: #cast(u32, first), width: 1, ok: true }
+    return Decode{ codepoint: #cast(u32, first), width: 1, valid: true }
   }
   if first >= 56320 || offset + 1 >= #len(source) {
-    return Decode{ codepoint: Replacement, width: 1, ok: false }
+    return Decode{ codepoint: Replacement, width: 1, valid: false }
   }
   second := source[offset + 1]
   if second < 56320 || second > 57343 {
-    return Decode{ codepoint: Replacement, width: 1, ok: false }
+    return Decode{ codepoint: Replacement, width: 1, valid: false }
   }
   high := #cast(u32, (first - 55296))
   low := #cast(u32, (second - 56320))
-  return Decode{ codepoint: 65536 + high * 1024 + low, width: 2, ok: true }
+  return Decode{ codepoint: 65536 + high * 1024 + low, width: 2, valid: true }
 }
 
 pub fn encode(destination: []u16, codepoint: u32) usize {
@@ -46,7 +46,7 @@ pub fn valid(source: []const u16) bool {
   offset: usize = 0
   for offset < #len(source) {
     decoded := decode(source, offset)
-    if !decoded.ok {
+    if !decoded.valid {
       return false
     }
     offset += decoded.width
@@ -54,7 +54,7 @@ pub fn valid(source: []const u16) bool {
   return true
 }
 
-pub struct Count { value: usize, ok: bool }
+pub struct Count { value: usize, valid: bool }
 
 // Code points in source. ok is false when source is not valid UTF-16.
 pub fn codepoint_count(source: []const u16) Count {
@@ -62,11 +62,11 @@ pub fn codepoint_count(source: []const u16) Count {
   offset: usize = 0
   for offset < #len(source) {
     decoded := decode(source, offset)
-    if !decoded.ok {
+    if !decoded.valid {
       return Count{}
     }
     offset += decoded.width
     count += 1
   }
-  return Count{ value: count, ok: true }
+  return Count{ value: count, valid: true }
 }

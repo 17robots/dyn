@@ -233,7 +233,7 @@ static void expression(Dump *d, const DynIrExpr *e) {
       break;
     case DYN_EXPR_INDEX: EX("base",e->left); EX("index",e->right); break;
     case DYN_EXPR_CONVERT: case DYN_EXPR_CAST: case DYN_EXPR_BITCAST:
-    case DYN_EXPR_LEN: EX("operand",e->left); break;
+    case DYN_EXPR_LEN: case DYN_EXPR_INIT: EX("operand",e->left); break;
     case DYN_EXPR_SIZE: case DYN_EXPR_ALIGN: case DYN_EXPR_TYPEOF:
       flag(d,"type_operand",e->boolean);
       if(e->boolean) {
@@ -267,7 +267,7 @@ static void statement(Dump *d,const DynIrStmt *s) {
       EX("value",s->expression); EX("target",s->target);
       if (s->target==DYN_NO_EXPR) LOCAL("local",s->local_id);
       op(d,"op",s->assignment_op); break;
-    case DYN_STMT_RETURN: case DYN_STMT_EXPR: case DYN_STMT_PANIC:
+    case DYN_STMT_RETURN: case DYN_STMT_EXPR: case DYN_STMT_PANIC: case DYN_STMT_ASSERT:
       EX("expression",s->expression); break;
     case DYN_STMT_IF:
       EX("condition",s->expression); BODY("body",s->body_start,s->body_count);
@@ -336,7 +336,7 @@ static void walk(Dump *d,const DynTarget *t) {
   SECTION(fields,field_count) {
     const DynIrField *f=&p->fields[i]; row(d,"field",i);
     name(d,"name",f->name,false); type(d,"type",f->type);
-    EX("default",f->default_expression); END;
+    END;
   }
   SECTION(variants,variant_count) {
     const DynIrVariant *v=&p->variants[i]; row(d,"variant",i);

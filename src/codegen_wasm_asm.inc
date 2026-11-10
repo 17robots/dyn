@@ -388,7 +388,12 @@ static void wa_body(WG *g, WB *out, WARead *r, const WSym *symbol,
                  (int64_t)bits);
     } else if (opcode == 0xfc) {
       uint64_t sub = wa_unsigned(r);
-      if (sub == 10) {
+      static const char *const saturating[] = {
+          "i32.trunc_sat_f32_s", "i32.trunc_sat_f32_u", "i32.trunc_sat_f64_s", "i32.trunc_sat_f64_u",
+          "i64.trunc_sat_f32_s", "i64.trunc_sat_f32_u", "i64.trunc_sat_f64_s", "i64.trunc_sat_f64_u"};
+      if (sub < 8) {
+        wa_print(out, "\t%s\n", saturating[sub]);
+      } else if (sub == 10) {
         if (wa_unsigned(r) || wa_unsigned(r))
           g->failed = true;
         wa_print(out, "\tmemory.copy 0, 0\n");

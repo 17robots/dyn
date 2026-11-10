@@ -1,3 +1,4 @@
+use "std/io" io
 #target(kernel: windows)
 extern fn argument_command "dyn_arguments_command"() *const u16
 struct ArgumentToken { next: usize, length: usize, ok: bool }
@@ -54,7 +55,7 @@ fn argument_token(command: []const u16, start: usize, first: bool, destination: 
       continue
     }
     decoded := utf16.decode(command, at)
-    if !decoded.ok {
+    if !decoded.valid {
       return ArgumentToken{}
     }
     width := argument_emit(destination, used, decoded.codepoint, writing)
@@ -76,17 +77,17 @@ fn argument_skip(command: []const u16, at: usize) usize {
 fn arguments_native(arena: *mem.Arena) ArgumentsResult {
   raw := argument_command()
   if raw == nil {
-    return ArgumentsResult{ kind: error_kinds.Kind.InvalidState }
+    return ArgumentsResult{ failure: io.Failure{ kind: io.Kind.InvalidState } }
   }
-  native := raw[..32767]
+  native := #slice(raw, 32767)
   length: usize = 0
   for length < 32767 && native[length] != 0 {
     length += 1
   }
   if length == 32767 {
-    return ArgumentsResult{ kind: error_kinds.Kind.Overflow }
+    return ArgumentsResult{ failure: io.Failure{ kind: io.Kind.Overflow } }
   }
-  command := raw[..length]
+  command := #slice(raw, length)
   empty: []u8
   count: usize = 0
   size: usize = 0
@@ -94,20 +95,20 @@ fn arguments_native(arena: *mem.Arena) ArgumentsResult {
   for at < length {
     token := argument_token(command, at, count == 0, empty, false)
     if !token.ok {
-      return ArgumentsResult{ kind: error_kinds.Kind.InvalidInput }
+      return ArgumentsResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
     }
     size += token.length
     count += 1
     at = argument_skip(command, token.next)
   }
   result := argument_slots(arena, count)
-  if !result.ok {
+  if result.failure.kind != io.Kind.Ok {
     return result
   }
   allocation := mem.arena_push_uninit(arena, size, 1)
   bytes := arena.data[..0]
   if size > 0 {
-    bytes = allocation[..size]
+    bytes = #slice(allocation, size)
   }
   used: usize = 0
   index: usize = 0
@@ -115,7 +116,7 @@ fn arguments_native(arena: *mem.Arena) ArgumentsResult {
   for at < length {
     copied := argument_token(command, at, index == 0, bytes[used..], true)
     if !copied.ok {
-      return ArgumentsResult{ kind: error_kinds.Kind.InvalidInput }
+      return ArgumentsResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
     }
     result.value[index] = bytes[used..used + copied.length]
     used += copied.length

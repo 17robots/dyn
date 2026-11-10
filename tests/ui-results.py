@@ -11,7 +11,7 @@ DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 SOURCE = r'''use "std/ui" ui
 use "std/ui/software" software
 use "std/mem" mem
-use "std/errors" errors
+use "std/io" errors
 fn check(ok: bool) { if !ok { #panic("UI contract") } }
 fn pair(context: *ui.Context, arena: *mem.Arena, input: ui.Input) [2]ui.Response {
   mem.arena_rewind(arena, 0)
@@ -34,7 +34,7 @@ fn ring(context: *const ui.Context, x: i32) {
   check(count == 4)
 }
 fn interactions(arena: *mem.Arena) {
-  context := ui.Context{}
+  context := ui.Context{ style: ui.default_style }
   check(context.style.background.a == 255 && context.style.padding == 4)
   response := pair(&context, arena, ui.Input{ x: 5, y: 5, released: true })
   check(!response[0].activated)
@@ -51,7 +51,7 @@ fn interactions(arena: *mem.Arena) {
   check(!response[0].activated)
   response = pair(&context, arena, ui.Input{ x: 5, y: 5, pressed: true, released: true })
   check(response[0].activated && context.active == 0)
-  context = ui.Context{}
+  context = ui.Context{ style: ui.default_style }
   response = pair(&context, arena, ui.Input{ tab: true })
   check(context.focused == 1)
   response = pair(&context, arena, ui.Input{ tab: true })
@@ -78,14 +78,14 @@ fn interactions(arena: *mem.Arena) {
   check(!hidden.hovered && context.active == 0)
 }
 fn widgets(arena: *mem.Arena) {
-  context := ui.Context{}
+  context := ui.Context{ style: ui.default_style }
   toggled := false
   ui.begin(&context, arena, ui.Input{ x: 3, y: 3, pressed: true, released: true }, ui.Rect{ width: 100, height: 60 })
   checkbox := ui.checkbox(&context, 1, ui.Rect{ width: 40, height: 12 }, "on", &toggled, true)
   ui.end(&context)
   check(toggled && checkbox.changed)
   value: i32 = 0
-  context = ui.Context{}
+  context = ui.Context{ style: ui.default_style }
   ui.begin(&context, arena, ui.Input{ x: 20, y: 5, down: true }, ui.Rect{ width: 100, height: 60 })
   response := ui.slider(&context, 9, ui.Rect{ width: 21, height: 10 }, &value, -2147483648, 2147483647, true)
   ui.end(&context)
@@ -116,7 +116,7 @@ fn glyph(raw: rawptr, codepoint: u32) software.Glyph {
   return software.Glyph{ pixels: pixels, width: 2, height: 2, stride: 2, advance: 3, x_offset: trace.bearing, y_offset: trace.vertical }
 }
 fn raster(arena: *mem.Arena) {
-  context := ui.Context{}
+  context := ui.Context{ style: ui.default_style }
   bytes: [80]u8 = []
   for i in 0..80 { bytes[i] = 109 }
   for y in 0..4 { for x in 0..16 { bytes[y * 20 + x] = 0 } }
@@ -129,7 +129,7 @@ fn raster(arena: *mem.Arena) {
   ui.rectangle(&context, ui.Rect{ x: 1, width: 2, height: 2 }, ui.Color{ b: 200, a: 255 })
   ui.rectangle(&context, ui.Rect{ x: 1, width: 2, height: 2 }, ui.Color{ r: 200, a: 128 })
   ui.end(&context)
-  check(software.render(&surface, ui.first(&context), font).ok)
+  check(software.render(&surface, ui.first(&context), font).failure.kind == errors.Kind.Ok)
   check(bytes[0] == 200 && bytes[3] == 128)
   check(bytes[4] == 100 && bytes[6] == 100 && bytes[7] == 255)
   for y in 0..4 { for x in 16..20 { check(bytes[y * 20 + x] == 109) } }
@@ -140,7 +140,7 @@ fn raster(arena: *mem.Arena) {
   mutable[0] = 66
   ui.end(&context)
   check(ui.first(&context).text[0] == 65)
-  check(software.render(&surface, ui.first(&context), font).ok)
+  check(software.render(&surface, ui.first(&context), font).failure.kind == errors.Kind.Ok)
   check(bytes[1] == 240 && bytes[3] == 128 && bytes[7] == 64 && bytes[23] == 0 && bytes[27] == 128)
   check(bytes[61] == 240 && bytes[63] == 128 && trace.calls == 2)
   for i in 0..80 { bytes[i] = 0 }
@@ -148,34 +148,34 @@ fn raster(arena: *mem.Arena) {
   ui.begin(&context, arena, ui.Input{}, ui.Rect{ width: 4, height: 4 })
   ui.label(&context, ui.Rect{ x: 1, y: 1, width: 2, height: 2 }, "A", ui.Color{ a: 255 })
   ui.end(&context)
-  check(software.render(&surface, ui.first(&context), font).ok)
+  check(software.render(&surface, ui.first(&context), font).failure.kind == errors.Kind.Ok)
   check(bytes[27] == 128 && bytes[47] == 255 && bytes[23] == 0)
   for i in 0..80 { bytes[i] = 0 }
   trace = Trace{ bearing: -1 }
   ui.begin(&context, arena, ui.Input{}, ui.Rect{ width: 4, height: 4 })
   ui.label(&context, ui.Rect{ width: 3, height: 3 }, "AA", ui.Color{ a: 255 })
   ui.end(&context)
-  check(software.render(&surface, ui.first(&context), font).ok)
+  check(software.render(&surface, ui.first(&context), font).failure.kind == errors.Kind.Ok)
   check(bytes[11] == 255)
   for i in 0..80 { bytes[i] = 0 }
   trace = Trace{ vertical: -1 }
   ui.begin(&context, arena, ui.Input{}, ui.Rect{ width: 4, height: 4 })
   ui.label(&context, ui.Rect{ width: 2, height: 3 }, "A\nA", ui.Color{ a: 255 })
   ui.end(&context)
-  check(software.render(&surface, ui.first(&context), font).ok)
+  check(software.render(&surface, ui.first(&context), font).failure.kind == errors.Kind.Ok)
   check(bytes[43] == 255)
   trace = Trace{}
   ui.begin(&context, arena, ui.Input{}, ui.Rect{ width: 4, height: 4 })
   ui.label(&context, ui.Rect{ width: 4, height: 4 }, "\xff\xc3\xa9", ui.Color{ a: 255 })
   ui.end(&context)
-  check(software.render(&surface, ui.first(&context), font).ok)
+  check(software.render(&surface, ui.first(&context), font).failure.kind == errors.Kind.Ok)
   check(trace.calls == 2 && trace.first == 65533 && trace.last == 233)
   trace.invalid = true
-  check(software.render(&surface, ui.first(&context), font).kind == errors.Kind.InvalidInput)
+  check(software.render(&surface, ui.first(&context), font).failure.kind == errors.Kind.InvalidInput)
   surface.stride = 15
-  check(software.render(&surface, ui.first(&context), font).kind == errors.Kind.InvalidInput)
+  check(software.render(&surface, ui.first(&context), font).failure.kind == errors.Kind.InvalidInput)
   surface.stride = 20
-  check(software.render(&surface, ui.first(&context), software.Font{}).kind == errors.Kind.InvalidInput)
+  check(software.render(&surface, ui.first(&context), software.Font{}).failure.kind == errors.Kind.InvalidInput)
 }
 fn main() {
   arena := mem.arena_create(0)
@@ -222,7 +222,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-ui-results-') as directory:
         'UI widget ID must be nonzero': 'ui.begin(&context, arena, ui.Input{}, bounds)\n _ = ui.button(&context, 0, bounds, "", true)',
     }
     for message, body in failures.items():
-        (work / 'main.dyn').write_text('use "std/ui" ui\nuse "std/mem" mem\nfn main() {\n arena := mem.arena_create(0)\n context := ui.Context{}\n bounds := ui.Rect{ width: 10, height: 10 }\n '+body+'\n}')
+        (work / 'main.dyn').write_text('use "std/ui" ui\nuse "std/mem" mem\nfn main() {\n arena := mem.arena_create(0)\n context := ui.Context{ style: ui.default_style }\n bounds := ui.Rect{ width: 10, height: 10 }\n '+body+'\n}')
         for mode in ('--debug', '--release'):
             output = work / 'invalid'
             subprocess.run([DYN, 'build', str(work), mode, '--quiet', '--output', str(output)], check=True, timeout=300)

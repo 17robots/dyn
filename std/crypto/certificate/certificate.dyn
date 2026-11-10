@@ -1,76 +1,77 @@
-use "std/errors" errors
+use "std/parse" parse
+use "std/io" io
 use "std/crypto/der" der
 use "std/crypto/core" crypto_core
 
 // Borrowed DER envelope; parse alone does not establish trust. std/crypto/x509
 // validates explicit native paths. TLS retains its separate provider policy.
 pub struct Certificate { encoded: []const u8, tbs: []const u8, signature_algorithm: []const u8, signature_bits: []const u8 }
-pub struct Result { value: Certificate, ok: bool, kind: errors.Kind, error: isize, offset: usize }
+pub struct Result { value: Certificate, offset: usize, failure: parse.Failure }
 
 pub fn parse(encoded: []const u8) Result {
   outer_cursor := der.cursor(encoded)
   outer := der.next(&outer_cursor)
-  if !outer.ok {
-    kind:=outer.kind
-    if kind==errors.Kind.None {
-      kind=errors.Kind.InvalidInput
+  if !outer.found {
+    kind:=outer.failure.kind
+    if kind==parse.Kind.Ok {
+      kind=parse.Kind.Syntax
     }
-    return Result{kind:kind, offset:outer.offset}
+    return Result{ offset:outer.offset, failure: parse.Failure{ kind: kind, offset: outer.offset } }
   }
   if outer.value.tag!=48 {
-    return Result{kind:errors.Kind.InvalidInput}
+    return Result{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   if !der.finished(&outer_cursor) {
-    return Result{kind:errors.Kind.InvalidInput, offset:outer_cursor.offset}
+    return Result{ offset:outer_cursor.offset, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: outer_cursor.offset } }
   }
   header:=#len(outer.value.encoded)-#len(outer.value.content)
   children:=der.enter(outer.value)
   start:=children.offset
   tbs:=der.next(&children)
-  if !tbs.ok {
-    kind:=tbs.kind
-    if kind==errors.Kind.None {
-      kind=errors.Kind.InvalidInput
+  if !tbs.found {
+    kind:=tbs.failure.kind
+    if kind==parse.Kind.Ok {
+      kind=parse.Kind.Syntax
     }
-    return Result{kind:kind, offset:header+tbs.offset}
+    return Result{ offset:header+tbs.offset, failure: parse.Failure{ kind: kind, offset: header+tbs.offset } }
   }
   if tbs.value.tag!=48 {
-    return Result{kind:errors.Kind.InvalidInput, offset:header+start}
+    return Result{ offset:header+start, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: header+start } }
   }
   start=children.offset
   algorithm:=der.next(&children)
-  if !algorithm.ok {
-    kind:=algorithm.kind
-    if kind==errors.Kind.None {
-      kind=errors.Kind.InvalidInput
+  if !algorithm.found {
+    kind:=algorithm.failure.kind
+    if kind==parse.Kind.Ok {
+      kind=parse.Kind.Syntax
     }
-    return Result{kind:kind, offset:header+algorithm.offset}
+    return Result{ offset:header+algorithm.offset, failure: parse.Failure{ kind: kind, offset: header+algorithm.offset } }
   }
   if algorithm.value.tag!=48 {
-    return Result{kind:errors.Kind.InvalidInput, offset:header+start}
+    return Result{ offset:header+start, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: header+start } }
   }
   start=children.offset
   signature:=der.next(&children)
-  if !signature.ok {
-    kind:=signature.kind
-    if kind==errors.Kind.None {
-      kind=errors.Kind.InvalidInput
+  if !signature.found {
+    kind:=signature.failure.kind
+    if kind==parse.Kind.Ok {
+      kind=parse.Kind.Syntax
     }
-    return Result{kind:kind, offset:header+signature.offset}
+    return Result{ offset:header+signature.offset, failure: parse.Failure{ kind: kind, offset: header+signature.offset } }
   }
   if signature.value.tag!=3 || #len(signature.value.content)<1 {
-    return Result{kind:errors.Kind.InvalidInput, offset:header+start}
+    return Result{ offset:header+start, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: header+start } }
   }
   if signature.value.content[0]!=0 {
-    return Result{kind:errors.Kind.InvalidInput, offset:header+start+#len(signature.value.encoded)-#len(signature.value.content)}
+    return Result{ offset:header+start+#len(signature.value.encoded)-#len(signature.value.content), failure: parse.Failure{ kind: parse.Kind.Syntax, offset: header+start+#len(signature.value.encoded)-#len(signature.value.content) } }
   }
   if !der.finished(&children) {
-    return Result{kind:errors.Kind.InvalidInput, offset:header+children.offset}
+    return Result{ offset:header+children.offset, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: header+children.offset } }
   }
   return Result{ value: Certificate{
     encoded: encoded, tbs: tbs.value.encoded, signature_algorithm: algorithm.value.encoded,
     signature_bits: signature.value.content[1..],
-  }, ok: true }
+  } }
 }
 
 pub fn fingerprint_sha256(destination: []u8, certificate: Certificate) []u8 {

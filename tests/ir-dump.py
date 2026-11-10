@@ -10,7 +10,7 @@ ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 MAIN=r'''use "dep" d
 struct Pair { left:i64, right:f64 }
-enum(u8) Tag { A=0,B=1 }
+enum(u8) Tag { A,B }
 const maximum:u64=18446744073709551615
 const message:[]const u8="a\x00\xffz"
 global:i32=3
@@ -31,7 +31,7 @@ fn main() {
   _=minimum
   values:[3]i32=[1,2,3]
   pointer:*i32=&values[0]
-  _=pointer[..3]
+  _=#slice(pointer, 3)
   _=work(values[..],Tag.A)
   _=d.generic(d.Item{value:7})
   target:fn(i32) i32=callback

@@ -37,10 +37,10 @@ const batch_fragment: []const u8 = "#version 330 core\nin vec2 uv; in vec4 tint;
 
 pub fn open_batch(batch: *Batch, api: gl.Api) Result {
   if batch.program != 0 {
-    return Result{ kind: errors.Kind.InvalidState }
+    return Result{ kind: io.Kind.InvalidState }
   }
   if !healthy(&api) {
-    return Result{ kind: errors.Kind.System }
+    return Result{ kind: io.Kind.System }
   }
   vertex := shader(&api, gl.VertexShader, batch_vertex)
   fragment := shader(&api, gl.FragmentShader, batch_fragment)
@@ -51,7 +51,7 @@ pub fn open_batch(batch: *Batch, api: gl.Api) Result {
     if fragment != 0 {
       api.delete_shader(fragment)
     }
-    return Result{ kind: errors.Kind.System }
+    return Result{ kind: io.Kind.System }
   }
   batch.api = api
   batch.program = api.create_program()
@@ -64,7 +64,7 @@ pub fn open_batch(batch: *Batch, api: gl.Api) Result {
   api.get_program_iv(batch.program, gl.LinkStatus, &valid)
   if valid == 0 {
     close_batch(batch)
-    return Result{ kind: errors.Kind.System }
+    return Result{ kind: io.Kind.System }
   }
   viewport_name := "viewport\x00"
   batch.viewport = api.get_uniform_location(batch.program, &viewport_name[0])
@@ -88,7 +88,7 @@ pub fn open_batch(batch: *Batch, api: gl.Api) Result {
   api.tex_image_2d(gl.Texture2d, 0, #cast(i32, gl.R8), atlas_size, atlas_size, 0, gl.Red, gl.UnsignedByte, nil)
   if batch.vao == 0 || batch.buffer == 0 || batch.atlas == 0 || !healthy(&api) {
     close_batch(batch)
-    return Result{ kind: errors.Kind.System }
+    return Result{ kind: io.Kind.System }
   }
   reset_atlas(batch)
   return Result{ ok: true }
@@ -151,7 +151,7 @@ struct Cached { entry: *Entry, ok: bool, full: bool }
 
 // The atlas entry for codepoint, rasterizing and uploading it on a miss.
 fn cached(batch: *Batch, font: software.Font, codepoint: u32) Cached {
-  slot := #cast(usize, #wrap(codepoint * 2654435761) % #cast(u32, index_size))
+  slot := #cast(usize, (codepoint * 2654435761) % #cast(u32, index_size))
   for probe in 0..index_size {
     entry := &batch.entries[(slot + probe) % index_size]
     if !entry.used {
@@ -255,17 +255,17 @@ fn batch_glyph(batch: *Batch, stream: *Stream, font: software.Font, codepoint: u
 // frame with more distinct glyphs than fit returns Capacity.
 pub fn render_batch(batch: *Batch, commands: *const ui.Command, width, height: i32, font: software.Font, vertices: []f32) Result {
   if batch.program == 0 {
-    return Result{ kind: errors.Kind.InvalidState }
+    return Result{ kind: io.Kind.InvalidState }
   }
   if width < 0 || height < 0 || #len(vertices) < 6 * vertex_floats || font.glyph == nil || font.line_height <= 0 {
-    return Result{ kind: errors.Kind.InvalidInput }
+    return Result{ kind: io.Kind.InvalidInput }
   }
   if width == 0 || height == 0 {
     return Result{ ok: true }
   }
   api := &batch.api
   if !healthy(api) {
-    return Result{ kind: errors.Kind.System }
+    return Result{ kind: io.Kind.System }
   }
   api.viewport(0, 0, width, height)
   api.use_program(batch.program)
@@ -327,10 +327,10 @@ pub fn render_batch(batch: *Batch, commands: *const ui.Command, width, height: i
           drawn = batch_glyph(batch, &stream, font, command.codepoint, command.glyph_x, command.glyph_y, command.color, clip)
         }
         if drawn.full {
-          return Result{ kind: errors.Kind.Capacity }
+          return Result{ kind: io.Kind.Capacity }
         }
         if !drawn.ok {
-          return Result{ kind: errors.Kind.InvalidInput }
+          return Result{ kind: io.Kind.InvalidInput }
         }
       }
       else if command.kind == ui.Kind.Text {
@@ -341,7 +341,7 @@ pub fn render_batch(batch: *Batch, commands: *const ui.Command, width, height: i
           decoded := utf8.decode(command.text, offset)
           offset += decoded.width
           codepoint := decoded.codepoint
-          if !decoded.ok {
+          if !decoded.valid {
             codepoint = 65533
           }
           if codepoint == 10 {
@@ -356,24 +356,24 @@ pub fn render_batch(batch: *Batch, commands: *const ui.Command, width, height: i
               drawn = batch_glyph(batch, &stream, font, codepoint, x, y, command.color, clip)
             }
             if drawn.full {
-              return Result{ kind: errors.Kind.Capacity }
+              return Result{ kind: io.Kind.Capacity }
             }
             if !drawn.ok {
-              return Result{ kind: errors.Kind.InvalidInput }
+              return Result{ kind: io.Kind.InvalidInput }
             }
             x += drawn.advance
           }
         }
       }
       else {
-        return Result{ kind: errors.Kind.InvalidInput }
+        return Result{ kind: io.Kind.InvalidInput }
       }
     }
     command = command.next
   }
   flush(batch, &stream)
   if !healthy(api) {
-    return Result{ kind: errors.Kind.System }
+    return Result{ kind: io.Kind.System }
   }
   return Result{ ok: true }
 }

@@ -1,0 +1,27 @@
+// A process panic handler. It runs once, after cleanups, right before a panic
+// that nothing handles reports its message and exits. It cannot recover the
+// program: use it to log, write a crash report or flush files. A panic inside
+// the handler reports and exits without running it again.
+//
+// On Wasm a panic traps at once, with no cleanups and no report, so the
+// handler never runs there.
+
+handler: fn([]const u8)
+
+fn run(message: *const u8, length: u64) {
+  callback := handler
+  if callback == nil {
+    return
+  }
+  if message == nil {
+    callback("")
+    return
+  }
+  callback(#slice(message, #cast(usize, length)))
+}
+
+// Installs the handler, replacing any earlier one.
+pub fn set_handler(callback: fn(message: []const u8)) {
+  handler = callback
+  install()
+}

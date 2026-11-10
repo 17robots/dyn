@@ -1,3 +1,4 @@
+use "std/parse" parse
 use "std/c"
 #link("sqlite3")
 
@@ -8,8 +9,8 @@ pub struct OpenResult { database: Database, code: i32, ok: bool }
 // Provider allocates database. Successful results require close; failures own nothing.
 pub fn open(name: []const u8, buffer: []u8) OpenResult {
   encoded := c.string_into(buffer, name)
-  if !encoded.ok {
-    return OpenResult{ code: string_error(encoded.error) }
+  if encoded.failure.kind != parse.Kind.Ok {
+    return OpenResult{ code: string_error(encoded.failure.kind) }
   }
   database: rawptr = nil
   code := sqlite_open(encoded.value, &database)
@@ -34,8 +35,8 @@ pub fn execute(database: Database, sql: []const u8, buffer: []u8) i32 {
     return -1
   }
   encoded := c.string_into(buffer, sql)
-  if !encoded.ok {
-    return string_error(encoded.error)
+  if encoded.failure.kind != parse.Kind.Ok {
+    return string_error(encoded.failure.kind)
   }
   error: rawptr = nil
   code := sqlite_exec(database, encoded.value, nil, nil, &error)
@@ -51,17 +52,17 @@ pub fn error_message(database: Database, maximum: usize) []const u8 {
     return ""
   }
   value := c.bytes_from_string(sqlite_error_message(database), maximum)
-  if !value.ok {
+  if value.failure.kind != parse.Kind.Ok {
     return ""
   }
   return value.value
 }
 
-fn string_error(error: c.ErrorKind) i32 {
-  if error == c.ErrorKind.Capacity {
+fn string_error(error: parse.Kind) i32 {
+  if error == parse.Kind.Capacity {
     return Capacity
   }
-  if error == c.ErrorKind.Overflow {
+  if error == parse.Kind.Overflow {
     return Overflow
   }
   return InvalidArgument

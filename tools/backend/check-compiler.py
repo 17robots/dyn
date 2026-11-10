@@ -36,7 +36,7 @@ second:u64=next()
 fn identity(x:$T) T { return x }
 fn main() {
  if first!=1 || second!=2 || identity(counter)!=2 { #panic("startup") }
- _ = io.println(io.stdout(), "native compiler ok")
+ io.println("native compiler ok")
 }
 ''')
         for compiler, mode in ((reference,'--debug'),(candidate,'--debug'),(candidate,'--release')):

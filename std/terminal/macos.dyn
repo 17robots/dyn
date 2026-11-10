@@ -1,3 +1,4 @@
+use "std/io" io
 #target(kernel: darwin)
 
 // Darwin ioctl is syscall 54. Requests: TIOCGETA, TIOCSETA and TIOCGWINSZ.
@@ -11,21 +12,20 @@ pub fn read_state(descriptor: isize) Read {
   result: Read
   code := control(descriptor, 1078490131, &result.value.bytes[0])
   if code < 0 {
-    return Read{ kind: errors.darwin(code), error: code }
+    return Read{ failure: io.Failure{ kind: io.darwin(code), native: code } }
   }
-  result.ok = true
   return result
 }
 
 pub fn restore(descriptor: isize, saved: *const State) Result {
   if saved == nil {
-    return Result{ kind: errors.Kind.InvalidInput }
+    return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
   code := control(descriptor, 2152231956, &saved.bytes[0])
   if code < 0 {
-    return Result{ kind: errors.darwin(code), error: code }
+    return Result{ failure: io.Failure{ kind: io.darwin(code), native: code } }
   }
-  return Result{ ok: true }
+  return Result{}
 }
 
 // cfmakeraw in the Darwin termios layout: 64-bit iflag, oflag, cflag and
@@ -46,9 +46,9 @@ pub fn size(descriptor: isize) Size {
   bytes: [8]u8 = []
   code := control(descriptor, 1074295912, &bytes[0])
   if code < 0 {
-    return Size{ kind: errors.darwin(code), error: code }
+    return Size{ failure: io.Failure{ kind: io.darwin(code), native: code } }
   }
   rows := #cast(usize, bytes[0]) + #cast(usize, bytes[1]) * 256
   columns := #cast(usize, bytes[2]) + #cast(usize, bytes[3]) * 256
-  return Size{ columns: columns, rows: rows, ok: true }
+  return Size{ columns: columns, rows: rows }
 }

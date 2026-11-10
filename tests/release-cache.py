@@ -17,7 +17,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-release-cache-') as directory:
     dependency = source/'value'
     dependency.mkdir(parents=True)
     (source/'main.dyn').write_text('use "./value"\nuse "std/io"\n'
-                                  'fn main() { _ = io.println(io.stdout(), value.text()) }\n')
+                                  'fn main() { io.println(value.text()) }\n')
     body = dependency/'main.dyn'
     body.write_text('pub fn text() []const u8 { return "first" }\n')
     cache = root/'cache'

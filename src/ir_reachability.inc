@@ -1,6 +1,7 @@
 typedef struct {
   const DynIrProgram *ir;
   bool *live;
+  bool *globals; /* optional: when set, only referenced globals are live */
   unsigned char *expressions, *statements;
   uint32_t *queue;
   size_t count;
@@ -13,6 +14,43 @@ static bool reachable_function(Reachability *p, uint64_t id) {
   }
   return true;
 }
+static bool reachable_expression(Reachability *p, DynExprId id, unsigned depth);
+static bool reachable_global(Reachability *p, uint64_t id, unsigned depth) {
+  if (id >= p->ir->global_count) return false;
+  if (!p->globals || p->globals[id]) return true;
+  p->globals[id] = true;
+  return reachable_expression(p, p->ir->globals[id].initializer, depth + 1);
+}
+/* Whether evaluating an initializer may do anything besides produce its
+   value: call, panic (division, a shift's count check, an index or a
+   dereference) or read memory. Only globals with pure initializers may be
+   dropped when nothing names them, as an unused constant is. */
+static bool initializer_effects(const DynIrProgram *ir, DynExprId id, unsigned depth) {
+  if (id == DYN_NO_EXPR) return false;
+  if (id >= ir->expression_count || depth > 1024) return true;
+  const DynIrExpr *e = &ir->expressions[id];
+  switch (e->kind) {
+  case DYN_EXPR_INT: case DYN_EXPR_FLOAT: case DYN_EXPR_BOOL: case DYN_EXPR_CHAR: case DYN_EXPR_STRING:
+  case DYN_EXPR_NIL: case DYN_EXPR_ENUM: case DYN_EXPR_GLOBAL: case DYN_EXPR_FUNCTION:
+  case DYN_EXPR_SIZE: case DYN_EXPR_ALIGN:
+    return false;
+  case DYN_EXPR_CONVERT: case DYN_EXPR_CAST: case DYN_EXPR_BITCAST: case DYN_EXPR_FIELD:
+    return initializer_effects(ir, e->left, depth + 1);
+  case DYN_EXPR_UNARY:
+    if (e->op == DYN_OP_DEREF) return true;
+    return e->op == DYN_OP_ADDRESS ? false : initializer_effects(ir, e->left, depth + 1);
+  case DYN_EXPR_BINARY:
+    if (e->op == DYN_OP_DIV || e->op == DYN_OP_REM || e->op == DYN_OP_SHL || e->op == DYN_OP_SHR) return true;
+    return initializer_effects(ir, e->left, depth + 1) || initializer_effects(ir, e->right, depth + 1);
+  case DYN_EXPR_STRUCT: case DYN_EXPR_ARRAY:
+    if ((uint64_t)e->item_start + e->item_count > ir->item_count) return true;
+    for (uint32_t i = 0; i < e->item_count; ++i)
+      if (initializer_effects(ir, ir->items[e->item_start + i].expression, depth + 1)) return true;
+    return false;
+  default:
+    return true;
+  }
+}
 static bool reachable_expression(Reachability *p, DynExprId id, unsigned depth) {
   if (id == DYN_NO_EXPR) return true;
   if (id >= p->ir->expression_count || depth > 1024) return false;
@@ -20,9 +58,10 @@ static bool reachable_expression(Reachability *p, DynExprId id, unsigned depth) 
   p->expressions[id] = 1;
   const DynIrExpr *e = &p->ir->expressions[id];
   if (e->kind == DYN_EXPR_FUNCTION) return reachable_function(p, e->integer);
+  if (e->kind == DYN_EXPR_GLOBAL) return reachable_global(p, e->integer, depth);
   if (e->kind == DYN_EXPR_INT || e->kind == DYN_EXPR_FLOAT || e->kind == DYN_EXPR_BOOL ||
       e->kind == DYN_EXPR_CHAR || e->kind == DYN_EXPR_STRING || e->kind == DYN_EXPR_NIL ||
-      e->kind == DYN_EXPR_GLOBAL || e->kind == DYN_EXPR_NAME) return true;
+      e->kind == DYN_EXPR_NAME) return true;
   if (e->kind == DYN_EXPR_CALL && !reachable_function(p, e->integer)) return false;
   if (!reachable_expression(p, e->left, depth + 1) ||
       !reachable_expression(p, e->right, depth + 1)) return false;
@@ -61,8 +100,15 @@ static bool reachable_collect(Reachability *p, bool public_roots, bool all_roots
     if (f->is_main || (public_roots && f->is_public) || f->foreign || all_roots)
       ok = reachable_function(p, i);
   }
-  for (size_t i = 0; ok && i < ir->global_count; ++i)
-    ok = reachable_expression(p, ir->globals[i].initializer, 0);
+  /* Without a globals map every initializer is a root. With one, roots are
+     public globals of libraries and initializers that may have effects;
+     the rest stay only when live code names them. */
+  for (size_t i = 0; ok && i < ir->global_count; ++i) {
+    const DynIrGlobal *g = &ir->globals[i];
+    if (!p->globals) ok = reachable_expression(p, g->initializer, 0);
+    else if (all_roots || (public_roots && g->is_public) || g->foreign || initializer_effects(ir, g->initializer, 0))
+      ok = reachable_global(p, i, 0);
+  }
   for (size_t at = 0; ok && at < p->count; ++at) {
     const DynIrFunction *f = &ir->functions[p->queue[at]];
     if (!f->foreign) ok = reachable_block(p, f->body_start, f->body_count, 0);

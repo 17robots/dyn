@@ -12,6 +12,7 @@ SOURCE = r'''use "std/mem" mem
 use "std/fmt" fmt
 use "std/bytes/builder" builder
 use "std/process" process
+use "std/io" io
 use "std/fs/watch" watch
 use "std/strings" strings
 fn check(ok: bool, message: []const u8) {
@@ -36,11 +37,12 @@ fn main() {
   check(text.error == builder.ErrorKind.None && builder.append_grow(&text, arena, "grown") == builder.ErrorKind.None, "builder clear")
   arguments: [1][]const u8 = ["true"]
   spawned := process.spawn(arena, "/bin/true", arguments[..], process.Options{})
-  check(spawned.ok, "zero options spawn")
+  check(spawned.failure.kind == io.Kind.Ok, "zero options spawn")
   exited := process.wait(&spawned.value, false)
-  check(exited.ok && exited.code == 0, "zero options inherit")
+  check(exited.failure.kind == io.Kind.Ok && exited.code == 0, "zero options inherit")
   idle: watch.Watcher
-  check(watch.close(&idle).ok && !idle.active, "zero watcher closes nothing")
+  watch.close(&idle)
+  check(!idle.active, "zero watcher closes nothing")
 }
 '''
 if not sys.platform.startswith('linux'):

@@ -25,7 +25,8 @@ fn ordered_open(window: *Window) bool {
   window.wake_descriptor = event_descriptor(0, 526336)
   supported: i32 = 0
   _ = detectable_repeat(window.display, 1, &supported)
-  return window.wake_descriptor >= 0
+  window.wake_active = window.wake_descriptor >= 0
+  return window.wake_active
 }
 // Keysyms encode Unicode directly above 0x01000000. Legacy Latin-1 maps
 // directly; unmapped legacy non-Latin keysyms report key zero, with scancode.
@@ -97,22 +98,22 @@ fn ordered_key(key: usize) u32 {
 }
 fn ordered_modifiers(state: u32) u32 {
   result: u32 = 0
-  if state & 1 != 0 {
+  if (state & 1) != 0 {
     result |= ordered.Shift
   }
-  if state & 4 != 0 {
+  if (state & 4) != 0 {
     result |= ordered.Control
   }
-  if state & 8 != 0 {
+  if (state & 8) != 0 {
     result |= ordered.Alt
   }
-  if state & 64 != 0 {
+  if (state & 64) != 0 {
     result |= ordered.Super
   }
-  if state & 2 != 0 {
+  if (state & 2) != 0 {
     result |= ordered.CapsLock
   }
-  if state & 16 != 0 {
+  if (state & 16) != 0 {
     result |= ordered.NumLock
   }
   return result
@@ -139,7 +140,7 @@ fn ordered_text(window: *Window, text: []const u8) {
     count := #len(text) - at
     if count > 256 {
       count = 256
-      for count > 0 && text[at + count] & 0xc0 == 0x80 {
+      for count > 0 && (text[at + count] & 0xc0) == 0x80 {
         count -= 1
       }
     }
@@ -159,18 +160,18 @@ pub fn next_event(window: *Window, output: *OrderedEvent) bool {
 }
 // Thread-safe wake only. Stop/join wake callers before closing the owner.
 pub fn wake(window: *const Window) Result {
-  if window.display == nil || window.wake_descriptor < 0 {
-    return Result{ kind: errors.Kind.InvalidState }
+  if window.display == nil || !window.wake_active {
+    return Result{ kind: io.Kind.InvalidState }
   }
   one: u64 = 1
   if event_write(window.wake_descriptor, &one, 8) != 8 {
-    return Result{ kind: errors.Kind.System }
+    return Result{ kind: io.Kind.System }
   }
-  return Result{ ok: true }
+  return Result{}
 }
 fn ordered_wakes(window: *Window) {
   value: u64 = 0
-  if window.wake_descriptor >= 0 && event_read(window.wake_descriptor, &value, 8) == 8 {
+  if window.wake_active && event_read(window.wake_descriptor, &value, 8) == 8 {
     ordered_push(window, ordered.Event{ kind: ordered.Kind.Wake })
   }
 }
@@ -183,7 +184,7 @@ fn ordered_clipboard(window: *Window, text: []const u8) {
     count := #len(text) - at
     if count > 256 {
       count = 256
-      for count > 0 && text[at + count] & 0xc0 == 0x80 {
+      for count > 0 && (text[at + count] & 0xc0) == 0x80 {
         count -= 1
       }
     }

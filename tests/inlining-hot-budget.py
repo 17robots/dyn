@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Bounded original-loop reservations prioritize tiny calls without cap growth."""
+"""Inlining budgets: the ranked O3 plan and O2 loop leaves stay within their
+bounds, and the original-loop reservation still caps tiny calls."""
 import ctypes
 import os
 from pathlib import Path
@@ -52,11 +53,12 @@ static void late(bool loop,bool o2) {
  if(o2 && !loop){assert(!o.owns_expansion);dyn_native_optimization_free(&o);return;}
  assert(o.owns_expansion);
  DynIrFunction *f=&o.ir.functions[3];
- assert(calls(&o.ir,f->body_start,f->body_count,2,0)==(loop?0:1));
- /* Existing O2 eligibility/allowance is unchanged: one actual loop leaf only.
-    No-loop O3 retains its original 34 middle chains + one other expansion. */
+ /* The late call is inlined: at O3 the ranked plan takes the cheapest
+    sites first whether or not they are in a loop, and at O2 the one loop
+    leaf is the only expansion. */
+ assert(calls(&o.ir,f->body_start,f->body_count,2,0)==0);
  if(o2)assert(o.inlined==1);
- else if(!loop)assert(o.inlined==69);
+ else assert(o.inlined==69); /* 34 middle chains and the late call */
  assert(o.ir.statement_count<85+4*512);
  dyn_native_optimization_free(&o);
 }
@@ -126,10 +128,10 @@ int main(void){late(true,false);late(false,false);late(true,true);late(false,tru
 '''
 SOURCE = '''use "std/io"
 state:u64=0
-fn leaf(x:u64) u64 {return #wrap(x+1)}
+fn leaf(x:u64) u64 {return (x+1)}
 fn cold(x:u64) u64 {return leaf(x)}
-fn tiny_hot(x:u64) u64 {return #wrap(x*3+1)}
-fn checked(x:u8) u8 {return x+1}
+fn tiny_hot(x:u64) u64 {return (x*3+1)}
+fn checked(x:u8) u8 {return 1/(x+1)}
 pub fn hot(seed:u64,n:usize) u64 {
  value:=seed
 COLD

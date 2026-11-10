@@ -68,7 +68,7 @@ fn native_connect(descriptor: isize, address: *const u8, length: usize) isize {
   if length > 2147483647 {
     return -22
   }
-  if win.socket_connect(#cast(usize, descriptor), address[..length]) {
+  if win.socket_connect(#cast(usize, descriptor), #slice(address, length)) {
     return 0
   }
   return win.socket_error()
@@ -161,7 +161,7 @@ fn poll_native(items: []PollDescriptor, milliseconds: i32) isize {
     items[i].events = requested
   }
   // The private saved field uses WSAPOLLFD padding; native stride remains 16.
-  native := (#cast(*win.PollDescriptor, &items[0]))[..#len(items)]
+  native := #slice(#cast(*win.PollDescriptor, &items[0]), #len(items))
   value := win.event_poll(native, milliseconds)
   for i in 0..#len(items) {
     items[i].events = items[i].saved_events
@@ -204,41 +204,41 @@ pub fn receive_packet(descriptor: isize, bytes: []u8) Result {
 }
 
 // Winsock reports WSA codes (10000 and up); adapter validation uses errno-style codes.
-fn native_kind(code: isize) errors.Kind {
+fn native_kind(code: isize) io.Kind {
   value := code
   if value < 0 {
     value = 0 - value
   }
   if value < 10000 {
-    return errors.linux(code)
+    return io.linux(code)
   }
   case value {
     10004 => {
-      return errors.Kind.Interrupted
+      return io.Kind.Interrupted
     }
     10009, 10038, 10056, 10057 => {
-      return errors.Kind.InvalidState
+      return io.Kind.InvalidState
     }
     10013 => {
-      return errors.Kind.PermissionDenied
+      return io.Kind.PermissionDenied
     }
     10022 => {
-      return errors.Kind.InvalidInput
+      return io.Kind.InvalidInput
     }
     10035 => {
-      return errors.Kind.WouldBlock
+      return io.Kind.WouldBlock
     }
     10048 => {
-      return errors.Kind.AlreadyExists
+      return io.Kind.AlreadyExists
     }
     10055 => {
-      return errors.Kind.Capacity
+      return io.Kind.Capacity
     }
     10045, 10047 => {
-      return errors.Kind.Unsupported
+      return io.Kind.Unsupported
     }
     _ => {
-      return errors.Kind.System
+      return io.Kind.System
     }
   }
 }

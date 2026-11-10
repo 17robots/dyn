@@ -1,155 +1,153 @@
 use "std/mem" memory
 use "std/fmt" format
-use "std/errors" errors
-
 // Minimal composable I/O seams. Adapters borrow state and never own or close it.
 
 pub enum Status { Complete, End, Error }
 
-pub struct Result {
+pub struct Transfer {
   transferred: usize,
   error: isize,
-  kind: errors.Kind,
+  kind: Kind,
   status: Status,
 }
 
 pub struct Reader {
   data: rawptr,
-  read: fn(rawptr, []u8) Result,
+  read: fn(rawptr, []u8) Transfer,
 }
 
 pub struct Writer {
   data: rawptr,
-  write: fn(rawptr, []const u8) Result,
+  write: fn(rawptr, []const u8) Transfer,
 }
 
 // Callback results are bounded by the supplied slice. Errors always have a
 // native code when supplied by the OS; readers may return bytes with End or Error.
-fn checked(result: Result, capacity: usize) Result {
+fn checked(result: Transfer, capacity: usize) Transfer {
   if result.transferred > capacity {
-    return Result{ error: -5, kind: errors.Kind.System, status: Status.Error }
+    return Transfer{ error: -5, kind: Kind.System, status: Status.Error }
   }
-  if result.status == Status.Error && result.kind == errors.Kind.None {
-    return Result{ transferred: result.transferred, error: result.error, kind: errors.Kind.System, status: Status.Error }
+  if result.status == Status.Error && result.kind == Kind.Ok {
+    return Transfer{ transferred: result.transferred, error: result.error, kind: Kind.System, status: Status.Error }
   }
   return result
 }
 
-pub fn read(reader: Reader, destination: []u8) Result {
+pub fn read(reader: Reader, destination: []u8) Transfer {
   if #len(destination) == 0 {
-    return Result{}
+    return Transfer{}
   }
   if reader.read == nil {
-    return Result{ error: -22, kind: errors.Kind.InvalidInput, status: Status.Error }
+    return Transfer{ error: -22, kind: Kind.InvalidInput, status: Status.Error }
   }
   return checked(reader.read(reader.data, destination), #len(destination))
 }
 
-pub fn write(writer: Writer, source: []const u8) Result {
+pub fn write(writer: Writer, source: []const u8) Transfer {
   if #len(source) == 0 {
-    return Result{}
+    return Transfer{}
   }
   if writer.write == nil {
-    return Result{ error: -22, kind: errors.Kind.InvalidInput, status: Status.Error }
+    return Transfer{ error: -22, kind: Kind.InvalidInput, status: Status.Error }
   }
   callback := writer.write
   result := checked(callback(writer.data, source), #len(source))
   if result.status == Status.End {
-    return Result{ transferred: result.transferred, error: -5, kind: errors.Kind.System, status: Status.Error }
+    return Transfer{ transferred: result.transferred, error: -5, kind: Kind.System, status: Status.Error }
   }
   return result
 }
 
-pub fn read_exact(reader: Reader, destination: []u8) Result {
+pub fn read_exact(reader: Reader, destination: []u8) Transfer {
   total: usize = 0
   for total < #len(destination) {
     result := read(reader, destination[total..])
     total += result.transferred
     if result.status == Status.Error {
-      return Result{ transferred: total, error: result.error, kind: result.kind, status: Status.Error }
+      return Transfer{ transferred: total, error: result.error, kind: result.kind, status: Status.Error }
     }
     if total == #len(destination) {
-      return Result{ transferred: total, error: 0, status: Status.Complete }
+      return Transfer{ transferred: total, error: 0, status: Status.Complete }
     }
     if result.status == Status.End {
-      return Result{ transferred: total, error: 0, status: Status.End }
+      return Transfer{ transferred: total, error: 0, status: Status.End }
     }
     if result.transferred == 0 {
-      return Result{ transferred: total, error: -5, kind: errors.Kind.System, status: Status.Error }
+      return Transfer{ transferred: total, error: -5, kind: Kind.System, status: Status.Error }
     }
   }
-  return Result{ transferred: total, error: 0, status: Status.Complete }
+  return Transfer{ transferred: total, error: 0, status: Status.Complete }
 }
 
-pub fn write_all(writer: Writer, source: []const u8) Result {
+pub fn write_all(writer: Writer, source: []const u8) Transfer {
   total: usize = 0
   for total < #len(source) {
     result := write(writer, source[total..])
     total += result.transferred
     if result.status == Status.Error {
-      return Result{ transferred: total, error: result.error, kind: result.kind, status: Status.Error }
+      return Transfer{ transferred: total, error: result.error, kind: result.kind, status: Status.Error }
     }
     if result.transferred == 0 {
-      return Result{ transferred: total, error: -5, kind: errors.Kind.System, status: Status.Error }
+      return Transfer{ transferred: total, error: -5, kind: Kind.System, status: Status.Error }
     }
   }
-  return Result{ transferred: total, error: 0, status: Status.Complete }
+  return Transfer{ transferred: total, error: 0, status: Status.Complete }
 }
 
-fn print_value(writer: Writer, value: any) Result {
+fn print_value(writer: Writer, value: any) Transfer {
   storage: [64 + memory.ArenaBufferOverhead]u8 = []
   scratch := memory.arena_from_buffer(storage[..])
   case value {
-    is f32 item => {
+    f32 item => {
       return write_all(writer, format.f64_decimal(scratch, #cast(f64, item), 6))
     }
-    is f64 item => {
+    f64 item => {
       return write_all(writer, format.f64_decimal(scratch, item, 6))
     }
-    is bool item => {
+    bool item => {
       if item {
         return write_all(writer, "true")
       }
       return write_all(writer, "false")
     }
-    is i8 item => {
+    i8 item => {
       return write_all(writer, format.i64_decimal(scratch, #cast(i64, item)))
     }
-    is i16 item => {
+    i16 item => {
       return write_all(writer, format.i64_decimal(scratch, #cast(i64, item)))
     }
-    is i32 item => {
+    i32 item => {
       return write_all(writer, format.i64_decimal(scratch, #cast(i64, item)))
     }
-    is i64 item => {
+    i64 item => {
       return write_all(writer, format.i64_decimal(scratch, item))
     }
-    is isize item => {
+    isize item => {
       return write_all(writer, format.i64_decimal(scratch, #cast(i64, item)))
     }
-    is u8 item => {
+    u8 item => {
       return write_all(writer, format.u64_decimal(scratch, #cast(u64, item)))
     }
-    is u16 item => {
+    u16 item => {
       return write_all(writer, format.u64_decimal(scratch, #cast(u64, item)))
     }
-    is u32 item => {
+    u32 item => {
       return write_all(writer, format.u64_decimal(scratch, #cast(u64, item)))
     }
-    is u64 item => {
+    u64 item => {
       return write_all(writer, format.u64_decimal(scratch, item))
     }
-    is usize item => {
+    usize item => {
       return write_all(writer, format.u64_decimal(scratch, #cast(u64, item)))
     }
-    is []u8 item => {
+    []u8 item => {
       return write_all(writer, item)
     }
-    is []const u8 item => {
+    []const u8 item => {
       return write_all(writer, item)
     }
     _ => {
-      return Result{ error: -22, kind: errors.Kind.InvalidInput, status: Status.Error }
+      return Transfer{ error: -22, kind: Kind.InvalidInput, status: Status.Error }
     }
   }
 }
@@ -180,10 +178,10 @@ fn format_argument_count(template: []const u8) isize {
 // print_arguments is the non-variadic entry point used by forwarding wrappers.
 // The format language is intentionally small: {} inserts a value; {{ and }}
 // write literal braces. Invalid formats and argument-count mismatches write nothing.
-pub fn print_arguments(writer: Writer, template: []const u8, arguments: []const any) Result {
+pub fn print_arguments(writer: Writer, template: []const u8, arguments: []const any) Transfer {
   count := format_argument_count(template)
   if count < 0 || #cast(usize, count) != #len(arguments) {
-    return Result{ transferred: 0, error: -22, kind: errors.Kind.InvalidInput, status: Status.Error }
+    return Transfer{ transferred: 0, error: -22, kind: Kind.InvalidInput, status: Status.Error }
   }
 
   total: usize = 0
@@ -199,21 +197,21 @@ pub fn print_arguments(writer: Writer, template: []const u8, arguments: []const 
         literal := write_all(writer, template[span_start..index])
         total += literal.transferred
         if literal.status == Status.Error {
-          return Result{ transferred: total, error: literal.error, kind: literal.kind, status: Status.Error }
+          return Transfer{ transferred: total, error: literal.error, kind: literal.kind, status: Status.Error }
         }
       }
       if template[index] == '{' && template[index + 1] == '}' {
         inserted := print_value(writer, arguments[argument_index])
         total += inserted.transferred
         if inserted.status == Status.Error {
-          return Result{ transferred: total, error: inserted.error, kind: inserted.kind, status: Status.Error }
+          return Transfer{ transferred: total, error: inserted.error, kind: inserted.kind, status: Status.Error }
         }
         argument_index += 1
       } else {
         brace := write_all(writer, template[index..index + 1])
         total += brace.transferred
         if brace.status == Status.Error {
-          return Result{ transferred: total, error: brace.error, kind: brace.kind, status: Status.Error }
+          return Transfer{ transferred: total, error: brace.error, kind: brace.kind, status: Status.Error }
         }
       }
       index += 2
@@ -224,23 +222,27 @@ pub fn print_arguments(writer: Writer, template: []const u8, arguments: []const 
     tail := write_all(writer, template[span_start..])
     total += tail.transferred
     if tail.status == Status.Error {
-      return Result{ transferred: total, error: tail.error, kind: tail.kind, status: Status.Error }
+      return Transfer{ transferred: total, error: tail.error, kind: tail.kind, status: Status.Error }
     }
   }
-  return Result{ transferred: total, error: 0, status: Status.Complete }
+  return Transfer{ transferred: total, error: 0, status: Status.Complete }
 }
 
-pub fn print(writer: Writer, template: []const u8, arguments: ...any) Result {
+// Checked formatting to any writer: {} takes the next argument.
+pub fn print_to(writer: Writer, template: []const u8, arguments: ...any) Transfer {
   return print_arguments(writer, template, arguments)
 }
 
-pub fn println_arguments(writer: Writer, template: []const u8, arguments: []const any) Result {
+// Terminal output, print/println/eprint/eprintln, lives with stdout() in each
+// platform file; targets without standard streams have neither.
+
+pub fn println_arguments(writer: Writer, template: []const u8, arguments: []const any) Transfer {
   result := print_arguments(writer, template, arguments)
   if result.status == Status.Error {
     return result
   }
   newline := write_all(writer, "\n")
-  return Result{
+  return Transfer{
     transferred: result.transferred + newline.transferred,
     error: newline.error,
     kind: newline.kind,
@@ -248,43 +250,43 @@ pub fn println_arguments(writer: Writer, template: []const u8, arguments: []cons
   }
 }
 
-pub fn println(writer: Writer, template: []const u8, arguments: ...any) Result {
+pub fn println_to(writer: Writer, template: []const u8, arguments: ...any) Transfer {
   return println_arguments(writer, template, arguments)
 }
 
-pub fn copy(writer: Writer, reader: Reader, scratch: []u8) Result {
+pub fn copy(writer: Writer, reader: Reader, scratch: []u8) Transfer {
   if #len(scratch) == 0 {
-    return Result{ transferred: 0, error: -22, kind: errors.Kind.InvalidInput, status: Status.Error }
+    return Transfer{ transferred: 0, error: -22, kind: Kind.InvalidInput, status: Status.Error }
   }
   total: usize = 0
   for {
     input := read(reader, scratch)
     if input.transferred > #len(scratch) {
-      return Result{ transferred: total, error: -5, kind: errors.Kind.System, status: Status.Error }
+      return Transfer{ transferred: total, error: -5, kind: Kind.System, status: Status.Error }
     }
     if input.transferred > 0 {
       output := write_all(writer, scratch[..input.transferred])
       total += output.transferred
       if output.status == Status.Error {
-        return Result{ transferred: total, error: output.error, kind: output.kind, status: Status.Error }
+        return Transfer{ transferred: total, error: output.error, kind: output.kind, status: Status.Error }
       }
     }
     if input.status == Status.Error {
-      return Result{ transferred: total, error: input.error, kind: input.kind, status: Status.Error }
+      return Transfer{ transferred: total, error: input.error, kind: input.kind, status: Status.Error }
     }
     if input.status == Status.End {
-      return Result{ transferred: total, error: 0, status: Status.Complete }
+      return Transfer{ transferred: total, error: 0, status: Status.Complete }
     }
     if input.transferred == 0 {
-      return Result{ transferred: total, error: -5, kind: errors.Kind.System, status: Status.Error }
+      return Transfer{ transferred: total, error: -5, kind: Kind.System, status: Status.Error }
     }
   }
-  return Result{ transferred: total, error: 0, status: Status.Complete }
+  return Transfer{ transferred: total, error: 0, status: Status.Complete }
 }
 
-pub fn copy_n(writer: Writer, reader: Reader, amount: usize, scratch: []u8) Result {
+pub fn copy_n(writer: Writer, reader: Reader, amount: usize, scratch: []u8) Transfer {
   if #len(scratch) == 0 && amount != 0 {
-    return Result{ transferred: 0, error: -22, kind: errors.Kind.InvalidInput, status: Status.Error }
+    return Transfer{ transferred: 0, error: -22, kind: Kind.InvalidInput, status: Status.Error }
   }
   total: usize = 0
   for total < amount {
@@ -297,14 +299,14 @@ pub fn copy_n(writer: Writer, reader: Reader, amount: usize, scratch: []u8) Resu
       output := write_all(writer, scratch[..input.transferred])
       total += output.transferred
       if output.status == Status.Error {
-        return Result{ transferred: total, error: output.error, kind: output.kind, status: Status.Error }
+        return Transfer{ transferred: total, error: output.error, kind: output.kind, status: Status.Error }
       }
     }
     if input.status != Status.Complete {
-      return Result{ transferred: total, error: input.error, kind: input.kind, status: input.status }
+      return Transfer{ transferred: total, error: input.error, kind: input.kind, status: input.status }
     }
   }
-  return Result{ transferred: total, error: 0, status: Status.Complete }
+  return Transfer{ transferred: total, error: 0, status: Status.Complete }
 }
 
 pub struct Cursor {
@@ -316,10 +318,10 @@ pub fn cursor(data: []const u8) Cursor {
   return Cursor{ data: data, offset: 0 }
 }
 
-fn cursor_read(data: rawptr, destination: []u8) Result {
+fn cursor_read(data: rawptr, destination: []u8) Transfer {
   state := #cast(*Cursor, data)
   if state.offset > #len(state.data) {
-    return Result{ error: -22, kind: errors.Kind.InvalidInput, status: Status.Error }
+    return Transfer{ error: -22, kind: Kind.InvalidInput, status: Status.Error }
   }
   remaining := #len(state.data) - state.offset
   take := remaining
@@ -334,7 +336,7 @@ fn cursor_read(data: rawptr, destination: []u8) Result {
   if state.offset == #len(state.data) {
     status = Status.End
   }
-  return Result{ transferred: take, error: 0, status: status }
+  return Transfer{ transferred: take, error: 0, status: status }
 }
 
 pub fn cursor_reader(state: *Cursor) Reader {
@@ -358,10 +360,10 @@ pub fn buffer_writer_reset(state: *BufferWriter) {
   state.length = 0
 }
 
-fn buffer_write(data: rawptr, source: []const u8) Result {
+fn buffer_write(data: rawptr, source: []const u8) Transfer {
   state := #cast(*BufferWriter, data)
   if state.length > #len(state.data) {
-    return Result{ error: -22, kind: errors.Kind.InvalidInput, status: Status.Error }
+    return Transfer{ error: -22, kind: Kind.InvalidInput, status: Status.Error }
   }
   remaining := #len(state.data) - state.length
   take := #len(source)
@@ -373,9 +375,9 @@ fn buffer_write(data: rawptr, source: []const u8) Result {
   }
   state.length += take
   if take != #len(source) {
-    return Result{ transferred: take, error: -28, kind: errors.Kind.Capacity, status: Status.Error }
+    return Transfer{ transferred: take, error: -28, kind: Kind.Capacity, status: Status.Error }
   }
-  return Result{ transferred: take, error: 0, status: Status.Complete }
+  return Transfer{ transferred: take, error: 0, status: Status.Complete }
 }
 
 pub fn buffer_writer_adapter(state: *BufferWriter) Writer {

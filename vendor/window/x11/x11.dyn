@@ -1,7 +1,8 @@
+use "std/parse" parse
 #target(kernel: linux)
 use "std/mem" mem
 use "std/c" c
-use "std/errors" errors
+use "std/io" io
 use "std/ui" ui
 #link("X11")
 #link("GL")
@@ -12,9 +13,9 @@ pub struct Window {
   width: i32, height: i32, input: ui.Input, close_requested: bool,
   // Desktop input for std/ui/box, reset by each poll; see desktop.dyn.
   desktop: Desktop,
-  events: ordered.Queue, events_enabled: bool, wake_descriptor: i32 = -1, ordered_pressed: [256]u8,
+  events: ordered.Queue, events_enabled: bool, wake_active: bool, wake_descriptor: i32, ordered_pressed: [256]u8,
 }
-pub struct Result { kind: errors.Kind, ok: bool }
+pub type Result = io.Failure
 struct Visual { visual: rawptr, id: usize, screen: i32, depth: i32, class: i32, red: usize, green: usize, blue: usize, colormap_size: i32, bits: i32 }
 struct Attributes { background_pixmap: usize, background_pixel: usize, border_pixmap: usize, border_pixel: usize, bit_gravity: i32, win_gravity: i32, backing_store: i32, backing_planes: usize, backing_pixel: usize, save_under: i32, event_mask: isize, propagate: isize, override_redirect: i32, colormap: usize, cursor: usize }
 struct Event { kind: i32, serial: usize, sent: i32, display: rawptr, window: usize, rest: [19]usize }
@@ -65,19 +66,19 @@ pub extern fn gl_proc "glXGetProcAddressARB"(name: *const u8) rawptr
 // Asynchronous X/GLX failures return System rather than terminating the process.
 pub fn open(window: *Window, title: []const u8, width, height: i32) Result {
   if window.display != nil {
-    return Result{kind:errors.Kind.InvalidState}
+    return Result{kind:io.Kind.InvalidState}
   }
   if width <= 0 || height <= 0 || width > 65535 || height > 65535 || #len(title) > 4095 {
-    return Result{kind:errors.Kind.InvalidInput}
+    return Result{kind:io.Kind.InvalidInput}
   }
   storage: [4096]u8 = []
   name := c.string_into(storage[..], title)
-  if !name.ok {
-    return Result{kind:errors.Kind.InvalidInput}
+  if name.failure.kind != parse.Kind.Ok {
+    return Result{kind:io.Kind.InvalidInput}
   }
   display := display_open(nil)
   if display == nil {
-    return Result{kind:errors.Kind.System}
+    return Result{kind:io.Kind.System}
   }
   window.* = Window{display:display, width:width, height:height}
   context_error_display = display
@@ -96,14 +97,14 @@ pub fn open(window: *Window, title: []const u8, width, height: i32) Result {
       _ = free(configs)
     }
     close(window)
-    return Result{kind:errors.Kind.System}
+    return Result{kind:io.Kind.System}
   }
   chosen := configs.*
   info := visual(display, chosen)
   if info == nil {
     _ = free(configs)
     close(window)
-    return Result{kind:errors.Kind.System}
+    return Result{kind:io.Kind.System}
   }
   window.colormap = create_colormap(display, root(display, info.screen), info.visual, 0)
   attrs := Attributes{colormap:window.colormap, event_mask:1|2|4|8|64|32768|131072|2097152|4194304}
@@ -117,9 +118,9 @@ pub fn open(window: *Window, title: []const u8, width, height: i32) Result {
   _ = sync(display, 0)
   _ = free(info)
   _ = free(configs)
-  if window.handle == 0 || window.context == nil || context_error_seen || !make_current(window).ok {
+  if window.handle == 0 || window.context == nil || context_error_seen || make_current(window).kind != io.Kind.Ok {
     close(window)
-    return Result{kind:errors.Kind.System}
+    return Result{kind:io.Kind.System}
   }
   atom_name: [17]u8 = ['W', 'M', '_', 'D', 'E', 'L', 'E', 'T', 'E', '_', 'W', 'I', 'N', 'D', 'O', 'W', 0]
   window.close_atom = intern_atom(display, &atom_name[0], 0)
@@ -131,35 +132,35 @@ pub fn open(window: *Window, title: []const u8, width, height: i32) Result {
   desktop_open(window)
   if !ordered_open(window) {
     close(window)
-    return Result{kind:errors.Kind.System}
+    return Result{kind:io.Kind.System}
   }
   _ = flush(display)
   _ = sync(display, 0)
   if context_error_seen {
     close(window)
-    return Result{kind:errors.Kind.System}
+    return Result{kind:io.Kind.System}
   }
-  return Result{ok:true}
+  return Result{}
 }
 pub fn make_current(window: *Window) Result {
   if window.display == nil || window.context == nil || window.handle == 0 {
-    return Result{kind:errors.Kind.InvalidState}
+    return Result{kind:io.Kind.InvalidState}
   }
   if current(window.display, window.handle, window.context) == 0 {
-    return Result{kind:errors.Kind.System}
+    return Result{kind:io.Kind.System}
   }
-  return Result{ok:true}
+  return Result{}
 }
 pub fn swap(window: *Window) Result {
   if window.display == nil || window.context == nil {
-    return Result{kind:errors.Kind.InvalidState}
+    return Result{kind:io.Kind.InvalidState}
   }
   swap_buffers(window.display, window.handle)
-  return Result{ok:true}
+  return Result{}
 }
 pub fn poll(window: *Window) Result {
   if window.display == nil {
-    return Result{kind:errors.Kind.InvalidState}
+    return Result{kind:io.Kind.InvalidState}
   }
   window.input.pressed = false
   window.input.released = false
@@ -250,15 +251,15 @@ pub fn poll(window: *Window) Result {
       desktop_selection(window, &event)
     }
   }
-  return Result{ok:true}
+  return Result{}
 }
 pub fn close(window: *Window) {
   if window.display == nil {
     return
   }
-  if window.wake_descriptor >= 0 {
+  if window.wake_active {
     _ = event_close(window.wake_descriptor)
-    window.wake_descriptor = -1
+    window.wake_active = false
   }
   desktop_close(window)
   if window.context != nil {

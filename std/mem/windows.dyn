@@ -12,7 +12,7 @@ fn mapping_allocate(size: usize) Mapping {
   if address == nil {
     return Mapping{ error: #cast(isize, arena_last_error()) }
   }
-  return Mapping{ bytes: (#cast(*u8, address))[..size], ok: true }
+  return Mapping{ bytes: #slice(#cast(*u8, address), size), ok: true }
 }
 // MEM_COMMIT of bytes[from..to] as read/write.
 fn mapping_commit(bytes: []u8, from: usize, to: usize) bool {

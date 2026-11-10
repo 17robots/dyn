@@ -229,6 +229,8 @@ static unsigned wfield(WG *g, DynType t, unsigned f) {
     return f ? 8 : 0;
   DynIrStruct *s = &g->ir->structs[t - DYN_TYPE_STRUCT_BASE];
   unsigned n = 0;
+  if (s->is_union)
+    return 0;
   for (unsigned i = 0; i <= f; i++) {
     DynType ft = g->ir->fields[s->field_start + i].type;
     n = wal(n, s->packed ? 1 : wa(g, ft));
@@ -288,6 +290,15 @@ static unsigned wsize(WG *g, DynType t) {
     DynIrStruct *s = &g->ir->structs[t - DYN_TYPE_STRUCT_BASE];
     if (!s->field_count)
       return 0;
+    if (s->is_union) {
+      unsigned largest = 0;
+      for (unsigned k = 0; k < s->field_count; k++) {
+        unsigned n = wsize(g, g->ir->fields[s->field_start + k].type);
+        if (n > largest)
+          largest = n;
+      }
+      return wal(largest, wa(g, t));
+    }
     unsigned i = s->field_count - 1;
     return wal(wfield(g, t, i) +
                    wsize(g, g->ir->fields[s->field_start + i].type),
@@ -738,9 +749,9 @@ static unsigned binary(WG *g, DynOperator o, DynType t, DynType rt, unsigned l,
   }
   if (o == DYN_OP_SHL || o == DYN_OP_SHR) {
     get(g, r);
-    icon(g, wsize(g, t) * 8, wvt(g, rt));
-    op(g, wvt(g, rt) == 0x7e ? 0x54 : 0x49);
-    guard(g);
+    icon(g, wsize(g, t) * 8 - 1, wvt(g, rt));
+    op(g, wvt(g, rt) == 0x7e ? 0x83 : 0x71);
+    r = save(g, wvt(g, rt));
     if (wvt(g, rt) != vt) {
       get(g, r);
       op(g, wide ? 0xad : 0xa7);
@@ -860,6 +871,25 @@ static unsigned convert(WG *g, unsigned v, DynType from, DynType to,
   unsigned a = wvt(g, from), b = wvt(g, to);
   if (a == b)
     return normalize(g, v, to);
+  if (!bitcast && (a == 0x7d || a == 0x7c) && (b == 0x7f || b == 0x7e)) {
+    /* trunc_sat clamps at 32 and 64 bits and gives 0 for NaN. Narrower types
+       clamp first; min and max keep NaN, so it still reaches trunc_sat. */
+    unsigned size = wsize(g, to);
+    if (size < 4) {
+      double high = wsign(to) ? (size == 1 ? 127.0 : 32767.0) : (size == 1 ? 255.0 : 65535.0);
+      double low = wsign(to) ? -high - 1.0 : 0.0;
+      unsigned low_bound = float_constant(g, low, a), high_bound = float_constant(g, high, a);
+      get(g, v);
+      get(g, low_bound);
+      op(g, a == 0x7d ? 0x97 : 0xa5);
+      get(g, high_bound);
+      op(g, a == 0x7d ? 0x96 : 0xa4);
+    } else
+      get(g, v);
+    op(g, 0xfc);
+    wu(&g->body, (b == 0x7e ? 4u : 0u) + (a == 0x7c ? 2u : 0u) + (wsign(to) ? 0u : 1u));
+    return normalize(g, save(g, b), to);
+  }
   get(g, v);
   unsigned c = 0;
   if (bitcast)
@@ -1075,17 +1105,6 @@ static unsigned expr(WG *g, DynExprId id) {
     p = slot(g, wsize(g, e->type), wa(g, e->type));
     zero(g, p, wsize(g, e->type));
     size_t element_temps = g->temp_cursor;
-    if (e->kind == DYN_EXPR_STRUCT) {
-      DynIrStruct *s = &g->ir->structs[e->integer];
-      for (unsigned i = 0; i < s->field_count; i++) {
-        DynIrField *f = &g->ir->fields[s->field_start + i];
-        if (f->default_expression != DYN_NO_EXPR) {
-          store(g, offset(g, p, wfield(g, e->type, i)),
-                expr(g, f->default_expression), f->type);
-          g->temp_cursor = element_temps;
-        }
-      }
-    }
     for (unsigned i = 0; i < e->item_count; i++) {
       DynIrItem *it = &g->ir->items[e->item_start + i];
       DynType t = g->ir->expressions[it->expression].type;
@@ -1181,28 +1200,6 @@ static unsigned expr(WG *g, DynExprId id) {
     }
     if (wagg(g, e->type))
       return v;
-    if (wen(e->type) && !wen(from)) {
-      DynIrEnum *en = &g->ir->enums[e->type - DYN_TYPE_ENUM_BASE];
-      unsigned ok = constant(g, 0, 0x7f),
-               wide = convert(g, v, from, DYN_TYPE_I64, false);
-      unsigned bits = wsize(g, en->tag_type) * 8;
-      bool sign = wsign(en->tag_type);
-      for (unsigned i = 0; i < en->variant_count; i++) {
-        uint64_t tag = g->ir->variants[en->variant_start + i].tag;
-        if (sign && bits < 64 && (tag & (UINT64_C(1) << (bits - 1))))
-          tag |= UINT64_MAX << bits;
-        if (wsign(from) != sign && (int64_t)tag < 0)
-          continue;
-        get(g, wide);
-        icon(g, tag, 0x7e);
-        op(g, 0x51);
-        get(g, ok);
-        op(g, 0x72);
-        set(g, ok);
-      }
-      get(g, ok);
-      guard(g);
-    }
     return convert(g, v, wtag(g, from), wtag(g, e->type),
                    e->kind == DYN_EXPR_BITCAST);
   }
@@ -1314,7 +1311,7 @@ static void statement(WG *g, const DynIrStmt *s) {
       v = load(g, p, t);
       unsigned r = expr(g, s->expression);
       v = binary(g, s->assignment_op, t, g->ir->expressions[s->expression].type,
-                 v, r, false, false);
+                 v, r, dyn_op_wraps(s->assignment_op), false);
     } else {
       v = expr(g, s->expression);
       if (wagg(g, t)) {
@@ -1344,7 +1341,7 @@ static void statement(WG *g, const DynIrStmt *s) {
     else if (wagg(g, t))
       v = load(g, v, wflat(g, t));
     restore(g);
-    if (g->function && g->function->is_main)
+    if (g->function && g->function->is_main && t != DYN_TYPE_I32)
       icon(g, 0, 0x7f);
     else if (t != DYN_TYPE_VOID &&
              !(wagg(g, t) && wflat(g, t) == DYN_TYPE_VOID))
@@ -1844,7 +1841,7 @@ static int wasm_object_impl(const DynSource *source, const DynIrProgram *ir,
     }
     block(&g, f->body_start, f->body_count);
     restore(&g);
-    if (f->is_main)
+    if (f->is_main && f->return_type == DYN_TYPE_VOID)
       icon(&g, 0, 0x7f);
     else if (f->return_type != DYN_TYPE_VOID)
       op(&g, 0);

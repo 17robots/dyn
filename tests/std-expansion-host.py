@@ -57,6 +57,8 @@ use "std/image/tga" tga
 use "std/image/gif" gif
 use "std/image/jpeg" jpeg
 use "std/encoding/toml" toml
+use "std/io" io
+use "std/parse" parse
 use "std/mem" mem
 use "std/bytes" bytes
 fn check(ok: bool) { if !ok { #panic("host formats") } }
@@ -65,31 +67,31 @@ fn main() {
  defer { mem.arena_release(arena) }
  pixels: [8]u8 = [255,0,0,255,0,128,255,64]
  bitmap := bmp.encode(arena,pixels[..],2,1,4)
- check(bitmap.ok)
+ check(bitmap.failure.kind == parse.Kind.Ok)
  decoded := bmp.decode(arena,bitmap.value)
- check(decoded.ok && bytes.equal(decoded.value.pixels,pixels[..]))
+ check(decoded.failure.kind == parse.Kind.Ok && bytes.equal(decoded.value.pixels,pixels[..]))
  targa := tga.encode(arena,pixels[..],2,1,4)
- check(targa.ok)
+ check(targa.failure.kind == parse.Kind.Ok)
  uncompressed := tga.decode(arena,targa.value)
- check(uncompressed.ok && bytes.equal(uncompressed.value.pixels,pixels[..]))
+ check(uncompressed.failure.kind == parse.Kind.Ok && bytes.equal(uncompressed.value.pixels,pixels[..]))
  animation := gif.decode(arena,GIF_BYTES)
- check(animation.ok && bytes.equal(animation.value.pixels,"\xff\0\0\xff"))
+ check(animation.failure.kind == parse.Kind.Ok && bytes.equal(animation.value.pixels,"\xff\0\0\xff"))
  photo := jpeg.decode(arena,JPEG_BYTES)
- check(photo.ok && bytes.equal(photo.value.pixels,"\x80\x80\x80\xff"))
+ check(photo.failure.kind == parse.Kind.Ok && bytes.equal(photo.value.pixels,"\x80\x80\x80\xff"))
  mark := mem.arena_mark(arena)
- check(!bmp.decode(arena,"BM").ok && mem.arena_mark(arena)==mark)
- check(!tga.decode(arena,"bad").ok && mem.arena_mark(arena)==mark)
- check(!gif.decode(arena,"GIF89a").ok && mem.arena_mark(arena)==mark)
- check(!jpeg.decode(arena,"\xff\xd8").ok && mem.arena_mark(arena)==mark)
+ check(bmp.decode(arena,"BM").failure.kind != parse.Kind.Ok && mem.arena_mark(arena)==mark)
+ check(tga.decode(arena,"bad").failure.kind != parse.Kind.Ok && mem.arena_mark(arena)==mark)
+ check(gif.decode(arena,"GIF89a").failure.kind != parse.Kind.Ok && mem.arena_mark(arena)==mark)
+ check(jpeg.decode(arena,"\xff\xd8").failure.kind != parse.Kind.Ok && mem.arena_mark(arena)==mark)
  document := toml.parse(arena,"[owner]\nname='Dyn'\nports=[8000,8001]\n[[products]]\nx=1979-05-27T07:32:00Z\n")
- check(document.ok)
+ check(document.failure.kind == parse.Kind.Ok)
  owner := toml.member(document.root,"owner")
  check(bytes.equal(toml.member(owner,"name").text,"Dyn"))
  check(bytes.equal(toml.index(toml.member(owner,"ports"),1).text,"8001"))
  encoded := toml.encode(arena,document.root)
- check(encoded.ok && toml.parse(arena,encoded.value).ok)
+ check(encoded.failure.kind == parse.Kind.Ok && toml.parse(arena,encoded.value).failure.kind == parse.Kind.Ok)
  before := mem.arena_mark(arena)
- check(!toml.parse(arena,"a=1\na=2").ok && mem.arena_mark(arena)==before)
+ check(toml.parse(arena,"a=1\na=2").failure.kind != parse.Kind.Ok && mem.arena_mark(arena)==before)
 }
 '''.replace('GIF_BYTES', dyn_bytes(gif)).replace('JPEG_BYTES', dyn_bytes(jpeg))
 

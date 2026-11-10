@@ -183,9 +183,9 @@ WebAssembly.instantiate(fs.readFileSync(process.argv[1]),{}).then(({instance})=>
 }).catch(e=>{console.error(e);process.exit(1)});''', wasm)
 
     (module/'main.dyn').write_text('''use "std/io" io
-fn fail() { defer { _ = io.println(io.stdout(), "inner") }
+fn fail() { defer { io.println("inner") }
 #panic("inline panic") }
-fn main() { defer { _ = io.println(io.stdout(), "outer") }
+fn main() { defer { io.println("outer") }
 fail() }
 ''')
     for level in (2, 3):
@@ -214,7 +214,7 @@ fail() }
     assert sizes[1] <= sizes[0] * 1.5, ('unbounded code growth', sizes)
 
     # Checked failure must remain a runtime failure at every optimization level.
-    (module/'main.dyn').write_text('fn main() { a: i8 = 127\nb: i8 = 1\n_ = a + b }\n')
+    (module/'main.dyn').write_text('fn main() { a: i8 = 127\nb: i8 = 0\n_ = a / b }\n')
     for level in (1, 2, 3):
         output = work/f'trap{level}'
         run(DYN, 'build', module, '--backend', 'native', '--release', '--opt-level', level,

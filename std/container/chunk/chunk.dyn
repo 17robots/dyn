@@ -1,13 +1,12 @@
 // Chunk lists: growing lists on a shared arena. Elements live in fixed-size
 // chunks that are linked together, so nothing is ever copied and element
-// addresses never change. The caller writes two small structs per element type:
-//
-//   struct EnemyChunk { next: *EnemyChunk, count: usize, items: [64]Enemy }
-//   struct EnemyList { first: *EnemyChunk, last: *EnemyChunk, total: usize }
-//
-// and these functions work through those field names. A zero list is empty.
+// addresses never change. Use List(Enemy), or declare structs with the same
+// field names to pick another chunk size. A zero list is empty.
 
 use "std/mem" mem
+
+pub struct Chunk($T: type) { next: *Chunk(T), count: usize, items: [64]T }
+pub struct List($T: type) { first: *Chunk(T), last: *Chunk(T), total: usize }
 
 // Same pointer, typed like the like argument. Lets push allocate a chunk
 // without naming the chunk type.

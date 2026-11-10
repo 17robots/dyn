@@ -18,8 +18,13 @@ void *memmove(void *destination, const void *source, size_t count) {
   while (count) { --count; out[count] = in[count]; }
   return destination;
 }
+/* The process panic hook from std/process.on_panic runs once before the trap. */
+static void (*dyn_panic_hook)(const char *, unsigned long long);
+void dyn_set_panic_hook(void (*hook)(const char *, unsigned long long)) { dyn_panic_hook = hook; }
 __attribute__((noreturn)) void dyn_panic(const char *message, size_t count) {
-  (void)message; (void)count;
+  void (*hook)(const char *, unsigned long long) = dyn_panic_hook;
+  dyn_panic_hook = 0;
+  if (hook) hook(message, count);
   __builtin_trap();
 }
 

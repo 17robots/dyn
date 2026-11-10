@@ -15,12 +15,12 @@ pub struct Handle { index: u32, generation: u32 }
 // marks the slot live.
 pub fn reset(node: *$T) {
   generation := node.generation
-  bytes := (#cast(*u8, node))[..#sizeof(T)]
+  bytes := #slice(#cast(*u8, node), #sizeof(T))
   for i in 0..#len(bytes) {
     bytes[i] = 0
   }
   if generation % 2 == 0 {
-    generation = #wrap(generation + 1)
+    generation = generation + 1
   }
   node.generation = generation
 }
@@ -28,7 +28,7 @@ pub fn reset(node: *$T) {
 // Marks a live slot free. Outstanding handles to it stop resolving.
 pub fn retire(node: *$T) {
   if node.generation % 2 == 1 {
-    node.generation = #wrap(node.generation + 1)
+    node.generation = node.generation + 1
   }
 }
 

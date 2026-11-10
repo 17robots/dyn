@@ -1,10 +1,17 @@
 // Portable categories accompany (and never replace) the original native code.
 // A library validation failure may have no native code. Test kind/ok/status first.
-pub enum Kind { None, InvalidInput, InvalidState, NotFound, PermissionDenied, AlreadyExists, Capacity, Overflow, Interrupted, WouldBlock, Unsupported, System }
+pub struct Failure { kind: Kind, native: isize }
+// A value and how getting it went. value is always safe to read: zero or a
+// documented partial result on failure.
+pub struct Result($T: type) { value: T, failure: Failure }
+pub type Bytes = Result([]u8)
+pub type Count = Result(usize)
+
+pub enum Kind { Ok, InvalidInput, InvalidState, NotFound, PermissionDenied, AlreadyExists, Capacity, Overflow, Interrupted, WouldBlock, Unsupported, System }
 
 pub fn linux(code: isize) Kind {
   if code == 0 {
-    return Kind.None
+    return Kind.Ok
   }
   value := code
   if value == 0 - #cast(isize, ((~#cast(usize, 0)) >> 1)) - 1 {
@@ -47,7 +54,7 @@ pub fn linux(code: isize) Kind {
 }
 pub fn windows(code: isize) Kind {
   if code == 0 {
-    return Kind.None
+    return Kind.Ok
   }
   value := code
   if value == 0 - #cast(isize, ((~#cast(usize, 0)) >> 1)) - 1 {
@@ -90,7 +97,7 @@ pub fn windows(code: isize) Kind {
 }
 pub fn wasi(code: isize) Kind {
   if code == 0 {
-    return Kind.None
+    return Kind.Ok
   }
   value := code
   if value == 0 - #cast(isize, ((~#cast(usize, 0)) >> 1)) - 1 {

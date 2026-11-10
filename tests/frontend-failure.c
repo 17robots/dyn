@@ -12,7 +12,7 @@ static void ignore(const char *a, const char *b, unsigned c, unsigned d, unsigne
   (void)a; (void)b; (void)c; (void)d; (void)e; (void)f; (void)g; (void)h;
 }
 int main(void) {
-  char text[16384] = "struct Pair { x: i32, flag: bool }\nenum Choice { A, B: i32 }\n"
+  char text[16384] = "struct Pair { x: i32, flag: bool }\nenum Choice { A, B }\n"
     "const answer: i32 = 42\nfn add(value: i32) i32 { return value + answer }\n"
     "fn consume(value: i32) { _ = value }\n"
     "fn main() {\n  consume(1)\n  callback := consume\n  callback(2)\n  p := Pair{x: add(1), flag: true}\n  values := [1,2,3]\n  for item in values { if item == p.x { break } }\n  _ = \"hello\"\n}\n";

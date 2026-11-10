@@ -15,6 +15,8 @@ DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 ENV = dict(os.environ, DYN_SDK=str(ROOT))
 
 SOURCE = r'''use "std/c" c
+use "std/parse" parse
+use "std/io" io
 use "std/mem" mem
 use "std/fs" fs
 fn check(ok:bool) { if !ok { #panic("CString buffer contract") } }
@@ -22,35 +24,35 @@ fn main() {
  backing:[6]u8=[]
  mem.fill(backing[..],165)
  exact:=c.string_into(backing[1..5],"abc")
- check(exact.ok && exact.error==c.ErrorKind.None && exact.required==4 && exact.value==&backing[1])
+ check(exact.failure.kind == parse.Kind.Ok && exact.required==4 && exact.value==&backing[1])
  check(mem.equal(backing[1..5],"abc\x00") && backing[0]==165 && backing[5]==165)
  empty:=c.string_into(backing[1..2],"")
- check(empty.ok && empty.required==1 && empty.value==&backing[1] && backing[1]==0)
+ check(empty.failure.kind == parse.Kind.Ok && empty.required==1 && empty.value==&backing[1] && backing[1]==0)
  check(backing[0]==165 && backing[2]=='b' && backing[5]==165)
  mem.fill(backing[..],165)
  short:=c.string_into(backing[1..4],"abc")
- check(!short.ok && short.error==c.ErrorKind.Capacity && short.required==4 && short.value==nil)
+ check(short.failure.kind == parse.Kind.Capacity && short.required==4 && short.value==nil)
  zero:=c.string_into(backing[..0],"")
- check(!zero.ok && zero.error==c.ErrorKind.Capacity && zero.required==1 && zero.value==nil)
+ check(zero.failure.kind == parse.Kind.Capacity && zero.required==1 && zero.value==nil)
  invalid:=c.string_into(backing[..],"a\x00b")
- check(!invalid.ok && invalid.error==c.ErrorKind.InvalidInput && invalid.value==nil)
+ check(invalid.failure.kind == parse.Kind.Syntax && invalid.value==nil)
  for byte in backing { check(byte==165) }
  _=mem.copy(backing[..],"abcde!")
  overlap:=c.string_into(backing[1..5],backing[..3])
- check(overlap.ok && overlap.value==&backing[1] && mem.equal(backing[..],"aabc\x00!"))
+ check(overlap.failure.kind == parse.Kind.Ok && overlap.value==&backing[1] && mem.equal(backing[..],"aabc\x00!"))
  reverse:=c.string_into(backing[..4],backing[1..4])
- check(reverse.ok && reverse.value==&backing[0] && mem.equal(backing[..],"abc\x00\x00!"))
+ check(reverse.failure.kind == parse.Kind.Ok && reverse.value==&backing[0] && mem.equal(backing[..],"abc\x00\x00!"))
  before:[6]u8=[]
  _=mem.copy(before[..],backing[..])
  alias_invalid:=c.string_into(backing[1..],backing[..5])
- check(!alias_invalid.ok && alias_invalid.error==c.ErrorKind.InvalidInput && mem.equal(backing[..],before[..]))
- huge:=(&backing[0])[..~#cast(usize,0)]
+ check(alias_invalid.failure.kind == parse.Kind.Syntax && mem.equal(backing[..],before[..]))
+ huge:=#slice(&backing[0], ~#cast(usize,0))
  overflow:=c.string_into(backing[..],huge)
- check(!overflow.ok && overflow.error==c.ErrorKind.Overflow && overflow.value==nil && mem.equal(backing[..],before[..]))
+ check(overflow.failure.kind == parse.Kind.Overflow && overflow.value==nil && mem.equal(backing[..],before[..]))
  path:[4300]u8=[]
  mem.fill(path[..],'a')
  removed:=fs.remove(path[..])
- check(!removed.ok)
+ check(removed.failure.kind != io.Kind.Ok)
  for byte in path { check(byte=='a') }
 }
 '''
@@ -87,6 +89,8 @@ with tempfile.TemporaryDirectory(prefix='dyn-cstring-buffers-') as temporary:
                        (ROOT / 'vendor/opengl/opengl.dyn').read_text())
     assert names and len(set(names)) == len(names)
     gl = '''use "vendor/opengl" gl
+use "std/parse" parse
+use "std/io" io
 use "std/c" c
 use "std/mem" mem
 const names:[COUNT][]const u8=[NAMES]
@@ -94,7 +98,7 @@ visited:usize=0
 fail_second:bool=false
 fn loader(name:*const u8) rawptr {
  text:=c.bytes_from_string(name,64)
- if !text.ok || visited>=#len(names) || !mem.equal(text.value,names[visited]) { #panic("OpenGL CString loader") }
+ if text.failure.kind != parse.Kind.Ok || visited>=#len(names) || !mem.equal(text.value,names[visited]) { #panic("OpenGL CString loader") }
  visited+=1
  if fail_second && visited==2 { return nil }
  return #cast(rawptr,1)

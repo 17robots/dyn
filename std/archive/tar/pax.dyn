@@ -113,26 +113,26 @@ pub fn next(state: *ArchiveReader) Result {
   for {
     record_start := cursor
     if cursor > #len(state.source) {
-      return Result{ status: Status.Error, detail: ErrorKind.InvalidOffset, kind: errors.Kind.InvalidInput, offset: cursor }
+      return Result{ offset: cursor, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: cursor, message: "invalid offset" } }
     }
     if cursor == #len(state.source) {
       if pending {
-        return Result{ status: Status.Error, detail: ErrorKind.Truncated, kind: errors.Kind.InvalidInput, offset: #len(state.source) }
+        return Result{ offset: #len(state.source), failure: parse.Failure{ kind: parse.Kind.Truncated, offset: #len(state.source), message: "" } }
       }
-      return Result{ status: Status.End, offset: cursor }
+      return Result{ offset: cursor }
     }
     if #len(state.source) - cursor < 512 {
-      return Result{ status: Status.Error, detail: ErrorKind.Truncated, kind: errors.Kind.InvalidInput, offset: #len(state.source) }
+      return Result{ offset: #len(state.source), failure: parse.Failure{ kind: parse.Kind.Truncated, offset: #len(state.source), message: "" } }
     }
     header := parse_header(state.source[cursor..cursor + 512])
     if !header.ok {
-      return Result{ status: Status.Error, detail: ErrorKind.Header, kind: errors.Kind.InvalidInput, offset: record_start }
+      return Result{ offset: record_start, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: record_start, message: "invalid header" } }
     }
     if header.ended {
       if pending {
-        return Result{ status: Status.Error, detail: ErrorKind.Header, kind: errors.Kind.InvalidInput, offset: record_start }
+        return Result{ offset: record_start, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: record_start, message: "invalid header" } }
       }
-      return Result{ status: Status.End, offset: cursor }
+      return Result{ offset: cursor }
     }
     entry := header.entry
     extension := entry.kind == 'x' || entry.kind == 'g' || entry.kind == 'L' || entry.kind == 'K'
@@ -141,39 +141,39 @@ pub fn next(state: *ArchiveReader) Result {
     }
     start := cursor + 512
     if entry.size > #cast(u64, (#len(state.source) - start)) {
-      return Result{ status: Status.Error, detail: ErrorKind.Truncated, kind: errors.Kind.InvalidInput, offset: #len(state.source) }
+      return Result{ offset: #len(state.source), failure: parse.Failure{ kind: parse.Kind.Truncated, offset: #len(state.source), message: "" } }
     }
     size := #cast(usize, entry.size)
     padding: usize = (512 - size % 512) % 512
     if padding > #len(state.source) - start - size {
-      return Result{ status: Status.Error, detail: ErrorKind.Truncated, kind: errors.Kind.InvalidInput, offset: #len(state.source) }
+      return Result{ offset: #len(state.source), failure: parse.Failure{ kind: parse.Kind.Truncated, offset: #len(state.source), message: "" } }
     }
     entry.data = state.source[start..start + size]
     cursor = start + size + padding
     if !extension {
       state.offset = cursor
       state.defaults = global
-      return Result{ entry: entry, status: Status.Entry, offset: cursor, ok: true }
+      return Result{ entry: entry, offset: cursor, found: true }
     }
     pending = true
     if entry.kind == 'x' {
       if !pax(entry.data, &local, false) {
-        return Result{ status: Status.Error, detail: ErrorKind.Header, kind: errors.Kind.InvalidInput, offset: record_start }
+        return Result{ offset: record_start, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: record_start, message: "invalid header" } }
       }
     }
     else if entry.kind == 'g' {
       if !pax(entry.data, &global, true) {
-        return Result{ status: Status.Error, detail: ErrorKind.Header, kind: errors.Kind.InvalidInput, offset: record_start }
+        return Result{ offset: record_start, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: record_start, message: "invalid header" } }
       }
     }
     else {
       if size == 0 || entry.data[size - 1] != 0 {
-        return Result{ status: Status.Error, detail: ErrorKind.Header, kind: errors.Kind.InvalidInput, offset: record_start }
+        return Result{ offset: record_start, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: record_start, message: "invalid header" } }
       }
       value := entry.data[..size - 1]
       for byte in value {
         if byte == 0 {
-          return Result{ status: Status.Error, detail: ErrorKind.Header, kind: errors.Kind.InvalidInput, offset: record_start }
+          return Result{ offset: record_start, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: record_start, message: "invalid header" } }
         }
       }
       if entry.kind == 'L' {
@@ -186,5 +186,5 @@ pub fn next(state: *ArchiveReader) Result {
       }
     }
   }
-  return Result{ status: Status.Error, detail: ErrorKind.Header, kind: errors.Kind.InvalidInput, offset: cursor }
+  return Result{ offset: cursor, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: cursor, message: "invalid header" } }
 }

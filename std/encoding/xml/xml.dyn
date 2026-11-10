@@ -1,5 +1,5 @@
 use "std/io" stream
-use "std/errors" errors
+use "std/parse" parse
 use "std/unicode/utf8" utf8
 use "std/bytes" bytes
 
@@ -7,14 +7,13 @@ pub enum Kind { Start, End, Text, Comment, Processing, Cdata }
 // Scanners keep their first error: next returns ok false from then on, and the
 // caller checks state.kind once after the loop. Scanner state.error is module
 // detail; system_error is the native I/O code (which may be zero).
-pub enum ErrorKind { None, Syntax, Capacity, Mismatched, Overlap, Io }
 pub struct Event { kind: Kind, name: []const u8, text: []const u8, attributes: []const u8, self_closing: bool }
-pub struct Scanner { source: []const u8, offset: usize, error_offset: usize, error: ErrorKind, kind: errors.Kind }
-pub struct StreamScanner { input: stream.Reader, storage: []u8, used: usize, consumed: usize, scanned: usize, quote: u8, ended: bool, error: ErrorKind, kind: errors.Kind, system_error: isize }
-pub struct Result { value: Event, kind: errors.Kind, error: isize, detail: ErrorKind, ok: bool }
-pub struct AttributeScanner { source: []const u8, offset: usize, error: ErrorKind, kind: errors.Kind }
-pub struct Attribute { name: []const u8, value: []const u8, kind: errors.Kind, error: isize, detail: ErrorKind, ok: bool }
-pub struct Writer { sink: stream.Writer, error: isize, kind: errors.Kind, detail: ErrorKind, failed: bool }
+pub struct Scanner { source: []const u8, offset: usize, failure: parse.StreamFailure }
+pub struct StreamScanner { input: stream.Reader, storage: []u8, used: usize, consumed: usize, scanned: usize, quote: u8, ended: bool, failure: parse.StreamFailure }
+pub struct Result { value: Event, found: bool, failure: parse.StreamFailure }
+pub struct AttributeScanner { source: []const u8, offset: usize, failure: parse.Failure }
+pub struct Attribute { name: []const u8, value: []const u8, found: bool, failure: parse.Failure }
+pub struct Writer { sink: stream.Writer, failed: bool, failure: parse.StreamFailure }
 
 pub fn scanner(source: []const u8) Scanner {
   return Scanner{ source: source }
@@ -37,21 +36,15 @@ fn shift_stream(state: *StreamScanner) {
   state.quote = 0
 }
 
-fn stream_fail(state: *StreamScanner, kind: ErrorKind) Result {
-  state.error = kind
-  if kind != ErrorKind.Io {
-    state.kind = errors.Kind.InvalidInput
-    if kind == ErrorKind.Capacity {
-      state.kind = errors.Kind.Capacity
-    }
-  }
-  return Result{ kind: state.kind, error: state.system_error, detail: state.error }
+fn stream_fail(state: *StreamScanner, failure: parse.StreamFailure) Result {
+  state.failure = failure
+  return Result{ failure: failure }
 }
 
 // Events borrow storage until the next call. Text may be returned in multiple events.
 pub fn next_stream(state: *StreamScanner) Result {
-  if state.error != ErrorKind.None {
-    return Result{ kind: state.kind, error: state.system_error, detail: state.error }
+  if state.failure.kind != parse.StreamKind.Ok {
+    return Result{ failure: state.failure }
   }
   shift_stream(state)
   for true {
@@ -88,12 +81,11 @@ pub fn next_stream(state: *StreamScanner) Result {
       if complete || state.ended {
         candidate := scanner(state.storage[..state.used])
         parsed := next(&candidate)
-        if parsed.ok {
+        if parsed.found {
           state.consumed = candidate.offset
         }
-        else if candidate.error != ErrorKind.None {
-          state.error = candidate.error
-          state.kind = parsed.kind
+        else if candidate.failure.kind != parse.StreamKind.Ok {
+          state.failure = candidate.failure
         }
         return parsed
       }
@@ -101,18 +93,14 @@ pub fn next_stream(state: *StreamScanner) Result {
       return Result{}
     }
     if state.used == #len(state.storage) {
-      return stream_fail(state, ErrorKind.Capacity)
+      return stream_fail(state, parse.parse_failure(parse.Kind.Capacity, 0, ""))
     }
     input_result := stream.read(state.input, state.storage[state.used..])
     if input_result.status == stream.Status.Error {
-      state.kind = input_result.kind
-      state.system_error = input_result.error
-      return stream_fail(state, ErrorKind.Io)
+      return stream_fail(state, parse.io_failure(input_result.kind, input_result.error))
     }
     if input_result.transferred > #len(state.storage) - state.used {
-      state.kind = errors.Kind.System
-      state.system_error = -5
-      return stream_fail(state, ErrorKind.Io)
+      return stream_fail(state, parse.io_failure(stream.Kind.System, -5))
     }
     state.used += input_result.transferred
     if input_result.status == stream.Status.End || input_result.transferred == 0 {
@@ -132,9 +120,7 @@ fn emit(state: *Writer, bytes: []const u8) bool {
   result := stream.write_all(state.sink, bytes)
   if result.status == stream.Status.Error {
     state.failed = true
-    state.error = result.error
-    state.kind = result.kind
-    state.detail = ErrorKind.Io
+    state.failure = parse.io_failure(result.kind, result.error)
     return false
   }
   return true
@@ -178,8 +164,7 @@ fn writer_valid(state: *Writer, valid: bool) bool {
   }
   if !valid {
     state.failed = true
-    state.kind = errors.Kind.InvalidInput
-    state.detail = ErrorKind.Syntax
+    state.failure = parse.parse_failure(parse.Kind.Syntax, 0, "")
     return false
   }
   return true
@@ -213,11 +198,9 @@ fn starts(source: []const u8, at: usize, expected: []const u8) bool {
   }
   return bytes.equal(source[at..at + #len(expected)], expected)
 }
-fn fail(state: *Scanner, at: usize, kind: ErrorKind) Result {
-  state.error = kind
-  state.kind = errors.Kind.InvalidInput
-  state.error_offset = at
-  return Result{ kind: state.kind, detail: state.error }
+fn fail(state: *Scanner, at: usize) Result {
+  state.failure = parse.parse_failure(parse.Kind.Syntax, at, "")
+  return Result{ failure: state.failure }
 }
 
 // XML 1.0 Fifth Edition NameStartChar/NameChar, decoded as Unicode scalars.
@@ -231,13 +214,13 @@ fn name_start(value: u32) bool {
 fn name_end(source: []const u8, start: usize) usize {
   at := start
   first := utf8.decode(source, at)
-  if !first.ok || !name_start(first.codepoint) {
+  if !first.valid || !name_start(first.codepoint) {
     return start
   }
   at += first.width
   for at < #len(source) {
     part := utf8.decode(source, at)
-    if !part.ok {
+    if !part.valid {
       break
     }
     value := part.codepoint
@@ -256,7 +239,7 @@ fn valid_characters(text: []const u8) bool {
   at: usize = 0
   for at < #len(text) {
     decoded := utf8.decode(text, at)
-    if !decoded.ok || !xml_character(decoded.codepoint) {
+    if !decoded.valid || !xml_character(decoded.codepoint) {
       return false
     }
     at += decoded.width
@@ -268,7 +251,7 @@ fn valid_text(text: []const u8, attribute: bool) bool {
   at: usize = 0
   for at < #len(text) {
     decoded := utf8.decode(text, at)
-    if !decoded.ok || !xml_character(decoded.codepoint) {
+    if !decoded.valid || !xml_character(decoded.codepoint) {
       return false
     }
     if attribute && text[at] == '<' {
@@ -331,8 +314,8 @@ fn valid_text(text: []const u8, attribute: bool) bool {
 }
 
 pub fn next(state: *Scanner) Result {
-  if state.error != ErrorKind.None || state.offset == #len(state.source) {
-    return Result{ kind: state.kind, detail: state.error }
+  if state.failure.kind != parse.StreamKind.Ok || state.offset == #len(state.source) {
+    return Result{ failure: state.failure }
   }
   start := state.offset
   if state.source[start] != '<' {
@@ -341,7 +324,7 @@ pub fn next(state: *Scanner) Result {
       text_end += 1
     }
     state.offset = text_end
-    return Result{ value: Event{ kind: Kind.Text, text: state.source[start..text_end] }, ok: true }
+    return Result{ value: Event{ kind: Kind.Text, text: state.source[start..text_end] }, found: true }
   }
   if starts(state.source, start, "<![CDATA[") {
     cdata_end := start + 9
@@ -349,10 +332,10 @@ pub fn next(state: *Scanner) Result {
       cdata_end += 1
     }
     if cdata_end + 3 > #len(state.source) {
-      return fail(state, start, ErrorKind.Syntax)
+      return fail(state, start)
     }
     state.offset = cdata_end + 3
-    return Result{ value: Event{ kind: Kind.Cdata, text: state.source[start + 9..cdata_end] }, ok: true }
+    return Result{ value: Event{ kind: Kind.Cdata, text: state.source[start + 9..cdata_end] }, found: true }
   }
   if starts(state.source, start, "<!--") {
     comment_end := start + 4
@@ -360,10 +343,10 @@ pub fn next(state: *Scanner) Result {
       comment_end += 1
     }
     if comment_end + 3 > #len(state.source) {
-      return fail(state, start, ErrorKind.Syntax)
+      return fail(state, start)
     }
     state.offset = comment_end + 3
-    return Result{ value: Event{ kind: Kind.Comment, text: state.source[start + 4..comment_end] }, ok: true }
+    return Result{ value: Event{ kind: Kind.Comment, text: state.source[start + 4..comment_end] }, found: true }
   }
   processing := starts(state.source, start, "<?")
   closing := starts(state.source, start, "</")
@@ -374,7 +357,7 @@ pub fn next(state: *Scanner) Result {
   name_start := at
   at = name_end(state.source, at)
   if at == name_start {
-    return fail(state, at, ErrorKind.Syntax)
+    return fail(state, at)
   }
   name := state.source[name_start..at]
   if closing {
@@ -382,10 +365,10 @@ pub fn next(state: *Scanner) Result {
       at += 1
     }
     if at >= #len(state.source) || state.source[at] != '>' {
-      return fail(state, at, ErrorKind.Syntax)
+      return fail(state, at)
     }
     state.offset = at + 1
-    return Result{ value: Event{ kind: Kind.End, name: name }, ok: true }
+    return Result{ value: Event{ kind: Kind.End, name: name }, found: true }
   }
   attributes_start := at
   quote: u8 = 0
@@ -409,7 +392,7 @@ pub fn next(state: *Scanner) Result {
     tag_end += 1
   }
   if tag_end >= #len(state.source) || quote != 0 {
-    return fail(state, tag_end, ErrorKind.Syntax)
+    return fail(state, tag_end)
   }
   terminator := tag_end
   if processing {
@@ -434,20 +417,19 @@ pub fn next(state: *Scanner) Result {
   if processing {
     event_kind = Kind.Processing
   }
-  return Result{ value: Event{ kind: event_kind, name: name, attributes: state.source[attributes_start..attributes_end], self_closing: self_closing }, ok: true }
+  return Result{ value: Event{ kind: event_kind, name: name, attributes: state.source[attributes_start..attributes_end], self_closing: self_closing }, found: true }
 }
 
 pub fn attributes(event: Event) AttributeScanner {
   return AttributeScanner{ source: event.attributes }
 }
 fn attribute_error(state: *AttributeScanner) Attribute {
-  state.error = ErrorKind.Syntax
-  state.kind = errors.Kind.InvalidInput
-  return Attribute{ kind: state.kind, detail: state.error }
+  state.failure = parse.Failure{ kind: parse.Kind.Syntax, offset: state.offset }
+  return Attribute{ failure: state.failure }
 }
 pub fn next_attribute(state: *AttributeScanner) Attribute {
-  if state.error != ErrorKind.None {
-    return Attribute{ kind: state.kind, detail: state.error }
+  if state.failure.kind != parse.Kind.Ok {
+    return Attribute{ failure: state.failure }
   }
   at := state.offset
   for at < #len(state.source) && whitespace(state.source[at]) {
@@ -493,20 +475,20 @@ pub fn next_attribute(state: *AttributeScanner) Attribute {
     return attribute_error(state)
   }
   state.offset = at + 1
-  return Attribute{ name: name, value: value, ok: true }
+  return Attribute{ name: name, value: value, found: true }
 }
 fn valid_attributes(event: Event) bool {
   scan := attributes(event)
   for {
     before := scan.offset
     item := next_attribute(&scan)
-    if !item.ok {
-      return scan.error == ErrorKind.None
+    if !item.found {
+      return scan.failure.kind == parse.Kind.Ok
     }
     previous := attributes(event)
     for previous.offset < before {
       other := next_attribute(&previous)
-      if !other.ok {
+      if !other.found {
         break
       }
       if bytes.equal(other.name, item.name) {
@@ -523,8 +505,8 @@ pub fn valid(source: []const u8, stack: [][]const u8) bool {
   roots: usize = 0
   for {
     item := next(&state)
-    if !item.ok {
-      return state.error == ErrorKind.None && depth == 0 && roots == 1
+    if !item.found {
+      return state.failure.kind == parse.StreamKind.Ok && depth == 0 && roots == 1
     }
     if item.value.kind == Kind.Text && !valid_text(item.value.text, false) {
       return false

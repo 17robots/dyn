@@ -1,3 +1,4 @@
+use "std/io" io
 #target(kernel: darwin)
 #link("System")
 extern fn clock_read "dyn_time_clock"(clock: i32, value: *Instant) i32
@@ -11,22 +12,22 @@ fn native_clock(monotonic: bool) ClockResult {
   }
   if clock_read(clock, &value) != 0 {
     code: isize = 0 - #cast(isize, clock_error().*)
-    return ClockResult{ error: code, kind: errors.darwin(code) }
+    return ClockResult{ failure: io.Failure{ kind: io.darwin(code), native: code } }
   }
-  return ClockResult{ value: value, ok: true }
+  return ClockResult{ value: value }
 }
 fn native_sleep(duration: i64) SleepResult {
   request := Instant{ seconds: duration / Second, nanoseconds: duration % Second }
   remaining := Instant{}
   for {
     if clock_sleep(&request, &remaining) == 0 {
-      return SleepResult{ ok: true }
+      return SleepResult{}
     }
     code: isize = 0 - #cast(isize, clock_error().*)
     if code != -4 {
-      return SleepResult{ error: code, kind: errors.darwin(code) }
+      return SleepResult{ failure: io.Failure{ kind: io.darwin(code), native: code } }
     }
     request = remaining
   }
-  return SleepResult{ ok: true }
+  return SleepResult{}
 }
