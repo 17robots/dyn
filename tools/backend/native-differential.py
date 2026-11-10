@@ -480,7 +480,10 @@ def build(args, root, program):
 
 def outcome(status, stdout, stderr):
     """Fatal faults compare as 'crash' across hosts: a POSIX signal (negative
-    status) or a Windows NTSTATUS error such as 0xC00000FD, stack overflow."""
+    status) or a Windows NTSTATUS error. Windows ends a stack overflow with
+    0xC00000FD before the fault report can run, so that one stays apart."""
+    if status == 0xC00000FD:
+        return 'stack overflow', stdout, b''
     if isinstance(status, int) and (status < 0 or status >= 0xC0000000):
         return 'crash', stdout, b''
     return status, stdout, stderr
@@ -517,7 +520,14 @@ def compare(target, prefix, binary, expected, directory, jobs):
     native = run_cases(prefix, binary, count, directory, jobs)
     # Equal timeouts do not prove equal behavior either. Every case must finish.
     timed = [i for i in range(count) if 'timeout' in (native[i][0], expected[i][0])]
-    failures = [i for i in range(count) if native[i] != expected[i] or i in timed]
+    # Debug builds on Linux report a stack overflow as a memory fault (101);
+    # Windows terminates the process instead. Those are the same case.
+    def same(mine, theirs):
+        if mine[0] == 'stack overflow':
+            return theirs[0] in ('crash', 101) and (theirs[0] == 'crash' or theirs[2].startswith(b'memory fault')) \
+                and mine[1] == theirs[1]
+        return mine == theirs
+    failures = [i for i in range(count) if not same(native[i], expected[i]) or i in timed]
     panics = sum(1 for r in expected if r[0] == 101)
     for i in failures[:20]:
         label = 'TIMEOUT' if i in timed else 'MISMATCH'

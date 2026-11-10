@@ -133,7 +133,8 @@ Upgrade guide: [0.1.0-preview.31](docs/migrations/0.1.0-preview.31.md).
   if need be from a value the loop does not use, which goes back at the loop's exits.
 - `chunk.List(T)` replaces the two structs a chunk list needed.
 - Generic structs: `struct Box($T: type) { value: T }`, used as `Box(i32)`.
-- Debug builds report memory faults with a stack trace on macOS and Windows too.
+- Debug builds report memory faults with a stack trace on macOS and Windows too. On Windows a
+  stack overflow still ends the process (0xC00000FD) without the report.
 - The documentation test now type-checks complete examples.
 - Generic enums: `enum Slot($T: type) { Empty, Full: T }`, used as `Slot(i32).Full(7)`.
 - Release builds at opt-level 3 vectorize `for x in xs { t += x }` and `t += x * x` and `for i in 0..n { t += xs[i] }` over 32- and 64-bit integer slices on x86-64 and AArch64 (squares are 32-bit only).

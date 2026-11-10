@@ -70,7 +70,6 @@ pub fn dyn_unwind_continue() {
 // thread of the process, so one installation is enough.
 extern fn set_exception_filter "SetUnhandledExceptionFilter"(filter: rawptr) rawptr
 extern fn exit_process "ExitProcess"(code: u32)
-extern fn stack_guarantee "SetThreadStackGuarantee"(size: *u32) i32
 fn fault_filter(information: rawptr) i32 {
   write_string("memory fault: invalid address\n")
   trace_dump()
@@ -79,8 +78,4 @@ fn fault_filter(information: rawptr) i32 {
 }
 fn trace_thread_started() {
   _ = set_exception_filter(#cast(rawptr, fault_filter))
-  // A stack overflow runs the filter on the overflowing thread: keep room
-  // for its message and trace, as the Linux handler's alternate stack does.
-  reserve: u32 = 65536
-  _ = stack_guarantee(&reserve)
 }
