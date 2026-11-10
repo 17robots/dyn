@@ -538,8 +538,9 @@ static bool compact_add_function_signatures(const DynSource *s,
       return false;
     }
     if (!foreign && compact_has_type_parameter(d, s)) {
-      if (!compact_add_generic(s, a, errors, d, ns, is_public))
-        return false;
+      /* A bad generic signature is already reported and declared with no
+         parameters; keep declaring the rest so their bodies check normally. */
+      (void)compact_add_generic(s, a, errors, d, ns, is_public);
       continue;
     }
     DynAstFn fn = {.span = compact_span(d),
