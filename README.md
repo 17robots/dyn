@@ -1,7 +1,7 @@
 # Dyn compiler
 
 Dyn is ready for public preview testing. Start with
-[preview 29](https://github.com/17robots/dyn/releases/tag/v0.1.0-preview.29), then
+[preview 30](https://github.com/17robots/dyn/releases/tag/v0.1.0-preview.30), then
 [report bugs](https://github.com/17robots/dyn/issues). APIs may change between previews.
 See the [changelog](CHANGELOG.md) for upgrade notes and code migrations.
 The [documentation](docs/README.md) covers the language, the standard library
@@ -70,9 +70,9 @@ the default and only backend, including textual exports.
 
 | System | Download from the release |
 | --- | --- |
-| Linux x64, glibc 2.39+ (Ubuntu 24.04 or current Arch) | `dyn-0.1.0-preview.29-linux-x86_64-glibc2.39.tar.gz` |
-| Windows x64 (10/11 or Server 2022) | `dyn-0.1.0-preview.29-windows-x86_64.zip` |
-| macOS 15+, Apple Silicon | `dyn-0.1.0-preview.29-macos-aarch64.tar.gz` |
+| Linux x64, glibc 2.39+ (Ubuntu 24.04 or current Arch) | `dyn-0.1.0-preview.30-linux-x86_64-glibc2.39.tar.gz` |
+| Windows x64 (10/11 or Server 2022) | `dyn-0.1.0-preview.30-windows-x86_64.zip` |
+| macOS 15+, Apple Silicon | `dyn-0.1.0-preview.30-macos-aarch64.tar.gz` |
 
 The SDKs include the compiler, standard library, runtime, host linker and library
 dependencies. LLVM, MSYS2 and Homebrew are not required to use the
@@ -92,7 +92,7 @@ mise install github:17robots/dyn
 mise exec -- dyn version
 ```
 
-Expected version: `dyn 0.1.0-preview.29`. No compiler checkout is needed.
+Expected version: `dyn 0.1.0-preview.30`. No compiler checkout is needed.
 `mise exec -- dyn ...` works without shell activation. To use plain `dyn`, follow
 [mise's shell setup](https://mise.jdx.dev/getting-started.html).
 
@@ -116,7 +116,7 @@ On Linux/macOS, from the directory containing the downloaded archive:
 
 ```sh
 # Linux; substitute the macos-aarch64 archive name on macOS.
-tar -xzf dyn-0.1.0-preview.29-linux-x86_64-glibc2.39.tar.gz
+tar -xzf dyn-0.1.0-preview.30-linux-x86_64-glibc2.39.tar.gz
 ./dyn-sdk/bin/dyn version
 export PATH="$PWD/dyn-sdk/bin:$PATH"
 ```
@@ -124,7 +124,7 @@ export PATH="$PWD/dyn-sdk/bin:$PATH"
 On Windows, in PowerShell:
 
 ```powershell
-Expand-Archive .\dyn-0.1.0-preview.29-windows-x86_64.zip -DestinationPath .\dyn-preview28
+Expand-Archive .\dyn-0.1.0-preview.30-windows-x86_64.zip -DestinationPath .\dyn-preview28
 .\dyn-preview28\dyn-sdk\bin\dyn.exe version
 $env:Path = "$PWD\dyn-preview28\dyn-sdk\bin;$env:Path"
 ```
@@ -255,8 +255,8 @@ cd dyn
 ```
 
 These commands build current `main`. To build the published preview instead,
-run `git checkout v0.1.0-preview.29` before continuing. Source builds normally report
-`0.1.0-dev`; set `DYN_VERSION=0.1.0-preview.29` if you need that embedded version.
+run `git checkout v0.1.0-preview.30` before continuing. Source builds normally report
+`0.1.0-dev`; set `DYN_VERSION=0.1.0-preview.30` if you need that embedded version.
 Source builds require their build-time libraries and linker to remain installed.
 
 ### Linux x64 (Ubuntu 24.04)
