@@ -1,13 +1,17 @@
 // Evented HTTP server under a deliberately small configuration so tests reach
 // buffer limits, synchronous large flushes and idle timeouts. Prints "port N"
-// once listening on 127.0.0.1; POST /quit stops it.
+// once listening on 127.0.0.1; POST /quit stops it. With argument "shared",
+// every worker owns an SO_REUSEPORT listener (evented.start_shared).
 use "std/bytes"
 use "std/fmt"
+use "std/html"
 use "std/io"
 use "std/mem"
 use "std/net"
 use "std/net/http"
 use "std/net/http/evented"
+use "std/parse"
+use "std/process"
 use "std/sync"
 use "std/time"
 
@@ -48,6 +52,41 @@ fn handle(response: *http.Response, request: *const http.Request) http.Result {
     }
     return http.body_finish(&opened.body)
   }
+  if bytes.equal(request.path, "/query") {
+    // ?q= decoded, escaped into HTML, echoed with a request header as a response header.
+    storage: [256]u8
+    q := http.query_value(request, "q", storage[..])
+    if q.failure.kind != parse.Kind.Ok {
+      return text(response, http.StatusBadRequest, "bad query\n")
+    }
+    page_storage: [1024]u8
+    page := fmt.buffer(page_storage[..])
+    _ = fmt.write(&page, "<p>")
+    _ = html.write_escaped(&page, q.value)
+    _ = fmt.write(&page, "</p>")
+    tag := http.request_header(request, "x-tag")
+    trigger: []const u8 = q.value
+    if tag.found {
+      trigger = tag.value
+    }
+    headers: [1]http.Header = [http.Header{ name: "HX-Trigger", value: trigger }]
+    sent := http.respond(response, fmt.bytes(&page), http.ResponseOptions{ content_type: "text/html", headers: headers[..] })
+    if sent.detail == http.ErrorKind.Invalid {
+      return text(response, http.StatusBadRequest, "bad header\n")
+    }
+    return sent
+  }
+  if bytes.equal(request.path, "/form") {
+    storage: [64]u8
+    name := http.form_value(request, "name", storage[..])
+    if !name.found {
+      return text(response, http.StatusBadRequest, "missing\n")
+    }
+    if name.failure.kind != parse.Kind.Ok {
+      return text(response, http.StatusBadRequest, "bad form\n")
+    }
+    return text(response, http.StatusOk, name.value)
+  }
   if bytes.equal(request.target, "/quit") {
     sync.store_u32(&app(request).quit, 1)
     return http.respond(response, "bye\n", http.ResponseOptions{ content_type: "text/plain", close_connection: true })
@@ -63,28 +102,31 @@ fn main() {
   for i in 0..BigSize {
     state.big[i] = #cast(u8, 'a' + i % 26)
   }
-  address := net.ipv4(127, 0, 0, 1, 0)
-  listened := net.tcp_listen_ipv4(&address, 128)
-  if listened.failure.kind != io.Kind.Ok {
-    #panic("cannot listen")
-  }
-  listener := net.listener_take(&listened.value)
-  bound := net.Address{}
-  if net.local_address(listener.descriptor, &bound).failure.kind != io.Kind.Ok {
-    #panic("cannot read local address")
-  }
-  port := #cast(u64, bound.bytes[2]) * 256 + #cast(u64, bound.bytes[3])
-
   config := evented.default_config()
   config.connections_per_worker = 16
   config.receive_size = 4 * mem.KiB
   config.send_size = 4 * mem.KiB
   config.idle_timeout_milliseconds = 500
+  arguments := process.arguments(arena)
+  shared := arguments.failure.kind == io.Kind.Ok && #len(arguments.value) > 1 && bytes.equal(arguments.value[1], "shared")
   workers := mem.push_array(evented.Worker, arena, WorkerCount)
-  started := evented.start(arena, workers, &listener, config, handle, state)
+  listener := net.Listener{}
+  started := evented.Result{}
+  if shared {
+    started = evented.start_shared(arena, workers, net.ipv4(127, 0, 0, 1, 0), 128, config, handle, state)
+  } else {
+    address := net.ipv4(127, 0, 0, 1, 0)
+    listened := net.tcp_listen_ipv4(&address, 128)
+    if listened.failure.kind != io.Kind.Ok {
+      #panic("cannot listen")
+    }
+    listener = net.listener_take(&listened.value)
+    started = evented.start(arena, workers, &listener, config, handle, state)
+  }
   if started.failure.kind != io.Kind.Ok {
     #panic("cannot start workers")
   }
+  port := #cast(u64, evented.local_port(workers))
   digits: [20 + mem.ArenaBufferOverhead]u8
   scratch := mem.arena_from_buffer(digits[..])
   _ = io.write_all(io.stdout(), "port ")
@@ -95,7 +137,9 @@ fn main() {
   }
   evented.stop(workers)
   joined := evented.join(workers)
-  net.listener_close(&listener)
+  if listener.active {
+    net.listener_close(&listener)
+  }
   if joined.failure.kind != io.Kind.Ok {
     #panic("worker failed")
   }

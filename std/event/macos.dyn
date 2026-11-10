@@ -44,7 +44,7 @@ fn native_control(queue: *Queue, index: usize, entry: Entry) Result {
   return Result{}
 }
 fn native_wait(arena: *mem.Arena, queue: *Queue, milliseconds: i32) WaitResult {
-  native := mem.push_array(Kevent, arena, #len(queue.entries))
+  native := mem.push_array(Kevent, arena, queue.batch)
   timeout := Timeout{}
   pointer: *Timeout = nil
   if milliseconds >= 0 {

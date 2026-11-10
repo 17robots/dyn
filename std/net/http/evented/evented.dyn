@@ -84,6 +84,8 @@ struct Connection {
 pub struct Worker {
   thread: *threading.Thread,
   listener: *network.Listener,
+  // Set by start_shared: this worker's own SO_REUSEPORT listener.
+  own_listener: network.Listener,
   handler: http.Handler,
   context: rawptr,
   config: Config,
@@ -439,68 +441,146 @@ fn worker_main(context: rawptr) isize {
   return 0
 }
 
+fn valid_start(workers: []Worker, config: Config, handler: http.Handler) io.Failure {
+  if #len(workers) == 0 || handler == nil || config.connections_per_worker == 0 ||
+    config.receive_size < 512 || config.send_size < 512 || config.stack_size < 64 * mem.KiB {
+    return io.Failure{ kind: io.Kind.InvalidInput }
+  }
+  for *worker in workers {
+    if worker.thread != nil {
+      return io.Failure{ kind: io.Kind.InvalidState }
+    }
+  }
+  return io.Failure{}
+}
+
+// Allocates the worker's connections and queue, then spawns its thread.
+// worker.listener and worker.own_listener are set by the caller.
+fn start_worker(arena: *mem.Arena, worker: *Worker) io.Failure {
+  config := worker.config
+  count := config.connections_per_worker
+  worker.connections = mem.push_array(Connection, arena, count)
+  worker.free = mem.push_array(usize, arena, count)
+  receive := mem.push_bytes_uninit(arena, count * config.receive_size)
+  send := mem.push_bytes_uninit(arena, count * config.send_size)
+  for c in 0..count {
+    worker.connections[c].input = receive[c * config.receive_size..(c + 1) * config.receive_size]
+    worker.connections[c].output = send[c * config.send_size..(c + 1) * config.send_size]
+    worker.free[c] = count - 1 - c
+  }
+  worker.free_count = count
+  worker.scratch = mem.arena_from_buffer(mem.push_bytes_uninit(arena, scratch_size(config)))
+  blocking := network.nonblocking(worker.listener.descriptor, true)
+  if blocking.failure.kind != io.Kind.Ok {
+    return blocking.failure
+  }
+  opened := event.open(arena, count + 1)
+  if opened.failure.kind != io.Kind.Ok {
+    return opened.failure
+  }
+  worker.queue = opened.value
+  worker.listening = true
+  added := event.add(&worker.queue, worker.listener.descriptor, event.Readable, ListenerToken)
+  if added.failure.kind != io.Kind.Ok {
+    event.close(&worker.queue)
+    return added.failure
+  }
+  stack := mem.push_bytes_uninit(arena, config.stack_size)
+  spawned := threading.spawn(arena, stack, worker_main, worker)
+  if spawned.failure.kind != io.Kind.Ok {
+    event.close(&worker.queue)
+    return io.Failure{ kind: spawned.failure.kind, native: spawned.failure.native }
+  }
+  worker.thread = spawned.value
+  return io.Failure{}
+}
+
+fn abandon(workers: []Worker, started: usize, failure: io.Failure) Result {
+  stop(workers[..started])
+  _ = join(workers[..started])
+  for *worker in workers[started..] {
+    if worker.own_listener.active {
+      network.listener_close(&worker.own_listener)
+    }
+  }
+  return Result{ started: started, failure: failure }
+}
+
 // Starts one event loop per worker, all accepting from listener (made
 // nonblocking here). arena must hold storage_size(config, #len(workers)) and
 // stay alive, unrewound, until join returns. Workers must be zeroed or joined.
 // Every Request carries context; workers share it, so synchronize mutable state.
 pub fn start(arena: *mem.Arena, workers: []Worker, listener: *network.Listener, config: Config,
   handler: http.Handler, context: rawptr) Result {
-  if #len(workers) == 0 || listener == nil || !listener.active || handler == nil || config.connections_per_worker == 0 ||
-    config.receive_size < 512 || config.send_size < 512 || config.stack_size < 64 * mem.KiB {
+  invalid := valid_start(workers, config, handler)
+  if invalid.kind != io.Kind.Ok {
+    return Result{ failure: invalid }
+  }
+  if listener == nil || !listener.active {
     return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
-  for *worker in workers {
-    if worker.thread != nil {
-      return Result{ failure: io.Failure{ kind: io.Kind.InvalidState } }
-    }
+  for i in 0..#len(workers) {
+    workers[i] = Worker{ listener: listener, handler: handler, context: context, config: config }
   }
-  blocking := network.nonblocking(listener.descriptor, true)
-  if blocking.failure.kind != io.Kind.Ok {
-    return Result{ failure: blocking.failure }
-  }
-  i: usize = 0
-  for i < #len(workers) {
-    worker := &workers[i]
-    worker.* = Worker{ listener: listener, handler: handler, context: context, config: config }
-    count := config.connections_per_worker
-    worker.connections = mem.push_array(Connection, arena, count)
-    worker.free = mem.push_array(usize, arena, count)
-    receive := mem.push_bytes_uninit(arena, count * config.receive_size)
-    send := mem.push_bytes_uninit(arena, count * config.send_size)
-    for c in 0..count {
-      worker.connections[c].input = receive[c * config.receive_size..(c + 1) * config.receive_size]
-      worker.connections[c].output = send[c * config.send_size..(c + 1) * config.send_size]
-      worker.free[c] = count - 1 - c
+  for i in 0..#len(workers) {
+    failed := start_worker(arena, &workers[i])
+    if failed.kind != io.Kind.Ok {
+      return abandon(workers, i, failed)
     }
-    worker.free_count = count
-    worker.scratch = mem.arena_from_buffer(mem.push_bytes_uninit(arena, scratch_size(config)))
-    opened := event.open(arena, count + 1)
-    if opened.failure.kind != io.Kind.Ok {
-      stop(workers[..i])
-      _ = join(workers[..i])
-      return Result{ started: i, failure: opened.failure }
-    }
-    worker.queue = opened.value
-    worker.listening = true
-    added := event.add(&worker.queue, listener.descriptor, event.Readable, ListenerToken)
-    if added.failure.kind != io.Kind.Ok {
-      event.close(&worker.queue)
-      stop(workers[..i])
-      _ = join(workers[..i])
-      return Result{ started: i, failure: added.failure }
-    }
-    stack := mem.push_bytes_uninit(arena, config.stack_size)
-    spawned := threading.spawn(arena, stack, worker_main, worker)
-    if spawned.failure.kind != io.Kind.Ok {
-      event.close(&worker.queue)
-      stop(workers[..i])
-      _ = join(workers[..i])
-      return Result{ started: i, failure: io.Failure{ kind: spawned.failure.kind, native: spawned.failure.native } }
-    }
-    worker.thread = spawned.value
-    i += 1
   }
   return Result{ started: #len(workers) }
+}
+
+// Like start, but every worker owns a listener on address with SO_REUSEPORT,
+// so the kernel spreads new connections across workers instead of waking all
+// of them. Port 0 picks one free port shared by all; read it back with
+// local_port. join closes the listeners. Linux only: elsewhere the result
+// fails with Unsupported; use start there.
+pub fn start_shared(arena: *mem.Arena, workers: []Worker, address: network.Ipv4Address, backlog: usize,
+  config: Config, handler: http.Handler, context: rawptr) Result {
+  invalid := valid_start(workers, config, handler)
+  if invalid.kind != io.Kind.Ok {
+    return Result{ failure: invalid }
+  }
+  for i in 0..#len(workers) {
+    workers[i] = Worker{ handler: handler, context: context, config: config }
+  }
+  for i in 0..#len(workers) {
+    worker := &workers[i]
+    listened := network.tcp_listen_ipv4_shared(&address, backlog)
+    if listened.failure.kind != io.Kind.Ok {
+      return abandon(workers, i, listened.failure)
+    }
+    worker.own_listener = network.listener_take(&listened.value)
+    worker.listener = &worker.own_listener
+    if i == 0 {
+      // Pin a kernel-chosen port so later listeners join the same group.
+      bound := network.Address{}
+      if network.local_address(worker.own_listener.descriptor, &bound).failure.kind == io.Kind.Ok {
+        address.bytes[2] = bound.bytes[2]
+        address.bytes[3] = bound.bytes[3]
+      }
+    }
+  }
+  for i in 0..#len(workers) {
+    failed := start_worker(arena, &workers[i])
+    if failed.kind != io.Kind.Ok {
+      return abandon(workers, i, failed)
+    }
+  }
+  return Result{ started: #len(workers) }
+}
+
+// Local port of the first worker's listener, or 0.
+pub fn local_port(workers: []Worker) u16 {
+  if #len(workers) == 0 || workers[0].listener == nil {
+    return 0
+  }
+  bound := network.Address{}
+  if network.local_address(workers[0].listener.descriptor, &bound).failure.kind != io.Kind.Ok {
+    return 0
+  }
+  return #cast(u16, bound.bytes[2]) * 256 + #cast(u16, bound.bytes[3])
 }
 
 // Asks every worker to finish its current loop pass (at most about 100 ms).
@@ -527,6 +607,9 @@ pub fn join(workers: []Worker) Result {
       continue
     }
     worker.thread = nil
+    if worker.own_listener.active {
+      network.listener_close(&worker.own_listener)
+    }
     result.started += 1
     if result.failure.kind == io.Kind.Ok && worker.error.failure.kind != io.Kind.Ok {
       result.failure = worker.error.failure

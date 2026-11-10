@@ -677,6 +677,9 @@ pub struct Request {
   raw: []const u8,
   method: []const u8,
   target: []const u8,
+  // target before '?', and after it (empty when absent). Both borrow raw.
+  path: []const u8,
+  query: []const u8,
   body: []const u8,
   header_length: usize,
   keep_alive: bool,
@@ -693,11 +696,17 @@ pub struct Response {
   finished: bool,
 }
 
+pub struct Header { name: []const u8, value: []const u8 }
+
 pub struct ResponseOptions {
   status: u16,
   reason: []const u8,
   content_type: []const u8,
   close_connection: bool,
+  // Extra response headers, written in order. Names must be tokens and values
+  // must not hold CR, LF or NUL; otherwise respond fails with Invalid before
+  // writing anything, so request data cannot inject headers.
+  headers: []const Header,
 }
 
 pub struct Server {
@@ -772,7 +781,7 @@ pub fn dispatch(state: *Router, response: *Response, request: *const Request) Re
   i: usize = 0
   for i < state.count {
     candidate := state.routes[i]
-    if bytes.equal(candidate.method, request.method) && bytes.equal(candidate.target, request.target) {
+    if bytes.equal(candidate.method, request.method) && bytes.equal(candidate.target, request.path) {
       return candidate.handler(response, request)
     }
     i += 1
@@ -820,10 +829,18 @@ fn request_parts(input: []const u8, head: HttpHead) Request {
     return Request{}
   }
   total := head.header_length + head.content_length
+  target := input[first_space + 1..second_space]
+  question := bytes.find_byte(target, '?')
+  query := target[..0]
+  if question < #len(target) {
+    query = target[question + 1..]
+  }
   return Request{
     raw: input[..total],
     method: input[..first_space],
-    target: input[first_space + 1..second_space],
+    target: target,
+    path: target[..question],
+    query: query,
     body: input[head.header_length..total],
     header_length: head.header_length,
     keep_alive: head.keep_alive,
@@ -1023,6 +1040,72 @@ fn response_output(response: *Response, source: []const u8) Result {
   return Result{}
 }
 
+fn header_valid(item: Header) bool {
+  if #len(item.name) == 0 {
+    return false
+  }
+  for byte in item.name {
+    if !token_byte(byte) {
+      return false
+    }
+  }
+  for byte in item.value {
+    if byte == '\r' || byte == '\n' || byte == 0 {
+      return false
+    }
+  }
+  return true
+}
+fn text_valid(value: []const u8) bool {
+  for byte in value {
+    if byte == '\r' || byte == '\n' || byte == 0 {
+      return false
+    }
+  }
+  return true
+}
+
+enum HeadMode { Measure, Stage, Direct }
+struct HeadWriter { mode: HeadMode, staging: []u8, used: usize, response: *Response, failed: bool }
+fn head_emit(writer: *HeadWriter, piece: []const u8) {
+  if writer.failed {
+    return
+  }
+  if writer.mode == HeadMode.Measure {
+    writer.used += #len(piece)
+  } else if writer.mode == HeadMode.Stage {
+    writer.used = append_bytes(writer.staging, writer.used, piece)
+  } else {
+    writer.failed = response_output(writer.response, piece).failure.kind != io.Kind.Ok
+  }
+}
+fn head_write(writer: *HeadWriter, options: ResponseOptions, status: u16, reason: []const u8, content_type: []const u8, body_length: usize, chunked: bool) {
+  number_storage: [20]u8 = []
+  head_emit(writer, "HTTP/1.1 ")
+  head_emit(writer, decimal(number_storage[..], #cast(usize, status)))
+  head_emit(writer, " ")
+  head_emit(writer, reason)
+  head_emit(writer, "\r\nContent-Type: ")
+  head_emit(writer, content_type)
+  if chunked {
+    head_emit(writer, "\r\nTransfer-Encoding: chunked")
+  } else {
+    head_emit(writer, "\r\nContent-Length: ")
+    head_emit(writer, decimal(number_storage[..], body_length))
+  }
+  for item in options.headers {
+    head_emit(writer, "\r\n")
+    head_emit(writer, item.name)
+    head_emit(writer, ": ")
+    head_emit(writer, item.value)
+  }
+  if options.close_connection {
+    head_emit(writer, "\r\nConnection: close\r\n\r\n")
+  } else {
+    head_emit(writer, "\r\nConnection: keep-alive\r\n\r\n")
+  }
+}
+
 // Writes the response head, followed by body when given. Head and body leave in
 // one write when they fit in a stack staging buffer: separate small writes on a
 // keep-alive socket stall on Nagle plus delayed ACK (about 40 ms per response).
@@ -1045,51 +1128,118 @@ fn response_begin(response: *Response, options: ResponseOptions, body_length: us
   if #len(content_type) == 0 {
     content_type = "application/octet-stream"
   }
-  status_storage: [20]u8 = []
-  length_storage: [20]u8 = []
-  framing_name := "\r\nTransfer-Encoding: chunked"
-  length_text: []const u8 = ""
-  if !chunked {
-    framing_name = "\r\nContent-Length: "
-    length_text = decimal(length_storage[..], body_length)
+  // Rejected before any byte is written; the response stays unstarted.
+  if !text_valid(reason) || !text_valid(content_type) {
+    return Result{ detail: ErrorKind.Invalid, failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
-  connection := "\r\nConnection: keep-alive\r\n\r\n"
-  if options.close_connection {
-    connection = "\r\nConnection: close\r\n\r\n"
-  }
-  pieces: [10][]const u8 = [
-    "HTTP/1.1 ", decimal(status_storage[..], #cast(usize, status)), " ", reason,
-    "\r\nContent-Type: ", content_type, framing_name, length_text, connection, body,
-  ]
-  staging: [8 * memory.KiB]u8 = []
-  used: usize = 0
-  for piece in pieces {
-    used = append_bytes(staging[..], used, piece)
-  }
-  if used <= #len(staging) {
-    result := response_output(response, staging[..used])
-    if result.failure.kind == io.Kind.Ok {
-      response.started = true
+  for item in options.headers {
+    if !header_valid(item) {
+      return Result{ detail: ErrorKind.Invalid, failure: io.Failure{ kind: io.Kind.InvalidInput } }
     }
-    return result
   }
-  used = 0
-  for piece in pieces[..9] {
-    used = append_bytes(staging[..], used, piece)
-  }
-  if used <= #len(staging) {
-    if response_output(response, staging[..used]).failure.kind != io.Kind.Ok {
+  staging: [8 * memory.KiB]u8 = []
+  measure := HeadWriter{ mode: HeadMode.Measure, response: response }
+  head_write(&measure, options, status, reason, content_type, body_length, chunked)
+  head_length := measure.used
+  if head_length <= #len(staging) {
+    stage := HeadWriter{ mode: HeadMode.Stage, staging: staging[..], response: response }
+    head_write(&stage, options, status, reason, content_type, body_length, chunked)
+    if #len(body) <= #len(staging) - head_length {
+      // Common case: head and body in one write.
+      used := append_bytes(staging[..], head_length, body)
+      result := response_output(response, staging[..used])
+      if result.failure.kind == io.Kind.Ok {
+        response.started = true
+      }
+      return result
+    }
+    if response_output(response, staging[..head_length]).failure.kind != io.Kind.Ok {
       return response.first
     }
   } else {
-    for piece in pieces[..9] {
-      if response_output(response, piece).failure.kind != io.Kind.Ok {
-        return response.first
-      }
+    direct := HeadWriter{ mode: HeadMode.Direct, response: response }
+    head_write(&direct, options, status, reason, content_type, body_length, chunked)
+    if direct.failed {
+      return response.first
     }
   }
   response.started = true
   return response_output(response, body)
+}
+
+// First request header named name (ASCII case-insensitive). The value borrows
+// request.raw. Each call scans the head.
+pub fn request_header(request: *const Request, name: []const u8) HttpHeader {
+  return header(request.raw[..request.header_length], name)
+}
+
+pub struct FieldValue { value: []u8, found: bool, failure: parse.Failure }
+
+// application/x-www-form-urlencoded value into destination: '+' becomes a
+// space and %XX a byte. Fails with Syntax on a bad escape and Capacity when
+// destination is too small; destination contents are then unspecified.
+pub fn form_decode(destination: []u8, source: []const u8) FieldValue {
+  at: usize = 0
+  i: usize = 0
+  for i < #len(source) {
+    if at == #len(destination) {
+      return FieldValue{ found: true, failure: parse.Failure{ kind: parse.Kind.Capacity, offset: i } }
+    }
+    byte := source[i]
+    if byte == '%' {
+      if #len(source) - i < 3 || hex(source[i + 1]) < 0 || hex(source[i + 2]) < 0 {
+        return FieldValue{ found: true, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: i } }
+      }
+      destination[at] = #cast(u8, hex(source[i + 1]) * 16 + hex(source[i + 2]))
+      i += 3
+    } else {
+      if byte == '+' {
+        byte = ' '
+      }
+      destination[at] = byte
+      i += 1
+    }
+    at += 1
+  }
+  return FieldValue{ value: destination[..at], found: true }
+}
+
+// Raw, still-encoded value of the first field named name in an urlencoded
+// form or query string.
+pub fn form_field(form: []const u8, name: []const u8) HttpHeader {
+  start: usize = 0
+  for start <= #len(form) {
+    end := start + bytes.find_byte(form[start..], '&')
+    pair := form[start..end]
+    equals := bytes.find_byte(pair, '=')
+    if bytes.equal(pair[..equals], name) {
+      if equals == #len(pair) {
+        return HttpHeader{ name: pair, value: pair[..0], found: true }
+      }
+      return HttpHeader{ name: pair[..equals], value: pair[equals + 1..], found: true }
+    }
+    start = end + 1
+  }
+  return HttpHeader{}
+}
+
+// Decoded query parameter name into destination. found is false when absent.
+pub fn query_value(request: *const Request, name: []const u8, destination: []u8) FieldValue {
+  field := form_field(request.query, name)
+  if !field.found {
+    return FieldValue{}
+  }
+  return form_decode(destination, field.value)
+}
+
+// Decoded urlencoded body field name into destination. The caller checks the
+// content type when it matters. found is false when absent.
+pub fn form_value(request: *const Request, name: []const u8, destination: []u8) FieldValue {
+  field := form_field(request.body, name)
+  if !field.found {
+    return FieldValue{}
+  }
+  return form_decode(destination, field.value)
 }
 
 pub fn respond(response: *Response, body: []const u8, options: ResponseOptions) Result {

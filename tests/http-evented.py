@@ -55,6 +55,28 @@ def exercise(port):
     assert client.getresponse().read() == b'ok\n'
     client.close()
 
+    # Query decoding, HTML escaping, request and response headers.
+    client = http.client.HTTPConnection('127.0.0.1', port, timeout=10)
+    client.request('GET', '/query?x=1&q=%3Cscript%3E+%26%22', headers={'X-Tag': 'refresh'})
+    reply = client.getresponse()
+    assert reply.read() == b'<p>&lt;script&gt; &amp;&quot;</p>'
+    assert reply.getheader('HX-Trigger') == 'refresh'
+    client.request('GET', '/query?q=%zz')
+    reply = client.getresponse()
+    assert (reply.status, reply.read()) == (400, b'bad query\n')
+    client.request('POST', '/form', body=b'a=1&name=Ada+L%C3%B6',
+                   headers={'Content-Type': 'application/x-www-form-urlencoded'})
+    reply = client.getresponse()
+    assert (reply.status, reply.read().decode()) == (200, 'Ada L\u00f6')
+    client.request('POST', '/form', body=b'name=' + b'x' * 100)
+    reply = client.getresponse()
+    assert (reply.status, reply.read()) == (400, b'bad form\n')
+    client.close()
+    # A decoded query value carrying CR LF cannot become a response header:
+    # respond refuses it before writing any byte.
+    injected = raw(port, b'GET /query?q=a%0D%0ASet-Cookie:+x HTTP/1.1\r\nConnection: close\r\n\r\n')
+    assert injected.startswith(b'HTTP/1.1 400') and b'bad header' in injected, injected
+
     # Slow reader: the worker drains the large body as the peer reads.
     with socket.create_connection(('127.0.0.1', port), timeout=10) as connection:
         connection.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
@@ -118,12 +140,12 @@ def exercise(port):
 
 
 with tempfile.TemporaryDirectory(prefix='dyn-http-evented-') as temporary:
-    for release in (False, True):
+    for release, mode in ((False, 'single'), (True, 'single'), (True, 'shared')):
         program = Path(temporary) / 'server'
         subprocess.run([DYN, 'build', str(ROOT / 'tests/http-evented'), '--no-cache', '--quiet',
                         '--output', str(program)] + (['--release'] if release else []),
                        check=True, timeout=120)
-        server = subprocess.Popen([str(program)], stdout=subprocess.PIPE)
+        server = subprocess.Popen([str(program), mode], stdout=subprocess.PIPE)
         try:
             line = server.stdout.readline().decode()
             assert line.startswith('port '), line
@@ -133,4 +155,4 @@ with tempfile.TemporaryDirectory(prefix='dyn-http-evented-') as temporary:
             if server.poll() is None:
                 server.kill()
                 server.wait()
-print('PASS evented HTTP: keep-alive, pipelining, byte splits, large/slow/streamed responses, 400/413, idle timeout, 48 clients over 32 slots (debug/release)')
+print('PASS evented HTTP: keep-alive, pipelining, byte splits, large/slow/streamed responses, 400/413, query/form/header API, idle timeout, 48 clients over 32 slots (debug/release, shared SO_REUSEPORT listeners)')

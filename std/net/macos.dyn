@@ -8,6 +8,8 @@ const ReuseOption: usize = 4
 const ErrorOption: usize = 4103
 const TcpLevel: usize = 6
 const NoDelayOption: usize = 1
+// Zero: no load-balancing SO_REUSEPORT on this platform.
+const ReusePortOption: usize = 0
 const NoSignalFlag: usize = 524288
 fn native_interrupted(code: isize) bool {
   return code == -4

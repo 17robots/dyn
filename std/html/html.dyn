@@ -1,0 +1,41 @@
+// HTML text escaping into bounded caller storage. Untrusted text placed in
+// element content or a quoted attribute value must pass through write_escaped.
+// It does not make text safe inside <script>, <style>, URLs or unquoted
+// attributes; those need context-specific encoding.
+use "std/fmt" fmt
+
+// Appends text with & < > " ' replaced by entities. Returns false, with the
+// buffer marked failed, when it does not fit.
+pub fn write_escaped(buffer: *fmt.Buffer, text: []const u8) bool {
+  start: usize = 0
+  for i in 0..#len(text) {
+    replacement := entity(text[i])
+    if #len(replacement) > 0 {
+      _ = fmt.write(buffer, text[start..i])
+      _ = fmt.write(buffer, replacement)
+      start = i + 1
+    }
+  }
+  _ = fmt.write(buffer, text[start..])
+  return !buffer.failed
+}
+
+// Entity for one byte, or empty when the byte needs no escaping.
+pub fn entity(byte: u8) []const u8 {
+  if byte == '&' {
+    return "&amp;"
+  }
+  if byte == '<' {
+    return "&lt;"
+  }
+  if byte == '>' {
+    return "&gt;"
+  }
+  if byte == '"' {
+    return "&quot;"
+  }
+  if byte == '\'' {
+    return "&#39;"
+  }
+  return ""
+}

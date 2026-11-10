@@ -28,6 +28,23 @@ servers so they pick up the new `dyn`.
   that own their sockets.
 - New `net.no_delay` sets `TCP_NODELAY`. The evented server enables it on every
   accepted connection.
+- `evented.start_shared` gives every worker its own `SO_REUSEPORT` listener, so
+  the kernel spreads connections instead of waking every worker (Linux; other
+  platforms report Unsupported). New `net.tcp_listen_ipv4_shared`,
+  `net.reuse_port` and `evented.local_port`.
+- `std/event` add, modify and remove are now constant time (free list plus a
+  descriptor table), and `wait` asks the kernel for at most 512 events per call
+  instead of zeroing an array the size of the queue.
+- `http.Request` has `path` and `query`, split from `target`. `http.dispatch`
+  now matches routes against `path`, so `/search?q=x` reaches a `/search` route.
+- New `http.query_value`, `http.form_value`, `http.form_decode` and
+  `http.form_field` decode urlencoded fields into caller storage.
+  `http.request_header` reads one request header.
+- `http.ResponseOptions.headers` adds response headers. A header name that is
+  not a token, or a value (or reason or content type) holding CR, LF or NUL,
+  fails with `ErrorKind.Invalid` before any byte is written, so request data
+  cannot inject headers.
+- New `std/html` with `html.write_escaped` for HTML text in `fmt.Buffer`s.
 
 ## 0.1.0-preview.32
 
