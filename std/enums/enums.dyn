@@ -2,12 +2,12 @@
 // (Ok = 0, NoEnt = 2); reflection reports each variant's tag. Dense enums
 // index directly; enums with set values search their variants.
 
-pub fn count($E: type) usize {
+pub fn count(E: type) usize {
   info := #typeof(E)
   return #len(info.variants)
 }
 
-fn index_of($E: type, tag: u64) usize {
+fn index_of(E: type, tag: u64) usize {
   info := #typeof(E)
   variants := info.variants
   total := #len(variants)
@@ -23,7 +23,7 @@ fn index_of($E: type, tag: u64) usize {
 
 // The variant with this tag, or the first variant when no variant has it.
 // Use this to bring external numbers into an enum.
-pub fn from_int($E: type, value: u64) E {
+pub fn from_int(E: type, value: u64) E {
   if index_of(E, value) == count(E) {
     return #cast(E, 0)
   }

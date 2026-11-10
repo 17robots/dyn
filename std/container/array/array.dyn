@@ -18,7 +18,7 @@
 use "std/mem" mem
 
 // items is the used front of storage.
-pub struct Array($T: type) {
+pub struct Array(T) {
   items: []T,
   storage: []T,
   arena: *mem.Arena,
@@ -32,13 +32,13 @@ pub fn init(a: *Array($T), arena: *mem.Arena) {
 }
 
 // Adds value at the end.
-pub fn push(a: *Array($T), value: T) {
+pub fn push(a: *Array($T), value: $T) {
   _ = push_ref(a, value)
 }
 
 // Adds value at the end and returns its address, which goes stale at the
 // next push.
-pub fn push_ref(a: *Array($T), value: T) *T {
+pub fn push_ref(a: *Array($T), value: $T) *T {
   count := #len(a.items)
   if count == #len(a.storage) {
     grow(a, count + 1)
@@ -67,7 +67,7 @@ fn grow(a: *Array($T), need: usize) {
 }
 
 // Adds every value at the end.
-pub fn push_all(a: *Array($T), values: []const T) {
+pub fn push_all(a: *Array($T), values: []const $T) {
   count := #len(a.items)
   if count + #len(values) > #len(a.storage) {
     grow(a, count + #len(values))
@@ -87,7 +87,7 @@ pub fn get(a: *const Array($T), index: usize) *T {
 }
 
 // The last element, removed: ok is false when the array was empty.
-pub struct Popped($T: type) { value: T, ok: bool }
+pub struct Popped(T) { value: T, ok: bool }
 
 pub fn pop(a: *Array($T)) Popped(T) {
   result: Popped(T)

@@ -11,13 +11,13 @@
 // return it instead of nil.
 
 // Singly linked stack through next.
-pub fn sll_stack_push(first: **$T, node: *T) {
+pub fn sll_stack_push(first: **$T, node: *$T) {
   node.next = first.*
   first.* = node
 }
 
 // Pops the top node, or returns nil_node when the stack is empty.
-pub fn sll_stack_pop(first: **$T, nil_node: *const T) *T {
+pub fn sll_stack_pop(first: **$T, nil_node: *const $T) *T {
   node := first.*
   if node == nil {
     return #cast(*T, nil_node)
@@ -28,7 +28,7 @@ pub fn sll_stack_pop(first: **$T, nil_node: *const T) *T {
 }
 
 // Singly linked queue through next: push at the back, pop from the front.
-pub fn sll_queue_push(first, last: **$T, node: *T) {
+pub fn sll_queue_push(first, last: **$T, node: *$T) {
   node.next = nil
   if first.* == nil {
     first.* = node
@@ -38,7 +38,7 @@ pub fn sll_queue_push(first, last: **$T, node: *T) {
   last.* = node
 }
 
-pub fn sll_queue_push_front(first, last: **$T, node: *T) {
+pub fn sll_queue_push_front(first, last: **$T, node: *$T) {
   node.next = first.*
   first.* = node
   if last.* == nil {
@@ -47,7 +47,7 @@ pub fn sll_queue_push_front(first, last: **$T, node: *T) {
 }
 
 // Pops the front node, or returns nil_node when the queue is empty.
-pub fn sll_queue_pop(first, last: **$T, nil_node: *const T) *T {
+pub fn sll_queue_pop(first, last: **$T, nil_node: *const $T) *T {
   node := first.*
   if node == nil {
     return #cast(*T, nil_node)
@@ -61,7 +61,7 @@ pub fn sll_queue_pop(first, last: **$T, nil_node: *const T) *T {
 }
 
 // Doubly linked list through next and prev.
-pub fn dll_push_back(first, last: **$T, node: *T) {
+pub fn dll_push_back(first, last: **$T, node: *$T) {
   node.next = nil
   node.prev = last.*
   if last.* == nil {
@@ -72,7 +72,7 @@ pub fn dll_push_back(first, last: **$T, node: *T) {
   last.* = node
 }
 
-pub fn dll_push_front(first, last: **$T, node: *T) {
+pub fn dll_push_front(first, last: **$T, node: *$T) {
   node.prev = nil
   node.next = first.*
   if first.* == nil {
@@ -84,7 +84,7 @@ pub fn dll_push_front(first, last: **$T, node: *T) {
 }
 
 // Inserts node directly after after, which must already be in the list.
-pub fn dll_insert_after(first, last: **$T, after: *T, node: *T) {
+pub fn dll_insert_after(first, last: **$T, after: *$T, node: *$T) {
   node.prev = after
   node.next = after.next
   if after.next == nil {
@@ -99,7 +99,7 @@ pub fn dll_insert_after(first, last: **$T, after: *T, node: *T) {
 }
 
 // Unlinks node, which must be in the list, and clears its links.
-pub fn dll_remove(first, last: **$T, node: *T) {
+pub fn dll_remove(first, last: **$T, node: *$T) {
   if node.prev == nil {
     first.* = node.next
   } else {
@@ -116,7 +116,7 @@ pub fn dll_remove(first, last: **$T, node: *T) {
 
 // Trees: each node has parent, first, last, next and prev. Children are a
 // doubly linked list on their parent.
-pub fn tree_push_child(parent: *$T, node: *T) {
+pub fn tree_push_child(parent: *$T, node: *$T) {
   node.parent = parent
   dll_push_back(&parent.first, &parent.last, node)
 }
@@ -132,14 +132,14 @@ pub fn tree_remove(node: *$T) {
 
 // Free lists through free_next, a link separate from next so that freeing a
 // node cannot corrupt another list it is still in. Unlink a node before freeing it.
-pub fn free_push(first_free: **$T, node: *T) {
+pub fn free_push(first_free: **$T, node: *$T) {
   node.free_next = first_free.*
   first_free.* = node
 }
 
 // Takes a node back from the free list, or returns nil_node when it is empty.
 // The node keeps its old contents; clear it (mem.clear or slot_map.reset).
-pub fn free_pop(first_free: **$T, nil_node: *const T) *T {
+pub fn free_pop(first_free: **$T, nil_node: *const $T) *T {
   node := first_free.*
   if node == nil {
     return #cast(*T, nil_node)

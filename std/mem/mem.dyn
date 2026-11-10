@@ -571,14 +571,14 @@ pub fn arena_try_push_uninit(arena: *Arena, size: usize, alignment: usize) Alloc
 
 // Pushes one fresh T: zeroed, then T's field defaults. Panics when the arena
 // is exhausted. Types without defaults pay nothing beyond the zeroing.
-pub fn push($T: type, arena: *Arena) *T {
+pub fn push(T: type, arena: *Arena) *T {
   value := #cast(*T, arena_push(arena, #sizeof(T), #alignof(T)))
   #init(value)
   return value
 }
 
 // Pushes count zeroed elements. Panics when the arena is exhausted or the size overflows.
-pub fn push_array($T: type, arena: *Arena, count: usize) []T {
+pub fn push_array(T: type, arena: *Arena, count: usize) []T {
   if count == 0 {
     empty: []T
     return empty
@@ -592,7 +592,7 @@ pub fn push_array($T: type, arena: *Arena, count: usize) []T {
 
 // Pushes count elements, each zeroed and then given T's field defaults. The
 // loop over the elements is the cost push_array leaves out.
-pub fn push_array_init($T: type, arena: *Arena, count: usize) []T {
+pub fn push_array_init(T: type, arena: *Arena, count: usize) []T {
   items := push_array(T, arena, count)
   for i in 0..count {
     #init(&items[i])
@@ -602,7 +602,7 @@ pub fn push_array_init($T: type, arena: *Arena, count: usize) []T {
 
 // Pushes one fresh T, zeroed and then given T's field defaults, or returns nil when the arena is exhausted. Never panics
 // on exhaustion; on failure the offset and existing bytes are unchanged.
-pub fn try_push($T: type, arena: *Arena) *T {
+pub fn try_push(T: type, arena: *Arena) *T {
   allocation := arena_try_push(arena, #sizeof(T), #alignof(T))
   if !allocation.ok {
     return nil
@@ -614,7 +614,7 @@ pub fn try_push($T: type, arena: *Arena) *T {
 
 // Pushes count zeroed elements, or returns an empty slice when the arena is
 // exhausted or the size overflows. A nonzero count with an empty result is failure.
-pub fn try_push_array($T: type, arena: *Arena, count: usize) []T {
+pub fn try_push_array(T: type, arena: *Arena, count: usize) []T {
   empty: []T
   size := size_for(count, #sizeof(T))
   if count == 0 || !size.valid {
@@ -635,7 +635,7 @@ pub fn try_push_array($T: type, arena: *Arena, count: usize) []T {
 // lists; use a chunk list for many. Returns the new element.
 // Panics when something else was pushed onto arena after items, or when the
 // list reaches the end of its block.
-pub fn append(arena: *Arena, items: *[]$T, value: T) *T {
+pub fn append(arena: *Arena, items: *[]$T, value: $T) *T {
   count := #len(items.*)
   if count == 0 {
     items.* = push_array(T, arena, 1)
@@ -653,7 +653,7 @@ pub fn append(arena: *Arena, items: *[]$T, value: T) *T {
 // Like append and append_many, but when the block fills the list moves to a new
 // block. Earlier element pointers and copies of the slice then go stale. Use
 // these when the arena is the caller's and nothing else holds the list.
-pub fn append_grow(arena: *Arena, items: *[]$T, value: T) *T {
+pub fn append_grow(arena: *Arena, items: *[]$T, value: $T) *T {
   count := #len(items.*)
   if count == 0 {
     items.* = push_array(T, arena, 1)
@@ -669,7 +669,7 @@ pub fn append_grow(arena: *Arena, items: *[]$T, value: T) *T {
   slot.* = value
   return slot
 }
-pub fn append_many_grow(arena: *Arena, items: *[]$T, values: []const T) {
+pub fn append_many_grow(arena: *Arena, items: *[]$T, values: []const $T) {
   count := #len(items.*)
   extra := #len(values)
   if extra == 0 {
@@ -691,7 +691,7 @@ pub fn append_many_grow(arena: *Arena, items: *[]$T, values: []const T) {
 }
 
 // Like append, but returns stub instead of panicking when the list cannot grow.
-pub fn try_append(arena: *Arena, items: *[]$T, value: T, stub: *const T) *T {
+pub fn try_append(arena: *Arena, items: *[]$T, value: $T, stub: *const $T) *T {
   count := #len(items.*)
   if count == 0 {
     fresh := try_push_array(T, arena, 1)
@@ -710,7 +710,7 @@ pub fn try_append(arena: *Arena, items: *[]$T, value: T, stub: *const T) *T {
 }
 
 // Appends every element of values to items, under the same rules as append.
-pub fn append_many(arena: *Arena, items: *[]$T, values: []const T) {
+pub fn append_many(arena: *Arena, items: *[]$T, values: []const $T) {
   count := #len(items.*)
   extra := #len(values)
   if extra == 0 {
@@ -890,7 +890,7 @@ pub fn frames_release(frames: *Frames) {
 
 // Copies source into the start of destination and returns the element count.
 // Panics if destination is shorter than source. Use move for overlapping ranges.
-pub fn copy(destination: []$T, source: []const T) usize {
+pub fn copy(destination: []$T, source: []const $T) usize {
   if #len(destination) < #len(source) {
     #panic("copy destination too small")
   }
@@ -901,7 +901,7 @@ pub fn copy(destination: []$T, source: []const T) usize {
 }
 
 // Like copy, but source and destination may overlap.
-pub fn move(destination: []$T, source: []const T) usize {
+pub fn move(destination: []$T, source: []const $T) usize {
   if #len(destination) < #len(source) {
     #panic("move destination too small")
   }
@@ -940,7 +940,7 @@ pub fn clear(value: *$T) {
   zero(#slice(#cast(*u8, value), #sizeof(T)))
 }
 
-pub fn fill(items: []$T, value: T) {
+pub fn fill(items: []$T, value: $T) {
   for *item in items {
     item.* = value
   }

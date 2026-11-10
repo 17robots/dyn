@@ -1364,6 +1364,32 @@ static bool bind_pattern(DynAstProgram *a, DynType pattern, DynType actual,
   }
   return true;
 }
+/* Whether a parameter pattern mentions type parameter `param` anywhere, as in
+   `[]T`, `*T` or `Box(T)`. */
+static bool pattern_mentions(DynAstProgram *a, DynType pattern, DynType param,
+                             unsigned depth) {
+  if (pattern == param) return true;
+  if (depth > 32) return false;
+  if (dyn_type_is_struct(pattern)) {
+    DynAstStruct p = a->structs[pattern - DYN_TYPE_STRUCT_BASE];
+    for (uint32_t i = 0; p.open_instance && i < p.type_param_count; ++i)
+      if (pattern_mentions(a, p.type_args[i], param, depth + 1)) return true;
+    return false;
+  }
+  if (dyn_type_is_enum(pattern)) {
+    DynAstEnum p = a->enums[pattern - DYN_TYPE_ENUM_BASE];
+    for (uint32_t i = 0; p.open_instance && i < p.type_param_count; ++i)
+      if (pattern_mentions(a, p.type_args[i], param, depth + 1)) return true;
+    return false;
+  }
+  if (dyn_type_is_pointer(pattern))
+    return pattern_mentions(a, a->pointers[pattern - DYN_TYPE_POINTER_BASE].pointee, param, depth + 1);
+  if (dyn_type_is_slice(pattern))
+    return pattern_mentions(a, a->slices[pattern - DYN_TYPE_SLICE_BASE].element, param, depth + 1);
+  if (dyn_type_is_array(pattern))
+    return pattern_mentions(a, a->arrays[pattern - DYN_TYPE_ARRAY_BASE].element, param, depth + 1);
+  return false;
+}
 /* Generic symbols need canonical type identity, not diagnostic names (which
    strip module prefixes and truncate long compound types). Nominal names in
    the merged source carry stable module prefixes; never hash AST table IDs. */
@@ -1449,19 +1475,69 @@ static DynType check_generic_call(Sema *sema, DynAstProgram *a, DynExprId id,
   DynSpan call = a->expressions[id].span;
   uint32_t item_start = a->expressions[id].item_start,
            item_count = a->expressions[id].item_count;
-  /* f(T) with only the leading type arguments names that instance as a
-     function value: `hash := key_hash(u32)`. */
-  bool value_form = item_count == g.type_param_count && item_count < g.param_count;
-  for (uint32_t i = 0; value_form && i < item_count; ++i)
-    value_form = a->generic_params[g.param_start + i].is_type;
-  if (item_count != g.param_count && !value_form) {
-    error_span(call, s, errors, "function argument count mismatch");
+  /* #instance(f, T, ...) names an instance as a function value: one type per
+     type parameter, in the order the parameters are declared. */
+  if (a->expressions[id].instance) {
+    DynType args[DYN_MAX_TYPE_PARAMS] = {0};
+    bool types = item_count == g.type_param_count;
+    for (uint32_t k = 0; types && k < item_count; ++k) {
+      DynExprId arg = a->items[item_start + k].expression;
+      if (arg == DYN_NO_EXPR) { types = false; break; }
+      if (a->expressions[arg].kind == DYN_EXPR_TYPE)
+        args[k] = a->expressions[arg].type;
+      else if (a->expressions[arg].kind == DYN_EXPR_NAME &&
+               find_local(sema, a, a->expressions[arg].span, s) == UINT32_MAX)
+        args[k] = dyn_ast_named_type(a, a->expressions[arg].span, s);
+      else
+        args[k] = DYN_TYPE_ERROR;
+      types = args[k] != DYN_TYPE_ERROR;
+    }
+    if (!types) {
+      char message[160];
+      snprintf(message, sizeof(message),
+               "#instance needs one type for each of the function's %u type parameters",
+               g.type_param_count);
+      error_span(call, s, errors, message);
+      return a->expressions[id].type = DYN_TYPE_ERROR;
+    }
+    uint32_t function = UINT32_MAX;
+    for (size_t i = 0; i < a->instance_count && function == UINT32_MAX; ++i)
+      if (a->instances[i].generic == generic &&
+          !memcmp(a->instances[i].args, args, g.type_param_count * sizeof(*args)))
+        function = a->instances[i].function;
+    if (function == UINT32_MAX) {
+      uint32_t depth = 0;
+      if (sema->current_function != UINT32_MAX &&
+          a->functions[sema->current_function].is_instance)
+        depth = a->instances[a->functions[sema->current_function].instance].depth + 1;
+      if (depth >= DYN_MAX_INSTANCE_DEPTH) {
+        error_span(call, s, errors, "generic instances nest too deeply (limit 32)");
+        return a->expressions[id].type = DYN_TYPE_ERROR;
+      }
+      function = dyn_ast_instantiate(a, s, generic, args, depth, call,
+                                     instance_hash(a, s, args, g.type_param_count));
+      if (function == UINT32_MAX) {
+        error_span(call, s, errors, "out of memory");
+        return a->expressions[id].type = DYN_TYPE_ERROR;
+      }
+    }
+    DynAstExpr *e = &a->expressions[id];
+    e->kind = DYN_EXPR_FUNCTION;
+    e->integer = function;
+    e->left = DYN_NO_EXPR;
+    e->item_count = 0;
+    return e->type = function_pointer_type(a, function);
+  }
+  if (item_count != g.param_count) {
+    error_span(call, s, errors,
+               item_count == g.type_param_count
+                   ? "function argument count mismatch; to name an instance as a value, write #instance(f, T)"
+                   : "function argument count mismatch");
     return a->expressions[id].type = DYN_TYPE_ERROR;
   }
   DynType args[DYN_MAX_TYPE_PARAMS] = {0}, values[64];
   /* The argument that first fixed each type parameter, for conflict errors. */
   DynExprId binder[DYN_MAX_TYPE_PARAMS];
-  bool given[DYN_MAX_TYPE_PARAMS] = {0};
   for (uint32_t k = 0; k < DYN_MAX_TYPE_PARAMS; ++k) binder[k] = DYN_NO_EXPR;
   if (item_count > 64) {
     error_span(call, s, errors, "too many arguments for a generic function");
@@ -1488,7 +1564,10 @@ static DynType check_generic_call(Sema *sema, DynAstProgram *a, DynExprId id,
       bool is_type = a->expressions[arg].kind == DYN_EXPR_TYPE;
       if (pass == 0 && p.is_type != is_type) {
         error_span(a->expressions[arg].span, s, errors,
-                   p.is_type ? "expected a type argument" : "a type is not a value");
+                   p.is_type ? "expected a type argument"
+                   : item_count == g.type_param_count
+                       ? "a type is not a value; to name an instance as a value, write #instance(f, T)"
+                       : "a type is not a value");
         failed = true;
         continue;
       }
@@ -1496,7 +1575,6 @@ static DynType check_generic_call(Sema *sema, DynAstProgram *a, DynExprId id,
         if (pass == 0) {
           args[p.pattern - DYN_TYPE_PARAM_BASE] = a->expressions[arg].type;
           binder[p.pattern - DYN_TYPE_PARAM_BASE] = arg;
-          given[p.pattern - DYN_TYPE_PARAM_BASE] = true;
         }
         continue;
       }
@@ -1521,10 +1599,9 @@ static DynType check_generic_call(Sema *sema, DynAstProgram *a, DynExprId id,
         DynSpan name = g.type_names[conflict];
         int n = (int)(name.end_byte - name.start_byte);
         const char *tname = s->text + name.start_byte;
-        if (given[conflict]) {
-          snprintf(message, sizeof(message), "%.*s is given as %s, but this argument makes it %s",
-                   n, tname, first, second);
-        } else if (binder[conflict] != DYN_NO_EXPR) {
+        /* A type argument written at the call never conflicts: `$T: type`
+           is rejected when an argument's type also carries T. */
+        if (binder[conflict] != DYN_NO_EXPR) {
           DynSpan from = a->expressions[binder[conflict]].span;
           int m = (int)(from.end_byte - from.start_byte);
           if (m > 40) m = 40;
@@ -1577,14 +1654,6 @@ static DynType check_generic_call(Sema *sema, DynAstProgram *a, DynExprId id,
       error_span(call, s, errors, "out of memory");
       return a->expressions[id].type = DYN_TYPE_ERROR;
     }
-  }
-  if (value_form) {
-    DynAstExpr *e = &a->expressions[id];
-    e->kind = DYN_EXPR_FUNCTION;
-    e->integer = function;
-    e->left = DYN_NO_EXPR;
-    e->item_count = 0;
-    return e->type = function_pointer_type(a, function);
   }
   /* Check value arguments against the concrete parameters, dropping type
      arguments from the call. */
@@ -1786,6 +1855,10 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
       a->expressions[id].kind = DYN_EXPR_INDIRECT_CALL;
     } else if (a->functions[fn].is_generic) {
       return check_generic_call(sema, a, id, a->functions[fn].generic, s, errors);
+    } else if (a->expressions[id].instance) {
+      error_span(a->expressions[id].span, s, errors,
+                 "#instance needs a generic function; name a plain function directly");
+      return a->expressions[id].type = DYN_TYPE_ERROR;
     } else {
       a->expressions[id].left = DYN_NO_EXPR;
       a->expressions[id].integer = fn;
@@ -1847,8 +1920,7 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
           uint32_t arg_index = item_start + i;
           DynType element = slice_info(a, callee->variadic_type)->element;
           DynType value =
-              check_expr(sema, a, a->items[arg_index].expression, s, errors,
-                         element == DYN_TYPE_ANY ? DYN_TYPE_INFER : element);
+              check_expr(sema, a, a->items[arg_index].expression, s, errors, element);
           if (element != DYN_TYPE_ANY && value != element &&
               value != DYN_TYPE_ERROR) {
             if (can_convert(sema, a, value, element))
@@ -2536,7 +2608,7 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
     return a->expressions[id].type = DYN_TYPE_I32;
   }
   if (a->expressions[id].kind == DYN_EXPR_FLOAT) {
-    return a->expressions[id].type = expected == DYN_TYPE_F64 || expected == DYN_TYPE_ANY ? DYN_TYPE_F64 : DYN_TYPE_F32;
+    return a->expressions[id].type = expected == DYN_TYPE_F32 ? DYN_TYPE_F32 : DYN_TYPE_F64;
   }
   if (a->expressions[id].kind == DYN_EXPR_CHAR) {
     DynType t = expected != DYN_TYPE_INFER && !dyn_type_is_distinct(expected) &&
@@ -4222,6 +4294,32 @@ static bool sema_program(Sema *sema, DynAstProgram *a, const DynSource *s,
     if (fn->return_type == DYN_TYPE_ANY)
       error_span(fn->name, s, errors,
                  "returning any would escape borrowed storage");
+    /* One way to write a generic: a type an argument already carries is
+       inferred from it (`items: []$T`), and `$T: type` is only for a type
+       no argument carries, such as one used only by the result or body. */
+    if (fn->is_generic && !fn->is_instance) {
+      DynAstGeneric g = a->generics[fn->generic];
+      for (uint32_t i = 0; i < g.param_count; ++i) {
+        DynAstGenericParam explicit_param = a->generic_params[g.param_start + i];
+        if (!explicit_param.is_type) continue;
+        for (uint32_t j = i + 1; j < g.param_count; ++j) {
+          DynAstGenericParam later = a->generic_params[g.param_start + j];
+          if (later.is_type || !pattern_mentions(a, later.pattern, explicit_param.pattern, 0))
+            continue;
+          char message[320];
+          int tn = (int)(explicit_param.name.end_byte - explicit_param.name.start_byte);
+          int pn = (int)(later.name.end_byte - later.name.start_byte);
+          snprintf(message, sizeof(message),
+                   "%.*s is in the type of `%.*s`, so it is inferred: write `$%.*s` there and drop `%.*s: type`",
+                   tn, s->text + explicit_param.name.start_byte,
+                   pn, s->text + later.name.start_byte,
+                   tn, s->text + explicit_param.name.start_byte,
+                   tn, s->text + explicit_param.name.start_byte);
+          error_span(explicit_param.name, s, errors, message);
+          break;
+        }
+      }
+    }
     if (fn->foreign) {
       if (fn->variadic && fn->param_count == 0)
         error_span(fn->name, s, errors,
@@ -4229,11 +4327,25 @@ static bool sema_program(Sema *sema, DynAstProgram *a, const DynSource *s,
       if (!foreign_symbol_valid(fn->link_name, s))
         error_span(fn->link_name, s, errors,
                    "foreign link name must be a non-empty linker symbol");
-      for (uint32_t prior = 0; prior < f; ++prior)
-        if (a->functions[prior].foreign &&
-            dyn_span_text_equal(fn->link_name, a->functions[prior].link_name,
-                                s))
-          error_span(fn->link_name, s, errors, "duplicate foreign link symbol");
+      // Several modules may bind the same C symbol (each std backend binds
+      // its own errno accessor). That is fine when every binding agrees on
+      // the signature; only a conflicting redeclaration is an error.
+      for (uint32_t prior = 0; prior < f; ++prior) {
+        DynAstFn *other = &a->functions[prior];
+        if (!other->foreign ||
+            !dyn_span_text_equal(fn->link_name, other->link_name, s))
+          continue;
+        bool same = other->return_type == fn->return_type &&
+                    other->param_count == fn->param_count &&
+                    other->variadic == fn->variadic;
+        for (uint32_t i = 0; same && i < fn->param_count; ++i)
+          same = a->params[fn->param_start + i].type ==
+                 a->params[other->param_start + i].type;
+        if (!same)
+          error_span(fn->link_name, s, errors,
+                     "foreign link symbol redeclared with a different signature");
+        break;
+      }
       if (fn->return_type == DYN_TYPE_ERROR ||
           fn->return_type == DYN_TYPE_INFER)
         error_span(fn->name, s, errors,

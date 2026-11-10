@@ -156,6 +156,15 @@ _=values()[i]
 #panic("BOUNDS SKIPPED") }
 """, 'index.ok')
 
+# Each `else if` ends in an empty block that jumps to the enclosing join, so a
+# long chain makes a chain of forwarding blocks longer than any small hop limit.
+# Branches must land on the chain's end, never on an unset block address.
+ELSE_IF_CHAIN = 'counter: usize = 0\nfn sink(v: usize) {\n  counter += v\n}\nfn action(id: usize) {\n  if id == 0 {\n    sink(100)\n  }\n'
+for arm in range(1, 40):
+    ELSE_IF_CHAIN += '  else if id == %d {\n    sink(%d)\n  }\n' % (arm, arm)
+ELSE_IF_CHAIN += '}\nfn main() {\n  for i in 0..50 {\n    action(i)\n  }\n  if counter != 880 { #panic("ELSE IF CHAIN") }\n}\n'
+CASES['else_if_chain'] = (ELSE_IF_CHAIN, None)
+
 
 def build(directory, output, *options):
     result = subprocess.run(

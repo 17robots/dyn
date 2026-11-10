@@ -37,7 +37,7 @@ pub fn is_live(node: *const $T) bool {
 }
 
 // The handle for node, which must be an element of slots.
-pub fn handle_of(slots: []$T, node: *const T) Handle {
+pub fn handle_of(slots: []$T, node: *const $T) Handle {
   base := #cast(usize, &slots[0])
   address := #cast(usize, node)
   if address < base || (address - base) % #sizeof(T) != 0 || (address - base) / #sizeof(T) >= #len(slots) {
@@ -48,7 +48,7 @@ pub fn handle_of(slots: []$T, node: *const T) Handle {
 
 // The live slot the handle was made for, or nil_node when the handle is stale,
 // zero, or out of range.
-pub fn resolve(slots: []$T, handle: Handle, nil_node: *const T) *T {
+pub fn resolve(slots: []$T, handle: Handle, nil_node: *const $T) *T {
   index := #cast(usize, handle.index)
   if index >= #len(slots) || handle.generation % 2 == 0 || slots[index].generation != handle.generation {
     return #cast(*T, nil_node)

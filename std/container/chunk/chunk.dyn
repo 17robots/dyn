@@ -5,8 +5,8 @@
 
 use "std/mem" mem
 
-pub struct Chunk($T: type) { next: *Chunk(T), count: usize, items: [64]T }
-pub struct List($T: type) { first: *Chunk(T), last: *Chunk(T), total: usize }
+pub struct Chunk(T) { next: *Chunk(T), count: usize, items: [64]T }
+pub struct List(T) { first: *Chunk(T), last: *Chunk(T), total: usize }
 
 // Same pointer, typed like the like argument. Lets push allocate a chunk
 // without naming the chunk type.
@@ -54,7 +54,7 @@ pub fn at(list: *const $L, index: usize, nil_node: *const $E) *E {
 }
 
 // Copies every element, in order, into one new contiguous slice from arena.
-pub fn to_slice($T: type, arena: *mem.Arena, list: *const $L) []T {
+pub fn to_slice(T: type, arena: *mem.Arena, list: *const $L) []T {
   result := mem.push_array(T, arena, list.total)
   at: usize = 0
   chunk := list.first

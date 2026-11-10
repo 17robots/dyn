@@ -12,6 +12,40 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
+## Unreleased
+
+- Generics have one spelling, and existing code needs a rewrite. `tools/migrate-generics.py`
+  does it for `.dyn` files:
+  - A type the caller passes is `T: type`, or `K, V: type` for several. `$T: type` is an
+    error.
+  - Struct and enum type parameters are bare names: `struct Map(K, V)`, `enum Slot(T)`.
+    Their parentheses hold only types, so `$T: type` and `T: type` are errors there.
+  - A type an argument supplies is written `$T` at every parameter that supplies it:
+    `fn eql(a: $T, b: $T) bool`. A plain `T` there is an error. The result type and the
+    body still write plain `T`.
+  - `T: type` for a type that a parameter's type contains is an error; infer it instead.
+    `fn first(T: type, items: []T) T` becomes `fn first(items: []$T) T`, and calls drop
+    the type.
+  - `#instance(f, T, ...)` names an instance as a function value, one type per type
+    parameter in declaration order: `#instance(key_hash, u32)`. The old `f(T)` value form
+    is gone, so a call `f(...)` always runs the function.
+
+  See [docs/migrations/generics-one-spelling.md](docs/migrations/generics-one-spelling.md).
+
+- A float literal with no float context is now `f64`. `x := 1.5` and a generic `$T`
+  inferred from `1.5` were `f32`, which disagreed with `any`. Write `x: f32 = 1.5` where
+  you want `f32`; mixing the two in arithmetic is a compile error that points at the line.
+
+- Optimized x86-64 builds no longer miscompile long `else if` chains. Jump forwarding
+  stopped after 16 hops, which left some jumps pointing into unrelated functions.
+- Several modules may bind the same C symbol when the signatures agree, so a program that
+  uses both `std/thread` and `std/process` checks for macOS again. A binding with a
+  different signature is still an error.
+- A float literal passed through `...any` boxes as `f64`, matching a single `any` parameter
+  and the language guide. It was `f32`.
+- Debug builds no longer emit dead jumps after a `case` arm or `if` branch that returns or
+  panics. When every arm ended that way, the jump pointed into the next function.
+
 ## 0.1.0-preview.31
 
 Upgrade guide: [0.1.0-preview.31](docs/migrations/0.1.0-preview.31.md).

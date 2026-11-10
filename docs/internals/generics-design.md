@@ -14,10 +14,15 @@ unconstrained, and type-explicit when the type cannot be inferred.
 
 ## Rules in one paragraph
 
-A parameter written `$T: type` takes a type argument at the call. A parameter
-type containing `$T` (as in `a: $T`, `p: *$T` or `s: []$T`) declares `T`
-and infers it from that argument. Elsewhere in the
-declaration and body, `T` is an ordinary type name. Each distinct set of type
+A parameter type containing `$T` (as in `a: $T`, `p: *$T` or `s: []$T`)
+infers `T` from that argument, and every parameter that supplies `T` writes
+`$T`. A parameter written `T: type` (or `K, V: type`) takes a type argument at
+the call, and is allowed only when no parameter's type contains `T`: a type an
+argument carries is always inferred. So each generic has one spelling and each
+call one form. `$` appears only in parameter types; the result type and the
+body write plain `T`. Struct and enum type parameters are always passed and
+are bare names, `struct Map(K, V)`: those parentheses hold only types, while a
+function's also hold values, which is why a function writes `T: type`. Each distinct set of type
 arguments produces one instance. The compiler checks every instance's body as
 ordinary code; a body that is invalid for a type is an error at the call that
 created the instance. There are no constraints, traits, interfaces, operator
@@ -45,7 +50,7 @@ language decision, not an extension of this design.
 - Specialization: no different body for a particular type, and no overloading
   by parameter type.
 - Generic unions, generic methods, and generic type aliases.
-- Value parameters (`$N: usize`) and compile-time function execution.
+- Value parameters (`N: usize`) and compile-time function execution.
 - Higher-kinded parameters (a parameter that is itself a generic type).
 
 ## Syntax
@@ -54,11 +59,11 @@ language decision, not an extension of this design.
 
 ```dyn
 // Explicit type argument: the type is the first thing a reader sees.
-pub fn push($T: type, arena: *Arena) *T {
+pub fn push(T: type, arena: *Arena) *T {
   return #cast(*T, arena_push_or_panic(arena, #sizeof(T), #alignof(T)))
 }
 
-pub fn push_array($T: type, arena: *Arena, count: usize) []T {
+pub fn push_array(T: type, arena: *Arena, count: usize) []T {
   bytes := arena_push_or_panic(arena, count * #sizeof(T), #alignof(T))
   return (#cast(*T, bytes))[..count]
 }
@@ -79,7 +84,7 @@ pub fn clear(value: *$T) {
   zero((#cast(*u8, value))[..#sizeof(T)])
 }
 
-pub fn copy(destination: []$T, source: []const T) usize {
+pub fn copy(destination: []$T, source: []const $T) usize {
   count := min(#len(destination), #len(source))
   for i in 0..count {
     destination[i] = source[i]
@@ -100,13 +105,14 @@ clear(&state.diagnostics)
 
 Grammar additions:
 
-- `$T: type` as a parameter. It may appear anywhere in the list; by
-  convention it comes first.
-- `$T` inside a parameter type, introducing `T`. Each name is introduced with
-  `$` once; later uses, including within the same parameter list, use plain
-  `T`.
+- `T: type`, or grouped `K, V: type`, as a parameter. It may appear anywhere
+  in the list; by convention it comes first.
+- `$T` inside a parameter type: the first one introduces `T`, and each later
+  one matches it. A plain `T` in a parameter type where `T` is inferred is an
+  error, as is `$T` for a `T: type` parameter.
 - A type used as a call argument. This already parses for `#sizeof(T)`; it
-  becomes valid only in a `$T: type` parameter position.
+  is valid only in a `T: type` parameter position.
+- `#instance(f, T, ...)`, which names an instance as a function value.
 
 ### Inference
 
@@ -130,11 +136,11 @@ to match an `i64` one). Add a cast at the call.
 ### Reversed: generic structs and enums
 
 This design first ruled out generic types. That was reversed on 2026-11-06:
-`struct Box($T: type)` and `enum Slot($T: type)` take type parameters, and
+`struct Box(T)` and `enum Slot(T)` take type parameters, and
 `Box(i32)` names one concrete instance. Type arguments are always written.
 
 ```dyn
-pub fn sll_stack_push(first: **$T, node: *T) {
+pub fn sll_stack_push(first: **$T, node: *$T) {
   node.next = first.*
   first.* = node
 }
@@ -187,8 +193,10 @@ summarized as `(N more)`.
   inference from `nil`, no untyped constants after defaulting.
 - `#sizeof(T)` inside a generic body is a constant per instance, as today.
 - `#typeof(T)` works as for any type.
-- Address-of a generic function (`&min`) requires explicit arguments, written
-  `&min(i32)`, and produces an ordinary function pointer.
+- `#instance(f, T, ...)` names an instance as an ordinary function value, one
+  type per type parameter in declaration order: `#instance(min, i32)`,
+  `#instance(push, Node)`. A call `f(...)` always runs the function, and
+  `&min` is not a form.
 
 ### Exports and visibility
 
@@ -302,7 +310,7 @@ There is no phase 3: generic types were rejected.
 
 Done:
 
-- Grammar: `$T` as a type and as a `$T: type` parameter; `type_argument`
+- Grammar: `$T` in parameter types and `T: type` parameters; `type_argument`
   call arguments for types that do not parse as expressions (`*T`, `[]T`,
   primitives). A plain name such as `Node` stays a name expression, and a
   generic call resolves it as a type.
@@ -360,6 +368,6 @@ Not done:
 ## Open questions
 
 - Whether `type` should be a keyword or remain an identifier in parameter
-  position. Proposed: contextual, valid only after `$T:`.
+  position. Proposed: contextual, valid only as a parameter's type.
 - Whether `&min(i32)` is needed at all in phase 1. Proposed: reject taking the
   address of a generic function until a caller needs it.

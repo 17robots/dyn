@@ -30,7 +30,7 @@ fn verify(bytes: []u8, arena: *mem.Arena, start: usize, size: usize) {
     else { expect(bytes[i] == 171) }
   }
 }
-fn typed_array($T:type, count:usize, offset:usize) {
+fn typed_array(T:type, count:usize, offset:usize) {
   left:[512]u8=[]
   right:[512]u8=[]
   fill(left[..])

@@ -1,16 +1,16 @@
-enum Slot($T: type) { Empty, Full: T }
-enum(u8) Either($A: type, $B: type) { Neither, Left: A, Right: B }
-enum Tree($T: type) { Leaf, Node: *Branch(T) }
+enum Slot(T) { Empty, Full: T }
+enum(u8) Either(A, B) { Neither, Left: A, Right: B }
+enum Tree(T) { Leaf, Node: *Branch(T) }
 enum Color { Red, Green }
-struct Branch($T: type) { left: Tree(T), right: Tree(T), value: T }
+struct Branch(T) { left: Tree(T), right: Tree(T), value: T }
 struct Holder { slot: Slot(i64), other: Slot(u8) }
 type IntSlot = Slot(i32)
 
-fn full($T: type, value: T) Slot(T) {
+fn full(value: $T) Slot(T) {
   return Slot(T).Full(value)
 }
 
-fn get(slot: Slot($T), fallback: T) T {
+fn get(slot: Slot($T), fallback: $T) T {
   case slot {
     Slot(T).Empty => {
       return fallback
@@ -51,7 +51,8 @@ fn main() {
   if get(a, 0) != 8 {
     #panic("alias")
   }
-  b: Slot(f64) = full(f64, 1.5)
+  half: f64 = 1.5
+  b: Slot(f64) = full(half)
   if get(b, 0.0) != 1.5 {
     #panic("f64")
   }

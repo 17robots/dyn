@@ -23,11 +23,11 @@
 use "std/container/hash" hash
 use "std/mem" mem
 
-pub struct Entry($K: type, $V: type) { key: K, value: V }
+pub struct Entry(K, V) { key: K, value: V }
 // Two parallel arrays. A tag is 0 for an empty entry, else 0x80 with the top
 // 7 bits of the key's hash, so most probes read one byte and never touch an
 // entry that cannot match.
-pub struct Map($K: type, $V: type) {
+pub struct Map(K, V) {
   tags: []u8,
   entries: []Entry(K, V),
   count: usize,
@@ -42,21 +42,21 @@ pub struct Map($K: type, $V: type) {
 // and compare by value; any other key type is a compile error, so give
 // init_with its hash and equality.
 pub fn init(m: *Map($K, $V), arena: *mem.Arena) {
-  init_seeded_with(m, arena, 0x243f6a8885a308d3, default_hash(K), default_equal(K))
+  init_seeded_with(m, arena, 0x243f6a8885a308d3, #instance(default_hash, K), #instance(default_equal, K))
 }
 
 // init with a chosen seed, for keys an attacker may choose.
 pub fn init_seeded(m: *Map($K, $V), arena: *mem.Arena, seed: u64) {
-  init_seeded_with(m, arena, seed, default_hash(K), default_equal(K))
+  init_seeded_with(m, arena, seed, #instance(default_hash, K), #instance(default_equal, K))
 }
 
 // init with the key's hash and equality: fn(seed, key) u64 and fn(a, b) bool.
-pub fn init_with(m: *Map($K, $V), arena: *mem.Arena, hash_key: fn(u64, K) u64, equal_key: fn(K, K) bool) {
+pub fn init_with(m: *Map($K, $V), arena: *mem.Arena, hash_key: fn(u64, $K) u64, equal_key: fn($K, $K) bool) {
   init_seeded_with(m, arena, 0x243f6a8885a308d3, hash_key, equal_key)
 }
 
 // The default hash of a key: text by content, other keys by value.
-fn default_hash($K: type, seed: u64, key: K) u64 {
+fn default_hash(seed: u64, key: $K) u64 {
   #assert(#typeof(K).kind == TypeKind.Integer || #typeof(K).kind == TypeKind.Enum ||
       #typeof(K).kind == TypeKind.Bool || #typeof(K).kind == TypeKind.Pointer ||
       (#typeof(K).kind == TypeKind.Slice && #typeof(K).element_id == #typeof(u8).id),
@@ -84,7 +84,7 @@ fn default_hash($K: type, seed: u64, key: K) u64 {
   return integer_hash(seed, #cast(u64, #cast(*const u8, &key).*))
 }
 
-fn default_equal($K: type, left: K, right: K) bool {
+fn default_equal(left: $K, right: $K) bool {
   if #typeof(K).kind == TypeKind.Slice {
     return text_equal(#cast(*const []const u8, &left).*, #cast(*const []const u8, &right).*)
   }
@@ -104,7 +104,7 @@ fn default_equal($K: type, left: K, right: K) bool {
 }
 
 // init_with and a chosen seed, passed to every hash_key call.
-pub fn init_seeded_with(m: *Map($K, $V), arena: *mem.Arena, seed: u64, hash_key: fn(u64, K) u64, equal_key: fn(K, K) bool) {
+pub fn init_seeded_with(m: *Map($K, $V), arena: *mem.Arena, seed: u64, hash_key: fn(u64, $K) u64, equal_key: fn($K, $K) bool) {
   empty: Map(K, V)
   m.* = empty
   m.arena = arena
@@ -149,7 +149,7 @@ fn tag_of(code: u64) u8 {
 }
 
 // The index holding key, or the empty index where it belongs.
-fn locate(m: *const Map($K, $V), key: K, code: u64) usize {
+fn locate(m: *const Map($K, $V), key: $K, code: u64) usize {
   tags := m.tags
   entries := m.entries
   equal_key := m.equal_key
@@ -198,7 +198,7 @@ fn grow(m: *Map($K, $V)) {
 }
 
 // The index of key, adding the key when absent; the caller sets the value.
-fn place(m: *Map($K, $V), key: K) usize {
+fn place(m: *Map($K, $V), key: $K) usize {
   if m.arena == nil {
     #panic("call map.init before adding to a map")
   }
@@ -216,7 +216,7 @@ fn place(m: *Map($K, $V), key: K) usize {
 }
 
 // Sets key to value, adding it when absent.
-pub fn insert(m: *Map($K, $V), key: K, value: V) {
+pub fn insert(m: *Map($K, $V), key: $K, value: $V) {
   if m.arena == nil {
     #panic("call map.init before adding to a map")
   }
@@ -237,7 +237,7 @@ pub fn insert(m: *Map($K, $V), key: K, value: V) {
 // The value for key, added as initial when absent: one lookup for counting,
 // as in map.upsert(&counts, word, 0).* += 1. The pointer goes stale at the
 // next insert or upsert.
-pub fn upsert(m: *Map($K, $V), key: K, initial: V) *V {
+pub fn upsert(m: *Map($K, $V), key: $K, initial: $V) *V {
   before := m.count
   entry := &m.entries[place(m, key)]
   if m.count != before {
@@ -247,7 +247,7 @@ pub fn upsert(m: *Map($K, $V), key: K, initial: V) *V {
 }
 
 // The value for key, or nil when key is absent. An empty map needs no init.
-pub fn get(m: *const Map($K, $V), key: K) *V {
+pub fn get(m: *const Map($K, $V), key: $K) *V {
   if m.count == 0 {
     return nil
   }
@@ -260,7 +260,7 @@ pub fn get(m: *const Map($K, $V), key: K) *V {
 
 // Removes key. Returns false when it was absent. Later entries of the probe run
 // shift back, so no tombstones build up.
-pub fn remove(m: *Map($K, $V), key: K) bool {
+pub fn remove(m: *Map($K, $V), key: $K) bool {
   if m.count == 0 {
     return false
   }
@@ -286,7 +286,7 @@ pub fn remove(m: *Map($K, $V), key: K) bool {
 
 // A walk over a map's entries. Adding or removing entries during a walk may
 // skip or repeat some.
-pub struct Walk($K: type, $V: type) { map: *const Map(K, V), at: usize, entry: *Entry(K, V) }
+pub struct Walk(K, V) { map: *const Map(K, V), at: usize, entry: *Entry(K, V) }
 
 pub fn walk(m: *const Map($K, $V)) Walk(K, V) {
   it: Walk(K, V)

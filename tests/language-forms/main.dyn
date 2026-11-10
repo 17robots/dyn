@@ -6,7 +6,7 @@ use "std/io"
 use "std/mem"
 
 struct Point { x: i32, y: i32 }
-struct Box($T: type) { value: T }
+struct Box(T) { value: T }
 
 const LIMIT := 64
 const MASK := 1 << 12
@@ -130,7 +130,7 @@ fn main() {
   at: usize = narrow
   check(widened + #cast(u64, at) == 12, "size widening")
   // Generic instances as function values, and default map keys.
-  twice := doubled(u32)
+  twice := #instance(doubled, u32)
   check(twice(21) == 42, "instance value")
   arena2 := mem.arena_create(0)
   by_errno: map.Map(Errno, u32)
@@ -162,7 +162,7 @@ fn main() {
   io.println("{} {}", "ok", 1)
 }
 
-fn classify($T: type) usize {
+fn classify(T: type) usize {
   if #typeof(T).kind == TypeKind.Slice {
     return 100
   } else if #typeof(T).kind == TypeKind.Enum {
@@ -174,7 +174,7 @@ fn classify($T: type) usize {
   return #sizeof(T)
 }
 
-fn doubled($T: type, value: T) T {
+fn doubled(value: $T) T {
   #assert(#typeof(T).kind == TypeKind.Integer, "doubled: integers only")
   return value * 2
 }

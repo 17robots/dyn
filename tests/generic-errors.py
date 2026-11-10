@@ -39,4 +39,45 @@ with tempfile.TemporaryDirectory(prefix='dyn-generic-errors-') as directory:
     assert any(line.startswith(main + ':13:3: error: #assert failed: map.init: keys must be') for line in lines), result.stderr
     assert any('map.dyn' in line and 'note: reported inside the library here' in line for line in lines), result.stderr
     assert not any('map.dyn' in line and ': error:' in line for line in lines), result.stderr
-print('PASS generic errors: conflicts name the binding argument; std instance failures land on the program call')
+
+# One spelling per generic: `$T: type` is an error when an argument's type
+# already carries T, and inferred generics name instances as function values.
+REDUNDANT = '''fn first(T: type, items: []T) T {
+  return items[0]
+}
+
+fn sizes(T: type, count: usize) usize {
+  return count * #sizeof(T)
+}
+
+fn main() {
+  values: [2]u8 = [1, 2]
+  _ = first(u8, values[..])
+  _ = sizes(u32, 2)
+}
+'''
+INSTANCE = '''fn mix(seed: u64, key: $K) u64 {
+  return seed + #cast(u64, key)
+}
+
+fn main() {
+  hash := #instance(mix, u32)
+  if hash(1, 2) != 3 {
+    #panic("instance value")
+  }
+}
+'''
+with tempfile.TemporaryDirectory(prefix='dyn-generic-spelling-') as directory:
+    work = Path(directory) / 'redundant'
+    work.mkdir()
+    (work / 'main.dyn').write_text(REDUNDANT)
+    result = subprocess.run([DYN, 'check', str(work)], capture_output=True, text=True, timeout=60)
+    errors = [line for line in result.stderr.splitlines() if ': error:' in line]
+    assert result.returncode != 0 and len(errors) == 1, result.stderr
+    assert ':1:10: error: T is in the type of `items`, so it is inferred' in errors[0], result.stderr
+    work = Path(directory) / 'instance'
+    work.mkdir()
+    (work / 'main.dyn').write_text(INSTANCE)
+    result = subprocess.run([DYN, 'run', str(work), '--quiet'], capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stderr
+print('PASS generic errors: conflicts name the binding argument; std instance failures land on the program call; one generic spelling; inferred instance values')

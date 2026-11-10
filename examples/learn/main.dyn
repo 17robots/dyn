@@ -332,19 +332,19 @@ fn largest(values: []const $T) T {
 }
 
 // A type parameter can also be passed explicitly.
-fn zeroed($T: type) T {
+fn zeroed(T: type) T {
   value: T
   return value
 }
 
 // Generic structs and enums write their type arguments everywhere, including
 // literals: Pair(u8){ first: 1, second: 2 }.
-struct Pair($T: type) {
+struct Pair(T) {
   first: T,
   second: T,
 }
 
-enum Slot($T: type) {
+enum Slot(T) {
   Empty,
   Full: T,
 }

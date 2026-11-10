@@ -3,7 +3,7 @@
 pub struct Failure { kind: Kind, native: isize }
 // A value and how getting it went. value is always safe to read: zero or a
 // documented partial result on failure.
-pub struct Result($T: type) { value: T, failure: Failure }
+pub struct Result(T) { value: T, failure: Failure }
 pub type Bytes = Result([]u8)
 pub type Count = Result(usize)
 

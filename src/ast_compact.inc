@@ -202,7 +202,21 @@ static DynType compact_type(CompactNode n, const DynSource *s, DynAstProgram *a)
   uint16_t kind = compact_kind(n);
   if (kind == EXP_TYPE_PARAMETER) {
     DynSpan name = compact_span(n); ++name.start_byte;
-    return scope_type(a, name, s, a->declaring_generic);
+    if (!a->binding_params) {
+      a->type_param_error = "`$T` only marks a function parameter that supplies T; write `T` here";
+      return DYN_TYPE_ERROR;
+    }
+    DynType found = scope_type(a, name, s, false);
+    if (found != DYN_TYPE_ERROR) {
+      if (a->scope_explicit[found - DYN_TYPE_PARAM_BASE]) {
+        a->type_param_error = "this type is passed with `T: type`; a type an argument supplies is inferred, so drop `T: type`";
+        return DYN_TYPE_ERROR;
+      }
+      return found;
+    }
+    found = scope_type(a, name, s, true);
+    if (found == DYN_TYPE_ERROR) a->type_param_error = "too many type parameters";
+    return found;
   }
   if (kind == EXP_FN_TYPE) {
     uint32_t named = compact_count(n), count = 0;
@@ -319,7 +333,7 @@ static DynExprId compact_expr(CompactNode node, const DynSource *s, DynAstProgra
       }
     if (fl) {
       e.kind = DYN_EXPR_FLOAT;
-      e.type = DYN_TYPE_F32;
+      e.type = DYN_TYPE_F64;
       char buf[128];
       size_t out = 0;
       for (uint32_t i = e.span.start_byte;
@@ -366,6 +380,7 @@ static DynExprId compact_expr(CompactNode node, const DynSource *s, DynAstProgra
     e.span = compact_span(compact_child(node, 1));
   } else if (!(k != EXP_CALL)) {
     CompactNode callee = compact_unwrap(compact_child(node, 0));
+    e.instance = compact_flag(node, EXP_INSTANCE);
     if (!(compact_kind(callee) != EXP_FIELD)) {
       e.kind = DYN_EXPR_ENUM;
       e.type = DYN_TYPE_INFER;

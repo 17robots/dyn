@@ -96,14 +96,22 @@ operation.
 
 ## Generic functions
 
-A parameter written `$T: type` takes a type argument at the call, as in
-`mem.push(Node, &arena)`. A parameter type containing `$T`, such as `a: $T`, `p: *$T` or
-`s: []$T`, declares `T` and infers it from that argument, as in `sort.sort(values)`. Elsewhere in
-the declaration and body, `T` is an ordinary type name. Write `$T` once; later parameters write
-`T` and must match exactly, with no implicit widening:
+A function takes a type in one of two ways, and which one is not a choice:
+
+- **Inferred.** When an argument supplies the type, write `$T` inside that parameter's type, at
+  every parameter that supplies it: `a: $T`, `p: *$T`, `s: []$T`, `box: Box($T)`. The call
+  passes only values, as in `sort.sort(values)`. Arguments must agree exactly, with no implicit
+  widening.
+- **Passed.** When no argument supplies it, because only the result or the body uses it, write
+  `T: type`, or `K, V: type` for several. The call passes the type first, as in
+  `mem.push(Node, &arena)`.
+
+`T: type` for a type that a parameter's type also contains is an error, and so is a plain `T` in
+a parameter type where `T` is inferred: each generic has one spelling and each call one form.
+`$` appears only in parameter types; the result type and the body write plain `T`.
 
 ```dyn
-fn max(a: $T, b: T) T {
+fn max(a: $T, b: $T) T {
   if a > b { return a }
   return b
 }
@@ -117,15 +125,17 @@ arguments, never from the expected result. The
 [generics design](../internals/generics-design.md) records the rules and what is deliberately left
 out.
 
-Naming only the leading type arguments makes an instance a function value: `hash := key_hash(u32)`
-has type `fn(u64, u32) u64` when `key_hash` is `fn($K: type, seed: u64, key: K) u64`.
+`#instance(f, T, ...)` names an instance as a function value, with one type per type parameter
+in the order they are declared: `hash := #instance(key_hash, u32)` has type `fn(u64, u32) u64`
+when `key_hash` is `fn(seed: u64, key: $K) u64`, and `#instance(mem.push, Node)` has type
+`fn(*Arena) *Node`. A call `f(...)` always runs the function.
 
 `#assert` also works in a function body, where it is checked when the body is: in a generic
 function, once per instance. With `#typeof`, whose scalar fields (`kind`, `size`, `id`,
 `element_id` and the rest) are compile-time constants, it states what a generic function accepts:
 
 ```dyn
-fn bits($K: type, key: K) u64 {
+fn bits(key: $K) u64 {
   #assert(#typeof(K).kind == TypeKind.Integer, "bits: K must be an integer")
   return #cast(u64, key)
 }
@@ -139,10 +149,10 @@ removes dead code but never chooses code by type.
 A struct may take type parameters, and each set of arguments makes one concrete struct:
 
 ```dyn
-struct Box($T: type) { value: T, failed: bool }
+struct Box(T) { value: T, failed: bool }
 type IntBox = Box(i32)
 
-fn wrap($T: type, value: T) Box(T) {
+fn wrap(value: $T) Box(T) {
   result: Box(T)
   result.value = value
   return result
@@ -155,7 +165,8 @@ fn read(box: Box($T)) T {
 a: Box(f64) = .{ value: 1.5 }
 ```
 
-Type arguments are always written, and parameters are types only. A literal names its instance
+A struct or enum lists its type parameters as bare names, `List(T)` or `Map(K, V)`: its parentheses
+hold only types, so they need no `: type`, and they are always passed. Type arguments are always written, and parameters are types only. A literal names its instance
 directly, `Box(i32){value: 1}`, with the brace right after the arguments; `.{ ... }` with an
 expected type and aliases work too. `mem.push(Box(i32), arena)` passes the instance as a type.
 
@@ -192,6 +203,7 @@ its context is a compile error, checked again for each type a generic function i
 An integer literal in a float context is that float when it is exact (up to 2^24 for `f32`,
 2^53 for `f64`), so `x * 2` works for any numeric `T`. Integer arithmetic
 wraps. Floats use IEEE-754. Expression evaluation is left-to-right.
+A float literal with no float context is `f64`, so `x := 1.5` is `f64`.
 Float literals accept trailing dots (`2.`); lexical lookahead keeps `2..3` an integer range.
 Explicit primitive locals without initializers start at zero. Inferred locals require an
 initializer. A local may shadow an outer local or parameter only inside a nested block or loop:
@@ -267,7 +279,7 @@ it and needs a mutable subject. Replacing the enum while an alias is live leaves
 old variant's storage, the same class of error as a dangling pointer. Enums with payloads have
 no `#cast` and no `==`; they are laid out as the tag followed by the largest payload.
 
-An enum can take type parameters: `enum Slot($T: type) { Empty, Full: T }`. Write the arguments
+An enum can take type parameters: `enum Slot(T) { Empty, Full: T }`. Write the arguments
 everywhere the enum is named: `Slot(i32).Full(7)` builds one, and a `case` arm reads
 `Slot(i32).Full value`. Inside a generic function, use `Slot(T)`. `type IntSlot = Slot(i32)` gives
 a shorter name, and `IntSlot.Full(7)` works. A generic function can infer `T` from a parameter such

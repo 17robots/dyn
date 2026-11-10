@@ -406,7 +406,7 @@ fn src_expression_start(p: *Parser) bool {
   if kind == TokenKind.Name || kind == TokenKind.Number || kind == TokenKind.Text || kind == TokenKind.Character {
     return true
   }
-  starts: [19][]const u8 = ["(", "[", ".", "-", "&", "!", "~", "#cast", "#bitcast", "#sizeof", "#alignof", "#offsetof", "#typeof", "#len", "#init", "#slice", "#offset", "#load", "#syscall"]
+  starts: [20][]const u8 = ["(", "[", ".", "-", "&", "!", "~", "#cast", "#bitcast", "#sizeof", "#alignof", "#offsetof", "#typeof", "#len", "#init", "#instance", "#slice", "#offset", "#load", "#syscall"]
   for candidate in starts {
     if token_is(p, candidate) {
       return true
@@ -597,14 +597,12 @@ fn src_param(p: *Parser, variadic_allowed: bool) u32 {
   first := None
   last := None
   if at(p, start, "$") {
-    token := p.token
-    lex(p)
-    chain(p, &first, &last, add_node(p, ExpTypeParameter, start, token.end, None))
-  } else {
+    fail(p, start, "write `T: type` to take a type; `$T` marks a parameter that supplies T, as in `items: []$T`")
+    return None
+  }
+  chain(p, &first, &last, parse_name(p))
+  for take(p, ",") && !p.tree.failed {
     chain(p, &first, &last, parse_name(p))
-    for take(p, ",") && !p.tree.failed {
-      chain(p, &first, &last, parse_name(p))
-    }
   }
   colon := p.token.start
   expect(p, ":")
@@ -669,13 +667,23 @@ fn src_type_parameters(p: *Parser, first: *u32, last: *u32) {
   if !take(p, "(") {
     return
   }
+  // Bare names: every name in a declaration's parentheses is a type.
   for !token_is(p, ")") && !p.tree.failed {
-    if !at(p, p.token.start, "$") {
-      fail(p, p.token.start, "expected a `$T: type` parameter")
+    token := p.token
+    if at(p, token.start, "$") {
+      fail(p, token.start, "write `T`, not `$T`; a struct or enum's parameters are all types")
+      break
     }
-    chain(p, first, last, type_body(p))
-    expect(p, ":")
-    expect(p, "type")
+    if token.kind != TokenKind.Name {
+      fail(p, token.start, "expected a type parameter name, as in `List(T)`")
+      break
+    }
+    lex(p)
+    chain(p, first, last, add_node(p, ExpTypeParameter, token.start, token.end, None))
+    if token_is(p, ":") {
+      fail(p, p.token.start, "write `T`, not `T: type`; a struct or enum's parameters are all types")
+      break
+    }
     if !take(p, ",") {
       break
     }

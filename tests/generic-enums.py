@@ -7,20 +7,20 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
-SLOT = 'enum Slot($T: type) { Empty, Full: T }\n'
+SLOT = 'enum Slot(T) { Empty, Full: T }\n'
 REJECTED = {
     'no arguments': (SLOT + 'fn main() {\n  x: Slot\n  _ = x\n}\n', 'unknown'),
     'too many': (SLOT + 'fn main() {\n  x: Slot(i32, u8)\n  _ = x\n}\n', 'unknown'),
     'not generic': ('enum Plain { A, B }\nfn main() {\n  x: Plain(i32)\n  _ = x\n}\n', 'unknown'),
     'bare variant': (SLOT + 'fn main() {\n  x := Slot.Full(1)\n  _ = x\n}\n', 'type arguments'),
     'unknown argument': (SLOT + 'fn main() {\n  x := Slot(Nope).Full(1)\n  _ = x\n}\n', 'error'),
-    'by value': ('enum Slot($T: type) { Empty, Next: Slot(T) }\nfn main() {\n  x: Slot(i32)\n  _ = x\n}\n', 'itself'),
-    'first payload': ('enum Slot($T: type) { Full: T, Empty }\nfn main() {\n}\n', 'first enum variant'),
+    'by value': ('enum Slot(T) { Empty, Next: Slot(T) }\nfn main() {\n  x: Slot(i32)\n  _ = x\n}\n', 'itself'),
+    'first payload': ('enum Slot(T) { Full: T, Empty }\nfn main() {\n}\n', 'first enum variant'),
     'wrong payload': (SLOT + 'fn main() {\n  x := Slot(i32).Full(true)\n  _ = x\n}\n', 'mismatch'),
     'not exhaustive': (SLOT + 'fn main() {\n  x: Slot(i32)\n  case x {\n    Slot(i32).Empty => { }\n  }\n}\n', 'exhaustive'),
     'other instance': (SLOT + 'fn main() {\n  x: Slot(i32)\n  y: Slot(u8) = x\n  _ = y\n}\n', 'mismatch'),
-    'conflict names part': ('struct Box($T: type) { value: T }\nfn f($T: type, b: Box(T)) { }\n'
-                            'fn main() {\n  a: Box(i32)\n  f(f64, a)\n}\n', 'T is given as f64, but this argument makes it i32'),
+    'type carried by argument': ('struct Box(T) { value: T }\nfn f(T: type, b: Box(T)) { }\n'
+                                 'fn main() {\n  a: Box(i32)\n  f(i32, a)\n}\n', 'T is in the type of `b`, so it is inferred'),
 }
 with tempfile.TemporaryDirectory(prefix='dyn-generic-enums-') as temporary:
     root = Path(temporary)
@@ -32,8 +32,8 @@ with tempfile.TemporaryDirectory(prefix='dyn-generic-enums-') as temporary:
     project = root / 'project'
     (project / 'shapes').mkdir(parents=True)
     (project / 'shapes' / 'shapes.dyn').write_text(
-        'pub enum Slot($T: type) { Empty, Full: T }\n'
-        'pub fn get(slot: Slot($T), fallback: T) T {\n  case slot {\n    Slot(T).Empty => {\n      return fallback\n    }\n'
+        'pub enum Slot(T) { Empty, Full: T }\n'
+        'pub fn get(slot: Slot($T), fallback: $T) T {\n  case slot {\n    Slot(T).Empty => {\n      return fallback\n    }\n'
         '    Slot(T).Full value => {\n      return value\n    }\n  }\n}\n')
     (project / 'main.dyn').write_text(
         'use "./shapes" shapes\n'

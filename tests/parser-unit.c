@@ -126,7 +126,7 @@ int main(void) {
   exp_free(&tree);
   allocation_failures("#cast(fn([]const u8,[4]i32)*m.T,f($T,Point{x:[1,2,3],y:#sizeof(a+b)}))", exp_parse);
   allocation_failures("f([1,2,3],#sizeof([1,2]),#typeof(a+b),[4]*const m.T)", exp_parse);
-  allocation_failures("use \"dep\" d pub struct S {x:i32} pub fn f($T:any,x:T) T { if true { return x } else { return x } }", exp_parse_source);
+  allocation_failures("use \"dep\" d pub struct S {x:i32} pub fn f(x:$T) T { if true { return x } else { return x } }", exp_parse_source);
   allocation_failures("#target(os:linux) #link(\"c\") extern fn puts(x:*const u8)i32 fn f() { for i in 0..10 { defer foo() } }", exp_parse_source);
   const char *bad_sources[] = {"fn", "fn f(){", "struct S{x:", "use", "fn f(){if x{", "fn f(){return #cast()}"};
   for (size_t i = 0; i < sizeof(bad_sources) / sizeof(*bad_sources); ++i) {

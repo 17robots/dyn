@@ -472,21 +472,21 @@ pub fn scan_line(state: *Scanner) Scanned {
 // Integers accept an optional sign; floats use decimal syntax. Returns zero
 // when text is not a valid T or does not fit. Use valid first when bad input
 // must be reported. Another T panics.
-pub fn parse($T: type, text: []const u8) T {
+pub fn parse(T: type, text: []const u8) T {
   result: T
   _ = parse_into(text, 10, &result)
   return result
 }
 
 // Like parse for integer types, in base 2 through 36.
-pub fn parse_base($T: type, text: []const u8, base: u8) T {
+pub fn parse_base(T: type, text: []const u8, base: u8) T {
   result: T
   _ = parse_into(text, base, &result)
   return result
 }
 
 // Whether text parses as T, by the same rules as parse.
-pub fn valid($T: type, text: []const u8) bool {
+pub fn valid(T: type, text: []const u8) bool {
   result: T
   return parse_into(text, 10, &result)
 }
