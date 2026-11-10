@@ -172,6 +172,11 @@ dyn_win_yield:
     adrp x16, __imp_SwitchToThread
     ldr x16, [x16, :lo12:__imp_SwitchToThread]
     br x16
+.global dyn_win_system_info
+dyn_win_system_info:
+    adrp x16, __imp_GetSystemInfo
+    ldr x16, [x16, :lo12:__imp_GetSystemInfo]
+    br x16
 .global dyn_net_idle
 dyn_net_idle:
     adrp x16, __imp_Sleep
@@ -712,6 +717,7 @@ kernel_lookup:
     thunk CloseHandle
     thunk WaitForSingleObject
     thunk SwitchToThread
+    thunk GetSystemInfo
     thunk CreateDirectoryW
     thunk DeleteFileW
     thunk RemoveDirectoryW
@@ -814,6 +820,7 @@ iat ExitProcess
 iat CloseHandle
 iat WaitForSingleObject
 iat SwitchToThread
+iat GetSystemInfo
 iat CreateDirectoryW
 iat DeleteFileW
 iat RemoveDirectoryW
@@ -919,6 +926,7 @@ hint ExitProcess
 hint CloseHandle
 hint WaitForSingleObject
 hint SwitchToThread
+hint GetSystemInfo
 hint CreateDirectoryW
 hint DeleteFileW
 hint RemoveDirectoryW

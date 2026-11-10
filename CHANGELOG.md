@@ -45,6 +45,8 @@ servers so they pick up the new `dyn`.
   fails with `ErrorKind.Invalid` before any byte is written, so request data
   cannot inject headers.
 - New `std/html` with `html.write_escaped` for HTML text in `fmt.Buffer`s.
+- New `thread.cpu_count()`: CPUs the process may run on (Linux affinity mask,
+  macOS `hw.activecpu`, Windows `GetSystemInfo`). Size worker pools with it.
 
 ## 0.1.0-preview.32
 
