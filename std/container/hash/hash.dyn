@@ -12,7 +12,7 @@
 use "std/mem" mem
 
 // Returns count empty slots from arena. count must be nonzero.
-pub fn slots($T: type, arena: *mem.Arena, count: usize) []*T {
+pub fn slots(T: type, arena: *mem.Arena, count: usize) []*T {
   if count == 0 {
     #panic("hash table needs at least one slot")
   }
@@ -24,7 +24,7 @@ fn slot_of(slots: []*$T, hash: u64) usize {
 }
 
 // Finds the node with this hash and key, or returns nil_node.
-pub fn find(slots: []*$T, hash: u64, key: []const u8, nil_node: *const T) *T {
+pub fn find(slots: []*$T, hash: u64, key: []const u8, nil_node: *const $T) *T {
   node := slots[slot_of(slots, hash)]
   for node != nil {
     if node.hash == hash && bytes_equal(node.key, key) {
@@ -37,14 +37,14 @@ pub fn find(slots: []*$T, hash: u64, key: []const u8, nil_node: *const T) *T {
 
 // Adds node at the front of its chain. node.hash and node.key must be set.
 // Does not check for an existing node with the same key.
-pub fn insert(slots: []*$T, node: *T) {
+pub fn insert(slots: []*$T, node: *$T) {
   slot := slot_of(slots, node.hash)
   node.hash_next = slots[slot]
   slots[slot] = node
 }
 
 // Unlinks node from its chain. Returns false when node is not in the table.
-pub fn remove(slots: []*$T, node: *T) bool {
+pub fn remove(slots: []*$T, node: *$T) bool {
   link := &slots[slot_of(slots, node.hash)]
   for link.* != nil {
     if link.* == node {

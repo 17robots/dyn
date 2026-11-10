@@ -227,7 +227,7 @@ static bool src_expression_start(Parser *p) {
       is(p, "-") || is(p, "&") || is(p, "!") || is(p, "~") ||
       is(p, "#cast") || is(p, "#bitcast") || is(p, "#sizeof") ||
       is(p, "#alignof") || is(p, "#offsetof") || is(p, "#typeof") ||
-      is(p, "#len") || is(p, "#init") || is(p, "#slice") || is(p, "#offset") || is(p, "#load") || is(p, "#syscall");
+      is(p, "#len") || is(p, "#init") || is(p, "#instance") || is(p, "#slice") || is(p, "#offset") || is(p, "#load") || is(p, "#syscall");
 }
 static uint32_t src_assert(Parser *p);
 static uint32_t src_panic(Parser *p) {
@@ -398,12 +398,11 @@ static uint32_t src_block(Parser *p) {
 static uint32_t src_param(Parser *p, bool variadic_allowed) {
   uint32_t start = p->token.start, first = NONE, last = NONE;
   if (at(p, start, "$")) {
-    Token token = p->token; lex(p);
-    append(p, &first, &last, node(p, EXP_TYPE_PARAMETER, start, token.end, NONE, (Token){0}));
-  } else {
-    append(p, &first, &last, name(p));
-    while (take(p, ",") && !p->tree->error) append(p, &first, &last, name(p));
+    fail(p, start, "write `T: type` to take a type; `$T` marks a parameter that supplies T, as in `items: []$T`");
+    return NONE;
   }
+  append(p, &first, &last, name(p));
+  while (take(p, ",") && !p->tree->error) append(p, &first, &last, name(p));
   uint32_t colon = p->token.start; expect(p, ":");
   if (variadic_allowed && (is(p, "..") || is(p, "..."))) {
     if (first != last || (first != NONE && p->tree->nodes[first].kind != EXP_NAME))
@@ -443,10 +442,20 @@ static uint32_t src_function(Parser *p, bool external) {
 }
 static void src_type_parameters(Parser *p, uint32_t *first, uint32_t *last) {
   if (!take(p, "(")) return;
+  /* Bare names: every name in a declaration's parentheses is a type. */
   while (!is(p, ")") && !p->tree->error) {
-    if (!at(p, p->token.start, "$")) fail(p, p->token.start, "expected a `$T: type` parameter");
-    append(p, first, last, type_body(p));
-    expect(p, ":"); expect(p, "type");
+    Token t = p->token;
+    if (at(p, t.start, "$")) {
+      fail(p, t.start, "write `T`, not `$T`; a struct or enum's parameters are all types");
+      break;
+    }
+    if (t.kind != NAME) { fail(p, t.start, "expected a type parameter name, as in `List(T)`"); break; }
+    lex(p);
+    append(p, first, last, node(p, EXP_TYPE_PARAMETER, t.start, t.end, NONE, (Token){0}));
+    if (is(p, ":")) {
+      fail(p, p->token.start, "write `T`, not `T: type`; a struct or enum's parameters are all types");
+      break;
+    }
     if (!take(p, ",")) break;
   }
   expect(p, ")");

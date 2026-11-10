@@ -46,6 +46,7 @@ const FlagPrimary: u16 = 128
 const FlagBitcast: u16 = 256
 const FlagWildcard: u16 = 512
 const FlagUnion: u16 = 1024
+const FlagInstance: u16 = 2048
 
 fn add_node(p: *Parser, kind: u16, start: u32, end: u32, first: u32) u32 {
   if p.tree.failed {
@@ -551,6 +552,28 @@ fn parse_operand(p: *Parser, minimum: i32) u32 {
     child := expression(p, 12)
     if child != None {
       left = add_node(p, ExpPrefix, token.start, node_end(p, child), child)
+    }
+  } else if token_is(p, "#instance") {
+    lex(p)
+    expect(p, "(")
+    callee := expression(p, 0)
+    last := callee
+    if !token_is(p, ",") {
+      fail(p, p.token.start, "#instance takes a generic function and its types, as in #instance(f, T)")
+    }
+    for callee != None && take(p, ",") && !p.tree.failed {
+      value := argument(p, false)
+      if value == None {
+        break
+      }
+      p.tree.nodes[last].next = value
+      last = value
+    }
+    end := p.token.end
+    expect(p, ")")
+    if callee != None && !p.tree.failed {
+      left = mark(p, add_node(p, ExpCall, token.start, end, callee), FlagPrimary | FlagInstance)
+      primary = true
     }
   } else if token_is(p, "#cast") || token_is(p, "#bitcast") {
     lex(p)

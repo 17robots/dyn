@@ -145,9 +145,11 @@ static bool compact_add_struct_fields(const DynSource *s, DynAstProgram *a,
     for (CompactNode m = compact_child(d, 1); !compact_null(m); m = compact_next(m)) {
       if (compact_kind(m) == EXP_TYPE_PARAMETER) {
         DynSpan parameter = compact_span(m);
-        ++parameter.start_byte;
-        if (scope_type(a, parameter, s, true) == DYN_TYPE_ERROR)
+        DynType declared = scope_type(a, parameter, s, true);
+        if (declared == DYN_TYPE_ERROR)
           compact_report(m, s, errors, "duplicate or too many type parameters");
+        else
+          a->scope_explicit[declared - DYN_TYPE_PARAM_BASE] = true;
       }
       if ((compact_kind(m) != SRC_STRUCT_MEMBER))
         continue;
@@ -228,9 +230,11 @@ static bool compact_add_enum_variants(const DynSource *s, DynAstProgram *a,
       }
       if (k == EXP_TYPE_PARAMETER) {
         DynSpan parameter = compact_span(c);
-        ++parameter.start_byte;
-        if (scope_type(a, parameter, s, true) == DYN_TYPE_ERROR)
+        DynType declared = scope_type(a, parameter, s, true);
+        if (declared == DYN_TYPE_ERROR)
           compact_report(c, s, errors, "duplicate or too many type parameters");
+        else
+          a->scope_explicit[declared - DYN_TYPE_PARAM_BASE] = true;
         continue;
       }
       if ((k != SRC_ENUM_MEMBER))
@@ -412,6 +416,12 @@ static bool compact_add_asserts(const DynSource *s, DynAstProgram *a, unsigned *
 }
 /* Only type parameters use `$`, and a signature ends at its body's `{`. */
 static bool compact_has_type_parameter(CompactNode n, const DynSource *s) {
+  for (CompactNode c = compact_first(n); !compact_null(c); c = compact_next(c)) {
+    if (compact_kind(c) != SRC_FN_PARAM) continue;
+    DynSpan text = compact_span(compact_child(compact_last(c), 0));
+    if (text.end_byte - text.start_byte == 4 && !memcmp(s->text + text.start_byte, "type", 4))
+      return true;
+  }
   for (uint32_t i = compact_span(n).start_byte; i < compact_span(n).end_byte; ++i) {
     if (!(i % 1024) && !dyn_work_step(&s->context, 1)) return false;
     if (s->text[i] == '{')
@@ -442,37 +452,35 @@ static bool compact_add_generic(const DynSource *s, DynAstProgram *a, unsigned *
       compact_report(c, s, errors, "generic functions cannot be variadic");
       ok = false;
     } else if (!(kind != SRC_FN_PARAM)) {
-      CompactNode first = compact_child(c, 0);
       CompactNode qualifier = compact_last(c);
-      if (!(compact_kind(first) != EXP_TYPE_PARAMETER)) {
-        CompactNode type = compact_child(qualifier, 0);
-        DynSpan text = compact_span(type);
-        DynSpan name = compact_span(first);
-        ++name.start_byte;
-        DynType param = scope_type(a, name, s, true);
-        if (text.end_byte - text.start_byte != 4 ||
-            memcmp(s->text + text.start_byte, "type", 4)) {
-          compact_report(type, s, errors, "a `$T` parameter must have type `type`");
-          ok = false;
-        } else if (param == DYN_TYPE_ERROR) {
-          compact_report(first, s, errors, "duplicate or too many type parameters");
-          ok = false;
+      CompactNode written_type = compact_child(qualifier, 0);
+      DynSpan text = compact_span(written_type);
+      if (text.end_byte - text.start_byte == 4 && !memcmp(s->text + text.start_byte, "type", 4)) {
+        /* `T: type` or `K, V: type`: types the caller passes. */
+        for (CompactNode q = compact_child(c, 0); !compact_null(q); q = compact_next(q)) {
+          if (compact_kind(q) != EXP_NAME)
+            continue;
+          DynSpan name = compact_span(q);
+          DynType param = scope_type(a, name, s, true);
+          if (param == DYN_TYPE_ERROR) {
+            compact_report(q, s, errors, "duplicate or too many type parameters");
+            ok = false;
+          } else {
+            a->scope_explicit[param - DYN_TYPE_PARAM_BASE] = true;
+          }
+          a->generic_params[a->generic_param_count++] =
+              (DynAstGenericParam){.name = name, .pattern = param, .is_type = true};
+          ++g.param_count;
         }
-        a->generic_params[a->generic_param_count++] =
-            (DynAstGenericParam){.name = name, .pattern = param, .is_type = true};
-        ++g.param_count;
         continue;
       }
-      DynType type = compact_type(compact_child(qualifier, 0), s, a);
-      DynSpan written = compact_span(qualifier);
-      if (type == DYN_TYPE_ERROR &&
-          memchr(s->text + written.start_byte, '$', written.end_byte - written.start_byte)) {
-        compact_report(qualifier, s, errors,
-                       "type parameter declared more than once; write `T`, not `$T`, after its first use");
-        ok = false;
-      } else if (type == DYN_TYPE_ERROR) {
-        /* The qualifier spans ": T"; point at the type itself. */
-        compact_report(compact_child(qualifier, 0), s, errors, "unknown type in parameter");
+      a->binding_params = true;
+      a->type_param_error = NULL;
+      DynType type = compact_type(written_type, s, a);
+      a->binding_params = false;
+      if (type == DYN_TYPE_ERROR) {
+        compact_report(written_type, s, errors,
+                       a->type_param_error ? a->type_param_error : "unknown type in parameter");
         ok = false;
       }
       for (CompactNode q = compact_child(c, 0); !compact_null(q); q = compact_next(q)) {
@@ -483,9 +491,11 @@ static bool compact_add_generic(const DynSource *s, DynAstProgram *a, unsigned *
         ++g.param_count;
       }
     } else if (!(kind != EXP_TYPE)) {
+      a->type_param_error = NULL;
       g.return_pattern = compact_type(c, s, a);
       if (g.return_pattern == DYN_TYPE_ERROR) {
-        compact_report(c, s, errors, "unknown type in return signature");
+        compact_report(c, s, errors,
+                       a->type_param_error ? a->type_param_error : "unknown type in return signature");
         ok = false;
       }
     }

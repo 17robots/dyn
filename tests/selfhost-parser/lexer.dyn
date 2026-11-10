@@ -38,7 +38,7 @@ struct Tree {
 // Grows a slice with a separate count by doubling into arena, copying when the
 // slice is not the arena's newest allocation, like realloc in the C parser.
 // Returns the new element's index.
-fn append_grow(items: *[]$T, count: *usize, arena: *mem.Arena, value: T) usize {
+fn append_grow(items: *[]$T, count: *usize, arena: *mem.Arena, value: $T) usize {
   if count.* == #len(items.*) {
     capacity := #len(items.*) * 2
     if capacity == 0 {

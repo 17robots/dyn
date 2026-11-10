@@ -7614,7 +7614,10 @@ static bool ssa_cache_moves(SsaEmit *e, uint32_t b) {
 }
 static uint32_t ssa_landing(SsaEmit *e, uint32_t b) {
   Ssa *s = e->s;
-  for (unsigned hops = 0; hops < 16 && b < s->block_count; ++hops) {
+  /* Follow the whole chain. A cap shorter than the chain would return a block
+     that itself forwards: emission skips it, so jumps to it had no address.
+     block_count hops bound a cycle of forwarding blocks. */
+  for (uint32_t hops = 0; hops < s->block_count && b < s->block_count; ++hops) {
     if (ssa_cache_moves(e, b)) return b;
     SsaBlock *block = &s->blocks[b];
     if (block->kind != SB_PLAIN || block->succ[0] == b || block->succ[0] >= s->block_count) return b;
@@ -9242,6 +9245,9 @@ static uint32_t *ssa_cold_layout(Ssa *s, const uint32_t *order, uint32_t n) {
 static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
   Ssa *s = e->s; BackendContext *ctx = e->ctx;
   SsaAlloc *a = e->alloc;
+  /* Unset until emitted, so a jump to a block that never gets an address
+     fails the build instead of branching into another function. */
+  for (uint32_t b = 0; b < s->block_count; ++b) s->blocks[b].at = SIZE_MAX;
   unsigned saves = 0;
   for (unsigned r = 0; r < 32 && !ctx->win64; ++r) saves += a->used_callee >> r & 1;
   uint32_t frame = (s->frame + 7) / 8 * 8;
@@ -9550,6 +9556,7 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
   }
   for (uint32_t i = 0; i < e->jump_count; ++i) {
     size_t at = e->jumps[i].at, target = s->blocks[e->jumps[i].block].at;
+    if (target == SIZE_MAX) { ctx->text.failed = true; continue; }
     if (e->jumps[i].short_branch && ctx->rv64) { rvs_patch_near(ctx, at, target); continue; }
     if (e->jumps[i].short_branch && ctx->a64) {
       int64_t delta = ((int64_t)target - (int64_t)at) / 4;

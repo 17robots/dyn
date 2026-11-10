@@ -54,7 +54,7 @@ pub fn sign(value: $T) T {
   return 0
 }
 // Converts value to T and panics if it does not fit; the checked form of #cast.
-pub fn narrow($T: type, value: $U) T {
+pub fn narrow(T: type, value: $U) T {
   zero: T = 0
   result := #cast(T, value)
   if #cast(U, result) != value || (result < zero) != (value < #cast(U, 0)) {
@@ -64,18 +64,18 @@ pub fn narrow($T: type, value: $U) T {
 }
 
 // Integer type facts.
-pub fn is_signed($T: type) bool {
+pub fn is_signed(T: type) bool {
   zero: T = 0
   return (zero - 1) < zero
 }
-pub fn max_value($T: type) T {
+pub fn max_value(T: type) T {
   if is_signed(T) {
     return #cast(T, (#cast(u64, 1) << #cast(u64, #sizeof(T) * 8 - 1)) - 1)
   }
   zero: T = 0
   return zero - 1
 }
-pub fn min_value($T: type) T {
+pub fn min_value(T: type) T {
   if is_signed(T) {
     return -max_value(T) - 1
   }

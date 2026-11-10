@@ -15,11 +15,11 @@ fn helper(x: usize) usize {
   return x * 2
 }
 
-pub fn double_size($T: type) usize {
+pub fn double_size(T: type) usize {
   return helper(#sizeof(T))
 }
 
-pub fn fill(items: []$T, value: T) {
+pub fn fill(items: []$T, value: $T) {
   for *item in items {
     item.* = value
   }
@@ -136,7 +136,7 @@ fn min(a, b: $T) T {
   if a < b { return a }
   return b
 }
-fn make($T: type) T {
+fn make(T: type) T {
   v: T
   return v
 }
@@ -183,9 +183,13 @@ with tempfile.TemporaryDirectory(prefix='dyn-generics-') as temporary:
 
     case = root/'repeated'
     case.mkdir()
+    # `$T` marks every parameter that supplies T; a plain `T` there is an error.
     (case/'main.dyn').write_text('fn same(a: $T, b: $T) T {\n  return a\n}\nfn main() {\n  _ = same(1, 2)\n}\n')
     checked = run('check', str(case))
-    assert checked.returncode != 0 and 'write `T`, not `$T`' in checked.stderr, checked.stderr
+    assert checked.returncode == 0, checked.stderr
+    (case/'main.dyn').write_text('fn same(a: $T, b: T) T {\n  return a\n}\nfn main() {\n  _ = same(1, 2)\n}\n')
+    checked = run('check', str(case))
+    assert checked.returncode != 0 and 'written `$T` in every parameter' in checked.stderr, checked.stderr
 
     # A generic body edit changes the output; a new instance does too.
     env = dict(os.environ, DYN_CACHE_DIR=str(root/'cache'))

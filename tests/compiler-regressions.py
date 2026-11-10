@@ -162,4 +162,66 @@ fn main() {
 }
 '''}), 'mismatch')
 
-print('PASS compiler regressions: exit flush, extern clash, global shadowing, literal operands, implicit rawptr')
+    # Two bindings of one C symbol are fine when the signatures agree (std's
+    # thread and process backends both bind __error on macOS); a conflicting
+    # signature is still an error.
+    shared = project(root, 'extern-shared', {'main.dyn': '''#link("c")
+extern fn first_getpid "getpid"() i32
+extern fn second_getpid "getpid"() i32
+fn main() {
+  if first_getpid() != second_getpid() {
+    #panic("different pids")
+  }
+}
+'''})
+    for output in build_and_run(shared):
+        assert output == b'', output
+    check_fails(project(root, 'extern-conflict', {'main.dyn': '''extern fn first_getpid "getpid"() i32
+extern fn second_getpid "getpid"() i64
+fn main() {
+  _ = first_getpid()
+}
+'''}), 'different signature')
+
+    # A float literal passed through ...any boxes as f64, the same as a single
+    # any parameter.
+    boxed = project(root, 'variadic-any-float', {'main.dyn': '''use "std/io"
+
+fn kind(values: ...any) {
+  for value in values {
+    case value {
+      f64 x => { io.println("f64") }
+      f32 x => { io.println("f32") }
+      _ => { io.println("other") }
+    }
+  }
+}
+fn main() {
+  kind(2.5, 7)
+}
+'''})
+    for output in build_and_run(boxed):
+        assert output == b'f64\nother\n', output
+
+    # A float literal with no float context is f64, in a local and through
+    # generic inference; an f32 context still takes it as f32.
+    floats = project(root, 'float-default', {'main.dyn': '''use "std/io"
+
+fn same(a: $T, b: $T) T {
+  return a
+}
+
+fn main() {
+  x := 1.5
+  y: f64 = x
+  z: f64 = same(2.5, y)
+  w: f32 = 0.5
+  if z + y + #cast(f64, w) == 4.5 {
+    io.println("ok")
+  }
+}
+'''})
+    for output in build_and_run(floats):
+        assert output == b'ok\n', output
+
+print('PASS compiler regressions: exit flush, extern clash, global shadowing, literal operands, implicit rawptr, shared externs, variadic any floats, f64 float default')

@@ -155,7 +155,7 @@ pub fn sort(values: []$T) {
 
 // Binary search in sorted values. A miss returns len(values), never an
 // insertion point, so index is always a valid slice boundary.
-pub fn search(values: []const $T, target: T) SearchResult {
+pub fn search(values: []const $T, target: $T) SearchResult {
   low: usize = 0
   high := #len(values)
   for low < high {

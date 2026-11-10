@@ -33,6 +33,6 @@ pub fn stream_result(failure: StreamFailure, transferred: usize) io.Transfer {
 }
 
 // A value and how decoding went. value is zero or partial on failure.
-pub struct Result($T: type) { value: T, failure: Failure }
+pub struct Result(T) { value: T, failure: Failure }
 // Decoded or encoded bytes, for codecs with nothing else to report.
 pub type Bytes = Result([]u8)

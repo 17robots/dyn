@@ -788,8 +788,15 @@ static DynType parse_type_name(DynSpan p, const DynSource *s, DynAstProgram *a) 
       return m[i].t;
     }
   DynType bound = scope_type(a, p, s, false);
-  if (bound != DYN_TYPE_ERROR)
+  if (bound != DYN_TYPE_ERROR) {
+    if (a->binding_params && bound >= DYN_TYPE_PARAM_BASE &&
+        bound < DYN_TYPE_PARAM_BASE + DYN_MAX_TYPE_PARAMS &&
+        !a->scope_explicit[bound - DYN_TYPE_PARAM_BASE]) {
+      a->type_param_error = "an inferred type is written `$T` in every parameter that supplies it";
+      return DYN_TYPE_ERROR;
+    }
     return bound;
+  }
   uint32_t alias = find_alias(a, p, s);
   if (alias != UINT32_MAX) {
     return resolve_alias(a, alias, s);
@@ -808,6 +815,7 @@ static DynType scope_type(DynAstProgram *a, DynSpan name, const DynSource *s,
   if (!introduce || a->scope_count == DYN_MAX_TYPE_PARAMS)
     return DYN_TYPE_ERROR;
   a->scope_names[a->scope_count] = name;
+  a->scope_explicit[a->scope_count] = false;
   a->scope_types[a->scope_count] = DYN_TYPE_PARAM_BASE + a->scope_count;
   return a->scope_types[a->scope_count++];
 }

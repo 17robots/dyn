@@ -504,6 +504,20 @@ static uint32_t parse(Parser *p, int minimum) {
   } else if (is(p, "-") || is(p, "&") || is(p, "!") || is(p, "~")) {
     lex(p); uint32_t child = expression(p, 12);
     if (child != NONE) left = node(p, EXP_PREFIX, token.start, p->tree->nodes[child].end, child, token);
+  } else if (is(p, "#instance")) {
+    /* #instance(f, T, ...) names a generic instance as a function value. */
+    lex(p); expect(p, "(");
+    uint32_t callee = expression(p, 0), last = callee;
+    if (!is(p, ",")) fail(p, p->token.start, "#instance takes a generic function and its types, as in #instance(f, T)");
+    while (callee != NONE && take(p, ",") && !p->tree->error) {
+      uint32_t arg = argument(p, false); if (arg == NONE) break;
+      p->tree->nodes[last].next = arg; last = arg;
+    }
+    uint32_t end = p->token.end; expect(p, ")");
+    if (callee != NONE && !p->tree->error) {
+      left = mark(p, node(p, EXP_CALL, token.start, end, callee, (Token){0}), EXP_PRIMARY | EXP_INSTANCE);
+      primary = true;
+    }
   } else if (is(p, "#cast") || is(p, "#bitcast")) {
     lex(p); expect(p, "("); uint32_t target = type(p);
     if (is(p, ")")) fail(p, p->token.start, "use #cast(type, value) or #bitcast(type, value); prefix cast syntax is no longer supported");

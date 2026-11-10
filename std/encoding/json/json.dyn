@@ -799,14 +799,14 @@ pub fn object_get(object: *const Value, key: []const u8) *const Value {
 // []const u8 (string text), or *const Value (the member itself). A missing
 // member or a member of another kind gives zero, "" or &nil_value. Another T
 // panics.
-pub fn get($T: type, object: *const Value, key: []const u8) T {
+pub fn get(T: type, object: *const Value, key: []const u8) T {
   result: T
   read_into(object_get(object, key), &result)
   return result
 }
 
 // Reads value itself as T, by the same rules as get.
-pub fn as($T: type, value: *const Value) T {
+pub fn as(T: type, value: *const Value) T {
   result: T
   read_into(value, &result)
   return result

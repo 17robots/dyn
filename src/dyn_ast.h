@@ -132,6 +132,7 @@ typedef struct {
   double floating;
   bool boolean;
   bool boolean_reflection; /* a #typeof(T) result: its fields are compile-time values */
+  bool instance; /* #instance(f, T): the call names an instance instead of running it */
   uint32_t item_start, item_count;
   /* Set during lowering for integer +, -, *, unary - and <<. */
   bool wrap;
@@ -396,6 +397,10 @@ typedef struct {
   DynType scope_types[DYN_MAX_TYPE_PARAMS];
   uint32_t scope_count;
   bool declaring_generic;
+  /* While reading a generic function's parameter types: `$T` binds or matches T. */
+  bool binding_params;
+  bool scope_explicit[DYN_MAX_TYPE_PARAMS]; /* declared `T: type`, not inferred */
+  const char *type_param_error;
   /* Until layouts run, instances only queue; later each is finished at once. */
   bool structs_open, filling_instances;
   uint32_t instances_filled, enums_filled;

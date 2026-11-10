@@ -2414,10 +2414,12 @@ static bool block_statements_value(BackendContext *ctx, const DynIrProgram *ir, 
       size_t otherwise = isa_branch(ctx, when_false);
       bool then_falls, else_falls;
       if (!block(ctx, ir, f, s->body_start, s->body_count, depth + 1, &then_falls)) return false;
-      size_t done = isa_branch(ctx, -1); /* join */
+      /* Join only when the then-branch can reach it and an else-branch sits
+         in between; otherwise the jump is dead or jumps to the next byte. */
+      size_t done = then_falls && s->else_count ? isa_branch(ctx, -1) : SIZE_MAX;
       isa_patch(ctx, otherwise, ctx->text.n);
       if (!block(ctx, ir, f, s->else_start, s->else_count, depth + 1, &else_falls)) return false;
-      isa_patch(ctx, done, ctx->text.n);
+      if (done != SIZE_MAX) isa_patch(ctx, done, ctx->text.n);
       reachable = reachable && (then_falls || else_falls);
     } else if (s->kind == DYN_STMT_LOCAL || s->kind == DYN_STMT_ASSIGN) {
       if (s->kind == DYN_STMT_ASSIGN && s->local_id == UINT32_MAX && s->target == DYN_NO_EXPR) {
@@ -2542,7 +2544,11 @@ static bool block_statements_value(BackendContext *ctx, const DynIrProgram *ir, 
         bool arm_falls;
         if (!block(ctx,ir,f,a->body_start,a->body_count,depth+1,&arm_falls)) return false;
         if (a->local_id!=UINT32_MAX) ctx->local_alias[a->local_id-f->local_start]=old_alias;
-        all_terminate &= !arm_falls; pending_jump(ctx,-1,&done);
+        all_terminate &= !arm_falls;
+        /* An arm that returns or panics has no path to the end of the case; a
+           jump there would be dead and, when every arm ends that way, would
+           target whatever code follows the function. */
+        if (arm_falls) pending_jump(ctx,-1,&done);
         if (!resolve_jumps(ctx,next,ctx->text.n)) return false;
       }
       if (dyn_type_is_enum(type)) {
