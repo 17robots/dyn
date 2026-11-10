@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import shlex
 import shutil
+import sys
 import subprocess
 import tempfile
 ROOT = Path(__file__).resolve().parents[1]
@@ -66,6 +67,13 @@ int main(void) {
  puts("PASS native controls and queued layout/shift snapshots");
 }
 '''
+# The native library builds against Wayland and EGL development packages, as
+# window-events.py requires; without them there is nothing to qualify here.
+if not (sys.platform.startswith('linux') and shutil.which('pkg-config') and shutil.which('wayland-scanner') and
+        subprocess.run(['pkg-config', '--exists', 'wayland-client', 'wayland-egl', 'wayland-cursor', 'xkbcommon',
+                        'egl', 'wayland-protocols']).returncode == 0):
+    print('SKIP native controls: Wayland/EGL development packages unavailable')
+    raise SystemExit(0)
 with tempfile.TemporaryDirectory(prefix='dyn-controls-') as directory:
     work=Path(directory)
     subprocess.run(['python3',str(NATIVE/'build.py'),'--output',str(work/'libdyn_window.so')],check=True)
