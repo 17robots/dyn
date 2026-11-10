@@ -21,17 +21,30 @@ const BigSize: usize = 200 * mem.KiB
 struct App {
   quit: sync.AtomicU32,
   big: []u8,
+  router: http.Routes(App),
+  route_storage: [4]http.TypedRoute(App),
 }
 
-fn app(request: *const http.Request) *App {
-  return #cast(*App, request.context)
+fn user_post(response: *http.Response, request: *const http.Request, app: *App) http.Result {
+  storage: [128]u8
+  page := html.writer(storage[..])
+  html.markup(&page, html.trusted("user="))
+  html.text(&page, http.param(request, "id").value)
+  html.markup(&page, html.trusted(" post="))
+  html.text(&page, http.param(request, "post").value)
+  return text(response, http.StatusOk, html.output(&page).bytes)
 }
+
+fn user_create(response: *http.Response, request: *const http.Request, app: *App) http.Result {
+  return text(response, http.StatusCreated, "created\n")
+}
+
 
 fn text(response: *http.Response, status: u16, body: []const u8) http.Result {
   return http.respond(response, body, http.ResponseOptions{ status: status, content_type: "text/plain" })
 }
 
-fn handle(response: *http.Response, request: *const http.Request) http.Result {
+fn handle(response: *http.Response, request: *const http.Request, app: *App) http.Result {
   if bytes.equal(request.target, "/health") {
     return text(response, http.StatusOk, "ok\n")
   }
@@ -39,7 +52,7 @@ fn handle(response: *http.Response, request: *const http.Request) http.Result {
     return text(response, http.StatusOk, request.body)
   }
   if bytes.equal(request.target, "/big") {
-    return text(response, http.StatusOk, app(request).big)
+    return text(response, http.StatusOk, app.big)
   }
   if bytes.equal(request.target, "/stream") {
     opened := http.respond_stream(response, http.ResponseOptions{ content_type: "text/plain" })
@@ -88,7 +101,7 @@ fn handle(response: *http.Response, request: *const http.Request) http.Result {
     return text(response, http.StatusOk, name.value)
   }
   if bytes.equal(request.target, "/quit") {
-    sync.store_u32(&app(request).quit, 1)
+    sync.store_u32(&app.quit, 1)
     return http.respond(response, "bye\n", http.ResponseOptions{ content_type: "text/plain", close_connection: true })
   }
   return text(response, http.StatusNotFound, "not found\n")
@@ -102,6 +115,13 @@ fn main() {
   for i in 0..BigSize {
     state.big[i] = #cast(u8, 'a' + i % 26)
   }
+  state.router = http.typed_routes(state.route_storage[..], state)
+  state.router.fallback = handle
+  if http.add(&state.router, "GET", "/users/:id/posts/:post", user_post).failure.kind != io.Kind.Ok ||
+    http.add(&state.router, "POST", "/users", user_create).failure.kind != io.Kind.Ok {
+    #panic("cannot add routes")
+  }
+  binding := http.bind_routes(&state.router)
   config := evented.default_config()
   config.connections_per_worker = 16
   config.receive_size = 4 * mem.KiB
@@ -113,7 +133,7 @@ fn main() {
   listener := net.Listener{}
   started := evented.Result{}
   if shared {
-    started = evented.start_shared(arena, workers, net.ipv4(127, 0, 0, 1, 0), 128, config, handle, state)
+    started = evented.start_shared(arena, workers, net.ipv4(127, 0, 0, 1, 0), 128, config, binding.handler, binding.context)
   } else {
     address := net.ipv4(127, 0, 0, 1, 0)
     listened := net.tcp_listen_ipv4(&address, 128)
@@ -121,7 +141,7 @@ fn main() {
       #panic("cannot listen")
     }
     listener = net.listener_take(&listened.value)
-    started = evented.start(arena, workers, &listener, config, handle, state)
+    started = evented.start(arena, workers, &listener, config, binding.handler, binding.context)
   }
   if started.failure.kind != io.Kind.Ok {
     #panic("cannot start workers")

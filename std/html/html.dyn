@@ -1,8 +1,52 @@
-// HTML text escaping into bounded caller storage. Untrusted text placed in
-// element content or a quoted attribute value must pass through write_escaped.
-// It does not make text safe inside <script>, <style>, URLs or unquoted
+// HTML output into bounded caller storage. A Writer takes two kinds of input:
+// text, always escaped, and Trusted markup, written as is. Trusted can only
+// be made with trusted(), so every place raw markup enters a page is explicit
+// and searchable; passing plain bytes where markup is expected does not
+// compile. Escaping covers element content and quoted attribute values. It
+// does not make text safe inside <script>, <style>, URLs or unquoted
 // attributes; those need context-specific encoding.
 use "std/fmt" fmt
+
+// Markup the program vouches for: literals and output of other Writers.
+pub struct Trusted { bytes: []const u8 }
+
+// Marks bytes as markup. Never pass request data or other untrusted input.
+pub fn trusted(markup: []const u8) Trusted {
+  return Trusted{ bytes: markup }
+}
+
+// failed records the first write that did not fit; later writes do nothing.
+pub struct Writer { buffer: fmt.Buffer }
+
+pub fn writer(storage: []u8) Writer {
+  return Writer{ buffer: fmt.buffer(storage) }
+}
+
+pub fn markup(destination: *Writer, value: Trusted) {
+  _ = fmt.write(&destination.buffer, value.bytes)
+}
+
+// Escaped text.
+pub fn text(destination: *Writer, value: []const u8) {
+  _ = write_escaped(&destination.buffer, value)
+}
+
+pub fn number(destination: *Writer, value: u64) {
+  _ = fmt.write_u64(&destination.buffer, value)
+}
+
+pub fn signed(destination: *Writer, value: i64) {
+  _ = fmt.write_i64(&destination.buffer, value)
+}
+
+pub fn failed(source: *const Writer) bool {
+  return source.buffer.failed
+}
+
+// The page so far, as markup for another Writer or for a response body.
+pub fn output(source: *const Writer) Trusted {
+  return Trusted{ bytes: fmt.bytes(&source.buffer) }
+}
 
 // Appends text with & < > " ' replaced by entities. Returns false, with the
 // buffer marked failed, when it does not fit.

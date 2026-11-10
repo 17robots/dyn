@@ -47,6 +47,21 @@ servers so they pick up the new `dyn`.
 - New `std/html` with `html.write_escaped` for HTML text in `fmt.Buffer`s.
 - New `thread.cpu_count()`: CPUs the process may run on (Linux affinity mask,
   macOS `hw.activecpu`, Windows `GetSystemInfo`). Size worker pools with it.
+- Typed HTTP state with generics: `http.Typed(T)` and `http.bind` pair a `*T`
+  with handlers of type `fn(*Response, *const Request, *T) Result`, so handlers
+  no longer cast `Request.context`. A handler for another state type is a
+  compile error.
+- New generic router `http.Routes(T)` (`typed_routes`, `add`, `bind_routes`,
+  `serve_routes`): `:name` path parameters read with `http.param`, 405 with an
+  `Allow` header, and a typed fallback. New status constants 201, 303, 401, 403,
+  405, 409, 422, 429 and 503.
+- `std/html` gains `html.Writer`: `html.text` escapes, and `html.markup` takes
+  only `html.Trusted`, made with `html.trusted(...)`. Passing plain bytes as
+  markup is a compile error.
+- New `parse.u64_decimal` and `parse.i64_decimal`: strict decimal integers
+  with overflow and offset reporting.
+- Compiler: a malformed generic signature no longer stops later functions from
+  being declared, which had produced false "may exit without return" errors.
 
 ## 0.1.0-preview.32
 

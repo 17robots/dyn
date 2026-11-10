@@ -1,0 +1,23 @@
+// parse.u64_decimal and parse.i64_decimal edges: limits, overflow, offsets.
+use "std/io"
+use "std/parse"
+
+fn check(ok: bool, label: []const u8) {
+  if !ok {
+    #panic(label)
+  }
+}
+
+fn main() {
+  check(parse.u64_decimal("0").value == 0, "zero")
+  check(parse.u64_decimal("18446744073709551615").value == 18446744073709551615, "max")
+  check(parse.u64_decimal("18446744073709551616").failure.kind == parse.Kind.Overflow, "over")
+  check(parse.u64_decimal("").failure.kind == parse.Kind.Syntax, "empty")
+  check(parse.u64_decimal("12a").failure.offset == 2, "offset")
+  check(parse.i64_decimal("-9223372036854775808").value == -9223372036854775807 - 1, "min")
+  check(parse.i64_decimal("-9223372036854775809").failure.kind == parse.Kind.Overflow, "under")
+  check(parse.i64_decimal("9223372036854775808").failure.kind == parse.Kind.Overflow, "i64 over")
+  check(parse.i64_decimal("-").failure.offset == 1, "dash")
+  check(parse.i64_decimal("-42").value == -42, "neg")
+  io.println("ok")
+}

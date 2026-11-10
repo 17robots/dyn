@@ -653,9 +653,19 @@ pub fn parse_url(input: []const u8) Url {
 }
 
 pub const StatusOk: u16 = 200
+pub const StatusCreated: u16 = 201
 pub const StatusNoContent: u16 = 204
+pub const StatusSeeOther: u16 = 303
 pub const StatusBadRequest: u16 = 400
+pub const StatusUnauthorized: u16 = 401
+pub const StatusForbidden: u16 = 403
 pub const StatusNotFound: u16 = 404
+pub const StatusMethodNotAllowed: u16 = 405
+pub const StatusConflict: u16 = 409
+pub const StatusUnprocessableContent: u16 = 422
+pub const StatusTooManyRequests: u16 = 429
+pub const StatusServiceUnavailable: u16 = 503
+pub const MaxParams: usize = 4
 pub const StatusPayloadTooLarge: u16 = 413
 pub const StatusInternalServerError: u16 = 500
 
@@ -685,6 +695,10 @@ pub struct Request {
   keep_alive: bool,
   // Borrowed application state given to serve_stream_context and friends; nil otherwise.
   context: rawptr,
+  // Path parameters captured by a Routes pattern such as /users/:id. Read
+  // them with param.
+  params: [MaxParams]Header,
+  param_count: usize,
 }
 
 pub struct Response {
@@ -790,6 +804,147 @@ pub fn dispatch(state: *Router, response: *Response, request: *const Request) Re
     return state.fallback(response, request)
   }
   return respond(response, "not found\n", ResponseOptions{ status: StatusNotFound, content_type: "text/plain; charset=utf-8" })
+}
+
+// Typed application state. A server stores one Handler and one rawptr; bind
+// pairs them so the cast back to *T lives here, matched by construction, and
+// handlers receive *T directly. The Typed value must stay alive and unmoved
+// while any server uses the Binding.
+pub struct Typed(T) {
+  state: *T,
+  handler: fn(*Response, *const Request, *T) Result,
+}
+
+pub struct Binding { handler: Handler, context: rawptr }
+
+fn typed_dispatch(T: type, response: *Response, request: *const Request) Result {
+  typed := #cast(*Typed(T), request.context)
+  return typed.handler(response, request, typed.state)
+}
+
+pub fn bind(typed: *Typed($T)) Binding {
+  return Binding{ handler: #instance(typed_dispatch, T), context: typed }
+}
+
+// Typed router. Patterns are exact paths with optional :name segments, each
+// matching one nonempty path segment: "/users/:id/posts/:post". At most
+// MaxParams per pattern. A path that matches with another method gets 405
+// with an Allow header; no match runs fallback, or 404 when fallback is nil.
+pub struct TypedRoute(T) {
+  method: []const u8,
+  pattern: []const u8,
+  handler: fn(*Response, *const Request, *T) Result,
+}
+
+pub struct Routes(T) {
+  routes: []TypedRoute(T),
+  count: usize,
+  state: *T,
+  fallback: fn(*Response, *const Request, *T) Result,
+}
+
+// Route storage is caller-supplied; method and pattern strings are borrowed.
+pub fn typed_routes(storage: []TypedRoute($T), state: *$T) Routes(T) {
+  return Routes(T){ routes: storage, state: state }
+}
+
+pub fn add(router: *Routes($T), method: []const u8, pattern: []const u8, handler: fn(*Response, *const Request, *$T) Result) Result {
+  if handler == nil || #len(pattern) == 0 || pattern[0] != '/' || pattern_params(pattern) > MaxParams {
+    return Result{ detail: ErrorKind.Invalid, failure: io.Failure{ kind: io.Kind.InvalidInput } }
+  }
+  if router.count >= #len(router.routes) {
+    return Result{ detail: ErrorKind.Capacity, failure: io.Failure{ kind: io.Kind.Capacity } }
+  }
+  router.routes[router.count] = TypedRoute(T){ method: method, pattern: pattern, handler: handler }
+  router.count += 1
+  return Result{}
+}
+
+fn routes_dispatch(T: type, response: *Response, request: *const Request) Result {
+  return serve_routes(#cast(*Routes(T), request.context), response, request)
+}
+
+// Runs the matching route. Use it from a Typed handler that wraps routing
+// with its own work, such as counting or authentication.
+pub fn serve_routes(router: *Routes($T), response: *Response, request: *const Request) Result {
+  matched := request.*
+  allow_storage: [128]u8 = []
+  allow_used: usize = 0
+  for i in 0..router.count {
+    candidate := &router.routes[i]
+    if !match_path(candidate.pattern, request.path, &matched) {
+      continue
+    }
+    if bytes.equal(candidate.method, request.method) {
+      return candidate.handler(response, &matched, router.state)
+    }
+    if allow_used > 0 {
+      allow_used = append_bytes(allow_storage[..], allow_used, ", ")
+    }
+    allow_used = append_bytes(allow_storage[..], allow_used, candidate.method)
+  }
+  if allow_used > 0 && allow_used <= #len(allow_storage) {
+    headers: [1]Header = [Header{ name: "Allow", value: allow_storage[..allow_used] }]
+    return respond(response, "method not allowed\n", ResponseOptions{ status: StatusMethodNotAllowed,
+      content_type: "text/plain; charset=utf-8", headers: headers[..] })
+  }
+  if router.fallback != nil {
+    return router.fallback(response, request, router.state)
+  }
+  return respond(response, "not found\n", ResponseOptions{ status: StatusNotFound, content_type: "text/plain; charset=utf-8" })
+}
+
+// Binds a router for a server start, like bind.
+pub fn bind_routes(router: *Routes($T)) Binding {
+  return Binding{ handler: #instance(routes_dispatch, T), context: router }
+}
+
+fn pattern_params(pattern: []const u8) usize {
+  count: usize = 0
+  for i in 0..#len(pattern) {
+    if pattern[i] == ':' && i > 0 && pattern[i - 1] == '/' {
+      count += 1
+    }
+  }
+  return count
+}
+
+// Matches path against pattern segment by segment, capturing :name segments
+// into request.params. Captures borrow path.
+pub fn match_path(pattern: []const u8, path: []const u8, request: *Request) bool {
+  request.param_count = 0
+  p: usize = 0
+  q: usize = 0
+  for p < #len(pattern) && q < #len(path) {
+    if pattern[p] == ':' && p > 0 && pattern[p - 1] == '/' {
+      name_end := p + bytes.find_byte(pattern[p..], '/')
+      value_end := q + bytes.find_byte(path[q..], '/')
+      if value_end == q || request.param_count >= MaxParams {
+        return false
+      }
+      request.params[request.param_count] = Header{ name: pattern[p + 1..name_end], value: path[q..value_end] }
+      request.param_count += 1
+      p = name_end
+      q = value_end
+      continue
+    }
+    if pattern[p] != path[q] {
+      return false
+    }
+    p += 1
+    q += 1
+  }
+  return p == #len(pattern) && q == #len(path)
+}
+
+// Path parameter captured by a Routes pattern, still percent-encoded.
+pub fn param(request: *const Request, name: []const u8) HttpHeader {
+  for i in 0..request.param_count {
+    if bytes.equal(request.params[i].name, name) {
+      return HttpHeader{ name: request.params[i].name, value: request.params[i].value, found: true }
+    }
+  }
+  return HttpHeader{}
 }
 
 pub fn server(input: stream.Reader, output: stream.Writer, storage: []u8) Server {
@@ -978,14 +1133,41 @@ fn status_reason(status: u16) []const u8 {
   if status == 200 {
     return "OK"
   }
+  if status == 201 {
+    return "Created"
+  }
   if status == 204 {
     return "No Content"
+  }
+  if status == 303 {
+    return "See Other"
   }
   if status == 400 {
     return "Bad Request"
   }
+  if status == 401 {
+    return "Unauthorized"
+  }
+  if status == 403 {
+    return "Forbidden"
+  }
   if status == 404 {
     return "Not Found"
+  }
+  if status == 405 {
+    return "Method Not Allowed"
+  }
+  if status == 409 {
+    return "Conflict"
+  }
+  if status == 422 {
+    return "Unprocessable Content"
+  }
+  if status == 429 {
+    return "Too Many Requests"
+  }
+  if status == 503 {
+    return "Service Unavailable"
   }
   if status == 413 {
     return "Payload Too Large"

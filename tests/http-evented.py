@@ -77,6 +77,23 @@ def exercise(port):
     injected = raw(port, b'GET /query?q=a%0D%0ASet-Cookie:+x HTTP/1.1\r\nConnection: close\r\n\r\n')
     assert injected.startswith(b'HTTP/1.1 400') and b'bad header' in injected, injected
 
+    # Typed routes: path parameters, 405 with Allow, fallback.
+    client = http.client.HTTPConnection('127.0.0.1', port, timeout=10)
+    client.request('GET', '/users/7/posts/%3Cb%3E?x=1')
+    reply = client.getresponse()
+    assert (reply.status, reply.read()) == (200, b'user=7 post=%3Cb%3E')
+    client.request('GET', '/users/7/posts/')
+    reply = client.getresponse()
+    assert (reply.status, reply.read()) == (404, b'not found\n')
+    client.request('DELETE', '/users')
+    reply = client.getresponse()
+    assert reply.status == 405 and reply.getheader('Allow') == 'POST', reply.status
+    reply.read()
+    client.request('POST', '/users', body=b'')
+    reply = client.getresponse()
+    assert (reply.status, reply.read()) == (201, b'created\n')
+    client.close()
+
     # Slow reader: the worker drains the large body as the peer reads.
     with socket.create_connection(('127.0.0.1', port), timeout=10) as connection:
         connection.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
@@ -155,4 +172,4 @@ with tempfile.TemporaryDirectory(prefix='dyn-http-evented-') as temporary:
             if server.poll() is None:
                 server.kill()
                 server.wait()
-print('PASS evented HTTP: keep-alive, pipelining, byte splits, large/slow/streamed responses, 400/413, query/form/header API, idle timeout, 48 clients over 32 slots (debug/release, shared SO_REUSEPORT listeners)')
+print('PASS evented HTTP: keep-alive, pipelining, byte splits, large/slow/streamed responses, 400/413, query/form/header API, typed routes, idle timeout, 48 clients over 32 slots (debug/release, shared SO_REUSEPORT listeners)')

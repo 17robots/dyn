@@ -36,3 +36,50 @@ pub fn stream_result(failure: StreamFailure, transferred: usize) io.Transfer {
 pub struct Result(T) { value: T, failure: Failure }
 // Decoded or encoded bytes, for codecs with nothing else to report.
 pub type Bytes = Result([]u8)
+
+// Whole text as a decimal u64: one or more ASCII digits, nothing else (no
+// sign, space or underscore). Syntax at the first bad byte; Overflow past
+// the u64 range.
+pub fn u64_decimal(text: []const u8) Result(u64) {
+  if #len(text) == 0 {
+    return Result(u64){ failure: Failure{ kind: Kind.Syntax, message: "expected digits" } }
+  }
+  value: u64 = 0
+  for i in 0..#len(text) {
+    byte := text[i]
+    if byte < '0' || byte > '9' {
+      return Result(u64){ failure: Failure{ kind: Kind.Syntax, offset: i, message: "expected a digit" } }
+    }
+    digit := #cast(u64, byte - '0')
+    if value > (18446744073709551615 - digit) / 10 {
+      return Result(u64){ failure: Failure{ kind: Kind.Overflow, offset: i, message: "number exceeds u64" } }
+    }
+    value = value * 10 + digit
+  }
+  return Result(u64){ value: value }
+}
+
+// Whole text as a decimal i64 with an optional leading '-'.
+pub fn i64_decimal(text: []const u8) Result(i64) {
+  negative := #len(text) > 0 && text[0] == '-'
+  start: usize = 0
+  if negative {
+    start = 1
+  }
+  magnitude := u64_decimal(text[start..])
+  if magnitude.failure.kind != Kind.Ok {
+    failure := magnitude.failure
+    failure.offset += start
+    return Result(i64){ failure: failure }
+  }
+  if negative {
+    if magnitude.value > 9223372036854775808 {
+      return Result(i64){ failure: Failure{ kind: Kind.Overflow, offset: start, message: "number below i64 minimum" } }
+    }
+    return Result(i64){ value: #cast(i64, 0 - magnitude.value) }
+  }
+  if magnitude.value > 9223372036854775807 {
+    return Result(i64){ failure: Failure{ kind: Kind.Overflow, offset: start, message: "number exceeds i64" } }
+  }
+  return Result(i64){ value: #cast(i64, magnitude.value) }
+}
