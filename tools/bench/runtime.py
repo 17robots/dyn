@@ -71,7 +71,7 @@ def stage(args):
                     if text.count('fn main() {') != 1:
                         raise SystemExit(f'{name}: unsupported browser entry point')
                     text = text.replace('fn main() {', 'pub fn checksum() u64 {')
-                    text, count = re.subn(r'  _ = io.println\(io.stdout\(\), "{}", (.+)\)\n\}\s*$',
+                    text, count = re.subn(r'  io.println\("{}", (.+)\)\n\}\s*$',
                                          r'  return #cast(u64, \1)\n}\n', text)
                     if count != 1:
                         raise SystemExit(f'{name}: unsupported checksum output')

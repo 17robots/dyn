@@ -115,10 +115,10 @@ pub fn agg_enum(a: i64, b: u64) i64 {
 }
 fn any_kind(v: any) u64 {
   case v {
-    is i64 n => { return #cast(u64, (n % 100)) + 1000 }
-    is f64 n => { _ = n
+    i64 n => { return #cast(u64, (n % 100)) + 1000 }
+    f64 n => { _ = n
     return 2000 }
-    is Pair p => { return #cast(u64, (p.x % 10)) + 3000 }
+    Pair p => { return #cast(u64, (p.x % 10)) + 3000 }
     _ => { return 9 }
   }
 }
@@ -399,7 +399,7 @@ fn main() {{
   backing: [65536]u8 = []
   arena := mem.arena_from_buffer(backing[..])
   arguments := process.arguments(arena)
-  if !arguments.ok || #len(arguments.value) < 2 {{ #panic("case index required") }}
+  if arguments.failure.kind != io.Kind.Ok || #len(arguments.value) < 2 {{ #panic("case index required") }}
   if !strings.valid(u64, arguments.value[1]) {{ #panic("bad case index") }}
   index := strings.parse(u64, arguments.value[1])
   case index / 128 {{
