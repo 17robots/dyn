@@ -398,6 +398,9 @@ static void a64s_vloop(SsaEmit *e, SsaValue *v) {
   BackendContext *ctx = e->ctx;
   const uint32_t *w = &e->s->lists[v->list];
   uint32_t bases = w[0], sums_at = w[8], inputs_at = w[9], ops = w[3], step = w[16], counter_step = w[17];
+  uint32_t bytes = w[18] & 0xff, lanes = 16 / bytes;
+  bool wide = bytes == 8, integer = w[18] >> 8 & 1;
+  uint32_t size = wide ? 3u << 10 : 2u << 10; /* .2d or .4s in ld/st */
   const uint32_t *stride = w + 4, *scale = w + 12, *program = w + VP_HEADER;
   size_t skips[2 + VP_MAX_BASES + VP_MAX_BASES * VP_MAX_BASES]; unsigned skip_count = 0;
   unsigned skip_kinds[2 + VP_MAX_BASES + VP_MAX_BASES * VP_MAX_BASES];
@@ -412,7 +415,8 @@ static void a64s_vloop(SsaEmit *e, SsaValue *v) {
     a64s_immediate(ctx, 17, counter_step);
     a64_word(ctx, 0x9ac00800u | 17u << 16 | 10u << 5 | 10u);             /* udiv */
   }
-  a64_word(ctx, 0x92400000u | 62u << 16 | 61u << 10 | 10u << 5 | 11u);   /* and x11, x10, ~3 */
+  if (wide) a64_word(ctx, 0x92400000u | 63u << 16 | 62u << 10 | 10u << 5 | 11u); /* and x11, x10, ~1 */
+  else a64_word(ctx, 0x92400000u | 62u << 16 | 61u << 10 | 10u << 5 | 11u);      /* and x11, x10, ~3 */
   skip_kinds[skip_count] = 0xff; skips[skip_count++] = a64s_later(ctx);   /* cbz x11 */
   for (uint32_t k = 0; k < w[10]; ++k) {
     a64_word(ctx, 0xf9400000u | 0u << 10 | 8u << 5 | 16u);
@@ -427,6 +431,13 @@ static void a64s_vloop(SsaEmit *e, SsaValue *v) {
     a64_word(ctx, 0x9b007c00u | 17u << 16 | 11u << 5 | 10u);             /* mul x10, x11, x17 */
     a64_word(ctx, 0x8b000000u | 9u << 16 | 10u << 5 | 10u);              /* add x10, x10, x9 */
   } else a64_word(ctx, 0x8b000000u | 9u << 16 | 11u << 5 | 10u);         /* add x10, x11, x9 */
+  for (uint32_t j = 0; j < ops; ++j) {
+    if (program[VP_WORDS * j] != VP_INDEX) continue;
+    a64s_immediate(ctx, 17, UINT64_C(0x80000000));
+    a64_word(ctx, 0xeb00001fu | 17u << 16 | 10u << 5);                    /* cmp x10, 2^31 */
+    skip_kinds[skip_count] = 8; skips[skip_count++] = a64s_later(ctx);    /* b.hi */
+    break;
+  }
   for (uint32_t k = 0; k < bases; ++k)
     a64_word(ctx, 0xf9400000u | (3u + k) << 10 | 8u << 5 | k);
   for (uint32_t a = 0; a < bases; ++a) {
@@ -453,13 +464,22 @@ static void a64s_vloop(SsaEmit *e, SsaValue *v) {
     const uint32_t *o = program + VP_WORDS * j;
     unsigned d = a64vp_reg(o[1]);
     if (o[0] == VP_CONST) {
-      a64s_immediate(ctx, 16, o[5]);
-      a64_word(ctx, 0x4e040c00u | 16u << 5 | d);                         /* dup d.4s, w16 */
+      a64s_immediate(ctx, 16, wide ? (uint64_t)o[3] << 32 | o[5] : o[5]);
+      a64_word(ctx, (wide ? 0x4e080c00u : 0x4e040c00u) | 16u << 5 | d);  /* dup d, x16/w16 */
     } else if (o[0] == VP_BCAST) {
-      a64_word(ctx, 0xbd400000u | (inputs_at + 4 * o[4]) / 4 << 10 | 8u << 5 | d);
-      a64_word(ctx, 0x4e040400u | d << 5 | d);                           /* dup d.4s, d.s[0] */
+      if (wide) a64_word(ctx, 0xfd400000u | (inputs_at + 8 * o[4]) / 8 << 10 | 8u << 5 | d);
+      else a64_word(ctx, 0xbd400000u | (inputs_at + 4 * o[4]) / 4 << 10 | 8u << 5 | d);
+      a64_word(ctx, (wide ? 0x4e080400u : 0x4e040400u) | d << 5 | d);    /* dup d, d[0] */
+    } else if (o[0] == VP_SUM && integer) {
+      a64_word(ctx, 0xbd400000u | (sums_at + 8 * o[4]) / 4 << 10 | 8u << 5 | d); /* ldr s: low 32 bits, rest zero */
     } else if (o[0] == VP_SUM) {
-      a64_word(ctx, 0xbd400000u | (sums_at + 4 * o[4]) / 4 << 10 | 8u << 5 | d);
+      if (wide) a64_word(ctx, 0xfd400000u | (sums_at + 8 * o[4]) / 8 << 10 | 8u << 5 | d);
+      else a64_word(ctx, 0xbd400000u | (sums_at + 4 * o[4]) / 4 << 10 | 8u << 5 | d);
+    } else if (o[0] == VP_LANES) {
+      a64s_immediate(ctx, 16, UINT64_C(0x0000000100000000));
+      a64s_immediate(ctx, 17, UINT64_C(0x0000000300000002));
+      a64_word(ctx, 0x4e080c00u | 16u << 5 | d);                         /* dup d.2d, x16 */
+      a64_word(ctx, 0x4e181c00u | 17u << 5 | d);                         /* ins d.d[1], x17 */
     }
   }
   size_t loop = ctx->text.n;
@@ -469,16 +489,16 @@ static void a64s_vloop(SsaEmit *e, SsaValue *v) {
     switch (o[0]) {
     case VP_LOAD:
       a64vp_address(ctx, base, scale[base]);
-      if (stride[base] == 4) a64_word(ctx, 0x4c407800u | 16u << 5 | d);   /* ld1 */
-      else if (stride[base] == 8) {
-        a64_word(ctx, 0x4c408800u | 16u << 5 | 30u);                     /* ld2 {v30, v31} */
+      if (stride[base] == bytes) a64_word(ctx, 0x4c407000u | size | 16u << 5 | d); /* ld1 */
+      else if (stride[base] == 2 * bytes) {
+        a64_word(ctx, 0x4c408000u | size | 16u << 5 | 30u);              /* ld2 {v30, v31} */
         a64vp_copy(ctx, d, o[5] ? 31 : 30);
         const uint32_t *next = j + 1 < ops ? o + VP_WORDS : NULL;
-        if (next && next[0] == VP_LOAD && next[4] == base && next[5] == (o[5] ^ 4)) {
+        if (next && next[0] == VP_LOAD && next[4] == base && next[5] == (o[5] ^ bytes)) {
           a64vp_copy(ctx, a64vp_reg(next[1]), next[5] ? 31 : 30); ++j;
         }
       } else {
-        a64_word(ctx, 0x4c404800u | 16u << 5 | 29u);                     /* ld3 {v29, v30, v31} */
+        a64_word(ctx, 0x4c404000u | size | 16u << 5 | 29u);              /* ld3 {v29, v30, v31} */
         a64vp_copy(ctx, d, 29);
         a64vp_copy(ctx, a64vp_reg(o[VP_WORDS + 1]), 30);
         a64vp_copy(ctx, a64vp_reg(o[2 * VP_WORDS + 1]), 31);
@@ -487,29 +507,46 @@ static void a64s_vloop(SsaEmit *e, SsaValue *v) {
       break;
     case VP_STORE:
       a64vp_address(ctx, base, scale[base]);
-      a64_word(ctx, 0x4c007800u | 16u << 5 | x);                         /* st1 */
+      a64_word(ctx, 0x4c007000u | size | 16u << 5 | x);                  /* st1 */
+      break;
+    case VP_INDEX:
+      a64_word(ctx, 0x4e040c00u | 9u << 5 | 28u);                        /* dup v28.4s, w9 */
+      a64_word(ctx, 0x4ea08400u | x << 16 | 28u << 5 | 28u);             /* add v28.4s, v28.4s, lanes */
+      a64_word(ctx, 0x4e21d800u | 28u << 5 | d);                         /* scvtf d.4s, v28.4s */
       break;
     case VP_STORE2:
       a64vp_address(ctx, base, scale[base]);
       a64vp_copy(ctx, 30, x); a64vp_copy(ctx, 31, y);
-      a64_word(ctx, 0x4c008800u | 16u << 5 | 30u);                       /* st2 */
+      a64_word(ctx, 0x4c008000u | size | 16u << 5 | 30u);                /* st2 */
       break;
     case VP_STORE3:
       a64vp_address(ctx, base, scale[base]);
       a64vp_copy(ctx, 29, x); a64vp_copy(ctx, 30, y); a64vp_copy(ctx, 31, a64vp_reg(o[5]));
-      a64_word(ctx, 0x4c004800u | 16u << 5 | 29u);                       /* st3 */
+      a64_word(ctx, 0x4c004000u | size | 16u << 5 | 29u);                /* st3 */
       break;
     case VP_ADD: case VP_SUB: case VP_MUL: case VP_DIV: {
       static const uint32_t codes[] = {0x4e20d400u, 0x4ea0d400u, 0x6e20dc00u, 0x6e20fc00u};
-      a64_word(ctx, codes[o[0] - VP_ADD] | y << 16 | x << 5 | d);
+      if (integer) {
+        uint32_t code = o[0] == VP_ADD ? 0x4ea08400u : o[0] == VP_SUB ? 0x6ea08400u : o[0] == VP_MUL ? 0x4ea09c00u : 0;
+        a64_word(ctx, code | y << 16 | x << 5 | d);
+        break;
+      }
+      a64_word(ctx, codes[o[0] - VP_ADD] | (wide ? 1u << 22 : 0) | y << 16 | x << 5 | d);
+      break;
+    }
+    case VP_AND: case VP_OR: case VP_XOR: {
+      uint32_t code = o[0] == VP_AND ? 0x4e201c00u : o[0] == VP_OR ? 0x4ea01c00u : 0x6e201c00u;
+      a64_word(ctx, code | y << 16 | x << 5 | d);
       break;
     }
     case VP_SUM: {
+      if (integer) { a64_word(ctx, (o[5] & 1 ? 0x6ea08400u : 0x4ea08400u) | x << 16 | d << 5 | d); break; }
       /* Lane 0, then lanes 1, 2 and 3: the scalar loop's order. */
-      uint32_t code = o[5] ? 0x1e203800u : 0x1e202800u;
+      uint32_t code = (o[5] ? 0x1e203800u : 0x1e202800u) | (wide ? 1u << 22 : 0);
       a64_word(ctx, code | x << 16 | d << 5 | d);
-      for (unsigned lane = 1; lane < 4; ++lane) {
-        a64_word(ctx, 0x5e040400u | lane << 19 | x << 5 | 28u);          /* dup s28, x.s[lane] */
+      for (unsigned lane = 1; lane < lanes; ++lane) {
+        if (wide) a64_word(ctx, 0x5e180400u | x << 5 | 28u);             /* dup d28, x.d[1] */
+        else a64_word(ctx, 0x5e040400u | lane << 19 | x << 5 | 28u);     /* dup s28, x.s[lane] */
         a64_word(ctx, code | 28u << 16 | d << 5 | d);
       }
       break;
@@ -517,7 +554,7 @@ static void a64s_vloop(SsaEmit *e, SsaValue *v) {
     default: break;
     }
   }
-  a64_word(ctx, 0x91000000u | (4 * step) << 10 | 9u << 5 | 9u);          /* add x9, x9, 4 * step */
+  a64_word(ctx, 0x91000000u | (lanes * step) << 10 | 9u << 5 | 9u);      /* add x9, x9, lanes * step */
   a64_word(ctx, 0xeb00001fu | 10u << 16 | 9u << 5);                      /* cmp x9, x10 */
   a64s_back(ctx, loop, 3);                                                /* b.lo */
   a64_word(ctx, 0xf9000000u | 2u << 10 | 8u << 5 | 9u);                  /* str x9, [x8, 16] */
@@ -530,8 +567,17 @@ static void a64s_vloop(SsaEmit *e, SsaValue *v) {
   a64_word(ctx, 0xf9000000u | 0u << 10 | 8u << 5 | 16u);                 /* i += iterations * step */
   for (uint32_t j = 0; j < ops; ++j) {
     const uint32_t *o = program + VP_WORDS * j;
-    if (o[0] == VP_SUM)
-      a64_word(ctx, 0xbd000000u | (sums_at + 4 * o[4]) / 4 << 10 | 8u << 5 | a64vp_reg(o[1]));
+    if (o[0] == VP_SUM && integer) {
+      unsigned d = a64vp_reg(o[1]);
+      a64_word(ctx, 0x4eb1b800u | d << 5 | 28u);                         /* addv s28, d.4s */
+      a64_word(ctx, 0x1e260000u | 28u << 5 | 16u);                       /* fmov w16, s28 */
+      if (o[5] & 2) a64_word(ctx, 0x2a1003f0u);                          /* mov w16, w16 */
+      else a64_word(ctx, 0x93407c00u | 16u << 5 | 16u);                  /* sxtw x16, w16 */
+      a64_word(ctx, 0xf9000000u | (sums_at + 8 * o[4]) / 8 << 10 | 8u << 5 | 16u);
+    } else if (o[0] == VP_SUM) {
+      if (wide) a64_word(ctx, 0xfd000000u | (sums_at + 8 * o[4]) / 8 << 10 | 8u << 5 | a64vp_reg(o[1]));
+      else a64_word(ctx, 0xbd000000u | (sums_at + 4 * o[4]) / 4 << 10 | 8u << 5 | a64vp_reg(o[1]));
+    }
   }
   for (unsigned k = 0; k < skip_count; ++k) {
     if (skip_kinds[k] == 0xff) a64s_if_zero(ctx, skips[k], ctx->text.n, 11);

@@ -120,16 +120,18 @@ def run_debug_case(program):
 
 with tempfile.TemporaryDirectory(prefix='dyn-p256-') as directory:
  work=Path(directory)
- debug_programs=[]
- for case,source in debug_sources:
+ def build_debug(item):
+  case,source=item
   project=work/case
   project.mkdir()
   (project/'main.dyn').write_text(source,encoding='utf-8')
   output=project/('program.exe' if os.name=='nt' else 'program')
   subprocess.run([DYN,'build',str(project),'--debug','--quiet','--no-cache','--output',str(output)],check=True,timeout=300)
-  debug_programs.append((case,output))
- # Two independent cases fit the hosted runner while keeping all trace checks.
- with ThreadPoolExecutor(max_workers=min(2,os.cpu_count() or 1)) as pool:
+  return case,output
+ # Every vector builds and runs on its own, as many at once as there are
+ # processors, keeping all trace checks.
+ with ThreadPoolExecutor(max_workers=os.cpu_count() or 1) as pool:
+  debug_programs=list(pool.map(build_debug,debug_sources))
   list(pool.map(run_debug_case,debug_programs))
  (work/'main.dyn').write_text(s,encoding='utf-8')
  for flags in (['--release'],['--release','--opt-level','3']):
@@ -140,21 +142,24 @@ with tempfile.TemporaryDirectory(prefix='dyn-p256-') as directory:
   start=time.monotonic()
   subprocess.run([str(output)],check=True,timeout=120)
   print(f'PASS P256 {mode}: {time.monotonic()-start:.2f}s',flush=True)
- for target in ('aarch64-linux','riscv64-linux','x86_64-macos','aarch64-macos','x86_64-windows','aarch64-windows','wasm32-wasi'):
-  output=work/target
-  subprocess.run([DYN,'build',str(work),'--target',target,'--release','--quiet','--no-cache','--output',str(output)],check=True,timeout=300)
-  emulator={'aarch64-linux':'qemu-aarch64','riscv64-linux':'qemu-riscv64','x86_64-windows':'wine'}.get(target)
-  if emulator and shutil.which(emulator):
-   if target=='riscv64-linux':
-    # QEMU's RISC-V user mode is slow: the first vector and the edge cases
-    # cover the target's code paths; the host builds check every vector.
-    for case,source in (debug_sources[0],debug_sources[-1]):
-     project=work/('riscv-'+case);project.mkdir(exist_ok=True)
-     (project/'main.dyn').write_text(source,encoding='utf-8')
-     subprocess.run([DYN,'build',str(project),'--target',target,'--release','--quiet','--no-cache','--output',str(project/'program')],check=True,timeout=300)
-     subprocess.run([emulator,str(project/'program')],check=True,timeout=240)
-   else:subprocess.run([emulator,str(output)],check=True,timeout=240)
-  if target=='wasm32-wasi' and shutil.which('node'):
-   script="const {WASI}=require('node:wasi'),fs=require('fs');(async()=>{const wasi=new WASI({version:'preview1',returnOnExit:true});const {instance}=await WebAssembly.instantiate(fs.readFileSync(process.argv[1]),{wasi_snapshot_preview1:wasi.wasiImport});process.exitCode=wasi.start(instance);})().catch(e=>{console.error(e);process.exit(1)});"
-   subprocess.run(['node','--no-warnings','-e',script,str(output)],check=True,timeout=240)
+ def cross(target):
+   output=work/target
+   subprocess.run([DYN,'build',str(work),'--target',target,'--release','--quiet','--no-cache','--output',str(output)],check=True,timeout=300)
+   emulator={'aarch64-linux':'qemu-aarch64','riscv64-linux':'qemu-riscv64','x86_64-windows':'wine'}.get(target)
+   if emulator and shutil.which(emulator):
+    if target=='riscv64-linux':
+     # QEMU's RISC-V user mode is slow: the first vector and the edge cases
+     # cover the target's code paths; the host builds check every vector.
+     for case,source in (debug_sources[0],debug_sources[-1]):
+      project=work/('riscv-'+case);project.mkdir(exist_ok=True)
+      (project/'main.dyn').write_text(source,encoding='utf-8')
+      subprocess.run([DYN,'build',str(project),'--target',target,'--release','--quiet','--no-cache','--output',str(project/'program')],check=True,timeout=300)
+      subprocess.run([emulator,str(project/'program')],check=True,timeout=240)
+    else:subprocess.run([emulator,str(output)],check=True,timeout=240)
+   if target=='wasm32-wasi' and shutil.which('node'):
+    script="const {WASI}=require('node:wasi'),fs=require('fs');(async()=>{const wasi=new WASI({version:'preview1',returnOnExit:true});const {instance}=await WebAssembly.instantiate(fs.readFileSync(process.argv[1]),{wasi_snapshot_preview1:wasi.wasiImport});process.exitCode=wasi.start(instance);})().catch(e=>{console.error(e);process.exit(1)});"
+    subprocess.run(['node','--no-warnings','-e',script,str(output)],check=True,timeout=240)
+ # Targets build and run independently, all at once.
+ with ThreadPoolExecutor(max_workers=os.cpu_count() or 1) as pool:
+  list(pool.map(cross,('aarch64-linux','riscv64-linux','x86_64-macos','aarch64-macos','x86_64-windows','aarch64-windows','wasm32-wasi')))
 print('PASS native P256: RFC6979, independent integer oracle, signing/verification, cross-targets')

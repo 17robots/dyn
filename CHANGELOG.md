@@ -12,11 +12,22 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
-## Unreleased
+## 0.1.0-preview.31
 
-- `--opt-level 3` on x86-64 and AArch64 runs counted f32 loops four iterations at a time: loads and stores
-  of one-, two- and three-float elements, f32 arithmetic and running sums, which add the lanes in
-  iteration order so results match the scalar loop bit for bit. The vector part runs only when
+Upgrade guide: [0.1.0-preview.31](docs/migrations/0.1.0-preview.31.md).
+
+- Generic call errors point at your code: a type conflict names the argument that fixed the
+  type, and a failure inside a std instance, such as an unsupported map key, is reported at
+  your call with the std line as a note.
+- The language server treats a lone file that declares `main`, in a directory without
+  `main.dyn` or `dyn.project`, as its own program, as `dyn run hello.dyn` does.
+- Editor analysis keeps a cancellation that arrives during a struct-literal lookahead instead
+  of reporting a syntax error.
+- `--opt-level 3` on x86-64 and AArch64 runs counted loops several iterations at a time: four
+  `f32` or `i32` lanes, or two `f64` lanes. It covers loads and stores of one-, two- and
+  three-field elements, arithmetic (wrapping add, subtract, multiply and bitwise ops for `i32`;
+  multiply needs SSE4.1 on x86-64), `f32(i)` of the counter, and running sums. Float sums add
+  the lanes in iteration order, so results match the scalar loop bit for bit. The vector part runs only when
   the arrays it writes don't overlap the others and every checked index is in range, both checked
   at run time; otherwise, and for the last few iterations, the scalar loop runs. The `pairs`
   kernel now matches `cc -O2`, and `structs` is 1.14x it, from 1.19x and 1.26x. AArch64 also

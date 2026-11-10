@@ -12,6 +12,71 @@ struct W {
   z: f32
 }
 
+struct P {
+  x: f64,
+  y: f64
+}
+
+struct Q {
+  x: f64,
+  y: f64,
+  z: f64
+}
+
+fn wide(f: f64) u64 {
+  return #bitcast(u64, f)
+}
+
+// Two f64 fields and a running sum.
+fn drift(ps: []P, vs: []P, k: f64) f64 {
+  e: f64 = 0.25
+  for i in 0..#len(ps) {
+    ps[i] = P{ x: ps[i].x + vs[i].x * k, y: ps[i].y / (vs[i].y + 2.0) }
+    e += ps[i].x * vs[i].y - ps[i].y
+  }
+  return e
+}
+
+// Three f64 fields.
+fn twist(qs: []Q, rs: []Q) f64 {
+  e: f64 = 0.0
+  for i in 0..#len(qs) {
+    qs[i] = Q{ x: qs[i].y * rs[i].z, y: qs[i].z - rs[i].x, z: qs[i].x + rs[i].y }
+    e -= qs[i].x * rs[i].x + qs[i].y * rs[i].y + qs[i].z * rs[i].z
+  }
+  return e
+}
+
+// One f64 per element.
+fn scale(a: []f64, b: []f64, k: f64) f64 {
+  t: f64 = 0.0
+  for i in 0..#len(a) {
+    a[i] = a[i] * k + b[i]
+    t += a[i]
+  }
+  return t
+}
+
+// Wrapping i32 lanes without a multiply, and a subtracted sum.
+fn blend(a: []i32, b: []i32, k: i32) i32 {
+  t: i32 = 7
+  for i in 0..#len(a) {
+    a[i] = (a[i] + k) ^ (b[i] - 3) | 1
+    t -= a[i] & 255
+  }
+  return t
+}
+
+// A multiply, and a u32 sum that wraps.
+fn churn(a: []u32, b: []u32) u32 {
+  t: u32 = 4000000000
+  for i in 0..#len(a) {
+    a[i] = a[i] * 2654435761 + b[i]
+    t += a[i]
+  }
+  return t
+}
+
 fn bits(f: f32) u32 {
   return #bitcast(u32, f)
 }
@@ -96,6 +161,44 @@ fn main() {
   }
   s := spin(ws[1..], ws[..39], 2.0)
   io.println("spin overlap {} {}", bits(s), bits(ws[20].x))
+  ps := mem.push_array(P, arena, 33)
+  pv := mem.push_array(P, arena, 33)
+  qs := mem.push_array(Q, arena, 33)
+  qr := mem.push_array(Q, arena, 33)
+  ds := mem.push_array(f64, arena, 33)
+  dr := mem.push_array(f64, arena, 33)
+  wides: [6]usize = [0, 1, 2, 3, 8, 33]
+  for n in wides {
+    for i in 0..33 {
+      f := #cast(f64, i)
+      ps[i] = P{ x: f * 0.1, y: 1.0 / (f + 1.0) }
+      pv[i] = P{ x: 3.0 - f, y: f * f * 0.002 }
+      qs[i] = Q{ x: f, y: f * 0.5 - 7.0, z: 1.0 / (f + 3.0) }
+      qr[i] = Q{ x: 0.75 * f, y: 2.0 - f, z: f * 0.03 }
+      ds[i] = f * 1.25
+      dr[i] = 0.5 - f
+    }
+    pv[5].y = 0.0 / 0.0
+    a := drift(ps[..n], pv[..n], 0.125)
+    b := twist(qs[..n], qr[..n])
+    c := scale(ds[..n], dr[..n], 1.0000001)
+    io.println("f64 {} {} {} {} {} {}", n, wide(a), wide(b), wide(c), wide(ps[n / 2].y), wide(qs[n / 2].z))
+  }
+  io.println("f64 overlap {} {}", wide(scale(ds[1..], ds[..32], 0.5)), wide(drift(ps[1..], ps[..32], 2.0)))
+  ia := mem.push_array(i32, arena, 37)
+  ib := mem.push_array(i32, arena, 37)
+  ua := mem.push_array(u32, arena, 37)
+  ub := mem.push_array(u32, arena, 37)
+  for n in wides {
+    for i in 0..37 {
+      ia[i] = #cast(i32, i) * 1000003 - 2147483000
+      ib[i] = 77 - #cast(i32, i) * 9
+      ua[i] = #cast(u32, i) * 123456789
+      ub[i] = 4294967295 - #cast(u32, i)
+    }
+    io.println("int {} {} {} {} {}", n, blend(ia[..n], ib[..n], 2147483647), churn(ua[..n], ub[..n]), ia[n / 2], ua[n / 2])
+  }
+  io.println("int overlap {} {}", blend(ia[1..], ia[..36], 5), churn(ua[2..], ua[..35]))
   // An index past the end panics after the earlier iterations' writes.
   short := buffer[..5]
   io.println("last {}", bits(step(buffer, short, 0, 5, 1.0)))

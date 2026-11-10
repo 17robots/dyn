@@ -48,3 +48,4 @@ contracts straight from the source.
 - [Structural IR snapshot](internals/ir-dump.md)
 - [Std contract migration](migrations/std-contracts-20261024.md)
 - [Language rules, 2026-11-08](migrations/language-rules-20261108.md)
+- [Upgrading to 0.1.0-preview.31](migrations/0.1.0-preview.31.md)
