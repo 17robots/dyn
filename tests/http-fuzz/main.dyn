@@ -1,0 +1,212 @@
+// Fuzzes the HTTP request framer, form decoding, path matching, response
+// header validation and HTML escaping. Each property returns false on a
+// violation; debug builds also panic on any out-of-bounds access. The first
+// argument scales the case count.
+use "std/bytes"
+use "std/fmt"
+use "std/html"
+use "std/io"
+use "std/net/http"
+use "std/parse"
+use "std/process"
+use "std/mem"
+use "std/testing"
+
+// The framer must agree with itself: a prefix of a request is Incomplete, and
+// a longer buffer frames the same request.
+fn framing(context: rawptr, input: []const u8) bool {
+  capacity: usize = 512
+  whole := http.frame_request(input, capacity)
+  if whole.status == http.FrameStatus.Ready {
+    request := whole.request
+    if whole.consumed == 0 || whole.consumed > #len(input) || #len(request.method) == 0 {
+      return false
+    }
+    if #len(request.body) != whole.consumed - request.header_length {
+      return false
+    }
+    if #len(request.path) + #len(request.query) > #len(request.target) {
+      return false
+    }
+    for cut in 0..whole.consumed {
+      prefix := http.frame_request(input[..cut], capacity)
+      if prefix.status == http.FrameStatus.Ready {
+        return false
+      }
+    }
+  }
+  return true
+}
+
+fn hex_digit(value: u8) u8 {
+  if value < 10 {
+    return '0' + value
+  }
+  return 'A' + value - 10
+}
+
+// Percent-encoding every byte and decoding gives the input back; decoding raw
+// input never writes past the destination.
+fn form_round_trip(context: rawptr, input: []const u8) bool {
+  encoded: [3 * 256]u8 = []
+  if #len(input) > 256 {
+    return true
+  }
+  for i in 0..#len(input) {
+    encoded[3 * i] = '%'
+    encoded[3 * i + 1] = hex_digit(input[i] >> 4)
+    encoded[3 * i + 2] = hex_digit(input[i] & 15)
+  }
+  decoded: [256]u8 = []
+  value := http.form_decode(decoded[..], encoded[..3 * #len(input)])
+  if value.failure.kind != parse.Kind.Ok || !bytes.equal(value.value, input) {
+    return false
+  }
+  small: [8]u8 = []
+  raw := http.form_decode(small[..], input)
+  return raw.failure.kind != parse.Kind.Ok || #len(raw.value) <= #len(input)
+}
+
+// Splits input at the first zero byte into pattern and path. Captures must be
+// nonempty slices of path, and a match must be repeatable.
+fn path_match(context: rawptr, input: []const u8) bool {
+  split := bytes.find_byte(input, 0)
+  if split == #len(input) {
+    return true
+  }
+  pattern := input[..split]
+  path := input[split + 1..]
+  request := http.Request{}
+  matched := http.match_path(pattern, path, &request)
+  if !matched {
+    return true
+  }
+  if request.param_count > http.MaxParams {
+    return false
+  }
+  for i in 0..request.param_count {
+    value := request.params[i].value
+    if #len(value) == 0 || bytes.find_byte(value, '/') != #len(value) {
+      return false
+    }
+  }
+  again := http.Request{}
+  return http.match_path(pattern, path, &again) && again.param_count == request.param_count
+}
+
+struct Capture { bytes: [4096]u8, length: usize }
+
+fn capture_write(data: rawptr, source: []const u8) io.Transfer {
+  capture := #cast(*Capture, data)
+  room := #len(capture.bytes) - capture.length
+  count := #len(source)
+  if count > room {
+    count = room
+  }
+  _ = mem.copy(capture.bytes[capture.length..capture.length + count], source[..count])
+  capture.length += count
+  return io.Transfer{ transferred: #len(source) }
+}
+
+// Input becomes a header name and value. Either respond refuses it before
+// writing anything, or the head has exactly the expected line count: request
+// data can never add a header line.
+fn header_injection(context: rawptr, input: []const u8) bool {
+  split := bytes.find_byte(input, ':')
+  if split == #len(input) {
+    return true
+  }
+  capture := Capture{}
+  response := http.Response{ output: io.Writer{ data: &capture, write: capture_write } }
+  headers: [1]http.Header = [http.Header{ name: input[..split], value: input[split + 1..] }]
+  sent := http.respond(&response, "", http.ResponseOptions{ content_type: "text/plain", headers: headers[..] })
+  if sent.failure.kind != io.Kind.Ok {
+    return capture.length == 0
+  }
+  head := capture.bytes[..capture.length]
+  lines: usize = 0
+  for i in 0..#len(head) {
+    if head[i] == '\n' {
+      lines += 1
+    }
+    if head[i] == '\r' && (i + 1 >= #len(head) || head[i + 1] != '\n') {
+      return false
+    }
+  }
+  // Status, Content-Type, Content-Length, the header, Connection, blank.
+  return lines == 6
+}
+
+// Escaped output holds no markup characters, and every input byte is
+// accounted for.
+fn escaping(context: rawptr, input: []const u8) bool {
+  storage: [8 * 256]u8 = []
+  if #len(input) > 256 {
+    return true
+  }
+  page := html.writer(storage[..])
+  html.text(&page, input)
+  output := html.output(&page).bytes
+  expected: usize = 0
+  for byte in input {
+    entity := html.entity(byte)
+    if #len(entity) == 0 {
+      expected += 1
+    } else {
+      expected += #len(entity)
+    }
+  }
+  if #len(output) != expected {
+    return false
+  }
+  for byte in output {
+    if byte == '<' || byte == '>' || byte == '"' || byte == '\'' {
+      return false
+    }
+  }
+  return true
+}
+
+fn run(name: []const u8, cases: usize, corpus: []const []const u8, predicate: fn(rawptr, []const u8) bool) {
+  work: [2048]u8 = []
+  result := testing.fuzz(testing.FuzzOptions{ seed: 20261110, cases: cases, shrink_checks: 20000 }, corpus, work[..], predicate, nil)
+  if !result.passed {
+    io.eprintln("fuzz failure in {}", name)
+    storage: [8 * 1024]u8 = []
+    quoted := fmt.buffer(storage[..])
+    _ = fmt.write_quoted(&quoted, result.example)
+    io.eprintln("example: {}", fmt.bytes(&quoted))
+    #panic("fuzz property failed")
+  }
+}
+
+fn main() {
+  arena := mem.arena_create(mem.MiB)
+  defer mem.arena_release(arena)
+  scale: u64 = 1
+  arguments := process.arguments(arena)
+  if arguments.failure.kind == io.Kind.Ok && #len(arguments.value) > 1 {
+    parsed := parse.u64_decimal(arguments.value[1])
+    if parsed.failure.kind == parse.Kind.Ok && parsed.value > 0 {
+      scale = parsed.value
+    }
+  }
+  cases := #cast(usize, 20000 * scale)
+  requests: [5][]const u8 = [
+    "GET /a?b=c HTTP/1.1\r\nHost: x\r\n\r\n",
+    "POST /form HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\n\r\nhello",
+    "GET / HTTP/1.1\r\nConnection: close\r\nX: y\r\n\r\nGET / HTTP/1.1\r\n\r\n",
+    "POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n",
+    "GET /x HTTP/1.0\r\nContent-Length: 99999999999999999999\r\n\r\n",
+  ]
+  run("framing", cases, requests[..], framing)
+  forms: [2][]const u8 = ["a=1&b=%20+x", "%zz%4"]
+  run("form", cases, forms[..], form_round_trip)
+  paths: [3][]const u8 = ["/users/:id\x00/users/7", "/a/:b/c/:d\x00/a/x/c/y", "/:a/:b/:c/:d/:e\x00/1/2/3/4/5"]
+  run("path", cases, paths[..], path_match)
+  headers: [3][]const u8 = ["HX-Trigger:refresh", "X:a\r\nSet-Cookie: x", "Bad Name:v"]
+  run("headers", cases, headers[..], header_injection)
+  texts: [2][]const u8 = ["<script>alert('x')</script>", "a & \"b\""]
+  run("escaping", cases, texts[..], escaping)
+  io.println("ok")
+}

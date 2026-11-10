@@ -1,0 +1,229 @@
+// HTTP/1.1 keep-alive load generator: one thread per connection to an IPv4
+// server, each sending GET requests back to back for a fixed duration.
+//
+//   httpbench PORT PATH CONNECTIONS SECONDS [A.B.C.D]
+//
+// Prints one line: requests, rate, p50/p99/max latency in microseconds and
+// errors. Latency is recorded in a log-linear histogram (about 1.5% error).
+use "std/fmt"
+use "std/io"
+use "std/mem"
+use "std/net"
+use "std/net/http"
+use "std/parse"
+use "std/process"
+use "std/sync"
+use "std/thread"
+use "std/time"
+
+const BucketCount: usize = 1024 + 54 * 64
+const ReceiveSize: usize = 64 * 1024
+
+struct Shared {
+  address: net.Ipv4Address,
+  request: []const u8,
+  stopping: sync.AtomicU32,
+}
+
+struct Client {
+  shared: *Shared,
+  thread: *thread.Thread,
+  requests: u64,
+  errors: u64,
+  buckets: [BucketCount]u32,
+}
+
+// Exact below 1024 us; above, 64 steps per power of two.
+fn bucket_of(micros: u64) usize {
+  if micros < 1024 {
+    return #cast(usize, micros)
+  }
+  bits: u64 = 10
+  for (micros >> (bits + 1)) != 0 && bits < 63 {
+    bits += 1
+  }
+  mantissa := (micros >> (bits - 6)) & 63
+  index := 1024 + #cast(usize, bits - 10) * 64 + #cast(usize, mantissa)
+  if index >= BucketCount {
+    return BucketCount - 1
+  }
+  return index
+}
+
+fn bucket_value(index: usize) u64 {
+  if index < 1024 {
+    return #cast(u64, index)
+  }
+  bits := #cast(u64, (index - 1024) / 64) + 10
+  mantissa := #cast(u64, (index - 1024) % 64)
+  return (#cast(u64, 64) + mantissa) << (bits - 6)
+}
+
+fn now_micros() u64 {
+  now := time.monotonic_now()
+  return #cast(u64, now.value.seconds) * 1000000 + #cast(u64, now.value.nanoseconds) / 1000
+}
+
+// One request and its full response. False on any error.
+fn exchange(connection: *net.Connection, request: []const u8, storage: []u8) bool {
+  if net.connection_write(connection, request).failure.kind != io.Kind.Ok {
+    return false
+  }
+  used: usize = 0
+  for true {
+    if used > 3 {
+      head := http.parse_response(storage[..used])
+      if head.failure.kind == parse.Kind.Ok {
+        total := head.header_length + head.content_length
+        if total > #len(storage) {
+          return false
+        }
+        if used >= total {
+          return true
+        }
+      }
+    }
+    if used == #len(storage) {
+      return false
+    }
+    read := net.connection_read(connection, storage[used..])
+    if read.failure.kind != io.Kind.Ok || read.value <= 0 {
+      return false
+    }
+    used += #cast(usize, read.value)
+  }
+  return false
+}
+
+fn client_main(context: rawptr) isize {
+  client := #cast(*Client, context)
+  storage: [ReceiveSize]u8 = []
+  opened := net.tcp_connect_ipv4(&client.shared.address)
+  if opened.failure.kind != io.Kind.Ok {
+    client.errors += 1
+    return 0
+  }
+  connection := opened.value
+  _ = net.no_delay(connection.descriptor, true)
+  for sync.load_u32(&client.shared.stopping) == 0 {
+    started := now_micros()
+    if !exchange(&connection, client.shared.request, storage[..]) {
+      client.errors += 1
+      break
+    }
+    client.buckets[bucket_of(now_micros() - started)] += 1
+    client.requests += 1
+  }
+  net.connection_close(&connection)
+  return 0
+}
+
+// Zero for a missing or malformed number; callers reject zero.
+fn argument_u64(arguments: [][]const u8, index: usize) u64 {
+  parsed := parse.u64_decimal(arguments[index])
+  if parsed.failure.kind != parse.Kind.Ok {
+    return 0
+  }
+  return parsed.value
+}
+
+fn percentile(buckets: []const u64, total: u64, fraction_thousandths: u64) u64 {
+  target := (total * fraction_thousandths + 999) / 1000
+  seen: u64 = 0
+  for i in 0..#len(buckets) {
+    seen += buckets[i]
+    if seen >= target && buckets[i] > 0 {
+      return bucket_value(i)
+    }
+  }
+  return 0
+}
+
+fn main() i32 {
+  arena := mem.arena_create(0)
+  defer mem.arena_release(arena)
+  arguments := process.arguments(arena)
+  if arguments.failure.kind != io.Kind.Ok || #len(arguments.value) < 5 {
+    io.eprintln("usage: httpbench PORT PATH CONNECTIONS SECONDS [A.B.C.D]")
+    return 2
+  }
+  values := arguments.value
+  port := argument_u64(values, 1)
+  connections := argument_u64(values, 3)
+  seconds := argument_u64(values, 4)
+  if port == 0 || port > 65535 || connections == 0 || connections > 4096 || seconds == 0 {
+    io.eprintln("httpbench: PORT 1..65535, CONNECTIONS 1..4096, SECONDS > 0")
+    return 2
+  }
+  octets: [4]u8 = [127, 0, 0, 1]
+  if #len(values) > 5 {
+    at: usize = 0
+    for i in 0..4 {
+      end := at
+      for end < #len(values[5]) && values[5][end] != '.' {
+        end += 1
+      }
+      part := parse.u64_decimal(values[5][at..end])
+      if part.failure.kind != parse.Kind.Ok || part.value > 255 {
+        io.eprintln("httpbench: bad IPv4 address")
+        return 2
+      }
+      octets[i] = #cast(u8, part.value)
+      at = end + 1
+    }
+  }
+  request_storage: [1024]u8 = []
+  request := fmt.buffer(request_storage[..])
+  _ = fmt.write(&request, "GET ")
+  _ = fmt.write(&request, values[2])
+  _ = fmt.write(&request, " HTTP/1.1\r\nHost: bench\r\n\r\n")
+  if request.failed {
+    io.eprintln("httpbench: PATH too long")
+    return 2
+  }
+  shared := mem.push(Shared, arena)
+  shared.address = net.ipv4(octets[0], octets[1], octets[2], octets[3], #cast(u16, port))
+  shared.request = fmt.bytes(&request)
+  count := #cast(usize, connections)
+  clients := mem.push_array(Client, arena, count)
+  started: usize = 0
+  for i in 0..count {
+    clients[i].shared = shared
+    spawned := thread.spawn_with_size(arena, ReceiveSize + 128 * 1024, client_main, &clients[i])
+    if spawned.failure.kind != io.Kind.Ok {
+      io.eprintln("httpbench: cannot start client threads")
+      sync.store_u32(&shared.stopping, 1)
+      break
+    }
+    clients[i].thread = spawned.value
+    started += 1
+  }
+  begin := now_micros()
+  _ = time.sleep(#cast(i64, seconds) * time.Second)
+  sync.store_u32(&shared.stopping, 1)
+  elapsed := now_micros() - begin
+  buckets := mem.push_array(u64, arena, BucketCount)
+  requests: u64 = 0
+  errors: u64 = 0
+  for i in 0..started {
+    _ = thread.join(clients[i].thread)
+    requests += clients[i].requests
+    errors += clients[i].errors
+    for b in 0..BucketCount {
+      buckets[b] += #cast(u64, clients[i].buckets[b])
+    }
+  }
+  if started < count {
+    errors += #cast(u64, count - started)
+  }
+  rate := requests * 1000000 / elapsed
+  max: u64 = 0
+  for i in 0..BucketCount {
+    if buckets[i] > 0 {
+      max = bucket_value(i)
+    }
+  }
+  io.println("requests {} rate {} p50_us {} p99_us {} max_us {} errors {}", requests, rate,
+    percentile(buckets, requests, 500), percentile(buckets, requests, 990), max, errors)
+  return 0
+}

@@ -62,6 +62,12 @@ servers so they pick up the new `dyn`.
   with overflow and offset reporting.
 - Compiler: a malformed generic signature no longer stops later functions from
   being declared, which had produced false "may exit without return" errors.
+- New `tools/httpbench`: a Dyn HTTP/1.1 keep-alive load generator
+  (`httpbench PORT PATH CONNECTIONS SECONDS`) with p50/p99/max latency.
+- Tests: `http-fuzz` fuzzes request framing, form decoding, path matching,
+  response header validation and HTML escaping; `http-bench` fails when either
+  HTTP server drops below 20000 requests/s or 20 ms p99, which catches stalls
+  such as the old 40 ms Nagle delay.
 
 ## 0.1.0-preview.32
 
