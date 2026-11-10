@@ -11,6 +11,9 @@
 // - A response larger than the send buffer is flushed synchronously: the
 //   worker waits (up to write_timeout_milliseconds) for the socket to drain.
 // - A request larger than the receive buffer gets 413 and the connection closes.
+//
+// Config.transport replaces plain TCP reads and writes, for TLS. This module
+// has no TLS dependency; std/net/http/evented/tls supplies an OpenSSL one.
 #target(pointer_bits: 64)
 
 use "std/event" event
@@ -34,6 +37,33 @@ pub struct Config {
   // Longest a worker waits on one client during a synchronous large flush.
   write_timeout_milliseconds: i32,
   stack_size: usize,
+  // nil for plain TCP. Must stay alive and unchanged until join returns.
+  transport: *const Transport,
+  // nil starts std/thread threads. Workers that call C libraries need
+  // threads with libc state: pass std/thread/posix spawner(). Must stay alive
+  // until join returns.
+  spawner: *const threading.Spawner,
+}
+
+pub enum TransportStatus { Ok, WouldRead, WouldWrite, End, Failed }
+pub struct TransportIo { count: usize, status: TransportStatus }
+
+// A byte-stream layer over each accepted nonblocking socket, such as TLS.
+// open returns a session handle or nil; the worker calls handshake until Ok,
+// then read and write. WouldRead and WouldWrite mean retry after that
+// readiness, with the same arguments. close releases the session; the worker
+// closes the socket itself. All functions run on the worker that owns the
+// connection.
+pub struct Transport {
+  data: rawptr,
+  open: fn(rawptr, isize) rawptr,
+  handshake: fn(rawptr) TransportIo,
+  read: fn(rawptr, []u8) TransportIo,
+  write: fn(rawptr, []const u8) TransportIo,
+  close: fn(rawptr),
+  // The transport calls C code that keeps per-thread state; start then
+  // requires Config.spawner.
+  needs_native_threads: bool,
 }
 
 pub fn default_config() Config {
@@ -79,10 +109,19 @@ struct Connection {
   failed: bool,
   last_active: i64,
   write_timeout: i32,
+  transport: *const Transport,
+  session: rawptr,
+  handshaking: bool,
+  // The last flush stopped for readable, not writable (TLS renegotiation).
+  flush_wants_read: bool,
+  // Events registered with the queue.
+  interest: u32,
 }
 
 pub struct Worker {
   thread: *threading.Thread,
+  // Handle from Config.spawner, instead of thread.
+  native: rawptr,
   listener: *network.Listener,
   // Set by start_shared: this worker's own SO_REUSEPORT listener.
   own_listener: network.Listener,
@@ -115,18 +154,63 @@ fn now_milliseconds() i64 {
   return now.value.seconds * 1000 + now.value.nanoseconds / clock.Millisecond
 }
 
+fn connection_read(connection: *Connection, destination: []u8) TransportIo {
+  if connection.transport != nil {
+    return connection.transport.read(connection.session, destination)
+  }
+  received := network.receive(connection.descriptor, destination, 0)
+  if received.failure.kind != io.Kind.Ok {
+    if network.would_block(&received) {
+      return TransportIo{ status: TransportStatus.WouldRead }
+    }
+    return TransportIo{ status: TransportStatus.Failed }
+  }
+  if received.value == 0 {
+    return TransportIo{ status: TransportStatus.End }
+  }
+  return TransportIo{ count: #cast(usize, received.value) }
+}
+
+fn connection_write(connection: *Connection, source: []const u8) TransportIo {
+  if connection.transport != nil {
+    return connection.transport.write(connection.session, source)
+  }
+  sent := network.send(connection.descriptor, source, 0)
+  if sent.failure.kind != io.Kind.Ok {
+    if network.would_block(&sent) {
+      return TransportIo{ status: TransportStatus.WouldWrite }
+    }
+    return TransportIo{ status: TransportStatus.Failed }
+  }
+  return TransportIo{ count: #cast(usize, sent.value) }
+}
+
+fn set_interest(worker: *Worker, index: usize, events: u32) bool {
+  connection := &worker.connections[index]
+  if connection.interest == events {
+    return true
+  }
+  connection.interest = events
+  return event.modify(&worker.queue, connection.descriptor, events, #cast(u64, index) + 1).failure.kind == io.Kind.Ok
+}
+
 // Sends queued output without blocking. Returns false when the connection is
 // dead and must be closed.
 fn flush(connection: *Connection) bool {
+  connection.flush_wants_read = false
   for connection.sent < connection.queued {
-    sent := network.send(connection.descriptor, connection.output[connection.sent..connection.queued], 0)
-    if sent.failure.kind != io.Kind.Ok {
-      if network.would_block(&sent) {
-        return true
-      }
+    sent := connection_write(connection, connection.output[connection.sent..connection.queued])
+    if sent.status == TransportStatus.WouldWrite {
+      return true
+    }
+    if sent.status == TransportStatus.WouldRead {
+      connection.flush_wants_read = true
+      return true
+    }
+    if sent.status != TransportStatus.Ok {
       return false
     }
-    connection.sent += #cast(usize, sent.value)
+    connection.sent += sent.count
   }
   connection.sent = 0
   connection.queued = 0
@@ -143,7 +227,11 @@ fn flush_blocking(connection: *Connection) bool {
     if connection.queued == 0 {
       return true
     }
-    ready := network.wait(connection.descriptor, network.PollWritable, connection.write_timeout)
+    wanted := network.PollWritable
+    if connection.flush_wants_read {
+      wanted = network.PollReadable
+    }
+    ready := network.wait(connection.descriptor, wanted, connection.write_timeout)
     if ready.failure.kind != io.Kind.Ok || ready.value == 0 {
       return false
     }
@@ -190,6 +278,9 @@ fn close_connection(worker: *Worker, index: usize) {
     return
   }
   _ = event.remove(&worker.queue, connection.descriptor)
+  if connection.session != nil {
+    connection.transport.close(connection.session)
+  }
   network.close(connection.descriptor)
   input := connection.input
   output := connection.output
@@ -246,13 +337,8 @@ fn serve_buffered(worker: *Worker, index: usize) bool {
     return false
   }
   if connection.queued > 0 {
-    if !connection.writing {
-      connection.writing = true
-      if event.modify(&worker.queue, connection.descriptor, event.Writable, #cast(u64, index) + 1).failure.kind != io.Kind.Ok {
-        return false
-      }
-    }
-    return true
+    connection.writing = true
+    return set_interest(worker, index, write_interest(connection))
   }
   if connection.close_after {
     finish(worker, index)
@@ -260,10 +346,19 @@ fn serve_buffered(worker: *Worker, index: usize) bool {
   return true
 }
 
-// Output is fully sent and the connection is done.
+fn write_interest(connection: *const Connection) u32 {
+  if connection.flush_wants_read {
+    return event.Readable
+  }
+  return event.Writable
+}
+
+// Output is fully sent and the connection is done. Rejected plain TCP
+// connections drain first; TLS ones close at once, since a raw half-close
+// would cut the TLS stream.
 fn finish(worker: *Worker, index: usize) {
   connection := &worker.connections[index]
-  if !connection.rejected || connection.draining {
+  if !connection.rejected || connection.draining || connection.transport != nil {
     close_connection(worker, index)
     return
   }
@@ -294,26 +389,44 @@ fn on_readable(worker: *Worker, index: usize) {
     drain(worker, index)
     return
   }
-  if connection.used == #len(connection.input) {
-    // Buffer full and nothing framed: serve_buffered already answered 413.
-    close_connection(worker, index)
-    return
-  }
-  received := network.receive(connection.descriptor, connection.input[connection.used..], 0)
-  if received.failure.kind != io.Kind.Ok {
-    if !network.would_block(&received) {
+  // TLS may hold decrypted bytes the socket no longer signals, so a transport
+  // reads until it would block. Plain TCP reads again only after a full read.
+  for rounds in 0..16 {
+    if connection.used == #len(connection.input) {
+      // Buffer full and nothing framed: serve_buffered already answered 413.
       close_connection(worker, index)
+      return
     }
-    return
-  }
-  if received.value == 0 {
-    close_connection(worker, index)
-    return
-  }
-  connection.used += #cast(usize, received.value)
-  connection.last_active = now_milliseconds()
-  if !serve_buffered(worker, index) {
-    close_connection(worker, index)
+    room := #len(connection.input) - connection.used
+    received := connection_read(connection, connection.input[connection.used..])
+    if received.status == TransportStatus.WouldRead {
+      if !set_interest(worker, index, event.Readable) {
+        close_connection(worker, index)
+      }
+      return
+    }
+    if received.status == TransportStatus.WouldWrite {
+      if !set_interest(worker, index, event.Writable) {
+        close_connection(worker, index)
+      }
+      return
+    }
+    if received.status != TransportStatus.Ok || received.count == 0 {
+      close_connection(worker, index)
+      return
+    }
+    connection.used += received.count
+    connection.last_active = now_milliseconds()
+    if !serve_buffered(worker, index) {
+      close_connection(worker, index)
+      return
+    }
+    if !connection.active || connection.writing || connection.draining {
+      return
+    }
+    if connection.transport == nil && received.count < room {
+      return
+    }
   }
 }
 
@@ -324,27 +437,50 @@ fn on_writable(worker: *Worker, index: usize) {
     return
   }
   if connection.queued > 0 {
+    if !set_interest(worker, index, write_interest(connection)) {
+      close_connection(worker, index)
+    }
     return
   }
   connection.last_active = now_milliseconds()
-  if connection.close_after {
-    connection.writing = false
-    if event.modify(&worker.queue, connection.descriptor, event.Readable, #cast(u64, index) + 1).failure.kind != io.Kind.Ok {
-      close_connection(worker, index)
-      return
-    }
-    finish(worker, index)
+  connection.writing = false
+  if !set_interest(worker, index, event.Readable) {
+    close_connection(worker, index)
     return
   }
-  connection.writing = false
-  if event.modify(&worker.queue, connection.descriptor, event.Readable, #cast(u64, index) + 1).failure.kind != io.Kind.Ok {
-    close_connection(worker, index)
+  if connection.close_after {
+    finish(worker, index)
     return
   }
   // Pipelined requests may already be buffered.
   if !serve_buffered(worker, index) {
     close_connection(worker, index)
   }
+}
+
+fn on_handshake(worker: *Worker, index: usize) {
+  connection := &worker.connections[index]
+  step := connection.transport.handshake(connection.session)
+  if step.status == TransportStatus.WouldRead {
+    if !set_interest(worker, index, event.Readable) {
+      close_connection(worker, index)
+    }
+    return
+  }
+  if step.status == TransportStatus.WouldWrite {
+    if !set_interest(worker, index, event.Writable) {
+      close_connection(worker, index)
+    }
+    return
+  }
+  if step.status != TransportStatus.Ok {
+    close_connection(worker, index)
+    return
+  }
+  connection.handshaking = false
+  connection.last_active = now_milliseconds()
+  // The client's first request may arrive with its last handshake message.
+  on_readable(worker, index)
 }
 
 fn on_accept(worker: *Worker) {
@@ -374,6 +510,7 @@ fn on_accept(worker: *Worker) {
     connection.active = true
     connection.last_active = now_milliseconds()
     connection.write_timeout = worker.config.write_timeout_milliseconds
+    connection.interest = event.Readable
     if event.add(&worker.queue, descriptor, event.Readable, #cast(u64, index) + 1).failure.kind != io.Kind.Ok {
       network.close(descriptor)
       connection.active = false
@@ -382,6 +519,17 @@ fn on_accept(worker: *Worker) {
       continue
     }
     worker.accepted += 1
+    transport := worker.config.transport
+    if transport != nil {
+      connection.transport = transport
+      connection.session = transport.open(transport.data, descriptor)
+      if connection.session == nil {
+        close_connection(worker, index)
+        continue
+      }
+      connection.handshaking = true
+      on_handshake(worker, index)
+    }
   }
 }
 
@@ -416,6 +564,8 @@ fn worker_main(context: rawptr) isize {
       }
       if (item.events & (event.Error | event.Hangup)) != 0 && (item.events & event.Readable) == 0 {
         close_connection(worker, index)
+      } else if worker.connections[index].handshaking {
+        on_handshake(worker, index)
       } else if worker.connections[index].writing {
         on_writable(worker, index)
       } else {
@@ -446,8 +596,11 @@ fn valid_start(workers: []Worker, config: Config, handler: http.Handler) io.Fail
     config.receive_size < 512 || config.send_size < 512 || config.stack_size < 64 * mem.KiB {
     return io.Failure{ kind: io.Kind.InvalidInput }
   }
+  if config.transport != nil && config.transport.needs_native_threads && config.spawner == nil {
+    return io.Failure{ kind: io.Kind.InvalidInput }
+  }
   for *worker in workers {
-    if worker.thread != nil {
+    if worker.thread != nil || worker.native != nil {
       return io.Failure{ kind: io.Kind.InvalidState }
     }
   }
@@ -484,6 +637,14 @@ fn start_worker(arena: *mem.Arena, worker: *Worker) io.Failure {
   if added.failure.kind != io.Kind.Ok {
     event.close(&worker.queue)
     return added.failure
+  }
+  if config.spawner != nil {
+    worker.native = config.spawner.spawn(config.spawner.data, arena, config.stack_size, worker_main, worker)
+    if worker.native == nil {
+      event.close(&worker.queue)
+      return io.Failure{ kind: io.Kind.System }
+    }
+    return io.Failure{}
   }
   stack := mem.push_bytes_uninit(arena, config.stack_size)
   spawned := threading.spawn(arena, stack, worker_main, worker)
@@ -595,16 +756,26 @@ pub fn stop(workers: []Worker) {
 pub fn join(workers: []Worker) Result {
   result := Result{}
   for *worker in workers {
-    if worker.thread == nil {
+    if worker.thread == nil && worker.native == nil {
       result.started += 1
       continue
     }
-    joined := threading.join(worker.thread)
-    if joined.failure.kind != io.Kind.Ok {
-      if result.failure.kind == io.Kind.Ok {
-        result.failure = io.Failure{ kind: joined.failure.kind, native: joined.failure.native }
+    if worker.native != nil {
+      if !worker.config.spawner.join(worker.config.spawner.data, worker.native) {
+        if result.failure.kind == io.Kind.Ok {
+          result.failure = io.Failure{ kind: io.Kind.System }
+        }
+        continue
       }
-      continue
+      worker.native = nil
+    } else {
+      joined := threading.join(worker.thread)
+      if joined.failure.kind != io.Kind.Ok {
+        if result.failure.kind == io.Kind.Ok {
+          result.failure = io.Failure{ kind: joined.failure.kind, native: joined.failure.native }
+        }
+        continue
+      }
     }
     worker.thread = nil
     if worker.own_listener.active {

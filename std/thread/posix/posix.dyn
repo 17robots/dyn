@@ -1,0 +1,88 @@
+// POSIX threads on Linux, through libc. std/thread starts raw kernel threads
+// that have no libc thread state, so C code that keeps per-thread state (malloc
+// caches, errno, OpenSSL) is unsafe on them once several run at once. Use
+// these threads, or posix.spawner(), when threads call into C libraries.
+// Importing this module links libc.
+#target(kernel: linux)
+#link("c")
+
+use "std/io" io
+use "std/mem" mem
+use "std/thread" threading
+
+// Large enough for pthread_attr_t on every supported glibc and musl target.
+struct Attributes { storage: [8]u64 }
+extern fn attr_init "pthread_attr_init"(attributes: *Attributes) i32
+extern fn attr_stack_size "pthread_attr_setstacksize"(attributes: *Attributes, size: usize) i32
+extern fn attr_destroy "pthread_attr_destroy"(attributes: *Attributes) i32
+extern fn create "pthread_create"(thread: *usize, attributes: *const Attributes, entry: fn(rawptr) rawptr, context: rawptr) i32
+extern fn wait "pthread_join"(thread: usize, value: *rawptr) i32
+
+pub struct Thread { handle: usize, entry: fn(rawptr) isize, context: rawptr, joined: bool }
+pub type SpawnResult = io.Result(*Thread)
+
+fn trampoline(context: rawptr) rawptr {
+  thread := #cast(*Thread, context)
+  return #cast(rawptr, #cast(usize, thread.entry(thread.context)))
+}
+
+// libc owns the stack; stack_size is rounded up to whole pages. thread and
+// context must stay alive and unmoved until join succeeds. Arena exhaustion
+// panics; a native failure restores the arena mark.
+pub fn spawn(arena: *mem.Arena, stack_size: usize, entry: fn(rawptr) isize, context: rawptr) SpawnResult {
+  if stack_size < 16384 || entry == nil {
+    return SpawnResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
+  }
+  attributes := Attributes{}
+  error := attr_init(&attributes)
+  if error != 0 {
+    return SpawnResult{ failure: io.Failure{ kind: io.linux(0 - #cast(isize, error)), native: 0 - #cast(isize, error) } }
+  }
+  defer {
+    _ = attr_destroy(&attributes)
+  }
+  error = attr_stack_size(&attributes, (stack_size + 4095) & ~#cast(usize, 4095))
+  if error != 0 {
+    return SpawnResult{ failure: io.Failure{ kind: io.linux(0 - #cast(isize, error)), native: 0 - #cast(isize, error) } }
+  }
+  mark := mem.arena_mark(arena)
+  thread := mem.push(Thread, arena)
+  thread.entry = entry
+  thread.context = context
+  error = create(&thread.handle, &attributes, trampoline, thread)
+  if error != 0 {
+    mem.arena_rewind(arena, mark)
+    return SpawnResult{ failure: io.Failure{ kind: io.linux(0 - #cast(isize, error)), native: 0 - #cast(isize, error) } }
+  }
+  return SpawnResult{ value: thread }
+}
+
+// Waits for the thread. A joined Thread joins again as a no-op.
+pub fn join(thread: *Thread) io.Failure {
+  if thread.joined {
+    return io.Failure{}
+  }
+  value: rawptr = nil
+  error := wait(thread.handle, &value)
+  if error != 0 {
+    return io.Failure{ kind: io.linux(0 - #cast(isize, error)), native: 0 - #cast(isize, error) }
+  }
+  thread.joined = true
+  return io.Failure{}
+}
+
+fn spawner_spawn(data: rawptr, arena: *mem.Arena, stack_size: usize, entry: fn(rawptr) isize, context: rawptr) rawptr {
+  spawned := spawn(arena, stack_size, entry, context)
+  if spawned.failure.kind != io.Kind.Ok {
+    return nil
+  }
+  return spawned.value
+}
+
+fn spawner_join(data: rawptr, handle: rawptr) bool {
+  return join(#cast(*Thread, handle)).kind == io.Kind.Ok
+}
+
+pub fn spawner() threading.Spawner {
+  return threading.Spawner{ data: nil, spawn: spawner_spawn, join: spawner_join }
+}

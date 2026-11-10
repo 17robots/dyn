@@ -68,6 +68,15 @@ servers so they pick up the new `dyn`.
   response header validation and HTML escaping; `http-bench` fails when either
   HTTP server drops below 20000 requests/s or 20 ms p99, which catches stalls
   such as the old 40 ms Nagle delay.
+- HTTPS for the evented server: `evented.Config.transport` takes a
+  `Transport` (open, handshake, read, write, close) and
+  `std/net/http/evented/tls` supplies an OpenSSL one (Linux). Only programs
+  importing that module link libssl.
+- New `std/thread/posix`: pthread-backed `spawn`, `join` and `spawner()`.
+  std/thread's Linux threads carry no libc thread state, so C libraries with
+  per-thread state (malloc caches, OpenSSL) corrupt memory when several run at
+  once. `evented.Config.spawner` selects the thread creator, and `start`
+  refuses a transport marked `needs_native_threads` without one.
 
 ## 0.1.0-preview.32
 
