@@ -6161,11 +6161,14 @@ static bool ssa_vloops(Ssa *s, const uint32_t *order, uint32_t n) {
     uint32_t sums_at = 24 + 8 * p.base_count, inputs_at = sums_at + sum_bytes * p.sum_count;
     uint32_t lengths_at = (inputs_at + p.bytes * p.input_count + 7) & ~7u;
     uint32_t size = lengths_at + 8 * p.length_count;
+    /* Emitting below may move the value array: keep ids, not pointers. */
+    int32_t bound = test->b;
+    test = NULL;
     uint32_t saved = s->current;
     s->current = pre;
     int32_t frame = ssa_frame(s, ssa_reserve(s, size, 8));
     ssa_store(s, frame, -1, 1, 0, SSA_MEM(64, 0, 0), (int32_t)s->lists[s->values[p.primary].list + outside]);
-    ssa_store(s, frame, -1, 1, 8, SSA_MEM(64, 0, 0), test->b);
+    ssa_store(s, frame, -1, 1, 8, SSA_MEM(64, 0, 0), bound);
     int32_t address_start;
     if (p.index == p.derived)
       address_start = ssa_emit(s, SO_MUL, SC_INT, (int32_t)s->lists[s->values[p.primary].list + outside],
