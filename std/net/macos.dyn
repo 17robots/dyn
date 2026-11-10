@@ -6,6 +6,8 @@ const UnixPathLimit: usize = 103
 const SocketLevel: usize = 65535
 const ReuseOption: usize = 4
 const ErrorOption: usize = 4103
+const TcpLevel: usize = 6
+const NoDelayOption: usize = 1
 const NoSignalFlag: usize = 524288
 fn native_interrupted(code: isize) bool {
   return code == -4

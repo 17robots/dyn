@@ -830,6 +830,42 @@ fn request_parts(input: []const u8, head: HttpHead) Request {
   }
 }
 
+pub enum FrameStatus { Incomplete, Ready, Invalid, Capacity }
+pub struct FrameResult { status: FrameStatus, request: Request, consumed: usize, offset: usize }
+
+// Frames one request from bytes already buffered, with no I/O, for callers that
+// own their sockets (event loops). capacity is the most bytes the caller can
+// ever buffer for one request. Ready requests borrow input; consumed is its
+// full length. Incomplete means read more. Chunked request bodies are Invalid.
+pub fn frame_request(input: []const u8, capacity: usize) FrameResult {
+  scan: usize = 0
+  if !head_complete(input, &scan) {
+    if #len(input) >= capacity {
+      return FrameResult{ status: FrameStatus.Capacity }
+    }
+    return FrameResult{ status: FrameStatus.Incomplete }
+  }
+  head := parse_request(input)
+  if head.failure.kind != parse.Kind.Ok {
+    return FrameResult{ status: FrameStatus.Invalid, offset: head.offset }
+  }
+  if head.chunked {
+    return FrameResult{ status: FrameStatus.Invalid }
+  }
+  if head.header_length > capacity || head.content_length > capacity - head.header_length {
+    return FrameResult{ status: FrameStatus.Capacity }
+  }
+  total := head.header_length + head.content_length
+  if #len(input) < total {
+    return FrameResult{ status: FrameStatus.Incomplete }
+  }
+  request := request_parts(input, head)
+  if #len(request.method) == 0 {
+    return FrameResult{ status: FrameStatus.Invalid }
+  }
+  return FrameResult{ status: FrameStatus.Ready, request: request, consumed: total }
+}
+
 fn receive_failure(state: *Server, detail: ErrorKind, native: isize) ReceiveResult {
   if !state.failed {
     state.failed = true
@@ -987,7 +1023,10 @@ fn response_output(response: *Response, source: []const u8) Result {
   return Result{}
 }
 
-fn response_begin(response: *Response, options: ResponseOptions, body_length: usize, chunked: bool) Result {
+// Writes the response head, followed by body when given. Head and body leave in
+// one write when they fit in a stack staging buffer: separate small writes on a
+// keep-alive socket stall on Nagle plus delayed ACK (about 40 ms per response).
+fn response_begin(response: *Response, options: ResponseOptions, body_length: usize, chunked: bool, body: []const u8) Result {
   if response.failed {
     return response.first
   }
@@ -1006,40 +1045,55 @@ fn response_begin(response: *Response, options: ResponseOptions, body_length: us
   if #len(content_type) == 0 {
     content_type = "application/octet-stream"
   }
-  number_storage: [20]u8 = []
-  status_text := decimal(number_storage[..], #cast(usize, status))
-  if response_output(response, "HTTP/1.1 ").failure.kind != io.Kind.Ok || response_output(response, status_text).failure.kind != io.Kind.Ok ||
-    response_output(response, " ").failure.kind != io.Kind.Ok || response_output(response, reason).failure.kind != io.Kind.Ok ||
-    response_output(response, "\r\nContent-Type: ").failure.kind != io.Kind.Ok || response_output(response, content_type).failure.kind != io.Kind.Ok {
-    return response.first
-  }
-  if chunked {
-    if response_output(response, "\r\nTransfer-Encoding: chunked").failure.kind != io.Kind.Ok {
-      return response.first
-    }
-  } else {
-    length_text := decimal(number_storage[..], body_length)
-    if response_output(response, "\r\nContent-Length: ").failure.kind != io.Kind.Ok || response_output(response, length_text).failure.kind != io.Kind.Ok {
-      return response.first
-    }
+  status_storage: [20]u8 = []
+  length_storage: [20]u8 = []
+  framing_name := "\r\nTransfer-Encoding: chunked"
+  length_text: []const u8 = ""
+  if !chunked {
+    framing_name = "\r\nContent-Length: "
+    length_text = decimal(length_storage[..], body_length)
   }
   connection := "\r\nConnection: keep-alive\r\n\r\n"
   if options.close_connection {
     connection = "\r\nConnection: close\r\n\r\n"
   }
-  result := response_output(response, connection)
-  if result.failure.kind == io.Kind.Ok {
-    response.started = true
+  pieces: [10][]const u8 = [
+    "HTTP/1.1 ", decimal(status_storage[..], #cast(usize, status)), " ", reason,
+    "\r\nContent-Type: ", content_type, framing_name, length_text, connection, body,
+  ]
+  staging: [8 * memory.KiB]u8 = []
+  used: usize = 0
+  for piece in pieces {
+    used = append_bytes(staging[..], used, piece)
   }
-  return result
+  if used <= #len(staging) {
+    result := response_output(response, staging[..used])
+    if result.failure.kind == io.Kind.Ok {
+      response.started = true
+    }
+    return result
+  }
+  used = 0
+  for piece in pieces[..9] {
+    used = append_bytes(staging[..], used, piece)
+  }
+  if used <= #len(staging) {
+    if response_output(response, staging[..used]).failure.kind != io.Kind.Ok {
+      return response.first
+    }
+  } else {
+    for piece in pieces[..9] {
+      if response_output(response, piece).failure.kind != io.Kind.Ok {
+        return response.first
+      }
+    }
+  }
+  response.started = true
+  return response_output(response, body)
 }
 
 pub fn respond(response: *Response, body: []const u8, options: ResponseOptions) Result {
-  started := response_begin(response, options, #len(body), false)
-  if started.failure.kind != io.Kind.Ok {
-    return started
-  }
-  written := response_output(response, body)
+  written := response_begin(response, options, #len(body), false, body)
   if written.failure.kind == io.Kind.Ok {
     response.finished = true
   }
@@ -1047,7 +1101,7 @@ pub fn respond(response: *Response, body: []const u8, options: ResponseOptions) 
 }
 
 pub fn respond_stream(response: *Response, options: ResponseOptions) BodyResult {
-  started := response_begin(response, options, 0, true)
+  started := response_begin(response, options, 0, true, "")
   if started.failure.kind != io.Kind.Ok {
     return BodyResult{ detail: started.detail, body: Body{ failed: true, first: started, first_stream: response.first_stream }, result: started, failure: io.Failure{ kind: started.failure.kind, native: started.failure.native } }
   }

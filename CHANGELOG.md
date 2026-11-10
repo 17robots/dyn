@@ -12,6 +12,23 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
+## Unreleased
+
+- New `std/net/http/evented`: an event-loop HTTP/1.1 server on `std/event`
+  (epoll/kqueue). Each worker multiplexes many nonblocking keep-alive
+  connections, so slow or idle clients no longer hold a thread. Handlers keep the
+  `http.Handler` signature. All buffers are fixed at `evented.start`; see
+  `evented.default_config` and `evented.storage_size`. Idle connections close
+  after `idle_timeout_milliseconds`; rejected requests get their 400/413 before a
+  graceful close.
+- `http.respond` now sends the response head and a body of up to 8 KiB in one
+  write. Before, the head left in about ten small writes, and keep-alive clients
+  waited about 40 ms per response on Nagle plus delayed ACK.
+- New `http.frame_request` frames one buffered request without I/O, for servers
+  that own their sockets.
+- New `net.no_delay` sets `TCP_NODELAY`. The evented server enables it on every
+  accepted connection.
+
 ## 0.1.0-preview.32
 
 - Generics have one spelling, and existing code needs a rewrite. `tools/migrate-generics.py`

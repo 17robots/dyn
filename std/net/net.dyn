@@ -473,6 +473,16 @@ pub fn reuse_address(descriptor: isize, enabled: bool) Result {
   return result(native_set_option(descriptor, SocketLevel, ReuseOption, &value, #sizeof(i32)))
 }
 
+// TCP_NODELAY: send small segments at once instead of waiting for the peer's
+// ACK. Request/response servers want this; bulk senders usually do not.
+pub fn no_delay(descriptor: isize, enabled: bool) Result {
+  value: i32 = 0
+  if enabled {
+    value = 1
+  }
+  return result(native_set_option(descriptor, TcpLevel, NoDelayOption, &value, #sizeof(i32)))
+}
+
 // Completes a nonblocking connect by reading SO_ERROR. Zero means connected.
 pub fn socket_error(descriptor: isize) Result {
   error: i32 = 0

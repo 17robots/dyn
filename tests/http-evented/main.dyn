@@ -1,0 +1,102 @@
+// Evented HTTP server under a deliberately small configuration so tests reach
+// buffer limits, synchronous large flushes and idle timeouts. Prints "port N"
+// once listening on 127.0.0.1; POST /quit stops it.
+use "std/bytes"
+use "std/fmt"
+use "std/io"
+use "std/mem"
+use "std/net"
+use "std/net/http"
+use "std/net/http/evented"
+use "std/sync"
+use "std/time"
+
+const WorkerCount: usize = 2
+const BigSize: usize = 200 * mem.KiB
+
+struct App {
+  quit: sync.AtomicU32,
+  big: []u8,
+}
+
+fn app(request: *const http.Request) *App {
+  return #cast(*App, request.context)
+}
+
+fn text(response: *http.Response, status: u16, body: []const u8) http.Result {
+  return http.respond(response, body, http.ResponseOptions{ status: status, content_type: "text/plain" })
+}
+
+fn handle(response: *http.Response, request: *const http.Request) http.Result {
+  if bytes.equal(request.target, "/health") {
+    return text(response, http.StatusOk, "ok\n")
+  }
+  if bytes.equal(request.target, "/echo") {
+    return text(response, http.StatusOk, request.body)
+  }
+  if bytes.equal(request.target, "/big") {
+    return text(response, http.StatusOk, app(request).big)
+  }
+  if bytes.equal(request.target, "/stream") {
+    opened := http.respond_stream(response, http.ResponseOptions{ content_type: "text/plain" })
+    if opened.failure.kind != io.Kind.Ok {
+      return opened.result
+    }
+    writer := http.body_writer(&opened.body)
+    for i in 0..3 {
+      _ = writer.write(writer.data, "chunk\n")
+    }
+    return http.body_finish(&opened.body)
+  }
+  if bytes.equal(request.target, "/quit") {
+    sync.store_u32(&app(request).quit, 1)
+    return http.respond(response, "bye\n", http.ResponseOptions{ content_type: "text/plain", close_connection: true })
+  }
+  return text(response, http.StatusNotFound, "not found\n")
+}
+
+fn main() {
+  arena := mem.arena_create(64 * mem.MiB)
+  defer mem.arena_release(arena)
+  state := mem.push(App, arena)
+  state.big = mem.push_bytes_uninit(arena, BigSize)
+  for i in 0..BigSize {
+    state.big[i] = #cast(u8, 'a' + i % 26)
+  }
+  address := net.ipv4(127, 0, 0, 1, 0)
+  listened := net.tcp_listen_ipv4(&address, 128)
+  if listened.failure.kind != io.Kind.Ok {
+    #panic("cannot listen")
+  }
+  listener := net.listener_take(&listened.value)
+  bound := net.Address{}
+  if net.local_address(listener.descriptor, &bound).failure.kind != io.Kind.Ok {
+    #panic("cannot read local address")
+  }
+  port := #cast(u64, bound.bytes[2]) * 256 + #cast(u64, bound.bytes[3])
+
+  config := evented.default_config()
+  config.connections_per_worker = 16
+  config.receive_size = 4 * mem.KiB
+  config.send_size = 4 * mem.KiB
+  config.idle_timeout_milliseconds = 500
+  workers := mem.push_array(evented.Worker, arena, WorkerCount)
+  started := evented.start(arena, workers, &listener, config, handle, state)
+  if started.failure.kind != io.Kind.Ok {
+    #panic("cannot start workers")
+  }
+  digits: [20 + mem.ArenaBufferOverhead]u8
+  scratch := mem.arena_from_buffer(digits[..])
+  _ = io.write_all(io.stdout(), "port ")
+  _ = io.write_all(io.stdout(), fmt.u64_decimal(scratch, port))
+  _ = io.write_all(io.stdout(), "\n")
+  for sync.load_u32(&state.quit) == 0 {
+    _ = time.sleep(10 * time.Millisecond)
+  }
+  evented.stop(workers)
+  joined := evented.join(workers)
+  net.listener_close(&listener)
+  if joined.failure.kind != io.Kind.Ok {
+    #panic("worker failed")
+  }
+}

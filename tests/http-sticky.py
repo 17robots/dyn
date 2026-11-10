@@ -35,8 +35,8 @@ fn same(r: http.Result, code: isize) {
 fn main() {
   for native in [0, -73] {
     code := #cast(isize, native)
-    // Nine fixed-length header segments followed by body; each can fail independently.
-    for segment in 1..11 {
+    // Head and small body leave in one write.
+    for segment in 1..2 {
       sink := Sink{ fail: #cast(usize, segment), code: code }
       response := http.Response{ output: io.Writer{ data: &sink, write: write } }
       first := http.respond(&response, "body", http.ResponseOptions{})
@@ -47,7 +47,8 @@ fn main() {
       same(again.result, code)
       if sink.calls != calls { #panic("response retried IO") }
     }
-    for segment in 1..9 {
+    // The stream head leaves in one write.
+    for segment in 1..2 {
       sink := Sink{ fail: #cast(usize, segment), code: code }
       response := http.Response{ output: io.Writer{ data: &sink, write: write } }
       opened := http.respond_stream(&response, http.ResponseOptions{})

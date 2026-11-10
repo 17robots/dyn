@@ -121,7 +121,7 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
 | `std/event` | Portable level-triggered readiness queues: epoll, kqueue and WSAPoll |
 | `std/net` | IPv4, IPv6 and Unix streams, IPv4 UDP multicast, polling and event queues |
 | `std/net/dns` | DNS queries into caller storage |
-| `std/net/http`, `http/concurrent` | HTTP/1 client, server and router, and a worker-pool server |
+| `std/net/http`, `http/concurrent`, `http/evented` | HTTP/1 client, server and router; a thread-per-connection worker pool; and an event-loop server (epoll/kqueue) for many keep-alive connections |
 | `std/net/websocket` | RFC 6455 handshake and frame codec |
 | `std/net/url` | URL parsing and component encoding |
 | `std/net/tls` | Verified TLS client and server through OpenSSL; link it explicitly |
