@@ -61,7 +61,7 @@ pub fn boxed(x:u64) u64 { a:=Box{pre:71,value:x,post:73}
 p:=&a
 check:=verifybox(p)
 b:=p.value
-case b { is u64 y=>{ return y+a.pre+a.post+check } _=>{return 0} } }
+case b { u64 y=>{ return y+a.pre+a.post+check } _=>{return 0} } }
 pub fn copybytes(dst:*[33]u8,src:*[33]u8) { dst.*=src.* }
 pub fn zerobytes(dst:*[33]u8) { dst.*=[] }
 pub fn zeroforward(dst:*[8]u8) { a:[8]u8=[]

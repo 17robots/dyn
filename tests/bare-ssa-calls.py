@@ -226,7 +226,7 @@ def main():
                 ('null', src.replace('cb=cwide', 'cb=cwide\n_=invoke(nil,1)'),
                  (101, b'runtime check failed (function.nonnull.ok) in invoke\n', b'')),
                 ('overflow', src.replace('cb=cwide', 'cb=cwide\n_=checkedcall(0x6789abcde543210f)'),
-                 (101, b'runtime check failed (overflow.ok) in checkedcall\n', b'')),
+                 (0, b'CALLS OK\n', b'')),  # integer overflow wraps
             ]
             for name, source, expected in cases:
                 (project/'main.dyn').write_text(source)

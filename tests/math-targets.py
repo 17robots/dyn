@@ -40,7 +40,7 @@ def generate():
     lines = ['use "std/math" m', 'use "std/io"',
              'extern fn opaque(x:u64) u64', 'extern fn cpacr() u32',
              'pub fn math_selected_sqrt(x:f64) f64 { return m.sqrt(x) }',
-             'fn main() {', 'if cpacr() & 0x00f00000 != 0 { #panic("FPU enabled at entry") }']
+             'fn main() {', 'if (cpacr() & 0x00f00000) != 0 { #panic("FPU enabled at entry") }']
     checks = 0
 
     def raw(x, width=32):
@@ -101,18 +101,18 @@ def generate():
         flag(f'm.rng1{t}_center(m.Rng1{t}{{min:#bitcast({t},opaque({lo})),max:#bitcast({t},opaque({hi}))}}) == mid_{t}','wide midpoint')
     lines += [f'x:={value(2)}', f'z:={value(0)}', f'o:={value(1)}',
               's:=m.mat4_scale(m.Vec3{x:x,y:x,z:x})', 'inv:=m.mat4_inverse(s.value)']
-    flag('s.ok && inv.ok','scale inverse')
+    flag('s.valid && inv.valid','scale inverse')
     for c in range(4):
         for r,field in enumerate('xyzw'):
             exact(f'inv.value.c{c}.{field}', (.5 if c<3 else 1) if c==r else 0)
     lines += ['p:=m.mat4_orthographic(-x,x,-x,x,o,o+x)', 'v:=m.mat4_mul_vec4(p.value,m.Vec4{x:x,y:x,z:-o,w:o})']
-    flag('p.ok','projection')
+    flag('p.valid','projection')
     for field,e in zip('xyzw',[1,1,-1,1]): exact('v.'+field,e)
     lines += ['q:=m.quat_to_mat3(m.Quat{x:z,y:z,z:o,w:z})']
-    flag('q.ok','quaternion basis')
+    flag('q.valid','quaternion basis')
     for c in range(3):
         for r,field in enumerate('xyz'): exact(f'q.value.c{c}.{field}',[-1,-1,1][c] if c==r else 0)
-    lines += ['if cpacr() & 0x00f00000 != 0 { #panic("FPU enabled on soft Thumb") }',
+    lines += ['if (cpacr() & 0x00f00000) != 0 { #panic("FPU enabled on soft Thumb") }',
               '_=io.write_all(io.stdout(),"MATH TARGET PASS\\n")', '}']
     return '\n'.join(lines), checks
 

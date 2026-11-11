@@ -6,6 +6,8 @@ DYN_QEMU_RISCV32 and DYN_QEMU_ARM are shell-split command prefixes.
 Container wrappers must mount TMPDIR at the same path and bound the guest
 (e.g. timeout 15 qemu-system-arm). TemporaryDirectory respects TMPDIR.
 37 arithmetic fixtures + 7 order/shift/cleanup fixtures + 1 extrema fixture.
+Overflow and shift-count fixtures check that release arithmetic wraps and masks
+the same way on both paths.
 """
 import os
 from pathlib import Path
@@ -118,7 +120,12 @@ def main():
                     outputs.append(run_guest([*qemu, *board, '-nographic', '-kernel', str(image)]))
                 assert outputs[0] == outputs[1], (target, name, outputs)
                 status, stdout, stderr = outputs[0]
-                if panic:
+                if panic in ('overflow', 'shift'):
+                    # Integer overflow wraps and shift counts are masked; --check-overflow
+                    # is debug-only and these are release builds.
+                    expected = {'cleanup': b'CLEAN\nOK\n', 'caller_cleanup': b'OK\nOUTER\n'}.get(name, b'OK\n')
+                    assert (status, stdout, stderr) == (0, expected, b''), (target, name, outputs)
+                elif panic:
                     predicate = {'division by zero': 'divide.ok',
                                  'division overflow': 'division.overflow.ok',
                                  'divide': 'divide.ok', 'shift': 'shift.count.ok',

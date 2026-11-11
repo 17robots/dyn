@@ -179,7 +179,7 @@ def main():
                 tw = work/t
                 tw.mkdir()
                 cpacr = 'unsigned cpacr(void){'+('return 0;' if rv else 'return *(volatile unsigned*)0xe000ed88;')+'}'
-                check = 'if cpacr() & 0x00f00000 != 0 { #panic("FPU enabled") }\n' if issoft and not rv else ''
+                check = 'if (cpacr() & 0x00f00000) != 0 { #panic("FPU enabled") }\n' if issoft and not rv else ''
                 obj = object_file(tw, 'unsigned opaque(void){return 1;} '+cpacr, ff, rv)
                 for name, body, expected in CASES:
                     project = tw/name

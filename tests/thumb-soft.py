@@ -255,7 +255,7 @@ for name, ct, dt, ci, di, checks in (
               f'fn local_{key}({",".join(dp)}) {dt} {{ if {bad} {{ #panic("incoming {key}") }}\nreturn x }}']
         B += [f'if cb_{key}(local_{key}) != 1 {{ #panic("callback {key}") }}',
               f'if cb_{key}(c_{key}) != 1 {{ #panic("C control {key}") }}',
-              f'x_{key} := {di}', f'r_{key} := c_{key}({",".join(args).replace("x",f"x_{key}")})']
+              f'x_{key}: {dt} = {di}', f'r_{key} := c_{key}({",".join(args).replace("x",f"x_{key}")})']
         for field, bits, union in checks:
             width = 32 if union == 'Fbits' else 64
             B += [f'if #bitcast(u{width},r_{key}{field}) != {bits} {{ #panic("outgoing {key}") }}']
@@ -271,9 +271,9 @@ B += ['if variadic(17,23,#cast(f64,2.5),29) != 1 { #panic("variadic") }']
 C += ['uint32_t cpacr(void) { return *(volatile uint32_t *)0xe000ed88u; }']
 D += ['extern fn cpacr() u32',
       'fn recursive(n:i32, x:f64, wide:u64) f64 { if n == 0 { return x }\nsaved := x + #cast(f64,wide)\nchild := recursive(n-1,x+0.5,wide+1)\nreturn child + saved }']
-B.insert(0, 'if cpacr() & 0x00f00000 != 0 { #panic("CP10/11 enabled at entry") }')
+B.insert(0, 'if (cpacr() & 0x00f00000) != 0 { #panic("CP10/11 enabled at entry") }')
 B += ['if recursive(5,1.5,0x100000001) != 21474836511.5 { #panic("recursive frame bank") }',
-      'if cpacr() & 0x00f00000 != 0 { #panic("CP10/11 enabled after work") }']
+      'if (cpacr() & 0x00f00000) != 0 { #panic("CP10/11 enabled after work") }']
 
 
 def guest_run(image, mode, panic=False):
@@ -327,7 +327,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-thumb-soft-') as tmp:
         print(f'PASS thumb-soft {mode}: arithmetic/conversions, recursive frame bank, CPACR disabled, clang ABI, explicit mixed ABI rejection; {instructions} non-VFP instructions', flush=True)
     # Checked bounds panic unwinds recursively through live f64/u64 locals.
     # Release disables bounds checks; debug is the contract exercised here.
-    (source / 'main.dyn').write_text('use "std/io"\nextern fn cpacr() u32\nfn cleanup(x:f64, wide:u64) {\n  if x != 7.5 || wide != 0x123456789abcdef0 || cpacr() & 0x00f00000 != 0 { #panic("unwind bank corrupt") }\n  io.println("UNWIND BANK PASS")\n}\nfn descend(n:i32, index:usize) {\n  x:f64 = 7.5\n  wide:u64 = 0x123456789abcdef0\n  defer cleanup(x,wide)\n  if n != 0 { descend(n-1,index)\n  return }\n  values:[1]u8 = [7]\n  _ = values[index]\n}\nfn main() { descend(3,2) }\n')
+    (source / 'main.dyn').write_text('use "std/io"\nextern fn cpacr() u32\nfn cleanup(x:f64, wide:u64) {\n  if x != 7.5 || wide != 0x123456789abcdef0 || (cpacr() & 0x00f00000) != 0 { #panic("unwind bank corrupt") }\n  io.println("UNWIND BANK PASS")\n}\nfn descend(n:i32, index:usize) {\n  x:f64 = 7.5\n  wide:u64 = 0x123456789abcdef0\n  defer cleanup(x,wide)\n  if n != 0 { descend(n-1,index)\n  return }\n  values:[1]u8 = [7]\n  _ = values[index]\n}\nfn main() { descend(3,2) }\n')
     image = work / 'panic.elf'
     run([DYN, 'build', str(source), '--target', 'thumbv7em-none-soft', '--no-cache', '--quiet', '--debug', '--link', str(obj), '--output', str(image)])
     check_image(image)
