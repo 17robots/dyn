@@ -677,7 +677,7 @@ class Contracts(unittest.TestCase):
         responses, stderr = run_lsp([opened(path, text), opened(sibling, 'fn answer() i32 { return 42 }\n'),
             request('textDocument/didClose', {'textDocument': {'uri': sibling.as_uri()}})])
         self.assertEqual(stderr, '')
-        self.assertTrue(any(d['message'] == 'unknown function' for d in diagnostics(responses, path)))
+        self.assertTrue(any(d['message'] == "unknown function 'answer'" for d in diagnostics(responses, path)))
         self.assertEqual(diagnostics(responses, sibling), [])
 
     def test_unicode_json_source(self):

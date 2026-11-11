@@ -574,14 +574,45 @@ fn src_block(p: *Parser) u32 {
   last := None
   expect(p, "{")
   for !token_is(p, "}") && !p.tree.failed && p.token.kind != TokenKind.End {
+    statement_start := p.token.start
     chain(p, &first, &last, src_statement(p))
     if !p.tree.failed && !token_is(p, "}") && p.token.kind != TokenKind.End && !src_line_start(p, p.token.start) {
-      fail(p, p.token.start, "each statement must start on its own line")
+      variant := src_bare_variant(p, statement_start)
+      if variant != None {
+        fail(p, variant, "an enum variant needs its type: write Enum.Variant, not .Variant")
+      } else {
+        fail(p, p.token.start, "each statement must start on its own line")
+      }
     }
   }
   end := p.token.end
   expect(p, "}")
   return add_node(p, SrcBlock, start, end, first)
+}
+// The offset of a `.Name` on the statement's line that no value precedes,
+// as in `c == .Red`: Dyn always writes the enum type.
+fn src_bare_variant(p: *Parser, from: u32) u32 {
+  i := from
+  for i + 1 < p.length && p.text[i] != '\n' {
+    if p.text[i] == '.' && alpha(p.text[i + 1]) {
+      before := i
+      for before > from && (p.text[before - 1] == ' ' || p.text[before - 1] == '\t') {
+        before -= 1
+      }
+      c: u8 = ' '
+      if before > from {
+        c = p.text[before - 1]
+      }
+      if c == '=' || c == '(' || c == ',' || c == '!' || c == '<' || c == '>' || c == ':' || c == '{' {
+        return i
+      }
+      if before < i && (c == '|' || c == '&' || c == 'n') {
+        return i
+      }
+    }
+    i += 1
+  }
+  return None
 }
 // Whether only spaces and tabs separate offset from the start of its line.
 fn src_line_start(p: *Parser, offset: u32) bool {

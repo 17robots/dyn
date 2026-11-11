@@ -460,6 +460,9 @@ fn aggregate(p: *Parser) u32 {
           chain(p, &first, &last, parse_name(p))
         }
       }
+    } else if p.token.kind == TokenKind.Name {
+      fail(p, p.token.start - 1, "an enum variant needs its type: write Enum.Variant, not .Variant")
+      return None
     }
     expect(p, "{")
   }

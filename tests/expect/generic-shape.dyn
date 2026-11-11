@@ -1,0 +1,10 @@
+fn first(xs: []$T) T {
+  return xs[0]
+}
+
+struct Pair(A, B) { a: A, b: B }
+
+fn main() {
+  p := Pair(i32, bool){a: 1, b: true}
+  _ = first(p) // error: parameter 'xs' has type []$T, but this argument is Pair(i32, bool)
+}

@@ -381,14 +381,37 @@ static uint32_t src_recover(Parser *p, Parser saved, uint32_t count, bool top) {
   if (t->error) return NONE;
   return src_node(p, SRC_ERROR, start, end, NONE);
 }
+/* The offset of a `.Name` on the current statement's line that no value
+   precedes, as in `c == .Red`: Dyn always writes the enum type. */
+static uint32_t statement_start(const Parser *p, Parser saved) {
+  (void)p;
+  return saved.token.start;
+}
+static uint32_t src_bare_variant(const Parser *p, uint32_t from) {
+  for (uint32_t i = from; i + 1 < p->length && p->text[i] != '\n'; ++i) {
+    if (p->text[i] != '.' || !alpha((unsigned char)p->text[i + 1])) continue;
+    uint32_t before = i;
+    while (before > from && (p->text[before - 1] == ' ' || p->text[before - 1] == '\t')) --before;
+    char c = before > from ? p->text[before - 1] : ' ';
+    if (c == '=' || c == '(' || c == ',' || c == '!' || c == '<' || c == '>' || c == ':' || c == '{' ||
+        (before < i && (c == '|' || c == '&' || c == 'n')))
+      return i;
+  }
+  return NONE;
+}
 static uint32_t src_block(Parser *p) {
   uint32_t start = p->token.start, first = NONE, last = NONE;
   expect(p, "{");
   while (!is(p, "}") && !p->tree->error && p->token.kind != END) {
     Parser saved = *p; uint32_t count = p->tree->count;
     uint32_t statement = src_statement(p);
-    if (!p->tree->error && !is(p, "}") && p->token.kind != END && !src_line_start(p, p->token.start))
-      fail(p, p->token.start, "each statement must start on its own line");
+    if (!p->tree->error && !is(p, "}") && p->token.kind != END && !src_line_start(p, p->token.start)) {
+      uint32_t variant = src_bare_variant(p, statement_start(p, saved));
+      if (variant != NONE)
+        fail(p, variant, "an enum variant needs its type: write Enum.Variant, not .Variant");
+      else
+        fail(p, p->token.start, "each statement must start on its own line");
+    }
     if (p->tree->error) statement = src_recover(p, saved, count, false);
     append(p, &first, &last, statement);
   }

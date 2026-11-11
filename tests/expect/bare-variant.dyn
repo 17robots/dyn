@@ -1,0 +1,7 @@
+// Dyn always writes the enum type: Color.Red, never .Red.
+enum Color { Red, Green }
+
+fn main() {
+  c: Color = .Red // error: write Enum.Variant, not .Variant
+  _ = c
+}

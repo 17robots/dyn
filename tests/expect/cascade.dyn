@@ -1,0 +1,9 @@
+// A declaration whose initializer fails still declares its name, so later
+// uses are not reported again as unknown names.
+fn main() {
+  x: u32 = 1
+  y := x << 33 // error: 33 shifts every bit out of a 32-bit value
+  z := nope() // error: unknown function 'nope'
+  total := y + z
+  _ = total
+}

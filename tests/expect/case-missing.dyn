@@ -1,0 +1,19 @@
+enum Shape { None, Circle: f64, Square: f64, Line: f64, Dot, Star }
+
+fn area(s: Shape) f64 {
+  case s { // error: case is not exhaustive: missing Shape.Square, Shape.Line, Shape.Dot and Shape.Star
+    Shape.None => { return 0 }
+    Shape.Circle r => { return 3.0 * r * r }
+  }
+}
+
+fn kind(s: Shape) u8 {
+  case s { // error: missing Shape.Circle, Shape.Square, Shape.Line, Shape.Dot and 1 more
+    Shape.None => { return 0 }
+  }
+}
+
+fn main() {
+  _ = area(Shape.None)
+  _ = kind(Shape.None)
+}

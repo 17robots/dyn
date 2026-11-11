@@ -440,6 +440,9 @@ static uint32_t aggregate(Parser *p) {
         append(p, &first, &last, name(p));
         while (take(p, ".") && !p->tree->error) append(p, &first, &last, name(p));
       }
+    } else if (p->token.kind == NAME) {
+      fail(p, p->token.start - 1, "an enum variant needs its type: write Enum.Variant, not .Variant");
+      return NONE;
     }
     expect(p, "{");
   }

@@ -1,0 +1,9 @@
+enum Color { Red, Green }
+
+fn red(c: Color) bool {
+  return c == .Red // error: write Enum.Variant, not .Variant
+}
+
+fn main() {
+  _ = red(Color.Green)
+}

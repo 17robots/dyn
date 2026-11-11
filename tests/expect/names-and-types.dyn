@@ -1,0 +1,15 @@
+// Messages name what the reader wrote: the unknown name, the expected type,
+// the literal that does not fit.
+use "std/io"
+
+struct Point { x: i32, y: i32 }
+
+fn main() {
+  p := Point{x: 1, y: 2}
+  io.println("{}", p.y + "a") // error: but this context expects i32
+  z := undefined_name + 3 // error: unknown name 'undefined_name'
+  w: u8 = 300 // error: expected type u8: 300 does not fit
+  missing() // error: unknown function 'missing'
+  _ = z
+  _ = w
+}

@@ -1,0 +1,8 @@
+// Aliases live at module scope.
+type Top = i32
+
+fn main() {
+  type Local = i32 // error: local type aliases are not supported
+  x: Top = 1
+  _ = x
+}
