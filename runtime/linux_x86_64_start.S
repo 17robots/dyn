@@ -89,7 +89,7 @@ dyn_fault_report:
     mov $64, %rcx
     cmp %rcx, %rbx
     cmova %rcx, %rbx
-    lea 16(%rax), %r13
+    lea 32(%rax), %r13
 .Ldyn_panic_frame:
     test %rbx, %rbx
     jz .Ldyn_panic_exit
@@ -251,26 +251,49 @@ dyn_unwind_jump:
 .global dyn_trace_push
 .type dyn_trace_push,@function
 dyn_trace_push:
+    # The slot whose stack range holds the caller's stack pointer is this
+    # thread's. A thread's first frame, or one deeper than any before it,
+    # asks the kernel for the thread id instead and widens the range.
+    lea 8(%rsp), %r8
+    call .Ldyn_trace_find
+    test %rax, %rax
+    jnz .Ldyn_trace_push_have
     push %rdi
     push %rsi
+    push %r8
     call .Ldyn_trace_slot_claim
+    pop %r8
     pop %rsi
     pop %rdi
-    # Returns where the caller stores the line it is running: within the
-    # frame, or a spare word past 64 frames or without a slot.
     test %rax, %rax
     jz .Ldyn_trace_push_spare
+    cmpq $0, 8(%rax)
+    jne .Ldyn_trace_push_widen
+    mov %r8, 24(%rax)
+    mov %r8, 16(%rax)
+    jmp .Ldyn_trace_push_have
+.Ldyn_trace_push_widen:
+    cmp 24(%rax), %r8
+    jae .Ldyn_trace_push_high
+    mov %r8, 24(%rax)
+.Ldyn_trace_push_high:
+    cmp 16(%rax), %r8
+    jbe .Ldyn_trace_push_have
+    mov %r8, 16(%rax)
+.Ldyn_trace_push_have:
+    # Returns where the caller stores the line it is running: within the
+    # frame, or a spare word past 64 frames or without a slot.
     mov 8(%rax), %rcx
     cmp $64, %rcx
     jae .Ldyn_trace_push_count
     mov %rcx, %rdx
     shl $4, %rdx
-    mov %rdi, 16(%rax,%rdx)
+    mov %rdi, 32(%rax,%rdx)
     mov %esi, %esi
-    mov %rsi, 24(%rax,%rdx)
+    mov %rsi, 40(%rax,%rdx)
     inc %rcx
     mov %rcx, 8(%rax)
-    lea 28(%rax,%rdx), %rax
+    lea 44(%rax,%rdx), %rax
     ret
 .Ldyn_trace_push_count:
     inc %rcx
@@ -282,20 +305,49 @@ dyn_trace_push:
 .global dyn_trace_pop
 .type dyn_trace_pop,@function
 dyn_trace_pop:
+    lea 8(%rsp), %r8
+    call .Ldyn_trace_find
+    test %rax, %rax
+    jnz .Ldyn_trace_pop_have
     call .Ldyn_trace_slot
     test %rax, %rax
     jz .Ldyn_trace_pop_done
+.Ldyn_trace_pop_have:
     mov 8(%rax), %rcx
     test %rcx, %rcx
     jz .Ldyn_trace_pop_done
     dec %rcx
     mov %rcx, 8(%rax)
     jnz .Ldyn_trace_pop_done
+    # Released: the range goes first, so no other thread matches it while
+    # a new owner claims the slot.
+    movq $0, 16(%rax)
+    movq $0, 24(%rax)
     movq $0, (%rax)
 .Ldyn_trace_pop_done:
     ret
 
-# Return current thread's trace slot, or zero. 64 bounded slots, 64 frames each.
+# This thread's slot from its stack, or zero: the slot whose range
+# [low, top] holds the stack pointer in r8. Stacks of threads do not
+# overlap, and a free slot's range is empty.
+.Ldyn_trace_find:
+    lea dyn_trace_slots(%rip), %rdx
+    mov $64, %ecx
+.Ldyn_trace_find_loop:
+    cmp 16(%rdx), %r8
+    ja .Ldyn_trace_find_next
+    cmp 24(%rdx), %r8
+    jb .Ldyn_trace_find_next
+    mov %rdx, %rax
+    ret
+.Ldyn_trace_find_next:
+    add $1056, %rdx
+    loop .Ldyn_trace_find_loop
+    xor %eax, %eax
+    ret
+
+# Return current thread's trace slot, or zero. 64 bounded slots of
+# {tid, count, top, low, frames[64]}.
 .Ldyn_trace_slot:
     mov $186, %eax
     syscall
@@ -304,7 +356,7 @@ dyn_trace_pop:
 .Ldyn_trace_slot_find:
     cmp (%rdx), %rax
     je .Ldyn_trace_slot_found
-    add $1040, %rdx
+    add $1056, %rdx
     loop .Ldyn_trace_slot_find
     xor %eax, %eax
     ret
@@ -325,7 +377,7 @@ dyn_trace_pop:
     xor %eax, %eax
     lock cmpxchg %r8, (%rdx)
     je .Ldyn_trace_slot_new
-    add $1040, %rdx
+    add $1056, %rdx
     loop .Ldyn_trace_slot_claim_loop
     xor %eax, %eax
     ret
@@ -337,7 +389,7 @@ dyn_trace_pop:
     mov %rdx, %rax
     ret
 .hidden dyn_trace_slots
-.comm dyn_trace_slots,66560,16
+.comm dyn_trace_slots,67584,16
 .hidden dyn_trace_spare_line
 .comm dyn_trace_spare_line,4,4
 #endif

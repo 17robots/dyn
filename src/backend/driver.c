@@ -561,11 +561,19 @@ static void guard(BackendContext *ctx, const DynIrFunction *f, Cond success, uns
     }
   } else {
     /* Debug index checks compare the index in C with the length in D;
-       dyn_check_failed reports both. 32-bit calls split 64-bit arguments. */
-    bool values = ctx->debug_mode && check == GUARD_INDEX && !ctx->rv32 && !ctx->t32;
+       dyn_check_failed reports both. */
+    bool values = ctx->debug_mode && check == GUARD_INDEX;
     if (values) {
-      /* Third and fourth arguments; the name and kind follow in the first two. */
-      if (ctx->a64) { a64_word(ctx, 0xaa0903e2u); a64_word(ctx, 0xaa0103e3u); } /* mov x2, x9; mov x3, x1 */
+      /* Third and fourth arguments; the name and kind follow in the first two.
+         ILP32 passes each u64 in a register pair after the packed kind
+         (a3:a4, a5:a6); AAPCS passes them on the stack after r2:r3. */
+      if (ctx->rv32) { rv_move(ctx, 13, 5); rv_move(ctx, 14, 19); rv_move(ctx, 15, 11); rv_move(ctx, 16, 20); }
+      else if (ctx->t32) {
+        t32_add_imm(ctx, T32_SP, T32_SP, -16);
+        t32_mem(ctx, T32_STR, t32_lo[R_C], T32_SP, 0); t32_mem(ctx, T32_STR, t32_high(ctx, R_C, T32_T1), T32_SP, 4);
+        t32_mem(ctx, T32_STR, t32_lo[R_D], T32_SP, 8); t32_mem(ctx, T32_STR, t32_high(ctx, R_D, T32_T1), T32_SP, 12);
+      }
+      else if (ctx->a64) { a64_word(ctx, 0xaa0903e2u); a64_word(ctx, 0xaa0103e3u); } /* mov x2, x9; mov x3, x1 */
       else if (ctx->rv64) { rv_move(ctx, 12, 5); rv_move(ctx, 13, 11); }      /* mv a2, t0; mv a3, a1 */
       else if (ctx->win64) CODE(0x49, 0x89, 0xc8, 0x49, 0x89, 0xd1);           /* mov r8, rcx; mov r9, rdx */
       else CODE(0x48, 0x87, 0xd1);                                             /* xchg rcx, rdx */

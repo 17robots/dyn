@@ -1,7 +1,13 @@
 // name is "function (path:line)" for the function's first line. line is the
 // line the frame is running, stored by the compiled code at each statement.
 struct Frame { name: *const u8, length: u32, line: u32 }
-struct TraceSlot { tid: u64, count: u64, frames: [64]Frame }
+// top and low bound the stack addresses where the thread's traced frames
+// called push: push and pop find the slot from the stack pointer, without
+// asking the kernel for the thread id. A free slot has top 0.
+struct TraceSlot { tid: u64, count: u64, top: u64, low: u64, frames: [64]Frame }
+// push and pop measure the stack inside their own frames, a few hundred
+// bytes from the caller's. Guard pages keep other threads' stacks farther.
+const trace_slack: u64 = 512
 // Debug builds trace calls; release builds never call trace_push, so they
 // reserve nothing. Chunks come from the platform on first use and are reused.
 struct TraceChunk { next: u64, slots: [trace_chunk_slots]TraceSlot }
@@ -46,13 +52,46 @@ fn trace_slot(id: u64, claim: bool) *TraceSlot {
   }
   return nil
 }
+// The slot whose stack range holds stack, or nil: stacks of threads do not
+// overlap.
+fn trace_find(stack: u64) *TraceSlot {
+  chunk := atomic_load(&trace_first)
+  for chunk != 0 {
+    for i in 0..trace_chunk_slots {
+      slot := &trace_chunk(chunk).slots[i]
+      top := slot.top
+      if top != 0 && stack <= top + trace_slack && stack + trace_slack >= slot.low {
+        return slot
+      }
+    }
+    chunk = atomic_load(&trace_chunk(chunk).next)
+  }
+  return nil
+}
 // Frames past the 64th, and threads without a slot, write their lines here.
 trace_spare_line: u32
-// Returns where the caller stores the line it is running.
+// Returns where the caller stores the line it is running. A thread's first
+// frame, or one deeper than any before it, asks for the thread id instead
+// and widens the slot's range.
 fn trace_push(name: *const u8, length: u64) *u32 {
-  slot := trace_slot(thread_id(), true)
+  marker: u64 = 0
+  stack := #cast(u64, #cast(usize, &marker))
+  slot := trace_find(stack)
   if slot == nil {
-    return &trace_spare_line
+    slot = trace_slot(thread_id(), true)
+    if slot == nil {
+      return &trace_spare_line
+    }
+    if slot.count == 0 {
+      slot.low = stack
+      slot.top = stack
+    }
+    if stack < slot.low {
+      slot.low = stack
+    }
+    if stack > slot.top {
+      slot.top = stack
+    }
   }
   line := &trace_spare_line
   if slot.count < 64 {
@@ -66,10 +105,18 @@ fn trace_push(name: *const u8, length: u64) *u32 {
   return line
 }
 fn trace_pop() {
-  slot := trace_slot(thread_id(), false)
+  marker: u64 = 0
+  slot := trace_find(#cast(u64, #cast(usize, &marker)))
+  if slot == nil {
+    slot = trace_slot(thread_id(), false)
+  }
   if slot != nil && slot.count != 0 {
     slot.count -= 1
     if slot.count == 0 {
+      // The range goes first, so no other thread matches it while a new
+      // owner claims the slot.
+      slot.top = 0
+      slot.low = 0
       atomic_store(&slot.tid, 0)
     }
   }

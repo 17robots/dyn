@@ -14,6 +14,11 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- Debug builds no longer make two thread-id system calls per function call
+  for the stack trace: each thread's trace slot is found from its stack
+  address. A call-heavy kernel dropped from 200s to 23s in a debug build.
+- Debug index failures also report the index and the length on RV32 and
+  Cortex-M targets.
 - Debug builds use the SSA code generator on x86-64, AArch64 and RISC-V64
   (Linux, macOS, Windows), as release builds do, with no optimizing passes and
   every local in its frame slot for the debugger. Debug code runs faster

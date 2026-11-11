@@ -368,7 +368,11 @@ enum { TRACE_SLOTS = 64, TRACE_FRAMES = 64 };
 /* name is "function (path:N)" for the function's first line; line is the
    line the frame is running, stored by compiled code at each statement. */
 typedef struct { const unsigned char *name; uint32_t length, line; } DynFrame;
-typedef struct { uint64_t tid, count; DynFrame frames[TRACE_FRAMES]; } DynSlot;
+/* top and low bound the stack addresses where the thread's traced frames
+   called push, so push and pop find the slot without a thread-id system
+   call. A free slot has top 0. */
+typedef struct { uint64_t tid, count, top, low; DynFrame frames[TRACE_FRAMES]; } DynSlot;
+enum { TRACE_SLACK = 512 }; /* push and pop measure from their own frames */
 static DynSlot trace_slots[TRACE_SLOTS];
 static uint64_t trace_tid(void) {
 #if defined(_WIN32)
@@ -412,9 +416,22 @@ static DynSlot *trace_slot(uint64_t id, int claim) {
   return 0;
 }
 /* Returns where the caller stores the line it is running. */
+static DynSlot *trace_find(uint64_t stack) {
+  for (size_t i = 0; i < TRACE_SLOTS; ++i) {
+    uint64_t top = __atomic_load_n(&trace_slots[i].top, __ATOMIC_RELAXED);
+    if (top && stack <= top + TRACE_SLACK && stack + TRACE_SLACK >= trace_slots[i].low) return &trace_slots[i];
+  }
+  return 0;
+}
 uint32_t *dyn_trace_push(const unsigned char *name, uint64_t length) {
   static uint32_t spare;
-  DynSlot *s = trace_slot(trace_tid(), 1);
+  uint64_t stack = (uint64_t)(uintptr_t)__builtin_frame_address(0);
+  DynSlot *s = trace_find(stack);
+  if (!s && (s = trace_slot(trace_tid(), 1))) {
+    if (!s->count) { s->low = stack; __atomic_store_n(&s->top, stack, __ATOMIC_RELAXED); }
+    if (stack < s->low) s->low = stack;
+    if (stack > s->top) s->top = stack;
+  }
   uint32_t *line = &spare;
   if (s) {
     if (s->count < TRACE_FRAMES) {
@@ -426,8 +443,12 @@ uint32_t *dyn_trace_push(const unsigned char *name, uint64_t length) {
   return line;
 }
 void dyn_trace_pop(void) {
-  DynSlot *s = trace_slot(trace_tid(), 0);
-  if (s && s->count && !--s->count) __atomic_store_n(&s->tid,0,__ATOMIC_RELEASE);
+  DynSlot *s = trace_find((uint64_t)(uintptr_t)__builtin_frame_address(0));
+  if (!s) s = trace_slot(trace_tid(), 0);
+  if (s && s->count && !--s->count) {
+    __atomic_store_n(&s->top, 0, __ATOMIC_RELAXED); s->low = 0;
+    __atomic_store_n(&s->tid, 0, __ATOMIC_RELEASE);
+  }
 }
 void dyn_trace_dump(void) {
   static const unsigned char h[]="stack trace:\n", a[]="  at ", n[]="\n";
