@@ -48,13 +48,14 @@ $2 = len 2 = {1, 2}
 Add the `source` line to `~/.gdbinit` to load them in every session. Fields stay available:
 `print view.len`, `print view.data[1]`.
 
-Dyn panic output needs no debugger and reports active functions with declaration locations:
+Dyn panic output needs no debugger. It lists the active functions, innermost first, each with the
+line it was running: the failing statement for the first frame, and the call for each caller:
 
 ```text
 message
 stack trace:
-  at fail (src/work.dyn:12)
-  at main (src/main.dyn:4)
+  at fail (src/work.dyn:14)
+  at main (src/main.dyn:9)
 ```
 
 Native FFI libraries remain visible through their own debug information. Debugger expression

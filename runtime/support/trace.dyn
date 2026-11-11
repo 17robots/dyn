@@ -1,4 +1,6 @@
-struct Frame { name: *const u8, length: u64 }
+// name is "function (path:line)" for the function's first line. line is the
+// line the frame is running, stored by the compiled code at each statement.
+struct Frame { name: *const u8, length: u32, line: u32 }
 struct TraceSlot { tid: u64, count: u64, frames: [64]Frame }
 // Debug builds trace calls; release builds never call trace_push, so they
 // reserve nothing. Chunks come from the platform on first use and are reused.
@@ -44,15 +46,24 @@ fn trace_slot(id: u64, claim: bool) *TraceSlot {
   }
   return nil
 }
-fn trace_push(name: *const u8, length: u64) {
+// Frames past the 64th, and threads without a slot, write their lines here.
+trace_spare_line: u32
+// Returns where the caller stores the line it is running.
+fn trace_push(name: *const u8, length: u64) *u32 {
   slot := trace_slot(thread_id(), true)
-  if slot != nil {
-    if slot.count < 64 {
-      slot.frames[slot.count].name = name
-      slot.frames[slot.count].length = length
-    }
-    slot.count += 1
+  if slot == nil {
+    return &trace_spare_line
   }
+  line := &trace_spare_line
+  if slot.count < 64 {
+    frame := &slot.frames[slot.count]
+    frame.name = name
+    frame.length = #cast(u32, length)
+    frame.line = 0
+    line = &frame.line
+  }
+  slot.count += 1
+  return line
 }
 fn trace_pop() {
   slot := trace_slot(thread_id(), false)
@@ -80,7 +91,35 @@ fn trace_dump() {
     count -= 1
     frame := &slot.frames[count]
     write_string("  at ")
-    trace_write(frame.name, frame.length)
+    write_frame(frame)
     write_string("\n")
   }
+}
+// "function (path:line)", with the line the frame was running in place of
+// the function's first line when one was stored.
+fn write_frame(frame: *Frame) {
+  length := #cast(u64, frame.length)
+  name := #slice(frame.name, #cast(usize, length))
+  colon := length
+  for i in #reverse(0..#len(name)) {
+    if name[i] == ':' {
+      colon = #cast(u64, i)
+      break
+    }
+  }
+  if frame.line == 0 || colon == length {
+    trace_write(frame.name, length)
+    return
+  }
+  trace_write(frame.name, colon + 1)
+  digits: [10]u8 = []
+  at: usize = 10
+  value := frame.line
+  for value != 0 {
+    at -= 1
+    digits[at] = #cast(u8, value % 10) + '0'
+    value /= 10
+  }
+  trace_write(&digits[at], #cast(u64, 10 - at))
+  write_string(")")
 }

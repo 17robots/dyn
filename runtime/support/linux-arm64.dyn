@@ -31,8 +31,8 @@ fn mmap_number() i64 {
 fn write_number() i64 {
   return 64
 }
-pub fn dyn_trace_push(name: *const u8, length: u64) {
-  trace_push(name, length)
+pub fn dyn_trace_push(name: *const u8, length: u64) *u32 {
+  return trace_push(name, length)
 }
 pub fn dyn_trace_pop() {
   trace_pop()

@@ -397,7 +397,8 @@ class Contracts(unittest.TestCase):
             result = subprocess.run([str(output)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 101)
             self.assertIn(f'fail ({helper}:1)', result.stderr)
-            self.assertIn(f'main ({root / "main.dyn"}:2)', result.stderr)
+            # Each caller's frame names the line of its call.
+            self.assertIn(f'main ({root / "main.dyn"}:6)', result.stderr)
 
 if __name__ == '__main__':
     unittest.main()

@@ -103,11 +103,49 @@ dyn_fault_report:
     mov $2, %edi
     mov $1, %eax
     syscall
+    # A frame is {name, u32 length, u32 running line}. The name ends in
+    # "(path:N)"; a stored running line replaces N.
     mov (%r12), %rsi
-    mov 8(%r12), %rdx
+    mov 8(%r12), %edx
+    mov 12(%r12), %r14d
+    test %r14d, %r14d
+    jz .Ldyn_panic_name
+    mov %rdx, %rcx
+.Ldyn_panic_colon:
+    test %rcx, %rcx
+    jz .Ldyn_panic_name
+    dec %rcx
+    cmpb $58, (%rsi,%rcx)
+    jne .Ldyn_panic_colon
+    lea 1(%rcx), %rdx
     mov $2, %edi
     mov $1, %eax
     syscall
+    sub $16, %rsp
+    lea 15(%rsp), %rsi
+    movb $41, (%rsi)
+    mov %r14d, %eax
+    mov $10, %ecx
+.Ldyn_panic_digit:
+    xor %edx, %edx
+    div %ecx
+    add $48, %dl
+    dec %rsi
+    mov %dl, (%rsi)
+    test %eax, %eax
+    jnz .Ldyn_panic_digit
+    lea 16(%rsp), %rdx
+    sub %rsi, %rdx
+    mov $2, %edi
+    mov $1, %eax
+    syscall
+    add $16, %rsp
+    jmp .Ldyn_panic_name_done
+.Ldyn_panic_name:
+    mov $2, %edi
+    mov $1, %eax
+    syscall
+.Ldyn_panic_name_done:
     lea .Ldyn_panic_newline(%rip), %rsi
     mov $1, %edx
     mov $2, %edi
@@ -218,19 +256,27 @@ dyn_trace_push:
     call .Ldyn_trace_slot_claim
     pop %rsi
     pop %rdi
+    # Returns where the caller stores the line it is running: within the
+    # frame, or a spare word past 64 frames or without a slot.
     test %rax, %rax
-    jz .Ldyn_trace_push_done
+    jz .Ldyn_trace_push_spare
     mov 8(%rax), %rcx
     cmp $64, %rcx
     jae .Ldyn_trace_push_count
     mov %rcx, %rdx
     shl $4, %rdx
     mov %rdi, 16(%rax,%rdx)
+    mov %esi, %esi
     mov %rsi, 24(%rax,%rdx)
+    inc %rcx
+    mov %rcx, 8(%rax)
+    lea 28(%rax,%rdx), %rax
+    ret
 .Ldyn_trace_push_count:
     inc %rcx
     mov %rcx, 8(%rax)
-.Ldyn_trace_push_done:
+.Ldyn_trace_push_spare:
+    lea dyn_trace_spare_line(%rip), %rax
     ret
 .section .text.dyn_trace_pop,"ax",@progbits
 .global dyn_trace_pop
@@ -292,6 +338,8 @@ dyn_trace_pop:
     ret
 .hidden dyn_trace_slots
 .comm dyn_trace_slots,66560,16
+.hidden dyn_trace_spare_line
+.comm dyn_trace_spare_line,4,4
 #endif
 .section .text.dyn_syscall6,"ax",@progbits
 .global dyn_syscall6

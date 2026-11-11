@@ -366,6 +366,8 @@ class Assembler:
         prefix = b'\xf0' if lock else b''
         if base == 'neg':
             self.modrm(b'\xf7', 3, args[0], width); return
+        if base == 'div':
+            self.modrm(b'\xf7', 6, args[0], width); return
         if base in ('inc', 'dec'):
             self.modrm(b'\xff', 0 if base == 'inc' else 1, args[0], width); return
         if base == 'shl':

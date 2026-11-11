@@ -351,7 +351,9 @@ DYN_RUNTIME_HIDDEN float fmodf(float x, float y) {
 #if defined(_WIN32) || defined(__APPLE__) || (defined(DYN_AARCH64) && !defined(DYN_RELEASE))
 long dyn_syscall6(long, long, long, long, long, long, long);
 enum { TRACE_SLOTS = 64, TRACE_FRAMES = 64 };
-typedef struct { const unsigned char *name; uint64_t length; } DynFrame;
+/* name is "function (path:N)" for the function's first line; line is the
+   line the frame is running, stored by compiled code at each statement. */
+typedef struct { const unsigned char *name; uint32_t length, line; } DynFrame;
 typedef struct { uint64_t tid, count; DynFrame frames[TRACE_FRAMES]; } DynSlot;
 static DynSlot trace_slots[TRACE_SLOTS];
 static uint64_t trace_tid(void) {
@@ -395,12 +397,19 @@ static DynSlot *trace_slot(uint64_t id, int claim) {
   }
   return 0;
 }
-void dyn_trace_push(const unsigned char *name, uint64_t length) {
+/* Returns where the caller stores the line it is running. */
+uint32_t *dyn_trace_push(const unsigned char *name, uint64_t length) {
+  static uint32_t spare;
   DynSlot *s = trace_slot(trace_tid(), 1);
+  uint32_t *line = &spare;
   if (s) {
-    if (s->count < TRACE_FRAMES) s->frames[s->count] = (DynFrame){name,length};
+    if (s->count < TRACE_FRAMES) {
+      s->frames[s->count] = (DynFrame){name, (uint32_t)length, 0};
+      line = &s->frames[s->count].line;
+    }
     ++s->count;
   }
+  return line;
 }
 void dyn_trace_pop(void) {
   DynSlot *s = trace_slot(trace_tid(), 0);
@@ -414,7 +423,18 @@ void dyn_trace_dump(void) {
   for (uint64_t i=s->count < TRACE_FRAMES ? s->count : TRACE_FRAMES;i;--i) {
     DynFrame *f=&s->frames[i-1];
     trace_write(a,sizeof(a)-1);
-    trace_write(f->name,f->length);
+    uint32_t colon=f->length;
+    while (f->line && colon && f->name[colon-1] != ':') --colon;
+    if (!f->line || !colon) { trace_write(f->name,f->length); }
+    else {
+      /* No local buffer: a stack array would need the stack protector. */
+      static const unsigned char digits[]="0123456789)";
+      uint32_t scale=1;
+      while (f->line/scale >= 10) scale*=10;
+      trace_write(f->name,colon);
+      for (; scale; scale/=10) trace_write(digits+f->line/scale%10,1);
+      trace_write(digits+10,1);
+    }
     trace_write(n,1);
   }
 }

@@ -103,6 +103,10 @@ typedef struct {
   unsigned loop_depth;
   const DynIrProgram *active_ir;
   uint32_t defer_ids[MAX_DEFERS], defer_count, unwind_offset, return_offset, call_offset, sret_offset;
+  /* Debug builds: the frame word holding dyn_trace_push's result, a pointer
+     to this call's 32-bit line in the trace. Each statement stores its line
+     there, so a stack trace names the line each frame is running. */
+  uint32_t trace_offset;
   uint32_t captured_offsets[MAX_NODES], statement_scratch[MAX_NODES], temporary_offsets[MAX_NODES];
   /* Struct and array literals whose every field is constant are laid out in
      the constants section once; literal_offsets holds offset + 1 from
@@ -2347,6 +2351,11 @@ static bool block_statements_value(BackendContext *ctx, const DynIrProgram *ir, 
       dyn_location_get(ctx->debug_locations,ctx->debug_source,s->span.start_byte,&path,&line,&column);
       if (!backend_dwarf_line(ctx->dwarf,ctx->text.n,path,line,column,false)) return false;
     }
+    if (ctx->trace_offset && ctx->debug_locations) {
+      const char *path; unsigned line,column;
+      dyn_location_get(ctx->debug_locations,ctx->debug_source,s->span.start_byte,&path,&line,&column);
+      isa_load(ctx, R_11, ctx->trace_offset); isa_small_immediate(ctx, R_A, line); isa_store_value(ctx, 32);
+    }
     if (s->kind==DYN_STMT_PANIC) {
       if (s->expression>=ir->expression_count || !descriptor(ir->expressions[s->expression].type) ||
           !expression(ctx, ir,f,s->expression,0)) return false;
@@ -2723,6 +2732,7 @@ static bool function(BackendContext *ctx, const DynSource *source, const DynIrPr
   if (!count_scratch(ctx, ir,f,f->body_start,f->body_count,0,&scratch)) return false;
   for (unsigned r = 0; r < 4; ++r)
     if (ctx->allocator_used & (1u << r)) ctx->allocator_save[r] = 0u - 8 * (ctx->local_words + ++scratch);
+  ctx->trace_offset = ctx->debug_mode ? 0u - 8 * (ctx->local_words + ++scratch) : 0;
   ctx->frame_bytes = (((ctx->local_words+scratch) * 8 + 15) / 16) * 16;
   if (!ctx->frame_bytes) ctx->frame_bytes = 16;
   ctx->stack_slots = ctx->loop_depth = 0;
@@ -2766,6 +2776,7 @@ static bool function(BackendContext *ctx, const DynSource *source, const DynIrPr
     snprintf(label, sizeof(label), "%s (%s:%u)", f->debug_name ? f->debug_name : f->name, path, line);
     size_t length = strlen(label), offset = literal(ctx, label, length);
     isa_string_arguments(ctx, offset, length); runtime_call(ctx, 1);
+    isa_store(ctx, R_A, ctx->trace_offset);
   }
   if (ctx->dwarf) {
     const char *path; unsigned line,column;
