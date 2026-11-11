@@ -87,7 +87,12 @@ frame rules, including the biased Thumb frame pointer.
 
 A function the SSA path cannot build yet falls back to the tree emitter;
 `--opt-remarks` reports the line of `ssa.inc` that stopped it. Debug builds
-use the tree emitter. Windows ARM64 SSA reserves callee-saved GP registers
+on the 64-bit targets also use SSA code generation, without the optimizing
+passes: every local stays in its frame slot (DWARF variables with lexical
+scopes), each statement gets a line row and stores its line where
+`dyn_trace_push` said, frames push and pop through ordinary runtime calls,
+emission runs once with long branches, and two preparation workers keep
+emission fed. Debug builds on RV32 and Thumb use the tree emitter. Windows ARM64 SSA reserves callee-saved GP registers
 and spills values that cross calls, so it can reuse the canonical Windows
 unwind records and stack probing. `DYN_NO_SSA=1` selects the tree
 emitter everywhere. SSA code

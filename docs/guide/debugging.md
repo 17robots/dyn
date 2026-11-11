@@ -58,6 +58,13 @@ stack trace:
   at main (src/main.dyn:9)
 ```
 
+A failed runtime check names the function, file and line, and a failed index check also the index
+and the length it had to be below:
+
+```text
+runtime check failed (index.ok) in get at src/main.dyn:6: index 9, length 4
+```
+
 Native FFI libraries remain visible through their own debug information. Debugger expression
 parsers do not understand Dyn expressions, so use simple variable names, fields, addresses, and
 the debugger's C-like casts when inspecting values.

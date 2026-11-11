@@ -38,9 +38,15 @@ static inline void dyn_location_get(const DynLocationIndex *index, const DynSour
   size_t length, offset;
   dyn_source_position(s, byte, path, &text, &length, &offset);
   if (offset > length) offset = length;
-  for (size_t i = 0; i < index->count; ++i) {
+  /* Code generation asks for one function's statements in a row: try the
+     file of the previous answer before scanning every file. */
+  static _Thread_local size_t hint;
+  for (size_t n = 0; n < index->count; ++n) {
+    size_t i = n ? n - 1 : (hint < index->count ? hint : 0);
+    if (n && i == hint) continue;
     const DynLocationFile *file = &index->files[i];
     if (file->text != text) continue;
+    hint = i;
     size_t first = 0, end = file->count;
     while (first < end) {
       size_t mid = first + (end - first) / 2;

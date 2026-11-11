@@ -135,7 +135,10 @@ static size_t a64s_branch(BackendContext *ctx, unsigned code) {
 static void a64s_fail(SsaEmit *e, unsigned code, unsigned kind) {
   size_t at = a64s_branch(e->ctx, code);
   e->stub_uses = ssa_grow(e->stub_uses, &e->stub_use_capacity, e->stub_use_count + 1, sizeof(*e->stub_uses), &e->s->failed);
-  if (!e->s->failed) { e->stub_uses[e->stub_use_count].at = at; e->stub_uses[e->stub_use_count].origin = e->check_origin; e->stub_uses[e->stub_use_count++].kind = kind; }
+  if (!e->s->failed) { e->stub_uses[e->stub_use_count].at = at; e->stub_uses[e->stub_use_count].origin = e->check_origin; e->stub_uses[e->stub_use_count].pos = e->check_pos;
+    e->stub_uses[e->stub_use_count].values = e->check_values;
+    e->stub_uses[e->stub_use_count].index = e->check_index; e->stub_uses[e->stub_use_count].limit = e->check_limit;
+    e->stub_uses[e->stub_use_count++].kind = kind; }
 }
 static Cond a64s_compare(SsaEmit *e, int32_t a, int32_t b, Cond cond) {
   Ssa *s = e->s; BackendContext *ctx = e->ctx;
@@ -589,6 +592,7 @@ static void a64s_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
   uint32_t id = block->values.items[*k];
   SsaValue *v = &s->values[id];
   e->check_origin = v->check_origin;
+  e->check_pos = v->pos;
   if (v->dead && v->op != SO_CALL) return;
   unsigned d;
   uint64_t c;
@@ -820,7 +824,9 @@ static void a64s_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
     return;
   case SO_CHECK: {
     Cond cond = a64s_compare(e, v->a, v->b, (Cond)v->cond);
+    ssa_check_values(e, v);
     a64s_fail(e, a64_cond[cond] ^ 1, (unsigned)v->aux);
+    e->check_values = false;
     return;
   }
   case SO_VECTOR: {
@@ -852,17 +858,7 @@ static void a64s_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
     if (v->cond) { a64s_protect_begin(e, block); ssa_call_emit(e, block, k); a64s_protect_end(e); }
     else ssa_call_emit(e, block, k);
     return;
-  case SO_FAIL: {
-    const DynIrFunction *origin = v->check_origin && v->check_origin <= s->ir->function_count
-        ? &s->ir->functions[v->check_origin - 1] : s->f;
-    const char *name = function_name(origin);
-    size_t length = strlen(name);
-    if (length > 800) length = 800;
-    isa_string_arguments(ctx, literal(ctx, name, length), (size_t)v->aux << 24 | length);
-    runtime_call(ctx, RUNTIME_CHECK_FAILED);
-    isa_trap(ctx);
-    return;
-  }
+  case SO_FAIL: ssa_fail_after_cleanup(e, v); return;
   case SO_CONTINUE: runtime_call(ctx, 6); isa_trap(ctx); return;
   case SO_PANIC: {
     SsaMove moves[2] = {ssa_source(e, v->a), ssa_source(e, v->b)};

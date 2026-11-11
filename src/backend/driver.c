@@ -560,7 +560,17 @@ static void guard(BackendContext *ctx, const DynIrFunction *f, Cond success, uns
       runtime_call(ctx, RUNTIME_CHECK_FAILED); isa_trap(ctx); /* never returns */
     }
   } else {
-    isa_string_arguments(ctx, ctx->message_offsets[check], ctx->message_lengths[check]);
+    /* Debug index checks compare the index in C with the length in D;
+       dyn_check_failed reports both. 32-bit calls split 64-bit arguments. */
+    bool values = ctx->debug_mode && check == GUARD_INDEX && !ctx->rv32 && !ctx->t32;
+    if (values) {
+      /* Third and fourth arguments; the name and kind follow in the first two. */
+      if (ctx->a64) { a64_word(ctx, 0xaa0903e2u); a64_word(ctx, 0xaa0103e3u); } /* mov x2, x9; mov x3, x1 */
+      else if (ctx->rv64) { rv_move(ctx, 12, 5); rv_move(ctx, 13, 11); }      /* mv a2, t0; mv a3, a1 */
+      else if (ctx->win64) CODE(0x49, 0x89, 0xc8, 0x49, 0x89, 0xd1);           /* mov r8, rcx; mov r9, rdx */
+      else CODE(0x48, 0x87, 0xd1);                                             /* xchg rcx, rdx */
+    }
+    isa_string_arguments(ctx, ctx->message_offsets[check], ctx->message_lengths[check] | (values ? 0x800000u : 0));
     runtime_call(ctx, RUNTIME_CHECK_FAILED); isa_trap(ctx); /* never returns */
   }
   ctx->stack_slots=saved_stack;
@@ -3102,6 +3112,8 @@ static unsigned dwarf_type(BackendContext *ctx, const DynIrProgram *ir, DynType 
 static bool dwarf_variables(BackendContext *ctx, const DynIrProgram *ir, const DynIrFunction *f) {
   for (uint32_t i = 0; i < f->local_count; ++i) {
     const DynIrLocal *local = &ir->locals[f->local_start + i];
+    /* SSA code leaves locals that stay in registers at offset 0. */
+    if (!ctx->local_offsets[i]) continue;
     bool parameter = false;
     for (uint32_t j = 0; j < f->param_count; ++j)
       parameter |= ir->params[f->param_start + j].local_id == f->local_start + i;

@@ -14,6 +14,14 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- Debug builds use the SSA code generator on x86-64, AArch64 and RISC-V64
+  (Linux, macOS, Windows), as release builds do, with no optimizing passes and
+  every local in its frame slot for the debugger. Debug code runs faster
+  (nbody 7.7s to 3.2s, matmul 5.6s to 3.6s). Release `--debug-info` builds now
+  get optimized SSA code with line rows too. 32-bit targets keep the tree
+  emitter in debug builds; `DYN_NO_SSA=1` selects it everywhere.
+- A failed index check in a debug build reports the index and the length:
+  `runtime check failed (index.ok) in get at main.dyn:6: index 9, length 4`.
 - `#cast(u32, 0x80000000)` compiles: an integer literal in `#cast` takes the
   target type when it fits, instead of the default `i32`.
 - New `--check-overflow` for debug builds: `+`, `-`, `*`, `<<` and negation in

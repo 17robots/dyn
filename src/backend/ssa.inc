@@ -93,6 +93,9 @@ typedef struct {
   uint32_t abi_expr, abi_groups, abi_group_count;
   int32_t reg, slot, hint; /* hint: a value whose register this one prefers */
   uint32_t start, end; /* live interval */
+  /* 1 + the source byte of the statement that built this value, or 0.
+     Debug builds turn changes of it into line rows and trace line stores. */
+  uint32_t pos;
 } SsaValue;
 typedef struct {
   uint32_t *items; uint32_t count, capacity;
@@ -145,6 +148,13 @@ typedef struct {
   const DynIrStmt *scalar_loop; /* versioned loop now lowering its scalar path */
   bool calls;
   uint32_t check_origin;
+  uint32_t pos;         /* see SsaValue.pos */
+  /* Debug builds: frame offset of the pointer dyn_trace_push returned, where
+     each statement stores its line; 0 when the function is not traced. */
+  uint32_t trace_slot;
+  /* Debug information: where each local is visible, as 1 + source bytes
+     [scope_low, scope_high]; 0 when it is visible in the whole function. */
+  uint32_t *scope_low, *scope_high;
   /* Pending defers, innermost last; while they run, `unwinding` is set and
      simple deferred calls read the arguments captured at the defer. */
   uint32_t defers[MAX_DEFERS]; unsigned defer_count;
@@ -241,6 +251,7 @@ static int32_t ssa_value(Ssa *s, uint32_t block, SsaOp op, uint8_t cls, int32_t 
   memset(v, 0, sizeof(*v));
   v->op = (uint8_t)op; v->cls = cls; v->a = a; v->b = b; v->c = c; v->aux = aux; v->aux2 = aux2;
   v->check_origin = s->check_origin;
+  v->pos = s->pos;
   v->block = block; v->reg = v->slot = -1; v->hint = -1; v->scale = 1;
   v->effect = op == SO_CHECK || op == SO_CHECK_SHL || op == SO_ADDO || op == SO_SUBO || op == SO_MULO ||
               op == SO_LOAD || op == SO_STORE || op == SO_CALL || op == SO_COPYMEM || op == SO_ZEROMEM || op == SO_FILLMEM || op == SO_FIND_BYTE || op == SO_FIND || op == SO_JSON_ASCII_PREFIX || op == SO_BYTE_COUNT || op == SO_SUM || op == SO_AXPY || op == SO_VLOOP ||
@@ -404,7 +415,7 @@ static void ssa_free(Ssa *s) {
     s->chunks = next;
   }
   free(s->values); free(s->blocks); free(s->lists); free(s->defs); free(s->pending);
-  free(s->address_exposed); free(s->memory_local); free(s->local_offset); free(s->alias); free(s->captures); free(s->regions);
+  free(s->address_exposed); free(s->memory_local); free(s->local_offset); free(s->alias); free(s->scope_low); free(s->scope_high); free(s->captures); free(s->regions);
 }
 
 /* ---- Building ---- */
@@ -442,7 +453,9 @@ static void ssa_check(Ssa *s, int32_t a, int32_t b, Cond holds, unsigned kind) {
     s->current = fail;
     ssa_run_defers(s, 0);
     if (s->current != UINT32_MAX) {
-      ssa_emit(s, SO_FAIL, SC_NONE, -1, -1, -1, kind, 0);
+      /* Debug index failures report the index and the limit. */
+      bool values = s->ctx->debug_mode && kind == GUARD_INDEX;
+      ssa_emit(s, SO_FAIL, SC_NONE, values ? a : -1, values ? b : -1, -1, kind, 0);
       s->blocks[s->current].kind = SB_EXIT;
     }
     ssa_seal(s, ok);
@@ -1380,7 +1393,7 @@ static int32_t ssa_call(Ssa *s, const DynIrExpr *e, int32_t *second, unsigned de
       pack_type = ir->slices[callee->variadic_type - DYN_TYPE_SLICE_BASE].element;
     }
   }
-  if (callee && callee->byte_intrinsic == DYN_BYTE_INTRINSIC_FIND &&
+  if (callee && !ctx->debug_mode && !ctx->dwarf && callee->byte_intrinsic == DYN_BYTE_INTRINSIC_FIND &&
       !ctx->a64 && !ctx->rv64 && !ctx->rv32 && !ctx->t32) {
     if (callee->variadic || callee->return_type != DYN_TYPE_USIZE || result != DYN_TYPE_USIZE ||
         callee->param_count != 2 || e->item_count != 2 ||
@@ -1408,7 +1421,7 @@ static int32_t ssa_call(Ssa *s, const DynIrExpr *e, int32_t *second, unsigned de
     s->check_origin = saved_origin;
     return found;
   }
-  if (callee && callee->byte_intrinsic == DYN_BYTE_INTRINSIC_JSON_ASCII_PREFIX &&
+  if (callee && !ctx->debug_mode && !ctx->dwarf && callee->byte_intrinsic == DYN_BYTE_INTRINSIC_JSON_ASCII_PREFIX &&
       !ctx->a64 && !ctx->rv64 && !ctx->rv32 && !ctx->t32) {
     if (callee->variadic || callee->return_type != DYN_TYPE_USIZE || result != DYN_TYPE_USIZE ||
         callee->param_count != 1 || e->item_count != 1 || callee->param_start >= ir->param_count) {
@@ -1425,7 +1438,7 @@ static int32_t ssa_call(Ssa *s, const DynIrExpr *e, int32_t *second, unsigned de
     if (length < 0) { SSA_GIVE_UP(s); return 0; }
     return ssa_emit(s, SO_JSON_ASCII_PREFIX, SC_INT, pointer, length, -1, 0, 0);
   }
-  if (callee && callee->byte_intrinsic == DYN_BYTE_INTRINSIC_FIND_BYTE &&
+  if (callee && !ctx->debug_mode && !ctx->dwarf && callee->byte_intrinsic == DYN_BYTE_INTRINSIC_FIND_BYTE &&
       !ctx->a64 && !ctx->rv64 && !ctx->rv32 && !ctx->t32) {
     if (callee->variadic || callee->return_type != DYN_TYPE_USIZE || result != DYN_TYPE_USIZE ||
         callee->param_count != 2 || e->item_count != 2 ||
@@ -1650,6 +1663,11 @@ static void ssa_statements(Ssa *s, uint32_t start, uint32_t count, unsigned dept
 static void ssa_statement_value(Ssa *, const DynIrStmt *, unsigned);
 static void ssa_return(Ssa *s, int32_t value, int32_t second) {
   if (s->current == UINT32_MAX) return;
+  if (s->trace_slot) {
+    /* dyn_trace_pop, after the result is computed; the call keeps it. */
+    ssa_emit(s, SO_CALL, SC_NONE, -1, -1, -1, 2, 1);
+    s->calls = true;
+  }
   SsaBlock *b = &s->blocks[s->current];
   b->kind = SB_RETURN; b->control = value; b->control2 = second;
   s->current = UINT32_MAX;
@@ -2623,10 +2641,12 @@ static void ssa_loop_body(Ssa *s, const DynIrStmt *st, uint32_t latch, uint32_t 
   ssa_jump(s, latch);
 }
 static void ssa_statement(Ssa *s, const DynIrStmt *st, unsigned depth) {
-  uint32_t saved_origin = s->check_origin;
+  uint32_t saved_origin = s->check_origin, saved_pos = s->pos;
   if (st->check_origin) s->check_origin = st->check_origin;
+  s->pos = st->span.start_byte + 1;
   ssa_statement_value(s, st, depth);
   s->check_origin = saved_origin;
+  s->pos = saved_pos;
 }
 static void ssa_statement_value(Ssa *s, const DynIrStmt *st, unsigned depth) {
   const DynIrProgram *ir = s->ir;
@@ -2844,6 +2864,27 @@ static void ssa_statements(Ssa *s, uint32_t start, uint32_t count, unsigned dept
   const DynIrProgram *ir = s->ir;
   if (depth > MAX_DEPTH || (uint64_t)start + count > ir->child_count) { SSA_GIVE_UP(s); return; }
   unsigned base = s->defer_count;
+  if (s->scope_low && count && ir->children[start + count - 1] < ir->statement_count) {
+    /* As in the tree emitter: a local is visible from the statement after
+       its declaration to the end of its block; loop and case bindings
+       cover the statement that introduces them. */
+    uint32_t end = ir->statements[ir->children[start + count - 1]].span.end_byte;
+    for (uint32_t i = 0; i < count; ++i) {
+      uint32_t id = ir->children[start + i];
+      if (id >= ir->statement_count) break;
+      const DynIrStmt *st = &ir->statements[id];
+      uint32_t locals[64], n = 0, low = st->span.start_byte, high = st->span.end_byte;
+      if (st->kind == DYN_STMT_LOCAL) { locals[n++] = st->local_id; low = st->span.end_byte; high = end; }
+      if (st->kind == DYN_STMT_FOR) locals[n++] = st->local_id;
+      if (st->kind == DYN_STMT_CASE && (uint64_t)st->case_arm_start + st->case_arm_count <= ir->case_arm_count)
+        for (uint32_t j = 0; j < st->case_arm_count && n < 64; ++j) locals[n++] = ir->case_arms[st->case_arm_start + j].local_id;
+      for (uint32_t j = 0; j < n; ++j) {
+        if (locals[j] < s->f->local_start || locals[j] - s->f->local_start >= s->f->local_count) continue;
+        s->scope_low[locals[j] - s->f->local_start] = low + 1;
+        s->scope_high[locals[j] - s->f->local_start] = high + 1;
+      }
+    }
+  }
   for (uint32_t i = 0; i < count && !s->unsupported && !s->failed; ++i) {
     if (s->current == UINT32_MAX) break; /* unreachable code */
     uint32_t id = ir->children[start + i];
@@ -2907,6 +2948,11 @@ static void ssa_build(Ssa *s) {
   s->local_offset = calloc(locals, sizeof(uint32_t));
   s->alias = malloc(locals * sizeof(int32_t));
   if (!s->memory_local || !s->address_exposed || !s->local_offset || !s->alias) { s->failed = true; return; }
+  if (s->ctx->dwarf) {
+    s->scope_low = calloc(locals, sizeof(uint32_t));
+    s->scope_high = calloc(locals, sizeof(uint32_t));
+    if (!s->scope_low || !s->scope_high) { s->failed = true; return; }
+  }
   for (uint32_t i = 0; i < locals; ++i) s->alias[i] = -1;
   s->variable_count = 2 * f->local_count;
   s->return_slot = UINT32_MAX;
@@ -2917,6 +2963,10 @@ static void ssa_build(Ssa *s) {
   }
   ssa_scan(s, f->body_start, f->body_count, 0);
   if (s->unsupported) return;
+  /* Debug builds keep every local in its frame slot, where the debugger's
+     variable records find it at each statement. */
+  if (s->ctx->debug_mode)
+    for (uint32_t i = 0; i < f->local_count; ++i) s->memory_local[i] = true;
   for (uint32_t i = 0; i < f->local_count; ++i) {
     if (!s->memory_local[i]) continue;
     uint32_t size, alignment;
@@ -2924,6 +2974,7 @@ static void ssa_build(Ssa *s) {
     s->local_offset[i] = ssa_reserve(s, size ? size : 1, alignment);
   }
   uint32_t entry = ssa_block(s);
+  if (s->failed) return;
   s->blocks[entry].sealed = true;
   s->current = entry;
   BackendContext *ctx = s->ctx;
@@ -3014,6 +3065,16 @@ static void ssa_build(Ssa *s) {
     int32_t call = ssa_emit(s, SO_CALL, SC_NONE, -1, -1, -1, ctx->initializer_symbol, 0);
     (void)call;
     s->calls = true;
+  }
+  if (ctx->debug_mode) {
+    /* dyn_trace_push(label): the emitter supplies the label. Its result is
+       where statements store their lines; ssa_return pops the frame. */
+    int32_t call = ssa_emit(s, SO_CALL, SC_NONE, -1, -1, -1, 1, 1);
+    s->calls = true;
+    int32_t line = ssa_emit(s, SO_RESULT, SC_INT, call, -1, -1, 0, 0);
+    uint32_t slot = ssa_reserve(s, 8, 8);
+    ssa_store(s, ssa_frame(s, slot), -1, 1, 0, SSA_MEM(64, 0, 0), line);
+    s->trace_slot = slot;
   }
   ssa_statements(s, f->body_start, f->body_count, 0);
   if (s->current != UINT32_MAX) {
@@ -7343,13 +7404,30 @@ static void ssa_cache_loops(SsaAlloc *a) {
 /* ---- x86-64 emission ---- */
 
 typedef struct { int base, index; unsigned scale; int32_t disp; } SsaMemory;
+/* Parallel moves between registers, frame slots, outgoing stack slots and
+   constants (see ssa_parallel). */
+enum { L_REG, L_SLOT, L_OUT, L_CONST, L_FRAME };
+typedef struct { uint8_t dst_kind, src_kind, cls; int64_t dst, src; } SsaMove;
 typedef struct {
   SsaAlloc *alloc;
   Ssa *s;
   BackendContext *ctx;
   uint32_t frame_bytes, spill_base, save_base;
-  uint32_t check_origin;
-  struct { size_t at, target; unsigned kind, origin; } *stub_uses; uint32_t stub_use_count, stub_use_capacity;
+  uint32_t check_origin, check_pos;
+  /* Debug index checks: where the index and the limit are, for the
+     failure path to report them. */
+  bool check_values;
+  SsaMove check_index, check_limit;
+  struct { size_t at, target; unsigned kind, origin; uint32_t pos; bool values; SsaMove index, limit; } *stub_uses;
+  uint32_t stub_use_count, stub_use_capacity;
+  /* Debug information for this emission, applied once the final emission
+     succeeds: line rows by statement position, epilogue starts, and where
+     the frame is set up. last_pos and last_line track the statement and
+     traced line the code being emitted belongs to. */
+  struct { size_t pc; const char *path; unsigned line, column; uint32_t pos; bool prologue_end; } *rows; uint32_t row_count, row_capacity;
+  size_t *epilogues; uint32_t epilogue_count, epilogue_capacity;
+  size_t prologue_pc;
+  uint32_t last_pos; unsigned last_line;
   struct { size_t at; uint32_t block; bool short_branch; } *jumps; uint32_t jump_count, jump_capacity;
   /* From a first emission: block and jump offsets from the function start,
      so the final emission can pick short branches. */
@@ -7493,8 +7571,6 @@ static SsaMemory ssa_address_of(SsaEmit *e, int32_t base, int32_t index, unsigne
 }
 /* Parallel moves between registers, frame slots, outgoing stack slots and
    constants, resolving cycles through R11 or XMM15. */
-enum { L_REG, L_SLOT, L_OUT, L_CONST, L_FRAME };
-typedef struct { uint8_t dst_kind, src_kind, cls; int64_t dst, src; } SsaMove;
 static SsaMove ssa_source(SsaEmit *e, int32_t id) {
   SsaValue *v = &e->s->values[id];
   SsaMove m = {0};
@@ -7657,7 +7733,10 @@ static void ssa_jump_to(SsaEmit *e, int condition, uint32_t block) {
 static void ssa_fail_when(SsaEmit *e, int failure, unsigned kind) {
   size_t at = isa_branch(e->ctx, failure);
   e->stub_uses = ssa_grow(e->stub_uses, &e->stub_use_capacity, e->stub_use_count + 1, sizeof(*e->stub_uses), &e->s->failed);
-  if (!e->s->failed) { e->stub_uses[e->stub_use_count].at = at; e->stub_uses[e->stub_use_count].origin = e->check_origin; e->stub_uses[e->stub_use_count++].kind = kind; }
+  if (!e->s->failed) { e->stub_uses[e->stub_use_count].at = at; e->stub_uses[e->stub_use_count].origin = e->check_origin; e->stub_uses[e->stub_use_count].pos = e->check_pos;
+    e->stub_uses[e->stub_use_count].values = e->check_values;
+    e->stub_uses[e->stub_use_count].index = e->check_index; e->stub_uses[e->stub_use_count].limit = e->check_limit;
+    e->stub_uses[e->stub_use_count++].kind = kind; }
 }
 /* Sets flags for a against b; returns the condition to use (swapped when
    the constant had to move to the right). */
@@ -7734,7 +7813,10 @@ static void ssa_fail_raw(SsaEmit *e, unsigned char jcc, unsigned kind) {
   CODE(0x0f, jcc);
   size_t at = ctx->text.n; word(ctx, 0);
   e->stub_uses = ssa_grow(e->stub_uses, &e->stub_use_capacity, e->stub_use_count + 1, sizeof(*e->stub_uses), &e->s->failed);
-  if (!e->s->failed) { e->stub_uses[e->stub_use_count].at = at; e->stub_uses[e->stub_use_count].origin = e->check_origin; e->stub_uses[e->stub_use_count++].kind = kind; }
+  if (!e->s->failed) { e->stub_uses[e->stub_use_count].at = at; e->stub_uses[e->stub_use_count].origin = e->check_origin; e->stub_uses[e->stub_use_count].pos = e->check_pos;
+    e->stub_uses[e->stub_use_count].values = e->check_values;
+    e->stub_uses[e->stub_use_count].index = e->check_index; e->stub_uses[e->stub_use_count].limit = e->check_limit;
+    e->stub_uses[e->stub_use_count++].kind = kind; }
 }
 enum { JCC_O = 0x80, JCC_B = 0x82 };
 /* Copies size bytes from [r11] to [r10] through RCX, forwards or backwards. */
@@ -8470,6 +8552,103 @@ static void ssa_find(SsaEmit *e, SsaValue *v) {
   ssa_put(e, v, X_RAX);
 }
 static void a64s_store_outgoing(SsaEmit *e, int32_t value, uint32_t offset, unsigned width);
+/* The name dyn_check_failed reports: the function, and in debug builds
+   "at path:line" for the statement, as the tree emitter writes it. */
+static size_t ssa_check_name(SsaEmit *e, uint32_t origin, uint32_t pos, size_t *length) {
+  BackendContext *ctx = e->ctx; Ssa *s = e->s;
+  const char *name = function_name(origin && origin <= s->ir->function_count ? &s->ir->functions[origin - 1] : s->f);
+  size_t n = strlen(name);
+  if (n > 800) n = 800;
+  char located[801];
+  if (ctx->debug_mode && ctx->debug_locations && pos) {
+    const char *path; unsigned line, column;
+    dyn_location_get(ctx->debug_locations, ctx->debug_source, pos - 1, &path, &line, &column);
+    int written = snprintf(located, sizeof(located), "%.*s at %s:%u", (int)n, name, path, line);
+    if (written > 0) {
+      name = located;
+      n = (size_t)written < sizeof(located) ? (size_t)written : sizeof(located) - 1;
+    }
+  }
+  *length = n;
+  return literal(ctx, name, n);
+}
+static void a64s_slot_access(BackendContext *ctx, bool store, unsigned reg, SsaMemory m);
+static void rvs_slot_access(BackendContext *ctx, bool store, unsigned reg, SsaMemory m);
+/* Records where an index check's operands are, before its failure branch. */
+static SsaMove ssa_source(SsaEmit *e, int32_t id);
+static void ssa_parallel(SsaEmit *e, SsaMove *moves, uint32_t count);
+static void ssa_check_values(SsaEmit *e, const SsaValue *v) {
+  e->check_values = e->ctx->debug_mode && v->aux == GUARD_INDEX;
+  if (!e->check_values) return;
+  e->check_index = ssa_source(e, v->a);
+  e->check_limit = ssa_source(e, v->b);
+}
+/* dyn_check_failed's third and fourth arguments: the index and the limit. */
+static void ssa_report_values(SsaEmit *e, SsaMove index, SsaMove limit) {
+  SsaMove moves[2] = {index, limit};
+  for (unsigned i = 0; i < 2; ++i) {
+    moves[i].dst_kind = L_REG; moves[i].dst = ssa_location_register(e->ctx, 2 + (int)i); moves[i].cls = SC_INT;
+  }
+  ssa_parallel(e, moves, 2);
+}
+/* A check failed with cleanup pending: the cleanup has run; report. */
+static void ssa_fail_after_cleanup(SsaEmit *e, const SsaValue *v) {
+  BackendContext *ctx = e->ctx;
+  bool values = v->a >= 0 && v->b >= 0;
+  if (values) ssa_report_values(e, ssa_source(e, v->a), ssa_source(e, v->b));
+  size_t length, at = ssa_check_name(e, v->check_origin, v->pos, &length);
+  isa_string_arguments(ctx, at, (size_t)v->aux << 24 | (values ? 0x800000u : 0) | length);
+  runtime_call(ctx, RUNTIME_CHECK_FAILED);
+  isa_trap(ctx);
+}
+/* Debug builds: the statement at pos begins. Records a line row for the
+   debugger and stores a changed line where dyn_trace_push said. */
+static void ssa_debug_position(SsaEmit *e, uint32_t pos) {
+  BackendContext *ctx = e->ctx;
+  if (!pos || pos == e->last_pos || !ctx->debug_locations) return;
+  e->last_pos = pos;
+  uint32_t slot = e->s->trace_slot;
+  if (!ctx->dwarf && !slot) return;
+  const char *path; unsigned line, column;
+  dyn_location_get(ctx->debug_locations, ctx->debug_source, pos - 1, &path, &line, &column);
+  if (ctx->dwarf) {
+    e->rows = ssa_grow(e->rows, &e->row_capacity, e->row_count + 1, sizeof(*e->rows), &e->s->failed);
+    if (e->s->failed) return;
+    e->rows[e->row_count].pc = ctx->text.n; e->rows[e->row_count].path = path;
+    e->rows[e->row_count].line = line; e->rows[e->row_count].column = column;
+    e->rows[e->row_count].pos = pos; e->rows[e->row_count++].prologue_end = false;
+  }
+  if (!slot || line == e->last_line) return;
+  e->last_line = line;
+  if (ctx->a64) {
+    a64s_slot_access(ctx, false, 16, (SsaMemory){A64_FP, -1, 1, (int32_t)slot});
+    a64_immediate(ctx, 17, line);
+    a64_word(ctx, 0xb9000000u | 16u << 5 | 17u); /* str w17, [x16] */
+  } else if (ctx->rv64) {
+    rvs_slot_access(ctx, false, 5, (SsaMemory){8, -1, 1, (int32_t)slot});
+    rv_imm(ctx, 6, line);
+    rv_memory(ctx, true, 6, 5, 0, 2, false); /* sw t1, 0(t0) */
+  } else {
+    x86_mem_op(ctx, -1, true, OP1(0x8b), X_R11, (SsaMemory){X_RBP, -1, 1, (int32_t)slot}, false);
+    CODE(0x41, 0xc7, 0x03); word(ctx, line); /* mov dword [r11], line */
+  }
+}
+static void ssa_debug_epilogue(SsaEmit *e) {
+  if (!e->ctx->dwarf) return;
+  e->epilogues = ssa_grow(e->epilogues, &e->epilogue_capacity, e->epilogue_count + 1, sizeof(*e->epilogues), &e->s->failed);
+  if (!e->s->failed) e->epilogues[e->epilogue_count++] = e->ctx->text.n;
+}
+/* dyn_trace_push's arguments: "function (path:line)" for the function's
+   first line, as the tree emitter writes it. */
+static void ssa_trace_label(SsaEmit *e) {
+  BackendContext *ctx = e->ctx;
+  const DynIrFunction *f = e->s->f;
+  char label[4096]; const char *path = NULL; unsigned line = 0, column = 0;
+  if (ctx->debug_locations) dyn_location_get(ctx->debug_locations, ctx->debug_source, f->source_offset, &path, &line, &column);
+  snprintf(label, sizeof(label), "%s (%s:%u)", f->debug_name ? f->debug_name : f->name, path ? path : "?", line);
+  size_t length = strlen(label);
+  isa_string_arguments(ctx, literal(ctx, label, length), length);
+}
 static void ssa_call_emit(SsaEmit *e, SsaBlock *block, uint32_t *k) {
   Ssa *s = e->s; BackendContext *ctx = e->ctx;
   uint32_t id = block->values.items[*k];
@@ -8536,7 +8715,10 @@ static void ssa_call_emit(SsaEmit *e, SsaBlock *block, uint32_t *k) {
   if (v->aux2 == 2 && ctx->a64) a64_word(ctx, 0xd63f0120u); /* blr x9 */
   else if (v->aux2 == 2 && ctx->rv64) rv_i(ctx, 0x67, 1, 28, 0, 0); /* jalr ra, x28 */
   else if (v->aux2 == 2) CODE(0xff, 0xd0); /* call rax */
-  else if (v->aux2 == 1) runtime_call(ctx, (unsigned)v->aux);
+  else if (v->aux2 == 1) {
+    if (v->aux == 1) ssa_trace_label(e);
+    runtime_call(ctx, (unsigned)v->aux);
+  }
   else if (ctx->win64) { byte(ctx, 0xe8); relocate(ctx, (unsigned)v->aux, R_X86_64_PLT32, -4); word(ctx, 0); } /* home area is in the frame */
   else isa_call_symbol(ctx, (unsigned)v->aux);
   e->call_end = ctx->text.n;
@@ -8588,6 +8770,7 @@ static void ssa_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
   uint32_t id = block->values.items[*k];
   SsaValue *v = &s->values[id];
   e->check_origin = v->check_origin;
+  e->check_pos = v->pos;
   if (v->dead && v->op != SO_CALL) return;
   unsigned d;
   int32_t imm, imm32_scratch = 0;
@@ -8948,7 +9131,9 @@ static void ssa_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
   }
   case SO_CHECK: {
     Cond cond = ssa_compare_values(e, v->a, v->b, (Cond)v->cond);
+    ssa_check_values(e, v);
     ssa_fail_when(e, cond ^ 1, (unsigned)v->aux);
+    e->check_values = false;
     return;
   }
   case SO_VECTOR: {
@@ -8987,15 +9172,7 @@ static void ssa_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
     } else if (v->cond) { ssa_protect_begin(e, block); ssa_call_emit(e, block, k); ssa_protect_end(e); }
     else ssa_call_emit(e, block, k);
     return;
-  case SO_FAIL: {
-    const char *name = function_name(v->check_origin && v->check_origin <= s->ir->function_count ? &s->ir->functions[v->check_origin - 1] : s->f);
-    size_t length = strlen(name);
-    if (length > 800) length = 800;
-    isa_string_arguments(ctx, literal(ctx, name, length), (size_t)v->aux << 24 | length);
-    runtime_call(ctx, RUNTIME_CHECK_FAILED);
-    isa_trap(ctx);
-    return;
-  }
+  case SO_FAIL: ssa_fail_after_cleanup(e, v); return;
   case SO_CONTINUE: runtime_call(ctx, 6); isa_trap(ctx); return;
   case SO_PANIC: {
     SsaMove moves[2] = {ssa_source(e, v->a), ssa_source(e, v->b)};
@@ -9101,16 +9278,25 @@ static void ssa_epilogue(SsaEmit *e) {
     for (unsigned r = 0; r < 32; ++r)
       if (e->alloc->used_callee >> r & 1)
         rvs_slot_access(ctx, false, r, (SsaMemory){8, -1, 1, (int32_t)(e->save_base - 8 * k++)});
+    ssa_debug_epilogue(e);
     rv_move(ctx, 2, 8);
     rv_memory(ctx, false, 8, 2, 0, 3, false); rv_memory(ctx, false, 1, 2, 8, 3, false);
     rv_i(ctx, 0x13, 2, 2, 16, 0); rv_i(ctx, 0x67, 0, 1, 0, 0);
     return;
   }
   if (ctx->a64) {
-    if (ctx->winarm64) { isa_return(ctx); return; }
+    if (ctx->winarm64) {
+      /* isa_return would mark the epilogue directly; SSA marks it once the
+         final emission is known to stand. */
+      BackendDwarf *dwarf = ctx->dwarf;
+      ssa_debug_epilogue(e);
+      ctx->dwarf = NULL; isa_return(ctx); ctx->dwarf = dwarf;
+      return;
+    }
     for (unsigned r = 0; r < 32; ++r)
       if (e->alloc->used_callee >> r & 1)
         a64s_slot_access(ctx, false, r, (SsaMemory){A64_FP, -1, 1, (int32_t)(e->save_base - 8 * k++)});
+    ssa_debug_epilogue(e);
     a64_word(ctx, 0x910003bfu); /* mov sp, x29 */
     a64_word(ctx, 0xa8c17bfdu); /* ldp x29, x30, [sp], #16 */
     a64_word(ctx, 0xd65f03c0u); /* ret */
@@ -9124,6 +9310,7 @@ static void ssa_epilogue(SsaEmit *e) {
     if (!(e->alloc->used_callee >> r & 1)) continue;
     x86_mem_op(ctx, -1, true, OP1(0x8b), r, (SsaMemory){X_RBP, -1, 1, (int32_t)(e->save_base - 8 * k++)}, false);
   }
+  ssa_debug_epilogue(e);
   CODE(0xc9, 0xc3); /* leave; ret */
 }
 /* A recursive function may return directly from its first guard without
@@ -9133,7 +9320,7 @@ static void ssa_x86_base_return(SsaEmit *e) {
   BackendContext *ctx = e->ctx;
   const DynIrProgram *ir = e->s->ir;
   const DynIrFunction *f = e->s->f;
-  if (ctx->a64 || ctx->rv64 || ctx->win64 || f->is_main || f->variadic ||
+  if (ctx->a64 || ctx->rv64 || ctx->win64 || f->is_main || f->variadic || ctx->debug_mode || ctx->dwarf ||
       f->return_type != DYN_TYPE_U64 || !f->body_count || f->param_count > 6) return;
   unsigned self = ctx->function_symbols[f - ir->functions];
   bool recursive = false;
@@ -9214,7 +9401,10 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
   e->frame_bytes = (uint32_t)total;
   bare_stack_check(ctx,e->frame_bytes + 16);
   unsigned k = 0;
+  e->row_count = e->epilogue_count = 0;
+  e->last_pos = 0; e->last_line = 0;
   ssa_x86_base_return(e);
+  e->prologue_pc = ctx->text.n;
   if (ctx->rv64) {
     rv_i(ctx, 0x13, 2, 2, -16, 0);
     rv_memory(ctx, true, 8, 2, 0, 3, false); rv_memory(ctx, true, 1, 2, 8, 3, false);
@@ -9277,6 +9467,16 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
     moves[count++] = m;
   }
   ssa_parallel(e, moves, count);
+  if (ctx->dwarf) {
+    /* The body begins: where a breakpoint on the function stops. */
+    e->rows = ssa_grow(e->rows, &e->row_capacity, e->row_count + 1, sizeof(*e->rows), &s->failed);
+    if (s->failed) return false;
+    const char *path; unsigned line, column;
+    dyn_location_get(ctx->debug_locations, ctx->debug_source, s->f->source_offset, &path, &line, &column);
+    e->rows[e->row_count].pc = ctx->text.n; e->rows[e->row_count].path = path;
+    e->rows[e->row_count].line = line; e->rows[e->row_count].column = column;
+    e->rows[e->row_count].pos = 0; e->rows[e->row_count++].prologue_end = true;
+  }
   for (uint32_t i = 0; i < n && !ctx->text.failed && !s->failed; ++i) {
     uint32_t b = order[i];
     SsaBlock *block = &s->blocks[b];
@@ -9313,7 +9513,10 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
       SsaValue *w = &s->values[a->caches[c].evicted];
       ssa_transfer(e, L_REG, a->caches[c].reg, L_SLOT, (int32_t)(e->spill_base - 8 * (uint32_t)a->caches[c].evicted_slot), w->cls, X_R11);
     }
+    /* Control may arrive from anywhere: the first statement stores again. */
+    e->last_pos = 0; e->last_line = 0;
     for (uint32_t k = 0; k < block->values.count; ++k) {
+      ssa_debug_position(e, s->values[block->values.items[k]].pos);
       if (ctx->a64) a64s_emit_value(e, block, &k);
       else if (ctx->rv64) rvs_emit_value(e, block, &k);
       else ssa_emit_value(e, block, &k);
@@ -9451,19 +9654,21 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
   /* Share failure paths only when both kind and original callee match. */
   for (uint32_t i = 0; i < e->stub_use_count; ++i) {
     unsigned kind = e->stub_uses[i].kind, origin = e->stub_uses[i].origin;
+    /* Debug messages name the statement, so its checks share a path. */
+    uint32_t pos = ctx->debug_mode ? e->stub_uses[i].pos : 0;
     size_t target = SIZE_MAX;
-    for (uint32_t j = 0; j < i; ++j) {
-      if (e->stub_uses[j].kind == kind && e->stub_uses[j].origin == origin) {
+    /* A path that reports values serves its own check only. */
+    for (uint32_t j = 0; j < i && !e->stub_uses[i].values; ++j) {
+      if (e->stub_uses[j].kind == kind && e->stub_uses[j].origin == origin && !e->stub_uses[j].values &&
+          (ctx->debug_mode ? e->stub_uses[j].pos : 0) == pos) {
         target = e->stub_uses[j].target; break;
       }
     }
     if (target == SIZE_MAX) {
       target = ctx->text.n;
-      const char *name = function_name(origin && origin <= s->ir->function_count ? &s->ir->functions[origin - 1] : s->f);
-      size_t length = strlen(name);
-      if (length > 800) length = 800;
-      size_t at = literal(ctx, name, length);
-      isa_string_arguments(ctx, at, (size_t)kind << 24 | length);
+      size_t length, at = ssa_check_name(e, origin, pos, &length);
+      if (e->stub_uses[i].values) ssa_report_values(e, e->stub_uses[i].index, e->stub_uses[i].limit);
+      isa_string_arguments(ctx, at, (size_t)kind << 24 | (e->stub_uses[i].values ? 0x800000u : 0) | length);
       runtime_call(ctx, RUNTIME_CHECK_FAILED);
       isa_trap(ctx);
     }
@@ -9546,7 +9751,9 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
 
 static bool ssa_enabled(BackendContext *ctx, const DynSource *source) {
   const DynOptimization *policy = source->context.optimization;
-  if (ctx->debug_mode || ctx->dwarf) return false;
+  /* Debug and debug-info builds use SSA on the 64-bit targets; the paired
+     32-bit lowering has no line rows or trace stores yet. */
+  if ((ctx->debug_mode || ctx->dwarf) && (ctx->rv32 || ctx->t32)) return false;
   if (policy && policy->level == 1) return false;
   const char *disabled = getenv("DYN_NO_SSA");
   return !disabled || !*disabled || !strcmp(disabled, "0");
@@ -9590,6 +9797,24 @@ static void ssa_prepare(SsaPrepared *p, BackendContext *ctx, const DynSource *so
      stop once five passes in a row are quiet, and the last round runs only
      the passes before the final change. */
   enum { SSA_PASSES = 5, SSA_ROUNDS = 6 };
+  /* Debug builds keep the program as written: no optimizing passes, so
+     every statement keeps its code for stepping and breakpoints. */
+  if (ctx->debug_mode) {
+    order = ssa_order(s, &n);
+    if (!order || s->failed) goto done;
+    ssa_dominators(s, order, n);
+    ssa_split_edges(s);
+    free(order);
+    order = ssa_order(s, &n);
+    if (!order || s->failed) goto done;
+    for (unsigned i = 0; i < n; ++i) {
+      SsaBlock *block = &s->blocks[order[i]];
+      for (uint32_t k = 0; k < block->values.count; ++k) s->values[block->values.items[k]].block = order[i];
+    }
+    ssa_addressing(s, order, n);
+    ssa_dce(s, order, n);
+    goto allocate;
+  }
   unsigned quiet = 0;
   for (unsigned step = 0; step < SSA_PASSES * SSA_ROUNDS && quiet < SSA_PASSES && !s->failed; ++step) {
     unsigned pass = step % SSA_PASSES;
@@ -9677,6 +9902,7 @@ static void ssa_prepare(SsaPrepared *p, BackendContext *ctx, const DynSource *so
     goto done;
   }
   if (ssa_vloops(s, order, n)) ssa_dce(s, order, n);
+allocate:
   if (ctx->vectorize && !ctx->rv64 && ssa_pairs(s, order, n)) {
     ssa_resolve_all(s);
     /* Two trees may load the same pair. */
@@ -9744,6 +9970,9 @@ static int ssa_function(BackendContext *ctx, const DynSource *source, const DynI
                           ? ctx->ssa_prepared[index] : NULL;
   size_t text = ctx->text.n, relocations = ctx->relocation_count, rodata = ctx->rodata.n;
   unsigned unwind_frames = ctx->unwind_frame_count, arm_epilogues = ctx->arm_epilogue_count;
+  /* RISC-V pc-relative pairs name their auipc by anchor symbols, which a
+     repeated or abandoned emission must not leave behind. */
+  unsigned anchors = ctx->rv_anchor_count;
   size_t landings = ctx->landing_count;
   if (p) p->used = true;
   else { p = &local; ssa_prepare(p, ctx, source, ir, f, false); }
@@ -9774,7 +10003,8 @@ static int ssa_function(BackendContext *ctx, const DynSource *source, const DynI
   emit.start = ctx->text.n;
   size_t built_rodata = ctx->rodata.n;
   bool measured = ssa_emit_function(&emit, order, n);
-  if (measured) {
+  /* Debug builds favor compile time: one emission, with long branches. */
+  if (measured && !ctx->debug_mode) {
     emit.measured_blocks = malloc(s->block_count * sizeof(size_t));
     emit.measured_jumps = malloc((emit.jump_count + 1) * sizeof(size_t));
     if (emit.measured_blocks && emit.measured_jumps) {
@@ -9782,13 +10012,47 @@ static int ssa_function(BackendContext *ctx, const DynSource *source, const DynI
       for (uint32_t i = 0; i < emit.jump_count; ++i) emit.measured_jumps[i] = emit.jumps[i].at;
       emit.measured_jump_count = emit.jump_count;
       ctx->text.n = text; ctx->relocation_count = relocations; ctx->rodata.n = built_rodata;
-      ctx->unwind_frame_count = unwind_frames; ctx->arm_epilogue_count = arm_epilogues;
+      ctx->unwind_frame_count = unwind_frames; ctx->arm_epilogue_count = arm_epilogues; ctx->rv_anchor_count = anchors;
       ctx->landing_count = landings;
       emit.jump_count = emit.stub_use_count = emit.table_count = 0;
       measured = ssa_emit_function(&emit, order, n);
     }
   }
   ctx->ssa_emit_ms += backend_timing(&source->context, &phase);
+  if (measured && ctx->dwarf) {
+    /* Rows come in emission order, so their addresses only grow. */
+    measured = backend_dwarf_prologue(ctx->dwarf, emit.prologue_pc);
+    for (uint32_t i = 0; i < emit.row_count && measured; ++i)
+      measured = backend_dwarf_line(ctx->dwarf, emit.rows[i].pc, emit.rows[i].path, emit.rows[i].line,
+                                    emit.rows[i].column, emit.rows[i].prologue_end);
+    for (uint32_t i = 0; i < emit.epilogue_count && measured; ++i)
+      measured = backend_dwarf_epilogue(ctx->dwarf, emit.epilogues[i]);
+    /* Locals in frame memory are where the debugger finds them; others
+       (offset 0) have no fixed location and get no variable record. */
+    for (uint32_t i = 0; i < f->local_count && i < MAX_LOCALS && measured; ++i) {
+      ctx->local_offsets[i] = s->memory_local[i] && s->alias[i] < 0 ? s->local_offset[i] : 0;
+      ctx->local_scope_begin[i] = ctx->local_scope_end[i] = 0;
+      if (!s->scope_low || !s->scope_low[i]) continue;
+      /* The scope's code: from its first statement row to the first later
+         row outside it. Debug code keeps statements in source order. */
+      uint32_t low = s->scope_low[i], high = s->scope_high[i];
+      size_t begin = SIZE_MAX, last = 0, end = ctx->text.n;
+      for (uint32_t r = 0; r < emit.row_count; ++r) {
+        uint32_t pos = emit.rows[r].pos;
+        if (pos < low || pos > high) continue;
+        if (emit.rows[r].pc < begin) begin = emit.rows[r].pc;
+        if (emit.rows[r].pc > last) last = emit.rows[r].pc;
+      }
+      if (begin == SIZE_MAX) { ctx->local_scope_begin[i] = ctx->local_scope_end[i] = ctx->text.n; continue; }
+      for (uint32_t r = 0; r < emit.row_count; ++r) {
+        uint32_t pos = emit.rows[r].pos;
+        if (emit.rows[r].pc > last && emit.rows[r].pc < end && (pos < low || pos > high)) end = emit.rows[r].pc;
+      }
+      ctx->local_scope_begin[i] = begin;
+      ctx->local_scope_end[i] = end;
+    }
+    if (!measured) ctx->text.failed = true;
+  }
   if (measured) {
     result = SSA_EMITTED;
     /* Landing records hold block numbers until the blocks are placed. */
@@ -9809,7 +10073,7 @@ static int ssa_function(BackendContext *ctx, const DynSource *source, const DynI
     ctx->landing_count = landings;
     /* Roll back; the tree emitter takes the function instead. */
     ctx->text.n = text; ctx->relocation_count = relocations; ctx->rodata.n = rodata;
-    ctx->unwind_frame_count = unwind_frames; ctx->arm_epilogue_count = arm_epilogues;
+    ctx->unwind_frame_count = unwind_frames; ctx->arm_epilogue_count = arm_epilogues; ctx->rv_anchor_count = anchors;
     ctx->text.failed = ctx->rodata.failed = ctx->relocation_failed = false;
   }
   if (result == SSA_EMITTED && source->context.optimization && source->context.optimization->remarks)
@@ -9820,6 +10084,7 @@ done:
   if ((ctx->rv32 || ctx->t32) && result == SSA_UNSUPPORTED && ctx->optimization_remarks)
     fprintf(stderr, "remark: %s: tree emitter (paired SSA boundary)\n", f->name);
   free(order);
+  free(emit.rows); free(emit.epilogues);
   free(emit.stub_uses); free(emit.jumps); free(emit.tables); free(emit.measured_blocks); free(emit.measured_jumps);
   ssa_prepared_free(p);
   return result;
@@ -9836,6 +10101,9 @@ static unsigned ssa_parallel_workers(BackendContext *ctx, const DynSource *sourc
   long workers = setting && *setting ? strtol(setting, NULL, 10) : sysconf(_SC_NPROCESSORS_ONLN);
 #endif
   if (!(setting && *setting) && workers > 6) workers = 6;
+  /* Debug preparation is light (no optimizing passes), so serial emission
+     dominates and more workers only contend for memory: two measured best. */
+  if (!(setting && *setting) && ctx->debug_mode && workers > 2) workers = 2;
   if (workers < 1) workers = 1;
   if (workers > 64) workers = 64;
   if (ir->function_count < 16) return 1;
