@@ -537,7 +537,41 @@ pub fn arena_try_extend(arena: *Arena, memory: *u8, size: usize, extra: usize) b
 // Failure: panics when a buffer or bounded arena is exhausted or the alignment is invalid.
 // Thread safety: caller synchronizes access to the arena.
 pub fn arena_push(arena: *Arena, size: usize, alignment: usize) *u8 {
+  memory := arena_push_fast(arena, size, alignment)
+  if memory != nil {
+    zero_bytes_fast(#slice(memory, size))
+    return memory
+  }
   return arena_must(arena_try_push_impl(arena, size, alignment, true))
+}
+
+// The common push, small enough to inline: room in the current block, already
+// committed, valid alignment, and no observer. Returns nil for anything else,
+// which arena_try_push_impl then handles with the same result.
+fn arena_push_fast(arena: *Arena, size: usize, alignment: usize) *u8 {
+  block := arena.current
+  if arena.events != nil || size == 0 || alignment == 0 || (alignment & (alignment - 1)) != 0 {
+    return nil
+  }
+  if block.offset >= #len(block.data) {
+    return nil
+  }
+  padding := (0 - #cast(usize, &block.data[block.offset])) & (alignment - 1)
+  room := #len(block.data) - block.offset
+  if padding > room || size > room - padding {
+    return nil
+  }
+  end := block.offset + padding + size
+  if block.owns_memory && end > block.committed {
+    return nil
+  }
+  memory := &block.data[block.offset + padding]
+  block.offset = end
+  used := block.base + end - header_size()
+  if used > arena.peak_used {
+    arena.peak_used = used
+  }
+  return memory
 }
 
 // Ownership: result borrows arena backing; cast memory to the requested element type.
@@ -555,6 +589,10 @@ pub fn arena_push_array(arena: *Arena, count: usize, element_size: usize, alignm
 
 // Like arena_push, without zeroing, for bytes that are overwritten right away.
 pub fn arena_push_uninit(arena: *Arena, size: usize, alignment: usize) *u8 {
+  memory := arena_push_fast(arena, size, alignment)
+  if memory != nil {
+    return memory
+  }
   return arena_must(arena_try_push_impl(arena, size, alignment, false))
 }
 
