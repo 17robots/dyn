@@ -14,6 +14,25 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- Text diagnostics show the source line under each error, with the span
+  underlined, and no longer end in `[range L:C-L:C]`. Tools that read ranges
+  should use `--diagnostics json`, which is unchanged.
+- Error messages name what they are about: `unknown name 'total'`,
+  `integer literal is not representable in expected type u8: 300 does not fit`,
+  `case is not exhaustive: missing Shape.Rect`, and for a generic call that
+  cannot infer a type, the parameter's shape and the argument's type. The old
+  wording stays at the start of each message.
+- A local whose initializer has an error is still declared, so its later uses
+  are no longer reported as unknown names.
+- `.Variant` without its enum type reports `an enum variant needs its type:
+  write Enum.Variant, not .Variant` instead of a statement-layout error.
+- Debug stack traces show the line each frame is running, so a caller's frame
+  names the line of its call rather than the function's first line.
+- Release builds no longer replace small inputs of Fibonacci-shaped recursive
+  functions with a precomputed table. The recursive base-case return remains.
+- `tests/run.py` runs tests in parallel (`DYN_TEST_JOBS`, `DYN_TEST_ONLY`);
+  `tests/expect/*.dyn` hold diagnostic tests written as `// error:` comments.
+
 - New `std/net/http/evented`: an event-loop HTTP/1.1 server on `std/event`
   (epoll/kqueue). Each worker multiplexes many nonblocking keep-alive
   connections, so slow or idle clients no longer hold a thread. Handlers keep the
