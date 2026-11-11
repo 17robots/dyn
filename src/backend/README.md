@@ -59,9 +59,7 @@ checks other than overflow checks, keeps the sum in an accumulator and jumps
 back to its start instead of making the last call. Dense
 `case` statements become jump tables. On x86-64 System V, a recursive
 function whose first pure unsigned guard returns an argument can bypass frame
-setup on that path. A two-statement unsigned recurrence with two decreasing
-self calls can also pack its first eight proved byte-sized results into a
-constant. Larger arguments execute the original checked code. Small leaf
+setup on that path. Small leaf
 functions inside loops are inlined under a separate size budget at O2; their
 arguments are captured once, and constant subtrees are shared. Runtime checks
 retain their originating callee through inlining, including tree fallback and

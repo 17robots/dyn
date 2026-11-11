@@ -9126,53 +9126,6 @@ static void ssa_epilogue(SsaEmit *e) {
   }
   CODE(0xc9, 0xc3); /* leave; ret */
 }
-/* Peel a bounded prefix of a pure two-branch unsigned recurrence. The
-   complete body must be `if n < k { return n }; return f(n-a)+f(n-b)`
-   (also <=), with positive a/b <= the first recursive input. Every table
-   entry is proved non-overflowing; no load, effect or runtime check is skipped. */
-static bool ssa_x86_recurrence_prefix(SsaEmit *e, const DynIrStmt *guard,
-                                      const DynIrExpr *test, uint64_t limit) {
-  const DynIrProgram *ir = e->s->ir;
-  const DynIrFunction *f = e->s->f;
-  if (f->param_count != 1 || f->body_count != 2 ||
-      ir->expressions[ir->statements[ir->children[guard->body_start]].expression].integer != ir->params[f->param_start].local_id ||
-      (test->op != DYN_OP_LT && test->op != DYN_OP_LE)) return false;
-  uint64_t first = limit + (test->op == DYN_OP_LE);
-  if (!first || first > 8) return false;
-  const DynIrStmt *ret = &ir->statements[ir->children[f->body_start + 1]];
-  if (ret->kind != DYN_STMT_RETURN || ret->expression >= ir->expression_count) return false;
-  const DynIrExpr *sum = &ir->expressions[ret->expression];
-  if (sum->kind != DYN_EXPR_BINARY || sum->op != DYN_OP_ADD || sum->type != DYN_TYPE_U64 ||
-      sum->left >= ir->expression_count || sum->right >= ir->expression_count) return false;
-  uint64_t step[2];
-  DynExprId calls[2] = {sum->left, sum->right};
-  for (unsigned i = 0; i < 2; ++i) {
-    const DynIrExpr *call = &ir->expressions[calls[i]];
-    if (call->kind != DYN_EXPR_CALL || call->integer != (uint64_t)(f - ir->functions) || call->item_count != 1) return false;
-    const DynIrExpr *arg = &ir->expressions[ir->items[call->item_start].expression];
-    if (arg->kind != DYN_EXPR_BINARY || arg->op != DYN_OP_SUB || arg->type != DYN_TYPE_U64 ||
-        arg->left >= ir->expression_count || arg->right >= ir->expression_count) return false;
-    const DynIrExpr *n = &ir->expressions[arg->left], *delta = &ir->expressions[arg->right];
-    if (n->kind != DYN_EXPR_NAME || n->integer != ir->params[f->param_start].local_id ||
-        delta->kind != DYN_EXPR_INT || !delta->integer || delta->integer > first) return false;
-    step[i] = delta->integer;
-  }
-  uint64_t values[8], packed = 0;
-  for (uint64_t n = 0; n < 8; ++n) {
-    values[n] = n < first ? n : values[n - step[0]] + values[n - step[1]];
-    if (values[n] > 255) return false;
-    packed |= values[n] << (8 * n);
-  }
-  BackendContext *ctx = e->ctx;
-  x86_reg_op(ctx, -1, true, OP1(0x83), 7, X_RDI, false); byte(ctx, 8);
-  byte(ctx, 0x73); size_t skip = ctx->text.n; byte(ctx, 0); /* jae ordinary entry */
-  x86_mov(ctx, X_RCX, X_RDI);
-  CODE(0x48, 0xc1, 0xe1, 0x03); /* shift = n * 8 */
-  x86_move_immediate(ctx, X_RAX, packed);
-  CODE(0x48, 0xd3, 0xe8, 0x0f, 0xb6, 0xc0, 0xc3); /* shr rax, cl; movzx eax, al; ret */
-  ctx->text.data[skip] = (unsigned char)(ctx->text.n - skip - 1);
-  return true;
-}
 /* A recursive function may return directly from its first guard without
    needing a frame. Read only unmodified integer arguments here; the regular
    SSA entry still handles every other input and every runtime check. */
@@ -9210,7 +9163,6 @@ static void ssa_x86_base_return(SsaEmit *e) {
     if (param->local_id == result->integer) result_reg = args[i];
   }
   if (input_reg == UINT_MAX || result_reg == UINT_MAX) return;
-  if (ssa_x86_recurrence_prefix(e, guard, test, limit->integer)) return;
   Cond condition;
   switch (test->op) {
   case DYN_OP_EQ: condition = CC_E; break;

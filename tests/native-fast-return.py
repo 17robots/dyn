@@ -92,7 +92,8 @@ with tempfile.TemporaryDirectory(prefix='dyn-base-return-') as directory:
             code=symbols(Path(str(output)+'.o'))
             for name in ('less','equal','different','above','at_least','at_most'):
                 assert code[name][0] in (0x48,0x49) and 0xc3 in code[name][:40],(name,code[name][:16].hex())
-            assert code['less'][3]==8 and code['alternate'][3]==8, code['less'][:8].hex()
+            # The guard compares against the source limit: no precomputed table of results.
+            assert code['less'][3]==2 and code['alternate'][3]==1, (code['less'][:8].hex(), code['alternate'][:8].hex())
             assert code['unsafe'][3]==1 and code['overflowing'][3]==2
             assert code['later'][3]==2, code['later'][:8].hex()
             for name in ('signed','effect','cleanup'):
