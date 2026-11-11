@@ -303,8 +303,8 @@ There is no phase 3: generic types were rejected.
   call and shows the trace), depth limit, `&min` without type arguments.
 - Cache: editing a generic body rebuilds its chunk and keeps unrelated chunks;
   adding the first `min(f32)` call rebuilds the owner chunk only.
-- Grammar: `tests/grammar-feature-errors` covers each rejected form in the
-  non-goals list.
+- Grammar: `tests/expect/` covers rejected forms such as `.Variant` and local
+  type aliases.
 
 ## Implementation status
 

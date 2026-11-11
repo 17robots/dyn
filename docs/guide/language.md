@@ -241,8 +241,8 @@ Loops may be labeled as `name: for`; `break: name` and `continue: name` target a
 loop with that label. Active labels cannot duplicate. Transfers run defers for every exited scope.
 
 Struct field order determines layout. Packed structs preserve order, remove inter-field padding,
-and have alignment 1 on current Linux x86-64 target. Construction zeroes every field, then applies
-explicit literal members. `.{ ... }` requires expected
+and have alignment 1. Construction gives every field its default (zero when it declares none), then
+applies explicit literal members. `.{ ... }` requires expected
 struct type. Struct assignment copies by value. Unknown/duplicate fields, duplicate declarations,
 by-value recursion and aggregate comparison fail. Empty structs have size and alignment 1 so arrays
 have stable element stride and distinct elements have distinct addresses.
@@ -474,12 +474,12 @@ is not a supported-feature claim:
 | Module-level transparent type alias | Supported |
 | Local type alias inside a function | Reserved; diagnosed as unsupported |
 | Enum declaration-order tags | Supported |
-| Explicit enum values | Rejected |
+| Explicit enum values | Supported for enums without payloads |
 | `.Variant` without the enum type | Not planned; write `Enum.Variant` |
 | Several imports in one `use`, comma-separated | Supported |
 | Optional import alias followed by a new global | Supported; alias stays on the import line |
 
-`tests/grammar-feature-errors` checks the reserved forms. See
+`tests/expect/` checks the reserved forms (`bare-variant.dyn`, `local-type-alias.dyn`). See
 [toolchain and grammar provenance](tools.md) for generation/release checks.
 
 ## Build modes and syntax stability
