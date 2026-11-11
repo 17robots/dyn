@@ -14,6 +14,11 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- Release builds fold constant globals, including `<<` and `>>` in their
+  initializers, so `const Capacity: usize = 1 << 23` no longer loads from
+  memory at each use, and a small helper that reads a constant can inline.
+  A hash map kernel ran 22% faster. Taking a constant's address still gives
+  its `*const` storage.
 - Debug builds no longer make two thread-id system calls per function call
   for the stack trace: each thread's trace slot is found from its stack
   address. A call-heavy kernel dropped from 200s to 23s in a debug build.

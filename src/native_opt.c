@@ -81,6 +81,13 @@ static bool value(Eval *c, DynExprId id, uint64_t *out, unsigned depth) {
     return st && st <= c->ir->statement_count &&
            value(c, c->ir->statements[st - 1].expression, out, depth + 1);
   }
+  if (e->kind == DYN_EXPR_GLOBAL) {
+    if (e->integer >= c->ir->global_count)
+      return false;
+    const DynIrGlobal *g = &c->ir->globals[e->integer];
+    return g->is_const && !g->foreign && g->initializer != DYN_NO_EXPR &&
+           g->type == e->type && value(c, g->initializer, out, depth + 1);
+  }
   if (e->kind == DYN_EXPR_CALL && c->level >= 3 && !c->function &&
       e->integer < c->ir->function_count) {
     const DynIrFunction *f = &c->ir->functions[e->integer];
@@ -133,6 +140,27 @@ static bool value(Eval *c, DynExprId id, uint64_t *out, unsigned depth) {
       return false;
     const DynIrExpr *left = &c->ir->expressions[e->left];
     unsigned operand_bits = width(c, left->type);
+    if (e->op == DYN_OP_SHL || e->op == DYN_OP_SHR) {
+      /* Counts are masked to the left operand's width; the count may have
+         another integer type. */
+      if (operand_bits != bits || bits < 8)
+        return false;
+      unsigned n = (unsigned)(b & (bits - 1));
+      a &= mask;
+      if (e->op == DYN_OP_SHL) {
+        r = (a << n) & mask;
+        int64_t back = (int64_t)normalize(r, bits, sign);
+        uint64_t undone = sign ? (uint64_t)(back >> n) & mask : r >> n;
+        if (undone != a && !e->wrap)
+          return false;
+      } else {
+        r = a >> n;
+        if (sign && (a & high))
+          r = (r | ~(mask >> n)) & mask;
+      }
+      *out = normalize(r, bits, sign);
+      return true;
+    }
     if (!operand_bits || left->type != c->ir->expressions[e->right].type)
       return false;
     uint64_t omask = UINT64_MAX >> (64 - operand_bits),
@@ -1711,11 +1739,24 @@ static bool optimize(const DynSource *source, const DynIrProgram *input, DynIrPr
     c.level = 3;
   }
   struct timespec optimization_time = dyn_timing_start(&source->context);
+  /* A constant global whose address is taken stays a global; its uses as a
+     value fold to its initializer. */
+  bool *addressed = calloc(input->expression_count ? input->expression_count : 1, sizeof(*addressed));
+  if (!addressed) {
+    free(samples);
+    dyn_native_optimization_free(o);
+    return false;
+  }
+  for (size_t i = 0; i < input->expression_count; ++i) {
+    const DynIrExpr *e = &input->expressions[i];
+    if (e->kind == DYN_EXPR_UNARY && e->op == DYN_OP_ADDRESS && e->left < input->expression_count)
+      addressed[e->left] = true;
+  }
   for (size_t i = 0; i < input->expression_count; ++i) {
     if (input->live.expressions && !input->live.expressions[i]) continue;
     const DynIrExpr *e = &input->expressions[i];
     if (e->kind == DYN_EXPR_INT || e->kind == DYN_EXPR_BOOL ||
-        e->kind == DYN_EXPR_CHAR)
+        e->kind == DYN_EXPR_CHAR || (e->kind == DYN_EXPR_GLOBAL && addressed[i]))
       continue;
     uint64_t result;
     c.remaining = 256;
@@ -1725,13 +1766,14 @@ static bool optimize(const DynSource *source, const DynIrProgram *input, DynIrPr
     dest->kind = e->type == DYN_TYPE_BOOL ? DYN_EXPR_BOOL : DYN_EXPR_INT;
     dest->integer = result;
     dest->boolean = result != 0;
-    if (e->kind == DYN_EXPR_NAME)
+    if (e->kind == DYN_EXPR_NAME || e->kind == DYN_EXPR_GLOBAL)
       ++o->propagated;
     else if (e->kind == DYN_EXPR_CALL)
       ++o->calls;
     else
       ++o->folded;
   }
+  free(addressed);
   if (level >= 2)
     for (size_t i = 0; i < input->statement_count; ++i) {
       if (input->live.statements && !input->live.statements[i]) continue;
