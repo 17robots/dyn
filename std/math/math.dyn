@@ -276,6 +276,18 @@ pub fn mul_overflows(a, b: $T) bool {
   result := a * b
   return result / a != b
 }
+// Arithmetic that wraps on overflow, as + - * do by default. Programs built
+// with --check-overflow use these where wrapping is meant, such as hashes;
+// std code always wraps, so these never check.
+pub fn wrapping_add(a, b: $T) T {
+  return a + b
+}
+pub fn wrapping_sub(a, b: $T) T {
+  return a - b
+}
+pub fn wrapping_mul(a, b: $T) T {
+  return a * b
+}
 // Arithmetic that stops at T's limits instead of overflowing.
 pub fn saturating_add(a, b: $T) T {
   zero: T = 0

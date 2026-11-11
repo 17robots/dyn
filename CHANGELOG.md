@@ -14,6 +14,16 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- `#cast(u32, 0x80000000)` compiles: an integer literal in `#cast` takes the
+  target type when it fits, instead of the default `i32`.
+- New `--check-overflow` for debug builds: `+`, `-`, `*`, `<<` and negation in
+  the program's own modules panic on overflow instead of wrapping. std and
+  vendor code keeps wrapping. New `math.wrapping_add`, `wrapping_sub` and
+  `wrapping_mul` mark arithmetic that is meant to wrap.
+- `for i in 0..10` with two literal bounds always counts in `usize`. It no
+  longer takes the type of the first typed use of `i` in the body, so a use such
+  as `total += i` with `total: i32` is now an error at that line. Write
+  `for i: i32 in 0..10`.
 - Text diagnostics show the source line under each error, with the span
   underlined, and no longer end in `[range L:C-L:C]`. Tools that read ranges
   should use `--diagnostics json`, which is unchanged.

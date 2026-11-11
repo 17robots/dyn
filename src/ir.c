@@ -390,6 +390,17 @@ static bool validate_ir(const DynIrProgram *ir) {
     if ((size_t)ir->case_arms[i].pattern_start + ir->case_arms[i].pattern_count > ir->pattern_count || (size_t)ir->case_arms[i].body_start + ir->case_arms[i].body_count > ir->child_count) return false;
   return true;
 }
+/* Whether integer arithmetic written at span wraps. It always does, except
+   with --check-overflow in the program's own modules: std and vendor code
+   relies on wrapping (hashes, checksums), so it keeps it. */
+static bool ir_wraps(const DynSource *source, DynSpan span) {
+  const DynOptimization *o = source ? source->context.optimization : NULL;
+  if (!o || !o->check_overflow) return true;
+  const char *path, *text;
+  size_t length, at;
+  dyn_source_position(source, span.start_byte, &path, &text, &length, &at);
+  return path && (strstr(path, "/std/") || strstr(path, "/vendor/") || strstr(path, "/share/dyn/"));
+}
 static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgram *ir, bool proofs) {
   memset(ir, 0, sizeof(*ir));
   size_t extra = 0;
@@ -461,7 +472,7 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
     DynIrExpr *e = &ir->expressions[i];
     if ((e->kind == DYN_EXPR_BINARY && dyn_op_wraps(e->op)) ||
         (e->kind == DYN_EXPR_UNARY && e->op == DYN_OP_NEG))
-      e->wrap = true;
+      e->wrap = ir_wraps(source, e->span);
   }
   for (size_t i = 0; i < ir->expression_count; ++i)
     if (ir->expressions[i].type == DYN_TYPE_INFER) {
@@ -695,7 +706,7 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
     }
     DynType type = ir->expressions[left].type;
     DynExprId binary = (DynExprId)ir->expression_count;
-    ir->expressions[ir->expression_count++] = (DynIrExpr){.kind = DYN_EXPR_BINARY, .type = type, .op = st->assignment_op, .wrap = dyn_op_wraps(st->assignment_op), .left = left, .right = st->expression, .span = st->span};
+    ir->expressions[ir->expression_count++] = (DynIrExpr){.kind = DYN_EXPR_BINARY, .type = type, .op = st->assignment_op, .wrap = dyn_op_wraps(st->assignment_op) && ir_wraps(source, st->span), .left = left, .right = st->expression, .span = st->span};
     st->expression = binary;
     st->assignment_op = DYN_OP_NONE;
   }

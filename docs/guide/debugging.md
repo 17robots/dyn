@@ -62,6 +62,13 @@ Native FFI libraries remain visible through their own debug information. Debugge
 parsers do not understand Dyn expressions, so use simple variable names, fields, addresses, and
 the debugger's C-like casts when inspecting values.
 
+## Overflow checks
+
+Integer arithmetic wraps. To find overflow that is not meant, build with `--check-overflow`:
+`+`, `-`, `*`, `<<` and negation in your own modules then panic with `overflow.ok` and a stack
+trace. Library code keeps wrapping. Use `math.wrapping_add`, `wrapping_sub` and `wrapping_mul`
+from `std/math` where your code wraps on purpose. The flag is for debug builds only.
+
 ## Memory faults
 
 On Linux, macOS and Windows, a debug program that touches an invalid address prints `memory fault`

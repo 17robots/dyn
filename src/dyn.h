@@ -52,6 +52,9 @@ typedef struct {
 } DynWork;
 typedef struct {
   bool native_cpu, remarks;
+  /* Debug builds with --check-overflow: + - * << and negation in the
+     program's own modules panic on overflow instead of wrapping. */
+  bool check_overflow;
   unsigned level; /* Zero preserves the default O2 release policy. */
   const char *sample_profile;
   uint64_t profile_hash; /* Computed once per command, shared by module workers. */

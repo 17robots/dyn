@@ -224,12 +224,10 @@ the loop-local binding. `for *value` binds a mutable pointer to each source elem
 rejects const slices and requires assignable arrays. `for *const value` binds a const pointer.
 `for i in first..last` counts integers from `first` up to but excluding `last`; `..=` includes
 `last`. Both bounds share one integer type, and a literal bound adapts to the other bound, so
-`0..count` has `count`'s type. When both bounds are literals, `i` takes the type of its first
-use that meets a known integer type: `total += i` with `total: i32` counts in `i32`, as do
-passing it to an `i32` parameter or returning it from an `i32` function. With no such use it
-counts in `usize`, so `for i in 0..3 { values[i] }` indexes directly; indexes accept any integer
-type either way. A typed binding sets the type of both bounds: `for i: i32 in -3..3`. A negative
-literal range needs a typed binding or a use that sets a signed type. Bounds evaluate once, first
+`0..count` has `count`'s type. When both bounds are literals, `i` is a `usize`, whatever the
+body does with it, so `for i in 0..3 { values[i] }` indexes directly. A typed binding sets the type
+of both bounds: `for i: i32 in -3..3` or `for i: i32 in 0..5 { total += i }` with `total: i32`.
+A negative literal range needs a typed binding. Bounds evaluate once, first
 bound first. An empty range such as `5..2` runs no iterations. `i` is a copy: assigning it does not change iteration, and pointer
 bindings are rejected. Inclusive ranges may end at the type's maximum without overflow.
 `for i in #reverse(first..last)` visits the same values from last to first: `#reverse(0..3)` gives
@@ -371,6 +369,12 @@ in a constant expression is a compile error. Shift counts are masked to the left
 values. Bitwise operators require integers. Division and remainder by zero panic, and the signed
 minimum divided by `-1` panics. `std/math` has `add_overflows`, `sub_overflows`, `mul_overflows` and
 saturating arithmetic for code that wants them.
+
+`dyn build --check-overflow` (debug builds only) makes `+`, `-`, `*`, `<<`, unary negation and
+their compound assignments in the program's own modules panic with `overflow.ok` instead of
+wrapping. `std` and `vendor` code keeps wrapping. Write `math.wrapping_add`, `wrapping_sub` or
+`wrapping_mul` where a program means to wrap, so the code reads the same with and without the flag.
+Release builds always wrap; the flag is a way to find overflow bugs, not a change in meaning.
 
 Untyped integer constants are evaluated exactly for the implemented constant-expression operators,
 then adapted only when their value is representable in the expected type. Runtime implicit numeric
