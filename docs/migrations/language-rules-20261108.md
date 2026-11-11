@@ -21,8 +21,10 @@ the errors, then check the cases at the end, which still compile.
 
 - A nested block may now shadow an outer name. Code that relied on the old
   error to catch a reused name should be read again.
-- `for i in 0..n` takes its type from the first typed use of `i` in the body.
-  A loop that used `i` as a `usize` index first and an `i32` later keeps `usize`.
+- Since 2026-11-11, `for i in 0..10` with two literal bounds always counts in
+  `usize`; it no longer takes the type of the first typed use of `i`. Where the
+  body needs another type, the compiler reports the mismatch at that use: write
+  `for i: i32 in 0..10`.
 - An inferred constant built from literals (`const LIMIT := 64`) adapts to each
   use. Give it a type (`const LIMIT: u32 = 64`) to keep the old fixed type.
 - Literals passed as `any` are `i32`, `f64` and `[]const u8`.

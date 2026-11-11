@@ -2458,8 +2458,16 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
     return e->type = DYN_TYPE_USIZE;
   }
   if (a->expressions[id].kind == DYN_EXPR_CAST) {
-    DynType source = check_expr(sema, a, a->expressions[id].left, s, errors, DYN_TYPE_INFER),
-            target = (DynType)a->expressions[id].integer;
+    DynType target = (DynType)a->expressions[id].integer;
+    /* #cast(u32, 0x80000000): an integer literal that fits the target takes
+       it, rather than the default i32 it may not fit. */
+    DynExprId operand = a->expressions[id].left;
+    DynType literal_type = operand != DYN_NO_EXPR && a->expressions[operand].kind == DYN_EXPR_INT &&
+                                   !dyn_type_is_distinct(target) && integer(sema, target) &&
+                                   literal_fits(sema, a->expressions[operand].integer, target)
+                               ? target
+                               : DYN_TYPE_INFER;
+    DynType source = check_expr(sema, a, operand, s, errors, literal_type);
     if (source == DYN_TYPE_ERROR)
       return a->expressions[id].type = DYN_TYPE_ERROR;
     bool source_ptr = dyn_type_is_pointer(source) || source == DYN_TYPE_RAWPTR;
@@ -2935,104 +2943,6 @@ static bool lvalue_const(DynAstProgram *a, DynExprId id) {
   if (e->kind == DYN_EXPR_GLOBAL)
     return e->integer < a->global_count && a->globals[e->integer].is_const;
   return false;
-}
-/* An all-literal range takes its binding's type from the first use that meets
-   a known integer type: a typed target, operand, parameter or return. */
-typedef struct {
-  Sema *sema;
-  DynAstProgram *a;
-  const DynSource *s;
-  DynSpan name;
-  DynType hint;
-  unsigned work;
-} RangeHint;
-static bool range_mentions(RangeHint *h, DynExprId id, unsigned depth) {
-  if (id == DYN_NO_EXPR || depth > 32) return false;
-  const DynAstExpr *e = &h->a->expressions[id];
-  if (e->kind == DYN_EXPR_NAME) return dyn_span_text_equal(e->span, h->name, h->s);
-  if (e->kind == DYN_EXPR_UNARY)
-    return (e->op == DYN_OP_NEG || e->op == DYN_OP_BIT_NOT) && range_mentions(h, e->left, depth + 1);
-  if (e->kind != DYN_EXPR_BINARY || e->op < DYN_OP_ADD) return false;
-  if (e->op >= DYN_OP_EQ && e->op <= DYN_OP_LOGICAL_OR) return false;
-  if (e->op == DYN_OP_SHL || e->op == DYN_OP_SHR) return range_mentions(h, e->left, depth + 1);
-  return range_mentions(h, e->left, depth + 1) || range_mentions(h, e->right, depth + 1);
-}
-static DynType range_known_name(RangeHint *h, DynSpan name) {
-  if (dyn_span_text_equal(name, h->name, h->s)) return DYN_TYPE_INFER;
-  uint32_t l = find_local(h->sema, h->a, name, h->s);
-  if (l != UINT32_MAX) return h->a->locals[l].has_untyped ? DYN_TYPE_INFER : h->a->locals[l].type;
-  uint32_t g = sema_find_global_name(h->sema, h->a, name, h->s);
-  if (g != UINT32_MAX) return h->a->globals[g].has_untyped ? DYN_TYPE_INFER : h->a->globals[g].type;
-  return DYN_TYPE_INFER;
-}
-static DynType range_known(RangeHint *h, DynExprId id) {
-  if (id == DYN_NO_EXPR) return DYN_TYPE_INFER;
-  const DynAstExpr *e = &h->a->expressions[id];
-  if (e->kind == DYN_EXPR_LEN) return DYN_TYPE_USIZE;
-  if (e->kind == DYN_EXPR_NAME) return range_known_name(h, e->span);
-  if (e->kind == DYN_EXPR_CALL) {
-    uint32_t fn = sema_find_function(h->sema, h->a, e->span, h->s);
-    return fn == UINT32_MAX || h->a->functions[fn].is_generic ? DYN_TYPE_INFER
-                                                              : h->a->functions[fn].return_type;
-  }
-  if (e->kind == DYN_EXPR_FIELD && e->left != DYN_NO_EXPR) {
-    DynType base = range_known(h, e->left);
-    DynAstPointer *pointer = pointer_info(h->a, base);
-    if (pointer) base = pointer->pointee;
-    if (!dyn_type_is_struct(base)) return DYN_TYPE_INFER;
-    uint32_t sid = base - DYN_TYPE_STRUCT_BASE;
-    uint32_t field = sema_find_field(h->a, sid, e->span, h->s);
-    return field == UINT32_MAX ? DYN_TYPE_INFER
-                               : h->a->fields[h->a->structs[sid].field_start + field].type;
-  }
-  return DYN_TYPE_INFER;
-}
-static void range_offer(RangeHint *h, DynType type) {
-  if (h->hint == DYN_TYPE_INFER && type != DYN_TYPE_INFER && type != DYN_TYPE_ERROR &&
-      integer(h->sema, type))
-    h->hint = type;
-}
-static void range_expr(RangeHint *h, DynExprId id, unsigned depth) {
-  if (id == DYN_NO_EXPR || h->hint != DYN_TYPE_INFER || depth > 64 || ++h->work > 100000) return;
-  DynAstExpr e = h->a->expressions[id];
-  if (e.kind == DYN_EXPR_BINARY) {
-    if (range_mentions(h, e.left, 0)) range_offer(h, range_known(h, e.right));
-    if (range_mentions(h, e.right, 0)) range_offer(h, range_known(h, e.left));
-  }
-  if (e.kind == DYN_EXPR_CALL) {
-    uint32_t fn = sema_find_function(h->sema, h->a, e.span, h->s);
-    if (fn != UINT32_MAX && !h->a->functions[fn].is_generic)
-      for (uint32_t i = 0; i < e.item_count && i < h->a->functions[fn].param_count; ++i)
-        if (range_mentions(h, h->a->items[e.item_start + i].expression, 0))
-          range_offer(h, h->a->params[h->a->functions[fn].param_start + i].type);
-  }
-  range_expr(h, e.left, depth + 1);
-  range_expr(h, e.right, depth + 1);
-  if (e.kind == DYN_EXPR_CALL || e.kind == DYN_EXPR_STRUCT || e.kind == DYN_EXPR_ARRAY)
-    for (uint32_t i = 0; i < e.item_count; ++i)
-      range_expr(h, h->a->items[e.item_start + i].expression, depth + 1);
-}
-static void range_block(RangeHint *h, uint32_t start, uint32_t count, unsigned depth) {
-  for (uint32_t i = 0; i < count && h->hint == DYN_TYPE_INFER && depth < 64; ++i) {
-    const DynAstStmt *st = &h->a->statements[h->a->children[start + i]];
-    if (st->kind == DYN_STMT_ASSIGN && range_mentions(h, st->expression, 0))
-      range_offer(h, st->target != DYN_NO_EXPR ? range_known(h, st->target)
-                                               : range_known_name(h, st->name));
-    if (st->kind == DYN_STMT_LOCAL && st->declared_type != DYN_TYPE_INFER &&
-        range_mentions(h, st->expression, 0))
-      range_offer(h, st->declared_type);
-    if (st->kind == DYN_STMT_RETURN && h->sema->current_function != UINT32_MAX &&
-        range_mentions(h, st->expression, 0))
-      range_offer(h, h->a->functions[h->sema->current_function].return_type);
-    range_expr(h, st->target, 0);
-    range_expr(h, st->expression, 0);
-    range_block(h, st->body_start, st->body_count, depth + 1);
-    range_block(h, st->else_start, st->else_count, depth + 1);
-    for (uint32_t k = 0; k < st->case_arm_count; ++k) {
-      const DynAstCaseArm *arm = &h->a->case_arms[st->case_arm_start + k];
-      range_block(h, arm->body_start, arm->body_count, depth + 1);
-    }
-  }
 }
 static bool sema_block(Sema *sema, DynAstProgram *, uint32_t, uint32_t,
                        const DynSource *, unsigned *, bool);
@@ -3755,16 +3665,15 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
             check_expr(sema, a, st->expression, s, errors, type) != type)
           type = DYN_TYPE_ERROR;
       } else if (first_literal && last_literal) {
-        RangeHint hint = {sema, a, s, st->name, DYN_TYPE_INFER, 0};
-        range_block(&hint, st->body_start, st->body_count, 0);
-        if (hint.hint == DYN_TYPE_INFER &&
-            (a->expressions[st->target].kind == DYN_EXPR_UNARY ||
-             a->expressions[st->expression].kind == DYN_EXPR_UNARY)) {
+        /* An untyped all-literal range counts in usize, whatever the body
+           does with the binding: write `for i: i32 in` for another type. */
+        if (a->expressions[st->target].kind == DYN_EXPR_UNARY ||
+            a->expressions[st->expression].kind == DYN_EXPR_UNARY) {
           error_span(st->span, s, errors,
                      "negative literal range needs a typed binding, such as 'for i: i32 in'");
           return false;
         }
-        type = hint.hint == DYN_TYPE_INFER ? DYN_TYPE_USIZE : hint.hint;
+        type = DYN_TYPE_USIZE;
         if (check_expr(sema, a, st->target, s, errors, type) != type ||
             check_expr(sema, a, st->expression, s, errors, type) != type)
           type = DYN_TYPE_ERROR;

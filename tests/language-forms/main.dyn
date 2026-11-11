@@ -49,7 +49,7 @@ fn shadowed(x: i32) i32 {
 fn take(v: u8) u8 { return v }
 
 fn root(n: i32) i32 {
-  for i in 0..10 {
+  for i: i32 in 0..10 {
     if i * i == n { return i }
   }
   return -1
@@ -90,16 +90,18 @@ fn main() {
   const local := 3
   sum: i64 = DOUBLE + local
   check(small == 64 && wide == 4096 && real == 128.0 && sum == 131, "adapting constants")
-  // Literal ranges count in the type their binding meets first.
+  // Untyped literal ranges count in usize; a typed binding picks another type.
   total: i32 = 0
-  for i in 0..5 { total += i }
+  for i: i32 in 0..5 { total += i }
   stats := Stats{count: 0}
-  for i in 0..3 { stats.count += i }
+  for i in 0..3 { stats.count += #cast(i64, i) }
   tiny: u8 = 0
-  for i in 0..4 { tiny += take(i) }
+  for i: u8 in 0..4 { tiny += take(i) }
   negative: i32 = 0
-  for i in -3..0 { negative += i }
-  check(total == 10 && stats.count == 3 && tiny == 6 && negative == -6 && root(49) == 7, "ranges")
+  for i: i32 in -3..0 { negative += i }
+  big: usize = 0
+  for i in 0..4 { big += i }
+  check(total == 10 && stats.count == 3 && tiny == 6 && negative == -6 && big == 6 && root(49) == 7, "ranges")
   // Literals boxed into any take i32, f64, []const u8 and bool.
   check(kind_of(5) + kind_of(2.5) + kind_of("hey") + kind_of(true) == 1108, "boxed literals")
   // A nested block may shadow; the same block may not.
