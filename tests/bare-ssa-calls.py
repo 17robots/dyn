@@ -17,6 +17,10 @@ import signal
 import subprocess
 import tempfile
 
+# These checks name individual functions (remarks, symbols, check messages,
+# per-function compiler hooks), so keep every call out of line.
+os.environ['DYN_NO_INLINE'] = '1'
+
 ROOT = Path(os.environ.get('ROOT', Path(__file__).resolve().parents[1])).resolve()
 DYN = str(Path(os.environ.get('DYN', ROOT/'build/dyn-release')).resolve())
 CLANG = shlex.split(os.environ.get('CLANG', 'clang'))

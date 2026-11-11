@@ -23,6 +23,10 @@ import sys
 import tempfile
 import time
 
+# These checks name individual functions (remarks, symbols, check messages,
+# per-function compiler hooks), so keep every call out of line.
+os.environ['DYN_NO_INLINE'] = '1'
+
 ROOT = Path(os.environ.get('ROOT', Path(__file__).resolve().parents[1])).resolve()
 
 def mod(name):

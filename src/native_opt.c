@@ -356,6 +356,10 @@ typedef struct {
      expansion), when overridden. */
   uint32_t override_node;
   bool overridden;
+  /* Released statement-list buffers, reused by the next lists: every block
+     of every caller builds one. */
+  struct { uint32_t *ids; size_t capacity; } spare[32];
+  unsigned spare_count;
 } Inline;
 /* One possible expansion: the call at `site` within the body that node
    `parent` expands (node 0 is the caller itself). */
@@ -411,9 +415,22 @@ static bool inline_grow(Inline *b, void **array, size_t *capacity, size_t need,
       (b)->out.field##s[(b)->out.field##_count++] = (value);                   \
   } while (0)
 static void inline_list(Inline *b, InlineList *list, uint32_t id) {
+  if (!list->ids && b->spare_count) {
+    --b->spare_count;
+    list->ids = b->spare[b->spare_count].ids;
+    list->capacity = b->spare[b->spare_count].capacity;
+  }
   if (inline_grow(b, (void **)&list->ids, &list->capacity, list->count + 1,
                   sizeof(*list->ids)))
     list->ids[list->count++] = id;
+}
+static void inline_list_release(Inline *b, InlineList *list) {
+  if (list->ids && b->spare_count < sizeof(b->spare) / sizeof(b->spare[0])) {
+    b->spare[b->spare_count].ids = list->ids;
+    b->spare[b->spare_count++].capacity = list->capacity;
+  } else free(list->ids);
+  list->ids = NULL;
+  list->count = list->capacity = 0;
 }
 static uint32_t inline_children(Inline *b, InlineList *list) {
   uint32_t start = (uint32_t)b->out.child_count;
@@ -424,8 +441,7 @@ static uint32_t inline_children(Inline *b, InlineList *list) {
              list->count * sizeof(*list->ids));
     b->out.child_count += list->count;
   }
-  free(list->ids);
-  list->ids = NULL;
+  inline_list_release(b, list);
   return start;
 }
 static uint32_t inline_local(Inline *b, const InlineScope *s, uint32_t id) {
@@ -784,8 +800,11 @@ static bool inline_admits(const Inline *b, const InlineScope *scope, uint64_t id
       (uint64_t)f->param_start + f->param_count > b->in->param_count)
     return false;
   /* Preserve the call for target byte-scan lowering; other targets retain
-     their existing scalar inlining decisions. */
-  if (b->byte_fast && f->byte_intrinsic != DYN_BYTE_INTRINSIC_NONE)
+     their existing scalar inlining decisions. Math the backend lowers to
+     one instruction (sqrt, fma, rounding) stays a call too: its body is the
+     software fallback. */
+  if ((b->byte_fast && f->byte_intrinsic != DYN_BYTE_INTRINSIC_NONE) ||
+      f->math_intrinsic != DYN_MATH_INTRINSIC_NONE)
     return false;
   if (b->leaf_only && (!scope->in_loop || !inline_leaf(b->in, f)))
     return false;
@@ -864,7 +883,7 @@ static bool inline_call_bound(Inline *b, const InlineScope *scope,
     bool expanded = inline_cast_call(b, scope, argument, &expansion, &value, depth + 1);
     for (size_t j = 0; j < expansion.count; ++j)
       inline_list(b, list, expansion.ids[j]);
-    free(expansion.ids);
+    inline_list_release(b, &expansion);
     if (b->failed)
       return true;
     s.expression = expanded ? value : inline_expr(b, scope, argument, 0);
@@ -961,7 +980,7 @@ static bool inline_guarded_call(Inline *b, const InlineScope *scope,
     bool done = inline_cast_call(b, scope, argument, &expansion, &expanded, depth + 1);
     for (size_t j = 0; j < expansion.count; ++j)
       inline_list(b, list, expansion.ids[j]);
-    free(expansion.ids);
+    inline_list_release(b, &expansion);
     s.expression = done ? expanded : inline_expr(b, scope, argument, 0);
     inline_statement(b, list, s);
     arguments[i] = local;
@@ -1126,8 +1145,8 @@ static bool inline_cast_call(Inline *b, const InlineScope *scope,
     for (size_t i = 0; i < captures.count; ++i) inline_list(b, list, captures.ids[i]);
     for (size_t i = 0; i < body.count; ++i) inline_list(b, list, body.ids[i]);
   }
-  free(captures.ids);
-  free(body.ids);
+  inline_list_release(b, &captures);
+  inline_list_release(b, &body);
   if (!expanded) return b->failed;
   while (count && !b->failed) {
     --count;
@@ -1266,7 +1285,8 @@ static bool inline_plan_fits(const Inline *b, uint32_t node) {
   const DynIrExpr *call = &b->in->expressions[x->site];
   if (f->foreign || f->generic || f->variadic || f->is_main || f->local_count > 128 ||
       call->item_count != f->param_count || (uint64_t)f->param_start + f->param_count > b->in->param_count ||
-      (b->byte_fast && f->byte_intrinsic != DYN_BYTE_INTRINSIC_NONE))
+      (b->byte_fast && f->byte_intrinsic != DYN_BYTE_INTRINSIC_NONE) ||
+      f->math_intrinsic != DYN_MATH_INTRINSIC_NONE)
     return false;
   /* A repeating site may be twice the size, like LLVM's bonus for loops,
      when it runs often for its size: a large callee behind a branch, such
@@ -1356,7 +1376,7 @@ static void inline_block(Inline *b, const InlineScope *scope, uint32_t start,
       s.target = inline_capture_target(b, scope, s.target, list);
     for (size_t j = 0; j < expansion.count; ++j)
       inline_list(b, list, expansion.ids[j]);
-    free(expansion.ids);
+    inline_list_release(b, &expansion);
     if (b->failed)
       return;
     /* An expanded call with no value has run; `_ = f()` of one is done too. */
@@ -1473,7 +1493,8 @@ static bool inline_dense_loops(DynIrProgram *ir) {
   free(ids);
   return true;
 }
-static bool inline_program(DynNativeOptimization *o, bool leaf_only, bool byte_fast) {
+/* budget: growth allowed per caller, in cost units; see inline_admits. */
+static bool inline_program_within(DynNativeOptimization *o, bool leaf_only, bool byte_fast, unsigned budget) {
   Inline b = {.view = o->ir, .out = o->ir, .loop_stride = 1,
               .leaf_only = leaf_only, .byte_fast = byte_fast};
   b.in = &b.view;
@@ -1612,7 +1633,7 @@ static bool inline_program(DynNativeOptimization *o, bool leaf_only, bool byte_f
                          .local_base = inline_locals(&b, f),
                          .loop_base = inline_loop_base(&b),
                          .expand = true};
-    b.budget = leaf_only ? 24 : 512;
+    b.budget = leaf_only ? 24 : budget;
     b.resource_budget = 8 * b.budget;
     b.reserved_growth = b.reserved_resources = 0;
     b.active[i] = true;
@@ -1651,6 +1672,7 @@ static bool inline_program(DynNativeOptimization *o, bool leaf_only, bool byte_f
   free(b.guess_types);
   free(b.guess_functions);
   free(b.plan);
+  while (b.spare_count) free(b.spare[--b.spare_count].ids);
   /* The original records are still the prefix of the shared arrays. */
   o->ir.expressions = b.out.expressions;
   o->ir.statements = b.out.statements;
@@ -1799,7 +1821,16 @@ static bool optimize(const DynSource *source, const DynIrProgram *input, DynIrPr
   const char *no_ssa = getenv("DYN_NO_SSA");
   bool byte_fast = allow_ssa_intrinsics && !strcmp(dyn_context_target(&source->context)->arch, "x86_64") &&
                   (!no_ssa || !*no_ssa || !strcmp(no_ssa, "0"));
-  if (level >= 2 && !inline_program(o, level == 2, byte_fast)) {
+  /* O2 and O3 share the ranked inliner. O2 grows each caller by a quarter
+     as much: that kept most of the gain on an allocation-bound kernel (0.79
+     to 0.41 s, 0.35 s at O3's budget) for 9 percent more compile time on a
+     deep call chain instead of 47. The leaf-only mode stays for the
+     inliner's unit tests. */
+  /* DYN_NO_INLINE=1 keeps every call, for tests that inspect one function's
+     code or remarks. */
+  const char *no_inline = getenv("DYN_NO_INLINE");
+  bool inline_calls = !no_inline || !*no_inline || !strcmp(no_inline, "0");
+  if (level >= 2 && inline_calls && !inline_program_within(o, false, byte_fast, level == 2 ? 128 : 512)) {
     free(samples);
     dyn_native_optimization_free(o);
     return false;

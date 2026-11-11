@@ -44,11 +44,12 @@ publication fails.
 
 - **O1:** fold scalar integer and boolean expressions while preserving checked
   overflow, invalid shifts, division errors, and evaluation effects.
-- **O2 (default):** also propagate immutable local constants and remove unchosen
-  constant branches.
+- **O2 (default):** also propagate immutable local constants, remove unchosen
+  constant branches, and inline eligible direct calls with dynamic arguments,
+  preserving argument evaluation and cleanup. Hot call sites go first, within a
+  growth budget per caller. Unsupported call contexts remain calls.
 - **O3:** also specialize bounded pure scalar function calls with constant
-  arguments. It also inlines eligible direct calls with dynamic arguments,
-  preserving argument evaluation and cleanup. Unsupported call contexts remain calls.
+  arguments, and vectorize counted loops on x86-64 and AArch64.
 
 `--opt-remarks` reports actual transformations. `--cpu native` is restricted to
 the host target and resolves the implemented host features into the cache key.

@@ -14,6 +14,29 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- `--release` (O2) now inlines small direct calls the way `--opt-level 3`
+  does, within a quarter of its growth budget, instead of only one-statement
+  leaves inside loops. An allocation-heavy tree kernel went from 0.79s to
+  0.41s, and the JSON log report from 48 ms to 34 ms; compile time of a
+  100k-line project did not change. `--opt-level 3` keeps the larger budget
+  and adds constant-call specialization and vectorization.
+- Calls to `math.sqrt64`, `math.fma64` and the other math functions the
+  backend lowers to one instruction are no longer inlined as their software
+  bodies.
+- `mem.arena_push`, `push`, `push_array` and `arena_push_uninit` take an
+  inlined fast path when the current block has room: the tree kernel went
+  from 0.41s to 0.29s, ahead of the Go and C versions.
+- Release builds drop the bounds check on a probe index that stays in range
+  around a loop, such as `at = (at + 1) & (Capacity - 1)`, and reuse a load
+  the loop exit already made instead of loading it again.
+- Debug builds return from a function without searching for the thread's
+  stack-trace slot: `dyn_trace_pop` now takes the word `dyn_trace_push`
+  returned. Debug `fib(40)` went from 1.39s to 1.06s. Custom runtimes that
+  define `dyn_trace_pop` must accept that argument.
+- The compiler makes far fewer heap allocations: SSA functions use arenas
+  recycled between functions (release builds of a 1500-function project
+  went from 179k to 30k allocations, debug builds from 145k to 52k).
+
 - Release builds fold constant globals, including `<<` and `>>` in their
   initializers, so `const Capacity: usize = 1 << 23` no longer loads from
   memory at each use, and a small helper that reads a constant can inline.
