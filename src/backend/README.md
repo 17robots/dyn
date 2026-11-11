@@ -90,9 +90,12 @@ A function the SSA path cannot build yet falls back to the tree emitter;
 on the 64-bit targets also use SSA code generation, without the optimizing
 passes: every local stays in its frame slot (DWARF variables with lexical
 scopes), each statement gets a line row and stores its line where
-`dyn_trace_push` said, frames push and pop through ordinary runtime calls,
+`dyn_trace_push` said, frames push and pop through ordinary runtime calls
+(`dyn_trace_pop` gets the word push returned, and finds the slot from it),
 emission runs once with long branches, and two preparation workers keep
-emission fed. Debug builds on RV32 and Thumb use the tree emitter. Windows ARM64 SSA reserves callee-saved GP registers
+emission fed. Each worker prepares a fixed share of the functions with its
+own pool of arena chunks, so a build's heap calls do not depend on thread
+timing. Debug builds on RV32 and Thumb use the tree emitter. Windows ARM64 SSA reserves callee-saved GP registers
 and spills values that cross calls, so it can reuse the canonical Windows
 unwind records and stack probing. `DYN_NO_SSA=1` selects the tree
 emitter everywhere. SSA code

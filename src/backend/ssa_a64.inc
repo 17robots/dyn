@@ -134,7 +134,7 @@ static size_t a64s_branch(BackendContext *ctx, unsigned code) {
 }
 static void a64s_fail(SsaEmit *e, unsigned code, unsigned kind) {
   size_t at = a64s_branch(e->ctx, code);
-  e->stub_uses = ssa_grow(e->stub_uses, &e->stub_use_capacity, e->stub_use_count + 1, sizeof(*e->stub_uses), &e->s->failed);
+  e->stub_uses = ssa_grow(e->s, e->stub_uses, &e->stub_use_capacity, e->stub_use_count + 1, sizeof(*e->stub_uses));
   if (!e->s->failed) { e->stub_uses[e->stub_use_count].at = at; e->stub_uses[e->stub_use_count].origin = e->check_origin; e->stub_uses[e->stub_use_count].pos = e->check_pos;
     e->stub_uses[e->stub_use_count].values = e->check_values;
     e->stub_uses[e->stub_use_count].index = e->check_index; e->stub_uses[e->stub_use_count].limit = e->check_limit;

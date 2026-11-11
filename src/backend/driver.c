@@ -5,6 +5,7 @@
 #include "dyn_timing.h"
 #include "elf64.h"
 #include "elf_class.h"
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -81,6 +82,7 @@ typedef struct {
      each IR string's first index with identical contents. */
   struct SsaPrepared **ssa_prepared; size_t ssa_prepared_count;
   struct SsaPipeline *ssa_pipeline;
+  struct SsaPool *ssa_pool; /* the pipeline's, while it runs */
   uint32_t *literal_canonical;
   uint32_t constant_offsets[MAX_SYMBOLS];
   Elf64_Rela *relocations;
@@ -2059,7 +2061,7 @@ static void return_value(BackendContext *ctx, DynType type) {
   if (ctx->debug_mode) {
     if (aggregate(ir, type) && !sret) {
       /* The aggregate snapshot may occupy rbp-8 itself in a zero-local function. */
-      runtime_call(ctx, 2); isa_lea(ctx, R_A, ctx->return_offset);
+      isa_trace_pop_argument(ctx); runtime_call(ctx, 2); isa_lea(ctx, R_A, ctx->return_offset);
     } else isa_trace_pop(ctx, descriptor(type));
   }
   if (ctx->rv64 && aggregate(ir,type) && !sret) {if(!rv_struct_registers(ctx,ir,type,0,true))ctx->text.failed=true;isa_return(ctx);return;}

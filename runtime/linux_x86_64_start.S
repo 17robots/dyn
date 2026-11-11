@@ -95,16 +95,16 @@ dyn_fault_report:
     jz .Ldyn_panic_exit
     dec %rbx
     mov %r13, %r12
-    mov %rbx, %rax
-    shl $4, %rax
+    lea (%rbx,%rbx,2), %rax
+    shl $3, %rax
     add %rax, %r12
     lea .Ldyn_panic_at(%rip), %rsi
     mov $5, %edx
     mov $2, %edi
     mov $1, %eax
     syscall
-    # A frame is {name, u32 length, u32 running line}. The name ends in
-    # "(path:N)"; a stored running line replaces N.
+    # A frame is {name, u32 length, u32 running line, slot}. The name ends
+    # in "(path:N)"; a stored running line replaces N.
     mov (%r12), %rsi
     mov 8(%r12), %edx
     mov 12(%r12), %r14d
@@ -282,22 +282,27 @@ dyn_trace_push:
     mov %r8, 16(%rax)
 .Ldyn_trace_push_have:
     # Returns where the caller stores the line it is running: within the
-    # frame, or a spare word past 64 frames or without a slot.
+    # frame, the slot's 65th frame past 64 frames, or a spare word without
+    # a slot. The slot pointer follows the line, for dyn_trace_pop.
     mov 8(%rax), %rcx
-    cmp $64, %rcx
-    jae .Ldyn_trace_push_count
     mov %rcx, %rdx
-    shl $4, %rdx
+    cmp $64, %rcx
+    jb .Ldyn_trace_push_frame
+    mov $64, %edx
+.Ldyn_trace_push_frame:
+    lea (%rdx,%rdx,2), %rdx
+    shl $3, %rdx
+    cmp $64, %rcx
+    jae .Ldyn_trace_push_deep
     mov %rdi, 32(%rax,%rdx)
-    mov %esi, %esi
-    mov %rsi, 40(%rax,%rdx)
+    mov %esi, 40(%rax,%rdx)
+.Ldyn_trace_push_deep:
+    movl $0, 44(%rax,%rdx)
+    mov %rax, 48(%rax,%rdx)
     inc %rcx
     mov %rcx, 8(%rax)
     lea 44(%rax,%rdx), %rax
     ret
-.Ldyn_trace_push_count:
-    inc %rcx
-    mov %rcx, 8(%rax)
 .Ldyn_trace_push_spare:
     lea dyn_trace_spare_line(%rip), %rax
     ret
@@ -305,14 +310,11 @@ dyn_trace_push:
 .global dyn_trace_pop
 .type dyn_trace_pop,@function
 dyn_trace_pop:
-    lea 8(%rsp), %r8
-    call .Ldyn_trace_find
-    test %rax, %rax
-    jnz .Ldyn_trace_pop_have
-    call .Ldyn_trace_slot
-    test %rax, %rax
-    jz .Ldyn_trace_pop_done
-.Ldyn_trace_pop_have:
+    # rdi is the line word dyn_trace_push returned; its slot follows it.
+    lea dyn_trace_spare_line(%rip), %rax
+    cmp %rax, %rdi
+    je .Ldyn_trace_pop_done
+    mov 4(%rdi), %rax
     mov 8(%rax), %rcx
     test %rcx, %rcx
     jz .Ldyn_trace_pop_done
@@ -341,13 +343,13 @@ dyn_trace_pop:
     mov %rdx, %rax
     ret
 .Ldyn_trace_find_next:
-    add $1056, %rdx
+    add $1592, %rdx
     loop .Ldyn_trace_find_loop
     xor %eax, %eax
     ret
 
 # Return current thread's trace slot, or zero. 64 bounded slots of
-# {tid, count, top, low, frames[64]}.
+# {tid, count, top, low, frames[65]}, 1592 bytes each.
 .Ldyn_trace_slot:
     mov $186, %eax
     syscall
@@ -356,7 +358,7 @@ dyn_trace_pop:
 .Ldyn_trace_slot_find:
     cmp (%rdx), %rax
     je .Ldyn_trace_slot_found
-    add $1056, %rdx
+    add $1592, %rdx
     loop .Ldyn_trace_slot_find
     xor %eax, %eax
     ret
@@ -377,7 +379,7 @@ dyn_trace_pop:
     xor %eax, %eax
     lock cmpxchg %r8, (%rdx)
     je .Ldyn_trace_slot_new
-    add $1056, %rdx
+    add $1592, %rdx
     loop .Ldyn_trace_slot_claim_loop
     xor %eax, %eax
     ret
@@ -389,7 +391,7 @@ dyn_trace_pop:
     mov %rdx, %rax
     ret
 .hidden dyn_trace_slots
-.comm dyn_trace_slots,67584,16
+.comm dyn_trace_slots,101888,16
 .hidden dyn_trace_spare_line
 .comm dyn_trace_spare_line,4,4
 #endif

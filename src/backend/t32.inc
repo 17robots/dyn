@@ -545,6 +545,7 @@ static void t32_multiply(BackendContext *c, bool checked, bool sign) {
 static void t32_trace_pop(BackendContext *c, bool descriptor_result) {
   t32_push(c,R_A);
   if (descriptor_result) t32_push(c,R_D);
+  t32_load(c, R_A, c->trace_offset); /* the line word: see isa_trace_pop_argument */
   runtime_call(c,2);
   if (descriptor_result) t32_pop(c,R_D);
   t32_pop(c,R_A);

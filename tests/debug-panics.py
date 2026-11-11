@@ -61,4 +61,44 @@ with tempfile.TemporaryDirectory(prefix='dyn-debug-panics-') as directory:
         if tree == '0':
             expected += ': index 6, length 4'
         assert result.stdout == 'cleanup\n' and result.stderr.splitlines()[0] == expected, (tree, result)
+# Returns pop their frames by the word push returned; deeper than 64 frames
+# share one, and the trace keeps the 64 outermost.
+DEEP = '''use "std/io"
+
+fn shallow(n: u64) u64 {
+  return n + 1
+}
+
+fn deep(n: u64, values: []u64) u64 {
+  if n == 0 {
+    return values[n + 3]
+  }
+  return deep(n - 1, values) + 1
+}
+
+fn main() {
+  values: [2]u64 = [1, 2]
+  total: u64 = 0
+  for i in 0..100 {
+    total += shallow(#cast(u64, i))
+  }
+  io.println("{}", total)
+  io.println("{}", deep(70, values[..]))
+}
+'''
+with tempfile.TemporaryDirectory(prefix='dyn-debug-deep-') as directory:
+    work = Path(directory)
+    main = work / 'main.dyn'
+    main.write_text(DEEP)
+    for tree in ('0', '1'):
+        output = work / ('tree' if tree == '1' else 'ssa')
+        built = subprocess.run([DYN, 'build', '--no-cache', str(work), '--output', str(output)],
+                               capture_output=True, text=True, timeout=120, env={**os.environ, 'DYN_NO_SSA': tree})
+        assert built.returncode == 0, built.stderr
+        result = subprocess.run([str(output)], capture_output=True, text=True, timeout=30)
+        lines = result.stderr.splitlines()
+        assert result.returncode == 101 and result.stdout == '5050\n', (tree, result)
+        frames = [line for line in lines if line.startswith('  at ')]
+        assert len(frames) == 64 and frames[-1] == f'  at main ({main}:21)', (tree, lines)
+        assert frames[:-1] == [f'  at deep ({main}:11)'] * 63, (tree, lines)
 print('PASS debug panics: located checks, index and length, call lines in traces (SSA and tree)')

@@ -1,12 +1,15 @@
 // name is "function (path:line)" for the function's first line. line is the
 // line the frame is running, stored by the compiled code at each statement.
-struct Frame { name: *const u8, length: u32, line: u32 }
+// slot follows line on every target, so pop finds the slot from the line
+// pointer push returned.
+struct Frame { name: *const u8, length: u32, line: u32, slot: *TraceSlot }
 // top and low bound the stack addresses where the thread's traced frames
-// called push: push and pop find the slot from the stack pointer, without
-// asking the kernel for the thread id. A free slot has top 0.
-struct TraceSlot { tid: u64, count: u64, top: u64, low: u64, frames: [64]Frame }
-// push and pop measure the stack inside their own frames, a few hundred
-// bytes from the caller's. Guard pages keep other threads' stacks farther.
+// called push: push finds the slot from the stack pointer, without asking
+// the kernel for the thread id. A free slot has top 0. Frames past the 64th
+// share the last frame's line.
+struct TraceSlot { tid: u64, count: u64, top: u64, low: u64, frames: [65]Frame }
+// push measures the stack inside its own frame, a few hundred bytes from the
+// caller's. Guard pages keep other threads' stacks farther.
 const trace_slack: u64 = 512
 // Debug builds trace calls; release builds never call trace_push, so they
 // reserve nothing. Chunks come from the platform on first use and are reused.
@@ -68,7 +71,7 @@ fn trace_find(stack: u64) *TraceSlot {
   }
   return nil
 }
-// Frames past the 64th, and threads without a slot, write their lines here.
+// Threads without a slot write their lines here.
 trace_spare_line: u32
 // Returns where the caller stores the line it is running. A thread's first
 // frame, or one deeper than any before it, asks for the thread id instead
@@ -93,24 +96,25 @@ fn trace_push(name: *const u8, length: u64) *u32 {
       slot.top = stack
     }
   }
-  line := &trace_spare_line
+  frame := &slot.frames[64]
   if slot.count < 64 {
-    frame := &slot.frames[slot.count]
+    frame = &slot.frames[slot.count]
     frame.name = name
     frame.length = #cast(u32, length)
-    frame.line = 0
-    line = &frame.line
   }
+  frame.line = 0
+  frame.slot = slot
   slot.count += 1
-  return line
+  return &frame.line
 }
-fn trace_pop() {
-  marker: u64 = 0
-  slot := trace_find(#cast(u64, #cast(usize, &marker)))
-  if slot == nil {
-    slot = trace_slot(thread_id(), false)
+// line is what push returned: the slot pointer follows it.
+fn trace_pop(line: *u32) {
+  if line == &trace_spare_line {
+    return
   }
-  if slot != nil && slot.count != 0 {
+  // On every target the slot pointer is the word after line.
+  slot := (#cast(**TraceSlot, #cast(usize, line) + 4)).*
+  if slot.count != 0 {
     slot.count -= 1
     if slot.count == 0 {
       // The range goes first, so no other thread matches it while a new
