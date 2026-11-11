@@ -684,6 +684,17 @@ static size_t nd_rv64(const unsigned char *p, size_t n, char *out, size_t cap) {
   uint32_t w=(uint32_t)nd_read(p,4);unsigned op=w&127,d=(w>>7)&31,f=(w>>12)&7,a=(w>>15)&31,b=(w>>20)&31,h=w>>25;
   int imm=(int32_t)w>>20;
   const char *name=NULL;
+  if(op==0x6f) {
+    imm=((int32_t)(w&0x80000000)>>11)|(int)(w&0xff000)|(int)((w>>9)&0x800)|(int)((w>>20)&0x7fe);
+    snprintf(out,cap,"jal x%u, .%+d",d,imm);return 4;
+  }
+  if(op==0x3b) {
+    name=h==0&&f==0?"addw":h==32&&f==0?"subw":h==0&&f==1?"sllw":h==0&&f==5?"srlw":h==32&&f==5?"sraw":
+         h==1&&f==0?"mulw":h==1&&f==4?"divw":h==1&&f==5?"divuw":h==1&&f==6?"remw":h==1&&f==7?"remuw":NULL;
+    if(!name)return 0;
+    snprintf(out,cap,"%s x%u, x%u, x%u",name,d,a,b);return 4;
+  }
+  if(op==0x13&&(f==2||f==6)) {snprintf(out,cap,"%s x%u, x%u, %d",f==2?"slti":"ori",d,a,imm);return 4;}
   if(op==0x13||op==0x1b) {
     if(f==0)name=op==0x1b?"addiw":"addi";
     if(f==1)name=op==0x1b?"slliw":"slli";
@@ -727,6 +738,18 @@ static size_t nd_rv64(const unsigned char *p, size_t n, char *out, size_t cap) {
     }
     if(base==0x50&&f<=2) {snprintf(out,cap,"%s.%c x%u, f%u, f%u",f==0?"fle":f==1?"flt":"feq",single?'s':'d',d,a,b);return 4;}
     if((base==0x70||base==0x78)&&b==0&&f==0) {snprintf(out,cap,base==0x70?"fmv.x.%c x%u, f%u":"fmv.%c.x f%u, x%u",single?'w':'d',d,a);return 4;}
+    static const char *const ints[]={"w","wu","l","lu"};
+    if(base==0x60&&b<4) {snprintf(out,cap,"fcvt.%s.%c x%u, f%u",ints[b],single?'s':'d',d,a);return 4;}
+    if(base==0x68&&b<4) {snprintf(out,cap,"fcvt.%c.%s f%u, x%u",single?'s':'d',ints[b],d,a);return 4;}
+    if(h==0x20&&b==1) {snprintf(out,cap,"fcvt.s.d f%u, f%u",d,a);return 4;}
+    if(h==0x21&&b==0) {snprintf(out,cap,"fcvt.d.s f%u, f%u",d,a);return 4;}
+    if(base==0x10&&f<=2) {snprintf(out,cap,"%s.%c f%u, f%u, f%u",f==0?"fsgnj":f==1?"fsgnjn":"fsgnjx",single?'s':'d',d,a,b);return 4;}
+    if(base==0x14&&f<=1) {snprintf(out,cap,"%s.%c f%u, f%u, f%u",f==0?"fmin":"fmax",single?'s':'d',d,a,b);return 4;}
+    if(base==0x2c&&b==0) {snprintf(out,cap,"fsqrt.%c f%u, f%u",single?'s':'d',d,a);return 4;}
+  }
+  if(op==0x43||op==0x47||op==0x4b||op==0x4f) {
+    static const char *const fused[]={"fmadd","fmsub","fnmsub","fnmadd"};
+    snprintf(out,cap,"%s.%c f%u, f%u, f%u, f%u",fused[(op-0x43)/4],(h&3)?'d':'s',d,a,b,w>>27);return 4;
   }
   return 0;
 }
