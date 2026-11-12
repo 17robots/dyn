@@ -29,6 +29,13 @@ servers so they pick up the new `dyn`.
 - Release builds drop the bounds check on a probe index that stays in range
   around a loop, such as `at = (at + 1) & (Capacity - 1)`, and reuse a load
   the loop exit already made instead of loading it again.
+- A loop counter that calls after the loop push out of registers stays in
+  a register inside the loop, and is stored once at each exit instead of
+  being loaded at every use. The JSON log report at `--opt-level 3` went
+  from 27.8 ms to 26.5 ms.
+- Builds without overflow checks turn `return f(n - 1) + f(n - 2)` style
+  recursion into one call per level plus a loop, as overflow-checked builds
+  already did: release `fib(40)` went from 0.27s to 0.18s.
 - Debug builds return from a function without searching for the thread's
   stack-trace slot: `dyn_trace_pop` now takes the word `dyn_trace_push`
   returned. Debug `fib(40)` went from 1.39s to 1.06s. Custom runtimes that

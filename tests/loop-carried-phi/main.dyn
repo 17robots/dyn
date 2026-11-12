@@ -1,0 +1,110 @@
+use "std/io"
+
+fn note(a: u64, b: u64, c: u64, d: u64, e: u64, f: u64, g: u64) u64 {
+  return a * 3 + b + c + d + e + f + g
+}
+
+fn fnote(a: f64, b: u64) u64 {
+  return #cast(u64, a) + b
+}
+
+// Six calls after the loop push the counter out of registers for the whole
+// function; inside the loop it lives in one, and both exits store it.
+fn scan(text: []const u8, a: u64, b: u64, c: u64, d: u64, e: u64) u64 {
+  end: usize = 0
+  for end < #len(text) && text[end] != '"' {
+    end += 1
+  }
+  x := note(a, b, c, d, e, #cast(u64, end), 1)
+  y := note(x, a, b, c, d, e, #cast(u64, end))
+  z := note(y, x, a, b, c, d, e)
+  w := note(z, y, x, a, b, c, d)
+  v := note(w, z, y, x, a, b, c)
+  u := note(v, w, z, y, x, a, b)
+  t := note(u, v, w, z, y, x, #cast(u64, end))
+  s := note(t, u, v, w, z, y, x)
+  r := note(s, t, u, v, w, z, y)
+  return r + #cast(u64, end)
+}
+
+// The same with breaks: the block after the loop is entered from the loop
+// test and from each break.
+fn breaks(text: []const u8, a: u64, b: u64, c: u64, d: u64, e: u64) u64 {
+  end: usize = 0
+  for end < #len(text) {
+    if text[end] == '!' {
+      break
+    }
+    if text[end] == '"' {
+      break
+    }
+    end += 1
+  }
+  x := note(a, b, c, d, e, #cast(u64, end), 1)
+  y := note(x, a, b, c, d, e, #cast(u64, end))
+  z := note(y, x, a, b, c, d, e)
+  w := note(z, y, x, a, b, c, d)
+  v := note(w, z, y, x, a, b, c)
+  u := note(v, w, z, y, x, a, b)
+  t := note(u, v, w, z, y, x, #cast(u64, end))
+  s := note(t, u, v, w, z, y, x)
+  r := note(s, t, u, v, w, z, y)
+  return r + #cast(u64, end)
+}
+
+// Two counters, an early break, and an inner loop that reads the outer one.
+fn nested(text: []const u8, a: u64, b: u64, c: u64, d: u64) u64 {
+  row: usize = 0
+  total: u64 = 0
+  for row < #len(text) {
+    if text[row] == '!' {
+      break
+    }
+    column: usize = row
+    for column < #len(text) && text[column] != ' ' {
+      total += #cast(u64, column - row)
+      column += 1
+    }
+    row = column + 1
+  }
+  x := note(a, b, c, d, total, #cast(u64, row), 2)
+  y := note(x, a, b, c, d, total, #cast(u64, row))
+  z := note(y, x, a, b, c, d, total)
+  w := note(z, y, x, a, b, c, d)
+  v := note(w, z, y, x, a, b, #cast(u64, row))
+  u := note(v, w, z, y, x, a, total)
+  t := note(u, v, w, z, y, x, #cast(u64, row))
+  s := note(t, u, v, w, z, y, total)
+  return s + total + #cast(u64, row)
+}
+
+// A floating counter.
+fn halves(limit: f64, a: u64, b: u64, c: u64) u64 {
+  x: f64 = limit
+  steps: u64 = 0
+  for x > 1.0 {
+    x = x / 2.0
+    steps += 1
+  }
+  p := fnote(x * 1000.0, a)
+  q := fnote(x * 100.0, p + b)
+  r := fnote(x * 10.0, q + c)
+  s := fnote(x, r + steps)
+  t := fnote(x * 3.0, s + a)
+  o := fnote(x * 5.0, t + b)
+  n := fnote(x * 9.0, o + c)
+  m := fnote(x * 11.0, n + steps)
+  return m + steps + fnote(x * 7.0, b)
+}
+
+keep_scan: fn(text: []const u8, a: u64, b: u64, c: u64, d: u64, e: u64) u64 = scan
+keep_breaks: fn(text: []const u8, a: u64, b: u64, c: u64, d: u64, e: u64) u64 = breaks
+keep_nested: fn(text: []const u8, a: u64, b: u64, c: u64, d: u64) u64 = nested
+keep_halves: fn(limit: f64, a: u64, b: u64, c: u64) u64 = halves
+
+fn main() {
+  io.println("{} {}", keep_scan("abcdefgh\"ij", 1, 2, 3, 4, 5), keep_scan("short", 1, 2, 3, 4, 5))
+  io.println("{} {} {}", keep_breaks("abc!d", 1, 2, 3, 4, 5), keep_breaks("ab\"cd", 1, 2, 3, 4, 5), keep_breaks("abcd", 1, 2, 3, 4, 5))
+  io.println("{} {}", keep_nested("ab cde f ghij", 1, 2, 3, 4), keep_nested("ab cd!e fg", 4, 3, 2, 1))
+  io.println("{} {}", keep_halves(1000.0, 1, 2, 3), keep_halves(0.5, 4, 5, 6))
+}

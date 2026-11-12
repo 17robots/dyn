@@ -5385,12 +5385,17 @@ static void ssa_divisions(Ssa *s, const uint32_t *order, uint32_t n) {
    per level instead of two. Unsigned partial sums only grow, so the
    accumulated additions overflow exactly when the original ones do. The
    function's only checks are overflow checks, which all report the same
-   message, so a different order among them cannot change the outcome. */
+   message, so a different order among them cannot change the outcome.
+   Without overflow checks, as in release builds, + wraps: wrapping addition
+   of 64-bit integers, signed or not, regroups freely. */
 static bool ssa_accumulate(Ssa *s, const uint32_t *order, uint32_t n) {
   const DynIrProgram *ir = s->ir;
   const DynIrFunction *f = s->f;
   size_t index = (size_t)(f - ir->functions);
-  if (f->is_main || index >= ir->function_count || storage_type(ir, f->return_type) != DYN_TYPE_U64 || !n) return false;
+  DynType returned = index < ir->function_count ? storage_type(ir, f->return_type) : DYN_TYPE_VOID;
+  if (f->is_main || index >= ir->function_count || (returned != DYN_TYPE_U64 && returned != DYN_TYPE_I64) || !n) return false;
+  /* The addition the tails use: SO_ADDO with overflow checks, else SO_ADD. */
+  int add_op = -1;
   unsigned self = s->ctx->function_symbols[index];
   uint32_t entry = order[0];
   int32_t params[16]; unsigned param_count = 0;
@@ -5422,7 +5427,10 @@ static bool ssa_accumulate(Ssa *s, const uint32_t *order, uint32_t n) {
        its last call, and nothing after the call uses the result. */
     uint32_t count = block->values.count;
     SsaValue *add = &s->values[block->control];
-    if (!count || add->op != SO_ADDO || add->aux2 || block->values.items[count - 1] != (uint32_t)block->control) continue;
+    if (!count || (add->op != SO_ADDO && add->op != SO_ADD) || add->aux2 || add->cls != SC_INT ||
+        block->values.items[count - 1] != (uint32_t)block->control) continue;
+    /* Checked addition is unsigned only; all tails add the same way. */
+    if ((add->op == SO_ADDO && returned != DYN_TYPE_U64) || (add_op >= 0 && add->op != add_op)) return false;
     int32_t last = -1;
     for (uint32_t k = 0; k < count; ++k)
       if (s->values[block->values.items[k]].op == SO_CALL) last = (int32_t)block->values.items[k];
@@ -5441,7 +5449,7 @@ static bool ssa_accumulate(Ssa *s, const uint32_t *order, uint32_t n) {
       uint32_t operands = ssa_operands(s, id, ssa_slots, SSA_MAX_OPERANDS);
       for (uint32_t o = 0; o < operands; ++o) if (*ssa_slots[o] == result || *ssa_slots[o] == r->a) tail = false;
     }
-    if (tail && after && tail_count < 16) tails[tail_count++] = (int32_t)b;
+    if (tail && after && tail_count < 16) { tails[tail_count++] = (int32_t)b; add_op = add->op; }
   }
   if (!tail_count || !param_count) return false;
   /* Each tail call passes one register argument per parameter, and its
@@ -5468,7 +5476,7 @@ static bool ssa_accumulate(Ssa *s, const uint32_t *order, uint32_t n) {
       uint32_t count = ssa_operands(s, block->values.items[k], ssa_slots, SSA_MAX_OPERANDS);
       for (uint32_t o = 0; o < count; ++o) {
         SsaValue *used = &s->values[*ssa_slots[o]];
-        if (used->op == SO_RESULT && s->values[block->values.items[k]].op != SO_ADDO) return false;
+        if (used->op == SO_RESULT && s->values[block->values.items[k]].op != add_op) return false;
       }
     }
   }
@@ -5556,7 +5564,7 @@ static bool ssa_accumulate(Ssa *s, const uint32_t *order, uint32_t n) {
   for (uint32_t i = 0; i < n && !s->failed; ++i) {
     SsaBlock *block = &s->blocks[order[i]];
     if (block->kind != SB_RETURN || block->control < 0) continue;
-    int32_t sum = ssa_value(s, order[i], SO_ADDO, SC_INT, phis[param_count], block->control, -1, 0, 0);
+    int32_t sum = ssa_value(s, order[i], add_op, SC_INT, phis[param_count], block->control, -1, 0, 0);
     if (s->failed) break;
     ssa_push(s, &s->blocks[order[i]].values, (uint32_t)sum);
     s->blocks[order[i]].control = sum;
@@ -6909,12 +6917,14 @@ typedef struct {
   SsaSave *saves; uint32_t save_count; /* sorted by call */
   /* Spilled values cached in a register through one loop; see ssa_cache_loops. */
   struct SsaCache *caches; uint32_t cache_count;
-  uint8_t *cache_member; /* cache_count rows of block_count: 1 in the loop, 2 an exit */
+  uint8_t *cache_member; /* cache_count rows of block_count; see SsaCache */
 } SsaAlloc;
 /* value holds reg inside its loop. evicted, when not UINT32_MAX, held reg
    through the loop without a use there: it goes to evicted_slot at the
-   preheader and comes back at each exit. */
-typedef struct SsaCache { uint32_t value, preheader, evicted; int reg; int32_t evicted_slot; } SsaCache;
+   preheader and comes back at each exit. carried marks a phi of the loop's
+   header: its back edges write reg alone, so each exit stores reg to the
+   phi's slot. cache_member rows hold 1 for a loop block and 2 for an exit. */
+typedef struct SsaCache { uint32_t value, preheader, evicted; int reg; int32_t evicted_slot; bool carried; } SsaCache;
 /* Whether id is used in block at or after position. */
 static bool ssa_used_from(SsaAlloc *a, uint32_t block, uint32_t position, uint32_t id) {
   Ssa *s = a->s;
@@ -7384,7 +7394,13 @@ static bool ssa_allocate(SsaAlloc *a) {
    and used in it, gets a register of its own through the loop when one is
    free there and no call in the loop takes it: the preheader loads it once
    and every use in the loop reads the register. SSA values never change,
-   so the slot stays valid and the loop's exits need no stores. */
+   so the slot stays valid and the loop's exits need no stores.
+
+   A phi of the loop's header, such as a counter that later calls push out
+   of registers, is carried the same way: the preheader loads the entry
+   value, back edges move the next value into the register, and each exit,
+   entered from the loop alone, stores the register to the phi's slot.
+   Critical edges are split, so loops with breaks have such exits too. */
 enum { SSA_CACHES = 64 };
 static bool ssa_cache_free(SsaAlloc *a, unsigned reg, uint32_t from, uint32_t to, uint32_t except) {
   Ssa *s = a->s;
@@ -7406,6 +7422,21 @@ static bool ssa_cache_free(SsaAlloc *a, unsigned reg, uint32_t from, uint32_t to
     }
   }
   return !ssa_clobbered(a, reg, from, to, UINT32_MAX);
+}
+/* Whether a carried phi's register is free at the start of every exit, where
+   it is stored: a phi of the exit itself would already hold it. */
+static bool ssa_exits_free(SsaAlloc *a, const bool *exit_block, int reg) {
+  Ssa *s = a->s;
+  for (uint32_t b = 0; b < s->block_count; ++b) {
+    if (!exit_block[b]) continue;
+    SsaBlock *block = &s->blocks[b];
+    for (uint32_t k = 0; k < block->values.count; ++k) {
+      SsaValue *w = &s->values[block->values.items[k]];
+      if (w->op != SO_PHI) break;
+      if (!w->dead && w->reg == reg) return false;
+    }
+  }
+  return true;
 }
 static void ssa_cache_loops(SsaAlloc *a) {
   Ssa *s = a->s;
@@ -7483,18 +7514,26 @@ static void ssa_cache_loops(SsaAlloc *a) {
         uint32_t best_uses = 0;
         for (uint32_t id = 0; id < s->value_count; ++id) {
           SsaValue *v = &s->values[id];
-          if (uses[id] <= best_uses || v->reg >= 0 || v->slot < 0 || v->dead || member[v->block] ||
-              !ssa_located(v)) continue;
+          if (uses[id] <= best_uses || v->reg >= 0 || v->slot < 0 || v->dead || !ssa_located(v)) continue;
+          if (member[v->block]) {
+            /* A header phi, unless an inner loop already caches it: that
+               cache loads from the slot, which a carried phi leaves stale. */
+            bool cached = false;
+            for (uint32_t c = 0; c < a->cache_count && !cached; ++c) cached = a->caches[c].value == id;
+            if (v->op != SO_PHI || v->block != header || !exits_closed || cached) continue;
+          }
           best = (int32_t)id; best_uses = uses[id];
         }
         if (best < 0) break;
         SsaValue *v = &s->values[best];
         bool floating = v->cls == SC_F64 || v->cls == SC_F32;
+        bool carried = member[v->block];
         int chosen = -1;
         uint32_t evicted = UINT32_MAX;
         for (unsigned r = 0; r < 64 && chosen < 0; ++r) {
           if ((r >= X_XMM0) != floating || !ssa_allocatable(s->ctx, r)) continue;
-          if (ssa_cache_free(a, r, from, to, UINT32_MAX)) chosen = (int)r;
+          if (ssa_cache_free(a, r, from, to, UINT32_MAX) && (!carried || ssa_exits_free(a, exit_block, (int)r)))
+            chosen = (int)r;
         }
         /* Or take the register of a value live through the loop and unused
            in it, when every exit is entered only from the loop. */
@@ -7510,6 +7549,7 @@ static void ssa_cache_loops(SsaAlloc *a) {
               busy = a->caches[c].value == id || a->caches[c].evicted == id;
             for (uint32_t q = 0; q < a->save_count && !busy; ++q) busy = a->saves[q].value == id;
             if (busy || !ssa_cache_free(a, (unsigned)w->reg, from, to, id)) continue;
+            if (carried && !ssa_exits_free(a, exit_block, w->reg)) continue;
             chosen = w->reg;
             evicted = id;
           }
@@ -7521,7 +7561,7 @@ static void ssa_cache_loops(SsaAlloc *a) {
         a->cache_member = ssa_grow(s, a->cache_member, &member_capacity, a->cache_count + 1, s->block_count);
         if (s->failed) break;
         a->caches[a->cache_count] = (SsaCache){(uint32_t)best, preheader, evicted, chosen,
-                                               evicted == UINT32_MAX ? -1 : (int32_t)a->spill_slots++};
+                                               evicted == UINT32_MAX ? -1 : (int32_t)a->spill_slots++, carried};
         uint8_t *row = &a->cache_member[(size_t)a->cache_count * s->block_count];
         for (uint32_t b = 0; b < s->block_count; ++b) row[b] = member[b] ? 1 : exit_block[b] ? 2 : 0;
         ++a->cache_count;
@@ -7812,12 +7852,13 @@ static bool ssa_edge_moves_nothing(SsaEmit *e, uint32_t from, uint32_t to) {
   }
   return true;
 }
-/* Whether b emits loop cache moves (a preheader's loads or an exit's
-   reloads), so jumps cannot pass through it. */
+/* Whether b emits loop cache moves (a preheader's loads, or an exit's
+   stores and reloads), so jumps cannot pass through it. */
 static bool ssa_cache_moves(SsaEmit *e, uint32_t b) {
   for (uint32_t c = 0; c < e->alloc->cache_count; ++c)
     if (e->alloc->caches[c].preheader == b ||
-        (e->alloc->caches[c].evicted != UINT32_MAX && e->alloc->cache_member[(size_t)c * e->s->block_count + b] == 2))
+        ((e->alloc->caches[c].evicted != UINT32_MAX || e->alloc->caches[c].carried) &&
+         e->alloc->cache_member[(size_t)c * e->s->block_count + b] == 2))
       return true;
   return false;
 }
@@ -9615,10 +9656,13 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
        its target, and its address becomes the target's below. */
     if (i && ssa_landing(e, b) != b) continue;
     /* Values cached through a loop live in their register inside it; a value
-       they evicted lives in its slot there and comes back at each exit. */
+       they evicted lives in its slot there and comes back at each exit. A
+       value cached in several loops takes its register from the one that
+       holds b, whichever order the caches come in. */
+    for (uint32_t c = 0; c < a->cache_count; ++c) s->values[a->caches[c].value].reg = -1;
     for (uint32_t c = 0; c < a->cache_count; ++c) {
       uint8_t place = a->cache_member[(size_t)c * s->block_count + b];
-      s->values[a->caches[c].value].reg = place == 1 ? a->caches[c].reg : -1;
+      if (place == 1) s->values[a->caches[c].value].reg = a->caches[c].reg;
       if (a->caches[c].evicted != UINT32_MAX) {
         SsaValue *w = &s->values[a->caches[c].evicted];
         w->reg = place == 1 ? -1 : a->caches[c].reg;
@@ -9640,7 +9684,13 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
     }
     block->at = ctx->text.n;
     for (uint32_t c = 0; c < a->cache_count; ++c) {
-      if (a->caches[c].evicted == UINT32_MAX || a->cache_member[(size_t)c * s->block_count + b] != 2) continue;
+      if (a->cache_member[(size_t)c * s->block_count + b] != 2) continue;
+      /* A carried phi leaves the loop in its register. */
+      if (a->caches[c].carried) {
+        SsaValue *v = &s->values[a->caches[c].value];
+        ssa_transfer(e, L_SLOT, (int32_t)(e->spill_base - 8 * (uint32_t)v->slot), L_REG, a->caches[c].reg, v->cls, X_R11);
+      }
+      if (a->caches[c].evicted == UINT32_MAX) continue;
       SsaValue *w = &s->values[a->caches[c].evicted];
       ssa_transfer(e, L_REG, a->caches[c].reg, L_SLOT, (int32_t)(e->spill_base - 8 * (uint32_t)a->caches[c].evicted_slot), w->cls, X_R11);
     }
