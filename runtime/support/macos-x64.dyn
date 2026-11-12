@@ -1,0 +1,10 @@
+#target(kernel: darwin, arch: x86_64)
+// The faulting instruction and frame pointer in the machine context: an
+// exception state of 16 bytes, then rax, rbx, rcx, rdx, rdi, rsi, rbp, rsp,
+// r8-r15 and rip.
+fn fault_pc(machine: usize) usize {
+  return #cast(*const usize, machine + 144).*
+}
+fn fault_fp(machine: usize) usize {
+  return #cast(*const usize, machine + 64).*
+}

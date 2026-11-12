@@ -1,0 +1,8 @@
+#target(kernel: windows, arch: x86_64)
+// The faulting instruction and frame pointer in an x64 CONTEXT.
+fn fault_pc(context: usize) usize {
+  return #cast(*const usize, context + 0xf8).*
+}
+fn fault_fp(context: usize) usize {
+  return #cast(*const usize, context + 0xa0).*
+}

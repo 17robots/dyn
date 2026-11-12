@@ -945,36 +945,6 @@ static void isa_store_chunk(BackendContext *ctx, unsigned offset, unsigned bytes
     if (j+1<bytes) CODE(0x49,0xc1,0xea,8);
   }
 }
-/* dyn_trace_pop's argument: the frame's line word, from which the runtime
-   finds the trace slot. Clobbers the first argument register. */
-static void isa_trace_pop_argument(BackendContext *ctx) {
-  isa_load(ctx, ctx->rv64 || ctx->a64 || ctx->rv32 || ctx->t32 ? R_A : ctx->win64 ? R_C : R_DI, ctx->trace_offset);
-}
-/* Call dyn_trace_pop while preserving the A (and D) result registers. */
-static void isa_trace_pop(BackendContext *ctx, bool descriptor_result) {
-  if (ctx->t32) { t32_trace_pop(ctx, descriptor_result); return; }
-  if (ctx->rv32) { r32_trace_pop(ctx, descriptor_result); return; }
-  if (ctx->rv64) {
-    rv_push(ctx,R_A); if (descriptor_result) rv_push(ctx,R_D);
-    isa_trace_pop_argument(ctx); runtime_call(ctx,2);
-    if (descriptor_result) rv_pop(ctx,R_D);
-    rv_pop(ctx,R_A);
-    return;
-  }
-  if (ctx->a64) {
-    a64_word(ctx, 0xa9bf07e0); /* stp x0, x1, [sp, #-16]! */
-    isa_trace_pop_argument(ctx);
-    runtime_call(ctx, 2);
-    a64_word(ctx, 0xa8c107e0); /* ldp x0, x1, [sp], #16 */
-    return;
-  }
-  /* Before the result saves: without locals the trace word is rbp-8. */
-  isa_trace_pop_argument(ctx);
-  CODE(0x48,0x89,0x45,0xf8);
-  if (descriptor_result) CODE(0x48,0x89,0x55,0xf0);
-  runtime_call(ctx, 2); CODE(0x48,0x8b,0x45,0xf8);
-  if (descriptor_result) CODE(0x48,0x8b,0x55,0xf0);
-}
 static void allocation_preserve(BackendContext *ctx, bool restore) {
   for (unsigned r = 0; r < 4; ++r) {
     if (!(ctx->allocator_used & (1u << r))) continue;

@@ -84,6 +84,13 @@ dyn_panic:
     sw a0, 0(sp)
     sw a1, 4(sp)
     sw a2, 8(sp)
+    // The trace begins at the caller: its return address and frame pointer.
+    mv a0, ra
+    mv a1, s0
+    call dyn_trace_capture
+    lw a0, 0(sp)
+    lw a1, 4(sp)
+    lw a2, 8(sp)
     call dyn_unwind_begin
     lw a0, 0(sp)
     lw a1, 4(sp)

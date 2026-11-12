@@ -107,7 +107,7 @@ def build_adapter(work):
         'if (!strcmp(s->f->name,"wide")) length = ssa_load_value(s, ssa_local_address(s, 0), DYN_TYPE_U64, NULL);\n    '+anchor)
     (work/'ssa.inc').write_text(source)
     source = soft.replace_once((ROOT/'src/backend/driver.c').read_text(),
-        '{"dyn_panic", "dyn_trace_push"', '{"oraclepanic", "dyn_trace_push"')
+        '{"dyn_panic", "dyn_trace_start"', '{"oraclepanic", "dyn_trace_start"')
     anchor = 'runtime_call(ctx, 0); isa_trap(ctx); reachable=false;'
     source = soft.replace_once(source, anchor,
         'if (!strcmp(f->name,"wide")) isa_load(ctx, isa_argument(ctx,1), ctx->local_offsets[0]);\n      '+anchor)

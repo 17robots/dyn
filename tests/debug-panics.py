@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Debug panics, with SSA code generation and the tree emitter: the check
 message names the statement's file and line and, for an index, the index and
-the length; the stack trace names each caller's call line."""
+the length; the stack trace, walked from frame pointers, names each caller's
+call line."""
 import os
 from pathlib import Path
 import platform
@@ -61,8 +62,12 @@ with tempfile.TemporaryDirectory(prefix='dyn-debug-panics-') as directory:
         if tree == '0':
             expected += ': index 6, length 4'
         assert result.stdout == 'cleanup\n' and result.stderr.splitlines()[0] == expected, (tree, result)
-# Returns pop their frames by the word push returned; deeper than 64 frames
-# share one, and the trace keeps the 64 outermost.
+        # The trace was walked before the cleanup ran, and the inline cleanup
+        # code does not take over the failing statement's line.
+        assert result.stderr.splitlines()[1:4] == ['stack trace:', f'  at cleaned ({main}:16)',
+                                                   f'  at main ({main}:23)'], (tree, result)
+# A deep stack keeps its 48 innermost and 16 outermost frames and counts the
+# rest: deep's own failing line, its 70 recursive calls, then main.
 DEEP = '''use "std/io"
 
 fn shallow(n: u64) u64 {
@@ -98,7 +103,8 @@ with tempfile.TemporaryDirectory(prefix='dyn-debug-deep-') as directory:
         result = subprocess.run([str(output)], capture_output=True, text=True, timeout=30)
         lines = result.stderr.splitlines()
         assert result.returncode == 101 and result.stdout == '5050\n', (tree, result)
-        frames = [line for line in lines if line.startswith('  at ')]
-        assert len(frames) == 64 and frames[-1] == f'  at main ({main}:21)', (tree, lines)
-        assert frames[:-1] == [f'  at deep ({main}:11)'] * 63, (tree, lines)
+        trace = lines[lines.index('stack trace:') + 1:]
+        recursive = f'  at deep ({main}:11)'
+        assert trace == [f'  at deep ({main}:9)'] + [recursive] * 47 + ['  ... 8 more frames'] + \
+            [recursive] * 15 + [f'  at main ({main}:21)'], (tree, lines)
 print('PASS debug panics: located checks, index and length, call lines in traces (SSA and tree)')

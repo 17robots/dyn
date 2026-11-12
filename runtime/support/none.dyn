@@ -5,22 +5,15 @@ fn unwind_owner_offset() usize {
 }
 // Bare metal: one hart, output through the board console in the start runtime.
 extern fn console_write "dyn_console_write"(data: *const u8, size: u64)
-// One hart: one unwind slot and one trace slot, in fixed storage.
+// One hart: one unwind slot, in fixed storage.
 const unwind_chunk_slots: usize = 1
 const unwind_hint_count: usize = 1
-const trace_chunk_slots: usize = 1
 none_unwind: UnwindChunk
-none_trace: TraceChunk
 none_unwind_taken: bool
-none_trace_taken: bool
 fn runtime_pages(bytes: u64) u64 {
   if bytes == #cast(u64, #sizeof(UnwindChunk)) && !none_unwind_taken {
     none_unwind_taken = true
     return #cast(u64, #cast(usize, &none_unwind))
-  }
-  if bytes == #cast(u64, #sizeof(TraceChunk)) && !none_trace_taken {
-    none_trace_taken = true
-    return #cast(u64, #cast(usize, &none_trace))
   }
   return 0
 }
@@ -31,15 +24,6 @@ fn trace_write(data: *const u8, size: u64) {
   if size != 0 {
     console_write(data, size)
   }
-}
-pub fn dyn_trace_push(name: *const u8, length: u64) *u32 {
-  return trace_push(name, length)
-}
-pub fn dyn_trace_pop(line: *u32) {
-  trace_pop(line)
-}
-pub fn dyn_trace_dump() {
-  trace_dump()
 }
 // Resumes unwinding after a frame's cleanup has run.
 pub fn dyn_unwind_continue() {

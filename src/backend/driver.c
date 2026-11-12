@@ -48,7 +48,7 @@ static double backend_timing(const DynContext *context, struct timespec *start) 
   *start = now;
   return ms;
 }
-static const char *const runtime_names[] = {"dyn_panic", "dyn_trace_push", "dyn_trace_pop", "dyn_unwind_set", "dyn_unwind_link", "dyn_unwind_unlink", "dyn_unwind_continue", "fmod", "fmodf", "dyn_syscall6", "__chkstk", "dyn_check_failed",
+static const char *const runtime_names[] = {"dyn_panic", "dyn_trace_start", "dyn_trace_pop", "dyn_unwind_set", "dyn_unwind_link", "dyn_unwind_unlink", "dyn_unwind_continue", "fmod", "fmodf", "dyn_syscall6", "__chkstk", "dyn_check_failed",
   "dyn_rv32_divide", "dyn_rv32_multiply", "dyn_rv32_int_to_float", "dyn_rv32_float_to_int", "dyn_stack_overflow",
   "dyn_soft_f32_add", "dyn_soft_f32_sub", "dyn_soft_f32_mul", "dyn_soft_f32_div", "dyn_soft_f32_rem", "dyn_soft_f32_eq", "dyn_soft_f32_ne", "dyn_soft_f32_lt", "dyn_soft_f32_le", "dyn_soft_f32_gt", "dyn_soft_f32_ge", "dyn_soft_f32_unordered", "dyn_soft_i64_to_f32", "dyn_soft_f32_to_i64", "dyn_soft_u64_to_f32", "dyn_soft_f32_to_u64", "dyn_soft_f64_add", "dyn_soft_f64_sub", "dyn_soft_f64_mul", "dyn_soft_f64_div", "dyn_soft_f64_rem", "dyn_soft_f64_eq", "dyn_soft_f64_ne", "dyn_soft_f64_lt", "dyn_soft_f64_le", "dyn_soft_f64_gt", "dyn_soft_f64_ge", "dyn_soft_f64_unordered", "dyn_soft_i64_to_f64", "dyn_soft_f64_to_i64", "dyn_soft_u64_to_f64", "dyn_soft_f64_to_u64", "dyn_soft_f32_to_f64", "dyn_soft_f64_to_f32"};
 /* Thumb-2 names of the 32-bit helpers, in the same order. */
@@ -105,10 +105,18 @@ typedef struct {
   unsigned loop_depth;
   const DynIrProgram *active_ir;
   uint32_t defer_ids[MAX_DEFERS], defer_count, unwind_offset, return_offset, call_offset, sret_offset;
-  /* Debug builds: the frame word holding dyn_trace_push's result, a pointer
-     to this call's 32-bit line in the trace. Each statement stores its line
-     there, so a stack trace names the line each frame is running. */
-  uint32_t trace_offset;
+  /* Debug builds: stack traces walk frame pointers and look each return
+     address up in a table of function ranges and pc-to-line rows, which
+     the object carries in its constants (see trace_table_write). main hands
+     the table's header to dyn_trace_start; nothing runs per call. */
+  bool trace_table;
+  uint32_t trace_header; /* constants offset of {text start, table} */
+  unsigned trace_base_symbol; uint32_t trace_base_offset; /* the first traced function */
+  struct TraceRow { uint32_t pc, line; } *trace_rows;
+  size_t trace_row_count, trace_row_capacity, trace_row_mark;
+  struct TraceFunction { uint32_t start, end, row_first, row_count, name, name_length; } *trace_functions;
+  size_t trace_function_count, trace_function_capacity;
+  char *trace_names; size_t trace_names_size, trace_names_capacity;
   uint32_t captured_offsets[MAX_NODES], statement_scratch[MAX_NODES], temporary_offsets[MAX_NODES];
   /* Struct and array literals whose every field is constant are laid out in
      the constants section once; literal_offsets holds offset + 1 from
@@ -335,6 +343,26 @@ static void runtime_call(BackendContext *ctx, unsigned runtime) {
   if (!ctx->runtime_index[runtime]) ctx->runtime_index[runtime] = (unsigned)(ctx->runtime_base + ctx->runtime_count++);
   isa_call_symbol(ctx, ctx->runtime_index[runtime]);
 }
+/* Debug builds: code from pc on runs line, until the next row. A function's
+   emission starts again from trace_row_mark, so a retried or abandoned
+   emission leaves no rows behind. */
+static bool trace_row(BackendContext *ctx, size_t pc, unsigned line) {
+  if (!ctx->trace_table) return true;
+  if (ctx->trace_row_count > ctx->trace_row_mark) {
+    struct TraceRow *last = &ctx->trace_rows[ctx->trace_row_count - 1];
+    if (last->line == line) return true;
+    if (last->pc == pc) { last->line = line; return true; }
+  }
+  if (ctx->trace_row_count == ctx->trace_row_capacity) {
+    size_t capacity = ctx->trace_row_capacity ? 2 * ctx->trace_row_capacity : 1024;
+    void *grown = realloc(ctx->trace_rows, capacity * sizeof(*ctx->trace_rows));
+    if (!grown) return false;
+    ctx->trace_rows = grown; ctx->trace_row_capacity = capacity;
+  }
+  ctx->trace_rows[ctx->trace_row_count++] = (struct TraceRow){(uint32_t)pc, line};
+  return true;
+}
+
 #include "a64.inc"
 #include "rv64.inc"
 #include "rv32.inc"
@@ -342,6 +370,87 @@ static void runtime_call(BackendContext *ctx, unsigned runtime) {
 #include "isa.inc"
 #include "coff.inc"
 #include "macho.inc"
+static size_t align8(size_t n);
+static bool constant_relocation(BackendContext *ctx,uint32_t at,unsigned symbol,int64_t addend);
+/* Debug builds: main's first call is dyn_trace_start(&header). */
+static void trace_start_argument(BackendContext *ctx) {
+  isa_local_address(ctx, ctx->rv64 || ctx->a64 || ctx->rv32 || ctx->t32 ? R_A : ctx->win64 ? R_C : R_DI,
+                    ctx->literals_symbol, ctx->trace_header);
+}
+static void trace_start_call(BackendContext *ctx) {
+  trace_start_argument(ctx);
+  runtime_call(ctx, 1);
+}
+/* Debug builds: function at [start, end) of .text, named "name (path:" in
+   traces, with the rows emitted since trace_row_mark. */
+static bool trace_function(BackendContext *ctx, const DynIrFunction *f, const DynSource *source,
+                           const DynLocationIndex *locations, uint32_t start, unsigned symbol) {
+  const char *path = "?"; unsigned line, column;
+  dyn_location_get(locations, source, f->source_offset, &path, &line, &column);
+  char label[4096];
+  int length = snprintf(label, sizeof(label), "%s (%s:", f->debug_name ? f->debug_name : f->name, path ? path : "?");
+  if (length < 0) return false;
+  if ((size_t)length >= sizeof(label)) length = (int)sizeof(label) - 1;
+  if (ctx->trace_names_size + (size_t)length > ctx->trace_names_capacity) {
+    size_t capacity = ctx->trace_names_capacity ? 2 * ctx->trace_names_capacity : 4096;
+    while (capacity < ctx->trace_names_size + (size_t)length) capacity *= 2;
+    char *grown = realloc(ctx->trace_names, capacity);
+    if (!grown) return false;
+    ctx->trace_names = grown; ctx->trace_names_capacity = capacity;
+  }
+  if (ctx->trace_function_count == ctx->trace_function_capacity) {
+    size_t capacity = ctx->trace_function_capacity ? 2 * ctx->trace_function_capacity : 256;
+    void *grown = realloc(ctx->trace_functions, capacity * sizeof(*ctx->trace_functions));
+    if (!grown) return false;
+    ctx->trace_functions = grown; ctx->trace_function_capacity = capacity;
+  }
+  if (!ctx->trace_function_count) { ctx->trace_base_symbol = symbol; ctx->trace_base_offset = start; }
+  memcpy(ctx->trace_names + ctx->trace_names_size, label, (size_t)length);
+  ctx->trace_functions[ctx->trace_function_count++] = (struct TraceFunction){
+    start, (uint32_t)ctx->text.n, (uint32_t)ctx->trace_row_mark, (uint32_t)(ctx->trace_row_count - ctx->trace_row_mark),
+    (uint32_t)ctx->trace_names_size, (uint32_t)length};
+  ctx->trace_names_size += (size_t)length;
+  return true;
+}
+/* Debug builds: the stack trace table, appended to the constants after the
+   last function, and the header main hands to dyn_trace_start. The header
+   holds two pointers: the first traced function and the table. The table is
+   u32 words: magic "DYNT", version 1, flags (1: Thumb code addresses), the
+   offsets from a frame pointer of the caller's frame pointer and of the
+   return address, the first function's .text offset, .text size, function
+   count, row count, name bytes; then per function {start, end, first row,
+   row count, name offset, name length}, rows {pc, line}, and names. Offsets
+   are from .text; a row's line holds from its pc to the next row. */
+static bool trace_table_write(BackendContext *ctx) {
+  if (!ctx->trace_table || !ctx->trace_function_count || !ctx->literals_symbol) return true;
+  size_t functions = ctx->trace_function_count, rows = ctx->trace_row_count;
+  size_t bytes = 40 + 24 * functions + 8 * rows + ctx->trace_names_size;
+  size_t at = align8(ctx->constants_data.n);
+  if (bytes > LIMIT || at > LIMIT - bytes || !reserve(&ctx->constants_data, at + bytes)) return false;
+  memset(ctx->constants_data.data + ctx->constants_data.n, 0, at + bytes - ctx->constants_data.n);
+  ctx->constants_data.n = at + bytes;
+  unsigned char *out = ctx->constants_data.data + at;
+  /* Thumb frames: push {r3-r11, lr}, then r11 = sp - 4092. Every other
+     target saves the caller's frame pointer at fp and the return address
+     one 8-byte slot above it. */
+  uint32_t header[10] = {0x544e5944u, 1, ctx->t32 ? 1u : 0u, ctx->t32 ? 4092 + 32 : 0, ctx->t32 ? 4092 + 36 : 8,
+                         ctx->trace_base_offset, (uint32_t)ctx->text.n, (uint32_t)functions, (uint32_t)rows,
+                         (uint32_t)ctx->trace_names_size};
+  memcpy(out, header, sizeof(header));
+  for (size_t i = 0; i < functions; ++i) {
+    const struct TraceFunction *f = &ctx->trace_functions[i];
+    uint32_t record[6] = {f->start, f->end, f->row_first, f->row_count, f->name, f->name_length};
+    memcpy(out + 40 + 24 * i, record, sizeof(record));
+  }
+  for (size_t i = 0; i < rows; ++i) {
+    uint32_t row[2] = {ctx->trace_rows[i].pc, ctx->trace_rows[i].line};
+    memcpy(out + 40 + 24 * functions + 8 * i, row, sizeof(row));
+  }
+  if (ctx->trace_names_size) memcpy(out + 40 + 24 * functions + 8 * rows, ctx->trace_names, ctx->trace_names_size);
+  uint32_t pointer = ctx->rv32 || ctx->t32 ? 4 : 8;
+  return constant_relocation(ctx, ctx->trace_header, ctx->trace_base_symbol, 0) &&
+         constant_relocation(ctx, ctx->trace_header + pointer, ctx->literals_symbol, (int64_t)at);
+}
 static bool signed_scalar(DynType type) {
   return (type >= DYN_TYPE_I8 && type <= DYN_TYPE_I64) || type == DYN_TYPE_ISIZE;
 }
@@ -2058,12 +2167,6 @@ static void return_value(BackendContext *ctx, DynType type) {
     }
     isa_move(ctx, R_A, R_DI);
   }
-  if (ctx->debug_mode) {
-    if (aggregate(ir, type) && !sret) {
-      /* The aggregate snapshot may occupy rbp-8 itself in a zero-local function. */
-      isa_trace_pop_argument(ctx); runtime_call(ctx, 2); isa_lea(ctx, R_A, ctx->return_offset);
-    } else isa_trace_pop(ctx, descriptor(type));
-  }
   if (ctx->rv64 && aggregate(ir,type) && !sret) {if(!rv_struct_registers(ctx,ir,type,0,true))ctx->text.failed=true;isa_return(ctx);return;}
   if (ctx->rv32 && aggregate(ir,type) && !sret) {
     if (!rv32_struct_registers(ctx,ir,type,0,true)) ctx->text.failed=true;
@@ -2371,10 +2474,10 @@ static bool block_statements_value(BackendContext *ctx, const DynIrProgram *ir, 
       dyn_location_get(ctx->debug_locations,ctx->debug_source,s->span.start_byte,&path,&line,&column);
       if (!backend_dwarf_line(ctx->dwarf,ctx->text.n,path,line,column,false)) return false;
     }
-    if (ctx->trace_offset && ctx->debug_locations) {
+    if (ctx->trace_table && ctx->debug_locations) {
       const char *path; unsigned line,column;
       dyn_location_get(ctx->debug_locations,ctx->debug_source,s->span.start_byte,&path,&line,&column);
-      isa_load(ctx, R_11, ctx->trace_offset); isa_small_immediate(ctx, R_A, line); isa_store_value(ctx, 32);
+      if (!trace_row(ctx, ctx->text.n, line)) return false;
     }
     if (s->kind==DYN_STMT_PANIC) {
       if (s->expression>=ir->expression_count || !descriptor(ir->expressions[s->expression].type) ||
@@ -2693,11 +2796,15 @@ static bool emit_defers(BackendContext *ctx, const DynIrProgram *ir, const DynIr
   if (ctx->cleanup_depth++>=MAX_DEPTH) { --ctx->cleanup_depth; return false; }
   bool old=ctx->unwinding; ctx->unwinding=true;
   unsigned saved=ctx->defer_count;
+  /* The deferred statements record their own lines; the code after them
+     belongs to the statement that ran them. */
+  unsigned line = ctx->trace_row_count > ctx->trace_row_mark ? ctx->trace_rows[ctx->trace_row_count - 1].line : 0;
   for (unsigned i=saved;i>base;--i) {
     const DynIrStmt *s=&ir->statements[ctx->defer_ids[i-1]]; bool falls;
     if (!block(ctx, ir,f,s->body_start,s->body_count,0,&falls)) { ctx->unwinding=old; --ctx->cleanup_depth; return false; }
   }
-  ctx->unwinding=old; ctx->defer_count=saved; --ctx->cleanup_depth; return true;
+  ctx->unwinding=old; ctx->defer_count=saved; --ctx->cleanup_depth;
+  return !line || trace_row(ctx, ctx->text.n, line);
 }
 #include "allocation.inc"
 #include "ssa.inc"
@@ -2752,11 +2859,17 @@ static bool function(BackendContext *ctx, const DynSource *source, const DynIrPr
   if (!count_scratch(ctx, ir,f,f->body_start,f->body_count,0,&scratch)) return false;
   for (unsigned r = 0; r < 4; ++r)
     if (ctx->allocator_used & (1u << r)) ctx->allocator_save[r] = 0u - 8 * (ctx->local_words + ++scratch);
-  ctx->trace_offset = ctx->debug_mode ? 0u - 8 * (ctx->local_words + ++scratch) : 0;
   ctx->frame_bytes = (((ctx->local_words+scratch) * 8 + 15) / 16) * 16;
   if (!ctx->frame_bytes) ctx->frame_bytes = 16;
   ctx->stack_slots = ctx->loop_depth = 0;
   for (unsigned i = 0; i < GUARD_COUNT; ++i) ctx->message_offsets[i] = ctx->guard_stubs[i] = SIZE_MAX;
+  if (ctx->trace_table) {
+    /* Until the first statement, the function's own line. */
+    const char *path; unsigned line, column;
+    dyn_location_get(locations, source, f->source_offset, &path, &line, &column);
+    ctx->trace_row_count = ctx->trace_row_mark;
+    if (!trace_row(ctx, ctx->text.n, line)) return false;
+  }
   isa_enter(ctx);
   /* GP and FP register banks exhaust independently; stack slots retain source order. */
   unsigned gp=ctx->sret_offset && !ctx->a64?1:0,fp=0; uint32_t spilled=0;
@@ -2790,14 +2903,7 @@ static bool function(BackendContext *ctx, const DynSource *source, const DynIrPr
   }
   if (ctx->rv64 || ctx->rv32) rv_i(ctx,0x13,2,2,128,0);
   if (ctx->t32) t32_release_bank(ctx);
-  if (ctx->debug_mode) {
-    char label[4096]; const char *path; unsigned line, column;
-    dyn_location_get(locations, source, f->source_offset, &path, &line, &column);
-    snprintf(label, sizeof(label), "%s (%s:%u)", f->debug_name ? f->debug_name : f->name, path, line);
-    size_t length = strlen(label), offset = literal(ctx, label, length);
-    isa_string_arguments(ctx, offset, length); runtime_call(ctx, 1);
-    isa_store(ctx, R_A, ctx->trace_offset);
-  }
+  if (ctx->trace_table && f->is_main) trace_start_call(ctx);
   if (ctx->dwarf) {
     const char *path; unsigned line,column;
     dyn_location_get(locations,source,f->source_offset,&path,&line,&column);
@@ -3009,6 +3115,16 @@ static bool constant_literals(BackendContext *ctx, const DynIrProgram *ir) {
     }
   }
   free(nested);
+  if (ctx->trace_table) {
+    /* The trace header {text start, table}: two pointers relocated once the
+       table is written after the last function. */
+    size_t at = align8(ctx->constants_data.n);
+    if (at > LIMIT - 16 || !reserve(&ctx->constants_data, at + 16)) return false;
+    memset(ctx->constants_data.data + ctx->constants_data.n, 0, at + 16 - ctx->constants_data.n);
+    ctx->constants_data.n = at + 16;
+    ctx->trace_header = (uint32_t)at;
+    any = true;
+  }
   if (any) ctx->literals_symbol = (unsigned)ctx->runtime_base++;
   return true;
 }
@@ -3331,12 +3447,15 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
       if (!backend_dwarf_begin(ctx->dwarf,begin,name,file,line,column)) goto done;
     }
     ctx->ssa_frame_valid = false;
+    ctx->trace_row_mark = ctx->trace_row_count;
     bool emitted = length <= string_limit - names && function(ctx, source, ir, f, &locations);
     ssa_pipeline_done(ctx, i);
     if (!emitted) {
       backend_report(ctx, "unsupported by native backend function or emission limit: %s\n", name);
       goto done;
     }
+    if (ctx->trace_table && !f->foreign && ctx->text.n > begin &&
+        !trace_function(ctx, f, source, &locations, (uint32_t)begin, ctx->function_symbols[i])) goto done;
     if (ctx->unwind_tables && !f->foreign && ctx->text.n > begin) {
       if (ctx->frame_record_count == ctx->frame_record_capacity) {
         size_t capacity = ctx->frame_record_capacity ? 2 * ctx->frame_record_capacity : 64;
@@ -3370,6 +3489,7 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
     if (ctx->function_suffixed[i]) memcpy(strings + names + strlen(name), ".dyn", 4);
     strings[names + length - 1] = 0; names += length;
   }
+  if (!trace_table_write(ctx)) goto done;
   if (ctx->initializer_symbol) {
     const char *name="__dyn_backend_initialize"; size_t length=strlen(name)+1,begin=ctx->text.n;
     if (ctx->dwarf) {
@@ -3584,6 +3704,7 @@ static bool object_target_mode(const DynSource *source, const DynIrProgram *ir,
       ? (!strcmp(dyn_context_target(&source->context)->name, "thumbv7em-none-nucleo-h753zi") ? 0x20001000u : 0x20301000u)
       : 0x87f01000u;
   ctx->debug_mode = debug; ctx->report = report; ctx->a64 = a64; ctx->shared = shared;
+  ctx->trace_table = debug && !source->context.runtime_support;
   const char *features = source->context.optimization ? source->context.optimization->features : NULL;
   bool x86 = !a64 && !ctx->rv64 && !ctx->rv32 && !ctx->t32;
   if (x86 && !debug && !debug_info && source->context.optimization && source->context.optimization->level >= 2)
@@ -3630,6 +3751,7 @@ static bool object_target_mode(const DynSource *source, const DynIrProgram *ir,
   free(ctx->text.data); free(ctx->rodata.data); free(ctx->globals_data.data); free(ctx->constants_data.data);
   free(ctx->strings);
   free(ctx->relocations); free(ctx->constant_relocations);
+  free(ctx->trace_rows); free(ctx->trace_functions); free(ctx->trace_names);
   free(ctx->frame_records); free(ctx->landing_records);
   free(ctx->expression_live); free(ctx);
   return ok;

@@ -36,10 +36,15 @@ servers so they pick up the new `dyn`.
 - Builds without overflow checks turn `return f(n - 1) + f(n - 2)` style
   recursion into one call per level plus a loop, as overflow-checked builds
   already did: release `fib(40)` went from 0.27s to 0.18s.
-- Debug builds return from a function without searching for the thread's
-  stack-trace slot: `dyn_trace_pop` now takes the word `dyn_trace_push`
-  returned. Debug `fib(40)` went from 1.39s to 1.06s. Custom runtimes that
-  define `dyn_trace_pop` must accept that argument.
+- Debug stack traces no longer cost anything per call. Functions no longer
+  call `dyn_trace_push` and `dyn_trace_pop` or store their line at each
+  statement; instead a panic or memory fault walks frame pointers and looks
+  each return address up in a table of function ranges and line rows that
+  debug builds carry. Debug `fib(40)` went from 1.39s to 0.33s (C at `-O0`:
+  0.28s), and debug binaries are smaller. A trace now lists the innermost
+  frames: past 64 it keeps the 48 innermost and 16 outermost and counts the
+  rest. Custom runtimes provide `dyn_trace_start(header)`, which `main` calls
+  once, instead of `dyn_trace_push` and `dyn_trace_pop`.
 - The compiler makes far fewer heap allocations: SSA functions use arenas
   recycled between functions (release builds of a 1500-function project
   went from 179k to 30k allocations, debug builds from 145k to 52k).

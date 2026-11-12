@@ -3,7 +3,6 @@ extern fn syscall_raw "dyn_syscall6"(n: i64, a: i64, b: i64, c: i64, d: i64, e: 
 // Runtime slot chunks: 64 threads per chunk, more chunks on demand.
 const unwind_chunk_slots: usize = 64
 const unwind_hint_count: usize = 64
-const trace_chunk_slots: usize = 64
 // Private anonymous read-write pages; zero on failure. The kernel commits
 // them on first touch.
 fn runtime_pages(bytes: u64) u64 {
@@ -37,11 +36,16 @@ struct SignalAction { handler: usize, flags: u64, restorer: usize, mask: u64 }
 struct SignalStack { base: u64, flags: i32, size: u64 }
 const fault_stack_size: u64 = 65536
 const signal_on_stack: u64 = 0x08000000
+const signal_information: u64 = 4
 const signal_bus: i64 = 7
 const signal_segv: i64 = 11
-fn fault_handler() {
+fn fault_handler(signal: i32, information: rawptr, context: rawptr) {
+  _ = signal
+  _ = information
   write_string("memory fault: invalid address\n")
-  fault_report()
+  address := #cast(usize, context)
+  trace_fault(fault_pc(address), fault_fp(address))
+  _ = syscall_raw(exit_number(), 101, 0, 0, 0, 0, 0)
 }
 pub fn dyn_fault_install() {
   stack := SignalStack{ base: runtime_pages(fault_stack_size), size: fault_stack_size }
@@ -50,7 +54,7 @@ pub fn dyn_fault_install() {
   }
   _ = syscall_raw(sigaltstack_number(), #cast(i64, #cast(usize, &stack)), 0, 0, 0, 0, 0)
   handler := #cast(usize, #cast(rawptr, fault_handler))
-  action := SignalAction{ handler: handler, flags: signal_on_stack | signal_restorer_flag(), restorer: signal_restorer(handler) }
+  action := SignalAction{ handler: handler, flags: signal_on_stack | signal_information | signal_restorer_flag(), restorer: signal_restorer(handler) }
   _ = syscall_raw(sigaction_number(), signal_segv, #cast(i64, #cast(usize, &action)), 0, 8, 0, 0)
   _ = syscall_raw(sigaction_number(), signal_bus, #cast(i64, #cast(usize, &action)), 0, 8, 0, 0)
 }

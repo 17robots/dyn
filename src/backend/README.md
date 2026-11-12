@@ -89,14 +89,20 @@ use word accesses, with byte prefixes and tails; copies preserve overlap
 semantics. Both 32-bit targets emit DWARF with target-sized addresses and
 frame rules, including the biased Thumb frame pointer.
 
+Debug stack traces cost nothing per call. Every target keeps a frame-pointer
+chain, and debug objects carry a table in their constants: function ranges,
+pc-to-line rows and `function (path:` labels, with the target's frame layout
+(see `trace_table_write` in `driver.c`). `main` passes its header to
+`dyn_trace_start` once. A panic walks the frames from `dyn_panic`'s caller
+before cleanups unwind them (`runtime/support/trace.dyn`), and a memory fault
+walks from the faulting instruction in the signal or exception context.
+
 A function the SSA path cannot build yet falls back to the tree emitter;
 `--opt-remarks` reports the line of `ssa.inc` that stopped it. Debug builds
 on the 64-bit targets also use SSA code generation, without the optimizing
 passes: every local stays in its frame slot (DWARF variables with lexical
-scopes), each statement gets a line row and stores its line where
-`dyn_trace_push` said, frames push and pop through ordinary runtime calls
-(`dyn_trace_pop` gets the word push returned, and finds the slot from it),
-emission runs once with long branches, and two preparation workers keep
+scopes), each statement gets a line row, emission runs once with long
+branches, and two preparation workers keep
 emission fed. Each worker prepares a fixed share of the functions with its
 own pool of arena chunks, so a build's heap calls do not depend on thread
 timing. Debug builds on RV32 and Thumb use the tree emitter. Windows ARM64 SSA reserves callee-saved GP registers

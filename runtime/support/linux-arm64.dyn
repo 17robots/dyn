@@ -18,9 +18,12 @@ fn signal_restorer_flag() u64 {
 fn signal_restorer(handler: usize) usize {
   return 0
 }
-fn fault_report() {
-  trace_dump()
-  _ = syscall_raw(exit_number(), 101, 0, 0, 0, 0, 0)
+// The faulting instruction and frame pointer in a signal's ucontext.
+fn fault_pc(context: usize) usize {
+  return #cast(*const usize, context + 440).*
+}
+fn fault_fp(context: usize) usize {
+  return #cast(*const usize, context + 416).*
 }
 fn thread_number() i64 {
   return 178
@@ -30,15 +33,6 @@ fn mmap_number() i64 {
 }
 fn write_number() i64 {
   return 64
-}
-pub fn dyn_trace_push(name: *const u8, length: u64) *u32 {
-  return trace_push(name, length)
-}
-pub fn dyn_trace_pop(line: *u32) {
-  trace_pop(line)
-}
-pub fn dyn_trace_dump() {
-  trace_dump()
 }
 // Resumes unwinding after a frame's cleanup has run.
 pub fn dyn_unwind_continue() {

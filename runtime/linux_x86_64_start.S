@@ -3,9 +3,6 @@
 .global _start
 .type _start,@function
 _start:
-#ifndef DYN_RELEASE
-    # Trace slots are claimed lazily by each thread.
-#endif
     call main
     mov %eax, %edi
     # Returning from main ends the process. With a C library linked, its
@@ -73,90 +70,10 @@ dyn_panic:
     mov $2, %edi
     mov $1, %eax
     syscall
-.global dyn_fault_report
-.type dyn_fault_report,@function
-dyn_fault_report:
 .Ldyn_panic_stack:
-    lea .Ldyn_panic_trace(%rip), %rsi
-    mov $13, %edx
-    mov $2, %edi
-    mov $1, %eax
-    syscall
-    call .Ldyn_trace_slot
-    test %rax, %rax
-    jz .Ldyn_panic_exit
-    mov 8(%rax), %rbx
-    mov $64, %rcx
-    cmp %rcx, %rbx
-    cmova %rcx, %rbx
-    lea 32(%rax), %r13
-.Ldyn_panic_frame:
-    test %rbx, %rbx
-    jz .Ldyn_panic_exit
-    dec %rbx
-    mov %r13, %r12
-    lea (%rbx,%rbx,2), %rax
-    shl $3, %rax
-    add %rax, %r12
-    lea .Ldyn_panic_at(%rip), %rsi
-    mov $5, %edx
-    mov $2, %edi
-    mov $1, %eax
-    syscall
-    # A frame is {name, u32 length, u32 running line, slot}. The name ends
-    # in "(path:N)"; a stored running line replaces N.
-    mov (%r12), %rsi
-    mov 8(%r12), %edx
-    mov 12(%r12), %r14d
-    test %r14d, %r14d
-    jz .Ldyn_panic_name
-    mov %rdx, %rcx
-.Ldyn_panic_colon:
-    test %rcx, %rcx
-    jz .Ldyn_panic_name
-    dec %rcx
-    cmpb $58, (%rsi,%rcx)
-    jne .Ldyn_panic_colon
-    lea 1(%rcx), %rdx
-    mov $2, %edi
-    mov $1, %eax
-    syscall
-    sub $16, %rsp
-    lea 15(%rsp), %rsi
-    movb $41, (%rsi)
-    mov %r14d, %eax
-    mov $10, %ecx
-.Ldyn_panic_digit:
-    xor %edx, %edx
-    div %ecx
-    add $48, %dl
-    dec %rsi
-    mov %dl, (%rsi)
-    test %eax, %eax
-    jnz .Ldyn_panic_digit
-    lea 16(%rsp), %rdx
-    sub %rsi, %rdx
-    mov $2, %edi
-    mov $1, %eax
-    syscall
-    add $16, %rsp
-    jmp .Ldyn_panic_name_done
-.Ldyn_panic_name:
-    mov $2, %edi
-    mov $1, %eax
-    syscall
-.Ldyn_panic_name_done:
-    lea .Ldyn_panic_newline(%rip), %rsi
-    mov $1, %edx
-    mov $2, %edi
-    mov $1, %eax
-    syscall
-    jmp .Ldyn_panic_frame
-#endif
-#ifdef DYN_RELEASE
-.global dyn_fault_report
-.type dyn_fault_report,@function
-dyn_fault_report:
+    # The trace was captured when the panic began, before cleanups ran.
+    and $-16, %rsp
+    call dyn_trace_dump
 #endif
 .Ldyn_panic_exit:
     # A panic ends every thread, without atexit handlers (state may be broken).
@@ -242,159 +159,6 @@ dyn_unwind_jump:
 .section .rodata
 .Ldyn_panic_newline:
     .byte 10
-#ifndef DYN_RELEASE
-.Ldyn_panic_trace:
-    .ascii "stack trace:\n"
-.Ldyn_panic_at:
-    .ascii "  at "
-.section .text.dyn_trace_push,"ax",@progbits
-.global dyn_trace_push
-.type dyn_trace_push,@function
-dyn_trace_push:
-    # The slot whose stack range holds the caller's stack pointer is this
-    # thread's. A thread's first frame, or one deeper than any before it,
-    # asks the kernel for the thread id instead and widens the range.
-    lea 8(%rsp), %r8
-    call .Ldyn_trace_find
-    test %rax, %rax
-    jnz .Ldyn_trace_push_have
-    push %rdi
-    push %rsi
-    push %r8
-    call .Ldyn_trace_slot_claim
-    pop %r8
-    pop %rsi
-    pop %rdi
-    test %rax, %rax
-    jz .Ldyn_trace_push_spare
-    cmpq $0, 8(%rax)
-    jne .Ldyn_trace_push_widen
-    mov %r8, 24(%rax)
-    mov %r8, 16(%rax)
-    jmp .Ldyn_trace_push_have
-.Ldyn_trace_push_widen:
-    cmp 24(%rax), %r8
-    jae .Ldyn_trace_push_high
-    mov %r8, 24(%rax)
-.Ldyn_trace_push_high:
-    cmp 16(%rax), %r8
-    jbe .Ldyn_trace_push_have
-    mov %r8, 16(%rax)
-.Ldyn_trace_push_have:
-    # Returns where the caller stores the line it is running: within the
-    # frame, the slot's 65th frame past 64 frames, or a spare word without
-    # a slot. The slot pointer follows the line, for dyn_trace_pop.
-    mov 8(%rax), %rcx
-    mov %rcx, %rdx
-    cmp $64, %rcx
-    jb .Ldyn_trace_push_frame
-    mov $64, %edx
-.Ldyn_trace_push_frame:
-    lea (%rdx,%rdx,2), %rdx
-    shl $3, %rdx
-    cmp $64, %rcx
-    jae .Ldyn_trace_push_deep
-    mov %rdi, 32(%rax,%rdx)
-    mov %esi, 40(%rax,%rdx)
-.Ldyn_trace_push_deep:
-    movl $0, 44(%rax,%rdx)
-    mov %rax, 48(%rax,%rdx)
-    inc %rcx
-    mov %rcx, 8(%rax)
-    lea 44(%rax,%rdx), %rax
-    ret
-.Ldyn_trace_push_spare:
-    lea dyn_trace_spare_line(%rip), %rax
-    ret
-.section .text.dyn_trace_pop,"ax",@progbits
-.global dyn_trace_pop
-.type dyn_trace_pop,@function
-dyn_trace_pop:
-    # rdi is the line word dyn_trace_push returned; its slot follows it.
-    lea dyn_trace_spare_line(%rip), %rax
-    cmp %rax, %rdi
-    je .Ldyn_trace_pop_done
-    mov 4(%rdi), %rax
-    mov 8(%rax), %rcx
-    test %rcx, %rcx
-    jz .Ldyn_trace_pop_done
-    dec %rcx
-    mov %rcx, 8(%rax)
-    jnz .Ldyn_trace_pop_done
-    # Released: the range goes first, so no other thread matches it while
-    # a new owner claims the slot.
-    movq $0, 16(%rax)
-    movq $0, 24(%rax)
-    movq $0, (%rax)
-.Ldyn_trace_pop_done:
-    ret
-
-# This thread's slot from its stack, or zero: the slot whose range
-# [low, top] holds the stack pointer in r8. Stacks of threads do not
-# overlap, and a free slot's range is empty.
-.Ldyn_trace_find:
-    lea dyn_trace_slots(%rip), %rdx
-    mov $64, %ecx
-.Ldyn_trace_find_loop:
-    cmp 16(%rdx), %r8
-    ja .Ldyn_trace_find_next
-    cmp 24(%rdx), %r8
-    jb .Ldyn_trace_find_next
-    mov %rdx, %rax
-    ret
-.Ldyn_trace_find_next:
-    add $1592, %rdx
-    loop .Ldyn_trace_find_loop
-    xor %eax, %eax
-    ret
-
-# Return current thread's trace slot, or zero. 64 bounded slots of
-# {tid, count, top, low, frames[65]}, 1592 bytes each.
-.Ldyn_trace_slot:
-    mov $186, %eax
-    syscall
-    lea dyn_trace_slots(%rip), %rdx
-    mov $64, %ecx
-.Ldyn_trace_slot_find:
-    cmp (%rdx), %rax
-    je .Ldyn_trace_slot_found
-    add $1592, %rdx
-    loop .Ldyn_trace_slot_find
-    xor %eax, %eax
-    ret
-.Ldyn_trace_slot_found:
-    mov %rdx, %rax
-    ret
-
-# Return existing slot or atomically claim empty slot for current tid.
-.Ldyn_trace_slot_claim:
-    mov $186, %eax
-    syscall
-    mov %rax, %r8
-    lea dyn_trace_slots(%rip), %rdx
-    mov $64, %ecx
-.Ldyn_trace_slot_claim_loop:
-    cmp (%rdx), %r8
-    je .Ldyn_trace_slot_claimed
-    xor %eax, %eax
-    lock cmpxchg %r8, (%rdx)
-    je .Ldyn_trace_slot_new
-    add $1592, %rdx
-    loop .Ldyn_trace_slot_claim_loop
-    xor %eax, %eax
-    ret
-.Ldyn_trace_slot_new:
-    push %rdx
-    call dyn_fault_install
-    pop %rdx
-.Ldyn_trace_slot_claimed:
-    mov %rdx, %rax
-    ret
-.hidden dyn_trace_slots
-.comm dyn_trace_slots,101888,16
-.hidden dyn_trace_spare_line
-.comm dyn_trace_spare_line,4,4
-#endif
 .section .text.dyn_syscall6,"ax",@progbits
 .global dyn_syscall6
 .type dyn_syscall6,@function
@@ -505,6 +269,10 @@ dyn_thread_spawn:
     jz .Ldyn_thread_child
     ret
 .Ldyn_thread_child:
+#ifndef DYN_RELEASE
+    # Debug programs give each thread a stack for fault reports.
+    call dyn_trace_thread
+#endif
     pop %rax
     pop %rdi
     call *%rax

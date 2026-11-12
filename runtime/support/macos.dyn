@@ -8,7 +8,6 @@ extern fn syscall_raw "dyn_syscall6"(n: i64, a: i64, b: i64, c: i64, d: i64, e: 
 // Runtime slot chunks: 64 threads per chunk, more chunks on demand.
 const unwind_chunk_slots: usize = 64
 const unwind_hint_count: usize = 64
-const trace_chunk_slots: usize = 64
 // Private anonymous read-write pages through the mmap syscall; zero on failure.
 fn runtime_pages(bytes: u64) u64 {
   address := syscall_raw(197, 0, #cast(i64, bytes), 3, 4098, -1, 0)
@@ -34,15 +33,6 @@ fn trace_write(data: *const u8, size: u64) {
     offset += #cast(usize, written)
   }
 }
-pub fn dyn_trace_push(name: *const u8, length: u64) *u32 {
-  return trace_push(name, length)
-}
-pub fn dyn_trace_pop(line: *u32) {
-  trace_pop(line)
-}
-pub fn dyn_trace_dump() {
-  trace_dump()
-}
 // Resumes unwinding after a frame's cleanup has run.
 pub fn dyn_unwind_continue() {
   slot := unwind_slot(false)
@@ -65,11 +55,17 @@ extern fn signal_stack "sigaltstack"(stack: *const SignalStack, previous: rawptr
 extern fn exit_now "_exit"(code: i32)
 const fault_stack_size: u64 = 65536
 const signal_on_stack: i32 = 1
+const signal_information: i32 = 0x40
 const signal_bus: i32 = 10
 const signal_segv: i32 = 11
-fn fault_handler() {
+// The ucontext points at the machine context, which holds the faulting
+// instruction and frame pointer (fault_pc and fault_fp, per architecture).
+fn fault_handler(signal: i32, information: rawptr, context: rawptr) {
+  _ = signal
+  _ = information
   write_string("memory fault: invalid address\n")
-  trace_dump()
+  machine := #cast(*const usize, #cast(usize, context) + 48).*
+  trace_fault(fault_pc(machine), fault_fp(machine))
   exit_now(101)
 }
 fn trace_thread_started() {
@@ -79,7 +75,7 @@ fn trace_thread_started() {
   }
   stack := SignalStack{ base: #cast(usize, base), size: #cast(usize, fault_stack_size) }
   _ = signal_stack(&stack, nil)
-  action := SignalAction{ handler: #cast(usize, #cast(rawptr, fault_handler)), flags: signal_on_stack }
+  action := SignalAction{ handler: #cast(usize, #cast(rawptr, fault_handler)), flags: signal_on_stack | signal_information }
   _ = signal_action(signal_segv, &action, nil)
   _ = signal_action(signal_bus, &action, nil)
 }

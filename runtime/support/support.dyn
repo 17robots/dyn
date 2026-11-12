@@ -1,9 +1,10 @@
 // Freestanding runtime compiled by Dyn's independent backend.
 // No std imports, allocations, defer, or tracing may be introduced here.
 struct Unwind { previous: *Unwind }
+// trace holds the frames of the panic being unwound (see trace_walk).
 struct UnwindSlot {
   tid: u64, top: *Unwind, message: *const u8, length: u64, unwinding: u64,
-  storage: [4096]u8
+  storage: [4096]u8, trace_total: u64, trace: [trace_frames]usize
 }
 // Slots live in chunks obtained from the platform on first use, so programs
 // that never register a cleanup frame reserve nothing. Chunks are never

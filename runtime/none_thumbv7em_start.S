@@ -140,6 +140,14 @@ dyn_memory_end:
 dyn_panic:
     mov r4, r0
     mov r5, r2
+    mov r6, r3
+    // The trace begins at the caller: its return address and frame pointer.
+    mov r0, lr
+    mov r1, r11
+    bl dyn_trace_capture
+    mov r0, r4
+    mov r2, r5
+    mov r3, r6
     bl dyn_unwind_begin
     cmp.w r5, #0
     beq.w .Ltrace

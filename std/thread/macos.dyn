@@ -17,7 +17,12 @@ extern fn sysctl_by_name "sysctlbyname"(name: *const u8, value: rawptr, length: 
 
 pub struct Thread { handle: rawptr, identifier: u32, entry: fn(rawptr) isize, context: rawptr, ready: sync.AtomicU32 }
 
+// Debug programs give each thread a stack for fault reports; release
+// programs return at once.
+extern fn trace_thread "dyn_trace_thread"()
+
 fn trampoline(context: rawptr) rawptr {
+  trace_thread()
   thread := #cast(*Thread, context)
   // Publish the native handle/id before entry can complete and retire its port.
   for sync.load_u32(&thread.ready) == 0 {

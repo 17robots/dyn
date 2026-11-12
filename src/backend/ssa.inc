@@ -94,7 +94,8 @@ typedef struct {
   int32_t reg, slot, hint; /* hint: a value whose register this one prefers */
   uint32_t start, end; /* live interval */
   /* 1 + the source byte of the statement that built this value, or 0.
-     Debug builds turn changes of it into line rows and trace line stores. */
+     Debug builds turn changes of it into line rows for the debugger and
+     for stack traces. */
   uint32_t pos;
 } SsaValue;
 typedef struct {
@@ -149,9 +150,6 @@ typedef struct {
   bool calls;
   uint32_t check_origin;
   uint32_t pos;         /* see SsaValue.pos */
-  /* Debug builds: frame offset of the pointer dyn_trace_push returned, where
-     each statement stores its line; 0 when the function is not traced. */
-  uint32_t trace_slot;
   /* Debug information: where each local is visible, as 1 + source bytes
      [scope_low, scope_high]; 0 when it is visible in the whole function. */
   uint32_t *scope_low, *scope_high;
@@ -1749,15 +1747,6 @@ static void ssa_statements(Ssa *s, uint32_t start, uint32_t count, unsigned dept
 static void ssa_statement_value(Ssa *, const DynIrStmt *, unsigned);
 static void ssa_return(Ssa *s, int32_t value, int32_t second) {
   if (s->current == UINT32_MAX) return;
-  if (s->trace_slot) {
-    /* dyn_trace_pop(line word), after the result is computed; the call
-       keeps it. The runtime finds the slot from the word, without a search. */
-    int32_t items[3] = {ssa_load(s, ssa_frame(s, s->trace_slot), -1, 1, 0, SSA_MEM(64, 0, 0)), 0, 0};
-    int32_t call = ssa_emit(s, SO_CALL, SC_NONE, -1, -1, -1, 2, 1);
-    if (s->failed) return;
-    s->values[call].list = ssa_list(s, items, 3); s->values[call].count = 1;
-    s->calls = true;
-  }
   SsaBlock *b = &s->blocks[s->current];
   b->kind = SB_RETURN; b->control = value; b->control2 = second;
   s->current = UINT32_MAX;
@@ -3149,20 +3138,16 @@ static void ssa_build(Ssa *s) {
   }
   if (next != count) { SSA_GIVE_UP(s); return; }
   }
+  if (ctx->trace_table && f->is_main) {
+    /* dyn_trace_start(&header), before global initializers can panic; the
+       emitter supplies the argument. */
+    ssa_emit(s, SO_CALL, SC_NONE, -1, -1, -1, 1, 1);
+    s->calls = true;
+  }
   if (f->is_main && ctx->initializer_symbol) {
     int32_t call = ssa_emit(s, SO_CALL, SC_NONE, -1, -1, -1, ctx->initializer_symbol, 0);
     (void)call;
     s->calls = true;
-  }
-  if (ctx->debug_mode) {
-    /* dyn_trace_push(label): the emitter supplies the label. Its result is
-       where statements store their lines; ssa_return pops the frame. */
-    int32_t call = ssa_emit(s, SO_CALL, SC_NONE, -1, -1, -1, 1, 1);
-    s->calls = true;
-    int32_t line = ssa_emit(s, SO_RESULT, SC_INT, call, -1, -1, 0, 0);
-    uint32_t slot = ssa_reserve(s, 8, 8);
-    ssa_store(s, ssa_frame(s, slot), -1, 1, 0, SSA_MEM(64, 0, 0), line);
-    s->trace_slot = slot;
   }
   ssa_statements(s, f->body_start, f->body_count, 0);
   if (s->current != UINT32_MAX) {
@@ -7595,8 +7580,8 @@ typedef struct {
   uint32_t stub_use_count, stub_use_capacity;
   /* Debug information for this emission, applied once the final emission
      succeeds: line rows by statement position, epilogue starts, and where
-     the frame is set up. last_pos and last_line track the statement and
-     traced line the code being emitted belongs to. */
+     the frame is set up. last_pos tracks the statement the code being
+     emitted belongs to. */
   struct { size_t pc; const char *path; unsigned line, column; uint32_t pos; bool prologue_end; } *rows; uint32_t row_count, row_capacity;
   size_t *epilogues; uint32_t epilogue_count, epilogue_capacity;
   size_t prologue_pc;
@@ -8776,52 +8761,24 @@ static void ssa_fail_after_cleanup(SsaEmit *e, const SsaValue *v) {
   isa_trap(ctx);
 }
 /* Debug builds: the statement at pos begins. Records a line row for the
-   debugger and stores a changed line where dyn_trace_push said. */
+   debugger and for stack traces. */
 static void ssa_debug_position(SsaEmit *e, uint32_t pos) {
   BackendContext *ctx = e->ctx;
   if (!pos || pos == e->last_pos || !ctx->debug_locations) return;
   e->last_pos = pos;
-  uint32_t slot = e->s->trace_slot;
-  if (!ctx->dwarf && !slot) return;
+  if (!ctx->dwarf && !ctx->trace_table) return;
   const char *path; unsigned line, column;
   dyn_location_get(ctx->debug_locations, ctx->debug_source, pos - 1, &path, &line, &column);
-  if (ctx->dwarf) {
-    e->rows = ssa_grow(e->s, e->rows, &e->row_capacity, e->row_count + 1, sizeof(*e->rows));
-    if (e->s->failed) return;
-    e->rows[e->row_count].pc = ctx->text.n; e->rows[e->row_count].path = path;
-    e->rows[e->row_count].line = line; e->rows[e->row_count].column = column;
-    e->rows[e->row_count].pos = pos; e->rows[e->row_count++].prologue_end = false;
-  }
-  if (!slot || line == e->last_line) return;
-  e->last_line = line;
-  if (ctx->a64) {
-    a64s_slot_access(ctx, false, 16, (SsaMemory){A64_FP, -1, 1, (int32_t)slot});
-    a64_immediate(ctx, 17, line);
-    a64_word(ctx, 0xb9000000u | 16u << 5 | 17u); /* str w17, [x16] */
-  } else if (ctx->rv64) {
-    rvs_slot_access(ctx, false, 5, (SsaMemory){8, -1, 1, (int32_t)slot});
-    rv_imm(ctx, 6, line);
-    rv_memory(ctx, true, 6, 5, 0, 2, false); /* sw t1, 0(t0) */
-  } else {
-    x86_mem_op(ctx, -1, true, OP1(0x8b), X_R11, (SsaMemory){X_RBP, -1, 1, (int32_t)slot}, false);
-    CODE(0x41, 0xc7, 0x03); word(ctx, line); /* mov dword [r11], line */
-  }
+  e->rows = ssa_grow(e->s, e->rows, &e->row_capacity, e->row_count + 1, sizeof(*e->rows));
+  if (e->s->failed) return;
+  e->rows[e->row_count].pc = ctx->text.n; e->rows[e->row_count].path = path;
+  e->rows[e->row_count].line = line; e->rows[e->row_count].column = column;
+  e->rows[e->row_count].pos = pos; e->rows[e->row_count++].prologue_end = false;
 }
 static void ssa_debug_epilogue(SsaEmit *e) {
   if (!e->ctx->dwarf) return;
   e->epilogues = ssa_grow(e->s, e->epilogues, &e->epilogue_capacity, e->epilogue_count + 1, sizeof(*e->epilogues));
   if (!e->s->failed) e->epilogues[e->epilogue_count++] = e->ctx->text.n;
-}
-/* dyn_trace_push's arguments: "function (path:line)" for the function's
-   first line, as the tree emitter writes it. */
-static void ssa_trace_label(SsaEmit *e) {
-  BackendContext *ctx = e->ctx;
-  const DynIrFunction *f = e->s->f;
-  char label[4096]; const char *path = NULL; unsigned line = 0, column = 0;
-  if (ctx->debug_locations) dyn_location_get(ctx->debug_locations, ctx->debug_source, f->source_offset, &path, &line, &column);
-  snprintf(label, sizeof(label), "%s (%s:%u)", f->debug_name ? f->debug_name : f->name, path ? path : "?", line);
-  size_t length = strlen(label);
-  isa_string_arguments(ctx, literal(ctx, label, length), length);
 }
 static void ssa_call_emit(SsaEmit *e, SsaBlock *block, uint32_t *k) {
   Ssa *s = e->s; BackendContext *ctx = e->ctx;
@@ -8890,7 +8847,7 @@ static void ssa_call_emit(SsaEmit *e, SsaBlock *block, uint32_t *k) {
   else if (v->aux2 == 2 && ctx->rv64) rv_i(ctx, 0x67, 1, 28, 0, 0); /* jalr ra, x28 */
   else if (v->aux2 == 2) CODE(0xff, 0xd0); /* call rax */
   else if (v->aux2 == 1) {
-    if (v->aux == 1) ssa_trace_label(e);
+    if (v->aux == 1) trace_start_argument(ctx);
     runtime_call(ctx, (unsigned)v->aux);
   }
   else if (ctx->win64) { byte(ctx, 0xe8); relocate(ctx, (unsigned)v->aux, R_X86_64_PLT32, -4); word(ctx, 0); } /* home area is in the frame */
@@ -9639,7 +9596,7 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
     moves[count++] = m;
   }
   ssa_parallel(e, moves, count);
-  if (ctx->dwarf) {
+  if (ctx->dwarf || ctx->trace_table) {
     /* The body begins: where a breakpoint on the function stops. */
     e->rows = ssa_grow(s, e->rows, &e->row_capacity, e->row_count + 1, sizeof(*e->rows));
     if (s->failed) return false;
@@ -9933,7 +9890,7 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
 static bool ssa_enabled(BackendContext *ctx, const DynSource *source) {
   const DynOptimization *policy = source->context.optimization;
   /* Debug and debug-info builds use SSA on the 64-bit targets; the paired
-     32-bit lowering has no line rows or trace stores yet. */
+     32-bit lowering has no line rows yet. */
   if ((ctx->debug_mode || ctx->dwarf) && (ctx->rv32 || ctx->t32)) return false;
   if (policy && policy->level == 1) return false;
   const char *disabled = getenv("DYN_NO_SSA");
@@ -10220,6 +10177,16 @@ static int ssa_function(BackendContext *ctx, const DynSource *source, const DynI
       ctx->local_scope_begin[i] = begin;
       ctx->local_scope_end[i] = end;
     }
+    if (!measured) ctx->text.failed = true;
+  }
+  if (measured && ctx->trace_table) {
+    /* Stack trace rows: the function's own line from its first byte, then
+       each statement's. */
+    const char *path; unsigned line = 0, column;
+    if (ctx->debug_locations) dyn_location_get(ctx->debug_locations, ctx->debug_source, f->source_offset, &path, &line, &column);
+    ctx->trace_row_count = ctx->trace_row_mark;
+    measured = trace_row(ctx, text, line);
+    for (uint32_t i = 0; i < emit.row_count && measured; ++i) measured = trace_row(ctx, emit.rows[i].pc, emit.rows[i].line);
     if (!measured) ctx->text.failed = true;
   }
   if (measured) {

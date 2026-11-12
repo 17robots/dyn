@@ -14,6 +14,12 @@ dyn_panic:
     subq $88, %rsp
     movq %rcx, 48(%rsp)
     movq %rdx, 56(%rsp)
+    // The trace begins at the caller: its return address and frame pointer.
+    movq 88(%rsp), %rcx
+    movq %rbp, %rdx
+    callq dyn_trace_capture
+    movq 48(%rsp), %rcx
+    movq 56(%rsp), %rdx
     callq dyn_unwind_begin
     movl $-12, %ecx
     callq *__imp_GetStdHandle(%rip)
