@@ -9801,10 +9801,23 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
                        a->caches[c].reg, v->cls, X_R11);
         ssa_transfer(e, L_REG, a->caches[c].reg, L_SLOT, (int32_t)(e->spill_base - 8 * (uint32_t)v->slot), v->cls, X_R11);
       }
-      SsaBlock *target = &s->blocks[block->succ[0]];
+      /* The back edge may pass through forwarding blocks that move nothing. */
+      uint32_t head = ssa_landing(e, block->succ[0]);
+      SsaBlock *target = &s->blocks[head];
+      bool back = target->order < block->order;
+      /* A header of phis alone moves nothing once this edge's phi moves are
+         done, so the comparison block after it can be repeated instead. */
+      if (back && target->kind == SB_PLAIN && target->succ[0] < s->block_count &&
+          !ssa_cache_moves(e, head) && ssa_edge_moves_nothing(e, head, target->succ[0]) &&
+          s->blocks[target->succ[0]].kind == SB_IF && s->blocks[target->succ[0]].preds.count == 1) {
+        bool phis = true;
+        for (uint32_t k = 0; phis && k < target->values.count; ++k)
+          phis = s->values[target->values.items[k]].op == SO_PHI;
+        if (phis) target = &s->blocks[target->succ[0]];
+      }
       /* A back edge to a header that only compares and branches repeats the
          comparison here, saving a jump per iteration (loop rotation). */
-      bool rotate = !SSA_NEXT(block->succ[0]) && target->order < block->order && target->kind == SB_IF &&
+      bool rotate = !SSA_NEXT(block->succ[0]) && back && target->kind == SB_IF &&
                     s->values[target->control].fused && s->values[target->control].op == SO_CMP;
       for (uint32_t k = 0; rotate && k < target->values.count; ++k) {
         SsaValue *v = &s->values[target->values.items[k]];
