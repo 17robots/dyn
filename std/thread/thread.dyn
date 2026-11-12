@@ -3,7 +3,11 @@
 use "std/io" io
 use "std/sync"
 
-pub struct Thread { tid: sync.AtomicU32, stack_owner: *mem.Arena }
+// stack is the mapping spawn_with_size made for the thread, or empty.
+pub struct Thread { tid: sync.AtomicU32, stack: []u8 }
+// Below each mapped stack: no access, so an overflow faults instead of
+// writing into the next mapping. 64 KiB covers 64 KiB pages.
+const stack_guard: usize = 65536
 
 extern fn spawn_raw "dyn_thread_spawn"(
   stack: *u8,
@@ -41,14 +45,24 @@ pub fn spawn_with_size(arena: *mem.Arena, size: usize, entry: fn(rawptr) isize, 
   if size < 256 || entry == nil {
     return SpawnResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
+  if size > ~#cast(usize, 0) - stack_guard - 4096 {
+    return SpawnResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
+  }
   mark := mem.arena_mark(arena)
   thread := mem.push(Thread, arena)
-  // The stack follows the arena header in its own mapping.
-  thread.stack_owner = mem.arena_create(size + 256)
-  stack := mem.arena_push_uninit(thread.stack_owner, size, 16)
-  value := spawn_raw(stack, size, entry, context, &thread.tid)
+  // Private, anonymous, reserved lazily; the guard is the lowest 64 KiB.
+  total := stack_guard + (size + 4095) / 4096 * 4096
+  address := #syscall(9, 0, total, 3, 16418, -1, 0)
+  if address < 0 {
+    mem.arena_rewind(arena, mark)
+    return SpawnResult{ failure: io.Failure{ kind: io.linux(address), native: address } }
+  }
+  base := #cast(*u8, address)
+  _ = #syscall(10, base, stack_guard, 0)
+  thread.stack = #slice(base, total)
+  value := spawn_raw(&thread.stack[stack_guard], total - stack_guard, entry, context, &thread.tid)
   if value < 0 {
-    mem.arena_release(thread.stack_owner)
+    _ = #syscall(11, base, total)
     mem.arena_rewind(arena, mark)
     return SpawnResult{ failure: io.Failure{ kind: io.linux(value), native: value } }
   }
@@ -63,8 +77,10 @@ pub fn join(thread: *Thread) Result {
   for true {
     tid := sync.load_u32(&thread.tid)
     if tid == 0 {
-      mem.arena_release(thread.stack_owner)
-      thread.stack_owner = nil
+      if #len(thread.stack) != 0 {
+        _ = #syscall(11, &thread.stack[0], #len(thread.stack))
+        thread.stack = thread.stack[..0]
+      }
       return Result{}
     }
     result := #syscall(202, &thread.tid, 0, tid, 0, 0, 0)

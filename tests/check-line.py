@@ -28,6 +28,39 @@ with tempfile.TemporaryDirectory(prefix='dyn-check-line-') as temporary:
     subprocess.run([DYN, 'build', str(fault), '--debug', '--quiet', '--no-cache', '--output', str(program)], check=True, timeout=120)
     result = subprocess.run([str(program)], capture_output=True, text=True, timeout=30)
     assert result.returncode == 101 and 'memory fault' in result.stderr and 'at touch' in result.stderr, result
+    # A thread's stack overflow hits its guard and reports on the thread's
+    # own fault stack, on every Linux target.
+    overflow = Path(temporary) / 'overflow'
+    overflow.mkdir()
+    (overflow / 'main.dyn').write_text('''use "std/mem"
+use "std/thread"
+
+fn down(n: u64) u64 {
+  if n == 0 {
+    return 0
+  }
+  return down(n - 1) + 1
+}
+
+fn worker(context: rawptr) isize {
+  _ = context
+  return #cast(isize, down(100000000))
+}
+
+fn main() {
+  arena := mem.arena_create(0)
+  spawned := thread.spawn_with_size(arena, 1048576, worker, nil)
+  _ = thread.join(spawned.value)
+}
+''')
+    for target, emulator in (('x86_64-linux', []), ('aarch64-linux', ['qemu-aarch64']), ('riscv64-linux', ['qemu-riscv64'])):
+        if emulator and not shutil.which(emulator[0]):
+            continue
+        program = Path(temporary) / ('overflow-' + target)
+        subprocess.run([DYN, 'build', str(overflow), '--target', target, '--debug', '--quiet', '--no-cache',
+                        '--output', str(program)], check=True, timeout=120)
+        result = subprocess.run([*emulator, str(program)], capture_output=True, text=True, timeout=60)
+        assert result.returncode == 101 and 'memory fault' in result.stderr and '  at down (' in result.stderr, (target, result)
     windows = Path(temporary) / 'fault.exe'
     subprocess.run([DYN, 'build', str(fault), '--target', 'x86_64-windows', '--debug', '--quiet', '--no-cache', '--output', str(windows)], check=True, timeout=120)
     if shutil.which('wine'):
