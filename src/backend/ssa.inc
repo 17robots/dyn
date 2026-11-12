@@ -7146,6 +7146,9 @@ typedef struct {
   SsaSave *saves; uint32_t save_count; /* sorted by call */
   /* Spilled values cached in a register through one loop; see ssa_cache_loops. */
   struct SsaCache *caches; uint32_t cache_count;
+  /* Spilled values held in a free register between uses in one block; see
+     ssa_local_splits. Sorted by block order, then first use. */
+  struct SsaSplit *splits; uint32_t split_count;
   uint8_t *cache_member; /* cache_count rows of block_count; see SsaCache */
 } SsaAlloc;
 /* value holds reg inside its loop. evicted, when not UINT32_MAX, held reg
@@ -7713,6 +7716,180 @@ static bool ssa_exits_free(SsaAlloc *a, const bool *exit_block, int reg) {
     }
   }
   return true;
+}
+/* A spilled value used more than once in a block reloads its slot at every
+   use: the JSON decoder read its cursor from the stack a dozen times on its
+   fast path, spilled for living across calls further on. Splitting its
+   range there, LLVM's local splitting, gives each run of uses in a block a
+   register that no other value holds and no clobber touches over the run:
+   one load before the first use, then the register. The slot stays the
+   value's home, so nothing is stored back. x86-64 release code only. */
+/* defined: the split starts at the value's definition, which then writes the
+   register and stores it to the slot once, instead of reloading it. */
+typedef struct SsaSplit { uint32_t value, block, first, last; int reg; bool defined; } SsaSplit;
+typedef struct { uint32_t start, end; } SsaSpan;
+static int ssa_split_order(const void *x, const void *y) {
+  const SsaSplit *a = x, *b = y;
+  return a->first < b->first ? -1 : a->first > b->first;
+}
+static int ssa_span_order(const void *x, const void *y) {
+  const SsaSpan *a = x, *b = y;
+  return a->start < b->start ? -1 : a->start > b->start;
+}
+static bool ssa_loop_header(Ssa *s, uint32_t b) {
+  SsaBlock *block = &s->blocks[b];
+  for (uint32_t p = 0; p < block->preds.count; ++p)
+    if (s->blocks[block->preds.items[p]].order >= block->order) return true;
+  return false;
+}
+static void ssa_local_splits(SsaAlloc *a) {
+  Ssa *s = a->s;
+  BackendContext *ctx = s->ctx;
+  if (ctx->a64 || ctx->rv64 || ctx->rv32 || ctx->t32 || ctx->debug_mode) return;
+  /* Occupied spans per register, by start, with the largest end so far. */
+  uint32_t counts[64] = {0}, at[64] = {0};
+  for (uint32_t id = 0; id < s->value_count; ++id) {
+    SsaValue *v = &s->values[id];
+    if (v->reg >= 0 && v->reg < 64 && !v->dead) ++counts[v->reg];
+  }
+  SsaSpan *spans[64];
+  for (unsigned r = 0; r < 64; ++r) {
+    spans[r] = counts[r] ? ssa_temp(s, counts[r] * sizeof(SsaSpan)) : NULL;
+    if (counts[r] && !spans[r]) { s->failed = true; return; }
+  }
+  for (uint32_t id = 0; id < s->value_count; ++id) {
+    SsaValue *v = &s->values[id];
+    if (v->reg >= 0 && v->reg < 64 && !v->dead) spans[v->reg][at[v->reg]++] = (SsaSpan){v->start, v->end};
+  }
+  for (unsigned r = 0; r < 64; ++r) {
+    if (counts[r] > 1) qsort(spans[r], counts[r], sizeof(SsaSpan), ssa_span_order);
+    for (uint32_t i = 1; i < counts[r]; ++i) if (spans[r][i].end < spans[r][i - 1].end) spans[r][i].end = spans[r][i - 1].end;
+  }
+  uint32_t capacity = 0;
+  uint32_t *first = ssa_temp(s, (s->value_count + 1) * sizeof(uint32_t));
+  uint32_t *last = ssa_temp(s, (s->value_count + 1) * sizeof(uint32_t));
+  uint32_t *uses = ssa_temp_zero(s, (size_t)(s->value_count + 1) * sizeof(uint32_t));
+  uint32_t *touched = ssa_temp(s, (s->value_count + 1) * sizeof(uint32_t));
+  if (!first || !last || !uses || !touched) { s->failed = true; return; }
+  /* Regions: runs of consecutive blocks where each later block is entered
+     from the one before it alone, such as a fast path past its checks. A
+     register loaded in one of them is still there in the next. */
+  bool *cached = ssa_temp_zero(s, (size_t)(s->block_count + 1) * sizeof(bool));
+  if (!cached) { s->failed = true; return; }
+  for (uint32_t c = 0; c < a->cache_count; ++c)
+    for (uint32_t b = 0; b < s->block_count; ++b)
+      if (a->cache_member[(size_t)c * s->block_count + b]) cached[b] = true;
+  /* Loop caches set and clear their values' registers block by block. */
+  bool *cache_value = ssa_temp_zero(s, (size_t)(s->value_count + 1) * sizeof(bool));
+  if (!cache_value) { s->failed = true; return; }
+  for (uint32_t c = 0; c < a->cache_count; ++c) {
+    cache_value[a->caches[c].value] = true;
+    if (a->caches[c].evicted != UINT32_MAX) cache_value[a->caches[c].evicted] = true;
+  }
+  for (uint32_t i = 0; i < a->n && !s->failed;) {
+    if (cached[a->order[i]]) { ++i; continue; }
+    /* Loop rotation emits a header again at its latches, which then jump to
+       the header's successors: a region must not continue past a loop
+       header, nor past the comparison after a header of phis. */
+    uint32_t end = i + 1;
+    while (end < a->n && !cached[a->order[end]] && s->blocks[a->order[end]].preds.count == 1 &&
+           s->blocks[a->order[end]].preds.items[0] == a->order[end - 1] &&
+           !ssa_loop_header(s, a->order[end - 1]) &&
+           !(s->blocks[a->order[end - 1]].preds.count == 1 && ssa_loop_header(s, s->blocks[a->order[end - 1]].preds.items[0])))
+      ++end;
+    uint32_t head = a->order[i], region_start = a->block_start[head];
+    uint32_t touched_count = 0;
+    for (uint32_t r_index = i; r_index < end; ++r_index) {
+    uint32_t b = a->order[r_index];
+    SsaBlock *block = &s->blocks[b];
+    for (uint32_t k = 0; k <= block->values.count; ++k) {
+      int32_t operands[SSA_MAX_OPERANDS]; uint32_t count = 0, position;
+      if (k < block->values.count) {
+        SsaValue *user = &s->values[block->values.items[k]];
+        if (user->dead || user->op == SO_PHI) continue;
+        uint32_t c = ssa_operands(s, block->values.items[k], ssa_slots, SSA_MAX_OPERANDS);
+        for (uint32_t j = 0; j < c; ++j) operands[count++] = *ssa_slots[j];
+        /* A fused value is emitted by its user, at the latest by the
+           terminator: its operands count as used there. */
+        position = user->fused ? a->block_end[b] : user->start;
+        /* As in ssa_intervals: a protected call runs dyn_unwind_set and
+           dyn_unwind_link before its argument moves. */
+        if ((user->op == SO_CALL || user->op == SO_PANIC) && user->cond) position = user->start + 1;
+      } else {
+        /* The terminator, including phi moves into the successors. */
+        int32_t controls[4] = {block->control, block->control2, block->control3, block->control4};
+        for (unsigned j = 0; j < 4; ++j) if (controls[j] >= 0) operands[count++] = controls[j];
+        for (uint32_t j = 0; j < ssa_successors(s, block) && count < SSA_MAX_OPERANDS - 64; ++j) {
+          SsaBlock *next = &s->blocks[ssa_successor(s, block, j)];
+          for (uint32_t p = 0; p < next->preds.count; ++p) {
+            if (next->preds.items[p] != b) continue;
+            for (uint32_t q = 0; q < next->values.count && count < SSA_MAX_OPERANDS; ++q) {
+              SsaValue *phi = &s->values[next->values.items[q]];
+              if (phi->op == SO_PHI && p < phi->count) operands[count++] = (int32_t)s->lists[phi->list + p];
+            }
+          }
+        }
+        position = a->block_end[b];
+      }
+      for (uint32_t j = 0; j < count; ++j) {
+        int32_t op = operands[j];
+        if (op < 0) continue;
+        SsaValue *v = &s->values[op];
+        if (v->reg >= 0 || v->slot < 0 || v->dead || v->cls == SC_NONE || v->op == SO_CONST || cache_value[op]) continue;
+        if (!uses[op]) { touched[touched_count++] = (uint32_t)op; first[op] = position; }
+        last[op] = position;
+        ++uses[op];
+      }
+    }
+    }
+    for (uint32_t t = 0; t < touched_count; ++t) {
+      uint32_t id = touched[t];
+      SsaValue *v = &s->values[id];
+      uint32_t from = first[id], to = last[id], n = uses[id];
+      uses[id] = 0;
+      /* An ordinary definition earlier in this region starts the split. */
+      bool defined = v->start >= region_start && v->start < from && v->op != SO_PHI && v->op != SO_RESULT &&
+                     v->op != SO_PARAM && v->op != SO_CALL && !v->fused;
+      if (defined) from = v->start;
+      else if (n < 2 || to == from) continue;
+      /* A phi's predecessors write its slot in their phi moves: a split
+         holding the phi through one of them would take that write instead. */
+      bool written = false;
+      if (v->op == SO_PHI) {
+        SsaBlock *home = &s->blocks[v->block];
+        for (uint32_t p = 0; p < home->preds.count && !written; ++p) {
+          uint32_t at = a->block_end[home->preds.items[p]];
+          written = at >= from && at <= to;
+        }
+      }
+      if (written) continue;
+      bool floating = v->cls == SC_F64 || v->cls == SC_F32;
+      int chosen = -1;
+      for (unsigned r = floating ? X_XMM0 : 0; r < (floating ? 64u : (unsigned)X_XMM0) && chosen < 0; ++r) {
+        /* The first use may itself clobber (a call taking the value as an
+           argument), unlike a definition there: include it. */
+        if (!ssa_allocatable(ctx, r) || ssa_clobbered(a, r, defined ? from : from - 1, to, id)) continue;
+        /* Occupied when some span in r starts by `to` and ends at `from` or later. */
+        uint32_t lo = 0, hi = counts[r];
+        while (lo < hi) { uint32_t mid = (lo + hi) / 2; if (spans[r][mid].start <= to) lo = mid + 1; else hi = mid; }
+        if (lo && spans[r][lo - 1].end >= from) continue;
+        /* Nor another split of this region over the same stretch. */
+        bool taken = false;
+        for (uint32_t q = a->split_count; q-- > 0 && a->splits[q].block == head && !taken;)
+          taken = a->splits[q].reg == (int)r && a->splits[q].first <= to && a->splits[q].last >= from;
+        if (!taken) chosen = (int)r;
+      }
+      if (chosen < 0) continue;
+      a->splits = ssa_grow(s, a->splits, &capacity, a->split_count + 1, sizeof(SsaSplit));
+      if (s->failed) return;
+      a->splits[a->split_count++] = (SsaSplit){id, head, from, to, chosen, defined};
+      if (chosen == X_RBX || (chosen >= X_R12 && chosen <= X_R15) || (ctx->win64 && (chosen == X_RSI || chosen == X_RDI)))
+        a->used_callee |= UINT64_C(1) << chosen;
+    }
+    i = end;
+  }
+  /* Emission activates splits in order of their first position. */
+  if (a->split_count > 1) qsort(a->splits, a->split_count, sizeof(SsaSplit), ssa_split_order);
 }
 static void ssa_cache_loops(SsaAlloc *a) {
   Ssa *s = a->s;
@@ -9882,6 +10059,9 @@ static uint32_t *ssa_cold_layout(Ssa *s, const uint32_t *order, uint32_t n) {
 static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
   Ssa *s = e->s; BackendContext *ctx = e->ctx;
   SsaAlloc *a = e->alloc;
+  /* Local splits (ssa_local_splits), in order of first position: active
+     ones hold their register from the first use to the last. */
+  uint32_t split_next = 0, split_active[64], split_actives = 0;
   /* Unset until emitted, so a jump to a block that never gets an address
      fails the build instead of branching into another function. */
   for (uint32_t b = 0; b < s->block_count; ++b) s->blocks[b].at = SIZE_MAX;
@@ -10022,12 +10202,50 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
     }
     /* Control may arrive from anywhere: the first statement stores again. */
     e->last_pos = 0; e->last_line = 0;
+    /* Splits end before anything past their last use is emitted. */
+    for (uint32_t q = 0; q < split_actives;) {
+      SsaSplit *split = &a->splits[split_active[q]];
+      if (split->last < a->block_start[b]) { s->values[split->value].reg = -1; split_active[q] = split_active[--split_actives]; }
+      else ++q;
+    }
     for (uint32_t k = 0; k < block->values.count; ++k) {
+      uint32_t position = s->values[block->values.items[k]].start;
+      for (uint32_t q = 0; q < split_actives;) {
+        SsaSplit *split = &a->splits[split_active[q]];
+        if (split->last < position) { s->values[split->value].reg = -1; split_active[q] = split_active[--split_actives]; }
+        else ++q;
+      }
+      uint32_t emitted = block->values.items[k];
+      /* A split whose first position passed without emission (a value a
+         call consumed) stays unloaded: its uses read the slot. */
+      while (split_next < a->split_count && a->splits[split_next].first <= position) {
+        SsaSplit *split = &a->splits[split_next++];
+        SsaValue *v = &s->values[split->value];
+        if (split->first != position || s->values[emitted].op == SO_PHI || split_actives == 64) continue;
+        if (!split->defined) ssa_transfer(e, L_REG, split->reg, L_SLOT, ssa_slot_memory(e, v).disp, v->cls, X_R11);
+        v->reg = split->reg;
+        split_active[split_actives++] = (uint32_t)(split - a->splits);
+      }
       ssa_debug_position(e, s->values[block->values.items[k]].pos);
       if (ctx->a64) a64s_emit_value(e, block, &k);
       else if (ctx->rv64) rvs_emit_value(e, block, &k);
       else ssa_emit_value(e, block, &k);
+      /* A split definition wrote its register; the slot keeps the value for
+         the rest of the function. */
+      for (uint32_t q = 0; q < split_actives; ++q) {
+        SsaSplit *split = &a->splits[split_active[q]];
+        if (split->defined && split->value == emitted && s->values[emitted].reg == split->reg)
+          ssa_transfer(e, L_SLOT, ssa_slot_memory(e, &s->values[emitted]).disp, L_REG, split->reg, s->values[emitted].cls, X_R11);
+      }
+      position = s->values[block->values.items[k]].start;
+      for (uint32_t q = 0; q < split_actives;) {
+        SsaSplit *split = &a->splits[split_active[q]];
+        if (split->last <= position) { s->values[split->value].reg = -1; split_active[q] = split_active[--split_actives]; }
+        else ++q;
+      }
     }
+    /* A split whose last use is this terminator keeps its register through
+       it; the next block's first value releases it. */
     /* Falling through reaches the next block emitted. */
     uint32_t next = UINT32_MAX;
     for (uint32_t j = i + 1; j < n && next == UINT32_MAX; ++j)
@@ -10297,6 +10515,7 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
     }
     isa_patch(ctx, at, target);
   }
+  for (uint32_t q = 0; q < a->split_count; ++q) s->values[a->splits[q].value].reg = -1;
   /* Cached values are spilled outside their loops; the next emission pass
      sets their registers again block by block. */
   for (uint32_t c = 0; c < a->cache_count; ++c) {
@@ -10484,6 +10703,8 @@ allocate:
   if (!ssa_allocate(&p->alloc) || s->failed) goto done;
   ssa_cache_loops(&p->alloc);
   if (s->failed) goto done;
+  ssa_local_splits(&p->alloc);
+  if (s->failed) goto done;
   p->allocate_ms += backend_timing(&source->context, &phase);
   p->ready = true;
 done:
@@ -10497,6 +10718,7 @@ static void ssa_prepared_free(SsaPrepared *p) {
   ssa_free(&p->s);
   p->order = NULL; p->alloc.block_start = p->alloc.block_end = NULL; p->alloc.clobbers = NULL; p->alloc.saves = NULL; p->alloc.save_count = 0;
   p->alloc.caches = NULL; p->alloc.cache_member = NULL; p->alloc.cache_count = 0;
+  p->alloc.splits = NULL; p->alloc.split_count = 0;
   p->s.literal_uses = NULL;
 }
 /* Interns deferred literals exactly as ssa_build would have, then gives

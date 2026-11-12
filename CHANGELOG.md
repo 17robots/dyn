@@ -41,8 +41,10 @@ servers so they pick up the new `dyn`.
   void function ending in one) loops instead of calling, so deep tail
   recursion no longer grows the stack; loops whose condition loads and
   bounds-checks are rotated; `at = (at + 1) & mask` stays in one register;
-  64-bit constants used in loops stay in registers. The hash map benchmark
-  runs 9% faster and sieve 5%.
+  64-bit constants used in loops stay in registers; a value kept on the stack
+  because it lives across calls is loaded once into a free register for a
+  run of straight-line uses instead of at every use. The hash map benchmark
+  runs 8% faster, sieve 6%, the JSONL report 3%.
 - Functions that take or return fixed arrays or payload enums by value, such
   as `fn area(shape: Shape) f64`, and functions that call C variadic
   functions now compile to optimized SSA code on every 64-bit target. No
