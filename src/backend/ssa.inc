@@ -3065,6 +3065,13 @@ static void ssa_scan(Ssa *s, uint32_t start, uint32_t count, unsigned depth) {
     ssa_find_addresses(s, st->target, pointer_loop, 0);
     ssa_scan(s, st->body_start, st->body_count, depth + 1);
     ssa_scan(s, st->else_start, st->else_count, depth + 1);
+    /* Case arms too: an address taken in an arm once sent the whole
+       function to the tree emitter, std's number parsing among them. */
+    if ((uint64_t)st->case_arm_start + st->case_arm_count > ir->case_arm_count) { SSA_GIVE_UP(s); return; }
+    for (uint32_t j = 0; j < st->case_arm_count && !s->unsupported; ++j) {
+      const DynIrCaseArm *arm = &ir->case_arms[st->case_arm_start + j];
+      ssa_scan(s, arm->body_start, arm->body_count, depth + 1);
+    }
   }
 }
 /* Builds the function. Parameters arrive first, as SO_PARAM values that the

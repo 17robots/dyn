@@ -37,6 +37,10 @@ servers so they pick up the new `dyn`.
   hands the optimizer the lowered program instead of a copy, and keeps
   blocks up to 4 MiB in the heap in batch commands instead of mapping each one.
   `dyn lsp` keeps the allocator's defaults.
+- A function that takes a local's address inside a `case` arm now compiles
+  to optimized SSA code instead of the simple fallback emitter. std's number
+  parsing (`strings.parse_into`, behind `json.read`) was one such function;
+  the JSONL report benchmark runs about 7% faster.
 - `--release` inlines a little more: each function may grow by 176 cost units
   instead of 128, enough to inline `mem.push` together with the arena's fast
   path. The tree benchmark runs 16% faster; compile time on real projects is
