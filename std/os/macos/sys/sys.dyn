@@ -1,0 +1,35 @@
+#target(kernel: darwin)
+// XNU BSD system call numbers for #syscall, from bsd/kern/syscalls.master.
+pub const Read: u64 = 3
+pub const Write: u64 = 4
+pub const Open: u64 = 5
+pub const Close: u64 = 6
+pub const Recvmsg: u64 = 27
+pub const Recvfrom: u64 = 29
+pub const Accept: u64 = 30
+pub const Getpeername: u64 = 31
+pub const Getsockname: u64 = 32
+pub const Sigaction: u64 = 46
+pub const Ioctl: u64 = 54
+pub const Readlink: u64 = 58
+pub const Munmap: u64 = 73
+pub const Fcntl: u64 = 92
+pub const Fsync: u64 = 95
+pub const Socket: u64 = 97
+pub const Connect: u64 = 98
+pub const Bind: u64 = 104
+pub const Setsockopt: u64 = 105
+pub const Listen: u64 = 106
+pub const Getsockopt: u64 = 118
+pub const Rename: u64 = 128
+pub const Sendto: u64 = 133
+pub const Shutdown: u64 = 134
+pub const Mmap: u64 = 197
+pub const Lseek: u64 = 199
+pub const Poll: u64 = 230
+pub const DisableThreadsignal: u64 = 331
+pub const Stat64: u64 = 338
+pub const Fstat64: u64 = 339
+pub const Getdirentries64: u64 = 344
+pub const Kqueue: u64 = 362
+pub const Kevent: u64 = 363

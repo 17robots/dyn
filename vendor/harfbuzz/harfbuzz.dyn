@@ -147,7 +147,7 @@ pub fn shape_run(arena: *mem.Arena, api: *const Api, font: rawptr, text: []const
   if count != positions_count || (count != 0 && (infos == nil || positions == nil)) {
     return ShapeResult{kind:io.Kind.System}
   }
-  if #cast(u64, count) > #cast(u64, ~#cast(usize, 0)/#sizeof(Glyph)) {
+  if #cast(u64, count) > #cast(u64, #max(usize)/#sizeof(Glyph)) {
     return ShapeResult{kind:io.Kind.Overflow}
   }
   glyphs := mem.push_array(Glyph, arena, #cast(usize, count))

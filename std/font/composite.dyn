@@ -42,21 +42,19 @@ fn composite_outline(arena: *mem.Arena, face: *const Face, data: []const u8, ori
     b: i32 = 0
     if words {
       if xy {
-        a = #cast(i32, i16be(data, at))
-        b = #cast(i32, i16be(data, at + 2))
-      }
-      else {
-        a = #cast(i32, u16be(data, at))
-        b = #cast(i32, u16be(data, at + 2))
+        a = i16be(data, at)
+        b = i16be(data, at + 2)
+      } else {
+        a = u16be(data, at)
+        b = u16be(data, at + 2)
       }
     } else {
       if xy {
-        a = #cast(i32, #cast(i8, data[at]))
-        b = #cast(i32, #cast(i8, data[at + 1]))
-      }
-      else {
-        a = #cast(i32, data[at])
-        b = #cast(i32, data[at + 1])
+        a = #cast(i8, data[at])
+        b = #cast(i8, data[at + 1])
+      } else {
+        a = data[at]
+        b = data[at + 1]
       }
     }
     at += length
@@ -91,7 +89,7 @@ fn composite_outline(arena: *mem.Arena, face: *const Face, data: []const u8, ori
     for *point in child.points {
       point.* = transformed(point.*, matrix)
     }
-    offset := Point{ x: #cast(f64, a), y: #cast(f64, b) }
+    offset := Point{ x: a, y: b }
     if xy {
       // Unspecified/conflicting offset flags use the recommended unscaled
       // default. Grid fitting is deliberately omitted with all other hinting.
@@ -105,8 +103,8 @@ fn composite_outline(arena: *mem.Arena, face: *const Face, data: []const u8, ori
         }
         return Outline{ kind: parse.Kind.Syntax }
       }
-      offset.x = result.points[#cast(usize, a)].x - child.points[#cast(usize, b)].x
-      offset.y = result.points[#cast(usize, a)].y - child.points[#cast(usize, b)].y
+      offset.x = result.points[a].x - child.points[b].x
+      offset.y = result.points[a].y - child.points[b].y
     }
     for *point in child.points {
       point.x += offset.x

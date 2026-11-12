@@ -53,10 +53,10 @@ pub fn intersect(a, b: Rect) Rect {
   x := #cast(i64, a.x)
   y := #cast(i64, a.y)
   if b.x > a.x {
-    x = #cast(i64, b.x)
+    x = b.x
   }
   if b.y > a.y {
-    y = #cast(i64, b.y)
+    y = b.y
   }
   right := #cast(i64, a.x) + #cast(i64, a.width)
   bottom := #cast(i64, a.y) + #cast(i64, a.height)
@@ -134,8 +134,7 @@ pub fn end(context: *Context) {
   if context.input.tab && !context.focus_moved {
     context.focused = context.first_focus
     context.focus_target = context.first_target
-  }
-  else if !context.focus_seen {
+  } else if !context.focus_seen {
     context.focused = 0
   }
   // Focus can move after an earlier widget was submitted. Draw one final ring
@@ -195,12 +194,7 @@ fn emit(context: *Context, kind: Kind, bounds: Rect, tint: Color, text: []const 
     _ = mem.copy(copied, text)
     command.text = copied
   }
-  if context.last == nil {
-    context.first = command
-  }
-  else {
-    context.last.next = command
-  }
+  if context.last == nil { context.first = command } else { context.last.next = command }
   context.last = command
   return command
 }
@@ -346,10 +340,10 @@ pub fn slider(context: *Context, id: u64, bounds: Rect, value: *i32, low, high: 
   before := value.*
   current := #cast(i64, before)
   if current < #cast(i64, low) {
-    current = #cast(i64, low)
+    current = low
   }
   if current > #cast(i64, high) {
-    current = #cast(i64, high)
+    current = high
   }
   range := #cast(i64, high) - #cast(i64, low)
   if response.captured && bounds.width > 1 {

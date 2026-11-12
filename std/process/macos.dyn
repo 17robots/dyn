@@ -74,14 +74,14 @@ fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, co
       copies[source_index] = native_fcntl(#cast(i32, sources[source_index]), 67, 3)
       if copies[source_index] < 0 {
         duplicate_error := mac_error()
-        return SpawnResult{ failure: io.Failure{ kind: io.darwin(duplicate_error), native: duplicate_error } }
+        return SpawnResult{ failure: io.darwin_failure(duplicate_error) }
       }
     }
   }
   channel: [2]i32 = []
   if native_pipe(&channel[0]) != 0 {
     pipe_error := mac_error()
-    return SpawnResult{ failure: io.Failure{ kind: io.darwin(pipe_error), native: pipe_error } }
+    return SpawnResult{ failure: io.darwin_failure(pipe_error) }
   }
   reader := native_fcntl(channel[0], 67, 3)
   writer := native_fcntl(channel[1], 67, 3)
@@ -94,14 +94,14 @@ fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, co
     if writer >= 0 {
       _ = native_close(writer)
     }
-    return SpawnResult{ failure: io.Failure{ kind: io.darwin(-24), native: -24 } }
+    return SpawnResult{ failure: io.darwin_failure(-24) }
   }
   child := native_fork()
   if child < 0 {
     failure := mac_error()
     _ = native_close(reader)
     _ = native_close(writer)
-    return SpawnResult{ failure: io.Failure{ kind: io.darwin(failure), native: failure } }
+    return SpawnResult{ failure: io.darwin_failure(failure) }
   }
   if child == 0 {
     _ = native_close(reader)
@@ -140,9 +140,9 @@ fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, co
     if amount != #cast(isize, #sizeof(isize)) {
       reported = -5
     }
-    return SpawnResult{ failure: io.Failure{ kind: io.darwin(reported), native: reported } }
+    return SpawnResult{ failure: io.darwin_failure(reported) }
   }
-  return SpawnResult{ value: Child{ handle: #cast(isize, child), active: true } }
+  return SpawnResult{ value: Child{ handle: child, active: true } }
 }
 fn wait_native(child: *Child, nonblocking: bool) ExitResult {
   status: i32 = 0
@@ -156,7 +156,7 @@ fn wait_native(child: *Child, nonblocking: bool) ExitResult {
   }
   if value < 0 {
     wait_error := mac_error()
-    return ExitResult{ failure: io.Failure{ kind: io.darwin(wait_error), native: wait_error } }
+    return ExitResult{ failure: io.darwin_failure(wait_error) }
   }
   if value == 0 {
     return ExitResult{}
@@ -170,14 +170,14 @@ fn wait_native(child: *Child, nonblocking: bool) ExitResult {
 fn terminate_native(child: *Child) Status {
   if native_kill(#cast(i32, child.handle), 9) < 0 {
     terminate_error := mac_error()
-    return Status{ failure: io.Failure{ kind: io.darwin(terminate_error), native: terminate_error } }
+    return Status{ failure: io.darwin_failure(terminate_error) }
   }
   return Status{}
 }
 fn close_native(handle: isize) Status {
   if native_close(#cast(i32, handle)) < 0 {
     close_error := mac_error()
-    return Status{ failure: io.Failure{ kind: io.darwin(close_error), native: close_error } }
+    return Status{ failure: io.darwin_failure(close_error) }
   }
   return Status{}
 }
@@ -185,15 +185,15 @@ fn pipe_native() Pipe {
   descriptors: [2]i32 = []
   if native_pipe(&descriptors[0]) != 0 {
     pipe_error := mac_error()
-    return Pipe{ failure: io.Failure{ kind: io.darwin(pipe_error), native: pipe_error } }
+    return Pipe{ failure: io.darwin_failure(pipe_error) }
   }
   if native_fcntl(descriptors[0], 2, 1) < 0 || native_fcntl(descriptors[1], 2, 1) < 0 || native_fcntl(descriptors[0], 4, 4) < 0 {
     failure := mac_error()
     _ = native_close(descriptors[0])
     _ = native_close(descriptors[1])
-    return Pipe{ failure: io.Failure{ kind: io.darwin(failure), native: failure } }
+    return Pipe{ failure: io.darwin_failure(failure) }
   }
-  return Pipe{ input: #cast(isize, descriptors[0]), output: #cast(isize, descriptors[1]) }
+  return Pipe{ input: descriptors[0], output: descriptors[1] }
 }
 fn read_native(handle: isize, destination: []u8) ReadResult {
   amount := native_read(#cast(i32, handle), &destination[0], #len(destination))
@@ -249,7 +249,7 @@ fn duplicate_native(value: isize) HandleResult {
     duplicate_error := mac_error()
     return HandleResult{ error: duplicate_error, kind: io.darwin(duplicate_error) }
   }
-  return HandleResult{ value: #cast(isize, copied), ok: true }
+  return HandleResult{ value: copied, ok: true }
 }
 
 extern fn argument_count "dyn_arguments_count"() *i32
@@ -261,10 +261,10 @@ fn arguments_native(arena: *mem.Arena) ArgumentsResult {
     return ArgumentsResult{ failure: io.Failure{ kind: io.Kind.InvalidState } }
   }
   result := argument_slots(arena, #cast(usize, count))
-  if result.failure.kind != io.Kind.Ok {
+  if io.failed(result.failure) {
     return result
   }
-  vector := #slice(argument_vector().*, #cast(usize, count))
+  vector := #slice(argument_vector().*, count)
   at: usize = 0
   for at < #cast(usize, count) {
     source := vector[at]

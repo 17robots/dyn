@@ -3,59 +3,60 @@ use "std/io" io
 use "std/os/linux" os
 use "std/fs" fs
 use "std/time" time
+use "std/os/linux/sys"
 fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, configuration: Options) SpawnResult {
   native := os.spawn_environment(arena, path, arguments, configuration.environment,
     os.SpawnOptions{ input: native_stream(configuration.input), output: native_stream(configuration.output), error: native_stream(configuration.error), directory: configuration.directory })
-  return SpawnResult{ value: Child{ handle: native.process, active: native.ok }, failure: io.Failure{ kind: io.linux(native.error), native: native.error } }
+  return SpawnResult{ value: Child{ handle: native.process, active: native.ok }, failure: io.linux_failure(native.error) }
 }
 fn wait_native(child: *Child, nonblocking: bool) ExitResult {
   value := os.wait(child.handle, nonblocking)
   if !value.ok {
-    return ExitResult{ failure: io.Failure{ kind: io.linux(value.error), native: value.error } }
+    return ExitResult{ failure: io.linux_failure(value.error) }
   }
   if value.process == 0 {
     return ExitResult{}
   }
   child.active = false
   if os.exited(value.status) {
-    return ExitResult{ code: #cast(u32, os.exit_status(value.status)), finished: true }
+    return ExitResult{ code: os.exit_status(value.status), finished: true }
   }
-  return ExitResult{ signal: #cast(u32, os.termination_signal(value.status)), finished: true }
+  return ExitResult{ signal: os.termination_signal(value.status), finished: true }
 }
 fn terminate_native(child: *Child) Status {
   result := os.send_signal(child.handle, 9)
-  return Status{ failure: io.Failure{ kind: io.linux(result.error), native: result.error } }
+  return Status{ failure: io.linux_failure(result.error) }
 }
 fn close_native(handle: isize) Status {
   result := os.close_descriptor(handle)
-  return Status{ failure: io.Failure{ kind: io.linux(result.error), native: result.error } }
+  return Status{ failure: io.linux_failure(result.error) }
 }
 fn pipe_native() Pipe {
   descriptors: [2]i32 = []
-  result := #syscall(293, &descriptors[0], 524288)
+  result := #syscall(sys.Pipe2, &descriptors[0], 524288)
   if result < 0 {
-    return Pipe{ failure: io.Failure{ kind: io.linux(result), native: result } }
+    return Pipe{ failure: io.linux_failure(result) }
   }
-  flags := #syscall(72, descriptors[0], 3, 0)
-  changed := #syscall(72, descriptors[0], 4, flags | 2048)
+  flags := #syscall(sys.Fcntl, descriptors[0], 3, 0)
+  changed := #syscall(sys.Fcntl, descriptors[0], 4, flags | 2048)
   if changed < 0 {
-    _ = close_native(#cast(isize, descriptors[0]))
-    _ = close_native(#cast(isize, descriptors[1]))
-    return Pipe{ failure: io.Failure{ kind: io.linux(changed), native: changed } }
+    _ = close_native(descriptors[0])
+    _ = close_native(descriptors[1])
+    return Pipe{ failure: io.linux_failure(changed) }
   }
-  return Pipe{ input: #cast(isize, descriptors[0]), output: #cast(isize, descriptors[1]) }
+  return Pipe{ input: descriptors[0], output: descriptors[1] }
 }
 fn read_native(handle: isize, destination: []u8) ReadResult {
   file := fs.borrow_handle(handle)
   result := fs.read(&file, destination)
-  if result.failure.kind != io.Kind.Ok && result.failure.native == -11 {
+  if io.failed(result.failure) && result.failure.native == -11 {
     return ReadResult{ ok: true }
   }
-  return ReadResult{ count: result.transferred, ended: result.failure.kind == io.Kind.Ok && result.transferred == 0, error: result.failure.native, kind: result.failure.kind, ok: result.failure.kind == io.Kind.Ok }
+  return ReadResult{ count: result.transferred, ended: !io.failed(result.failure) && result.transferred == 0, error: result.failure.native, kind: result.failure.kind, ok: !io.failed(result.failure) }
 }
 fn milliseconds_native() MillisecondsResult {
   now := time.monotonic_now()
-  if now.failure.kind != io.Kind.Ok {
+  if io.failed(now.failure) {
     return MillisecondsResult{error: now.failure.native, kind: now.failure.kind}
   }
   return MillisecondsResult{value: #cast(u64, now.value.seconds) * 1000 + #cast(u64, (now.value.nanoseconds / 1000000)), ok: true}
@@ -65,11 +66,11 @@ fn sleep_native() {
 }
 fn environment_native(name: []const u8, destination: []u8) EnvironmentResult {
   result := os.environment_get(name, destination)
-  return EnvironmentResult{ value: result.value, found: result.found, failure: io.Failure{ kind: io.linux(result.error), native: result.error } }
+  return EnvironmentResult{ value: result.value, found: result.found, failure: io.linux_failure(result.error) }
 }
 
 fn duplicate_native(value: isize) HandleResult {
-  copied := #syscall(72, value, 1030, 3)
+  copied := #syscall(sys.Fcntl, value, 1030, 3)
   if copied < 0 {
     return HandleResult{ error: copied, kind: io.linux(copied) }
   }
@@ -77,8 +78,8 @@ fn duplicate_native(value: isize) HandleResult {
 }
 
 fn arguments_native(arena: *mem.Arena) ArgumentsResult {
-  raw := fs.read_all(arena, "/proc/self/cmdline", ~#cast(usize, 0))
-  if raw.failure.kind != io.Kind.Ok {
+  raw := fs.read_all(arena, "/proc/self/cmdline", #max(usize))
+  if io.failed(raw.failure) {
     return ArgumentsResult{ failure: io.Failure{ kind: raw.failure.kind, native: raw.failure.native } }
   }
   count: usize = 0
@@ -91,7 +92,7 @@ fn arguments_native(arena: *mem.Arena) ArgumentsResult {
     return ArgumentsResult{ failure: io.Failure{ kind: io.Kind.InvalidState } }
   }
   result := argument_slots(arena, count)
-  if result.failure.kind != io.Kind.Ok {
+  if io.failed(result.failure) {
     return result
   }
   at: usize = 0

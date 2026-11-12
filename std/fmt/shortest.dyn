@@ -75,8 +75,7 @@ fn shortest_decimal(mantissa_bits: u64, exponent_bits: u64) Decimal {
   if exponent_bits == 0 {
     e2 = 1 - 1023 - 52 - 2
     m2 = mantissa_bits
-  }
-  else {
+  } else {
     e2 = #cast(i64, exponent_bits) - 1023 - 52 - 2
     m2 = 4503599627370496 | mantissa_bits
   }
@@ -109,16 +108,13 @@ fn shortest_decimal(mantissa_bits: u64, exponent_bits: u64) Decimal {
     if q <= 21 {
       if mv % 5 == 0 {
         vr_trailing_zeros = multiple_of_pow5(mv, q)
-      }
-      else if accept_bounds {
+      } else if accept_bounds {
         vm_trailing_zeros = multiple_of_pow5(mv - 1 - mm_shift, q)
-      }
-      else if multiple_of_pow5(mv + 2, q) {
+      } else if multiple_of_pow5(mv + 2, q) {
         vp -= 1
       }
     }
-  }
-  else {
+  } else {
     q := log10_pow5(-e2)
     if -e2 > 1 {
       q -= 1
@@ -135,14 +131,8 @@ fn shortest_decimal(mantissa_bits: u64, exponent_bits: u64) Decimal {
     vm = multiply_shift(4 * m2 - 1 - mm_shift, low, high, j)
     if q <= 1 {
       vr_trailing_zeros = true
-      if accept_bounds {
-        vm_trailing_zeros = mm_shift == 1
-      }
-      else {
-        vp -= 1
-      }
-    }
-    else if q < 63 {
+      if accept_bounds { vm_trailing_zeros = mm_shift == 1 } else { vp -= 1 }
+    } else if q < 63 {
       vr_trailing_zeros = multiple_of_pow2(mv, q)
     }
   }
@@ -176,8 +166,7 @@ fn shortest_decimal(mantissa_bits: u64, exponent_bits: u64) Decimal {
     if (vr == vm && (!accept_bounds || !vm_trailing_zeros)) || last_removed >= 5 {
       output += 1
     }
-  }
-  else {
+  } else {
     round_up := false
     if vp / 100 > vm / 100 {
       round_up = vr % 100 >= 50
@@ -249,8 +238,7 @@ pub fn write_f64_shortest(state: *Buffer, value: f64) bool {
       for i in 0..count {
         ok = ok && write_byte(state, digits[count - 1 - i])
       }
-    }
-    else {
+    } else {
       for i in 0..count {
         if #cast(i64, i) == point {
           ok = ok && write_byte(state, '.')
@@ -261,8 +249,7 @@ pub fn write_f64_shortest(state: *Buffer, value: f64) bool {
         ok = ok && write_padding(state, '0', #cast(usize, point - #cast(i64, count)))
       }
     }
-  }
-  else {
+  } else {
     ok = write_byte(state, digits[count - 1])
     if count > 1 {
       ok = ok && write_byte(state, '.')
@@ -275,8 +262,7 @@ pub fn write_f64_shortest(state: *Buffer, value: f64) bool {
     if shown < 0 {
       ok = ok && write_byte(state, '-')
       shown = -shown
-    }
-    else {
+    } else {
       ok = ok && write_byte(state, '+')
     }
     ok = ok && write_u64(state, #cast(u64, shown))

@@ -54,12 +54,10 @@ fn pax(source: []const u8, values: *Overrides, global: bool) bool {
     if bytes.equal(key, "path") {
       values.path = value
       values.has_path = !global || #len(value) > 0
-    }
-    else if bytes.equal(key, "linkpath") {
+    } else if bytes.equal(key, "linkpath") {
       values.link = value
       values.has_link = !global || #len(value) > 0
-    }
-    else if bytes.equal(key, "size") {
+    } else if bytes.equal(key, "size") {
       values.has_size = !global || #len(value) > 0
       values.delete_size = #len(value) == 0
       if #len(value) > 0 && !decimal(value, &values.size) {
@@ -160,13 +158,11 @@ pub fn next(state: *ArchiveReader) Result {
       if !pax(entry.data, &local, false) {
         return Result{ offset: record_start, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: record_start, message: "invalid header" } }
       }
-    }
-    else if entry.kind == 'g' {
+    } else if entry.kind == 'g' {
       if !pax(entry.data, &global, true) {
         return Result{ offset: record_start, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: record_start, message: "invalid header" } }
       }
-    }
-    else {
+    } else {
       if size == 0 || entry.data[size - 1] != 0 {
         return Result{ offset: record_start, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: record_start, message: "invalid header" } }
       }
@@ -179,8 +175,7 @@ pub fn next(state: *ArchiveReader) Result {
       if entry.kind == 'L' {
         local.path = value
         local.has_path = true
-      }
-      else {
+      } else {
         local.link = value
         local.has_link = true
       }

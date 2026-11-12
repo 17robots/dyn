@@ -81,7 +81,7 @@ pub fn bitmap(face: rawptr) BitmapResult {
   }
   stride := #cast(usize, value.pitch)
   width := #cast(usize, value.width)
-  if #cast(usize, value.rows-1) > (~#cast(usize, 0)-width)/stride {
+  if #cast(usize, value.rows-1) > (#max(usize)-width)/stride {
     return BitmapResult{kind:io.Kind.Overflow}
   }
   result.stride = stride

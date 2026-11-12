@@ -53,7 +53,7 @@ fn trace_offset(table: usize, address: usize) usize {
   text := trace_code(table, trace_word(trace_header)) - #cast(usize, trace_u32(table + 20))
   code := trace_code(table, address)
   if code < text {
-    return ~#cast(usize, 0)
+    return #max(usize)
   }
   return code - text
 }
@@ -70,11 +70,9 @@ fn trace_function(table: usize, address: usize) usize {
     record := table + 40 + 24 * middle
     if offset < #cast(usize, trace_u32(record)) {
       high = middle
-    }
-    else if offset >= #cast(usize, trace_u32(record + 4)) {
+    } else if offset >= #cast(usize, trace_u32(record + 4)) {
       low = middle + 1
-    }
-    else {
+    } else {
       return record
     }
   }
@@ -113,8 +111,7 @@ fn trace_walk(pc: usize, fp: usize, exact: bool, frames: []usize) u64 {
     address -= 1
   }
   frame := fp
-  for step in 0..1000000 {
-    _ = step
+  for _ in 0..1000000 {
     if address != 0 && trace_function(table, address) != 0 {
       index := #cast(usize, total)
       if index >= trace_inner {
@@ -122,11 +119,9 @@ fn trace_walk(pc: usize, fp: usize, exact: bool, frames: []usize) u64 {
       }
       frames[index] = address
       total += 1
-    }
-    else if total != 0 || skipped == 8 {
+    } else if total != 0 || skipped == 8 {
       return total
-    }
-    else {
+    } else {
       skipped += 1
     }
     if frame == 0 || frame % #sizeof(usize) != 0 {

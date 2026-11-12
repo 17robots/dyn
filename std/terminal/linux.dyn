@@ -1,12 +1,13 @@
 use "std/io" io
+use "std/os/linux/sys"
 #target(kernel: linux)
 
 // The terminal settings of descriptor. ok is false when it is not a terminal.
 pub fn read_state(descriptor: isize) Read {
   result: Read
-  code := #syscall(16, descriptor, 21505, &result.value.bytes[0])
+  code := #syscall(sys.Ioctl, descriptor, 21505, &result.value.bytes[0])
   if code < 0 {
-    return Read{ failure: io.Failure{ kind: io.linux(code), native: code } }
+    return Read{ failure: io.linux_failure(code) }
   }
   return result
 }
@@ -15,17 +16,16 @@ pub fn restore(descriptor: isize, saved: *const State) Result {
   if saved == nil {
     return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
-  code := #syscall(16, descriptor, 21506, &saved.bytes[0])
+  code := #syscall(sys.Ioctl, descriptor, 21506, &saved.bytes[0])
   if code < 0 {
-    return Result{ failure: io.Failure{ kind: io.linux(code), native: code } }
+    return Result{ failure: io.linux_failure(code) }
   }
   return Result{}
 }
 
 // Clears IGNBRK, BRKINT, ICRNL, IXON, OPOST-adjacent input bits, ISIG,
 // ICANON and ECHO, then sets VTIME 0 and VMIN 1 in the Linux termios layout.
-fn make_raw(descriptor: isize, state: *State) {
-  _ = descriptor
+fn make_raw(_descriptor: isize, state: *State) {
   state.bytes[0] = state.bytes[0] & 252
   state.bytes[1] = state.bytes[1] & 250
   state.bytes[3] = state.bytes[3] & 245
@@ -36,9 +36,9 @@ fn make_raw(descriptor: isize, state: *State) {
 
 pub fn size(descriptor: isize) Size {
   bytes: [8]u8 = []
-  code := #syscall(16, descriptor, 21523, &bytes[0])
+  code := #syscall(sys.Ioctl, descriptor, 21523, &bytes[0])
   if code < 0 {
-    return Size{ failure: io.Failure{ kind: io.linux(code), native: code } }
+    return Size{ failure: io.linux_failure(code) }
   }
   rows := #cast(usize, bytes[0]) + #cast(usize, bytes[1]) * 256
   columns := #cast(usize, bytes[2]) + #cast(usize, bytes[3]) * 256

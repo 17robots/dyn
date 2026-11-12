@@ -128,8 +128,7 @@ fn ordered_keyboard(window: *Window, event: *Event) {
       value.repeated = #cast(u32, window.ordered_pressed[code])
       window.ordered_pressed[code] = 1
     }
-  }
-  else if code < 256 {
+  } else if code < 256 {
     window.ordered_pressed[code] = 0
   }
   ordered_push(window, value)

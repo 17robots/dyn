@@ -89,7 +89,9 @@ typedef enum {
   /* #offsetof: integer holds the struct type, item_start/item_count the field name's byte span. Sema folds it to an integer. */
   DYN_EXPR_OFFSET,
   /* #init(pointer): a statement sema rewrites before lowering. */
-  DYN_EXPR_INIT
+  DYN_EXPR_INIT,
+  /* #max(T) (op DYN_OP_GT) and #min(T) (op DYN_OP_LT): sema folds them. */
+  DYN_EXPR_LIMIT
 } DynExprKind;
 static inline bool dyn_type_is_param(DynType t) {
   return t >= DYN_TYPE_PARAM_BASE && t < DYN_TYPE_PARAM_BASE + DYN_MAX_TYPE_PARAMS;

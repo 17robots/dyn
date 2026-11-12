@@ -53,7 +53,7 @@ pub fn next(state: *Reader) FieldResult {
     if #len(state.source) - at < 4 {
       return fail(state, at, parse.Kind.Syntax)
     }
-    field.value = #cast(u64, binary.load_u32_le(state.source[at..at+4]))
+    field.value = binary.load_u32_le(state.source[at..at+4])
     at += 4
   } else if field.wire == Wire.Bytes {
     length := binary.uleb128_decode(state.source[at..])
@@ -107,18 +107,16 @@ pub fn encode(arena: *mem.Arena, fields: []const Field) EncodeResult {
     extra := binary.uleb128_size(key(field))
     if field.wire == Wire.Varint {
       extra += binary.uleb128_size(field.value)
-    }
-    else if field.wire == Wire.Fixed32 {
+    } else if field.wire == Wire.Fixed32 {
       if field.value > 0xffffffff {
         return EncodeResult{ offset: i, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: i } }
       }
       extra += 4
     } else if field.wire == Wire.Fixed64 {
       extra += 8
-    }
-    else if field.wire == Wire.Bytes {
-      length_size := binary.uleb128_size(#cast(u64, #len(field.bytes)))
-      if #len(field.bytes) > ~#cast(usize, 0) - extra - length_size {
+    } else if field.wire == Wire.Bytes {
+      length_size := binary.uleb128_size(#len(field.bytes))
+      if #len(field.bytes) > #max(usize) - extra - length_size {
         return EncodeResult{ offset: i, failure: parse.Failure{ kind: parse.Kind.Overflow, offset: i } }
       }
       extra += length_size + #len(field.bytes)
@@ -136,7 +134,7 @@ pub fn encode(arena: *mem.Arena, fields: []const Field) EncodeResult {
     } else {
       return EncodeResult{ offset: i, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: i } }
     }
-    if extra > ~#cast(usize, 0) - size {
+    if extra > #max(usize) - size {
       return EncodeResult{ offset: i, failure: parse.Failure{ kind: parse.Kind.Overflow, offset: i } }
     }
     size += extra
@@ -150,17 +148,14 @@ pub fn encode(arena: *mem.Arena, fields: []const Field) EncodeResult {
     at += #len(binary.uleb128_encode(output[at..], key(field)))
     if field.wire == Wire.Varint {
       at += #len(binary.uleb128_encode(output[at..], field.value))
-    }
-    else if field.wire == Wire.Fixed32 {
+    } else if field.wire == Wire.Fixed32 {
       binary.store_u32_le(output[at..at+4], #cast(u32, field.value))
       at += 4
-    }
-    else if field.wire == Wire.Fixed64 {
+    } else if field.wire == Wire.Fixed64 {
       binary.store_u64_le(output[at..at+8], field.value)
       at += 8
-    }
-    else if field.wire == Wire.Bytes {
-      at += #len(binary.uleb128_encode(output[at..], #cast(u64, #len(field.bytes))))
+    } else if field.wire == Wire.Bytes {
+      at += #len(binary.uleb128_encode(output[at..], #len(field.bytes)))
       _ = mem.copy(output[at..at+#len(field.bytes)], field.bytes)
       at += #len(field.bytes)
     }

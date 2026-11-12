@@ -94,8 +94,7 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Result {
         pixels[dst] = source[src]
         pixels[dst + 1] = source[src]
         pixels[dst + 2] = source[src]
-      }
-      else {
+      } else {
         pixels[dst] = source[src + 2]
         pixels[dst + 1] = source[src + 1]
         pixels[dst + 2] = source[src]
@@ -142,8 +141,7 @@ pub fn encode(arena: *mem.Arena, pixels: []const u8, width, height: u32, channel
     dst := 18 + src
     if channels < 3 {
       output[dst] = pixels[src]
-    }
-    else {
+    } else {
       output[dst] = pixels[src + 2]
       output[dst + 1] = pixels[src + 1]
       output[dst + 2] = pixels[src]

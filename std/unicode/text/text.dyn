@@ -14,11 +14,9 @@ fn properties(codepoint: u32) u32 {
     at := mid * 3
     if codepoint < Properties[at] {
       high = mid
-    }
-    else if codepoint > Properties[at + 1] {
+    } else if codepoint > Properties[at + 1] {
       low = mid + 1
-    }
-    else {
+    } else {
       return Properties[at + 2]
     }
   }
@@ -135,11 +133,9 @@ fn mapping(table: []const u32, codepoint: u32) []const u32 {
     at := mid * 3
     if codepoint < table[at] {
       high = mid
-    }
-    else if codepoint > table[at] {
+    } else if codepoint > table[at] {
       low = mid + 1
-    }
-    else {
+    } else {
       start := #cast(usize, table[at + 1])
       return MappingValues[start..start + #cast(usize, table[at + 2])]
     }
@@ -189,11 +185,9 @@ fn compose(left: u32, right: u32) u32 {
     at := mid * 3
     if left < Composition[at] || (left == Composition[at] && right < Composition[at + 1]) {
       high = mid
-    }
-    else if left > Composition[at] || (left == Composition[at] && right > Composition[at + 1]) {
+    } else if left > Composition[at] || (left == Composition[at] && right > Composition[at + 1]) {
       low = mid + 1
-    }
-    else {
+    } else {
       return Composition[at + 2]
     }
   }
@@ -263,7 +257,7 @@ fn normalize_into(destination: []u8, source: []const u8, form: Form, work: []u32
     buckets: [256]usize = []
     i := start
     for i < end {
-      buckets[#cast(usize, combining_class(values[i]))] += 1
+      buckets[combining_class(values[i])] += 1
       i += 1
     }
     sum: usize = 0
@@ -301,8 +295,7 @@ fn normalize_into(destination: []u8, source: []const u8, form: Form, work: []u32
       }
       if combined != 0 {
         values[starter] = combined
-      }
-      else {
+      } else {
         if current_class == 0 {
           starter = used
           have_starter = true
@@ -384,7 +377,7 @@ pub fn normalize(arena: *mem.Arena, source: []const u8, form: Form) Converted {
       #panic("arena size overflow")
     }
     work_count := work_size.bytes / #sizeof(u32)
-    maximum := ~#cast(usize, 0)
+    maximum := #max(usize)
     alignment := #alignof(u32)
     padding := alignment - 1
     if work_size.bytes > maximum - capacity ||

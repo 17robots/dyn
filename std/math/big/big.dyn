@@ -139,8 +139,7 @@ fn subtract_magnitude(arena: *mem.Arena, a: []const u32, b: []const u32) []u32 {
     if minuend >= subtrahend {
       result[i] = #cast(u32, minuend - subtrahend)
       borrow = 0
-    }
-    else {
+    } else {
       result[i] = #cast(u32, minuend + 4294967296 - subtrahend)
       borrow = 1
     }
@@ -389,7 +388,7 @@ pub fn gcd(arena: *mem.Arena, a: Int, b: Int) Int {
 
 fn digit_value(byte: u8) u32 {
   if byte >= '0' && byte <= '9' {
-    return #cast(u32, byte - '0')
+    return byte - '0'
   }
   if byte >= 'a' && byte <= 'z' {
     return #cast(u32, byte - 'a') + 10
@@ -472,8 +471,7 @@ pub fn format(arena: *mem.Arena, value: Int, base: u32) []u8 {
     digit := #cast(u8, rest)
     if digit < 10 {
       output[capacity - 1 - count] = '0' + digit
-    }
-    else {
+    } else {
       output[capacity - 1 - count] = 'a' + digit - 10
     }
     count += 1

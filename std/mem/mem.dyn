@@ -353,7 +353,7 @@ fn align_size(size: usize, alignment: usize) usize {
     return size
   }
   padding := alignment - remainder
-  maximum := ~#cast(usize, 0)
+  maximum := #max(usize)
   if size > maximum - padding {
     return 0
   }
@@ -367,7 +367,7 @@ fn valid_alignment(alignment: usize) bool {
 fn arena_event(arena: *Arena, kind: observe.Kind, value: usize) {
   if arena.events != nil {
     _ = observe.record(arena.events, observe.Event{kind: kind, resource: arena.event_resource,
-      value: #cast(u64, value), source: "std/mem"})
+      value: value, source: "std/mem"})
   }
 }
 fn arena_failure(arena: *Arena, error: ErrorKind) Allocation {
@@ -400,7 +400,7 @@ fn arena_grow(arena: *Arena, size: usize, alignment: usize) Growth {
   if arena.fixed_buffer || arena.block_size == 0 {
     return Growth{error: ErrorKind.Capacity}
   }
-  maximum := ~#cast(usize, 0)
+  maximum := #max(usize)
   // Worst-case alignment padding is alignment - 1, not alignment.
   if alignment - 1 > maximum - header_size() {
     return Growth{error: ErrorKind.Overflow}
@@ -795,7 +795,7 @@ pub fn trial_next(arena: *const Arena, current: usize) usize {
     }
     return trial_size(arena, current * 2 + 1)
   }
-  if current > ~#cast(usize, 0) / 4 {
+  if current > #max(usize) / 4 {
     #panic("output size overflows")
   }
   return current * 2 + 1

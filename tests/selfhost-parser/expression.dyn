@@ -598,9 +598,11 @@ fn parse_operand(p: *Parser, minimum: i32) u32 {
       left = mark(p, add_node(p, ExpCast, token.start, end, target), flags)
       primary = true
     }
-  } else if token_is(p, "#sizeof") || token_is(p, "#alignof") || token_is(p, "#typeof") || token_is(p, "#offsetof") {
+  } else if token_is(p, "#sizeof") || token_is(p, "#alignof") || token_is(p, "#typeof") || token_is(p, "#offsetof") ||
+    token_is(p, "#max") || token_is(p, "#min") {
     kind := ExpOffset
-    if token_is(p, "#sizeof") {
+    // #max and #min share #sizeof's node.
+    if token_is(p, "#sizeof") || token_is(p, "#max") || token_is(p, "#min") {
       kind = ExpSize
     } else if token_is(p, "#alignof") {
       kind = ExpAlign

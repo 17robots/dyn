@@ -538,6 +538,11 @@ static void sema_vet_note(const DynSource *s, DynSpan span, bool unsafe_note, co
   dyn_diagnostic_source("warning", s, span.start_byte, span.end_byte, message);
   if (s->context.vet_findings) ++*s->context.vet_findings;
 }
+/* A cast into a typed slot (argument, return, field, typed local, assignment)
+   whose operand the slot would widen anyway. Instances are skipped: a cast in
+   a generic body can be needed by another instance. */
+static void vet_cast(Sema *sema, DynAstProgram *a, const DynSource *s, DynExprId id,
+                     DynType target);
 static bool discard_name(DynSpan n, const DynSource *s) {
   return n.end_byte - n.start_byte == 1 && s->text[n.start_byte] == '_';
 }
@@ -622,6 +627,32 @@ static bool lossless(Sema *sema, DynType from, DynType to) {
     return needed <= precision;
   }
   return false;
+}
+/* Whether #cast names a builtin number type. A named type can be an alias
+   that differs by target, so a cast to it can be needed elsewhere. */
+static bool vet_cast_builtin(const DynSource *s, DynSpan span) {
+  static const char *const names[] = {"u8", "u16", "u32", "u64", "usize", "i8", "i16",
+                                      "i32", "i64", "isize", "f32", "f64"};
+  size_t at = span.start_byte + 6, end = at;
+  if (span.end_byte < at || memcmp(s->text + span.start_byte, "#cast(", 6)) return false;
+  while (end < span.end_byte && (isalnum((unsigned char)s->text[end]) || s->text[end] == '_')) ++end;
+  if (end >= span.end_byte || s->text[end] != ',') return false;
+  for (size_t i = 0; i < sizeof(names) / sizeof(*names); ++i)
+    if (strlen(names[i]) == end - at && !memcmp(s->text + at, names[i], end - at)) return true;
+  return false;
+}
+static void vet_cast(Sema *sema, DynAstProgram *a, const DynSource *s, DynExprId id,
+                     DynType target) {
+  if (!s->context.vet || id == DYN_NO_EXPR) return;
+  if (sema->current_function != UINT32_MAX && a->functions[sema->current_function].is_instance)
+    return;
+  const DynAstExpr *e = &a->expressions[id];
+  if (e->kind != DYN_EXPR_CAST || e->left == DYN_NO_EXPR || e->type != target) return;
+  DynType from = a->expressions[e->left].type;
+  if (from == DYN_TYPE_ERROR || (from != target && !lossless(sema, from, target)) ||
+      !vet_cast_builtin(s, e->span))
+    return;
+  sema_vet_note(s, e->span, false, "cast is implicit here");
 }
 static DynAstPointer *pointer_info(DynAstProgram *a, DynType t) {
   return dyn_type_is_pointer(t) && t - DYN_TYPE_POINTER_BASE < a->pointer_count
@@ -881,6 +912,15 @@ static DynExprId index_operand(Sema *sema, DynAstProgram *a, DynExprId operand, 
     snprintf(message, sizeof(message), "%s requires integer", what);
     error_span(span, s, errors, message);
     return operand;
+  }
+  const DynAstExpr *cast = &a->expressions[operand];
+  if (s->context.vet && cast->kind == DYN_EXPR_CAST && cast->left != DYN_NO_EXPR &&
+      t == DYN_TYPE_USIZE &&
+      !(sema->current_function != UINT32_MAX && a->functions[sema->current_function].is_instance)) {
+    DynType from = a->expressions[cast->left].type;
+    if ((from == DYN_TYPE_USIZE || (from != DYN_TYPE_ISIZE && integer(sema, from) && bits(sema, from) <= 32)) &&
+        vet_cast_builtin(s, cast->span))
+      sema_vet_note(s, cast->span, false, "cast is implicit here");
   }
   if (!signed_int(sema, t)) return operand;
   if (bits(sema, t) > bits(sema, DYN_TYPE_USIZE)) {
@@ -1879,6 +1919,7 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
       uint32_t arg_index = item_start;
       DynType value =
           check_expr(sema, a, a->items[arg_index].expression, s, errors, v->payload_type);
+      vet_cast(sema, a, s, a->items[arg_index].expression, v->payload_type);
       if (value != v->payload_type && value != DYN_TYPE_ERROR) {
         if (can_convert(sema, a, value, v->payload_type))
           a->items[arg_index].expression = convert_expr(a, a->items[arg_index].expression, v->payload_type);
@@ -1950,6 +1991,7 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
         uint32_t arg_index = item_start + i;
         DynType target = a->params[callee->param_start + i].type,
                 value = check_expr(sema, a, a->items[arg_index].expression, s, errors, target);
+        vet_cast(sema, a, s, a->items[arg_index].expression, target);
         if (value != target && value != DYN_TYPE_ERROR &&
             target != DYN_TYPE_ERROR) {
           if (can_convert(sema, a, value, target))
@@ -2030,6 +2072,7 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
       uint32_t arg_index = item_start + i;
       DynType want = a->fn_type_params[signature->param_start + i],
               value = check_expr(sema, a, a->items[arg_index].expression, s, errors, want);
+      vet_cast(sema, a, s, a->items[arg_index].expression, want);
       if (value != want && value != DYN_TYPE_ERROR) {
         if (can_convert(sema, a, value, want))
           a->items[arg_index].expression = convert_expr(a, a->items[arg_index].expression, want);
@@ -2423,6 +2466,39 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
     a->expressions[id].item_count = 13;
     return a->expressions[id].type;
   }
+  if (a->expressions[id].kind == DYN_EXPR_LIMIT) {
+    bool maximum = a->expressions[id].op == DYN_OP_GT;
+    DynType t = a->expressions[id].boolean ? (DynType)a->expressions[id].integer : DYN_TYPE_ERROR;
+    if (t == DYN_TYPE_ERROR || !integer(sema, t)) {
+      error_span(a->expressions[id].span, s, errors,
+                 maximum ? "#max requires an integer type" : "#min requires an integer type");
+      return a->expressions[id].type = DYN_TYPE_ERROR;
+    }
+    unsigned b = bits(sema, t);
+    uint64_t top = UINT64_C(1) << (b - 1);
+    if (!maximum && signed_int(sema, t)) {
+      /* Written as -magnitude, the form a negative literal takes. */
+      DynExprId magnitude = convert_expr(a, id, t);
+      if (magnitude == DYN_NO_EXPR) return a->expressions[id].type = DYN_TYPE_ERROR;
+      a->expressions[magnitude] = (DynAstExpr){.kind = DYN_EXPR_INT, .type = t,
+                                               .span = a->expressions[id].span,
+                                               .integer = top, .left = DYN_NO_EXPR,
+                                               .right = DYN_NO_EXPR};
+      DynAstExpr *e = &a->expressions[id];
+      e->kind = DYN_EXPR_UNARY;
+      e->op = DYN_OP_NEG;
+      e->boolean = true;
+      e->left = magnitude;
+      e->right = DYN_NO_EXPR;
+      e->integer = 0;
+      return e->type = t;
+    }
+    DynAstExpr *e = &a->expressions[id];
+    e->kind = DYN_EXPR_INT;
+    e->integer = !maximum ? 0 : signed_int(sema, t) ? top - 1 : top - 1 + top;
+    e->boolean = false;
+    return e->type = t;
+  }
   if (a->expressions[id].kind == DYN_EXPR_SIZE || a->expressions[id].kind == DYN_EXPR_ALIGN) {
     DynType operand =
         a->expressions[id].boolean ? (DynType)a->expressions[id].integer
@@ -2525,8 +2601,16 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
     if (a->expressions[id].item_count &&
         !strcmp(dyn_context_target(&s->context)->kernel, "linux") &&
         strcmp(dyn_context_target(&s->context)->arch, "x86_64")) {
-      DynAstExpr *number = &a->expressions[a->items[a->expressions[id].item_start].expression];
+      DynExprId number_id = a->items[a->expressions[id].item_start].expression;
+      DynAstExpr *number = &a->expressions[number_id];
       uint64_t native = 0;
+      /* A named constant, such as sys.Openat, folds to its number. */
+      ConstantUInt named = constant_uint_at(a, number_id, 8);
+      if (number->kind != DYN_EXPR_INT && named.valid && !named.overflow) {
+        number->kind = DYN_EXPR_INT;
+        number->integer = named.value;
+        number->left = number->right = DYN_NO_EXPR;
+      }
       if (number->kind != DYN_EXPR_INT)
         error_span(number->span, s, errors,
                    "non-x86 Linux #syscall number must be a constant portable Linux "
@@ -2612,6 +2696,7 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
           error_span(a->items[item_index].name, s, errors, "duplicate struct literal field");
       DynType target = a->fields[st->field_start + field].type;
       DynType value = check_expr(sema, a, a->items[item_index].expression, s, errors, target);
+      vet_cast(sema, a, s, a->items[item_index].expression, target);
       if (value != target && value != DYN_TYPE_ERROR &&
           target != DYN_TYPE_ERROR) {
         if (can_convert(sema, a, value, target))
@@ -3448,6 +3533,7 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
     else {
       DynType value = check_expr(sema, a, st->expression, s, errors,
                                  sema->current_return_type);
+      vet_cast(sema, a, s, st->expression, sema->current_return_type);
       if (returns_local_borrow(sema, a, st->expression))
         error_span(st->span, s, errors,
                    "returned value borrows function-local storage");
@@ -3821,6 +3907,8 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
       pristine = copy_untyped(a, st->expression);
     if (st->expression != DYN_NO_EXPR) {
       DynType value = check_expr(sema, a, st->expression, s, errors, type);
+      if (type != DYN_TYPE_INFER)
+        vet_cast(sema, a, s, st->expression, type);
       if (type == DYN_TYPE_INFER)
         type = value;
       else if (value != type && value != DYN_TYPE_ERROR) {
@@ -3860,6 +3948,8 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
   if (st->target != DYN_NO_EXPR) {
     DynType target = check_expr(sema, a, st->target, s, errors, DYN_TYPE_INFER),
             value = check_expr(sema, a, st->expression, s, errors, target);
+    if (st->assignment_op == DYN_OP_NONE)
+      vet_cast(sema, a, s, st->expression, target);
     if (lvalue_const(a, st->target))
       error_span(st->span, s, errors, "assignment through *const pointer");
     if (value != target && value != DYN_TYPE_ERROR &&
@@ -3926,6 +4016,8 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
       st->assignment_op == DYN_OP_SHL || st->assignment_op == DYN_OP_SHR;
   DynType value = check_expr(sema, a, st->expression, s, errors,
                              shift ? DYN_TYPE_USIZE : target);
+  if (!shift && st->assignment_op == DYN_OP_NONE)
+    vet_cast(sema, a, s, st->expression, target);
   if (shift) {
     if (!integer(sema, value) || signed_int(sema, value))
       error_span(st->span, s, errors, "shift count requires unsigned integer");

@@ -112,7 +112,7 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Result {
   }
   palette_count: usize = 0
   if bits <= 8 {
-    palette_count = #cast(usize, le32(source, 46))
+    palette_count = le32(source, 46)
     maximum := #cast(usize, 1) << bits
     if palette_count == 0 {
       palette_count = maximum
@@ -151,13 +151,11 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Result {
       if bits <= 8 {
         index: usize = 0
         if bits == 8 {
-          index = #cast(usize, source[start + x])
-        }
-        else if bits == 4 {
-          index = #cast(usize, (source[start + x / 2] >> ((1 - x % 2) * 4)) & 15)
-        }
-        else {
-          index = #cast(usize, (source[start + x / 8] >> (7 - x % 8)) & 1)
+          index = source[start + x]
+        } else if bits == 4 {
+          index = (source[start + x / 2] >> ((1 - x % 2) * 4)) & 15
+        } else {
+          index = (source[start + x / 8] >> (7 - x % 8)) & 1
         }
         if index >= palette_count {
           return Result{ offset: start + x * #cast(usize, bits) / 8, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: start + x * #cast(usize, bits) / 8 } }
@@ -176,9 +174,8 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Result {
       } else {
         value: u32 = 0
         if bits == 16 {
-          value = #cast(u32, le16(source, start + x * 2))
-        }
-        else {
+          value = le16(source, start + x * 2)
+        } else {
           value = le32(source, start + x * 4)
         }
         pixels[at] = component(value, masks[0], 0)

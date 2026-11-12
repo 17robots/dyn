@@ -2,6 +2,7 @@
 
 use "std/observe" observe
 use "std/io" io
+use "std/os/linux/sys"
 // A borrowed directory descriptor limits file lookup through this interface.
 // Set active: true with the descriptor; a zero Directory fails with EBADF.
 // Descriptor owner keeps it open; do not close/reuse it while a capability exists.
@@ -9,7 +10,7 @@ use "std/io" io
 pub struct Directory { descriptor: isize, active: bool, events: *observe.Log, resource: u64 }
 pub type ReadResult = io.Count
 fn failure(code: isize) ReadResult {
-  return ReadResult{ failure: io.Failure{ kind: io.linux(code), native: code } }
+  return ReadResult{ failure: io.linux_failure(code) }
 }
 struct OpenHow { flags: u64, mode: u64, resolve: u64 }
 
@@ -37,7 +38,7 @@ pub fn read(directory: *const Directory, path: []const u8, destination: []u8) Re
   }
   // O_CLOEXEC | O_NONBLOCK, RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | NO_MAGICLINKS.
   how := OpenHow{flags: 526336, resolve: 14}
-  descriptor := #syscall(437, directory.descriptor, &name[0], &how, #sizeof(OpenHow))
+  descriptor := #syscall(sys.Openat2, directory.descriptor, &name[0], &how, #sizeof(OpenHow))
   if descriptor < 0 {
     if directory.events != nil {
       _ = observe.record(directory.events,
@@ -51,9 +52,9 @@ pub fn read(directory: *const Directory, path: []const u8, destination: []u8) Re
   }
   value: isize = 0
   if #len(destination) != 0 {
-    value = #syscall(0, descriptor, &destination[0], #len(destination))
+    value = #syscall(sys.Read, descriptor, &destination[0], #len(destination))
   }
-  closed := #syscall(3, descriptor)
+  closed := #syscall(sys.Close, descriptor)
   if directory.events != nil {
     _ = observe.record(directory.events,
       observe.Event{kind: observe.Kind.ResourceClosed, resource: directory.resource, source: "std/fs/capability"})

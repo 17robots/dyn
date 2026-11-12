@@ -12,19 +12,17 @@ fn native_control(queue: *Queue, index: usize, entry: Entry) Result {
   outcome := net.Result{}
   if !entry.active {
     outcome = net.event_remove(queue.handle, old.descriptor)
-  }
-  else if old.active {
-    outcome = net.event_modify(queue.handle, entry.descriptor, entry.events, #cast(u64, index))
-  }
-  else {
-    outcome = net.event_add(queue.handle, entry.descriptor, entry.events, #cast(u64, index))
+  } else if old.active {
+    outcome = net.event_modify(queue.handle, entry.descriptor, entry.events, index)
+  } else {
+    outcome = net.event_add(queue.handle, entry.descriptor, entry.events, index)
   }
   return Result{ failure: io.Failure{ kind: outcome.failure.kind, native: outcome.failure.native } }
 }
 fn native_wait(arena: *mem.Arena, queue: *Queue, timeout: i32) WaitResult {
   native := mem.push_array(net.Event, arena, queue.batch)
   outcome := net.event_wait(queue.handle, native, timeout)
-  if outcome.failure.kind != io.Kind.Ok {
+  if io.failed(outcome.failure) {
     return WaitResult{ failure: io.Failure{ kind: outcome.failure.kind, native: outcome.failure.native } }
   }
   events := mem.push_array(Event, arena, #cast(usize, outcome.value))

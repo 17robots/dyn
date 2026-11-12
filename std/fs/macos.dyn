@@ -3,6 +3,7 @@ use "std/parse" parse
 use "std/io" io
 use "std/mem" mem
 use "std/c" cstrings
+use "std/os/macos/sys"
 
 fn terminated(path: []const u8, storage: []u8) *const u8 {
   if #len(path) == 0 {
@@ -22,34 +23,32 @@ fn native_open(path: []const u8, mode: u8) FileResult {
   }
   flags: usize = 16777216 // O_CLOEXEC
   if mode == 1 {
-    flags = flags | 1537
-  } // O_WRONLY | O_CREAT | O_TRUNC
-  else if mode == 2 {
-    flags = flags | 521
-  } // O_WRONLY | O_CREAT | O_APPEND
-  else if mode == 3 {
-    flags = flags | 2561
-  } // O_WRONLY | O_CREAT | O_EXCL
-  value := #syscall(5, name, flags, 420)
+    flags = flags | 1537 // O_WRONLY | O_CREAT | O_TRUNC
+  } else if mode == 2 {
+    flags = flags | 521 // O_WRONLY | O_CREAT | O_APPEND
+  } else if mode == 3 {
+    flags = flags | 2561 // O_WRONLY | O_CREAT | O_EXCL
+  }
+  value := #syscall(sys.Open, name, flags, 420)
   if value < 0 {
     return FileResult{ failure: io.Failure{ kind: native_kind(value), native: value } }
   }
   return FileResult{ value: owned_file(value) }
 }
 fn native_close(handle: isize) isize {
-  return #syscall(6, handle)
+  return #syscall(sys.Close, handle)
 }
 fn native_read(handle: isize, destination: []u8) isize {
-  return #syscall(3, handle, &destination[0], #len(destination))
+  return #syscall(sys.Read, handle, &destination[0], #len(destination))
 }
 fn native_write(handle: isize, source: []const u8) isize {
-  return #syscall(4, handle, &source[0], #len(source))
+  return #syscall(sys.Write, handle, &source[0], #len(source))
 }
 fn native_seek(handle: isize, offset: isize, origin: usize) isize {
-  return #syscall(199, handle, offset, origin)
+  return #syscall(sys.Lseek, handle, offset, origin)
 }
 fn native_sync(handle: isize) isize {
-  return #syscall(95, handle)
+  return #syscall(sys.Fsync, handle)
 }
 fn native_kind(code: isize) io.Kind {
   return io.darwin(code)
@@ -62,8 +61,8 @@ fn native_interrupted(code: isize) bool {
 }
 // Read-only private mapping of size bytes from offset zero.
 fn native_map(handle: isize, size: usize) isize {
-  return #syscall(197, 0, size, 1, 2, handle, 0)
+  return #syscall(sys.Mmap, 0, size, 1, 2, handle, 0)
 }
 fn native_unmap(address: usize, size: usize) isize {
-  return #syscall(73, address, size)
+  return #syscall(sys.Munmap, address, size)
 }

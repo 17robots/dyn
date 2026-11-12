@@ -93,8 +93,7 @@ pub fn next_stream(state: *StreamScanner, destination: []u8) Field {
         }
         if after.value == '"' {
           byte = '"'
-        }
-        else {
+        } else {
           closed = true
           delimiter = after.value
           break
@@ -102,8 +101,7 @@ pub fn next_stream(state: *StreamScanner, destination: []u8) Field {
       }
     } else if byte == '"' {
       return stream_fail(state, parse.Kind.Syntax)
-    }
-    else if byte == ',' || byte == '\r' || byte == '\n' {
+    } else if byte == ',' || byte == '\r' || byte == '\n' {
       delimiter = byte
       break
     }
@@ -127,8 +125,7 @@ pub fn next_stream(state: *StreamScanner, destination: []u8) Field {
     }
     if after_cr.end {
       input_ended = true
-    }
-    else if after_cr.value != '\n' {
+    } else if after_cr.value != '\n' {
       stream_unread(state, after_cr.value)
     }
   }
@@ -268,19 +265,16 @@ pub fn next(state: *Scanner, destination: []u8) Field {
   if at == #len(state.source) {
     state.finished = true
     end_record = true
-  }
-  else if state.source[at] == ',' {
+  } else if state.source[at] == ',' {
     at += 1
-  }
-  else {
+  } else {
     end_record = true
     if state.source[at] == '\r' {
       at += 1
       if at < #len(state.source) && state.source[at] == '\n' {
         at += 1
       }
-    }
-    else {
+    } else {
       at += 1
     }
     if at == #len(state.source) {

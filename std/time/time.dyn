@@ -36,7 +36,7 @@ pub fn checked_sub(a, b: i64) DurationResult {
 }
 pub fn elapsed(start, end: Instant) DurationResult {
   seconds := checked_sub(end.seconds, start.seconds)
-  if seconds.failure.kind != io.Kind.Ok {
+  if io.failed(seconds.failure) {
     return DurationResult{ failure: io.Failure{ kind: io.Kind.Overflow } }
   }
   scaled: i64 = 0
@@ -45,7 +45,7 @@ pub fn elapsed(start, end: Instant) DurationResult {
   }
   scaled = seconds.value * Second
   nanos := checked_sub(end.nanoseconds, start.nanoseconds)
-  if nanos.failure.kind != io.Kind.Ok {
+  if io.failed(nanos.failure) {
     return DurationResult{ failure: io.Failure{ kind: io.Kind.Overflow } }
   }
   return checked_add(scaled, nanos.value)
@@ -70,7 +70,7 @@ pub fn sleep(duration: i64) SleepResult {
 }
 pub fn deadline_after(duration: i64) DeadlineResult {
   now := monotonic_now()
-  if now.failure.kind != io.Kind.Ok {
+  if io.failed(now.failure) {
     return DeadlineResult{ failure: io.Failure{ kind: now.failure.kind, native: now.failure.native } }
   }
   seconds := duration / Second
@@ -84,7 +84,7 @@ pub fn deadline_after(duration: i64) DeadlineResult {
     nanos += Second
   }
   sum := checked_add(now.value.seconds, seconds)
-  if sum.failure.kind != io.Kind.Ok {
+  if io.failed(sum.failure) {
     return DeadlineResult{ failure: io.Failure{ kind: io.Kind.Overflow } }
   }
   return DeadlineResult{ value: Deadline{ at: Instant{ seconds: sum.value, nanoseconds: nanos } } }
@@ -94,7 +94,7 @@ pub fn deadline_expired(deadline: *const Deadline) ExpiredResult {
     return ExpiredResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
   now := monotonic_now()
-  if now.failure.kind != io.Kind.Ok {
+  if io.failed(now.failure) {
     return ExpiredResult{ failure: io.Failure{ kind: now.failure.kind, native: now.failure.native } }
   }
   return ExpiredResult{ value: now.value.seconds > deadline.at.seconds ||
@@ -105,7 +105,7 @@ pub fn deadline_remaining(deadline: *const Deadline) DurationResult {
     return DurationResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
   now := monotonic_now()
-  if now.failure.kind != io.Kind.Ok {
+  if io.failed(now.failure) {
     return DurationResult{ failure: io.Failure{ kind: now.failure.kind, native: now.failure.native } }
   }
   if now.value.seconds > deadline.at.seconds ||
@@ -113,7 +113,7 @@ pub fn deadline_remaining(deadline: *const Deadline) DurationResult {
     return DurationResult{}
   }
   result := elapsed(now.value, deadline.at)
-  if result.failure.kind != io.Kind.Ok {
+  if io.failed(result.failure) {
     return DurationResult{ failure: io.Failure{ kind: io.Kind.Overflow } }
   }
   return result
@@ -184,7 +184,7 @@ fn parse_iso8601_into(input: []const u8, output: *DateTime) bool {
   }
   positions: [14]u8 = [0, 1, 2, 3, 5, 6, 8, 9, 11, 12, 14, 15, 17, 18]
   for i in 0..#len(positions) {
-    if !decimal(input[#cast(usize, positions[i])]) {
+    if !decimal(input[positions[i]]) {
       return false
     }
   }
@@ -279,7 +279,7 @@ pub fn date_time(instant: Instant, offset: i64) DateTime {
 pub fn instant_of(value: *const DateTime, offset: i64) Instant {
   days := days_from_civil(value.year, value.month, value.day)
   seconds := days * 86400 + #cast(i64, value.hour) * 3600 + #cast(i64, value.minute) * 60 + #cast(i64, value.second) - offset
-  return Instant{ seconds: seconds, nanoseconds: #cast(i64, value.nanosecond) }
+  return Instant{ seconds: seconds, nanoseconds: value.nanosecond }
 }
 
 pub fn weekday(value: *const DateTime) Weekday {

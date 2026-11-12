@@ -1,4 +1,5 @@
 use "std/io" io
+use "std/os/linux/sys"
 #target(kernel: linux)
 fn native_clock(monotonic: bool) ClockResult {
   value := Instant{}
@@ -6,22 +7,22 @@ fn native_clock(monotonic: bool) ClockResult {
   if monotonic {
     clock = 1
   }
-  code := #syscall(228, clock, &value)
+  code := #syscall(sys.ClockGettime, clock, &value)
   if code < 0 {
-    return ClockResult{ failure: io.Failure{ kind: io.linux(code), native: code } }
+    return ClockResult{ failure: io.linux_failure(code) }
   }
   return ClockResult{ value: value }
 }
 fn native_sleep(duration: i64) SleepResult {
   request := Instant{ seconds: duration / Second, nanoseconds: duration % Second }
   remaining := Instant{}
-  code := #syscall(35, &request, &remaining)
+  code := #syscall(sys.Nanosleep, &request, &remaining)
   for code == -4 {
     request = remaining
-    code = #syscall(35, &request, &remaining)
+    code = #syscall(sys.Nanosleep, &request, &remaining)
   }
   if code < 0 {
-    return SleepResult{ failure: io.Failure{ kind: io.linux(code), native: code } }
+    return SleepResult{ failure: io.linux_failure(code) }
   }
   return SleepResult{}
 }

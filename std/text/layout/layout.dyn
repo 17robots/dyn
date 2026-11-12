@@ -236,11 +236,7 @@ pub fn build(arena: *mem.Arena, source: []const u8, font: Font, requested: Optio
         glyphs[glyph_count] = glyph
         glyph_count += 1
       }
-      if show_soft {
-        x += cluster.advance
-      } else {
-        x += step(cluster, x)
-      }
+      if show_soft { x += cluster.advance } else { x += step(cluster, x) }
       if cluster.tab {
         has_previous = false
       }
@@ -279,8 +275,7 @@ pub fn build(arena: *mem.Arena, source: []const u8, font: Font, requested: Optio
       begin = end + 1
     } else if end == cluster_count {
       more = false
-    }
-    else {
+    } else {
       begin = end
       if wrapped {
         for begin < cluster_count && clusters[begin].space {

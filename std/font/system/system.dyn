@@ -103,11 +103,9 @@ fn name(arena: *mem.Arena, names: []const u8, wanted: u16) []const u8 {
       if language == 0x409 {
         rank = 3
       }
-    }
-    else if platform == 0 {
+    } else if platform == 0 {
       rank = 2
-    }
-    else if platform == 1 && encoding == 0 {
+    } else if platform == 1 && encoding == 0 {
       rank = 1
     }
     if rank > best_rank {
@@ -153,8 +151,7 @@ fn name(arena: *mem.Arena, names: []const u8, wanted: u16) []const u8 {
       }
       at += 2
       unit = 0x10000 + ((unit - 0xd800) << 10) + (low - 0xdc00)
-    }
-    else if unit >= 0xdc00 && unit <= 0xdfff {
+    } else if unit >= 0xdc00 && unit <= 0xdfff {
       return ""
     }
     if unit == 0 {
@@ -245,7 +242,7 @@ fn visit(arena: *mem.Arena, scratch: *mem.Arena, walk: *Walk, directory: []const
   }
   storage: [8192]u8 = []
   opened := fs.open_directory(directory, storage[..])
-  if opened.failure.kind != io.Kind.Ok {
+  if io.failed(opened.failure) {
     return
   }
   listing := opened.value
@@ -260,22 +257,20 @@ fn visit(arena: *mem.Arena, scratch: *mem.Arena, walk: *Walk, directory: []const
     if item.kind == 4 {
       // Directories recurse with their own scratch path, then release it.
       visit(arena, scratch, walk, path, depth + 1)
-    }
-    else if font_file(item.name) && walk.count < #len(walk.entries) {
+    } else if font_file(item.name) && walk.count < #len(walk.entries) {
       file := fs.open(path)
-      if file.failure.kind == io.Kind.Ok {
+      if !io.failed(file.failure) {
         handle := fs.take(&file.value)
         mapped := fs.map(&handle)
         fs.close(&handle)
-        if mapped.failure.kind == io.Kind.Ok {
+        if !io.failed(mapped.failure) {
           entry_mark := mem.arena_mark(arena)
           entry := describe(arena, path, mapped.value)
           _ = fs.unmap(&mapped)
           if #len(entry.family) != 0 {
             walk.entries[walk.count] = entry
             walk.count += 1
-          }
-          else {
+          } else {
             mem.arena_rewind(arena, entry_mark)
           }
         }
@@ -316,7 +311,7 @@ pub fn scan(arena: *mem.Arena, limit: usize) []Entry {
 
 fn home(arena: *mem.Arena) []const u8 {
   found := process.environment(arena, "HOME")
-  if found.failure.kind == io.Kind.Ok && found.found {
+  if !io.failed(found.failure) && found.found {
     return found.value
   }
   return ""
@@ -325,10 +320,9 @@ fn home(arena: *mem.Arena) []const u8 {
 fn closeness(entry: *const Entry, weight: u16, italic: bool) u32 {
   difference: u32 = 0
   if entry.weight > weight {
-    difference = #cast(u32, entry.weight - weight)
-  }
-  else {
-    difference = #cast(u32, weight - entry.weight)
+    difference = entry.weight - weight
+  } else {
+    difference = weight - entry.weight
   }
   if entry.italic != italic {
     difference += 1000
@@ -419,13 +413,13 @@ pub fn covering(entries: []const Entry, codepoint: u32, regular_only: bool) *con
       continue
     }
     file := fs.open(entry.path)
-    if file.failure.kind != io.Kind.Ok {
+    if io.failed(file.failure) {
       continue
     }
     handle := fs.take(&file.value)
     mapped := fs.map(&handle)
     fs.close(&handle)
-    if mapped.failure.kind != io.Kind.Ok {
+    if io.failed(mapped.failure) {
       continue
     }
     face := font.open(mapped.value)

@@ -64,7 +64,7 @@ fn central_entry(source: []const u8, at: usize, limit: usize, data_limit: usize)
 // Checks directory framing and every local-header/descriptor relationship up front.
 // Payload CRCs are verified by extract, without allocating or decompressing here.
 pub fn open_checked(source: []const u8) OpenResult {
-  if #len(source) > ((~#cast(usize, 0)) >> 1) {
+  if #len(source) > (#max(usize) >> 1) {
     return OpenResult{ failure: parse.Failure{ kind: parse.Kind.Overflow } }
   }
   if #len(source) < 22 {

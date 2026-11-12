@@ -32,7 +32,7 @@ static bool initializer_effects(const DynIrProgram *ir, DynExprId id, unsigned d
   switch (e->kind) {
   case DYN_EXPR_INT: case DYN_EXPR_FLOAT: case DYN_EXPR_BOOL: case DYN_EXPR_CHAR: case DYN_EXPR_STRING:
   case DYN_EXPR_NIL: case DYN_EXPR_ENUM: case DYN_EXPR_GLOBAL: case DYN_EXPR_FUNCTION:
-  case DYN_EXPR_SIZE: case DYN_EXPR_ALIGN:
+  case DYN_EXPR_SIZE: case DYN_EXPR_ALIGN: case DYN_EXPR_LIMIT:
     return false;
   case DYN_EXPR_CONVERT: case DYN_EXPR_CAST: case DYN_EXPR_BITCAST: case DYN_EXPR_FIELD:
     return initializer_effects(ir, e->left, depth + 1);

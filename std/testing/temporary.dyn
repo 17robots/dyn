@@ -11,27 +11,27 @@ pub type TemporaryResult = io.Result(TemporaryDirectory)
 pub fn temporary_directory(arena: *mem.Arena, prefix: []const u8) TemporaryResult {
   for byte in prefix {
     if byte == 0 || byte == '/' {
-      return TemporaryResult{ failure: io.Failure{ kind: io.linux(-22), native: -22 } }
+      return TemporaryResult{ failure: io.linux_failure(-22) }
     }
   }
   for attempt in 0..128 {
     path := temporary_path(arena, prefix, "")
     created := fs.make_directory(path, 448)
-    if created.failure.kind == io.Kind.Ok {
+    if !io.failed(created.failure) {
       return TemporaryResult{ value: TemporaryDirectory{ path: path, active: true } }
     }
     if created.failure.native != -17 {
       return TemporaryResult{ failure: io.Failure{ kind: created.failure.kind, native: created.failure.native } }
     }
   }
-  return TemporaryResult{ failure: io.Failure{ kind: io.linux(-17), native: -17 } }
+  return TemporaryResult{ failure: io.linux_failure(-17) }
 }
 pub fn remove_temporary(directory: *TemporaryDirectory, frames: []fs.RemovalFrame, scratch: []u8) fs.Result {
   if !directory.active {
     return fs.Result{}
   }
   result := fs.remove_tree(directory.path, frames, scratch)
-  if result.failure.kind == io.Kind.Ok {
+  if !io.failed(result.failure) {
     directory.active = false
   }
   return result

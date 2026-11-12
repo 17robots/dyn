@@ -226,7 +226,7 @@ static bool src_expression_start(Parser *p) {
       p->token.kind == CHARACTER || is(p, "(") || is(p, "[") || is(p, ".") ||
       is(p, "-") || is(p, "&") || is(p, "!") || is(p, "~") ||
       is(p, "#cast") || is(p, "#bitcast") || is(p, "#sizeof") ||
-      is(p, "#alignof") || is(p, "#offsetof") || is(p, "#typeof") ||
+      is(p, "#alignof") || is(p, "#offsetof") || is(p, "#typeof") || is(p, "#max") || is(p, "#min") ||
       is(p, "#len") || is(p, "#init") || is(p, "#instance") || is(p, "#slice") || is(p, "#offset") || is(p, "#load") || is(p, "#syscall");
 }
 static uint32_t src_assert(Parser *p);

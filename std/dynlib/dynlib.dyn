@@ -58,7 +58,7 @@ pub fn close(handle: *Handle) Result {
     return Result{ failure: io.Failure{ kind: io.Kind.InvalidState } }
   }
   closed := platform_close(value)
-  if closed.failure.kind == io.Kind.Ok {
+  if !io.failed(closed.failure) {
     handle.* = nil
   }
   return closed

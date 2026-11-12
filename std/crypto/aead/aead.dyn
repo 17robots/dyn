@@ -37,8 +37,7 @@ fn overlaps(left: []const u8, right: []const u8) bool {
 }
 // Reject unused backing before allocations can overwrite borrowed inputs.
 // Allocated inputs remain stable when this arena adds blocks.
-fn conflicts(arena: *mem.Arena, count: usize, first: []const u8, second: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) bool {
-  _ = count
+fn conflicts(arena: *mem.Arena, _count: usize, first: []const u8, second: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) bool {
   return mem.arena_overlaps_unallocated(arena, first) || mem.arena_overlaps_unallocated(arena, second) || mem.arena_overlaps_unallocated(arena, additional) || mem.arena_overlaps_unallocated(arena, key) || mem.arena_overlaps_unallocated(arena, nonce)
 }
 
@@ -51,7 +50,7 @@ fn conflicts(arena: *mem.Arena, count: usize, first: []const u8, second: []const
 // provider_code are always zero; the latter remains for source compatibility.
 pub fn seal(arena: *mem.Arena, kind: Cipher, plaintext: []const u8, additional: []const u8, key: []const u8, nonce: []const u8) SealResult {
   count := #len(plaintext)
-  if !valid(kind, count, additional, key, nonce) || count > ~#cast(usize, 0) - 16 {
+  if !valid(kind, count, additional, key, nonce) || count > #max(usize) - 16 {
     return SealResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   empty: []const u8
@@ -65,8 +64,7 @@ pub fn seal(arena: *mem.Arena, kind: Cipher, plaintext: []const u8, additional: 
   ok := false
   if kind == Cipher.Chacha20Poly1305 {
     ok = native.seal(ciphertext, tag, plaintext, additional, key, nonce)
-  }
-  else {
+  } else {
     ok = aes.seal(ciphertext, tag, plaintext, additional, key, nonce)
   }
   if !ok {
@@ -94,8 +92,7 @@ pub fn open(arena: *mem.Arena, kind: Cipher, ciphertext: []const u8, tag: []cons
   ok := false
   if kind == Cipher.Chacha20Poly1305 {
     ok = native.open(plaintext, ciphertext, tag, additional, key, nonce)
-  }
-  else {
+  } else {
     ok = aes.open(plaintext, ciphertext, tag, additional, key, nonce)
   }
   if !ok {

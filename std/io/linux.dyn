@@ -1,14 +1,14 @@
 #target(kernel: linux)
+use "std/os/linux/sys"
 
 // Borrow the process standard descriptors; callers do not own or close them.
-fn stdin_read(data: rawptr, destination: []u8) Transfer {
-  _ = data
+fn stdin_read(_data: rawptr, destination: []u8) Transfer {
   if #len(destination) == 0 {
     return Transfer{ transferred: 0, error: 0, status: Status.Complete }
   }
-  value := #syscall(0, 0, &destination[0], #len(destination))
+  value := #syscall(sys.Read, 0, &destination[0], #len(destination))
   for value == -4 {
-    value = #syscall(0, 0, &destination[0], #len(destination))
+    value = #syscall(sys.Read, 0, &destination[0], #len(destination))
   }
   if value < 0 {
     return Transfer{ transferred: 0, error: value, kind: linux(value), status: Status.Error }
@@ -23,27 +23,23 @@ fn stdin_read(data: rawptr, destination: []u8) Transfer {
 fn write_descriptor(descriptor: isize, source: []const u8) Transfer {
   written: usize = 0
   for written < #len(source) {
-    value := #syscall(1, descriptor, &source[written], #len(source) - written)
-    if value == -4 { }
-    else if value <= 0 {
+    value := #syscall(sys.Write, descriptor, &source[written], #len(source) - written)
+    if value == -4 { } else if value <= 0 {
       if value == 0 {
         value = -5
       }
       return Transfer{ transferred: written, error: value, kind: linux(value), status: Status.Error }
-    }
-    else {
+    } else {
       written += #cast(usize, value)
     }
   }
   return Transfer{ transferred: written, error: 0, status: Status.Complete }
 }
-fn stdout_write(data: rawptr, source: []const u8) Transfer {
-  _ = data
+fn stdout_write(_data: rawptr, source: []const u8) Transfer {
   return write_descriptor(1, source)
 }
 
-fn stderr_write(data: rawptr, source: []const u8) Transfer {
-  _ = data
+fn stderr_write(_data: rawptr, source: []const u8) Transfer {
   return write_descriptor(2, source)
 }
 

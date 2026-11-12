@@ -5,14 +5,14 @@ fn metric_origin(face: *const Face, index: u16, xmin: i16) Point {
   if index >= face.metrics {
     at = #cast(usize, face.metrics) * 4 + (#cast(usize, index) - #cast(usize, face.metrics)) * 2
   }
-  return Point{ x: #cast(f64, #cast(i32, xmin) - #cast(i32, i16be(face.hmtx, at))) }
+  return Point{ x: #cast(i32, xmin) - #cast(i32, i16be(face.hmtx, at)) }
 }
 fn metric_advance(face: *const Face, index: u16) Point {
   metric := #cast(usize, index)
   if index >= face.metrics {
-    metric = #cast(usize, face.metrics - 1)
+    metric = face.metrics - 1
   }
-  return Point{ x: #cast(f64, u16be(face.hmtx, metric * 4)) }
+  return Point{ x: u16be(face.hmtx, metric * 4) }
 }
 fn read_outline(arena: *mem.Arena, face: *const Face, index: u16, depth: usize, budget: *OutlineBudget) Outline {
   if index >= face.glyphs {
@@ -28,7 +28,7 @@ fn read_outline(arena: *mem.Arena, face: *const Face, index: u16, depth: usize, 
   }
   budget.nodes -= 1
   budget.path[depth] = index
-  start := location(face, #cast(usize, index))
+  start := location(face, index)
   end := location(face, #cast(usize, index) + 1)
   data := face.glyf[start..end]
   if start == end {
@@ -63,7 +63,7 @@ fn read_outline(arena: *mem.Arena, face: *const Face, index: u16, depth: usize, 
   budget.points -= count
   ends := mem.push_array(usize, arena, #cast(usize, contours))
   for i in 0..#len(ends) {
-    ends[i] = #cast(usize, u16be(data, 10 + i * 2))
+    ends[i] = u16be(data, 10 + i * 2)
     if (i != 0 && ends[i] <= ends[i - 1]) || ends[i] >= count {
       return Outline{ kind: parse.Kind.Syntax }
     }
@@ -114,7 +114,7 @@ fn read_outline(arena: *mem.Arena, face: *const Face, index: u16, depth: usize, 
         if !fits(data, at, 1) {
           return Outline{ kind: parse.Kind.Syntax }
         }
-        delta = #cast(i32, data[at])
+        delta = data[at]
         at += 1
         if (flags[j] & same) == 0 {
           delta = 0 - delta
@@ -123,7 +123,7 @@ fn read_outline(arena: *mem.Arena, face: *const Face, index: u16, depth: usize, 
         if !fits(data, at, 2) {
           return Outline{ kind: parse.Kind.Syntax }
         }
-        delta = #cast(i32, i16be(data, at))
+        delta = i16be(data, at)
         at += 2
       }
       coordinate += delta
@@ -131,13 +131,13 @@ fn read_outline(arena: *mem.Arena, face: *const Face, index: u16, depth: usize, 
         if coordinate < #cast(i32, x0) || coordinate > #cast(i32, x1) {
           return Outline{ kind: parse.Kind.Syntax }
         }
-        points[j].x = #cast(f64, coordinate)
+        points[j].x = coordinate
         points[j].on = (flags[j] & 1) != 0
       } else {
         if coordinate < #cast(i32, y0) || coordinate > #cast(i32, y1) {
           return Outline{ kind: parse.Kind.Syntax }
         }
-        points[j].y = #cast(f64, coordinate)
+        points[j].y = coordinate
       }
     }
   }

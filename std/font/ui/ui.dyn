@@ -62,7 +62,7 @@ use "std/text/layout" layout
 pub struct LayoutAdapter { atlas: *const font.Atlas, face: *const font.Face, pixels_per_em: u16 }
 fn layout_advance(raw: rawptr, codepoint: u32) f64 {
   adapter := #cast(*const LayoutAdapter, raw)
-  return #cast(f64, font.atlas_glyph(adapter.atlas, codepoint).advance)
+  return font.atlas_glyph(adapter.atlas, codepoint).advance
 }
 fn layout_kerning(raw: rawptr, left, right: u32) f64 {
   adapter := #cast(*const LayoutAdapter, raw)

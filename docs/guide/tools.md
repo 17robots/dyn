@@ -8,7 +8,7 @@
 | `dyn vet DIR` | Check, then report suspicious but valid code; exits 1 on findings |
 | `dyn build DIR` | Build an executable (`--debug` default, or `--release`) |
 | `dyn run DIR` | Build and run; `dyn run DIR -- a b` passes `a b` to the program and returns its exit code |
-| `dyn fmt DIR` | Format every file in the module: one statement per line, two-space indentation, a space after commas; `--check` only reports |
+| `dyn fmt DIR` | Format every file in the module: one statement per line, `} else {` on one line, two-space indentation, a space after commas; `--check` only reports |
 | `dyn docs DIR` | Print public declarations and their contracts; `--json` for tools |
 | `dyn query DIR` | Export a semantic program index as JSON |
 | `dyn lsp` | Run the language server on stdio |
@@ -28,7 +28,12 @@ See the [independent toolchain guide](independent-toolchain.md).
 
 The compiler reports errors only. `dyn vet` runs extra checks on valid code: it
 flags copying an arena (the copies would hand out overlapping memory) and
-importing one module under two names, and locals that are never used.
+importing one module under two names, locals that are never used, and a
+`#cast` that an argument, return, field, typed local, assignment or index would
+make anyway, such as `take(#cast(u64, count))` when `count` is a `u32`. Casts
+that set a type, like `wide := #cast(u64, n)` or an operand of `*`, stay.
+Editors flag unused parameters except those named with a leading `_`, such as
+`_signal` in a callback that ignores it.
 `dyn vet --unsafe` also lists every `#slice`, `#offset`, `#syscall` and pointer cast in your
 code, so a review can see new unsafe sites. Language servers show the same findings
 as warnings. Run `dyn vet` in CI next to `dyn fmt --check`.

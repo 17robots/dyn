@@ -68,11 +68,7 @@ fn append(build: *Build, bounds: ui.Rect, tint: ui.Color, glyph: *const software
   }
   draw := mem.push(Draw, build.arena)
   draw.* = Draw{bounds:bounds, tint:tint, coverage:pixels}
-  if build.last == nil {
-    build.first = draw
-  } else {
-    build.last.next = draw
-  }
+  if build.last == nil { build.first = draw } else { build.last.next = draw }
   build.last = draw
   build.count += 1
 }
@@ -190,7 +186,7 @@ pub fn render(renderer: *Renderer, scratch: *mem.Arena, surface: *software.Surfa
   if build.count == 0 {
     return Result{ok:true}
   }
-  max_words := ~#cast(usize, 0)/4
+  max_words := #max(usize)/4
   if max_words > 0xffffffff {
     max_words = 0xffffffff
   }

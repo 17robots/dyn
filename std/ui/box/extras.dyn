@@ -110,8 +110,7 @@ pub fn splitter(state: *State, label: []const u8, axis: u8, extent: f32, minimum
   if axis == 0 {
     divider.width = pixels(6.0, 1.0)
     divider.height = percent(1.0, 1.0)
-  }
-  else {
+  } else {
     divider.width = percent(1.0, 1.0)
     divider.height = pixels(6.0, 1.0)
   }

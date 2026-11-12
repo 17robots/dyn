@@ -9,12 +9,30 @@ pub type Count = Result(usize)
 
 pub enum Kind { Ok, InvalidInput, InvalidState, NotFound, PermissionDenied, AlreadyExists, Capacity, Overflow, Interrupted, WouldBlock, Unsupported, System }
 
+// Whether a step failed. Kind.Ok is the zero value, so a zero Failure succeeded.
+pub fn failed(failure: Failure) bool {
+  return failure.kind != Kind.Ok
+}
+// A native error code with its portable kind; 0 is success.
+pub fn linux_failure(code: isize) Failure {
+  return Failure{ kind: linux(code), native: code }
+}
+pub fn darwin_failure(code: isize) Failure {
+  return Failure{ kind: darwin(code), native: code }
+}
+pub fn windows_failure(code: isize) Failure {
+  return Failure{ kind: windows(code), native: code }
+}
+pub fn wasi_failure(code: isize) Failure {
+  return Failure{ kind: wasi(code), native: code }
+}
+
 pub fn linux(code: isize) Kind {
   if code == 0 {
     return Kind.Ok
   }
   value := code
-  if value == 0 - #cast(isize, ((~#cast(usize, 0)) >> 1)) - 1 {
+  if value == #min(isize) {
     return Kind.System
   }
   if value < 0 {
@@ -57,7 +75,7 @@ pub fn windows(code: isize) Kind {
     return Kind.Ok
   }
   value := code
-  if value == 0 - #cast(isize, ((~#cast(usize, 0)) >> 1)) - 1 {
+  if value == #min(isize) {
     return Kind.System
   }
   if value < 0 {
@@ -100,7 +118,7 @@ pub fn wasi(code: isize) Kind {
     return Kind.Ok
   }
   value := code
-  if value == 0 - #cast(isize, ((~#cast(usize, 0)) >> 1)) - 1 {
+  if value == #min(isize) {
     return Kind.System
   }
   if value < 0 {
@@ -141,7 +159,7 @@ pub fn wasi(code: isize) Kind {
 
 pub fn darwin(code: isize) Kind {
   value := code
-  if value == 0 - #cast(isize, ((~#cast(usize, 0)) >> 1)) - 1 {
+  if value == #min(isize) {
     return Kind.System
   }
   if value < 0 {

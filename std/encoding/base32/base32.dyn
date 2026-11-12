@@ -63,8 +63,7 @@ fn encode_into(destination: []u8, source: []const u8) Result {
     for digit in 0..8 {
       if digit < symbols {
         destination[output_at] = symbol(#cast(u8, ((block >> (35 - digit * 5)) & 31)))
-      }
-      else {
+      } else {
         destination[output_at] = '='
       }
       output_at += 1
@@ -114,8 +113,7 @@ fn decode_pass(destination: []u8, source: []const u8, write: bool, offset: *usiz
       if byte == '=' {
         padding_started = true
         block = block << 5
-      }
-      else {
+      } else {
         decoded := decode_symbol(byte)
         if decoded == 255 || padding_started {
           offset.* = input_at + digit
@@ -204,7 +202,7 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Decoded {
   if !size.ok {
     return Decoded{ failure: parse.Failure{ kind: parse.Kind.Syntax, offset: size.offset } }
   }
-  if size.value > (~#cast(usize, 0)) - mark {
+  if size.value > #max(usize) - mark {
     return Decoded{ failure: parse.Failure{ kind: parse.Kind.Overflow } }
   }
   // Check borrowed backing before allocation or rewind can modify aliased input.

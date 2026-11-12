@@ -8,7 +8,7 @@ pub fn decode(source: []const u16, offset: usize) Decode {
   }
   first := source[offset]
   if first < 55296 || first > 57343 {
-    return Decode{ codepoint: #cast(u32, first), width: 1, valid: true }
+    return Decode{ codepoint: first, width: 1, valid: true }
   }
   if first >= 56320 || offset + 1 >= #len(source) {
     return Decode{ codepoint: Replacement, width: 1, valid: false }

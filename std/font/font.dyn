@@ -116,12 +116,10 @@ pub fn open(data: []const u8) FaceResult {
     }
     length: usize = 0
     if kind == 4 && #len(sub) >= 16 {
-      length = #cast(usize, u16be(sub, 2))
-    }
-    else if kind == 12 && #len(sub) >= 16 {
-      length = #cast(usize, u32be(sub, 4))
-    }
-    else {
+      length = u16be(sub, 2)
+    } else if kind == 12 && #len(sub) >= 16 {
+      length = u32be(sub, 4)
+    } else {
       continue
     }
     if length < 16 || length > #len(sub) {
@@ -192,7 +190,7 @@ pub fn open(data: []const u8) FaceResult {
 }
 fn location(face: *const Face, index: usize) usize {
   if face.long_loca {
-    return #cast(usize, u32be(face.loca, index * 4))
+    return u32be(face.loca, index * 4)
   }
   return #cast(usize, u16be(face.loca, index * 2)) * 2
 }
@@ -211,11 +209,9 @@ pub fn glyph_index(face: *const Face, codepoint: u32) u16 {
       end := u32be(sub, 20 + mid * 12)
       if codepoint < start {
         high = mid
-      }
-      else if codepoint > end {
+      } else if codepoint > end {
         low = mid + 1
-      }
-      else {
+      } else {
         return #cast(u16, (u32be(sub, 24 + mid * 12) + codepoint - start))
       }
     }
@@ -276,7 +272,7 @@ pub fn raster(arena: *mem.Arena, face: *const Face, index: u16, pixels_per_em: u
   }
   scale := #cast(f64, pixels_per_em) / #cast(f64, face.units_per_em)
   advance := #cast(i32, math.floor64(metric_advance(face, index).x * scale + 0.5))
-  start := location(face, #cast(usize, index))
+  start := location(face, index)
   end := location(face, #cast(usize, index) + 1)
   bitmap := Bitmap{ advance: advance }
   if start == end {
@@ -379,11 +375,9 @@ pub fn raster(arena: *mem.Arena, face: *const Face, index: u16, pixels_per_em: u
     cursor := first
     if a.on {
       cursor += 1
-    }
-    else if b.on {
+    } else if b.on {
       origin = b
-    }
-    else {
+    } else {
       origin = midpoint(a, b)
     }
     current := origin
@@ -401,8 +395,7 @@ pub fn raster(arena: *mem.Arena, face: *const Face, index: u16, pixels_per_em: u
       }
       if !destination.on {
         destination = midpoint(point, destination)
-      }
-      else if cursor <= last {
+      } else if cursor <= last {
         cursor += 1
       }
       curvature := math.abs(current.x - 2.0 * point.x + destination.x) + math.abs(current.y - 2.0 * point.y + destination.y)
@@ -441,11 +434,7 @@ pub fn raster(arena: *mem.Arena, face: *const Face, index: u16, pixels_per_em: u
             if (e.a.y <= py && e.b.y > py) || (e.b.y <= py && e.a.y > py) {
               crossing := e.a.x + (py - e.a.y) * (e.b.x - e.a.x) / (e.b.y - e.a.y)
               if crossing > px {
-                if e.b.y > e.a.y {
-                  winding += 1
-                } else {
-                  winding -= 1
-                }
+                if e.b.y > e.a.y { winding += 1 } else { winding -= 1 }
               }
             }
           }
@@ -553,11 +542,7 @@ pub fn atlas_glyph(value: *const Atlas, codepoint: u32) *const AtlasGlyph {
   high := #len(value.glyphs) - 1
   for low < high {
     mid := low + (high - low) / 2
-    if value.glyphs[mid].codepoint < codepoint {
-      low = mid + 1
-    } else {
-      high = mid
-    }
+    if value.glyphs[mid].codepoint < codepoint { low = mid + 1 } else { high = mid }
   }
   if low < #len(value.glyphs) - 1 && value.glyphs[low].codepoint == codepoint {
     return &value.glyphs[low]

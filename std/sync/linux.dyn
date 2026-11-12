@@ -1,13 +1,14 @@
 #target(kernel: linux)
+use "std/os/linux/sys"
 fn native_wait(address: *AtomicU32, expected: u32) isize {
-  return #syscall(202, address, 0, expected, 0, 0, 0)
+  return #syscall(sys.Futex, address, 0, expected, 0, 0, 0)
 }
 fn native_wake(address: *AtomicU32, all: bool) {
   count: usize = 1
   if all {
     count = 2147483647
   }
-  _ = #syscall(202, address, 1, count, 0, 0, 0)
+  _ = #syscall(sys.Futex, address, 1, count, 0, 0, 0)
 }
 fn native_mutex_try_lock(value: *Mutex) bool {
   return wait_mutex_try_lock(value)
@@ -21,7 +22,7 @@ fn native_mutex_unlock(value: *Mutex) {
 
 fn native_wait_timeout(address: *AtomicU32, expected: u32, duration: i64) isize {
   request := time.Instant{seconds:duration / time.Second, nanoseconds:duration % time.Second}
-  code := #syscall(202, address, 0, expected, &request, 0, 0)
+  code := #syscall(sys.Futex, address, 0, expected, &request, 0, 0)
   if code == -110 {
     return 1
   }

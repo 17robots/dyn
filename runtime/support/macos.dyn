@@ -60,9 +60,7 @@ const signal_bus: i32 = 10
 const signal_segv: i32 = 11
 // The ucontext points at the machine context, which holds the faulting
 // instruction and frame pointer (fault_pc and fault_fp, per architecture).
-fn fault_handler(signal: i32, information: rawptr, context: rawptr) {
-  _ = signal
-  _ = information
+fn fault_handler(_signal: i32, _information: rawptr, context: rawptr) {
   write_string("memory fault: invalid address\n")
   machine := #cast(*const usize, #cast(usize, context) + 48).*
   trace_fault(fault_pc(machine), fault_fp(machine))

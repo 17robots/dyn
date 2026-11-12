@@ -4,6 +4,7 @@ use "std/mem" mem
 use "std/io" io
 use "std/fs" fs
 use "std/c" c
+use "std/os/linux/sys"
 
 pub const Modify: u32 = 2
 pub const Attributes: u32 = 4
@@ -38,11 +39,11 @@ pub struct EventResult { event: Event, status: Status, failure: io.Failure }
 // storage until next refill. An overflow invalidates all cached workspace state.
 pub fn open(storage: []u8) OpenResult {
   if #len(storage) < 272 {
-    return OpenResult{ value: Watcher{}, failure: io.Failure{ kind: io.linux(-28), native: -28 } }
+    return OpenResult{ value: Watcher{}, failure: io.linux_failure(-28) }
   }
-  descriptor := #syscall(294, 526336)
+  descriptor := #syscall(sys.InotifyInit1, 526336)
   if descriptor < 0 {
-    return OpenResult{ value: Watcher{}, failure: io.Failure{ kind: io.linux(descriptor), native: descriptor } }
+    return OpenResult{ value: Watcher{}, failure: io.linux_failure(descriptor) }
   }
   return OpenResult{ value: Watcher{ descriptor: descriptor, active: true, storage: storage } }
 }
@@ -52,7 +53,7 @@ pub fn add(state: *Watcher, path: []const u8, mask: u32) Result {
   if name.failure.kind != parse.Kind.Ok || #len(path) == 0 || !state.active {
     return failure(-22)
   }
-  value := #syscall(254, state.descriptor, name.value, mask)
+  value := #syscall(sys.InotifyAddWatch, state.descriptor, name.value, mask)
   if value < 0 {
     return failure(value)
   }
@@ -62,14 +63,14 @@ pub fn remove(state: *Watcher, watch: i32) Result {
   if !state.active {
     return failure(-9)
   }
-  value := #syscall(255, state.descriptor, watch)
+  value := #syscall(sys.InotifyRmWatch, state.descriptor, watch)
   return status(value)
 }
 pub fn close(state: *Watcher) {
   if !state.active {
     return
   }
-  value := #syscall(3, state.descriptor)
+  value := #syscall(sys.Close, state.descriptor)
   state.descriptor = 0
   state.active = false
   state.used = 0
@@ -108,7 +109,7 @@ pub fn next(state: *Watcher) EventResult {
     }
     file := fs.borrow_handle(state.descriptor)
     result := fs.read(&file, state.storage)
-    if result.failure.kind != io.Kind.Ok {
+    if io.failed(result.failure) {
       if result.failure.native == -11 {
         return EventResult{ status: Status.Empty }
       }
@@ -157,7 +158,7 @@ pub fn acknowledge_rescan(state: *Watcher) {
 }
 
 fn failure(code: isize) Result {
-  return Result{ failure: io.Failure{ kind: io.linux(code), native: code } }
+  return Result{ failure: io.linux_failure(code) }
 }
 fn status(code: isize) Result {
   if code == 0 {

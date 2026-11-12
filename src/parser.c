@@ -532,8 +532,10 @@ static uint32_t parse(Parser *p, int minimum) {
           at(p, token.start, "#bitcast") ? EXP_BITCAST : 0);
       primary = true;
     }
-  } else if (is(p, "#sizeof") || is(p, "#alignof") || is(p, "#typeof") || is(p, "#offsetof")) {
-    ExpKind kind = is(p, "#sizeof") ? EXP_SIZE : is(p, "#alignof") ? EXP_ALIGN : is(p, "#typeof") ? EXP_TYPEOF : EXP_OFFSET;
+  } else if (is(p, "#sizeof") || is(p, "#alignof") || is(p, "#typeof") || is(p, "#offsetof") ||
+             is(p, "#max") || is(p, "#min")) {
+    /* #max and #min share #sizeof's node; compaction tells them apart by name. */
+    ExpKind kind = is(p, "#sizeof") || is(p, "#max") || is(p, "#min") ? EXP_SIZE : is(p, "#alignof") ? EXP_ALIGN : is(p, "#typeof") ? EXP_TYPEOF : EXP_OFFSET;
     lex(p); expect(p, "(");
     uint32_t child = kind == EXP_OFFSET ? type(p) : argument(p, true);
     if (kind == EXP_OFFSET) {

@@ -57,20 +57,15 @@ fn closing(pattern: []const u8, at: usize, close: u8) usize {
     b := pattern[i]
     if escaped {
       escaped = false
-    }
-    else if b == '\\' {
+    } else if b == '\\' {
       escaped = true
-    }
-    else if b == '[' {
+    } else if b == '[' {
       in_class = true
-    }
-    else if b == ']' {
+    } else if b == ']' {
       in_class = false
-    }
-    else if !in_class && b == '(' {
+    } else if !in_class && b == '(' {
       depth += 1
-    }
-    else if !in_class && b == ')' {
+    } else if !in_class && b == ')' {
       if close == ')' && depth == 0 {
         return i
       }
@@ -97,25 +92,19 @@ fn expression(state: *CompileState, lo: usize, hi: usize) bool {
       b := state.pattern[i]
       if escaped {
         escaped = false
-      }
-      else if b == '\\' {
+      } else if b == '\\' {
         escaped = true
-      }
-      else if b == '[' {
+      } else if b == '[' {
         in_class = true
-      }
-      else if b == ']' {
+      } else if b == ']' {
         in_class = false
-      }
-      else if !in_class && b == '(' {
+      } else if !in_class && b == '(' {
         depth += 1
-      }
-      else if !in_class && b == ')' {
+      } else if !in_class && b == ')' {
         if depth > 0 {
           depth -= 1
         }
-      }
-      else if !in_class && depth == 0 && b == '|' {
+      } else if !in_class && depth == 0 && b == '|' {
         split = true
       }
     }
@@ -181,11 +170,9 @@ fn sequence(state: *CompileState, lo: usize, hi: usize) bool {
       op := Char
       if state.pattern[i] == '.' {
         op = Any
-      }
-      else if state.pattern[i] == '^' {
+      } else if state.pattern[i] == '^' {
         op = Begin
-      }
-      else if state.pattern[i] == '$' {
+      } else if state.pattern[i] == '$' {
         op = End
       }
       if !token(state, op, state.pattern[i], 0, 0) {
@@ -202,18 +189,15 @@ fn sequence(state: *CompileState, lo: usize, hi: usize) bool {
       unbounded = true
       qafter += 1
       quantified = true
-    }
-    else if after < hi && state.pattern[after] == '+' {
+    } else if after < hi && state.pattern[after] == '+' {
       unbounded = true
       qafter += 1
       quantified = true
-    }
-    else if after < hi && state.pattern[after] == '?' {
+    } else if after < hi && state.pattern[after] == '?' {
       minimum = 0
       qafter += 1
       quantified = true
-    }
-    else if counted(state.pattern, after, &minimum, &maximum, &unbounded, &qafter) {
+    } else if counted(state.pattern, after, &minimum, &maximum, &unbounded, &qafter) {
       quantified = true
     }
     if quantified && state.counting {
@@ -239,8 +223,7 @@ fn sequence(state: *CompileState, lo: usize, hi: usize) bool {
       }
       state.used = begin + copies * (atom_count + 2)
       after = qafter
-    }
-    else if quantified {
+    } else if quantified {
       atom_end := state.used
       atom_count := atom_end - begin
       if minimum == 0 {
@@ -316,7 +299,7 @@ fn sequence(state: *CompileState, lo: usize, hi: usize) bool {
   return pieces > 0
 }
 
-const NoPatch: usize = ~#cast(usize, 0)
+const NoPatch: usize = #max(usize)
 struct Fragment { start: usize, out: usize }
 
 fn field(code: []Instruction, slot: usize) usize {
@@ -335,11 +318,9 @@ fn set_field(code: []Instruction, slot: usize, value: usize) {
   part := slot % 3
   if part == 0 {
     code[instruction].x = value
-  }
-  else if part == 1 {
+  } else if part == 1 {
     code[instruction].y = value
-  }
-  else {
+  } else {
     code[instruction].z = value
   }
 }
@@ -377,23 +358,18 @@ fn compile_into(pattern: []const u8, storage: []Instruction, workspace: []Instru
   for byte in pattern {
     if escaped {
       escaped = false
-    }
-    else if byte == '\\' {
+    } else if byte == '\\' {
       escaped = true
-    }
-    else if byte == '[' {
+    } else if byte == '[' {
       in_class = true
-    }
-    else if byte == ']' {
+    } else if byte == ']' {
       in_class = false
-    }
-    else if !in_class && byte == '(' {
+    } else if !in_class && byte == '(' {
       nesting += 1
       if nesting > 128 {
         return Program{ error: parse.Kind.Capacity }
       }
-    }
-    else if !in_class && byte == ')' && nesting > 0 {
+    } else if !in_class && byte == ')' && nesting > 0 {
       nesting -= 1
     }
   }
@@ -417,8 +393,7 @@ fn compile_into(pattern: []const u8, storage: []Instruction, workspace: []Instru
       part: usize = 0
       if item.op == Save {
         part = 1
-      }
-      else if item.op == Class {
+      } else if item.op == Class {
         part = 2
       }
       scratch[top * 2] = used
@@ -463,12 +438,10 @@ fn compile_into(pattern: []const u8, storage: []Instruction, workspace: []Instru
         patch_list(storage, value.out, used)
         scratch[(top - 1) * 2] = used
         scratch[(top - 1) * 2 + 1] = list(storage, used, 1)
-      }
-      else if item.op == PlusToken {
+      } else if item.op == PlusToken {
         patch_list(storage, value.out, used)
         scratch[(top - 1) * 2 + 1] = list(storage, used, 1)
-      }
-      else {
+      } else {
         scratch[(top - 1) * 2] = used
         scratch[(top - 1) * 2 + 1] = append_list(storage, value.out, list(storage, used, 1))
       }
@@ -500,23 +473,18 @@ pub fn compile(arena: *mem.Arena, pattern: []const u8) Result {
     b := pattern[i]
     if escaped {
       escaped = false
-    }
-    else if b == '\\' {
+    } else if b == '\\' {
       escaped = true
-    }
-    else if b == '[' {
+    } else if b == '[' {
       in_class = true
-    }
-    else if b == ']' {
+    } else if b == ']' {
       in_class = false
-    }
-    else if !in_class && b == '(' {
+    } else if !in_class && b == '(' {
       depth += 1
       if depth > 128 {
         return Result{ offset: i, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: i, message: "nesting too deep" } }
       }
-    }
-    else if !in_class && b == ')' && depth > 0 {
+    } else if !in_class && b == ')' && depth > 0 {
       depth -= 1
     }
   }
@@ -589,8 +557,7 @@ fn expand(program: Program, text: []const u8, at: usize, seed: []usize,
       }
       if instruction.op == Jump {
         row[0] = instruction.x
-      }
-      else if instruction.op == Save {
+      } else if instruction.op == Save {
         slot := instruction.x + 1
         if slot < stride {
           row[slot] = at
@@ -599,20 +566,17 @@ fn expand(program: Program, text: []const u8, at: usize, seed: []usize,
           }
         }
         row[0] = instruction.y
-      }
-      else if instruction.op == Begin {
+      } else if instruction.op == Begin {
         if at != 0 {
           break
         }
         row[0] = instruction.x
-      }
-      else if instruction.op == End {
+      } else if instruction.op == End {
         if at != #len(text) {
           break
         }
         row[0] = instruction.x
-      }
-      else {
+      } else {
         copy_thread(output[used.* * stride..(used.* + 1) * stride], row)
         used.* += 1
         break
@@ -871,8 +835,7 @@ pub fn next(state: *Iterator) MatchResult {
   }
   if result.value.end == result.value.start {
     state.offset = result.value.end + 1
-  }
-  else {
+  } else {
     state.offset = result.value.end
   }
   if result.value.end == #len(state.text) {

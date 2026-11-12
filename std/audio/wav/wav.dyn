@@ -123,7 +123,7 @@ pub fn decode(arena: *mem.Arena, source: []const u8) DecodeResult {
     return DecodeResult{ offset: data_offset, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: data_offset } }
   }
   sample_count := #len(data) / stride
-  if sample_count > ~#cast(usize, 0) / #sizeof(f32) {
+  if sample_count > #max(usize) / #sizeof(f32) {
     return DecodeResult{ offset: data_offset, failure: parse.Failure{ kind: parse.Kind.Overflow, offset: data_offset } }
   }
   samples := mem.push_array(f32, arena, sample_count)
@@ -134,23 +134,19 @@ pub fn decode(arena: *mem.Arena, source: []const u8) DecodeResult {
       if bits == 32 {
         samples[i] = #bitcast(f32, u32le(data, pos))
         continue
-      }
-      else {
+      } else {
         raw := #cast(u64, u32le(data, pos)) | (#cast(u64, u32le(data, pos + 4)) << 32)
         value = #bitcast(f64, raw)
       }
     } else {
       raw: u32 = 0
       if bits == 8 {
-        raw = #cast(u32, data[pos])
-      }
-      else if bits == 16 {
-        raw = #cast(u32, u16le(data, pos))
-      }
-      else if bits == 24 {
+        raw = data[pos]
+      } else if bits == 16 {
+        raw = u16le(data, pos)
+      } else if bits == 24 {
         raw = #cast(u32, data[pos]) | (#cast(u32, data[pos + 1]) << 8) | (#cast(u32, data[pos + 2]) << 16)
-      }
-      else {
+      } else {
         raw = u32le(data, pos)
       }
       if precision < bits {
@@ -158,15 +154,12 @@ pub fn decode(arena: *mem.Arena, source: []const u8) DecodeResult {
       }
       if bits == 8 {
         value = (#cast(f64, raw) - 128.0) / 128.0
-      }
-      else if bits == 16 {
+      } else if bits == 16 {
         value = #cast(f64, #cast(i16, raw)) / 32768.0
-      }
-      else if bits == 24 {
+      } else if bits == 24 {
         signed := #cast(i32, (raw << 8)) >> 8
         value = #cast(f64, signed) / 8388608.0
-      }
-      else {
+      } else {
         value = #cast(f64, #cast(i32, raw)) / 2147483648.0
       }
     }
@@ -213,7 +206,7 @@ pub fn encode(arena: *mem.Arena, audio: *const Audio, encoding: Encoding) Encode
       header = 80
     }
   }
-  if #len(audio.samples) > (4294967295 - (header - 8) - 1) / stride || #len(audio.samples) > (~#cast(usize, 0) - header - 1) / stride {
+  if #len(audio.samples) > (4294967295 - (header - 8) - 1) / stride || #len(audio.samples) > (#max(usize) - header - 1) / stride {
     return EncodeResult{ failure: parse.Failure{ kind: parse.Kind.Overflow } }
   }
   length := #len(audio.samples) * stride
@@ -281,8 +274,7 @@ pub fn encode(arena: *mem.Arena, audio: *const Audio, encoding: Encoding) Encode
     value := #cast(f64, audio.samples[i])
     if floating {
       put32(output, at, #bitcast(u32, audio.samples[i]))
-    }
-    else {
+    } else {
       maximum: f64 = 128.0
       if bits == 16 {
         maximum = 32768.0
@@ -305,8 +297,7 @@ pub fn encode(arena: *mem.Arena, audio: *const Audio, encoding: Encoding) Encode
       }
       if bits == 8 {
         output[at] = #cast(u8, sample + 128)
-      }
-      else {
+      } else {
         raw := #cast(u32, sample)
         for byte in 0..stride {
           output[at + byte] = #cast(u8, (raw >> (byte * 8)))

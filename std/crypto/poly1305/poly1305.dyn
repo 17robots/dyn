@@ -7,7 +7,7 @@ pub struct State { r: [5]u64, h: [5]u64, pad: [4]u32, buffer: [16]u8, used: usiz
 pub struct Tag { value: [16]u8, valid: bool }
 const Mask: u64 = 0x3ffffff
 fn load(source: []const u8, at: usize) u64 {
-  return #cast(u64, binary.load_u32_le(source[at..at+4]))
+  return binary.load_u32_le(source[at..at+4])
 }
 pub fn init(key: []const u8) State {
   if #len(key) != 32 {

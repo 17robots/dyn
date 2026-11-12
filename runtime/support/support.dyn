@@ -114,8 +114,7 @@ fn unwind_slot(claim: bool) *UnwindSlot {
       if !unwind_grow() {
         return nil
       }
-    }
-    else if atomic_claim(&empty.tid, 0, tid) {
+    } else if atomic_claim(&empty.tid, 0, tid) {
       unwind_remember(tid, empty_index)
       return empty
     }
@@ -146,8 +145,7 @@ pub fn dyn_unwind_unlink(frame: *Unwind) {
   if offset != 0 {
     owner := #cast(*usize, #cast(usize, frame) + offset)
     slot = #cast(*UnwindSlot, owner.*)
-  }
-  else {
+  } else {
     slot = unwind_slot(false)
   }
   if slot != nil && slot.top == frame {

@@ -834,7 +834,8 @@ static bool body_merge(DynAstProgram *a, BodyRun *r, const BodyBase *b) {
     if (e.kind == DYN_EXPR_SLICE) e.integer = BODY_SHIFT((uint32_t)e.integer, be, de);
     else if (e.kind == DYN_EXPR_STRING) e.integer = (uint32_t)e.integer + dstr;
     else if (e.kind == DYN_EXPR_CAST || e.kind == DYN_EXPR_BITCAST || e.kind == DYN_EXPR_OFFSET ||
-             ((e.kind == DYN_EXPR_SIZE || e.kind == DYN_EXPR_ALIGN || e.kind == DYN_EXPR_TYPEOF) && e.boolean))
+             ((e.kind == DYN_EXPR_SIZE || e.kind == DYN_EXPR_ALIGN || e.kind == DYN_EXPR_TYPEOF ||
+               e.kind == DYN_EXPR_LIMIT) && e.boolean))
       e.integer = body_type(&m, (DynType)e.integer);
     a->expressions[a->expression_count++] = e;
   }

@@ -158,12 +158,10 @@ fn main() {
     if bytes.equal(arguments[i], "--frames") && i + 1 < #len(arguments) {
       frames = strings.parse(usize, arguments[i + 1])
       i += 2
-    }
-    else if bytes.equal(arguments[i], "--screenshot") && i + 1 < #len(arguments) {
+    } else if bytes.equal(arguments[i], "--screenshot") && i + 1 < #len(arguments) {
       screenshot = arguments[i + 1]
       i += 2
-    }
-    else {
+    } else {
       path = arguments[i]
       i += 1
     }

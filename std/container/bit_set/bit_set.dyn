@@ -18,8 +18,7 @@ pub fn set(words: []u64, bit: usize, value: bool) bool {
   mask := #cast(u64, 1) << (bit % 64)
   if value {
     words[bit / 64] = words[bit / 64] | mask
-  }
-  else {
+  } else {
     words[bit / 64] = words[bit / 64] & ~mask
   }
   return true

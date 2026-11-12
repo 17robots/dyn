@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""dyn fmt: canonical indentation, idempotence, comment preservation, clean std."""
+"""dyn fmt: canonical indentation, } else { joining, idempotence, comment
+preservation, clean std."""
 import os
 from pathlib import Path
 import re
@@ -34,9 +35,14 @@ fn main() {
 x := [1, 2,
   3]
           _ = x
-    } else {
+    }
+       else {
   #panic("add")
         }
+  _ = pick(true)
+}
+fn pick(wide: bool) i64 {
+  if wide { return 8 } else { return 4 }
 }
 '''
 EXPECTED = '''fn add(
@@ -57,6 +63,10 @@ fn main() {
   } else {
     #panic("add")
   }
+  _ = pick(true)
+}
+fn pick(wide: bool) i64 {
+  if wide { return 8 } else { return 4 }
 }
 '''
 

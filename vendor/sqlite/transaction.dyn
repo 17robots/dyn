@@ -34,8 +34,7 @@ pub fn begin(database: Database, mode: TransactionMode) i32 {
   command := "BEGIN DEFERRED\0"
   if mode == TransactionMode.Immediate {
     command = "BEGIN IMMEDIATE\0"
-  }
-  else if mode == TransactionMode.Exclusive {
+  } else if mode == TransactionMode.Exclusive {
     command = "BEGIN EXCLUSIVE\0"
   }
   return transaction_command(database, &command[0])

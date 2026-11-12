@@ -1,4 +1,5 @@
 #target(arch: aarch64, kernel: linux)
+use "std/os/linux/sys"
 // Linux UAPI naturally aligns the 64-bit epoll data field on AArch64.
 pub struct Event { bytes: [16]u8 }
 const EventDataOffset: usize = 8
@@ -11,9 +12,9 @@ fn poll_native(descriptors: []PollDescriptor, timeout_milliseconds: i32) isize {
   timeout := PollTimeout{}
   timeout_pointer: *PollTimeout = nil
   if timeout_milliseconds >= 0 {
-    timeout.seconds = #cast(isize, (timeout_milliseconds / 1000))
+    timeout.seconds = (timeout_milliseconds / 1000)
     timeout.nanoseconds = #cast(isize, (timeout_milliseconds % 1000)) * 1000000
     timeout_pointer = &timeout
   }
-  return #syscall(271, descriptor_pointer, #len(descriptors), timeout_pointer, 0, 8)
+  return #syscall(sys.Ppoll, descriptor_pointer, #len(descriptors), timeout_pointer, 0, 8)
 }

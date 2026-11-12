@@ -91,8 +91,7 @@ pub fn directory_next(directory: *Directory) DirectoryEntry {
       kind: u8 = 8
       if (attributes & 1024) != 0 {
         kind = 10
-      }
-      else if (attributes & 16) != 0 {
+      } else if (attributes & 16) != 0 {
         kind = 4
       }
       return DirectoryEntry{ name: name, kind: kind, found: true }
@@ -183,7 +182,7 @@ pub fn file_metadata(file: *const File) Metadata {
     return Metadata{ failure: io.Failure{ kind: native_kind(code), native: code } }
   }
   attributes := word32(data[..], 0)
-  return Metadata{ size: #cast(u64, word32(data[..], 32)) << 32 | #cast(u64, word32(data[..], 36)), inode: #cast(u64, word32(data[..], 44)) << 32 | #cast(u64, word32(data[..], 48)), device: #cast(u64, word32(data[..], 28)), mode: mode_of(attributes) }
+  return Metadata{ size: #cast(u64, word32(data[..], 32)) << 32 | #cast(u64, word32(data[..], 36)), inode: #cast(u64, word32(data[..], 44)) << 32 | #cast(u64, word32(data[..], 48)), device: word32(data[..], 28), mode: mode_of(attributes) }
 }
 
 fn wide_result(ok: i32) Result {
@@ -203,8 +202,7 @@ pub fn remove(path: []const u8) Result {
 }
 
 // mode is ignored on Windows.
-pub fn make_directory(path: []const u8, mode: usize) Result {
-  _ = mode
+pub fn make_directory(path: []const u8, _mode: usize) Result {
   wide := WidePath{}
   wide_path(path, &wide)
   if !wide.ok {

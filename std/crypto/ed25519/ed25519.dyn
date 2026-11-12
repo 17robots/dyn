@@ -83,7 +83,7 @@ fn modulo(output: []u8, wide: [64]i64) {
 fn reduce(hash: []u8) {
   wide: [64]i64
   for i in 0..64 {
-    wide[i]=#cast(i64, hash[i])
+    wide[i]=hash[i]
   }
   modulo(hash, wide)
 }
@@ -131,7 +131,7 @@ pub fn sign(output: []u8, message: []const u8, key: []const u8) bool {
   reduce(h[..])
   wide: [64]i64
   for i in 0..32 {
-    wide[i]=#cast(i64, r[i])
+    wide[i]=r[i]
   }
   for i in 0..32 {
     for j in 0..32 {

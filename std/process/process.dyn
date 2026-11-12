@@ -103,7 +103,7 @@ pub fn environment(arena: *mem.Arena, name: []const u8) EnvironmentResult {
     mark := mem.arena_mark(arena)
     result := environment_into(name, mem.push_bytes_uninit(arena, capacity))
     if result.failure.native != -28 {
-      if result.failure.kind == io.Kind.Ok {
+      if !io.failed(result.failure) {
         mem.arena_rewind(arena, mark + #len(result.value))
       } else {
         mem.arena_rewind(arena, mark)
@@ -195,12 +195,12 @@ pub fn capture(arena: *mem.Arena, path: []const u8, arguments: [][]const u8,
     }
   }
   stdout := pipe_native()
-  if stdout.failure.kind != io.Kind.Ok {
+  if io.failed(stdout.failure) {
     return CaptureResult{ failure: io.Failure{ kind: stdout.failure.kind, native: stdout.failure.native } }
   }
   defer _ = close_native(stdout.input)
   stderr := pipe_native()
-  if stderr.failure.kind != io.Kind.Ok {
+  if io.failed(stderr.failure) {
     _ = close_native(stdout.output)
     return CaptureResult{ failure: io.Failure{ kind: stderr.failure.kind, native: stderr.failure.native } }
   }
@@ -210,7 +210,7 @@ pub fn capture(arena: *mem.Arena, path: []const u8, arguments: [][]const u8,
   child := spawn(arena, path, arguments, config)
   _ = close_native(stdout.output)
   _ = close_native(stderr.output)
-  if child.failure.kind != io.Kind.Ok {
+  if io.failed(child.failure) {
     return CaptureResult{ failure: io.Failure{ kind: child.failure.kind, native: child.failure.native } }
   }
   defer {
@@ -279,20 +279,15 @@ pub fn capture(arena: *mem.Arena, path: []const u8, arguments: [][]const u8,
             break
           }
         }
-        if stream_index == 0 {
-          out_end = read.ended
-        }
-        else {
-          err_end = read.ended
-        }
+        if stream_index == 0 { out_end = read.ended } else { err_end = read.ended }
       }
     }
-    if result.failure.kind != io.Kind.Ok {
+    if io.failed(result.failure) {
       break
     }
     if child.value.active {
       exited := wait(&child.value, true)
-      if exited.failure.kind != io.Kind.Ok {
+      if io.failed(exited.failure) {
         result.failure.native = exited.failure.native
         result.failure.kind = exited.failure.kind
         break
@@ -322,7 +317,7 @@ pub fn capture(arena: *mem.Arena, path: []const u8, arguments: [][]const u8,
       sleep_native()
     }
   }
-  if result.failure.kind == io.Kind.Ok || result.timed_out || result.limit_reached {
+  if !io.failed(result.failure) || result.timed_out || result.limit_reached {
     result.output = output.storage[..output.length]
     result.errors = errors.storage[..errors.length]
     published = true
@@ -339,7 +334,7 @@ pub struct Program { arena: *mem.Arena, args: [][]const u8 }
 pub fn start() Program {
   arena := mem.arena_create(0)
   result := arguments(arena)
-  if result.failure.kind != io.Kind.Ok {
+  if io.failed(result.failure) {
     #panic("process.start: cannot read the program arguments")
   }
   return Program{ arena: arena, args: result.value }
@@ -352,7 +347,7 @@ pub type ArgumentsResult = io.Result([][]const u8)
 pub fn arguments(arena: *mem.Arena) ArgumentsResult {
   mark := mem.arena_mark(arena)
   result := arguments_native(arena)
-  if result.failure.kind != io.Kind.Ok {
+  if io.failed(result.failure) {
     mem.arena_rewind(arena, mark)
   }
   return result
@@ -361,7 +356,7 @@ fn argument_slots(arena: *mem.Arena, count: usize) ArgumentsResult {
   if count == 0 {
     return ArgumentsResult{}
   }
-  if count > (~#cast(usize, 0)) / #sizeof([]const u8) {
+  if count > #max(usize) / #sizeof([]const u8) {
     return ArgumentsResult{ failure: io.Failure{ kind: io.Kind.Overflow } }
   }
   allocation := mem.arena_push_uninit(arena, count * #sizeof([]const u8), #alignof([]const u8))

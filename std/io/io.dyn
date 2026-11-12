@@ -99,7 +99,7 @@ fn print_value(writer: Writer, value: any) Transfer {
   scratch := memory.arena_from_buffer(storage[..])
   case value {
     f32 item => {
-      return write_all(writer, format.f64_decimal(scratch, #cast(f64, item), 6))
+      return write_all(writer, format.f64_decimal(scratch, item, 6))
     }
     f64 item => {
       return write_all(writer, format.f64_decimal(scratch, item, 6))
@@ -111,34 +111,34 @@ fn print_value(writer: Writer, value: any) Transfer {
       return write_all(writer, "false")
     }
     i8 item => {
-      return write_all(writer, format.i64_decimal(scratch, #cast(i64, item)))
+      return write_all(writer, format.i64_decimal(scratch, item))
     }
     i16 item => {
-      return write_all(writer, format.i64_decimal(scratch, #cast(i64, item)))
+      return write_all(writer, format.i64_decimal(scratch, item))
     }
     i32 item => {
-      return write_all(writer, format.i64_decimal(scratch, #cast(i64, item)))
+      return write_all(writer, format.i64_decimal(scratch, item))
     }
     i64 item => {
       return write_all(writer, format.i64_decimal(scratch, item))
     }
     isize item => {
-      return write_all(writer, format.i64_decimal(scratch, #cast(i64, item)))
+      return write_all(writer, format.i64_decimal(scratch, item))
     }
     u8 item => {
-      return write_all(writer, format.u64_decimal(scratch, #cast(u64, item)))
+      return write_all(writer, format.u64_decimal(scratch, item))
     }
     u16 item => {
-      return write_all(writer, format.u64_decimal(scratch, #cast(u64, item)))
+      return write_all(writer, format.u64_decimal(scratch, item))
     }
     u32 item => {
-      return write_all(writer, format.u64_decimal(scratch, #cast(u64, item)))
+      return write_all(writer, format.u64_decimal(scratch, item))
     }
     u64 item => {
       return write_all(writer, format.u64_decimal(scratch, item))
     }
     usize item => {
-      return write_all(writer, format.u64_decimal(scratch, #cast(u64, item)))
+      return write_all(writer, format.u64_decimal(scratch, item))
     }
     []u8 item => {
       return write_all(writer, item)
@@ -163,8 +163,7 @@ fn format_argument_count(template: []const u8) isize {
       next := template[index + 1]
       if template[index] == '{' && next == '}' {
         count += 1
-      }
-      else if next != template[index] {
+      } else if next != template[index] {
         return -1
       }
       index += 2
@@ -191,8 +190,7 @@ pub fn print_arguments(writer: Writer, template: []const u8, arguments: []const 
   for index < #len(template) {
     if template[index] != '{' && template[index] != '}' {
       index += 1
-    }
-    else {
+    } else {
       if span_start < index {
         literal := write_all(writer, template[span_start..index])
         total += literal.transferred

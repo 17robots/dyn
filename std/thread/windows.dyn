@@ -20,7 +20,7 @@ pub fn spawn_with_size(arena: *mem.Arena, stack_size: usize, entry: fn(rawptr) i
   if !win.thread_spawn(&thread.native, stack_size, entry, context) {
     error := win.thread_error()
     mem.arena_rewind(arena, mark)
-    return SpawnResult{ failure: io.Failure{ kind: io.windows(error), native: error } }
+    return SpawnResult{ failure: io.windows_failure(error) }
   }
   return SpawnResult{ value: thread }
 }
@@ -33,7 +33,7 @@ pub fn join(thread: *Thread) Result {
   }
   if !win.thread_join(&thread.native) {
     error := win.thread_error()
-    return Result{ failure: io.Failure{ kind: io.windows(error), native: error } }
+    return Result{ failure: io.windows_failure(error) }
   }
   return Result{}
 }

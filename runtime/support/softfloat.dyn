@@ -284,8 +284,7 @@ fn soft_convert(a: u64, source: SoftFormat, dest: SoftFormat) u64 {
   sig := x.significand << 3
   if dest.fraction > source.fraction {
     sig <<= dest.fraction-source.fraction
-  }
-  else {
+  } else {
     sig = soft_jam(sig, source.fraction-dest.fraction)
   }
   return soft_pack(sign, x.exponent, sig, dest)
@@ -308,8 +307,7 @@ fn soft_from_integer(magnitude: u64, negative: bool, f: SoftFormat) u64 {
   sig := magnitude
   if #cast(u64, exponent) > desired {
     sig = soft_jam(sig, #cast(u64, exponent)-desired)
-  }
-  else {
+  } else {
     sig <<= desired-#cast(u64, exponent)
   }
   return soft_pack(sign, exponent, sig, f)
@@ -337,8 +335,7 @@ fn soft_to_integer(a: u64, signed: bool, f: SoftFormat) u64 {
   magnitude := x.significand
   if #cast(u64, x.exponent) > f.fraction {
     magnitude <<= #cast(u64, x.exponent)-f.fraction
-  }
-  else {
+  } else {
     magnitude >>= f.fraction-#cast(u64, x.exponent)
   }
   if signed {

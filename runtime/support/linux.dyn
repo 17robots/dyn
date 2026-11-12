@@ -39,9 +39,7 @@ const signal_on_stack: u64 = 0x08000000
 const signal_information: u64 = 4
 const signal_bus: i64 = 7
 const signal_segv: i64 = 11
-fn fault_handler(signal: i32, information: rawptr, context: rawptr) {
-  _ = signal
-  _ = information
+fn fault_handler(_signal: i32, _information: rawptr, context: rawptr) {
   write_string("memory fault: invalid address\n")
   address := #cast(usize, context)
   trace_fault(fault_pc(address), fault_fp(address))

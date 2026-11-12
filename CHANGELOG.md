@@ -14,6 +14,22 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- `#max(T)` and `#min(T)` are the largest and smallest values of an integer
+  type, as constants of that type: write `#max(usize)` for `~#cast(usize, 0)`.
+- `dyn vet` reports a `#cast` that its position would make anyway: an
+  argument, return value, struct field, typed local, assignment or index whose
+  type the value widens to without loss, such as `take(#cast(u64, count))`
+  for a `u32` count. Casts that choose a type, like `wide := #cast(u64, n)` or
+  an operand of `*`, are not reported. std dropped 322 such casts.
+- `#syscall` takes a named constant on every Linux target. `std/os/linux/sys`
+  and `std/os/macos/sys` name the calls std makes: `#syscall(sys.Openat, ...)`.
+- `io.failed(failure)` tests a failure, and `io.linux_failure(code)`,
+  `darwin_failure`, `windows_failure` and `wasi_failure` build one from a
+  native code with its portable kind.
+- `dyn fmt` puts `} else {` on one line. An `if` whose two branches are one
+  statement each may be written on one line, `if wide { return 8 } else {
+  return 4 }`, and std uses that form where it fits in 100 columns.
+
 - `--release` (O2) now inlines small direct calls the way `--opt-level 3`
   does, within a quarter of its growth budget, instead of only one-statement
   leaves inside loops. An allocation-heavy tree kernel went from 0.79s to

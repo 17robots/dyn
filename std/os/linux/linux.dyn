@@ -1,6 +1,7 @@
 #target(kernel: linux)
 
 use "std/mem" memory
+use "std/os/linux/sys"
 
 pub struct Result { value: isize, error: isize, ok: bool }
 
@@ -27,12 +28,12 @@ pub fn process_arguments(arena: *memory.Arena) [][]const u8 {
     path[i] = source[i]
     i += 1
   }
-  descriptor := #syscall(257, -100, &path[0], 0, 0)
+  descriptor := #syscall(sys.Openat, -100, &path[0], 0, 0)
   if descriptor < 0 {
     return no_arguments()
   }
-  value := #syscall(0, descriptor, &temporary[0], #len(temporary))
-  _ = #syscall(3, descriptor)
+  value := #syscall(sys.Read, descriptor, &temporary[0], #len(temporary))
+  _ = #syscall(sys.Close, descriptor)
   if value < 0 || #cast(usize, value) == #len(temporary) {
     return no_arguments()
   }
@@ -72,16 +73,16 @@ pub fn process_arguments(arena: *memory.Arena) [][]const u8 {
 }
 
 pub fn process_id() isize {
-  return #syscall(39)
+  return #syscall(sys.Getpid)
 }
 pub fn parent_process_id() isize {
-  return #syscall(110)
+  return #syscall(sys.Getppid)
 }
 pub fn thread_id() isize {
-  return #syscall(186)
+  return #syscall(sys.Gettid)
 }
 pub fn yield_thread() {
-  _ = #syscall(24)
+  _ = #syscall(sys.SchedYield)
 }
 
 pub struct PipeResult { input: isize, output: isize, error: isize, ok: bool }
@@ -92,27 +93,27 @@ struct CStringPointer { value: *u8 }
 
 pub fn pipe() PipeResult {
   descriptors: [2]i32 = []
-  value := #syscall(293, &descriptors[0], 0)
+  value := #syscall(sys.Pipe2, &descriptors[0], 0)
   if value < 0 {
     return PipeResult{ input: -1, output: -1, error: value, ok: false }
   }
-  return PipeResult{ input: #cast(isize, descriptors[0]), output: #cast(isize, descriptors[1]), ok: true }
+  return PipeResult{ input: descriptors[0], output: descriptors[1], ok: true }
 }
 pub fn close_descriptor(descriptor: isize) Result {
-  return result(#syscall(3, descriptor))
+  return result(#syscall(sys.Close, descriptor))
 }
 pub fn duplicate_to(descriptor: isize, target: isize) Result {
   if descriptor == target {
-    return result(#syscall(72, descriptor, 1, 0))
+    return result(#syscall(sys.Fcntl, descriptor, 1, 0))
   }
-  value := #syscall(33, descriptor, target, 0)
+  value := #syscall(sys.Dup2, descriptor, target, 0)
   for value == -4 {
-    value = #syscall(33, descriptor, target, 0)
+    value = #syscall(sys.Dup2, descriptor, target, 0)
   }
   return result(value)
 }
 pub fn send_signal(process: isize, signal: usize) Result {
-  return result(#syscall(62, process, signal))
+  return result(#syscall(sys.Kill, process, signal))
 }
 pub fn fork_process() Result {
   return result(fork_native())
@@ -162,7 +163,7 @@ pub fn execute(arena: *memory.Arena, path: []const u8, arguments: [][]const u8) 
     }
   }
   pointers[length] = CStringPointer{ value: nil }
-  value := #syscall(59, path_raw, &pointers[0], &pointers[length])
+  value := #syscall(sys.Execve, path_raw, &pointers[0], &pointers[length])
   return value
 }
 
@@ -245,7 +246,7 @@ pub fn spawn_environment(
   }
   for source_index in 0..3 {
     if sources[source_index] >= 0 {
-      copied := #syscall(72, sources[source_index], 1030, 3)
+      copied := #syscall(sys.Fcntl, sources[source_index], 1030, 3)
       if copied < 0 {
         return SpawnResult{ error: copied }
       }
@@ -253,16 +254,16 @@ pub fn spawn_environment(
     }
   }
   descriptors: [2]i32 = []
-  channel := #syscall(293, &descriptors[0], 524288)
+  channel := #syscall(sys.Pipe2, &descriptors[0], 524288)
   if channel < 0 {
     return SpawnResult{ error: channel }
   }
   // Keep the error pipe out of the standard-descriptor range even if stdin/out/err
   // were closed by the parent; redirection must not overwrite the reporting pipe.
-  input := #syscall(72, descriptors[0], 1030, 3)
-  output := #syscall(72, descriptors[1], 1030, 3)
-  _ = close_descriptor(#cast(isize, descriptors[0]))
-  _ = close_descriptor(#cast(isize, descriptors[1]))
+  input := #syscall(sys.Fcntl, descriptors[0], 1030, 3)
+  output := #syscall(sys.Fcntl, descriptors[1], 1030, 3)
+  _ = close_descriptor(descriptors[0])
+  _ = close_descriptor(descriptors[1])
   if input < 0 || output < 0 {
     if input >= 0 {
       _ = close_descriptor(input)
@@ -300,19 +301,19 @@ pub fn spawn_environment(
       }
     }
     if failure == 0 && directory_raw != nil {
-      failure = #syscall(80, directory_raw)
+      failure = #syscall(sys.Chdir, directory_raw)
     }
     if failure == 0 {
-      failure = #syscall(59, path_raw, &pointers[0], &environment_pointers[0])
+      failure = #syscall(sys.Execve, path_raw, &pointers[0], &environment_pointers[0])
     }
-    _ = #syscall(1, output, &failure, #sizeof(isize))
+    _ = #syscall(sys.Write, output, &failure, #sizeof(isize))
     exit_process(127)
   }
   _ = close_descriptor(output)
   reported: isize = 0
-  received := #syscall(0, input, &reported, #sizeof(isize))
+  received := #syscall(sys.Read, input, &reported, #sizeof(isize))
   for received == -4 {
-    received = #syscall(0, input, &reported, #sizeof(isize))
+    received = #syscall(sys.Read, input, &reported, #sizeof(isize))
   }
   _ = close_descriptor(input)
   if received != 0 {
@@ -334,9 +335,9 @@ pub fn wait(process: isize, nonblocking: bool) WaitResult {
   if nonblocking {
     options = 1
   }
-  value := #syscall(61, process, &status, options, 0)
+  value := #syscall(sys.Wait4, process, &status, options, 0)
   for value == -4 {
-    value = #syscall(61, process, &status, options, 0)
+    value = #syscall(sys.Wait4, process, &status, options, 0)
   }
   if value < 0 {
     return WaitResult{ process: value, status: status, error: value, ok: false }
@@ -358,7 +359,7 @@ pub fn termination_signal(status: i32) u8 {
 
 // Ends the whole process: exit_group, so other threads end with it.
 pub fn exit_process(status: u8) {
-  _ = #syscall(231, status)
+  _ = #syscall(sys.ExitGroup, status)
   #panic("exit syscall returned")
 }
 
@@ -375,11 +376,11 @@ pub fn environment_get(name: []const u8, destination: []u8) EnvironmentResult {
     }
   }
   path := "/proc/self/environ\0"
-  descriptor := #syscall(257, -100, &path[0], 0, 0)
+  descriptor := #syscall(sys.Openat, -100, &path[0], 0, 0)
   if descriptor < 0 {
     return EnvironmentResult{ value: destination[..0], error: descriptor }
   }
-  defer _ = #syscall(3, descriptor)
+  defer _ = #syscall(sys.Close, descriptor)
   scratch: [4096]u8 = []
   position: usize = 0
   used: usize = 0
@@ -387,7 +388,7 @@ pub fn environment_get(name: []const u8, destination: []u8) EnvironmentResult {
   in_value := false
   selected := false
   for {
-    count := #syscall(0, descriptor, &scratch[0], #len(scratch))
+    count := #syscall(sys.Read, descriptor, &scratch[0], #len(scratch))
     if count == -4 {
       continue
     }
@@ -414,8 +415,7 @@ pub fn environment_get(name: []const u8, destination: []u8) EnvironmentResult {
         if byte == '=' {
           in_value = true
           selected = matching && position == #len(name)
-        }
-        else {
+        } else {
           if position >= #len(name) || byte != name[position] {
             matching = false
           }
@@ -438,7 +438,7 @@ pub fn current_directory(destination: []u8) PathResult {
   if #len(destination) == 0 {
     return PathResult{ value: destination[..0], error: -28 }
   }
-  count := #syscall(79, &destination[0], #len(destination))
+  count := #syscall(sys.Getcwd, &destination[0], #len(destination))
   if count < 0 {
     return PathResult{ value: destination[..0], error: count }
   }
@@ -451,7 +451,7 @@ pub fn current_directory(destination: []u8) PathResult {
 struct SignalDisposition { handler: usize, flags: usize, restorer: usize, mask: u64 }
 fn signal_disposition(signal: usize, handler: usize) Result {
   action := SignalDisposition{ handler: handler }
-  return result(#syscall(13, signal, &action, 0, 8))
+  return result(#syscall(sys.RtSigaction, signal, &action, 0, 8))
 }
 pub fn signal_ignore(signal: usize) Result {
   return signal_disposition(signal, 1)

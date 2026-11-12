@@ -54,7 +54,7 @@ fn archive_failure(state: *ArchiveReader, kind: parse.Kind) EntryResult {
 }
 fn stream_read(state: *StreamReader, destination: []u8) stream.Transfer {
   result := stream.read_exact(state.source_reader, destination)
-  if result.transferred > (~#cast(usize, 0)) - state.offset {
+  if result.transferred > #max(usize) - state.offset {
     state.failed = true
     state.failure = parse.parse_failure(parse.Kind.Overflow, state.offset, "")
     return stream.Transfer{ kind: stream.Kind.Overflow, status: stream.Status.Error }
@@ -122,7 +122,7 @@ pub fn next_stream(state: *StreamReader) EntryResult {
     if error != parse.Kind.Ok {
       return stream_failure(state, error)
     }
-    if !stream_discard(state, #cast(usize, u16le(state.header_storage, 20))) {
+    if !stream_discard(state, u16le(state.header_storage, 20)) {
       return stream_failure(state, state.failure.parse.kind)
     }
     state.ended = true
@@ -179,7 +179,7 @@ pub fn next(state: *ArchiveReader) EntryResult {
   if state.failed {
     return archive_failure(state, state.failure.parse.kind)
   }
-  if #len(state.source) > ((~#cast(usize, 0)) >> 1) {
+  if #len(state.source) > (#max(usize) >> 1) {
     return archive_failure(state, parse.Kind.Overflow)
   }
   if state.indexed {
@@ -242,13 +242,13 @@ pub fn next(state: *ArchiveReader) EntryResult {
 // The entry's bytes, decompressed and checksum-verified, in arena. Failure
 // pushes nothing. Source must remain immutable.
 pub fn extract(arena: *mem.Arena, archive_entry: Entry) ExtractResult {
-  if #len(archive_entry.payload) > ((~#cast(usize, 0)) >> 1) {
+  if #len(archive_entry.payload) > (#max(usize) >> 1) {
     return ExtractResult{ failure: parse.Failure{ kind: parse.Kind.Overflow } }
   }
   if #len(archive_entry.payload) != archive_entry.compressed_size {
     return ExtractResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
-  if archive_entry.uncompressed_size > ((~#cast(usize, 0)) >> 1) {
+  if archive_entry.uncompressed_size > (#max(usize) >> 1) {
     return ExtractResult{ failure: parse.Failure{ kind: parse.Kind.Overflow } }
   }
   mark := mem.arena_mark(arena)

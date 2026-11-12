@@ -14,19 +14,14 @@ extern fn unfair_try_lock "os_unfair_lock_trylock"(value: *u32) bool
 extern fn unfair_unlock "os_unfair_lock_unlock"(value: *u32)
 
 fn native_wait(address: *AtomicU32, expected: u32) isize {
-  if wait_address(&address.value, #cast(u64, expected), 4, 0) < 0 {
+  if wait_address(&address.value, expected, 4, 0) < 0 {
     return 0 - #cast(isize, wait_error().*)
   }
   return 0
 }
 fn native_wake(address: *AtomicU32, all: bool) {
   // ENOENT (no waiter) is normal; callers always recheck their predicate.
-  if all {
-    _ = wake_all(&address.value, 4, 0)
-  }
-  else {
-    _ = wake_single(&address.value, 4, 0)
-  }
+  if all { _ = wake_all(&address.value, 4, 0) } else { _ = wake_single(&address.value, 4, 0) }
 }
 fn native_mutex_lock(value: *Mutex) {
   unfair_lock(&value.state.value)
@@ -42,7 +37,7 @@ fn native_mutex_unlock(value: *Mutex) {
 // OS_CLOCK_MACH_ABSOLUTE_TIME=32 selects the monotonic, sleep-excluding clock.
 extern fn wait_address_timeout "os_sync_wait_on_address_with_timeout"(address: *u32, expected: u64, size: usize, flags: u32, clock: u32, nanoseconds: u64) i32
 fn native_wait_timeout(address: *AtomicU32, expected: u32, duration: i64) isize {
-  if wait_address_timeout(&address.value, #cast(u64, expected), 4, 0, 32, #cast(u64, duration)) >= 0 {
+  if wait_address_timeout(&address.value, expected, 4, 0, 32, #cast(u64, duration)) >= 0 {
     return 0
   }
   code := wait_error().*

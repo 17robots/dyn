@@ -93,7 +93,7 @@ fn local_failures() {
  mark := mem.arena_mark(arena)
  capacity := mem.arena_try_push(arena, 1, 1)
  require(!capacity.ok && capacity.error == mem.ErrorKind.Capacity && capacity.code == 0)
- overflow := mem.arena_try_push(arena, ~#cast(usize, 0), 1)
+ overflow := mem.arena_try_push(arena, #max(usize), 1)
  require(!overflow.ok && overflow.error == mem.ErrorKind.Overflow && overflow.code == 0)
  alignment := mem.arena_try_push(arena, 1, 3)
  require(!alignment.ok && alignment.error == mem.ErrorKind.InvalidAlignment && alignment.code == 0)

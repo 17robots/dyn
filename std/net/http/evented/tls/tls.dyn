@@ -30,7 +30,7 @@ pub fn transport(context: provider.Context) evented.Transport {
 }
 
 fn status(result: provider.Result) evented.TransportIo {
-  if result.failure.kind == io.Kind.Ok {
+  if !io.failed(result.failure) {
     return evented.TransportIo{ count: result.count }
   }
   if result.detail == provider.ErrorKind.WantRead {
@@ -44,7 +44,7 @@ fn status(result: provider.Result) evented.TransportIo {
 
 fn open(data: rawptr, descriptor: isize) rawptr {
   created := provider.server_connection_create(data, #cast(i32, descriptor))
-  if created.failure.kind != io.Kind.Ok {
+  if io.failed(created.failure) {
     return nil
   }
   return created.value

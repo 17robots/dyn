@@ -77,20 +77,20 @@ pub fn next(state: *Reader) Result {
   payload := false
   if tag < 0x80 {
     token.kind = Kind.Unsigned
-    token.value = #cast(u64, tag)
+    token.value = tag
   } else if tag < 0x90 {
     token.kind = Kind.Map
-    token.value = #cast(u64, tag & 15)
+    token.value = tag & 15
   } else if tag < 0xa0 {
     token.kind = Kind.Array
-    token.value = #cast(u64, tag & 15)
+    token.value = tag & 15
   } else if tag < 0xc0 {
     token.kind = Kind.Text
-    token.value = #cast(u64, tag & 31)
+    token.value = tag & 31
     payload = true
   } else if tag >= 0xe0 {
     token.kind = Kind.Signed
-    token.integer = #cast(i64, #cast(i8, tag))
+    token.integer = #cast(i8, tag)
   } else if tag == 0xc0 {
     token.kind = Kind.Nil
   } else if tag == 0xc1 {
@@ -143,9 +143,8 @@ pub fn next(state: *Reader) Result {
     at += size
     if token.kind == Kind.Float {
       if size == 4 {
-        token.real = #cast(f64, #bitcast(f32, #cast(u32, raw)))
-      }
-      else {
+        token.real = #bitcast(f32, #cast(u32, raw))
+      } else {
         token.real = #bitcast(f64, raw)
       }
     } else if token.kind == Kind.Signed {
@@ -327,12 +326,12 @@ pub fn encode(arena: *mem.Arena, tokens: []const Token) EncodeResult {
       count += 1
     }
     if token.kind == Kind.Text || token.kind == Kind.Bytes || token.kind == Kind.Extension {
-      if #len(token.bytes) > ~#cast(usize, 0) - count {
+      if #len(token.bytes) > #max(usize) - count {
         return EncodeResult{ offset: i, failure: parse.Failure{ kind: parse.Kind.Overflow, offset: i } }
       }
       count += #len(token.bytes)
     }
-    if count > ~#cast(usize, 0) - size {
+    if count > #max(usize) - size {
       return EncodeResult{ offset: i, failure: parse.Failure{ kind: parse.Kind.Overflow, offset: i } }
     }
     size += count
@@ -354,7 +353,7 @@ pub fn encode(arena: *mem.Arena, tokens: []const Token) EncodeResult {
       value = #bitcast(u64, token.real)
     }
     if token.kind == Kind.Text || token.kind == Kind.Bytes || token.kind == Kind.Extension {
-      value = #cast(u64, #len(token.bytes))
+      value = #len(token.bytes)
     }
     put(output, &at, value, extra(tag))
     if token.kind == Kind.Extension {

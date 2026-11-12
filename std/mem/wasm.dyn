@@ -10,7 +10,7 @@ const DefaultBlock: usize = 4 * MiB
 
 fn mapping_allocate(size: usize) Mapping {
   header := #sizeof(WasmRegion)
-  maximum := ~#cast(usize, 0)
+  maximum := #max(usize)
   if size == 0 || size > maximum - header - (WasmPage - 1) {
     return Mapping{ error: -1 }
   }
@@ -27,11 +27,7 @@ fn mapping_allocate(size: usize) Mapping {
       next = #cast(*WasmRegion, (#cast(usize, region) + pages * WasmPage))
       next.* = WasmRegion{ pages: region.pages - pages, next: region.next }
     }
-    if previous == nil {
-      wasm_free = next
-    } else {
-      previous.next = next
-    }
+    if previous == nil { wasm_free = next } else { previous.next = next }
   } else {
     start := grow_pages(pages)
     if start == maximum {
@@ -67,8 +63,7 @@ fn mapping_release(bytes: []u8) isize {
   }
   if previous == nil {
     wasm_free = region
-  }
-  else if #cast(usize, previous) + previous.pages * WasmPage == #cast(usize, region) {
+  } else if #cast(usize, previous) + previous.pages * WasmPage == #cast(usize, region) {
     previous.pages += region.pages
     previous.next = region.next
   } else {

@@ -244,8 +244,7 @@ fn remove(storage: []u8, edit: *Edit, from: usize, to: usize) {
   edit.length -= count
   if edit.cursor > to {
     edit.cursor -= count
-  }
-  else if edit.cursor > from {
+  } else if edit.cursor > from {
     edit.cursor = from
   }
 }
@@ -340,8 +339,7 @@ pub fn text_field(state: *State, label: []const u8, storage: []u8, edit: *Edit) 
     }
     edit.cursor = at
     edit.selecting = edit.cursor != edit.anchor
-  }
-  else if result.signal.dragging || result.signal.released {
+  } else if result.signal.dragging || result.signal.released {
     edit.cursor = pointer_boundary(state, box, storage[..edit.length], edit.scroll_x)
     edit.selecting = edit.cursor != edit.anchor
   }
@@ -363,13 +361,11 @@ pub fn text_field(state: *State, label: []const u8, storage: []u8, edit: *Edit) 
           invalid = true
         }
       }
-      if before.failure.kind != io.Kind.Ok {
+      if io.failed(before.failure) {
         result.correction_error = before.failure.kind
-      }
-      else if invalid {
+      } else if invalid {
         result.correction_error = io.Kind.InvalidInput
-      }
-      else {
+      } else {
         buffer := text_edits.Buffer{ storage: storage, length: edit.length, cursor: edit.cursor, anchor: anchor, token: before.value.token }
         applied := text_edits.apply(state.frame, &buffer, replacement)
         if applied.kind == io.Kind.Ok {
@@ -379,8 +375,7 @@ pub fn text_field(state: *State, label: []const u8, storage: []u8, edit: *Edit) 
           edit.selecting = false
           result.changed = true
           correction_applied = true
-        }
-        else {
+        } else {
           result.correction_error = applied.kind
         }
       }
@@ -420,22 +415,18 @@ pub fn text_field(state: *State, label: []const u8, storage: []u8, edit: *Edit) 
       if input.left {
         if !input.shift && edit.selecting {
           target = selection_low(edit)
-        }
-        else if input.control {
+        } else if input.control {
           target = word_boundary(state, text, old, false)
-        }
-        else {
+        } else {
           target = previous_boundary(text, old)
         }
       }
       if input.right {
         if !input.shift && edit.selecting {
           target = selection_high(edit)
-        }
-        else if input.control {
+        } else if input.control {
           target = word_boundary(state, text, old, true)
-        }
-        else {
+        } else {
           target = next_boundary(text, old)
         }
       }
@@ -444,8 +435,7 @@ pub fn text_field(state: *State, label: []const u8, storage: []u8, edit: *Edit) 
           edit.anchor = old
         }
         edit.selecting = target != edit.anchor
-      }
-      else {
+      } else {
         edit.anchor = target
         edit.selecting = false
       }
@@ -458,16 +448,13 @@ pub fn text_field(state: *State, label: []const u8, storage: []u8, edit: *Edit) 
         if input.backspace {
           if input.control {
             low = word_boundary(state, text, low, false)
-          }
-          else {
+          } else {
             low = previous_boundary(text, low)
           }
-        }
-        else {
+        } else {
           if input.control {
             high = word_boundary(state, text, high, true)
-          }
-          else {
+          } else {
             high = next_boundary(text, high)
           }
         }
@@ -586,10 +573,9 @@ pub fn text_field(state: *State, label: []const u8, storage: []u8, edit: *Edit) 
       anchor = edit.anchor
     }
     context := text_edits.snapshot(&state.text_tracker, box.key, storage[..edit.length], edit.cursor, anchor, cause)
-    if context.failure.kind == io.Kind.Ok {
+    if !io.failed(context.failure) {
       state.text_context = context.value
-    }
-    else {
+    } else {
       state.text_context = text_edits.Context{}
       state.text_context_error = context.failure.kind
     }

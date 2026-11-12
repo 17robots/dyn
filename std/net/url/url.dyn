@@ -77,7 +77,7 @@ fn unreserved(byte: u8) bool {
 }
 fn hex_value(byte: u8) isize {
   if byte >= '0' && byte <= '9' {
-    return #cast(isize, (byte - '0'))
+    return (byte - '0')
   }
   if byte >= 'a' && byte <= 'f' {
     return #cast(isize, (byte - 'a')) + 10
@@ -107,11 +107,10 @@ fn percent_encode_into(destination: []u8, source: []const u8) EncodingResult {
     if unreserved(input_byte) {
       destination[at] = input_byte
       at += 1
-    }
-    else {
+    } else {
       destination[at] = '%'
-      destination[at + 1] = alphabet[#cast(usize, (input_byte >> 4))]
-      destination[at + 2] = alphabet[#cast(usize, (input_byte & 15))]
+      destination[at + 1] = alphabet[(input_byte >> 4)]
+      destination[at + 2] = alphabet[(input_byte & 15)]
       at += 3
     }
   }

@@ -505,6 +505,11 @@ static DynExprId compact_expr(CompactNode node, const DynSource *s, DynAstProgra
     e.kind = !(k != EXP_SIZE)    ? DYN_EXPR_SIZE
              : !(k != EXP_ALIGN) ? DYN_EXPR_ALIGN
                                    : DYN_EXPR_TYPEOF;
+    if (e.kind == DYN_EXPR_SIZE && e.span.end_byte - e.span.start_byte > 4 &&
+        (!memcmp(s->text + e.span.start_byte, "#max", 4) || !memcmp(s->text + e.span.start_byte, "#min", 4))) {
+      e.kind = DYN_EXPR_LIMIT;
+      e.op = s->text[e.span.start_byte + 2] == 'a' ? DYN_OP_GT : DYN_OP_LT;
+    }
     CompactNode operand = compact_child(node, 0);
     if (!(compact_kind(operand) != EXP_TYPE)) {
       DynType parsed = compact_type(operand, s, a);

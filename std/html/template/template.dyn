@@ -31,17 +31,13 @@ fn write_escaped(destination: stream.Writer, source: []const u8) RenderResult {
     replacement: []const u8 = ""
     if source[i] == '&' {
       replacement = "&amp;"
-    }
-    else if source[i] == '<' {
+    } else if source[i] == '<' {
       replacement = "&lt;"
-    }
-    else if source[i] == '>' {
+    } else if source[i] == '>' {
       replacement = "&gt;"
-    }
-    else if source[i] == '"' {
+    } else if source[i] == '"' {
       replacement = "&quot;"
-    }
-    else if source[i] == 39 {
+    } else if source[i] == 39 {
       replacement = "&#39;"
     }
     if #len(replacement) > 0 {

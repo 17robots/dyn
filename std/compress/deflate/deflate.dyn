@@ -333,16 +333,13 @@ fn fixed_symbol(writer: *BitWriter, symbol: usize) {
   if symbol <= 143 {
     code_value = 48 + symbol
     length = 8
-  }
-  else if symbol <= 255 {
+  } else if symbol <= 255 {
     code_value = 400 + symbol - 144
     length = 9
-  }
-  else if symbol <= 279 {
+  } else if symbol <= 279 {
     code_value = symbol - 256
     length = 7
-  }
-  else {
+  } else {
     code_value = 192 + symbol - 280
     length = 8
   }
@@ -355,32 +352,25 @@ fn dynamic_symbol(writer: *BitWriter, symbol: usize) {
   if symbol <= 143 {
     code = 52 + symbol
     length = 8
-  }
-  else if symbol <= 255 {
+  } else if symbol <= 255 {
     code = 400 + symbol - 144
     length = 9
-  }
-  else if symbol <= 281 {
+  } else if symbol <= 281 {
     code = symbol - 256
     length = 7
-  }
-  else {
+  } else {
     code = 196 + symbol - 282
     length = 8
   }
   write_bits(writer, reverse_code(#cast(u32, code), length), length)
 }
 fn encoded_symbol(writer: *BitWriter, symbol: usize, dynamic: bool) {
-  if dynamic {
-    dynamic_symbol(writer, symbol)
-  } else {
-    fixed_symbol(writer, symbol)
-  }
+  if dynamic { dynamic_symbol(writer, symbol) } else { fixed_symbol(writer, symbol) }
 }
 fn fixed_length(writer: *BitWriter, length: usize, dynamic: bool) {
   index: usize = 0
   for index + 1 < 29 {
-    next_base: usize = #cast(usize, LengthBase[index + 1])
+    next_base: usize = LengthBase[index + 1]
     if next_base > length {
       break
     }
@@ -388,7 +378,7 @@ fn fixed_length(writer: *BitWriter, length: usize, dynamic: bool) {
   }
   encoded_symbol(writer, 257 + index, dynamic)
   extra := #cast(usize, LengthExtra[index])
-  base: usize = #cast(usize, LengthBase[index])
+  base: usize = LengthBase[index]
   if extra != 0 {
     value := length - base
     write_bits(writer, #cast(u32, value), extra)
@@ -397,7 +387,7 @@ fn fixed_length(writer: *BitWriter, length: usize, dynamic: bool) {
 fn fixed_distance(writer: *BitWriter, distance: usize, dynamic: bool) {
   index: usize = 0
   for index + 1 < 30 {
-    next_base: usize = #cast(usize, DistanceBase[index + 1])
+    next_base: usize = DistanceBase[index + 1]
     if next_base > distance {
       break
     }
@@ -415,7 +405,7 @@ fn fixed_distance(writer: *BitWriter, distance: usize, dynamic: bool) {
     write_bits(writer, reverse_code(#cast(u32, index), 5), 5)
   }
   extra := #cast(usize, DistanceExtra[index])
-  base: usize = #cast(usize, DistanceBase[index])
+  base: usize = DistanceBase[index]
   if extra != 0 {
     value := distance - base
     write_bits(writer, #cast(u32, value), extra)
@@ -443,11 +433,7 @@ fn deflate_huffman_chunk(destination: []u8, input: []const u8, final: bool,
     i += 1
   }
   writer := BitWriter{ destination: destination, ok: true }
-  if final {
-    write_bits(&writer, 1, 1)
-  } else {
-    write_bits(&writer, 0, 1)
-  }
+  if final { write_bits(&writer, 1, 1) } else { write_bits(&writer, 0, 1) }
   if dynamic {
     write_bits(&writer, 2, 2)
     write_bits(&writer, 29, 5)
@@ -456,19 +442,14 @@ fn deflate_huffman_chunk(destination: []u8, input: []const u8, final: bool,
     code_length_order: [19]u8 = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15]
     for code_length_at in 0..19 {
       code_symbol := code_length_order[code_length_at]
-      if code_symbol <= 12 {
-        write_bits(&writer, 4, 3)
-      } else {
-        write_bits(&writer, 5, 3)
-      }
+      if code_symbol <= 12 { write_bits(&writer, 4, 3) } else { write_bits(&writer, 5, 3) }
     }
     symbol: usize = 0
     for symbol < 286 {
       length: usize = 8
       if symbol >= 144 && symbol <= 255 {
         length = 9
-      }
-      else if symbol >= 256 && symbol <= 281 {
+      } else if symbol >= 256 && symbol <= 281 {
         length = 7
       }
       write_bits(&writer, reverse_code(#cast(u32, length), 4), 4)
@@ -478,8 +459,7 @@ fn deflate_huffman_chunk(destination: []u8, input: []const u8, final: bool,
     for symbol < 30 {
       if symbol < 2 {
         write_bits(&writer, reverse_code(4, 4), 4)
-      }
-      else {
+      } else {
         write_bits(&writer, reverse_code(5, 4), 4)
       }
       symbol += 1
@@ -513,10 +493,9 @@ fn deflate_huffman_chunk(destination: []u8, input: []const u8, final: bool,
       }
     }
     if best == 0 {
-      encoded_symbol(&writer, #cast(usize, input[at]), dynamic)
+      encoded_symbol(&writer, input[at], dynamic)
       at += 1
-    }
-    else {
+    } else {
       fixed_length(&writer, best, dynamic)
       fixed_distance(&writer, distance, dynamic)
       for consumed in 1..best {
@@ -531,8 +510,7 @@ fn deflate_huffman_chunk(destination: []u8, input: []const u8, final: bool,
   if writer.ok && writer.count != 0 {
     if writer.written == #len(destination) {
       writer.ok = false
-    }
-    else {
+    } else {
       writer.destination[writer.written] = #cast(u8, writer.value)
       writer.written += 1
     }
@@ -598,7 +576,7 @@ fn build(table: *Huffman, lengths: []const u8, symbols: usize, allow_empty: bool
     if lengths[i] == 0 {
       zero_count += 1
     }
-    length_index: usize = #cast(usize, lengths[i])
+    length_index: usize = lengths[i]
     counts[length_index] += 1
     i += 1
   }
@@ -635,7 +613,7 @@ fn build(table: *Huffman, lengths: []const u8, symbols: usize, allow_empty: bool
     length := lengths[i]
     stored_lengths[i] = length
     if length != 0 {
-      code_index: usize = #cast(usize, length)
+      code_index: usize = length
       source := next[code_index]
       reversed: u32 = 0
       bit: usize = 0
@@ -667,7 +645,7 @@ fn decode(reader: *Bits, table: *Huffman, output: *u16) bool {
     code += bit * factor
     symbol: usize = 0
     for symbol < table.symbol_count {
-      symbol_length: usize = #cast(usize, table.lengths[symbol])
+      symbol_length: usize = table.lengths[symbol]
       symbol_code := table.codes[symbol]
       if symbol_length == length && symbol_code == code {
         output.* = #cast(u16, symbol)
@@ -879,7 +857,7 @@ fn resume_impl(state: *InflateState, destination: []u8, input: []const u8, parti
           state.error = -74
           break
         }
-        state.stored = #cast(usize, stored_length)
+        state.stored = stored_length
         state.stage = 1
       } else {
         if !tables(&state.reader, kind, &state.literal, &state.distance) {
@@ -941,7 +919,7 @@ fn resume_impl(state: *InflateState, destination: []u8, input: []const u8, parti
         }
         index := (#cast(usize, symbol)) - 257
         extra: u32 = 0
-        if !bits(&state.reader, #cast(usize, LengthExtra[index]), &extra) {
+        if !bits(&state.reader, LengthExtra[index], &extra) {
           need_input(state, before)
           break
         }
@@ -956,7 +934,7 @@ fn resume_impl(state: *InflateState, destination: []u8, input: []const u8, parti
           break
         }
         distance_index := #cast(usize, distance_symbol)
-        if !bits(&state.reader, #cast(usize, DistanceExtra[distance_index]), &extra) {
+        if !bits(&state.reader, DistanceExtra[distance_index], &extra) {
           need_input(state, before)
           break
         }
@@ -1034,11 +1012,7 @@ fn grow_until_done(arena: *mem.Arena, input: []const u8, gzip: bool) Inflated {
 fn crc_byte(previous: u32, byte: u8) u32 {
   crc := previous ^ #cast(u32, byte)
   for i in 0..8 {
-    if (crc & 1) != 0 {
-      crc = (crc >> 1) ^ 3988292384
-    } else {
-      crc >>= 1
-    }
+    if (crc & 1) != 0 { crc = (crc >> 1) ^ 3988292384 } else { crc >>= 1 }
   }
   return crc
 }
@@ -1051,10 +1025,10 @@ fn crc32(input: []const u8) u32 {
 }
 
 fn little32(input: []const u8, at: usize) u32 {
-  a: u32 = #cast(u32, input[at])
-  b: u32 = #cast(u32, input[at + 1])
-  c: u32 = #cast(u32, input[at + 2])
-  d: u32 = #cast(u32, input[at + 3])
+  a: u32 = input[at]
+  b: u32 = input[at + 1]
+  c: u32 = input[at + 2]
+  d: u32 = input[at + 3]
   return a + b * 256 + c * 65536 + d * 16777216
 }
 

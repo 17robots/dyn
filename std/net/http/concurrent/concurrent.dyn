@@ -25,7 +25,7 @@ fn worker_main(context: rawptr) isize {
   worker := #cast(*Worker, context)
   for sync.load_u32(&worker.stopping) == 0 {
     accepted := http.accept(worker.listener)
-    if accepted.failure.kind != io.Kind.Ok {
+    if io.failed(accepted.failure) {
       if sync.load_u32(&worker.stopping) != 0 {
         return 0
       }
@@ -33,7 +33,7 @@ fn worker_main(context: rawptr) isize {
         continue
       }
       worker.error = Result{ failure: io.Failure{ kind: accepted.failure.kind, native: accepted.failure.native } }
-      if worker.error.failure.kind == io.Kind.Ok {
+      if !io.failed(worker.error.failure) {
         worker.error.failure.kind = io.Kind.System
       }
       return accepted.failure.native
@@ -54,7 +54,7 @@ fn worker_main(context: rawptr) isize {
     http.close(&socket)
     worker.active_socket = false
     sync.unlock(&worker.control)
-    if handled.failure.kind != io.Kind.Ok {
+    if io.failed(handled.failure) {
       worker.request_errors += 1
     }
   }
@@ -107,7 +107,7 @@ pub fn start_context(arena: *mem.Arena, workers: []Worker, listener: *http.Liste
       storage: receive_storage[i * worker_storage_size..(i + 1) * worker_storage_size] }
     spawned := threading.spawn(arena, stacks[i * stack_size..(i + 1) * stack_size],
       worker_main, &workers[i])
-    if spawned.failure.kind != io.Kind.Ok {
+    if io.failed(spawned.failure) {
       stop(workers[..i])
       _ = join(workers[..i])
       return Result{ started: i, failure: io.Failure{ kind: spawned.failure.kind, native: spawned.failure.native } }
@@ -125,10 +125,10 @@ pub fn join(workers: []Worker) Result {
     completed := true
     if worker.thread != nil {
       joined := threading.join(worker.thread)
-      completed = joined.failure.kind == io.Kind.Ok
-      if joined.failure.kind == io.Kind.Ok {
+      completed = !io.failed(joined.failure)
+      if !io.failed(joined.failure) {
         worker.thread = nil
-      } else if result.failure.kind == io.Kind.Ok {
+      } else if !io.failed(result.failure) {
         result.failure.kind = joined.failure.kind
         result.failure.native = joined.failure.native
       }
@@ -137,7 +137,7 @@ pub fn join(workers: []Worker) Result {
     if completed {
       result.started += 1
       // Read worker state only after join has established completion.
-      if result.failure.kind == io.Kind.Ok && worker.error.failure.kind != io.Kind.Ok {
+      if !io.failed(result.failure) && io.failed(worker.error.failure) {
         result.failure.kind = worker.error.failure.kind
         result.failure.native = worker.error.failure.native
       }

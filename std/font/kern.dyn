@@ -71,18 +71,11 @@ pub fn kerning(face: *const Face, left, right: u16, pixels_per_em: u16) f64 {
         found := u32be(bytes, pair_at)
         if found < key {
           low = mid + 1
-        }
-        else if found > key {
+        } else if found > key {
           high = mid
-        }
-        else {
+        } else {
           value := #cast(i64, i16be(bytes, pair_at + 4))
-          if (u16be(bytes, at + 4) & 8) != 0 {
-            result = value
-          }
-          else {
-            result += value
-          }
+          if (u16be(bytes, at + 4) & 8) != 0 { result = value } else { result += value }
           break
         }
       }

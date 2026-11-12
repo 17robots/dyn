@@ -53,7 +53,7 @@ pub fn close(state: *Watch) {
     return
   }
   closed := platform_close(state)
-  if closed.failure.kind == io.Kind.Ok {
+  if !io.failed(closed.failure) {
     state.* = Watch{}
   }
 }

@@ -67,11 +67,9 @@ fn u64_base_into(destination: []u8, value: u64, base: u8, uppercase: bool) []u8 
     digit := #cast(u8, (remaining_value % radix))
     if digit < 10 {
       destination[at] = digit + '0'
-    }
-    else if uppercase {
+    } else if uppercase {
       destination[at] = digit - 10 + 'A'
-    }
-    else {
+    } else {
       destination[at] = digit - 10 + 'a'
     }
     remaining_value /= radix
@@ -89,8 +87,7 @@ fn i64_decimal_into(destination: []u8, value: i64) []u8 {
   if negative {
     magnitude = #cast(u64, (-(value + 1)))
     magnitude += 1
-  }
-  else {
+  } else {
     magnitude = #cast(u64, value)
   }
   if !negative {
@@ -145,17 +142,13 @@ pub fn write_quoted(state: *Buffer, value: []const u8) bool {
     escaped: u8 = 0
     if byte == '"' {
       escaped = '"'
-    }
-    else if byte == '\\' {
+    } else if byte == '\\' {
       escaped = '\\'
-    }
-    else if byte == 10 {
+    } else if byte == 10 {
       escaped = 'n'
-    }
-    else if byte == 13 {
+    } else if byte == 13 {
       escaped = 'r'
-    }
-    else if byte == 9 {
+    } else if byte == 9 {
       escaped = 't'
     }
     if escaped != 0 {
@@ -199,7 +192,7 @@ pub fn write_arguments(state: *Buffer, arguments: []const any) bool {
     ok := false
     case argument {
       f32 value => {
-        ok = write_f64(state, #cast(f64, value))
+        ok = write_f64(state, value)
       }
       f64 value => {
         ok = write_f64(state, value)
@@ -208,34 +201,34 @@ pub fn write_arguments(state: *Buffer, arguments: []const any) bool {
         ok = write_bool(state, value)
       }
       i8 value => {
-        ok = write_i64(state, #cast(i64, value))
+        ok = write_i64(state, value)
       }
       i16 value => {
-        ok = write_i64(state, #cast(i64, value))
+        ok = write_i64(state, value)
       }
       i32 value => {
-        ok = write_i64(state, #cast(i64, value))
+        ok = write_i64(state, value)
       }
       i64 value => {
         ok = write_i64(state, value)
       }
       isize value => {
-        ok = write_i64(state, #cast(i64, value))
+        ok = write_i64(state, value)
       }
       u8 value => {
-        ok = write_u64(state, #cast(u64, value))
+        ok = write_u64(state, value)
       }
       u16 value => {
-        ok = write_u64(state, #cast(u64, value))
+        ok = write_u64(state, value)
       }
       u32 value => {
-        ok = write_u64(state, #cast(u64, value))
+        ok = write_u64(state, value)
       }
       u64 value => {
         ok = write_u64(state, value)
       }
       usize value => {
-        ok = write_u64(state, #cast(u64, value))
+        ok = write_u64(state, value)
       }
       []const u8 value => {
         ok = write(state, value)
@@ -274,15 +267,13 @@ fn f64_decimal_into(destination: []u8, value: f64, precision: usize) []u8 {
   fraction_bits := bits & 4503599627370495
   if exponent_bits == 2047 && fraction_bits != 0 {
     _ = write(&state, "nan")
-  }
-  else {
+  } else {
     if negative {
       _ = write_byte(&state, '-')
     }
     if exponent_bits == 2047 {
       _ = write(&state, "inf")
-    }
-    else {
+    } else {
       magnitude := value
       if negative {
         magnitude = -magnitude

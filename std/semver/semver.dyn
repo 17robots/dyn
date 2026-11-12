@@ -197,11 +197,9 @@ fn compare_prerelease(a: []const u8, b: []const u8) i32 {
     if left_numeric {
       if #len(left) < #len(right) {
         comparison = -1
-      }
-      else if #len(left) > #len(right) {
+      } else if #len(left) > #len(right) {
         comparison = 1
-      }
-      else {
+      } else {
         comparison = bytes_compare(left, right)
       }
     } else {

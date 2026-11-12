@@ -102,7 +102,7 @@ fn arguments_native(arena: *mem.Arena) ArgumentsResult {
     at = argument_skip(command, token.next)
   }
   result := argument_slots(arena, count)
-  if result.failure.kind != io.Kind.Ok {
+  if io.failed(result.failure) {
     return result
   }
   allocation := mem.arena_push_uninit(arena, size, 1)

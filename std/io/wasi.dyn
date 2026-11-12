@@ -1,8 +1,7 @@
 #target(kernel: wasi)
 use "std/os/wasi/raw" wasi_raw
 
-fn stdin_read(data: rawptr, destination: []u8) Transfer {
-  _ = data
+fn stdin_read(_data: rawptr, destination: []u8) Transfer {
   if #len(destination) == 0 {
     return Transfer{ status: Status.Complete }
   }
@@ -28,12 +27,10 @@ fn write_descriptor(descriptor: u32, source: []const u8) Transfer {
   }
   return Transfer{ transferred: count, status: Status.Complete }
 }
-fn stdout_write(data: rawptr, source: []const u8) Transfer {
-  _ = data
+fn stdout_write(_data: rawptr, source: []const u8) Transfer {
   return write_descriptor(1, source)
 }
-fn stderr_write(data: rawptr, source: []const u8) Transfer {
-  _ = data
+fn stderr_write(_data: rawptr, source: []const u8) Transfer {
   return write_descriptor(2, source)
 }
 

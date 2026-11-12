@@ -22,8 +22,7 @@ pub fn advance(state: *Scanner, amount: usize) bool {
     if state.source[state.offset] == '\n' {
       state.line += 1
       state.column = 0
-    }
-    else {
+    } else {
       state.column += 1
     }
     state.offset += 1

@@ -126,10 +126,10 @@ fn draw_glyph(surface: *Surface, clip: ui.Rect, tint: ui.Color, font: Font, code
   gr := left + #cast(i64, glyph.width)
   gb := top + #cast(i64, glyph.height)
   if gx < #cast(i64, clip.x) {
-    gx = #cast(i64, clip.x)
+    gx = clip.x
   }
   if gy < #cast(i64, clip.y) {
-    gy = #cast(i64, clip.y)
+    gy = clip.y
   }
   cr := #cast(i64, clip.x) + #cast(i64, clip.width)
   cb := #cast(i64, clip.y) + #cast(i64, clip.height)
@@ -170,7 +170,7 @@ fn text(surface: *Surface, command: *const ui.Command, clip: ui.Rect, font: Font
       continue
     }
     if codepoint == 10 {
-      x = #cast(i64, command.bounds.x)
+      x = command.bounds.x
       y += #cast(i64, font.line_height)
       if y >= bottom + 2147483648 {
         break
@@ -208,20 +208,17 @@ pub fn render(surface: *Surface, commands: *const ui.Command, font: Font) Result
       if command.kind == ui.Kind.Rectangle {
         if command.radius > 0 {
           rounded(surface, clip, command.bounds, command.radius, command.color)
-        }
-        else {
+        } else {
           rectangle(surface, clip, command.color)
         }
-      }
-      else if command.kind == ui.Kind.Glyph {
-        drawn := draw_glyph(surface, clip, command.color, font, command.codepoint, #cast(i64, command.glyph_x), #cast(i64, command.glyph_y))
+      } else if command.kind == ui.Kind.Glyph {
+        drawn := draw_glyph(surface, clip, command.color, font, command.codepoint, command.glyph_x, command.glyph_y)
         if !drawn.ok {
           return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
         }
-      }
-      else if command.kind == ui.Kind.Text {
+      } else if command.kind == ui.Kind.Text {
         outcome := text(surface, command, clip, font)
-        if outcome.failure.kind != io.Kind.Ok {
+        if io.failed(outcome.failure) {
           return outcome
         }
       }

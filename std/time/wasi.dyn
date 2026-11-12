@@ -13,7 +13,6 @@ fn native_clock(monotonic: bool) ClockResult {
   }
   return ClockResult{ value: Instant{ seconds: #cast(i64, (value / 1000000000)), nanoseconds: #cast(i64, (value % 1000000000)) } }
 }
-fn native_sleep(duration: i64) SleepResult {
-  _ = duration
+fn native_sleep(_duration: i64) SleepResult {
   return SleepResult{ failure: io.Failure{ kind: io.Kind.Unsupported } }
 }

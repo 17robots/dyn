@@ -25,7 +25,7 @@ pub fn cmsdk(base: usize) Uart {
 pub fn ready(uart: *const Uart) bool {
   status: u32 = 0
   if uart.width == RegisterWidth.Byte {
-    status = #cast(u32, mmio.load_u8(uart.status))
+    status = mmio.load_u8(uart.status)
   } else {
     status = mmio.load_u32(uart.status)
   }
@@ -39,7 +39,7 @@ pub fn write_byte(uart: *const Uart, byte: u8) {
   if uart.width == RegisterWidth.Byte {
     mmio.store_u8(uart.data, byte)
   } else {
-    mmio.store_u32(uart.data, #cast(u32, byte))
+    mmio.store_u32(uart.data, byte)
   }
 }
 

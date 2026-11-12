@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""dyn vet reports unused locals and imports; --unsafe lists unsafe operations."""
+"""dyn vet reports unused locals and imports and casts a slot makes implicit;
+--unsafe lists unsafe operations."""
 import os
 from pathlib import Path
 import subprocess
@@ -20,4 +21,26 @@ with tempfile.TemporaryDirectory() as directory:
     imports = subprocess.run([DYN, 'vet', str(root)], capture_output=True, text=True, timeout=60)
     assert imports.returncode == 1 and imports.stderr.count('import is never used') == 1, imports
     assert 'main.dyn:2:' in imports.stderr, imports
-print('PASS vet: unused locals and the unsafe report')
+    (root/'other.dyn').unlink()
+    (root/'main.dyn').write_text("""struct P { n: u64 }
+fn take(n: u64) u64 {
+  return #cast(u64, n)
+}
+fn keep(n: u32) u64 {
+  wide := #cast(u64, n)
+  return wide * #cast(u64, n)
+}
+fn main() {
+  a: u32 = 3
+  b: u64 = #cast(u64, a)
+  d: [4]u8 = []
+  e := d[#cast(usize, a)]
+  p := P{ n: #cast(u64, a) }
+  _ = take(#cast(u64, e)) + keep(a) + b + p.n
+}
+""")
+    casts = subprocess.run([DYN, 'vet', str(root)], capture_output=True, text=True, timeout=60)
+    found = sorted(int(line.split(':')[1]) for line in casts.stderr.splitlines() if 'cast is implicit here' in line)
+    # Untyped locals and binary operands keep their casts: those set the type.
+    assert found == [3, 11, 13, 14, 15], casts.stderr
+print('PASS vet: unused locals, implicit casts and the unsafe report')

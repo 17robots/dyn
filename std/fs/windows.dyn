@@ -18,8 +18,7 @@ fn native_kind(code: isize) io.Kind {
 fn native_valid(handle: isize) bool {
   return handle != 0 && handle != -1
 }
-fn native_interrupted(code: isize) bool {
-  _ = code
+fn native_interrupted(_code: isize) bool {
   return false
 }
 fn pointer(handle: isize) rawptr {
@@ -60,12 +59,10 @@ fn native_open(path: []const u8, mode: u8) FileResult {
   if mode == 1 {
     access = 1073741824
     creation = 2
-  }
-  else if mode == 2 {
+  } else if mode == 2 {
     access = 4
     creation = 4
-  }
-  else if mode == 3 {
+  } else if mode == 3 {
     access = 1073741824
     creation = 1
   }
@@ -105,7 +102,7 @@ fn native_write(handle: isize, source: []const u8) isize {
 }
 fn native_seek(handle: isize, offset: isize, origin: usize) isize {
   position: i64 = 0
-  if win_seek(pointer(handle), #cast(i64, offset), &position, #cast(u32, origin)) == 0 {
+  if win_seek(pointer(handle), offset, &position, #cast(u32, origin)) == 0 {
     return last_error()
   }
   return #cast(isize, position)
@@ -119,8 +116,7 @@ fn native_sync(handle: isize) isize {
 
 // Read-only view of the whole file. The view keeps the section alive, so the
 // mapping handle closes at once.
-fn native_map(handle: isize, size: usize) isize {
-  _ = size
+fn native_map(handle: isize, _size: usize) isize {
   mapping := win_map_create(pointer(handle), nil, 2, 0, 0, nil)
   if mapping == nil {
     return last_error()
@@ -136,8 +132,7 @@ fn native_map(handle: isize, size: usize) isize {
   }
   return #cast(isize, #cast(usize, view))
 }
-fn native_unmap(address: usize, size: usize) isize {
-  _ = size
+fn native_unmap(address: usize, _size: usize) isize {
   if win_map_release(#cast(rawptr, address)) == 0 {
     return last_error()
   }

@@ -61,19 +61,15 @@ pub fn next_stream(state: *StreamScanner) Result {
           state.scanned += 1
           if cdata {
             complete = at >= 2 && byte == '>' && state.storage[at - 1] == ']' && state.storage[at - 2] == ']'
-          }
-          else if comment {
+          } else if comment {
             complete = at >= 2 && byte == '>' && state.storage[at - 1] == '-' && state.storage[at - 2] == '-'
-          }
-          else if state.quote != 0 {
+          } else if state.quote != 0 {
             if byte == state.quote {
               state.quote = 0
             }
-          }
-          else if byte == 39 || byte == '"' {
+          } else if byte == 39 || byte == '"' {
             state.quote = byte
-          }
-          else if byte == '>' {
+          } else if byte == '>' {
             complete = !processing || (at > 0 && state.storage[at - 1] == '?')
           }
         }
@@ -83,8 +79,7 @@ pub fn next_stream(state: *StreamScanner) Result {
         parsed := next(&candidate)
         if parsed.found {
           state.consumed = candidate.offset
-        }
-        else if candidate.failure.kind != parse.StreamKind.Ok {
+        } else if candidate.failure.kind != parse.StreamKind.Ok {
           state.failure = candidate.failure
         }
         return parsed
@@ -135,14 +130,11 @@ fn escaped(state: *Writer, value: []const u8, attribute: bool) bool {
     replacement: []const u8 = ""
     if value[i] == '&' {
       replacement = "&amp;"
-    }
-    else if value[i] == '<' {
+    } else if value[i] == '<' {
       replacement = "&lt;"
-    }
-    else if value[i] == '>' {
+    } else if value[i] == '>' {
       replacement = "&gt;"
-    }
-    else if attribute && value[i] == '"' {
+    } else if attribute && value[i] == '"' {
       replacement = "&quot;"
     }
     if #len(replacement) > 0 {
@@ -284,12 +276,10 @@ fn valid_text(text: []const u8, attribute: bool) bool {
           byte := entity[index]
           digit: u32 = 16
           if byte >= '0' && byte <= '9' {
-            digit = #cast(u32, (byte - '0'))
-          }
-          else if byte >= 'a' && byte <= 'f' {
+            digit = (byte - '0')
+          } else if byte >= 'a' && byte <= 'f' {
             digit = #cast(u32, (byte - 'a')) + 10
-          }
-          else if byte >= 'A' && byte <= 'F' {
+          } else if byte >= 'A' && byte <= 'F' {
             digit = #cast(u32, (byte - 'A')) + 10
           }
           if digit >= base || value > (1114111 - digit) / base {
@@ -379,14 +369,11 @@ pub fn next(state: *Scanner) Result {
       if byte == quote {
         quote = 0
       }
-    }
-    else if byte == '"' || byte == 39 {
+    } else if byte == '"' || byte == 39 {
       quote = byte
-    }
-    else if processing && byte == '?' && tag_end + 1 < #len(state.source) && state.source[tag_end + 1] == '>' {
+    } else if processing && byte == '?' && tag_end + 1 < #len(state.source) && state.source[tag_end + 1] == '>' {
       break
-    }
-    else if !processing && byte == '>' {
+    } else if !processing && byte == '>' {
       break
     }
     tag_end += 1
@@ -395,12 +382,7 @@ pub fn next(state: *Scanner) Result {
     return fail(state, tag_end)
   }
   terminator := tag_end
-  if processing {
-    state.offset = tag_end + 2
-  }
-  else {
-    state.offset = tag_end + 1
-  }
+  if processing { state.offset = tag_end + 2 } else { state.offset = tag_end + 1 }
   attributes_end := terminator
   for attributes_end > attributes_start && whitespace(state.source[attributes_end - 1]) {
     attributes_end -= 1

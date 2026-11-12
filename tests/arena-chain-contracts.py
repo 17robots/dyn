@@ -79,7 +79,7 @@ fn failures() {
   mem.arena_release(arena)
   overflow := mem.arena_create_bounded(192, 4096)
   overflow_mark := mem.arena_mark(overflow)
-  too_big := mem.arena_try_push(overflow, ~#cast(usize, 0), 16)
+  too_big := mem.arena_try_push(overflow, #max(usize), 16)
   check(!too_big.ok && too_big.error == mem.ErrorKind.Overflow, "push arithmetic overflow")
   check(mem.arena_mark(overflow) == overflow_mark && mem.arena_snapshot(overflow).blocks == 1, "overflow preserves state")
   mem.arena_release(overflow)

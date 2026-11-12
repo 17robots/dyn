@@ -323,7 +323,8 @@ ownership, lifetime, arithmetic, indexing, or dereference operation.
 ## Control flow and cleanup
 
 Each statement starts on its own line; two statements on one line are a syntax error. A block
-with a single statement may stay on one line, as in `if done { return }`. `case` arms are not
+with a single statement may stay on one line, as in `if done { return }`, and so may an `if` whose
+two branches are one statement each: `if wide { return 8 } else { return 4 }`. `case` arms are not
 separated by commas; each arm's body is a block:
 
 ```dyn
@@ -427,6 +428,7 @@ collections, and ordinary algorithms belong in libraries.
 
 - Conversion: `#cast(Type, value)` and `#bitcast(Type, value)`.
 - Layout and reflection: `#sizeof`, `#alignof`, `#offsetof`, and `#typeof`.
+- Integer limits: `#max` and `#min`.
 - Representation and pointers: `#len`, `#slice` and `#offset`.
 - Validation and termination: compile-time `#assert` and runtime `#panic`.
 - Build input and OS boundary: `#load` and `#syscall`.
@@ -446,8 +448,11 @@ operations, such as `#cast(*T, memory).field`. The old `#cast(T) value` and
 value operands. `#len` accepts arrays and slices. `#cast(T, value)` performs explicit numeric conversion
 or compatible pointer conversion; explicit integer-pointer casts serve OS ABI boundaries. Narrowing follows destination representation. `#bitcast(T, value)`
 requires equal-sized compatible numeric representations or compatible pointer representations.
-`#syscall(number, args...)` returns `isize` and accepts at most six integer/pointer arguments on
-Linux x86-64. It does not depend on `std`.
+`#max(T)` and `#min(T)` are the largest and smallest values of integer type `T`, as constants of
+type `T`; `#max(usize)` is the target's. `#syscall(number, args...)` returns `isize` and accepts at
+most six integer/pointer arguments on
+Linux x86-64. It does not depend on `std`. The number may be a named constant: `std/os/linux/sys`
+and `std/os/macos/sys` name each call std makes, as in `#syscall(sys.Getpid)`.
 `#offsetof(Type, field)` is a field's byte offset as a `usize` constant.
 `#init(pointer)` is a statement that writes `T`'s field defaults through a mutable `*T`; for a type
 without defaults it only evaluates the pointer.
