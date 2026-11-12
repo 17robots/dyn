@@ -20,7 +20,7 @@ unwind_first: u64
 unwind_hints: [unwind_hint_count]u64
 fn unwind_remember(tid: u64, index: usize) {
   if tid != 0 && tid >> 58 == 0 && index < 64 {
-    atomic_store(&unwind_hints[#cast(usize, tid % #cast(u64, unwind_hint_count))], (tid << 6) | #cast(u64, index))
+    atomic_store(&unwind_hints[#cast(usize, tid % unwind_hint_count)], (tid << 6) | index)
   }
 }
 extern fn atomic_load "dyn_atomic_load_u64"(p: *const u64) u64
@@ -68,7 +68,7 @@ fn unwind_slot(claim: bool) *UnwindSlot {
     return &head.slots[0]
   }
   if tid != 0 && tid >> 58 == 0 {
-    hint := atomic_load(&unwind_hints[#cast(usize, tid % #cast(u64, unwind_hint_count))])
+    hint := atomic_load(&unwind_hints[#cast(usize, tid % unwind_hint_count)])
     index := #cast(usize, hint & 63)
     if hint >> 6 == tid && index < unwind_chunk_slots {
       candidate := &head.slots[index]
@@ -126,7 +126,7 @@ pub fn dyn_unwind_link(frame: *Unwind) {
   slot := unwind_slot(true)
   if slot == nil {
     message: []const u8 = "runtime unwind storage unavailable"
-    panic_raw(&message[0], #cast(u64, #len(message)))
+    panic_raw(&message[0], #len(message))
     return
   }
   // A target may reserve a private word beyond its saved register bank.
@@ -209,9 +209,9 @@ fn unwind_store_message(slot: *UnwindSlot, message: *const u8, length: u64) {
   }
   if copied < total {
     for i in 0..#len(truncated) {
-      slot.storage[copied + #cast(u64, i)] = truncated[i]
+      slot.storage[copied + i] = truncated[i]
     }
-    total = copied + #cast(u64, #len(truncated))
+    total = copied + #len(truncated)
   }
   slot.message = &slot.storage[0]
   slot.length = total
@@ -262,9 +262,9 @@ fn check_name(kind: u64) []const u8 {
 }
 fn append_bytes(buffer: []u8, at: u64, text: []const u8) u64 {
   for i in 0..#len(text) {
-    buffer[at + #cast(u64, i)] = text[i]
+    buffer[at + i] = text[i]
   }
-  return at + #cast(u64, #len(text))
+  return at + #len(text)
 }
 // Failed runtime checks pass the function name and kind << 24 | name length
 // rather than a full message, so each function stores its name once. The

@@ -7,7 +7,7 @@ fn rotate(value: u32, amount: usize) u32 {
   for i in 0..amount {
     factor *= 2
   }
-  left := #cast(u32, ((#cast(u64, value) * factor) % Mod32))
+  left := #cast(u32, ((value * factor) % Mod32))
   return left | (value >> (32 - amount))
 }
 fn load32(input: []const u8, at: usize) u32 {

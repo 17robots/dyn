@@ -224,7 +224,7 @@ pub fn days_from_civil(year: i32, month: u8, day: u8) i64 {
   if month > 2 {
     shifted = #cast(i64, month) - 3
   }
-  day_of_year := (153 * shifted + 2) / 5 + #cast(i64, day) - 1
+  day_of_year := (153 * shifted + 2) / 5 + day - 1
   day_of_era := year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year
   return era * 146097 + day_of_era - 719468
 }
@@ -278,7 +278,7 @@ pub fn date_time(instant: Instant, offset: i64) DateTime {
 // second (second 60) maps to the following second.
 pub fn instant_of(value: *const DateTime, offset: i64) Instant {
   days := days_from_civil(value.year, value.month, value.day)
-  seconds := days * 86400 + #cast(i64, value.hour) * 3600 + #cast(i64, value.minute) * 60 + #cast(i64, value.second) - offset
+  seconds := days * 86400 + #cast(i64, value.hour) * 3600 + #cast(i64, value.minute) * 60 + value.second - offset
   return Instant{ seconds: seconds, nanoseconds: value.nanosecond }
 }
 

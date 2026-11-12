@@ -13,10 +13,10 @@ const unwind_chunk_slots: usize = 64
 const unwind_hint_count: usize = 64
 // Committed read-write pages; Windows backs them physically on first touch.
 fn runtime_pages(bytes: u64) u64 {
-  return #cast(u64, #cast(usize, virtual_alloc(nil, #cast(usize, bytes), 12288, 4)))
+  return #cast(usize, virtual_alloc(nil, #cast(usize, bytes), 12288, 4))
 }
 fn thread_id() u64 {
-  return #cast(u64, get_tid())
+  return get_tid()
 }
 fn trace_write(data: *const u8, size: u64) {
   if size == 0 {
@@ -34,7 +34,7 @@ fn trace_write(data: *const u8, size: u64) {
     if write_file(handle, #cast(rawptr, &bytes[offset]), #cast(u32, chunk), &written, nil) == 0 || written == 0 {
       return
     }
-    offset += #cast(usize, written)
+    offset += written
   }
 }
 

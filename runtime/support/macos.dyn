@@ -17,7 +17,7 @@ fn runtime_pages(bytes: u64) u64 {
   return #cast(u64, address)
 }
 fn thread_id() u64 {
-  return #cast(u64, #cast(usize, pthread_self()))
+  return #cast(usize, pthread_self())
 }
 fn trace_write(data: *const u8, size: u64) {
   if size == 0 {

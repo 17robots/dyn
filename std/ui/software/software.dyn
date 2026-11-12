@@ -66,8 +66,8 @@ fn blend(surface: *Surface, x, y: i32, tint: ui.Color, coverage: u8) {
   denominator := alpha * 255 + old_alpha * (255 - alpha)
   components: [3]u8 = [tint.r, tint.g, tint.b]
   for i in 0..3 {
-    source := #cast(u32, components[i]) * alpha * 255
-    destination := #cast(u32, surface.pixels[at + i]) * old_alpha * (255 - alpha)
+    source := components[i] * alpha * 255
+    destination := surface.pixels[at + i] * old_alpha * (255 - alpha)
     surface.pixels[at + i] = #cast(u8, ((source + destination + denominator / 2) / denominator))
   }
   surface.pixels[at + 3] = #cast(u8, ((denominator + 127) / 255))
@@ -118,17 +118,17 @@ fn draw_glyph(surface: *Surface, clip: ui.Rect, tint: ui.Color, font: Font, code
   if !valid_glyph(&glyph) {
     return DrawResult{}
   }
-  left := x + #cast(i64, glyph.x_offset)
-  top := y + #cast(i64, glyph.y_offset)
+  left := x + glyph.x_offset
+  top := y + glyph.y_offset
   // Intersect in i64: bearings may place the glyph outside i32 coordinates.
   gx := left
   gy := top
-  gr := left + #cast(i64, glyph.width)
-  gb := top + #cast(i64, glyph.height)
-  if gx < #cast(i64, clip.x) {
+  gr := left + glyph.width
+  gb := top + glyph.height
+  if gx < clip.x {
     gx = clip.x
   }
-  if gy < #cast(i64, clip.y) {
+  if gy < clip.y {
     gy = clip.y
   }
   cr := #cast(i64, clip.x) + #cast(i64, clip.width)
@@ -171,7 +171,7 @@ fn text(surface: *Surface, command: *const ui.Command, clip: ui.Rect, font: Font
     }
     if codepoint == 10 {
       x = command.bounds.x
-      y += #cast(i64, font.line_height)
+      y += font.line_height
       if y >= bottom + 2147483648 {
         break
       }
@@ -186,7 +186,7 @@ fn text(surface: *Surface, command: *const ui.Command, clip: ui.Rect, font: Font
     if !drawn.ok {
       return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
     }
-    x += #cast(i64, drawn.advance)
+    x += drawn.advance
   }
   return Result{}
 }

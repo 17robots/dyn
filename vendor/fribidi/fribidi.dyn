@@ -115,7 +115,7 @@ pub fn resolve(arena: *mem.Arena, api: *const Api, text: []const u8, base: u32) 
     }
   }
   for i in 0..count {
-    if visual_to_logical[#cast(usize, logical_to_visual[i])] != #cast(i32, i) {
+    if visual_to_logical[logical_to_visual[i]] != #cast(i32, i) {
       mem.arena_rewind(arena, mark)
       return Result{kind:io.Kind.InvalidState}
     }

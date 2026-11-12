@@ -119,7 +119,7 @@ pub fn decode(arena: *mem.Arena, source: []const u8) DecodeResult {
     return DecodeResult{ failure: parse.Failure{ kind: parse.Kind.Unsupported } }
   }
   stride := #cast(usize, bits / 8)
-  if channels == 0 || rate == 0 || #cast(usize, channels) * stride != #cast(usize, align) || #cast(u64, rate) * #cast(u64, align) != #cast(u64, u32le(format, 8)) || !mask_valid(mask, channels) || #len(data) % #cast(usize, align) != 0 {
+  if channels == 0 || rate == 0 || channels * stride != align || #cast(u64, rate) * #cast(u64, align) != #cast(u64, u32le(format, 8)) || !mask_valid(mask, channels) || #len(data) % #cast(usize, align) != 0 {
     return DecodeResult{ offset: data_offset, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: data_offset } }
   }
   sample_count := #len(data) / stride

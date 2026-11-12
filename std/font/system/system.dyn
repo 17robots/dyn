@@ -117,7 +117,7 @@ fn name(arena: *mem.Arena, names: []const u8, wanted: u16) []const u8 {
     return ""
   }
   length := #cast(usize, u16be(names, best + 8))
-  offset := storage + #cast(usize, u16be(names, best + 10))
+  offset := storage + u16be(names, best + 10)
   if offset > #len(names) || length > #len(names) - offset {
     return ""
   }

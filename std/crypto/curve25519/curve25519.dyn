@@ -119,7 +119,7 @@ pub fn equal(a: Field, b: Field) bool {
   encode(right[..], b)
   difference: u32
   for i in 0..32 {
-    difference |= #cast(u32, left[i]^right[i])
+    difference |= left[i]^right[i]
   }
   return difference == 0
 }

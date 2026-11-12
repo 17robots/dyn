@@ -277,7 +277,8 @@ static int execute_command(DynOptions *options, const char *compiler) {
   DynWork work = {.remaining = options->max_work};
   unsigned vet_findings = 0;
   bool vet = is_command(options, "vet");
-  DynContext context = {.work = options->max_work ? &work : NULL, .target = dyn_target_find(options->target), .optimization = &options->optimization, .runtime_support = options->runtime_support, .json_diagnostics = options->json_diagnostics, .vet = vet, .vet_unsafe = options->vet_unsafe, .vet_findings = &vet_findings, .timings = options->timings, .strict_syntax = true};
+  DynVetCasts vet_casts = {0};
+  DynContext context = {.work = options->max_work ? &work : NULL, .target = dyn_target_find(options->target), .optimization = &options->optimization, .runtime_support = options->runtime_support, .json_diagnostics = options->json_diagnostics, .vet = vet, .vet_unsafe = options->vet_unsafe, .vet_findings = &vet_findings, .vet_casts = vet ? &vet_casts : NULL, .timings = options->timings, .strict_syntax = true};
   if (is_command(options, "help")) {
     dyn_cli_help(options->input);
     return 0;
@@ -440,7 +441,8 @@ static int execute_command(DynOptions *options, const char *compiler) {
     dyn_sources_free(&sources); free(main_path); return result;
   }
   DynCheckResult checked = {0};
-  if (!build) checked = dyn_check_sources(&sources, main_path, false);
+  if (vet) checked = dyn_vet_sources(&sources, main_path, options->input);
+  else if (!build) checked = dyn_check_sources(&sources, main_path, false);
   if (checked.errors || vet_findings) {
     dyn_sources_free(&sources);
     free(main_path);

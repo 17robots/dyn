@@ -98,7 +98,7 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Result {
       value = source[cursor.at]
       cursor.at += 1
       if stride == 2 {
-        value = value * 256 + #cast(u32, source[cursor.at])
+        value = value * 256 + source[cursor.at]
         cursor.at += 1
       }
     }
@@ -136,7 +136,7 @@ pub fn encode(arena: *mem.Arena, pixels: []const u8, width: u32, height: u32, ch
     return EncodeResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   header := 9 + digits(width) + digits(height)
-  if #cast(u64, width) * #cast(u64, height) > #cast(u64, (#max(usize) - header) / #cast(usize, channels)) {
+  if #cast(u64, width) * #cast(u64, height) > #cast(u64, (#max(usize) - header) / channels) {
     return EncodeResult{ failure: parse.Failure{ kind: parse.Kind.Overflow } }
   }
   count := #cast(usize, width) * #cast(usize, height) * #cast(usize, channels)

@@ -19,8 +19,21 @@ servers so they pick up the new `dyn`.
 - `dyn vet` reports a `#cast` that its position would make anyway: an
   argument, return value, struct field, typed local, assignment or index whose
   type the value widens to without loss, such as `take(#cast(u64, count))`
-  for a `u32` count. Casts that choose a type, like `wide := #cast(u64, n)` or
-  an operand of `*`, are not reported. std dropped 322 such casts.
+  for a `u32` count. Casts that choose a type, like `wide := #cast(u64, n)`,
+  are not reported, and neither is a cast that some target needs, such as a
+  cast of a `c.char` or `net.Descriptor`. std dropped 751 such casts.
+- Binary operators widen the narrower operand when its type converts to the
+  other's without loss, as typed slots already do: `count_u32 * size_u64` is
+  a `u64`, `index_u32 < limit_i64` compares as `i64`, and `total += count_u32`
+  works on a `u64` total. Each operand keeps its own arithmetic until then.
+  `u64` against `i64` still needs a cast.
+- Release loops whose back edge passes an empty forwarding block, such as a
+  loop with a bounds check, now test at the bottom: one branch per iteration
+  instead of a compare at the top and a jump back.
+- Large programs check about 9% faster and build about 7% faster: the walk
+  that finds generic instances in function bodies runs on up to four threads.
+- `std/os/macos.thread_yield` yields through libSystem's `sched_yield`. It
+  called BSD syscall 331, which is `__disable_threadsignal`, not a yield.
 - `#syscall` takes a named constant on every Linux target. `std/os/linux/sys`
   and `std/os/macos/sys` name the calls std makes: `#syscall(sys.Openat, ...)`.
 - `io.failed(failure)` tests a failure, and `io.linux_failure(code)`,

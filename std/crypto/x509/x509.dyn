@@ -78,7 +78,7 @@ fn small(value: []const u8) i64 {
   }
   result: i64 = 0
   for byte in value {
-    result = result*256 + #cast(i64, byte)
+    result = result*256 + byte
   }
   return result
 }
@@ -247,7 +247,7 @@ fn decimal(source: []const u8) i64 {
     if byte < '0' || byte > '9' {
       return -1
     }
-    result = result*10 + #cast(i64, byte-'0')
+    result = result*10 + (byte-'0')
   }
   return result
 }
@@ -357,7 +357,7 @@ fn usage(source: []const u8, view: *View) bool {
   view.has_usage = true
   view.usage = #cast(u16, content[1]) << 8
   if #len(content) == 3 {
-    view.usage |= #cast(u16, content[2])
+    view.usage |= content[2]
   }
   // encipherOnly/decipherOnly require keyAgreement.
   if (view.usage & 0x0180) != 0 && (view.usage & 0x0800) == 0 {

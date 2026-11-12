@@ -49,7 +49,7 @@ pub fn next(state: *Cursor) Result {
       if length > (#max(usize) - #cast(usize, state.source[at + i])) / 256 {
         return fail(state, parse.Kind.Overflow, at + i)
       }
-      length = length * 256 + #cast(usize, state.source[at + i])
+      length = length * 256 + state.source[at + i]
     }
     if length < 128 {
       return fail(state, parse.Kind.Syntax, at)

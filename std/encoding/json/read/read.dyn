@@ -348,7 +348,7 @@ pub fn length(value: *const Value) usize {
   return 0
 }
 pub fn as_text(value: *const Value) []const u8 {
-  if value == nil || (value.tag & 255) != #cast(u64, KindString) {
+  if value == nil || (value.tag & 255) != KindString {
     return ""
   }
   length := #cast(usize, value.tag >> 8)
@@ -358,7 +358,7 @@ pub fn as_text(value: *const Value) []const u8 {
   return #slice(#cast(*const u8, #cast(usize, value.bits)), length)
 }
 pub fn as_f64(value: *const Value) f64 {
-  if value == nil || (value.tag & 255) != #cast(u64, KindNumber) {
+  if value == nil || (value.tag & 255) != KindNumber {
     return 0.0
   }
   number_type := value.tag & 65280
@@ -371,7 +371,7 @@ pub fn as_f64(value: *const Value) f64 {
   return #bitcast(f64, value.bits)
 }
 pub fn as_bool(value: *const Value) bool {
-  return value != nil && (value.tag & 255) == #cast(u64, KindBool) && value.bits != 0
+  return value != nil && (value.tag & 255) == KindBool && value.bits != 0
 }
 fn read_after(value: *const Value) *const Value {
   span: usize = 1
@@ -382,7 +382,7 @@ fn read_after(value: *const Value) *const Value {
   return #cast(*const Value, #cast(usize, value) + span * 16)
 }
 pub fn get(object: *const Value, key: []const u8) *const Value {
-  if object == nil || (object.tag & 255) != #cast(u64, KindObject) {
+  if object == nil || (object.tag & 255) != KindObject {
     return &nil_value
   }
   at := #cast(*const Value, #cast(usize, object) + 16)
@@ -403,7 +403,7 @@ pub fn get(object: *const Value, key: []const u8) *const Value {
   return &nil_value
 }
 pub fn at(array: *const Value, index: usize) *const Value {
-  if array == nil || (array.tag & 255) != #cast(u64, KindArray) || index >= #cast(usize, array.tag >> 8) {
+  if array == nil || (array.tag & 255) != KindArray || index >= #cast(usize, array.tag >> 8) {
     return &nil_value
   }
   at := #cast(*const Value, #cast(usize, array) + 16)
@@ -608,7 +608,7 @@ fn failed_string(cursor: *Cursor) []const u8 {
 
 // Zero is returned for a wrong kind, a fractional real or an out-of-range value.
 pub fn as_u64(value: *const Value) u64 {
-  if value == nil || (value.tag & 255) != #cast(u64, KindNumber) {
+  if value == nil || (value.tag & 255) != KindNumber {
     return 0
   }
   number_type := value.tag & 65280
@@ -633,7 +633,7 @@ pub fn as_u64(value: *const Value) u64 {
   return integer
 }
 pub fn as_i64(value: *const Value) i64 {
-  if value == nil || (value.tag & 255) != #cast(u64, KindNumber) {
+  if value == nil || (value.tag & 255) != KindNumber {
     return 0
   }
   number_type := value.tag & 65280

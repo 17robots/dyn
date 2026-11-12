@@ -239,10 +239,10 @@ fn decimal_add(left: *DecimalInteger, right: *const DecimalInteger) {
   for index < limit {
     item := carry
     if index < left.used {
-      item += #cast(u64, left.limbs[index])
+      item += left.limbs[index]
     }
     if index < right.used {
-      item += #cast(u64, right.limbs[index])
+      item += right.limbs[index]
     }
     left.limbs[index] = #cast(u32, item)
     carry = item >> 32
@@ -519,7 +519,7 @@ fn parse_into(text: []const u8, base: u8, target: any) bool {
     }
     *isize p => {
       ok := parse_i64_into(text, base, &wide)
-      if !ok || wide < #cast(i64, #min(isize)) || wide > #cast(i64, #max(isize)) {
+      if !ok || wide < #min(isize) || wide > #max(isize) {
         return false
       }
       p.* = #cast(isize, wide)

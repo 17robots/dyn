@@ -48,7 +48,7 @@ pub fn shared(destination: []u8, private_key: []const u8, peer: []const u8) bool
   field.encode(destination[..32], a)
   nonzero: u32
   for i in 0..32 {
-    nonzero |= #cast(u32, destination[i])
+    nonzero |= destination[i]
   }
   return nonzero != 0
 }

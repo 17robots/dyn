@@ -11,9 +11,9 @@ const unwind_hint_count: usize = 1
 none_unwind: UnwindChunk
 none_unwind_taken: bool
 fn runtime_pages(bytes: u64) u64 {
-  if bytes == #cast(u64, #sizeof(UnwindChunk)) && !none_unwind_taken {
+  if bytes == #sizeof(UnwindChunk) && !none_unwind_taken {
     none_unwind_taken = true
-    return #cast(u64, #cast(usize, &none_unwind))
+    return #cast(usize, &none_unwind)
   }
   return 0
 }

@@ -199,19 +199,19 @@ fn glyph_quad(_batch: *Batch, stream: *Stream, entry: *const Entry, x, y: i64, t
     return
   }
   // Crop the glyph to clip in whole pixels, shifting texture coordinates.
-  left := x + #cast(i64, entry.x_offset)
-  top := y + #cast(i64, entry.y_offset)
-  right := left + #cast(i64, entry.width)
-  bottom := top + #cast(i64, entry.height)
+  left := x + entry.x_offset
+  top := y + entry.y_offset
+  right := left + entry.width
+  bottom := top + entry.height
   x0 := left
   y0 := top
   x1 := right
   y1 := bottom
-  if x0 < #cast(i64, clip.x) {
-    x0 = #cast(i64, clip.x)
+  if x0 < clip.x {
+    x0 = clip.x
   }
-  if y0 < #cast(i64, clip.y) {
-    y0 = #cast(i64, clip.y)
+  if y0 < clip.y {
+    y0 = clip.y
   }
   if x1 > #cast(i64, clip.x) + #cast(i64, clip.width) {
     x1 = #cast(i64, clip.x) + #cast(i64, clip.width)
@@ -223,10 +223,10 @@ fn glyph_quad(_batch: *Batch, stream: *Stream, entry: *const Entry, x, y: i64, t
     return
   }
   scale := 1.0 / #cast(f32, atlas_size)
-  u0 := #cast(f32, #cast(i64, entry.x) + x0 - left) * scale
-  v0 := #cast(f32, #cast(i64, entry.y) + y0 - top) * scale
-  u1 := #cast(f32, #cast(i64, entry.x) + x1 - left) * scale
-  v1 := #cast(f32, #cast(i64, entry.y) + y1 - top) * scale
+  u0 := #cast(f32, entry.x + x0 - left) * scale
+  v0 := #cast(f32, entry.y + y0 - top) * scale
+  u1 := #cast(f32, entry.x + x1 - left) * scale
+  v1 := #cast(f32, entry.y + y1 - top) * scale
   none: [4]f32 = [0.0, 0.0, 0.0, 0.0]
   push_quad(stream, #cast(f32, x0), #cast(f32, y0), #cast(f32, x1), #cast(f32, y1), u0, v0, u1, v1, tint, none, 0.0, 1.0)
 }
@@ -245,7 +245,7 @@ fn batch_glyph(batch: *Batch, stream: *Stream, font: software.Font, codepoint: u
     flush(batch, stream)
   }
   glyph_quad(batch, stream, found.entry, x, y, tint, clip)
-  return Drawn{ advance: #cast(i64, found.entry.advance), ok: true }
+  return Drawn{ advance: found.entry.advance, ok: true }
 }
 
 // Draws commands in order with their clips. vertices holds the stream between
@@ -342,8 +342,8 @@ pub fn render_batch(batch: *Batch, commands: *const ui.Command, width, height: i
             codepoint = 65533
           }
           if codepoint == 10 {
-            x = #cast(i64, command.bounds.x)
-            y += #cast(i64, font.line_height)
+            x = command.bounds.x
+            y += font.line_height
           } else if codepoint != 13 {
             drawn := batch_glyph(batch, &stream, font, codepoint, x, y, command.color, clip)
             if drawn.full {

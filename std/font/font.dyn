@@ -158,7 +158,7 @@ pub fn open(data: []const u8) FaceResult {
         start := u32be(sub, 16 + j * 12)
         end := u32be(sub, 20 + j * 12)
         base := u32be(sub, 24 + j * 12)
-        if start > end || end > 1114111 || (j != 0 && start <= prior) || base >= #cast(u32, glyphs) || end - start >= #cast(u32, glyphs) - base {
+        if start > end || end > 1114111 || (j != 0 && start <= prior) || base >= glyphs || end - start >= glyphs - base {
           return FaceResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
         }
         prior = end
@@ -297,12 +297,12 @@ pub fn raster(arena: *mem.Arena, face: *const Face, index: u16, pixels_per_em: u
     return BitmapResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   metric_base := metric_origin(face, index, x0)
-  left := math.floor64((#cast(f64, x0) - metric_base.x) * scale)
-  top := math.floor64(0.0 - #cast(f64, y1) * scale)
+  left := math.floor64((x0 - metric_base.x) * scale)
+  top := math.floor64(0.0 - y1 * scale)
   bitmap.x_offset = #cast(i32, left)
   bitmap.y_offset = #cast(i32, top)
-  bitmap.width = #cast(i32, math.ceil64((#cast(f64, x1) - metric_base.x) * scale) - left)
-  bitmap.height = #cast(i32, math.ceil64(0.0 - #cast(f64, y0) * scale) - top)
+  bitmap.width = #cast(i32, math.ceil64((x1 - metric_base.x) * scale) - left)
+  bitmap.height = #cast(i32, math.ceil64(0.0 - y0 * scale) - top)
   width := #cast(usize, bitmap.width)
   height := #cast(usize, bitmap.height)
   if width > 4096 || height > 4096 || (width != 0 && height > 1048576 / width) {
@@ -341,12 +341,12 @@ pub fn raster(arena: *mem.Arena, face: *const Face, index: u16, pixels_per_em: u
     // all scratch; rewinding here would invalidate the later scratch mark.
     return BitmapResult{ value: Bitmap{ advance: bitmap.advance } }
   }
-  left = math.floor64((#cast(f64, x0) - outline.origin.x) * scale)
-  top = math.floor64((outline.origin.y - #cast(f64, y1)) * scale)
+  left = math.floor64((x0 - outline.origin.x) * scale)
+  top = math.floor64((outline.origin.y - y1) * scale)
   bitmap.x_offset = #cast(i32, left)
   bitmap.y_offset = #cast(i32, top)
-  bitmap.width = #cast(i32, math.ceil64((#cast(f64, x1) - outline.origin.x) * scale) - left)
-  bitmap.height = #cast(i32, math.ceil64((outline.origin.y - #cast(f64, y0)) * scale) - top)
+  bitmap.width = #cast(i32, math.ceil64((x1 - outline.origin.x) * scale) - left)
+  bitmap.height = #cast(i32, math.ceil64((outline.origin.y - y0) * scale) - top)
   width = #cast(usize, bitmap.width)
   height = #cast(usize, bitmap.height)
   if width > 4096 || height > 4096 || (width != 0 && height > 1048576 / width) {
@@ -354,7 +354,7 @@ pub fn raster(arena: *mem.Arena, face: *const Face, index: u16, pixels_per_em: u
   }
   bitmap.pixels = bitmap.pixels[..width * height]
   for *point in points {
-    if point.x < #cast(f64, x0) || point.x > #cast(f64, x1) || point.y < #cast(f64, y0) || point.y > #cast(f64, y1) {
+    if point.x < x0 || point.x > x1 || point.y < y0 || point.y > y1 {
       return BitmapResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
     }
     point.x = (point.x - outline.origin.x) * scale - left
@@ -479,7 +479,7 @@ pub fn atlas(arena: *mem.Arena, face: *const Face, codepoints: []const u32, pixe
       mem.arena_rewind(arena, mark)
     }
   }
-  value := Atlas{ width: width, height: height, line_height: #cast(i32, math.ceil64(#cast(f64, line) * scale)),
+  value := Atlas{ width: width, height: height, line_height: #cast(i32, math.ceil64(line * scale)),
     pixels: mem.push_array(u8, arena, #cast(usize, width) * #cast(usize, height)),
     glyphs: mem.push_array(AtlasGlyph, arena, #len(codepoints) + 1) }
   scratch := mem.arena_mark(arena)
@@ -521,7 +521,7 @@ pub fn atlas(arena: *mem.Arena, face: *const Face, codepoints: []const u32, pixe
       }
     }
     value.glyphs[i] = AtlasGlyph{ codepoint: cp, x: place_x, y: place_y, width: glyph.width, height: glyph.height,
-      x_offset: glyph.x_offset, y_offset: glyph.y_offset + #cast(i32, math.ceil64(#cast(f64, face.ascent) * scale)), advance: glyph.advance }
+      x_offset: glyph.x_offset, y_offset: glyph.y_offset + #cast(i32, math.ceil64(face.ascent * scale)), advance: glyph.advance }
     if glyph.width > 0 && glyph.height > 0 {
       x += glyph.width + 1
       if glyph.height + 1 > row {

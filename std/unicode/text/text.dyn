@@ -137,7 +137,7 @@ fn mapping(table: []const u32, codepoint: u32) []const u32 {
       low = mid + 1
     } else {
       start := #cast(usize, table[at + 1])
-      return MappingValues[start..start + #cast(usize, table[at + 2])]
+      return MappingValues[start..start + table[at + 2]]
     }
   }
   return MappingValues[..0]

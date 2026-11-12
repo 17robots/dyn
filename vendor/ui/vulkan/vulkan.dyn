@@ -86,7 +86,7 @@ fn glyph(build: *Build, clip: ui.Rect, tint: ui.Color, font: software.Font, code
     return 0
   }
   if bitmap.width == 0 || bitmap.height == 0 {
-    return #cast(i64, bitmap.advance)
+    return bitmap.advance
   }
   if bitmap.stride < #cast(usize, bitmap.width) || #cast(usize, bitmap.width) > #len(bitmap.pixels) {
     build.kind = io.Kind.InvalidInput
@@ -96,17 +96,17 @@ fn glyph(build: *Build, clip: ui.Rect, tint: ui.Color, font: software.Font, code
     build.kind = io.Kind.InvalidInput
     return 0
   }
-  left := x+#cast(i64, bitmap.x_offset)
-  top := y+#cast(i64, bitmap.y_offset)
+  left := x+bitmap.x_offset
+  top := y+bitmap.y_offset
   gx := left
   gy := top
-  right := left+#cast(i64, bitmap.width)
-  bottom := top+#cast(i64, bitmap.height)
-  if gx < #cast(i64, clip.x) {
-    gx = #cast(i64, clip.x)
+  right := left+bitmap.width
+  bottom := top+bitmap.height
+  if gx < clip.x {
+    gx = clip.x
   }
-  if gy < #cast(i64, clip.y) {
-    gy = #cast(i64, clip.y)
+  if gy < clip.y {
+    gy = clip.y
   }
   if right > #cast(i64, clip.x)+#cast(i64, clip.width) {
     right = #cast(i64, clip.x)+#cast(i64, clip.width)
@@ -117,7 +117,7 @@ fn glyph(build: *Build, clip: ui.Rect, tint: ui.Color, font: software.Font, code
   if right > gx && bottom > gy {
     append(build, ui.Rect{x:#cast(i32, gx), y:#cast(i32, gy), width:#cast(i32, right-gx), height:#cast(i32, bottom-gy)}, tint, &bitmap, #cast(usize, gx-left), #cast(usize, gy-top))
   }
-  return #cast(i64, bitmap.advance)
+  return bitmap.advance
 }
 // Scratch holds copied glyph coverage and serialized commands. It may be reset
 // after return; do not use it to retain font-cache entries during callbacks.
@@ -162,8 +162,8 @@ pub fn render(renderer: *Renderer, scratch: *mem.Arena, surface: *software.Surfa
             codepoint = 65533
           }
           if codepoint == 10 {
-            x = #cast(i64, command.bounds.x)
-            y += #cast(i64, font.line_height)
+            x = command.bounds.x
+            y += font.line_height
             if y >= #cast(i64, command.bounds.y)+#cast(i64, command.bounds.height)+2147483648 {
               break
             }

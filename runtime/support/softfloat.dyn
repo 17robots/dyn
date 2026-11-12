@@ -354,117 +354,117 @@ fn soft_to_integer(a: u64, signed: bool, f: SoftFormat) u64 {
   return magnitude
 }
 pub fn dyn_soft_f32_add(a: u32, b: u32) u32 {
-  return #cast(u32, soft_add(#cast(u64, a), #cast(u64, b), soft_format(false)))
+  return #cast(u32, soft_add(a, b, soft_format(false)))
 }
 pub fn dyn_soft_f32_sub(a: u32, b: u32) u32 {
-  return #cast(u32, soft_add(#cast(u64, a), #cast(u64, b) ^ soft_format(false).sign, soft_format(false)))
+  return #cast(u32, soft_add(a, b ^ soft_format(false).sign, soft_format(false)))
 }
 pub fn dyn_soft_f32_mul(a: u32, b: u32) u32 {
-  return #cast(u32, soft_mul(#cast(u64, a), #cast(u64, b), soft_format(false)))
+  return #cast(u32, soft_mul(a, b, soft_format(false)))
 }
 pub fn dyn_soft_f32_div(a: u32, b: u32) u32 {
-  return #cast(u32, soft_div(#cast(u64, a), #cast(u64, b), soft_format(false)))
+  return #cast(u32, soft_div(a, b, soft_format(false)))
 }
 pub fn dyn_soft_f32_rem(a: u32, b: u32) u32 {
-  return #cast(u32, soft_rem(#cast(u64, a), #cast(u64, b), soft_format(false)))
+  return #cast(u32, soft_rem(a, b, soft_format(false)))
 }
 pub fn dyn_soft_f32_eq(a: u32, b: u32) bool {
-  c := soft_compare(#cast(u64, a), #cast(u64, b), soft_format(false))
+  c := soft_compare(a, b, soft_format(false))
   return c == 0
 }
 pub fn dyn_soft_f32_ne(a: u32, b: u32) bool {
-  c := soft_compare(#cast(u64, a), #cast(u64, b), soft_format(false))
+  c := soft_compare(a, b, soft_format(false))
   return c != 0
 }
 pub fn dyn_soft_f32_lt(a: u32, b: u32) bool {
-  c := soft_compare(#cast(u64, a), #cast(u64, b), soft_format(false))
+  c := soft_compare(a, b, soft_format(false))
   return c == -1
 }
 pub fn dyn_soft_f32_le(a: u32, b: u32) bool {
-  c := soft_compare(#cast(u64, a), #cast(u64, b), soft_format(false))
+  c := soft_compare(a, b, soft_format(false))
   return c == -1 || c == 0
 }
 pub fn dyn_soft_f32_gt(a: u32, b: u32) bool {
-  c := soft_compare(#cast(u64, a), #cast(u64, b), soft_format(false))
+  c := soft_compare(a, b, soft_format(false))
   return c == 1
 }
 pub fn dyn_soft_f32_ge(a: u32, b: u32) bool {
-  c := soft_compare(#cast(u64, a), #cast(u64, b), soft_format(false))
+  c := soft_compare(a, b, soft_format(false))
   return c == 1 || c == 0
 }
 pub fn dyn_soft_f32_unordered(a: u32, b: u32) bool {
-  c := soft_compare(#cast(u64, a), #cast(u64, b), soft_format(false))
+  c := soft_compare(a, b, soft_format(false))
   return c == 2
 }
 pub fn dyn_soft_i64_to_f32(a: i64) u32 {
   return #cast(u32, soft_from_signed(a, soft_format(false)))
 }
 pub fn dyn_soft_f32_to_i64(a: u32) i64 {
-  return #bitcast(i64, soft_to_integer(#cast(u64, a), true, soft_format(false)))
+  return #bitcast(i64, soft_to_integer(a, true, soft_format(false)))
 }
 pub fn dyn_soft_u64_to_f32(a: u64) u32 {
   return #cast(u32, soft_from_integer(a, false, soft_format(false)))
 }
 pub fn dyn_soft_f32_to_u64(a: u32) u64 {
-  return soft_to_integer(#cast(u64, a), false, soft_format(false))
+  return soft_to_integer(a, false, soft_format(false))
 }
 pub fn dyn_soft_f64_add(a: u64, b: u64) u64 {
-  return soft_add(#cast(u64, a), #cast(u64, b), soft_format(true))
+  return soft_add(a, b, soft_format(true))
 }
 pub fn dyn_soft_f64_sub(a: u64, b: u64) u64 {
-  return soft_add(#cast(u64, a), #cast(u64, b) ^ soft_format(true).sign, soft_format(true))
+  return soft_add(a, b ^ soft_format(true).sign, soft_format(true))
 }
 pub fn dyn_soft_f64_mul(a: u64, b: u64) u64 {
-  return soft_mul(#cast(u64, a), #cast(u64, b), soft_format(true))
+  return soft_mul(a, b, soft_format(true))
 }
 pub fn dyn_soft_f64_div(a: u64, b: u64) u64 {
-  return soft_div(#cast(u64, a), #cast(u64, b), soft_format(true))
+  return soft_div(a, b, soft_format(true))
 }
 pub fn dyn_soft_f64_rem(a: u64, b: u64) u64 {
-  return soft_rem(#cast(u64, a), #cast(u64, b), soft_format(true))
+  return soft_rem(a, b, soft_format(true))
 }
 pub fn dyn_soft_f64_eq(a: u64, b: u64) bool {
-  c := soft_compare(#cast(u64, a), #cast(u64, b), soft_format(true))
+  c := soft_compare(a, b, soft_format(true))
   return c == 0
 }
 pub fn dyn_soft_f64_ne(a: u64, b: u64) bool {
-  c := soft_compare(#cast(u64, a), #cast(u64, b), soft_format(true))
+  c := soft_compare(a, b, soft_format(true))
   return c != 0
 }
 pub fn dyn_soft_f64_lt(a: u64, b: u64) bool {
-  c := soft_compare(#cast(u64, a), #cast(u64, b), soft_format(true))
+  c := soft_compare(a, b, soft_format(true))
   return c == -1
 }
 pub fn dyn_soft_f64_le(a: u64, b: u64) bool {
-  c := soft_compare(#cast(u64, a), #cast(u64, b), soft_format(true))
+  c := soft_compare(a, b, soft_format(true))
   return c == -1 || c == 0
 }
 pub fn dyn_soft_f64_gt(a: u64, b: u64) bool {
-  c := soft_compare(#cast(u64, a), #cast(u64, b), soft_format(true))
+  c := soft_compare(a, b, soft_format(true))
   return c == 1
 }
 pub fn dyn_soft_f64_ge(a: u64, b: u64) bool {
-  c := soft_compare(#cast(u64, a), #cast(u64, b), soft_format(true))
+  c := soft_compare(a, b, soft_format(true))
   return c == 1 || c == 0
 }
 pub fn dyn_soft_f64_unordered(a: u64, b: u64) bool {
-  c := soft_compare(#cast(u64, a), #cast(u64, b), soft_format(true))
+  c := soft_compare(a, b, soft_format(true))
   return c == 2
 }
 pub fn dyn_soft_i64_to_f64(a: i64) u64 {
   return soft_from_signed(a, soft_format(true))
 }
 pub fn dyn_soft_f64_to_i64(a: u64) i64 {
-  return #bitcast(i64, soft_to_integer(#cast(u64, a), true, soft_format(true)))
+  return #bitcast(i64, soft_to_integer(a, true, soft_format(true)))
 }
 pub fn dyn_soft_u64_to_f64(a: u64) u64 {
   return soft_from_integer(a, false, soft_format(true))
 }
 pub fn dyn_soft_f64_to_u64(a: u64) u64 {
-  return soft_to_integer(#cast(u64, a), false, soft_format(true))
+  return soft_to_integer(a, false, soft_format(true))
 }
 pub fn dyn_soft_f32_to_f64(a: u32) u64 {
-  return soft_convert(#cast(u64, a), soft_format(false), soft_format(true))
+  return soft_convert(a, soft_format(false), soft_format(true))
 }
 pub fn dyn_soft_f64_to_f32(a: u64) u32 {
   return #cast(u32, soft_convert(a, soft_format(true), soft_format(false)))

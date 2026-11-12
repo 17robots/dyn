@@ -144,7 +144,7 @@ pub fn next(state: *Reader) Result {
     }
     value = 0
     for byte in state.source[at..at+count] {
-      value = (value << 8) | #cast(u64, byte)
+      value = (value << 8) | byte
     }
     at += count
   }
@@ -177,7 +177,7 @@ pub fn next(state: *Reader) Result {
     }
   }
   if !token.indefinite && (token.kind == Kind.Bytes || token.kind == Kind.Text) {
-    if value > #cast(u64, #len(state.source) - at) {
+    if value > (#len(state.source) - at) {
       return fail(state, at, parse.Kind.Syntax)
     }
     count := #cast(usize, value)

@@ -133,7 +133,7 @@ pub fn add(queue: *Queue, descriptor: isize, events: u32, token: u64) Result {
   if io.failed(ready.failure) {
     return ready
   }
-  if descriptor < 0 || #cast(isize, #cast(net.Descriptor, descriptor)) != descriptor || events == 0 || (events & ~#cast(u32, 5)) != 0 {
+  if descriptor < 0 || #cast(net.Descriptor, descriptor) != descriptor || events == 0 || (events & ~#cast(u32, 5)) != 0 {
     return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
   if find(queue, descriptor) != #len(queue.entries) {
@@ -220,7 +220,7 @@ pub fn wait(arena: *mem.Arena, queue: *Queue, timeout_milliseconds: i32) WaitRes
       if io.failed(elapsed.failure) {
         return WaitResult{ failure: io.Failure{ kind: elapsed.failure.kind, native: elapsed.failure.native } }
       }
-      duration := #cast(i64, timeout_milliseconds) * clock.Millisecond
+      duration := timeout_milliseconds * clock.Millisecond
       if elapsed.value >= duration {
         return WaitResult{}
       }

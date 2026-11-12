@@ -18,6 +18,8 @@ typedef struct {
 
 unsigned dyn_target_pointer_bytes(const DynTarget *target);
 const DynTarget *dyn_target_find(const char *name);
+/* The supported targets in table order; NULL past the end. */
+const DynTarget *dyn_target_at(size_t index);
 const char *dyn_target_property(const DynTarget *target, const char *key);
 bool dyn_target_syscall_number(const DynTarget *target, uint64_t source, uint64_t *native);
 typedef struct DynSyntaxCacheEntry DynSyntaxCacheEntry;
@@ -60,6 +62,20 @@ typedef struct {
   uint64_t profile_hash; /* Computed once per command, shared by module workers. */
   char *cpu, *features; /* Command-owned LLVM strings; contexts borrow these. */
 } DynOptimization;
+/* `dyn vet` reports a cast as implicit only when every target agrees: a
+   type alias such as c.long can make a cast redundant on one target only.
+   The first pass collects candidates; confirm passes on the other targets
+   mark the ones a target still needs. Keys are file paths and file offsets. */
+typedef struct {
+  char *path;
+  size_t at, start, end;
+  bool needed;
+} DynVetCast;
+typedef struct {
+  DynVetCast *items;
+  size_t count, capacity;
+  bool confirm, failed;
+} DynVetCasts;
 /* Copyable compilation policy. Target is immutable; diagnostic storage is
    borrowed for the duration of analysis. No process-global compiler state. */
 typedef struct {
@@ -71,6 +87,7 @@ typedef struct {
   bool json_diagnostics, vet, vet_unsafe;
   /* `dyn vet`: run the vet checks, counting findings when vet_findings is set. */
   unsigned *vet_findings;
+  DynVetCasts *vet_casts; /* Borrowed; NULL reports casts directly. */
   bool timings;
   DynWork *work; /* Borrowed, never owned by a source or cached snapshot. */
   DynSyntaxCache *syntax_cache; /* Optional owner-scoped immutable source trees. */
@@ -215,6 +232,9 @@ void dyn_source_free(DynSource *source);
 void dyn_source_position(const DynSource *, size_t, const char **, const char **, size_t *, size_t *);
 void dyn_source_location(const DynSource *source, size_t byte, const char **path, unsigned *line, unsigned *column);
 DynCheckResult dyn_check_sources(const DynSources *sources, const char *main_path, bool require_main);
+/* dyn vet: dyn_check_sources plus the cross-target cast confirmation
+   (DynVetCasts); input is the module directory to reload per target. */
+DynCheckResult dyn_vet_sources(const DynSources *sources, const char *main_path, const char *input);
 int dyn_codegen_main(const DynSource *source, const char *object_path, const char *asm_path, bool release, bool debug_info, bool shared);
 /* owner_key is "root" or a rewritten dyn_m<hash> prefix. NULL emits one
    monolithic object. Every object sees the full typed program, but defines

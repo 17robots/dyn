@@ -381,7 +381,13 @@ Untyped integer constants are evaluated exactly for the implemented constant-exp
 then adapted only when their value is representable in the expected type. Runtime implicit numeric
 conversion is allowed only when every source-type value is exactly representable on every
 target, counting `usize` and `isize` as anywhere from 32 to 64 bits: `usize` widens to `u64` and
-`u32` to `usize` implicitly, while `u64` to `usize` needs `#cast`. `#cast` permits
+`u32` to `usize` implicitly, while `u64` to `usize` needs `#cast`. The same rule joins
+the operands of a binary operator: when one operand's type widens to the other's without loss,
+the operator works in the wider type, so `count_u32 * size_u64` is a `u64` and `index_u32 < limit_i64`
+compares as `i64`. Each operand is computed in its own type first, so `a_u32 * b_u32 + c_u64`
+multiplies in `u32`. `u64` against `i64` has no lossless meeting type and needs a cast. `x += y`
+widens `y` to `x`'s type the same way. Shifts keep their rule: the result has the left operand's
+type. `#cast` permits
 intentional narrowing and uses destination-width two's-complement/modulo representation for integers.
 Float-to-integer conversion truncates toward zero and saturates: an out-of-range value gives the
 type's minimum or maximum, and NaN gives 0, on every target. `#bitcast` preserves bits and requires

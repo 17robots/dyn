@@ -169,7 +169,7 @@ pub fn build(arena: *mem.Arena, source: []const u8, font: Font, requested: Optio
         return Result{ offset: cluster.start, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: cluster.start } }
       }
       next_width := width + adjustment + step(cluster, width + adjustment)
-      if !options.no_wrap && options.width > 0 && next_width > #cast(f64, options.width) && cursor > begin {
+      if !options.no_wrap && options.width > 0 && next_width > options.width && cursor > begin {
         if candidate > begin {
           cursor = candidate
           selected_break = true
@@ -198,7 +198,7 @@ pub fn build(arena: *mem.Arena, source: []const u8, font: Font, requested: Optio
           }
           break_width += cluster.advance + soft_adjustment
         }
-        if options.width == 0 || break_width <= #cast(f64, options.width) {
+        if options.width == 0 || break_width <= options.width {
           candidate = cursor
         }
       }
@@ -246,12 +246,12 @@ pub fn build(arena: *mem.Arena, source: []const u8, font: Font, requested: Optio
       }
     }
     shift: f64 = 0.0
-    if options.width > 0 && x < #cast(f64, options.width) {
+    if options.width > 0 && x < options.width {
       if options.alignment == Align.Center {
-        shift = (#cast(f64, options.width) - x) * 0.5
+        shift = (options.width - x) * 0.5
       }
       if options.alignment == Align.Right {
-        shift = #cast(f64, options.width) - x
+        shift = options.width - x
       }
     }
     for i in glyph_start..glyph_count {

@@ -13,7 +13,7 @@ pub fn resize(scratch: *mem.Arena, source: []const u8, width: i32, height: i32, 
   }
   input_size := #cast(u64, width) * #cast(u64, height) * #cast(u64, channels)
   output_size := #cast(u64, out_width) * #cast(u64, out_height) * #cast(u64, channels)
-  if input_size > 2147483647 || output_size > 2147483647 || #cast(u64, #len(source)) < input_size || #cast(u64, #len(destination)) < output_size {
+  if input_size > 2147483647 || output_size > 2147483647 || #len(source) < input_size || #len(destination) < output_size {
     return false
   }
   mark := mem.arena_mark(scratch)

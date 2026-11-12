@@ -44,7 +44,7 @@ pub fn decompress(arena: *memory.Arena, source: []const u8) BufferResult {
   if !size.known {
     return BufferResult{ failure: parse.Failure{ kind: parse.Kind.Unsupported } }
   }
-  if size.size > #cast(u64, #max(usize)) {
+  if size.size > #max(usize) {
     return BufferResult{ failure: parse.Failure{ kind: parse.Kind.Overflow } }
   }
   capacity := #cast(usize, size.size)

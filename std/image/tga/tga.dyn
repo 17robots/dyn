@@ -81,15 +81,15 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Result {
         src += j * stride
       }
       index := produced + j
-      x := index % #cast(usize, width)
-      y := index / #cast(usize, width)
+      x := index % width
+      y := index / width
       if (source[17] & 16) != 0 {
         x = #cast(usize, width) - 1 - x
       }
       if (source[17] & 32) == 0 {
         y = #cast(usize, height) - 1 - y
       }
-      dst := (y * #cast(usize, width) + x) * 4
+      dst := (y * width + x) * 4
       if gray {
         pixels[dst] = source[src]
         pixels[dst + 1] = source[src]
@@ -137,7 +137,7 @@ pub fn encode(arena: *mem.Arena, pixels: []const u8, width, height: u32, channel
     output[17] |= 8
   }
   for i in 0..#cast(usize, count) {
-    src := i * #cast(usize, channels)
+    src := i * channels
     dst := 18 + src
     if channels < 3 {
       output[dst] = pixels[src]
@@ -147,7 +147,7 @@ pub fn encode(arena: *mem.Arena, pixels: []const u8, width, height: u32, channel
       output[dst + 2] = pixels[src]
     }
     if channels == 2 || channels == 4 {
-      output[dst + #cast(usize, channels) - 1] = pixels[src + #cast(usize, channels) - 1]
+      output[dst + channels - 1] = pixels[src + channels - 1]
     }
   }
   return EncodeResult{ value: output }

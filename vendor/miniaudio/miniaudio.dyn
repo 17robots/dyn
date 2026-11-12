@@ -29,7 +29,7 @@ pub fn decoder_read(decoder: rawptr, output: []f32) Read {
     return Read{ code: -2 }
   }
   frames: u64 = 0
-  code := native_read(decoder, &output[0], #cast(u64, (#len(output) / 2)), &frames)
+  code := native_read(decoder, &output[0], (#len(output) / 2), &frames)
   return Read{ samples: #cast(usize, frames) * 2, code: code, ended: code == -17, ok: code == 0 || code == -17 }
 }
 pub extern fn decoder_close "dyn_ma_decoder_close"(decoder: rawptr)
@@ -65,7 +65,7 @@ pub fn mix(engine: rawptr, output: []f32) Read {
     return Read{ code: -2 }
   }
   frames: u64 = 0
-  code := native_mix(engine, &output[0], #cast(u64, (#len(output) / 2)), &frames)
+  code := native_mix(engine, &output[0], (#len(output) / 2), &frames)
   return Read{ samples: #cast(usize, frames) * 2, code: code, ok: code == 0 }
 }
 pub extern fn engine_close "dyn_ma_engine_close"(engine: rawptr)

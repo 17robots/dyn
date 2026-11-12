@@ -5,6 +5,9 @@ use "std/mem" mem
 use "std/c" cstrings
 use "std/os/macos/sys"
 
+// libSystem has no BSD yield call; sched_yield wraps the swtch_pri Mach trap.
+extern fn native_yield "sched_yield"() i32
+
 pub struct IoResult { value: isize, error: isize, ok: bool }
 pub struct PollDescriptor { descriptor: i32, events: i16, returned: i16 }
 pub const has_native_threads: bool = false
@@ -46,7 +49,7 @@ pub fn file_close(handle: isize) IoResult {
   return io_result(#syscall(sys.Close, handle))
 }
 pub fn thread_yield() {
-  _ = #syscall(sys.DisableThreadsignal, 1)
+  _ = native_yield()
 }
 pub fn socket_open(family: i32, kind: i32, protocol: i32) IoResult {
   return io_result(#syscall(sys.Socket, family, kind, protocol))

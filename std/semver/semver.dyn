@@ -32,7 +32,7 @@ fn parse_number(text: []const u8, offset: *usize, output: *u32, kind: *parse.Kin
   value: u64 = 0
   i := start
   for i < offset.* {
-    value = value * 10 + #cast(u64, (text[i] - '0'))
+    value = value * 10 + (text[i] - '0')
     if value > 4294967295 {
       kind.* = parse.Kind.Overflow
       offset.* = i

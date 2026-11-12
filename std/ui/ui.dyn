@@ -339,10 +339,10 @@ pub fn slider(context: *Context, id: u64, bounds: Rect, value: *i32, low, high: 
   response := interact(context, id, bounds, enabled)
   before := value.*
   current := #cast(i64, before)
-  if current < #cast(i64, low) {
+  if current < low {
     current = low
   }
-  if current > #cast(i64, high) {
+  if current > high {
     current = high
   }
   range := #cast(i64, high) - #cast(i64, low)
@@ -355,13 +355,13 @@ pub fn slider(context: *Context, id: u64, bounds: Rect, value: *i32, low, high: 
     if position > width {
       position = width
     }
-    current = #cast(i64, low) + (position * range + width / 2) / width
+    current = low + (position * range + width / 2) / width
   }
   if enabled && response.focused && !context.input.tab {
-    if context.input.left && current > #cast(i64, low) {
+    if context.input.left && current > low {
       current -= 1
     }
-    if context.input.right && current < #cast(i64, high) {
+    if context.input.right && current < high {
       current += 1
     }
   }
@@ -371,8 +371,8 @@ pub fn slider(context: *Context, id: u64, bounds: Rect, value: *i32, low, high: 
   response.changed = value.* != before
   rectangle(context, bounds, background(context, response, enabled))
   if bounds.width > 0 {
-    position := (current - #cast(i64, low)) * (#cast(i64, bounds.width) - 1) / range
-    rectangle(context, Rect{ x: coordinate(#cast(i64, bounds.x) + position), y: bounds.y, width: 1, height: bounds.height }, context.style.accent)
+    position := (current - low) * (#cast(i64, bounds.width) - 1) / range
+    rectangle(context, Rect{ x: coordinate(bounds.x + position), y: bounds.y, width: 1, height: bounds.height }, context.style.accent)
   }
   return response
 }

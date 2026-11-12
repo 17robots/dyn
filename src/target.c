@@ -45,6 +45,10 @@ const DynTarget *dyn_target_find(const char *name) {
   return NULL;
 }
 
+const DynTarget *dyn_target_at(size_t index) {
+  return index < sizeof(targets) / sizeof(targets[0]) ? &targets[index] : NULL;
+}
+
 const char *dyn_target_property(const DynTarget *target, const char *key) {
   if (!strcmp(key, "arch"))
     return target->arch;

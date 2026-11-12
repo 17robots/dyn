@@ -521,7 +521,7 @@ fn exchange(name: []const u8, server: *const network.Ipv4Address, packet: []u8,
   finite := timeout_milliseconds >= 0
   deadline := time.Deadline{}
   if finite {
-    created := time.deadline_after(#cast(i64, timeout_milliseconds) * time.Millisecond)
+    created := time.deadline_after(timeout_milliseconds * time.Millisecond)
     if io.failed(created.failure) {
       return Packet{error: created.failure.native, kind: created.failure.kind}
     }

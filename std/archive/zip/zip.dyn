@@ -201,7 +201,7 @@ pub fn next(state: *ArchiveReader) EntryResult {
     if #cast(usize, u16le(remaining, 20)) > #len(remaining) - 22 {
       return archive_failure(state, parse.Kind.Syntax)
     }
-    state.offset = start + 22 + #cast(usize, u16le(remaining, 20))
+    state.offset = start + 22 + u16le(remaining, 20)
     return EntryResult{ offset: state.offset }
   }
   if start > #len(state.source) || #len(state.source) - start < 30 || u32le(state.source, start) != 67324752 {

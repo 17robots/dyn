@@ -72,7 +72,7 @@ pub fn random_below(generator: *Random, bound: usize) usize {
   if bound == 0 {
     return 0
   }
-  return #cast(usize, (random_next(generator) % #cast(u64, bound)))
+  return #cast(usize, (random_next(generator) % bound))
 }
 
 // Clock failures are retained by the benchmark and returned by later queries.

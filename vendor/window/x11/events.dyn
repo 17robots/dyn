@@ -125,7 +125,7 @@ fn ordered_keyboard(window: *Window, event: *Event) {
   if event.kind == 2 {
     value.kind = ordered.Kind.KeyDown
     if code < 256 {
-      value.repeated = #cast(u32, window.ordered_pressed[code])
+      value.repeated = window.ordered_pressed[code]
       window.ordered_pressed[code] = 1
     }
   } else if code < 256 {

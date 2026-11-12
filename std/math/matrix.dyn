@@ -366,13 +366,13 @@ pub fn mat4_look_at(eye, target, up: Vec3) Mat4Result {
   return Mat4Result{ value: value, valid: true }
 }
 pub fn mat4_perspective(fov_y, aspect, near, far: f32) Mat4Result {
-  if !is_finite(fov_y) || !is_finite(aspect) || !is_finite(near) || !is_finite(far) || fov_y <= 0.0 || #cast(f64, fov_y) >= pi || aspect <= 0.0 || near <= 0.0 || far <= near {
+  if !is_finite(fov_y) || !is_finite(aspect) || !is_finite(near) || !is_finite(far) || fov_y <= 0.0 || fov_y >= pi || aspect <= 0.0 || near <= 0.0 || far <= near {
     return .{}
   }
   n := #cast(f64, near)
   f := #cast(f64, far)
   y := 1.0/tan(#cast(f64, fov_y)*0.5)
-  value := Mat4{ c0: Vec4{ x: #cast(f32, y/#cast(f64, aspect)) }, c1: Vec4{ y: #cast(f32, y) }, c2: Vec4{ z: #cast(f32, -(f+n)/(f-n)), w: -1.0 }, c3: Vec4{ z: #cast(f32, -2.0*f*n/(f-n)) } }
+  value := Mat4{ c0: Vec4{ x: #cast(f32, y/aspect) }, c1: Vec4{ y: #cast(f32, y) }, c2: Vec4{ z: #cast(f32, -(f+n)/(f-n)), w: -1.0 }, c3: Vec4{ z: #cast(f32, -2.0*f*n/(f-n)) } }
   if !mat4_finite(value) {
     return .{}
   }

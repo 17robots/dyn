@@ -18,7 +18,6 @@
 
 use "std/event" event
 use "std/io" io
-use "std/io" stream
 use "std/mem" mem
 use "std/net" network
 use "std/net/http" http
@@ -239,10 +238,10 @@ fn flush_blocking(connection: *Connection) bool {
   return true
 }
 
-fn output_write(data: rawptr, source: []const u8) stream.Transfer {
+fn output_write(data: rawptr, source: []const u8) io.Transfer {
   connection := #cast(*Connection, data)
   if connection.failed {
-    return stream.Transfer{ kind: io.Kind.InvalidState, status: stream.Status.Error }
+    return io.Transfer{ kind: io.Kind.InvalidState, status: io.Status.Error }
   }
   written: usize = 0
   for written < #len(source) {
@@ -250,7 +249,7 @@ fn output_write(data: rawptr, source: []const u8) stream.Transfer {
     if room == 0 {
       if !flush_blocking(connection) {
         connection.failed = true
-        return stream.Transfer{ transferred: written, kind: io.Kind.WouldBlock, status: stream.Status.Error }
+        return io.Transfer{ transferred: written, kind: io.Kind.WouldBlock, status: io.Status.Error }
       }
       room = #len(connection.output)
     }
@@ -262,11 +261,11 @@ fn output_write(data: rawptr, source: []const u8) stream.Transfer {
     connection.queued += count
     written += count
   }
-  return stream.Transfer{ transferred: written }
+  return io.Transfer{ transferred: written }
 }
 
 fn reject(connection: *Connection, status: u16, body: []const u8) {
-  response := http.Response{ output: stream.Writer{ data: connection, write: output_write } }
+  response := http.Response{ output: io.Writer{ data: connection, write: output_write } }
   _ = http.respond(&response, body, http.ResponseOptions{ status: status, content_type: "text/plain; charset=utf-8", close_connection: true })
   connection.close_after = true
   connection.rejected = true
@@ -314,7 +313,7 @@ fn serve_buffered(worker: *Worker, index: usize) bool {
     }
     request := framed.request
     request.context = worker.context
-    response := http.Response{ output: stream.Writer{ data: connection, write: output_write } }
+    response := http.Response{ output: io.Writer{ data: connection, write: output_write } }
     worker.requests += 1
     handled := worker.handler(&response, &request)
     consumed += framed.consumed
@@ -355,7 +354,7 @@ fn write_interest(connection: *const Connection) u32 {
 
 // Output is fully sent and the connection is done. Rejected plain TCP
 // connections drain first; TLS ones close at once, since a raw half-close
-// would cut the TLS stream.
+// would cut the TLS io.
 fn finish(worker: *Worker, index: usize) {
   connection := &worker.connections[index]
   if !connection.rejected || connection.draining || connection.transport != nil {

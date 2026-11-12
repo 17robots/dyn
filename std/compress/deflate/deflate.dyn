@@ -546,7 +546,7 @@ fn bits(reader: *Bits, count: usize, output: *u32) bool {
       factor *= 2
       shift_at += 1
     }
-    reader.value += (#cast(u32, reader.input[reader.at])) * factor
+    reader.value += reader.input[reader.at] * factor
     reader.at += 1
     reader.count += 8
   }
@@ -617,7 +617,7 @@ fn build(table: *Huffman, lengths: []const u8, symbols: usize, allow_empty: bool
       source := next[code_index]
       reversed: u32 = 0
       bit: usize = 0
-      for bit < #cast(usize, length) {
+      for bit < length {
         reversed = reversed * 2 + (source & 1)
         source /= 2
         bit += 1
@@ -1010,7 +1010,7 @@ fn grow_until_done(arena: *mem.Arena, input: []const u8, gzip: bool) Inflated {
 }
 
 fn crc_byte(previous: u32, byte: u8) u32 {
-  crc := previous ^ #cast(u32, byte)
+  crc := previous ^ byte
   for i in 0..8 {
     if (crc & 1) != 0 { crc = (crc >> 1) ^ 3988292384 } else { crc >>= 1 }
   }

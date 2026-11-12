@@ -79,7 +79,7 @@ pub struct Event {
 #assert(#offsetof(Event, text_length) == 52)
 #assert(#offsetof(Event, text) == 56)
 pub fn text(event: *const Event) []const u8 {
-  return event.text[..#cast(usize, event.text_length)]
+  return event.text[..event.text_length]
 }
 // Returns the producer's translated key snapshot, or zero when unavailable.
 pub fn character(event: *const Event) u32 {

@@ -290,7 +290,7 @@ fn fixed(source: []const u8, at, count: usize) i32 {
     if source[i] < 48 || source[i] > 57 {
       return -1
     }
-    result = result * 10 + #cast(i32, source[i] - 48)
+    result = result * 10 + (source[i] - 48)
   }
   return result
 }

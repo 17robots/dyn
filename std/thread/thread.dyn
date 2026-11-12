@@ -115,7 +115,7 @@ pub fn cpu_count() usize {
   for byte in mask[..#cast(usize, written)] {
     bits := byte
     for bits != 0 {
-      count += #cast(usize, bits & 1)
+      count += bits & 1
       bits >>= 1
     }
   }

@@ -48,7 +48,7 @@ pub fn vec2_normalize(a: Vec2) Vec2 {
   if magnitude == 0.0 {
     return Vec2{ x: 0.0, y: 0.0 }
   }
-  return Vec2{ x: #cast(f32, #cast(f64, a.x) / magnitude), y: #cast(f32, #cast(f64, a.y) / magnitude) }
+  return Vec2{ x: #cast(f32, a.x / magnitude), y: #cast(f32, a.y / magnitude) }
 }
 pub fn vec2_lerp(a, b: Vec2, t: f32) Vec2 {
   return Vec2{ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t }
@@ -91,7 +91,7 @@ pub fn vec3_normalize(a: Vec3) Vec3 {
   if magnitude == 0.0 {
     return Vec3{ x: 0.0, y: 0.0, z: 0.0 }
   }
-  return Vec3{ x: #cast(f32, #cast(f64, a.x) / magnitude), y: #cast(f32, #cast(f64, a.y) / magnitude), z: #cast(f32, #cast(f64, a.z) / magnitude) }
+  return Vec3{ x: #cast(f32, a.x / magnitude), y: #cast(f32, a.y / magnitude), z: #cast(f32, a.z / magnitude) }
 }
 pub fn vec3_lerp(a, b: Vec3, t: f32) Vec3 {
   return Vec3{ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, z: a.z + (b.z - a.z) * t }
@@ -138,7 +138,7 @@ pub fn vec4_normalize(a: Vec4) Vec4 {
   if magnitude == 0.0 {
     return Vec4{ x: 0.0, y: 0.0, z: 0.0, w: 0.0 }
   }
-  return Vec4{ x: #cast(f32, #cast(f64, a.x) / magnitude), y: #cast(f32, #cast(f64, a.y) / magnitude), z: #cast(f32, #cast(f64, a.z) / magnitude), w: #cast(f32, #cast(f64, a.w) / magnitude) }
+  return Vec4{ x: #cast(f32, a.x / magnitude), y: #cast(f32, a.y / magnitude), z: #cast(f32, a.z / magnitude), w: #cast(f32, a.w / magnitude) }
 }
 pub fn vec4_lerp(a, b: Vec4, t: f32) Vec4 {
   return Vec4{ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, z: a.z + (b.z - a.z) * t, w: a.w + (b.w - a.w) * t }

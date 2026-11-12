@@ -59,7 +59,7 @@ pub fn aead_seal(kind: u8, ciphertext: []u8, tag: []u8, plaintext: []const u8, a
   }
   final_count: i32 = 0
   if success {
-    success = evp_encrypt_final(context, mutable_pointer(ciphertext[#cast(usize, produced)..]), &final_count) == 1
+    success = evp_encrypt_final(context, mutable_pointer(ciphertext[produced..]), &final_count) == 1
   }
   if success {
     success = evp_control(context, AeadGetTag, 16, mutable_pointer(tag[..16])) == 1
@@ -107,7 +107,7 @@ pub fn aead_open(kind: u8, plaintext: []u8, ciphertext: []const u8, tag: []const
   }
   final_count: i32 = 0
   if success {
-    success = evp_decrypt_final(context, mutable_pointer(plaintext[#cast(usize, produced)..]), &final_count) == 1
+    success = evp_decrypt_final(context, mutable_pointer(plaintext[produced..]), &final_count) == 1
   }
   code: u64 = 0
   if !success {

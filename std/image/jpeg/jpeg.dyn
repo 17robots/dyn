@@ -42,7 +42,7 @@ fn take(bits: *Bits, count: u8) u32 {
       }
       bits.at += 1
     }
-    bits.buffer = (bits.buffer << 8) | #cast(u32, value)
+    bits.buffer = (bits.buffer << 8) | value
     bits.count += 8
   }
   bits.count -= count
@@ -56,7 +56,7 @@ fn symbol(bits: *Bits, table: *const Huffman) u8 {
       return 0
     }
     start := table.first[length]
-    if value >= start && value - start < #cast(u32, table.counts[length]) {
+    if value >= start && value - start < table.counts[length] {
       return table.values[#cast(usize, table.offsets[length]) + #cast(usize, (value - start))]
     }
   }
@@ -104,7 +104,7 @@ fn block(decoder: *Decoder, bits: *Bits, component: *Component, bx, by: usize) b
     return invalid(decoder)
   }
   q := #cast(usize, component.quant)
-  coefficients[0] = (component.prediction * #cast(i32, decoder.quant[q][0]))
+  coefficients[0] = (component.prediction * decoder.quant[q][0])
   at: usize = 1
   nonzero := false
   for at < 64 {
@@ -132,7 +132,7 @@ fn block(decoder: *Decoder, bits: *Bits, component: *Component, bx, by: usize) b
     if bits.failed {
       return invalid(decoder)
     }
-    coefficients[Zigzag[at]] = (amplitude * #cast(i32, decoder.quant[q][at]))
+    coefficients[Zigzag[at]] = (amplitude * decoder.quant[q][at])
     nonzero = true
     at += 1
   }
@@ -294,8 +294,8 @@ fn allocate_planes(arena: *mem.Arena, decoder: *Decoder) bool {
   total: u64 = 0
   for i in 0..decoder.count {
     component := &decoder.components[i]
-    component.stride = columns * #cast(usize, component.h) * 8
-    component.rows = rows * #cast(usize, component.v) * 8
+    component.stride = columns * component.h * 8
+    component.rows = rows * component.v * 8
     size := #cast(u64, component.stride) * #cast(u64, component.rows)
     if size > 67108864 - total {
       decoder.kind = parse.Kind.Capacity

@@ -530,11 +530,15 @@ static uint32_t sema_find_field(DynAstProgram *a, uint32_t sid, DynSpan name,
       sizeof(*a->fields), st->field_count, name, s, false, &a->allocation_failed);
 }
 /* Vet reports user code only: std implements these operations on purpose. */
+/* Vet reports only the user's own code, never std or vendored modules. */
+static bool vet_path_skipped(const char *path) {
+  return !path || strstr(path, "/std/") || strstr(path, "/share/dyn/") || strstr(path, "/vendor/");
+}
 static void sema_vet_note(const DynSource *s, DynSpan span, bool unsafe_note, const char *message) {
   if (!s->context.vet || (unsafe_note && !s->context.vet_unsafe)) return;
   const char *path, *text; size_t length, at;
   dyn_source_position(s, span.start_byte, &path, &text, &length, &at);
-  if (path && (strstr(path, "/std/") || strstr(path, "/share/dyn/") || strstr(path, "/vendor/"))) return;
+  if (path && vet_path_skipped(path)) return;
   dyn_diagnostic_source("warning", s, span.start_byte, span.end_byte, message);
   if (s->context.vet_findings) ++*s->context.vet_findings;
 }
@@ -628,6 +632,12 @@ static bool lossless(Sema *sema, DynType from, DynType to) {
   }
   return false;
 }
+/* x += y widens y as x = x + y would: the operator meets at x's type when
+   y converts to it losslessly. Shifts take any unsigned count instead. */
+static bool compound_widens(Sema *sema, DynOperator op, DynType value, DynType target) {
+  return op != DYN_OP_NONE && op != DYN_OP_SHL && op != DYN_OP_SHR &&
+         numeric(sema, value) && numeric(sema, target) && lossless(sema, value, target);
+}
 /* Whether #cast names a builtin number type. A named type can be an alias
    that differs by target, so a cast to it can be needed elsewhere. */
 static bool vet_cast_builtin(const DynSource *s, DynSpan span) {
@@ -641,18 +651,45 @@ static bool vet_cast_builtin(const DynSource *s, DynSpan span) {
     if (strlen(names[i]) == end - at && !memcmp(s->text + at, names[i], end - at)) return true;
   return false;
 }
+/* A builtin-type cast in a typed slot. Redundant ones are reported, or
+   collected for the other targets to confirm; a target that needs the cast
+   marks it so it is not reported. */
+static void vet_cast_report(const DynSource *s, DynSpan span, bool redundant) {
+  DynVetCasts *casts = s->context.vet_casts;
+  if (!casts) {
+    if (redundant) sema_vet_note(s, span, false, "cast is implicit here");
+    return;
+  }
+  const char *path, *text; size_t length, at;
+  dyn_source_position(s, span.start_byte, &path, &text, &length, &at);
+  if (vet_path_skipped(path)) return;
+  for (size_t i = 0; i < casts->count; ++i)
+    if (casts->items[i].at == at && !strcmp(casts->items[i].path, path)) {
+      if (!redundant) casts->items[i].needed = true;
+      return;
+    }
+  if (casts->confirm || !redundant) return;
+  if (casts->count == casts->capacity) {
+    size_t capacity = casts->capacity ? casts->capacity * 2 : 16;
+    DynVetCast *items = realloc(casts->items, capacity * sizeof(*items));
+    if (!items) { casts->failed = true; return; }
+    casts->items = items;
+    casts->capacity = capacity;
+  }
+  char *copy = strdup(path);
+  if (!copy) { casts->failed = true; return; }
+  casts->items[casts->count++] = (DynVetCast){copy, at, span.start_byte, span.end_byte, false};
+}
 static void vet_cast(Sema *sema, DynAstProgram *a, const DynSource *s, DynExprId id,
                      DynType target) {
   if (!s->context.vet || id == DYN_NO_EXPR) return;
   if (sema->current_function != UINT32_MAX && a->functions[sema->current_function].is_instance)
     return;
   const DynAstExpr *e = &a->expressions[id];
-  if (e->kind != DYN_EXPR_CAST || e->left == DYN_NO_EXPR || e->type != target) return;
+  if (e->kind != DYN_EXPR_CAST || e->left == DYN_NO_EXPR || !vet_cast_builtin(s, e->span)) return;
   DynType from = a->expressions[e->left].type;
-  if (from == DYN_TYPE_ERROR || (from != target && !lossless(sema, from, target)) ||
-      !vet_cast_builtin(s, e->span))
-    return;
-  sema_vet_note(s, e->span, false, "cast is implicit here");
+  if (from == DYN_TYPE_ERROR || e->type == DYN_TYPE_ERROR || target == DYN_TYPE_ERROR) return;
+  vet_cast_report(s, e->span, e->type == target && (from == target || lossless(sema, from, target)));
 }
 static DynAstPointer *pointer_info(DynAstProgram *a, DynType t) {
   return dyn_type_is_pointer(t) && t - DYN_TYPE_POINTER_BASE < a->pointer_count
@@ -915,12 +952,12 @@ static DynExprId index_operand(Sema *sema, DynAstProgram *a, DynExprId operand, 
   }
   const DynAstExpr *cast = &a->expressions[operand];
   if (s->context.vet && cast->kind == DYN_EXPR_CAST && cast->left != DYN_NO_EXPR &&
-      t == DYN_TYPE_USIZE &&
+      vet_cast_builtin(s, cast->span) &&
       !(sema->current_function != UINT32_MAX && a->functions[sema->current_function].is_instance)) {
     DynType from = a->expressions[cast->left].type;
-    if ((from == DYN_TYPE_USIZE || (from != DYN_TYPE_ISIZE && integer(sema, from) && bits(sema, from) <= 32)) &&
-        vet_cast_builtin(s, cast->span))
-      sema_vet_note(s, cast->span, false, "cast is implicit here");
+    if (from != DYN_TYPE_ERROR)
+      vet_cast_report(s, cast->span, t == DYN_TYPE_USIZE &&
+          (from == DYN_TYPE_USIZE || (from != DYN_TYPE_ISIZE && integer(sema, from) && bits(sema, from) <= 32)));
   }
   if (!signed_int(sema, t)) return operand;
   if (bits(sema, t) > bits(sema, DYN_TYPE_USIZE)) {
@@ -1808,6 +1845,43 @@ static bool untyped_constant(Sema *sema, DynAstProgram *a, DynExprId id, const D
   }
   default: return false;
   }
+}
+/* Whether an operand's type stands on its own. Literals and untyped
+   constants take the other operand's type, so dropping a cast beside one
+   would change the arithmetic. */
+static bool vet_fixed_type(Sema *sema, DynAstProgram *a, DynExprId id, const DynSource *s,
+                           unsigned depth) {
+  if (id == DYN_NO_EXPR || depth > 64 || untyped_constant(sema, a, id, s, 0)) return false;
+  const DynAstExpr *e = &a->expressions[id];
+  switch (e->kind) {
+  case DYN_EXPR_NAME: case DYN_EXPR_GLOBAL: case DYN_EXPR_FIELD: case DYN_EXPR_INDEX:
+  case DYN_EXPR_CALL: case DYN_EXPR_CONVERT: case DYN_EXPR_LIMIT:
+    return true;
+  case DYN_EXPR_UNARY:
+    return vet_fixed_type(sema, a, e->left, s, depth + 1);
+  case DYN_EXPR_BINARY:
+    return vet_fixed_type(sema, a, e->left, s, depth + 1) ||
+           vet_fixed_type(sema, a, e->right, s, depth + 1);
+  default:
+    return false;
+  }
+}
+/* A cast on one side of an operator whose other side already has the cast's
+   type: the operator widens the operand itself. Not when both sides are
+   casts, since dropping both would narrow the arithmetic. */
+static void vet_operand_cast(Sema *sema, DynAstProgram *a, const DynSource *s, DynExprId id,
+                             DynExprId other) {
+  if (!s->context.vet || id == DYN_NO_EXPR || other == DYN_NO_EXPR) return;
+  if (sema->current_function != UINT32_MAX && a->functions[sema->current_function].is_instance)
+    return;
+  const DynAstExpr *e = &a->expressions[id];
+  if (e->kind != DYN_EXPR_CAST || e->left == DYN_NO_EXPR || !vet_cast_builtin(s, e->span)) return;
+  DynType from = a->expressions[e->left].type;
+  if (from == DYN_TYPE_ERROR || e->type == DYN_TYPE_ERROR) return;
+  bool redundant = from == e->type ||
+      (a->expressions[other].kind != DYN_EXPR_CAST && a->expressions[other].type == e->type &&
+       lossless(sema, from, e->type) && vet_fixed_type(sema, a, other, s, 0));
+  vet_cast_report(s, e->span, redundant);
 }
 static DynExprId copy_untyped(DynAstProgram *a, DynExprId id) {
   if (id == DYN_NO_EXPR) return id;
@@ -2919,6 +2993,19 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
       right = left;
     }
   }
+  /* Mixed number types meet at the wider one when that widening is lossless
+     on every target, as it would be in a typed slot: u32 + u64 is u64,
+     u32 < i64 compares as i64. u64 < i64 still needs a cast. */
+  if (left != right && numeric(sema, left) && numeric(sema, right) &&
+      a->expressions[id].op != DYN_OP_LOGICAL_AND && a->expressions[id].op != DYN_OP_LOGICAL_OR) {
+    if (lossless(sema, right, left)) {
+      a->expressions[id].right = convert_expr(a, a->expressions[id].right, left);
+      right = left;
+    } else if (lossless(sema, left, right)) {
+      a->expressions[id].left = convert_expr(a, a->expressions[id].left, right);
+      left = right;
+    }
+  }
   if (left != right) {
     char lhs[128], rhs[128], message[384];
     type_name_into(a, left, s, lhs, sizeof(lhs));
@@ -2928,6 +3015,11 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
              rhs);
     error_span(a->expressions[id].span, s, errors, message);
     return a->expressions[id].type = DYN_TYPE_ERROR;
+  }
+  if (numeric(sema, left) && a->expressions[id].op != DYN_OP_LOGICAL_AND &&
+      a->expressions[id].op != DYN_OP_LOGICAL_OR) {
+    vet_operand_cast(sema, a, s, a->expressions[id].left, a->expressions[id].right);
+    vet_operand_cast(sema, a, s, a->expressions[id].right, a->expressions[id].left);
   }
   if (a->expressions[id].op == DYN_OP_LOGICAL_AND || a->expressions[id].op == DYN_OP_LOGICAL_OR) {
     if (left != DYN_TYPE_BOOL)
@@ -3948,14 +4040,15 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
   if (st->target != DYN_NO_EXPR) {
     DynType target = check_expr(sema, a, st->target, s, errors, DYN_TYPE_INFER),
             value = check_expr(sema, a, st->expression, s, errors, target);
-    if (st->assignment_op == DYN_OP_NONE)
+    bool field_shift = st->assignment_op == DYN_OP_SHL || st->assignment_op == DYN_OP_SHR;
+    if (!field_shift)
       vet_cast(sema, a, s, st->expression, target);
     if (lvalue_const(a, st->target))
       error_span(st->span, s, errors, "assignment through *const pointer");
     if (value != target && value != DYN_TYPE_ERROR &&
         target != DYN_TYPE_ERROR) {
-      if (can_convert(sema, a, value, target) &&
-          st->assignment_op == DYN_OP_NONE)
+      if ((can_convert(sema, a, value, target) && st->assignment_op == DYN_OP_NONE) ||
+          compound_widens(sema, st->assignment_op, value, target))
         st->expression = convert_expr(a, st->expression, target);
       else
         error_types(a, st->span, s, errors, "field assignment type mismatch",
@@ -4016,14 +4109,15 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
       st->assignment_op == DYN_OP_SHL || st->assignment_op == DYN_OP_SHR;
   DynType value = check_expr(sema, a, st->expression, s, errors,
                              shift ? DYN_TYPE_USIZE : target);
-  if (!shift && st->assignment_op == DYN_OP_NONE)
+  if (!shift)
     vet_cast(sema, a, s, st->expression, target);
   if (shift) {
     if (!integer(sema, value) || signed_int(sema, value))
       error_span(st->span, s, errors, "shift count requires unsigned integer");
   } else if (value != target && value != DYN_TYPE_ERROR &&
              target != DYN_TYPE_ERROR) {
-    if (can_convert(sema, a, value, target) && st->assignment_op == DYN_OP_NONE)
+    if ((can_convert(sema, a, value, target) && st->assignment_op == DYN_OP_NONE) ||
+        compound_widens(sema, st->assignment_op, value, target))
       st->expression = convert_expr(a, st->expression, target);
     else
       error_types(a, st->span, s, errors, "assignment type mismatch", target,

@@ -50,7 +50,7 @@ fn trace_code(table: usize, address: usize) usize {
   return address
 }
 fn trace_offset(table: usize, address: usize) usize {
-  text := trace_code(table, trace_word(trace_header)) - #cast(usize, trace_u32(table + 20))
+  text := trace_code(table, trace_word(trace_header)) - trace_u32(table + 20)
   code := trace_code(table, address)
   if code < text {
     return #max(usize)
@@ -60,7 +60,7 @@ fn trace_offset(table: usize, address: usize) usize {
 // The function record holding address, or 0.
 fn trace_function(table: usize, address: usize) usize {
   offset := trace_offset(table, address)
-  if offset >= #cast(usize, trace_u32(table + 24)) {
+  if offset >= trace_u32(table + 24) {
     return 0
   }
   low: usize = 0
@@ -68,9 +68,9 @@ fn trace_function(table: usize, address: usize) usize {
   for low < high {
     middle := (low + high) / 2
     record := table + 40 + 24 * middle
-    if offset < #cast(usize, trace_u32(record)) {
+    if offset < trace_u32(record) {
       high = middle
-    } else if offset >= #cast(usize, trace_u32(record + 4)) {
+    } else if offset >= trace_u32(record + 4) {
       low = middle + 1
     } else {
       return record
@@ -85,7 +85,7 @@ fn trace_line(table: usize, record: usize, address: usize) u32 {
   line: u32 = 0
   for i in 0..#cast(usize, trace_u32(record + 12)) {
     row := rows + 8 * (first + i)
-    if #cast(usize, trace_u32(row)) > offset {
+    if trace_u32(row) > offset {
       break
     }
     line = trace_u32(row + 4)
@@ -138,7 +138,7 @@ fn trace_walk(pc: usize, fp: usize, exact: bool, frames: []usize) u64 {
   return total
 }
 fn write_string(text: []const u8) {
-  trace_write(&text[0], #cast(u64, #len(text)))
+  trace_write(&text[0], #len(text))
 }
 // "  at function (path:line)".
 fn trace_frame(table: usize, address: usize) {
@@ -148,7 +148,7 @@ fn trace_frame(table: usize, address: usize) {
   }
   names := table + 40 + 24 * #cast(usize, trace_u32(table + 28)) + 8 * #cast(usize, trace_u32(table + 32))
   write_string("  at ")
-  trace_write(#cast(*const u8, names + #cast(usize, trace_u32(record + 16))), #cast(u64, trace_u32(record + 20)))
+  trace_write(#cast(*const u8, names + trace_u32(record + 16)), trace_u32(record + 20))
   digits: [10]u8 = []
   at: usize = 10
   value := trace_line(table, record, address)
@@ -160,7 +160,7 @@ fn trace_frame(table: usize, address: usize) {
       break
     }
   }
-  trace_write(&digits[at], #cast(u64, 10 - at))
+  trace_write(&digits[at], 10 - at)
   write_string(")\n")
 }
 fn trace_print(frames: []usize, total: u64) {
@@ -176,7 +176,7 @@ fn trace_print(frames: []usize, total: u64) {
   for i in 0..inner {
     trace_frame(table, frames[i])
   }
-  if total <= #cast(u64, trace_inner) {
+  if total <= trace_inner {
     return
   }
   ring := trace_frames - trace_inner
@@ -196,7 +196,7 @@ fn trace_print(frames: []usize, total: u64) {
         break
       }
     }
-    trace_write(&digits[at], #cast(u64, 20 - at))
+    trace_write(&digits[at], 20 - at)
     write_string(" more frames\n")
   }
   for k in start..rest {

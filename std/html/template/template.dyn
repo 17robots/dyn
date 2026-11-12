@@ -1,6 +1,5 @@
 use "std/parse" parse
 use "std/io" io
-use "std/io" stream
 use "std/mem" memory
 use "std/text/template" core
 
@@ -13,9 +12,9 @@ pub fn parse(arena: *memory.Arena, source: []const u8) ParseResult {
   return core.parse(arena, source)
 }
 
-fn write(destination: stream.Writer, source: []const u8) RenderResult {
-  result := stream.write_all(destination, source)
-  if result.status == stream.Status.Error {
+fn write(destination: io.Writer, source: []const u8) RenderResult {
+  result := io.write_all(destination, source)
+  if result.status == io.Status.Error {
     kind:=result.kind
     if kind==io.Kind.Ok {
       kind=io.Kind.System
@@ -25,7 +24,7 @@ fn write(destination: stream.Writer, source: []const u8) RenderResult {
   return RenderResult{}
 }
 
-fn write_escaped(destination: stream.Writer, source: []const u8) RenderResult {
+fn write_escaped(destination: io.Writer, source: []const u8) RenderResult {
   start: usize = 0
   for i in 0..#len(source) {
     replacement: []const u8 = ""
@@ -61,6 +60,6 @@ fn write_escaped(destination: stream.Writer, source: []const u8) RenderResult {
 }
 
 // Escapes text and quoted attribute values. Not a JS/CSS/URL-context sanitizer.
-pub fn render(destination: stream.Writer, template: *const Template, fields: []const Field) RenderResult {
+pub fn render(destination: io.Writer, template: *const Template, fields: []const Field) RenderResult {
   return core.render_with(destination, template, fields, write_escaped)
 }

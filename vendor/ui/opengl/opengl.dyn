@@ -120,7 +120,7 @@ fn glyph(renderer: *Renderer, clip: ui.Rect, tint: ui.Color, font: software.Font
     return -1
   }
   if bitmap.width == 0 || bitmap.height == 0 {
-    return #cast(i64, bitmap.advance)
+    return bitmap.advance
   }
   if bitmap.stride < #cast(usize, bitmap.width) || bitmap.stride > 2147483647 || #cast(usize, bitmap.width) > #len(bitmap.pixels) {
     return -1
@@ -128,20 +128,20 @@ fn glyph(renderer: *Renderer, clip: ui.Rect, tint: ui.Color, font: software.Font
   if #cast(usize, bitmap.height-1) > (#len(bitmap.pixels)-#cast(usize, bitmap.width))/bitmap.stride {
     return -1
   }
-  left := x+#cast(i64, bitmap.x_offset)
-  top := y+#cast(i64, bitmap.y_offset)
-  if left >= #cast(i64, clip.x)+#cast(i64, clip.width) || top >= #cast(i64, clip.y)+#cast(i64, clip.height) || left+#cast(i64, bitmap.width) <= #cast(i64, clip.x) || top+#cast(i64, bitmap.height) <= #cast(i64, clip.y) {
-    return #cast(i64, bitmap.advance)
+  left := x+bitmap.x_offset
+  top := y+bitmap.y_offset
+  if left >= #cast(i64, clip.x)+#cast(i64, clip.width) || top >= #cast(i64, clip.y)+#cast(i64, clip.height) || left+bitmap.width <= clip.x || top+bitmap.height <= clip.y {
+    return bitmap.advance
   }
   gx := left
   gy := top
-  right := left+#cast(i64, bitmap.width)
-  bottom := top+#cast(i64, bitmap.height)
-  if gx < #cast(i64, clip.x) {
-    gx = #cast(i64, clip.x)
+  right := left+bitmap.width
+  bottom := top+bitmap.height
+  if gx < clip.x {
+    gx = clip.x
   }
-  if gy < #cast(i64, clip.y) {
-    gy = #cast(i64, clip.y)
+  if gy < clip.y {
+    gy = clip.y
   }
   if right > #cast(i64, clip.x)+#cast(i64, clip.width) {
     right = #cast(i64, clip.x)+#cast(i64, clip.width)
@@ -157,11 +157,11 @@ fn glyph(renderer: *Renderer, clip: ui.Rect, tint: ui.Color, font: software.Font
   // Upload only visible rows, without requiring final-row atlas padding.
   renderer.api.tex_image_2d(gl.Texture2d, 0, #cast(i32, gl.R8), cropped_width, cropped_height, 0, gl.Red, gl.UnsignedByte, nil)
   for row in 0..cropped_height {
-    offset := #cast(usize, gy-top+#cast(i64, row))*bitmap.stride+#cast(usize, gx-left)
+    offset := #cast(usize, gy-top+row)*bitmap.stride+#cast(usize, gx-left)
     renderer.api.tex_sub_image_2d(gl.Texture2d, 0, 0, row, cropped_width, 1, gl.Red, gl.UnsignedByte, #cast(rawptr, &bitmap.pixels[offset]))
   }
   quad(renderer, #cast(f32, gx), #cast(f32, gy), #cast(f32, right), #cast(f32, bottom), tint)
-  return #cast(i64, bitmap.advance)
+  return bitmap.advance
 }
 // Draws in order, with command clip snapshots. Font coverage is borrowed only
 // until the next callback. No persistent glyph cache or frame allocations.
@@ -256,8 +256,8 @@ pub fn render(renderer: *Renderer, commands: *const ui.Command, width, height: i
             codepoint = 65533
           }
           if codepoint == 10 {
-            x = #cast(i64, command.bounds.x)
-            y += #cast(i64, font.line_height)
+            x = command.bounds.x
+            y += font.line_height
           } else if codepoint != 13 {
             advance := glyph(renderer, clip, command.color, font, codepoint, x, y)
             if advance == -2 {

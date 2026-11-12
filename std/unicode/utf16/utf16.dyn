@@ -37,8 +37,8 @@ pub fn encode(destination: []u16, codepoint: u32) usize {
     return 0
   }
   value := codepoint - 65536
-  destination[0] = #cast(u16, (#cast(u32, 55296) + value / 1024))
-  destination[1] = #cast(u16, (#cast(u32, 56320) + value % 1024))
+  destination[0] = #cast(u16, (55296 + value / 1024))
+  destination[1] = #cast(u16, (56320 + value % 1024))
   return 2
 }
 

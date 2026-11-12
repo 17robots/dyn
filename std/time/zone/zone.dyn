@@ -55,12 +55,12 @@ fn rule_day(rule: Rule, year: i32) i64 {
     return first + day
   }
   if rule.kind == 1 {
-    return first + #cast(i64, rule.day)
+    return first + rule.day
   }
   month_start := time.days_from_civil(year, rule.month, 1)
   first_day := time.DateTime{ year: year, month: rule.month, day: 1 }
   start_weekday := #cast(i64, #cast(u8, time.weekday(&first_day)))
-  day := month_start + (#cast(i64, rule.weekday) - start_weekday + 7) % 7 + (#cast(i64, rule.week) - 1) * 7
+  day := month_start + (rule.weekday - start_weekday + 7) % 7 + (#cast(i64, rule.week) - 1) * 7
   lengths: [12]i64 = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
   length := lengths[#cast(usize, rule.month) - 1]
   if rule.month == 2 && leap {
@@ -74,7 +74,7 @@ fn rule_day(rule: Rule, year: i32) i64 {
 
 // The UTC second at which rule fires in year, for wall clock offset.
 fn rule_instant(rule: Rule, year: i32, offset: i32) i64 {
-  return rule_day(rule, year) * 86400 + #cast(i64, rule.time) - #cast(i64, offset)
+  return rule_day(rule, year) * 86400 + rule.time - offset
 }
 
 fn rule_type(zone: *const Zone, seconds: i64) Type {
@@ -217,7 +217,7 @@ pub fn parse_tzif(arena: *mem.Arena, name: []const u8, data: []const u8) ZoneRes
   indexes := body + transition_count * time_size
   for i in 0..transition_count {
     index := data[indexes + i]
-    if #cast(usize, index) >= type_count {
+    if index >= type_count {
       mem.arena_rewind(arena, mark)
       return invalid()
     }
@@ -284,7 +284,7 @@ fn number(cursor: *Cursor, maximum: i64) i64 {
   }
   value: i64 = 0
   for digit(peek(cursor)) {
-    value = value * 10 + #cast(i64, peek(cursor) - '0')
+    value = value * 10 + (peek(cursor) - '0')
     cursor.at += 1
     if value > maximum {
       cursor.ok = false

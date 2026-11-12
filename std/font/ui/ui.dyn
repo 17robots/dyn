@@ -20,7 +20,7 @@ fn glyph(raw: rawptr, codepoint: u32) software.Glyph {
     return software.Glyph{ width: -1 }
   }
   scale := #cast(f64, state.pixels_per_em) / #cast(f64, state.face.units_per_em)
-  ascent := #cast(i32, math.ceil64(#cast(f64, state.face.ascent) * scale))
+  ascent := #cast(i32, math.ceil64(state.face.ascent * scale))
   value := bitmap.value
   return software.Glyph{ pixels: value.pixels, width: value.width, height: value.height, stride: #cast(usize, value.width),
     x_offset: value.x_offset, y_offset: value.y_offset + ascent, advance: value.advance }
@@ -38,7 +38,7 @@ pub fn renderer(state: *Adapter) software.Font {
     return software.Font{}
   }
   scale := #cast(f64, state.pixels_per_em) / #cast(f64, state.face.units_per_em)
-  return software.Font{ data: state, glyph: glyph, line_height: #cast(i32, math.ceil64(#cast(f64, height) * scale)) }
+  return software.Font{ data: state, glyph: glyph, line_height: #cast(i32, math.ceil64(height * scale)) }
 }
 
 fn atlas_glyph(raw: rawptr, codepoint: u32) software.Glyph {

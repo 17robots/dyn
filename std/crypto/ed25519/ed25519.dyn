@@ -171,7 +171,7 @@ fn decode(input: []const u8) Decoded {
     return Decoded{}
   }
   // Decode the negated point, for [S]B-[h]A.
-  if f.parity(x)==#cast(i64, input[31]>>7) {
+  if f.parity(x)==(input[31]>>7) {
     x=f.sub(f.number(0), x)
   }
   return Decoded{point:Point{x:x, y:y, z:one, t:f.multiply(x, y)}, ok:true}
@@ -213,11 +213,11 @@ pub fn verify(signature: []const u8, message: []const u8, key: []const u8) bool 
   less:=false
   for step in 0..32 {
     i:=31-step
-    if #cast(i64, signature[i+32])<L[i] {
+    if signature[i+32]<L[i] {
       less=true
       break
     }
-    if #cast(i64, signature[i+32])>L[i] {
+    if signature[i+32]>L[i] {
       return false
     }
   }

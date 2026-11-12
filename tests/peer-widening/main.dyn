@@ -1,0 +1,33 @@
+// Mixed number types meet at the wider one when the widening is lossless on
+// every target. Each operand keeps its own arithmetic until then.
+use "std/io" io
+
+struct Totals { sum: u64, scale: f64 }
+
+counter: i64 = 10
+
+fn main() {
+  small: u8 = 200
+  medium: u32 = 4000000000
+  large: u64 = 5
+  signed: i64 = -3
+  index: usize = 7
+  ratio: f64 = 0.5
+
+  io.println("{} {} {}", medium + large, small + medium, large * medium)
+  io.println("{} {} {}", medium < signed, signed < medium, small == 200)
+  io.println("{} {}", index + medium, ratio * small)
+  io.println("{} {}", (small | large) & 0xff, medium ^ large)
+
+  // Narrow operands still wrap before they widen.
+  wrapped := medium * medium + large
+  io.println("{}", wrapped)
+
+  large += medium
+  signed -= small
+  totals := Totals{ sum: 1, scale: 2.0 }
+  totals.sum += medium
+  totals.scale *= small
+  counter += medium
+  io.println("{} {} {} {} {}", large, signed, totals.sum, totals.scale, counter)
+}

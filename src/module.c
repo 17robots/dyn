@@ -713,7 +713,11 @@ static int visit(Resolver *r, const char *directory,
           dyn_diagnostic_source("error", s, item.start, item.end, message);
           result = 1;
         } else {
-          if (s->context.vet && has(file_targets, file_target_count, target)) {
+          const char *vet_path, *vet_text; size_t vet_length, vet_at;
+          dyn_source_position(s, item.start, &vet_path, &vet_text, &vet_length, &vet_at);
+          bool own = vet_path && !strstr(vet_path, "/std/") && !strstr(vet_path, "/share/dyn/") &&
+                     !strstr(vet_path, "/vendor/");
+          if (s->context.vet && own && has(file_targets, file_target_count, target)) {
             char message[512];
             snprintf(
                 message, sizeof(message),

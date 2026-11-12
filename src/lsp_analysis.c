@@ -703,9 +703,12 @@ LspSemantic lsp_semantic_project(LspDocument *documents, size_t count,
   }
   DynSources project = {0};
   LspDiagnostics diagnostics = {0};
+  /* A confirm-mode collector with no candidates reports no casts: the cast
+     check needs every target, so it runs in dyn vet, not on each edit. */
+  static DynVetCasts no_casts = {.confirm = true};
   // Editors show vet findings as warnings, as gopls does.
   DynContext context = {.target = lsp_target_current(), .work = lsp_work_current(), .diagnostic = lsp_collect_diagnostic,
-                        .diagnostic_data = &diagnostics, .vet = true,
+                        .diagnostic_data = &diagnostics, .vet = true, .vet_casts = &no_casts,
                         .syntax_cache = requested->analysis_cache
                             ? &requested->analysis_cache->syntax : NULL};
   int loaded = lsp_load_semantic_project(documents, count, requested, replacement,

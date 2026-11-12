@@ -168,8 +168,7 @@ fn search_walk(directory: []const u8, result: *Search) {
     }
     if entry.kind == 4 {
       search_walk(joined.value, result)
-    }
-    else if strings.ends_with(entry.name, ".txt") {
+    } else if strings.ends_with(entry.name, ".txt") {
       read := fs.read_all(scratch, joined.value, 1024 * mem.MiB)
       if read.failure.kind != io.Kind.Ok {
         #panic("read search")
@@ -295,11 +294,9 @@ fn main() {
   }
   if strings.equal(args[1], "report") {
     report(args[2])
-  }
-  else if strings.equal(args[1], "search") {
+  } else if strings.equal(args[1], "search") {
     search(args[2])
-  }
-  else {
+  } else {
     #panic("unknown mode")
   }
 }

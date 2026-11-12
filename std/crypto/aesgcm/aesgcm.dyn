@@ -11,8 +11,8 @@ fn multiply(left: u8, right: u8) u8 {
   b := right
   result: u8 = 0
   for i in 0..8 {
-    result ^= a & (#cast(u8, 0) - (b & 1))
-    a = (a << 1) ^ (0x1b & (#cast(u8, 0) - (a >> 7)))
+    result ^= a & (0 - (b & 1))
+    a = (a << 1) ^ (0x1b & (0 - (a >> 7)))
     b >>= 1
   }
   return result
@@ -109,10 +109,10 @@ fn product(left: Block, right: Block) Block {
     } else {
       bit = (left.low >> #cast(u64, 127-i)) & 1
     }
-    mask := #cast(u64, 0) - bit
+    mask := 0 - bit
     z.high ^= v.high & mask
     z.low ^= v.low & mask
-    reduction := 0xe100000000000000 & (#cast(u64, 0) - (v.low & 1))
+    reduction := 0xe100000000000000 & (0 - (v.low & 1))
     v.low = (v.low >> 1) | (v.high << 63)
     v.high = (v.high >> 1) ^ reduction
   }
@@ -153,7 +153,7 @@ fn transform(key: *const Key, j0: Block, output: []u8, input: []const u8) {
   at: usize = 0
   for at < #len(input) {
     low := #cast(u32, counter.low) + 1
-    counter.low = (counter.low & 0xffffffff00000000) | #cast(u64, low)
+    counter.low = (counter.low & 0xffffffff00000000) | low
     stream := encrypt(key, counter)
     buffer: [16]u8 = []
     binary.store_u64_be(buffer[..8], stream.high)

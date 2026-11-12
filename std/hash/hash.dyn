@@ -4,7 +4,7 @@
 pub fn hash64(source: []const u8) u64 {
   value: u64 = 14695981039346656037
   for byte in source {
-    value = (value ^ #cast(u64, byte)) * 1099511628211
+    value = (value ^ byte) * 1099511628211
   }
   return value
 }
@@ -53,7 +53,7 @@ pub fn crc32(source: []const u8) u32 {
 pub fn crc32_update(previous: u32, source: []const u8) u32 {
   value := previous ^ 4294967295
   for byte in source {
-    value = crc32_table[(value ^ #cast(u32, byte)) & 255] ^ (value >> 8)
+    value = crc32_table[(value ^ byte) & 255] ^ (value >> 8)
   }
   return value ^ 4294967295
 }
@@ -61,7 +61,7 @@ pub fn crc32_update(previous: u32, source: []const u8) u32 {
 pub fn checksum32(source: []const u8) u32 {
   value: u32 = 0
   for byte in source {
-    value += #cast(u32, byte)
+    value += byte
   }
   return value
 }
@@ -152,5 +152,5 @@ pub fn wyhash(source: []const u8, seed: u64) u64 {
   a ^= wy_secret1
   b ^= value
   product := multiply_wide(a, b)
-  return wy_mix(product.low ^ wy_secret0 ^ #cast(u64, length), product.high ^ wy_secret1)
+  return wy_mix(product.low ^ wy_secret0 ^ length, product.high ^ wy_secret1)
 }

@@ -149,7 +149,7 @@ fn styles_supported(method: rawptr) usize {
   // over-the-spot (the method draws it at the spot), then neither.
   wanted: [3]usize = [0x402, 0x404, 0x408]
   for choice in wanted {
-    listed := #slice(styles.styles, #cast(usize, styles.count))
+    listed := #slice(styles.styles, styles.count)
     for i in 0..#len(listed) {
       if listed[i] == choice && found == 0 {
         found = choice
@@ -242,7 +242,7 @@ fn compose_snapshot(desktop: *Desktop) {
     composition.text_length = 0
   }
   if desktop.owner != nil {
-    value := ordered.Event{ kind: ordered.Kind.Composition, text_length: #cast(u32, composition.text_length),
+    value := ordered.Event{ kind: ordered.Kind.Composition, text_length: composition.text_length,
       x: caret_bytes, y: caret_bytes }
     if composition.active != 0 {
       value.width = 1
@@ -496,7 +496,7 @@ fn read_scale(display: rawptr) f32 {
       }
       value: f32 = 0.0
       for at < #len(text) && text[at] >= '0' && text[at] <= '9' {
-        value = value * 10.0 + #cast(f32, text[at] - '0')
+        value = value * 10.0 + (text[at] - '0')
         at += 1
       }
       if value > 0.0 {
@@ -621,16 +621,16 @@ fn desktop_key(window: *Window, event: *Event) {
     desktop.escape = true
   } else if key == 0xff09 {
     desktop.tab = true
-  } else if control && (key == #cast(usize, 'a') || key == #cast(usize, 'A')) {
+  } else if control && (key == 'a' || key == 'A') {
     desktop.select_all = true
-  } else if control && (key == #cast(usize, 'c') || key == #cast(usize, 'C')) {
+  } else if control && (key == 'c' || key == 'C') {
     desktop.copy = true
-  } else if control && (key == #cast(usize, 'x') || key == #cast(usize, 'X')) {
+  } else if control && (key == 'x' || key == 'X') {
     desktop.cut = true
-  } else if control && (key == #cast(usize, 'v') || key == #cast(usize, 'V')) {
+  } else if control && (key == 'v' || key == 'V') {
     request_paste(window)
   } else if !control {
-    shown := buffer[..#cast(usize, count)]
+    shown := buffer[..count]
     if #len(shown) != 0 && shown[0] >= 32 && shown[0] != 127 {
       ordered_text(window, shown)
       append_text(desktop, shown)
@@ -708,7 +708,7 @@ fn clipboard_deliver(window: *Window) {
       at += count
       chunks += 1
     }
-    if window.events.dropped != 0 || chunks > 128 - #cast(usize, window.events.count) {
+    if window.events.dropped != 0 || chunks > 128 - window.events.count {
       desktop_loss(desktop)
       return
     }
@@ -1053,7 +1053,7 @@ pub fn set_cursor(window: *Window, cursor: Cursor) {
     return
   }
   window.desktop.cursor = cursor
-  _ = define_cursor(window.display, window.handle, window.desktop.cursors[#cast(usize, #cast(u8, cursor))])
+  _ = define_cursor(window.display, window.handle, window.desktop.cursors[#cast(u8, cursor)])
   _ = flush(window.display)
 }
 
@@ -1099,7 +1099,7 @@ pub fn box_input(window: *const Window) box.Input {
   }
   value.composition_cursor = -1
   if desktop.composition.active != 0 {
-    value.composition = desktop.composition.text[..#cast(usize, desktop.composition.text_length)]
+    value.composition = desktop.composition.text[..desktop.composition.text_length]
     value.composition_cursor = desktop.composition.cursor_begin
   }
   return value

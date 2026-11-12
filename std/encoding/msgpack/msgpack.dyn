@@ -24,7 +24,7 @@ fn fail(state: *Reader, offset: usize, kind: parse.Kind) Result {
 fn number(source: []const u8) u64 {
   value: u64 = 0
   for byte in source {
-    value = (value << 8) | #cast(u64, byte)
+    value = (value << 8) | byte
   }
   return value
 }
@@ -162,7 +162,7 @@ pub fn next(state: *Reader) Result {
     at += 1
   }
   if payload {
-    if token.value > #cast(u64, #len(state.source) - at) {
+    if token.value > (#len(state.source) - at) {
       return fail(state, at, parse.Kind.Syntax)
     }
     count := #cast(usize, token.value)
@@ -175,7 +175,7 @@ pub fn next(state: *Reader) Result {
     if token.kind == Kind.Map {
       minimum *= 2
     }
-    if minimum > #cast(u64, #len(state.source) - at) {
+    if minimum > (#len(state.source) - at) {
       return fail(state, at, parse.Kind.Syntax)
     }
   }

@@ -89,7 +89,7 @@ fn read_outline(arena: *mem.Arena, face: *const Face, index: u16, depth: usize, 
       if !fits(data, at, 1) {
         return Outline{ kind: parse.Kind.Syntax }
       }
-      repeat += #cast(usize, data[at])
+      repeat += data[at]
       at += 1
     }
     if repeat > count - i {
@@ -128,13 +128,13 @@ fn read_outline(arena: *mem.Arena, face: *const Face, index: u16, depth: usize, 
       }
       coordinate += delta
       if axis == 0 {
-        if coordinate < #cast(i32, x0) || coordinate > #cast(i32, x1) {
+        if coordinate < x0 || coordinate > x1 {
           return Outline{ kind: parse.Kind.Syntax }
         }
         points[j].x = coordinate
         points[j].on = (flags[j] & 1) != 0
       } else {
-        if coordinate < #cast(i32, y0) || coordinate > #cast(i32, y1) {
+        if coordinate < y0 || coordinate > y1 {
           return Outline{ kind: parse.Kind.Syntax }
         }
         points[j].y = coordinate

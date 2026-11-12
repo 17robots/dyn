@@ -15,8 +15,8 @@ fn coordinate(value: f64) Coordinate {
 // match the metrics used to build the layout.
 pub fn label(context: *ui.Context, bounds: ui.Rect, value: *const layout.Layout, tint: ui.Color) {
   for glyph in value.glyphs {
-    x := coordinate(#cast(f64, bounds.x) + glyph.x)
-    y := coordinate(#cast(f64, bounds.y) + glyph.y)
+    x := coordinate(bounds.x + glyph.x)
+    y := coordinate(bounds.y + glyph.y)
     if x.ok && y.ok {
       ui.glyph(context, bounds, glyph.codepoint, x.value, y.value, tint)
     }

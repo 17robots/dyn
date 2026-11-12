@@ -7,9 +7,9 @@ pub fn rgba(r: u8, g: u8, b: u8, a: u8) Rgba {
 pub fn premultiply(value: Rgba) Rgba {
   alpha: u16 = value.a
   return Rgba{
-    r: #cast(u8, ((#cast(u16, value.r) * alpha + 127) / 255)),
-    g: #cast(u8, ((#cast(u16, value.g) * alpha + 127) / 255)),
-    b: #cast(u8, ((#cast(u16, value.b) * alpha + 127) / 255)),
+    r: #cast(u8, ((value.r * alpha + 127) / 255)),
+    g: #cast(u8, ((value.g * alpha + 127) / 255)),
+    b: #cast(u8, ((value.b * alpha + 127) / 255)),
     a: value.a,
   }
 }

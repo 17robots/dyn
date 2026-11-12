@@ -115,7 +115,7 @@ pub fn finish(state: *State) Tag {
   result := Tag{ valid: true }
   carry = 0
   for i in 0..4 {
-    word := words[i] + #cast(u64, state.pad[i]) + carry
+    word := words[i] + state.pad[i] + carry
     binary.store_u32_le(result.value[i*4..i*4+4], #cast(u32, word))
     carry = word >> 32
   }
@@ -136,7 +136,7 @@ pub fn equal(left: []const u8, right: []const u8) bool {
   }
   difference: u32 = 0
   for i in 0..16 {
-    difference |= #cast(u32, left[i] ^ right[i])
+    difference |= left[i] ^ right[i]
   }
   return difference == 0
 }

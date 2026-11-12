@@ -107,7 +107,7 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Result {
   palette: []const u8
   if (source[10] & 128) != 0 {
     count := #cast(usize, 1) << ((source[10] & 7) + 1)
-    if count * 3 > #len(source) - at || #cast(usize, source[11]) >= count {
+    if count * 3 > #len(source) - at || source[11] >= count {
       return Result{ offset: at, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: at } }
     }
     palette = source[at..at + count * 3]
@@ -255,8 +255,8 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Result {
       for used > 0 {
         used -= 1
         index := stack[used]
-        x := produced % #cast(usize, image_width)
-        dst := ((#cast(usize, top) + row) * #cast(usize, width) + #cast(usize, left) + x) * 4
+        x := produced % image_width
+        dst := ((top + row) * width + left + x) * 4
         if !transparent || index != transparent_index {
           if #cast(usize, index) >= #len(palette) / 3 {
             return Result{ offset: bits.at, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: bits.at } }
@@ -268,12 +268,12 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Result {
           pixels[dst + 3] = 255
         }
         produced += 1
-        if produced % #cast(usize, image_width) == 0 {
+        if produced % image_width == 0 {
           if (flags & 64) == 0 {
             row += 1
           } else {
             row += steps[pass]
-            for row >= #cast(usize, image_height) && pass < 3 {
+            for row >= image_height && pass < 3 {
               pass += 1
               row = starts[pass]
             }

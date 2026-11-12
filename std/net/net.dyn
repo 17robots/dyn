@@ -2,7 +2,6 @@
 
 
 use "std/io" io
-use "std/io" stream
 use "std/time" clock
 
 pub const AddressFamilyIpv4: usize = 2
@@ -361,36 +360,36 @@ pub fn connection_write(connection: *Connection, source: []const u8) Result {
   return Result{ value: #cast(isize, total) }
 }
 
-fn connection_reader_read(data: rawptr, destination: []u8) stream.Transfer {
+fn connection_reader_read(data: rawptr, destination: []u8) io.Transfer {
   outcome := connection_read(#cast(*Connection, data), destination)
   if io.failed(outcome.failure) {
-    return stream.Transfer{ error: outcome.failure.native, status: stream.Status.Error }
+    return io.Transfer{ error: outcome.failure.native, status: io.Status.Error }
   }
-  status := stream.Status.Complete
+  status := io.Status.Complete
   if outcome.value == 0 {
-    status = stream.Status.End
+    status = io.Status.End
   }
-  return stream.Transfer{ transferred: #cast(usize, outcome.value), status: status }
+  return io.Transfer{ transferred: #cast(usize, outcome.value), status: status }
 }
 
-fn connection_writer_write(data: rawptr, source: []const u8) stream.Transfer {
+fn connection_writer_write(data: rawptr, source: []const u8) io.Transfer {
   outcome := connection_write(#cast(*Connection, data), source)
   if io.failed(outcome.failure) {
     transferred: usize = 0
     if outcome.value > 0 {
       transferred = #cast(usize, outcome.value)
     }
-    return stream.Transfer{ transferred: transferred, error: outcome.failure.native, status: stream.Status.Error }
+    return io.Transfer{ transferred: transferred, error: outcome.failure.native, status: io.Status.Error }
   }
-  return stream.Transfer{ transferred: #cast(usize, outcome.value), status: stream.Status.Complete }
+  return io.Transfer{ transferred: #cast(usize, outcome.value), status: io.Status.Complete }
 }
 
-pub fn connection_reader(connection: *Connection) stream.Reader {
-  return stream.Reader{ data: connection, read: connection_reader_read }
+pub fn connection_reader(connection: *Connection) io.Reader {
+  return io.Reader{ data: connection, read: connection_reader_read }
 }
 
-pub fn connection_writer(connection: *Connection) stream.Writer {
-  return stream.Writer{ data: connection, write: connection_writer_write }
+pub fn connection_writer(connection: *Connection) io.Writer {
+  return io.Writer{ data: connection, write: connection_writer_write }
 }
 
 pub fn accept_address(descriptor: isize, address: *Address) Result {
@@ -549,7 +548,7 @@ fn interrupted_timeout(start: clock.Instant, milliseconds: i32) Result {
   if io.failed(elapsed.failure) || elapsed.value < 0 {
     return result(-75)
   }
-  duration := #cast(i64, milliseconds) * clock.Millisecond
+  duration := milliseconds * clock.Millisecond
   if elapsed.value >= duration {
     return result(0)
   }

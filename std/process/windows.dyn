@@ -335,7 +335,7 @@ fn environment_native(name: []const u8, destination: []u8) EnvironmentResult {
   }
   at: usize = 0
   used: usize = 0
-  for at < #cast(usize, length) {
+  for at < length {
     decoded := utf16.decode(value[..length], at)
     if !decoded.valid {
       return EnvironmentResult{ failure: io.Failure{ kind: io.Kind.InvalidInput, native: -22 } }
