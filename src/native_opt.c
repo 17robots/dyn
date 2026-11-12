@@ -1850,16 +1850,19 @@ static bool optimize(const DynSource *source, const DynIrProgram *input, DynIrPr
   const char *no_ssa = getenv("DYN_NO_SSA");
   bool byte_fast = allow_ssa_intrinsics && !strcmp(dyn_context_target(&source->context)->arch, "x86_64") &&
                   (!no_ssa || !*no_ssa || !strcmp(no_ssa, "0"));
-  /* O2 and O3 share the ranked inliner. O2 grows each caller by a quarter
-     as much: that kept most of the gain on an allocation-bound kernel (0.79
-     to 0.41 s, 0.35 s at O3's budget) for 9 percent more compile time on a
-     deep call chain instead of 47. The leaf-only mode stays for the
+  /* O2 and O3 share the ranked inliner; O2, which plain --release uses,
+     grows each caller by about a third as much. At 128, a quarter, mem.push
+     inlined but the arena fast path inside it no longer fit, so every push
+     stayed a call: the tree kernel ran 187 ms against 156 ms at O3. 176 is
+     the smallest budget that takes it, for no measurable compile time on
+     real projects and 10 percent on compile-budget's 1500-function chain
+     (O3's budget costs 40 there). The leaf-only mode stays for the
      inliner's unit tests. */
   /* DYN_NO_INLINE=1 keeps every call, for tests that inspect one function's
      code or remarks. */
   const char *no_inline = getenv("DYN_NO_INLINE");
   bool inline_calls = !no_inline || !*no_inline || !strcmp(no_inline, "0");
-  if (level >= 2 && inline_calls && !inline_program_within(o, false, byte_fast, level == 2 ? 128 : 512)) {
+  if (level >= 2 && inline_calls && !inline_program_within(o, false, byte_fast, level == 2 ? 176 : 512)) {
     free(samples);
     dyn_native_optimization_free(o);
     return false;

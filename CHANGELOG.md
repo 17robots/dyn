@@ -37,6 +37,10 @@ servers so they pick up the new `dyn`.
   hands the optimizer the lowered program instead of a copy, and keeps
   blocks up to 4 MiB in the heap in batch commands instead of mapping each one.
   `dyn lsp` keeps the allocator's defaults.
+- `--release` inlines a little more: each function may grow by 176 cost units
+  instead of 128, enough to inline `mem.push` together with the arena's fast
+  path. The tree benchmark runs 16% faster; compile time on real projects is
+  unchanged.
 - `--opt-level 2` and `3` no longer pad x86 function entries to 64 bytes, so
   plain `--release`, which optimizes at the same level, now produces the same
   code as `--opt-level 2`. The padding moved benchmark kernels by -10% to +9%
