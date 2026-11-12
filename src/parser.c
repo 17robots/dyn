@@ -64,12 +64,25 @@ static uint32_t depth_limit(Parser *p) {
   uint32_t requested = p->options ? p->options->max_depth : 0;
   return requested && requested < MAX_DEPTH ? requested : MAX_DEPTH;
 }
-static bool at(Parser *p, uint32_t offset, const char *s) {
-  size_t n = strlen(s);
-  return offset <= p->length && n <= p->length - offset && !memcmp(p->text + offset, s, n);
+/* Whether s, a NUL-terminated word, starts at offset. Compares in place:
+   the parser asks this about every token for many words, and most differ in
+   the first byte. */
+static inline bool at(Parser *p, uint32_t offset, const char *s) {
+  if (offset > p->length) return false;
+  const char *text = p->text + offset;
+  uint32_t room = p->length - offset;
+  for (uint32_t i = 0; s[i]; ++i)
+    if (i == room || text[i] != s[i]) return false;
+  return true;
 }
-static bool is(Parser *p, const char *s) {
-  return strlen(s) == p->token.end - p->token.start && at(p, p->token.start, s);
+/* Whether the current token is exactly s. */
+static inline bool is(Parser *p, const char *s) {
+  uint32_t n = p->token.end - p->token.start;
+  if (p->token.start > p->length || n > p->length - p->token.start) return false;
+  const char *text = p->text + p->token.start;
+  for (uint32_t i = 0; i < n; ++i)
+    if (s[i] != text[i] || !s[i]) return false;
+  return s[n] == 0;
 }
 static bool escape(Parser *p, uint32_t *i) {
   if (*i == p->length) return false;

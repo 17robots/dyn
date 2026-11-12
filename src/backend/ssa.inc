@@ -196,6 +196,10 @@ typedef struct SsaChunk {
 typedef struct SsaPool {
   SsaChunk *chunks;
   size_t bytes;
+  /* ssa_prove's range memo, made on first use. It was thread-local, which
+     made every thread the compiler starts, SSA or not, zero 128 KiB. */
+  struct SsaRangeMemo *range_memo;
+  uint32_t range_stamp;
 } SsaPool;
 typedef struct { SsaChunk *chunk; size_t used; } SsaMark;
 enum { SSA_CHUNK_BYTES = 64 * 1024 };
@@ -233,6 +237,9 @@ static void ssa_pool_drain(SsaPool *pool) {
   ssa_chunks_release(NULL, pool->chunks);
   pool->chunks = NULL;
   pool->bytes = 0;
+  free(pool->range_memo);
+  pool->range_memo = NULL;
+  pool->range_stamp = 0;
 }
 static void *ssa_alloc_in(Ssa *s, SsaChunk **arena, size_t bytes, size_t align) {
   SsaChunk *chunk = *arena;
@@ -5228,10 +5235,12 @@ static bool ssa_prove(Ssa *s, const uint32_t *order, uint32_t n) {
   ssa_fact_index(s, order, n);
   /* Each prove starts a new stamp, and so does rewriting an overflow test or
      a branch control, which changes ranges. Stamp 0 marks unused slots. */
-  static _Thread_local SsaRangeMemo memo[SSA_RANGE_MEMO];
-  static _Thread_local uint32_t stamp;
-  s->range_memo = memo;
-  s->range_stamp = ++stamp;
+  /* Without a pool, or if the memo cannot be made, ranges are computed
+     directly; the memo returns exactly what the computation would. */
+  SsaPool *pool = s->pool;
+  if (pool && !pool->range_memo) pool->range_memo = calloc(SSA_RANGE_MEMO, sizeof(SsaRangeMemo));
+  s->range_memo = pool ? pool->range_memo : NULL;
+  s->range_stamp = pool ? ++pool->range_stamp : 0;
   for (uint32_t i = 0; i < n; ++i) {
     uint32_t b = order[i];
     SsaBlock *block = &s->blocks[b];
@@ -5320,7 +5329,7 @@ static bool ssa_prove(Ssa *s, const uint32_t *order, uint32_t n) {
     }
     if (changed) ++s->range_stamp;
   }
-  stamp = s->range_stamp;
+  if (pool) pool->range_stamp = s->range_stamp;
   s->range_memo = NULL;
   s->fact_start = s->fact_blocks = s->dom_enter = s->dom_leave = NULL; s->fact_value_count = 0;
   return changed;
