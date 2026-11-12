@@ -20,7 +20,11 @@ enum { SSA_UNSUPPORTED, SSA_EMITTED, SSA_FAILED };
 
 /* Register ids: 0-31 general registers, 32-63 floating registers. */
 enum { X_RAX = 0, X_RCX = 1, X_RDX = 2, X_RBX = 3, X_RSP = 4, X_RBP = 5, X_RSI = 6, X_RDI = 7,
-       X_R8 = 8, X_R9 = 9, X_R10 = 10, X_R11 = 11, X_R12 = 12, X_R13 = 13, X_R14 = 14, X_R15 = 15, X_XMM0 = 32 };
+       X_R8 = 8, X_R9 = 9, X_R10 = 10, X_R11 = 11, X_R12 = 12, X_R13 = 13, X_R14 = 14, X_R15 = 15, X_XMM0 = 32,
+       /* Result parts on the x87 stack, st(0) and st(1): System V x86-64
+          returns the third and fourth float leaves of an array or payload
+          enum there. They pass through Ssa.x87_offset, never a register. */
+       X_X87 = 48 };
 typedef enum {
   SO_CONST,      /* aux: value bits */
   SO_PARAM,      /* aux: incoming location index; see ssa_param */
@@ -89,6 +93,9 @@ typedef struct {
   uint32_t block, list, count, uses, check_origin;
   bool element_address; /* &xs[i]: bounds-checked, so neither nil nor misaligned */
   uint8_t element_align; /* log2 of that element's alignment */
+  /* SO_CALL on x86-64: float results on the x87 stack, popped right after
+     the call. Bits 0-1 count them; bit 2 + j marks part j as f32. */
+  uint8_t x87;
   /* ILP32 calls retain original signature identity and {type, first, count}
      groups separately from the optimizer's flattened operand triples. */
   uint32_t abi_expr, abi_groups, abi_group_count;
@@ -160,6 +167,7 @@ typedef struct {
   bool unwinding;
   SsaCapture *captures; uint32_t capture_count, capture_capacity;
   uint32_t unwind_offset, results_offset;
+  uint32_t x87_offset; /* two eight-byte slots for x87 results, or 0 */
   /* During ssa_prove: for each value, the blocks whose entry fact (see
      ssa_fact) compares it, as fact_blocks[fact_start[v]..fact_start[v + 1]). */
   uint32_t *fact_start, *fact_blocks; uint32_t fact_value_count;
@@ -1282,7 +1290,11 @@ static void ssa_pass(Ssa *s, SsaArguments *list, DynType type, int32_t value, in
       if (aggregate(ir, type))
         part = floating ? ssa_load(s, value, -1, 1, parts[i].offset, SSA_MEM(parts[i].size == 4 ? 32 : 64, 0, 1))
                         : ssa_load_bytes(s, value, parts[i].offset, parts[i].size);
-      else part = i ? second : value;
+      else {
+        part = i ? second : value;
+        /* Windows on Arm variadic calls pass floats in integer registers. */
+        if (float_type(type) && parts[i].cls >= 0 && parts[i].cls < 8) part = ssa_emit(s, SO_BITS, SC_INT, part, -1, -1, 0, 0);
+      }
       if (parts[i].cls >= 0) { ssa_argument(s, list, part, parts[i].cls, 0); continue; }
       uint32_t at = stack_slot(s->ctx, &parts[i], stack);
       ssa_argument(s, list, part, SSA_STACK + (int32_t)at, -(int32_t)stack_width(s->ctx, &parts[i]));
@@ -1367,14 +1379,14 @@ static bool ssa_struct_parts(Ssa *s, DynType type, SsaPart *parts, unsigned *cou
   if (raw_aggregate(ir, type)) {
     if (s->ctx->rv32 || s->ctx->t32) return false;
     /* System V x86-64: integer leaves in RAX, RDX, RCX and float leaves in
-       XMM0, XMM1, then x87. Only the first two of each are results here. */
+       XMM0, XMM1, then st(0) and st(1). A return carries four parts. */
     ArrayPart leaves[512]; unsigned n = 0, integers = 0, floats = 0;
     if (!array_parts(ir, type, 0, leaves, &n, 0) || n > 4) return false;
     for (unsigned i = 0; i < n; ++i) {
       bool fl = float_type(leaves[i].type);
-      if (fl ? floats == 2 : integers == 2) return false;
-      parts[i] = (SsaPart){leaves[i].offset, (memory_bits(leaves[i].type) + 7) / 8,
-                           fl ? X_XMM0 + (int)floats++ : (int)integers++, fl, leaves[i].type};
+      if (fl ? floats == 4 : integers == 3) return false;
+      int aux = !fl ? (int)integers++ : floats < 2 ? X_XMM0 + (int)floats++ : X_X87 + (int)(floats++ - 2);
+      parts[i] = (SsaPart){leaves[i].offset, (memory_bits(leaves[i].type) + 7) / 8, aux, fl, leaves[i].type};
     }
     *count = n;
     return true;
@@ -1493,8 +1505,7 @@ static int32_t ssa_call(Ssa *s, const DynIrExpr *e, int32_t *second, unsigned de
     if (e->integer >= ir->function_count) { SSA_GIVE_UP(s); return 0; }
     callee = &ir->functions[e->integer];
     if (callee->generic || callee->is_main || !ctx->function_symbols[e->integer] ||
-        (!callee->variadic && callee->param_count != e->item_count) || callee->param_count > e->item_count ||
-        (callee->variadic && callee->foreign && !ilp32)) { SSA_GIVE_UP(s); return 0; }
+        (!callee->variadic && callee->param_count != e->item_count) || callee->param_count > e->item_count) { SSA_GIVE_UP(s); return 0; }
     fixed = callee->param_count;
     packed = callee->variadic && !callee->foreign;
     if (packed) {
@@ -1615,15 +1626,31 @@ static int32_t ssa_call(Ssa *s, const DynIrExpr *e, int32_t *second, unsigned de
     ssa_argument(s, &list, result_address, (ctx->rv32 || ctx->t32) ? SSA_ILP32_PART : ctx->a64 ? SSA_RESULT_POINTER : 0, (ctx->rv32 || ctx->t32) ? DYN_TYPE_RAWPTR : 0);
   }
   AbiPart parts[512];
-  for (uint32_t i = 0; i < (ilp32 ? plan.groups : fixed + (packed ? 1u : 0u)) && !s->unsupported && !s->failed; ++i) {
+  /* A C variadic callee on a 64-bit target: the extra arguments follow the
+     fixed ones with the platform's variadic rules, as the tree emitter
+     passes them. Only scalars and pointers, as for ILP32. */
+  bool c_variadic = !ilp32 && callee && callee->variadic && callee->foreign;
+  uint32_t argument_groups = ilp32 ? plan.groups : c_variadic ? e->item_count : fixed + (packed ? 1u : 0u);
+  for (uint32_t i = 0; i < argument_groups && !s->unsupported && !s->failed; ++i) {
     if ((ctx->rv32 || ctx->t32) && group_count >= 512) { SSA_GIVE_UP(s); break; }
     DynType type = ilp32 ? ssa_call_type(s,e,&plan,i) : i < fixed ? (indirect ? ir->fn_type_params[ir->fn_types[e->integer].param_start + i]
                                          : ir->params[callee->param_start + i].type)
+                             : c_variadic ? ir->expressions[ir->items[e->item_start + i].expression].type
                              : callee->variadic_type;
+    if (c_variadic && i >= fixed && type != DYN_TYPE_I32 && type != DYN_TYPE_U32 && type != DYN_TYPE_I64 &&
+        type != DYN_TYPE_U64 && type != DYN_TYPE_ISIZE && type != DYN_TYPE_USIZE && type != DYN_TYPE_F64 &&
+        type != DYN_TYPE_RAWPTR && !dyn_type_is_pointer(type)) { SSA_GIVE_UP(s); break; }
     unsigned count; bool by_pointer;
-    if (!ssa_call_parts(s, type, ilp32 && plan.variadic && (ctx->t32 || i>=fixed), &gp, &fp, parts, &count, 512, &by_pointer)) {
-      SSA_GIVE_UP(s); break;
-    }
+    /* RISC-V passes variadic floats in integer registers; Windows on Arm
+       passes every float argument of a variadic call that way. */
+    backend_winarm_variadic = c_variadic && ctx->winarm64;
+    bool parts_ok = ssa_call_parts(s, type, (ilp32 && plan.variadic && (ctx->t32 || i>=fixed)) || (c_variadic && ctx->rv64 && i >= fixed),
+                                   &gp, &fp, parts, &count, 512, &by_pointer);
+    backend_winarm_variadic = false;
+    if (!parts_ok) { SSA_GIVE_UP(s); break; }
+    /* Apple AArch64 passes every variadic argument on the stack. */
+    if (c_variadic && ctx->darwin && ctx->a64 && i >= fixed)
+      for (unsigned k = 0; k < count; ++k) { parts[k].cls = -1; parts[k].leaf = DYN_TYPE_U64; }
     /* AArch64 stack arguments differ by platform; they stay with the tree emitter. */
     int32_t value, length = -1;
     if (i < fixed || !packed) {
@@ -1669,9 +1696,15 @@ static int32_t ssa_call(Ssa *s, const DynIrExpr *e, int32_t *second, unsigned de
       continue;
     }
     ssa_pass(s, &list, type, value, length, parts, count, &stack);
+    /* Microsoft x64 variadic callees read a float from its integer
+       register too. */
+    if (c_variadic && ctx->win64 && float_type(type) && count == 1 && parts[0].cls >= 8)
+      ssa_argument(s, &list, ssa_emit(s, SO_BITS, SC_INT, value, -1, -1, 0, 0), parts[0].cls - 8, 0);
   }
   if (s->unsupported || s->failed) return 0;
   if (indirect) ssa_argument(s, &list, target, SSA_TARGET, 0);
+  /* System V x86-64: AL bounds the vector registers a variadic callee reads. */
+  else if (c_variadic && !ctx->a64 && !ctx->rv64 && !ctx->win64) ssa_argument(s, &list, ssa_const(s, fp, SC_INT), SSA_TARGET, 0);
   int32_t call = ssa_emit(s, SO_CALL, SC_NONE, -1, -1, -1, indirect ? 0 : ctx->function_symbols[e->integer], indirect ? 2 : 0);
   if (!s->failed) {
     s->values[call].list = ssa_list(s, list.items, list.count);
@@ -1710,6 +1743,15 @@ static int32_t ssa_call(Ssa *s, const DynIrExpr *e, int32_t *second, unsigned de
     int32_t values[4];
     for (unsigned i = 0; i < count; ++i)
       values[i] = ssa_emit(s, SO_RESULT, parts[i].floating ? (parts[i].size == 4 ? SC_F32 : SC_F64) : SC_INT, call, -1, -1, parts[i].aux, (ctx->rv32 || ctx->t32) ? result : 0);
+    /* The emitter pops x87 results right after the call, used or not. */
+    for (unsigned i = 0; i < count && !s->failed; ++i) {
+      if (parts[i].aux < X_X87) continue;
+      if (!s->x87_offset) s->x87_offset = ssa_reserve(s, 16, 16);
+      unsigned j = (unsigned)(parts[i].aux - X_X87);
+      SsaValue *c = &s->values[call];
+      if ((c->x87 & 3u) < j + 1) c->x87 = (uint8_t)((c->x87 & ~3u) | (j + 1));
+      if (parts[i].size == 4) c->x87 |= (uint8_t)(4u << j);
+    }
     int32_t address = destination >= 0 ? destination : ssa_temporary(s, result);
     for (unsigned i = 0; i < count; ++i) {
       if (parts[i].floating) ssa_store(s, address, -1, 1, parts[i].offset, SSA_MEM(parts[i].size == 4 ? 32 : 64, 0, 1), values[i]);
@@ -3095,7 +3137,22 @@ static void ssa_scan(Ssa *s, uint32_t start, uint32_t count, unsigned depth) {
    emitter moves out of the argument registers together. */
 static bool ssa32_signature(Ssa *s);
 static void ssa32_parameters(Ssa *s);
+/* DYN_TREE_FUNCTIONS=a,b keeps the named functions on the tree emitter, so
+   tests can check calls between the two emitters in both directions. */
+static bool ssa_tree_only(const DynIrFunction *f) {
+  const char *list = getenv("DYN_TREE_FUNCTIONS");
+  if (!list || !*list || !f->name) return false;
+  size_t n = strlen(f->name);
+  for (const char *p = list;;) {
+    const char *end = strchr(p, ',');
+    size_t length = end ? (size_t)(end - p) : strlen(p);
+    if (length == n && !memcmp(p, f->name, n)) return true;
+    if (!end) return false;
+    p = end + 1;
+  }
+}
 static void ssa_build(Ssa *s) {
+  if (ssa_tree_only(s->f)) { SSA_GIVE_UP(s); return; }
   if ((s->ctx->rv32 || s->ctx->t32) && !ssa32_signature(s)) { SSA_GIVE_UP(s); return; }
   const DynIrProgram *ir = s->ir;
   const DynIrFunction *f = s->f;
@@ -3146,6 +3203,8 @@ static void ssa_build(Ssa *s) {
   if (raw_aggregate(ir, f->return_type) && !sret) {
     SsaPart result_parts[4]; unsigned result_count;
     if (!ssa_struct_parts(s, f->return_type, result_parts, &result_count)) { SSA_GIVE_UP(s); return; }
+    for (unsigned i = 0; i < result_count; ++i)
+      if (result_parts[i].aux >= X_X87 && !s->x87_offset) s->x87_offset = ssa_reserve(s, 16, 16);
   }
   unsigned gp = sret && !ctx->a64 ? 1 : 0, fp = 0;
   uint32_t stack = ctx->win64 ? 32 : 0; /* Microsoft x64: the 32-byte home area precedes stack arguments */
@@ -4526,8 +4585,8 @@ static uint64_t ssa_access_size(const SsaValue *v) {
 /* Marks regions whose address escapes and regions something reads. */
 static void ssa_classify_regions(Ssa *s, const uint32_t *order, uint32_t n, uint8_t *state) {
   memset(state, 0, s->region_count);
-  uint32_t fixed[2] = {s->unwind_offset, s->results_offset};
-  for (unsigned i = 0; i < 2; ++i) {
+  uint32_t fixed[3] = {s->unwind_offset, s->results_offset, s->x87_offset};
+  for (unsigned i = 0; i < 3; ++i) {
     int32_t r = fixed[i] ? ssa_region(s, (int32_t)fixed[i]) : -1;
     if (r >= 0) state[r] |= REGION_ESCAPED;
   }
@@ -6904,7 +6963,7 @@ typedef struct { uint32_t call, value; int32_t slot; } SsaSave;
 static int ssa_result_register(const BackendContext *ctx, int64_t aux) {
   if (ctx->rv64) return aux >= X_XMM0 ? (int)aux + 10 : 10 + (int)aux;
   if (aux >= X_XMM0 || ctx->a64) return (int)aux;
-  return aux ? X_RDX : X_RAX;
+  return aux == 0 ? X_RAX : aux == 1 ? X_RDX : X_RCX;
 }
 /* Whether a value occupies a register or slot (constants and frame
    addresses are rematerialized at each use). */
@@ -7218,7 +7277,7 @@ static void ssa_hints(SsaAlloc *a) {
       case SO_PARAM:
         v->hint = -2 - ssa_location_register(s->ctx, (int)v->aux);
         break;
-      case SO_RESULT: v->hint = -2 - ssa_result_register(s->ctx, v->aux); break;
+      case SO_RESULT: if (v->aux < X_X87) v->hint = -2 - ssa_result_register(s->ctx, v->aux); break;
       case SO_FIND:
       case SO_FIND_BYTE:
       case SO_JSON_ASCII_PREFIX:
@@ -8945,6 +9004,25 @@ static void ssa_debug_epilogue(SsaEmit *e) {
   e->epilogues = ssa_grow(e->s, e->epilogues, &e->epilogue_capacity, e->epilogue_count + 1, sizeof(*e->epilogues));
   if (!e->s->failed) e->epilogues[e->epilogue_count++] = e->ctx->text.n;
 }
+/* Where a call result part arrives: its register, or for x87 parts the
+   slot ssa_x87_pop stored it in. */
+static SsaMove ssa_result_source(SsaEmit *e, const SsaValue *r) {
+  if (r->aux >= X_X87)
+    return (SsaMove){.src_kind = L_SLOT, .src = (int32_t)e->s->x87_offset + 8 * (int32_t)(r->aux - X_X87), .cls = r->cls};
+  return (SsaMove){.src_kind = L_REG, .src = ssa_result_register(e->ctx, r->aux), .cls = r->cls};
+}
+/* Empties the x87 stack after a call that returned float leaves there,
+   st(0) first, into Ssa.x87_offset: the stack must be empty again before
+   any other call. */
+static void ssa_x87_pop(SsaEmit *e, const SsaValue *call) {
+  BackendContext *ctx = e->ctx;
+  unsigned count = call->x87 & 3u;
+  for (unsigned j = 0; j < count; ++j) {
+    bool f32 = (call->x87 >> (2 + j)) & 1u;
+    /* fstp dword/qword [rbp + disp32] */
+    byte(ctx, f32 ? 0xd9 : 0xdd); byte(ctx, 0x9d); word(ctx, (uint32_t)((int32_t)e->s->x87_offset + 8 * (int32_t)j));
+  }
+}
 static void ssa_call_emit(SsaEmit *e, SsaBlock *block, uint32_t *k) {
   Ssa *s = e->s; BackendContext *ctx = e->ctx;
   uint32_t id = block->values.items[*k];
@@ -9018,6 +9096,7 @@ static void ssa_call_emit(SsaEmit *e, SsaBlock *block, uint32_t *k) {
   else if (ctx->win64) { byte(ctx, 0xe8); relocate(ctx, (unsigned)v->aux, R_X86_64_PLT32, -4); word(ctx, 0); } /* home area is in the frame */
   else isa_call_symbol(ctx, (unsigned)v->aux);
   e->call_end = ctx->text.n;
+  ssa_x87_pop(e, v);
   /* Results follow their call directly. */
   count = 0;
   while (*k + 1 < block->values.count && s->values[block->values.items[*k + 1]].op == SO_RESULT &&
@@ -9025,7 +9104,7 @@ static void ssa_call_emit(SsaEmit *e, SsaBlock *block, uint32_t *k) {
     ++*k;
     SsaValue *r = &s->values[block->values.items[*k]];
     if (r->dead || (r->reg < 0 && r->slot < 0)) continue;
-    SsaMove m = {.src_kind = L_REG, .src = ssa_result_register(ctx, r->aux), .cls = r->cls};
+    SsaMove m = ssa_result_source(e, r);
     ssa_destination(e, &m, (int32_t)block->values.items[*k]);
     moves[count++] = m;
   }
@@ -9055,11 +9134,13 @@ static void ssa_protect_end(SsaEmit *e) {
   x86_mem_op(ctx, -1, true, OP1(0x89), X_RDX, (SsaMemory){X_RBP, -1, 1, at + 8}, false);
   x86_mem_op(ctx, 0xf2, false, OP2(0x0f, 0x11), 0, (SsaMemory){X_RBP, -1, 1, at + 16}, false);
   x86_mem_op(ctx, 0xf2, false, OP2(0x0f, 0x11), 1, (SsaMemory){X_RBP, -1, 1, at + 24}, false);
+  x86_mem_op(ctx, -1, true, OP1(0x89), X_RCX, (SsaMemory){X_RBP, -1, 1, at + 32}, false);
   ssa_frame_argument(e, e->s->unwind_offset); runtime_call(ctx, 5);
   x86_mem_op(ctx, -1, true, OP1(0x8b), X_RAX, (SsaMemory){X_RBP, -1, 1, at}, false);
   x86_mem_op(ctx, -1, true, OP1(0x8b), X_RDX, (SsaMemory){X_RBP, -1, 1, at + 8}, false);
   x86_mem_op(ctx, 0xf2, false, OP2(0x0f, 0x10), 0, (SsaMemory){X_RBP, -1, 1, at + 16}, false);
   x86_mem_op(ctx, 0xf2, false, OP2(0x0f, 0x10), 1, (SsaMemory){X_RBP, -1, 1, at + 24}, false);
+  x86_mem_op(ctx, -1, true, OP1(0x8b), X_RCX, (SsaMemory){X_RBP, -1, 1, at + 32}, false);
 }
 static void ssa_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
   Ssa *s = e->s; BackendContext *ctx = e->ctx;
@@ -9077,7 +9158,7 @@ static void ssa_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
   case SO_RESULT:
     /* After a protected call, results arrive in the next block. */
     if (s->values[v->a].block != v->block && (v->reg >= 0 || v->slot >= 0)) {
-      SsaMove m = {.src_kind = L_REG, .src = ssa_result_register(ctx, v->aux), .cls = v->cls};
+      SsaMove m = ssa_result_source(e, v);
       ssa_destination(e, &m, (int32_t)id);
       uint32_t count = 1;
       while (*k + count < block->values.count && s->values[block->values.items[*k + count]].op == SO_RESULT) ++count;
@@ -9085,7 +9166,7 @@ static void ssa_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
       for (uint32_t j = 0; j < count && j < 4; ++j) {
         SsaValue *r = &s->values[block->values.items[*k + j]];
         if (r->dead || (r->reg < 0 && r->slot < 0)) continue;
-        SsaMove move = {.src_kind = L_REG, .src = ssa_result_register(ctx, r->aux), .cls = r->cls};
+        SsaMove move = ssa_result_source(e, r);
         ssa_destination(e, &move, (int32_t)block->values.items[*k + j]);
         moves[n++] = move;
       }
@@ -9957,14 +10038,29 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
       SsaMove results[4]; uint32_t parts = 0;
       unsigned integers = 0, floats = 0;
       int32_t values[4] = {block->control, block->control2, block->control3, block->control4};
+      /* Float parts past XMM1 go to the x87 stack: through the x87 slot,
+         loaded last part first so st(0) holds the third float. */
+      unsigned x87 = 0; uint8_t x87_cls[2] = {0, 0};
       for (unsigned p = 0; p < 4; ++p) {
         if (values[p] < 0) continue;
         SsaMove m = ssa_source(e, values[p]);
+        if (ssa_float_class(m.cls) && floats >= 2) {
+          m.dst_kind = L_SLOT; m.dst = (int32_t)s->x87_offset + 8 * (int32_t)x87;
+          x87_cls[x87++] = m.cls; ++floats;
+          ssa_parallel(e, &m, 1);
+          continue;
+        }
         m.dst_kind = L_REG;
         m.dst = ssa_float_class(m.cls) ? ssa_result_register(ctx, X_XMM0 + floats++) : ssa_result_register(ctx, integers++);
         results[parts++] = m;
       }
       ssa_parallel(e, results, parts);
+      while (x87) {
+        --x87;
+        /* fld dword/qword [rbp + disp32] */
+        byte(ctx, x87_cls[x87] == SC_F32 ? 0xd9 : 0xdd); byte(ctx, 0x85);
+        word(ctx, (uint32_t)((int32_t)s->x87_offset + 8 * (int32_t)x87));
+      }
       ssa_epilogue(e);
     }
   }

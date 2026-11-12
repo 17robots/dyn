@@ -22,8 +22,7 @@ fn measure(s: Shape) f64 {
   }
 }
 
-// Three integer leaves: returned in RAX, RDX and RCX on x86-64, which keeps
-// this function on the tree emitter there.
+// Three integer leaves: returned in RAX, RDX and RCX on x86-64.
 fn widen(w: Wide, s: Shape) Wide {
   case w {
     Wide.Empty => { return Wide.Value(#cast(i64, measure(s))) }
@@ -71,8 +70,7 @@ fn mixed(n: i64, s: Shape, a: [4]i32, w: Wide, f: [3]f64, t: Shape) f64 {
   return total + f[0] - f[1] * f[2]
 }
 
-// Returns three integers, so a tree-emitter caller on x86-64 of the SSA
-// functions above.
+// Returns three integers in RAX, RDX and RCX on x86-64.
 fn via_tree(s: Shape, k: i64) [3]i64 {
   ints: [8]i64
   for i in 0..8 {
@@ -91,8 +89,7 @@ fn via_tree(s: Shape, k: i64) [3]i64 {
   return out
 }
 
-// Calls widen, so stays on the tree emitter on x86-64; its array and enum
-// parameters arrive from the SSA caller below, some on the stack.
+// Its array and enum parameters arrive from ssa_call, some on the stack.
 fn tree_take(a: [8]i64, s: Shape, f: [10]f32, w: Wide) i64 {
   total := wide_value(widen(w, s))
   for i in 0..8 {
@@ -116,6 +113,18 @@ fn ssa_call(k: i64) i64 {
   return tree_take(ints, make(k % 4, 2.0), floats, Wide.Text("abc")) + tree_take(ints, Shape.Count(k), floats, Wide.Value(k))
 }
 
+// Four float leaves: XMM0, XMM1, then st(0) and st(1) on x86-64.
+fn corners(x: f32) [4]f32 {
+  out: [4]f32 = [x, x * 2.0, x * 3.0, x * 4.0]
+  return out
+}
+
+fn corner_sum(k: i64) f32 {
+  c := corners(#cast(f32, k) + 0.5)
+  d := corners(c[3])
+  return c[0] + c[1] + c[2] + c[3] + d[2]
+}
+
 fn main() {
   shapes: [4]Shape = [make(0, 0.0), make(1, 1.25), make(2, 3.0), make(3, 4.0)]
   for i in 0..4 {
@@ -130,6 +139,7 @@ fn main() {
     io.println("{} {} {}", r[0], r[1], r[2])
   }
   io.println("{} {}", ssa_call(3), ssa_call(6))
+  io.println("{} {}", corner_sum(1), corner_sum(4))
   quarter: [4]i32 = [4, 8, 12, 16]
   thirds: [3]f64 = [1.0, 2.0, 3.0]
   io.println("{}", mixed(5, shapes[1], quarter, Wide.Value(100), thirds, shapes[3]))
