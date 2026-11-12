@@ -37,6 +37,11 @@ servers so they pick up the new `dyn`.
   hands the optimizer the lowered program instead of a copy, and keeps
   blocks up to 4 MiB in the heap in batch commands instead of mapping each one.
   `dyn lsp` keeps the allocator's defaults.
+- Functions that take or return fixed arrays or payload enums by value, such
+  as `fn area(shape: Shape) f64`, now compile to optimized SSA code on every
+  64-bit target. On x86-64 a result needing three integer registers or more
+  than two float ones (`[3]i64`, `[4]f32`, an enum with a slice payload) still
+  uses the fallback emitter.
 - A function that takes a local's address inside a `case` arm now compiles
   to optimized SSA code instead of the simple fallback emitter. std's number
   parsing (`strings.parse_into`, behind `json.read`) was one such function;

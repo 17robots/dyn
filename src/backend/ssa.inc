@@ -1292,8 +1292,10 @@ static void ssa_pass(Ssa *s, SsaArguments *list, DynType type, int32_t value, in
   if (aggregate(ir, type)) {
     uint32_t size, alignment;
     if (!layout(ir, type, &size, &alignment, 0)) { SSA_GIVE_UP(s); return; }
-    if (count && parts[0].cls < 0) {
-      /* Memory class: a snapshot now, copied to the outgoing area at the call. */
+    if (count && parts[0].cls < 0 && !raw_aggregate(ir, type)) {
+      /* Memory class: a snapshot now, copied to the outgoing area at the call.
+         Arrays and payload enums instead pass each leaf, in a register or
+         its own eight-byte slot, as the tree emitter does. */
       int32_t copy = ssa_temporary(s, type);
       ssa_copy_aggregate(s, copy, value, size, alignment);
       ssa_argument(s, list, copy, SSA_STACK + (int32_t)*stack, (int32_t)size);
@@ -1360,6 +1362,21 @@ static bool ssa_struct_parts(Ssa *s, DynType type, SsaPart *parts, unsigned *cou
     unsigned word = s->ctx->t32 ? 4 : 8;
     *count = (size + word - 1) / word;
     for (unsigned i = 0; i < *count; ++i) parts[i] = (SsaPart){i * word, size - i * word > word ? word : size - i * word, (int)i, false, word == 4 ? DYN_TYPE_U32 : DYN_TYPE_U64};
+    return true;
+  }
+  if (raw_aggregate(ir, type)) {
+    if (s->ctx->rv32 || s->ctx->t32) return false;
+    /* System V x86-64: integer leaves in RAX, RDX, RCX and float leaves in
+       XMM0, XMM1, then x87. Only the first two of each are results here. */
+    ArrayPart leaves[512]; unsigned n = 0, integers = 0, floats = 0;
+    if (!array_parts(ir, type, 0, leaves, &n, 0) || n > 4) return false;
+    for (unsigned i = 0; i < n; ++i) {
+      bool fl = float_type(leaves[i].type);
+      if (fl ? floats == 2 : integers == 2) return false;
+      parts[i] = (SsaPart){leaves[i].offset, (memory_bits(leaves[i].type) + 7) / 8,
+                           fl ? X_XMM0 + (int)floats++ : (int)integers++, fl, leaves[i].type};
+    }
+    *count = n;
     return true;
   }
   unsigned cls[2], integers = 0, floats = 0;
@@ -1457,7 +1474,7 @@ static int32_t ssa_call(Ssa *s, const DynIrExpr *e, int32_t *second, unsigned de
   bool indirect = e->kind == DYN_EXPR_INDIRECT_CALL;
   if (e->item_count > 512 || (uint64_t)e->item_start + e->item_count > ir->item_count) { SSA_GIVE_UP(s); return 0; }
   DynType result = e->type;
-  if ((raw_aggregate(ir, result) && !ctx->rv32 && !ctx->t32) || !abi_supported(ir, result)) { SSA_GIVE_UP(s); return 0; }
+  if (!abi_supported(ir, result)) { SSA_GIVE_UP(s); return 0; }
   SsaCallPlan plan = {0};
   bool ilp32 = ctx->rv32 || ctx->t32;
   if (ilp32 && !ssa_call_plan(s,e,&plan)) { SSA_GIVE_UP(s); return 0; }
@@ -1604,7 +1621,7 @@ static int32_t ssa_call(Ssa *s, const DynIrExpr *e, int32_t *second, unsigned de
                                          : ir->params[callee->param_start + i].type)
                              : callee->variadic_type;
     unsigned count; bool by_pointer;
-    if ((raw_aggregate(ir, type) && !ctx->rv32 && !ctx->t32) || !ssa_call_parts(s, type, ilp32 && plan.variadic && (ctx->t32 || i>=fixed), &gp, &fp, parts, &count, 512, &by_pointer)) {
+    if (!ssa_call_parts(s, type, ilp32 && plan.variadic && (ctx->t32 || i>=fixed), &gp, &fp, parts, &count, 512, &by_pointer)) {
       SSA_GIVE_UP(s); break;
     }
     /* AArch64 stack arguments differ by platform; they stay with the tree emitter. */
@@ -1687,7 +1704,7 @@ static int32_t ssa_call(Ssa *s, const DynIrExpr *e, int32_t *second, unsigned de
     if (second) *second = length;
     return data;
   }
-  if (dyn_type_is_struct(result)) {
+  if (aggregate(ir, result)) {
     SsaPart parts[4]; unsigned count;
     if (!ssa_call_result_parts(s, result, ctx->t32 && plan.variadic, parts, &count)) { SSA_GIVE_UP(s); return 0; }
     int32_t values[4];
@@ -3123,7 +3140,13 @@ static void ssa_build(Ssa *s) {
     if (s->unsupported || s->failed) return;
   } else {
   bool sret = abi_memory(ctx, ir, f->return_type);
-  if (raw_aggregate(ir, f->return_type)) { SSA_GIVE_UP(s); return; }
+  /* Arrays and payload enums return through memory, or on x86-64 System V
+     leaf by leaf in registers; ssa_struct_parts takes the register cases
+     that fit RAX/RDX and XMM0/XMM1. */
+  if (raw_aggregate(ir, f->return_type) && !sret) {
+    SsaPart result_parts[4]; unsigned result_count;
+    if (!ssa_struct_parts(s, f->return_type, result_parts, &result_count)) { SSA_GIVE_UP(s); return; }
+  }
   unsigned gp = sret && !ctx->a64 ? 1 : 0, fp = 0;
   uint32_t stack = ctx->win64 ? 32 : 0; /* Microsoft x64: the 32-byte home area precedes stack arguments */
   /* Pass 1: every register parameter as an SO_PARAM value. */
@@ -3133,7 +3156,7 @@ static void ssa_build(Ssa *s) {
   for (uint32_t i = 0; i < f->param_count + (unsigned)f->variadic && !s->unsupported; ++i) {
     DynType type = i < f->param_count ? ir->params[f->param_start + i].type : f->variadic_type;
     AbiPart parts[512]; unsigned n; bool by_pointer;
-    if (raw_aggregate(ir, type) || !abi_assign(ctx, ir, type, &gp, &fp, parts, &n, 512, &by_pointer) ||
+    if (!abi_assign(ctx, ir, type, &gp, &fp, parts, &n, 512, &by_pointer) ||
         count + n > 512 || i >= 512) { SSA_GIVE_UP(s); return; }
     if (by_pointer) parts[0].leaf = DYN_TYPE_RAWPTR; /* marks the copy-from pointer */
     firsts[i] = count;
