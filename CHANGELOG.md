@@ -44,7 +44,10 @@ servers so they pick up the new `dyn`.
   64-bit constants used in loops stay in registers; a value kept on the stack
   because it lives across calls is loaded once into a free register for a
   run of straight-line uses instead of at every use. The hash map benchmark
-  runs 8% faster, sieve 6%, the JSONL report 3%.
+  runs 8% faster, sieve 6%, the JSONL report 3%. A branch around one or two
+  cheap instructions that only picks a value becomes a conditional move
+  (CMOV on x86-64, CSEL on AArch64), so clamps and min/max no longer
+  mispredict.
 - Functions that take or return fixed arrays or payload enums by value, such
   as `fn area(shape: Shape) f64`, and functions that call C variadic
   functions now compile to optimized SSA code on every 64-bit target. No

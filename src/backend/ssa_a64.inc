@@ -685,6 +685,23 @@ static void a64s_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
     a64s_extend(ctx, d, a64s_get(e, v->a, A_S1), (unsigned)v->aux, v->aux2 != 0);
     a64s_put(e, v, d);
     return;
+  case SO_SELECT: {
+    /* d = a ? b : c: compare with zero, then CSEL. */
+    /* The comparison (fused into the select, or against zero) comes first:
+       operand loads leave the flags alone, but a slot load far from the
+       frame pointer computes its address in x15, so the true value is
+       loaded last into x15 itself and the false value before it into x14. */
+    unsigned code = 1; /* ne */
+    SsaValue *c = &s->values[v->a];
+    if (c->fused && c->op == SO_CMP) code = a64_cond[a64s_compare(e, c->a, c->b, (Cond)c->cond)];
+    else a64_word(ctx, 0xf100001fu | a64s_get(e, v->a, A_S1) << 5);     /* cmp rc, #0 */
+    unsigned rf = a64s_get(e, v->c, A_S4);
+    unsigned rt = a64s_get(e, v->b, A_S3);
+    d = a64s_target(v);
+    a64_word(ctx, 0x9a800000u | rf << 16 | code << 12 | rt << 5 | d);   /* csel d, rt, rf, cond */
+    a64s_put(e, v, d);
+    return;
+  }
   case SO_CMP: {
     if (v->fused) return;
     Cond cond = a64s_compare(e, v->a, v->b, (Cond)v->cond);

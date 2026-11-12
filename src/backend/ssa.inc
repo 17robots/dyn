@@ -76,6 +76,7 @@ typedef enum {
   SO_VLANE,      /* f32 lane aux of a */
   SO_VHADD,      /* f32 lane 0 + lane 1 of a, in that order */
   SO_VLOOP,      /* x86-64 SysV: four-lane f32 loop; a: frame {i, end, bases, sums, inputs}; list: program */
+  SO_SELECT,     /* b if a is nonzero, else c: integers only, x86-64 and AArch64 */
   SO_COUNT
 } SsaOp;
 enum { SC_NONE, SC_INT, SC_F64, SC_F32 };
@@ -4035,6 +4036,94 @@ static bool ssa_thread_conditions(Ssa *s, const uint32_t *order, uint32_t n) {
   if (changed && s->ctx->optimization_remarks) fprintf(stderr, "remark: %s: branches threaded past boolean phis\n", s->f->name);
   return changed;
 }
+/* If-conversion, as GCC and LLVM do at -O2: a branch around one or two cheap
+   instructions that only feed phis becomes selects (CMOV on x86-64, CSEL on
+   AArch64), so an unpredictable condition costs no misprediction. Shapes:
+   a diamond H -> T, F -> J or a triangle H -> T -> J with H -> J, where the
+   arms hold at most two pure, non-trapping integer values, are entered from
+   H alone and J has no other predecessors. RISC-V has no conditional move
+   in its base ISA and keeps the branch. */
+static bool ssa_select_arm(Ssa *s, uint32_t arm, uint32_t head, uint32_t join) {
+  SsaBlock *block = &s->blocks[arm];
+  if (block->kind != SB_PLAIN || block->succ[0] != join || block->preds.count != 1 || block->preds.items[0] != head ||
+      block->values.count > 2) return false;
+  for (uint32_t k = 0; k < block->values.count; ++k) {
+    SsaValue *v = &s->values[block->values.items[k]];
+    if (v->dead) continue;
+    if (v->cls != SC_INT && v->cls != SC_NONE) return false;
+    switch (v->op) {
+    case SO_CONST: case SO_ADD: case SO_SUB: case SO_AND: case SO_OR: case SO_XOR: case SO_NOT: case SO_NEG:
+    case SO_EXT: case SO_CMP: case SO_COPY: break;
+    case SO_SHL: case SO_SHR: case SO_SAR: { uint64_t c; if (!ssa_is_const(s, v->b, &c)) return false; break; }
+    default: return false;
+    }
+  }
+  return true;
+}
+static bool ssa_selects(Ssa *s, const uint32_t *order, uint32_t n) {
+  if (s->ctx->rv64 || s->ctx->rv32 || s->ctx->t32 || s->ctx->debug_mode) return false;
+  bool changed = false;
+  for (uint32_t i = 0; i < n && !s->failed; ++i) {
+    uint32_t h = order[i];
+    SsaBlock *head = &s->blocks[h];
+    if (head->kind != SB_IF || head->control < 0 || s->values[head->control].cls != SC_INT) continue;
+    uint32_t yes = head->succ[0], no = head->succ[1], join, arms[2] = {UINT32_MAX, UINT32_MAX};
+    if (yes == no || yes == h || no == h) continue;
+    if (s->blocks[yes].kind == SB_PLAIN && s->blocks[no].kind == SB_PLAIN && s->blocks[yes].succ[0] == s->blocks[no].succ[0] &&
+        ssa_select_arm(s, yes, h, s->blocks[yes].succ[0]) && ssa_select_arm(s, no, h, s->blocks[yes].succ[0])) {
+      join = s->blocks[yes].succ[0]; arms[0] = yes; arms[1] = no;
+    } else if (ssa_select_arm(s, yes, h, no)) { join = no; arms[0] = yes; }
+    else if (ssa_select_arm(s, no, h, yes)) { join = yes; arms[1] = no; }
+    else continue;
+    SsaBlock *j = &s->blocks[join];
+    if (join == h || j->preds.count != 2) continue;
+    /* Which predecessor of the join stands for the true side. */
+    uint32_t true_pred = arms[0] != UINT32_MAX ? arms[0] : h, false_pred = arms[1] != UINT32_MAX ? arms[1] : h;
+    int true_index = j->preds.items[0] == true_pred ? 0 : j->preds.items[1] == true_pred ? 1 : -1;
+    int false_index = j->preds.items[0] == false_pred ? 0 : j->preds.items[1] == false_pred ? 1 : -1;
+    if (true_index < 0 || false_index < 0 || true_index == false_index) continue;
+    unsigned phis = 0; bool ok = true;
+    for (uint32_t k = 0; k < j->values.count && ok; ++k) {
+      SsaValue *phi = &s->values[j->values.items[k]];
+      if (phi->op != SO_PHI) break;
+      ok = phi->cls == SC_INT && phi->count == 2;
+      ++phis;
+    }
+    if (!ok || !phis || phis > 3) continue;
+    /* The arms' values move into the head, before its branch. */
+    for (unsigned side = 0; side < 2; ++side) {
+      if (arms[side] == UINT32_MAX) continue;
+      SsaBlock *arm = &s->blocks[arms[side]];
+      for (uint32_t k = 0; k < arm->values.count; ++k) {
+        s->values[arm->values.items[k]].block = h;
+        ssa_push(s, &s->blocks[h].values, arm->values.items[k]);
+      }
+      arm = &s->blocks[arms[side]];
+      arm->values.count = 0; arm->preds.count = 0;
+    }
+    if (s->failed) return changed;
+    head = &s->blocks[h]; j = &s->blocks[join];
+    int32_t condition = head->control;
+    for (uint32_t k = 0; k < j->values.count && !s->failed; ++k) {
+      uint32_t id = j->values.items[k];
+      if (s->values[id].op != SO_PHI) break;
+      int32_t when_true = (int32_t)s->lists[s->values[id].list + (uint32_t)true_index];
+      int32_t when_false = (int32_t)s->lists[s->values[id].list + (uint32_t)false_index];
+      int32_t select = ssa_value(s, h, SO_SELECT, SC_INT, condition, when_true, when_false, 0, 0);
+      if (s->failed) return changed;
+      ssa_push(s, &s->blocks[h].values, (uint32_t)select);
+      ssa_replace(s, id, select);
+      j = &s->blocks[join];
+    }
+    head = &s->blocks[h]; j = &s->blocks[join];
+    head->kind = SB_PLAIN; head->control = -1;
+    head->succ[0] = join; head->succ[1] = UINT32_MAX;
+    j->preds.items[0] = h; j->preds.count = 1;
+    changed = true;
+  }
+  if (changed && s->ctx->optimization_remarks) fprintf(stderr, "remark: %s: branches became selects\n", s->f->name);
+  return changed;
+}
 /* Splits edges from a branch into a block with several predecessors, so phi
    moves have a block of their own. */
 static void ssa_split_edges(Ssa *s) {
@@ -4292,7 +4381,7 @@ static bool ssa_pure(const SsaValue *v) {
   case SO_CONST: case SO_ADD: case SO_SUB: case SO_MUL: case SO_AND: case SO_OR: case SO_XOR:
   case SO_SHL: case SO_SHR: case SO_SAR: case SO_NEG: case SO_NOT: case SO_EXT: case SO_CMP: case SO_FCMP:
   case SO_FADD: case SO_FSUB: case SO_FMUL: case SO_FDIV: case SO_FNEG: case SO_MATH: case SO_ITOF: case SO_FTOI:
-  case SO_FCVT: case SO_BITS: case SO_FRAME: case SO_SYMBOL: case SO_LEA: case SO_MULH:
+  case SO_FCVT: case SO_BITS: case SO_FRAME: case SO_SYMBOL: case SO_LEA: case SO_MULH: case SO_SELECT:
     return true;
   default:
     return false;
@@ -9604,6 +9693,67 @@ static void ssa_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
     ssa_put(e, v, v->op == SO_DIV ? X_RAX : X_RDX);
     return;
   }
+  case SO_SELECT: {
+    d = ssa_target(e, v);
+    SsaValue *c = &s->values[v->a];
+    int32_t base = v->c, other = v->b; /* d = base, then CMOVcc d, other */
+    bool invert = false;
+    SsaValue *vt = &s->values[v->b], *vf = &s->values[v->c];
+    bool t_const = vt->op == SO_CONST && !ssa_located(vt), f_const = vf->op == SO_CONST && !ssa_located(vf);
+    if ((t_const && !f_const) || (vt->reg >= 0 && (unsigned)vt->reg == d)) { base = v->b; other = v->c; invert = true; }
+    SsaValue *vo = &s->values[other];
+    bool other_ok = !(vo->op == SO_CONST && !ssa_located(vo)) && vo->op != SO_FRAME &&
+                    !(vo->reg >= 0 && (unsigned)vo->reg == d) && (vo->reg >= 0 || vo->slot >= 0);
+    /* A comparison fused into the select (ssa_fuse) is emitted here: d gets
+       its base value first, since immediate loads may write flags, so d must
+       not hold a compare operand. */
+    if (c->fused && c->op == SO_CMP && other_ok && v->reg >= 0 &&
+        !(s->values[c->a].reg >= 0 && (unsigned)s->values[c->a].reg == d) &&
+        !(s->values[c->b].reg >= 0 && (unsigned)s->values[c->b].reg == d)) {
+      SsaValue *vb = &s->values[base];
+      if (!(vb->reg >= 0 && (unsigned)vb->reg == d)) x86_mov(ctx, d, ssa_get(e, base, d));
+      Cond cond = ssa_compare_values(e, c->a, c->b, (Cond)c->cond);
+      unsigned char op = (unsigned char)(x86_setcc[cond] - 0x50);
+      if (invert) op ^= 1;
+      if (vo->reg >= 0) x86_reg_op(ctx, -1, true, OP2(0x0f, op), d, (unsigned)vo->reg, false);
+      else x86_mem_op(ctx, -1, true, OP2(0x0f, op), d, ssa_slot_memory(e, vo), false);
+      ssa_put(e, v, d);
+      return;
+    }
+    /* Otherwise the condition as a value in a register, then TEST and CMOV.
+       d may be a scratch register itself (a spilled select). */
+    unsigned rc;
+    if (c->fused && c->op == SO_CMP) {
+      Cond cond = ssa_compare_values(e, c->a, c->b, (Cond)c->cond);
+      ssa_setcc(ctx, X_R10, cond);
+      x86_reg_op(ctx, -1, false, OP2(0x0f, 0xb6), X_R10, X_R10, true); /* movzx r10d, r10b */
+      rc = X_R10;
+    } else rc = ssa_get(e, v->a, X_R10);
+    if (rc == d) { x86_mov(ctx, X_R10, rc); rc = X_R10; }
+    /* base goes into d first; other is the CMOV source. */
+    unsigned char cmov = 0x45; /* cmovne: d = other when the condition holds */
+    base = v->c; other = v->b;
+    if (vt->reg >= 0 && (unsigned)vt->reg == d) { base = v->b; other = v->c; cmov = 0x44; }
+    if (!(s->values[base].reg >= 0 && (unsigned)s->values[base].reg == d)) x86_mov(ctx, d, ssa_get(e, base, d));
+    x86_reg_op(ctx, -1, true, OP1(0x85), rc, rc, false);
+    vo = &s->values[other];
+    if (vo->reg >= 0) x86_reg_op(ctx, -1, true, OP2(0x0f, cmov), d, (unsigned)vo->reg, false);
+    else if (vo->op != SO_CONST && vo->op != SO_FRAME && vo->slot >= 0)
+      x86_mem_op(ctx, -1, true, OP2(0x0f, cmov), d, ssa_slot_memory(e, vo), false);
+    else {
+      /* A constant or frame address: into a scratch register the condition
+         no longer needs, without touching the flags (no XOR). */
+      unsigned scratch = d == X_R10 ? X_R11 : X_R10;
+      if (vo->op == SO_CONST) {
+        uint64_t n = (uint64_t)vo->aux;
+        if (n <= UINT32_MAX) { if (scratch >= 8) byte(ctx, 0x41); byte(ctx, 0xb8 + (scratch & 7)); word(ctx, (uint32_t)n); }
+        else x86_move_immediate(ctx, scratch, n);
+      } else x86_mem_op(ctx, -1, true, OP1(0x8d), scratch, (SsaMemory){X_RBP, -1, 1, (int32_t)vo->aux}, false);
+      x86_reg_op(ctx, -1, true, OP2(0x0f, cmov), d, scratch, false);
+    }
+    ssa_put(e, v, d);
+    return;
+  }
   case SO_MULH: {
     unsigned rb = ssa_get(e, v->b, X_R11);
     if (rb != X_R11) x86_mov(ctx, X_R11, rb);
@@ -9939,6 +10089,23 @@ static int ssa_float_branch(SsaEmit *e, const SsaValue *c) {
   return c->aux == 2 || c->aux == 4 ? CC_A : CC_AE;
 }
 static void ssa_fuse(Ssa *s, const uint32_t *order, uint32_t n) {
+  /* A comparison used only by a select in its block sits right before it
+     and is emitted by it: CMP then CMOVcc, or CSEL with its condition. */
+  for (uint32_t i = 0; i < n && !s->ctx->rv64; ++i) {
+    SsaBlock *block = &s->blocks[order[i]];
+    for (uint32_t k = 1; k < block->values.count; ++k) {
+      SsaValue *v = &s->values[block->values.items[k]];
+      if (v->op != SO_SELECT || v->dead || v->a < 0) continue;
+      SsaValue *c = &s->values[v->a];
+      if (c->op != SO_CMP || c->uses != 1 || c->block != order[i] || c->fused) continue;
+      uint32_t at = UINT32_MAX;
+      for (uint32_t q = 0; q < k; ++q) if (block->values.items[q] == (uint32_t)v->a) at = q;
+      if (at == UINT32_MAX) continue;
+      memmove(&block->values.items[at], &block->values.items[at + 1], (k - at - 1) * sizeof(uint32_t));
+      block->values.items[k - 1] = (uint32_t)v->a;
+      c->fused = true;
+    }
+  }
   for (uint32_t i = 0; i < n; ++i) {
     SsaBlock *block = &s->blocks[order[i]];
     if (block->kind != SB_IF || block->control < 0) continue;
@@ -10728,6 +10895,7 @@ static void ssa_prepare(SsaPrepared *p, BackendContext *ctx, const DynSource *so
   }
   if (ssa_strength(s, order, n)) ssa_resolve_all(s);
   if (ssa_thread_conditions(s, order, n)) ssa_resolve_all(s);
+  if (ssa_selects(s, order, n)) ssa_resolve_all(s);
   if (s->failed) goto done;
   ssa_split_edges(s);
   order = ssa_order(s, &n);
