@@ -37,6 +37,12 @@ servers so they pick up the new `dyn`.
   hands the optimizer the lowered program instead of a copy, and keeps
   blocks up to 4 MiB in the heap in batch commands instead of mapping each one.
   `dyn lsp` keeps the allocator's defaults.
+- Release code is tighter: a function that returns a call to itself (or a
+  void function ending in one) loops instead of calling, so deep tail
+  recursion no longer grows the stack; loops whose condition loads and
+  bounds-checks are rotated; `at = (at + 1) & mask` stays in one register;
+  64-bit constants used in loops stay in registers. The hash map benchmark
+  runs 9% faster and sieve 5%.
 - Functions that take or return fixed arrays or payload enums by value, such
   as `fn area(shape: Shape) f64`, and functions that call C variadic
   functions now compile to optimized SSA code on every 64-bit target. No
