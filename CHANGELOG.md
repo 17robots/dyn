@@ -37,6 +37,10 @@ servers so they pick up the new `dyn`.
   hands the optimizer the lowered program instead of a copy, and keeps
   blocks up to 4 MiB in the heap in batch commands instead of mapping each one.
   `dyn lsp` keeps the allocator's defaults.
+- `--opt-level 2` and `3` no longer pad x86 function entries to 64 bytes, so
+  plain `--release`, which optimizes at the same level, now produces the same
+  code as `--opt-level 2`. The padding moved benchmark kernels by -10% to +9%
+  depending on where code landed, with no consistent gain.
 - `std/os/macos.thread_yield` yields through libSystem's `sched_yield`. It
   called BSD syscall 331, which is `__disable_threadsignal`, not a yield.
 - `#syscall` takes a named constant on every Linux target. `std/os/linux/sys`

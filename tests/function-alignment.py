@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Optimized x86 entries and object section placement preserve 64-byte alignment."""
+"""x86 function entries are packed at every optimization level.
+
+Optimized builds once aligned entries to 64 bytes at --opt-level 2 and 3 but
+not under plain --release, which optimizes at the same level. Measured kernels
+moved by -10% to +9% with placement and gained nothing consistent, so every
+mode now uses the section's ordinary alignment and plain --release lays code
+out exactly like --opt-level 2."""
 import os
 from pathlib import Path
 import platform
@@ -99,26 +105,27 @@ with tempfile.TemporaryDirectory(prefix='dyn-function-alignment-') as directory:
     module.mkdir()
     (module/'main.dyn').write_text(SOURCE)
     for target, parser, baseline in [('x86_64-linux', elf, 16), ('x86_64-windows', coff, 16), ('x86_64-macos', macho, 4)]:
-        for mode, flags, expected in [('o2', ['--release', '--opt-level', '2'], 64),
-                                      ('o3', ['--release', '--opt-level', '3'], 64),
-                                      ('o1', ['--release', '--opt-level', '1'], baseline),
-                                      ('debug', ['--debug'], baseline),
-                                      ('dwarf', ['--release', '--opt-level', '3', '--debug-info'], baseline)]:
+        objects = {}
+        for mode, flags in [('release', ['--release']),
+                            ('o2', ['--release', '--opt-level', '2']),
+                            ('o3', ['--release', '--opt-level', '3']),
+                            ('o1', ['--release', '--opt-level', '1']),
+                            ('debug', ['--debug']),
+                            ('dwarf', ['--release', '--opt-level', '3', '--debug-info'])]:
             output = work/(target+'-'+mode)
             run(DYN, 'build', module, '--backend', 'native', '--shared', '--no-link', '--emit-object',
                 '--no-cache', '--quiet', '--target', target, '--output', output, *flags)
-            alignment, entries, foreign = parser(output.with_suffix('.o').read_bytes())
-            assert alignment == expected, (target, mode, alignment, expected)
+            data = output.with_suffix('.o').read_bytes()
+            objects[mode] = data
+            alignment, entries, foreign = parser(data)
+            assert alignment == baseline, (target, mode, alignment, baseline)
             assert NAMES <= entries.keys(), (target, mode, entries)
             assert foreign['external'] == (0, 0), (target, mode, foreign)
-            if expected == 64:
-                assert all(entries[name] % 64 == 0 for name in NAMES), (target, mode, entries)
+        assert objects['release'] == objects['o2'], (target, 'plain --release differs from --opt-level 2')
     if platform.system() == 'Linux' and platform.machine() in ('x86_64', 'amd64'):
         (module/'main.dyn').write_text(SOURCE.split('pub fn foreign_call')[0].replace('extern fn external "external"(x: u64) u64\n', '')+
-                                       'callbacks: [3]fn(u64) u64 = [first, second, recursive]\nfn main() { if callbacks[2](12) != 144 || callbacks[0](8) != 9 || callbacks[1](8) != 24 { #panic("aligned calls") } }\n')
+                                       'callbacks: [3]fn(u64) u64 = [first, second, recursive]\nfn main() { if callbacks[2](12) != 144 || callbacks[0](8) != 9 || callbacks[1](8) != 24 { #panic("packed calls") } }\n')
         output = work/'linked'
         run(DYN, 'build', module, '--release', '--opt-level', '3', '--no-cache', '--quiet', '--output', output)
-        _, entries, _ = elf(output.read_bytes())
-        assert all(entries[name] % 64 == 0 for name in NAMES-{'foreign_call'}), entries
         run(output)
-print('PASS optimized x86 function and section alignment; O1/debug/DWARF policy preserved')
+print('PASS x86 function entries packed at every level; plain --release matches --opt-level 2')

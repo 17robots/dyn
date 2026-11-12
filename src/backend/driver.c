@@ -66,7 +66,6 @@ typedef struct { DynType type; uint32_t offset; } ArrayPart;
    bytes inside an aggregate; leaf is the scalar type of an array leaf. */
 typedef struct { uint32_t offset, size; int cls; DynType leaf; uint32_t stack; } AbiPart;
 typedef struct {
-  unsigned function_alignment; /* Optimized x86 entry and section alignment. */
   Bytes text, rodata, globals_data, constants_data; /* globals_data tracks zero-fill size only. */
   BackendDwarf *dwarf;
   const DynSource *debug_source;
@@ -3439,12 +3438,6 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
     const char *name = function_name(f);
     /* Keep recursive entries stable across changes to preceding functions.
        Padding belongs outside the function's symbol and debug ranges. */
-    if (!f->foreign && ctx->function_alignment) {
-      unsigned pad = (unsigned)(-ctx->text.n & (ctx->function_alignment - 1));
-      const unsigned char nop = 0x90;
-      while (pad--) code(ctx, &nop, 1);
-      if (ctx->text.failed) goto done;
-    }
     size_t length = strlen(name) + 1 + (ctx->function_suffixed[i] ? 4 : 0), begin = ctx->text.n;
     if (ctx->dwarf && !f->foreign) {
       const char *file; unsigned line,column;
@@ -3579,7 +3572,7 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
   sh[1] = (Elf64_Shdr){.sh_name=1, .sh_type=SHT_PROGBITS,
     /* SSA pads x86 loop headers relative to this section's start. The linker
        must preserve that alignment when placing the object after runtime code. */
-    .sh_flags=SHF_ALLOC|SHF_EXECINSTR, .sh_offset=sizeof(h), .sh_size=ctx->text.n, .sh_addralign=(ctx->a64||ctx->rv64||ctx->rv32||ctx->t32)?4:ctx->function_alignment?ctx->function_alignment:16};
+    .sh_flags=SHF_ALLOC|SHF_EXECINSTR, .sh_offset=sizeof(h), .sh_size=ctx->text.n, .sh_addralign=(ctx->a64||ctx->rv64||ctx->rv32||ctx->t32)?4:16};
   sh[2] = (Elf64_Shdr){.sh_name=7, .sh_type=SHT_PROGBITS, .sh_flags=SHF_ALLOC,
     .sh_offset=align8(sizeof(h)+ctx->text.n), .sh_size=ctx->rodata.n, .sh_addralign=8};
   sh[3] = (Elf64_Shdr){.sh_name=15, .sh_type=SHT_RELA,
@@ -3712,8 +3705,6 @@ static bool object_target_mode(const DynSource *source, const DynIrProgram *ir,
   ctx->trace_table = debug && !source->context.runtime_support;
   const char *features = source->context.optimization ? source->context.optimization->features : NULL;
   bool x86 = !a64 && !ctx->rv64 && !ctx->rv32 && !ctx->t32;
-  if (x86 && !debug && !debug_info && source->context.optimization && source->context.optimization->level >= 2)
-    ctx->function_alignment = 64;
   ctx->bmi2 = x86 && dyn_cpu_has_feature(features, "+bmi2");
   ctx->sse41 = x86 && dyn_cpu_has_feature(features, "+sse4.1");
   ctx->fma = x86 && dyn_cpu_has_feature(features, "+fma");

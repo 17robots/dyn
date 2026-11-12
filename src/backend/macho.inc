@@ -105,7 +105,7 @@ static bool write_macho(BackendContext *ctx, const char *path, const Elf64_Sym *
   uint64_t address[MACHO_DEBUG + BACKEND_DWARF_SECTION_COUNT], vm = 0;
   for (unsigned i = 0; i < section_count; ++i) {
     if (i == MACHO_DATA) continue;
-    uint64_t alignment = i == MACHO_TEXT && ctx->function_alignment ? ctx->function_alignment : i == MACHO_CONSTANTS ? 16 : 8;
+    uint64_t alignment = i == MACHO_CONSTANTS ? 16 : 8;
     vm = (vm + alignment - 1) & ~(alignment - 1); address[i] = vm; vm += sizes[i];
   }
   vm = (vm + 15) & ~(uint64_t)15; address[MACHO_DATA] = vm; vm += sizes[MACHO_DATA];
@@ -115,7 +115,7 @@ static bool write_macho(BackendContext *ctx, const char *path, const Elf64_Sym *
   cursor = data_start;
   for (unsigned i = 0; i < section_count; ++i) {
     if (i == MACHO_DATA) { offsets[i] = 0; continue; }
-    size_t alignment = i == MACHO_TEXT && ctx->function_alignment ? ctx->function_alignment : i == MACHO_CONSTANTS ? 16 : 8;
+    size_t alignment = i == MACHO_CONSTANTS ? 16 : 8;
     cursor = (cursor + alignment - 1) & ~(alignment - 1); offsets[i] = cursor; cursor += sizes[i];
   }
   size_t data_end = cursor;
@@ -142,10 +142,6 @@ static bool write_macho(BackendContext *ctx, const char *path, const Elf64_Sym *
   put64(c + 32, vm); put64(c + 40, data_start); put64(c + 48, data_end - data_start);
   put32(c + 56, 7); put32(c + 60, 7); put32(c + 64, section_count);
   unsigned text_alignment = 2;
-  if (ctx->function_alignment) {
-    text_alignment = 0;
-    for (unsigned alignment = ctx->function_alignment; alignment > 1; alignment >>= 1) ++text_alignment;
-  }
   for (unsigned i = 0; i < section_count; ++i) {
     unsigned char *s = c + 72 + 80 * i;
     memcpy(s, section_names[i][0], strlen(section_names[i][0])); memcpy(s + 16, section_names[i][1], strlen(section_names[i][1]));
