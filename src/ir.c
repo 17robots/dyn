@@ -154,6 +154,36 @@ static DynByteIntrinsic json_byte_identity(const DynSource *source, CanonicalPat
   return DYN_BYTE_INTRINSIC_JSON_ASCII_PREFIX;
 }
 
+/* std/mem's private zero_bytes_fast(items: []u8): the SSA backend writes a
+   constant-length call as one fixed-size fill, such as the zeroing of each
+   mem.push. Only the exact SDK declaration has this identity. */
+static DynByteIntrinsic zero_identity(const DynSource *source, CanonicalPath *paths,
+                                      const char *source_path, const char *sdk,
+                                      const DynAstProgram *a, const DynIrProgram *ir,
+                                      const DynIrFunction *fn) {
+  if (!sdk || !source_path || fn->foreign || fn->variadic || fn->generic || fn->instance || fn->is_public ||
+      fn->return_type != DYN_TYPE_VOID || fn->param_count != 1 || fn->param_start >= ir->param_count)
+    return DYN_BYTE_INTRINSIC_NONE;
+  DynType items = ir->params[fn->param_start].type;
+  if (!dyn_type_is_slice(items) || items - DYN_TYPE_SLICE_BASE >= a->slice_count ||
+      a->slices[items - DYN_TYPE_SLICE_BASE].is_const || a->slices[items - DYN_TYPE_SLICE_BASE].element != DYN_TYPE_U8)
+    return DYN_BYTE_INTRINSIC_NONE;
+  const char *canonical = canonical_path(paths, source_path);
+  if (!canonical || strcmp(canonical, sdk)) return DYN_BYTE_INTRINSIC_NONE;
+  const char *original, *ignored_path;
+  size_t length, offset;
+  dyn_source_position(source, fn->source_offset, &ignored_path, &original, &length, &offset);
+  const char name[] = "zero_bytes_fast";
+  size_t n = sizeof(name) - 1;
+  if (offset > length || n > length - offset || memcmp(original + offset, name, n)) return DYN_BYTE_INTRINSIC_NONE;
+  if (offset + n < length) {
+    unsigned char c = (unsigned char)original[offset + n];
+    if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_')
+      return DYN_BYTE_INTRINSIC_NONE;
+  }
+  return DYN_BYTE_INTRINSIC_ZERO;
+}
+
 static bool allocate(void **out, size_t count, size_t size) {
   if (!count) {
     *out = NULL;
@@ -529,11 +559,13 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
   char *bytes_sdk = proofs ? sdk_source_path("std/bytes/bytes.dyn", true) : NULL;
   char *json_sdk = proofs ? sdk_source_path("std/encoding/json/read/read.dyn", true) : NULL;
   char *mutable_json_sdk = proofs ? sdk_source_path("std/encoding/json/json.dyn", true) : NULL;
+  char *mem_sdk = proofs ? sdk_source_path("std/mem/mem.dyn", true) : NULL;
   for (size_t i = 0; i < a->function_count; ++i) {
     size_t n = a->functions[i].name.end_byte - a->functions[i].name.start_byte;
     /* Instances share the generic's name; the suffix hashes the type arguments, so it stays stable when other code changes. */
     ir->functions[i].name = malloc(n + 20);
     if (!ir->functions[i].name) {
+      free(mem_sdk);
       free(mutable_json_sdk);
       free(json_sdk);
       free(bytes_sdk);
@@ -570,6 +602,7 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
     size_t link_length = a->functions[i].link_name.end_byte - a->functions[i].link_name.start_byte;
     ir->functions[i].link_name = malloc(link_length + 1);
     if (!ir->functions[i].link_name) {
+      free(mem_sdk);
       free(mutable_json_sdk);
       free(json_sdk);
       free(bytes_sdk);
@@ -602,7 +635,10 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
     ir->functions[i].byte_intrinsic = byte_identity(source, &paths, source_path, bytes_sdk, a, ir, &ir->functions[i]);
     if (ir->functions[i].byte_intrinsic == DYN_BYTE_INTRINSIC_NONE)
       ir->functions[i].byte_intrinsic = json_byte_identity(source, &paths, source_path, json_sdk, mutable_json_sdk, a, ir, &ir->functions[i]);
+    if (ir->functions[i].byte_intrinsic == DYN_BYTE_INTRINSIC_NONE)
+      ir->functions[i].byte_intrinsic = zero_identity(source, &paths, source_path, mem_sdk, a, ir, &ir->functions[i]);
   }
+  free(mem_sdk);
   free(mutable_json_sdk);
   free(json_sdk);
   free(bytes_sdk);

@@ -109,7 +109,9 @@ typedef enum {
   DYN_BYTE_INTRINSIC_NONE,
   DYN_BYTE_INTRINSIC_FIND_BYTE,
   DYN_BYTE_INTRINSIC_FIND,
-  DYN_BYTE_INTRINSIC_JSON_ASCII_PREFIX
+  DYN_BYTE_INTRINSIC_JSON_ASCII_PREFIX,
+  /* std/mem's zero_bytes_fast: a constant length becomes a fixed zero fill. */
+  DYN_BYTE_INTRINSIC_ZERO
 } DynByteIntrinsic;
 typedef struct {
   /* debug_name is set for instances only: "min(u32)" for debuggers. */

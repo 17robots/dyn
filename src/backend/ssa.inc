@@ -5558,6 +5558,25 @@ static bool ssa_accumulate(Ssa *s, const uint32_t *order, uint32_t n) {
     fprintf(stderr, "remark: %s: self-recursive tail additions accumulate in a loop\n", f->name);
   return !s->failed;
 }
+/* std/mem's zero_bytes_fast, once folding has made its length constant, as
+   in each mem.push: one fixed fill instead of a call. x86-64 and AArch64
+   store unaligned; the call stays on RISC-V. */
+static void ssa_zero_calls(Ssa *s, const uint32_t *order, uint32_t n) {
+  BackendContext *ctx = s->ctx;
+  if (!ctx->zero_symbol || ctx->rv64 || ctx->rv32 || ctx->t32) return;
+  for (uint32_t i = 0; i < n; ++i) {
+    SsaBlock *block = &s->blocks[order[i]];
+    for (uint32_t k = 0; k < block->values.count; ++k) {
+      SsaValue *v = &s->values[block->values.items[k]];
+      if (v->dead || v->op != SO_CALL || v->aux2 || (unsigned)v->aux != ctx->zero_symbol || v->count != 2 || v->cond) continue;
+      int32_t pointer = (int32_t)s->lists[v->list], length = ssa_resolve(s, (int32_t)s->lists[v->list + 3]);
+      if (length < 0 || s->values[length].op != SO_CONST || (uint64_t)s->values[length].aux > 256) continue;
+      int64_t bytes = s->values[length].aux;
+      v->op = SO_ZEROMEM; v->cls = SC_NONE; v->a = pointer; v->b = v->c = -1;
+      v->aux = bytes; v->aux2 = 0; v->count = 0; v->list = 0;
+    }
+  }
+}
 /* ---- Unroll and jam ----
 
    A loop nest such as matrix multiply,
@@ -6818,7 +6837,7 @@ static uint64_t ssa_clobbers(Ssa *s, const SsaValue *v) {
     return ssa_is_const(s, v->b, &c) || s->ctx->bmi2 ? 0 : UINT64_C(1) << X_RCX;
   }
   case SO_COPYMEM: return v->aux > 64 ? (UINT64_C(1) << X_RCX | UINT64_C(1) << X_RSI | UINT64_C(1) << X_RDI) : UINT64_C(1) << X_RCX;
-  case SO_ZEROMEM: return v->aux > 64 ? (UINT64_C(1) << X_RAX | UINT64_C(1) << X_RCX | UINT64_C(1) << X_RDI) : 0;
+  case SO_ZEROMEM: return v->aux > 256 ? (UINT64_C(1) << X_RAX | UINT64_C(1) << X_RCX | UINT64_C(1) << X_RDI) : 0;
   case SO_FILLMEM: return UINT64_C(1) << X_RAX | UINT64_C(1) << X_RCX | UINT64_C(1) << X_RDI;
   case SO_FIND: return UINT64_C(1) << X_RAX | UINT64_C(1) << X_RCX | UINT64_C(1) << X_RDX |
                        UINT64_C(1) << X_R8 | UINT64_C(1) << X_R9 | UINT64_C(1) << X_R10 | UINT64_C(1) << X_R11;
@@ -8043,9 +8062,18 @@ static void ssa_zero_memory(SsaEmit *e, SsaValue *v) {
   BackendContext *ctx = e->ctx;
   uint32_t size = (uint32_t)v->aux;
   if (!size) return;
-  if (size <= 64) {
+  if (size <= 256) {
+    /* Unaligned stores: 16 bytes at a time from a zeroed scratch register,
+       then the tail. */
     SsaMemory m = ssa_address_of(e, v->a, -1, 1, 0, X_R10, X_R11);
     uint32_t at = 0;
+    if (size >= 32) {
+      x86_reg_op(ctx, 0x66, false, OP2(0x0f, 0xef), SSA_XS1 - X_XMM0, SSA_XS1 - X_XMM0, false); /* pxor */
+      for (; size - at >= 16; at += 16) {
+        SsaMemory slot = m; slot.disp += (int32_t)at;
+        x86_mem_op(ctx, -1, false, OP2(0x0f, 0x11), SSA_XS1 - X_XMM0, slot, false); /* movups */
+      }
+    }
     while (at < size) {
       unsigned width = size - at >= 8 ? 8 : size - at >= 4 ? 4 : size - at >= 2 ? 2 : 1;
       SsaMemory slot = m; slot.disp += (int32_t)at;
@@ -9977,6 +10005,7 @@ static void ssa_prepare(SsaPrepared *p, BackendContext *ctx, const DynSource *so
   }
   order = ssa_order(s, &n);
   if (!order || s->failed) goto done;
+  ssa_zero_calls(s, order, n);
   if (ssa_accumulate(s, order, n)) {
     ssa_resolve_all(s);
     order = ssa_order(s, &n);

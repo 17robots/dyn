@@ -109,6 +109,8 @@ typedef struct {
      address up in a table of function ranges and pc-to-line rows, which
      the object carries in its constants (see trace_table_write). main hands
      the table's header to dyn_trace_start; nothing runs per call. */
+  /* The symbol of std/mem's zero_bytes_fast, or 0; see ssa_zero_calls. */
+  unsigned zero_symbol;
   bool trace_table;
   uint32_t trace_header; /* constants offset of {text start, table} */
   unsigned trace_base_symbol; uint32_t trace_base_offset; /* the first traced function */
@@ -3426,6 +3428,9 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
     symbols[ctx->initializer_flag_symbol]=(Elf64_Sym){.st_name=(Elf64_Word)names,.st_info=ELF64_ST_INFO(STB_LOCAL,STT_OBJECT),.st_shndx=8,.st_value=at,.st_size=1};
     memcpy(strings+names,flag,length); names+=length;
   }
+  for (size_t i = 0; i < ir->function_count; ++i)
+    if (ctx->function_live[i] && ir->functions[i].byte_intrinsic == DYN_BYTE_INTRINSIC_ZERO)
+      ctx->zero_symbol = ctx->function_symbols[i];
   ssa_pipeline_start(ctx, source, ir);
   for (size_t i = 0; i < ir->function_count; ++i) {
     const DynIrFunction *f = &ir->functions[i];

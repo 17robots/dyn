@@ -36,6 +36,14 @@ servers so they pick up the new `dyn`.
 - Builds without overflow checks turn `return f(n - 1) + f(n - 2)` style
   recursion into one call per level plus a loop, as overflow-checked builds
   already did: release `fib(40)` went from 0.27s to 0.18s.
+- `mem.push` and the other arena pushes take a smaller inlined fast path,
+  and a struct's zeroing becomes one fixed-size fill instead of a call:
+  the tree kernel went from 0.30s to 0.19s and the JSON log report from
+  30.7 ms to 28.3 ms (25.4 ms at `--opt-level 3`). An arena's `peak_used`
+  is brought up to date when it is read or rewound, not on every push.
+- Threads from `thread.spawn_with_size` on Linux get a 64 KiB guard below
+  their stack, so a stack overflow faults (and debug builds report it with
+  a trace) instead of writing into neighbouring memory.
 - Debug stack traces no longer cost anything per call. Functions no longer
   call `dyn_trace_push` and `dyn_trace_pop` or store their line at each
   statement; instead a panic or memory fault walks frame pointers and looks
