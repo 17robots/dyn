@@ -61,6 +61,21 @@ static size_t nd_x64(const unsigned char *p, size_t n, char *out, size_t cap) {
   const char *name = NULL;
   if (prefix && op != 0x0f && op != 0xa4 && op != 0xaa)
     return 0;
+  /* Multi-byte NOPs, 0f 1f /0, as loop alignment pads them. */
+  if (op == 0x0f && !prefix && n - i >= 2 && p[i] == 0x1f && ((p[i + 1] >> 3) & 7) == 0) {
+    unsigned modrm = p[i + 1], mod = modrm >> 6, rm = modrm & 7;
+    size_t length = i + 2;
+    if (mod != 3 && rm == 4) {
+      if (n <= length) return 0;
+      if (mod == 0 && (p[length] & 7) == 5) length += 4;
+      ++length;
+    }
+    if (mod == 1) length += 1;
+    else if (mod == 2 || (mod == 0 && rm == 5)) length += 4;
+    if (length > n) return 0;
+    snprintf(out, cap, "nop");
+    return length;
+  }
   if (op == 0xc4 && !rex && !prefix && !word16 && n - i >= 4) {
     unsigned v2 = p[i], v3 = p[i + 1], modrm = p[i + 3];
     if ((v2 & 31) == 2 && p[i + 2] == 0xa9 && !(v3 & 4) && (v3 & 3) == 1 && (modrm >> 6) == 3) {

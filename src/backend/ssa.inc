@@ -58,6 +58,7 @@ typedef enum {
   SO_BYTE_COUNT, /* x86 only: count predicate matches in a[0..b], starting at c */
   SO_AXPY,       /* x86 only: dst[i] +/- v * src[i]; a: frame {dst, src, count, v}; aux: bytes, aux2: operator */
   SO_SUM,        /* x86 only: wrapping sum of a[0..b] from c; aux: bytes, aux2: bit 0 squares, bit 1 signed */
+  SO_COPYN,      /* x86 only: copy c bytes from b to a, as a forward byte loop would */
   SO_PANIC,      /* dyn_panic(a, b) */
   SO_VECTOR,     /* SIMD loop over frame arrays a = b op c; aux: elements, aux2: op | bytes << 8 */
   SO_MULOK32,   /* paired targets: checked product fits, without a guard */
@@ -344,7 +345,7 @@ static int32_t ssa_value(Ssa *s, uint32_t block, SsaOp op, uint8_t cls, int32_t 
   v->pos = s->pos;
   v->block = block; v->reg = v->slot = -1; v->hint = -1; v->scale = 1;
   v->effect = op == SO_CHECK || op == SO_CHECK_SHL || op == SO_ADDO || op == SO_SUBO || op == SO_MULO ||
-              op == SO_LOAD || op == SO_STORE || op == SO_CALL || op == SO_COPYMEM || op == SO_ZEROMEM || op == SO_FILLMEM || op == SO_FIND_BYTE || op == SO_FIND || op == SO_JSON_ASCII_PREFIX || op == SO_BYTE_COUNT || op == SO_SUM || op == SO_AXPY || op == SO_VLOOP ||
+              op == SO_LOAD || op == SO_STORE || op == SO_CALL || op == SO_COPYMEM || op == SO_ZEROMEM || op == SO_FILLMEM || op == SO_FIND_BYTE || op == SO_FIND || op == SO_JSON_ASCII_PREFIX || op == SO_BYTE_COUNT || op == SO_SUM || op == SO_AXPY || op == SO_COPYN || op == SO_VLOOP ||
               op == SO_PANIC || op == SO_DIV || op == SO_REM || op == SO_RESULT || op == SO_PARAM || op == SO_VECTOR || op == SO_TRAP || op == SO_FAIL || op == SO_CONTINUE;
   return (int32_t)s->value_count++;
 }
@@ -2409,6 +2410,53 @@ static bool ssa_sum(Ssa *s, const DynIrStmt *st, unsigned depth) {
   if (s->ctx->optimization_remarks) fprintf(stderr, "remark: %s: vectorized slice sum\n", s->f->name);
   return true;
 }
+/* `for i in 0..n { d[i] = s[i] }` over scalar elements, as mem.copy has it:
+   one SO_COPYN when n fits both slices; otherwise the ordinary loop, whose
+   checks then fail at the same index. */
+static bool ssa_copy_loop(Ssa *s, const DynIrStmt *st, unsigned depth) {
+  const DynIrProgram *ir = s->ir;
+  BackendContext *ctx = s->ctx;
+  if (s->scalar_loop == st || !ctx->byte_fill || ctx->a64 || ctx->rv64 || ctx->rv32 || ctx->t32 ||
+      !st->for_range || st->for_reverse || st->for_inclusive || st->for_pointer || st->body_count != 1 ||
+      st->body_start >= ir->child_count || st->target >= ir->expression_count ||
+      st->expression >= ir->expression_count || !ssa_byte_count_private(s, st->local_id)) return false;
+  const DynIrExpr *start = &ir->expressions[st->target];
+  if (start->kind != DYN_EXPR_INT || start->integer || !ssa_axpy_pure(s, st->expression, st->local_id, 0)) return false;
+  const DynIrStmt *assign = &ir->statements[ir->children[st->body_start]];
+  if (assign->kind != DYN_STMT_ASSIGN || assign->assignment_op != DYN_OP_NONE || assign->target == DYN_NO_EXPR ||
+      assign->expression >= ir->expression_count) return false;
+  uint32_t destination, source;
+  DynExprId destination_offset, source_offset;
+  DynType element, source_element;
+  if (!ssa_axpy_element(s, assign->target, st->local_id, &destination, &destination_offset, &element) ||
+      !ssa_axpy_element(s, assign->expression, st->local_id, &source, &source_offset, &source_element) ||
+      destination_offset != DYN_NO_EXPR || source_offset != DYN_NO_EXPR || destination == source ||
+      element != source_element || !scalar(ir, element) || ir->expressions[assign->expression].type != element)
+    return false;
+  uint32_t size, alignment;
+  if (!layout(ir, element, &size, &alignment, 0) || !size || size > 8) return false;
+  uint32_t scalar_path = ssa_block(s), join = ssa_block(s);
+  if (s->failed) return true;
+  int32_t count = ssa_expr(s, st->expression, NULL, 0);
+  ssa_axpy_guard(s, count, ssa_read(s, 2 * destination + 1, s->current, SC_INT), scalar_path);
+  ssa_axpy_guard(s, count, ssa_read(s, 2 * source + 1, s->current, SC_INT), scalar_path);
+  int32_t bytes = size == 1 ? count : ssa_emit(s, SO_MUL, SC_INT, count, ssa_const(s, size, SC_INT), -1, 0, 0);
+  ssa_emit(s, SO_COPYN, SC_NONE, ssa_read(s, 2 * destination, s->current, SC_INT),
+           ssa_read(s, 2 * source, s->current, SC_INT), bytes, 0, 0);
+  ssa_jump(s, join);
+  ssa_seal(s, scalar_path);
+  s->current = scalar_path;
+  const DynIrStmt *outer = s->scalar_loop;
+  s->scalar_loop = st;
+  ssa_statement_value(s, st, depth);
+  s->scalar_loop = outer;
+  if (s->failed) return true;
+  if (s->current != UINT32_MAX) ssa_jump(s, join);
+  ssa_seal(s, join);
+  s->current = s->blocks[join].preds.count ? join : UINT32_MAX;
+  if (ctx->optimization_remarks) fprintf(stderr, "remark: %s: element copy loop became one copy\n", s->f->name);
+  return true;
+}
 static bool ssa_vector(Ssa *s, const DynIrStmt *st) {
   const DynIrProgram *ir = s->ir;
   if (!s->ctx->vectorize || !st->for_range || st->for_reverse || st->for_inclusive || st->for_pointer ||
@@ -2797,6 +2845,7 @@ static void ssa_statement_value(Ssa *s, const DynIrStmt *st, unsigned depth) {
     if (ssa_vector(s, st)) return;
     if (ssa_sum(s, st, depth)) return;
     if (ssa_axpy(s, st, depth)) return;
+    if (ssa_copy_loop(s, st, depth)) return;
     uint32_t counter = s->variable_count + s->hidden_variables++;
     ++s->loop_depth;
     uint32_t header = ssa_block(s), body = ssa_block(s), latch = ssa_block(s), exit = ssa_block(s);
@@ -4467,7 +4516,8 @@ static void ssa_classify_regions(Ssa *s, const uint32_t *order, uint32_t n, uint
                                       ssa_access_size(v), &at, &inside);
         if (!memory || !inside) {
           state[r] |= REGION_ESCAPED;
-          if (((v->op == SO_FIND_BYTE || v->op == SO_JSON_ASCII_PREFIX || v->op == SO_BYTE_COUNT || v->op == SO_SUM || v->op == SO_AXPY) && address) || (v->op == SO_FIND && (j == 0 || j == 2))) state[r] |= REGION_READ;
+          if (((v->op == SO_FIND_BYTE || v->op == SO_JSON_ASCII_PREFIX || v->op == SO_BYTE_COUNT || v->op == SO_SUM || v->op == SO_AXPY) && address) || (v->op == SO_FIND && (j == 0 || j == 2)) ||
+              (v->op == SO_COPYN && source)) state[r] |= REGION_READ;
           continue;
         }
         if (v->op == SO_LOAD || source) state[r] |= REGION_READ;
@@ -6849,6 +6899,8 @@ static uint64_t ssa_clobbers(Ssa *s, const SsaValue *v) {
                             UINT64_C(1) << X_R10 | UINT64_C(1) << X_R11;
   case SO_FIND_BYTE: return UINT64_C(1) << X_RAX | UINT64_C(1) << X_RCX |
                             UINT64_C(1) << X_R10 | UINT64_C(1) << X_R11;
+  case SO_COPYN: return UINT64_C(1) << X_RAX | UINT64_C(1) << X_RCX | UINT64_C(1) << X_RSI | UINT64_C(1) << X_RDI |
+                        UINT64_C(1) << X_R11;
   default: return 0;
   }
 }
@@ -8071,7 +8123,7 @@ static void ssa_zero_memory(SsaEmit *e, SsaValue *v) {
       x86_reg_op(ctx, 0x66, false, OP2(0x0f, 0xef), SSA_XS1 - X_XMM0, SSA_XS1 - X_XMM0, false); /* pxor */
       for (; size - at >= 16; at += 16) {
         SsaMemory slot = m; slot.disp += (int32_t)at;
-        x86_mem_op(ctx, -1, false, OP2(0x0f, 0x11), SSA_XS1 - X_XMM0, slot, false); /* movups */
+        x86_mem_op(ctx, 0xf3, false, OP2(0x0f, 0x7f), SSA_XS1 - X_XMM0, slot, false); /* movdqu */
       }
     }
     while (at < size) {
@@ -8605,6 +8657,52 @@ static void ssa_json_ascii_prefix(SsaEmit *e, SsaValue *v) {
   CODE(0x0f,0xbc,0xc2,0x48,0x01,0xc8); /* bsf eax,edx; add index */
   isa_patch(ctx, done, ctx->text.n);
   ssa_put(e, v, X_RAX);
+}
+/* SO_COPYN: c bytes from b to a with the result of a forward byte loop,
+   overlap included. rep movsb from 32 bytes. Below that, disjoint ranges
+   copy 8 or 4 bytes at a time, the last move overlapping the one before;
+   overlapping ranges go one byte at a time. RAX and R11 carry the data. */
+static void ssa_copy_bytes(SsaEmit *e, SsaValue *v) {
+  BackendContext *ctx = e->ctx;
+  SsaMove moves[3] = {ssa_source(e, v->a), ssa_source(e, v->b), ssa_source(e, v->c)};
+  moves[0].dst_kind = moves[1].dst_kind = moves[2].dst_kind = L_REG;
+  moves[0].dst = X_RDI; moves[1].dst = X_RSI; moves[2].dst = X_RCX;
+  moves[0].cls = moves[1].cls = moves[2].cls = SC_INT;
+  if (ctx->win64) CODE(0x56, 0x57); /* RSI and RDI are callee-saved on Windows */
+  ssa_parallel(e, moves, 3);
+  CODE(0x48, 0x83, 0xf9, 0x20, 0x0f, 0x83); size_t large = ctx->text.n; word(ctx, 0); /* cmp rcx, 32; jae */
+  /* Disjoint: rdi - rsi >= rcx and rsi - rdi >= rcx, unsigned. */
+  CODE(0x48, 0x89, 0xf8, 0x48, 0x29, 0xf0, 0x48, 0x39, 0xc8, 0x0f, 0x82);              /* rax = rdi - rsi; cmp rax, rcx; jb */
+  size_t overlap1 = ctx->text.n; word(ctx, 0);
+  CODE(0x48, 0x89, 0xf0, 0x48, 0x29, 0xf8, 0x48, 0x39, 0xc8, 0x0f, 0x82);              /* rax = rsi - rdi; cmp rax, rcx; jb */
+  size_t overlap2 = ctx->text.n; word(ctx, 0);
+  CODE(0x48, 0x83, 0xf9, 0x08, 0x0f, 0x82); size_t under8 = ctx->text.n; word(ctx, 0); /* cmp rcx, 8; jb */
+  /* 8 to 31 bytes: the last 8 first, then 8 at a time from the start. */
+  CODE(0x4c, 0x8b, 0x5c, 0x0e, 0xf8, 0x4c, 0x89, 0x5c, 0x0f, 0xf8);                    /* r11 = [rsi+rcx-8]; [rdi+rcx-8] = r11 */
+  size_t words = ctx->text.n;
+  CODE(0x48, 0x8b, 0x06, 0x48, 0x89, 0x07);                                           /* rax = [rsi]; [rdi] = rax */
+  CODE(0x48, 0x83, 0xc6, 0x08, 0x48, 0x83, 0xc7, 0x08, 0x48, 0x83, 0xe9, 0x08);       /* rsi += 8; rdi += 8; rcx -= 8 */
+  CODE(0x48, 0x83, 0xf9, 0x08, 0x0f, 0x83); word(ctx, (uint32_t)((int64_t)words - (int64_t)(ctx->text.n + 4))); /* cmp 8; jae */
+  byte(ctx, 0xe9); size_t done_words = ctx->text.n; word(ctx, 0);
+  patch_word(ctx, under8, (uint32_t)(ctx->text.n - under8 - 4));
+  CODE(0x48, 0x83, 0xf9, 0x04, 0x0f, 0x82); size_t under4 = ctx->text.n; word(ctx, 0); /* cmp rcx, 4; jb */
+  CODE(0x8b, 0x06, 0x44, 0x8b, 0x5c, 0x0e, 0xfc, 0x89, 0x07, 0x44, 0x89, 0x5c, 0x0f, 0xfc); /* 4 from each end */
+  byte(ctx, 0xe9); size_t done_halves = ctx->text.n; word(ctx, 0);
+  patch_word(ctx, under4, (uint32_t)(ctx->text.n - under4 - 4));
+  patch_word(ctx, overlap1, (uint32_t)(ctx->text.n - overlap1 - 4));
+  patch_word(ctx, overlap2, (uint32_t)(ctx->text.n - overlap2 - 4));
+  CODE(0x48, 0x85, 0xc9, 0x0f, 0x84); size_t done_bytes = ctx->text.n; word(ctx, 0);  /* test rcx, rcx; jz */
+  size_t bytes = ctx->text.n;
+  CODE(0x8a, 0x06, 0x88, 0x07, 0x48, 0xff, 0xc6, 0x48, 0xff, 0xc7, 0x48, 0xff, 0xc9); /* one byte; rsi++; rdi++; rcx-- */
+  CODE(0x0f, 0x85); word(ctx, (uint32_t)((int64_t)bytes - (int64_t)(ctx->text.n + 4)));
+  byte(ctx, 0xe9); size_t done_tail = ctx->text.n; word(ctx, 0);
+  patch_word(ctx, large, (uint32_t)(ctx->text.n - large - 4));
+  CODE(0xf3, 0xa4);                                                                    /* rep movsb */
+  patch_word(ctx, done_words, (uint32_t)(ctx->text.n - done_words - 4));
+  patch_word(ctx, done_halves, (uint32_t)(ctx->text.n - done_halves - 4));
+  patch_word(ctx, done_bytes, (uint32_t)(ctx->text.n - done_bytes - 4));
+  patch_word(ctx, done_tail, (uint32_t)(ctx->text.n - done_tail - 4));
+  if (ctx->win64) CODE(0x5f, 0x5e);
 }
 static void ssa_find_byte(SsaEmit *e, SsaValue *v) {
   BackendContext *ctx = e->ctx;
@@ -9320,6 +9418,7 @@ static void ssa_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
   case SO_FIND_BYTE: ssa_find_byte(e, v); return;
   case SO_BYTE_COUNT: ssa_byte_count_emit(e, v); return;
   case SO_SUM: ssa_sum_emit(e, v); return;
+  case SO_COPYN: ssa_copy_bytes(e, v); return;
   case SO_AXPY: ssa_axpy_emit(e, v); return;
   case SO_VLOOP: ssa_vloop_emit(e, v); return;
   case SO_JSON_ASCII_PREFIX: ssa_json_ascii_prefix(e, v); return;
@@ -9832,6 +9931,9 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
     }
     if (target == SIZE_MAX) {
       target = ctx->text.n;
+      /* The out-of-line path belongs to its statement's line, for the
+         debugger and stack traces. */
+      if (pos) { e->last_pos = 0; ssa_debug_position(e, pos); }
       size_t length, at = ssa_check_name(e, origin, pos, &length);
       if (e->stub_uses[i].values) ssa_report_values(e, e->stub_uses[i].index, e->stub_uses[i].limit);
       isa_string_arguments(ctx, at, (size_t)kind << 24 | (e->stub_uses[i].values ? 0x800000u : 0) | length);

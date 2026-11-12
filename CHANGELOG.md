@@ -36,6 +36,12 @@ servers so they pick up the new `dyn`.
 - Builds without overflow checks turn `return f(n - 1) + f(n - 2)` style
   recursion into one call per level plus a loop, as overflow-checked builds
   already did: release `fib(40)` went from 0.27s to 0.18s.
+- `mem.copy`, and any loop of the form `for i in 0..n { d[i] = s[i] }` over
+  scalar elements, run as one copy in x86-64 release builds when `n` fits
+  both slices (otherwise the loop runs and fails where it did before):
+  copying a 1 MiB buffer 2000 times plus 20 million 12-byte copies went
+  from 0.45s to 0.07s. Fixed-size zeroing of up to 256 bytes uses 16-byte
+  stores instead of `rep stosb`.
 - `mem.push` and the other arena pushes take a smaller inlined fast path,
   and a struct's zeroing becomes one fixed-size fill instead of a call:
   the tree kernel went from 0.30s to 0.19s and the JSON log report from
