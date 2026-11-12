@@ -38,9 +38,18 @@ static inline void dyn_location_get(const DynLocationIndex *index, const DynSour
   size_t length, offset;
   dyn_source_position(s, byte, path, &text, &length, &offset);
   if (offset > length) offset = length;
-  /* Code generation asks for one function's statements in a row: try the
-     file of the previous answer before scanning every file. */
+  /* Files are the source itself and then its maps in order, so the map
+     holding byte names the file; the scan below covers an index built for
+     another source. Code generation asks for one function's statements in a
+     row, so the scan tries the file of the previous answer first. */
   static _Thread_local size_t hint;
+  size_t lo = 0, hi = s->map_count;
+  while (lo < hi) {
+    size_t mid = lo + (hi - lo) / 2;
+    if (s->maps[mid].end < byte) lo = mid + 1; else hi = mid;
+  }
+  size_t guess = lo < s->map_count && byte >= s->maps[lo].start ? lo + 1 : 0;
+  if (guess < index->count && index->files[guess].text == text) hint = guess;
   for (size_t n = 0; n < index->count; ++n) {
     size_t i = n ? n - 1 : (hint < index->count ? hint : 0);
     if (n && i == hint) continue;

@@ -1724,22 +1724,31 @@ static bool optimize(const DynSource *source, const DynIrProgram *input, DynIrPr
   o->ir.statements = NULL;
   if (level < 1 || level > 3)
     return false;
-  o->ir.expressions =
-      malloc((input->expression_count ? input->expression_count : 1) *
-             sizeof(*input->expressions));
-  o->ir.statements =
-      malloc((input->statement_count ? input->statement_count : 1) *
-             sizeof(*input->statements));
-  if (!o->ir.expressions || !o->ir.statements) {
-    dyn_native_optimization_free(o);
-    return false;
+  /* An owned input's arrays become the optimized program's: copying them
+     cost a full pass over a large program's expressions. Folding below reads
+     the input while it runs, so its results are applied afterwards either
+     way. */
+  if (owned) {
+    o->ir.expressions = owned->expressions;
+    o->ir.statements = owned->statements;
+  } else {
+    o->ir.expressions =
+        malloc((input->expression_count ? input->expression_count : 1) *
+               sizeof(*input->expressions));
+    o->ir.statements =
+        malloc((input->statement_count ? input->statement_count : 1) *
+               sizeof(*input->statements));
+    if (!o->ir.expressions || !o->ir.statements) {
+      dyn_native_optimization_free(o);
+      return false;
+    }
+    if (input->expression_count)
+      memcpy(o->ir.expressions, input->expressions,
+             input->expression_count * sizeof(*input->expressions));
+    if (input->statement_count)
+      memcpy(o->ir.statements, input->statements,
+             input->statement_count * sizeof(*input->statements));
   }
-  if (input->expression_count)
-    memcpy(o->ir.expressions, input->expressions,
-           input->expression_count * sizeof(*input->expressions));
-  if (input->statement_count)
-    memcpy(o->ir.statements, input->statements,
-           input->statement_count * sizeof(*input->statements));
   Eval c = {.ir = input,
             .level = level,
             .pointer_bits = 8 * dyn_target_pointer_bytes(
@@ -1754,6 +1763,7 @@ static bool optimize(const DynSource *source, const DynIrProgram *input, DynIrPr
               "error: independent sample profile requires nonempty "
               "function:total:head text records and numeric line samples\n");
       free(samples);
+      if (owned) o->ir.expressions = NULL, o->ir.statements = NULL;
       dyn_native_optimization_free(o);
       return false;
     }
@@ -1764,8 +1774,11 @@ static bool optimize(const DynSource *source, const DynIrProgram *input, DynIrPr
   /* A constant global whose address is taken stays a global; its uses as a
      value fold to its initializer. */
   bool *addressed = calloc(input->expression_count ? input->expression_count : 1, sizeof(*addressed));
+  struct { DynExprId id; uint64_t value; } *folds = NULL;
+  size_t fold_count = 0, fold_capacity = 0;
   if (!addressed) {
     free(samples);
+    if (owned) o->ir.expressions = NULL, o->ir.statements = NULL;
     dyn_native_optimization_free(o);
     return false;
   }
@@ -1784,10 +1797,20 @@ static bool optimize(const DynSource *source, const DynIrProgram *input, DynIrPr
     c.remaining = 256;
     if (!value(&c, (DynExprId)i, &result, 0))
       continue;
-    DynIrExpr *dest = &o->ir.expressions[i];
-    dest->kind = e->type == DYN_TYPE_BOOL ? DYN_EXPR_BOOL : DYN_EXPR_INT;
-    dest->integer = result;
-    dest->boolean = result != 0;
+    if (fold_count == fold_capacity) {
+      size_t capacity = fold_capacity ? fold_capacity * 2 : 256;
+      void *grown = realloc(folds, capacity * sizeof(*folds));
+      if (!grown) {
+        free(folds); free(addressed); free(samples);
+        if (owned) o->ir.expressions = NULL, o->ir.statements = NULL;
+        dyn_native_optimization_free(o);
+        return false;
+      }
+      folds = grown;
+      fold_capacity = capacity;
+    }
+    folds[fold_count].id = (DynExprId)i;
+    folds[fold_count++].value = result;
     if (e->kind == DYN_EXPR_NAME || e->kind == DYN_EXPR_GLOBAL)
       ++o->propagated;
     else if (e->kind == DYN_EXPR_CALL)
@@ -1795,6 +1818,13 @@ static bool optimize(const DynSource *source, const DynIrProgram *input, DynIrPr
     else
       ++o->folded;
   }
+  for (size_t f = 0; f < fold_count; ++f) {
+    DynIrExpr *dest = &o->ir.expressions[folds[f].id];
+    dest->kind = dest->type == DYN_TYPE_BOOL ? DYN_EXPR_BOOL : DYN_EXPR_INT;
+    dest->integer = folds[f].value;
+    dest->boolean = folds[f].value != 0;
+  }
+  free(folds);
   free(addressed);
   if (level >= 2)
     for (size_t i = 0; i < input->statement_count; ++i) {
@@ -1814,8 +1844,7 @@ static bool optimize(const DynSource *source, const DynIrProgram *input, DynIrPr
     }
   dyn_timing_phase(&source->context, &optimization_time, "scalar optimization");
   if (owned) {
-    /* The copy now holds every expression and statement inlining reads. */
-    free(owned->expressions); free(owned->statements);
+    /* The optimized program holds the input's arrays from here on. */
     owned->expressions = NULL; owned->statements = NULL;
   }
   const char *no_ssa = getenv("DYN_NO_SSA");

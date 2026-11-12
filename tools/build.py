@@ -140,8 +140,8 @@ add('module-allocation-test', [f'{COMPILER}/tests/interface-allocation.c', f'{CO
 add('global-allocation-test', [f'{COMPILER}/tests/global-allocation.c', f'{COMPILER}/src/sema_globals.c', f'{COMPILER}/src/source.c', f'{COMPILER}/src/source_tree.c', f'{COMPILER}/src/diagnostic.c', *headers],
     [*cc, *cppflags, *cflags, '-D_POSIX_C_SOURCE=200809L', '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections', f'-I{COMPILER}/src', 'tests/global-allocation.c', f'{COMPILER}/src/source.c', f'{COMPILER}/src/source_tree.c', f'{COMPILER}/src/diagnostic.c', *parser_sources, '-o', f'{BUILD}/global-allocation-test'])
 
-add('source-failure-test', [f'{COMPILER}/tests/source-failure.c', f'{COMPILER}/src/source.c', f'{COMPILER}/src/source_tree.c', f'{COMPILER}/src/diagnostic.c', *headers],
-    [*cc, *cppflags, *cflags, '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections', f'-I{COMPILER}/src', 'tests/source-failure.c', f'{COMPILER}/src/source_tree.c', f'{COMPILER}/src/diagnostic.c', *parser_sources, '-o', f'{BUILD}/source-failure-test'])
+add('source-failure-test', [f'{COMPILER}/tests/source-failure.c', f'{COMPILER}/src/source.c', f'{COMPILER}/src/source_tree.c', f'{COMPILER}/src/diagnostic.c', f'{COMPILER}/src/target.c', *headers],
+    [*cc, *cppflags, *cflags, '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections', f'-I{COMPILER}/src', 'tests/source-failure.c', f'{COMPILER}/src/source_tree.c', f'{COMPILER}/src/diagnostic.c', f'{COMPILER}/src/target.c', *parser_sources, '-o', f'{BUILD}/source-failure-test'])
 
 add('ast-allocation-test', [f'{COMPILER}/tests/ast-allocation.c', f'{COMPILER}/src/ast.c', f'{COMPILER}/src/source.c', f'{COMPILER}/src/source_tree.c', f'{COMPILER}/src/diagnostic.c', f'{COMPILER}/src/target.c', *headers],
     [*cc, *cppflags, *cflags, '-D_POSIX_C_SOURCE=200809L', '-ffunction-sections', '-fdata-sections', '-Wl,--gc-sections', f'-I{COMPILER}/src', 'tests/ast-allocation.c', f'{COMPILER}/src/source.c', f'{COMPILER}/src/source_tree.c', f'{COMPILER}/src/diagnostic.c', f'{COMPILER}/src/target.c', *parser_sources, '-o', f'{BUILD}/ast-allocation-test'])

@@ -32,6 +32,11 @@ servers so they pick up the new `dyn`.
   instead of a compare at the top and a jump back.
 - Large programs check about 9% faster and build about 7% faster: the walk
   that finds generic instances in function bodies runs on up to four threads.
+- Large programs check about 12% faster and build 7 to 10% faster again. The
+  compiler reads each file's `#target` line once, looks modules up by hash,
+  hands the optimizer the lowered program instead of a copy, and keeps
+  blocks up to 4 MiB in the heap in batch commands instead of mapping each one.
+  `dyn lsp` keeps the allocator's defaults.
 - `std/os/macos.thread_yield` yields through libSystem's `sched_yield`. It
   called BSD syscall 331, which is `__disable_threadsignal`, not a yield.
 - `#syscall` takes a named constant on every Linux target. `std/os/linux/sys`

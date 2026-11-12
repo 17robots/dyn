@@ -168,6 +168,12 @@ typedef struct {
   size_t *dependency_sources;
   size_t dependency_count;
   uint64_t dependency_hash;
+  /* dyn_source_target_enabled's answer, recorded by dyn_source_prepare for
+     exactly this text buffer, length and target; any other text rescans. */
+  const char *target_text;
+  size_t target_length;
+  const void *target_for;
+  int target_state;
 } DynSource;
 
 typedef struct {
@@ -210,6 +216,7 @@ int dyn_sources_load(const DynContext *context, const char *directory,
 int dyn_sources_load_quiet(const DynContext *context, const char *dir, DynSources *out);
 void dyn_sources_free(DynSources *sources);
 int dyn_source_target_enabled(const DynSource *source);
+void dyn_source_target_record(DynSource *source);
 void dyn_sources_single_file(const char *directory, const char *name);
 int dyn_sources_merge(const DynSources *sources, const char *module_name, DynSource *merged);
 bool dyn_source_target_gap(const DynSource *source, size_t byte, char *message, size_t capacity);
