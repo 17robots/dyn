@@ -96,6 +96,9 @@ typedef struct {
   /* SO_CALL on x86-64: float results on the x87 stack, popped right after
      the call. Bits 0-1 count them; bit 2 + j marks part j as f32. */
   uint8_t x87;
+  /* SO_CALL through a pointer to a C variadic function on System V x86-64:
+     the vector register count plus one, for AL. */
+  uint8_t al_count;
   /* ILP32 calls retain original signature identity and {type, first, count}
      groups separately from the optimizer's flattened operand triples. */
   uint32_t abi_expr, abi_groups, abi_group_count;
@@ -1503,7 +1506,9 @@ static int32_t ssa_call(Ssa *s, const DynIrExpr *e, int32_t *second, unsigned de
   if (indirect) {
     if (e->integer >= ir->fn_type_count) { SSA_GIVE_UP(s); return 0; }
     const DynIrFnType *signature = &ir->fn_types[e->integer];
-    if (!ilp32 && (signature->variadic || signature->param_count != e->item_count)) { SSA_GIVE_UP(s); return 0; }
+    if (!ilp32 && (signature->variadic ? signature->param_count > e->item_count : signature->param_count != e->item_count)) {
+      SSA_GIVE_UP(s); return 0;
+    }
     fixed = signature->param_count;
   } else {
     if (e->integer >= ir->function_count) { SSA_GIVE_UP(s); return 0; }
@@ -1633,7 +1638,8 @@ static int32_t ssa_call(Ssa *s, const DynIrExpr *e, int32_t *second, unsigned de
   /* A C variadic callee on a 64-bit target: the extra arguments follow the
      fixed ones with the platform's variadic rules, as the tree emitter
      passes them. Only scalars and pointers, as for ILP32. */
-  bool c_variadic = !ilp32 && callee && callee->variadic && callee->foreign;
+  bool c_variadic = !ilp32 && ((callee && callee->variadic && callee->foreign) ||
+                               (indirect && ir->fn_types[e->integer].variadic));
   uint32_t argument_groups = ilp32 ? plan.groups : c_variadic ? e->item_count : fixed + (packed ? 1u : 0u);
   for (uint32_t i = 0; i < argument_groups && !s->unsupported && !s->failed; ++i) {
     if ((ctx->rv32 || ctx->t32) && group_count >= 512) { SSA_GIVE_UP(s); break; }
@@ -1707,9 +1713,12 @@ static int32_t ssa_call(Ssa *s, const DynIrExpr *e, int32_t *second, unsigned de
   }
   if (s->unsupported || s->failed) return 0;
   if (indirect) ssa_argument(s, &list, target, SSA_TARGET, 0);
-  /* System V x86-64: AL bounds the vector registers a variadic callee reads. */
+  /* System V x86-64: AL bounds the vector registers a variadic callee reads.
+     An indirect call's target arrives in RAX too: the emitter moves it to
+     R11 and sets AL from al_count. */
   else if (c_variadic && !ctx->a64 && !ctx->rv64 && !ctx->win64) ssa_argument(s, &list, ssa_const(s, fp, SC_INT), SSA_TARGET, 0);
   int32_t call = ssa_emit(s, SO_CALL, SC_NONE, -1, -1, -1, indirect ? 0 : ctx->function_symbols[e->integer], indirect ? 2 : 0);
+  if (!s->failed && indirect && c_variadic && !ctx->a64 && !ctx->rv64 && !ctx->win64) s->values[call].al_count = (uint8_t)(fp + 1);
   if (!s->failed) {
     s->values[call].list = ssa_list(s, list.items, list.count);
     s->values[call].count = list.count / 3;
@@ -7726,8 +7735,14 @@ static bool ssa_exits_free(SsaAlloc *a, const bool *exit_block, int reg) {
    value's home, so nothing is stored back. x86-64 release code only. */
 /* defined: the split starts at the value's definition, which then writes the
    register and stores it to the slot once, instead of reloading it. */
-typedef struct SsaSplit { uint32_t value, block, first, last; int reg; bool defined; } SsaSplit;
+typedef struct SsaSplit { uint32_t value, block, first, last; int reg; bool defined, stored; } SsaSplit;
 typedef struct { uint32_t start, end; } SsaSpan;
+typedef struct { uint32_t value, position; } SsaUse;
+static int ssa_use_order(const void *x, const void *y) {
+  const SsaUse *a = x, *b = y;
+  if (a->value != b->value) return a->value < b->value ? -1 : 1;
+  return a->position < b->position ? -1 : a->position > b->position;
+}
 static int ssa_split_order(const void *x, const void *y) {
   const SsaSplit *a = x, *b = y;
   return a->first < b->first ? -1 : a->first > b->first;
@@ -7742,10 +7757,21 @@ static bool ssa_loop_header(Ssa *s, uint32_t b) {
     if (s->blocks[block->preds.items[p]].order >= block->order) return true;
   return false;
 }
+/* Whether a call (or a panic) lies strictly between two positions. */
+static bool ssa_call_between(SsaAlloc *a, uint32_t from, uint32_t to) {
+  for (uint32_t c = ssa_first_clobber(a, from); c < a->clobber_count && a->clobbers[c].position < to; ++c) {
+    uint8_t op = a->s->values[a->clobbers[c].value].op;
+    if (op == SO_CALL || op == SO_PANIC) return true;
+  }
+  return false;
+}
 static void ssa_local_splits(SsaAlloc *a) {
   Ssa *s = a->s;
   BackendContext *ctx = s->ctx;
-  if (ctx->a64 || ctx->rv64 || ctx->rv32 || ctx->t32 || ctx->debug_mode) return;
+  if (ctx->rv32 || ctx->t32 || ctx->debug_mode) return;
+  /* DYN_NO_SPLIT=1 turns local splitting off, for tests comparing both. */
+  const char *off = getenv("DYN_NO_SPLIT");
+  if (off && *off && strcmp(off, "0")) return;
   /* Occupied spans per register, by start, with the largest end so far. */
   uint32_t counts[64] = {0}, at[64] = {0};
   for (uint32_t id = 0; id < s->value_count; ++id) {
@@ -7766,11 +7792,8 @@ static void ssa_local_splits(SsaAlloc *a) {
     for (uint32_t i = 1; i < counts[r]; ++i) if (spans[r][i].end < spans[r][i - 1].end) spans[r][i].end = spans[r][i - 1].end;
   }
   uint32_t capacity = 0;
-  uint32_t *first = ssa_temp(s, (s->value_count + 1) * sizeof(uint32_t));
-  uint32_t *last = ssa_temp(s, (s->value_count + 1) * sizeof(uint32_t));
-  uint32_t *uses = ssa_temp_zero(s, (size_t)(s->value_count + 1) * sizeof(uint32_t));
-  uint32_t *touched = ssa_temp(s, (s->value_count + 1) * sizeof(uint32_t));
-  if (!first || !last || !uses || !touched) { s->failed = true; return; }
+  SsaUse *uses_list = NULL;
+  uint32_t uses_capacity = 0, uses_count = 0;
   /* Regions: runs of consecutive blocks where each later block is entered
      from the one before it alone, such as a fast path past its checks. A
      register loaded in one of them is still there in the next. */
@@ -7798,7 +7821,7 @@ static void ssa_local_splits(SsaAlloc *a) {
            !(s->blocks[a->order[end - 1]].preds.count == 1 && ssa_loop_header(s, s->blocks[a->order[end - 1]].preds.items[0])))
       ++end;
     uint32_t head = a->order[i], region_start = a->block_start[head];
-    uint32_t touched_count = 0;
+    uses_count = 0;
     for (uint32_t r_index = i; r_index < end; ++r_index) {
     uint32_t b = a->order[r_index];
     SsaBlock *block = &s->blocks[b];
@@ -7836,55 +7859,73 @@ static void ssa_local_splits(SsaAlloc *a) {
         if (op < 0) continue;
         SsaValue *v = &s->values[op];
         if (v->reg >= 0 || v->slot < 0 || v->dead || v->cls == SC_NONE || v->op == SO_CONST || cache_value[op]) continue;
-        if (!uses[op]) { touched[touched_count++] = (uint32_t)op; first[op] = position; }
-        last[op] = position;
-        ++uses[op];
+        uses_list = ssa_grow_temp(s, uses_list, &uses_capacity, uses_count + 1, sizeof(SsaUse));
+        if (s->failed) return;
+        uses_list[uses_count++] = (SsaUse){(uint32_t)op, position};
       }
     }
     }
-    for (uint32_t t = 0; t < touched_count; ++t) {
-      uint32_t id = touched[t];
+    if (uses_count > 1) qsort(uses_list, uses_count, sizeof(SsaUse), ssa_use_order);
+    for (uint32_t u = 0; u < uses_count;) {
+      uint32_t id = uses_list[u].value;
       SsaValue *v = &s->values[id];
-      uint32_t from = first[id], to = last[id], n = uses[id];
-      uses[id] = 0;
-      /* An ordinary definition earlier in this region starts the split. */
-      bool defined = v->start >= region_start && v->start < from && v->op != SO_PHI && v->op != SO_RESULT &&
-                     v->op != SO_PARAM && v->op != SO_CALL && !v->fused;
-      if (defined) from = v->start;
-      else if (n < 2 || to == from) continue;
-      /* A phi's predecessors write its slot in their phi moves: a split
-         holding the phi through one of them would take that write instead. */
-      bool written = false;
-      if (v->op == SO_PHI) {
-        SsaBlock *home = &s->blocks[v->block];
-        for (uint32_t p = 0; p < home->preds.count && !written; ++p) {
-          uint32_t at = a->block_end[home->preds.items[p]];
-          written = at >= from && at <= to;
+      /* Segments: uses with no call between consecutive ones. A register
+         that survives calls is rarely free, so each run between calls gets
+         its own split, the first one possibly from the definition. */
+      bool first_segment = true;
+      while (u < uses_count && uses_list[u].value == id) {
+        uint32_t from = uses_list[u].position, to = from, n = 1, w = u + 1;
+        while (w < uses_count && uses_list[w].value == id &&
+               !ssa_call_between(a, to, uses_list[w].position)) { to = uses_list[w].position; ++n; ++w; }
+        u = w;
+        bool may_define = first_segment;
+        first_segment = false;
+        /* A definition earlier in this region starts the split. A call result
+           starts it at its call, whose emission moves the result into place;
+           not past a protected call, whose results arrive in the next block,
+           nor from the x87 stack. */
+        bool result = v->op == SO_RESULT && v->a >= 0 && !s->values[v->a].cond && v->aux < X_X87 &&
+                      s->values[v->a].start >= region_start;
+        bool defined = may_define && v->start >= region_start && v->start < from && v->op != SO_PHI &&
+                       (v->op != SO_RESULT || result) && v->op != SO_PARAM && v->op != SO_CALL && !v->fused;
+        if (defined && ssa_call_between(a, result ? s->values[v->a].start + 1 : v->start, from)) defined = false;
+        if (defined) from = result ? s->values[v->a].start : v->start;
+        else if (n < 2 || to == from) continue;
+        /* A phi's predecessors write its slot in their phi moves: a split
+           holding the phi through one of them would take that write instead. */
+        bool written = false;
+        if (v->op == SO_PHI) {
+          SsaBlock *home = &s->blocks[v->block];
+          for (uint32_t p = 0; p < home->preds.count && !written; ++p) {
+            uint32_t at = a->block_end[home->preds.items[p]];
+            written = at >= from && at <= to;
+          }
         }
+        if (written) continue;
+        bool floating = v->cls == SC_F64 || v->cls == SC_F32;
+        int chosen = -1;
+        for (unsigned r = floating ? X_XMM0 : 0; r < (floating ? 64u : (unsigned)X_XMM0) && chosen < 0; ++r) {
+          /* The first use may itself clobber (a call taking the value as an
+             argument), unlike a definition there: include it. */
+          if (!ssa_allocatable(ctx, r) || ssa_clobbered(a, r, defined ? from : from - 1, to, id)) continue;
+          /* Occupied when some span in r starts by `to` and ends at `from` or later. */
+          uint32_t lo = 0, hi = counts[r];
+          while (lo < hi) { uint32_t mid = (lo + hi) / 2; if (spans[r][mid].start <= to) lo = mid + 1; else hi = mid; }
+          if (lo && spans[r][lo - 1].end >= from) continue;
+          /* Nor another split of this region over the same stretch. */
+          bool taken = false;
+          for (uint32_t q = a->split_count; q-- > 0 && a->splits[q].block == head && !taken;)
+            taken = a->splits[q].reg == (int)r && a->splits[q].first <= to && a->splits[q].last >= from;
+          if (!taken) chosen = (int)r;
+        }
+        if (chosen < 0) continue;
+        a->splits = ssa_grow(s, a->splits, &capacity, a->split_count + 1, sizeof(SsaSplit));
+        if (s->failed) return;
+        a->splits[a->split_count++] = (SsaSplit){id, head, from, to, chosen, defined, false};
+        if (ctx->a64 ? (A64_CALLEE_SAVED >> chosen & 1) : ctx->rv64 ? (RV_CALLEE_SAVED >> chosen & 1)
+            : chosen == X_RBX || (chosen >= X_R12 && chosen <= X_R15) || (ctx->win64 && (chosen == X_RSI || chosen == X_RDI)))
+          a->used_callee |= UINT64_C(1) << chosen;
       }
-      if (written) continue;
-      bool floating = v->cls == SC_F64 || v->cls == SC_F32;
-      int chosen = -1;
-      for (unsigned r = floating ? X_XMM0 : 0; r < (floating ? 64u : (unsigned)X_XMM0) && chosen < 0; ++r) {
-        /* The first use may itself clobber (a call taking the value as an
-           argument), unlike a definition there: include it. */
-        if (!ssa_allocatable(ctx, r) || ssa_clobbered(a, r, defined ? from : from - 1, to, id)) continue;
-        /* Occupied when some span in r starts by `to` and ends at `from` or later. */
-        uint32_t lo = 0, hi = counts[r];
-        while (lo < hi) { uint32_t mid = (lo + hi) / 2; if (spans[r][mid].start <= to) lo = mid + 1; else hi = mid; }
-        if (lo && spans[r][lo - 1].end >= from) continue;
-        /* Nor another split of this region over the same stretch. */
-        bool taken = false;
-        for (uint32_t q = a->split_count; q-- > 0 && a->splits[q].block == head && !taken;)
-          taken = a->splits[q].reg == (int)r && a->splits[q].first <= to && a->splits[q].last >= from;
-        if (!taken) chosen = (int)r;
-      }
-      if (chosen < 0) continue;
-      a->splits = ssa_grow(s, a->splits, &capacity, a->split_count + 1, sizeof(SsaSplit));
-      if (s->failed) return;
-      a->splits[a->split_count++] = (SsaSplit){id, head, from, to, chosen, defined};
-      if (chosen == X_RBX || (chosen >= X_R12 && chosen <= X_R15) || (ctx->win64 && (chosen == X_RSI || chosen == X_RDI)))
-        a->used_callee |= UINT64_C(1) << chosen;
     }
     i = end;
   }
@@ -9387,6 +9428,11 @@ static void ssa_call_emit(SsaEmit *e, SsaBlock *block, uint32_t *k) {
   ssa_parallel(e, moves, count);
   if (v->aux2 == 2 && ctx->a64) a64_word(ctx, 0xd63f0120u); /* blr x9 */
   else if (v->aux2 == 2 && ctx->rv64) rv_i(ctx, 0x67, 1, 28, 0, 0); /* jalr ra, x28 */
+  else if (v->aux2 == 2 && v->al_count) {
+    CODE(0x49, 0x89, 0xc3);                       /* mov r11, rax */
+    byte(ctx, 0xb8); word(ctx, v->al_count - 1u); /* mov eax, count */
+    CODE(0x41, 0xff, 0xd3);                       /* call r11 */
+  }
   else if (v->aux2 == 2) CODE(0xff, 0xd0); /* call rax */
   else if (v->aux2 == 1) {
     if (v->aux == 1) trace_start_argument(ctx);
@@ -9870,6 +9916,16 @@ static void ssa_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
 }
 #include "ssa_a64.inc"
 #include "ssa_rv64.inc"
+/* Moves a split value between its slot and its split register. */
+static void ssa_split_transfer(SsaEmit *e, bool load, int reg, const SsaValue *v) {
+  int32_t disp = (int32_t)(e->spill_base - 8 * (uint32_t)v->slot);
+  if (e->ctx->a64) {
+    if (load) a64s_transfer(e, L_REG, reg, L_SLOT, disp, v->cls); else a64s_transfer(e, L_SLOT, disp, L_REG, reg, v->cls);
+  } else if (e->ctx->rv64) {
+    if (load) rvs_transfer(e, L_REG, reg, L_SLOT, disp, v->cls); else rvs_transfer(e, L_SLOT, disp, L_REG, reg, v->cls);
+  } else if (load) ssa_transfer(e, L_REG, reg, L_SLOT, disp, v->cls, X_R11);
+  else ssa_transfer(e, L_SLOT, disp, L_REG, reg, v->cls, X_R11);
+}
 /* A comparison used only by its block's branch is emitted at the branch. */
 /* Flags for a fused ordered float comparison; returns the condition. */
 static int ssa_float_branch(SsaEmit *e, const SsaValue *c) {
@@ -10222,22 +10278,27 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
         SsaSplit *split = &a->splits[split_next++];
         SsaValue *v = &s->values[split->value];
         if (split->first != position || s->values[emitted].op == SO_PHI || split_actives == 64) continue;
-        if (!split->defined) ssa_transfer(e, L_REG, split->reg, L_SLOT, ssa_slot_memory(e, v).disp, v->cls, X_R11);
+        if (!split->defined) ssa_split_transfer(e, true, split->reg, v);
         v->reg = split->reg;
+        split->stored = false;
         split_active[split_actives++] = (uint32_t)(split - a->splits);
       }
       ssa_debug_position(e, s->values[block->values.items[k]].pos);
       if (ctx->a64) a64s_emit_value(e, block, &k);
       else if (ctx->rv64) rvs_emit_value(e, block, &k);
       else ssa_emit_value(e, block, &k);
-      /* A split definition wrote its register; the slot keeps the value for
-         the rest of the function. */
+      position = s->values[block->values.items[k]].start;
+      /* A split definition (or a call's result) wrote its register; the
+         slot keeps the value for the rest of the function. */
+      (void)emitted;
       for (uint32_t q = 0; q < split_actives; ++q) {
         SsaSplit *split = &a->splits[split_active[q]];
-        if (split->defined && split->value == emitted && s->values[emitted].reg == split->reg)
-          ssa_transfer(e, L_SLOT, ssa_slot_memory(e, &s->values[emitted]).disp, L_REG, split->reg, s->values[emitted].cls, X_R11);
+        SsaValue *defined = &s->values[split->value];
+        if (split->defined && !split->stored && defined->start <= position && defined->reg == split->reg) {
+          ssa_split_transfer(e, false, split->reg, defined);
+          split->stored = true;
+        }
       }
-      position = s->values[block->values.items[k]].start;
       for (uint32_t q = 0; q < split_actives;) {
         SsaSplit *split = &a->splits[split_active[q]];
         if (split->last <= position) { s->values[split->value].reg = -1; split_active[q] = split_active[--split_actives]; }
