@@ -337,7 +337,11 @@ typedef struct {
   DynIrProgram view, out;
   size_t expressions_cap, statements_cap, items_cap, children_cap, locals_cap,
       arms_cap;
+  /* Loop IDs: each rebuilt or inlined body takes a fresh run as long as
+     its function's span (loop_low, loop_span per function), from next_loop,
+     which starts past every original ID. */
   uint32_t loop_stride, next_loop;
+  uint32_t *loop_low, *loop_span;
   unsigned expansions, budget, resource_budget, reserved_growth, reserved_resources;
   unsigned *costs;
   bool failed, leaf_only, byte_fast;
@@ -389,7 +393,7 @@ static bool inline_grow(Inline *b, void **array, size_t *capacity, size_t need,
     return false;
   if (need <= *capacity)
     return true;
-  if (need > (1u << 22) || element > SIZE_MAX / need) {
+  if (need > UINT32_MAX || element > SIZE_MAX / need) {
     b->failed = true;
     return false;
   }
@@ -470,13 +474,50 @@ static uint32_t inline_locals(Inline *b, const DynIrFunction *f) {
   }
   return start;
 }
-static uint32_t inline_loop_base(Inline *b) {
-  uint32_t base = b->next_loop;
-  if (b->next_loop > UINT32_MAX - b->loop_stride)
-    b->failed = true;
-  else
-    b->next_loop += b->loop_stride;
+/* The offset that moves f's loop IDs onto a fresh run. It wraps: an ID
+   plus the offset is next_loop plus the ID's place in f's span. */
+/* f's index in the program, or SIZE_MAX without spans (a caller that set
+   up Inline itself) or for a function outside the program's array. */
+static size_t inline_loop_owner(const Inline *b, const DynIrFunction *f) {
+  if (!b->loop_low || f < b->in->functions || f >= b->in->functions + b->in->function_count) return SIZE_MAX;
+  return (size_t)(f - b->in->functions);
+}
+static uint32_t inline_loop_base(Inline *b, const DynIrFunction *f) {
+  size_t index = inline_loop_owner(b, f);
+  /* Without a span, every original ID shifts past every ID handed out. */
+  uint32_t low = index != SIZE_MAX ? b->loop_low[index] : 0;
+  uint32_t span = index != SIZE_MAX ? b->loop_span[index] : b->loop_stride;
+  uint32_t base = b->next_loop - low;
+  if (b->next_loop > UINT32_MAX - span - 1) b->failed = true;
+  else b->next_loop += span;
   return base;
+}
+/* One new loop ID. */
+static uint32_t inline_loop_id(Inline *b) {
+  if (b->next_loop == UINT32_MAX) { b->failed = true; return 0; }
+  return b->next_loop++;
+}
+/* The lowest and highest loop IDs a body's statements use. */
+static void inline_loop_range(const DynIrProgram *ir, uint32_t start, uint32_t count, uint32_t *low, uint32_t *high,
+                              unsigned depth) {
+  if (depth > 1024 || (uint64_t)start + count > ir->child_count) return;
+  for (uint32_t i = 0; i < count; ++i) {
+    uint32_t id = ir->children[start + i];
+    if (id >= ir->statement_count) continue;
+    const DynIrStmt *s = &ir->statements[id];
+    uint32_t loop = s->kind == DYN_STMT_FOR ? s->loop_id
+                  : s->kind == DYN_STMT_BREAK || s->kind == DYN_STMT_CONTINUE ? s->target_loop_id : UINT32_MAX;
+    if (loop != UINT32_MAX) {
+      if (loop < *low) *low = loop;
+      if (loop > *high || *high == UINT32_MAX) *high = loop;
+    }
+    inline_loop_range(ir, s->body_start, s->body_count, low, high, depth + 1);
+    inline_loop_range(ir, s->else_start, s->else_count, low, high, depth + 1);
+    if ((uint64_t)s->case_arm_start + s->case_arm_count <= ir->case_arm_count)
+      for (uint32_t j = 0; j < s->case_arm_count; ++j)
+        inline_loop_range(ir, ir->case_arms[s->case_arm_start + j].body_start,
+                          ir->case_arms[s->case_arm_start + j].body_count, low, high, depth + 1);
+  }
 }
 /* Keep constant subtrees shared. Cloning their IR identities would duplicate
    the backend's literal pool even when the enclosing function is unchanged. */
@@ -853,13 +894,13 @@ static bool inline_call_bound(Inline *b, const InlineScope *scope,
   b->resource_budget -= resources;
   InlineScope nested = {.function = f,
                         .local_base = inline_locals(b, f),
-                        .loop_base = inline_loop_base(b),
+                        .loop_base = inline_loop_base(b, f),
                         .returns = true,
                         .check_origin = (uint32_t)call->integer + 1,
                         .expand = true,
                         .plan = node ? node + 1 : 0,
                         .result_local = UINT32_MAX};
-  nested.exit_loop = inline_loop_base(b);
+  nested.exit_loop = inline_loop_id(b);
   if (f->return_type != DYN_TYPE_VOID) {
     DynIrLocal local = {.name = "__inline_result", .type = f->return_type};
     INLINE_APPEND(b, local, locals_cap, local, nested.result_local);
@@ -1391,10 +1432,15 @@ static void inline_block(Inline *b, const InlineScope *scope, uint32_t start,
       if (s.kind != DYN_STMT_FOR || s.for_range || s.target != DYN_NO_EXPR)
         s.local_id = inline_local(b, scope, s.local_id);
     }
-    if (s.kind == DYN_STMT_FOR)
-      s.loop_id += scope->loop_base;
-    if (s.kind == DYN_STMT_BREAK || s.kind == DYN_STMT_CONTINUE)
-      s.target_loop_id += scope->loop_base;
+    /* An ID outside the function's span would leave its run: give up
+       rather than risk two loops sharing one. */
+    size_t owner = inline_loop_owner(b, scope->function);
+    uint32_t *loop = s.kind == DYN_STMT_FOR ? &s.loop_id
+                   : s.kind == DYN_STMT_BREAK || s.kind == DYN_STMT_CONTINUE ? &s.target_loop_id : NULL;
+    if (loop && owner != SIZE_MAX &&
+        (*loop < b->loop_low[owner] || *loop - b->loop_low[owner] >= b->loop_span[owner]))
+      b->failed = true;
+    if (loop) *loop += scope->loop_base;
     InlineScope child = *scope;
     if (s.kind == DYN_STMT_FOR)
       child.in_loop = true;
@@ -1463,8 +1509,7 @@ static int inline_loop_compare(const void *a, const void *b) {
    restore the checked IR invariant with a bounded, identity-preserving map.
    Include retained original prefixes as well as rebuilt executable bodies. */
 static bool inline_dense_loops(DynIrProgram *ir) {
-  if (ir->statement_count > (1u << 22) ||
-      ir->statement_count > SIZE_MAX / sizeof(uint32_t)) return false;
+  if (ir->statement_count > UINT32_MAX || ir->statement_count > SIZE_MAX / sizeof(uint32_t)) return false;
   uint32_t *ids = malloc((ir->statement_count ? ir->statement_count : 1) * sizeof(*ids));
   if (!ids) return false;
   size_t count = 0;
@@ -1573,6 +1618,17 @@ static bool inline_program_within(DynNativeOptimization *o, bool leaf_only, bool
         b.loop_stride = s->loop_id + 1;
     }
   }
+  b.next_loop = b.loop_stride;
+  b.loop_low = malloc((b.in->function_count ? b.in->function_count : 1) * sizeof(uint32_t));
+  b.loop_span = malloc((b.in->function_count ? b.in->function_count : 1) * sizeof(uint32_t));
+  if (!b.loop_low || !b.loop_span) b.failed = true;
+  for (size_t i = 0; i < b.in->function_count && !b.failed; ++i) {
+    uint32_t low = UINT32_MAX, high = UINT32_MAX;
+    const DynIrFunction *f = &b.in->functions[i];
+    if (!f->foreign) inline_loop_range(b.in, f->body_start, f->body_count, &low, &high, 0);
+    b.loop_low[i] = low == UINT32_MAX ? 0 : low;
+    b.loop_span[i] = low == UINT32_MAX ? 0 : high - low + 1;
+  }
   b.addressed = calloc(b.in->local_count ? b.in->local_count : 1, sizeof(bool));
   if (!b.addressed) b.failed = true;
   for (size_t i = 0; i < b.in->expression_count && !b.failed; ++i) {
@@ -1631,7 +1687,7 @@ static bool inline_program_within(DynNativeOptimization *o, bool leaf_only, bool
       continue;
     InlineScope scope = {.function = f,
                          .local_base = inline_locals(&b, f),
-                         .loop_base = inline_loop_base(&b),
+                         .loop_base = inline_loop_base(&b, f),
                          .expand = true};
     b.budget = leaf_only ? 24 : budget;
     b.resource_budget = 8 * b.budget;
@@ -1668,6 +1724,8 @@ static bool inline_program_within(DynNativeOptimization *o, bool leaf_only, bool
     memset(b.out.unstable_locals, 1, b.out.local_count);
   free(b.active);
   free(b.costs);
+  free(b.loop_low);
+  free(b.loop_span);
   free(b.addressed);
   free(b.guess_types);
   free(b.guess_functions);

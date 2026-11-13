@@ -10877,7 +10877,7 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
     /* Callee-saved registers go to the caller's home area, in a fixed order
        the unwind codes describe (coff_unwind_info). */
     size_t start = ctx->text.n;
-    if (ctx->unwind_frame_count >= sizeof(ctx->unwind_frames) / sizeof(ctx->unwind_frames[0])) { ctx->text.failed = true; return false; }
+    if (ctx->unwind_frame_count >= ctx->symbol_capacity) { ctx->text.failed = true; return false; }
     uint32_t *frame = ctx->unwind_frames[ctx->unwind_frame_count++];
     CODE(0x55, 0x48, 0x89, 0xe5);
     uint32_t mask = 0;
@@ -11810,8 +11810,8 @@ static int ssa_shard_merge(BackendContext *ctx, const SsaEmitted *m) {
   }
   free(offsets);
   if (anchor_base + m->anchor_count > MAX_NODES ||
-      frame_base + m->unwind_frame_count > sizeof(ctx->unwind_frames) / sizeof(ctx->unwind_frames[0]) ||
-      ctx->arm_epilogue_count + m->arm_epilogue_count > sizeof(ctx->arm_epilogues) / sizeof(ctx->arm_epilogues[0]))
+      frame_base + m->unwind_frame_count > ctx->symbol_capacity ||
+      ctx->arm_epilogue_count + m->arm_epilogue_count > 8 * ctx->symbol_capacity)
     return SSA_FAILED;
   for (unsigned i = 0; i < m->anchor_count; ++i) ctx->rv_anchors[ctx->rv_anchor_count++] = m->anchors[i] + (uint32_t)base;
   for (unsigned i = 0; i < m->unwind_frame_count; ++i) {
@@ -11899,6 +11899,7 @@ static bool ssa_literal_canonical(BackendContext *ctx, const DynIrProgram *ir) {
 }
 /* A worker's emission context: the driver's fields above its arrays, with
    empty outputs of its own, and placeholder runtime symbols. */
+static void ssa_shard_free(BackendContext *shard);
 static BackendContext *ssa_shard_new(const BackendContext *ctx) {
   BackendContext *shard = calloc(1, sizeof(*shard));
   SsaShard *pieces = calloc(1, sizeof(*pieces));
@@ -11918,12 +11919,17 @@ static BackendContext *ssa_shard_new(const BackendContext *ctx) {
   shard->rv_anchor_count = shard->unwind_frame_count = shard->arm_epilogue_count = 0;
   for (unsigned r = 0; r < RUNTIME_COUNT; ++r) shard->runtime_index[r] = SHARD_RUNTIME_SYMBOL + r;
   shard->shard = pieces;
+  /* The per-symbol inputs are the driver's; these outputs are the shard's. */
+  shard->unwind_frames = calloc(ctx->symbol_capacity, sizeof(*shard->unwind_frames));
+  shard->arm_epilogues = calloc(8 * ctx->symbol_capacity, sizeof(*shard->arm_epilogues));
+  if (!shard->unwind_frames || !shard->arm_epilogues) { ssa_shard_free(shard); return NULL; }
   return shard;
 }
 static void ssa_shard_free(BackendContext *shard) {
   if (!shard) return;
   free(shard->text.data); free(shard->rodata.data); free(shard->relocations); free(shard->landing_records);
   free(shard->shard->pieces); free(shard->shard->bytes); free(shard->shard);
+  free(shard->unwind_frames); free(shard->arm_epilogues);
   free(shard);
 }
 /* Prepares live functions on worker threads, at most `window` ahead of

@@ -73,6 +73,9 @@ servers so they pick up the new `dyn`.
   after `xs[j]` passed, `xs[..j + 1]` and `xs[j + 1..]` need no check, and
   neither does an index such as `(#len(xs) - 1) / 2` once `#len(xs) >= 1`
   is known. Quicksort keeps only the checks of its inner scans.
+- Native builds no longer stop at 32,768 functions and globals or 4 million
+  IR nodes: a 1,000,000-line project builds and runs. Release builds of
+  large programs are faster again: 300,000 lines in 185 ms.
 - Functions that take or return fixed arrays or payload enums by value, such
   as `fn area(shape: Shape) f64`, and functions that call C variadic
   functions now compile to optimized SSA code on every 64-bit target. No

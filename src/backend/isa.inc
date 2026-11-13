@@ -962,7 +962,7 @@ static void isa_return(BackendContext *ctx) {
   if (ctx->dwarf && !backend_dwarf_epilogue(ctx->dwarf,ctx->text.n)) ctx->text.failed=true;
   if (ctx->a64) {
     if (ctx->winarm64) {
-      if (!ctx->unwind_frame_count || ctx->arm_epilogue_count >= MAX_SYMBOLS*8) ctx->text.failed=true;
+      if (!ctx->unwind_frame_count || ctx->arm_epilogue_count >= 8*ctx->symbol_capacity) ctx->text.failed=true;
       else { uint32_t *e=ctx->arm_epilogues[ctx->arm_epilogue_count++]; e[0]=ctx->unwind_frame_count-1; e[1]=(uint32_t)ctx->text.n; }
     }
     a64_word(ctx, 0x910003bf); /* mov sp, x29 */
@@ -985,7 +985,7 @@ static void isa_enter(BackendContext *ctx) {
   if (ctx->rv64) { rv_enter(ctx); return; }
   if (ctx->a64) {
     if (ctx->winarm64) {
-      if (ctx->unwind_frame_count >= MAX_SYMBOLS+2) { ctx->text.failed=true; return; }
+      if (ctx->unwind_frame_count >= ctx->symbol_capacity) { ctx->text.failed=true; return; }
       uint32_t *f=ctx->unwind_frames[ctx->unwind_frame_count++];
       f[0]=(uint32_t)ctx->text.n; f[2]=ctx->frame_bytes;
     }
@@ -1007,7 +1007,7 @@ static void isa_enter(BackendContext *ctx) {
   }
   if (ctx->win64) {
     size_t start = ctx->text.n;
-    if (ctx->unwind_frame_count >= sizeof(ctx->unwind_frames)/sizeof(ctx->unwind_frames[0])) ctx->text.failed = true;
+    if (ctx->unwind_frame_count >= ctx->symbol_capacity) ctx->text.failed = true;
     else ctx->unwind_frame_count++;
     CODE(0x55, 0x48, 0x89, 0xe5, 0x48, 0x89, 0x75, 16, 0x48, 0x89, 0x7d, 24);
     uint32_t *frame = ctx->unwind_frames[ctx->unwind_frame_count ? ctx->unwind_frame_count - 1 : 0];

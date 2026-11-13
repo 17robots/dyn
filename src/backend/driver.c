@@ -19,8 +19,10 @@
 /* Per-section and per-object byte bound; buffers grow on demand up to it. */
 #define LIMIT (1024u * 1024u * 1024u)
 /* Fixed per-object capacities; exceeding one fails emission explicitly. */
-#define MAX_SYMBOLS 32768
 #define MAX_LOCALS 65536
+/* Functions and globals in one object. Relocations name shard placeholders
+   from SHARD_RUNTIME_SYMBOL (0x3f000000) up, so symbols stay well below. */
+#define SYMBOL_LIMIT (1u << 28)
 #define MAX_SCRATCH (1u << 21) /* frame eightbytes: 16 MiB */
 #define MAX_AGGREGATE (1u << 24)
 #define MAX_LAYOUT (UINT32_MAX - 15u) /* Sparse heap layouts; frame limits remain separate. */
@@ -72,9 +74,13 @@ typedef struct {
   const DynLocationIndex *debug_locations;
   Elf64_Rela *constant_relocations;
   size_t constant_relocation_count, constant_relocation_capacity;
-  bool global_static[MAX_SYMBOLS];
-  bool function_live[MAX_SYMBOLS];
-  bool global_live[MAX_SYMBOLS];
+  /* Per function or global, sized for the program by object_target_mode:
+     symbol_capacity is the larger count plus two (the initializer and the
+     DLL entry). */
+  size_t symbol_capacity;
+  bool *global_static;
+  bool *function_live;
+  bool *global_live;
   unsigned char *expression_live; /* reachability's expression marks; null keeps all */
   double ssa_build_ms, ssa_optimize_ms, ssa_allocate_ms, ssa_emit_ms, serialization_ms;
   /* SSA preparations made ahead on worker threads, indexed by function, and
@@ -83,13 +89,13 @@ typedef struct {
   struct SsaPipeline *ssa_pipeline;
   struct SsaPool *ssa_pool; /* the pipeline's, while it runs */
   uint32_t *literal_canonical;
-  uint32_t constant_offsets[MAX_SYMBOLS];
+  uint32_t *constant_offsets;
   Elf64_Rela *relocations;
   size_t relocation_capacity;
   size_t relocation_count, runtime_base, runtime_count;
-  unsigned function_symbols[MAX_SYMBOLS], global_symbols[MAX_SYMBOLS];
+  unsigned *function_symbols, *global_symbols;
   /* Production symbol policy: local bodies named like a foreign link name or exit/_exit get ".dyn". */
-  bool function_suffixed[MAX_SYMBOLS];
+  bool *function_suffixed;
   unsigned initializer_symbol, initializer_flag_symbol, first_global, dll_entry_symbol;
   bool shared;
   unsigned runtime_index[RUNTIME_COUNT], stack_slots, frame_bytes, local_words;
@@ -186,19 +192,22 @@ typedef struct {
   /* ---- Arrays: per-node and per-local scratch, and outputs that start
      empty. Emission shards (ssa_shard_new) copy every field above this
      line and leave these zeroed, so they cost nothing until touched. ---- */
-  unsigned symbol_remap[2 * MAX_SYMBOLS + RUNTIME_COUNT];
+  unsigned *symbol_remap; /* 2 * symbol_capacity + RUNTIME_COUNT */
   uint32_t local_offsets[MAX_LOCALS];
   signed char allocator_registers[MAX_LOCALS];
   bool local_alias[MAX_LOCALS];
   struct { uint32_t id; size_t condition, breaks, continues; unsigned defer_base; } loops[MAX_DEPTH];
-  uint32_t captured_offsets[MAX_NODES], statement_scratch[MAX_NODES], temporary_offsets[MAX_NODES];
+  /* Per expression or statement of the program being emitted, node_capacity
+     of each (object_target_mode sizes them; touched_exprs twice that). */
+  size_t node_capacity;
+  uint32_t *captured_offsets, *statement_scratch, *temporary_offsets;
   /* Offset + 1 of each constant literal from literals_symbol, or 0. */
-  uint32_t literal_offsets[MAX_NODES];
-  bool visited_expr[MAX_NODES];
-  uint32_t pack_offsets[MAX_NODES];
-  uint32_t copy_offsets[MAX_NODES]; /* AAPCS64 caller copies of large struct arguments */
+  uint32_t *literal_offsets;
+  bool *visited_expr;
+  uint32_t *pack_offsets;
+  uint32_t *copy_offsets; /* AAPCS64 caller copies of large struct arguments */
   /* Ids written while sizing one function; reset touches only these, not the program. */
-  uint32_t touched_exprs[2 * MAX_NODES], touched_stmts[MAX_NODES];
+  uint32_t *touched_exprs, *touched_stmts;
   ArrayPart call_leaves[512];
   AbiPart call_parts[512];
   /* DWARF lexical scopes: [begin, end) text offsets per local; zero end means
@@ -206,9 +215,10 @@ typedef struct {
   size_t local_scope_begin[MAX_LOCALS], local_scope_end[MAX_LOCALS];
   uint32_t scope_stack[MAX_LOCALS];
   uint32_t rv_anchors[MAX_NODES];
-  /* Windows unwind data per function: text start, prologue bytes, frame bytes, saved home registers. */
-  uint32_t unwind_frames[MAX_SYMBOLS + 2][4];
-  uint32_t arm_epilogues[MAX_SYMBOLS * 8][2]; /* frame index, text offset */
+  /* Windows unwind data per function: text start, prologue bytes, frame
+     bytes, saved home registers; symbol_capacity of them. */
+  uint32_t (*unwind_frames)[4];
+  uint32_t (*arm_epilogues)[2]; /* frame index, text offset; 8 * symbol_capacity */
   uint32_t ladder_pool[16384];
 } BackendContext;
 /* Bit order of frame record masks: rbx, r12, r13, r14, r15. */
@@ -2901,7 +2911,7 @@ static bool function(BackendContext *ctx, const DynSource *source, const DynIrPr
     if (ctx->local_words>MAX_SCRATCH) return false;
     ctx->local_offsets[i]=0u-8*ctx->local_words;
   }
-  if (ir->expression_count>MAX_NODES || ir->statement_count>MAX_NODES) return false;
+  if (ir->expression_count>ctx->node_capacity || ir->statement_count>ctx->node_capacity) return false;
   reset_scratch(ctx);
   if (ctx->active_ir!=ir) ctx->active_ir=ir;
   ctx->sret_offset=ctx->return_offset=ctx->defer_count=ctx->unwind_offset=ctx->cleanup_depth=0; ctx->unwinding=false;
@@ -3190,7 +3200,7 @@ static bool constant_literals(BackendContext *ctx, const DynIrProgram *ir) {
 static bool global_initializer(BackendContext *ctx,const DynIrProgram *ir) {
   ctx->allocator_used = ctx->allocator_local_count = 0;
   DynIrFunction f={.name="__dyn_init_root",.return_type=DYN_TYPE_VOID};
-  if (ir->expression_count>MAX_NODES) return false;
+  if (ir->expression_count>ctx->node_capacity) return false;
   ctx->local_words=ctx->stack_slots=ctx->defer_count=ctx->loop_depth=0; ctx->unwinding=false;
   reset_scratch(ctx);
   unsigned slots=0;
@@ -3334,7 +3344,7 @@ static bool suffix_functions(BackendContext *ctx, const DynIrProgram *ir) {
 
 static bool emit_object(BackendContext *ctx, const DynSource *source, const DynIrProgram *ir, const char *path) {
   ctx->active_ir=ir;
-  if ((!ir->function_count && !ctx->shared) || ir->function_count > MAX_SYMBOLS || ir->global_count > MAX_SYMBOLS) {
+  if ((!ir->function_count && !ctx->shared) || ir->function_count + ir->global_count > SYMBOL_LIMIT) {
     backend_report(ctx, "unsupported by native backend: global/function count\n");
     return false;
   }
@@ -3381,9 +3391,9 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
   /* ELF requires every local before sh_info. Reindex once before code emission,
      including address relocations already recorded for constant initializers. */
   unsigned *remap=ctx->symbol_remap, next=section_symbols;
-  memset(ctx->symbol_remap,0,sizeof(ctx->symbol_remap));
+  memset(ctx->symbol_remap,0,(2*ctx->symbol_capacity+RUNTIME_COUNT)*sizeof(*ctx->symbol_remap));
   for (unsigned i=1;i<section_symbols;++i) remap[i]=i;
-  if (ctx->runtime_base>sizeof(ctx->symbol_remap)/sizeof(*ctx->symbol_remap)) { dyn_location_free(&locations); return false; }
+  if (ctx->runtime_base>2*ctx->symbol_capacity+RUNTIME_COUNT) { dyn_location_free(&locations); return false; }
   for (unsigned pass=0;pass<2;++pass) {
     if (pass) ctx->first_global=next;
     for (size_t i=0;i<ir->function_count;++i) {
@@ -3744,10 +3754,45 @@ done:
   free(symbols); free(strings); return ok;
 }
 typedef enum { TARGET_X64_ELF, TARGET_A64_ELF, TARGET_X64_COFF, TARGET_A64_MACHO, TARGET_X64_MACHO, TARGET_A64_COFF, TARGET_RV64_ELF, TARGET_RV32_ELF, TARGET_T32_ELF } ObjectTarget;
+/* Per-symbol and per-node arrays for a program; false without memory. */
+static bool symbol_arrays(BackendContext *ctx, const DynIrProgram *ir) {
+  size_t functions = ir->function_count, globals = ir->global_count;
+  size_t nodes = (ir->expression_count > ir->statement_count ? ir->expression_count : ir->statement_count) + 1;
+  ctx->node_capacity = nodes;
+  ctx->captured_offsets = calloc(nodes, sizeof(uint32_t)); ctx->statement_scratch = calloc(nodes, sizeof(uint32_t));
+  ctx->temporary_offsets = calloc(nodes, sizeof(uint32_t)); ctx->literal_offsets = calloc(nodes, sizeof(uint32_t));
+  ctx->visited_expr = calloc(nodes, sizeof(bool)); ctx->pack_offsets = calloc(nodes, sizeof(uint32_t));
+  ctx->copy_offsets = calloc(nodes, sizeof(uint32_t)); ctx->touched_exprs = calloc(2 * nodes, sizeof(uint32_t));
+  ctx->touched_stmts = calloc(nodes, sizeof(uint32_t));
+  if (!ctx->captured_offsets || !ctx->statement_scratch || !ctx->temporary_offsets || !ctx->literal_offsets ||
+      !ctx->visited_expr || !ctx->pack_offsets || !ctx->copy_offsets || !ctx->touched_exprs || !ctx->touched_stmts)
+    return false;
+  size_t n = (functions > globals ? functions : globals) + 2;
+  ctx->symbol_capacity = n;
+  ctx->global_static = calloc(n, sizeof(bool)); ctx->function_live = calloc(n, sizeof(bool));
+  ctx->global_live = calloc(n, sizeof(bool)); ctx->function_suffixed = calloc(n, sizeof(bool));
+  ctx->constant_offsets = calloc(n, sizeof(uint32_t));
+  ctx->function_symbols = calloc(n, sizeof(unsigned)); ctx->global_symbols = calloc(n, sizeof(unsigned));
+  ctx->symbol_remap = calloc(2 * n + RUNTIME_COUNT, sizeof(unsigned));
+  ctx->unwind_frames = calloc(n, sizeof(*ctx->unwind_frames));
+  ctx->arm_epilogues = calloc(8 * n, sizeof(*ctx->arm_epilogues));
+  return ctx->global_static && ctx->function_live && ctx->global_live && ctx->function_suffixed && ctx->constant_offsets &&
+         ctx->function_symbols && ctx->global_symbols && ctx->symbol_remap && ctx->unwind_frames && ctx->arm_epilogues;
+}
+static void symbol_arrays_free(BackendContext *ctx) {
+  free(ctx->captured_offsets); free(ctx->statement_scratch); free(ctx->temporary_offsets); free(ctx->literal_offsets);
+  free(ctx->visited_expr); free(ctx->pack_offsets); free(ctx->copy_offsets); free(ctx->touched_exprs); free(ctx->touched_stmts);
+  free(ctx->global_static); free(ctx->function_live); free(ctx->global_live); free(ctx->function_suffixed);
+  free(ctx->constant_offsets); free(ctx->function_symbols); free(ctx->global_symbols); free(ctx->symbol_remap);
+  free(ctx->unwind_frames); free(ctx->arm_epilogues);
+}
 static bool object_target_mode(const DynSource *source, const DynIrProgram *ir,
                           const char *path, bool debug, bool debug_info, bool report, ObjectTarget target, bool shared) {
   BackendContext *ctx = calloc(1, sizeof(*ctx));
   if (!ctx) return false;
+  if (ir->function_count + ir->global_count > SYMBOL_LIMIT || !symbol_arrays(ctx, ir)) {
+    symbol_arrays_free(ctx); free(ctx); return false;
+  }
   bool a64 = target == TARGET_A64_ELF || target == TARGET_A64_MACHO || target == TARGET_A64_COFF;
   ctx->rv64=target==TARGET_RV64_ELF;
   ctx->rv32=target==TARGET_RV32_ELF;
@@ -3789,7 +3834,7 @@ static bool object_target_mode(const DynSource *source, const DynIrProgram *ir,
                        !getenv("DYN_NO_UNWIND_TABLES");
   if (debug_info && (!(ctx->dwarf=ctx->rv32?backend_dwarf_create_rv32():ctx->t32?backend_dwarf_create_t32():ctx->rv64?backend_dwarf_create_rv64():a64?backend_dwarf_create_a64():backend_dwarf_create()) ||
                      !(ctx->dwarf_types=calloc(DYN_TYPE_PARAM_BASE, sizeof(*ctx->dwarf_types))))) {
-    backend_dwarf_free(ctx->dwarf); free(ctx); return false;
+    backend_dwarf_free(ctx->dwarf); symbol_arrays_free(ctx); free(ctx); return false;
   }
   layout_cache_begin(ir);
   bool ok = emit_object(ctx, source, ir, path);
@@ -3809,7 +3854,7 @@ static bool object_target_mode(const DynSource *source, const DynIrProgram *ir,
   free(ctx->relocations); free(ctx->constant_relocations);
   free(ctx->trace_rows); free(ctx->trace_functions); free(ctx->trace_names);
   free(ctx->frame_records); free(ctx->landing_records);
-  free(ctx->expression_live); free(ctx);
+  free(ctx->expression_live); symbol_arrays_free(ctx); free(ctx);
   return ok;
 }
 static bool object_target(const DynSource *source, const DynIrProgram *ir,

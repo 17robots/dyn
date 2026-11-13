@@ -1,7 +1,7 @@
 #include "../ir_reachability.inc"
 
 static bool reachable_functions(BackendContext *ctx, const DynSource *source, const DynIrProgram *ir) {
-  memset(ctx->global_live, 0, sizeof(ctx->global_live));
+  memset(ctx->global_live, 0, ctx->symbol_capacity * sizeof(*ctx->global_live));
   Reachability p = {.ir = ir, .live = ctx->function_live, .globals = ctx->global_live};
   p.expressions = calloc(ir->expression_count ? ir->expression_count : 1, 1);
   p.statements = calloc(ir->statement_count ? ir->statement_count : 1, 1);
