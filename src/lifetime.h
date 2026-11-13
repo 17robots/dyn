@@ -132,7 +132,8 @@ static void life_warn_copy(Life *l, DynAstStmt *statement) {
       owner == LIFE_ARENA_OWNER
         ? "copying an arena descriptor duplicates mutable allocation state; borrow its address or transfer ownership explicitly"
         : "copying a handle duplicates an OS resource that must be closed once; borrow its address or transfer it with take");
-  if (l->source->context.vet_findings) ++*l->source->context.vet_findings;
+  if (l->sema->late_vet) ++*l->sema->late_vet;
+  else if (l->source->context.vet_findings) ++*l->source->context.vet_findings;
 }
 static LifeValue life_field(Life *l,uint32_t local,uint32_t field) {
   for (size_t i=l->field_count;i;--i) if(l->fields[i-1].local==local && l->fields[i-1].field==field) return l->fields[i-1].value;

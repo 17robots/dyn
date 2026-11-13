@@ -64,6 +64,11 @@ servers so they pick up the new `dyn`.
   objects are byte for byte what serial emission writes;
   `DYN_SERIAL_EMISSION=1` keeps emission on one thread for comparison. x86-64
   release builds start functions that contain loops on a 16-byte boundary.
+- Programs with 512 or more functions run their lifetime checks on worker
+  threads after every body is checked, and report the same diagnostics in
+  the same order: checking a 300,000-line project's semantics takes 22 ms
+  instead of 29. `DYN_SERIAL_LIFETIMES=1` keeps them in place for
+  comparison.
 - Functions that take or return fixed arrays or payload enums by value, such
   as `fn area(shape: Shape) f64`, and functions that call C variadic
   functions now compile to optimized SSA code on every 64-bit target. No

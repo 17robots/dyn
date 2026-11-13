@@ -291,6 +291,22 @@ bool dyn_module_cache_restore(const DynSources *, size_t first, size_t count, un
 void dyn_module_cache_store(const DynSources *, size_t first, size_t count, unsigned chunk, unsigned chunks, uint64_t interface_hash, const DynOptions *, const char *compiler_path, const char *cache_root, const char *object);
 void dyn_diagnostic(const DynContext *, const char *, const char *, unsigned, unsigned, unsigned, unsigned, const char *);
 void dyn_diagnostic_source(const char *severity, const DynSource *source, size_t start, size_t end, const char *message);
+/* While a thread's capture is set, dyn_diagnostic_source keeps its
+   diagnostics instead of reporting them; dyn_diagnostic_replay reports them
+   later, in order, and empties the capture. Work done on worker threads
+   reports this way in the order a serial run would. */
+typedef struct DynDiagnosticRecord {
+  const DynSource *source;
+  size_t start, end;
+  char *severity, *message;
+} DynDiagnosticRecord;
+typedef struct DynDiagnosticCapture {
+  DynDiagnosticRecord *items;
+  size_t count, capacity;
+} DynDiagnosticCapture;
+extern _Thread_local DynDiagnosticCapture *dyn_diagnostic_capture;
+void dyn_diagnostic_replay(DynDiagnosticCapture *capture, size_t first, size_t count);
+void dyn_diagnostic_capture_free(DynDiagnosticCapture *capture);
 bool dyn_format_source(const DynSource *, char **, size_t *);
 bool dyn_format_syntax_ok(const DynSource *, bool);
 int dyn_format_directory(const char *, bool);

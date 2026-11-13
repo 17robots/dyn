@@ -5,6 +5,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
+#include <pthread.h>
+#include <stdatomic.h>
+#include <unistd.h>
+#endif
 
 typedef struct {
   uint32_t *buckets, *next;
@@ -22,6 +27,8 @@ typedef struct {
   /* Per function: 0 unknown, 1 not a std/mem function, 2 + i is mem_names[i]. */
   uint8_t *mem_kinds;
   size_t mem_kind_count;
+  /* On a lifetime-check worker: where its vet findings count (SemaLate). */
+  unsigned *late_vet;
 } Sema;
 
 /* How errors are being reported in the analysis running on this thread.
@@ -4361,6 +4368,123 @@ static int assert_value(DynAstProgram *a, DynExprId id, unsigned depth) {
   default: return order >= 0;
   }
 }
+/* ---- Lifetime checks on worker threads ----
+
+   Lifetime checks only read the program, so a large one has every body
+   checked first and then runs its lifetime checks on worker threads.
+   Diagnostics keep the serial order: the body pass keeps its own, each
+   check keeps its own, and the replay reports a function's body
+   diagnostics and then its check's. As in a serial run, a check runs only
+   while nothing has failed: candidates are the functions before the first
+   body error, and the replay stops after the first check with an error. */
+typedef struct {
+  uint32_t function;
+  size_t body_end; /* body diagnostics reported before this check */
+  unsigned errors, vet;
+  DynDiagnosticCapture diagnostics;
+} SemaLateCheck;
+typedef struct {
+  Sema *sema;
+  DynAstProgram *a;
+  const DynSource *s;
+  SemaLateCheck *checks;
+  size_t count, capacity;
+  DynDiagnosticCapture body, *outer;
+  char gap_module[sizeof(sema_report.gap_module)];
+#ifndef _WIN32
+  atomic_size_t next;
+#endif
+} SemaLate;
+enum { SEMA_LATE_FUNCTIONS = 512, SEMA_LATE_WORKERS = 16 };
+/* The deferred checks' state, or NULL to check each function in place. */
+static SemaLate *sema_late_start(Sema *sema, DynAstProgram *a, const DynSource *s) {
+#ifdef _WIN32
+  (void)sema; (void)a; (void)s;
+  return NULL;
+#else
+  /* DYN_SERIAL_LIFETIMES=1 checks each function in place, for comparison. */
+  const char *serial = getenv("DYN_SERIAL_LIFETIMES");
+  if (a->function_count < SEMA_LATE_FUNCTIONS || sysconf(_SC_NPROCESSORS_ONLN) < 2 || (serial && *serial == '1'))
+    return NULL;
+  SemaLate *late = calloc(1, sizeof(*late));
+  if (!late) return NULL;
+  late->sema = sema; late->a = a; late->s = s;
+  late->outer = dyn_diagnostic_capture;
+  dyn_diagnostic_capture = &late->body;
+  return late;
+#endif
+}
+/* False when there is no room: the caller checks the function now. */
+static bool sema_late_add(SemaLate *late, uint32_t function) {
+  if (late->count == late->capacity) {
+    size_t capacity = late->capacity ? 2 * late->capacity : 256;
+    SemaLateCheck *grown = realloc(late->checks, capacity * sizeof(*grown));
+    if (!grown) return false;
+    late->checks = grown; late->capacity = capacity;
+  }
+  late->checks[late->count++] = (SemaLateCheck){.function = function, .body_end = late->body.count};
+  return true;
+}
+#ifndef _WIN32
+static void *sema_late_worker(void *argument) {
+  SemaLate *late = argument;
+  Sema sema = *late->sema;
+  sema.mem_kinds = NULL; sema.mem_kind_count = 0;
+  sema.locals = (SemaNames){0}; sema.indexed_locals = 0;
+  sema.active_loops = NULL; sema.active_loop_count = sema.active_loop_capacity = 0;
+  memset(&sema_report, 0, sizeof(sema_report));
+  memcpy(sema_report.gap_module, late->gap_module, sizeof(late->gap_module));
+  for (;;) {
+    size_t i = atomic_fetch_add(&late->next, 1);
+    if (i >= late->count) break;
+    SemaLateCheck *c = &late->checks[i];
+    sema.current_function = c->function;
+    sema.late_vet = &c->vet;
+    dyn_diagnostic_capture = &c->diagnostics;
+    life_check_function(&sema, late->a, late->s, &c->errors, &late->a->functions[c->function]);
+  }
+  dyn_diagnostic_capture = NULL;
+  free(sema.mem_kinds);
+  return NULL;
+}
+#endif
+static void sema_late_finish(SemaLate *late, unsigned *errors) {
+  dyn_diagnostic_capture = late->outer;
+#ifndef _WIN32
+  memcpy(late->gap_module, sema_report.gap_module, sizeof(late->gap_module));
+  atomic_init(&late->next, 0);
+  long online = sysconf(_SC_NPROCESSORS_ONLN);
+  size_t workers = online > 1 ? (size_t)online : 1;
+  if (workers > SEMA_LATE_WORKERS) workers = SEMA_LATE_WORKERS;
+  if (workers > late->count) workers = late->count;
+  pthread_t threads[SEMA_LATE_WORKERS];
+  size_t started = 0;
+  for (; started + 1 < workers; ++started)
+    if (pthread_create(&threads[started], NULL, sema_late_worker, late)) break;
+  sema_late_worker(late);
+  for (size_t i = 0; i < started; ++i) pthread_join(threads[i], NULL);
+#endif
+  size_t reported = 0;
+  bool failed = false;
+  for (size_t i = 0; i < late->count; ++i) {
+    SemaLateCheck *c = &late->checks[i];
+    dyn_diagnostic_replay(&late->body, reported, c->body_end - reported);
+    reported = c->body_end;
+    if (!failed) {
+      dyn_diagnostic_replay(&c->diagnostics, 0, c->diagnostics.count);
+      *errors += c->errors;
+      if (late->s->context.vet_findings) *late->s->context.vet_findings += c->vet;
+      DynAstFn *fn = &late->a->functions[c->function];
+      if (c->errors && fn->is_instance) instance_trace(late->a, late->s, fn->instance);
+      failed = c->errors != 0;
+    }
+    dyn_diagnostic_capture_free(&c->diagnostics);
+  }
+  dyn_diagnostic_replay(&late->body, reported, late->body.count - reported);
+  dyn_diagnostic_capture_free(&late->body);
+  free(late->checks);
+  free(late);
+}
 static bool sema_program(Sema *sema, DynAstProgram *a, const DynSource *s,
                          unsigned *errors) {
   /* Reserve common conversion growth up front as an optimization. Reflection
@@ -4483,6 +4607,7 @@ static bool sema_program(Sema *sema, DynAstProgram *a, const DynSource *s,
       error_span(as->span, s, errors, message);
     }
   }
+  SemaLate *late = sema_late_start(sema, a, s);
   for (uint32_t f = 0; f < a->function_count && dyn_work_step(&s->context, 1); ++f) {
     DynAstFn *fn = &a->functions[f];
     if (fn->return_type == DYN_TYPE_ANY)
@@ -4628,7 +4753,8 @@ static bool sema_program(Sema *sema, DynAstProgram *a, const DynSource *s,
     sema_report.has_origin = false;
     fn = &a->functions[f];
     fn->local_count = (uint32_t)a->local_count - fn->local_start;
-    life_check_function(sema,a,s,errors,fn);
+    if (!late || (!*errors && fn->local_count && !sema_late_add(late, f)))
+      life_check_function(sema,a,s,errors,fn);
     if (fn->return_type != DYN_TYPE_VOID && !terminated)
       error_span(fn->name, s, errors,
                  "non-void function may exit without return");
@@ -4639,6 +4765,7 @@ static bool sema_program(Sema *sema, DynAstProgram *a, const DynSource *s,
     if (fn->is_instance && *errors != errors_before)
       instance_trace(a, s, fn->instance);
   }
+  if (late) sema_late_finish(late, errors);
   sema_report.assert_failed = false;
   sema->current_function = UINT32_MAX;
   return *errors == 0;

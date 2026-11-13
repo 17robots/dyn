@@ -2,6 +2,7 @@
 #include "dyn.h"
 #include "dyn_compact.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 static void quote(const char *s) {
   fputc('"', stderr);
@@ -85,8 +86,38 @@ static void diagnostic_snippet(const char *text, size_t length, size_t at, size_
     if (((unsigned char)text[i] & 0xc0) != 0x80) fputc('~', stderr);
   fputc('\n', stderr);
 }
+_Thread_local DynDiagnosticCapture *dyn_diagnostic_capture;
+static bool diagnostic_keep(DynDiagnosticCapture *capture, const char *severity, const DynSource *source,
+                            size_t start, size_t end, const char *message) {
+  if (capture->count == capture->capacity) {
+    size_t capacity = capture->capacity ? 2 * capture->capacity : 16;
+    DynDiagnosticRecord *grown = realloc(capture->items, capacity * sizeof(*grown));
+    if (!grown) return false;
+    capture->items = grown; capture->capacity = capacity;
+  }
+  char *kept_severity = strdup(severity), *kept_message = strdup(message);
+  if (!kept_severity || !kept_message) { free(kept_severity); free(kept_message); return false; }
+  capture->items[capture->count++] = (DynDiagnosticRecord){source, start, end, kept_severity, kept_message};
+  return true;
+}
+void dyn_diagnostic_replay(DynDiagnosticCapture *capture, size_t first, size_t count) {
+  DynDiagnosticCapture *kept = dyn_diagnostic_capture;
+  dyn_diagnostic_capture = NULL;
+  for (size_t i = first; i < first + count && i < capture->count; ++i) {
+    DynDiagnosticRecord *r = &capture->items[i];
+    dyn_diagnostic_source(r->severity, r->source, r->start, r->end, r->message);
+  }
+  dyn_diagnostic_capture = kept;
+}
+void dyn_diagnostic_capture_free(DynDiagnosticCapture *capture) {
+  for (size_t i = 0; i < capture->count; ++i) { free(capture->items[i].severity); free(capture->items[i].message); }
+  free(capture->items);
+  *capture = (DynDiagnosticCapture){0};
+}
 void dyn_diagnostic_source(const char *severity, const DynSource *source,
                            size_t start, size_t end, const char *message) {
+  /* Without memory to keep it, report it now: out of order beats lost. */
+  if (dyn_diagnostic_capture && diagnostic_keep(dyn_diagnostic_capture, severity, source, start, end, message)) return;
   const char *path, *end_path;
   unsigned line, column, end_line, end_column;
   dyn_source_location(source, start, &path, &line, &column);
