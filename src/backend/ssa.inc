@@ -7612,6 +7612,69 @@ static bool ssa_phi_hole(SsaAlloc *a, uint32_t phi, uint32_t id) {
     if (ssa_clobber_hits(a, c, (unsigned)p->reg, phi)) return false;
   return true;
 }
+/* Whether w holds nothing anyone reads over positions [from, to]: no use of
+   w lies in that range or later in the blocks it covers, and no path from
+   those blocks reaches a use of w without first passing w's definition (SSA
+   values are defined once, so a path through it sees a new value). A
+   single interval cannot show such a hole; LLVM's segmented live ranges
+   can. Bounded: large functions answer no. */
+static bool ssa_dead_over(SsaAlloc *a, uint32_t w, uint32_t from, uint32_t to) {
+  Ssa *s = a->s;
+  if (s->block_count > 4096) return false;
+  uint32_t home = s->values[w].block;
+  uint8_t *used = ssa_temp_zero(s, s->block_count + 1), *seen = ssa_temp_zero(s, s->block_count + 1);
+  uint32_t *work = ssa_temp(s, (s->block_count + 1) * sizeof(uint32_t));
+  if (!used || !seen || !work) return false;
+  for (uint32_t i = 0; i < a->n; ++i) {
+    uint32_t b = a->order[i];
+    SsaBlock *block = &s->blocks[b];
+    for (uint32_t k = 0; k <= block->values.count; ++k) {
+      int32_t operands[SSA_MAX_OPERANDS]; uint32_t count = 0, at = a->block_end[b];
+      bool phi = false;
+      if (k < block->values.count) {
+        SsaValue *u = &s->values[block->values.items[k]];
+        if (u->dead) continue;
+        count = ssa_operands(s, block->values.items[k], ssa_slots, SSA_MAX_OPERANDS);
+        for (uint32_t j = 0; j < count; ++j) operands[j] = *ssa_slots[j];
+        phi = u->op == SO_PHI;
+        at = u->fused ? a->block_end[b] : u->start;
+        if ((u->op == SO_CALL || u->op == SO_PANIC) && u->cond) at = u->start + 1;
+      } else {
+        int32_t controls[4] = {block->control, block->control2, block->control3, block->control4};
+        for (unsigned j = 0; j < 4; ++j) if (controls[j] >= 0) operands[count++] = controls[j];
+      }
+      for (uint32_t j = 0; j < count; ++j) {
+        if (operands[j] != (int32_t)w) continue;
+        /* A phi reads its operand at the end of that predecessor. */
+        uint32_t user = phi ? block->preds.items[j] : b, position = phi ? a->block_end[user] : at;
+        /* The value itself may read w at its start, before it writes. */
+        if (position > from && position <= to) return false;
+        used[user] = 1;
+        /* A use after the range, in a block the range covers, still reads w. */
+        if (position > to && a->block_start[user] <= to) return false;
+      }
+    }
+  }
+  uint32_t top = 0;
+  for (uint32_t i = 0; i < a->n; ++i) {
+    uint32_t b = a->order[i];
+    if (a->block_end[b] < from || a->block_start[b] > to) continue;
+    for (uint32_t j = 0; j < ssa_successors(s, &s->blocks[b]); ++j) {
+      uint32_t next = ssa_successor(s, &s->blocks[b], j);
+      if (!seen[next]) { seen[next] = 1; work[top++] = next; }
+    }
+  }
+  while (top) {
+    uint32_t b = work[--top];
+    if (b == home) continue; /* w is defined again before any read */
+    if (used[b]) return false;
+    for (uint32_t j = 0; j < ssa_successors(s, &s->blocks[b]); ++j) {
+      uint32_t next = ssa_successor(s, &s->blocks[b], j);
+      if (!seen[next]) { seen[next] = 1; work[top++] = next; }
+    }
+  }
+  return true;
+}
 static bool ssa_allocate(SsaAlloc *a) {
   Ssa *s = a->s;
   uint32_t *list = ssa_temp(s, (s->value_count + 1) * sizeof(uint32_t)), count = 0;
@@ -7680,6 +7743,17 @@ static bool ssa_allocate(SsaAlloc *a) {
         ssa_phi_hole(a, (uint32_t)v->hint, id)) {
       chosen = want;
       shares[id] = (uint32_t)v->hint + 1;
+    }
+    /* The register's owner may be dead where this value lives (a hole in
+       its interval): share it, and hand it back when this value ends. A phi
+       never takes a hole: its moves write the register in predecessors,
+       before its interval starts. */
+    if (chosen < 0 && want >= 0 && (want >= X_XMM0) == floating && owner[want] != UINT32_MAX &&
+        v->op != SO_PHI && owner[want] != id && !saved[owner[want]] && !shares[owner[want]] &&
+        s->values[owner[want]].reg == want && !ssa_clobbered(a, (unsigned)want, v->start, v->end, id) &&
+        ssa_dead_over(a, owner[want], v->start, v->end)) {
+      chosen = want;
+      shares[id] = owner[want] + 1;
     }
     if (chosen >= 0) {}
     else if (floating) {
@@ -8131,6 +8205,13 @@ static void ssa_cache_loops(SsaAlloc *a) {
             for (uint32_t c = 0; c < a->cache_count && !busy; ++c)
               busy = a->caches[c].value == id || a->caches[c].evicted == id;
             for (uint32_t q = 0; q < a->save_count && !busy; ++q) busy = a->saves[q].value == id;
+            /* Nothing else may hold the register inside w's interval, as a
+               value filling a hole in it does (ssa_dead_over): the exits
+               restore w there. */
+            for (uint32_t q = 0; q < s->value_count && !busy; ++q) {
+              SsaValue *x = &s->values[q];
+              busy = q != id && !x->dead && x->reg == w->reg && x->start <= w->end && x->end >= w->start;
+            }
             if (busy || !ssa_cache_free(a, (unsigned)w->reg, from, to, id)) continue;
             if (carried && !ssa_exits_free(a, exit_block, w->reg)) continue;
             chosen = w->reg;

@@ -8,6 +8,8 @@
 - Wide constants used in a loop live in registers, not one MOVABS per use.
 - A loop whose header loads and checks before comparing is rotated: the
   latch repeats the header instead of jumping back to it.
+- quicksort's outer latch decrements j in j's own register: the new j lives
+  in a hole of the old j's interval, so no copy surrounds the SUB.
 The programs run and are checked for their output first."""
 import os
 from pathlib import Path
@@ -121,6 +123,13 @@ with tempfile.TemporaryDirectory(prefix='dyn-ssa-codegen-shape-') as temporary:
     backward = [l for l in body if re.search(r'\tjmp\s+([0-9a-f]+) <quicksort', l) and
                 int(re.search(r'jmp\s+([0-9a-f]+)', l).group(1), 16) < int(l.split(':')[0], 16)]
     assert len(backward) <= 1, backward
+    for i, line in enumerate(quicksort):
+        if re.match(r'sub\s+\$0x1,', line) and i + 1 < len(quicksort) and quicksort[i + 1].startswith('jmp'):
+            register = line.split(',')[-1]
+            assert not quicksort[i - 1].endswith(',' + register) or quicksort[i - 1].startswith('add'), quicksort[i - 2:i + 2]
+            break
+    else:
+        raise AssertionError(quicksort)
     probe = function(listing, 'probe')
     for i, line in enumerate(probe):
         if line.startswith('and') and '$0x3ff' in line:
@@ -133,4 +142,4 @@ with tempfile.TemporaryDirectory(prefix='dyn-ssa-codegen-shape-') as temporary:
     loop = [l for l in mix if l.startswith('imul') or l.startswith('movabs')]
     assert sum(l.startswith('movabs') for l in mix) == 2 and not any(
         mix[i].startswith('movabs') and any(m.startswith('imul') for m in mix[:i]) for i in range(len(mix))), mix
-print('PASS tail calls loop, two-address chains share the phi register, wide loop constants stay in registers')
+print('PASS tail calls loop, two-address chains share the phi register, wide loop constants stay in registers, quicksort latch has no copies')

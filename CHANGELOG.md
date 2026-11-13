@@ -47,7 +47,9 @@ servers so they pick up the new `dyn`.
   runs 8% faster, sieve 6%, the JSONL report 3%. A branch around one or two
   cheap instructions that only picks a value becomes a conditional move
   (CMOV on x86-64, CSEL on AArch64), so clamps and min/max no longer
-  mispredict.
+  mispredict. A value can take a register through a stretch where the
+  register's owner is dead, so `j -= 1` at the bottom of quicksort's loop
+  no longer copies j; the sort benchmark runs 2% faster.
 - Functions that take or return fixed arrays or payload enums by value, such
   as `fn area(shape: Shape) f64`, and functions that call C variadic
   functions now compile to optimized SSA code on every 64-bit target. No
