@@ -10292,62 +10292,275 @@ static void ssa_epilogue(SsaEmit *e) {
   ssa_debug_epilogue(e);
   CODE(0xc9, 0xc3); /* leave; ret */
 }
-/* A recursive function may return directly from its first guard without
-   needing a frame. Read only unmodified integer arguments here; the regular
-   SSA entry still handles every other input and every runtime check. */
-static void ssa_x86_base_return(SsaEmit *e) {
-  BackendContext *ctx = e->ctx;
-  const DynIrProgram *ir = e->s->ir;
-  const DynIrFunction *f = e->s->f;
-  if (ctx->a64 || ctx->rv64 || ctx->win64 || f->is_main || f->variadic || ctx->debug_mode || ctx->dwarf ||
-      f->return_type != DYN_TYPE_U64 || !f->body_count || f->param_count > 6) return;
-  unsigned self = ctx->function_symbols[f - ir->functions];
-  bool recursive = false;
-  for (uint32_t i = 0; i < e->s->value_count; ++i) {
-    SsaValue *v = &e->s->values[i];
-    if (!v->dead && v->op == SO_CALL && !v->aux2 && (unsigned)v->aux == self) recursive = true;
+/* Shrink-wrapping by duplication: when a path from the entry reaches a
+   return through blocks without effects, that path runs once before the
+   prologue, straight from the argument registers. Its loads go to scratch
+   registers, its checks and every branch off the path jump to the regular
+   entry, which repeats the work with the frame in place. Emission is
+   speculative: a path that meets anything else is rewound. */
+typedef struct {
+  uint8_t kind; /* 0 not yet known, 1 constant k, 2 register reg + k, 3 same as value k */
+  uint8_t reg;
+  int64_t k;
+} SsaSymbol;
+typedef struct {
+  SsaEmit *e;
+  SsaSymbol *sym;
+  uint8_t *visited;
+  unsigned scratch;
+  size_t exits[16];
+  unsigned exit_count;
+} SsaEarly;
+static bool ssa_early_pure(uint8_t op) {
+  switch (op) {
+  case SO_CONST: case SO_PARAM: case SO_PHI: case SO_COPY: case SO_ADD: case SO_SUB: case SO_MUL: case SO_AND:
+  case SO_OR: case SO_XOR: case SO_SHL: case SO_SHR: case SO_SAR: case SO_NEG: case SO_NOT: case SO_EXT: case SO_CMP:
+  case SO_FCMP: case SO_FADD: case SO_FSUB: case SO_FMUL: case SO_FDIV: case SO_FNEG: case SO_ITOF: case SO_FCVT:
+  case SO_BITS: case SO_SYMBOL: case SO_FRAME: case SO_LEA: case SO_SELECT: case SO_MULH: case SO_LOAD: return true;
+  default: return false;
   }
-  if (!recursive) return;
-  const DynIrStmt *guard = &ir->statements[ir->children[f->body_start]];
-  if (guard->kind != DYN_STMT_IF || guard->body_count != 1 || guard->else_count ||
-      guard->expression >= ir->expression_count) return;
-  const DynIrExpr *test = &ir->expressions[guard->expression];
-  if (test->kind != DYN_EXPR_BINARY || test->left >= ir->expression_count || test->right >= ir->expression_count) return;
-  const DynIrExpr *input = &ir->expressions[test->left], *limit = &ir->expressions[test->right];
-  if (input->kind != DYN_EXPR_NAME || input->type != DYN_TYPE_U64 ||
-      limit->kind != DYN_EXPR_INT || limit->integer > INT32_MAX) return;
-  const DynIrStmt *ret = &ir->statements[ir->children[guard->body_start]];
-  if (ret->kind != DYN_STMT_RETURN || ret->expression >= ir->expression_count) return;
-  const DynIrExpr *result = &ir->expressions[ret->expression];
-  if (result->kind != DYN_EXPR_NAME || result->type != DYN_TYPE_U64) return;
-  static const unsigned args[] = {X_RDI, X_RSI, X_RDX, X_RCX, X_R8, X_R9};
-  unsigned input_reg = UINT_MAX, result_reg = UINT_MAX;
-  for (uint32_t i = 0; i < f->param_count; ++i) {
-    const DynIrParam *param = &ir->params[f->param_start + i];
-    if (param->type != DYN_TYPE_U64) return;
-    if (param->local_id == input->integer) input_reg = args[i];
-    if (param->local_id == result->integer) result_reg = args[i];
+}
+static int ssa_early_scratch(SsaEarly *w) {
+  static const unsigned char x86[] = {X_RAX, X_R10, X_R11}, a64[] = {9, 10, 11, 12, 13};
+  if (w->e->ctx->a64) return w->scratch < sizeof(a64) ? a64[w->scratch++] : -1;
+  return w->scratch < sizeof(x86) ? x86[w->scratch++] : -1;
+}
+/* A register holding the symbol exactly, emitting a move or an add if needed. */
+static int ssa_early_register(SsaEarly *w, SsaSymbol x) {
+  BackendContext *ctx = w->e->ctx;
+  if (x.kind == 2 && !x.k) return x.reg;
+  int d = ssa_early_scratch(w);
+  if (d < 0) return -1;
+  if (ctx->a64) {
+    if (x.kind == 1) a64s_immediate(ctx, (unsigned)d, (uint64_t)x.k);
+    else if (x.k > -4096 && x.k < 4096) a64s_add_immediate(ctx, (unsigned)d, x.reg, x.k);
+    else return -1;
+    return d;
   }
-  if (input_reg == UINT_MAX || result_reg == UINT_MAX) return;
-  Cond condition;
-  switch (test->op) {
-  case DYN_OP_EQ: condition = CC_E; break;
-  case DYN_OP_NE: condition = CC_NE; break;
-  case DYN_OP_LT: condition = CC_B; break;
-  case DYN_OP_LE: condition = CC_BE; break;
-  case DYN_OP_GT: condition = CC_A; break;
-  case DYN_OP_GE: condition = CC_AE; break;
-  default: return;
+  if (x.kind == 1) x86_move_immediate(ctx, (unsigned)d, (uint64_t)x.k);
+  else if (x.k >= INT32_MIN && x.k <= INT32_MAX)
+    x86_mem_op(ctx, -1, true, OP1(0x8d), (unsigned)d, (SsaMemory){(int)x.reg, -1, 1, (int32_t)x.k}, false);
+  else return -1;
+  return d;
+}
+static bool ssa_early_value(SsaEarly *w, int32_t id, SsaSymbol *out) {
+  Ssa *s = w->e->s; BackendContext *ctx = w->e->ctx;
+  for (unsigned hops = 0; w->sym[id].kind == 3 && hops < 64; ++hops) id = (int32_t)w->sym[id].k;
+  if (w->sym[id].kind == 3) return false;
+  if (w->sym[id].kind) { *out = w->sym[id]; return true; }
+  SsaValue *v = &s->values[id];
+  if (v->cls != SC_INT || !w->visited[v->block]) return false;
+  SsaSymbol x = {0, 0, 0}, y = {0, 0, 0}, r = {0, 0, 0};
+  switch (v->op) {
+  case SO_CONST: r = (SsaSymbol){1, 0, v->aux}; break;
+  case SO_COPY: if (!ssa_early_value(w, v->a, &r)) return false; break;
+  case SO_ADD: case SO_SUB: case SO_AND: case SO_OR: case SO_XOR: {
+    if (!ssa_early_value(w, v->a, &x) || !ssa_early_value(w, v->b, &y)) return false;
+    uint64_t a = (uint64_t)x.k, b = (uint64_t)y.k;
+    if (x.kind == 1 && y.kind == 1) {
+      uint64_t n = v->op == SO_ADD ? a + b : v->op == SO_SUB ? a - b : v->op == SO_AND ? (a & b) : v->op == SO_OR ? (a | b) : (a ^ b);
+      r = (SsaSymbol){1, 0, (int64_t)n};
+    } else if (v->op == SO_ADD && (x.kind == 1 || y.kind == 1)) {
+      SsaSymbol base = x.kind == 1 ? y : x;
+      r = (SsaSymbol){2, base.reg, (int64_t)((uint64_t)base.k + (x.kind == 1 ? a : b))};
+    } else if (v->op == SO_SUB && y.kind == 1) {
+      r = (SsaSymbol){2, x.reg, (int64_t)(a - b)};
+    } else if (v->op != SO_SUB && v->op != SO_ADD && y.kind == 1 && y.k >= INT32_MIN && y.k <= INT32_MAX && !ctx->a64) {
+      int source = ssa_early_register(w, x), d = ssa_early_scratch(w);
+      if (source < 0 || d < 0) return false;
+      x86_mov(ctx, (unsigned)d, (unsigned)source);
+      unsigned extension = v->op == SO_AND ? 4 : v->op == SO_OR ? 1 : 6;
+      if (y.k >= -128 && y.k <= 127) { x86_reg_op(ctx, -1, true, OP1(0x83), extension, (unsigned)d, false); byte(ctx, (uint8_t)y.k); }
+      else { x86_reg_op(ctx, -1, true, OP1(0x81), extension, (unsigned)d, false); word(ctx, (uint32_t)y.k); }
+      r = (SsaSymbol){2, (uint8_t)d, 0};
+    } else if (v->op != SO_SUB && v->op != SO_ADD && ctx->a64) {
+      int left = ssa_early_register(w, x), right = ssa_early_register(w, y), d = ssa_early_scratch(w);
+      if (left < 0 || right < 0 || d < 0) return false;
+      uint32_t opcode = v->op == SO_AND ? 0x8a000000u : v->op == SO_OR ? 0xaa000000u : 0xca000000u;
+      a64_word(ctx, opcode | (uint32_t)right << 16 | (uint32_t)left << 5 | (uint32_t)d);
+      r = (SsaSymbol){2, (uint8_t)d, 0};
+    } else return false;
+    break;
   }
-  if (limit->integer <= 127) {
-    x86_reg_op(ctx, -1, true, OP1(0x83), 7, input_reg, false); byte(ctx, (uint8_t)limit->integer);
+  case SO_LOAD: {
+    unsigned bits = v->aux2 & 0xff;
+    bool sign = v->aux2 >> 8 & 1;
+    if (v->b >= 0 || v->aux2 >> 9 & 1 || !ssa_early_value(w, v->a, &x) || x.kind != 2) return false;
+    int64_t disp = x.k + v->aux;
+    int d = ssa_early_scratch(w);
+    if (d < 0 || disp < INT32_MIN || disp > INT32_MAX) return false;
+    SsaMemory m = {(int)x.reg, -1, 1, (int32_t)disp};
+    if (ctx->a64) a64s_memory(ctx, bits, sign, false, false, (unsigned)d, m);
+    else if (bits == 8) x86_mem_op(ctx, -1, sign, sign ? OP2(0x0f, 0xbe) : OP2(0x0f, 0xb6), (unsigned)d, m, false);
+    else if (bits == 16) x86_mem_op(ctx, -1, sign, sign ? OP2(0x0f, 0xbf) : OP2(0x0f, 0xb7), (unsigned)d, m, false);
+    else if (bits == 32) x86_mem_op(ctx, -1, sign, sign ? OP1(0x63) : OP1(0x8b), (unsigned)d, m, false);
+    else x86_mem_op(ctx, -1, true, OP1(0x8b), (unsigned)d, m, false);
+    r = (SsaSymbol){2, (uint8_t)d, 0};
+    break;
+  }
+  default: return false;
+  }
+  w->sym[id] = r;
+  *out = r;
+  return true;
+}
+/* Sets the flags for a cond b; the condition to branch on comes back. */
+static bool ssa_early_compare(SsaEarly *w, int32_t a, int32_t b, Cond *cond) {
+  BackendContext *ctx = w->e->ctx;
+  SsaSymbol x, y;
+  if (*cond >= 10 || !ssa_early_value(w, b, &y)) return false;
+  /* (p & mask) == 0, as an alignment check tests: TEST without the AND. */
+  SsaValue *and = &w->e->s->values[a];
+  if (!ctx->a64 && (*cond == CC_E || *cond == CC_NE) && y.kind == 1 && !y.k && and->op == SO_AND && !w->sym[a].kind) {
+    SsaSymbol mask;
+    if (ssa_early_value(w, and->b, &mask) && mask.kind == 1 && mask.k >= INT32_MIN && mask.k <= INT32_MAX &&
+        ssa_early_value(w, and->a, &x) && x.kind == 2) {
+      int left = ssa_early_register(w, x);
+      if (left < 0) return false;
+      x86_reg_op(ctx, -1, true, OP1(0xf7), 0, (unsigned)left, false);
+      word(ctx, (uint32_t)mask.k);
+      return true;
+    }
+  }
+  if (!ssa_early_value(w, a, &x)) return false;
+  if (x.kind == 1 && y.kind != 1) { SsaSymbol t = x; x = y; y = t; *cond = ssa_swap(*cond); }
+  int left = ssa_early_register(w, x);
+  if (left < 0) return false;
+  if (ctx->a64) {
+    if (y.kind == 1 && (uint64_t)y.k < 4096) a64_word(ctx, 0xf100001fu | (uint32_t)y.k << 10 | (uint32_t)left << 5);
+    else if (y.kind == 1 && 0 - (uint64_t)y.k < 4096) a64_word(ctx, 0xb100001fu | (uint32_t)(0 - (uint64_t)y.k) << 10 | (uint32_t)left << 5);
+    else {
+      int right = ssa_early_register(w, y);
+      if (right < 0) return false;
+      a64_word(ctx, 0xeb00001fu | (uint32_t)right << 16 | (uint32_t)left << 5);
+    }
+    return true;
+  }
+  if (y.kind == 1 && !y.k) x86_reg_op(ctx, -1, true, OP1(0x85), (unsigned)left, (unsigned)left, false);
+  else if (y.kind == 1 && y.k >= -128 && y.k <= 127) { x86_reg_op(ctx, -1, true, OP1(0x83), 7, (unsigned)left, false); byte(ctx, (uint8_t)y.k); }
+  else if (y.kind == 1 && y.k >= INT32_MIN && y.k <= INT32_MAX) { x86_reg_op(ctx, -1, true, OP1(0x81), 7, (unsigned)left, false); word(ctx, (uint32_t)y.k); }
+  else {
+    int right = ssa_early_register(w, y);
+    if (right < 0) return false;
+    x86_reg_op(ctx, -1, true, OP1(0x39), (unsigned)right, (unsigned)left, false);
+  }
+  return true;
+}
+/* A branch to the regular entry when cond holds; patched at the end. */
+static bool ssa_early_leave(SsaEarly *w, Cond cond) {
+  BackendContext *ctx = w->e->ctx;
+  if (w->exit_count >= sizeof(w->exits) / sizeof(w->exits[0])) return false;
+  w->exits[w->exit_count++] = ctx->text.n + (ctx->a64 ? 0 : 1);
+  if (ctx->a64) a64_word(ctx, 0x54000000u | a64_cond[cond]);
+  else { byte(ctx, (unsigned char)(x86_jcc[cond] - 0x10)); byte(ctx, 0); }
+  return true;
+}
+static bool ssa_early_walk(SsaEarly *w, uint32_t b, uint32_t from, unsigned depth) {
+  Ssa *s = w->e->s; BackendContext *ctx = w->e->ctx;
+  if (depth > 8 || w->visited[b]) return false;
+  w->visited[b] = 1;
+  SsaBlock *block = &s->blocks[b];
+  uint32_t edge = 0;
+  if (from != UINT32_MAX) {
+    while (edge < block->preds.count && block->preds.items[edge] != from) ++edge;
+    if (edge == block->preds.count) return false;
+  }
+  for (uint32_t i = 0; i < block->values.count; ++i) {
+    uint32_t id = block->values.items[i];
+    SsaValue *v = &s->values[id];
+    if (v->dead) continue;
+    if (v->op == SO_PHI) {
+      if (edge >= v->count) return false;
+      w->sym[id] = (SsaSymbol){3, 0, s->lists[v->list + edge]};
+    } else if (v->op == SO_PARAM) {
+      if (from != UINT32_MAX) return false;
+      if (v->cls == SC_INT && v->aux >= 0 && v->aux < 8) w->sym[id] = (SsaSymbol){2, (uint8_t)ssa_location_register(ctx, (int)v->aux), 0};
+    } else if (v->op == SO_CHECK) {
+      Cond cond = (Cond)v->cond;
+      if (!ssa_early_compare(w, v->a, v->b, &cond) || !ssa_early_leave(w, ssa_negate(cond))) return false;
+    } else if ((v->effect && v->op != SO_LOAD) || !ssa_early_pure(v->op)) return false;
+  }
+  if (block->kind == SB_PLAIN) return ssa_early_walk(w, block->succ[0], b, depth + 1);
+  if (block->kind == SB_RETURN) {
+    if (block->control2 >= 0) return false;
+    if (block->control < 0) {
+      if (s->f->return_type != DYN_TYPE_VOID) return false;
+    } else {
+      SsaSymbol r;
+      if (s->values[block->control].cls != SC_INT || !ssa_early_value(w, block->control, &r)) return false;
+      if (ctx->a64) {
+        if (r.kind == 1) a64s_immediate(ctx, 0, (uint64_t)r.k);
+        else if (r.k > -4096 && r.k < 4096) a64s_add_immediate(ctx, 0, r.reg, r.k);
+        else return false;
+      } else {
+        if (r.kind == 1) x86_move_immediate(ctx, X_RAX, (uint64_t)r.k);
+        else if (!r.k) x86_mov(ctx, X_RAX, r.reg);
+        else if (r.k >= INT32_MIN && r.k <= INT32_MAX)
+          x86_mem_op(ctx, -1, true, OP1(0x8d), X_RAX, (SsaMemory){(int)r.reg, -1, 1, (int32_t)r.k}, false);
+        else return false;
+      }
+    }
+    if (ctx->a64) a64_word(ctx, 0xd65f03c0u); /* ret */
+    else byte(ctx, 0xc3);
+    return true;
+  }
+  if (block->kind != SB_IF || block->control < 0) return false;
+  SsaValue *c = &s->values[block->control];
+  Cond cond = CC_NE;
+  if (c->op == SO_CMP && c->cls == SC_INT) {
+    cond = (Cond)c->cond;
+    if (!ssa_early_compare(w, c->a, c->b, &cond)) return false;
   } else {
-    x86_reg_op(ctx, -1, true, OP1(0x81), 7, input_reg, false); word(ctx, (uint32_t)limit->integer);
+    SsaSymbol x;
+    if (!ssa_early_value(w, block->control, &x)) return false;
+    int left = ssa_early_register(w, x);
+    if (left < 0) return false;
+    if (ctx->a64) a64_word(ctx, 0xf100001fu | (uint32_t)left << 5);
+    else x86_reg_op(ctx, -1, true, OP1(0x85), (unsigned)left, (unsigned)left, false);
   }
-  byte(ctx, (unsigned char)((x86_jcc[condition] ^ 1) - 0x10));
-  size_t skip = ctx->text.n; byte(ctx, 0);
-  x86_mov(ctx, X_RAX, result_reg); byte(ctx, 0xc3);
-  ctx->text.data[skip] = (unsigned char)(ctx->text.n - skip - 1);
+  /* Try the warm side first; the other one leaves for the regular entry. */
+  size_t n = (size_t)(s->value_count + 1);
+  SsaSymbol *saved = ssa_temp(s, n * sizeof(SsaSymbol));
+  uint8_t *seen = ssa_temp(s, s->block_count + 1);
+  if (!saved || !seen) return false;
+  memcpy(saved, w->sym, n * sizeof(SsaSymbol));
+  memcpy(seen, w->visited, s->block_count + 1);
+  size_t text = ctx->text.n;
+  unsigned scratch = w->scratch, exits = w->exit_count;
+  bool cold_first = s->blocks[block->succ[0]].cold && !s->blocks[block->succ[1]].cold;
+  for (unsigned attempt = 0; attempt < 2; ++attempt) {
+    unsigned side = attempt ^ (cold_first ? 1u : 0u);
+    if (ssa_early_leave(w, side ? cond : ssa_negate(cond)) && ssa_early_walk(w, block->succ[side], b, depth + 1)) return true;
+    ctx->text.n = text; w->scratch = scratch; w->exit_count = exits;
+    memcpy(w->sym, saved, n * sizeof(SsaSymbol));
+    memcpy(w->visited, seen, s->block_count + 1);
+  }
+  return false;
+}
+static void ssa_early_return(SsaEmit *e, const uint32_t *order) {
+  Ssa *s = e->s; BackendContext *ctx = e->ctx;
+  const DynIrFunction *f = s->f;
+  if (ctx->rv64 || ctx->win64 || ctx->winarm64 || f->is_main || f->variadic || ctx->debug_mode || ctx->dwarf ||
+      ctx->trace_table || !e->alloc->used_callee || s->return_slot != UINT32_MAX || s->x87_offset) return;
+  SsaEarly w = {.e = e};
+  w.sym = ssa_temp_zero(s, (size_t)(s->value_count + 1) * sizeof(SsaSymbol));
+  w.visited = ssa_temp_zero(s, s->block_count + 1);
+  if (!w.sym || !w.visited) return;
+  size_t start = ctx->text.n;
+  bool ok = ssa_early_walk(&w, order[0], UINT32_MAX, 0);
+  /* Worth it only when short: the regular entry repeats this work. */
+  if (ok && ctx->text.n - start > (ctx->a64 ? 64 : 48)) ok = false;
+  for (unsigned i = 0; ok && i < w.exit_count; ++i) {
+    size_t at = w.exits[i];
+    if (ctx->a64) {
+      uint32_t instruction;
+      memcpy(&instruction, ctx->text.data + at, 4);
+      instruction |= (uint32_t)((ctx->text.n - at) / 4) << 5;
+      memcpy(ctx->text.data + at, &instruction, 4);
+    } else if (ctx->text.n - at - 1 > 127) ok = false;
+    else ctx->text.data[at] = (unsigned char)(ctx->text.n - at - 1);
+  }
+  if (!ok) ctx->text.n = start;
 }
 /* order with cold blocks moved to the end, keeping relative order within
    each group. A block is cold when it is a failure exit or every successor
@@ -10385,7 +10598,7 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
   unsigned k = 0;
   e->row_count = e->epilogue_count = 0;
   e->last_pos = 0; e->last_line = 0;
-  ssa_x86_base_return(e);
+  ssa_early_return(e, order);
   e->prologue_pc = ctx->text.n;
   if (ctx->rv64) {
     rv_i(ctx, 0x13, 2, 2, -16, 0);

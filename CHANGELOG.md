@@ -49,7 +49,10 @@ servers so they pick up the new `dyn`.
   (CMOV on x86-64, CSEL on AArch64), so clamps and min/max no longer
   mispredict. A value can take a register through a stretch where the
   register's owner is dead, so `j -= 1` at the bottom of quicksort's loop
-  no longer copies j; the sort benchmark runs 2% faster.
+  no longer copies j; the sort benchmark runs 2% faster. An early return
+  reached without side effects, such as a recursion's base case or a tree
+  walk's `if node.left == nil { return 1 }`, runs before the function saves
+  any registers; the tree benchmark runs 3% faster.
 - Functions that take or return fixed arrays or payload enums by value, such
   as `fn area(shape: Shape) f64`, and functions that call C variadic
   functions now compile to optimized SSA code on every 64-bit target. No
