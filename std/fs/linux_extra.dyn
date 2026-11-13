@@ -129,8 +129,8 @@ pub fn copy_file(source: []const u8, destination: []const u8, scratch: []u8) Res
   copied := io.copy(writer(&output_file.value), reader(&input.value), scratch)
   close(&input.value)
   close(&output_file.value)
-  if copied.status == io.Status.Error {
-    return Result{ transferred: copied.transferred, failure: io.Failure{ kind: copied.kind, native: copied.error } }
+  if io.failed(copied.failure) {
+    return Result{ transferred: copied.transferred, failure: io.Failure{ kind: copied.failure.kind, native: copied.failure.native } }
   }
   return Result{ transferred: copied.transferred }
 }

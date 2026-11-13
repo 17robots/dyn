@@ -22,12 +22,12 @@ const nil_entry: Entry = Entry{}
 fn sink_write(data: rawptr, source: []const u8) io.Transfer {
   state := #cast(*Sink, data)
   state.calls += 1
-  if state.fail || (state.fail_after > 0 && state.calls > state.fail_after) { return io.Transfer{transferred: 0, status: io.Status.Error, kind: errors.Kind.PermissionDenied, error: -13} }
+  if state.fail || (state.fail_after > 0 && state.calls > state.fail_after) { return io.Transfer{ transferred: 0, failure: io.Failure{ kind: errors.Kind.PermissionDenied, native: -13 } } }
   amount := #len(source)
   if amount > 3 { amount = 3 }
   for i in 0..amount { state.bytes[state.used + i] = source[i] }
   state.used += amount
-  return io.Transfer{transferred: amount, status: io.Status.Complete}
+  return io.Transfer{ transferred: amount, status: io.Status.Complete }
 }
 fn main() {''']
     randomizer=random.Random(124)
@@ -49,18 +49,18 @@ fn main() {''']
   buffered := bufio.writer(io.Writer{data: #cast(rawptr, &sink), write: sink_write}, staging[..])
   result := io.write_all(bufio.writer_adapter(&buffered), "abcdefghijklmnopqrst")
   t.expect(result.transferred == 20 && sink.used == 16 && buffered.used == 4, "direct path keeps tail")
-  t.expect(bufio.writer_flush(&buffered).status == io.Status.Complete, "flush tail")
+  t.expect(io.complete(bufio.writer_flush(&buffered)), "flush tail")
   t.expect(bytes.equal(sink.bytes[..sink.used], "abcdefghijklmnopqrst"), "short writes preserve order")
   sink.fail = true
   result = io.write_all(bufio.writer_adapter(&buffered), "abcdefghijkl")
-  t.expect(result.status == io.Status.Error && result.transferred == 0, "direct failure")
+  t.expect(io.failed(result.failure) && result.transferred == 0, "direct failure")
   calls := sink.calls
   _ = io.write_all(bufio.writer_adapter(&buffered), "z")
   t.expect(sink.calls == calls, "sticky direct failure")
   sink = Sink{fail_after: 1}
   buffered = bufio.writer(io.Writer{data: #cast(rawptr, &sink), write: sink_write}, staging[..])
   result = io.write_all(bufio.writer_adapter(&buffered), "abcdefghijkl")
-  t.expect(result.status == io.Status.Error && result.transferred == 3 && sink.used == 3 && buffered.used == 0, "partial direct failure")
+  t.expect(io.failed(result.failure) && result.transferred == 3 && sink.used == 3 && buffered.used == 0, "partial direct failure")
   chunk_storage: [8]u8
   text := "abcdefghijklmnopqrst"
   for capacity in 1..9 {

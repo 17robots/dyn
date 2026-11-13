@@ -55,9 +55,9 @@ fn verify(raw: []const u8, encoded: []const u8, workspace: []u8, chunk: usize, w
  total: usize = 0
  for {
   result := io.read(reader, output[..])
-  if result.status == io.Status.Error {
+  if io.failed(result.failure) {
    if !bad { #panic("zstd unexpected error") }
-   if io.read(reader, output[..]).error != result.error { #panic("zstd sticky error") }
+   if io.read(reader, output[..]).failure.native != result.failure.native { #panic("zstd sticky error") }
    return
   }
   at: usize = 0
@@ -83,7 +83,7 @@ struct Failure { calls: usize, code: isize }
 fn fail(data: rawptr, destination: []u8) io.Transfer {
  state := #cast(*Failure, data)
  state.calls += 1
- return io.Transfer{ kind: errors.Kind.PermissionDenied, error: state.code, status: io.Status.Error }
+ return io.Transfer{ failure: io.Failure{ kind: errors.Kind.PermissionDenied, native: state.code } }
 }
 fn results(arena: *mem.Arena, encoded: []const u8, unknown: []const u8, workspace: []u8) {
  packed_result := z.compress(arena, "portable zstd", 3)
@@ -110,7 +110,7 @@ fn results(arena: *mem.Arena, encoded: []const u8, unknown: []const u8, workspac
   first := io.read(reader, output[..])
   callback := reader.read
   replay := callback(reader.data, output[..0])
-  if first.status != io.Status.Error || first.kind != errors.Kind.PermissionDenied || first.error != code || replay.status != io.Status.Error || replay.kind != first.kind || replay.error != code || upstream.calls != 1 || state.provider_code != 0 { #panic("sticky upstream native zero / empty callback") }
+  if !io.failed(first.failure) || first.failure.kind != errors.Kind.PermissionDenied || first.failure.native != code || !io.failed(replay.failure) || replay.failure.kind != first.failure.kind || replay.failure.native != code || upstream.calls != 1 || state.provider_code != 0 { #panic("sticky upstream native zero / empty callback") }
   code += 1
  }
  compressed: [17]u8
@@ -121,7 +121,7 @@ fn results(arena: *mem.Arena, encoded: []const u8, unknown: []const u8, workspac
  failed := io.read(reader, output[..])
  callback := reader.read
  replay := callback(reader.data, output[..0])
- if failed.status != io.Status.Error || failed.kind != errors.Kind.InvalidInput || failed.error != 0 || state.provider_code == 0 || replay.kind != failed.kind || replay.status != io.Status.Error { #panic("sticky provider diagnostic") }
+ if !io.failed(failed.failure) || failed.failure.kind != errors.Kind.InvalidInput || failed.failure.native != 0 || state.provider_code == 0 || replay.failure.kind != failed.failure.kind || !io.failed(replay.failure) { #panic("sticky provider diagnostic") }
 }
 '''
 source = source + extra + r'''
@@ -130,10 +130,10 @@ fn main() {
  adapter := z.decoder_reader(&invalid)
  destination: [1]u8
  failed_invalid := io.read(adapter,destination[..])
- if failed_invalid.status!=io.Status.Error || failed_invalid.kind!=errors.Kind.InvalidState || failed_invalid.error!=0 || !invalid.failed { #panic("invalid decoder cursor") }
+ if !io.failed(failed_invalid.failure) || failed_invalid.failure.kind!=errors.Kind.InvalidState || failed_invalid.failure.native!=0 || !invalid.failed { #panic("invalid decoder cursor") }
  invalid.offset=0
  replay_invalid:=adapter.read(adapter.data,destination[..0])
- if replay_invalid.status!=io.Status.Error || replay_invalid.kind!=errors.Kind.InvalidState || replay_invalid.error!=0 { #panic("sticky invalid decoder cursor") }
+ if !io.failed(replay_invalid.failure) || replay_invalid.failure.kind!=errors.Kind.InvalidState || replay_invalid.failure.native!=0 { #panic("sticky invalid decoder cursor") }
  owner := mem.arena_alloc(16000000)
  defer { mem.arena_release(owner) }
  arena := owner

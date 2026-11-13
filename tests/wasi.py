@@ -28,10 +28,10 @@ fn main() {
   defer { _ = wasi.close(file.fd) }
   data: [16]u8
   result := wasi.read(file.fd, data[..])
-  if result.status != io.Status.Complete || result.transferred != 5 { #panic("read") }
+  if (result.status != io.Status.Complete || io.failed(result.failure)) || result.transferred != 5 { #panic("read") }
   _ = io.write_all(io.stdout(), data[..result.transferred])
   if wasi.read(file.fd, data[..]).status != io.Status.End { #panic("EOF") }
-  if wasi.read(999999, data[..]).status != io.Status.Error { #panic("bad fd") }
+  if !io.failed(wasi.read(999999, data[..]).failure) { #panic("bad fd") }
   result = io.read_exact(io.stdin(), data[..3])
   if result.transferred != 3 { #panic("stdin") }
   _ = io.write_all(io.stdout(), data[..3])

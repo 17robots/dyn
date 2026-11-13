@@ -138,9 +138,9 @@ fn decoder_read(data: rawptr, destination: []u8) stream.Transfer {
     input_result := stream.read(state.source_reader, state.compressed_storage)
     state.offset = 0
     state.used = input_result.transferred
-    if input_result.status == stream.Status.Error {
+    if stream.failed(input_result.failure) {
       state.failed = true
-      state.failure = parse.io_failure(input_result.kind, input_result.error)
+      state.failure = parse.io_failure(input_result.failure.kind, input_result.failure.native)
       break
     }
     if input_result.status == stream.Status.End {

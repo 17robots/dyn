@@ -29,10 +29,10 @@ fn lines(text: []const u8, expected: []const u8, capacity: usize, buffering: usi
   require(empty.status == bufio.ReadStatus.More && empty.transferred == 0, "stdlib assertion 27")
   for {
     part := bufio.read_line(&input, chunk[..capacity])
-    require(part.status != bufio.ReadStatus.Error, "stdlib assertion 30")
+    require(!io.failed(part.failure), "stdlib assertion 30")
     for byte in chunk[..part.transferred] { result[used] = byte
     used += 1 }
-    if part.status == bufio.ReadStatus.Complete { result[used] = '|'
+    if (part.status == bufio.ReadStatus.Complete && !io.failed(part.failure)) { result[used] = '|'
     used += 1 }
     if part.status == bufio.ReadStatus.End { break }
   }
@@ -41,12 +41,12 @@ fn lines(text: []const u8, expected: []const u8, capacity: usize, buffering: usi
 fn error_read(data: rawptr, destination: []u8) io.Transfer {
   _ = data
   destination[0] = 'x'
-  return io.Transfer{ transferred: 1, kind: errors.Kind.PermissionDenied, status: io.Status.Error }
+  return io.Transfer{ transferred: 1, failure: io.Failure{ kind: errors.Kind.PermissionDenied } }
 }
 fn error_write(data: rawptr, source: []const u8) io.Transfer {
   _ = data
   _ = source
-  return io.Transfer{ kind: errors.Kind.PermissionDenied, status: io.Status.Error }
+  return io.Transfer{ failure: io.Failure{ kind: errors.Kind.PermissionDenied } }
 }
 fn main() {
   counter32 := sync.atomic_u32(7)
@@ -90,7 +90,7 @@ fn main() {
   require(duplicate.failure.kind != errors.Kind.Ok && duplicate.failure.kind == errors.Kind.AlreadyExists, "stdlib assertion 69")
   borrowed := fs.borrow(&created.value)
   fs.close(&borrowed)
-  require(io.write_all(fs.writer(&borrowed), "abc").status == io.Status.Complete, "stdlib assertion 72")
+  require(io.complete(io.write_all(fs.writer(&borrowed), "abc")), "stdlib assertion 72")
   require(fs.sync(&created.value).failure.kind == errors.Kind.Ok, "stdlib assertion 73")
   moved := fs.take(&created.value)
   require(!fs.is_open(&created.value) && fs.is_open(&moved), "stdlib assertion 75")
@@ -103,7 +103,7 @@ fn main() {
   require(opened.failure.kind == errors.Kind.Ok && fs.seek(&opened.value, 2, 0).value == 2, "stdlib assertion 82")
   contents: [8]u8
   read := io.read_exact(fs.reader(&opened.value), contents[..4])
-  require(read.status == io.Status.Complete && bytes.equal(contents[..4], "cdef"), "stdlib assertion 85")
+  require((read.status == io.Status.Complete && !io.failed(read.failure)) && bytes.equal(contents[..4], "cdef"), "stdlib assertion 85")
   require(io.read(fs.reader(&opened.value), contents[..]).status == io.Status.End, "stdlib assertion 86")
   fs.close(&opened.value)
   mark := mem.arena_mark(arena)
@@ -132,18 +132,18 @@ fn main() {
   for error_capacity in [0, 8] {
     failing := bufio.reader(io.Reader{ read: error_read }, error_storage[..#cast(usize, error_capacity)])
     error_line := bufio.read_line(&failing, contents[..])
-    require(error_line.status == bufio.ReadStatus.Error && error_line.transferred == 1, "stdlib assertion 114")
-    require(contents[0] == 'x' && error_line.kind == errors.Kind.PermissionDenied && error_line.error == 0, "stdlib assertion 115")
+    require(io.failed(error_line.failure) && error_line.transferred == 1, "stdlib assertion 114")
+    require(contents[0] == 'x' && error_line.failure.kind == errors.Kind.PermissionDenied && error_line.failure.native == 0, "stdlib assertion 115")
   }
   failed_output := bufio.writer(io.Writer{ write: error_write }, error_storage[..])
-  require(io.write_all(bufio.writer_adapter(&failed_output), "pending").status == io.Status.Complete, "stdlib assertion 118")
-  require(bufio.writer_flush(&failed_output).kind == errors.Kind.PermissionDenied, "stdlib assertion 119")
-  require(bufio.writer_flush(&failed_output).kind == errors.Kind.PermissionDenied, "stdlib assertion 120")
-  require(io.write_all(bufio.writer_adapter(&failed_output), "x").status == io.Status.Error, "stdlib assertion 121")
+  require(io.complete(io.write_all(bufio.writer_adapter(&failed_output), "pending")), "stdlib assertion 118")
+  require(bufio.writer_flush(&failed_output).failure.kind == errors.Kind.PermissionDenied, "stdlib assertion 119")
+  require(bufio.writer_flush(&failed_output).failure.kind == errors.Kind.PermissionDenied, "stdlib assertion 120")
+  require(io.failed(io.write_all(bufio.writer_adapter(&failed_output), "x").failure), "stdlib assertion 121")
   raw_cursor := io.cursor("a\r\nx")
   raw_input := bufio.reader(io.cursor_reader(&raw_cursor), error_storage[..1])
   raw_line := bufio.read_until(&raw_input, contents[..], 10)
-  require(raw_line.status == bufio.ReadStatus.Complete && bytes.equal(contents[..raw_line.transferred], "a\r"), "stdlib assertion 125")
+  require((raw_line.status == bufio.ReadStatus.Complete && !io.failed(raw_line.failure)) && bytes.equal(contents[..raw_line.transferred], "a\r"), "stdlib assertion 125")
   require(process.environment(arena, "").failure.kind == errors.Kind.InvalidInput, "stdlib assertion 126")
   invalid_child := process.Child{}
   require(process.wait(&invalid_child, false).failure.kind == errors.Kind.InvalidState, "stdlib assertion 128")
@@ -159,7 +159,7 @@ fn main() {
   finished := time.monotonic_now()
   require(finished.failure.kind == errors.Kind.Ok && time.elapsed(started.value, finished.value).value >= time.Millisecond, "stdlib assertion 139")
   require(time.sleep(0).failure.kind == errors.Kind.Ok, "stdlib assertion 140")
-  require(io.println_to(io.stdout(), "stdlib passed").status == io.Status.Complete, "stdlib assertion 141")
+  require(io.complete(io.println_to(io.stdout(), "stdlib passed")), "stdlib assertion 141")
 }
 '''
 

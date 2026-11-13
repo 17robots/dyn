@@ -79,7 +79,7 @@ fn main() {
       dump(&out, arena, &tree, root)
     }
     written := io.write_all(io.stdout(), out.data[..out.count])
-    if written.status != io.Status.Complete {
+    if (written.status != io.Status.Complete || io.failed(written.failure)) {
       #panic("cannot write output")
     }
     mem.arena_rewind(arena, mark)

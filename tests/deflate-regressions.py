@@ -44,8 +44,8 @@ fn check(encoded: []const u8, expected: []const u8, wrapped: bool, corrupt: bool
   total: usize = 0
   for {
     result := io.read(decoder, output[..chunk])
-    if result.status == io.Status.Error {
-      require(corrupt && result.error != 0, "unexpected decode error")
+    if io.failed(result.failure) {
+      require(corrupt && result.failure.native != 0, "unexpected decode error")
       return
     }
     require(total + result.transferred <= #len(expected), "extra output")

@@ -57,18 +57,18 @@ fn stream_read(state: *StreamReader, destination: []u8) stream.Transfer {
   if result.transferred > #max(usize) - state.offset {
     state.failed = true
     state.failure = parse.parse_failure(parse.Kind.Overflow, state.offset, "")
-    return stream.Transfer{ kind: stream.Kind.Overflow, status: stream.Status.Error }
+    return stream.Transfer{ failure: stream.Failure{ kind: stream.Kind.Overflow } }
   }
   state.offset += result.transferred
-  if result.status == stream.Status.Error {
+  if stream.failed(result.failure) {
     state.failed = true
-    state.failure = parse.io_failure(result.kind, result.error)
+    state.failure = parse.io_failure(result.failure.kind, result.failure.native)
   }
   return result
 }
 fn stream_exact(state: *StreamReader, destination: []u8) bool {
   result := stream_read(state, destination)
-  if result.status != stream.Status.Complete {
+  if (result.status != stream.Status.Complete || stream.failed(result.failure)) {
     _ = stream_failure(state, parse.Kind.Syntax)
     return false
   }
@@ -106,7 +106,7 @@ pub fn next_stream(state: *StreamReader) EntryResult {
     state.ended = true
     return EntryResult{ offset: state.offset }
   }
-  if first.status != stream.Status.Complete {
+  if (first.status != stream.Status.Complete || stream.failed(first.failure)) {
     return stream_failure(state, parse.Kind.Syntax)
   }
   signature := u32le(state.header_storage, 0)

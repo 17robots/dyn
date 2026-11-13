@@ -297,7 +297,7 @@ fn flush_blocking(connection: *Connection) bool {
 fn output_write(data: rawptr, source: []const u8) io.Transfer {
   connection := #cast(*Connection, data)
   if connection.failed {
-    return io.Transfer{ kind: io.Kind.InvalidState, status: io.Status.Error }
+    return io.Transfer{ failure: io.Failure{ kind: io.Kind.InvalidState } }
   }
   connection.body_reserved = false
   written: usize = 0
@@ -309,7 +309,7 @@ fn output_write(data: rawptr, source: []const u8) io.Transfer {
     if room == 0 {
       if !flush_blocking(connection) {
         connection.failed = true
-        return io.Transfer{ transferred: written, kind: io.Kind.WouldBlock, status: io.Status.Error }
+        return io.Transfer{ transferred: written, failure: io.Failure{ kind: io.Kind.WouldBlock } }
       }
       room = #len(connection.output)
     }
@@ -346,7 +346,7 @@ fn reserve_body(data: rawptr, capacity: usize) []u8 {
 fn commit_body(data: rawptr, head: []const u8, length: usize) io.Transfer {
   connection := #cast(*Connection, data)
   if !connection.body_reserved || #len(head) > 8192 || length > #len(connection.output) - 8192 {
-    return io.Transfer{ kind: io.Kind.InvalidState, status: io.Status.Error }
+    return io.Transfer{ failure: io.Failure{ kind: io.Kind.InvalidState } }
   }
   connection.sent = 8192 - #len(head)
   connection.queued = 8192 + length

@@ -36,18 +36,18 @@ pub fn write(target: *Logger, level: Level, message: []const u8, fields: []const
   }
   total: usize = 0
   first := stream.write_all(target.output, name(level))
-  if first.status == stream.Status.Error {
+  if stream.failed(first.failure) {
     return first
   }
   total += first.transferred
   separator := stream.write_all(target.output, ": ")
-  if separator.status == stream.Status.Error {
+  if stream.failed(separator.failure) {
     separator.transferred += total
     return separator
   }
   total += separator.transferred
   body := stream.write_all(target.output, message)
-  if body.status == stream.Status.Error {
+  if stream.failed(body.failure) {
     body.transferred += total
     return body
   }
@@ -56,21 +56,21 @@ pub fn write(target: *Logger, level: Level, message: []const u8, fields: []const
     parts: [3][]const u8 = [" ", field.name, "="]
     for part in parts {
       field_part := stream.write_all(target.output, part)
-      if field_part.status == stream.Status.Error {
+      if stream.failed(field_part.failure) {
         field_part.transferred += total
         return field_part
       }
       total += field_part.transferred
     }
     field_value := stream.write_all(target.output, field.value)
-    if field_value.status == stream.Status.Error {
+    if stream.failed(field_value.failure) {
       field_value.transferred += total
       return field_value
     }
     total += field_value.transferred
   }
   ending := stream.write_all(target.output, "\n")
-  if ending.status == stream.Status.Error {
+  if stream.failed(ending.failure) {
     ending.transferred += total
     return ending
   }

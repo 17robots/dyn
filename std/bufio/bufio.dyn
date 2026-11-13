@@ -18,20 +18,20 @@ pub fn writer_buffered(state: *const Writer) usize {
 
 pub fn writer_flush(state: *Writer) io.Transfer {
   if state.kind != io.Kind.Ok {
-    return io.Transfer{ transferred: 0, error: state.error, kind: state.kind, status: io.Status.Error }
+    return io.Transfer{ transferred: 0, failure: io.Failure{ kind: state.kind, native: state.error } }
   }
   if state.used > #len(state.storage) {
     state.error = -22
     state.kind = io.Kind.InvalidInput
-    return io.Transfer{ error: state.error, kind: state.kind, status: io.Status.Error }
+    return io.Transfer{ failure: io.Failure{ kind: state.kind, native: state.error } }
   }
   if state.used == 0 {
-    return io.Transfer{ transferred: 0, error: 0, status: io.Status.Complete }
+    return io.Transfer{ transferred: 0, status: io.Status.Complete, failure: io.Failure{ native: 0 } }
   }
   result := io.write_all(state.destination, state.storage[..state.used])
-  if result.status == io.Status.Error {
-    state.error = result.error
-    state.kind = result.kind
+  if io.failed(result.failure) {
+    state.error = result.failure.native
+    state.kind = result.failure.kind
     pending := state.used - result.transferred
     for i in 0..pending {
       state.storage[i] = state.storage[result.transferred + i]
@@ -46,18 +46,18 @@ pub fn writer_flush(state: *Writer) io.Transfer {
 fn writer_write(data: rawptr, source: []const u8) io.Transfer {
   state := #cast(*Writer, data)
   if state.kind != io.Kind.Ok {
-    return io.Transfer{ transferred: 0, error: state.error, kind: state.kind, status: io.Status.Error }
+    return io.Transfer{ transferred: 0, failure: io.Failure{ kind: state.kind, native: state.error } }
   }
   if state.used > #len(state.storage) {
     state.error = -22
     state.kind = io.Kind.InvalidInput
-    return io.Transfer{ error: state.error, kind: state.kind, status: io.Status.Error }
+    return io.Transfer{ failure: io.Failure{ kind: state.kind, native: state.error } }
   }
   if #len(state.storage) == 0 {
     result := io.write_all(state.destination, source)
-    if result.status == io.Status.Error {
-      state.error = result.error
-      state.kind = result.kind
+    if io.failed(result.failure) {
+      state.error = result.failure.native
+      state.kind = result.failure.kind
     }
     return result
   }
@@ -65,8 +65,8 @@ fn writer_write(data: rawptr, source: []const u8) io.Transfer {
   for total < #len(source) {
     if state.used == #len(state.storage) {
       flushed := writer_flush(state)
-      if flushed.status == io.Status.Error {
-        return io.Transfer{ transferred: total, error: flushed.error, kind: flushed.kind, status: io.Status.Error }
+      if io.failed(flushed.failure) {
+        return io.Transfer{ transferred: total, failure: io.Failure{ kind: flushed.failure.kind, native: flushed.failure.native } }
       }
     }
     // Large writes need no staging copy when the buffer is empty. Preserve the
@@ -75,10 +75,10 @@ fn writer_write(data: rawptr, source: []const u8) io.Transfer {
       amount := ((#len(source) - total - 1) / #len(state.storage)) * #len(state.storage)
       direct := io.write_all(state.destination, source[total..total + amount])
       total += direct.transferred
-      if direct.status == io.Status.Error {
-        state.error = direct.error
-        state.kind = direct.kind
-        return io.Transfer{transferred: total, error: direct.error, kind: direct.kind, status: io.Status.Error}
+      if io.failed(direct.failure) {
+        state.error = direct.failure.native
+        state.kind = direct.failure.kind
+        return io.Transfer{ transferred: total, failure: io.Failure{ kind: direct.failure.kind, native: direct.failure.native } }
       }
     }
     available := #len(state.storage) - state.used
@@ -92,7 +92,7 @@ fn writer_write(data: rawptr, source: []const u8) io.Transfer {
     state.used += amount
     total += amount
   }
-  return io.Transfer{ transferred: total, error: 0, status: io.Status.Complete }
+  return io.Transfer{ transferred: total, status: io.Status.Complete, failure: io.Failure{ native: 0 } }
 }
 
 pub fn writer_adapter(state: *Writer) io.Writer {
@@ -120,11 +120,11 @@ pub fn reader(source: io.Reader, storage: []u8) Reader {
 fn reader_read(data: rawptr, destination: []u8) io.Transfer {
   state := #cast(*Reader, data)
   if state.kind != io.Kind.Ok {
-    return io.Transfer{ error: state.error, kind: state.kind, status: io.Status.Error }
+    return io.Transfer{ failure: io.Failure{ kind: state.kind, native: state.error } }
   }
   if state.start > state.end || state.end > #len(state.storage) || state.pending_count > 2 {
     state.kind = io.Kind.InvalidState
-    return io.Transfer{ error: state.error, kind: state.kind, status: io.Status.Error }
+    return io.Transfer{ failure: io.Failure{ kind: state.kind, native: state.error } }
   }
   total: usize = 0
   for total < #len(destination) {
@@ -137,20 +137,19 @@ fn reader_read(data: rawptr, destination: []u8) io.Transfer {
     }
     if state.start == state.end {
       if state.kind != io.Kind.Ok {
-        return io.Transfer{ transferred: total, error: state.error, kind: state.kind, status: io.Status.Error }
+        return io.Transfer{ transferred: total, failure: io.Failure{ kind: state.kind, native: state.error } }
       }
       if state.ended {
         return io.Transfer{ transferred: total, status: io.Status.End }
       }
       if #len(state.storage) == 0 {
         direct := io.read(state.source, destination[total..])
-        if direct.status == io.Status.Complete && direct.transferred == 0 {
-          direct.status = io.Status.Error
-          direct.kind = io.Kind.System
+        if (direct.status == io.Status.Complete && !io.failed(direct.failure)) && direct.transferred == 0 {
+          direct.failure.kind = io.Kind.System
         }
-        if direct.status == io.Status.Error {
-          state.error = direct.error
-          state.kind = direct.kind
+        if io.failed(direct.failure) {
+          state.error = direct.failure.native
+          state.kind = direct.failure.kind
         }
         if direct.status == io.Status.End {
           state.ended = true
@@ -161,14 +160,14 @@ fn reader_read(data: rawptr, destination: []u8) io.Transfer {
       input := io.read(state.source, state.storage)
       state.start = 0
       state.end = input.transferred
-      if input.status == io.Status.Error {
-        state.error = input.error
-        state.kind = input.kind
+      if io.failed(input.failure) {
+        state.error = input.failure.native
+        state.kind = input.failure.kind
       }
       if input.status == io.Status.End {
         state.ended = true
       }
-      if input.transferred == 0 && input.status == io.Status.Complete {
+      if input.transferred == 0 && (input.status == io.Status.Complete && !io.failed(input.failure)) {
         state.kind = io.Kind.System
       }
       continue
@@ -191,11 +190,11 @@ pub fn reader_adapter(state: *Reader) io.Reader {
   return io.Reader{ data: state, read: reader_read }
 }
 
-pub enum ReadStatus { Complete, End, More, Error }
+// More means the record continues past destination; failure is separate.
+pub enum ReadStatus { Complete, End, More }
 pub struct ReadResult {
   transferred: usize,
-  error: isize,
-  kind: io.Kind,
+  failure: io.Failure,
   status: ReadStatus,
 }
 
@@ -207,7 +206,7 @@ fn unread(state: *Reader, byte: u8) {
 
 fn read_record(state: *Reader, destination: []u8, delimiter: u8, line: bool) ReadResult {
   if state.kind != io.Kind.Ok {
-    return ReadResult{ error: state.error, kind: state.kind, status: ReadStatus.Error }
+    return ReadResult{ failure: io.Failure{ kind: state.kind, native: state.error } }
   }
   if #len(destination) == 0 {
     return ReadResult{ status: ReadStatus.More }
@@ -217,8 +216,8 @@ fn read_record(state: *Reader, destination: []u8, delimiter: u8, line: bool) Rea
   for {
     input := io.read(reader_adapter(state), byte[..])
     if input.transferred == 0 {
-      if input.status == io.Status.Error {
-        return ReadResult{ transferred: total, error: input.error, kind: input.kind, status: ReadStatus.Error }
+      if io.failed(input.failure) {
+        return ReadResult{ transferred: total, failure: input.failure }
       }
       return ReadResult{ transferred: total, status: ReadStatus.End }
     }
@@ -244,7 +243,7 @@ fn read_record(state: *Reader, destination: []u8, delimiter: u8, line: bool) Rea
     destination[total] = byte[0]
     total += 1
   }
-  return ReadResult{ transferred: total, kind: io.Kind.System, status: ReadStatus.Error }
+  return ReadResult{ transferred: total, failure: io.Failure{ kind: io.Kind.System } }
 }
 
 // Consume and exclude delimiter. More means continue this same record with

@@ -32,7 +32,7 @@ fn malformed(storage: []u8, used: usize) {
   // Buffered records are the public seam; this never reads or owns descriptor 0.
   state := watch.Watcher{ descriptor: 0, storage: storage, used: used }
   result := watch.next(&state)
-  require(result.status == watch.Status.Error && result.failure.native == -74, "malformed event")
+  require(io.failed(result.failure) && result.failure.native == -74, "malformed event")
   require(state.offset == 0 && !state.rescan_required, "malformed event changed state")
 }
 fn records() {
@@ -91,7 +91,7 @@ fn main() {
   require(#syscall(72,0,1,0) >= 0, "unopened close clobbered stdin")
   require(watch.add(&unopened,".",watch.Create).failure.kind != io.Kind.Ok, "add unopened")
   require(watch.remove(&unopened,0).failure.kind != io.Kind.Ok, "remove unopened")
-  require(watch.next(&unopened).status == watch.Status.Error, "read unopened")
+  require(io.failed(watch.next(&unopened).failure), "read unopened")
   storage: [272]u8
   for length in 0..272 {
     failed := watch.open(storage[..length])
@@ -132,7 +132,7 @@ fn main() {
   watch.close(&state)
   require(#syscall(72,descriptor,1,0) == -9, "descriptor leaked")
   watch.close(&state)
-  require(watch.next(&state).status == watch.Status.Error, "read closed watcher")
+  require(io.failed(watch.next(&state).failure), "read closed watcher")
   records()
   exhausted_open()
 }

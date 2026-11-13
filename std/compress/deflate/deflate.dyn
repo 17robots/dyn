@@ -52,9 +52,9 @@ fn refill(state: *Decoder) bool {
   }
   result := stream.read(state.source_reader, state.compressed_storage[remaining..])
   state.compressed_used += result.transferred
-  if result.status == stream.Status.Error {
-    state.error = result.error
-    state.source_kind = result.kind
+  if stream.failed(result.failure) {
+    state.error = result.failure.native
+    state.source_kind = result.failure.kind
     return false
   }
   if result.status == stream.Status.End || result.transferred == 0 {
@@ -233,7 +233,7 @@ fn decoder_read(data: rawptr, destination: []u8) stream.Transfer {
         kind = stream.Kind.Capacity
       }
     }
-    return stream.Transfer{ error: state.error, kind: kind, status: stream.Status.Error }
+    return stream.Transfer{ failure: stream.Failure{ kind: kind, native: state.error } }
   }
   remaining := state.engine.written - state.offset
   amount := remaining

@@ -27,13 +27,13 @@ fn read(data: rawptr, destination: []u8) io.Transfer {
   if p.mode == 2 { return io.Transfer{} }
   if p.mode == 1 { destination[0] = 'x'
   return io.Transfer{ transferred: 1, status: io.Status.End } }
-  return io.Transfer{ status: io.Status.Error, kind: errors.Kind.PermissionDenied, error: p.code }
+  return io.Transfer{ failure: io.Failure{ kind: errors.Kind.PermissionDenied, native: p.code } }
 }
 fn write(data: rawptr, source: []const u8) io.Transfer {
   p := #cast(*Probe, data)
   p.calls += 1
   check(p.calls == 1)
-  return io.Transfer{ status: io.Status.Error, kind: errors.Kind.PermissionDenied, error: p.code }
+  return io.Transfer{ failure: io.Failure{ kind: errors.Kind.PermissionDenied, native: p.code } }
 }
 fn callback_contracts() {
   scratch: [32]u8

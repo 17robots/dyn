@@ -4,20 +4,20 @@ use "std/os/linux/sys"
 // Borrow the process standard descriptors; callers do not own or close them.
 fn stdin_read(_data: rawptr, destination: []u8) Transfer {
   if #len(destination) == 0 {
-    return Transfer{ transferred: 0, error: 0, status: Status.Complete }
+    return Transfer{ transferred: 0, status: Status.Complete, failure: Failure{ native: 0 } }
   }
   value := #syscall(sys.Read, 0, &destination[0], #len(destination))
   for value == -4 {
     value = #syscall(sys.Read, 0, &destination[0], #len(destination))
   }
   if value < 0 {
-    return Transfer{ transferred: 0, error: value, kind: linux(value), status: Status.Error }
+    return Transfer{ transferred: 0, failure: Failure{ kind: linux(value), native: value } }
   }
   status := Status.Complete
   if value == 0 {
     status = Status.End
   }
-  return Transfer{ transferred: #cast(usize, value), error: 0, status: status }
+  return Transfer{ transferred: #cast(usize, value), status: status, failure: Failure{ native: 0 } }
 }
 
 fn write_descriptor(descriptor: isize, source: []const u8) Transfer {
@@ -28,12 +28,12 @@ fn write_descriptor(descriptor: isize, source: []const u8) Transfer {
       if value == 0 {
         value = -5
       }
-      return Transfer{ transferred: written, error: value, kind: linux(value), status: Status.Error }
+      return Transfer{ transferred: written, failure: Failure{ kind: linux(value), native: value } }
     } else {
       written += #cast(usize, value)
     }
   }
-  return Transfer{ transferred: written, error: 0, status: Status.Complete }
+  return Transfer{ transferred: written, status: Status.Complete, failure: Failure{ native: 0 } }
 }
 fn stdout_write(_data: rawptr, source: []const u8) Transfer {
   return write_descriptor(1, source)

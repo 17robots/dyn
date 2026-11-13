@@ -19,7 +19,7 @@ fn reserve(raw: rawptr, size: usize) []u8 {
 fn commit(raw: rawptr, head: []const u8, size: usize) io.Transfer {
   sink := #cast(*Sink, raw)
   sink.commits += 1
-  if sink.fail { return io.Transfer{ error: sink.code, kind: io.Kind.System, status: io.Status.Error } }
+  if sink.fail { return io.Transfer{ failure: io.Failure{ kind: io.Kind.System, native: sink.code } } }
   return io.Transfer{ transferred: #len(head) + size }
 }
 fn write(raw: rawptr, source: []const u8) io.Transfer {

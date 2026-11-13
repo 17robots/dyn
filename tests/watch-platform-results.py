@@ -50,7 +50,7 @@ fn main() {
  slot.handle = #cast(rawptr, 1)
  slot.event = #cast(rawptr, 2)
  first := next(&state)
- require(first.status == Status.Error && first.failure.native == 0 && first.failure.kind == io.Kind.System)
+ require(io.failed(first.failure) && first.failure.native == 0 && first.failure.kind == io.Kind.System)
  reads := mock_reads
  mock_code = 5
  repeated := next(&state)

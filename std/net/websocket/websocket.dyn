@@ -703,8 +703,8 @@ pub fn connection_send(state: *WebSocketConnection, opcode: u8, payload: []const
     return ws_connection_fail(state, io.Kind.Capacity, 0)
   }
   result := io.write_all(state.output, frame)
-  if result.status == io.Status.Error {
-    return ws_connection_fail(state, result.kind, result.error)
+  if io.failed(result.failure) {
+    return ws_connection_fail(state, result.failure.kind, result.failure.native)
   }
   if opcode == WsU8Eight {
     state.close_sent = true
@@ -796,8 +796,8 @@ pub fn connection_receive(state: *WebSocketConnection) WebSocketResult {
       _ = ws_connection_fail(state, io.Kind.System, 0)
       return WebSocketResult{ offset: state.offset, failure: io.Failure{ kind: state.kind, native: state.error } }
     }
-    if input.status == io.Status.Error {
-      _ = ws_connection_fail(state, input.kind, input.error)
+    if io.failed(input.failure) {
+      _ = ws_connection_fail(state, input.failure.kind, input.failure.native)
       return WebSocketResult{ offset: state.offset, failure: io.Failure{ kind: state.kind, native: state.error } }
     }
     state.frame_used += input.transferred

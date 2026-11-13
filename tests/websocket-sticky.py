@@ -19,10 +19,10 @@ struct Trace { reads: usize, writes: usize, mode: usize, bytes: usize }
 fn read(data: rawptr, destination: []u8) io.Transfer {
   trace := #cast(*Trace, data)
   trace.reads += 1
-  if trace.mode == 0 { return io.Transfer{ error: -71, kind: errors.Kind.System, status: io.Status.Error } }
+  if trace.mode == 0 { return io.Transfer{ failure: io.Failure{ kind: errors.Kind.System, native: -71 } } }
   if trace.mode == 1 { return io.Transfer{ status: io.Status.End } }
   if trace.mode == 2 { return io.Transfer{ transferred: #len(destination) + 1 } }
-  if trace.mode == 3 { return io.Transfer{ error: 0, kind: errors.Kind.System, status: io.Status.Error } }
+  if trace.mode == 3 { return io.Transfer{ failure: io.Failure{ kind: errors.Kind.System, native: 0 } } }
   if trace.mode == 8 {
     // A valid length prefix whose payload exceeds the frame buffer.
     for i in 0..#len(destination) { destination[i] = 0 }
@@ -42,7 +42,7 @@ fn read(data: rawptr, destination: []u8) io.Transfer {
   destination[1] = 0
   if trace.mode == 4 { destination[0] = 129
   destination[1] = 128 }
-  if trace.mode == 5 { return io.Transfer{ transferred: 2, error: -72, status: io.Status.Error } }
+  if trace.mode == 5 { return io.Transfer{ transferred: 2, failure: io.Failure{ kind: io.Kind.System, native: -72 } } }
   if trace.mode == 6 { destination[0] = 0
   destination[1] = 0 }
   if trace.mode == 7 { return io.Transfer{} }
@@ -51,14 +51,14 @@ fn read(data: rawptr, destination: []u8) io.Transfer {
 fn write(data: rawptr, source: []const u8) io.Transfer {
   trace := #cast(*Trace, data)
   trace.writes += 1
-  if trace.mode == 10 { return io.Transfer{ error: -73, status: io.Status.Error } }
+  if trace.mode == 10 { return io.Transfer{ failure: io.Failure{ kind: io.Kind.System, native: -73 } } }
   if trace.mode == 11 { return io.Transfer{} }
   if trace.mode == 12 { return io.Transfer{ transferred: #len(source) + 1 } }
-  if trace.mode == 13 { return io.Transfer{ error: 0, kind: errors.Kind.System, status: io.Status.Error } }
+  if trace.mode == 13 { return io.Transfer{ failure: io.Failure{ kind: errors.Kind.System, native: 0 } } }
   if trace.mode == 14 {
     if trace.writes == 1 { trace.bytes += 1
     return io.Transfer{ transferred: 1 } }
-    return io.Transfer{ error: -74, status: io.Status.Error }
+    return io.Transfer{ failure: io.Failure{ kind: io.Kind.System, native: -74 } }
   }
   trace.bytes += #len(source)
   return io.Transfer{ transferred: #len(source) }
@@ -93,8 +93,8 @@ fn wire_read(raw: rawptr, destination: []u8) io.Transfer {
   if count > #len(destination) { count = #len(destination) }
   for i in 0..count { destination[i] = wire.data[wire.at + i] }
   wire.at += count
-  if count == 0 { return io.Transfer{status: io.Status.End} }
-  return io.Transfer{transferred: count}
+  if count == 0 { return io.Transfer{ status: io.Status.End } }
+  return io.Transfer{ transferred: count }
 }
 fn coalesced() {
   isolated := Wire{data: "\x81\x01a", step: 32}

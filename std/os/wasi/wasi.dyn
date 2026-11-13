@@ -17,7 +17,7 @@ pub fn write(fd: u32, bytes: []const u8) io.Transfer {
   count: usize = 0
   error := wasi_raw.write(fd, #cast(rawptr, &bytes[0]), #len(bytes), &count)
   if error != 0 {
-    return io.Transfer{ transferred: count, error: 0 - #cast(isize, error), status: io.Status.Error }
+    return io.Transfer{ transferred: count, failure: io.Failure{ kind: io.Kind.System, native: 0 - #cast(isize, error) } }
   }
   return io.Transfer{ transferred: count, status: io.Status.Complete }
 }
@@ -28,7 +28,7 @@ pub fn read(fd: u32, bytes: []u8) io.Transfer {
   count: usize = 0
   error := wasi_raw.read(fd, &bytes[0], #len(bytes), &count)
   if error != 0 {
-    return io.Transfer{ transferred: count, error: 0 - #cast(isize, error), status: io.Status.Error }
+    return io.Transfer{ transferred: count, failure: io.Failure{ kind: io.Kind.System, native: 0 - #cast(isize, error) } }
   }
   if count == 0 {
     return io.Transfer{ status: io.Status.End }

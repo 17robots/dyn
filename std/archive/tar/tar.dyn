@@ -98,8 +98,8 @@ fn read_exact(state: *StreamReader, destination: []u8) stream.Transfer {
     return parse.stream_result(state.failure, 0)
   }
   result := stream.read_exact(state.source_reader, destination)
-  if result.status == stream.Status.Error {
-    _ = stream_failure(state, parse.io_failure(result.kind, result.error))
+  if stream.failed(result.failure) {
+    _ = stream_failure(state, parse.io_failure(result.failure.kind, result.failure.native))
   }
   if result.transferred > #max(usize) - state.offset {
     _ = syntax_failure(state, parse.Kind.Overflow, "invalid offset")
@@ -116,7 +116,7 @@ fn discard(state: *StreamReader, amount: usize) bool {
       take = #len(state.header_storage)
     }
     result := read_exact(state, state.header_storage[..take])
-    if result.status != stream.Status.Complete {
+    if (result.status != stream.Status.Complete || stream.failed(result.failure)) {
       _ = syntax_failure(state, parse.Kind.Truncated, "")
       return false
     }
@@ -182,7 +182,7 @@ pub fn next_stream(state: *StreamReader) StreamEntry {
       state.ended = true
       return StreamEntry{ offset: state.offset }
     }
-    if header_result.status != stream.Status.Complete {
+    if (header_result.status != stream.Status.Complete || stream.failed(header_result.failure)) {
       return syntax_failure(state, parse.Kind.Truncated, "")
     }
     parsed := parse_header(state.header_storage[..512])
@@ -217,7 +217,7 @@ pub fn next_stream(state: *StreamReader) StreamEntry {
     }
     payload := state.metadata[state.metadata_used..state.metadata_used + state.remaining]
     loaded := read_exact(state, payload)
-    if loaded.status != stream.Status.Complete {
+    if (loaded.status != stream.Status.Complete || stream.failed(loaded.failure)) {
       return syntax_failure(state, parse.Kind.Truncated, "")
     }
     if !discard(state, state.padding) {
@@ -276,7 +276,7 @@ pub fn read_stream(state: *StreamReader, destination: []u8) stream.Transfer {
     return stream.Transfer{ status: stream.Status.End }
   }
   result := read_exact(state, destination[..take])
-  if result.status != stream.Status.Complete {
+  if (result.status != stream.Status.Complete || stream.failed(result.failure)) {
     _ = syntax_failure(state, parse.Kind.Truncated, "")
     return parse.stream_result(state.failure, result.transferred)
   }

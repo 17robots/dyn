@@ -102,7 +102,7 @@ pub fn write(file: *File, source: []const u8) Result {
 fn adapter_read(data: rawptr, destination: []u8) io.Transfer {
   result := read(#cast(*File, data), destination)
   if result.failure.kind != io.Kind.Ok {
-    return io.Transfer{ transferred: result.transferred, error: result.failure.native, kind: result.failure.kind, status: io.Status.Error }
+    return io.Transfer{ transferred: result.transferred, failure: io.Failure{ kind: result.failure.kind, native: result.failure.native } }
   }
   status := io.Status.Complete
   if result.transferred == 0 && #len(destination) != 0 {
@@ -113,7 +113,7 @@ fn adapter_read(data: rawptr, destination: []u8) io.Transfer {
 fn adapter_write(data: rawptr, source: []const u8) io.Transfer {
   result := write(#cast(*File, data), source)
   if result.failure.kind != io.Kind.Ok {
-    return io.Transfer{ transferred: result.transferred, error: result.failure.native, kind: result.failure.kind, status: io.Status.Error }
+    return io.Transfer{ transferred: result.transferred, failure: io.Failure{ kind: result.failure.kind, native: result.failure.native } }
   }
   return io.Transfer{ transferred: result.transferred }
 }

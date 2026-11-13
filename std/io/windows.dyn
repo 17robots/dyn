@@ -19,7 +19,7 @@ fn stream_error(count: u32, code: u32) Transfer {
   if error == 0 {
     error = -5
   }
-  return Transfer{ transferred: count, error: error, kind: windows(error), status: Status.Error }
+  return Transfer{ transferred: count, failure: Failure{ kind: windows(error), native: error } }
 }
 fn stdin_read(_data: rawptr, destination: []u8) Transfer {
   if #len(destination) == 0 {

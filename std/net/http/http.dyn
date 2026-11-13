@@ -1109,10 +1109,10 @@ pub fn receive(state: *Server) ReceiveResult {
       return receive_failure(state, ErrorKind.Io, 0)
     }
     state.used += input.transferred
-    if input.status == io.Status.Error {
-      failure := receive_failure(state, ErrorKind.Io, input.error)
-      state.first.failure.kind = input.kind
-      failure.failure.kind = input.kind
+    if io.failed(input.failure) {
+      failure := receive_failure(state, ErrorKind.Io, input.failure.native)
+      state.first.failure.kind = input.failure.kind
+      failure.failure.kind = input.failure.kind
       return failure
     }
     state.ended = input.status == io.Status.End
@@ -1196,8 +1196,8 @@ fn decimal(destination: []u8, value: usize) []const u8 {
 
 fn write_output(destination: io.Writer, bytes: []const u8) Result {
   written := io.write_all(destination, bytes)
-  if written.status == io.Status.Error {
-    return Result{ detail: ErrorKind.Io, failure: io.Failure{ kind: written.kind, native: written.error } }
+  if io.failed(written.failure) {
+    return Result{ detail: ErrorKind.Io, failure: io.Failure{ kind: written.failure.kind, native: written.failure.native } }
   }
   return Result{ detail: ErrorKind.None }
 }
@@ -1206,8 +1206,8 @@ fn response_failure(response: *Response, result: Result) Result {
   if !response.failed {
     response.failed = true
     response.first = result
-    if response.first_stream.status != io.Status.Error {
-      response.first_stream = io.Transfer{ error: 0, kind: io.Kind.InvalidState, status: io.Status.Error }
+    if !io.failed(response.first_stream.failure) {
+      response.first_stream = io.Transfer{ failure: io.Failure{ kind: io.Kind.InvalidState, native: 0 } }
     }
   }
   return response.first
@@ -1218,9 +1218,9 @@ fn response_output(response: *Response, source: []const u8) Result {
     return response.first
   }
   written := io.write_all(response.output, source)
-  if written.status == io.Status.Error {
-    response.first_stream = io.Transfer{ error: written.error, kind: written.kind, status: io.Status.Error }
-    return response_failure(response, Result{ detail: ErrorKind.Io, failure: io.Failure{ kind: written.kind, native: written.error } })
+  if io.failed(written.failure) {
+    response.first_stream = io.Transfer{ failure: io.Failure{ kind: written.failure.kind, native: written.failure.native } }
+    return response_failure(response, Result{ detail: ErrorKind.Io, failure: io.Failure{ kind: written.failure.kind, native: written.failure.native } })
   }
   return Result{}
 }
@@ -1335,11 +1335,11 @@ fn response_begin(response: *Response, options: ResponseOptions, body_length: us
     head_write(&stage, options, status, reason, content_type, body_length, false)
     written := response.commit_body(response.output.data, staging[..head_length], body_length)
     response.reserved = response.reserved[..0]
-    if written.status == io.Status.Error || written.transferred != head_length + body_length {
+    if io.failed(written.failure) || written.transferred != head_length + body_length {
       response.first_stream = written
-      failure_kind := written.kind
+      failure_kind := written.failure.kind
       if failure_kind == io.Kind.Ok { failure_kind = io.Kind.InvalidState }
-      return response_failure(response, Result{ detail: ErrorKind.Io, failure: io.Failure{ kind: failure_kind, native: written.error } })
+      return response_failure(response, Result{ detail: ErrorKind.Io, failure: io.Failure{ kind: failure_kind, native: written.failure.native } })
     }
     response.started = true
     return Result{}
@@ -1510,13 +1510,13 @@ fn body_failure(body: *Body, result: Result, native: io.Transfer) Result {
   if !body.failed {
     body.failed = true
     body.first = result
-    body.first_stream = io.Transfer{ error: native.error, kind: native.kind, status: io.Status.Error }
+    body.first_stream = io.Transfer{ failure: io.Failure{ kind: native.failure.kind, native: native.failure.native } }
   }
   return body.first
 }
 
 fn body_invalid(body: *Body) Result {
-  return body_failure(body, Result{ detail: ErrorKind.Invalid, failure: io.Failure{ kind: io.Kind.InvalidState } }, io.Transfer{ error: 0, kind: io.Kind.InvalidState, status: io.Status.Error })
+  return body_failure(body, Result{ detail: ErrorKind.Invalid, failure: io.Failure{ kind: io.Kind.InvalidState } }, io.Transfer{ failure: io.Failure{ kind: io.Kind.InvalidState, native: 0 } })
 }
 
 fn body_output(body: *Body, source: []const u8) io.Transfer {
@@ -1524,8 +1524,8 @@ fn body_output(body: *Body, source: []const u8) io.Transfer {
     return body.first_stream
   }
   result := io.write_all(body.output, source)
-  if result.status == io.Status.Error {
-    _ = body_failure(body, Result{ detail: ErrorKind.Io, failure: io.Failure{ kind: result.kind, native: result.error } }, result)
+  if io.failed(result.failure) {
+    _ = body_failure(body, Result{ detail: ErrorKind.Io, failure: io.Failure{ kind: result.failure.kind, native: result.failure.native } }, result)
   }
   return result
 }
@@ -1545,19 +1545,19 @@ fn body_write(data: rawptr, source: []const u8) io.Transfer {
   size_storage: [16]u8
   size := hex_size(size_storage[..], #len(source))
   first := body_output(body, size)
-  if first.status == io.Status.Error {
+  if io.failed(first.failure) {
     return first
   }
   separator := body_output(body, "\r\n")
-  if separator.status == io.Status.Error {
+  if io.failed(separator.failure) {
     return separator
   }
   content := body_output(body, source)
-  if content.status == io.Status.Error {
+  if io.failed(content.failure) {
     return content
   }
   ending := body_output(body, "\r\n")
-  if ending.status == io.Status.Error {
+  if io.failed(ending.failure) {
     return ending
   }
   return io.Transfer{ transferred: #len(source), status: io.Status.Complete }
@@ -1576,7 +1576,7 @@ pub fn body_finish(body: *Body) Result {
     return body_invalid(body)
   }
   result := body_output(body, "0\r\n\r\n")
-  if result.status == io.Status.Error {
+  if io.failed(result.failure) {
     return body.first
   }
   body.finished = true
@@ -1658,8 +1658,8 @@ pub fn client_do(arena: *memory.Arena, input: io.Reader, output: io.Writer,
   request_bytes := write_request(arena, method, target, host, body)
   sent := io.write_all(output, request_bytes)
   memory.arena_rewind(arena, mark)
-  if sent.status == io.Status.Error {
-    return ClientResponse{ detail: ErrorKind.Io, failure: io.Failure{ kind: sent.kind, native: sent.error } }
+  if io.failed(sent.failure) {
+    return ClientResponse{ detail: ErrorKind.Io, failure: io.Failure{ kind: sent.failure.kind, native: sent.failure.native } }
   }
   result := client_receive(arena, input, method)
   if io.failed(result.failure) {
@@ -1741,8 +1741,8 @@ fn client_receive(arena: *memory.Arena, input: io.Reader, method: []const u8) Cl
     if part.transferred > #len(scratch) {
       return ClientResponse{ detail: ErrorKind.Io, failure: io.Failure{ kind: io.Kind.System } }
     }
-    if part.status == io.Status.Error {
-      return ClientResponse{ detail: ErrorKind.Io, failure: io.Failure{ kind: part.kind, native: part.error } }
+    if io.failed(part.failure) {
+      return ClientResponse{ detail: ErrorKind.Io, failure: io.Failure{ kind: part.failure.kind, native: part.failure.native } }
     }
     memory.append_many_grow(arena, &response_storage, scratch[..part.transferred])
     used += part.transferred

@@ -38,15 +38,15 @@ fn main() {
   line: [64]u8
   for {
     result := bufio.read_line(&input, line[..])
-    if result.status == bufio.ReadStatus.Error { #panic("input failed") }
+    if io.failed(result.failure) { #panic("input failed") }
     if result.transferred > 0 || result.status != bufio.ReadStatus.End {
       written := io.println_to(io.stdout(), "[{}]", line[..result.transferred])
-      if written.status == io.Status.Error { #panic("output failed") }
+      if io.failed(written.failure) { #panic("output failed") }
     }
     if result.status == bufio.ReadStatus.End { break }
   }
   finished := io.write_all(io.stderr(), "done\\n")
-  if finished.status == io.Status.Error { #panic("stderr failed") }
+  if io.failed(finished.failure) { #panic("stderr failed") }
 }
 ''')
     for options in ([], ['--release']):
@@ -68,11 +68,11 @@ fn main() {
 fn main() {
   bytes: [1]u8
   input := io.read(io.stdin(), bytes[..])
-  if input.status != io.Status.Error || input.error == 0 || input.transferred != 0 { #panic("missing read error") }
+  if !io.failed(input.failure) || input.failure.native == 0 || input.transferred != 0 { #panic("missing read error") }
   output := io.write_all(io.stdout(), "x")
-  if output.status != io.Status.Error || output.error == 0 || output.transferred != 0 { #panic("missing write error") }
+  if !io.failed(output.failure) || output.failure.native == 0 || output.transferred != 0 { #panic("missing write error") }
   empty := io.read(io.stdin(), bytes[..0])
-  if empty.status != io.Status.Complete || empty.transferred != 0 { #panic("empty read") }
+  if (empty.status != io.Status.Complete || io.failed(empty.failure)) || empty.transferred != 0 { #panic("empty read") }
   _ = io.write_all(io.stderr(), "errors handled\\n")
 }
 ''')
@@ -90,9 +90,9 @@ use "std/os/wasi"
 fn check_descriptors() {
   bytes: [1]u8
   empty := wasi.read(0, bytes[..0])
-  if empty.status != io.Status.Complete { #panic("empty descriptor read") }
+  if (empty.status != io.Status.Complete || io.failed(empty.failure)) { #panic("empty descriptor read") }
   invalid := wasi.write(4294967295, "x")
-  if invalid.status != io.Status.Error || invalid.error == 0 { #panic("descriptor error") }
+  if !io.failed(invalid.failure) || invalid.failure.native == 0 { #panic("descriptor error") }
 }
 ''')
         source = project/'main.dyn'
@@ -123,7 +123,7 @@ fn main() {
   cursor := io.cursor("ok")
   bytes: [2]u8
   result := io.read_exact(io.cursor_reader(&cursor), bytes[..])
-  if result.status != io.Status.Complete { #panic("read failed") }
+  if (result.status != io.Status.Complete || io.failed(result.failure)) { #panic("read failed") }
 }
 ''')
     for target in ('x86_64-windows', 'aarch64-macos', 'wasm32-browser', 'aarch64-linux'):

@@ -52,7 +52,7 @@ fn main() {
   seen_second: u32 = 0
   for attempt in 0..1000 {
     event := watch.next(&opened.value)
-    require(event.status != watch.Status.Error)
+    require(!io.failed(event.failure))
     if event.status == watch.Status.Event {
       require(!event.event.rescan && event.event.cookie == 0)
       if event.event.watch == first.value {

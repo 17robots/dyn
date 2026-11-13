@@ -118,11 +118,11 @@ fn json_stream_check(value: *const json.Value, document: []const u8, expected: b
   result := json.write(io.buffer_writer_adapter(&output), value)
   written := io.buffer_writer_bytes(&output)
   if expected {
-    if result.status != io.Status.Complete || result.transferred != #len(document) || !bytes.equal(written, document) {
+    if (result.status != io.Status.Complete || io.failed(result.failure)) || result.transferred != #len(document) || !bytes.equal(written, document) {
       #panic("JSON streaming UTF8 roundtrip")
     }
   } else {
-    if result.status != io.Status.Error || result.error != -22 || result.transferred != #len(prefix) || !bytes.equal(written, prefix) {
+    if !io.failed(result.failure) || result.failure.native != -22 || result.transferred != #len(prefix) || !bytes.equal(written, prefix) {
       #panic("JSON streaming invalid UTF8")
     }
   }

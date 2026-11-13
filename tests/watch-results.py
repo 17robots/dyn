@@ -13,7 +13,7 @@ fn require(ok: bool) { if !ok { #panic("watch result contract") } }
 fn main() {
  state := watch.Watcher{}
  first := watch.next(&state)
- require(first.failure.kind != errors.Kind.Ok && first.status == watch.Status.Error && first.failure.native == -9 && first.failure.kind == errors.Kind.InvalidState)
+ require(first.failure.kind != errors.Kind.Ok && errors.failed(first.failure) && first.failure.native == -9 && first.failure.kind == errors.Kind.InvalidState)
  for i in 0..3 {
   next := watch.next(&state)
   require(next.failure.kind != errors.Kind.Ok && next.status == first.status && next.failure.native == first.failure.native && next.failure.kind == first.failure.kind)

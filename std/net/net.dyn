@@ -363,7 +363,7 @@ pub fn connection_write(connection: *Connection, source: []const u8) Result {
 fn connection_reader_read(data: rawptr, destination: []u8) io.Transfer {
   outcome := connection_read(#cast(*Connection, data), destination)
   if io.failed(outcome.failure) {
-    return io.Transfer{ error: outcome.failure.native, status: io.Status.Error }
+    return io.Transfer{ failure: io.Failure{ kind: io.Kind.System, native: outcome.failure.native } }
   }
   status := io.Status.Complete
   if outcome.value == 0 {
@@ -379,7 +379,7 @@ fn connection_writer_write(data: rawptr, source: []const u8) io.Transfer {
     if outcome.value > 0 {
       transferred = #cast(usize, outcome.value)
     }
-    return io.Transfer{ transferred: transferred, error: outcome.failure.native, status: io.Status.Error }
+    return io.Transfer{ transferred: transferred, failure: io.Failure{ kind: io.Kind.System, native: outcome.failure.native } }
   }
   return io.Transfer{ transferred: #cast(usize, outcome.value), status: io.Status.Complete }
 }

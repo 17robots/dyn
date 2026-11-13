@@ -104,7 +104,7 @@ fn encoded_summary(arena: *mem.Arena, summary: *const Summary) []u8 {
   return json.encode(arena, root)
 }
 fn print_json(value: []const u8) {
-  if io.write_all(io.stdout(), value).status != io.Status.Complete || io.write_all(io.stdout(), "\n").status != io.Status.Complete {
+  if !io.complete(io.write_all(io.stdout(), value)) || !io.complete(io.write_all(io.stdout(), "\n")) {
     #panic("stdout")
   }
 }

@@ -186,41 +186,52 @@ borrowed; inspect them with an exhaustive type `case` and do not retain them.
 
 ## Errors and cleanup
 
-Dyn has no mandatory universal result type. Return the smallest ordinary value that preserves what
-the caller needs:
+Dyn has one way to report each kind of outcome. A failed value is still safe
+to read: it is zero, an empty stub, or a documented partial result, so code
+that ignores a failure keeps running on ordinary empty data.
 
-- `bool` for success/failure with no useful detail.
-- `nil` or another unambiguous sentinel for lookup-style absence.
-- A struct for a value plus status, count, offset, or OS error.
-- An enum when callers must distinguish several outcomes.
-- `#panic` only for broken invariants or explicitly infallible convenience APIs.
+- **The operation can fail:** return `{value, failure}` (`io.Result(T)`,
+  `parse.Result(T)`), or a bare `Failure` when there is no value. OS and I/O
+  work uses `io.Failure {kind, native}`; parsers use `parse.Failure {kind,
+  offset, message}`. Check it with `io.failed(result.failure)` or
+  `parse.failed(result.failure)`.
+- **Absence is not failure:** a lookup returns `nil` (`map.get`) or an empty
+  stub for tree nodes, and every `find*` returns `#len(text)` on a miss.
+- **A step with several normal outcomes** returns a `Status` enum such as
+  `Complete`/`End` or `Event`/`Empty`. A status never has an `Error`
+  variant; the failure is its own field next to it.
+- **Yes-or-no questions** return `bool`, and only predicates do:
+  `is_*`, `has_*`, `valid`.
+- **Many steps in a row** keep the first failure in their own state and turn
+  later calls into no-ops. Writers that work this way return nothing; check
+  their `failed` field or failure once at the end.
+- **A broken invariant** is `#panic`. There is no recovery.
 
 ```dyn
 enum ParseStatus { Empty, Invalid, Complete }
 struct ParseResult { value: u64, offset: usize, status: ParseStatus }
 ```
 
-Code that does many fallible steps in a row, such as a parser, a writer or a builder, keeps
-its first error in its own state and turns later calls into no-ops. The caller loops, then
-checks once, as with Go's `bufio.Scanner.Err()`:
+A parser, writer or builder keeps its first error in its own state, as Go's
+`bufio.Scanner.Err()` does. The caller loops, then checks once:
 
 ```dyn
 scan := ini.scanner(text)
 for {
   item := ini.next(&scan)
-  if !item.ok {
+  if !item.found {
     break
   }
-  apply(item.entry)
+  apply(item.value)
 }
-if scan.error != ini.ErrorKind.None {
-  report(scan.error_line)
+if parse.failed(scan.failure) {
+  report(scan.failure)
 }
 ```
 
-OS operations return `{value, ok, kind, error}`, because partial counts and native error
-numbers matter. Ownership is independent of success: say whether a returned slice borrows the
-input, occupies caller storage or lives in a supplied arena, and never allocate on failure.
+Ownership is independent of success: say whether a returned slice borrows the
+input, occupies caller storage or lives in a supplied arena, and never allocate
+on failure.
 
 Handle expected failures near the operation. Use `defer` immediately after successful resource
 acquisition. Defers run in LIFO order on normal scope exit, control transfer, and panic.
@@ -268,7 +279,7 @@ use "std/io" io
 
 io.println("count: {}", count)
 result := io.println_to(log_file, "count: {}", count)
-if result.status == io.Status.Error { #panic("log write failed") }
+if io.failed(result.failure) { #panic("log write failed") }
 ```
 
 `io.print` and `io.println` write to standard output and return nothing, so a terminal print needs

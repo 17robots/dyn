@@ -30,12 +30,12 @@ struct Trace { calls: usize, native: isize }
 fn read(raw: rawptr, dest: []u8) io.Transfer {
   trace := #cast(*Trace, raw)
   trace.calls += 1
-  return io.Transfer{ kind: errors.Kind.PermissionDenied, error: trace.native, status: io.Status.Error }
+  return io.Transfer{ failure: io.Failure{ kind: errors.Kind.PermissionDenied, native: trace.native } }
 }
 fn write(raw: rawptr, source: []const u8) io.Transfer {
   trace := #cast(*Trace, raw)
   trace.calls += 1
-  return io.Transfer{ kind: errors.Kind.PermissionDenied, error: trace.native, status: io.Status.Error }
+  return io.Transfer{ failure: io.Failure{ kind: errors.Kind.PermissionDenied, native: trace.native } }
 }
 fn main() {
   head(http.parse_request("GET / HTTP/1.1\r\nBad Header: x\r\n\r\n"), 19)

@@ -35,12 +35,12 @@ fn request_check(body: []const u8, expected: []const u8) {
 fn error_read(raw: rawptr, data: []u8) io.Transfer {
   _ = raw
   _ = data
-  return io.Transfer{ kind: errors.Kind.PermissionDenied, error: 0, status: io.Status.Error }
+  return io.Transfer{ failure: io.Failure{ kind: errors.Kind.PermissionDenied, native: 0 } }
 }
 fn error_write(raw: rawptr, data: []const u8) io.Transfer {
   _ = raw
   _ = data
-  return io.Transfer{ kind: errors.Kind.PermissionDenied, error: 0, status: io.Status.Error }
+  return io.Transfer{ failure: io.Failure{ kind: errors.Kind.PermissionDenied, native: 0 } }
 }
 fn io_check(write_failure: bool) {
   arena := mem.arena_alloc(0)

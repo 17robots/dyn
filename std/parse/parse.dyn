@@ -29,7 +29,7 @@ pub fn stream_result(failure: StreamFailure, transferred: usize) io.Transfer {
   } else if failure.parse.kind == Kind.Overflow {
     kind = io.Kind.Overflow
   }
-  return io.Transfer{ transferred: transferred, error: failure.io.native, kind: kind, status: io.Status.Error }
+  return io.Transfer{ transferred: transferred, failure: io.Failure{ kind: kind, native: failure.io.native } }
 }
 
 // A value and how decoding went. value is zero or partial on failure.

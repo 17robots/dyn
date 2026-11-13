@@ -19,7 +19,7 @@ struct Sink { calls: usize, code: isize }
 fn fail(data: rawptr, source: []const u8) io.Transfer {
   state := #cast(*Sink, data)
   state.calls += 1
-  return io.Transfer{ transferred: 1, kind: errors.Kind.Capacity, error: state.code, status: io.Status.Error }
+  return io.Transfer{ transferred: 1, failure: io.Failure{ kind: errors.Kind.Capacity, native: state.code } }
 }
 fn custom(destination: io.Writer, value: []const u8) text.RenderResult {
   return text.RenderResult{ offset: 97, failure: parse.io_failure(errors.Kind.Unsupported, -73) }

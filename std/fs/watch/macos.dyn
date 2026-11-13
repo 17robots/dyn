@@ -25,7 +25,7 @@ pub const HasCloseWrite: bool = false
 pub const HasMoveCookies: bool = false
 pub const HasDirectoryFlag: bool = true
 pub const FixedWatchCapacity: usize = 16
-pub enum Status { Event, Empty, Error }
+pub enum Status { Event, Empty }
 // `error` keeps the native code; `kind` is its portable category.
 pub type Result = io.Result(i32)
 pub struct Event { watch: i32, mask: u32, cookie: u32, name: []const u8, rescan: bool }
@@ -367,7 +367,7 @@ fn event_failure(watcher: *Watcher, code: isize) EventResult {
       watcher.kind = io.Kind.System
     }
   }
-  return EventResult{ status: Status.Error, failure: io.Failure{ kind: watcher.kind, native: watcher.error } }
+  return EventResult{ failure: io.Failure{ kind: watcher.kind, native: watcher.error } }
 }
 pub fn next(watcher: *Watcher) EventResult {
   if watcher.failed {

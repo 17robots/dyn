@@ -20,7 +20,7 @@ fn stage(name: []const u8) { io.println("{}",name) }
 fn await_event(state: *watch.Watcher, id: i32, name: []const u8, mask: u32, renamed: bool) {
   for attempt in 0..1500 {
     result := watch.next(state)
-    require(result.status != watch.Status.Error,"event error")
+    require(!io.failed(result.failure),"event error")
     if result.status == watch.Status.Event && result.event.watch == id && (result.event.mask & mask) != 0 && bytes.equal(result.event.name,name) {
       if renamed { require(result.event.cookie == 0 && result.event.rescan && state.rescan_required,"rename rescan") }
       return
@@ -33,7 +33,7 @@ fn main() {
   watch.audit_callbacks()
   empty := watch.Watcher{}
   watch.close(&empty)
-  require(watch.next(&empty).status == watch.Status.Error,"default next")
+  require(io.failed(watch.next(&empty).failure),"default next")
   storage: [1024]u8
   failed := watch.open(storage[..271])
   watch.close(&failed.value)
@@ -65,7 +65,7 @@ fn main() {
   await_event(&opened.value,other.value,"third",watch.Create,false)
   for attempt in 0..50 {
     result := watch.next(&opened.value)
-    require(result.status != watch.Status.Error,"after remove")
+    require(!io.failed(result.failure),"after remove")
     require(result.status != watch.Status.Event || result.event.watch != added.value,"removed watch delivery")
     _ = time.sleep(time.Millisecond*10)
   }
