@@ -134,8 +134,7 @@ fn parse_i64_into(text: []const u8, base: u8, output: *i64) bool {
     }
     if magnitude == 9223372036854775808 {
       output.* = -9223372036854775807 - 1
-    }
-    else {
+    } else {
       output.* = -#cast(i64, magnitude)
     }
   } else {
@@ -240,10 +239,10 @@ fn decimal_add(left: *DecimalInteger, right: *const DecimalInteger) {
   for index < limit {
     item := carry
     if index < left.used {
-      item += #cast(u64, left.limbs[index])
+      item += left.limbs[index]
     }
     if index < right.used {
-      item += #cast(u64, right.limbs[index])
+      item += right.limbs[index]
     }
     left.limbs[index] = #cast(u32, item)
     carry = item >> 32
@@ -266,8 +265,7 @@ fn decimal_compare(numerator: *const DecimalInteger, denominator: *const Decimal
   decimal_add(&right, &high)
   if exponent < 0 {
     decimal_shift(&left, #cast(usize, -exponent))
-  }
-  else {
+  } else {
     decimal_shift(&right, #cast(usize, exponent))
   }
   if left.used < right.used {
@@ -293,8 +291,7 @@ fn decimal_compare_bits(numerator: *const DecimalInteger, denominator: *const De
   mantissa := bits & 4503599627370495
   if exponent == 0 {
     exponent = -1074
-  }
-  else {
+  } else {
     mantissa += 4503599627370496
     exponent -= 1075
   }
@@ -332,14 +329,13 @@ fn parse_f64_into(text: []const u8, output: *f64) bool {
     if byte == '.' && !fraction {
       fraction = true
       at += 1
-    }
-    else if ascii_is_digit(byte) {
+    } else if ascii_is_digit(byte) {
       digits += 1
       if fraction {
         shift -= 1
       }
       if significant < 800 {
-        decimal_multiply(&numerator, 10, #cast(u32, (byte - '0')))
+        decimal_multiply(&numerator, 10, (byte - '0'))
         if byte != '0' || significant > 0 {
           significant += 1
         }
@@ -369,12 +365,7 @@ fn parse_f64_into(text: []const u8, output: *f64) bool {
     cap := #cast(i64, #len(text)) + 10000
     for at < #len(text) && ascii_is_digit(text[at]) {
       digit := #cast(i64, (text[at] - '0'))
-      if exponent <= (cap - digit) / 10 {
-        exponent = exponent * 10 + digit
-      }
-      else {
-        exponent = cap
-      }
+      if exponent <= (cap - digit) / 10 { exponent = exponent * 10 + digit } else { exponent = cap }
       at += 1
     }
     if at == start {
@@ -387,25 +378,14 @@ fn parse_f64_into(text: []const u8, output: *f64) bool {
   bits: u64 = 0
   if numerator.used != 0 {
     if exponent_negative {
-      if shift < exponent - 2000 {
-        shift = -2000
-      }
-      else {
-        shift -= exponent
-      }
+      if shift < exponent - 2000 { shift = -2000 } else { shift -= exponent }
     } else {
-      if shift > 2000 - exponent {
-        shift = 2000
-      }
-      else {
-        shift += exponent
-      }
+      if shift > 2000 - exponent { shift = 2000 } else { shift += exponent }
     }
     order := shift + #cast(i64, significant)
     if order > 309 {
       bits = 9218868437227405312
-    }
-    else if order >= -323 {
+    } else if order >= -323 {
       denominator := DecimalInteger{}
       decimal_multiply(&denominator, 1, 1)
       for shift > 0 {
@@ -422,8 +402,7 @@ fn parse_f64_into(text: []const u8, output: *f64) bool {
         middle := low + (high - low) / 2 + 1
         if decimal_compare_bits(&numerator, &denominator, middle, false) >= 0 {
           low = middle
-        }
-        else {
+        } else {
           high = middle - 1
         }
       }
@@ -540,7 +519,7 @@ fn parse_into(text: []const u8, base: u8, target: any) bool {
     }
     *isize p => {
       ok := parse_i64_into(text, base, &wide)
-      if !ok || wide < #cast(i64, isize_minimum()) || wide > #cast(i64, isize_maximum()) {
+      if !ok || wide < #min(isize) || wide > #max(isize) {
         return false
       }
       p.* = #cast(isize, wide)
@@ -565,7 +544,7 @@ fn parse_into(text: []const u8, base: u8, target: any) bool {
       return unsigned_into(text, base, 18446744073709551615, p)
     }
     *usize p => {
-      ok := unsigned_into(text, base, #cast(u64, usize_maximum()), &natural)
+      ok := unsigned_into(text, base, #max(usize), &natural)
       p.* = #cast(usize, natural)
       return ok
     }
@@ -593,16 +572,6 @@ fn parse_into(text: []const u8, base: u8, target: any) bool {
   }
 }
 
-fn usize_maximum() usize {
-  return ~#cast(usize, 0)
-}
-fn isize_maximum() isize {
-  return #cast(isize, usize_maximum() / 2)
-}
-fn isize_minimum() isize {
-  return -isize_maximum() - 1
-}
-
 // Builders put their output in arena, arena first. Sizes too large to
 // address panic, like any exhausted arena.
 
@@ -614,7 +583,7 @@ pub fn clone(arena: *memory.Arena, source: []const u8) []u8 {
 }
 
 fn checked_add(total: usize, more: usize) usize {
-  if more > ~#cast(usize, 0) - total {
+  if more > #max(usize) - total {
     #panic("strings: size overflows")
   }
   return total + more
@@ -733,13 +702,11 @@ pub fn glob_match(pattern: []const u8, text: []const u8) bool {
       if matched {
         p = next
         t += 1
-      }
-      else if star < #len(pattern) {
+      } else if star < #len(pattern) {
         retry += 1
         t = retry
         p = star + 1
-      }
-      else {
+      } else {
         return false
       }
     }
@@ -792,11 +759,7 @@ pub struct List {
 pub fn list_push(arena: *memory.Arena, list: *List, value: []const u8) {
   node := memory.push(ListNode, arena)
   node.value = value
-  if list.last == nil {
-    list.first = node
-  } else {
-    list.last.next = node
-  }
+  if list.last == nil { list.first = node } else { list.last.next = node }
   list.last = node
   list.count += 1
   list.total += #len(value)

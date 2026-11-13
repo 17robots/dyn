@@ -16,9 +16,9 @@ if OUT.exists():
     shutil.rmtree(OUT)
 OUT.mkdir(parents=True)
 
-def run(command, capture=False):
+def run(command, capture=False, env=None):
     return subprocess.run(list(map(str, command)), cwd=ROOT, check=True, timeout=600,
-                          capture_output=capture, text=capture)
+                          capture_output=capture, text=capture, env={**os.environ, **(env or {})})
 
 def require_ssa(result, names):
     for name in names:
@@ -71,7 +71,9 @@ for name,target in [('windows-arm64','aarch64-windows'),('macos-x64','x86_64-mac
             output=destination/(label+('.exe' if 'windows' in name else ''))
             selected = name=='windows-arm64' and mode=='release'
             result = run([DYN,'build',project,'--target',target,'--no-cache','--quiet','--'+mode,'--output',output,
-                          *(['--opt-remarks'] if selected else [])], capture=selected)
+                          *(['--opt-remarks'] if selected else [])], capture=selected,
+                         # The probe checks each function's own code; O2 would inline the small ones into main.
+                         env={'DYN_NO_INLINE': '1'} if selected else None)
             if selected: require_ssa(result, ['many','floats','big','retained','main'] if key=='SSA' else ['main'])
             rows.append(dict(path=str(output.relative_to(OUT)),mode=mode,sha256=hashlib.sha256(output.read_bytes()).hexdigest(),
                              expected_returncode=101 if key=='PANIC' else 0,

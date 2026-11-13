@@ -3,15 +3,13 @@
 // no input, so stdin reports end of input.
 extern fn console_write "dyn_console_write"(data: *const u8, size: u64)
 
-fn stdin_read(data: rawptr, destination: []u8) Transfer {
-  _ = data
+fn stdin_read(_data: rawptr, destination: []u8) Transfer {
   return Transfer{ transferred: 0, error: 0, status: Status.End }
 }
 
-fn console_writer_write(data: rawptr, source: []const u8) Transfer {
-  _ = data
+fn console_writer_write(_data: rawptr, source: []const u8) Transfer {
   if #len(source) != 0 {
-    console_write(&source[0], #cast(u64, #len(source)))
+    console_write(&source[0], #len(source))
   }
   return Transfer{ transferred: #len(source), error: 0, status: Status.Complete }
 }

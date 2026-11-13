@@ -87,7 +87,7 @@ pub fn u8x16_equal(a, b: U8x16) U8x16 {
   output: U8x16 = []
   for i in 0..16 {
     if a[i] == b[i] {
-      output[i] = ~#cast(u8, 0)
+      output[i] = #max(u8)
     }
   }
   return output
@@ -281,7 +281,7 @@ pub fn u16x8_equal(a, b: U16x8) U16x8 {
   output: U16x8 = []
   for i in 0..8 {
     if a[i] == b[i] {
-      output[i] = ~#cast(u16, 0)
+      output[i] = #max(u16)
     }
   }
   return output
@@ -475,7 +475,7 @@ pub fn u32x4_equal(a, b: U32x4) U32x4 {
   output: U32x4 = []
   for i in 0..4 {
     if a[i] == b[i] {
-      output[i] = ~#cast(u32, 0)
+      output[i] = #max(u32)
     }
   }
   return output
@@ -669,7 +669,7 @@ pub fn u64x2_equal(a, b: U64x2) U64x2 {
   output: U64x2 = []
   for i in 0..2 {
     if a[i] == b[i] {
-      output[i] = ~#cast(u64, 0)
+      output[i] = #max(u64)
     }
   }
   return output

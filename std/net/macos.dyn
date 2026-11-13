@@ -1,4 +1,5 @@
 #target(kernel: darwin)
+use "std/os/macos/sys"
 pub const AddressFamilyIpv6: usize = 30
 pub type Descriptor = i32
 pub struct PollDescriptor { descriptor: Descriptor, events: i16, returned: i16 }
@@ -22,55 +23,51 @@ fn address_family(bytes: []u8, length: usize, family: usize) {
   bytes[1] = #cast(u8, family)
 }
 fn native_socket(family: usize, kind: usize, protocol: usize) isize {
-  return #syscall(97, family, kind, protocol)
+  return #syscall(sys.Socket, family, kind, protocol)
 }
 fn native_close(descriptor: isize) isize {
-  return #syscall(6, descriptor)
+  return #syscall(sys.Close, descriptor)
 }
 fn native_listen(descriptor: isize, backlog: usize) isize {
-  return #syscall(106, descriptor, backlog)
+  return #syscall(sys.Listen, descriptor, backlog)
 }
 fn native_shutdown(descriptor: isize, how: usize) isize {
-  return #syscall(134, descriptor, how)
+  return #syscall(sys.Shutdown, descriptor, how)
 }
 fn native_connect(descriptor: isize, address: *const u8, length: usize) isize {
-  return #syscall(98, descriptor, address, length)
+  return #syscall(sys.Connect, descriptor, address, length)
 }
 fn native_bind(descriptor: isize, address: *const u8, length: usize) isize {
-  return #syscall(104, descriptor, address, length)
+  return #syscall(sys.Bind, descriptor, address, length)
 }
 fn native_accept(descriptor: isize, address: *u8, length: *u32) isize {
-  return #syscall(30, descriptor, address, length)
+  return #syscall(sys.Accept, descriptor, address, length)
 }
 fn native_local(descriptor: isize, address: *u8, length: *u32) isize {
-  return #syscall(32, descriptor, address, length)
+  return #syscall(sys.Getsockname, descriptor, address, length)
 }
 fn native_peer(descriptor: isize, address: *u8, length: *u32) isize {
-  return #syscall(31, descriptor, address, length)
+  return #syscall(sys.Getpeername, descriptor, address, length)
 }
 fn native_send(descriptor: isize, data: *const u8, length: usize, flags: usize, address: *const u8, address_length: usize) isize {
-  return #syscall(133, descriptor, data, length, flags, address, address_length)
+  return #syscall(sys.Sendto, descriptor, data, length, flags, address, address_length)
 }
 fn native_receive(descriptor: isize, data: *u8, length: usize, flags: usize, address: *u8, address_length: *u32) isize {
-  return #syscall(29, descriptor, data, length, flags, address, address_length)
+  return #syscall(sys.Recvfrom, descriptor, data, length, flags, address, address_length)
 }
 fn native_set_option(descriptor: isize, level: usize, option: usize, data: rawptr, length: usize) isize {
-  return #syscall(105, descriptor, level, option, #cast(usize, data), length)
+  return #syscall(sys.Setsockopt, descriptor, level, option, #cast(usize, data), length)
 }
 fn native_get_option(descriptor: isize, level: usize, option: usize, data: rawptr, length: *u32) isize {
-  return #syscall(118, descriptor, level, option, #cast(usize, data), length)
+  return #syscall(sys.Getsockopt, descriptor, level, option, #cast(usize, data), length)
 }
 fn native_nonblocking(descriptor: isize, enabled: bool) isize {
-  flags := #syscall(92, descriptor, 3, 0)
+  flags := #syscall(sys.Fcntl, descriptor, 3, 0)
   if flags < 0 {
     return flags
   }
-  if enabled {
-    flags = flags | 4
-  } else {
-    flags = flags & ~4
-  }
-  return #syscall(92, descriptor, 4, flags)
+  if enabled { flags = flags | 4 } else { flags = flags & ~4 }
+  return #syscall(sys.Fcntl, descriptor, 4, flags)
 }
 struct TimeValue { seconds: isize, microseconds: isize }
 fn native_timeout(descriptor: isize, milliseconds: usize, sending: bool) isize {
@@ -89,7 +86,7 @@ fn poll_native(descriptors: []PollDescriptor, milliseconds: i32) isize {
   if #len(descriptors) > 0 {
     data = &descriptors[0]
   }
-  return #syscall(230, data, #len(descriptors), milliseconds)
+  return #syscall(sys.Poll, data, #len(descriptors), milliseconds)
 }
 
 struct MessageVector { data: *u8, length: usize }
@@ -102,9 +99,9 @@ pub fn receive_packet(descriptor: isize, bytes: []u8) Result {
   }
   vector := MessageVector{ data: data, length: #len(bytes) }
   header := MessageHeader{ vectors: &vector, count: 1 }
-  value := #syscall(27, descriptor, &header, 0)
+  value := #syscall(sys.Recvmsg, descriptor, &header, 0)
   for value == -4 {
-    value = #syscall(27, descriptor, &header, 0)
+    value = #syscall(sys.Recvmsg, descriptor, &header, 0)
   }
   if value >= 0 && (header.flags & 16) != 0 {
     return result(#cast(isize, #len(bytes)) + 1)
@@ -122,6 +119,6 @@ const MulticastInterfaceOption: usize = 9
 const MulticastTtlOption: usize = 10
 const MulticastLoopOption: usize = 11
 fn native_multicast_byte(descriptor: isize, option: usize, value: u8) isize {
-  native: u8 = #cast(u8, value)
+  native: u8 = value
   return native_set_option(descriptor, 0, option, &native, #sizeof(u8))
 }

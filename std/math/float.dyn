@@ -437,11 +437,7 @@ fn split_float(x: f64) Split {
   bits := #bitcast(u64, x)
   raw_exponent := #cast(i32, (bits >> 52) & 0x7ff)
   mantissa := bits & bits_fffffffffffff
-  if raw_exponent == 0 {
-    raw_exponent = 1
-  } else {
-    mantissa |= bits_10000000000000
-  }
+  if raw_exponent == 0 { raw_exponent = 1 } else { mantissa |= bits_10000000000000 }
   return Split{ mantissa: mantissa, exponent: raw_exponent - 1075, negative: (bits >> 63) != 0 }
 }
 
@@ -653,7 +649,7 @@ fn log_parts(x: f64) Split2 {
   t2 := z * (6.666666666666735130e-01 + w * (2.857142874366239149e-01 + w * (1.818357216161805012e-01 + w * 1.479819860511658591e-01)))
   hi := with_low(f - hfsq, 0)
   lo := f - hi - hfsq + s * (hfsq + t2 + t1)
-  return Split2{ high: hi, low: lo, k: #cast(f64, reduced.k) }
+  return Split2{ high: hi, low: lo, k: reduced.k }
 }
 
 pub fn log2_64(x: f64) f64 {
@@ -677,7 +673,7 @@ pub fn log10_64(x: f64) f64 {
   reduced := reduce_log(x)
   logarithm := logarithm_dd(reduced.f)
   fraction := dd_mul(logarithm, DoubleDouble{ hi: 4.34294481903251816668e-01, lo: 1.098319650216765073e-17 })
-  exponent := dd_mul(DoubleDouble{ hi: #cast(f64, reduced.k), lo: 0.0 }, DoubleDouble{ hi: 3.01029995663981198017e-01, lo: -2.803728127785170391e-18 })
+  exponent := dd_mul(DoubleDouble{ hi: reduced.k, lo: 0.0 }, DoubleDouble{ hi: 3.01029995663981198017e-01, lo: -2.803728127785170391e-18 })
   result := dd_add(exponent, fraction)
   return result.hi + result.lo
 }
@@ -763,7 +759,7 @@ fn window_word(limbs: *[16]u64, base: i32, top: i32) u64 {
       take = top - bit
     }
     if k >= 0 && k < 16 {
-      piece := (limbs.*[#cast(usize, k)] >> #cast(u64, offset)) & ((#cast(u64, 1) << #cast(u64, take)) - 1)
+      piece := (limbs.*[k] >> #cast(u64, offset)) & ((#cast(u64, 1) << #cast(u64, take)) - 1)
       word |= piece << #cast(u64, bit - (top - 64))
     }
     bit += take
@@ -795,10 +791,10 @@ fn reduce_pi2_large(x: f64) Remainder {
     for j in 0..3 {
       i := k - #cast(i32, j)
       if i >= 0 && i <= 65 {
-        sum += two_over_pi[#cast(usize, 65 - i)] * chunks[j]
+        sum += two_over_pi[65 - i] * chunks[j]
       }
     }
-    limbs[#cast(usize, k - base)] = sum & 0xffffff
+    limbs[k - base] = sum & 0xffffff
     carry = sum >> 24
     k += 1
   }
@@ -1119,10 +1115,10 @@ pub fn atan2_64(y, x: f64) f64 {
   if is_inf(x) {
     if is_inf(y) {
       quarter: [4]f64 = [pi / 4.0, -pi / 4.0, 3.0 * pi / 4.0, -3.0 * pi / 4.0]
-      return quarter[#cast(usize, m)]
+      return quarter[m]
     }
     whole: [4]f64 = [0.0, -0.0, pi, -pi]
-    return whole[#cast(usize, m)]
+    return whole[m]
   }
   ix := high(x) & 0x7fffffff
   iy := high(y) & 0x7fffffff
@@ -1351,7 +1347,7 @@ fn logarithm_dd(f: f64) DoubleDouble {
   n: i32 = 3
   for n <= 51 {
     term = dd_mul(term, square)
-    sum = dd_add(sum, dd_div_integer(term, #cast(f64, n)))
+    sum = dd_add(sum, dd_div_integer(term, n))
     n += 2
   }
   return DoubleDouble{ hi: 2.0 * sum.hi, lo: 2.0 * sum.lo }
@@ -1367,7 +1363,7 @@ fn pow_positive(base, y: f64) f64 {
   reduced := reduce_log(base)
   logarithm := logarithm_dd(reduced.f)
   inverse := DoubleDouble{ hi: 1.44269504088896338700, lo: 2.035527374093103311e-17 }
-  t := dd_add(DoubleDouble{ hi: #cast(f64, reduced.k), lo: 0.0 }, dd_mul(logarithm, inverse))
+  t := dd_add(DoubleDouble{ hi: reduced.k, lo: 0.0 }, dd_mul(logarithm, inverse))
   // Avoid infinite products and the invalid residual infinity - infinity.
   estimate := y * t.hi
   if estimate > 1025.0 {

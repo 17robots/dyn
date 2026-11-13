@@ -64,12 +64,25 @@ static uint32_t depth_limit(Parser *p) {
   uint32_t requested = p->options ? p->options->max_depth : 0;
   return requested && requested < MAX_DEPTH ? requested : MAX_DEPTH;
 }
-static bool at(Parser *p, uint32_t offset, const char *s) {
-  size_t n = strlen(s);
-  return offset <= p->length && n <= p->length - offset && !memcmp(p->text + offset, s, n);
+/* Whether s, a NUL-terminated word, starts at offset. Compares in place:
+   the parser asks this about every token for many words, and most differ in
+   the first byte. */
+static inline bool at(Parser *p, uint32_t offset, const char *s) {
+  if (offset > p->length) return false;
+  const char *text = p->text + offset;
+  uint32_t room = p->length - offset;
+  for (uint32_t i = 0; s[i]; ++i)
+    if (i == room || text[i] != s[i]) return false;
+  return true;
 }
-static bool is(Parser *p, const char *s) {
-  return strlen(s) == p->token.end - p->token.start && at(p, p->token.start, s);
+/* Whether the current token is exactly s. */
+static inline bool is(Parser *p, const char *s) {
+  uint32_t n = p->token.end - p->token.start;
+  if (p->token.start > p->length || n > p->length - p->token.start) return false;
+  const char *text = p->text + p->token.start;
+  for (uint32_t i = 0; i < n; ++i)
+    if (s[i] != text[i] || !s[i]) return false;
+  return s[n] == 0;
 }
 static bool escape(Parser *p, uint32_t *i) {
   if (*i == p->length) return false;
@@ -440,6 +453,9 @@ static uint32_t aggregate(Parser *p) {
         append(p, &first, &last, name(p));
         while (take(p, ".") && !p->tree->error) append(p, &first, &last, name(p));
       }
+    } else if (p->token.kind == NAME) {
+      fail(p, p->token.start - 1, "an enum variant needs its type: write Enum.Variant, not .Variant");
+      return NONE;
     }
     expect(p, "{");
   }
@@ -529,8 +545,10 @@ static uint32_t parse(Parser *p, int minimum) {
           at(p, token.start, "#bitcast") ? EXP_BITCAST : 0);
       primary = true;
     }
-  } else if (is(p, "#sizeof") || is(p, "#alignof") || is(p, "#typeof") || is(p, "#offsetof")) {
-    ExpKind kind = is(p, "#sizeof") ? EXP_SIZE : is(p, "#alignof") ? EXP_ALIGN : is(p, "#typeof") ? EXP_TYPEOF : EXP_OFFSET;
+  } else if (is(p, "#sizeof") || is(p, "#alignof") || is(p, "#typeof") || is(p, "#offsetof") ||
+             is(p, "#max") || is(p, "#min")) {
+    /* #max and #min share #sizeof's node; compaction tells them apart by name. */
+    ExpKind kind = is(p, "#sizeof") || is(p, "#max") || is(p, "#min") ? EXP_SIZE : is(p, "#alignof") ? EXP_ALIGN : is(p, "#typeof") ? EXP_TYPEOF : EXP_OFFSET;
     lex(p); expect(p, "(");
     uint32_t child = kind == EXP_OFFSET ? type(p) : argument(p, true);
     if (kind == EXP_OFFSET) {

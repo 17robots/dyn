@@ -14,6 +14,192 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- `#max(T)` and `#min(T)` are the largest and smallest values of an integer
+  type, as constants of that type: write `#max(usize)` for `~#cast(usize, 0)`.
+- `dyn vet` reports a `#cast` that its position would make anyway: an
+  argument, return value, struct field, typed local, assignment or index whose
+  type the value widens to without loss, such as `take(#cast(u64, count))`
+  for a `u32` count. Casts that choose a type, like `wide := #cast(u64, n)`,
+  are not reported, and neither is a cast that some target needs, such as a
+  cast of a `c.char` or `net.Descriptor`. std dropped 751 such casts.
+- Binary operators widen the narrower operand when its type converts to the
+  other's without loss, as typed slots already do: `count_u32 * size_u64` is
+  a `u64`, `index_u32 < limit_i64` compares as `i64`, and `total += count_u32`
+  works on a `u64` total. Each operand keeps its own arithmetic until then.
+  `u64` against `i64` still needs a cast.
+- Release loops whose back edge passes an empty forwarding block, such as a
+  loop with a bounds check, now test at the bottom: one branch per iteration
+  instead of a compare at the top and a jump back.
+- Large programs check about 9% faster and build about 7% faster: the walk
+  that finds generic instances in function bodies runs on up to four threads.
+- Large programs check about 12% faster and build 7 to 10% faster again. The
+  compiler reads each file's `#target` line once, looks modules up by hash,
+  hands the optimizer the lowered program instead of a copy, and keeps
+  blocks up to 4 MiB in the heap in batch commands instead of mapping each one.
+  `dyn lsp` keeps the allocator's defaults.
+- Release code is tighter: a function that returns a call to itself (or a
+  void function ending in one) loops instead of calling, so deep tail
+  recursion no longer grows the stack; loops whose condition loads and
+  bounds-checks are rotated; `at = (at + 1) & mask` stays in one register;
+  64-bit constants used in loops stay in registers; a value kept on the stack
+  because it lives across calls is loaded once into a free register for a
+  run of straight-line uses instead of at every use. The hash map benchmark
+  runs 8% faster, sieve 6%, the JSONL report 3%. A branch around one or two
+  cheap instructions that only picks a value becomes a conditional move
+  (CMOV on x86-64, CSEL on AArch64), so clamps and min/max no longer
+  mispredict. A value can take a register through a stretch where the
+  register's owner is dead, so `j -= 1` at the bottom of quicksort's loop
+  no longer copies j; the sort benchmark runs 2% faster. An early return
+  reached without side effects, such as a recursion's base case or a tree
+  walk's `if node.left == nil { return 1 }`, runs before the function saves
+  any registers; the tree benchmark runs 3% faster. `for i in a..=b` with
+  a constant `b` below the type's maximum compares once per iteration.
+  A recursion such as `return fib(n - 1) + fib(n - 2)`, already turned into
+  a loop with one call, now copies that loop into its own call six levels
+  deep, so most calls never happen; the Fibonacci benchmark runs twice as
+  fast.
+- Release builds emit machine code on the backend's worker threads instead
+  of one thread, and large programs (2048 live functions or more) use up to
+  12 workers: a 300,000-line project builds in 199 ms instead of 209. The
+  objects are byte for byte what serial emission writes;
+  `DYN_SERIAL_EMISSION=1` keeps emission on one thread for comparison. x86-64
+  release builds start functions that contain loops on a 16-byte boundary.
+- Programs with 512 or more functions run their lifetime checks on worker
+  threads after every body is checked, and report the same diagnostics in
+  the same order: checking a 300,000-line project's semantics takes 22 ms
+  instead of 29. `DYN_SERIAL_LIFETIMES=1` keeps them in place for
+  comparison.
+- Release builds drop bounds checks that an earlier check already covers:
+  after `xs[j]` passed, `xs[..j + 1]` and `xs[j + 1..]` need no check, and
+  neither does an index such as `(#len(xs) - 1) / 2` once `#len(xs) >= 1`
+  is known. Quicksort keeps only the checks of its inner scans.
+- Native builds no longer stop at 32,768 functions and globals or 4 million
+  IR nodes: a 1,000,000-line project builds and runs. Release builds of
+  large programs are faster again: 300,000 lines in 185 ms.
+- Functions that take or return fixed arrays or payload enums by value, such
+  as `fn area(shape: Shape) f64`, and functions that call C variadic
+  functions now compile to optimized SSA code on every 64-bit target. No
+  function in the repository's projects uses the fallback emitter any more.
+  `DYN_TREE_FUNCTIONS=a,b` keeps named functions on it, for tests.
+- A function that takes a local's address inside a `case` arm now compiles
+  to optimized SSA code instead of the simple fallback emitter. std's number
+  parsing (`strings.parse_into`, behind `json.read`) was one such function;
+  the JSONL report benchmark runs about 7% faster.
+- `--release` inlines a little more: each function may grow by 176 cost units
+  instead of 128, enough to inline `mem.push` together with the arena's fast
+  path. The tree benchmark runs 16% faster; compile time on real projects is
+  unchanged.
+- `--opt-level 2` and `3` no longer pad x86 function entries to 64 bytes, so
+  plain `--release`, which optimizes at the same level, now produces the same
+  code as `--opt-level 2`. The padding moved benchmark kernels by -10% to +9%
+  depending on where code landed, with no consistent gain.
+- `std/os/macos.thread_yield` yields through libSystem's `sched_yield`. It
+  called BSD syscall 331, which is `__disable_threadsignal`, not a yield.
+- `#syscall` takes a named constant on every Linux target. `std/os/linux/sys`
+  and `std/os/macos/sys` name the calls std makes: `#syscall(sys.Openat, ...)`.
+- `io.failed(failure)` tests a failure, and `io.linux_failure(code)`,
+  `darwin_failure`, `windows_failure` and `wasi_failure` build one from a
+  native code with its portable kind.
+- `dyn fmt` puts `} else {` on one line. An `if` whose two branches are one
+  statement each may be written on one line, `if wide { return 8 } else {
+  return 4 }`, and std uses that form where it fits in 100 columns.
+
+- `--release` (O2) now inlines small direct calls the way `--opt-level 3`
+  does, within a quarter of its growth budget, instead of only one-statement
+  leaves inside loops. An allocation-heavy tree kernel went from 0.79s to
+  0.41s, and the JSON log report from 48 ms to 34 ms; compile time of a
+  100k-line project did not change. `--opt-level 3` keeps the larger budget
+  and adds constant-call specialization and vectorization.
+- Calls to `math.sqrt64`, `math.fma64` and the other math functions the
+  backend lowers to one instruction are no longer inlined as their software
+  bodies.
+- `mem.arena_push`, `push`, `push_array` and `arena_push_uninit` take an
+  inlined fast path when the current block has room: the tree kernel went
+  from 0.41s to 0.29s, ahead of the Go and C versions.
+- Release builds drop the bounds check on a probe index that stays in range
+  around a loop, such as `at = (at + 1) & (Capacity - 1)`, and reuse a load
+  the loop exit already made instead of loading it again.
+- A loop counter that calls after the loop push out of registers stays in
+  a register inside the loop, and is stored once at each exit instead of
+  being loaded at every use. The JSON log report at `--opt-level 3` went
+  from 27.8 ms to 26.5 ms.
+- Builds without overflow checks turn `return f(n - 1) + f(n - 2)` style
+  recursion into one call per level plus a loop, as overflow-checked builds
+  already did: release `fib(40)` went from 0.27s to 0.18s.
+- `mem.copy`, and any loop of the form `for i in 0..n { d[i] = s[i] }` over
+  scalar elements, run as one copy in x86-64 release builds when `n` fits
+  both slices (otherwise the loop runs and fails where it did before):
+  copying a 1 MiB buffer 2000 times plus 20 million 12-byte copies went
+  from 0.45s to 0.07s. Fixed-size zeroing of up to 256 bytes uses 16-byte
+  stores instead of `rep stosb`.
+- `mem.push` and the other arena pushes take a smaller inlined fast path,
+  and a struct's zeroing becomes one fixed-size fill instead of a call:
+  the tree kernel went from 0.30s to 0.19s and the JSON log report from
+  30.7 ms to 28.3 ms (25.4 ms at `--opt-level 3`). An arena's `peak_used`
+  is brought up to date when it is read or rewound, not on every push.
+- Threads from `thread.spawn_with_size` on Linux get a 64 KiB guard below
+  their stack, so a stack overflow faults (and debug builds report it with
+  a trace) instead of writing into neighbouring memory.
+- Debug stack traces no longer cost anything per call. Functions no longer
+  call `dyn_trace_push` and `dyn_trace_pop` or store their line at each
+  statement; instead a panic or memory fault walks frame pointers and looks
+  each return address up in a table of function ranges and line rows that
+  debug builds carry. Debug `fib(40)` went from 1.39s to 0.33s (C at `-O0`:
+  0.28s), and debug binaries are smaller. A trace now lists the innermost
+  frames: past 64 it keeps the 48 innermost and 16 outermost and counts the
+  rest. Custom runtimes provide `dyn_trace_start(header)`, which `main` calls
+  once, instead of `dyn_trace_push` and `dyn_trace_pop`.
+- The compiler makes far fewer heap allocations: SSA functions use arenas
+  recycled between functions (release builds of a 1500-function project
+  went from 179k to 30k allocations, debug builds from 145k to 52k).
+
+- Release builds fold constant globals, including `<<` and `>>` in their
+  initializers, so `const Capacity: usize = 1 << 23` no longer loads from
+  memory at each use, and a small helper that reads a constant can inline.
+  A hash map kernel ran 22% faster. Taking a constant's address still gives
+  its `*const` storage.
+- Debug builds no longer make two thread-id system calls per function call
+  for the stack trace: each thread's trace slot is found from its stack
+  address. A call-heavy kernel dropped from 200s to 23s in a debug build.
+- Debug index failures also report the index and the length on RV32 and
+  Cortex-M targets.
+- Debug builds use the SSA code generator on x86-64, AArch64 and RISC-V64
+  (Linux, macOS, Windows), as release builds do, with no optimizing passes and
+  every local in its frame slot for the debugger. Debug code runs faster
+  (nbody 7.7s to 3.2s, matmul 5.6s to 3.6s). Release `--debug-info` builds now
+  get optimized SSA code with line rows too. 32-bit targets keep the tree
+  emitter in debug builds; `DYN_NO_SSA=1` selects it everywhere.
+- A failed index check in a debug build reports the index and the length:
+  `runtime check failed (index.ok) in get at main.dyn:6: index 9, length 4`.
+- `#cast(u32, 0x80000000)` compiles: an integer literal in `#cast` takes the
+  target type when it fits, instead of the default `i32`.
+- New `--check-overflow` for debug builds: `+`, `-`, `*`, `<<` and negation in
+  the program's own modules panic on overflow instead of wrapping. std and
+  vendor code keeps wrapping. New `math.wrapping_add`, `wrapping_sub` and
+  `wrapping_mul` mark arithmetic that is meant to wrap.
+- `for i in 0..10` with two literal bounds always counts in `usize`. It no
+  longer takes the type of the first typed use of `i` in the body, so a use such
+  as `total += i` with `total: i32` is now an error at that line. Write
+  `for i: i32 in 0..10`.
+- Text diagnostics show the source line under each error, with the span
+  underlined, and no longer end in `[range L:C-L:C]`. Tools that read ranges
+  should use `--diagnostics json`, which is unchanged.
+- Error messages name what they are about: `unknown name 'total'`,
+  `integer literal is not representable in expected type u8: 300 does not fit`,
+  `case is not exhaustive: missing Shape.Rect`, and for a generic call that
+  cannot infer a type, the parameter's shape and the argument's type. The old
+  wording stays at the start of each message.
+- A local whose initializer has an error is still declared, so its later uses
+  are no longer reported as unknown names.
+- `.Variant` without its enum type reports `an enum variant needs its type:
+  write Enum.Variant, not .Variant` instead of a statement-layout error.
+- Debug stack traces show the line each frame is running, so a caller's frame
+  names the line of its call rather than the function's first line.
+- Release builds no longer replace small inputs of Fibonacci-shaped recursive
+  functions with a precomputed table. The recursive base-case return remains.
+- `tests/run.py` runs tests in parallel (`DYN_TEST_JOBS`, `DYN_TEST_ONLY`);
+  `tests/expect/*.dyn` hold diagnostic tests written as `// error:` comments.
+
 - New `std/net/http/evented`: an event-loop HTTP/1.1 server on `std/event`
   (epoll/kqueue). Each worker multiplexes many nonblocking keep-alive
   connections, so slow or idle clients no longer hold a thread. Handlers keep the

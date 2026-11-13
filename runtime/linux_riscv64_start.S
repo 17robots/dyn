@@ -18,6 +18,12 @@ dyn_panic:
     addi sp, sp, -16
     sd a0, 0(sp)
     sd a1, 8(sp)
+    // The trace begins at the caller: its return address and frame pointer.
+    mv a0, ra
+    mv a1, s0
+    call dyn_trace_capture
+    ld a0, 0(sp)
+    ld a1, 8(sp)
     call dyn_unwind_begin
     ld a1, 0(sp)
     ld a2, 8(sp)
@@ -211,6 +217,10 @@ dyn_thread_spawn:
     beq a0, zero, .Lchild
     ret
 .Lchild:
+#ifndef DYN_RELEASE
+    // Debug programs give each thread a stack for fault reports.
+    call dyn_trace_thread
+#endif
     ld t0, 0(sp)
     ld a0, 8(sp)
     jalr t0

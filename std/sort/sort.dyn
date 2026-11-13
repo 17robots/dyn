@@ -160,11 +160,7 @@ pub fn search(values: []const $T, target: $T) SearchResult {
   high := #len(values)
   for low < high {
     middle := low + (high - low) / 2
-    if values[middle] < target {
-      low = middle + 1
-    } else {
-      high = middle
-    }
+    if values[middle] < target { low = middle + 1 } else { high = middle }
   }
   if low < #len(values) && values[low] == target {
     return SearchResult{ index: low, found: true }

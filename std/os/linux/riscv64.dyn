@@ -1,4 +1,5 @@
 #target(arch: riscv64, kernel: linux)
+use "std/os/linux/sys"
 fn fork_native() isize {
-  return #syscall(56, 17, 0, 0, 0, 0)
+  return #syscall(sys.Clone, 17, 0, 0, 0, 0)
 }

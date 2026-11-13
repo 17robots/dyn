@@ -216,8 +216,7 @@ pub fn poll(window: *Window) Result {
           }
           ordered_push(window, value)
         }
-      }
-      else {
+      } else {
         ordered_push(window, value)
       }
       if pointer.button == 1 && event.kind != 6 {

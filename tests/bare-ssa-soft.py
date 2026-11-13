@@ -147,7 +147,7 @@ def aggregates(g, ns, target, flags, board, qemu):
             # Verify CP10/11 remain disabled around the entire oracle.
             c += '\nunsigned cpacr(void){return *(volatile unsigned*)0xe000ed88u;}\n'
             source = 'extern fn cpacr() u32\n' + source
-            source = replace_once(source, 'n:=oracle()', 'if cpacr() & 0x00f00000 != 0 { #panic("FPU entry") }\nn:=oracle()\nif cpacr() & 0x00f00000 != 0 { #panic("FPU exit") }')
+            source = replace_once(source, 'n:=oracle()', 'if (cpacr() & 0x00f00000) != 0 { #panic("FPU entry") }\nn:=oracle()\nif (cpacr() & 0x00f00000) != 0 { #panic("FPU exit") }')
         project = work/'source'
         project.mkdir()
         (project/'main.dyn').write_text(source)

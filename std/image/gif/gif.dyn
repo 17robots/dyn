@@ -18,7 +18,7 @@ fn byte(bits: *Bits) u8 {
       bits.failed = true
       return 0
     }
-    bits.remaining = #cast(usize, bits.source[bits.at])
+    bits.remaining = bits.source[bits.at]
     bits.at += 1
     if bits.remaining == 0 {
       bits.ended = true
@@ -107,7 +107,7 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Result {
   palette: []const u8
   if (source[10] & 128) != 0 {
     count := #cast(usize, 1) << ((source[10] & 7) + 1)
-    if count * 3 > #len(source) - at || #cast(usize, source[11]) >= count {
+    if count * 3 > #len(source) - at || source[11] >= count {
       return Result{ offset: at, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: at } }
     }
     palette = source[at..at + count * 3]
@@ -241,9 +241,9 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Result {
           if current >= next || used >= 4096 {
             return Result{ offset: bits.at, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: bits.at } }
           }
-          stack[used] = suffixes[#cast(usize, current)]
+          stack[used] = suffixes[current]
           used += 1
-          current = prefixes[#cast(usize, current)]
+          current = prefixes[current]
         }
       }
       first = #cast(u8, current)
@@ -255,8 +255,8 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Result {
       for used > 0 {
         used -= 1
         index := stack[used]
-        x := produced % #cast(usize, image_width)
-        dst := ((#cast(usize, top) + row) * #cast(usize, width) + #cast(usize, left) + x) * 4
+        x := produced % image_width
+        dst := ((top + row) * width + left + x) * 4
         if !transparent || index != transparent_index {
           if #cast(usize, index) >= #len(palette) / 3 {
             return Result{ offset: bits.at, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: bits.at } }
@@ -268,13 +268,12 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Result {
           pixels[dst + 3] = 255
         }
         produced += 1
-        if produced % #cast(usize, image_width) == 0 {
+        if produced % image_width == 0 {
           if (flags & 64) == 0 {
             row += 1
-          }
-          else {
+          } else {
             row += steps[pass]
-            for row >= #cast(usize, image_height) && pass < 3 {
+            for row >= image_height && pass < 3 {
               pass += 1
               row = starts[pass]
             }
@@ -282,14 +281,14 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Result {
         }
       }
       if old >= 0 && next < 4096 {
-        prefixes[#cast(usize, next)] = #cast(u16, old)
-        suffixes[#cast(usize, next)] = first
+        prefixes[next] = #cast(u16, old)
+        suffixes[next] = first
         next += 1
         if next == (#cast(u16, 1) << size) && size < 12 {
           size += 1
         }
       }
-      old = #cast(i32, incoming)
+      old = incoming
     }
     if produced != count {
       return Result{ offset: bits.at, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: bits.at } }

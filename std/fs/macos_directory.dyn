@@ -1,4 +1,5 @@
 use "std/io" io
+use "std/os/macos/sys"
 #target(kernel: darwin)
 
 // Directory listing through getdirentries64, with the Linux API shape.
@@ -17,9 +18,9 @@ pub fn open_directory(path: []const u8, storage: []u8) DirectoryResult {
     return DirectoryResult{ failure: io.Failure{ kind: io.Kind.InvalidInput, native: -22 } }
   }
   // O_RDONLY | O_DIRECTORY | O_CLOEXEC.
-  descriptor := #syscall(5, name, 17825792, 0)
+  descriptor := #syscall(sys.Open, name, 17825792, 0)
   if descriptor < 0 {
-    return DirectoryResult{ failure: io.Failure{ kind: io.darwin(descriptor), native: descriptor } }
+    return DirectoryResult{ failure: io.darwin_failure(descriptor) }
   }
   return DirectoryResult{ value: Directory{ file: owned_file(descriptor), storage: storage } }
 }
@@ -31,12 +32,12 @@ pub fn directory_next(directory: *Directory) DirectoryEntry {
   }
   for true {
     if directory.offset >= directory.used {
-      value := #syscall(344, directory.file.descriptor, &directory.storage[0], #len(directory.storage), &directory.base)
+      value := #syscall(sys.Getdirentries64, directory.file.descriptor, &directory.storage[0], #len(directory.storage), &directory.base)
       for value == -4 {
-        value = #syscall(344, directory.file.descriptor, &directory.storage[0], #len(directory.storage), &directory.base)
+        value = #syscall(sys.Getdirentries64, directory.file.descriptor, &directory.storage[0], #len(directory.storage), &directory.base)
       }
       if value < 0 {
-        return DirectoryEntry{ failure: io.Failure{ kind: io.darwin(value), native: value } }
+        return DirectoryEntry{ failure: io.darwin_failure(value) }
       }
       if value == 0 {
         return DirectoryEntry{}
@@ -77,7 +78,7 @@ pub struct Metadata { size: u64, inode: u64, device: u64, mode: u16, failure: io
 fn stat_metadata(raw: *const [144]u8) Metadata {
   bytes := raw.*
   read := fn_u64(bytes[..], 8)
-  return Metadata{ size: fn_u64(bytes[..], 96), inode: read, device: #cast(u64, fn_u32(bytes[..], 0)), mode: #cast(u16, bytes[4]) | #cast(u16, bytes[5]) << 8 }
+  return Metadata{ size: fn_u64(bytes[..], 96), inode: read, device: fn_u32(bytes[..], 0), mode: #cast(u16, bytes[4]) | #cast(u16, bytes[5]) << 8 }
 }
 
 fn fn_u32(bytes: []const u8, at: usize) u32 {
@@ -95,9 +96,9 @@ pub fn metadata(path: []const u8) Metadata {
     return Metadata{ failure: io.Failure{ kind: io.Kind.InvalidInput, native: -22 } }
   }
   raw: [144]u8 = []
-  value := #syscall(338, name, &raw[0])
+  value := #syscall(sys.Stat64, name, &raw[0])
   if value < 0 {
-    return Metadata{ failure: io.Failure{ kind: io.darwin(value), native: value } }
+    return Metadata{ failure: io.darwin_failure(value) }
   }
   return stat_metadata(&raw)
 }
@@ -107,9 +108,9 @@ pub fn file_metadata(file: *const File) Metadata {
     return Metadata{ failure: io.Failure{ kind: io.Kind.InvalidState, native: -9 } }
   }
   raw: [144]u8 = []
-  value := #syscall(339, file.descriptor, &raw[0])
+  value := #syscall(sys.Fstat64, file.descriptor, &raw[0])
   if value < 0 {
-    return Metadata{ failure: io.Failure{ kind: io.darwin(value), native: value } }
+    return Metadata{ failure: io.darwin_failure(value) }
   }
   return stat_metadata(&raw)
 }
@@ -147,7 +148,7 @@ pub fn rename(old_path: []const u8, new_path: []const u8) Result {
   if old_name == nil || new_name == nil {
     return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput, native: -22 } }
   }
-  value := #syscall(128, old_name, new_name)
+  value := #syscall(sys.Rename, old_name, new_name)
   if value < 0 {
     return failure(value)
   }

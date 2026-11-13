@@ -147,7 +147,7 @@ fn main() {
   require(process.environment(arena, "").failure.kind == errors.Kind.InvalidInput, "stdlib assertion 126")
   invalid_child := process.Child{}
   require(process.wait(&invalid_child, false).failure.kind == errors.Kind.InvalidState, "stdlib assertion 128")
-  minimum: isize = 0 - #cast(isize, ((~#cast(usize, 0)) >> 1)) - 1
+  minimum: isize = 0 - #cast(isize, (#max(usize) >> 1)) - 1
   require(errors.linux(minimum) == errors.Kind.System, "stdlib assertion 130")
   require(errors.darwin(minimum) == errors.Kind.System, "stdlib assertion 131")
   require(errors.windows(minimum) == errors.Kind.System, "stdlib assertion 132")

@@ -142,7 +142,7 @@ pub fn request_paste(window: *Window) {
 
 pub fn set_cursor(window: *Window, cursor: Cursor) {
   if window.handle != nil {
-    native_set_cursor(window.handle, #cast(i32, #cast(u8, cursor)))
+    native_set_cursor(window.handle, #cast(u8, cursor))
   }
 }
 
@@ -170,7 +170,7 @@ pub fn box_input(window: *const Window) box.Input {
   value := box.Input{
     x: #cast(f32, window.input.x), y: #cast(f32, window.input.y), down: window.input.down,
     scroll_x: desktop.scroll_x, scroll_y: desktop.scroll_y,
-    text: desktop.text[..#cast(usize, desktop.text_length)],
+    text: desktop.text[..desktop.text_length],
     backspace: (keys & 1) != 0, delete: (keys & 2) != 0, left: (keys & 4) != 0, right: (keys & 8) != 0,
     home: (keys & 16) != 0, end: (keys & 32) != 0, enter: (keys & 64) != 0, escape: (keys & 128) != 0,
     tab: (keys & 256) != 0, shift: (keys & 512) != 0, control: (keys & 16384) != 0, select_all: (keys & 1024) != 0,
@@ -178,11 +178,11 @@ pub fn box_input(window: *const Window) box.Input {
     copy: (keys & 2048) != 0, cut: (keys & 4096) != 0, paste: (keys & 8192) != 0,
   }
   if value.paste && desktop.clipboard != nil {
-    value.clipboard = #slice(desktop.clipboard, #cast(usize, desktop.clipboard_length))
+    value.clipboard = #slice(desktop.clipboard, desktop.clipboard_length)
   }
   value.composition_cursor = -1
   if window.composition.active != 0 && window.composition.text_length <= 256 {
-    value.composition = window.composition.text[..#cast(usize, window.composition.text_length)]
+    value.composition = window.composition.text[..window.composition.text_length]
     value.composition_cursor = window.composition.cursor_begin
   }
   return value
@@ -242,7 +242,7 @@ pub fn clipboard(window: *const Window) []const u8 {
   if text == nil {
     return ""
   }
-  return #slice(text, #cast(usize, length))
+  return #slice(text, length)
 }
 
 pub type Surrounding = surrounding_edit.Context

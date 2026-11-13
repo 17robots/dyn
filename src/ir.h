@@ -11,21 +11,23 @@ typedef struct {
   unsigned char *expressions, *statements;
 } DynIrLiveness;
 
+/* Fields ordered by size, so the record packs into 64 bytes. */
 typedef struct {
   DynExprKind kind;
   DynType type;
   DynOperator op;
   DynExprId left, right;
-  uint64_t integer;
-  double floating;
-  bool boolean; /* A literal's value; on a dereference, its checks already ran. */
   uint32_t item_start, item_count;
-  DynSpan span;
-  bool wrap;
   /* Zero inherits the enclosing expression or emitted function; otherwise
      the original function index plus one identifies runtime check failures. */
   uint32_t check_origin;
+  DynSpan span;
+  uint64_t integer;
+  double floating;
+  bool boolean; /* A literal's value; on a dereference, its checks already ran. */
+  bool wrap;
 } DynIrExpr;
+_Static_assert(sizeof(DynIrExpr) <= 64, "DynIrExpr grew past 64 bytes");
 typedef struct {
   DynExprId expression;
   uint32_t field_index;
@@ -109,7 +111,9 @@ typedef enum {
   DYN_BYTE_INTRINSIC_NONE,
   DYN_BYTE_INTRINSIC_FIND_BYTE,
   DYN_BYTE_INTRINSIC_FIND,
-  DYN_BYTE_INTRINSIC_JSON_ASCII_PREFIX
+  DYN_BYTE_INTRINSIC_JSON_ASCII_PREFIX,
+  /* std/mem's zero_bytes_fast: a constant length becomes a fixed zero fill. */
+  DYN_BYTE_INTRINSIC_ZERO
 } DynByteIntrinsic;
 typedef struct {
   /* debug_name is set for instances only: "min(u32)" for debuggers. */
@@ -125,12 +129,15 @@ typedef struct {
 typedef struct {
   DynStmtKind kind;
   DynExprId expression, target;
-  DynOperator assignment_op;
   uint32_t local_id, body_start, body_count, else_start, else_count, loop_id, target_loop_id, case_arm_start, case_arm_count;
-  bool defer_block, for_pointer, for_const, for_range, for_inclusive, for_reverse;
-  DynSpan span;
   uint32_t check_origin;
+  DynSpan span;
+  /* A DynOperator in one byte, and one bit per flag, keep a statement at 64 bytes. No switch reads assignment_op. */
+  uint8_t assignment_op;
+  bool defer_block : 1, for_pointer : 1, for_const : 1, for_range : 1, for_inclusive : 1, for_reverse : 1;
 } DynIrStmt;
+_Static_assert(sizeof(DynIrStmt) <= 64, "DynIrStmt grew past one cache line");
+_Static_assert(DYN_OP_SHR <= UINT8_MAX, "DynOperator no longer fits DynIrStmt.assignment_op");
 typedef struct {
   char *name;
   DynType type;
@@ -192,8 +199,6 @@ typedef struct DynIrProgram {
   size_t local_count;
   /* Line tables of the lowered source, shared by every code generator. */
   DynLocationIndex locations;
-  /* Declarations every object may depend on: types, globals and function signatures, but no function bodies. Keys cached chunk objects. */
-  uint64_t interface_hash;
   /* Whole-program facts every code generator needs, computed once by dyn_codegen_prepare instead of once per module. Per local: whether it is assigned or address-taken, and the 1-based statement declaring it. */
   bool *unstable_locals;
   uint32_t *local_statements;

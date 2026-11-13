@@ -122,8 +122,7 @@ pub fn fuzz(options: FuzzOptions, corpus: []const []const u8, work: []u8,
     length: usize = 0
     if #len(corpus) != 0 && random_below(&generator, 4) != 0 {
       length = copy_into(sample, corpus[random_below(&generator, #len(corpus))])
-    }
-    else {
+    } else {
       length = random_below(&generator, capacity + 1)
       for i in 0..length {
         sample[i] = #cast(u8, random_next(&generator) & 255)

@@ -268,21 +268,13 @@ fn read_label(parser: *Parser, node: *Node) {
 
 fn append(parent: *Node, node: *Node) {
   node.parent = parent
-  if parent.last == nil {
-    parent.first = node
-  } else {
-    parent.last.next = node
-  }
+  if parent.last == nil { parent.first = node } else { parent.last.next = node }
   parent.last = node
 }
 
 fn append_tag(node: *Node, tag_node: *Node) {
   tag_node.parent = node
-  if node.last_tag == nil {
-    node.first_tag = tag_node
-  } else {
-    node.last_tag.next = tag_node
-  }
+  if node.last_tag == nil { node.first_tag = tag_node } else { node.last_tag.next = tag_node }
   node.last_tag = tag_node
 }
 

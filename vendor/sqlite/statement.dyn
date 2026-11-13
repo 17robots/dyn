@@ -60,11 +60,9 @@ pub fn step(statement: *Statement) StepResult {
   statement.code = sqlite_step(statement.handle)
   if statement.code == 100 {
     statement.state = State.Row
-  }
-  else if statement.code == 101 {
+  } else if statement.code == 101 {
     statement.state = State.Done
-  }
-  else {
+  } else {
     statement.state = State.Failed
   }
   return StepResult{ state: statement.state, code: statement.code, ok: statement.state != State.Failed }
@@ -183,12 +181,10 @@ pub fn column(statement: *const Statement, index: i32) Column {
   result_kind := ColumnKind.Text
   if kind == 3 {
     pointer = sqlite_column_text(statement.handle, index)
-  }
-  else if kind == 4 {
+  } else if kind == 4 {
     pointer = sqlite_column_blob(statement.handle, index)
     result_kind = ColumnKind.Blob
-  }
-  else {
+  } else {
     return Column{ code: InvalidArgument }
   }
   length := sqlite_column_bytes(statement.handle, index)
@@ -198,5 +194,5 @@ pub fn column(statement: *const Statement, index: i32) Column {
   if length == 0 {
     return Column{ kind: result_kind, bytes: "", ok: true }
   }
-  return Column{ kind: result_kind, bytes: #slice(pointer, #cast(usize, length)), ok: true }
+  return Column{ kind: result_kind, bytes: #slice(pointer, length), ok: true }
 }

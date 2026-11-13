@@ -18,6 +18,10 @@ import shutil
 import subprocess
 import tempfile
 
+# These checks name individual functions (remarks, symbols, check messages,
+# per-function compiler hooks), so keep every call out of line.
+os.environ['DYN_NO_INLINE'] = '1'
+
 ROOT = Path(os.environ.get('ROOT', Path(__file__).resolve().parents[1])).resolve()
 BUILD = Path(os.environ.get('BUILD', ROOT/'build')).resolve()
 DYN = str(Path(os.environ.get('DYN', BUILD/'dyn-release')).resolve())
@@ -103,7 +107,7 @@ def build_adapter(work):
         'if (!strcmp(s->f->name,"wide")) length = ssa_load_value(s, ssa_local_address(s, 0), DYN_TYPE_U64, NULL);\n    '+anchor)
     (work/'ssa.inc').write_text(source)
     source = soft.replace_once((ROOT/'src/backend/driver.c').read_text(),
-        '{"dyn_panic", "dyn_trace_push"', '{"oraclepanic", "dyn_trace_push"')
+        '{"dyn_panic", "dyn_trace_start"', '{"oraclepanic", "dyn_trace_start"')
     anchor = 'runtime_call(ctx, 0); isa_trap(ctx); reachable=false;'
     source = soft.replace_once(source, anchor,
         'if (!strcmp(f->name,"wide")) isa_load(ctx, isa_argument(ctx,1), ctx->local_offsets[0]);\n      '+anchor)
@@ -179,7 +183,7 @@ def main():
                 tw = work/t
                 tw.mkdir()
                 cpacr = 'unsigned cpacr(void){'+('return 0;' if rv else 'return *(volatile unsigned*)0xe000ed88;')+'}'
-                check = 'if cpacr() & 0x00f00000 != 0 { #panic("FPU enabled") }\n' if issoft and not rv else ''
+                check = 'if (cpacr() & 0x00f00000) != 0 { #panic("FPU enabled") }\n' if issoft and not rv else ''
                 obj = object_file(tw, 'unsigned opaque(void){return 1;} '+cpacr, ff, rv)
                 for name, body, expected in CASES:
                     project = tw/name

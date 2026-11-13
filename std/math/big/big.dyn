@@ -115,9 +115,9 @@ fn add_magnitude(arena: *mem.Arena, a: []const u32, b: []const u32) []u32 {
   result := mem.push_array(u32, arena, #len(long) + 1)
   carry: u64 = 0
   for i in 0..#len(long) {
-    sum := #cast(u64, long[i]) + carry
+    sum := long[i] + carry
     if i < #len(short) {
-      sum += #cast(u64, short[i])
+      sum += short[i]
     }
     result[i] = #cast(u32, sum & 0xffffffff)
     carry = sum >> 32
@@ -133,14 +133,13 @@ fn subtract_magnitude(arena: *mem.Arena, a: []const u32, b: []const u32) []u32 {
   for i in 0..#len(a) {
     subtrahend := borrow
     if i < #len(b) {
-      subtrahend += #cast(u64, b[i])
+      subtrahend += b[i]
     }
     minuend := #cast(u64, a[i])
     if minuend >= subtrahend {
       result[i] = #cast(u32, minuend - subtrahend)
       borrow = 0
-    }
-    else {
+    } else {
       result[i] = #cast(u32, minuend + 4294967296 - subtrahend)
       borrow = 1
     }
@@ -171,7 +170,7 @@ pub fn multiply(arena: *mem.Arena, a: Int, b: Int) Int {
     carry: u64 = 0
     left := #cast(u64, a.limbs[i])
     for j in 0..#len(b.limbs) {
-      product := left * #cast(u64, b.limbs[j]) + #cast(u64, result[i + j]) + carry
+      product := left * b.limbs[j] + result[i + j] + carry
       result[i + j] = #cast(u32, product & 0xffffffff)
       carry = product >> 32
     }
@@ -222,7 +221,7 @@ fn divide_magnitude(arena: *mem.Arena, a: []const u32, b: []const u32, quotient:
     numerator := #cast(u64, dividend[j + n]) << 32 | #cast(u64, dividend[j + n - 1])
     estimate := numerator / top
     rest := numerator % top
-    for estimate > 0xffffffff || estimate * next > (rest << 32 | #cast(u64, dividend[j + n - 2])) {
+    for estimate > 0xffffffff || estimate * next > (rest << 32 | dividend[j + n - 2]) {
       estimate -= 1
       rest += top
       if rest > 0xffffffff {
@@ -233,16 +232,16 @@ fn divide_magnitude(arena: *mem.Arena, a: []const u32, b: []const u32, quotient:
     borrow: i64 = 0
     carry: u64 = 0
     for i in 0..n {
-      product := estimate * #cast(u64, divisor[i]) + carry
+      product := estimate * divisor[i] + carry
       carry = product >> 32
-      difference := #cast(i64, dividend[i + j]) - borrow - #cast(i64, product & 0xffffffff)
+      difference := dividend[i + j] - borrow - #cast(i64, product & 0xffffffff)
       dividend[i + j] = #cast(u32, #bitcast(u64, difference) & 0xffffffff)
       borrow = 0
       if difference < 0 {
         borrow = 1
       }
     }
-    difference := #cast(i64, dividend[j + n]) - borrow - #cast(i64, carry)
+    difference := dividend[j + n] - borrow - #cast(i64, carry)
     dividend[j + n] = #cast(u32, #bitcast(u64, difference) & 0xffffffff)
     if difference < 0 {
       // The estimate was one too large: add the divisor back.
@@ -252,7 +251,7 @@ fn divide_magnitude(arena: *mem.Arena, a: []const u32, b: []const u32, quotient:
         sum = #cast(u64, dividend[i + j]) + #cast(u64, divisor[i]) + (sum >> 32)
         dividend[i + j] = #cast(u32, sum & 0xffffffff)
       }
-      dividend[j + n] = #cast(u32, (#cast(u64, dividend[j + n]) + (sum >> 32)) & 0xffffffff)
+      dividend[j + n] = #cast(u32, (dividend[j + n] + (sum >> 32)) & 0xffffffff)
     }
     quotient[j] = #cast(u32, estimate)
   }
@@ -281,7 +280,7 @@ pub fn divide(arena: *mem.Arena, a: Int, b: Int) Division {
     at := #len(a.limbs)
     for at != 0 {
       at -= 1
-      current := rest << 32 | #cast(u64, a.limbs[at])
+      current := rest << 32 | a.limbs[at]
       quotient[at] = #cast(u32, current / divisor)
       rest = current % divisor
     }
@@ -389,7 +388,7 @@ pub fn gcd(arena: *mem.Arena, a: Int, b: Int) Int {
 
 fn digit_value(byte: u8) u32 {
   if byte >= '0' && byte <= '9' {
-    return #cast(u32, byte - '0')
+    return byte - '0'
   }
   if byte >= 'a' && byte <= 'z' {
     return #cast(u32, byte - 'a') + 10
@@ -462,9 +461,9 @@ pub fn format(arena: *mem.Arena, value: Int, base: u32) []u8 {
     at := length
     for at != 0 {
       at -= 1
-      current := rest << 32 | #cast(u64, work[at])
-      work[at] = #cast(u32, current / #cast(u64, base))
-      rest = current % #cast(u64, base)
+      current := rest << 32 | work[at]
+      work[at] = #cast(u32, current / base)
+      rest = current % base
     }
     for length != 0 && work[length - 1] == 0 {
       length -= 1
@@ -472,8 +471,7 @@ pub fn format(arena: *mem.Arena, value: Int, base: u32) []u8 {
     digit := #cast(u8, rest)
     if digit < 10 {
       output[capacity - 1 - count] = '0' + digit
-    }
-    else {
+    } else {
       output[capacity - 1 - count] = 'a' + digit - 10
     }
     count += 1

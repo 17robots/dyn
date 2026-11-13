@@ -45,8 +45,7 @@ fn operation_failure(connection: Connection, status: i32) Result {
   code := ssl_error(connection, status)
   if code == ErrorWantRead {
     kind = ErrorKind.WantRead
-  }
-  else if code == ErrorWantWrite {
+  } else if code == ErrorWantWrite {
     kind = ErrorKind.WantWrite
   }
   return Result{ count: 0, error: kind, provider_code: provider_error(), provider_status: code, ok: false }
@@ -166,7 +165,7 @@ pub fn selected_alpn(connection: Connection) []const u8 {
     return ""
   }
   bytes := #cast(*const u8, selected)
-  return #slice(bytes, #cast(usize, length))
+  return #slice(bytes, length)
 }
 
 // Caller owns the returned reference and must call certificate_free_owned.

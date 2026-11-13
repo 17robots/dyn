@@ -1,4 +1,5 @@
 use "std/io" io
+use "std/os/linux/sys"
 #target(kernel: linux)
 
 // Blocked signals are read from a signalfd. Numbers: SIGHUP 1, SIGINT 2,
@@ -19,15 +20,15 @@ fn mask_of(set: Set) u64 {
 
 fn platform_watch(set: Set) WatchResult {
   mask := mask_of(set)
-  code := #syscall(14, 0, &mask, 0, 8)
+  code := #syscall(sys.RtSigprocmask, 0, &mask, 0, 8)
   if code < 0 {
-    return WatchResult{ failure: io.Failure{ kind: io.linux(code), native: code } }
+    return WatchResult{ failure: io.linux_failure(code) }
   }
   // SFD_NONBLOCK | SFD_CLOEXEC.
-  descriptor := #syscall(289, -1, &mask, 8, 526336)
+  descriptor := #syscall(sys.Signalfd4, -1, &mask, 8, 526336)
   if descriptor < 0 {
-    _ = #syscall(14, 1, &mask, 0, 8)
-    return WatchResult{ failure: io.Failure{ kind: io.linux(descriptor), native: descriptor } }
+    _ = #syscall(sys.RtSigprocmask, 1, &mask, 0, 8)
+    return WatchResult{ failure: io.linux_failure(descriptor) }
   }
   return WatchResult{ value: Watch{ handle: descriptor, set: set, active: true } }
 }
@@ -48,7 +49,7 @@ fn kind_of(number: u32) Kind {
 fn platform_next(state: *Watch, block: bool) Next {
   info: [128]u8 = []
   for true {
-    count := #syscall(0, state.handle, &info[0], 128)
+    count := #syscall(sys.Read, state.handle, &info[0], 128)
     if count == 128 {
       number := #cast(u32, info[0]) | #cast(u32, info[1]) << 8 | #cast(u32, info[2]) << 16 | #cast(u32, info[3]) << 24
       return Next{ value: kind_of(number), found: true }
@@ -65,27 +66,26 @@ fn platform_next(state: *Watch, block: bool) Next {
       entry[2] = #cast(u8, descriptor >> 16 & 255)
       entry[3] = #cast(u8, descriptor >> 24)
       entry[4] = 1
-      waited := #syscall(271, &entry[0], 1, 0, 0, 8)
+      waited := #syscall(sys.Ppoll, &entry[0], 1, 0, 0, 8)
       if waited < 0 && waited != -4 {
-        return Next{ failure: io.Failure{ kind: io.linux(waited), native: waited } }
+        return Next{ failure: io.linux_failure(waited) }
       }
-    }
-    else if count != -4 {
+    } else if count != -4 {
       if count >= 0 {
         return Next{ failure: io.Failure{ kind: io.Kind.System } }
       }
-      return Next{ failure: io.Failure{ kind: io.linux(count), native: count } }
+      return Next{ failure: io.linux_failure(count) }
     }
   }
   return Next{}
 }
 
 fn platform_close(state: *Watch) Result {
-  code := #syscall(3, state.handle)
+  code := #syscall(sys.Close, state.handle)
   if code < 0 {
-    return Result{ failure: io.Failure{ kind: io.linux(code), native: code } }
+    return Result{ failure: io.linux_failure(code) }
   }
   mask := mask_of(state.set)
-  _ = #syscall(14, 1, &mask, 0, 8)
+  _ = #syscall(sys.RtSigprocmask, 1, &mask, 0, 8)
   return Result{}
 }

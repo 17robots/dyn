@@ -126,7 +126,7 @@ for name, ct, dt, ci, di, checks in (
               f'fn local_{key}({",".join(dp)}) {dt} {{ if {bad} {{ #panic("incoming {key}") }}\nreturn x }}']
         B += [f'if cb_{key}(local_{key}) != 1 {{ #panic("callback {key}") }}',
               f'if cb_{key}(c_{key}) != 1 {{ #panic("C control {key}") }}',
-              f'x_{key} := {di}', f'r_{key} := c_{key}({",".join(args).replace("x",f"x_{key}")})']
+              f'x_{key}: {dt} = {di}', f'r_{key} := c_{key}({",".join(args).replace("x",f"x_{key}")})']
         for field, bits, union in checks:
             width = 32 if union == 'Fbits' else 64
             B += [f'if #bitcast(u{width},r_{key}{field}) != {bits} {{ #panic("outgoing {key}") }}']

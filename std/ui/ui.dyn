@@ -53,10 +53,10 @@ pub fn intersect(a, b: Rect) Rect {
   x := #cast(i64, a.x)
   y := #cast(i64, a.y)
   if b.x > a.x {
-    x = #cast(i64, b.x)
+    x = b.x
   }
   if b.y > a.y {
-    y = #cast(i64, b.y)
+    y = b.y
   }
   right := #cast(i64, a.x) + #cast(i64, a.width)
   bottom := #cast(i64, a.y) + #cast(i64, a.height)
@@ -134,8 +134,7 @@ pub fn end(context: *Context) {
   if context.input.tab && !context.focus_moved {
     context.focused = context.first_focus
     context.focus_target = context.first_target
-  }
-  else if !context.focus_seen {
+  } else if !context.focus_seen {
     context.focused = 0
   }
   // Focus can move after an earlier widget was submitted. Draw one final ring
@@ -195,12 +194,7 @@ fn emit(context: *Context, kind: Kind, bounds: Rect, tint: Color, text: []const 
     _ = mem.copy(copied, text)
     command.text = copied
   }
-  if context.last == nil {
-    context.first = command
-  }
-  else {
-    context.last.next = command
-  }
+  if context.last == nil { context.first = command } else { context.last.next = command }
   context.last = command
   return command
 }
@@ -345,11 +339,11 @@ pub fn slider(context: *Context, id: u64, bounds: Rect, value: *i32, low, high: 
   response := interact(context, id, bounds, enabled)
   before := value.*
   current := #cast(i64, before)
-  if current < #cast(i64, low) {
-    current = #cast(i64, low)
+  if current < low {
+    current = low
   }
-  if current > #cast(i64, high) {
-    current = #cast(i64, high)
+  if current > high {
+    current = high
   }
   range := #cast(i64, high) - #cast(i64, low)
   if response.captured && bounds.width > 1 {
@@ -361,13 +355,13 @@ pub fn slider(context: *Context, id: u64, bounds: Rect, value: *i32, low, high: 
     if position > width {
       position = width
     }
-    current = #cast(i64, low) + (position * range + width / 2) / width
+    current = low + (position * range + width / 2) / width
   }
   if enabled && response.focused && !context.input.tab {
-    if context.input.left && current > #cast(i64, low) {
+    if context.input.left && current > low {
       current -= 1
     }
-    if context.input.right && current < #cast(i64, high) {
+    if context.input.right && current < high {
       current += 1
     }
   }
@@ -377,8 +371,8 @@ pub fn slider(context: *Context, id: u64, bounds: Rect, value: *i32, low, high: 
   response.changed = value.* != before
   rectangle(context, bounds, background(context, response, enabled))
   if bounds.width > 0 {
-    position := (current - #cast(i64, low)) * (#cast(i64, bounds.width) - 1) / range
-    rectangle(context, Rect{ x: coordinate(#cast(i64, bounds.x) + position), y: bounds.y, width: 1, height: bounds.height }, context.style.accent)
+    position := (current - low) * (#cast(i64, bounds.width) - 1) / range
+    rectangle(context, Rect{ x: coordinate(bounds.x + position), y: bounds.y, width: 1, height: bounds.height }, context.style.accent)
   }
   return response
 }

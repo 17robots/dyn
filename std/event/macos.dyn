@@ -1,17 +1,18 @@
 use "std/io" io
+use "std/os/macos/sys"
 #target(kernel: darwin)
 struct Kevent { ident: u64, filter: i16, flags: u16, filter_flags: u32, data: i64, user: u64 }
 struct Timeout { seconds: i64, nanoseconds: i64 }
 fn native_open() net.Result {
-  value := #syscall(362)
+  value := #syscall(sys.Kqueue)
   if value < 0 {
-    return net.Result{ failure: io.Failure{ kind: io.darwin(value), native: value } }
+    return net.Result{ failure: io.darwin_failure(value) }
   }
   return net.Result{ value: value }
 }
 fn native_close(handle: isize) Result {
-  code := #syscall(6, handle)
-  return Result{ failure: io.Failure{ kind: io.darwin(code), native: code } }
+  code := #syscall(sys.Close, handle)
+  return Result{ failure: io.darwin_failure(code) }
 }
 fn native_control(queue: *Queue, index: usize, entry: Entry) Result {
   old := queue.entries[index]
@@ -33,13 +34,13 @@ fn native_control(queue: *Queue, index: usize, entry: Entry) Result {
         flags = 1
         descriptor = entry.descriptor
       }
-      changes[count] = Kevent{ ident: #cast(u64, descriptor), filter: filter, flags: flags, user: #cast(u64, index) }
+      changes[count] = Kevent{ ident: #cast(u64, descriptor), filter: filter, flags: flags, user: index }
       count += 1
     }
   }
-  code := #syscall(363, queue.handle, &changes[0], count, 0, 0, 0)
+  code := #syscall(sys.Kevent, queue.handle, &changes[0], count, 0, 0, 0)
   if code < 0 {
-    return Result{ failure: io.Failure{ kind: io.darwin(code), native: code } }
+    return Result{ failure: io.darwin_failure(code) }
   }
   return Result{}
 }
@@ -48,13 +49,13 @@ fn native_wait(arena: *mem.Arena, queue: *Queue, milliseconds: i32) WaitResult {
   timeout := Timeout{}
   pointer: *Timeout = nil
   if milliseconds >= 0 {
-    timeout.seconds = #cast(i64, (milliseconds / 1000))
+    timeout.seconds = (milliseconds / 1000)
     timeout.nanoseconds = #cast(i64, (milliseconds % 1000)) * 1000000
     pointer = &timeout
   }
-  code := #syscall(363, queue.handle, 0, 0, &native[0], #len(native), pointer)
+  code := #syscall(sys.Kevent, queue.handle, 0, 0, &native[0], #len(native), pointer)
   if code < 0 {
-    return WaitResult{ failure: io.Failure{ kind: io.darwin(code), native: code } }
+    return WaitResult{ failure: io.darwin_failure(code) }
   }
   events := mem.push_array(Event, arena, #cast(usize, code))
   for i in 0..#len(events) {

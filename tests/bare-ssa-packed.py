@@ -183,8 +183,8 @@ def main():
                         bd = board + ['-cpu', 'sifive-e31']
                     else:
                         source = 'extern fn cpacr() u32\n' + source.replace('fn main() {',
-                            'fn main() { if cpacr() & 0x00f00000 != 0 { #panic("FPU") }').replace(
-                            '_ = io.write_all', 'if cpacr() & 0x00f00000 != 0 { #panic("FPU exit") }\n_ = io.write_all')
+                            'fn main() { if (cpacr() & 0x00f00000) != 0 { #panic("FPU") }').replace(
+                            '_ = io.write_all', 'if (cpacr() & 0x00f00000) != 0 { #panic("FPU exit") }\n_ = io.write_all')
                 (project/'main.dyn').write_text(source)
                 (work/'oracle.c').write_text(c)
                 obj = work/'oracle.o'

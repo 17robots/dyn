@@ -5,6 +5,7 @@
 #include "dyn_timing.h"
 #include "elf64.h"
 #include "elf_class.h"
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,8 +19,10 @@
 /* Per-section and per-object byte bound; buffers grow on demand up to it. */
 #define LIMIT (1024u * 1024u * 1024u)
 /* Fixed per-object capacities; exceeding one fails emission explicitly. */
-#define MAX_SYMBOLS 32768
 #define MAX_LOCALS 65536
+/* Functions and globals in one object. Relocations name shard placeholders
+   from SHARD_RUNTIME_SYMBOL (0x3f000000) up, so symbols stay well below. */
+#define SYMBOL_LIMIT (1u << 28)
 #define MAX_SCRATCH (1u << 21) /* frame eightbytes: 16 MiB */
 #define MAX_AGGREGATE (1u << 24)
 #define MAX_LAYOUT (UINT32_MAX - 15u) /* Sparse heap layouts; frame limits remain separate. */
@@ -47,7 +50,7 @@ static double backend_timing(const DynContext *context, struct timespec *start) 
   *start = now;
   return ms;
 }
-static const char *const runtime_names[] = {"dyn_panic", "dyn_trace_push", "dyn_trace_pop", "dyn_unwind_set", "dyn_unwind_link", "dyn_unwind_unlink", "dyn_unwind_continue", "fmod", "fmodf", "dyn_syscall6", "__chkstk", "dyn_check_failed",
+static const char *const runtime_names[] = {"dyn_panic", "dyn_trace_start", "dyn_trace_pop", "dyn_unwind_set", "dyn_unwind_link", "dyn_unwind_unlink", "dyn_unwind_continue", "fmod", "fmodf", "dyn_syscall6", "__chkstk", "dyn_check_failed",
   "dyn_rv32_divide", "dyn_rv32_multiply", "dyn_rv32_int_to_float", "dyn_rv32_float_to_int", "dyn_stack_overflow",
   "dyn_soft_f32_add", "dyn_soft_f32_sub", "dyn_soft_f32_mul", "dyn_soft_f32_div", "dyn_soft_f32_rem", "dyn_soft_f32_eq", "dyn_soft_f32_ne", "dyn_soft_f32_lt", "dyn_soft_f32_le", "dyn_soft_f32_gt", "dyn_soft_f32_ge", "dyn_soft_f32_unordered", "dyn_soft_i64_to_f32", "dyn_soft_f32_to_i64", "dyn_soft_u64_to_f32", "dyn_soft_f32_to_u64", "dyn_soft_f64_add", "dyn_soft_f64_sub", "dyn_soft_f64_mul", "dyn_soft_f64_div", "dyn_soft_f64_rem", "dyn_soft_f64_eq", "dyn_soft_f64_ne", "dyn_soft_f64_lt", "dyn_soft_f64_le", "dyn_soft_f64_gt", "dyn_soft_f64_ge", "dyn_soft_f64_unordered", "dyn_soft_i64_to_f64", "dyn_soft_f64_to_i64", "dyn_soft_u64_to_f64", "dyn_soft_f64_to_u64", "dyn_soft_f32_to_f64", "dyn_soft_f64_to_f32"};
 /* Thumb-2 names of the 32-bit helpers, in the same order. */
@@ -65,71 +68,70 @@ typedef struct { DynType type; uint32_t offset; } ArrayPart;
    bytes inside an aggregate; leaf is the scalar type of an array leaf. */
 typedef struct { uint32_t offset, size; int cls; DynType leaf; uint32_t stack; } AbiPart;
 typedef struct {
-  unsigned function_alignment; /* Optimized x86 entry and section alignment. */
   Bytes text, rodata, globals_data, constants_data; /* globals_data tracks zero-fill size only. */
   BackendDwarf *dwarf;
   const DynSource *debug_source;
   const DynLocationIndex *debug_locations;
   Elf64_Rela *constant_relocations;
   size_t constant_relocation_count, constant_relocation_capacity;
-  bool global_static[MAX_SYMBOLS];
-  bool function_live[MAX_SYMBOLS];
-  bool global_live[MAX_SYMBOLS];
+  /* Per function or global, sized for the program by object_target_mode:
+     symbol_capacity is the larger count plus two (the initializer and the
+     DLL entry). */
+  size_t symbol_capacity;
+  bool *global_static;
+  bool *function_live;
+  bool *global_live;
   unsigned char *expression_live; /* reachability's expression marks; null keeps all */
   double ssa_build_ms, ssa_optimize_ms, ssa_allocate_ms, ssa_emit_ms, serialization_ms;
   /* SSA preparations made ahead on worker threads, indexed by function, and
      each IR string's first index with identical contents. */
   struct SsaPrepared **ssa_prepared; size_t ssa_prepared_count;
   struct SsaPipeline *ssa_pipeline;
+  struct SsaPool *ssa_pool; /* the pipeline's, while it runs */
   uint32_t *literal_canonical;
-  uint32_t constant_offsets[MAX_SYMBOLS];
+  uint32_t *constant_offsets;
   Elf64_Rela *relocations;
   size_t relocation_capacity;
   size_t relocation_count, runtime_base, runtime_count;
-  unsigned function_symbols[MAX_SYMBOLS], global_symbols[MAX_SYMBOLS];
-  unsigned symbol_remap[2 * MAX_SYMBOLS + RUNTIME_COUNT];
+  unsigned *function_symbols, *global_symbols;
   /* Production symbol policy: local bodies named like a foreign link name or exit/_exit get ".dyn". */
-  bool function_suffixed[MAX_SYMBOLS];
+  bool *function_suffixed;
   unsigned initializer_symbol, initializer_flag_symbol, first_global, dll_entry_symbol;
   bool shared;
   unsigned runtime_index[RUNTIME_COUNT], stack_slots, frame_bytes, local_words;
   uint32_t bare_stack_limit; /* Includes 4 KiB headroom for bounded assembly helpers. */
-  uint32_t local_offsets[MAX_LOCALS];
-  signed char allocator_registers[MAX_LOCALS];
   unsigned allocator_local_count, allocator_used;
   uint32_t allocator_save[4];
-  bool local_alias[MAX_LOCALS];
-  struct { uint32_t id; size_t condition, breaks, continues; unsigned defer_base; } loops[MAX_DEPTH];
   unsigned loop_depth;
   const DynIrProgram *active_ir;
   uint32_t defer_ids[MAX_DEFERS], defer_count, unwind_offset, return_offset, call_offset, sret_offset;
-  uint32_t captured_offsets[MAX_NODES], statement_scratch[MAX_NODES], temporary_offsets[MAX_NODES];
+  /* Debug builds: stack traces walk frame pointers and look each return
+     address up in a table of function ranges and pc-to-line rows, which
+     the object carries in its constants (see trace_table_write). main hands
+     the table's header to dyn_trace_start; nothing runs per call. */
+  /* The symbol of std/mem's zero_bytes_fast, or 0; see ssa_zero_calls. */
+  unsigned zero_symbol;
+  bool trace_table;
+  uint32_t trace_header; /* constants offset of {text start, table} */
+  unsigned trace_base_symbol; uint32_t trace_base_offset; /* the first traced function */
+  struct TraceRow { uint32_t pc, line; } *trace_rows;
+  size_t trace_row_count, trace_row_capacity, trace_row_mark;
+  struct TraceFunction { uint32_t start, end, row_first, row_count, name, name_length; } *trace_functions;
+  size_t trace_function_count, trace_function_capacity;
+  char *trace_names; size_t trace_names_size, trace_names_capacity;
   /* Struct and array literals whose every field is constant are laid out in
-     the constants section once; literal_offsets holds offset + 1 from
-     literals_symbol, or 0. */
-  uint32_t literal_offsets[MAX_NODES];
+     the constants section once, after literals_symbol (see literal_offsets). */
   unsigned literals_symbol;
   /* Read-only byte strings already written, by content, so each is stored
      once. Entries past a rolled-back end of rodata are ignored. */
   struct StoredString { size_t offset, length; } *strings;
   size_t string_capacity, string_count;
-  bool visited_expr[MAX_NODES];
-  uint32_t pack_offsets[MAX_NODES];
-  uint32_t copy_offsets[MAX_NODES]; /* AAPCS64 caller copies of large struct arguments */
-  /* Ids written while sizing one function; reset touches only these, not the program. */
-  uint32_t touched_exprs[2 * MAX_NODES], touched_stmts[MAX_NODES];
-  size_t touched_expr_count, touched_stmt_count;
+  size_t touched_expr_count, touched_stmt_count; /* see touched_exprs */
   bool unwinding;
   unsigned cleanup_depth;
   bool debug_mode, relocation_failed;
   bool report; /* false: the caller selects another backend silently */
-  ArrayPart call_leaves[512];
-  AbiPart call_parts[512];
-  /* DWARF lexical scopes: [begin, end) text offsets per local; zero end means
-     the variable is visible in the whole function. */
-  size_t local_scope_begin[MAX_LOCALS], local_scope_end[MAX_LOCALS];
-  uint32_t scope_stack[MAX_LOCALS];
-  unsigned scope_count;
+  unsigned scope_count; /* see local_scope_begin */
   bool vectorize, optimization_remarks;
   bool byte_fill; /* constant fills of global byte arrays become one fill */
   bool bmi2; /* Host-selected flag-preserving variable shifts. */
@@ -137,17 +139,13 @@ typedef struct {
   bool rv64;
   bool rv32; /* RV32 pairs each 64-bit model register (rv32.inc) */
   bool t32; /* Thumb-2 (ARMv7E-M) with the same 32-bit model (t32.inc) */
-  uint32_t rv_anchors[MAX_NODES];
   unsigned rv_anchor_count;
   bool soft_float; /* Explicit software FP target; independent of variadic ABI. */
   bool a64; /* AArch64 encodings, relocations and ABI instead of x86-64 */
   bool winarm64; /* Windows AArch64 calling convention and COFF objects. */
   bool win64; /* x86-64 Windows: Microsoft x64 calling convention and COFF objects */
   bool darwin; /* macOS: Apple's AAPCS64 variant and Mach-O objects */
-  /* Windows unwind data: per function {text start, prologue length, frame bytes}. */
-  uint32_t unwind_frames[MAX_SYMBOLS + 2][4]; /* start, prologue bytes, frame bytes, saved home registers */
-  unsigned unwind_frame_count;
-  uint32_t arm_epilogues[MAX_SYMBOLS * 8][2]; /* frame index, text offset */
+  unsigned unwind_frame_count; /* see unwind_frames */
   unsigned arm_epilogue_count;
   unsigned *dwarf_types; /* DynType -> DWARF type id + 1 for this object; 1 means unknown */
   size_t message_offsets[GUARD_COUNT], message_lengths[GUARD_COUNT];
@@ -170,7 +168,6 @@ typedef struct {
      the same way emit the cleanup once per defer stack and jump to it. */
   struct { unsigned kind, count, first; size_t at; } ladders[128];
   unsigned ladder_count, ladder_pool_used;
-  uint32_t ladder_pool[16384];
   /* Linux x86-64 table-driven unwinding. Each function gets a frame record
      (where it saves callee-saved registers) and each protected direct call a
      landing record (return address to landing pad); both go to the
@@ -185,6 +182,44 @@ typedef struct {
   bool ssa_frame_valid;
   uint32_t ssa_frame_mask;
   int32_t ssa_frame_offsets[5];
+  /* x86-64 release builds start a function with loops on a 16-byte
+     boundary, so its loop headers align the same wherever it lands; the
+     driver's symbol starts after these padding bytes. */
+  unsigned ssa_entry_pad;
+  /* Set in an emission shard: a worker's private context, whose read-only
+     data goes to the shard's own list for the driver to place in order. */
+  struct SsaShard *shard;
+  /* ---- Arrays: per-node and per-local scratch, and outputs that start
+     empty. Emission shards (ssa_shard_new) copy every field above this
+     line and leave these zeroed, so they cost nothing until touched. ---- */
+  unsigned *symbol_remap; /* 2 * symbol_capacity + RUNTIME_COUNT */
+  uint32_t local_offsets[MAX_LOCALS];
+  signed char allocator_registers[MAX_LOCALS];
+  bool local_alias[MAX_LOCALS];
+  struct { uint32_t id; size_t condition, breaks, continues; unsigned defer_base; } loops[MAX_DEPTH];
+  /* Per expression or statement of the program being emitted, node_capacity
+     of each (object_target_mode sizes them; touched_exprs twice that). */
+  size_t node_capacity;
+  uint32_t *captured_offsets, *statement_scratch, *temporary_offsets;
+  /* Offset + 1 of each constant literal from literals_symbol, or 0. */
+  uint32_t *literal_offsets;
+  bool *visited_expr;
+  uint32_t *pack_offsets;
+  uint32_t *copy_offsets; /* AAPCS64 caller copies of large struct arguments */
+  /* Ids written while sizing one function; reset touches only these, not the program. */
+  uint32_t *touched_exprs, *touched_stmts;
+  ArrayPart call_leaves[512];
+  AbiPart call_parts[512];
+  /* DWARF lexical scopes: [begin, end) text offsets per local; zero end means
+     the variable is visible in the whole function. */
+  size_t local_scope_begin[MAX_LOCALS], local_scope_end[MAX_LOCALS];
+  uint32_t scope_stack[MAX_LOCALS];
+  uint32_t rv_anchors[MAX_NODES];
+  /* Windows unwind data per function: text start, prologue bytes, frame
+     bytes, saved home registers; symbol_capacity of them. */
+  uint32_t (*unwind_frames)[4];
+  uint32_t (*arm_epilogues)[2]; /* frame index, text offset; 8 * symbol_capacity */
+  uint32_t ladder_pool[16384];
 } BackendContext;
 /* Bit order of frame record masks: rbx, r12, r13, r14, r15. */
 static int unwind_register_bit(unsigned reg) {
@@ -273,8 +308,49 @@ static uint64_t bytes_hash(const char *s, size_t length) {
   return hash;
 }
 static size_t literal_store(BackendContext *ctx, const char *s, size_t length);
+/* ---- Emission shards ----
+
+   A pipeline worker emits a function into a context of its own whose text
+   starts at offset zero. What only the whole object can number is named
+   within the shard: read-only data by piece, through a placeholder symbol
+   or a tagged addend of rodata symbol 1; runtime functions by a placeholder
+   symbol; RISC-V anchors by their index in the shard. ssa_shard_merge gives
+   each its place when the driver reaches the function, in the order serial
+   emission would have used. */
+enum { SHARD_RUNTIME_SYMBOL = 0x3f000000u, SHARD_LITERAL_SYMBOL = 0x40000000u };
+#define SHARD_TAG (INT64_C(1) << 60)
+typedef struct SsaShard {
+  /* Strings to intern, or raw words placed at an alignment and never shared. */
+  struct SsaShardPiece { size_t at, length; uint32_t align; bool raw; } *pieces;
+  uint32_t piece_count, piece_capacity;
+  char *bytes; size_t byte_count, byte_capacity;
+  bool aligned_entry; /* the function starts on a 16-byte boundary (ssa_aligned_entry) */
+} SsaShard;
+/* The rodata addend that names the start of piece. */
+static int64_t shard_tag(uint32_t piece) { return SHARD_TAG + ((int64_t)piece << 32); }
+static size_t shard_piece(BackendContext *ctx, const char *s, size_t length, uint32_t align, bool raw) {
+  SsaShard *shard = ctx->shard;
+  if (shard->piece_count == shard->piece_capacity) {
+    uint32_t capacity = shard->piece_capacity ? 2 * shard->piece_capacity : 64;
+    void *grown = realloc(shard->pieces, capacity * sizeof(*shard->pieces));
+    if (!grown) { ctx->rodata.failed = true; return 0; }
+    shard->pieces = grown; shard->piece_capacity = capacity;
+  }
+  if (length > shard->byte_capacity - shard->byte_count) {
+    size_t capacity = shard->byte_capacity ? 2 * shard->byte_capacity : 4096;
+    while (capacity - shard->byte_count < length) capacity *= 2;
+    char *grown = realloc(shard->bytes, capacity);
+    if (!grown) { ctx->rodata.failed = true; return 0; }
+    shard->bytes = grown; shard->byte_capacity = capacity;
+  }
+  memcpy(shard->bytes + shard->byte_count, s, length);
+  shard->pieces[shard->piece_count] = (struct SsaShardPiece){shard->byte_count, length, align, raw};
+  shard->byte_count += length;
+  return (size_t)shard_tag(shard->piece_count++);
+}
 static size_t literal(BackendContext *ctx, const char *s, size_t length) {
   if (!length) return 0;
+  if (ctx->shard) return shard_piece(ctx, s, length, 1, false);
   if (2 * (ctx->string_count + 1) > ctx->string_capacity) {
     size_t capacity = ctx->string_capacity ? 2 * ctx->string_capacity : 1024;
     struct StoredString *grown = calloc(capacity, sizeof(*grown));
@@ -304,6 +380,13 @@ static size_t literal_store(BackendContext *ctx, const char *s, size_t length) {
   ctx->rodata.n += length;
   return offset;
 }
+/* Raw words in read-only data at a 4-byte boundary, never shared. */
+static size_t rodata_words(BackendContext *ctx, const char *bytes, size_t length) {
+  if (ctx->shard) return shard_piece(ctx, bytes, length, 4, true);
+  static const char zeros[4] = {0};
+  if (ctx->rodata.n & 3) literal_store(ctx, zeros, 4 - (ctx->rodata.n & 3));
+  return literal_store(ctx, bytes, length);
+}
 static bool grow_relocations(Elf64_Rela **items, size_t *capacity) {
   size_t next = *capacity ? *capacity * 2 : 4096;
   if (next > LIMIT / sizeof(Elf64_Rela)) return false;
@@ -329,6 +412,26 @@ static void runtime_call(BackendContext *ctx, unsigned runtime) {
   if (!ctx->runtime_index[runtime]) ctx->runtime_index[runtime] = (unsigned)(ctx->runtime_base + ctx->runtime_count++);
   isa_call_symbol(ctx, ctx->runtime_index[runtime]);
 }
+/* Debug builds: code from pc on runs line, until the next row. A function's
+   emission starts again from trace_row_mark, so a retried or abandoned
+   emission leaves no rows behind. */
+static bool trace_row(BackendContext *ctx, size_t pc, unsigned line) {
+  if (!ctx->trace_table) return true;
+  if (ctx->trace_row_count > ctx->trace_row_mark) {
+    struct TraceRow *last = &ctx->trace_rows[ctx->trace_row_count - 1];
+    if (last->line == line) return true;
+    if (last->pc == pc) { last->line = line; return true; }
+  }
+  if (ctx->trace_row_count == ctx->trace_row_capacity) {
+    size_t capacity = ctx->trace_row_capacity ? 2 * ctx->trace_row_capacity : 1024;
+    void *grown = realloc(ctx->trace_rows, capacity * sizeof(*ctx->trace_rows));
+    if (!grown) return false;
+    ctx->trace_rows = grown; ctx->trace_row_capacity = capacity;
+  }
+  ctx->trace_rows[ctx->trace_row_count++] = (struct TraceRow){(uint32_t)pc, line};
+  return true;
+}
+
 #include "a64.inc"
 #include "rv64.inc"
 #include "rv32.inc"
@@ -336,6 +439,87 @@ static void runtime_call(BackendContext *ctx, unsigned runtime) {
 #include "isa.inc"
 #include "coff.inc"
 #include "macho.inc"
+static size_t align8(size_t n);
+static bool constant_relocation(BackendContext *ctx,uint32_t at,unsigned symbol,int64_t addend);
+/* Debug builds: main's first call is dyn_trace_start(&header). */
+static void trace_start_argument(BackendContext *ctx) {
+  isa_local_address(ctx, ctx->rv64 || ctx->a64 || ctx->rv32 || ctx->t32 ? R_A : ctx->win64 ? R_C : R_DI,
+                    ctx->literals_symbol, ctx->trace_header);
+}
+static void trace_start_call(BackendContext *ctx) {
+  trace_start_argument(ctx);
+  runtime_call(ctx, 1);
+}
+/* Debug builds: function at [start, end) of .text, named "name (path:" in
+   traces, with the rows emitted since trace_row_mark. */
+static bool trace_function(BackendContext *ctx, const DynIrFunction *f, const DynSource *source,
+                           const DynLocationIndex *locations, uint32_t start, unsigned symbol) {
+  const char *path = "?"; unsigned line, column;
+  dyn_location_get(locations, source, f->source_offset, &path, &line, &column);
+  char label[4096];
+  int length = snprintf(label, sizeof(label), "%s (%s:", f->debug_name ? f->debug_name : f->name, path ? path : "?");
+  if (length < 0) return false;
+  if ((size_t)length >= sizeof(label)) length = (int)sizeof(label) - 1;
+  if (ctx->trace_names_size + (size_t)length > ctx->trace_names_capacity) {
+    size_t capacity = ctx->trace_names_capacity ? 2 * ctx->trace_names_capacity : 4096;
+    while (capacity < ctx->trace_names_size + (size_t)length) capacity *= 2;
+    char *grown = realloc(ctx->trace_names, capacity);
+    if (!grown) return false;
+    ctx->trace_names = grown; ctx->trace_names_capacity = capacity;
+  }
+  if (ctx->trace_function_count == ctx->trace_function_capacity) {
+    size_t capacity = ctx->trace_function_capacity ? 2 * ctx->trace_function_capacity : 256;
+    void *grown = realloc(ctx->trace_functions, capacity * sizeof(*ctx->trace_functions));
+    if (!grown) return false;
+    ctx->trace_functions = grown; ctx->trace_function_capacity = capacity;
+  }
+  if (!ctx->trace_function_count) { ctx->trace_base_symbol = symbol; ctx->trace_base_offset = start; }
+  memcpy(ctx->trace_names + ctx->trace_names_size, label, (size_t)length);
+  ctx->trace_functions[ctx->trace_function_count++] = (struct TraceFunction){
+    start, (uint32_t)ctx->text.n, (uint32_t)ctx->trace_row_mark, (uint32_t)(ctx->trace_row_count - ctx->trace_row_mark),
+    (uint32_t)ctx->trace_names_size, (uint32_t)length};
+  ctx->trace_names_size += (size_t)length;
+  return true;
+}
+/* Debug builds: the stack trace table, appended to the constants after the
+   last function, and the header main hands to dyn_trace_start. The header
+   holds two pointers: the first traced function and the table. The table is
+   u32 words: magic "DYNT", version 1, flags (1: Thumb code addresses), the
+   offsets from a frame pointer of the caller's frame pointer and of the
+   return address, the first function's .text offset, .text size, function
+   count, row count, name bytes; then per function {start, end, first row,
+   row count, name offset, name length}, rows {pc, line}, and names. Offsets
+   are from .text; a row's line holds from its pc to the next row. */
+static bool trace_table_write(BackendContext *ctx) {
+  if (!ctx->trace_table || !ctx->trace_function_count || !ctx->literals_symbol) return true;
+  size_t functions = ctx->trace_function_count, rows = ctx->trace_row_count;
+  size_t bytes = 40 + 24 * functions + 8 * rows + ctx->trace_names_size;
+  size_t at = align8(ctx->constants_data.n);
+  if (bytes > LIMIT || at > LIMIT - bytes || !reserve(&ctx->constants_data, at + bytes)) return false;
+  memset(ctx->constants_data.data + ctx->constants_data.n, 0, at + bytes - ctx->constants_data.n);
+  ctx->constants_data.n = at + bytes;
+  unsigned char *out = ctx->constants_data.data + at;
+  /* Thumb frames: push {r3-r11, lr}, then r11 = sp - 4092. Every other
+     target saves the caller's frame pointer at fp and the return address
+     one 8-byte slot above it. */
+  uint32_t header[10] = {0x544e5944u, 1, ctx->t32 ? 1u : 0u, ctx->t32 ? 4092 + 32 : 0, ctx->t32 ? 4092 + 36 : 8,
+                         ctx->trace_base_offset, (uint32_t)ctx->text.n, (uint32_t)functions, (uint32_t)rows,
+                         (uint32_t)ctx->trace_names_size};
+  memcpy(out, header, sizeof(header));
+  for (size_t i = 0; i < functions; ++i) {
+    const struct TraceFunction *f = &ctx->trace_functions[i];
+    uint32_t record[6] = {f->start, f->end, f->row_first, f->row_count, f->name, f->name_length};
+    memcpy(out + 40 + 24 * i, record, sizeof(record));
+  }
+  for (size_t i = 0; i < rows; ++i) {
+    uint32_t row[2] = {ctx->trace_rows[i].pc, ctx->trace_rows[i].line};
+    memcpy(out + 40 + 24 * functions + 8 * i, row, sizeof(row));
+  }
+  if (ctx->trace_names_size) memcpy(out + 40 + 24 * functions + 8 * rows, ctx->trace_names, ctx->trace_names_size);
+  uint32_t pointer = ctx->rv32 || ctx->t32 ? 4 : 8;
+  return constant_relocation(ctx, ctx->trace_header, ctx->trace_base_symbol, 0) &&
+         constant_relocation(ctx, ctx->trace_header + pointer, ctx->literals_symbol, (int64_t)at);
+}
 static bool signed_scalar(DynType type) {
   return (type >= DYN_TYPE_I8 && type <= DYN_TYPE_I64) || type == DYN_TYPE_ISIZE;
 }
@@ -556,7 +740,25 @@ static void guard(BackendContext *ctx, const DynIrFunction *f, Cond success, uns
       runtime_call(ctx, RUNTIME_CHECK_FAILED); isa_trap(ctx); /* never returns */
     }
   } else {
-    isa_string_arguments(ctx, ctx->message_offsets[check], ctx->message_lengths[check]);
+    /* Debug index checks compare the index in C with the length in D;
+       dyn_check_failed reports both. */
+    bool values = ctx->debug_mode && check == GUARD_INDEX;
+    if (values) {
+      /* Third and fourth arguments; the name and kind follow in the first two.
+         ILP32 passes each u64 in a register pair after the packed kind
+         (a3:a4, a5:a6); AAPCS passes them on the stack after r2:r3. */
+      if (ctx->rv32) { rv_move(ctx, 13, 5); rv_move(ctx, 14, 19); rv_move(ctx, 15, 11); rv_move(ctx, 16, 20); }
+      else if (ctx->t32) {
+        t32_add_imm(ctx, T32_SP, T32_SP, -16);
+        t32_mem(ctx, T32_STR, t32_lo[R_C], T32_SP, 0); t32_mem(ctx, T32_STR, t32_high(ctx, R_C, T32_T1), T32_SP, 4);
+        t32_mem(ctx, T32_STR, t32_lo[R_D], T32_SP, 8); t32_mem(ctx, T32_STR, t32_high(ctx, R_D, T32_T1), T32_SP, 12);
+      }
+      else if (ctx->a64) { a64_word(ctx, 0xaa0903e2u); a64_word(ctx, 0xaa0103e3u); } /* mov x2, x9; mov x3, x1 */
+      else if (ctx->rv64) { rv_move(ctx, 12, 5); rv_move(ctx, 13, 11); }      /* mv a2, t0; mv a3, a1 */
+      else if (ctx->win64) CODE(0x49, 0x89, 0xc8, 0x49, 0x89, 0xd1);           /* mov r8, rcx; mov r9, rdx */
+      else CODE(0x48, 0x87, 0xd1);                                             /* xchg rcx, rdx */
+    }
+    isa_string_arguments(ctx, ctx->message_offsets[check], ctx->message_lengths[check] | (values ? 0x800000u : 0));
     runtime_call(ctx, RUNTIME_CHECK_FAILED); isa_trap(ctx); /* never returns */
   }
   ctx->stack_slots=saved_stack;
@@ -2034,12 +2236,6 @@ static void return_value(BackendContext *ctx, DynType type) {
     }
     isa_move(ctx, R_A, R_DI);
   }
-  if (ctx->debug_mode) {
-    if (aggregate(ir, type) && !sret) {
-      /* The aggregate snapshot may occupy rbp-8 itself in a zero-local function. */
-      runtime_call(ctx, 2); isa_lea(ctx, R_A, ctx->return_offset);
-    } else isa_trace_pop(ctx, descriptor(type));
-  }
   if (ctx->rv64 && aggregate(ir,type) && !sret) {if(!rv_struct_registers(ctx,ir,type,0,true))ctx->text.failed=true;isa_return(ctx);return;}
   if (ctx->rv32 && aggregate(ir,type) && !sret) {
     if (!rv32_struct_registers(ctx,ir,type,0,true)) ctx->text.failed=true;
@@ -2346,6 +2542,11 @@ static bool block_statements_value(BackendContext *ctx, const DynIrProgram *ir, 
       const char *path; unsigned line,column;
       dyn_location_get(ctx->debug_locations,ctx->debug_source,s->span.start_byte,&path,&line,&column);
       if (!backend_dwarf_line(ctx->dwarf,ctx->text.n,path,line,column,false)) return false;
+    }
+    if (ctx->trace_table && ctx->debug_locations) {
+      const char *path; unsigned line,column;
+      dyn_location_get(ctx->debug_locations,ctx->debug_source,s->span.start_byte,&path,&line,&column);
+      if (!trace_row(ctx, ctx->text.n, line)) return false;
     }
     if (s->kind==DYN_STMT_PANIC) {
       if (s->expression>=ir->expression_count || !descriptor(ir->expressions[s->expression].type) ||
@@ -2664,11 +2865,15 @@ static bool emit_defers(BackendContext *ctx, const DynIrProgram *ir, const DynIr
   if (ctx->cleanup_depth++>=MAX_DEPTH) { --ctx->cleanup_depth; return false; }
   bool old=ctx->unwinding; ctx->unwinding=true;
   unsigned saved=ctx->defer_count;
+  /* The deferred statements record their own lines; the code after them
+     belongs to the statement that ran them. */
+  unsigned line = ctx->trace_row_count > ctx->trace_row_mark ? ctx->trace_rows[ctx->trace_row_count - 1].line : 0;
   for (unsigned i=saved;i>base;--i) {
     const DynIrStmt *s=&ir->statements[ctx->defer_ids[i-1]]; bool falls;
     if (!block(ctx, ir,f,s->body_start,s->body_count,0,&falls)) { ctx->unwinding=old; --ctx->cleanup_depth; return false; }
   }
-  ctx->unwinding=old; ctx->defer_count=saved; --ctx->cleanup_depth; return true;
+  ctx->unwinding=old; ctx->defer_count=saved; --ctx->cleanup_depth;
+  return !line || trace_row(ctx, ctx->text.n, line);
 }
 #include "allocation.inc"
 #include "ssa.inc"
@@ -2706,7 +2911,7 @@ static bool function(BackendContext *ctx, const DynSource *source, const DynIrPr
     if (ctx->local_words>MAX_SCRATCH) return false;
     ctx->local_offsets[i]=0u-8*ctx->local_words;
   }
-  if (ir->expression_count>MAX_NODES || ir->statement_count>MAX_NODES) return false;
+  if (ir->expression_count>ctx->node_capacity || ir->statement_count>ctx->node_capacity) return false;
   reset_scratch(ctx);
   if (ctx->active_ir!=ir) ctx->active_ir=ir;
   ctx->sret_offset=ctx->return_offset=ctx->defer_count=ctx->unwind_offset=ctx->cleanup_depth=0; ctx->unwinding=false;
@@ -2727,6 +2932,13 @@ static bool function(BackendContext *ctx, const DynSource *source, const DynIrPr
   if (!ctx->frame_bytes) ctx->frame_bytes = 16;
   ctx->stack_slots = ctx->loop_depth = 0;
   for (unsigned i = 0; i < GUARD_COUNT; ++i) ctx->message_offsets[i] = ctx->guard_stubs[i] = SIZE_MAX;
+  if (ctx->trace_table) {
+    /* Until the first statement, the function's own line. */
+    const char *path; unsigned line, column;
+    dyn_location_get(locations, source, f->source_offset, &path, &line, &column);
+    ctx->trace_row_count = ctx->trace_row_mark;
+    if (!trace_row(ctx, ctx->text.n, line)) return false;
+  }
   isa_enter(ctx);
   /* GP and FP register banks exhaust independently; stack slots retain source order. */
   unsigned gp=ctx->sret_offset && !ctx->a64?1:0,fp=0; uint32_t spilled=0;
@@ -2760,13 +2972,7 @@ static bool function(BackendContext *ctx, const DynSource *source, const DynIrPr
   }
   if (ctx->rv64 || ctx->rv32) rv_i(ctx,0x13,2,2,128,0);
   if (ctx->t32) t32_release_bank(ctx);
-  if (ctx->debug_mode) {
-    char label[4096]; const char *path; unsigned line, column;
-    dyn_location_get(locations, source, f->source_offset, &path, &line, &column);
-    snprintf(label, sizeof(label), "%s (%s:%u)", f->debug_name ? f->debug_name : f->name, path, line);
-    size_t length = strlen(label), offset = literal(ctx, label, length);
-    isa_string_arguments(ctx, offset, length); runtime_call(ctx, 1);
-  }
+  if (ctx->trace_table && f->is_main) trace_start_call(ctx);
   if (ctx->dwarf) {
     const char *path; unsigned line,column;
     dyn_location_get(locations,source,f->source_offset,&path,&line,&column);
@@ -2978,13 +3184,23 @@ static bool constant_literals(BackendContext *ctx, const DynIrProgram *ir) {
     }
   }
   free(nested);
+  if (ctx->trace_table) {
+    /* The trace header {text start, table}: two pointers relocated once the
+       table is written after the last function. */
+    size_t at = align8(ctx->constants_data.n);
+    if (at > LIMIT - 16 || !reserve(&ctx->constants_data, at + 16)) return false;
+    memset(ctx->constants_data.data + ctx->constants_data.n, 0, at + 16 - ctx->constants_data.n);
+    ctx->constants_data.n = at + 16;
+    ctx->trace_header = (uint32_t)at;
+    any = true;
+  }
   if (any) ctx->literals_symbol = (unsigned)ctx->runtime_base++;
   return true;
 }
 static bool global_initializer(BackendContext *ctx,const DynIrProgram *ir) {
   ctx->allocator_used = ctx->allocator_local_count = 0;
   DynIrFunction f={.name="__dyn_init_root",.return_type=DYN_TYPE_VOID};
-  if (ir->expression_count>MAX_NODES) return false;
+  if (ir->expression_count>ctx->node_capacity) return false;
   ctx->local_words=ctx->stack_slots=ctx->defer_count=ctx->loop_depth=0; ctx->unwinding=false;
   reset_scratch(ctx);
   unsigned slots=0;
@@ -3091,6 +3307,8 @@ static unsigned dwarf_type(BackendContext *ctx, const DynIrProgram *ir, DynType 
 static bool dwarf_variables(BackendContext *ctx, const DynIrProgram *ir, const DynIrFunction *f) {
   for (uint32_t i = 0; i < f->local_count; ++i) {
     const DynIrLocal *local = &ir->locals[f->local_start + i];
+    /* SSA code leaves locals that stay in registers at offset 0. */
+    if (!ctx->local_offsets[i]) continue;
     bool parameter = false;
     for (uint32_t j = 0; j < f->param_count; ++j)
       parameter |= ir->params[f->param_start + j].local_id == f->local_start + i;
@@ -3126,7 +3344,7 @@ static bool suffix_functions(BackendContext *ctx, const DynIrProgram *ir) {
 
 static bool emit_object(BackendContext *ctx, const DynSource *source, const DynIrProgram *ir, const char *path) {
   ctx->active_ir=ir;
-  if ((!ir->function_count && !ctx->shared) || ir->function_count > MAX_SYMBOLS || ir->global_count > MAX_SYMBOLS) {
+  if ((!ir->function_count && !ctx->shared) || ir->function_count + ir->global_count > SYMBOL_LIMIT) {
     backend_report(ctx, "unsupported by native backend: global/function count\n");
     return false;
   }
@@ -3173,9 +3391,9 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
   /* ELF requires every local before sh_info. Reindex once before code emission,
      including address relocations already recorded for constant initializers. */
   unsigned *remap=ctx->symbol_remap, next=section_symbols;
-  memset(ctx->symbol_remap,0,sizeof(ctx->symbol_remap));
+  memset(ctx->symbol_remap,0,(2*ctx->symbol_capacity+RUNTIME_COUNT)*sizeof(*ctx->symbol_remap));
   for (unsigned i=1;i<section_symbols;++i) remap[i]=i;
-  if (ctx->runtime_base>sizeof(ctx->symbol_remap)/sizeof(*ctx->symbol_remap)) { dyn_location_free(&locations); return false; }
+  if (ctx->runtime_base>2*ctx->symbol_capacity+RUNTIME_COUNT) { dyn_location_free(&locations); return false; }
   for (unsigned pass=0;pass<2;++pass) {
     if (pass) ctx->first_global=next;
     for (size_t i=0;i<ir->function_count;++i) {
@@ -3277,6 +3495,9 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
     symbols[ctx->initializer_flag_symbol]=(Elf64_Sym){.st_name=(Elf64_Word)names,.st_info=ELF64_ST_INFO(STB_LOCAL,STT_OBJECT),.st_shndx=8,.st_value=at,.st_size=1};
     memcpy(strings+names,flag,length); names+=length;
   }
+  for (size_t i = 0; i < ir->function_count; ++i)
+    if (ctx->function_live[i] && ir->functions[i].byte_intrinsic == DYN_BYTE_INTRINSIC_ZERO)
+      ctx->zero_symbol = ctx->function_symbols[i];
   ssa_pipeline_start(ctx, source, ir);
   for (size_t i = 0; i < ir->function_count; ++i) {
     const DynIrFunction *f = &ir->functions[i];
@@ -3285,12 +3506,6 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
     const char *name = function_name(f);
     /* Keep recursive entries stable across changes to preceding functions.
        Padding belongs outside the function's symbol and debug ranges. */
-    if (!f->foreign && ctx->function_alignment) {
-      unsigned pad = (unsigned)(-ctx->text.n & (ctx->function_alignment - 1));
-      const unsigned char nop = 0x90;
-      while (pad--) code(ctx, &nop, 1);
-      if (ctx->text.failed) goto done;
-    }
     size_t length = strlen(name) + 1 + (ctx->function_suffixed[i] ? 4 : 0), begin = ctx->text.n;
     if (ctx->dwarf && !f->foreign) {
       const char *file; unsigned line,column;
@@ -3298,12 +3513,17 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
       if (!backend_dwarf_begin(ctx->dwarf,begin,name,file,line,column)) goto done;
     }
     ctx->ssa_frame_valid = false;
+    ctx->ssa_entry_pad = 0;
+    ctx->trace_row_mark = ctx->trace_row_count;
     bool emitted = length <= string_limit - names && function(ctx, source, ir, f, &locations);
     ssa_pipeline_done(ctx, i);
+    begin += ctx->ssa_entry_pad;
     if (!emitted) {
       backend_report(ctx, "unsupported by native backend function or emission limit: %s\n", name);
       goto done;
     }
+    if (ctx->trace_table && !f->foreign && ctx->text.n > begin &&
+        !trace_function(ctx, f, source, &locations, (uint32_t)begin, ctx->function_symbols[i])) goto done;
     if (ctx->unwind_tables && !f->foreign && ctx->text.n > begin) {
       if (ctx->frame_record_count == ctx->frame_record_capacity) {
         size_t capacity = ctx->frame_record_capacity ? 2 * ctx->frame_record_capacity : 64;
@@ -3337,6 +3557,7 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
     if (ctx->function_suffixed[i]) memcpy(strings + names + strlen(name), ".dyn", 4);
     strings[names + length - 1] = 0; names += length;
   }
+  if (!trace_table_write(ctx)) goto done;
   if (ctx->initializer_symbol) {
     const char *name="__dyn_backend_initialize"; size_t length=strlen(name)+1,begin=ctx->text.n;
     if (ctx->dwarf) {
@@ -3421,7 +3642,7 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
   sh[1] = (Elf64_Shdr){.sh_name=1, .sh_type=SHT_PROGBITS,
     /* SSA pads x86 loop headers relative to this section's start. The linker
        must preserve that alignment when placing the object after runtime code. */
-    .sh_flags=SHF_ALLOC|SHF_EXECINSTR, .sh_offset=sizeof(h), .sh_size=ctx->text.n, .sh_addralign=(ctx->a64||ctx->rv64||ctx->rv32||ctx->t32)?4:ctx->function_alignment?ctx->function_alignment:16};
+    .sh_flags=SHF_ALLOC|SHF_EXECINSTR, .sh_offset=sizeof(h), .sh_size=ctx->text.n, .sh_addralign=(ctx->a64||ctx->rv64||ctx->rv32||ctx->t32)?4:16};
   sh[2] = (Elf64_Shdr){.sh_name=7, .sh_type=SHT_PROGBITS, .sh_flags=SHF_ALLOC,
     .sh_offset=align8(sizeof(h)+ctx->text.n), .sh_size=ctx->rodata.n, .sh_addralign=8};
   sh[3] = (Elf64_Shdr){.sh_name=15, .sh_type=SHT_RELA,
@@ -3533,10 +3754,45 @@ done:
   free(symbols); free(strings); return ok;
 }
 typedef enum { TARGET_X64_ELF, TARGET_A64_ELF, TARGET_X64_COFF, TARGET_A64_MACHO, TARGET_X64_MACHO, TARGET_A64_COFF, TARGET_RV64_ELF, TARGET_RV32_ELF, TARGET_T32_ELF } ObjectTarget;
+/* Per-symbol and per-node arrays for a program; false without memory. */
+static bool symbol_arrays(BackendContext *ctx, const DynIrProgram *ir) {
+  size_t functions = ir->function_count, globals = ir->global_count;
+  size_t nodes = (ir->expression_count > ir->statement_count ? ir->expression_count : ir->statement_count) + 1;
+  ctx->node_capacity = nodes;
+  ctx->captured_offsets = calloc(nodes, sizeof(uint32_t)); ctx->statement_scratch = calloc(nodes, sizeof(uint32_t));
+  ctx->temporary_offsets = calloc(nodes, sizeof(uint32_t)); ctx->literal_offsets = calloc(nodes, sizeof(uint32_t));
+  ctx->visited_expr = calloc(nodes, sizeof(bool)); ctx->pack_offsets = calloc(nodes, sizeof(uint32_t));
+  ctx->copy_offsets = calloc(nodes, sizeof(uint32_t)); ctx->touched_exprs = calloc(2 * nodes, sizeof(uint32_t));
+  ctx->touched_stmts = calloc(nodes, sizeof(uint32_t));
+  if (!ctx->captured_offsets || !ctx->statement_scratch || !ctx->temporary_offsets || !ctx->literal_offsets ||
+      !ctx->visited_expr || !ctx->pack_offsets || !ctx->copy_offsets || !ctx->touched_exprs || !ctx->touched_stmts)
+    return false;
+  size_t n = (functions > globals ? functions : globals) + 2;
+  ctx->symbol_capacity = n;
+  ctx->global_static = calloc(n, sizeof(bool)); ctx->function_live = calloc(n, sizeof(bool));
+  ctx->global_live = calloc(n, sizeof(bool)); ctx->function_suffixed = calloc(n, sizeof(bool));
+  ctx->constant_offsets = calloc(n, sizeof(uint32_t));
+  ctx->function_symbols = calloc(n, sizeof(unsigned)); ctx->global_symbols = calloc(n, sizeof(unsigned));
+  ctx->symbol_remap = calloc(2 * n + RUNTIME_COUNT, sizeof(unsigned));
+  ctx->unwind_frames = calloc(n, sizeof(*ctx->unwind_frames));
+  ctx->arm_epilogues = calloc(8 * n, sizeof(*ctx->arm_epilogues));
+  return ctx->global_static && ctx->function_live && ctx->global_live && ctx->function_suffixed && ctx->constant_offsets &&
+         ctx->function_symbols && ctx->global_symbols && ctx->symbol_remap && ctx->unwind_frames && ctx->arm_epilogues;
+}
+static void symbol_arrays_free(BackendContext *ctx) {
+  free(ctx->captured_offsets); free(ctx->statement_scratch); free(ctx->temporary_offsets); free(ctx->literal_offsets);
+  free(ctx->visited_expr); free(ctx->pack_offsets); free(ctx->copy_offsets); free(ctx->touched_exprs); free(ctx->touched_stmts);
+  free(ctx->global_static); free(ctx->function_live); free(ctx->global_live); free(ctx->function_suffixed);
+  free(ctx->constant_offsets); free(ctx->function_symbols); free(ctx->global_symbols); free(ctx->symbol_remap);
+  free(ctx->unwind_frames); free(ctx->arm_epilogues);
+}
 static bool object_target_mode(const DynSource *source, const DynIrProgram *ir,
                           const char *path, bool debug, bool debug_info, bool report, ObjectTarget target, bool shared) {
   BackendContext *ctx = calloc(1, sizeof(*ctx));
   if (!ctx) return false;
+  if (ir->function_count + ir->global_count > SYMBOL_LIMIT || !symbol_arrays(ctx, ir)) {
+    symbol_arrays_free(ctx); free(ctx); return false;
+  }
   bool a64 = target == TARGET_A64_ELF || target == TARGET_A64_MACHO || target == TARGET_A64_COFF;
   ctx->rv64=target==TARGET_RV64_ELF;
   ctx->rv32=target==TARGET_RV32_ELF;
@@ -3551,10 +3807,9 @@ static bool object_target_mode(const DynSource *source, const DynIrProgram *ir,
       ? (!strcmp(dyn_context_target(&source->context)->name, "thumbv7em-none-nucleo-h753zi") ? 0x20001000u : 0x20301000u)
       : 0x87f01000u;
   ctx->debug_mode = debug; ctx->report = report; ctx->a64 = a64; ctx->shared = shared;
+  ctx->trace_table = debug && !source->context.runtime_support;
   const char *features = source->context.optimization ? source->context.optimization->features : NULL;
   bool x86 = !a64 && !ctx->rv64 && !ctx->rv32 && !ctx->t32;
-  if (x86 && !debug && !debug_info && source->context.optimization && source->context.optimization->level >= 2)
-    ctx->function_alignment = 64;
   ctx->bmi2 = x86 && dyn_cpu_has_feature(features, "+bmi2");
   ctx->sse41 = x86 && dyn_cpu_has_feature(features, "+sse4.1");
   ctx->fma = x86 && dyn_cpu_has_feature(features, "+fma");
@@ -3579,7 +3834,7 @@ static bool object_target_mode(const DynSource *source, const DynIrProgram *ir,
                        !getenv("DYN_NO_UNWIND_TABLES");
   if (debug_info && (!(ctx->dwarf=ctx->rv32?backend_dwarf_create_rv32():ctx->t32?backend_dwarf_create_t32():ctx->rv64?backend_dwarf_create_rv64():a64?backend_dwarf_create_a64():backend_dwarf_create()) ||
                      !(ctx->dwarf_types=calloc(DYN_TYPE_PARAM_BASE, sizeof(*ctx->dwarf_types))))) {
-    backend_dwarf_free(ctx->dwarf); free(ctx); return false;
+    backend_dwarf_free(ctx->dwarf); symbol_arrays_free(ctx); free(ctx); return false;
   }
   layout_cache_begin(ir);
   bool ok = emit_object(ctx, source, ir, path);
@@ -3597,8 +3852,9 @@ static bool object_target_mode(const DynSource *source, const DynIrProgram *ir,
   free(ctx->text.data); free(ctx->rodata.data); free(ctx->globals_data.data); free(ctx->constants_data.data);
   free(ctx->strings);
   free(ctx->relocations); free(ctx->constant_relocations);
+  free(ctx->trace_rows); free(ctx->trace_functions); free(ctx->trace_names);
   free(ctx->frame_records); free(ctx->landing_records);
-  free(ctx->expression_live); free(ctx);
+  free(ctx->expression_live); symbol_arrays_free(ctx); free(ctx);
   return ok;
 }
 static bool object_target(const DynSource *source, const DynIrProgram *ir,

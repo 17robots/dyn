@@ -66,7 +66,7 @@ static void run(unsigned cold, unsigned dead, bool hot_first, bool leaf_only) {
   uint32_t *children = p->children;
   DynIrFunction *functions = p->functions;
   bool *live = p->live.functions;
-  assert(inline_program(&o, leaf_only, false));
+  assert(inline_program_within(&o, leaf_only,false,512));
   assert(o.owns_expansion);
   /* leaf costs 2+2=4; middle costs 9+2=11 plus the nested leaf's 4.
      O3 fits 34 chains (510), O2 fits six leaves (24).
@@ -116,7 +116,7 @@ static void later_helper(void) {
     o.ir.statements[i]=(DynIrStmt){.kind=i<2 ? DYN_STMT_RETURN : DYN_STMT_EXPR,
         .expression=i==0 ? 0 : i==1 || i==20 ? 1 : 2,.target=DYN_NO_EXPR};
   }
-  assert(inline_program(&o,false,false) && o.owns_expansion);
+  assert(inline_program_within(&o,false,false,512) && o.owns_expansion);
   assert(o.inlined==38); /* middle's leaf, 18 chains, then the late leaf */
   DynIrFunction *caller=&o.ir.functions[2];
   for (unsigned i=0;i<caller->body_count;++i) {
@@ -139,7 +139,7 @@ static void recursion(void) {
   o.ir.statement_count=1; o.ir.statements=calloc(1,sizeof(DynIrStmt));
   o.ir.statements[0]=(DynIrStmt){.kind=DYN_STMT_EXPR,.expression=0,
       .target=DYN_NO_EXPR};
-  assert(inline_program(&o,false,false));
+  assert(inline_program_within(&o,false,false,512));
   assert(!o.inlined && !o.owns_expansion);
   dyn_native_optimization_free(&o);
 }
@@ -194,7 +194,7 @@ static void resources(unsigned arms, unsigned locals, unsigned items) {
   p->statements[1].case_arm_count=arms;
   p->statements[42].expression=2; /* Always retain the transformed IR. */
   size_t input_records=records(p);
-  assert(inline_program(&o,false,false) && o.owns_expansion);
+  assert(inline_program_within(&o,false,false,512) && o.owns_expansion);
   /* 40 calls to a 1000-empty-arm body used to produce 41000 arms.
      A whole local table must also be charged even with no local statements. */
   assert(o.ir.case_arm_count <= arms + 512);

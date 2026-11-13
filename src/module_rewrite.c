@@ -16,10 +16,15 @@ extern char *realpath(const char *, char *);
 typedef struct {
   char *name;
 } Decl;
+/* Alias.module before resolve_aliases runs, and when no module of the
+   project has the target directory. */
+#define ALIAS_UNRESOLVED SIZE_MAX
+#define ALIAS_NO_MODULE (SIZE_MAX - 1)
 typedef struct {
   char *name;
   char *target;
   char *path;
+  size_t module; /* index of the target's module, or one of the above */
 } Alias;
 typedef struct {
   char *dir;
@@ -101,11 +106,57 @@ static char *source_dir(const char *path) {
     *slash = 0;
   return full;
 }
+static uint64_t hash_path(const char *s);
+/* Module directories by hash. Projects have hundreds of modules, and a linear
+   search per source and per alias was a measurable share of `dyn check`.
+   Slots hold module index + 1; zero is empty. */
+typedef struct {
+  size_t *slots;
+  size_t capacity;
+} ModuleIndex;
+static size_t module_index_slot(const ModuleIndex *x, const Module *modules, const char *dir) {
+  size_t mask = x->capacity - 1, slot = (size_t)hash_path(dir) & mask;
+  while (x->slots[slot] && strcmp(modules[x->slots[slot] - 1].dir, dir))
+    slot = (slot + 1) & mask;
+  return slot;
+}
+/* Records modules[index], which must not be indexed yet. */
+static bool module_index_add(ModuleIndex *x, const Module *modules, size_t index) {
+  if ((index + 1) * 2 > x->capacity) {
+    size_t capacity = x->capacity ? x->capacity * 2 : 64;
+    while ((index + 1) * 2 > capacity) capacity *= 2;
+    size_t *slots = calloc(capacity, sizeof(*slots));
+    if (!slots) return false;
+    free(x->slots);
+    *x = (ModuleIndex){slots, capacity};
+    for (size_t i = 0; i < index; ++i)
+      x->slots[module_index_slot(x, modules, modules[i].dir)] = i + 1;
+  }
+  x->slots[module_index_slot(x, modules, modules[index].dir)] = index + 1;
+  return true;
+}
+static Module *module_index_find(const ModuleIndex *x, Module *modules, const char *dir) {
+  if (!x->capacity) return NULL;
+  size_t slot = x->slots[module_index_slot(x, modules, dir)];
+  return slot ? &modules[slot - 1] : NULL;
+}
 static Module *find_module(Module *modules, size_t count, const char *dir) {
   for (size_t i = 0; i < count; ++i)
     if (!strcmp(modules[i].dir, dir))
       return &modules[i];
   return NULL;
+}
+/* Every alias names its target by directory; resolve each once. */
+static void resolve_aliases(Module *modules, size_t count, const ModuleIndex *index) {
+  for (size_t i = 0; i < count; ++i)
+    for (size_t a = 0; a < modules[i].alias_count; ++a) {
+      const Module *target = module_index_find(index, modules, modules[i].aliases[a].target);
+      modules[i].aliases[a].module = target ? (size_t)(target - modules) : ALIAS_NO_MODULE;
+    }
+}
+static Module *alias_module(Module *modules, size_t count, const Alias *alias) {
+  if (alias->module == ALIAS_UNRESOLVED) return find_module(modules, count, alias->target);
+  return alias->module == ALIAS_NO_MODULE ? NULL : &modules[alias->module];
 }
 static uint64_t declaration_hash(const char *name) {
   uint64_t hash = UINT64_C(14695981039346656037);
@@ -174,7 +225,7 @@ static bool add_alias(Module *m, const char *name, const char *target, const cha
   if (!p)
     return false;
   m->aliases = p;
-  p[m->alias_count] = (Alias){strdup(name), strdup(target), strdup(path)};
+  p[m->alias_count] = (Alias){strdup(name), strdup(target), strdup(path), ALIAS_UNRESOLVED};
   if (!p[m->alias_count].name || !p[m->alias_count].target || !p[m->alias_count].path) {
     free(p[m->alias_count].name);
     free(p[m->alias_count].target);
@@ -184,12 +235,6 @@ static bool add_alias(Module *m, const char *name, const char *target, const cha
   }
   ++m->alias_count;
   return true;
-}
-static const char *alias_target(const Module *m, const char *name) {
-  for (size_t i = 0; i < m->alias_count; ++i)
-    if (!strcmp(m->aliases[i].name, name))
-      return m->aliases[i].target;
-  return NULL;
 }
 static uint64_t hash_path(const char *s) {
   uint64_t h = UINT64_C(1469598103934665603);
@@ -230,8 +275,10 @@ static bool append_edit(Edits *e, Edit edit) {
 }
 static Module *target_module(Module *modules, size_t count,
                              const Module *current, const char *alias) {
-  const char *dir = alias_target(current, alias);
-  return dir ? find_module(modules, count, dir) : NULL;
+  for (size_t i = 0; i < current->alias_count; ++i)
+    if (!strcmp(current->aliases[i].name, alias))
+      return alias_module(modules, count, &current->aliases[i]);
+  return NULL;
 }
 #include "module_compact_rewrite.h"
 static int edit_compare(const void *a, const void *b) {
@@ -509,6 +556,7 @@ static bool apply_edits(DynSource *s, Edits *e) {
   DynSyntaxCache *cache = s->context.syntax_cache;
   s->context.syntax_cache = NULL;
   s->compact = patched;
+  dyn_source_target_record(s);
   bool prepared = dyn_source_prepare(s);
   s->context.syntax_cache = cache;
   return prepared;
@@ -659,26 +707,30 @@ static bool capture_dependencies(DynSources *sources, Module *modules, size_t co
     reflection |= source->needs_reflection || source->compact_reflection;
     if (!compact_rewrite_abi(source, compact, module)) { free(selected); return false; }
   }
+  /* Modules reachable through aliases, walked from a stack. */
+  size_t *stack = malloc((count ? count : 1) * sizeof(*stack));
+  if (!stack) { free(selected); return false; }
   for (size_t i = 0; i < sources->count; ++i) {
     if (i && owners[i] == owners[i - 1]) continue;
     memset(selected, reflection ? 1 : 0, count * sizeof(*selected));
     selected[owners[i]] = true;
-    bool changed = true;
-    while (changed) {
-      changed = false;
-      for (size_t j = 0; j < count; ++j) if (selected[j])
-        for (size_t k = 0; k < modules[j].alias_count; ++k) {
-          Module *target = find_module(modules, count, modules[j].aliases[k].target);
-          if (target && !selected[target - modules]) {
-            selected[target - modules] = true; changed = true;
-          }
+    size_t depth = 0;
+    if (!reflection) stack[depth++] = owners[i];
+    while (depth) {
+      const Module *m = &modules[stack[--depth]];
+      for (size_t k = 0; k < m->alias_count; ++k) {
+        const Module *target = alias_module(modules, count, &m->aliases[k]);
+        if (target && !selected[target - modules]) {
+          selected[target - modules] = true;
+          stack[depth++] = (size_t)(target - modules);
         }
+      }
     }
     DynSource *source = &sources->items[i];
     size_t needed = 0;
     for (size_t j = 0; j < sources->count; ++j) needed += selected[owners[j]];
     source->dependency_sources = malloc(needed * sizeof(size_t));
-    if (!source->dependency_sources) { free(selected); return false; }
+    if (!source->dependency_sources) { free(selected); free(stack); return false; }
     uint64_t hash = UINT64_C(1469598103934665603);
     hash = rewrite_hash(hash, &reflection, sizeof(reflection));
     for (size_t j = 0; j < count; ++j) if (selected[j])
@@ -692,6 +744,7 @@ static bool capture_dependencies(DynSources *sources, Module *modules, size_t co
       source->dependency_sources[source->dependency_count++] = j;
     source->dependency_hash = hash ? hash : 1;
   }
+  free(stack);
   free(selected);
   return true;
 }
@@ -740,7 +793,7 @@ static void rewrite_module_keys(Module *modules, size_t count) {
     for (size_t d = 0; d < m->decl_count; ++d)
       decls += rewrite_mix(UINT64_C(1469598103934665603), m->decls[d].name, strlen(m->decls[d].name));
     for (size_t a = 0; a < m->alias_count; ++a) {
-      const Module *target = find_module(modules, count, m->aliases[a].target);
+      const Module *target = alias_module(modules, count, &m->aliases[a]);
       unsigned char shape = target ? 1 + (target->root ? 1 : 0) : 0;
       uint64_t alias = rewrite_mix(UINT64_C(1469598103934665603), m->aliases[a].name, strlen(m->aliases[a].name) + 1);
       alias = rewrite_mix(alias, m->aliases[a].target, strlen(m->aliases[a].target) + 1);
@@ -894,6 +947,7 @@ int dyn_module_rewrite_project(const char *project_root, DynSources *sources) {
     return 1;
   Module *modules = NULL;
   size_t module_count = 0;
+  ModuleIndex index = {0};
   int result = 0;
   /* Each source's module, resolved once: resolving a path is several system calls. */
   size_t *owners = malloc((sources->count ? sources->count : 1) * sizeof(*owners));
@@ -905,7 +959,7 @@ int dyn_module_rewrite_project(const char *project_root, DynSources *sources) {
       result = 2;
       break;
     }
-    Module *found = find_module(modules, module_count, dir);
+    Module *found = module_index_find(&index, modules, dir);
     if (found) {
       owners[i] = (size_t)(found - modules);
       free(dir);
@@ -918,6 +972,11 @@ int dyn_module_rewrite_project(const char *project_root, DynSources *sources) {
       }
       modules = p;
       modules[module_count] = (Module){.dir = dir, .root = !strcmp(dir, root)};
+      if (!module_index_add(&index, modules, module_count)) {
+        free(dir);
+        result = 2;
+        break;
+      }
       owners[i] = module_count++;
     }
   }
@@ -930,6 +989,8 @@ int dyn_module_rewrite_project(const char *project_root, DynSources *sources) {
     if (!compact || !compact_rewrite_declarations(s, compact, m, false) ||
         !compact_rewrite_imports(s, m, root)) result = 2;
   }
+  if (!result) resolve_aliases(modules, module_count, &index);
+  free(index.slots);
   for (size_t si = 0; si < sources->count && !result; ++si) {
     if (dyn_source_target_enabled(&sources->items[si]) == 0)
       continue;

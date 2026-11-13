@@ -70,6 +70,11 @@ bool dyn_path_is_directory(const char *path) {
   struct stat st;
   return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
 }
+/* Prepares a loaded source and records its #target answer for this text. */
+static bool source_prepare(DynSource *source) {
+  dyn_source_target_record(source);
+  return dyn_source_prepare(source);
+}
 static int source_compare(const void *a, const void *b) {
   return strcmp(((const DynSource *)a)->path, ((const DynSource *)b)->path);
 }
@@ -95,7 +100,7 @@ static void *prepare_worker(void *raw) {
   for (;;) {
     size_t i = atomic_fetch_add(&jobs->next, 1);
     if (i >= jobs->sources->count) return NULL;
-    jobs->prepared[i] = dyn_source_prepare(&jobs->sources->items[i]);
+    jobs->prepared[i] = source_prepare(&jobs->sources->items[i]);
   }
 }
 #endif
@@ -118,7 +123,7 @@ static int prepare_parallel(DynSources *out, bool quiet) {
   prepare_worker(&jobs);
   for (size_t i = 0; i < started; ++i) pthread_join(threads[i], NULL);
 #else
-  for (size_t i = 0; i < out->count; ++i) prepared[i] = dyn_source_prepare(&out->items[i]);
+  for (size_t i = 0; i < out->count; ++i) prepared[i] = source_prepare(&out->items[i]);
 #endif
   int result = 0;
   for (size_t i = 0; i < out->count && !result; ++i)
@@ -231,7 +236,7 @@ static int sources_load(const DynContext *context, const char *dir,
     bool failed = s->length != (size_t)size || ferror(f);
     if (fclose(f))
       failed = true;
-    if (!failed && !parallel && !dyn_source_prepare(s)) {
+    if (!failed && !parallel && !source_prepare(s)) {
       closedir(d);
       return prepare_failure(s, quiet);
     }
@@ -313,9 +318,25 @@ static const char *source_target_directive(const char *p) {
   }
   return NULL;
 }
+static int source_target_scan(const DynSource *s);
+/* Called for every source several times per command; the answer recorded
+   when the text was prepared saves rescanning whole files. */
 int dyn_source_target_enabled(const DynSource *s) {
+  if (s->target_text && s->target_text == s->text && s->target_length == s->length &&
+      s->target_for == dyn_context_target(&s->context))
+    return s->target_state;
+  return source_target_scan(s);
+}
+void dyn_source_target_record(DynSource *s) {
+  s->target_state = source_target_scan(s);
+  s->target_text = s->text;
+  s->target_length = s->length;
+  s->target_for = dyn_context_target(&s->context);
+}
+static int source_target_scan(const DynSource *s) {
   /* Most files have no target directive. The substring test is only a
      rejection fast path; the lexer below still excludes comments/literals. */
+  if (!s->text) return 1;
   if (!strstr(s->text, "#target")) return 1;
   const char *p = source_target_directive(s->text);
   if (!p)
@@ -479,7 +500,7 @@ int dyn_sources_merge(const DynSources *sources, const char *module_name,
   out->length = at;
   /* No enabled source: certify the empty text directly. */
   if (!out->map_count && !prelude) {
-    if (!dyn_source_prepare(out)) { dyn_source_free(out); return 2; }
+    if (!source_prepare(out)) { dyn_source_free(out); return 2; }
     return 0;
   }
   /* Each enabled input keeps its own snapshot: concatenating files can change

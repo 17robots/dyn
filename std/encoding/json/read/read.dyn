@@ -43,8 +43,7 @@ fn read_append(state: *ReadParser, kind: u8, bits: u64) usize {
     }
     if memory.arena_try_extend(state.arena, #cast(*u8, &state.values[0]), old * 16, (capacity - old) * 16) {
       state.values = #slice(&state.values[0], capacity)
-    }
-    else {
+    } else {
       // Parsing retains indexes, not node pointers. Moving the complete tape
       // preserves relative subtree spans; string pointers refer to stable buffer.
       storage := memory.arena_push_uninit(state.arena, capacity * 16, 8)
@@ -54,7 +53,7 @@ fn read_append(state: *ReadParser, kind: u8, bits: u64) usize {
     }
   }
   index := state.used
-  state.values[index] = Value{ tag: #cast(u64, kind), bits: bits }
+  state.values[index] = Value{ tag: kind, bits: bits }
   state.used += 1
   return index
 }
@@ -87,8 +86,7 @@ fn read_number(state: *ReadParser) bool {
   byte := source[at]
   if byte == '0' {
     at += 1
-  }
-  else {
+  } else {
     if byte < '1' || byte > '9' {
       return false
     }
@@ -101,8 +99,7 @@ fn read_number(state: *ReadParser) bool {
       if exact {
         if integer > 1844674407370955161 || (integer == 1844674407370955161 && n > 5) {
           exact = false
-        }
-        else {
+        } else {
           integer = integer * 10 + n
         }
       }
@@ -175,7 +172,7 @@ fn read_string_value(state: *ReadParser) bool {
   }
   pointer: u64 = 0
   if #len(value) != 0 {
-    pointer = #cast(u64, #cast(usize, &value[0]))
+    pointer = #cast(usize, &value[0])
   }
   index := read_append(state, KindString, pointer)
   state.values[index].tag |= #cast(u64, #len(value)) << 8
@@ -204,8 +201,7 @@ fn read_value(state: *ReadParser, depth: usize) bool {
       if !literal(&state.cursor, "true") {
         return false
       }
-    }
-    else {
+    } else {
       if !literal(&state.cursor, "false") {
         return false
       }
@@ -236,7 +232,7 @@ fn read_value(state: *ReadParser, depth: usize) bool {
   count: usize = 0
   if state.cursor.at < #len(state.buffer) && state.buffer[state.cursor.at] == close {
     state.cursor.at += 1
-    state.values[index].bits = #cast(u64, state.used - index)
+    state.values[index].bits = state.used - index
     return true
   }
   for {
@@ -272,7 +268,7 @@ fn read_value(state: *ReadParser, depth: usize) bool {
     }
   }
   state.values[index].tag |= #cast(u64, count) << 8
-  state.values[index].bits = #cast(u64, state.used - index)
+  state.values[index].bits = state.used - index
   return true
 }
 
@@ -289,7 +285,7 @@ pub fn parse(arena: *memory.Arena, source: []const u8) ParseResult {
   if #len(source) == 0 {
     return ParseResult{ root: &nil_value, failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
-  maximum := ~#cast(usize, 0)
+  maximum := #max(usize)
   // Incomplete containers can consume one node per input byte before failure.
   // The smaller complete-document estimate is only an initial capacity hint.
   limit := #len(source)
@@ -352,7 +348,7 @@ pub fn length(value: *const Value) usize {
   return 0
 }
 pub fn as_text(value: *const Value) []const u8 {
-  if value == nil || (value.tag & 255) != #cast(u64, KindString) {
+  if value == nil || (value.tag & 255) != KindString {
     return ""
   }
   length := #cast(usize, value.tag >> 8)
@@ -362,7 +358,7 @@ pub fn as_text(value: *const Value) []const u8 {
   return #slice(#cast(*const u8, #cast(usize, value.bits)), length)
 }
 pub fn as_f64(value: *const Value) f64 {
-  if value == nil || (value.tag & 255) != #cast(u64, KindNumber) {
+  if value == nil || (value.tag & 255) != KindNumber {
     return 0.0
   }
   number_type := value.tag & 65280
@@ -375,7 +371,7 @@ pub fn as_f64(value: *const Value) f64 {
   return #bitcast(f64, value.bits)
 }
 pub fn as_bool(value: *const Value) bool {
-  return value != nil && (value.tag & 255) == #cast(u64, KindBool) && value.bits != 0
+  return value != nil && (value.tag & 255) == KindBool && value.bits != 0
 }
 fn read_after(value: *const Value) *const Value {
   span: usize = 1
@@ -386,7 +382,7 @@ fn read_after(value: *const Value) *const Value {
   return #cast(*const Value, #cast(usize, value) + span * 16)
 }
 pub fn get(object: *const Value, key: []const u8) *const Value {
-  if object == nil || (object.tag & 255) != #cast(u64, KindObject) {
+  if object == nil || (object.tag & 255) != KindObject {
     return &nil_value
   }
   at := #cast(*const Value, #cast(usize, object) + 16)
@@ -407,7 +403,7 @@ pub fn get(object: *const Value, key: []const u8) *const Value {
   return &nil_value
 }
 pub fn at(array: *const Value, index: usize) *const Value {
-  if array == nil || (array.tag & 255) != #cast(u64, KindArray) || index >= #cast(usize, array.tag >> 8) {
+  if array == nil || (array.tag & 255) != KindArray || index >= #cast(usize, array.tag >> 8) {
     return &nil_value
   }
   at := #cast(*const Value, #cast(usize, array) + 16)
@@ -495,23 +491,17 @@ fn read_decoded_string(state: *ReadParser) []const u8 {
       source_at += 1
       if escaped == '"' || escaped == '\\' || escaped == '/' {
         byte = escaped
-      }
-      else if escaped == 'b' {
+      } else if escaped == 'b' {
         byte = 8
-      }
-      else if escaped == 'f' {
+      } else if escaped == 'f' {
         byte = 12
-      }
-      else if escaped == 'n' {
+      } else if escaped == 'n' {
         byte = '\n'
-      }
-      else if escaped == 'r' {
+      } else if escaped == 'r' {
         byte = '\r'
-      }
-      else if escaped == 't' {
+      } else if escaped == 't' {
         byte = '\t'
-      }
-      else if escaped == 'u' {
+      } else if escaped == 'u' {
         if source_at + 4 > end {
           return failed_string(cursor)
         }
@@ -579,7 +569,7 @@ fn read_decoded_string(state: *ReadParser) []const u8 {
 
 fn hex_value(byte: u8) usize {
   if byte >= '0' && byte <= '9' {
-    return #cast(usize, (byte - '0'))
+    return (byte - '0')
   }
   if byte >= 'a' && byte <= 'f' {
     return #cast(usize, (byte - 'a')) + 10
@@ -618,7 +608,7 @@ fn failed_string(cursor: *Cursor) []const u8 {
 
 // Zero is returned for a wrong kind, a fractional real or an out-of-range value.
 pub fn as_u64(value: *const Value) u64 {
-  if value == nil || (value.tag & 255) != #cast(u64, KindNumber) {
+  if value == nil || (value.tag & 255) != KindNumber {
     return 0
   }
   number_type := value.tag & 65280
@@ -643,7 +633,7 @@ pub fn as_u64(value: *const Value) u64 {
   return integer
 }
 pub fn as_i64(value: *const Value) i64 {
-  if value == nil || (value.tag & 255) != #cast(u64, KindNumber) {
+  if value == nil || (value.tag & 255) != KindNumber {
     return 0
   }
   number_type := value.tag & 65280

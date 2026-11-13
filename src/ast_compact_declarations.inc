@@ -834,7 +834,8 @@ static bool body_merge(DynAstProgram *a, BodyRun *r, const BodyBase *b) {
     if (e.kind == DYN_EXPR_SLICE) e.integer = BODY_SHIFT((uint32_t)e.integer, be, de);
     else if (e.kind == DYN_EXPR_STRING) e.integer = (uint32_t)e.integer + dstr;
     else if (e.kind == DYN_EXPR_CAST || e.kind == DYN_EXPR_BITCAST || e.kind == DYN_EXPR_OFFSET ||
-             ((e.kind == DYN_EXPR_SIZE || e.kind == DYN_EXPR_ALIGN || e.kind == DYN_EXPR_TYPEOF) && e.boolean))
+             ((e.kind == DYN_EXPR_SIZE || e.kind == DYN_EXPR_ALIGN || e.kind == DYN_EXPR_TYPEOF ||
+               e.kind == DYN_EXPR_LIMIT) && e.boolean))
       e.integer = body_type(&m, (DynType)e.integer);
     a->expressions[a->expression_count++] = e;
   }
@@ -895,6 +896,13 @@ static unsigned body_workers(const DynSource *s, size_t jobs) {
 /* Lowers jobs on worker threads into the program; false leaves it unchanged
    so the caller lowers serially, which also reports diagnostics in order. */
 static bool body_parallel(const DynSource *s, DynAstProgram *a, BodyJob *jobs, size_t count, unsigned workers) {
+  /* Runs copy the program, name indexes included, and only read them: an
+     index behind its count (instances were created since it was built)
+     would be extended by every run at once into the arrays they share. */
+  (void)find_struct(a, (DynSpan){0}, s);
+  (void)find_enum(a, (DynSpan){0}, s);
+  (void)find_alias(a, (DynSpan){0}, s);
+  if (a->allocation_failed) return false;
   BodyBase base = {0, 0, 0, 0, 0, 0, 0, a->pointer_count, a->array_count, a->slice_count,
                    a->fn_type_count, a->fn_type_param_count, a->loop_count};
   /* Runs of about equal source size, a few per worker for balance. */
@@ -1001,6 +1009,87 @@ static void compact_create_instances(CompactNode n, const DynSource *s, DynAstPr
   for (CompactNode c = compact_first(n); !compact_null(c); c = compact_next(c))
     compact_create_instances(c, s, a, depth + 1);
 }
+/* Instances must exist before the body workers start, but only a few nodes
+   create one. Workers find those nodes in preorder without changing the
+   program; the caller then creates the instances in job order, which keeps
+   type ids the same as one serial walk. */
+typedef struct {
+  const DynSource *s;
+  DynAstProgram *a;
+  const BodyJob *jobs;
+  size_t begin, end, count, capacity;
+  CompactNode *found;
+  bool failed;
+} InstanceScan;
+#ifndef _WIN32 /* Windows builds scan serially (compact_create_instances_parallel). */
+static void instance_scan_node(InstanceScan *w, CompactNode n, unsigned depth) {
+  if (compact_null(n) || depth > 2048 || w->failed) return;
+  uint16_t kind = compact_kind(n);
+  bool hit = kind == EXP_GENERIC_TYPE;
+  if (kind == EXP_CALL) {
+    CompactNode callee = compact_first(n);
+    hit = !compact_null(callee) && compact_template(w->a, compact_span(callee), w->s, NULL, NULL);
+  }
+  if (hit) {
+    if (w->count == w->capacity) {
+      size_t capacity = w->capacity ? w->capacity * 2 : 64;
+      CompactNode *found = realloc(w->found, capacity * sizeof(*found));
+      if (!found) { w->failed = true; return; }
+      w->found = found;
+      w->capacity = capacity;
+    }
+    w->found[w->count++] = n;
+  }
+  for (CompactNode c = compact_first(n); !compact_null(c); c = compact_next(c))
+    instance_scan_node(w, c, depth + 1);
+}
+static void *instance_scan(void *data) {
+  InstanceScan *w = data;
+  for (size_t i = w->begin; i < w->end && !w->failed; ++i) instance_scan_node(w, w->jobs[i].block, 0);
+  return NULL;
+}
+static void compact_create_found(CompactNode n, const DynSource *s, DynAstProgram *a) {
+  if (compact_kind(n) == EXP_GENERIC_TYPE) (void)compact_type(n, s, a);
+  else {
+    CompactNode callee = compact_first(n);
+    (void)compact_instance(callee, compact_next(callee), s, a);
+  }
+}
+#endif
+/* Creates every instance the bodies name; false means the parallel scan
+   could not run and the caller walks serially. */
+static bool compact_create_instances_parallel(const BodyJob *jobs, size_t count, unsigned workers,
+                                              const DynSource *s, DynAstProgram *a) {
+#ifdef _WIN32
+  (void)jobs; (void)count; (void)workers; (void)s; (void)a;
+  return false;
+#else
+  if (workers < 2) return false;
+  /* Build the name indexes now so the scan only reads them. */
+  (void)find_struct(a, (DynSpan){0}, s);
+  if (a->allocation_failed) return false;
+  InstanceScan scans[4] = {0};
+  pthread_t threads[4];
+  bool started[4] = {0};
+  if (workers > 4) workers = 4;
+  for (unsigned i = 0; i < workers; ++i) {
+    scans[i] = (InstanceScan){.s = s, .a = a, .jobs = jobs, .begin = count * i / workers,
+                              .end = count * (i + 1) / workers};
+    started[i] = i && !pthread_create(&threads[i], NULL, instance_scan, &scans[i]);
+  }
+  for (unsigned i = 0; i < workers; ++i)
+    if (!started[i]) instance_scan(&scans[i]);
+  bool ok = true;
+  for (unsigned i = 0; i < workers; ++i) {
+    if (started[i]) pthread_join(threads[i], NULL);
+    ok = ok && !scans[i].failed;
+  }
+  for (unsigned i = 0; ok && i < workers; ++i)
+    for (size_t k = 0; k < scans[i].count; ++k) compact_create_found(scans[i].found[k], s, a);
+  for (unsigned i = 0; i < workers; ++i) free(scans[i].found);
+  return ok;
+#endif
+}
 static void compact_lower_function_bodies(const DynSource *s,
                                   DynAstProgram *a, unsigned *errors,
                                   const char *owner_key, DynNameIndex *index) {
@@ -1036,9 +1125,10 @@ static void compact_lower_function_bodies(const DynSource *s,
   }
   /* Workers lower bodies on private copies and merge by id, so every struct
      instance must exist before they start. */
-  for (size_t i = 0; i < count; ++i)
-    compact_create_instances(jobs[i].block, s, a, 0);
   unsigned workers = body_workers(s, count);
+  if (!compact_create_instances_parallel(jobs, count, workers, s, a))
+    for (size_t i = 0; i < count; ++i)
+      compact_create_instances(jobs[i].block, s, a, 0);
   if (workers < 2 || !body_parallel(s, a, jobs, count, workers))
     for (size_t i = 0; i < count; ++i)
       compact_block(jobs[i].block, s, a, errors, 0, &a->functions[jobs[i].function].body_start,

@@ -1,4 +1,5 @@
 use "std/io" io
+use "std/os/linux/sys"
 #target(kernel: linux)
 
 fn open_flags(path: []const u8, flags: usize, mode: usize) FileResult {
@@ -7,9 +8,9 @@ fn open_flags(path: []const u8, flags: usize, mode: usize) FileResult {
   if raw == nil {
     return FileResult{ failure: io.Failure{ kind: io.Kind.InvalidInput, native: -36 } }
   }
-  descriptor := #syscall(257, -100, raw, flags | 524288, mode)
+  descriptor := #syscall(sys.Openat, -100, raw, flags | 524288, mode)
   if descriptor < 0 {
-    return FileResult{ failure: io.Failure{ kind: io.linux(descriptor), native: descriptor } }
+    return FileResult{ failure: io.linux_failure(descriptor) }
   }
   return FileResult{ value: owned_file(descriptor) }
 }
@@ -40,19 +41,19 @@ fn native_open(path: []const u8, mode: u8) FileResult {
   return native_open_read(path)
 }
 fn native_close(handle: isize) isize {
-  return #syscall(3, handle)
+  return #syscall(sys.Close, handle)
 }
 fn native_read(handle: isize, destination: []u8) isize {
-  return #syscall(0, handle, &destination[0], #len(destination))
+  return #syscall(sys.Read, handle, &destination[0], #len(destination))
 }
 fn native_write(handle: isize, source: []const u8) isize {
-  return #syscall(1, handle, &source[0], #len(source))
+  return #syscall(sys.Write, handle, &source[0], #len(source))
 }
 fn native_seek(handle: isize, offset: isize, origin: usize) isize {
-  return #syscall(8, handle, offset, origin)
+  return #syscall(sys.Lseek, handle, offset, origin)
 }
 fn native_sync(handle: isize) isize {
-  return #syscall(74, handle)
+  return #syscall(sys.Fsync, handle)
 }
 fn native_kind(code: isize) io.Kind {
   return io.linux(code)
@@ -65,8 +66,8 @@ fn native_interrupted(code: isize) bool {
 }
 // Read-only private mapping of size bytes from offset zero.
 fn native_map(handle: isize, size: usize) isize {
-  return #syscall(9, 0, size, 1, 2, handle, 0)
+  return #syscall(sys.Mmap, 0, size, 1, 2, handle, 0)
 }
 fn native_unmap(address: usize, size: usize) isize {
-  return #syscall(11, address, size)
+  return #syscall(sys.Munmap, address, size)
 }

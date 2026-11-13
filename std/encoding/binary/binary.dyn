@@ -126,7 +126,7 @@ pub fn uleb128_decode(source: []const u8) Decode {
         value |= 9223372036854775808
       }
     } else {
-      value += #cast(u64, (byte & 127)) * factor
+      value += (byte & 127) * factor
     }
     if byte < 128 {
       return Decode{ value: value, consumed: i + 1, valid: true }

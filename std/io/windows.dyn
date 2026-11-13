@@ -19,10 +19,9 @@ fn stream_error(count: u32, code: u32) Transfer {
   if error == 0 {
     error = -5
   }
-  return Transfer{ transferred: #cast(usize, count), error: error, kind: windows(error), status: Status.Error }
+  return Transfer{ transferred: count, error: error, kind: windows(error), status: Status.Error }
 }
-fn stdin_read(data: rawptr, destination: []u8) Transfer {
-  _ = data
+fn stdin_read(_data: rawptr, destination: []u8) Transfer {
   if #len(destination) == 0 {
     return Transfer{}
   }
@@ -35,18 +34,18 @@ fn stdin_read(data: rawptr, destination: []u8) Transfer {
     error := standard_error()
     // A closed pipe and a file at EOF both end the byte stream.
     if error == 109 || error == 38 {
-      return Transfer{ transferred: #cast(usize, count), status: Status.End }
+      return Transfer{ transferred: count, status: Status.End }
     }
     // A message-mode pipe may return a partial message with ERROR_MORE_DATA.
     if error == 234 && count > 0 {
-      return Transfer{ transferred: #cast(usize, count) }
+      return Transfer{ transferred: count }
     }
     return stream_error(count, error)
   }
   if count == 0 {
     return Transfer{ status: Status.End }
   }
-  return Transfer{ transferred: #cast(usize, count) }
+  return Transfer{ transferred: count }
 }
 fn write_standard(kind: u32, source: []const u8) Transfer {
   if #len(source) == 0 {
@@ -63,14 +62,12 @@ fn write_standard(kind: u32, source: []const u8) Transfer {
   if count == 0 {
     return stream_error(0, 5)
   }
-  return Transfer{ transferred: #cast(usize, count) }
+  return Transfer{ transferred: count }
 }
-fn stdout_write(data: rawptr, source: []const u8) Transfer {
-  _ = data
+fn stdout_write(_data: rawptr, source: []const u8) Transfer {
   return write_standard(4294967285, source)
 }
-fn stderr_write(data: rawptr, source: []const u8) Transfer {
-  _ = data
+fn stderr_write(_data: rawptr, source: []const u8) Transfer {
   return write_standard(4294967284, source)
 }
 

@@ -1,8 +1,9 @@
 #target(kernel: linux)
+use "std/os/linux/sys"
 // Address space each arena block reserves by default. Only touched pages cost memory.
 const DefaultBlock: usize = 64 * GiB
 fn mapping_allocate(size: usize) Mapping {
-  address := #syscall(9, 0, size, 3, 16418, -1, 0)
+  address := #syscall(sys.Mmap, 0, size, 3, 16418, -1, 0)
   if address < 0 {
     return Mapping{ error: address }
   }
@@ -14,11 +15,11 @@ fn mapping_allocate(size: usize) Mapping {
   if head > 2 * MiB {
     head = 2 * MiB
   }
-  _ = #syscall(28, address, head, 15)
+  _ = #syscall(sys.Madvise, address, head, 15)
   return Mapping{ bytes: #slice(#cast(*u8, address), size), committed: size, ok: true }
 }
 fn mapping_release(bytes: []u8) isize {
-  return #syscall(11, &bytes[0], #len(bytes))
+  return #syscall(sys.Munmap, &bytes[0], #len(bytes))
 }
 // The whole mapping is committed at creation.
 fn mapping_commit(bytes: []u8, from: usize, to: usize) bool {

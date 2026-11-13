@@ -20,13 +20,13 @@ pub fn is_attached(descriptor: isize) bool {
 // or the change failed.
 pub fn raw(descriptor: isize) Read {
   saved := read_state(descriptor)
-  if saved.failure.kind != io.Kind.Ok {
+  if io.failed(saved.failure) {
     return saved
   }
   changed := saved.value
   make_raw(descriptor, &changed)
   applied := restore(descriptor, &changed)
-  if applied.failure.kind != io.Kind.Ok {
+  if io.failed(applied.failure) {
     return Read{ failure: io.Failure{ kind: applied.failure.kind, native: applied.failure.native } }
   }
   return saved
@@ -48,11 +48,9 @@ pub fn key_decode(bytes: []const u8) Key {
     width: usize = 1
     if bytes[0] >= 194 && bytes[0] <= 223 {
       width = 2
-    }
-    else if bytes[0] >= 224 && bytes[0] <= 239 {
+    } else if bytes[0] >= 224 && bytes[0] <= 239 {
       width = 3
-    }
-    else if bytes[0] >= 240 && bytes[0] <= 244 {
+    } else if bytes[0] >= 240 && bytes[0] <= 244 {
       width = 4
     }
     if #len(bytes) < width {
@@ -69,20 +67,15 @@ pub fn key_decode(bytes: []const u8) Key {
   kind := KeyKind.Unknown
   if bytes[2] == 'A' {
     kind = KeyKind.Up
-  }
-  else if bytes[2] == 'B' {
+  } else if bytes[2] == 'B' {
     kind = KeyKind.Down
-  }
-  else if bytes[2] == 'C' {
+  } else if bytes[2] == 'C' {
     kind = KeyKind.Right
-  }
-  else if bytes[2] == 'D' {
+  } else if bytes[2] == 'D' {
     kind = KeyKind.Left
-  }
-  else if bytes[2] == 'H' {
+  } else if bytes[2] == 'H' {
     kind = KeyKind.Home
-  }
-  else if bytes[2] == 'F' {
+  } else if bytes[2] == 'F' {
     kind = KeyKind.End
   }
   if kind != KeyKind.Unknown {
@@ -93,11 +86,9 @@ pub fn key_decode(bytes: []const u8) Key {
       if end == 3 && bytes[end] == '~' {
         if bytes[2] == '1' {
           kind = KeyKind.Home
-        }
-        else if bytes[2] == '3' {
+        } else if bytes[2] == '3' {
           kind = KeyKind.Delete
-        }
-        else if bytes[2] == '4' {
+        } else if bytes[2] == '4' {
           kind = KeyKind.End
         }
       }

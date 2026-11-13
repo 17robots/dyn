@@ -3,9 +3,6 @@
 .global _start
 .type _start,@function
 _start:
-#ifndef DYN_RELEASE
-    # Trace slots are claimed lazily by each thread.
-#endif
     call main
     mov %eax, %edi
     # Returning from main ends the process. With a C library linked, its
@@ -73,52 +70,10 @@ dyn_panic:
     mov $2, %edi
     mov $1, %eax
     syscall
-.global dyn_fault_report
-.type dyn_fault_report,@function
-dyn_fault_report:
 .Ldyn_panic_stack:
-    lea .Ldyn_panic_trace(%rip), %rsi
-    mov $13, %edx
-    mov $2, %edi
-    mov $1, %eax
-    syscall
-    call .Ldyn_trace_slot
-    test %rax, %rax
-    jz .Ldyn_panic_exit
-    mov 8(%rax), %rbx
-    mov $64, %rcx
-    cmp %rcx, %rbx
-    cmova %rcx, %rbx
-    lea 16(%rax), %r13
-.Ldyn_panic_frame:
-    test %rbx, %rbx
-    jz .Ldyn_panic_exit
-    dec %rbx
-    mov %r13, %r12
-    mov %rbx, %rax
-    shl $4, %rax
-    add %rax, %r12
-    lea .Ldyn_panic_at(%rip), %rsi
-    mov $5, %edx
-    mov $2, %edi
-    mov $1, %eax
-    syscall
-    mov (%r12), %rsi
-    mov 8(%r12), %rdx
-    mov $2, %edi
-    mov $1, %eax
-    syscall
-    lea .Ldyn_panic_newline(%rip), %rsi
-    mov $1, %edx
-    mov $2, %edi
-    mov $1, %eax
-    syscall
-    jmp .Ldyn_panic_frame
-#endif
-#ifdef DYN_RELEASE
-.global dyn_fault_report
-.type dyn_fault_report,@function
-dyn_fault_report:
+    # The trace was captured when the panic began, before cleanups ran.
+    and $-16, %rsp
+    call dyn_trace_dump
 #endif
 .Ldyn_panic_exit:
     # A panic ends every thread, without atexit handlers (state may be broken).
@@ -204,95 +159,6 @@ dyn_unwind_jump:
 .section .rodata
 .Ldyn_panic_newline:
     .byte 10
-#ifndef DYN_RELEASE
-.Ldyn_panic_trace:
-    .ascii "stack trace:\n"
-.Ldyn_panic_at:
-    .ascii "  at "
-.section .text.dyn_trace_push,"ax",@progbits
-.global dyn_trace_push
-.type dyn_trace_push,@function
-dyn_trace_push:
-    push %rdi
-    push %rsi
-    call .Ldyn_trace_slot_claim
-    pop %rsi
-    pop %rdi
-    test %rax, %rax
-    jz .Ldyn_trace_push_done
-    mov 8(%rax), %rcx
-    cmp $64, %rcx
-    jae .Ldyn_trace_push_count
-    mov %rcx, %rdx
-    shl $4, %rdx
-    mov %rdi, 16(%rax,%rdx)
-    mov %rsi, 24(%rax,%rdx)
-.Ldyn_trace_push_count:
-    inc %rcx
-    mov %rcx, 8(%rax)
-.Ldyn_trace_push_done:
-    ret
-.section .text.dyn_trace_pop,"ax",@progbits
-.global dyn_trace_pop
-.type dyn_trace_pop,@function
-dyn_trace_pop:
-    call .Ldyn_trace_slot
-    test %rax, %rax
-    jz .Ldyn_trace_pop_done
-    mov 8(%rax), %rcx
-    test %rcx, %rcx
-    jz .Ldyn_trace_pop_done
-    dec %rcx
-    mov %rcx, 8(%rax)
-    jnz .Ldyn_trace_pop_done
-    movq $0, (%rax)
-.Ldyn_trace_pop_done:
-    ret
-
-# Return current thread's trace slot, or zero. 64 bounded slots, 64 frames each.
-.Ldyn_trace_slot:
-    mov $186, %eax
-    syscall
-    lea dyn_trace_slots(%rip), %rdx
-    mov $64, %ecx
-.Ldyn_trace_slot_find:
-    cmp (%rdx), %rax
-    je .Ldyn_trace_slot_found
-    add $1040, %rdx
-    loop .Ldyn_trace_slot_find
-    xor %eax, %eax
-    ret
-.Ldyn_trace_slot_found:
-    mov %rdx, %rax
-    ret
-
-# Return existing slot or atomically claim empty slot for current tid.
-.Ldyn_trace_slot_claim:
-    mov $186, %eax
-    syscall
-    mov %rax, %r8
-    lea dyn_trace_slots(%rip), %rdx
-    mov $64, %ecx
-.Ldyn_trace_slot_claim_loop:
-    cmp (%rdx), %r8
-    je .Ldyn_trace_slot_claimed
-    xor %eax, %eax
-    lock cmpxchg %r8, (%rdx)
-    je .Ldyn_trace_slot_new
-    add $1040, %rdx
-    loop .Ldyn_trace_slot_claim_loop
-    xor %eax, %eax
-    ret
-.Ldyn_trace_slot_new:
-    push %rdx
-    call dyn_fault_install
-    pop %rdx
-.Ldyn_trace_slot_claimed:
-    mov %rdx, %rax
-    ret
-.hidden dyn_trace_slots
-.comm dyn_trace_slots,66560,16
-#endif
 .section .text.dyn_syscall6,"ax",@progbits
 .global dyn_syscall6
 .type dyn_syscall6,@function
@@ -403,6 +269,10 @@ dyn_thread_spawn:
     jz .Ldyn_thread_child
     ret
 .Ldyn_thread_child:
+#ifndef DYN_RELEASE
+    # Debug programs give each thread a stack for fault reports.
+    call dyn_trace_thread
+#endif
     pop %rax
     pop %rdi
     call *%rax

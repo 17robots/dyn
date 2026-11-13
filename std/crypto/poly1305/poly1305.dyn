@@ -7,7 +7,7 @@ pub struct State { r: [5]u64, h: [5]u64, pad: [4]u32, buffer: [16]u8, used: usiz
 pub struct Tag { value: [16]u8, valid: bool }
 const Mask: u64 = 0x3ffffff
 fn load(source: []const u8, at: usize) u64 {
-  return #cast(u64, binary.load_u32_le(source[at..at+4]))
+  return binary.load_u32_le(source[at..at+4])
 }
 pub fn init(key: []const u8) State {
   if #len(key) != 32 {
@@ -115,7 +115,7 @@ pub fn finish(state: *State) Tag {
   result := Tag{ valid: true }
   carry = 0
   for i in 0..4 {
-    word := words[i] + #cast(u64, state.pad[i]) + carry
+    word := words[i] + state.pad[i] + carry
     binary.store_u32_le(result.value[i*4..i*4+4], #cast(u32, word))
     carry = word >> 32
   }
@@ -136,7 +136,7 @@ pub fn equal(left: []const u8, right: []const u8) bool {
   }
   difference: u32 = 0
   for i in 0..16 {
-    difference |= #cast(u32, left[i] ^ right[i])
+    difference |= left[i] ^ right[i]
   }
   return difference == 0
 }

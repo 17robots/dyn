@@ -18,6 +18,10 @@ import signal
 import subprocess
 import tempfile
 
+# These checks name individual functions (remarks, symbols, check messages,
+# per-function compiler hooks), so keep every call out of line.
+os.environ['DYN_NO_INLINE'] = '1'
+
 ROOT = Path(os.environ.get('ROOT', Path(__file__).resolve().parents[1])).resolve()
 BUILD = Path(os.environ.get('BUILD', ROOT/'build')).resolve()
 DYN = str(Path(os.environ.get('DYN', BUILD/'dyn-release')).resolve())
@@ -213,7 +217,7 @@ def guests(work, compiler, target, flags, board, qemu, adapter, audit):
     for fixture, body, expected in fixtures:
         project = work/fixture
         project.mkdir()
-        check = 'if cpacr() & 0x00f00000 != 0 { #panic("FPU") }\n' if audit and target.startswith('thumb') else ''
+        check = 'if (cpacr() & 0x00f00000) != 0 { #panic("FPU") }\n' if audit and target.startswith('thumb') else ''
         (project/'main.dyn').write_text(SOURCE+'fn main() {\n'+check+body+'\n'+check+'}\n')
         for mode in ('ssa', 'tree'):
             image = work/f'{fixture}-{mode}.elf'

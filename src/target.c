@@ -45,6 +45,10 @@ const DynTarget *dyn_target_find(const char *name) {
   return NULL;
 }
 
+const DynTarget *dyn_target_at(size_t index) {
+  return index < sizeof(targets) / sizeof(targets[0]) ? &targets[index] : NULL;
+}
+
 const char *dyn_target_property(const DynTarget *target, const char *key) {
   if (!strcmp(key, "arch"))
     return target->arch;
@@ -74,7 +78,7 @@ bool dyn_target_syscall_number(const DynTarget *target, uint64_t source,
   static const struct {
     uint16_t portable, aarch64;
   } map[] = {
-      {0, 63},    {1, 64},    {3, 57},   {8, 62},   {9, 222},   {11, 215},
+      {0, 63},    {1, 64},    {3, 57},   {8, 62},   {9, 222},   {10, 226},  {11, 215},
       {13, 134},  {14, 135},  {16, 29},   {28, 233},   {24, 124}, {32, 23},  {33, 24},   {35, 101},
       {39, 172},  {41, 198},  {42, 203}, {43, 202}, {44, 206},  {45, 207},
       {48, 210},  {49, 200},  {50, 201}, {51, 204}, {52, 205},  {54, 208}, {55, 209}, {56, 220},

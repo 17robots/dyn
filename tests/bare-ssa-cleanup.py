@@ -23,6 +23,10 @@ import sys
 import tempfile
 import time
 
+# These checks name individual functions (remarks, symbols, check messages,
+# per-function compiler hooks), so keep every call out of line.
+os.environ['DYN_NO_INLINE'] = '1'
+
 ROOT = Path(os.environ.get('ROOT', Path(__file__).resolve().parents[1])).resolve()
 
 def mod(name):
@@ -198,12 +202,15 @@ def fixtures():
       source+=f'pub fn {name}(a:{ty},b:{ty}) {ty} {{ defer mark("CHECK\\n")\nreturn a{sym}b }}\n'
       bits=int(ty[1:]);sign=ty[0]=='i';mx=2**(bits-sign)-1;mn=-2**(bits-1) if sign else 0
       a,v=(mx,2) if op=='mul' else (mx,1) if op=='add' else (mn,1) if op=='sub' else (1,0)
-      pred='divide.ok' if op in ('div','rem') else 'overflow.ok'
-      cases.append((name,f'_={name}({a},{v})',101,f'CHECK\nruntime check failed ({pred}) in {name}\n'.encode()))
+      # Integer overflow wraps; only division keeps its runtime check.
+      if op in ('div','rem'):
+       cases.append((name,f'_={name}({a},{v})',101,f'CHECK\nruntime check failed (divide.ok) in {name}\n'.encode()))
+      else:
+       cases.append((name,f'_={name}({a},{v})',0,b'CHECK\n'))
       if sign and op in ('div','rem'):
        cases.append((name+'min',f'_={name}({mn},-1)',101,f'CHECK\nruntime check failed (division.overflow.ok) in {name}\n'.encode()))
     source+='pub fn shift(a:u64,b:u64) u64 { defer mark("CHECK\\n")\nreturn a<<b }\n'
-    cases += [('shiftcount','_=shift(1,64)',101,b'CHECK\nruntime check failed (shift.count.ok) in shift\n'),('shiftbits','_=shift(18446744073709551615,1)',101,b'CHECK\nruntime check failed (overflow.ok) in shift\n'),('mulbounds','if mul_i64(-9223372036854775808,1)!=-9223372036854775808 || mul_u64(18446744073709551615,1)!=18446744073709551615 || mul_i64(-3,-7)!=21 || mul_u64(0,18446744073709551615)!=0 { #panic("multiply") }',0,b'CHECK\n'*4)]
+    cases += [('shiftcount','_=shift(1,64)',0,b'CHECK\n'),('shiftbits','_=shift(18446744073709551615,1)',0,b'CHECK\n'),('mulbounds','if mul_i64(-9223372036854775808,1)!=-9223372036854775808 || mul_u64(18446744073709551615,1)!=18446744073709551615 || mul_i64(-3,-7)!=21 || mul_u64(0,18446744073709551615)!=0 { #panic("multiply") }',0,b'CHECK\n'*4)]
     assert len(cases) == 52 and len(re.findall(r"pub fn (\w+)", source)) == 48
     groups = [("cleanup", source, cases)]
     original = source
@@ -234,7 +241,7 @@ def fixtures():
     i+=1 }
     mark(s) }
     '''
-    cases=[('adjacent','adjacent()',0,b'SECOND\nFIRST\n'),('nested','nested()',0,b'B\nM\nA\n'),('early','if early(1)!=0x1122334455667788 { #panic("return") }',0,b'F\nE\n'),('overflow','_=overflow(18446744073709551615)',101,b'CHECK\nruntime check failed (overflow.ok) in overflow\n'),('lengths','lengths()',0,b'X\nLONGER\nLONGER\nLONGER\nORIGINAL\n')]
+    cases=[('adjacent','adjacent()',0,b'SECOND\nFIRST\n'),('nested','nested()',0,b'B\nM\nA\n'),('early','if early(1)!=0x1122334455667788 { #panic("return") }',0,b'F\nE\n'),('overflow','_=overflow(18446744073709551615)',0,b'CHECK\n'),('lengths','lengths()',0,b'X\nLONGER\nLONGER\nLONGER\nORIGINAL\n')]
     groups.append(('minimal', source, cases))
     source = original
     source+=r'''
@@ -286,7 +293,7 @@ def fixtures():
     source=r'''use "std/io"
     extern fn cpacr() u32
     fn mark(s:[]const u8) { _=io.write_all(io.stdout(),s) }
-    fn checkany(x:any) { case x { is u64 n => { if n!=0x1122334455667788 { #panic("any") }
+    fn checkany(x:any) { case x { u64 n => { if n!=0x1122334455667788 { #panic("any") }
     mark("ANY\n") } _ => { #panic("type") } } }
     fn mutable(x:[]u8) { if #len(x)!=3 || x[2]!=67 { #panic("slice") }
     mark("SLICE\n") }
@@ -396,7 +403,7 @@ def main():
                 for f in flags] if rv else ['--target=arm-none-eabi', '-mcpu=cortex-m7', '-mthumb', '-mfloat-abi=soft'])
             audit = soft.fixture('rv32' if rv else 'thumb')[0] if sf else None
             command = qemu + (['-cpu', 'sifive-e31'] if sf and rv else [])
-            check = 'if cpacr() & 0x00f00000 != 0 { #panic("FPU enabled") }\n' if sf and not rv else ''
+            check = 'if (cpacr() & 0x00f00000) != 0 { #panic("FPU enabled") }\n' if sf and not rv else ''
             with tempfile.TemporaryDirectory(prefix='dyn-cleanup-') as temporary:
                 work = Path(temporary)
                 for group, source, cases in groups:

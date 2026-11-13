@@ -81,6 +81,13 @@ static bool value(Eval *c, DynExprId id, uint64_t *out, unsigned depth) {
     return st && st <= c->ir->statement_count &&
            value(c, c->ir->statements[st - 1].expression, out, depth + 1);
   }
+  if (e->kind == DYN_EXPR_GLOBAL) {
+    if (e->integer >= c->ir->global_count)
+      return false;
+    const DynIrGlobal *g = &c->ir->globals[e->integer];
+    return g->is_const && !g->foreign && g->initializer != DYN_NO_EXPR &&
+           g->type == e->type && value(c, g->initializer, out, depth + 1);
+  }
   if (e->kind == DYN_EXPR_CALL && c->level >= 3 && !c->function &&
       e->integer < c->ir->function_count) {
     const DynIrFunction *f = &c->ir->functions[e->integer];
@@ -133,6 +140,27 @@ static bool value(Eval *c, DynExprId id, uint64_t *out, unsigned depth) {
       return false;
     const DynIrExpr *left = &c->ir->expressions[e->left];
     unsigned operand_bits = width(c, left->type);
+    if (e->op == DYN_OP_SHL || e->op == DYN_OP_SHR) {
+      /* Counts are masked to the left operand's width; the count may have
+         another integer type. */
+      if (operand_bits != bits || bits < 8)
+        return false;
+      unsigned n = (unsigned)(b & (bits - 1));
+      a &= mask;
+      if (e->op == DYN_OP_SHL) {
+        r = (a << n) & mask;
+        int64_t back = (int64_t)normalize(r, bits, sign);
+        uint64_t undone = sign ? (uint64_t)(back >> n) & mask : r >> n;
+        if (undone != a && !e->wrap)
+          return false;
+      } else {
+        r = a >> n;
+        if (sign && (a & high))
+          r = (r | ~(mask >> n)) & mask;
+      }
+      *out = normalize(r, bits, sign);
+      return true;
+    }
     if (!operand_bits || left->type != c->ir->expressions[e->right].type)
       return false;
     uint64_t omask = UINT64_MAX >> (64 - operand_bits),
@@ -309,7 +337,11 @@ typedef struct {
   DynIrProgram view, out;
   size_t expressions_cap, statements_cap, items_cap, children_cap, locals_cap,
       arms_cap;
+  /* Loop IDs: each rebuilt or inlined body takes a fresh run as long as
+     its function's span (loop_low, loop_span per function), from next_loop,
+     which starts past every original ID. */
   uint32_t loop_stride, next_loop;
+  uint32_t *loop_low, *loop_span;
   unsigned expansions, budget, resource_budget, reserved_growth, reserved_resources;
   unsigned *costs;
   bool failed, leaf_only, byte_fast;
@@ -328,6 +360,10 @@ typedef struct {
      expansion), when overridden. */
   uint32_t override_node;
   bool overridden;
+  /* Released statement-list buffers, reused by the next lists: every block
+     of every caller builds one. */
+  struct { uint32_t *ids; size_t capacity; } spare[32];
+  unsigned spare_count;
 } Inline;
 /* One possible expansion: the call at `site` within the body that node
    `parent` expands (node 0 is the caller itself). */
@@ -357,7 +393,7 @@ static bool inline_grow(Inline *b, void **array, size_t *capacity, size_t need,
     return false;
   if (need <= *capacity)
     return true;
-  if (need > (1u << 22) || element > SIZE_MAX / need) {
+  if (need > UINT32_MAX || element > SIZE_MAX / need) {
     b->failed = true;
     return false;
   }
@@ -383,9 +419,22 @@ static bool inline_grow(Inline *b, void **array, size_t *capacity, size_t need,
       (b)->out.field##s[(b)->out.field##_count++] = (value);                   \
   } while (0)
 static void inline_list(Inline *b, InlineList *list, uint32_t id) {
+  if (!list->ids && b->spare_count) {
+    --b->spare_count;
+    list->ids = b->spare[b->spare_count].ids;
+    list->capacity = b->spare[b->spare_count].capacity;
+  }
   if (inline_grow(b, (void **)&list->ids, &list->capacity, list->count + 1,
                   sizeof(*list->ids)))
     list->ids[list->count++] = id;
+}
+static void inline_list_release(Inline *b, InlineList *list) {
+  if (list->ids && b->spare_count < sizeof(b->spare) / sizeof(b->spare[0])) {
+    b->spare[b->spare_count].ids = list->ids;
+    b->spare[b->spare_count++].capacity = list->capacity;
+  } else free(list->ids);
+  list->ids = NULL;
+  list->count = list->capacity = 0;
 }
 static uint32_t inline_children(Inline *b, InlineList *list) {
   uint32_t start = (uint32_t)b->out.child_count;
@@ -396,8 +445,7 @@ static uint32_t inline_children(Inline *b, InlineList *list) {
              list->count * sizeof(*list->ids));
     b->out.child_count += list->count;
   }
-  free(list->ids);
-  list->ids = NULL;
+  inline_list_release(b, list);
   return start;
 }
 static uint32_t inline_local(Inline *b, const InlineScope *s, uint32_t id) {
@@ -426,13 +474,50 @@ static uint32_t inline_locals(Inline *b, const DynIrFunction *f) {
   }
   return start;
 }
-static uint32_t inline_loop_base(Inline *b) {
-  uint32_t base = b->next_loop;
-  if (b->next_loop > UINT32_MAX - b->loop_stride)
-    b->failed = true;
-  else
-    b->next_loop += b->loop_stride;
+/* The offset that moves f's loop IDs onto a fresh run. It wraps: an ID
+   plus the offset is next_loop plus the ID's place in f's span. */
+/* f's index in the program, or SIZE_MAX without spans (a caller that set
+   up Inline itself) or for a function outside the program's array. */
+static size_t inline_loop_owner(const Inline *b, const DynIrFunction *f) {
+  if (!b->loop_low || f < b->in->functions || f >= b->in->functions + b->in->function_count) return SIZE_MAX;
+  return (size_t)(f - b->in->functions);
+}
+static uint32_t inline_loop_base(Inline *b, const DynIrFunction *f) {
+  size_t index = inline_loop_owner(b, f);
+  /* Without a span, every original ID shifts past every ID handed out. */
+  uint32_t low = index != SIZE_MAX ? b->loop_low[index] : 0;
+  uint32_t span = index != SIZE_MAX ? b->loop_span[index] : b->loop_stride;
+  uint32_t base = b->next_loop - low;
+  if (b->next_loop > UINT32_MAX - span - 1) b->failed = true;
+  else b->next_loop += span;
   return base;
+}
+/* One new loop ID. */
+static uint32_t inline_loop_id(Inline *b) {
+  if (b->next_loop == UINT32_MAX) { b->failed = true; return 0; }
+  return b->next_loop++;
+}
+/* The lowest and highest loop IDs a body's statements use. */
+static void inline_loop_range(const DynIrProgram *ir, uint32_t start, uint32_t count, uint32_t *low, uint32_t *high,
+                              unsigned depth) {
+  if (depth > 1024 || (uint64_t)start + count > ir->child_count) return;
+  for (uint32_t i = 0; i < count; ++i) {
+    uint32_t id = ir->children[start + i];
+    if (id >= ir->statement_count) continue;
+    const DynIrStmt *s = &ir->statements[id];
+    uint32_t loop = s->kind == DYN_STMT_FOR ? s->loop_id
+                  : s->kind == DYN_STMT_BREAK || s->kind == DYN_STMT_CONTINUE ? s->target_loop_id : UINT32_MAX;
+    if (loop != UINT32_MAX) {
+      if (loop < *low) *low = loop;
+      if (loop > *high || *high == UINT32_MAX) *high = loop;
+    }
+    inline_loop_range(ir, s->body_start, s->body_count, low, high, depth + 1);
+    inline_loop_range(ir, s->else_start, s->else_count, low, high, depth + 1);
+    if ((uint64_t)s->case_arm_start + s->case_arm_count <= ir->case_arm_count)
+      for (uint32_t j = 0; j < s->case_arm_count; ++j)
+        inline_loop_range(ir, ir->case_arms[s->case_arm_start + j].body_start,
+                          ir->case_arms[s->case_arm_start + j].body_count, low, high, depth + 1);
+  }
 }
 /* Keep constant subtrees shared. Cloning their IR identities would duplicate
    the backend's literal pool even when the enclosing function is unchanged. */
@@ -756,8 +841,11 @@ static bool inline_admits(const Inline *b, const InlineScope *scope, uint64_t id
       (uint64_t)f->param_start + f->param_count > b->in->param_count)
     return false;
   /* Preserve the call for target byte-scan lowering; other targets retain
-     their existing scalar inlining decisions. */
-  if (b->byte_fast && f->byte_intrinsic != DYN_BYTE_INTRINSIC_NONE)
+     their existing scalar inlining decisions. Math the backend lowers to
+     one instruction (sqrt, fma, rounding) stays a call too: its body is the
+     software fallback. */
+  if ((b->byte_fast && f->byte_intrinsic != DYN_BYTE_INTRINSIC_NONE) ||
+      f->math_intrinsic != DYN_MATH_INTRINSIC_NONE)
     return false;
   if (b->leaf_only && (!scope->in_loop || !inline_leaf(b->in, f)))
     return false;
@@ -806,13 +894,13 @@ static bool inline_call_bound(Inline *b, const InlineScope *scope,
   b->resource_budget -= resources;
   InlineScope nested = {.function = f,
                         .local_base = inline_locals(b, f),
-                        .loop_base = inline_loop_base(b),
+                        .loop_base = inline_loop_base(b, f),
                         .returns = true,
                         .check_origin = (uint32_t)call->integer + 1,
                         .expand = true,
                         .plan = node ? node + 1 : 0,
                         .result_local = UINT32_MAX};
-  nested.exit_loop = inline_loop_base(b);
+  nested.exit_loop = inline_loop_id(b);
   if (f->return_type != DYN_TYPE_VOID) {
     DynIrLocal local = {.name = "__inline_result", .type = f->return_type};
     INLINE_APPEND(b, local, locals_cap, local, nested.result_local);
@@ -836,7 +924,7 @@ static bool inline_call_bound(Inline *b, const InlineScope *scope,
     bool expanded = inline_cast_call(b, scope, argument, &expansion, &value, depth + 1);
     for (size_t j = 0; j < expansion.count; ++j)
       inline_list(b, list, expansion.ids[j]);
-    free(expansion.ids);
+    inline_list_release(b, &expansion);
     if (b->failed)
       return true;
     s.expression = expanded ? value : inline_expr(b, scope, argument, 0);
@@ -895,7 +983,9 @@ static DynExprId inline_call_of(Inline *b, const DynIrExpr *site, DynExprKind ki
 /* A call through a pointer whose type only one taken function has becomes
      if pointer == that { inlined body } else { pointer(arguments) }
    The comparison keeps any other value correct; it only predicts the common
-   case of a struct field that always holds the same function. */
+   case of a struct field that always holds the same function. Only the
+   inlined branch evaluates the arguments first: the other keeps the call,
+   which checks a nil pointer before its arguments' own checks. */
 static bool inline_guarded_call(Inline *b, const InlineScope *scope,
                                 const DynIrExpr *site, InlineList *list,
                                 DynExprId *result, unsigned depth) {
@@ -920,6 +1010,7 @@ static bool inline_guarded_call(Inline *b, const InlineScope *scope,
   capture.expression = inline_expr(b, scope, call.left, 0);
   inline_statement(b, list, capture);
   DynExprId arguments[16], names[16];
+  InlineList direct = {0}, indirect = {0};
   for (uint32_t i = 0; i < call.item_count && !b->failed; ++i) {
     DynExprId argument = b->in->items[call.item_start + i].expression;
     DynIrLocal value = {.name = "__guard_argument", .type = b->in->expressions[argument].type};
@@ -932,10 +1023,10 @@ static bool inline_guarded_call(Inline *b, const InlineScope *scope,
     DynExprId expanded = DYN_NO_EXPR;
     bool done = inline_cast_call(b, scope, argument, &expansion, &expanded, depth + 1);
     for (size_t j = 0; j < expansion.count; ++j)
-      inline_list(b, list, expansion.ids[j]);
-    free(expansion.ids);
+      inline_list(b, &direct, expansion.ids[j]);
+    inline_list_release(b, &expansion);
     s.expression = done ? expanded : inline_expr(b, scope, argument, 0);
-    inline_statement(b, list, s);
+    inline_statement(b, &direct, s);
     arguments[i] = local;
   }
   uint32_t answer = UINT32_MAX;
@@ -943,8 +1034,10 @@ static bool inline_guarded_call(Inline *b, const InlineScope *scope,
     DynIrLocal value = {.name = "__guard_result", .type = call.type};
     INLINE_APPEND(b, local, locals_cap, value, answer);
   }
-  if (b->failed) return true;
-  InlineList direct = {0}, indirect = {0};
+  if (b->failed) {
+    inline_list_release(b, &direct);
+    return true;
+  }
   for (uint32_t i = 0; i < call.item_count; ++i) names[i] = inline_name(b, arguments[i], call.span);
   DynIrExpr known = call;
   known.kind = DYN_EXPR_CALL;
@@ -957,7 +1050,8 @@ static bool inline_guarded_call(Inline *b, const InlineScope *scope,
   for (int branch = 0; branch < 2; ++branch) {
     InlineList *into = branch ? &indirect : &direct;
     if (branch) {
-      for (uint32_t i = 0; i < call.item_count; ++i) names[i] = inline_name(b, arguments[i], call.span);
+      for (uint32_t i = 0; i < call.item_count; ++i)
+        names[i] = inline_expr(b, scope, b->in->items[call.item_start + i].expression, 0);
       value = inline_call_of(b, &call, DYN_EXPR_INDIRECT_CALL, call.integer,
                              inline_name(b, callee, call.span), names);
     }
@@ -1098,8 +1192,8 @@ static bool inline_cast_call(Inline *b, const InlineScope *scope,
     for (size_t i = 0; i < captures.count; ++i) inline_list(b, list, captures.ids[i]);
     for (size_t i = 0; i < body.count; ++i) inline_list(b, list, body.ids[i]);
   }
-  free(captures.ids);
-  free(body.ids);
+  inline_list_release(b, &captures);
+  inline_list_release(b, &body);
   if (!expanded) return b->failed;
   while (count && !b->failed) {
     --count;
@@ -1238,7 +1332,8 @@ static bool inline_plan_fits(const Inline *b, uint32_t node) {
   const DynIrExpr *call = &b->in->expressions[x->site];
   if (f->foreign || f->generic || f->variadic || f->is_main || f->local_count > 128 ||
       call->item_count != f->param_count || (uint64_t)f->param_start + f->param_count > b->in->param_count ||
-      (b->byte_fast && f->byte_intrinsic != DYN_BYTE_INTRINSIC_NONE))
+      (b->byte_fast && f->byte_intrinsic != DYN_BYTE_INTRINSIC_NONE) ||
+      f->math_intrinsic != DYN_MATH_INTRINSIC_NONE)
     return false;
   /* A repeating site may be twice the size, like LLVM's bonus for loops,
      when it runs often for its size: a large callee behind a branch, such
@@ -1328,7 +1423,7 @@ static void inline_block(Inline *b, const InlineScope *scope, uint32_t start,
       s.target = inline_capture_target(b, scope, s.target, list);
     for (size_t j = 0; j < expansion.count; ++j)
       inline_list(b, list, expansion.ids[j]);
-    free(expansion.ids);
+    inline_list_release(b, &expansion);
     if (b->failed)
       return;
     /* An expanded call with no value has run; `_ = f()` of one is done too. */
@@ -1343,10 +1438,15 @@ static void inline_block(Inline *b, const InlineScope *scope, uint32_t start,
       if (s.kind != DYN_STMT_FOR || s.for_range || s.target != DYN_NO_EXPR)
         s.local_id = inline_local(b, scope, s.local_id);
     }
-    if (s.kind == DYN_STMT_FOR)
-      s.loop_id += scope->loop_base;
-    if (s.kind == DYN_STMT_BREAK || s.kind == DYN_STMT_CONTINUE)
-      s.target_loop_id += scope->loop_base;
+    /* An ID outside the function's span would leave its run: give up
+       rather than risk two loops sharing one. */
+    size_t owner = inline_loop_owner(b, scope->function);
+    uint32_t *loop = s.kind == DYN_STMT_FOR ? &s.loop_id
+                   : s.kind == DYN_STMT_BREAK || s.kind == DYN_STMT_CONTINUE ? &s.target_loop_id : NULL;
+    if (loop && owner != SIZE_MAX &&
+        (*loop < b->loop_low[owner] || *loop - b->loop_low[owner] >= b->loop_span[owner]))
+      b->failed = true;
+    if (loop) *loop += scope->loop_base;
     InlineScope child = *scope;
     if (s.kind == DYN_STMT_FOR)
       child.in_loop = true;
@@ -1415,8 +1515,7 @@ static int inline_loop_compare(const void *a, const void *b) {
    restore the checked IR invariant with a bounded, identity-preserving map.
    Include retained original prefixes as well as rebuilt executable bodies. */
 static bool inline_dense_loops(DynIrProgram *ir) {
-  if (ir->statement_count > (1u << 22) ||
-      ir->statement_count > SIZE_MAX / sizeof(uint32_t)) return false;
+  if (ir->statement_count > UINT32_MAX || ir->statement_count > SIZE_MAX / sizeof(uint32_t)) return false;
   uint32_t *ids = malloc((ir->statement_count ? ir->statement_count : 1) * sizeof(*ids));
   if (!ids) return false;
   size_t count = 0;
@@ -1445,7 +1544,8 @@ static bool inline_dense_loops(DynIrProgram *ir) {
   free(ids);
   return true;
 }
-static bool inline_program(DynNativeOptimization *o, bool leaf_only, bool byte_fast) {
+/* budget: growth allowed per caller, in cost units; see inline_admits. */
+static bool inline_program_within(DynNativeOptimization *o, bool leaf_only, bool byte_fast, unsigned budget) {
   Inline b = {.view = o->ir, .out = o->ir, .loop_stride = 1,
               .leaf_only = leaf_only, .byte_fast = byte_fast};
   b.in = &b.view;
@@ -1524,6 +1624,17 @@ static bool inline_program(DynNativeOptimization *o, bool leaf_only, bool byte_f
         b.loop_stride = s->loop_id + 1;
     }
   }
+  b.next_loop = b.loop_stride;
+  b.loop_low = malloc((b.in->function_count ? b.in->function_count : 1) * sizeof(uint32_t));
+  b.loop_span = malloc((b.in->function_count ? b.in->function_count : 1) * sizeof(uint32_t));
+  if (!b.loop_low || !b.loop_span) b.failed = true;
+  for (size_t i = 0; i < b.in->function_count && !b.failed; ++i) {
+    uint32_t low = UINT32_MAX, high = UINT32_MAX;
+    const DynIrFunction *f = &b.in->functions[i];
+    if (!f->foreign) inline_loop_range(b.in, f->body_start, f->body_count, &low, &high, 0);
+    b.loop_low[i] = low == UINT32_MAX ? 0 : low;
+    b.loop_span[i] = low == UINT32_MAX ? 0 : high - low + 1;
+  }
   b.addressed = calloc(b.in->local_count ? b.in->local_count : 1, sizeof(bool));
   if (!b.addressed) b.failed = true;
   for (size_t i = 0; i < b.in->expression_count && !b.failed; ++i) {
@@ -1582,9 +1693,9 @@ static bool inline_program(DynNativeOptimization *o, bool leaf_only, bool byte_f
       continue;
     InlineScope scope = {.function = f,
                          .local_base = inline_locals(&b, f),
-                         .loop_base = inline_loop_base(&b),
+                         .loop_base = inline_loop_base(&b, f),
                          .expand = true};
-    b.budget = leaf_only ? 24 : 512;
+    b.budget = leaf_only ? 24 : budget;
     b.resource_budget = 8 * b.budget;
     b.reserved_growth = b.reserved_resources = 0;
     b.active[i] = true;
@@ -1619,10 +1730,13 @@ static bool inline_program(DynNativeOptimization *o, bool leaf_only, bool byte_f
     memset(b.out.unstable_locals, 1, b.out.local_count);
   free(b.active);
   free(b.costs);
+  free(b.loop_low);
+  free(b.loop_span);
   free(b.addressed);
   free(b.guess_types);
   free(b.guess_functions);
   free(b.plan);
+  while (b.spare_count) free(b.spare[--b.spare_count].ids);
   /* The original records are still the prefix of the shared arrays. */
   o->ir.expressions = b.out.expressions;
   o->ir.statements = b.out.statements;
@@ -1674,22 +1788,31 @@ static bool optimize(const DynSource *source, const DynIrProgram *input, DynIrPr
   o->ir.statements = NULL;
   if (level < 1 || level > 3)
     return false;
-  o->ir.expressions =
-      malloc((input->expression_count ? input->expression_count : 1) *
-             sizeof(*input->expressions));
-  o->ir.statements =
-      malloc((input->statement_count ? input->statement_count : 1) *
-             sizeof(*input->statements));
-  if (!o->ir.expressions || !o->ir.statements) {
-    dyn_native_optimization_free(o);
-    return false;
+  /* An owned input's arrays become the optimized program's: copying them
+     cost a full pass over a large program's expressions. Folding below reads
+     the input while it runs, so its results are applied afterwards either
+     way. */
+  if (owned) {
+    o->ir.expressions = owned->expressions;
+    o->ir.statements = owned->statements;
+  } else {
+    o->ir.expressions =
+        malloc((input->expression_count ? input->expression_count : 1) *
+               sizeof(*input->expressions));
+    o->ir.statements =
+        malloc((input->statement_count ? input->statement_count : 1) *
+               sizeof(*input->statements));
+    if (!o->ir.expressions || !o->ir.statements) {
+      dyn_native_optimization_free(o);
+      return false;
+    }
+    if (input->expression_count)
+      memcpy(o->ir.expressions, input->expressions,
+             input->expression_count * sizeof(*input->expressions));
+    if (input->statement_count)
+      memcpy(o->ir.statements, input->statements,
+             input->statement_count * sizeof(*input->statements));
   }
-  if (input->expression_count)
-    memcpy(o->ir.expressions, input->expressions,
-           input->expression_count * sizeof(*input->expressions));
-  if (input->statement_count)
-    memcpy(o->ir.statements, input->statements,
-           input->statement_count * sizeof(*input->statements));
   Eval c = {.ir = input,
             .level = level,
             .pointer_bits = 8 * dyn_target_pointer_bytes(
@@ -1704,6 +1827,7 @@ static bool optimize(const DynSource *source, const DynIrProgram *input, DynIrPr
               "error: independent sample profile requires nonempty "
               "function:total:head text records and numeric line samples\n");
       free(samples);
+      if (owned) o->ir.expressions = NULL, o->ir.statements = NULL;
       dyn_native_optimization_free(o);
       return false;
     }
@@ -1711,27 +1835,61 @@ static bool optimize(const DynSource *source, const DynIrProgram *input, DynIrPr
     c.level = 3;
   }
   struct timespec optimization_time = dyn_timing_start(&source->context);
+  /* A constant global whose address is taken stays a global; its uses as a
+     value fold to its initializer. */
+  bool *addressed = calloc(input->expression_count ? input->expression_count : 1, sizeof(*addressed));
+  struct { DynExprId id; uint64_t value; } *folds = NULL;
+  size_t fold_count = 0, fold_capacity = 0;
+  if (!addressed) {
+    free(samples);
+    if (owned) o->ir.expressions = NULL, o->ir.statements = NULL;
+    dyn_native_optimization_free(o);
+    return false;
+  }
+  for (size_t i = 0; i < input->expression_count; ++i) {
+    const DynIrExpr *e = &input->expressions[i];
+    if (e->kind == DYN_EXPR_UNARY && e->op == DYN_OP_ADDRESS && e->left < input->expression_count)
+      addressed[e->left] = true;
+  }
   for (size_t i = 0; i < input->expression_count; ++i) {
     if (input->live.expressions && !input->live.expressions[i]) continue;
     const DynIrExpr *e = &input->expressions[i];
     if (e->kind == DYN_EXPR_INT || e->kind == DYN_EXPR_BOOL ||
-        e->kind == DYN_EXPR_CHAR)
+        e->kind == DYN_EXPR_CHAR || (e->kind == DYN_EXPR_GLOBAL && addressed[i]))
       continue;
     uint64_t result;
     c.remaining = 256;
     if (!value(&c, (DynExprId)i, &result, 0))
       continue;
-    DynIrExpr *dest = &o->ir.expressions[i];
-    dest->kind = e->type == DYN_TYPE_BOOL ? DYN_EXPR_BOOL : DYN_EXPR_INT;
-    dest->integer = result;
-    dest->boolean = result != 0;
-    if (e->kind == DYN_EXPR_NAME)
+    if (fold_count == fold_capacity) {
+      size_t capacity = fold_capacity ? fold_capacity * 2 : 256;
+      void *grown = realloc(folds, capacity * sizeof(*folds));
+      if (!grown) {
+        free(folds); free(addressed); free(samples);
+        if (owned) o->ir.expressions = NULL, o->ir.statements = NULL;
+        dyn_native_optimization_free(o);
+        return false;
+      }
+      folds = grown;
+      fold_capacity = capacity;
+    }
+    folds[fold_count].id = (DynExprId)i;
+    folds[fold_count++].value = result;
+    if (e->kind == DYN_EXPR_NAME || e->kind == DYN_EXPR_GLOBAL)
       ++o->propagated;
     else if (e->kind == DYN_EXPR_CALL)
       ++o->calls;
     else
       ++o->folded;
   }
+  for (size_t f = 0; f < fold_count; ++f) {
+    DynIrExpr *dest = &o->ir.expressions[folds[f].id];
+    dest->kind = dest->type == DYN_TYPE_BOOL ? DYN_EXPR_BOOL : DYN_EXPR_INT;
+    dest->integer = folds[f].value;
+    dest->boolean = folds[f].value != 0;
+  }
+  free(folds);
+  free(addressed);
   if (level >= 2)
     for (size_t i = 0; i < input->statement_count; ++i) {
       if (input->live.statements && !input->live.statements[i]) continue;
@@ -1750,14 +1908,25 @@ static bool optimize(const DynSource *source, const DynIrProgram *input, DynIrPr
     }
   dyn_timing_phase(&source->context, &optimization_time, "scalar optimization");
   if (owned) {
-    /* The copy now holds every expression and statement inlining reads. */
-    free(owned->expressions); free(owned->statements);
+    /* The optimized program holds the input's arrays from here on. */
     owned->expressions = NULL; owned->statements = NULL;
   }
   const char *no_ssa = getenv("DYN_NO_SSA");
   bool byte_fast = allow_ssa_intrinsics && !strcmp(dyn_context_target(&source->context)->arch, "x86_64") &&
                   (!no_ssa || !*no_ssa || !strcmp(no_ssa, "0"));
-  if (level >= 2 && !inline_program(o, level == 2, byte_fast)) {
+  /* O2 and O3 share the ranked inliner; O2, which plain --release uses,
+     grows each caller by about a third as much. At 128, a quarter, mem.push
+     inlined but the arena fast path inside it no longer fit, so every push
+     stayed a call: the tree kernel ran 187 ms against 156 ms at O3. 176 is
+     the smallest budget that takes it, for no measurable compile time on
+     real projects and 10 percent on compile-budget's 1500-function chain
+     (O3's budget costs 40 there). The leaf-only mode stays for the
+     inliner's unit tests. */
+  /* DYN_NO_INLINE=1 keeps every call, for tests that inspect one function's
+     code or remarks. */
+  const char *no_inline = getenv("DYN_NO_INLINE");
+  bool inline_calls = !no_inline || !*no_inline || !strcmp(no_inline, "0");
+  if (level >= 2 && inline_calls && !inline_program_within(o, false, byte_fast, level == 2 ? 176 : 512)) {
     free(samples);
     dyn_native_optimization_free(o);
     return false;

@@ -61,6 +61,9 @@ fn main() {
 '''
 run('windows',s)
 s=(root/'std/fs/watch/macos.dyn').read_text().replace('#target(kernel: darwin)','')
+# std/os/macos/sys is darwin-only: inline the numbers it names.
+numbers=dict(re.findall(r'pub const (\w+): u64 = (\d+)',(root/'std/os/macos/sys/sys.dyn').read_text()))
+s=re.sub(r'sys\.(\w+)',lambda m:numbers[m[1]],s.replace('use "std/os/macos/sys"\n',''))
 def mac(m):
  line=m[0]; name=re.search(r'fn (\w+)',line)[1]; sig=re.sub(r' "[^"]+"','',line.removeprefix('extern '))
  body=''

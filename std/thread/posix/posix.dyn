@@ -36,14 +36,14 @@ pub fn spawn(arena: *mem.Arena, stack_size: usize, entry: fn(rawptr) isize, cont
   attributes := Attributes{}
   error := attr_init(&attributes)
   if error != 0 {
-    return SpawnResult{ failure: io.Failure{ kind: io.linux(0 - #cast(isize, error)), native: 0 - #cast(isize, error) } }
+    return SpawnResult{ failure: io.linux_failure(0 - #cast(isize, error)) }
   }
   defer {
     _ = attr_destroy(&attributes)
   }
   error = attr_stack_size(&attributes, (stack_size + 4095) & ~#cast(usize, 4095))
   if error != 0 {
-    return SpawnResult{ failure: io.Failure{ kind: io.linux(0 - #cast(isize, error)), native: 0 - #cast(isize, error) } }
+    return SpawnResult{ failure: io.linux_failure(0 - #cast(isize, error)) }
   }
   mark := mem.arena_mark(arena)
   thread := mem.push(Thread, arena)
@@ -52,7 +52,7 @@ pub fn spawn(arena: *mem.Arena, stack_size: usize, entry: fn(rawptr) isize, cont
   error = create(&thread.handle, &attributes, trampoline, thread)
   if error != 0 {
     mem.arena_rewind(arena, mark)
-    return SpawnResult{ failure: io.Failure{ kind: io.linux(0 - #cast(isize, error)), native: 0 - #cast(isize, error) } }
+    return SpawnResult{ failure: io.linux_failure(0 - #cast(isize, error)) }
   }
   return SpawnResult{ value: thread }
 }
@@ -65,7 +65,7 @@ pub fn join(thread: *Thread) io.Failure {
   value: rawptr = nil
   error := wait(thread.handle, &value)
   if error != 0 {
-    return io.Failure{ kind: io.linux(0 - #cast(isize, error)), native: 0 - #cast(isize, error) }
+    return io.linux_failure(0 - #cast(isize, error))
   }
   thread.joined = true
   return io.Failure{}
@@ -73,7 +73,7 @@ pub fn join(thread: *Thread) io.Failure {
 
 fn spawner_spawn(data: rawptr, arena: *mem.Arena, stack_size: usize, entry: fn(rawptr) isize, context: rawptr) rawptr {
   spawned := spawn(arena, stack_size, entry, context)
-  if spawned.failure.kind != io.Kind.Ok {
+  if io.failed(spawned.failure) {
     return nil
   }
   return spawned.value

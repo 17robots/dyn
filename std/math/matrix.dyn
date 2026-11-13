@@ -55,17 +55,17 @@ pub fn mat3_inverse(a: Mat3) Mat3Result {
     return .{}
   }
   t: [18]f64 = []
-  t[0] = #cast(f64, a.c0.x)
-  t[1] = #cast(f64, a.c1.x)
-  t[2] = #cast(f64, a.c2.x)
+  t[0] = a.c0.x
+  t[1] = a.c1.x
+  t[2] = a.c2.x
   t[3] = 1.0
-  t[6] = #cast(f64, a.c0.y)
-  t[7] = #cast(f64, a.c1.y)
-  t[8] = #cast(f64, a.c2.y)
+  t[6] = a.c0.y
+  t[7] = a.c1.y
+  t[8] = a.c2.y
   t[10] = 1.0
-  t[12] = #cast(f64, a.c0.z)
-  t[13] = #cast(f64, a.c1.z)
-  t[14] = #cast(f64, a.c2.z)
+  t[12] = a.c0.z
+  t[13] = a.c1.z
+  t[14] = a.c2.z
   t[17] = 1.0
   k: i32 = 0
   for k < 3 {
@@ -134,25 +134,25 @@ pub fn mat4_inverse(a: Mat4) Mat4Result {
     return .{}
   }
   t: [32]f64 = []
-  t[0] = #cast(f64, a.c0.x)
-  t[1] = #cast(f64, a.c1.x)
-  t[2] = #cast(f64, a.c2.x)
-  t[3] = #cast(f64, a.c3.x)
+  t[0] = a.c0.x
+  t[1] = a.c1.x
+  t[2] = a.c2.x
+  t[3] = a.c3.x
   t[4] = 1.0
-  t[8] = #cast(f64, a.c0.y)
-  t[9] = #cast(f64, a.c1.y)
-  t[10] = #cast(f64, a.c2.y)
-  t[11] = #cast(f64, a.c3.y)
+  t[8] = a.c0.y
+  t[9] = a.c1.y
+  t[10] = a.c2.y
+  t[11] = a.c3.y
   t[13] = 1.0
-  t[16] = #cast(f64, a.c0.z)
-  t[17] = #cast(f64, a.c1.z)
-  t[18] = #cast(f64, a.c2.z)
-  t[19] = #cast(f64, a.c3.z)
+  t[16] = a.c0.z
+  t[17] = a.c1.z
+  t[18] = a.c2.z
+  t[19] = a.c3.z
   t[22] = 1.0
-  t[24] = #cast(f64, a.c0.w)
-  t[25] = #cast(f64, a.c1.w)
-  t[26] = #cast(f64, a.c2.w)
-  t[27] = #cast(f64, a.c3.w)
+  t[24] = a.c0.w
+  t[25] = a.c1.w
+  t[26] = a.c2.w
+  t[27] = a.c3.w
   t[31] = 1.0
   k: i32 = 0
   for k < 4 {
@@ -366,13 +366,13 @@ pub fn mat4_look_at(eye, target, up: Vec3) Mat4Result {
   return Mat4Result{ value: value, valid: true }
 }
 pub fn mat4_perspective(fov_y, aspect, near, far: f32) Mat4Result {
-  if !is_finite(fov_y) || !is_finite(aspect) || !is_finite(near) || !is_finite(far) || fov_y <= 0.0 || #cast(f64, fov_y) >= pi || aspect <= 0.0 || near <= 0.0 || far <= near {
+  if !is_finite(fov_y) || !is_finite(aspect) || !is_finite(near) || !is_finite(far) || fov_y <= 0.0 || fov_y >= pi || aspect <= 0.0 || near <= 0.0 || far <= near {
     return .{}
   }
   n := #cast(f64, near)
   f := #cast(f64, far)
   y := 1.0/tan(#cast(f64, fov_y)*0.5)
-  value := Mat4{ c0: Vec4{ x: #cast(f32, y/#cast(f64, aspect)) }, c1: Vec4{ y: #cast(f32, y) }, c2: Vec4{ z: #cast(f32, -(f+n)/(f-n)), w: -1.0 }, c3: Vec4{ z: #cast(f32, -2.0*f*n/(f-n)) } }
+  value := Mat4{ c0: Vec4{ x: #cast(f32, y/aspect) }, c1: Vec4{ y: #cast(f32, y) }, c2: Vec4{ z: #cast(f32, -(f+n)/(f-n)), w: -1.0 }, c3: Vec4{ z: #cast(f32, -2.0*f*n/(f-n)) } }
   if !mat4_finite(value) {
     return .{}
   }

@@ -1,0 +1,166 @@
+use "std/io"
+
+struct Pair { a: i32, b: i32 }
+enum Shape { Dot, Circle: f64, Box: Pair, Count: i64 }
+enum Wide { Empty, Text: []const u8, Value: i64 }
+
+fn make(kind: i64, x: f64) Shape {
+  case kind {
+    1 => { return Shape.Circle(x) }
+    2 => { return Shape.Box(Pair{ a: #cast(i32, x), b: 7 }) }
+    3 => { return Shape.Count(#cast(i64, x) * 10) }
+    _ => { return Shape.Dot }
+  }
+}
+
+fn measure(s: Shape) f64 {
+  case s {
+    Shape.Dot => { return 0.5 }
+    Shape.Circle r => { return r * 2.0 }
+    Shape.Box p => { return #cast(f64, p.a * p.b) }
+    Shape.Count n => { return #cast(f64, n) }
+  }
+}
+
+// Three integer leaves: returned in RAX, RDX and RCX on x86-64.
+fn widen(w: Wide, s: Shape) Wide {
+  case w {
+    Wide.Empty => { return Wide.Value(#cast(i64, measure(s))) }
+    Wide.Text t => { return Wide.Value(#cast(i64, #len(t)) + #cast(i64, measure(s))) }
+    Wide.Value v => { return Wide.Value(v + 1) }
+  }
+}
+
+fn wide_value(w: Wide) i64 {
+  case w {
+    Wide.Value v => { return v }
+    Wide.Text t => { return #cast(i64, #len(t)) }
+    _ => { return -1 }
+  }
+}
+
+// Eleven integer leaves: the last five go on the stack.
+fn sum_ints(a: [8]i64, b: [3]i64) [3]i64 {
+  out: [3]i64
+  for i in 0..8 {
+    out[i % 3] += a[i] * #cast(i64, i + 1)
+  }
+  for i in 0..3 {
+    out[i] += b[i]
+  }
+  return out
+}
+
+// Twelve float leaves: four go on the stack. Two doubles return in XMM0/1.
+fn sum_floats(a: [10]f32, b: [2]f64) [2]f64 {
+  out: [2]f64
+  for i in 0..10 {
+    out[i % 2] += #cast(f64, a[i]) * #cast(f64, i + 1)
+  }
+  out[0] += b[0]
+  out[1] -= b[1]
+  return out
+}
+
+fn mixed(n: i64, s: Shape, a: [4]i32, w: Wide, f: [3]f64, t: Shape) f64 {
+  total := #cast(f64, n) + measure(s) + measure(t) + #cast(f64, wide_value(w))
+  for i in 0..4 {
+    total += #cast(f64, a[i]) * 0.25
+  }
+  return total + f[0] - f[1] * f[2]
+}
+
+// Returns three integers in RAX, RDX and RCX on x86-64.
+fn via_tree(s: Shape, k: i64) [3]i64 {
+  ints: [8]i64
+  for i in 0..8 {
+    ints[i] = k + #cast(i64, i)
+  }
+  floats: [10]f32
+  for i in 0..10 {
+    floats[i] = #cast(f32, i) * 0.5
+  }
+  extra: [3]i64 = [1, 2, 3]
+  sums := sum_ints(ints, extra)
+  halves: [2]f64 = [1.5, 2.5]
+  pair := sum_floats(floats, halves)
+  made := make(k % 4, 3.0)
+  out: [3]i64 = [sums[0] + #cast(i64, measure(s)), sums[1] + #cast(i64, pair[0] + pair[1]), sums[2] + #cast(i64, measure(made))]
+  return out
+}
+
+// Its array and enum parameters arrive from ssa_call, some on the stack.
+fn tree_take(a: [8]i64, s: Shape, f: [10]f32, w: Wide) i64 {
+  total := wide_value(widen(w, s))
+  for i in 0..8 {
+    total += a[i] * #cast(i64, i)
+  }
+  for i in 0..10 {
+    total += #cast(i64, f[i] * 4.0)
+  }
+  return total
+}
+
+fn ssa_call(k: i64) i64 {
+  ints: [8]i64
+  floats: [10]f32
+  for i in 0..8 {
+    ints[i] = k * #cast(i64, i + 2)
+  }
+  for i in 0..10 {
+    floats[i] = #cast(f32, k) + #cast(f32, i) * 0.25
+  }
+  return tree_take(ints, make(k % 4, 2.0), floats, Wide.Text("abc")) + tree_take(ints, Shape.Count(k), floats, Wide.Value(k))
+}
+
+// Four float leaves: XMM0, XMM1, then st(0) and st(1) on x86-64.
+fn corners(x: f32) [4]f32 {
+  out: [4]f32 = [x, x * 2.0, x * 3.0, x * 4.0]
+  return out
+}
+
+fn corner_sum(k: i64) f32 {
+  c := corners(#cast(f32, k) + 0.5)
+  d := corners(c[3])
+  return c[0] + c[1] + c[2] + c[3] + d[2]
+}
+
+// Structs of three or four floats: AArch64 returns them in v0-v3 (HFAs);
+// x86-64 System V sends the parts past XMM1 through x87.
+struct Quad { a: f32, b: f32, c: f32, d: f32 }
+struct Triple { x: f64, y: f64, z: f64 }
+
+fn quad(x: f32) Quad {
+  return Quad{ a: x, b: x + 1.0, c: x * 2.0, d: x - 0.5 }
+}
+
+fn triple(x: f64) Triple {
+  return Triple{ x: x * 0.5, y: x + 2.0, z: x * x }
+}
+
+fn hfa_sum(k: i64) f64 {
+  q := quad(#cast(f32, k) + 0.25)
+  t := triple(#cast(f64, q.d))
+  return #cast(f64, q.a + q.b + q.c + q.d) + t.x + t.y + t.z
+}
+
+fn main() {
+  shapes: [4]Shape = [make(0, 0.0), make(1, 1.25), make(2, 3.0), make(3, 4.0)]
+  for i in 0..4 {
+    io.print("{} ", measure(shapes[i]))
+  }
+  io.println("")
+  words := Wide.Text("hello")
+  w := widen(words, shapes[1])
+  io.println("{} {} {}", wide_value(w), wide_value(widen(Wide.Empty, shapes[2])), wide_value(widen(Wide.Value(41), shapes[0])))
+  for k in 0..4 {
+    r := via_tree(shapes[#cast(usize, k)], #cast(i64, k))
+    io.println("{} {} {}", r[0], r[1], r[2])
+  }
+  io.println("{} {}", ssa_call(3), ssa_call(6))
+  io.println("{} {}", corner_sum(1), corner_sum(4))
+  quarter: [4]i32 = [4, 8, 12, 16]
+  thirds: [3]f64 = [1.0, 2.0, 3.0]
+  io.println("{}", mixed(5, shapes[1], quarter, Wide.Value(100), thirds, shapes[3]))
+  io.println("{} {}", hfa_sum(2), hfa_sum(7))
+}

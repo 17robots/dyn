@@ -20,8 +20,7 @@ pub fn advance(state: *Progress, index: usize, amount: u64) bool {
   node := &state.nodes[index]
   if node.total != 0 && amount > node.total - node.completed {
     node.completed = node.total
-  }
-  else {
+  } else {
     node.completed += amount
   }
   return true

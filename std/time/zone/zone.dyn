@@ -55,12 +55,12 @@ fn rule_day(rule: Rule, year: i32) i64 {
     return first + day
   }
   if rule.kind == 1 {
-    return first + #cast(i64, rule.day)
+    return first + rule.day
   }
   month_start := time.days_from_civil(year, rule.month, 1)
   first_day := time.DateTime{ year: year, month: rule.month, day: 1 }
   start_weekday := #cast(i64, #cast(u8, time.weekday(&first_day)))
-  day := month_start + (#cast(i64, rule.weekday) - start_weekday + 7) % 7 + (#cast(i64, rule.week) - 1) * 7
+  day := month_start + (rule.weekday - start_weekday + 7) % 7 + (#cast(i64, rule.week) - 1) * 7
   lengths: [12]i64 = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
   length := lengths[#cast(usize, rule.month) - 1]
   if rule.month == 2 && leap {
@@ -74,14 +74,14 @@ fn rule_day(rule: Rule, year: i32) i64 {
 
 // The UTC second at which rule fires in year, for wall clock offset.
 fn rule_instant(rule: Rule, year: i32, offset: i32) i64 {
-  return rule_day(rule, year) * 86400 + #cast(i64, rule.time) - #cast(i64, offset)
+  return rule_day(rule, year) * 86400 + rule.time - offset
 }
 
 fn rule_type(zone: *const Zone, seconds: i64) Type {
   if !zone.has_daylight {
     return zone.standard
   }
-  year := time.date_time(time.Instant{ seconds: seconds }, #cast(i64, zone.standard.offset)).year
+  year := time.date_time(time.Instant{ seconds: seconds }, zone.standard.offset).year
   start := rule_instant(zone.start, year, zone.standard.offset)
   end := rule_instant(zone.end, year, zone.daylight.offset)
   if start < end {
@@ -124,20 +124,15 @@ pub fn type_at(zone: *const Zone, seconds: i64) Type {
   high := count
   for high - low > 1 {
     middle := low + (high - low) / 2
-    if zone.transitions[middle] <= seconds {
-      low = middle
-    }
-    else {
-      high = middle
-    }
+    if zone.transitions[middle] <= seconds { low = middle } else { high = middle }
   }
-  return zone.types[#cast(usize, zone.transition_types[low])]
+  return zone.types[zone.transition_types[low]]
 }
 
 // The local calendar time of an instant in zone.
 pub fn local(zone: *const Zone, instant: time.Instant) Local {
   chosen := type_at(zone, instant.seconds)
-  return Local{ value: time.date_time(instant, #cast(i64, chosen.offset)), offset: chosen.offset, dst: chosen.dst, abbreviation: chosen.abbreviation }
+  return Local{ value: time.date_time(instant, chosen.offset), offset: chosen.offset, dst: chosen.dst, abbreviation: chosen.abbreviation }
 }
 
 // The instant of a local wall clock time in zone. A time skipped by a forward
@@ -146,10 +141,10 @@ pub fn instant_of_local(zone: *const Zone, value: *const time.DateTime) time.Ins
   guess := time.instant_of(value, 0)
   // The offset at the wall time read as UTC, then corrected once or twice.
   first := type_at(zone, guess.seconds - 86400)
-  candidate := time.instant_of(value, #cast(i64, first.offset))
+  candidate := time.instant_of(value, first.offset)
   second := type_at(zone, candidate.seconds)
   if second.offset != first.offset {
-    retried := time.instant_of(value, #cast(i64, second.offset))
+    retried := time.instant_of(value, second.offset)
     if type_at(zone, retried.seconds).offset == second.offset {
       return retried
     }
@@ -215,15 +210,14 @@ pub fn parse_tzif(arena: *mem.Arena, name: []const u8, data: []const u8) ZoneRes
   for i in 0..transition_count {
     if time_size == 8 {
       zone.transitions[i] = read_i64(data, body + i * 8)
-    }
-    else {
-      zone.transitions[i] = #cast(i64, #bitcast(i32, read_u32(data, body + i * 4)))
+    } else {
+      zone.transitions[i] = #bitcast(i32, read_u32(data, body + i * 4))
     }
   }
   indexes := body + transition_count * time_size
   for i in 0..transition_count {
     index := data[indexes + i]
-    if #cast(usize, index) >= type_count {
+    if index >= type_count {
       mem.arena_rewind(arena, mark)
       return invalid()
     }
@@ -254,7 +248,7 @@ pub fn parse_tzif(arena: *mem.Arena, name: []const u8, data: []const u8) ZoneRes
       }
       if close < #len(data) && close > footer + 1 {
         rule := parse_posix(arena, data[footer + 1..close])
-        if rule.failure.kind != io.Kind.Ok {
+        if io.failed(rule.failure) {
           mem.arena_rewind(arena, mark)
           return invalid()
         }
@@ -290,7 +284,7 @@ fn number(cursor: *Cursor, maximum: i64) i64 {
   }
   value: i64 = 0
   for digit(peek(cursor)) {
-    value = value * 10 + #cast(i64, peek(cursor) - '0')
+    value = value * 10 + (peek(cursor) - '0')
     cursor.at += 1
     if value > maximum {
       cursor.ok = false
@@ -369,15 +363,13 @@ fn rule(cursor: *Cursor) Rule {
     if value.month == 0 || value.week == 0 {
       cursor.ok = false
     }
-  }
-  else if peek(cursor) == 'J' {
+  } else if peek(cursor) == 'J' {
     cursor.at += 1
     value.day = #cast(u16, number(cursor, 365))
     if value.day == 0 {
       cursor.ok = false
     }
-  }
-  else {
+  } else {
     value.kind = 1
     value.day = #cast(u16, number(cursor, 365))
   }
@@ -480,11 +472,11 @@ fn put_offset(output: []u8, used: *usize, offset: i32, colon: bool) bool {
     sign = "-"
     magnitude = -offset
   }
-  ok := put(output, used, sign) && put_number(output, used, #cast(i64, magnitude / 3600), 2)
+  ok := put(output, used, sign) && put_number(output, used, magnitude / 3600, 2)
   if colon {
     ok = ok && put(output, used, ":")
   }
-  return ok && put_number(output, used, #cast(i64, magnitude / 60 % 60), 2)
+  return ok && put_number(output, used, magnitude / 60 % 60, 2)
 }
 
 // Formats a local time into arena storage. Directives: %Y year, %m month,
@@ -513,54 +505,41 @@ pub fn format(arena: *mem.Arena, pattern: []const u8, value: *const Local) []u8 
     directive := pattern[at]
     at += 1
     if directive == 'Y' {
-      ok = put_number(output, &used, #cast(i64, date.year), 4)
-    }
-    else if directive == 'm' {
-      ok = put_number(output, &used, #cast(i64, date.month), 2)
-    }
-    else if directive == 'd' {
-      ok = put_number(output, &used, #cast(i64, date.day), 2)
-    }
-    else if directive == 'H' {
-      ok = put_number(output, &used, #cast(i64, date.hour), 2)
-    }
-    else if directive == 'M' {
-      ok = put_number(output, &used, #cast(i64, date.minute), 2)
-    }
-    else if directive == 'S' {
-      ok = put_number(output, &used, #cast(i64, date.second), 2)
-    }
-    else if directive == 'j' {
-      ok = put_number(output, &used, #cast(i64, time.day_of_year(date)), 3)
-    }
-    else if directive == 'a' || directive == 'A' {
-      name := weekday_names[#cast(usize, #cast(u8, time.weekday(date)))]
+      ok = put_number(output, &used, date.year, 4)
+    } else if directive == 'm' {
+      ok = put_number(output, &used, date.month, 2)
+    } else if directive == 'd' {
+      ok = put_number(output, &used, date.day, 2)
+    } else if directive == 'H' {
+      ok = put_number(output, &used, date.hour, 2)
+    } else if directive == 'M' {
+      ok = put_number(output, &used, date.minute, 2)
+    } else if directive == 'S' {
+      ok = put_number(output, &used, date.second, 2)
+    } else if directive == 'j' {
+      ok = put_number(output, &used, time.day_of_year(date), 3)
+    } else if directive == 'a' || directive == 'A' {
+      name := weekday_names[#cast(u8, time.weekday(date))]
       if directive == 'a' {
         name = name[..3]
       }
       ok = put(output, &used, name)
-    }
-    else if directive == 'b' || directive == 'B' {
+    } else if directive == 'b' || directive == 'B' {
       name := month_names[#cast(usize, date.month) - 1]
       if directive == 'b' {
         name = name[..3]
       }
       ok = put(output, &used, name)
-    }
-    else if directive == 'Z' {
+    } else if directive == 'Z' {
       ok = put(output, &used, value.abbreviation)
-    }
-    else if directive == 'z' {
+    } else if directive == 'z' {
       ok = put_offset(output, &used, value.offset, false)
-    }
-    else if directive == ':' && at < #len(pattern) && pattern[at] == 'z' {
+    } else if directive == ':' && at < #len(pattern) && pattern[at] == 'z' {
       at += 1
       ok = put_offset(output, &used, value.offset, true)
-    }
-    else if directive == '%' {
+    } else if directive == '%' {
       ok = put(output, &used, "%")
-    }
-    else {
+    } else {
       ok = false
     }
   }

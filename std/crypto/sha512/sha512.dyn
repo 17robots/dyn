@@ -83,7 +83,7 @@ pub fn update(state: *State, input: []const u8) bool {
   }
   // Count bytes in 125 bits, so the 128-bit bit count cannot overflow.
   before:=state.low
-  state.low=state.low+#cast(u64, #len(input))
+  state.low=state.low+#len(input)
   if state.low<before {
     state.high+=1
   }

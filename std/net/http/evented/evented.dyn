@@ -18,7 +18,6 @@
 
 use "std/event" event
 use "std/io" io
-use "std/io" stream
 use "std/mem" mem
 use "std/net" network
 use "std/net/http" http
@@ -148,7 +147,7 @@ const ListenerToken: u64 = 0
 
 fn now_milliseconds() i64 {
   now := clock.monotonic_now()
-  if now.failure.kind != io.Kind.Ok {
+  if io.failed(now.failure) {
     return 0
   }
   return now.value.seconds * 1000 + now.value.nanoseconds / clock.Millisecond
@@ -159,7 +158,7 @@ fn connection_read(connection: *Connection, destination: []u8) TransportIo {
     return connection.transport.read(connection.session, destination)
   }
   received := network.receive(connection.descriptor, destination, 0)
-  if received.failure.kind != io.Kind.Ok {
+  if io.failed(received.failure) {
     if network.would_block(&received) {
       return TransportIo{ status: TransportStatus.WouldRead }
     }
@@ -176,7 +175,7 @@ fn connection_write(connection: *Connection, source: []const u8) TransportIo {
     return connection.transport.write(connection.session, source)
   }
   sent := network.send(connection.descriptor, source, 0)
-  if sent.failure.kind != io.Kind.Ok {
+  if io.failed(sent.failure) {
     if network.would_block(&sent) {
       return TransportIo{ status: TransportStatus.WouldWrite }
     }
@@ -232,17 +231,17 @@ fn flush_blocking(connection: *Connection) bool {
       wanted = network.PollReadable
     }
     ready := network.wait(connection.descriptor, wanted, connection.write_timeout)
-    if ready.failure.kind != io.Kind.Ok || ready.value == 0 {
+    if io.failed(ready.failure) || ready.value == 0 {
       return false
     }
   }
   return true
 }
 
-fn output_write(data: rawptr, source: []const u8) stream.Transfer {
+fn output_write(data: rawptr, source: []const u8) io.Transfer {
   connection := #cast(*Connection, data)
   if connection.failed {
-    return stream.Transfer{ kind: io.Kind.InvalidState, status: stream.Status.Error }
+    return io.Transfer{ kind: io.Kind.InvalidState, status: io.Status.Error }
   }
   written: usize = 0
   for written < #len(source) {
@@ -250,7 +249,7 @@ fn output_write(data: rawptr, source: []const u8) stream.Transfer {
     if room == 0 {
       if !flush_blocking(connection) {
         connection.failed = true
-        return stream.Transfer{ transferred: written, kind: io.Kind.WouldBlock, status: stream.Status.Error }
+        return io.Transfer{ transferred: written, kind: io.Kind.WouldBlock, status: io.Status.Error }
       }
       room = #len(connection.output)
     }
@@ -262,11 +261,11 @@ fn output_write(data: rawptr, source: []const u8) stream.Transfer {
     connection.queued += count
     written += count
   }
-  return stream.Transfer{ transferred: written }
+  return io.Transfer{ transferred: written }
 }
 
 fn reject(connection: *Connection, status: u16, body: []const u8) {
-  response := http.Response{ output: stream.Writer{ data: connection, write: output_write } }
+  response := http.Response{ output: io.Writer{ data: connection, write: output_write } }
   _ = http.respond(&response, body, http.ResponseOptions{ status: status, content_type: "text/plain; charset=utf-8", close_connection: true })
   connection.close_after = true
   connection.rejected = true
@@ -314,11 +313,11 @@ fn serve_buffered(worker: *Worker, index: usize) bool {
     }
     request := framed.request
     request.context = worker.context
-    response := http.Response{ output: stream.Writer{ data: connection, write: output_write } }
+    response := http.Response{ output: io.Writer{ data: connection, write: output_write } }
     worker.requests += 1
     handled := worker.handler(&response, &request)
     consumed += framed.consumed
-    if handled.failure.kind != io.Kind.Ok || !response.finished {
+    if io.failed(handled.failure) || !response.finished {
       // A handler that failed or never finished leaves the stream unframed.
       connection.close_after = true
     }
@@ -355,7 +354,7 @@ fn write_interest(connection: *const Connection) u32 {
 
 // Output is fully sent and the connection is done. Rejected plain TCP
 // connections drain first; TLS ones close at once, since a raw half-close
-// would cut the TLS stream.
+// would cut the TLS io.
 fn finish(worker: *Worker, index: usize) {
   connection := &worker.connections[index]
   if !connection.rejected || connection.draining || connection.transport != nil {
@@ -372,7 +371,7 @@ fn finish(worker: *Worker, index: usize) {
 fn drain(worker: *Worker, index: usize) {
   connection := &worker.connections[index]
   received := network.receive(connection.descriptor, connection.input, 0)
-  if received.failure.kind != io.Kind.Ok {
+  if io.failed(received.failure) {
     if !network.would_block(&received) {
       close_connection(worker, index)
     }
@@ -492,7 +491,7 @@ fn on_accept(worker: *Worker) {
       return
     }
     accepted := network.accept(worker.listener.descriptor)
-    if accepted.failure.kind != io.Kind.Ok {
+    if io.failed(accepted.failure) {
       // Would-block: another worker won the race. Other errors (EMFILE,
       // ECONNABORTED) are per-connection; keep serving.
       return
@@ -549,7 +548,7 @@ fn worker_main(context: rawptr) isize {
   for sync.load_u32(&worker.stopping) == 0 {
     mark := mem.arena_mark(worker.scratch)
     waited := event.wait(worker.scratch, &worker.queue, 100)
-    if waited.failure.kind != io.Kind.Ok {
+    if io.failed(waited.failure) {
       worker.error = Result{ failure: waited.failure }
       break
     }
@@ -624,17 +623,17 @@ fn start_worker(arena: *mem.Arena, worker: *Worker) io.Failure {
   worker.free_count = count
   worker.scratch = mem.arena_from_buffer(mem.push_bytes_uninit(arena, scratch_size(config)))
   blocking := network.nonblocking(worker.listener.descriptor, true)
-  if blocking.failure.kind != io.Kind.Ok {
+  if io.failed(blocking.failure) {
     return blocking.failure
   }
   opened := event.open(arena, count + 1)
-  if opened.failure.kind != io.Kind.Ok {
+  if io.failed(opened.failure) {
     return opened.failure
   }
   worker.queue = opened.value
   worker.listening = true
   added := event.add(&worker.queue, worker.listener.descriptor, event.Readable, ListenerToken)
-  if added.failure.kind != io.Kind.Ok {
+  if io.failed(added.failure) {
     event.close(&worker.queue)
     return added.failure
   }
@@ -648,7 +647,7 @@ fn start_worker(arena: *mem.Arena, worker: *Worker) io.Failure {
   }
   stack := mem.push_bytes_uninit(arena, config.stack_size)
   spawned := threading.spawn(arena, stack, worker_main, worker)
-  if spawned.failure.kind != io.Kind.Ok {
+  if io.failed(spawned.failure) {
     event.close(&worker.queue)
     return io.Failure{ kind: spawned.failure.kind, native: spawned.failure.native }
   }
@@ -709,7 +708,7 @@ pub fn start_shared(arena: *mem.Arena, workers: []Worker, address: network.Ipv4A
   for i in 0..#len(workers) {
     worker := &workers[i]
     listened := network.tcp_listen_ipv4_shared(&address, backlog)
-    if listened.failure.kind != io.Kind.Ok {
+    if io.failed(listened.failure) {
       return abandon(workers, i, listened.failure)
     }
     worker.own_listener = network.listener_take(&listened.value)
@@ -762,7 +761,7 @@ pub fn join(workers: []Worker) Result {
     }
     if worker.native != nil {
       if !worker.config.spawner.join(worker.config.spawner.data, worker.native) {
-        if result.failure.kind == io.Kind.Ok {
+        if !io.failed(result.failure) {
           result.failure = io.Failure{ kind: io.Kind.System }
         }
         continue
@@ -770,8 +769,8 @@ pub fn join(workers: []Worker) Result {
       worker.native = nil
     } else {
       joined := threading.join(worker.thread)
-      if joined.failure.kind != io.Kind.Ok {
-        if result.failure.kind == io.Kind.Ok {
+      if io.failed(joined.failure) {
+        if !io.failed(result.failure) {
           result.failure = io.Failure{ kind: joined.failure.kind, native: joined.failure.native }
         }
         continue
@@ -782,7 +781,7 @@ pub fn join(workers: []Worker) Result {
       network.listener_close(&worker.own_listener)
     }
     result.started += 1
-    if result.failure.kind == io.Kind.Ok && worker.error.failure.kind != io.Kind.Ok {
+    if !io.failed(result.failure) && io.failed(worker.error.failure) {
       result.failure = worker.error.failure
     }
   }

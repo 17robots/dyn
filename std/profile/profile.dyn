@@ -40,7 +40,7 @@ pub fn finish(destination: *Trace, span: Span) Result {
   if destination.failed {
     return Result{ failure: io.Failure{ kind: destination.kind, native: destination.error } }
   }
-  if span.started.failure.kind != io.Kind.Ok {
+  if io.failed(span.started.failure) {
     return fail(destination, span.started.failure.kind, span.started.failure.native)
   }
   if destination.count >= #len(destination.events) {
@@ -48,11 +48,11 @@ pub fn finish(destination: *Trace, span: Span) Result {
     return Result{ failure: io.Failure{ kind: io.Kind.Capacity } }
   }
   finished := clock.monotonic_now()
-  if finished.failure.kind != io.Kind.Ok {
+  if io.failed(finished.failure) {
     return fail(destination, finished.failure.kind, finished.failure.native)
   }
   duration := clock.elapsed(span.started.value, finished.value)
-  if duration.failure.kind != io.Kind.Ok {
+  if io.failed(duration.failure) {
     return fail(destination, io.Kind.Overflow, 0)
   }
   scaled := span.started.value.seconds
@@ -60,7 +60,7 @@ pub fn finish(destination: *Trace, span: Span) Result {
     return fail(destination, io.Kind.Overflow, 0)
   }
   absolute := clock.checked_add(scaled * clock.Second, span.started.value.nanoseconds)
-  if absolute.failure.kind != io.Kind.Ok {
+  if io.failed(absolute.failure) {
     return fail(destination, io.Kind.Overflow, 0)
   }
   destination.events[destination.count] = Event{

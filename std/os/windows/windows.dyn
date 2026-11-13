@@ -35,8 +35,7 @@ fn socket_initialize() i32 {
       data: [64]u64 = []
       socket_startup_error = socket_startup_raw(514, &data[0])
       sync.store_u32(&socket_startup_state, 2)
-    }
-    else {
+    } else {
       for sync.load_u32(&socket_startup_state) != 2 {
         _ = yield_raw()
       }
@@ -122,11 +121,11 @@ pub fn thread_yield() {
 pub fn socket_open(family: i32, kind: i32, protocol: i32) IoResult {
   startup := socket_initialize()
   if startup != 0 {
-    return IoResult{ value: -1, error: #cast(isize, startup), ok: false }
+    return IoResult{ value: -1, error: startup, ok: false }
   }
   value := socket_raw(family, kind, protocol)
   if value == 18446744073709551615 {
-    return IoResult{ value: -1, error: #cast(isize, socket_error_raw()), ok: false }
+    return IoResult{ value: -1, error: socket_error_raw(), ok: false }
   }
   return IoResult{ value: #cast(isize, value), error: 0, ok: true }
 }
@@ -150,5 +149,5 @@ pub fn event_poll(items: []PollDescriptor, milliseconds: i32) isize {
   if value < 0 {
     return 0 - #cast(isize, socket_error_raw())
   }
-  return #cast(isize, value)
+  return value
 }

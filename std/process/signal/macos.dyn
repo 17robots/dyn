@@ -1,4 +1,5 @@
 use "std/io" io
+use "std/os/macos/sys"
 #target(kernel: darwin)
 
 // Watched signals are ignored and read from a kqueue with EVFILT_SIGNAL, which
@@ -9,7 +10,7 @@ struct Timeout { seconds: i64, nanoseconds: i64 }
 
 fn set_action(number: u64, handler: usize) isize {
   action := Action{ handler: handler }
-  return #syscall(46, number, &action, 0)
+  return #syscall(sys.Sigaction, number, &action, 0)
 }
 
 fn numbers(set: Set, storage: []u64) usize {
@@ -32,19 +33,19 @@ fn numbers(set: Set, storage: []u64) usize {
 fn platform_watch(set: Set) WatchResult {
   chosen: [3]u64 = []
   count := numbers(set, chosen[..])
-  queue := #syscall(362)
+  queue := #syscall(sys.Kqueue)
   if queue < 0 {
-    return WatchResult{ failure: io.Failure{ kind: io.darwin(queue), native: queue } }
+    return WatchResult{ failure: io.darwin_failure(queue) }
   }
   changes: [3]Event = []
   for i in 0..count {
     // EVFILT_SIGNAL is -6; EV_ADD is 1.
     changes[i] = Event{ ident: chosen[i], filter: -6, flags: 1 }
   }
-  code := #syscall(363, queue, &changes[0], count, 0, 0, 0)
+  code := #syscall(sys.Kevent, queue, &changes[0], count, 0, 0, 0)
   if code < 0 {
-    _ = #syscall(6, queue)
-    return WatchResult{ failure: io.Failure{ kind: io.darwin(code), native: code } }
+    _ = #syscall(sys.Close, queue)
+    return WatchResult{ failure: io.darwin_failure(code) }
   }
   for i in 0..count {
     // SIG_IGN is 1.
@@ -59,20 +60,17 @@ fn platform_next(state: *Watch, block: bool) Next {
   for true {
     code: isize = 0
     if block {
-      code = #syscall(363, state.handle, 0, 0, &event, 1, 0)
-    }
-    else {
-      code = #syscall(363, state.handle, 0, 0, &event, 1, &zero)
+      code = #syscall(sys.Kevent, state.handle, 0, 0, &event, 1, 0)
+    } else {
+      code = #syscall(sys.Kevent, state.handle, 0, 0, &event, 1, &zero)
     }
     if code == 1 {
       kind := Kind.None
       if event.ident == 1 {
         kind = Kind.Hangup
-      }
-      else if event.ident == 2 {
+      } else if event.ident == 2 {
         kind = Kind.Interrupt
-      }
-      else if event.ident == 15 {
+      } else if event.ident == 15 {
         kind = Kind.Terminate
       }
       return Next{ value: kind, found: true }
@@ -81,7 +79,7 @@ fn platform_next(state: *Watch, block: bool) Next {
       return Next{ found: true }
     }
     if code < 0 && code != -4 {
-      return Next{ failure: io.Failure{ kind: io.darwin(code), native: code } }
+      return Next{ failure: io.darwin_failure(code) }
     }
   }
   return Next{}
@@ -93,9 +91,9 @@ fn platform_close(state: *Watch) Result {
   for i in 0..count {
     _ = set_action(chosen[i], 0)
   }
-  code := #syscall(6, state.handle)
+  code := #syscall(sys.Close, state.handle)
   if code < 0 {
-    return Result{ failure: io.Failure{ kind: io.darwin(code), native: code } }
+    return Result{ failure: io.darwin_failure(code) }
   }
   return Result{}
 }

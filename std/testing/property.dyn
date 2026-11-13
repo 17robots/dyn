@@ -73,7 +73,7 @@ fn shrink(sample: []u8, trial: []u8, failing: usize, budget: usize,
   for position < length && checks < budget {
     original := sample[position]
     candidate: u16 = 0
-    for candidate < #cast(u16, original) && checks < budget {
+    for candidate < original && checks < budget {
       sample[position] = #cast(u8, candidate)
       checks += 1
       if !predicate(context, sample[..length]) {

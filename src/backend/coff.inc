@@ -182,11 +182,6 @@ static bool write_coff(BackendContext *ctx, const char *path, const Elf64_Sym *s
     0x40500040u, /* constant globals, read, 16-byte aligned */
     0x40300040u, /* .xdata: initialized data, read, 4-byte aligned */
     0x40300040u};
-  if (ctx->function_alignment) {
-    unsigned power = 0;
-    for (unsigned alignment = ctx->function_alignment; alignment > 1; alignment >>= 1) ++power;
-    flags[0] = (flags[0] & ~0x00f00000u) | ((power + 1) << 20);
-  }
   const Elf64_Rela *relocations[COFF_SECTION_LIMIT] = {ctx->relocations, NULL, NULL, ctx->constant_relocations, NULL, table_relocations};
   size_t relocation_counts[COFF_SECTION_LIMIT] = {ctx->relocation_count, 0, 0, ctx->constant_relocation_count, 0, (ctx->a64?2:3) * (size_t)frames};
   /* DWARF relocations name DWARF sections or .text; regroup them per section. */

@@ -154,6 +154,36 @@ static DynByteIntrinsic json_byte_identity(const DynSource *source, CanonicalPat
   return DYN_BYTE_INTRINSIC_JSON_ASCII_PREFIX;
 }
 
+/* std/mem's private zero_bytes_fast(items: []u8): the SSA backend writes a
+   constant-length call as one fixed-size fill, such as the zeroing of each
+   mem.push. Only the exact SDK declaration has this identity. */
+static DynByteIntrinsic zero_identity(const DynSource *source, CanonicalPath *paths,
+                                      const char *source_path, const char *sdk,
+                                      const DynAstProgram *a, const DynIrProgram *ir,
+                                      const DynIrFunction *fn) {
+  if (!sdk || !source_path || fn->foreign || fn->variadic || fn->generic || fn->instance || fn->is_public ||
+      fn->return_type != DYN_TYPE_VOID || fn->param_count != 1 || fn->param_start >= ir->param_count)
+    return DYN_BYTE_INTRINSIC_NONE;
+  DynType items = ir->params[fn->param_start].type;
+  if (!dyn_type_is_slice(items) || items - DYN_TYPE_SLICE_BASE >= a->slice_count ||
+      a->slices[items - DYN_TYPE_SLICE_BASE].is_const || a->slices[items - DYN_TYPE_SLICE_BASE].element != DYN_TYPE_U8)
+    return DYN_BYTE_INTRINSIC_NONE;
+  const char *canonical = canonical_path(paths, source_path);
+  if (!canonical || strcmp(canonical, sdk)) return DYN_BYTE_INTRINSIC_NONE;
+  const char *original, *ignored_path;
+  size_t length, offset;
+  dyn_source_position(source, fn->source_offset, &ignored_path, &original, &length, &offset);
+  const char name[] = "zero_bytes_fast";
+  size_t n = sizeof(name) - 1;
+  if (offset > length || n > length - offset || memcmp(original + offset, name, n)) return DYN_BYTE_INTRINSIC_NONE;
+  if (offset + n < length) {
+    unsigned char c = (unsigned char)original[offset + n];
+    if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_')
+      return DYN_BYTE_INTRINSIC_NONE;
+  }
+  return DYN_BYTE_INTRINSIC_ZERO;
+}
+
 static bool allocate(void **out, size_t count, size_t size) {
   if (!count) {
     *out = NULL;
@@ -390,6 +420,17 @@ static bool validate_ir(const DynIrProgram *ir) {
     if ((size_t)ir->case_arms[i].pattern_start + ir->case_arms[i].pattern_count > ir->pattern_count || (size_t)ir->case_arms[i].body_start + ir->case_arms[i].body_count > ir->child_count) return false;
   return true;
 }
+/* Whether integer arithmetic written at span wraps. It always does, except
+   with --check-overflow in the program's own modules: std and vendor code
+   relies on wrapping (hashes, checksums), so it keeps it. */
+static bool ir_wraps(const DynSource *source, DynSpan span) {
+  const DynOptimization *o = source ? source->context.optimization : NULL;
+  if (!o || !o->check_overflow) return true;
+  const char *path, *text;
+  size_t length, at;
+  dyn_source_position(source, span.start_byte, &path, &text, &length, &at);
+  return path && (strstr(path, "/std/") || strstr(path, "/vendor/") || strstr(path, "/share/dyn/"));
+}
 static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgram *ir, bool proofs) {
   memset(ir, 0, sizeof(*ir));
   size_t extra = 0;
@@ -449,19 +490,19 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
   char *cursor = ir->names;
   for (size_t i = 0; i < a->expression_count; ++i)
     ir->expressions[i] = (DynIrExpr){
-        a->expressions[i].kind,       lower_type(a, a->expressions[i].type),
-        a->expressions[i].op,         a->expressions[i].left,
-        a->expressions[i].right,      a->expressions[i].integer,
-        a->expressions[i].floating,   a->expressions[i].boolean,
-        a->expressions[i].item_start, a->expressions[i].item_count,
-        a->expressions[i].span,       a->expressions[i].wrap, 0};
+        .kind = a->expressions[i].kind,             .type = lower_type(a, a->expressions[i].type),
+        .op = a->expressions[i].op,                 .left = a->expressions[i].left,
+        .right = a->expressions[i].right,           .integer = a->expressions[i].integer,
+        .floating = a->expressions[i].floating,     .boolean = a->expressions[i].boolean,
+        .item_start = a->expressions[i].item_start, .item_count = a->expressions[i].item_count,
+        .span = a->expressions[i].span,             .wrap = a->expressions[i].wrap};
   /* Runtime integer arithmetic wraps. Sema has already rejected constant
      overflow. Division and shift counts have their own rules. */
   for (size_t i = 0; i < ir->expression_count; ++i) {
     DynIrExpr *e = &ir->expressions[i];
     if ((e->kind == DYN_EXPR_BINARY && dyn_op_wraps(e->op)) ||
         (e->kind == DYN_EXPR_UNARY && e->op == DYN_OP_NEG))
-      e->wrap = true;
+      e->wrap = ir_wraps(source, e->span);
   }
   for (size_t i = 0; i < ir->expression_count; ++i)
     if (ir->expressions[i].type == DYN_TYPE_INFER) {
@@ -518,11 +559,13 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
   char *bytes_sdk = proofs ? sdk_source_path("std/bytes/bytes.dyn", true) : NULL;
   char *json_sdk = proofs ? sdk_source_path("std/encoding/json/read/read.dyn", true) : NULL;
   char *mutable_json_sdk = proofs ? sdk_source_path("std/encoding/json/json.dyn", true) : NULL;
+  char *mem_sdk = proofs ? sdk_source_path("std/mem/mem.dyn", true) : NULL;
   for (size_t i = 0; i < a->function_count; ++i) {
     size_t n = a->functions[i].name.end_byte - a->functions[i].name.start_byte;
     /* Instances share the generic's name; the suffix hashes the type arguments, so it stays stable when other code changes. */
     ir->functions[i].name = malloc(n + 20);
     if (!ir->functions[i].name) {
+      free(mem_sdk);
       free(mutable_json_sdk);
       free(json_sdk);
       free(bytes_sdk);
@@ -559,6 +602,7 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
     size_t link_length = a->functions[i].link_name.end_byte - a->functions[i].link_name.start_byte;
     ir->functions[i].link_name = malloc(link_length + 1);
     if (!ir->functions[i].link_name) {
+      free(mem_sdk);
       free(mutable_json_sdk);
       free(json_sdk);
       free(bytes_sdk);
@@ -591,7 +635,10 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
     ir->functions[i].byte_intrinsic = byte_identity(source, &paths, source_path, bytes_sdk, a, ir, &ir->functions[i]);
     if (ir->functions[i].byte_intrinsic == DYN_BYTE_INTRINSIC_NONE)
       ir->functions[i].byte_intrinsic = json_byte_identity(source, &paths, source_path, json_sdk, mutable_json_sdk, a, ir, &ir->functions[i]);
+    if (ir->functions[i].byte_intrinsic == DYN_BYTE_INTRINSIC_NONE)
+      ir->functions[i].byte_intrinsic = zero_identity(source, &paths, source_path, mem_sdk, a, ir, &ir->functions[i]);
   }
+  free(mem_sdk);
   free(mutable_json_sdk);
   free(json_sdk);
   free(bytes_sdk);
@@ -641,27 +688,13 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
   for (size_t i = 0; i < a->local_count; ++i) {
     ir->locals[i] = (DynIrLocal){.name = copy_span(a->locals[i].name, source, &cursor), .type = lower_type(a, a->locals[i].type)};
   }
-  for (size_t i = 0; i < a->statement_count; ++i)
-    ir->statements[i] = (DynIrStmt){a->statements[i].kind,
-                                    a->statements[i].expression,
-                                    a->statements[i].target,
-                                    a->statements[i].assignment_op,
-                                    a->statements[i].local_id,
-                                    a->statements[i].body_start,
-                                    a->statements[i].body_count,
-                                    a->statements[i].else_start,
-                                    a->statements[i].else_count,
-                                    a->statements[i].loop_id,
-                                    a->statements[i].target_loop_id,
-                                    a->statements[i].case_arm_start,
-                                    a->statements[i].case_arm_count,
-                                    a->statements[i].defer_block,
-                                    a->statements[i].for_pointer,
-                                    a->statements[i].for_const,
-                                    a->statements[i].for_range,
-                                    a->statements[i].for_inclusive,
-                                    a->statements[i].for_reverse,
-                                    a->statements[i].span, 0};
+  for (size_t i = 0; i < a->statement_count; ++i) {
+    const DynAstStmt *from = &a->statements[i];
+    ir->statements[i] = (DynIrStmt){.kind = from->kind, .expression = from->expression, .target = from->target, .assignment_op = from->assignment_op,
+                                    .local_id = from->local_id, .body_start = from->body_start, .body_count = from->body_count, .else_start = from->else_start, .else_count = from->else_count,
+                                    .loop_id = from->loop_id, .target_loop_id = from->target_loop_id, .case_arm_start = from->case_arm_start, .case_arm_count = from->case_arm_count,
+                                    .defer_block = from->defer_block, .for_pointer = from->for_pointer, .for_const = from->for_const, .for_range = from->for_range, .for_inclusive = from->for_inclusive, .for_reverse = from->for_reverse, .span = from->span};
+  }
   for (size_t i = 0; i < a->pattern_count; ++i)
     ir->patterns[i] = (DynIrPattern){a->patterns[i].first_value, a->patterns[i].last_value, lower_type(a, a->patterns[i].type), a->patterns[i].variant, a->patterns[i].is_enum, a->patterns[i].is_signed, a->patterns[i].is_type};
   for (size_t i = 0; i < a->case_arm_count; ++i)
@@ -695,7 +728,7 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
     }
     DynType type = ir->expressions[left].type;
     DynExprId binary = (DynExprId)ir->expression_count;
-    ir->expressions[ir->expression_count++] = (DynIrExpr){.kind = DYN_EXPR_BINARY, .type = type, .op = st->assignment_op, .wrap = dyn_op_wraps(st->assignment_op), .left = left, .right = st->expression, .span = st->span};
+    ir->expressions[ir->expression_count++] = (DynIrExpr){.kind = DYN_EXPR_BINARY, .type = type, .op = st->assignment_op, .wrap = dyn_op_wraps(st->assignment_op) && ir_wraps(source, st->span), .left = left, .right = st->expression, .span = st->span};
     st->expression = binary;
     st->assignment_op = DYN_OP_NONE;
   }

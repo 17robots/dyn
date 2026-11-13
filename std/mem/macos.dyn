@@ -1,15 +1,16 @@
 #target(kernel: darwin)
+use "std/os/macos/sys"
 // Address space each arena block reserves by default. Only touched pages cost memory.
 const DefaultBlock: usize = 64 * GiB
 fn mapping_allocate(size: usize) Mapping {
-  address := #syscall(197, 0, size, 3, 4098, -1, 0)
+  address := #syscall(sys.Mmap, 0, size, 3, 4098, -1, 0)
   if address < 0 {
     return Mapping{ error: address }
   }
   return Mapping{ bytes: #slice(#cast(*u8, address), size), committed: size, ok: true }
 }
 fn mapping_release(bytes: []u8) isize {
-  return #syscall(73, &bytes[0], #len(bytes))
+  return #syscall(sys.Munmap, &bytes[0], #len(bytes))
 }
 // The whole mapping is committed at creation.
 fn mapping_commit(bytes: []u8, from: usize, to: usize) bool {

@@ -1,9 +1,15 @@
 #include "sema.h"
 #include <ctype.h>
 #include <limits.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
+#include <pthread.h>
+#include <stdatomic.h>
+#include <unistd.h>
+#endif
 
 typedef struct {
   uint32_t *buckets, *next;
@@ -21,16 +27,34 @@ typedef struct {
   /* Per function: 0 unknown, 1 not a std/mem function, 2 + i is mem_names[i]. */
   uint8_t *mem_kinds;
   size_t mem_kind_count;
+  /* On a lifetime-check worker: where its vet findings count (SemaLate). */
+  unsigned *late_vet;
 } Sema;
 
+/* How errors are being reported in the analysis running on this thread.
+   dyn_sema_base resets it, so nothing carries over from an earlier analysis
+   (the language server analyzes many times on one thread). */
+typedef struct {
+  /* Set once a body's #assert fails: the function's other errors would only
+     restate that its type arguments are wrong, so they go unreported. */
+  bool assert_failed;
+  /* While checking a generic instance that program code required, errors
+     that land inside std or vendor code are reported at the program's call,
+     with the library location as a note: the call is what the reader can
+     change. */
+  bool has_origin;
+  DynSpan origin;
+  /* The last module reported as having no source file for the target. */
+  char gap_module[4096];
+} SemaReport;
+static _Thread_local SemaReport sema_report;
 /* Errors inside a module with no source file for the target all share that
    cause: report it once per module instead of every missing name. */
 static bool target_gap_reported(DynSpan span, const DynSource *s) {
-  static _Thread_local char reported[4096];
   char name[4096];
   if (!dyn_source_target_gap(s, span.start_byte, name, sizeof(name))) return false;
-  if (!strcmp(reported, name)) return true;
-  memcpy(reported, name, strlen(name) + 1);
+  if (!strcmp(sema_report.gap_module, name)) return true;
+  memcpy(sema_report.gap_module, name, strlen(name) + 1);
   char message[4200];
   snprintf(message, sizeof(message), "module '%s' has no source file for target %s; it is unavailable there",
            name, dyn_context_target(&s->context)->name);
@@ -39,14 +63,6 @@ static bool target_gap_reported(DynSpan span, const DynSource *s) {
 }
 static int assert_value(DynAstProgram *a, DynExprId id, unsigned depth);
 static DynExprId sema_push_expr(DynAstProgram *a, DynAstExpr e);
-/* Set once a body's #assert fails: the function's other errors would only
-   restate that its type arguments are wrong, so they go unreported. */
-static bool sema_assert_failed;
-/* While checking a generic instance that program code required, errors that
-   land inside std or vendor code are reported at the program's call, with
-   the library location as a note: the call is what the reader can change. */
-static bool sema_has_origin;
-static DynSpan sema_origin;
 static bool span_in_library(const DynSource *s, DynSpan span) {
   const char *path, *text;
   size_t length, at;
@@ -56,10 +72,10 @@ static bool span_in_library(const DynSource *s, DynSpan span) {
 static void error_span(DynSpan span, const DynSource *s, unsigned *e,
                        const char *m) {
   ++*e;
-  if (sema_assert_failed) return;
+  if (sema_report.assert_failed) return;
   if (target_gap_reported(span, s)) return;
-  if (sema_has_origin && span_in_library(s, span)) {
-    dyn_diagnostic_source("error", s, sema_origin.start_byte, sema_origin.end_byte, m);
+  if (sema_report.has_origin && span_in_library(s, span)) {
+    dyn_diagnostic_source("error", s, sema_report.origin.start_byte, sema_report.origin.end_byte, m);
     dyn_diagnostic_source("note", s, span.start_byte, span.end_byte, "reported inside the library here");
     return;
   }
@@ -72,6 +88,26 @@ static void note_span(DynSpan span, const DynSource *s, const char *m) {
 }
 static void display_type_name(DynAstProgram *a, DynType t, const DynSource *s,
                               char *out, size_t cap);
+static void error_missing_variants(DynAstProgram *a, DynSpan span, const DynSource *s, unsigned *errors,
+                                   const char *m, DynType subject, const bool *seen);
+/* An error whose message names what the reader wrote: a name, a type, a value. */
+static void error_format(DynSpan span, const DynSource *s, unsigned *e, const char *format, ...) {
+  char message[1024];
+  va_list arguments;
+  va_start(arguments, format);
+  vsnprintf(message, sizeof(message), format, arguments);
+  va_end(arguments);
+  error_span(span, s, e, message);
+}
+/* An error about a literal that does not fit the type its context expects. */
+static void error_literal(DynAstProgram *a, DynSpan span, const DynSource *s, unsigned *e,
+                          const char *m, DynType expected) {
+  char want[384];
+  display_type_name(a, expected, s, want, sizeof(want));
+  int length = (int)(span.end_byte - span.start_byte);
+  if (length > 64) length = 64;
+  error_format(span, s, e, "%s %s: %.*s does not fit", m, want, length, s->text + span.start_byte);
+}
 static void error_types(DynAstProgram *a, DynSpan span, const DynSource *s,
                         unsigned *e, const char *m, DynType expected,
                         DynType found) {
@@ -182,8 +218,10 @@ static bool suggest_name(DynAstProgram *a, DynSpan unknown, const DynSource *s,
   size_t n = best.end_byte - best.start_byte;
   if (!n || distance > 2)
     return false;
-  snprintf(message, capacity, "unknown %s; did you mean '%.*s'?",
-           functions ? "function" : "name", (int)n, s->text + best.start_byte);
+  int length = (int)(unknown.end_byte - unknown.start_byte);
+  snprintf(message, capacity, "unknown %s '%.*s'; did you mean '%.*s'?",
+           functions ? "function" : "name", length > 64 ? 64 : length, s->text + unknown.start_byte,
+           (int)n, s->text + best.start_byte);
   return true;
 }
 static bool push_loop(Sema *sema, DynAstStmt *st, const DynSource *s,
@@ -499,14 +537,23 @@ static uint32_t sema_find_field(DynAstProgram *a, uint32_t sid, DynSpan name,
       sizeof(*a->fields), st->field_count, name, s, false, &a->allocation_failed);
 }
 /* Vet reports user code only: std implements these operations on purpose. */
+/* Vet reports only the user's own code, never std or vendored modules. */
+static bool vet_path_skipped(const char *path) {
+  return !path || strstr(path, "/std/") || strstr(path, "/share/dyn/") || strstr(path, "/vendor/");
+}
 static void sema_vet_note(const DynSource *s, DynSpan span, bool unsafe_note, const char *message) {
   if (!s->context.vet || (unsafe_note && !s->context.vet_unsafe)) return;
   const char *path, *text; size_t length, at;
   dyn_source_position(s, span.start_byte, &path, &text, &length, &at);
-  if (path && (strstr(path, "/std/") || strstr(path, "/share/dyn/") || strstr(path, "/vendor/"))) return;
+  if (path && vet_path_skipped(path)) return;
   dyn_diagnostic_source("warning", s, span.start_byte, span.end_byte, message);
   if (s->context.vet_findings) ++*s->context.vet_findings;
 }
+/* A cast into a typed slot (argument, return, field, typed local, assignment)
+   whose operand the slot would widen anyway. Instances are skipped: a cast in
+   a generic body can be needed by another instance. */
+static void vet_cast(Sema *sema, DynAstProgram *a, const DynSource *s, DynExprId id,
+                     DynType target);
 static bool discard_name(DynSpan n, const DynSource *s) {
   return n.end_byte - n.start_byte == 1 && s->text[n.start_byte] == '_';
 }
@@ -591,6 +638,65 @@ static bool lossless(Sema *sema, DynType from, DynType to) {
     return needed <= precision;
   }
   return false;
+}
+/* x += y widens y as x = x + y would: the operator meets at x's type when
+   y converts to it losslessly. Shifts take any unsigned count instead. */
+static bool compound_widens(Sema *sema, DynOperator op, DynType value, DynType target) {
+  return op != DYN_OP_NONE && op != DYN_OP_SHL && op != DYN_OP_SHR &&
+         numeric(sema, value) && numeric(sema, target) && lossless(sema, value, target);
+}
+/* Whether #cast names a builtin number type. A named type can be an alias
+   that differs by target, so a cast to it can be needed elsewhere. */
+static bool vet_cast_builtin(const DynSource *s, DynSpan span) {
+  static const char *const names[] = {"u8", "u16", "u32", "u64", "usize", "i8", "i16",
+                                      "i32", "i64", "isize", "f32", "f64"};
+  size_t at = span.start_byte + 6, end = at;
+  if (span.end_byte < at || memcmp(s->text + span.start_byte, "#cast(", 6)) return false;
+  while (end < span.end_byte && (isalnum((unsigned char)s->text[end]) || s->text[end] == '_')) ++end;
+  if (end >= span.end_byte || s->text[end] != ',') return false;
+  for (size_t i = 0; i < sizeof(names) / sizeof(*names); ++i)
+    if (strlen(names[i]) == end - at && !memcmp(s->text + at, names[i], end - at)) return true;
+  return false;
+}
+/* A builtin-type cast in a typed slot. Redundant ones are reported, or
+   collected for the other targets to confirm; a target that needs the cast
+   marks it so it is not reported. */
+static void vet_cast_report(const DynSource *s, DynSpan span, bool redundant) {
+  DynVetCasts *casts = s->context.vet_casts;
+  if (!casts) {
+    if (redundant) sema_vet_note(s, span, false, "cast is implicit here");
+    return;
+  }
+  const char *path, *text; size_t length, at;
+  dyn_source_position(s, span.start_byte, &path, &text, &length, &at);
+  if (vet_path_skipped(path)) return;
+  for (size_t i = 0; i < casts->count; ++i)
+    if (casts->items[i].at == at && !strcmp(casts->items[i].path, path)) {
+      if (!redundant) casts->items[i].needed = true;
+      return;
+    }
+  if (casts->confirm || !redundant) return;
+  if (casts->count == casts->capacity) {
+    size_t capacity = casts->capacity ? casts->capacity * 2 : 16;
+    DynVetCast *items = realloc(casts->items, capacity * sizeof(*items));
+    if (!items) { casts->failed = true; return; }
+    casts->items = items;
+    casts->capacity = capacity;
+  }
+  char *copy = strdup(path);
+  if (!copy) { casts->failed = true; return; }
+  casts->items[casts->count++] = (DynVetCast){copy, at, span.start_byte, span.end_byte, false};
+}
+static void vet_cast(Sema *sema, DynAstProgram *a, const DynSource *s, DynExprId id,
+                     DynType target) {
+  if (!s->context.vet || id == DYN_NO_EXPR) return;
+  if (sema->current_function != UINT32_MAX && a->functions[sema->current_function].is_instance)
+    return;
+  const DynAstExpr *e = &a->expressions[id];
+  if (e->kind != DYN_EXPR_CAST || e->left == DYN_NO_EXPR || !vet_cast_builtin(s, e->span)) return;
+  DynType from = a->expressions[e->left].type;
+  if (from == DYN_TYPE_ERROR || e->type == DYN_TYPE_ERROR || target == DYN_TYPE_ERROR) return;
+  vet_cast_report(s, e->span, e->type == target && (from == target || lossless(sema, from, target)));
 }
 static DynAstPointer *pointer_info(DynAstProgram *a, DynType t) {
   return dyn_type_is_pointer(t) && t - DYN_TYPE_POINTER_BASE < a->pointer_count
@@ -794,6 +900,12 @@ static DynType function_signature_type(DynAstProgram *a, uint32_t id) {
   free(params);
   return result;
 }
+/* The type tables only fail to grow when memory runs out: report it, or the
+   ERROR type would pass as an earlier, already reported error. */
+static DynType reported_type(DynType type, DynSpan span, const DynSource *s, unsigned *errors) {
+  if (type == DYN_TYPE_ERROR) error_span(span, s, errors, "out of memory");
+  return type;
+}
 static bool can_convert(Sema *sema, DynAstProgram *a, DynType from,
                         DynType to) {
   if (to == DYN_TYPE_ANY && from != DYN_TYPE_VOID && from != DYN_TYPE_ERROR)
@@ -844,6 +956,15 @@ static DynExprId index_operand(Sema *sema, DynAstProgram *a, DynExprId operand, 
     snprintf(message, sizeof(message), "%s requires integer", what);
     error_span(span, s, errors, message);
     return operand;
+  }
+  const DynAstExpr *cast = &a->expressions[operand];
+  if (s->context.vet && cast->kind == DYN_EXPR_CAST && cast->left != DYN_NO_EXPR &&
+      vet_cast_builtin(s, cast->span) &&
+      !(sema->current_function != UINT32_MAX && a->functions[sema->current_function].is_instance)) {
+    DynType from = a->expressions[cast->left].type;
+    if (from != DYN_TYPE_ERROR)
+      vet_cast_report(s, cast->span, t == DYN_TYPE_USIZE &&
+          (from == DYN_TYPE_USIZE || (from != DYN_TYPE_ISIZE && integer(sema, from) && bits(sema, from) <= 32)));
   }
   if (!signed_int(sema, t)) return operand;
   if (bits(sema, t) > bits(sema, DYN_TYPE_USIZE)) {
@@ -1085,8 +1206,9 @@ static bool reserve_reflection_string(DynAstProgram *a) {
   a->string_capacity = c;
   return true;
 }
-static void type_name_into(DynAstProgram *a, DynType t, const DynSource *s,
-                           char *out, size_t cap) {
+/* names, when present, spells generic parameter i as $names[i]. */
+static void type_name_params(DynAstProgram *a, DynType t, const DynSource *s,
+                             char *out, size_t cap, const DynSpan *names) {
   if (!cap)
     return;
   out[0] = 0;
@@ -1121,7 +1243,7 @@ static void type_name_into(DynAstProgram *a, DynType t, const DynSource *s,
       size_t used = n;
       for (uint32_t i = 0; i < type_args && used + 2 < cap; ++i) {
         char argument[128];
-        type_name_into(a, arguments[i], s, argument, sizeof(argument));
+        type_name_params(a, arguments[i], s, argument, sizeof(argument), names);
         used += (size_t)snprintf(out + used, cap - used, "%s%s", i ? ", " : "(", argument);
       }
       if (used + 2 < cap) snprintf(out + used, cap - used, ")");
@@ -1131,7 +1253,7 @@ static void type_name_into(DynAstProgram *a, DynType t, const DynSource *s,
   char inner[384];
   if (dyn_type_is_pointer(t)) {
     DynAstPointer *p = pointer_info(a, t);
-    type_name_into(a, p->pointee, s, inner, sizeof(inner));
+    type_name_params(a, p->pointee, s, inner, sizeof(inner), names);
     /* A function value is a code pointer and is spelled fn(...) R. */
     if (dyn_type_is_function(p->pointee) && !p->is_const)
       snprintf(out, cap, "%s", inner);
@@ -1141,13 +1263,13 @@ static void type_name_into(DynAstProgram *a, DynType t, const DynSource *s,
   }
   if (dyn_type_is_array(t)) {
     DynAstArray *ar = array_info(a, t);
-    type_name_into(a, ar->element, s, inner, sizeof(inner));
+    type_name_params(a, ar->element, s, inner, sizeof(inner), names);
     snprintf(out, cap, "[%llu]%s", (unsigned long long)ar->length, inner);
     return;
   }
   if (dyn_type_is_slice(t)) {
     DynAstSlice *sl = slice_info(a, t);
-    type_name_into(a, sl->element, s, inner, sizeof(inner));
+    type_name_params(a, sl->element, s, inner, sizeof(inner), names);
     snprintf(out, cap, "[]%s%s", sl->is_const ? "const " : "", inner);
     return;
   }
@@ -1155,17 +1277,25 @@ static void type_name_into(DynAstProgram *a, DynType t, const DynSource *s,
     DynAstFnType *fn = fn_type_info(a, t);
     size_t at = (size_t)snprintf(out, cap, "fn(");
     for (uint32_t i = 0; i < fn->param_count && at < cap; ++i) {
-      type_name_into(a, a->fn_type_params[fn->param_start + i], s, inner,
-                     sizeof(inner));
+      type_name_params(a, a->fn_type_params[fn->param_start + i], s, inner,
+                     sizeof(inner), names);
       at += (size_t)snprintf(out + at, cap - at, "%s%s", i ? ", " : "", inner);
     }
     if (at < cap) {
-      type_name_into(a, fn->return_type, s, inner, sizeof(inner));
+      type_name_params(a, fn->return_type, s, inner, sizeof(inner), names);
       snprintf(out + at, cap - at, ") %s", inner);
     }
     return;
   }
+  if (names && dyn_type_is_param(t)) {
+    DynSpan name = names[t - DYN_TYPE_PARAM_BASE];
+    snprintf(out, cap, "$%.*s", (int)(name.end_byte - name.start_byte), s->text + name.start_byte);
+    return;
+  }
   snprintf(out, cap, "unknown");
+}
+static void type_name_into(DynAstProgram *a, DynType t, const DynSource *s, char *out, size_t cap) {
+  type_name_params(a, t, s, out, cap, NULL);
 }
 static uint64_t reflection_id(const char *name) {
   uint64_t h = UINT64_C(1469598103934665603);
@@ -1526,7 +1656,7 @@ static DynType check_generic_call(Sema *sema, DynAstProgram *a, DynExprId id,
     e->integer = function;
     e->left = DYN_NO_EXPR;
     e->item_count = 0;
-    return e->type = function_pointer_type(a, function);
+    return e->type = reported_type(function_pointer_type(a, function), call, s, errors);
   }
   if (item_count != g.param_count) {
     error_span(call, s, errors,
@@ -1536,6 +1666,7 @@ static DynType check_generic_call(Sema *sema, DynAstProgram *a, DynExprId id,
     return a->expressions[id].type = DYN_TYPE_ERROR;
   }
   DynType args[DYN_MAX_TYPE_PARAMS] = {0}, values[64];
+  for (uint32_t i = 0; i < 64; ++i) values[i] = DYN_TYPE_INFER;
   /* The argument that first fixed each type parameter, for conflict errors. */
   DynExprId binder[DYN_MAX_TYPE_PARAMS];
   for (uint32_t k = 0; k < DYN_MAX_TYPE_PARAMS; ++k) binder[k] = DYN_NO_EXPR;
@@ -1624,11 +1755,28 @@ static DynType check_generic_call(Sema *sema, DynAstProgram *a, DynExprId id,
   for (uint32_t k = 0; !failed && k < g.type_param_count; ++k)
     if (args[k] == DYN_TYPE_INFER || args[k] == DYN_TYPE_ERROR) {
       if (args[k] == DYN_TYPE_INFER) {
-        char message[160];
+        char message[1024];
         DynSpan name = g.type_names[k];
-        snprintf(message, sizeof(message), "cannot infer %.*s from the arguments",
-                 (int)(name.end_byte - name.start_byte), s->text + name.start_byte);
-        error_span(call, s, errors, message);
+        int used = snprintf(message, sizeof(message), "cannot infer %.*s from the arguments",
+                            (int)(name.end_byte - name.start_byte), s->text + name.start_byte);
+        DynSpan at = call;
+        /* Name the parameter that should have supplied it and the argument
+           whose type did not have that shape. */
+        for (uint32_t i = 0; i < item_count && used > 0; ++i) {
+          DynAstGenericParam p = a->generic_params[g.param_start + i];
+          if (p.is_type || values[i] == DYN_TYPE_INFER || values[i] == DYN_TYPE_ERROR ||
+              !pattern_mentions(a, p.pattern, DYN_TYPE_PARAM_BASE + k, 0))
+            continue;
+          char want[384], got[384];
+          type_name_params(a, p.pattern, s, want, sizeof(want), g.type_names);
+          dyn_type_format(a, values[i], s, got, sizeof(got));
+          snprintf(message + used, sizeof(message) - (size_t)used,
+                   ": parameter '%.*s' has type %s, but this argument is %s",
+                   (int)(p.name.end_byte - p.name.start_byte), s->text + p.name.start_byte, want, got);
+          at = a->expressions[a->items[item_start + i].expression].span;
+          break;
+        }
+        error_span(at, s, errors, message);
       }
       failed = true;
     }
@@ -1704,6 +1852,43 @@ static bool untyped_constant(Sema *sema, DynAstProgram *a, DynExprId id, const D
   }
   default: return false;
   }
+}
+/* Whether an operand's type stands on its own. Literals and untyped
+   constants take the other operand's type, so dropping a cast beside one
+   would change the arithmetic. */
+static bool vet_fixed_type(Sema *sema, DynAstProgram *a, DynExprId id, const DynSource *s,
+                           unsigned depth) {
+  if (id == DYN_NO_EXPR || depth > 64 || untyped_constant(sema, a, id, s, 0)) return false;
+  const DynAstExpr *e = &a->expressions[id];
+  switch (e->kind) {
+  case DYN_EXPR_NAME: case DYN_EXPR_GLOBAL: case DYN_EXPR_FIELD: case DYN_EXPR_INDEX:
+  case DYN_EXPR_CALL: case DYN_EXPR_CONVERT: case DYN_EXPR_LIMIT:
+    return true;
+  case DYN_EXPR_UNARY:
+    return vet_fixed_type(sema, a, e->left, s, depth + 1);
+  case DYN_EXPR_BINARY:
+    return vet_fixed_type(sema, a, e->left, s, depth + 1) ||
+           vet_fixed_type(sema, a, e->right, s, depth + 1);
+  default:
+    return false;
+  }
+}
+/* A cast on one side of an operator whose other side already has the cast's
+   type: the operator widens the operand itself. Not when both sides are
+   casts, since dropping both would narrow the arithmetic. */
+static void vet_operand_cast(Sema *sema, DynAstProgram *a, const DynSource *s, DynExprId id,
+                             DynExprId other) {
+  if (!s->context.vet || id == DYN_NO_EXPR || other == DYN_NO_EXPR) return;
+  if (sema->current_function != UINT32_MAX && a->functions[sema->current_function].is_instance)
+    return;
+  const DynAstExpr *e = &a->expressions[id];
+  if (e->kind != DYN_EXPR_CAST || e->left == DYN_NO_EXPR || !vet_cast_builtin(s, e->span)) return;
+  DynType from = a->expressions[e->left].type;
+  if (from == DYN_TYPE_ERROR || e->type == DYN_TYPE_ERROR) return;
+  bool redundant = from == e->type ||
+      (a->expressions[other].kind != DYN_EXPR_CAST && a->expressions[other].type == e->type &&
+       lossless(sema, from, e->type) && vet_fixed_type(sema, a, other, s, 0));
+  vet_cast_report(s, e->span, redundant);
 }
 static DynExprId copy_untyped(DynAstProgram *a, DynExprId id) {
   if (id == DYN_NO_EXPR) return id;
@@ -1815,6 +2000,7 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
       uint32_t arg_index = item_start;
       DynType value =
           check_expr(sema, a, a->items[arg_index].expression, s, errors, v->payload_type);
+      vet_cast(sema, a, s, a->items[arg_index].expression, v->payload_type);
       if (value != v->payload_type && value != DYN_TYPE_ERROR) {
         if (can_convert(sema, a, value, v->payload_type))
           a->items[arg_index].expression = convert_expr(a, a->items[arg_index].expression, v->payload_type);
@@ -1830,10 +2016,12 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
       if (find_local(sema, a, a->expressions[id].span, s) == UINT32_MAX &&
           sema_find_global_name(sema, a, a->expressions[id].span, s) == UINT32_MAX) {
         char message[256];
-        error_span(a->expressions[id].span, s, errors,
-                   suggest_name(a, a->expressions[id].span, s, true, message, sizeof(message))
-                       ? message
-                       : "unknown function");
+        DynSpan name = a->expressions[id].span;
+        if (suggest_name(a, name, s, true, message, sizeof(message)))
+          error_span(name, s, errors, message);
+        else
+          error_format(name, s, errors, "unknown function '%.*s'", (int)(name.end_byte - name.start_byte),
+                       s->text + name.start_byte);
         for (uint32_t i = 0; i < a->expressions[id].item_count; ++i)
           (void)check_expr(sema, a, a->items[a->expressions[id].item_start + i].expression, s,
                            errors, DYN_TYPE_INFER);
@@ -1884,6 +2072,7 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
         uint32_t arg_index = item_start + i;
         DynType target = a->params[callee->param_start + i].type,
                 value = check_expr(sema, a, a->items[arg_index].expression, s, errors, target);
+        vet_cast(sema, a, s, a->items[arg_index].expression, target);
         if (value != target && value != DYN_TYPE_ERROR &&
             target != DYN_TYPE_ERROR) {
           if (can_convert(sema, a, value, target))
@@ -1964,6 +2153,7 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
       uint32_t arg_index = item_start + i;
       DynType want = a->fn_type_params[signature->param_start + i],
               value = check_expr(sema, a, a->items[arg_index].expression, s, errors, want);
+      vet_cast(sema, a, s, a->items[arg_index].expression, want);
       if (value != want && value != DYN_TYPE_ERROR) {
         if (can_convert(sema, a, value, want))
           a->items[arg_index].expression = convert_expr(a, a->items[arg_index].expression, want);
@@ -2040,13 +2230,15 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
       }
       a->expressions[id].kind = DYN_EXPR_FUNCTION;
       a->expressions[id].integer = fn;
-      return a->expressions[id].type = function_pointer_type(a, fn);
+      return a->expressions[id].type = reported_type(function_pointer_type(a, fn), a->expressions[id].span, s, errors);
     }
     char message[256];
-    error_span(a->expressions[id].span, s, errors,
-               suggest_name(a, a->expressions[id].span, s, false, message, sizeof(message))
-                   ? message
-                   : "unknown name");
+    DynSpan name = a->expressions[id].span;
+    if (suggest_name(a, name, s, false, message, sizeof(message)))
+      error_span(name, s, errors, message);
+    else
+      error_format(name, s, errors, "unknown name '%.*s'", (int)(name.end_byte - name.start_byte),
+                   s->text + name.start_byte);
     return a->expressions[id].type = DYN_TYPE_ERROR;
   }
   if (a->expressions[id].kind == DYN_EXPR_ARRAY) {
@@ -2183,7 +2375,7 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
                          : UINT32_MAX;
       operand = reflected_fn == UINT32_MAX
                     ? check_expr(sema, a, a->expressions[id].left, s, errors, DYN_TYPE_INFER)
-                    : function_signature_type(a, reflected_fn);
+                    : reported_type(function_signature_type(a, reflected_fn), source->span, s, errors);
     }
     uint32_t info = UINT32_MAX, member = UINT32_MAX, kind_enum = UINT32_MAX;
     for (uint32_t i = 0; i < a->struct_count; ++i)
@@ -2355,6 +2547,39 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
     a->expressions[id].item_count = 13;
     return a->expressions[id].type;
   }
+  if (a->expressions[id].kind == DYN_EXPR_LIMIT) {
+    bool maximum = a->expressions[id].op == DYN_OP_GT;
+    DynType t = a->expressions[id].boolean ? (DynType)a->expressions[id].integer : DYN_TYPE_ERROR;
+    if (t == DYN_TYPE_ERROR || !integer(sema, t)) {
+      error_span(a->expressions[id].span, s, errors,
+                 maximum ? "#max requires an integer type" : "#min requires an integer type");
+      return a->expressions[id].type = DYN_TYPE_ERROR;
+    }
+    unsigned b = bits(sema, t);
+    uint64_t top = UINT64_C(1) << (b - 1);
+    if (!maximum && signed_int(sema, t)) {
+      /* Written as -magnitude, the form a negative literal takes. */
+      DynExprId magnitude = convert_expr(a, id, t);
+      if (magnitude == DYN_NO_EXPR) return a->expressions[id].type = DYN_TYPE_ERROR;
+      a->expressions[magnitude] = (DynAstExpr){.kind = DYN_EXPR_INT, .type = t,
+                                               .span = a->expressions[id].span,
+                                               .integer = top, .left = DYN_NO_EXPR,
+                                               .right = DYN_NO_EXPR};
+      DynAstExpr *e = &a->expressions[id];
+      e->kind = DYN_EXPR_UNARY;
+      e->op = DYN_OP_NEG;
+      e->boolean = true;
+      e->left = magnitude;
+      e->right = DYN_NO_EXPR;
+      e->integer = 0;
+      return e->type = t;
+    }
+    DynAstExpr *e = &a->expressions[id];
+    e->kind = DYN_EXPR_INT;
+    e->integer = !maximum ? 0 : signed_int(sema, t) ? top - 1 : top - 1 + top;
+    e->boolean = false;
+    return e->type = t;
+  }
   if (a->expressions[id].kind == DYN_EXPR_SIZE || a->expressions[id].kind == DYN_EXPR_ALIGN) {
     DynType operand =
         a->expressions[id].boolean ? (DynType)a->expressions[id].integer
@@ -2390,8 +2615,16 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
     return e->type = DYN_TYPE_USIZE;
   }
   if (a->expressions[id].kind == DYN_EXPR_CAST) {
-    DynType source = check_expr(sema, a, a->expressions[id].left, s, errors, DYN_TYPE_INFER),
-            target = (DynType)a->expressions[id].integer;
+    DynType target = (DynType)a->expressions[id].integer;
+    /* #cast(u32, 0x80000000): an integer literal that fits the target takes
+       it, rather than the default i32 it may not fit. */
+    DynExprId operand = a->expressions[id].left;
+    DynType literal_type = operand != DYN_NO_EXPR && a->expressions[operand].kind == DYN_EXPR_INT &&
+                                   !dyn_type_is_distinct(target) && integer(sema, target) &&
+                                   literal_fits(sema, a->expressions[operand].integer, target)
+                               ? target
+                               : DYN_TYPE_INFER;
+    DynType source = check_expr(sema, a, operand, s, errors, literal_type);
     if (source == DYN_TYPE_ERROR)
       return a->expressions[id].type = DYN_TYPE_ERROR;
     bool source_ptr = dyn_type_is_pointer(source) || source == DYN_TYPE_RAWPTR;
@@ -2449,8 +2682,16 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
     if (a->expressions[id].item_count &&
         !strcmp(dyn_context_target(&s->context)->kernel, "linux") &&
         strcmp(dyn_context_target(&s->context)->arch, "x86_64")) {
-      DynAstExpr *number = &a->expressions[a->items[a->expressions[id].item_start].expression];
+      DynExprId number_id = a->items[a->expressions[id].item_start].expression;
+      DynAstExpr *number = &a->expressions[number_id];
       uint64_t native = 0;
+      /* A named constant, such as sys.Openat, folds to its number. */
+      ConstantUInt named = constant_uint_at(a, number_id, 8);
+      if (number->kind != DYN_EXPR_INT && named.valid && !named.overflow) {
+        number->kind = DYN_EXPR_INT;
+        number->integer = named.value;
+        number->left = number->right = DYN_NO_EXPR;
+      }
       if (number->kind != DYN_EXPR_INT)
         error_span(number->span, s, errors,
                    "non-x86 Linux #syscall number must be a constant portable Linux "
@@ -2536,6 +2777,7 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
           error_span(a->items[item_index].name, s, errors, "duplicate struct literal field");
       DynType target = a->fields[st->field_start + field].type;
       DynType value = check_expr(sema, a, a->items[item_index].expression, s, errors, target);
+      vet_cast(sema, a, s, a->items[item_index].expression, target);
       if (value != target && value != DYN_TYPE_ERROR &&
           target != DYN_TYPE_ERROR) {
         if (can_convert(sema, a, value, target))
@@ -2592,8 +2834,8 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
     if (expected != DYN_TYPE_INFER && !dyn_type_is_distinct(expected) &&
         integer(sema, expected)) {
       if (!literal_fits(sema, a->expressions[id].integer, expected)) {
-        error_span(a->expressions[id].span, s, errors,
-                   "integer literal is not representable in expected type");
+        error_literal(a, a->expressions[id].span, s, errors,
+                      "integer literal is not representable in expected type", expected);
         return a->expressions[id].type = DYN_TYPE_ERROR;
       }
       return a->expressions[id].type = expected;
@@ -2616,8 +2858,8 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
                     ? expected
                     : DYN_TYPE_U32;
     if (!literal_fits(sema, a->expressions[id].integer, t)) {
-      error_span(a->expressions[id].span, s, errors,
-                 "character literal is not representable in expected type");
+      error_literal(a, a->expressions[id].span, s, errors,
+                    "character literal is not representable in expected type", t);
       return a->expressions[id].type = DYN_TYPE_ERROR;
     }
     return a->expressions[id].type = t;
@@ -2628,8 +2870,10 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
       return a->expressions[id].type = sema_intern_slice(a, DYN_TYPE_U8, true);
     DynAstSlice *target = slice_info(a, expected);
     if (!target || target->element != DYN_TYPE_U8 || !target->is_const) {
-      error_span(a->expressions[id].span, s, errors,
-                 "string literal requires expected []const u8 type");
+      char want[384];
+      display_type_name(a, expected, s, want, sizeof(want));
+      error_format(a->expressions[id].span, s, errors,
+                   "string literal requires expected []const u8 type, but this context expects %s", want);
       return a->expressions[id].type = DYN_TYPE_ERROR;
     }
     return a->expressions[id].type = expected;
@@ -2644,8 +2888,8 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
     uint64_t limit =
         width == 64 ? (UINT64_C(1) << 63) : (UINT64_C(1) << (width - 1));
     if (operand->integer > limit) {
-      error_span(a->expressions[id].span, s, errors,
-                 "negative literal is not representable in expected type");
+      error_literal(a, a->expressions[id].span, s, errors,
+                    "negative literal is not representable in expected type", expected);
       return a->expressions[id].type = DYN_TYPE_ERROR;
     }
     operand->type = expected;
@@ -2656,8 +2900,8 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
       !dyn_type_is_distinct(expected) && integer(sema, expected) && !signed_int(sema, expected) &&
       a->expressions[a->expressions[id].left].kind == DYN_EXPR_INT &&
       a->expressions[a->expressions[id].left].integer != 0) {
-    error_span(a->expressions[id].span, s, errors,
-               "negative literal is not representable in expected type");
+    error_literal(a, a->expressions[id].span, s, errors,
+                  "negative literal is not representable in expected type", expected);
     return a->expressions[id].type = DYN_TYPE_ERROR;
   }
   if (a->expressions[id].kind == DYN_EXPR_UNARY && a->expressions[id].op == DYN_OP_ADDRESS) {
@@ -2730,8 +2974,11 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
     }
     ConstantUInt rhs = constant_uint(a, a->expressions[id].right);
     if (rhs.valid && rhs.value >= bits(sema, left)) {
-      error_span(a->expressions[id].span, s, errors, "invalid constant shift count");
-      return a->expressions[id].type = DYN_TYPE_ERROR;
+      error_format(a->expressions[id].span, s, errors,
+                   "invalid constant shift count: %llu shifts every bit out of a %u-bit value (counts 0 to %u)",
+                   (unsigned long long)rhs.value, bits(sema, left), bits(sema, left) - 1);
+      /* The result type is still the left operand's, so later uses check. */
+      return a->expressions[id].type = left;
     }
     return a->expressions[id].type = left;
   }
@@ -2753,6 +3000,19 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
       right = left;
     }
   }
+  /* Mixed number types meet at the wider one when that widening is lossless
+     on every target, as it would be in a typed slot: u32 + u64 is u64,
+     u32 < i64 compares as i64. u64 < i64 still needs a cast. */
+  if (left != right && numeric(sema, left) && numeric(sema, right) &&
+      a->expressions[id].op != DYN_OP_LOGICAL_AND && a->expressions[id].op != DYN_OP_LOGICAL_OR) {
+    if (lossless(sema, right, left)) {
+      a->expressions[id].right = convert_expr(a, a->expressions[id].right, left);
+      right = left;
+    } else if (lossless(sema, left, right)) {
+      a->expressions[id].left = convert_expr(a, a->expressions[id].left, right);
+      left = right;
+    }
+  }
   if (left != right) {
     char lhs[128], rhs[128], message[384];
     type_name_into(a, left, s, lhs, sizeof(lhs));
@@ -2762,6 +3022,11 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
              rhs);
     error_span(a->expressions[id].span, s, errors, message);
     return a->expressions[id].type = DYN_TYPE_ERROR;
+  }
+  if (numeric(sema, left) && a->expressions[id].op != DYN_OP_LOGICAL_AND &&
+      a->expressions[id].op != DYN_OP_LOGICAL_OR) {
+    vet_operand_cast(sema, a, s, a->expressions[id].left, a->expressions[id].right);
+    vet_operand_cast(sema, a, s, a->expressions[id].right, a->expressions[id].left);
   }
   if (a->expressions[id].op == DYN_OP_LOGICAL_AND || a->expressions[id].op == DYN_OP_LOGICAL_OR) {
     if (left != DYN_TYPE_BOOL)
@@ -2862,104 +3127,6 @@ static bool lvalue_const(DynAstProgram *a, DynExprId id) {
   if (e->kind == DYN_EXPR_GLOBAL)
     return e->integer < a->global_count && a->globals[e->integer].is_const;
   return false;
-}
-/* An all-literal range takes its binding's type from the first use that meets
-   a known integer type: a typed target, operand, parameter or return. */
-typedef struct {
-  Sema *sema;
-  DynAstProgram *a;
-  const DynSource *s;
-  DynSpan name;
-  DynType hint;
-  unsigned work;
-} RangeHint;
-static bool range_mentions(RangeHint *h, DynExprId id, unsigned depth) {
-  if (id == DYN_NO_EXPR || depth > 32) return false;
-  const DynAstExpr *e = &h->a->expressions[id];
-  if (e->kind == DYN_EXPR_NAME) return dyn_span_text_equal(e->span, h->name, h->s);
-  if (e->kind == DYN_EXPR_UNARY)
-    return (e->op == DYN_OP_NEG || e->op == DYN_OP_BIT_NOT) && range_mentions(h, e->left, depth + 1);
-  if (e->kind != DYN_EXPR_BINARY || e->op < DYN_OP_ADD) return false;
-  if (e->op >= DYN_OP_EQ && e->op <= DYN_OP_LOGICAL_OR) return false;
-  if (e->op == DYN_OP_SHL || e->op == DYN_OP_SHR) return range_mentions(h, e->left, depth + 1);
-  return range_mentions(h, e->left, depth + 1) || range_mentions(h, e->right, depth + 1);
-}
-static DynType range_known_name(RangeHint *h, DynSpan name) {
-  if (dyn_span_text_equal(name, h->name, h->s)) return DYN_TYPE_INFER;
-  uint32_t l = find_local(h->sema, h->a, name, h->s);
-  if (l != UINT32_MAX) return h->a->locals[l].has_untyped ? DYN_TYPE_INFER : h->a->locals[l].type;
-  uint32_t g = sema_find_global_name(h->sema, h->a, name, h->s);
-  if (g != UINT32_MAX) return h->a->globals[g].has_untyped ? DYN_TYPE_INFER : h->a->globals[g].type;
-  return DYN_TYPE_INFER;
-}
-static DynType range_known(RangeHint *h, DynExprId id) {
-  if (id == DYN_NO_EXPR) return DYN_TYPE_INFER;
-  const DynAstExpr *e = &h->a->expressions[id];
-  if (e->kind == DYN_EXPR_LEN) return DYN_TYPE_USIZE;
-  if (e->kind == DYN_EXPR_NAME) return range_known_name(h, e->span);
-  if (e->kind == DYN_EXPR_CALL) {
-    uint32_t fn = sema_find_function(h->sema, h->a, e->span, h->s);
-    return fn == UINT32_MAX || h->a->functions[fn].is_generic ? DYN_TYPE_INFER
-                                                              : h->a->functions[fn].return_type;
-  }
-  if (e->kind == DYN_EXPR_FIELD && e->left != DYN_NO_EXPR) {
-    DynType base = range_known(h, e->left);
-    DynAstPointer *pointer = pointer_info(h->a, base);
-    if (pointer) base = pointer->pointee;
-    if (!dyn_type_is_struct(base)) return DYN_TYPE_INFER;
-    uint32_t sid = base - DYN_TYPE_STRUCT_BASE;
-    uint32_t field = sema_find_field(h->a, sid, e->span, h->s);
-    return field == UINT32_MAX ? DYN_TYPE_INFER
-                               : h->a->fields[h->a->structs[sid].field_start + field].type;
-  }
-  return DYN_TYPE_INFER;
-}
-static void range_offer(RangeHint *h, DynType type) {
-  if (h->hint == DYN_TYPE_INFER && type != DYN_TYPE_INFER && type != DYN_TYPE_ERROR &&
-      integer(h->sema, type))
-    h->hint = type;
-}
-static void range_expr(RangeHint *h, DynExprId id, unsigned depth) {
-  if (id == DYN_NO_EXPR || h->hint != DYN_TYPE_INFER || depth > 64 || ++h->work > 100000) return;
-  DynAstExpr e = h->a->expressions[id];
-  if (e.kind == DYN_EXPR_BINARY) {
-    if (range_mentions(h, e.left, 0)) range_offer(h, range_known(h, e.right));
-    if (range_mentions(h, e.right, 0)) range_offer(h, range_known(h, e.left));
-  }
-  if (e.kind == DYN_EXPR_CALL) {
-    uint32_t fn = sema_find_function(h->sema, h->a, e.span, h->s);
-    if (fn != UINT32_MAX && !h->a->functions[fn].is_generic)
-      for (uint32_t i = 0; i < e.item_count && i < h->a->functions[fn].param_count; ++i)
-        if (range_mentions(h, h->a->items[e.item_start + i].expression, 0))
-          range_offer(h, h->a->params[h->a->functions[fn].param_start + i].type);
-  }
-  range_expr(h, e.left, depth + 1);
-  range_expr(h, e.right, depth + 1);
-  if (e.kind == DYN_EXPR_CALL || e.kind == DYN_EXPR_STRUCT || e.kind == DYN_EXPR_ARRAY)
-    for (uint32_t i = 0; i < e.item_count; ++i)
-      range_expr(h, h->a->items[e.item_start + i].expression, depth + 1);
-}
-static void range_block(RangeHint *h, uint32_t start, uint32_t count, unsigned depth) {
-  for (uint32_t i = 0; i < count && h->hint == DYN_TYPE_INFER && depth < 64; ++i) {
-    const DynAstStmt *st = &h->a->statements[h->a->children[start + i]];
-    if (st->kind == DYN_STMT_ASSIGN && range_mentions(h, st->expression, 0))
-      range_offer(h, st->target != DYN_NO_EXPR ? range_known(h, st->target)
-                                               : range_known_name(h, st->name));
-    if (st->kind == DYN_STMT_LOCAL && st->declared_type != DYN_TYPE_INFER &&
-        range_mentions(h, st->expression, 0))
-      range_offer(h, st->declared_type);
-    if (st->kind == DYN_STMT_RETURN && h->sema->current_function != UINT32_MAX &&
-        range_mentions(h, st->expression, 0))
-      range_offer(h, h->a->functions[h->sema->current_function].return_type);
-    range_expr(h, st->target, 0);
-    range_expr(h, st->expression, 0);
-    range_block(h, st->body_start, st->body_count, depth + 1);
-    range_block(h, st->else_start, st->else_count, depth + 1);
-    for (uint32_t k = 0; k < st->case_arm_count; ++k) {
-      const DynAstCaseArm *arm = &h->a->case_arms[st->case_arm_start + k];
-      range_block(h, arm->body_start, arm->body_count, depth + 1);
-    }
-  }
 }
 static bool sema_block(Sema *sema, DynAstProgram *, uint32_t, uint32_t,
                        const DynSource *, unsigned *, bool);
@@ -3311,15 +3478,40 @@ static bool sema_case_v2(Sema *sema, DynAstProgram *a, DynAstStmt *st,
     complete = true;
     for (uint32_t i = 0; i < en->variant_count; ++i)
       complete = complete && seen[i];
-    free(seen);
   } else
     complete = integer_case_complete(sema, a, st, subject);
   if (wildcard && complete)
     error_span(st->span, s, errors,
                "_ case arm is unreachable because all cases are covered");
+  else if (!wildcard && !complete && enum_case)
+    error_missing_variants(a, st->span, s, errors, "case is not exhaustive", subject, seen);
   else if (!wildcard && !complete)
-    error_span(st->span, s, errors, "case is not exhaustive");
+    error_span(st->span, s, errors, "case is not exhaustive: add the missing ranges or a _ arm");
+  if (enum_case) free(seen);
   return all_terminate;
+}
+/* "case is not exhaustive: missing Shape.Rect and Shape.Line", naming at
+   most four variants. */
+static void error_missing_variants(DynAstProgram *a, DynSpan span, const DynSource *s, unsigned *errors,
+                                   const char *m, DynType subject, const bool *seen) {
+  const DynAstEnum *en = &a->enums[subject - DYN_TYPE_ENUM_BASE];
+  char type[384], message[1024];
+  display_type_name(a, subject, s, type, sizeof(type));
+  uint32_t missing = 0;
+  for (uint32_t i = 0; i < en->variant_count; ++i) missing += !seen[i];
+  int used = snprintf(message, sizeof(message), "%s: missing", m);
+  uint32_t listed = 0;
+  for (uint32_t i = 0; i < en->variant_count && listed < 4 && used > 0 && (size_t)used < sizeof(message); ++i) {
+    if (seen[i]) continue;
+    DynSpan name = a->variants[en->variant_start + i].name;
+    const char *separator = !listed ? " " : listed + 1 == missing ? " and " : ", ";
+    used += snprintf(message + used, sizeof(message) - (size_t)used, "%s%s.%.*s", separator, type,
+                     (int)(name.end_byte - name.start_byte), s->text + name.start_byte);
+    ++listed;
+  }
+  if (missing > listed && used > 0 && (size_t)used < sizeof(message))
+    snprintf(message + used, sizeof(message) - (size_t)used, " and %u more", missing - listed);
+  error_span(span, s, errors, message);
 }
 /* Diagnose syntactically proven escapes only. Borrowed pointer/slice parameters
  * are safe here; their referents are not the parameter's own stack slot. */
@@ -3405,7 +3597,7 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
         snprintf(message, sizeof(message), "#assert failed%s%.*s", quoted ? ": " : "",
                  quoted ? (int)(m.end_byte - m.start_byte - 2) : 0, quoted ? s->text + m.start_byte + 1 : "");
         error_span(st->span, s, errors, message);
-        sema_assert_failed = true;
+        sema_report.assert_failed = true;
       }
     }
     st->kind = DYN_STMT_EXPR;
@@ -3440,6 +3632,7 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
     else {
       DynType value = check_expr(sema, a, st->expression, s, errors,
                                  sema->current_return_type);
+      vet_cast(sema, a, s, st->expression, sema->current_return_type);
       if (returns_local_borrow(sema, a, st->expression))
         error_span(st->span, s, errors,
                    "returned value borrows function-local storage");
@@ -3636,7 +3829,7 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
             st->span, s, errors,
             "_ case arm is unreachable because all variants are covered");
       else if (!wildcard && !complete)
-        error_span(st->span, s, errors, "enum case is not exhaustive");
+        error_missing_variants(a, st->span, s, errors, "enum case is not exhaustive", subject, variants);
       free(variants);
     } else if (!wildcard)
       error_span(st->span, s, errors,
@@ -3657,16 +3850,15 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
             check_expr(sema, a, st->expression, s, errors, type) != type)
           type = DYN_TYPE_ERROR;
       } else if (first_literal && last_literal) {
-        RangeHint hint = {sema, a, s, st->name, DYN_TYPE_INFER, 0};
-        range_block(&hint, st->body_start, st->body_count, 0);
-        if (hint.hint == DYN_TYPE_INFER &&
-            (a->expressions[st->target].kind == DYN_EXPR_UNARY ||
-             a->expressions[st->expression].kind == DYN_EXPR_UNARY)) {
+        /* An untyped all-literal range counts in usize, whatever the body
+           does with the binding: write `for i: i32 in` for another type. */
+        if (a->expressions[st->target].kind == DYN_EXPR_UNARY ||
+            a->expressions[st->expression].kind == DYN_EXPR_UNARY) {
           error_span(st->span, s, errors,
                      "negative literal range needs a typed binding, such as 'for i: i32 in'");
           return false;
         }
-        type = hint.hint == DYN_TYPE_INFER ? DYN_TYPE_USIZE : hint.hint;
+        type = DYN_TYPE_USIZE;
         if (check_expr(sema, a, st->target, s, errors, type) != type ||
             check_expr(sema, a, st->expression, s, errors, type) != type)
           type = DYN_TYPE_ERROR;
@@ -3814,6 +4006,8 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
       pristine = copy_untyped(a, st->expression);
     if (st->expression != DYN_NO_EXPR) {
       DynType value = check_expr(sema, a, st->expression, s, errors, type);
+      if (type != DYN_TYPE_INFER)
+        vet_cast(sema, a, s, st->expression, type);
       if (type == DYN_TYPE_INFER)
         type = value;
       else if (value != type && value != DYN_TYPE_ERROR) {
@@ -3824,15 +4018,16 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
                       value);
       }
     }
-    if (type == DYN_TYPE_ERROR || type == DYN_TYPE_STRING ||
-        type == DYN_TYPE_VOID) {
+    if (type == DYN_TYPE_STRING || type == DYN_TYPE_VOID) {
       if (type == DYN_TYPE_STRING)
         error_span(st->span, s, errors,
                    "string locals are deferred until slice lowering");
-      else if (type == DYN_TYPE_VOID)
+      else
         error_span(st->span, s, errors, "local cannot have void type");
-      return false;
+      type = DYN_TYPE_ERROR;
     }
+    /* A local whose type failed is still declared, with the error type, so
+       its later uses are not reported again as unknown names. */
     if (!reserve_local(a)) {
       error_span(st->span, s, errors, "out of memory");
       return false;
@@ -3852,12 +4047,15 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
   if (st->target != DYN_NO_EXPR) {
     DynType target = check_expr(sema, a, st->target, s, errors, DYN_TYPE_INFER),
             value = check_expr(sema, a, st->expression, s, errors, target);
+    bool field_shift = st->assignment_op == DYN_OP_SHL || st->assignment_op == DYN_OP_SHR;
+    if (!field_shift)
+      vet_cast(sema, a, s, st->expression, target);
     if (lvalue_const(a, st->target))
       error_span(st->span, s, errors, "assignment through *const pointer");
     if (value != target && value != DYN_TYPE_ERROR &&
         target != DYN_TYPE_ERROR) {
-      if (can_convert(sema, a, value, target) &&
-          st->assignment_op == DYN_OP_NONE)
+      if ((can_convert(sema, a, value, target) && st->assignment_op == DYN_OP_NONE) ||
+          compound_widens(sema, st->assignment_op, value, target))
         st->expression = convert_expr(a, st->expression, target);
       else
         error_types(a, st->span, s, errors, "field assignment type mismatch",
@@ -3918,12 +4116,15 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
       st->assignment_op == DYN_OP_SHL || st->assignment_op == DYN_OP_SHR;
   DynType value = check_expr(sema, a, st->expression, s, errors,
                              shift ? DYN_TYPE_USIZE : target);
+  if (!shift)
+    vet_cast(sema, a, s, st->expression, target);
   if (shift) {
     if (!integer(sema, value) || signed_int(sema, value))
       error_span(st->span, s, errors, "shift count requires unsigned integer");
   } else if (value != target && value != DYN_TYPE_ERROR &&
              target != DYN_TYPE_ERROR) {
-    if (can_convert(sema, a, value, target) && st->assignment_op == DYN_OP_NONE)
+    if ((can_convert(sema, a, value, target) && st->assignment_op == DYN_OP_NONE) ||
+        compound_widens(sema, st->assignment_op, value, target))
       st->expression = convert_expr(a, st->expression, target);
     else
       error_types(a, st->span, s, errors, "assignment type mismatch", target,
@@ -4167,6 +4368,123 @@ static int assert_value(DynAstProgram *a, DynExprId id, unsigned depth) {
   default: return order >= 0;
   }
 }
+/* ---- Lifetime checks on worker threads ----
+
+   Lifetime checks only read the program, so a large one has every body
+   checked first and then runs its lifetime checks on worker threads.
+   Diagnostics keep the serial order: the body pass keeps its own, each
+   check keeps its own, and the replay reports a function's body
+   diagnostics and then its check's. As in a serial run, a check runs only
+   while nothing has failed: candidates are the functions before the first
+   body error, and the replay stops after the first check with an error. */
+typedef struct {
+  uint32_t function;
+  size_t body_end; /* body diagnostics reported before this check */
+  unsigned errors, vet;
+  DynDiagnosticCapture diagnostics;
+} SemaLateCheck;
+typedef struct {
+  Sema *sema;
+  DynAstProgram *a;
+  const DynSource *s;
+  SemaLateCheck *checks;
+  size_t count, capacity;
+  DynDiagnosticCapture body, *outer;
+  char gap_module[sizeof(sema_report.gap_module)];
+#ifndef _WIN32
+  atomic_size_t next;
+#endif
+} SemaLate;
+enum { SEMA_LATE_FUNCTIONS = 512, SEMA_LATE_WORKERS = 16 };
+/* The deferred checks' state, or NULL to check each function in place. */
+static SemaLate *sema_late_start(Sema *sema, DynAstProgram *a, const DynSource *s) {
+#ifdef _WIN32
+  (void)sema; (void)a; (void)s;
+  return NULL;
+#else
+  /* DYN_SERIAL_LIFETIMES=1 checks each function in place, for comparison. */
+  const char *serial = getenv("DYN_SERIAL_LIFETIMES");
+  if (a->function_count < SEMA_LATE_FUNCTIONS || sysconf(_SC_NPROCESSORS_ONLN) < 2 || (serial && *serial == '1'))
+    return NULL;
+  SemaLate *late = calloc(1, sizeof(*late));
+  if (!late) return NULL;
+  late->sema = sema; late->a = a; late->s = s;
+  late->outer = dyn_diagnostic_capture;
+  dyn_diagnostic_capture = &late->body;
+  return late;
+#endif
+}
+/* False when there is no room: the caller checks the function now. */
+static bool sema_late_add(SemaLate *late, uint32_t function) {
+  if (late->count == late->capacity) {
+    size_t capacity = late->capacity ? 2 * late->capacity : 256;
+    SemaLateCheck *grown = realloc(late->checks, capacity * sizeof(*grown));
+    if (!grown) return false;
+    late->checks = grown; late->capacity = capacity;
+  }
+  late->checks[late->count++] = (SemaLateCheck){.function = function, .body_end = late->body.count};
+  return true;
+}
+#ifndef _WIN32
+static void *sema_late_worker(void *argument) {
+  SemaLate *late = argument;
+  Sema sema = *late->sema;
+  sema.mem_kinds = NULL; sema.mem_kind_count = 0;
+  sema.locals = (SemaNames){0}; sema.indexed_locals = 0;
+  sema.active_loops = NULL; sema.active_loop_count = sema.active_loop_capacity = 0;
+  memset(&sema_report, 0, sizeof(sema_report));
+  memcpy(sema_report.gap_module, late->gap_module, sizeof(late->gap_module));
+  for (;;) {
+    size_t i = atomic_fetch_add(&late->next, 1);
+    if (i >= late->count) break;
+    SemaLateCheck *c = &late->checks[i];
+    sema.current_function = c->function;
+    sema.late_vet = &c->vet;
+    dyn_diagnostic_capture = &c->diagnostics;
+    life_check_function(&sema, late->a, late->s, &c->errors, &late->a->functions[c->function]);
+  }
+  dyn_diagnostic_capture = NULL;
+  free(sema.mem_kinds);
+  return NULL;
+}
+#endif
+static void sema_late_finish(SemaLate *late, unsigned *errors) {
+  dyn_diagnostic_capture = late->outer;
+#ifndef _WIN32
+  memcpy(late->gap_module, sema_report.gap_module, sizeof(late->gap_module));
+  atomic_init(&late->next, 0);
+  long online = sysconf(_SC_NPROCESSORS_ONLN);
+  size_t workers = online > 1 ? (size_t)online : 1;
+  if (workers > SEMA_LATE_WORKERS) workers = SEMA_LATE_WORKERS;
+  if (workers > late->count) workers = late->count;
+  pthread_t threads[SEMA_LATE_WORKERS];
+  size_t started = 0;
+  for (; started + 1 < workers; ++started)
+    if (pthread_create(&threads[started], NULL, sema_late_worker, late)) break;
+  sema_late_worker(late);
+  for (size_t i = 0; i < started; ++i) pthread_join(threads[i], NULL);
+#endif
+  size_t reported = 0;
+  bool failed = false;
+  for (size_t i = 0; i < late->count; ++i) {
+    SemaLateCheck *c = &late->checks[i];
+    dyn_diagnostic_replay(&late->body, reported, c->body_end - reported);
+    reported = c->body_end;
+    if (!failed) {
+      dyn_diagnostic_replay(&c->diagnostics, 0, c->diagnostics.count);
+      *errors += c->errors;
+      if (late->s->context.vet_findings) *late->s->context.vet_findings += c->vet;
+      DynAstFn *fn = &late->a->functions[c->function];
+      if (c->errors && fn->is_instance) instance_trace(late->a, late->s, fn->instance);
+      failed = c->errors != 0;
+    }
+    dyn_diagnostic_capture_free(&c->diagnostics);
+  }
+  dyn_diagnostic_replay(&late->body, reported, late->body.count - reported);
+  dyn_diagnostic_capture_free(&late->body);
+  free(late->checks);
+  free(late);
+}
 static bool sema_program(Sema *sema, DynAstProgram *a, const DynSource *s,
                          unsigned *errors) {
   /* Reserve common conversion growth up front as an optimization. Reflection
@@ -4289,6 +4607,7 @@ static bool sema_program(Sema *sema, DynAstProgram *a, const DynSource *s,
       error_span(as->span, s, errors, message);
     }
   }
+  SemaLate *late = sema_late_start(sema, a, s);
   for (uint32_t f = 0; f < a->function_count && dyn_work_step(&s->context, 1); ++f) {
     DynAstFn *fn = &a->functions[f];
     if (fn->return_type == DYN_TYPE_ANY)
@@ -4382,7 +4701,7 @@ static bool sema_program(Sema *sema, DynAstProgram *a, const DynSource *s,
       fn = &a->functions[f];
     }
     sema->current_function = f;
-    sema_assert_failed = false;
+    sema_report.assert_failed = false;
     sema->block_depth = 0;
     sema->current_return_type = fn->return_type;
     fn->local_start = (uint32_t)a->local_count;
@@ -4418,7 +4737,7 @@ static bool sema_program(Sema *sema, DynAstProgram *a, const DynSource *s,
                                                     .owner_function = f};
       }
     }
-    sema_has_origin = false;
+    sema_report.has_origin = false;
     if (fn->is_instance) {
       uint32_t outer = fn->instance;
       for (unsigned guard = 0; guard < 64; ++guard) {
@@ -4426,15 +4745,16 @@ static bool sema_program(Sema *sema, DynAstProgram *a, const DynSource *s,
         if (next == UINT32_MAX) break;
         outer = next;
       }
-      sema_origin = a->instances[outer].call;
-      sema_has_origin = !span_in_library(s, sema_origin);
+      sema_report.origin = a->instances[outer].call;
+      sema_report.has_origin = !span_in_library(s, sema_report.origin);
     }
     bool terminated =
         sema_block(sema, a, fn->body_start, fn->body_count, s, errors, false);
-    sema_has_origin = false;
+    sema_report.has_origin = false;
     fn = &a->functions[f];
     fn->local_count = (uint32_t)a->local_count - fn->local_start;
-    life_check_function(sema,a,s,errors,fn);
+    if (!late || (!*errors && fn->local_count && !sema_late_add(late, f)))
+      life_check_function(sema,a,s,errors,fn);
     if (fn->return_type != DYN_TYPE_VOID && !terminated)
       error_span(fn->name, s, errors,
                  "non-void function may exit without return");
@@ -4445,7 +4765,8 @@ static bool sema_program(Sema *sema, DynAstProgram *a, const DynSource *s,
     if (fn->is_instance && *errors != errors_before)
       instance_trace(a, s, fn->instance);
   }
-  sema_assert_failed = false;
+  if (late) sema_late_finish(late, errors);
+  sema_report.assert_failed = false;
   sema->current_function = UINT32_MAX;
   return *errors == 0;
 }
@@ -4469,6 +4790,8 @@ static void sema_main_init(DynAstProgram *a, const DynSource *s, unsigned *error
   }
 }
 bool dyn_sema_base(DynAstProgram *a, const DynSource *s, unsigned *errors) {
+  sema_report.assert_failed = sema_report.has_origin = false;
+  sema_report.gap_module[0] = 0;
   Sema sema = {.program = a,
                .pointer_bytes = dyn_target_pointer_bytes(dyn_context_target(&s->context)),
                .current_function = UINT32_MAX,

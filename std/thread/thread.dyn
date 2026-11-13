@@ -2,8 +2,13 @@
 
 use "std/io" io
 use "std/sync"
+use "std/os/linux/sys"
 
-pub struct Thread { tid: sync.AtomicU32, stack_owner: *mem.Arena }
+// stack is the mapping spawn_with_size made for the thread, or empty.
+pub struct Thread { tid: sync.AtomicU32, stack: []u8 }
+// Below each mapped stack: no access, so an overflow faults instead of
+// writing into the next mapping. 64 KiB covers 64 KiB pages.
+const stack_guard: usize = 65536
 
 extern fn spawn_raw "dyn_thread_spawn"(
   stack: *u8,
@@ -30,7 +35,7 @@ pub fn spawn(arena: *mem.Arena, stack: []u8, entry: fn(rawptr) isize, context: r
   value := spawn_raw(&stack[0], #len(stack), entry, context, &thread.tid)
   if value < 0 {
     mem.arena_rewind(arena, mark)
-    return SpawnResult{ failure: io.Failure{ kind: io.linux(value), native: value } }
+    return SpawnResult{ failure: io.linux_failure(value) }
   }
   return SpawnResult{ value: thread }
 }
@@ -41,16 +46,26 @@ pub fn spawn_with_size(arena: *mem.Arena, size: usize, entry: fn(rawptr) isize, 
   if size < 256 || entry == nil {
     return SpawnResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
+  if size > #max(usize) - stack_guard - 4096 {
+    return SpawnResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
+  }
   mark := mem.arena_mark(arena)
   thread := mem.push(Thread, arena)
-  // The stack follows the arena header in its own mapping.
-  thread.stack_owner = mem.arena_create(size + 256)
-  stack := mem.arena_push_uninit(thread.stack_owner, size, 16)
-  value := spawn_raw(stack, size, entry, context, &thread.tid)
-  if value < 0 {
-    mem.arena_release(thread.stack_owner)
+  // Private, anonymous, reserved lazily; the guard is the lowest 64 KiB.
+  total := stack_guard + (size + 4095) / 4096 * 4096
+  address := #syscall(sys.Mmap, 0, total, 3, 16418, -1, 0)
+  if address < 0 {
     mem.arena_rewind(arena, mark)
-    return SpawnResult{ failure: io.Failure{ kind: io.linux(value), native: value } }
+    return SpawnResult{ failure: io.linux_failure(address) }
+  }
+  base := #cast(*u8, address)
+  _ = #syscall(sys.Mprotect, base, stack_guard, 0)
+  thread.stack = #slice(base, total)
+  value := spawn_raw(&thread.stack[stack_guard], total - stack_guard, entry, context, &thread.tid)
+  if value < 0 {
+    _ = #syscall(sys.Munmap, base, total)
+    mem.arena_rewind(arena, mark)
+    return SpawnResult{ failure: io.linux_failure(value) }
   }
   return SpawnResult{ value: thread }
 }
@@ -63,13 +78,15 @@ pub fn join(thread: *Thread) Result {
   for true {
     tid := sync.load_u32(&thread.tid)
     if tid == 0 {
-      mem.arena_release(thread.stack_owner)
-      thread.stack_owner = nil
+      if #len(thread.stack) != 0 {
+        _ = #syscall(sys.Munmap, &thread.stack[0], #len(thread.stack))
+        thread.stack = thread.stack[..0]
+      }
       return Result{}
     }
-    result := #syscall(202, &thread.tid, 0, tid, 0, 0, 0)
+    result := #syscall(sys.Futex, &thread.tid, 0, tid, 0, 0, 0)
     if result < 0 && result != -4 && result != -11 {
-      return Result{ failure: io.Failure{ kind: io.linux(result), native: result } }
+      return Result{ failure: io.linux_failure(result) }
     }
   }
   return Result{}
@@ -79,9 +96,9 @@ pub fn id(thread: *const Thread) u32 {
   return sync.load_u32(&thread.tid)
 }
 pub fn yield_now() Result {
-  value := #syscall(24)
+  value := #syscall(sys.SchedYield)
   if value < 0 {
-    return Result{ failure: io.Failure{ kind: io.linux(value), native: value } }
+    return Result{ failure: io.linux_failure(value) }
   }
   return Result{ value: value }
 }
@@ -90,7 +107,7 @@ pub fn yield_now() Result {
 // worker pools; it can change while the process runs.
 pub fn cpu_count() usize {
   mask: [128]u8 = []
-  written := #syscall(204, 0, #len(mask), &mask[0])
+  written := #syscall(sys.SchedGetaffinity, 0, #len(mask), &mask[0])
   if written <= 0 {
     return 1
   }
@@ -98,7 +115,7 @@ pub fn cpu_count() usize {
   for byte in mask[..#cast(usize, written)] {
     bits := byte
     for bits != 0 {
-      count += #cast(usize, bits & 1)
+      count += bits & 1
       bits >>= 1
     }
   }

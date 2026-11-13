@@ -542,13 +542,6 @@ static void t32_multiply(BackendContext *c, bool checked, bool sign) {
   t32_mul(c,T32_T1,0,5); t32_mla(c,T32_T1,4,2,T32_T1);
   t32_umull(c,0,T32_T2,0,2); T32_OP(T32_ADD,4,T32_T2,T32_T1);
 }
-static void t32_trace_pop(BackendContext *c, bool descriptor_result) {
-  t32_push(c,R_A);
-  if (descriptor_result) t32_push(c,R_D);
-  runtime_call(c,2);
-  if (descriptor_result) t32_pop(c,R_D);
-  t32_pop(c,R_A);
-}
 /* Hard frame: saved cores, locals, d8-d15. Soft frame: saved cores,
    private 64-byte bank, locals. Both have identical total size and FP/CFA. */
 static void t32_enter(BackendContext *c) {
@@ -661,7 +654,7 @@ static void t32_compare_top(BackendContext *c) {
 }
 /* Runtime routines that take (pointer, u64): the u64 goes in r2:r3. */
 static void t32_runtime_arguments(BackendContext *c, unsigned runtime) {
-  if (runtime == 0 || runtime == 1 || runtime == RUNTIME_CHECK_FAILED) { t32_mv(c,2,1); t32_from_s(c,3,t32_hi[R_D]); }
+  if (runtime == 0 || runtime == RUNTIME_CHECK_FAILED) { t32_mv(c,2,1); t32_from_s(c,3,t32_hi[R_D]); }
 }
 /* Results: r0, r0:r1 for 64-bit integers and slices, r0-r2 for any, s0/d0
    for floats. */

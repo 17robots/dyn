@@ -42,7 +42,7 @@ fn measure(data: rawptr, text: []const u8) f32 {
   atlas := #cast(*font.Atlas, data)
   width: i32 = 0
   for byte in text {
-    width += font.atlas_glyph(atlas, #cast(u32, byte)).advance
+    width += font.atlas_glyph(atlas, byte).advance
   }
   return #cast(f32, width)
 }
@@ -53,9 +53,9 @@ fn row_text(storage: []u8, index: usize) []const u8 {
   state := fmt.buffer(storage)
   _ = fmt.write(&state, levels[index % 4])
   _ = fmt.write(&state, "  request ")
-  _ = fmt.write_u64(&state, #cast(u64, index))
+  _ = fmt.write_u64(&state, index)
   _ = fmt.write(&state, " handled in ")
-  _ = fmt.write_u64(&state, #cast(u64, index * 7919 % 997))
+  _ = fmt.write_u64(&state, index * 7919 % 997)
   _ = fmt.write(&state, " ms")
   return fmt.bytes(&state)
 }
@@ -94,7 +94,7 @@ fn build(state: *box.State, app: *App) {
   }
   storage: [64]u8 = []
   status := fmt.buffer(storage[..])
-  _ = fmt.write_u64(&status, #cast(u64, app.match_count))
+  _ = fmt.write_u64(&status, app.match_count)
   _ = fmt.write(&status, " rows###status")
   _ = box.label(state, fmt.bytes(&status))
   box.pop_parent(state)
@@ -105,7 +105,7 @@ fn build(state: *box.State, app: *App) {
   text: [96]u8 = []
   for i in range.first..range.last {
     index := #cast(usize, app.matches[i])
-    row := box.build_key(state, box.Clickable | box.DrawText | box.DrawBackground | box.HotAnimation, box.key(list.key, "row") + #cast(u64, index), "")
+    row := box.build_key(state, box.Clickable | box.DrawText | box.DrawBackground | box.HotAnimation, box.key(list.key, "row") + index, "")
     shown := row_text(text[..], index)
     copied := mem.push_bytes_uninit(state.frame, #len(shown))
     _ = mem.copy(copied, shown)
@@ -158,12 +158,10 @@ fn main() {
     if bytes.equal(arguments[i], "--frames") && i + 1 < #len(arguments) {
       frames = strings.parse(usize, arguments[i + 1])
       i += 2
-    }
-    else if bytes.equal(arguments[i], "--screenshot") && i + 1 < #len(arguments) {
+    } else if bytes.equal(arguments[i], "--screenshot") && i + 1 < #len(arguments) {
       screenshot = arguments[i + 1]
       i += 2
-    }
-    else {
+    } else {
       path = arguments[i]
       i += 1
     }

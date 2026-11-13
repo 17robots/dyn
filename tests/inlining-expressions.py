@@ -79,7 +79,7 @@ static void sparse_loops(void) {
  o.ir.statements[0]=(DynIrStmt){.kind=DYN_STMT_RETURN,.expression=0,.target=DYN_NO_EXPR};
  o.ir.statements[1]=(DynIrStmt){.kind=DYN_STMT_EXPR,.expression=1,.target=DYN_NO_EXPR};
  o.ir.statements[2]=(DynIrStmt){.kind=DYN_STMT_FOR,.expression=DYN_NO_EXPR,.target=DYN_NO_EXPR,.loop_id=0,.body_start=1,.body_count=1};
- assert(inline_program(&o,false,false) && o.owns_expansion && o.inlined==1);
+ assert(inline_program_within(&o,false,false,512) && o.owns_expansion && o.inlined==1);
  for(size_t i=0;i<o.ir.statement_count;i++) {
   DynIrStmt *st=&o.ir.statements[i];
   if(st->kind==DYN_STMT_FOR)assert(st->loop_id<o.ir.statement_count);

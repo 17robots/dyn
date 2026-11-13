@@ -1,9 +1,10 @@
 // Freestanding runtime compiled by Dyn's independent backend.
 // No std imports, allocations, defer, or tracing may be introduced here.
 struct Unwind { previous: *Unwind }
+// trace holds the frames of the panic being unwound (see trace_walk).
 struct UnwindSlot {
   tid: u64, top: *Unwind, message: *const u8, length: u64, unwinding: u64,
-  storage: [4096]u8
+  storage: [4096]u8, trace_total: u64, trace: [trace_frames]usize
 }
 // Slots live in chunks obtained from the platform on first use, so programs
 // that never register a cleanup frame reserve nothing. Chunks are never
@@ -19,7 +20,7 @@ unwind_first: u64
 unwind_hints: [unwind_hint_count]u64
 fn unwind_remember(tid: u64, index: usize) {
   if tid != 0 && tid >> 58 == 0 && index < 64 {
-    atomic_store(&unwind_hints[#cast(usize, tid % #cast(u64, unwind_hint_count))], (tid << 6) | #cast(u64, index))
+    atomic_store(&unwind_hints[#cast(usize, tid % unwind_hint_count)], (tid << 6) | index)
   }
 }
 extern fn atomic_load "dyn_atomic_load_u64"(p: *const u64) u64
@@ -67,7 +68,7 @@ fn unwind_slot(claim: bool) *UnwindSlot {
     return &head.slots[0]
   }
   if tid != 0 && tid >> 58 == 0 {
-    hint := atomic_load(&unwind_hints[#cast(usize, tid % #cast(u64, unwind_hint_count))])
+    hint := atomic_load(&unwind_hints[#cast(usize, tid % unwind_hint_count)])
     index := #cast(usize, hint & 63)
     if hint >> 6 == tid && index < unwind_chunk_slots {
       candidate := &head.slots[index]
@@ -113,8 +114,7 @@ fn unwind_slot(claim: bool) *UnwindSlot {
       if !unwind_grow() {
         return nil
       }
-    }
-    else if atomic_claim(&empty.tid, 0, tid) {
+    } else if atomic_claim(&empty.tid, 0, tid) {
       unwind_remember(tid, empty_index)
       return empty
     }
@@ -126,7 +126,7 @@ pub fn dyn_unwind_link(frame: *Unwind) {
   slot := unwind_slot(true)
   if slot == nil {
     message: []const u8 = "runtime unwind storage unavailable"
-    panic_raw(&message[0], #cast(u64, #len(message)))
+    panic_raw(&message[0], #len(message))
     return
   }
   // A target may reserve a private word beyond its saved register bank.
@@ -145,8 +145,7 @@ pub fn dyn_unwind_unlink(frame: *Unwind) {
   if offset != 0 {
     owner := #cast(*usize, #cast(usize, frame) + offset)
     slot = #cast(*UnwindSlot, owner.*)
-  }
-  else {
+  } else {
     slot = unwind_slot(false)
   }
   if slot != nil && slot.top == frame {
@@ -210,9 +209,9 @@ fn unwind_store_message(slot: *UnwindSlot, message: *const u8, length: u64) {
   }
   if copied < total {
     for i in 0..#len(truncated) {
-      slot.storage[copied + #cast(u64, i)] = truncated[i]
+      slot.storage[copied + i] = truncated[i]
     }
-    total = copied + #cast(u64, #len(truncated))
+    total = copied + #len(truncated)
   }
   slot.message = &slot.storage[0]
   slot.length = total
@@ -263,15 +262,17 @@ fn check_name(kind: u64) []const u8 {
 }
 fn append_bytes(buffer: []u8, at: u64, text: []const u8) u64 {
   for i in 0..#len(text) {
-    buffer[at + #cast(u64, i)] = text[i]
+    buffer[at + i] = text[i]
   }
-  return at + #cast(u64, #len(text))
+  return at + #len(text)
 }
 // Failed runtime checks pass the function name and kind << 24 | name length
 // rather than a full message, so each function stores its name once. The
 // compiler caps names at 800 bytes, so the message always fits.
-pub fn dyn_check_failed(name: *const u8, packed_value: u64) {
-  length := packed_value & 0xffffff
+// Debug builds set bit 23 for an index check and pass the index and the
+// length it had to be below.
+pub fn dyn_check_failed(name: *const u8, packed_value: u64, index: u64, limit: u64) {
+  length := packed_value & 0x7fffff
   storage: [1024]u8 = []
   buffer := storage[..]
   used := append_bytes(buffer, 0, "runtime check failed (")
@@ -280,7 +281,40 @@ pub fn dyn_check_failed(name: *const u8, packed_value: u64) {
   if length != 0 && length <= 800 {
     used = append_bytes(buffer, used, #slice(name, #cast(usize, length)))
   }
+  if (packed_value & 0x800000) != 0 {
+    used = append_bytes(buffer, used, ": index ")
+    used = append_index(buffer, used, index)
+    used = append_bytes(buffer, used, ", length ")
+    used = append_index(buffer, used, limit)
+  }
   panic_raw(&storage[0], used)
+}
+// A negative signed index arrives as a huge unsigned one; no real index or
+// length reaches 2^63, so the top bit means negative.
+fn append_index(buffer: []u8, at: u64, value: u64) u64 {
+  used := at
+  magnitude := value
+  if (value >> 63) != 0 {
+    buffer[used] = '-'
+    used += 1
+    magnitude = 0 - value
+  }
+  digits: [20]u8 = []
+  count: u64 = 0
+  for true {
+    digits[count] = #cast(u8, magnitude % 10) + '0'
+    count += 1
+    magnitude /= 10
+    if magnitude == 0 {
+      break
+    }
+  }
+  for count != 0 {
+    count -= 1
+    buffer[used] = digits[count]
+    used += 1
+  }
+  return used
 }
 
 // Exact binary scaling: each subtraction is exact, including subnormals.

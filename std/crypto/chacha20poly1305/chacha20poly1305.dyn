@@ -52,8 +52,8 @@ fn mac(ciphertext: []const u8, aad: []const u8, key: []const u8, nonce: []const 
     _ = poly.update(&state, zero[..16-#len(ciphertext)%16])
   }
   lengths: [16]u8 = []
-  binary.store_u64_le(lengths[..8], #cast(u64, #len(aad)))
-  binary.store_u64_le(lengths[8..], #cast(u64, #len(ciphertext)))
+  binary.store_u64_le(lengths[..8], #len(aad))
+  binary.store_u64_le(lengths[8..], #len(ciphertext))
   _ = poly.update(&state, lengths[..])
   return poly.finish(&state)
 }

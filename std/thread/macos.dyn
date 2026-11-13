@@ -17,7 +17,12 @@ extern fn sysctl_by_name "sysctlbyname"(name: *const u8, value: rawptr, length: 
 
 pub struct Thread { handle: rawptr, identifier: u32, entry: fn(rawptr) isize, context: rawptr, ready: sync.AtomicU32 }
 
+// Debug programs give each thread a stack for fault reports; release
+// programs return at once.
+extern fn trace_thread "dyn_trace_thread"()
+
 fn trampoline(context: rawptr) rawptr {
+  trace_thread()
   thread := #cast(*Thread, context)
   // Publish the native handle/id before entry can complete and retire its port.
   for sync.load_u32(&thread.ready) == 0 {
@@ -35,14 +40,14 @@ pub fn spawn(arena: *mem.Arena, stack: []u8, entry: fn(rawptr) isize, context: r
   return spawn_with_size(arena, #len(stack), entry, context)
 }
 pub fn spawn_with_size(arena: *mem.Arena, stack_size: usize, entry: fn(rawptr) isize, context: rawptr) SpawnResult {
-  if stack_size < 256 || entry == nil || stack_size > (~#cast(usize, 0)) - 16383 {
+  if stack_size < 256 || entry == nil || stack_size > #max(usize) - 16383 {
     return SpawnResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
   attributes := Attributes{}
   error := attr_init(&attributes)
   if error != 0 {
     code := 0 - #cast(isize, error)
-    return SpawnResult{ failure: io.Failure{ kind: io.darwin(code), native: code } }
+    return SpawnResult{ failure: io.darwin_failure(code) }
   }
   defer {
     _ = attr_destroy(&attributes)
@@ -51,7 +56,7 @@ pub fn spawn_with_size(arena: *mem.Arena, stack_size: usize, entry: fn(rawptr) i
   error = attr_size(&attributes, size)
   if error != 0 {
     code := 0 - #cast(isize, error)
-    return SpawnResult{ failure: io.Failure{ kind: io.darwin(code), native: code } }
+    return SpawnResult{ failure: io.darwin_failure(code) }
   }
   mark := mem.arena_mark(arena)
   thread := mem.push(Thread, arena)
@@ -63,7 +68,7 @@ pub fn spawn_with_size(arena: *mem.Arena, stack_size: usize, entry: fn(rawptr) i
   if error != 0 {
     mem.arena_rewind(arena, mark)
     code := 0 - #cast(isize, error)
-    return SpawnResult{ failure: io.Failure{ kind: io.darwin(code), native: code } }
+    return SpawnResult{ failure: io.darwin_failure(code) }
   }
   thread.handle = handle
   thread.identifier = native_id(handle)
@@ -82,7 +87,7 @@ pub fn join(thread: *Thread) Result {
   error := wait(thread.handle, &value)
   if error != 0 {
     code := 0 - #cast(isize, error)
-    return Result{ failure: io.Failure{ kind: io.darwin(code), native: code } }
+    return Result{ failure: io.darwin_failure(code) }
   }
   thread.handle = nil
   thread.identifier = 0
@@ -98,7 +103,7 @@ pub fn id(thread: *const Thread) u32 {
 pub fn yield_now() Result {
   if native_yield() != 0 {
     error := 0 - #cast(isize, native_errno().*)
-    return Result{ failure: io.Failure{ kind: io.darwin(error), native: error } }
+    return Result{ failure: io.darwin_failure(error) }
   }
   return Result{}
 }

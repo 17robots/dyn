@@ -69,7 +69,7 @@ fn main() {
     again := der.next(&c)
     check(!again.found && again.failure.kind == failure.failure.kind && again.offset == failure.offset && c.offset == 0)
   }
-  c = der.Cursor{ offset: ~#cast(usize, 0) }
+  c = der.Cursor{ offset: #max(usize) }
   check(der.next(&c).failure.kind == parse.Kind.Syntax)
   c = der.cursor("\x02\x89\x01\x01\x01\x01\x01\x01\x01\x01\x01")
   check(der.next(&c).failure.kind == parse.Kind.Overflow)

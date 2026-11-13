@@ -152,9 +152,9 @@ if '--cross' in sys.argv:
   return ns
  arm=helpers('thumb-soft.py');rv=helpers('rv32-soft.py')
  cross_source=r'''use "std/encoding/json/read" json
+use "std/parse" parse
 use "std/io" io
 use "std/mem" mem
-use "std/io"
 pub fn json_read_selected_kind(v:*const json.Value) u8 { return json.kind(v) }
 fn require(ok:bool) { if !ok { #panic("JSON read target") } }
 fn main() {
@@ -162,7 +162,7 @@ fn main() {
  arena:=mem.arena_from_buffer(backing[..])
  require(#sizeof(json.Value)==16 && json_read_selected_kind(nil)==json.KindMissing)
  document:=json.parse(arena,"{\"\":[0,true,\"a\\u0000b\"],\"utf\":\"caf\\u00e9\",\"i\":-9223372036854775808,\"u\":18446744073709551615,\"real\":1.25}")
- require(document.ok)
+ require(document.failure.kind == parse.Kind.Ok)
  root:=document.root
  require(json.as_i64(json.get(root,"i"))==-9223372036854775807-1)
  require(json.as_u64(json.get(root,"u"))==18446744073709551615)
@@ -174,7 +174,7 @@ fn main() {
  require(item.found && mem.equal(json.as_text(item.value),"a\x00b") && !json.next(&it).found)
  mem.arena_reset(arena)
  zero:=json.parse(arena,"-0")
- require(zero.ok && #bitcast(u64,json.as_f64(zero.root))==9223372036854775808)
+ require(zero.failure.kind == parse.Kind.Ok && #bitcast(u64,json.as_f64(zero.root))==9223372036854775808)
  mem.arena_reset(arena)
  mark:=mem.arena_mark(arena)
  bad:=json.parse(arena,"[1,]")
@@ -201,7 +201,7 @@ fn main() {
   'require(mem.equal(json.as_text(json.at(json.get(owned.root,"key"),0)),"a\\x00b"))',
   'mem.arena_rewind(chain,before)',
   'failed:=json.parse(chain,"[1,]")',
-  'require(!failed.ok && mem.arena_mark(chain)==before && mem.arena_snapshot(chain).blocks==before_blocks)',
+  'require(failed.failure.kind != parse.Kind.Ok && mem.arena_mark(chain)==before && mem.arena_snapshot(chain).blocks==before_blocks)',
   'for byte in prefix { require(byte==91) }',
   'mem.arena_release(chain)',
   'chain=nil',

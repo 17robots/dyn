@@ -45,10 +45,10 @@ fn encode_result(work: EncodeWork) EncodeResult {
 }
 
 fn u32be(source: []const u8, at: usize) u32 {
-  a: u32 = #cast(u32, source[at])
-  b: u32 = #cast(u32, source[at + 1])
-  c: u32 = #cast(u32, source[at + 2])
-  d: u32 = #cast(u32, source[at + 3])
+  a: u32 = source[at]
+  b: u32 = source[at + 1]
+  c: u32 = source[at + 2]
+  d: u32 = source[at + 3]
   return a * 16777216 + b * 65536 + c * 256 + d
 }
 
@@ -74,7 +74,7 @@ fn hash(r: u8, g: u8, b: u8, a: u8) usize {
 }
 
 fn add(byte_value: u8, amount: i16) u8 {
-  wide: i16 = #cast(i16, byte_value) + amount
+  wide: i16 = byte_value + amount
   if wide < 0 {
     wide += 256
   }
@@ -90,7 +90,7 @@ fn decode_into(destination: []u8, source: []const u8) DecodeWork {
     return DecodeWork{ error: -22 }
   }
   count := #cast(usize, info.width) * #cast(usize, info.height)
-  if info.width != 0 && count / #cast(usize, info.width) != #cast(usize, info.height) {
+  if info.width != 0 && count / info.width != info.height {
     return DecodeWork{ error: -75 }
   }
   if count > #len(destination) / 4 {
@@ -117,8 +117,7 @@ fn decode_into(destination: []u8, source: []const u8) DecodeWork {
   for output < count {
     if run > 0 {
       run -= 1
-    }
-    else {
+    } else {
       if input >= #len(source) - 8 {
         return DecodeWork{ info: info, error: -74, offset: input }
       }
@@ -142,7 +141,7 @@ fn decode_into(destination: []u8, source: []const u8) DecodeWork {
         alpha = source[input + 3]
         input += 4
       } else if (tag & 192) == 0 {
-        indexed_pixel := table[#cast(usize, (tag & 63))]
+        indexed_pixel := table[(tag & 63)]
         red = #cast(u8, (indexed_pixel >> 24))
         green = #cast(u8, (indexed_pixel >> 16))
         blue = #cast(u8, (indexed_pixel >> 8))
@@ -158,11 +157,11 @@ fn decode_into(destination: []u8, source: []const u8) DecodeWork {
         second := source[input]
         input += 1
         dg: i16 = #cast(i16, (tag & 63)) - 32
-        red = add(red, dg - 8 + #cast(i16, (second >> 4)))
+        red = add(red, dg - 8 + (second >> 4))
         green = add(green, dg)
-        blue = add(blue, dg - 8 + #cast(i16, (second & 15)))
+        blue = add(blue, dg - 8 + (second & 15))
       } else {
-        run = #cast(usize, (tag & 63))
+        run = (tag & 63)
         if run >= count - output {
           return DecodeWork{ info: info, error: -74, offset: input - 1 }
         }
@@ -205,8 +204,8 @@ fn encode_into(destination: []u8, pixels: []const u8, width: u32, height: u32, c
     return EncodeWork{ error: -22 }
   }
   count := #cast(usize, width) * #cast(usize, height)
-  if count / #cast(usize, width) != #cast(usize, height) || count > #len(pixels) / #cast(usize, channels) ||
-    #len(pixels) != count * #cast(usize, channels) || #len(destination) < 22 {
+  if count / width != height || count > #len(pixels) / #cast(usize, channels) ||
+    #len(pixels) != count * channels || #len(destination) < 22 {
     return EncodeWork{ error: -28 }
   }
   destination[0] = 'q'
@@ -228,7 +227,7 @@ fn encode_into(destination: []u8, pixels: []const u8, width: u32, height: u32, c
   output: usize = 14
   run: usize = 0
   for pixel in 0..count {
-    at := pixel * #cast(usize, channels)
+    at := pixel * channels
     red := pixels[at]
     green := pixels[at + 1]
     blue := pixels[at + 2]
@@ -350,17 +349,17 @@ fn encode_work(arena: *mem.Arena, pixels: []const u8, width: u32, height: u32, c
 
 // Checked before allocation; no hidden allocator and failures preserve the arena mark.
 fn pixel_count(width: u32, height: u32, channels: u8) usize {
-  limit := ~#cast(usize, 0)
+  limit := #max(usize)
   w := #cast(usize, width)
   h := #cast(usize, height)
   if w > limit / h {
     return 0
   }
   count := w * h
-  if count > limit / #cast(usize, channels) {
+  if count > limit / channels {
     return 0
   }
-  return count * #cast(usize, channels)
+  return count * channels
 }
 
 pub fn decode(arena: *mem.Arena, source: []const u8) Result {
@@ -381,7 +380,7 @@ pub fn encode(arena: *mem.Arena, pixels: []const u8, width: u32, height: u32, ch
   }
   size := pixel_count(width, height, channels)
   bound_pixels := pixel_count(width, height, channels + 1)
-  if size == 0 || bound_pixels == 0 || bound_pixels > (~#cast(usize, 0)) - 22 {
+  if size == 0 || bound_pixels == 0 || bound_pixels > #max(usize) - 22 {
     return EncodeResult{ failure: parse.Failure{ kind: parse.Kind.Overflow } }
   }
   if size != #len(pixels) {

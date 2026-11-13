@@ -292,6 +292,9 @@ def main():
         remarks = subprocess.run([DYN, 'build', work/'accumulate', '--release', '--no-cache', '--opt-remarks',
                                   '--output', work/'accumulate'/'remarks'], capture_output=True, text=True, timeout=300)
         accumulated = re.findall(r'remark: (\w+): self-recursive', remarks.stderr)
+        # Release additions wrap, so signed and overflowing sums accumulate
+        # too; noisy writes a global and keeps its calls.
+        assert sorted(accumulated) == ['fib', 'grow', 'signed', 'weighted'], remarks.stderr
         # Struct parameters, literals and results stay in registers: `step`
         # never touches its frame.
         output = work/'struct-values'/'listing'

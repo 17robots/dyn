@@ -30,15 +30,14 @@ fn native_interrupted(code: isize) bool {
 fn native_would_block(code: isize) bool {
   return code == -10035 || code == -10036 || code == -10037
 }
-fn address_family(bytes: []u8, length: usize, family: usize) {
-  _ = length
+fn address_family(bytes: []u8, _length: usize, family: usize) {
   bytes[0] = #cast(u8, family)
 }
 fn native_status(value: i32) isize {
   if value == -1 {
     return win.socket_error()
   }
-  return #cast(isize, value)
+  return value
 }
 fn native_socket(family: usize, kind: usize, protocol: usize) isize {
   if family > 2147483647 || kind > 2147483647 || protocol > 2147483647 {
@@ -85,7 +84,7 @@ fn native_bind(descriptor: isize, address: *const u8, length: usize) isize {
 }
 fn native_accept(descriptor: isize, address: *u8, length: *u32) isize {
   value := raw_accept(#cast(usize, descriptor), address, length)
-  if value == ~#cast(usize, 0) {
+  if value == #max(usize) {
     return win.socket_error()
   }
   return #cast(isize, value)
@@ -253,6 +252,6 @@ const MulticastInterfaceOption: usize = 9
 const MulticastTtlOption: usize = 10
 const MulticastLoopOption: usize = 11
 fn native_multicast_byte(descriptor: isize, option: usize, value: u8) isize {
-  native: u32 = #cast(u32, value)
+  native: u32 = value
   return native_set_option(descriptor, 0, option, &native, #sizeof(u32))
 }

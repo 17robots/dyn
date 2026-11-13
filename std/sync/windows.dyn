@@ -15,12 +15,7 @@ fn native_wait(address: *AtomicU32, expected: u32) isize {
   return 0
 }
 fn native_wake(address: *AtomicU32, all: bool) {
-  if all {
-    wake_all(&address.value)
-  }
-  else {
-    wake_single(&address.value)
-  }
+  if all { wake_all(&address.value) } else { wake_single(&address.value) }
 }
 fn native_mutex_lock(value: *Mutex) {
   wait_mutex_lock(value)
@@ -56,7 +51,6 @@ fn native_sync_error(code: isize) io.Kind {
   return io.windows(code)
 }
 
-fn native_wait_interrupted(code: isize) bool {
-  _ = code
+fn native_wait_interrupted(_code: isize) bool {
   return false
 }

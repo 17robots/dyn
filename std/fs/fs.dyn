@@ -1,13 +1,12 @@
-use "std/io" stream
 use "std/mem" memory
 use "std/io" io
 // File{} is unopened. Owners must not be copied: transfer with take(), or borrow().
 // Borrowed files never close the underlying handle. Their owner must outlive them.
 pub struct File { descriptor: isize, active: bool, owned: bool }
-pub type FileResult = stream.Result(File)
-pub struct Result { transferred: usize, failure: stream.Failure }
-pub type OffsetResult = stream.Count
-pub type ReadAllResult = stream.Bytes
+pub type FileResult = io.Result(File)
+pub struct Result { transferred: usize, failure: io.Failure }
+pub type OffsetResult = io.Count
+pub type ReadAllResult = io.Bytes
 fn owned_file(handle: isize) File {
   return File{ descriptor: handle, active: true, owned: true }
 }
@@ -52,7 +51,7 @@ pub fn create_exclusive(path: []const u8) FileResult {
   return native_open(path, 3)
 }
 fn failure(code: isize) Result {
-  return Result{ failure: stream.Failure{ kind: native_kind(code), native: code } }
+  return Result{ failure: io.Failure{ kind: native_kind(code), native: code } }
 }
 pub fn close(file: *File) {
   if !is_open(file) || !file.owned {
@@ -66,7 +65,7 @@ pub fn close(file: *File) {
 // Destination borrows caller storage. Zero bytes on a successful nonempty read means EOF.
 pub fn read(file: *File, destination: []u8) Result {
   if !is_open(file) {
-    return Result{ failure: stream.Failure{ kind: io.Kind.InvalidState } }
+    return Result{ failure: io.Failure{ kind: io.Kind.InvalidState } }
   }
   if #len(destination) == 0 {
     return Result{}
@@ -82,7 +81,7 @@ pub fn read(file: *File, destination: []u8) Result {
 }
 pub fn write(file: *File, source: []const u8) Result {
   if !is_open(file) {
-    return Result{ failure: stream.Failure{ kind: io.Kind.InvalidState } }
+    return Result{ failure: io.Failure{ kind: io.Kind.InvalidState } }
   }
   written: usize = 0
   for written < #len(source) {
@@ -91,57 +90,57 @@ pub fn write(file: *File, source: []const u8) Result {
       continue
     }
     if value < 0 {
-      return Result{ transferred: written, failure: stream.Failure{ kind: native_kind(value), native: value } }
+      return Result{ transferred: written, failure: io.Failure{ kind: native_kind(value), native: value } }
     }
     if value == 0 {
-      return Result{ transferred: written, failure: stream.Failure{ kind: io.Kind.System } }
+      return Result{ transferred: written, failure: io.Failure{ kind: io.Kind.System } }
     }
     written += #cast(usize, value)
   }
   return Result{ transferred: written }
 }
-fn adapter_read(data: rawptr, destination: []u8) stream.Transfer {
+fn adapter_read(data: rawptr, destination: []u8) io.Transfer {
   result := read(#cast(*File, data), destination)
-  if result.failure.kind != stream.Kind.Ok {
-    return stream.Transfer{ transferred: result.transferred, error: result.failure.native, kind: result.failure.kind, status: stream.Status.Error }
+  if result.failure.kind != io.Kind.Ok {
+    return io.Transfer{ transferred: result.transferred, error: result.failure.native, kind: result.failure.kind, status: io.Status.Error }
   }
-  status := stream.Status.Complete
+  status := io.Status.Complete
   if result.transferred == 0 && #len(destination) != 0 {
-    status = stream.Status.End
+    status = io.Status.End
   }
-  return stream.Transfer{ transferred: result.transferred, status: status }
+  return io.Transfer{ transferred: result.transferred, status: status }
 }
-fn adapter_write(data: rawptr, source: []const u8) stream.Transfer {
+fn adapter_write(data: rawptr, source: []const u8) io.Transfer {
   result := write(#cast(*File, data), source)
-  if result.failure.kind != stream.Kind.Ok {
-    return stream.Transfer{ transferred: result.transferred, error: result.failure.native, kind: result.failure.kind, status: stream.Status.Error }
+  if result.failure.kind != io.Kind.Ok {
+    return io.Transfer{ transferred: result.transferred, error: result.failure.native, kind: result.failure.kind, status: io.Status.Error }
   }
-  return stream.Transfer{ transferred: result.transferred }
+  return io.Transfer{ transferred: result.transferred }
 }
 // Adapters borrow the File itself: keep it alive and unmoved until I/O completes.
-pub fn reader(file: *File) stream.Reader {
-  return stream.Reader{ data: file, read: adapter_read }
+pub fn reader(file: *File) io.Reader {
+  return io.Reader{ data: file, read: adapter_read }
 }
-pub fn writer(file: *File) stream.Writer {
-  return stream.Writer{ data: file, write: adapter_write }
+pub fn writer(file: *File) io.Writer {
+  return io.Writer{ data: file, write: adapter_write }
 }
 // origin: 0 start, 1 current, 2 end.
 pub fn seek(file: *File, offset: isize, origin: usize) OffsetResult {
   if !is_open(file) {
-    return OffsetResult{ failure: stream.Failure{ kind: io.Kind.InvalidState } }
+    return OffsetResult{ failure: io.Failure{ kind: io.Kind.InvalidState } }
   }
   if origin > 2 {
-    return OffsetResult{ failure: stream.Failure{ kind: io.Kind.InvalidInput } }
+    return OffsetResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
   value := native_seek(file.descriptor, offset, origin)
   if value < 0 {
-    return OffsetResult{ failure: stream.Failure{ kind: native_kind(value), native: value } }
+    return OffsetResult{ failure: io.Failure{ kind: native_kind(value), native: value } }
   }
   return OffsetResult{ value: #cast(usize, value) }
 }
 pub fn sync(file: *File) Result {
   if !is_open(file) {
-    return Result{ failure: stream.Failure{ kind: io.Kind.InvalidState } }
+    return Result{ failure: io.Failure{ kind: io.Kind.InvalidState } }
   }
   value := native_sync(file.descriptor)
   if value < 0 {
@@ -154,25 +153,25 @@ pub fn sync(file: *File) Result {
 // bytes reflect the file when mapped; another writer may change them later.
 // Truncating the file while mapped can fault on access. A zero-length file
 // maps to an empty value without a native mapping.
-pub type Mapping = stream.Result([]const u8)
+pub type Mapping = io.Result([]const u8)
 
 // Maps the whole file. The file position is unchanged, and the file may be
 // closed while the mapping stays valid.
 pub fn map(file: *const File) Mapping {
   if !is_open(file) {
-    return Mapping{ failure: stream.Failure{ kind: io.Kind.InvalidState } }
+    return Mapping{ failure: io.Failure{ kind: io.Kind.InvalidState } }
   }
   current := native_seek(file.descriptor, 0, 1)
   if current < 0 {
-    return Mapping{ failure: stream.Failure{ kind: native_kind(current), native: current } }
+    return Mapping{ failure: io.Failure{ kind: native_kind(current), native: current } }
   }
   end := native_seek(file.descriptor, 0, 2)
   restored := native_seek(file.descriptor, current, 0)
   if end < 0 {
-    return Mapping{ failure: stream.Failure{ kind: native_kind(end), native: end } }
+    return Mapping{ failure: io.Failure{ kind: native_kind(end), native: end } }
   }
   if restored < 0 {
-    return Mapping{ failure: stream.Failure{ kind: native_kind(restored), native: restored } }
+    return Mapping{ failure: io.Failure{ kind: native_kind(restored), native: restored } }
   }
   size := #cast(usize, end)
   if size == 0 {
@@ -180,7 +179,7 @@ pub fn map(file: *const File) Mapping {
   }
   address := native_map(file.descriptor, size)
   if address < 0 {
-    return Mapping{ failure: stream.Failure{ kind: native_kind(address), native: address } }
+    return Mapping{ failure: io.Failure{ kind: native_kind(address), native: address } }
   }
   bytes := #cast(*const u8, #cast(usize, address))
   return Mapping{ value: #slice(bytes, size) }
@@ -189,7 +188,7 @@ pub fn map(file: *const File) Mapping {
 // Releases a mapping and clears it. Unmapping a zero Mapping succeeds.
 pub fn unmap(mapping: *Mapping) Result {
   if mapping == nil {
-    return Result{ failure: stream.Failure{ kind: io.Kind.InvalidInput } }
+    return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
   if #len(mapping.value) != 0 {
     value := native_unmap(#cast(usize, &mapping.value[0]), #len(mapping.value))
@@ -204,8 +203,8 @@ pub fn unmap(mapping: *Mapping) Result {
 // Reads one complete file into arena storage, bounded by maximum.
 pub fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) ReadAllResult {
   opened := open(path)
-  if opened.failure.kind != stream.Kind.Ok {
-    return ReadAllResult{ failure: stream.Failure{ kind: opened.failure.kind, native: opened.failure.native } }
+  if opened.failure.kind != io.Kind.Ok {
+    return ReadAllResult{ failure: io.Failure{ kind: opened.failure.kind, native: opened.failure.native } }
   }
   mark := memory.arena_mark(arena)
   output: []u8
@@ -220,7 +219,7 @@ pub fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) ReadAllR
   // change length while being read, and pseudo files that report zero.
   hint: usize = 0
   info := file_metadata(&opened.value)
-  if info.failure.kind == stream.Kind.Ok && info.size != 0 && info.size <= #cast(u64, maximum) {
+  if info.failure.kind == io.Kind.Ok && info.size != 0 && info.size <= maximum {
     hint = #cast(usize, info.size)
   }
   for {
@@ -233,7 +232,7 @@ pub fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) ReadAllR
       // caller buffer still distinguishes EOF from capacity/maximum overflow.
       probe: [1]u8 = []
       extra := read(&opened.value, probe[..])
-      if extra.failure.kind != stream.Kind.Ok {
+      if extra.failure.kind != io.Kind.Ok {
         error = extra.failure.native
         kind = extra.failure.kind
         break
@@ -321,7 +320,7 @@ pub fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) ReadAllR
     }
     part := read(&opened.value, output[total..total + capacity])
     total += part.transferred
-    if part.failure.kind != stream.Kind.Ok {
+    if part.failure.kind != io.Kind.Ok {
       error = part.failure.native
       kind = part.failure.kind
       break
@@ -333,7 +332,7 @@ pub fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) ReadAllR
   close(&opened.value)
   if kind != io.Kind.Ok {
     memory.arena_rewind(arena, mark)
-    return ReadAllResult{ failure: stream.Failure{ kind: kind, native: error } }
+    return ReadAllResult{ failure: io.Failure{ kind: kind, native: error } }
   }
   if #len(output) != 0 {
     memory.arena_rewind(arena, output_mark + total)
@@ -344,8 +343,8 @@ pub fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) ReadAllR
 // A failed close is not reported. Use sync when the write must be durable.
 pub fn write_all(path: []const u8, source: []const u8) Result {
   created := create(path)
-  if created.failure.kind != stream.Kind.Ok {
-    return Result{ failure: stream.Failure{ kind: created.failure.kind, native: created.failure.native } }
+  if created.failure.kind != io.Kind.Ok {
+    return Result{ failure: io.Failure{ kind: created.failure.kind, native: created.failure.native } }
   }
   result := write(&created.value, source)
   close(&created.value)

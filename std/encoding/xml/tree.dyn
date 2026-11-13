@@ -60,12 +60,7 @@ fn tree_failure(arena: *tree_memory.Arena, mark: usize, offset: usize, message: 
 fn tree_append(arena: *tree_memory.Arena, parent: *Node, kind: NodeKind, event: Event) *Node {
   node := tree_memory.push(Node, arena)
   node.* = Node{ kind: kind, name: event.name, text: event.text, attributes: event.attributes, parent: parent }
-  if parent.last == nil {
-    parent.first = node
-  }
-  else {
-    parent.last.next = node
-  }
+  if parent.last == nil { parent.first = node } else { parent.last.next = node }
   parent.last = node
   return node
 }

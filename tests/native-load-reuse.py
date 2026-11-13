@@ -70,9 +70,15 @@ fn pair_checked(p: *Pair, x: u64) u64 {
   y := p.b + 5
   return p.a * 10 + y
 }
+// Taken addresses keep repeat and pair_run out of line, where the
+// assembly checks find them; main still calls them directly.
+keep_repeat: fn(p: *const u64) u64 = repeat
+keep_pair: fn(p: *Pair, x: u64) u64 = pair_run
 fn main() {
   for i in 1..33 {
     pair := Pair{}
+    kept := #cast(u64, i)
+    if keep_repeat(&kept) != kept * 2 || keep_pair(&pair, kept) != kept * 11 + 1 { #panic("kept") }
     x := #cast(u64, i)
     if pair_run(&pair, x) != x * 10 + x + 1 { #panic("store run") }
     if pair_alias(&pair, &pair.a, x) != 90 + x + 1 { #panic("store run alias") }

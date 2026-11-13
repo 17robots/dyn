@@ -141,7 +141,7 @@ pub fn add(state: *Watcher, path: []const u8, mask: u32) Result {
   }
   slot := &state.native.slots[index]
   slot.handle = native_open(&wide[0], 1, 7, nil, 3, 1107296256, nil)
-  if #cast(usize, slot.handle) == ~#cast(usize, 0) {
+  if #cast(usize, slot.handle) == #max(usize) {
     slot.handle = nil
     return failure(error())
   }
@@ -152,7 +152,7 @@ pub fn add(state: *Watcher, path: []const u8, mask: u32) Result {
     return failure(code)
   }
   armed := arm(slot)
-  if armed.failure.kind != io.Kind.Ok {
+  if io.failed(armed.failure) {
     _ = retire(slot)
     return armed
   }
@@ -219,7 +219,7 @@ pub fn next(state: *Watcher) EventResult {
     }
     if !slot.pending && slot.offset == slot.used {
       armed := arm(slot)
-      if armed.failure.kind != io.Kind.Ok {
+      if io.failed(armed.failure) {
         return event_failure(state, armed.failure.native, armed.failure.kind)
       }
     }
@@ -237,7 +237,7 @@ pub fn next(state: *Watcher) EventResult {
         return event_failure(state, 0 - #cast(isize, code), io.windows(#cast(isize, code)))
       }
       slot.pending = false
-      slot.used = #cast(usize, transferred)
+      slot.used = transferred
       slot.offset = 0
       if slot.used == 0 || slot.used > 4096 {
         slot.used = 0
@@ -260,28 +260,19 @@ pub fn next(state: *Watcher) EventResult {
         slot.offset = 0
         return rescan(state, slot.id)
       }
-      if next_offset == 0 {
-        slot.offset = slot.used
-      } else {
-        slot.offset += next_offset
-      }
+      if next_offset == 0 { slot.offset = slot.used } else { slot.offset += next_offset }
       mask: u32 = 0
       if action == 1 {
         mask = Create
-      }
-      else if action == 2 {
+      } else if action == 2 {
         mask = Delete
-      }
-      else if action == 3 {
+      } else if action == 3 {
         mask = Modify | Attributes
-      }
-      else if action == 4 {
+      } else if action == 4 {
         mask = MoveFrom
-      }
-      else if action == 5 {
+      } else if action == 5 {
         mask = MoveTo
-      }
-      else {
+      } else {
         return rescan(state, slot.id)
       }
       mask = mask & slot.mask
@@ -328,5 +319,5 @@ fn status(code: isize) Result {
 }
 // Validation codes retain their errno-style namespace separately from Win32.
 fn validation_failure(code: isize) Result {
-  return Result{ failure: io.Failure{ kind: io.linux(code), native: code } }
+  return Result{ failure: io.linux_failure(code) }
 }

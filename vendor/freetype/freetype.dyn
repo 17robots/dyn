@@ -72,7 +72,7 @@ pub fn bitmap(face: rawptr) BitmapResult {
   if value.width > 2147483647 || value.rows > 2147483647 {
     return BitmapResult{kind:io.Kind.Overflow}
   }
-  result := BitmapView{width:#cast(i32, value.width), height:#cast(i32, value.rows), left:slot.bitmap_left, top:slot.bitmap_top, advance_x:#cast(i64, slot.advance.x), advance_y:#cast(i64, slot.advance.y)}
+  result := BitmapView{width:#cast(i32, value.width), height:#cast(i32, value.rows), left:slot.bitmap_left, top:slot.bitmap_top, advance_x:slot.advance.x, advance_y:slot.advance.y}
   if value.width == 0 || value.rows == 0 {
     return BitmapResult{value:result, ok:true}
   }
@@ -81,11 +81,11 @@ pub fn bitmap(face: rawptr) BitmapResult {
   }
   stride := #cast(usize, value.pitch)
   width := #cast(usize, value.width)
-  if #cast(usize, value.rows-1) > (~#cast(usize, 0)-width)/stride {
+  if (value.rows-1) > (#max(usize)-width)/stride {
     return BitmapResult{kind:io.Kind.Overflow}
   }
   result.stride = stride
-  result.pixels = #slice(value.buffer, #cast(usize, value.rows-1)*stride+width)
+  result.pixels = #slice(value.buffer, (value.rows-1)*stride+width)
   return BitmapResult{value:result, ok:true}
 }
 pub fn open(font: *Font, api: Api, bytes: []const u8, index: u32, pixels: u32) Result {
@@ -98,19 +98,19 @@ pub fn open(font: *Font, api: Api, bytes: []const u8, index: u32, pixels: u32) R
   library: rawptr
   error := api.init(&library)
   if error != 0 {
-    return Result{kind:io.Kind.System, error:#cast(isize, error)}
+    return Result{kind:io.Kind.System, error:error}
   }
   face: rawptr
   error = api.new_memory_face(library, &bytes[0], #cast(Long, #len(bytes)), #cast(Long, index), &face)
   if error != 0 {
     _ = api.done(library)
-    return Result{kind:io.Kind.System, error:#cast(isize, error)}
+    return Result{kind:io.Kind.System, error:error}
   }
   error = api.set_pixel_sizes(face, 0, pixels)
   if error != 0 {
     _ = api.done_face(face)
     _ = api.done(library)
-    return Result{kind:io.Kind.System, error:#cast(isize, error)}
+    return Result{kind:io.Kind.System, error:error}
   }
   font.* = Font{api:api, library:library, face:face, bytes:bytes}
   return Result{ok:true}
@@ -141,7 +141,7 @@ fn glyph(data: rawptr, codepoint: u32) software.Glyph {
   error := adapter.font.api.load_glyph(adapter.font.face, index, LoadRender)
   if error != 0 {
     adapter.kind = io.Kind.System
-    adapter.error = #cast(isize, error)
+    adapter.error = error
     return software.Glyph{width:-1}
   }
   rendered := bitmap(adapter.font.face)

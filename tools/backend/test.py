@@ -492,12 +492,12 @@ def inspect(path, debug):
                for offset in range(table[4], table[4] + table[5], table[9])]
     assert all(s[1] >> 4 == 0 for s in symbols[:table[7]])
     assert all(s[1] >> 4 == 1 for s in symbols[table[7]:])
-    # Table-based release unwinding needs continue, but no set/link/unlink calls.
-    # Debug keeps those calls and the two tracing hooks. Both modes retain the
-    # local .text section symbol used by the unwind-table relocation.
+    # Table-based unwinding needs continue, but no set/link/unlink calls. Debug
+    # builds generate this program's functions through SSA as release does, so
+    # they unwind by table too; their stack traces walk frame pointers, with no
+    # hook in each function. Both modes retain the local .text section symbol
+    # used by the unwind-table relocation.
     runtime_symbols = {b'dyn_panic', b'dyn_unwind_continue', b'fmod', b'fmodf', b'dyn_check_failed'}
-    if debug:
-        runtime_symbols |= {b'dyn_trace_push', b'dyn_trace_pop', b'dyn_unwind_set', b'dyn_unwind_link', b'dyn_unwind_unlink'}
     # Three generic templates produce five concrete instances. Fixed symbols:
     # null, .rodata, .text, literals, initializer, and initialized flag.
     concrete_functions = SOURCE.count('pub fn ') - 3 + 5
@@ -825,58 +825,9 @@ with tempfile.TemporaryDirectory(prefix='dyn-scalar-backend-') as directory:
         run([BACKEND, *(['--debug'] if mode == 'debug' else []), source, obj])
         inspect(obj, mode == 'debug')
         runtime = root / ('runtime-' + mode + '.o')
-        # Production shared builds use dynrt_shared.o in both modes. Debug
-        # emission adds function traces; release retains only the runtime header.
+        # Production shared builds use dynrt_shared.o in both modes.
         run([*CC, '-fPIC', '-DDYN_SHARED', '-c', ROOT / 'runtime/linux_x86_64_start.S', '-o', runtime])
         run([*CC, '-shared', '-Wl,--no-undefined', obj, runtime, support, '-lm', '-o', native])
-        if mode == 'debug':
-            alignment_source = root / 'alignment.S'
-            alignment_source.write_text("""
-.text
-.global dyn_trace_push
-.type dyn_trace_push,@function
-dyn_trace_push:
-    mov %rsp, %rax
-    and $15, %eax
-    cmp $8, %eax
-    jne .Lbad
-    incq .Lcalls(%rip)
-    ret
-.Lbad:
-    mov $122, %edi
-    mov $231, %eax
-    syscall
-    ud2
-.global alignment_seen
-.type alignment_seen,@function
-alignment_seen:
-    mov .Lcalls(%rip), %rax
-    ret
-.bss
-.p2align 3
-.Lcalls: .quad 0
-.section .note.GNU-stack,"",@progbits
-""")
-            alignment_library = root / 'alignment.so'
-            run([*CC, '-shared', '-fPIC', alignment_source, '-o', alignment_library])
-            alignment_code = """import ctypes as c,sys
-lib=c.CDLL(sys.argv[1]); probe=c.CDLL(sys.argv[2]); probe.alignment_seen.restype=c.c_uint64
-for name,args,expected in [('call_nested',(1,2,3),266),('call_args6',(1,2,3,4,5,6),123456),
-                           ('call_six_nested',(1,2,3,4,5,6),123907),('call_arity3',(1,2,3),123),
-                           ('float_mixed_call',(),47.5),('float_mixed_indirect',(),47.5),('float_max_call',(),397.0),('indirect_use',(7,),14),('indirect_six',(1,),123456),('indirect_stack',(7,),7),('large_frame',(7,),168),('loop_nested',(5,),50),('call_arity4',(1,2,3,4),1234),('call_arity5',(1,2,3,4,5),12345),
-                           ('factorial',(10,),3628800),('rec_entry',(3,1),4)]:
- fn=getattr(lib,name);fn.argtypes=[c.c_uint64]*len(args);fn.restype=c.c_double if name.startswith('float_') else c.c_uint64
- for _ in range(5): assert fn(*args)==expected
-for n in (7,8,9,16,32,256):
- fn=getattr(lib,f'stack_call{n}'); fn.argtypes=[c.c_uint64]*n; fn.restype=c.c_uint64
- selected=range(n) if n<=32 else (0,5,6,127,255)
- assert fn(*range(n))==sum(i*(i+1) for i in selected)
-assert probe.alignment_seen()>100, 'alignment interposer did not run'
-"""
-            # Only this ABI probe replaces the trace hook. Ordinary execution
-            # and all panic comparisons use the unmodified Dyn runtime.
-            run([sys.executable, '-c', alignment_code, native, alignment_library],
-                env=dict(os.environ, LD_PRELOAD=str(alignment_library)))
         production_path = root / ('production-' + mode + '.so')
         run([DYN, 'build', root, '--shared', '--' + mode, '--no-cache',
              '--jobs', '1', '--output', production_path])

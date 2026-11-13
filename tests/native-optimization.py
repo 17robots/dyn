@@ -86,8 +86,10 @@ with tempfile.TemporaryDirectory(prefix='dyn-native-opt-') as directory:
 fn left(a: u64, b: u64) u64 { return a << b }
 fn right(a: u64, b: u64) u64 { return a >> b }
 fn signed_right(a: i64, b: u64) i64 { return a >> b }
+// Mutable, so inlined calls still shift by a variable count.
+counts: [3]u64 = [4, 63, 2]
 fn main() {
-  if left(3, 4) != 48 || right(0x8000000000000000, 63) != 1 || signed_right(-8, 2) != -2 {
+  if left(3, counts[0]) != 48 || right(0x8000000000000000, counts[1]) != 1 || signed_right(-8, counts[2]) != -2 {
     #panic("CPU shifts")
   }
 }

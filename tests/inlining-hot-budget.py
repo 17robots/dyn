@@ -49,7 +49,7 @@ static void late(bool loop,bool o2) {
  p->statements[83]=(DynIrStmt){.kind=loop?DYN_STMT_FOR:DYN_STMT_EXPR,.expression=loop?DYN_NO_EXPR:3,
    .target=DYN_NO_EXPR,.body_start=loop?84:0,.body_count=loop?1:0,.loop_id=0};
  p->statements[84].expression=3;
- assert(inline_program(&o,o2,false));
+ assert(inline_program_within(&o,o2,false,512));
  if(o2 && !loop){assert(!o.owns_expansion);dyn_native_optimization_free(&o);return;}
  assert(o.owns_expansion);
  DynIrFunction *f=&o.ir.functions[3];

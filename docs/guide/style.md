@@ -6,7 +6,10 @@ The naming rules are conventions; the formatter does not rename anything.
 ## Layout (enforced by `dyn fmt`)
 
 - One statement per line. A block's statements never share a line with `{`, `}`, or each other,
-  so `if ready { return }` becomes three lines.
+  except that a block written on one line with one simple statement stays there:
+  `if ready { return }`.
+- `} else {` shares a line. An `if` whose two branches are one statement each may be one line:
+  `if wide { return 8 } else { return 4 }`. `else if` chains stay on separate lines.
 - One space after every comma: `add(4, 2)`, `[1, 2, 3]`. A comma before a closing bracket or at a
   line end gets no space.
 - LF line endings, no trailing spaces or tabs, and a final newline.
@@ -15,7 +18,6 @@ The naming rules are conventions; the formatter does not rename anything.
 
 - Indent with two spaces per block level. Never use tabs.
 - Put spaces around binary operators and `:=`: `total := a + b`.
-- Keep `} else {` on one line.
 - Empty blocks stay on one line: `fn noop() {}`.
 
 ```dyn

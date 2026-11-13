@@ -28,7 +28,7 @@ fn handle_of(descriptor: isize) rawptr {
 
 fn failure() Result {
   code := #cast(isize, native_windows.last_error_raw())
-  return Result{ failure: io.Failure{ kind: io.windows(code), native: code } }
+  return Result{ failure: io.windows_failure(code) }
 }
 
 fn mode_of(state: *const State) u32 {
@@ -71,8 +71,7 @@ fn make_raw(descriptor: isize, state: *State) {
   mode := mode_of(state)
   if descriptor == 1 || descriptor == 2 {
     mode = mode | virtual_terminal_output
-  }
-  else {
+  } else {
     mode = mode & ~(line_input | echo_input | processed_input) | virtual_terminal_input
   }
   set_mode_bytes(state, mode)

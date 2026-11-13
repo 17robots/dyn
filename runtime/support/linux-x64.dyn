@@ -18,8 +18,13 @@ fn signal_restorer_flag() u64 {
 fn signal_restorer(handler: usize) usize {
   return handler
 }
-// The assembly runtime keeps its own trace slots and dumps them before exiting.
-extern fn fault_report "dyn_fault_report"()
+// The faulting instruction and frame pointer in a signal's ucontext.
+fn fault_pc(context: usize) usize {
+  return #cast(*const usize, context + 168).*
+}
+fn fault_fp(context: usize) usize {
+  return #cast(*const usize, context + 120).*
+}
 fn thread_number() i64 {
   return 186
 }
@@ -59,7 +64,7 @@ fn unwind_find(rip: u64, landing: *u64) usize {
     }
     relative := #cast(i64, #cast(i32, unwind_u32(at + 8)))
     text := #cast(u64, at + 8) + #cast(u64, relative)
-    if rip >= text && rip - text < #cast(u64, unwind_u32(at + 12)) {
+    if rip >= text && rip - text < unwind_u32(at + 12) {
       offset := #cast(u32, rip - text)
       functions := #cast(usize, unwind_u32(at + 16))
       landings := #cast(usize, unwind_u32(at + 20))
@@ -75,7 +80,7 @@ fn unwind_find(rip: u64, landing: *u64) usize {
         pads := at + 24 + 32 * functions
         for i in 0..landings {
           if unwind_u32(pads + 8 * i) == offset {
-            landing.* = text + #cast(u64, unwind_u32(pads + 8 * i + 4))
+            landing.* = text + unwind_u32(pads + 8 * i + 4)
             break
           }
         }
@@ -92,7 +97,7 @@ fn unwind_walk(slot: *UnwindSlot, state: *UnwindState) {
   for true {
     top := slot.top
     // A handler registered in this frame or a deeper one is the nearest.
-    if top != nil && #cast(u64, #cast(usize, top)) < state.rbp {
+    if top != nil && #cast(usize, top) < state.rbp {
       slot.top = top.previous
       jump(top)
     }
@@ -135,6 +140,7 @@ fn unwind_walk(slot: *UnwindSlot, state: *UnwindState) {
 // Called by dyn_panic with the registers of its caller. Returns when nothing
 // handles the unwind, and dyn_panic then reports the message and exits.
 pub fn dyn_unwind_begin_state(message: *const u8, length: u64, state: *UnwindState) {
+  dyn_trace_capture(#cast(usize, state.rip), #cast(usize, state.rbp))
   slot := unwind_slot(true)
   if slot == nil || slot.unwinding != 0 {
     run_panic_hook(message, length)

@@ -3,25 +3,20 @@ use "std/io" io
 
 // WASI Preview 1 has no terminal control. Descriptors are never terminals;
 // key_decode still works on bytes read from standard input.
-pub fn read_state(descriptor: isize) Read {
-  _ = descriptor
+pub fn read_state(_descriptor: isize) Read {
   return Read{ failure: io.Failure{ kind: io.Kind.Unsupported } }
 }
 
-pub fn restore(descriptor: isize, saved: *const State) Result {
-  _ = descriptor
+pub fn restore(_descriptor: isize, saved: *const State) Result {
   if saved == nil {
     return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
   return Result{ failure: io.Failure{ kind: io.Kind.Unsupported } }
 }
 
-fn make_raw(descriptor: isize, state: *State) {
-  _ = descriptor
-  _ = state
+fn make_raw(_descriptor: isize, _state: *State) {
 }
 
-pub fn size(descriptor: isize) Size {
-  _ = descriptor
+pub fn size(_descriptor: isize) Size {
   return Size{ failure: io.Failure{ kind: io.Kind.Unsupported } }
 }

@@ -20,6 +20,7 @@ int dyn_docs_directory(const char *directory, bool json);
 typedef struct {
   size_t offset;
   unsigned indent; /* UINT_MAX inserts one space; otherwise newline + indent */
+  size_t end;      /* past offset: the whitespace up to end becomes one space */
 } FormatInsert;
 
 typedef struct {
@@ -40,7 +41,7 @@ static void format_insert(FormatEdits *edits, size_t offset, unsigned indent) {
     edits->items = items;
     edits->capacity = capacity;
   }
-  edits->items[edits->count++] = (FormatInsert){offset, indent};
+  edits->items[edits->count++] = (FormatInsert){offset, indent, 0};
 }
 
 static unsigned format_line_indent(const char *text, uint32_t offset) {
@@ -84,8 +85,21 @@ static void format_layout_compact(FormatEdits *edits, const FormatTree *t,
                                   unsigned anchor_indent) {
   const ExpNode *nodes = t->tree->nodes, *node = &nodes[id];
   if (node->kind != SRC_BLOCK) {
-    for (uint32_t child = node->first; child != UINT32_MAX; child = nodes[child].next)
+    for (uint32_t child = node->first, previous = UINT32_MAX; child != UINT32_MAX;
+         previous = child, child = nodes[child].next) {
+      /* } else { shares a line: only whitespace may separate them. */
+      if (node->kind == SRC_IF && nodes[child].kind == SRC_ELSE && previous != UINT32_MAX) {
+        size_t from = nodes[previous].end, to = nodes[child].start;
+        bool blank = from < to;
+        for (size_t i = from; i < to && blank; ++i)
+          blank = strchr(" \t\r\n", edits->text[i]) != NULL;
+        if (blank && (to - from != 1 || edits->text[from] != ' ')) {
+          format_insert(edits, from, UINT_MAX);
+          if (!edits->failed) edits->items[edits->count - 1].end = to;
+        }
+      }
       format_layout_compact(edits, t, child, anchor_row, anchor_indent);
+    }
     return;
   }
   uint32_t row = format_row(t, node->start);
@@ -336,9 +350,11 @@ bool dyn_format_source(const DynSource *s, char **result, size_t *length) {
     qsort(edits.items, edits.count, sizeof(*edits.items), format_insert_order);
   size_t at = 0, line = 0, next = 0;
   for (size_t i = 0; i <= s->length; ++i) {
+    size_t skip = i;
     for (; next < edits.count && edits.items[next].offset == i; ++next) {
       if (edits.items[next].indent == UINT_MAX) {
         out[at++] = ' ';
+        if (edits.items[next].end > skip) skip = edits.items[next].end;
         continue;
       }
       while (at > line && (out[at - 1] == ' ' || out[at - 1] == '\t'))
@@ -350,6 +366,12 @@ bool dyn_format_source(const DynSource *s, char **result, size_t *length) {
     }
     if (i == s->length)
       break;
+    if (skip > i) {
+      while (next < edits.count && edits.items[next].offset < skip)
+        ++next;
+      i = skip - 1;
+      continue;
+    }
     unsigned char c = (unsigned char)s->text[i];
     if (c == '\r' && i + 1 < s->length && s->text[i + 1] == '\n')
       continue;

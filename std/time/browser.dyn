@@ -1,10 +1,8 @@
 use "std/io" io
 #target(kernel: browser)
-fn native_clock(monotonic: bool) ClockResult {
-  _ = monotonic
+fn native_clock(_monotonic: bool) ClockResult {
   return ClockResult{ failure: io.Failure{ kind: io.Kind.Unsupported } }
 }
-fn native_sleep(duration: i64) SleepResult {
-  _ = duration
+fn native_sleep(_duration: i64) SleepResult {
   return SleepResult{ failure: io.Failure{ kind: io.Kind.Unsupported } }
 }

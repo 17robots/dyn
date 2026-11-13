@@ -128,16 +128,30 @@ static uint64_t check_append(unsigned char *out, uint64_t at, const char *text) 
   while (*text) out[at++] = (unsigned char)*text++;
   return at;
 }
-void dyn_check_failed(const unsigned char *name, uint64_t packed) {
+static uint64_t check_number(unsigned char *out, uint64_t at, uint64_t value) {
+  if (value >> 63) { out[at++] = '-'; value = 0 - value; }
+  static unsigned char digits[20]; unsigned count = 0; /* no stack array: no stack protector */
+  do { digits[count++] = (unsigned char)('0' + value % 10); value /= 10; } while (value);
+  while (count) out[at++] = digits[--count];
+  return at;
+}
+/* Debug builds set bit 23 for an index check and pass the index and limit. */
+void dyn_check_failed(const unsigned char *name, uint64_t packed, uint64_t index, uint64_t limit) {
   static const char *const kinds[] = {"overflow.ok", "divide.ok", "division.overflow.ok", "shift.count.ok",
     "function.nonnull.ok", "pointer.nonnull.ok", "pointer.aligned.ok", "index.ok", "slice.order.ok",
     "slice.bounds.ok", "enum.cast.ok", "enum.tag.ok"};
   static unsigned char message[1024];
-  uint64_t kind = packed >> 24, length = packed & 0xffffff;
+  uint64_t kind = packed >> 24, length = packed & 0x7fffff;
   uint64_t used = check_append(message, 0, "runtime check failed (");
   used = check_append(message, used, kind < 12 ? kinds[kind] : "unknown");
   used = check_append(message, used, ") in ");
   for (uint64_t i = 0; i < length && i < 800; ++i) message[used++] = name[i];
+  if (packed & 0x800000) {
+    used = check_append(message, used, ": index ");
+    used = check_number(message, used, index);
+    used = check_append(message, used, ", length ");
+    used = check_number(message, used, limit);
+  }
   dyn_panic(message, used);
 }
 
@@ -350,72 +364,11 @@ DYN_RUNTIME_HIDDEN float fmodf(float x, float y) {
 
 #if defined(_WIN32) || defined(__APPLE__) || (defined(DYN_AARCH64) && !defined(DYN_RELEASE))
 long dyn_syscall6(long, long, long, long, long, long, long);
-enum { TRACE_SLOTS = 64, TRACE_FRAMES = 64 };
-typedef struct { const unsigned char *name; uint64_t length; } DynFrame;
-typedef struct { uint64_t tid, count; DynFrame frames[TRACE_FRAMES]; } DynSlot;
-static DynSlot trace_slots[TRACE_SLOTS];
-static uint64_t trace_tid(void) {
-#if defined(_WIN32)
-  return (uint64_t)GetCurrentThreadId();
-#elif defined(__APPLE__)
-  return (uint64_t)(uintptr_t)pthread_self();
-#else
-  return (uint64_t)dyn_syscall6(178,0,0,0,0,0,0);
-#endif
-}
-static void trace_write(const unsigned char *data, uint64_t length) {
-#if defined(_WIN32)
-  __declspec(dllimport) void *__stdcall GetStdHandle(unsigned long);
-  __declspec(dllimport) int __stdcall WriteFile(void *, const void *, unsigned long, unsigned long *, void *);
-  void *handle = GetStdHandle((unsigned long)-12);
-  while (length) {
-    unsigned long written = 0;
-    unsigned long chunk = length > 0x7fffffff ? 0x7fffffff : (unsigned long)length;
-    if (!WriteFile(handle, data, chunk, &written, 0) || !written) return;
-    data += written; length -= written;
-  }
-#else
-  while (length) {
-#if defined(__APPLE__)
-    long written = dyn_syscall6(4,2,(long)data,(long)length,0,0,0);
-#else
-    long written = dyn_syscall6(64,2,(long)data,(long)length,0,0,0);
-#endif
-    if (written <= 0) return;
-    data += written; length -= (uint64_t)written;
-  }
-#endif
-}
-static DynSlot *trace_slot(uint64_t id, int claim) {
-  for (size_t i = 0; i < TRACE_SLOTS; ++i) {
-    uint64_t seen = __atomic_load_n(&trace_slots[i].tid, __ATOMIC_ACQUIRE);
-    if (seen == id) return &trace_slots[i];
-    if (claim && !seen && __atomic_compare_exchange_n(&trace_slots[i].tid,
-        &seen, id, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return &trace_slots[i];
-  }
-  return 0;
-}
-void dyn_trace_push(const unsigned char *name, uint64_t length) {
-  DynSlot *s = trace_slot(trace_tid(), 1);
-  if (s) {
-    if (s->count < TRACE_FRAMES) s->frames[s->count] = (DynFrame){name,length};
-    ++s->count;
-  }
-}
-void dyn_trace_pop(void) {
-  DynSlot *s = trace_slot(trace_tid(), 0);
-  if (s && s->count && !--s->count) __atomic_store_n(&s->tid,0,__ATOMIC_RELEASE);
-}
-void dyn_trace_dump(void) {
-  static const unsigned char h[]="stack trace:\n", a[]="  at ", n[]="\n";
-  DynSlot *s = trace_slot(trace_tid(), 0);
-  if (!s || !s->count) return;
-  trace_write(h,sizeof(h)-1);
-  for (uint64_t i=s->count < TRACE_FRAMES ? s->count : TRACE_FRAMES;i;--i) {
-    DynFrame *f=&s->frames[i-1];
-    trace_write(a,sizeof(a)-1);
-    trace_write(f->name,f->length);
-    trace_write(n,1);
-  }
-}
+/* Debug programs hand dyn_trace_start the header of their stack trace table
+   (runtime/support/trace.dyn walks it). This reference runtime keeps the
+   entry points and prints no trace. */
+static uintptr_t trace_header;
+void dyn_trace_start(uintptr_t header) { trace_header = header; }
+void dyn_trace_capture(uintptr_t pc, uintptr_t fp) { (void)pc; (void)fp; }
+void dyn_trace_dump(void) {}
 #endif

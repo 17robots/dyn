@@ -11,13 +11,12 @@ extern fn virtual_alloc "dyn_win_virtual_alloc"(address: rawptr, size: usize, ki
 // Runtime slot chunks: 64 threads per chunk, more chunks on demand.
 const unwind_chunk_slots: usize = 64
 const unwind_hint_count: usize = 64
-const trace_chunk_slots: usize = 64
 // Committed read-write pages; Windows backs them physically on first touch.
 fn runtime_pages(bytes: u64) u64 {
-  return #cast(u64, #cast(usize, virtual_alloc(nil, #cast(usize, bytes), 12288, 4)))
+  return #cast(usize, virtual_alloc(nil, #cast(usize, bytes), 12288, 4))
 }
 fn thread_id() u64 {
-  return #cast(u64, get_tid())
+  return get_tid()
 }
 fn trace_write(data: *const u8, size: u64) {
   if size == 0 {
@@ -35,17 +34,8 @@ fn trace_write(data: *const u8, size: u64) {
     if write_file(handle, #cast(rawptr, &bytes[offset]), #cast(u32, chunk), &written, nil) == 0 || written == 0 {
       return
     }
-    offset += #cast(usize, written)
+    offset += written
   }
-}
-pub fn dyn_trace_push(name: *const u8, length: u64) {
-  trace_push(name, length)
-}
-pub fn dyn_trace_pop() {
-  trace_pop()
-}
-pub fn dyn_trace_dump() {
-  trace_dump()
 }
 
 pub fn dyn_panic_write(data: *const u8, size: u64) {
@@ -70,10 +60,17 @@ pub fn dyn_unwind_continue() {
 // thread of the process, so one installation is enough.
 extern fn set_exception_filter "SetUnhandledExceptionFilter"(filter: rawptr) rawptr
 extern fn exit_process "ExitProcess"(code: u32)
-fn fault_filter(information: rawptr) i32 {
+// information is EXCEPTION_POINTERS: the exception record, then the CONTEXT
+// that holds the faulting instruction and frame pointer (fault_pc and
+// fault_fp, per architecture).
+fn fault_report(information: rawptr) {
   write_string("memory fault: invalid address\n")
-  trace_dump()
+  context := #cast(*const usize, #cast(usize, information) + #sizeof(usize)).*
+  trace_fault(fault_pc(context), fault_fp(context))
   exit_process(101)
+}
+fn fault_filter(information: rawptr) i32 {
+  fault_report(information)
   return 1
 }
 // The unhandled filter runs only after Windows walks the stack to the thread
@@ -86,9 +83,7 @@ fn fault_vectored(information: rawptr) i32 {
   code := #cast(*const u32, record).*
   // Access violation, misalignment, illegal instruction, in-page error.
   if code == 0xC0000005 || code == 0x80000002 || code == 0xC000001D || code == 0xC0000006 {
-    write_string("memory fault: invalid address\n")
-    trace_dump()
-    exit_process(101)
+    fault_report(information)
   }
   return 0
 }

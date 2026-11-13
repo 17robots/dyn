@@ -48,18 +48,33 @@ $2 = len 2 = {1, 2}
 Add the `source` line to `~/.gdbinit` to load them in every session. Fields stay available:
 `print view.len`, `print view.data[1]`.
 
-Dyn panic output needs no debugger and reports active functions with declaration locations:
+Dyn panic output needs no debugger. It lists the active functions, innermost first, each with the
+line it was running: the failing statement for the first frame, and the call for each caller:
 
 ```text
 message
 stack trace:
-  at fail (src/work.dyn:12)
-  at main (src/main.dyn:4)
+  at fail (src/work.dyn:14)
+  at main (src/main.dyn:9)
+```
+
+A failed runtime check names the function, file and line, and a failed index check also the index
+and the length it had to be below:
+
+```text
+runtime check failed (index.ok) in get at src/main.dyn:6: index 9, length 4
 ```
 
 Native FFI libraries remain visible through their own debug information. Debugger expression
 parsers do not understand Dyn expressions, so use simple variable names, fields, addresses, and
 the debugger's C-like casts when inspecting values.
+
+## Overflow checks
+
+Integer arithmetic wraps. To find overflow that is not meant, build with `--check-overflow`:
+`+`, `-`, `*`, `<<` and negation in your own modules then panic with `overflow.ok` and a stack
+trace. Library code keeps wrapping. Use `math.wrapping_add`, `wrapping_sub` and `wrapping_mul`
+from `std/math` where your code wraps on purpose. The flag is for debug builds only.
 
 ## Memory faults
 

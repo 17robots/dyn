@@ -18,7 +18,7 @@ fn central_entry(source: []const u8, at: usize, limit: usize, data_limit: usize)
     return Central{ error: parse.Kind.Unsupported }
   }
   name_length := #cast(usize, u16le(source, at + 28))
-  tail := name_length + #cast(usize, u16le(source, at + 30)) + #cast(usize, u16le(source, at + 32))
+  tail := name_length + u16le(source, at + 30) + u16le(source, at + 32)
   if tail > limit - at - 46 {
     return Central{ error: parse.Kind.Syntax }
   }
@@ -40,7 +40,7 @@ fn central_entry(source: []const u8, at: usize, limit: usize, data_limit: usize)
   }
   checksum := u32le(source, at + 16)
   if (flags & 8) == 0 {
-    if checksum != u32le(source, local + 14) || compressed != #cast(usize, u32le(source, local + 18)) || size != #cast(usize, u32le(source, local + 22)) {
+    if checksum != u32le(source, local + 14) || compressed != u32le(source, local + 18) || size != u32le(source, local + 22) {
       return Central{ error: parse.Kind.Syntax }
     }
   } else {
@@ -49,9 +49,9 @@ fn central_entry(source: []const u8, at: usize, limit: usize, data_limit: usize)
       return Central{ error: parse.Kind.Syntax }
     }
     // A CRC may itself equal the optional signature: try the unsigned form first.
-    unsigned := u32le(source, descriptor) == checksum && #cast(usize, u32le(source, descriptor + 4)) == compressed && #cast(usize, u32le(source, descriptor + 8)) == size
+    unsigned := u32le(source, descriptor) == checksum && u32le(source, descriptor + 4) == compressed && u32le(source, descriptor + 8) == size
     if !unsigned {
-      if data_limit - descriptor < 16 || u32le(source, descriptor) != 134695760 || u32le(source, descriptor + 4) != checksum || #cast(usize, u32le(source, descriptor + 8)) != compressed || #cast(usize, u32le(source, descriptor + 12)) != size {
+      if data_limit - descriptor < 16 || u32le(source, descriptor) != 134695760 || u32le(source, descriptor + 4) != checksum || u32le(source, descriptor + 8) != compressed || u32le(source, descriptor + 12) != size {
         return Central{ error: parse.Kind.Syntax }
       }
     }
@@ -64,7 +64,7 @@ fn central_entry(source: []const u8, at: usize, limit: usize, data_limit: usize)
 // Checks directory framing and every local-header/descriptor relationship up front.
 // Payload CRCs are verified by extract, without allocating or decompressing here.
 pub fn open_checked(source: []const u8) OpenResult {
-  if #len(source) > ((~#cast(usize, 0)) >> 1) {
+  if #len(source) > (#max(usize) >> 1) {
     return OpenResult{ failure: parse.Failure{ kind: parse.Kind.Overflow } }
   }
   if #len(source) < 22 {
@@ -77,7 +77,7 @@ pub fn open_checked(source: []const u8) OpenResult {
   }
   found: bool = false
   for {
-    if u32le(source, end) == 101010256 && #cast(usize, u16le(source, end + 20)) == #len(source) - end - 22 {
+    if u32le(source, end) == 101010256 && u16le(source, end + 20) == #len(source) - end - 22 {
       found = true
       break
     }

@@ -54,19 +54,25 @@ null and alignment checks on addresses of globals and frame memory. Loop
 nests whose inner loop carries a floating accumulator, such as matrix
 multiply, are unrolled by two and jammed: two independent sums run side by
 side, each adding the same terms in the same order. A function that returns
-`f(...) + x` with checked unsigned 64-bit addition, and has no effects or
-checks other than overflow checks, keeps the sum in an accumulator and jumps
-back to its start instead of making the last call. Dense
+`f(...) + x` with checked unsigned 64-bit addition, or with wrapping 64-bit
+addition when overflow is not checked, and has no effects or checks other
+than overflow checks, keeps the sum in an accumulator and jumps back to its
+start instead of making the last call. Element
+copy loops, `for i in 0..n { d[i] = s[i] }` as `mem.copy` has them, become
+one forward copy on x86-64 when `n` fits both slices, and a call to
+`std/mem`'s `zero_bytes_fast` whose length folds to a constant becomes a
+fixed fill. Dense
 `case` statements become jump tables. On x86-64 System V, a recursive
 function whose first pure unsigned guard returns an argument can bypass frame
-setup on that path. A two-statement unsigned recurrence with two decreasing
-self calls can also pack its first eight proved byte-sized results into a
-constant. Larger arguments execute the original checked code. Small leaf
+setup on that path. Small leaf
 functions inside loops are inlined under a separate size budget at O2; their
 arguments are captured once, and constant subtrees are shared. Runtime checks
 retain their originating callee through inlining, including tree fallback and
 cleanup. Linear-scan register allocation runs over all values, with clobber-aware live intervals and hints that coalesce
-moves. Emission runs twice so the second pass can use short branches.
+moves. A value spilled for its whole interval gets a register through a loop
+that uses it when one is free there; a phi of the loop's header, such as a
+counter that later calls push out of registers, is carried in it and stored
+to its slot at each exit. Emission runs twice so the second pass can use short branches.
 
 RISC-V32 always uses the tree emitter. Each model register is a pair of
 32-bit registers (low words where RV64 keeps the value, high words in s2-s9),
@@ -87,9 +93,23 @@ use word accesses, with byte prefixes and tails; copies preserve overlap
 semantics. Both 32-bit targets emit DWARF with target-sized addresses and
 frame rules, including the biased Thumb frame pointer.
 
+Debug stack traces cost nothing per call. Every target keeps a frame-pointer
+chain, and debug objects carry a table in their constants: function ranges,
+pc-to-line rows and `function (path:` labels, with the target's frame layout
+(see `trace_table_write` in `driver.c`). `main` passes its header to
+`dyn_trace_start` once. A panic walks the frames from `dyn_panic`'s caller
+before cleanups unwind them (`runtime/support/trace.dyn`), and a memory fault
+walks from the faulting instruction in the signal or exception context.
+
 A function the SSA path cannot build yet falls back to the tree emitter;
 `--opt-remarks` reports the line of `ssa.inc` that stopped it. Debug builds
-use the tree emitter. Windows ARM64 SSA reserves callee-saved GP registers
+on the 64-bit targets also use SSA code generation, without the optimizing
+passes: every local stays in its frame slot (DWARF variables with lexical
+scopes), each statement gets a line row, emission runs once with long
+branches, and two preparation workers keep
+emission fed. Each worker prepares a fixed share of the functions with its
+own pool of arena chunks, so a build's heap calls do not depend on thread
+timing. Debug builds on RV32 and Thumb use the tree emitter. Windows ARM64 SSA reserves callee-saved GP registers
 and spills values that cross calls, so it can reuse the canonical Windows
 unwind records and stack probing. `DYN_NO_SSA=1` selects the tree
 emitter everywhere. SSA code

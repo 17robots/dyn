@@ -1,0 +1,8 @@
+// An integer literal in #cast takes the target type when it fits, instead of
+// the default i32 it may not fit. This file must check clean.
+fn main() {
+  high := #cast(u32, 0x80000000)
+  all := #cast(u64, 0xffffffffffffffff)
+  _ = high
+  _ = all
+}

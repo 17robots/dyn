@@ -224,12 +224,10 @@ the loop-local binding. `for *value` binds a mutable pointer to each source elem
 rejects const slices and requires assignable arrays. `for *const value` binds a const pointer.
 `for i in first..last` counts integers from `first` up to but excluding `last`; `..=` includes
 `last`. Both bounds share one integer type, and a literal bound adapts to the other bound, so
-`0..count` has `count`'s type. When both bounds are literals, `i` takes the type of its first
-use that meets a known integer type: `total += i` with `total: i32` counts in `i32`, as do
-passing it to an `i32` parameter or returning it from an `i32` function. With no such use it
-counts in `usize`, so `for i in 0..3 { values[i] }` indexes directly; indexes accept any integer
-type either way. A typed binding sets the type of both bounds: `for i: i32 in -3..3`. A negative
-literal range needs a typed binding or a use that sets a signed type. Bounds evaluate once, first
+`0..count` has `count`'s type. When both bounds are literals, `i` is a `usize`, whatever the
+body does with it, so `for i in 0..3 { values[i] }` indexes directly. A typed binding sets the type
+of both bounds: `for i: i32 in -3..3` or `for i: i32 in 0..5 { total += i }` with `total: i32`.
+A negative literal range needs a typed binding. Bounds evaluate once, first
 bound first. An empty range such as `5..2` runs no iterations. `i` is a copy: assigning it does not change iteration, and pointer
 bindings are rejected. Inclusive ranges may end at the type's maximum without overflow.
 `for i in #reverse(first..last)` visits the same values from last to first: `#reverse(0..3)` gives
@@ -241,8 +239,8 @@ Loops may be labeled as `name: for`; `break: name` and `continue: name` target a
 loop with that label. Active labels cannot duplicate. Transfers run defers for every exited scope.
 
 Struct field order determines layout. Packed structs preserve order, remove inter-field padding,
-and have alignment 1 on current Linux x86-64 target. Construction zeroes every field, then applies
-explicit literal members. `.{ ... }` requires expected
+and have alignment 1. Construction gives every field its default (zero when it declares none), then
+applies explicit literal members. `.{ ... }` requires expected
 struct type. Struct assignment copies by value. Unknown/duplicate fields, duplicate declarations,
 by-value recursion and aggregate comparison fail. Empty structs have size and alignment 1 so arrays
 have stable element stride and distinct elements have distinct addresses.
@@ -325,7 +323,8 @@ ownership, lifetime, arithmetic, indexing, or dereference operation.
 ## Control flow and cleanup
 
 Each statement starts on its own line; two statements on one line are a syntax error. A block
-with a single statement may stay on one line, as in `if done { return }`. `case` arms are not
+with a single statement may stay on one line, as in `if done { return }`, and so may an `if` whose
+two branches are one statement each: `if wide { return 8 } else { return 4 }`. `case` arms are not
 separated by commas; each arm's body is a block:
 
 ```dyn
@@ -372,11 +371,23 @@ values. Bitwise operators require integers. Division and remainder by zero panic
 minimum divided by `-1` panics. `std/math` has `add_overflows`, `sub_overflows`, `mul_overflows` and
 saturating arithmetic for code that wants them.
 
+`dyn build --check-overflow` (debug builds only) makes `+`, `-`, `*`, `<<`, unary negation and
+their compound assignments in the program's own modules panic with `overflow.ok` instead of
+wrapping. `std` and `vendor` code keeps wrapping. Write `math.wrapping_add`, `wrapping_sub` or
+`wrapping_mul` where a program means to wrap, so the code reads the same with and without the flag.
+Release builds always wrap; the flag is a way to find overflow bugs, not a change in meaning.
+
 Untyped integer constants are evaluated exactly for the implemented constant-expression operators,
 then adapted only when their value is representable in the expected type. Runtime implicit numeric
 conversion is allowed only when every source-type value is exactly representable on every
 target, counting `usize` and `isize` as anywhere from 32 to 64 bits: `usize` widens to `u64` and
-`u32` to `usize` implicitly, while `u64` to `usize` needs `#cast`. `#cast` permits
+`u32` to `usize` implicitly, while `u64` to `usize` needs `#cast`. The same rule joins
+the operands of a binary operator: when one operand's type widens to the other's without loss,
+the operator works in the wider type, so `count_u32 * size_u64` is a `u64` and `index_u32 < limit_i64`
+compares as `i64`. Each operand is computed in its own type first, so `a_u32 * b_u32 + c_u64`
+multiplies in `u32`. `u64` against `i64` has no lossless meeting type and needs a cast. `x += y`
+widens `y` to `x`'s type the same way. Shifts keep their rule: the result has the left operand's
+type. `#cast` permits
 intentional narrowing and uses destination-width two's-complement/modulo representation for integers.
 Float-to-integer conversion truncates toward zero and saturates: an out-of-range value gives the
 type's minimum or maximum, and NaN gives 0, on every target. `#bitcast` preserves bits and requires
@@ -423,6 +434,7 @@ collections, and ordinary algorithms belong in libraries.
 
 - Conversion: `#cast(Type, value)` and `#bitcast(Type, value)`.
 - Layout and reflection: `#sizeof`, `#alignof`, `#offsetof`, and `#typeof`.
+- Integer limits: `#max` and `#min`.
 - Representation and pointers: `#len`, `#slice` and `#offset`.
 - Validation and termination: compile-time `#assert` and runtime `#panic`.
 - Build input and OS boundary: `#load` and `#syscall`.
@@ -442,8 +454,11 @@ operations, such as `#cast(*T, memory).field`. The old `#cast(T) value` and
 value operands. `#len` accepts arrays and slices. `#cast(T, value)` performs explicit numeric conversion
 or compatible pointer conversion; explicit integer-pointer casts serve OS ABI boundaries. Narrowing follows destination representation. `#bitcast(T, value)`
 requires equal-sized compatible numeric representations or compatible pointer representations.
-`#syscall(number, args...)` returns `isize` and accepts at most six integer/pointer arguments on
-Linux x86-64. It does not depend on `std`.
+`#max(T)` and `#min(T)` are the largest and smallest values of integer type `T`, as constants of
+type `T`; `#max(usize)` is the target's. `#syscall(number, args...)` returns `isize` and accepts at
+most six integer/pointer arguments on
+Linux x86-64. It does not depend on `std`. The number may be a named constant: `std/os/linux/sys`
+and `std/os/macos/sys` name each call std makes, as in `#syscall(sys.Getpid)`.
 `#offsetof(Type, field)` is a field's byte offset as a `usize` constant.
 `#init(pointer)` is a statement that writes `T`'s field defaults through a mutable `*T`; for a type
 without defaults it only evaluates the pointer.
@@ -474,12 +489,12 @@ is not a supported-feature claim:
 | Module-level transparent type alias | Supported |
 | Local type alias inside a function | Reserved; diagnosed as unsupported |
 | Enum declaration-order tags | Supported |
-| Explicit enum values | Rejected |
+| Explicit enum values | Supported for enums without payloads |
 | `.Variant` without the enum type | Not planned; write `Enum.Variant` |
 | Several imports in one `use`, comma-separated | Supported |
 | Optional import alias followed by a new global | Supported; alias stays on the import line |
 
-`tests/grammar-feature-errors` checks the reserved forms. See
+`tests/expect/` checks the reserved forms (`bare-variant.dyn`, `local-type-alias.dyn`). See
 [toolchain and grammar provenance](tools.md) for generation/release checks.
 
 ## Build modes and syntax stability

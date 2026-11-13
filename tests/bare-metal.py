@@ -18,6 +18,10 @@ import struct
 import subprocess
 import tempfile
 
+# These checks name individual functions (remarks, symbols, check messages,
+# per-function compiler hooks), so keep every call out of line.
+os.environ['DYN_NO_INLINE'] = '1'
+
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 PANIC = '''use "std/io"
@@ -183,7 +187,9 @@ for target, bits, machine, low, high, variable, program, board in TARGETS:
                 assert output == expected, (target, output)
             else:
                 assert ran.returncode == 101, (target, ran.returncode, output)
-                assert output.startswith('before\ncleanup ran\nruntime check failed (index.ok) in pick\n'), output
+                assert output.startswith('before\ncleanup ran\nruntime check failed (index.ok) in pick'), output
+                # Debug builds name the statement and report the index and the length.
+                assert release or 'main.dyn:4: index 5, length 3\n' in output, (target, output)
                 assert ('stack trace:' in output) != release, output
         ran_targets.append(target)
 if ran_targets:

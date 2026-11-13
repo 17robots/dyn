@@ -78,7 +78,7 @@ fn small(value: []const u8) i64 {
   }
   result: i64 = 0
   for byte in value {
-    result = result*256 + #cast(i64, byte)
+    result = result*256 + byte
   }
   return result
 }
@@ -194,8 +194,7 @@ fn name(encoded: der.Element) bool {
         if !utf8.valid(data) {
           return false
         }
-      }
-      else if tag == 19 {
+      } else if tag == 19 {
         for byte in data {
           c := lower(byte)
           valid := (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
@@ -214,8 +213,7 @@ fn name(encoded: der.Element) bool {
             return false
           }
         }
-      }
-      else if tag == 30 {
+      } else if tag == 30 {
         if #len(data)%2 != 0 {
           return false
         }
@@ -249,7 +247,7 @@ fn decimal(source: []const u8) i64 {
     if byte < '0' || byte > '9' {
       return -1
     }
-    result = result*10 + #cast(i64, byte-'0')
+    result = result*10 + (byte-'0')
   }
   return result
 }
@@ -264,11 +262,7 @@ fn date(element: der.Element) Date {
     if year < 0 {
       return Date{}
     }
-    if year >= 50 {
-      year += 1900
-    } else {
-      year += 2000
-    }
+    if year >= 50 { year += 1900 } else { year += 2000 }
   } else if element.tag == 24 && #len(source) == 15 {
     year = decimal(source[..4])
     at = 4
@@ -363,7 +357,7 @@ fn usage(source: []const u8, view: *View) bool {
   view.has_usage = true
   view.usage = #cast(u16, content[1]) << 8
   if #len(content) == 3 {
-    view.usage |= #cast(u16, content[2])
+    view.usage |= content[2]
   }
   // encipherOnly/decipherOnly require keyAgreement.
   if (view.usage & 0x0180) != 0 && (view.usage & 0x0800) == 0 {

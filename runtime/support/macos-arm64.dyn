@@ -1,0 +1,9 @@
+#target(kernel: darwin, arch: aarch64)
+// The faulting instruction and frame pointer in the machine context: an
+// exception state of 16 bytes, then x0-x28, fp, lr, sp and pc.
+fn fault_pc(machine: usize) usize {
+  return #cast(*const usize, machine + 272).*
+}
+fn fault_fp(machine: usize) usize {
+  return #cast(*const usize, machine + 248).*
+}

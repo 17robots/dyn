@@ -11,6 +11,11 @@ _dyn_start:
 .global _dyn_panic
 _dyn_panic:
     stp x0, x1, [sp, #-16]!
+    // The trace begins at the caller: its return address and frame pointer.
+    mov x0, x30
+    mov x1, x29
+    bl _dyn_trace_capture
+    ldp x0, x1, [sp]
     bl _dyn_unwind_begin
     ldp x19, x20, [sp]
     cbz x19, .Lpanic_exit

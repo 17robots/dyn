@@ -21,11 +21,7 @@ pub fn push(arena: *mem.Arena, list: *$L, value: $E) *E {
   if chunk == nil || chunk.count == #len(chunk.items) {
     memory := mem.arena_push(arena, #sizeof(list.last.*), #alignof(list.last.*))
     chunk = typed_like(memory, list.last)
-    if list.last == nil {
-      list.first = chunk
-    } else {
-      list.last.next = chunk
-    }
+    if list.last == nil { list.first = chunk } else { list.last.next = chunk }
     list.last = chunk
   }
   slot := &chunk.items[chunk.count]

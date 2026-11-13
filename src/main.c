@@ -15,6 +15,9 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
+#if defined(__GLIBC__)
+#include <malloc.h>
+#endif
 #ifndef DYN_VERSION
 #define DYN_VERSION "0.1.0-dev"
 #endif
@@ -277,7 +280,8 @@ static int execute_command(DynOptions *options, const char *compiler) {
   DynWork work = {.remaining = options->max_work};
   unsigned vet_findings = 0;
   bool vet = is_command(options, "vet");
-  DynContext context = {.work = options->max_work ? &work : NULL, .target = dyn_target_find(options->target), .optimization = &options->optimization, .runtime_support = options->runtime_support, .json_diagnostics = options->json_diagnostics, .vet = vet, .vet_unsafe = options->vet_unsafe, .vet_findings = &vet_findings, .timings = options->timings, .strict_syntax = true};
+  DynVetCasts vet_casts = {0};
+  DynContext context = {.work = options->max_work ? &work : NULL, .target = dyn_target_find(options->target), .optimization = &options->optimization, .runtime_support = options->runtime_support, .json_diagnostics = options->json_diagnostics, .vet = vet, .vet_unsafe = options->vet_unsafe, .vet_findings = &vet_findings, .vet_casts = vet ? &vet_casts : NULL, .timings = options->timings, .strict_syntax = true};
   if (is_command(options, "help")) {
     dyn_cli_help(options->input);
     return 0;
@@ -440,7 +444,8 @@ static int execute_command(DynOptions *options, const char *compiler) {
     dyn_sources_free(&sources); free(main_path); return result;
   }
   DynCheckResult checked = {0};
-  if (!build) checked = dyn_check_sources(&sources, main_path, false);
+  if (vet) checked = dyn_vet_sources(&sources, main_path, options->input);
+  else if (!build) checked = dyn_check_sources(&sources, main_path, false);
   if (checked.errors || vet_findings) {
     dyn_sources_free(&sources);
     free(main_path);
@@ -611,6 +616,18 @@ static bool configure_sdk_linkers(void) {
   return result == 0;
 }
 
+/* A batch command allocates its working set, uses it and exits. glibc maps
+   blocks over 128 KiB separately at first, so growing arrays are mapped,
+   faulted and unmapped again and again: 5 to 7% of a large check or build.
+   Blocks up to 4 MiB stay in the heap. Larger thresholds, or keeping freed
+   memory, saved no more time and raised peak memory by up to half on
+   mid-sized projects (tests/compile-budget.py). The editor server stays on
+   the defaults because it runs for hours. */
+static void batch_allocator(void) {
+#if defined(__GLIBC__)
+  mallopt(M_MMAP_THRESHOLD, 4 << 20);
+#endif
+}
 int main(int argc, char **argv) {
 #ifdef _WIN32
   _setmode(STDIN_FILENO, _O_BINARY);
@@ -637,6 +654,7 @@ int main(int argc, char **argv) {
     if (!dump_requested) dyn_cli_help(NULL);
     return cli;
   }
+  if (!is_command(&o, "lsp")) batch_allocator();
   /* CLI link inputs borrow argv; discovered libraries are owned suffix entries. Keep cleanup outside execution so every early return follows this path. */
   size_t borrowed_links = o.link_input_count;
   o.explicit_link_input_count = o.link_input_count;

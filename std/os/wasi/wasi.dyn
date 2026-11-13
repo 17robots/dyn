@@ -64,7 +64,7 @@ pub fn arguments(arena: *mem.Arena) Arguments {
   if count == 0 {
     return Arguments{ ok: true }
   }
-  maximum := ~#cast(usize, 0)
+  maximum := #max(usize)
   if count > maximum / #sizeof([]const u8) || count > maximum / #sizeof(*u8) {
     return Arguments{ error: 48 }
   }

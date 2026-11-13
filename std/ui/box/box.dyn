@@ -270,7 +270,7 @@ fn derived(value: u64) u64 {
 }
 
 fn lookup(state: *const State, value: u64) *Box {
-  at := state.buckets[#cast(usize, value % #cast(u64, bucket_count))]
+  at := state.buckets[#cast(usize, value % bucket_count)]
   for at != nil {
     if at.key == value {
       return at
@@ -281,7 +281,7 @@ fn lookup(state: *const State, value: u64) *Box {
 }
 
 fn unlink(state: *State, target: *Box) {
-  slot := &state.buckets[#cast(usize, target.key % #cast(u64, bucket_count))]
+  slot := &state.buckets[#cast(usize, target.key % bucket_count)]
   for slot.* != nil {
     if slot.* == target {
       slot.* = target.hash_next
@@ -340,16 +340,14 @@ pub fn build_key(state: *State, flags: u32, value: u64, text: []const u8) *Box {
     if box != nil {
       state.free = box.hash_next
       box.* = Box{}
-    }
-    else {
+    } else {
       box = mem.push(Box, state.arena)
     }
     box.key = value
-    slot := &state.buckets[#cast(usize, value % #cast(u64, bucket_count))]
+    slot := &state.buckets[#cast(usize, value % bucket_count)]
     box.hash_next = slot.*
     slot.* = box
-  }
-  else if box.touched == state.frame_index {
+  } else if box.touched == state.frame_index {
     // An equal label built twice in one frame, such as two overloads in a
     // list, gets a derived key instead of failing.
     return build_key(state, flags, derived(value), text)
@@ -376,12 +374,7 @@ pub fn build_key(state: *State, flags: u32, value: u64, text: []const u8) *Box {
   if state.depth != 0 {
     owner := top(state)
     box.parent = owner
-    if owner.last == nil {
-      owner.first = box
-    }
-    else {
-      owner.last.next = box
-    }
+    if owner.last == nil { owner.first = box } else { owner.last.next = box }
     owner.last = box
   }
   return box
@@ -413,8 +406,7 @@ fn focus_order(box: *const Box, focused: u64, order: *FocusOrder) {
     if box.key == focused {
       order.before = order.last
       order.seen = true
-    }
-    else if order.seen && order.after == 0 {
+    } else if order.seen && order.after == 0 {
       order.after = box.key
     }
     order.last = box.key
@@ -435,8 +427,7 @@ pub fn begin(state: *State, frame: *mem.Arena, input: Input, width: f32, height:
       if state.focused == 0 {
         state.focused = order.last
       }
-    }
-    else {
+    } else {
       state.focused = order.after
       if state.focused == 0 {
         state.focused = order.first
@@ -512,8 +503,7 @@ pub fn signal(state: *State, box: *Box) Signal {
         result.released = true
         result.clicked = over
         state.active = 0
-      }
-      else if input.down {
+      } else if input.down {
         result.dragging = true
       }
     }
@@ -557,12 +547,10 @@ fn standalone(state: *State, box: *Box, axis: usize) {
   semantic := size_of(box, axis)
   if semantic.kind == SizeKind.Pixels {
     box.size[axis] = semantic.value * state.scale
-  }
-  else if semantic.kind == SizeKind.Text {
+  } else if semantic.kind == SizeKind.Text {
     if axis == 0 {
       box.size[0] = state.measure(state.measure_data, box.text) + 2.0 * semantic.value * state.scale + 2.0 * box.padding[axis]
-    }
-    else {
+    } else {
       box.size[1] = state.line_height + 2.0 * semantic.value * state.scale + 2.0 * box.padding[axis]
     }
   }
@@ -605,10 +593,9 @@ fn downward(box: *Box, axis: usize) {
     child = box.first
     for child != nil {
       if !floating(child, axis) {
-        if #cast(usize, box.axis) == axis {
+        if box.axis == axis {
           total += child.size[axis]
-        }
-        else if child.size[axis] > total {
+        } else if child.size[axis] > total {
           total = child.size[axis]
         }
       }
@@ -625,7 +612,7 @@ fn violations(box: *Box, axis: usize) {
     available = 0.0
   }
   if !scrolls(box, axis) {
-    if #cast(usize, box.axis) == axis {
+    if box.axis == axis {
       total: f32 = 0.0
       slack: f32 = 0.0
       child := box.first
@@ -665,8 +652,7 @@ fn violations(box: *Box, axis: usize) {
           child = child.next
         }
       }
-    }
-    else {
+    } else {
       child := box.first
       for child != nil {
         if !floating(child, axis) && child.size[axis] > available {
@@ -695,13 +681,11 @@ fn positions(box: *Box, axis: usize) {
   for child != nil {
     if floating(child, axis) {
       child.position[axis] = child.floating[axis]
-    }
-    else {
-      if #cast(usize, box.axis) == axis {
+    } else {
+      if box.axis == axis {
         child.position[axis] = cursor
         cursor += child.size[axis]
-      }
-      else {
+      } else {
         child.position[axis] = box.padding[axis]
       }
       if child.position[axis] + child.size[axis] > extent {
@@ -819,10 +803,10 @@ fn animating_box(box: *const Box) bool {
 
 fn mix(a, b: ui.Color, t: f32) ui.Color {
   return ui.Color{
-    r: #cast(u8, #cast(f32, a.r) + (#cast(f32, b.r) - #cast(f32, a.r)) * t),
-    g: #cast(u8, #cast(f32, a.g) + (#cast(f32, b.g) - #cast(f32, a.g)) * t),
-    b: #cast(u8, #cast(f32, a.b) + (#cast(f32, b.b) - #cast(f32, a.b)) * t),
-    a: #cast(u8, #cast(f32, a.a) + (#cast(f32, b.a) - #cast(f32, a.a)) * t),
+    r: #cast(u8, a.r + (#cast(f32, b.r) - #cast(f32, a.r)) * t),
+    g: #cast(u8, a.g + (#cast(f32, b.g) - #cast(f32, a.g)) * t),
+    b: #cast(u8, a.b + (#cast(f32, b.b) - #cast(f32, a.b)) * t),
+    a: #cast(u8, a.a + (#cast(f32, b.a) - #cast(f32, a.a)) * t),
   }
 }
 

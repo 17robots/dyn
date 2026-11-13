@@ -15,6 +15,12 @@ _dyn_panic:
     mov %rsp, %rbp
     push %rdi
     push %rsi
+    # The trace begins at the caller: its return address and frame pointer.
+    mov 8(%rbp), %rdi
+    mov (%rbp), %rsi
+    call _dyn_trace_capture
+    mov -8(%rbp), %rdi
+    mov -16(%rbp), %rsi
     call _dyn_unwind_begin
     pop %rdx
     pop %rsi

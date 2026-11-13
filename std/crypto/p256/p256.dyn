@@ -72,7 +72,7 @@ fn multiply(a: Number, b: Number, modulus: Number) Number {
     i:=255-step
     result=plus(result, result, modulus)
     added:=plus(result, a, modulus)
-    result=choose(result, added, #cast(u64, (b.limbs[i/32]>>#cast(u32, i%32))&1))
+    result=choose(result, added, (b.limbs[i/32]>>#cast(u32, i%32))&1)
   }
   return result
 }
@@ -175,7 +175,7 @@ fn scalar(point: Point, value: Number) Point {
     i:=255-step
     result=double(result)
     added:=point_add(result, point)
-    result=select(result, added, #cast(u64, (value.limbs[i/32]>>#cast(u32, i%32))&1))
+    result=select(result, added, (value.limbs[i/32]>>#cast(u32, i%32))&1)
   }
   return result
 }

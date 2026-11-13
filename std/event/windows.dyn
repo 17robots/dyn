@@ -5,14 +5,10 @@ use "std/io" io
 fn native_open() net.Result {
   return net.Result{}
 }
-fn native_close(handle: isize) Result {
-  _ = handle
+fn native_close(_handle: isize) Result {
   return Result{}
 }
-fn native_control(queue: *Queue, index: usize, entry: Entry) Result {
-  _ = queue
-  _ = index
-  _ = entry
+fn native_control(_queue: *Queue, _index: usize, _entry: Entry) Result {
   return Result{}
 }
 fn native_wait(arena: *mem.Arena, queue: *Queue, timeout: i32) WaitResult {
@@ -34,7 +30,7 @@ fn native_wait(arena: *mem.Arena, queue: *Queue, timeout: i32) WaitResult {
     }
   }
   outcome := net.poll(native, timeout)
-  if outcome.failure.kind != io.Kind.Ok {
+  if io.failed(outcome.failure) {
     return WaitResult{ failure: io.Failure{ kind: outcome.failure.kind, native: outcome.failure.native } }
   }
   events := mem.push_array(Event, arena, #cast(usize, outcome.value))

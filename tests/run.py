@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Standalone compiler regressions; no sibling projects or editor repositories."""
+"""Standalone compiler regressions; no sibling projects or editor repositories.
+
+Tests run in parallel (DYN_TEST_JOBS, default half the CPUs; 1 runs them in
+order). Tests that measure time, drive a desktop session or rebuild shared
+build outputs run alone after the parallel group. DYN_TEST_ONLY=a,b runs only
+the named tests."""
+import concurrent.futures
 import os
 from pathlib import Path
 import subprocess
@@ -8,14 +14,58 @@ import time
 ROOT=Path(__file__).resolve().parents[1]
 BUILD=Path(os.environ.get('BUILD',ROOT/'build')).resolve()
 TIMES=os.environ.get('DYN_TEST_TIMES')
+JOBS=max(1,int(os.environ.get('DYN_TEST_JOBS',max(1,(os.cpu_count() or 2)//2))))
+ONLY={name.strip() for name in os.environ.get('DYN_TEST_ONLY','').split(',') if name.strip()}
+# Run alone: timing budgets, desktop sessions, and tests that rebuild or
+# rewrite shared files under BUILD.
+SERIAL_PREFIXES=('window-','vulkan-','ui-','native-ui','scale-benchmark','performance-','compile-budget',
+                 'inlining-hot-budget','inlining-expressions','ssa-byte-count','unwind-owner','kernels',
+                 'bare-ssa-cases','bare-ssa-panic','no-llvm','vendor-','release-bundle','release-cache',
+                 'benchmark','optimization-benchmark')
+queue=[]
 def run(*command, timeout=300):
+    queue.append(([str(c) for c in command], timeout))
+def label(command):
+    return ' '.join(Path(c).name for c in command[1:3]) if command[0]==sys.executable else Path(command[0]).name
+def serial(command):
+    name=Path(command[1] if command[0]==sys.executable else command[0]).name
+    return name.startswith(SERIAL_PREFIXES)
+def execute(item):
+    command, timeout=item
     started=time.monotonic()
-    subprocess.run(list(map(str,command)),cwd=ROOT,check=True,timeout=timeout)
+    try:
+        result=subprocess.run(command,cwd=ROOT,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=timeout)
+        status, output=result.returncode, result.stdout
+    except subprocess.TimeoutExpired as error:
+        status, output=f'timeout after {timeout}s', error.stdout or b''
+    elapsed=time.monotonic()-started
     if TIMES:
         with open(TIMES,'a') as out:
-            out.write(f'{time.monotonic()-started:.2f} {" ".join(Path(str(c)).name for c in command[1:3])}\n')
+            out.write(f'{elapsed:.2f} {label(command)}\n')
+    return command, status, output, elapsed
+failures=[]
+def report(command, status, output, elapsed):
+    if status==0:
+        print(f'PASS {label(command)} ({elapsed:.1f}s)', flush=True)
+        return
+    failures.append(label(command))
+    sys.stdout.write(output.decode(errors='replace'))
+    print(f'FAIL {label(command)}: {status} ({elapsed:.1f}s)', flush=True)
+def drain(pending):
+    items=[item for item in pending if not ONLY or Path(item[0][1] if item[0][0]==sys.executable else item[0][0]).stem in ONLY]
+    pending.clear()
+    parallel=[item for item in items if JOBS>1 and not serial(item[0])]
+    alone=[item for item in items if JOBS<=1 or serial(item[0])]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=JOBS) as pool:
+        for future in concurrent.futures.as_completed([pool.submit(execute,item) for item in parallel]):
+            report(*future.result())
+    for item in alone:
+        report(*execute(item))
 run(sys.executable, ROOT/'tests/ci-setup.py')
 run(sys.executable, ROOT/'tests/import-sdk-diagnostics.py')
+run(sys.executable, ROOT/'tests/expectations.py')
+run(sys.executable, ROOT/'tests/check-overflow.py')
+run(sys.executable, ROOT/'tests/debug-panics.py')
 run(sys.executable, ROOT/'tests/file-imports.py')
 run(sys.executable, ROOT/'tests/fallible-arena-handles.py')
 run(sys.executable, ROOT/'tests/memory-ergonomics.py')
@@ -48,6 +98,7 @@ run(sys.executable, ROOT/'tests/bool-phi-threading.py')
 run(sys.executable, ROOT/'tests/loop-unswitch.py')
 run(sys.executable, ROOT/'tests/loop-counter-replacement.py')
 run(sys.executable, ROOT/'tests/loop-register-split.py')
+run(sys.executable, ROOT/'tests/loop-carried-phi.py')
 run(sys.executable, ROOT/'tests/slice-sum.py')
 run(sys.executable, ROOT/'tests/float-elements.py')
 run(sys.executable, ROOT/'tests/vet-checks.py')
@@ -86,6 +137,20 @@ run(sys.executable, ROOT/'tests/aggregate-call-destination.py')
 run(sys.executable, ROOT/'tests/ssa-zero-copy.py')
 run(sys.executable, ROOT/'tests/small-zero-fill.py')
 run(sys.executable, ROOT/'tests/arena-zero-fast.py', timeout=420)
+run(sys.executable, ROOT/'tests/arena-push-inline.py')
+run(sys.executable, ROOT/'tests/element-copy.py')
+run(sys.executable, ROOT/'tests/integer-limits.py')
+run(sys.executable, ROOT/'tests/peer-widening.py')
+run(sys.executable, ROOT/'tests/ssa-case-addresses.py')
+run(sys.executable, ROOT/'tests/ssa-aggregate-values.py')
+run(sys.executable, ROOT/'tests/ssa-c-variadic.py')
+run(sys.executable, ROOT/'tests/ssa-codegen-shape.py')
+run(sys.executable, ROOT/'tests/ssa-local-splits.py')
+run(sys.executable, ROOT/'tests/ssa-selects.py')
+run(sys.executable, ROOT/'tests/ssa-early-return.py')
+run(sys.executable, ROOT/'tests/ssa-self-inline.py')
+run(sys.executable, ROOT/'tests/ssa-shard-emission.py')
+run(sys.executable, ROOT/'tests/sema-late-lifetimes.py')
 run(sys.executable, ROOT/'tests/utf8-ascii-fast.py')
 run(sys.executable, ROOT/'tests/json-string-fast.py')
 run(sys.executable, ROOT/'tests/json-parser-loops.py')
@@ -98,6 +163,8 @@ run(sys.executable, ROOT/'tests/simd-byte-search.py')
 run(sys.executable, ROOT/'tests/fs-read-all-fast.py')
 run(sys.executable, ROOT/'tests/arena-resident.py')
 run(sys.executable, ROOT/'tests/function-types.py')
+run(sys.executable, ROOT/'tests/const-fold.py')
+run(sys.executable, ROOT/'tests/ssa-phi-ranges.py')
 run(sys.executable, ROOT/'tests/zero-values.py')
 run(sys.executable, ROOT/'tests/operator-precedence.py')
 run(sys.executable, ROOT/'tests/evaluation-order.py')
@@ -262,9 +329,15 @@ run(sys.executable, ROOT/'tests/owner-warnings.py')
 run(sys.executable, ROOT/'tests/documentation-examples.py')
 for name in ('performance-contracts.py','backend-regressions.py','frontend-audit.py','regex-regressions.py','deflate-regressions.py','library-audit.py','runtime-audit.py','http-fragments.py','unwind-registers.py','unwind-owner.py','shared-unwind-boundaries.py','unwind-tables.py','run-cache.py','chunk-cache.py','pointer-facts.py','generics.py','release-cache.py','net-contracts.py','concurrency-net-host.py','sync-host.py','sync-timeout.py','dns-host.py','watch-contracts.py','windows-sockets.py','parser-contracts.py','vendor-bindings.py','selfhost-readiness.py','aggregate-copy.py','shared-host.py','shared-unwind-hidden.py', 'process-directory.py', 'panic-lifetime.py','compiler-contracts.py','lsp-contracts.py','lifetime-flow.py','semantic-combinations.py','compiler-regressions.py','syntax-diagnostics.py','batch-without-tree-sitter.py','builtin-linker.py','native-zero-fill.py','native-constant-data.py','native-ssa.py','native-differential-harness.py','native-fast-return.py','native-leaf-inline.py','windows-arm64-ssa.py','riscv-ssa-abi.py','native-load-reuse.py','compile-budget.py','native-reachability.py','native-cache.py','macho-relocations.py','native-optimization.py','native-machine-optimization.py','native-assembly.py','native-decode.py','text-output.py','cross-runtime.py','native-memory.py','runtime-support.py','wasm-browser.py','wasm-memory.py','wasm-semantics.py','wasm-assembly.py','wasi.py','wasm-runtime.py','wasm-linker.py','standard-streams.py','stdlib-host.py','readiness-native.py','aggregate-abi.py','native-debugger.py','release-bundle.py'):
     run(sys.executable,ROOT/'tests'/name)
+drain(queue)
 # Exercise real frontend/cache failure seams retained with the compiler.
 artifacts=['cache-failure-test','interface-allocation-test','module-allocation-test','global-allocation-test','source-failure-test','ast-allocation-test','module-rewrite-allocation-test','stack-probe-test','frontend-state-test','frontend-failure-test','analysis-cache-test','codegen-failure-test','project-failure-test','syntax-cache-test','scope-index-test','parser-recovery-test','parser-unit-test','parser-snapshot-test','unwind-capacity-test','build-plan-test','interface-test']
-run(sys.executable,ROOT/'tools/build.py',*artifacts)
-for name in artifacts:
-    run(BUILD/name)
+if not ONLY:
+    report(*execute(([sys.executable,str(ROOT/'tools/build.py'),*artifacts],300)))
+    for name in artifacts:
+        run(BUILD/name)
+    drain(queue)
+if failures:
+    print(f'FAIL {len(failures)} test(s): '+', '.join(failures))
+    raise SystemExit(1)
 print('PASS standalone compiler regression suite')

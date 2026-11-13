@@ -28,11 +28,7 @@ fn carry(a: *Field) {
     a.limbs[i] += 65536
     c := a.limbs[i] >> 16
     a.limbs[i] -= c * 65536
-    if i < 15 {
-      a.limbs[i+1] += c - 1
-    } else {
-      a.limbs[0] += 38 * (c - 1)
-    }
+    if i < 15 { a.limbs[i+1] += c - 1 } else { a.limbs[0] += 38 * (c - 1) }
   }
 }
 pub fn select(a: *Field, b: *Field, bit: i64) {
@@ -123,12 +119,12 @@ pub fn equal(a: Field, b: Field) bool {
   encode(right[..], b)
   difference: u32
   for i in 0..32 {
-    difference |= #cast(u32, left[i]^right[i])
+    difference |= left[i]^right[i]
   }
   return difference == 0
 }
 pub fn parity(a: Field) i64 {
   encoded: [32]u8
   encode(encoded[..], a)
-  return #cast(i64, encoded[0]&1)
+  return encoded[0]&1
 }

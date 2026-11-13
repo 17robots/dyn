@@ -112,7 +112,7 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Result {
   }
   palette_count: usize = 0
   if bits <= 8 {
-    palette_count = #cast(usize, le32(source, 46))
+    palette_count = le32(source, 46)
     maximum := #cast(usize, 1) << bits
     if palette_count == 0 {
       palette_count = maximum
@@ -125,11 +125,11 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Result {
     return Result{ offset: 10, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: 10 } }
   }
   row := #cast(usize, ((#cast(u64, width) * #cast(u64, bits) + 31) / 32 * 4))
-  if #cast(usize, height) > (#len(source) - pixel_at) / row {
+  if height > (#len(source) - pixel_at) / row {
     return Result{ offset: pixel_at, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: pixel_at } }
   }
   declared := #cast(usize, le32(source, 2))
-  if declared != 0 && (declared > #len(source) || declared < pixel_at + row * #cast(usize, height)) {
+  if declared != 0 && (declared > #len(source) || declared < pixel_at + row * height) {
     return Result{ offset: 2, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: 2 } }
   }
   mark := mem.arena_mark(arena)
@@ -147,20 +147,18 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Result {
     }
     start := pixel_at + sy * row
     for x in 0..#cast(usize, width) {
-      at := (y * #cast(usize, width) + x) * 4
+      at := (y * width + x) * 4
       if bits <= 8 {
         index: usize = 0
         if bits == 8 {
-          index = #cast(usize, source[start + x])
-        }
-        else if bits == 4 {
-          index = #cast(usize, (source[start + x / 2] >> ((1 - x % 2) * 4)) & 15)
-        }
-        else {
-          index = #cast(usize, (source[start + x / 8] >> (7 - x % 8)) & 1)
+          index = source[start + x]
+        } else if bits == 4 {
+          index = (source[start + x / 2] >> ((1 - x % 2) * 4)) & 15
+        } else {
+          index = (source[start + x / 8] >> (7 - x % 8)) & 1
         }
         if index >= palette_count {
-          return Result{ offset: start + x * #cast(usize, bits) / 8, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: start + x * #cast(usize, bits) / 8 } }
+          return Result{ offset: start + x * bits / 8, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: start + x * bits / 8 } }
         }
         p := header_end + index * 4
         pixels[at] = source[p + 2]
@@ -176,9 +174,8 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Result {
       } else {
         value: u32 = 0
         if bits == 16 {
-          value = #cast(u32, le16(source, start + x * 2))
-        }
-        else {
+          value = le16(source, start + x * 2)
+        } else {
           value = le32(source, start + x * 4)
         }
         pixels[at] = component(value, masks[0], 0)
@@ -212,7 +209,7 @@ pub fn encode(arena: *mem.Arena, pixels: []const u8, width, height: u32, channel
     dib = 108
   }
   row := (#cast(usize, width) * #cast(usize, channels) + 3) & ~#cast(usize, 3)
-  size := header + row * #cast(usize, height)
+  size := header + row * height
   output := mem.push_array(u8, arena, size)
   output[0] = 66
   output[1] = 77
@@ -223,7 +220,7 @@ pub fn encode(arena: *mem.Arena, pixels: []const u8, width, height: u32, channel
   binary.store_u32_le(output[22..], height)
   binary.store_u16_le(output[26..], 1)
   binary.store_u16_le(output[28..], #cast(u16, channels) * 8)
-  binary.store_u32_le(output[34..], #cast(u32, (row * #cast(usize, height))))
+  binary.store_u32_le(output[34..], #cast(u32, (row * height)))
   if channels == 4 {
     binary.store_u32_le(output[30..], 3)
     binary.store_u32_le(output[54..], 0xff0000)
@@ -234,8 +231,8 @@ pub fn encode(arena: *mem.Arena, pixels: []const u8, width, height: u32, channel
   }
   for y in 0..#cast(usize, height) {
     for x in 0..#cast(usize, width) {
-      src := (y * #cast(usize, width) + x) * #cast(usize, channels)
-      dst := header + (#cast(usize, height) - 1 - y) * row + x * #cast(usize, channels)
+      src := (y * width + x) * channels
+      dst := header + (#cast(usize, height) - 1 - y) * row + x * channels
       output[dst] = pixels[src + 2]
       output[dst + 1] = pixels[src + 1]
       output[dst + 2] = pixels[src]

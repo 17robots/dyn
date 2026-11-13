@@ -194,15 +194,14 @@ fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, co
     source: rawptr = nil
     if sources[index] == -1 {
       source = win_std(4294967286 - #cast(u32, index))
-    }
-    else {
+    } else {
       source = handle(sources[index])
     }
     duplicate: rawptr = nil
     if source != nil && #cast(usize, source) != 18446744073709551615 {
       if win_duplicate(win_current(), source, win_current(), &duplicate, 0, 1, 2) == 0 {
         duplicate_error := win_failure()
-        return SpawnResult{ failure: io.Failure{ kind: io.windows(duplicate_error), native: duplicate_error } }
+        return SpawnResult{ failure: io.windows_failure(duplicate_error) }
       }
       handles[inherited_count] = duplicate
       inherited_count += 1
@@ -221,12 +220,12 @@ fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, co
   startup.attributes = attributes
   if win_init_attributes(startup.attributes, 1, 0, &size) == 0 {
     initialize_error := win_failure()
-    return SpawnResult{ failure: io.Failure{ kind: io.windows(initialize_error), native: initialize_error } }
+    return SpawnResult{ failure: io.windows_failure(initialize_error) }
   }
   defer win_delete_attributes(startup.attributes)
   if inherited_count > 0 && win_update_attributes(startup.attributes, 0, 131074, &handles[0], inherited_count*#sizeof(rawptr), nil, nil) == 0 {
     attribute_error := win_failure()
-    return SpawnResult{ failure: io.Failure{ kind: io.windows(attribute_error), native: attribute_error } }
+    return SpawnResult{ failure: io.windows_failure(attribute_error) }
   }
   information := ProcessInformation{}
   inherit: i32 = 0
@@ -235,7 +234,7 @@ fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, co
   }
   if win_create(&application.data[0], &command[0], nil, nil, inherit, 525312, &environment[0], directory, &startup, &information) == 0 {
     create_error := win_failure()
-    return SpawnResult{ failure: io.Failure{ kind: io.windows(create_error), native: create_error } }
+    return SpawnResult{ failure: io.windows_failure(create_error) }
   }
   _ = win_close(information.thread)
   return SpawnResult{ value: Child{ handle: #cast(isize, #cast(usize, information.process)), active: true } }
@@ -251,12 +250,12 @@ fn wait_native(child: *Child, nonblocking: bool) ExitResult {
   }
   if value != 0 {
     wait_error := win_failure()
-    return ExitResult{ failure: io.Failure{ kind: io.windows(wait_error), native: wait_error } }
+    return ExitResult{ failure: io.windows_failure(wait_error) }
   }
   code: u32 = 0
   if win_exit_code(handle(child.handle), &code) == 0 {
     exit_error := win_failure()
-    return ExitResult{ failure: io.Failure{ kind: io.windows(exit_error), native: exit_error } }
+    return ExitResult{ failure: io.windows_failure(exit_error) }
   }
   _ = win_close(handle(child.handle))
   child.active = false
@@ -265,14 +264,14 @@ fn wait_native(child: *Child, nonblocking: bool) ExitResult {
 fn terminate_native(child: *Child) Status {
   if win_terminate(handle(child.handle), 1) == 0 {
     terminate_error := win_failure()
-    return Status{ failure: io.Failure{ kind: io.windows(terminate_error), native: terminate_error } }
+    return Status{ failure: io.windows_failure(terminate_error) }
   }
   return Status{}
 }
 fn close_native(value: isize) Status {
   if win_close(handle(value)) == 0 {
     close_error := win_failure()
-    return Status{ failure: io.Failure{ kind: io.windows(close_error), native: close_error } }
+    return Status{ failure: io.windows_failure(close_error) }
   }
   return Status{}
 }
@@ -281,7 +280,7 @@ fn pipe_native() Pipe {
   output: rawptr = nil
   if win_pipe(&input, &output, nil, 0) == 0 {
     pipe_error := win_failure()
-    return Pipe{ failure: io.Failure{ kind: io.windows(pipe_error), native: pipe_error } }
+    return Pipe{ failure: io.windows_failure(pipe_error) }
   }
   return Pipe{ input: #cast(isize, #cast(usize, input)), output: #cast(isize, #cast(usize, output)) }
 }
@@ -306,7 +305,7 @@ fn read_native(value: isize, destination: []u8) ReadResult {
     read_error := win_failure()
     return ReadResult{ error: read_error, kind: io.windows(read_error) }
   }
-  return ReadResult{ count: #cast(usize, read), ok: true }
+  return ReadResult{ count: read, ok: true }
 }
 fn milliseconds_native() MillisecondsResult {
   return MillisecondsResult{value: win_ticks(), ok: true}
@@ -328,7 +327,7 @@ fn environment_native(name: []const u8, destination: []u8) EnvironmentResult {
       return EnvironmentResult{ value: destination[..0] }
     }
     if error != 0 {
-      return EnvironmentResult{ failure: io.Failure{ kind: io.windows(0 - #cast(isize, error)), native: 0 - #cast(isize, error) } }
+      return EnvironmentResult{ failure: io.windows_failure(0 - #cast(isize, error)) }
     }
   }
   if length >= 32768 {
@@ -336,8 +335,8 @@ fn environment_native(name: []const u8, destination: []u8) EnvironmentResult {
   }
   at: usize = 0
   used: usize = 0
-  for at < #cast(usize, length) {
-    decoded := utf16.decode(value[..#cast(usize, length)], at)
+  for at < length {
+    decoded := utf16.decode(value[..length], at)
     if !decoded.valid {
       return EnvironmentResult{ failure: io.Failure{ kind: io.Kind.InvalidInput, native: -22 } }
     }

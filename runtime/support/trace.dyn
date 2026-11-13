@@ -1,86 +1,232 @@
-struct Frame { name: *const u8, length: u64 }
-struct TraceSlot { tid: u64, count: u64, frames: [64]Frame }
-// Debug builds trace calls; release builds never call trace_push, so they
-// reserve nothing. Chunks come from the platform on first use and are reused.
-struct TraceChunk { next: u64, slots: [trace_chunk_slots]TraceSlot }
-trace_first: u64
-fn trace_chunk(address: u64) *TraceChunk {
-  return #cast(*TraceChunk, #cast(usize, address))
+// Debug stack traces walk frame pointers; nothing runs per call. main passes
+// dyn_trace_start the header the compiler wrote, {first traced function,
+// table}. The table (trace_table_write in src/backend/driver.c) is u32
+// words: magic "DYNT", version 1, flags (1: Thumb code addresses), the
+// offsets from a frame pointer of the caller's frame pointer and of the
+// return address, the first function's .text offset, .text size, function
+// count, row count, name bytes; then per function {start, end, first row,
+// row count, name offset, name length}, rows {pc, line} and the names, each
+// "function (path:". A row's line holds from its pc to the next row.
+//
+// A panic walks the frames when it begins, before cleanups unwind them, into
+// the thread's unwind slot, and the report at exit prints them. A memory
+// fault walks from the faulting instruction and prints right away.
+const trace_frames: usize = 64
+// The innermost frames kept; past them the last ones are kept in a ring.
+const trace_inner: usize = 48
+trace_header: usize
+pub fn dyn_trace_start(header: usize) {
+  trace_header = header
+  trace_thread_started()
 }
-fn trace_grow() bool {
-  fresh := runtime_pages(#cast(u64, #sizeof(TraceChunk)))
-  if fresh == 0 {
-    return false
+// A new thread of a debug program, on Linux: its own stack for fault reports.
+pub fn dyn_trace_thread() {
+  if trace_header != 0 {
+    trace_thread_started()
   }
-  link := &trace_first
-  for true {
-    if atomic_claim(link, 0, fresh) {
-      return true
+}
+fn trace_word(at: usize) usize {
+  return #cast(*const usize, at).*
+}
+fn trace_u32(at: usize) u32 {
+  return #cast(*const u32, at).*
+}
+// The table, or 0 before dyn_trace_start or in release builds.
+fn trace_table() usize {
+  if trace_header == 0 {
+    return 0
+  }
+  table := trace_word(trace_header + #sizeof(usize))
+  if table == 0 || trace_u32(table) != 0x544e5944 || trace_u32(table + 4) != 1 {
+    return 0
+  }
+  return table
+}
+// A code address without the Thumb bit.
+fn trace_code(table: usize, address: usize) usize {
+  if (trace_u32(table + 8) & 1) != 0 {
+    return address & ~#cast(usize, 1)
+  }
+  return address
+}
+fn trace_offset(table: usize, address: usize) usize {
+  text := trace_code(table, trace_word(trace_header)) - trace_u32(table + 20)
+  code := trace_code(table, address)
+  if code < text {
+    return #max(usize)
+  }
+  return code - text
+}
+// The function record holding address, or 0.
+fn trace_function(table: usize, address: usize) usize {
+  offset := trace_offset(table, address)
+  if offset >= trace_u32(table + 24) {
+    return 0
+  }
+  low: usize = 0
+  high := #cast(usize, trace_u32(table + 28))
+  for low < high {
+    middle := (low + high) / 2
+    record := table + 40 + 24 * middle
+    if offset < trace_u32(record) {
+      high = middle
+    } else if offset >= trace_u32(record + 4) {
+      low = middle + 1
+    } else {
+      return record
     }
-    link = &trace_chunk(atomic_load(link)).next
   }
-  return false
+  return 0
 }
-fn trace_slot(id: u64, claim: bool) *TraceSlot {
-  for true {
-    chunk := atomic_load(&trace_first)
-    for chunk != 0 {
-      for i in 0..trace_chunk_slots {
-        slot := &trace_chunk(chunk).slots[i]
-        seen := atomic_load(&slot.tid)
-        if seen == id {
-          return slot
-        }
-        if claim && seen == 0 && atomic_claim(&slot.tid, 0, id) {
-          trace_thread_started()
-          return slot
-        }
+fn trace_line(table: usize, record: usize, address: usize) u32 {
+  offset := trace_offset(table, address)
+  rows := table + 40 + 24 * #cast(usize, trace_u32(table + 28))
+  first := #cast(usize, trace_u32(record + 8))
+  line: u32 = 0
+  for i in 0..#cast(usize, trace_u32(record + 12)) {
+    row := rows + 8 * (first + i)
+    if trace_u32(row) > offset {
+      break
+    }
+    line = trace_u32(row + 4)
+  }
+  return line
+}
+// Walks frames into frames, innermost first: the first trace_inner, then the
+// last ones in a ring. Returns how many frames the stack held. pc is the
+// faulting instruction when exact, else a return address; frames of the
+// runtime itself come first and are skipped, and the first frame after the
+// traced ones, such as the start routine, ends the walk.
+fn trace_walk(pc: usize, fp: usize, exact: bool, frames: []usize) u64 {
+  table := trace_table()
+  if table == 0 {
+    return 0
+  }
+  previous_offset := #cast(usize, trace_u32(table + 12))
+  return_offset := #cast(usize, trace_u32(table + 16))
+  total: u64 = 0
+  skipped: u64 = 0
+  address := trace_code(table, pc)
+  if !exact && address != 0 {
+    address -= 1
+  }
+  frame := fp
+  for _ in 0..1000000 {
+    if address != 0 && trace_function(table, address) != 0 {
+      index := #cast(usize, total)
+      if index >= trace_inner {
+        index = trace_inner + (index - trace_inner) % (trace_frames - trace_inner)
       }
-      chunk = atomic_load(&trace_chunk(chunk).next)
+      frames[index] = address
+      total += 1
+    } else if total != 0 || skipped == 8 {
+      return total
+    } else {
+      skipped += 1
     }
-    if !claim || !trace_grow() {
-      return nil
+    if frame == 0 || frame % #sizeof(usize) != 0 {
+      return total
     }
+    // Callers' frames sit at higher addresses.
+    previous := trace_word(frame + previous_offset)
+    address = trace_code(table, trace_word(frame + return_offset)) - 1
+    if previous <= frame {
+      return total
+    }
+    frame = previous
   }
-  return nil
-}
-fn trace_push(name: *const u8, length: u64) {
-  slot := trace_slot(thread_id(), true)
-  if slot != nil {
-    if slot.count < 64 {
-      slot.frames[slot.count].name = name
-      slot.frames[slot.count].length = length
-    }
-    slot.count += 1
-  }
-}
-fn trace_pop() {
-  slot := trace_slot(thread_id(), false)
-  if slot != nil && slot.count != 0 {
-    slot.count -= 1
-    if slot.count == 0 {
-      atomic_store(&slot.tid, 0)
-    }
-  }
+  return total
 }
 fn write_string(text: []const u8) {
-  trace_write(&text[0], #cast(u64, #len(text)))
+  trace_write(&text[0], #len(text))
 }
-fn trace_dump() {
-  slot := trace_slot(thread_id(), false)
-  if slot == nil || slot.count == 0 {
+// "  at function (path:line)".
+fn trace_frame(table: usize, address: usize) {
+  record := trace_function(table, address)
+  if record == 0 {
+    return
+  }
+  names := table + 40 + 24 * #cast(usize, trace_u32(table + 28)) + 8 * #cast(usize, trace_u32(table + 32))
+  write_string("  at ")
+  trace_write(#cast(*const u8, names + trace_u32(record + 16)), trace_u32(record + 20))
+  digits: [10]u8 = []
+  at: usize = 10
+  value := trace_line(table, record, address)
+  for true {
+    at -= 1
+    digits[at] = #cast(u8, value % 10) + '0'
+    value /= 10
+    if value == 0 {
+      break
+    }
+  }
+  trace_write(&digits[at], 10 - at)
+  write_string(")\n")
+}
+fn trace_print(frames: []usize, total: u64) {
+  table := trace_table()
+  if table == 0 || total == 0 {
     return
   }
   write_string("stack trace:\n")
-  count := slot.count
-  if count > 64 {
-    count = 64
+  inner := #cast(usize, total)
+  if inner > trace_inner {
+    inner = trace_inner
   }
-  for count != 0 {
-    count -= 1
-    frame := &slot.frames[count]
-    write_string("  at ")
-    trace_write(frame.name, frame.length)
-    write_string("\n")
+  for i in 0..inner {
+    trace_frame(table, frames[i])
   }
+  if total <= trace_inner {
+    return
+  }
+  ring := trace_frames - trace_inner
+  rest := #cast(usize, total) - trace_inner
+  start: usize = 0
+  if rest > ring {
+    start = rest - ring
+    write_string("  ... ")
+    digits: [20]u8 = []
+    at: usize = 20
+    value := start
+    for true {
+      at -= 1
+      digits[at] = #cast(u8, value % 10) + '0'
+      value /= 10
+      if value == 0 {
+        break
+      }
+    }
+    trace_write(&digits[at], 20 - at)
+    write_string(" more frames\n")
+  }
+  for k in start..rest {
+    trace_frame(table, frames[trace_inner + k % ring])
+  }
+}
+// dyn_panic, as a panic begins: pc is the return address dyn_panic was called
+// with and fp the caller's frame pointer. A panic raised again at the end of
+// unwinding keeps the trace of the first.
+pub fn dyn_trace_capture(pc: usize, fp: usize) {
+  if trace_table() == 0 {
+    return
+  }
+  slot := unwind_slot(true)
+  if slot == nil || slot.unwinding != 0 {
+    return
+  }
+  slot.trace_total = trace_walk(pc, fp, false, slot.trace[..])
+}
+pub fn dyn_trace_dump() {
+  if trace_table() == 0 {
+    return
+  }
+  slot := unwind_slot(false)
+  if slot != nil {
+    trace_print(slot.trace[..], slot.trace_total)
+  }
+}
+// A memory fault at pc, with fp the frame pointer of its function.
+fn trace_fault(pc: usize, fp: usize) {
+  frames: [trace_frames]usize = []
+  trace_print(frames[..], trace_walk(pc, fp, true, frames[..]))
 }

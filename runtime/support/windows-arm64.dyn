@@ -1,0 +1,9 @@
+#target(kernel: windows, arch: aarch64)
+// The faulting instruction and frame pointer in an ARM64 CONTEXT: flags and
+// cpsr, x0-x28, then fp, lr, sp and pc.
+fn fault_pc(context: usize) usize {
+  return #cast(*const usize, context + 264).*
+}
+fn fault_fp(context: usize) usize {
+  return #cast(*const usize, context + 240).*
+}

@@ -77,7 +77,7 @@ fn failures() {
   require(mem.arena_mark(arena) == mark)
   builder.clear(&state)
   require(builder.append(&state, "wxyz") == builder.ErrorKind.None)
-  huge := #slice(&backing[0], ~#cast(usize, 0))
+  huge := #slice(&backing[0], #max(usize))
   require(builder.append_grow(&state, arena, huge) == builder.ErrorKind.Overflow)
   require(mem.arena_mark(arena) == mark && state.length == 4 && bytes.equal(backing[..], "wxyz"))
   builder.clear(&state)

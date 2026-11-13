@@ -35,24 +35,14 @@ fn finite(value: f64) bool {
 fn append(output: *Output, glyph: Glyph) {
   node:=mem.push(GlyphNode, output.arena)
   node.value=glyph
-  if output.last==nil {
-    output.first=node
-  }
-  else {
-    output.last.next=node
-  }
+  if output.last==nil { output.first=node } else { output.last.next=node }
   output.last=node
   output.glyph_count+=1
 }
 fn line_append(output: *Output, line: Line) {
   node:=mem.push(LineNode, output.arena)
   node.value=line
-  if output.tail==nil {
-    output.lines=node
-  }
-  else {
-    output.tail.next=node
-  }
+  if output.tail==nil { output.lines=node } else { output.tail.next=node }
   output.tail=node
   output.line_count+=1
   if line.width>output.width {
@@ -125,7 +115,7 @@ fn shape(arena:*mem.Arena, api:*const hb.Api, text:[]const u8, clusters:[]Cluste
       }
       run.glyphs=shaped.value
       for g in shaped.value {
-        if #cast(usize, g.cluster)<item_offset {
+        if g.cluster<item_offset {
           return Span{kind:io.Kind.InvalidInput}
         }
       }
@@ -136,7 +126,7 @@ fn shape(arena:*mem.Arena, api:*const hb.Api, text:[]const u8, clusters:[]Cluste
       i:usize=0
       previous:=run.end
       for i<#len(run.glyphs) {
-        source:=run.start+#cast(usize, run.glyphs[i].cluster)
+        source:=run.start+run.glyphs[i].cluster
         if source<run.start || source>=run.end || !utf8.decode(text, source).valid {
           return Span{kind:io.Kind.InvalidInput}
         }
@@ -151,9 +141,8 @@ fn shape(arena:*mem.Arena, api:*const hb.Api, text:[]const u8, clusters:[]Cluste
         end:=run.end
         if (run.level&1)!=0 {
           end=previous
-        }
-        else if next<#len(run.glyphs) {
-          end=run.start+#cast(usize, run.glyphs[next].cluster)
+        } else if next<#len(run.glyphs) {
+          end=run.start+run.glyphs[next].cluster
         }
         if end<=source || end>run.end || advance<0.0 || !finite(advance) || unit_count>=#len(units) {
           return Span{kind:io.Kind.InvalidInput}
@@ -219,12 +208,7 @@ fn cluster_index(clusters:[]Cluster, offset:usize) usize {
   high:=#len(clusters)
   for low<high {
     mid:=low+(high-low)/2
-    if clusters[mid].start<offset {
-      low=mid+1
-    }
-    else {
-      high=mid
-    }
+    if clusters[mid].start<offset { low=mid+1 } else { high=mid }
   }
   return low
 }
@@ -233,12 +217,7 @@ fn scalar_index(paragraph:*const bidi.Paragraph, offset:usize) usize {
   high:=#len(paragraph.starts)
   for low<high {
     mid:=low+(high-low)/2
-    if paragraph.starts[mid]<offset {
-      low=mid+1
-    }
-    else {
-      high=mid
-    }
+    if paragraph.starts[mid]<offset { low=mid+1 } else { high=mid }
   }
   return low
 }
@@ -261,17 +240,12 @@ fn emit(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[]cons
   seen:=mem.push_array(u8, work, #len(span.runs))
   count:usize=0
   for scalar in reordered.value.visual_to_logical {
-    byte:=paragraph.starts[#cast(usize, scalar)]
+    byte:=paragraph.starts[scalar]
     low:usize=0
     high:=#len(span.runs)
     for low<high {
       mid:=low+(high-low)/2
-      if span.runs[mid].end<=byte {
-        low=mid+1
-      }
-      else {
-        high=mid
-      }
+      if span.runs[mid].end<=byte { low=mid+1 } else { high=mid }
     }
     if low<#len(span.runs) && seen[low]==0 && byte>=span.runs[low].start {
       order[count]=low
@@ -296,7 +270,7 @@ fn emit(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[]cons
     previous:=run.end
     i:usize=0
     for i<#len(run.glyphs) {
-      source:=run.start+#cast(usize, run.glyphs[i].cluster)
+      source:=run.start+run.glyphs[i].cluster
       next:=i+1
       for next<#len(run.glyphs) && run.glyphs[next].cluster==run.glyphs[i].cluster {
         next+=1
@@ -304,20 +278,14 @@ fn emit(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[]cons
       cluster_end:=run.end
       if (run.level&1)!=0 {
         cluster_end=previous
-      }
-      else if next<#len(run.glyphs) {
-        cluster_end=run.start+#cast(usize, run.glyphs[next].cluster)
+      } else if next<#len(run.glyphs) {
+        cluster_end=run.start+run.glyphs[next].cluster
       }
       low:usize=0
       high:=#len(span.units)
       for low<high {
         mid:=low+(high-low)/2
-        if span.units[mid].start<=source {
-          low=mid+1
-        }
-        else {
-          high=mid
-        }
+        if span.units[mid].start<=source { low=mid+1 } else { high=mid }
       }
       snapped_start:=source
       snapped_end:=cluster_end
@@ -382,8 +350,7 @@ fn paragraph(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[
   for i in 0..used {
     if !neutral(clusters[i].script) {
       previous=clusters[i].script
-    }
-    else if previous!=0 {
+    } else if previous!=0 {
       clusters[i].script=previous
     }
   }
@@ -393,8 +360,7 @@ fn paragraph(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[
     i-=1
     if !neutral(clusters[i].script) {
       next_script=clusters[i].script
-    }
-    else if next_script!=0 {
+    } else if next_script!=0 {
       clusters[i].script=next_script
     }
   }
@@ -432,7 +398,7 @@ fn paragraph(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[
       at:=u
       for at<#len(measured.units) {
         width:=advance(measured.units[at], x, tab)
-        if at>u && x+width>#cast(f64, options.width) {
+        if at>u && x+width>options.width {
           break
         }
         x+=width
@@ -460,7 +426,7 @@ fn paragraph(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[
         return kind
       }
       line:=temporary.tail.value
-      if !options.no_wrap && options.width>0 && line.width>#cast(f64, options.width) && end>u+1 {
+      if !options.no_wrap && options.width>0 && line.width>options.width && end>u+1 {
         end-=1
         continue
       }
@@ -585,7 +551,7 @@ fn hit(layout:*const Layout, line_index, offset:usize) Hit {
       x=left
     }
   }
-  return Hit{start:offset, end:offset, line:line_index, x:x, y:line.y, height:#cast(f64, layout.line_height), rtl:rtl, ok:true}
+  return Hit{start:offset, end:offset, line:line_index, x:x, y:line.y, height:layout.line_height, rtl:rtl, ok:true}
 }
 
 pub fn cluster_at(layout:*const Layout, offset:usize) Hit {
@@ -611,7 +577,7 @@ pub fn cluster_at(layout:*const Layout, offset:usize) Hit {
           right=math.max(right, other.x+other.advance)
         }
       }
-      return Hit{start:glyph.start, end:glyph.end, line:line_index, x:left, y:line.y, width:right-left, height:#cast(f64, layout.line_height), rtl:glyph.rtl, ok:true}
+      return Hit{start:glyph.start, end:glyph.end, line:line_index, x:left, y:line.y, width:right-left, height:layout.line_height, rtl:glyph.rtl, ok:true}
     }
   }
   return hit(layout, line_index, offset)
@@ -622,7 +588,7 @@ pub fn at_point(layout:*const Layout, x, y:f64) Hit {
   }
   line_index:usize=0
   if y>0.0 {
-    line_index=#cast(usize, math.floor64(y/#cast(f64, layout.line_height)))
+    line_index=#cast(usize, math.floor64(y/layout.line_height))
   }
   if line_index>=#len(layout.lines) {
     return cluster_at(layout, #len(layout.text))
@@ -637,7 +603,7 @@ pub fn at_point(layout:*const Layout, x, y:f64) Hit {
     if first.rtl {
       offset=first.end
     }
-    return Hit{start:offset, end:offset, line:line_index, x:first.x, y:line.y, height:#cast(f64, layout.line_height), rtl:first.rtl, ok:true}
+    return Hit{start:offset, end:offset, line:line_index, x:first.x, y:line.y, height:layout.line_height, rtl:first.rtl, ok:true}
   }
   i:=line.glyph_start
   for i<line.glyph_start+line.glyph_count {
@@ -652,7 +618,7 @@ pub fn at_point(layout:*const Layout, x, y:f64) Hit {
       next+=1
     }
     if x<right {
-      return Hit{start:glyph.start, end:glyph.end, line:line_index, x:left, y:line.y, width:right-left, height:#cast(f64, layout.line_height), rtl:glyph.rtl, ok:true}
+      return Hit{start:glyph.start, end:glyph.end, line:line_index, x:left, y:line.y, width:right-left, height:layout.line_height, rtl:glyph.rtl, ok:true}
     }
     i=next
   }
@@ -661,7 +627,7 @@ pub fn at_point(layout:*const Layout, x, y:f64) Hit {
   if last.rtl {
     offset=last.start
   }
-  return Hit{start:offset, end:offset, line:line_index, x:line.width, y:line.y, height:#cast(f64, layout.line_height), rtl:last.rtl, ok:true}
+  return Hit{start:offset, end:offset, line:line_index, x:line.width, y:line.y, height:layout.line_height, rtl:last.rtl, ok:true}
 }
 
 // Visual cells touched by a logical source selection. start/end are the source
@@ -711,17 +677,15 @@ fn selection_walk(layout: *const Layout, start, end: usize, destination: []Selec
             if glyph.end>pending.end {
               pending.end=glyph.end
             }
-          }
-          else {
+          } else {
             if active {
               selection_store(destination, count, pending)
               count+=1
             }
-            pending=SelectionRect{line:line_index, start:glyph.start, end:glyph.end, x:left, y:line.y, width:right-left, height:#cast(f64, layout.line_height)}
+            pending=SelectionRect{line:line_index, start:glyph.start, end:glyph.end, x:left, y:line.y, width:right-left, height:layout.line_height}
             active=true
           }
-        }
-        else if active {
+        } else if active {
           selection_store(destination, count, pending)
           count+=1
           active=false
@@ -754,7 +718,7 @@ pub fn selection(arena: *mem.Arena, layout: *const Layout, start, end: usize) Se
   }
   used: usize=0
   for line in layout.lines {
-    if line.start>line.end || line.end>#len(layout.text) || line.glyph_start!=used || line.glyph_count>#len(layout.glyphs)-used || !selection_boundary(layout.text, line.start) || !selection_boundary(layout.text, line.end) || !finite(line.y) || !finite(line.y+#cast(f64, layout.line_height)) {
+    if line.start>line.end || line.end>#len(layout.text) || line.glyph_start!=used || line.glyph_count>#len(layout.glyphs)-used || !selection_boundary(layout.text, line.start) || !selection_boundary(layout.text, line.end) || !finite(line.y) || !finite(line.y+layout.line_height) {
       return SelectionResult{kind:io.Kind.InvalidInput}
     }
     used+=line.glyph_count
@@ -769,7 +733,7 @@ pub fn selection(arena: *mem.Arena, layout: *const Layout, start, end: usize) Se
   }
   empty: [0]SelectionRect=[]
   count:=selection_walk(layout, start, end, empty[..])
-  if count>~#cast(usize, 0)/#sizeof(SelectionRect) {
+  if count>#max(usize)/#sizeof(SelectionRect) {
     return SelectionResult{kind:io.Kind.Overflow}
   }
   if count==0 {

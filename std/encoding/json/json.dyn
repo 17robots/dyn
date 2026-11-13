@@ -62,40 +62,30 @@ pub fn token_next(state: *Tokenizer) Token {
   if byte == '{' {
     kind = TokenKind.ObjectBegin
     cursor.at += 1
-  }
-  else if byte == '}' {
+  } else if byte == '}' {
     kind = TokenKind.ObjectEnd
     cursor.at += 1
-  }
-  else if byte == '[' {
+  } else if byte == '[' {
     kind = TokenKind.ArrayBegin
     cursor.at += 1
-  }
-  else if byte == ']' {
+  } else if byte == ']' {
     kind = TokenKind.ArrayEnd
     cursor.at += 1
-  }
-  else if byte == ':' {
+  } else if byte == ':' {
     kind = TokenKind.Colon
     cursor.at += 1
-  }
-  else if byte == ',' {
+  } else if byte == ',' {
     kind = TokenKind.Comma
     cursor.at += 1
-  }
-  else if byte == '"' && string(&cursor) {
+  } else if byte == '"' && string(&cursor) {
     kind = TokenKind.String
-  }
-  else if byte == 'n' && literal(&cursor, "null") {
+  } else if byte == 'n' && literal(&cursor, "null") {
     kind = TokenKind.Null
-  }
-  else if byte == 't' && literal(&cursor, "true") {
+  } else if byte == 't' && literal(&cursor, "true") {
     kind = TokenKind.Bool
-  }
-  else if byte == 'f' && literal(&cursor, "false") {
+  } else if byte == 'f' && literal(&cursor, "false") {
     kind = TokenKind.Bool
-  }
-  else if number(&cursor) {
+  } else if number(&cursor) {
     kind = TokenKind.Number
   }
   if kind == TokenKind.Invalid {
@@ -113,12 +103,7 @@ fn node(arena: *memory.Arena, kind: u8) *Value {
 
 fn append(parent: *Value, child: *Value) {
   child.parent = parent
-  if parent.first == nil {
-    parent.first = child
-  }
-  else {
-    parent.last.next = child
-  }
+  if parent.first == nil { parent.first = child } else { parent.last.next = child }
   parent.last = child
 }
 
@@ -134,7 +119,7 @@ fn hex(byte: u8) bool {
 
 fn hex_value(byte: u8) usize {
   if byte >= '0' && byte <= '9' {
-    return #cast(usize, (byte - '0'))
+    return (byte - '0')
   }
   if byte >= 'a' && byte <= 'f' {
     return #cast(usize, (byte - 'a')) + 10
@@ -227,8 +212,7 @@ fn number(cursor: *Cursor) bool {
   }
   if cursor.source[cursor.at] == '0' {
     cursor.at += 1
-  }
-  else {
+  } else {
     if cursor.source[cursor.at] < '1' || cursor.source[cursor.at] > '9' {
       return false
     }
@@ -370,23 +354,17 @@ fn write_string_into(destination: []u8, source: []const u8) []u8 {
     escaped: u8 = 0
     if byte == '"' {
       escaped = '"'
-    }
-    else if byte == '\\' {
+    } else if byte == '\\' {
       escaped = '\\'
-    }
-    else if byte == '\n' {
+    } else if byte == '\n' {
       escaped = 'n'
-    }
-    else if byte == '\r' {
+    } else if byte == '\r' {
       escaped = 'r'
-    }
-    else if byte == '\t' {
+    } else if byte == '\t' {
       escaped = 't'
-    }
-    else if byte == 8 {
+    } else if byte == 8 {
       escaped = 'b'
-    }
-    else if byte == 12 {
+    } else if byte == 12 {
       escaped = 'f'
     }
     if escaped != 0 {
@@ -406,8 +384,8 @@ fn write_string_into(destination: []u8, source: []const u8) []u8 {
         destination[at + 1] = 'u'
         destination[at + 2] = '0'
         destination[at + 3] = '0'
-        destination[at + 4] = digits[#cast(usize, (byte >> 4))]
-        destination[at + 5] = digits[#cast(usize, (byte & 15))]
+        destination[at + 4] = digits[(byte >> 4)]
+        destination[at + 5] = digits[(byte & 15)]
         at += 6
         continue
       }
@@ -514,23 +492,17 @@ fn decoded_string(arena: *memory.Arena, cursor: *Cursor) []const u8 {
       source_at += 1
       if escaped == '"' || escaped == '\\' || escaped == '/' {
         byte = escaped
-      }
-      else if escaped == 'b' {
+      } else if escaped == 'b' {
         byte = 8
-      }
-      else if escaped == 'f' {
+      } else if escaped == 'f' {
         byte = 12
-      }
-      else if escaped == 'n' {
+      } else if escaped == 'n' {
         byte = '\n'
-      }
-      else if escaped == 'r' {
+      } else if escaped == 'r' {
         byte = '\r'
-      }
-      else if escaped == 't' {
+      } else if escaped == 't' {
         byte = '\t'
-      }
-      else if escaped == 'u' {
+      } else if escaped == 'u' {
         if source_at + 4 > end {
           return failed_string(cursor)
         }
@@ -614,8 +586,7 @@ fn parse_node(arena: *memory.Arena, cursor: *Cursor, depth: usize) *Value {
       if !literal(cursor, "true") {
         return nil
       }
-    }
-    else {
+    } else {
       if !literal(cursor, "false") {
         return nil
       }
@@ -1132,23 +1103,17 @@ fn stream_string(destination: stream.Writer, source: []const u8) stream.Transfer
     byte := source[i]
     if byte == '"' {
       escaped = "\\\""
-    }
-    else if byte == '\\' {
+    } else if byte == '\\' {
       escaped = "\\\\"
-    }
-    else if byte == 8 {
+    } else if byte == 8 {
       escaped = "\\b"
-    }
-    else if byte == 12 {
+    } else if byte == 12 {
       escaped = "\\f"
-    }
-    else if byte == 10 {
+    } else if byte == 10 {
       escaped = "\\n"
-    }
-    else if byte == 13 {
+    } else if byte == 13 {
       escaped = "\\r"
-    }
-    else if byte == 9 {
+    } else if byte == 9 {
       escaped = "\\t"
     }
     if #len(escaped) > 0 || byte < 32 {

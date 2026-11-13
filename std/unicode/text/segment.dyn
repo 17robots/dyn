@@ -11,11 +11,9 @@ fn segment_value(codepoint: u32) u32 {
     at := mid * 3
     if codepoint < Segments[at] {
       high = mid
-    }
-    else if codepoint > Segments[at + 1] {
+    } else if codepoint > Segments[at + 1] {
       low = mid + 1
-    }
-    else {
+    } else {
       return Segments[at + 2]
     }
   }
@@ -183,8 +181,7 @@ pub fn word_breaks(arena: *mem.Arena, text: []const u8) Breaks {
     }
     if attach {
       units[unit_count - 1].last = i
-    }
-    else {
+    } else {
       units[unit_count] = Unit{ class: class, flags: values[i], first: i, last: i, start: starts[i] }
       unit_count += 1
     }
@@ -197,59 +194,41 @@ pub fn word_breaks(arena: *mem.Arena, text: []const u8) Breaks {
     joined := false
     if a == WCR && b == WLF {
       joined = true
-    }
-    else if a == WCR || a == WLF || a == WNewline || b == WCR || b == WLF || b == WNewline {
+    } else if a == WCR || a == WLF || a == WNewline || b == WCR || b == WLF || b == WNewline {
       joined = false
-    }
-    else if last_raw == WZWJ && (values[units[u].first] & FlagPictographic) != 0 {
+    } else if last_raw == WZWJ && (values[units[u].first] & FlagPictographic) != 0 {
       joined = true
-    }
-    else if last_raw == WSpace && units[u - 1].first == units[u - 1].last && b == WSpace {
+    } else if last_raw == WSpace && units[u - 1].first == units[u - 1].last && b == WSpace {
       joined = true
-    }
-    else if letter(a) && letter(b) {
+    } else if letter(a) && letter(b) {
       joined = true
-    }
-    else if letter(a) && mid_letter_q(b) && u + 1 < unit_count && letter(units[u + 1].class) {
+    } else if letter(a) && mid_letter_q(b) && u + 1 < unit_count && letter(units[u + 1].class) {
       joined = true
-    }
-    else if mid_letter_q(a) && letter(b) && u >= 2 && letter(units[u - 2].class) {
+    } else if mid_letter_q(a) && letter(b) && u >= 2 && letter(units[u - 2].class) {
       joined = true
-    }
-    else if a == WHebrew && b == WSingleQuote {
+    } else if a == WHebrew && b == WSingleQuote {
       joined = true
-    }
-    else if a == WHebrew && b == WDoubleQuote && u + 1 < unit_count && units[u + 1].class == WHebrew {
+    } else if a == WHebrew && b == WDoubleQuote && u + 1 < unit_count && units[u + 1].class == WHebrew {
       joined = true
-    }
-    else if a == WDoubleQuote && b == WHebrew && u >= 2 && units[u - 2].class == WHebrew {
+    } else if a == WDoubleQuote && b == WHebrew && u >= 2 && units[u - 2].class == WHebrew {
       joined = true
-    }
-    else if a == WNumeric && b == WNumeric {
+    } else if a == WNumeric && b == WNumeric {
       joined = true
-    }
-    else if letter(a) && b == WNumeric {
+    } else if letter(a) && b == WNumeric {
       joined = true
-    }
-    else if a == WNumeric && letter(b) {
+    } else if a == WNumeric && letter(b) {
       joined = true
-    }
-    else if mid_num_q(a) && b == WNumeric && u >= 2 && units[u - 2].class == WNumeric {
+    } else if mid_num_q(a) && b == WNumeric && u >= 2 && units[u - 2].class == WNumeric {
       joined = true
-    }
-    else if a == WNumeric && mid_num_q(b) && u + 1 < unit_count && units[u + 1].class == WNumeric {
+    } else if a == WNumeric && mid_num_q(b) && u + 1 < unit_count && units[u + 1].class == WNumeric {
       joined = true
-    }
-    else if a == WKatakana && b == WKatakana {
+    } else if a == WKatakana && b == WKatakana {
       joined = true
-    }
-    else if (letter(a) || a == WNumeric || a == WKatakana || a == WExtendNumLet) && b == WExtendNumLet {
+    } else if (letter(a) || a == WNumeric || a == WKatakana || a == WExtendNumLet) && b == WExtendNumLet {
       joined = true
-    }
-    else if a == WExtendNumLet && (letter(b) || b == WNumeric || b == WKatakana) {
+    } else if a == WExtendNumLet && (letter(b) || b == WNumeric || b == WKatakana) {
       joined = true
-    }
-    else if a == WRegional && b == WRegional {
+    } else if a == WRegional && b == WRegional {
       // WB15 and WB16: pair regional indicators from the start of the run.
       count_back: usize = 0
       back := u

@@ -6,6 +6,7 @@ use "std/c" c
 use "std/sync" sync
 use "std/bytes" bytes
 use "std/unicode/utf8" utf8
+use "std/os/macos/sys"
 
 pub const Modify: u32 = 2
 pub const Attributes: u32 = 4
@@ -106,8 +107,7 @@ fn load(api: *API) bool {
   api.canonical = #cast(fn(*const u8, *u8) *u8, symbol(api.system, "realpath"))
   return api.string != nil && api.array != nil && api.release != nil && api.create != nil && api.schedule != nil && api.start != nil && api.stop != nil && api.invalidate != nil && api.stream_release != nil && api.canonical != nil
 }
-fn barrier(context: rawptr) {
-  _ = context
+fn barrier(_context: rawptr) {
 }
 struct MaskUpdate { slot: *Slot, mask: u32 }
 fn update_mask(context: rawptr) {
@@ -135,7 +135,7 @@ fn discard_slot(state: *State, slot: *Slot) {
 }
 pub fn open(storage: []u8) OpenResult {
   if #len(storage) < 272 {
-    return OpenResult{ failure: io.Failure{ kind: io.darwin(-28), native: -28 } }
+    return OpenResult{ failure: io.darwin_failure(-28) }
   }
   arena := mem.arena_create(#sizeof(State))
   state := mem.push(State, arena)
@@ -148,7 +148,7 @@ pub fn open(storage: []u8) OpenResult {
   if state.queue == nil {
     unload(&state.api)
     mem.arena_release(arena)
-    return OpenResult{ failure: io.Failure{ kind: io.darwin(-12), native: -12 } }
+    return OpenResult{ failure: io.darwin_failure(-12) }
   }
   return OpenResult{ value: Watcher{ state: state, storage: storage, arena: arena } }
 }
@@ -160,7 +160,7 @@ fn publish(slot: *Slot, name: []const u8, mask: u32, rescan: bool) {
     sync.store_u32(&state.lost, 1)
     return
   }
-  record := &state.records[#cast(usize, write)]
+  record := &state.records[write]
   record.watch = slot.id
   record.mask = mask
   record.rescan = rescan
@@ -170,9 +170,7 @@ fn publish(slot: *Slot, name: []const u8, mask: u32, rescan: bool) {
   }
   sync.store_u32(&state.write, following)
 }
-fn callback(stream: rawptr, info: rawptr, count: usize, paths: rawptr, flags: *const u32, ids: *const u64) {
-  _ = stream
-  _ = ids
+fn callback(_stream: rawptr, info: rawptr, count: usize, paths: rawptr, flags: *const u32, _ids: *const u64) {
   if count == 0 {
     return
   }
@@ -275,11 +273,11 @@ pub fn add(watcher: *Watcher, path: []const u8, mask: u32) Result {
     return failure(-22)
   }
   // FSEvents watches trees; this adapter promises only direct directory children.
-  directory := #syscall(5, &canonical[0], 17858560, 0) // O_CLOEXEC|O_DIRECTORY|O_EVTONLY
+  directory := #syscall(sys.Open, &canonical[0], 17858560, 0) // O_CLOEXEC|O_DIRECTORY|O_EVTONLY
   if directory < 0 {
     return failure(directory)
   }
-  _ = #syscall(6, directory)
+  _ = #syscall(sys.Close, directory)
   index: usize = 16
   for i in 0..16 {
     if state.slots[i].stream == nil && index == 16 {
@@ -388,7 +386,7 @@ pub fn next(watcher: *Watcher) EventResult {
     if read == sync.load_u32(&state.write) {
       return EventResult{ status: Status.Empty }
     }
-    record := state.records[#cast(usize, read)]
+    record := state.records[read]
     sync.store_u32(&state.read, (read+1)%64)
     live := false
     for i in 0..16 {
@@ -418,7 +416,7 @@ pub fn acknowledge_rescan(watcher: *Watcher) {
 }
 
 fn failure(code: isize) Result {
-  return Result{ failure: io.Failure{ kind: io.darwin(code), native: code } }
+  return Result{ failure: io.darwin_failure(code) }
 }
 fn status(code: isize) Result {
   if code == 0 {

@@ -8,7 +8,7 @@ pub fn decode(source: []const u16, offset: usize) Decode {
   }
   first := source[offset]
   if first < 55296 || first > 57343 {
-    return Decode{ codepoint: #cast(u32, first), width: 1, valid: true }
+    return Decode{ codepoint: first, width: 1, valid: true }
   }
   if first >= 56320 || offset + 1 >= #len(source) {
     return Decode{ codepoint: Replacement, width: 1, valid: false }
@@ -37,8 +37,8 @@ pub fn encode(destination: []u16, codepoint: u32) usize {
     return 0
   }
   value := codepoint - 65536
-  destination[0] = #cast(u16, (#cast(u32, 55296) + value / 1024))
-  destination[1] = #cast(u16, (#cast(u32, 56320) + value % 1024))
+  destination[0] = #cast(u16, (55296 + value / 1024))
+  destination[1] = #cast(u16, (56320 + value % 1024))
   return 2
 }
 

@@ -1,0 +1,70 @@
+use "std/io"
+use "std/mem"
+use "std/process"
+
+// Every copy below is the loop mem.copy runs: `for i in 0..n { d[i] = s[i] }`.
+fn copy_bytes(destination: []u8, source: []const u8, n: usize) {
+  for i in 0..n {
+    destination[i] = source[i]
+  }
+}
+
+fn copy_words(destination: []u32, source: []const u32) {
+  for i in 0..#len(source) {
+    destination[i] = source[i]
+  }
+}
+
+fn checksum(bytes: []const u8) u64 {
+  total: u64 = 0
+  for i in 0..#len(bytes) {
+    total = total * 31 + #cast(u64, bytes[i])
+  }
+  return total
+}
+
+fn main() {
+  program := process.start()
+  buffer: [256]u8 = []
+  scratch: [256]u8 = []
+  for i in 0..#len(buffer) {
+    buffer[i] = #cast(u8, i * 7 + 3)
+  }
+  total: u64 = 0
+  // Every length from 0 to 100, through mem.copy and the loop above.
+  for n in 0..101 {
+    for i in 0..#len(scratch) {
+      scratch[i] = 0
+    }
+    _ = mem.copy(scratch[5..5 + n], buffer[n..2 * n])
+    copy_bytes(scratch[120..], buffer[3..], n)
+    total = total * 7 + checksum(scratch[..])
+  }
+  // Overlap: the destination above the source repeats the pattern, below it
+  // shifts, as a forward byte loop does.
+  for distance in 1..12 {
+    overlap: [64]u8 = []
+    for i in 0..#len(overlap) {
+      overlap[i] = #cast(u8, i)
+    }
+    copy_bytes(overlap[distance..], overlap[..], 40)
+    total = total * 7 + checksum(overlap[..])
+    copy_bytes(overlap[..], overlap[distance..], 40)
+    total = total * 7 + checksum(overlap[..])
+  }
+  words: [40]u32 = []
+  copies: [40]u32 = []
+  for i in 0..#len(words) {
+    words[i] = #cast(u32, i * 2654435761)
+  }
+  copy_words(copies[..], words[..])
+  for i in 0..#len(copies) {
+    total = total * 3 + #cast(u64, copies[i])
+  }
+  io.println("{}", total)
+  // A destination shorter than the count fails at its first missing index.
+  if #len(program.args) > 1 {
+    short: [10]u8 = []
+    copy_bytes(short[..], buffer[..], 20)
+  }
+}

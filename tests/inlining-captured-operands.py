@@ -22,7 +22,7 @@ fn main() {
   a := counter + bump(10)
   b := counter * (counter - bump(1))
   total: i64 = 0
-  for i in 0..1000 {
+  for i: i64 in 0..1000 {
     total += counter - bump(i)
   }
   io.println("{} {} {} {}", a, b, total, counter)

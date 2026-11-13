@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
-"""Recursive base cases return before frame setup without skipping effects."""
+"""Recursive base cases return before frame setup without skipping effects;
+self tail calls become loops."""
 import os
+import shutil
 from pathlib import Path
 import platform
 import struct
@@ -90,12 +92,19 @@ with tempfile.TemporaryDirectory(prefix='dyn-base-return-') as directory:
         results.append(result.stdout)
         if mode=='ssa':
             code=symbols(Path(str(output)+'.o'))
-            for name in ('less','equal','different','above','at_least','at_most'):
+            for name in ('less','equal','at_most','signed'):
                 assert code[name][0] in (0x48,0x49) and 0xc3 in code[name][:40],(name,code[name][:16].hex())
-            assert code['less'][3]==8 and code['alternate'][3]==8, code['less'][:8].hex()
+            # Self tail calls (different, above, at_least) are loops instead: no call at all.
+            if shutil.which('objdump'):
+                listing=subprocess.run(['objdump','-d','--no-show-raw-insn',str(output)+'.o'],text=True,capture_output=True,check=True).stdout
+                for name in ('different','above','at_least'):
+                    body=listing.split(f'<{name}>:',1)[1].split('\n\n',1)[0]
+                    assert '\tcall' not in body,(name,body)
+            # The guard compares against the source limit: no precomputed table of results.
+            assert code['less'][3]==2 and code['alternate'][3]==1, (code['less'][:8].hex(), code['alternate'][:8].hex())
             assert code['unsafe'][3]==1 and code['overflowing'][3]==2
             assert code['later'][3]==2, code['later'][:8].hex()
-            for name in ('signed','effect','cleanup'):
+            for name in ('effect','cleanup'):
                 assert code[name][0]==0x55,(name,code[name][:16].hex())
     assert results[0]==results[1],results
     for call in ():
@@ -109,4 +118,4 @@ with tempfile.TemporaryDirectory(prefix='dyn-base-return-') as directory:
             assert result.returncode!=0 and 'overflow.ok' in result.stderr,(call,mode,result)
             failures.append(result.returncode)
         assert failures[0]==failures[1],failures
-print('PASS recursive base cases: all unsigned comparisons, sixth argument, limits, effects, signed and defer exclusions')
+print('PASS recursive base cases: all unsigned comparisons, sixth argument, limits, signed, effect and defer exclusions')

@@ -1,4 +1,5 @@
 use "std/io" io
+use "std/os/linux/sys"
 #target(kernel: linux)
 // Linux epoll. Target-specific Event storage follows the kernel UAPI layout.
 pub const EventReadable: u32 = 1
@@ -31,33 +32,33 @@ pub fn event(events: u32, data: u64) Event {
 }
 
 pub fn event_events(value: *const Event) u32 {
-  a: u32 = #cast(u32, value.bytes[0])
-  b: u32 = #cast(u32, value.bytes[1])
-  c: u32 = #cast(u32, value.bytes[2])
-  d: u32 = #cast(u32, value.bytes[3])
+  a: u32 = value.bytes[0]
+  b: u32 = value.bytes[1]
+  c: u32 = value.bytes[2]
+  d: u32 = value.bytes[3]
   return a | (b << 8) | (c << 16) | (d << 24)
 }
 
 fn event_u32_at(value: *const Event, offset: usize) u32 {
-  a: u32 = #cast(u32, value.bytes[offset])
-  b: u32 = #cast(u32, value.bytes[offset + 1])
-  c: u32 = #cast(u32, value.bytes[offset + 2])
-  d: u32 = #cast(u32, value.bytes[offset + 3])
+  a: u32 = value.bytes[offset]
+  b: u32 = value.bytes[offset + 1]
+  c: u32 = value.bytes[offset + 2]
+  d: u32 = value.bytes[offset + 3]
   return a | (b << 8) | (c << 16) | (d << 24)
 }
 
 pub fn event_data(value: *const Event) u64 {
-  low: u64 = #cast(u64, event_u32_at(value, EventDataOffset))
-  high: u64 = #cast(u64, event_u32_at(value, EventDataOffset + 4))
+  low: u64 = event_u32_at(value, EventDataOffset)
+  high: u64 = event_u32_at(value, EventDataOffset + 4)
   return low | (high << 32)
 }
 
 pub fn event_queue() Result {
-  return result(#syscall(291, 0))
+  return result(#syscall(sys.EpollCreate1, 0))
 }
 
 pub fn event_control(queue: isize, operation: usize, descriptor: isize, value: *Event) Result {
-  return result(#syscall(233, queue, operation, descriptor, value))
+  return result(#syscall(sys.EpollCtl, queue, operation, descriptor, value))
 }
 
 // Registration helpers keep epoll's operation numbers and remove-event pointer
@@ -86,21 +87,21 @@ pub fn event_wait(queue: isize, events: []Event, timeout_milliseconds: i32) Resu
   start := clock.ClockResult{}
   if timeout_milliseconds > 0 {
     start = clock.monotonic_now()
-    if start.failure.kind != io.Kind.Ok {
+    if io.failed(start.failure) {
       return Result{ value: start.failure.native, failure: io.Failure{ kind: start.failure.kind, native: start.failure.native } }
     }
   }
   remaining := timeout_milliseconds
-  value := #syscall(232, queue, &events[0], #len(events), remaining)
+  value := #syscall(sys.EpollWait, queue, &events[0], #len(events), remaining)
   for value == -4 {
     if timeout_milliseconds > 0 {
       retry := interrupted_timeout(start.value, timeout_milliseconds)
-      if retry.failure.kind != io.Kind.Ok || retry.value == 0 {
+      if io.failed(retry.failure) || retry.value == 0 {
         return retry
       }
       remaining = #cast(i32, retry.value)
     }
-    value = #syscall(232, queue, &events[0], #len(events), remaining)
+    value = #syscall(sys.EpollWait, queue, &events[0], #len(events), remaining)
   }
   return result(value)
 }

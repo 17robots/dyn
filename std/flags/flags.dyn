@@ -59,8 +59,7 @@ fn parse_buffers(
     text := arguments[argument]
     if !options_done && bytes.equal(text, "--") {
       options_done = true
-    }
-    else if !options_done && #len(text) > 2 && text[0] == '-' && text[1] == '-' {
+    } else if !options_done && #len(text) > 2 && text[0] == '-' && text[1] == '-' {
       name_end := #len(text)
       scan: usize = 2
       for scan < #len(text) {
@@ -82,8 +81,7 @@ fn parse_buffers(
         }
       } else if inline {
         values[long_option].text = text[name_end + 1..]
-      }
-      else {
+      } else {
         if argument + 1 == #len(arguments) {
           return failure(parse.Kind.Syntax, "missing value", argument, text)
         }
@@ -104,8 +102,7 @@ fn parse_buffers(
         if options[short_option].kind != Kind.Bool {
           if short_at + 1 < #len(text) {
             values[short_option].text = text[short_at + 1..]
-          }
-          else {
+          } else {
             if argument + 1 == #len(arguments) {
               return failure(parse.Kind.Syntax, "missing value", argument, text)
             }
@@ -140,11 +137,9 @@ fn parse_buffers(
       valid := true
       if definition.kind == Kind.Integer {
         valid = strings.valid(i64, text_value)
-      }
-      else if definition.kind == Kind.Float {
+      } else if definition.kind == Kind.Float {
         valid = strings.valid(f64, text_value)
-      }
-      else if definition.kind == Kind.Choice {
+      } else if definition.kind == Kind.Choice {
         valid = false
         for choice_value in definition.choices {
           if bytes.equal(text_value, choice_value) {

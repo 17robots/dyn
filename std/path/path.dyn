@@ -54,7 +54,7 @@ pub fn is_absolute(path: []const u8) bool {
 
 fn join_into(destination: []u8, left: []const u8, right: []const u8) Result {
   separator := #len(left) > 0 && left[#len(left) - 1] != '/' && #len(right) > 0 && right[0] != '/'
-  maximum := ~#cast(usize, 0)
+  maximum := #max(usize)
   if #len(left) > maximum - #len(right) {
     return Result{ value: destination[..0], valid: false }
   }
@@ -104,8 +104,7 @@ fn clean_into(destination: []u8, path: []const u8) Result {
       i += 1
     }
     length := i - start
-    if length == 0 || (length == 1 && path[start] == '.') { }
-    else if length == 2 && path[start] == '.' && path[start + 1] == '.' {
+    if length == 0 || (length == 1 && path[start] == '.') { } else if length == 2 && path[start] == '.' && path[start + 1] == '.' {
       floor: usize = 0
       if absolute {
         floor = 1

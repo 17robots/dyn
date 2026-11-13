@@ -35,9 +35,10 @@ offset: isize = 0         // explicit representation
 buffer: [4096]u8 = []     // fixed stack storage, zero-filled
 ```
 
-Shadowing is forbidden. Reassign an existing variable instead of introducing another with the same
-name. Use `const` for compile-time constants and `distinct type` for values that must not mix by
-accident.
+A name may be declared again only inside a nested block or loop, as in `if ready { x := parse(x) }`;
+a second declaration in the same block, a loop variable redeclared inside its own loop, and a local
+that hides a global, function or module are errors. Prefer reassigning an existing variable. Use
+`const` for compile-time constants and `distinct type` for values that must not mix by accident.
 
 ```dyn
 const BufferCapacity: usize = 4096

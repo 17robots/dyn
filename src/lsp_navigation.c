@@ -95,6 +95,10 @@ const char *lsp_builtin_hover(const char *text, size_t line, size_t character) {
                   "size in bytes."},
       {"#alignof", "#alignof(type_or_value) -> usize\nReturns the compile-time "
                    "alignment in bytes."},
+      {"#max", "#max(integer_type) -> integer_type\nReturns the largest value of "
+               "the type, for this target's usize and isize."},
+      {"#min", "#min(integer_type) -> integer_type\nReturns the smallest value of "
+               "the type, for this target's usize and isize."},
       {"#typeof", "#typeof(type_or_value) -> TypeInfo\nReturns reflection "
                   "metadata for a type or value."},
       {"#syscall",

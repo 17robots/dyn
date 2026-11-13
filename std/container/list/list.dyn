@@ -30,11 +30,7 @@ pub fn sll_stack_pop(first: **$T, nil_node: *const $T) *T {
 // Singly linked queue through next: push at the back, pop from the front.
 pub fn sll_queue_push(first, last: **$T, node: *$T) {
   node.next = nil
-  if first.* == nil {
-    first.* = node
-  } else {
-    last.*.next = node
-  }
+  if first.* == nil { first.* = node } else { last.*.next = node }
   last.* = node
 }
 
@@ -64,22 +60,14 @@ pub fn sll_queue_pop(first, last: **$T, nil_node: *const $T) *T {
 pub fn dll_push_back(first, last: **$T, node: *$T) {
   node.next = nil
   node.prev = last.*
-  if last.* == nil {
-    first.* = node
-  } else {
-    last.*.next = node
-  }
+  if last.* == nil { first.* = node } else { last.*.next = node }
   last.* = node
 }
 
 pub fn dll_push_front(first, last: **$T, node: *$T) {
   node.prev = nil
   node.next = first.*
-  if first.* == nil {
-    last.* = node
-  } else {
-    first.*.prev = node
-  }
+  if first.* == nil { last.* = node } else { first.*.prev = node }
   first.* = node
 }
 
@@ -87,11 +75,7 @@ pub fn dll_push_front(first, last: **$T, node: *$T) {
 pub fn dll_insert_after(first, last: **$T, after: *$T, node: *$T) {
   node.prev = after
   node.next = after.next
-  if after.next == nil {
-    last.* = node
-  } else {
-    after.next.prev = node
-  }
+  if after.next == nil { last.* = node } else { after.next.prev = node }
   after.next = node
   if first.* == nil {
     first.* = node
@@ -100,16 +84,8 @@ pub fn dll_insert_after(first, last: **$T, after: *$T, node: *$T) {
 
 // Unlinks node, which must be in the list, and clears its links.
 pub fn dll_remove(first, last: **$T, node: *$T) {
-  if node.prev == nil {
-    first.* = node.next
-  } else {
-    node.prev.next = node.next
-  }
-  if node.next == nil {
-    last.* = node.prev
-  } else {
-    node.next.prev = node.prev
-  }
+  if node.prev == nil { first.* = node.next } else { node.prev.next = node.next }
+  if node.next == nil { last.* = node.prev } else { node.next.prev = node.prev }
   node.next = nil
   node.prev = nil
 }

@@ -388,13 +388,6 @@ static void r32_multiply(BackendContext *c, bool checked, bool sign) {
   R32_MULHU(R32_T1,10,5); R32_MUL(R32_T2,10,19); R32_ADD(R32_T1,R32_T1,R32_T2);
   R32_MUL(R32_T2,18,5); R32_ADD(18,R32_T1,R32_T2); R32_MUL(10,10,5);
 }
-static void r32_trace_pop(BackendContext *c, bool descriptor_result) {
-  r32_push(c,R_A);
-  if (descriptor_result) r32_push(c,R_D);
-  runtime_call(c,2);
-  if (descriptor_result) r32_pop(c,R_D);
-  r32_pop(c,R_A);
-}
 /* Frame: s0 and ra above FP, then the locals, then s1-s11. */
 static void r32_enter(BackendContext *c) {
   R32_ADDI(2,2,-16); R32_SW(8,2,0); R32_SW(1,2,8);
@@ -473,5 +466,5 @@ static void r32_compare_top(BackendContext *c) {
 static void r32_helper(BackendContext *c, unsigned runtime, uint32_t mode) { r32_li(c,R32_T1,mode); runtime_call(c,runtime); }
 /* Runtime routines that take (pointer, u64): the u64's high word goes in a2. */
 static void r32_runtime_arguments(BackendContext *c, unsigned runtime) {
-  if (runtime == 0 || runtime == 1 || runtime == RUNTIME_CHECK_FAILED) rv_move(c,12,20);
+  if (runtime == 0 || runtime == RUNTIME_CHECK_FAILED) rv_move(c,12,20);
 }

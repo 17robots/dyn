@@ -9,9 +9,14 @@ static _Thread_local unsigned allocation_count, fail_allocation;
 static _Thread_local bool failed_optional_cache;
 static bool emitter_allocation_fails(const char *caller) {
   if (++allocation_count != fail_allocation) return false;
-  /* Deduplication and layout caches can fall back to uncached emission.
-     Identify these allocations by owner, independent of order or size. */
-  failed_optional_cache = !strcmp(caller,"literal") || !strcmp(caller,"layout_cache_begin");
+  /* Deduplication and layout caches can fall back to uncached emission,
+     and the SSA worker pipeline to preparing on this thread. Identify these
+     allocations by owner, independent of order or size. */
+  static const char *const optional[] = {"literal", "layout_cache_begin", "ssa_pipeline_start",
+                                         "ssa_literal_canonical", "ssa_shard_new"};
+  failed_optional_cache = false;
+  for (size_t i = 0; i < sizeof(optional) / sizeof(*optional); ++i)
+    if (!strcmp(caller, optional[i])) failed_optional_cache = true;
   return true;
 }
 static void *emitter_calloc(size_t count,size_t size,const char *caller) {

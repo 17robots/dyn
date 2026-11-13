@@ -149,7 +149,7 @@ fn styles_supported(method: rawptr) usize {
   // over-the-spot (the method draws it at the spot), then neither.
   wanted: [3]usize = [0x402, 0x404, 0x408]
   for choice in wanted {
-    listed := #slice(styles.styles, #cast(usize, styles.count))
+    listed := #slice(styles.styles, styles.count)
     for i in 0..#len(listed) {
       if listed[i] == choice && found == 0 {
         found = choice
@@ -184,8 +184,7 @@ fn open_context(window: *Window) {
     preedit_name := "preeditAttributes\x00"
     desktop.context = create_context(desktop.method, &style_name[0], style, &client[0], window.handle, &focus[0], window.handle, &preedit_name[0], #cast(usize, attributes), #cast(usize, 0))
     _ = free(attributes)
-  }
-  else if style == 0x404 {
+  } else if style == 0x404 {
     spot := Point{}
     spot_name := "spotLocation\x00"
     attributes := nested_list(0, &spot_name[0], &spot, #cast(usize, 0))
@@ -243,7 +242,7 @@ fn compose_snapshot(desktop: *Desktop) {
     composition.text_length = 0
   }
   if desktop.owner != nil {
-    value := ordered.Event{ kind: ordered.Kind.Composition, text_length: #cast(u32, composition.text_length),
+    value := ordered.Event{ kind: ordered.Kind.Composition, text_length: composition.text_length,
       x: caret_bytes, y: caret_bytes }
     if composition.active != 0 {
       value.width = 1
@@ -255,9 +254,7 @@ fn compose_snapshot(desktop: *Desktop) {
   }
 }
 
-fn preedit_start(context: rawptr, data: rawptr, call: rawptr) i32 {
-  _ = context
-  _ = call
+fn preedit_start(_context: rawptr, data: rawptr, _call: rawptr) i32 {
   desktop := #cast(*Desktop, data)
   desktop.preedit_count = 0
   desktop.preedit_caret = 0
@@ -266,16 +263,13 @@ fn preedit_start(context: rawptr, data: rawptr, call: rawptr) i32 {
   return #cast(i32, preedit_limit)
 }
 
-fn preedit_done(context: rawptr, data: rawptr, call: rawptr) {
-  _ = context
-  _ = call
+fn preedit_done(_context: rawptr, data: rawptr, _call: rawptr) {
   desktop := #cast(*Desktop, data)
   desktop.preedit_count = 0
   compose_snapshot(desktop)
 }
 
-fn preedit_caret(context: rawptr, data: rawptr, call: *PreeditCaret) {
-  _ = context
+fn preedit_caret(_context: rawptr, data: rawptr, call: *PreeditCaret) {
   if call == nil {
     return
   }
@@ -283,37 +277,31 @@ fn preedit_caret(context: rawptr, data: rawptr, call: *PreeditCaret) {
   position := #cast(usize, math.clamp(desktop.preedit_caret, 0, #cast(i32, desktop.preedit_count)))
   if call.direction == 0 && position < desktop.preedit_count {
     position += 1
-  }
-  else if call.direction == 1 && position > 0 {
+  } else if call.direction == 1 && position > 0 {
     position -= 1
-  }
-  else if call.direction == 2 {
+  } else if call.direction == 2 {
     for position < desktop.preedit_count && wide_space(desktop.preedit[position]) == 0 {
       position += 1
     }
     for position < desktop.preedit_count && wide_space(desktop.preedit[position]) != 0 {
       position += 1
     }
-  }
-  else if call.direction == 3 {
+  } else if call.direction == 3 {
     for position > 0 && wide_space(desktop.preedit[position - 1]) != 0 {
       position -= 1
     }
     for position > 0 && wide_space(desktop.preedit[position - 1]) == 0 {
       position -= 1
     }
-  }
-  else if call.direction == 8 {
+  } else if call.direction == 8 {
     for position > 0 && desktop.preedit[position - 1] != 10 {
       position -= 1
     }
-  }
-  else if call.direction == 9 {
+  } else if call.direction == 9 {
     for position < desktop.preedit_count && desktop.preedit[position] != 10 {
       position += 1
     }
-  }
-  else if call.direction == 10 {
+  } else if call.direction == 10 {
     position = #cast(usize, math.clamp(call.position, 0, #cast(i32, desktop.preedit_count)))
   }
   // Vertical movement needs application text layout. This single-line preedit
@@ -325,8 +313,7 @@ fn preedit_caret(context: rawptr, data: rawptr, call: *PreeditCaret) {
 }
 
 // Replaces change_length code points at change_first with the new text.
-fn preedit_draw(context: rawptr, data: rawptr, call: *PreeditDraw) {
-  _ = context
+fn preedit_draw(_context: rawptr, data: rawptr, call: *PreeditDraw) {
   desktop := #cast(*Desktop, data)
   if call == nil {
     return
@@ -364,8 +351,7 @@ fn preedit_draw(context: rawptr, data: rawptr, call: *PreeditDraw) {
         incoming[count] = wide[i]
         count += 1
       }
-    }
-    else {
+    } else {
       // XIM multibyte data uses the process locale, not necessarily UTF-8.
       // Decode exactly the declared number of characters; no NUL scan is
       // needed and callbacks can provide non-terminated character arrays.
@@ -433,8 +419,7 @@ pub fn set_text_input(window: *Window, enabled: bool, x, y, width, height: i32) 
       if enabled {
         desktop.preedit_count = 0
         set_focus(desktop.context)
-      }
-      else {
+      } else {
         unset_focus(desktop.context)
       }
     }
@@ -511,7 +496,7 @@ fn read_scale(display: rawptr) f32 {
       }
       value: f32 = 0.0
       for at < #len(text) && text[at] >= '0' && text[at] <= '9' {
-        value = value * 10.0 + #cast(f32, text[at] - '0')
+        value = value * 10.0 + (text[at] - '0')
         at += 1
       }
       if value > 0.0 {
@@ -561,8 +546,7 @@ fn desktop_filter(window: *Window, event: *Event) bool {
     if key == 0xffe3 || key == 0xffe4 {
       desktop.control = event.kind == 2
     }
-  }
-  else if event.kind == 10 {
+  } else if event.kind == 10 {
     window.desktop.shift = false
     window.desktop.control = false
   }
@@ -603,8 +587,7 @@ fn desktop_key(window: *Window, event: *Event) {
       }
       count = 0
     }
-  }
-  else if desktop.text_input {
+  } else if desktop.text_input {
     latin: [8]u8 = []
     length := lookup_latin1(event, &latin[0], 8, &key, nil)
     for i in 0..#cast(usize, length) {
@@ -612,8 +595,7 @@ fn desktop_key(window: *Window, event: *Event) {
       if byte < 128 {
         buffer[count] = byte
         count += 1
-      }
-      else {
+      } else {
         buffer[count] = 192 | byte >> 6
         buffer[count + 1] = 128 | byte & 63
         count += 2
@@ -639,16 +621,16 @@ fn desktop_key(window: *Window, event: *Event) {
     desktop.escape = true
   } else if key == 0xff09 {
     desktop.tab = true
-  } else if control && (key == #cast(usize, 'a') || key == #cast(usize, 'A')) {
+  } else if control && (key == 'a' || key == 'A') {
     desktop.select_all = true
-  } else if control && (key == #cast(usize, 'c') || key == #cast(usize, 'C')) {
+  } else if control && (key == 'c' || key == 'C') {
     desktop.copy = true
-  } else if control && (key == #cast(usize, 'x') || key == #cast(usize, 'X')) {
+  } else if control && (key == 'x' || key == 'X') {
     desktop.cut = true
-  } else if control && (key == #cast(usize, 'v') || key == #cast(usize, 'V')) {
+  } else if control && (key == 'v' || key == 'V') {
     request_paste(window)
   } else if !control {
-    shown := buffer[..#cast(usize, count)]
+    shown := buffer[..count]
     if #len(shown) != 0 && shown[0] >= 32 && shown[0] != 127 {
       ordered_text(window, shown)
       append_text(desktop, shown)
@@ -726,7 +708,7 @@ fn clipboard_deliver(window: *Window) {
       at += count
       chunks += 1
     }
-    if window.events.dropped != 0 || chunks > 128 - #cast(usize, window.events.count) {
+    if window.events.dropped != 0 || chunks > 128 - window.events.count {
       desktop_loss(desktop)
       return
     }
@@ -764,15 +746,9 @@ fn clipboard_finish(window: *Window, deferred: bool) {
     desktop.received = clipboard_bytes(desktop.received_arena)
     desktop.received_length = #len(desktop.received)
     desktop.paste_result = Result{}
-    if deferred {
-      desktop.paste_ready = true
-    }
-    else {
-      desktop.paste = true
-    }
+    if deferred { desktop.paste_ready = true } else { desktop.paste = true }
     clipboard_deliver(window)
-  }
-  else {
+  } else {
     mem.arena_release(desktop.incoming_arena)
     desktop.incoming_arena = nil
   }
@@ -985,8 +961,7 @@ fn desktop_selection(window: *Window, event: *Event) {
           }
           _ = change_property(window.display, request.requestor, property, desktop.utf8_atom, 8, 0, data, #cast(i32, desktop.owned_length))
           reply.property = property
-        }
-        else {
+        } else {
           for i in 0..clipboard_transfers {
             transfer := &desktop.outgoing[i]
             if transfer.requestor == 0 {
@@ -1005,8 +980,7 @@ fn desktop_selection(window: *Window, event: *Event) {
             }
           }
         }
-      }
-      else if request.target == desktop.targets_atom {
+      } else if request.target == desktop.targets_atom {
         offered: [2]usize = [desktop.targets_atom, desktop.utf8_atom]
         _ = change_property(window.display, request.requestor, property, 4, 32, 0, #cast(*const u8, &offered[0]), 2)
         reply.property = property
@@ -1014,11 +988,9 @@ fn desktop_selection(window: *Window, event: *Event) {
     }
     _ = send_event(window.display, request.requestor, 0, 0, &reply)
     _ = flush(window.display)
-  }
-  else if event.kind == 29 {
+  } else if event.kind == 29 {
     desktop.owns = false
-  }
-  else if event.kind == 31 && desktop.paste_pending && !desktop.incoming {
+  } else if event.kind == 31 && desktop.paste_pending && !desktop.incoming {
     notify := #cast(*SelectionNotify, event)
     if notify.selection != desktop.clipboard_atom || notify.target != desktop.utf8_atom || notify.requestor != window.handle {
       return
@@ -1081,7 +1053,7 @@ pub fn set_cursor(window: *Window, cursor: Cursor) {
     return
   }
   window.desktop.cursor = cursor
-  _ = define_cursor(window.display, window.handle, window.desktop.cursors[#cast(usize, #cast(u8, cursor))])
+  _ = define_cursor(window.display, window.handle, window.desktop.cursors[#cast(u8, cursor)])
   _ = flush(window.display)
 }
 
@@ -1127,7 +1099,7 @@ pub fn box_input(window: *const Window) box.Input {
   }
   value.composition_cursor = -1
   if desktop.composition.active != 0 {
-    value.composition = desktop.composition.text[..#cast(usize, desktop.composition.text_length)]
+    value.composition = desktop.composition.text[..desktop.composition.text_length]
     value.composition_cursor = desktop.composition.cursor_begin
   }
   return value

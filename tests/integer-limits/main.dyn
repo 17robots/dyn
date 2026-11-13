@@ -1,0 +1,14 @@
+use "std/io"
+use "std/os/linux/sys"
+const Top: usize = #max(usize)
+fn wider(value: u32) u64 {
+  return value
+}
+fn main() {
+  io.println("{} {} {} {}", #max(u64), #min(i64), #max(i32), #min(i8))
+  io.println("{} {} {}", #max(u8), #min(u16), Top == #max(usize))
+  half := #max(usize) >> 1
+  io.println("{}", #cast(u64, half) == #cast(u64, #max(isize)))
+  pid := #syscall(sys.Getpid)
+  io.println("{} {}", pid > 0, wider(#max(u32)))
+}

@@ -34,7 +34,8 @@ pub struct Arena {
   base: usize,
   // Bytes used in this block, header included.
   offset: usize,
-  // Bytes of this block the OS has committed. Only Windows commits on demand.
+  // Bytes of this block ready to use: what the OS has committed of a
+  // mapping (only Windows commits on demand), or a whole caller buffer.
   committed: usize,
   // This block is an OS mapping that release returns.
   owns_memory: bool,
@@ -110,7 +111,7 @@ pub fn arena_from_buffer(backing: []u8) *Arena {
   if skip > #len(backing) || #len(backing) - skip < header_size() {
     #panic("arena buffer cannot hold the arena header")
   }
-  arena := block_init(backing[skip..], 0, false, 0)
+  arena := block_init(backing[skip..], 0, false, #len(backing) - skip)
   arena.current = arena
   arena.fixed_buffer = true
   arena.backing = #len(arena.data)
@@ -271,6 +272,15 @@ pub fn arena_overlaps_unallocated(arena: *const Arena, source: []const u8) bool 
 pub fn arena_mark(arena: *const Arena) usize {
   return arena.current.base + arena.current.offset
 }
+// The peak usage. Fast pushes leave peak_used behind, so it counts the
+// current usage too; whatever lowers usage stores it first.
+fn arena_peak(arena: *const Arena) usize {
+  used := arena_mark(arena) - header_size()
+  if used > arena.peak_used {
+    return used
+  }
+  return arena.peak_used
+}
 fn arena_blocks(arena: *const Arena) usize {
   count: usize = 0
   block := arena.current
@@ -291,7 +301,7 @@ pub struct ArenaSnapshot {
 pub fn arena_snapshot(arena: *const Arena) ArenaSnapshot {
   return ArenaSnapshot{ capacity: arena_capacity(arena), used: arena_used(arena),
     remaining: arena_remaining(arena), blocks: arena_blocks(arena), owns_memory: arena.owns_memory,
-    poison_on_rewind: arena.poison_on_rewind, peak_used: arena.peak_used,
+    poison_on_rewind: arena.poison_on_rewind, peak_used: arena_peak(arena),
     allocation_failures: arena.allocation_failures }
 }
 
@@ -309,6 +319,7 @@ pub fn arena_rewind(arena: *Arena, mark: usize) {
   if mark > arena_mark(arena) {
     #panic("arena mark is ahead of current position")
   }
+  arena.peak_used = arena_peak(arena)
   // Marks below the start, such as 0, rewind to the start.
   target := mark
   if target < header_size() {
@@ -342,7 +353,7 @@ fn align_size(size: usize, alignment: usize) usize {
     return size
   }
   padding := alignment - remainder
-  maximum := ~#cast(usize, 0)
+  maximum := #max(usize)
   if size > maximum - padding {
     return 0
   }
@@ -356,7 +367,7 @@ fn valid_alignment(alignment: usize) bool {
 fn arena_event(arena: *Arena, kind: observe.Kind, value: usize) {
   if arena.events != nil {
     _ = observe.record(arena.events, observe.Event{kind: kind, resource: arena.event_resource,
-      value: #cast(u64, value), source: "std/mem"})
+      value: value, source: "std/mem"})
   }
 }
 fn arena_failure(arena: *Arena, error: ErrorKind) Allocation {
@@ -389,7 +400,7 @@ fn arena_grow(arena: *Arena, size: usize, alignment: usize) Growth {
   if arena.fixed_buffer || arena.block_size == 0 {
     return Growth{error: ErrorKind.Capacity}
   }
-  maximum := ~#cast(usize, 0)
+  maximum := #max(usize)
   // Worst-case alignment padding is alignment - 1, not alignment.
   if alignment - 1 > maximum - header_size() {
     return Growth{error: ErrorKind.Overflow}
@@ -537,7 +548,30 @@ pub fn arena_try_extend(arena: *Arena, memory: *u8, size: usize, extra: usize) b
 // Failure: panics when a buffer or bounded arena is exhausted or the alignment is invalid.
 // Thread safety: caller synchronizes access to the arena.
 pub fn arena_push(arena: *Arena, size: usize, alignment: usize) *u8 {
+  memory := arena_push_fast(arena, size, alignment)
+  if memory != nil {
+    zero_bytes_fast(#slice(memory, size))
+    return memory
+  }
   return arena_must(arena_try_push_impl(arena, size, alignment, true))
+}
+
+// The common push, small enough to inline: room in the current block, already
+// committed, valid alignment, and no observer. Returns nil for anything else,
+// which arena_try_push_impl then handles with the same result.
+// It leaves peak_used behind; see arena_peak.
+fn arena_push_fast(arena: *Arena, size: usize, alignment: usize) *u8 {
+  block := arena.current
+  // Blocks start 16-aligned, so up to 16 an aligned offset is an aligned
+  // address. Alignments of 0 and above 16 take the slow path.
+  mask := alignment - 1
+  start := (block.offset + mask) & ~mask
+  if arena.events != nil || size == 0 || mask >= 16 || (alignment & mask) != 0 || start > block.committed ||
+    size > block.committed - start {
+    return nil
+  }
+  block.offset = start + size
+  return &block.data[start]
 }
 
 // Ownership: result borrows arena backing; cast memory to the requested element type.
@@ -555,6 +589,10 @@ pub fn arena_push_array(arena: *Arena, count: usize, element_size: usize, alignm
 
 // Like arena_push, without zeroing, for bytes that are overwritten right away.
 pub fn arena_push_uninit(arena: *Arena, size: usize, alignment: usize) *u8 {
+  memory := arena_push_fast(arena, size, alignment)
+  if memory != nil {
+    return memory
+  }
   return arena_must(arena_try_push_impl(arena, size, alignment, false))
 }
 
@@ -757,7 +795,7 @@ pub fn trial_next(arena: *const Arena, current: usize) usize {
     }
     return trial_size(arena, current * 2 + 1)
   }
-  if current > ~#cast(usize, 0) / 4 {
+  if current > #max(usize) / 4 {
     #panic("output size overflows")
   }
   return current * 2 + 1

@@ -81,7 +81,7 @@ pub fn condition_wait_timeout(value: *Condition, lock_value: *Mutex, timeout: i6
     return ConditionWaitResult{ status:ConditionWaitStatus.TimedOut }
   }
   deadline := time.deadline_after(timeout)
-  if deadline.failure.kind != io.Kind.Ok {
+  if io.failed(deadline.failure) {
     return ConditionWaitResult{ failure: io.Failure{ kind: deadline.failure.kind, native: deadline.failure.native } }
   }
   sequence := load_u32(&value.sequence)
@@ -93,7 +93,7 @@ pub fn condition_wait_timeout(value: *Condition, lock_value: *Mutex, timeout: i6
       break
     }
     remaining := time.deadline_remaining(&deadline.value)
-    if remaining.failure.kind != io.Kind.Ok {
+    if io.failed(remaining.failure) {
       result = ConditionWaitResult{ failure: io.Failure{ kind: remaining.failure.kind, native: remaining.failure.native } }
       break
     }

@@ -44,7 +44,7 @@ pub fn decompress(arena: *memory.Arena, source: []const u8) BufferResult {
   if !size.known {
     return BufferResult{ failure: parse.Failure{ kind: parse.Kind.Unsupported } }
   }
-  if size.size > #cast(u64, ~#cast(usize, 0)) {
+  if size.size > #max(usize) {
     return BufferResult{ failure: parse.Failure{ kind: parse.Kind.Overflow } }
   }
   capacity := #cast(usize, size.size)
@@ -112,8 +112,7 @@ fn decoder_read(data: rawptr, destination: []u8) stream.Transfer {
     if decoded.ended {
       state.frame_ended = true
       state.saw_frame = true
-    }
-    else if decoded.consumed != 0 || decoded.written != 0 {
+    } else if decoded.consumed != 0 || decoded.written != 0 {
       state.frame_ended = false
     }
     if decoded.written != 0 {
@@ -146,8 +145,7 @@ fn decoder_read(data: rawptr, destination: []u8) stream.Transfer {
     }
     if input_result.status == stream.Status.End {
       state.source_ended = true
-    }
-    else if state.used == 0 {
+    } else if state.used == 0 {
       state.failed = true
       state.failure = parse.io_failure(stream.Kind.System, 0)
       break
