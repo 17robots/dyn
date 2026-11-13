@@ -199,8 +199,6 @@ typedef struct DynIrProgram {
   size_t local_count;
   /* Line tables of the lowered source, shared by every code generator. */
   DynLocationIndex locations;
-  /* Declarations every object may depend on: types, globals and function signatures, but no function bodies. Keys cached chunk objects. */
-  uint64_t interface_hash;
   /* Whole-program facts every code generator needs, computed once by dyn_codegen_prepare instead of once per module. Per local: whether it is assigned or address-taken, and the 1-based statement declaring it. */
   bool *unstable_locals;
   uint32_t *local_statements;

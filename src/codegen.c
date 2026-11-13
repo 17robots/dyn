@@ -33,72 +33,6 @@ static bool module_owns(const char *owner_key, const char *name) {
   global_module_key(name, key, sizeof(key));
   return !strcmp(owner_key, key);
 }
-/* The object-file symbol of a Dyn function. Root-module functions keep their
-   plain names, except where that would take a name the program also uses for
-   a C function (an extern's link name, or exit/_exit, which the runtime calls
-   when a C library is linked). Those get a ".dyn" suffix, the same in every
-   object file, so the extern and the Dyn function never merge or get renamed
-   differently per object. */
-static uint64_t interface_bytes(uint64_t hash, const void *data, size_t length) {
-  const unsigned char *bytes = data;
-  for (size_t i = 0; i < length; ++i)
-    hash = (hash ^ bytes[i]) * UINT64_C(1099511628211);
-  return hash;
-}
-static uint64_t interface_span(uint64_t hash, DynSpan span, const DynSource *s) {
-  if (span.end_byte > span.start_byte && span.end_byte <= s->length)
-    hash = interface_bytes(hash, s->text + span.start_byte,
-                           span.end_byte - span.start_byte);
-  return interface_bytes(hash, "\n", 1);
-}
-static uint64_t interface_type(uint64_t hash, DynAstProgram *a, DynType type,
-                               const DynSource *s) {
-  char name[512];
-  dyn_type_format(a, type, s, name, sizeof(name));
-  return interface_bytes(hash, name, strlen(name) + 1);
-}
-/* Everything one object may depend on from the rest of the program, without
-   function bodies. Reflection exposes types introduced in bodies, so a
-   reflecting program hashes its whole text. */
-static uint64_t interface_hash(DynAstProgram *a, const DynSource *s) {
-  uint64_t hash = UINT64_C(1469598103934665603);
-  for (size_t i = 0; i < a->expression_count; ++i)
-    if (a->expressions[i].kind == DYN_EXPR_TYPEOF)
-      return interface_bytes(hash, s->text, s->length);
-  for (size_t i = 0; i < a->struct_count; ++i)
-    hash = interface_span(hash, a->structs[i].span, s);
-  for (size_t i = 0; i < a->enum_count; ++i)
-    hash = interface_span(hash, a->enums[i].span, s);
-  for (size_t i = 0; i < a->alias_count; ++i) {
-    hash = interface_span(hash, a->aliases[i].name, s);
-    hash = interface_type(hash, a, a->aliases[i].target, s);
-  }
-  for (size_t i = 0; i < a->global_count; ++i) {
-    const DynAstGlobal *global = &a->globals[i];
-    hash = interface_span(hash, global->name, s);
-    hash = interface_span(hash, global->link_name, s);
-    hash = interface_type(hash, a, global->type, s);
-    bool flags[] = {global->is_const, global->foreign, global->is_public};
-    hash = interface_bytes(hash, flags, sizeof(flags));
-    if (global->initializer != DYN_NO_EXPR)
-      hash = interface_span(hash, a->expressions[global->initializer].span, s);
-  }
-  for (size_t i = 0; i < a->function_count; ++i) {
-    const DynAstFn *fn = &a->functions[i];
-    if (fn->is_instance)
-      continue;
-    hash = interface_span(hash, fn->name, s);
-    hash = interface_span(hash, fn->link_name, s);
-    hash = interface_type(hash, a, fn->return_type, s);
-    for (uint32_t p = 0; p < fn->param_count; ++p)
-      hash = interface_type(hash, a, a->params[fn->param_start + p].type, s);
-    bool flags[] = {fn->is_main, fn->foreign, fn->variadic, fn->is_public};
-    hash = interface_bytes(hash, flags, sizeof(flags));
-    if (fn->variadic)
-      hash = interface_type(hash, a, fn->variadic_type, s);
-  }
-  return hash;
-}
 uint64_t dyn_codegen_chunk_instances(const DynSource *source,
                                      const DynIrProgram *ir,
                                      const char *owner_key, unsigned chunk,
@@ -180,7 +114,6 @@ static int codegen_prepare(const DynSource *source,
     dyn_ast_program_free(&ast);
     return 2;
   }
-  ir->interface_hash = interface_hash(&ast, source);
   dyn_ast_program_free(&ast);
   if (!local_facts_build(ir)) {
     dyn_ir_free(ir);
