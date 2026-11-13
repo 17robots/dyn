@@ -296,11 +296,23 @@ static int execute_command(DynOptions *options, const char *compiler) {
   }
   if (is_command(options, "cache")) return dyn_cache_command(options->input);
   if (is_command(options, "fmt") || is_command(options, "docs")) {
-    if (!options->input || (!dyn_path_is_directory(options->input) && !single_file_module(options))) {
+    char *sdk_path = NULL;
+    bool available = options->input && (dyn_path_is_directory(options->input) || single_file_module(options));
+    if (!available && is_command(options, "docs")) {
+      sdk_path = dyn_module_resolve_sdk(options->input);
+      if (sdk_path) {
+        options->input = sdk_path;
+        available = dyn_path_is_directory(options->input) || single_file_module(options);
+      }
+    }
+    if (!available) {
       fprintf(stderr, "error: %s requires a module directory or a .dyn file\n", options->command);
+      free(sdk_path);
       return 2;
     }
-    return is_command(options, "fmt") ? dyn_format_directory(options->input, options->format_check) : dyn_docs_directory(options->input, options->docs_json);
+    int result = is_command(options, "fmt") ? dyn_format_directory(options->input, options->format_check) : dyn_docs_directory(options->input, options->docs_json);
+    free(sdk_path);
+    return result;
   }
   bool run = is_command(options, "run");
   if (!is_command(options, "check") && !vet && !is_command(options, "build") && !is_command(options, "query") && !run) {

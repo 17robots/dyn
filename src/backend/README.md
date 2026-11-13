@@ -208,3 +208,22 @@ BUILD=/tmp/dyn-backend-sanitize \
 BUILD=/tmp/dyn-backend-sanitize DYN="$PWD/build/dyn-release" \
   python3 tools/backend/test.py
 ```
+
+Runtime x86-64 quotient/remainder reuse is integrated into constant-division
+lowering. A 64-entry direct-mapped cache, 64-step dominance/search limits, and
+32 rewrites per function keep analysis and insertion work bounded. Matching
+operands and signedness are required. Original division checks stay in place;
+remainder-first pairs also require an unconditional plain-block path to the
+later quotient. Remainders are reconstructed as unchecked internal `x - q*d`.
+Other targets retain their existing runtime division lowering.
+
+The native IR optimizer can propagate uniform, cheap integer-like arguments
+through private direct calls on the qualified x86-64 SSA path. Existing call
+and function-reference scans collect facts; assigned/addressed parameters and
+public, foreign, generic, variadic or escaped functions are excluded. Analysis
+inspects at most eight arguments per call and stores four bytes per IR local
+plus one byte per function. Constants must fit sign-extended 32-bit immediates;
+a measured regression from repeatedly rematerializing a 64-bit mask motivated
+this restriction. Calls/signatures stay unchanged and no functions are cloned.
+The current whole-object cache hashes all project source files; any future
+chunk-cache reactivation must preserve these caller-to-callee dependencies.

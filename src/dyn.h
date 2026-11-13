@@ -280,6 +280,8 @@ int dyn_module_load_project(const char *project_root, const DynSources *root_sou
 int dyn_module_load_project_overlay(const char *project_root, const DynSources *root_sources, const DynSources *overrides, DynSources *project_sources);
 int dyn_module_rewrite_project(const char *project_root, DynSources *sources);
 char *dyn_module_resolve_import(const DynContext *, const char *project_root, const char *current, const char *path);
+/* Owned canonical SDK path, or NULL. Does not read a project manifest. */
+char *dyn_module_resolve_sdk(const char *path);
 bool dyn_cache_hit(const DynSources *sources, const DynOptions *options, const char *compiler_path, const char *output);
 uint64_t dyn_cache_file_hash(const char *compiler_path);
 bool dyn_cache_directory(char *path, size_t capacity);

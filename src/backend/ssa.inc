@@ -4291,7 +4291,11 @@ static bool ssa_fold(Ssa *s, const uint32_t *order, uint32_t n) {
         }
         break;
       }
-      case SO_CMP: if (ca && cb) { r = ssa_condition_holds(v->cond, x, y); constant = true; } break;
+      case SO_CMP:
+        if (ca && cb) { r = ssa_condition_holds(v->cond, x, y); constant = true; }
+        /* Integer identity only: SO_FCMP must retain NaN behavior. */
+        else if (v->a >= 0 && v->a == v->b) { r = ssa_condition_holds(v->cond, 0, 0); constant = true; }
+        break;
       case SO_ADDO: case SO_SUBO: case SO_MULO:
         if (ca && cb) {
           bool overflow;
@@ -5686,6 +5690,69 @@ static int32_t ssa_insert(Ssa *s, uint32_t b, uint32_t *k, SsaOp op, int32_t a, 
   list->items[(*k)++] = (uint32_t)v;
   return v;
 }
+/* Reuse a dominating runtime quotient for remainder. The direct-mapped cache
+   is initialized only for functions with runtime division; collisions merely
+   miss an optimization. Checks retain their original positions. If remainder
+   comes first, introduce the quotient at that exact operation, never above its
+   checks. Computing x - q*d uses unchecked SSA arithmetic (no new panics). */
+static void ssa_division_pair(Ssa *s, uint32_t b, uint32_t *k, uint32_t id,
+                              uint32_t recent[64], bool *initialized, unsigned *budget) {
+  if (!*budget) return;
+  SsaValue *v = &s->values[id];
+  if (!*initialized) { memset(recent, 0xff, 64 * sizeof(*recent)); *initialized = true; }
+  int32_t x = v->a, d = v->b;
+  int64_t sign = v->aux2;
+  uint32_t slot = ((uint32_t)x * 31u + (uint32_t)d * 17u + (uint32_t)sign) & 63u;
+  uint32_t previous = recent[slot];
+  if (previous == UINT32_MAX || s->values[previous].a != x || s->values[previous].b != d ||
+      s->values[previous].aux2 != sign) {
+    recent[slot] = id;
+    return;
+  }
+  SsaValue *first = &s->values[previous];
+  uint32_t ancestor = b;
+  for (unsigned steps = 0; steps < 64 && s->blocks[ancestor].depth > s->blocks[first->block].depth; ++steps)
+    ancestor = s->blocks[ancestor].idom;
+  if (ancestor != first->block) { recent[slot] = id; return; }
+  if (first->op == v->op) return;
+  bool remainder_first = first->op == SO_REM;
+  if (remainder_first && first->block != b) {
+    // Do not add arithmetic to a remainder whose later quotient is conditional.
+    uint32_t next = first->block;
+    for (unsigned steps = 0; steps < 64 && next != b; ++steps) {
+      if (s->blocks[next].kind != SB_PLAIN || s->blocks[next].succ[0] == UINT32_MAX) break;
+      next = s->blocks[next].succ[0];
+    }
+    if (next != b) { recent[slot] = id; return; }
+  }
+  uint32_t rem = v->op == SO_REM ? id : previous;
+  int32_t quotient = v->op == SO_DIV ? (int32_t)id : (int32_t)previous;
+  uint32_t at = s->values[rem].block, position = *k;
+  SsaList *list = &s->blocks[at].values;
+  if (rem != id) {
+    position = at == b ? *k : list->count;
+    uint32_t stop = position > 64 ? position - 64 : 0;
+    bool found = false;
+    while (position > stop) {
+      --position;
+      if (list->items[position] == rem) { found = true; break; }
+    }
+    if (!found) { recent[slot] = id; return; }
+  }
+  uint32_t original_position = position;
+  if (remainder_first) {
+    quotient = ssa_insert(s, at, &position, SO_DIV, x, d, 0, sign);
+  }
+  int32_t product = ssa_insert(s, at, &position, SO_MUL, quotient, d, 0, 0);
+  int32_t remainder = ssa_insert(s, at, &position, SO_SUB, x, product, 0, 0);
+  if (s->failed) return;
+  ssa_replace(s, rem, remainder);
+  if (remainder_first) ssa_replace(s, id, quotient);
+  /* Inserts before the current cursor must not make us visit values twice. */
+  if (at == b && original_position <= *k) *k += position - original_position;
+  recent[slot] = (uint32_t)quotient;
+  --*budget;
+}
 /* Division by a constant becomes shifts or a multiply by its reciprocal
    (Granlund and Montgomery, as libdivide computes it). The checks before it
    already ran; the result is bit-identical to the hardware division. */
@@ -5693,13 +5760,20 @@ static void ssa_divisions(Ssa *s, const uint32_t *order, uint32_t n) {
   /* Pair targets use the ISA's division helpers; reciprocal reduction would
      introduce SO_MULH, which their slot emitter does not implement. */
   if (s->ctx->rv32 || s->ctx->t32) return;
+  uint32_t recent[64]; bool initialized = false; unsigned pair_budget = 32;
   for (uint32_t i = 0; i < n; ++i) {
     uint32_t b = order[i];
     for (uint32_t k = 0; k < s->blocks[b].values.count; ++k) {
       uint32_t id = s->blocks[b].values.items[k];
       SsaValue *v = &s->values[id];
       uint64_t d;
-      if ((v->op != SO_DIV && v->op != SO_REM) || !ssa_is_const(s, v->b, &d) || d == 0) continue;
+      if (v->op != SO_DIV && v->op != SO_REM) continue;
+      if (!ssa_is_const(s, v->b, &d)) {
+        if (!s->ctx->a64 && !s->ctx->rv64) ssa_division_pair(s, b, &k, id, recent, &initialized, &pair_budget);
+        if (s->failed) return;
+        continue;
+      }
+      if (d == 0) continue;
       bool sign = v->aux2 != 0, rem = v->op == SO_REM;
       int32_t x = v->a, q;
       if (sign && (int64_t)d <= 1) continue; /* negative divisors keep IDIV */

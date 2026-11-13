@@ -342,12 +342,16 @@ typedef struct {
      which starts past every original ID. */
   uint32_t loop_stride, next_loop;
   uint32_t *loop_low, *loop_span;
-  unsigned expansions, budget, resource_budget, reserved_growth, reserved_resources;
+  unsigned expansions, constants, budget, resource_budget, reserved_growth, reserved_resources;
   unsigned *costs;
-  bool failed, leaf_only, byte_fast;
+  bool failed, leaf_only, byte_fast, uniform_params;
   bool *active;
   /* Locals whose address is taken anywhere; a call may change them. */
   bool *addressed;
+  /* Original local ID -> 0 unknown, 1 varying/unsafe, or literal ID + 2.
+     Facts only describe readonly scalar parameters of private direct callees. */
+  uint32_t *param_literals;
+  bool *escaped;
   /* For each function-pointer type whose value is ever taken, the one function
      it can be, or UINT32_MAX when there are several. */
   DynType *guess_types;
@@ -560,6 +564,47 @@ static bool inline_shared_expr(const DynIrProgram *ir, DynExprId id,
       return false;
   return true;
 }
+/* Collect uniform scalar arguments during the existing expression scan.
+   Keep the signature and arguments unchanged: calls still evaluate everything.
+   The eight-parameter cap bounds work even for unusual shared IR item ranges. */
+static void inline_uniform_call(Inline *b, const DynIrExpr *call) {
+  if (!b->uniform_params || call->kind != DYN_EXPR_CALL || call->integer >= b->in->function_count ||
+      !b->in->unstable_locals)
+    return;
+  const DynIrFunction *f = &b->in->functions[call->integer];
+  if (f->is_public || f->is_main || f->foreign || f->generic || f->variadic ||
+      f->param_count > 8 || f->param_count != call->item_count ||
+      (uint64_t)f->param_start + f->param_count > b->in->param_count ||
+      (uint64_t)call->item_start + call->item_count > b->in->item_count)
+    return;
+  for (uint32_t i = 0; i < f->param_count; ++i) {
+    const DynIrParam *param = &b->in->params[f->param_start + i];
+    if (param->local_id >= b->in->local_count) continue;
+    uint32_t *fact = &b->param_literals[param->local_id];
+    if (*fact == 1) continue;
+    DynExprId id = b->in->items[call->item_start + i].expression;
+    if (b->in->unstable_locals[param->local_id] || id >= b->in->expression_count ||
+        id > UINT32_MAX - 2) { *fact = 1; continue; }
+    const DynIrExpr *argument = &b->in->expressions[id];
+    bool scalar = param->type == DYN_TYPE_BOOL ||
+      (param->type >= DYN_TYPE_I8 && param->type <= DYN_TYPE_U64) ||
+      param->type == DYN_TYPE_ISIZE || param->type == DYN_TYPE_USIZE;
+    if (!scalar || argument->type != param->type ||
+        (argument->kind != DYN_EXPR_INT && argument->kind != DYN_EXPR_BOOL &&
+         argument->kind != DYN_EXPR_CHAR)) { *fact = 1; continue; }
+    uint64_t bits = argument->kind == DYN_EXPR_BOOL ? argument->boolean : argument->integer;
+    // Large constants may be rematerialized inside loops. Limit this target's
+    // specialization to values encodable as sign-extended 32-bit immediates.
+    if (argument->kind == DYN_EXPR_INT && bits > (uint64_t)INT32_MAX &&
+        bits < UINT64_MAX - (uint64_t)INT32_MAX) { *fact = 1; continue; }
+    if (*fact > 1) {
+      const DynIrExpr *previous = &b->in->expressions[*fact - 2];
+      uint64_t a = argument->kind == DYN_EXPR_BOOL ? argument->boolean : argument->integer;
+      uint64_t p = previous->kind == DYN_EXPR_BOOL ? previous->boolean : previous->integer;
+      if (a != p) *fact = 1;
+    } else *fact = id + 2;
+  }
+}
 static DynExprId inline_expr(Inline *b, const InlineScope *scope, DynExprId id,
                              unsigned depth) {
   if (id == DYN_NO_EXPR || b->failed)
@@ -573,6 +618,21 @@ static DynExprId inline_expr(Inline *b, const InlineScope *scope, DynExprId id,
                          scope->check_origin != 0))
     return id;
   DynIrExpr e = b->in->expressions[id];
+  if (b->uniform_params && e.kind == DYN_EXPR_NAME && e.integer < b->in->local_count &&
+      b->param_literals[e.integer] > 1 && b->in->unstable_locals &&
+      !b->in->unstable_locals[e.integer] && !b->addressed[e.integer] &&
+      b->in->expressions[b->param_literals[e.integer] - 2].type == e.type) {
+    DynExprId literal = b->param_literals[e.integer] - 2;
+    DynIrExpr constant = b->in->expressions[literal];
+    constant.span = e.span;
+    constant.check_origin = e.check_origin;
+    /* This prefix is the optimizer's owned copy, not the prepared input.
+       Keep uniform-only changes even when no body is expanded and rebuilt
+       local/statement tables are discarded below. */
+    b->out.expressions[id] = constant;
+    ++b->constants;
+    return literal;
+  }
   if (!e.check_origin)
     e.check_origin = scope->check_origin;
   if (e.kind == DYN_EXPR_NAME)
@@ -1547,7 +1607,8 @@ static bool inline_dense_loops(DynIrProgram *ir) {
 /* budget: growth allowed per caller, in cost units; see inline_admits. */
 static bool inline_program_within(DynNativeOptimization *o, bool leaf_only, bool byte_fast, unsigned budget) {
   Inline b = {.view = o->ir, .out = o->ir, .loop_stride = 1,
-              .leaf_only = leaf_only, .byte_fast = byte_fast};
+              .leaf_only = leaf_only, .byte_fast = byte_fast,
+              .uniform_params = byte_fast};
   b.in = &b.view;
   b.expressions_cap = o->ir.expression_count;
   b.statements_cap = o->ir.statement_count;
@@ -1636,9 +1697,17 @@ static bool inline_program_within(DynNativeOptimization *o, bool leaf_only, bool
     b.loop_span[i] = low == UINT32_MAX ? 0 : high - low + 1;
   }
   b.addressed = calloc(b.in->local_count ? b.in->local_count : 1, sizeof(bool));
+  // Uniform-parameter qualification currently covers native x86-64 SSA only;
+  // other backends retain their previous optimization and allocation paths.
+  if (b.uniform_params) {
+    b.param_literals = calloc(b.in->local_count ? b.in->local_count : 1, sizeof(*b.param_literals));
+    b.escaped = calloc(b.in->function_count ? b.in->function_count : 1, sizeof(*b.escaped));
+    if (!b.param_literals || !b.escaped) b.failed = true;
+  }
   if (!b.addressed) b.failed = true;
   for (size_t i = 0; i < b.in->expression_count && !b.failed; ++i) {
     const DynIrExpr *e = &b.in->expressions[i];
+    if (b.uniform_params && e->kind == DYN_EXPR_CALL) inline_uniform_call(&b, e);
     /* &local, &local.field, &local[i], and slices of local arrays all point
        into the local's storage. */
     bool takes = (e->kind == DYN_EXPR_UNARY && e->op == DYN_OP_ADDRESS) || e->kind == DYN_EXPR_SLICE;
@@ -1661,6 +1730,15 @@ static bool inline_program_within(DynNativeOptimization *o, bool leaf_only, bool
     if (e->kind != DYN_EXPR_FUNCTION ||
         (b.in->live.expressions && !b.in->live.expressions[i]) ||
         (b.in->live.functions && !b.in->live.functions[e->integer])) continue;
+    if (b.uniform_params && e->integer < b.in->function_count && !b.escaped[e->integer]) {
+      b.escaped[e->integer] = true;
+      const DynIrFunction *f = &b.in->functions[e->integer];
+      if (f->param_count <= 8 && (uint64_t)f->param_start + f->param_count <= b.in->param_count)
+        for (uint32_t j = 0; j < f->param_count; ++j) {
+          uint32_t local = b.in->params[f->param_start + j].local_id;
+          if (local < b.in->local_count) b.param_literals[local] = 1;
+        }
+    }
     size_t k = 0;
     while (k < b.guess_count && b.guess_types[k] != e->type) ++k;
     if (k == b.guess_count) {
@@ -1737,6 +1815,8 @@ static bool inline_program_within(DynNativeOptimization *o, bool leaf_only, bool
   free(b.loop_low);
   free(b.loop_span);
   free(b.addressed);
+  free(b.param_literals);
+  free(b.escaped);
   free(b.guess_types);
   free(b.guess_functions);
   free(b.plan);
@@ -1744,6 +1824,7 @@ static bool inline_program_within(DynNativeOptimization *o, bool leaf_only, bool
   /* The original records are still the prefix of the shared arrays. */
   o->ir.expressions = b.out.expressions;
   o->ir.statements = b.out.statements;
+  o->propagated += b.constants;
   if (b.failed || !b.expansions) {
     b.out.expressions = NULL;
     b.out.statements = NULL;
