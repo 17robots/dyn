@@ -11,21 +11,23 @@ typedef struct {
   unsigned char *expressions, *statements;
 } DynIrLiveness;
 
+/* Fields ordered by size, so the record packs into 64 bytes. */
 typedef struct {
   DynExprKind kind;
   DynType type;
   DynOperator op;
   DynExprId left, right;
-  uint64_t integer;
-  double floating;
-  bool boolean; /* A literal's value; on a dereference, its checks already ran. */
   uint32_t item_start, item_count;
-  DynSpan span;
-  bool wrap;
   /* Zero inherits the enclosing expression or emitted function; otherwise
      the original function index plus one identifies runtime check failures. */
   uint32_t check_origin;
+  DynSpan span;
+  uint64_t integer;
+  double floating;
+  bool boolean; /* A literal's value; on a dereference, its checks already ran. */
+  bool wrap;
 } DynIrExpr;
+_Static_assert(sizeof(DynIrExpr) <= 64, "DynIrExpr grew past 64 bytes");
 typedef struct {
   DynExprId expression;
   uint32_t field_index;

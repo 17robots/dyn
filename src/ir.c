@@ -490,12 +490,12 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
   char *cursor = ir->names;
   for (size_t i = 0; i < a->expression_count; ++i)
     ir->expressions[i] = (DynIrExpr){
-        a->expressions[i].kind,       lower_type(a, a->expressions[i].type),
-        a->expressions[i].op,         a->expressions[i].left,
-        a->expressions[i].right,      a->expressions[i].integer,
-        a->expressions[i].floating,   a->expressions[i].boolean,
-        a->expressions[i].item_start, a->expressions[i].item_count,
-        a->expressions[i].span,       a->expressions[i].wrap, 0};
+        .kind = a->expressions[i].kind,             .type = lower_type(a, a->expressions[i].type),
+        .op = a->expressions[i].op,                 .left = a->expressions[i].left,
+        .right = a->expressions[i].right,           .integer = a->expressions[i].integer,
+        .floating = a->expressions[i].floating,     .boolean = a->expressions[i].boolean,
+        .item_start = a->expressions[i].item_start, .item_count = a->expressions[i].item_count,
+        .span = a->expressions[i].span,             .wrap = a->expressions[i].wrap};
   /* Runtime integer arithmetic wraps. Sema has already rejected constant
      overflow. Division and shift counts have their own rules. */
   for (size_t i = 0; i < ir->expression_count; ++i) {
