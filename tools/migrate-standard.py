@@ -110,8 +110,8 @@ def files(paths, embedded):
     suffixes = {'.dyn'} | ({'.py', '.md'} if embedded else set())
     for path in map(pathlib.Path, paths):
         if path.is_dir():
-            yield from (p for p in sorted(path.rglob('*')) if p.suffix in suffixes and p.is_file())
-        elif path.suffix in suffixes:
+            yield from (p for p in sorted(path.rglob('*')) if (p.suffix in suffixes or p.name.endswith('.dyn.in')) and p.is_file())
+        elif path.suffix in suffixes or path.name.endswith('.dyn.in'):
             yield path
 
 

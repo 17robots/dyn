@@ -1,12 +1,13 @@
 use "std/mem"
 use "std/c"
 use "std/strings"
+use "std/bytes"
 use "std/io"
 use "vendor/lua/raw" lua
 
 fn main() {
   // Application-owned storage is an arena. Lua owns its own native state.
-  backing: [1024]u8 = []
+  backing: [1024]u8
   persistent := mem.arena_from_buffer(backing[..])
   state := lua.luaL_newstate()
   if state == nil { #panic("Lua state allocation") }
@@ -25,6 +26,6 @@ fn main() {
   retained := strings.clone(persistent, borrowed)
   lua.lua_pop(state, 1)
   // No use of borrowed/pointer beyond this point.
-  if lua.lua_gettop(state) != 0 || !strings.equal(retained, "retained result") { #panic("lifetime contract") }
+  if lua.lua_gettop(state) != 0 || !bytes.equal(retained, "retained result") { #panic("lifetime contract") }
   io.println("{}", retained)
 }
