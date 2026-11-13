@@ -52,7 +52,8 @@ servers so they pick up the new `dyn`.
   no longer copies j; the sort benchmark runs 2% faster. An early return
   reached without side effects, such as a recursion's base case or a tree
   walk's `if node.left == nil { return 1 }`, runs before the function saves
-  any registers; the tree benchmark runs 3% faster.
+  any registers; the tree benchmark runs 3% faster. `for i in a..=b` with
+  a constant `b` below the type's maximum compares once per iteration.
 - Functions that take or return fixed arrays or payload enums by value, such
   as `fn area(shape: Shape) f64`, and functions that call C variadic
   functions now compile to optimized SSA code on every 64-bit target. No

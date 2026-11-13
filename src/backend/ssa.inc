@@ -2998,25 +2998,33 @@ static void ssa_statement_value(Ssa *s, const DynIrStmt *st, unsigned depth) {
       int32_t first = ssa_expr(s, st->target, NULL, 0);
       int32_t last = ssa_expr(s, st->expression, NULL, 0);
       int32_t stop = st->for_reverse ? first : last;
+      /* A constant inclusive end below the maximum is an exclusive end one
+         past it: no separate exit test before the step. */
+      bool inclusive = st->for_inclusive;
+      uint64_t end;
+      if (inclusive && !st->for_reverse && ssa_is_const(s, stop, &end) && end != (sign ? (uint64_t)INT64_MAX : UINT64_MAX)) {
+        stop = ssa_const(s, end + 1, SC_INT);
+        inclusive = false;
+      }
       ssa_write(s, counter, st->for_reverse ? last : first);
       ssa_jump(s, header);
       ++s->loop_depth;
       s->current = header;
       int32_t at = ssa_read(s, counter, header, SC_INT);
-      Cond exit_when = st->for_reverse ? (st->for_inclusive ? (sign ? CC_L : CC_B) : (sign ? CC_LE : CC_BE))
-                                       : (st->for_inclusive ? (sign ? CC_G : CC_A) : (sign ? CC_GE : CC_AE));
+      Cond exit_when = st->for_reverse ? (inclusive ? (sign ? CC_L : CC_B) : (sign ? CC_LE : CC_BE))
+                                       : (inclusive ? (sign ? CC_G : CC_A) : (sign ? CC_GE : CC_AE));
       ssa_branch(s, ssa_compare(s, at, stop, exit_when), exit, body);
       ssa_seal(s, body);
       s->current = body;
       int32_t value = at;
-      if (st->for_reverse && !st->for_inclusive) value = ssa_emit(s, SO_ADD, SC_INT, at, ssa_const(s, UINT64_MAX, SC_INT), -1, 0, 0);
+      if (st->for_reverse && !inclusive) value = ssa_emit(s, SO_ADD, SC_INT, at, ssa_const(s, UINT64_MAX, SC_INT), -1, 0, 0);
       ssa_set_local(s, binding, value, -1);
       ssa_loop_body(s, st, latch, exit, depth);
       ssa_seal(s, latch);
       s->current = s->blocks[latch].preds.count ? latch : UINT32_MAX;
       if (s->current != UINT32_MAX) {
         int32_t now = ssa_read(s, counter, latch, SC_INT);
-        if (st->for_inclusive) {
+        if (inclusive) {
           uint32_t step = ssa_block(s);
           ssa_branch(s, ssa_compare(s, now, stop, CC_E), exit, step);
           ssa_seal(s, step);

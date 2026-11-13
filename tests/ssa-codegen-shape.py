@@ -8,6 +8,8 @@
 - Wide constants used in a loop live in registers, not one MOVABS per use.
 - A loop whose header loads and checks before comparing is rotated: the
   latch repeats the header instead of jumping back to it.
+- An inclusive range with a constant end below the maximum loops as an
+  exclusive one: one comparison against the end plus one, no equality exit.
 - quicksort's outer latch decrements j in j's own register: the new j lives
   in a hole of the old j's interval, so no copy surrounds the SUB.
 The programs run and are checked for their output first."""
@@ -73,6 +75,14 @@ fn mix(n: u64) u64 {
   return state
 }
 
+fn spin(seed: u64) u64 {
+  x := seed
+  for i in 1..=1000 {
+    x = x * 31 + i
+  }
+  return x
+}
+
 fn main() {
   values: [64]u64
   state: u64 = 3
@@ -89,7 +99,7 @@ fn main() {
   }
   keys: [1024]u64
   keys[probe(keys[..], 5)] = 5
-  io.println("{} {} {} {}", count_down(10000000, 0), sorted, probe(keys[..], 5) < 1024, mix(1000) != 0)
+  io.println("{} {} {} {}", count_down(10000000, 0), sorted, probe(keys[..], 5) < 1024, mix(1000) != 0 && spin(3) != 0)
 }
 '''
 if not shutil.which('objdump'):
@@ -138,8 +148,10 @@ with tempfile.TemporaryDirectory(prefix='dyn-ssa-codegen-shape-') as temporary:
             break
     else:
         raise AssertionError(probe)
+    spin = function(listing, 'spin')
+    assert not any('$0x3e8' in line for line in spin) and sum('$0x3e9' in line for line in spin) >= 1, spin
     mix = function(listing, 'mix')
     loop = [l for l in mix if l.startswith('imul') or l.startswith('movabs')]
     assert sum(l.startswith('movabs') for l in mix) == 2 and not any(
         mix[i].startswith('movabs') and any(m.startswith('imul') for m in mix[:i]) for i in range(len(mix))), mix
-print('PASS tail calls loop, two-address chains share the phi register, wide loop constants stay in registers, quicksort latch has no copies')
+print('PASS tail calls loop, two-address chains share the phi register, wide loop constants stay in registers, quicksort latch has no copies, constant inclusive ranges compare once')
