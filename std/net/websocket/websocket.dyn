@@ -82,7 +82,7 @@ fn ws_rol(value: u32, count: usize) u32 {
   return ws_shl(value, count) | (value >> (32 - count))
 }
 fn ws_sha1_block(state: []u32, block: []const u8) {
-  words: [80]u32 = []
+  words: [80]u32
   i: usize = 0
   for i < 16 {
     at := i * 4
@@ -176,13 +176,13 @@ fn ws_append(destination: []u8, offset: usize, source: []const u8) usize {
 
 // Computes RFC 6455 Sec-WebSocket-Accept into 28 caller-owned bytes.
 fn websocket_accept(destination: []u8, key: []const u8) []u8 {
-  decoded: [18 + mem.ArenaBufferOverhead]u8 = []
+  decoded: [18 + mem.ArenaBufferOverhead]u8
   decoded_arena := mem.arena_from_buffer(decoded[..])
   if #len(key) != 24 || #len(base64.decode(decoded_arena, key).value) != 16 || #len(destination) < 28 {
     return destination[..0]
   }
   guid: []const u8 = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
-  message: [128]u8 = []
+  message: [128]u8
   i: usize = 0
   for i < #len(key) {
     message[i] = key[i]
@@ -199,7 +199,7 @@ fn websocket_accept(destination: []u8, key: []const u8) []u8 {
   state: [5]u32 = [1732584193, 4023233417, 2562383102, 271733878, 3285377520]
   ws_sha1_block(state[..], message[..64])
   ws_sha1_block(state[..], message[64..])
-  digest: [20]u8 = []
+  digest: [20]u8
   i = 0
   for i < 5 {
     digest[i * 4] = #cast(u8, (state[i] >> 24))
@@ -208,7 +208,7 @@ fn websocket_accept(destination: []u8, key: []const u8) []u8 {
     digest[i * 4 + 3] = #cast(u8, state[i])
     i += 1
   }
-  encoding_storage: [28 + mem.ArenaBufferOverhead]u8 = []
+  encoding_storage: [28 + mem.ArenaBufferOverhead]u8
   encoded := mem.arena_from_buffer(encoding_storage[..])
   text := base64.encode(encoded, digest[..])
   for j in 0..#len(text) {
@@ -220,7 +220,7 @@ fn websocket_accept(destination: []u8, key: []const u8) []u8 {
 // Validates the HTTP request-side RFC 6455 upgrade fields. Returned key borrows request.
 fn websocket_validate_upgrade_request(request: []const u8) WebSocketUpgrade {
   head := http.parse_request(request)
-  if head.failure.kind != parse.Kind.Ok {
+  if parse.failed(head.failure) {
     return WebSocketUpgrade{ offset: head.offset, failure: parse.Failure{ kind: head.failure.kind, offset: head.offset } }
   }
   if #len(request) < 4 || !ws_equal(request[..4], "GET ") {
@@ -230,7 +230,7 @@ fn websocket_validate_upgrade_request(request: []const u8) WebSocketUpgrade {
   connection_header := http.header(request, "Connection")
   version := http.header(request, "Sec-WebSocket-Version")
   key := http.header(request, "Sec-WebSocket-Key")
-  scratch: [18 + mem.ArenaBufferOverhead]u8 = []
+  scratch: [18 + mem.ArenaBufferOverhead]u8
   scratch_arena := mem.arena_from_buffer(scratch[..])
   if !upgrade.found || !connection_header.found || !version.found || !key.found || !ws_equal_case(upgrade.value, "websocket") ||
     !ws_equal_case(connection_header.value, "Upgrade") || !ws_equal(version.value, "13") ||
@@ -242,7 +242,7 @@ fn websocket_validate_upgrade_request(request: []const u8) WebSocketUpgrade {
 
 // Writes the server's complete 101 response. Empty means invalid key/capacity.
 fn websocket_write_upgrade_response(destination: []u8, key: []const u8) []u8 {
-  accept_storage: [28]u8 = []
+  accept_storage: [28]u8
   accept_value := websocket_accept(accept_storage[..], key)
   if #len(accept_value) == 0 {
     return destination[..0]
@@ -258,13 +258,13 @@ fn websocket_write_upgrade_response(destination: []u8, key: []const u8) []u8 {
 
 fn websocket_validate_upgrade_response(response: []const u8, key: []const u8) bool {
   head := http.parse_response(response)
-  if head.failure.kind != parse.Kind.Ok || head.code != 101 {
+  if parse.failed(head.failure) || head.code != 101 {
     return false
   }
   upgrade := http.header(response, "Upgrade")
   connection_header := http.header(response, "Connection")
   accept_header := http.header(response, "Sec-WebSocket-Accept")
-  expected: [28]u8 = []
+  expected: [28]u8
   expected_accept := websocket_accept(expected[..], key)
   return upgrade.found && connection_header.found && accept_header.found && ws_equal_case(upgrade.value, "websocket") && ws_equal_case(connection_header.value, "Upgrade") && ws_equal(accept_header.value, expected_accept)
 }
@@ -416,13 +416,13 @@ fn websocket_parse(input: []const u8) WebSocketFrame {
 }
 
 fn websocket_decode(destination: []u8, frame: WebSocketFrame) []u8 {
-  if frame.failure.kind != parse.Kind.Ok || #len(destination) < #len(frame.payload) {
+  if parse.failed(frame.failure) || #len(destination) < #len(frame.payload) {
     return destination[..0]
   }
   fm0 := frame.mask >> 24
   fm1 := frame.mask >> 16
   fm2 := frame.mask >> 8
-  keys: [4]u8 = []
+  keys: [4]u8
   keys[0] = #cast(u8, fm0)
   keys[1] = #cast(u8, fm1)
   keys[2] = #cast(u8, fm2)
@@ -516,7 +516,7 @@ fn websocket_message_state(expect_masked: bool) WebSocketMessageState {
 // Advances one RFC 6455 message io. All storage belongs to the caller.
 // Message storage persists across fragments; control storage may be reused per call.
 fn websocket_receive(state: *WebSocketMessageState, message: []u8, control: []u8, frame: WebSocketFrame) WebSocketEvent {
-  if frame.failure.kind != parse.Kind.Ok {
+  if parse.failed(frame.failure) {
     return WebSocketEvent{ offset: frame.offset, detail: WebSocketEventKind.Error, failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
   if state.closed {
@@ -601,7 +601,7 @@ pub fn write_upgrade_response(arena: *mem.Arena, key: []const u8) []u8 {
 
 pub fn validate_upgrade_response(response: []const u8, key: []const u8) Result {
   head := http.parse_response(response)
-  if head.failure.kind != parse.Kind.Ok {
+  if parse.failed(head.failure) {
     return Result{ offset: head.offset, failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
   if !websocket_validate_upgrade_response(response, key) {
@@ -703,8 +703,8 @@ pub fn connection_send(state: *WebSocketConnection, opcode: u8, payload: []const
     return ws_connection_fail(state, io.Kind.Capacity, 0)
   }
   result := io.write_all(state.output, frame)
-  if result.status == io.Status.Error {
-    return ws_connection_fail(state, result.kind, result.error)
+  if io.failed(result.failure) {
+    return ws_connection_fail(state, result.failure.kind, result.failure.native)
   }
   if opcode == WsU8Eight {
     state.close_sent = true
@@ -758,7 +758,7 @@ pub fn connection_receive(state: *WebSocketConnection) WebSocketResult {
   state.frame_consumed = 0
   for true {
     frame := websocket_parse(state.frames[..state.frame_used])
-    if frame.failure.kind == parse.Kind.Ok {
+    if !parse.failed(frame.failure) {
       event := websocket_receive(&state.state, state.message, state.control, frame)
       if event.detail == WebSocketEventKind.Error {
         state.offset = event.offset
@@ -796,8 +796,8 @@ pub fn connection_receive(state: *WebSocketConnection) WebSocketResult {
       _ = ws_connection_fail(state, io.Kind.System, 0)
       return WebSocketResult{ offset: state.offset, failure: io.Failure{ kind: state.kind, native: state.error } }
     }
-    if input.status == io.Status.Error {
-      _ = ws_connection_fail(state, input.kind, input.error)
+    if io.failed(input.failure) {
+      _ = ws_connection_fail(state, input.failure.kind, input.failure.native)
       return WebSocketResult{ offset: state.offset, failure: io.Failure{ kind: state.kind, native: state.error } }
     }
     state.frame_used += input.transferred

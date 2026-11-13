@@ -15,8 +15,7 @@ struct Shared {
   mutex: sync.Mutex, condition: sync.Condition, gate: sync.Semaphore,
   once: sync.Once, arrived: u32, completed: u32, total: u64, value: u64
 }
-fn worker(context: rawptr) isize {
-  shared := #cast(*Shared, context)
+fn worker(shared: *Shared) isize {
   sync.lock(&shared.mutex)
   shared.arrived += 1
   sync.condition_broadcast(&shared.condition)
@@ -39,16 +38,16 @@ fn worker(context: rawptr) isize {
   return 0
 }
 fn main() {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   defer { mem.arena_release(arena) }
   shared := Shared{}
   if !sync.try_lock(&shared.mutex) { #panic("initial trylock") }
   if sync.try_lock(&shared.mutex) { #panic("recursive trylock") }
   sync.unlock(&shared.mutex)
-  threads: [4]*thread.Thread = []
+  threads: [4]*thread.Thread
   for i in 0..4 {
-    spawned:=thread.spawn_with_size(arena,131072,worker,#cast(rawptr,&shared))
-    if spawned.failure.kind != io.Kind.Ok { #panic("spawn") }
+    spawned:=thread.spawn_with_size(arena,131072,worker,&shared)
+    if io.failed(spawned.failure) { #panic("spawn") }
     threads[i]=spawned.value
   }
   sync.lock(&shared.mutex)
@@ -59,7 +58,7 @@ fn main() {
   for shared.completed != 4 { sync.condition_wait(&shared.condition, &shared.mutex) }
   if shared.total != 8000 { #panic("lost mutex updates") }
   sync.unlock(&shared.mutex)
-  for i in 0..4 { if thread.join(threads[i]).failure.kind != io.Kind.Ok { #panic("join") } }
+  for i in 0..4 { if io.failed(thread.join(threads[i]).failure) { #panic("join") } }
   if sync.semaphore_try_wait(&shared.gate) || sync.once_begin(&shared.once) { #panic("consumed state") }
   sync.semaphore_post(&shared.gate)
   if !sync.semaphore_try_wait(&shared.gate) { #panic("semaphore try") }

@@ -4,6 +4,16 @@ Dyn is pre-1.0. Source and standard-library compatibility may change, but change
 in release notes and accompanied by migrations for shipped examples and tests. Core syntax should
 be frozen during a release cycle; experimental APIs must not be presented as stable.
 
+## Language freeze
+
+The language is frozen as of the 2026-11-13 standardization
+([migration](../migrations/standard-20261113.md)). Until the self-hosted
+compiler's stage 0, no syntax or language rule changes: the grammar, the
+builtins, the conversion rules, generics and the error model stay as written in
+the [language reference](language.md). Bug fixes that make the compiler match
+that reference, better diagnostics, and standard-library growth continue.
+Reopening the freeze takes an explicit decision recorded in the changelog.
+
 Linux x86-64 is the primary target. The [support scope](../internals/release.md#support-scope)
 table is the authoritative list of targets and their status. A target leaves
 experimental status only after its native release gates record passing results;

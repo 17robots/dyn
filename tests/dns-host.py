@@ -25,7 +25,7 @@ use "std/mem" mem
 use "std/crypto/random" random
 fn require(value: bool, message: []const u8) { if !value { #panic(message) } }
 fn main() {
-  bytes: [515]u8 = []
+  bytes: [515]u8
   sizes: [4]usize = [0,1,257,513]
   for size in sizes {
     for i in 0..515 { bytes[i] = 42 }
@@ -34,18 +34,18 @@ fn main() {
     for i in size+1..515 { require(bytes[i] == 42,"random suffix clobbered") }
   }
   server := net.ipv4(127,0,0,1,PORT)
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   defer mem.arena_release(arena)
   result := dns.resolve_ipv4(arena,"a.test",&server,4000)
-  require(result.failure.kind == io.Kind.Ok && #len(result.value) == 1,"A response")
+  require(!io.failed(result.failure) && #len(result.value) == 1,"A response")
   require(result.value[0].a == 1 && result.value[0].b == 2 && result.value[0].c == 3 && result.value[0].d == 4,"A value / nonce filtering")
   result6 := dns.resolve_ipv6(arena,"aaaa.test",&server,4000)
-  require(result6.failure.kind == io.Kind.Ok && #len(result6.value) == 1,"AAAA response")
+  require(!io.failed(result6.failure) && #len(result6.value) == 1,"AAAA response")
   for i in 0..16 { require(result6.value[0].bytes[i] == #cast(u8, i),"AAAA value") }
   result = dns.resolve_ipv4(arena,"missing.test",&server,4000)
-  require(result.failure.kind != io.Kind.Ok && result.failure.native == -3,"NXDOMAIN response")
+  require(io.failed(result.failure) && result.failure.native == -3,"NXDOMAIN response")
   result = dns.resolve_ipv4(arena,"large.test",&server,4000)
-  require(result.failure.kind == io.Kind.Ok && #len(result.value) == 1,"UDP truncation TCP fallback")
+  require(!io.failed(result.failure) && #len(result.value) == 1,"UDP truncation TCP fallback")
   require(result.value[0].a == 9 && result.value[0].b == 8 && result.value[0].c == 7 && result.value[0].d == 6,"TCP response value")
 }
 '''

@@ -15,39 +15,39 @@ use "std/bytes" bytes
 fn require(ok: bool) { if !ok { #panic("OS edge result contract") } }
 fn main() {
  r := terminal.read_state(-1)
- require(r.failure.kind != errors.Kind.Ok && r.failure.native == -9 && r.failure.kind == errors.Kind.InvalidState)
+ require(errors.failed(r.failure) && r.failure.native == -9 && r.failure.kind == errors.Kind.InvalidState)
  s := terminal.size(-1)
- require(s.failure.kind != errors.Kind.Ok && s.failure.native == -9 && s.failure.kind == errors.Kind.InvalidState && s.rows == 0 && s.columns == 0)
+ require(errors.failed(s.failure) && s.failure.native == -9 && s.failure.kind == errors.Kind.InvalidState && s.rows == 0 && s.columns == 0)
  saved := terminal.State{}
  restored := terminal.restore(-1, &saved)
- require(restored.failure.kind != errors.Kind.Ok && restored.failure.native == -9 && restored.failure.kind == errors.Kind.InvalidState)
+ require(errors.failed(restored.failure) && restored.failure.native == -9 && restored.failure.kind == errors.Kind.InvalidState)
  restored = terminal.restore(-1, nil)
- require(restored.failure.kind != errors.Kind.Ok && restored.failure.native == 0 && restored.failure.kind == errors.Kind.InvalidInput)
+ require(errors.failed(restored.failure) && restored.failure.native == 0 && restored.failure.kind == errors.Kind.InvalidInput)
  r = terminal.raw(-1)
- require(r.failure.kind != errors.Kind.Ok && r.failure.native == -9 && r.failure.kind == errors.Kind.InvalidState)
+ require(errors.failed(r.failure) && r.failure.native == -9 && r.failure.kind == errors.Kind.InvalidState)
  require(!terminal.is_attached(-1))
  r = terminal.read_state(PTY_DESCRIPTOR)
- require(r.failure.kind == errors.Kind.Ok && r.failure.native == 0 && r.failure.kind == errors.Kind.Ok)
+ require(!errors.failed(r.failure) && r.failure.native == 0 && !errors.failed(r.failure))
  changed := terminal.raw(PTY_DESCRIPTOR)
- require(changed.failure.kind == errors.Kind.Ok && changed.failure.native == 0 && changed.failure.kind == errors.Kind.Ok)
- require(terminal.restore(PTY_DESCRIPTOR, &changed.value).failure.kind == errors.Kind.Ok)
+ require(!errors.failed(changed.failure) && changed.failure.native == 0 && !errors.failed(changed.failure))
+ require(!errors.failed(terminal.restore(PTY_DESCRIPTOR, &changed.value).failure))
  after := terminal.read_state(PTY_DESCRIPTOR)
- require(after.failure.kind == errors.Kind.Ok && bytes.equal(r.value.bytes[..], after.value.bytes[..]))
- output: [32]u8 = []
+ require(!errors.failed(after.failure) && bytes.equal(r.value.bytes[..], after.value.bytes[..]))
+ output: [32]u8
  directory := cap.Directory{descriptor: DIRECTORY_DESCRIPTOR, active: true}
  read := cap.read(&directory, "ok", output[..])
- require(read.failure.kind == errors.Kind.Ok && read.value == 3 && read.failure.native == 0 && read.failure.kind == errors.Kind.Ok && bytes.equal(output[..3], "yes"))
+ require(!errors.failed(read.failure) && read.value == 3 && read.failure.native == 0 && !errors.failed(read.failure) && bytes.equal(output[..3], "yes"))
  read = cap.read(&directory, "missing", output[..])
- require(read.failure.kind != errors.Kind.Ok && read.value == 0 && read.failure.native == -2 && read.failure.kind == errors.Kind.NotFound)
+ require(errors.failed(read.failure) && read.value == 0 && read.failure.native == -2 && read.failure.kind == errors.Kind.NotFound)
  read = cap.read(&directory, "../secret", output[..])
- require(read.failure.kind != errors.Kind.Ok && read.value == 0 && read.failure.native < 0 && read.failure.kind != errors.Kind.Ok)
+ require(errors.failed(read.failure) && read.value == 0 && read.failure.native < 0 && errors.failed(read.failure))
  read = cap.read(&directory, "link", output[..])
- require(read.failure.kind != errors.Kind.Ok && read.value == 0 && read.failure.native < 0 && read.failure.kind != errors.Kind.Ok)
+ require(errors.failed(read.failure) && read.value == 0 && read.failure.native < 0 && errors.failed(read.failure))
  read = cap.read(nil, "ok", output[..])
- require(read.failure.kind != errors.Kind.Ok && read.failure.native == -22 && read.failure.kind == errors.Kind.InvalidInput)
+ require(errors.failed(read.failure) && read.failure.native == -22 && read.failure.kind == errors.Kind.InvalidInput)
  zero := cap.Directory{}
  read = cap.read(&zero, "ok", output[..])
- require(read.failure.kind != errors.Kind.Ok && read.failure.native == -9 && read.failure.kind == errors.Kind.InvalidState)
+ require(errors.failed(read.failure) && read.failure.native == -9 && read.failure.kind == errors.Kind.InvalidState)
 }
 '''
 

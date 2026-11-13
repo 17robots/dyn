@@ -8,7 +8,7 @@ fn stdin_read(_data: rawptr, destination: []u8) Transfer {
   count: usize = 0
   error := wasi_raw.read(0, &destination[0], #len(destination), &count)
   if error != 0 {
-    return Transfer{ transferred: count, error: 0 - #cast(isize, error), kind: wasi(0 - #cast(isize, error)), status: Status.Error }
+    return Transfer{ transferred: count, failure: Failure{ kind: wasi(0 - #cast(isize, error)), native: 0 - #cast(isize, error) } }
   }
   if count == 0 {
     return Transfer{ status: Status.End }
@@ -23,7 +23,7 @@ fn write_descriptor(descriptor: u32, source: []const u8) Transfer {
   count: usize = 0
   error := wasi_raw.write(descriptor, #cast(rawptr, &source[0]), #len(source), &count)
   if error != 0 {
-    return Transfer{ transferred: count, error: 0 - #cast(isize, error), kind: wasi(0 - #cast(isize, error)), status: Status.Error }
+    return Transfer{ transferred: count, failure: Failure{ kind: wasi(0 - #cast(isize, error)), native: 0 - #cast(isize, error) } }
   }
   return Transfer{ transferred: count, status: Status.Complete }
 }
@@ -47,18 +47,6 @@ pub fn stderr() Writer {
 
 // Terminal output. These ignore write failures, such as a closed pipe, so a
 // call needs no `_ =`; use print_to or println_to to check the result.
-pub fn print(template: []const u8, arguments: ...any) {
-  _ = print_arguments(stdout(), template, arguments)
-}
 
-pub fn println(template: []const u8, arguments: ...any) {
-  _ = println_arguments(stdout(), template, arguments)
-}
 
-pub fn eprint(template: []const u8, arguments: ...any) {
-  _ = print_arguments(stderr(), template, arguments)
-}
 
-pub fn eprintln(template: []const u8, arguments: ...any) {
-  _ = println_arguments(stderr(), template, arguments)
-}

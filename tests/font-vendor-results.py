@@ -25,7 +25,7 @@ fn save(arena: *mem.Arena, glyphs: []const hb.Glyph, path: []const u8){
  for i in 0..#len(glyphs){glyph := glyphs[i]
  values: [6]u32 = [glyph.index,glyph.cluster,#cast(u32,glyph.x_advance),#cast(u32,glyph.y_advance),#cast(u32,glyph.x_offset),#cast(u32,glyph.y_offset)]
  for j in 0..6 {binary.store_u32_le(output[4+i*24+j*4..8+i*24+j*4],values[j])}}
- check(fs.write_all(path,output).failure.kind == errors.Kind.Ok)
+ check(!errors.failed(fs.write_all(path,output).failure))
 }
 empty_face: rawptr
 empty_face_destroyed: u32
@@ -49,50 +49,50 @@ fn count_empty_destroy(font: rawptr) { check(font == empty_font)
 fn reject_empty_configuration(font: rawptr) { _ = font
  #panic("empty font must not be configured") }
 fn main(){
- arena := mem.arena_create(0)
+ arena := mem.arena_alloc(0)
  defer {mem.arena_release(arena)}
  library := dynlib.open("FT_LIBRARY",dynlib.Now)
- check(library.failure.kind == errors.Kind.Ok)
+ check(!errors.failed(library.failure))
  defer {_ = dynlib.close(&library.value)}
  ft_loaded := ft.load(library.value)
- check(ft_loaded.ok && !ft.load(nil).ok)
+ check(!errors.failed(ft_loaded.failure) && errors.failed(ft.load(nil).failure))
  font_bytes := fs.read_all(arena,"font.ttf",10000000)
- check(font_bytes.failure.kind == errors.Kind.Ok)
+ check(!errors.failed(font_bytes.failure))
  font := ft.Font{}
- check(ft.open(&font,ft_loaded.api,font_bytes.value,0,32).ok)
+ check(!errors.failed(ft.open(&font,ft_loaded.api,font_bytes.value,0,32).failure))
  defer {ft.close(&font)}
  check(ft.open(&font,ft_loaded.api,font_bytes.value,0,32).kind == errors.Kind.InvalidState)
  index := ft_loaded.api.char_index(font.face,65)
  check(index != 0 && ft_loaded.api.load_glyph(font.face,index,ft.LoadRender) == 0)
  bitmap := ft.bitmap(font.face)
- check(bitmap.ok && bitmap.value.width > 0 && bitmap.value.height > 0)
+ check(!errors.failed(bitmap.failure) && bitmap.value.width > 0 && bitmap.value.height > 0)
  value := bitmap.value
  output := mem.push_array(u8,arena,24+#cast(usize,value.width)*#cast(usize,value.height))
  fields: [6]u32 = [#cast(u32,value.width),#cast(u32,value.height),#cast(u32,value.left),#cast(u32,value.top),#cast(u32,value.advance_x),#cast(u32,value.advance_y)]
  for i in 0..6 {binary.store_u32_le(output[i*4..i*4+4],fields[i])}
  for row in 0..value.height {for x in 0..value.width {output[24+#cast(usize,row*value.width+x)] = value.pixels[#cast(usize,row)*value.stride+#cast(usize,x)]}}
- check(fs.write_all("ft-actual.bin",output).failure.kind == errors.Kind.Ok)
+ check(!errors.failed(fs.write_all("ft-actual.bin",output).failure))
  metrics:=ft.face_metrics(font.face)
- check(metrics.ok && ft.face_metrics(nil).kind==errors.Kind.InvalidInput)
+ check(!errors.failed(metrics.failure) && ft.face_metrics(nil).kind==errors.Kind.InvalidInput)
  values:=metrics.value
  metric_fields:[7]u32=[#cast(u32,values.units_per_em),#cast(u32,#cast(i32,values.ascent)),#cast(u32,#cast(i32,values.descent)),#cast(u32,#cast(i32,values.height)),values.glyph_count,values.face_count,values.face_index]
- metric_bytes:[28]u8=[]
+ metric_bytes:[28]u8
  for i in 0..7 {binary.store_u32_le(metric_bytes[i*4..i*4+4],metric_fields[i])}
- check(fs.write_all("metrics-actual.bin",metric_bytes[..]).failure.kind == errors.Kind.Ok)
+ check(!errors.failed(fs.write_all("metrics-actual.bin",metric_bytes[..]).failure))
  shaping := dynlib.open("HB_LIBRARY",dynlib.Now)
- check(shaping.failure.kind == errors.Kind.Ok)
+ check(!errors.failed(shaping.failure))
  defer {_ = dynlib.close(&shaping.value)}
  loaded := hb.load(shaping.value)
- check(loaded.ok && !hb.load(nil).ok)
+ check(!errors.failed(loaded.failure) && errors.failed(hb.load(nil).failure))
  created := hb.font_owned(&loaded.api,font_bytes.value,0)
- check(created.ok)
+ check(!errors.failed(created.failure))
  empty_font = loaded.api.font_get_empty()
  oom_api := loaded.api
  oom_api.font_create = empty_create
  oom_api.font_destroy = count_empty_destroy
  oom_api.ot_font_set_funcs = reject_empty_configuration
  failed_font := hb.font_owned(&oom_api,font_bytes.value,0)
- check(!failed_font.ok && failed_font.kind == errors.Kind.System && failed_font.value == nil && empty_destroyed == 1)
+ check(errors.failed(failed_font.failure) && failed_font.kind == errors.Kind.System && failed_font.value == nil && empty_destroyed == 1)
  empty_face = loaded.api.face_get_empty()
  real_blob_destroy = loaded.api.blob_destroy
  face_oom := loaded.api
@@ -101,23 +101,23 @@ fn main(){
  face_oom.blob_destroy = count_blob_destroy
  face_oom.face_glyph_count = reject_empty_glyph_count
  failed_face := hb.font_owned(&face_oom,font_bytes.value,0)
- check(!failed_face.ok && failed_face.kind == errors.Kind.System && failed_face.value == nil && empty_face_destroyed == 1 && blob_destroyed == 1)
+ check(errors.failed(failed_face.failure) && failed_face.kind == errors.Kind.System && failed_face.value == nil && empty_face_destroyed == 1 && blob_destroyed == 1)
  defer {loaded.api.font_destroy(created.value)}
  loaded.api.font_set_scale(created.value,2048,2048)
  features: []const hb.Feature
  latin := hb.shape(arena,&loaded.api,created.value,"office AV",0,features)
  arabic := hb.shape(arena,&loaded.api,created.value,"السلام",0,features)
- check(latin.ok && #len(latin.value) < 9 && arabic.ok && #len(arabic.value) <= 6)
+ check(!errors.failed(latin.failure) && #len(latin.value) < 9 && !errors.failed(arabic.failure) && #len(arabic.value) <= 6)
  check(arabic.value[0].cluster > arabic.value[#len(arabic.value)-1].cluster)
  for glyph in latin.value {check(glyph.index != 0)}
  for glyph in arabic.value {check(glyph.index != 0)}
  save(arena,latin.value,"latin-actual.bin")
  save(arena,arabic.value,"arabic-actual.bin")
  run := hb.shape_run(arena,&loaded.api,created.value,"السَلام",hb.Options{direction:hb.RightToLeft,script:1098015074,language:"ar",cluster_level:hb.MonotoneCharacters,flags:hb.BeginningOfText|hb.EndOfText},features)
- check(run.ok)
+ check(!errors.failed(run.failure))
  save(arena,run.value,"run-actual.bin")
  context_run:=hb.shape_run(arena,&loaded.api,created.value,"بجح",hb.Options{direction:hb.RightToLeft,script:1098015074,language:"ar",cluster_level:1,item_offset:2,has_item_length:true,item_length:2},features)
- check(context_run.ok && #len(context_run.value)>0 && context_run.value[0].cluster==2)
+ check(!errors.failed(context_run.failure) && #len(context_run.value)>0 && context_run.value[0].cluster==2)
  save(arena,context_run.value,"context-actual.bin")
  unicode := loaded.api.unicode_get_default()
  check(unicode!=nil && loaded.api.unicode_script(unicode,65)==1281455214 && loaded.api.script_horizontal_direction(1098015074)==hb.RightToLeft)
@@ -140,12 +140,12 @@ fn main(){
  ui.end(&context)
  pixels := mem.push_array(u8,arena,#cast(usize,256*64*4))
  surface := software.Surface{pixels:pixels,width:256,height:64,stride:256*4}
- check(software.render(&surface,ui.first(&context),ft.renderer(&adapter)).failure.kind == errors.Kind.Ok)
+ check(!errors.failed(software.render(&surface,ui.first(&context),ft.renderer(&adapter)).failure))
  ink: usize = 0
  for pixel in pixels {if pixel != 0 {ink += 1}}
  check(ink > 100 && adapter.kind == errors.Kind.Ok)
  bad := ft.Font{}
- check(!ft.open(&bad,ft_loaded.api,"broken",0,32).ok && bad.face == nil && bad.library == nil)
+ check(errors.failed(ft.open(&bad,ft_loaded.api,"broken",0,32).failure) && bad.face == nil && bad.library == nil)
  check(hb.font_owned(&loaded.api,"broken",0).kind == errors.Kind.InvalidInput)
  check(hb.shape(arena,&loaded.api,created.value,"x",1,features).kind == errors.Kind.InvalidInput)
  ft.close(&font)

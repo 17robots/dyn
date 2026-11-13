@@ -2,14 +2,15 @@
 
 use "std/mem" memory
 use "std/os/linux/sys"
+use "std/io"
 
-pub struct Result { value: isize, error: isize, ok: bool }
+pub struct Result { value: isize, failure: io.Failure }
 
 fn result(value: isize) Result {
   if value < 0 {
-    return Result{ value: value, error: value, ok: false }
+    return Result{ value: value, failure: io.linux_failure(value) }
   }
-  return Result{ value: value, error: 0, ok: true }
+  return Result{ value: value }
 }
 
 fn no_arguments() [][]const u8 {
@@ -20,8 +21,8 @@ fn no_arguments() [][]const u8 {
 // Linux exposes argv as NUL-separated bytes through procfs. Returned slices live
 // in the caller arena. Limits are explicit and intentionally modest for tools.
 pub fn process_arguments(arena: *memory.Arena) [][]const u8 {
-  temporary: [16385]u8 = []
-  path: [19]u8 = []
+  temporary: [16385]u8
+  path: [19]u8
   source: []const u8 = "/proc/self/cmdline"
   i: usize = 0
   for i < #len(source) {
@@ -85,19 +86,19 @@ pub fn yield_thread() {
   _ = #syscall(sys.SchedYield)
 }
 
-pub struct PipeResult { input: isize, output: isize, error: isize, ok: bool }
-pub struct WaitResult { process: isize, status: i32, error: isize, ok: bool }
-pub struct SpawnResult { process: isize, error: isize, ok: bool }
+pub struct PipeResult { input: isize, output: isize, failure: io.Failure }
+pub struct WaitResult { process: isize, status: i32, failure: io.Failure }
+pub struct SpawnResult { process: isize, failure: io.Failure }
 pub struct SpawnOptions { input: isize, output: isize, error: isize, directory: []const u8 }
 struct CStringPointer { value: *u8 }
 
 pub fn pipe() PipeResult {
-  descriptors: [2]i32 = []
+  descriptors: [2]i32
   value := #syscall(sys.Pipe2, &descriptors[0], 0)
   if value < 0 {
-    return PipeResult{ input: -1, output: -1, error: value, ok: false }
+    return PipeResult{ input: -1, output: -1, failure: io.linux_failure(value) }
   }
-  return PipeResult{ input: descriptors[0], output: descriptors[1], ok: true }
+  return PipeResult{ input: descriptors[0], output: descriptors[1] }
 }
 pub fn close_descriptor(descriptor: isize) Result {
   return result(#syscall(sys.Close, descriptor))
@@ -177,34 +178,34 @@ pub fn spawn_environment(
   mark := memory.arena_mark(arena)
   defer memory.arena_rewind(arena, mark)
   if #len(path) == 0 {
-    return SpawnResult{ error: -22 }
+    return SpawnResult{ failure: io.linux_failure(-22) }
   }
   for byte in path {
     if byte == 0 {
-      return SpawnResult{ error: -22 }
+      return SpawnResult{ failure: io.linux_failure(-22) }
     }
   }
   for argument in arguments {
     for argument_byte in argument {
       if argument_byte == 0 {
-        return SpawnResult{ error: -22 }
+        return SpawnResult{ failure: io.linux_failure(-22) }
       }
     }
   }
   path_raw := terminate(arena, path)
   if path_raw == nil {
-    return SpawnResult{ error: -28 }
+    return SpawnResult{ failure: io.linux_failure(-28) }
   }
   directory_raw: *const u8 = nil
   if #len(options.directory) > 0 {
     for directory_byte in options.directory {
       if directory_byte == 0 {
-        return SpawnResult{ error: -22 }
+        return SpawnResult{ failure: io.linux_failure(-22) }
       }
     }
     directory_raw = terminate(arena, options.directory)
     if directory_raw == nil {
-      return SpawnResult{ error: -28 }
+      return SpawnResult{ failure: io.linux_failure(-28) }
     }
   }
   count := #len(arguments)
@@ -214,7 +215,7 @@ pub fn spawn_environment(
   for index in 0..count {
     pointers[index].value = terminate(arena, arguments[index])
     if pointers[index].value == nil {
-      return SpawnResult{ error: -28 }
+      return SpawnResult{ failure: io.linux_failure(-28) }
     }
   }
   pointers[count].value = nil
@@ -225,12 +226,12 @@ pub fn spawn_environment(
   for env_index < #len(environment) {
     for env_byte in environment[env_index] {
       if env_byte == 0 {
-        return SpawnResult{ error: -22 }
+        return SpawnResult{ failure: io.linux_failure(-22) }
       }
     }
     environment_pointers[env_index].value = terminate(arena, environment[env_index])
     if environment_pointers[env_index].value == nil {
-      return SpawnResult{ error: -28 }
+      return SpawnResult{ failure: io.linux_failure(-28) }
     }
     env_index += 1
   }
@@ -248,15 +249,15 @@ pub fn spawn_environment(
     if sources[source_index] >= 0 {
       copied := #syscall(sys.Fcntl, sources[source_index], 1030, 3)
       if copied < 0 {
-        return SpawnResult{ error: copied }
+        return SpawnResult{ failure: io.linux_failure(copied) }
       }
       redirected_sources[source_index] = copied
     }
   }
-  descriptors: [2]i32 = []
+  descriptors: [2]i32
   channel := #syscall(sys.Pipe2, &descriptors[0], 524288)
   if channel < 0 {
-    return SpawnResult{ error: channel }
+    return SpawnResult{ failure: io.linux_failure(channel) }
   }
   // Keep the error pipe out of the standard-descriptor range even if stdin/out/err
   // were closed by the parent; redirection must not overwrite the reporting pipe.
@@ -271,33 +272,33 @@ pub fn spawn_environment(
     if output >= 0 {
       _ = close_descriptor(output)
     }
-    return SpawnResult{ error: -24 }
+    return SpawnResult{ failure: io.linux_failure(-24) }
   }
   child := fork_process()
-  if !child.ok {
+  if io.failed(child.failure) {
     _ = close_descriptor(input)
     _ = close_descriptor(output)
-    return SpawnResult{ error: child.error }
+    return SpawnResult{ failure: io.linux_failure(child.failure.native) }
   }
   if child.value == 0 {
     _ = close_descriptor(input)
     failure: isize = 0
     if redirected_sources[0] >= 0 {
       redirected := duplicate_to(redirected_sources[0], 0)
-      if !redirected.ok {
-        failure = redirected.error
+      if io.failed(redirected.failure) {
+        failure = redirected.failure.native
       }
     }
     if failure == 0 && redirected_sources[1] >= 0 {
       redirected_out := duplicate_to(redirected_sources[1], 1)
-      if !redirected_out.ok {
-        failure = redirected_out.error
+      if io.failed(redirected_out.failure) {
+        failure = redirected_out.failure.native
       }
     }
     if failure == 0 && redirected_sources[2] >= 0 {
       redirected_error := duplicate_to(redirected_sources[2], 2)
-      if !redirected_error.ok {
-        failure = redirected_error.error
+      if io.failed(redirected_error.failure) {
+        failure = redirected_error.failure.native
       }
     }
     if failure == 0 && directory_raw != nil {
@@ -324,9 +325,9 @@ pub fn spawn_environment(
     } else if received != #cast(isize, #sizeof(isize)) {
       reported = -5
     }
-    return SpawnResult{ error: reported }
+    return SpawnResult{ failure: io.linux_failure(reported) }
   }
-  return SpawnResult{ process: child.value, ok: true }
+  return SpawnResult{ process: child.value }
 }
 
 pub fn wait(process: isize, nonblocking: bool) WaitResult {
@@ -340,9 +341,9 @@ pub fn wait(process: isize, nonblocking: bool) WaitResult {
     value = #syscall(sys.Wait4, process, &status, options, 0)
   }
   if value < 0 {
-    return WaitResult{ process: value, status: status, error: value, ok: false }
+    return WaitResult{ process: value, status: status, failure: io.linux_failure(value) }
   }
-  return WaitResult{ process: value, status: status, error: 0, ok: true }
+  return WaitResult{ process: value, status: status }
 }
 pub fn exited(status: i32) bool {
   return (status & 127) == 0
@@ -363,25 +364,25 @@ pub fn exit_process(status: u8) {
   #panic("exit syscall returned")
 }
 
-pub struct EnvironmentResult { value: []u8, found: bool, error: isize, ok: bool }
+pub struct EnvironmentResult { value: []u8, found: bool, failure: io.Failure }
 // Reads the process's initial environment. Values are copied into caller storage.
 // Not found is successful with found=false; failure may modify unused destination bytes.
 pub fn environment_get(name: []const u8, destination: []u8) EnvironmentResult {
   if #len(name) == 0 {
-    return EnvironmentResult{ value: destination[..0], error: -22 }
+    return EnvironmentResult{ value: destination[..0], failure: io.linux_failure(-22) }
   }
   for name_byte in name {
     if name_byte == 0 || name_byte == '=' {
-      return EnvironmentResult{ value: destination[..0], error: -22 }
+      return EnvironmentResult{ value: destination[..0], failure: io.linux_failure(-22) }
     }
   }
   path := "/proc/self/environ\0"
   descriptor := #syscall(sys.Openat, -100, &path[0], 0, 0)
   if descriptor < 0 {
-    return EnvironmentResult{ value: destination[..0], error: descriptor }
+    return EnvironmentResult{ value: destination[..0], failure: io.linux_failure(descriptor) }
   }
   defer _ = #syscall(sys.Close, descriptor)
-  scratch: [4096]u8 = []
+  scratch: [4096]u8
   position: usize = 0
   used: usize = 0
   matching := true
@@ -393,18 +394,18 @@ pub fn environment_get(name: []const u8, destination: []u8) EnvironmentResult {
       continue
     }
     if count < 0 {
-      return EnvironmentResult{ value: destination[..0], error: count }
+      return EnvironmentResult{ value: destination[..0], failure: io.linux_failure(count) }
     }
     if count == 0 {
       if selected {
-        return EnvironmentResult{ value: destination[..0], error: -5 }
+        return EnvironmentResult{ value: destination[..0], failure: io.linux_failure(-5) }
       }
-      return EnvironmentResult{ value: destination[..0], ok: true }
+      return EnvironmentResult{ value: destination[..0] }
     }
     for byte in scratch[..#cast(usize, count)] {
       if byte == 0 {
         if selected {
-          return EnvironmentResult{ value: destination[..used], found: true, ok: true }
+          return EnvironmentResult{ value: destination[..used], found: true }
         }
         position = 0
         used = 0
@@ -423,29 +424,29 @@ pub fn environment_get(name: []const u8, destination: []u8) EnvironmentResult {
         }
       } else if selected {
         if used == #len(destination) {
-          return EnvironmentResult{ value: destination[..0], error: -28 }
+          return EnvironmentResult{ value: destination[..0], failure: io.linux_failure(-28) }
         }
         destination[used] = byte
         used += 1
       }
     }
   }
-  return EnvironmentResult{ value: destination[..0], error: -5 }
+  return EnvironmentResult{ value: destination[..0], failure: io.linux_failure(-5) }
 }
 
-pub struct PathResult { value: []u8, error: isize, ok: bool }
+pub struct PathResult { value: []u8, failure: io.Failure }
 pub fn current_directory(destination: []u8) PathResult {
   if #len(destination) == 0 {
-    return PathResult{ value: destination[..0], error: -28 }
+    return PathResult{ value: destination[..0], failure: io.linux_failure(-28) }
   }
   count := #syscall(sys.Getcwd, &destination[0], #len(destination))
   if count < 0 {
-    return PathResult{ value: destination[..0], error: count }
+    return PathResult{ value: destination[..0], failure: io.linux_failure(count) }
   }
   if count == 0 {
-    return PathResult{ value: destination[..0], error: -5 }
+    return PathResult{ value: destination[..0], failure: io.linux_failure(-5) }
   }
-  return PathResult{ value: destination[..#cast(usize, count) - 1], ok: true }
+  return PathResult{ value: destination[..#cast(usize, count) - 1] }
 }
 
 struct SignalDisposition { handler: usize, flags: usize, restorer: usize, mask: u64 }
@@ -461,6 +462,6 @@ pub fn signal_default(signal: usize) Result {
 }
 
 pub fn spawn(arena: *memory.Arena, path: []const u8, arguments: [][]const u8, options: SpawnOptions) SpawnResult {
-  empty: [0][]const u8 = []
+  empty: [0][]const u8
   return spawn_environment(arena, path, arguments, empty[..], options)
 }

@@ -12,7 +12,7 @@ pub fn open_directory(path: []const u8, storage: []u8) DirectoryResult {
   if #len(storage) < 1048 {
     return DirectoryResult{ failure: io.Failure{ kind: io.Kind.InvalidInput, native: -22 } }
   }
-  space: [4096]u8 = []
+  space: [4096]u8
   name := terminated(path, space[..])
   if name == nil {
     return DirectoryResult{ failure: io.Failure{ kind: io.Kind.InvalidInput, native: -22 } }
@@ -90,12 +90,12 @@ fn fn_u64(bytes: []const u8, at: usize) u64 {
 }
 
 pub fn metadata(path: []const u8) Metadata {
-  space: [4096]u8 = []
+  space: [4096]u8
   name := terminated(path, space[..])
   if name == nil {
     return Metadata{ failure: io.Failure{ kind: io.Kind.InvalidInput, native: -22 } }
   }
-  raw: [144]u8 = []
+  raw: [144]u8
   value := #syscall(sys.Stat64, name, &raw[0])
   if value < 0 {
     return Metadata{ failure: io.darwin_failure(value) }
@@ -107,7 +107,7 @@ pub fn file_metadata(file: *const File) Metadata {
   if !is_open(file) {
     return Metadata{ failure: io.Failure{ kind: io.Kind.InvalidState, native: -9 } }
   }
-  raw: [144]u8 = []
+  raw: [144]u8
   value := #syscall(sys.Fstat64, file.descriptor, &raw[0])
   if value < 0 {
     return Metadata{ failure: io.darwin_failure(value) }
@@ -116,7 +116,7 @@ pub fn file_metadata(file: *const File) Metadata {
 }
 
 fn path_call(number: isize, path: []const u8, argument: usize) Result {
-  space: [4096]u8 = []
+  space: [4096]u8
   name := terminated(path, space[..])
   if name == nil {
     return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput, native: -22 } }
@@ -141,8 +141,8 @@ pub fn remove_directory(path: []const u8) Result {
 }
 
 pub fn rename(old_path: []const u8, new_path: []const u8) Result {
-  old_space: [4096]u8 = []
-  new_space: [4096]u8 = []
+  old_space: [4096]u8
+  new_space: [4096]u8
   old_name := terminated(old_path, old_space[..])
   new_name := terminated(new_path, new_space[..])
   if old_name == nil || new_name == nil {

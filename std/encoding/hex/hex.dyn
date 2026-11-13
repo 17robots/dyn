@@ -81,7 +81,7 @@ fn decode_pass(destination: []u8, source: []const u8, write: bool, offset: *usiz
 fn decode_into(destination: []u8, source: []const u8) Result {
   offset: usize = 0
   measured := decode_pass(destination[..0], source, false, &offset)
-  if measured.failure.kind != parse.Kind.Ok {
+  if parse.failed(measured.failure) {
     return measured
   }
   if measured.required > #len(destination) {
@@ -99,10 +99,10 @@ struct Size { value: usize, ok: bool, offset: usize }
 // Validates the complete input and reports the exact decoded byte count.
 // ok with value zero is a valid empty encoding.
 fn decoded_size(source: []const u8) Size {
-  empty: [0]u8 = []
+  empty: [0]u8
   offset: usize = 0
   measured := decode_pass(empty[..], source, false, &offset)
-  return Size{ value: measured.required, ok: measured.failure.kind == parse.Kind.Ok, offset: offset }
+  return Size{ value: measured.required, ok: !parse.failed(measured.failure), offset: offset }
 }
 
 pub type Decoded = parse.Bytes
@@ -115,7 +115,7 @@ pub fn encode(arena: *mem.Arena, source: []const u8, uppercase: bool) []u8 {
   }
   output := mem.push_bytes_uninit(arena, required)
   result := encode_into(output, source, uppercase)
-  if result.failure.kind != parse.Kind.Ok {
+  if parse.failed(result.failure) {
     #panic("hex.encode: invalid source/output overlap")
   }
   return output
@@ -139,7 +139,7 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Decoded {
   }
   output := mem.push_bytes_uninit(arena, size.value)
   result := decode_into(output, source)
-  if result.failure.kind != parse.Kind.Ok {
+  if parse.failed(result.failure) {
     mem.arena_rewind(arena, mark)
     return Decoded{ failure: result.failure }
   }

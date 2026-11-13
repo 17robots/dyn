@@ -18,9 +18,9 @@ fn check(ok: bool) { if !ok { #panic("KDF contract") } }
 fn filled(data: []const u8, value: u8) bool { for byte in data { if byte != value { return false } }
  return true }
 fn main() {
- output: [100]u8 = []
- scratch: [100]u8 = []
- key: [32]u8 = []
+ output: [100]u8
+ scratch: [100]u8
+ key: [32]u8
  for i in 0..32 { key[i] = #cast(u8,i) }
 '''
 

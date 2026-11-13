@@ -1,0 +1,15 @@
+// A case on text takes string literal patterns and needs a _ arm.
+const Go: []const u8 = "go"
+
+fn main() {
+  word := "a"
+  case word { // error: a text case needs a _ arm
+    "a" => { }
+    "a" => { } // error: duplicate case pattern
+    Go => { } // error: must be a string literal
+  }
+  case word {
+    "b" x => { } // error: takes no binding
+    _ => { }
+  }
+}

@@ -9,14 +9,14 @@ fn check(ok: bool) {
 
 pub fn main() {
   missing := dl.open("missing-library-xyz", dl.Now)
-  check(missing.failure.kind != io.Kind.Ok)
+  check(io.failed(missing.failure))
   library := dl.open(library_path, dl.Now)
-  check(library.failure.kind == io.Kind.Ok)
+  check(!io.failed(library.failure))
   found := dl.symbol(library.value, symbol_name)
-  check(found.failure.kind == io.Kind.Ok && found.value != nil)
+  check(!io.failed(found.failure) && found.value != nil)
   absent := dl.symbol(library.value, "no_such_symbol_xyz")
-  check(absent.failure.kind != io.Kind.Ok)
+  check(io.failed(absent.failure))
   handle := library.value
-  check(dl.close(&handle).failure.kind == io.Kind.Ok)
+  check(!io.failed(dl.close(&handle).failure))
   check(handle == nil)
 }

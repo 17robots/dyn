@@ -21,7 +21,7 @@ void dyn_cli_help(const char *command) {
       "  --target <x86_64-linux|aarch64-linux|riscv64-linux|riscv64-none|riscv32-none|riscv32-none-soft|thumbv7em-none|thumbv7em-none-soft|thumbv7em-none-nucleo-h753zi|x86_64-macos|aarch64-macos|x86_64-windows|aarch64-windows|wasm32-browser|wasm32-wasi>\n"
       "  --jobs <1..256>  --max-work <positive frontend work units>\n"
       "  --cpu <generic|native>  --opt-level <1|2|3>  --opt-remarks\n"
-      "  --check-overflow  (debug builds: + - * << and negation panic on overflow)\n"
+      "  --no-check-overflow  (debug builds check + - * << and negation for overflow by default)\n"
       "  --sample-profile <text profile>  (release builds only)\n"
       "  --backend <auto|native>  independent code generator\n"
       "  --link <object-archive-or-so>  (repeatable explicit FFI input)\n"
@@ -96,7 +96,11 @@ int dyn_cli_parse(int argc, char **argv, DynOptions *o) {
     } else if (strcmp(a, "--opt-remarks") == 0) {
       o->optimization.remarks = true;
     } else if (strcmp(a, "--check-overflow") == 0) {
-      o->optimization.check_overflow = true;
+      o->overflow_set = true;
+      o->no_check_overflow = false;
+    } else if (strcmp(a, "--no-check-overflow") == 0) {
+      o->overflow_set = true;
+      o->no_check_overflow = true;
     } else if (strcmp(a, "--debug") == 0) {
       o->release = false;
       if (!o->debug_info_set)
@@ -159,10 +163,12 @@ int dyn_cli_parse(int argc, char **argv, DynOptions *o) {
     fprintf(stderr, "error: --emit-ir requires build without code-generation, link or optimization options\n");
     return 2;
   }
-  if (o->optimization.check_overflow && o->release) {
+  if (o->overflow_set && !o->no_check_overflow && o->release) {
     fprintf(stderr, "error: --check-overflow is for debug builds; release integer arithmetic always wraps\n");
     return 2;
   }
+  /* Debug builds check overflow unless --no-check-overflow; release wraps. */
+  o->optimization.check_overflow = !o->release && !o->no_check_overflow;
   if (o->docs_json && strcmp(o->command, "docs")) {
     fprintf(stderr, "error: --json is only supported by docs\n");
     return 2;

@@ -25,7 +25,7 @@ pub const HasCloseWrite: bool = false
 pub const HasMoveCookies: bool = false
 pub const HasDirectoryFlag: bool = true
 pub const FixedWatchCapacity: usize = 16
-pub enum Status { Event, Empty, Error }
+pub enum Status { Event, Empty }
 // `error` keeps the native code; `kind` is its portable category.
 pub type Result = io.Result(i32)
 pub struct Event { watch: i32, mask: u32, cookie: u32, name: []const u8, rescan: bool }
@@ -64,17 +64,17 @@ extern fn queue_create "dispatch_queue_create"(label: *const u8, attributes: raw
 extern fn queue_sync "dispatch_sync_f"(queue: rawptr, context: rawptr, callback: fn(rawptr))
 extern fn queue_release "dispatch_release"(queue: rawptr)
 fn symbol(handle: rawptr, name: []const u8) rawptr {
-  backing: [128 + mem.ArenaBufferOverhead]u8 = []
+  backing: [128 + mem.ArenaBufferOverhead]u8
   value := c.string_into(backing[..], name)
-  if handle == nil || value.failure.kind != parse.Kind.Ok {
+  if handle == nil || parse.failed(value.failure) {
     return nil
   }
   return library_symbol(handle, value.value)
 }
 fn library(path: []const u8) rawptr {
-  backing: [256 + mem.ArenaBufferOverhead]u8 = []
+  backing: [256 + mem.ArenaBufferOverhead]u8
   value := c.string_into(backing[..], path)
-  if value.failure.kind != parse.Kind.Ok {
+  if parse.failed(value.failure) {
     return nil
   }
   return library_open(value.value, 2)
@@ -137,7 +137,7 @@ pub fn open(storage: []u8) OpenResult {
   if #len(storage) < 272 {
     return OpenResult{ failure: io.darwin_failure(-28) }
   }
-  arena := mem.arena_create(#sizeof(State))
+  arena := mem.arena_alloc(#sizeof(State))
   state := mem.push(State, arena)
   if !load(&state.api) {
     unload(&state.api)
@@ -190,7 +190,7 @@ fn callback(_stream: rawptr, info: rawptr, count: usize, paths: rawptr, flags: *
       sync.store_u32(&slot.owner.lost, 1)
     }
     native := c.bytes_from_string(names[i], 1024)
-    if native.failure.kind != parse.Kind.Ok || !utf8.valid(native.value) {
+    if parse.failed(native.failure) || !utf8.valid(native.value) {
       sync.store_u32(&slot.owner.lost, 1)
       continue
     }
@@ -258,18 +258,18 @@ pub fn add(watcher: *Watcher, path: []const u8, mask: u32) Result {
   if (mask & SupportedEvents) == 0 {
     return Result{ failure: io.Failure{ kind: io.Kind.Unsupported, native: -95 } }
   }
-  input: [1024 + mem.ArenaBufferOverhead]u8 = []
+  input: [1024 + mem.ArenaBufferOverhead]u8
   terminated := c.string_into(input[..], path)
-  if terminated.failure.kind != parse.Kind.Ok {
+  if parse.failed(terminated.failure) {
     return failure(-22)
   }
-  canonical: [1024]u8 = []
+  canonical: [1024]u8
   if state.api.canonical(terminated.value, &canonical[0]) == nil {
     code := 0 - #cast(isize, native_errno().*)
     return failure(code)
   }
   rooted := c.bytes_from_string(&canonical[0], 1024)
-  if rooted.failure.kind != parse.Kind.Ok || !utf8.valid(rooted.value) {
+  if parse.failed(rooted.failure) || !utf8.valid(rooted.value) {
     return failure(-22)
   }
   // FSEvents watches trees; this adapter promises only direct directory children.
@@ -367,7 +367,7 @@ fn event_failure(watcher: *Watcher, code: isize) EventResult {
       watcher.kind = io.Kind.System
     }
   }
-  return EventResult{ status: Status.Error, failure: io.Failure{ kind: watcher.kind, native: watcher.error } }
+  return EventResult{ failure: io.Failure{ kind: watcher.kind, native: watcher.error } }
 }
 pub fn next(watcher: *Watcher) EventResult {
   if watcher.failed {

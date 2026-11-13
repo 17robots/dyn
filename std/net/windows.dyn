@@ -44,8 +44,8 @@ fn native_socket(family: usize, kind: usize, protocol: usize) isize {
     return -22
   }
   opened := win.socket_open(#cast(i32, family), #cast(i32, kind), #cast(i32, protocol))
-  if !opened.ok {
-    return 0 - opened.error
+  if io.failed(opened.failure) {
+    return 0 - opened.failure.native
   }
   return opened.value
 }

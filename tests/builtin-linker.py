@@ -55,7 +55,7 @@ fn mix(x: u64) u64 {
   return (x ^ 0x9e3779b9) * 2654435761
 }
 fn main() {
-  arena := mem.arena_create(4096)
+  arena := mem.arena_alloc(4096)
   values := #slice(mem.arena_push(arena, 64, 8), 64)
   state: u64 = 1
   for i in 0..64 {

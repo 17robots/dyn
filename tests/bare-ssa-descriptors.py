@@ -79,7 +79,7 @@ if r!=0 { io.println("oracle {}",r)
 #panic("oracle") }
 _=io.write_all(io.stdout(),"DESCRIPTORS OK\n") }
 extern fn touch(p:rawptr)
-pub fn large(x:[]const u8) []const u8 { a:[1025]u64=[]
+pub fn large(x:[]const u8) []const u8 { a:[1025]u64
 touch(&a)
 return cdesc(x) }
 pub fn protecteddesc(x:[]const u8) []const u8 { defer { state="cleanup" }

@@ -76,8 +76,8 @@ fn value(fields: []const Field, name: []const u8) []const u8 {
 
 fn write(destination: stream.Writer, source: []const u8) RenderResult {
   result := stream.write_all(destination, source)
-  if result.status == stream.Status.Error {
-    return RenderResult{ failure: parse.io_failure(result.kind, result.error) }
+  if stream.failed(result.failure) {
+    return RenderResult{ failure: parse.io_failure(result.failure.kind, result.failure.native) }
   }
   return RenderResult{}
 }
@@ -85,8 +85,8 @@ fn write(destination: stream.Writer, source: []const u8) RenderResult {
 // Literal output maps directly to source bytes, unlike expanded field values.
 fn write_literal(destination: stream.Writer, source: []const u8, offset: usize) RenderResult {
   result := stream.write_all(destination, source)
-  if result.status == stream.Status.Error {
-    return RenderResult{ offset: offset + result.transferred, failure: parse.io_failure(result.kind, result.error) }
+  if stream.failed(result.failure) {
+    return RenderResult{ offset: offset + result.transferred, failure: parse.io_failure(result.failure.kind, result.failure.native) }
   }
   return RenderResult{}
 }

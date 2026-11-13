@@ -3,6 +3,7 @@
 // frames and memory use so debug and release builds can be compared.
 use "std/fmt"
 use "std/io"
+use "std/math"
 use "std/mem"
 use "breakout"
 
@@ -24,7 +25,7 @@ fn autopilot(game: *const breakout.Game) breakout.Input {
 fn hash_pixels(hash: u64, pixels: []const u32) u64 {
   value := hash
   for pixel in pixels {
-    value = ((value ^ #cast(u64, pixel)) * 0x100000001B3)
+    value = math.wrapping_mul(value ^ #cast(u64, pixel), 0x100000001B3)
   }
   return value
 }
@@ -39,7 +40,7 @@ fn print_field(name: []const u8, value: u64) {
 }
 
 fn main() {
-  persistent := mem.arena_create(mem.MiB)
+  persistent := mem.arena_alloc(mem.MiB)
   defer mem.arena_release(persistent)
   game := mem.push(breakout.Game, persistent)
   pixels := mem.push_array(u32, persistent, #cast(usize, breakout.Width * breakout.Height))

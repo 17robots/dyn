@@ -47,7 +47,7 @@ pub fn bits_live(source:[]const u8,needle:u8,a,b,c,d,e,f,g,h:u64) u64 {
  return a^b^c^d^e^f^g^h^#cast(u64,at)
 }
 pub fn mutation() usize {
- data:[64]u8=[]
+ data:[64]u8
  data[20]=7
  first:=bytes.find_byte(data[..],7)
  data[20]=0

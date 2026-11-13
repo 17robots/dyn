@@ -1,0 +1,8 @@
+// Comparisons do not chain.
+fn main() {
+  i := 1
+  inside := 0 <= i < 3 // error: comparisons do not chain
+  same := (i == 1) == true
+  _ = inside
+  _ = same
+}

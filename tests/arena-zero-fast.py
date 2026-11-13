@@ -31,14 +31,14 @@ fn verify(bytes: []u8, arena: *mem.Arena, start: usize, size: usize) {
   }
 }
 fn typed_array(T:type, count:usize, offset:usize) {
-  left:[512]u8=[]
-  right:[512]u8=[]
+  left:[512]u8
+  right:[512]u8
   fill(left[..])
   fill(right[..])
   typed:=mem.arena_from_buffer(left[offset..])
   untyped:=mem.arena_from_buffer(right[offset..])
-  typed_events:[4]observe.Event=[]
-  untyped_events:[4]observe.Event=[]
+  typed_events:[4]observe.Event
+  untyped_events:[4]observe.Event
   typed_log:=observe.log(typed_events[..])
   untyped_log:=observe.log(untyped_events[..])
   typed.events=&typed_log
@@ -74,7 +74,7 @@ fn main() {
       typed_array(Padded,count,offset)
     }
   }
-  invalid := mem.arena_create(0)
+  invalid := mem.arena_alloc(0)
   defer mem.arena_release(invalid)
   invalid.offset=1
   expect(#len(mem.push_array(u64,invalid,0))==0 && invalid.offset==1 && invalid.allocation_failures==0)
@@ -191,9 +191,9 @@ fn cleanup(arena:*mem.Arena, log:*observe.Log) {
  io.println("FAILURE STATE PASS")
 }
 fn main() {
- backing:[mem.ArenaBufferOverhead+16]u8=[]
+ backing:[mem.ArenaBufferOverhead+16]u8
  arena:=mem.arena_from_buffer(backing[..])
- events:[4]observe.Event=[]
+ events:[4]observe.Event
  log:=observe.log(events[..])
  arena.events=&log
  _=mem.push_bytes_uninit(arena,3)

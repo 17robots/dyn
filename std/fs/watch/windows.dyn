@@ -21,7 +21,7 @@ pub const FixedWatchCapacity: usize = 16
 pub const HasCloseWrite: bool = false
 pub const HasMoveCookies: bool = false
 pub const HasDirectoryFlag: bool = false
-pub enum Status { Event, Empty, Error }
+pub enum Status { Event, Empty }
 struct Overlapped { internal: usize, transferred: usize, offset: u32, offset_high: u32, event: rawptr }
 struct Slot { handle: rawptr, event: rawptr, overlap: Overlapped, buffer: [1024]u32, used: usize, offset: usize, pending: bool, id: i32, mask: u32 }
 struct Native { slots: [16]Slot, next_id: i32, cursor: usize }
@@ -66,7 +66,7 @@ pub fn open(storage: []u8) OpenResult {
   if #len(storage) < 272 {
     return OpenResult{ value: Watcher{}, failure: io.Failure{ kind: io.Kind.Capacity, native: -28 } }
   }
-  owner := mem.arena_create(#sizeof(Native))
+  owner := mem.arena_alloc(#sizeof(Native))
   native := mem.push(Native, owner)
   native.next_id = 1
   return OpenResult{ value: Watcher{ native: native, owner: owner, storage: storage } }
@@ -124,7 +124,7 @@ pub fn add(state: *Watcher, path: []const u8, mask: u32) Result {
   if index == 16 || state.native.next_id == 2147483647 {
     return validation_failure(-28)
   }
-  wide: [4096]u16 = []
+  wide: [4096]u16
   at: usize = 0
   used: usize = 0
   for at < #len(path) {
@@ -201,7 +201,7 @@ fn event_failure(state: *Watcher, code: isize, kind: io.Kind) EventResult {
       state.kind = io.Kind.System
     }
   }
-  return EventResult{ status: Status.Error, failure: io.Failure{ kind: state.kind, native: state.error } }
+  return EventResult{ failure: io.Failure{ kind: state.kind, native: state.error } }
 }
 pub fn next(state: *Watcher) EventResult {
   if state.failed {

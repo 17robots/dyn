@@ -40,7 +40,7 @@ fn main() {
     total += value.x + value.y
   }
   if total != 18 || state != 6 { #panic("argument captures") }
-  points: [3]Pair = []
+  points: [3]Pair
   for *p in points { p.* = pair(12, 5) }
   for p in points { if p.x != 17 || p.y != 7 { #panic("aggregate leaf") } }
   old: i64 = 1

@@ -35,7 +35,7 @@ def main():
         for index, project in enumerate(corpus()):
             for flags in ([], ['--debug-info']):
                 output = Path(directory)/f'{index}'
-                result = subprocess.run([str(args.compiler), 'build', str(project), '--backend', 'native',
+                result = subprocess.run([str(args.compiler), 'build', str(project),'--no-check-overflow', '--backend', 'native',
                                          '--target', args.target, '--no-link', '--no-cache', '--quiet',
                                          '--output', str(output), *flags],
                                         capture_output=True, timeout=300)

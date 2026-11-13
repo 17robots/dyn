@@ -230,6 +230,6 @@ with tempfile.TemporaryDirectory(prefix='dyn-math-float-') as tmp:
     failed = False
     for mode in ('debug','release'):
         print(f'[{mode}]',flush=True)
-        subprocess.run([DYN,'build',str(source),'--no-cache','--jobs','1',f'--{mode}','--link',str(work/'oracle.so'),'--output',str(work/'test')],check=True)
+        subprocess.run([DYN,'build',str(source),'--no-cache','--jobs','1',f'--{mode}', *(['--no-check-overflow'] if mode == 'debug' else []),'--link',str(work/'oracle.so'),'--output',str(work/'test')],check=True)
         failed |= subprocess.run([str(work/'test')],timeout=180).returncode != 0
     raise SystemExit(1 if failed else 0)

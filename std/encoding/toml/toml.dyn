@@ -1,7 +1,7 @@
 use "std/mem" mem
 use "std/parse" parse
-use "std/strings" strings
 use "std/unicode/utf8" utf8
+use "std/bytes"
 // TOML 1.0 tree. All parsed strings, keys and scalar lexemes are arena-owned.
 // Integer/float/date/time text preserves spelling
 // no conversion loses precision.
@@ -30,7 +30,7 @@ fn link(parent, child: *Value) {
 fn find(parent: *Value, key: []const u8) *Value {
   value := parent.first
   for value != nil {
-    if strings.equal(value.key, key) {
+    if bytes.equal(value.key, key) {
       return value
     }
     value = value.next
@@ -43,7 +43,7 @@ pub fn member(parent: *const Value, key: []const u8) *const Value {
   }
   value := parent.first
   for value != nil {
-    if strings.equal(value.key, key) {
+    if bytes.equal(value.key, key) {
       return value
     }
     value = value.next
@@ -225,7 +225,7 @@ fn quoted(parser: *Parser, key: bool) []const u8 {
           scalar = (scalar << 4) | #cast(u32, digit)
         }
         parser.at += count
-        encoded: [4]u8 = []
+        encoded: [4]u8
         width := utf8.encode(encoded[..], scalar)
         if width == 0 {
           parser.failed = true
@@ -358,7 +358,7 @@ fn datetime(source: []const u8) bool {
   return offset_hour >= 0 && offset_hour <= 23 && offset_minute >= 0 && offset_minute <= 59
 }
 fn scalar_kind(source: []const u8) Kind {
-  if strings.equal(source, "true") || strings.equal(source, "false") {
+  if bytes.equal(source, "true") || bytes.equal(source, "false") {
     return Kind.Bool
   }
   if datetime(source) {
@@ -372,7 +372,7 @@ fn scalar_kind(source: []const u8) Kind {
     negative = source[0] == 45
     at += 1
   }
-  if strings.equal(source[at..], "inf") || strings.equal(source[at..], "nan") {
+  if bytes.equal(source[at..], "inf") || bytes.equal(source[at..], "nan") {
     return Kind.Float
   }
   base: i32 = 10
@@ -539,7 +539,7 @@ fn value(parser: *Parser) *Value {
   }
   result := node(parser, kind)
   result.text = copy(parser.arena, token)
-  result.boolean = strings.equal(token, "true")
+  result.boolean = bytes.equal(token, "true")
   return result
 }
 fn assign(parser: *Parser, table: *Value) {
@@ -729,7 +729,7 @@ fn valid_children(current: *const Value) bool {
       }
       previous := current.first
       for previous != child {
-        if strings.equal(previous.key, child.key) {
+        if bytes.equal(previous.key, child.key) {
           return false
         }
         previous = previous.next

@@ -41,7 +41,7 @@ fn main() {
 ''')
         for compiler, mode in ((reference,'--debug'),(candidate,'--debug'),(candidate,'--release')):
             backend = ['--backend','native'] if compiler == candidate and mode == '--debug' else []
-            result = ok([compiler,'build',root,mode,*backend,'--no-cache','--jobs','1','--output',output])
+            result = ok([compiler,'build',root,'--no-check-overflow',mode,*backend,'--no-cache','--jobs','1','--output',output])
             result = ok([output]); assert result.stdout == b'native compiler ok\n', result.stdout
             checks += 1
         # Imported reflection must retain source names after module rewriting.
@@ -65,7 +65,7 @@ fn main() {
         observed=[]
         for compiler in (reference,candidate):
             backend = ['--backend','native'] if compiler == candidate else []
-            ok([compiler,'build',root,'--debug',*backend,'--no-cache','--output',output])
+            ok([compiler,'build',root,'--no-check-overflow','--debug',*backend,'--no-cache','--output',output])
             observed.append(ok([output]).stdout)
         assert observed[0]==observed[1] and b'Pair' in observed[0] and observed[0].endswith(b'firstsecond'),observed
         checks += 1
@@ -87,14 +87,14 @@ fn main() {
                 provider.write_text('unsigned long backend_value=17; unsigned long private_value=999; unsigned long private_fn(void){return 999;}')
                 ok([*shlex.split(os.environ.get('CC','cc')),'-c',provider,'-o',provider_obj])
             backend = ['--backend','native'] if compiler == candidate else []
-            ok([compiler,'build',root,'--debug',*backend,'--no-cache','--link',provider_obj,'--output',output])
+            ok([compiler,'build',root,'--no-check-overflow','--debug',*backend,'--no-cache','--link',provider_obj,'--output',output])
             ok([output])
         checks += 1
         source.write_text(original)
         # Native executables use the whole-executable cache, keyed by emission options.
         cache=root/'cache'; env=dict(os.environ,DYN_CACHE_DIR=str(cache))
         def cached(*flags):
-            result=subprocess.run(list(map(str,[candidate,'build',root,*flags,'--output',output])),
+            result=subprocess.run(list(map(str,[candidate,'build',root,'--no-check-overflow',*flags,'--output',output])),
                                   capture_output=True,timeout=120,env=env)
             assert result.returncode == 0, result.stderr
             return b'cached ' in result.stdout
@@ -105,7 +105,7 @@ fn main() {
         # Independent output and optimization options must execute without fallback.
         for flags in (['--emit-asm'], ['--cpu', 'native'],
                       ['--opt-remarks'], ['--release', '--opt-level', '2']):
-            result=run([candidate,'build',root,'--backend','native',*flags,'--output',output])
+            result=run([candidate,'build',root,'--no-check-overflow','--backend','native',*flags,'--output',output])
             assert result.returncode == 0, (flags,result.stderr)
             assert ok([output]).stdout == b'native compiler ok\n'
             checks += 1
@@ -118,9 +118,9 @@ fn main() {
                 assert a.returncode != 0
                 checks += 1
         source.write_text('fn inner(){ #panic("native trace") }\nfn main(){inner()}\n')
-        ok([candidate,'build',root,'--backend','native','--output',output])
+        ok([candidate,'build',root,'--no-check-overflow','--backend','native','--output',output])
         result=run([output]);assert result.returncode != 0 and b'native trace' in result.stderr and b'inner' in result.stderr,result.stderr
-        ok([reference,'build',root,'--debug','--no-cache','--output',output])
+        ok([reference,'build',root,'--no-check-overflow','--debug','--no-cache','--output',output])
         oracle=run([output])
         assert (result.returncode,result.stdout,result.stderr)==(oracle.returncode,oracle.stdout,oracle.stderr),(result,oracle)
         checks += 1
@@ -129,15 +129,15 @@ fn main() {
         source.write_text('fn wide('+', '.join(f'a{i}: u64' for i in range(600))+') u64 { return a599 }\n'
                           'fn main() { if wide('+', '.join(map(str,range(600)))+') != 599 { #panic("wide") } }\n')
         obj=Path(str(output)+'.o');obj.write_bytes(b'previous object')
-        result=run([candidate,'build',root,'--backend','native','--no-link','--output',output])
+        result=run([candidate,'build',root,'--no-check-overflow','--backend','native','--no-link','--output',output])
         assert result.returncode != 0 and b'native emission failed' in result.stderr,result.stderr
         assert obj.read_bytes() == b'previous object'
-        result=run([candidate,'build',root,'--verbose','--no-cache','--output',output])
+        result=run([candidate,'build',root,'--no-check-overflow','--verbose','--no-cache','--output',output])
         assert result.returncode != 0, result.stderr
         checks += 1
         # Debug builds carry DWARF by default; release builds use independent emission too.
         source.write_text('fn main() {}\n')
-        ok([candidate,'build',root,'--backend','native','--no-link','--output',output])
+        ok([candidate,'build',root,'--no-check-overflow','--backend','native','--no-link','--output',output])
         sections=ok(['readelf','-S',str(output)+'.o']).stdout
         assert b'.debug_info' in sections and b'.debug_line' in sections and b'.debug_frame' in sections
         checks += 1

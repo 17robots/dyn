@@ -93,7 +93,7 @@ fn sample_value(value: f64) u8 {
   return #cast(u8, math.floor64(value + 0.5))
 }
 fn block(decoder: *Decoder, bits: *Bits, component: *Component, bx, by: usize) bool {
-  coefficients: [64]f64 = []
+  coefficients: [64]f64
   category := symbol(bits, &decoder.dc[component.dc_table])
   if bits.failed || category > 11 {
     return invalid(decoder)
@@ -145,7 +145,7 @@ fn block(decoder: *Decoder, bits: *Bits, component: *Component, bx, by: usize) b
     }
     return true
   }
-  temporary: [64]f64 = []
+  temporary: [64]f64
   for v in 0..8 {
     for x in 0..8 {
       sum: f64 = 0.0
@@ -322,7 +322,7 @@ fn scan(decoder: *Decoder, payload: []const u8) bool {
     decoder.kind = parse.Kind.Unsupported
     return false
   }
-  selected: [3]usize = []
+  selected: [3]usize
   for i in 0..count {
     id := payload[1 + i * 2]
     found := decoder.count

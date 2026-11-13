@@ -193,12 +193,13 @@ pub struct State {
 
 pub struct StateResult { value: *State, valid: bool }
 
-// A state in arena. measure returns the pixel width of a text run.
-pub fn create(arena: *mem.Arena, measure: fn(rawptr, []const u8) f32, measure_data: rawptr, line_height: f32) *State {
+// A state in arena. measure(measure_data, text) returns the pixel width of a
+// text run; measure_data is any *C that outlives the state.
+pub fn push_state(arena: *mem.Arena, measure: fn(*$C, []const u8) f32, measure_data: *$C, line_height: f32) *State {
   state := mem.push(State, arena)
   state.arena = arena
   state.buckets = mem.push_array(*Box, arena, bucket_count)
-  state.measure = measure
+  state.measure = #cast(fn(rawptr, []const u8) f32, measure)
   state.measure_data = measure_data
   state.line_height = line_height
   state.half_life = 0.04
@@ -243,7 +244,7 @@ pub fn key_bytes(seed: u64, identity: []const u8) u64 {
 // A stable child identity for a numeric application value, independent of
 // machine byte order and width. Unlike labels, numbers have no ### suffix.
 pub fn key_number(seed: u64, number: u64) u64 {
-  encoded: [8]u8 = []
+  encoded: [8]u8
   for i in 0..8 {
     encoded[i] = #cast(u8, (number >> (i * 8)) & 255)
   }

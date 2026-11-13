@@ -37,13 +37,13 @@ fn grouped(data: rawptr) {
 }
 
 fn main() {
-  arena := mem.arena_create(16777216)
+  arena := mem.arena_alloc(16777216)
   defer {
     mem.arena_release(arena)
   }
   check(pool.start(arena, 0, 8, 65536).failure.kind == errors.Kind.InvalidInput)
   started := pool.start(arena, 4, 64, 65536)
-  check(started.failure.kind == errors.Kind.Ok)
+  check(!errors.failed(started.failure))
   workers := started.value
   shared = workers
   for i in 1..1001 {
@@ -77,6 +77,6 @@ fn main() {
   }
   pool.group_wait(&group)
   check(sync.load_u64(&total) == 50)
-  check(pool.stop(workers).failure.kind == errors.Kind.Ok)
+  check(!errors.failed(pool.stop(workers).failure))
   check(!pool.submit(workers, pool.Task{ run: add }))
 }

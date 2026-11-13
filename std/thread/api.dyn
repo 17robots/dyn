@@ -12,3 +12,15 @@ pub struct Spawner {
   spawn: fn(rawptr, *mem.Arena, usize, fn(rawptr) isize, rawptr) rawptr,
   join: fn(rawptr, rawptr) bool,
 }
+
+// Starts entry(context) on a new thread with stack as its stack. context is any
+// *C the caller keeps alive and unmoved until join succeeds; the entry receives
+// it typed. Stack and context are borrowed until successful join.
+pub fn spawn(arena: *mem.Arena, stack: []u8, entry: fn(*$C) isize, context: *$C) SpawnResult {
+  return spawn_untyped(arena, stack, #cast(fn(rawptr) isize, entry), context)
+}
+
+// As spawn, with a stack of size bytes that the thread owns until join.
+pub fn spawn_with_size(arena: *mem.Arena, size: usize, entry: fn(*$C) isize, context: *$C) SpawnResult {
+  return spawn_with_size_untyped(arena, size, #cast(fn(rawptr) isize, entry), context)
+}

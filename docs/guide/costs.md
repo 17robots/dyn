@@ -14,7 +14,7 @@ work only when semantics remain unchanged.
 | float to integer `#cast` | none | two float compares and a branch, then the conversion |
 | `arena_push`, `mem.push` | caller arena | constant-time bookkeeping in the current block plus zeroing proportional to bytes; growth adds a backing block and may require OS reservation/commitment/page faults; panics when exhausted |
 | `arena_push_uninit` | caller arena | constant-time bookkeeping in the current block without zeroing; growth may add a block and require OS reservation/commitment/page faults |
-| `arena_create` / `arena_create_bounded` | OS backing | reserve and initialize a header in the first block; `arena_create(0)` selects the target default; Wasm obtains backed linear memory |
+| `arena_alloc` / `arena_alloc_bounded` | OS backing | reserve and initialize a header in the first block; `arena_alloc(0)` selects the target default; Wasm obtains backed linear memory |
 | `arena_from_buffer` | caller buffer | constant-time header initialization; consumes 144 bytes plus up to 15 bytes of alignment padding |
 | arena rewind/reset | none | proportional to blocks released, plus OS release cost; poisoning touches reclaimed bytes in the retained block when enabled |
 | arena release | none | walks and releases all blocks; invalidates the arena pointer |

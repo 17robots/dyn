@@ -22,12 +22,12 @@ pub struct SymbolResult { value: rawptr, message: *const u8, failure: io.Failure
 pub struct Result { message: *const u8, failure: io.Failure }
 
 pub fn open(path: []const u8, flags: i32) OpenResult {
-  storage: [4096 + mem.ArenaBufferOverhead]u8 = []
+  storage: [4096 + mem.ArenaBufferOverhead]u8
   if #len(path) >= #len(storage) {
     return OpenResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
   name := cabi.string_into(storage[..], path)
-  if name.failure.kind != parse.Kind.Ok {
+  if parse.failed(name.failure) {
     return OpenResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
   return platform_open(name.value, flags)
@@ -37,12 +37,12 @@ pub fn symbol(handle: Handle, name: []const u8) SymbolResult {
   if handle == nil {
     return SymbolResult{ failure: io.Failure{ kind: io.Kind.InvalidState } }
   }
-  storage: [4096 + mem.ArenaBufferOverhead]u8 = []
+  storage: [4096 + mem.ArenaBufferOverhead]u8
   if #len(name) >= #len(storage) {
     return SymbolResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
   native_name := cabi.string_into(storage[..], name)
-  if native_name.failure.kind != parse.Kind.Ok {
+  if parse.failed(native_name.failure) {
     return SymbolResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
   return platform_symbol(handle, native_name.value)

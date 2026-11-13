@@ -195,7 +195,7 @@ fn shortest_decimal(mantissa_bits: u64, exponent_bits: u64) Decimal {
 // "123.25"); others print as digits with an exponent ("1e-7", "1.5e+300").
 // Integers have no fractional part. Non-finite values print "nan", "inf" and
 // "-inf". Negative zero prints "-0".
-pub fn write_f64_shortest(state: *Buffer, value: f64) bool {
+fn put_f64_shortest(state: *Buffer, value: f64) bool {
   start := state.length
   bits := #bitcast(u64, value)
   negative := bits >> 63 != 0
@@ -203,25 +203,25 @@ pub fn write_f64_shortest(state: *Buffer, value: f64) bool {
   mantissa_bits := bits & 4503599627370495
   if exponent_bits == 2047 {
     if mantissa_bits != 0 {
-      return write(state, "nan")
+      return put(state, "nan")
     }
     if negative {
-      return write(state, "-inf")
+      return put(state, "-inf")
     }
-    return write(state, "inf")
+    return put(state, "inf")
   }
-  if negative && !write_byte(state, '-') {
+  if negative && !put_byte(state, '-') {
     return false
   }
   if exponent_bits == 0 && mantissa_bits == 0 {
-    if !write_byte(state, '0') {
+    if !put_byte(state, '0') {
       state.length = start
       return false
     }
     return true
   }
   decimal := shortest_decimal(mantissa_bits, exponent_bits)
-  digits: [20]u8 = []
+  digits: [20]u8
   count: usize = 0
   rest := decimal.mantissa
   for rest != 0 {
@@ -234,38 +234,38 @@ pub fn write_f64_shortest(state: *Buffer, value: f64) bool {
   ok := true
   if point > -6 && point <= 21 {
     if point <= 0 {
-      ok = write(state, "0.") && write_padding(state, '0', #cast(usize, -point))
+      ok = put(state, "0.") && put_padding(state, '0', #cast(usize, -point))
       for i in 0..count {
-        ok = ok && write_byte(state, digits[count - 1 - i])
+        ok = ok && put_byte(state, digits[count - 1 - i])
       }
     } else {
       for i in 0..count {
         if #cast(i64, i) == point {
-          ok = ok && write_byte(state, '.')
+          ok = ok && put_byte(state, '.')
         }
-        ok = ok && write_byte(state, digits[count - 1 - i])
+        ok = ok && put_byte(state, digits[count - 1 - i])
       }
       if point > #cast(i64, count) {
-        ok = ok && write_padding(state, '0', #cast(usize, point - #cast(i64, count)))
+        ok = ok && put_padding(state, '0', #cast(usize, point - #cast(i64, count)))
       }
     }
   } else {
-    ok = write_byte(state, digits[count - 1])
+    ok = put_byte(state, digits[count - 1])
     if count > 1 {
-      ok = ok && write_byte(state, '.')
+      ok = ok && put_byte(state, '.')
       for i in 1..count {
-        ok = ok && write_byte(state, digits[count - 1 - i])
+        ok = ok && put_byte(state, digits[count - 1 - i])
       }
     }
     shown := point - 1
-    ok = ok && write_byte(state, 'e')
+    ok = ok && put_byte(state, 'e')
     if shown < 0 {
-      ok = ok && write_byte(state, '-')
+      ok = ok && put_byte(state, '-')
       shown = -shown
     } else {
-      ok = ok && write_byte(state, '+')
+      ok = ok && put_byte(state, '+')
     }
-    ok = ok && write_u64(state, #cast(u64, shown))
+    ok = ok && put_u64(state, #cast(u64, shown))
   }
   if !ok {
     state.length = start
@@ -277,8 +277,8 @@ pub fn write_f64_shortest(state: *Buffer, value: f64) bool {
 // The shortest round-trip text of value in arena storage; see
 // write_f64_shortest. At most 24 bytes.
 pub fn f64_shortest(arena: *mem.Arena, value: f64) []u8 {
-  storage: [32]u8 = []
+  storage: [32]u8
   state := buffer(storage[..])
-  _ = write_f64_shortest(&state, value)
+  _ = put_f64_shortest(&state, value)
   return copy_out(arena, bytes(&state))
 }

@@ -47,7 +47,7 @@ fn kind_of(number: u32) Kind {
 }
 
 fn platform_next(state: *Watch, block: bool) Next {
-  info: [128]u8 = []
+  info: [128]u8
   for true {
     count := #syscall(sys.Read, state.handle, &info[0], 128)
     if count == 128 {
@@ -59,7 +59,7 @@ fn platform_next(state: *Watch, block: bool) Next {
         return Next{ found: true }
       }
       // Wait for readability: ppoll on one descriptor with no timeout.
-      entry: [8]u8 = []
+      entry: [8]u8
       descriptor := #cast(u32, state.handle)
       entry[0] = #cast(u8, descriptor & 255)
       entry[1] = #cast(u8, descriptor >> 8 & 255)

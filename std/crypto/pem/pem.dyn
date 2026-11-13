@@ -97,7 +97,7 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Result {
     return fail(arena, mark, at, parse.Kind.Syntax)
   }
   decoded := base64.decode(arena, base64_storage[..encoded_length])
-  if decoded.failure.kind != parse.Kind.Ok {
+  if parse.failed(decoded.failure) {
     return fail(arena, mark, body_start, parse.Kind.Syntax)
   }
   return Result{ value: decoded.value, label: label, consumed: at }

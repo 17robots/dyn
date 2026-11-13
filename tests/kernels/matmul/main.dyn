@@ -11,7 +11,7 @@ fn mul(a: []f64, b: []f64, c: []f64, n: usize) {
   }
 }
 fn main() {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   n: usize = 1500
   a := mem.push_array(f64, arena, n * n)
   b := mem.push_array(f64, arena, n * n)

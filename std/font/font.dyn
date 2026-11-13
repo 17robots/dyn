@@ -494,7 +494,7 @@ pub fn atlas(arena: *mem.Arena, face: *const Face, codepoints: []const u32, pixe
       index = glyph_index(face, cp)
     }
     rendered := raster(arena, face, index, pixels_per_em)
-    if rendered.failure.kind != parse.Kind.Ok {
+    if parse.failed(rendered.failure) {
       return AtlasResult{ offset: rendered.offset, failure: rendered.failure }
     }
     glyph := rendered.value

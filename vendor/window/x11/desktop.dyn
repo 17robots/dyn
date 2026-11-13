@@ -332,7 +332,7 @@ fn preedit_draw(_context: rawptr, data: rawptr, call: *PreeditDraw) {
     compose_snapshot(desktop)
     return
   }
-  incoming: [preedit_limit]u32 = []
+  incoming: [preedit_limit]u32
   count: usize = 0
   room := preedit_limit - first
   if call.text != nil && call.text.string != nil {
@@ -383,7 +383,7 @@ fn preedit_draw(_context: rawptr, data: rawptr, call: *PreeditDraw) {
     tail = preedit_limit - first - count
     desktop_loss(desktop)
   }
-  rest: [preedit_limit]u32 = []
+  rest: [preedit_limit]u32
   for i in 0..tail {
     rest[i] = desktop.preedit[first + remove + i]
   }
@@ -475,7 +475,7 @@ fn read_scale(display: rawptr) f32 {
     return 1.0
   }
   found := c.bytes_from_string(raw, 1048576)
-  if found.failure.kind != parse.Kind.Ok {
+  if parse.failed(found.failure) {
     return 1.0
   }
   text := found.value
@@ -573,7 +573,7 @@ fn append_text(desktop: *Desktop, bytes: []const u8) {
 fn desktop_key(window: *Window, event: *Event) {
   desktop := &window.desktop
   key_event := #cast(*KeyEvent, event)
-  buffer: [4096]u8 = []
+  buffer: [4096]u8
   key: usize = keysym(event, 0)
   count: i32 = 0
   if desktop.context != nil && desktop.text_input {
@@ -588,7 +588,7 @@ fn desktop_key(window: *Window, event: *Event) {
       count = 0
     }
   } else if desktop.text_input {
-    latin: [8]u8 = []
+    latin: [8]u8
     length := lookup_latin1(event, &latin[0], 8, &key, nil)
     for i in 0..#cast(usize, length) {
       byte := latin[i]
@@ -849,7 +849,7 @@ fn clipboard_read(window: *Window, incremental: bool) {
   }
   if !desktop.incoming_failed && count != 0 {
     if desktop.incoming_arena == nil {
-      desktop.incoming_arena = mem.arena_create_bounded(clipboard_limit + mem.ArenaHeader, clipboard_limit + mem.ArenaHeader)
+      desktop.incoming_arena = mem.arena_alloc_bounded(clipboard_limit + mem.ArenaHeader, clipboard_limit + mem.ArenaHeader)
     }
     _ = mem.copy(mem.push_bytes_uninit(desktop.incoming_arena, count), #slice(data, count))
   }
@@ -1116,9 +1116,9 @@ pub fn set_title(window: *Window, title: []const u8) Result {
   if !utf8.valid(title) {
     return Result{kind:io.Kind.InvalidInput}
   }
-  storage: [4096]u8 = []
+  storage: [4096]u8
   name := c.string_into(storage[..], title)
-  if name.failure.kind != parse.Kind.Ok {
+  if parse.failed(name.failure) {
     return Result{kind:io.Kind.InvalidInput}
   }
   _ = store_name(window.display, window.handle, name.value)
@@ -1149,7 +1149,7 @@ fn clipboard_incoming_used(desktop: *Desktop) usize {
 
 fn clipboard_arena(size: usize) *mem.Arena {
   backing := math.max(size, 1) + mem.ArenaHeader
-  return mem.arena_create_bounded(backing, backing)
+  return mem.arena_alloc_bounded(backing, backing)
 }
 fn clipboard_bytes(arena: *const mem.Arena) []u8 {
   empty: []u8

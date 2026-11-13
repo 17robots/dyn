@@ -14,8 +14,8 @@ pub const WindowHidden: u64 = 8
 pub const EventQuit: u32 = 256
 pub const EventWindowCloseRequested: u32 = 528
 pub const EventWindowDestroyed: u32 = 537
-pub struct WindowResult { value: Window, ok: bool }
-pub struct RendererResult { value: Renderer, ok: bool }
+pub struct WindowResult { value: Window, failure: io.Failure }
+pub struct RendererResult { value: Renderer, failure: io.Failure }
 // SDL_Event has a stable 128-byte ABI. u64 words preserve its required
 // eight-byte alignment while keeping the large C union out of Dyn's API.
 pub struct Event { words: [16]u64 }
@@ -32,14 +32,14 @@ pub fn quit() {
 }
 pub fn window_create(title: []const u8, title_buffer: []u8, width: i32, height: i32, flags: u64) WindowResult {
   if width <= 0 || height <= 0 {
-    return WindowResult{}
+    return WindowResult{ failure: io.Failure{ kind: io.Kind.System } }
   }
   native_title := c.string_into(title_buffer, title)
-  if native_title.failure.kind != parse.Kind.Ok {
-    return WindowResult{}
+  if parse.failed(native_title.failure) {
+    return WindowResult{ failure: io.Failure{ kind: io.Kind.System } }
   }
   value := native_create_window(native_title.value, width, height, flags)
-  return WindowResult{ value: value, ok: value != nil }
+  return WindowResult{ value: value, failure: io.failure_if(value == nil) }
 }
 pub fn window_destroy_owned(window: Window) {
   if window != nil {
@@ -48,10 +48,10 @@ pub fn window_destroy_owned(window: Window) {
 }
 pub fn renderer_create_default_owned(window: Window) RendererResult {
   if window == nil {
-    return RendererResult{}
+    return RendererResult{ failure: io.Failure{ kind: io.Kind.System } }
   }
   value := native_create_renderer(window, nil)
-  return RendererResult{ value: value, ok: value != nil }
+  return RendererResult{ value: value, failure: io.failure_if(value == nil) }
 }
 pub fn renderer_destroy_owned(renderer: Renderer) {
   if renderer != nil {
@@ -93,23 +93,23 @@ pub const AudioU8: u32 = 8
 pub const AudioS16: u32 = 32784
 pub const AudioF32: u32 = 33056
 pub struct AudioSpec { format: u32, channels: i32, frequency: i32 }
-pub struct AudioStreamResult { value: AudioStream, ok: bool }
+pub struct AudioStreamResult { value: AudioStream, failure: io.Failure }
 
 
 // SDL owns the stream allocation. nil callbacks select explicitly queued audio.
 pub fn stream_open_playback_owned(spec: *const AudioSpec) AudioStreamResult {
   if spec == nil {
-    return AudioStreamResult{}
+    return AudioStreamResult{ failure: io.Failure{ kind: io.Kind.System } }
   }
   value := native_open_audio_stream(AudioDeviceDefaultPlayback, spec, nil, nil)
-  return AudioStreamResult{ value: value, ok: value != nil }
+  return AudioStreamResult{ value: value, failure: io.failure_if(value == nil) }
 }
 pub fn stream_open_playback_callback_owned(spec: *const AudioSpec, callback: AudioCallback, context: rawptr) AudioStreamResult {
   if spec == nil || callback == nil {
-    return AudioStreamResult{}
+    return AudioStreamResult{ failure: io.Failure{ kind: io.Kind.System } }
   }
   value := native_open_audio_stream(AudioDeviceDefaultPlayback, spec, #cast(rawptr, callback), context)
-  return AudioStreamResult{ value: value, ok: value != nil }
+  return AudioStreamResult{ value: value, failure: io.failure_if(value == nil) }
 }
 // SDL copies source before return; source stays caller-owned.
 pub fn stream_put(stream: AudioStream, source: []const u8) bool {
@@ -165,8 +165,8 @@ pub const BufferVertex: u32 = 1
 pub const BufferIndex: u32 = 2
 pub const TextureSampler: u32 = 1
 pub const TextureColorTarget: u32 = 2
-pub struct GpuDeviceResult { value: GpuDevice, ok: bool }
-pub struct GpuSwapchainResult { texture: GpuTexture, width: u32, height: u32, ok: bool }
+pub struct GpuDeviceResult { value: GpuDevice, failure: io.Failure }
+pub struct GpuSwapchainResult { texture: GpuTexture, width: u32, height: u32, failure: io.Failure }
 pub struct FColor { red: f32, green: f32, blue: f32, alpha: f32 }
 pub struct GpuColorTargetInfo {
   texture: GpuTexture, mip_level: u32, layer_or_depth_plane: u32, clear_color: FColor,
@@ -186,7 +186,7 @@ pub struct GpuBufferInfo { usage: u32, size: u32, properties: u32 }
 
 pub fn gpu_create_default_owned(formats: u32, debug: bool) GpuDeviceResult {
   value := native_gpu_create(formats, debug, nil)
-  return GpuDeviceResult{ value: value, ok: value != nil }
+  return GpuDeviceResult{ value: value, failure: io.failure_if(value == nil) }
 }
 pub fn gpu_destroy_owned(device: GpuDevice) {
   if device != nil {
@@ -212,7 +212,7 @@ pub fn gpu_wait_swapchain(commands: GpuCommandBuffer, window: Window) GpuSwapcha
   width: u32 = 0
   height: u32 = 0
   ok := commands != nil && window != nil && native_gpu_swapchain(commands, window, &texture, &width, &height)
-  return GpuSwapchainResult{ texture: texture, width: width, height: height, ok: ok }
+  return GpuSwapchainResult{ texture: texture, width: width, height: height, failure: io.failure_if(!ok) }
 }
 // Submission consumes the command buffer regardless of success.
 pub fn gpu_submit(commands: GpuCommandBuffer) bool {
@@ -256,7 +256,7 @@ pub fn gpu_buffer_release_owned(device: GpuDevice, buffer: GpuBuffer) {
 // A minimized window may have no texture; submit the empty buffer successfully.
 pub fn gpu_clear_swapchain(commands: GpuCommandBuffer, window: Window, color: FColor) bool {
   acquired := gpu_wait_swapchain(commands, window)
-  if !acquired.ok {
+  if io.failed(acquired.failure) {
     return false
   }
   if acquired.texture == nil {

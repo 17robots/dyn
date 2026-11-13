@@ -17,7 +17,7 @@ for message in ('unsafe: #slice', 'unsafe: #offset', 'unsafe: pointer cast', 'un
 with tempfile.TemporaryDirectory() as directory:
     root = Path(directory)
     (root/'main.dyn').write_text('use "std/mem"\nuse "std/fmt" f\nfn main() {\n  helper()\n}\n')
-    (root/'other.dyn').write_text('fn helper() {\n  arena := mem.arena_create(4096)\n  mem.arena_release(arena)\n}\n')
+    (root/'other.dyn').write_text('fn helper() {\n  arena := mem.arena_alloc(4096)\n  mem.arena_release(arena)\n}\n')
     imports = subprocess.run([DYN, 'vet', str(root)], capture_output=True, text=True, timeout=60)
     assert imports.returncode == 1 and imports.stderr.count('import is never used') == 1, imports
     assert 'main.dyn:2:' in imports.stderr, imports
@@ -33,7 +33,7 @@ fn keep(n: u32) u64 {
 fn main() {
   a: u32 = 3
   b: u64 = #cast(u64, a)
-  d: [4]u8 = []
+  d: [4]u8
   e := d[#cast(usize, a)]
   p := P{ n: #cast(u64, a) }
   _ = take(#cast(u64, e)) + keep(a) + b + p.n

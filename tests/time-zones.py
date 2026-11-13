@@ -26,7 +26,7 @@ if not Path('/usr/share/zoneinfo/Europe/Berlin').exists():
 lines = ['use "std/time" time', 'use "std/time/zone" zone', 'use "std/mem" mem', 'use "std/io" io', '',
          f'const instants: [{len(instants)}]i64 = [{", ".join(map(str, instants))}]',
          f'const days: [{len(calendar_days)}]i64 = [{", ".join(map(str, calendar_days))}]', '',
-         'fn main() {', '  arena := mem.arena_create(16777216)', '  defer {', '    mem.arena_release(arena)', '  }',
+         'fn main() {', '  arena := mem.arena_alloc(16777216)', '  defer {', '    mem.arena_release(arena)', '  }',
          '  for day in days {', '    date := time.civil_from_days(day)',
          '    io.println("day {} {} {} {} {} {}", day, date.year, date.month, date.day, time.days_from_civil(date.year, date.month, date.day), #cast(u8, time.weekday(&date)))',
          '  }']
@@ -37,14 +37,14 @@ for index, name in enumerate(ZONES):
               f'    back := zone.instant_of_local(&loaded{index}.value, &shown.value)',
               f'    io.println("{name} {{}} {{}} {{}} {{}} {{}}-{{}}-{{}} {{}}:{{}}:{{}} {{}}", seconds, shown.offset, shown.dst, shown.abbreviation, shown.value.year, shown.value.month, shown.value.day, shown.value.hour, shown.value.minute, shown.value.second, back.seconds)',
               '  }']
-lines += ['  posix := zone.parse_posix(arena, "CET-1CEST,M3.5.0,M10.5.0/3")', '  if posix.failure.kind != io.Kind.Ok {', '    #panic("posix")', '  }',
+lines += ['  posix := zone.parse_posix(arena, "CET-1CEST,M3.5.0,M10.5.0/3")', '  if io.failed(posix.failure) {', '    #panic("posix")', '  }',
           '  for seconds in instants {', '    shown := zone.local(&posix.value, time.Instant{ seconds: seconds })',
           '    io.println("posix {} {} {}", seconds, shown.offset, shown.abbreviation)', '  }',
-          '  bad := zone.parse_posix(arena, "CET-1CEST,M13.5.0")', '  if bad.failure.kind == io.Kind.Ok {', '    #panic("bad posix")', '  }',
+          '  bad := zone.parse_posix(arena, "CET-1CEST,M13.5.0")', '  if !io.failed(bad.failure) {', '    #panic("bad posix")', '  }',
           '  for seconds in instants {', '    shown := zone.local(&loaded0.value, time.Instant{ seconds: seconds })',
           '    io.println("format {} {} {}", seconds, zone.format(arena, "%Y-%m-%d %H:%M:%S %j %a %A %b %B %Z %z %%", &shown), zone.format_rfc3339(arena, &shown))', '  }',
           '  bad_format := zone.local(&loaded0.value, time.Instant{})', '  if #len(zone.format(arena, "%Q", &bad_format)) != 0 {', '    #panic("bad format")', '  }',
-          '  system := zone.system(arena)', '  if system.failure.kind != io.Kind.Ok {', '    #panic("system")', '  }',
+          '  system := zone.system(arena)', '  if io.failed(system.failure) {', '    #panic("system")', '  }',
           '  io.println("system {}", system.value.name)', '}']
 
 
@@ -104,7 +104,7 @@ use "std/mem" mem
 use "std/io" errors
 
 fn main() {
-  arena := mem.arena_create(1048576)
+  arena := mem.arena_alloc(1048576)
   defer {
     mem.arena_release(arena)
   }
@@ -112,7 +112,7 @@ fn main() {
     #panic("windows load")
   }
   system := zone.system(arena)
-  if system.failure.kind != errors.Kind.Ok || #len(system.value.name) == 0 || #len(system.value.standard.abbreviation) == 0 {
+  if errors.failed(system.failure) || #len(system.value.name) == 0 || #len(system.value.standard.abbreviation) == 0 {
     #panic("windows system")
   }
 }

@@ -11,7 +11,7 @@ SOURCE = '''use "std/mem"
 struct Item { tag: u8, value: u64 }
 fn expect(ok: bool) { if !ok { #panic("memory ergonomics contract") } }
 fn main() {
-  created := mem.arena_create(mem.KiB)
+  created := mem.arena_alloc(mem.KiB)
   defer { mem.arena_release(created) }
   count: usize = 7
   size := mem.size_for(count, #sizeof(Item))
@@ -38,7 +38,7 @@ fn main() {
   expect(zero_size.valid && zero_size.bytes == 0)
   expect(mem.MiB == 1024 * mem.KiB && mem.GiB == 1024 * mem.MiB)
 
-  chain := mem.arena_create_bounded(512, 4 * mem.KiB)
+  chain := mem.arena_alloc_bounded(512, 4 * mem.KiB)
   defer { mem.arena_release(chain) }
   first := mem.push(u64, chain)
   first.* = 42
@@ -60,12 +60,12 @@ fn main() {
     mem.arena_reset(chain)
     expect(mem.arena_snapshot(chain).blocks == 1)
   }
-  tight := mem.arena_create_bounded(mem.ArenaHeader, mem.ArenaHeader)
+  tight := mem.arena_alloc_bounded(mem.ArenaHeader, mem.ArenaHeader)
   expect(mem.arena_try_push(tight, 0, 1).ok)
   expect(!mem.arena_try_push(tight, 1, 1).ok)
   expect(mem.arena_snapshot(tight).blocks == 1)
   mem.arena_release(tight)
-  unbounded := mem.arena_create(0)
+  unbounded := mem.arena_alloc(0)
   _ = mem.arena_push(unbounded, 4096, 8)
   expect(mem.arena_snapshot(unbounded).blocks == 1)
   mem.arena_release(unbounded)

@@ -41,9 +41,10 @@ pub fn remove_temporary(directory: *TemporaryDirectory, frames: []fs.RemovalFram
 // Use fs.create_exclusive to claim it, or a caller-selected private directory.
 temporary_path_sequence: sync.AtomicU64
 pub fn temporary_path(arena: *mem.Arena, prefix: []const u8, suffix: []const u8) []u8 {
-  storage: [4096]u8 = []
+  storage: [4096]u8
   state := format.buffer(storage[..])
-  if !format.write_values(&state, "/tmp/", prefix, "-", platform.process_id(), "-", sync.fetch_add_u64(&temporary_path_sequence, 1), suffix) {
+  format.write_values(&state, "/tmp/", prefix, "-", platform.process_id(), "-", sync.fetch_add_u64(&temporary_path_sequence, 1), suffix)
+  if state.failed {
     #panic("temporary path longer than 4096 bytes")
   }
   output := mem.push_bytes_uninit(arena, state.length)

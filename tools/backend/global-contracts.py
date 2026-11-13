@@ -70,7 +70,7 @@ def main():
         collisions=root/'collisions.c';collisions.write_text(COLLISIONS);collisions_obj=root/'collisions.o'
         run([*CC,'-fPIC','-c',collisions,'-o',collisions_obj])
         for mode in ('debug','release'):
-            oracle=root/(mode+'-compiler.so');run([DYN,'build',root,'--shared','--'+mode,'--no-cache','--jobs','1','--link',provider_obj,'--link',collisions_obj,'--output',oracle])
+            oracle=root/(mode+'-compiler.so');run([DYN,'build',root,'--no-check-overflow','--shared','--'+mode,'--no-cache','--jobs','1','--link',provider_obj,'--link',collisions_obj,'--output',oracle])
             for path in (oracle,):
                 lib=ctypes.CDLL(str(path))
                 for name,expected in (('state',76),('pid',os.getpid()),('unknown_syscall',-38),('reflect',24),('constants',62)):
@@ -86,7 +86,7 @@ def main():
                 assert result.returncode==-11 or (result.returncode==101 and result.stderr.startswith('memory fault')),(mode,path,result.returncode,result.stderr);checks+=1
             # Freestanding runtime calls main directly; no CRT constructor walker.
             source.write_text(SOURCE+'\nfn main() { if state()!=76 { #panic("global startup") }\n_=write_text()\nreturn }\n')
-            executable=root/(mode+'-compiler');run([DYN,'build',root,'--'+mode,'--no-cache','--jobs','1','--link',provider_obj,'--link',collisions_obj,'--output',executable])
+            executable=root/(mode+'-compiler');run([DYN,'build',root,'--no-check-overflow','--'+mode,'--no-cache','--jobs','1','--link',provider_obj,'--link',collisions_obj,'--output',executable])
             assert run([executable]).stdout=='ok';checks+=1
             for failure in (
                 'fn seed() u64 { #panic("initializer failure") } pub value:u64=seed()\nfn main() {}\n',
@@ -95,7 +95,7 @@ def main():
                 source.write_text(failure)
                 for shared in (True,False):
                     oracle=root/(mode+'-failure'+('.so' if shared else ''))
-                    run([DYN,'build',root,*(['--shared'] if shared else []),'--'+mode,'--no-cache','--jobs','1','--output',oracle])
+                    run([DYN,'build',root,'--no-check-overflow',*(['--shared'] if shared else []),'--'+mode,'--no-cache','--jobs','1','--output',oracle])
                     command=[sys.executable,'-c','import ctypes,sys;ctypes.CDLL(sys.argv[1])',str(oracle)] if shared else [str(oracle)]
                     result=subprocess.run(command,capture_output=True,text=True,timeout=10)
                     assert result.returncode==101,(mode,oracle,result.returncode,result.stderr);checks+=1

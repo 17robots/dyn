@@ -8,7 +8,7 @@ fn sum(xs: []i32) i32 {
   return t
 }
 fn main() {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   xs := mem.push_array(i32, arena, 100000)
   for i in 0..#len(xs) {
     xs[i] = #cast(i32, i)

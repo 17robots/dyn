@@ -83,7 +83,7 @@ fn main() {
 seed: u8 = initial()
 fn initial() u8 { return 120 }
 fn main() {
-  text: [6000]u8 = []
+  text: [6000]u8
   index: usize = 0
   for index < 6000 { text[index] = seed + #cast(u8, (index % 7))
   index += 1 }

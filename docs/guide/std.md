@@ -17,7 +17,7 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
 - **Zero is initialization.** A zeroed data struct is a valid empty value: `Builder{}`,
   `process.Options{}` (inherit every stream), and scanners given only their
   `source`. Arena handles are pointers to backing headers and require
-  `arena_create` or `arena_from_buffer`; a nil arena handle does not allocate.
+  `arena_alloc` or `arena_from_buffer`; a nil arena handle does not allocate.
 - **Errors are values, in one shape.** If the world can make a function fail,
   it returns `{value, failure}`; with nothing to return, the failure alone.
   Effects use `io.Failure {kind, native}`. Parsers use `parse.Failure {kind,
@@ -29,6 +29,22 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
   Scanners and writers keep their first error in their state and turn later
   calls into no-ops, so callers check once at the end. Predicates return
   `bool`. Missing lookups and end of input are ordinary results, not errors.
+- **One place for byte search.** `std/bytes` owns `equal`, `find`,
+  `find_byte`, `find_last`, `find_last_byte`, `contains`, `starts_with` and
+  `ends_with`; `std/strings` holds text work (trim, split, join, format, parse)
+  and does not repeat them. Every `find*` returns `#len(text)` on a miss,
+  always a safe slice bound: `text[..bytes.find(text, ",")]` is the text up to
+  the first comma, or all of it.
+- **Names say what happens to memory.** `push_*` allocates from an arena the
+  caller passes (`mem.push`, `json.push_object`). `alloc` and `release` make and
+  free an owner (`mem.arena_alloc`, `mem.arena_release`). `open` and `close`
+  acquire and give back an OS resource. `init(&x, ...)` fills storage the
+  caller already has. A conversion names its result first, then its source:
+  `X_from_Y`.
+- **Callbacks are typed.** A function that calls back takes `fn(*$C, ...)` and
+  the matching `context: *$C`, so the callback receives its own type. Only
+  stored, type-erased seams (`io.Reader`, `io.Writer`, `thread.Spawner`) and
+  C ABI boundaries keep `rawptr`.
 - **Panics are for bugs.** Broken invariants, out-of-bounds access and
   exhausted arenas panic. There is no recovery.
 - **Native resources are explicit.** Files, sockets, threads, loaded libraries
@@ -45,7 +61,7 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
 | `std/bytes` | Byte-slice operations, cursors and splitters |
 | `std/bytes/builder` | Byte and UTF-8 string builder over caller storage or an arena |
 | `std/bytes/search` | Prepared KMP search |
-| `std/strings` | Search, parse, split, join, format, glob, ASCII helpers and string lists |
+| `std/strings` | Parse, split, join, format, trim, glob, ASCII helpers and string lists; byte search is in `std/bytes` |
 | `std/fmt` | Formatting into a bounded caller buffer, including shortest round-trip floats |
 | `std/unicode/utf8`, `utf16`, `text` | Strict UTF-8 and UTF-16, case folding, normalization, and grapheme, word and line segmentation |
 | `std/text/scanner` | Line and field scanner with positions |

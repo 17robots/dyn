@@ -18,12 +18,12 @@ fn conflicts(arena: *mem.Arena, input: []const u8) bool {
   return mem.arena_overlaps_unallocated(arena, input)
 }
 
-fn load_u16(bytes: []const u8, offset: usize) u16 {
-  return #cast(u16, bytes[offset]) * 256 + #cast(u16, bytes[offset + 1])
+fn load_u16(data: []const u8, offset: usize) u16 {
+  return #cast(u16, data[offset]) * 256 + #cast(u16, data[offset + 1])
 }
-fn store_u16(bytes: []u8, offset: usize, value: u16) {
-  bytes[offset] = #cast(u8, (value >> 8))
-  bytes[offset + 1] = #cast(u8, value)
+fn store_u16(data: []u8, offset: usize, value: u16) {
+  data[offset] = #cast(u8, (value >> 8))
+  data[offset + 1] = #cast(u8, value)
 }
 struct Name { end: usize, length: usize, ok: bool, offset: usize }
 fn read_name(packet: []const u8, start: usize, destination: []u8) Name {
@@ -81,7 +81,7 @@ fn read_name(packet: []const u8, start: usize, destination: []u8) Name {
   return Name{}
 }
 fn skip_name(packet: []const u8, start: usize) usize {
-  storage: [254]u8 = []
+  storage: [254]u8
   parsed := read_name(packet, start, storage[..])
   if !parsed.ok {
     return 0
@@ -89,10 +89,10 @@ fn skip_name(packet: []const u8, start: usize) usize {
   return parsed.end
 }
 fn question_matches(packet: []const u8, name: []const u8) bool {
-  storage: [254]u8 = []
+  storage: [254]u8
   parsed := read_name(packet, 12, storage[..])
-  encoded: [512]u8 = []
-  canonical: [254]u8 = []
+  encoded: [512]u8
+  canonical: [254]u8
   request := query(encoded[..], name, 0, 1)
   if #len(request) == 0 {
     return false
@@ -114,7 +114,7 @@ fn query_arena(arena: *mem.Arena, name: []const u8, identifier: u16, kind: u16) 
     empty: []u8
     return empty
   }
-  storage: [272]u8 = []
+  storage: [272]u8
   encoded := query(storage[..], name, identifier, kind)
   output := mem.push_bytes_uninit(arena, #len(encoded))
   _ = mem.copy(output, encoded)
@@ -222,10 +222,10 @@ fn canonical_owner(packet: []const u8, start: usize, answers: usize, owner: []u8
     index: usize = 0
     found: bool = false
     target_length: usize = 0
-    target: [254]u8 = []
+    target: [254]u8
     for index < answers {
       record_start := cursor
-      record_name: [254]u8 = []
+      record_name: [254]u8
       parsed := read_name(packet, cursor, record_name[..])
       if !parsed.ok || parsed.end + 10 > #len(packet) {
         return Name{offset: record_start}
@@ -239,7 +239,7 @@ fn canonical_owner(packet: []const u8, start: usize, answers: usize, owner: []u8
         return Name{offset: record_start}
       }
       if kind == 5 && class == 1 && same_name(record_name[..parsed.length], owner[..current.length]) {
-        candidate: [254]u8 = []
+        candidate: [254]u8
         alias := read_name(packet, cursor, candidate[..])
         if !alias.ok || alias.end != cursor + length {
           return Name{offset: record_start}
@@ -329,14 +329,14 @@ fn parse(packet: []const u8, identifier: u16, name: []const u8, addresses: []Ipv
     }
     scan += length
   }
-  owner: [254]u8 = []
+  owner: [254]u8
   canonical := canonical_owner(packet, cursor, answers, owner[..])
   if !canonical.ok {
     return Result{ offset: canonical.offset, failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
   count: usize = 0
   for answer in 0..answers {
-    record_owner: [254]u8 = []
+    record_owner: [254]u8
     parsed_owner := read_name(packet, cursor, record_owner[..])
     if !parsed_owner.ok {
       return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
@@ -379,7 +379,7 @@ pub fn resolve_ipv4(arena: *mem.Arena, name: []const u8, server: *const network.
   if conflicts(arena, name) {
     return Ipv4Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
-  packet: [65535]u8 = []
+  packet: [65535]u8
   received := exchange(name, server, packet[..], timeout_milliseconds, 1)
   if !received.ok {
     return Ipv4Result{ failure: io.Failure{ kind: received.kind, native: received.error } }
@@ -391,7 +391,7 @@ pub fn resolve_ipv6(arena: *mem.Arena, name: []const u8, server: *const network.
   if conflicts(arena, name) {
     return Ipv6Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
-  packet: [65535]u8 = []
+  packet: [65535]u8
   received := exchange(name, server, packet[..], timeout_milliseconds, 28)
   if !received.ok {
     return Ipv6Result{ failure: io.Failure{ kind: received.kind, native: received.error } }
@@ -490,7 +490,7 @@ fn tcp(name: []const u8, server: *const network.Ipv4Address, packet: []u8,
       return Packet{ error: checked.failure.native, kind: checked.failure.kind }
     }
   }
-  prefix: [2]u8 = []
+  prefix: [2]u8
   store_u16(prefix[..], 0, #cast(u16, #len(request)))
   sent := transfer(descriptor, prefix[..], true, deadline, finite)
   if !io.failed(sent.failure) {
@@ -527,7 +527,7 @@ fn exchange(name: []const u8, server: *const network.Ipv4Address, packet: []u8,
     }
     deadline = created.value
   }
-  entropy: [2]u8 = []
+  entropy: [2]u8
   if !random.fill(entropy[..]) {
     return Packet{ error: -5, kind: io.Kind.System }
   }

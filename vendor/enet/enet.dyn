@@ -1,5 +1,6 @@
 use "std/parse" parse
 use "std/c"
+use "std/io"
 #link("dyn_enet")
 // ENet 1.3.18, configurable reliable channels. Provider owns hosts/packets. Initialize once
 // before creating hosts and deinitialize after destroying all hosts. Hosts and
@@ -10,14 +11,14 @@ pub type Packet = rawptr
 pub const Connected: i32 = 1
 pub const Disconnected: i32 = 2
 pub const Received: i32 = 3
-pub struct Event { kind: i32, peer: Peer, packet: Packet, code: i32, ok: bool, channel: u8, data: u32 }
+pub struct Event { kind: i32, peer: Peer, packet: Packet, code: i32, channel: u8, data: u32, failure: io.Failure }
 pub fn init() bool {
   return native_init() == 0
 }
 pub extern fn quit "enet_deinitialize"()
 // Convenience listener uses loopback and one channel; port=0 is ephemeral.
 pub fn listen_owned(port: u16, peers: usize) Host {
-  buffer: [16]u8 = []
+  buffer: [16]u8
   return listen_at_owned("127.0.0.1", port, peers, 1, buffer[..])
 }
 pub fn client_owned(peers: usize) Host {
@@ -35,9 +36,9 @@ pub fn connect(host: Host, ip: []const u8, port: u16, buffer: []u8) Peer {
 // Service both endpoints. code=0 means no event; positive means an event.
 // Every received packet must be destroyed, including packets the app ignores.
 pub fn service(host: Host, timeout_ms: u32) Event {
-  event := Event{}
+  event := Event{ failure: io.Failure{ kind: io.Kind.System } }
   event.code = native_service(host, timeout_ms, &event.kind, &event.peer, &event.packet, &event.channel, &event.data)
-  event.ok = event.code >= 0
+  event.failure = io.failure_if(event.code < 0)
   return event
 }
 // Copies bytes; successful send transfers the private packet to ENet. Maximum 1 MiB.
@@ -86,7 +87,7 @@ extern fn native_disconnect "enet_peer_disconnect"(peer: Peer, data: u32)
 // channels must be 1..255. No DNS lookup or hidden filesystem/network work.
 pub fn listen_at_owned(ip: []const u8, port: u16, peers: usize, channels: usize, buffer: []u8) Host {
   encoded := c.string_into(buffer, ip)
-  if encoded.failure.kind != parse.Kind.Ok {
+  if parse.failed(encoded.failure) {
     return nil
   }
   return native_host(encoded.value, port, peers, channels)
@@ -96,7 +97,7 @@ pub fn client_channels_owned(peers: usize, channels: usize) Host {
 }
 pub fn connect_channels(host: Host, ip: []const u8, port: u16, channels: usize, buffer: []u8) Peer {
   encoded := c.string_into(buffer, ip)
-  if encoded.failure.kind != parse.Kind.Ok {
+  if parse.failed(encoded.failure) {
     return nil
   }
   return native_connect(host, encoded.value, port, channels)

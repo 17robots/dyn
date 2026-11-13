@@ -447,7 +447,7 @@ fn put(output: []u8, used: *usize, text: []const u8) bool {
 }
 
 fn put_number(output: []u8, used: *usize, value: i64, width: usize) bool {
-  digits: [24]u8 = []
+  digits: [24]u8
   count: usize = 0
   rest := value
   negative := rest < 0

@@ -1,0 +1,28 @@
+0 10
+1 20
+2 30
+3 40
+r 3 43
+r 2 32
+r 1 21
+r 0 10
+p 0 1 2
+p 1 3 4
+weighted 214
+0 104
+1 101
+2 121
+go 1
+run 1
+ 2
+stop 3
+sto 0
+stops 0
+x 0
+only wildcard
+edit once
+calls 2
+fresh 100 0
+run 4 -1
+unit Unit{name: ada, at: Vec2{x: 1.5, y: 2}, op: Sub} at Vec2{x: 1.5, y: 2} op Sub errno 2
+op true true

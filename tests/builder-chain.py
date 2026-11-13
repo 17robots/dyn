@@ -10,21 +10,25 @@ DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 ENV = dict(os.environ, DYN_SDK=str(ROOT))
 SOURCE = r'''use "std/mem" mem
 use "std/bytes/builder" builder
+use "std/io" io
 use "std/bytes" bytes
 fn require(ok: bool) { if !ok { #panic("builder chain contract") } }
 fn moving(block: usize, bounded: bool) {
   arena: *mem.Arena
-  if bounded { arena = mem.arena_create_bounded(block, 4096) }
-  else { arena = mem.arena_create(block) }
+  if bounded { arena = mem.arena_alloc_bounded(block, 4096) }
+  else { arena = mem.arena_alloc(block) }
   defer mem.arena_release(arena)
   state: builder.Builder
-  require(builder.reserve(&state, arena, 8) == builder.ErrorKind.None)
-  require(builder.append(&state, "abcdefgh") == builder.ErrorKind.None)
+  builder.reserve(&state, arena, 8)
+  require(!io.failed(state.failure))
+  builder.append(&state, "abcdefgh")
+  require(!io.failed(state.failure))
   old := state.storage
   first := arena.current
   for i in mem.ArenaHeader + 8..#len(first.data) { first.data[i] = 85 }
   mark := mem.arena_mark(arena)
-  require(builder.reserve(&state, arena, 64) == builder.ErrorKind.None)
+  builder.reserve(&state, arena, 64)
+  require(!io.failed(state.failure))
   if &state.storage[0] == &old[0] { #panic("builder move required") }
   require(bytes.equal(builder.bytes(&state), "abcdefgh"))
   require(bytes.equal(old, "abcdefgh"))
@@ -32,7 +36,8 @@ fn moving(block: usize, bounded: bool) {
   for i in 0..56 { state.storage[8+i] = #cast(u8, i) }
   state.length = 64
   before := state.storage
-  require(builder.append_grow(&state, arena, before) == builder.ErrorKind.None)
+  builder.append_grow(&state, arena, before)
+  require(!io.failed(state.failure))
   require(state.length == 128 && &state.storage[0] != &before[0])
   require(bytes.equal(state.storage[..64], before) && bytes.equal(state.storage[64..128], before))
   require(bytes.equal(old, "abcdefgh"))
@@ -42,23 +47,27 @@ fn moving(block: usize, bounded: bool) {
   require(bytes.equal(old, "abcdefgh"))
 }
 fn current_block() {
-  arena := mem.arena_create_bounded(256, 2048)
+  arena := mem.arena_alloc_bounded(256, 2048)
   defer mem.arena_release(arena)
   guard := mem.push_bytes_uninit(arena, 100)
   mem.fill(guard, 91)
   state: builder.Builder
-  require(builder.reserve(&state, arena, 64) == builder.ErrorKind.None)
+  builder.reserve(&state, arena, 64)
+  require(!io.failed(state.failure))
   require(mem.arena_snapshot(arena).blocks == 2)
-  require(builder.append(&state, "seed") == builder.ErrorKind.None)
+  builder.append(&state, "seed")
+  require(!io.failed(state.failure))
   previous := &state.storage[0]
   mark := mem.arena_mark(arena)
-  require(builder.reserve(&state, arena, 80) == builder.ErrorKind.None)
+  builder.reserve(&state, arena, 80)
+  require(!io.failed(state.failure))
   require(&state.storage[0] == previous && mem.arena_mark(arena) == mark + 16)
   require(bytes.equal(builder.bytes(&state), "seed"))
   // Another allocation makes the builder non-topmost even in the same block.
   other := mem.push_bytes_uninit(arena, 1)
   other[0] = 37
-  require(builder.reserve(&state, arena, 96) == builder.ErrorKind.None)
+  builder.reserve(&state, arena, 96)
+  require(!io.failed(state.failure))
   require(&state.storage[0] != previous && other[0] == 37)
   for value in guard { require(value == 91) }
   require(bytes.equal(builder.bytes(&state), "seed"))
@@ -66,23 +75,30 @@ fn current_block() {
 fn failures() {
   backing: [4]u8 = [1, 2, 3, 4]
   state := builder.from_buffer(backing[..])
-  require(builder.append(&state, "abc") == builder.ErrorKind.None)
-  require(builder.append(&state, "XY") == builder.ErrorKind.Capacity)
+  builder.append(&state, "abc")
+  require(!io.failed(state.failure))
+  builder.append(&state, "XY")
+  require(state.failure.kind == io.Kind.Capacity)
   require(state.length == 3 && bytes.equal(builder.bytes(&state), "abc") && backing[3] == 4)
-  arena := mem.arena_create(160)
+  arena := mem.arena_alloc(160)
   defer mem.arena_release(arena)
   mark := mem.arena_mark(arena)
-  require(builder.reserve(&state, arena, 64) == builder.ErrorKind.Capacity)
-  require(builder.append_grow(&state, arena, "z") == builder.ErrorKind.Capacity)
+  builder.reserve(&state, arena, 64)
+  require(state.failure.kind == io.Kind.Capacity)
+  builder.append_grow(&state, arena, "z")
+  require(state.failure.kind == io.Kind.Capacity)
   require(mem.arena_mark(arena) == mark)
   builder.clear(&state)
-  require(builder.append(&state, "wxyz") == builder.ErrorKind.None)
+  builder.append(&state, "wxyz")
+  require(!io.failed(state.failure))
   huge := #slice(&backing[0], #max(usize))
-  require(builder.append_grow(&state, arena, huge) == builder.ErrorKind.Overflow)
+  builder.append_grow(&state, arena, huge)
+  require(state.failure.kind == io.Kind.Overflow)
   require(mem.arena_mark(arena) == mark && state.length == 4 && bytes.equal(backing[..], "wxyz"))
   builder.clear(&state)
   state.length = 5
-  require(builder.reserve(&state, arena, 64) == builder.ErrorKind.InvalidState)
+  builder.reserve(&state, arena, 64)
+  require(state.failure.kind == io.Kind.InvalidState)
   require(mem.arena_mark(arena) == mark && bytes.equal(backing[..], "wxyz"))
 }
 fn main() {
@@ -95,17 +111,17 @@ fn main() {
 }
 '''
 PANICS = {
-    'bounded': '''arena := mem.arena_create_bounded(160, 320)
+    'bounded': '''arena := mem.arena_alloc_bounded(160, 320)
   defer mem.arena_release(arena)
   state: builder.Builder
-  _ = builder.reserve(&state, arena, 8)
-  _ = builder.reserve(&state, arena, 64)''',
+  builder.reserve(&state, arena, 8)
+  builder.reserve(&state, arena, 64)''',
     'fixed': '''backing: [16 + mem.ArenaBufferOverhead]u8
   arena := mem.arena_from_buffer(backing[..])
   arena = mem.arena_from_buffer(arena.data[..mem.ArenaHeader + 16])
   state: builder.Builder
-  _ = builder.reserve(&state, arena, 8)
-  _ = builder.reserve(&state, arena, 64)''',
+  builder.reserve(&state, arena, 8)
+  builder.reserve(&state, arena, 64)''',
 }
 
 

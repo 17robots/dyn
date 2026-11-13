@@ -63,7 +63,7 @@ fn unchanged(arena: *mem.Arena, before: mem.ArenaSnapshot, mark: usize,
  for i in 0..#len(prefix) { require(prefix[i] == #cast(u8, i + 17)) }
 }
 fn native_failure(code: isize) {
- arena := mem.arena_create_bounded(160, 4096)
+ arena := mem.arena_alloc_bounded(160, 4096)
  defer mem.arena_release(arena)
  prefix := mem.push_bytes_uninit(arena, 16)
  for i in 0..16 { prefix[i] = #cast(u8, i + 17) }
@@ -86,7 +86,7 @@ fn native_failure(code: isize) {
  for i in 0..16 { require(prefix[i] == #cast(u8, i + 17)) }
 }
 fn local_failures() {
- arena := mem.arena_create_bounded(160, 160)
+ arena := mem.arena_alloc_bounded(160, 160)
  defer mem.arena_release(arena)
  _ = mem.push_bytes_uninit(arena, 16)
  calls := mem.allocation_calls()
@@ -101,7 +101,7 @@ fn local_failures() {
  require(mem.arena_snapshot(arena).allocation_failures == 3)
 }
 fn commitment_failure() {
- arena := mem.arena_create_bounded(160, 4096)
+ arena := mem.arena_alloc_bounded(160, 4096)
  defer mem.arena_release(arena)
  prefix := mem.push_bytes_uninit(arena, 16)
  for i in 0..16 { prefix[i] = #cast(u8, i + 17) }
@@ -122,7 +122,7 @@ fn commitment_failure() {
  require(retry.ok && retry.code == 0)
 }
 fn payload_commitment_failure() {
- arena := mem.arena_create_bounded(512, 512)
+ arena := mem.arena_alloc_bounded(512, 512)
  defer mem.arena_release(arena)
  bytes := mem.arena_push(arena, 8, 1)
  bytes.* = 91

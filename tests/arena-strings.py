@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 SOURCE = '''use "std/mem" mem
 use "std/strings" strings
+use "std/bytes"
 
 fn main() {
   created := mem.frames_create(4096)
@@ -17,28 +18,28 @@ fn main() {
 
   arena := mem.frame_current(frames)
   greeting := strings.format(arena, "{} + {} = {}", 2, 3, 5)
-  if !strings.equal(greeting, "2 + 3 = 5") { #panic("format") }
+  if !bytes.equal(greeting, "2 + 3 = 5") { #panic("format") }
   braces := strings.format(arena, "{{{}}}", "x")
-  if !strings.equal(braces, "{x}") { #panic("braces") }
+  if !bytes.equal(braces, "{x}") { #panic("braces") }
 
   list: strings.List
   strings.list_push(arena, &list, "a")
   strings.list_push_format(arena, &list, "b{}", 2)
   strings.list_push(arena, &list, "")
-  if !strings.equal(strings.list_join(arena, &list, ", "), "a, b2, ") { #panic("join") }
+  if !bytes.equal(strings.list_join(arena, &list, ", "), "a, b2, ") { #panic("join") }
   empty: strings.List
-  if !strings.equal(strings.list_join(arena, &empty, ","), "") { #panic("empty join") }
+  if !bytes.equal(strings.list_join(arena, &empty, ","), "") { #panic("empty join") }
 
   parts := strings.split(arena, "x,,y,", ",")
-  if #len(parts) != 4 || !strings.equal(parts[2], "y") || #len(parts[3]) != 0 { #panic("split") }
-  if !strings.equal(strings.join(arena, parts, "-"), "x--y-") { #panic("join parts") }
+  if #len(parts) != 4 || !bytes.equal(parts[2], "y") || #len(parts[3]) != 0 { #panic("split") }
+  if !bytes.equal(strings.join(arena, parts, "-"), "x--y-") { #panic("join parts") }
   copied := strings.clone(arena, "copy")
-  if !strings.equal(copied, "copy") { #panic("clone") }
+  if !bytes.equal(copied, "copy") { #panic("clone") }
 
   kept := greeting
   mem.frame_advance(frames)
   if mem.frame_previous(frames) != arena { #panic("previous") }
-  if !strings.equal(kept, "2 + 3 = 5") { #panic("survives one frame") }
+  if !bytes.equal(kept, "2 + 3 = 5") { #panic("survives one frame") }
   mem.frame_advance(frames)
   if mem.frame_current(frames) != arena || mem.arena_used(arena) != 0 { #panic("reset") }
 }
@@ -48,12 +49,18 @@ with tempfile.TemporaryDirectory(prefix='dyn-arena-strings-') as temporary:
     project = Path(temporary)
     (project / 'main.dyn').write_text(SOURCE)
     # Misuse and exhaustion panic instead of returning a result.
-    for name, body in (('template', 'strings.format(arena, "{} {}", 1)'),
-                       ('separator', 'strings.split(arena, "a,b", "")'),
+    # A literal template that does not match its arguments fails to compile.
+    mismatch = project / 'template'
+    mismatch.mkdir()
+    (mismatch / 'main.dyn').write_text('use "std/mem" mem\nuse "std/strings" strings\nuse "std/bytes"\n\nfn main() {\n'
+                                       '  arena := mem.arena_alloc(0)\n  _ = strings.format(arena, "{} {}", 1)\n}\n')
+    checked = subprocess.run([DYN, 'check', str(mismatch)], cwd=ROOT, capture_output=True, text=True, timeout=60)
+    assert checked.returncode != 0 and 'format template has 2 {} but the call passes 1 argument' in checked.stderr, checked.stderr
+    for name, body in (('separator', 'strings.split(arena, "a,b", "")'),
                        ('exhausted', 'strings.format(arena, "{}", "too long for eight")')):
         panic = project / name
         panic.mkdir()
-        (panic / 'main.dyn').write_text('use "std/mem" mem\nuse "std/strings" strings\n\nfn main() {\n'
+        (panic / 'main.dyn').write_text('use "std/mem" mem\nuse "std/strings" strings\nuse "std/bytes"\n\nfn main() {\n'
                                         '  storage: [8 + mem.ArenaBufferOverhead]u8\n  arena := mem.arena_from_buffer(storage[..])\n'
                                         f'  _ = {body}\n}}\n')
         subprocess.run([DYN, 'build', str(panic), '--no-cache', '--quiet', '--output', str(panic / 'out')],

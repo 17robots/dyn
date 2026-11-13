@@ -38,9 +38,9 @@ CASES = {
   rejected: rawptr = nil
   if raw.sqlite3_prepare_v2(database, #cast(*const c.char, &invalid[0]), #cast(i32, #len(invalid)), &rejected, nil) == raw.SQLITE_OK || rejected != nil { #panic("syntax failure") }
   if raw.sqlite3_finalize(statement) != raw.SQLITE_OK || raw.sqlite3_close(database) != raw.SQLITE_OK { #panic("cleanup") }''',
-    'zstd': r'''input: [64]u8 = []
-  encoded: [256]u8 = []
-  decoded: [64]u8 = []
+    'zstd': r'''input: [64]u8
+  encoded: [256]u8
+  decoded: [64]u8
   i: usize = 0
   for i < #len(input) { input[i] = #cast(u8, i)
     i += 1 }

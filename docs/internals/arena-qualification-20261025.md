@@ -34,7 +34,7 @@ compiler/SDK and available target runners to reproduce the registered gates.
 
 Constructors return `*mem.Arena`; headers live in backing storage. Owned arenas
 chain blocks, while borrowed buffer arenas remain fixed. Explicit
-`arena_create(0)` selects the target default. Backing limits include headers,
+`arena_alloc(0)` selects the target default. Backing limits include headers,
 usage/peak counters exclude them, and marks are virtual positions. Rewind/reset
 release later blocks; owned release invalidates its handle. Pointer aliases do
 not create additional owners, and the language does not prohibit explicit

@@ -4,11 +4,12 @@ use "std/parse" parse
 use "std/mem" mem
 use "std/c" cstrings
 use "std/os/macos/sys"
+use "std/io"
 
 // libSystem has no BSD yield call; sched_yield wraps the swtch_pri Mach trap.
 extern fn native_yield "sched_yield"() i32
 
-pub struct IoResult { value: isize, error: isize, ok: bool }
+pub struct IoResult { value: isize, failure: io.Failure }
 pub struct PollDescriptor { descriptor: i32, events: i16, returned: i16 }
 pub const has_native_threads: bool = false
 pub fn io_value(result: *const IoResult) isize {
@@ -16,25 +17,25 @@ pub fn io_value(result: *const IoResult) isize {
 }
 fn io_result(value: isize) IoResult {
   if value < 0 {
-    return IoResult{ value: value, error: value, ok: false }
+    return IoResult{ value: value, failure: io.darwin_failure(value) }
   }
-  return IoResult{ value: value, error: 0, ok: true }
+  return IoResult{ value: value }
 }
 fn terminated(path: []const u8, storage: []u8) *const u8 {
   if #len(path) == 0 {
     return nil
   }
   result := cstrings.string_into(storage, path)
-  if result.failure.kind != parse.Kind.Ok {
+  if parse.failed(result.failure) {
     return nil
   }
   return result.value
 }
 pub fn file_open(path: []const u8, write_access: bool, create: bool) IoResult {
-  storage: [4096 + mem.ArenaBufferOverhead]u8 = []
+  storage: [4096 + mem.ArenaBufferOverhead]u8
   name := terminated(path, storage[..])
   if name == nil {
-    return IoResult{ value: -1, error: -63, ok: false }
+    return IoResult{ value: -1, failure: io.darwin_failure(-63) }
   }
   flags: usize = 0
   if write_access {

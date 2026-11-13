@@ -13,7 +13,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-owner-warnings-') as temporary:
     source = project / 'main.dyn'
     source.write_text('''use "std/mem"
 fn main() {
-  storage: [64 + mem.ArenaBufferOverhead]u8 = []
+  storage: [64 + mem.ArenaBufferOverhead]u8
   original := mem.arena_from_buffer(storage[..])
   duplicate := original.*
   _ = duplicate
@@ -45,7 +45,7 @@ fn main() {
     (project / 'other.dyn').unlink()
     source.write_text('''use "std/mem"
 fn main() {
-  storage: [64 + mem.ArenaBufferOverhead]u8 = []
+  storage: [64 + mem.ArenaBufferOverhead]u8
   original := mem.arena_from_buffer(storage[..])
   alias := original
   _ = mem.arena_push(alias, 1, 1)
@@ -73,7 +73,7 @@ fn main() {
     assert 'main.dyn:5:' in handles.stderr, handles.stderr
     source.write_text('''use "std/mem"
 fn main() {
-  storage: [64 + mem.ArenaBufferOverhead]u8 = []
+  storage: [64 + mem.ArenaBufferOverhead]u8
   arena := mem.arena_from_buffer(storage[..])
   pointer := mem.arena_push(arena, 1, 1)
   mem.arena_rewind(arena, 0)
@@ -84,7 +84,7 @@ fn main() {
     assert expired.returncode == 1 and 'arena_rewind to zero' in expired.stderr, expired.stderr
     source.write_text('''use "std/mem"
 fn main() {
-  storage: [64 + mem.ArenaBufferOverhead]u8 = []
+  storage: [64 + mem.ArenaBufferOverhead]u8
   arena := mem.arena_from_buffer(storage[..])
   allocation := mem.arena_push_array(arena, 1, 1, 1)
   pointer := allocation
@@ -96,7 +96,7 @@ fn main() {
     assert helper.returncode == 1 and 'after arena_reset' in helper.stderr, helper.stderr
     source.write_text('''use "std/mem"
 fn main() {
-  created := mem.arena_create(mem.KiB)
+  created := mem.arena_alloc(mem.KiB)
   pointer := mem.arena_push(created, 1, 1)
   pointer.* = 42
   moved := created

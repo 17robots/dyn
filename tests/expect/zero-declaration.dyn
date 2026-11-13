@@ -1,0 +1,14 @@
+// A declaration without an initializer is already zero; `= []` is redundant.
+buffer: [16]u8 = [] // error: drop '= []'
+const Table: [4]u8 = []
+
+fn main() {
+  local: [8]u8 = [] // error: drop '= []'
+  partial: [4]i32 = [1, 2]
+  zero: [8]u8
+  local = []
+  _ = partial
+  _ = zero
+  _ = Table
+  _ = buffer
+}

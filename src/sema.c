@@ -419,17 +419,16 @@ static uint32_t find_local(Sema *sema, DynAstProgram *a, DynSpan name,
                            const DynSource *s) {
   return sema_local_lookup(sema, a, name, s, true);
 }
-/* A nested block may reuse an outer local's name. A second local in the same
-   block, or a shadowed loop variable inside its own loop, is an error. */
+/* Locals never shadow: a name in scope cannot be declared again, in the same
+   block or a nested one. It is free again once its block or loop ends. */
 static const char *local_name_conflict(Sema *sema, DynAstProgram *a, DynSpan name,
                                        const DynSource *s, bool binding) {
+  (void)binding;
   uint32_t l = find_local(sema, a, name, s);
   if (l == UINT32_MAX) return NULL;
   if (a->locals[l].loop_variable)
-    return "cannot shadow a loop variable inside its loop";
-  if (a->locals[l].depth >= sema->block_depth + (binding ? 1 : 0))
-    return "this name is already declared in this block; only a nested block may shadow it";
-  return NULL;
+    return "this name is the loop variable of an enclosing loop; locals never shadow";
+  return "this name is already declared in an enclosing scope; locals never shadow";
 }
 static uint32_t sema_find_global_name(Sema *sema, DynAstProgram *a,
                                       DynSpan name, const DynSource *s) {
@@ -1463,6 +1462,222 @@ static DynExprId reflection_members(DynAstProgram *a, const DynSource *s,
   return slice;
 }
 
+/* Struct and enum values in a literal template print their contents. The
+   compiler rewrites the template and the arguments, so nothing is looked up at
+   run time: `"{}", point` becomes `"Point{{x: {}, y: {}}}", point.x, point.y`,
+   and a plain enum becomes its variant's name, read from a constant table.
+   Only a name or field path is expanded, since it is read once per field;
+   any other expression keeps the {?} it prints at run time. */
+typedef struct {
+  char *text;
+  size_t length, capacity;
+  DynAstItem *items;
+  uint32_t count, capacity_items;
+  bool failed;
+} FormatExpansion;
+static void format_text(FormatExpansion *x, const char *text, size_t length) {
+  if (x->failed) return;
+  if (x->length + length > x->capacity) {
+    size_t c = x->capacity ? x->capacity * 2 : 64;
+    while (c < x->length + length) c *= 2;
+    char *p = realloc(x->text, c);
+    if (!p) { x->failed = true; return; }
+    x->text = p;
+    x->capacity = c;
+  }
+  memcpy(x->text + x->length, text, length);
+  x->length += length;
+}
+static void format_item(FormatExpansion *x, DynExprId expression) {
+  if (x->failed) return;
+  if (x->count == x->capacity_items) {
+    uint32_t c = x->capacity_items ? x->capacity_items * 2 : 8;
+    DynAstItem *p = realloc(x->items, c * sizeof(*p));
+    if (!p) { x->failed = true; return; }
+    x->items = p;
+    x->capacity_items = c;
+  }
+  x->items[x->count++] = (DynAstItem){.expression = expression, .field_index = UINT32_MAX};
+}
+static bool format_path(const DynAstProgram *a, DynExprId id, unsigned depth) {
+  if (id == DYN_NO_EXPR || depth > 16) return false;
+  const DynAstExpr *e = &a->expressions[id];
+  if (e->kind == DYN_EXPR_NAME || e->kind == DYN_EXPR_GLOBAL || e->kind == DYN_EXPR_ENUM) return true;
+  return e->kind == DYN_EXPR_FIELD && format_path(a, e->left, depth + 1);
+}
+static DynExprId format_clone(DynAstProgram *a, DynExprId id) {
+  if (!reserve_expr(a)) return DYN_NO_EXPR;
+  DynAstExpr copy = a->expressions[id];
+  if (copy.kind == DYN_EXPR_FIELD) {
+    copy.left = format_clone(a, copy.left);
+    if (copy.left == DYN_NO_EXPR || !reserve_expr(a)) return DYN_NO_EXPR;
+  }
+  DynExprId clone = (DynExprId)a->expression_count;
+  a->expressions[a->expression_count++] = copy;
+  return clone;
+}
+static void format_value(DynAstProgram *a, FormatExpansion *x, DynExprId path, DynType type,
+                         const DynSource *s, unsigned depth) {
+  DynExprId value = format_clone(a, path);
+  if (value == DYN_NO_EXPR) { x->failed = true; return; }
+  if (dyn_type_is_struct(type) && depth < 4) {
+    const DynAstStruct *st = &a->structs[type - DYN_TYPE_STRUCT_BASE];
+    char name[256];
+    type_name_into(a, type, s, name, sizeof(name));
+    format_text(x, name, strlen(name));
+    format_text(x, "{{", 2);
+    for (uint32_t i = 0; i < st->field_count && !x->failed; ++i) {
+      const DynAstField *field = &a->fields[a->structs[type - DYN_TYPE_STRUCT_BASE].field_start + i];
+      if (i) format_text(x, ", ", 2);
+      format_text(x, s->text + field->name.start_byte, field->name.end_byte - field->name.start_byte);
+      format_text(x, ": ", 2);
+      DynExprId member = reflection_expr(a, DYN_EXPR_FIELD, field->type, i);
+      if (member == DYN_NO_EXPR) { x->failed = true; return; }
+      a->expressions[member].left = value;
+      a->expressions[member].span = field->name;
+      format_value(a, x, member, field->type, s, depth + 1);
+    }
+    format_text(x, "}}", 2);
+    return;
+  }
+  if (dyn_type_is_enum(type) && !a->enums[type - DYN_TYPE_ENUM_BASE].has_payload &&
+      !a->enums[type - DYN_TYPE_ENUM_BASE].explicit_tags) {
+    /* A constant table of variant names, indexed by the tag. */
+    const DynAstEnum *en = &a->enums[type - DYN_TYPE_ENUM_BASE];
+    DynType text = sema_intern_slice(a, DYN_TYPE_U8, true);
+    DynType table_type = sema_intern_array(a, text, en->variant_count);
+    if (text == DYN_TYPE_ERROR || table_type == DYN_TYPE_ERROR ||
+        !reserve_reflection_items(a, en->variant_count)) { x->failed = true; return; }
+    uint32_t start = (uint32_t)a->item_count;
+    a->item_count += en->variant_count;
+    for (uint32_t i = 0; i < en->variant_count; ++i) {
+      DynSpan variant = a->variants[en->variant_start + i].name;
+      DynExprId name = reflection_string(a, text, s->text + variant.start_byte,
+                                         variant.end_byte - variant.start_byte);
+      if (name == DYN_NO_EXPR) { x->failed = true; return; }
+      a->items[start + i] = (DynAstItem){.expression = name, .field_index = UINT32_MAX};
+    }
+    DynExprId table = reflection_expr(a, DYN_EXPR_ARRAY, table_type, 0);
+    DynExprId index = convert_expr(a, value, DYN_TYPE_USIZE);
+    DynExprId pick = reflection_expr(a, DYN_EXPR_INDEX, text, 0);
+    if (table == DYN_NO_EXPR || index == DYN_NO_EXPR || pick == DYN_NO_EXPR) { x->failed = true; return; }
+    a->expressions[table].item_start = start;
+    a->expressions[table].item_count = en->variant_count;
+    a->expressions[pick].left = table;
+    a->expressions[pick].right = index;
+    a->expressions[index].type = DYN_TYPE_USIZE;
+    format_text(x, "{}", 2);
+    format_item(x, pick);
+    return;
+  }
+  if (dyn_type_is_enum(type) && !a->enums[type - DYN_TYPE_ENUM_BASE].has_payload) {
+    /* Set tags: print the tag. */
+    format_text(x, "{}", 2);
+    DynExprId tag = convert_expr(a, value, DYN_TYPE_U64);
+    if (tag == DYN_NO_EXPR) { x->failed = true; return; }
+    format_item(x, tag);
+    return;
+  }
+  format_text(x, "{}", 2);
+  format_item(x, value);
+}
+static void expand_format_arguments(DynAstProgram *a, const DynAstFn *callee, DynExprId call,
+                                    DynExprId template, const DynSource *s) {
+  uint32_t item_start = a->expressions[call].item_start;
+  uint32_t first = callee->param_count, count = a->expressions[call].item_count;
+  bool any = false;
+  /* Pack items hold each typed value; IR lowering boxes them into any. */
+  for (uint32_t i = first; i < count; ++i) {
+    DynExprId source = a->items[item_start + i].expression;
+    if (source == DYN_NO_EXPR) continue;
+    DynType type = a->expressions[source].type;
+    if ((dyn_type_is_struct(type) || (dyn_type_is_enum(type) && !a->enums[type - DYN_TYPE_ENUM_BASE].has_payload)) &&
+        format_path(a, source, 0))
+      any = true;
+  }
+  if (!any) return;
+  const DynAstString *original = &a->strings[a->expressions[template].integer];
+  FormatExpansion x = {0};
+  for (uint32_t i = 0; i < first; ++i) format_item(&x, a->items[item_start + i].expression);
+  uint32_t next = first;
+  for (size_t i = 0; i < original->length && !x.failed; ++i) {
+    unsigned char c = original->data[i];
+    unsigned char following = i + 1 < original->length ? original->data[i + 1] : 0;
+    if (c == '{' && following == '}') {
+      DynExprId source = a->items[item_start + next++].expression;
+      DynType type = source == DYN_NO_EXPR ? DYN_TYPE_ERROR : a->expressions[source].type;
+      if (source != DYN_NO_EXPR && format_path(a, source, 0) &&
+          (dyn_type_is_struct(type) || (dyn_type_is_enum(type) && !a->enums[type - DYN_TYPE_ENUM_BASE].has_payload)))
+        format_value(a, &x, source, type, s, 0);
+      else {
+        format_text(&x, "{}", 2);
+        format_item(&x, source);
+      }
+      ++i;
+    } else if ((c == '{' || c == '}') && following == c) {
+      format_text(&x, (const char *)original->data + i, 2);
+      ++i;
+    } else
+      format_text(&x, (const char *)original->data + i, 1);
+  }
+  if (!x.failed && reserve_reflection_string(a) && reserve_reflection_items(a, x.count)) {
+    unsigned char *bytes = malloc(x.length ? x.length : 1);
+    if (bytes) {
+      memcpy(bytes, x.text, x.length);
+      uint32_t string = (uint32_t)a->string_count;
+      a->strings[a->string_count++] = (DynAstString){bytes, x.length};
+      a->expressions[template].integer = string;
+      uint32_t start = (uint32_t)a->item_count;
+      memcpy(a->items + start, x.items, x.count * sizeof(*x.items));
+      a->item_count += x.count;
+      a->expressions[call].item_start = start;
+      a->expressions[call].item_count = x.count;
+    }
+  }
+  free(x.text);
+  free(x.items);
+}
+
+/* A function whose last fixed parameter is `template: []const u8` and whose
+   pack is `...any` takes a format template: {} inserts the next argument, {{
+   and }} write braces. A literal template is checked against the arguments. */
+static void check_format_template(DynAstProgram *a, const DynAstFn *callee, DynExprId call,
+                                  const DynSource *s, unsigned *errors) {
+  if (!callee->param_count || callee->variadic_type == DYN_TYPE_ERROR) return;
+  DynAstSlice *pack = slice_info(a, callee->variadic_type);
+  if (!pack || pack->element != DYN_TYPE_ANY) return;
+  const DynAstParam *param = &a->params[callee->param_start + callee->param_count - 1];
+  if (!span_is(param->name, s, "template")) return;
+  uint32_t item_count = a->expressions[call].item_count;
+  if (item_count < callee->param_count) return;
+  DynExprId template = a->items[a->expressions[call].item_start + callee->param_count - 1].expression;
+  while (template != DYN_NO_EXPR && a->expressions[template].kind == DYN_EXPR_CONVERT)
+    template = a->expressions[template].left;
+  if (template == DYN_NO_EXPR || a->expressions[template].kind != DYN_EXPR_STRING) return;
+  const DynAstString *text = &a->strings[a->expressions[template].integer];
+  uint32_t holes = 0;
+  for (size_t i = 0; i < text->length; ++i) {
+    unsigned char c = text->data[i];
+    if (c != '{' && c != '}') continue;
+    unsigned char next = i + 1 < text->length ? text->data[i + 1] : 0;
+    if (c == '{' && next == '}') ++holes;
+    else if (next != c) {
+      error_span(a->expressions[template].span, s, errors,
+                 c == '{' ? "format template: only {} inserts a value; write {{ for a literal brace"
+                          : "format template: write }} for a literal brace");
+      return;
+    }
+    ++i;
+  }
+  uint32_t arguments = item_count - callee->param_count;
+  if (holes != arguments) {
+    error_format(a->expressions[call].span, s, errors,
+                 "format template has %u {} but the call passes %u argument%s",
+                 (unsigned)holes, (unsigned)arguments, arguments == 1 ? "" : "s");
+    return;
+  }
+  expand_format_arguments(a, callee, call, template, s);
+}
 static DynType check_expr(Sema *, DynAstProgram *, DynExprId, const DynSource *,
                           unsigned *, DynType);
 /* An untyped literal takes its type from the parameter once T is known. */
@@ -1472,7 +1687,9 @@ static bool untyped_literal(DynAstProgram *a, DynExprId id) {
   DynAstExpr e = a->expressions[id];
   if (e.kind == DYN_EXPR_UNARY && e.op == DYN_OP_NEG)
     return untyped_literal(a, e.left);
-  return e.kind == DYN_EXPR_INT || e.kind == DYN_EXPR_FLOAT || e.kind == DYN_EXPR_CHAR;
+  /* nil, like a number, takes its type from the other arguments. */
+  return e.kind == DYN_EXPR_INT || e.kind == DYN_EXPR_FLOAT || e.kind == DYN_EXPR_CHAR ||
+         e.kind == DYN_EXPR_NIL;
 }
 /* Match a parameter pattern against an argument type, binding type
    parameters. Returns false only on a conflicting binding. A shape that does
@@ -1523,6 +1740,16 @@ static bool bind_pattern(DynAstProgram *a, DynType pattern, DynType actual,
                 v = a->arrays[actual - DYN_TYPE_ARRAY_BASE];
     return p.length == v.length ? bind_pattern(a, p.element, v.element, args, conflict) : true;
   }
+  if (dyn_type_is_function(pattern) && dyn_type_is_function(actual)) {
+    /* fn(*$C) isize matches a named function: its parameters and result bind. */
+    DynAstFnType p = a->fn_types[pattern - DYN_TYPE_FN_BASE],
+                 v = a->fn_types[actual - DYN_TYPE_FN_BASE];
+    if (p.param_count != v.param_count || p.variadic != v.variadic) return true;
+    for (uint32_t i = 0; i < p.param_count; ++i)
+      if (!bind_pattern(a, a->fn_type_params[p.param_start + i], a->fn_type_params[v.param_start + i], args, conflict))
+        return false;
+    return bind_pattern(a, p.return_type, v.return_type, args, conflict);
+  }
   return true;
 }
 /* Whether a parameter pattern mentions type parameter `param` anywhere, as in
@@ -1549,6 +1776,12 @@ static bool pattern_mentions(DynAstProgram *a, DynType pattern, DynType param,
     return pattern_mentions(a, a->slices[pattern - DYN_TYPE_SLICE_BASE].element, param, depth + 1);
   if (dyn_type_is_array(pattern))
     return pattern_mentions(a, a->arrays[pattern - DYN_TYPE_ARRAY_BASE].element, param, depth + 1);
+  if (dyn_type_is_function(pattern)) {
+    DynAstFnType f = a->fn_types[pattern - DYN_TYPE_FN_BASE];
+    for (uint32_t i = 0; i < f.param_count; ++i)
+      if (pattern_mentions(a, a->fn_type_params[f.param_start + i], param, depth + 1)) return true;
+    return pattern_mentions(a, f.return_type, param, depth + 1);
+  }
   return false;
 }
 /* Generic symbols need canonical type identity, not diagnostic names (which
@@ -2152,6 +2385,8 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
                          "variadic argument type mismatch");
           }
         }
+      if (callee->variadic && !callee->foreign)
+        check_format_template(a, callee, id, s, errors);
       return a->expressions[id].type = return_type;
     }
   }
@@ -2357,6 +2592,9 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
       DynExprId sum = reflection_expr(a, DYN_EXPR_BINARY, DYN_TYPE_USIZE, 0);
       if (address == DYN_NO_EXPR || count == DYN_NO_EXPR || sum == DYN_NO_EXPR)
         return a->expressions[id].type = DYN_TYPE_ERROR;
+      /* Address arithmetic always wraps, even under --check-overflow. */
+      a->expressions[bytes].wrap = true;
+      a->expressions[sum].wrap = true;
       a->expressions[bytes].op = DYN_OP_MUL;
       a->expressions[bytes].left = count;
       a->expressions[bytes].right = size;
@@ -2662,7 +2900,8 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
       return a->expressions[id].type = DYN_TYPE_ERROR;
     bool source_ptr = dyn_type_is_pointer(source) || source == DYN_TYPE_RAWPTR;
     bool target_ptr = dyn_type_is_pointer(target) || target == DYN_TYPE_RAWPTR;
-    /* Plain enums cast to and from integers; codegen checks integer values. */
+    /* A plain enum casts to its tag. An integer becomes an enum only through
+       enums.from_int, which maps unknown tags to the first variant. */
     bool source_tag = dyn_type_is_enum(source) &&
                       !a->enums[source - DYN_TYPE_ENUM_BASE].has_payload;
     bool target_tag = dyn_type_is_enum(target) &&
@@ -2671,8 +2910,12 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
                  (source_ptr && target_ptr) ||
                  (source_ptr && integer(sema, target)) ||
                  (integer(sema, source) && target_ptr) || source == target ||
-                 (source_tag && integer(sema, target)) ||
-                 (integer(sema, source) && target_tag);
+                 (source_tag && integer(sema, target));
+    if (!valid && integer(sema, source) && target_tag) {
+      error_span(a->expressions[id].span, s, errors,
+                 "#cast cannot make an enum from an integer; use enums.from_int(Enum, value)");
+      return a->expressions[id].type = DYN_TYPE_ERROR;
+    }
     if (!valid) {
       char from[128], to[128], message[320];
       type_name_into(a, source, s, from, sizeof(from));
@@ -2686,14 +2929,19 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
   if (a->expressions[id].kind == DYN_EXPR_BITCAST) {
     DynType source = check_expr(sema, a, a->expressions[id].left, s, errors, DYN_TYPE_INFER),
             target = (DynType)a->expressions[id].integer;
-    bool scalar = (numeric(sema, source) || dyn_type_is_pointer(source)) &&
-                  (numeric(sema, target) || dyn_type_is_pointer(target));
+    if (source == DYN_TYPE_ERROR) return a->expressions[id].type = DYN_TYPE_ERROR;
+    if (dyn_type_is_pointer(source) || dyn_type_is_pointer(target) ||
+        source == DYN_TYPE_RAWPTR || target == DYN_TYPE_RAWPTR) {
+      error_span(a->expressions[id].span, s, errors,
+                 "#bitcast takes numbers only; convert pointers with #cast");
+      return a->expressions[id].type = DYN_TYPE_ERROR;
+    }
+    bool scalar = numeric(sema, source) && numeric(sema, target);
     uint64_t from = sema_type_layout(sema, a, source, false),
              to = sema_type_layout(sema, a, target, false);
-    if (!scalar || !from || from != to ||
-        (dyn_type_is_pointer(source) != dyn_type_is_pointer(target))) {
+    if (!scalar || !from || from != to) {
       error_span(a->expressions[id].span, s, errors,
-                 "#bitcast requires compatible scalar representation sizes");
+                 "#bitcast requires numbers of the same size");
       return a->expressions[id].type = DYN_TYPE_ERROR;
     }
     return a->expressions[id].type = target;
@@ -2753,6 +3001,12 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
                    : a->expressions[id].boolean && dyn_type_is_struct(expected)
                        ? expected - DYN_TYPE_STRUCT_BASE
                        : sema_find_struct(a, a->expressions[id].span, s);
+    if (named != DYN_TYPE_INFER && named != DYN_TYPE_ERROR && !dyn_type_is_struct(named)) {
+      char name[256];
+      display_type_name(a, named, s, name, sizeof(name));
+      error_format(a->expressions[id].span, s, errors, "a literal needs a struct type, but this is %s", name);
+      return a->expressions[id].type = DYN_TYPE_ERROR;
+    }
     if (sid == UINT32_MAX || sid >= a->struct_count) {
       error_span(a->expressions[id].span, s, errors,
                  a->expressions[id].boolean
@@ -3382,6 +3636,65 @@ static bool sema_case_v2(Sema *sema, DynAstProgram *a, DynAstStmt *st,
       error_span(st->span, s, errors, "any case requires _ arm");
     return all_terminate;
   }
+  DynAstSlice *text = slice_info(a, subject);
+  if (text && text->element == DYN_TYPE_U8) {
+    /* A text case compares the subject's length and bytes against string
+       literals; IR lowering turns it into that chain of comparisons. */
+    DynType literal = sema_intern_slice(a, DYN_TYPE_U8, true);
+    bool wildcard = false, all_terminate = true;
+    for (uint32_t i = 0; i < st->case_arm_count; ++i) {
+      DynAstCaseArm *arm = &a->case_arms[st->case_arm_start + i];
+      if (arm->wildcard) {
+        if (wildcard)
+          error_span(arm->span, s, errors, "duplicate _ case arm");
+        wildcard = true;
+      }
+      if (arm->binding.end_byte > arm->binding.start_byte)
+        error_span(arm->binding, s, errors, "a text case arm takes no binding; use the subject");
+      for (uint32_t j = 0; j < arm->pattern_count; ++j) {
+        DynAstPattern *p = &a->patterns[arm->pattern_start + j];
+        if (p->range || p->is_type || p->first == DYN_NO_EXPR ||
+            a->expressions[p->first].kind != DYN_EXPR_STRING) {
+          error_span(p->span, s, errors, "a text case pattern must be a string literal");
+          continue;
+        }
+        (void)check_expr(sema, a, p->first, s, errors, literal);
+        const DynAstString *mine = &a->strings[a->expressions[p->first].integer];
+        bool duplicate = false;
+        for (uint32_t k = 0; k <= i && !duplicate; ++k) {
+          DynAstCaseArm *other = &a->case_arms[st->case_arm_start + k];
+          for (uint32_t m = 0; m < other->pattern_count; ++m) {
+            DynAstPattern *q = &a->patterns[other->pattern_start + m];
+            if (q == p) break;
+            if (q->first == DYN_NO_EXPR || a->expressions[q->first].kind != DYN_EXPR_STRING) continue;
+            const DynAstString *theirs = &a->strings[a->expressions[q->first].integer];
+            if (theirs->length == mine->length &&
+                (!mine->length || memcmp(theirs->data, mine->data, mine->length) == 0)) {
+              duplicate = true;
+              break;
+            }
+          }
+        }
+        if (duplicate) error_span(p->span, s, errors, "duplicate case pattern");
+      }
+      all_terminate = sema_block(sema, a, arm->body_start, arm->body_count, s, errors, true) &&
+                      all_terminate;
+    }
+    if (!wildcard) {
+      error_span(st->span, s, errors, "a text case needs a _ arm");
+      return false;
+    }
+    /* The subject is evaluated once into this unnamed local. */
+    if (!reserve_local(a)) {
+      error_out_of_memory(st->span, s, errors);
+      return false;
+    }
+    st->local_id = (uint32_t)a->local_count;
+    a->locals[a->local_count++] = (DynAstLocal){.type = subject,
+                                                .depth = sema->block_depth,
+                                                .owner_function = sema->current_function};
+    return all_terminate;
+  }
   if (!enum_case && !integer_case) {
     error_span(st->span, s, errors, "case requires integer or enum value");
     return false;
@@ -3970,7 +4283,22 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
         error_span(st->name, s, errors, local_name_conflict(sema, a, st->name, s, true));
         return false;
       }
-      if (!reserve_local(a)) {
+      if (st->for_index && local_name_conflict(sema, a, st->index_name, s, true)) {
+        error_span(st->index_name, s, errors, local_name_conflict(sema, a, st->index_name, s, true));
+        return false;
+      }
+      if (st->for_index && dyn_span_text_equal(st->name, st->index_name, s)) {
+        error_span(st->index_name, s, errors, "the element and the index need different names");
+        return false;
+      }
+      bool room = reserve_local(a);
+      if (room && st->for_index) {
+        /* The index local takes the next slot after the element. */
+        ++a->local_count;
+        room = reserve_local(a);
+        --a->local_count;
+      }
+      if (!room) {
         error_out_of_memory(st->span, s, errors);
         return false;
       }
@@ -3992,12 +4320,21 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
                         .depth = sema->block_depth + 1,
                         .loop_variable = true,
                         .owner_function = sema->current_function};
+      if (st->for_index)
+        a->locals[a->local_count++] =
+            (DynAstLocal){.name = st->index_name,
+                          .type = DYN_TYPE_USIZE,
+                          .active = true,
+                          .depth = sema->block_depth + 1,
+                          .loop_variable = true,
+                          .owner_function = sema->current_function};
       bool pushed = push_loop(sema, st, s, errors);
       (void)sema_block(sema, a, st->body_start, st->body_count, s, errors,
                        true);
       if (pushed)
         pop_loop(sema);
       a->locals[st->local_id].active = false;
+      if (st->for_index) a->locals[st->local_id + 1].active = false;
       return false;
     }
     DynType condition =

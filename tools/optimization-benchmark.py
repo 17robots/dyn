@@ -56,7 +56,7 @@ if a.kernel == 'vector':
     rounds = max(1, a.iterations // 1027)
     expected = None
     source = f'''fn main() {{
-  a: [1027]u32 = [] b: [1027]u32 = []
+  a: [1027]u32 = [] b: [1027]u32
   for i in 0..1027 {{ a[i] = #cast(u32, i) b[i] = (#cast(u32, i)) * 3 }}
   for round in 0..{rounds} {{
     for i in 0..1027 {{ a[i] = (a[i] + b[i]) }}

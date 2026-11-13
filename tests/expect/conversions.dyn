@@ -1,0 +1,17 @@
+// #cast turns an enum into its tag but never an integer into an enum, and
+// #bitcast takes numbers only.
+enum Color { Red, Green }
+
+fn main() {
+  tag := #cast(u32, Color.Green)
+  color := #cast(Color, tag) // error: use enums.from_int(Enum, value)
+  value: u32 = 1
+  pointer := &value
+  other := #bitcast(*i32, pointer) // error: #bitcast takes numbers only; convert pointers with #cast
+  fine := #cast(*i32, pointer)
+  bits := #bitcast(f32, value)
+  _ = color
+  _ = other
+  _ = fine
+  _ = bits
+}

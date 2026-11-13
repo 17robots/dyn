@@ -3,8 +3,9 @@
 
 use "std/mem" mem
 
-// failed records the first write that did not fit; later writes do nothing
-// and return false, so callers may check failed once at the end.
+// failed records the first write that did not fit; later writes do nothing,
+// so callers write freely and check failed once at the end. A write that does
+// not fit leaves the buffer as it was before that write.
 pub struct Buffer { data: []u8, length: usize, failed: bool }
 pub fn buffer(storage: []u8) Buffer {
   return Buffer{ data: storage, length: 0 }
@@ -24,7 +25,7 @@ pub fn clear(state: *Buffer) {
   state.failed = false
 }
 
-pub fn write(state: *Buffer, value: []const u8) bool {
+fn put(state: *Buffer, value: []const u8) bool {
   if state.failed || state.length > #len(state.data) || #len(value) > #len(state.data) - state.length {
     state.failed = true
     return false
@@ -40,7 +41,7 @@ pub fn write(state: *Buffer, value: []const u8) bool {
   return true
 }
 
-pub fn write_byte(state: *Buffer, value: u8) bool {
+fn put_byte(state: *Buffer, value: u8) bool {
   if state.failed || state.length >= #len(state.data) {
     state.failed = true
     return false
@@ -127,24 +128,24 @@ fn i64_decimal_into(destination: []u8, value: i64) []u8 {
   return destination[..#len(digits) + 1]
 }
 
-pub fn write_u64(state: *Buffer, value: u64) bool {
-  storage: [20]u8 = []
-  return write(state, u64_decimal_into(storage[..], value))
+fn put_u64(state: *Buffer, value: u64) bool {
+  storage: [20]u8
+  return put(state, u64_decimal_into(storage[..], value))
 }
 
-pub fn write_i64(state: *Buffer, value: i64) bool {
-  storage: [20]u8 = []
-  return write(state, i64_decimal_into(storage[..], value))
+fn put_i64(state: *Buffer, value: i64) bool {
+  storage: [20]u8
+  return put(state, i64_decimal_into(storage[..], value))
 }
 
-pub fn write_bool(state: *Buffer, value: bool) bool {
+fn put_bool(state: *Buffer, value: bool) bool {
   if value {
-    return write(state, "true")
+    return put(state, "true")
   }
-  return write(state, "false")
+  return put(state, "false")
 }
 
-pub fn write_padding(state: *Buffer, byte: u8, amount: usize) bool {
+fn put_padding(state: *Buffer, byte: u8, amount: usize) bool {
   if state.failed || state.length > #len(state.data) || amount > remaining(state) {
     state.failed = true
     return false
@@ -156,9 +157,9 @@ pub fn write_padding(state: *Buffer, byte: u8, amount: usize) bool {
   return true
 }
 
-pub fn write_quoted(state: *Buffer, value: []const u8) bool {
+fn put_quoted(state: *Buffer, value: []const u8) bool {
   start := state.length
-  if !write_byte(state, '"') {
+  if !put_byte(state, '"') {
     return false
   }
   for byte in value {
@@ -175,27 +176,27 @@ pub fn write_quoted(state: *Buffer, value: []const u8) bool {
       escaped = 't'
     }
     if escaped != 0 {
-      if !write_byte(state, '\\') || !write_byte(state, escaped) {
+      if !put_byte(state, '\\') || !put_byte(state, escaped) {
         state.length = start
         return false
       }
     } else if byte < 32 {
-      if !write(state, "\\u00") {
+      if !put(state, "\\u00") {
         state.length = start
         return false
       }
       high := byte / 16
       low := byte % 16
-      if !write_byte(state, if_hex(high)) || !write_byte(state, if_hex(low)) {
+      if !put_byte(state, if_hex(high)) || !put_byte(state, if_hex(low)) {
         state.length = start
         return false
       }
-    } else if !write_byte(state, byte) {
+    } else if !put_byte(state, byte) {
       state.length = start
       return false
     }
   }
-  if !write_byte(state, '"') {
+  if !put_byte(state, '"') {
     state.length = start
     return false
   }
@@ -209,55 +210,55 @@ fn if_hex(value: u8) u8 {
   return value - 10 + 'a'
 }
 
-pub fn write_arguments(state: *Buffer, arguments: []const any) bool {
+fn put_arguments(state: *Buffer, arguments: []const any) bool {
   start := state.length
   for argument in arguments {
     ok := false
     case argument {
       f32 value => {
-        ok = write_f64(state, value)
+        ok = put_f64(state, value)
       }
       f64 value => {
-        ok = write_f64(state, value)
+        ok = put_f64(state, value)
       }
       bool value => {
-        ok = write_bool(state, value)
+        ok = put_bool(state, value)
       }
       i8 value => {
-        ok = write_i64(state, value)
+        ok = put_i64(state, value)
       }
       i16 value => {
-        ok = write_i64(state, value)
+        ok = put_i64(state, value)
       }
       i32 value => {
-        ok = write_i64(state, value)
+        ok = put_i64(state, value)
       }
       i64 value => {
-        ok = write_i64(state, value)
+        ok = put_i64(state, value)
       }
       isize value => {
-        ok = write_i64(state, value)
+        ok = put_i64(state, value)
       }
       u8 value => {
-        ok = write_u64(state, value)
+        ok = put_u64(state, value)
       }
       u16 value => {
-        ok = write_u64(state, value)
+        ok = put_u64(state, value)
       }
       u32 value => {
-        ok = write_u64(state, value)
+        ok = put_u64(state, value)
       }
       u64 value => {
-        ok = write_u64(state, value)
+        ok = put_u64(state, value)
       }
       usize value => {
-        ok = write_u64(state, value)
+        ok = put_u64(state, value)
       }
       []const u8 value => {
-        ok = write(state, value)
+        ok = put(state, value)
       }
       []u8 value => {
-        ok = write(state, value)
+        ok = put(state, value)
       }
       _ => {
         ok = false
@@ -271,8 +272,8 @@ pub fn write_arguments(state: *Buffer, arguments: []const any) bool {
   return true
 }
 
-pub fn write_values(state: *Buffer, values: ...any) bool {
-  return write_arguments(state, values)
+fn put_values(state: *Buffer, values: ...any) bool {
+  return put_arguments(state, values)
 }
 
 // Rounded decimal formatting, not a shortest-roundtrip serialization format.
@@ -282,20 +283,20 @@ fn f64_decimal_into(destination: []u8, value: f64, precision: usize) []u8 {
   if precision > 15 {
     return destination[..0]
   }
-  scratch: [64]u8 = []
+  scratch: [64]u8
   state := buffer(scratch[..])
   bits := #bitcast(u64, value)
   negative := (bits >> 63) != 0
   exponent_bits := (bits >> 52) & 2047
   fraction_bits := bits & 4503599627370495
   if exponent_bits == 2047 && fraction_bits != 0 {
-    _ = write(&state, "nan")
+    _ = put(&state, "nan")
   } else {
     if negative {
-      _ = write_byte(&state, '-')
+      _ = put_byte(&state, '-')
     }
     if exponent_bits == 2047 {
-      _ = write(&state, "inf")
+      _ = put(&state, "inf")
     } else {
       magnitude := value
       if negative {
@@ -326,7 +327,7 @@ fn f64_decimal_into(destination: []u8, value: f64, precision: usize) []u8 {
         rounded /= 10
         exponent += 1
       }
-      _ = write_u64(&state, rounded / scale)
+      _ = put_u64(&state, rounded / scale)
       fraction := rounded % scale
       if fraction != 0 {
         digits := precision
@@ -334,15 +335,15 @@ fn f64_decimal_into(destination: []u8, value: f64, precision: usize) []u8 {
           fraction /= 10
           digits -= 1
         }
-        fraction_storage: [20]u8 = []
+        fraction_storage: [20]u8
         rendered := u64_decimal_into(fraction_storage[..], fraction)
-        _ = write_byte(&state, '.')
-        _ = write_padding(&state, '0', digits - #len(rendered))
-        _ = write(&state, rendered)
+        _ = put_byte(&state, '.')
+        _ = put_padding(&state, '0', digits - #len(rendered))
+        _ = put(&state, rendered)
       }
       if scientific {
-        _ = write_byte(&state, 'e')
-        _ = write_i64(&state, exponent)
+        _ = put_byte(&state, 'e')
+        _ = put_i64(&state, exponent)
       }
     }
   }
@@ -357,13 +358,13 @@ fn f64_decimal_into(destination: []u8, value: f64, precision: usize) []u8 {
   return destination[..state.length]
 }
 
-pub fn write_f64(state: *Buffer, value: f64) bool {
-  storage: [64]u8 = []
-  return write(state, f64_decimal_into(storage[..], value, 6))
+fn put_f64(state: *Buffer, value: f64) bool {
+  storage: [64]u8
+  return put(state, f64_decimal_into(storage[..], value, 6))
 }
 
-pub fn write_u64_width(state: *Buffer, value: u64, width: usize, padding: u8) bool {
-  storage: [20]u8 = []
+fn put_u64_width(state: *Buffer, value: u64, width: usize, padding: u8) bool {
+  storage: [20]u8
   rendered := u64_decimal_into(storage[..], value)
   length := #len(rendered)
   if width > length {
@@ -373,8 +374,8 @@ pub fn write_u64_width(state: *Buffer, value: u64, width: usize, padding: u8) bo
     state.failed = true
     return false
   }
-  _ = write_padding(state, padding, length - #len(rendered))
-  return write(state, rendered)
+  _ = put_padding(state, padding, length - #len(rendered))
+  return put(state, rendered)
 }
 
 fn copy_out(arena: *mem.Arena, text: []const u8) []u8 {
@@ -385,17 +386,17 @@ fn copy_out(arena: *mem.Arena, text: []const u8) []u8 {
 
 // value in base 2 through 36. Panics on another base.
 pub fn u64_base(arena: *mem.Arena, value: u64, base: u8, uppercase: bool) []u8 {
-  storage: [64]u8 = []
+  storage: [64]u8
   return copy_out(arena, u64_base_into(storage[..], value, base, uppercase))
 }
 
 pub fn u64_decimal(arena: *mem.Arena, value: u64) []u8 {
-  storage: [20]u8 = []
+  storage: [20]u8
   return copy_out(arena, u64_decimal_into(storage[..], value))
 }
 
 pub fn i64_decimal(arena: *mem.Arena, value: i64) []u8 {
-  storage: [20]u8 = []
+  storage: [20]u8
   return copy_out(arena, i64_decimal_into(storage[..], value))
 }
 
@@ -406,6 +407,112 @@ pub fn f64_decimal(arena: *mem.Arena, value: f64, precision: usize) []u8 {
   if precision > 15 {
     #panic("fmt.f64_decimal: precision above 15")
   }
-  storage: [64]u8 = []
+  storage: [64]u8
   return copy_out(arena, f64_decimal_into(storage[..], value, precision))
+}
+
+// Sticky writes: each does nothing once the buffer has failed, and a value
+// that does not fit sets failed and leaves the buffer as it was.
+pub fn write(state: *Buffer, value: []const u8) {
+  _ = put(state, value)
+}
+pub fn write_byte(state: *Buffer, value: u8) {
+  _ = put_byte(state, value)
+}
+pub fn write_u64(state: *Buffer, value: u64) {
+  _ = put_u64(state, value)
+}
+pub fn write_i64(state: *Buffer, value: i64) {
+  _ = put_i64(state, value)
+}
+pub fn write_bool(state: *Buffer, value: bool) {
+  _ = put_bool(state, value)
+}
+pub fn write_f64(state: *Buffer, value: f64) {
+  _ = put_f64(state, value)
+}
+pub fn write_f64_shortest(state: *Buffer, value: f64) {
+  _ = put_f64_shortest(state, value)
+}
+pub fn write_padding(state: *Buffer, byte: u8, amount: usize) {
+  _ = put_padding(state, byte, amount)
+}
+pub fn write_quoted(state: *Buffer, value: []const u8) {
+  _ = put_quoted(state, value)
+}
+pub fn write_u64_width(state: *Buffer, value: u64, width: usize, padding: u8) {
+  _ = put_u64_width(state, value, width, padding)
+}
+// Each value in turn, as print would insert it; a value with no text form
+// fails the write.
+pub fn write_values(state: *Buffer, values: ...any) {
+  _ = put_arguments(state, values)
+}
+
+// Formats template into the buffer: {} inserts the next argument, {{ and }}
+// write braces. A literal template is checked by the compiler; a run-time
+// template that does not match prints {?} for a missing value and {+value}
+// for an extra one, as io.print does. Sticky like the other writes.
+pub fn print(state: *Buffer, template: []const u8, arguments: ...any) {
+  print_arguments(state, template, arguments)
+}
+
+pub fn print_arguments(state: *Buffer, template: []const u8, arguments: []const any) {
+  if state.failed {
+    return
+  }
+  start := state.length
+  next_argument: usize = 0
+  index: usize = 0
+  span_start: usize = 0
+  ok := true
+  for ok && index < #len(template) {
+    byte := template[index]
+    if byte != '{' && byte != '}' {
+      index += 1
+      continue
+    }
+    ok = put(state, template[span_start..index])
+    following: u8 = 0
+    if index + 1 < #len(template) {
+      following = template[index + 1]
+    }
+    step: usize = 1
+    if byte == '{' && following == '}' {
+      step = 2
+      if next_argument < #len(arguments) {
+        ok = ok && put_value(state, arguments[next_argument])
+        next_argument += 1
+      } else {
+        ok = ok && put(state, "{?}")
+      }
+    } else {
+      if following == byte {
+        step = 2
+      }
+      ok = ok && put(state, template[index..index + 1])
+    }
+    index += step
+    span_start = index
+  }
+  if ok && span_start < #len(template) {
+    ok = put(state, template[span_start..])
+  }
+  for ok && next_argument < #len(arguments) {
+    ok = put(state, " {+") && put_value(state, arguments[next_argument]) && put(state, "}")
+    next_argument += 1
+  }
+  if !ok {
+    state.length = start
+    state.failed = true
+  }
+}
+
+fn put_value(state: *Buffer, value: any) bool {
+  one: [1]any = [value]
+  if put_arguments(state, one[..]) {
+    return true
+  }
+  // put_arguments rolled back; a type with no text form prints a marker.
+  return !state.failed && put(state, "{?}")
 }

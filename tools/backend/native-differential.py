@@ -86,7 +86,7 @@ return total }
 fn array_make(seed: u32) [5]u32 { return [seed, seed + 1, seed + 2, seed + 3, seed % 7] }
 pub fn agg_array(a: u32) u64 { return array_sum(array_make(a % 1000)) }
 pub fn agg_slice(a: u64, b: u64) u64 {
-  data: [16]u64 = []
+  data: [16]u64
   for i in 0..16 { data[i] = #cast(u64, i) * 3 }
   s := data[a % 8..8 + b % 8]
   total: u64 = 0
@@ -400,7 +400,7 @@ use "std/strings"
 {source}
 {dispatch_source}
 fn main() {{
-  backing: [65536]u8 = []
+  backing: [65536]u8
   arena := mem.arena_from_buffer(backing[..])
   arguments := process.arguments(arena)
   if arguments.failure.kind != io.Kind.Ok || #len(arguments.value) < 2 {{ #panic("case index required") }}
@@ -464,7 +464,7 @@ def build(args, root, program):
         subprocess.run([clang, f'--target={TARGETS[target]}', *target_flags, '-ffreestanding', '-fno-stack-protector', '-O1',
                         '-c', str(root/'provider.c'), '-o', str(provider)], check=True)
         output = root/(name + (suffix if name == 'native' else ''))
-        built = subprocess.run([str(args.compiler), 'build', str(root/'app'), '--target', target,
+        built = subprocess.run([str(args.compiler), 'build', str(root/'app'),'--no-check-overflow', '--target', target,
                                 '--no-cache', '--quiet', *(['--release'] if args.release else []),
                                 '--link', str(provider), '--output', str(output)],
                                capture_output=True, text=True, timeout=600)

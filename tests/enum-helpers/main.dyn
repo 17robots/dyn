@@ -15,7 +15,7 @@ fn main() {
   if math.div_or_zero(7, 0) != 0 || math.rem_or_zero(7, 2) != 1 {
     #panic("or zero")
   }
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   defer mem.arena_release(arena)
   items: []u32
   stub: u32 = 99

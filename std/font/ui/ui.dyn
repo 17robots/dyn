@@ -14,7 +14,7 @@ fn glyph(raw: rawptr, codepoint: u32) software.Glyph {
   }
   index := font.glyph_index(state.face, codepoint)
   bitmap := font.raster(state.arena, state.face, index, state.pixels_per_em)
-  if bitmap.failure.kind != parse.Kind.Ok {
+  if parse.failed(bitmap.failure) {
     state.failed = true
     state.failure = bitmap.failure
     return software.Glyph{ width: -1 }

@@ -17,11 +17,27 @@ SOURCE = '''
 enum(u8) Small { Zero, One }
 enum(i8) Signed { Low, Zero, High }
 enum(u64) Wide { Zero, High }
+// The fixture builds without std, so it writes each tag at its own width.
+fn small_from(value: u8) Small {
+  result: Small
+  #cast(*u8, &result).* = value
+  return result
+}
+fn signed_from(value: i64) Signed {
+  result: Signed
+  #cast(*i8, &result).* = #cast(i8, value)
+  return result
+}
+fn wide_from(value: u64) Wide {
+  result: Wide
+  #cast(*u64, &result).* = value
+  return result
+}
 pub small_global:Small=Small.One
 pub signed_global:Signed=Signed.Low
-pub fn small_global_set(value:u8) i64 { small_global=#cast(Small, value)
+pub fn small_global_set(value:u8) i64 { small_global=small_from(value)
 return #cast(i64, small_global) }
-pub fn signed_global_set(value:i64) i64 { signed_global=#cast(Signed, value)
+pub fn signed_global_set(value:i64) i64 { signed_global=signed_from(value)
 return #cast(i64, signed_global) }
 struct Message { number: i64 }
 struct Pair { a: i64, b: i64 }
@@ -62,11 +78,11 @@ fn mixed(values: ...any) i64 {
   return total
 }
 pub fn plain(value: u8) u64 {
-  small := #cast(Small, value)
+  small := small_from(value)
   case small { Small.Zero => { return 11 } Small.One => { return 22 } }
 }
-pub fn signed_tag(value:i64) i64 { return #cast(i64, #cast(Signed, value)) }
-pub fn wide_tag(value:u64) u64 { return #cast(u64, #cast(Wide, value)) }
+pub fn signed_tag(value:i64) i64 { return #cast(i64, signed_from(value)) }
+pub fn wide_tag(value:u64) u64 { return #cast(u64, wide_from(value)) }
 pub fn payload(value: i64) i64 {
   message := Message{number:value}
   message.number += 3
@@ -178,7 +194,7 @@ def main():
         run([*CC,'-fPIC','-c',provider,'-o',provider_obj])
         for mode in ('debug','release'):
             oracle = root / (mode + '-compiler.so')
-            run([DYN,'build',root,'--shared','--'+mode,'--no-cache','--jobs','1',
+            run([DYN,'build',root,'--no-check-overflow','--shared','--'+mode,'--no-cache','--jobs','1',
                  '--link',provider_obj,'--output',oracle])
             paths = [oracle]
             if not args.oracle_only:

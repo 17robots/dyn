@@ -18,9 +18,9 @@ FUNCTIONS = 600
 PLAIN = 'fn f{i}(x: i64) i64 {{\n  y := x * {i} + 1\n  return y - {i}\n}}\n'
 LIFETIME = 'fn f{i}(x: i64) *i64 {{\n  y: i64 = x\n  p := &y\n  return p\n}}\n'
 TYPE = 'fn f{i}(x: i64) i64 {{\n  y: bool = x\n  return {i}\n}}\n'
-ARENA = ('fn f{i}(x: i64) i64 {{\n  storage: [64 + mem.ArenaBufferOverhead]u8 = []\n'
+ARENA = ('fn f{i}(x: i64) i64 {{\n  storage: [64 + mem.ArenaBufferOverhead]u8\n'
          '  original := mem.arena_from_buffer(storage[..])\n  copy := original.*\n  _ = copy\n  return x\n}}\n')
-RESET = ('fn f{i}(x: i64) i64 {{\n  storage: [64]u8 = []\n  a := mem.arena_from_buffer(storage[..])\n'
+RESET = ('fn f{i}(x: i64) i64 {{\n  storage: [64]u8\n  a := mem.arena_from_buffer(storage[..])\n'
          '  p := mem.arena_push(a, 8, 1)\n  mem.arena_reset(a)\n  p.* = 7\n  return x\n}}\n')
 SHAPES = {
     'clean': {},

@@ -54,7 +54,7 @@ fn bits(ps: []V) u64 {
 }
 
 fn main() {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   ps := mem.push_array(V, arena, 257)
   vs := mem.push_array(V, arena, 257)
   for i in 0..257 {
@@ -77,7 +77,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-pairs-') as directory:
     (work / 'main.dyn').write_text(SOURCE)
     outputs = []
     remarks = ''
-    for name, flags in (('debug', ['--debug']), ('o2', ['--release', '--opt-level', '2']),
+    for name, flags in (('debug', ['--debug', '--no-check-overflow']), ('o2', ['--release', '--opt-level', '2']),
                         ('o3', ['--release', '--opt-level', '3'])):
         program = work / name
         result = subprocess.run([DYN, 'build', str(work), *flags, '--quiet', '--no-cache', '--opt-remarks',

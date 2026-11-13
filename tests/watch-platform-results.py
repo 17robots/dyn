@@ -35,7 +35,7 @@ fn main() {
  require(validation_failure(-95).failure.kind == io.Kind.Unsupported)
  closed := Watcher{}
  require(next(&closed).failure.kind == io.Kind.InvalidState)
- backing: [272]u8 = []
+ backing: [272]u8
  opened := open(backing[..])
  state := opened.value
  added := add(&state, "test", Create)
@@ -50,7 +50,7 @@ fn main() {
  slot.handle = #cast(rawptr, 1)
  slot.event = #cast(rawptr, 2)
  first := next(&state)
- require(first.status == Status.Error && first.failure.native == 0 && first.failure.kind == io.Kind.System)
+ require(io.failed(first.failure) && first.failure.native == 0 && first.failure.kind == io.Kind.System)
  reads := mock_reads
  mock_code = 5
  repeated := next(&state)
@@ -79,19 +79,19 @@ _ = output
 return nil }
 fn require(ok: bool) { if !ok { #panic("macos mock") } }
 fn main() {
- owner := mem.arena_create(0)
+ owner := mem.arena_alloc(0)
  live := Watcher{arena: owner, state: mem.push(State, owner)}
  close(&live)
  require(live.arena == nil && live.state == nil)
  close(&live)
- partial := Watcher{arena: mem.arena_create(0)}
+ partial := Watcher{arena: mem.arena_alloc(0)}
  close(&partial)
  require(partial.arena == nil)
  close(&partial)
  empty := Watcher{}
  close(&empty)
  close(&empty)
- backing: [272]u8 = []
+ backing: [272]u8
  opened := open(backing[..])
  require(opened.failure.kind != io.Kind.Ok && opened.failure.native == -95 && opened.failure.kind == io.Kind.Unsupported)
  state := State{api: API{canonical: canonical_mock}}

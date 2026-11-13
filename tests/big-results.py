@@ -66,7 +66,7 @@ fn show(arena: *mem.Arena, value: big.Int) {
 }
 
 fn main() {
-  arena := mem.arena_create(268435456)
+  arena := mem.arena_alloc(268435456)
   defer {
     mem.arena_release(arena)
   }
@@ -109,11 +109,11 @@ fn main() {
     mem.arena_rewind(arena, mark)
   }
   bad := big.parse(arena, "12x4", 10)
-  if bad.failure.kind == parse.Kind.Ok || bad.offset != 2 {
+  if !parse.failed(bad.failure) || bad.offset != 2 {
     #panic("parse failure")
   }
   hex := big.parse(arena, "-FfeE", 16)
-  if hex.failure.kind != parse.Kind.Ok || !mem.equal(big.format(arena, hex.value, 36), "-1ejy") {
+  if parse.failed(hex.failure) || !mem.equal(big.format(arena, hex.value, 36), "-1ejy") {
     #panic("bases")
   }
 }

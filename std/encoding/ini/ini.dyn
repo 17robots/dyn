@@ -29,7 +29,7 @@ fn trim(source: []const u8) []const u8 {
 }
 
 fn record(state: *Scanner, line: usize, offset: usize) {
-  if state.failure.kind == parse.Kind.Ok {
+  if !parse.failed(state.failure) {
     state.failure = parse.Failure{ kind: parse.Kind.Syntax, offset: offset }
     state.error_line = line
   }
@@ -37,7 +37,7 @@ fn record(state: *Scanner, line: usize, offset: usize) {
 }
 
 pub fn next(state: *Scanner) Result {
-  if state.failure.kind != parse.Kind.Ok {
+  if parse.failed(state.failure) {
     return Result{ failure: state.failure }
   }
   for state.offset < #len(state.source) {
@@ -133,7 +133,7 @@ pub fn parse(arena: *mem.Arena, source: []const u8) ParseResult {
     }
     count += 1
   }
-  if state.failure.kind != parse.Kind.Ok {
+  if parse.failed(state.failure) {
     return ParseResult{ offset: state.failure.offset, line: state.error_line, failure: state.failure }
   }
   if count == 0 {

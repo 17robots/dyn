@@ -18,13 +18,13 @@ fn clean() {
 
 fn main() {
   clean()
-  check(fs.make_directory("listing", 493).failure.kind == io.Kind.Ok, "make directory")
-  check(fs.make_directory("listing/inner", 493).failure.kind == io.Kind.Ok, "make inner")
-  check(fs.write_all("listing/alpha.txt", "a").failure.kind == io.Kind.Ok, "alpha")
-  check(fs.write_all("listing/βeta.txt", "b").failure.kind == io.Kind.Ok, "beta")
-  storage: [4096]u8 = []
+  check(!io.failed(fs.make_directory("listing", 493).failure), "make directory")
+  check(!io.failed(fs.make_directory("listing/inner", 493).failure), "make inner")
+  check(!io.failed(fs.write_all("listing/alpha.txt", "a").failure), "alpha")
+  check(!io.failed(fs.write_all("listing/βeta.txt", "b").failure), "beta")
+  storage: [4096]u8
   opened := fs.open_directory("listing", storage[..])
-  check(opened.failure.kind == io.Kind.Ok, "open directory")
+  check(!io.failed(opened.failure), "open directory")
   directory := opened.value
   seen_alpha := false
   seen_beta := false
@@ -50,17 +50,17 @@ fn main() {
   check(count == 3 && seen_alpha && seen_beta && seen_inner, "entries")
   fs.close_directory(&directory)
   empty := fs.open_directory("listing/inner", storage[..])
-  check(empty.failure.kind == io.Kind.Ok, "open empty")
+  check(!io.failed(empty.failure), "open empty")
   inner := empty.value
   check(!fs.directory_next(&inner).found, "empty directory")
   fs.close_directory(&inner)
-  check(fs.open_directory("missing-directory", storage[..]).failure.kind != io.Kind.Ok, "missing")
+  check(io.failed(fs.open_directory("missing-directory", storage[..]).failure), "missing")
   info := fs.metadata("listing/alpha.txt")
-  check(info.failure.kind == io.Kind.Ok && info.size == 1 && (info.mode & 0o170000) == 0o100000, "file metadata")
+  check(!io.failed(info.failure) && info.size == 1 && (info.mode & 0o170000) == 0o100000, "file metadata")
   folder := fs.metadata("listing/inner")
-  check(folder.failure.kind == io.Kind.Ok && (folder.mode & 0o170000) == 0o040000, "directory metadata")
-  check(fs.rename("listing/alpha.txt", "listing/renamed.txt").failure.kind == io.Kind.Ok, "rename")
-  check(fs.metadata("listing/alpha.txt").failure.kind != io.Kind.Ok && fs.metadata("listing/renamed.txt").failure.kind == io.Kind.Ok, "renamed")
+  check(!io.failed(folder.failure) && (folder.mode & 0o170000) == 0o040000, "directory metadata")
+  check(!io.failed(fs.rename("listing/alpha.txt", "listing/renamed.txt").failure), "rename")
+  check(io.failed(fs.metadata("listing/alpha.txt").failure) && !io.failed(fs.metadata("listing/renamed.txt").failure), "renamed")
   clean()
-  check(fs.metadata("listing").failure.kind != io.Kind.Ok, "cleaned up")
+  check(io.failed(fs.metadata("listing").failure), "cleaned up")
 }

@@ -20,13 +20,15 @@ stack or arena storage. It never stores an allocator or obtains heap memory impl
 
 ```dyn
 use "std/bytes/builder"
+use "std/io"
 use "std/mem"
 
 fn main() {
-  storage: [256]u8 = []
+  storage: [256]u8
   arena := mem.arena_from_buffer(storage[..])
   text := builder.Builder{}
-  if builder.append_grow(&text, arena, "hello") != builder.ErrorKind.None {
+  builder.append_grow(&text, arena, "hello")
+  if io.failed(text.failure) {
     #panic("builder size")
   }
   _ = builder.bytes(&text)
@@ -80,7 +82,7 @@ struct Enemy {
 }
 
 fn main() {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   enemies: array.Array(Enemy)
   array.init(&enemies, arena)
   array.push(&enemies, Enemy{ hp: 10 })
@@ -131,9 +133,12 @@ fn spawn(level: *Level) {
 - `append` panics when something else was pushed on that arena after the list,
   which means the list does not own its arena. A list can also share an arena
   if it is built completely before anything else is pushed.
-- Use `arena := mem.arena_create(0)` for an explicit default arena. One arena
+- Use `arena := mem.arena_alloc(0)` for an explicit default arena. One arena
   per list reserves address space cheaply on 64-bit hosts. A list never moves;
-  it panics at the end of its block, and `try_append` returns a stub instead. `append_grow` moves the list to a new block, for a list nothing else holds, such as a result built on a caller's arena. Fixed-buffer arenas never
+  it panics at the end of its block, and `try_append` returns a stub instead. `append_grow` moves the list to a new block, for a list nothing else holds, such as a result built on a caller's arena.
+  `append_grow` copies the whole list whenever anything else was pushed after
+  it, so two lists growing in turn on one arena copy on every append: give each
+  growing list its own arena, or use a chunk list. Fixed-buffer arenas never
   chain and require header space. Reset invalidates their allocations too.
 - Resetting the arena empties the list; set the slice back to empty as well.
 
@@ -211,7 +216,7 @@ use "std/container/map"
 use "std/mem"
 
 fn main() {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   ages: map.Map([]const u8, i32)
   map.init(&ages, arena)
   map.insert(&ages, "ada", 36)

@@ -301,7 +301,7 @@ fn encode_into(destination: []u8, scanlines: []u8, compressed: []u8, pixels: []c
     destination[i] = signature[i]
     i += 1
   }
-  ihdr: [13]u8 = []
+  ihdr: [13]u8
   put_u32be(ihdr[..], 0, width)
   put_u32be(ihdr[..], 4, height)
   ihdr[8] = 8

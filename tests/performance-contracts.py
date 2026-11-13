@@ -22,12 +22,12 @@ const nil_entry: Entry = Entry{}
 fn sink_write(data: rawptr, source: []const u8) io.Transfer {
   state := #cast(*Sink, data)
   state.calls += 1
-  if state.fail || (state.fail_after > 0 && state.calls > state.fail_after) { return io.Transfer{transferred: 0, status: io.Status.Error, kind: errors.Kind.PermissionDenied, error: -13} }
+  if state.fail || (state.fail_after > 0 && state.calls > state.fail_after) { return io.Transfer{ transferred: 0, failure: io.Failure{ kind: errors.Kind.PermissionDenied, native: -13 } } }
   amount := #len(source)
   if amount > 3 { amount = 3 }
   for i in 0..amount { state.bytes[state.used + i] = source[i] }
   state.used += amount
-  return io.Transfer{transferred: amount, status: io.Status.Complete}
+  return io.Transfer{ transferred: amount, status: io.Status.Complete }
 }
 fn main() {''']
     randomizer=random.Random(124)
@@ -38,30 +38,30 @@ fn main() {''']
     def literal(data): return '"'+''.join('\\x%02x'%v for v in data)+'"'
     for text, needle in cases:
         body += ['if true {',f'text := {literal(text)}',f'needle := {literal(needle)}',
-                 'table: [64]usize = []','p := search.prepare(needle, table[..])',
+                 'table: [64]usize','p := search.prepare(needle, table[..])',
                  't.expect(p.valid, "prepare")',
                  f't.expect(search.find(p.pattern, text) == {position(text.find(needle), text)}, "KMP oracle")',
                  f't.expect(bytes.find(text, needle) == {position(text.find(needle), text)}, "find oracle")',
                  f't.expect(bytes.find_last(text, needle) == {position(text.rfind(needle), text)}, "rfind oracle")','}']
     body += ['''
   sink := Sink{}
-  staging: [4]u8 = []
+  staging: [4]u8
   buffered := bufio.writer(io.Writer{data: #cast(rawptr, &sink), write: sink_write}, staging[..])
   result := io.write_all(bufio.writer_adapter(&buffered), "abcdefghijklmnopqrst")
   t.expect(result.transferred == 20 && sink.used == 16 && buffered.used == 4, "direct path keeps tail")
-  t.expect(bufio.writer_flush(&buffered).status == io.Status.Complete, "flush tail")
+  t.expect(io.complete(bufio.writer_flush(&buffered)), "flush tail")
   t.expect(bytes.equal(sink.bytes[..sink.used], "abcdefghijklmnopqrst"), "short writes preserve order")
   sink.fail = true
   result = io.write_all(bufio.writer_adapter(&buffered), "abcdefghijkl")
-  t.expect(result.status == io.Status.Error && result.transferred == 0, "direct failure")
+  t.expect(io.failed(result.failure) && result.transferred == 0, "direct failure")
   calls := sink.calls
   _ = io.write_all(bufio.writer_adapter(&buffered), "z")
   t.expect(sink.calls == calls, "sticky direct failure")
   sink = Sink{fail_after: 1}
   buffered = bufio.writer(io.Writer{data: #cast(rawptr, &sink), write: sink_write}, staging[..])
   result = io.write_all(bufio.writer_adapter(&buffered), "abcdefghijkl")
-  t.expect(result.status == io.Status.Error && result.transferred == 3 && sink.used == 3 && buffered.used == 0, "partial direct failure")
-  chunk_storage: [8]u8 = []
+  t.expect(io.failed(result.failure) && result.transferred == 3 && sink.used == 3 && buffered.used == 0, "partial direct failure")
+  chunk_storage: [8]u8
   text := "abcdefghijklmnopqrst"
   for capacity in 1..9 {
     for size in 0..21 {
@@ -77,22 +77,25 @@ fn main() {''']
   }
   table: [1]usize = [99]
   t.expect(!search.prepare("ab", table[..]).valid && table[0] == 99, "prepare failure atomic")
-  backing: [8192]u8 = []
+  backing: [8192]u8
   arena := mem.arena_from_buffer(backing[..])
   built := builder.from_buffer(backing[..0])
-  for i in 0..1000 { t.expect(builder.append_grow(&built, arena, "x") == builder.ErrorKind.None, "builder growth") }
+  for i in 0..1000 { builder.append_grow(&built, arena, "x") }
+  t.expect(!io.failed(built.failure), "builder growth")
   t.expect(mem.arena_used(arena) == 1024, "last allocation extends without retained old buffers")
   view := builder.bytes(&built)
-  t.expect(builder.append_grow(&built, arena, view) == builder.ErrorKind.None, "overlapping growth")
+  builder.append_grow(&built, arena, view)
+  t.expect(!io.failed(built.failure), "overlapping growth")
   t.expect(built.length == 2000 && mem.arena_used(arena) == 2048, "self append in place")
   _ = mem.arena_push(arena, 1, 1)
   previous := &built.storage[0]
-  t.expect(builder.reserve(&built, arena, 4096) == builder.ErrorKind.None, "interleaved growth")
+  builder.reserve(&built, arena, 4096)
+  t.expect(!io.failed(built.failure), "interleaved growth")
   t.expect(&built.storage[0] != previous && built.storage[1999] == 'x', "interleaved allocation copied")
   mem.arena_reset(arena)
   names := hash.slots(Entry, arena, 32)
   initial := mem.arena_used(arena)
-  entries: [30]Entry = []
+  entries: [30]Entry
   for i in 0..30 {
     entries[i].bytes[0] = #cast(u8, i)
     entries[i].key = entries[i].bytes[..]
@@ -101,7 +104,7 @@ fn main() {''']
     hash.insert(names, &entries[i])
   }
   t.expect(mem.arena_used(arena) == initial, "insertion does not allocate")
-  key: [1]u8 = []
+  key: [1]u8
   for i in 0..30 { key[0] = #cast(u8, i)
     found := hash.find(names, hash.hash_bytes(3, key[..]), key[..], &nil_entry)
     t.expect(found.value == i, "values")
@@ -134,13 +137,13 @@ use "std/fs" fs
 use "std/io" io
 use "std/mem" mem
 fn main() {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   created := t.temporary_directory(arena, "dyn-performance-contract")
-  t.expect(created.failure.kind == io.Kind.Ok && created.value.active, "temporary directory")
-  frames: [4]fs.RemovalFrame = []
-  scratch: [4096]u8 = []
+  t.expect(!io.failed(created.failure) && created.value.active, "temporary directory")
+  frames: [4]fs.RemovalFrame
+  scratch: [4096]u8
   removed := t.remove_temporary(&created.value, frames[..], scratch[..])
-  t.expect(removed.failure.kind == io.Kind.Ok && !created.value.active, "remove temporary directory")
+  t.expect(!io.failed(removed.failure) && !created.value.active, "remove temporary directory")
 }
 ''')
         for flags in ([], ['--release']):

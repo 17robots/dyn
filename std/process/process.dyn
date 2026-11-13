@@ -1,6 +1,5 @@
 use "std/mem" mem
 use "std/io" io
-use "std/bytes" bytes
 use "std/bytes/builder" builder
 
 // Handles are native descriptors/HANDLE values. -1 inherits that standard stream.
@@ -236,7 +235,7 @@ pub fn capture(arena: *mem.Arena, path: []const u8, arguments: [][]const u8,
   out_end: bool = false
   err_end: bool = false
   result := CaptureResult{}
-  buffer: [65536]u8 = []
+  buffer: [65536]u8
   for {
     progress: bool = false
     for stream_index in 0..2 {
@@ -274,7 +273,8 @@ pub fn capture(arena: *mem.Arena, path: []const u8, arguments: [][]const u8,
         }
         if read.count > 0 {
           progress = true
-          if builder.append_grow(state, arena, destination[..read.count]) != builder.ErrorKind.None {
+          builder.append_grow(state, arena, destination[..read.count])
+          if io.failed(state.failure) {
             result.failure.kind = io.Kind.Overflow
             break
           }
@@ -332,7 +332,7 @@ pub struct Program { arena: *mem.Arena, args: [][]const u8 }
 // Call it on main's first line: `program := process.start()`. It panics only
 // when the arguments cannot be read.
 pub fn start() Program {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   result := arguments(arena)
   if io.failed(result.failure) {
     #panic("process.start: cannot read the program arguments")

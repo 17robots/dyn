@@ -28,9 +28,9 @@ const Base: usize = 2
 type Row = [Later]u8
 fn main() {
   const Local: usize = 5
-  bytes: [4 * mem.KiB]u8 = []
-  local: [(Local + 1) * 2]u8 = []
-  rows: [2]Row = []
+  bytes: [4 * mem.KiB]u8
+  local: [(Local + 1) * 2]u8
+  rows: [2]Row
   grid := layout.grid()
   if #len(bytes) != 4096 || #len(local) != 12 || #sizeof(rows) != 6 || #sizeof(grid) != 12 {
     #panic("constant array extent")
@@ -56,16 +56,16 @@ fn main() {
 
     invalid = [
         'use "./layout"\nfn main() { _ = layout.Width }',
-        'fn main() { count := 4\ndata: [count]u8 = []\n_ = data }',
-        'fn f(count: usize) { data: [count]u8 = []\n_ = data } fn main() {}',
-        'const N: usize = M const M: usize = N fn main() { data: [N]u8 = []\n_ = data }',
-        'fn main() { data: [1 - 2]u8 = []\n_ = data }',
-        'fn main() { data: [1 / 0]u8 = []\n_ = data }',
-        'fn main() { data: [18446744073709551615 + 1]u8 = []\n_ = data }',
-        'fn main() { data: [1.5]u8 = []\n_ = data }',
-        'const N: f64 = 4 fn main() { data: [N]u8 = []\n_ = data }',
-        'fn main() { data: [1 << 64]u8 = []\n_ = data }',
-        'fn main() { data: [N]u8 = []\nconst N: usize = 2\n_ = data }',
+        'fn main() { count := 4\ndata: [count]u8\n_ = data }',
+        'fn f(count: usize) { data: [count]u8\n_ = data } fn main() {}',
+        'const N: usize = M const M: usize = N fn main() { data: [N]u8\n_ = data }',
+        'fn main() { data: [1 - 2]u8\n_ = data }',
+        'fn main() { data: [1 / 0]u8\n_ = data }',
+        'fn main() { data: [18446744073709551615 + 1]u8\n_ = data }',
+        'fn main() { data: [1.5]u8\n_ = data }',
+        'const N: f64 = 4 fn main() { data: [N]u8\n_ = data }',
+        'fn main() { data: [1 << 64]u8\n_ = data }',
+        'fn main() { data: [N]u8\nconst N: usize = 2\n_ = data }',
     ]
     for code in invalid:
         source.write_text(code)

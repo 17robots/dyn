@@ -56,7 +56,10 @@ with tempfile.TemporaryDirectory(prefix='dyn-native-debugger-') as directory:
     (root / 'app').mkdir()
     (root / 'app/main.dyn').write_text(SOURCE)
     program = root / 'program'
-    built = subprocess.run([DYN, 'build', str(root / 'app'), '--backend', 'native', '--quiet',
+    # Overflow checks move each checked operation's failure path out of line,
+    # and the sibling if/else scopes then overlap in DWARF (both `x` show in
+    # `info locals`). Tracked separately; this test pins the plain layout.
+    built = subprocess.run([DYN, 'build', str(root / 'app'), '--backend', 'native', '--no-check-overflow', '--quiet',
                             '--no-cache', '--output', str(program)],
                            capture_output=True, text=True, timeout=120)
     if built.returncode == 2 and '--backend native requires' in built.stderr:

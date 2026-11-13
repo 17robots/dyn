@@ -1,3 +1,4 @@
+use "std/io"
 extern fn provider_error "ERR_get_error"() u64
 extern fn evp_context_new "EVP_CIPHER_CTX_new"() rawptr
 extern fn evp_context_free "EVP_CIPHER_CTX_free"(context: rawptr)

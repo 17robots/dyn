@@ -21,8 +21,8 @@ use "std/mem" mem
 use "std/bytes" bytes
 fn require(ok: bool, message: []const u8) { if !ok { #panic(message) } }
 fn converted(r: text.Converted, expected: []const u8) {
- require(r.failure.kind == parse.Kind.Ok && bytes.equal(r.value, expected), "conversion golden")
- require(r.failure.kind == parse.Kind.Ok && r.offset == 0, "success diagnostics")
+ require(!parse.failed(r.failure) && bytes.equal(r.value, expected), "conversion golden")
+ require(!parse.failed(r.failure) && r.offset == 0, "success diagnostics")
 }
 fn convert(a: *mem.Arena, input: []const u8, mode: usize) text.Converted {
  if mode == 4 { return text.case_fold(a, input) }
@@ -31,7 +31,7 @@ fn convert(a: *mem.Arena, input: []const u8, mode: usize) text.Converted {
  return text.normalize(a, input, form)
 }
 fn good(input: []const u8, expected: []const u8, mode: usize) {
- backing: [8192+mem.ArenaBufferOverhead]u8 = []
+ backing: [8192+mem.ArenaBufferOverhead]u8
  mem.fill(backing[..], 99)
  a := mem.arena_from_buffer(backing[..])
  prefix := mem.push_bytes_uninit(a, 7)
@@ -41,7 +41,7 @@ fn good(input: []const u8, expected: []const u8, mode: usize) {
  for c in prefix { require(c == 99, "prefix preserved") }
 }
 fn chained(input: []const u8, expected: []const u8, mode: usize, block: usize, prior: bool) {
- a := mem.arena_create_bounded(block, 1024 * 1024)
+ a := mem.arena_alloc_bounded(block, 1024 * 1024)
  defer mem.arena_release(a)
  prefix := mem.push_bytes_uninit(a, 3)
  mem.fill(prefix, 91)
@@ -69,7 +69,7 @@ fn chained(input: []const u8, expected: []const u8, mode: usize, block: usize, p
 }
 fn bad(input: []const u8, off: usize) {
  for mode in 0..5 {
-  backing: [256+mem.ArenaBufferOverhead]u8 = []
+  backing: [256+mem.ArenaBufferOverhead]u8
   mem.fill(backing[..], 99)
   a := mem.arena_from_buffer(backing[..])
   prefix := mem.push_bytes_uninit(a, 7)
@@ -77,19 +77,19 @@ fn bad(input: []const u8, off: usize) {
   snapshot: [256+mem.ArenaBufferOverhead]u8
   _ = mem.copy(snapshot[..], backing[..])
   r := convert(a, input, mode)
-  require(r.failure.kind != parse.Kind.Ok && #len(r.value) == 0 && r.failure.kind == parse.Kind.Syntax && r.offset == off, "invalid diagnostics")
+  require(parse.failed(r.failure) && #len(r.value) == 0 && r.failure.kind == parse.Kind.Syntax && r.offset == off, "invalid diagnostics")
   require(mem.arena_mark(a) == mem.arena_start(a) + 7, "invalid rollback")
   require(bytes.equal(backing[..], snapshot[..]), "validation wrote arena")
-  empty: [mem.ArenaBufferOverhead]u8 = []
+  empty: [mem.ArenaBufferOverhead]u8
   pad := (16-(#cast(usize,&empty[0])&15))&15
   full := mem.arena_from_buffer(empty[pad..pad+mem.ArenaHeader])
   r = convert(full, input, mode)
-  require(r.failure.kind != parse.Kind.Ok && r.offset == off && r.failure.kind == parse.Kind.Syntax && #len(r.value) == 0 && mem.arena_mark(full) == mem.arena_start(full), "validate before allocation")
+  require(parse.failed(r.failure) && r.offset == off && r.failure.kind == parse.Kind.Syntax && #len(r.value) == 0 && mem.arena_mark(full) == mem.arena_start(full), "validate before allocation")
  }
 }
 fn overlap(start: usize, mode: usize) {
- backing: [1024+mem.ArenaBufferOverhead]u8 = []
- snapshot: [1024+mem.ArenaBufferOverhead]u8 = []
+ backing: [1024+mem.ArenaBufferOverhead]u8
+ snapshot: [1024+mem.ArenaBufferOverhead]u8
  mem.fill(backing[..], 99)
  a := mem.arena_from_buffer(backing[..])
  _ = mem.push_bytes_uninit(a, 8)
@@ -98,27 +98,27 @@ fn overlap(start: usize, mode: usize) {
  payload := a.data[mem.ArenaHeader..]
  _ = mem.copy(snapshot[..], payload)
  r := convert(a, a.data[at..at+4], mode)
- require(r.failure.kind != parse.Kind.Ok && #len(r.value) == 0 && r.failure.kind == parse.Kind.Overlap && r.offset == 0, "overlap diagnostics")
+ require(parse.failed(r.failure) && #len(r.value) == 0 && r.failure.kind == parse.Kind.Overlap && r.offset == 0, "overlap diagnostics")
  require(mem.arena_mark(a) == mem.arena_start(a) + 8 && bytes.equal(payload, snapshot[..#len(payload)]), "overlap preserved bytes and mark")
 }
 fn end(r: text.GraphemeResult) {
- require(!r.found && #len(r.value) == 0 && r.failure.kind == parse.Kind.Ok && r.offset == 0, "ordinary EOF")
+ require(!r.found && #len(r.value) == 0 && !parse.failed(r.failure) && r.offset == 0, "ordinary EOF")
 }
 fn cluster(r: text.GraphemeResult, expected: []const u8) {
- require(r.found && bytes.equal(r.value, expected) && r.failure.kind == parse.Kind.Ok && r.offset == 0, "grapheme value")
+ require(r.found && bytes.equal(r.value, expected) && !parse.failed(r.failure) && r.offset == 0, "grapheme value")
 }
 fn sticky(input: []const u8, off: usize, start: usize) {
  g := text.graphemes(input)
  g.offset = start
  for repeat in 0..3 {
   r := text.next_grapheme(&g)
-  require(r.failure.kind != parse.Kind.Ok && #len(r.value) == 0 && r.failure.kind == parse.Kind.Syntax && r.offset == off, "sticky error diagnostics")
+  require(parse.failed(r.failure) && #len(r.value) == 0 && r.failure.kind == parse.Kind.Syntax && r.offset == off, "sticky error diagnostics")
   require(g.offset == start && g.error == parse.Kind.Syntax, "sticky iterator state")
  }
 }
 fn main() {
  z := text.Converted{}
- require(#len(z.value) == 0 && z.failure.kind == parse.Kind.Ok && z.offset == 0, "zero Converted")
+ require(#len(z.value) == 0 && !parse.failed(z.failure) && z.offset == 0, "zero Converted")
  end(text.GraphemeResult{})
  empty := text.graphemes("")
  end(text.next_grapheme(&empty))
@@ -175,7 +175,7 @@ overlap(10, 4)
     program += 'cluster(text.next_grapheme(&partial), "a")\n'
     program += '''for repeat in 0..3 {
  r := text.next_grapheme(&partial)
- require(r.failure.kind != parse.Kind.Ok && #len(r.value) == 0 && r.failure.kind == parse.Kind.Syntax && r.offset == 2 && partial.offset == 1, "sticky after success")
+ require(parse.failed(r.failure) && #len(r.value) == 0 && r.failure.kind == parse.Kind.Syntax && r.offset == 2 && partial.offset == 1, "sticky after success")
 }
 '''
     for raw, off, start in [(b'\xff', 0, 0), (b'a\xff', 1, 0),
@@ -208,7 +208,7 @@ def main():
                     (work / 'main.dyn').write_text('''use "std/unicode/text" text
     use "std/mem" mem
     fn main() {
-     backing: [1+mem.ArenaBufferOverhead]u8 = []
+     backing: [1+mem.ArenaBufferOverhead]u8
      pad := (16-(#cast(usize,&backing[0])&15))&15
      a := mem.arena_from_buffer(backing[pad..pad+mem.ArenaHeader+1])
      _ = OPERATION

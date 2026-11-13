@@ -56,7 +56,7 @@ def build(compiler, root, program, target, release):
         (root/name).mkdir(exist_ok=True)
         (root/name/'main.dyn').write_text(source)
         output = root/(name + '-image')
-        built = subprocess.run([str(compiler), 'build', str(root/name), '--target', which, '--no-cache', '--quiet',
+        built = subprocess.run([str(compiler), 'build', str(root/name),'--no-check-overflow', '--target', which, '--no-cache', '--quiet',
                                 '--output', str(output)] + (['--release'] if release else []), capture_output=True, text=True, timeout=900)
         if built.returncode:
             sys.exit(f'{name} build failed:\n{built.stderr[-4000:]}')

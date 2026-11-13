@@ -36,6 +36,7 @@ FIXTURES = {
 use "std/parse" parse
 use "std/io" io
 use "std/strings"
+use "std/bytes"
 // Grammar is separate from runtime. This example uses the packaged C grammar.
 #link("tree-sitter-c")
 extern fn language "tree_sitter_c"() ts.Language
@@ -49,13 +50,13 @@ fn main() {
     #panic("grammar ABI mismatch")
   }
   parsed := ts.parse(parser, nil, "int x;")
-  if !parsed.ok {
+  if io.failed(parsed.failure) {
     #panic("parse")
   }
   defer ts.tree_destroy_owned(parsed.tree)
   node := ts.root(parsed.tree)
   kind := ts.node_type(node, 128)
-  if kind.failure.kind != parse.Kind.Ok || !strings.equal(kind.value, "translation_unit") || ts.node_has_error(node) {
+  if parse.failed(kind.failure) || !bytes.equal(kind.value, "translation_unit") || ts.node_has_error(node) {
     #panic("root")
   }
   if ts.node_end(node) != 6 || ts.child_count(node) != 1 {
@@ -74,7 +75,7 @@ fn main() {
     #panic("edit")
   }
   reparsed := ts.parse(parser, parsed.tree, "int xyz;")
-  if !reparsed.ok {
+  if io.failed(reparsed.failure) {
     #panic("reparse")
   }
   defer ts.tree_destroy_owned(reparsed.tree)
@@ -85,7 +86,7 @@ fn main() {
     #panic("copy changed")
   }
   malformed := ts.parse(parser, nil, "int = ;")
-  if !malformed.ok {
+  if io.failed(malformed.failure) {
     #panic("error tree")
   }
   defer ts.tree_destroy_owned(malformed.tree)
@@ -98,9 +99,10 @@ fn main() {
     'regex-example': r'''use "vendor/pcre2" regex
 use "std/io" io
 use "std/strings"
+use "std/bytes"
 fn main() {
   compiled := regex.compile_owned("name=([a-z]+)", 0)
-  if !compiled.ok {
+  if io.failed(compiled.failure) {
     #panic("regex compile")
   }
   defer regex.pattern_destroy_owned(compiled.pattern)
@@ -111,27 +113,27 @@ fn main() {
   defer regex.match_data_destroy_owned(data)
   subject := "name=ada"
   matched := regex.match(compiled.pattern, data, subject, 0)
-  if !matched.ok || !matched.matched {
+  if io.failed(matched.failure) || !matched.matched {
     #panic("match")
   }
   span := regex.capture(data, 1)
-  if !span.set || !strings.equal(subject[span.start..span.end], "ada") {
+  if !span.set || !bytes.equal(subject[span.start..span.end], "ada") {
     #panic("capture")
   }
   absent := regex.match(compiled.pattern, data, "123", 0)
-  if !absent.ok || absent.matched {
+  if io.failed(absent.failure) || absent.matched {
     #panic("no-match status")
   }
-  if regex.match(compiled.pattern, data, subject, 999).ok {
+  if !io.failed(regex.match(compiled.pattern, data, subject, 999).failure) {
     #panic("start validation")
   }
   invalid := regex.compile_owned("(", 0)
-  if invalid.ok {
+  if !io.failed(invalid.failure) {
     regex.pattern_destroy_owned(invalid.pattern)
     #panic("invalid pattern accepted")
   }
   unicode := regex.compile_owned("(.)?", regex.Utf | regex.Ucp)
-  if !unicode.ok {
+  if io.failed(unicode.failure) {
     #panic("Unicode compile")
   }
   defer regex.pattern_destroy_owned(unicode.pattern)
@@ -141,11 +143,11 @@ fn main() {
   }
   defer regex.match_data_destroy_owned(unicode_data)
   bad_utf: [1]u8 = [255]
-  if regex.match(unicode.pattern, unicode_data, bad_utf[..], 0).ok {
+  if !io.failed(regex.match(unicode.pattern, unicode_data, bad_utf[..], 0).failure) {
     #panic("invalid UTF accepted")
   }
   empty_match := regex.match(unicode.pattern, unicode_data, "", 0)
-  if !empty_match.ok || !empty_match.matched || regex.capture(unicode_data, 1).set {
+  if io.failed(empty_match.failure) || !empty_match.matched || regex.capture(unicode_data, 1).set {
     #panic("unset capture")
   }
   io.println("PCRE2: captured ada; no-match and invalid pattern handled")
@@ -154,45 +156,46 @@ fn main() {
     'lua-example': r'''use "vendor/lua"
 use "std/io" io
 use "std/strings"
+use "std/bytes"
 fn main() {
   state := lua.create_owned()
   if state == nil {
     #panic("Lua allocation")
   }
   defer lua.destroy_owned(state)
-  if !lua.execute(state, "return 6 * 7").ok {
+  if io.failed(lua.execute(state, "return 6 * 7").failure) {
     #panic("Lua evaluation")
   }
   answer := lua.integer(state, -1)
-  if !answer.ok || answer.value != 42 {
+  if io.failed(answer.failure) || answer.value != 42 {
     #panic("Lua result")
   }
   if !lua.pop(state, 1) {
     #panic("Lua pop")
   }
-  if !lua.execute(state, "return 'hello'").ok {
+  if io.failed(lua.execute(state, "return 'hello'").failure) {
     #panic("Lua string")
   }
   text := lua.bytes(state, -1)
-  if !text.ok || !strings.equal(text.value, "hello") {
+  if io.failed(text.failure) || !bytes.equal(text.value, "hello") {
     #panic("Lua bytes")
   }
   _ = lua.pop(state, 1) // text expires here.
-  if lua.execute(state, "return (").ok || lua.stack_size(state) != 1 {
+  if !io.failed(lua.execute(state, "return (").failure) || lua.stack_size(state) != 1 {
     #panic("Lua syntax failure")
   }
   _ = lua.pop(state, 1)
-  if lua.execute(state, "return missing()").ok {
+  if !io.failed(lua.execute(state, "return missing()").failure) {
     #panic("Lua runtime failure")
   }
   _ = lua.pop(state, 1)
   if lua.stack_size(state) != 0 || lua.pop(state, 1) {
     #panic("Lua stack balance")
   }
-  if !lua.execute(state, "").ok || lua.stack_size(state) != 1 {
+  if io.failed(lua.execute(state, "").failure) || lua.stack_size(state) != 1 {
     #panic("empty Lua chunk")
   }
-  if lua.bytes(state, -1).ok || lua.integer(state, 0).ok {
+  if !io.failed(lua.bytes(state, -1).failure) || !io.failed(lua.integer(state, 0).failure) {
     #panic("Lua result validation")
   }
   _ = lua.pop(state, 1)
@@ -206,7 +209,7 @@ use "std/fs"
 use "std/os/linux"
 use "std/io"
 fn main() {
-  storage := mem.arena_create(16 * 1024 * 1024)
+  storage := mem.arena_alloc(16 * 1024 * 1024)
   defer {
     mem.arena_release(storage)
   }
@@ -216,33 +219,33 @@ fn main() {
     return
   }
   loaded := fs.read_all(storage, args[1], 8 * 1024 * 1024)
-  if loaded.failure.kind != io.Kind.Ok {
+  if io.failed(loaded.failure) {
     #panic("read archive")
   }
   opened := archive.open_memory_owned(loaded.value)
-  if !opened.ok {
+  if io.failed(opened.failure) {
     #panic("open archive")
   }
   defer {
     _ = archive.destroy_owned(opened.reader)
   }
-  buffer: [4096]u8 = []
+  buffer: [4096]u8
   for true {
     entry := archive.next(opened.reader)
     if entry.end {
       break
     }
-    if !entry.ok {
+    if io.failed(entry.failure) {
       #panic("archive header")
     }
     name := archive.entry_name(entry.entry, 4096)
-    if name.failure.kind != parse.Kind.Ok {
+    if parse.failed(name.failure) {
       #panic("archive name")
     }
     io.println("{}", name.value)
     for true {
       read := archive.read(opened.reader, buffer[..])
-      if !read.ok {
+      if io.failed(read.failure) {
         #panic("archive data")
       }
       if read.end {
@@ -258,7 +261,7 @@ use "std/mem"
 use "std/os/linux"
 use "std/io"
 fn main() {
-  storage: [65536]u8 = []
+  storage: [65536]u8
   arena := mem.arena_from_buffer(storage[..])
   args := linux.process_arguments(arena)
   if #len(args) != 2 {
@@ -269,10 +272,10 @@ fn main() {
     #panic("curl initialization")
   }
   defer curl.cleanup()
-  url: [4096]u8 = []
-  response: [16384]u8 = []
+  url: [4096]u8
+  response: [16384]u8
   result := curl.get_into(args[1], url[..], response[..], 5000)
-  if !result.ok {
+  if io.failed(result.failure) {
     #panic("HTTP transfer failed or buffer full")
   }
   io.println("HTTP {}", result.http_status)
@@ -286,7 +289,7 @@ use "std/fs"
 use "std/os/linux"
 use "std/io"
 fn main() {
-  storage := mem.arena_create(16 * 1024 * 1024)
+  storage := mem.arena_alloc(16 * 1024 * 1024)
   defer {
     mem.arena_release(storage)
   }
@@ -295,22 +298,22 @@ fn main() {
     io.println("usage: sdl3-image-example IMAGE")
     return
   }
-  path: [4096]u8 = []
+  path: [4096]u8
   surface := image.load_owned(args[1], path[..])
-  if !surface.ok {
+  if io.failed(surface.failure) {
     #panic("image load")
   }
   defer sdl3.surface_destroy_owned(surface.value)
   bytes := fs.read_all(storage, args[1], 8 * 1024 * 1024)
-  if bytes.failure.kind != io.Kind.Ok {
+  if io.failed(bytes.failure) {
     #panic("image read")
   }
   decoded := image.decode_owned(bytes.value)
-  if !decoded.ok {
+  if io.failed(decoded.failure) {
     #panic("image decode")
   }
   defer sdl3.surface_destroy_owned(decoded.value)
-  if image.decode_owned("not an image").ok {
+  if !io.failed(image.decode_owned("not an image").failure) {
     #panic("malformed image accepted")
   }
   io.println("SDL_image: loaded file and decoded caller buffer")
@@ -322,7 +325,7 @@ use "std/mem"
 use "std/os/linux"
 use "std/io"
 fn main() {
-  storage: [65536]u8 = []
+  storage: [65536]u8
   arena := mem.arena_from_buffer(storage[..])
   args := linux.process_arguments(arena)
   if #len(args) != 2 {
@@ -333,26 +336,26 @@ fn main() {
     #panic("font init")
   }
   defer ttf.quit()
-  path: [4096]u8 = []
+  path: [4096]u8
   font := ttf.open_owned(args[1], path[..], 20.0)
-  if !font.ok {
+  if io.failed(font.failure) {
     #panic("font open")
   }
   defer ttf.destroy_owned(font.value)
   empty := ttf.measure(font.value, "")
-  if !empty.ok || empty.width != 0 {
+  if io.failed(empty.failure) || empty.width != 0 {
     #panic("empty text")
   }
   measured := ttf.measure(font.value, "Hello Dyn")
-  if !measured.ok || measured.width <= 0 || measured.height <= 0 {
+  if io.failed(measured.failure) || measured.width <= 0 || measured.height <= 0 {
     #panic("font measure")
   }
   surface := ttf.render_owned(font.value, "Hello Dyn", sdl3.Color{ red: 255, green: 255, blue: 255, alpha: 255 })
-  if !surface.ok {
+  if io.failed(surface.failure) {
     #panic("font render")
   }
   defer sdl3.surface_destroy_owned(surface.value)
-  if ttf.open_owned(args[1], path[..], 0.0).ok {
+  if !io.failed(ttf.open_owned(args[1], path[..], 0.0).failure) {
     #panic("font size validation")
   }
   io.println("SDL_ttf: measured and rendered text")
@@ -364,6 +367,7 @@ use "std/mem"
 use "std/os/linux"
 use "std/io" io
 use "std/strings"
+use "std/bytes"
 use "std/c" c
 use "std/parse" parse
 fn shader(api: *gl.Api, kind: u32, source: []const u8) u32 {
@@ -378,7 +382,7 @@ fn shader(api: *gl.Api, kind: u32, source: []const u8) u32 {
   compiled: i32 = 0
   api.get_shader_iv(value, gl.CompileStatus, &compiled)
   if compiled == 0 {
-    log: [2048]u8 = []
+    log: [2048]u8
     written: i32 = 0
     api.get_shader_log(value, 2048, &written, &log[0])
     if written > 0 && written <= 2048 {
@@ -442,7 +446,7 @@ fn atlas_smoke(api: *gl.Api) {
   alignment: i32 = 0
   api.get_integer(gl.UnpackAlignment, &alignment)
   api.pixel_store_i(gl.UnpackAlignment, 1)
-  empty: [4]u8 = []
+  empty: [4]u8
   coverage: [4]u8 = [255, 128, 0, 255]
   api.tex_image_2d(gl.Texture2d, 0, #cast(i32, gl.R8), 2, 2, 0, gl.Red, gl.UnsignedByte, &empty[0])
   api.tex_sub_image_2d(gl.Texture2d, 0, 0, 0, 2, 2, gl.Red, gl.UnsignedByte, &coverage[0])
@@ -458,7 +462,7 @@ fn atlas_smoke(api: *gl.Api) {
   api.enable(gl.ScissorTest)
   if api.is_enabled(gl.Blend) == 0 || api.is_enabled(gl.ScissorTest) == 0 { #panic("atlas enables") }
   api.draw_arrays(gl.Triangles, 0, 3)
-  pixel: [4]u8 = []
+  pixel: [4]u8
   api.read_pixels(1, 1, 1, 1, gl.Rgba, gl.UnsignedByte, &pixel[0])
   if pixel[0] < 126 || pixel[0] > 130 || pixel[1] != 0 || pixel[2] < 125 || pixel[2] > 129 || pixel[3] != 255 { #panic("atlas solid alpha") }
   api.read_pixels(1, 6, 1, 1, gl.Rgba, gl.UnsignedByte, &pixel[0])
@@ -477,22 +481,22 @@ fn atlas_smoke(api: *gl.Api) {
   if api.get_error() != 0 { #panic("atlas GL error") }
 }
 fn missing_texture_proc(name: *const u8) rawptr {
-  bytes := c.bytes_from_string(name, 64)
-  if bytes.failure.kind == parse.Kind.Ok && strings.equal(bytes.value, "glTexImage2D") { return nil }
+  text := c.bytes_from_string(name, 64)
+  if !parse.failed(text.failure) && bytes.equal(text.value, "glTexImage2D") { return nil }
   return sdl3.gl_proc(name)
 }
 fn main() {
   missing := gl.load(missing_proc)
-  if missing.ok || !strings.equal(missing.missing, "glClearColor") {
+  if !io.failed(missing.failure) || !bytes.equal(missing.missing, "glClearColor") {
     #panic("missing symbol accepted")
   }
-  if gl.load(nil).ok {
+  if !io.failed(gl.load(nil).failure) {
     #panic("nil loader accepted")
   }
-  backing: [65536]u8 = []
+  backing: [65536]u8
   arena := mem.arena_from_buffer(backing[..])
   args := linux.process_arguments(arena)
-  smoke := #len(args) == 2 && strings.equal(args[1], "--smoke")
+  smoke := #len(args) == 2 && bytes.equal(args[1], "--smoke")
   if !sdl3.init_video() {
     #panic("video unavailable")
   }
@@ -500,9 +504,9 @@ fn main() {
   if !sdl3.gl_request_core(3, 3) {
     #panic("GL attributes")
   }
-  title: [64]u8 = []
+  title: [64]u8
   window := sdl3.window_create("Dyn OpenGL triangle", title[..], 640, 480, sdl3.WindowOpenGL | sdl3.WindowResizable)
-  if !window.ok {
+  if io.failed(window.failure) {
     #panic("GL window")
   }
   defer sdl3.window_destroy_owned(window.value)
@@ -517,12 +521,12 @@ fn main() {
     #panic("GL current")
   }
   loaded := gl.load(sdl3.gl_proc)
-  if !loaded.ok {
+  if io.failed(loaded.failure) {
     io.eprintln("missing {}", loaded.missing)
     #panic("GL load")
   }
   absent_texture := gl.load(missing_texture_proc)
-  if absent_texture.ok || !strings.equal(absent_texture.missing, "glTexImage2D") || absent_texture.api.clear_color != nil {
+  if !io.failed(absent_texture.failure) || !bytes.equal(absent_texture.missing, "glTexImage2D") || absent_texture.api.clear_color != nil {
     #panic("partial atlas API accepted")
   }
   api := &loaded.api
@@ -547,7 +551,7 @@ fn main() {
     api.compile_shader(invalid)
     compiled: i32 = 0
     api.get_shader_iv(invalid, gl.CompileStatus, &compiled)
-    log: [2048]u8 = []
+    log: [2048]u8
     written: i32 = 0
     api.get_shader_log(invalid, 2048, &written, &log[0])
     api.delete_shader(invalid)
@@ -609,7 +613,7 @@ fn main() {
     api.use_program(program)
     api.draw_arrays(gl.Triangles, 0, 3)
     if smoke {
-      pixel: [4]u8 = []
+      pixel: [4]u8
       api.read_pixels(width / 2, height / 2, 1, 1, gl.Rgba, gl.UnsignedByte, #cast(rawptr, &pixel[0]))
       if pixel[0] < 200 || pixel[1] > 30 || pixel[2] > 30 {
         #panic("triangle pixel mismatch")
@@ -634,29 +638,31 @@ use "std/mem"
 use "std/os/linux"
 use "std/io" io
 use "std/strings"
+use "std/bytes"
 fn main() {
-  backing: [65536]u8 = []
+  backing: [65536]u8
   arena := mem.arena_from_buffer(backing[..])
   args := linux.process_arguments(arena)
   if #len(args) != 3 { #panic("URL required") }
   if curl.init() != 0 { #panic("init") }
   defer curl.cleanup()
-  url: [4096]u8 = []
-  output: [256]u8 = []
+  url: [4096]u8
+  output: [256]u8
   result := curl.get_into(args[1], url[..], output[..], 5000)
-  if !result.ok || result.http_status != 200 || !strings.equal(output[..result.written], "vendor transfer\n") { #panic("transfer") }
+  if io.failed(result.failure) || result.http_status != 200 || !bytes.equal(output[..result.written], "vendor transfer\n") { #panic("transfer") }
   missing := curl.get_into(args[2], url[..], output[..], 5000)
-  if !missing.ok || missing.http_status != 404 { #panic("HTTP status is not transport error") }
-  small: [1]u8 = []
+  if io.failed(missing.failure) || missing.http_status != 404 { #panic("HTTP status is not transport error") }
+  small: [1]u8
   overflow := curl.get_into(args[1], url[..], small[..], 5000)
-  if overflow.ok || !overflow.capacity_exceeded || overflow.written > 1 { #panic("bounded output") }
-  if curl.get_into(args[1], small[..], output[..], 5000).ok { #panic("URL capacity") }
-  if curl.get_into("http://invalid\x00suffix", url[..], output[..], 5000).ok { #panic("URL NUL") }
-  if curl.get_into(args[1], url[..], output[..], 0).ok { #panic("timeout validation") }
-  if curl.get_into("file:///etc/passwd", url[..], output[..], 5000).ok { #panic("protocol restriction") }
+  if !io.failed(overflow.failure) || !overflow.capacity_exceeded || overflow.written > 1 { #panic("bounded output") }
+  if !io.failed(curl.get_into(args[1], small[..], output[..], 5000).failure) { #panic("URL capacity") }
+  if !io.failed(curl.get_into("http://invalid\x00suffix", url[..], output[..], 5000).failure) { #panic("URL NUL") }
+  if !io.failed(curl.get_into(args[1], url[..], output[..], 0).failure) { #panic("timeout validation") }
+  if !io.failed(curl.get_into("file:///etc/passwd", url[..], output[..], 5000).failure) { #panic("protocol restriction") }
 }
 ''',
-    'provider-abi': r'''use "vendor/tree_sitter" ts
+    'provider-abi': r'''use "std/io"
+use "vendor/tree_sitter" ts
 use "vendor/sdl3"
 use "vendor/sdl3/image" image
 use "vendor/sdl3/ttf" ttf
@@ -669,34 +675,34 @@ extern fn color_size "oracle_color_size"() usize
 extern fn surface_valid "oracle_surface"(surface: sdl3.Surface) i32
 fn main() {
   if #sizeof(ts.Node) != node_size() || #alignof(ts.Node) != node_align() || #sizeof(ts.Edit) != edit_size() || #sizeof(sdl3.Color) != color_size() { #panic("provider ABI mismatch") }
-  backing: [65536]u8 = []
+  backing: [65536]u8
   arena := mem.arena_from_buffer(backing[..])
   args := linux.process_arguments(arena)
   if #len(args) != 3 { #panic("image and font paths required") }
-  buffer: [4096]u8 = []
+  buffer: [4096]u8
   surface := image.load_owned(args[1], buffer[..])
-  if !surface.ok { #panic("image") }
+  if io.failed(surface.failure) { #panic("image") }
   defer sdl3.surface_destroy_owned(surface.value)
   if surface_valid(surface.value) == 0 { #panic("image dimensions") }
   if !ttf.init() { #panic("TTF init") }
   defer ttf.quit()
   font := ttf.open_owned(args[2], buffer[..], 18.0)
-  if !font.ok { #panic("font") }
+  if io.failed(font.failure) { #panic("font") }
   defer ttf.destroy_owned(font.value)
   rendered := ttf.render_owned(font.value, "Dyn", sdl3.Color{ red: 255, green: 127, blue: 64, alpha: 255 })
-  if !rendered.ok { #panic("rendered text") }
+  if io.failed(rendered.failure) { #panic("rendered text") }
   defer sdl3.surface_destroy_owned(rendered.value)
   if surface_valid(rendered.value) == 0 { #panic("text dimensions") }
   if !sdl3.init_video() { #panic("video") }
   defer sdl3.quit()
   window := sdl3.window_create("provider test", buffer[..], 64, 64, sdl3.WindowHidden)
-  if !window.ok { #panic("window") }
+  if io.failed(window.failure) { #panic("window") }
   defer sdl3.window_destroy_owned(window.value)
   renderer := sdl3.renderer_create_default_owned(window.value)
-  if !renderer.ok { #panic("renderer") }
+  if io.failed(renderer.failure) { #panic("renderer") }
   defer sdl3.renderer_destroy_owned(renderer.value)
   texture := sdl3.texture_from_surface_owned(renderer.value, surface.value)
-  if !texture.ok { #panic("texture") }
+  if io.failed(texture.failure) { #panic("texture") }
   defer sdl3.texture_destroy_owned(texture.value)
   if !sdl3.texture_draw(renderer.value, texture.value) || !sdl3.present(renderer.value) { #panic("draw") }
 }

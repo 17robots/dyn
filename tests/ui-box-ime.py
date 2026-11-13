@@ -13,7 +13,7 @@ use "std/mem" mem
 use "std/bytes" bytes
 use "std/unicode/utf8" utf8
 fn check(ok: bool, why: []const u8) { if !ok { #panic(why) } }
-fn measure(data: rawptr, text: []const u8) f32 {
+fn measure(data: *u8, text: []const u8) f32 {
   _ = data
   check(utf8.valid(text), "measure receives complete UTF8")
   return #cast(f32, utf8.codepoint_count(text).value) * 8.0
@@ -38,11 +38,11 @@ fn frame(state: *box.State, arena: *mem.Arena, app: *App, input: box.Input) {
   ui.end(&context)
 }
 fn main() {
-  persistent := mem.arena_create(0)
-  arena := mem.arena_create(0)
+  persistent := mem.arena_alloc(0)
+  arena := mem.arena_alloc(0)
   defer { mem.arena_release(arena)
     mem.arena_release(persistent) }
-  state := box.create(persistent,measure,nil,16.0)
+  state := box.push_state(persistent,measure,nil,16.0)
   app := App{}
   frame(state,arena,&app,box.Input{})
   frame(state,arena,&app,box.Input{tab:true})

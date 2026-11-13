@@ -295,11 +295,26 @@ fn src_for(p: *Parser) u32 {
       binding = parse_name(p)
     }
     bound_type := None
-    if binding != None && !pointer && take(p, ":") {
+    index := None
+    if binding != None && take(p, ",") {
+      if p.token.kind != TokenKind.Name {
+        fail(p, p.token.start, "expected the index name after ','")
+        return None
+      }
+      index = parse_name(p)
+      if !token_is(p, "in") {
+        fail(p, p.token.start, "expected 'in' after the index name")
+        return None
+      }
+    }
+    if binding != None && index == None && !pointer && take(p, ":") {
       bound_type = parse_type(p)
     }
     if binding != None && take(p, "in") {
       flags = FlagIteration
+      if index != None {
+        flags |= FlagIndexed
+      }
       if pointer {
         flags |= FlagPointerBinding
       }
@@ -307,6 +322,9 @@ fn src_for(p: *Parser) u32 {
         flags |= FlagConst
       }
       chain(p, &condition_first, &condition_last, binding)
+      if index != None {
+        chain(p, &condition_first, &condition_last, index)
+      }
       if bound_type != None {
         chain(p, &condition_first, &condition_last, bound_type)
       }

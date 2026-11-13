@@ -29,20 +29,22 @@ const values: [{len(bits)}]u64 = [
 ]
 
 fn main() {{
-  storage: [64]u8 = []
+  storage: [64]u8
   for bits in values {{
     state := fmt.buffer(storage[..])
-    if !fmt.write_f64_shortest(&state, #bitcast(f64, bits)) {{
+    fmt.write_f64_shortest(&state, #bitcast(f64, bits))
+    if state.failed {{
       #panic("shortest")
     }}
     io.println("{{}}", fmt.bytes(&state))
   }}
-  tiny: [3]u8 = []
+  tiny: [3]u8
   small := fmt.buffer(tiny[..])
-  if fmt.write_f64_shortest(&small, 0.125) || small.length != 0 || !small.failed {{
+  fmt.write_f64_shortest(&small, 0.125)
+  if small.length != 0 || !small.failed {{
     #panic("rollback")
   }}
-  backing: [64 + mem.ArenaBufferOverhead]u8 = []
+  backing: [64 + mem.ArenaBufferOverhead]u8
   arena := mem.arena_from_buffer(backing[..])
   if !mem.equal(fmt.f64_shortest(arena, -2.5e-9), "-2.5e-9") {{
     #panic("arena")

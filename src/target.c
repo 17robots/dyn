@@ -62,6 +62,9 @@ const char *dyn_target_property(const DynTarget *target, const char *key) {
     return target->endian;
   if (!strcmp(key, "pointer_bits"))
     return target->pointer_bits;
+  /* Standard input, output and error: every target but the browser. */
+  if (!strcmp(key, "streams"))
+    return strcmp(target->kernel, "browser") ? "yes" : "no";
   return NULL;
 }
 

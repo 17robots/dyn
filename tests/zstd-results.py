@@ -48,16 +48,16 @@ fn read(data: rawptr, destination: []u8) io.Transfer {
 }
 fn verify(raw: []const u8, encoded: []const u8, workspace: []u8, chunk: usize, window: u32, bad: bool, repeats: usize) {
  input := Input{ source: encoded, chunk: chunk }
- compressed: [113]u8 = []
- output: [8191]u8 = []
+ compressed: [113]u8
+ output: [8191]u8
  state := z.decoder(io.Reader{ data: #cast(rawptr, &input), read: read }, compressed[..], workspace, window)
  reader := z.decoder_reader(&state)
  total: usize = 0
  for {
   result := io.read(reader, output[..])
-  if result.status == io.Status.Error {
+  if io.failed(result.failure) {
    if !bad { #panic("zstd unexpected error") }
-   if io.read(reader, output[..]).error != result.error { #panic("zstd sticky error") }
+   if io.read(reader, output[..]).failure.native != result.failure.native { #panic("zstd sticky error") }
    return
   }
   at: usize = 0
@@ -83,18 +83,18 @@ struct Failure { calls: usize, code: isize }
 fn fail(data: rawptr, destination: []u8) io.Transfer {
  state := #cast(*Failure, data)
  state.calls += 1
- return io.Transfer{ kind: errors.Kind.PermissionDenied, error: state.code, status: io.Status.Error }
+ return io.Transfer{ failure: io.Failure{ kind: errors.Kind.PermissionDenied, native: state.code } }
 }
 fn results(arena: *mem.Arena, encoded: []const u8, unknown: []const u8, workspace: []u8) {
  packed_result := z.compress(arena, "portable zstd", 3)
- if packed_result.failure.kind != parse.Kind.Ok { #panic("compress success") }
+ if parse.failed(packed_result.failure) { #panic("compress success") }
  unpacked := z.decompress(arena, packed_result.value)
- if unpacked.failure.kind != parse.Kind.Ok || #len(unpacked.value) != 13 { #panic("roundtrip") }
+ if parse.failed(unpacked.failure) || #len(unpacked.value) != 13 { #panic("roundtrip") }
  mark := mem.arena_used(arena)
  bad := z.decompress(arena, "bad")
  if bad.failure.kind != parse.Kind.Syntax || #len(bad.value) != 0 || mem.arena_used(arena) != mark { #panic("malformed result") }
  size := z.frame_size(unknown)
- if size.failure.kind != parse.Kind.Ok || size.known { #panic("unknown valid frame") }
+ if parse.failed(size.failure) || size.known { #panic("unknown valid frame") }
  unsupported := z.decompress(arena, unknown)
  if unsupported.failure.kind != parse.Kind.Unsupported || mem.arena_used(arena) != mark { #panic("unknown arena unsupported") }
  // Header retains a valid known size, while truncation fails after allocation.
@@ -103,25 +103,25 @@ fn results(arena: *mem.Arena, encoded: []const u8, unknown: []const u8, workspac
  code: isize = 0
  for code < 2 {
   upstream := Failure{ code: code }
-  compressed: [17]u8 = []
-  output: [11]u8 = []
+  compressed: [17]u8
+  output: [11]u8
   state := z.decoder(io.Reader{ data: &upstream, read: fail }, compressed[..], workspace, 21)
   reader := z.decoder_reader(&state)
   first := io.read(reader, output[..])
   callback := reader.read
   replay := callback(reader.data, output[..0])
-  if first.status != io.Status.Error || first.kind != errors.Kind.PermissionDenied || first.error != code || replay.status != io.Status.Error || replay.kind != first.kind || replay.error != code || upstream.calls != 1 || state.provider_code != 0 { #panic("sticky upstream native zero / empty callback") }
+  if !io.failed(first.failure) || first.failure.kind != errors.Kind.PermissionDenied || first.failure.native != code || !io.failed(replay.failure) || replay.failure.kind != first.failure.kind || replay.failure.native != code || upstream.calls != 1 || state.provider_code != 0 { #panic("sticky upstream native zero / empty callback") }
   code += 1
  }
- compressed: [17]u8 = []
- output: [11]u8 = []
+ compressed: [17]u8
+ output: [11]u8
  input := Input{ source: "bad", chunk: 3 }
  state := z.decoder(io.Reader{ data: &input, read: read }, compressed[..], workspace, 21)
  reader := z.decoder_reader(&state)
  failed := io.read(reader, output[..])
  callback := reader.read
  replay := callback(reader.data, output[..0])
- if failed.status != io.Status.Error || failed.kind != errors.Kind.InvalidInput || failed.error != 0 || state.provider_code == 0 || replay.kind != failed.kind || replay.status != io.Status.Error { #panic("sticky provider diagnostic") }
+ if !io.failed(failed.failure) || failed.failure.kind != errors.Kind.InvalidInput || failed.failure.native != 0 || state.provider_code == 0 || replay.failure.kind != failed.failure.kind || !io.failed(replay.failure) { #panic("sticky provider diagnostic") }
 }
 '''
 source = source + extra + r'''
@@ -130,18 +130,18 @@ fn main() {
  adapter := z.decoder_reader(&invalid)
  destination: [1]u8
  failed_invalid := io.read(adapter,destination[..])
- if failed_invalid.status!=io.Status.Error || failed_invalid.kind!=errors.Kind.InvalidState || failed_invalid.error!=0 || !invalid.failed { #panic("invalid decoder cursor") }
+ if !io.failed(failed_invalid.failure) || failed_invalid.failure.kind!=errors.Kind.InvalidState || failed_invalid.failure.native!=0 || !invalid.failed { #panic("invalid decoder cursor") }
  invalid.offset=0
  replay_invalid:=adapter.read(adapter.data,destination[..0])
- if replay_invalid.status!=io.Status.Error || replay_invalid.kind!=errors.Kind.InvalidState || replay_invalid.error!=0 { #panic("sticky invalid decoder cursor") }
- owner := mem.arena_create(16000000)
+ if !io.failed(replay_invalid.failure) || replay_invalid.failure.kind!=errors.Kind.InvalidState || replay_invalid.failure.native!=0 { #panic("sticky invalid decoder cursor") }
+ owner := mem.arena_alloc(16000000)
  defer { mem.arena_release(owner) }
  arena := owner
  raw := fs.read_all(arena, "DIRECTORY/raw", 6000000)
  encoded := fs.read_all(arena, "DIRECTORY/encoded", 2000000)
  concatenated := fs.read_all(arena, "DIRECTORY/concatenated", 4000000)
  unknown := fs.read_all(arena, "DIRECTORY/unknown", 2000000)
- if raw.failure.kind != io.Kind.Ok || encoded.failure.kind != io.Kind.Ok || concatenated.failure.kind != io.Kind.Ok || unknown.failure.kind != io.Kind.Ok { #panic("fixtures") }
+ if io.failed(raw.failure) || io.failed(encoded.failure) || io.failed(concatenated.failure) || io.failed(unknown.failure) { #panic("fixtures") }
  workspace := #slice(mem.arena_push_uninit(arena, z.decoder_workspace_size(21), 8), z.decoder_workspace_size(21))
  results(arena, encoded.value, unknown.value, workspace)
  verify(raw.value, unknown.value, workspace, 13, 21, false, 1)
@@ -174,7 +174,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-zstd-results-') as temporary:
     panic_source = '''use "std/mem" mem
 use "std/compress/zstd" z
 fn main() {
- storage: [1 + mem.ArenaBufferOverhead]u8 = []
+ storage: [1 + mem.ArenaBufferOverhead]u8
  arena := mem.arena_from_buffer(storage[..])
  arena = mem.arena_from_buffer(arena.data[..mem.ArenaHeader + 1])
  _ = z.compress(arena, "exhaustion", 3)

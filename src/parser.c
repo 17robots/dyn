@@ -456,6 +456,9 @@ static uint32_t aggregate(Parser *p) {
     } else if (p->token.kind == NAME) {
       fail(p, p->token.start - 1, "an enum variant needs its type: write Enum.Variant, not .Variant");
       return NONE;
+    } else {
+      fail(p, p->token.start - 1, "a struct literal needs its type: write Type{...}, not .{...}");
+      return NONE;
     }
     expect(p, "{");
   }

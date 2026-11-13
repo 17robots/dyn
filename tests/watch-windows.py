@@ -17,33 +17,33 @@ fn require(value: bool) { if !value { #panic("Windows watch contract") } }
 fn main() {
   empty := watch.Watcher{}
   watch.close(&empty)
-  tiny: [1]u8 = []
+  tiny: [1]u8
   failed := watch.open(tiny[..])
   watch.close(&failed.value)
-  require(failed.failure.kind != io.Kind.Ok)
-  scratch: [1024]u8 = []
+  require(io.failed(failed.failure))
+  scratch: [1024]u8
   opened := watch.open(scratch[..])
-  require(opened.failure.kind == io.Kind.Ok)
-  require(watch.add(&opened.value,"missing-directory",watch.Changes).failure.kind != io.Kind.Ok)
-  require(watch.add(&opened.value,".",watch.CloseWrite).failure.kind != io.Kind.Ok)
+  require(!io.failed(opened.failure))
+  require(io.failed(watch.add(&opened.value,"missing-directory",watch.Changes).failure))
+  require(io.failed(watch.add(&opened.value,".",watch.CloseWrite).failure))
   first := watch.add(&opened.value,"one",watch.Changes)
   second := watch.add(&opened.value,"two",watch.Changes)
-  require(first.failure.kind == io.Kind.Ok && second.failure.kind == io.Kind.Ok && first.value != second.value)
+  require(!io.failed(first.failure) && !io.failed(second.failure) && first.value != second.value)
   require(!watch.HasCloseWrite && !watch.HasMoveCookies && !watch.HasDirectoryFlag)
-  capacity_scratch: [272]u8 = []
+  capacity_scratch: [272]u8
   capacity := watch.open(capacity_scratch[..])
-  require(capacity.failure.kind == io.Kind.Ok)
-  ids: [16]i32 = []
+  require(!io.failed(capacity.failure))
+  ids: [16]i32
   for i in 0..16 {
     added := watch.add(&capacity.value,".",watch.Changes)
-    require(added.failure.kind == io.Kind.Ok)
+    require(!io.failed(added.failure))
     ids[i] = added.value
   }
-  require(watch.add(&capacity.value,".",watch.Changes).failure.kind != io.Kind.Ok)
-  require(watch.remove(&capacity.value,ids[0]).failure.kind == io.Kind.Ok)
+  require(io.failed(watch.add(&capacity.value,".",watch.Changes).failure))
+  require(!io.failed(watch.remove(&capacity.value,ids[0]).failure))
   replacement := watch.add(&capacity.value,".",watch.Changes)
-  require(replacement.failure.kind == io.Kind.Ok && replacement.value != ids[0])
-  require(watch.remove(&capacity.value,ids[0]).failure.kind != io.Kind.Ok)
+  require(!io.failed(replacement.failure) && replacement.value != ids[0])
+  require(io.failed(watch.remove(&capacity.value,ids[0]).failure))
   // Closing all remaining idle watches must cancel pending native requests.
   watch.close(&capacity.value)
   watch.close(&capacity.value)
@@ -52,7 +52,7 @@ fn main() {
   seen_second: u32 = 0
   for attempt in 0..1000 {
     event := watch.next(&opened.value)
-    require(event.status != watch.Status.Error)
+    require(!io.failed(event.failure))
     if event.status == watch.Status.Event {
       require(!event.event.rescan && event.event.cookie == 0)
       if event.event.watch == first.value {
@@ -68,15 +68,15 @@ fn main() {
       }
     }
     if seen_first == (watch.Create | watch.MoveFrom | watch.MoveTo | watch.Delete) && seen_second == (watch.Create | watch.Delete) { break }
-    if event.status == watch.Status.Empty { require(time.sleep(10000000).failure.kind == io.Kind.Ok) }
+    if event.status == watch.Status.Empty { require(!io.failed(time.sleep(10000000).failure)) }
   }
   require(seen_first == (watch.Create | watch.MoveFrom | watch.MoveTo | watch.Delete))
   require(seen_second == (watch.Create | watch.Delete))
-  require(watch.remove(&opened.value,first.value).failure.kind == io.Kind.Ok)
-  require(watch.remove(&opened.value,second.value).failure.kind == io.Kind.Ok)
+  require(!io.failed(watch.remove(&opened.value,first.value).failure))
+  require(!io.failed(watch.remove(&opened.value,second.value).failure))
   watch.close(&opened.value)
   reopened := watch.open(scratch[..])
-  require(reopened.failure.kind == io.Kind.Ok && watch.add(&reopened.value,"one",watch.Changes).failure.kind == io.Kind.Ok)
+  require(!io.failed(reopened.failure) && !io.failed(watch.add(&reopened.value,"one",watch.Changes).failure))
   watch.close(&reopened.value)
   io.println("DONE")
 }

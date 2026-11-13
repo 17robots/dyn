@@ -4,36 +4,18 @@ use "std/io" io
 
 // UTF-8 strings are immutable byte slices. Operations work on bytes unless named otherwise.
 
-pub fn equal(left: []const u8, right: []const u8) bool {
-  return byte_ops.equal(left, right)
-}
+// Byte search and comparison live in std/bytes: bytes.equal, find, find_byte,
+// find_last, find_last_byte, contains, starts_with and ends_with. A miss
+// returns #len(text), always a safe slice bound.
 
-// Positions: a miss returns #len(text), always a safe slice bound.
-pub fn find_byte(text: []const u8, byte: u8) usize {
-  return byte_ops.find_byte(text, byte)
-}
-
-pub fn find(text: []const u8, needle: []const u8) usize {
-  return byte_ops.find(text, needle)
-}
-
-pub fn contains(text: []const u8, needle: []const u8) bool {
-  return byte_ops.contains(text, needle)
-}
-pub fn starts_with(text: []const u8, prefix: []const u8) bool {
-  return byte_ops.starts_with(text, prefix)
-}
-pub fn ends_with(text: []const u8, suffix: []const u8) bool {
-  return byte_ops.ends_with(text, suffix)
-}
 pub fn strip_prefix(text: []const u8, prefix: []const u8) []const u8 {
-  if starts_with(text, prefix) {
+  if byte_ops.starts_with(text, prefix) {
     return text[#len(prefix)..]
   }
   return text
 }
 pub fn strip_suffix(text: []const u8, suffix: []const u8) []const u8 {
-  if ends_with(text, suffix) {
+  if byte_ops.ends_with(text, suffix) {
     return text[..#len(text) - #len(suffix)]
   }
   return text
@@ -164,7 +146,7 @@ pub fn scan_until(state: *Scanner, delimiter: u8) Scanned {
   }
   start := state.offset
   rest := state.text[start..]
-  found := find_byte(rest, delimiter)
+  found := byte_ops.find_byte(rest, delimiter)
   if found == #len(rest) {
     state.offset = #len(state.text)
   } else {
@@ -434,12 +416,6 @@ pub fn trim_right(text: []const u8) []const u8 {
   }
   return text[..end]
 }
-pub fn find_last_byte(text: []const u8, byte: u8) usize {
-  return byte_ops.find_last_byte(text, byte)
-}
-pub fn find_last(text: []const u8, needle: []const u8) usize {
-  return byte_ops.find_last(text, needle)
-}
 // The next line without its \n or \r\n. ok is false at the end of the text.
 pub fn scan_line(state: *Scanner) Scanned {
   line := scan_until(state, 10)
@@ -560,11 +536,11 @@ fn parse_into(text: []const u8, base: u8, target: any) bool {
       return true
     }
     *bool p => {
-      if equal(text, "true") {
+      if byte_ops.equal(text, "true") {
         p.* = true
         return true
       }
-      return equal(text, "false")
+      return byte_ops.equal(text, "false")
     }
     _ => {
       #panic("strings.parse: unsupported type")
@@ -620,7 +596,7 @@ pub fn split(arena: *memory.Arena, source: []const u8, separator: []const u8) []
   at: usize = 0
   for {
     rest := source[at..]
-    found := find(rest, separator)
+    found := byte_ops.find(rest, separator)
     if found == #len(rest) {
       break
     }
@@ -630,7 +606,7 @@ pub fn split(arena: *memory.Arena, source: []const u8, separator: []const u8) []
   values := memory.push_array([]const u8, arena, count)
   at = 0
   for i in 0..count - 1 {
-    end := at + find(source[at..], separator)
+    end := at + byte_ops.find(source[at..], separator)
     values[i] = source[at..end]
     at = end + #len(separator)
   }
@@ -647,7 +623,7 @@ pub fn replace(arena: *memory.Arena, source: []const u8, needle: []const u8, rep
   at: usize = 0
   for {
     rest := source[at..]
-    found := find(rest, needle)
+    found := byte_ops.find(rest, needle)
     if found == #len(rest) {
       break
     }
@@ -659,7 +635,7 @@ pub fn replace(arena: *memory.Arena, source: []const u8, needle: []const u8, rep
   written: usize = 0
   for {
     rest := source[at..]
-    next := find(rest, needle)
+    next := byte_ops.find(rest, needle)
     if next == #len(rest) {
       break
     }
@@ -728,10 +704,9 @@ fn count_write(data: rawptr, source: []const u8) io.Transfer {
 // Panics on a bad template or argument count.
 pub fn format_arguments(arena: *memory.Arena, template: []const u8, arguments: []const any) []u8 {
   size: usize = 0
-  counted := io.print_arguments(io.Writer{ data: &size, write: count_write }, template, arguments)
-  if counted.status == io.Status.Error {
-    #panic("format template does not match its arguments")
-  }
+  // A template that does not match its arguments formats with markers; see
+  // io.print_arguments.
+  _ = io.print_arguments(io.Writer{ data: &size, write: count_write }, template, arguments)
   output := memory.push_bytes_uninit(arena, size)
   buffer := io.buffer_writer(output)
   _ = io.print_arguments(io.buffer_writer_adapter(&buffer), template, arguments)

@@ -106,7 +106,7 @@ fn decode_into(destination: []u8, source: []const u8) DecodeWork {
       return DecodeWork{ info: info, error: -74, offset: payload_end + i }
     }
   }
-  table: [64]u32 = []
+  table: [64]u32
   red: u8 = 0
   green: u8 = 0
   blue: u8 = 0
@@ -219,7 +219,7 @@ fn encode_into(destination: []u8, pixels: []const u8, width: u32, height: u32, c
   if srgb {
     destination[13] = 0
   }
-  table: [64]u32 = []
+  table: [64]u32
   previous_red: u8 = 0
   previous_green: u8 = 0
   previous_blue: u8 = 0

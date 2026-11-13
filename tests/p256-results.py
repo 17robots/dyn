@@ -50,8 +50,8 @@ fn vector(key: []const u8,message: []const u8,expected_public: []const u8,expect
  signature: [72]u8
  for i in 0..73 { public[i]=165 }
  for i in 0..72 { signature[i]=165 }
- check(facade.p256_public(public[..],key).failure.kind == errors.Kind.Ok && bytes.equal(public[..65],expected_public))
- check(facade.p256_sign(signature[..],message,key).failure.kind == errors.Kind.Ok && bytes.equal(signature[..64],expected_signature))
+ check(!errors.failed(facade.p256_public(public[..],key).failure) && bytes.equal(public[..65],expected_public))
+ check(!errors.failed(facade.p256_sign(signature[..],message,key).failure) && bytes.equal(signature[..64],expected_signature))
  check(p.valid_public_key(public[..65]))
  check(facade.p256_verify(signature[..64],message,public[..65]))
  for i in 65..73 { check(public[i]==165) }
@@ -94,15 +94,15 @@ s+=''' key: [32]u8
  public: [65]u8
  for i in 0..96 { output[i]=165 }
  invalid:=facade.p256_public(output[..],key[..])
- check(invalid.failure.kind != errors.Kind.Ok && invalid.failure.kind == errors.Kind.InvalidInput && #len(invalid.value)==0 && invalid.provider_code==0)
- check(facade.p256_sign(output[..],"",key[..]).failure.kind != errors.Kind.Ok)
+ check(errors.failed(invalid.failure) && invalid.failure.kind == errors.Kind.InvalidInput && #len(invalid.value)==0 && invalid.provider_code==0)
+ check(errors.failed(facade.p256_sign(output[..],"",key[..]).failure))
  for i in 0..96 { check(output[i]==165) }
  check(!p.public_key(output[..],key[..]) && !p.sign(output[..],"",key[..]))
  key[31]=1
  check(!p.public_key(output[..64],key[..]))
- check(facade.p256_public(output[..],output[64..96]).failure.kind != errors.Kind.Ok)
+ check(errors.failed(facade.p256_public(output[..],output[64..96]).failure))
  check(!p.public_key(output[..],output[64..96]))
- check(facade.p256_sign(output[..],output[80..81],key[..]).failure.kind != errors.Kind.Ok)
+ check(errors.failed(facade.p256_sign(output[..],output[80..81],key[..]).failure))
  check(!p.sign(output[..],output[80..81],key[..]))
  check(!p.valid_public_key(public[..]) && !p.valid_public_key(public[..64]))
  check(!p.verify(signature[..],"",public[..]))

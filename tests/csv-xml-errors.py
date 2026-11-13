@@ -27,16 +27,16 @@ fn read(data: rawptr, destination: []u8) io.Transfer {
   if p.mode == 2 { return io.Transfer{} }
   if p.mode == 1 { destination[0] = 'x'
   return io.Transfer{ transferred: 1, status: io.Status.End } }
-  return io.Transfer{ status: io.Status.Error, kind: errors.Kind.PermissionDenied, error: p.code }
+  return io.Transfer{ failure: io.Failure{ kind: errors.Kind.PermissionDenied, native: p.code } }
 }
 fn write(data: rawptr, source: []const u8) io.Transfer {
   p := #cast(*Probe, data)
   p.calls += 1
   check(p.calls == 1)
-  return io.Transfer{ status: io.Status.Error, kind: errors.Kind.PermissionDenied, error: p.code }
+  return io.Transfer{ failure: io.Failure{ kind: errors.Kind.PermissionDenied, native: p.code } }
 }
 fn callback_contracts() {
-  scratch: [32]u8 = []
+  scratch: [32]u8
   for code in 0..2 {
     p := Probe{ code: 0 - #cast(isize, code * 13) }
     reader := io.Reader{ data: #cast(rawptr, &p), read: read }
@@ -102,7 +102,7 @@ fn callback_contracts() {
 }
 
 fn additional_contracts() {
-  scratch: [32]u8 = []
+  scratch: [32]u8
   // Complete with no bytes is also EOF, and must never trigger another read.
   p := Probe{mode: 2}
   reader := io.Reader{data: #cast(rawptr, &p), read: read}
@@ -126,13 +126,13 @@ fn additional_contracts() {
   check(!end.found && end.failure.kind == parse.StreamKind.Ok)
   attrs := xml.attributes(xml.Event{})
   attr := xml.next_attribute(&attrs)
-  check(!attr.found && attr.failure.kind == parse.Kind.Ok)
+  check(!attr.found && !parse.failed(attr.failure))
   zero_field: csv.Field
   zero_result: xml.Result
   zero_attribute: xml.Attribute
   check(!zero_field.found && zero_field.failure.kind == parse.StreamKind.Ok)
   check(!zero_result.found && zero_result.failure.kind == parse.StreamKind.Ok)
-  check(!zero_attribute.found && zero_attribute.failure.kind == parse.Kind.Ok)
+  check(!zero_attribute.found && !parse.failed(zero_attribute.failure))
   // CSV diagnostics retain the field's starting byte offset.
   bad := csv.scanner("a,\"unfinished")
   check(csv.next(&bad, scratch[..]).found)
@@ -200,8 +200,8 @@ fn csv_check(source: []const u8, expected: bool) {
       chunk := Chunk{source: source, limit: limit}
       streamed := csv.stream_scanner(input(&chunk))
       direct := csv.scanner(source)
-      a: [32]u8 = []
-      b: [32]u8 = []
+      a: [32]u8
+      b: [32]u8
       first := csv.next(&direct, a[..capacity])
       second := csv.next_stream(&streamed, b[..capacity])
       if first.failure.parse.kind != second.failure.parse.kind || first.failure.parse.kind != direct.failure.parse.kind || second.failure.parse.kind != streamed.failure.parse.kind || first.found != second.found || (capacity == 4 && first.found != expected) {
@@ -227,7 +227,7 @@ fn xml_check(source: []const u8, expected: bool) {
   if expected {
     for capacity in 0..#len(source) {
       chunk := Chunk{source: source, limit: 1}
-      storage: [128]u8 = []
+      storage: [128]u8
       streamed := xml.stream_scanner(input(&chunk), storage[..capacity])
       event := xml.next_stream(&streamed)
       if event.found || event.failure.parse.kind != parse.Kind.Capacity || streamed.failure.parse.kind != parse.Kind.Capacity {
@@ -238,7 +238,7 @@ fn xml_check(source: []const u8, expected: bool) {
   for limit in 0..4 {
     for split in 1..#len(source) + 1 {
       chunk := Chunk{source: source, split: split, limit: limit}
-      storage: [128]u8 = []
+      storage: [128]u8
       capacity := #len(source)
       if !expected {
         capacity += 1

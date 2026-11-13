@@ -48,7 +48,7 @@ fn read_u32(at: usize) usize {
 }
 
 fn main() {
-  arena := mem.arena_create(67108864)
+  arena := mem.arena_alloc(67108864)
   defer {
     mem.arena_release(arena)
   }

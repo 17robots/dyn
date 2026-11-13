@@ -20,7 +20,7 @@ fn stage(name: []const u8) { io.println("{}",name) }
 fn await_event(state: *watch.Watcher, id: i32, name: []const u8, mask: u32, renamed: bool) {
   for attempt in 0..1500 {
     result := watch.next(state)
-    require(result.status != watch.Status.Error,"event error")
+    require(!io.failed(result.failure),"event error")
     if result.status == watch.Status.Event && result.event.watch == id && (result.event.mask & mask) != 0 && bytes.equal(result.event.name,name) {
       if renamed { require(result.event.cookie == 0 && result.event.rescan && state.rescan_required,"rename rescan") }
       return
@@ -33,19 +33,19 @@ fn main() {
   watch.audit_callbacks()
   empty := watch.Watcher{}
   watch.close(&empty)
-  require(watch.next(&empty).status == watch.Status.Error,"default next")
-  storage: [1024]u8 = []
+  require(io.failed(watch.next(&empty).failure),"default next")
+  storage: [1024]u8
   failed := watch.open(storage[..271])
   watch.close(&failed.value)
-  require(failed.failure.kind != io.Kind.Ok,"short buffer")
+  require(io.failed(failed.failure),"short buffer")
   opened := watch.open(storage[..])
-  require(opened.failure.kind == io.Kind.Ok,"FSEvents open")
+  require(!io.failed(opened.failure),"FSEvents open")
   defer { watch.close(&opened.value) }
-  require(watch.add(&opened.value,"missing-directory",watch.Changes).failure.kind != io.Kind.Ok,"missing path")
-  require(watch.add(&opened.value,"existing",watch.Changes).failure.kind != io.Kind.Ok,"file path")
+  require(io.failed(watch.add(&opened.value,"missing-directory",watch.Changes).failure),"missing path")
+  require(io.failed(watch.add(&opened.value,"existing",watch.Changes).failure),"file path")
   added := watch.add(&opened.value,".",watch.Changes)
   other := watch.add(&opened.value,"other",watch.Changes)
-  require(added.failure.kind == io.Kind.Ok && other.failure.kind == io.Kind.Ok && added.value != other.value,"multiple watches")
+  require(!io.failed(added.failure) && !io.failed(other.failure) && added.value != other.value,"multiple watches")
   require(watch.add(&opened.value,".",watch.Changes).value == added.value,"repeat add identity")
   stage("create")
   await_event(&opened.value,added.value,"café-😀",watch.Create,false)
@@ -59,13 +59,13 @@ fn main() {
   await_event(&opened.value,added.value,"renamed",watch.Delete,false)
   stage("other")
   await_event(&opened.value,other.value,"second",watch.Create,false)
-  require(watch.remove(&opened.value,added.value).failure.kind == io.Kind.Ok,"remove")
-  require(watch.remove(&opened.value,added.value).failure.kind != io.Kind.Ok,"stale remove")
+  require(!io.failed(watch.remove(&opened.value,added.value).failure),"remove")
+  require(io.failed(watch.remove(&opened.value,added.value).failure),"stale remove")
   stage("removed")
   await_event(&opened.value,other.value,"third",watch.Create,false)
   for attempt in 0..50 {
     result := watch.next(&opened.value)
-    require(result.status != watch.Status.Error,"after remove")
+    require(!io.failed(result.failure),"after remove")
     require(result.status != watch.Status.Event || result.event.watch != added.value,"removed watch delivery")
     _ = time.sleep(time.Millisecond*10)
   }
@@ -73,8 +73,8 @@ fn main() {
   // Each close invalidates pending callbacks before freeing/reusing contexts.
   for iteration in 0..16 {
     pending := watch.open(storage[..])
-    require(pending.failure.kind == io.Kind.Ok,"pending open")
-    require(watch.add(&pending.value,".",watch.Changes).failure.kind == io.Kind.Ok,"pending add")
+    require(!io.failed(pending.failure),"pending open")
+    require(!io.failed(watch.add(&pending.value,".",watch.Changes).failure),"pending add")
     _ = time.sleep(time.Millisecond*5)
     watch.close(&pending.value)
     watch.close(&pending.value)
@@ -88,7 +88,7 @@ fn main() {
 # exporting testing APIs. The nonzero stream value is compared, never called.
 AUDIT = r'''
 pub fn audit_callbacks() {
-  allocation := mem.arena_create(mem.ArenaHeader + #alignof(State) + #sizeof(State))
+  allocation := mem.arena_alloc(mem.ArenaHeader + #alignof(State) + #sizeof(State))
   defer { mem.arena_release(allocation) }
   pushed := mem.arena_push(allocation,#sizeof(State),#alignof(State))
   state := #cast(*State, pushed)
@@ -100,9 +100,9 @@ pub fn audit_callbacks() {
   root := "/watched"
   slot.length = #len(root)
   for i in 0..#len(root) { slot.root[i] = root[i] }
-  output: [1024]u8 = []
+  output: [1024]u8
   watcher := Watcher{state:state,storage:output[..]}
-  name_storage: [128]u8 = []
+  name_storage: [128]u8
   path := c.string_into(name_storage[..],"/watched/café-😀")
   pointers: [1]*const u8 = [path.value]
   flags: [1]u32 = [256]

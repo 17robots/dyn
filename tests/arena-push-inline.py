@@ -25,7 +25,7 @@ fn make(arena: *mem.Arena, kind: u8) *Node {
 keep_make: fn(arena: *mem.Arena, kind: u8) *Node = make
 
 fn main() {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   mark := mem.arena_mark(arena)
   // Dirty the bytes, rewind, and push over them: every field reads zero.
   dirty := mem.push_bytes_uninit(arena, 4096)

@@ -23,20 +23,20 @@ pub fn writer(storage: []u8) Writer {
 }
 
 pub fn markup(destination: *Writer, value: Trusted) {
-  _ = fmt.write(&destination.buffer, value.bytes)
+  fmt.write(&destination.buffer, value.bytes)
 }
 
 // Escaped text.
 pub fn text(destination: *Writer, value: []const u8) {
-  _ = write_escaped(&destination.buffer, value)
+  write_escaped(&destination.buffer, value)
 }
 
 pub fn number(destination: *Writer, value: u64) {
-  _ = fmt.write_u64(&destination.buffer, value)
+  fmt.write_u64(&destination.buffer, value)
 }
 
 pub fn signed(destination: *Writer, value: i64) {
-  _ = fmt.write_i64(&destination.buffer, value)
+  fmt.write_i64(&destination.buffer, value)
 }
 
 pub fn failed(source: *const Writer) bool {
@@ -48,9 +48,9 @@ pub fn output(source: *const Writer) Trusted {
   return Trusted{ bytes: fmt.bytes(&source.buffer) }
 }
 
-// Appends text with & < > " ' replaced by entities. Returns false, with the
-// buffer marked failed, when it does not fit.
-pub fn write_escaped(buffer: *fmt.Buffer, text: []const u8) bool {
+// Appends text with & < > " ' replaced by entities. Sticky like fmt.write:
+// when it does not fit, the buffer is marked failed.
+pub fn write_escaped(buffer: *fmt.Buffer, text: []const u8) {
   // Keep ordinary text on its existing one-copy path. Only escaped text
   // needs the per-entity optimization below.
   first: usize = 0
@@ -59,7 +59,10 @@ pub fn write_escaped(buffer: *fmt.Buffer, text: []const u8) bool {
     if byte == '&' || byte == '<' || byte == '>' || byte == '"' || byte == 39 { break }
     first += 1
   }
-  if first == #len(text) { return fmt.write(buffer, text) }
+  if first == #len(text) {
+    fmt.write(buffer, text)
+    return
+  }
   // Reserve the worst case once. Near-capacity and aliased inputs keep the
   // span writer below, including its exact partial-write failure behavior.
   if !buffer.failed && buffer.length <= #len(buffer.data) && #len(text) > 0 &&
@@ -133,7 +136,7 @@ pub fn write_escaped(buffer: *fmt.Buffer, text: []const u8) bool {
         }
       }
       buffer.length += used
-      return true
+      return
     }
   }
   start: usize = 0
@@ -143,12 +146,11 @@ pub fn write_escaped(buffer: *fmt.Buffer, text: []const u8) bool {
     if byte != '&' && byte != '<' && byte != '>' && byte != '"' && byte != '\'' {
       continue
     }
-    _ = fmt.write(buffer, text[start..i])
-    _ = fmt.write(buffer, entity(byte))
+    fmt.write(buffer, text[start..i])
+    fmt.write(buffer, entity(byte))
     start = i + 1
   }
-  _ = fmt.write(buffer, text[start..])
-  return !buffer.failed
+  fmt.write(buffer, text[start..])
 }
 
 // Entity for one byte, or empty when the byte needs no escaping.

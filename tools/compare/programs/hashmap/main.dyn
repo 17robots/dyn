@@ -11,7 +11,7 @@ fn slot(key: u64) usize {
 }
 
 fn main() {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   keys := mem.push_array(u64, arena, Capacity)
   counts := mem.push_array(u64, arena, Capacity)
   state: u64 = 7

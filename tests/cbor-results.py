@@ -21,20 +21,20 @@ fn bad(source: []const u8) {
  check(again.failure.kind == item.failure.kind && again.offset == item.offset)
 }
 fn main() {
- arena := mem.arena_create(0)
+ arena := mem.arena_alloc(0)
  defer { mem.arena_release(arena) }
  // RFC8949 Appendix A: {"a":1,"b":[2,3]}, indefinite [1,[2,3],4,5].
  golden := "\xa2\x61a\x01\x61b\x82\x02\x03"
  state := cbor.reader(golden)
- tokens: [20]cbor.Token = []
+ tokens: [20]cbor.Token
  count: usize = 0
  item := cbor.next(&state)
  for item.found { tokens[count] = item.value
  count += 1
  item = cbor.next(&state) }
- check(item.failure.kind == parse.Kind.Ok && count == 7)
+ check(!parse.failed(item.failure) && count == 7)
  encoded := cbor.encode(arena,tokens[..count])
- check(encoded.failure.kind == parse.Kind.Ok && bytes.equal(encoded.value,golden))
+ check(!parse.failed(encoded.failure) && bytes.equal(encoded.value,golden))
  golden = "\x9f\x01\x82\x02\x03\x04\x05\xff"
  state = cbor.reader(golden)
  count = 0
@@ -42,9 +42,9 @@ fn main() {
  for item.found { tokens[count] = item.value
  count += 1
  item = cbor.next(&state) }
- check(item.failure.kind == parse.Kind.Ok && count == 8)
+ check(!parse.failed(item.failure) && count == 8)
  encoded = cbor.encode(arena,tokens[..count])
- check(encoded.failure.kind == parse.Kind.Ok && bytes.equal(encoded.value,golden))
+ check(!parse.failed(encoded.failure) && bytes.equal(encoded.value,golden))
  golden = "\xbf\x61a\x5f\x42ab\x41c\xff\x61b\x7f\x61d\x62ef\xff\xff"
  state = cbor.reader(golden)
  count = 0
@@ -52,9 +52,9 @@ fn main() {
  for item.found { tokens[count] = item.value
  count += 1
  item = cbor.next(&state) }
- check(item.failure.kind == parse.Kind.Ok)
+ check(!parse.failed(item.failure))
  encoded = cbor.encode(arena,tokens[..count])
- check(encoded.failure.kind == parse.Kind.Ok && bytes.equal(encoded.value,golden))
+ check(!parse.failed(encoded.failure) && bytes.equal(encoded.value,golden))
  // Tags wrap one child, including nested containers and other tags.
  golden = "\x81\xd8\x20\xc0\x81\x61x"
  state = cbor.reader(golden)
@@ -63,9 +63,9 @@ fn main() {
  for item.found { tokens[count] = item.value
  count += 1
  item = cbor.next(&state) }
- check(item.failure.kind == parse.Kind.Ok && count == 5)
+ check(!parse.failed(item.failure) && count == 5)
  encoded = cbor.encode(arena,tokens[..count])
- check(encoded.failure.kind == parse.Kind.Ok && bytes.equal(encoded.value,golden))
+ check(!parse.failed(encoded.failure) && bytes.equal(encoded.value,golden))
  floats := "\xf9\x3e\x00\xfa\xbf\xc0\x00\x00\xfb\x3f\xf8\x00\x00\x00\x00\x00\x00\xf9\x00\x01\xf9\x80\x00\xf9\x7c\x00\xf9\x7e\x00"
  state = cbor.reader(floats)
  check(cbor.next(&state).value.real == 1.5)
@@ -78,7 +78,7 @@ fn main() {
  check(nan != nan)
  extremes: [8]cbor.Token = [cbor.Token{kind:cbor.Kind.Unsigned,value:0xffffffffffffffff},cbor.Token{kind:cbor.Kind.Negative,value:0xffffffffffffffff},cbor.Token{kind:cbor.Kind.Bool,boolean:true},cbor.Token{kind:cbor.Kind.Null},cbor.Token{kind:cbor.Kind.Undefined},cbor.Token{kind:cbor.Kind.Simple,value:255},cbor.Token{kind:cbor.Kind.Simple,value:19},cbor.Token{kind:cbor.Kind.Float,real:-1.5}]
  encoded = cbor.encode(arena,extremes[..])
- check(encoded.failure.kind == parse.Kind.Ok)
+ check(!parse.failed(encoded.failure))
  state = cbor.reader(encoded.value)
  for expected in extremes {
   actual := cbor.next(&state)
@@ -101,18 +101,18 @@ fn main() {
  check(cbor.encode(arena,invalid[..]).failure.kind == parse.Kind.Syntax && mem.arena_mark(arena) == mark)
  invalid[0] = cbor.Token{kind:cbor.Kind.Simple,value:24}
  check(cbor.encode(arena,invalid[..]).failure.kind == parse.Kind.Syntax && mem.arena_mark(arena) == mark)
- deep: [65]u8 = []
+ deep: [65]u8
  for i in 0..65 { deep[i] = 0x9f }
  state = cbor.reader(deep[..])
  for i in 0..64 { check(cbor.next(&state).found) }
  check(cbor.next(&state).failure.kind == parse.Kind.Capacity)
- raw: [20]u8 = []
+ raw: [20]u8
  for tag in 0..256 {
   raw[0] = #cast(u8,tag)
   state = cbor.reader(raw[..])
   actual := cbor.next(&state)
   for actual.found { actual = cbor.next(&state) }
-  check(actual.failure.kind == parse.Kind.Ok || actual.failure.kind == parse.Kind.Syntax)
+  check(!parse.failed(actual.failure) || actual.failure.kind == parse.Kind.Syntax)
  }
 }
 '''

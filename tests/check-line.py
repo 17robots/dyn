@@ -42,13 +42,13 @@ fn down(n: u64) u64 {
   return down(n - 1) + 1
 }
 
-fn worker(context: rawptr) isize {
+fn worker(context: *u8) isize {
   _ = context
   return #cast(isize, down(100000000))
 }
 
 fn main() {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   spawned := thread.spawn_with_size(arena, 1048576, worker, nil)
   _ = thread.join(spawned.value)
 }

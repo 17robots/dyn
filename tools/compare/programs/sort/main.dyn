@@ -32,7 +32,7 @@ fn quicksort(values: []u64) {
 }
 
 fn main() {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   values := mem.push_array(u64, arena, Count)
   state: u64 = 42
   for *value in values {

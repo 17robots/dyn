@@ -28,9 +28,9 @@ pub struct Api {
   glyph_infos: fn(rawptr, *u32)*const GlyphInfo,
   glyph_positions: fn(rawptr, *u32)*const GlyphPosition,
 }
-pub struct LoadResult { api: Api, missing: []const u8, ok: bool }
-pub struct FontResult { value: rawptr, kind: io.Kind, ok: bool }
-pub struct ShapeResult { value: []Glyph, kind: io.Kind, ok: bool }
+pub struct LoadResult { api: Api, missing: []const u8, failure: io.Failure }
+pub struct FontResult { value: rawptr, kind: io.Kind, failure: io.Failure }
+pub struct ShapeResult { value: []Glyph, kind: io.Kind, failure: io.Failure }
 // Explicit directional/script run properties. Zero properties are guessed.
 // Cluster levels 0..2 are supported by HarfBuzz >= 0.9.42.
 pub struct Options { direction: u32, script: u32, language: []const u8, cluster_level: u32, flags: u32, item_offset: u32, has_item_length: bool, item_length: i32 }
@@ -43,14 +43,14 @@ pub const EndOfText: u32 = 2
 // references and is destroyed with api.font_destroy. Scale uses caller units.
 pub fn font_owned(api: *const Api, bytes: []const u8, face_index: u32) FontResult {
   if #len(bytes) == 0 || #cast(u64, #len(bytes)) > 0xffffffff {
-    return FontResult{kind:io.Kind.InvalidInput}
+    return FontResult{ kind:io.Kind.InvalidInput, failure: io.Failure{ kind: io.Kind.System } }
   }
   blob := api.blob_create(&bytes[0], #cast(u32, #len(bytes)), 0, nil, nil)
   if blob == nil || api.blob_length(blob) != #cast(u32, #len(bytes)) {
     if blob != nil {
       api.blob_destroy(blob)
     }
-    return FontResult{kind:io.Kind.System}
+    return FontResult{ kind:io.Kind.System, failure: io.Failure{ kind: io.Kind.System } }
   }
   face := api.face_create(blob, face_index)
   api.blob_destroy(blob)
@@ -58,11 +58,11 @@ pub fn font_owned(api: *const Api, bytes: []const u8, face_index: u32) FontResul
     if face != nil {
       api.face_destroy(face)
     }
-    return FontResult{kind:io.Kind.System}
+    return FontResult{ kind:io.Kind.System, failure: io.Failure{ kind: io.Kind.System } }
   }
   if api.face_glyph_count(face) == 0 {
     api.face_destroy(face)
-    return FontResult{kind:io.Kind.InvalidInput}
+    return FontResult{ kind:io.Kind.InvalidInput, failure: io.Failure{ kind: io.Kind.System } }
   }
   font := api.font_create(face)
   api.face_destroy(face)
@@ -70,10 +70,10 @@ pub fn font_owned(api: *const Api, bytes: []const u8, face_index: u32) FontResul
     if font != nil {
       api.font_destroy(font)
     }
-    return FontResult{kind:io.Kind.System}
+    return FontResult{ kind:io.Kind.System, failure: io.Failure{ kind: io.Kind.System } }
   }
   api.ot_font_set_funcs(font)
-  return FontResult{value:font, ok:true}
+  return FontResult{ value:font }
 }
 // Set direction to zero to guess from the run; explicit values are HB constants.
 // Clusters are byte offsets into UTF-8 input. Invalid sequences use HB recovery.
@@ -86,29 +86,29 @@ pub fn shape(arena: *mem.Arena, api: *const Api, font: rawptr, text: []const u8,
 pub fn shape_run(arena: *mem.Arena, api: *const Api, font: rawptr, text: []const u8, options: Options, features: []const Feature) ShapeResult {
   direction:=options.direction
   if options.cluster_level>2 || (options.flags&~#cast(u32, 255))!=0 || #len(options.language)>2147483647 {
-    return ShapeResult{kind:io.Kind.InvalidInput}
+    return ShapeResult{ kind:io.Kind.InvalidInput, failure: io.Failure{ kind: io.Kind.System } }
   }
   for byte in options.language {
     if byte==0 {
-      return ShapeResult{kind:io.Kind.InvalidInput}
+      return ShapeResult{ kind:io.Kind.InvalidInput, failure: io.Failure{ kind: io.Kind.System } }
     }
   }
   if font == nil || #len(text) > 2147483647 || #cast(u64, #len(features)) > 0xffffffff || (direction != 0 && (direction < 4 || direction > 7)) {
-    return ShapeResult{kind:io.Kind.InvalidInput}
+    return ShapeResult{ kind:io.Kind.InvalidInput, failure: io.Failure{ kind: io.Kind.System } }
   }
   if #cast(usize, options.item_offset)>#len(text) || (options.has_item_length && options.item_length<0) {
-    return ShapeResult{kind:io.Kind.InvalidInput}
+    return ShapeResult{ kind:io.Kind.InvalidInput, failure: io.Failure{ kind: io.Kind.System } }
   }
   item_length:=options.item_length
   if !options.has_item_length {
     item_length=#cast(i32, #len(text)-#cast(usize, options.item_offset))
   }
   if #cast(usize, item_length)>#len(text)-#cast(usize, options.item_offset) {
-    return ShapeResult{kind:io.Kind.InvalidInput}
+    return ShapeResult{ kind:io.Kind.InvalidInput, failure: io.Failure{ kind: io.Kind.System } }
   }
   buffer := api.buffer_create()
   if buffer == nil {
-    return ShapeResult{kind:io.Kind.System}
+    return ShapeResult{ kind:io.Kind.System, failure: io.Failure{ kind: io.Kind.System } }
   }
   defer {
     api.buffer_destroy(buffer)
@@ -125,7 +125,7 @@ pub fn shape_run(arena: *mem.Arena, api: *const Api, font: rawptr, text: []const
   if #len(options.language)!=0 {
     language:=api.language_from_string(&options.language[0], #cast(i32, #len(options.language)))
     if language==nil {
-      return ShapeResult{kind:io.Kind.InvalidInput}
+      return ShapeResult{ kind:io.Kind.InvalidInput, failure: io.Failure{ kind: io.Kind.System } }
     }
     api.buffer_set_language(buffer, language)
   }
@@ -138,17 +138,17 @@ pub fn shape_run(arena: *mem.Arena, api: *const Api, font: rawptr, text: []const
   }
   api.shape(font, buffer, feature_pointer, #cast(u32, #len(features)))
   if api.buffer_allocation_successful(buffer) == 0 {
-    return ShapeResult{kind:io.Kind.System}
+    return ShapeResult{ kind:io.Kind.System, failure: io.Failure{ kind: io.Kind.System } }
   }
   count: u32 = 0
   positions_count: u32 = 0
   infos := api.glyph_infos(buffer, &count)
   positions := api.glyph_positions(buffer, &positions_count)
   if count != positions_count || (count != 0 && (infos == nil || positions == nil)) {
-    return ShapeResult{kind:io.Kind.System}
+    return ShapeResult{ kind:io.Kind.System, failure: io.Failure{ kind: io.Kind.System } }
   }
   if #cast(u64, count) > #cast(u64, #max(usize)/#sizeof(Glyph)) {
-    return ShapeResult{kind:io.Kind.Overflow}
+    return ShapeResult{ kind:io.Kind.Overflow, failure: io.Failure{ kind: io.Kind.System } }
   }
   glyphs := mem.push_array(Glyph, arena, #cast(usize, count))
   info_view := #slice(infos, count)
@@ -158,130 +158,130 @@ pub fn shape_run(arena: *mem.Arena, api: *const Api, font: rawptr, text: []const
     position := position_view[i]
     glyphs[i] = Glyph{index:info.codepoint, cluster:info.cluster, x_advance:position.x_advance, y_advance:position.y_advance, x_offset:position.x_offset, y_offset:position.y_offset}
   }
-  return ShapeResult{value:glyphs, ok:true}
+  return ShapeResult{ value:glyphs }
 }
 
 pub fn load(handle: dynlib.Handle) LoadResult {
   api := Api{}
   api.blob_create = #cast(fn(*const u8, u32, u32, rawptr, fn(rawptr))rawptr, dynlib.symbol(handle, "hb_blob_create_or_fail").value)
   if api.blob_create == nil {
-    return LoadResult{missing:"hb_blob_create_or_fail"}
+    return LoadResult{ missing:"hb_blob_create_or_fail", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.blob_destroy = #cast(fn(rawptr), dynlib.symbol(handle, "hb_blob_destroy").value)
   if api.blob_destroy == nil {
-    return LoadResult{missing:"hb_blob_destroy"}
+    return LoadResult{ missing:"hb_blob_destroy", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.blob_length = #cast(fn(rawptr)u32, dynlib.symbol(handle, "hb_blob_get_length").value)
   if api.blob_length == nil {
-    return LoadResult{missing:"hb_blob_get_length"}
+    return LoadResult{ missing:"hb_blob_get_length", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.face_create = #cast(fn(rawptr, u32)rawptr, dynlib.symbol(handle, "hb_face_create").value)
   if api.face_create == nil {
-    return LoadResult{missing:"hb_face_create"}
+    return LoadResult{ missing:"hb_face_create", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.face_get_empty = #cast(fn()rawptr, dynlib.symbol(handle, "hb_face_get_empty").value)
   if api.face_get_empty == nil {
-    return LoadResult{missing:"hb_face_get_empty"}
+    return LoadResult{ missing:"hb_face_get_empty", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.face_destroy = #cast(fn(rawptr), dynlib.symbol(handle, "hb_face_destroy").value)
   if api.face_destroy == nil {
-    return LoadResult{missing:"hb_face_destroy"}
+    return LoadResult{ missing:"hb_face_destroy", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.face_glyph_count = #cast(fn(rawptr)u32, dynlib.symbol(handle, "hb_face_get_glyph_count").value)
   if api.face_glyph_count == nil {
-    return LoadResult{missing:"hb_face_get_glyph_count"}
+    return LoadResult{ missing:"hb_face_get_glyph_count", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.font_create = #cast(fn(rawptr)rawptr, dynlib.symbol(handle, "hb_font_create").value)
   if api.font_create == nil {
-    return LoadResult{missing:"hb_font_create"}
+    return LoadResult{ missing:"hb_font_create", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.font_get_empty = #cast(fn()rawptr, dynlib.symbol(handle, "hb_font_get_empty").value)
   if api.font_get_empty == nil {
-    return LoadResult{missing:"hb_font_get_empty"}
+    return LoadResult{ missing:"hb_font_get_empty", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.font_destroy = #cast(fn(rawptr), dynlib.symbol(handle, "hb_font_destroy").value)
   if api.font_destroy == nil {
-    return LoadResult{missing:"hb_font_destroy"}
+    return LoadResult{ missing:"hb_font_destroy", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.font_set_scale = #cast(fn(rawptr, i32, i32), dynlib.symbol(handle, "hb_font_set_scale").value)
   if api.font_set_scale == nil {
-    return LoadResult{missing:"hb_font_set_scale"}
+    return LoadResult{ missing:"hb_font_set_scale", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.font_set_ppem = #cast(fn(rawptr, u32, u32), dynlib.symbol(handle, "hb_font_set_ppem").value)
   if api.font_set_ppem == nil {
-    return LoadResult{missing:"hb_font_set_ppem"}
+    return LoadResult{ missing:"hb_font_set_ppem", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.ot_font_set_funcs = #cast(fn(rawptr), dynlib.symbol(handle, "hb_ot_font_set_funcs").value)
   if api.ot_font_set_funcs == nil {
-    return LoadResult{missing:"hb_ot_font_set_funcs"}
+    return LoadResult{ missing:"hb_ot_font_set_funcs", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.buffer_create = #cast(fn()rawptr, dynlib.symbol(handle, "hb_buffer_create").value)
   if api.buffer_create == nil {
-    return LoadResult{missing:"hb_buffer_create"}
+    return LoadResult{ missing:"hb_buffer_create", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.buffer_destroy = #cast(fn(rawptr), dynlib.symbol(handle, "hb_buffer_destroy").value)
   if api.buffer_destroy == nil {
-    return LoadResult{missing:"hb_buffer_destroy"}
+    return LoadResult{ missing:"hb_buffer_destroy", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.buffer_allocation_successful = #cast(fn(rawptr)i32, dynlib.symbol(handle, "hb_buffer_allocation_successful").value)
   if api.buffer_allocation_successful == nil {
-    return LoadResult{missing:"hb_buffer_allocation_successful"}
+    return LoadResult{ missing:"hb_buffer_allocation_successful", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.buffer_add_utf8 = #cast(fn(rawptr, *const u8, i32, u32, i32), dynlib.symbol(handle, "hb_buffer_add_utf8").value)
   if api.buffer_add_utf8 == nil {
-    return LoadResult{missing:"hb_buffer_add_utf8"}
+    return LoadResult{ missing:"hb_buffer_add_utf8", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.buffer_guess_properties = #cast(fn(rawptr), dynlib.symbol(handle, "hb_buffer_guess_segment_properties").value)
   if api.buffer_guess_properties == nil {
-    return LoadResult{missing:"hb_buffer_guess_segment_properties"}
+    return LoadResult{ missing:"hb_buffer_guess_segment_properties", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.buffer_set_direction = #cast(fn(rawptr, u32), dynlib.symbol(handle, "hb_buffer_set_direction").value)
   if api.buffer_set_direction == nil {
-    return LoadResult{missing:"hb_buffer_set_direction"}
+    return LoadResult{ missing:"hb_buffer_set_direction", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.buffer_set_script = #cast(fn(rawptr, u32), dynlib.symbol(handle, "hb_buffer_set_script").value)
   if api.buffer_set_script == nil {
-    return LoadResult{missing:"hb_buffer_set_script"}
+    return LoadResult{ missing:"hb_buffer_set_script", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.buffer_set_language = #cast(fn(rawptr, rawptr), dynlib.symbol(handle, "hb_buffer_set_language").value)
   if api.buffer_set_language == nil {
-    return LoadResult{missing:"hb_buffer_set_language"}
+    return LoadResult{ missing:"hb_buffer_set_language", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.language_from_string = #cast(fn(*const u8, i32)rawptr, dynlib.symbol(handle, "hb_language_from_string").value)
   if api.language_from_string == nil {
-    return LoadResult{missing:"hb_language_from_string"}
+    return LoadResult{ missing:"hb_language_from_string", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.shape = #cast(fn(rawptr, rawptr, *const Feature, u32), dynlib.symbol(handle, "hb_shape").value)
   if api.shape == nil {
-    return LoadResult{missing:"hb_shape"}
+    return LoadResult{ missing:"hb_shape", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.glyph_infos = #cast(fn(rawptr, *u32)*const GlyphInfo, dynlib.symbol(handle, "hb_buffer_get_glyph_infos").value)
   if api.glyph_infos == nil {
-    return LoadResult{missing:"hb_buffer_get_glyph_infos"}
+    return LoadResult{ missing:"hb_buffer_get_glyph_infos", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.glyph_positions = #cast(fn(rawptr, *u32)*const GlyphPosition, dynlib.symbol(handle, "hb_buffer_get_glyph_positions").value)
   if api.glyph_positions == nil {
-    return LoadResult{missing:"hb_buffer_get_glyph_positions"}
+    return LoadResult{ missing:"hb_buffer_get_glyph_positions", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.unicode_get_default=#cast(fn()rawptr, dynlib.symbol(handle, "hb_unicode_funcs_get_default").value)
   if api.unicode_get_default==nil {
-    return LoadResult{missing:"hb_unicode_funcs_get_default"}
+    return LoadResult{ missing:"hb_unicode_funcs_get_default", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.unicode_script=#cast(fn(rawptr, u32)u32, dynlib.symbol(handle, "hb_unicode_script").value)
   if api.unicode_script==nil {
-    return LoadResult{missing:"hb_unicode_script"}
+    return LoadResult{ missing:"hb_unicode_script", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.script_horizontal_direction=#cast(fn(u32)u32, dynlib.symbol(handle, "hb_script_get_horizontal_direction").value)
   if api.script_horizontal_direction==nil {
-    return LoadResult{missing:"hb_script_get_horizontal_direction"}
+    return LoadResult{ missing:"hb_script_get_horizontal_direction", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.buffer_set_cluster_level=#cast(fn(rawptr, u32), dynlib.symbol(handle, "hb_buffer_set_cluster_level").value)
   if api.buffer_set_cluster_level==nil {
-    return LoadResult{missing:"hb_buffer_set_cluster_level"}
+    return LoadResult{ missing:"hb_buffer_set_cluster_level", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.buffer_set_flags=#cast(fn(rawptr, u32), dynlib.symbol(handle, "hb_buffer_set_flags").value)
   if api.buffer_set_flags==nil {
-    return LoadResult{missing:"hb_buffer_set_flags"}
+    return LoadResult{ missing:"hb_buffer_set_flags", failure: io.Failure{ kind: io.Kind.System } }
   }
-  return LoadResult{api:api, ok:true}
+  return LoadResult{ api:api }
 }

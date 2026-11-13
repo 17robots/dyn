@@ -21,8 +21,7 @@ pub struct Worker {
 }
 pub struct Result { started: usize, failure: io.Failure }
 
-fn worker_main(context: rawptr) isize {
-  worker := #cast(*Worker, context)
+fn worker_main(worker: *Worker) isize {
   for sync.load_u32(&worker.stopping) == 0 {
     accepted := http.accept(worker.listener)
     if io.failed(accepted.failure) {

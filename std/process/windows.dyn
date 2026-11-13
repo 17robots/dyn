@@ -179,7 +179,7 @@ fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, co
       environment_used += 1
     }
   }
-  handles: [3]rawptr = []
+  handles: [3]rawptr
   sources: [3]isize = [native_stream(configuration.input), native_stream(configuration.output), native_stream(configuration.error)]
   inherited_count: usize = 0
   defer {
@@ -314,8 +314,8 @@ fn sleep_native() {
   win_sleep(1)
 }
 fn environment_native(name: []const u8, destination: []u8) EnvironmentResult {
-  key: [32768]u16 = []
-  value: [32768]u16 = []
+  key: [32768]u16
+  value: [32768]u16
   if encode_wide(key[..], name) == 0 {
     return EnvironmentResult{ failure: io.Failure{ kind: io.Kind.Capacity, native: -28 } }
   }

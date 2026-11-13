@@ -47,7 +47,7 @@ fn add_record(summary: *Summary, root: *const json.Value) bool {
   }
   index: usize = 16
   for i in 0..16 {
-    if strings.equal(service.text, Services[i]) {
+    if bytes.equal(service.text, Services[i]) {
       index = i
       break
     }
@@ -76,21 +76,21 @@ fn add_record(summary: *Summary, root: *const json.Value) bool {
   return true
 }
 fn member(arena: *mem.Arena, root: *json.Value, key: []const u8, value: u64) {
-  if !json.add_member(root, key, json.make_number(arena, fmt.u64_decimal(arena, value))) {
+  if !json.add_member(root, key, json.push_number(arena, fmt.u64_decimal(arena, value))) {
     #panic("JSON output")
   }
 }
 fn encoded_summary(arena: *mem.Arena, summary: *const Summary) []u8 {
-  root := json.make_object(arena)
+  root := json.push_object(arena)
   member(arena, root, "records", summary.totals[0])
   member(arena, root, "bytes", summary.totals[1])
   member(arena, root, "latency_us", summary.totals[2])
   member(arena, root, "errors", summary.totals[3])
-  groups := json.make_array(arena)
+  groups := json.push_array(arena)
   for i in 0..16 {
-    row := json.make_array(arena)
+    row := json.push_array(arena)
     for j in 0..4 {
-      if !json.add(row, json.make_number(arena, fmt.u64_decimal(arena, summary.services[i][j]))) {
+      if !json.add(row, json.push_number(arena, fmt.u64_decimal(arena, summary.services[i][j]))) {
         #panic("JSON output")
       }
     }
@@ -104,18 +104,18 @@ fn encoded_summary(arena: *mem.Arena, summary: *const Summary) []u8 {
   return json.encode(arena, root)
 }
 fn print_json(value: []const u8) {
-  if io.write_all(io.stdout(), value).status != io.Status.Complete || io.write_all(io.stdout(), "\n").status != io.Status.Complete {
+  if !io.complete(io.write_all(io.stdout(), value)) || !io.complete(io.write_all(io.stdout(), "\n")) {
     #panic("stdout")
   }
 }
 fn report(file: []const u8) {
-  input := mem.arena_create(mem.GiB)
+  input := mem.arena_alloc(mem.GiB)
   defer mem.arena_release(input)
   read := fs.read_all(input, file, 1024 * mem.MiB)
-  if read.failure.kind != io.Kind.Ok {
+  if io.failed(read.failure) {
     #panic("read report")
   }
-  scratch := mem.arena_create(0)
+  scratch := mem.arena_alloc(0)
   defer mem.arena_release(scratch)
   summary: Summary
   at: usize
@@ -124,7 +124,7 @@ fn report(file: []const u8) {
     length := bytes.find_byte(rest, '\n')
     if length != 0 {
       parsed := json.parse(scratch, rest[..length])
-      if parsed.failure.kind != parse.Kind.Ok || !add_record(&summary, parsed.root) {
+      if parse.failed(parsed.failure) || !add_record(&summary, parsed.root) {
         #panic("invalid record")
       }
       mem.arena_reset(scratch)
@@ -139,17 +139,17 @@ fn report(file: []const u8) {
 fn search_walk(directory: []const u8, result: *Search) {
   buffer: [32768]u8
   opened := fs.open_directory(directory, buffer[..])
-  if opened.failure.kind != io.Kind.Ok {
+  if io.failed(opened.failure) {
     #panic("open directory")
   }
   state := opened.value
   defer fs.close_directory(&state)
-  scratch := mem.arena_create(0)
+  scratch := mem.arena_alloc(0)
   defer mem.arena_release(scratch)
   for {
     entry := fs.directory_next(&state)
     if !entry.found {
-      if entry.failure.kind != io.Kind.Ok {
+      if io.failed(entry.failure) {
         #panic("read directory")
       }
       break
@@ -168,9 +168,9 @@ fn search_walk(directory: []const u8, result: *Search) {
     }
     if entry.kind == 4 {
       search_walk(joined.value, result)
-    } else if strings.ends_with(entry.name, ".txt") {
+    } else if bytes.ends_with(entry.name, ".txt") {
       read := fs.read_all(scratch, joined.value, 1024 * mem.MiB)
-      if read.failure.kind != io.Kind.Ok {
+      if io.failed(read.failure) {
         #panic("read search")
       }
       result.files += 1
@@ -200,9 +200,9 @@ fn search_walk(directory: []const u8, result: *Search) {
 fn search(directory: []const u8) {
   result: Search
   search_walk(directory, &result)
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   defer mem.arena_release(arena)
-  root := json.make_object(arena)
+  root := json.push_object(arena)
   member(arena, root, "files", result.files)
   member(arena, root, "bytes", result.bytes)
   member(arena, root, "lines", result.lines)
@@ -212,24 +212,24 @@ fn search(directory: []const u8) {
 }
 struct App { quit: sync.AtomicU32 }
 fn handle(response: *http.Response, request: *const http.Request) http.Result {
-  if strings.equal(request.method, "GET") && strings.equal(request.target, "/health") {
+  if bytes.equal(request.method, "GET") && bytes.equal(request.target, "/health") {
     return http.respond(response, "ok\n", http.ResponseOptions{ content_type: "text/plain", close_connection: true })
   }
-  if strings.equal(request.method, "POST") && strings.equal(request.target, "/quit") {
+  if bytes.equal(request.method, "POST") && bytes.equal(request.target, "/quit") {
     result := http.respond(response, "bye\n", http.ResponseOptions{ close_connection: true })
     sync.store_u32(&#cast(*App, request.context).quit, 1)
     return result
   }
-  if !strings.equal(request.method, "POST") || !strings.equal(request.target, "/summarize") {
+  if !bytes.equal(request.method, "POST") || !bytes.equal(request.target, "/summarize") {
     return http.respond(response, "not found\n", http.ResponseOptions{ status: 404, close_connection: true })
   }
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   defer mem.arena_release(arena)
   if #len(request.body) > mem.MiB {
     return http.respond(response, "invalid\n", http.ResponseOptions{ status: 400, close_connection: true })
   }
   parsed := json.parse(arena, request.body)
-  if parsed.failure.kind != parse.Kind.Ok || parsed.root.kind != json.KindArray {
+  if parse.failed(parsed.failure) || parsed.root.kind != json.KindArray {
     return http.respond(response, "invalid\n", http.ResponseOptions{ status: 400, close_connection: true })
   }
   summary: Summary
@@ -243,24 +243,24 @@ fn handle(response: *http.Response, request: *const http.Request) http.Result {
   return http.respond(response, encoded_summary(arena, &summary), http.ResponseOptions{ content_type: "application/json", close_connection: true })
 }
 fn serve() {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   defer mem.arena_release(arena)
   state := mem.push(App, arena)
   address := net.ipv4(127, 0, 0, 1, 0)
   opened := net.tcp_listen_ipv4(&address, 128)
-  if opened.failure.kind != io.Kind.Ok {
+  if io.failed(opened.failure) {
     #panic("listen")
   }
   listener := net.listener_take(&opened.value)
   bound: net.Address
-  if net.local_address(listener.descriptor, &bound).failure.kind != io.Kind.Ok {
+  if io.failed(net.local_address(listener.descriptor, &bound).failure) {
     #panic("local address")
   }
   workers := mem.push_array(concurrent.Worker, arena, 4)
   receive := mem.push_array(u8, arena, #cast(usize, 4) * (mem.MiB + 16384))
   stacks := mem.push_array(u8, arena, #cast(usize, 4) * 512 * mem.KiB)
   started := concurrent.start_context(arena, workers, &listener, receive, mem.MiB + 16384, stacks, 512 * mem.KiB, handle, state)
-  if started.failure.kind != io.Kind.Ok {
+  if io.failed(started.failure) {
     #panic("workers")
   }
   port := #cast(u64, bound.bytes[2]) * 256 + #cast(u64, bound.bytes[3])
@@ -273,28 +273,28 @@ fn serve() {
   concurrent.stop(workers)
   joined := concurrent.join(workers)
   net.listener_close(&listener)
-  if joined.failure.kind != io.Kind.Ok {
+  if io.failed(joined.failure) {
     #panic("join workers")
   }
 }
 fn main() {
-  arena := mem.arena_create(mem.GiB)
+  arena := mem.arena_alloc(mem.GiB)
   defer mem.arena_release(arena)
   arguments := process.arguments(arena)
-  if arguments.failure.kind != io.Kind.Ok {
+  if io.failed(arguments.failure) {
     #panic("arguments")
   }
   args := arguments.value
-  if #len(args) == 2 && strings.equal(args[1], "serve") {
+  if #len(args) == 2 && bytes.equal(args[1], "serve") {
     serve()
     return
   }
   if #len(args) != 3 {
     #panic("usage: report FILE | search DIRECTORY | serve")
   }
-  if strings.equal(args[1], "report") {
+  if bytes.equal(args[1], "report") {
     report(args[2])
-  } else if strings.equal(args[1], "search") {
+  } else if bytes.equal(args[1], "search") {
     search(args[2])
   } else {
     #panic("unknown mode")

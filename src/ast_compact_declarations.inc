@@ -364,6 +364,10 @@ static bool compact_add_globals(const DynSource *s, DynAstProgram *a,
     if (type == DYN_TYPE_ERROR)
       compact_report(!(compact_kind(tq) != SRC_QUALIFIER) ? compact_child(tq, 0) : tq, s, errors,
                      "unknown type in global declaration");
+    if (!is_const && !compact_null(init) && compact_kind(compact_unwrap(init)) == EXP_ARRAY &&
+        compact_count(compact_unwrap(init)) == 0)
+      compact_report(init, s, errors,
+                     "a declaration without an initializer is already zero; drop '= []'");
     if (!reserve_global(a)) {
       compact_report(v, s, errors, "out of memory");
       return false;

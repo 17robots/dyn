@@ -10,6 +10,7 @@ use "std/parse" parse
 use "std/mem" memory
 use "std/strings" text
 use "std/unicode/utf8" utf8
+use "std/bytes"
 
 pub const KindMissing: u8 = 0
 pub const KindNull: u8 = 1
@@ -394,7 +395,7 @@ pub fn get(object: *const Value, key: []const u8) *const Value {
         return value
       }
       name := #slice(#cast(*const u8, #cast(usize, at.bits)), length)
-      if text.equal(name, key) {
+      if bytes.equal(name, key) {
         return value
       }
     }
@@ -585,16 +586,16 @@ fn utf8_byte(value: usize, marker: u8) u8 {
   return converted | marker
 }
 
-fn literal(cursor: *Cursor, text: []const u8) bool {
-  if cursor.at + #len(text) > #len(cursor.source) {
+fn literal(cursor: *Cursor, content: []const u8) bool {
+  if cursor.at + #len(content) > #len(cursor.source) {
     return false
   }
-  for i in 0..#len(text) {
-    if cursor.source[cursor.at + i] != text[i] {
+  for i in 0..#len(content) {
+    if cursor.source[cursor.at + i] != content[i] {
       return false
     }
   }
-  cursor.at += #len(text)
+  cursor.at += #len(content)
   return true
 }
 

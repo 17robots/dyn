@@ -16,7 +16,7 @@ pub fn open_directory(path: []const u8, storage: []u8) DirectoryResult {
   if #len(storage) < 1040 || #len(path) == 0 || #len(path) > 32000 {
     return DirectoryResult{ failure: io.Failure{ kind: io.Kind.InvalidInput, native: -22 } }
   }
-  wide: [32768]u16 = []
+  wide: [32768]u16
   count: usize = 0
   at: usize = 0
   for at < #len(path) {
@@ -64,7 +64,7 @@ pub fn directory_next(directory: *Directory) DirectoryEntry {
     attributes := #cast(u32, directory.data[0]) | #cast(u32, directory.data[1]) << 8 | #cast(u32, directory.data[2]) << 16
     used: usize = 0
     index: usize = 44
-    units: [260]u16 = []
+    units: [260]u16
     count: usize = 0
     for count < 260 {
       unit := #cast(u16, directory.data[index]) | #cast(u16, directory.data[index + 1]) << 8
@@ -161,7 +161,7 @@ pub fn metadata(path: []const u8) Metadata {
     return Metadata{ failure: io.Failure{ kind: io.Kind.InvalidInput, native: -22 } }
   }
   // WIN32_FILE_ATTRIBUTE_DATA: attributes, three FILETIMEs, size high, low.
-  data: [36]u8 = []
+  data: [36]u8
   if win_attributes(&wide.units[0], 0, &data[0]) == 0 {
     code := last_error()
     return Metadata{ failure: io.Failure{ kind: native_kind(code), native: code } }
@@ -176,7 +176,7 @@ pub fn file_metadata(file: *const File) Metadata {
     return Metadata{ failure: io.Failure{ kind: io.Kind.InvalidState, native: -9 } }
   }
   // BY_HANDLE_FILE_INFORMATION.
-  data: [52]u8 = []
+  data: [52]u8
   if win_information(pointer(file.descriptor), &data[0]) == 0 {
     code := last_error()
     return Metadata{ failure: io.Failure{ kind: native_kind(code), native: code } }

@@ -13,7 +13,7 @@ SOURCE = r'''use "std/io"
 use "std/fmt"
 use "std/mem"
 fn show(label: []const u8, value: u64) {
-  storage: [64 + mem.ArenaBufferOverhead]u8 = []
+  storage: [64 + mem.ArenaBufferOverhead]u8
   arena := mem.arena_from_buffer(storage[..])
   io.println(label)
   io.println(fmt.u64_decimal(arena, value))

@@ -214,7 +214,7 @@ fn set_interest(worker: *Worker, index: usize, events: u32) bool {
     return true
   }
   connection.interest = events
-  return event.modify(&worker.queue, connection.descriptor, events, #cast(u64, index) + 1).failure.kind == io.Kind.Ok
+  return !io.failed(event.modify(&worker.queue, connection.descriptor, events, #cast(u64, index) + 1).failure)
 }
 
 // Returns an overflow block only after its queued bytes drain or the socket closes.
@@ -297,7 +297,7 @@ fn flush_blocking(connection: *Connection) bool {
 fn output_write(data: rawptr, source: []const u8) io.Transfer {
   connection := #cast(*Connection, data)
   if connection.failed {
-    return io.Transfer{ kind: io.Kind.InvalidState, status: io.Status.Error }
+    return io.Transfer{ failure: io.Failure{ kind: io.Kind.InvalidState } }
   }
   connection.body_reserved = false
   written: usize = 0
@@ -309,7 +309,7 @@ fn output_write(data: rawptr, source: []const u8) io.Transfer {
     if room == 0 {
       if !flush_blocking(connection) {
         connection.failed = true
-        return io.Transfer{ transferred: written, kind: io.Kind.WouldBlock, status: io.Status.Error }
+        return io.Transfer{ transferred: written, failure: io.Failure{ kind: io.Kind.WouldBlock } }
       }
       room = #len(connection.output)
     }
@@ -346,7 +346,7 @@ fn reserve_body(data: rawptr, capacity: usize) []u8 {
 fn commit_body(data: rawptr, head: []const u8, length: usize) io.Transfer {
   connection := #cast(*Connection, data)
   if !connection.body_reserved || #len(head) > 8192 || length > #len(connection.output) - 8192 {
-    return io.Transfer{ kind: io.Kind.InvalidState, status: io.Status.Error }
+    return io.Transfer{ failure: io.Failure{ kind: io.Kind.InvalidState } }
   }
   connection.sent = 8192 - #len(head)
   connection.queued = 8192 + length
@@ -380,7 +380,7 @@ fn close_connection(worker: *Worker, index: usize) {
   worker.free[worker.free_count] = index
   worker.free_count += 1
   if !worker.listening && sync.load_u32(&worker.stopping) == 0 {
-    worker.listening = event.add(&worker.queue, worker.listener.descriptor, event.Readable, ListenerToken).failure.kind == io.Kind.Ok
+    worker.listening = !io.failed(event.add(&worker.queue, worker.listener.descriptor, event.Readable, ListenerToken).failure)
   }
 }
 
@@ -457,7 +457,7 @@ fn finish(worker: *Worker, index: usize) {
   }
   connection.draining = true
   connection.used = 0
-  if network.shutdown(connection.descriptor, network.ShutdownWrite).failure.kind != io.Kind.Ok {
+  if io.failed(network.shutdown(connection.descriptor, network.ShutdownWrite).failure) {
     close_connection(worker, index)
   }
 }
@@ -579,7 +579,7 @@ fn on_handshake(worker: *Worker, index: usize) {
 fn on_accept(worker: *Worker) {
   for true {
     if worker.free_count == 0 {
-      if event.remove(&worker.queue, worker.listener.descriptor).failure.kind == io.Kind.Ok {
+      if !io.failed(event.remove(&worker.queue, worker.listener.descriptor).failure) {
         worker.listening = false
       }
       return
@@ -591,7 +591,7 @@ fn on_accept(worker: *Worker) {
       return
     }
     descriptor := accepted.value
-    if network.nonblocking(descriptor, true).failure.kind != io.Kind.Ok {
+    if io.failed(network.nonblocking(descriptor, true).failure) {
       network.close(descriptor)
       continue
     }
@@ -604,7 +604,7 @@ fn on_accept(worker: *Worker) {
     connection.last_active = now_milliseconds()
     connection.write_timeout = worker.config.write_timeout_milliseconds
     connection.interest = event.Readable
-    if event.add(&worker.queue, descriptor, event.Readable, #cast(u64, index) + 1).failure.kind != io.Kind.Ok {
+    if io.failed(event.add(&worker.queue, descriptor, event.Readable, #cast(u64, index) + 1).failure) {
       network.close(descriptor)
       connection.active = false
       worker.free[worker.free_count] = index
@@ -636,8 +636,7 @@ fn sweep_idle(worker: *Worker, now: i64) {
   }
 }
 
-fn worker_main(context: rawptr) isize {
-  worker := #cast(*Worker, context)
+fn worker_main(worker: *Worker) isize {
   last_sweep := now_milliseconds()
   for sync.load_u32(&worker.stopping) == 0 {
     mark := mem.arena_mark(worker.scratch)
@@ -745,7 +744,7 @@ fn start_worker(arena: *mem.Arena, worker: *Worker) io.Failure {
     return added.failure
   }
   if config.spawner != nil {
-    worker.native = config.spawner.spawn(config.spawner.data, arena, config.stack_size, worker_main, worker)
+    worker.native = config.spawner.spawn(config.spawner.data, arena, config.stack_size, #cast(fn(rawptr) isize, worker_main), worker)
     if worker.native == nil {
       event.close(&worker.queue)
       return io.Failure{ kind: io.Kind.System }
@@ -823,7 +822,7 @@ pub fn start_shared(arena: *mem.Arena, workers: []Worker, address: network.Ipv4A
     if i == 0 {
       // Pin a kernel-chosen port so later listeners join the same group.
       bound := network.Address{}
-      if network.local_address(worker.own_listener.descriptor, &bound).failure.kind == io.Kind.Ok {
+      if !io.failed(network.local_address(worker.own_listener.descriptor, &bound).failure) {
         address.bytes[2] = bound.bytes[2]
         address.bytes[3] = bound.bytes[3]
       }
@@ -844,7 +843,7 @@ pub fn local_port(workers: []Worker) u16 {
     return 0
   }
   bound := network.Address{}
-  if network.local_address(workers[0].listener.descriptor, &bound).failure.kind != io.Kind.Ok {
+  if io.failed(network.local_address(workers[0].listener.descriptor, &bound).failure) {
     return 0
   }
   return #cast(u16, bound.bytes[2]) * 256 + #cast(u16, bound.bytes[3])

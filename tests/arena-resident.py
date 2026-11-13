@@ -10,14 +10,14 @@ SOURCE=r'''use "std/mem"
 fn wait() {
  ready:="ready\n"
  _=#syscall(1,1,&ready[0],#len(ready))
- input:[1]u8=[]
+ input:[1]u8
  _=#syscall(0,0,&input[0],1)
 }
 fn main() {
  wait()
- arenas:[COUNT]*mem.Arena=[]
+ arenas:[COUNT]*mem.Arena
  for i in 0..COUNT {
-  arenas[i]=mem.arena_create(0)
+  arenas[i]=mem.arena_alloc(0)
   bytes:=mem.push_bytes_uninit(arenas[i],64)
   for *byte in bytes { byte.*=1 }
  }

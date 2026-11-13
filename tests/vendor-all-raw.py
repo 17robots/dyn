@@ -34,7 +34,7 @@ cases = {
     'archive': 'if raw.archive_version_number() == 0 { #panic("version") }',
     'lz4': 'if raw.LZ4_versionNumber() == 0 { #panic("version") }',
     'openssl': 'if raw.OpenSSL_version_num() == 0 { #panic("version") }',
-    'pcre2': '''version: [64]u8 = []
+    'pcre2': '''version: [64]u8
   if raw.pcre2_config_8(#cast(u32, raw.PCRE2_CONFIG_VERSION), #cast(rawptr, &version[0])) <= 0 { #panic("config") }''',
     'curl': '''version := raw.curl_version_info(raw.CURLVERSION_FIRST)
   if version == nil || version.version_num == 0 { #panic("version") }''',
@@ -64,33 +64,33 @@ cases = {
   if raw.cgltf_write(&options, nil, 0, data) == 0 { #panic("writer") }
   raw.cgltf_free(data)''',
     'stb_rect_pack': '''context := raw.stbrp_context{}
-  nodes: [8]raw.stbrp_node = []
+  nodes: [8]raw.stbrp_node
   rect := raw.stbrp_rect{ id: 0, w: 2, h: 2 }
   raw.stbrp_init_target(&context, 8, 8, &nodes[0], 8)
   if raw.stbrp_pack_rects(&context, &rect, 1) != 1 || rect.was_packed == 0 { #panic("pack") }''',
     'stb_image_resize': '''input: [4]u8 = [33, 33, 33, 33]
-  output: [16]u8 = []
+  output: [16]u8
   if raw.stbir_resize_uint8_linear(&input[0], 2, 2, 0, &output[0], 4, 4, 0, raw.STBIR_1CHANNEL) == nil { #panic("resize") }
   if output[0] != 33 || output[15] != 33 { #panic("pixels") }
-  storage: [131072]u8 = []
+  storage: [131072]u8
   arena := mem.arena_from_buffer(storage[..])
   if !image.resize(arena, input[..], 2, 2, output[..], 4, 4, 1, false) || mem.arena_mark(arena) != mem.arena_start(arena) { #panic("arena wrapper coexistence") }
   if output[0] != 33 || output[15] != 33 { #panic("arena pixels") }
-  tiny: [1 + mem.ArenaBufferOverhead]u8 = []
+  tiny: [1 + mem.ArenaBufferOverhead]u8
   pad := (16-(#cast(usize,&tiny[0])&15))&15
   exhausted := mem.arena_from_buffer(tiny[pad..pad+mem.ArenaHeader+1])
   if image.resize(exhausted, input[..], 2, 2, output[..], 4, 4, 1, false) { #panic("arena allocator replaced") }''',
     'vulkan': '''library := dynlib.open("libvulkan.so.1", dynlib.Now)
-  if library.failure.kind != io.Kind.Ok { #panic("loader") }
+  if io.failed(library.failure) { #panic("loader") }
   symbol := dynlib.symbol(library.value, "vkEnumerateInstanceVersion")
-  if symbol.failure.kind != io.Kind.Ok { #panic("procedure") }
+  if io.failed(symbol.failure) { #panic("procedure") }
   version: u32 = 0
   if raw.vkEnumerateInstanceVersion(#cast(raw.Procedure_vkEnumerateInstanceVersion, symbol.value), &version) != raw.VK_SUCCESS || version == 0 { #panic("dispatch") }
   _ = dynlib.close(&library.value)''',
     'opengl': '''library := dynlib.open("libGL.so.1", dynlib.Now)
-  if library.failure.kind != io.Kind.Ok { #panic("loader") }
+  if io.failed(library.failure) { #panic("loader") }
   symbol := dynlib.symbol(library.value, "glGetError")
-  if symbol.failure.kind != io.Kind.Ok { #panic("procedure") }
+  if io.failed(symbol.failure) { #panic("procedure") }
   raw.glClear(record_clear, #cast(u32, raw.GL_COLOR_BUFFER_BIT))
   if recorded_mask != #cast(u32, raw.GL_COLOR_BUFFER_BIT) { #panic("dispatch") }
   _ = dynlib.close(&library.value)''',
@@ -125,7 +125,7 @@ cases['openssl'] = r'''context := raw.SSL_CTX_new(raw.TLS_method())
   if bio == nil { #panic("BIO") }
   defer { _ = raw.BIO_free(bio) }
   input: []const u8 = "payload"
-  output: [7]u8 = []
+  output: [7]u8
   if raw.BIO_pending(bio) != 0 || raw.BIO_write(bio, #cast(rawptr, &input[0]), 7) != 7 || raw.BIO_pending(bio) != 7 { #panic("BIO pending") }
   if raw.BIO_read(bio, #cast(rawptr, &output[0]), 3) != 3 || raw.BIO_pending(bio) != 4 || output[0] != 'p' || output[2] != 'y' { #panic("BIO partial read") }
   if raw.BIO_flush(bio) != 1 || raw.BIO_reset(bio) != 1 || raw.BIO_pending(bio) != 0 || raw.BIO_eof(bio) != 1 { #panic("BIO reset") }'''
@@ -154,9 +154,9 @@ cases['sqlite'] = r'''path: [9]u8 = [':','m','e','m','o','r','y',':',0]
   invalid: []const u8 = "SELECT ("
   rejected: rawptr = nil
   if raw.sqlite3_prepare_v2(database, #cast(*const c.char, &invalid[0]), #cast(i32, #len(invalid)), &rejected, nil) == raw.SQLITE_OK || rejected != nil { #panic("syntax failure") }'''
-cases['lz4'] = r'''input: [64]u8 = []
-  encoded: [256]u8 = []
-  decoded: [64]u8 = []
+cases['lz4'] = r'''input: [64]u8
+  encoded: [256]u8
+  decoded: [64]u8
   i: usize = 0
   for i < #len(input) {
     input[i] = #cast(u8, i)
@@ -172,9 +172,9 @@ cases['lz4'] = r'''input: [64]u8 = []
   if raw.LZ4_decompress_safe(#cast(*const c.char, &encoded[0]), #cast(*c.char, &decoded[0]), n, 1) >= 0 { #panic("short output") }
   malformed: [2]u8 = [255,255]
   if raw.LZ4_decompress_safe(#cast(*const c.char, &malformed[0]), #cast(*c.char, &decoded[0]), 2, 64) >= 0 { #panic("malformed LZ4") }'''
-cases['zstd'] = r'''input: [64]u8 = []
-  encoded: [256]u8 = []
-  decoded: [64]u8 = []
+cases['zstd'] = r'''input: [64]u8
+  encoded: [256]u8
+  decoded: [64]u8
   i: usize = 0
   for i < #len(input) {
     input[i] = #cast(u8, i)

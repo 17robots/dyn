@@ -1,0 +1,11 @@
+// A literal format template is checked against its arguments.
+use "std/io"
+
+fn main() {
+  io.println("{} and {}", 1) // error: format template has 2 {} but the call passes 1 argument
+  io.println("{}", 1, 2) // error: format template has 1 {} but the call passes 2 arguments
+  io.println("{:x}", 255) // error: only {} inserts a value
+  io.println("{{}} {}", 3)
+  text := "{}"
+  io.println(text, 1, 2)
+}

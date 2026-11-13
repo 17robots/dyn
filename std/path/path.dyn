@@ -1,5 +1,5 @@
-use "std/strings"
 use "std/mem" mem
+use "std/bytes"
 
 // Slash-separated lexical paths. Operations do not access filesystem.
 pub struct Result { value: []u8, valid: bool }
@@ -162,8 +162,8 @@ fn safe_join_into(destination: []u8, root: []const u8, child: []const u8) Result
   if is_absolute(child) {
     return Result{ value: destination[..0], valid: false }
   }
-  temporary: [4096]u8 = []
-  root_storage: [4096]u8 = []
+  temporary: [4096]u8
+  root_storage: [4096]u8
   combined := join_into(temporary[..], root, child)
   if !combined.valid {
     return Result{ value: destination[..0], valid: false }
@@ -173,8 +173,8 @@ fn safe_join_into(destination: []u8, root: []const u8, child: []const u8) Result
   if !normalized.valid || !normalized_root.valid || #len(normalized.value) < #len(normalized_root.value) {
     return Result{ value: destination[..0], valid: false }
   }
-  if strings.equal(normalized_root.value, ".") {
-    if strings.equal(normalized.value, "..") || (#len(normalized.value) >= 3 && strings.equal(normalized.value[..3], "../")) {
+  if bytes.equal(normalized_root.value, ".") {
+    if bytes.equal(normalized.value, "..") || (#len(normalized.value) >= 3 && bytes.equal(normalized.value[..3], "../")) {
       return Result{ value: destination[..0] }
     }
     return normalized
@@ -214,8 +214,8 @@ pub fn component_next(state: *Components) Component {
 // Lexical relative path, for normalized inputs up to 4096 bytes each.
 // Absolute and relative roots cannot be mixed. No filesystem access occurs.
 fn relative_into(destination: []u8, base: []const u8, target: []const u8) Result {
-  base_storage: [4096]u8 = []
-  target_storage: [4096]u8 = []
+  base_storage: [4096]u8
+  target_storage: [4096]u8
   left := clean_into(base_storage[..], base)
   right := clean_into(target_storage[..], target)
   if !left.valid || !right.valid || is_absolute(left.value) != is_absolute(right.value) {
@@ -223,10 +223,10 @@ fn relative_into(destination: []u8, base: []const u8, target: []const u8) Result
   }
   left_text: []const u8 = left.value
   right_text: []const u8 = right.value
-  if strings.equal(left_text, ".") {
+  if bytes.equal(left_text, ".") {
     left_text = ""
   }
-  if strings.equal(right_text, ".") {
+  if bytes.equal(right_text, ".") {
     right_text = ""
   }
   left_parts := components(left_text)
@@ -236,10 +236,10 @@ fn relative_into(destination: []u8, base: []const u8, target: []const u8) Result
   for {
     left_part := component_next(&left_parts)
     right_part := component_next(&right_parts)
-    if left_part.found && right_part.found && strings.equal(left_part.value, right_part.value) {
+    if left_part.found && right_part.found && bytes.equal(left_part.value, right_part.value) {
       continue
     }
-    if left_part.found && strings.equal(left_part.value, "..") {
+    if left_part.found && bytes.equal(left_part.value, "..") {
       return Result{ value: destination[..0] }
     }
     if left_part.found {

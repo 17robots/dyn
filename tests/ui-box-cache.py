@@ -10,18 +10,18 @@ DYN = str(Path(os.environ.get('DYN', ROOT/'build/dyn-release')).resolve())
 SOURCE = r'''use "std/ui/box" box
 use "std/mem" mem
 fn check(ok: bool, why: []const u8) { if !ok { #panic(why) } }
-fn measure(data: rawptr, text: []const u8) f32 { _ = data
+fn measure(data: *u8, text: []const u8) f32 { _ = data
   return #cast(f32, #len(text)) * 8.0 }
 fn start(state: *box.State, frame: *mem.Arena) {
   mem.arena_reset(frame)
   box.begin(state, frame, box.Input{}, 100.0, 100.0, 0.02)
 }
 fn main() {
-  persistent := mem.arena_create(0)
-  frame := mem.arena_create(0)
+  persistent := mem.arena_alloc(0)
+  frame := mem.arena_alloc(0)
   defer { mem.arena_release(frame)
     mem.arena_release(persistent) }
-  state := box.create(persistent, measure, nil, 16.0)
+  state := box.push_state(persistent, measure, nil, 16.0)
   key := box.key_bytes(0, "explicit###identity")
   check(key != box.key(0, "explicit###identity"), "explicit identity does not parse label suffix")
   encoded: [8]u8 = [35,35,35,0,0,0,0,0]

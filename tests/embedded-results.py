@@ -12,7 +12,7 @@ use "std/embedded/timer" timer
 use "std/io" errors
 fn check(ok: bool) { if !ok { #panic("embedded helper") } }
 fn main() {
-  registers: [8]u32 = []
+  registers: [8]u32
   address := #cast(usize, &registers[0])
   device := uart.Uart{ data: address, status: address + 4, ready_mask: 4, ready_when_set: true, width: uart.RegisterWidth.Word }
   check(!uart.ready(&device))
@@ -25,10 +25,10 @@ fn main() {
   uart.write_byte(&device, 88)
   check(registers[0] == 88)
   tick := timer.SysTick{ base: address }
-  check(timer.start(&tick, 0, true, true).failure.kind != errors.Kind.Ok && registers[0] == 88)
-  check(timer.start(&tick, 1, true, true).failure.kind != errors.Kind.Ok && registers[0] == 88)
-  check(timer.start(&tick, 2, false, false).failure.kind == errors.Kind.Ok && registers[1] == 1)
-  check(timer.start(&tick, 100, true, true).failure.kind == errors.Kind.Ok)
+  check(errors.failed(timer.start(&tick, 0, true, true).failure) && registers[0] == 88)
+  check(errors.failed(timer.start(&tick, 1, true, true).failure) && registers[0] == 88)
+  check(!errors.failed(timer.start(&tick, 2, false, false).failure) && registers[1] == 1)
+  check(!errors.failed(timer.start(&tick, 100, true, true).failure))
   check(registers[0] == 7 && registers[1] == 99 && registers[2] == 0)
   registers[2] = 0xff123456
   check(timer.current(&tick) == 0x123456)
@@ -36,7 +36,7 @@ fn main() {
   check(timer.elapsed(&tick))
   timer.stop(&tick)
   check(registers[0] == 0)
-  check(timer.start(&tick, 16777216, false, false).failure.kind == errors.Kind.Ok && registers[1] == 0xffffff)
+  check(!errors.failed(timer.start(&tick, 16777216, false, false).failure) && registers[1] == 0xffffff)
   check(timer.start(&tick, 16777217, false, false).failure.kind == errors.Kind.InvalidInput)
   clock := timer.MachineTimer{ time: address, compare: address + 8 }
   registers[0] = 0x89abcdef

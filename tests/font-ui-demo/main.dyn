@@ -13,25 +13,25 @@ use "std/process" process
 use "std/text/layout" layout
 use "std/ui/text" ui_text
 fn main() {
-  frame := mem.arena_create(0)
-  output := mem.arena_create(0)
+  frame := mem.arena_alloc(0)
+  output := mem.arena_alloc(0)
   defer {
     mem.arena_release(output)
     mem.arena_release(frame)
   }
   arguments := process.arguments(output)
-  if arguments.failure.kind != io.Kind.Ok || #len(arguments.value) != 3 {
+  if io.failed(arguments.failure) || #len(arguments.value) != 3 {
     #panic("usage: font-ui-demo FONT.ttf OUTPUT.png")
   }
   bytes := fs.read_all(output, arguments.value[1], 64000000)
-  if bytes.failure.kind != io.Kind.Ok {
+  if io.failed(bytes.failure) {
     #panic("cannot read font")
   }
   opened := font.open(bytes.value)
-  if opened.failure.kind != parse.Kind.Ok {
+  if parse.failed(opened.failure) {
     #panic("unsupported or malformed TrueType font")
   }
-  codepoints: [100]u32 = []
+  codepoints: [100]u32
   for i in 0..95 {
     codepoints[i] = 32 + #cast(u32, i)
   }
@@ -41,7 +41,7 @@ fn main() {
   codepoints[98] = 241
   codepoints[99] = 252
   cached := font.atlas(output, &opened.value, codepoints[..], 24, 512, 256)
-  if cached.failure.kind != parse.Kind.Ok {
+  if parse.failed(cached.failure) {
     #panic("cannot cache font")
   }
   context := ui.Context{ style: ui.default_style }
@@ -63,14 +63,14 @@ fn main() {
   }
   _ = ui.checkbox(&context, 3, ui.Rect{ x: 32, y: 152, width: 180, height: 24 }, "GRID", &grid, true)
   _ = ui.slider(&context, 4, ui.Rect{ x: 240, y: 160, width: 192, height: 16 }, &count, 0, 10, true)
-  label_bytes: [32]u8 = []
+  label_bytes: [32]u8
   label := fmt.buffer(label_bytes[..])
-  _ = fmt.write(&label, "COUNT ")
-  _ = fmt.write_i64(&label, #cast(i64, count))
+  fmt.write(&label, "COUNT ")
+  fmt.write_i64(&label, #cast(i64, count))
   ui.label(&context, ui.Rect{ x: 32, y: 64, width: 416, height: 24 }, fmt.bytes(&label), context.style.accent)
   metrics := font_ui.LayoutAdapter{ atlas: &cached.value, face: &opened.value, pixels_per_em: 24 }
   positioned := layout.build(frame, "AV Café Å ñ ü Ç", font_ui.layout_font(&metrics), layout.Options{ width: 416 })
-  if positioned.failure.kind != parse.Kind.Ok {
+  if parse.failed(positioned.failure) {
     #panic("font text layout")
   }
   ui_text.label(&context, ui.Rect{ x: 32, y: 188, width: 416, height: 28 }, &positioned.value, context.style.foreground)
@@ -78,11 +78,11 @@ fn main() {
   pixels := mem.push_array(u8, output, #cast(usize, 480 * 240 * 4))
   surface := software.Surface{ pixels: pixels, width: 480, height: 240, stride: 480 * 4 }
   rendered := software.render(&surface, ui.first(&context), font_ui.atlas_renderer(&cached.value))
-  if rendered.failure.kind != io.Kind.Ok || count != 3 {
+  if io.failed(rendered.failure) || count != 3 {
     #panic("UI demo render")
   }
   encoded := png.encode(output, pixels, 480, 240, 4)
-  if encoded.failure.kind != parse.Kind.Ok || fs.write_all(arguments.value[2], encoded.value).failure.kind != io.Kind.Ok {
+  if parse.failed(encoded.failure) || io.failed(fs.write_all(arguments.value[2], encoded.value).failure) {
     #panic("UI demo output")
   }
 }

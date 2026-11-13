@@ -109,10 +109,10 @@ fn main() {}
     check(project(root, 'load-missing', '''const A: []const u8 = #load("missing.bin")
 fn main() {}
 '''), '#load cannot read file')
-    run(project(root, 'use-list', '''use "std/mem" memory, "std/strings",
+    run(project(root, 'use-list', '''use "std/mem" memory, "std/bytes",
   "std/math" m
 fn main() {
-  if memory.KiB != 1024 || !strings.equal("a", "a") || m.min(2, 3) != 2 { #panic("imports") }
+  if memory.KiB != 1024 || !bytes.equal("a", "a") || m.min(2, 3) != 2 { #panic("imports") }
 }
 '''))
     check(project(root, 'use-list-duplicate', '''use "std/mem" a, "std/strings" a

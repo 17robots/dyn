@@ -30,7 +30,7 @@ fn block(state: *State, input: []const u8, high: u64) {
   state.h[2] += (load(input, 6) >> 4) & Mask
   state.h[3] += (load(input, 9) >> 6) & Mask
   state.h[4] += (load(input, 12) >> 8) | high
-  d: [5]u64 = []
+  d: [5]u64
   for i in 0..5 {
     for j in 0..5 {
       // i/j are public, so this branch and these indexes reveal no key bits.
@@ -99,7 +99,7 @@ pub fn finish(state: *State) Tag {
   h[4] &= Mask
   h[1] += h[0] >> 26
   h[0] &= Mask
-  g: [5]u64 = []
+  g: [5]u64
   carry: u64 = 5
   for i in 0..4 {
     g[i] = h[i] + carry

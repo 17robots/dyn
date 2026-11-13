@@ -6,7 +6,7 @@ pub storage: [32]u8
 
 fn main() {
   if counter != 7 || storage[0] != 0 { #panic("startup memory") }
-  arena := mem.arena_create(64 * mem.KiB)
+  arena := mem.arena_alloc(64 * mem.KiB)
   defer mem.arena_release(arena)
   value := mem.push(u32, arena)
   value.* = 42

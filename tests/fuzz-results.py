@@ -42,7 +42,7 @@ fn check(ok: bool) {
 }
 
 fn main() {
-  work: [512]u8 = []
+  work: [512]u8
   corpus: [2][]const u8 = ["hello FUZ", "abc"]
   found := testing.fuzz(testing.FuzzOptions{ seed: 7, cases: 200000, shrink_checks: 10000 }, corpus[..], work[..], no_fuzz, nil)
   check(!found.passed && bytes.equal(found.example, "FUZZ") && found.corpus_entry == 2)

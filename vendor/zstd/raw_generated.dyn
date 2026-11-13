@@ -1,3 +1,4 @@
+use "std/io"
 extern fn zstd_compress_bound "ZSTD_compressBound"(source_size: usize) usize
 extern fn zstd_compress "ZSTD_compress"(destination: rawptr, capacity: usize, source: rawptr, source_size: usize, level: i32) usize
 extern fn zstd_decompress "ZSTD_decompress"(destination: rawptr, capacity: usize, source: rawptr, compressed_size: usize) usize

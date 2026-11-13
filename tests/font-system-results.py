@@ -48,7 +48,7 @@ use "std/mem" mem
 use "std/bytes" bytes
 fn check(ok: bool, label: []const u8) { if !ok { #panic(label) } }
 fn main() {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   defer { mem.arena_release(arena) }
   regular := system.describe(arena, "regular.ttf", regular_data[..])
   check(bytes.equal(regular.family, "Test 😀") && bytes.equal(regular.style, "Regular"), "check 39")
@@ -77,7 +77,7 @@ SCAN_SOURCE = r'''use "std/font/system" system
 use "std/mem" mem
 fn check(ok: bool) { if !ok { #panic("font scan contract") } }
 fn main() {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   defer { mem.arena_release(arena) }
   directories: [2][]const u8 = ["MISSING_DIRECTORY", "FONT_DIRECTORY"]
   check(#len(system.scan_directories(arena, directories[..], 0)) == 0)

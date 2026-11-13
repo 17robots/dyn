@@ -22,8 +22,7 @@ use "std/io" errors
 '''
 SOURCE = IMPORTS + r'''
 struct Shared { gate: sync.AtomicU32, arrived: sync.AtomicU32, value: u32 }
-fn worker(context: rawptr) isize {
-  shared := #cast(*Shared, context)
+fn worker(shared: *Shared) isize {
   sync.store_u32(&shared.arrived, 1)
   for sync.load_u32(&shared.gate) == 0 { _ = thread.yield_now() }
   shared.value = 42
@@ -36,36 +35,37 @@ fn invalid(result: thread.SpawnResult, arena: *mem.Arena, mark: usize) {
 }
 fn joined(value: *thread.Thread) {
   result := thread.join(value)
-  if result.failure.kind != errors.Kind.Ok || result.failure.native != 0 || result.value != 0 || thread.id(value) != 0 { #panic("join result") }
+  if errors.failed(result.failure) || result.failure.native != 0 || result.value != 0 || thread.id(value) != 0 { #panic("join result") }
 }
 fn main() {
   zero := thread.SpawnResult{}
-  if zero.value != nil || zero.failure.kind != errors.Kind.Ok || zero.failure.native != 0 { #panic("zero spawn result") }
+  if zero.value != nil || errors.failed(zero.failure) || zero.failure.native != 0 { #panic("zero spawn result") }
   result := thread.Result{}
-  if result.value != 0 || result.failure.kind != errors.Kind.Ok || result.failure.native != 0 { #panic("zero result") }
+  if result.value != 0 || errors.failed(result.failure) || result.failure.native != 0 { #panic("zero result") }
   empty := thread.Thread{}
   if thread.id(&empty) != 0 { #panic("zero id") }
   joined(&empty)
   joined(&empty)
-  storage: [4096]u8 = []
+  storage: [4096]u8
   arena := mem.arena_from_buffer(storage[..])
   _ = mem.push_bytes_uninit(arena, 7)
   mark := mem.arena_mark(arena)
-  stack: [131072]u8 = []
+  stack: [131072]u8
   for size in [0, 1, 255] {
     invalid(thread.spawn_with_size(arena, #cast(usize, size), worker, nil), arena, mark)
     invalid(thread.spawn(arena, stack[..size], worker, nil), arena, mark)
   }
-  invalid(thread.spawn_with_size(arena, 131072, nil, nil), arena, mark)
-  invalid(thread.spawn(arena, stack[..], nil, nil), arena, mark)
+  no_entry: fn(*Shared) isize = nil
+  invalid(thread.spawn_with_size(arena, 131072, no_entry, nil), arena, mark)
+  invalid(thread.spawn(arena, stack[..], no_entry, nil), arena, mark)
   first := Shared{}
   second := Shared{}
-  owned := thread.spawn_with_size(arena, 131072, worker, #cast(rawptr, &first))
-  if owned.failure.kind != errors.Kind.Ok || owned.value == nil || owned.failure.kind != errors.Kind.Ok || owned.failure.native != 0 { #panic("owned spawn") }
+  owned := thread.spawn_with_size(arena, 131072, worker, &first)
+  if errors.failed(owned.failure) || owned.value == nil || errors.failed(owned.failure) || owned.failure.native != 0 { #panic("owned spawn") }
   stable := owned.value
   owned_mark := mem.arena_mark(arena)
-  borrowed := thread.spawn(arena, stack[..], worker, #cast(rawptr, &second))
-  if borrowed.failure.kind != errors.Kind.Ok || borrowed.value == nil || borrowed.failure.kind != errors.Kind.Ok || borrowed.failure.native != 0 { #panic("borrowed spawn") }
+  borrowed := thread.spawn(arena, stack[..], worker, &second)
+  if errors.failed(borrowed.failure) || borrowed.value == nil || errors.failed(borrowed.failure) || borrowed.failure.native != 0 { #panic("borrowed spawn") }
   if borrowed.value == stable || owned.value != stable || owned_mark <= mark { #panic("stable distinct nodes") }
   for sync.load_u32(&first.arrived) == 0 || sync.load_u32(&second.arrived) == 0 { _ = thread.yield_now() }
   if thread.id(stable) == 0 || thread.id(borrowed.value) == 0 || thread.id(stable) == thread.id(borrowed.value) { #panic("two active ids") }
@@ -95,13 +95,13 @@ fn main() {
 }
 '''
 EXHAUSTION = IMPORTS + r'''
-fn forbidden(context: rawptr) isize { if context == nil { #panic("WORKER_STARTED") }
+fn forbidden(context: *u8) isize { if context == nil { #panic("WORKER_STARTED") }
 return 0 }
 fn main() {
-  backing: [mem.ArenaBufferOverhead]u8 = []
+  backing: [mem.ArenaBufferOverhead]u8
   skip := (16-(#cast(usize,&backing[0]) & 15)) & 15
   arena := mem.arena_from_buffer(backing[skip..skip+mem.ArenaHeader])
-  stack: [131072]u8 = []
+  stack: [131072]u8
   SPAWN
   #panic("SPAWN_RETURNED")
 }

@@ -25,8 +25,8 @@ fn checksum(bytes: []const u8) u64 {
 
 fn main() {
   program := process.start()
-  buffer: [256]u8 = []
-  scratch: [256]u8 = []
+  buffer: [256]u8
+  scratch: [256]u8
   for i in 0..#len(buffer) {
     buffer[i] = #cast(u8, i * 7 + 3)
   }
@@ -43,7 +43,7 @@ fn main() {
   // Overlap: the destination above the source repeats the pattern, below it
   // shifts, as a forward byte loop does.
   for distance in 1..12 {
-    overlap: [64]u8 = []
+    overlap: [64]u8
     for i in 0..#len(overlap) {
       overlap[i] = #cast(u8, i)
     }
@@ -52,8 +52,8 @@ fn main() {
     copy_bytes(overlap[..], overlap[distance..], 40)
     total = total * 7 + checksum(overlap[..])
   }
-  words: [40]u32 = []
-  copies: [40]u32 = []
+  words: [40]u32
+  copies: [40]u32
   for i in 0..#len(words) {
     words[i] = #cast(u32, i * 2654435761)
   }
@@ -64,7 +64,7 @@ fn main() {
   io.println("{}", total)
   // A destination shorter than the count fails at its first missing index.
   if #len(program.args) > 1 {
-    short: [10]u8 = []
+    short: [10]u8
     copy_bytes(short[..], buffer[..], 20)
   }
 }

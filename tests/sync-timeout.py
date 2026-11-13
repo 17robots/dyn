@@ -20,7 +20,7 @@ struct Shared { mutex: sync.Mutex, condition: sync.Condition, ready: bool }
 fn check(value: bool) { if !value { #panic("condition timeout") } }
 fn worker(context: rawptr) rawptr {
   shared := #cast(*Shared,context)
-  check(time.sleep(10*time.Millisecond).failure.kind == errors.Kind.Ok)
+  check(!errors.failed(time.sleep(10*time.Millisecond).failure))
   sync.lock(&shared.mutex)
   shared.ready = true
   sync.condition_signal(&shared.condition)
@@ -31,23 +31,23 @@ fn main() {
   shared := Shared{}
   sync.lock(&shared.mutex)
   invalid := sync.condition_wait_timeout(&shared.condition,&shared.mutex,-1)
-  check(invalid.failure.kind != errors.Kind.Ok && invalid.failure.kind==errors.Kind.InvalidInput)
+  check(errors.failed(invalid.failure) && invalid.failure.kind==errors.Kind.InvalidInput)
   check(!sync.try_lock(&shared.mutex))
   zero := sync.condition_wait_timeout(&shared.condition,&shared.mutex,0)
-  check(zero.failure.kind == errors.Kind.Ok && zero.status==sync.ConditionWaitStatus.TimedOut)
+  check(!errors.failed(zero.failure) && zero.status==sync.ConditionWaitStatus.TimedOut)
   check(!sync.try_lock(&shared.mutex))
   before := time.monotonic_now()
-  check(before.failure.kind == errors.Kind.Ok)
+  check(!errors.failed(before.failure))
   timeout := sync.condition_wait_timeout(&shared.condition,&shared.mutex,15*time.Millisecond)
   after := time.monotonic_now()
   elapsed := time.elapsed(before.value,after.value)
-  check(timeout.failure.kind == errors.Kind.Ok && timeout.status==sync.ConditionWaitStatus.TimedOut)
-  check(elapsed.failure.kind == errors.Kind.Ok && elapsed.value>=15*time.Millisecond)
+  check(!errors.failed(timeout.failure) && timeout.status==sync.ConditionWaitStatus.TimedOut)
+  check(!errors.failed(elapsed.failure) && elapsed.value>=15*time.Millisecond)
   check(!sync.try_lock(&shared.mutex))
   check(start(worker,#cast(rawptr,&shared))==0)
   for !shared.ready {
     result := sync.condition_wait_timeout(&shared.condition,&shared.mutex,time.Second)
-    check(result.failure.kind == errors.Kind.Ok && result.status==sync.ConditionWaitStatus.Signaled)
+    check(!errors.failed(result.failure) && result.status==sync.ConditionWaitStatus.Signaled)
   }
   check(!sync.try_lock(&shared.mutex))
   sync.unlock(&shared.mutex)
@@ -58,8 +58,8 @@ fn main() {
   interrupted := sync.condition_wait_timeout(&shared.condition,&shared.mutex,80*time.Millisecond)
   after = time.monotonic_now()
   elapsed = time.elapsed(before.value,after.value)
-  check(interrupted.failure.kind == errors.Kind.Ok && interrupted.status==sync.ConditionWaitStatus.TimedOut)
-  check(elapsed.failure.kind == errors.Kind.Ok && elapsed.value>=80*time.Millisecond && elapsed.value<400*time.Millisecond)
+  check(!errors.failed(interrupted.failure) && interrupted.status==sync.ConditionWaitStatus.TimedOut)
+  check(!errors.failed(elapsed.failure) && elapsed.value>=80*time.Millisecond && elapsed.value<400*time.Millisecond)
   check(!sync.try_lock(&shared.mutex))
   sync.unlock(&shared.mutex)
   check(finish_interrupts()==0)
@@ -118,7 +118,7 @@ fn main() {
  condition := sync.condition()
  sync.lock(&mutex)
  result := sync.condition_wait_timeout(&condition,&mutex,1000000000)
- if result.failure.kind == errors.Kind.Ok || result.failure.native != -22 || result.failure.kind != errors.Kind.InvalidInput { #panic(\"native error\") }
+ if !errors.failed(result.failure) || result.failure.native != -22 || result.failure.kind != errors.Kind.InvalidInput { #panic(\"native error\") }
  if sync.try_lock(&mutex) { #panic(\"mutex not reacquired\") }
  sync.unlock(&mutex)
 }

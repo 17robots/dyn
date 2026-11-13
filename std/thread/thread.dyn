@@ -26,7 +26,7 @@ extern fn spawn_raw "dyn_thread_spawn"(
 // Failed creation rewinds the arena to its entry mark; no worker starts.
 // Thread safety: caller synchronizes arena access and shared context; one caller
 // controls each returned Thread's lifecycle.
-pub fn spawn(arena: *mem.Arena, stack: []u8, entry: fn(rawptr) isize, context: rawptr) SpawnResult {
+fn spawn_untyped(arena: *mem.Arena, stack: []u8, entry: fn(rawptr) isize, context: rawptr) SpawnResult {
   if #len(stack) < 256 || entry == nil {
     return SpawnResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
@@ -42,7 +42,7 @@ pub fn spawn(arena: *mem.Arena, stack: []u8, entry: fn(rawptr) isize, context: r
 
 // Same stable caller-arena node and context lifetime as spawn. Owns a mapped
 // stack until successful join; failed creation releases it and rewinds the node.
-pub fn spawn_with_size(arena: *mem.Arena, size: usize, entry: fn(rawptr) isize, context: rawptr) SpawnResult {
+fn spawn_with_size_untyped(arena: *mem.Arena, size: usize, entry: fn(rawptr) isize, context: rawptr) SpawnResult {
   if size < 256 || entry == nil {
     return SpawnResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
@@ -106,7 +106,7 @@ pub fn yield_now() Result {
 // CPUs this process may run on (its affinity mask), at least 1. Use it to size
 // worker pools; it can change while the process runs.
 pub fn cpu_count() usize {
-  mask: [128]u8 = []
+  mask: [128]u8
   written := #syscall(sys.SchedGetaffinity, 0, #len(mask), &mask[0])
   if written <= 0 {
     return 1

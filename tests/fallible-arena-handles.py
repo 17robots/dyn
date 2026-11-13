@@ -9,14 +9,14 @@ DYN = str(Path(os.environ.get('DYN', ROOT/'build/dyn-release')).resolve())
 SOURCE = '''use "std/mem"
 fn check(ok: bool) { if !ok { #panic("fallible arena handles") } }
 fn main() {
-  bad := mem.arena_try_create_bounded(64, 64)
+  bad := mem.arena_try_alloc_bounded(64, 64)
   check(!bad.ok && bad.arena == nil && bad.error == mem.ErrorKind.Capacity)
   mem.arena_release(bad.arena)
-  created := mem.arena_try_create(0)
+  created := mem.arena_try_alloc(0)
   check(created.ok && created.arena != nil)
   check(mem.arena_used(created.arena) == 0)
   mem.arena_release(created.arena)
-  bounded := mem.arena_try_create_bounded(mem.ArenaHeader + 64, mem.ArenaHeader + 64)
+  bounded := mem.arena_try_alloc_bounded(mem.ArenaHeader + 64, mem.ArenaHeader + 64)
   check(bounded.ok)
   arena := bounded.arena
   bytes := mem.arena_try_push_uninit(arena, 64, 1)

@@ -35,7 +35,7 @@ fn main() {
     'failed-connection': '''use "std/io" io
 use "std/net"
 fn check_failed(outcome: *net.ConnectionResult) {
-  if outcome.failure.kind == io.Kind.Ok { #panic("connection unexpectedly succeeded") }
+  if !io.failed(outcome.failure) { #panic("connection unexpectedly succeeded") }
   net.connection_close(&outcome.value)
   if #syscall(72, 0, 1, 0) < 0 { #panic("failed connection closed stdin") }
   if outcome.value.active { #panic("failed connection active") }
@@ -61,7 +61,7 @@ fn main() {
   address := net.ipv4(127, 0, 0, 1, 1)
   address.bytes[0] = 255
   outcome := net.tcp_listen_ipv4(&address, 1)
-  if outcome.failure.kind == errors.Kind.Ok { #panic("listener unexpectedly succeeded") }
+  if !errors.failed(outcome.failure) { #panic("listener unexpectedly succeeded") }
   net.listener_close(&outcome.value)
   if #syscall(72, 0, 1, 0) < 0 { #panic("failed listener closed stdin") }
   if outcome.value.active { #panic("failed listener active") }
@@ -71,32 +71,32 @@ fn main() {
 use "std/net"
 fn main() {
   opened := net.socket(net.AddressFamilyIpv4, net.SocketDatagram, 0)
-  if opened.failure.kind != io.Kind.Ok { #panic("socket") }
+  if io.failed(opened.failure) { #panic("socket") }
   descriptor := opened.value
   defer { net.close(descriptor) }
   address := net.ipv4(127, 0, 0, 1, 0)
-  if net.bind_ipv4(descriptor, &address).failure.kind != io.Kind.Ok { #panic("bind") }
+  if io.failed(net.bind_ipv4(descriptor, &address).failure) { #panic("bind") }
   bound := net.Address{}
-  if net.local_address(descriptor, &bound).failure.kind != io.Kind.Ok { #panic("local address") }
-  if net.nonblocking(descriptor, true).failure.kind != io.Kind.Ok { #panic("nonblocking") }
+  if io.failed(net.local_address(descriptor, &bound).failure) { #panic("local address") }
+  if io.failed(net.nonblocking(descriptor, true).failure) { #panic("nonblocking") }
   sent := net.send_to(descriptor, "", 0, bound.bytes[..bound.length])
-  if sent.failure.kind != io.Kind.Ok || sent.value != 0 { #panic("send empty") }
+  if io.failed(sent.failure) || sent.value != 0 { #panic("send empty") }
   ready := net.wait(descriptor, net.PollReadable, 1000)
-  if ready.failure.kind != io.Kind.Ok || ready.value == 0 { #panic("empty datagram dropped") }
+  if io.failed(ready.failure) || ready.value == 0 { #panic("empty datagram dropped") }
   // An empty datagram still validates the destination and socket.
-  if net.send_to(-1, "", 0, bound.bytes[..bound.length]).failure.kind == io.Kind.Ok { #panic("invalid socket accepted") }
-  if net.send_to(descriptor, "", 0, "").failure.kind == io.Kind.Ok { #panic("invalid address accepted") }
-  buffer: [1]u8 = []
-  peer: [128]u8 = []
+  if !io.failed(net.send_to(-1, "", 0, bound.bytes[..bound.length]).failure) { #panic("invalid socket accepted") }
+  if !io.failed(net.send_to(descriptor, "", 0, "").failure) { #panic("invalid address accepted") }
+  buffer: [1]u8
+  peer: [128]u8
   length: u32 = 0
   received := net.receive_from(descriptor, buffer[..], 0, peer[..], &length)
-  if received.failure.kind != io.Kind.Ok || received.value != 0 || length != 16 { #panic("receive empty") }
+  if io.failed(received.failure) || received.value != 0 || length != 16 { #panic("receive empty") }
   sent = net.send_to(descriptor, "x", 0, bound.bytes[..bound.length])
-  if sent.failure.kind != io.Kind.Ok || sent.value != 1 { #panic("send byte") }
+  if io.failed(sent.failure) || sent.value != 1 { #panic("send byte") }
   ready = net.wait(descriptor, net.PollReadable, 1000)
-  if ready.failure.kind != io.Kind.Ok || ready.value == 0 { #panic("byte datagram dropped") }
+  if io.failed(ready.failure) || ready.value == 0 { #panic("byte datagram dropped") }
   received = net.receive_from(descriptor, buffer[..], 0, peer[..], &length)
-  if received.failure.kind != io.Kind.Ok || received.value != 1 || buffer[0] != 'x' { #panic("receive byte") }
+  if io.failed(received.failure) || received.value != 1 || buffer[0] != 'x' { #panic("receive byte") }
 }
 ''',
 }
@@ -112,7 +112,7 @@ fn main() {
   connection := net.connection_from_descriptor(SOCKET_FD)
   address := net.ipv4(127, 0, 0, 1, 1)
   outcome := EXPRESSION
-  if outcome.failure.kind == io.Kind.Ok || outcome.failure.native != -32 { #panic("expected EPIPE") }
+  if !io.failed(outcome.failure) || outcome.failure.native != -32 { #panic("expected EPIPE") }
 }
 '''.replace('EXPRESSION', expression)
 
@@ -157,18 +157,18 @@ fn main() {
   descriptor := start(READY)
   if descriptor < 0 { #panic("signal helper") }
   queue := net.event_queue()
-  if queue.failure.kind != io.Kind.Ok { #panic("queue") }
+  if io.failed(queue.failure) { #panic("queue") }
   defer { net.close(queue.value) }
-  if net.event_add(queue.value, #cast(isize, descriptor), net.EventReadable, 42).failure.kind != io.Kind.Ok { #panic("event add") }
+  if io.failed(net.event_add(queue.value, #cast(isize, descriptor), net.EventReadable, 42).failure) { #panic("event add") }
   items: [1]net.PollDescriptor = [net.PollDescriptor{ descriptor: descriptor, events: net.PollReadable }]
-  events: [1]net.Event = []
+  events: [1]net.Event
   before := time.monotonic_now()
   outcome := OPERATION
   after := time.monotonic_now()
-  if before.failure.kind != io.Kind.Ok || after.failure.kind != io.Kind.Ok { #panic("clock read") }
+  if io.failed(before.failure) || io.failed(after.failure) { #panic("clock read") }
   duration := time.elapsed(before.value, after.value)
   signals := stop()
-  if outcome.failure.kind != io.Kind.Ok || duration.failure.kind != io.Kind.Ok { #panic("wait failed") }
+  if io.failed(outcome.failure) || io.failed(duration.failure) { #panic("wait failed") }
   if TIMEOUT == 100 {
     if outcome.value != 0 || duration.value < 80000000 || duration.value > 750000000 || signals < 2 {
       #panic("interrupted wait restarted its deadline")

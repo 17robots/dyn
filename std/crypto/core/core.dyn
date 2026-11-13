@@ -29,7 +29,7 @@ const K: [64]u64 = [
 ]
 
 fn block(state: []u32, input: []const u8) {
-  words: [64]u32 = []
+  words: [64]u32
   i: usize = 0
   for i < 16 {
     at := i * 4
@@ -156,7 +156,7 @@ pub fn sha256_finish(context: *Sha256, destination: []u8) []u8 {
   if #len(destination) < 32 {
     return destination[..0]
   }
-  tail: [128]u8 = []
+  tail: [128]u8
   remaining := context.tail_length
   i: usize = 0
   for i < remaining {
@@ -203,8 +203,8 @@ pub fn hmac_sha256(destination: []u8, key: []const u8, message: []const u8) []u8
   if #len(destination) < 32 {
     return destination[..0]
   }
-  key_block: [64]u8 = []
-  key_digest: [32]u8 = []
+  key_block: [64]u8
+  key_digest: [32]u8
   key_at: usize = 0
   if #len(key) > 64 {
     hashed := sha256(key_digest[..], key)
@@ -221,8 +221,8 @@ pub fn hmac_sha256(destination: []u8, key: []const u8, message: []const u8) []u8
       key_at += 1
     }
   }
-  inner_block: [64]u8 = []
-  outer_block: [64]u8 = []
+  inner_block: [64]u8
+  outer_block: [64]u8
   for pad_at in 0..64 {
     inner_block[pad_at] = key_block[pad_at] ^ 54
     outer_block[pad_at] = key_block[pad_at] ^ 92
@@ -232,7 +232,7 @@ pub fn hmac_sha256(destination: []u8, key: []const u8, message: []const u8) []u8
   if !sha256_update(&inner, inner_block[..]) || !sha256_update(&inner, message) {
     return destination[..0]
   }
-  inner_digest: [32]u8 = []
+  inner_digest: [32]u8
   _ = sha256_finish(&inner, inner_digest[..])
   outer := Sha256{}
   sha256_init(&outer)

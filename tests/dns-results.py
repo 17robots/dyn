@@ -62,7 +62,7 @@ fn require(ok: bool) { if !ok { #panic("DNS result contract") } }
 for label, family, data, count, offset in cases:
     source += f'''fn case_{label}() {{
   data: [{len(data)}]u8 = {literal(data)}
-  backing: [1024 + mem.ArenaBufferOverhead]u8 = []
+  backing: [1024 + mem.ArenaBufferOverhead]u8
   arena := mem.arena_from_buffer(backing[..])
   arena.poison_on_rewind = true
   prefix := mem.push_bytes_uninit(arena, 3)
@@ -71,7 +71,7 @@ for label, family, data, count, offset in cases:
   result := dns.parse_ipv{family}(arena, data[..], 7, "example.test")
 '''
     if count is not None:
-        source += f'  require(result.failure.kind == errors.Kind.Ok && #len(result.value) == {count})\n'
+        source += f'  require(!errors.failed(result.failure) && #len(result.value) == {count})\n'
         if count:
             if family == 4:
                 source += '  require(result.value[0].a == 1 && result.value[0].d == 4)\n'
@@ -83,7 +83,7 @@ for label, family, data, count, offset in cases:
         else:
             source += '  require(mem.arena_mark(arena) == mark)\n'
     else:
-        source += '  require(result.failure.kind != io.Kind.Ok && #len(result.value) == 0 && mem.arena_mark(arena) == mark)\n'
+        source += '  require(io.failed(result.failure) && #len(result.value) == 0 && mem.arena_mark(arena) == mark)\n'
         if offset is not None:
             source += f'  require(result.offset == {offset})\n'
         if label == 'nxdomain':
@@ -96,33 +96,33 @@ for label, family, data, count, offset in cases:
     source += '}\n'
 data = packet(1, [a, b])
 source += f'''fn aliases() {{
-  backing: [1024 + mem.ArenaBufferOverhead]u8 = []
+  backing: [1024 + mem.ArenaBufferOverhead]u8
   data: [{len(data)}]u8 = {literal(data)}
   arena := mem.arena_from_buffer(backing[..])
   payload := arena.data[mem.ArenaHeader..]
   for i in 0..#len(data) {{ payload[16+i] = data[i] }}
   arena.poison_on_rewind = true
   result := dns.parse_ipv4(arena, payload[16..16+#len(data)], 7, "example.test")
-  require(result.failure.kind != errors.Kind.Ok && #len(result.value) == 0 && mem.arena_mark(arena) == mem.arena_start(arena))
+  require(errors.failed(result.failure) && #len(result.value) == 0 && mem.arena_mark(arena) == mem.arena_start(arena))
   for i in 0..#len(data) {{ require(payload[16+i] == data[i]) }}
   text := "example.test"
   for i in 0..#len(text) {{ payload[i] = text[i] }}
   result = dns.parse_ipv4(arena, data[..], 7, payload[..#len(text)])
-  require(result.failure.kind != errors.Kind.Ok && mem.arena_mark(arena) == mem.arena_start(arena))
+  require(errors.failed(result.failure) && mem.arena_mark(arena) == mem.arena_start(arena))
   query := dns.query_ipv4(arena, payload[..#len(text)], 7)
   require(#len(query) == 0 && mem.arena_mark(arena) == mem.arena_start(arena))
   for i in 0..#len(text) {{ require(payload[i] == text[i]) }}
   server := net.ipv4(127,0,0,1,53)
   rejected4 := dns.resolve_ipv4(arena, payload[..#len(text)], &server, 0)
   rejected6 := dns.resolve_ipv6(arena, payload[..#len(text)], &server, 0)
-  require(rejected4.failure.kind != errors.Kind.Ok && rejected6.failure.kind != errors.Kind.Ok && mem.arena_mark(arena) == mem.arena_start(arena))
+  require(errors.failed(rejected4.failure) && errors.failed(rejected6.failure) && mem.arena_mark(arena) == mem.arena_start(arena))
   invalid4 := dns.resolve_ipv4(arena, "", &server, 0)
   invalid6 := dns.resolve_ipv6(arena, "", &server, 0)
-  require(invalid4.failure.kind != errors.Kind.Ok && invalid6.failure.kind != errors.Kind.Ok && mem.arena_mark(arena) == mem.arena_start(arena))
+  require(errors.failed(invalid4.failure) && errors.failed(invalid6.failure) && mem.arena_mark(arena) == mem.arena_start(arena))
   // Borrowing a live prefix is safe; output is after it.
   _ = mem.push_bytes_uninit(arena, #len(text))
   result = dns.parse_ipv4(arena, data[..], 7, payload[..#len(text)])
-  require(result.failure.kind == errors.Kind.Ok && #len(result.value) == 2)
+  require(!errors.failed(result.failure) && #len(result.value) == 2)
   query4 := dns.query_ipv4(arena, "example.test", 7)
   query6 := dns.query_ipv6(arena, "example.test", 7)
   require(#len(query4) == 30 && #len(query6) == 30)
@@ -139,7 +139,7 @@ use "std/io" io
 use "std/mem" mem
 fn main() {{
   data: [{len(data)}]u8 = {literal(data)}
-  backing: [1 + mem.ArenaBufferOverhead]u8 = []
+  backing: [1 + mem.ArenaBufferOverhead]u8
   arena := mem.arena_from_buffer(backing[..])
   arena = mem.arena_from_buffer(arena.data[..mem.ArenaHeader + 1])
   _ = dns.parse_ipv4(arena, data[..], 7, "example.test")

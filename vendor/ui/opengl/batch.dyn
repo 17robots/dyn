@@ -37,10 +37,10 @@ const batch_fragment: []const u8 = "#version 330 core\nin vec2 uv; in vec4 tint;
 
 pub fn open_batch(batch: *Batch, api: gl.Api) Result {
   if batch.program != 0 {
-    return Result{ kind: io.Kind.InvalidState }
+    return Result{ kind: io.Kind.InvalidState, failure: io.Failure{ kind: io.Kind.System } }
   }
   if !healthy(&api) {
-    return Result{ kind: io.Kind.System }
+    return Result{ kind: io.Kind.System, failure: io.Failure{ kind: io.Kind.System } }
   }
   vertex := shader(&api, gl.VertexShader, batch_vertex)
   fragment := shader(&api, gl.FragmentShader, batch_fragment)
@@ -51,7 +51,7 @@ pub fn open_batch(batch: *Batch, api: gl.Api) Result {
     if fragment != 0 {
       api.delete_shader(fragment)
     }
-    return Result{ kind: io.Kind.System }
+    return Result{ kind: io.Kind.System, failure: io.Failure{ kind: io.Kind.System } }
   }
   batch.api = api
   batch.program = api.create_program()
@@ -64,7 +64,7 @@ pub fn open_batch(batch: *Batch, api: gl.Api) Result {
   api.get_program_iv(batch.program, gl.LinkStatus, &valid)
   if valid == 0 {
     close_batch(batch)
-    return Result{ kind: io.Kind.System }
+    return Result{ kind: io.Kind.System, failure: io.Failure{ kind: io.Kind.System } }
   }
   viewport_name := "viewport\x00"
   batch.viewport = api.get_uniform_location(batch.program, &viewport_name[0])
@@ -88,10 +88,10 @@ pub fn open_batch(batch: *Batch, api: gl.Api) Result {
   api.tex_image_2d(gl.Texture2d, 0, #cast(i32, gl.R8), atlas_size, atlas_size, 0, gl.Red, gl.UnsignedByte, nil)
   if batch.vao == 0 || batch.buffer == 0 || batch.atlas == 0 || !healthy(&api) {
     close_batch(batch)
-    return Result{ kind: io.Kind.System }
+    return Result{ kind: io.Kind.System, failure: io.Failure{ kind: io.Kind.System } }
   }
   reset_atlas(batch)
-  return Result{ ok: true }
+  return Result{}
 }
 
 pub fn close_batch(batch: *Batch) {
@@ -147,7 +147,7 @@ fn flush(batch: *Batch, stream: *Stream) {
   stream.count = 0
 }
 
-struct Cached { entry: *Entry, ok: bool, full: bool }
+struct Cached { entry: *Entry, full: bool, failure: io.Failure }
 
 // The atlas entry for codepoint, rasterizing and uploading it on a miss.
 fn cached(batch: *Batch, font: software.Font, codepoint: u32) Cached {
@@ -157,14 +157,14 @@ fn cached(batch: *Batch, font: software.Font, codepoint: u32) Cached {
     if !entry.used {
       bitmap := font.glyph(font.data, codepoint)
       if bitmap.width < 0 || bitmap.height < 0 || bitmap.advance < 0 {
-        return Cached{}
+        return Cached{ failure: io.Failure{ kind: io.Kind.System } }
       }
       if bitmap.width > 0 && (bitmap.stride < #cast(usize, bitmap.width) || #cast(usize, bitmap.width) > #len(bitmap.pixels) ||
           bitmap.height > 0 && #cast(usize, bitmap.height - 1) > (#len(bitmap.pixels) - #cast(usize, bitmap.width)) / bitmap.stride) {
-        return Cached{}
+        return Cached{ failure: io.Failure{ kind: io.Kind.System } }
       }
       if bitmap.width >= atlas_size || bitmap.height >= atlas_size {
-        return Cached{}
+        return Cached{ failure: io.Failure{ kind: io.Kind.System } }
       }
       if batch.shelf_x + bitmap.width + 1 > atlas_size {
         batch.shelf_x = 1
@@ -172,7 +172,7 @@ fn cached(batch: *Batch, font: software.Font, codepoint: u32) Cached {
         batch.shelf_height = 1
       }
       if batch.shelf_y + bitmap.height + 1 > atlas_size {
-        return Cached{ full: true }
+        return Cached{ full: true, failure: io.Failure{ kind: io.Kind.System } }
       }
       entry.* = Entry{ codepoint: codepoint, used: true, x: batch.shelf_x, y: batch.shelf_y, width: bitmap.width, height: bitmap.height,
         x_offset: bitmap.x_offset, y_offset: bitmap.y_offset, advance: bitmap.advance }
@@ -185,13 +185,13 @@ fn cached(batch: *Batch, font: software.Font, codepoint: u32) Cached {
       if bitmap.height > batch.shelf_height {
         batch.shelf_height = bitmap.height
       }
-      return Cached{ entry: entry, ok: true }
+      return Cached{ entry: entry }
     }
     if entry.codepoint == codepoint {
-      return Cached{ entry: entry, ok: true }
+      return Cached{ entry: entry }
     }
   }
-  return Cached{ full: true }
+  return Cached{ full: true, failure: io.Failure{ kind: io.Kind.System } }
 }
 
 fn glyph_quad(_batch: *Batch, stream: *Stream, entry: *const Entry, x, y: i64, tint: ui.Color, clip: ui.Rect) {
@@ -231,21 +231,21 @@ fn glyph_quad(_batch: *Batch, stream: *Stream, entry: *const Entry, x, y: i64, t
   push_quad(stream, #cast(f32, x0), #cast(f32, y0), #cast(f32, x1), #cast(f32, y1), u0, v0, u1, v1, tint, none, 0.0, 1.0)
 }
 
-struct Drawn { advance: i64, ok: bool, full: bool }
+struct Drawn { advance: i64, full: bool, failure: io.Failure }
 
 fn batch_glyph(batch: *Batch, stream: *Stream, font: software.Font, codepoint: u32, x, y: i64, tint: ui.Color, clip: ui.Rect) Drawn {
   found := cached(batch, font, codepoint)
   if found.full {
-    return Drawn{ full: true }
+    return Drawn{ full: true, failure: io.Failure{ kind: io.Kind.System } }
   }
-  if !found.ok {
-    return Drawn{}
+  if io.failed(found.failure) {
+    return Drawn{ failure: io.Failure{ kind: io.Kind.System } }
   }
   if stream.count + 6 > #len(stream.data) / vertex_floats {
     flush(batch, stream)
   }
   glyph_quad(batch, stream, found.entry, x, y, tint, clip)
-  return Drawn{ advance: found.entry.advance, ok: true }
+  return Drawn{ advance: found.entry.advance }
 }
 
 // Draws commands in order with their clips. vertices holds the stream between
@@ -254,17 +254,17 @@ fn batch_glyph(batch: *Batch, stream: *Stream, font: software.Font, codepoint: u
 // frame with more distinct glyphs than fit returns Capacity.
 pub fn render_batch(batch: *Batch, commands: *const ui.Command, width, height: i32, font: software.Font, vertices: []f32) Result {
   if batch.program == 0 {
-    return Result{ kind: io.Kind.InvalidState }
+    return Result{ kind: io.Kind.InvalidState, failure: io.Failure{ kind: io.Kind.System } }
   }
   if width < 0 || height < 0 || #len(vertices) < 6 * vertex_floats || font.glyph == nil || font.line_height <= 0 {
-    return Result{ kind: io.Kind.InvalidInput }
+    return Result{ kind: io.Kind.InvalidInput, failure: io.Failure{ kind: io.Kind.System } }
   }
   if width == 0 || height == 0 {
-    return Result{ ok: true }
+    return Result{}
   }
   api := &batch.api
   if !healthy(api) {
-    return Result{ kind: io.Kind.System }
+    return Result{ kind: io.Kind.System, failure: io.Failure{ kind: io.Kind.System } }
   }
   api.viewport(0, 0, width, height)
   api.use_program(batch.program)
@@ -325,10 +325,10 @@ pub fn render_batch(batch: *Batch, commands: *const ui.Command, width, height: i
           drawn = batch_glyph(batch, &stream, font, command.codepoint, command.glyph_x, command.glyph_y, command.color, clip)
         }
         if drawn.full {
-          return Result{ kind: io.Kind.Capacity }
+          return Result{ kind: io.Kind.Capacity, failure: io.Failure{ kind: io.Kind.System } }
         }
-        if !drawn.ok {
-          return Result{ kind: io.Kind.InvalidInput }
+        if io.failed(drawn.failure) {
+          return Result{ kind: io.Kind.InvalidInput, failure: io.Failure{ kind: io.Kind.System } }
         }
       } else if command.kind == ui.Kind.Text {
         x := #cast(i64, command.bounds.x)
@@ -352,23 +352,23 @@ pub fn render_batch(batch: *Batch, commands: *const ui.Command, width, height: i
               drawn = batch_glyph(batch, &stream, font, codepoint, x, y, command.color, clip)
             }
             if drawn.full {
-              return Result{ kind: io.Kind.Capacity }
+              return Result{ kind: io.Kind.Capacity, failure: io.Failure{ kind: io.Kind.System } }
             }
-            if !drawn.ok {
-              return Result{ kind: io.Kind.InvalidInput }
+            if io.failed(drawn.failure) {
+              return Result{ kind: io.Kind.InvalidInput, failure: io.Failure{ kind: io.Kind.System } }
             }
             x += drawn.advance
           }
         }
       } else {
-        return Result{ kind: io.Kind.InvalidInput }
+        return Result{ kind: io.Kind.InvalidInput, failure: io.Failure{ kind: io.Kind.System } }
       }
     }
     command = command.next
   }
   flush(batch, &stream)
   if !healthy(api) {
-    return Result{ kind: io.Kind.System }
+    return Result{ kind: io.Kind.System, failure: io.Failure{ kind: io.Kind.System } }
   }
-  return Result{ ok: true }
+  return Result{}
 }

@@ -21,13 +21,13 @@ use "std/mem" mem
 use "std/fs" fs
 fn check(ok:bool) { if !ok { #panic("CString buffer contract") } }
 fn main() {
- backing:[6]u8=[]
+ backing:[6]u8
  mem.fill(backing[..],165)
  exact:=c.string_into(backing[1..5],"abc")
- check(exact.failure.kind == parse.Kind.Ok && exact.required==4 && exact.value==&backing[1])
+ check(!parse.failed(exact.failure) && exact.required==4 && exact.value==&backing[1])
  check(mem.equal(backing[1..5],"abc\x00") && backing[0]==165 && backing[5]==165)
  empty:=c.string_into(backing[1..2],"")
- check(empty.failure.kind == parse.Kind.Ok && empty.required==1 && empty.value==&backing[1] && backing[1]==0)
+ check(!parse.failed(empty.failure) && empty.required==1 && empty.value==&backing[1] && backing[1]==0)
  check(backing[0]==165 && backing[2]=='b' && backing[5]==165)
  mem.fill(backing[..],165)
  short:=c.string_into(backing[1..4],"abc")
@@ -39,31 +39,32 @@ fn main() {
  for byte in backing { check(byte==165) }
  _=mem.copy(backing[..],"abcde!")
  overlap:=c.string_into(backing[1..5],backing[..3])
- check(overlap.failure.kind == parse.Kind.Ok && overlap.value==&backing[1] && mem.equal(backing[..],"aabc\x00!"))
+ check(!parse.failed(overlap.failure) && overlap.value==&backing[1] && mem.equal(backing[..],"aabc\x00!"))
  reverse:=c.string_into(backing[..4],backing[1..4])
- check(reverse.failure.kind == parse.Kind.Ok && reverse.value==&backing[0] && mem.equal(backing[..],"abc\x00\x00!"))
- before:[6]u8=[]
+ check(!parse.failed(reverse.failure) && reverse.value==&backing[0] && mem.equal(backing[..],"abc\x00\x00!"))
+ before:[6]u8
  _=mem.copy(before[..],backing[..])
  alias_invalid:=c.string_into(backing[1..],backing[..5])
  check(alias_invalid.failure.kind == parse.Kind.Syntax && mem.equal(backing[..],before[..]))
  huge:=#slice(&backing[0], ~#cast(usize,0))
  overflow:=c.string_into(backing[..],huge)
  check(overflow.failure.kind == parse.Kind.Overflow && overflow.value==nil && mem.equal(backing[..],before[..]))
- path:[4300]u8=[]
+ path:[4300]u8
  mem.fill(path[..],'a')
  removed:=fs.remove(path[..])
- check(removed.failure.kind != io.Kind.Ok)
+ check(io.failed(removed.failure))
  for byte in path { check(byte=='a') }
 }
 '''
-SQLITE = r'''use "vendor/sqlite" sqlite
+SQLITE = r'''use "std/io"
+use "vendor/sqlite" sqlite
 fn main() {
- backing:[11]u8=[]
+ backing:[11]u8
  for *byte in backing { byte.*=165 }
  result:=sqlite.open(":memory:",backing[1..10])
- if !result.ok || result.database==nil { #panic("SQLite exact CString buffer") }
+ if io.failed(result.failure) || result.database==nil { #panic("SQLite exact CString buffer") }
  if backing[0]!=165 || backing[10]!=165 { #panic("SQLite CString canaries") }
- if sqlite.close(result.database)!=0 { #panic("SQLite close") }
+ if io.failed(sqlite.close(result.database)) { #panic("SQLite close") }
 }
 '''
 
@@ -98,20 +99,20 @@ visited:usize=0
 fail_second:bool=false
 fn loader(name:*const u8) rawptr {
  text:=c.bytes_from_string(name,64)
- if text.failure.kind != parse.Kind.Ok || visited>=#len(names) || !mem.equal(text.value,names[visited]) { #panic("OpenGL CString loader") }
+ if parse.failed(text.failure) || visited>=#len(names) || !mem.equal(text.value,names[visited]) { #panic("OpenGL CString loader") }
  visited+=1
  if fail_second && visited==2 { return nil }
  return #cast(rawptr,1)
 }
 fn main() {
  none:=gl.load(nil)
- if none.ok || !mem.equal(none.missing,"loader") || visited!=0 { #panic("nil loader") }
+ if !io.failed(none.failure) || !mem.equal(none.missing,"loader") || visited!=0 { #panic("nil loader") }
  loaded:=gl.load(loader)
- if !loaded.ok || visited!=#len(names) { #panic("OpenGL complete table") }
+ if io.failed(loaded.failure) || visited!=#len(names) { #panic("OpenGL complete table") }
  visited=0
  fail_second=true
  failed:=gl.load(loader)
- if failed.ok || visited!=2 || !mem.equal(failed.missing,names[1]) { #panic("OpenGL missing symbol") }
+ if !io.failed(failed.failure) || visited!=2 || !mem.equal(failed.missing,names[1]) { #panic("OpenGL missing symbol") }
 }
 '''.replace('COUNT', str(len(names))).replace('NAMES', ','.join(json.dumps(n) for n in names))
     run(work, 'opengl-loader', gl)

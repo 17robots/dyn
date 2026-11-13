@@ -12,7 +12,7 @@ use "std/ui/box" box
 use "std/mem" mem
 use "std/bytes" bytes
 fn check(ok: bool, message: []const u8) { if !ok { #panic(message) } }
-fn measure(data: rawptr, text: []const u8) f32 { _ = data
+fn measure(data: *u8, text: []const u8) f32 { _ = data
   return #cast(f32, #len(text)) * 8.0
 }
 fn start(state: *box.State, frame: *mem.Arena, context: *ui.Context, input: box.Input) {
@@ -25,12 +25,12 @@ fn finish(state: *box.State, context: *ui.Context) {
   ui.end(context)
 }
 fn main() {
-  persistent := mem.arena_create(0)
-  frame := mem.arena_create(0)
+  persistent := mem.arena_alloc(0)
+  frame := mem.arena_alloc(0)
   defer { mem.arena_release(frame)
     mem.arena_release(persistent) }
   context := ui.Context{ style: ui.default_style }
-  state := box.create(persistent, measure, nil, 16.0)
+  state := box.push_state(persistent, measure, nil, 16.0)
   state.reduced_motion = true
   selected: usize = 0
   // Hover, press and release a tab. Selection changes on activation only.
@@ -56,7 +56,7 @@ fn main() {
   check(box.tooltip(state, "nil-tip", "Hidden", nil) == nil, "nil tooltip target")
   finish(state, &context)
 
-  menu_state := box.create(persistent, measure, nil, 16.0)
+  menu_state := box.push_state(persistent, measure, nil, 16.0)
   menu := box.Menu{}
   // Open the popup through its trigger.
   for step in 0..4 {
@@ -86,7 +86,7 @@ fn main() {
   check(box.parent(menu_state) == menu_state.root, "closed menu balances stack")
   finish(menu_state, &context)
 
-  split_state := box.create(persistent, measure, nil, 16.0)
+  split_state := box.push_state(persistent, measure, nil, 16.0)
   split_state.scale = 2.0
   split := box.Split{ position: 100.0 }
   for step in 0..5 {

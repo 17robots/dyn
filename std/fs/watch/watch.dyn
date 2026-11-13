@@ -24,7 +24,7 @@ pub const HasMoveCookies: bool = true
 pub const HasDirectoryFlag: bool = true
 // Zero means no fixed userspace slot limit; native inotify quotas still apply.
 pub const FixedWatchCapacity: usize = 0
-pub enum Status { Event, Empty, Error }
+pub enum Status { Event, Empty }
 // Zero is a closed watcher: active is false.
 // Ownership: a live watcher is not an independent owner when copied. Keep one
 // stable owner and close it before its storage is released or reused.
@@ -48,9 +48,9 @@ pub fn open(storage: []u8) OpenResult {
   return OpenResult{ value: Watcher{ descriptor: descriptor, active: true, storage: storage } }
 }
 pub fn add(state: *Watcher, path: []const u8, mask: u32) Result {
-  storage: [4096 + mem.ArenaBufferOverhead]u8 = []
+  storage: [4096 + mem.ArenaBufferOverhead]u8
   name := c.string_into(storage[..], path)
-  if name.failure.kind != parse.Kind.Ok || #len(path) == 0 || !state.active {
+  if parse.failed(name.failure) || #len(path) == 0 || !state.active {
     return failure(-22)
   }
   value := #syscall(sys.InotifyAddWatch, state.descriptor, name.value, mask)
@@ -94,7 +94,7 @@ fn event_error(state: *Watcher, kind: io.Kind, code: isize) EventResult {
       state.kind = io.Kind.System
     }
   }
-  return EventResult{ status: Status.Error, failure: io.Failure{ kind: state.kind, native: state.error } }
+  return EventResult{ failure: io.Failure{ kind: state.kind, native: state.error } }
 }
 pub fn next(state: *Watcher) EventResult {
   if state.failed {

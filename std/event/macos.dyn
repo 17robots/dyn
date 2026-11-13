@@ -16,7 +16,7 @@ fn native_close(handle: isize) Result {
 }
 fn native_control(queue: *Queue, index: usize, entry: Entry) Result {
   old := queue.entries[index]
-  changes: [2]Kevent = []
+  changes: [2]Kevent
   count: usize = 0
   for i in 0..2 {
     bit: u32 = Readable

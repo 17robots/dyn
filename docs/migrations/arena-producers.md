@@ -6,7 +6,7 @@ are gone.
 
 ```dyn
 // Before
-digits: [20]u8 = []
+digits: [20]u8
 text := fmt.u64_decimal(digits[..], count)
 copied := strings.clone_into(buffer[..], name)
 encoded := base64.encode(output[..], bytes)
@@ -20,7 +20,7 @@ encoded := base64.encode(&arena, bytes)
 To keep a result in fixed storage, wrap the storage:
 
 ```dyn
-digits: [20]u8 = []
+digits: [20]u8
 scratch := mem.arena_from_buffer(digits[..])
 text := fmt.u64_decimal(&scratch, count)
 ```

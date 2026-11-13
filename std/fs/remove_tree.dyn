@@ -5,7 +5,7 @@ use "std/os/linux/sys"
 // Names borrow the parent frame's directory buffer, so no paths are rebuilt.
 pub struct RemovalFrame { directory: Directory, name: []const u8, parent: isize }
 fn unlink_at(parent: isize, name: []const u8, directory: bool) isize {
-  storage: [4096]u8 = []
+  storage: [4096]u8
   raw := terminated(name, storage[..])
   if raw == nil {
     return -36
@@ -17,7 +17,7 @@ fn unlink_at(parent: isize, name: []const u8, directory: bool) isize {
   return #syscall(sys.Unlinkat, parent, raw, flags)
 }
 fn open_removal(parent: isize, name: []const u8, storage: []u8) DirectoryResult {
-  path: [4096]u8 = []
+  path: [4096]u8
   raw := terminated(name, path[..])
   if raw == nil {
     return DirectoryResult{ failure: io.linux_failure(-36) }

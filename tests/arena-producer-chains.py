@@ -23,7 +23,7 @@ use "std/process"
 fn check(ok:bool) { if !ok { #panic("chained producer contract") } }
 struct Fixture { arena:*mem.Arena, prefix:[]u8, second:[]u8 }
 fn fresh() Fixture {
- arena:=mem.arena_create_bounded(160,8*mem.MiB)
+ arena:=mem.arena_alloc_bounded(160,8*mem.MiB)
  prefix:=mem.push_bytes_uninit(arena,16)
  mem.fill(prefix,91)
  second:=mem.push_bytes_uninit(arena,256)
@@ -52,16 +52,16 @@ fn main() {
  check(bytes.equal(b32.decode(f.arena,"NBSWY3DP").value,"hello"))
  check(bytes.equal(hex.decode(f.arena,"68656c6c6f").value,"hello"))
  parsed:=json.parse(f.arena,"{\"answer\":42,\"text\":\"hello\"}")
- check(parsed.failure.kind == parse.Kind.Ok && json.get(i64,parsed.root,"answer")==42)
+ check(!parse.failed(parsed.failure) && json.get(i64,parsed.root,"answer")==42)
  chunked:=http.decode_chunked(f.arena,"5\r\nhello\r\n0\r\n\r\n")
- check(chunked.failure.kind == errors.Kind.Ok && bytes.equal(chunked.value,"hello"))
+ check(!errors.failed(chunked.failure) && bytes.equal(chunked.value,"hello"))
  packet:[46]u8=[18,52,129,128,0,1,0,1,0,0,0,0,7,101,120,97,109,112,108,101,4,116,101,115,116,0,0,1,0,1,192,12,0,1,0,1,0,0,0,1,0,4,1,2,3,4]
  answers:=dns.parse_ipv4(f.arena,packet[..],0x1234,"example.test")
- check(answers.failure.kind == errors.Kind.Ok && #len(answers.value)==1 && answers.value[0].a==1 && answers.value[0].d==4)
- key:[32]u8=[]
- nonce:[12]u8=[]
+ check(!errors.failed(answers.failure) && #len(answers.value)==1 && answers.value[0].a==1 && answers.value[0].d==4)
+ key:[32]u8
+ nonce:[12]u8
  sealed:=aead.seal(f.arena,aead.Cipher.Aes256Gcm,"hello","",key[..],nonce[..])
- check(sealed.failure.kind == parse.Kind.Ok)
+ check(!parse.failed(sealed.failure))
  opened:=aead.open(f.arena,aead.Cipher.Aes256Gcm,sealed.value.ciphertext,sealed.value.tag,"",key[..],nonce[..])
  check(opened.valid && bytes.equal(opened.value,"hello"))
  PROCESS_CASE
@@ -69,7 +69,7 @@ fn main() {
 }
 '''
 def main():
-    source=SOURCE.replace('PROCESS_CASE', 'arguments:[3][]const u8=["/bin/sh","-c","printf chain"]\n captured:=process.capture(f.arena,"/bin/sh",arguments[..],process.Options{},process.CaptureOptions{timeout_milliseconds:2000})\n check(captured.failure.kind == errors.Kind.Ok && captured.exit.code==0 && bytes.equal(captured.output,"chain"))' if sys.platform=='linux' else '_=process.Options{}')
+    source=SOURCE.replace('PROCESS_CASE', 'arguments:[3][]const u8=["/bin/sh","-c","printf chain"]\n captured:=process.capture(f.arena,"/bin/sh",arguments[..],process.Options{},process.CaptureOptions{timeout_milliseconds:2000})\n check(!errors.failed(captured.failure) && captured.exit.code==0 && bytes.equal(captured.output,"chain"))' if sys.platform=='linux' else '_=process.Options{}')
     with tempfile.TemporaryDirectory(prefix='dyn-chain-producers-') as temporary:
         project=Path(temporary)
         (project/'main.dyn').write_text(source)

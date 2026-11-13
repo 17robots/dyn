@@ -15,7 +15,7 @@ use "std/io" errors
 use "std/bytes" bytes
 use "vendor/window/events" events
 fn check(ok: bool, why: []const u8) { if !ok { #panic(why) } }
-fn measure(data: rawptr, text: []const u8) f32 { _ = data
+fn measure(data: *u8, text: []const u8) f32 { _ = data
   return #cast(f32,#len(text))*8.0 }
 struct App { storage: [64]u8, edit: box.Edit, changed: bool, error: errors.Kind }
 fn frame(state: *box.State, arena: *mem.Arena, app: *App, input: box.Input) {
@@ -34,15 +34,15 @@ fn correction(collector: *events.EditBuffer, token: u64, start, end: i32, text: 
   event := events.Event{kind:events.Kind.Edit,key:#cast(u32,token & 4294967295),modifiers:#cast(u32,token>>32),x:start,y:end,width:#cast(i32,#len(text)),text_length:#cast(u32,#len(text)),button:1}
   for i in 0..#len(text) { event.text[i] = text[i] }
   result := events.collect_edit(collector,&event)
-  check(result.failure.kind == errors.Kind.Ok && result.ready,"native edit assembly")
+  check(!errors.failed(result.failure) && result.ready,"native edit assembly")
   return result.value
 }
 fn main() {
-  persistent := mem.arena_create(0)
-  arena := mem.arena_create(0)
+  persistent := mem.arena_alloc(0)
+  arena := mem.arena_alloc(0)
   defer { mem.arena_release(arena)
     mem.arena_release(persistent) }
-  state := box.create(persistent,measure,nil,16.0)
+  state := box.push_state(persistent,measure,nil,16.0)
   app := App{}
   collector := events.EditBuffer{}
   frame(state,arena,&app,box.Input{})

@@ -167,11 +167,18 @@ static uint32_t src_for(Parser *p) {
     bool constant = pointer && take(p, "const");
     unsigned flags = 0;
     uint32_t binding = p->token.kind == NAME ? name(p) : NONE;
-    uint32_t bound_type = NONE;
-    if (binding != NONE && !pointer && take(p, ":")) bound_type = type(p);
+    uint32_t bound_type = NONE, index = NONE;
+    if (binding != NONE && take(p, ",")) {
+      if (p->token.kind != NAME) { fail(p, p->token.start, "expected the index name after ','"); return NONE; }
+      index = name(p);
+      if (!is(p, "in")) { fail(p, p->token.start, "expected 'in' after the index name"); return NONE; }
+    }
+    if (binding != NONE && index == NONE && !pointer && take(p, ":")) bound_type = type(p);
     if (binding != NONE && take(p, "in")) {
-      flags = EXP_ITERATION | (pointer ? EXP_POINTER_BINDING : 0) | (constant ? EXP_CONST : 0);
+      flags = EXP_ITERATION | (pointer ? EXP_POINTER_BINDING : 0) | (constant ? EXP_CONST : 0) |
+              (index != NONE ? EXP_INDEXED : 0);
       append(p, &cf, &cl, binding);
+      if (index != NONE) append(p, &cf, &cl, index);
       if (bound_type != NONE) append(p, &cf, &cl, bound_type);
       if (is(p, "#reverse")) {
         uint32_t reverse_start = p->token.start; lex(p); expect(p, "(");

@@ -1,4 +1,4 @@
-// Type patterns, chained comparisons, generic struct literals, single-line
+// Type patterns, generic struct literals, single-line
 // blocks and constants that adapt to their use.
 use "std/container/map"
 use "std/enums"
@@ -33,10 +33,10 @@ enum(i32) Errno { Ok = 0, NoEnt = 2, Intr = 4, Io, NoMem = 12 }
 
 fn parse(x: i32) i32 { return x * 2 }
 
-fn shadowed(x: i32) i32 {
+fn reused(x: i32) i32 {
   if x > 0 {
-    x := parse(x)
-    return x
+    doubled := parse(x)
+    return doubled
   }
   for i in 0..3 {
     y := i
@@ -75,10 +75,6 @@ fn main() {
   text: []const u8 = "abcd"
   check(describe(ten) + describe(true) + describe(point) + describe(text) == 22, "type patterns")
   x: i32 = 5
-  check(0 <= x < 10, "chain")
-  check(10 > x >= 5, "descending chain")
-  check(!(0 < x < 3), "chain fails")
-  check(point.x < x <= point.x + point.y + 2, "field chain")
   flags: u32 = 6
   check((flags & 2) != 0, "parenthesized mask")
   b := Box(i32){value: 41}
@@ -104,8 +100,8 @@ fn main() {
   check(total == 10 && stats.count == 3 && tiny == 6 && negative == -6 && big == 6 && root(49) == 7, "ranges")
   // Literals boxed into any take i32, f64, []const u8 and bool.
   check(kind_of(5) + kind_of(2.5) + kind_of("hey") + kind_of(true) == 1108, "boxed literals")
-  // A nested block may shadow; the same block may not.
-  check(shadowed(2) == 4 && shadowed(-1) == 4, "shadowing")
+  // Names never shadow, but a name is free again once its block ends.
+  check(reused(2) == 4 && reused(-1) == 4, "reused names")
   // Field defaults: literals, declarations, mem.push and #init.
   fresh := Player{}
   given := Player{health: 5, speed: Speed{level: 9}}
@@ -134,7 +130,7 @@ fn main() {
   // Generic instances as function values, and default map keys.
   twice := #instance(doubled, u32)
   check(twice(21) == 42, "instance value")
-  arena2 := mem.arena_create(0)
+  arena2 := mem.arena_alloc(0)
   by_errno: map.Map(Errno, u32)
   map.init(&by_errno, arena2)
   map.insert(&by_errno, Errno.Io, 5)

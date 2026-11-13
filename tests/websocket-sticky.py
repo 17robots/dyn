@@ -19,10 +19,10 @@ struct Trace { reads: usize, writes: usize, mode: usize, bytes: usize }
 fn read(data: rawptr, destination: []u8) io.Transfer {
   trace := #cast(*Trace, data)
   trace.reads += 1
-  if trace.mode == 0 { return io.Transfer{ error: -71, kind: errors.Kind.System, status: io.Status.Error } }
+  if trace.mode == 0 { return io.Transfer{ failure: io.Failure{ kind: errors.Kind.System, native: -71 } } }
   if trace.mode == 1 { return io.Transfer{ status: io.Status.End } }
   if trace.mode == 2 { return io.Transfer{ transferred: #len(destination) + 1 } }
-  if trace.mode == 3 { return io.Transfer{ error: 0, kind: errors.Kind.System, status: io.Status.Error } }
+  if trace.mode == 3 { return io.Transfer{ failure: io.Failure{ kind: errors.Kind.System, native: 0 } } }
   if trace.mode == 8 {
     // A valid length prefix whose payload exceeds the frame buffer.
     for i in 0..#len(destination) { destination[i] = 0 }
@@ -42,7 +42,7 @@ fn read(data: rawptr, destination: []u8) io.Transfer {
   destination[1] = 0
   if trace.mode == 4 { destination[0] = 129
   destination[1] = 128 }
-  if trace.mode == 5 { return io.Transfer{ transferred: 2, error: -72, status: io.Status.Error } }
+  if trace.mode == 5 { return io.Transfer{ transferred: 2, failure: io.Failure{ kind: io.Kind.System, native: -72 } } }
   if trace.mode == 6 { destination[0] = 0
   destination[1] = 0 }
   if trace.mode == 7 { return io.Transfer{} }
@@ -51,23 +51,23 @@ fn read(data: rawptr, destination: []u8) io.Transfer {
 fn write(data: rawptr, source: []const u8) io.Transfer {
   trace := #cast(*Trace, data)
   trace.writes += 1
-  if trace.mode == 10 { return io.Transfer{ error: -73, status: io.Status.Error } }
+  if trace.mode == 10 { return io.Transfer{ failure: io.Failure{ kind: io.Kind.System, native: -73 } } }
   if trace.mode == 11 { return io.Transfer{} }
   if trace.mode == 12 { return io.Transfer{ transferred: #len(source) + 1 } }
-  if trace.mode == 13 { return io.Transfer{ error: 0, kind: errors.Kind.System, status: io.Status.Error } }
+  if trace.mode == 13 { return io.Transfer{ failure: io.Failure{ kind: errors.Kind.System, native: 0 } } }
   if trace.mode == 14 {
     if trace.writes == 1 { trace.bytes += 1
     return io.Transfer{ transferred: 1 } }
-    return io.Transfer{ error: -74, status: io.Status.Error }
+    return io.Transfer{ failure: io.Failure{ kind: io.Kind.System, native: -74 } }
   }
   trace.bytes += #len(source)
   return io.Transfer{ transferred: #len(source) }
 }
 fn failure(result: ws.Result, kind: errors.Kind, native: isize, offset: usize) {
-  if result.failure.kind == io.Kind.Ok || result.failure.kind != kind || result.failure.native != native || result.offset != offset { #panic("structured failure metadata") }
+  if !io.failed(result.failure) || result.failure.kind != kind || result.failure.native != native || result.offset != offset { #panic("structured failure metadata") }
 }
 fn success(result: ws.Result) bool {
-  return result.failure.kind == io.Kind.Ok && result.failure.kind == errors.Kind.Ok && result.failure.native == 0 && result.offset == 0
+  return !io.failed(result.failure) && !errors.failed(result.failure) && result.failure.native == 0 && result.offset == 0
 }
 fn sticky(connection: *ws.WebSocketConnection, trace: *Trace, kind: errors.Kind, expected: isize, offset: usize) {
   reads := trace.reads
@@ -80,7 +80,7 @@ fn sticky(connection: *ws.WebSocketConnection, trace: *Trace, kind: errors.Kind,
     failure(ws.connection_pong(connection, "", 0), kind, expected, offset)
     failure(ws.connection_close(connection, "", 0), kind, expected, offset)
     result := ws.connection_receive(connection)
-    if result.failure.kind == io.Kind.Ok || result.failure.native != expected || result.failure.kind != kind || result.offset != offset { #panic("receive lost first error") }
+    if !io.failed(result.failure) || result.failure.native != expected || result.failure.kind != kind || result.offset != offset { #panic("receive lost first error") }
   }
   if trace.reads != reads || trace.writes != writes || trace.bytes != bytes { #panic("I/O after failure") }
 }
@@ -93,49 +93,49 @@ fn wire_read(raw: rawptr, destination: []u8) io.Transfer {
   if count > #len(destination) { count = #len(destination) }
   for i in 0..count { destination[i] = wire.data[wire.at + i] }
   wire.at += count
-  if count == 0 { return io.Transfer{status: io.Status.End} }
-  return io.Transfer{transferred: count}
+  if count == 0 { return io.Transfer{ status: io.Status.End } }
+  return io.Transfer{ transferred: count }
 }
 fn coalesced() {
   isolated := Wire{data: "\x81\x01a", step: 32}
   single_sent := Trace{mode: 99}
-  available: [32]u8 = []
-  single_message: [32]u8 = []
-  controls: [125]u8 = []
+  available: [32]u8
+  single_message: [32]u8
+  controls: [125]u8
   reusable := ws.connection(io.Reader{data: &isolated, read: wire_read}, io.Writer{data: &single_sent, write: write}, available[..], single_message[..], controls[..], true)
-  if ws.connection_receive(&reusable).failure.kind != io.Kind.Ok { #panic("single frame") }
-  if ws.connection_send(&reusable, 1, "abcdefghijklmnopqrstuvwxyz", true, 1).failure.kind != io.Kind.Ok || single_sent.bytes != 32 { #panic("fully consumed capacity") }
+  if io.failed(ws.connection_receive(&reusable).failure) { #panic("single frame") }
+  if io.failed(ws.connection_send(&reusable, 1, "abcdefghijklmnopqrstuvwxyz", true, 1).failure) || single_sent.bytes != 32 { #panic("fully consumed capacity") }
   for step in [1, 2, 3, 4, 32] {
     wire := Wire{data: "\x81\x01a\x81\x01b\x88\x00", step: #cast(usize, step)}
-    frames: [32]u8 = []
-    message: [32]u8 = []
-    control: [125]u8 = []
+    frames: [32]u8
+    message: [32]u8
+    control: [125]u8
     sent := Trace{mode: 99}
     state := ws.connection(io.Reader{data: &wire, read: wire_read}, io.Writer{data: &sent, write: write}, frames[..], message[..], control[..], true)
     a := ws.connection_receive(&state)
-    if a.failure.kind != io.Kind.Ok || a.event.detail != ws.WebSocketEventKind.Ready || #len(a.event.payload) != 1 || a.event.payload[0] != 'a' { #panic("coalesced first") }
-    if ws.connection_pong(&state, "p", 1).failure.kind != io.Kind.Ok || sent.writes != 1 || a.event.payload[0] != 'a' { #panic("send with pending frames") }
+    if io.failed(a.failure) || a.event.detail != ws.WebSocketEventKind.Ready || #len(a.event.payload) != 1 || a.event.payload[0] != 'a' { #panic("coalesced first") }
+    if io.failed(ws.connection_pong(&state, "p", 1).failure) || sent.writes != 1 || a.event.payload[0] != 'a' { #panic("send with pending frames") }
     b := ws.connection_receive(&state)
-    if b.failure.kind != io.Kind.Ok || b.event.detail != ws.WebSocketEventKind.Ready || #len(b.event.payload) != 1 || b.event.payload[0] != 'b' { #panic("coalesced second") }
+    if io.failed(b.failure) || b.event.detail != ws.WebSocketEventKind.Ready || #len(b.event.payload) != 1 || b.event.payload[0] != 'b' { #panic("coalesced second") }
     closed := ws.connection_receive(&state)
-    if closed.failure.kind != io.Kind.Ok || closed.event.detail != ws.WebSocketEventKind.Close { #panic("coalesced close") }
+    if io.failed(closed.failure) || closed.event.detail != ws.WebSocketEventKind.Close { #panic("coalesced close") }
     if step == 32 && wire.calls != 1 { #panic("coalesced extra read") }
     wire = Wire{data: "\x01\x01a\x89\x01p\x80\x01b", step: #cast(usize, step)}
     state = ws.connection(io.Reader{data: &wire, read: wire_read}, io.Writer{data: &sent, write: write}, frames[..], message[..], control[..], true)
     ping := ws.connection_receive(&state)
-    if ping.failure.kind != io.Kind.Ok || ping.event.detail != ws.WebSocketEventKind.Ping || #len(ping.event.payload) != 1 || ping.event.payload[0] != 'p' { #panic("fragmented ping") }
-    if ws.connection_pong(&state, ping.event.payload, 1).failure.kind != io.Kind.Ok || sent.writes != 2 || ping.event.payload[0] != 'p' { #panic("send with pending continuation") }
+    if io.failed(ping.failure) || ping.event.detail != ws.WebSocketEventKind.Ping || #len(ping.event.payload) != 1 || ping.event.payload[0] != 'p' { #panic("fragmented ping") }
+    if io.failed(ws.connection_pong(&state, ping.event.payload, 1).failure) || sent.writes != 2 || ping.event.payload[0] != 'p' { #panic("send with pending continuation") }
     ab := ws.connection_receive(&state)
-    if ab.failure.kind != io.Kind.Ok || ab.event.detail != ws.WebSocketEventKind.Ready || #len(ab.event.payload) != 2 || ab.event.payload[0] != 'a' || ab.event.payload[1] != 'b' { #panic("fragmented remainder") }
+    if io.failed(ab.failure) || ab.event.detail != ws.WebSocketEventKind.Ready || #len(ab.event.payload) != 2 || ab.event.payload[0] != 'a' || ab.event.payload[1] != 'b' { #panic("fragmented remainder") }
     if step == 32 && wire.calls != 1 { #panic("fragmented extra read") }
   }
 }
 fn main() {
   coalesced()
   trace := Trace{}
-  frames: [32]u8 = []
-  message: [32]u8 = []
-  control: [125]u8 = []
+  frames: [32]u8
+  message: [32]u8
+  control: [125]u8
   reader := io.Reader{ data: &trace, read: read }
   writer := io.Writer{ data: &trace, write: write }
   zero := ws.WebSocketConnection{}
@@ -144,7 +144,7 @@ fn main() {
   sticky(&zero, &trace, errors.Kind.InvalidState, 0, 0)
   zero = ws.WebSocketConnection{}
   initial := ws.connection_receive(&zero)
-  if initial.failure.kind == io.Kind.Ok || initial.failure.kind != errors.Kind.InvalidState || initial.failure.native != 0 || initial.offset != 0 { #panic("zero receive") }
+  if !io.failed(initial.failure) || initial.failure.kind != errors.Kind.InvalidState || initial.failure.native != 0 || initial.offset != 0 { #panic("zero receive") }
   sticky(&zero, &trace, errors.Kind.InvalidState, 0, 0)
   for mode in 0..10 {
     trace = Trace{ mode: mode }
@@ -163,7 +163,7 @@ fn main() {
     if mode == 8 { kind = errors.Kind.Capacity }
     offset: usize = 0
     if mode == 9 { offset = 2 }
-    if result.failure.kind == io.Kind.Ok || result.failure.native != expected || result.failure.kind != kind || result.offset != offset || trace.reads == 0 { #panic("initial receive failure") }
+    if !io.failed(result.failure) || result.failure.native != expected || result.failure.kind != kind || result.offset != offset || trace.reads == 0 { #panic("initial receive failure") }
     sticky(&connection, &trace, kind, expected, offset)
   }
   for mode in 10..15 {
@@ -187,11 +187,11 @@ fn main() {
   sticky(&connection, &trace, errors.Kind.InvalidInput, 0, 0)
   connection = ws.connection(reader, writer, frames[..0], message[..], control[..], true)
   capacity_result := ws.connection_receive(&connection)
-  if capacity_result.failure.kind == io.Kind.Ok || capacity_result.failure.kind != errors.Kind.Capacity || capacity_result.failure.native != 0 || capacity_result.offset != 0 { #panic("receive capacity") }
+  if !io.failed(capacity_result.failure) || capacity_result.failure.kind != errors.Kind.Capacity || capacity_result.failure.native != 0 || capacity_result.offset != 0 { #panic("receive capacity") }
   sticky(&connection, &trace, errors.Kind.Capacity, 0, 0)
   connection = ws.connection(io.Reader{}, writer, frames[..], message[..], control[..], true)
   nil_reader_result := ws.connection_receive(&connection)
-  if nil_reader_result.failure.kind == io.Kind.Ok || nil_reader_result.failure.kind != errors.Kind.InvalidState || nil_reader_result.failure.native != 0 || nil_reader_result.offset != 0 { #panic("nil reader") }
+  if !io.failed(nil_reader_result.failure) || nil_reader_result.failure.kind != errors.Kind.InvalidState || nil_reader_result.failure.native != 0 || nil_reader_result.offset != 0 { #panic("nil reader") }
   sticky(&connection, &trace, errors.Kind.InvalidState, 0, 0)
   connection = ws.connection(reader, io.Writer{}, frames[..], message[..], control[..], true)
   failure(ws.connection_send(&connection, 1, "", true, 0), errors.Kind.InvalidState, 0, 0)
@@ -199,9 +199,9 @@ fn main() {
   // Constructor assignment resets failure; a normal peer Close allows one reply.
   connection = ws.connection(reader, writer, frames[..], message[..], control[..], true)
   result := ws.connection_receive(&connection)
-  if result.failure.kind != io.Kind.Ok || result.event.detail != ws.WebSocketEventKind.Close || result.event.failure.kind != io.Kind.Ok || result.event.failure.kind != errors.Kind.Ok || result.event.failure.native != 0 || result.failure.kind != errors.Kind.Ok || result.failure.native != 0 || connection.failed { #panic("normal close") }
+  if io.failed(result.failure) || result.event.detail != ws.WebSocketEventKind.Close || io.failed(result.event.failure) || errors.failed(result.event.failure) || result.event.failure.native != 0 || errors.failed(result.failure) || result.failure.native != 0 || connection.failed { #panic("normal close") }
   reads := trace.reads
-  if ws.connection_receive(&connection).failure.kind != io.Kind.Ok || trace.reads != reads { #panic("repeat peer close") }
+  if io.failed(ws.connection_receive(&connection).failure) || trace.reads != reads { #panic("repeat peer close") }
   failure(ws.connection_ping(&connection, "", 0), errors.Kind.InvalidState, 0, 0)
   if connection.failed { #panic("closed ping") }
   if !success(ws.connection_close(&connection, "", 0)) { #panic("close reply") }
@@ -210,7 +210,7 @@ fn main() {
   failure(ws.connection_send(&connection, 1, "", true, 0), errors.Kind.InvalidState, 0, 0)
   if connection.failed { #panic("closed send") }
   connection = ws.connection(reader, writer, frames[..], message[..], control[..], true)
-  if !success(ws.connection_close(&connection, "", 0)) || ws.connection_receive(&connection).failure.kind != io.Kind.Ok { #panic("local close handshake") }
+  if !success(ws.connection_close(&connection, "", 0)) || io.failed(ws.connection_receive(&connection).failure) { #panic("local close handshake") }
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-websocket-sticky-') as temporary:

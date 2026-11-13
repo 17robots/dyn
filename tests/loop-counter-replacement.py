@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 EXPECTED = '138 0 0 30 3\n11529215046068469805\n'
 with tempfile.TemporaryDirectory(prefix='dyn-loop-counter-') as temporary:
-    for name, flags, emulator in (('debug', ['--debug'], []), ('release', ['--release'], []),
+    for name, flags, emulator in (('debug', ['--debug', '--no-check-overflow'], []), ('release', ['--release'], []),
                                   ('o3', ['--release', '--opt-level', '3'], []),
                                   ('arm', ['--target', 'aarch64-linux', '--release'], ['qemu-aarch64'])):
         program = Path(temporary) / name

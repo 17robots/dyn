@@ -190,7 +190,7 @@ fn describe_data(arena: *mem.Arena, path: []const u8, data: []const u8) Entry {
     }
   }
   opened := font.open(data)
-  if opened.failure.kind != parse.Kind.Ok {
+  if parse.failed(opened.failure) {
     return nil_entry
   }
   names := table(data, 0x6e616d65)
@@ -240,7 +240,7 @@ fn visit(arena: *mem.Arena, scratch: *mem.Arena, walk: *Walk, directory: []const
   if depth > depth_limit || walk.count == #len(walk.entries) {
     return
   }
-  storage: [8192]u8 = []
+  storage: [8192]u8
   opened := fs.open_directory(directory, storage[..])
   if io.failed(opened.failure) {
     return
@@ -287,7 +287,7 @@ fn visit(arena: *mem.Arena, scratch: *mem.Arena, walk: *Walk, directory: []const
 // is filesystem order; callers can reorder entries before fallback selection.
 pub fn scan_directories(arena: *mem.Arena, directories: []const []const u8, limit: usize) []Entry {
   walk := Walk{ entries: mem.push_array(Entry, arena, limit) }
-  scratch := mem.arena_create(16777216)
+  scratch := mem.arena_alloc(16777216)
   defer {
     mem.arena_release(scratch)
   }
@@ -300,11 +300,11 @@ pub fn scan_directories(arena: *mem.Arena, directories: []const []const u8, limi
 // Fonts in platform system and user directories, at most limit entries.
 // This does not read fontconfig configuration or platform font registries.
 pub fn scan(arena: *mem.Arena, limit: usize) []Entry {
-  scratch := mem.arena_create(16777216)
+  scratch := mem.arena_alloc(16777216)
   defer {
     mem.arena_release(scratch)
   }
-  directories: [6][]const u8 = []
+  directories: [6][]const u8
   count := font_directories(scratch, directories[..])
   return scan_directories(arena, directories[..count], limit)
 }
@@ -423,7 +423,7 @@ pub fn covering(entries: []const Entry, codepoint: u32, regular_only: bool) *con
       continue
     }
     face := font.open(mapped.value)
-    found := face.failure.kind == parse.Kind.Ok && font.glyph_index(&face.value, codepoint) != 0
+    found := !parse.failed(face.failure) && font.glyph_index(&face.value, codepoint) != 0
     _ = fs.unmap(&mapped)
     if found {
       return entry

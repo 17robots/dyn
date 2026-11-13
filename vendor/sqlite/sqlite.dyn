@@ -3,14 +3,14 @@ use "std/c"
 #link("sqlite3")
 
 pub type Database = rawptr
-pub struct OpenResult { database: Database, code: i32, ok: bool }
+pub struct OpenResult { database: Database, code: i32, failure: io.Failure }
 
 
 // Provider allocates database. Successful results require close; failures own nothing.
 pub fn open(name: []const u8, buffer: []u8) OpenResult {
   encoded := c.string_into(buffer, name)
-  if encoded.failure.kind != parse.Kind.Ok {
-    return OpenResult{ code: string_error(encoded.failure.kind) }
+  if parse.failed(encoded.failure) {
+    return OpenResult{ code: string_error(encoded.failure.kind), failure: io.Failure{ kind: io.Kind.System } }
   }
   database: rawptr = nil
   code := sqlite_open(encoded.value, &database)
@@ -18,9 +18,9 @@ pub fn open(name: []const u8, buffer: []u8) OpenResult {
     if database != nil {
       _ = sqlite_close(database)
     }
-    return OpenResult{ code: code }
+    return OpenResult{ code: code, failure: io.Failure{ kind: io.Kind.System } }
   }
-  return OpenResult{ database: database, code: code, ok: true }
+  return OpenResult{ database: database, code: code }
 }
 // Opt in only when the caller serializes every connection/statement operation,
 // including borrowed views, from publication until all workers have stopped.
@@ -30,40 +30,48 @@ extern fn sqlite_open_flags "sqlite3_open_v2"(name: c.string, database: *rawptr,
 pub fn open_with_options(name: []const u8, buffer: []u8, options: OpenOptions) OpenResult {
   if !options.caller_serialized { return open(name, buffer) }
   encoded := c.string_into(buffer, name)
-  if encoded.failure.kind != parse.Kind.Ok {
-    return OpenResult{ code: string_error(encoded.failure.kind) }
+  if parse.failed(encoded.failure) {
+    return OpenResult{ code: string_error(encoded.failure.kind), failure: io.Failure{ kind: io.Kind.System } }
   }
   database: rawptr = nil
   // READWRITE | CREATE | NOMUTEX: file locking/durability are unchanged.
   code := sqlite_open_flags(encoded.value, &database, 0x8006, nil)
   if code != 0 {
     if database != nil { _ = sqlite_close(database) }
-    return OpenResult{ code: code }
+    return OpenResult{ code: code, failure: io.Failure{ kind: io.Kind.System } }
   }
-  return OpenResult{ database: database, code: code, ok: true }
+  return OpenResult{ database: database, code: code }
 }
-pub fn close(database: Database) i32 {
-  if database == nil {
-    return 0
+// A SQLite result code as a failure: SQLITE_OK (0) succeeds, and native keeps
+// any other code.
+fn code_failure(code: i32) io.Failure {
+  if code == 0 {
+    return io.Failure{}
   }
-  return sqlite_close(database)
+  return io.Failure{ kind: io.Kind.System, native: #cast(isize, code) }
+}
+pub fn close(database: Database) io.Failure {
+  if database == nil {
+    return io.Failure{}
+  }
+  return code_failure(sqlite_close(database))
 }
 
 // SQL is borrowed only for call. SQLite owns returned error; wrapper releases it.
-pub fn execute(database: Database, sql: []const u8, buffer: []u8) i32 {
+pub fn execute(database: Database, sql: []const u8, buffer: []u8) io.Failure {
   if database == nil {
-    return -1
+    return code_failure(-1)
   }
   encoded := c.string_into(buffer, sql)
-  if encoded.failure.kind != parse.Kind.Ok {
-    return string_error(encoded.failure.kind)
+  if parse.failed(encoded.failure) {
+    return code_failure(string_error(encoded.failure.kind))
   }
   error: rawptr = nil
   code := sqlite_exec(database, encoded.value, nil, nil, &error)
   if error != nil {
     sqlite_free(error)
   }
-  return code
+  return code_failure(code)
 }
 
 // Returned bytes borrow database and expire at next SQLite call or close.
@@ -72,7 +80,7 @@ pub fn error_message(database: Database, maximum: usize) []const u8 {
     return ""
   }
   value := c.bytes_from_string(sqlite_error_message(database), maximum)
-  if value.failure.kind != parse.Kind.Ok {
+  if parse.failed(value.failure) {
     return ""
   }
   return value.value

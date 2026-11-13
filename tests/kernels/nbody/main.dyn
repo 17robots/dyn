@@ -25,7 +25,7 @@ fn step(b: []Body, dt: f64) {
   }
 }
 fn main() {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   bodies := mem.push_array(Body, arena, 64)
   for i in 0..64 {
     v := #cast(f64, i)

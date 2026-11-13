@@ -43,7 +43,7 @@ fn make_raw(_descriptor: isize, state: *State) {
 }
 
 pub fn size(descriptor: isize) Size {
-  bytes: [8]u8 = []
+  bytes: [8]u8
   code := control(descriptor, 1074295912, &bytes[0])
   if code < 0 {
     return Size{ failure: io.darwin_failure(code) }

@@ -8,6 +8,11 @@ pub enum Kind { Ok, Syntax, Truncated, Overflow, Capacity, Unsupported, Checksum
 pub struct Failure { kind: Kind, offset: usize, message: []const u8 }
 
 // A stream decoder fails on its input text or on the stream that carries it.
+// Whether a step failed. Kind.Ok is the zero value, so a zero Failure succeeded.
+pub fn failed(failure: Failure) bool {
+  return failure.kind != Kind.Ok
+}
+
 pub enum StreamKind { Ok, Parse, Io }
 pub struct StreamFailure { kind: StreamKind, parse: Failure, io: io.Failure }
 
@@ -29,7 +34,7 @@ pub fn stream_result(failure: StreamFailure, transferred: usize) io.Transfer {
   } else if failure.parse.kind == Kind.Overflow {
     kind = io.Kind.Overflow
   }
-  return io.Transfer{ transferred: transferred, error: failure.io.native, kind: kind, status: io.Status.Error }
+  return io.Transfer{ transferred: transferred, failure: io.Failure{ kind: kind, native: failure.io.native } }
 }
 
 // A value and how decoding went. value is zero or partial on failure.

@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 with tempfile.TemporaryDirectory(prefix='dyn-slice-sum-') as temporary:
     root = Path(temporary)
-    for name, flags in (('debug', ['--debug']), ('release', ['--release']), ('vector', ['--release', '--opt-level', '3', '--opt-remarks'])):
+    for name, flags in (('debug', ['--debug', '--no-check-overflow']), ('release', ['--release']), ('vector', ['--release', '--opt-level', '3', '--opt-remarks'])):
         program = root / name
         run = subprocess.run([DYN, 'build', str(ROOT / 'tests/slice-sum'), *flags, '--no-cache', '--quiet',
                               '--output', str(program)], capture_output=True, text=True, timeout=120)

@@ -2,7 +2,7 @@ use "std/container/map"
 use "std/io"
 use "std/mem"
 fn main() {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   m: map.Map(u64, u64)
   map.init(&m, arena)
   t: u64 = 0

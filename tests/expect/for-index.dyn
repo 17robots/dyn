@@ -1,0 +1,7 @@
+// for x, i in xs gives each element and its usize index.
+fn main() {
+  values: [3]i32 = [1, 2, 3]
+  for value, i in values { _ = value + #cast(i32, i) }
+  for i, j in 0..3 { _ = i } // error: a range loop's variable is already its index
+  for same, same in values { _ = same } // error: different names
+}

@@ -1,0 +1,7 @@
+// A local never takes the name of a module its file imports.
+use "std/bytes"
+
+fn main() {
+  bytes := "abc" // error: a local cannot take the name of the imported module 'bytes'
+  _ = bytes
+}

@@ -96,7 +96,7 @@ pub fn string_from_bytes(arena: *memory.Arena, source: []const u8) StringResult 
   mark := memory.arena_mark(arena)
   allocation := memory.arena_push_uninit(arena, #len(source) + 1, 1)
   result := string_into(#slice(allocation, #len(source) + 1), source)
-  if result.failure.kind != parse.Kind.Ok {
+  if parse.failed(result.failure) {
     memory.arena_rewind(arena, mark)
   }
   return result

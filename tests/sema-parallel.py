@@ -29,7 +29,7 @@ def function(i):
     value = f'f{i - 1}' if i else 'base'
     generic = f'  total += #cast(i64, same(#cast(u{8 << (i % 4)}, x)))\n' if i % 97 == 5 else ''
     return f'''fn f{i}(x: i64) i64 {{
-  numbers: [{size}]u16 = []
+  numbers: [{size}]u16
   numbers[{i % size}] = #cast(u16, x & 255)
   view := &numbers
   values: [3]i64 = [x, {i}, 2]
@@ -76,7 +76,7 @@ fn main() {
 '''
 LIFETIME = 'fn f{i}(x: i64) *i64 {{\n  y: i64 = x\n  p := &y\n  return p\n}}\n'
 TYPE = 'fn f{i}(x: i64) i64 {{\n  y: bool = x\n  return {i}\n}}\n'
-ARENA = ('fn f{i}(x: i64) i64 {{\n  storage: [64 + mem.ArenaBufferOverhead]u8 = []\n'
+ARENA = ('fn f{i}(x: i64) i64 {{\n  storage: [64 + mem.ArenaBufferOverhead]u8\n'
          '  original := mem.arena_from_buffer(storage[..])\n  copy := original.*\n  _ = copy\n  return x\n}}\n')
 BROKEN = {
     'type': {300: TYPE, 1800: TYPE},

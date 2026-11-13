@@ -35,7 +35,7 @@ pub fn block(destination: []u8, key: []const u8, nonce: []const u8, counter: u32
   if #len(destination) < 64 || #len(key) != 32 || #len(nonce) != 12 {
     return false
   }
-  initial: [16]u32 = []
+  initial: [16]u32
   initial[0] = 1634760805
   initial[1] = 857760878
   initial[2] = 2036477234
@@ -80,7 +80,7 @@ pub fn xor(destination: []u8, input: []const u8, key: []const u8, nonce: []const
   if #cast(u64, blocks) > 4294967296 - #cast(u64, counter) {
     return false
   }
-  stream: [64]u8 = []
+  stream: [64]u8
   at: usize = 0
   block_counter := counter
   for at < #len(input) {

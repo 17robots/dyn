@@ -14,12 +14,12 @@ pub fn parse(arena: *memory.Arena, source: []const u8) ParseResult {
 
 fn write(destination: io.Writer, source: []const u8) RenderResult {
   result := io.write_all(destination, source)
-  if result.status == io.Status.Error {
-    kind:=result.kind
+  if io.failed(result.failure) {
+    kind:=result.failure.kind
     if kind==io.Kind.Ok {
       kind=io.Kind.System
     }
-    return RenderResult{ failure: parse.io_failure(kind, result.error) }
+    return RenderResult{ failure: parse.io_failure(kind, result.failure.native) }
   }
   return RenderResult{}
 }

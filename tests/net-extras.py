@@ -15,20 +15,20 @@ fn check(ok: bool) {
 }
 fn exchange(listener: *net.Listener, connection: *net.Connection) {
   accepted := net.listener_accept(listener)
-  check(accepted.failure.kind == errors.Kind.Ok)
+  check(!errors.failed(accepted.failure))
   peer := accepted.value
-  check(net.connection_write(connection, "ping").failure.kind == errors.Kind.Ok)
+  check(!errors.failed(net.connection_write(connection, "ping").failure))
   check(net.wait(peer.descriptor, net.PollReadable, 1000).value != 0)
-  buffer: [4]u8 = []
+  buffer: [4]u8
   got := net.connection_read(&peer, buffer[..])
-  check(got.failure.kind == errors.Kind.Ok && got.value == 4 && buffer[0] == 112 && buffer[3] == 103)
+  check(!errors.failed(got.failure) && got.value == 4 && buffer[0] == 112 && buffer[3] == 103)
   net.connection_close(&peer)
   net.connection_close(connection)
   net.listener_close(listener)
 }
 fn main() {
   check(net.unix("").length == 0 && net.unix("bad\x00path").length == 0)
-  oversized: [108]u8 = []
+  oversized: [108]u8
   check(net.unix(oversized[..]).length == 0)
   invalid := net.unix("")
   check(net.unix_listen(&invalid, 1).failure.kind == errors.Kind.InvalidInput)
@@ -37,52 +37,52 @@ fn main() {
   check(net.connect_unix(-1, &invalid).failure.kind == errors.Kind.InvalidInput)
   path := net.unix("dyn-net-extras.sock")
   opened := net.unix_listen(&path, 4)
-  check(opened.failure.kind == errors.Kind.Ok)
+  check(!errors.failed(opened.failure))
   listener := opened.value
   connected := net.unix_connect(&path)
-  check(connected.failure.kind == errors.Kind.Ok)
+  check(!errors.failed(connected.failure))
   connection := connected.value
   exchange(&listener, &connection)
 
-  loopback: [16]u8 = []
+  loopback: [16]u8
   loopback[15] = 1
   address := net.ipv6(loopback, 0, 0)
   opened = net.tcp_listen_ipv6(&address, 4)
-  check(opened.failure.kind == errors.Kind.Ok)
+  check(!errors.failed(opened.failure))
   listener = opened.value
   local := net.Address{}
-  check(net.local_address(listener.descriptor, &local).failure.kind == errors.Kind.Ok && local.length == 28)
+  check(!errors.failed(net.local_address(listener.descriptor, &local).failure) && local.length == 28)
   port := (#cast(u16, local.bytes[2]) << 8) | #cast(u16, local.bytes[3])
   address = net.ipv6(loopback, port, 0)
   connected = net.tcp_connect_ipv6(&address)
-  check(connected.failure.kind == errors.Kind.Ok)
+  check(!errors.failed(connected.failure))
   connection = connected.value
   exchange(&listener, &connection)
 
   socket := net.socket(net.AddressFamilyIpv4, net.SocketDatagram, 0)
-  check(socket.failure.kind == errors.Kind.Ok)
+  check(!errors.failed(socket.failure))
   descriptor := socket.value
   bound := net.ipv4(0, 0, 0, 0, 0)
-  check(net.bind_ipv4(descriptor, &bound).failure.kind == errors.Kind.Ok)
-  check(net.local_address(descriptor, &local).failure.kind == errors.Kind.Ok)
+  check(!errors.failed(net.bind_ipv4(descriptor, &bound).failure))
+  check(!errors.failed(net.local_address(descriptor, &local).failure))
   port = (#cast(u16, local.bytes[2]) << 8) | #cast(u16, local.bytes[3])
   group: [4]u8 = [239, 255, 42, 17]
   interface: [4]u8 = [127, 0, 0, 1]
   bad: [4]u8 = [127, 0, 0, 1]
   check(net.multicast_join_ipv4(descriptor, bad, interface).failure.kind == errors.Kind.InvalidInput)
-  check(net.multicast_join_ipv4(descriptor, group, interface).failure.kind == errors.Kind.Ok)
-  check(net.multicast_interface_ipv4(descriptor, interface).failure.kind == errors.Kind.Ok)
-  check(net.multicast_ttl_ipv4(descriptor, 1).failure.kind == errors.Kind.Ok)
-  check(net.multicast_loop_ipv4(descriptor, true).failure.kind == errors.Kind.Ok)
+  check(!errors.failed(net.multicast_join_ipv4(descriptor, group, interface).failure))
+  check(!errors.failed(net.multicast_interface_ipv4(descriptor, interface).failure))
+  check(!errors.failed(net.multicast_ttl_ipv4(descriptor, 1).failure))
+  check(!errors.failed(net.multicast_loop_ipv4(descriptor, true).failure))
   destination := net.ipv4(239, 255, 42, 17, port)
-  check(net.send_to(descriptor, "group", 0, destination.bytes[..]).failure.kind == errors.Kind.Ok)
+  check(!errors.failed(net.send_to(descriptor, "group", 0, destination.bytes[..]).failure))
   ready := net.wait(descriptor, net.PollReadable, 2000)
-  check(ready.failure.kind == errors.Kind.Ok && ready.value != 0)
-  data: [8]u8 = []
+  check(!errors.failed(ready.failure) && ready.value != 0)
+  data: [8]u8
   received := net.receive(descriptor, data[..], 0)
-  check(received.failure.kind == errors.Kind.Ok && received.value == 5 && data[0] == 103 && data[4] == 112)
-  check(net.multicast_leave_ipv4(descriptor, group, interface).failure.kind == errors.Kind.Ok)
-  check(net.multicast_loop_ipv4(descriptor, false).failure.kind == errors.Kind.Ok)
+  check(!errors.failed(received.failure) && received.value == 5 && data[0] == 103 && data[4] == 112)
+  check(!errors.failed(net.multicast_leave_ipv4(descriptor, group, interface).failure))
+  check(!errors.failed(net.multicast_loop_ipv4(descriptor, false).failure))
   net.close(descriptor)
 }
 '''

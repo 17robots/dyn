@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""--check-overflow: the program's own + - * << and negation panic on overflow
-in debug builds, std code keeps wrapping, math.wrapping_* never checks, and
-release builds reject the flag."""
+"""Debug builds check overflow by default: the program's own + - * << and
+negation panic on overflow, std code keeps wrapping, math.wrapping_* never
+checks, --no-check-overflow wraps, and release builds reject --check-overflow."""
 import os
 from pathlib import Path
 import platform
@@ -25,7 +25,7 @@ fn bump(x: i32) i32 {
 
 fn main() {
   program := process.start()
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   m: map.Map(u64, u64)
   map.init(&m, arena)
   map.insert(&m, 18446744073709551615, 7)
@@ -52,9 +52,9 @@ fn main() {
 with tempfile.TemporaryDirectory(prefix='dyn-check-overflow-') as directory:
     work = Path(directory)
     (work / 'main.dyn').write_text(SOURCE)
-    for checked in (False, True):
+    for checked, flags in ((True, []), (True, ['--check-overflow']), (False, ['--no-check-overflow']),
+                           (False, ['--release'])):
         output = work / ('checked' if checked else 'plain')
-        flags = ['--check-overflow'] if checked else []
         built = subprocess.run([DYN, 'build', *flags, '--no-cache', str(work), '--output', str(output)],
                                capture_output=True, text=True, timeout=120)
         assert built.returncode == 0, built.stderr
@@ -70,4 +70,4 @@ with tempfile.TemporaryDirectory(prefix='dyn-check-overflow-') as directory:
     rejected = subprocess.run([DYN, 'build', '--release', '--check-overflow', str(work), '--output', str(work / 'r')],
                               capture_output=True, text=True, timeout=60)
     assert rejected.returncode == 2 and '--check-overflow is for debug builds' in rejected.stderr, rejected.stderr
-print('PASS --check-overflow: own arithmetic checked, std and wrapping_* wrap, release rejects it')
+print('PASS overflow checks: debug default checks own arithmetic, std and wrapping_* wrap, opt-out and release wrap')

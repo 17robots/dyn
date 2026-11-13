@@ -278,7 +278,7 @@ static void statement(Dump *d,const DynIrStmt *s) {
       ref(d,"loop","loop",s->loop_id,p->statement_count,false);
       flag(d,"pointer",s->for_pointer); flag(d,"const",s->for_const);
       flag(d,"range",s->for_range); flag(d,"inclusive",s->for_inclusive);
-      flag(d,"reverse",s->for_reverse); break;
+      flag(d,"reverse",s->for_reverse); flag(d,"index",s->for_index); break;
     case DYN_STMT_BREAK: case DYN_STMT_CONTINUE:
       ref(d,"target_loop","loop",s->target_loop_id,p->statement_count,false); break;
     case DYN_STMT_CASE:

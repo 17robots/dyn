@@ -165,7 +165,7 @@ fn main() {
   T_Packed_word_set(&packed_value, 1234)
   if T_Packed_word_get(&packed_value) != 1234 { #panic("packed field") }
   bytes: T_Bytes = [1, 2, 3]
-  result: T_Bytes = []
+  result: T_Bytes
   T_Packed_bytes_set(&packed_value, &bytes)
   T_Packed_bytes_get(&packed_value, &result)
   if result[2] != 3 || result[7] != 0 { #panic("packed array") }

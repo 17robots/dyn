@@ -8,7 +8,7 @@ source=r'''
 use "std/mem" mem
 arenas: [8]*mem.Arena
 pub fn allocate(slot: usize, size: usize) usize {
-  made := mem.arena_create(size + mem.ArenaHeader)
+  made := mem.arena_alloc(size + mem.ArenaHeader)
   arenas[slot] = made
   return #cast(usize, mem.arena_push(arenas[slot], size, 1))
 }
@@ -25,7 +25,7 @@ pub fn fixed() bool {
   return !mem.arena_try_push(arena, 1, 1).ok
 }
 pub fn growing() bool {
-  arena := mem.arena_create(65536 + mem.ArenaHeader)
+  arena := mem.arena_alloc(65536 + mem.ArenaHeader)
   first := mem.arena_push(arena, 65536, 8)
   first.* = 42
   second := mem.arena_push(arena, 65536, 8)

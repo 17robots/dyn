@@ -21,27 +21,27 @@ fn main() {
     if result.index!=expected || result.found!=(expected!=5) { #panic("search miss position") }
     _=values[..result.index]
   }
-  empty:[0]i32=[]
+  empty:[0]i32
   if sort.search(empty[..],0).index!=0 || sort.search(empty[..],0).found { #panic("empty search") }
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   defer mem.arena_release(arena)
   prefix:=mem.push(u8,arena)
   prefix.*=91
   mark:=mem.arena_mark(arena)
   parsed:=mdesk.parse(arena,"valid: 1\nbroken: {")
   if parsed.failure.kind != parse.Kind.Truncated { #panic("mdesk error fields") }
-  if parsed.failure.kind == parse.Kind.Ok || parsed.root!= &mdesk.nil_node || !mdesk.is_nil(parsed.root) { #panic("failed root") }
+  if !parse.failed(parsed.failure) || parsed.root!= &mdesk.nil_node || !mdesk.is_nil(parsed.root) { #panic("failed root") }
   if mem.arena_mark(arena)!=mark || prefix.*!=91 { #panic("failed parse rollback") }
   if mdesk.child(parsed.root,"valid")!= &mdesk.nil_node || mdesk.child_count(parsed.root)!=0 { #panic("stub navigation") }
   valid:=mdesk.parse(arena,"valid: 1")
-  if valid.failure.kind != parse.Kind.Ok || mdesk.is_nil(valid.root) { #panic("parse after failure") }
+  if parse.failed(valid.failure) || mdesk.is_nil(valid.root) { #panic("parse after failure") }
   jsonmark:=mem.arena_mark(arena)
   invalidjson:=json.parse(arena,"{broken")
-  if invalidjson.failure.kind == parse.Kind.Ok || invalidjson.failure.kind != parse.Kind.Syntax || invalidjson.root!= &json.nil_value || mem.arena_mark(arena)!=jsonmark { #panic("JSON syntax fields/stub/rollback") }
+  if !parse.failed(invalidjson.failure) || invalidjson.failure.kind != parse.Kind.Syntax || invalidjson.root!= &json.nil_value || mem.arena_mark(arena)!=jsonmark { #panic("JSON syntax fields/stub/rollback") }
   trailing:=json.parse(arena,"null garbage")
-  if trailing.failure.kind == parse.Kind.Ok || trailing.failure.kind != parse.Kind.Syntax || !mem.equal(trailing.failure.message, "trailing data") || trailing.offset!=5 || trailing.root!= &json.nil_value || mem.arena_mark(arena)!=jsonmark { #panic("JSON trailing fields") }
+  if !parse.failed(trailing.failure) || trailing.failure.kind != parse.Kind.Syntax || !mem.equal(trailing.failure.message, "trailing data") || trailing.offset!=5 || trailing.root!= &json.nil_value || mem.arena_mark(arena)!=jsonmark { #panic("JSON trailing fields") }
   validjson:=json.parse(arena,"null")
-  if validjson.failure.kind != parse.Kind.Ok || validjson.root.kind!=json.KindNull { #panic("JSON success fields") }
+  if parse.failed(validjson.failure) || validjson.root.kind!=json.KindNull { #panic("JSON success fields") }
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-std-misses-') as directory:

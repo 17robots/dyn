@@ -32,7 +32,7 @@ fn bitmap(data: rawptr, codepoint: u32) software.Glyph {
   return software.Glyph{ pixels: coverage[..], width: 6, height: 8, stride: 6, advance: 7, y_offset: 2 }
 }
 
-fn measure(data: rawptr, text: []const u8) f32 {
+fn measure(data: *u8, text: []const u8) f32 {
   _ = data
   return 7.0 * #cast(f32, #len(text))
 }
@@ -60,7 +60,7 @@ fn build(state: *box.State, context: *ui.Context, arena: *mem.Arena) {
 }
 
 fn main() {
-  persistent_arena = mem.arena_create(0)
+  persistent_arena = mem.arena_alloc(0)
   defer mem.arena_release(persistent_arena)
   for i in 0..48 {
     coverage[i] = 255
@@ -74,28 +74,28 @@ fn main() {
     window.close(&host)
   }
   loaded := gl.load(window.gl_proc)
-  check(loaded.ok, "gl")
+  check(!errors.failed(loaded.failure), "gl")
   batch := mem.push(gpu.Batch, persistent_arena)
-  check(gpu.open_batch(batch, loaded.api).ok, "open batch")
+  check(!errors.failed(gpu.open_batch(batch, loaded.api).failure), "open batch")
   defer {
     gpu.close_batch(batch)
   }
-  arena := mem.arena_create(16777216)
+  arena := mem.arena_alloc(16777216)
   defer {
     mem.arena_release(arena)
   }
-  state := box.create(persistent_arena, measure, nil, 12.0)
+  state := box.push_state(persistent_arena, measure, nil, 12.0)
   context := ui.Context{ style: ui.default_style }
   build(state, &context, arena)
   build(state, &context, arena)
   font := software.Font{ glyph: bitmap, line_height: 12 }
   pixels := mem.push_array(u8, persistent_arena, #cast(usize, 61440))
   surface := software.Surface{ pixels: pixels, width: 160, height: 96, stride: 640 }
-  check(software.render(&surface, ui.first(&context), font).failure.kind == errors.Kind.Ok, "software")
+  check(!errors.failed(software.render(&surface, ui.first(&context), font).failure), "software")
   vertices := mem.push_array(f32, persistent_arena, #cast(usize, 86016))
   loaded.api.clear_color(0.0, 0.0, 0.0, 0.0)
   loaded.api.clear(gl.ColorBufferBit)
-  check(gpu.render_batch(batch, ui.first(&context), 160, 96, font, vertices).ok, "batch render")
+  check(!errors.failed(gpu.render_batch(batch, ui.first(&context), 160, 96, font, vertices).failure), "batch render")
   actual := mem.push_array(u8, persistent_arena, #cast(usize, 61440))
   loaded.api.read_pixels(0, 0, 160, 96, gl.Rgba, gl.UnsignedByte, &actual[0])
   worst: i32 = 0
@@ -117,12 +117,12 @@ fn main() {
   check(batch.draw_calls == 1, "single draw call")
   uploads := batch.uploads
   check(uploads >= 1 && uploads <= 12, "atlas uploads distinct glyphs")
-  check(gpu.render_batch(batch, ui.first(&context), 160, 96, font, vertices).ok, "second render")
+  check(!errors.failed(gpu.render_batch(batch, ui.first(&context), 160, 96, font, vertices).failure), "second render")
   check(batch.uploads == uploads, "cached glyphs are not uploaded again")
   // Tiny vertex storage still renders, with more draw calls.
-  tiny: [84]f32 = []
+  tiny: [84]f32
   calls := batch.draw_calls
-  check(gpu.render_batch(batch, ui.first(&context), 160, 96, font, tiny[..]).ok, "tiny stream")
+  check(!errors.failed(gpu.render_batch(batch, ui.first(&context), 160, 96, font, tiny[..]).failure), "tiny stream")
   check(batch.draw_calls - calls > 5, "tiny stream flushes often")
   check(gpu.render_batch(batch, ui.first(&context), 160, 96, font, tiny[..10]).kind == errors.Kind.InvalidInput, "stream too small")
   check(window.poll(&host).kind == errors.Kind.Ok && window.swap(&host).kind == errors.Kind.Ok, "present")

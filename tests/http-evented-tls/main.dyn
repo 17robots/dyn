@@ -37,19 +37,19 @@ fn handle(response: *http.Response, request: *const http.Request, app: *App) htt
       return text(response, app.big)
     }
     if #len(http.body_buffer(response, 1)) != 0 { #panic("second reservation succeeded") }
-    if http.respond_buffered(response, BigSize + 1, http.ResponseOptions{}).failure.kind == io.Kind.Ok {
+    if !io.failed(http.respond_buffered(response, BigSize + 1, http.ResponseOptions{}).failure) {
       #panic("oversize commit succeeded")
     }
     bad_headers: [1]http.Header = [http.Header{ name: "X-Test", value: "bad\r\nheader" }]
-    if http.respond_buffered(response, 1, http.ResponseOptions{ headers: bad_headers[..] }).failure.kind == io.Kind.Ok {
+    if !io.failed(http.respond_buffered(response, 1, http.ResponseOptions{ headers: bad_headers[..] }).failure) {
       #panic("invalid header succeeded")
     }
     _ = mem.copy(body, app.big)
     length := BigSize
     if bytes.equal(request.path, "/buffered-empty") { length = 0 }
     result := http.respond_buffered(response, length, http.ResponseOptions{ content_type: "text/plain" })
-    if result.failure.kind != io.Kind.Ok { return result }
-    if http.respond_buffered(response, 1, http.ResponseOptions{}).failure.kind == io.Kind.Ok {
+    if io.failed(result.failure) { return result }
+    if !io.failed(http.respond_buffered(response, 1, http.ResponseOptions{}).failure) {
       #panic("second commit succeeded")
     }
     return result
@@ -71,15 +71,15 @@ fn handle(response: *http.Response, request: *const http.Request, app: *App) htt
 }
 
 fn main() i32 {
-  arena := mem.arena_create(64 * mem.MiB)
+  arena := mem.arena_alloc(64 * mem.MiB)
   defer mem.arena_release(arena)
   arguments := process.arguments(arena)
-  if arguments.failure.kind != io.Kind.Ok || #len(arguments.value) != 3 {
+  if io.failed(arguments.failure) || #len(arguments.value) != 3 {
     io.eprintln("usage: main CERT.pem KEY.pem")
     return 2
   }
   context := tls.server_config_create(arena, arguments.value[1], arguments.value[2])
-  if context.failure.kind != io.Kind.Ok {
+  if io.failed(context.failure) {
     io.eprintln("cannot load certificate and key")
     return 1
   }
@@ -110,7 +110,7 @@ fn main() i32 {
   config.spawner = &spawner
   workers := mem.push_array(evented.Worker, arena, 2)
   started := evented.start_shared(arena, workers, net.ipv4(127, 0, 0, 1, 0), 128, config, binding.handler, binding.context)
-  if started.failure.kind != io.Kind.Ok {
+  if io.failed(started.failure) {
     io.eprintln("cannot start workers")
     return 1
   }
@@ -128,7 +128,7 @@ fn main() i32 {
     if worker.send_pool.free_count != config.overflow_send_count { #panic("overflow block leaked") }
   }
   tls.config_release(&context.value)
-  if joined.failure.kind != io.Kind.Ok {
+  if io.failed(joined.failure) {
     return 1
   }
   return 0

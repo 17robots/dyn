@@ -2506,6 +2506,7 @@ static void statement_scopes(BackendContext *ctx, const DynIrProgram *ir, const 
   /* Loop and case bindings cover the statement that introduces them. */
   unsigned base = ctx->scope_count;
   if (s->kind == DYN_STMT_FOR) scope_open(ctx, f, s->local_id, before);
+  if (s->kind == DYN_STMT_FOR && s->for_index) scope_open(ctx, f, s->local_id + 1, before);
   if (s->kind == DYN_STMT_CASE && (uint64_t)s->case_arm_start + s->case_arm_count <= ir->case_arm_count)
     for (uint32_t j = 0; j < s->case_arm_count; ++j)
       scope_open(ctx, f, ir->case_arms[s->case_arm_start + j].local_id, before);
@@ -2788,6 +2789,10 @@ static bool block_statements_value(BackendContext *ctx, const DynIrProgram *ir, 
       isa_load(ctx, R_A, counter);
       if (s->for_reverse) { isa_test(ctx, R_A); pending_jump(ctx, CC_E,&ctx->loops[loop].breaks); isa_step(ctx, -1); }
       else { isa_compare_frame(ctx, length); pending_jump(ctx, CC_AE,&ctx->loops[loop].breaks); }
+      if (s->for_index) {
+        uint32_t index_slot; if (!local_slot(ctx, f,s->local_id+1,&index_slot)) return false;
+        isa_store(ctx, R_A, index_slot);
+      }
       isa_scale(ctx, R_A, element_size); isa_add_frame(ctx, data);
       if (s->for_pointer) isa_store(ctx, R_A, binding);
       else if (scalar(ir, element)) { load_memory(ctx, element); isa_store(ctx, R_A, binding); }

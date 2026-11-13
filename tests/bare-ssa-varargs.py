@@ -91,7 +91,7 @@ fn('change','','u32','state.a=99\nreturn 7')
 fn('snapshot','','u32','state=Large{a:11,e:55}\nreturn snap(state,change())')
 c+='W snap(Large x,...){va_list ap;va_start(ap,x);W a=va_arg(ap,int);va_end(ap);return x.a==11 && x.e==55 && a==7?88:0;}\n';checks.append('snapshot()!=88')
 src+='extern fn touch(p:rawptr)\n';c+='void touch(void*p){__asm__ volatile(""::"r"(p):"memory");}\n'
-fn('largeframe','','u32','a:[2049]u64=[]\ntouch(&a)\nreturn cv(1,#cast(f32,1.5),23)');checks.append('largeframe()!=77')
+fn('largeframe','','u32','a:[2049]u64\ntouch(&a)\nreturn cv(1,#cast(f32,1.5),23)');checks.append('largeframe()!=77')
 src+='extern fn capacity(x:u32,...) u32\n'
 fn('capacitycall','','u32','return capacity(511,'+','.join(['1']*511)+')')
 c+='W capacity(W x,...){va_list ap;va_start(ap,x);W sum=0;for(W i=0;i<x;i++)sum+=va_arg(ap,int);va_end(ap);return sum;}\n';checks.append('capacitycall()!=511')

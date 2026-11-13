@@ -190,7 +190,7 @@ use "std/mem" mem
 extern fn key "dyn_send_key"(display:rawptr,handle:usize,symbol:usize,modifiers:u32,down:i32)
 fn check(ok:bool){if !ok{#panic("XIM commit bounds")}}
 fn main(){
- arena:=mem.arena_create(0)
+ arena:=mem.arena_alloc(0)
  defer{mem.arena_release(arena)}
  split:=process.environment(arena,"DYN_TEST_SPLIT_COMMIT").found
  host:=window.Window{}

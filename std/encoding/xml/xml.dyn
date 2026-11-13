@@ -91,8 +91,8 @@ pub fn next_stream(state: *StreamScanner) Result {
       return stream_fail(state, parse.parse_failure(parse.Kind.Capacity, 0, ""))
     }
     input_result := stream.read(state.input, state.storage[state.used..])
-    if input_result.status == stream.Status.Error {
-      return stream_fail(state, parse.io_failure(input_result.kind, input_result.error))
+    if stream.failed(input_result.failure) {
+      return stream_fail(state, parse.io_failure(input_result.failure.kind, input_result.failure.native))
     }
     if input_result.transferred > #len(state.storage) - state.used {
       return stream_fail(state, parse.io_failure(stream.Kind.System, -5))
@@ -108,14 +108,14 @@ pub fn writer(destination_writer: stream.Writer) Writer {
   return Writer{ sink: destination_writer }
 }
 
-fn emit(state: *Writer, bytes: []const u8) bool {
+fn emit(state: *Writer, data: []const u8) bool {
   if state.failed {
     return false
   }
-  result := stream.write_all(state.sink, bytes)
-  if result.status == stream.Status.Error {
+  result := stream.write_all(state.sink, data)
+  if stream.failed(result.failure) {
     state.failed = true
-    state.failure = parse.io_failure(result.kind, result.error)
+    state.failure = parse.io_failure(result.failure.kind, result.failure.native)
     return false
   }
   return true
@@ -410,7 +410,7 @@ fn attribute_error(state: *AttributeScanner) Attribute {
   return Attribute{ failure: state.failure }
 }
 pub fn next_attribute(state: *AttributeScanner) Attribute {
-  if state.failure.kind != parse.Kind.Ok {
+  if parse.failed(state.failure) {
     return Attribute{ failure: state.failure }
   }
   at := state.offset
@@ -465,7 +465,7 @@ fn valid_attributes(event: Event) bool {
     before := scan.offset
     item := next_attribute(&scan)
     if !item.found {
-      return scan.failure.kind == parse.Kind.Ok
+      return !parse.failed(scan.failure)
     }
     previous := attributes(event)
     for previous.offset < before {

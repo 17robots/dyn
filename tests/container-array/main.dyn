@@ -12,7 +12,7 @@ struct Enemy {
 }
 
 fn main() {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   enemies: array.Array(Enemy)
   array.init(&enemies, arena)
   check(#len(enemies.items) == 0 && array.get(&enemies, 0) == nil)
@@ -44,9 +44,9 @@ fn main() {
   check(#len(other.items) == 503 && other.items[502] == 9)
 
   last := array.pop(&other)
-  check(last.ok && last.value == 9 && #len(other.items) == 502)
+  check(last.found && last.value == 9 && #len(other.items) == 502)
   array.clear(&other)
-  check(#len(other.items) == 0 && !array.pop(&other).ok)
+  check(#len(other.items) == 0 && !array.pop(&other).found)
   array.push(&other, 42)
   check(other.items[0] == 42)
 }

@@ -30,7 +30,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-generic-structs-') as temporary:
     (project / 'main.dyn').write_text(
         'use "./shapes" shapes\n'
         'fn twice(box: shapes.Box(i32)) i32 {\n  return box.value * 2\n}\n'
-        'fn main() {\n  a := shapes.wrap(4)\n  b: shapes.Box(f64) = .{ value: 1.5 }\n'
+        'fn main() {\n  a := shapes.wrap(4)\n  b := shapes.Box(f64){ value: 1.5 }\n'
         '  if twice(a) != 8 || shapes.read(b) != 1.5 {\n    #panic("imported")\n  }\n}\n')
     program = root / 'imported'
     subprocess.run([DYN, 'build', str(project), '--quiet', '--no-cache', '--output', str(program)], check=True, timeout=120)

@@ -7,7 +7,8 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
-SOURCE = r'''use "std/hash"
+SOURCE = r'''use "std/enums"
+use "std/hash"
 
 enum(u8) Op { Nop, Add, Sub, Halt }
 enum(i8) Dir { Back, Stay, Forward }
@@ -56,8 +57,9 @@ fn main() {
   expect(#cast(u8, Op.Sub) == 2 && #cast(u8, Op.Halt) == 3, "dense values")
   expect(#cast(i32, Dir.Forward) == 2 && #cast(u32, Plain.C) == 2, "signed and plain")
   byte: u8 = 3
-  expect(#cast(Op, byte) == Op.Halt, "from integer")
-  expect(#len(name(#cast(Op, 2))) == 3, "case on cast value")
+  expect(enums.from_int(Op, byte) == Op.Halt, "from integer")
+  expect(#len(name(enums.from_int(Op, 2))) == 3, "case on converted value")
+  expect(enums.from_int(Op, 200) == Op.Nop, "unknown tag gives the first variant")
 }
 '''
 PANICS = {
@@ -81,9 +83,11 @@ def program(directory, source):
 with tempfile.TemporaryDirectory(prefix='dyn-wrap-enum-') as temporary:
   work = Path(temporary)
   project = program(work / 'pass', SOURCE)
+  # The program checks wrapping itself, so debug builds opt out of overflow checks.
   for mode in ('--debug', '--release'):
     output = work / ('pass' + mode)
-    subprocess.run([DYN, 'build', str(project), mode, '--no-cache', '--quiet', '--output', str(output)],
+    flags = ['--no-check-overflow'] if mode == '--debug' else []
+    subprocess.run([DYN, 'build', str(project), mode, *flags, '--no-cache', '--quiet', '--output', str(output)],
                    cwd=ROOT, check=True, timeout=120)
     subprocess.run([str(output)], check=True, timeout=10)
   for index, (label, (body, check)) in enumerate(PANICS.items()):

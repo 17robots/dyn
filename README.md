@@ -143,7 +143,7 @@ use "std/io"
 
 fn main() {
   result := io.println_to(io.stdout(), "Hello, Dyn!")
-  if result.status == io.Status.Error { #panic("could not write output") }
+  if io.failed(result.failure) { #panic("could not write output") }
 }
 ```
 

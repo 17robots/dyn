@@ -1,3 +1,4 @@
+use "std/io"
 #link("dyn_box2d")
 // Box2D 3.1.1 C ABI adapter. Provider owns worlds, bodies and shapes.
 // Destroy a world to destroy all its children; IDs are generation-checked.
@@ -5,7 +6,7 @@
 pub type World = u32
 pub type Body = u64
 pub type Shape = u64
-pub struct Position { x: f32, y: f32, ok: bool }
+pub struct Position { x: f32, y: f32, failure: io.Failure }
 pub extern fn create_owned "dyn_b2_world_create"(gravity_x: f32, gravity_y: f32) World
 pub extern fn destroy_owned "dyn_b2_world_destroy"(world: World) bool
 // dt must be finite, >0 and <=1 second; substeps 1..64.
@@ -15,8 +16,8 @@ pub extern fn body_destroy "dyn_b2_body_destroy"(body: Body) bool
 // Positive finite half-extents and nonnegative finite density. Body owns shape.
 pub extern fn box_create "dyn_b2_box"(body: Body, half_width: f32, half_height: f32, density: f32) Shape
 pub fn position(body: Body) Position {
-  result := Position{}
-  result.ok = native_position(body, &result.x, &result.y)
+  result := Position{ failure: io.Failure{ kind: io.Kind.System } }
+  result.failure = io.failure_if(!(native_position(body, &result.x, &result.y)))
   return result
 }
 extern fn native_position "dyn_b2_position"(body: Body, x: *f32, y: *f32) bool
@@ -29,13 +30,13 @@ pub extern fn joint_destroy "dyn_b2_joint_destroy"(joint: Joint) bool
 pub extern fn contact_events "dyn_b2_events"(shape: Shape, enabled: bool) bool
 // Read after step and before modifying the world. -1 means invalid world.
 pub extern fn contact_count "dyn_b2_contact_count"(world: World, begin: bool) i32
-pub struct Contact { first: Shape, second: Shape, ok: bool }
+pub struct Contact { first: Shape, second: Shape, failure: io.Failure }
 pub fn contact(world: World, begin: bool, index: i32) Contact {
-  result := Contact{}
-  result.ok = native_contact(world, begin, index, &result.first, &result.second)
+  result := Contact{ failure: io.Failure{ kind: io.Kind.System } }
+  result.failure = io.failure_if(!(native_contact(world, begin, index, &result.first, &result.second)))
   return result
 }
-pub struct Query { total: usize, written: usize, ok: bool }
+pub struct Query { total: usize, written: usize, failure: io.Failure }
 // Broad-phase AABB candidates, not exact geometry overlap. Output order is
 // unspecified. total may exceed capacity; written reports the copied prefix.
 pub fn query(world: World, x0: f32, y0: f32, x1: f32, y1: f32, output: []Shape) Query {
@@ -45,14 +46,14 @@ pub fn query(world: World, x0: f32, y0: f32, x1: f32, y1: f32, output: []Shape) 
   }
   count := native_query(world, x0, y0, x1, y1, data, #len(output))
   if count < 0 {
-    return Query{}
+    return Query{ failure: io.Failure{ kind: io.Kind.System } }
   }
   total := #cast(usize, count)
   written := total
   if written > #len(output) {
     written = #len(output)
   }
-  return Query{ total: total, written: written, ok: true }
+  return Query{ total: total, written: written }
 }
 extern fn native_contact "dyn_b2_contact"(world: World, begin: bool, index: i32, first: *Shape, second: *Shape) bool
 extern fn native_query "dyn_b2_query"(world: World, x0: f32, y0: f32, x1: f32, y1: f32, output: *Shape, capacity: usize) i64
