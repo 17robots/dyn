@@ -58,6 +58,12 @@ servers so they pick up the new `dyn`.
   a loop with one call, now copies that loop into its own call six levels
   deep, so most calls never happen; the Fibonacci benchmark runs twice as
   fast.
+- Release builds emit machine code on the backend's worker threads instead
+  of one thread, and large programs (2048 live functions or more) use up to
+  12 workers: a 300,000-line project builds in 199 ms instead of 209. The
+  objects are byte for byte what serial emission writes;
+  `DYN_SERIAL_EMISSION=1` keeps emission on one thread for comparison. x86-64
+  release builds start functions that contain loops on a 16-byte boundary.
 - Functions that take or return fixed arrays or payload enums by value, such
   as `fn area(shape: Shape) f64`, and functions that call C variadic
   functions now compile to optimized SSA code on every 64-bit target. No

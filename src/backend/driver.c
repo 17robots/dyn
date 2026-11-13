@@ -88,19 +88,14 @@ typedef struct {
   size_t relocation_capacity;
   size_t relocation_count, runtime_base, runtime_count;
   unsigned function_symbols[MAX_SYMBOLS], global_symbols[MAX_SYMBOLS];
-  unsigned symbol_remap[2 * MAX_SYMBOLS + RUNTIME_COUNT];
   /* Production symbol policy: local bodies named like a foreign link name or exit/_exit get ".dyn". */
   bool function_suffixed[MAX_SYMBOLS];
   unsigned initializer_symbol, initializer_flag_symbol, first_global, dll_entry_symbol;
   bool shared;
   unsigned runtime_index[RUNTIME_COUNT], stack_slots, frame_bytes, local_words;
   uint32_t bare_stack_limit; /* Includes 4 KiB headroom for bounded assembly helpers. */
-  uint32_t local_offsets[MAX_LOCALS];
-  signed char allocator_registers[MAX_LOCALS];
   unsigned allocator_local_count, allocator_used;
   uint32_t allocator_save[4];
-  bool local_alias[MAX_LOCALS];
-  struct { uint32_t id; size_t condition, breaks, continues; unsigned defer_base; } loops[MAX_DEPTH];
   unsigned loop_depth;
   const DynIrProgram *active_ir;
   uint32_t defer_ids[MAX_DEFERS], defer_count, unwind_offset, return_offset, call_offset, sret_offset;
@@ -118,33 +113,19 @@ typedef struct {
   struct TraceFunction { uint32_t start, end, row_first, row_count, name, name_length; } *trace_functions;
   size_t trace_function_count, trace_function_capacity;
   char *trace_names; size_t trace_names_size, trace_names_capacity;
-  uint32_t captured_offsets[MAX_NODES], statement_scratch[MAX_NODES], temporary_offsets[MAX_NODES];
   /* Struct and array literals whose every field is constant are laid out in
-     the constants section once; literal_offsets holds offset + 1 from
-     literals_symbol, or 0. */
-  uint32_t literal_offsets[MAX_NODES];
+     the constants section once, after literals_symbol (see literal_offsets). */
   unsigned literals_symbol;
   /* Read-only byte strings already written, by content, so each is stored
      once. Entries past a rolled-back end of rodata are ignored. */
   struct StoredString { size_t offset, length; } *strings;
   size_t string_capacity, string_count;
-  bool visited_expr[MAX_NODES];
-  uint32_t pack_offsets[MAX_NODES];
-  uint32_t copy_offsets[MAX_NODES]; /* AAPCS64 caller copies of large struct arguments */
-  /* Ids written while sizing one function; reset touches only these, not the program. */
-  uint32_t touched_exprs[2 * MAX_NODES], touched_stmts[MAX_NODES];
-  size_t touched_expr_count, touched_stmt_count;
+  size_t touched_expr_count, touched_stmt_count; /* see touched_exprs */
   bool unwinding;
   unsigned cleanup_depth;
   bool debug_mode, relocation_failed;
   bool report; /* false: the caller selects another backend silently */
-  ArrayPart call_leaves[512];
-  AbiPart call_parts[512];
-  /* DWARF lexical scopes: [begin, end) text offsets per local; zero end means
-     the variable is visible in the whole function. */
-  size_t local_scope_begin[MAX_LOCALS], local_scope_end[MAX_LOCALS];
-  uint32_t scope_stack[MAX_LOCALS];
-  unsigned scope_count;
+  unsigned scope_count; /* see local_scope_begin */
   bool vectorize, optimization_remarks;
   bool byte_fill; /* constant fills of global byte arrays become one fill */
   bool bmi2; /* Host-selected flag-preserving variable shifts. */
@@ -152,17 +133,13 @@ typedef struct {
   bool rv64;
   bool rv32; /* RV32 pairs each 64-bit model register (rv32.inc) */
   bool t32; /* Thumb-2 (ARMv7E-M) with the same 32-bit model (t32.inc) */
-  uint32_t rv_anchors[MAX_NODES];
   unsigned rv_anchor_count;
   bool soft_float; /* Explicit software FP target; independent of variadic ABI. */
   bool a64; /* AArch64 encodings, relocations and ABI instead of x86-64 */
   bool winarm64; /* Windows AArch64 calling convention and COFF objects. */
   bool win64; /* x86-64 Windows: Microsoft x64 calling convention and COFF objects */
   bool darwin; /* macOS: Apple's AAPCS64 variant and Mach-O objects */
-  /* Windows unwind data: per function {text start, prologue length, frame bytes}. */
-  uint32_t unwind_frames[MAX_SYMBOLS + 2][4]; /* start, prologue bytes, frame bytes, saved home registers */
-  unsigned unwind_frame_count;
-  uint32_t arm_epilogues[MAX_SYMBOLS * 8][2]; /* frame index, text offset */
+  unsigned unwind_frame_count; /* see unwind_frames */
   unsigned arm_epilogue_count;
   unsigned *dwarf_types; /* DynType -> DWARF type id + 1 for this object; 1 means unknown */
   size_t message_offsets[GUARD_COUNT], message_lengths[GUARD_COUNT];
@@ -185,7 +162,6 @@ typedef struct {
      the same way emit the cleanup once per defer stack and jump to it. */
   struct { unsigned kind, count, first; size_t at; } ladders[128];
   unsigned ladder_count, ladder_pool_used;
-  uint32_t ladder_pool[16384];
   /* Linux x86-64 table-driven unwinding. Each function gets a frame record
      (where it saves callee-saved registers) and each protected direct call a
      landing record (return address to landing pad); both go to the
@@ -200,6 +176,40 @@ typedef struct {
   bool ssa_frame_valid;
   uint32_t ssa_frame_mask;
   int32_t ssa_frame_offsets[5];
+  /* x86-64 release builds start a function with loops on a 16-byte
+     boundary, so its loop headers align the same wherever it lands; the
+     driver's symbol starts after these padding bytes. */
+  unsigned ssa_entry_pad;
+  /* Set in an emission shard: a worker's private context, whose read-only
+     data goes to the shard's own list for the driver to place in order. */
+  struct SsaShard *shard;
+  /* ---- Arrays: per-node and per-local scratch, and outputs that start
+     empty. Emission shards (ssa_shard_new) copy every field above this
+     line and leave these zeroed, so they cost nothing until touched. ---- */
+  unsigned symbol_remap[2 * MAX_SYMBOLS + RUNTIME_COUNT];
+  uint32_t local_offsets[MAX_LOCALS];
+  signed char allocator_registers[MAX_LOCALS];
+  bool local_alias[MAX_LOCALS];
+  struct { uint32_t id; size_t condition, breaks, continues; unsigned defer_base; } loops[MAX_DEPTH];
+  uint32_t captured_offsets[MAX_NODES], statement_scratch[MAX_NODES], temporary_offsets[MAX_NODES];
+  /* Offset + 1 of each constant literal from literals_symbol, or 0. */
+  uint32_t literal_offsets[MAX_NODES];
+  bool visited_expr[MAX_NODES];
+  uint32_t pack_offsets[MAX_NODES];
+  uint32_t copy_offsets[MAX_NODES]; /* AAPCS64 caller copies of large struct arguments */
+  /* Ids written while sizing one function; reset touches only these, not the program. */
+  uint32_t touched_exprs[2 * MAX_NODES], touched_stmts[MAX_NODES];
+  ArrayPart call_leaves[512];
+  AbiPart call_parts[512];
+  /* DWARF lexical scopes: [begin, end) text offsets per local; zero end means
+     the variable is visible in the whole function. */
+  size_t local_scope_begin[MAX_LOCALS], local_scope_end[MAX_LOCALS];
+  uint32_t scope_stack[MAX_LOCALS];
+  uint32_t rv_anchors[MAX_NODES];
+  /* Windows unwind data per function: text start, prologue bytes, frame bytes, saved home registers. */
+  uint32_t unwind_frames[MAX_SYMBOLS + 2][4];
+  uint32_t arm_epilogues[MAX_SYMBOLS * 8][2]; /* frame index, text offset */
+  uint32_t ladder_pool[16384];
 } BackendContext;
 /* Bit order of frame record masks: rbx, r12, r13, r14, r15. */
 static int unwind_register_bit(unsigned reg) {
@@ -288,8 +298,49 @@ static uint64_t bytes_hash(const char *s, size_t length) {
   return hash;
 }
 static size_t literal_store(BackendContext *ctx, const char *s, size_t length);
+/* ---- Emission shards ----
+
+   A pipeline worker emits a function into a context of its own whose text
+   starts at offset zero. What only the whole object can number is named
+   within the shard: read-only data by piece, through a placeholder symbol
+   or a tagged addend of rodata symbol 1; runtime functions by a placeholder
+   symbol; RISC-V anchors by their index in the shard. ssa_shard_merge gives
+   each its place when the driver reaches the function, in the order serial
+   emission would have used. */
+enum { SHARD_RUNTIME_SYMBOL = 0x3f000000u, SHARD_LITERAL_SYMBOL = 0x40000000u };
+#define SHARD_TAG (INT64_C(1) << 60)
+typedef struct SsaShard {
+  /* Strings to intern, or raw words placed at an alignment and never shared. */
+  struct SsaShardPiece { size_t at, length; uint32_t align; bool raw; } *pieces;
+  uint32_t piece_count, piece_capacity;
+  char *bytes; size_t byte_count, byte_capacity;
+  bool aligned_entry; /* the function starts on a 16-byte boundary (ssa_aligned_entry) */
+} SsaShard;
+/* The rodata addend that names the start of piece. */
+static int64_t shard_tag(uint32_t piece) { return SHARD_TAG + ((int64_t)piece << 32); }
+static size_t shard_piece(BackendContext *ctx, const char *s, size_t length, uint32_t align, bool raw) {
+  SsaShard *shard = ctx->shard;
+  if (shard->piece_count == shard->piece_capacity) {
+    uint32_t capacity = shard->piece_capacity ? 2 * shard->piece_capacity : 64;
+    void *grown = realloc(shard->pieces, capacity * sizeof(*shard->pieces));
+    if (!grown) { ctx->rodata.failed = true; return 0; }
+    shard->pieces = grown; shard->piece_capacity = capacity;
+  }
+  if (length > shard->byte_capacity - shard->byte_count) {
+    size_t capacity = shard->byte_capacity ? 2 * shard->byte_capacity : 4096;
+    while (capacity - shard->byte_count < length) capacity *= 2;
+    char *grown = realloc(shard->bytes, capacity);
+    if (!grown) { ctx->rodata.failed = true; return 0; }
+    shard->bytes = grown; shard->byte_capacity = capacity;
+  }
+  memcpy(shard->bytes + shard->byte_count, s, length);
+  shard->pieces[shard->piece_count] = (struct SsaShardPiece){shard->byte_count, length, align, raw};
+  shard->byte_count += length;
+  return (size_t)shard_tag(shard->piece_count++);
+}
 static size_t literal(BackendContext *ctx, const char *s, size_t length) {
   if (!length) return 0;
+  if (ctx->shard) return shard_piece(ctx, s, length, 1, false);
   if (2 * (ctx->string_count + 1) > ctx->string_capacity) {
     size_t capacity = ctx->string_capacity ? 2 * ctx->string_capacity : 1024;
     struct StoredString *grown = calloc(capacity, sizeof(*grown));
@@ -318,6 +369,13 @@ static size_t literal_store(BackendContext *ctx, const char *s, size_t length) {
   if (length) memcpy(ctx->rodata.data + ctx->rodata.n, s, length);
   ctx->rodata.n += length;
   return offset;
+}
+/* Raw words in read-only data at a 4-byte boundary, never shared. */
+static size_t rodata_words(BackendContext *ctx, const char *bytes, size_t length) {
+  if (ctx->shard) return shard_piece(ctx, bytes, length, 4, true);
+  static const char zeros[4] = {0};
+  if (ctx->rodata.n & 3) literal_store(ctx, zeros, 4 - (ctx->rodata.n & 3));
+  return literal_store(ctx, bytes, length);
 }
 static bool grow_relocations(Elf64_Rela **items, size_t *capacity) {
   size_t next = *capacity ? *capacity * 2 : 4096;
@@ -3445,9 +3503,11 @@ static bool emit_object(BackendContext *ctx, const DynSource *source, const DynI
       if (!backend_dwarf_begin(ctx->dwarf,begin,name,file,line,column)) goto done;
     }
     ctx->ssa_frame_valid = false;
+    ctx->ssa_entry_pad = 0;
     ctx->trace_row_mark = ctx->trace_row_count;
     bool emitted = length <= string_limit - names && function(ctx, source, ir, f, &locations);
     ssa_pipeline_done(ctx, i);
+    begin += ctx->ssa_entry_pad;
     if (!emitted) {
       backend_report(ctx, "unsupported by native backend function or emission limit: %s\n", name);
       goto done;

@@ -11187,14 +11187,13 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
       /* x86-64: entries in read-only data, relative to the anchor. */
       SsaBlock *block = &s->blocks[e->tables[i].block];
       uint32_t entries = s->lists[block->table + 1];
-      static const char zeros[4] = {0};
-      if (ctx->rodata.n & 3) literal_store(ctx, zeros, 4 - (ctx->rodata.n & 3));
-      size_t table = ctx->rodata.n;
+      char *bytes = ssa_temp(s, (size_t)entries * 4 + 1);
+      if (!bytes) { s->failed = true; break; }
       for (uint32_t k = 0; k < entries; ++k) {
         int32_t delta = (int32_t)((int64_t)s->blocks[s->lists[block->table + 3 + k]].at - (int64_t)e->tables[i].anchor);
-        char bytes[4] = {(char)delta, (char)(delta >> 8), (char)(delta >> 16), (char)(delta >> 24)};
-        literal_store(ctx, bytes, 4);
+        for (unsigned j = 0; j < 4; ++j) bytes[4 * k + j] = (char)(delta >> (8 * j));
       }
+      size_t table = rodata_words(ctx, bytes, (size_t)entries * 4);
       ctx->relocations[e->tables[i].at].r_addend = (int64_t)table - 4;
       continue;
     }
@@ -11273,12 +11272,13 @@ typedef struct SsaPrepared {
   bool ready;          /* allocated (or paired-target lowered) and emittable */
   bool used;           /* consumed by ssa_function */
   double build_ms, optimize_ms, allocate_ms;
+  struct SsaEmitted *emitted; /* emitted by a worker into its shard */
 } SsaPrepared;
 static void ssa_prepare(SsaPrepared *p, BackendContext *ctx, const DynSource *source, const DynIrProgram *ir,
                         const DynIrFunction *f, bool defer_literals, SsaPool *pool) {
   p->s = (Ssa){.ctx = ctx, .ir = ir, .f = f, .current = UINT32_MAX, .defer_literals = defer_literals, .pool = pool};
   p->alloc = (SsaAlloc){.s = &p->s};
-  p->order = NULL; p->n = 0; p->ready = false; p->used = false;
+  p->order = NULL; p->n = 0; p->ready = false; p->used = false; p->emitted = NULL;
   p->build_ms = p->optimize_ms = p->allocate_ms = 0;
   Ssa *s = &p->s;
   uint32_t *order = NULL, n = 0;
@@ -11460,25 +11460,42 @@ static bool ssa_finish_literals(Ssa *s) {
     SsaValue *v = &s->values[i];
     if (v->op != SO_SYMBOL || v->aux != SSA_PENDING_LITERAL) continue;
     const DynIrString *string = &s->ir->strings[v->c];
-    v->aux = 1;
-    v->c = (int32_t)literal(ctx, (const char *)string->data, string->length);
+    size_t at = literal(ctx, (const char *)string->data, string->length);
     if (ctx->rodata.failed) return false;
+    /* In a shard the piece is a symbol of its own: offsets do not fit c. */
+    if (ctx->shard) { v->aux = SHARD_LITERAL_SYMBOL + ctx->shard->piece_count - 1; v->c = 0; continue; }
+    v->aux = 1;
+    v->c = (int32_t)at;
   }
   return true;
 }
-static int ssa_function(BackendContext *ctx, const DynSource *source, const DynIrProgram *ir, const DynIrFunction *f) {
-  if (!ssa_enabled(ctx, source)) return SSA_UNSUPPORTED;
-  size_t index = (size_t)(f - ir->functions);
-  SsaPrepared local, *p = ctx->ssa_prepared && index < ctx->ssa_prepared_count && ctx->ssa_prepared[index]
-                          ? ctx->ssa_prepared[index] : NULL;
+/* x86-64 release builds start a function with a loop on a 16-byte boundary.
+   Its loop headers pad to 16 bytes from where the function starts, so they
+   align the same in a shard as in the object, and emission is identical
+   whether a worker or the driver does it. The predicate is the one the
+   header padding in ssa_emit_function uses. */
+static bool ssa_aligned_entry(const BackendContext *ctx, const Ssa *s, const uint32_t *order, uint32_t n) {
+  if (ctx->a64 || ctx->rv64 || ctx->rv32 || ctx->t32 || ctx->debug_mode || ctx->dwarf || ctx->trace_table) return false;
+  for (uint32_t i = 0; i < n; ++i) {
+    const SsaBlock *block = &s->blocks[order[i]];
+    for (uint32_t k = 0; k < block->preds.count; ++k)
+      if (s->blocks[block->preds.items[k]].order >= block->order) return true;
+  }
+  return false;
+}
+/* Emits a prepared function into ctx (the driver's, or a worker's shard)
+   and releases its SSA. */
+static int ssa_emit_prepared(BackendContext *ctx, const DynSource *source, const DynIrProgram *ir, const DynIrFunction *f,
+                             SsaPrepared *p) {
+  (void)ir;
   size_t text = ctx->text.n, relocations = ctx->relocation_count, rodata = ctx->rodata.n;
   unsigned unwind_frames = ctx->unwind_frame_count, arm_epilogues = ctx->arm_epilogue_count;
+  uint32_t pieces = ctx->shard ? ctx->shard->piece_count : 0;
+  size_t piece_bytes = ctx->shard ? ctx->shard->byte_count : 0;
   /* RISC-V pc-relative pairs name their auipc by anchor symbols, which a
      repeated or abandoned emission must not leave behind. */
   unsigned anchors = ctx->rv_anchor_count;
   size_t landings = ctx->landing_count;
-  if (p) p->used = true;
-  else { p = &local; ssa_prepare(p, ctx, source, ir, f, false, ctx->ssa_pool); }
   ctx->ssa_build_ms += p->build_ms;
   ctx->ssa_optimize_ms += p->optimize_ms;
   ctx->ssa_allocate_ms += p->allocate_ms;
@@ -11501,9 +11518,15 @@ static int ssa_function(BackendContext *ctx, const DynSource *source, const DynI
   uint32_t *layout = ssa_cold_layout(s, order, n);
   if (!layout) goto done;
   order = layout;
+  if (ssa_aligned_entry(ctx, s, order, n)) {
+    if (ctx->shard) ctx->shard->aligned_entry = true;
+    while (ctx->text.n & 15) { byte(ctx, 0xcc); ++ctx->ssa_entry_pad; }
+  }
   /* Measure, then emit again with short branches. */
   emit.start = ctx->text.n;
   size_t built_rodata = ctx->rodata.n;
+  uint32_t built_pieces = ctx->shard ? ctx->shard->piece_count : 0;
+  size_t built_piece_bytes = ctx->shard ? ctx->shard->byte_count : 0;
   bool measured = ssa_emit_function(&emit, order, n);
   /* Debug builds favor compile time: one emission, with long branches. */
   if (measured && !ctx->debug_mode) {
@@ -11513,9 +11536,10 @@ static int ssa_function(BackendContext *ctx, const DynSource *source, const DynI
       for (uint32_t i = 0; i < n; ++i) emit.measured_blocks[order[i]] = s->blocks[order[i]].at;
       for (uint32_t i = 0; i < emit.jump_count; ++i) emit.measured_jumps[i] = emit.jumps[i].at;
       emit.measured_jump_count = emit.jump_count;
-      ctx->text.n = text; ctx->relocation_count = relocations; ctx->rodata.n = built_rodata;
+      ctx->text.n = emit.start; ctx->relocation_count = relocations; ctx->rodata.n = built_rodata;
       ctx->unwind_frame_count = unwind_frames; ctx->arm_epilogue_count = arm_epilogues; ctx->rv_anchor_count = anchors;
       ctx->landing_count = landings;
+      if (ctx->shard) { ctx->shard->piece_count = built_pieces; ctx->shard->byte_count = built_piece_bytes; }
       emit.jump_count = emit.stub_use_count = emit.table_count = 0;
       measured = ssa_emit_function(&emit, order, n);
     }
@@ -11573,6 +11597,7 @@ static int ssa_function(BackendContext *ctx, const DynSource *source, const DynI
     if (!ctx->win64 && !ctx->a64 && !ctx->rv64) {
       ctx->ssa_frame_valid = true;
       ctx->ssa_frame_mask = 0;
+      memset(ctx->ssa_frame_offsets, 0, sizeof(ctx->ssa_frame_offsets));
       unsigned k = 0;
       for (unsigned r = 0; r < 16; ++r) {
         if (!(alloc->used_callee >> r & 1)) continue;
@@ -11587,6 +11612,8 @@ static int ssa_function(BackendContext *ctx, const DynSource *source, const DynI
     ctx->text.n = text; ctx->relocation_count = relocations; ctx->rodata.n = rodata;
     ctx->unwind_frame_count = unwind_frames; ctx->arm_epilogue_count = arm_epilogues; ctx->rv_anchor_count = anchors;
     ctx->text.failed = ctx->rodata.failed = ctx->relocation_failed = false;
+    ctx->ssa_entry_pad = 0;
+    if (ctx->shard) { ctx->shard->piece_count = pieces; ctx->shard->byte_count = piece_bytes; ctx->shard->aligned_entry = false; }
   }
   if (result == SSA_EMITTED && source->context.optimization && source->context.optimization->remarks)
     fprintf(stderr, "remark: %s: SSA code generation, %u spill slots, %u loop-cached values\n", f->name, alloc->spill_slots, alloc->cache_count);
@@ -11598,18 +11625,190 @@ done:
   ssa_prepared_free(p);
   return result;
 }
+/* A function a worker emitted into its shard, copied out for the driver. */
+typedef struct SsaEmitted {
+  int result;
+  bool retry;          /* no memory for the copy once the SSA was released: prepare again */
+  bool aligned_entry;
+  unsigned char *text; size_t text_length;
+  Elf64_Rela *relocations; size_t relocation_count;
+  SsaShard pieces;
+  uint32_t *anchors; unsigned anchor_count;
+  uint32_t (*unwind_frames)[4]; unsigned unwind_frame_count;
+  uint32_t (*arm_epilogues)[2]; unsigned arm_epilogue_count;
+  uint32_t (*landings)[2]; size_t landing_count;
+  bool frame_valid; uint32_t frame_mask; int32_t frame_offsets[5];
+  double build_ms, optimize_ms, allocate_ms, emit_ms;
+} SsaEmitted;
+/* The record and its arrays are one allocation. */
+static void ssa_emitted_free(SsaEmitted *m) { if (m && !m->retry) free(m); }
+/* Copies count items into the record's block at *at, 8-byte aligned. */
+static void *ssa_copy_out(char *block, size_t *at, const void *from, size_t count, size_t size) {
+  if (!count) return NULL;
+  void *copy = block + *at;
+  memcpy(copy, from, count * size);
+  *at += (count * size + 7) & ~(size_t)7;
+  return copy;
+}
+/* Worker side: emits p into the worker's shard and keeps the result for
+   the driver. */
+static void ssa_shard_emit(BackendContext *shard, const DynSource *source, const DynIrProgram *ir, const DynIrFunction *f,
+                          SsaPrepared *p, SsaPool *pool) {
+  shard->text.n = shard->rodata.n = 0; shard->text.failed = shard->rodata.failed = false;
+  shard->relocation_count = 0; shard->relocation_failed = false;
+  shard->shard->piece_count = 0; shard->shard->byte_count = 0; shard->shard->aligned_entry = false;
+  shard->rv_anchor_count = shard->unwind_frame_count = shard->arm_epilogue_count = 0;
+  shard->landing_count = 0; shard->ssa_frame_valid = false; shard->ssa_entry_pad = 0;
+  shard->ssa_build_ms = shard->ssa_optimize_ms = shard->ssa_allocate_ms = shard->ssa_emit_ms = 0;
+  p->s.ctx = shard;
+  /* Emission runs on this worker too, so its chunks come from and return to the worker's pool. */
+  p->s.pool = pool;
+  p->used = true;
+  int result = ssa_emit_prepared(shard, source, ir, f, p);
+  bool emitted = result == SSA_EMITTED;
+  SsaShard *pieces = shard->shard;
+  size_t sizes[] = {emitted ? shard->text.n : 0, emitted ? shard->relocation_count * sizeof(Elf64_Rela) : 0,
+                    emitted ? pieces->piece_count * sizeof(*pieces->pieces) : 0, emitted ? pieces->byte_count : 0,
+                    emitted ? shard->rv_anchor_count * sizeof(uint32_t) : 0,
+                    emitted ? shard->unwind_frame_count * sizeof(shard->unwind_frames[0]) : 0,
+                    emitted ? shard->arm_epilogue_count * sizeof(shard->arm_epilogues[0]) : 0,
+                    emitted ? shard->landing_count * sizeof(shard->landing_records[0]) : 0};
+  size_t total = (sizeof(SsaEmitted) + 7) & ~(size_t)7;
+  for (unsigned i = 0; i < sizeof(sizes) / sizeof(sizes[0]); ++i) total += (sizes[i] + 7) & ~(size_t)7;
+  char *block = malloc(total);
+  SsaEmitted *m = (SsaEmitted *)block;
+  if (!m) {
+    /* The SSA is gone: the driver prepares the function again. */
+    static SsaEmitted retry = {.retry = true};
+    p->emitted = &retry;
+    return;
+  }
+  *m = (SsaEmitted){.result = result};
+  size_t at = (sizeof(SsaEmitted) + 7) & ~(size_t)7;
+  if (emitted) {
+    m->aligned_entry = pieces->aligned_entry;
+    m->text = ssa_copy_out(block, &at, shard->text.data, m->text_length = shard->text.n, 1);
+    m->relocations = ssa_copy_out(block, &at, shard->relocations, m->relocation_count = shard->relocation_count, sizeof(Elf64_Rela));
+    m->pieces.pieces = ssa_copy_out(block, &at, pieces->pieces, m->pieces.piece_count = pieces->piece_count, sizeof(*pieces->pieces));
+    m->pieces.bytes = ssa_copy_out(block, &at, pieces->bytes, m->pieces.byte_count = pieces->byte_count, 1);
+    m->anchors = ssa_copy_out(block, &at, shard->rv_anchors, m->anchor_count = shard->rv_anchor_count, sizeof(uint32_t));
+    m->unwind_frames = ssa_copy_out(block, &at, shard->unwind_frames, m->unwind_frame_count = shard->unwind_frame_count,
+                                    sizeof(shard->unwind_frames[0]));
+    m->arm_epilogues = ssa_copy_out(block, &at, shard->arm_epilogues, m->arm_epilogue_count = shard->arm_epilogue_count,
+                                    sizeof(shard->arm_epilogues[0]));
+    m->landings = ssa_copy_out(block, &at, shard->landing_records, m->landing_count = shard->landing_count,
+                               sizeof(shard->landing_records[0]));
+    m->frame_valid = shard->ssa_frame_valid; m->frame_mask = shard->ssa_frame_mask;
+    memcpy(m->frame_offsets, shard->ssa_frame_offsets, sizeof(m->frame_offsets));
+  }
+  m->build_ms = shard->ssa_build_ms; m->optimize_ms = shard->ssa_optimize_ms;
+  m->allocate_ms = shard->ssa_allocate_ms; m->emit_ms = shard->ssa_emit_ms;
+  p->emitted = m;
+}
+/* Driver side: places a shard's function at the end of the text, as if the
+   driver had emitted it there. */
+static int ssa_shard_merge(BackendContext *ctx, const SsaEmitted *m) {
+  ctx->ssa_build_ms += m->build_ms; ctx->ssa_optimize_ms += m->optimize_ms;
+  ctx->ssa_allocate_ms += m->allocate_ms; ctx->ssa_emit_ms += m->emit_ms;
+  if (m->result != SSA_EMITTED) return m->result;
+  if (m->aligned_entry)
+    while (ctx->text.n & 15) { byte(ctx, 0xcc); ++ctx->ssa_entry_pad; }
+  size_t base = ctx->text.n;
+  if (!reserve(&ctx->text, base + m->text_length)) return SSA_FAILED;
+  if (m->text_length) memcpy(ctx->text.data + base, m->text, m->text_length);
+  ctx->text.n = base + m->text_length;
+  /* Read-only data in the order the shard stored it. */
+  size_t *offsets = m->pieces.piece_count ? malloc(m->pieces.piece_count * sizeof(size_t)) : NULL;
+  if (m->pieces.piece_count && !offsets) return SSA_FAILED;
+  for (uint32_t i = 0; i < m->pieces.piece_count; ++i) {
+    const struct SsaShardPiece *piece = &m->pieces.pieces[i];
+    const char *bytes = m->pieces.bytes + piece->at;
+    if (!piece->raw) { offsets[i] = literal(ctx, bytes, piece->length); continue; }
+    static const char zeros[16] = {0};
+    if (ctx->rodata.n % piece->align) literal_store(ctx, zeros, piece->align - ctx->rodata.n % piece->align);
+    offsets[i] = literal_store(ctx, bytes, piece->length);
+  }
+  unsigned anchor_base = ctx->rv_anchor_count, frame_base = ctx->unwind_frame_count;
+  for (size_t i = 0; i < m->relocation_count && !ctx->relocation_failed; ++i) {
+    Elf64_Rela r = m->relocations[i];
+    unsigned symbol = (unsigned)ELF64_R_SYM(r.r_info), type = (unsigned)ELF64_R_TYPE(r.r_info);
+    if (symbol & 0x80000000u) symbol = 0x80000000u | ((symbol & 0x7fffffffu) + anchor_base);
+    else if (symbol >= SHARD_LITERAL_SYMBOL) {
+      r.r_addend += (int64_t)offsets[symbol - SHARD_LITERAL_SYMBOL];
+      symbol = 1;
+    } else if (symbol >= SHARD_RUNTIME_SYMBOL) {
+      unsigned runtime = symbol - SHARD_RUNTIME_SYMBOL;
+      if (!ctx->runtime_index[runtime]) ctx->runtime_index[runtime] = (unsigned)(ctx->runtime_base + ctx->runtime_count++);
+      symbol = ctx->runtime_index[runtime];
+    } else if (symbol == 1 && r.r_addend >= SHARD_TAG / 2) {
+      uint32_t piece = (uint32_t)((uint64_t)(r.r_addend - SHARD_TAG + (INT64_C(1) << 31)) >> 32);
+      r.r_addend = (int64_t)offsets[piece] + (r.r_addend - shard_tag(piece));
+    }
+    if (ctx->relocation_count == ctx->relocation_capacity &&
+        !grow_relocations(&ctx->relocations, &ctx->relocation_capacity)) { ctx->relocation_failed = true; break; }
+    r.r_offset += base;
+    r.r_info = ELF64_R_INFO(symbol, type);
+    ctx->relocations[ctx->relocation_count++] = r;
+  }
+  free(offsets);
+  if (anchor_base + m->anchor_count > MAX_NODES ||
+      frame_base + m->unwind_frame_count > sizeof(ctx->unwind_frames) / sizeof(ctx->unwind_frames[0]) ||
+      ctx->arm_epilogue_count + m->arm_epilogue_count > sizeof(ctx->arm_epilogues) / sizeof(ctx->arm_epilogues[0]))
+    return SSA_FAILED;
+  for (unsigned i = 0; i < m->anchor_count; ++i) ctx->rv_anchors[ctx->rv_anchor_count++] = m->anchors[i] + (uint32_t)base;
+  for (unsigned i = 0; i < m->unwind_frame_count; ++i) {
+    uint32_t *frame = ctx->unwind_frames[ctx->unwind_frame_count++];
+    memcpy(frame, m->unwind_frames[i], sizeof(m->unwind_frames[i]));
+    frame[0] += (uint32_t)base;
+  }
+  for (unsigned i = 0; i < m->arm_epilogue_count; ++i) {
+    uint32_t *epilogue = ctx->arm_epilogues[ctx->arm_epilogue_count++];
+    epilogue[0] = m->arm_epilogues[i][0] + frame_base; epilogue[1] = m->arm_epilogues[i][1] + (uint32_t)base;
+  }
+  for (size_t i = 0; i < m->landing_count; ++i)
+    if (!unwind_add_landing(ctx, m->landings[i][0] + (uint32_t)base, m->landings[i][1] + (uint32_t)base)) return SSA_FAILED;
+  ctx->ssa_frame_valid = m->frame_valid; ctx->ssa_frame_mask = m->frame_mask;
+  memcpy(ctx->ssa_frame_offsets, m->frame_offsets, sizeof(m->frame_offsets));
+  if (ctx->text.failed || ctx->rodata.failed || ctx->relocation_failed) return SSA_FAILED;
+  return SSA_EMITTED;
+}
+static int ssa_function(BackendContext *ctx, const DynSource *source, const DynIrProgram *ir, const DynIrFunction *f) {
+  if (!ssa_enabled(ctx, source)) return SSA_UNSUPPORTED;
+  size_t index = (size_t)(f - ir->functions);
+  SsaPrepared local, *p = ctx->ssa_prepared && index < ctx->ssa_prepared_count && ctx->ssa_prepared[index]
+                          ? ctx->ssa_prepared[index] : NULL;
+  if (p && p->emitted && !p->emitted->retry) return ssa_shard_merge(ctx, p->emitted);
+  if (p && !p->emitted) p->used = true;
+  else { p = &local; ssa_prepare(p, ctx, source, ir, f, false, ctx->ssa_pool); }
+  return ssa_emit_prepared(ctx, source, ir, f, p);
+}
 
+/* Workers also emit, each into a shard, unless the object needs what only
+   serial emission records: debug rows and tables, or Windows ARM64 rodata
+   offsets in instruction immediates. DYN_SERIAL_EMISSION=1 keeps emission
+   on the driver's thread, for comparison. */
+static bool ssa_shards_enabled(const BackendContext *ctx) {
+  const char *serial = getenv("DYN_SERIAL_EMISSION");
+  return !ctx->debug_mode && !ctx->dwarf && !ctx->trace_table && !ctx->winarm64 && !ctx->rv32 && !ctx->t32 &&
+         !(serial && *serial == '1');
+}
 static unsigned ssa_parallel_workers(BackendContext *ctx, const DynSource *source, const DynIrProgram *ir) {
   if (!ssa_enabled(ctx, source) || ctx->rv32 || ctx->t32 || ctx->optimization_remarks) return 1;
   const char *setting = getenv("DYN_BACKEND_JOBS");
-  /* Serial emission bounds the speedup; a few workers already keep it busy. */
 #ifdef _WIN32
   /* Like the frontend pools, Windows stays serial unless asked. */
   long workers = setting && *setting ? strtol(setting, NULL, 10) : 1;
 #else
   long workers = setting && *setting ? strtol(setting, NULL, 10) : sysconf(_SC_NPROCESSORS_ONLN);
 #endif
-  if (!(setting && *setting) && workers > 6) workers = 6;
+  /* Serial emission bounds the speedup at about six workers. Workers that
+     emit in shards scale further on large programs: 3874 live functions
+     build in 199 ms with 12 instead of 209 with 6. Smaller programs gain
+     nothing, and each worker adds its own memory. */
+  size_t live = 0;
+  for (size_t i = 0; i < ir->function_count; ++i) live += ctx->function_live[i];
+  long cap = ssa_shards_enabled(ctx) && live >= 2048 ? 12 : 6;
+  if (!(setting && *setting) && workers > cap) workers = cap;
   /* Debug preparation is light (no optimizing passes), so serial emission
      dominates and more workers only contend for memory: two measured best. */
   if (!(setting && *setting) && ctx->debug_mode && workers > 2) workers = 2;
@@ -11640,6 +11839,35 @@ static bool ssa_literal_canonical(BackendContext *ctx, const DynIrProgram *ir) {
   free(table);
   return true;
 }
+/* A worker's emission context: the driver's fields above its arrays, with
+   empty outputs of its own, and placeholder runtime symbols. */
+static BackendContext *ssa_shard_new(const BackendContext *ctx) {
+  BackendContext *shard = calloc(1, sizeof(*shard));
+  SsaShard *pieces = calloc(1, sizeof(*pieces));
+  if (!shard || !pieces) { free(shard); free(pieces); return NULL; }
+  memcpy(shard, ctx, offsetof(BackendContext, symbol_remap));
+  shard->text = shard->rodata = shard->globals_data = shard->constants_data = (Bytes){0};
+  shard->constant_relocations = NULL; shard->constant_relocation_count = shard->constant_relocation_capacity = 0;
+  shard->relocations = NULL; shard->relocation_capacity = shard->relocation_count = 0;
+  shard->strings = NULL; shard->string_capacity = shard->string_count = 0;
+  shard->trace_rows = NULL; shard->trace_row_count = shard->trace_row_capacity = shard->trace_row_mark = 0;
+  shard->trace_functions = NULL; shard->trace_function_count = shard->trace_function_capacity = 0;
+  shard->trace_names = NULL; shard->trace_names_size = shard->trace_names_capacity = 0;
+  shard->frame_records = NULL; shard->frame_record_count = shard->frame_record_capacity = 0;
+  shard->landing_records = NULL; shard->landing_count = shard->landing_capacity = 0;
+  shard->dwarf = NULL; shard->dwarf_types = NULL;
+  shard->ssa_prepared = NULL; shard->ssa_prepared_count = 0; shard->ssa_pipeline = NULL; shard->ssa_pool = NULL;
+  shard->rv_anchor_count = shard->unwind_frame_count = shard->arm_epilogue_count = 0;
+  for (unsigned r = 0; r < RUNTIME_COUNT; ++r) shard->runtime_index[r] = SHARD_RUNTIME_SYMBOL + r;
+  shard->shard = pieces;
+  return shard;
+}
+static void ssa_shard_free(BackendContext *shard) {
+  if (!shard) return;
+  free(shard->text.data); free(shard->rodata.data); free(shard->relocations); free(shard->landing_records);
+  free(shard->shard->pieces); free(shard->shard->bytes); free(shard->shard);
+  free(shard);
+}
 /* Prepares live functions on worker threads, at most `window` ahead of
    emission, which consumes them in function order on the calling thread. */
 typedef struct SsaPipeline {
@@ -11660,6 +11888,8 @@ typedef struct SsaPipeline {
   const DynIrProgram *layout_program;
   LayoutEntry *layout_structs;
   uint32_t *layout_offsets;
+  /* Per worker, when workers also emit: its shard of the context. */
+  BackendContext *shards[64];
 } SsaPipeline;
 static void *ssa_pipeline_worker(void *argument) {
   const struct SsaWorker *start = argument;
@@ -11682,6 +11912,8 @@ static void *ssa_pipeline_worker(void *argument) {
        so only the window's worth is live at once. */
     SsaPrepared *p = malloc(sizeof(*p));
     if (p) ssa_prepare(p, pipeline->ctx, pipeline->source, pipeline->ir, &pipeline->ir->functions[index], true, &pool);
+    if (p && pipeline->shards[start->id])
+      ssa_shard_emit(pipeline->shards[start->id], pipeline->source, pipeline->ir, &pipeline->ir->functions[index], p, &pool);
     pthread_mutex_lock(&pipeline->lock);
     pipeline->ctx->ssa_prepared[index] = p;
     pipeline->ready[place] = true;
@@ -11709,11 +11941,13 @@ static void ssa_pipeline_stop(BackendContext *ctx) {
     SsaPrepared *p = ctx->ssa_prepared[pipeline->functions[i]];
     if (!p) continue;
     if (pipeline->ready[i] && !p->used) ssa_prepared_free(p);
+    if (pipeline->ready[i]) ssa_emitted_free(p->emitted);
     free(p);
     ctx->ssa_prepared[pipeline->functions[i]] = NULL;
   }
   pthread_mutex_destroy(&pipeline->lock);
   pthread_cond_destroy(&pipeline->changed);
+  for (unsigned i = 0; i < 64; ++i) ssa_shard_free(pipeline->shards[i]);
   free(pipeline->functions); free(pipeline->position); free(pipeline->ready);
   free(pipeline);
   ctx->ssa_pipeline = NULL;
@@ -11756,6 +11990,12 @@ static void ssa_pipeline_start(BackendContext *ctx, const DynSource *source, con
   }
   ctx->ssa_pipeline = pipeline;
   pipeline->workers = workers;
+  if (ssa_shards_enabled(ctx))
+    for (unsigned w = 0; w < workers; ++w)
+      if (!(pipeline->shards[w] = ssa_shard_new(ctx))) {
+        for (unsigned k = 0; k < w; ++k) { ssa_shard_free(pipeline->shards[k]); pipeline->shards[k] = NULL; }
+        break;
+      }
   for (; pipeline->started < workers; ++pipeline->started) {
     pipeline->starts[pipeline->started] = (struct SsaWorker){pipeline, pipeline->started};
     if (pthread_create(&pipeline->threads[pipeline->started], NULL, ssa_pipeline_worker, &pipeline->starts[pipeline->started])) break;
@@ -11784,6 +12024,7 @@ static void ssa_pipeline_done(BackendContext *ctx, size_t index) {
   if (!pipeline || index >= ctx->ssa_prepared_count || pipeline->position[index] == SIZE_MAX) return;
   SsaPrepared *p = ctx->ssa_prepared[index];
   if (p && !p->used) ssa_prepared_free(p);
+  if (p) ssa_emitted_free(p->emitted);
   free(p);
   ctx->ssa_prepared[index] = NULL;
   pthread_mutex_lock(&pipeline->lock);
