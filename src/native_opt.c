@@ -983,7 +983,9 @@ static DynExprId inline_call_of(Inline *b, const DynIrExpr *site, DynExprKind ki
 /* A call through a pointer whose type only one taken function has becomes
      if pointer == that { inlined body } else { pointer(arguments) }
    The comparison keeps any other value correct; it only predicts the common
-   case of a struct field that always holds the same function. */
+   case of a struct field that always holds the same function. Only the
+   inlined branch evaluates the arguments first: the other keeps the call,
+   which checks a nil pointer before its arguments' own checks. */
 static bool inline_guarded_call(Inline *b, const InlineScope *scope,
                                 const DynIrExpr *site, InlineList *list,
                                 DynExprId *result, unsigned depth) {
@@ -1008,6 +1010,7 @@ static bool inline_guarded_call(Inline *b, const InlineScope *scope,
   capture.expression = inline_expr(b, scope, call.left, 0);
   inline_statement(b, list, capture);
   DynExprId arguments[16], names[16];
+  InlineList direct = {0}, indirect = {0};
   for (uint32_t i = 0; i < call.item_count && !b->failed; ++i) {
     DynExprId argument = b->in->items[call.item_start + i].expression;
     DynIrLocal value = {.name = "__guard_argument", .type = b->in->expressions[argument].type};
@@ -1020,10 +1023,10 @@ static bool inline_guarded_call(Inline *b, const InlineScope *scope,
     DynExprId expanded = DYN_NO_EXPR;
     bool done = inline_cast_call(b, scope, argument, &expansion, &expanded, depth + 1);
     for (size_t j = 0; j < expansion.count; ++j)
-      inline_list(b, list, expansion.ids[j]);
+      inline_list(b, &direct, expansion.ids[j]);
     inline_list_release(b, &expansion);
     s.expression = done ? expanded : inline_expr(b, scope, argument, 0);
-    inline_statement(b, list, s);
+    inline_statement(b, &direct, s);
     arguments[i] = local;
   }
   uint32_t answer = UINT32_MAX;
@@ -1031,8 +1034,10 @@ static bool inline_guarded_call(Inline *b, const InlineScope *scope,
     DynIrLocal value = {.name = "__guard_result", .type = call.type};
     INLINE_APPEND(b, local, locals_cap, value, answer);
   }
-  if (b->failed) return true;
-  InlineList direct = {0}, indirect = {0};
+  if (b->failed) {
+    inline_list_release(b, &direct);
+    return true;
+  }
   for (uint32_t i = 0; i < call.item_count; ++i) names[i] = inline_name(b, arguments[i], call.span);
   DynIrExpr known = call;
   known.kind = DYN_EXPR_CALL;
@@ -1045,7 +1050,8 @@ static bool inline_guarded_call(Inline *b, const InlineScope *scope,
   for (int branch = 0; branch < 2; ++branch) {
     InlineList *into = branch ? &indirect : &direct;
     if (branch) {
-      for (uint32_t i = 0; i < call.item_count; ++i) names[i] = inline_name(b, arguments[i], call.span);
+      for (uint32_t i = 0; i < call.item_count; ++i)
+        names[i] = inline_expr(b, scope, b->in->items[call.item_start + i].expression, 0);
       value = inline_call_of(b, &call, DYN_EXPR_INDIRECT_CALL, call.integer,
                              inline_name(b, callee, call.span), names);
     }
