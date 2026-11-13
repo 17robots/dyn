@@ -69,6 +69,10 @@ servers so they pick up the new `dyn`.
   the same order: checking a 300,000-line project's semantics takes 22 ms
   instead of 29. `DYN_SERIAL_LIFETIMES=1` keeps them in place for
   comparison.
+- Release builds drop bounds checks that an earlier check already covers:
+  after `xs[j]` passed, `xs[..j + 1]` and `xs[j + 1..]` need no check, and
+  neither does an index such as `(#len(xs) - 1) / 2` once `#len(xs) >= 1`
+  is known. Quicksort keeps only the checks of its inner scans.
 - Functions that take or return fixed arrays or payload enums by value, such
   as `fn area(shape: Shape) f64`, and functions that call C variadic
   functions now compile to optimized SSA code on every 64-bit target. No

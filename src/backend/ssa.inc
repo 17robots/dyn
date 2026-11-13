@@ -5441,6 +5441,48 @@ static bool ssa_checks_below(Ssa *s, uint32_t block, uint32_t before, int32_t x)
   }
   return false;
 }
+/* Whether a check that passed before position `before` of block, or a
+   branch fact on the way there, establishes a <cond> b. */
+static bool ssa_established(Ssa *s, uint32_t block, uint32_t before, int32_t a, int32_t b, Cond cond) {
+  uint32_t at = block, limit = before;
+  for (unsigned depth = 0; depth < 32 && at < s->block_count; ++depth) {
+    SsaBlock *here = &s->blocks[at];
+    for (uint32_t k = 0; k < limit && k < here->values.count; ++k) {
+      SsaValue *v = &s->values[here->values.items[k]];
+      if (v->op == SO_CHECK && v->a == a && v->b == b && v->cond == cond) return true;
+    }
+    int32_t compare; bool holds; uint32_t next;
+    if (ssa_fact(s, at, &compare, &holds, &next)) {
+      SsaValue *c = &s->values[compare];
+      Cond fact = holds ? (Cond)c->cond : ssa_negate((Cond)c->cond);
+      if ((c->a == a && c->b == b && fact == cond) || (c->a == b && c->b == a && fact == ssa_swap(cond))) return true;
+    }
+    if (next == UINT32_MAX || next == at || next >= s->block_count) return false;
+    at = next; limit = UINT32_MAX;
+  }
+  return false;
+}
+/* Whether a <u b because a is b made smaller: b minus a constant b is at
+   least, b shifted right or divided while b is at least 1, or something
+   no larger than such a value (a mask of it). A middle index
+   (#len(xs) - 1) / 2 under #len(xs) >= 1 is below the length this way. */
+static bool ssa_shrinks(Ssa *s, uint32_t block, int32_t a, int32_t b, unsigned depth) {
+  if (a < 0 || b < 0 || depth > 4) return false;
+  SsaValue *v = &s->values[a];
+  uint64_t c, lo, hi;
+  if (v->op == SO_SUB && v->a == b && ssa_is_const(s, v->b, &c) && c) {
+    ssa_range(s, b, block, &lo, &hi, 0);
+    return lo >= c;
+  }
+  if ((v->op == SO_SHR && ssa_is_const(s, v->b, &c) && c && c < 64) ||
+      (v->op == SO_DIV && !v->aux2 && ssa_is_const(s, v->b, &c) && c >= 2)) {
+    if (v->a != b) return ssa_shrinks(s, block, v->a, b, depth + 1);
+    ssa_range(s, b, block, &lo, &hi, 0);
+    return lo >= 1;
+  }
+  if (v->op == SO_AND) return ssa_shrinks(s, block, v->a, b, depth + 1) || ssa_shrinks(s, block, v->b, b, depth + 1);
+  return false;
+}
 static bool ssa_below_some(Ssa *s, uint32_t block, uint32_t before, int32_t x) {
   if (ssa_checks_below(s, block, before, x)) return true;
   uint32_t at = block;
@@ -5526,8 +5568,22 @@ static bool ssa_prove(Ssa *s, const uint32_t *order, uint32_t n) {
         ssa_range(s, v->b, b, &blo, &bhi, 0);
         bool proven = false;
         switch (v->cond) {
-        case CC_B: proven = ahi < blo || ssa_unsigned_bound_fact(s, b, v->a, v->b); break;
-        case CC_BE: proven = ahi <= blo; break;
+        case CC_B:
+          proven = ahi < blo || ssa_unsigned_bound_fact(s, b, v->a, v->b) ||
+                   ssa_established(s, b, kept, v->a, v->b, CC_B) || ssa_shrinks(s, b, v->a, v->b, 0);
+          break;
+        case CC_BE: {
+          /* x < n, already checked, gives x <= n and x + 1 <= n: the bounds
+             of xs[..j + 1] and xs[j + 1..] after xs[j] was read. */
+          SsaValue *x = &s->values[v->a];
+          int32_t step = x->op == SO_ADD && ssa_is_const(s, x->b, &blo) && blo == 1 ? x->a
+                       : x->op == SO_ADD && ssa_is_const(s, x->a, &blo) && blo == 1 ? x->b : -1;
+          ssa_range(s, v->b, b, &blo, &bhi, 0);
+          proven = ahi <= blo || ssa_established(s, b, kept, v->a, v->b, CC_BE) ||
+                   ssa_established(s, b, kept, v->a, v->b, CC_B) || ssa_shrinks(s, b, v->a, v->b, 0) ||
+                   (step >= 0 && ssa_established(s, b, kept, step, v->b, CC_B));
+          break;
+        }
         case CC_AE: proven = alo >= bhi || ssa_increment_fits(s, b, kept, v->a, v->b); break;
         case CC_NE: proven = (blo == 0 && bhi == 0 && alo > 0) || (alo == 0 && ahi == 0 && blo > 0) || ahi < blo || bhi < alo; break;
         case CC_E: {
