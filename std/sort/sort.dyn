@@ -1,3 +1,5 @@
+use "std/mem"
+
 pub struct SearchResult { index: usize, found: bool }
 
 fn sift(values: []$T, root_value, length: usize) {
@@ -111,6 +113,8 @@ fn introsort(input: []$T, depth_value: usize) {
 // case comparisons. Stack usage is O(log n). Not stable. Elements must support
 // < with a strict weak ordering; unordered floating NaNs have no sort order.
 pub fn sort(values: []$T) {
+  #assert(#typeof(T).kind == TypeKind.Integer || #typeof(T).kind == TypeKind.Float ||
+      #typeof(T).kind == TypeKind.Pointer, "sort.sort: elements must support <; use sort.sort_by for other types")
   // Stop scanning as soon as both monotone orders are disproved. Random
   // inputs pay only a short prefix; already ordered slices take linear time.
   ascending := true
@@ -166,4 +170,167 @@ pub fn search(values: []const $T, target: $T) SearchResult {
     return SearchResult{ index: low, found: true }
   }
   return SearchResult{ index: #len(values) }
+}
+
+// Comparator versions. less(a, b) says a goes before b; it must be a strict
+// weak ordering. Elements of any type, structs included.
+fn sift_by(values: []$T, root_value, length: usize, less: fn($T, $T) bool) {
+  root := root_value
+  for root < length / 2 {
+    child := root * 2 + 1
+    if child + 1 < length && less(values[child], values[child + 1]) {
+      child += 1
+    }
+    if !less(values[root], values[child]) {
+      return
+    }
+    temporary := values[root]
+    values[root] = values[child]
+    values[child] = temporary
+    root = child
+  }
+}
+
+fn insertion_by(values: []$T, less: fn($T, $T) bool) {
+  for i in 1..#len(values) {
+    value := values[i]
+    j := i
+    for j > 0 && less(value, values[j - 1]) {
+      values[j] = values[j - 1]
+      j -= 1
+    }
+    values[j] = value
+  }
+}
+
+fn heap_by(values: []$T, less: fn($T, $T) bool) {
+  length := #len(values)
+  parent := length / 2
+  for parent > 0 {
+    parent -= 1
+    sift_by(values, parent, length, less)
+  }
+  end := length
+  for end > 1 {
+    end -= 1
+    temporary := values[0]
+    values[0] = values[end]
+    values[end] = temporary
+    sift_by(values, 0, end, less)
+  }
+}
+
+fn introsort_by(input: []$T, depth_value: usize, less: fn($T, $T) bool) {
+  values := input
+  depth := depth_value
+  for #len(values) >= 16 {
+    if depth == 0 {
+      heap_by(values, less)
+      return
+    }
+    depth -= 1
+    last := #len(values) - 1
+    middle := #len(values) / 2
+    if less(values[middle], values[0]) {
+      temporary := values[0]
+      values[0] = values[middle]
+      values[middle] = temporary
+    }
+    if less(values[last], values[middle]) {
+      temporary := values[middle]
+      values[middle] = values[last]
+      values[last] = temporary
+    }
+    if less(values[middle], values[0]) {
+      temporary := values[0]
+      values[0] = values[middle]
+      values[middle] = temporary
+    }
+    pivot := values[middle]
+    lower: usize = 0
+    cursor: usize = 0
+    upper := #len(values)
+    for cursor < upper {
+      if less(values[cursor], pivot) {
+        temporary := values[lower]
+        values[lower] = values[cursor]
+        values[cursor] = temporary
+        lower += 1
+        cursor += 1
+      } else if less(pivot, values[cursor]) {
+        upper -= 1
+        temporary := values[upper]
+        values[upper] = values[cursor]
+        values[cursor] = temporary
+      } else {
+        cursor += 1
+      }
+    }
+    if lower < #len(values) - upper {
+      introsort_by(values[..lower], depth, less)
+      values = values[upper..]
+    } else {
+      introsort_by(values[upper..], depth, less)
+      values = values[..lower]
+    }
+  }
+  insertion_by(values, less)
+}
+
+// Sorts in place by less without allocating, as sort does. Not stable.
+pub fn sort_by(values: []$T, less: fn($T, $T) bool) {
+  remaining := #len(values)
+  depth: usize = 0
+  for remaining > 1 {
+    depth += 2
+    remaining /= 2
+  }
+  introsort_by(values, depth, less)
+}
+
+// Sorts in place by less, keeping equal elements in their original order.
+// Bottom-up merge sort: O(n log n) comparisons, and a scratch copy of values
+// pushed onto arena and rewound before returning.
+pub fn stable_by(arena: *mem.Arena, values: []$T, less: fn($T, $T) bool) {
+  count := #len(values)
+  if count < 2 {
+    return
+  }
+  mark := mem.arena_mark(arena)
+  defer { mem.arena_rewind(arena, mark) }
+  scratch := mem.push_array(T, arena, count)
+  source := values
+  target := scratch
+  width: usize = 1
+  for width < count {
+    start: usize = 0
+    for start < count {
+      middle := start + width
+      if middle > count { middle = count }
+      end := middle + width
+      if end > count { end = count }
+      left := start
+      right := middle
+      out := start
+      for out < end {
+        // Take from the right only when it is strictly smaller: stable.
+        if right < end && (left >= middle || less(source[right], source[left])) {
+          target[out] = source[right]
+          right += 1
+        } else {
+          target[out] = source[left]
+          left += 1
+        }
+        out += 1
+      }
+      start = end
+    }
+    swap := source
+    source = target
+    target = swap
+    width *= 2
+  }
+  if #len(source) > 0 && &source[0] != &values[0] {
+    for value, i in source { values[i] = value }
+  }
 }

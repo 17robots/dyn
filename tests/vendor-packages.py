@@ -21,6 +21,7 @@ CASES = {
     'lua': ('lua5.4', r'''use "vendor/lua"
 use "std/io" io
 use "std/strings"
+use "std/bytes"
 fn main() {
   state := lua.create_owned()
   if state == nil {
@@ -41,7 +42,7 @@ fn main() {
     #panic("Lua string")
   }
   text := lua.bytes(state, -1)
-  if !text.ok || !strings.equal(text.value, "hello") {
+  if !text.ok || !bytes.equal(text.value, "hello") {
     #panic("Lua bytes")
   }
   _ = lua.pop(state, 1) // text expires here.
@@ -69,6 +70,7 @@ fn main() {
     'pcre2': ('libpcre2-8', r'''use "vendor/pcre2" regex
 use "std/io" io
 use "std/strings"
+use "std/bytes"
 fn main() {
   compiled := regex.compile_owned("name=([a-z]+)", 0)
   if !compiled.ok {
@@ -86,7 +88,7 @@ fn main() {
     #panic("match")
   }
   span := regex.capture(data, 1)
-  if !span.set || !strings.equal(subject[span.start..span.end], "ada") {
+  if !span.set || !bytes.equal(subject[span.start..span.end], "ada") {
     #panic("capture")
   }
   absent := regex.match(compiled.pattern, data, "123", 0)
@@ -161,6 +163,7 @@ fn main() {
     'lz4': ('liblz4', r'''use "vendor/lz4"
 use "std/io" io
 use "std/strings"
+use "std/bytes"
 fn main() {
   compressed: [128]u8
   output: [128]u8
@@ -170,7 +173,7 @@ fn main() {
     #panic("LZ4 compression")
   }
   decoded := lz4.decompress(output[..], compressed[..result.written])
-  if !decoded.ok || !strings.equal(output[..decoded.written], source) {
+  if !decoded.ok || !bytes.equal(output[..decoded.written], source) {
     #panic("LZ4 roundtrip")
   }
   if lz4.decompress(output[..1], compressed[..result.written]).ok {

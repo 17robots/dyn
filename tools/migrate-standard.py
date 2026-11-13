@@ -9,6 +9,8 @@ Mechanical rewrites only:
     std/strings forwarded (equal, find*, contains, starts_with, ends_with) and
     testing.equal_bytes are called through std/bytes. Import aliases are
     followed per module directory, and `use "std/bytes"` is added where needed.
+  - fmt.write* and html.write_escaped return nothing now (check the buffer's
+    failed field once instead), so `_ = fmt.write(...)` loses its `_ = `.
 
 The compiler reports the rest with a message that names the fix: `.{...}`
 literals, `#cast` from an integer to an enum, chained comparisons, shadowed
@@ -53,6 +55,11 @@ TO_BYTES = {'std/strings': ['equal', 'find', 'find_byte', 'find_last', 'find_las
             'std/testing': [('equal_bytes', 'equal')]}
 
 
+VOIDED = {'std/fmt': ['write', 'write_byte', 'write_u64', 'write_i64', 'write_bool', 'write_f64', 'write_f64_shortest',
+                       'write_padding', 'write_quoted', 'write_u64_width', 'write_values'],
+          'std/html': ['write_escaped']}
+
+
 def module_aliases(directory):
     """Import path -> alias for every `use` in a module directory."""
     aliases = {}
@@ -75,6 +82,12 @@ def rename_calls(path, aliases):
             continue
         for old, new in pairs:
             result = re.sub(r'(?<![\w.])' + re.escape(alias) + r'\.' + re.escape(old) + r'\b', alias + '.' + new, result)
+    for module, names in VOIDED.items():
+        alias = aliases.get(module)
+        if not alias:
+            continue
+        for name in names:
+            result = re.sub(r'_ = (' + re.escape(alias) + r'\.' + name + r'\()', r'\1', result)
     moved = False
     byte_alias = aliases.get('std/bytes', 'bytes')
     for module, names in TO_BYTES.items():

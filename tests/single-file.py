@@ -33,7 +33,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-single-') as directory:
     result = dyn('check', str(work / 'comma.dyn'))
     assert "expected ',' or '}', found 'tag': is a comma missing at the end of the line above" in result.stderr, result.stderr
     (work / 'maps.dyn').write_text('use "std/container/map"\nuse "std/io"\nuse "std/mem"\n\nfn main() {\n'
-        '  arena := mem.arena_create(0)\n  ids: map.Map(u64, u32)\n  map.init(&ids, arena)\n'
+        '  arena := mem.arena_alloc(0)\n  ids: map.Map(u64, u32)\n  map.init(&ids, arena)\n'
         '  map.insert(&ids, 9, 4)\n  words: map.Map([]const u8, u32)\n  map.init(&words, arena)\n'
         '  map.upsert(&words, "hi", 1).* += 2\n  io.println("{} {}", map.get(&ids, 9).*, map.get(&words, "hi").*)\n}\n')
     result = dyn('run', str(work / 'maps.dyn'))

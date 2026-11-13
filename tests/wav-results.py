@@ -18,7 +18,7 @@ use "std/fs" fs
 use "std/io" errors
 fn check(ok: bool) { if !ok { #panic("WAV contract") } }
 fn main() {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   defer { mem.arena_release(arena) }
   samples: [6]f32 = [-1.0,-0.5,0.0,0.25,0.5,1.0]
   audio := wav.Audio{ samples: samples[..], rate: 48000, channels: 2 }
@@ -104,7 +104,7 @@ use "std/io" io
 use "std/mem" mem
 fn check(ok: bool) { if !ok { #panic("WAV portable") } }
 fn main() {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   defer { mem.arena_release(arena) }
   samples: [6]f32 = [-1.0,-0.5,0.0,0.25,0.5,1.0]
   audio := wav.Audio{ samples: samples[..], rate: 48000, channels: 2, channel_mask: 3 }

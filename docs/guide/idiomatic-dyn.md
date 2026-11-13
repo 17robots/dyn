@@ -74,16 +74,16 @@ fn do_work(scratch: *mem.Arena) {
 }
 
 fn main() {
-  root := mem.arena_create(mem.MiB)
+  root := mem.arena_alloc(mem.MiB)
   defer mem.arena_release(root)
   do_work(root)
 }
 ```
 
 An arena is a `*mem.Arena`, with its header in its first backing block. Create it
-explicitly: `mem.arena_create(0)` chooses the target's default block size. Owned
+explicitly: `mem.arena_alloc(0)` chooses the target's default block size. Owned
 arenas add blocks when needed without moving earlier allocations. For a backing
-budget, use `mem.arena_create_bounded(block_size, limit)`; the limit includes every
+budget, use `mem.arena_alloc_bounded(block_size, limit)`; the limit includes every
 block's header. Ordinary pushes succeed or panic; `arena_try_push` reports
 exhaustion when caller code needs a recoverable result.
 
@@ -103,7 +103,7 @@ initialize its backing with `arena_from_buffer` again before reuse.
 For long-running programs, partition one root arena by lifetime:
 
 ```dyn
-root := mem.arena_create(mem.MiB)
+root := mem.arena_alloc(mem.MiB)
 defer mem.arena_release(root)
 permanent := mem.arena_sub(root, 512 * mem.KiB)
 frame := mem.arena_sub(root, 256 * mem.KiB)

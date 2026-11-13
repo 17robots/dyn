@@ -34,7 +34,7 @@ fn main() {
     for i in size+1..515 { require(bytes[i] == 42,"random suffix clobbered") }
   }
   server := net.ipv4(127,0,0,1,PORT)
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   defer mem.arena_release(arena)
   result := dns.resolve_ipv4(arena,"a.test",&server,4000)
   require(result.failure.kind == io.Kind.Ok && #len(result.value) == 1,"A response")

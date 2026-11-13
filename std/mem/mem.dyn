@@ -123,23 +123,23 @@ pub fn arena_from_buffer(backing: []u8) *Arena {
 // touched pages cost memory). When a block fills up, the arena adds another, so
 // earlier allocations never move. Panics when the OS refuses the reservation.
 // Release with arena_release.
-pub fn arena_create(block_size: usize) *Arena {
-  return arena_create_bounded(block_size, 0)
+pub fn arena_alloc(block_size: usize) *Arena {
+  return arena_alloc_bounded(block_size, 0)
 }
 
-pub struct ArenaCreation { arena: *Arena, error: ErrorKind, code: isize, ok: bool }
+pub struct ArenaAllocation { arena: *Arena, error: ErrorKind, code: isize, ok: bool }
 
-// Like arena_create, returning an absent handle on reservation failure.
-// Zero selects the target default, just as for arena_create.
-pub fn arena_try_create(block_size: usize) ArenaCreation {
-  return arena_try_create_bounded(block_size, 0)
+// Like arena_alloc, returning an absent handle on reservation failure.
+// Zero selects the target default, just as for arena_alloc.
+pub fn arena_try_alloc(block_size: usize) ArenaAllocation {
+  return arena_try_alloc_bounded(block_size, 0)
 }
 
-// Like arena_create, with a cap on backing bytes across all blocks, headers
+// Like arena_alloc, with a cap on backing bytes across all blocks, headers
 // included. Pushes that would pass it fail like an exhausted fixed arena. A zero
 // limit means no cap.
-pub fn arena_create_bounded(block_size: usize, limit: usize) *Arena {
-  result := arena_try_create_bounded(block_size, limit)
+pub fn arena_alloc_bounded(block_size: usize, limit: usize) *Arena {
+  result := arena_try_alloc_bounded(block_size, limit)
   if !result.ok {
     if result.error == ErrorKind.Capacity {
       #panic("arena backing limit cannot hold the header")
@@ -150,9 +150,9 @@ pub fn arena_create_bounded(block_size: usize, limit: usize) *Arena {
 }
 
 // Fallible bounded construction. Failed construction owns no backing.
-pub fn arena_try_create_bounded(block_size: usize, limit: usize) ArenaCreation {
+pub fn arena_try_alloc_bounded(block_size: usize, limit: usize) ArenaAllocation {
   if limit != 0 && limit < header_size() {
-    return ArenaCreation{ error: ErrorKind.Capacity }
+    return ArenaAllocation{ error: ErrorKind.Capacity }
   }
   size := block_size
   if size == 0 {
@@ -166,14 +166,14 @@ pub fn arena_try_create_bounded(block_size: usize, limit: usize) ArenaCreation {
   }
   mapping := mapping_with_header(size)
   if !mapping.ok {
-    return ArenaCreation{ error: ErrorKind.System, code: mapping.error }
+    return ArenaAllocation{ error: ErrorKind.System, code: mapping.error }
   }
   arena := block_init(mapping.bytes, 0, true, mapping.committed)
   arena.current = arena
   arena.block_size = size
   arena.limit = limit
   arena.backing = size
-  return ArenaCreation{ arena: arena, ok: true }
+  return ArenaAllocation{ arena: arena, ok: true }
 }
 
 // Frees every block that is not the first. Release with the newest first, so a
@@ -901,9 +901,9 @@ pub struct Frames {
 }
 
 // Ownership: returns two owning arenas reserving capacity bytes each.
-// Panics like arena_create.
+// Panics like arena_alloc.
 pub fn frames_create(capacity: usize) Frames {
-  return Frames{ arenas: [arena_create(capacity), arena_create(capacity)] }
+  return Frames{ arenas: [arena_alloc(capacity), arena_alloc(capacity)] }
 }
 
 pub fn frame_current(frames: *Frames) *Arena {

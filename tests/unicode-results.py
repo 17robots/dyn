@@ -41,7 +41,7 @@ fn good(input: []const u8, expected: []const u8, mode: usize) {
  for c in prefix { require(c == 99, "prefix preserved") }
 }
 fn chained(input: []const u8, expected: []const u8, mode: usize, block: usize, prior: bool) {
- a := mem.arena_create_bounded(block, 1024 * 1024)
+ a := mem.arena_alloc_bounded(block, 1024 * 1024)
  defer mem.arena_release(a)
  prefix := mem.push_bytes_uninit(a, 3)
  mem.fill(prefix, 91)

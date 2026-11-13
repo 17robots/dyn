@@ -51,12 +51,12 @@ const levels: [4][]const u8 = ["INFO ", "WARN ", "DEBUG", "ERROR"]
 
 fn row_text(storage: []u8, index: usize) []const u8 {
   state := fmt.buffer(storage)
-  _ = fmt.write(&state, levels[index % 4])
-  _ = fmt.write(&state, "  request ")
-  _ = fmt.write_u64(&state, index)
-  _ = fmt.write(&state, " handled in ")
-  _ = fmt.write_u64(&state, index * 7919 % 997)
-  _ = fmt.write(&state, " ms")
+  fmt.write(&state, levels[index % 4])
+  fmt.write(&state, "  request ")
+  fmt.write_u64(&state, index)
+  fmt.write(&state, " handled in ")
+  fmt.write_u64(&state, index * 7919 % 997)
+  fmt.write(&state, " ms")
   return fmt.bytes(&state)
 }
 
@@ -94,8 +94,8 @@ fn build(state: *box.State, app: *App) {
   }
   storage: [64]u8
   status := fmt.buffer(storage[..])
-  _ = fmt.write_u64(&status, app.match_count)
-  _ = fmt.write(&status, " rows###status")
+  fmt.write_u64(&status, app.match_count)
+  fmt.write(&status, " rows###status")
   _ = box.label(state, fmt.bytes(&status))
   box.pop_parent(state)
   row_height := 20.0 * app.zoom * state.scale
@@ -143,8 +143,8 @@ fn save(api: *const gl.Api, arena: *mem.Arena, path: []const u8, width, height: 
 }
 
 fn main() {
-  persistent := mem.arena_create(268435456)
-  frame_arena := mem.arena_create(1073741824)
+  persistent := mem.arena_alloc(268435456)
+  frame_arena := mem.arena_alloc(1073741824)
   defer {
     mem.arena_release(frame_arena)
     mem.arena_release(persistent)
@@ -215,7 +215,7 @@ fn main() {
   app.selected = 0
   app.matches = mem.push_array(u32, persistent, row_count)
   refilter(app)
-  state := box.create(persistent, measure, atlas, #cast(f32, atlas.line_height))
+  state := box.push_state(persistent, measure, atlas, #cast(f32, atlas.line_height))
   state.scale = scale
   context := ui.Context{ style: ui.default_style }
   glyphs := font_ui.atlas_renderer(atlas)

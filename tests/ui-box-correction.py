@@ -38,11 +38,11 @@ fn correction(collector: *events.EditBuffer, token: u64, start, end: i32, text: 
   return result.value
 }
 fn main() {
-  persistent := mem.arena_create(0)
-  arena := mem.arena_create(0)
+  persistent := mem.arena_alloc(0)
+  arena := mem.arena_alloc(0)
   defer { mem.arena_release(arena)
     mem.arena_release(persistent) }
-  state := box.create(persistent,measure,nil,16.0)
+  state := box.push_state(persistent,measure,nil,16.0)
   app := App{}
   collector := events.EditBuffer{}
   frame(state,arena,&app,box.Input{})

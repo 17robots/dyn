@@ -25,7 +25,7 @@ fn bump(x: i32) i32 {
 
 fn main() {
   program := process.start()
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   m: map.Map(u64, u64)
   map.init(&m, arena)
   map.insert(&m, 18446744073709551615, 7)

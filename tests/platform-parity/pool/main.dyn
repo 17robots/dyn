@@ -37,7 +37,7 @@ fn grouped(data: rawptr) {
 }
 
 fn main() {
-  arena := mem.arena_create(16777216)
+  arena := mem.arena_alloc(16777216)
   defer {
     mem.arena_release(arena)
   }

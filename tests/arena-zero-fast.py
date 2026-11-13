@@ -74,7 +74,7 @@ fn main() {
       typed_array(Padded,count,offset)
     }
   }
-  invalid := mem.arena_create(0)
+  invalid := mem.arena_alloc(0)
   defer mem.arena_release(invalid)
   invalid.offset=1
   expect(#len(mem.push_array(u64,invalid,0))==0 && invalid.offset==1 && invalid.allocation_failures==0)

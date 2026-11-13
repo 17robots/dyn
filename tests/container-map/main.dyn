@@ -27,7 +27,7 @@ fn check(ok: bool) {
 }
 
 fn main() {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   ages: map.Map([]const u8, i32)
   check(map.get(&ages, "ada") == nil)
   map.init(&ages, arena)

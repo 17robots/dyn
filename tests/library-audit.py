@@ -68,7 +68,7 @@ struct Entry {
 }
 const nil_entry: Entry = Entry{}
 fn main() {
-  owned := mem.arena_create(1000000)
+  owned := mem.arena_alloc(1000000)
   table := hash.slots(Entry, owned, 8)
   entries := mem.push_array(Entry, owned, 128)
   first_free: *Entry
@@ -77,7 +77,7 @@ fn main() {
   }
   live: [128]*Entry
   handles: [128]slots.Handle
-  scratch := mem.arena_create(0)
+  scratch := mem.arena_alloc(0)
   seed: u64 = 7
   for step in 0..4000 {
     seed = (seed * 1664525 + 1013904223) % 4294967296

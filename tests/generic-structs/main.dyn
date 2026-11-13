@@ -49,7 +49,7 @@ fn main() {
   if a.value != 7 || unwrap(b) != 2.5 || c.first != 1 || #len(c.second) != 3 || d.value != 9 {
     #panic("values")
   }
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   list: List(i64)
   for i in 0..10 {
     push(arena, &list, #cast(i64, i))

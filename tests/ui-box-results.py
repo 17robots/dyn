@@ -67,13 +67,13 @@ fn frame(state: *box.State, context: *ui.Context, arena: *mem.Arena, app: *App, 
 }
 
 fn main() {
-  persistent := mem.arena_create(16777216)
-  arena := mem.arena_create(16777216)
+  persistent := mem.arena_alloc(16777216)
+  arena := mem.arena_alloc(16777216)
   defer {
     mem.arena_release(persistent)
     mem.arena_release(arena)
   }
-  state := box.create(persistent, measure, nil, 16.0)
+  state := box.push_state(persistent, measure, nil, 16.0)
   context := ui.Context{ style: ui.default_style }
   app := App{}
   frame(state, &context, arena, &app, box.Input{})
@@ -143,7 +143,7 @@ fn main() {
 // An input method composition draws at the caret, moves it, inserts nothing
 // and asks the window for text input at the caret.
 fn composing(persistent: *mem.Arena, arena: *mem.Arena) {
-  state := box.create(persistent, measure, nil, 16.0)
+  state := box.push_state(persistent, measure, nil, 16.0)
   context := ui.Context{ style: ui.default_style }
   storage: [64]u8
   edit := box.Edit{}
@@ -179,7 +179,7 @@ fn composing(persistent: *mem.Arena, arena: *mem.Arena) {
 // Equal labels in one frame get derived keys; reduced motion snaps; scale
 // multiplies pixel sizes and padding.
 fn duplicates(persistent: *mem.Arena, arena: *mem.Arena) {
-  state := box.create(persistent, measure, nil, 16.0)
+  state := box.push_state(persistent, measure, nil, 16.0)
   context := ui.Context{ style: ui.default_style }
   for round in 0..3 {
     mem.arena_reset(arena)

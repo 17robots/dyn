@@ -34,12 +34,12 @@ An arena is a `*mem.Arena`: its header lives in its first backing block.
 Create it explicitly and pass the pointer directly to arena functions. A nil
 pointer is an inactive owner, not a lazily allocating arena.
 
-- `mem.arena_create(block_size)` reserves the first block and adds blocks when
-  needed. Earlier allocations do not move. `arena_create(0)` selects the target
+- `mem.arena_alloc(block_size)` reserves the first block and adds blocks when
+  needed. Earlier allocations do not move. `arena_alloc(0)` selects the target
   default: 64 GiB per block on 64-bit hosts, 4 MiB on wasm32, and 1 MiB on
   bare-metal targets. Host pages generally cost physical memory when touched;
   wasm32 obtains backed linear memory immediately.
-- `mem.arena_create_bounded(block_size, limit)` caps total backing bytes across
+- `mem.arena_alloc_bounded(block_size, limit)` caps total backing bytes across
   all blocks, including their headers. A zero limit means no cap. A nonzero
   limit smaller than `mem.ArenaHeader` panics. The last block may be smaller
   than the preferred block size to fit the remaining budget.
@@ -62,7 +62,7 @@ pointer is an inactive owner, not a lazily allocating arena.
   release through a stale owned pointer is invalid. Releasing nil is harmless.
 
 ```dyn
-root := mem.arena_create(mem.GiB)
+root := mem.arena_alloc(mem.GiB)
 defer mem.arena_release(root)
 permanent := mem.arena_sub(root, 512 * mem.MiB)
 frame := mem.arena_sub(root, 256 * mem.MiB)
@@ -266,8 +266,8 @@ can detach JavaScript typed-array views, so rebuild them after allocating.
 
 ### Fallible arena creation
 
-`mem.arena_try_create(block_size)` and `arena_try_create_bounded(block_size, limit)`
-return `ArenaCreation` with `arena: *Arena`, `ok`, an error kind and system code.
+`mem.arena_try_alloc(block_size)` and `arena_try_alloc_bounded(block_size, limit)`
+return `ArenaAllocation` with `arena: *Arena`, `ok`, an error kind and system code.
 Failure returns nil and owns no backing; zero block size selects the target
 default. `arena_try_push_uninit` provides the ordinary fallible push contract
 without initializing returned bytes. Commitment failures return `System` from

@@ -134,7 +134,7 @@ fn main() {
  invalid.offset=0
  replay_invalid:=adapter.read(adapter.data,destination[..0])
  if replay_invalid.status!=io.Status.Error || replay_invalid.kind!=errors.Kind.InvalidState || replay_invalid.error!=0 { #panic("sticky invalid decoder cursor") }
- owner := mem.arena_create(16000000)
+ owner := mem.arena_alloc(16000000)
  defer { mem.arena_release(owner) }
  arena := owner
  raw := fs.read_all(arena, "DIRECTORY/raw", 6000000)

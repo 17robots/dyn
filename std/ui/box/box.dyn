@@ -194,7 +194,7 @@ pub struct State {
 pub struct StateResult { value: *State, valid: bool }
 
 // A state in arena. measure returns the pixel width of a text run.
-pub fn create(arena: *mem.Arena, measure: fn(rawptr, []const u8) f32, measure_data: rawptr, line_height: f32) *State {
+pub fn push_state(arena: *mem.Arena, measure: fn(rawptr, []const u8) f32, measure_data: rawptr, line_height: f32) *State {
   state := mem.push(State, arena)
   state.arena = arena
   state.buckets = mem.push_array(*Box, arena, bucket_count)

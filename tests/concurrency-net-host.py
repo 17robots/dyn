@@ -36,7 +36,7 @@ fn worker(context: rawptr) isize {
   return 0
 }
 fn main() {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   defer { mem.arena_release(arena) }
   idle := thread.Thread{}
   if thread.join(&idle).failure.kind != io.Kind.Ok || thread.id(&idle) != 0 { #panic("empty join") }

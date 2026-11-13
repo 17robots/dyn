@@ -14,7 +14,7 @@ fn check(ok: bool, message: []const u8) {
   if !ok { #panic(message) }
 }
 fn chain() {
-  arena := mem.arena_create_bounded(192, 4096)
+  arena := mem.arena_alloc_bounded(192, 4096)
   events: [64]observe.Event
   log := observe.log(events[..])
   arena.events = &log
@@ -55,7 +55,7 @@ fn chain() {
   check(log.count == 7 && events[6].kind == observe.Kind.Released, "release event")
 }
 fn failures() {
-  arena := mem.arena_create_bounded(192, 192)
+  arena := mem.arena_alloc_bounded(192, 192)
   events: [8]observe.Event
   log := observe.log(events[..])
   arena.events = &log
@@ -77,7 +77,7 @@ fn failures() {
   check(#len(mem.push_array(u64, arena, 0)) == 0 && mem.arena_mark(arena) == before, "typed zero push")
   check(log.count == 3 && arena.allocation_failures == 2, "zero pushes have no events or failures")
   mem.arena_release(arena)
-  overflow := mem.arena_create_bounded(192, 4096)
+  overflow := mem.arena_alloc_bounded(192, 4096)
   overflow_mark := mem.arena_mark(overflow)
   too_big := mem.arena_try_push(overflow, #max(usize), 16)
   check(!too_big.ok && too_big.error == mem.ErrorKind.Overflow, "push arithmetic overflow")
@@ -108,7 +108,7 @@ fn buffers() {
   }
 }
 fn followup() {
-  arena := mem.arena_create_bounded(512, 1024)
+  arena := mem.arena_alloc_bounded(512, 1024)
   payload := mem.arena_push(arena, 16, 1)
   snapshot := mem.arena_snapshot(arena)
   check(snapshot.used == 16 && snapshot.peak_used == 16, "peak excludes header")
@@ -120,7 +120,7 @@ fn followup() {
   check(exact.ok && arena.backing == 1024, "exact aligned block fits limit")
   check(mem.arena_used(arena) == 736 && arena.peak_used == 736, "chain peak excludes headers")
   mem.arena_release(arena)
-  last := mem.arena_create_bounded(512, 1000)
+  last := mem.arena_alloc_bounded(512, 1000)
   _ = mem.arena_push(last, 368, 1)
   partial := mem.arena_try_push(last, 100, 1)
   check(partial.ok && last.backing == 1000, "smaller final block uses remaining budget")
@@ -142,7 +142,7 @@ fn followup() {
   }
 }
 fn pending_blocks() {
-  arena := mem.arena_create_bounded(176, 1024)
+  arena := mem.arena_alloc_bounded(176, 1024)
   defer mem.arena_release(arena)
   live := mem.push_bytes_uninit(arena, 8)
   pending := arena.current.data[arena.current.offset..]
@@ -158,7 +158,7 @@ fn pending_blocks() {
 fn main() {
   pending_blocks()
   mem.arena_release(nil)
-  default_arena: *mem.Arena = mem.arena_create(0)
+  default_arena: *mem.Arena = mem.arena_alloc(0)
   check(default_arena != nil && mem.arena_used(default_arena) == 0, "explicit default pointer arena")
   mem.arena_release(default_arena)
   followup()
@@ -190,7 +190,7 @@ def run():
         (work / (name + '.run.log')).write_text(result.stdout + result.stderr)
         assert result.returncode == 0 and 'ARENA CHAIN PASS' in result.stdout, (name, result.returncode, result.stdout, result.stderr)
         print('PASS arena chain', name, flush=True)
-    panic_source = 'use "std/mem"\nfn main() {\n  _ = mem.arena_create_bounded(1, 1)\n}\n'
+    panic_source = 'use "std/mem"\nfn main() {\n  _ = mem.arena_alloc_bounded(1, 1)\n}\n'
     (project / 'main.dyn').write_text(panic_source)
     for name, flags, extra_env in [
         ('small-limit-debug', [], {}),
@@ -216,7 +216,7 @@ def run():
         # masquerade as a successful negative control.
         baseline_source = '''use "std/mem"
 fn main() {
-  arena := mem.arena_create_bounded(512, 1024)
+  arena := mem.arena_alloc_bounded(512, 1024)
   _ = mem.arena_push(arena, 16, 1)
   if mem.arena_snapshot(arena).peak_used != 16 { #panic("peak excludes header") }
   mem.arena_release(arena)

@@ -24,7 +24,7 @@ def check(node,v,label):
 values=[None,True,False,0,-0.0,1,-1,2**64-1,-2**63,2**53-1,1.25,1e300,1e-300,'','ascii','é😀','a\0b\n\\"',{'é😀':'café','a\0b':[True,None]},[],{},[1,2,{'x':'y'}]]
 values.append({'é😀':'café','a\0b':[True,None]})
 for i in range(60):values.append({'id':i,'key'+str(i):['x'*(i%17),'é😀',i%2==0,None,{'nested':i*19}],'escaped':'a\nb\t"\\'})
-lines=['use "std/parse" parse\nuse "std/encoding/json/read" json','use "std/encoding/json" mutable','use "std/mem" mem','use "std/io"','fn require(ok:bool,label:[]const u8) { if !ok { #panic(label) } }','fn main() {','require(#sizeof(json.Value)==16,"compact value size")','arena:=mem.arena_create(mem.MiB)\ndefer mem.arena_release(arena)','_=mem.push_bytes_uninit(arena,3)\nprefix_mark:=mem.arena_mark(arena)']
+lines=['use "std/parse" parse\nuse "std/encoding/json/read" json','use "std/encoding/json" mutable','use "std/mem" mem','use "std/io"','fn require(ok:bool,label:[]const u8) { if !ok { #panic(label) } }','fn main() {','require(#sizeof(json.Value)==16,"compact value size")','arena:=mem.arena_alloc(mem.MiB)\ndefer mem.arena_release(arena)','_=mem.push_bytes_uninit(arena,3)\nprefix_mark:=mem.arena_mark(arena)']
 for i,v in enumerate(values):
  raw=json.dumps(v,ensure_ascii=i%2==0,separators=(',',':')).encode();lines+=['if true {',f'original:={quote(raw)}','input:=mem.push_bytes_uninit(arena,#len(original))\n_=mem.copy(input,original)','mark:=mem.arena_mark(arena)','result:=json.parse(arena,input)','require(result.failure.kind == parse.Kind.Ok && result.failure.kind==json.Kind.None,"valid metadata")','for i in 0..#len(input) { input[i]=255 }']
  # errors is not re-exported as Kind; use zero enum via cast.
@@ -97,7 +97,7 @@ chain_source = [
  'for bounded in [false,true] {',
  'for preforced in [false,true] {',
  'chain: *mem.Arena = nil',
- 'if bounded { chain=mem.arena_create_bounded(#cast(usize,block_size),256*mem.KiB) } else { chain=mem.arena_create(#cast(usize,block_size)) }',
+ 'if bounded { chain=mem.arena_alloc_bounded(#cast(usize,block_size),256*mem.KiB) } else { chain=mem.arena_alloc(#cast(usize,block_size)) }',
  'prefix:=mem.push_array(u8,chain,8)',
  'mem.fill(prefix,91)',
  'if preforced { _=mem.arena_push(chain,512,1)\n_=mem.arena_push(chain,8,1)\nrequire(mem.arena_snapshot(chain).blocks>1,"pre-forced chain") }',
@@ -184,7 +184,7 @@ fn main() {
 }
 '''
  cross_chain = '\n'.join([
-  'chain:=mem.arena_create_bounded(512,128*mem.KiB)',
+  'chain:=mem.arena_alloc_bounded(512,128*mem.KiB)',
   'prefix:=mem.push_array(u8,chain,8)',
   'mem.fill(prefix,91)',
   '_=mem.arena_push(chain,512,1)',

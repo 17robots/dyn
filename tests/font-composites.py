@@ -116,7 +116,7 @@ fn same(arena: *mem.Arena, face: *const font.Face, a, b: u16, size: u16) {
   mem.arena_rewind(arena, mark)
 }
 fn main() {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   defer { mem.arena_release(arena) }
   parsed := font.open(data[..])
   check(parsed.failure.kind == parse.Kind.Ok)

@@ -60,7 +60,7 @@ fn build(state: *box.State, context: *ui.Context, arena: *mem.Arena) {
 }
 
 fn main() {
-  persistent_arena = mem.arena_create(0)
+  persistent_arena = mem.arena_alloc(0)
   defer mem.arena_release(persistent_arena)
   for i in 0..48 {
     coverage[i] = 255
@@ -80,11 +80,11 @@ fn main() {
   defer {
     gpu.close_batch(batch)
   }
-  arena := mem.arena_create(16777216)
+  arena := mem.arena_alloc(16777216)
   defer {
     mem.arena_release(arena)
   }
-  state := box.create(persistent_arena, measure, nil, 12.0)
+  state := box.push_state(persistent_arena, measure, nil, 12.0)
   context := ui.Context{ style: ui.default_style }
   build(state, &context, arena)
   build(state, &context, arena)

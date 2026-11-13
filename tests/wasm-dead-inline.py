@@ -14,7 +14,7 @@ if not shutil.which(NODE):
     raise SystemExit(0)
 SOURCE = '''use "std/mem" mem
 fn main() {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   value := mem.push(i32, arena)
   value.* = 42
   if value.* != 42 { #panic("live allocation") }
@@ -30,7 +30,7 @@ state: i32 = initial()
 fn plus(value: i32) i32 { return value + state }
 callback: fn(i32) i32 = plus
 pub fn api(value: i32) i32 {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   slot := mem.push(i32, arena)
   slot.* = callback(value)
   result := slot.*

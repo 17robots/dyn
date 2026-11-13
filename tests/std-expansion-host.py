@@ -63,7 +63,7 @@ use "std/mem" mem
 use "std/bytes" bytes
 fn check(ok: bool) { if !ok { #panic("host formats") } }
 fn main() {
- arena := mem.arena_create(0)
+ arena := mem.arena_alloc(0)
  defer { mem.arena_release(arena) }
  pixels: [8]u8 = [255,0,0,255,0,128,255,64]
  bitmap := bmp.encode(arena,pixels[..],2,1,4)

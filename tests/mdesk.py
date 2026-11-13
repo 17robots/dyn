@@ -25,7 +25,7 @@ fn fails(arena: *mem.Arena, source: []const u8, kind: parse.Kind, message: []con
 }
 
 fn main() {
-  arena := mem.arena_create(mem.MiB)
+  arena := mem.arena_alloc(mem.MiB)
   defer mem.arena_release(arena)
   source := #load("types.mdesk")
   parsed := mdesk.parse(arena, source)

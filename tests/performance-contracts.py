@@ -134,7 +134,7 @@ use "std/fs" fs
 use "std/io" io
 use "std/mem" mem
 fn main() {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   created := t.temporary_directory(arena, "dyn-performance-contract")
   t.expect(created.failure.kind == io.Kind.Ok && created.value.active, "temporary directory")
   frames: [4]fs.RemovalFrame

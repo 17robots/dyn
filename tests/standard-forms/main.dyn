@@ -3,6 +3,12 @@ use "std/enums"
 use "std/io"
 
 struct Pair { a: i32, b: i32 }
+struct Player { health: i32 = 100, armor: i32 }
+
+// T{} in a generic body is the instance's own struct literal.
+fn fresh(T: type) T {
+  return T{}
+}
 enum(u8) Op { Nop, Add, Sub }
 
 fn weighted(values: []const i32) usize {
@@ -44,5 +50,7 @@ fn main() {
     _ => { io.println("bad") }
   }
   io.println("calls {}", calls)
+  player := fresh(Player)
+  io.println("fresh {} {}", player.health, player.armor)
   io.println("op {} {}", enums.from_int(Op, 2) == Op.Sub, enums.from_int(Op, 9) == Op.Nop)
 }

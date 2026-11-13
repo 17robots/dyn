@@ -73,8 +73,8 @@ fn glyph(data: rawptr, codepoint: u32) software.Glyph {
   return software.Glyph{ pixels: coverage[..], width: 10, height: 14, stride: 10, advance: 12, y_offset: 2 }
 }
 fn main() {
-  frame := mem.arena_create(0)
-  output := mem.arena_create(0)
+  frame := mem.arena_alloc(0)
+  output := mem.arena_alloc(0)
   defer {
     mem.arena_release(output)
     mem.arena_release(frame)
@@ -100,8 +100,8 @@ fn main() {
   _ = ui.slider(&context, 4, ui.Rect{ x: 240, y: 160, width: 192, height: 16 }, &count, 0, 10, true)
   label_bytes: [32]u8
   label := fmt.buffer(label_bytes[..])
-  _ = fmt.write(&label, "COUNT ")
-  _ = fmt.write_i64(&label, #cast(i64, count))
+  fmt.write(&label, "COUNT ")
+  fmt.write_i64(&label, #cast(i64, count))
   ui.label(&context, ui.Rect{ x: 32, y: 64, width: 416, height: 24 }, fmt.bytes(&label), context.style.accent)
   ui.end(&context)
   pixels := mem.push_array(u8, output, #cast(usize, 480 * 240 * 4))

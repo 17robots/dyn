@@ -21,7 +21,7 @@ fn bad(source: []const u8) {
   check(again.failure.kind == result.failure.kind && again.offset == result.offset)
 }
 fn main() {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   defer { mem.arena_release(arena) }
   fields: [7]pb.Field = [pb.Field{ number: 1, wire: pb.Wire.Varint, value: 150 },
     pb.Field{ number: 2, wire: pb.Wire.Fixed64, value: 0x0123456789abcdef },

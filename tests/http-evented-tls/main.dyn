@@ -71,7 +71,7 @@ fn handle(response: *http.Response, request: *const http.Request, app: *App) htt
 }
 
 fn main() i32 {
-  arena := mem.arena_create(64 * mem.MiB)
+  arena := mem.arena_alloc(64 * mem.MiB)
   defer mem.arena_release(arena)
   arguments := process.arguments(arena)
   if arguments.failure.kind != io.Kind.Ok || #len(arguments.value) != 3 {

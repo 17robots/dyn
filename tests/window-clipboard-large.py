@@ -49,7 +49,7 @@ fn main() {
  defer { window.close(&owner) }
  check(window.open(&reader,"clipboard reader",80,80).kind == errors.Kind.Ok,28)
  defer { window.close(&reader) }
- arena := mem.arena_create(0)
+ arena := mem.arena_alloc(0)
  defer { mem.arena_release(arena) }
  large := mem.push_bytes_uninit(arena, 1200000)
  for i in 0..#len(large) { large[i] = #cast(u8, 32 + i % 90) }

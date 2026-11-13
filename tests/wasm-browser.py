@@ -59,7 +59,7 @@ pub fn pool_test() bool {
   return same == first && second == &slots[1] && first_free == nil
 }
 pub fn heap_available() bool {
-  created := mem.arena_create(32 + mem.ArenaHeader)
+  created := mem.arena_alloc(32 + mem.ArenaHeader)
   _ = mem.arena_push(created, 32, 1)
   mem.arena_release(created)
   created = nil

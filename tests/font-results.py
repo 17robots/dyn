@@ -57,8 +57,8 @@ use "std/mem" mem
 use "std/io" errors
 fn check(ok: bool) { if !ok { #panic("font contract") } }
 fn main() {
-  arena := mem.arena_create(0)
-  frame := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
+  frame := mem.arena_alloc(0)
   defer { mem.arena_release(frame)
     mem.arena_release(arena) }
   opened := font.open(data[..])

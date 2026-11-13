@@ -51,7 +51,7 @@ fn dump(out: *Output, arena: *mem.Arena, tree: *const Tree, root: u32) {
 }
 
 fn main() {
-  arena := mem.arena_create(4 * mem.GiB)
+  arena := mem.arena_alloc(4 * mem.GiB)
   defer mem.arena_release(arena)
   arguments := process.arguments(arena)
   if arguments.failure.kind != io.Kind.Ok {

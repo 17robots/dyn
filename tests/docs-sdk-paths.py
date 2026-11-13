@@ -21,10 +21,10 @@ def declarations(result):
 with tempfile.TemporaryDirectory(prefix='dyn-sdk-docs-') as temporary:
     root=Path(temporary);cwd=root/'project';cwd.mkdir()
     env=dict(os.environ);env.pop('DYN_SDK',None)
-    assert 'arena_create' in declarations(run(['docs','std/mem','--json'],cwd,env))
+    assert 'arena_alloc' in declarations(run(['docs','std/mem','--json'],cwd,env))
     assert 'prepare' in declarations(run(['docs','vendor/sqlite','--json'],cwd,env))
     result=run(['docs','std/mem'],cwd,env)
-    assert result.returncode==0 and 'arena_create' in result.stdout,result.stderr
+    assert result.returncode==0 and 'arena_alloc' in result.stdout,result.stderr
     sdk=root/'custom sdk'; standard=sdk/'std/example';vendor=sdk/'vendor/example'
     standard.mkdir(parents=True);vendor.mkdir(parents=True)
     original='pub fn Standard( ) u64{return 1}\n'

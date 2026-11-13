@@ -36,6 +36,10 @@ fn clamp(value: i32, low: i32, high: i32) i32 {
 - Functions, locals, parameters, fields, and module paths: `snake_case`.
 - Structs, enums, enum variants, and constants: `PascalCase`.
 - Import aliases: short `snake_case` module names.
+- Verbs say what happens to memory: `push_*` allocates from a caller's arena,
+  `alloc`/`release` make and free an owner, `open`/`close` hold an OS resource,
+  and `init(&x)` fills storage that already exists. Conversions are
+  `X_from_Y`: the result first, then the source.
 
 ## Imports
 

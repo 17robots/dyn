@@ -13,8 +13,8 @@ use "std/process" process
 use "std/text/layout" layout
 use "std/ui/text" ui_text
 fn main() {
-  frame := mem.arena_create(0)
-  output := mem.arena_create(0)
+  frame := mem.arena_alloc(0)
+  output := mem.arena_alloc(0)
   defer {
     mem.arena_release(output)
     mem.arena_release(frame)
@@ -65,8 +65,8 @@ fn main() {
   _ = ui.slider(&context, 4, ui.Rect{ x: 240, y: 160, width: 192, height: 16 }, &count, 0, 10, true)
   label_bytes: [32]u8
   label := fmt.buffer(label_bytes[..])
-  _ = fmt.write(&label, "COUNT ")
-  _ = fmt.write_i64(&label, #cast(i64, count))
+  fmt.write(&label, "COUNT ")
+  fmt.write_i64(&label, #cast(i64, count))
   ui.label(&context, ui.Rect{ x: 32, y: 64, width: 416, height: 24 }, fmt.bytes(&label), context.style.accent)
   metrics := font_ui.LayoutAdapter{ atlas: &cached.value, face: &opened.value, pixels_per_em: 24 }
   positioned := layout.build(frame, "AV Café Å ñ ü Ç", font_ui.layout_font(&metrics), layout.Options{ width: 416 })

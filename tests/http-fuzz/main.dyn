@@ -174,14 +174,14 @@ fn run(name: []const u8, cases: usize, corpus: []const []const u8, predicate: fn
     io.eprintln("fuzz failure in {}", name)
     storage: [8 * 1024]u8
     quoted := fmt.buffer(storage[..])
-    _ = fmt.write_quoted(&quoted, result.example)
+    fmt.write_quoted(&quoted, result.example)
     io.eprintln("example: {}", fmt.bytes(&quoted))
     #panic("fuzz property failed")
   }
 }
 
 fn main() {
-  arena := mem.arena_create(mem.MiB)
+  arena := mem.arena_alloc(mem.MiB)
   defer mem.arena_release(arena)
   scale: u64 = 1
   arguments := process.arguments(arena)

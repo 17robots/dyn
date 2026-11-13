@@ -12,7 +12,7 @@ fn read_nothing(data: rawptr, destination: []u8) io.Transfer {
 
 // Explicit default arenas initialize zeroed payload; replacement follows release.
 fn zero_arena() {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   first := mem.push(u64, arena)
   first.* = 7
   many := mem.push_array(u64, arena, 100000)
@@ -21,7 +21,7 @@ fn zero_arena() {
     #panic("zero arena push")
   }
   mem.arena_release(arena)
-  arena = mem.arena_create(0)
+  arena = mem.arena_alloc(0)
   again := mem.push(u32, arena)
   if again.* != 0 {
     #panic("zero arena after release")
@@ -65,7 +65,7 @@ fn bytes_equal(a: []const u8, b: []const u8) bool {
 
 // Zeroed net handles are closed; closing one must not touch descriptor 0.
 fn zero_net_handles() {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   defer mem.arena_release(arena)
   connection := mem.push(net.Connection, arena)
   listener := mem.push(net.Listener, arena)

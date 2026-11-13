@@ -138,7 +138,7 @@ fn json_bytes(value: []const u8, expected: bool) {
   json_document(quoted[..length], expected)
   arena_storage: [512]u8
   arena := mem.arena_from_buffer(arena_storage[..])
-  string_value := json.make_string(arena, value)
+  string_value := json.push_string(arena, value)
   if string_value == nil {
     #panic("JSON test string allocation")
   }
@@ -153,8 +153,8 @@ fn json_bytes(value: []const u8, expected: bool) {
     object[length+1+i] = tail[i]
   }
   json_document(object[..length+1+#len(tail)], expected)
-  object_value := json.make_object(arena)
-  child := json.make_null(arena)
+  object_value := json.push_object(arena)
+  child := json.push_null(arena)
   if object_value == nil || child == nil || !json.add_member(object_value, value, child) {
     #panic("JSON test member allocation")
   }

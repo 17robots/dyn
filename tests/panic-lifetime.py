@@ -16,7 +16,7 @@ _ = checked(2) }''',
     'local': '''use "std/io"
 use "std/mem"
 fn main() {
-  owned := mem.arena_create(64)
+  owned := mem.arena_alloc(64)
   defer { mem.arena_release(owned)
   io.println("cleanup") }
   text := #slice(mem.arena_push(owned, 32, 1), 32)
@@ -27,7 +27,7 @@ fn main() {
 use "std/mem"
 fn fail(text: []const u8) { #panic(text) }
 fn main() {
-  owned := mem.arena_create(64)
+  owned := mem.arena_alloc(64)
   defer { mem.arena_release(owned)
   io.println("cleanup") }
   text := #slice(mem.arena_push(owned, 32, 1), 32)

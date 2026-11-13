@@ -59,7 +59,7 @@ fn check(encoded: []const u8, expected: []const u8, wrapped: bool, corrupt: bool
   }
 }
 fn fixture(encoded_path: []const u8, expected_path: []const u8, wrapped: bool, corrupt: bool) {
-  owned := memory.arena_create(4000000)
+  owned := memory.arena_alloc(4000000)
   encoded := fs.read_all(owned, encoded_path, 1000000)
   expected := fs.read_all(owned, expected_path, 1000000)
   require(encoded.failure.kind == io.Kind.Ok && expected.failure.kind == io.Kind.Ok, "read fixture")

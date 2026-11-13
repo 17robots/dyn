@@ -2,12 +2,12 @@ use "std/mem"
 fn expect(condition: bool, message: []const u8) { if !condition { #panic(message) } }
 
 fn main() {
-  defaults := mem.arena_create(0)
+  defaults := mem.arena_alloc(0)
   expect(mem.arena_capacity(defaults) > 0 && mem.arena_snapshot(defaults).owns_memory, "explicit default owned arena")
   mem.arena_release(defaults)
   defaults = nil
   // This limit includes the header and exactly 128 payload bytes.
-  arena := mem.arena_create_bounded(mem.ArenaHeader + 128, mem.ArenaHeader + 128)
+  arena := mem.arena_alloc_bounded(mem.ArenaHeader + 128, mem.ArenaHeader + 128)
   allocation := mem.arena_push(arena, 128, 1)
   allocated_bytes := #slice(allocation, 128)
   expect(allocated_bytes[0] == 0 && allocated_bytes[127] == 0, "owned zeroed storage")
@@ -24,7 +24,7 @@ fn main() {
   mem.arena_release(arena) // Nil is safe; an owned arena pointer expires on release.
 
   // Small blocks force chaining; earlier pushes never move.
-  chain := mem.arena_create(256)
+  chain := mem.arena_alloc(256)
   a := mem.push(u64, chain)
   start := mem.arena_mark(chain)
   for i in 0..40 {
@@ -46,7 +46,7 @@ fn main() {
   expect(reused.* == 0 && mem.arena_snapshot(chain).blocks == 1, "reset starts fresh in first block")
   mem.arena_release(chain)
   chain = nil
-  bounded := mem.arena_create_bounded(256, 1024)
+  bounded := mem.arena_alloc_bounded(256, 1024)
   expect(mem.arena_try_push(bounded, 128, 8).ok, "bounded push")
   expect(!mem.arena_try_push(bounded, 2048, 8).ok, "bounded cap")
   mem.arena_release(bounded)

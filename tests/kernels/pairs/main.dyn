@@ -11,7 +11,7 @@ fn dot(a: V, b: V) f32 {
   return a.x * b.x + a.y * b.y
 }
 fn main() {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   ps := mem.push_array(V, arena, 10000)
   vs := mem.push_array(V, arena, 10000)
   for i in 0..10000 {

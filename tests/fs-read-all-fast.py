@@ -10,7 +10,7 @@ use "std/process"
 use "std/io" errors
 fn require(value: bool, message: []const u8) { if !value { #panic(message) } }
 fn main() {
- zero := mem.arena_create(0)
+ zero := mem.arena_alloc(0)
  defer mem.arena_release(zero)
  missing := fs.read_all(zero,"DIR/missing",100)
  require(missing.failure.kind != errors.Kind.Ok && missing.failure.kind == errors.Kind.NotFound && mem.arena_used(zero)==0,"missing state")
@@ -21,7 +21,7 @@ fn main() {
  result := fs.read_all(zero,"DIR/small",6)
  require(result.failure.kind == errors.Kind.Ok && bytes.equal(result.value,"abcdef"),"lazy read")
  require(mem.arena_mark(zero)==mem.arena_start(zero)+6,"exact mark")
- argv := mem.arena_create(0)
+ argv := mem.arena_alloc(0)
  defer mem.arena_release(argv)
  arguments := process.arguments(argv)
  require(arguments.failure.kind == errors.Kind.Ok && #len(arguments.value)>0,"lazy arguments")
@@ -45,7 +45,7 @@ fn main() {
  require(empty.failure.kind == errors.Kind.Ok && #len(empty.value)==0 && fixed_empty.fixed_buffer && !fixed_empty.owns_memory,"fixed empty")
  full := fs.read_all(fixed_empty,"DIR/small",100)
  require(full.failure.kind != errors.Kind.Ok && full.failure.kind==errors.Kind.Capacity && fixed_empty.fixed_buffer && !fixed_empty.owns_memory,"fixed empty capacity")
- bounded := mem.arena_create_bounded(160,160)
+ bounded := mem.arena_alloc_bounded(160,160)
  defer mem.arena_release(bounded)
  bounded_small:=fs.read_all(bounded,"DIR/small",100)
  require(bounded_small.failure.kind == errors.Kind.Ok && bytes.equal(bounded_small.value,"abcdef"),"bounded preferred capacity")
@@ -53,7 +53,7 @@ fn main() {
  bounded_large:=fs.read_all(bounded,"DIR/large",100)
  require(bounded_large.failure.kind != errors.Kind.Ok && bounded_large.failure.kind==errors.Kind.Capacity && mem.arena_mark(bounded)==bounded_mark,"bounded rollback")
  require(bytes.equal(bounded_small.value,"abcdef"),"bounded retained payload")
- chained := mem.arena_create(160)
+ chained := mem.arena_alloc(160)
  defer mem.arena_release(chained)
  first := mem.push_bytes_uninit(chained,16)
  for *byte in first { byte.*=71 }
@@ -79,7 +79,7 @@ fn main() {
  require(bytes.equal(chain_small.value,"abcdef"),"chain output lifetime")
  for byte in first { require(byte==71,"first block canary") }
  for byte in forced { require(byte==82,"prior block canary") }
- fifo_arena:=mem.arena_create(160)
+ fifo_arena:=mem.arena_alloc(160)
  defer mem.arena_release(fifo_arena)
  fifo_prefix:=mem.push_bytes_uninit(fifo_arena,16)
  for *byte in fifo_prefix { byte.*=83 }
@@ -91,7 +91,7 @@ fn main() {
  for i in 0..#len(pipe.value) { require(pipe.value[i]==#cast(u8,i%239),"FIFO output lifetime") }
  for byte in fifo_prefix { require(byte==83,"FIFO prefix canary") }
  // Regular files are sized once: no geometric copies stay pinned in the arena.
- sized:=mem.arena_create(0)
+ sized:=mem.arena_alloc(0)
  defer mem.arena_release(sized)
  sized_large:=fs.read_all(sized,"DIR/large",1048576)
  require(sized_large.failure.kind == errors.Kind.Ok && #len(sized_large.value)==131073,"sized extent")

@@ -18,7 +18,7 @@ pub enum Mode { A, B }
 pub distinct type Id = u64
 type Transform = fn(Event) Event
 pub fn exercise() usize {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   defer { mem.arena_release(arena) }
   events := mem.push_array(Event, arena, 2)
   pointers := mem.push_array(*Event, arena, 2)

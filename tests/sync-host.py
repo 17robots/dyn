@@ -39,7 +39,7 @@ fn worker(context: rawptr) isize {
   return 0
 }
 fn main() {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   defer { mem.arena_release(arena) }
   shared := Shared{}
   if !sync.try_lock(&shared.mutex) { #panic("initial trylock") }

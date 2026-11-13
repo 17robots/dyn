@@ -48,7 +48,7 @@ fn worker(context: rawptr) isize {
 }
 
 fn main() {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   spawned := thread.spawn_with_size(arena, 1048576, worker, nil)
   _ = thread.join(spawned.value)
 }

@@ -62,18 +62,18 @@ are not part of this first interface.
 
 Use `std/mem.arena_from_buffer` over module-global or caller-provided storage.
 Function-local buffers must not escape their call. Reset/rewind invalidates every
-affected allocation, including JavaScript views. `arena_create` now obtains backing
+affected allocation, including JavaScript views. `arena_alloc` now obtains backing
 through Wasm `memory.grow`. Released page ranges are reused, split and coalesced
 inside `std/mem`; linear memory cannot shrink. Existing allocations never move.
 Growing arenas acquire additional blocks through this same interface. Fixed
-buffer-backed arenas never fall back to growth on exhaustion. `arena_create` and `arena_push` trap on allocation failure; `arena_try_push`
+buffer-backed arenas never fall back to growth on exhaustion. `arena_alloc` and `arena_push` trap on allocation failure; `arena_try_push`
 returns a failure result without changing live allocations. This allocator
 is thread-confined; no shared-memory or reentrant allocation contract is promised.
 No ownership packages or standalone malloc interface are added.
 
 The module exports its linear memory. Host code must respect allocation bounds
 and lifetime; linear-memory bounds do not validate individual Dyn allocations.
-Any call which grows memory (including `arena_create` and growing arena pushes)
+Any call which grows memory (including `arena_alloc` and growing arena pushes)
 can detach existing JavaScript views. Recreate views from `exports.memory.buffer`
 after such calls. Numeric Dyn pointers remain stable. Use `--link --max-memory=N`
 (bytes, multiple of 65536) to set a linker-enforced memory ceiling.

@@ -1,0 +1,8 @@
+// T{} names the instance's struct; a type argument that is not a struct is an error.
+fn fresh(T: type) T {
+  return T{} // error: a literal needs a struct type, but this is i32
+}
+
+fn main() {
+  _ = fresh(i32) // note: in instance fresh(i32) required here
+}

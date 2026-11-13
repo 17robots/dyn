@@ -17,7 +17,7 @@ use "std/mem" mem
 use "std/bytes" bytes
 fn check(ok: bool) { if !ok { #panic("xml tree contract") } }
 fn main() {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   defer { mem.arena_release(arena) }
   zero: xml.Node
   check(xml.is_nil(&zero) && xml.is_nil(nil))

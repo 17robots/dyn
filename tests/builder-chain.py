@@ -14,8 +14,8 @@ use "std/bytes" bytes
 fn require(ok: bool) { if !ok { #panic("builder chain contract") } }
 fn moving(block: usize, bounded: bool) {
   arena: *mem.Arena
-  if bounded { arena = mem.arena_create_bounded(block, 4096) }
-  else { arena = mem.arena_create(block) }
+  if bounded { arena = mem.arena_alloc_bounded(block, 4096) }
+  else { arena = mem.arena_alloc(block) }
   defer mem.arena_release(arena)
   state: builder.Builder
   require(builder.reserve(&state, arena, 8) == builder.ErrorKind.None)
@@ -42,7 +42,7 @@ fn moving(block: usize, bounded: bool) {
   require(bytes.equal(old, "abcdefgh"))
 }
 fn current_block() {
-  arena := mem.arena_create_bounded(256, 2048)
+  arena := mem.arena_alloc_bounded(256, 2048)
   defer mem.arena_release(arena)
   guard := mem.push_bytes_uninit(arena, 100)
   mem.fill(guard, 91)
@@ -69,7 +69,7 @@ fn failures() {
   require(builder.append(&state, "abc") == builder.ErrorKind.None)
   require(builder.append(&state, "XY") == builder.ErrorKind.Capacity)
   require(state.length == 3 && bytes.equal(builder.bytes(&state), "abc") && backing[3] == 4)
-  arena := mem.arena_create(160)
+  arena := mem.arena_alloc(160)
   defer mem.arena_release(arena)
   mark := mem.arena_mark(arena)
   require(builder.reserve(&state, arena, 64) == builder.ErrorKind.Capacity)
@@ -95,7 +95,7 @@ fn main() {
 }
 '''
 PANICS = {
-    'bounded': '''arena := mem.arena_create_bounded(160, 320)
+    'bounded': '''arena := mem.arena_alloc_bounded(160, 320)
   defer mem.arena_release(arena)
   state: builder.Builder
   _ = builder.reserve(&state, arena, 8)

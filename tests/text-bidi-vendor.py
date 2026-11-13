@@ -78,7 +78,7 @@ fn fail_reorder(flags:u32,types:*const u32,n,off:i32,base:u32,levels:*i8,visual:
  return 0
 }
 fn main() {
- arena:=mem.arena_create(0)
+ arena:=mem.arena_alloc(0)
  defer mem.arena_release(arena)
  library:=dynlib.open("LIBRARY",dynlib.Now)
  check(library.failure.kind == errors.Kind.Ok)

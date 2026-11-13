@@ -14,6 +14,7 @@ use "std/crypto/pem" pem
 use "std/crypto/certificate" certificate
 use "std/mem" mem
 use "std/strings" strings
+use "std/bytes"
 fn check(ok: bool) { if !ok { #panic("DER/PEM result regression") } }
 fn main() {
   certificate_bytes:[10]u8=[48,8,48,0,48,0,3,2,0,170]
@@ -44,11 +45,11 @@ fn main() {
   prefix[0] = 42
   mark := mem.arena_mark(arena)
   valid := pem.decode(arena, "prefix\n-----BEGIN TEST-----\nAQID\n-----END TEST-----\ntail")
-  check(valid.failure.kind == parse.Kind.Ok && strings.equal(valid.label, "TEST") && valid.consumed == 52)
+  check(valid.failure.kind == parse.Kind.Ok && bytes.equal(valid.label, "TEST") && valid.consumed == 52)
   check(#len(valid.value) == 3)
   mem.arena_rewind(arena, mark)
   empty := pem.decode(arena, "-----BEGIN TEST-----\n-----END TEST-----")
-  check(empty.failure.kind == parse.Kind.Ok && #len(empty.value) == 0 && strings.equal(empty.label, "TEST") && empty.failure.kind == parse.Kind.Ok)
+  check(empty.failure.kind == parse.Kind.Ok && #len(empty.value) == 0 && bytes.equal(empty.label, "TEST") && empty.failure.kind == parse.Kind.Ok)
   mem.arena_rewind(arena, mark)
   bad := pem.decode(arena, "-----BEGIN TEST-----\n!!!!\n-----END TEST-----")
   check(bad.failure.kind != parse.Kind.Ok)

@@ -12,7 +12,7 @@ struct Enemy {
 }
 
 fn main() {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   enemies: array.Array(Enemy)
   array.init(&enemies, arena)
   check(#len(enemies.items) == 0 && array.get(&enemies, 0) == nil)

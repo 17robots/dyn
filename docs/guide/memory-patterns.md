@@ -3,7 +3,7 @@
 Choose fixed caller storage or an owned, chained arena according to the
 application lifetime and budget. Measure actual use with `arena_snapshot`. A
 byte unit makes a budget readable; it does not choose the budget for you. Owned
-arenas grow automatically; use `arena_create_bounded` to cap their backing.
+arenas grow automatically; use `arena_alloc_bounded` to cap their backing.
 
 Every Dyn block in this document is a complete program. The documentation test
 builds and runs them in debug and release modes. They use the matching source
@@ -50,6 +50,7 @@ The copied result survives scratch reset; copying a slice descriptor would not.
 ```dyn
 use "std/mem"
 use "std/strings"
+use "std/bytes"
 
 fn make_label(output: *mem.Arena, first: *mem.Arena, second: *mem.Arena) []u8 {
   temporary := mem.scratch_begin(first, second, output)
@@ -69,7 +70,7 @@ fn main() {
   label := make_label(output, output, scratch)
   if mem.arena_used(scratch) != 0 { #panic("scratch contract") }
   mem.zero(scratch.data[mem.ArenaHeader..])
-  if !strings.equal(label, "retained") { #panic("retained output") }
+  if !bytes.equal(label, "retained") { #panic("retained output") }
 }
 ```
 
@@ -87,13 +88,14 @@ is a separate concern.
 ```dyn
 use "std/bytes/builder" builder
 use "std/strings"
+use "std/bytes"
 
 fn main() {
   storage: [8]u8
   text := builder.from_buffer(storage[..])
   if builder.append(&text, "hello") != builder.ErrorKind.None { #panic("append") }
   if builder.append(&text, " world") != builder.ErrorKind.Capacity { #panic("capacity") }
-  if !strings.equal(builder.bytes(&text), "hello") { #panic("failure changed text") }
+  if !bytes.equal(builder.bytes(&text), "hello") { #panic("failure changed text") }
   builder.clear(&text)
   if builder.append(&text, "again") != builder.ErrorKind.None { #panic("reuse") }
 }
@@ -111,6 +113,7 @@ and resets the new current one, so last frame's data stays readable through
 ```dyn
 use "std/mem"
 use "std/strings"
+use "std/bytes"
 
 fn main() {
   storage := mem.frames_create(mem.MiB)
@@ -130,7 +133,7 @@ fn main() {
 
 ## Bounded growth and reclamation
 
-`arena_create_bounded` limits backing bytes across all blocks, headers included.
+`arena_alloc_bounded` limits backing bytes across all blocks, headers included.
 The limit is not an RSS measurement. A large allocation can request a block
 larger than the preferred size; the last block can be smaller when necessary to
 fit the remaining budget. Earlier allocation addresses stay stable.
@@ -139,7 +142,7 @@ fit the remaining budget. Earlier allocation addresses stay stable.
 use "std/mem"
 
 fn main() {
-  workspace := mem.arena_create_bounded(mem.KiB, 16 * mem.KiB)
+  workspace := mem.arena_alloc_bounded(mem.KiB, 16 * mem.KiB)
   defer mem.arena_release(workspace)
   prefix := mem.push_bytes_uninit(workspace, 8)
   prefix[0] = 42

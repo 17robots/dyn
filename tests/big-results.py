@@ -66,7 +66,7 @@ fn show(arena: *mem.Arena, value: big.Int) {
 }
 
 fn main() {
-  arena := mem.arena_create(268435456)
+  arena := mem.arena_alloc(268435456)
   defer {
     mem.arena_release(arena)
   }

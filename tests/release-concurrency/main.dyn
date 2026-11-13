@@ -26,7 +26,7 @@ fn worker(raw: rawptr) isize {
   return 0
 }
 fn main() {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   defer { mem.arena_release(arena) }
   state := State{lock: sync.mutex(), ready: sync.condition(), gate: sync.semaphore(0), once: sync.once(), atomic: sync.atomic_u64(0)}
   stacks: [4][65536]u8

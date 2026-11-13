@@ -26,7 +26,7 @@ if not Path('/usr/share/zoneinfo/Europe/Berlin').exists():
 lines = ['use "std/time" time', 'use "std/time/zone" zone', 'use "std/mem" mem', 'use "std/io" io', '',
          f'const instants: [{len(instants)}]i64 = [{", ".join(map(str, instants))}]',
          f'const days: [{len(calendar_days)}]i64 = [{", ".join(map(str, calendar_days))}]', '',
-         'fn main() {', '  arena := mem.arena_create(16777216)', '  defer {', '    mem.arena_release(arena)', '  }',
+         'fn main() {', '  arena := mem.arena_alloc(16777216)', '  defer {', '    mem.arena_release(arena)', '  }',
          '  for day in days {', '    date := time.civil_from_days(day)',
          '    io.println("day {} {} {} {} {} {}", day, date.year, date.month, date.day, time.days_from_civil(date.year, date.month, date.day), #cast(u8, time.weekday(&date)))',
          '  }']
@@ -104,7 +104,7 @@ use "std/mem" mem
 use "std/io" errors
 
 fn main() {
-  arena := mem.arena_create(1048576)
+  arena := mem.arena_alloc(1048576)
   defer {
     mem.arena_release(arena)
   }

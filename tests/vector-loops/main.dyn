@@ -112,7 +112,7 @@ fn spin(ws: []W, us: []W, k: f32) f32 {
 }
 
 fn main() {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   buffer := mem.push_array(V, arena, 64)
   other := mem.push_array(V, arena, 64)
   for i in 0..64 {

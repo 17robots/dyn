@@ -10,7 +10,7 @@ use "std/mem" mem
 use "std/os/wasi" wasi
 use "std/terminal" terminal
 fn main() {
-  arena := mem.arena_create(65536)
+  arena := mem.arena_alloc(65536)
   defer { mem.arena_release(arena) }
   arguments := wasi.arguments(arena)
   if !arguments.ok || #len(arguments.values) != 3 || #len(arguments.values[2]) != 5 { #panic("args") }

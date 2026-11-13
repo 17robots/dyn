@@ -38,11 +38,11 @@ fn frame(state: *box.State, arena: *mem.Arena, app: *App, input: box.Input) {
   ui.end(&context)
 }
 fn main() {
-  persistent := mem.arena_create(0)
-  arena := mem.arena_create(0)
+  persistent := mem.arena_alloc(0)
+  arena := mem.arena_alloc(0)
   defer { mem.arena_release(arena)
     mem.arena_release(persistent) }
-  state := box.create(persistent,measure,nil,16.0)
+  state := box.push_state(persistent,measure,nil,16.0)
   app := App{}
   frame(state,arena,&app,box.Input{})
   frame(state,arena,&app,box.Input{tab:true})

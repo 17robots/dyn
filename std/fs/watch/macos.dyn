@@ -137,7 +137,7 @@ pub fn open(storage: []u8) OpenResult {
   if #len(storage) < 272 {
     return OpenResult{ failure: io.darwin_failure(-28) }
   }
-  arena := mem.arena_create(#sizeof(State))
+  arena := mem.arena_alloc(#sizeof(State))
   state := mem.push(State, arena)
   if !load(&state.api) {
     unload(&state.api)

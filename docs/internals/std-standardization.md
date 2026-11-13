@@ -73,7 +73,7 @@ bound. Compare with the stub or the length only when the miss matters.
 
 ```dyn
 v := json.object_get(root, "name") // &json.nil_value on a miss
-i := strings.find(text, ":")       // #len(text) on a miss
+i := bytes.find(text, ":")       // #len(text) on a miss
 ```
 
 ### 3. Results are returned, not written through out parameters

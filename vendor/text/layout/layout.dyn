@@ -222,7 +222,7 @@ fn scalar_index(paragraph:*const bidi.Paragraph, offset:usize) usize {
   return low
 }
 fn emit(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[]const u8, paragraph:*const bidi.Paragraph, clusters:[]Cluster, start, end, base:usize, font:Font, tab:f64) io.Kind {
-  work:=mem.arena_create(0)
+  work:=mem.arena_alloc(0)
   defer mem.arena_release(work)
   first:=cluster_index(clusters, start)
   last:=cluster_index(clusters, end)
@@ -307,7 +307,7 @@ fn emit(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[]cons
   return io.Kind.Ok
 }
 fn paragraph(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[]const u8, base:usize, font:Font, options:Options) io.Kind {
-  work:=mem.arena_create(0)
+  work:=mem.arena_alloc(0)
   defer mem.arena_release(work)
   resolved:=bidi.resolve(work, bidi_api, text, options.base)
   if !resolved.ok {
@@ -372,7 +372,7 @@ fn paragraph(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[
   if breaks.failure.kind != parse.Kind.Ok {
     return io.Kind.InvalidInput
   }
-  spans:=mem.arena_create(0)
+  spans:=mem.arena_alloc(0)
   defer mem.arena_release(spans)
   adjusted:[0]i8
   measured:=shape(spans, api, text, clusters, 0, used, adjusted[..], 0, false)
@@ -415,7 +415,7 @@ fn paragraph(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[
         end=u+1
       }
     }
-    candidate:=mem.arena_create(0)
+    candidate:=mem.arena_alloc(0)
     accepted:=false
     for !accepted {
       mem.arena_reset(candidate)
@@ -472,7 +472,7 @@ pub fn build(arena:*mem.Arena, source:[]const u8, font:Font, api:*const hb.Api, 
       mem.arena_rewind(arena, mark)
     }
   }
-  work:=mem.arena_create(0)
+  work:=mem.arena_alloc(0)
   defer mem.arena_release(work)
   output:=Output{arena:work}
   begin:usize=0

@@ -25,7 +25,7 @@ fn oracle_write(raw: rawptr, data: []const u8) io.Transfer {
   return io.Transfer{ transferred: #len(data), status: io.Status.Complete }
 }
 fn request_check(body: []const u8, expected: []const u8) {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   feed := Feed{ data: "HTTP/1.1 204 No Content\r\n\r\n", step: 1 }
   oracle := Oracle{ expected: expected }
   got := http.client_do(arena, io.Reader{ data: &feed, read: read_feed }, io.Writer{ data: &oracle, write: oracle_write }, "POST", "?x", "host", body)
@@ -43,7 +43,7 @@ fn error_write(raw: rawptr, data: []const u8) io.Transfer {
   return io.Transfer{ kind: errors.Kind.PermissionDenied, error: 0, status: io.Status.Error }
 }
 fn io_check(write_failure: bool) {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   _ = mem.push_bytes_uninit(arena, 7)
   mark := mem.arena_mark(arena)
   writer := io.Writer{ write: sink }
@@ -74,7 +74,7 @@ fn check(wire: []const u8, expected: []const u8, valid: bool, method: []const u8
   for cut in 0..splits {
     for step in [1, 7, 65536] {
       feed := Feed{ data: wire, cut: cut, step: #cast(usize, step) }
-      arena := mem.arena_create(0)
+      arena := mem.arena_alloc(0)
       _ = mem.push_bytes_uninit(arena, 3)
       mark := mem.arena_mark(arena)
       _ = capacity
@@ -90,7 +90,7 @@ fn check(wire: []const u8, expected: []const u8, valid: bool, method: []const u8
 fn chain_check(wire: []const u8, expected: []const u8, valid: bool) {
   for block in [160,176] {
     for step in [1,7,65536] {
-      arena := mem.arena_create(#cast(usize,block))
+      arena := mem.arena_alloc(#cast(usize,block))
       first := mem.push_bytes_uninit(arena,16)
       for *byte in first { byte.*=71 }
       forced := mem.push_bytes_uninit(arena,33)
@@ -121,7 +121,7 @@ fn chain_check(wire: []const u8, expected: []const u8, valid: bool) {
   }
 }
 fn decode_check(wire: []const u8, expected: []const u8, valid: bool, offset: usize) {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   _ = mem.push_bytes_uninit(arena, 5)
   mark := mem.arena_mark(arena)
   got := http.decode_chunked(arena, wire)
@@ -131,7 +131,7 @@ fn decode_check(wire: []const u8, expected: []const u8, valid: bool, offset: usi
   mem.arena_release(arena)
 }
 fn live_alias_check() {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   wire: []const u8 = "3\r\nabc\r\n0\r\n\r\nrest"
   borrowed := mem.push_bytes_uninit(arena, #len(wire))
   _ = mem.copy(borrowed, wire)

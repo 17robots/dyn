@@ -1,5 +1,6 @@
 use "std/time" clock
 use "std/io" io
+use "std/bytes" bytes
 pub fn expect(condition: bool, message: []const u8) {
   if !condition {
     #panic(message)
@@ -10,19 +11,8 @@ pub fn expect_false(condition: bool, message: []const u8) {
     #panic(message)
   }
 }
-pub fn equal_bytes(left: []const u8, right: []const u8) bool {
-  if #len(left) != #len(right) {
-    return false
-  }
-  for i in 0..#len(left) {
-    if left[i] != right[i] {
-      return false
-    }
-  }
-  return true
-}
 pub fn expect_equal_bytes(left: []const u8, right: []const u8, message: []const u8) {
-  if !equal_bytes(left, right) {
+  if !bytes.equal(left, right) {
     #panic(message)
   }
 }

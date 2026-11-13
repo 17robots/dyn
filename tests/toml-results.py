@@ -18,7 +18,7 @@ use "std/mem" mem
 use "std/fs" fs
 use "std/process" process
 fn main() {
- arena := mem.arena_create(0)
+ arena := mem.arena_alloc(0)
  defer { mem.arena_release(arena) }
  args := process.arguments(arena)
  if args.failure.kind != io.Kind.Ok || #len(args.value) != 3 { #panic("arguments") }
@@ -107,7 +107,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-toml-') as directory:
   for failure in failures:print(failure)
   raise SystemExit(f'{len(failures)} of {len(cases)} TOML cases failed')
  portable=work/'portable';portable.mkdir()
- probe='use "std/parse" parse\nuse "std/encoding/toml" toml\nuse "std/mem" mem\nfn main() {\n arena := mem.arena_create(0)\n defer { mem.arena_release(arena) }\n source: ['+str(len(VALID[2]))+']u8 = ['+','.join(map(str,VALID[2]))+']\n parsed := toml.parse(arena,source[..])\n if parsed.failure.kind != parse.Kind.Ok { #panic("portable parse") }\n encoded := toml.encode(arena,parsed.root)\n if encoded.failure.kind != parse.Kind.Ok || toml.parse(arena,encoded.value).failure.kind != parse.Kind.Ok { #panic("portable encode") }\n cycle := toml.Value{kind:toml.Kind.Table}\n child := toml.Value{kind:toml.Kind.String,key:"x"}\n child.next = &child\n cycle.first = &child\n if toml.encode(arena,&cycle).failure.kind == parse.Kind.Ok { #panic("cycle") }\n}\n'
+ probe='use "std/parse" parse\nuse "std/encoding/toml" toml\nuse "std/mem" mem\nfn main() {\n arena := mem.arena_alloc(0)\n defer { mem.arena_release(arena) }\n source: ['+str(len(VALID[2]))+']u8 = ['+','.join(map(str,VALID[2]))+']\n parsed := toml.parse(arena,source[..])\n if parsed.failure.kind != parse.Kind.Ok { #panic("portable parse") }\n encoded := toml.encode(arena,parsed.root)\n if encoded.failure.kind != parse.Kind.Ok || toml.parse(arena,encoded.value).failure.kind != parse.Kind.Ok { #panic("portable encode") }\n cycle := toml.Value{kind:toml.Kind.Table}\n child := toml.Value{kind:toml.Kind.String,key:"x"}\n child.next = &child\n cycle.first = &child\n if toml.encode(arena,&cycle).failure.kind == parse.Kind.Ok { #panic("cycle") }\n}\n'
  (portable/'main.dyn').write_text(probe)
  for target in ('aarch64-linux','riscv64-linux','x86_64-macos','aarch64-macos','x86_64-windows','aarch64-windows','wasm32-wasi'):
   output=work/target

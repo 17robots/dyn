@@ -54,7 +54,7 @@ fn main() {
  replay_invalid:=zip.next(&invalid_state)
  check(!replay_invalid.found && replay_invalid.failure.parse.kind == parse.Kind.Syntax)
  data: []const u8 = DATA
- arena := mem.arena_create(0)
+ arena := mem.arena_alloc(0)
  state := zip.open(data)
  first := zip.next(&state)
  check(first.found && first.failure.kind == parse.StreamKind.Ok && first.offset == 36)

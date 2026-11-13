@@ -18,7 +18,7 @@ fn compile(arena:*memory.Arena,pattern:[]const u8) regex.Program {
   return result.value
 }
 fn check(pattern:[]const u8,text:[]const u8,expected:usize,matched:bool){
-  arena := memory.arena_create(0)
+  arena := memory.arena_alloc(0)
   program:=compile(arena,pattern)
   result:=regex.find(program,text)
   require(result.failure.kind == parse.Kind.Ok && result.value.found==matched && (!matched || result.value.end==expected),pattern)
@@ -37,7 +37,7 @@ fn main(){
   check("(a*)*b","aaab",4,true)
   check("a*ab","aaaab",5,true)
   check("^a|b","xb",2,true)
-  arena := memory.arena_create(0)
+  arena := memory.arena_alloc(0)
   invalid:=regex.compile(arena,"a{18446744073709551616}")
   require(invalid.failure.kind == parse.Kind.Syntax,"count overflow")
   invalid=regex.compile(arena,"a{1,18446744073709551616}")

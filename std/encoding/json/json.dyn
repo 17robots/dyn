@@ -3,6 +3,7 @@ use "std/mem" memory
 use "std/strings" text
 use "std/io" stream
 use "std/unicode/utf8" utf8
+use "std/bytes"
 
 struct Cursor { source: []const u8, at: usize, error: parse.Kind }
 
@@ -685,16 +686,16 @@ pub fn parse(arena: *memory.Arena, source: []const u8) ParseResult {
   return ParseResult{ root: root }
 }
 
-pub fn make_null(arena: *memory.Arena) *Value {
+pub fn push_null(arena: *memory.Arena) *Value {
   return node(arena, KindNull)
 }
-pub fn make_bool(arena: *memory.Arena, value: bool) *Value {
+pub fn push_bool(arena: *memory.Arena, value: bool) *Value {
   result := node(arena, KindBool)
   result.boolean = value
   return result
 }
 // Retains text as a borrowed view; caller keeps it alive.
-pub fn make_number(arena: *memory.Arena, text: []const u8) *Value {
+pub fn push_number(arena: *memory.Arena, text: []const u8) *Value {
   cursor := Cursor{ source: text, at: 0 }
   if !number(&cursor) || cursor.at != #len(text) {
     return nil
@@ -704,15 +705,15 @@ pub fn make_number(arena: *memory.Arena, text: []const u8) *Value {
   return result
 }
 // Retains text as a borrowed view; caller keeps it alive.
-pub fn make_string(arena: *memory.Arena, text: []const u8) *Value {
+pub fn push_string(arena: *memory.Arena, text: []const u8) *Value {
   result := node(arena, KindString)
   result.text = text
   return result
 }
-pub fn make_array(arena: *memory.Arena) *Value {
+pub fn push_array(arena: *memory.Arena) *Value {
   return node(arena, KindArray)
 }
-pub fn make_object(arena: *memory.Arena) *Value {
+pub fn push_object(arena: *memory.Arena) *Value {
   return node(arena, KindObject)
 }
 // A node has one parent. Reject duplicate attachment, reparenting and cycles
@@ -758,7 +759,7 @@ pub fn object_get(object: *const Value, key: []const u8) *const Value {
   }
   child := object.first
   for child != nil {
-    if text.equal(child.key, key) {
+    if bytes.equal(child.key, key) {
       return child
     }
     child = child.next

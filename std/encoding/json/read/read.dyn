@@ -10,6 +10,7 @@ use "std/parse" parse
 use "std/mem" memory
 use "std/strings" text
 use "std/unicode/utf8" utf8
+use "std/bytes"
 
 pub const KindMissing: u8 = 0
 pub const KindNull: u8 = 1
@@ -394,7 +395,7 @@ pub fn get(object: *const Value, key: []const u8) *const Value {
         return value
       }
       name := #slice(#cast(*const u8, #cast(usize, at.bits)), length)
-      if text.equal(name, key) {
+      if bytes.equal(name, key) {
         return value
       }
     }

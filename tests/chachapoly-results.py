@@ -13,7 +13,7 @@ use "std/bytes" bytes
 use "std/mem" mem
 fn check(ok: bool) { if !ok { #panic("native AEAD contract") } }
 fn vector(key: []const u8, nonce: []const u8, aad: []const u8, message: []const u8, cipher: []const u8, expected: []const u8) {
- arena := mem.arena_create(0)
+ arena := mem.arena_alloc(0)
  defer { mem.arena_release(arena) }
  output := mem.push_array(u8,arena,#len(message))
  tag: [16]u8

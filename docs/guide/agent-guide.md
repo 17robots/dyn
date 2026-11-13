@@ -72,8 +72,8 @@ arenas for retained results and temporary work, with disjoint backing. Copy the
 retained result before scratch ends. Copying a slice descriptor does not copy data.
 Ordinary arena pushes return memory or panic; use `arena_try_push` when your own
 code must report exhaustion. Create a `*mem.Arena` explicitly:
-`mem.arena_create(0)` selects the target's default block size, while
-`mem.arena_create_bounded(block_size, limit)` caps total backing, headers included.
+`mem.arena_alloc(0)` selects the target's default block size, while
+`mem.arena_alloc_bounded(block_size, limit)` caps total backing, headers included.
 Owned arenas add blocks without moving earlier allocations. Reset releases later
 blocks and clears the first; rewind releases blocks added after its mark.
 

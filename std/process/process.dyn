@@ -1,6 +1,5 @@
 use "std/mem" mem
 use "std/io" io
-use "std/bytes" bytes
 use "std/bytes/builder" builder
 
 // Handles are native descriptors/HANDLE values. -1 inherits that standard stream.
@@ -332,7 +331,7 @@ pub struct Program { arena: *mem.Arena, args: [][]const u8 }
 // Call it on main's first line: `program := process.start()`. It panics only
 // when the arguments cannot be read.
 pub fn start() Program {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   result := arguments(arena)
   if io.failed(result.failure) {
     #panic("process.start: cannot read the program arguments")

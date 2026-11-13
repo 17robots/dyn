@@ -26,7 +26,7 @@ fn count(node: *Node) i64 {
 
 // Each tree lives in one arena region that is rewound after counting.
 fn main() {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   total: i64 = 0
   depth: i64 = 4
   for depth <= MaxDepth {

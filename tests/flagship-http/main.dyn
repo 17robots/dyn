@@ -88,7 +88,7 @@ fn handle(response: *http.Response, request: *const http.Request) http.Result {
 }
 
 fn main() {
-  arena := mem.arena_create(16 * mem.MiB)
+  arena := mem.arena_alloc(16 * mem.MiB)
   defer mem.arena_release(arena)
   state := mem.push(App, arena)
   state.router = http.router(state.routes[..], nil)

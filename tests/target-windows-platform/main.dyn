@@ -4,7 +4,7 @@ use "std/os/windows" platform
 #target(arch: x86_64, kernel: windows, abi: win64)
 
 fn main() {
-  arena := mem.arena_create(4096)
+  arena := mem.arena_alloc(4096)
   memory := #slice(mem.arena_push(arena, 4096, 1), 4096)
   memory[0] = 42
   mem.arena_release(arena)

@@ -21,7 +21,7 @@ fn bad(source: []const u8) {
  check(again.failure.kind == item.failure.kind && again.offset == item.offset)
 }
 fn main() {
- arena := mem.arena_create(0)
+ arena := mem.arena_alloc(0)
  defer { mem.arena_release(arena) }
  golden := "\x82\xa1a\x93\x00\xcc\x80\xff\xa1b\xc4\x02hi"
  state := mp.reader(golden)

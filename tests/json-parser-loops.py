@@ -62,7 +62,7 @@ use "std/encoding/json" json
 use "std/mem" mem
 fn require(ok: bool, message: []const u8) { if !ok { #panic(message) } }
 fn main() {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   defer mem.arena_release(arena)
   _ = mem.push_bytes_uninit(arena, 7)
   mark := mem.arena_mark(arena)

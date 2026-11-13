@@ -271,7 +271,7 @@ fn arrays() {
 // mem.push gives a fresh value (zeros plus field defaults); nothing is freed
 // one object at a time.
 fn memory() {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   defer mem.arena_release(arena)      // runs when this block exits
   p := mem.push(Player, arena)        // a *Player with health 100
   p.name = "bob"
@@ -422,7 +422,7 @@ fn variadics() {
 
 // ------------------------------------------------- Collections in std ---
 fn collections() {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   defer mem.arena_release(arena)
   // A growing array that keeps its arena.
   names: array.Array([]const u8)
@@ -472,7 +472,7 @@ fn main() {
   control()
   arrays()
   memory()
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   read_config(arena)
   mem.arena_release(arena)
   cleanup()

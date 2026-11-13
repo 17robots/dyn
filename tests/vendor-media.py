@@ -36,6 +36,7 @@ FIXTURES = {
 use "std/parse" parse
 use "std/io" io
 use "std/strings"
+use "std/bytes"
 // Grammar is separate from runtime. This example uses the packaged C grammar.
 #link("tree-sitter-c")
 extern fn language "tree_sitter_c"() ts.Language
@@ -55,7 +56,7 @@ fn main() {
   defer ts.tree_destroy_owned(parsed.tree)
   node := ts.root(parsed.tree)
   kind := ts.node_type(node, 128)
-  if kind.failure.kind != parse.Kind.Ok || !strings.equal(kind.value, "translation_unit") || ts.node_has_error(node) {
+  if kind.failure.kind != parse.Kind.Ok || !bytes.equal(kind.value, "translation_unit") || ts.node_has_error(node) {
     #panic("root")
   }
   if ts.node_end(node) != 6 || ts.child_count(node) != 1 {
@@ -98,6 +99,7 @@ fn main() {
     'regex-example': r'''use "vendor/pcre2" regex
 use "std/io" io
 use "std/strings"
+use "std/bytes"
 fn main() {
   compiled := regex.compile_owned("name=([a-z]+)", 0)
   if !compiled.ok {
@@ -115,7 +117,7 @@ fn main() {
     #panic("match")
   }
   span := regex.capture(data, 1)
-  if !span.set || !strings.equal(subject[span.start..span.end], "ada") {
+  if !span.set || !bytes.equal(subject[span.start..span.end], "ada") {
     #panic("capture")
   }
   absent := regex.match(compiled.pattern, data, "123", 0)
@@ -154,6 +156,7 @@ fn main() {
     'lua-example': r'''use "vendor/lua"
 use "std/io" io
 use "std/strings"
+use "std/bytes"
 fn main() {
   state := lua.create_owned()
   if state == nil {
@@ -174,7 +177,7 @@ fn main() {
     #panic("Lua string")
   }
   text := lua.bytes(state, -1)
-  if !text.ok || !strings.equal(text.value, "hello") {
+  if !text.ok || !bytes.equal(text.value, "hello") {
     #panic("Lua bytes")
   }
   _ = lua.pop(state, 1) // text expires here.
@@ -206,7 +209,7 @@ use "std/fs"
 use "std/os/linux"
 use "std/io"
 fn main() {
-  storage := mem.arena_create(16 * 1024 * 1024)
+  storage := mem.arena_alloc(16 * 1024 * 1024)
   defer {
     mem.arena_release(storage)
   }
@@ -286,7 +289,7 @@ use "std/fs"
 use "std/os/linux"
 use "std/io"
 fn main() {
-  storage := mem.arena_create(16 * 1024 * 1024)
+  storage := mem.arena_alloc(16 * 1024 * 1024)
   defer {
     mem.arena_release(storage)
   }
@@ -364,6 +367,7 @@ use "std/mem"
 use "std/os/linux"
 use "std/io" io
 use "std/strings"
+use "std/bytes"
 use "std/c" c
 use "std/parse" parse
 fn shader(api: *gl.Api, kind: u32, source: []const u8) u32 {
@@ -478,12 +482,12 @@ fn atlas_smoke(api: *gl.Api) {
 }
 fn missing_texture_proc(name: *const u8) rawptr {
   bytes := c.bytes_from_string(name, 64)
-  if bytes.failure.kind == parse.Kind.Ok && strings.equal(bytes.value, "glTexImage2D") { return nil }
+  if bytes.failure.kind == parse.Kind.Ok && bytes.equal(bytes.value, "glTexImage2D") { return nil }
   return sdl3.gl_proc(name)
 }
 fn main() {
   missing := gl.load(missing_proc)
-  if missing.ok || !strings.equal(missing.missing, "glClearColor") {
+  if missing.ok || !bytes.equal(missing.missing, "glClearColor") {
     #panic("missing symbol accepted")
   }
   if gl.load(nil).ok {
@@ -492,7 +496,7 @@ fn main() {
   backing: [65536]u8
   arena := mem.arena_from_buffer(backing[..])
   args := linux.process_arguments(arena)
-  smoke := #len(args) == 2 && strings.equal(args[1], "--smoke")
+  smoke := #len(args) == 2 && bytes.equal(args[1], "--smoke")
   if !sdl3.init_video() {
     #panic("video unavailable")
   }
@@ -522,7 +526,7 @@ fn main() {
     #panic("GL load")
   }
   absent_texture := gl.load(missing_texture_proc)
-  if absent_texture.ok || !strings.equal(absent_texture.missing, "glTexImage2D") || absent_texture.api.clear_color != nil {
+  if absent_texture.ok || !bytes.equal(absent_texture.missing, "glTexImage2D") || absent_texture.api.clear_color != nil {
     #panic("partial atlas API accepted")
   }
   api := &loaded.api
@@ -634,6 +638,7 @@ use "std/mem"
 use "std/os/linux"
 use "std/io" io
 use "std/strings"
+use "std/bytes"
 fn main() {
   backing: [65536]u8
   arena := mem.arena_from_buffer(backing[..])
@@ -644,7 +649,7 @@ fn main() {
   url: [4096]u8
   output: [256]u8
   result := curl.get_into(args[1], url[..], output[..], 5000)
-  if !result.ok || result.http_status != 200 || !strings.equal(output[..result.written], "vendor transfer\n") { #panic("transfer") }
+  if !result.ok || result.http_status != 200 || !bytes.equal(output[..result.written], "vendor transfer\n") { #panic("transfer") }
   missing := curl.get_into(args[2], url[..], output[..], 5000)
   if !missing.ok || missing.http_status != 404 { #panic("HTTP status is not transport error") }
   small: [1]u8

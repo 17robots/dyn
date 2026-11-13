@@ -41,7 +41,7 @@ fn save(arena:*mem.Arena,result:*const layout.Layout,path:[]const u8) {
  check(fs.write_all(path,out).failure.kind == errors.Kind.Ok)
 }
 fn main() {
- arena:=mem.arena_create(0)
+ arena:=mem.arena_alloc(0)
  defer mem.arena_release(arena)
  hb_library:=dynlib.open("HB_LIBRARY",dynlib.Now)
  bidi_library:=dynlib.open("BIDI_LIBRARY",dynlib.Now)

@@ -87,7 +87,7 @@ and the ELF headers are not loaded.
 
 ## Memory
 
-Arenas are the only allocator, as on every target. `mem.arena_create` takes
+Arenas are the only allocator, as on every target. `mem.arena_alloc` takes
 its capacity from one fixed region. Releasing the newest arena returns its
 memory to the region; releasing an older one keeps its memory reserved until
 every newer arena is released too. For predictable use, create long-lived

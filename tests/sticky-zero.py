@@ -14,7 +14,6 @@ use "std/bytes/builder" builder
 use "std/process" process
 use "std/io" io
 use "std/fs/watch" watch
-use "std/strings" strings
 fn check(ok: bool, message: []const u8) {
   if !ok {
     #panic(message)
@@ -23,23 +22,31 @@ fn check(ok: bool, message: []const u8) {
 fn main() {
   storage: [4]u8
   out := fmt.buffer(storage[..])
-  _ = fmt.write(&out, "abc")
-  _ = fmt.write(&out, "toolong")
-  check(out.failed && !fmt.write(&out, "d") && strings.equal(fmt.bytes(&out), "abc"), "fmt keeps the first failure")
+  fmt.write(&out, "abc")
+  fmt.write(&out, "toolong")
+  fmt.write(&out, "d")
+  check(out.failed && mem.equal(fmt.bytes(&out), "abc"), "fmt keeps the first failure")
   fmt.clear(&out)
-  check(!out.failed && fmt.write(&out, "ok"), "fmt clear")
+  fmt.write(&out, "ok")
+  check(!out.failed, "fmt clear")
   fmt.clear(&out)
-  check(fmt.write(&out, "abcd") && fmt.write(&out, ""), "fmt exact capacity and empty append")
-  check(!fmt.write(&out, "e") && strings.equal(fmt.bytes(&out), "abcd"), "fmt overflow preserves bytes")
+  fmt.write(&out, "abcd")
+  fmt.write(&out, "")
+  check(!out.failed, "fmt exact capacity and empty append")
+  fmt.write(&out, "e")
+  check(out.failed && mem.equal(fmt.bytes(&out), "abcd"), "fmt overflow preserves bytes")
   fmt.clear(&out)
-  check(fmt.write(&out, "ab") && fmt.write(&out, storage[..2]) && strings.equal(fmt.bytes(&out), "abab"), "fmt append from own backing")
+  fmt.write(&out, "ab")
+  fmt.write(&out, storage[..2])
+  check(!out.failed && mem.equal(fmt.bytes(&out), "abab"), "fmt append from own backing")
   bad := fmt.buffer(storage[..])
   bad.length = 5
-  check(!fmt.write(&bad, "") && bad.failed && bad.length == 5, "fmt invalid cursor fails before slicing")
+  fmt.write(&bad, "")
+  check(bad.failed && bad.length == 5, "fmt invalid cursor fails before slicing")
   bytes: [2]u8
   text := builder.from_buffer(bytes[..])
   _ = builder.append(&text, "abc")
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   check(text.error == builder.ErrorKind.Capacity && builder.append_grow(&text, arena, "x") == builder.ErrorKind.Capacity, "builder keeps the first failure")
   builder.clear(&text)
   check(text.error == builder.ErrorKind.None && builder.append_grow(&text, arena, "grown") == builder.ErrorKind.None, "builder clear")

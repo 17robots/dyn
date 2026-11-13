@@ -10,6 +10,7 @@ DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 SOURCE = r'''use "std/parse" parse
 use "std/mem"
 use "std/strings"
+use "std/bytes"
 use "std/encoding/ini"
 use "std/container/list" list
 struct Slot { free_next: *Slot, value: u64 }
@@ -69,12 +70,12 @@ fn main() {
   expect(allocated.memory.* == 91)
   storage: [8 * mem.KiB + mem.ArenaBufferOverhead]u8
   arena := mem.arena_from_buffer(storage[..])
-  expect(strings.equal(strings.clone(arena, "retained"), "retained"))
+  expect(bytes.equal(strings.clone(arena, "retained"), "retained"))
   parts: [2][]const u8 = ["one", "two"]
-  expect(strings.equal(strings.join(arena, parts[..], "/"), "one/two"))
+  expect(bytes.equal(strings.join(arena, parts[..], "/"), "one/two"))
   parsed := ini.parse(arena, "[window]\nwidth=80\nheight=25\n")
   expect(parsed.failure.kind == parse.Kind.Ok && #len(parsed.value) == 3)
-  expect(strings.equal(parsed.value[2].section, "window") && strings.equal(parsed.value[2].value, "25"))
+  expect(bytes.equal(parsed.value[2].section, "window") && bytes.equal(parsed.value[2].value, "25"))
   before := mem.arena_used(arena)
   syntax := ini.parse(arena, "x=1\ninvalid\n")
   expect(syntax.failure.kind == parse.Kind.Syntax && syntax.offset == 4 && syntax.line == 2)
@@ -96,7 +97,7 @@ fn main() {
   list.free_push(&first_free, one)
   expect(list.free_pop(&first_free, &nil_slot) == one && first_free == nil)
 
-  growing := mem.arena_create_bounded(256, mem.KiB)
+  growing := mem.arena_alloc_bounded(256, mem.KiB)
   initial := #slice(mem.arena_push(growing, 32, 1), 32)
   expect(initial[0] == 0 && initial[31] == 0)
   for i in 0..#len(initial) { initial[i] = 165 }

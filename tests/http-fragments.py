@@ -37,7 +37,7 @@ fn check(wire: []const u8, expected: []const u8, valid: bool, method: []const u8
   for cut in 0..splits {
     for step in [1, 7, 65536] {
       feed := Feed{ data: wire, cut: cut, step: #cast(usize, step) }
-      arena := mem.arena_create(0)
+      arena := mem.arena_alloc(0)
       defer mem.arena_release(arena)
       got := http.client_do(arena, io.Reader{ data: #cast(rawptr, &feed), read: read_feed }, io.Writer{ write: sink }, method, "/", "host", "")
       if (got.failure.kind == io.Kind.Ok) != valid { #panic("response validity") }

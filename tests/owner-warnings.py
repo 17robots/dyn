@@ -96,7 +96,7 @@ fn main() {
     assert helper.returncode == 1 and 'after arena_reset' in helper.stderr, helper.stderr
     source.write_text('''use "std/mem"
 fn main() {
-  created := mem.arena_create(mem.KiB)
+  created := mem.arena_alloc(mem.KiB)
   pointer := mem.arena_push(created, 1, 1)
   pointer.* = 42
   moved := created

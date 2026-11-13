@@ -140,7 +140,7 @@ fn percentile(buckets: []const u64, total: u64, fraction_thousandths: u64) u64 {
 }
 
 fn main() i32 {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   defer mem.arena_release(arena)
   arguments := process.arguments(arena)
   if arguments.failure.kind != io.Kind.Ok || #len(arguments.value) < 5 {
@@ -174,9 +174,9 @@ fn main() i32 {
   }
   request_storage: [1024]u8
   request := fmt.buffer(request_storage[..])
-  _ = fmt.write(&request, "GET ")
-  _ = fmt.write(&request, values[2])
-  _ = fmt.write(&request, " HTTP/1.1\r\nHost: bench\r\n\r\n")
+  fmt.write(&request, "GET ")
+  fmt.write(&request, values[2])
+  fmt.write(&request, " HTTP/1.1\r\nHost: bench\r\n\r\n")
   if request.failed {
     io.eprintln("httpbench: PATH too long")
     return 2

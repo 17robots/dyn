@@ -39,18 +39,21 @@ const signed_bits: [{len(signed)}]u64 = [
 fn check_unsigned(value: u64) {{
   full: [20]u8
   reference := fmt.buffer(full[..])
-  if !fmt.write_u64(&reference, value) {{ #panic("full unsigned") }}
+  fmt.write_u64(&reference, value)
+  if reference.failed {{ #panic("full unsigned") }}
   io.println("{{}}", fmt.bytes(&reference))
   bounded: [24]u8
   for capacity in 0..22 {{
     for i in 0..#len(bounded) {{ bounded[i] = '!' }}
     state := fmt.buffer(bounded[..capacity])
     enough := capacity >= reference.length
-    if fmt.write_u64(&state, value) != enough || state.failed == enough {{ #panic("unsigned capacity") }}
+    fmt.write_u64(&state, value)
+    if state.failed == enough {{ #panic("unsigned capacity") }}
     if enough {{
       if !mem.equal(fmt.bytes(&state), fmt.bytes(&reference)) {{ #panic("unsigned bytes") }}
     }} else {{
-      if state.length != 0 || bounded[0] != '!' || fmt.write_u64(&state, 0) {{ #panic("unsigned rollback/sticky") }}
+      fmt.write_u64(&state, 0)
+      if state.length != 0 || bounded[0] != '!' || !state.failed {{ #panic("unsigned rollback/sticky") }}
     }}
     if bounded[capacity] != '!' {{ #panic("unsigned overwrite") }}
   }}
@@ -59,18 +62,21 @@ fn check_signed(bits: u64) {{
   value := #bitcast(i64, bits)
   full: [20]u8
   reference := fmt.buffer(full[..])
-  if !fmt.write_i64(&reference, value) {{ #panic("full signed") }}
+  fmt.write_i64(&reference, value)
+  if reference.failed {{ #panic("full signed") }}
   io.println("{{}}", fmt.bytes(&reference))
   bounded: [24]u8
   for capacity in 0..22 {{
     for i in 0..#len(bounded) {{ bounded[i] = '!' }}
     state := fmt.buffer(bounded[..capacity])
     enough := capacity >= reference.length
-    if fmt.write_i64(&state, value) != enough || state.failed == enough {{ #panic("signed capacity") }}
+    fmt.write_i64(&state, value)
+    if state.failed == enough {{ #panic("signed capacity") }}
     if enough {{
       if !mem.equal(fmt.bytes(&state), fmt.bytes(&reference)) {{ #panic("signed bytes") }}
     }} else {{
-      if state.length != 0 || bounded[0] != '!' || fmt.write_i64(&state, 0) {{ #panic("signed rollback/sticky") }}
+      fmt.write_i64(&state, 0)
+      if state.length != 0 || bounded[0] != '!' || !state.failed {{ #panic("signed rollback/sticky") }}
     }}
     if bounded[capacity] != '!' {{ #panic("signed overwrite") }}
   }}
@@ -80,9 +86,19 @@ fn main() {{
   for bits in signed_bits {{ check_signed(bits) }}
   storage: [32]u8
   state := fmt.buffer(storage[..])
-  if !fmt.write(&state, "id=") || !fmt.write_i64(&state, -42) || !mem.equal(fmt.bytes(&state), "id=-42") {{ #panic("append prefix") }}
+  fmt.write(&state, "id=")
+  fmt.write_i64(&state, -42)
+  if state.failed || !mem.equal(fmt.bytes(&state), "id=-42") {{ #panic("append prefix") }}
   fmt.clear(&state)
-  if !fmt.write_u64_width(&state, 42, 5, '0') || !mem.equal(fmt.bytes(&state), "00042") {{ #panic("padding") }}
+  fmt.write_u64_width(&state, 42, 5, '0')
+  if state.failed || !mem.equal(fmt.bytes(&state), "00042") {{ #panic("padding") }}
+  fmt.clear(&state)
+  fmt.print(&state, "{{}}-{{}} {{{{ok}}}}", 7, "x")
+  if state.failed || !mem.equal(fmt.bytes(&state), "7-x {{ok}}") {{ #panic("print") }}
+  small: [4]u8
+  tight := fmt.buffer(small[..])
+  fmt.print(&tight, "ab{{}}", 123)
+  if !tight.failed || tight.length != 0 {{ #panic("print rollback") }}
 }}
 '''
 expected = list(map(str, unsigned + signed))

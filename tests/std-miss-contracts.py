@@ -23,7 +23,7 @@ fn main() {
   }
   empty:[0]i32
   if sort.search(empty[..],0).index!=0 || sort.search(empty[..],0).found { #panic("empty search") }
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   defer mem.arena_release(arena)
   prefix:=mem.push(u8,arena)
   prefix.*=91

@@ -21,7 +21,7 @@ fn bad(source: []const u8) {
  check(again.failure.kind == item.failure.kind && again.offset == item.offset)
 }
 fn main() {
- arena := mem.arena_create(0)
+ arena := mem.arena_alloc(0)
  defer { mem.arena_release(arena) }
  // RFC8949 Appendix A: {"a":1,"b":[2,3]}, indefinite [1,[2,3],4,5].
  golden := "\xa2\x61a\x01\x61b\x82\x02\x03"

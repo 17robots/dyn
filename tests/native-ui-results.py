@@ -77,7 +77,7 @@ fn main() {
  }
  check(loaded.api.get_error() == 0)
  // A glyph wider than hardware textures succeeds when only one pixel is visible.
- arena := mem.arena_create(0)
+ arena := mem.arena_alloc(0)
  defer { mem.arena_release(arena) }
  check(renderer.max_texture > 0 && renderer.max_texture < 1048576)
  wide := Wide{pixels:mem.push_array(u8,arena,#cast(usize,renderer.max_texture)+1)}

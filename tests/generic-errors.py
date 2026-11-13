@@ -19,7 +19,7 @@ struct Point {
 }
 
 fn main() {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   points: map.Map(Point, u32)
   map.init(&points, arena)
   names: array.Array(u32)

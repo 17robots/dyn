@@ -57,17 +57,18 @@ fn reference(buffer: *fmt.Buffer, source: []const u8) bool {{
   for i in 0..#len(source) {{
     replacement := html.entity(source[i])
     if #len(replacement) != 0 {{
-      _ = fmt.write(buffer, source[start..i])
-      _ = fmt.write(buffer, replacement)
+      fmt.write(buffer, source[start..i])
+      fmt.write(buffer, replacement)
       start = i + 1
     }}
   }}
-  _ = fmt.write(buffer, source[start..])
+  fmt.write(buffer, source[start..])
   return !buffer.failed
 }}
 pub fn guard_escape(destination: []u8, source: []const u8) usize {{
   buffer := fmt.buffer(destination)
-  if !html.write_escaped(&buffer, source) {{ #panic("guard capacity") }}
+  html.write_escaped(&buffer, source)
+  if buffer.failed {{ #panic("guard capacity") }}
   return buffer.length
 }}
 fn overlap_cases() {{
@@ -86,9 +87,9 @@ fn overlap_cases() {{
           right := fmt.buffer(expected[destination_offset..destination_offset + capacity])
           left.length = prefix
           right.length = prefix
-          a := html.write_escaped(&left, actual[source_offset..source_offset + 8])
-          b := reference(&right, expected[source_offset..source_offset + 8])
-          if a != b || left.length != right.length || left.failed != right.failed {{ #panic("overlap state") }}
+          html.write_escaped(&left, actual[source_offset..source_offset + 8])
+          _ = reference(&right, expected[source_offset..source_offset + 8])
+          if left.length != right.length || left.failed != right.failed {{ #panic("overlap state") }}
           for i in 0..#len(actual) {{ if actual[i] != expected[i] {{ #panic("overlap bytes") }} }}
         }}
       }}
@@ -107,8 +108,7 @@ fn main() {{
       else if attempt == item.limit + 1 {{ capacity = 6 * item.length + 1 }}
       for i in 0..#len(storage) {{ storage[i] = 165 }}
       buffer := fmt.buffer(storage[..capacity])
-      ok := html.write_escaped(&buffer, source)
-      if ok == buffer.failed {{ #panic("failure result") }}
+      html.write_escaped(&buffer, source)
       for i in capacity..#len(storage) {{
         if storage[i] != 165 {{ #panic("past destination") }}
       }}
@@ -117,7 +117,8 @@ fn main() {{
       _ = io.write_all(io.stdout(), "\\n")
       if buffer.failed {{
         old_length := buffer.length
-        if html.write_escaped(&buffer, "x<&") || buffer.length != old_length {{ #panic("sticky length") }}
+        html.write_escaped(&buffer, "x<&")
+        if !buffer.failed || buffer.length != old_length {{ #panic("sticky length") }}
         for i in old_length..#len(storage) {{
           if storage[i] != 165 {{ #panic("sticky bytes") }}
         }}
@@ -126,14 +127,18 @@ fn main() {{
     for i in 0..#len(storage) {{ storage[i] = 165 }}
     failed := fmt.buffer(storage[..])
     failed.failed = true
-    if html.write_escaped(&failed, source) || failed.length != 0 {{ #panic("preexisting failure") }}
+    html.write_escaped(&failed, source)
+    if !failed.failed || failed.length != 0 {{ #panic("preexisting failure") }}
     for byte in storage {{ if byte != 165 {{ #panic("failed writer changed bytes") }} }}
   }}
   invalid := fmt.buffer(storage[..3])
   invalid.length = 4
-  if html.write_escaped(&invalid, "<&") || !invalid.failed || invalid.length != 4 {{ #panic("invalid buffer state") }}
+  html.write_escaped(&invalid, "<&")
+  if !invalid.failed || invalid.length != 4 {{ #panic("invalid buffer state") }}
   prefixed := fmt.buffer(storage[..])
-  if !fmt.write(&prefixed, "prefix:") || !html.write_escaped(&prefixed, "<&") {{ #panic("prefix append") }}
+  fmt.write(&prefixed, "prefix:")
+  html.write_escaped(&prefixed, "<&")
+  if prefixed.failed {{ #panic("prefix append") }}
   if prefixed.length != 16 {{ #panic("prefix length") }}
 }}
 '''

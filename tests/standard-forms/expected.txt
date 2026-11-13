@@ -22,4 +22,5 @@ x 0
 only wildcard
 edit once
 calls 2
+fresh 100 0
 op true true

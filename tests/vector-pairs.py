@@ -54,7 +54,7 @@ fn bits(ps: []V) u64 {
 }
 
 fn main() {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   ps := mem.push_array(V, arena, 257)
   vs := mem.push_array(V, arena, 257)
   for i in 0..257 {

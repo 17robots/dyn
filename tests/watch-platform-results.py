@@ -79,12 +79,12 @@ _ = output
 return nil }
 fn require(ok: bool) { if !ok { #panic("macos mock") } }
 fn main() {
- owner := mem.arena_create(0)
+ owner := mem.arena_alloc(0)
  live := Watcher{arena: owner, state: mem.push(State, owner)}
  close(&live)
  require(live.arena == nil && live.state == nil)
  close(&live)
- partial := Watcher{arena: mem.arena_create(0)}
+ partial := Watcher{arena: mem.arena_alloc(0)}
  close(&partial)
  require(partial.arena == nil)
  close(&partial)

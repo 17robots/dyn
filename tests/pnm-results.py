@@ -13,7 +13,7 @@ use "std/mem" mem
 use "std/bytes" bytes
 fn check(ok: bool) { if !ok { #panic("PNM contract") } }
 fn main() {
- arena := mem.arena_create(0)
+ arena := mem.arena_alloc(0)
  defer { mem.arena_release(arena) }
  decoded := pnm.decode(arena,"P3\n# comment\n2 1\n15\n15 0 7 0 15 15\n")
  check(decoded.failure.kind == parse.Kind.Ok && decoded.value.info.width == 2 && decoded.value.info.height == 1 && decoded.value.info.channels == 3 && bytes.equal(decoded.value.pixels,"\xff\x00\x77\x00\xff\xff"))

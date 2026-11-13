@@ -32,14 +32,16 @@ fn main() {{
   storage: [64]u8
   for bits in values {{
     state := fmt.buffer(storage[..])
-    if !fmt.write_f64_shortest(&state, #bitcast(f64, bits)) {{
+    fmt.write_f64_shortest(&state, #bitcast(f64, bits))
+    if state.failed {{
       #panic("shortest")
     }}
     io.println("{{}}", fmt.bytes(&state))
   }}
   tiny: [3]u8
   small := fmt.buffer(tiny[..])
-  if fmt.write_f64_shortest(&small, 0.125) || small.length != 0 || !small.failed {{
+  fmt.write_f64_shortest(&small, 0.125)
+  if small.length != 0 || !small.failed {{
     #panic("rollback")
   }}
   backing: [64 + mem.ArenaBufferOverhead]u8

@@ -13,7 +13,7 @@ SOURCE = '''use "std/io"
 use "std/mem"
 
 fn main() {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   xs := mem.push_array(f32, arena, 1000)
   for i in 0..1000 {
     xs[i] = #cast(f32, i) * 0.5

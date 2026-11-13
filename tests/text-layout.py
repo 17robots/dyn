@@ -40,7 +40,7 @@ fn big_glyph(raw: rawptr, cp: u32) software.Glyph { _ = raw
   _ = cp
   return software.Glyph{ pixels: coverage[..], width: 1, height: 1, stride: 1, x_offset: -2147483647, advance: 10 } }
 fn main() {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   defer { mem.arena_release(arena) }
   font := layout.Font{ advance: advance, kerning: kern, line_height: 12 }
   result := layout.build(arena, "AV AV", font, layout.Options{ width: 30 })

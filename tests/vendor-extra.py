@@ -25,7 +25,7 @@ use "vendor/stb/image_resize" image
 use "std/mem"
 use "std/io"
 fn main() {
-  backing := mem.arena_create(2 * 1024 * 1024)
+  backing := mem.arena_alloc(2 * 1024 * 1024)
   defer {
     mem.arena_release(backing)
   }
@@ -102,14 +102,15 @@ use "std/mem"
 use "std/os/linux"
 use "std/io" io
 use "std/strings"
+use "std/bytes"
 use "std/time"
 fn main() {
-  arena := mem.arena_create(1024 * 1024)
+  arena := mem.arena_alloc(1024 * 1024)
   defer {
     mem.arena_release(arena)
   }
   args := linux.process_arguments(arena)
-  smoke := #len(args) == 2 && strings.equal(args[1], "--smoke")
+  smoke := #len(args) == 2 && bytes.equal(args[1], "--smoke")
   if !sdl.init_video() {
     #panic("SDL video")
   }
@@ -188,9 +189,10 @@ use "std/mem"
 use "std/os/linux"
 use "std/io" io
 use "std/strings"
+use "std/bytes"
 use "std/time"
 fn main() {
-  arena := mem.arena_create(2 * 1024 * 1024)
+  arena := mem.arena_alloc(2 * 1024 * 1024)
   defer {
     mem.arena_release(arena)
   }
@@ -198,7 +200,7 @@ fn main() {
   if #len(args) < 2 {
     #panic("usage: audio-playback-example FILE.wav [--offline]")
   }
-  offline := #len(args) == 3 && strings.equal(args[2], "--offline")
+  offline := #len(args) == 3 && bytes.equal(args[2], "--offline")
   engine := audio.engine_create(arena, !offline)
   if !engine.ok {
     #panic("audio engine/device")
@@ -252,6 +254,7 @@ fn main() {
     'lz4': r'''use "vendor/lz4"
 use "std/io" io
 use "std/strings"
+use "std/bytes"
 fn main() {
   compressed: [128]u8
   output: [128]u8
@@ -261,7 +264,7 @@ fn main() {
     #panic("LZ4 compression")
   }
   decoded := lz4.decompress(output[..], compressed[..result.written])
-  if !decoded.ok || !strings.equal(output[..decoded.written], source) {
+  if !decoded.ok || !bytes.equal(output[..decoded.written], source) {
     #panic("LZ4 roundtrip")
   }
   if lz4.decompress(output[..1], compressed[..result.written]).ok {
@@ -287,6 +290,7 @@ fn main() {
     'cgltf': r'''use "vendor/cgltf"
 use "std/io" io
 use "std/strings"
+use "std/bytes"
 use "std/mem"
 use "std/fs"
 use "std/os/linux"
@@ -331,7 +335,7 @@ fn main() {
   triangles[2] = 2
   vertex_bytes := #slice(#cast(*const u8, &vertices[0]), 36)
   index_bytes := #slice(#cast(*const u8, &triangles[0]), 6)
-  if cgltf.buffer_count(mesh.value) != 2 || !strings.equal(cgltf.buffer_uri(mesh.value, 0, 256), "vertices.bin") || cgltf.buffer_size(mesh.value, 0) != 36 || cgltf.attach_buffer(mesh.value, 0, vertex_bytes[..1]) {
+  if cgltf.buffer_count(mesh.value) != 2 || !bytes.equal(cgltf.buffer_uri(mesh.value, 0, 256), "vertices.bin") || cgltf.buffer_size(mesh.value, 0) != 36 || cgltf.attach_buffer(mesh.value, 0, vertex_bytes[..1]) {
     #panic("mesh resource metadata")
   }
   if !cgltf.attach_buffer(mesh.value, 0, vertex_bytes) || !cgltf.attach_buffer(mesh.value, 1, index_bytes) || cgltf.attach_buffer(mesh.value, 0, vertex_bytes) || cgltf.load_embedded(mesh.value) != 0 || !cgltf.validate(mesh.value) {
@@ -349,7 +353,7 @@ fn main() {
   if !cgltf.world_transform(mesh.value, 0, transform[..]) || transform[12] != 1.0 || transform[13] != 2.0 || transform[14] != 3.0 || !cgltf.base_color(mesh.value, 0, color[..]) || color[1] != 0.5 || cgltf.base_color(mesh.value, 1, color[..]) {
     #panic("mesh transform/material")
   }
-  backing := mem.arena_create(2 * 1024 * 1024)
+  backing := mem.arena_alloc(2 * 1024 * 1024)
   defer {
     mem.arena_release(backing)
   }
@@ -450,8 +454,9 @@ fn main() {
 use "std/mem"
 use "std/io" io
 use "std/strings"
+use "std/bytes"
 fn main() {
-  storage := mem.arena_create(1024 * 1024)
+  storage := mem.arena_alloc(1024 * 1024)
   defer {
     mem.arena_release(storage)
   }
@@ -484,7 +489,7 @@ fn main() {
       if command == nil {
         break
       }
-      if ui.kind(command) == ui.Text && strings.equal(ui.text(command), "arena backed") {
+      if ui.kind(command) == ui.Text && bytes.equal(ui.text(command), "arena backed") {
         texts += 1
       }
       if ui.kind(command) == ui.Rect {
@@ -506,6 +511,7 @@ fn main() {
 use "std/time"
 use "std/io" io
 use "std/strings"
+use "std/bytes"
 fn main() {
   if !enet.init() {
     #panic("ENet init")
@@ -541,7 +547,7 @@ fn main() {
       #panic("server service")
     }
     if remote.kind == enet.Received {
-      if remote.channel != 1 || !strings.equal(enet.packet_bytes(remote.packet), "ping") {
+      if remote.channel != 1 || !bytes.equal(enet.packet_bytes(remote.packet), "ping") {
         #panic("server payload")
       }
       if !enet.send_channel(remote.peer, 1, "pong") {
@@ -559,7 +565,7 @@ fn main() {
       }
     }
     if local.kind == enet.Received {
-      if local.channel != 1 || !strings.equal(enet.packet_bytes(local.packet), "pong") {
+      if local.channel != 1 || !bytes.equal(enet.packet_bytes(local.packet), "pong") {
         #panic("client payload")
       }
       enet.packet_destroy(local.packet)
@@ -617,7 +623,7 @@ use "std/fs"
 use "std/io"
 use "std/time"
 fn main() {
-  storage := mem.arena_create(4 * 1024 * 1024)
+  storage := mem.arena_alloc(4 * 1024 * 1024)
   defer {
     mem.arena_release(storage)
   }
@@ -703,7 +709,7 @@ use "std/os/linux"
 use "std/fs"
 use "std/io"
 fn main() {
-  storage := mem.arena_create(4 * 1024 * 1024)
+  storage := mem.arena_alloc(4 * 1024 * 1024)
   defer {
     mem.arena_release(storage)
   }

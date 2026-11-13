@@ -849,7 +849,7 @@ fn clipboard_read(window: *Window, incremental: bool) {
   }
   if !desktop.incoming_failed && count != 0 {
     if desktop.incoming_arena == nil {
-      desktop.incoming_arena = mem.arena_create_bounded(clipboard_limit + mem.ArenaHeader, clipboard_limit + mem.ArenaHeader)
+      desktop.incoming_arena = mem.arena_alloc_bounded(clipboard_limit + mem.ArenaHeader, clipboard_limit + mem.ArenaHeader)
     }
     _ = mem.copy(mem.push_bytes_uninit(desktop.incoming_arena, count), #slice(data, count))
   }
@@ -1149,7 +1149,7 @@ fn clipboard_incoming_used(desktop: *Desktop) usize {
 
 fn clipboard_arena(size: usize) *mem.Arena {
   backing := math.max(size, 1) + mem.ArenaHeader
-  return mem.arena_create_bounded(backing, backing)
+  return mem.arena_alloc_bounded(backing, backing)
 }
 fn clipboard_bytes(arena: *const mem.Arena) []u8 {
   empty: []u8

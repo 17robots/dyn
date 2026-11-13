@@ -23,7 +23,7 @@ use "std/process"
 fn check(ok:bool) { if !ok { #panic("chained producer contract") } }
 struct Fixture { arena:*mem.Arena, prefix:[]u8, second:[]u8 }
 fn fresh() Fixture {
- arena:=mem.arena_create_bounded(160,8*mem.MiB)
+ arena:=mem.arena_alloc_bounded(160,8*mem.MiB)
  prefix:=mem.push_bytes_uninit(arena,16)
  mem.fill(prefix,91)
  second:=mem.push_bytes_uninit(arena,256)

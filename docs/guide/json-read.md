@@ -11,7 +11,7 @@ use "std/mem"
 use "std/parse" parse
 
 fn main() {
-  arena := mem.arena_create(mem.MiB)
+  arena := mem.arena_alloc(mem.MiB)
   defer mem.arena_release(arena)
   parsed := json.parse(arena, "{\"count\":12}")
   if parsed.failure.kind != parse.Kind.Ok {

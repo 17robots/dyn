@@ -133,9 +133,9 @@ fn handle(response: *http.Response, request: *const http.Request, app: *App) htt
     }
     page_storage: [1024]u8
     page := fmt.buffer(page_storage[..])
-    _ = fmt.write(&page, "<p>")
-    _ = html.write_escaped(&page, q.value)
-    _ = fmt.write(&page, "</p>")
+    fmt.write(&page, "<p>")
+    html.write_escaped(&page, q.value)
+    fmt.write(&page, "</p>")
     tag := http.request_header(request, "x-tag")
     trigger: []const u8 = q.value
     if tag.found {
@@ -167,7 +167,7 @@ fn handle(response: *http.Response, request: *const http.Request, app: *App) htt
 }
 
 fn main() {
-  arena := mem.arena_create(64 * mem.MiB)
+  arena := mem.arena_alloc(64 * mem.MiB)
   defer mem.arena_release(arena)
   state := mem.push(App, arena)
   state.big = mem.push_bytes_uninit(arena, BigSize)

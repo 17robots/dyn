@@ -15,8 +15,8 @@ use "std/mem" mem
 use "std/io" errors
 fn check(ok: bool) { if !ok { #panic("event readiness") } }
 fn main() {
-  arena := mem.arena_create(0)
-  scratch := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
+  scratch := mem.arena_alloc(0)
   defer { mem.arena_release(scratch)
     mem.arena_release(arena) }
   check(event.open(arena, 0).failure.kind == errors.Kind.InvalidInput)

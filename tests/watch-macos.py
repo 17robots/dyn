@@ -88,7 +88,7 @@ fn main() {
 # exporting testing APIs. The nonzero stream value is compared, never called.
 AUDIT = r'''
 pub fn audit_callbacks() {
-  allocation := mem.arena_create(mem.ArenaHeader + #alignof(State) + #sizeof(State))
+  allocation := mem.arena_alloc(mem.ArenaHeader + #alignof(State) + #sizeof(State))
   defer { mem.arena_release(allocation) }
   pushed := mem.arena_push(allocation,#sizeof(State),#alignof(State))
   state := #cast(*State, pushed)

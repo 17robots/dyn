@@ -15,7 +15,7 @@ use "std/io" errors
 use "vendor/window/events" events
 fn check(ok: bool, why: []const u8) { if !ok { #panic(why) } }
 fn main() {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   defer mem.arena_release(arena)
   tracker := edit.Tracker{}
   first := edit.snapshot(&tracker, 7, "hé world", 3, 3, edit.Cause.Other)

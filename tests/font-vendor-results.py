@@ -49,7 +49,7 @@ fn count_empty_destroy(font: rawptr) { check(font == empty_font)
 fn reject_empty_configuration(font: rawptr) { _ = font
  #panic("empty font must not be configured") }
 fn main(){
- arena := mem.arena_create(0)
+ arena := mem.arena_alloc(0)
  defer {mem.arena_release(arena)}
  library := dynlib.open("FT_LIBRARY",dynlib.Now)
  check(library.failure.kind == errors.Kind.Ok)

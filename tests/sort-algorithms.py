@@ -3,7 +3,7 @@
 
 C only transports input and compares results; Python computes every expected
 order. This checks correctness, not performance. NaNs are outside sort's strict
-weak ordering contract. No comparator overload exists for user structs.
+weak ordering contract. Comparator sorts are covered by tests/sort-by.py.
 """
 import os
 from pathlib import Path

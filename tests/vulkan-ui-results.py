@@ -21,7 +21,7 @@ fn bitmap(data: rawptr, codepoint: u32) software.Glyph {
  return software.Glyph{pixels:font.pixels[..],width:3,height:2,stride:5,advance:4,x_offset:-1,y_offset:1}
 }
 fn main() {
- arena := mem.arena_create(0)
+ arena := mem.arena_alloc(0)
  defer { mem.arena_release(arena) }
  renderer := gpu.Renderer{}
  check(gpu.open(&renderer,gpu.Limits{}).ok)

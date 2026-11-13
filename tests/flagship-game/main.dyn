@@ -40,7 +40,7 @@ fn print_field(name: []const u8, value: u64) {
 }
 
 fn main() {
-  persistent := mem.arena_create(mem.MiB)
+  persistent := mem.arena_alloc(mem.MiB)
   defer mem.arena_release(persistent)
   game := mem.push(breakout.Game, persistent)
   pixels := mem.push_array(u32, persistent, #cast(usize, breakout.Width * breakout.Height))

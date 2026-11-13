@@ -12,7 +12,7 @@ SOURCE = '''use "std/mem"
 fn expect(ok: bool) { if !ok { #panic("Windows arena header contract") } }
 fn main() {
   for cycle in 0..3 {
-    arena := mem.arena_create_bounded(4096, 12288)
+    arena := mem.arena_alloc_bounded(4096, 12288)
     first := mem.arena_push(arena, 3952, 1)
     first.* = 91
     mark := mem.arena_mark(arena)

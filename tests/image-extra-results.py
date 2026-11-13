@@ -16,8 +16,9 @@ use "std/mem" mem
 use "std/fs" fs
 use "std/process" process
 use "std/strings" strings
+use "std/bytes"
 fn main() {
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   defer { mem.arena_release(arena) }
   args := process.arguments(arena)
   if args.failure.kind != io.Kind.Ok || #len(args.value) != 4 { #panic("image arguments") }
@@ -35,7 +36,7 @@ fn main() {
   io.println("{} {}", result.value.info.width, result.value.info.height)
 }
 '''
-ENCODER='''if strings.starts_with(args.value[1], "encode") {
+ENCODER='''if bytes.starts_with(args.value[1], "encode") {
   channels := strings.parse(u8, args.value[1][6..])
   pixels: [16]u8
   for i in 0..4 { for j in 0..#cast(usize, channels) { pixels[i * #cast(usize, channels) + j] = #cast(u8, (i * 51 + j * 37)) } }
@@ -190,7 +191,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-image-extra-') as directory:
     if shutil.which('cjpeg'):fixture_data['jpeg']=data
     for kind,fixture in fixture_data.items():
         project=work/(kind+'-portable');project.mkdir()
-        source='use "std/image/'+kind+'" codec\nuse \"std/parse\" parse\nuse "std/mem" mem\nfn main() { arena := mem.arena_create(0); defer { mem.arena_release(arena) }; source: ['+str(len(fixture))+']u8 = ['+','.join(map(str,fixture))+']; result := codec.decode(arena,source[..]); if result.failure.kind != parse.Kind.Ok || result.value.info.width == 0 { #panic("portable image") } }'
+        source='use "std/image/'+kind+'" codec\nuse \"std/parse\" parse\nuse "std/mem" mem\nfn main() { arena := mem.arena_alloc(0); defer { mem.arena_release(arena) }; source: ['+str(len(fixture))+']u8 = ['+','.join(map(str,fixture))+']; result := codec.decode(arena,source[..]); if result.failure.kind != parse.Kind.Ok || result.value.info.width == 0 { #panic("portable image") } }'
         (project/'main.dyn').write_text(source.replace('; ', '\n'))
         for target in ('aarch64-linux','riscv64-linux','x86_64-macos','aarch64-macos','x86_64-windows','aarch64-windows','wasm32-wasi'):
             subprocess.run([DYN,'build',str(project),'--release','--target',target,'--quiet','--output',str(work/(kind+'-'+target))],check=True,timeout=300)

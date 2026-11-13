@@ -56,7 +56,7 @@ fn main() {
   notifications: [1]net.Event
   waited := net.event_wait(queue.value, notifications[..], 10)
   require(waited.failure.kind != errors.Kind.Ok && waited.failure.native == -1 && waited.failure.kind == errors.Kind.PermissionDenied)
-  arena := mem.arena_create(0)
+  arena := mem.arena_alloc(0)
   defer mem.arena_release(arena)
   server := net.ipv4(127,0,0,1,53)
   resolved := dns.resolve_ipv4(arena, "example.test", &server, 10)

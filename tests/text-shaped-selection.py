@@ -35,8 +35,8 @@ fn save(arena:*mem.Arena,rects:[]const layout.SelectionRect,path:[]const u8) {
  check(fs.write_all(path,output).failure.kind == errors.Kind.Ok)
 }
 fn main() {
- owner:=mem.arena_create(0)
- scratch:=mem.arena_create(0)
+ owner:=mem.arena_alloc(0)
+ scratch:=mem.arena_alloc(0)
  defer {mem.arena_release(scratch)
   mem.arena_release(owner)}
  library:=dynlib.open("HB_LIBRARY",dynlib.Now)
