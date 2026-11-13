@@ -464,7 +464,7 @@ def build(args, root, program):
         subprocess.run([clang, f'--target={TARGETS[target]}', *target_flags, '-ffreestanding', '-fno-stack-protector', '-O1',
                         '-c', str(root/'provider.c'), '-o', str(provider)], check=True)
         output = root/(name + (suffix if name == 'native' else ''))
-        built = subprocess.run([str(args.compiler), 'build', str(root/'app'), '--target', target,
+        built = subprocess.run([str(args.compiler), 'build', str(root/'app'),'--no-check-overflow', '--target', target,
                                 '--no-cache', '--quiet', *(['--release'] if args.release else []),
                                 '--link', str(provider), '--output', str(output)],
                                capture_output=True, text=True, timeout=600)

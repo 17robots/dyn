@@ -45,7 +45,7 @@ for name, target in [('windows','x86_64-windows'), ('macos','aarch64-macos'), ('
         else:
             shutil.copy2(ROOT/'build/readiness/native'/('aarch64-concurrency-'+mode), destination/'concurrency')
         for label, fixture in fixtures:
-            run([DYN,'build',ROOT/'tests'/fixture,'--target',target,'--no-cache','--quiet',
+            run([DYN,'build',ROOT/'tests'/fixture,'--no-check-overflow','--target',target,'--no-cache','--quiet',
                  '--output',destination/(label+suffix), *(['--release'] if mode == 'release' else [])])
         # macOS debug builds keep <output>.dynnative.o for the debugger; it is not a probe.
         for kept in destination.glob('*.dynnative.o'): kept.unlink()
@@ -70,7 +70,7 @@ for name,target in [('windows-arm64','aarch64-windows'),('macos-x64','x86_64-mac
             (project/'main.dyn').write_text(contracts[key])
             output=destination/(label+('.exe' if 'windows' in name else ''))
             selected = name=='windows-arm64' and mode=='release'
-            result = run([DYN,'build',project,'--target',target,'--no-cache','--quiet','--'+mode,'--output',output,
+            result = run([DYN,'build',project,'--no-check-overflow','--target',target,'--no-cache','--quiet','--'+mode,'--output',output,
                           *(['--opt-remarks'] if selected else [])], capture=selected,
                          # The probe checks each function's own code; O2 would inline the small ones into main.
                          env={'DYN_NO_INLINE': '1'} if selected else None)
@@ -82,7 +82,7 @@ for name,target in [('windows-arm64','aarch64-windows'),('macos-x64','x86_64-mac
         (project/'main.dyn').write_text('pub fn calculate(value:f64) f64 { return value % 2.0 }\n')
         output=destination/('shared.dll' if 'windows' in name else 'shared.dylib')
         selected = name=='windows-arm64' and mode=='release'
-        result = run([DYN,'build',project,'--target',target,'--no-cache','--quiet','--'+mode,'--shared','--output',output,
+        result = run([DYN,'build',project,'--no-check-overflow','--target',target,'--no-cache','--quiet','--'+mode,'--shared','--output',output,
                       *(['--opt-remarks'] if selected else [])], capture=selected)
         if selected: require_ssa(result, ['calculate'])
         rows.append(dict(path=str(output.relative_to(OUT)),mode=mode,kind='shared',

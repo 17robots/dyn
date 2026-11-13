@@ -829,7 +829,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-scalar-backend-') as directory:
         run([*CC, '-fPIC', '-DDYN_SHARED', '-c', ROOT / 'runtime/linux_x86_64_start.S', '-o', runtime])
         run([*CC, '-shared', '-Wl,--no-undefined', obj, runtime, support, '-lm', '-o', native])
         production_path = root / ('production-' + mode + '.so')
-        run([DYN, 'build', root, '--shared', '--' + mode, '--no-cache',
+        run([DYN, 'build', root,'--no-check-overflow', '--shared', '--' + mode, '--no-cache',
              '--jobs', '1', '--output', production_path])
         # An executable's smaller overriding symbol has no experiment-owned padding.
         override_asm=root/'override.S';override_c=root/'override.c'
@@ -1120,7 +1120,7 @@ Packed c_packed(Packed x) { x.value+=x.tag;return x; }
         foreign_obj=root/('foreign-'+mode+'.o');foreign_native=root/('foreign-native-'+mode+'.so');foreign_compiler=root/('foreign-production-'+mode+'.so')
         run([BACKEND,*(['--debug'] if mode=='debug' else []),foreign_source,foreign_obj])
         run([*CC,'-shared','-Wl,--no-undefined',foreign_obj,runtime,support,provider_obj,'-o',foreign_native])
-        run([DYN,'build',foreign_root,'--shared','--'+mode,'--no-cache','--jobs','1','--link',provider_obj,'--output',foreign_compiler])
+        run([DYN,'build',foreign_root,'--no-check-overflow','--shared','--'+mode,'--no-cache','--jobs','1','--link',provider_obj,'--output',foreign_compiler])
         for library in (foreign_native,foreign_compiler):
             lib=ctypes.CDLL(str(library))
             fn=lib.foreign_pair;fn.argtypes=[i64];fn.restype=ctypes.c_double;assert fn(9)==11.5
