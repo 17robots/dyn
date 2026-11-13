@@ -273,7 +273,8 @@ pub fn capture(arena: *mem.Arena, path: []const u8, arguments: [][]const u8,
         }
         if read.count > 0 {
           progress = true
-          if builder.append_grow(state, arena, destination[..read.count]) != builder.ErrorKind.None {
+          builder.append_grow(state, arena, destination[..read.count])
+          if io.failed(state.failure) {
             result.failure.kind = io.Kind.Overflow
             break
           }

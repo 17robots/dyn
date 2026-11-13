@@ -1,3 +1,4 @@
+use "std/io"
 extern fn tls_client_method "TLS_client_method"() rawptr
 extern fn tls_server_method "TLS_server_method"() rawptr
 extern fn ssl_context_new "SSL_CTX_new"(method: rawptr) rawptr

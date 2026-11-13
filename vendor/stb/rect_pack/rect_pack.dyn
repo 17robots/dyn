@@ -1,23 +1,24 @@
 use "std/mem"
+use "std/io"
 #link("dyn_stb")
 // Integer skyline packing, no rotation. Caller owns rectangles; scratch arena is
 // rewound before return. Inputs must not overlap newly allocated scratch storage.
 pub struct Rectangle { width: i32, height: i32, x: i32, y: i32, was_packed: i32 }
 // code=-1 invalid input/storage, 0 partial fit, 1 all fit. count is the successes.
-pub struct Result { count: usize, code: i32, ok: bool }
+pub struct Result { count: usize, code: i32, failure: io.Failure }
 pub fn pack(scratch: *mem.Arena, width: i32, height: i32, rectangles: []Rectangle) Result {
   if scratch == nil {
-    return Result{ code: -1 }
+    return Result{ code: -1, failure: io.Failure{ kind: io.Kind.System } }
   }
   size := native_size(width, #len(rectangles))
   if size == 0 {
-    return Result{ code: -1 }
+    return Result{ code: -1, failure: io.Failure{ kind: io.Kind.System } }
   }
   mark := mem.arena_mark(scratch)
   defer mem.arena_rewind(scratch, mark)
   work := mem.arena_try_push(scratch, size, 64)
   if !work.ok {
-    return Result{ code: -1 }
+    return Result{ code: -1, failure: io.Failure{ kind: io.Kind.System } }
   }
   data: *Rectangle = nil
   if #len(rectangles) != 0 {
@@ -32,7 +33,7 @@ pub fn pack(scratch: *mem.Arena, width: i32, height: i32, rectangles: []Rectangl
       }
     }
   }
-  return Result{ count: count, code: code, ok: code == 1 }
+  return Result{ count: count, code: code, failure: io.failure_if(code != 1) }
 }
 extern fn native_size "dyn_stb_pack_size"(width: i32, count: usize) usize
 extern fn native_pack "dyn_stb_pack"(width: i32, height: i32, rectangles: *Rectangle, count: usize, work: rawptr, size: usize) i32

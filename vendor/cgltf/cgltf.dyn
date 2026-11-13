@@ -1,17 +1,18 @@
 use "std/parse" parse
 use "std/c"
+use "std/io"
 #link("dyn_cgltf")
 // cgltf 1.15. Provider owns parsed model; keep input bytes alive until destroy.
 // In particular GLB binary buffers borrow input. Handles must not be copied for ownership.
 pub type Model = rawptr
-pub struct Result { value: Model, code: i32, ok: bool }
+pub struct Result { value: Model, code: i32, failure: io.Failure }
 pub fn parse_owned(bytes: []const u8) Result {
   if #len(bytes) == 0 {
-    return Result{ code: -1 }
+    return Result{ code: -1, failure: io.Failure{ kind: io.Kind.System } }
   }
   model: Model = nil
   code := native_parse(#cast(rawptr, &bytes[0]), #len(bytes), &model)
-  return Result{ value: model, code: code, ok: code == 0 }
+  return Result{ value: model, code: code, failure: io.failure_if(code != 0) }
 }
 pub fn destroy_owned(model: Model) {
   if model != nil {
@@ -77,10 +78,10 @@ pub extern fn material "dyn_cgltf_material"(model: Model, mesh: usize, primitive
 pub extern fn topology "dyn_cgltf_topology"(model: Model, mesh: usize, primitive: usize) i32
 pub extern fn element_count "dyn_cgltf_elements"(model: Model, accessor: usize) usize
 pub extern fn node_mesh "dyn_cgltf_node_mesh"(model: Model, node: usize) i64
-pub struct Index { value: u32, ok: bool }
+pub struct Index { value: u32, failure: io.Failure }
 pub fn read_index(model: Model, accessor: usize, element: usize) Index {
-  result := Index{}
-  result.ok = native_index(model, accessor, element, &result.value)
+  result := Index{ failure: io.Failure{ kind: io.Kind.System } }
+  result.failure = io.failure_if(!(native_index(model, accessor, element, &result.value)))
   return result
 }
 // Column-major world matrix and RGBA base factor, copied into caller storage.

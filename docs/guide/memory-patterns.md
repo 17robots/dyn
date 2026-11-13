@@ -87,17 +87,20 @@ is a separate concern.
 
 ```dyn
 use "std/bytes/builder" builder
-use "std/strings"
+use "std/io"
 use "std/bytes"
 
 fn main() {
   storage: [8]u8
   text := builder.from_buffer(storage[..])
-  if builder.append(&text, "hello") != builder.ErrorKind.None { #panic("append") }
-  if builder.append(&text, " world") != builder.ErrorKind.Capacity { #panic("capacity") }
+  builder.append(&text, "hello")
+  if io.failed(text.failure) { #panic("append") }
+  builder.append(&text, " world")
+  if text.failure.kind != io.Kind.Capacity { #panic("capacity") }
   if !bytes.equal(builder.bytes(&text), "hello") { #panic("failure changed text") }
   builder.clear(&text)
-  if builder.append(&text, "again") != builder.ErrorKind.None { #panic("reuse") }
+  builder.append(&text, "again")
+  if io.failed(text.failure) { #panic("reuse") }
 }
 ```
 

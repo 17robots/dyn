@@ -1,9 +1,10 @@
 use "std/parse" parse
 use "std/c"
 use "std/mem"
+use "std/io"
 #link("curl")
 
-pub struct Result { written: usize, code: i32, http_status: c.long, capacity_exceeded: bool, ok: bool }
+pub struct Result { written: usize, code: i32, http_status: c.long, capacity_exceeded: bool, failure: io.Failure }
 struct Sink { destination: []u8, used: usize, full: bool }
 // Call once before starting worker threads; cleanup only after all transfers end.
 pub fn init() i32 {
@@ -41,15 +42,15 @@ fn receive(data: *const u8, size: usize, count: usize, context: rawptr) usize {
 // On failure written bytes are partial, not a complete response. No borrows escape.
 pub fn get_into(url: []const u8, url_buffer: []u8, destination: []u8, timeout_ms: i32) Result {
   if timeout_ms <= 0 {
-    return Result{ code: -1 }
+    return Result{ code: -1, failure: io.Failure{ kind: io.Kind.System } }
   }
   encoded := c.string_into(url_buffer, url)
   if encoded.failure.kind != parse.Kind.Ok {
-    return Result{ code: -1 }
+    return Result{ code: -1, failure: io.Failure{ kind: io.Kind.System } }
   }
   easy := native_easy_init()
   if easy == nil {
-    return Result{ code: -2 }
+    return Result{ code: -2, failure: io.Failure{ kind: io.Kind.System } }
   }
   defer native_easy_cleanup(easy)
   sink := Sink{ destination: destination }
@@ -77,7 +78,7 @@ pub fn get_into(url: []const u8, url_buffer: []u8, destination: []u8, timeout_ms
   if code == 0 {
     code = native_getinfo(easy, 2097154, &status)
   }
-  return Result{ written: sink.used, code: code, http_status: status, capacity_exceeded: sink.full, ok: code == 0 }
+  return Result{ written: sink.used, code: code, http_status: status, capacity_exceeded: sink.full, failure: io.failure_if(code != 0) }
 }
 extern fn native_init "curl_global_init"(flags: c.long) i32
 extern fn native_cleanup "curl_global_cleanup"()

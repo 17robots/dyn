@@ -1,15 +1,14 @@
 use "std/mem" memory
+use "std/io" io
 
 // Byte and UTF-8 string construction share this byte-oriented builder. No UTF-8
 // validation is implied. A builder borrows storage; arena growth is explicit.
-// The first failure is kept in error and turns later calls into no-ops that
-// return it, so callers may check error once at the end.
-pub enum ErrorKind { None, Capacity, Overflow, InvalidState }
-pub struct Builder { storage: []u8, length: usize, error: ErrorKind }
+// The first failure is kept in failure and turns later calls into no-ops, so
+// callers write freely and check failure once at the end.
+pub struct Builder { storage: []u8, length: usize, failure: io.Failure }
 
-fn fail(state: *Builder, error: ErrorKind) ErrorKind {
-  state.error = error
-  return error
+fn fail(state: *Builder, kind: io.Kind) {
+  state.failure = io.Failure{ kind: kind }
 }
 
 pub fn from_buffer(storage: []u8) Builder {
@@ -24,64 +23,67 @@ pub fn bytes(state: *const Builder) []const u8 {
 // Empties the builder and clears a recorded error. Keeps capacity.
 pub fn clear(state: *Builder) {
   state.length = 0
-  state.error = ErrorKind.None
+  state.failure = io.Failure{}
 }
 
 // Exact capacity reservation. Panics when the arena is exhausted.
 // Extends the arena's most recent buffer in place when possible. Otherwise old
 // arena buffers remain allocated until the caller rewinds or resets.
-pub fn reserve(state: *Builder, arena: *memory.Arena, capacity: usize) ErrorKind {
-  if state.error != ErrorKind.None {
-    return state.error
+pub fn reserve(state: *Builder, arena: *memory.Arena, capacity: usize) {
+  if io.failed(state.failure) {
+    return
   }
   if state.length > #len(state.storage) {
-    return fail(state, ErrorKind.InvalidState)
+    fail(state, io.Kind.InvalidState)
+    return
   }
   if capacity <= #len(state.storage) {
-    return ErrorKind.None
+    return
   }
   if #len(state.storage) > 0 && memory.arena_try_extend(arena, &state.storage[0],
     #len(state.storage), capacity - #len(state.storage)) {
     state.storage = #slice(&state.storage[0], capacity)
-    return ErrorKind.None
+    return
   }
   allocated := memory.arena_push_uninit(arena, capacity, 1)
   storage := #slice(allocated, capacity)
   _ = memory.move(storage, state.storage[..state.length])
   state.storage = storage
-  return ErrorKind.None
 }
 
 // Bounded append supports overlap/self-append. Failure writes nothing.
 // Allocation: none; capacity is fixed until an explicit reserve or append_grow.
 // Failure: builder length and bytes are unchanged.
-pub fn append(state: *Builder, source: []const u8) ErrorKind {
-  if state.error != ErrorKind.None {
-    return state.error
+pub fn append(state: *Builder, source: []const u8) {
+  if io.failed(state.failure) {
+    return
   }
   if state.length > #len(state.storage) {
-    return fail(state, ErrorKind.InvalidState)
+    fail(state, io.Kind.InvalidState)
+    return
   }
   if #len(source) > #len(state.storage) - state.length {
-    return fail(state, ErrorKind.Capacity)
+    fail(state, io.Kind.Capacity)
+    return
   }
   _ = memory.move(state.storage[state.length..], source)
   state.length += #len(source)
-  return ErrorKind.None
 }
 
 // Geometric growth. Panics when the arena cannot hold the selected capacity.
 // Existing views must be reacquired after mutation. Source may borrow this builder.
-pub fn append_grow(state: *Builder, arena: *memory.Arena, source: []const u8) ErrorKind {
-  if state.error != ErrorKind.None {
-    return state.error
+pub fn append_grow(state: *Builder, arena: *memory.Arena, source: []const u8) {
+  if io.failed(state.failure) {
+    return
   }
   if state.length > #len(state.storage) {
-    return fail(state, ErrorKind.InvalidState)
+    fail(state, io.Kind.InvalidState)
+    return
   }
   maximum := #cast(usize, -1)
   if #len(source) > maximum - state.length {
-    return fail(state, ErrorKind.Overflow)
+    fail(state, io.Kind.Overflow)
+    return
   }
   required := state.length + #len(source)
   if required > #len(state.storage) {
@@ -96,10 +98,7 @@ pub fn append_grow(state: *Builder, arena: *memory.Arena, source: []const u8) Er
       }
       capacity *= 2
     }
-    error := reserve(state, arena, capacity)
-    if error != ErrorKind.None {
-      return fail(state, error)
-    }
+    reserve(state, arena, capacity)
   }
-  return append(state, source)
+  append(state, source)
 }

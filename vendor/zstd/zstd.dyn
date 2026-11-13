@@ -2,8 +2,8 @@
 
 pub const ContentSizeUnknown: u64 = 18446744073709551615
 pub const ContentSizeError: u64 = 18446744073709551614
-pub struct Result { written: usize, provider_code: usize, ok: bool }
-pub struct SizeResult { size: u64, known: bool, ok: bool }
+pub struct Result { written: usize, provider_code: usize, failure: io.Failure }
+pub struct SizeResult { size: u64, known: bool, failure: io.Failure }
 pub fn version() u32 {
   return zstd_version_number()
 }
@@ -36,13 +36,13 @@ pub fn decompress(destination: []u8, source: []const u8) Result {
 }
 pub fn frame_size(source: []const u8) SizeResult {
   if #len(source) == 0 {
-    return SizeResult{}
+    return SizeResult{ failure: io.Failure{ kind: io.Kind.System } }
   }
   size := zstd_frame_content_size(#cast(rawptr, &source[0]), #len(source))
   if size == ContentSizeError {
-    return SizeResult{ size: size }
+    return SizeResult{ size: size, failure: io.Failure{ kind: io.Kind.System } }
   }
-  return SizeResult{ size: size, known: size != ContentSizeUnknown, ok: true }
+  return SizeResult{ size: size, known: size != ContentSizeUnknown }
 }
 pub fn error_name(code: usize, maximum: usize) []const u8 {
   pointer := zstd_error_name(code)
@@ -63,15 +63,15 @@ pub fn error_name(code: usize, maximum: usize) []const u8 {
 // Provider error codes are not byte counts. Failed output must be discarded.
 fn result_from_code(code: usize) Result {
   if zstd_is_error(code) != 0 {
-    return Result{ provider_code: code }
+    return Result{ provider_code: code, failure: io.Failure{ kind: io.Kind.System } }
   }
-  return Result{ written: code, provider_code: code, ok: true }
+  return Result{ written: code, provider_code: code }
 }
 
 // Static provider context borrows workspace; never allocates or frees heap memory.
 // Advanced zstd ABI: build and run against the same supported provider version.
-pub struct StreamContext { value: rawptr, provider_code: usize, ok: bool }
-pub struct StreamResult { written: usize, consumed: usize, provider_code: usize, ended: bool, ok: bool }
+pub struct StreamContext { value: rawptr, provider_code: usize, failure: io.Failure }
+pub struct StreamResult { written: usize, consumed: usize, provider_code: usize, ended: bool, failure: io.Failure }
 pub fn stream_workspace_size(window_log: u32) usize {
   if window_log < 10 || window_log > 30 {
     return 0
@@ -87,24 +87,24 @@ pub fn stream_workspace_size(window_log: u32) usize {
 pub fn stream_context(workspace: []u8, window_log: u32) StreamContext {
   required := stream_workspace_size(window_log)
   if required == 0 || #len(workspace) < required {
-    return StreamContext{}
+    return StreamContext{ failure: io.Failure{ kind: io.Kind.System } }
   }
   address := #cast(usize, &workspace[0])
   eight: usize = 8
   padding := (eight - (address & 7)) & 7
   value := zstd_init_static_dstream(#cast(rawptr, &workspace[padding]), #len(workspace) - padding)
   if value == nil {
-    return StreamContext{}
+    return StreamContext{ failure: io.Failure{ kind: io.Kind.System } }
   }
   code := zstd_dctx_set_parameter(value, 100, #cast(i32, window_log))
   if zstd_is_error(code) != 0 {
-    return StreamContext{ provider_code: code }
+    return StreamContext{ provider_code: code, failure: io.Failure{ kind: io.Kind.System } }
   }
-  return StreamContext{ value: value, ok: true }
+  return StreamContext{ value: value }
 }
 pub fn stream_decode(context: *StreamContext, destination: []u8, source: []const u8) StreamResult {
-  if !context.ok {
-    return StreamResult{ provider_code: context.provider_code }
+  if io.failed(context.failure) {
+    return StreamResult{ provider_code: context.provider_code, failure: io.Failure{ kind: io.Kind.System } }
   }
   output_pointer: rawptr = nil
   input_pointer: rawptr = nil
@@ -118,9 +118,9 @@ pub fn stream_decode(context: *StreamContext, destination: []u8, source: []const
   consumed: usize = 0
   code := zstd_decompress_stream(context.value, output_pointer, #len(destination), &written, input_pointer, #len(source), &consumed)
   if zstd_is_error(code) != 0 {
-    context.ok = false
+    context.failure = io.Failure{ kind: io.Kind.System }
     context.provider_code = code
-    return StreamResult{ provider_code: code }
+    return StreamResult{ provider_code: code, failure: io.Failure{ kind: io.Kind.System } }
   }
-  return StreamResult{ written: written, consumed: consumed, ended: code == 0, provider_code: code, ok: true }
+  return StreamResult{ written: written, consumed: consumed, ended: code == 0, provider_code: code }
 }

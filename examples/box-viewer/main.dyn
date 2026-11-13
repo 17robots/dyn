@@ -202,7 +202,7 @@ fn main() {
   atlas.* = built.value
   loaded := gl.load(window.gl_proc)
   batch := mem.push(gpu.Batch, persistent)
-  if !loaded.ok || !gpu.open_batch(batch, loaded.api).ok {
+  if io.failed(loaded.failure) || io.failed(gpu.open_batch(batch, loaded.api).failure) {
     #panic("OpenGL 3.3 unavailable")
   }
   defer {
@@ -262,7 +262,7 @@ fn main() {
     }
     loaded.api.clear_color(0.08, 0.09, 0.11, 1.0)
     loaded.api.clear(gl.ColorBufferBit)
-    if !gpu.render_batch(batch, ui.first(&context), width, height, glyphs, vertices).ok {
+    if io.failed(gpu.render_batch(batch, ui.first(&context), width, height, glyphs, vertices).failure) {
       #panic("render")
     }
     drawn += 1

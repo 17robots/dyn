@@ -473,7 +473,7 @@ collections, and ordinary algorithms belong in libraries.
 
 `#sizeof(T)` and `#alignof(T)` are the short forms of `#typeof(T).size` and `#typeof(T).alignment`.
 
-`#target(key: value)` on a file's first line keeps that file only for matching targets. The keys
+`#target(key: value)` at the top of a file keeps that file only for matching targets. The keys
 are `arch`, `kernel` (`linux`, `darwin`, `windows`, `wasi`, `none`, `browser`), `abi`, `libc`,
 `endian`, `pointer_bits` and `streams` (`yes` on every target with standard input, output and
 error, which is every target but the browser).

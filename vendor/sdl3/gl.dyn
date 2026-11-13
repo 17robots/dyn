@@ -1,3 +1,4 @@
+use "std/io"
 // OpenGL context lifecycle. Create a WindowOpenGL window after setting attributes.
 // Context and loaded procedure addresses are thread/context-affine.
 pub const WindowOpenGL: u64 = 2

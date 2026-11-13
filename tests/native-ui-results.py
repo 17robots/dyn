@@ -13,6 +13,7 @@ SOURCE = r'''use "vendor/window" window
 use "vendor/opengl" gl
 use "vendor/ui/opengl" gpu
 use "std/ui" ui
+use "std/io"
 use "std/ui/software" software
 use "std/io" errors
 use "std/mem" mem
@@ -38,9 +39,9 @@ fn main() {
  defer { window.close(&host) }
  check(window.open(&host,"duplicate",32,32).kind == errors.Kind.InvalidState)
  loaded := gl.load(window.gl_proc)
- check(loaded.ok)
+ check(!errors.failed(loaded.failure))
  renderer := gpu.Renderer{}
- check(gpu.open(&renderer,loaded.api).ok)
+ check(!errors.failed(gpu.open(&renderer,loaded.api).failure))
  defer { gpu.close(&renderer) }
  check(gpu.open(&renderer,loaded.api).kind == errors.Kind.InvalidState)
  commands: [5]ui.Command = [
@@ -61,7 +62,7 @@ fn main() {
  loaded.api.enable(gl.ClipDistance0)
  loaded.api.color_mask(0,0,0,0)
  loaded.api.polygon_mode(gl.FrontAndBack,0x1b01)
- check(gpu.render(&renderer,&commands[0],32,32,font).ok)
+ check(!errors.failed(gpu.render(&renderer,&commands[0],32,32,font).failure))
  check(loaded.api.is_enabled(gl.RasterizerDiscard) == 0 && loaded.api.is_enabled(gl.FramebufferSrgb) == 0 && loaded.api.is_enabled(gl.ColorLogicOp) == 0 && loaded.api.is_enabled(gl.Dither) == 0 && loaded.api.is_enabled(gl.ClipDistance0) == 0)
  actual: [4096]u8
  loaded.api.read_pixels(0,0,32,32,gl.Rgba,gl.UnsignedByte,&actual[0])
@@ -83,7 +84,7 @@ fn main() {
  wide := Wide{pixels:mem.push_array(u8,arena,#cast(usize,renderer.max_texture)+1)}
  wide.pixels[0] = 255
  single := ui.Command{kind:ui.Kind.Glyph,bounds:ui.Rect{width:32,height:32},clip:ui.Rect{x:2,y:2,width:1,height:1},glyph_x:2,glyph_y:2,color:ui.Color{r:255,a:255}}
- check(gpu.render(&renderer,&single,32,32,software.Font{data:&wide,glyph:wide_bitmap,line_height:1}).ok)
+ check(!errors.failed(gpu.render(&renderer,&single,32,32,software.Font{data:&wide,glyph:wide_bitmap,line_height:1}).failure))
  pixel: [4]u8
  loaded.api.read_pixels(2,29,1,1,gl.Rgba,gl.UnsignedByte,&pixel[0])
  check(pixel[0] == 255 && pixel[1] == 0 && pixel[2] == 0 && pixel[3] == 255 && loaded.api.get_error() == 0)

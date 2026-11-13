@@ -29,7 +29,7 @@ pub fn compress(arena: *memory.Arena, source: []const u8, level: i32) BufferResu
   capacity := compress_bound(#len(source))
   allocation := memory.arena_push_uninit(arena, capacity, 1)
   result := provider.compress(#slice(allocation, capacity), source, level)
-  if !result.ok {
+  if stream.failed(result.failure) {
     memory.arena_rewind(arena, mark)
     return BufferResult{ provider_code: result.provider_code, failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
@@ -50,7 +50,7 @@ pub fn decompress(arena: *memory.Arena, source: []const u8) BufferResult {
   capacity := #cast(usize, size.size)
   allocation := memory.arena_push_uninit(arena, capacity, 1)
   result := provider.decompress(#slice(allocation, capacity), source)
-  if !result.ok {
+  if stream.failed(result.failure) {
     memory.arena_rewind(arena, mark)
     return BufferResult{ provider_code: result.provider_code, failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
@@ -58,7 +58,7 @@ pub fn decompress(arena: *memory.Arena, source: []const u8) BufferResult {
 }
 pub fn frame_size(source: []const u8) SizeResult {
   result := provider.frame_size(source)
-  if !result.ok {
+  if stream.failed(result.failure) {
     return SizeResult{ size: result.size, failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   return SizeResult{ size: result.size, known: result.known }
@@ -75,7 +75,7 @@ pub fn decoder_workspace_size(window_log: u32) usize {
 pub fn decoder(input: stream.Reader, compressed_bytes: []u8, workspace: []u8, window_log: u32) Decoder {
   context := provider.stream_context(workspace, window_log)
   state := Decoder{ source_reader: input, compressed_storage: compressed_bytes, context: context }
-  if !context.ok || #len(compressed_bytes) == 0 {
+  if stream.failed(context.failure) || #len(compressed_bytes) == 0 {
     state.failed = true
     state.failure = parse.parse_failure(parse.Kind.Capacity, 0, "")
     state.provider_code = context.provider_code
@@ -102,7 +102,7 @@ fn decoder_read(data: rawptr, destination: []u8) stream.Transfer {
     // First flush provider output, even with no new input. Reading the next chunk
     // before doing so would stall a caller while output is already available.
     decoded := provider.stream_decode(&state.context, destination, state.compressed_storage[state.offset..state.used])
-    if !decoded.ok {
+    if stream.failed(decoded.failure) {
       state.failed = true
       state.failure = parse.parse_failure(parse.Kind.Syntax, state.offset, "")
       state.provider_code = decoded.provider_code

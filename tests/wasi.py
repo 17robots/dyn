@@ -13,18 +13,18 @@ fn main() {
   arena := mem.arena_alloc(65536)
   defer { mem.arena_release(arena) }
   arguments := wasi.arguments(arena)
-  if !arguments.ok || #len(arguments.values) != 3 || #len(arguments.values[2]) != 5 { #panic("args") }
+  if io.failed(arguments.failure) || #len(arguments.values) != 3 || #len(arguments.values[2]) != 5 { #panic("args") }
   tiny: [1 + mem.ArenaBufferOverhead]u8
   buffer := mem.arena_from_buffer(tiny[..])
   failed := wasi.arguments(buffer)
-  if failed.ok || mem.arena_used(buffer) != 0 { #panic("args rollback") }
+  if !io.failed(failed.failure) || mem.arena_used(buffer) != 0 { #panic("args rollback") }
   file := wasi.open_read(3, "input.txt")
   if #len(arguments.values[1]) == 4 {
-    if file.ok { #panic("unexpected preopen") }
+    if !io.failed(file.failure) { #panic("unexpected preopen") }
     io.println("denied")
     return
   }
-  if !file.ok { #panic("open") }
+  if io.failed(file.failure) { #panic("open") }
   defer { _ = wasi.close(file.fd) }
   data: [16]u8
   result := wasi.read(file.fd, data[..])

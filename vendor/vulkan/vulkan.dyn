@@ -6,7 +6,7 @@ use "std/c"
 // commands/structures for the header version they target instead of coupling SDK releases.
 pub type Instance = rawptr
 pub type Procedure = rawptr
-pub struct ProcedureResult { value: Procedure, ok: bool }
+pub struct ProcedureResult { value: Procedure, failure: io.Failure }
 
 pub fn make_version(variant, major, minor, patch: u32) u32 {
   return (variant << 29) | (major << 22) | (minor << 12) | patch
@@ -28,10 +28,10 @@ pub fn version_patch(version: u32) u32 {
 pub fn procedure(instance: Instance, name: []const u8, name_buffer: []u8) ProcedureResult {
   encoded := c.string_into(name_buffer, name)
   if encoded.failure.kind != parse.Kind.Ok {
-    return ProcedureResult{}
+    return ProcedureResult{ failure: io.Failure{ kind: io.Kind.System } }
   }
   value := vulkan_get_instance_proc_address(instance, encoded.value)
-  return ProcedureResult{ value: value, ok: value != nil }
+  return ProcedureResult{ value: value, failure: io.failure_if(value == nil) }
 }
 pub fn global_procedure(name: []const u8, buffer: []u8) ProcedureResult {
   return procedure(nil, name, buffer)

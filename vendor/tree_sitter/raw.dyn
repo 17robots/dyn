@@ -1,3 +1,4 @@
+use "std/io"
 extern fn native_parser_new "ts_parser_new"() Parser
 extern fn native_parser_delete "ts_parser_delete"(parser: Parser)
 extern fn native_set_language "ts_parser_set_language"(parser: Parser, language: Language) bool

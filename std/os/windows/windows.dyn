@@ -4,8 +4,9 @@ use "std/parse" parse
 use "std/mem" mem
 use "std/c" cstrings
 use "std/sync" sync
+use "std/io"
 
-pub struct IoResult { value: isize, error: isize, ok: bool }
+pub struct IoResult { value: isize, failure: io.Failure }
 pub fn io_value(result: *const IoResult) isize {
   return result.value
 }
@@ -65,7 +66,7 @@ pub fn file_open(path: []const u8, write_access: bool, create: bool) IoResult {
   storage: [260 + mem.ArenaBufferOverhead]u8
   name := terminated(path, storage[..])
   if name == nil {
-    return IoResult{ value: -1, error: 206, ok: false }
+    return IoResult{ value: -1, failure: io.windows_failure(206) }
   }
   access: u32 = 2147483648
   creation: u32 = 3
@@ -78,15 +79,15 @@ pub fn file_open(path: []const u8, write_access: bool, create: bool) IoResult {
   handle := create_file_raw(name, access, 7, nil, creation, 128, nil)
   raw := #cast(usize, handle)
   if raw == 18446744073709551615 {
-    return IoResult{ value: -1, error: #cast(isize, last_error_raw()), ok: false }
+    return IoResult{ value: -1, failure: io.windows_failure(#cast(isize, last_error_raw())) }
   }
-  return IoResult{ value: #cast(isize, raw), error: 0, ok: true }
+  return IoResult{ value: #cast(isize, raw) }
 }
 pub fn file_close(handle: isize) IoResult {
   if close_handle_raw(#cast(rawptr, #cast(usize, handle))) == 0 {
-    return IoResult{ value: -1, error: #cast(isize, last_error_raw()), ok: false }
+    return IoResult{ value: -1, failure: io.windows_failure(#cast(isize, last_error_raw())) }
   }
-  return IoResult{ value: 0, error: 0, ok: true }
+  return IoResult{ value: 0 }
 }
 pub fn thread_spawn(thread: *Thread, stack_size: usize, entry: fn(rawptr) isize, context: rawptr) bool {
   if thread.handle != nil {
@@ -121,13 +122,13 @@ pub fn thread_yield() {
 pub fn socket_open(family: i32, kind: i32, protocol: i32) IoResult {
   startup := socket_initialize()
   if startup != 0 {
-    return IoResult{ value: -1, error: startup, ok: false }
+    return IoResult{ value: -1, failure: io.windows_failure(startup) }
   }
   value := socket_raw(family, kind, protocol)
   if value == 18446744073709551615 {
-    return IoResult{ value: -1, error: socket_error_raw(), ok: false }
+    return IoResult{ value: -1, failure: io.windows_failure(socket_error_raw()) }
   }
-  return IoResult{ value: #cast(isize, value), error: 0, ok: true }
+  return IoResult{ value: #cast(isize, value) }
 }
 pub fn socket_error() isize {
   return 0 - #cast(isize, socket_error_raw())

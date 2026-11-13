@@ -1,4 +1,5 @@
 use "vendor/sdl3"
+use "std/io"
 #link("SDL3_mixer")
 // SDL_mixer 3.2.4. Balance init/quit after destroying mixers and audio.
 // SDL owns these allocations. Destroy tracks before mixers; destroying a mixer
@@ -6,7 +7,7 @@ use "vendor/sdl3"
 pub type Mixer = rawptr
 pub type Audio = rawptr
 pub type Track = rawptr
-pub struct Result { written: usize, code: i32, ok: bool }
+pub struct Result { written: usize, code: i32, failure: io.Failure }
 pub extern fn init "MIX_Init"() bool
 pub extern fn quit "MIX_Quit"()
 // Offline stereo f32 at 48 kHz, no device. Pull audio into caller storage.
@@ -65,13 +66,13 @@ pub fn playing(track: Track) bool {
 // number of meaningful samples; provider fills the remaining output with silence.
 pub fn generate(mixer: Mixer, samples: []f32) Result {
   if mixer == nil || #len(samples) == 0 || #len(samples) % 2 != 0 || #len(samples) > 536870911 {
-    return Result{ code: -1 }
+    return Result{ code: -1, failure: io.Failure{ kind: io.Kind.System } }
   }
   code := native_generate(mixer, #cast(rawptr, &samples[0]), #cast(i32, (#len(samples) * 4)))
   if code < 0 {
-    return Result{ code: code }
+    return Result{ code: code, failure: io.Failure{ kind: io.Kind.System } }
   }
-  return Result{ written: #cast(usize, code) / 4, code: code, ok: true }
+  return Result{ written: #cast(usize, code) / 4, code: code }
 }
 extern fn native_create "MIX_CreateMixer"(spec: *const sdl3.AudioSpec) Mixer
 extern fn native_destroy "MIX_DestroyMixer"(mixer: Mixer)

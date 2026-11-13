@@ -45,11 +45,13 @@ fn main() {
   check(bad.failed && bad.length == 5, "fmt invalid cursor fails before slicing")
   bytes: [2]u8
   text := builder.from_buffer(bytes[..])
-  _ = builder.append(&text, "abc")
+  builder.append(&text, "abc")
   arena := mem.arena_alloc(0)
-  check(text.error == builder.ErrorKind.Capacity && builder.append_grow(&text, arena, "x") == builder.ErrorKind.Capacity, "builder keeps the first failure")
+  builder.append_grow(&text, arena, "x")
+  check(text.failure.kind == io.Kind.Capacity && #len(builder.bytes(&text)) == 0, "builder keeps the first failure")
   builder.clear(&text)
-  check(text.error == builder.ErrorKind.None && builder.append_grow(&text, arena, "grown") == builder.ErrorKind.None, "builder clear")
+  builder.append_grow(&text, arena, "grown")
+  check(!io.failed(text.failure), "builder clear")
   arguments: [1][]const u8 = ["true"]
   spawned := process.spawn(arena, "/bin/true", arguments[..], process.Options{})
   check(spawned.failure.kind == io.Kind.Ok, "zero options spawn")

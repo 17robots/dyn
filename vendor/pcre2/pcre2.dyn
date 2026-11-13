@@ -1,3 +1,4 @@
+use "std/io"
 #link("pcre2-8")
 // PCRE2 8-bit API. Compiled patterns and match data are provider-owned.
 pub type Pattern = rawptr
@@ -6,8 +7,8 @@ pub const Utf: u32 = 524288
 pub const Ucp: u32 = 131072
 pub const Caseless: u32 = 8
 pub const NoMatch: i32 = -1
-pub struct CompileResult { pattern: Pattern, code: i32, offset: usize, ok: bool }
-pub struct MatchResult { code: i32, matched: bool, ok: bool }
+pub struct CompileResult { pattern: Pattern, code: i32, offset: usize, failure: io.Failure }
+pub struct MatchResult { code: i32, matched: bool, failure: io.Failure }
 pub struct Span { start: usize, end: usize, set: bool }
 pub fn compile_owned(pattern: []const u8, options: u32) CompileResult {
   empty: [1]u8
@@ -18,7 +19,7 @@ pub fn compile_owned(pattern: []const u8, options: u32) CompileResult {
   code: i32 = 0
   offset: usize = 0
   value := native_compile(pointer, #len(pattern), options, &code, &offset, nil)
-  return CompileResult{ pattern: value, code: code, offset: offset, ok: value != nil }
+  return CompileResult{ pattern: value, code: code, offset: offset, failure: io.failure_if(value == nil) }
 }
 pub fn pattern_destroy_owned(pattern: Pattern) {
   if pattern != nil {
@@ -40,7 +41,7 @@ pub fn match_data_destroy_owned(data: MatchData) {
 // and thread-confined. Captures are meaningful only after a successful match.
 pub fn match(pattern: Pattern, data: MatchData, subject: []const u8, start: usize) MatchResult {
   if pattern == nil || data == nil || start > #len(subject) {
-    return MatchResult{ code: -33 }
+    return MatchResult{ code: -33, failure: io.Failure{ kind: io.Kind.System } }
   }
   empty: [1]u8
   pointer: *const u8 = &empty[0]
@@ -48,7 +49,7 @@ pub fn match(pattern: Pattern, data: MatchData, subject: []const u8, start: usiz
     pointer = &subject[0]
   }
   code := native_match(pattern, pointer, #len(subject), start, 0, data, nil)
-  return MatchResult{ code: code, matched: code >= 0, ok: code >= 0 || code == NoMatch }
+  return MatchResult{ code: code, matched: code >= 0, failure: io.failure_if(!(code >= 0 || code == NoMatch)) }
 }
 pub fn capture(data: MatchData, index: u32) Span {
   if data == nil || index >= native_count(data) {

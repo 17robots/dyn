@@ -13,6 +13,14 @@ pub enum Kind { Ok, InvalidInput, InvalidState, NotFound, PermissionDenied, Alre
 pub fn failed(failure: Failure) bool {
   return failure.kind != Kind.Ok
 }
+// For APIs that only say whether they worked: Kind.System when failed, zero
+// otherwise. Keep any native code the API gave in a field of its own.
+pub fn failure_if(failed: bool) Failure {
+  if failed {
+    return Failure{ kind: Kind.System }
+  }
+  return Failure{}
+}
 // A native error code with its portable kind; 0 is success.
 pub fn linux_failure(code: isize) Failure {
   return Failure{ kind: linux(code), native: code }

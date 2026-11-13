@@ -1,3 +1,4 @@
+use "std/io"
 extern fn sqlite_open "sqlite3_open"(name: c.string, database: *rawptr) c.int
 extern fn sqlite_close "sqlite3_close"(database: rawptr) c.int
 extern fn sqlite_exec "sqlite3_exec"(database: rawptr, sql: c.string, callback: rawptr, context: rawptr, error: *rawptr) c.int

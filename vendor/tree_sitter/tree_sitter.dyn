@@ -8,7 +8,7 @@ pub type Language = rawptr
 pub struct Point { row: u32, column: u32 }
 pub struct Edit { start_byte: u32, old_end_byte: u32, new_end_byte: u32, start_point: Point, old_end_point: Point, new_end_point: Point }
 pub struct Node { context: [4]u32, id: rawptr, tree: Tree }
-pub struct ParseResult { tree: Tree, ok: bool }
+pub struct ParseResult { tree: Tree, failure: io.Failure }
 
 pub fn parser_create_owned() Parser {
   return native_parser_new()
@@ -25,7 +25,7 @@ pub fn parser_language(parser: Parser, language: Language) bool {
 // when reparsing changed source. Syntax errors are represented in a successful tree.
 pub fn parse(parser: Parser, old_tree: Tree, source: []const u8) ParseResult {
   if parser == nil || #len(source) > 4294967295 {
-    return ParseResult{}
+    return ParseResult{ failure: io.Failure{ kind: io.Kind.System } }
   }
   empty: [1]u8
   pointer: *const u8 = &empty[0]
@@ -33,7 +33,7 @@ pub fn parse(parser: Parser, old_tree: Tree, source: []const u8) ParseResult {
     pointer = &source[0]
   }
   tree := native_parse(parser, old_tree, pointer, #cast(u32, #len(source)))
-  return ParseResult{ tree: tree, ok: tree != nil }
+  return ParseResult{ tree: tree, failure: io.failure_if(tree == nil) }
 }
 pub fn tree_destroy_owned(tree: Tree) {
   if tree != nil {

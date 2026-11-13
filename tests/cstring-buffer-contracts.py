@@ -56,12 +56,13 @@ fn main() {
  for byte in path { check(byte=='a') }
 }
 '''
-SQLITE = r'''use "vendor/sqlite" sqlite
+SQLITE = r'''use "std/io"
+use "vendor/sqlite" sqlite
 fn main() {
  backing:[11]u8
  for *byte in backing { byte.*=165 }
  result:=sqlite.open(":memory:",backing[1..10])
- if !result.ok || result.database==nil { #panic("SQLite exact CString buffer") }
+ if io.failed(result.failure) || result.database==nil { #panic("SQLite exact CString buffer") }
  if backing[0]!=165 || backing[10]!=165 { #panic("SQLite CString canaries") }
  if sqlite.close(result.database)!=0 { #panic("SQLite close") }
 }
@@ -105,13 +106,13 @@ fn loader(name:*const u8) rawptr {
 }
 fn main() {
  none:=gl.load(nil)
- if none.ok || !mem.equal(none.missing,"loader") || visited!=0 { #panic("nil loader") }
+ if !io.failed(none.failure) || !mem.equal(none.missing,"loader") || visited!=0 { #panic("nil loader") }
  loaded:=gl.load(loader)
- if !loaded.ok || visited!=#len(names) { #panic("OpenGL complete table") }
+ if io.failed(loaded.failure) || visited!=#len(names) { #panic("OpenGL complete table") }
  visited=0
  fail_second=true
  failed:=gl.load(loader)
- if failed.ok || visited!=2 || !mem.equal(failed.missing,names[1]) { #panic("OpenGL missing symbol") }
+ if !io.failed(failed.failure) || visited!=2 || !mem.equal(failed.missing,names[1]) { #panic("OpenGL missing symbol") }
 }
 '''.replace('COUNT', str(len(names))).replace('NAMES', ','.join(json.dumps(n) for n in names))
     run(work, 'opengl-loader', gl)

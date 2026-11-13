@@ -11,7 +11,7 @@ use "std/io" io
 // A zero limit passed to open selects 65536 draws or 64 MiB of coverage.
 pub struct Limits { draws: usize, coverage_bytes: usize }
 pub struct Renderer { handle: rawptr, limits: Limits }
-pub struct Result { kind: io.Kind, ok: bool }
+pub struct Result { kind: io.Kind, failure: io.Failure }
 extern fn native_open "dyn_ui_vk_open"() rawptr
 extern fn native_close "dyn_ui_vk_close"(handle: rawptr)
 extern fn native_render "dyn_ui_vk_render"(handle: rawptr, words: *const u32, count: u32, rgba: *u8, width: u32, height: u32) i32
@@ -19,11 +19,11 @@ struct Draw { bounds: ui.Rect, tint: ui.Color, coverage: []u8, next: *Draw }
 struct Build { arena: *mem.Arena, limits: Limits, count: usize, coverage_bytes: usize, first: *Draw, last: *Draw, kind: io.Kind }
 pub fn open(renderer: *Renderer, limits: Limits) Result {
   if renderer.handle != nil {
-    return Result{kind:io.Kind.InvalidState}
+    return Result{ kind:io.Kind.InvalidState, failure: io.Failure{ kind: io.Kind.System } }
   }
   handle := native_open()
   if handle == nil {
-    return Result{kind:io.Kind.System}
+    return Result{ kind:io.Kind.System, failure: io.Failure{ kind: io.Kind.System } }
   }
   chosen := limits
   if chosen.draws==0 {
@@ -33,7 +33,7 @@ pub fn open(renderer: *Renderer, limits: Limits) Result {
     chosen.coverage_bytes = 67108864
   }
   renderer.* = Renderer{handle:handle, limits:chosen}
-  return Result{ok:true}
+  return Result{}
 }
 pub fn close(renderer: *Renderer) {
   if renderer.handle != nil {
@@ -124,18 +124,18 @@ fn glyph(build: *Build, clip: ui.Rect, tint: ui.Color, font: software.Font, code
 // Rendering is synchronous and externally serialized for each owning Renderer.
 pub fn render(renderer: *Renderer, scratch: *mem.Arena, surface: *software.Surface, commands: *const ui.Command, font: software.Font) Result {
   if renderer.handle == nil {
-    return Result{kind:io.Kind.InvalidState}
+    return Result{ kind:io.Kind.InvalidState, failure: io.Failure{ kind: io.Kind.System } }
   }
   if surface.width < 0 || surface.height < 0 {
-    return Result{kind:io.Kind.InvalidInput}
+    return Result{ kind:io.Kind.InvalidInput, failure: io.Failure{ kind: io.Kind.System } }
   }
   if surface.width == 0 || surface.height == 0 {
-    return Result{ok:true}
+    return Result{}
   }
   width := #cast(usize, surface.width)
   height := #cast(usize, surface.height)
   if width > #len(surface.pixels)/4 || surface.stride < width*4 || height > #len(surface.pixels)/surface.stride {
-    return Result{kind:io.Kind.InvalidInput}
+    return Result{ kind:io.Kind.InvalidInput, failure: io.Failure{ kind: io.Kind.System } }
   }
   build := Build{arena:scratch, limits:renderer.limits}
   viewport := ui.Rect{width:surface.width, height:surface.height}
@@ -149,7 +149,7 @@ pub fn render(renderer: *Renderer, scratch: *mem.Arena, surface: *software.Surfa
         _ = glyph(&build, clip, command.color, font, command.codepoint, command.glyph_x, command.glyph_y)
       } else if command.kind == ui.Kind.Text {
         if font.glyph == nil || font.line_height <= 0 {
-          return Result{kind:io.Kind.InvalidInput}
+          return Result{ kind:io.Kind.InvalidInput, failure: io.Failure{ kind: io.Kind.System } }
         }
         x := #cast(i64, command.bounds.x)
         y := #cast(i64, command.bounds.y)
@@ -171,27 +171,27 @@ pub fn render(renderer: *Renderer, scratch: *mem.Arena, surface: *software.Surfa
             x += glyph(&build, clip, command.color, font, codepoint, x, y)
           }
           if build.kind != io.Kind.Ok {
-            return Result{kind:build.kind}
+            return Result{ kind:build.kind, failure: io.Failure{ kind: io.Kind.System } }
           }
         }
       } else {
-        return Result{kind:io.Kind.InvalidInput}
+        return Result{ kind:io.Kind.InvalidInput, failure: io.Failure{ kind: io.Kind.System } }
       }
     }
     if build.kind != io.Kind.Ok {
-      return Result{kind:build.kind}
+      return Result{ kind:build.kind, failure: io.Failure{ kind: io.Kind.System } }
     }
     command = command.next
   }
   if build.count == 0 {
-    return Result{ok:true}
+    return Result{}
   }
   max_words := #max(usize)/4
   if max_words > 0xffffffff {
     max_words = 0xffffffff
   }
   if build.count > (max_words-8)/8 {
-    return Result{kind:io.Kind.Overflow}
+    return Result{ kind:io.Kind.Overflow, failure: io.Failure{ kind: io.Kind.System } }
   }
   draw_words := 8+build.count*8
   coverage_words := build.coverage_bytes/4
@@ -199,7 +199,7 @@ pub fn render(renderer: *Renderer, scratch: *mem.Arena, surface: *software.Surfa
     coverage_words += 1
   }
   if coverage_words > max_words-draw_words {
-    return Result{kind:io.Kind.Overflow}
+    return Result{ kind:io.Kind.Overflow, failure: io.Failure{ kind: io.Kind.System } }
   }
   words := mem.push_array(u32, scratch, draw_words+coverage_words)
   words[2] = #cast(u32, build.count)
@@ -216,7 +216,7 @@ pub fn render(renderer: *Renderer, scratch: *mem.Arena, surface: *software.Surfa
     if #len(draw.coverage) != 0 {
       words[index+5] = 1
       if coverage_at > 0xffffffff || #len(draw.coverage) > 0xffffffff-coverage_at {
-        return Result{kind:io.Kind.Overflow}
+        return Result{ kind:io.Kind.Overflow, failure: io.Failure{ kind: io.Kind.System } }
       }
       words[index+6] = #cast(u32, coverage_at)
       for byte in draw.coverage {
@@ -236,15 +236,15 @@ pub fn render(renderer: *Renderer, scratch: *mem.Arena, surface: *software.Surfa
   }
   status := native_render(renderer.handle, &words[0], #cast(u32, #len(words)), &output[0], #cast(u32, surface.width), #cast(u32, surface.height))
   if status == 2 {
-    return Result{kind:io.Kind.Capacity}
+    return Result{ kind:io.Kind.Capacity, failure: io.Failure{ kind: io.Kind.System } }
   }
   if status != 1 {
-    return Result{kind:io.Kind.System}
+    return Result{ kind:io.Kind.System, failure: io.Failure{ kind: io.Kind.System } }
   }
   if surface.stride != width*4 {
     for row in 0..height {
       _ = mem.copy(surface.pixels[row*surface.stride..row*surface.stride+width*4], output[row*width*4..(row+1)*width*4])
     }
   }
-  return Result{ok:true}
+  return Result{}
 }

@@ -1,5 +1,5 @@
 pub enum TransactionMode { Deferred, Immediate, Exclusive }
-pub struct IntegerResult { value: i64, code: i32, ok: bool }
+pub struct IntegerResult { value: i64, code: i32, failure: io.Failure }
 // Applies to subsequent busy waits on this connection. Zero disables waiting.
 pub fn busy_timeout(database: Database, milliseconds: i32) i32 {
   if database == nil || milliseconds < 0 {
@@ -9,15 +9,15 @@ pub fn busy_timeout(database: Database, milliseconds: i32) i32 {
 }
 pub fn changes(database: Database) IntegerResult {
   if database == nil {
-    return IntegerResult{ code: InvalidArgument }
+    return IntegerResult{ code: InvalidArgument, failure: io.Failure{ kind: io.Kind.System } }
   }
-  return IntegerResult{ value: sqlite_changes(database), ok: true }
+  return IntegerResult{ value: sqlite_changes(database) }
 }
 pub fn last_insert_rowid(database: Database) IntegerResult {
   if database == nil {
-    return IntegerResult{ code: InvalidArgument }
+    return IntegerResult{ code: InvalidArgument, failure: io.Failure{ kind: io.Kind.System } }
   }
-  return IntegerResult{ value: sqlite_last_rowid(database), ok: true }
+  return IntegerResult{ value: sqlite_last_rowid(database) }
 }
 // Transactions belong to the connection. A failed commit may leave one active;
 // query in_transaction, retry or roll back before reusing the connection.

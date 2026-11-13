@@ -349,8 +349,8 @@ pub fn write_atomic(destination: []const u8, temporary: []const u8, source: []co
 
 fn environment_get(name: []const u8, destination: []u8) PathResult {
   result := platform.environment_get(name, destination)
-  if !result.ok {
-    return PathResult{ value: destination[..0], failure: io.linux_failure(result.error) }
+  if io.failed(result.failure) {
+    return PathResult{ value: destination[..0], failure: io.linux_failure(result.failure.native) }
   }
   if !result.found {
     return PathResult{ value: destination[..0], failure: io.linux_failure(-2) }

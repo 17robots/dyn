@@ -25,7 +25,7 @@ fn append(out:[]u8,at:*usize,value:u32) {
 }
 fn save(arena:*mem.Arena,api:*const bidi.Api,text:[]const u8,base:u32,path:[]const u8) {
  result:=bidi.resolve(arena,api,text,base)
- check(result.ok)
+ check(!errors.failed(result.failure))
  p:=result.value
  n:=#len(p.logical)
  out:=mem.push_bytes_uninit(arena,8+n*32+4*(4+n*8))
@@ -47,7 +47,7 @@ fn save(arena:*mem.Arena,api:*const bidi.Api,text:[]const u8,base:u32,path:[]con
  if n>=3 {starts[3]=n-3}
  for k in 0..4 {
   line:=bidi.reorder(arena,api,&p,starts[k],ends[k])
-  check(line.ok)
+  check(!errors.failed(line.failure))
   append(out,&at,#cast(u32,#len(line.value.levels)))
   for i in 0..#len(line.value.levels) {
    append(out,&at,#cast(u32,line.value.visual_to_logical[i]))
@@ -83,32 +83,32 @@ fn main() {
  library:=dynlib.open("LIBRARY",dynlib.Now)
  check(library.failure.kind == errors.Kind.Ok)
  loaded:=bidi.load(library.value)
- check(loaded.ok)
+ check(!errors.failed(loaded.failure))
  api:=loaded.api
  CASE_CALLS
  mark:=mem.arena_mark(arena)
- check(!bidi.resolve(arena,&api,"\xc0\xaf",bidi.Auto).ok && mem.arena_mark(arena)==mark)
- check(!bidi.resolve(arena,&api,"a\nb",bidi.Auto).ok && mem.arena_mark(arena)==mark)
- check(!bidi.resolve(arena,&api,"a\xe2\x80\xa9b",bidi.Auto).ok && mem.arena_mark(arena)==mark)
- check(!bidi.resolve(arena,&api,"abc",123).ok && mem.arena_mark(arena)==mark)
- check(!bidi.load(nil).ok)
+ check(errors.failed(bidi.resolve(arena,&api,"\xc0\xaf",bidi.Auto).failure) && mem.arena_mark(arena)==mark)
+ check(errors.failed(bidi.resolve(arena,&api,"a\nb",bidi.Auto).failure) && mem.arena_mark(arena)==mark)
+ check(errors.failed(bidi.resolve(arena,&api,"a\xe2\x80\xa9b",bidi.Auto).failure) && mem.arena_mark(arena)==mark)
+ check(errors.failed(bidi.resolve(arena,&api,"abc",123).failure) && mem.arena_mark(arena)==mark)
+ check(errors.failed(bidi.load(nil).failure))
  nil_api:=bidi.Api{}
- check(bidi.resolve(arena,&nil_api,"",bidi.Auto).ok)
+ check(!errors.failed(bidi.resolve(arena,&nil_api,"",bidi.Auto).failure))
  check(bidi.resolve(arena,&nil_api,"a",bidi.Auto).kind==errors.Kind.InvalidState && mem.arena_mark(arena)==mark)
  broken:=api
  broken.log2vis=fail_resolve
  check(bidi.resolve(arena,&broken,"abc",bidi.Auto).kind==errors.Kind.System && mem.arena_mark(arena)==mark)
  source:[4]u8=[97,215,144,98]
  owned:=bidi.resolve(arena,&api,source[..],bidi.Auto)
- check(owned.ok && owned.value.logical[1]==1488 && owned.value.starts[1]==1 && owned.value.ends[1]==3)
+ check(!errors.failed(owned.failure) && owned.value.logical[1]==1488 && owned.value.starts[1]==1 && owned.value.ends[1]==3)
  source[1]=120
  paragraph:=owned.value
  saved_level:=paragraph.levels[1]
  line:=bidi.reorder(arena,&api,&paragraph,0,2)
- check(line.ok && paragraph.levels[1]==saved_level)
+ check(!errors.failed(line.failure) && paragraph.levels[1]==saved_level)
  mark=mem.arena_mark(arena)
- check(!bidi.reorder(arena,&api,&paragraph,2,1).ok && mem.arena_mark(arena)==mark)
- check(!bidi.reorder(arena,&api,&paragraph,0,4).ok && mem.arena_mark(arena)==mark)
+ check(errors.failed(bidi.reorder(arena,&api,&paragraph,2,1).failure) && mem.arena_mark(arena)==mark)
+ check(errors.failed(bidi.reorder(arena,&api,&paragraph,0,4).failure) && mem.arena_mark(arena)==mark)
  broken=api
  broken.reorder_line=fail_reorder
  check(bidi.reorder(arena,&broken,&paragraph,0,2).kind==errors.Kind.System && mem.arena_mark(arena)==mark)

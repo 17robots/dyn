@@ -7,12 +7,12 @@ use "std/os/linux/sys"
 fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, configuration: Options) SpawnResult {
   native := os.spawn_environment(arena, path, arguments, configuration.environment,
     os.SpawnOptions{ input: native_stream(configuration.input), output: native_stream(configuration.output), error: native_stream(configuration.error), directory: configuration.directory })
-  return SpawnResult{ value: Child{ handle: native.process, active: native.ok }, failure: io.linux_failure(native.error) }
+  return SpawnResult{ value: Child{ handle: native.process, active: !io.failed(native.failure) }, failure: io.linux_failure(native.failure.native) }
 }
 fn wait_native(child: *Child, nonblocking: bool) ExitResult {
   value := os.wait(child.handle, nonblocking)
-  if !value.ok {
-    return ExitResult{ failure: io.linux_failure(value.error) }
+  if io.failed(value.failure) {
+    return ExitResult{ failure: io.linux_failure(value.failure.native) }
   }
   if value.process == 0 {
     return ExitResult{}
@@ -25,11 +25,11 @@ fn wait_native(child: *Child, nonblocking: bool) ExitResult {
 }
 fn terminate_native(child: *Child) Status {
   result := os.send_signal(child.handle, 9)
-  return Status{ failure: io.linux_failure(result.error) }
+  return Status{ failure: io.linux_failure(result.failure.native) }
 }
 fn close_native(handle: isize) Status {
   result := os.close_descriptor(handle)
-  return Status{ failure: io.linux_failure(result.error) }
+  return Status{ failure: io.linux_failure(result.failure.native) }
 }
 fn pipe_native() Pipe {
   descriptors: [2]i32
@@ -66,7 +66,7 @@ fn sleep_native() {
 }
 fn environment_native(name: []const u8, destination: []u8) EnvironmentResult {
   result := os.environment_get(name, destination)
-  return EnvironmentResult{ value: result.value, found: result.found, failure: io.linux_failure(result.error) }
+  return EnvironmentResult{ value: result.value, found: result.found, failure: io.linux_failure(result.failure.native) }
 }
 
 fn duplicate_native(value: isize) HandleResult {

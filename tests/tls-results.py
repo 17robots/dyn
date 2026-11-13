@@ -185,12 +185,12 @@ with tempfile.TemporaryDirectory(prefix='dyn-tls-results-') as temporary:
   if mode == 2 { detail = ErrorKind.WantWrite }
   if mode == 3 { detail = ErrorKind.Verification }
   if mode == 4 { detail = ErrorKind.Provider }
-  return Result{error: detail, provider_code: 18446744073709551615, provider_status: -7}''')
+  return Result{error: detail, provider_code: 18446744073709551615, provider_status: -7, failure: io.Failure{kind: io.Kind.System}}''')
     provider = replace_body(provider, 'read', '  _ = destination\nreturn handshake(connection)')
     provider = replace_body(provider, 'write', '  _ = source\nreturn handshake(connection)')
-    provider = replace_body(provider, 'set_alpn_result', '  _ = connection\n_ = protocols\nreturn Result{ok: true}')
-    provider = replace_body(provider, 'shutdown_result', '  _ = connection\nreturn Result{error: ErrorKind.WantRead, provider_status: 0}')
-    provider = replace_body(provider, 'subject_text_owned', '  _ = certificate\nreturn SubjectTextResult{provider_code: 18446744073709551615}')
+    provider = replace_body(provider, 'set_alpn_result', '  _ = connection\n_ = protocols\nreturn Result{}')
+    provider = replace_body(provider, 'shutdown_result', '  _ = connection\nreturn Result{error: ErrorKind.WantRead, provider_status: 0, failure: io.Failure{kind: io.Kind.System}}')
+    provider = replace_body(provider, 'subject_text_owned', '  _ = certificate\nreturn SubjectTextResult{provider_code: 18446744073709551615, failure: io.Failure{kind: io.Kind.System}}')
     (mock / 'stub').mkdir()
     (mock / 'stub/stub.dyn').write_text(provider)
     for sibling in (ROOT / 'vendor/openssl/tls').glob('*.dyn'):

@@ -35,15 +35,17 @@ pub fn read(fd: u32, bytes: []u8) io.Transfer {
   }
   return io.Transfer{ transferred: count, status: io.Status.Complete }
 }
-pub struct OpenResult { fd: u32, error: u32, ok: bool }
+pub struct OpenResult { fd: u32, failure: io.Failure }
 // Relative to a directory descriptor granted by the host. No implicit preopens.
 pub fn open_read(directory: u32, path: []const u8) OpenResult {
   if #len(path) == 0 {
-    return OpenResult{ error: 28 }
+    return OpenResult{ failure: io.wasi_failure(#cast(isize, 28)) }
   }
   result := OpenResult{}
-  result.error = native_open(directory, &path[0], #len(path), &result.fd)
-  result.ok = result.error == 0
+  error := native_open(directory, &path[0], #len(path), &result.fd)
+  if error != 0 {
+    result.failure = io.wasi_failure(#cast(isize, error))
+  }
   return result
 }
 pub fn random(bytes: []u8) u32 {
@@ -52,21 +54,21 @@ pub fn random(bytes: []u8) u32 {
   }
   return native_random(&bytes[0], #len(bytes))
 }
-pub struct Arguments { values: [][]const u8, error: u32, ok: bool }
+pub struct Arguments { values: [][]const u8, failure: io.Failure }
 // Both strings and slice descriptors belong to the supplied arena. Failure rewinds.
 pub fn arguments(arena: *mem.Arena) Arguments {
   count: usize = 0
   size: usize = 0
   error := native_sizes(&count, &size)
   if error != 0 {
-    return Arguments{ error: error }
+    return Arguments{ failure: io.wasi_failure(#cast(isize, error)) }
   }
   if count == 0 {
-    return Arguments{ ok: true }
+    return Arguments{}
   }
   maximum := #max(usize)
   if count > maximum / #sizeof([]const u8) || count > maximum / #sizeof(*u8) {
-    return Arguments{ error: 48 }
+    return Arguments{ failure: io.wasi_failure(#cast(isize, 48)) }
   }
   mark := mem.arena_mark(arena)
   pointer_allocation := mem.arena_try_push(arena, count * #sizeof(*u8), #alignof(*u8))
@@ -74,7 +76,7 @@ pub fn arguments(arena: *mem.Arena) Arguments {
   slice_allocation := mem.arena_try_push(arena, count * #sizeof([]const u8), #alignof([]const u8))
   if !pointer_allocation.ok || !byte_allocation.ok || !slice_allocation.ok {
     mem.arena_rewind(arena, mark)
-    return Arguments{ error: 48 }
+    return Arguments{ failure: io.wasi_failure(#cast(isize, 48)) }
   }
   pointers := pointer_allocation.memory
   bytes := byte_allocation.memory
@@ -82,7 +84,7 @@ pub fn arguments(arena: *mem.Arena) Arguments {
   error = native_args(pointers, bytes)
   if error != 0 {
     mem.arena_rewind(arena, mark)
-    return Arguments{ error: error }
+    return Arguments{ failure: io.wasi_failure(#cast(isize, error)) }
   }
   raw := #slice(#cast(**u8, pointers), count)
   values := #slice(#cast(*[]const u8, slices), count)
@@ -91,7 +93,7 @@ pub fn arguments(arena: *mem.Arena) Arguments {
     offset := #cast(usize, raw[i]) - #cast(usize, bytes)
     if offset >= size {
       mem.arena_rewind(arena, mark)
-      return Arguments{ error: 28 }
+      return Arguments{ failure: io.wasi_failure(#cast(isize, 28)) }
     }
     tail := #slice(raw[i], size - offset)
     length: usize = 0
@@ -100,10 +102,10 @@ pub fn arguments(arena: *mem.Arena) Arguments {
     }
     if length == #len(tail) {
       mem.arena_rewind(arena, mark)
-      return Arguments{ error: 28 }
+      return Arguments{ failure: io.wasi_failure(#cast(isize, 28)) }
     }
     values[i] = tail[..length]
     i += 1
   }
-  return Arguments{ values: values, ok: true }
+  return Arguments{ values: values }
 }

@@ -1,5 +1,6 @@
 use "std/parse" parse
 use "std/c"
+use "std/io"
 // OpenGL 3.3 core subset. No link dependency: caller supplies context loader.
 // Table belongs to that context and thread; reload for a different context.
 // Calls use native GL contracts and errors (get_error); no hidden allocations.
@@ -126,7 +127,7 @@ pub struct Api {
   draw_arrays: fn(u32, i32, i32),
   read_pixels: fn(i32, i32, i32, i32, u32, u32, rawptr),
 }
-pub struct LoadResult { api: Api, missing: []const u8, ok: bool }
+pub struct LoadResult { api: Api, missing: []const u8, failure: io.Failure }
 fn symbol(loader: Loader, name: []const u8) rawptr {
   buffer: [64]u8
   encoded := c.string_into(buffer[..], name)
@@ -139,208 +140,208 @@ fn symbol(loader: Loader, name: []const u8) rawptr {
 // Failure returns no callable table and identifies the first missing function.
 pub fn load(loader: Loader) LoadResult {
   if loader == nil {
-    return LoadResult{ missing: "loader" }
+    return LoadResult{ missing: "loader", failure: io.Failure{ kind: io.Kind.System } }
   }
   api := Api{}
   api.clear_color = #cast(fn(f32, f32, f32, f32), symbol(loader, "glClearColor"))
   if api.clear_color == nil {
-    return LoadResult{ missing: "glClearColor" }
+    return LoadResult{ missing: "glClearColor", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.clear = #cast(fn(u32), symbol(loader, "glClear"))
   if api.clear == nil {
-    return LoadResult{ missing: "glClear" }
+    return LoadResult{ missing: "glClear", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.viewport = #cast(fn(i32, i32, i32, i32), symbol(loader, "glViewport"))
   if api.viewport == nil {
-    return LoadResult{ missing: "glViewport" }
+    return LoadResult{ missing: "glViewport", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.get_error = #cast(fn() u32, symbol(loader, "glGetError"))
   if api.get_error == nil {
-    return LoadResult{ missing: "glGetError" }
+    return LoadResult{ missing: "glGetError", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.create_shader = #cast(fn(u32) u32, symbol(loader, "glCreateShader"))
   if api.create_shader == nil {
-    return LoadResult{ missing: "glCreateShader" }
+    return LoadResult{ missing: "glCreateShader", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.shader_source = #cast(fn(u32, i32, **const u8, *const i32), symbol(loader, "glShaderSource"))
   if api.shader_source == nil {
-    return LoadResult{ missing: "glShaderSource" }
+    return LoadResult{ missing: "glShaderSource", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.compile_shader = #cast(fn(u32), symbol(loader, "glCompileShader"))
   if api.compile_shader == nil {
-    return LoadResult{ missing: "glCompileShader" }
+    return LoadResult{ missing: "glCompileShader", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.get_shader_iv = #cast(fn(u32, u32, *i32), symbol(loader, "glGetShaderiv"))
   if api.get_shader_iv == nil {
-    return LoadResult{ missing: "glGetShaderiv" }
+    return LoadResult{ missing: "glGetShaderiv", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.get_shader_log = #cast(fn(u32, i32, *i32, *u8), symbol(loader, "glGetShaderInfoLog"))
   if api.get_shader_log == nil {
-    return LoadResult{ missing: "glGetShaderInfoLog" }
+    return LoadResult{ missing: "glGetShaderInfoLog", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.delete_shader = #cast(fn(u32), symbol(loader, "glDeleteShader"))
   if api.delete_shader == nil {
-    return LoadResult{ missing: "glDeleteShader" }
+    return LoadResult{ missing: "glDeleteShader", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.create_program = #cast(fn() u32, symbol(loader, "glCreateProgram"))
   if api.create_program == nil {
-    return LoadResult{ missing: "glCreateProgram" }
+    return LoadResult{ missing: "glCreateProgram", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.attach_shader = #cast(fn(u32, u32), symbol(loader, "glAttachShader"))
   if api.attach_shader == nil {
-    return LoadResult{ missing: "glAttachShader" }
+    return LoadResult{ missing: "glAttachShader", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.link_program = #cast(fn(u32), symbol(loader, "glLinkProgram"))
   if api.link_program == nil {
-    return LoadResult{ missing: "glLinkProgram" }
+    return LoadResult{ missing: "glLinkProgram", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.get_program_iv = #cast(fn(u32, u32, *i32), symbol(loader, "glGetProgramiv"))
   if api.get_program_iv == nil {
-    return LoadResult{ missing: "glGetProgramiv" }
+    return LoadResult{ missing: "glGetProgramiv", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.get_program_log = #cast(fn(u32, i32, *i32, *u8), symbol(loader, "glGetProgramInfoLog"))
   if api.get_program_log == nil {
-    return LoadResult{ missing: "glGetProgramInfoLog" }
+    return LoadResult{ missing: "glGetProgramInfoLog", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.use_program = #cast(fn(u32), symbol(loader, "glUseProgram"))
   if api.use_program == nil {
-    return LoadResult{ missing: "glUseProgram" }
+    return LoadResult{ missing: "glUseProgram", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.delete_program = #cast(fn(u32), symbol(loader, "glDeleteProgram"))
   if api.delete_program == nil {
-    return LoadResult{ missing: "glDeleteProgram" }
+    return LoadResult{ missing: "glDeleteProgram", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.gen_vertex_arrays = #cast(fn(i32, *u32), symbol(loader, "glGenVertexArrays"))
   if api.gen_vertex_arrays == nil {
-    return LoadResult{ missing: "glGenVertexArrays" }
+    return LoadResult{ missing: "glGenVertexArrays", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.bind_vertex_array = #cast(fn(u32), symbol(loader, "glBindVertexArray"))
   if api.bind_vertex_array == nil {
-    return LoadResult{ missing: "glBindVertexArray" }
+    return LoadResult{ missing: "glBindVertexArray", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.delete_vertex_arrays = #cast(fn(i32, *const u32), symbol(loader, "glDeleteVertexArrays"))
   if api.delete_vertex_arrays == nil {
-    return LoadResult{ missing: "glDeleteVertexArrays" }
+    return LoadResult{ missing: "glDeleteVertexArrays", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.gen_buffers = #cast(fn(i32, *u32), symbol(loader, "glGenBuffers"))
   if api.gen_buffers == nil {
-    return LoadResult{ missing: "glGenBuffers" }
+    return LoadResult{ missing: "glGenBuffers", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.bind_buffer = #cast(fn(u32, u32), symbol(loader, "glBindBuffer"))
   if api.bind_buffer == nil {
-    return LoadResult{ missing: "glBindBuffer" }
+    return LoadResult{ missing: "glBindBuffer", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.buffer_data = #cast(fn(u32, isize, rawptr, u32), symbol(loader, "glBufferData"))
   if api.buffer_data == nil {
-    return LoadResult{ missing: "glBufferData" }
+    return LoadResult{ missing: "glBufferData", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.delete_buffers = #cast(fn(i32, *const u32), symbol(loader, "glDeleteBuffers"))
   if api.delete_buffers == nil {
-    return LoadResult{ missing: "glDeleteBuffers" }
+    return LoadResult{ missing: "glDeleteBuffers", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.enable_vertex_attribute = #cast(fn(u32), symbol(loader, "glEnableVertexAttribArray"))
   if api.enable_vertex_attribute == nil {
-    return LoadResult{ missing: "glEnableVertexAttribArray" }
+    return LoadResult{ missing: "glEnableVertexAttribArray", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.vertex_attribute = #cast(fn(u32, i32, u32, u8, i32, rawptr), symbol(loader, "glVertexAttribPointer"))
   if api.vertex_attribute == nil {
-    return LoadResult{ missing: "glVertexAttribPointer" }
+    return LoadResult{ missing: "glVertexAttribPointer", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.draw_arrays = #cast(fn(u32, i32, i32), symbol(loader, "glDrawArrays"))
   if api.draw_arrays == nil {
-    return LoadResult{ missing: "glDrawArrays" }
+    return LoadResult{ missing: "glDrawArrays", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.read_pixels = #cast(fn(i32, i32, i32, i32, u32, u32, rawptr), symbol(loader, "glReadPixels"))
   if api.read_pixels == nil {
-    return LoadResult{ missing: "glReadPixels" }
+    return LoadResult{ missing: "glReadPixels", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.get_integer = #cast(fn(u32, *i32), symbol(loader, "glGetIntegerv"))
   if api.get_integer == nil {
-    return LoadResult{ missing: "glGetIntegerv" }
+    return LoadResult{ missing: "glGetIntegerv", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.enable = #cast(fn(u32), symbol(loader, "glEnable"))
   if api.enable == nil {
-    return LoadResult{ missing: "glEnable" }
+    return LoadResult{ missing: "glEnable", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.disable = #cast(fn(u32), symbol(loader, "glDisable"))
   if api.disable == nil {
-    return LoadResult{ missing: "glDisable" }
+    return LoadResult{ missing: "glDisable", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.is_enabled = #cast(fn(u32) u8, symbol(loader, "glIsEnabled"))
   if api.is_enabled == nil {
-    return LoadResult{ missing: "glIsEnabled" }
+    return LoadResult{ missing: "glIsEnabled", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.scissor = #cast(fn(i32, i32, i32, i32), symbol(loader, "glScissor"))
   if api.scissor == nil {
-    return LoadResult{ missing: "glScissor" }
+    return LoadResult{ missing: "glScissor", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.blend_func_separate = #cast(fn(u32, u32, u32, u32), symbol(loader, "glBlendFuncSeparate"))
   if api.blend_func_separate == nil {
-    return LoadResult{ missing: "glBlendFuncSeparate" }
+    return LoadResult{ missing: "glBlendFuncSeparate", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.blend_equation_separate = #cast(fn(u32, u32), symbol(loader, "glBlendEquationSeparate"))
   if api.blend_equation_separate == nil {
-    return LoadResult{ missing: "glBlendEquationSeparate" }
+    return LoadResult{ missing: "glBlendEquationSeparate", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.active_texture = #cast(fn(u32), symbol(loader, "glActiveTexture"))
   if api.active_texture == nil {
-    return LoadResult{ missing: "glActiveTexture" }
+    return LoadResult{ missing: "glActiveTexture", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.bind_sampler = #cast(fn(u32, u32), symbol(loader, "glBindSampler"))
   if api.bind_sampler == nil {
-    return LoadResult{ missing: "glBindSampler" }
+    return LoadResult{ missing: "glBindSampler", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.gen_textures = #cast(fn(i32, *u32), symbol(loader, "glGenTextures"))
   if api.gen_textures == nil {
-    return LoadResult{ missing: "glGenTextures" }
+    return LoadResult{ missing: "glGenTextures", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.bind_texture = #cast(fn(u32, u32), symbol(loader, "glBindTexture"))
   if api.bind_texture == nil {
-    return LoadResult{ missing: "glBindTexture" }
+    return LoadResult{ missing: "glBindTexture", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.delete_textures = #cast(fn(i32, *const u32), symbol(loader, "glDeleteTextures"))
   if api.delete_textures == nil {
-    return LoadResult{ missing: "glDeleteTextures" }
+    return LoadResult{ missing: "glDeleteTextures", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.tex_image_2d = #cast(fn(u32, i32, i32, i32, i32, i32, u32, u32, rawptr), symbol(loader, "glTexImage2D"))
   if api.tex_image_2d == nil {
-    return LoadResult{ missing: "glTexImage2D" }
+    return LoadResult{ missing: "glTexImage2D", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.tex_sub_image_2d = #cast(fn(u32, i32, i32, i32, i32, i32, u32, u32, rawptr), symbol(loader, "glTexSubImage2D"))
   if api.tex_sub_image_2d == nil {
-    return LoadResult{ missing: "glTexSubImage2D" }
+    return LoadResult{ missing: "glTexSubImage2D", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.tex_parameter_i = #cast(fn(u32, u32, i32), symbol(loader, "glTexParameteri"))
   if api.tex_parameter_i == nil {
-    return LoadResult{ missing: "glTexParameteri" }
+    return LoadResult{ missing: "glTexParameteri", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.pixel_store_i = #cast(fn(u32, i32), symbol(loader, "glPixelStorei"))
   if api.pixel_store_i == nil {
-    return LoadResult{ missing: "glPixelStorei" }
+    return LoadResult{ missing: "glPixelStorei", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.get_uniform_location = #cast(fn(u32, *const u8) i32, symbol(loader, "glGetUniformLocation"))
   if api.get_uniform_location == nil {
-    return LoadResult{ missing: "glGetUniformLocation" }
+    return LoadResult{ missing: "glGetUniformLocation", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.uniform_1i = #cast(fn(i32, i32), symbol(loader, "glUniform1i"))
   if api.uniform_1i == nil {
-    return LoadResult{ missing: "glUniform1i" }
+    return LoadResult{ missing: "glUniform1i", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.uniform_2f = #cast(fn(i32, f32, f32), symbol(loader, "glUniform2f"))
   if api.uniform_2f == nil {
-    return LoadResult{ missing: "glUniform2f" }
+    return LoadResult{ missing: "glUniform2f", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.uniform_4f = #cast(fn(i32, f32, f32, f32, f32), symbol(loader, "glUniform4f"))
   if api.uniform_4f == nil {
-    return LoadResult{ missing: "glUniform4f" }
+    return LoadResult{ missing: "glUniform4f", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.color_mask = #cast(fn(u8, u8, u8, u8), symbol(loader, "glColorMask"))
   if api.color_mask == nil {
-    return LoadResult{missing:"glColorMask"}
+    return LoadResult{ missing:"glColorMask", failure: io.Failure{ kind: io.Kind.System } }
   }
   api.polygon_mode = #cast(fn(u32, u32), symbol(loader, "glPolygonMode"))
   if api.polygon_mode == nil {
-    return LoadResult{missing:"glPolygonMode"}
+    return LoadResult{ missing:"glPolygonMode", failure: io.Failure{ kind: io.Kind.System } }
   }
-  return LoadResult{ api: api, ok: true }
+  return LoadResult{ api: api }
 }

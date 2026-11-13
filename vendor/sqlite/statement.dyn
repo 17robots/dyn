@@ -4,10 +4,10 @@ use "std/unicode/utf8"
 // fields directly. Database must remain open until every statement is finalized.
 pub enum State { Ready, Row, Done, Failed }
 pub struct Statement { handle: rawptr, state: State, code: i32 }
-pub struct PrepareResult { statement: Statement, consumed: usize, empty: bool, code: i32, ok: bool }
-pub struct StepResult { state: State, code: i32, ok: bool }
+pub struct PrepareResult { statement: Statement, consumed: usize, empty: bool, code: i32, failure: io.Failure }
+pub struct StepResult { state: State, code: i32, failure: io.Failure }
 pub enum ColumnKind { Null, Integer, Float, Text, Blob }
-pub struct Column { kind: ColumnKind, integer: i64, real: f64, bytes: []const u8, code: i32, ok: bool }
+pub struct Column { kind: ColumnKind, integer: i64, real: f64, bytes: []const u8, code: i32, failure: io.Failure }
 
 // Negative codes are wrapper failures; positive codes are unchanged SQLite codes.
 pub const InvalidArgument: i32 = -1
@@ -19,18 +19,18 @@ pub const Overflow: i32 = -3
 // SQL is borrowed only during this call and needs no terminating NUL or scratch.
 pub fn prepare(database: Database, sql: []const u8) PrepareResult {
   if database == nil {
-    return PrepareResult{ code: InvalidArgument }
+    return PrepareResult{ code: InvalidArgument, failure: io.Failure{ kind: io.Kind.System } }
   }
   if #len(sql) > 2147483647 {
-    return PrepareResult{ code: Overflow }
+    return PrepareResult{ code: Overflow, failure: io.Failure{ kind: io.Kind.System } }
   }
   for byte in sql {
     if byte == 0 {
-      return PrepareResult{ code: InvalidArgument }
+      return PrepareResult{ code: InvalidArgument, failure: io.Failure{ kind: io.Kind.System } }
     }
   }
   if #len(sql) == 0 {
-    return PrepareResult{ empty: true, ok: true }
+    return PrepareResult{ empty: true }
   }
   handle: rawptr = nil
   tail: c.string = nil
@@ -39,23 +39,23 @@ pub fn prepare(database: Database, sql: []const u8) PrepareResult {
     if handle != nil {
       _ = sqlite_finalize(handle)
     }
-    return PrepareResult{ code: code }
+    return PrepareResult{ code: code, failure: io.Failure{ kind: io.Kind.System } }
   }
   consumed := #cast(usize, tail) - #cast(usize, &sql[0])
-  return PrepareResult{ statement: Statement{ handle: handle }, consumed: consumed, empty: handle == nil, ok: true }
+  return PrepareResult{ statement: Statement{ handle: handle }, consumed: consumed, empty: handle == nil }
 }
 
 // Row and Done are successful, distinct outcomes. Repeated calls after Done or
 // failure do not implicitly re-execute SQL. reset is required before reuse.
 pub fn step(statement: *Statement) StepResult {
   if statement.handle == nil {
-    return StepResult{ state: State.Failed, code: InvalidArgument }
+    return StepResult{ state: State.Failed, code: InvalidArgument, failure: io.Failure{ kind: io.Kind.System } }
   }
   if statement.state == State.Done {
-    return StepResult{ state: State.Done, code: statement.code, ok: true }
+    return StepResult{ state: State.Done, code: statement.code }
   }
   if statement.state == State.Failed {
-    return StepResult{ state: State.Failed, code: statement.code }
+    return StepResult{ state: State.Failed, code: statement.code, failure: io.Failure{ kind: io.Kind.System } }
   }
   statement.code = sqlite_step(statement.handle)
   if statement.code == 100 {
@@ -65,7 +65,7 @@ pub fn step(statement: *Statement) StepResult {
   } else {
     statement.state = State.Failed
   }
-  return StepResult{ state: statement.state, code: statement.code, ok: statement.state != State.Failed }
+  return StepResult{ state: statement.state, code: statement.code, failure: io.failure_if(statement.state == State.Failed) }
 }
 
 // Always resets execution state, even when reporting the preceding execution's
@@ -165,17 +165,17 @@ pub fn column_count(statement: *const Statement) i32 {
 // borrow SQLite storage until step/reset/finalize; clone them into an arena to retain.
 pub fn column(statement: *const Statement, index: i32) Column {
   if statement.handle == nil || statement.state != State.Row || index < 0 || index >= sqlite_column_count(statement.handle) {
-    return Column{ code: InvalidArgument }
+    return Column{ code: InvalidArgument, failure: io.Failure{ kind: io.Kind.System } }
   }
   kind := sqlite_column_type(statement.handle, index)
   if kind == 5 {
-    return Column{ kind: ColumnKind.Null, ok: true }
+    return Column{ kind: ColumnKind.Null }
   }
   if kind == 1 {
-    return Column{ kind: ColumnKind.Integer, integer: sqlite_column_integer(statement.handle, index), ok: true }
+    return Column{ kind: ColumnKind.Integer, integer: sqlite_column_integer(statement.handle, index) }
   }
   if kind == 2 {
-    return Column{ kind: ColumnKind.Float, real: sqlite_column_float(statement.handle, index), ok: true }
+    return Column{ kind: ColumnKind.Float, real: sqlite_column_float(statement.handle, index) }
   }
   pointer: *const u8 = nil
   result_kind := ColumnKind.Text
@@ -185,14 +185,14 @@ pub fn column(statement: *const Statement, index: i32) Column {
     pointer = sqlite_column_blob(statement.handle, index)
     result_kind = ColumnKind.Blob
   } else {
-    return Column{ code: InvalidArgument }
+    return Column{ code: InvalidArgument, failure: io.Failure{ kind: io.Kind.System } }
   }
   length := sqlite_column_bytes(statement.handle, index)
   if pointer == nil && (length != 0 || kind == 3) {
-    return Column{ code: 7 }
+    return Column{ code: 7, failure: io.Failure{ kind: io.Kind.System } }
   }
   if length == 0 {
-    return Column{ kind: result_kind, bytes: "", ok: true }
+    return Column{ kind: result_kind, bytes: "" }
   }
-  return Column{ kind: result_kind, bytes: #slice(pointer, length), ok: true }
+  return Column{ kind: result_kind, bytes: #slice(pointer, length) }
 }

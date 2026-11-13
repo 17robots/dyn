@@ -57,7 +57,7 @@ pub fn certificate_subject(arena: *memory.Arena, certificate: Certificate) TextR
     return TextResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
   formatted := provider.subject_text_owned(certificate)
-  if !formatted.ok {
+  if io.failed(formatted.failure) {
     return TextResult{ provider_code: formatted.provider_code, failure: io.Failure{ kind: io.Kind.System } }
   }
   defer provider.subject_text_free_owned(formatted.value)

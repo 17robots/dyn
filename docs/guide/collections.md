@@ -20,13 +20,15 @@ stack or arena storage. It never stores an allocator or obtains heap memory impl
 
 ```dyn
 use "std/bytes/builder"
+use "std/io"
 use "std/mem"
 
 fn main() {
   storage: [256]u8
   arena := mem.arena_from_buffer(storage[..])
   text := builder.Builder{}
-  if builder.append_grow(&text, arena, "hello") != builder.ErrorKind.None {
+  builder.append_grow(&text, arena, "hello")
+  if io.failed(text.failure) {
     #panic("builder size")
   }
   _ = builder.bytes(&text)
