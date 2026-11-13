@@ -48,6 +48,17 @@ typedef struct {
   char gap_module[4096];
 } SemaReport;
 static _Thread_local SemaReport sema_report;
+/* Set on a thread that checks function bodies for sema_parallel. What only
+   the driver's thread may do (create instances, lower an instance's body,
+   add reflection strings, grow a shared array past the worker's region)
+   abandons the function there; the driver checks it again in order. */
+typedef struct SemaWork SemaWork;
+static _Thread_local SemaWork *sema_work;
+static void sema_work_abort(void);
+/* A worker records each type it creates, in order: kind 0 pointer, 1 array, 2 slice, 3 function. */
+static void sema_work_created(unsigned kind, uint32_t index);
+static void sema_work_out_of_memory(void);
+#define SEMA_SERIAL_ONLY(fail) do { if (sema_work) { sema_work_abort(); fail; } } while (0)
 /* Errors inside a module with no source file for the target all share that
    cause: report it once per module instead of every missing name. */
 static bool target_gap_reported(DynSpan span, const DynSource *s) {
@@ -80,6 +91,12 @@ static void error_span(DynSpan span, const DynSource *s, unsigned *e,
     return;
   }
   dyn_diagnostic_source("error", s, span.start_byte, span.end_byte, m);
+}
+/* A worker checking a body in parallel fails the program on it, rather
+   than taking it as an ordinary error to check again serially. */
+static void error_out_of_memory(DynSpan span, const DynSource *s, unsigned *e) {
+  if (sema_work) sema_work_out_of_memory();
+  error_span(span, s, e, "out of memory");
 }
 static void note_span(DynSpan span, const DynSource *s, const char *m) {
   char name[4096];
@@ -239,7 +256,7 @@ static bool push_loop(Sema *sema, DynAstStmt *st, const DynSource *s,
     size_t c = sema->active_loop_capacity ? sema->active_loop_capacity * 2 : 8;
     void *p = realloc(sema->active_loops, c * sizeof(*sema->active_loops));
     if (!p) {
-      error_span(st->span, s, errors, "out of memory");
+      error_out_of_memory(st->span, s, errors);
       return false;
     }
     sema->active_loops = p;
@@ -278,6 +295,7 @@ static bool resolve_loop_control(Sema *sema, DynAstStmt *st, const DynSource *s,
 static bool reserve_local(DynAstProgram *a) {
   if (a->local_count < a->local_capacity)
     return true;
+  SEMA_SERIAL_ONLY(return false);
   size_t c = a->local_capacity ? a->local_capacity * 2 : 16;
   void *p = realloc(a->locals, c * sizeof(*a->locals));
   if (!p) {
@@ -291,6 +309,7 @@ static bool reserve_local(DynAstProgram *a) {
 static bool sema_reserve_expr(DynAstProgram *a) {
   if (a->expression_count < a->expression_capacity)
     return true;
+  SEMA_SERIAL_ONLY(return false);
   size_t c = a->expression_capacity ? a->expression_capacity * 2 : 32;
   void *p = realloc(a->expressions, c * sizeof(*a->expressions));
   if (!p) {
@@ -547,7 +566,8 @@ static void sema_vet_note(const DynSource *s, DynSpan span, bool unsafe_note, co
   dyn_source_position(s, span.start_byte, &path, &text, &length, &at);
   if (path && vet_path_skipped(path)) return;
   dyn_diagnostic_source("warning", s, span.start_byte, span.end_byte, message);
-  if (s->context.vet_findings) ++*s->context.vet_findings;
+  if (sema_work) sema_work_abort();
+  else if (s->context.vet_findings) ++*s->context.vet_findings;
 }
 /* A cast into a typed slot (argument, return, field, typed local, assignment)
    whose operand the slot would widen anyway. Instances are skipped: a cast in
@@ -777,6 +797,7 @@ static DynType sema_intern_pointer(DynAstProgram *a, DynType pointee,
     a->pointer_capacity = c;
   }
   a->pointers[a->pointer_count] = (DynAstPointer){pointee, is_const};
+  if (sema_work) sema_work_created(0, (uint32_t)a->pointer_count);
   return DYN_TYPE_POINTER_BASE + a->pointer_count++;
 }
 static DynType sema_intern_array(DynAstProgram *a, DynType element,
@@ -799,6 +820,7 @@ static DynType sema_intern_array(DynAstProgram *a, DynType element,
     a->array_capacity = c;
   }
   a->arrays[a->array_count] = (DynAstArray){element, length};
+  if (sema_work) sema_work_created(1, (uint32_t)a->array_count);
   return DYN_TYPE_ARRAY_BASE + a->array_count++;
 }
 static DynType sema_intern_slice(DynAstProgram *a, DynType element,
@@ -821,6 +843,7 @@ static DynType sema_intern_slice(DynAstProgram *a, DynType element,
     a->slice_capacity = c;
   }
   a->slices[a->slice_count] = (DynAstSlice){element, is_const};
+  if (sema_work) sema_work_created(2, (uint32_t)a->slice_count);
   return DYN_TYPE_SLICE_BASE + a->slice_count++;
 }
 static DynType sema_intern_fn_type_ex(DynAstProgram *a, const DynType *params,
@@ -869,6 +892,7 @@ static DynType sema_intern_fn_type_ex(DynAstProgram *a, const DynType *params,
     a->fn_type_params[a->fn_type_param_count++] = params[i];
   a->fn_types[a->fn_type_count] =
       (DynAstFnType){result, start, count, variadic};
+  if (sema_work) sema_work_created(3, (uint32_t)a->fn_type_count);
   return DYN_TYPE_FN_BASE + a->fn_type_count++;
 }
 static DynType sema_intern_fn_type(DynAstProgram *a, const DynType *params,
@@ -878,8 +902,10 @@ static DynType sema_intern_fn_type(DynAstProgram *a, const DynType *params,
 static DynType function_pointer_type(DynAstProgram *a, uint32_t id) {
   DynAstFn *f = &a->functions[id];
   DynType *params = calloc(f->param_count, sizeof(*params));
-  if (f->param_count && !params)
+  if (f->param_count && !params) {
+    a->allocation_failed = true;
     return DYN_TYPE_ERROR;
+  }
   for (uint32_t i = 0; i < f->param_count; ++i)
     params[i] = a->params[f->param_start + i].type;
   DynType signature = sema_intern_fn_type_ex(
@@ -891,8 +917,10 @@ static DynType function_pointer_type(DynAstProgram *a, uint32_t id) {
 static DynType function_signature_type(DynAstProgram *a, uint32_t id) {
   DynAstFn *f = &a->functions[id];
   DynType *params = calloc(f->param_count, sizeof(*params));
-  if (f->param_count && !params)
+  if (f->param_count && !params) {
+    a->allocation_failed = true;
     return DYN_TYPE_ERROR;
+  }
   for (uint32_t i = 0; i < f->param_count; ++i)
     params[i] = a->params[f->param_start + i].type;
   DynType result =
@@ -903,7 +931,7 @@ static DynType function_signature_type(DynAstProgram *a, uint32_t id) {
 /* The type tables only fail to grow when memory runs out: report it, or the
    ERROR type would pass as an earlier, already reported error. */
 static DynType reported_type(DynType type, DynSpan span, const DynSource *s, unsigned *errors) {
-  if (type == DYN_TYPE_ERROR) error_span(span, s, errors, "out of memory");
+  if (type == DYN_TYPE_ERROR) error_out_of_memory(span, s, errors);
   return type;
 }
 static bool can_convert(Sema *sema, DynAstProgram *a, DynType from,
@@ -925,6 +953,7 @@ static bool can_convert(Sema *sema, DynAstProgram *a, DynType from,
 static DynExprId convert_expr(DynAstProgram *a, DynExprId source,
                               DynType target) {
   if (a->expression_count == a->expression_capacity) {
+    SEMA_SERIAL_ONLY(return DYN_NO_EXPR);
     size_t c = a->expression_capacity ? a->expression_capacity * 2 : 32;
     void *p = realloc(a->expressions, c * sizeof(*a->expressions));
     if (!p) {
@@ -1181,6 +1210,7 @@ static bool span_is(DynSpan p, const DynSource *s, const char *name) {
 static bool reserve_reflection_items(DynAstProgram *a, size_t extra) {
   if (a->item_count + extra <= a->item_capacity)
     return true;
+  SEMA_SERIAL_ONLY(return false);
   size_t c = a->item_capacity ? a->item_capacity * 2 : 16;
   while (c < a->item_count + extra)
     c *= 2;
@@ -1194,6 +1224,7 @@ static bool reserve_reflection_items(DynAstProgram *a, size_t extra) {
   return true;
 }
 static bool reserve_reflection_string(DynAstProgram *a) {
+  SEMA_SERIAL_ONLY(return false);
   if (a->string_count < a->string_capacity)
     return true;
   size_t c = a->string_capacity ? a->string_capacity * 2 : 8;
@@ -1617,7 +1648,7 @@ static DynType check_generic_call(Sema *sema, DynAstProgram *a, DynExprId id,
         args[k] = a->expressions[arg].type;
       else if (a->expressions[arg].kind == DYN_EXPR_NAME &&
                find_local(sema, a, a->expressions[arg].span, s) == UINT32_MAX)
-        args[k] = dyn_ast_named_type(a, a->expressions[arg].span, s);
+        args[k] = sema_work ? (sema_work_abort(), DYN_TYPE_ERROR) : dyn_ast_named_type(a, a->expressions[arg].span, s);
       else
         args[k] = DYN_TYPE_ERROR;
       types = args[k] != DYN_TYPE_ERROR;
@@ -1644,10 +1675,11 @@ static DynType check_generic_call(Sema *sema, DynAstProgram *a, DynExprId id,
         error_span(call, s, errors, "generic instances nest too deeply (limit 32)");
         return a->expressions[id].type = DYN_TYPE_ERROR;
       }
+      SEMA_SERIAL_ONLY(return a->expressions[id].type = DYN_TYPE_ERROR);
       function = dyn_ast_instantiate(a, s, generic, args, depth, call,
                                      instance_hash(a, s, args, g.type_param_count));
       if (function == UINT32_MAX) {
-        error_span(call, s, errors, "out of memory");
+        error_out_of_memory(call, s, errors);
         return a->expressions[id].type = DYN_TYPE_ERROR;
       }
     }
@@ -1686,7 +1718,7 @@ static DynType check_generic_call(Sema *sema, DynAstProgram *a, DynExprId id,
       }
       if (pass == 0 && a->expressions[arg].kind == DYN_EXPR_NAME &&
           (p.is_type || find_local(sema, a, a->expressions[arg].span, s) == UINT32_MAX)) {
-        DynType named = dyn_ast_named_type(a, a->expressions[arg].span, s);
+        DynType named = sema_work ? (sema_work_abort(), DYN_TYPE_ERROR) : dyn_ast_named_type(a, a->expressions[arg].span, s);
         if (named != DYN_TYPE_ERROR) {
           a->expressions[arg].kind = DYN_EXPR_TYPE;
           a->expressions[arg].type = named;
@@ -1713,7 +1745,7 @@ static DynType check_generic_call(Sema *sema, DynAstProgram *a, DynExprId id,
         continue;
       DynType expected = DYN_TYPE_INFER;
       if (pass == 1) {
-        DynType known = dyn_ast_substitute(a, p.pattern, args);
+        DynType known = sema_work ? (sema_work_abort(), DYN_TYPE_ERROR) : dyn_ast_substitute(a, p.pattern, args);
         bool bound = true;
         for (uint32_t k = 0; k < g.type_param_count; ++k)
           bound &= args[k] != DYN_TYPE_INFER;
@@ -1796,10 +1828,11 @@ static DynType check_generic_call(Sema *sema, DynAstProgram *a, DynExprId id,
       error_span(call, s, errors, "generic instances nest too deeply (limit 32)");
       return a->expressions[id].type = DYN_TYPE_ERROR;
     }
+    SEMA_SERIAL_ONLY(return a->expressions[id].type = DYN_TYPE_ERROR);
     function = dyn_ast_instantiate(a, s, generic, args, depth, call,
                                    instance_hash(a, s, args, g.type_param_count));
     if (function == UINT32_MAX) {
-      error_span(call, s, errors, "out of memory");
+      error_out_of_memory(call, s, errors);
       return a->expressions[id].type = DYN_TYPE_ERROR;
     }
   }
@@ -2029,7 +2062,7 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
       }
       DynSpan call_span = a->expressions[id].span;
       if (!reserve_expr(a)) {
-        error_span(call_span, s, errors, "out of memory");
+        error_out_of_memory(call_span, s, errors);
         return DYN_TYPE_ERROR;
       }
       DynExprId target = (DynExprId)a->expression_count;
@@ -2412,12 +2445,12 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
     type_name_into(a, operand, s, name, sizeof(name));
     size_t length = strlen(name);
     if (!reserve_reflection_string(a) || !reserve_reflection_items(a, 13)) {
-      error_span(a->expressions[id].span, s, errors, "out of memory");
+      error_out_of_memory(a->expressions[id].span, s, errors);
       return a->expressions[id].type = DYN_TYPE_ERROR;
     }
     unsigned char *bytes = malloc(length);
     if (length && !bytes) {
-      error_span(a->expressions[id].span, s, errors, "out of memory");
+      error_out_of_memory(a->expressions[id].span, s, errors);
       return a->expressions[id].type = DYN_TYPE_ERROR;
     }
     if (length)
@@ -2532,7 +2565,7 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
     }
     for (uint32_t i = 0; i < 13; ++i) {
       if (values[i] == DYN_NO_EXPR) {
-        error_span(a->expressions[id].span, s, errors, "out of memory");
+        error_out_of_memory(a->expressions[id].span, s, errors);
         return a->expressions[id].type = DYN_TYPE_ERROR;
       }
       a->items[start + i] =
@@ -3886,7 +3919,7 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
         return false;
       }
       if (!reserve_local(a)) {
-        error_span(st->span, s, errors, "out of memory");
+        error_out_of_memory(st->span, s, errors);
         return false;
       }
       st->local_id = (uint32_t)a->local_count;
@@ -3938,7 +3971,7 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
         return false;
       }
       if (!reserve_local(a)) {
-        error_span(st->span, s, errors, "out of memory");
+        error_out_of_memory(st->span, s, errors);
         return false;
       }
       DynType element = ar ? ar->element : sl->element,
@@ -3948,7 +3981,7 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
                             a, element, st->for_const || (sl && sl->is_const))
                       : element;
       if (binding == DYN_TYPE_ERROR) {
-        error_span(st->span, s, errors, "out of memory");
+        error_out_of_memory(st->span, s, errors);
         return false;
       }
       st->local_id = (uint32_t)a->local_count;
@@ -4029,7 +4062,7 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
     /* A local whose type failed is still declared, with the error type, so
        its later uses are not reported again as unknown names. */
     if (!reserve_local(a)) {
-      error_span(st->span, s, errors, "out of memory");
+      error_out_of_memory(st->span, s, errors);
       return false;
     }
     st->local_id = (uint32_t)a->local_count;
@@ -4096,7 +4129,7 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
     if (a->globals[global].is_const)
       error_span(st->name, s, errors, "cannot assign to constant");
     if (!reserve_expr(a)) {
-      error_span(st->span, s, errors, "out of memory");
+      error_out_of_memory(st->span, s, errors);
       return false;
     }
     st->target = (DynExprId)a->expression_count;
@@ -4485,6 +4518,171 @@ static void sema_late_finish(SemaLate *late, unsigned *errors) {
   free(late->checks);
   free(late);
 }
+/* Checks function f's signature rules and body: one turn of
+   sema_program's loop. A continue in the body ends the turn. */
+static void sema_check_function(Sema *sema, DynAstProgram *a, const DynSource *s, unsigned *errors, uint32_t f,
+                                SemaLate *late) {
+  do {
+    DynAstFn *fn = &a->functions[f];
+    if (fn->return_type == DYN_TYPE_ANY)
+      error_span(fn->name, s, errors,
+                 "returning any would escape borrowed storage");
+    /* One way to write a generic: a type an argument already carries is
+       inferred from it (`items: []$T`), and `$T: type` is only for a type
+       no argument carries, such as one used only by the result or body. */
+    if (fn->is_generic && !fn->is_instance) {
+      DynAstGeneric g = a->generics[fn->generic];
+      for (uint32_t i = 0; i < g.param_count; ++i) {
+        DynAstGenericParam explicit_param = a->generic_params[g.param_start + i];
+        if (!explicit_param.is_type) continue;
+        for (uint32_t j = i + 1; j < g.param_count; ++j) {
+          DynAstGenericParam later = a->generic_params[g.param_start + j];
+          if (later.is_type || !pattern_mentions(a, later.pattern, explicit_param.pattern, 0))
+            continue;
+          char message[320];
+          int tn = (int)(explicit_param.name.end_byte - explicit_param.name.start_byte);
+          int pn = (int)(later.name.end_byte - later.name.start_byte);
+          snprintf(message, sizeof(message),
+                   "%.*s is in the type of `%.*s`, so it is inferred: write `$%.*s` there and drop `%.*s: type`",
+                   tn, s->text + explicit_param.name.start_byte,
+                   pn, s->text + later.name.start_byte,
+                   tn, s->text + explicit_param.name.start_byte,
+                   tn, s->text + explicit_param.name.start_byte);
+          error_span(explicit_param.name, s, errors, message);
+          break;
+        }
+      }
+    }
+    if (fn->foreign) {
+      if (fn->variadic && fn->param_count == 0)
+        error_span(fn->name, s, errors,
+                   "C variadic function requires a fixed parameter");
+      if (!foreign_symbol_valid(fn->link_name, s))
+        error_span(fn->link_name, s, errors,
+                   "foreign link name must be a non-empty linker symbol");
+      // Several modules may bind the same C symbol (each std backend binds
+      // its own errno accessor). That is fine when every binding agrees on
+      // the signature; only a conflicting redeclaration is an error.
+      for (uint32_t prior = 0; prior < f; ++prior) {
+        DynAstFn *other = &a->functions[prior];
+        if (!other->foreign ||
+            !dyn_span_text_equal(fn->link_name, other->link_name, s))
+          continue;
+        bool same = other->return_type == fn->return_type &&
+                    other->param_count == fn->param_count &&
+                    other->variadic == fn->variadic;
+        for (uint32_t i = 0; same && i < fn->param_count; ++i)
+          same = a->params[fn->param_start + i].type ==
+                 a->params[other->param_start + i].type;
+        if (!same)
+          error_span(fn->link_name, s, errors,
+                     "foreign link symbol redeclared with a different signature");
+        break;
+      }
+      if (fn->return_type == DYN_TYPE_ERROR ||
+          fn->return_type == DYN_TYPE_INFER)
+        error_span(fn->name, s, errors,
+                   "foreign function has invalid return type");
+      for (uint32_t i = 0; i < fn->param_count; ++i) {
+        DynAstParam *p = &a->params[fn->param_start + i];
+        if (p->type == DYN_TYPE_ERROR || p->type == DYN_TYPE_INFER ||
+            p->type == DYN_TYPE_VOID)
+          error_span(p->name, s, errors,
+                     "foreign parameter requires a concrete non-void type");
+        for (uint32_t j = 0; j < i; ++j)
+          if (dyn_span_text_equal(p->name, a->params[fn->param_start + j].name,
+                                  s))
+            error_span(p->name, s, errors, "duplicate parameter name");
+      }
+      continue;
+    }
+    /* A cached/imported interface deliberately has no implementation body.
+       Its signature was checked while loading declarations; its owner checks
+       the body in a separate frontend job. */
+    if (fn->interface_only) {
+      for (uint32_t i = 0; i < fn->param_count; ++i) {
+        DynAstParam *p = &a->params[fn->param_start + i];
+        for (uint32_t j = 0; j < i; ++j)
+          if (dyn_span_text_equal(p->name, a->params[fn->param_start + j].name,
+                                  s))
+            error_span(p->name, s, errors, "duplicate parameter name");
+      }
+      continue;
+    }
+    unsigned errors_before = *errors;
+    if (fn->body_pending) {
+      SEMA_SERIAL_ONLY(return);
+      dyn_ast_lower_instance(a, s, f, errors);
+      fn = &a->functions[f];
+    }
+    sema->current_function = f;
+    sema_report.assert_failed = false;
+    sema->block_depth = 0;
+    sema->current_return_type = fn->return_type;
+    fn->local_start = (uint32_t)a->local_count;
+    for (uint32_t i = 0; i < fn->param_count; ++i) {
+      DynAstParam *p = &a->params[fn->param_start + i];
+      if (find_local(sema, a, p->name, s) != UINT32_MAX) {
+        error_span(p->name, s, errors, "duplicate parameter name");
+        continue;
+      }
+      /* Still declare it, so uses in the body do not report again. */
+      if (shadows_global(sema, a, p->name, s))
+        error_span(p->name, s, errors,
+                   "parameter has the name of a global; shadowing is forbidden");
+      if (!reserve_local(a)) {
+        error_out_of_memory(p->name, s, errors);
+        continue;
+      }
+      p->local_id = (uint32_t)a->local_count;
+      a->locals[a->local_count++] = (DynAstLocal){.name = p->name,
+                                                  .type = p->type,
+                                                  .active = true,
+                                                  .owner_function = f};
+    }
+    if (fn->variadic &&
+        fn->variadic_name.end_byte > fn->variadic_name.start_byte) {
+      if (!reserve_local(a))
+        error_out_of_memory(fn->variadic_name, s, errors);
+      else {
+        fn->variadic_local_id = (uint32_t)a->local_count;
+        a->locals[a->local_count++] = (DynAstLocal){.name = fn->variadic_name,
+                                                    .type = fn->variadic_type,
+                                                    .active = true,
+                                                    .owner_function = f};
+      }
+    }
+    sema_report.has_origin = false;
+    if (fn->is_instance) {
+      uint32_t outer = fn->instance;
+      for (unsigned guard = 0; guard < 64; ++guard) {
+        uint32_t next = instance_caller(a, outer);
+        if (next == UINT32_MAX) break;
+        outer = next;
+      }
+      sema_report.origin = a->instances[outer].call;
+      sema_report.has_origin = !span_in_library(s, sema_report.origin);
+    }
+    bool terminated =
+        sema_block(sema, a, fn->body_start, fn->body_count, s, errors, false);
+    sema_report.has_origin = false;
+    fn = &a->functions[f];
+    fn->local_count = (uint32_t)a->local_count - fn->local_start;
+    /* A worker leaves lifetimes to the commit, which runs them in order. */
+    if (!sema_work && (!late || (!*errors && fn->local_count && !sema_late_add(late, f))))
+      life_check_function(sema,a,s,errors,fn);
+    if (fn->return_type != DYN_TYPE_VOID && !terminated)
+      error_span(fn->name, s, errors,
+                 "non-void function may exit without return");
+    for (uint32_t i = fn->local_start; i < a->local_count; ++i)
+      a->locals[i].active = false;
+    free(sema->locals.buckets); free(sema->locals.next);
+    sema->locals = (SemaNames){0}; sema->indexed_locals = 0;
+    if (!sema_work && fn->is_instance && *errors != errors_before)
+      instance_trace(a, s, fn->instance);
+    } while (0);
+}
+#include "sema_parallel.inc"
 static bool sema_program(Sema *sema, DynAstProgram *a, const DynSource *s,
                          unsigned *errors) {
   /* Reserve common conversion growth up front as an optimization. Reflection
@@ -4608,163 +4806,12 @@ static bool sema_program(Sema *sema, DynAstProgram *a, const DynSource *s,
     }
   }
   SemaLate *late = sema_late_start(sema, a, s);
-  for (uint32_t f = 0; f < a->function_count && dyn_work_step(&s->context, 1); ++f) {
-    DynAstFn *fn = &a->functions[f];
-    if (fn->return_type == DYN_TYPE_ANY)
-      error_span(fn->name, s, errors,
-                 "returning any would escape borrowed storage");
-    /* One way to write a generic: a type an argument already carries is
-       inferred from it (`items: []$T`), and `$T: type` is only for a type
-       no argument carries, such as one used only by the result or body. */
-    if (fn->is_generic && !fn->is_instance) {
-      DynAstGeneric g = a->generics[fn->generic];
-      for (uint32_t i = 0; i < g.param_count; ++i) {
-        DynAstGenericParam explicit_param = a->generic_params[g.param_start + i];
-        if (!explicit_param.is_type) continue;
-        for (uint32_t j = i + 1; j < g.param_count; ++j) {
-          DynAstGenericParam later = a->generic_params[g.param_start + j];
-          if (later.is_type || !pattern_mentions(a, later.pattern, explicit_param.pattern, 0))
-            continue;
-          char message[320];
-          int tn = (int)(explicit_param.name.end_byte - explicit_param.name.start_byte);
-          int pn = (int)(later.name.end_byte - later.name.start_byte);
-          snprintf(message, sizeof(message),
-                   "%.*s is in the type of `%.*s`, so it is inferred: write `$%.*s` there and drop `%.*s: type`",
-                   tn, s->text + explicit_param.name.start_byte,
-                   pn, s->text + later.name.start_byte,
-                   tn, s->text + explicit_param.name.start_byte,
-                   tn, s->text + explicit_param.name.start_byte);
-          error_span(explicit_param.name, s, errors, message);
-          break;
-        }
-      }
-    }
-    if (fn->foreign) {
-      if (fn->variadic && fn->param_count == 0)
-        error_span(fn->name, s, errors,
-                   "C variadic function requires a fixed parameter");
-      if (!foreign_symbol_valid(fn->link_name, s))
-        error_span(fn->link_name, s, errors,
-                   "foreign link name must be a non-empty linker symbol");
-      // Several modules may bind the same C symbol (each std backend binds
-      // its own errno accessor). That is fine when every binding agrees on
-      // the signature; only a conflicting redeclaration is an error.
-      for (uint32_t prior = 0; prior < f; ++prior) {
-        DynAstFn *other = &a->functions[prior];
-        if (!other->foreign ||
-            !dyn_span_text_equal(fn->link_name, other->link_name, s))
-          continue;
-        bool same = other->return_type == fn->return_type &&
-                    other->param_count == fn->param_count &&
-                    other->variadic == fn->variadic;
-        for (uint32_t i = 0; same && i < fn->param_count; ++i)
-          same = a->params[fn->param_start + i].type ==
-                 a->params[other->param_start + i].type;
-        if (!same)
-          error_span(fn->link_name, s, errors,
-                     "foreign link symbol redeclared with a different signature");
-        break;
-      }
-      if (fn->return_type == DYN_TYPE_ERROR ||
-          fn->return_type == DYN_TYPE_INFER)
-        error_span(fn->name, s, errors,
-                   "foreign function has invalid return type");
-      for (uint32_t i = 0; i < fn->param_count; ++i) {
-        DynAstParam *p = &a->params[fn->param_start + i];
-        if (p->type == DYN_TYPE_ERROR || p->type == DYN_TYPE_INFER ||
-            p->type == DYN_TYPE_VOID)
-          error_span(p->name, s, errors,
-                     "foreign parameter requires a concrete non-void type");
-        for (uint32_t j = 0; j < i; ++j)
-          if (dyn_span_text_equal(p->name, a->params[fn->param_start + j].name,
-                                  s))
-            error_span(p->name, s, errors, "duplicate parameter name");
-      }
-      continue;
-    }
-    /* A cached/imported interface deliberately has no implementation body.
-       Its signature was checked while loading declarations; its owner checks
-       the body in a separate frontend job. */
-    if (fn->interface_only) {
-      for (uint32_t i = 0; i < fn->param_count; ++i) {
-        DynAstParam *p = &a->params[fn->param_start + i];
-        for (uint32_t j = 0; j < i; ++j)
-          if (dyn_span_text_equal(p->name, a->params[fn->param_start + j].name,
-                                  s))
-            error_span(p->name, s, errors, "duplicate parameter name");
-      }
-      continue;
-    }
-    unsigned errors_before = *errors;
-    if (fn->body_pending) {
-      dyn_ast_lower_instance(a, s, f, errors);
-      fn = &a->functions[f];
-    }
-    sema->current_function = f;
-    sema_report.assert_failed = false;
-    sema->block_depth = 0;
-    sema->current_return_type = fn->return_type;
-    fn->local_start = (uint32_t)a->local_count;
-    for (uint32_t i = 0; i < fn->param_count; ++i) {
-      DynAstParam *p = &a->params[fn->param_start + i];
-      if (find_local(sema, a, p->name, s) != UINT32_MAX) {
-        error_span(p->name, s, errors, "duplicate parameter name");
-        continue;
-      }
-      /* Still declare it, so uses in the body do not report again. */
-      if (shadows_global(sema, a, p->name, s))
-        error_span(p->name, s, errors,
-                   "parameter has the name of a global; shadowing is forbidden");
-      if (!reserve_local(a)) {
-        error_span(p->name, s, errors, "out of memory");
-        continue;
-      }
-      p->local_id = (uint32_t)a->local_count;
-      a->locals[a->local_count++] = (DynAstLocal){.name = p->name,
-                                                  .type = p->type,
-                                                  .active = true,
-                                                  .owner_function = f};
-    }
-    if (fn->variadic &&
-        fn->variadic_name.end_byte > fn->variadic_name.start_byte) {
-      if (!reserve_local(a))
-        error_span(fn->variadic_name, s, errors, "out of memory");
-      else {
-        fn->variadic_local_id = (uint32_t)a->local_count;
-        a->locals[a->local_count++] = (DynAstLocal){.name = fn->variadic_name,
-                                                    .type = fn->variadic_type,
-                                                    .active = true,
-                                                    .owner_function = f};
-      }
-    }
-    sema_report.has_origin = false;
-    if (fn->is_instance) {
-      uint32_t outer = fn->instance;
-      for (unsigned guard = 0; guard < 64; ++guard) {
-        uint32_t next = instance_caller(a, outer);
-        if (next == UINT32_MAX) break;
-        outer = next;
-      }
-      sema_report.origin = a->instances[outer].call;
-      sema_report.has_origin = !span_in_library(s, sema_report.origin);
-    }
-    bool terminated =
-        sema_block(sema, a, fn->body_start, fn->body_count, s, errors, false);
-    sema_report.has_origin = false;
-    fn = &a->functions[f];
-    fn->local_count = (uint32_t)a->local_count - fn->local_start;
-    if (!late || (!*errors && fn->local_count && !sema_late_add(late, f)))
-      life_check_function(sema,a,s,errors,fn);
-    if (fn->return_type != DYN_TYPE_VOID && !terminated)
-      error_span(fn->name, s, errors,
-                 "non-void function may exit without return");
-    for (uint32_t i = fn->local_start; i < a->local_count; ++i)
-      a->locals[i].active = false;
-    free(sema->locals.buckets); free(sema->locals.next);
-    sema->locals = (SemaNames){0}; sema->indexed_locals = 0;
-    if (fn->is_instance && *errors != errors_before)
-      instance_trace(a, s, fn->instance);
-  }
+  uint32_t first = 0;
+#ifndef _WIN32
+  first = sema_parallel(sema, a, s, errors, late);
+#endif
+  for (uint32_t f = first; f < a->function_count && dyn_work_step(&s->context, 1); ++f)
+    sema_check_function(sema, a, s, errors, f, late);
   if (late) sema_late_finish(late, errors);
   sema_report.assert_failed = false;
   sema->current_function = UINT32_MAX;
@@ -4772,6 +4819,7 @@ static bool sema_program(Sema *sema, DynAstProgram *a, const DynSource *s,
 }
 static DynExprId sema_push_expr(DynAstProgram *a, DynAstExpr e) {
   if (a->expression_count == a->expression_capacity) {
+    SEMA_SERIAL_ONLY(return DYN_NO_EXPR);
     size_t c = a->expression_capacity ? a->expression_capacity * 2 : 32;
     void *p = realloc(a->expressions, c * sizeof(*a->expressions));
     if (!p) { a->allocation_failed = true; return DYN_NO_EXPR; }

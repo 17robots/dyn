@@ -37,6 +37,14 @@ servers so they pick up the new `dyn`.
   hands the optimizer the lowered program instead of a copy, and keeps
   blocks up to 4 MiB in the heap in batch commands instead of mapping each one.
   `dyn lsp` keeps the allocator's defaults.
+- Programs with 2048 functions or more check function bodies on worker
+  threads, one per 1024 functions up to eight: a 300,000-line project spends
+  13 ms in the checker instead of 22, and checks in 95 ms instead of 104.
+  Diagnostics, the checked program and the code built from it are the same
+  as from one thread; a function that instantiates a generic or reports an
+  error is checked again on the main thread, in order. `dyn vet` checks on
+  one thread, and `DYN_SEMA_PARALLEL=0` keeps every check there, for
+  comparison.
 - Release code is tighter: a function that returns a call to itself (or a
   void function ending in one) loops instead of calling, so deep tail
   recursion no longer grows the stack; loops whose condition loads and
