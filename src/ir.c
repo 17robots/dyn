@@ -688,27 +688,13 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
   for (size_t i = 0; i < a->local_count; ++i) {
     ir->locals[i] = (DynIrLocal){.name = copy_span(a->locals[i].name, source, &cursor), .type = lower_type(a, a->locals[i].type)};
   }
-  for (size_t i = 0; i < a->statement_count; ++i)
-    ir->statements[i] = (DynIrStmt){a->statements[i].kind,
-                                    a->statements[i].expression,
-                                    a->statements[i].target,
-                                    a->statements[i].assignment_op,
-                                    a->statements[i].local_id,
-                                    a->statements[i].body_start,
-                                    a->statements[i].body_count,
-                                    a->statements[i].else_start,
-                                    a->statements[i].else_count,
-                                    a->statements[i].loop_id,
-                                    a->statements[i].target_loop_id,
-                                    a->statements[i].case_arm_start,
-                                    a->statements[i].case_arm_count,
-                                    a->statements[i].defer_block,
-                                    a->statements[i].for_pointer,
-                                    a->statements[i].for_const,
-                                    a->statements[i].for_range,
-                                    a->statements[i].for_inclusive,
-                                    a->statements[i].for_reverse,
-                                    a->statements[i].span, 0};
+  for (size_t i = 0; i < a->statement_count; ++i) {
+    const DynAstStmt *from = &a->statements[i];
+    ir->statements[i] = (DynIrStmt){.kind = from->kind, .expression = from->expression, .target = from->target, .assignment_op = from->assignment_op,
+                                    .local_id = from->local_id, .body_start = from->body_start, .body_count = from->body_count, .else_start = from->else_start, .else_count = from->else_count,
+                                    .loop_id = from->loop_id, .target_loop_id = from->target_loop_id, .case_arm_start = from->case_arm_start, .case_arm_count = from->case_arm_count,
+                                    .defer_block = from->defer_block, .for_pointer = from->for_pointer, .for_const = from->for_const, .for_range = from->for_range, .for_inclusive = from->for_inclusive, .for_reverse = from->for_reverse, .span = from->span};
+  }
   for (size_t i = 0; i < a->pattern_count; ++i)
     ir->patterns[i] = (DynIrPattern){a->patterns[i].first_value, a->patterns[i].last_value, lower_type(a, a->patterns[i].type), a->patterns[i].variant, a->patterns[i].is_enum, a->patterns[i].is_signed, a->patterns[i].is_type};
   for (size_t i = 0; i < a->case_arm_count; ++i)
