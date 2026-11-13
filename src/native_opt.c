@@ -1656,7 +1656,11 @@ static bool inline_program_within(DynNativeOptimization *o, bool leaf_only, bool
   }
   for (size_t i = 0; i < b.in->expression_count && !b.failed; ++i) {
     const DynIrExpr *e = &b.in->expressions[i];
-    if (e->kind != DYN_EXPR_FUNCTION) continue;
+    /* A guarded call adds a reference to its predicted function. Dead
+       callbacks have no rebuilt locals, so they cannot be predictions. */
+    if (e->kind != DYN_EXPR_FUNCTION ||
+        (b.in->live.expressions && !b.in->live.expressions[i]) ||
+        (b.in->live.functions && !b.in->live.functions[e->integer])) continue;
     size_t k = 0;
     while (k < b.guess_count && b.guess_types[k] != e->type) ++k;
     if (k == b.guess_count) {

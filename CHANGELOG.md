@@ -12,7 +12,12 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
-## 0.1.0-preview.33
+## 0.1.0-preview.34
+
+- Guarded callback inlining ignores unreachable callback candidates. This
+  prevents intermittent native emission failures when unused callbacks have
+  local variables, as exposed by DNA's LSP workset tests.
+- Preview.33 was cancelled before publication; this release includes its changes.
 
 - `#max(T)` and `#min(T)` are the largest and smallest values of an integer
   type, as constants of that type: write `#max(usize)` for `~#cast(usize, 0)`.
