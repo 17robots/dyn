@@ -55,7 +55,7 @@ fn main(){
   result=regex.find(program,"ac")
   require(result.value.found && !result.captures[0].found && result.captures[1].found && result.captures[1].end==1,"failed branch capture rollback")
   program=compile(arena,"(a){200}")
-  long_input:[200]u8=[]
+  long_input:[200]u8
   for i in 0..200 {long_input[i]='a'}
   result=regex.find(program,long_input[..])
   require(result.failure.kind == parse.Kind.Ok && result.value.found && result.value.end==200 && result.captures[0].start==199,"arena workspace")

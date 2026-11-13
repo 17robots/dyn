@@ -19,7 +19,7 @@ fn main() {
   if #cast(u8, 257) != 1 || generic(#cast(i16, -7)) != -7 { #panic("numeric") }
   bits := #bitcast(u32, #cast(f32, 1))
   if bits != 1065353216 || #bitcast(f32, bits) != 1.0 { #panic("bits") }
-  if #cast(Op, #cast(u8, 2)) != Op.Write { #panic("enum") }
+  if #cast(u8, Op.Write) != 2 { #panic("enum") }
   storage: [2]i32 = [4, 5]
   memory: rawptr = &storage[0]
   if #slice(#cast(*i32, memory), 2)[1] != 5 { #panic("postfix slice") }

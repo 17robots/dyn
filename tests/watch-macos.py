@@ -34,7 +34,7 @@ fn main() {
   empty := watch.Watcher{}
   watch.close(&empty)
   require(watch.next(&empty).status == watch.Status.Error,"default next")
-  storage: [1024]u8 = []
+  storage: [1024]u8
   failed := watch.open(storage[..271])
   watch.close(&failed.value)
   require(failed.failure.kind != io.Kind.Ok,"short buffer")
@@ -100,9 +100,9 @@ pub fn audit_callbacks() {
   root := "/watched"
   slot.length = #len(root)
   for i in 0..#len(root) { slot.root[i] = root[i] }
-  output: [1024]u8 = []
+  output: [1024]u8
   watcher := Watcher{state:state,storage:output[..]}
-  name_storage: [128]u8 = []
+  name_storage: [128]u8
   path := c.string_into(name_storage[..],"/watched/café-😀")
   pointers: [1]*const u8 = [path.value]
   flags: [1]u32 = [256]

@@ -226,7 +226,7 @@ fn main() {
   defer {
     _ = archive.destroy_owned(opened.reader)
   }
-  buffer: [4096]u8 = []
+  buffer: [4096]u8
   for true {
     entry := archive.next(opened.reader)
     if entry.end {
@@ -258,7 +258,7 @@ use "std/mem"
 use "std/os/linux"
 use "std/io"
 fn main() {
-  storage: [65536]u8 = []
+  storage: [65536]u8
   arena := mem.arena_from_buffer(storage[..])
   args := linux.process_arguments(arena)
   if #len(args) != 2 {
@@ -269,8 +269,8 @@ fn main() {
     #panic("curl initialization")
   }
   defer curl.cleanup()
-  url: [4096]u8 = []
-  response: [16384]u8 = []
+  url: [4096]u8
+  response: [16384]u8
   result := curl.get_into(args[1], url[..], response[..], 5000)
   if !result.ok {
     #panic("HTTP transfer failed or buffer full")
@@ -295,7 +295,7 @@ fn main() {
     io.println("usage: sdl3-image-example IMAGE")
     return
   }
-  path: [4096]u8 = []
+  path: [4096]u8
   surface := image.load_owned(args[1], path[..])
   if !surface.ok {
     #panic("image load")
@@ -322,7 +322,7 @@ use "std/mem"
 use "std/os/linux"
 use "std/io"
 fn main() {
-  storage: [65536]u8 = []
+  storage: [65536]u8
   arena := mem.arena_from_buffer(storage[..])
   args := linux.process_arguments(arena)
   if #len(args) != 2 {
@@ -333,7 +333,7 @@ fn main() {
     #panic("font init")
   }
   defer ttf.quit()
-  path: [4096]u8 = []
+  path: [4096]u8
   font := ttf.open_owned(args[1], path[..], 20.0)
   if !font.ok {
     #panic("font open")
@@ -378,7 +378,7 @@ fn shader(api: *gl.Api, kind: u32, source: []const u8) u32 {
   compiled: i32 = 0
   api.get_shader_iv(value, gl.CompileStatus, &compiled)
   if compiled == 0 {
-    log: [2048]u8 = []
+    log: [2048]u8
     written: i32 = 0
     api.get_shader_log(value, 2048, &written, &log[0])
     if written > 0 && written <= 2048 {
@@ -442,7 +442,7 @@ fn atlas_smoke(api: *gl.Api) {
   alignment: i32 = 0
   api.get_integer(gl.UnpackAlignment, &alignment)
   api.pixel_store_i(gl.UnpackAlignment, 1)
-  empty: [4]u8 = []
+  empty: [4]u8
   coverage: [4]u8 = [255, 128, 0, 255]
   api.tex_image_2d(gl.Texture2d, 0, #cast(i32, gl.R8), 2, 2, 0, gl.Red, gl.UnsignedByte, &empty[0])
   api.tex_sub_image_2d(gl.Texture2d, 0, 0, 0, 2, 2, gl.Red, gl.UnsignedByte, &coverage[0])
@@ -458,7 +458,7 @@ fn atlas_smoke(api: *gl.Api) {
   api.enable(gl.ScissorTest)
   if api.is_enabled(gl.Blend) == 0 || api.is_enabled(gl.ScissorTest) == 0 { #panic("atlas enables") }
   api.draw_arrays(gl.Triangles, 0, 3)
-  pixel: [4]u8 = []
+  pixel: [4]u8
   api.read_pixels(1, 1, 1, 1, gl.Rgba, gl.UnsignedByte, &pixel[0])
   if pixel[0] < 126 || pixel[0] > 130 || pixel[1] != 0 || pixel[2] < 125 || pixel[2] > 129 || pixel[3] != 255 { #panic("atlas solid alpha") }
   api.read_pixels(1, 6, 1, 1, gl.Rgba, gl.UnsignedByte, &pixel[0])
@@ -489,7 +489,7 @@ fn main() {
   if gl.load(nil).ok {
     #panic("nil loader accepted")
   }
-  backing: [65536]u8 = []
+  backing: [65536]u8
   arena := mem.arena_from_buffer(backing[..])
   args := linux.process_arguments(arena)
   smoke := #len(args) == 2 && strings.equal(args[1], "--smoke")
@@ -500,7 +500,7 @@ fn main() {
   if !sdl3.gl_request_core(3, 3) {
     #panic("GL attributes")
   }
-  title: [64]u8 = []
+  title: [64]u8
   window := sdl3.window_create("Dyn OpenGL triangle", title[..], 640, 480, sdl3.WindowOpenGL | sdl3.WindowResizable)
   if !window.ok {
     #panic("GL window")
@@ -547,7 +547,7 @@ fn main() {
     api.compile_shader(invalid)
     compiled: i32 = 0
     api.get_shader_iv(invalid, gl.CompileStatus, &compiled)
-    log: [2048]u8 = []
+    log: [2048]u8
     written: i32 = 0
     api.get_shader_log(invalid, 2048, &written, &log[0])
     api.delete_shader(invalid)
@@ -609,7 +609,7 @@ fn main() {
     api.use_program(program)
     api.draw_arrays(gl.Triangles, 0, 3)
     if smoke {
-      pixel: [4]u8 = []
+      pixel: [4]u8
       api.read_pixels(width / 2, height / 2, 1, 1, gl.Rgba, gl.UnsignedByte, #cast(rawptr, &pixel[0]))
       if pixel[0] < 200 || pixel[1] > 30 || pixel[2] > 30 {
         #panic("triangle pixel mismatch")
@@ -635,19 +635,19 @@ use "std/os/linux"
 use "std/io" io
 use "std/strings"
 fn main() {
-  backing: [65536]u8 = []
+  backing: [65536]u8
   arena := mem.arena_from_buffer(backing[..])
   args := linux.process_arguments(arena)
   if #len(args) != 3 { #panic("URL required") }
   if curl.init() != 0 { #panic("init") }
   defer curl.cleanup()
-  url: [4096]u8 = []
-  output: [256]u8 = []
+  url: [4096]u8
+  output: [256]u8
   result := curl.get_into(args[1], url[..], output[..], 5000)
   if !result.ok || result.http_status != 200 || !strings.equal(output[..result.written], "vendor transfer\n") { #panic("transfer") }
   missing := curl.get_into(args[2], url[..], output[..], 5000)
   if !missing.ok || missing.http_status != 404 { #panic("HTTP status is not transport error") }
-  small: [1]u8 = []
+  small: [1]u8
   overflow := curl.get_into(args[1], url[..], small[..], 5000)
   if overflow.ok || !overflow.capacity_exceeded || overflow.written > 1 { #panic("bounded output") }
   if curl.get_into(args[1], small[..], output[..], 5000).ok { #panic("URL capacity") }
@@ -669,11 +669,11 @@ extern fn color_size "oracle_color_size"() usize
 extern fn surface_valid "oracle_surface"(surface: sdl3.Surface) i32
 fn main() {
   if #sizeof(ts.Node) != node_size() || #alignof(ts.Node) != node_align() || #sizeof(ts.Edit) != edit_size() || #sizeof(sdl3.Color) != color_size() { #panic("provider ABI mismatch") }
-  backing: [65536]u8 = []
+  backing: [65536]u8
   arena := mem.arena_from_buffer(backing[..])
   args := linux.process_arguments(arena)
   if #len(args) != 3 { #panic("image and font paths required") }
-  buffer: [4096]u8 = []
+  buffer: [4096]u8
   surface := image.load_owned(args[1], buffer[..])
   if !surface.ok { #panic("image") }
   defer sdl3.surface_destroy_owned(surface.value)

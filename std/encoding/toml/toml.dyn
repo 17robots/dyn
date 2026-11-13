@@ -225,7 +225,7 @@ fn quoted(parser: *Parser, key: bool) []const u8 {
           scalar = (scalar << 4) | #cast(u32, digit)
         }
         parser.at += count
-        encoded: [4]u8 = []
+        encoded: [4]u8
         width := utf8.encode(encoded[..], scalar)
         if width == 0 {
           parser.failed = true

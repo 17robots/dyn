@@ -27,11 +27,11 @@ LINUX = '''use "std/fs/watch" watch
 use "std/io" errors
 fn require(ok: bool) { if !ok { #panic("watch read after failure") } }
 fn main() {
- backing: [272]u8 = []
+ backing: [272]u8
  state := watch.Watcher{descriptor: 999999, active: true, storage: backing[..]}
  first := watch.next(&state)
  require(first.failure.kind != errors.Kind.Ok && first.failure.native == -9 && first.failure.kind == errors.Kind.InvalidState)
- descriptors: [2]i32 = []
+ descriptors: [2]i32
  require(#syscall(293, &descriptors[0], 2048) == 0)
  defer { _ = #syscall(3, descriptors[0])
  _ = #syscall(3, descriptors[1]) }

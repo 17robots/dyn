@@ -58,8 +58,8 @@ fn main() {
  packet:[46]u8=[18,52,129,128,0,1,0,1,0,0,0,0,7,101,120,97,109,112,108,101,4,116,101,115,116,0,0,1,0,1,192,12,0,1,0,1,0,0,0,1,0,4,1,2,3,4]
  answers:=dns.parse_ipv4(f.arena,packet[..],0x1234,"example.test")
  check(answers.failure.kind == errors.Kind.Ok && #len(answers.value)==1 && answers.value[0].a==1 && answers.value[0].d==4)
- key:[32]u8=[]
- nonce:[12]u8=[]
+ key:[32]u8
+ nonce:[12]u8
  sealed:=aead.seal(f.arena,aead.Cipher.Aes256Gcm,"hello","",key[..],nonce[..])
  check(sealed.failure.kind == parse.Kind.Ok)
  opened:=aead.open(f.arena,aead.Cipher.Aes256Gcm,sealed.value.ciphertext,sealed.value.tag,"",key[..],nonce[..])

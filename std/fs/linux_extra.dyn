@@ -141,8 +141,8 @@ pub fn file_metadata(file: *const File) Metadata {
   if !is_open(file) {
     return Metadata{ failure: io.linux_failure(-9) }
   }
-  raw: [32]u64 = []
-  empty: [1]u8 = []
+  raw: [32]u64
+  empty: [1]u8
   result := #syscall(sys.Statx, file.descriptor, &empty[0], 4096, 2047, &raw[0])
   if result < 0 {
     return Metadata{ failure: io.linux_failure(result) }
@@ -166,7 +166,7 @@ pub fn metadata(path: []const u8) Metadata {
 }
 
 pub fn remove(path: []const u8) Result {
-  storage: [4096 + mem.ArenaBufferOverhead]u8 = []
+  storage: [4096 + mem.ArenaBufferOverhead]u8
   raw := terminated(path, storage[..])
   if raw == nil {
     return Result{ transferred: 0, failure: io.linux_failure(-36) }
@@ -179,8 +179,8 @@ pub fn remove(path: []const u8) Result {
 }
 
 pub fn rename(old_path: []const u8, new_path: []const u8) Result {
-  old_storage: [4096 + mem.ArenaBufferOverhead]u8 = []
-  new_storage: [4096 + mem.ArenaBufferOverhead]u8 = []
+  old_storage: [4096 + mem.ArenaBufferOverhead]u8
+  new_storage: [4096 + mem.ArenaBufferOverhead]u8
   old_raw := terminated(old_path, old_storage[..])
   new_raw := terminated(new_path, new_storage[..])
   if old_raw == nil || new_raw == nil {
@@ -194,7 +194,7 @@ pub fn rename(old_path: []const u8, new_path: []const u8) Result {
 }
 
 pub fn make_directory(path: []const u8, mode: usize) Result {
-  storage: [4096 + mem.ArenaBufferOverhead]u8 = []
+  storage: [4096 + mem.ArenaBufferOverhead]u8
   raw := terminated(path, storage[..])
   if raw == nil {
     return Result{ transferred: 0, failure: io.linux_failure(-36) }
@@ -207,7 +207,7 @@ pub fn make_directory(path: []const u8, mode: usize) Result {
 }
 
 pub fn remove_directory(path: []const u8) Result {
-  storage: [4096 + mem.ArenaBufferOverhead]u8 = []
+  storage: [4096 + mem.ArenaBufferOverhead]u8
   raw := terminated(path, storage[..])
   if raw == nil {
     return Result{ transferred: 0, failure: io.linux_failure(-36) }
@@ -220,8 +220,8 @@ pub fn remove_directory(path: []const u8) Result {
 }
 
 pub fn symbolic_link(target: []const u8, link: []const u8) Result {
-  target_storage: [4096 + mem.ArenaBufferOverhead]u8 = []
-  link_storage: [4096 + mem.ArenaBufferOverhead]u8 = []
+  target_storage: [4096 + mem.ArenaBufferOverhead]u8
+  link_storage: [4096 + mem.ArenaBufferOverhead]u8
   target_raw := terminated(target, target_storage[..])
   link_raw := terminated(link, link_storage[..])
   if target_raw == nil || link_raw == nil {
@@ -235,7 +235,7 @@ pub fn symbolic_link(target: []const u8, link: []const u8) Result {
 }
 
 fn read_link_into(path: []const u8, destination: []u8) PathResult {
-  storage: [4096 + mem.ArenaBufferOverhead]u8 = []
+  storage: [4096 + mem.ArenaBufferOverhead]u8
   raw := terminated(path, storage[..])
   if raw == nil {
     return PathResult{ value: destination[..0], failure: io.linux_failure(-36) }
@@ -401,7 +401,7 @@ fn app_directory_into(kind: AppDirectory, destination: []u8) PathResult {
   if !io.failed(configured.failure) && #len(configured.value) > 0 {
     return configured
   }
-  home_storage: [4096]u8 = []
+  home_storage: [4096]u8
   fallback_home := environment_get("HOME", home_storage[..])
   if io.failed(fallback_home.failure) {
     return PathResult{ value: destination[..0], failure: io.linux_failure(fallback_home.failure.native) }
@@ -426,7 +426,7 @@ pub fn truncate(path: []const u8, length: usize) Result {
   if length > 9223372036854775807 {
     return Result{ failure: io.linux_failure(-22) }
   }
-  storage: [4096 + mem.ArenaBufferOverhead]u8 = []
+  storage: [4096 + mem.ArenaBufferOverhead]u8
   name := terminated(path, storage[..])
   if name == nil {
     return Result{ failure: io.linux_failure(-36) }

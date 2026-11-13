@@ -21,7 +21,7 @@ fn check(ok: bool, message: []const u8) {
   }
 }
 fn main() {
-  storage: [4]u8 = []
+  storage: [4]u8
   out := fmt.buffer(storage[..])
   _ = fmt.write(&out, "abc")
   _ = fmt.write(&out, "toolong")
@@ -36,7 +36,7 @@ fn main() {
   bad := fmt.buffer(storage[..])
   bad.length = 5
   check(!fmt.write(&bad, "") && bad.failed && bad.length == 5, "fmt invalid cursor fails before slicing")
-  bytes: [2]u8 = []
+  bytes: [2]u8
   text := builder.from_buffer(bytes[..])
   _ = builder.append(&text, "abc")
   arena := mem.arena_create(0)

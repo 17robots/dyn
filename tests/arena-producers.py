@@ -38,7 +38,7 @@ fn main() {{
   check(strings.equal(strings.join(arena, strings.split(arena, "a,b,c", ","), "+"), "a+b+c"), "join split")
   check(strings.equal(strings.replace(arena, "a-b-c", "-", "::"), "a::b::c"), "replace")
   check(strings.equal(fmt.i64_decimal(arena, -42), "-42") && strings.equal(fmt.u64_base(arena, 255, 16, false), "ff"), "fmt")
-  digits: [3 + mem.ArenaBufferOverhead]u8 = []
+  digits: [3 + mem.ArenaBufferOverhead]u8
   fixed := mem.arena_from_buffer(digits[..])
   check(strings.equal(fmt.u64_decimal(fixed, 123), "123") && mem.arena_used(fixed) == 3, "fixed storage")
   encoded := base64.encode(arena, "hello")
@@ -69,7 +69,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-arena-producers-') as temporary:
         subprocess.run([DYN, 'build', str(project), '--no-cache', '--quiet', '--output', str(output),
                         *(['--release'] if release else [])], check=True, timeout=120)
         subprocess.run([str(output)], check=True, timeout=20)
-    source.write_text('use "std/mem" mem\nuse "std/encoding/json" json\nfn main() {\n  storage: [8 + mem.ArenaBufferOverhead]u8 = []\n  arena := mem.arena_from_buffer(storage[..])\n  _ = json.write_string(arena, "a long string that cannot fit")\n}\n')
+    source.write_text('use "std/mem" mem\nuse "std/encoding/json" json\nfn main() {\n  storage: [8 + mem.ArenaBufferOverhead]u8\n  arena := mem.arena_from_buffer(storage[..])\n  _ = json.write_string(arena, "a long string that cannot fit")\n}\n')
     subprocess.run([DYN, 'build', str(project), '--no-cache', '--quiet', '--output', str(output)], check=True, timeout=120)
     result = subprocess.run([str(output)], capture_output=True, text=True, timeout=10)
     assert result.returncode != 0 and 'arena exhausted' in result.stderr, result.stderr

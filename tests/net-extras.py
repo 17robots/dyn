@@ -19,7 +19,7 @@ fn exchange(listener: *net.Listener, connection: *net.Connection) {
   peer := accepted.value
   check(net.connection_write(connection, "ping").failure.kind == errors.Kind.Ok)
   check(net.wait(peer.descriptor, net.PollReadable, 1000).value != 0)
-  buffer: [4]u8 = []
+  buffer: [4]u8
   got := net.connection_read(&peer, buffer[..])
   check(got.failure.kind == errors.Kind.Ok && got.value == 4 && buffer[0] == 112 && buffer[3] == 103)
   net.connection_close(&peer)
@@ -28,7 +28,7 @@ fn exchange(listener: *net.Listener, connection: *net.Connection) {
 }
 fn main() {
   check(net.unix("").length == 0 && net.unix("bad\x00path").length == 0)
-  oversized: [108]u8 = []
+  oversized: [108]u8
   check(net.unix(oversized[..]).length == 0)
   invalid := net.unix("")
   check(net.unix_listen(&invalid, 1).failure.kind == errors.Kind.InvalidInput)
@@ -44,7 +44,7 @@ fn main() {
   connection := connected.value
   exchange(&listener, &connection)
 
-  loopback: [16]u8 = []
+  loopback: [16]u8
   loopback[15] = 1
   address := net.ipv6(loopback, 0, 0)
   opened = net.tcp_listen_ipv6(&address, 4)
@@ -78,7 +78,7 @@ fn main() {
   check(net.send_to(descriptor, "group", 0, destination.bytes[..]).failure.kind == errors.Kind.Ok)
   ready := net.wait(descriptor, net.PollReadable, 2000)
   check(ready.failure.kind == errors.Kind.Ok && ready.value != 0)
-  data: [8]u8 = []
+  data: [8]u8
   received := net.receive(descriptor, data[..], 0)
   check(received.failure.kind == errors.Kind.Ok && received.value == 5 && data[0] == 103 && data[4] == 112)
   check(net.multicast_leave_ipv4(descriptor, group, interface).failure.kind == errors.Kind.Ok)

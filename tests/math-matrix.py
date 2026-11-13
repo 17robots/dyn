@@ -272,7 +272,7 @@ for q in [[0,0,0,0],[math.inf,0,0,1],[math.nan,0,0,1]]:
     emit([f'q := {quat(q)}','n := math.quat_normalize(q)',flag('n.valid',False),'m := math.quat_to_mat3(q)',flag('m.valid',False),'v := math.quat_to_rotation_vector(q)',flag('v.valid',False)] + cv('n.value',[0]*4,0) + cm('m.value',[[0]*3 for _ in range(3)],0)+cv('v.value',[0]*3,0))
 emit(['r := math.quat_from_rotation_vector('+vec([math.inf,0,0])+')',flag('r.valid',False)]+cv('r.value',[0]*4,0))
 # Explicit zero initialization and valid singular scale constructors.
-emit(['a: math.Mat3 = .{}','b: math.Mat4 = .{}','q: math.Quat = .{}','x := math.mat3_inverse(a)','y := math.mat4_inverse(b)','z := math.quat_normalize(q)',flag('x.valid',False),flag('y.valid',False),flag('z.valid',False),'s := math.mat4_scale(math.Vec3{})',flag('s.valid'),'i := math.mat4_inverse(s.value)',flag('i.valid',False),'t := math.mat3_scale(math.Vec2{})',flag('t.valid'),'j := math.mat3_inverse(t.value)',flag('j.valid',False)])
+emit(['a: math.Mat3','b: math.Mat4','q: math.Quat','x := math.mat3_inverse(a)','y := math.mat4_inverse(b)','z := math.quat_normalize(q)',flag('x.valid',False),flag('y.valid',False),flag('z.valid',False),'s := math.mat4_scale(math.Vec3{})',flag('s.valid'),'i := math.mat4_inverse(s.value)',flag('i.valid',False),'t := math.mat3_scale(math.Vec2{})',flag('t.valid'),'j := math.mat3_inverse(t.value)',flag('j.valid',False)])
 
 with tempfile.TemporaryDirectory(prefix='dyn-math-matrix-') as tmp:
     work = Path(tmp)
@@ -286,7 +286,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-math-matrix-') as tmp:
     (source/'main.dyn').write_text('use "math"\nextern fn input(i:u32) u32\n'+'\n'.join(functions)+'\nfn main() {\n'+'\n'.join(f'test_{i}()' for i in range(len(functions)))+'\n}\n')
     failed = False
     for mode in ('debug','release'):
-        result = subprocess.run([DYN,'build',str(source),'--no-cache','--quiet','--jobs','1',f'--{mode}','--link',str(work/'input.so'),'--output',str(work/'test')],timeout=180)
+        result = subprocess.run([DYN,'build',str(source),'--no-cache','--quiet','--jobs','1',f'--{mode}', *(['--no-check-overflow'] if mode == 'debug' else []),'--link',str(work/'input.so'),'--output',str(work/'test')],timeout=180)
         if result.returncode:
             failed = True
             continue
@@ -310,7 +310,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-math-matrix-') as tmp:
         for case_index, expected_check in control_checks[name]:
             (source/'main.dyn').write_text('use "math"\nextern fn input(i:u32) u32\n'+'\n'.join(functions)+f'\nfn main() {{ test_{case_index}() }}\n')
             for mode in ('debug', 'release'):
-                build = subprocess.run([DYN,'build',str(source),'--no-cache','--quiet','--jobs','1',f'--{mode}','--link',str(work/'input.so'),'--output',str(work/'test')],timeout=180)
+                build = subprocess.run([DYN,'build',str(source),'--no-cache','--quiet','--jobs','1',f'--{mode}', *(['--no-check-overflow'] if mode == 'debug' else []),'--link',str(work/'input.so'),'--output',str(work/'test')],timeout=180)
                 if build.returncode:
                     failed = True
                     print(f'FAIL control {name} case {case_index} {mode}: compilation failed', flush=True)

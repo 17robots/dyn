@@ -120,7 +120,7 @@ fn main() {
   check(gpu.render_batch(batch, ui.first(&context), 160, 96, font, vertices).ok, "second render")
   check(batch.uploads == uploads, "cached glyphs are not uploaded again")
   // Tiny vertex storage still renders, with more draw calls.
-  tiny: [84]f32 = []
+  tiny: [84]f32
   calls := batch.draw_calls
   check(gpu.render_batch(batch, ui.first(&context), 160, 96, font, tiny[..]).ok, "tiny stream")
   check(batch.draw_calls - calls > 5, "tiny stream flushes often")

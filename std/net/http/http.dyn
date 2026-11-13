@@ -42,7 +42,7 @@ fn append_bytes(destination: []u8, offset: usize, source: []const u8) usize {
 }
 
 fn append_usize(destination: []u8, offset: usize, value: usize) usize {
-  digits: [20 + memory.ArenaBufferOverhead]u8 = []
+  digits: [20 + memory.ArenaBufferOverhead]u8
   scratch := memory.arena_from_buffer(digits[..])
   return append_bytes(destination, offset, format.u64_decimal(scratch, value))
 }
@@ -871,7 +871,7 @@ fn routes_dispatch(T: type, response: *Response, request: *const Request) Result
 // with its own work, such as counting or authentication.
 pub fn serve_routes(router: *Routes($T), response: *Response, request: *const Request) Result {
   matched := request.*
-  allow_storage: [128]u8 = []
+  allow_storage: [128]u8
   allow_used: usize = 0
   for i in 0..router.count {
     candidate := &router.routes[i]
@@ -1182,7 +1182,7 @@ fn status_reason(status: u16) []const u8 {
 }
 
 fn decimal(destination: []u8, value: usize) []const u8 {
-  digits: [20 + memory.ArenaBufferOverhead]u8 = []
+  digits: [20 + memory.ArenaBufferOverhead]u8
   scratch := memory.arena_from_buffer(digits[..])
   text := format.u64_decimal(scratch, value)
   if #len(text) > #len(destination) {
@@ -1265,7 +1265,7 @@ fn head_emit(writer: *HeadWriter, piece: []const u8) {
   }
 }
 fn head_write(writer: *HeadWriter, options: ResponseOptions, status: u16, reason: []const u8, content_type: []const u8, body_length: usize, chunked: bool) {
-  number_storage: [20]u8 = []
+  number_storage: [20]u8
   head_emit(writer, "HTTP/1.1 ")
   head_emit(writer, decimal(number_storage[..], status))
   head_emit(writer, " ")
@@ -1323,7 +1323,7 @@ fn response_begin(response: *Response, options: ResponseOptions, body_length: us
       return Result{ detail: ErrorKind.Invalid, failure: io.Failure{ kind: io.Kind.InvalidInput } }
     }
   }
-  staging: [8 * memory.KiB]u8 = []
+  staging: [8 * memory.KiB]u8
   measure := HeadWriter{ mode: HeadMode.Measure, response: response }
   head_write(&measure, options, status, reason, content_type, body_length, chunked)
   head_length := measure.used
@@ -1542,7 +1542,7 @@ fn body_write(data: rawptr, source: []const u8) io.Transfer {
   if #len(source) == 0 {
     return io.Transfer{ status: io.Status.Complete }
   }
-  size_storage: [16]u8 = []
+  size_storage: [16]u8
   size := hex_size(size_storage[..], #len(source))
   first := body_output(body, size)
   if first.status == io.Status.Error {
@@ -1736,7 +1736,7 @@ fn client_receive(arena: *memory.Arena, input: io.Reader, method: []const u8) Cl
     if ended {
       return ClientResponse{ offset: used, detail: ErrorKind.Invalid, failure: io.Failure{ kind: io.Kind.InvalidInput } }
     }
-    scratch: [4096]u8 = []
+    scratch: [4096]u8
     part := io.read(input, scratch[..])
     if part.transferred > #len(scratch) {
       return ClientResponse{ detail: ErrorKind.Io, failure: io.Failure{ kind: io.Kind.System } }

@@ -16,18 +16,18 @@ fn vector(key: []const u8, nonce: []const u8, aad: []const u8, message: []const 
  arena := mem.arena_create(0)
  defer { mem.arena_release(arena) }
  output := mem.push_array(u8,arena,#len(message))
- tag: [16]u8 = []
+ tag: [16]u8
  check(aead.seal(output,tag[..],message,aad,key,nonce))
  check(bytes.equal(output,cipher) && bytes.equal(tag[..],expected))
  check(aead.open(output,output,tag[..],aad,key,nonce) && bytes.equal(output,message))
  check(aead.seal(output,tag[..],output,aad,key,nonce) && bytes.equal(output,cipher) && bytes.equal(tag[..],expected))
- wrong_key: [32]u8 = []
+ wrong_key: [32]u8
  for i in 0..32 { wrong_key[i] = key[i] }
  wrong_key[0] ^= 1
  mem.fill(output,165)
  check(!aead.open(output,cipher,tag[..],aad,wrong_key[..],nonce))
  for byte in output { check(byte == 165) }
- wrong_nonce: [128]u8 = []
+ wrong_nonce: [128]u8
  for i in 0..#len(nonce) { wrong_nonce[i] = nonce[i] }
  wrong_nonce[0] ^= 1
  check(!aead.open(output,cipher,tag[..],aad,key,wrong_nonce[..#len(nonce)]))
@@ -93,10 +93,10 @@ for length in (0,1,15,16,17,63,64,65,1024):
 for key,nonce,aad,message in vectors:
     cipher,tag=oracle(key,nonce,aad,message)
     SOURCE+=' vector('+','.join(map(literal,(key,nonce,aad,message,cipher,tag)))+')\n'
-SOURCE+=r''' key: [32]u8 = []
- nonce: [12]u8 = []
- storage: [100]u8 = []
- tag: [16]u8 = []
+SOURCE+=r''' key: [32]u8
+ nonce: [12]u8
+ storage: [100]u8
+ tag: [16]u8
  check(!aead.seal(storage[..1],tag[..],storage[1..2],"",key[..],nonce[..1]))
  check(!aead.seal(storage[..10],tag[..],storage[1..11],"",key[..],nonce[..]))
  check(!aead.seal(storage[..1],tag[..],"x",storage[..1],key[..],nonce[..]))

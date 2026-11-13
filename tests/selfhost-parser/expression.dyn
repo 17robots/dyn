@@ -47,6 +47,7 @@ const FlagBitcast: u16 = 256
 const FlagWildcard: u16 = 512
 const FlagUnion: u16 = 1024
 const FlagInstance: u16 = 2048
+const FlagIndexed: u16 = 4096
 
 fn add_node(p: *Parser, kind: u16, start: u32, end: u32, first: u32) u32 {
   if p.tree.failed {
@@ -462,6 +463,9 @@ fn aggregate(p: *Parser) u32 {
       }
     } else if p.token.kind == TokenKind.Name {
       fail(p, p.token.start - 1, "an enum variant needs its type: write Enum.Variant, not .Variant")
+      return None
+    } else {
+      fail(p, p.token.start - 1, "a struct literal needs its type: write Type{...}, not .{...}")
       return None
     }
     expect(p, "{")

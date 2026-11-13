@@ -33,7 +33,7 @@ fn keep(n: u32) u64 {
 fn main() {
   a: u32 = 3
   b: u64 = #cast(u64, a)
-  d: [4]u8 = []
+  d: [4]u8
   e := d[#cast(usize, a)]
   p := P{ n: #cast(u64, a) }
   _ = take(#cast(u64, e)) + keep(a) + b + p.n

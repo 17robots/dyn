@@ -86,8 +86,8 @@ fn main() {
   // An empty datagram still validates the destination and socket.
   if net.send_to(-1, "", 0, bound.bytes[..bound.length]).failure.kind == io.Kind.Ok { #panic("invalid socket accepted") }
   if net.send_to(descriptor, "", 0, "").failure.kind == io.Kind.Ok { #panic("invalid address accepted") }
-  buffer: [1]u8 = []
-  peer: [128]u8 = []
+  buffer: [1]u8
+  peer: [128]u8
   length: u32 = 0
   received := net.receive_from(descriptor, buffer[..], 0, peer[..], &length)
   if received.failure.kind != io.Kind.Ok || received.value != 0 || length != 16 { #panic("receive empty") }
@@ -161,7 +161,7 @@ fn main() {
   defer { net.close(queue.value) }
   if net.event_add(queue.value, #cast(isize, descriptor), net.EventReadable, 42).failure.kind != io.Kind.Ok { #panic("event add") }
   items: [1]net.PollDescriptor = [net.PollDescriptor{ descriptor: descriptor, events: net.PollReadable }]
-  events: [1]net.Event = []
+  events: [1]net.Event
   before := time.monotonic_now()
   outcome := OPERATION
   after := time.monotonic_now()

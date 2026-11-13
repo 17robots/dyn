@@ -82,9 +82,9 @@ fn main() {
       }
     }
   }
-  left: Branch(i32) = .{ value: 2 }
-  right: Branch(i32) = .{ value: 3 }
-  root: Branch(i32) = .{ left: Tree(i32).Node(&left), right: Tree(i32).Node(&right), value: 1 }
+  left := Branch(i32){ value: 2 }
+  right := Branch(i32){ value: 3 }
+  root := Branch(i32){ left: Tree(i32).Node(&left), right: Tree(i32).Node(&right), value: 1 }
   if sum(Tree(i32).Node(&root)) != 6 {
     #panic("tree")
   }

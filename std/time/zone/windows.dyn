@@ -27,7 +27,7 @@ fn long(data: []const u8, at: usize) i32 {
 
 // A zero-terminated UTF-16 field of at most units code units, as UTF-8.
 fn name(arena: *mem.Arena, data: []const u8, at: usize, units: usize) []const u8 {
-  wide: [128]u16 = []
+  wide: [128]u16
   count: usize = 0
   for count < units && word(data, at + count * 2) != 0 {
     wide[count] = word(data, at + count * 2)
@@ -62,7 +62,7 @@ fn windows_rule(data: []const u8, at: usize) Rule {
 // StandardBias, DaylightName[32], DaylightDate, DaylightBias,
 // TimeZoneKeyName[128], DynamicDaylightTimeDisabled. Biases are minutes west.
 fn platform_system(arena: *mem.Arena) ZoneResult {
-  data: [432]u8 = []
+  data: [432]u8
   if zone_information(&data[0]) == 4294967295 {
     code := #cast(isize, native_windows.last_error_raw())
     return ZoneResult{ failure: io.windows_failure(code) }

@@ -221,7 +221,7 @@ pub fn write_f64_shortest(state: *Buffer, value: f64) bool {
     return true
   }
   decimal := shortest_decimal(mantissa_bits, exponent_bits)
-  digits: [20]u8 = []
+  digits: [20]u8
   count: usize = 0
   rest := decimal.mantissa
   for rest != 0 {
@@ -277,7 +277,7 @@ pub fn write_f64_shortest(state: *Buffer, value: f64) bool {
 // The shortest round-trip text of value in arena storage; see
 // write_f64_shortest. At most 24 bytes.
 pub fn f64_shortest(arena: *mem.Arena, value: f64) []u8 {
-  storage: [32]u8 = []
+  storage: [32]u8
   state := buffer(storage[..])
   _ = write_f64_shortest(&state, value)
   return copy_out(arena, bytes(&state))

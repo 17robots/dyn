@@ -23,7 +23,7 @@ fn worker(context: rawptr) isize {
   if accepted.failure.kind != io.Kind.Ok { #panic("accept") }
   connection := accepted.value
   defer { net.connection_close(&connection) }
-  buffer: [4]u8 = []
+  buffer: [4]u8
   at: usize = 0
   for at < 4 {
     part := net.connection_read(&connection, buffer[at..])
@@ -40,7 +40,7 @@ fn main() {
   defer { mem.arena_release(arena) }
   idle := thread.Thread{}
   if thread.join(&idle).failure.kind != io.Kind.Ok || thread.id(&idle) != 0 { #panic("empty join") }
-  stack: [131072]u8 = []
+  stack: [131072]u8
   mark:=mem.arena_mark(arena)
   rejected:=thread.spawn(arena, stack[..0], worker, nil)
   if rejected.failure.kind == io.Kind.Ok || rejected.failure.kind!=errors.Kind.InvalidInput || rejected.failure.native!=0 || rejected.value!=nil || mem.arena_mark(arena)!=mark { #panic("short stack") }
@@ -69,7 +69,7 @@ fn main() {
   if net.connection_write(&connection, "ping").failure.kind != io.Kind.Ok { #panic("request write") }
   item := net.PollDescriptor{ descriptor: #cast(net.Descriptor, connection.descriptor), events: net.PollReadable | net.PollError | net.PollHangup }
   if net.poll(#slice(&item, 1), 2000).value != 1 || !net.poll_has(&item, net.PollReadable) || item.events != 25 { #panic("poll") }
-  buffer: [4]u8 = []
+  buffer: [4]u8
   at: usize = 0
   for at < 4 {
     part := net.connection_read(&connection, buffer[at..])
@@ -94,7 +94,7 @@ fn main() {
   packet := net.receive_from(udp.value, buffer[..], 0, peer.bytes[..], &length)
   if packet.failure.kind != io.Kind.Ok || packet.value != 0 || length != 16 { #panic("empty datagram delivery") }
   if net.nonblocking(udp.value, false).failure.kind != io.Kind.Ok { #panic("blocking restore") }
-  loopback: [16]u8 = []
+  loopback: [16]u8
   loopback[15] = 1
   ipv6 := net.ipv6(loopback, 0, 0)
   v6 := net.socket(net.AddressFamilyIpv6, net.SocketDatagram, 0)

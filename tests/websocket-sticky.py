@@ -99,17 +99,17 @@ fn wire_read(raw: rawptr, destination: []u8) io.Transfer {
 fn coalesced() {
   isolated := Wire{data: "\x81\x01a", step: 32}
   single_sent := Trace{mode: 99}
-  available: [32]u8 = []
-  single_message: [32]u8 = []
-  controls: [125]u8 = []
+  available: [32]u8
+  single_message: [32]u8
+  controls: [125]u8
   reusable := ws.connection(io.Reader{data: &isolated, read: wire_read}, io.Writer{data: &single_sent, write: write}, available[..], single_message[..], controls[..], true)
   if ws.connection_receive(&reusable).failure.kind != io.Kind.Ok { #panic("single frame") }
   if ws.connection_send(&reusable, 1, "abcdefghijklmnopqrstuvwxyz", true, 1).failure.kind != io.Kind.Ok || single_sent.bytes != 32 { #panic("fully consumed capacity") }
   for step in [1, 2, 3, 4, 32] {
     wire := Wire{data: "\x81\x01a\x81\x01b\x88\x00", step: #cast(usize, step)}
-    frames: [32]u8 = []
-    message: [32]u8 = []
-    control: [125]u8 = []
+    frames: [32]u8
+    message: [32]u8
+    control: [125]u8
     sent := Trace{mode: 99}
     state := ws.connection(io.Reader{data: &wire, read: wire_read}, io.Writer{data: &sent, write: write}, frames[..], message[..], control[..], true)
     a := ws.connection_receive(&state)
@@ -133,9 +133,9 @@ fn coalesced() {
 fn main() {
   coalesced()
   trace := Trace{}
-  frames: [32]u8 = []
-  message: [32]u8 = []
-  control: [125]u8 = []
+  frames: [32]u8
+  message: [32]u8
+  control: [125]u8
   reader := io.Reader{ data: &trace, read: read }
   writer := io.Writer{ data: &trace, write: write }
   zero := ws.WebSocketConnection{}

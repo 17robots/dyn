@@ -62,14 +62,6 @@ static bool compact_comparison(DynOperator op) {
 static bool compact_bitwise(DynOperator op) {
   return op == DYN_OP_BIT_AND || op == DYN_OP_BIT_OR || op == DYN_OP_BIT_XOR;
 }
-static int compact_direction(DynOperator op) {
-  return op == DYN_OP_LT || op == DYN_OP_LE ? 1 : op == DYN_OP_GT || op == DYN_OP_GE ? -1 : 0;
-}
-static bool compact_chain_operand(CompactNode n) {
-  uint16_t kind = compact_kind(n);
-  if (kind == EXP_NAME || kind == EXP_NUMBER || kind == EXP_CHAR) return true;
-  return kind == EXP_FIELD && compact_chain_operand(compact_unwrap(compact_first(n)));
-}
 static DynType compact_type(CompactNode, const DynSource *, DynAstProgram *);
 static DynType compact_instance(CompactNode, CompactNode, const DynSource *, DynAstProgram *);
 static DynExprId compact_expr(CompactNode, const DynSource *, DynAstProgram *, unsigned *);
@@ -102,7 +94,9 @@ static bool compact_local_name(CompactNode use, const DynSource *s) {
       break;
     } else if (kind == SRC_FOR && compact_kind(child) == SRC_BLOCK) {
       for (CompactNode c = compact_first(scope); !compact_null(c); c = compact_next(c))
-        if (compact_kind(c) == SRC_FOR_CONDITION && compact_flag(c, EXP_ITERATION) && compact_same_name(compact_first(c), use, s)) return true;
+        if (compact_kind(c) == SRC_FOR_CONDITION && compact_flag(c, EXP_ITERATION) &&
+            (compact_same_name(compact_first(c), use, s) ||
+             (compact_flag(c, EXP_INDEXED) && compact_same_name(compact_child(c, 1), use, s)))) return true;
     } else if (kind == SRC_CASE_ARM && compact_kind(child) == SRC_BLOCK) {
       for (CompactNode name = compact_first(scope); !compact_null(name); name = compact_next(name)) {
         CompactNode binding = compact_kind(name) == SRC_TYPE_PATTERN ? compact_last(name) : name;
@@ -432,6 +426,11 @@ static DynExprId compact_expr(CompactNode node, const DynSource *s, DynAstProgra
         first < count &&
         !(compact_kind(compact_child(node, first)) != EXP_NAME))
       ++first;
+    if (first == 1 && e.type == DYN_TYPE_INFER && compact_kind(compact_child(node, 0)) == EXP_NAME) {
+      /* T{} in a generic body: T is the instance's concrete type. */
+      DynType bound = scope_type(a, compact_span(compact_child(node, 0)), s, false);
+      if (bound != DYN_TYPE_ERROR) e.type = bound;
+    }
     if (first) {
       CompactNode begin = compact_child(node, 0),
              end = compact_child(node, first - 1);
@@ -605,35 +604,15 @@ static DynExprId compact_expr(CompactNode node, const DynSource *s, DynAstProgra
           break;
         }
     }
-    int direction = compact_direction(e.op);
     DynOperator inner_op = compact_kind(lhs) == EXP_BINARY ? compact_operator(lhs, s) : DYN_OP_NONE;
     if (compact_comparison(e.op) && compact_comparison(inner_op)) {
-      /* a < b <= c means a < b && b <= c; b is evaluated twice, so it must
-         be a name, field or literal. */
-      CompactNode middle = compact_unwrap(compact_child(lhs, 1));
-      if (!direction || compact_direction(inner_op) != direction) {
-        compact_diagnostic(node, s, errors,
-            "only <, <= or >, >= chains in one direction; == and != do not chain");
-      } else if (!compact_chain_operand(middle))
-        compact_diagnostic(middle, s, errors,
-            "a chained comparison's middle operand must be a name, field or literal; bind it first");
-      DynExprId first = compact_expr(lhs, s, a, errors);
-      DynExprId again = compact_expr(middle, s, a, errors);
-      DynExprId last = compact_expr(rhs, s, a, errors);
-      if (!reserve_expr(a)) {
-        compact_diagnostic(node, s, errors, "out of memory");
-        return DYN_NO_EXPR;
-      }
-      DynExprId second = (DynExprId)a->expression_count;
-      a->expressions[a->expression_count++] = (DynAstExpr){.kind = DYN_EXPR_BINARY, .op = e.op,
-          .span = e.span, .left = again, .right = last};
-      e.op = DYN_OP_LOGICAL_AND;
-      e.left = first;
-      e.right = second;
-    } else {
-      e.left = compact_expr(lhs, s, a, errors);
-      e.right = compact_expr(rhs, s, a, errors);
+      compact_diagnostic(node, s, errors,
+          "comparisons do not chain: write a < b && b < c, or (a == b) == c");
+      /* Check the last comparison alone so the error does not cascade. */
+      lhs = compact_child(lhs, 1);
     }
+    e.left = compact_expr(lhs, s, a, errors);
+    e.right = compact_expr(rhs, s, a, errors);
   } else {
     compact_diagnostic(node, s, errors,
                "expression is not implemented in bootstrap compiler");
@@ -804,6 +783,10 @@ static uint32_t compact_stmt(CompactNode n, const DynSource *s, DynAstProgram *a
       } else if (!(compact_kind(c) != EXP_TYPE)) {
         st.declared_type = compact_type(c, s, a);
       } else {
+        if (!st.is_const && compact_kind(compact_unwrap(c)) == EXP_ARRAY &&
+            compact_count(compact_unwrap(c)) == 0)
+          compact_diagnostic(c, s, errors,
+              "a declaration without an initializer is already zero; drop '= []'");
         st.expression = compact_expr(c, s, a, errors);
       }
     }
@@ -870,9 +853,19 @@ static uint32_t compact_stmt(CompactNode n, const DynSource *s, DynAstProgram *a
           st.for_pointer = compact_flag(c, EXP_POINTER_BINDING);
           st.for_const = compact_flag(c, EXP_CONST);
           st.name = compact_span(binder);
-          if (cc == 3)
+          st.for_index = compact_flag(c, EXP_INDEXED);
+          if (st.for_index)
+            st.index_name = compact_span(compact_child(c, 1));
+          else if (cc == 3)
             st.declared_type = compact_type(compact_child(c, 1), s, a);
           CompactNode iterable = compact_last(c);
+          if (st.for_index && compact_kind(compact_unwrap(iterable)) == SRC_RANGE)
+            compact_diagnostic(c, s, errors,
+                "a range loop's variable is already its index; drop ', index'");
+          if (st.for_index && compact_kind(iterable) == SRC_REVERSE &&
+              compact_kind(compact_child(iterable, 0)) == SRC_RANGE)
+            compact_diagnostic(c, s, errors,
+                "a range loop's variable is already its index; drop ', index'");
           if (!(compact_kind(iterable) != SRC_REVERSE)) {
             st.for_reverse = true;
             iterable = compact_child(iterable, 0);

@@ -5,7 +5,7 @@ pub fn hkdf_extract(destination: []u8, salt: []const u8, input_key_material: []c
   if #len(destination) < 32 {
     return destination[..0]
   }
-  zero_salt: [32]u8 = []
+  zero_salt: [32]u8
   actual_salt := salt
   if #len(actual_salt) == 0 {
     actual_salt = zero_salt[..]
@@ -24,7 +24,7 @@ pub fn hkdf_expand(destination: []u8, pseudorandom_key: []const u8, info: []cons
   if bytes.overlaps(destination, scratch) || bytes.overlaps(destination, pseudorandom_key) || bytes.overlaps(destination, info) || bytes.overlaps(scratch, pseudorandom_key) || bytes.overlaps(scratch, info) {
     return false
   }
-  previous: [32]u8 = []
+  previous: [32]u8
   previous_length: usize = 0
   output_at: usize = 0
   counter: u8 = 1
@@ -63,7 +63,7 @@ pub fn hkdf_expand(destination: []u8, pseudorandom_key: []const u8, info: []cons
 }
 
 pub fn hkdf(destination: []u8, salt: []const u8, input_key_material: []const u8, info: []const u8, scratch: []u8) bool {
-  extracted: [32]u8 = []
+  extracted: [32]u8
   if #len(hkdf_extract(extracted[..], salt, input_key_material)) != 32 {
     return false
   }

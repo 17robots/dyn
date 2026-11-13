@@ -84,7 +84,7 @@ pub fn size(descriptor: isize) Size {
   if descriptor == 0 {
     handle = handle_of(1)
   }
-  info: [22]u8 = []
+  info: [22]u8
   if buffer_info(handle, &info[0]) == 0 {
     failed := failure()
     return Size{ failure: io.Failure{ kind: failed.failure.kind, native: failed.failure.native } }

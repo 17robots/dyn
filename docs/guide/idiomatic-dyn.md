@@ -128,7 +128,7 @@ A string is immutable UTF-8 bytes: `[]const u8`. It is length-based, not zero-te
 pointers borrow storage; they do not own it.
 
 ```dyn
-storage: [64]u8 = []
+storage: [64]u8
 whole := storage[..]
 prefix := whole[..8]
 length := #len(prefix)

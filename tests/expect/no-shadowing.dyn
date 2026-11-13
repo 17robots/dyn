@@ -1,0 +1,17 @@
+// A name in scope is never declared again; it is free once its scope ends.
+value: i32 = 3
+
+fn main() {
+  x := 1
+  if x > 0 {
+    x := 2 // error: locals never shadow
+    _ = x
+  }
+  for i in 0..3 {
+    i := 4 // error: loop variable of an enclosing loop
+    _ = i
+  }
+  for i in 0..3 { _ = i }
+  value := 5 // error: cannot shadow a global
+  _ = value
+}

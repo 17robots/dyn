@@ -53,7 +53,7 @@ pub fn surround_oracle() {
   surround_check(result.kind != io.Kind.Ok && result.kind == io.Kind.InvalidInput,"native string NUL")
   result = set_surrounding_text(&host,"abc",0,0,0)
   surround_check(result.kind != io.Kind.Ok && result.kind == io.Kind.InvalidInput,"zero revision")
-  large: [4097]u8 = []
+  large: [4097]u8
   for i in 0..#len(large) { large[i] = 'a' }
   result = set_surrounding_text(&host,large[..],0,0,1)
   surround_check(result.kind != io.Kind.Ok && result.kind == io.Kind.Capacity,"context byte cap")

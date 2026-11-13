@@ -54,7 +54,7 @@ pub fn open(window: *Window, title: []const u8, width, height: i32) Result {
   if width <= 0 || height <= 0 || #len(title) > 4095 {
     return Result{kind:io.Kind.InvalidInput}
   }
-  storage: [4096]u8 = []
+  storage: [4096]u8
   name := c.string_into(storage[..], title)
   if name.failure.kind != parse.Kind.Ok {
     return Result{kind:io.Kind.InvalidInput}
@@ -126,7 +126,7 @@ pub fn set_clipboard(window: *Window, text: []const u8) {
     length = 65536
   }
   if length == 0 {
-    empty: [1]u8 = []
+    empty: [1]u8
     native_set_clipboard(window.handle, &empty[0], 0)
     return
   }
@@ -261,7 +261,7 @@ pub fn set_surrounding_text(window: *Window, context: Surrounding) Result {
       return Result{ kind: io.Kind.InvalidInput }
     }
   }
-  empty: [1]u8 = []
+  empty: [1]u8
   pointer: *const u8 = &empty[0]
   if #len(context.text) != 0 {
     pointer = &context.text[0]
@@ -316,7 +316,7 @@ pub fn set_title(window: *Window, title: []const u8) Result {
       return Result{kind:io.Kind.InvalidInput}
     }
   }
-  empty: [1]u8 = []
+  empty: [1]u8
   pointer: *const u8 = &empty[0]
   if #len(title) != 0 {
     pointer = &title[0]
@@ -353,7 +353,7 @@ pub fn try_set_clipboard(window: *Window, text: []const u8) Result {
   if #len(text) > 4294967295 {
     return Result{kind:io.Kind.Capacity}
   }
-  empty: [1]u8 = []
+  empty: [1]u8
   pointer: *const u8 = &empty[0]
   if #len(text) != 0 {
     pointer = &text[0]

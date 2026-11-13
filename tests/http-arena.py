@@ -209,10 +209,10 @@ with tempfile.TemporaryDirectory(prefix='dyn-http-fragments-') as temporary:
         subprocess.run([str(DYN), 'build', str(project), '--quiet', '--no-cache', '--output', str(binary), *mode], env=ENV, check=True, timeout=120)
         subprocess.run([str(binary)], env=ENV, check=True, timeout=30)
 PANICS = [
-    ('decode overlap', 'storage: [256 + mem.ArenaBufferOverhead]u8 = []\narena := mem.arena_from_buffer(storage[..])\n_ = http.decode_chunked(arena, arena.data[mem.ArenaHeader + 80..mem.ArenaHeader + 90])'),
-    ('client late argument overlap', 'storage: [256 + mem.ArenaBufferOverhead]u8 = []\narena := mem.arena_from_buffer(storage[..])\n_ = http.client_do(arena, io.Reader{ read: error_read }, io.Writer{ write: sink }, "GET", "/", "host", arena.data[mem.ArenaHeader + 80..mem.ArenaHeader + 90])'),
-    ('decode exhaustion', 'storage: [2 + mem.ArenaBufferOverhead]u8 = []\narena := mem.arena_from_buffer(storage[..])\narena = mem.arena_from_buffer(arena.data[..mem.ArenaHeader + 2])\n_ = http.decode_chunked(arena, "3\\r\\nabc\\r\\n0\\r\\n\\r\\n")'),
-    ('client exhaustion', 'storage: [128 + mem.ArenaBufferOverhead]u8 = []\narena := mem.arena_from_buffer(storage[..])\narena = mem.arena_from_buffer(arena.data[..mem.ArenaHeader + 128])\nfeed := Feed{ data: "HTTP/1.1 200 OK\\r\\nContent-Length: 100\\r\\n\\r\\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", step: 1 }\n_ = http.client_do(arena, io.Reader{ data: &feed, read: read_feed }, io.Writer{ write: sink }, "GET", "/", "host", "")'),
+    ('decode overlap', 'storage: [256 + mem.ArenaBufferOverhead]u8\narena := mem.arena_from_buffer(storage[..])\n_ = http.decode_chunked(arena, arena.data[mem.ArenaHeader + 80..mem.ArenaHeader + 90])'),
+    ('client late argument overlap', 'storage: [256 + mem.ArenaBufferOverhead]u8\narena := mem.arena_from_buffer(storage[..])\n_ = http.client_do(arena, io.Reader{ read: error_read }, io.Writer{ write: sink }, "GET", "/", "host", arena.data[mem.ArenaHeader + 80..mem.ArenaHeader + 90])'),
+    ('decode exhaustion', 'storage: [2 + mem.ArenaBufferOverhead]u8\narena := mem.arena_from_buffer(storage[..])\narena = mem.arena_from_buffer(arena.data[..mem.ArenaHeader + 2])\n_ = http.decode_chunked(arena, "3\\r\\nabc\\r\\n0\\r\\n\\r\\n")'),
+    ('client exhaustion', 'storage: [128 + mem.ArenaBufferOverhead]u8\narena := mem.arena_from_buffer(storage[..])\narena = mem.arena_from_buffer(arena.data[..mem.ArenaHeader + 128])\nfeed := Feed{ data: "HTTP/1.1 200 OK\\r\\nContent-Length: 100\\r\\n\\r\\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", step: 1 }\n_ = http.client_do(arena, io.Reader{ data: &feed, read: read_feed }, io.Writer{ write: sink }, "GET", "/", "host", "")'),
 ]
 with tempfile.TemporaryDirectory(prefix='dyn-http-arena-panic-') as temporary:
     project = Path(temporary)

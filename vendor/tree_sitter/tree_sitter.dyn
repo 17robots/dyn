@@ -27,7 +27,7 @@ pub fn parse(parser: Parser, old_tree: Tree, source: []const u8) ParseResult {
   if parser == nil || #len(source) > 4294967295 {
     return ParseResult{}
   }
-  empty: [1]u8 = []
+  empty: [1]u8
   pointer: *const u8 = &empty[0]
   if #len(source) > 0 {
     pointer = &source[0]

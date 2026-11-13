@@ -82,7 +82,7 @@ pub fn ime_oracle() {
   ime_drain(&host)
   desktop.owns = true
   desktop.owned_length = 1
-  owned_storage: [1]u8 = []
+  owned_storage: [1]u8
   desktop.owned = owned_storage[..]
   defer desktop_close(&host)
   desktop.owned[0] = 'a'

@@ -728,10 +728,9 @@ fn count_write(data: rawptr, source: []const u8) io.Transfer {
 // Panics on a bad template or argument count.
 pub fn format_arguments(arena: *memory.Arena, template: []const u8, arguments: []const any) []u8 {
   size: usize = 0
-  counted := io.print_arguments(io.Writer{ data: &size, write: count_write }, template, arguments)
-  if counted.status == io.Status.Error {
-    #panic("format template does not match its arguments")
-  }
+  // A template that does not match its arguments formats with markers; see
+  // io.print_arguments.
+  _ = io.print_arguments(io.Writer{ data: &size, write: count_write }, template, arguments)
   output := memory.push_bytes_uninit(arena, size)
   buffer := io.buffer_writer(output)
   _ = io.print_arguments(io.buffer_writer_adapter(&buffer), template, arguments)

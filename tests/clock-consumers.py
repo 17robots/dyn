@@ -28,7 +28,7 @@ fn main() {
   require(synthetic_replay.failure.kind != errors.Kind.Ok && synthetic_replay.failure.native == 0 && synthetic_replay.failure.kind == errors.Kind.System)
   benchmark := testing.benchmark_start(1)
   empty_benchmark := testing.benchmark_start(0)
-  events: [1]profile.Event = []
+  events: [1]profile.Event
   trace := profile.trace(events[..])
   filters: [4]Filter = [Filter{code:32,k:0}, Filter{code:21,jf:1,k:228}, Filter{code:6,k:327681}, Filter{code:6,k:2147418112}]
   program := Program{length:4,filter:&filters[0]}
@@ -42,7 +42,7 @@ fn main() {
   require(elapsed.failure.kind != errors.Kind.Ok && elapsed.failure.native == -1 && elapsed.failure.kind == errors.Kind.PermissionDenied)
   each := testing.benchmark_nanoseconds_each(&benchmark)
   require(each.failure.kind != errors.Kind.Ok && each.failure.native == -1 && each.failure.kind == errors.Kind.PermissionDenied)
-  descriptors: [0]net.PollDescriptor = []
+  descriptors: [0]net.PollDescriptor
   failed_start := testing.benchmark_start(0)
   empty_failure := testing.benchmark_nanoseconds_each(&failed_start)
   require(empty_failure.failure.kind != errors.Kind.Ok && empty_failure.failure.native == -1 && empty_failure.failure.kind == errors.Kind.PermissionDenied)
@@ -53,7 +53,7 @@ fn main() {
   queue := net.event_queue()
   require(queue.failure.kind == errors.Kind.Ok)
   defer net.close(queue.value)
-  notifications: [1]net.Event = []
+  notifications: [1]net.Event
   waited := net.event_wait(queue.value, notifications[..], 10)
   require(waited.failure.kind != errors.Kind.Ok && waited.failure.native == -1 && waited.failure.kind == errors.Kind.PermissionDenied)
   arena := mem.arena_create(0)

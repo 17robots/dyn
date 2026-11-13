@@ -162,8 +162,8 @@ fn safe_join_into(destination: []u8, root: []const u8, child: []const u8) Result
   if is_absolute(child) {
     return Result{ value: destination[..0], valid: false }
   }
-  temporary: [4096]u8 = []
-  root_storage: [4096]u8 = []
+  temporary: [4096]u8
+  root_storage: [4096]u8
   combined := join_into(temporary[..], root, child)
   if !combined.valid {
     return Result{ value: destination[..0], valid: false }
@@ -214,8 +214,8 @@ pub fn component_next(state: *Components) Component {
 // Lexical relative path, for normalized inputs up to 4096 bytes each.
 // Absolute and relative roots cannot be mixed. No filesystem access occurs.
 fn relative_into(destination: []u8, base: []const u8, target: []const u8) Result {
-  base_storage: [4096]u8 = []
-  target_storage: [4096]u8 = []
+  base_storage: [4096]u8
+  target_storage: [4096]u8
   left := clean_into(base_storage[..], base)
   right := clean_into(target_storage[..], target)
   if !left.valid || !right.valid || is_absolute(left.value) != is_absolute(right.value) {

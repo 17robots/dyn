@@ -33,7 +33,7 @@ fn main() {
  require(terminal.restore(PTY_DESCRIPTOR, &changed.value).failure.kind == errors.Kind.Ok)
  after := terminal.read_state(PTY_DESCRIPTOR)
  require(after.failure.kind == errors.Kind.Ok && bytes.equal(r.value.bytes[..], after.value.bytes[..]))
- output: [32]u8 = []
+ output: [32]u8
  directory := cap.Directory{descriptor: DIRECTORY_DESCRIPTOR, active: true}
  read := cap.read(&directory, "ok", output[..])
  require(read.failure.kind == errors.Kind.Ok && read.value == 3 && read.failure.native == 0 && read.failure.kind == errors.Kind.Ok && bytes.equal(output[..3], "yes"))

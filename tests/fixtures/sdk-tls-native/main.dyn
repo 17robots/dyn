@@ -5,7 +5,7 @@ fn main() {
   context := tls.client_config_create()
   if context.failure.kind != errors.Kind.Ok { #panic("native TLS trust configuration") }
   defer tls.config_release(&context.value)
-  backing: [256]u8 = []
+  backing: [256]u8
   arena := mem.arena_from_buffer(backing[..])
   held := mem.arena_push(arena, 1, 1)
   held.* = 42

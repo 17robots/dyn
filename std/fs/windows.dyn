@@ -35,7 +35,7 @@ fn limit(length: usize) u32 {
 }
 // Paths are borrowed UTF-8, converted into bounded stack storage; no hidden allocation.
 fn native_open(path: []const u8, mode: u8) FileResult {
-  storage: [32768]u16 = []
+  storage: [32768]u16
   at: usize = 0
   used: usize = 0
   if #len(path) == 0 {

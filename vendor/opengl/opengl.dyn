@@ -128,7 +128,7 @@ pub struct Api {
 }
 pub struct LoadResult { api: Api, missing: []const u8, ok: bool }
 fn symbol(loader: Loader, name: []const u8) rawptr {
-  buffer: [64]u8 = []
+  buffer: [64]u8
   encoded := c.string_into(buffer[..], name)
   if encoded.failure.kind != parse.Kind.Ok {
     return nil

@@ -12,7 +12,7 @@ use "std/embedded/timer" timer
 use "std/io" errors
 fn check(ok: bool) { if !ok { #panic("embedded helper") } }
 fn main() {
-  registers: [8]u32 = []
+  registers: [8]u32
   address := #cast(usize, &registers[0])
   device := uart.Uart{ data: address, status: address + 4, ready_mask: 4, ready_when_set: true, width: uart.RegisterWidth.Word }
   check(!uart.ready(&device))

@@ -297,6 +297,9 @@ typedef struct {
       target_loop_id, case_arm_start, case_arm_count;
   /* Range for-in stores the first bound in target and the last in expression. */
   bool defer_block, for_pointer, for_const, is_const, for_range, for_inclusive, for_reverse;
+  /* for x, i in xs: the index local is local_id + 1. */
+  bool for_index;
+  DynSpan index_name;
 } DynAstStmt;
 typedef struct {
   DynSpan name;

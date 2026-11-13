@@ -50,7 +50,7 @@ fn server_check(wire: []const u8) {
   for cut in 0..#len(wire) + 1 {
     for step in [1, 7, 65536] {
       feed := Feed{ data: wire, cut: cut, step: #cast(usize, step) }
-      storage: [65536]u8 = []
+      storage: [65536]u8
       state := http.server(io.Reader{ data: #cast(rawptr, &feed), read: read_feed }, io.Writer{ write: sink }, storage[..])
       first := http.receive(&state)
       if first.failure.kind != io.Kind.Ok || !bytes.equal(first.request.body, "abc") || !bytes.equal(first.request.target, "/one") { #panic("first request") }
@@ -63,7 +63,7 @@ fn server_check(wire: []const u8) {
 }
 fn server_invalid(wire: []const u8) {
   feed := Feed{ data: wire, step: 1 }
-  storage: [256]u8 = []
+  storage: [256]u8
   state := http.server(io.Reader{ data: #cast(rawptr, &feed), read: read_feed }, io.Writer{ write: sink }, storage[..])
   got := http.receive(&state)
   if got.failure.kind == io.Kind.Ok || got.detail != http.ErrorKind.Invalid { #panic("invalid request") }

@@ -2172,7 +2172,7 @@ static bool ssa_byte_count_unchanged(Ssa *s, uint64_t local, uint32_t start, uin
         ((st->target == DYN_NO_EXPR && st->local_id == local) ||
          (st->target < ir->expression_count && ir->expressions[st->target].kind == DYN_EXPR_NAME &&
           ir->expressions[st->target].integer == local))) return false;
-    if (st->kind == DYN_STMT_FOR && st->local_id == local) return false;
+    if (st->kind == DYN_STMT_FOR && (st->local_id == local || (st->for_index && st->local_id + 1 == local))) return false;
     if (!ssa_byte_count_unchanged(s, local, st->body_start, st->body_count, initializer, budget, depth + 1) ||
         !ssa_byte_count_unchanged(s, local, st->else_start, st->else_count, initializer, budget, depth + 1)) return false;
     if ((uint64_t)st->case_arm_start + st->case_arm_count > ir->case_arm_count) return false;
@@ -2408,7 +2408,7 @@ static bool ssa_axpy(Ssa *s, const DynIrStmt *st, unsigned depth) {
 static bool ssa_sum(Ssa *s, const DynIrStmt *st, unsigned depth) {
   const DynIrProgram *ir = s->ir;
   if (s->scalar_loop == st || !s->ctx->vectorize || s->ctx->rv64 || s->ctx->rv32 || s->ctx->t32 ||
-      st->for_reverse || st->for_pointer || st->for_inclusive || st->body_count != 1 ||
+      st->for_reverse || st->for_pointer || st->for_inclusive || st->for_index || st->body_count != 1 ||
       st->body_start >= ir->child_count || st->target >= ir->expression_count ||
       !ssa_byte_count_private(s, st->local_id)) return false;
   /* `for x in xs` reads every element; `for i in 0..n` reads xs[i] and takes
@@ -3044,8 +3044,9 @@ static void ssa_statement_value(Ssa *s, const DynIrStmt *st, unsigned depth) {
       else if (dyn_type_is_slice(collection)) element = ir->slices[collection - DYN_TYPE_SLICE_BASE].element;
       else if (collection == DYN_TYPE_STRING) element = DYN_TYPE_U8;
       else break;
-      uint32_t size, alignment, binding;
+      uint32_t size, alignment, binding, index_binding = 0;
       if (!layout(ir, element, &size, &alignment, 0) || !ssa_local_index(s, st->local_id, &binding)) return;
+      if (st->for_index && !ssa_local_index(s, st->local_id + 1, &index_binding)) return;
       int32_t data, length = -1;
       if (array) {
         const DynExprKind kind = ir->expressions[st->target].kind;
@@ -3073,6 +3074,7 @@ static void ssa_statement_value(Ssa *s, const DynIrStmt *st, unsigned depth) {
       s->current = body;
       int32_t index = st->for_reverse ? ssa_emit(s, SO_ADD, SC_INT, at, ssa_const(s, UINT64_MAX, SC_INT), -1, 0, 0) : at;
       int32_t address = ssa_element(s, data, index, size);
+      if (st->for_index) ssa_set_local(s, index_binding, index, -1);
       if (st->for_pointer) ssa_set_local(s, binding, address, -1);
       else if (scalar(ir, element)) ssa_set_local(s, binding, ssa_load_value(s, address, element, NULL), -1);
       else if (descriptor(element)) {
@@ -3149,6 +3151,7 @@ static void ssa_statements(Ssa *s, uint32_t start, uint32_t count, unsigned dept
       uint32_t locals[64], n = 0, low = st->span.start_byte, high = st->span.end_byte;
       if (st->kind == DYN_STMT_LOCAL) { locals[n++] = st->local_id; low = st->span.end_byte; high = end; }
       if (st->kind == DYN_STMT_FOR) locals[n++] = st->local_id;
+      if (st->kind == DYN_STMT_FOR && st->for_index) locals[n++] = st->local_id + 1;
       if (st->kind == DYN_STMT_CASE && (uint64_t)st->case_arm_start + st->case_arm_count <= ir->case_arm_count)
         for (uint32_t j = 0; j < st->case_arm_count && n < 64; ++j) locals[n++] = ir->case_arms[st->case_arm_start + j].local_id;
       for (uint32_t j = 0; j < n; ++j) {

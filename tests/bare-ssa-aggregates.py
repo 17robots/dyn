@@ -43,7 +43,7 @@ struct Descs { pre:u32,text:[]const u8,mid:u32,view:[]u8,post:u32 }
 struct Box { pre:u64,value:any,post:u64 }
 extern fn verifydescs(p:*Descs) u32
 extern fn verifybox(p:*Box) u64
-pub fn arrays(i:usize,x:u32) u32 { a:[8]u32=[]
+pub fn arrays(i:usize,x:u32) u32 { a:[8]u32
 a[i]=x
 b:=a
 b[(i+1)%8]=7
@@ -68,9 +68,9 @@ b:=p.value
 case b { u64 y=>{ return y+a.pre+a.post+check } _=>{return 0} } }
 pub fn copybytes(dst:*[33]u8,src:*[33]u8) { dst.*=src.* }
 pub fn zerobytes(dst:*[33]u8) { dst.*=[] }
-pub fn zeroforward(dst:*[8]u8) { a:[8]u8=[]
+pub fn zeroforward(dst:*[8]u8) { a:[8]u8
 dst.*=a }
-pub fn zerochain(dst:*[8]u8) { a:[8]u8=[]
+pub fn zerochain(dst:*[8]u8) { a:[8]u8
 b:=a
 dst.*=b }
 pub fn zerocopy(dst:*[0]u8,src:*[0]u8) { dst.*=src.*

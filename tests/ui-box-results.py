@@ -145,7 +145,7 @@ fn main() {
 fn composing(persistent: *mem.Arena, arena: *mem.Arena) {
   state := box.create(persistent, measure, nil, 16.0)
   context := ui.Context{ style: ui.default_style }
-  storage: [64]u8 = []
+  storage: [64]u8
   edit := box.Edit{}
   inputs: [5]box.Input = [
     box.Input{ x: 20.0, y: 10.0 },

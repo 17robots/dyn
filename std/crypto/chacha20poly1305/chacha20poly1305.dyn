@@ -37,12 +37,12 @@ fn valid(output: []u8, input: []const u8, aad: []const u8, key: []const u8, nonc
   return true
 }
 fn mac(ciphertext: []const u8, aad: []const u8, key: []const u8, nonce: []const u8) poly.Tag {
-  first: [64]u8 = []
+  first: [64]u8
   if !chacha.block(first[..], key, nonce, 0) {
     return poly.Tag{}
   }
   state := poly.init(first[..32])
-  zero: [16]u8 = []
+  zero: [16]u8
   _ = poly.update(&state, aad)
   if #len(aad) % 16 != 0 {
     _ = poly.update(&state, zero[..16-#len(aad)%16])
@@ -51,7 +51,7 @@ fn mac(ciphertext: []const u8, aad: []const u8, key: []const u8, nonce: []const 
   if #len(ciphertext) % 16 != 0 {
     _ = poly.update(&state, zero[..16-#len(ciphertext)%16])
   }
-  lengths: [16]u8 = []
+  lengths: [16]u8
   binary.store_u64_le(lengths[..8], #len(aad))
   binary.store_u64_le(lengths[8..], #len(ciphertext))
   _ = poly.update(&state, lengths[..])

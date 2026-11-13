@@ -76,7 +76,7 @@ fn main(){
  check(metrics.ok && ft.face_metrics(nil).kind==errors.Kind.InvalidInput)
  values:=metrics.value
  metric_fields:[7]u32=[#cast(u32,values.units_per_em),#cast(u32,#cast(i32,values.ascent)),#cast(u32,#cast(i32,values.descent)),#cast(u32,#cast(i32,values.height)),values.glyph_count,values.face_count,values.face_index]
- metric_bytes:[28]u8=[]
+ metric_bytes:[28]u8
  for i in 0..7 {binary.store_u32_le(metric_bytes[i*4..i*4+4],metric_fields[i])}
  check(fs.write_all("metrics-actual.bin",metric_bytes[..]).failure.kind == errors.Kind.Ok)
  shaping := dynlib.open("HB_LIBRARY",dynlib.Now)

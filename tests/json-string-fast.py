@@ -11,6 +11,11 @@ DYN = Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve()
 def literal(data):
     return '[' + ','.join(str(b) for b in data) + ']'
 
+
+def initializer(data):
+    # An empty array needs no initializer: a declaration is already zero.
+    return f' = {literal(data)}' if data else ''
+
 valid = [
     (b'""', b''), (b'"plain ASCII"', b'plain ASCII'),
     (b'"' + b'x' * 4096 + b'"', b'x' * 4096),
@@ -35,7 +40,7 @@ checks = []
 # Depth rejection and rollback do not depend on the optimized string route.
 deep = b'[' * 257 + b'"plain"' + b']' * 257
 checks.append(f'''  if true {{
-    data: [{len(deep)}]u8 = {literal(deep)}
+    data: [{len(deep)}]u8{initializer(deep)}
     result := json.parse(arena, data[..])
     require(result.failure.kind != parse.Kind.Ok && result.failure.kind == parse.Kind.Syntax && mem.arena_mark(arena) == mem.arena_start(arena), "depth rollback")
   }}''')
@@ -43,8 +48,8 @@ for n, (raw, expected) in enumerate(valid):
     # Both object keys and values must survive mutation of all source bytes.
     doc = b'{' + raw + b':' + raw + b'}'
     checks.append(f'''  if true {{
-    data: [{len(doc)}]u8 = {literal(doc)}
-    expected: [{len(expected)}]u8 = {literal(expected)}
+    data: [{len(doc)}]u8{initializer(doc)}
+    expected: [{len(expected)}]u8{initializer(expected)}
     result := json.parse(arena, data[..])
     require(result.failure.kind == parse.Kind.Ok, "valid {n}")
     member := result.root.first
@@ -54,7 +59,7 @@ for n, (raw, expected) in enumerate(valid):
   }}''')
 for n, raw in enumerate(invalid):
     checks.append(f'''  if true {{
-    data: [{len(raw)}]u8 = {literal(raw)}
+    data: [{len(raw)}]u8{initializer(raw)}
     mark := mem.arena_mark(arena)
     result := json.parse(arena, data[..])
     require(result.failure.kind != parse.Kind.Ok && result.offset == 1 && result.failure.kind == parse.Kind.Syntax && json.is_missing(result.root), "invalid {n}")

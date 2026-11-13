@@ -254,7 +254,7 @@ fn normalize_into(destination: []u8, source: []const u8, form: Form, work: []u32
     for end < count && combining_class(values[end]) != 0 {
       end += 1
     }
-    buckets: [256]usize = []
+    buckets: [256]usize
     i := start
     for i < end {
       buckets[combining_class(values[i])] += 1

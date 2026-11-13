@@ -76,8 +76,8 @@ fn main() {
   frame = ws.parse_frame(valid[..])
   if frame.failure.kind != parse.Kind.Ok || frame.offset != 0 || frame.consumed != 2 { #panic("frame success metadata") }
   state := ws.message_state(false)
-  message: [32]u8 = []
-  control: [125]u8 = []
+  message: [32]u8
+  control: [125]u8
   event := ws.receive(&state, message[..], control[..], frame)
   if event.failure.kind != errors.Kind.Ok || event.detail != ws.WebSocketEventKind.Ready { #panic("event classification") }
   event = ws.receive(&state, message[..], control[..], ws.parse_frame(malformed[..]))
@@ -102,7 +102,7 @@ fn main() {
   if ws_zero.failure.kind != errors.Kind.Ok || ws_zero.failure.native != 0 || ws_zero.offset != 0 { #panic("zero WS result") }
   connection := http.Connection{}
   http.close(&connection)
-  routes: [1]http.Route = []
+  routes: [1]http.Route
   router := http.router(routes[..], nil)
   route := http.route(&router, "GET", "/", nil)
   if route.failure.kind != errors.Kind.InvalidInput || route.offset != 0 { #panic("metadata") }
@@ -117,14 +117,14 @@ fn main() {
     trace := Trace{ native: #cast(isize, native) }
     reader := io.Reader{ data: &trace, read: read }
     writer := io.Writer{ data: &trace, write: write }
-    storage: [128]u8 = []
+    storage: [128]u8
     server := http.server(reader, writer, storage[..])
     first := http.receive(&server)
     again := http.receive(&server)
     if first.failure.kind == io.Kind.Ok || first.failure.kind != errors.Kind.PermissionDenied || first.failure.native != trace.native || first.offset != 0 || first.detail != http.ErrorKind.Io { #panic("HTTP native metadata") }
     if again.failure.kind == io.Kind.Ok || again.failure.kind != first.failure.kind || again.failure.native != first.failure.native || again.offset != first.offset || again.detail != first.detail || trace.calls != 1 { #panic("HTTP native replay") }
     trace.calls = 0
-    frames: [32]u8 = []
+    frames: [32]u8
     socket := ws.connection(reader, writer, frames[..], message[..], control[..], true)
     received := ws.connection_receive(&socket)
     if received.failure.kind == io.Kind.Ok || received.failure.kind != errors.Kind.PermissionDenied || received.failure.native != trace.native || received.offset != 0 || trace.calls != 1 { #panic("WS native read metadata") }

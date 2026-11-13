@@ -89,7 +89,7 @@ fn main() {
     }
     feed := Feed{ fail: true, code: code }
     sink := Sink{}
-    storage: [128]u8 = []
+    storage: [128]u8
     state := http.server(io.Reader{ data: &feed, read: read }, io.Writer{ data: &sink, write: write }, storage[..])
     first := http.receive(&state)
     again := http.receive(&state)
@@ -101,7 +101,7 @@ fn main() {
   for wire in ["bad\r\n\r\n", "GET / HTTP/1.1\r\nContent-Length: 999\r\n\r\n", "", "GET / HTTP/1.1\r\n", "GET / HTTP/1.1\r\n\r\n"] {
     feed := Feed{ wire: wire }
     sink := Sink{}
-    storage: [64]u8 = []
+    storage: [64]u8
     state := http.server(io.Reader{ data: &feed, read: read }, io.Writer{ data: &sink, write: write }, storage[..])
     first := http.receive(&state)
     if first.detail == http.ErrorKind.None { first = http.receive(&state) }
@@ -111,7 +111,7 @@ fn main() {
   }
   feed := Feed{ wire: "GET / HTTP/1.1\r\n\r\n" }
   sink_zero := Sink{}
-  empty: [0]u8 = []
+  empty: [0]u8
   capacity := http.server(io.Reader{ data: &feed, read: read }, io.Writer{ data: &sink_zero, write: write }, empty[..])
   if http.receive(&capacity).detail != http.ErrorKind.Capacity || http.receive(&capacity).detail != http.ErrorKind.Capacity || feed.calls != 0 { #panic("empty capacity IO") }
   zero := http.Server{}

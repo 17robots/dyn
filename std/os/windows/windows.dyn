@@ -32,7 +32,7 @@ fn socket_initialize() i32 {
     if sync.compare_exchange_u32(&socket_startup_state, 0, 1) {
       // WSADATA needs pointer alignment; Win64's 408 bytes fit in this storage.
       // Keep one Winsock reference for process lifetime, independent of sockets.
-      data: [64]u64 = []
+      data: [64]u64
       socket_startup_error = socket_startup_raw(514, &data[0])
       sync.store_u32(&socket_startup_state, 2)
     } else {
@@ -62,7 +62,7 @@ fn terminated(path: []const u8, storage: []u8) *const u8 {
 pub fn file_open(path: []const u8, write_access: bool, create: bool) IoResult {
   // Keep this below MSVC's stack-probe threshold; this bootstrap runtime does
   // not depend on compiler-rt. Win32 legacy paths are bounded at 260 bytes.
-  storage: [260 + mem.ArenaBufferOverhead]u8 = []
+  storage: [260 + mem.ArenaBufferOverhead]u8
   name := terminated(path, storage[..])
   if name == nil {
     return IoResult{ value: -1, error: 206, ok: false }

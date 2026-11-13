@@ -7,7 +7,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 DYN = os.environ.get('DYN', str(ROOT/'build/dyn'))
-SOURCE = r'''
+SOURCE = r'''use "std/enums"
 enum(u64) Big { Zero, Top }
 enum(i8) Sign { Zero, Plus }
 extern fn note "note"(value: i32)
@@ -15,8 +15,7 @@ struct Pair { x: i32, y: i32 }
 pub fn rem64(a: f64,b: f64) f64 { return a % b }
 pub fn rem32(a: f32,b: f32) f32 { return a % b }
 pub fn high() u32 { return 4294967295 }
-pub fn badenum(x: i64) u64 { return #cast(u64, #cast(Big, x)) }
-pub fn goodenum(x: i64) i8 { return #cast(i8, #cast(Sign, x)) }
+pub fn goodenum(x: i64) i8 { return #cast(i8, enums.from_int(Sign, #cast(u64, x))) }
 pub fn divsmall(x: i8, y: i8) i8 { return x / y }
 pub fn remsmall(x: i8, y: i8) i8 { return x % y }
 pub fn deref(p: *i32) i32 { return p.* }
@@ -67,7 +66,7 @@ const bytes = require('node:fs').readFileSync(process.argv[1]);
 # body/local tables only for live functions. An unused std/io body must never
 # be emitted against those rebuilt tables. Keep an indirect global initializer
 # and callback call live as well, so function/table indices are checked at runtime.
-WASI_SOURCE = r'''
+WASI_SOURCE = r'''use "std/enums"
 use "std/io"
 struct Point { x: i64, y: i64 }
 points: [32]Point

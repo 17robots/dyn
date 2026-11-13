@@ -36,7 +36,7 @@ fn malformed(storage: []u8, used: usize) {
   require(state.offset == 0 && !state.rescan_required, "malformed event changed state")
 }
 fn records() {
-  storage: [64]u8 = []
+  storage: [64]u8
   for length in 1..16 { malformed(storage[..],length) }
   // Length field claims more bytes than the buffered record contains.
   storage[12] = 255
@@ -63,8 +63,8 @@ fn records() {
   require(!state.rescan_required, "acknowledge rescan")
 }
 fn exhausted_open() {
-  storage: [272]u8 = []
-  states: [128]watch.Watcher = []
+  storage: [272]u8
+  states: [128]watch.Watcher
   count: usize = 0
   failed: bool = false
   for count < 128 {
@@ -92,7 +92,7 @@ fn main() {
   require(watch.add(&unopened,".",watch.Create).failure.kind != io.Kind.Ok, "add unopened")
   require(watch.remove(&unopened,0).failure.kind != io.Kind.Ok, "remove unopened")
   require(watch.next(&unopened).status == watch.Status.Error, "read unopened")
-  storage: [272]u8 = []
+  storage: [272]u8
   for length in 0..272 {
     failed := watch.open(storage[..length])
     require(failed.failure.kind != io.Kind.Ok && failed.failure.native == -28, "short backing")

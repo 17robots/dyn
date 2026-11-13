@@ -34,7 +34,7 @@ fn main() {
  large := fs.read_all(zero,"DIR/large",131073)
  require(large.failure.kind == errors.Kind.Ok && #len(large.value)==131073,"large extent")
  for i in 0..#len(large.value) { require(large.value[i]==#cast(u8,i%251),"large payload") }
- storage: [5 + mem.ArenaBufferOverhead]u8 = []
+ storage: [5 + mem.ArenaBufferOverhead]u8
  fixed := mem.arena_from_buffer(storage[..])
  fixed.data = fixed.data[..mem.ArenaHeader + 5]
  short := fs.read_all(fixed,"DIR/small",100)

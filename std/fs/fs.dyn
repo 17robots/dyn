@@ -230,7 +230,7 @@ pub fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) ReadAllR
     if capacity == 0 {
       // Probe before growing: empty files need no allocation, and a full
       // caller buffer still distinguishes EOF from capacity/maximum overflow.
-      probe: [1]u8 = []
+      probe: [1]u8
       extra := read(&opened.value, probe[..])
       if extra.failure.kind != io.Kind.Ok {
         error = extra.failure.native

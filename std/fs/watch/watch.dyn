@@ -48,7 +48,7 @@ pub fn open(storage: []u8) OpenResult {
   return OpenResult{ value: Watcher{ descriptor: descriptor, active: true, storage: storage } }
 }
 pub fn add(state: *Watcher, path: []const u8, mask: u32) Result {
-  storage: [4096 + mem.ArenaBufferOverhead]u8 = []
+  storage: [4096 + mem.ArenaBufferOverhead]u8
   name := c.string_into(storage[..], path)
   if name.failure.kind != parse.Kind.Ok || #len(path) == 0 || !state.active {
     return failure(-22)

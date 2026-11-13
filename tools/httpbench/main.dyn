@@ -97,7 +97,7 @@ fn exchange(connection: *net.Connection, request: []const u8, storage: []u8) boo
 
 fn client_main(context: rawptr) isize {
   client := #cast(*Client, context)
-  storage: [ReceiveSize]u8 = []
+  storage: [ReceiveSize]u8
   opened := net.tcp_connect_ipv4(&client.shared.address)
   if opened.failure.kind != io.Kind.Ok {
     client.errors += 1
@@ -172,7 +172,7 @@ fn main() i32 {
       at = end + 1
     }
   }
-  request_storage: [1024]u8 = []
+  request_storage: [1024]u8
   request := fmt.buffer(request_storage[..])
   _ = fmt.write(&request, "GET ")
   _ = fmt.write(&request, values[2])

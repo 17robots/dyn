@@ -24,10 +24,23 @@ fn index_of(E: type, tag: u64) usize {
 // The variant with this tag, or the first variant when no variant has it.
 // Use this to bring external numbers into an enum.
 pub fn from_int(E: type, value: u64) E {
+  #assert(#typeof(E).kind == TypeKind.Enum, "enums.from_int: E must be an enum without payloads")
+  result: E
   if index_of(E, value) == count(E) {
-    return #cast(E, 0)
+    return result
   }
-  return #cast(E, value)
+  // The tag is the enum's backing integer: write it at the enum's own width.
+  size := #sizeof(E)
+  if size == 1 {
+    #cast(*u8, &result).* = #cast(u8, value)
+  } else if size == 2 {
+    #cast(*u16, &result).* = #cast(u16, value)
+  } else if size == 4 {
+    #cast(*u32, &result).* = #cast(u32, value)
+  } else {
+    #cast(*u64, &result).* = value
+  }
+  return result
 }
 
 // The variant's source name, or "" for a tag that is not a variant.

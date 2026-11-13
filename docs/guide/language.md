@@ -162,13 +162,13 @@ fn read(box: Box($T)) T {
   return box.value
 }
 
-a: Box(f64) = .{ value: 1.5 }
+a := Box(f64){ value: 1.5 }
 ```
 
 A struct or enum lists its type parameters as bare names, `List(T)` or `Map(K, V)`: its parentheses
 hold only types, so they need no `: type`, and they are always passed. Type arguments are always written, and parameters are types only. A literal names its instance
-directly, `Box(i32){value: 1}`, with the brace right after the arguments; `.{ ... }` with an
-expected type and aliases work too. `mem.push(Box(i32), arena)` passes the instance as a type.
+directly, `Box(i32){value: 1}`, with the brace right after the arguments; an alias works too,
+`IntBox{value: 1}`. `mem.push(Box(i32), arena)` passes the instance as a type.
 
 ## Values and types
 
@@ -191,7 +191,8 @@ type. Structs/enums remain nominal.
 A struct field may declare a default: `struct Player { health: i32 = 100, armor: i32 }`. Defaults
 are compile-time values. Every fresh value of the struct takes them: a literal's omitted fields
 (`Player{}` or `Player{armor: 5}`), a declaration without an initializer (`p: Player`), and
-`mem.push(Player, arena)`. A field without a default is zero, and an omitted struct-typed field is
+`mem.push(Player, arena)`. A declaration without an initializer is the one way to get a fresh
+value: `buffer: [64]u8 = []` is an error because the `= []` adds nothing. A field without a default is zero, and an omitted struct-typed field is
 that struct's own fresh value. `#init(pointer)` writes the defaults through a `*T`, which is how
 `mem.push` and custom allocators make fresh values; it compiles to nothing for a type without
 defaults. Zeroed bulk memory (`mem.push_array`, fixed arrays, `[]` initializers) stays zero: write
@@ -205,13 +206,11 @@ An integer literal in a float context is that float when it is exact (up to 2^24
 wraps. Floats use IEEE-754. Expression evaluation is left-to-right.
 A float literal with no float context is `f64`, so `x := 1.5` is `f64`.
 Float literals accept trailing dots (`2.`); lexical lookahead keeps `2..3` an integer range.
-Explicit primitive locals without initializers start at zero. Inferred locals require an
-initializer. A local may shadow an outer local or parameter only inside a nested block or loop:
-`if ready { x := parse(x) }` works, while a second `x` in the same block, or a parameter
-redeclared at the top of its function body, is an error. A loop variable cannot be shadowed
-inside its own loop. Locals never shadow globals, functions or module names. A name becomes
-reusable after its block or loop ends, so sibling blocks and consecutive loops may each declare
-`value`. Assignments copy values; compound assignments use
+Explicit locals without initializers start at zero, or at their struct's field defaults.
+Inferred locals require an initializer. Names never shadow: a local cannot reuse the name of
+another local, parameter or loop variable that is still in scope, in the same block or a nested
+one, and never the name of a global, function or module. A name becomes reusable after its block
+or loop ends, so sibling blocks and consecutive loops may each declare `value`. Assignments copy values; compound assignments use
 the same checked operators as ordinary expressions. An assignment evaluates its target (indexes,
 pointer operands) before its value: in `a[i()] = f()`, `i()` runs first. A compound assignment
 evaluates its target once, so `a[i()] += f()` calls `i()` once. Struct literal fields evaluate in
@@ -222,6 +221,9 @@ written order, not declaration order.
 collection` accepts arrays and slices, evaluates the collection once, and copies each element into
 the loop-local binding. `for *value` binds a mutable pointer to each source element; mutable binding
 rejects const slices and requires assignable arrays. `for *const value` binds a const pointer.
+`for value, i in values` (and `for *value, i`) also binds the element's index as a `usize`; with
+`#reverse` the index still names the element's position. A range loop's variable is already its
+index, so a range takes no second name.
 `for i in first..last` counts integers from `first` up to but excluding `last`; `..=` includes
 `last`. Both bounds share one integer type, and a literal bound adapts to the other bound, so
 `0..count` has `count`'s type. When both bounds are literals, `i` is a `usize`, whatever the
@@ -265,8 +267,9 @@ increase, and the first must be 0, so zeroed storage (`x: Color`, omitted struct
 with payloads keep automatic tags. `enums.from_int(Errno, n)` turns an external number into the
 variant with that tag, or the first variant when none has it; dense enums check a range and enums
 with set tags search their variants. Variants are written `Enum.Variant`; the type is always written,
-never inferred. Enums support equality and copy by value. `#cast(u8, op)` gives the tag and
-`#cast(Op, byte)` converts an integer back. An exhaustive `case` that meets a tag matching no
+never inferred. Enums support equality and copy by value. `#cast(u8, op)` gives the tag. An integer
+becomes an enum only through `enums.from_int(Op, byte)`, which gives the first variant for a tag
+that names none; `#cast(Op, byte)` is an error. An exhaustive `case` that meets a tag matching no
 variant panics with `enum.tag.ok`. Enums without payloads have the size and alignment of the
 backing integer.
 
@@ -336,7 +339,20 @@ case kind {
 ```
 
 Every `case` is exhaustive or contains `_`; integer interval analysis may prove exhaustive
-coverage. Patterns use literals/constants only. Arm order is irrelevant; duplicates,
+coverage. A case on text, a `[]const u8` or `[]u8` subject, takes string literal patterns and
+always needs `_`. It evaluates the subject once and compares its length, then its bytes, against
+each pattern in order; arms take no binding:
+
+```dyn
+fn command(word: []const u8) i32 {
+  case word {
+    "go", "run" => { return 1 }
+    "stop" => { return 2 }
+    _ => { return 0 }
+  }
+}
+```
+ Patterns use literals/constants only. Arm order is irrelevant; duplicates,
 overlaps, unreachable `_`, and redundant `_` fail. `Variant payload` copies its payload.
 `Variant *payload` aliases payload storage and permits assignment or field mutation; it requires a
 mutable assignable case subject. The alias exists only inside its arm.
@@ -371,11 +387,12 @@ values. Bitwise operators require integers. Division and remainder by zero panic
 minimum divided by `-1` panics. `std/math` has `add_overflows`, `sub_overflows`, `mul_overflows` and
 saturating arithmetic for code that wants them.
 
-`dyn build --check-overflow` (debug builds only) makes `+`, `-`, `*`, `<<`, unary negation and
-their compound assignments in the program's own modules panic with `overflow.ok` instead of
-wrapping. `std` and `vendor` code keeps wrapping. Write `math.wrapping_add`, `wrapping_sub` or
-`wrapping_mul` where a program means to wrap, so the code reads the same with and without the flag.
-Release builds always wrap; the flag is a way to find overflow bugs, not a change in meaning.
+Debug builds check overflow: `+`, `-`, `*`, `<<`, unary negation and their compound assignments
+in the program's own modules panic with `overflow.ok` instead of wrapping. `std` and `vendor`
+code keeps wrapping. Write `math.wrapping_add`, `wrapping_sub` or `wrapping_mul` where a program
+means to wrap, so the code reads the same in debug and release. `--no-check-overflow` turns the
+checks off for a debug build. Release builds always wrap; the checks find overflow bugs, they do
+not change the meaning of a correct program.
 
 Untyped integer constants are evaluated exactly for the implemented constant-expression operators,
 then adapted only when their value is representable in the expected type. Runtime implicit numeric
@@ -391,7 +408,7 @@ type. `#cast` permits
 intentional narrowing and uses destination-width two's-complement/modulo representation for integers.
 Float-to-integer conversion truncates toward zero and saturates: an out-of-range value gives the
 type's minimum or maximum, and NaN gives 0, on every target. `#bitcast` preserves bits and requires
-equal-sized scalar representations. Boolean/numeric conversion is never implicit.
+numbers of equal size; pointers convert only with `#cast`. Boolean/numeric conversion is never implicit.
 
 Empty or partially specified fixed-array constants zero-fill omitted elements. Compiler work and IR
 for an empty aggregate must remain bounded by written initializer count rather than storage size.
@@ -421,10 +438,16 @@ Mixing a bitwise operator (`&`, `^`, `|`) with a comparison needs parentheses:
 `flags & mask == 0` is an error and `(flags & mask) == 0` is required, so the expression means
 the same thing to readers from every language.
 
-Relational comparisons chain in one direction, as in Python: `0 <= i < n` means
-`0 <= i && i < n`, and `hi > x >= lo` works the same way. The middle operand is evaluated once per
-comparison, so it must be a name, field or literal. Mixed directions (`a < b > c`) and `==` or
-`!=` chains are errors; write `(a == b) == c` when that is meant.
+Comparisons do not chain: `0 <= i < n` is an error, written `0 <= i && i < n`. Write
+`(a == b) == c` when comparing a comparison's result is meant.
+
+## Format templates
+
+A function whose last fixed parameter is `template: []const u8` and whose pack is `...any` takes a
+format template, as `io.println`, `io.print_to`, `strings.format` and `fmt.print` do. `{}` inserts
+the next argument and `{{` and `}}` write a brace. When the template is a string literal, the
+compiler checks it: a lone brace, `{:x}` or any other spec, and a count of `{}` that differs from
+the count of arguments are errors. A template computed at run time is checked when it runs.
 
 ## Builtins
 
@@ -441,6 +464,8 @@ collections, and ordinary algorithms belong in libraries.
 - Iteration: `#reverse`, valid only in a `for` iterable.
 - Module directives: `#target` and `#link`, documented with platform and FFI rules.
 
+`#sizeof(T)` and `#alignof(T)` are the short forms of `#typeof(T).size` and `#typeof(T).alignment`.
+
 Conversions require exactly two arguments, with the type first. The value may be
 any expression and is evaluated exactly once. The closing parenthesis delimits
 that expression: `#cast(i64, a + b)` converts the sum, while
@@ -453,7 +478,7 @@ operations, such as `#cast(*T, memory).field`. The old `#cast(T) value` and
 `#sizeof(type_or_value)` and `#alignof(type_or_value)` return `usize` constants without evaluating
 value operands. `#len` accepts arrays and slices. `#cast(T, value)` performs explicit numeric conversion
 or compatible pointer conversion; explicit integer-pointer casts serve OS ABI boundaries. Narrowing follows destination representation. `#bitcast(T, value)`
-requires equal-sized compatible numeric representations or compatible pointer representations.
+requires numbers of equal size; it never takes pointers.
 `#max(T)` and `#min(T)` are the largest and smallest values of integer type `T`, as constants of
 type `T`; `#max(usize)` is the target's. `#syscall(number, args...)` returns `isize` and accepts at
 most six integer/pointer arguments on
@@ -476,7 +501,8 @@ recursive relationships use IDs rather than nested metadata.
 
 ## Removed/deferred syntax
 
-No `inline`, `thread_local`, `as`, wrapping operators such as `+%`, `~=`, or C-style casts.
+No `inline`, `thread_local`, `as`, wrapping operators such as `+%`, `~=`, C-style casts,
+`.{ ... }` literals without a type, or chained comparisons.
 `#cast(T, value)` and `#bitcast(T, value)` are explicit. Unary `!` is bool-only;
 unary `~` is integer-only. Comments do not nest; whitespace is insignificant; semicolons are
 unsupported.
@@ -491,6 +517,7 @@ is not a supported-feature claim:
 | Enum declaration-order tags | Supported |
 | Explicit enum values | Supported for enums without payloads |
 | `.Variant` without the enum type | Not planned; write `Enum.Variant` |
+| `.{ ... }` without the struct type | Removed; write `Type{ ... }` |
 | Several imports in one `use`, comma-separated | Supported |
 | Optional import alias followed by a new global | Supported; alias stays on the import line |
 

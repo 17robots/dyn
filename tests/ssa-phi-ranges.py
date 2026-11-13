@@ -18,7 +18,7 @@ DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 
 SOURCE = '''use "std/io"
 
-table: [1024]u64 = []
+table: [1024]u64
 
 fn probe(key: u64) u64 {
   at := #cast(usize, key >> 54)

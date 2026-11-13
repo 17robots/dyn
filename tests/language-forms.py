@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Type patterns, comparison chains, generic literals and adapting constants,
-with the errors for mixed bitwise comparisons, ambiguous chains and `is`."""
+"""Type patterns, generic literals and adapting constants, with the errors for
+mixed bitwise comparisons, comparison chains, shadowing and `is`."""
 import os
 from pathlib import Path
 import subprocess
@@ -22,20 +22,18 @@ ERRORS = {
         'initializer type mismatch',
     'fn main() {\n  f: u32 = 1\n  if f & 1 == 0 { }\n}\n':
         'mixing a bitwise operator with a comparison needs parentheses',
-    'fn main() {\n  a := 1\n  b := 2\n  if a < b > 0 { }\n}\n':
-        'only <, <= or >, >= chains in one direction',
+    'fn main() {\n  a := 1\n  b := 2\n  if a < b < 3 { }\n}\n':
+        'comparisons do not chain',
     'fn main() {\n  a := true\n  if a == a == a { }\n}\n':
-        '== and != do not chain',
-    'fn f() i32 { return 1 }\nfn main() {\n  if 0 < f() < 2 { }\n}\n':
-        "chained comparison's middle operand must be a name, field or literal",
+        'comparisons do not chain',
     'fn f(v: any) {\n  case v {\n    is i32 => { }\n    _ => { }\n  }\n}\nfn main() { f(true) }\n':
         'type patterns do not use `is`',
     'const BIG := 300\nfn main() {\n  x: u8 = BIG\n  _ = x\n}\n':
         'integer literal is not representable in expected type',
     'fn main() {\n  a := 1\n  a := 2\n  _ = a\n}\n':
-        'only a nested block may shadow it',
+        'locals never shadow',
     'fn main() {\n  for i in 0..3 {\n    i := 4\n    _ = i\n  }\n}\n':
-        'cannot shadow a loop variable inside its loop',
+        'loop variable of an enclosing loop',
     'fn f() i32 { return 1 }\nstruct S { x: i32 = f() }\nfn main() {}\n':
         'a field default must be a compile-time value',
     'enum E { A = 1, B }\nfn main() {}\n':

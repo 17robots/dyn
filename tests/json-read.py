@@ -34,7 +34,7 @@ invalid=[b'',b' ',b'01',b'1.',b'1e',b'-',b'true false',b'"x" trailing',b'{"a":}'
 invalid += [b'['*n for n in range(1,258)] + [b'{\"x\":'*n for n in range(1,65)]
 for i,raw in enumerate(invalid):lines+=['if true {',f'result:=json.parse(arena,{quote(raw)})','require(result.failure.kind != parse.Kind.Ok && json.kind(result.root)==json.KindMissing && mem.arena_mark(arena)==prefix_mark,"invalid rollback")','}']
 large=json.dumps(list(range(1000)),separators=(',',':')).encode();deep=b'['*256+b'0'+b']'*256
-lines += ['if true {',f'result:=json.parse(arena,{quote(large)})','require(result.failure.kind == parse.Kind.Ok && json.length(result.root)==1000,"growth array")','for i in 0..1000 { require(json.as_f64(json.at(result.root,i))==#cast(f64,i),"contiguous growth") }','require(result.root.bits==1001,"subtree span")','mem.arena_rewind(arena,prefix_mark)','}',f'require(json.parse(arena,{quote(deep)}).failure.kind == parse.Kind.Ok,"depth 256")','mem.arena_rewind(arena,prefix_mark)','if true {','backing:[512]u8=[]\nfixed:=mem.arena_from_buffer(backing[..])','result:=json.parse(fixed,"{\\"x\\":1}")','require(result.failure.kind == parse.Kind.Ok && json.as_f64(json.get(result.root,"x"))==1.0,"fixed buffer")','}', 'if true {','storage:[1024]u8=[]\nfixed:=mem.arena_from_buffer(storage[..])','input:=fixed.data[mem.ArenaHeader+10..mem.ArenaHeader+20]\n_=mem.copy(input,"[1,2,3,4] ")','result:=json.parse(fixed,input)','require(result.failure.kind != parse.Kind.Ok && mem.arena_mark(fixed)==mem.arena_start(fixed) && mem.equal(input,"[1,2,3,4] "),"alias rejection")','}', 'require(json.kind(nil)==json.KindMissing && json.kind(json.get(nil,"x"))==json.KindMissing,"nil navigation")','}']
+lines += ['if true {',f'result:=json.parse(arena,{quote(large)})','require(result.failure.kind == parse.Kind.Ok && json.length(result.root)==1000,"growth array")','for i in 0..1000 { require(json.as_f64(json.at(result.root,i))==#cast(f64,i),"contiguous growth") }','require(result.root.bits==1001,"subtree span")','mem.arena_rewind(arena,prefix_mark)','}',f'require(json.parse(arena,{quote(deep)}).failure.kind == parse.Kind.Ok,"depth 256")','mem.arena_rewind(arena,prefix_mark)','if true {','backing:[512]u8\nfixed:=mem.arena_from_buffer(backing[..])','result:=json.parse(fixed,"{\\"x\\":1}")','require(result.failure.kind == parse.Kind.Ok && json.as_f64(json.get(result.root,"x"))==1.0,"fixed buffer")','}', 'if true {','storage:[1024]u8\nfixed:=mem.arena_from_buffer(storage[..])','input:=fixed.data[mem.ArenaHeader+10..mem.ArenaHeader+20]\n_=mem.copy(input,"[1,2,3,4] ")','result:=json.parse(fixed,input)','require(result.failure.kind != parse.Kind.Ok && mem.arena_mark(fixed)==mem.arena_start(fixed) && mem.equal(input,"[1,2,3,4] "),"alias rejection")','}', 'require(json.kind(nil)==json.KindMissing && json.kind(json.get(nil,"x"))==json.KindMissing,"nil navigation")','}']
 edge_source = r'''
 if true {
   value:=json.parse(arena,"-0")
@@ -60,7 +60,7 @@ if true {
   require(mem.arena_mark(arena)==prefix_mark,"real overflow rollback")
 }
 for pad in 0..16 {
-  backing:[4096]u8=[]
+  backing:[4096]u8
   fixed:=mem.arena_from_buffer(backing[pad..])
   result:=json.parse(fixed,"{\"x\":[0,true,\"a\\u0000b\"],\"y\":-1.25}")
   require(result.failure.kind == parse.Kind.Ok && (#cast(usize,result.root)&7)==0,"misaligned backing")
@@ -71,7 +71,7 @@ for pad in 0..16 {
   require(item.found && mem.equal(json.as_text(item.value),"a\x00b") && !json.next(&it).found,"iterator decoded bytes")
 }
 if true {
-  backing:[80+mem.ArenaBufferOverhead]u8=[]
+  backing:[80+mem.ArenaBufferOverhead]u8
   pad:=(16-(#cast(usize,&backing[0])&15))&15
   fixed:=mem.arena_from_buffer(backing[pad..pad+mem.ArenaHeader+80])
   result:=json.parse(fixed,"\"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\"")
@@ -139,7 +139,7 @@ for name,flags in [('debug',[]),('release',['--release'])]:
 # Required arena storage follows the ordinary panic contract, including peak
 # growth capacity rather than just the final retained tree size.
 for raw,size in [(b'{"a":0}',56),(b'[0,1,2,3,4,5]',16)]:
- (P/'main.dyn').write_text('use "std/encoding/json/read" json\nuse "std/mem" mem\nfn main() { backing:['+str(size)+'+mem.ArenaBufferOverhead]u8=[]\npad:=(16-(#cast(usize,&backing[0])&15))&15\narena:=mem.arena_from_buffer(backing[pad..pad+mem.ArenaHeader+'+str(size)+'])\n_=json.parse(arena,'+quote(raw)+') }\n')
+ (P/'main.dyn').write_text('use "std/encoding/json/read" json\nuse "std/mem" mem\nfn main() { backing:['+str(size)+'+mem.ArenaBufferOverhead]u8\npad:=(16-(#cast(usize,&backing[0])&15))&15\narena:=mem.arena_from_buffer(backing[pad..pad+mem.ArenaHeader+'+str(size)+'])\n_=json.parse(arena,'+quote(raw)+') }\n')
  for name,flags in [('debug',[]),('release',['--release'])]:
   binary=W/('panic-'+name);subprocess.run([str(DYN),'build',str(P),'--no-cache','--quiet','--output',str(binary),*flags],env=env,check=True,timeout=120)
   result=subprocess.run([str(binary)],capture_output=True,timeout=10);assert result.returncode==101 and b'arena exhausted' in result.stderr,(name,result.returncode,result.stderr)
@@ -158,7 +158,7 @@ use "std/mem" mem
 pub fn json_read_selected_kind(v:*const json.Value) u8 { return json.kind(v) }
 fn require(ok:bool) { if !ok { #panic("JSON read target") } }
 fn main() {
- backing:[8192]u8=[]
+ backing:[8192]u8
  arena:=mem.arena_from_buffer(backing[..])
  require(#sizeof(json.Value)==16 && json_read_selected_kind(nil)==json.KindMissing)
  document:=json.parse(arena,"{\"\":[0,true,\"a\\u0000b\"],\"utf\":\"caf\\u00e9\",\"i\":-9223372036854775808,\"u\":18446744073709551615,\"real\":1.25}")

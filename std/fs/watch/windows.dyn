@@ -124,7 +124,7 @@ pub fn add(state: *Watcher, path: []const u8, mask: u32) Result {
   if index == 16 || state.native.next_id == 2147483647 {
     return validation_failure(-28)
   }
-  wide: [4096]u16 = []
+  wide: [4096]u16
   at: usize = 0
   used: usize = 0
   for at < #len(path) {

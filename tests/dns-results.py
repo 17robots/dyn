@@ -62,7 +62,7 @@ fn require(ok: bool) { if !ok { #panic("DNS result contract") } }
 for label, family, data, count, offset in cases:
     source += f'''fn case_{label}() {{
   data: [{len(data)}]u8 = {literal(data)}
-  backing: [1024 + mem.ArenaBufferOverhead]u8 = []
+  backing: [1024 + mem.ArenaBufferOverhead]u8
   arena := mem.arena_from_buffer(backing[..])
   arena.poison_on_rewind = true
   prefix := mem.push_bytes_uninit(arena, 3)
@@ -96,7 +96,7 @@ for label, family, data, count, offset in cases:
     source += '}\n'
 data = packet(1, [a, b])
 source += f'''fn aliases() {{
-  backing: [1024 + mem.ArenaBufferOverhead]u8 = []
+  backing: [1024 + mem.ArenaBufferOverhead]u8
   data: [{len(data)}]u8 = {literal(data)}
   arena := mem.arena_from_buffer(backing[..])
   payload := arena.data[mem.ArenaHeader..]
@@ -139,7 +139,7 @@ use "std/io" io
 use "std/mem" mem
 fn main() {{
   data: [{len(data)}]u8 = {literal(data)}
-  backing: [1 + mem.ArenaBufferOverhead]u8 = []
+  backing: [1 + mem.ArenaBufferOverhead]u8
   arena := mem.arena_from_buffer(backing[..])
   arena = mem.arena_from_buffer(arena.data[..mem.ArenaHeader + 1])
   _ = dns.parse_ipv4(arena, data[..], 7, "example.test")

@@ -23,7 +23,7 @@ use "std/bytes/builder"
 use "std/mem"
 
 fn main() {
-  storage: [256]u8 = []
+  storage: [256]u8
   arena := mem.arena_from_buffer(storage[..])
   text := builder.Builder{}
   if builder.append_grow(&text, arena, "hello") != builder.ErrorKind.None {

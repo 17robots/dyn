@@ -25,7 +25,7 @@ fn custom(destination: io.Writer, value: []const u8) text.RenderResult {
   return text.RenderResult{ offset: 97, failure: parse.io_failure(errors.Kind.Unsupported, -73) }
 }
 fn main() {
-  storage: [4096 + mem.ArenaBufferOverhead]u8 = []
+  storage: [4096 + mem.ArenaBufferOverhead]u8
   arena := mem.arena_from_buffer(storage[..])
   pzero: text.ParseResult
   rzero: html.RenderResult
@@ -39,7 +39,7 @@ fn main() {
   check(html.render(writer, &empty, fields[..]).failure.kind == parse.StreamKind.Ok)
   for mode in 0..2 {
     // Validation and empty input need no storage, even in a full fixed arena.
-    tiny_storage: [1 + mem.ArenaBufferOverhead]u8 = []
+    tiny_storage: [1 + mem.ArenaBufferOverhead]u8
     tiny := mem.arena_from_buffer(tiny_storage[..])
     tiny = mem.arena_from_buffer(tiny.data[..mem.ArenaHeader + 1])
     _ = mem.arena_push(tiny, 1, 1)
@@ -64,7 +64,7 @@ fn main() {
     check(parsed.failure.kind == parse.Kind.Ok && parsed.offset == 0)
     source[0] = '?'
     check(parsed.value.source[0] == '<') // parse owns an arena copy.
-    output: [128]u8 = []
+    output: [128]u8
     buffer := io.buffer_writer(output[..])
     rendered := text.RenderResult{}
     if mode == 0 { rendered = text.render(io.buffer_writer_adapter(&buffer), &parsed.value, fields[..]) } else { rendered = html.render(io.buffer_writer_adapter(&buffer), &parsed.value, fields[..]) }
@@ -95,7 +95,7 @@ fn main() {
 PANIC_SOURCE = r'''use "std/PACKAGE/template" template
 use "std/mem" mem
 fn main() {
-  storage: [1 + mem.ArenaBufferOverhead]u8 = []
+  storage: [1 + mem.ArenaBufferOverhead]u8
   arena := mem.arena_from_buffer(storage[..])
   arena = mem.arena_from_buffer(arena.data[..mem.ArenaHeader + 1])
   _ = template.parse(arena, "ab")

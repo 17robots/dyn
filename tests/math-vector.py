@@ -192,7 +192,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-math-vector-') as tmp:
     header = 'use "math"\n' + header
     (work/'input.c').write_text('#include <stdint.h>\nstatic const uint32_t data[] = {' + ','.join(map(str,words)) + '};\nuint32_t input(uint32_t i) { return data[i]; }\n')
     subprocess.run([*shlex.split(os.environ.get('CC','cc')), '-shared','-fPIC',str(work/'input.c'),'-o',str(work/'input.so')],check=True)
-    normal = header+'\n'.join(functions)+'\nfn main() {\n  zero: math.Vec4 = .{}\n  if math.vec4_length(zero) != 0.0 { #panic("zero initialization") }\n'+'\n'.join(f'  test_{i}()' for i in range(len(functions)))+'\n}\n'
+    normal = header+'\n'.join(functions)+'\nfn main() {\n  zero: math.Vec4\n  if math.vec4_length(zero) != 0.0 { #panic("zero initialization") }\n'+'\n'.join(f'  test_{i}()' for i in range(len(functions)))+'\n}\n'
     panics = [
         'math.vec2i_add(a,b)', 'math.vec2i_sub(math.Vec2i{ x: -a.x - 1 },b)',
         'math.vec2i_mul(a,b)', 'math.vec2i_scale(a,2)',
@@ -214,7 +214,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-math-vector-') as tmp:
                 subprocess.run([*shlex.split(os.environ.get('CC','cc')),'-shared','-fPIC',str(work/'input.c'),'-o',str(work/'panic.so')],check=True)
             (source/'main.dyn').write_text(program)
             library = work/('input.so' if expression is None else 'panic.so')
-            subprocess.run([DYN,'build',str(source),'--no-cache','--quiet',f'--{mode}','--link',str(library),'--output',str(work/'test')],check=True,timeout=120)
+            subprocess.run([DYN,'build',str(source),'--no-cache','--quiet',f'--{mode}', *(['--no-check-overflow'] if mode == 'debug' else []),'--link',str(library),'--output',str(work/'test')],check=True,timeout=120)
             result = subprocess.run([str(work/'test')],capture_output=True,timeout=60)
             if expression is None:
                 assert result.returncode == 0, (mode,result.stdout,result.stderr)

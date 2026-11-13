@@ -50,7 +50,7 @@ for size in (1, 2, 3, 4, 7, 8, 9, 15, 16, 17, 31, 32, 33, 40, 63, 64, 65, 129):
     source += f'''
 struct CopyBlock{size} {{ bytes: [{size}]u8 }}
 fn {name}(shift: i64) {{
-  storage: [520]u8 = []
+  storage: [520]u8
   for i in 0..520 {{ storage[i] = #cast(u8, (i % 251)) }}
   origin: usize = 193
   destination := #cast(usize, (#cast(i64, origin) + shift))
@@ -74,9 +74,9 @@ for t in ('u32', 'i32', 'u64', 'i64'):
             operation = f'(a[i] {op} b[i])' if op in ('+', '-') else f'a[i] {op} b[i]'
             source += f'''
 fn {function}() {{
-  a: [{n}]{t} = []
-  b: [{n}]{t} = []
-  c: [{n}]{t} = []
+  a: [{n}]{t}
+  b: [{n}]{t}
+  c: [{n}]{t}
   for i in 0..{n} {{ a[i] = #cast({t}, i)
 b[i] = #cast({t}, -1) }}
   for i in 0..{n} {{ c[i] = {operation} }}
@@ -153,9 +153,9 @@ with tempfile.TemporaryDirectory(prefix='dyn-machine-opt-') as directory:
     assert 'allocated to callee-saved registers' not in p.stderr, p.stderr
     assert 'vectorized' not in p.stderr, p.stderr
     (module/'main.dyn').write_text('''fn main() {
-  a: [19]u32 = []
-  b: [19]u32 = []
-  c: [19]u32 = []
+  a: [19]u32
+  b: [19]u32
+  c: [19]u32
   for i in 0..19 { a[i] = 4294967295
   b[i] = 1 }
   for i in 0..19 { c[i] = a[i] + b[i] }

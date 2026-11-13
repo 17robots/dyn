@@ -1,0 +1,7 @@
+// A struct literal names its type: Point{...}, never .{...}.
+struct Point { x: i32, y: i32 }
+
+fn main() {
+  p: Point = .{ x: 1, y: 2 } // error: write Type{...}, not .{...}
+  _ = p
+}

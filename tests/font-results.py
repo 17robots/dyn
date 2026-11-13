@@ -129,7 +129,7 @@ fn main() {
   ui.begin(&context, frame, ui.Input{}, ui.Rect{ width: 64, height: 32 })
   ui.label(&context, ui.Rect{ width: 64, height: 32 }, "ABC", ui.Color{ r: 200, a: 255 })
   ui.end(&context)
-  pixels: [8192]u8 = []
+  pixels: [8192]u8
   surface := software.Surface{ pixels: pixels[..], width: 64, height: 32, stride: 256 }
   adapter := font_ui.Adapter{ face: &face, arena: arena, pixels_per_em: 16 }
   result := software.render(&surface, ui.first(&context), font_ui.renderer(&adapter))

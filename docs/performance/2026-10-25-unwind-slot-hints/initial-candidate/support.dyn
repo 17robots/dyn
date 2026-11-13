@@ -209,7 +209,7 @@ fn append_bytes(buffer: []u8, at: u64, text: []const u8) u64 {
 // compiler caps names at 800 bytes, so the message always fits.
 pub fn dyn_check_failed(name: *const u8, packed: u64) {
   length := packed & 0xffffff
-  storage: [1024]u8 = []
+  storage: [1024]u8
   buffer := storage[..]
   used := append_bytes(buffer, 0, "runtime check failed (")
   used = append_bytes(buffer, used, check_name(packed >> 24))

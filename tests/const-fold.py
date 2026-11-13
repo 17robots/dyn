@@ -39,7 +39,7 @@ def main():
         for release in (False, True):
             output = project / ('release' if release else 'debug')
             build = subprocess.run([DYN, 'build', str(project), '--no-cache', '--output', str(output),
-                                    *(['--release', '--opt-remarks'] if release else ['--quiet'])],
+                                    *(['--release', '--opt-remarks'] if release else ['--quiet', '--no-check-overflow'])],
                                    capture_output=True, text=True, timeout=90)
             assert build.returncode == 0, build.stdout + build.stderr
             if release:

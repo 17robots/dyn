@@ -52,7 +52,7 @@ fn copy(arena: *mem.Arena, source: []const u8) []u8 {
   return destination
 }
 fn main() {
-  storage: [2097152]u8 = []
+  storage: [2097152]u8
   arena := mem.arena_from_buffer(storage[..])
   // Live argument bytes allocated before capture must survive setup and growth.
   command := copy(arena, PYTHON)
@@ -109,7 +109,7 @@ fn main() {
         pidfile = root / ('pid-' + mode)
         (project / 'main.dyn').write_text('''use "std/process"
 use "std/mem"
-fn main() { storage: [16384]u8 = []
+fn main() { storage: [16384]u8
 arena := mem.arena_from_buffer(storage[..])
 argv: [4][]const u8 = [PYTHON, SCRIPT, "exhaust", PID]
 _ = process.capture(arena, PYTHON, argv[..], process.Options{}, process.CaptureOptions{})

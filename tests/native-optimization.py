@@ -205,7 +205,7 @@ fail() }
         for i in range(24))
     (module/'main.dyn').write_text(
         f'fn fill(buffer: *[24]u64, value: u64) {{ {stores} }}\n' + wrappers +
-        '\nfn main() { buffer: [24]u64 = []\nwrapper_0(&buffer, 7)\n'
+        '\nfn main() { buffer: [24]u64\nwrapper_0(&buffer, 7)\n'
         'if buffer[23] != 30 { #panic("bounded inlining") } }\n')
     sizes = []
     for level in (2, 3):

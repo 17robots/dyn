@@ -27,7 +27,7 @@ use "std/encoding" codec
 use "std/mem" mem
 use "std/bytes" bytes
 fn good(raw: []const u8, hx: []const u8, upper: []const u8, b64: []const u8) {
-  backing: [4096 + mem.ArenaBufferOverhead]u8 = []
+  backing: [4096 + mem.ArenaBufferOverhead]u8
   mem.fill(backing[..], 99)
   a := mem.arena_from_buffer(backing[..])
   prefix := mem.push_bytes_uninit(a, 7)
@@ -43,7 +43,7 @@ fn good(raw: []const u8, hx: []const u8, upper: []const u8, b64: []const u8) {
   for c in prefix { if c != 99 { #panic("success changed prefix") } }
 }
 fn bad(input: []const u8, off: usize, hex: bool) {
-  backing: [128 + mem.ArenaBufferOverhead]u8 = []
+  backing: [128 + mem.ArenaBufferOverhead]u8
   mem.fill(backing[..], 99)
   a := mem.arena_from_buffer(backing[..])
   prefix := mem.push_bytes_uninit(a, 7)
@@ -59,8 +59,8 @@ fn bad(input: []const u8, off: usize, hex: bool) {
   for c in a.data[mem.ArenaHeader..] { if c != 99 { #panic("invalid touched dirty arena") } }
 }
 fn overlap(hex: bool, invalid: bool, start: usize) {
-  backing: [32 + mem.ArenaBufferOverhead]u8 = []
-  snapshot: [32]u8 = []
+  backing: [32 + mem.ArenaBufferOverhead]u8
+  snapshot: [32]u8
   mem.fill(backing[..], 99)
   input := "AAAA"
   if hex { input = "6162" }
@@ -142,7 +142,7 @@ def source():
   }
 }
 // Malformed input is validated even when no output storage remains.
-empty_backing: [mem.ArenaBufferOverhead]u8 = []
+empty_backing: [mem.ArenaBufferOverhead]u8
 a := mem.arena_from_buffer(empty_backing[..])
 a = mem.arena_from_buffer(a.data[..mem.ArenaHeader])
 x := b.decode(a, "AAAA!!!!")
@@ -178,7 +178,7 @@ def main():
                 (work / 'main.dyn').write_text(f'''use "std/mem" mem
 use "std/encoding/{module}" codec
 fn main() {{
-  backing: [mem.ArenaBufferOverhead]u8 = []
+  backing: [mem.ArenaBufferOverhead]u8
   arena := mem.arena_from_buffer(backing[..])
   arena = mem.arena_from_buffer(arena.data[..mem.ArenaHeader])
   _ = codec.decode(arena, "{encoded}")
@@ -193,7 +193,7 @@ fn main() {{
                 (work / 'main.dyn').write_text(f'''use "std/mem" mem
 use "std/encoding/{module}" codec
 fn main() {{
-  backing: [32 + mem.ArenaBufferOverhead]u8 = []
+  backing: [32 + mem.ArenaBufferOverhead]u8
   arena := mem.arena_from_buffer(backing[..])
   input := arena.data[mem.ArenaHeader..mem.ArenaHeader+1]
   input[0] = 'a'

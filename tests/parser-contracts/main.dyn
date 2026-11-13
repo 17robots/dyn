@@ -38,8 +38,8 @@ fn csv_check(source: []const u8, expected: bool) {
       chunk := Chunk{source: source, limit: limit}
       streamed := csv.stream_scanner(input(&chunk))
       direct := csv.scanner(source)
-      a: [32]u8 = []
-      b: [32]u8 = []
+      a: [32]u8
+      b: [32]u8
       first := csv.next(&direct, a[..capacity])
       second := csv.next_stream(&streamed, b[..capacity])
       if first.found != second.found || (capacity == 4 && first.found != expected) || direct.failure.parse.kind != streamed.failure.parse.kind {
@@ -60,7 +60,7 @@ fn xml_check(source: []const u8, expected: bool) {
   if expected {
     for capacity in 0..#len(source) {
       chunk := Chunk{source: source, limit: 1}
-      storage: [128]u8 = []
+      storage: [128]u8
       streamed := xml.stream_scanner(input(&chunk), storage[..capacity])
       event := xml.next_stream(&streamed)
       if event.found || streamed.failure.parse.kind != parse.Kind.Capacity {
@@ -71,7 +71,7 @@ fn xml_check(source: []const u8, expected: bool) {
   for limit in 0..4 {
     for split in 1..#len(source) + 1 {
       chunk := Chunk{source: source, split: split, limit: limit}
-      storage: [128]u8 = []
+      storage: [128]u8
       capacity := #len(source)
       if !expected {
         capacity += 1
@@ -92,7 +92,7 @@ fn json_document(source: []const u8, expected: bool) {
     #panic("JSON UTF8 validity")
   }
   // Arena exhaustion panics, so one roomy arena covers acceptance and rollback.
-  backing: [4096]u8 = []
+  backing: [4096]u8
   arena := mem.arena_from_buffer(backing[..])
   prefix := mem.arena_push(arena, 7, 1)
   for i in 0..7 {
@@ -113,7 +113,7 @@ fn json_document(source: []const u8, expected: bool) {
   }
 }
 fn json_stream_check(value: *const json.Value, document: []const u8, expected: bool, prefix: []const u8) {
-  storage: [128]u8 = []
+  storage: [128]u8
   output := io.buffer_writer(storage[..])
   result := json.write(io.buffer_writer_adapter(&output), value)
   written := io.buffer_writer_bytes(&output)
@@ -128,7 +128,7 @@ fn json_stream_check(value: *const json.Value, document: []const u8, expected: b
   }
 }
 fn json_bytes(value: []const u8, expected: bool) {
-  quoted: [64]u8 = []
+  quoted: [64]u8
   quoted[0] = '"'
   for i in 0..#len(value) {
     quoted[i+1] = value[i]
@@ -136,14 +136,14 @@ fn json_bytes(value: []const u8, expected: bool) {
   quoted[#len(value)+1] = '"'
   length := #len(value)+2
   json_document(quoted[..length], expected)
-  arena_storage: [512]u8 = []
+  arena_storage: [512]u8
   arena := mem.arena_from_buffer(arena_storage[..])
   string_value := json.make_string(arena, value)
   if string_value == nil {
     #panic("JSON test string allocation")
   }
   json_stream_check(string_value, quoted[..length], expected, "")
-  object: [80]u8 = []
+  object: [80]u8
   object[0] = '{'
   for i in 0..length {
     object[i+1] = quoted[i]
@@ -168,7 +168,7 @@ fn json_bytes(value: []const u8, expected: bool) {
   }
   object[#len(head)+length] = '}'
   json_document(object[..#len(head)+length+1], expected)
-  storage: [64 + mem.ArenaBufferOverhead]u8 = []
+  storage: [64 + mem.ArenaBufferOverhead]u8
   output := mem.arena_from_buffer(storage[..])
   written := json.write_string(output, value)
   if !expected {
@@ -192,7 +192,7 @@ fn json_contracts() {
   }
   codepoints: [12]u32 = [32, 127, 128, 2047, 2048, 55295, 57344, 65535, 65536, 128512, 1114110, 1114111]
   for codepoint in codepoints {
-    encoded: [4]u8 = []
+    encoded: [4]u8
     count := utf8.encode(encoded[..], codepoint)
     json_bytes(encoded[..count], true)
   }
@@ -216,7 +216,7 @@ fn recorded_errors() {
     #panic("INI stops at the first error")
   }
   fields := csv.scanner("a,b\"c,d")
-  buffer: [8]u8 = []
+  buffer: [8]u8
   count: usize = 0
   for csv.next(&fields, buffer[..]).found {
     count += 1

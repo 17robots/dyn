@@ -268,7 +268,7 @@ fn multicast_membership(descriptor: isize, group: [4]u8, interface: [4]u8, optio
   if group[0] < 224 || group[0] > 239 {
     return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput, native: -22 } }
   }
-  request: [8]u8 = []
+  request: [8]u8
   for i in 0..4 {
     request[i] = group[i]
     request[4 + i] = interface[i]

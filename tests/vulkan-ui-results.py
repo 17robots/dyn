@@ -36,8 +36,8 @@ fn main() {
  for i in 0..4 { commands[i].next = &commands[i+1] }
  font_data := FontData{}
  font := software.Font{data:&font_data,glyph:bitmap,line_height:3}
- pixels: [4224]u8 = []
- actual: [4224]u8 = []
+ pixels: [4224]u8
+ actual: [4224]u8
  for i in 0..#len(pixels) { pixels[i] = #cast(u8,i*37+19)
  actual[i] = pixels[i] }
  surface := software.Surface{pixels:pixels[..],width:32,height:32,stride:132}

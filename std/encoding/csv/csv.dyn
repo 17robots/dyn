@@ -24,7 +24,7 @@ fn stream_byte(state: *StreamScanner) ByteResult {
   if state.ended {
     return ByteResult{ end: true, ok: true }
   }
-  byte: [1]u8 = []
+  byte: [1]u8
   result := stream.read(state.input, byte[..])
   if result.status == stream.Status.Error {
     state.failure = parse.io_failure(result.kind, result.error)

@@ -1473,6 +1473,8 @@ static void statement(WG *g, const DynIrStmt *s) {
         op(g, vt == 0x7e ? 0x7d : 0x6b);
       }
       v = save(g, vt);
+      if (collection && s->for_index)
+        store(g, offset(g, g->base, g->localoffset[s->local_id + 1]), v, DYN_TYPE_USIZE);
       if (collection) {
         get(g, v);
         icon(g, wsize(g, element), 0x7f);

@@ -117,7 +117,7 @@ fn glyph(raw: rawptr, codepoint: u32) software.Glyph {
 }
 fn raster(arena: *mem.Arena) {
   context := ui.Context{ style: ui.default_style }
-  bytes: [80]u8 = []
+  bytes: [80]u8
   for i in 0..80 { bytes[i] = 109 }
   for y in 0..4 { for x in 0..16 { bytes[y * 20 + x] = 0 } }
   surface := software.Surface{ pixels: bytes[..], width: 4, height: 4, stride: 20 }

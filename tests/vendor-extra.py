@@ -29,7 +29,7 @@ fn main() {
   defer {
     mem.arena_release(backing)
   }
-  rectangles: [3]atlas.Rectangle = []
+  rectangles: [3]atlas.Rectangle
   rectangles[0] = atlas.Rectangle{ width: 8, height: 8 }
   rectangles[1] = atlas.Rectangle{ width: 4, height: 4 }
   rectangles[2] = atlas.Rectangle{ width: 4, height: 4 }
@@ -62,8 +62,8 @@ fn main() {
   if atlas.pack(backing, 16, 16, rectangles[..]).code != -1 {
     #panic("invalid atlas rectangle")
   }
-  source: [16]u8 = []
-  destination: [64]u8 = []
+  source: [16]u8
+  destination: [64]u8
   k: usize = 0
   for k < 16 {
     source[k] = 128
@@ -86,7 +86,7 @@ fn main() {
   if mem.arena_mark(backing) != mark {
     #panic("scratch leak")
   }
-  tiny: [1 + mem.ArenaBufferOverhead]u8 = []
+  tiny: [1 + mem.ArenaBufferOverhead]u8
   pad := (16-(#cast(usize,&tiny[0])&15))&15
   short_arena := mem.arena_from_buffer(tiny[pad..pad+mem.ArenaHeader+1])
   if image.resize(short_arena, source[..], 2, 2, destination[..], 4, 4, 4, false) || mem.arena_mark(short_arena) != mem.arena_start(short_arena) || atlas.pack(short_arena, 16, 16, rectangles[..]).code != -1 || mem.arena_mark(short_arena) != mem.arena_start(short_arena) {
@@ -114,7 +114,7 @@ fn main() {
     #panic("SDL video")
   }
   defer sdl.quit()
-  text: [256]u8 = []
+  text: [256]u8
   window := sdl.window_create("Dyn interactive UI", text[..], 640, 360, sdl.WindowResizable)
   if !window.ok {
     #panic("SDL window")
@@ -204,7 +204,7 @@ fn main() {
     #panic("audio engine/device")
   }
   defer audio.engine_close(engine.value)
-  path: [4096]u8 = []
+  path: [4096]u8
   mark := mem.arena_mark(arena)
   if audio.sound_create(arena, engine.value, "/nonexistent/dyn-audio-fixture", path[..]).ok || mem.arena_mark(arena) != mark {
     #panic("sound failure rollback")
@@ -218,7 +218,7 @@ fn main() {
     #panic("sound controls")
   }
   deadline := time.deadline_after(60 * time.Second)
-  samples: [2048]f32 = []
+  samples: [2048]f32
   heard := false
   if deadline.failure.kind != io.Kind.Ok { #panic("deadline clock failed") }
   for !audio.sound_ended(sound.value) {
@@ -253,8 +253,8 @@ fn main() {
 use "std/io" io
 use "std/strings"
 fn main() {
-  compressed: [128]u8 = []
-  output: [128]u8 = []
+  compressed: [128]u8
+  output: [128]u8
   source := "caller buffers caller buffers caller buffers"
   result := lz4.compress(compressed[..], source)
   if !result.ok {
@@ -300,7 +300,7 @@ fn main() {
   if !cgltf.validate(model.value) || cgltf.load_embedded(model.value) != 0 || cgltf.node_count(model.value) != 1 {
     #panic("glTF validate/load")
   }
-  values: [3]f32 = []
+  values: [3]f32
   if !cgltf.read_float(model.value, 0, 0, values[..]) || values[0] != 0.0 || values[1] != 1.0 || values[2] != 2.0 {
     #panic("glTF accessor")
   }
@@ -325,8 +325,8 @@ fn main() {
     #panic("mesh parse")
   }
   defer cgltf.destroy_owned(mesh.value)
-  vertices: [9]f32 = []
-  triangles: [3]u16 = []
+  vertices: [9]f32
+  triangles: [3]u16
   triangles[1] = 1
   triangles[2] = 2
   vertex_bytes := #slice(#cast(*const u8, &vertices[0]), 36)
@@ -344,8 +344,8 @@ fn main() {
   if !index.ok || index.value != 2 || cgltf.read_index(mesh.value, 1, 3).ok || cgltf.attribute(mesh.value, 0, 0, cgltf.Normal, 0) != -1 {
     #panic("mesh indices")
   }
-  transform: [16]f32 = []
-  color: [4]f32 = []
+  transform: [16]f32
+  color: [4]f32
   if !cgltf.world_transform(mesh.value, 0, transform[..]) || transform[12] != 1.0 || transform[13] != 2.0 || transform[14] != 3.0 || !cgltf.base_color(mesh.value, 0, color[..]) || color[1] != 0.5 || cgltf.base_color(mesh.value, 1, color[..]) {
     #panic("mesh transform/material")
   }
@@ -428,7 +428,7 @@ fn main() {
   if !contacts || !circle_position.ok || circle_position.y < 0.4 || circle_position.y > 0.7 || !joint_position.ok || joint_position.y < 1.9 || joint_position.y > 2.1 {
     #panic("circle contact/joint motion")
   }
-  hits: [1]physics.Shape = []
+  hits: [1]physics.Shape
   candidates := physics.query(world, -2.0, -2.0, 5.0, 5.0, hits[..])
   if !candidates.ok || candidates.total < 3 || candidates.written != 1 || physics.query(world, 2.0, 2.0, -2.0, -2.0, hits[..]).ok || physics.contact(world, true, 999).ok {
     #panic("physics query")
@@ -459,7 +459,7 @@ fn main() {
   if context == nil {
     #panic("UI context")
   }
-  buffer: [256]u8 = []
+  buffer: [256]u8
   if ui.label(context, "outside frame", buffer[..]) || ui.end(context) {
     #panic("invalid UI state accepted")
   }
@@ -511,7 +511,7 @@ fn main() {
     #panic("ENet init")
   }
   defer enet.quit()
-  path: [64]u8 = []
+  path: [64]u8
   server := enet.listen_at_owned("0.0.0.0", 0, 2, 2, path[..])
   if server == nil {
     #panic("ENet server")
@@ -638,7 +638,7 @@ fn main() {
     #panic("decoder")
   }
   defer audio.decoder_close(decoder.value)
-  samples: [2048]f32 = []
+  samples: [2048]f32
   heard := false
   ended := false
   iterations: usize = 0
@@ -670,7 +670,7 @@ fn main() {
     #panic("audio engine")
   }
   defer audio.engine_close(engine.value)
-  path: [4096]u8 = []
+  path: [4096]u8
   if !audio.play_file(engine.value, args[1], path[..]) {
     #panic("engine play")
   }
@@ -740,7 +740,7 @@ fn main() {
   if !mixer.play(track, audio) {
     #panic("mixer play")
   }
-  samples: [2048]f32 = []
+  samples: [2048]f32
   heard := false
   iterations: usize = 0
   for iterations < 200 && mixer.playing(track) {

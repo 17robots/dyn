@@ -10,7 +10,7 @@ pub struct CompileResult { pattern: Pattern, code: i32, offset: usize, ok: bool 
 pub struct MatchResult { code: i32, matched: bool, ok: bool }
 pub struct Span { start: usize, end: usize, set: bool }
 pub fn compile_owned(pattern: []const u8, options: u32) CompileResult {
-  empty: [1]u8 = []
+  empty: [1]u8
   pointer: *const u8 = &empty[0]
   if #len(pattern) > 0 {
     pointer = &pattern[0]
@@ -42,7 +42,7 @@ pub fn match(pattern: Pattern, data: MatchData, subject: []const u8, start: usiz
   if pattern == nil || data == nil || start > #len(subject) {
     return MatchResult{ code: -33 }
   }
-  empty: [1]u8 = []
+  empty: [1]u8
   pointer: *const u8 = &empty[0]
   if #len(subject) > 0 {
     pointer = &subject[0]

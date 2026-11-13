@@ -26,7 +26,7 @@ fn main() {
  // RFC8949 Appendix A: {"a":1,"b":[2,3]}, indefinite [1,[2,3],4,5].
  golden := "\xa2\x61a\x01\x61b\x82\x02\x03"
  state := cbor.reader(golden)
- tokens: [20]cbor.Token = []
+ tokens: [20]cbor.Token
  count: usize = 0
  item := cbor.next(&state)
  for item.found { tokens[count] = item.value
@@ -101,12 +101,12 @@ fn main() {
  check(cbor.encode(arena,invalid[..]).failure.kind == parse.Kind.Syntax && mem.arena_mark(arena) == mark)
  invalid[0] = cbor.Token{kind:cbor.Kind.Simple,value:24}
  check(cbor.encode(arena,invalid[..]).failure.kind == parse.Kind.Syntax && mem.arena_mark(arena) == mark)
- deep: [65]u8 = []
+ deep: [65]u8
  for i in 0..65 { deep[i] = 0x9f }
  state = cbor.reader(deep[..])
  for i in 0..64 { check(cbor.next(&state).found) }
  check(cbor.next(&state).failure.kind == parse.Kind.Capacity)
- raw: [20]u8 = []
+ raw: [20]u8
  for tag in 0..256 {
   raw[0] = #cast(u8,tag)
   state = cbor.reader(raw[..])

@@ -95,7 +95,7 @@ pub fn write_all(writer: Writer, source: []const u8) Transfer {
 }
 
 fn print_value(writer: Writer, value: any) Transfer {
-  storage: [64 + memory.ArenaBufferOverhead]u8 = []
+  storage: [64 + memory.ArenaBufferOverhead]u8
   scratch := memory.arena_from_buffer(storage[..])
   case value {
     f32 item => {
@@ -147,74 +147,72 @@ fn print_value(writer: Writer, value: any) Transfer {
       return write_all(writer, item)
     }
     _ => {
-      return Transfer{ error: -22, kind: Kind.InvalidInput, status: Status.Error }
+      // A type with no text form prints as a marker rather than ending the line.
+      return write_all(writer, "{?}")
     }
   }
-}
-
-fn format_argument_count(template: []const u8) isize {
-  count: isize = 0
-  index: usize = 0
-  for index < #len(template) {
-    if template[index] == '{' || template[index] == '}' {
-      if index + 1 >= #len(template) {
-        return -1
-      }
-      next := template[index + 1]
-      if template[index] == '{' && next == '}' {
-        count += 1
-      } else if next != template[index] {
-        return -1
-      }
-      index += 2
-    } else {
-      index += 1
-    }
-  }
-  return count
 }
 
 // print_arguments is the non-variadic entry point used by forwarding wrappers.
 // The format language is intentionally small: {} inserts a value; {{ and }}
-// write literal braces. Invalid formats and argument-count mismatches write nothing.
+// write literal braces. A literal template is checked by the compiler. A
+// template made at run time that does not match its arguments still prints:
+// a {} with no argument prints {?}, a lone brace prints as itself, and each
+// extra argument prints at the end as {+value}. The result then reports
+// InvalidInput with everything that was written.
 pub fn print_arguments(writer: Writer, template: []const u8, arguments: []const any) Transfer {
-  count := format_argument_count(template)
-  if count < 0 || #cast(usize, count) != #len(arguments) {
-    return Transfer{ transferred: 0, error: -22, kind: Kind.InvalidInput, status: Status.Error }
-  }
-
   total: usize = 0
   argument_index: usize = 0
+  mismatch := false
   span_start: usize = 0
   index: usize = 0
   for index < #len(template) {
-    if template[index] != '{' && template[index] != '}' {
+    byte := template[index]
+    if byte != '{' && byte != '}' {
       index += 1
-    } else {
-      if span_start < index {
-        literal := write_all(writer, template[span_start..index])
-        total += literal.transferred
-        if literal.status == Status.Error {
-          return Transfer{ transferred: total, error: literal.error, kind: literal.kind, status: Status.Error }
-        }
+      continue
+    }
+    if span_start < index {
+      literal := write_all(writer, template[span_start..index])
+      total += literal.transferred
+      if literal.status == Status.Error {
+        return Transfer{ transferred: total, error: literal.error, kind: literal.kind, status: Status.Error }
       }
-      if template[index] == '{' && template[index + 1] == '}' {
+    }
+    next: u8 = 0
+    if index + 1 < #len(template) {
+      next = template[index + 1]
+    }
+    piece := template[index..index + 1]
+    step: usize = 1
+    if byte == '{' && next == '}' {
+      step = 2
+      if argument_index < #len(arguments) {
         inserted := print_value(writer, arguments[argument_index])
         total += inserted.transferred
         if inserted.status == Status.Error {
           return Transfer{ transferred: total, error: inserted.error, kind: inserted.kind, status: Status.Error }
         }
         argument_index += 1
+        piece = ""
       } else {
-        brace := write_all(writer, template[index..index + 1])
-        total += brace.transferred
-        if brace.status == Status.Error {
-          return Transfer{ transferred: total, error: brace.error, kind: brace.kind, status: Status.Error }
-        }
+        mismatch = true
+        piece = "{?}"
       }
-      index += 2
-      span_start = index
+    } else if next == byte {
+      step = 2
+    } else {
+      mismatch = true
     }
+    if #len(piece) > 0 {
+      brace := write_all(writer, piece)
+      total += brace.transferred
+      if brace.status == Status.Error {
+        return Transfer{ transferred: total, error: brace.error, kind: brace.kind, status: Status.Error }
+      }
+    }
+    index += step
+    span_start = index
   }
   if span_start < #len(template) {
     tail := write_all(writer, template[span_start..])
@@ -222,6 +220,20 @@ pub fn print_arguments(writer: Writer, template: []const u8, arguments: []const 
     if tail.status == Status.Error {
       return Transfer{ transferred: total, error: tail.error, kind: tail.kind, status: Status.Error }
     }
+  }
+  for argument_index < #len(arguments) {
+    mismatch = true
+    open := write_all(writer, " {+")
+    inserted := print_value(writer, arguments[argument_index])
+    close := write_all(writer, "}")
+    total += open.transferred + inserted.transferred + close.transferred
+    if open.status == Status.Error || inserted.status == Status.Error || close.status == Status.Error {
+      return Transfer{ transferred: total, error: -22, kind: Kind.InvalidInput, status: Status.Error }
+    }
+    argument_index += 1
+  }
+  if mismatch {
+    return Transfer{ transferred: total, error: -22, kind: Kind.InvalidInput, status: Status.Error }
   }
   return Transfer{ transferred: total, error: 0, status: Status.Complete }
 }
@@ -236,16 +248,15 @@ pub fn print_to(writer: Writer, template: []const u8, arguments: ...any) Transfe
 
 pub fn println_arguments(writer: Writer, template: []const u8, arguments: []const any) Transfer {
   result := print_arguments(writer, template, arguments)
-  if result.status == Status.Error {
+  // A template that did not match its arguments still printed; end its line.
+  if result.status == Status.Error && result.kind != Kind.InvalidInput {
     return result
   }
   newline := write_all(writer, "\n")
-  return Transfer{
-    transferred: result.transferred + newline.transferred,
-    error: newline.error,
-    kind: newline.kind,
-    status: newline.status,
+  if newline.status == Status.Error {
+    return Transfer{ transferred: result.transferred + newline.transferred, error: newline.error, kind: newline.kind, status: Status.Error }
   }
+  return Transfer{ transferred: result.transferred + newline.transferred, error: result.error, kind: result.kind, status: result.status }
 }
 
 pub fn println_to(writer: Writer, template: []const u8, arguments: ...any) Transfer {

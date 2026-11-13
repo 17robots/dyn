@@ -213,7 +213,7 @@ fn read_record(state: *Reader, destination: []u8, delimiter: u8, line: bool) Rea
     return ReadResult{ status: ReadStatus.More }
   }
   total: usize = 0
-  byte: [1]u8 = []
+  byte: [1]u8
   for {
     input := io.read(reader_adapter(state), byte[..])
     if input.transferred == 0 {
@@ -228,7 +228,7 @@ fn read_record(state: *Reader, destination: []u8, delimiter: u8, line: bool) Rea
       return ReadResult{ transferred: total, status: ReadStatus.Complete }
     }
     if line && byte[0] == 13 {
-      next: [1]u8 = []
+      next: [1]u8
       peek := io.read(reader_adapter(state), next[..])
       if peek.transferred > 0 {
         if next[0] == 10 {

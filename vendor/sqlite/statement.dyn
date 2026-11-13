@@ -126,7 +126,7 @@ fn bind_bytes(statement: *Statement, index: i32, value: []const u8, text: bool) 
     return Overflow
   }
   // Empty data must have a non-null pointer so it is not bound as SQL NULL.
-  empty: [1]u8 = []
+  empty: [1]u8
   pointer := #cast(rawptr, &empty[0])
   if #len(value) > 0 {
     pointer = #cast(rawptr, &value[0])

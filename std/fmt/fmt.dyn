@@ -128,12 +128,12 @@ fn i64_decimal_into(destination: []u8, value: i64) []u8 {
 }
 
 pub fn write_u64(state: *Buffer, value: u64) bool {
-  storage: [20]u8 = []
+  storage: [20]u8
   return write(state, u64_decimal_into(storage[..], value))
 }
 
 pub fn write_i64(state: *Buffer, value: i64) bool {
-  storage: [20]u8 = []
+  storage: [20]u8
   return write(state, i64_decimal_into(storage[..], value))
 }
 
@@ -282,7 +282,7 @@ fn f64_decimal_into(destination: []u8, value: f64, precision: usize) []u8 {
   if precision > 15 {
     return destination[..0]
   }
-  scratch: [64]u8 = []
+  scratch: [64]u8
   state := buffer(scratch[..])
   bits := #bitcast(u64, value)
   negative := (bits >> 63) != 0
@@ -334,7 +334,7 @@ fn f64_decimal_into(destination: []u8, value: f64, precision: usize) []u8 {
           fraction /= 10
           digits -= 1
         }
-        fraction_storage: [20]u8 = []
+        fraction_storage: [20]u8
         rendered := u64_decimal_into(fraction_storage[..], fraction)
         _ = write_byte(&state, '.')
         _ = write_padding(&state, '0', digits - #len(rendered))
@@ -358,12 +358,12 @@ fn f64_decimal_into(destination: []u8, value: f64, precision: usize) []u8 {
 }
 
 pub fn write_f64(state: *Buffer, value: f64) bool {
-  storage: [64]u8 = []
+  storage: [64]u8
   return write(state, f64_decimal_into(storage[..], value, 6))
 }
 
 pub fn write_u64_width(state: *Buffer, value: u64, width: usize, padding: u8) bool {
-  storage: [20]u8 = []
+  storage: [20]u8
   rendered := u64_decimal_into(storage[..], value)
   length := #len(rendered)
   if width > length {
@@ -385,17 +385,17 @@ fn copy_out(arena: *mem.Arena, text: []const u8) []u8 {
 
 // value in base 2 through 36. Panics on another base.
 pub fn u64_base(arena: *mem.Arena, value: u64, base: u8, uppercase: bool) []u8 {
-  storage: [64]u8 = []
+  storage: [64]u8
   return copy_out(arena, u64_base_into(storage[..], value, base, uppercase))
 }
 
 pub fn u64_decimal(arena: *mem.Arena, value: u64) []u8 {
-  storage: [20]u8 = []
+  storage: [20]u8
   return copy_out(arena, u64_decimal_into(storage[..], value))
 }
 
 pub fn i64_decimal(arena: *mem.Arena, value: i64) []u8 {
-  storage: [20]u8 = []
+  storage: [20]u8
   return copy_out(arena, i64_decimal_into(storage[..], value))
 }
 
@@ -406,6 +406,6 @@ pub fn f64_decimal(arena: *mem.Arena, value: f64, precision: usize) []u8 {
   if precision > 15 {
     #panic("fmt.f64_decimal: precision above 15")
   }
-  storage: [64]u8 = []
+  storage: [64]u8
   return copy_out(arena, f64_decimal_into(storage[..], value, precision))
 }

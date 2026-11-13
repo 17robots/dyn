@@ -332,7 +332,7 @@ fn preedit_draw(_context: rawptr, data: rawptr, call: *PreeditDraw) {
     compose_snapshot(desktop)
     return
   }
-  incoming: [preedit_limit]u32 = []
+  incoming: [preedit_limit]u32
   count: usize = 0
   room := preedit_limit - first
   if call.text != nil && call.text.string != nil {
@@ -383,7 +383,7 @@ fn preedit_draw(_context: rawptr, data: rawptr, call: *PreeditDraw) {
     tail = preedit_limit - first - count
     desktop_loss(desktop)
   }
-  rest: [preedit_limit]u32 = []
+  rest: [preedit_limit]u32
   for i in 0..tail {
     rest[i] = desktop.preedit[first + remove + i]
   }
@@ -573,7 +573,7 @@ fn append_text(desktop: *Desktop, bytes: []const u8) {
 fn desktop_key(window: *Window, event: *Event) {
   desktop := &window.desktop
   key_event := #cast(*KeyEvent, event)
-  buffer: [4096]u8 = []
+  buffer: [4096]u8
   key: usize = keysym(event, 0)
   count: i32 = 0
   if desktop.context != nil && desktop.text_input {
@@ -588,7 +588,7 @@ fn desktop_key(window: *Window, event: *Event) {
       count = 0
     }
   } else if desktop.text_input {
-    latin: [8]u8 = []
+    latin: [8]u8
     length := lookup_latin1(event, &latin[0], 8, &key, nil)
     for i in 0..#cast(usize, length) {
       byte := latin[i]
@@ -1116,7 +1116,7 @@ pub fn set_title(window: *Window, title: []const u8) Result {
   if !utf8.valid(title) {
     return Result{kind:io.Kind.InvalidInput}
   }
-  storage: [4096]u8 = []
+  storage: [4096]u8
   name := c.string_into(storage[..], title)
   if name.failure.kind != parse.Kind.Ok {
     return Result{kind:io.Kind.InvalidInput}

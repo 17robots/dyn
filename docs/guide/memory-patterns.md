@@ -23,7 +23,7 @@ const WorkspaceBytes: usize = 4 * mem.KiB
 struct Item { value: u64 }
 
 fn main() {
-  storage: [WorkspaceBytes + mem.ArenaBufferOverhead]u8 = []
+  storage: [WorkspaceBytes + mem.ArenaBufferOverhead]u8
   arena := mem.arena_from_buffer(storage[..])
   items := mem.push_array(Item, arena, 10)
   items[9].value = 42
@@ -62,8 +62,8 @@ fn make_label(output: *mem.Arena, first: *mem.Arena, second: *mem.Arena) []u8 {
 }
 
 fn main() {
-  output_storage: [mem.KiB + mem.ArenaBufferOverhead]u8 = []
-  scratch_storage: [mem.KiB + mem.ArenaBufferOverhead]u8 = []
+  output_storage: [mem.KiB + mem.ArenaBufferOverhead]u8
+  scratch_storage: [mem.KiB + mem.ArenaBufferOverhead]u8
   output := mem.arena_from_buffer(output_storage[..])
   scratch := mem.arena_from_buffer(scratch_storage[..])
   label := make_label(output, output, scratch)
@@ -89,7 +89,7 @@ use "std/bytes/builder" builder
 use "std/strings"
 
 fn main() {
-  storage: [8]u8 = []
+  storage: [8]u8
   text := builder.from_buffer(storage[..])
   if builder.append(&text, "hello") != builder.ErrorKind.None { #panic("append") }
   if builder.append(&text, " world") != builder.ErrorKind.Capacity { #panic("capacity") }

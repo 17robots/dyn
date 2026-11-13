@@ -6,7 +6,7 @@ no caller-buffer duplicates (`_into`) and no size-query companions (`_size`,
 `_count`). To produce into fixed storage, wrap it in an arena:
 
 ```dyn
-storage: [64 + mem.ArenaBufferOverhead]u8 = []
+storage: [64 + mem.ArenaBufferOverhead]u8
 arena := mem.arena_from_buffer(storage[..])
 text := fmt.u64_decimal(arena, 42)
 ```

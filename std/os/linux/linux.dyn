@@ -20,8 +20,8 @@ fn no_arguments() [][]const u8 {
 // Linux exposes argv as NUL-separated bytes through procfs. Returned slices live
 // in the caller arena. Limits are explicit and intentionally modest for tools.
 pub fn process_arguments(arena: *memory.Arena) [][]const u8 {
-  temporary: [16385]u8 = []
-  path: [19]u8 = []
+  temporary: [16385]u8
+  path: [19]u8
   source: []const u8 = "/proc/self/cmdline"
   i: usize = 0
   for i < #len(source) {
@@ -92,7 +92,7 @@ pub struct SpawnOptions { input: isize, output: isize, error: isize, directory: 
 struct CStringPointer { value: *u8 }
 
 pub fn pipe() PipeResult {
-  descriptors: [2]i32 = []
+  descriptors: [2]i32
   value := #syscall(sys.Pipe2, &descriptors[0], 0)
   if value < 0 {
     return PipeResult{ input: -1, output: -1, error: value, ok: false }
@@ -253,7 +253,7 @@ pub fn spawn_environment(
       redirected_sources[source_index] = copied
     }
   }
-  descriptors: [2]i32 = []
+  descriptors: [2]i32
   channel := #syscall(sys.Pipe2, &descriptors[0], 524288)
   if channel < 0 {
     return SpawnResult{ error: channel }
@@ -381,7 +381,7 @@ pub fn environment_get(name: []const u8, destination: []u8) EnvironmentResult {
     return EnvironmentResult{ value: destination[..0], error: descriptor }
   }
   defer _ = #syscall(sys.Close, descriptor)
-  scratch: [4096]u8 = []
+  scratch: [4096]u8
   position: usize = 0
   used: usize = 0
   matching := true
@@ -461,6 +461,6 @@ pub fn signal_default(signal: usize) Result {
 }
 
 pub fn spawn(arena: *memory.Arena, path: []const u8, arguments: [][]const u8, options: SpawnOptions) SpawnResult {
-  empty: [0][]const u8 = []
+  empty: [0][]const u8
   return spawn_environment(arena, path, arguments, empty[..], options)
 }

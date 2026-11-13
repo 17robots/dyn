@@ -45,7 +45,7 @@ fn main() {
   if !sync.try_lock(&shared.mutex) { #panic("initial trylock") }
   if sync.try_lock(&shared.mutex) { #panic("recursive trylock") }
   sync.unlock(&shared.mutex)
-  threads: [4]*thread.Thread = []
+  threads: [4]*thread.Thread
   for i in 0..4 {
     spawned:=thread.spawn_with_size(arena,131072,worker,#cast(rawptr,&shared))
     if spawned.failure.kind != io.Kind.Ok { #panic("spawn") }

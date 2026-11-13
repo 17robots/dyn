@@ -14,7 +14,7 @@ for t, n in [('u8',16), ('i8',16), ('u16',8), ('i16',8), ('u32',4), ('i32',4), (
     prefix = t+'x'+str(n)
     typename = t[0].upper()+t[1:]+'x'+str(n)
     # Separate blocks allow concrete lane types with the same variable names.
-    source.append('if true {\n  a: simd.'+typename+' = []\n  b: simd.'+typename+' = []')
+    source.append('if true {\n  a: simd.'+typename+'\n  b: simd.'+typename)
     source.append(f'  for i in 0..{n} {{\n    a[i] = #cast({t}, i + 1)\n    b[i] = #cast({t}, i + 2)\n  }}')
     source.append(f'  check(#sizeof(simd.{typename}) == 16)')
     for operation, symbol in [('add','+'), ('sub','-'), ('mul','*')]+([('div','/')] if t[0]=='f' else [('and','&'), ('or','|'), ('xor','^')]):
@@ -22,7 +22,7 @@ for t, n in [('u8',16), ('i8',16), ('u16',8), ('i16',8), ('u32',4), ('i32',4), (
         if operation in ('and','or','xor') or (t[0]!='f' and operation in ('add','sub','mul')):
             oracle = f'({oracle})'
         source.append(f'  {operation} := simd.{prefix}_{operation}(a, b)\n  for i in 0..{n} {{ check({operation}[i] == {oracle}) }}')
-    source.append(f'  copy := simd.{prefix}_load(a[..])\n  destination: [{n+2}]{t} = []\n  simd.{prefix}_store(destination[1..], copy)\n  check(destination[0] == 0 && destination[{n+1}] == 0)\n  for i in 0..{n} {{ check(destination[i+1] == a[i]) }}')
+    source.append(f'  copy := simd.{prefix}_load(a[..])\n  destination: [{n+2}]{t}\n  simd.{prefix}_store(destination[1..], copy)\n  check(destination[0] == 0 && destination[{n+1}] == 0)\n  for i in 0..{n} {{ check(destination[i+1] == a[i]) }}')
     if t[0]!='f':
         max_value = (1 << int(t[1:]))-1 if t[0]=='u' else (1 << (int(t[1:])-1))-1
         source.append(f'  maximum := simd.{prefix}_splat({max_value})\n  one := simd.{prefix}_splat(1)\n  overflow := simd.{prefix}_add(maximum, one)\n  product := simd.{prefix}_mul(maximum, maximum)\n  for i in 0..{n} {{ check(overflow[i] == (maximum[i] + one[i]) && product[i] == (maximum[i] * maximum[i])) }}')
@@ -37,6 +37,8 @@ with tempfile.TemporaryDirectory(prefix='dyn-simd-lanes-') as directory:
         command = [DYN, 'build', str(work), mode, '--no-cache', '--quiet', '--output', str(work / 'program')]
         if mode == '--release':
             command += ['--opt-level', '3', '--opt-remarks']
+        else:
+            command += ['--no-check-overflow']  # the oracle wraps on purpose
         built = subprocess.run(command, capture_output=True, text=True, timeout=300)
         assert built.returncode == 0, built.stderr
         subprocess.run([str(work / 'program')], check=True, timeout=30)
@@ -51,7 +53,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-simd-lanes-') as directory:
     # Short loads/stores must fail in debug and release before writing anything.
     for operation in ('load', 'store'):
         body = '_ = simd.u32x4_load(buffer[..])' if operation == 'load' else 'simd.u32x4_store(buffer[..], simd.u32x4_splat(1))'
-        (work / 'main.dyn').write_text('use "std/simd" simd\nfn main() {\n buffer: [3]u32 = []\n '+body+'\n}')
+        (work / 'main.dyn').write_text('use "std/simd" simd\nfn main() {\n buffer: [3]u32\n '+body+'\n}')
         for mode in ('--debug', '--release'):
             subprocess.run([DYN, 'build', str(work), mode, '--quiet', '--output', str(work / 'program')], check=True, timeout=300)
             ran = subprocess.run([str(work / 'program')], capture_output=True, text=True, timeout=30)

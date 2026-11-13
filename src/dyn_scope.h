@@ -74,6 +74,8 @@ static inline bool dyn_scope_compact_collect(DynScopeIndex *index, const DynSour
       }
     } else if (loop) {
       if (nodes[node].kind == SRC_FOR_CONDITION && (nodes[node].flags & EXP_ITERATION) && !dyn_scope_compact_add(index, source, tree, nodes[node].first, start, end)) return false;
+      if (nodes[node].kind == SRC_FOR_CONDITION && (nodes[node].flags & EXP_INDEXED) && nodes[nodes[node].first].next != UINT32_MAX &&
+          !dyn_scope_compact_add(index, source, tree, nodes[nodes[node].first].next, start, end)) return false;
     } else {
       if (nodes[node].kind == SRC_TYPE_PATTERN) {
         node = nodes[node].first;

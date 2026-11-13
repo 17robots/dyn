@@ -34,7 +34,7 @@ fn worker(context: rawptr) isize {
   return 0
 }
 fn main() {
-  threads: [8]win.Thread = []
+  threads: [8]win.Thread
   for i in 0..8 {
     if !win.thread_spawn(&threads[i], 65536, worker, nil) { #panic("spawn") }
   }

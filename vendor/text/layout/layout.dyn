@@ -96,7 +96,7 @@ fn shape(arena:*mem.Arena, api:*const hb.Api, text:[]const u8, clusters:[]Cluste
       if (run.level&1)!=0 {
         direction=hb.RightToLeft
       }
-      features:[0]hb.Feature=[]
+      features:[0]hb.Feature
       flags:u32=0
       if run.first==first {
         flags|=hb.BeginningOfText
@@ -374,7 +374,7 @@ fn paragraph(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[
   }
   spans:=mem.arena_create(0)
   defer mem.arena_release(spans)
-  adjusted:[0]i8=[]
+  adjusted:[0]i8
   measured:=shape(spans, api, text, clusters, 0, used, adjusted[..], 0, false)
   if !measured.ok {
     return measured.kind
@@ -731,7 +731,7 @@ pub fn selection(arena: *mem.Arena, layout: *const Layout, start, end: usize) Se
       return SelectionResult{kind:io.Kind.InvalidInput}
     }
   }
-  empty: [0]SelectionRect=[]
+  empty: [0]SelectionRect
   count:=selection_walk(layout, start, end, empty[..])
   if count>#max(usize)/#sizeof(SelectionRect) {
     return SelectionResult{kind:io.Kind.Overflow}

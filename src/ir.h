@@ -134,7 +134,8 @@ typedef struct {
   DynSpan span;
   /* A DynOperator in one byte, and one bit per flag, keep a statement at 64 bytes. No switch reads assignment_op. */
   uint8_t assignment_op;
-  bool defer_block : 1, for_pointer : 1, for_const : 1, for_range : 1, for_inclusive : 1, for_reverse : 1;
+  /* for_index: the loop also sets local_id + 1 to the element index. */
+  bool defer_block : 1, for_pointer : 1, for_const : 1, for_range : 1, for_inclusive : 1, for_reverse : 1, for_index : 1;
 } DynIrStmt;
 _Static_assert(sizeof(DynIrStmt) <= 64, "DynIrStmt grew past one cache line");
 _Static_assert(DYN_OP_SHR <= UINT8_MAX, "DynOperator no longer fits DynIrStmt.assignment_op");

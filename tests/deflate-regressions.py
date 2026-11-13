@@ -33,9 +33,9 @@ fn source_read(data: rawptr, destination: []u8) io.Transfer {
 fn check(encoded: []const u8, expected: []const u8, wrapped: bool, corrupt: bool, chunk: usize, source_chunk: usize, history_size: usize) {
   source := Source{ bytes: encoded, chunk: source_chunk }
   reader := io.Reader{ data: #cast(rawptr, &source), read: source_read }
-  compressed: [1024]u8 = []
-  history: [65536]u8 = []
-  output: [65536]u8 = []
+  compressed: [1024]u8
+  history: [65536]u8
+  output: [65536]u8
   state := deflate.decoder(reader, compressed[..], history[..history_size])
   if wrapped { state = gzip.decoder(reader, compressed[..], history[..history_size]) }
   decoder := deflate.decoder_reader(&state)
@@ -87,7 +87,7 @@ fn fixture(encoded_path: []const u8, expected_path: []const u8, wrapped: bool, c
     }
     require(result.done && result.written == #len(expected.value), "linear resume completion")
     for i in 0..#len(destination) { require(destination[i] == expected.value[i], "linear resume output") }
-    tiny: [1]u8 = []
+    tiny: [1]u8
     capacity := deflate.InflateState{}
     result = deflate.resume(&capacity, tiny[..], encoded.value)
     require(!result.done && capacity.error == -28, "linear output capacity")

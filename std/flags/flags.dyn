@@ -256,7 +256,7 @@ pub fn completion(arena: *memory.Arena, options: []const Option) []u8 {
 }
 
 fn render_arena(arena: *memory.Arena, program: []const u8, options: []const Option, is_usage: bool) []u8 {
-  empty: [0]u8 = []
+  empty: [0]u8
   measured := render(empty[..], program, options, is_usage, false)
   if measured.failure.kind != parse.Kind.Ok {
     #panic("flags: usage text size overflows")

@@ -51,7 +51,7 @@ fn main() {
   ui.begin(&context, arena, ui.Input{}, ui.Rect{ width: 32, height: 32 })
   ui_text.label(&context, ui.Rect{ x: 2, y: 3, width: 28, height: 28 }, &result.value, ui.Color{ r: 255, a: 255 })
   ui.end(&context)
-  pixels: [4096]u8 = []
+  pixels: [4096]u8
   surface := software.Surface{ pixels: pixels[..], width: 32, height: 32, stride: 128 }
   check(software.render(&surface, ui.first(&context), software.Font{ glyph: glyph, line_height: 12 }).failure.kind == errors.Kind.Ok)
   check(pixels[(3 * 32 + 2) * 4] == 255 && pixels[(3 * 32 + 10) * 4] == 255 && pixels[(15 * 32 + 2) * 4] == 255)

@@ -25,11 +25,11 @@ fn handler(response: *http.Response, request: *const http.Request) http.Result {
 '''
 NATIVE = COMMON.replace('MODULE', 'std/net/http/concurrent') + r'''
 fn main() {
-  nodes: [4096]u8 = []
+  nodes: [4096]u8
   arena := mem.arena_from_buffer(nodes[..])
-  pool: [2]workers.Worker = []
-  receive: [8192]u8 = []
-  stacks: [262144]u8 = []
+  pool: [2]workers.Worker
+  receive: [8192]u8
+  stacks: [262144]u8
   workers.stop(pool[..])
   zero := workers.join(pool[..])
   if zero.failure.kind != errors.Kind.Ok || zero.failure.native != 0 { #panic("zero lifecycle") }
@@ -114,11 +114,11 @@ MOCK = COMMON.replace('MODULE', './workers').replace('use "std/thread" thread\n'
 use "./mock_thread" mock
 use "./mock_net" counter
 fn main() {
-  nodes: [4096]u8 = []
+  nodes: [4096]u8
   arena := mem.arena_from_buffer(nodes[..])
-  pool: [3]workers.Worker = []
-  receive: [3072]u8 = []
-  stacks: [768]u8 = []
+  pool: [3]workers.Worker
+  receive: [3072]u8
+  stacks: [768]u8
   workers.stop(pool[..])
   if counter.calls != 0 { #panic("zero worker shutdown") }
   // Descriptor zero is valid when explicitly owned.

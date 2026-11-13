@@ -20,10 +20,10 @@ fn require(value: bool, message: []const u8) { if !value { io.eprintln("{}", mes
 #panic(message) } }
 fn lines(text: []const u8, expected: []const u8, capacity: usize, buffering: usize) {
   cursor := io.cursor(text)
-  scratch: [8]u8 = []
+  scratch: [8]u8
   input := bufio.reader(io.cursor_reader(&cursor), scratch[..buffering])
-  chunk: [8]u8 = []
-  result: [256]u8 = []
+  chunk: [8]u8
+  result: [256]u8
   used: usize = 0
   empty := bufio.read_line(&input, chunk[..0])
   require(empty.status == bufio.ReadStatus.More && empty.transferred == 0, "stdlib assertion 27")
@@ -65,7 +65,7 @@ fn main() {
   require(!sync.compare_exchange_u64(&counter64, 4294967298, 0), "atomic64 failed CAS")
   require(sync.compare_exchange_u64(&counter64, 4294967300, 17), "atomic64 CAS")
   require(sync.load_u64(&counter64) == 17, "atomic64 final")
-  backing: [131072+mem.ArenaBufferOverhead]u8 = []
+  backing: [131072+mem.ArenaBufferOverhead]u8
   arena := mem.arena_from_buffer(backing[..])
   arguments := process.arguments(arena)
   require(arguments.failure.kind == errors.Kind.Ok && #len(arguments.value) == 7, "stdlib assertion 49")
@@ -75,7 +75,7 @@ fn main() {
   require(bytes.equal(arguments.value[4], "trailing\\"), "stdlib assertion 53")
   require(bytes.equal(arguments.value[5], "café 😀"), "stdlib assertion 54")
   require(bytes.equal(arguments.value[6], "slashes\\\\\"quote"), "stdlib assertion 55")
-  tiny_backing: [1+mem.ArenaBufferOverhead]u8 = []
+  tiny_backing: [1+mem.ArenaBufferOverhead]u8
   tiny_pad := (16-(#cast(usize,&tiny_backing[0])&15))&15
   tiny := mem.arena_from_buffer(tiny_backing[tiny_pad..tiny_pad+mem.ArenaHeader+1])
   unopened := fs.File{}
@@ -101,7 +101,7 @@ fn main() {
   fs.close(&appended.value)
   opened := fs.open("café-😀.txt")
   require(opened.failure.kind == errors.Kind.Ok && fs.seek(&opened.value, 2, 0).value == 2, "stdlib assertion 82")
-  contents: [8]u8 = []
+  contents: [8]u8
   read := io.read_exact(fs.reader(&opened.value), contents[..4])
   require(read.status == io.Status.Complete && bytes.equal(contents[..4], "cdef"), "stdlib assertion 85")
   require(io.read(fs.reader(&opened.value), contents[..]).status == io.Status.End, "stdlib assertion 86")
@@ -128,7 +128,7 @@ fn main() {
     }
     buffering += 1
   }
-  error_storage: [8]u8 = []
+  error_storage: [8]u8
   for error_capacity in [0, 8] {
     failing := bufio.reader(io.Reader{ read: error_read }, error_storage[..#cast(usize, error_capacity)])
     error_line := bufio.read_line(&failing, contents[..])

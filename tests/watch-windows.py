@@ -17,11 +17,11 @@ fn require(value: bool) { if !value { #panic("Windows watch contract") } }
 fn main() {
   empty := watch.Watcher{}
   watch.close(&empty)
-  tiny: [1]u8 = []
+  tiny: [1]u8
   failed := watch.open(tiny[..])
   watch.close(&failed.value)
   require(failed.failure.kind != io.Kind.Ok)
-  scratch: [1024]u8 = []
+  scratch: [1024]u8
   opened := watch.open(scratch[..])
   require(opened.failure.kind == io.Kind.Ok)
   require(watch.add(&opened.value,"missing-directory",watch.Changes).failure.kind != io.Kind.Ok)
@@ -30,10 +30,10 @@ fn main() {
   second := watch.add(&opened.value,"two",watch.Changes)
   require(first.failure.kind == io.Kind.Ok && second.failure.kind == io.Kind.Ok && first.value != second.value)
   require(!watch.HasCloseWrite && !watch.HasMoveCookies && !watch.HasDirectoryFlag)
-  capacity_scratch: [272]u8 = []
+  capacity_scratch: [272]u8
   capacity := watch.open(capacity_scratch[..])
   require(capacity.failure.kind == io.Kind.Ok)
-  ids: [16]i32 = []
+  ids: [16]i32
   for i in 0..16 {
     added := watch.add(&capacity.value,".",watch.Changes)
     require(added.failure.kind == io.Kind.Ok)

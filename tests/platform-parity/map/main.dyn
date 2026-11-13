@@ -13,7 +13,7 @@ fn main() {
   check(fs.unmap(&zero).failure.kind == errors.Kind.Ok)
   closed: fs.File
   check(fs.map(&closed).failure.kind == errors.Kind.InvalidState)
-  content: [5000]u8 = []
+  content: [5000]u8
   for i in 0..#len(content) {
     content[i] = #cast(u8, (i * 7) & 255)
   }
@@ -21,7 +21,7 @@ fn main() {
   opened := fs.open("map-fixture.bin")
   check(opened.failure.kind == errors.Kind.Ok)
   file := opened.value
-  head: [3]u8 = []
+  head: [3]u8
   check(fs.read(&file, head[..]).failure.kind == errors.Kind.Ok)
   mapping := fs.map(&file)
   check(mapping.failure.kind == errors.Kind.Ok && bytes.equal(mapping.value, content[..]))

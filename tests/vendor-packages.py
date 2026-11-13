@@ -126,7 +126,7 @@ fn main() {
 use "std/io" io
 
 fn main() {
-  backing: [128]u8 = []
+  backing: [128]u8
 
   opened := sqlite.open(":memory:", backing[..])
   if !opened.ok {
@@ -162,8 +162,8 @@ fn main() {
 use "std/io" io
 use "std/strings"
 fn main() {
-  compressed: [128]u8 = []
-  output: [128]u8 = []
+  compressed: [128]u8
+  output: [128]u8
   source := "caller buffers caller buffers caller buffers"
   result := lz4.compress(compressed[..], source)
   if !result.ok {

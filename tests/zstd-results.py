@@ -48,8 +48,8 @@ fn read(data: rawptr, destination: []u8) io.Transfer {
 }
 fn verify(raw: []const u8, encoded: []const u8, workspace: []u8, chunk: usize, window: u32, bad: bool, repeats: usize) {
  input := Input{ source: encoded, chunk: chunk }
- compressed: [113]u8 = []
- output: [8191]u8 = []
+ compressed: [113]u8
+ output: [8191]u8
  state := z.decoder(io.Reader{ data: #cast(rawptr, &input), read: read }, compressed[..], workspace, window)
  reader := z.decoder_reader(&state)
  total: usize = 0
@@ -103,8 +103,8 @@ fn results(arena: *mem.Arena, encoded: []const u8, unknown: []const u8, workspac
  code: isize = 0
  for code < 2 {
   upstream := Failure{ code: code }
-  compressed: [17]u8 = []
-  output: [11]u8 = []
+  compressed: [17]u8
+  output: [11]u8
   state := z.decoder(io.Reader{ data: &upstream, read: fail }, compressed[..], workspace, 21)
   reader := z.decoder_reader(&state)
   first := io.read(reader, output[..])
@@ -113,8 +113,8 @@ fn results(arena: *mem.Arena, encoded: []const u8, unknown: []const u8, workspac
   if first.status != io.Status.Error || first.kind != errors.Kind.PermissionDenied || first.error != code || replay.status != io.Status.Error || replay.kind != first.kind || replay.error != code || upstream.calls != 1 || state.provider_code != 0 { #panic("sticky upstream native zero / empty callback") }
   code += 1
  }
- compressed: [17]u8 = []
- output: [11]u8 = []
+ compressed: [17]u8
+ output: [11]u8
  input := Input{ source: "bad", chunk: 3 }
  state := z.decoder(io.Reader{ data: &input, read: read }, compressed[..], workspace, 21)
  reader := z.decoder_reader(&state)
@@ -174,7 +174,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-zstd-results-') as temporary:
     panic_source = '''use "std/mem" mem
 use "std/compress/zstd" z
 fn main() {
- storage: [1 + mem.ArenaBufferOverhead]u8 = []
+ storage: [1 + mem.ArenaBufferOverhead]u8
  arena := mem.arena_from_buffer(storage[..])
  arena = mem.arena_from_buffer(arena.data[..mem.ArenaHeader + 1])
  _ = z.compress(arena, "exhaustion", 3)

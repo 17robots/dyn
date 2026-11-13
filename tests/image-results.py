@@ -14,7 +14,7 @@ use "std/image/qoi" qoi
 use "std/parse" parse
 use "std/mem" mem
 fn main() {
-  storage: [8192]u8 = []
+  storage: [8192]u8
   arena := mem.arena_from_buffer(storage[..])
   pixels: [8]u8 = [255,0,0,255,0,255,0,128]
   p := png.encode(arena, pixels[..], 2, 1, 4)
@@ -86,7 +86,7 @@ fn main() {
   truncated: [22]u8 = ['q','o','i','f',0,0,0,1,0,0,0,1,4,0,0,0,0,0,0,0,0,1]
   qb := qoi.decode(arena, truncated[..])
   if qb.failure.kind == parse.Kind.Ok || qb.offset != 14 || qb.value.info.valid || #len(qb.value.pixels) != 0 || mem.arena_mark(arena) != mark { #panic("QOI malformed rollback") }
-  empty: [0]u8 = []
+  empty: [0]u8
   pbad := png.inspect(empty[..])
   qbad := qoi.inspect(empty[..])
   if pbad.failure.kind == parse.Kind.Ok || qbad.failure.kind == parse.Kind.Ok || pbad.failure.kind != parse.Kind.Syntax || qbad.failure.kind != parse.Kind.Syntax ||

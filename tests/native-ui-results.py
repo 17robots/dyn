@@ -50,7 +50,7 @@ fn main() {
  ui.Command{kind:ui.Kind.Glyph,bounds:ui.Rect{width:32,height:32},codepoint:65,glyph_x:24,glyph_y:5,clip:ui.Rect{x:24,y:6,width:1,height:2},color:ui.Color{g:255,a:128}},
  ui.Command{kind:ui.Kind.Glyph,bounds:ui.Rect{width:32,height:32},codepoint:65,glyph_x:9223372036854775807,glyph_y:0,clip:ui.Rect{width:32,height:32},color:ui.Color{r:255,a:255}}]
  for i in 0..4 { commands[i].next = &commands[i+1] }
- pixels: [4096]u8 = []
+ pixels: [4096]u8
  surface := software.Surface{pixels:pixels[..],width:32,height:32,stride:128}
  font := software.Font{glyph:bitmap,line_height:3}
  check(software.render(&surface,&commands[0],font).failure.kind == errors.Kind.Ok)
@@ -63,7 +63,7 @@ fn main() {
  loaded.api.polygon_mode(gl.FrontAndBack,0x1b01)
  check(gpu.render(&renderer,&commands[0],32,32,font).ok)
  check(loaded.api.is_enabled(gl.RasterizerDiscard) == 0 && loaded.api.is_enabled(gl.FramebufferSrgb) == 0 && loaded.api.is_enabled(gl.ColorLogicOp) == 0 && loaded.api.is_enabled(gl.Dither) == 0 && loaded.api.is_enabled(gl.ClipDistance0) == 0)
- actual: [4096]u8 = []
+ actual: [4096]u8
  loaded.api.read_pixels(0,0,32,32,gl.Rgba,gl.UnsignedByte,&actual[0])
  for y in 0..32 {
  for x in 0..32 {
@@ -84,7 +84,7 @@ fn main() {
  wide.pixels[0] = 255
  single := ui.Command{kind:ui.Kind.Glyph,bounds:ui.Rect{width:32,height:32},clip:ui.Rect{x:2,y:2,width:1,height:1},glyph_x:2,glyph_y:2,color:ui.Color{r:255,a:255}}
  check(gpu.render(&renderer,&single,32,32,software.Font{data:&wide,glyph:wide_bitmap,line_height:1}).ok)
- pixel: [4]u8 = []
+ pixel: [4]u8
  loaded.api.read_pixels(2,29,1,1,gl.Rgba,gl.UnsignedByte,&pixel[0])
  check(pixel[0] == 255 && pixel[1] == 0 && pixel[2] == 0 && pixel[3] == 255 && loaded.api.get_error() == 0)
  loaded.api.enable(0xffffffff)

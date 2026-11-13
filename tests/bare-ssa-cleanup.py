@@ -175,7 +175,7 @@ def fixtures():
     x.c=0
     mark("SNAP\n") }
     return x }
-    pub fn largeland(n:u32) { a:[2048]u64=[]
+    pub fn largeland(n:u32) { a:[2048]u64
     a[2047]=0x1122334455667788
     touch(&a)
     x:u64=5

@@ -72,13 +72,13 @@ fn release(pointer: rawptr) {
 
     # Parameters may not shadow globals, in the root module and in imports.
     shadow = 'parameter has the name of a global'
-    check_fails(project(root, 'shadow-root', {'main.dyn': '''output: [16]u8 = []
+    check_fails(project(root, 'shadow-root', {'main.dyn': '''output: [16]u8
 fn encode(character: u32, output: []u8) usize {
   output[0] = #cast(u8, character)
   return 1
 }
 fn main() {
-  storage: [4]u8 = []
+  storage: [4]u8
   _ = encode(65, storage[..])
 }
 '''}), shadow)

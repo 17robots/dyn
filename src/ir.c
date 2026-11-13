@@ -338,6 +338,8 @@ static void prove_unsigned_loop(DynIrProgram *ir, DynIrStmt *loop, RangeLocals o
       inside.values[st->local_id - inside.start] = (UIntRange){0};
       if (st->kind == DYN_STMT_ASSIGN) ++writes[st->local_id - inside.start];
     }
+    if (st->kind == DYN_STMT_FOR && st->for_index && range_has_local(inside, st->local_id + 1))
+      inside.values[st->local_id + 1 - inside.start] = (UIntRange){0};
   }
   UIntRange bound = uint_range(ir, condition->right, inside, pointer_bytes, 0), start = outer.values[induction_id - outer.start];
   if (!bound.exact || !start.exact || bound.value < start.value) goto done;
@@ -431,11 +433,129 @@ static bool ir_wraps(const DynSource *source, DynSpan span) {
   dyn_source_position(source, span.start_byte, &path, &text, &length, &at);
   return path && (strstr(path, "/std/") || strstr(path, "/vendor/") || strstr(path, "/share/dyn/"));
 }
+
+/* A case on text: `case name { "a" => {...} _ => {...} }`. Sema left the
+   subject's hidden local in the statement's local_id. Lowering rewrites it in
+   place into `if true { hidden := subject; if len == 1 && hidden[0] == 'a'
+   {...} else {...} }`: a length compare, then one compare per byte. */
+typedef struct { size_t expressions, statements, children; } TextCaseSpace;
+static bool text_case(const DynAstProgram *a, const DynAstStmt *st) {
+  return st->kind == DYN_STMT_CASE && st->local_id != UINT32_MAX && st->local_id < a->local_count;
+}
+static TextCaseSpace text_case_space(const DynAstProgram *a) {
+  TextCaseSpace space = {0};
+  for (size_t i = 0; i < a->statement_count; ++i) {
+    const DynAstStmt *st = &a->statements[i];
+    if (!text_case(a, st)) continue;
+    size_t arms = 0;
+    space.expressions += 2;
+    for (uint32_t j = 0; j < st->case_arm_count; ++j) {
+      const DynAstCaseArm *arm = &a->case_arms[st->case_arm_start + j];
+      if (arm->wildcard) continue;
+      ++arms;
+      for (uint32_t k = 0; k < arm->pattern_count; ++k) {
+        const DynAstPattern *p = &a->patterns[arm->pattern_start + k];
+        size_t length = p->first < a->expression_count && a->expressions[p->first].kind == DYN_EXPR_STRING
+                            ? a->strings[a->expressions[p->first].integer].length : 0;
+        space.expressions += 5 + 6 * length;
+      }
+    }
+    space.statements += 2 + arms;
+    space.children += 2 + arms;
+  }
+  return space;
+}
+static DynExprId text_expr(DynIrProgram *ir, DynIrExpr e) {
+  DynExprId id = (DynExprId)ir->expression_count;
+  if (e.left == 0 && e.kind != DYN_EXPR_LEN && e.kind != DYN_EXPR_INDEX && e.kind != DYN_EXPR_BINARY) e.left = DYN_NO_EXPR;
+  if (e.right == 0 && e.kind != DYN_EXPR_INDEX && e.kind != DYN_EXPR_BINARY) e.right = DYN_NO_EXPR;
+  ir->expressions[ir->expression_count++] = e;
+  return id;
+}
+static uint32_t text_stmt(DynIrProgram *ir, DynIrStmt st) {
+  uint32_t id = (uint32_t)ir->statement_count;
+  ir->statements[ir->statement_count++] = st;
+  return id;
+}
+static DynIrStmt text_if(DynExprId condition, DynSpan span) {
+  return (DynIrStmt){.kind = DYN_STMT_IF, .expression = condition, .target = DYN_NO_EXPR,
+                     .local_id = UINT32_MAX, .target_loop_id = UINT32_MAX, .span = span};
+}
+static void lower_text_cases(const DynAstProgram *a, DynIrProgram *ir) {
+  size_t statements = a->statement_count;
+  for (size_t i = 0; i < statements; ++i) {
+    if (!text_case(a, &a->statements[i])) continue;
+    DynIrStmt *original = &ir->statements[i];
+    DynSpan span = original->span;
+    uint32_t hidden = original->local_id;
+    DynType subject = ir->locals[hidden].type;
+    DynIrCaseArm *arms = &ir->case_arms[original->case_arm_start];
+    uint32_t arm_count = original->case_arm_count, wildcard = UINT32_MAX;
+    for (uint32_t j = 0; j < arm_count; ++j)
+      if (arms[j].wildcard) wildcard = j;
+    DynIrStmt local = {.kind = DYN_STMT_LOCAL, .expression = original->expression, .target = DYN_NO_EXPR,
+                       .local_id = hidden, .target_loop_id = UINT32_MAX, .span = span};
+    uint32_t local_id = text_stmt(ir, local);
+    /* Build the chain from the last arm back: each if's else is the next. */
+    uint32_t else_start = wildcard == UINT32_MAX ? 0 : arms[wildcard].body_start;
+    uint32_t else_count = wildcard == UINT32_MAX ? 0 : arms[wildcard].body_count;
+    uint32_t chain = UINT32_MAX;
+    for (uint32_t j = arm_count; j-- > 0;) {
+      if (arms[j].wildcard) continue;
+      DynExprId any = DYN_NO_EXPR;
+      /* IR arms share the AST's pattern indexes; lowering moved `_` last. */
+      for (uint32_t k = 0; k < arms[j].pattern_count; ++k) {
+        const DynAstPattern *p = &a->patterns[arms[j].pattern_start + k];
+        const DynAstString *text = &a->strings[a->expressions[p->first].integer];
+        DynExprId name = text_expr(ir, (DynIrExpr){.kind = DYN_EXPR_NAME, .type = subject, .integer = hidden, .span = span});
+        DynExprId length = text_expr(ir, (DynIrExpr){.kind = DYN_EXPR_LEN, .type = DYN_TYPE_USIZE, .left = name, .right = DYN_NO_EXPR, .span = span});
+        DynExprId count = text_expr(ir, (DynIrExpr){.kind = DYN_EXPR_INT, .type = DYN_TYPE_USIZE, .integer = text->length, .span = span});
+        DynExprId match = text_expr(ir, (DynIrExpr){.kind = DYN_EXPR_BINARY, .type = DYN_TYPE_BOOL, .op = DYN_OP_EQ, .left = length, .right = count, .span = span});
+        for (size_t b = 0; b < text->length; ++b) {
+          DynExprId at = text_expr(ir, (DynIrExpr){.kind = DYN_EXPR_NAME, .type = subject, .integer = hidden, .span = span});
+          DynExprId index = text_expr(ir, (DynIrExpr){.kind = DYN_EXPR_INT, .type = DYN_TYPE_USIZE, .integer = b, .span = span});
+          DynExprId byte = text_expr(ir, (DynIrExpr){.kind = DYN_EXPR_INDEX, .type = DYN_TYPE_U8, .left = at, .right = index, .span = span});
+          DynExprId want = text_expr(ir, (DynIrExpr){.kind = DYN_EXPR_INT, .type = DYN_TYPE_U8, .integer = text->data[b], .span = span});
+          DynExprId same = text_expr(ir, (DynIrExpr){.kind = DYN_EXPR_BINARY, .type = DYN_TYPE_BOOL, .op = DYN_OP_EQ, .left = byte, .right = want, .span = span});
+          match = text_expr(ir, (DynIrExpr){.kind = DYN_EXPR_BINARY, .type = DYN_TYPE_BOOL, .op = DYN_OP_LOGICAL_AND, .left = match, .right = same, .span = span});
+        }
+        any = any == DYN_NO_EXPR ? match
+            : text_expr(ir, (DynIrExpr){.kind = DYN_EXPR_BINARY, .type = DYN_TYPE_BOOL, .op = DYN_OP_LOGICAL_OR, .left = any, .right = match, .span = span});
+      }
+      DynIrStmt test = text_if(any, span);
+      test.body_start = arms[j].body_start;
+      test.body_count = arms[j].body_count;
+      test.else_start = else_start;
+      test.else_count = else_count;
+      chain = text_stmt(ir, test);
+      else_start = (uint32_t)ir->child_count;
+      else_count = 1;
+      ir->children[ir->child_count++] = chain;
+    }
+    if (chain == UINT32_MAX) {
+      /* Only `_`: run its body unconditionally. */
+      DynExprId yes = text_expr(ir, (DynIrExpr){.kind = DYN_EXPR_BOOL, .type = DYN_TYPE_BOOL, .boolean = true, .span = span});
+      DynIrStmt always = text_if(yes, span);
+      always.body_start = else_start;
+      always.body_count = else_count;
+      chain = text_stmt(ir, always);
+    } else --ir->child_count; /* The first if goes in the outer body instead. */
+    DynExprId yes = text_expr(ir, (DynIrExpr){.kind = DYN_EXPR_BOOL, .type = DYN_TYPE_BOOL, .boolean = true, .span = span});
+    DynIrStmt outer = text_if(yes, span);
+    outer.body_start = (uint32_t)ir->child_count;
+    outer.body_count = 2;
+    ir->children[ir->child_count++] = local_id;
+    ir->children[ir->child_count++] = chain;
+    ir->statements[i] = outer;
+  }
+}
 static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgram *ir, bool proofs) {
   memset(ir, 0, sizeof(*ir));
   size_t extra = 0;
   for (size_t i = 0; i < a->statement_count; ++i)
     if (a->statements[i].assignment_op != DYN_OP_NONE) extra += a->statements[i].target == DYN_NO_EXPR ? 2 : 1;
+  TextCaseSpace text = text_case_space(a);
+  extra += text.expressions;
   ir->expression_count = a->expression_count;
   ir->expression_capacity = a->expression_count + extra;
   ir->item_count = a->item_count;
@@ -466,9 +586,9 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
       !allocate((void **)&ir->global_init_order, ir->global_init_count, sizeof(*ir->global_init_order)) || !allocate((void **)&ir->pointers, ir->pointer_count, sizeof(*ir->pointers)) ||
       !allocate((void **)&ir->arrays, ir->array_count, sizeof(*ir->arrays)) || !allocate((void **)&ir->slices, ir->slice_count, sizeof(*ir->slices)) ||
       !allocate((void **)&ir->fn_types, ir->fn_type_count, sizeof(*ir->fn_types)) || !allocate((void **)&ir->fn_type_params, ir->fn_type_param_count, sizeof(*ir->fn_type_params)) ||
-      !allocate((void **)&ir->strings, ir->string_count, sizeof(*ir->strings)) || !allocate((void **)&ir->statements, ir->statement_count, sizeof(*ir->statements)) ||
+      !allocate((void **)&ir->strings, ir->string_count, sizeof(*ir->strings)) || !allocate((void **)&ir->statements, ir->statement_count + text.statements, sizeof(*ir->statements)) ||
       !allocate((void **)&ir->patterns, ir->pattern_count, sizeof(*ir->patterns)) || !allocate((void **)&ir->case_arms, ir->case_arm_count, sizeof(*ir->case_arms)) ||
-      !allocate((void **)&ir->children, ir->child_count, sizeof(*ir->children)) || !allocate((void **)&ir->locals, ir->local_count, sizeof(*ir->locals))) {
+      !allocate((void **)&ir->children, ir->child_count + text.children, sizeof(*ir->children)) || !allocate((void **)&ir->locals, ir->local_count, sizeof(*ir->locals))) {
     dyn_ir_free(ir);
     return false;
   }
@@ -502,7 +622,7 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
     DynIrExpr *e = &ir->expressions[i];
     if ((e->kind == DYN_EXPR_BINARY && dyn_op_wraps(e->op)) ||
         (e->kind == DYN_EXPR_UNARY && e->op == DYN_OP_NEG))
-      e->wrap = ir_wraps(source, e->span);
+      e->wrap = e->wrap || ir_wraps(source, e->span);
   }
   for (size_t i = 0; i < ir->expression_count; ++i)
     if (ir->expressions[i].type == DYN_TYPE_INFER) {
@@ -693,7 +813,7 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
     ir->statements[i] = (DynIrStmt){.kind = from->kind, .expression = from->expression, .target = from->target, .assignment_op = from->assignment_op,
                                     .local_id = from->local_id, .body_start = from->body_start, .body_count = from->body_count, .else_start = from->else_start, .else_count = from->else_count,
                                     .loop_id = from->loop_id, .target_loop_id = from->target_loop_id, .case_arm_start = from->case_arm_start, .case_arm_count = from->case_arm_count,
-                                    .defer_block = from->defer_block, .for_pointer = from->for_pointer, .for_const = from->for_const, .for_range = from->for_range, .for_inclusive = from->for_inclusive, .for_reverse = from->for_reverse, .span = from->span};
+                                    .defer_block = from->defer_block, .for_pointer = from->for_pointer, .for_const = from->for_const, .for_range = from->for_range, .for_inclusive = from->for_inclusive, .for_reverse = from->for_reverse, .for_index = from->for_index, .span = from->span};
   }
   for (size_t i = 0; i < a->pattern_count; ++i)
     ir->patterns[i] = (DynIrPattern){a->patterns[i].first_value, a->patterns[i].last_value, lower_type(a, a->patterns[i].type), a->patterns[i].variant, a->patterns[i].is_enum, a->patterns[i].is_signed, a->patterns[i].is_type};
@@ -736,6 +856,7 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
   for (size_t i = 0; i < ir->global_count; ++i) ir->globals[i].type = lower_type(a, ir->globals[i].type);
   for (size_t i = 0; i < ir->enum_count; ++i) ir->enums[i].tag_type = lower_type(a, ir->enums[i].tag_type);
   if (a->child_count) memcpy(ir->children, a->children, a->child_count * sizeof(*ir->children));
+  if (text.statements) lower_text_cases(a, ir);
   if (proofs) prove_unsigned_ranges(ir, dyn_target_pointer_bytes(dyn_context_target(&source->context)));
   for (size_t i = 0; i < ir->function_count; ++i) {
     if ((size_t)ir->functions[i].body_start + ir->functions[i].body_count > ir->child_count) {

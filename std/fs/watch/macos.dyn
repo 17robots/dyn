@@ -64,7 +64,7 @@ extern fn queue_create "dispatch_queue_create"(label: *const u8, attributes: raw
 extern fn queue_sync "dispatch_sync_f"(queue: rawptr, context: rawptr, callback: fn(rawptr))
 extern fn queue_release "dispatch_release"(queue: rawptr)
 fn symbol(handle: rawptr, name: []const u8) rawptr {
-  backing: [128 + mem.ArenaBufferOverhead]u8 = []
+  backing: [128 + mem.ArenaBufferOverhead]u8
   value := c.string_into(backing[..], name)
   if handle == nil || value.failure.kind != parse.Kind.Ok {
     return nil
@@ -72,7 +72,7 @@ fn symbol(handle: rawptr, name: []const u8) rawptr {
   return library_symbol(handle, value.value)
 }
 fn library(path: []const u8) rawptr {
-  backing: [256 + mem.ArenaBufferOverhead]u8 = []
+  backing: [256 + mem.ArenaBufferOverhead]u8
   value := c.string_into(backing[..], path)
   if value.failure.kind != parse.Kind.Ok {
     return nil
@@ -258,12 +258,12 @@ pub fn add(watcher: *Watcher, path: []const u8, mask: u32) Result {
   if (mask & SupportedEvents) == 0 {
     return Result{ failure: io.Failure{ kind: io.Kind.Unsupported, native: -95 } }
   }
-  input: [1024 + mem.ArenaBufferOverhead]u8 = []
+  input: [1024 + mem.ArenaBufferOverhead]u8
   terminated := c.string_into(input[..], path)
   if terminated.failure.kind != parse.Kind.Ok {
     return failure(-22)
   }
-  canonical: [1024]u8 = []
+  canonical: [1024]u8
   if state.api.canonical(terminated.value, &canonical[0]) == nil {
     code := 0 - #cast(isize, native_errno().*)
     return failure(code)

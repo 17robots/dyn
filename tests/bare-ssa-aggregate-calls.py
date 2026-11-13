@@ -73,7 +73,7 @@ source+=r'''
 extern fn craw_addr() rawptr
 pub fn rawforeign(x:[3]u32) [3]u32 { return #cast(fn([3]u32) [3]u32,craw_addr())(x) }
 extern fn touch(p:rawptr)
-pub fn bigframe(x:Mixed) Mixed { a:[1025]u64=[]
+pub fn bigframe(x:Mixed) Mixed { a:[1025]u64
 touch(&a)
 return cMixed(x) }
 pub fn partialmix(x:Mixed) u32 { return cMixed(x).b }

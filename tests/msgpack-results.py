@@ -25,7 +25,7 @@ fn main() {
  defer { mem.arena_release(arena) }
  golden := "\x82\xa1a\x93\x00\xcc\x80\xff\xa1b\xc4\x02hi"
  state := mp.reader(golden)
- tokens: [9]mp.Token = []
+ tokens: [9]mp.Token
  count: usize = 0
  item := mp.next(&state)
  for item.found { tokens[count] = item.value
@@ -44,7 +44,7 @@ fn main() {
  }
  check(mp.next(&state).failure.kind == parse.Kind.Ok && !mp.next(&state).found)
  // Every header is either complete or a structured failure, never a trap.
- raw: [20]u8 = []
+ raw: [20]u8
  for tag in 0..256 {
   raw[0] = #cast(u8,tag)
   state = mp.reader(raw[..])
@@ -71,7 +71,7 @@ fn main() {
  mark := mem.arena_mark(arena)
  invalid: [1]mp.Token = [mp.Token{kind:mp.Kind.Array,value:1}]
  check(mp.encode(arena,invalid[..]).failure.kind == parse.Kind.Syntax && mem.arena_mark(arena) == mark)
- deep: [130]u8 = []
+ deep: [130]u8
  for i in 0..129 { deep[i] = 0x91 }
  state = mp.reader(deep[..])
  for i in 0..64 { check(mp.next(&state).found) }

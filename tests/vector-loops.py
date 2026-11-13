@@ -18,7 +18,7 @@ SOURCE = ROOT / 'tests/vector-loops'
 with tempfile.TemporaryDirectory(prefix='dyn-vector-loops-') as directory:
     work = Path(directory)
     results = {}
-    for name, flags in (('debug', ['--debug']), ('o2', ['--release']), ('o3', ['--release', '--opt-level', '3']),
+    for name, flags in (('debug', ['--debug', '--no-check-overflow']), ('o2', ['--release']), ('o3', ['--release', '--opt-level', '3']),
                         ('native', ['--release', '--opt-level', '3', '--cpu', 'native'])):
         build = subprocess.run([DYN, 'build', str(SOURCE), *flags, '--no-cache', '--quiet', '--opt-remarks',
                                 '--output', str(work / name)], capture_output=True, text=True, timeout=300)
@@ -35,7 +35,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-vector-loops-') as directory:
     # AArch64 runs the same programs under QEMU when it is installed.
     if shutil.which('qemu-aarch64'):
         arm = {}
-        for name, flags in (('debug', ['--debug']), ('o3', ['--release', '--opt-level', '3'])):
+        for name, flags in (('debug', ['--debug', '--no-check-overflow']), ('o3', ['--release', '--opt-level', '3'])):
             build = subprocess.run([DYN, 'build', str(SOURCE), '--target', 'aarch64-linux', *flags, '--no-cache', '--quiet',
                                     '--opt-remarks', '--output', str(work / ('arm-' + name))], capture_output=True, text=True, timeout=300)
             assert build.returncode == 0, build.stderr

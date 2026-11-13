@@ -40,7 +40,7 @@ fn read(data: rawptr, destination: []u8) io.Transfer {
  return io.Transfer{ transferred: take }
 }
 fn main() {
- invalid_data: [46]u8 = []
+ invalid_data: [46]u8
  invalid_data[0]=80
  invalid_data[1]=75
  invalid_data[2]=1
@@ -83,9 +83,9 @@ fn main() {
  check(zip.next(&truncated).failure.parse.kind == parse.Kind.Syntax)
  truncated.source = data
  check(!zip.next(&truncated).found)
- header: [30]u8 = []
- name: [64]u8 = []
- payload: [64]u8 = []
+ header: [30]u8
+ name: [64]u8
+ payload: [64]u8
  for limit in 0..72 {
    input := Input{ source: data, fail: limit }
    stream := zip.stream_reader(io.Reader{ data: &input, read: read },header[..],name[..],payload[..])
@@ -128,7 +128,7 @@ fn main() {
  check(!zip.next_stream(&eof_stream).found && eof_input.calls == 1)
  empty_checked := zip.open_checked(data[#len(data)-22..])
  check(empty_checked.failure.kind != parse.Kind.Ok)
- empty_eocd: [22]u8 = []
+ empty_eocd: [22]u8
  empty_eocd[0] = 80
  empty_eocd[1] = 75
  empty_eocd[2] = 5
@@ -154,7 +154,7 @@ fn main() {
 ARENA_SOURCE = r'''use "std/archive/zip" zip
 use "std/mem" mem
 fn main() {
- storage: [1+mem.ArenaBufferOverhead]u8 = []
+ storage: [1+mem.ArenaBufferOverhead]u8
  pad := (16-(#cast(usize,&storage[0])&15))&15
  arena := mem.arena_from_buffer(storage[pad..pad+mem.ArenaHeader+1])
  _ = zip.extract(arena,zip.Entry{ payload: "hello", compressed_size: 5, uncompressed_size: 5 })

@@ -15,7 +15,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-pointer-builtins-') as temporary:
                         '--output', str(program)], check=True, timeout=120)
         subprocess.run([str(program)], check=True, timeout=30)
     errors = {'x: i32 = 1\n  p := &x\n  _ = p[..1]': '#slice(pointer, count)',
-              'x: [2]i32 = []\n  _ = #slice(x, 1)': 'require a pointer',
+              'x: [2]i32\n  _ = #slice(x, 1)': 'require a pointer',
               'x: i32 = 1\n  _ = #offset(&x, 1.5)': ''}
     module = root / 'bad'
     module.mkdir()

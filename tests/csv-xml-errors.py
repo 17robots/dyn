@@ -36,7 +36,7 @@ fn write(data: rawptr, source: []const u8) io.Transfer {
   return io.Transfer{ status: io.Status.Error, kind: errors.Kind.PermissionDenied, error: p.code }
 }
 fn callback_contracts() {
-  scratch: [32]u8 = []
+  scratch: [32]u8
   for code in 0..2 {
     p := Probe{ code: 0 - #cast(isize, code * 13) }
     reader := io.Reader{ data: #cast(rawptr, &p), read: read }
@@ -102,7 +102,7 @@ fn callback_contracts() {
 }
 
 fn additional_contracts() {
-  scratch: [32]u8 = []
+  scratch: [32]u8
   // Complete with no bytes is also EOF, and must never trigger another read.
   p := Probe{mode: 2}
   reader := io.Reader{data: #cast(rawptr, &p), read: read}
@@ -200,8 +200,8 @@ fn csv_check(source: []const u8, expected: bool) {
       chunk := Chunk{source: source, limit: limit}
       streamed := csv.stream_scanner(input(&chunk))
       direct := csv.scanner(source)
-      a: [32]u8 = []
-      b: [32]u8 = []
+      a: [32]u8
+      b: [32]u8
       first := csv.next(&direct, a[..capacity])
       second := csv.next_stream(&streamed, b[..capacity])
       if first.failure.parse.kind != second.failure.parse.kind || first.failure.parse.kind != direct.failure.parse.kind || second.failure.parse.kind != streamed.failure.parse.kind || first.found != second.found || (capacity == 4 && first.found != expected) {
@@ -227,7 +227,7 @@ fn xml_check(source: []const u8, expected: bool) {
   if expected {
     for capacity in 0..#len(source) {
       chunk := Chunk{source: source, limit: 1}
-      storage: [128]u8 = []
+      storage: [128]u8
       streamed := xml.stream_scanner(input(&chunk), storage[..capacity])
       event := xml.next_stream(&streamed)
       if event.found || event.failure.parse.kind != parse.Kind.Capacity || streamed.failure.parse.kind != parse.Kind.Capacity {
@@ -238,7 +238,7 @@ fn xml_check(source: []const u8, expected: bool) {
   for limit in 0..4 {
     for split in 1..#len(source) + 1 {
       chunk := Chunk{source: source, split: split, limit: limit}
-      storage: [128]u8 = []
+      storage: [128]u8
       capacity := #len(source)
       if !expected {
         capacity += 1

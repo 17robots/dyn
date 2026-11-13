@@ -31,7 +31,7 @@ fn main() {
   if opened.failure.kind != parse.Kind.Ok {
     #panic("unsupported or malformed TrueType font")
   }
-  codepoints: [100]u32 = []
+  codepoints: [100]u32
   for i in 0..95 {
     codepoints[i] = 32 + #cast(u32, i)
   }
@@ -63,7 +63,7 @@ fn main() {
   }
   _ = ui.checkbox(&context, 3, ui.Rect{ x: 32, y: 152, width: 180, height: 24 }, "GRID", &grid, true)
   _ = ui.slider(&context, 4, ui.Rect{ x: 240, y: 160, width: 192, height: 16 }, &count, 0, 10, true)
-  label_bytes: [32]u8 = []
+  label_bytes: [32]u8
   label := fmt.buffer(label_bytes[..])
   _ = fmt.write(&label, "COUNT ")
   _ = fmt.write_i64(&label, #cast(i64, count))

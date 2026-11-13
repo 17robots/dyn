@@ -13,7 +13,7 @@ use "std/mem" mem
 use "std/hash" hashing
 use "std/bytes" bytes
 fn main() {
-  buffer:[4+mem.ArenaBufferOverhead]u8=[]
+  buffer:[4+mem.ArenaBufferOverhead]u8
   pad:=(16-(#cast(usize,&buffer[0])&15))&15
   arena:=mem.arena_from_buffer(buffer[pad..pad+mem.ArenaHeader+4])
   _=mem.push_bytes_uninit(arena,1)
@@ -23,7 +23,7 @@ fn main() {
   entry:=zip.Entry{payload:payload[..3],compressed_size:3,uncompressed_size:3,checksum:hashing.crc32(payload[..3])}
   result:=zip.extract(arena,entry)
   if result.failure.kind != parse.Kind.Overlap || #len(result.value)!=0 || mem.arena_mark(arena)!=mark || !bytes.equal(payload[..3],"abc") { #panic("ZIP overlap preflight") }
-  backing:[1024+mem.ArenaBufferOverhead]u8=[]
+  backing:[1024+mem.ArenaBufferOverhead]u8
   unicodearena:=mem.arena_from_buffer(backing[..])
   text_payload:=unicodearena.data[mem.ArenaHeader..]
   text_payload[0]='a'

@@ -44,7 +44,7 @@ fn cleanup() {
 '''
 cases['bounded'] = '''use "std/io"
 fn main() {
-  text: [6000]u8 = []
+  text: [6000]u8
   index: usize = 0
   for index < 6000 { text[index] = 120
   index += 1 }

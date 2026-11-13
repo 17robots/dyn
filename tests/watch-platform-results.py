@@ -35,7 +35,7 @@ fn main() {
  require(validation_failure(-95).failure.kind == io.Kind.Unsupported)
  closed := Watcher{}
  require(next(&closed).failure.kind == io.Kind.InvalidState)
- backing: [272]u8 = []
+ backing: [272]u8
  opened := open(backing[..])
  state := opened.value
  added := add(&state, "test", Create)
@@ -91,7 +91,7 @@ fn main() {
  empty := Watcher{}
  close(&empty)
  close(&empty)
- backing: [272]u8 = []
+ backing: [272]u8
  opened := open(backing[..])
  require(opened.failure.kind != io.Kind.Ok && opened.failure.native == -95 && opened.failure.kind == io.Kind.Unsupported)
  state := State{api: API{canonical: canonical_mock}}

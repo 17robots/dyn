@@ -35,7 +35,7 @@ fn posix_load(arena: *mem.Arena, name: []const u8) ZoneResult {
 // The zone name of /etc/localtime, from its symbolic link target when it is
 // one ("/usr/share/zoneinfo/Europe/Berlin" names "Europe/Berlin").
 fn local_name(arena: *mem.Arena) []const u8 {
-  storage: [4096]u8 = []
+  storage: [4096]u8
   length := read_link("/etc/localtime\x00", storage[..])
   if length > 0 {
     target := storage[..#cast(usize, length)]

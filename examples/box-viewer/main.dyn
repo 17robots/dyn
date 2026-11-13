@@ -63,7 +63,7 @@ fn row_text(storage: []u8, index: usize) []const u8 {
 // Indexes of rows containing the filter text.
 fn refilter(app: *App) {
   needle := app.filter[..app.edit.length]
-  storage: [96]u8 = []
+  storage: [96]u8
   count: usize = 0
   for i in 0..row_count {
     if #len(needle) == 0 || bytes.find(row_text(storage[..], i), needle) != #len(row_text(storage[..], i)) {
@@ -92,7 +92,7 @@ fn build(state: *box.State, app: *App) {
   if field.changed {
     refilter(app)
   }
-  storage: [64]u8 = []
+  storage: [64]u8
   status := fmt.buffer(storage[..])
   _ = fmt.write_u64(&status, app.match_count)
   _ = fmt.write(&status, " rows###status")
@@ -102,7 +102,7 @@ fn build(state: *box.State, app: *App) {
   range := box.list_begin(state, "rows", box.percent(1.0, 0.0), box.percent(1.0, 0.0), app.match_count, row_height)
   list := box.parent(state)
   list.background = ui.Color{ r: 22, g: 24, b: 29, a: 255 }
-  text: [96]u8 = []
+  text: [96]u8
   for i in range.first..range.last {
     index := #cast(usize, app.matches[i])
     row := box.build_key(state, box.Clickable | box.DrawText | box.DrawBackground | box.HotAnimation, box.key(list.key, "row") + index, "")
@@ -182,7 +182,7 @@ fn main() {
   if face.failure.kind != parse.Kind.Ok {
     #panic("not a TrueType font")
   }
-  codepoints: [95]u32 = []
+  codepoints: [95]u32
   for c in 0..95 {
     codepoints[c] = #cast(u32, c + 32)
   }

@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 EXPECTED = '14394786373240357554\n'
 with tempfile.TemporaryDirectory(prefix='dyn-element-copy-') as temporary:
-    for name, flags in (('debug', ['--debug']), ('release', ['--release']), ('o3', ['--release', '--opt-level', '3'])):
+    for name, flags in (('debug', ['--debug', '--no-check-overflow']), ('release', ['--release']), ('o3', ['--release', '--opt-level', '3'])):
         program = Path(temporary) / name
         built = subprocess.run([DYN, 'build', str(ROOT / 'tests/element-copy'), *flags, '--opt-remarks', '--no-cache',
                                 '--output', str(program)], capture_output=True, text=True, timeout=120)

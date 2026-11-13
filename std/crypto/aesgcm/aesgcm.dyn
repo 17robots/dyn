@@ -39,7 +39,7 @@ fn expand(source: []const u8) Key {
   }
   rcon: u8 = 1
   for word in 8..60 {
-    temp: [4]u8 = []
+    temp: [4]u8
     for j in 0..4 {
       temp[j] = key.bytes[(word - 1)*4+j]
     }
@@ -62,14 +62,14 @@ fn expand(source: []const u8) Key {
   return key
 }
 fn encrypt(key: *const Key, input: Block) Block {
-  state: [16]u8 = []
+  state: [16]u8
   binary.store_u64_be(state[..8], input.high)
   binary.store_u64_be(state[8..], input.low)
   for i in 0..16 {
     state[i] ^= key.bytes[i]
   }
   for round in 1..15 {
-    shifted: [16]u8 = []
+    shifted: [16]u8
     for column in 0..4 {
       for row in 0..4 {
         shifted[column*4+row] = substitute(state[((column+row)%4)*4+row])
@@ -127,7 +127,7 @@ fn hash(state: Block, h: Block, source: []const u8) Block {
     at += 16
   }
   if at < #len(source) {
-    buffer: [16]u8 = []
+    buffer: [16]u8
     for i in 0..#len(source)-at {
       buffer[i] = source[at+i]
     }
@@ -155,7 +155,7 @@ fn transform(key: *const Key, j0: Block, output: []u8, input: []const u8) {
     low := #cast(u32, counter.low) + 1
     counter.low = (counter.low & 0xffffffff00000000) | low
     stream := encrypt(key, counter)
-    buffer: [16]u8 = []
+    buffer: [16]u8
     binary.store_u64_be(buffer[..8], stream.high)
     binary.store_u64_be(buffer[8..], stream.low)
     take := #len(input) - at
@@ -214,7 +214,7 @@ pub fn open(output: []u8, input: []const u8, authentication: []const u8, aad: []
   h := encrypt(&key, Block{})
   j0 := initial(h, nonce)
   value := tag(&key, h, j0, input, aad)
-  expected: [16]u8 = []
+  expected: [16]u8
   binary.store_u64_be(expected[..8], value.high)
   binary.store_u64_be(expected[8..], value.low)
   if !core.equal_constant_time(expected[..], authentication) {

@@ -16,7 +16,7 @@ fn terminated(path: []const u8, storage: []u8) *const u8 {
   return value.value
 }
 fn native_open(path: []const u8, mode: u8) FileResult {
-  storage: [4096 + mem.ArenaBufferOverhead]u8 = []
+  storage: [4096 + mem.ArenaBufferOverhead]u8
   name := terminated(path, storage[..])
   if name == nil {
     return FileResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }

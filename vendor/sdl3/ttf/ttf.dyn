@@ -35,7 +35,7 @@ pub fn measure(font: Font, text: []const u8) SizeResult {
   if font == nil {
     return SizeResult{}
   }
-  empty: [1]u8 = []
+  empty: [1]u8
   pointer: *const u8 = &empty[0]
   if #len(text) > 0 {
     pointer = &text[0]

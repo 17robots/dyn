@@ -38,14 +38,14 @@ fn main() {''']
     def literal(data): return '"'+''.join('\\x%02x'%v for v in data)+'"'
     for text, needle in cases:
         body += ['if true {',f'text := {literal(text)}',f'needle := {literal(needle)}',
-                 'table: [64]usize = []','p := search.prepare(needle, table[..])',
+                 'table: [64]usize','p := search.prepare(needle, table[..])',
                  't.expect(p.valid, "prepare")',
                  f't.expect(search.find(p.pattern, text) == {position(text.find(needle), text)}, "KMP oracle")',
                  f't.expect(bytes.find(text, needle) == {position(text.find(needle), text)}, "find oracle")',
                  f't.expect(bytes.find_last(text, needle) == {position(text.rfind(needle), text)}, "rfind oracle")','}']
     body += ['''
   sink := Sink{}
-  staging: [4]u8 = []
+  staging: [4]u8
   buffered := bufio.writer(io.Writer{data: #cast(rawptr, &sink), write: sink_write}, staging[..])
   result := io.write_all(bufio.writer_adapter(&buffered), "abcdefghijklmnopqrst")
   t.expect(result.transferred == 20 && sink.used == 16 && buffered.used == 4, "direct path keeps tail")
@@ -61,7 +61,7 @@ fn main() {''']
   buffered = bufio.writer(io.Writer{data: #cast(rawptr, &sink), write: sink_write}, staging[..])
   result = io.write_all(bufio.writer_adapter(&buffered), "abcdefghijkl")
   t.expect(result.status == io.Status.Error && result.transferred == 3 && sink.used == 3 && buffered.used == 0, "partial direct failure")
-  chunk_storage: [8]u8 = []
+  chunk_storage: [8]u8
   text := "abcdefghijklmnopqrst"
   for capacity in 1..9 {
     for size in 0..21 {
@@ -77,7 +77,7 @@ fn main() {''']
   }
   table: [1]usize = [99]
   t.expect(!search.prepare("ab", table[..]).valid && table[0] == 99, "prepare failure atomic")
-  backing: [8192]u8 = []
+  backing: [8192]u8
   arena := mem.arena_from_buffer(backing[..])
   built := builder.from_buffer(backing[..0])
   for i in 0..1000 { t.expect(builder.append_grow(&built, arena, "x") == builder.ErrorKind.None, "builder growth") }
@@ -92,7 +92,7 @@ fn main() {''']
   mem.arena_reset(arena)
   names := hash.slots(Entry, arena, 32)
   initial := mem.arena_used(arena)
-  entries: [30]Entry = []
+  entries: [30]Entry
   for i in 0..30 {
     entries[i].bytes[0] = #cast(u8, i)
     entries[i].key = entries[i].bytes[..]
@@ -101,7 +101,7 @@ fn main() {''']
     hash.insert(names, &entries[i])
   }
   t.expect(mem.arena_used(arena) == initial, "insertion does not allocate")
-  key: [1]u8 = []
+  key: [1]u8
   for i in 0..30 { key[0] = #cast(u8, i)
     found := hash.find(names, hash.hash_bytes(3, key[..]), key[..], &nil_entry)
     t.expect(found.value == i, "values")
@@ -137,8 +137,8 @@ fn main() {
   arena := mem.arena_create(0)
   created := t.temporary_directory(arena, "dyn-performance-contract")
   t.expect(created.failure.kind == io.Kind.Ok && created.value.active, "temporary directory")
-  frames: [4]fs.RemovalFrame = []
-  scratch: [4096]u8 = []
+  frames: [4]fs.RemovalFrame
+  scratch: [4096]u8
   removed := t.remove_temporary(&created.value, frames[..], scratch[..])
   t.expect(removed.failure.kind == io.Kind.Ok && !created.value.active, "remove temporary directory")
 }

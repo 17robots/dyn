@@ -40,7 +40,7 @@ pub fn execute(state: State, source: []const u8) Result {
   }
   name: [4]u8 = ['d', 'y', 'n', 0]
   mode: [2]u8 = ['t', 0]
-  empty: [1]u8 = []
+  empty: [1]u8
   pointer: *const u8 = &empty[0]
   if #len(source) > 0 {
     pointer = &source[0]

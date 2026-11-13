@@ -15,7 +15,7 @@ fn check(ok: bool, message: []const u8) {
 }
 fn chain() {
   arena := mem.arena_create_bounded(192, 4096)
-  events: [64]observe.Event = []
+  events: [64]observe.Event
   log := observe.log(events[..])
   arena.events = &log
   arena.event_resource = 91
@@ -56,7 +56,7 @@ fn chain() {
 }
 fn failures() {
   arena := mem.arena_create_bounded(192, 192)
-  events: [8]observe.Event = []
+  events: [8]observe.Event
   log := observe.log(events[..])
   arena.events = &log
   first := mem.push_array(u8, arena, 20)
@@ -85,7 +85,7 @@ fn failures() {
   mem.arena_release(overflow)
 }
 fn buffers() {
-  storage: [1400]u8 = []
+  storage: [1400]u8
   for offset in 0..16 {
     mem.fill(storage[..], 171)
     arena := mem.arena_from_buffer(storage[16+offset..1300])
@@ -127,7 +127,7 @@ fn followup() {
   check(mem.arena_snapshot(last).blocks == 2, "smaller last block chains")
   mem.arena_release(last)
   check(mem.ArenaBufferOverhead == 159, "documented caller overhead")
-  backing: [256]u8 = []
+  backing: [256]u8
   for offset in 0..16 {
     mem.fill(backing[..], 171)
     begin := 16 + offset

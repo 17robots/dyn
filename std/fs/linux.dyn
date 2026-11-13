@@ -3,7 +3,7 @@ use "std/os/linux/sys"
 #target(kernel: linux)
 
 fn open_flags(path: []const u8, flags: usize, mode: usize) FileResult {
-  storage: [4096]u8 = []
+  storage: [4096]u8
   raw := terminated(path, storage[..])
   if raw == nil {
     return FileResult{ failure: io.Failure{ kind: io.Kind.InvalidInput, native: -36 } }

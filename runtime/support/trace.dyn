@@ -149,7 +149,7 @@ fn trace_frame(table: usize, address: usize) {
   names := table + 40 + 24 * #cast(usize, trace_u32(table + 28)) + 8 * #cast(usize, trace_u32(table + 32))
   write_string("  at ")
   trace_write(#cast(*const u8, names + trace_u32(record + 16)), trace_u32(record + 20))
-  digits: [10]u8 = []
+  digits: [10]u8
   at: usize = 10
   value := trace_line(table, record, address)
   for true {
@@ -185,7 +185,7 @@ fn trace_print(frames: []usize, total: u64) {
   if rest > ring {
     start = rest - ring
     write_string("  ... ")
-    digits: [20]u8 = []
+    digits: [20]u8
     at: usize = 20
     value := start
     for true {
@@ -227,6 +227,6 @@ pub fn dyn_trace_dump() {
 }
 // A memory fault at pc, with fp the frame pointer of its function.
 fn trace_fault(pc: usize, fp: usize) {
-  frames: [trace_frames]usize = []
+  frames: [trace_frames]usize
   trace_print(frames[..], trace_walk(pc, fp, true, frames[..]))
 }

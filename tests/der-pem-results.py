@@ -38,7 +38,7 @@ fn main() {
   check(der.next(&child).value.content[0] == 7 && der.finished(&child))
   eof := der.next(&c)
   check(!eof.found && eof.failure.kind == parse.Kind.Ok && eof.offset == 5 && der.finished(&c))
-  storage: [4096]u8 = []
+  storage: [4096]u8
   arena := mem.arena_from_buffer(storage[..])
   prefix := mem.push_bytes_uninit(arena, 7)
   prefix[0] = 42

@@ -236,7 +236,7 @@ pub fn capture(arena: *mem.Arena, path: []const u8, arguments: [][]const u8,
   out_end: bool = false
   err_end: bool = false
   result := CaptureResult{}
-  buffer: [65536]u8 = []
+  buffer: [65536]u8
   for {
     progress: bool = false
     for stream_index in 0..2 {

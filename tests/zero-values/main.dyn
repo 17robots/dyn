@@ -44,7 +44,7 @@ fn zero_scanners() {
   }
   // An empty stream holds one empty field, from the constructor or from zero.
   empty := csv.StreamScanner{ input: io.Reader{ read: read_nothing } }
-  storage: [4]u8 = []
+  storage: [4]u8
   field := csv.next_stream(&empty, storage[..])
   if !field.found || #len(field.text) != 0 || !field.end_input {
     #panic("zero CSV stream scanner")

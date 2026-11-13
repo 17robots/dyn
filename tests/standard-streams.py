@@ -33,9 +33,9 @@ use "std/time"
 fn main() {
   clock := time.monotonic_now()
   if clock.failure.kind != io.Kind.Ok { #panic("clock failed") }
-  scratch: [8]u8 = []
+  scratch: [8]u8
   input := bufio.reader(io.stdin(), scratch[..])
-  line: [64]u8 = []
+  line: [64]u8
   for {
     result := bufio.read_line(&input, line[..])
     if result.status == bufio.ReadStatus.Error { #panic("input failed") }
@@ -66,7 +66,7 @@ fn main() {
     errors = root/'errors'; errors.mkdir()
     (errors/'main.dyn').write_text('''use "std/io"
 fn main() {
-  bytes: [1]u8 = []
+  bytes: [1]u8
   input := io.read(io.stdin(), bytes[..])
   if input.status != io.Status.Error || input.error == 0 || input.transferred != 0 { #panic("missing read error") }
   output := io.write_all(io.stdout(), "x")
@@ -88,7 +88,7 @@ fn main() {
         (project/'wasi.dyn').write_text('''#target(kernel: wasi)
 use "std/os/wasi"
 fn check_descriptors() {
-  bytes: [1]u8 = []
+  bytes: [1]u8
   empty := wasi.read(0, bytes[..0])
   if empty.status != io.Status.Complete { #panic("empty descriptor read") }
   invalid := wasi.write(4294967295, "x")
@@ -121,7 +121,7 @@ fn main() {
   date := parsed.value
   if !parsed.valid || !time.valid(&date) { #panic("date failed") }
   cursor := io.cursor("ok")
-  bytes: [2]u8 = []
+  bytes: [2]u8
   result := io.read_exact(io.cursor_reader(&cursor), bytes[..])
   if result.status != io.Status.Complete { #panic("read failed") }
 }

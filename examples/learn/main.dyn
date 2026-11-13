@@ -7,6 +7,7 @@
 // ---------------------------------------------------------------- Modules ---
 // A directory is a module; this file is its main.dyn. `use` binds the module
 // by its last path segment. Names are always qualified: io.println, mem.push.
+use "std/enums"
 use "std/io"
 use "std/mem"
 use "std/container/array"
@@ -90,7 +91,7 @@ fn describe(p: *const Player) {
 fn structs() {
   hero := Player{ name: "ada", health: 10 }   // omitted fields take defaults or zero
   fresh: Player                               // health 100: declarations use defaults too
-  hero.position = .{ x: 3.0, y: 4.0 }         // .{} takes the expected type
+  hero.position = Vec2{ x: 3.0, y: 4.0 }      // a literal always names its type
   heal(&hero, 5)
   describe(&hero)
   io.println("distance^2 {}", length_squared(hero.position))
@@ -165,11 +166,11 @@ fn grow(s: *Shape) {
 
 fn enums() {
   c := Color.Green
-  op := #cast(Op, 2)
+  op := enums.from_int(Op, 2)                // an integer becomes an enum only here
   io.println("color tag {} op is Sub {} errno {}", #cast(u32, c), op == Op.Sub, #cast(i32, Errno.Io))
   circle := Shape.Circle(2.0)
   grow(&circle)
-  io.println("areas {} {}", area(circle), area(Shape.Rect(.{ x: 2.0, y: 3.0 })))
+  io.println("areas {} {}", area(circle), area(Shape.Rect(Vec2{ x: 2.0, y: 3.0 })))
   w: Word
   w.number = 1.0
   io.println("1.0 as bits {}", w.bits)
@@ -186,10 +187,10 @@ fn control() {
   } else {
     io.println("F")
   }
-  // Comparisons chain in one direction: 0 <= score < 100. Mixing & or | with
-  // a comparison needs parentheses: (flags & 1) != 0.
+  // Comparisons do not chain: write 0 <= score && score < 100. Mixing & or |
+  // with a comparison needs parentheses: (flags & 1) != 0.
   flags: u32 = 5
-  if 0 <= score < 100 && (flags & 1) != 0 {
+  if 0 <= score && score < 100 && (flags & 1) != 0 {
     io.println("in range, odd flags")
   }
   // for over a half-open range; ..= includes the end. A literal range counts
@@ -237,10 +238,10 @@ fn control() {
     4 => { kind = "four" }
     _ => { kind = "other" }
   }
-  // A nested block may shadow an outer name; the same block may not.
+  // Names never shadow: pick a new one. A name is free again after its block.
   if found {
-    n := n * 2
-    _ = n
+    doubled := n * 2
+    _ = doubled
   }
   io.println("control {} {} {} {}", total, n, found, kind)
 }

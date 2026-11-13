@@ -21,7 +21,7 @@ fn main() {
   first := edit.snapshot(&tracker, 7, "hé world", 3, 3, edit.Cause.Other)
   again := edit.snapshot(&tracker, 7, "hé world", 3, 3, edit.Cause.Other)
   check(first.failure.kind == errors.Kind.Ok && again.value.token == first.value.token,"stable publication")
-  storage: [64]u8 = []
+  storage: [64]u8
   _ = mem.copy(storage[..9],"hé world")
   buffer := edit.Buffer{storage:storage[..],length:9,cursor:3,anchor:3,token:first.value.token}
   replacement := edit.Replacement{start:3,end:9,text:"😀",token:first.value.token}
@@ -42,7 +42,7 @@ fn main() {
   buffer = edit.Buffer{storage:storage[..],length:6,cursor:3,anchor:0,token:99}
   replacement = edit.Replacement{start:0,end:3,text:storage[..2],token:99}
   check(edit.apply(arena,&buffer,&replacement).kind == errors.Kind.Ok && bytes.equal(storage[..buffer.length],"abdef"),"aliased replacement")
-  scratch_backing: [64 + mem.ArenaBufferOverhead]u8 = []
+  scratch_backing: [64 + mem.ArenaBufferOverhead]u8
   scratch := mem.arena_from_buffer(scratch_backing[..])
   scratch_bytes := scratch.data[mem.ArenaHeader..]
   _ = mem.copy(scratch_bytes[..6],"abcdef")
@@ -72,7 +72,7 @@ fn main() {
   complete := events.collect_edit(&collector,&event)
   event.text[0] = 'z'
   check(complete.failure.kind == errors.Kind.Ok && complete.ready && #len(complete.value.text)==260 && complete.value.token == 8589934609 && complete.value.text[256] == 0xf0,"owned complete transaction")
-  large: [512]u8 = []
+  large: [512]u8
   _ = mem.copy(large[..3],"old")
   buffer = edit.Buffer{storage:large[..],length:3,cursor:3,anchor:3,token:complete.value.token}
   check(edit.apply(arena,&buffer,&complete.value).kind == errors.Kind.Ok && buffer.length==260 && large[259]==0x80,"assembled transaction applies")
@@ -97,7 +97,7 @@ for _ in range(64):
     incoming=''.join(rng.choice(['Z','ü','界','🙂']) for _ in range(rng.randrange(0,8))).encode()
     original=''.join(chars).encode();start=len(''.join(chars[:low]).encode());end=len(''.join(chars[:high]).encode())
     expected=original[:start]+incoming+original[end:]
-    GOLDEN+=' if true { storage: [128]u8 = []\n'
+    GOLDEN+=' if true { storage: [128]u8\n'
     GOLDEN+=f' _ = mem.copy(storage[..{len(original)}],{literal(original)})\n'
     GOLDEN+=f' buffer := edit.Buffer{{storage:storage[..],length:{len(original)},cursor:{start},anchor:{end},token:37}}\n'
     GOLDEN+=f' replacement := edit.Replacement{{start:{start},end:{end},text:{literal(incoming)},token:37}}\n'

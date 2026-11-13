@@ -52,6 +52,7 @@ static void allocation_block(AllocationPlan *p, uint32_t start, uint32_t count, 
     if (s->kind == DYN_STMT_LOCAL || s->kind == DYN_STMT_ASSIGN ||
         (s->kind == DYN_STMT_FOR && (s->for_range || s->target != DYN_NO_EXPR)))
       allocation_touch(p, s->local_id, false, false);
+    if (s->kind == DYN_STMT_FOR && s->for_index) allocation_touch(p, s->local_id + 1, false, false);
     allocation_block(p, s->body_start, s->body_count, depth + 1);
     allocation_block(p, s->else_start, s->else_count, depth + 1);
     if ((uint64_t)s->case_arm_start + s->case_arm_count > p->ir->case_arm_count) { p->failed = true; return; }

@@ -33,7 +33,7 @@ fn native_read(descriptor: i32, destination: *u8, count: usize) isize { return 0
 fn native_kill(child: i32, signal: i32) i32 { return 0 }
 fn native_wait(child: i32, status: *i32, flags: i32) i32 { return 0 }
 fn main() {
-  storage: [4096]u8 = []
+  storage: [4096]u8
   arena := mem.arena_from_buffer(storage[..])
   mark := mem.arena_mark(arena)
   empty := c_string(arena, "")
@@ -80,7 +80,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-process-cstring-') as temporary:
     (native / 'main.dyn').write_text('''use "std/process"
 use "std/mem"
 fn main() {
-  storage: [4096]u8 = []
+  storage: [4096]u8
   arena := mem.arena_from_buffer(storage[..])
   arguments: [1][]const u8 = ["/usr/bin/true"]
   _ = process.spawn(arena, arguments[0], arguments[..], process.Options{})

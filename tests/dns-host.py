@@ -25,7 +25,7 @@ use "std/mem" mem
 use "std/crypto/random" random
 fn require(value: bool, message: []const u8) { if !value { #panic(message) } }
 fn main() {
-  bytes: [515]u8 = []
+  bytes: [515]u8
   sizes: [4]usize = [0,1,257,513]
   for size in sizes {
     for i in 0..515 { bytes[i] = 42 }

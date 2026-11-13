@@ -17,7 +17,7 @@ pub fn init() bool {
 pub extern fn quit "enet_deinitialize"()
 // Convenience listener uses loopback and one channel; port=0 is ephemeral.
 pub fn listen_owned(port: u16, peers: usize) Host {
-  buffer: [16]u8 = []
+  buffer: [16]u8
   return listen_at_owned("127.0.0.1", port, peers, 1, buffer[..])
 }
 pub fn client_owned(peers: usize) Host {

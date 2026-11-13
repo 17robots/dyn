@@ -12,6 +12,24 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
+## Unreleased
+
+Breaking cleanup before the language freeze; see
+[docs/migrations/standard-20261113.md](docs/migrations/standard-20261113.md)
+and run `tools/migrate-standard.py`.
+
+- One spelling each: `Type{...}` literals only (`.{...}` is gone), a declaration
+  without an initializer is the one way to get zero (`= []` on a declaration is
+  an error), integers become enums only through `enums.from_int`, and
+  `#bitcast` takes numbers only.
+- Comparisons no longer chain, and locals never shadow another name in scope.
+- `for x, i in xs` binds each element's `usize` index, and `case` takes string
+  literal patterns on text.
+- Debug builds check overflow by default; `--no-check-overflow` opts out.
+- Literal format templates are checked against their arguments at compile time,
+  and run-time templates that do not match print with `{?}` and `{+value}`
+  markers instead of printing nothing.
+
 ## 0.1.0-preview.35
 
 - Native x86-64 SSA release builds propagate cheap uniform scalar arguments

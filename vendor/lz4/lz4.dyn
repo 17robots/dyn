@@ -13,7 +13,7 @@ pub fn compress(destination: []u8, source: []const u8) Result {
   if #len(source) > MaxInput || #len(destination) == 0 || #len(destination) > 2147483647 {
     return Result{}
   }
-  empty: [1]u8 = []
+  empty: [1]u8
   input: *const u8 = &empty[0]
   if #len(source) != 0 {
     input = &source[0]
@@ -28,7 +28,7 @@ pub fn decompress(destination: []u8, source: []const u8) Result {
   if #len(source) == 0 || #len(source) > 2147483647 || #len(destination) > 2147483647 {
     return Result{ code: -1 }
   }
-  empty: [1]u8 = []
+  empty: [1]u8
   output := &empty[0]
   if #len(destination) != 0 {
     output = &destination[0]

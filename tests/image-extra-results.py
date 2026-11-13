@@ -37,7 +37,7 @@ fn main() {
 '''
 ENCODER='''if strings.starts_with(args.value[1], "encode") {
   channels := strings.parse(u8, args.value[1][6..])
-  pixels: [16]u8 = []
+  pixels: [16]u8
   for i in 0..4 { for j in 0..#cast(usize, channels) { pixels[i * #cast(usize, channels) + j] = #cast(u8, (i * 51 + j * 37)) } }
   result := codec.encode(arena, pixels[..4 * #cast(usize, channels)], 2, 2, channels)
   if result.failure.kind != parse.Kind.Ok || fs.write_all(args.value[2], result.value).failure.kind != io.Kind.Ok { #panic("image encode") }

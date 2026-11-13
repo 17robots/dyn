@@ -13,7 +13,7 @@ class Contracts(unittest.TestCase):
     def test_scratch_rejects_all_conflicting_candidates(self):
         with tempfile.TemporaryDirectory(prefix='dyn-scratch-conflict-') as directory:
             root = Path(directory)
-            (root / 'main.dyn').write_text('use "std/mem"\nfn main() {\nstorage: [8 + mem.ArenaBufferOverhead]u8 = []\n'
+            (root / 'main.dyn').write_text('use "std/mem"\nfn main() {\nstorage: [8 + mem.ArenaBufferOverhead]u8\n'
                 'arena := mem.arena_from_buffer(storage[..])\n'
                 '_ = mem.scratch_begin(arena, arena, arena) }\n')
             subprocess.run([DYN, 'build', directory, '--quiet', '--no-cache', '--output', str(root / 'program')], check=True)
@@ -97,8 +97,8 @@ class Contracts(unittest.TestCase):
 }
 """
         invalid = [
-            ('fn main() { i := 0\n_ = i\ni := 1\n_ = i }', 'only a nested block may shadow it'),
-            ('fn main() { for i in 0..3 { for i in 0..2 { _ = i } } }', 'cannot shadow a loop variable inside its loop'),
+            ('fn main() { i := 0\n_ = i\ni := 1\n_ = i }', 'locals never shadow'),
+            ('fn main() { for i in 0..3 { for i in 0..2 { _ = i } } }', 'loop variable of an enclosing loop'),
             ('fn main() { for i in 0..3 { _ = i }\n_ = i }', 'unknown name'),
             ('fn main() { a: u8 = 1\nb: u32 = 5\nfor i in a..b { _ = i } }', 'range bounds require the same integer type'),
             ('fn main() { for *i in 0..3 { _ = i } }', 'range for-in binds values; remove the pointer binding'),
@@ -195,8 +195,8 @@ class Contracts(unittest.TestCase):
         invalid = [
             'fn bad() *i32 { x: i32 = 1\nreturn &x }',
             'fn bad(x: i32) *i32 { return &x }',
-            'fn bad() []u8 { x: [4]u8 = []\nreturn x[..] }',
-            'struct Box { data: []u8 } fn bad() Box { x: [4]u8 = []\nreturn Box{data: x[..]} }',
+            'fn bad() []u8 { x: [4]u8\nreturn x[..] }',
+            'struct Box { data: []u8 } fn bad() Box { x: [4]u8\nreturn Box{data: x[..]} }',
             'struct Box { value: i32 } fn bad() *i32 { x := Box{}\nreturn &x.value }',
         ]
         valid = [
@@ -204,8 +204,8 @@ class Contracts(unittest.TestCase):
             'fn good(x: []u8) []u8 { return x[..] }',
             'fn good(x: []u8) *u8 { return &x[0] }',
             'struct Box { value: i32 } fn good(x: *Box) *i32 { return &x.value }',
-            'data: [4]u8 = [] fn good() []u8 { return data[..] }',
-            'fn good() [4]u8 { x: [4]u8 = []\nreturn x }',
+            'data: [4]u8 fn good() []u8 { return data[..] }',
+            'fn good() [4]u8 { x: [4]u8\nreturn x }',
         ]
         with tempfile.TemporaryDirectory(prefix='dyn-local-borrow-') as directory:
             root = Path(directory)
@@ -388,7 +388,7 @@ class Contracts(unittest.TestCase):
     def test_trace_uses_original_file_and_line(self):
         with tempfile.TemporaryDirectory(prefix='dyn-trace-') as directory:
             root = Path(directory)
-            (root / 'main.dyn').write_text('use "std/mem"\nfn main() {\n  storage: [16 + mem.ArenaBufferOverhead]u8 = []\n  arena := mem.arena_from_buffer(storage[..])\n  _ = arena\n  fail()\n}\n')
+            (root / 'main.dyn').write_text('use "std/mem"\nfn main() {\n  storage: [16 + mem.ArenaBufferOverhead]u8\n  arena := mem.arena_from_buffer(storage[..])\n  _ = arena\n  fail()\n}\n')
             helper = root / 'helper.dyn'
             helper.write_text('fn fail() { #panic("expected failure") }\n')
             output = root / 'program'

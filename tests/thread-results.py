@@ -47,11 +47,11 @@ fn main() {
   if thread.id(&empty) != 0 { #panic("zero id") }
   joined(&empty)
   joined(&empty)
-  storage: [4096]u8 = []
+  storage: [4096]u8
   arena := mem.arena_from_buffer(storage[..])
   _ = mem.push_bytes_uninit(arena, 7)
   mark := mem.arena_mark(arena)
-  stack: [131072]u8 = []
+  stack: [131072]u8
   for size in [0, 1, 255] {
     invalid(thread.spawn_with_size(arena, #cast(usize, size), worker, nil), arena, mark)
     invalid(thread.spawn(arena, stack[..size], worker, nil), arena, mark)
@@ -98,10 +98,10 @@ EXHAUSTION = IMPORTS + r'''
 fn forbidden(context: rawptr) isize { if context == nil { #panic("WORKER_STARTED") }
 return 0 }
 fn main() {
-  backing: [mem.ArenaBufferOverhead]u8 = []
+  backing: [mem.ArenaBufferOverhead]u8
   skip := (16-(#cast(usize,&backing[0]) & 15)) & 15
   arena := mem.arena_from_buffer(backing[skip..skip+mem.ArenaHeader])
-  stack: [131072]u8 = []
+  stack: [131072]u8
   SPAWN
   #panic("SPAWN_RETURNED")
 }

@@ -53,7 +53,7 @@ fn main() {
   if #len(items) != 1003 || items[1001] != 1 || first != &items[0] {
     #panic("append")
   }
-  storage: [64 + mem.ArenaBufferOverhead]u8 = []
+  storage: [64 + mem.ArenaBufferOverhead]u8
   fixed := mem.arena_from_buffer(storage[..])
   small: []u32
   for i in 0..16 {
@@ -74,8 +74,8 @@ fn std_args() []u8 {
 """
 FAILURES = {
     'not the newest allocation': 'use "std/mem" mem\nfn main() {\n  arena := mem.arena_create(0)\n  items: []u64\n  _ = mem.append(arena, &items, 1)\n  _ = mem.push(u8, arena)\n  _ = mem.append(arena, &items, 2)\n}\n',
-    'end of its arena block': 'use "std/mem" mem\nfn main() {\n  storage: [16 + mem.ArenaBufferOverhead]u8 = []\n  arena := mem.arena_from_buffer(storage[..])\n  items: []u64\n  for i in 0..5 {\n    _ = mem.append(arena, &items, #cast(u64, i))\n  }\n}\n',
-    'node is not an element': 'use "std/container/slot_map" slots\nstruct S { generation: u32 }\nfn main() {\n  a: [2]S = []\n  b: S\n  _ = slots.handle_of(a[..], &b)\n}\n',
+    'end of its arena block': 'use "std/mem" mem\nfn main() {\n  storage: [16 + mem.ArenaBufferOverhead]u8\n  arena := mem.arena_from_buffer(storage[..])\n  items: []u64\n  for i in 0..5 {\n    _ = mem.append(arena, &items, #cast(u64, i))\n  }\n}\n',
+    'node is not an element': 'use "std/container/slot_map" slots\nstruct S { generation: u32 }\nfn main() {\n  a: [2]S\n  b: S\n  _ = slots.handle_of(a[..], &b)\n}\n',
 }
 with tempfile.TemporaryDirectory(prefix='dyn-containers-') as temporary:
     project = Path(temporary)

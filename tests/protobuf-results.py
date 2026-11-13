@@ -51,7 +51,7 @@ fn main() {
   bad("\x0b\x14")
   bad("\x0b")
   bad("\x0c")
-  deep: [65]u8 = []
+  deep: [65]u8
   for i in 0..65 { deep[i] = 11 }
   state = pb.reader(deep[..])
   for i in 0..64 { check(pb.next(&state).found) }

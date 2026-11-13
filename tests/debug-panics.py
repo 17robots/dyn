@@ -34,7 +34,7 @@ fn cleaned(values: []i32, at: usize) i32 {
 
 fn main() {
   program := process.start()
-  values: [4]i32 = []
+  values: [4]i32
   if #len(program.args) > 1 {
     _ = cleaned(values[..], 6)
   }

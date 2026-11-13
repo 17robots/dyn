@@ -17,12 +17,12 @@ const {WASI}=require('node:wasi'),fs=require('fs');
 (async()=>{const wasi=new WASI({version:'preview1',args:['test'],returnOnExit:true});const {instance}=await WebAssembly.instantiate(fs.readFileSync(process.argv[1]),{wasi_snapshot_preview1:wasi.wasiImport});process.exitCode=wasi.start(instance);})().catch(e=>{console.error(e);process.exit(1)});
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-peer-widening-') as temporary:
-    for name, flags, emulator in (('debug', ['--debug'], []), ('release', ['--release'], []),
+    for name, flags, emulator in (('debug', ['--debug', '--no-check-overflow'], []), ('release', ['--release'], []),
                                   ('arm', ['--target', 'aarch64-linux', '--release'], ['qemu-aarch64']),
-                                  ('arm-debug', ['--target', 'aarch64-linux'], ['qemu-aarch64']),
+                                  ('arm-debug', ['--target', 'aarch64-linux', '--no-check-overflow'], ['qemu-aarch64']),
                                   ('riscv', ['--target', 'riscv64-linux', '--release'], ['qemu-riscv64']),
                                   ('windows.exe', ['--target', 'x86_64-windows', '--release'], ['wine']),
-                                  ('wasi.wasm', ['--target', 'wasm32-wasi'], ['node', '--no-warnings', '-e', WASI]),
+                                  ('wasi.wasm', ['--target', 'wasm32-wasi', '--no-check-overflow'], ['node', '--no-warnings', '-e', WASI]),
                                   ('wasi-release.wasm', ['--target', 'wasm32-wasi', '--release'],
                                    ['node', '--no-warnings', '-e', WASI])):
         program = Path(temporary) / name

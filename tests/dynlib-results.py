@@ -46,7 +46,7 @@ fn main() {
   message_pointer: *const u8 = zero.message
   check(native_code == 0 && message_pointer == nil)
   invalid_open(dl.open("bad\x00path", dl.Now))
-  long_name: [4096]u8 = []
+  long_name: [4096]u8
   invalid_open(dl.open(long_name[..], dl.Now))
   invalid_symbol(dl.symbol(nil, "malloc"), errors.Kind.InvalidState)
   badclose := dl.close(nil)

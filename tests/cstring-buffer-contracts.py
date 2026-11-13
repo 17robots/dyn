@@ -21,7 +21,7 @@ use "std/mem" mem
 use "std/fs" fs
 fn check(ok:bool) { if !ok { #panic("CString buffer contract") } }
 fn main() {
- backing:[6]u8=[]
+ backing:[6]u8
  mem.fill(backing[..],165)
  exact:=c.string_into(backing[1..5],"abc")
  check(exact.failure.kind == parse.Kind.Ok && exact.required==4 && exact.value==&backing[1])
@@ -42,14 +42,14 @@ fn main() {
  check(overlap.failure.kind == parse.Kind.Ok && overlap.value==&backing[1] && mem.equal(backing[..],"aabc\x00!"))
  reverse:=c.string_into(backing[..4],backing[1..4])
  check(reverse.failure.kind == parse.Kind.Ok && reverse.value==&backing[0] && mem.equal(backing[..],"abc\x00\x00!"))
- before:[6]u8=[]
+ before:[6]u8
  _=mem.copy(before[..],backing[..])
  alias_invalid:=c.string_into(backing[1..],backing[..5])
  check(alias_invalid.failure.kind == parse.Kind.Syntax && mem.equal(backing[..],before[..]))
  huge:=#slice(&backing[0], ~#cast(usize,0))
  overflow:=c.string_into(backing[..],huge)
  check(overflow.failure.kind == parse.Kind.Overflow && overflow.value==nil && mem.equal(backing[..],before[..]))
- path:[4300]u8=[]
+ path:[4300]u8
  mem.fill(path[..],'a')
  removed:=fs.remove(path[..])
  check(removed.failure.kind != io.Kind.Ok)
@@ -58,7 +58,7 @@ fn main() {
 '''
 SQLITE = r'''use "vendor/sqlite" sqlite
 fn main() {
- backing:[11]u8=[]
+ backing:[11]u8
  for *byte in backing { byte.*=165 }
  result:=sqlite.open(":memory:",backing[1..10])
  if !result.ok || result.database==nil { #panic("SQLite exact CString buffer") }

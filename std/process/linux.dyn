@@ -32,7 +32,7 @@ fn close_native(handle: isize) Status {
   return Status{ failure: io.linux_failure(result.error) }
 }
 fn pipe_native() Pipe {
-  descriptors: [2]i32 = []
+  descriptors: [2]i32
   result := #syscall(sys.Pipe2, &descriptors[0], 524288)
   if result < 0 {
     return Pipe{ failure: io.linux_failure(result) }

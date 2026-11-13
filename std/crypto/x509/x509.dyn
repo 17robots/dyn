@@ -371,7 +371,7 @@ fn extended(source: []const u8, view: *View) bool {
     return false
   }
   cursor := der.enter(item.value)
-  seen: [64][]const u8 = []
+  seen: [64][]const u8
   count: usize = 0
   for !der.finished(&cursor) {
     value := der.next(&cursor)
@@ -457,7 +457,7 @@ fn extensions(element: der.Element, view: *View) Reason {
     return Reason.Malformed
   }
   cursor := der.enter(list.value)
-  seen: [64][]const u8 = []
+  seen: [64][]const u8
   count: usize = 0
   for !der.finished(&cursor) {
     entry := der.next(&cursor)
@@ -740,7 +740,7 @@ fn signed(child: *const View, parent: *const View) bool {
   if child.signature_algorithm == Algorithm.Ed25519 {
     return ed.verify(child.envelope.signature_bits, child.envelope.tbs, parent.public_key)
   }
-  raw: [64]u8 = []
+  raw: [64]u8
   if !raw_signature(child.envelope.signature_bits, raw[..]) {
     return false
   }
@@ -771,7 +771,7 @@ pub fn validate(chain: []const []const u8, anchors: []const []const u8, options:
   if #len(chain) > 16 {
     return validation(Reason.TooDeep, 0)
   }
-  views: [16]View = []
+  views: [16]View
   for i in 0..#len(chain) {
     parsed := inspect(chain[i])
     if parsed.failure.kind != parse.Kind.Ok {

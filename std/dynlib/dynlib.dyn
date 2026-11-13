@@ -22,7 +22,7 @@ pub struct SymbolResult { value: rawptr, message: *const u8, failure: io.Failure
 pub struct Result { message: *const u8, failure: io.Failure }
 
 pub fn open(path: []const u8, flags: i32) OpenResult {
-  storage: [4096 + mem.ArenaBufferOverhead]u8 = []
+  storage: [4096 + mem.ArenaBufferOverhead]u8
   if #len(path) >= #len(storage) {
     return OpenResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
@@ -37,7 +37,7 @@ pub fn symbol(handle: Handle, name: []const u8) SymbolResult {
   if handle == nil {
     return SymbolResult{ failure: io.Failure{ kind: io.Kind.InvalidState } }
   }
-  storage: [4096 + mem.ArenaBufferOverhead]u8 = []
+  storage: [4096 + mem.ArenaBufferOverhead]u8
   if #len(name) >= #len(storage) {
     return SymbolResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }

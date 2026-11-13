@@ -203,7 +203,7 @@ struct Size { value: usize, ok: bool, offset: usize }
 // Validates the complete input and reports the exact decoded byte count.
 // ok with value zero is a valid empty encoding.
 fn decoded_size(source: []const u8) Size {
-  empty: [0]u8 = []
+  empty: [0]u8
   offset: usize = 0
   measured := decode_pass(empty[..], source, false, &offset)
   return Size{ value: measured.required, ok: measured.failure.kind == parse.Kind.Ok, offset: offset }

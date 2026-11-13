@@ -106,7 +106,7 @@ pub fn yield_now() Result {
 // CPUs this process may run on (its affinity mask), at least 1. Use it to size
 // worker pools; it can change while the process runs.
 pub fn cpu_count() usize {
-  mask: [128]u8 = []
+  mask: [128]u8
   written := #syscall(sys.SchedGetaffinity, 0, #len(mask), &mask[0])
   if written <= 0 {
     return 1

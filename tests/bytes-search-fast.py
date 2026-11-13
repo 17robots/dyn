@@ -105,7 +105,7 @@ fn main() {
 with tempfile.TemporaryDirectory(prefix='dyn-bytes-search-') as directory:
     root = Path(directory)
     (root / 'main.dyn').write_text(SOURCE)
-    for mode in ([], ['--release']):
+    for mode in (['--no-check-overflow'], ['--release']):
         subprocess.run([DYN, 'build', str(root), '--quiet', '--no-cache', '--output', str(root/'run'), *mode], cwd=ROOT, check=True)
         # The exhaustive checked build exceeds 60 seconds on two-core CI.
         # Preserve every vector; release remains subject to the tighter bound.

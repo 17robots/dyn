@@ -21,7 +21,7 @@ fn main() {
     if result.index!=expected || result.found!=(expected!=5) { #panic("search miss position") }
     _=values[..result.index]
   }
-  empty:[0]i32=[]
+  empty:[0]i32
   if sort.search(empty[..],0).index!=0 || sort.search(empty[..],0).found { #panic("empty search") }
   arena := mem.arena_create(0)
   defer mem.arena_release(arena)

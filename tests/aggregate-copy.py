@@ -21,7 +21,7 @@ fn main() {
     app.config = parsed
     app.config = app.config
     bytes := copied.bytes
-    other: [32768]u8 = []
+    other: [32768]u8
     other = bytes
     bytes[32767] = 5
     parsed.bytes[32767] = 11
