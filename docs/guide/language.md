@@ -447,7 +447,14 @@ A function whose last fixed parameter is `template: []const u8` and whose pack i
 format template, as `io.println`, `io.print_to`, `strings.format` and `fmt.print` do. `{}` inserts
 the next argument and `{{` and `}}` write a brace. When the template is a string literal, the
 compiler checks it: a lone brace, `{:x}` or any other spec, and a count of `{}` that differs from
-the count of arguments are errors. A template computed at run time is checked when it runs.
+the count of arguments are errors. A template computed at run time is checked when it runs: a
+missing value prints `{?}`, an extra one prints at the end as `{+value}`, and a value with no text
+form prints `{?}`.
+
+With a literal template, a struct or plain enum named by a variable, field path or constant
+prints its contents. The compiler rewrites the call, so nothing is looked up at run time:
+`io.println("{}", unit)` prints `Unit{name: ada, at: Vec2{x: 1.5, y: 2}, op: Sub}`, reading
+each field once. Enums with set tags print the tag. Bind any other expression to a name first.
 
 ## Builtins
 
@@ -465,6 +472,11 @@ collections, and ordinary algorithms belong in libraries.
 - Module directives: `#target` and `#link`, documented with platform and FFI rules.
 
 `#sizeof(T)` and `#alignof(T)` are the short forms of `#typeof(T).size` and `#typeof(T).alignment`.
+
+`#target(key: value)` on a file's first line keeps that file only for matching targets. The keys
+are `arch`, `kernel` (`linux`, `darwin`, `windows`, `wasi`, `none`, `browser`), `abi`, `libc`,
+`endian`, `pointer_bits` and `streams` (`yes` on every target with standard input, output and
+error, which is every target but the browser).
 
 Conversions require exactly two arguments, with the type first. The value may be
 any expression and is evaluated exactly once. The closing parenthesis delimits

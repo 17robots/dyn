@@ -10,6 +10,9 @@ fn fresh(T: type) T {
   return T{}
 }
 enum(u8) Op { Nop, Add, Sub }
+enum(i32) Errno { Ok = 0, NoEnt = 2 }
+struct Vec2 { x: f32, y: f32 }
+struct Unit { name: []const u8, at: Vec2, op: Op }
 
 fn weighted(values: []const i32) usize {
   sum: usize = 0
@@ -52,5 +55,8 @@ fn main() {
   io.println("calls {}", calls)
   player := fresh(Player)
   io.println("fresh {} {}", player.health, player.armor)
+  unit := Unit{name: "ada", at: Vec2{x: 1.5, y: 2}, op: Op.Sub}
+  // A struct or enum in a literal template prints its contents.
+  io.println("unit {} at {} op {} errno {}", unit, unit.at, unit.op, Errno.NoEnt)
   io.println("op {} {}", enums.from_int(Op, 2) == Op.Sub, enums.from_int(Op, 9) == Op.Nop)
 }

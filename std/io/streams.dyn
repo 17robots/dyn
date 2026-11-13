@@ -1,0 +1,19 @@
+#target(streams: yes)
+// Terminal output for every target with standard streams. These ignore write
+// failures such as a closed pipe; print_to and println_to report them.
+
+pub fn print(template: []const u8, arguments: ...any) {
+  _ = print_arguments(stdout(), template, arguments)
+}
+
+pub fn println(template: []const u8, arguments: ...any) {
+  _ = println_arguments(stdout(), template, arguments)
+}
+
+pub fn eprint(template: []const u8, arguments: ...any) {
+  _ = print_arguments(stderr(), template, arguments)
+}
+
+pub fn eprintln(template: []const u8, arguments: ...any) {
+  _ = println_arguments(stderr(), template, arguments)
+}

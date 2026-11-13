@@ -1462,6 +1462,182 @@ static DynExprId reflection_members(DynAstProgram *a, const DynSource *s,
   return slice;
 }
 
+/* Struct and enum values in a literal template print their contents. The
+   compiler rewrites the template and the arguments, so nothing is looked up at
+   run time: `"{}", point` becomes `"Point{{x: {}, y: {}}}", point.x, point.y`,
+   and a plain enum becomes its variant's name, read from a constant table.
+   Only a name or field path is expanded, since it is read once per field;
+   any other expression keeps the {?} it prints at run time. */
+typedef struct {
+  char *text;
+  size_t length, capacity;
+  DynAstItem *items;
+  uint32_t count, capacity_items;
+  bool failed;
+} FormatExpansion;
+static void format_text(FormatExpansion *x, const char *text, size_t length) {
+  if (x->failed) return;
+  if (x->length + length > x->capacity) {
+    size_t c = x->capacity ? x->capacity * 2 : 64;
+    while (c < x->length + length) c *= 2;
+    char *p = realloc(x->text, c);
+    if (!p) { x->failed = true; return; }
+    x->text = p;
+    x->capacity = c;
+  }
+  memcpy(x->text + x->length, text, length);
+  x->length += length;
+}
+static void format_item(FormatExpansion *x, DynExprId expression) {
+  if (x->failed) return;
+  if (x->count == x->capacity_items) {
+    uint32_t c = x->capacity_items ? x->capacity_items * 2 : 8;
+    DynAstItem *p = realloc(x->items, c * sizeof(*p));
+    if (!p) { x->failed = true; return; }
+    x->items = p;
+    x->capacity_items = c;
+  }
+  x->items[x->count++] = (DynAstItem){.expression = expression, .field_index = UINT32_MAX};
+}
+static bool format_path(const DynAstProgram *a, DynExprId id, unsigned depth) {
+  if (id == DYN_NO_EXPR || depth > 16) return false;
+  const DynAstExpr *e = &a->expressions[id];
+  if (e->kind == DYN_EXPR_NAME || e->kind == DYN_EXPR_GLOBAL || e->kind == DYN_EXPR_ENUM) return true;
+  return e->kind == DYN_EXPR_FIELD && format_path(a, e->left, depth + 1);
+}
+static DynExprId format_clone(DynAstProgram *a, DynExprId id) {
+  if (!reserve_expr(a)) return DYN_NO_EXPR;
+  DynAstExpr copy = a->expressions[id];
+  if (copy.kind == DYN_EXPR_FIELD) {
+    copy.left = format_clone(a, copy.left);
+    if (copy.left == DYN_NO_EXPR || !reserve_expr(a)) return DYN_NO_EXPR;
+  }
+  DynExprId clone = (DynExprId)a->expression_count;
+  a->expressions[a->expression_count++] = copy;
+  return clone;
+}
+static void format_value(DynAstProgram *a, FormatExpansion *x, DynExprId path, DynType type,
+                         const DynSource *s, unsigned depth) {
+  DynExprId value = format_clone(a, path);
+  if (value == DYN_NO_EXPR) { x->failed = true; return; }
+  if (dyn_type_is_struct(type) && depth < 4) {
+    const DynAstStruct *st = &a->structs[type - DYN_TYPE_STRUCT_BASE];
+    char name[256];
+    type_name_into(a, type, s, name, sizeof(name));
+    format_text(x, name, strlen(name));
+    format_text(x, "{{", 2);
+    for (uint32_t i = 0; i < st->field_count && !x->failed; ++i) {
+      const DynAstField *field = &a->fields[a->structs[type - DYN_TYPE_STRUCT_BASE].field_start + i];
+      if (i) format_text(x, ", ", 2);
+      format_text(x, s->text + field->name.start_byte, field->name.end_byte - field->name.start_byte);
+      format_text(x, ": ", 2);
+      DynExprId member = reflection_expr(a, DYN_EXPR_FIELD, field->type, i);
+      if (member == DYN_NO_EXPR) { x->failed = true; return; }
+      a->expressions[member].left = value;
+      a->expressions[member].span = field->name;
+      format_value(a, x, member, field->type, s, depth + 1);
+    }
+    format_text(x, "}}", 2);
+    return;
+  }
+  if (dyn_type_is_enum(type) && !a->enums[type - DYN_TYPE_ENUM_BASE].has_payload &&
+      !a->enums[type - DYN_TYPE_ENUM_BASE].explicit_tags) {
+    /* A constant table of variant names, indexed by the tag. */
+    const DynAstEnum *en = &a->enums[type - DYN_TYPE_ENUM_BASE];
+    DynType text = sema_intern_slice(a, DYN_TYPE_U8, true);
+    DynType table_type = sema_intern_array(a, text, en->variant_count);
+    if (text == DYN_TYPE_ERROR || table_type == DYN_TYPE_ERROR ||
+        !reserve_reflection_items(a, en->variant_count)) { x->failed = true; return; }
+    uint32_t start = (uint32_t)a->item_count;
+    a->item_count += en->variant_count;
+    for (uint32_t i = 0; i < en->variant_count; ++i) {
+      DynSpan variant = a->variants[en->variant_start + i].name;
+      DynExprId name = reflection_string(a, text, s->text + variant.start_byte,
+                                         variant.end_byte - variant.start_byte);
+      if (name == DYN_NO_EXPR) { x->failed = true; return; }
+      a->items[start + i] = (DynAstItem){.expression = name, .field_index = UINT32_MAX};
+    }
+    DynExprId table = reflection_expr(a, DYN_EXPR_ARRAY, table_type, 0);
+    DynExprId index = convert_expr(a, value, DYN_TYPE_USIZE);
+    DynExprId pick = reflection_expr(a, DYN_EXPR_INDEX, text, 0);
+    if (table == DYN_NO_EXPR || index == DYN_NO_EXPR || pick == DYN_NO_EXPR) { x->failed = true; return; }
+    a->expressions[table].item_start = start;
+    a->expressions[table].item_count = en->variant_count;
+    a->expressions[pick].left = table;
+    a->expressions[pick].right = index;
+    a->expressions[index].type = DYN_TYPE_USIZE;
+    format_text(x, "{}", 2);
+    format_item(x, pick);
+    return;
+  }
+  if (dyn_type_is_enum(type) && !a->enums[type - DYN_TYPE_ENUM_BASE].has_payload) {
+    /* Set tags: print the tag. */
+    format_text(x, "{}", 2);
+    DynExprId tag = convert_expr(a, value, DYN_TYPE_U64);
+    if (tag == DYN_NO_EXPR) { x->failed = true; return; }
+    format_item(x, tag);
+    return;
+  }
+  format_text(x, "{}", 2);
+  format_item(x, value);
+}
+static void expand_format_arguments(DynAstProgram *a, const DynAstFn *callee, DynExprId call,
+                                    DynExprId template, const DynSource *s) {
+  uint32_t item_start = a->expressions[call].item_start;
+  uint32_t first = callee->param_count, count = a->expressions[call].item_count;
+  bool any = false;
+  /* Pack items hold each typed value; IR lowering boxes them into any. */
+  for (uint32_t i = first; i < count; ++i) {
+    DynExprId source = a->items[item_start + i].expression;
+    if (source == DYN_NO_EXPR) continue;
+    DynType type = a->expressions[source].type;
+    if ((dyn_type_is_struct(type) || (dyn_type_is_enum(type) && !a->enums[type - DYN_TYPE_ENUM_BASE].has_payload)) &&
+        format_path(a, source, 0))
+      any = true;
+  }
+  if (!any) return;
+  const DynAstString *original = &a->strings[a->expressions[template].integer];
+  FormatExpansion x = {0};
+  for (uint32_t i = 0; i < first; ++i) format_item(&x, a->items[item_start + i].expression);
+  uint32_t next = first;
+  for (size_t i = 0; i < original->length && !x.failed; ++i) {
+    unsigned char c = original->data[i];
+    unsigned char following = i + 1 < original->length ? original->data[i + 1] : 0;
+    if (c == '{' && following == '}') {
+      DynExprId source = a->items[item_start + next++].expression;
+      DynType type = source == DYN_NO_EXPR ? DYN_TYPE_ERROR : a->expressions[source].type;
+      if (source != DYN_NO_EXPR && format_path(a, source, 0) &&
+          (dyn_type_is_struct(type) || (dyn_type_is_enum(type) && !a->enums[type - DYN_TYPE_ENUM_BASE].has_payload)))
+        format_value(a, &x, source, type, s, 0);
+      else {
+        format_text(&x, "{}", 2);
+        format_item(&x, source);
+      }
+      ++i;
+    } else if ((c == '{' || c == '}') && following == c) {
+      format_text(&x, (const char *)original->data + i, 2);
+      ++i;
+    } else
+      format_text(&x, (const char *)original->data + i, 1);
+  }
+  if (!x.failed && reserve_reflection_string(a) && reserve_reflection_items(a, x.count)) {
+    unsigned char *bytes = malloc(x.length ? x.length : 1);
+    if (bytes) {
+      memcpy(bytes, x.text, x.length);
+      uint32_t string = (uint32_t)a->string_count;
+      a->strings[a->string_count++] = (DynAstString){bytes, x.length};
+      a->expressions[template].integer = string;
+      uint32_t start = (uint32_t)a->item_count;
+      memcpy(a->items + start, x.items, x.count * sizeof(*x.items));
+      a->item_count += x.count;
+      a->expressions[call].item_start = start;
+      a->expressions[call].item_count = x.count;
+    }
+  }
+  free(x.text);
+  free(x.items);
+}
+
 /* A function whose last fixed parameter is `template: []const u8` and whose
    pack is `...any` takes a format template: {} inserts the next argument, {{
    and }} write braces. A literal template is checked against the arguments. */
@@ -1494,10 +1670,13 @@ static void check_format_template(DynAstProgram *a, const DynAstFn *callee, DynE
     ++i;
   }
   uint32_t arguments = item_count - callee->param_count;
-  if (holes != arguments)
+  if (holes != arguments) {
     error_format(a->expressions[call].span, s, errors,
                  "format template has %u {} but the call passes %u argument%s",
                  (unsigned)holes, (unsigned)arguments, arguments == 1 ? "" : "s");
+    return;
+  }
+  expand_format_arguments(a, callee, call, template, s);
 }
 static DynType check_expr(Sema *, DynAstProgram *, DynExprId, const DynSource *,
                           unsigned *, DynType);

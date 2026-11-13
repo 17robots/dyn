@@ -26,18 +26,6 @@ pub fn stderr() Writer {
 
 // Terminal output. These ignore write failures, such as a closed pipe, so a
 // call needs no `_ =`; use print_to or println_to to check the result.
-pub fn print(template: []const u8, arguments: ...any) {
-  _ = print_arguments(stdout(), template, arguments)
-}
 
-pub fn println(template: []const u8, arguments: ...any) {
-  _ = println_arguments(stdout(), template, arguments)
-}
 
-pub fn eprint(template: []const u8, arguments: ...any) {
-  _ = print_arguments(stderr(), template, arguments)
-}
 
-pub fn eprintln(template: []const u8, arguments: ...any) {
-  _ = println_arguments(stderr(), template, arguments)
-}
