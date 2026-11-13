@@ -83,7 +83,7 @@ pub struct SpawnResult { value: *Thread, failure: errors.Failure }
 pub struct Result { failure: errors.Failure }
 pub struct State { spawns: usize, joins: usize, fail_at: usize, fail_join: bool }
 pub state: State
-pub fn spawn(arena: *mem.Arena, stack: []u8, entry: fn(rawptr) isize, context: rawptr) SpawnResult {
+pub fn spawn(arena: *mem.Arena, stack: []u8, entry: fn(*$C) isize, context: *$C) SpawnResult {
   _ = stack
   _ = entry
   _ = context

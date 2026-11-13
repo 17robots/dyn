@@ -17,7 +17,7 @@ fn main() {
   owned:=sqlite.open_with_options(":memory:",scratch[..],sqlite.OpenOptions{caller_serialized:true})
   if io.failed(owned.failure) || db_mutex(owned.database)!=nil { #panic("caller serialized flag") }
   defer _=sqlite.close(owned.database)
-  if sqlite.execute(owned.database,"CREATE TABLE counter(value INTEGER); INSERT INTO counter VALUES(0); UPDATE counter SET value=value+1",scratch[..])!=0 { #panic("execute") }
+  if io.failed(sqlite.execute(owned.database,"CREATE TABLE counter(value INTEGER); INSERT INTO counter VALUES(0); UPDATE counter SET value=value+1",scratch[..])) { #panic("execute") }
   prepared:=sqlite.prepare(owned.database,"SELECT value FROM counter")
   if io.failed(prepared.failure) { #panic("prepare") }
   statement:=prepared.statement

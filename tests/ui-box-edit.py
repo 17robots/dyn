@@ -13,7 +13,7 @@ use "std/mem" mem
 use "std/bytes" bytes
 use "std/unicode/utf8" utf8
 fn check(ok: bool, why: []const u8) { if !ok { #panic(why) } }
-fn measure(data: rawptr, text: []const u8) f32 {
+fn measure(data: *u8, text: []const u8) f32 {
   _ = data
   return #cast(f32, utf8.codepoint_count(text).value) * 8.0
 }

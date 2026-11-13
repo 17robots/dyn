@@ -29,7 +29,12 @@ fn trampoline(context: rawptr) rawptr {
 // libc owns the stack; stack_size is rounded up to whole pages. thread and
 // context must stay alive and unmoved until join succeeds. Arena exhaustion
 // panics; a native failure restores the arena mark.
-pub fn spawn(arena: *mem.Arena, stack_size: usize, entry: fn(rawptr) isize, context: rawptr) SpawnResult {
+// Starts entry(context) on a POSIX thread; context stays alive until join.
+pub fn spawn(arena: *mem.Arena, stack_size: usize, entry: fn(*$C) isize, context: *$C) SpawnResult {
+  return spawn_untyped(arena, stack_size, #cast(fn(rawptr) isize, entry), context)
+}
+
+fn spawn_untyped(arena: *mem.Arena, stack_size: usize, entry: fn(rawptr) isize, context: rawptr) SpawnResult {
   if stack_size < 16384 || entry == nil {
     return SpawnResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
@@ -72,7 +77,7 @@ pub fn join(thread: *Thread) io.Failure {
 }
 
 fn spawner_spawn(data: rawptr, arena: *mem.Arena, stack_size: usize, entry: fn(rawptr) isize, context: rawptr) rawptr {
-  spawned := spawn(arena, stack_size, entry, context)
+  spawned := spawn_untyped(arena, stack_size, entry, context)
   if io.failed(spawned.failure) {
     return nil
   }

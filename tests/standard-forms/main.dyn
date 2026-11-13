@@ -5,6 +5,18 @@ use "std/io"
 struct Pair { a: i32, b: i32 }
 struct Player { health: i32 = 100, armor: i32 }
 
+// A callback and its context: C is inferred through the function's type.
+fn run(entry: fn(*$C) i32, context: *$C) i32 {
+  if context == nil {
+    return -1
+  }
+  return entry(context)
+}
+
+fn armor_of(player: *Player) i32 {
+  return player.armor
+}
+
 // T{} in a generic body is the instance's own struct literal.
 fn fresh(T: type) T {
   return T{}
@@ -55,6 +67,8 @@ fn main() {
   io.println("calls {}", calls)
   player := fresh(Player)
   io.println("fresh {} {}", player.health, player.armor)
+  player.armor = 4
+  io.println("run {} {}", run(armor_of, &player), run(armor_of, nil))
   unit := Unit{name: "ada", at: Vec2{x: 1.5, y: 2}, op: Op.Sub}
   // A struct or enum in a literal template prints its contents.
   io.println("unit {} at {} op {} errno {}", unit, unit.at, unit.op, Errno.NoEnt)

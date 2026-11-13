@@ -27,8 +27,7 @@ pub struct Pool {
 pub type StartResult = io.Result(*Pool)
 pub struct Result { failure: io.Failure }
 
-fn worker(context: rawptr) isize {
-  pool := #cast(*Pool, context)
+fn worker(pool: *Pool) isize {
   sync.lock(&pool.lock)
   for true {
     for pool.count == 0 && !pool.stopping {

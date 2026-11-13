@@ -50,7 +50,7 @@ fn main() {
     #panic("grammar ABI mismatch")
   }
   parsed := ts.parse(parser, nil, "int x;")
-  if !parsed.ok {
+  if io.failed(parsed.failure) {
     #panic("parse")
   }
   defer ts.tree_destroy_owned(parsed.tree)
@@ -75,7 +75,7 @@ fn main() {
     #panic("edit")
   }
   reparsed := ts.parse(parser, parsed.tree, "int xyz;")
-  if !reparsed.ok {
+  if io.failed(reparsed.failure) {
     #panic("reparse")
   }
   defer ts.tree_destroy_owned(reparsed.tree)
@@ -86,7 +86,7 @@ fn main() {
     #panic("copy changed")
   }
   malformed := ts.parse(parser, nil, "int = ;")
-  if !malformed.ok {
+  if io.failed(malformed.failure) {
     #panic("error tree")
   }
   defer ts.tree_destroy_owned(malformed.tree)
@@ -102,7 +102,7 @@ use "std/strings"
 use "std/bytes"
 fn main() {
   compiled := regex.compile_owned("name=([a-z]+)", 0)
-  if !compiled.ok {
+  if io.failed(compiled.failure) {
     #panic("regex compile")
   }
   defer regex.pattern_destroy_owned(compiled.pattern)
@@ -113,7 +113,7 @@ fn main() {
   defer regex.match_data_destroy_owned(data)
   subject := "name=ada"
   matched := regex.match(compiled.pattern, data, subject, 0)
-  if !matched.ok || !matched.matched {
+  if io.failed(matched.failure) || !matched.matched {
     #panic("match")
   }
   span := regex.capture(data, 1)
@@ -121,19 +121,19 @@ fn main() {
     #panic("capture")
   }
   absent := regex.match(compiled.pattern, data, "123", 0)
-  if !absent.ok || absent.matched {
+  if io.failed(absent.failure) || absent.matched {
     #panic("no-match status")
   }
-  if regex.match(compiled.pattern, data, subject, 999).ok {
+  if !io.failed(regex.match(compiled.pattern, data, subject, 999).failure) {
     #panic("start validation")
   }
   invalid := regex.compile_owned("(", 0)
-  if invalid.ok {
+  if !io.failed(invalid.failure) {
     regex.pattern_destroy_owned(invalid.pattern)
     #panic("invalid pattern accepted")
   }
   unicode := regex.compile_owned("(.)?", regex.Utf | regex.Ucp)
-  if !unicode.ok {
+  if io.failed(unicode.failure) {
     #panic("Unicode compile")
   }
   defer regex.pattern_destroy_owned(unicode.pattern)
@@ -143,11 +143,11 @@ fn main() {
   }
   defer regex.match_data_destroy_owned(unicode_data)
   bad_utf: [1]u8 = [255]
-  if regex.match(unicode.pattern, unicode_data, bad_utf[..], 0).ok {
+  if !io.failed(regex.match(unicode.pattern, unicode_data, bad_utf[..], 0).failure) {
     #panic("invalid UTF accepted")
   }
   empty_match := regex.match(unicode.pattern, unicode_data, "", 0)
-  if !empty_match.ok || !empty_match.matched || regex.capture(unicode_data, 1).set {
+  if io.failed(empty_match.failure) || !empty_match.matched || regex.capture(unicode_data, 1).set {
     #panic("unset capture")
   }
   io.println("PCRE2: captured ada; no-match and invalid pattern handled")
@@ -163,39 +163,39 @@ fn main() {
     #panic("Lua allocation")
   }
   defer lua.destroy_owned(state)
-  if !lua.execute(state, "return 6 * 7").ok {
+  if io.failed(lua.execute(state, "return 6 * 7").failure) {
     #panic("Lua evaluation")
   }
   answer := lua.integer(state, -1)
-  if !answer.ok || answer.value != 42 {
+  if io.failed(answer.failure) || answer.value != 42 {
     #panic("Lua result")
   }
   if !lua.pop(state, 1) {
     #panic("Lua pop")
   }
-  if !lua.execute(state, "return 'hello'").ok {
+  if io.failed(lua.execute(state, "return 'hello'").failure) {
     #panic("Lua string")
   }
   text := lua.bytes(state, -1)
-  if !text.ok || !bytes.equal(text.value, "hello") {
+  if io.failed(text.failure) || !bytes.equal(text.value, "hello") {
     #panic("Lua bytes")
   }
   _ = lua.pop(state, 1) // text expires here.
-  if lua.execute(state, "return (").ok || lua.stack_size(state) != 1 {
+  if !io.failed(lua.execute(state, "return (").failure) || lua.stack_size(state) != 1 {
     #panic("Lua syntax failure")
   }
   _ = lua.pop(state, 1)
-  if lua.execute(state, "return missing()").ok {
+  if !io.failed(lua.execute(state, "return missing()").failure) {
     #panic("Lua runtime failure")
   }
   _ = lua.pop(state, 1)
   if lua.stack_size(state) != 0 || lua.pop(state, 1) {
     #panic("Lua stack balance")
   }
-  if !lua.execute(state, "").ok || lua.stack_size(state) != 1 {
+  if io.failed(lua.execute(state, "").failure) || lua.stack_size(state) != 1 {
     #panic("empty Lua chunk")
   }
-  if lua.bytes(state, -1).ok || lua.integer(state, 0).ok {
+  if !io.failed(lua.bytes(state, -1).failure) || !io.failed(lua.integer(state, 0).failure) {
     #panic("Lua result validation")
   }
   _ = lua.pop(state, 1)
@@ -223,7 +223,7 @@ fn main() {
     #panic("read archive")
   }
   opened := archive.open_memory_owned(loaded.value)
-  if !opened.ok {
+  if io.failed(opened.failure) {
     #panic("open archive")
   }
   defer {
@@ -235,7 +235,7 @@ fn main() {
     if entry.end {
       break
     }
-    if !entry.ok {
+    if io.failed(entry.failure) {
       #panic("archive header")
     }
     name := archive.entry_name(entry.entry, 4096)
@@ -245,7 +245,7 @@ fn main() {
     io.println("{}", name.value)
     for true {
       read := archive.read(opened.reader, buffer[..])
-      if !read.ok {
+      if io.failed(read.failure) {
         #panic("archive data")
       }
       if read.end {
@@ -275,7 +275,7 @@ fn main() {
   url: [4096]u8
   response: [16384]u8
   result := curl.get_into(args[1], url[..], response[..], 5000)
-  if !result.ok {
+  if io.failed(result.failure) {
     #panic("HTTP transfer failed or buffer full")
   }
   io.println("HTTP {}", result.http_status)
@@ -649,16 +649,16 @@ fn main() {
   url: [4096]u8
   output: [256]u8
   result := curl.get_into(args[1], url[..], output[..], 5000)
-  if !result.ok || result.http_status != 200 || !bytes.equal(output[..result.written], "vendor transfer\n") { #panic("transfer") }
+  if io.failed(result.failure) || result.http_status != 200 || !bytes.equal(output[..result.written], "vendor transfer\n") { #panic("transfer") }
   missing := curl.get_into(args[2], url[..], output[..], 5000)
-  if !missing.ok || missing.http_status != 404 { #panic("HTTP status is not transport error") }
+  if io.failed(missing.failure) || missing.http_status != 404 { #panic("HTTP status is not transport error") }
   small: [1]u8
   overflow := curl.get_into(args[1], url[..], small[..], 5000)
-  if overflow.ok || !overflow.capacity_exceeded || overflow.written > 1 { #panic("bounded output") }
-  if curl.get_into(args[1], small[..], output[..], 5000).ok { #panic("URL capacity") }
-  if curl.get_into("http://invalid\x00suffix", url[..], output[..], 5000).ok { #panic("URL NUL") }
-  if curl.get_into(args[1], url[..], output[..], 0).ok { #panic("timeout validation") }
-  if curl.get_into("file:///etc/passwd", url[..], output[..], 5000).ok { #panic("protocol restriction") }
+  if !io.failed(overflow.failure) || !overflow.capacity_exceeded || overflow.written > 1 { #panic("bounded output") }
+  if !io.failed(curl.get_into(args[1], small[..], output[..], 5000).failure) { #panic("URL capacity") }
+  if !io.failed(curl.get_into("http://invalid\x00suffix", url[..], output[..], 5000).failure) { #panic("URL NUL") }
+  if !io.failed(curl.get_into(args[1], url[..], output[..], 0).failure) { #panic("timeout validation") }
+  if !io.failed(curl.get_into("file:///etc/passwd", url[..], output[..], 5000).failure) { #panic("protocol restriction") }
 }
 ''',
     'provider-abi': r'''use "vendor/tree_sitter" ts

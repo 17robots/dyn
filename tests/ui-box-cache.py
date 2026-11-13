@@ -10,7 +10,7 @@ DYN = str(Path(os.environ.get('DYN', ROOT/'build/dyn-release')).resolve())
 SOURCE = r'''use "std/ui/box" box
 use "std/mem" mem
 fn check(ok: bool, why: []const u8) { if !ok { #panic(why) } }
-fn measure(data: rawptr, text: []const u8) f32 { _ = data
+fn measure(data: *u8, text: []const u8) f32 { _ = data
   return #cast(f32, #len(text)) * 8.0 }
 fn start(state: *box.State, frame: *mem.Arena) {
   mem.arena_reset(frame)

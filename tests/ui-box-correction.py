@@ -15,7 +15,7 @@ use "std/io" errors
 use "std/bytes" bytes
 use "vendor/window/events" events
 fn check(ok: bool, why: []const u8) { if !ok { #panic(why) } }
-fn measure(data: rawptr, text: []const u8) f32 { _ = data
+fn measure(data: *u8, text: []const u8) f32 { _ = data
   return #cast(f32,#len(text))*8.0 }
 struct App { storage: [64]u8, edit: box.Edit, changed: bool, error: errors.Kind }
 fn frame(state: *box.State, arena: *mem.Arena, app: *App, input: box.Input) {

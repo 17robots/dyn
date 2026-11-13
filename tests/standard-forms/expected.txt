@@ -23,5 +23,6 @@ only wildcard
 edit once
 calls 2
 fresh 100 0
+run 4 -1
 unit Unit{name: ada, at: Vec2{x: 1.5, y: 2}, op: Sub} at Vec2{x: 1.5, y: 2} op Sub errno 2
 op true true

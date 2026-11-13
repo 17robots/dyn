@@ -22,8 +22,7 @@ use "std/io" errors
 '''
 SOURCE = IMPORTS + r'''
 struct Shared { gate: sync.AtomicU32, arrived: sync.AtomicU32, value: u32 }
-fn worker(context: rawptr) isize {
-  shared := #cast(*Shared, context)
+fn worker(shared: *Shared) isize {
   sync.store_u32(&shared.arrived, 1)
   for sync.load_u32(&shared.gate) == 0 { _ = thread.yield_now() }
   shared.value = 42
@@ -56,15 +55,16 @@ fn main() {
     invalid(thread.spawn_with_size(arena, #cast(usize, size), worker, nil), arena, mark)
     invalid(thread.spawn(arena, stack[..size], worker, nil), arena, mark)
   }
-  invalid(thread.spawn_with_size(arena, 131072, nil, nil), arena, mark)
-  invalid(thread.spawn(arena, stack[..], nil, nil), arena, mark)
+  no_entry: fn(*Shared) isize = nil
+  invalid(thread.spawn_with_size(arena, 131072, no_entry, nil), arena, mark)
+  invalid(thread.spawn(arena, stack[..], no_entry, nil), arena, mark)
   first := Shared{}
   second := Shared{}
-  owned := thread.spawn_with_size(arena, 131072, worker, #cast(rawptr, &first))
+  owned := thread.spawn_with_size(arena, 131072, worker, &first)
   if owned.failure.kind != errors.Kind.Ok || owned.value == nil || owned.failure.kind != errors.Kind.Ok || owned.failure.native != 0 { #panic("owned spawn") }
   stable := owned.value
   owned_mark := mem.arena_mark(arena)
-  borrowed := thread.spawn(arena, stack[..], worker, #cast(rawptr, &second))
+  borrowed := thread.spawn(arena, stack[..], worker, &second)
   if borrowed.failure.kind != errors.Kind.Ok || borrowed.value == nil || borrowed.failure.kind != errors.Kind.Ok || borrowed.failure.native != 0 { #panic("borrowed spawn") }
   if borrowed.value == stable || owned.value != stable || owned_mark <= mark { #panic("stable distinct nodes") }
   for sync.load_u32(&first.arrived) == 0 || sync.load_u32(&second.arrived) == 0 { _ = thread.yield_now() }
@@ -95,7 +95,7 @@ fn main() {
 }
 '''
 EXHAUSTION = IMPORTS + r'''
-fn forbidden(context: rawptr) isize { if context == nil { #panic("WORKER_STARTED") }
+fn forbidden(context: *u8) isize { if context == nil { #panic("WORKER_STARTED") }
 return 0 }
 fn main() {
   backing: [mem.ArenaBufferOverhead]u8

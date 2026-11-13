@@ -42,28 +42,36 @@ pub fn open_with_options(name: []const u8, buffer: []u8, options: OpenOptions) O
   }
   return OpenResult{ database: database, code: code }
 }
-pub fn close(database: Database) i32 {
-  if database == nil {
-    return 0
+// A SQLite result code as a failure: SQLITE_OK (0) succeeds, and native keeps
+// any other code.
+fn code_failure(code: i32) io.Failure {
+  if code == 0 {
+    return io.Failure{}
   }
-  return sqlite_close(database)
+  return io.Failure{ kind: io.Kind.System, native: #cast(isize, code) }
+}
+pub fn close(database: Database) io.Failure {
+  if database == nil {
+    return io.Failure{}
+  }
+  return code_failure(sqlite_close(database))
 }
 
 // SQL is borrowed only for call. SQLite owns returned error; wrapper releases it.
-pub fn execute(database: Database, sql: []const u8, buffer: []u8) i32 {
+pub fn execute(database: Database, sql: []const u8, buffer: []u8) io.Failure {
   if database == nil {
-    return -1
+    return code_failure(-1)
   }
   encoded := c.string_into(buffer, sql)
   if encoded.failure.kind != parse.Kind.Ok {
-    return string_error(encoded.failure.kind)
+    return code_failure(string_error(encoded.failure.kind))
   }
   error: rawptr = nil
   code := sqlite_exec(database, encoded.value, nil, nil, &error)
   if error != nil {
     sqlite_free(error)
   }
-  return code
+  return code_failure(code)
 }
 
 // Returned bytes borrow database and expire at next SQLite call or close.

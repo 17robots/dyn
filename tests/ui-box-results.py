@@ -12,7 +12,7 @@ use "std/ui/box" box
 use "std/mem" mem
 use "std/bytes" bytes
 
-fn measure(data: rawptr, text: []const u8) f32 {
+fn measure(data: *u8, text: []const u8) f32 {
   _ = data
   return 8.0 * #cast(f32, #len(text))
 }

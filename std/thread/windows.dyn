@@ -8,10 +8,10 @@ pub struct Thread { native: win.Thread }
 // Windows owns the actual stack; the slice length requests its initial size.
 // Keep the arena, Thread, and context alive/unmoved until successful join.
 // Fixed arena exhaustion panics; native spawn failure restores the arena mark.
-pub fn spawn(arena: *mem.Arena, stack: []u8, entry: fn(rawptr) isize, context: rawptr) SpawnResult {
-  return spawn_with_size(arena, #len(stack), entry, context)
+fn spawn_untyped(arena: *mem.Arena, stack: []u8, entry: fn(rawptr) isize, context: rawptr) SpawnResult {
+  return spawn_with_size_untyped(arena, #len(stack), entry, context)
 }
-pub fn spawn_with_size(arena: *mem.Arena, stack_size: usize, entry: fn(rawptr) isize, context: rawptr) SpawnResult {
+fn spawn_with_size_untyped(arena: *mem.Arena, stack_size: usize, entry: fn(rawptr) isize, context: rawptr) SpawnResult {
   if stack_size < 256 || entry == nil {
     return SpawnResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }

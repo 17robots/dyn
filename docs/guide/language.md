@@ -99,9 +99,10 @@ operation.
 A function takes a type in one of two ways, and which one is not a choice:
 
 - **Inferred.** When an argument supplies the type, write `$T` inside that parameter's type, at
-  every parameter that supplies it: `a: $T`, `p: *$T`, `s: []$T`, `box: Box($T)`. The call
-  passes only values, as in `sort.sort(values)`. Arguments must agree exactly, with no implicit
-  widening.
+  every parameter that supplies it: `a: $T`, `p: *$T`, `s: []$T`, `box: Box($T)`,
+  `entry: fn(*$C) isize`. The call passes only values, as in `sort.sort(values)`. Arguments must
+  agree exactly, with no implicit widening; a number literal or `nil` takes the type the other
+  arguments give, so `thread.spawn(arena, stack, worker, nil)` infers `C` from `worker`.
 - **Passed.** When no argument supplies it, because only the result or the body uses it, write
   `T: type`, or `K, V: type` for several. The call passes the type first, as in
   `mem.push(Node, &arena)`.

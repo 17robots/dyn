@@ -41,6 +41,10 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
   acquire and give back an OS resource. `init(&x, ...)` fills storage the
   caller already has. A conversion names its result first, then its source:
   `X_from_Y`.
+- **Callbacks are typed.** A function that calls back takes `fn(*$C, ...)` and
+  the matching `context: *$C`, so the callback receives its own type. Only
+  stored, type-erased seams (`io.Reader`, `io.Writer`, `thread.Spawner`) and
+  C ABI boundaries keep `rawptr`.
 - **Panics are for bugs.** Broken invariants, out-of-bounds access and
   exhausted arenas panic. There is no recovery.
 - **Native resources are explicit.** Files, sockets, threads, loaded libraries

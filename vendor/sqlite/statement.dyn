@@ -70,53 +70,53 @@ pub fn step(statement: *Statement) StepResult {
 
 // Always resets execution state, even when reporting the preceding execution's
 // error. Parameter values survive reset; use clear_bindings to release them.
-pub fn reset(statement: *Statement) i32 {
+pub fn reset(statement: *Statement) io.Failure {
   if statement.handle == nil {
-    return InvalidArgument
+    return code_failure(InvalidArgument)
   }
   code := sqlite_reset(statement.handle)
   statement.state = State.Ready
   statement.code = 0
-  return code
+  return code_failure(code)
 }
 
 // Releases ownership and zeros the caller's slot even if SQLite reports a prior
 // execution error. Finalizing the same slot again succeeds without provider access.
-pub fn finalize(statement: *Statement) i32 {
+pub fn finalize(statement: *Statement) io.Failure {
   handle := statement.handle
   statement.* = Statement{}
   if handle == nil {
-    return 0
+    return io.Failure{}
   }
-  return sqlite_finalize(handle)
+  return code_failure(sqlite_finalize(handle))
 }
 
 fn can_bind(statement: *const Statement) bool {
   return statement.handle != nil && statement.state == State.Ready
 }
-pub fn clear_bindings(statement: *Statement) i32 {
+pub fn clear_bindings(statement: *Statement) io.Failure {
   if !can_bind(statement) {
-    return InvalidArgument
+    return code_failure(InvalidArgument)
   }
-  return sqlite_clear_bindings(statement.handle)
+  return code_failure(sqlite_clear_bindings(statement.handle))
 }
-pub fn bind_null(statement: *Statement, index: i32) i32 {
+pub fn bind_null(statement: *Statement, index: i32) io.Failure {
   if !can_bind(statement) {
-    return InvalidArgument
+    return code_failure(InvalidArgument)
   }
-  return sqlite_bind_null(statement.handle, index)
+  return code_failure(sqlite_bind_null(statement.handle, index))
 }
-pub fn bind_i64(statement: *Statement, index: i32, value: i64) i32 {
+pub fn bind_i64(statement: *Statement, index: i32, value: i64) io.Failure {
   if !can_bind(statement) {
-    return InvalidArgument
+    return code_failure(InvalidArgument)
   }
-  return sqlite_bind_integer(statement.handle, index, value)
+  return code_failure(sqlite_bind_integer(statement.handle, index, value))
 }
-pub fn bind_f64(statement: *Statement, index: i32, value: f64) i32 {
+pub fn bind_f64(statement: *Statement, index: i32, value: f64) io.Failure {
   if !can_bind(statement) {
-    return InvalidArgument
+    return code_failure(InvalidArgument)
   }
-  return sqlite_bind_float(statement.handle, index, value)
+  return code_failure(sqlite_bind_float(statement.handle, index, value))
 }
 fn bind_bytes(statement: *Statement, index: i32, value: []const u8, text: bool) i32 {
   if !can_bind(statement) {
@@ -139,19 +139,19 @@ fn bind_bytes(statement: *Statement, index: i32, value: []const u8, text: bool) 
 }
 // SQLite copies bindings before return. Text must be valid UTF-8 without NUL;
 // use blobs for arbitrary bytes. Inputs may be changed immediately after binding.
-pub fn bind_text(statement: *Statement, index: i32, value: []const u8) i32 {
+pub fn bind_text(statement: *Statement, index: i32, value: []const u8) io.Failure {
   if !utf8.valid(value) {
-    return InvalidArgument
+    return code_failure(InvalidArgument)
   }
   for byte in value {
     if byte == 0 {
-      return InvalidArgument
+      return code_failure(InvalidArgument)
     }
   }
-  return bind_bytes(statement, index, value, true)
+  return code_failure(bind_bytes(statement, index, value, true))
 }
-pub fn bind_blob(statement: *Statement, index: i32, value: []const u8) i32 {
-  return bind_bytes(statement, index, value, false)
+pub fn bind_blob(statement: *Statement, index: i32, value: []const u8) io.Failure {
+  return code_failure(bind_bytes(statement, index, value, false))
 }
 
 pub fn column_count(statement: *const Statement) i32 {

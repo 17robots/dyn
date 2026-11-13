@@ -1687,7 +1687,9 @@ static bool untyped_literal(DynAstProgram *a, DynExprId id) {
   DynAstExpr e = a->expressions[id];
   if (e.kind == DYN_EXPR_UNARY && e.op == DYN_OP_NEG)
     return untyped_literal(a, e.left);
-  return e.kind == DYN_EXPR_INT || e.kind == DYN_EXPR_FLOAT || e.kind == DYN_EXPR_CHAR;
+  /* nil, like a number, takes its type from the other arguments. */
+  return e.kind == DYN_EXPR_INT || e.kind == DYN_EXPR_FLOAT || e.kind == DYN_EXPR_CHAR ||
+         e.kind == DYN_EXPR_NIL;
 }
 /* Match a parameter pattern against an argument type, binding type
    parameters. Returns false only on a conflicting binding. A shape that does
@@ -1738,6 +1740,16 @@ static bool bind_pattern(DynAstProgram *a, DynType pattern, DynType actual,
                 v = a->arrays[actual - DYN_TYPE_ARRAY_BASE];
     return p.length == v.length ? bind_pattern(a, p.element, v.element, args, conflict) : true;
   }
+  if (dyn_type_is_function(pattern) && dyn_type_is_function(actual)) {
+    /* fn(*$C) isize matches a named function: its parameters and result bind. */
+    DynAstFnType p = a->fn_types[pattern - DYN_TYPE_FN_BASE],
+                 v = a->fn_types[actual - DYN_TYPE_FN_BASE];
+    if (p.param_count != v.param_count || p.variadic != v.variadic) return true;
+    for (uint32_t i = 0; i < p.param_count; ++i)
+      if (!bind_pattern(a, a->fn_type_params[p.param_start + i], a->fn_type_params[v.param_start + i], args, conflict))
+        return false;
+    return bind_pattern(a, p.return_type, v.return_type, args, conflict);
+  }
   return true;
 }
 /* Whether a parameter pattern mentions type parameter `param` anywhere, as in
@@ -1764,6 +1776,12 @@ static bool pattern_mentions(DynAstProgram *a, DynType pattern, DynType param,
     return pattern_mentions(a, a->slices[pattern - DYN_TYPE_SLICE_BASE].element, param, depth + 1);
   if (dyn_type_is_array(pattern))
     return pattern_mentions(a, a->arrays[pattern - DYN_TYPE_ARRAY_BASE].element, param, depth + 1);
+  if (dyn_type_is_function(pattern)) {
+    DynAstFnType f = a->fn_types[pattern - DYN_TYPE_FN_BASE];
+    for (uint32_t i = 0; i < f.param_count; ++i)
+      if (pattern_mentions(a, a->fn_type_params[f.param_start + i], param, depth + 1)) return true;
+    return pattern_mentions(a, f.return_type, param, depth + 1);
+  }
   return false;
 }
 /* Generic symbols need canonical type identity, not diagnostic names (which

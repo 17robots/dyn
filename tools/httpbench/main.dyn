@@ -95,8 +95,7 @@ fn exchange(connection: *net.Connection, request: []const u8, storage: []u8) boo
   return false
 }
 
-fn client_main(context: rawptr) isize {
-  client := #cast(*Client, context)
+fn client_main(client: *Client) isize {
   storage: [ReceiveSize]u8
   opened := net.tcp_connect_ipv4(&client.shared.address)
   if opened.failure.kind != io.Kind.Ok {

@@ -12,7 +12,7 @@ use "std/ui/box" box
 use "std/mem" mem
 use "std/bytes" bytes
 fn check(ok: bool, message: []const u8) { if !ok { #panic(message) } }
-fn measure(data: rawptr, text: []const u8) f32 { _ = data
+fn measure(data: *u8, text: []const u8) f32 { _ = data
   return #cast(f32, #len(text)) * 8.0
 }
 fn start(state: *box.State, frame: *mem.Arena, context: *ui.Context, input: box.Input) {

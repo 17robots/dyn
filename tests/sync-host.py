@@ -15,8 +15,7 @@ struct Shared {
   mutex: sync.Mutex, condition: sync.Condition, gate: sync.Semaphore,
   once: sync.Once, arrived: u32, completed: u32, total: u64, value: u64
 }
-fn worker(context: rawptr) isize {
-  shared := #cast(*Shared, context)
+fn worker(shared: *Shared) isize {
   sync.lock(&shared.mutex)
   shared.arrived += 1
   sync.condition_broadcast(&shared.condition)
@@ -47,7 +46,7 @@ fn main() {
   sync.unlock(&shared.mutex)
   threads: [4]*thread.Thread
   for i in 0..4 {
-    spawned:=thread.spawn_with_size(arena,131072,worker,#cast(rawptr,&shared))
+    spawned:=thread.spawn_with_size(arena,131072,worker,&shared)
     if spawned.failure.kind != io.Kind.Ok { #panic("spawn") }
     threads[i]=spawned.value
   }

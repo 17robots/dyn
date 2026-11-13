@@ -64,7 +64,7 @@ fn main() {
  result:=sqlite.open(":memory:",backing[1..10])
  if io.failed(result.failure) || result.database==nil { #panic("SQLite exact CString buffer") }
  if backing[0]!=165 || backing[10]!=165 { #panic("SQLite CString canaries") }
- if sqlite.close(result.database)!=0 { #panic("SQLite close") }
+ if io.failed(sqlite.close(result.database)) { #panic("SQLite close") }
 }
 '''
 

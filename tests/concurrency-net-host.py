@@ -16,8 +16,7 @@ use "std/io" errors
 use "std/sync"
 use "std/bytes"
 struct Context { listener: net.Listener, ready: sync.AtomicU32, count: sync.AtomicU64 }
-fn worker(context: rawptr) isize {
-  shared := #cast(*Context, context)
+fn worker(shared: *Context) isize {
   for sync.load_u32(&shared.ready) == 0 { _ = thread.yield_now() }
   accepted := net.listener_accept(&shared.listener)
   if accepted.failure.kind != io.Kind.Ok { #panic("accept") }
@@ -53,7 +52,7 @@ fn main() {
   if net.local_address(shared.listener.descriptor, &local).failure.kind != io.Kind.Ok || local.length != 16 { #panic("local address") }
   port := (#cast(u16, local.bytes[2]) << 8) | #cast(u16, local.bytes[3])
   if port == 0 { #panic("ephemeral port") }
-  spawned:=thread.spawn(arena, stack[..], worker, #cast(rawptr, &shared))
+  spawned:=thread.spawn(arena, stack[..], worker, &shared)
   if spawned.failure.kind != io.Kind.Ok || spawned.failure.kind!=errors.Kind.Ok || spawned.failure.native!=0 || spawned.value==nil { #panic("spawn") }
   active:=spawned.value
   if thread.id(active)==0 { #panic("active ownership") }

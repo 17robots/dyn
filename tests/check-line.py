@@ -42,7 +42,7 @@ fn down(n: u64) u64 {
   return down(n - 1) + 1
 }
 
-fn worker(context: rawptr) isize {
+fn worker(context: *u8) isize {
   _ = context
   return #cast(isize, down(100000000))
 }

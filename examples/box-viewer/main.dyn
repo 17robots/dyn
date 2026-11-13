@@ -38,8 +38,7 @@ struct App {
   match_count: usize,
 }
 
-fn measure(data: rawptr, text: []const u8) f32 {
-  atlas := #cast(*font.Atlas, data)
+fn measure(atlas: *font.Atlas, text: []const u8) f32 {
   width: i32 = 0
   for byte in text {
     width += font.atlas_glyph(atlas, byte).advance

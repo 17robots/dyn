@@ -32,7 +32,7 @@ fn bitmap(data: rawptr, codepoint: u32) software.Glyph {
   return software.Glyph{ pixels: coverage[..], width: 6, height: 8, stride: 6, advance: 7, y_offset: 2 }
 }
 
-fn measure(data: rawptr, text: []const u8) f32 {
+fn measure(data: *u8, text: []const u8) f32 {
   _ = data
   return 7.0 * #cast(f32, #len(text))
 }

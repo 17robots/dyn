@@ -636,8 +636,7 @@ fn sweep_idle(worker: *Worker, now: i64) {
   }
 }
 
-fn worker_main(context: rawptr) isize {
-  worker := #cast(*Worker, context)
+fn worker_main(worker: *Worker) isize {
   last_sweep := now_milliseconds()
   for sync.load_u32(&worker.stopping) == 0 {
     mark := mem.arena_mark(worker.scratch)
@@ -745,7 +744,7 @@ fn start_worker(arena: *mem.Arena, worker: *Worker) io.Failure {
     return added.failure
   }
   if config.spawner != nil {
-    worker.native = config.spawner.spawn(config.spawner.data, arena, config.stack_size, worker_main, worker)
+    worker.native = config.spawner.spawn(config.spawner.data, arena, config.stack_size, #cast(fn(rawptr) isize, worker_main), worker)
     if worker.native == nil {
       event.close(&worker.queue)
       return io.Failure{ kind: io.Kind.System }

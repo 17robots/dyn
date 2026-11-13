@@ -1,11 +1,11 @@
 pub enum TransactionMode { Deferred, Immediate, Exclusive }
 pub struct IntegerResult { value: i64, code: i32, failure: io.Failure }
 // Applies to subsequent busy waits on this connection. Zero disables waiting.
-pub fn busy_timeout(database: Database, milliseconds: i32) i32 {
+pub fn busy_timeout(database: Database, milliseconds: i32) io.Failure {
   if database == nil || milliseconds < 0 {
-    return InvalidArgument
+    return code_failure(InvalidArgument)
   }
-  return sqlite_busy_timeout(database, milliseconds)
+  return code_failure(sqlite_busy_timeout(database, milliseconds))
 }
 pub fn changes(database: Database) IntegerResult {
   if database == nil {
@@ -30,20 +30,20 @@ fn transaction_command(database: Database, command: *const u8) i32 {
   }
   return sqlite_exec(database, command, nil, nil, nil)
 }
-pub fn begin(database: Database, mode: TransactionMode) i32 {
+pub fn begin(database: Database, mode: TransactionMode) io.Failure {
   command := "BEGIN DEFERRED\0"
   if mode == TransactionMode.Immediate {
     command = "BEGIN IMMEDIATE\0"
   } else if mode == TransactionMode.Exclusive {
     command = "BEGIN EXCLUSIVE\0"
   }
-  return transaction_command(database, &command[0])
+  return code_failure(transaction_command(database, &command[0]))
 }
-pub fn commit(database: Database) i32 {
+pub fn commit(database: Database) io.Failure {
   command := "COMMIT\0"
-  return transaction_command(database, &command[0])
+  return code_failure(transaction_command(database, &command[0]))
 }
-pub fn rollback(database: Database) i32 {
+pub fn rollback(database: Database) io.Failure {
   command := "ROLLBACK\0"
-  return transaction_command(database, &command[0])
+  return code_failure(transaction_command(database, &command[0]))
 }
