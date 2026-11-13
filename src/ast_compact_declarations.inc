@@ -1014,6 +1014,7 @@ typedef struct {
   CompactNode *found;
   bool failed;
 } InstanceScan;
+#ifndef _WIN32 /* Windows builds scan serially (compact_create_instances_parallel). */
 static void instance_scan_node(InstanceScan *w, CompactNode n, unsigned depth) {
   if (compact_null(n) || depth > 2048 || w->failed) return;
   uint16_t kind = compact_kind(n);
@@ -1047,6 +1048,7 @@ static void compact_create_found(CompactNode n, const DynSource *s, DynAstProgra
     (void)compact_instance(callee, compact_next(callee), s, a);
   }
 }
+#endif
 /* Creates every instance the bodies name; false means the parallel scan
    could not run and the caller walks serially. */
 static bool compact_create_instances_parallel(const BodyJob *jobs, size_t count, unsigned workers,

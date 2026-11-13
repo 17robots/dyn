@@ -310,7 +310,11 @@ def bounded_combo(name, types, combo):
     of time or stack space. Any remaining timeout is a qualification failure.
     """
     result = list(combo)
-    if name in ('loop_nested', 'loop_forever', 'loop_condition_div', 'generic_recursion'):
+    # Recursion depth is work too: release builds turn rec_panic's tail
+    # call into a loop, so an unbounded depth runs for ages instead of
+    # overflowing the stack.
+    if name in ('loop_nested', 'loop_forever', 'loop_condition_div', 'generic_recursion',
+                'factorial', 'rec_panic', 'rec_entry', 'mutual_even', 'mutual_odd'):
         result[0] = str(int(result[0]) % 65)
     elif name == 'range_bound_panic':
         # Preserve a+1 overflow and divide-by-zero cases, otherwise bound work.
@@ -486,6 +490,17 @@ def outcome(status, stdout, stderr):
         return 'stack overflow', stdout, b''
     if isinstance(status, int) and (status < 0 or status >= 0xC0000000):
         return 'crash', stdout, b''
+    # A stack trace lists one line per frame. Frame sizes differ between
+    # targets, so a recursion that overflows the stack runs to a different
+    # depth on each: repeated frames compare as one.
+    # A trace cut short ("... N more frames") is a recursion that overflowed
+    # the stack, and where it ran out, frame for frame, depends on the target
+    # too: such a report compares by its message alone.
+    if b' more frames\n' in stderr:
+        return status, stdout, stderr.split(b'\n', 1)[0]
+    lines = stderr.split(b'\n')
+    stderr = b'\n'.join(line for i, line in enumerate(lines)
+                         if not (i and line == lines[i - 1] and line.startswith(b'  at ')))
     return status, stdout, stderr
 
 def run_cases(prefix, binary, count, directory, jobs):

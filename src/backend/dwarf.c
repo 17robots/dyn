@@ -370,7 +370,8 @@ static bool information(BackendDwarf *d,BackendDwarfOutput *out) {
        by start, outer ranges before the ranges they contain. */
     size_t first=f->first_variable,count=f->last_variable-first,scoped=0;
     size_t *order=count?malloc(count*sizeof(*order)):NULL;
-    size_t stack_begin[64],stack_end[64]; unsigned open=0;
+    /* sibling_end[k]: where the last block closed at depth k ended. */
+    size_t stack_begin[64],stack_end[64],sibling_end[65]={0}; unsigned open=0;
     if (count && !order) ok=false;
     for (size_t v=0;ok && v<count;++v) {
       Variable *variable=&d->variables[first+v];
@@ -382,15 +383,26 @@ static bool information(BackendDwarf *d,BackendDwarfOutput *out) {
       for (;y && scope_before(&d->variables[value],&d->variables[order[y-1]]);--y) order[y]=order[y-1];
       order[y]=value;
     }
+    /* Optimized or reordered code can interleave scopes, so a range may
+       start inside a block and end past it, or overlap the block before it.
+       DWARF needs blocks nested and siblings disjoint: a range is cut to its
+       enclosing block and starts after its previous sibling; one cut to
+       nothing leaves its variable in the enclosing block. */
     for (size_t x=0;ok && x<scoped;++x) {
       Variable *variable=&d->variables[order[x]];
-      while (ok && open && !(stack_begin[open-1]<=variable->begin && variable->end<=stack_end[open-1])) { ok=uleb(b,0); --open; }
-      if (ok && !(open && stack_begin[open-1]==variable->begin && stack_end[open-1]==variable->end)) {
-        if (open==64) { ok=uleb(b,0); --open; }
+      size_t begin=variable->begin,end=variable->end;
+      while (ok && open && !(stack_begin[open-1]<=begin && begin<stack_end[open-1])) {
+        ok=uleb(b,0); --open; sibling_end[open]=stack_end[open];
+      }
+      if (open && end>stack_end[open-1]) end=stack_end[open-1];
+      if (begin<sibling_end[open]) begin=sibling_end[open];
+      bool same=open && stack_begin[open-1]==begin && stack_end[open-1]==end;
+      if (ok && begin<end && !same) {
+        if (open==64) { ok=uleb(b,0); --open; sibling_end[open]=stack_end[open]; }
         ok=ok && uleb(b,14) &&
-           relocation(out,BACKEND_DWARF_INFO,BACKEND_DWARF_TEXT,address_relocation(d),(int64_t)variable->begin) &&
-           number(b,variable->end-variable->begin,8);
-        stack_begin[open]=variable->begin; stack_end[open++]=variable->end;
+           relocation(out,BACKEND_DWARF_INFO,BACKEND_DWARF_TEXT,address_relocation(d),(int64_t)begin) &&
+           number(b,end-begin,8);
+        stack_begin[open]=begin; stack_end[open++]=end; sibling_end[open]=0;
       }
       ok=ok && emit_variable(out,b,variable,&refs,&ref_count,&ref_capacity);
     }

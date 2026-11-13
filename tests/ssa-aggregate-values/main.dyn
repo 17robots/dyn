@@ -125,6 +125,25 @@ fn corner_sum(k: i64) f32 {
   return c[0] + c[1] + c[2] + c[3] + d[2]
 }
 
+// Structs of three or four floats: AArch64 returns them in v0-v3 (HFAs);
+// x86-64 System V sends the parts past XMM1 through x87.
+struct Quad { a: f32, b: f32, c: f32, d: f32 }
+struct Triple { x: f64, y: f64, z: f64 }
+
+fn quad(x: f32) Quad {
+  return Quad{ a: x, b: x + 1.0, c: x * 2.0, d: x - 0.5 }
+}
+
+fn triple(x: f64) Triple {
+  return Triple{ x: x * 0.5, y: x + 2.0, z: x * x }
+}
+
+fn hfa_sum(k: i64) f64 {
+  q := quad(#cast(f32, k) + 0.25)
+  t := triple(#cast(f64, q.d))
+  return #cast(f64, q.a + q.b + q.c + q.d) + t.x + t.y + t.z
+}
+
 fn main() {
   shapes: [4]Shape = [make(0, 0.0), make(1, 1.25), make(2, 3.0), make(3, 4.0)]
   for i in 0..4 {
@@ -143,4 +162,5 @@ fn main() {
   quarter: [4]i32 = [4, 8, 12, 16]
   thirds: [3]f64 = [1.0, 2.0, 3.0]
   io.println("{}", mixed(5, shapes[1], quarter, Wide.Value(100), thirds, shapes[3]))
+  io.println("{} {}", hfa_sum(2), hfa_sum(7))
 }

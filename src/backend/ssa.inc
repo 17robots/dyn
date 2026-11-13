@@ -11180,13 +11180,15 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
       SsaMove results[4]; uint32_t parts = 0;
       unsigned integers = 0, floats = 0;
       int32_t values[4] = {block->control, block->control2, block->control3, block->control4};
-      /* Float parts past XMM1 go to the x87 stack: through the x87 slot,
-         loaded last part first so st(0) holds the third float. */
+      /* On x86-64 System V, float parts past XMM1 go to the x87 stack:
+         through the x87 slot, loaded last part first so st(0) holds the
+         third float. AArch64 returns up to four floats in registers (HFAs). */
       unsigned x87 = 0; uint8_t x87_cls[2] = {0, 0};
+      bool x87_results = !ctx->a64 && !ctx->rv64 && !ctx->win64;
       for (unsigned p = 0; p < 4; ++p) {
         if (values[p] < 0) continue;
         SsaMove m = ssa_source(e, values[p]);
-        if (ssa_float_class(m.cls) && floats >= 2) {
+        if (x87_results && ssa_float_class(m.cls) && floats >= 2) {
           m.dst_kind = L_SLOT; m.dst = (int32_t)s->x87_offset + 8 * (int32_t)x87;
           x87_cls[x87++] = m.cls; ++floats;
           ssa_parallel(e, &m, 1);
