@@ -12,7 +12,7 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
-## Unreleased
+## 0.1.0-preview.33
 
 - `#max(T)` and `#min(T)` are the largest and smallest values of an integer
   type, as constants of that type: write `#max(usize)` for `~#cast(usize, 0)`.
