@@ -108,7 +108,7 @@ fn same(arena: *mem.Arena, face: *const font.Face, a, b: u16, size: u16) {
   mark := mem.arena_mark(arena)
   left := font.raster(arena, face, a, size)
   right := font.raster(arena, face, b, size)
-  check(left.failure.kind == parse.Kind.Ok && right.failure.kind == parse.Kind.Ok)
+  check(!parse.failed(left.failure) && !parse.failed(right.failure))
   check(left.value.width == right.value.width && left.value.height == right.value.height)
   check(left.value.x_offset == right.value.x_offset && left.value.y_offset == right.value.y_offset && left.value.advance == right.value.advance)
   check(#len(left.value.pixels) == #len(right.value.pixels))
@@ -119,7 +119,7 @@ fn main() {
   arena := mem.arena_alloc(0)
   defer { mem.arena_release(arena) }
   parsed := font.open(data[..])
-  check(parsed.failure.kind == parse.Kind.Ok)
+  check(!parse.failed(parsed.failure))
 '''
 for a,b in pairs:
     for size in (16,25): SOURCE+=f'  same(arena, &parsed.value, {a}, {b}, {size})\n'

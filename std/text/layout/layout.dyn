@@ -59,7 +59,7 @@ pub fn build(arena: *mem.Arena, source: []const u8, font: Font, requested: Optio
   text: []const u8
   if !options.no_normalize {
     normalized := unicode.normalize(arena, source, unicode.Form.NFC)
-    if normalized.failure.kind != parse.Kind.Ok {
+    if parse.failed(normalized.failure) {
       return Result{ offset: normalized.offset, failure: parse.Failure{ kind: normalized.failure.kind, offset: normalized.offset } }
     }
     text = normalized.value
@@ -69,7 +69,7 @@ pub fn build(arena: *mem.Arena, source: []const u8, font: Font, requested: Optio
     text = copied
   }
   breaks := unicode.line_breaks(arena, text)
-  if breaks.failure.kind != parse.Kind.Ok {
+  if parse.failed(breaks.failure) {
     return Result{ offset: breaks.offset, failure: parse.Failure{ kind: breaks.failure.kind, offset: breaks.offset } }
   }
   count := utf8.codepoint_count(text)

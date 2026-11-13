@@ -253,7 +253,7 @@ pub fn extract(arena: *mem.Arena, archive_entry: Entry) ExtractResult {
   }
   mark := mem.arena_mark(arena)
   result := extract_into(mem.push_bytes_uninit(arena, archive_entry.uncompressed_size), archive_entry)
-  if result.failure.kind != parse.Kind.Ok {
+  if parse.failed(result.failure) {
     mem.arena_rewind(arena, mark)
   }
   return result

@@ -100,10 +100,10 @@ fn json_document(source: []const u8, expected: bool) {
   }
   mark := mem.arena_mark(arena)
   parsed := json.parse(arena, source)
-  if (parsed.failure.kind == parse.Kind.Ok) != expected {
+  if (!parse.failed(parsed.failure)) != expected {
     #panic("JSON parse UTF8 result")
   }
-  if parsed.failure.kind != parse.Kind.Ok && mem.arena_mark(arena) != mark {
+  if parse.failed(parsed.failure) && mem.arena_mark(arena) != mark {
     #panic("JSON allocation rollback")
   }
   for byte in #slice(prefix, 7) {

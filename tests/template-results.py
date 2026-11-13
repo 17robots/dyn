@@ -29,7 +29,7 @@ fn main() {
   arena := mem.arena_from_buffer(storage[..])
   pzero: text.ParseResult
   rzero: html.RenderResult
-  check(pzero.failure.kind == parse.Kind.Ok && pzero.offset == 0 && #len(pzero.value.source) == 0)
+  check(!parse.failed(pzero.failure) && pzero.offset == 0 && #len(pzero.value.source) == 0)
   check(rzero.failure.kind == parse.StreamKind.Ok && rzero.offset == 0)
   empty: text.Template
   writer: io.Writer
@@ -46,13 +46,13 @@ fn main() {
     tiny_mark := mem.arena_mark(tiny)
     tiny_result := text.ParseResult{}
     if mode == 0 { tiny_result = text.parse(tiny, "") } else { tiny_result = html.parse(tiny, "") }
-    check(tiny_result.failure.kind == parse.Kind.Ok && #len(tiny_result.value.source) == 0 && mem.arena_mark(tiny) == tiny_mark)
+    check(!parse.failed(tiny_result.failure) && #len(tiny_result.value.source) == 0 && mem.arena_mark(tiny) == tiny_mark)
     if mode == 0 { tiny_result = text.parse(tiny, "ab{{ }}") } else { tiny_result = html.parse(tiny, "ab{{ }}") }
     check(tiny_result.failure.kind == parse.Kind.Syntax && tiny_result.offset == 2 && #len(tiny_result.value.source) == 0 && mem.arena_mark(tiny) == tiny_mark)
     mark := mem.arena_mark(arena)
     parsed := text.ParseResult{}
     if mode == 0 { parsed = text.parse(arena, "") } else { parsed = html.parse(arena, "") }
-    check(parsed.failure.kind == parse.Kind.Ok && #len(parsed.value.source) == 0 && parsed.offset == 0 && mem.arena_mark(arena) == mark)
+    check(!parse.failed(parsed.failure) && #len(parsed.value.source) == 0 && parsed.offset == 0 && mem.arena_mark(arena) == mark)
     invalid: [3][]const u8 = ["{{", "ab{{ }}", "a{{x!}}"]
     offsets: [3]usize = [0, 2, 1]
     for i in 0..3 {
@@ -61,7 +61,7 @@ fn main() {
     }
     source: [10]u8 = ['<','b','>','{','{','x','}','}','!','!']
     if mode == 0 { parsed = text.parse(arena, source[..]) } else { parsed = html.parse(arena, source[..]) }
-    check(parsed.failure.kind == parse.Kind.Ok && parsed.offset == 0)
+    check(!parse.failed(parsed.failure) && parsed.offset == 0)
     source[0] = '?'
     check(parsed.value.source[0] == '<') // parse owns an arena copy.
     output: [128]u8

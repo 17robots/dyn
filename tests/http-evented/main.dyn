@@ -39,7 +39,7 @@ fn limited_handshake(session: rawptr) evented.TransportIo {
 }
 fn limited_read(session: rawptr, output: []u8) evented.TransportIo {
   result := net.receive(#cast(isize, session), output, 0)
-  if result.failure.kind != io.Kind.Ok {
+  if io.failed(result.failure) {
     if net.would_block(&result) { return evented.TransportIo{ status: evented.TransportStatus.WouldRead } }
     return evented.TransportIo{ status: evented.TransportStatus.Failed }
   }
@@ -48,7 +48,7 @@ fn limited_read(session: rawptr, output: []u8) evented.TransportIo {
 }
 fn limited_write(session: rawptr, source: []const u8) evented.TransportIo {
   result := net.send(#cast(isize, session), source, 0)
-  if result.failure.kind != io.Kind.Ok {
+  if io.failed(result.failure) {
     if net.would_block(&result) { return evented.TransportIo{ status: evented.TransportStatus.WouldWrite } }
     return evented.TransportIo{ status: evented.TransportStatus.Failed }
   }
@@ -86,11 +86,11 @@ fn handle(response: *http.Response, request: *const http.Request, app: *App) htt
       return text(response, http.StatusOk, app.big)
     }
     if #len(http.body_buffer(response, 1)) != 0 { #panic("second reservation succeeded") }
-    if http.respond_buffered(response, BigSize + 1, http.ResponseOptions{}).failure.kind == io.Kind.Ok {
+    if !io.failed(http.respond_buffered(response, BigSize + 1, http.ResponseOptions{}).failure) {
       #panic("oversize commit succeeded")
     }
     bad_headers: [1]http.Header = [http.Header{ name: "X-Test", value: "bad\r\nheader" }]
-    if http.respond_buffered(response, 1, http.ResponseOptions{ headers: bad_headers[..] }).failure.kind == io.Kind.Ok {
+    if !io.failed(http.respond_buffered(response, 1, http.ResponseOptions{ headers: bad_headers[..] }).failure) {
       #panic("invalid header succeeded")
     }
     _ = mem.copy(body, app.big)
@@ -98,8 +98,8 @@ fn handle(response: *http.Response, request: *const http.Request, app: *App) htt
     if bytes.equal(request.path, "/buffered-empty") { length = 0 }
     good_headers: [1]http.Header = [http.Header{ name: "X-Buffered", value: "yes" }]
     result := http.respond_buffered(response, length, http.ResponseOptions{ content_type: "text/plain", headers: good_headers[..] })
-    if result.failure.kind != io.Kind.Ok { return result }
-    if http.respond_buffered(response, 1, http.ResponseOptions{}).failure.kind == io.Kind.Ok {
+    if io.failed(result.failure) { return result }
+    if !io.failed(http.respond_buffered(response, 1, http.ResponseOptions{}).failure) {
       #panic("second commit succeeded")
     }
     return result
@@ -115,7 +115,7 @@ fn handle(response: *http.Response, request: *const http.Request, app: *App) htt
   }
   if bytes.equal(request.target, "/stream") {
     opened := http.respond_stream(response, http.ResponseOptions{ content_type: "text/plain" })
-    if opened.failure.kind != io.Kind.Ok {
+    if io.failed(opened.failure) {
       return opened.result
     }
     writer := http.body_writer(&opened.body)
@@ -128,7 +128,7 @@ fn handle(response: *http.Response, request: *const http.Request, app: *App) htt
     // ?q= decoded, escaped into HTML, echoed with a request header as a response header.
     storage: [256]u8
     q := http.query_value(request, "q", storage[..])
-    if q.failure.kind != parse.Kind.Ok {
+    if parse.failed(q.failure) {
       return text(response, http.StatusBadRequest, "bad query\n")
     }
     page_storage: [1024]u8
@@ -154,7 +154,7 @@ fn handle(response: *http.Response, request: *const http.Request, app: *App) htt
     if !name.found {
       return text(response, http.StatusBadRequest, "missing\n")
     }
-    if name.failure.kind != parse.Kind.Ok {
+    if parse.failed(name.failure) {
       return text(response, http.StatusBadRequest, "bad form\n")
     }
     return text(response, http.StatusOk, name.value)
@@ -176,8 +176,8 @@ fn main() {
   }
   state.router = http.typed_routes(state.route_storage[..], state)
   state.router.fallback = handle
-  if http.add(&state.router, "GET", "/users/:id/posts/:post", user_post).failure.kind != io.Kind.Ok ||
-    http.add(&state.router, "POST", "/users", user_create).failure.kind != io.Kind.Ok {
+  if io.failed(http.add(&state.router, "GET", "/users/:id/posts/:post", user_post).failure) ||
+    io.failed(http.add(&state.router, "POST", "/users", user_create).failure) {
     #panic("cannot add routes")
   }
   binding := http.bind_routes(&state.router)
@@ -187,8 +187,8 @@ fn main() {
   config.send_size = 4 * mem.KiB
   config.idle_timeout_milliseconds = 500
   arguments := process.arguments(arena)
-  shared := arguments.failure.kind == io.Kind.Ok && #len(arguments.value) > 1 && bytes.equal(arguments.value[1], "shared")
-  pooled := arguments.failure.kind == io.Kind.Ok && #len(arguments.value) > 1 && bytes.equal(arguments.value[1], "pooled")
+  shared := !io.failed(arguments.failure) && #len(arguments.value) > 1 && bytes.equal(arguments.value[1], "shared")
+  pooled := !io.failed(arguments.failure) && #len(arguments.value) > 1 && bytes.equal(arguments.value[1], "pooled")
   transport := evented.Transport{ open: limited_open, handshake: limited_handshake, read: limited_read, write: limited_write, close: limited_close }
   worker_count := WorkerCount
   if pooled {
@@ -206,13 +206,13 @@ fn main() {
   } else {
     address := net.ipv4(127, 0, 0, 1, 0)
     listened := net.tcp_listen_ipv4(&address, 128)
-    if listened.failure.kind != io.Kind.Ok {
+    if io.failed(listened.failure) {
       #panic("cannot listen")
     }
     listener = net.listener_take(&listened.value)
     started = evented.start(arena, workers, &listener, config, binding.handler, binding.context)
   }
-  if started.failure.kind != io.Kind.Ok {
+  if io.failed(started.failure) {
     #panic("cannot start workers")
   }
   port := #cast(u64, evented.local_port(workers))
@@ -232,7 +232,7 @@ fn main() {
   for worker in workers {
     if worker.send_pool.free_count != config.overflow_send_count { #panic("overflow block leaked") }
   }
-  if joined.failure.kind != io.Kind.Ok {
+  if io.failed(joined.failure) {
     #panic("worker failed")
   }
 }

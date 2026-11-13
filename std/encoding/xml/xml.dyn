@@ -410,7 +410,7 @@ fn attribute_error(state: *AttributeScanner) Attribute {
   return Attribute{ failure: state.failure }
 }
 pub fn next_attribute(state: *AttributeScanner) Attribute {
-  if state.failure.kind != parse.Kind.Ok {
+  if parse.failed(state.failure) {
     return Attribute{ failure: state.failure }
   }
   at := state.offset
@@ -465,7 +465,7 @@ fn valid_attributes(event: Event) bool {
     before := scan.offset
     item := next_attribute(&scan)
     if !item.found {
-      return scan.failure.kind == parse.Kind.Ok
+      return !parse.failed(scan.failure)
     }
     previous := attributes(event)
     for previous.offset < before {

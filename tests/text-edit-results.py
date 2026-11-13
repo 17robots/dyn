@@ -20,7 +20,7 @@ fn main() {
   tracker := edit.Tracker{}
   first := edit.snapshot(&tracker, 7, "hé world", 3, 3, edit.Cause.Other)
   again := edit.snapshot(&tracker, 7, "hé world", 3, 3, edit.Cause.Other)
-  check(first.failure.kind == errors.Kind.Ok && again.value.token == first.value.token,"stable publication")
+  check(!errors.failed(first.failure) && again.value.token == first.value.token,"stable publication")
   storage: [64]u8
   _ = mem.copy(storage[..9],"hé world")
   buffer := edit.Buffer{storage:storage[..],length:9,cursor:3,anchor:3,token:first.value.token}
@@ -30,7 +30,7 @@ fn main() {
   check(bytes.equal(storage[..7],"hé😀") && mem.arena_mark(arena)==mark,"bytes and scratch lifetime")
   check(edit.apply(arena,&buffer,&replacement).kind == errors.Kind.InvalidState && bytes.equal(storage[..7],"hé😀"),"replay rejected")
   next := edit.snapshot(&tracker,7,storage[..7],7,7,edit.Cause.InputMethod)
-  check(next.failure.kind == errors.Kind.Ok && next.value.token != first.value.token && next.value.cause == edit.Cause.InputMethod,"changed context identity and cause")
+  check(!errors.failed(next.failure) && next.value.token != first.value.token && next.value.cause == edit.Cause.InputMethod,"changed context identity and cause")
   same := edit.snapshot(&tracker,7,storage[..7],7,7,edit.Cause.Other)
   check(same.value.token == next.value.token && same.value.cause == edit.Cause.InputMethod,"unchanged cause is retained")
   buffer.token = next.value.token
@@ -51,7 +51,7 @@ fn main() {
   replacement = edit.Replacement{start:0,end:1,text:"new",token:99}
   check(edit.apply(scratch,&buffer,&replacement).kind == errors.Kind.InvalidInput && mem.arena_used(scratch)==0 && bytes.equal(scratch_bytes[..6],"abcdef"),"pending scratch alias rejected")
   failed := edit.snapshot(&tracker,7,"é",1,0,edit.Cause.Other)
-  check(failed.failure.kind != errors.Kind.Ok && tracker.token == 0,"invalid publication invalidates old identity")
+  check(errors.failed(failed.failure) && tracker.token == 0,"invalid publication invalidates old identity")
   back := edit.snapshot(&tracker,7,"hé😀",7,7,edit.Cause.Other)
   check(back.value.token != next.value.token,"returning content never revives stale token")
   tracker.serial = 18446744073709551615
@@ -61,7 +61,7 @@ fn main() {
   event := events.Event{kind:events.Kind.Edit,key:17,modifiers:2,x:0,y:3,width:260,text_length:256}
   for i in 0..256 { event.text[i] = 'x' }
   partial := events.collect_edit(&collector,&event)
-  check(partial.failure.kind == errors.Kind.Ok && !partial.ready,"partial transaction")
+  check(!errors.failed(partial.failure) && !partial.ready,"partial transaction")
   event.scancode = 256
   event.text_length = 4
   event.text[0] = 0xf0
@@ -71,19 +71,19 @@ fn main() {
   event.button = 1
   complete := events.collect_edit(&collector,&event)
   event.text[0] = 'z'
-  check(complete.failure.kind == errors.Kind.Ok && complete.ready && #len(complete.value.text)==260 && complete.value.token == 8589934609 && complete.value.text[256] == 0xf0,"owned complete transaction")
+  check(!errors.failed(complete.failure) && complete.ready && #len(complete.value.text)==260 && complete.value.token == 8589934609 && complete.value.text[256] == 0xf0,"owned complete transaction")
   large: [512]u8
   _ = mem.copy(large[..3],"old")
   buffer = edit.Buffer{storage:large[..],length:3,cursor:3,anchor:3,token:complete.value.token}
   check(edit.apply(arena,&buffer,&complete.value).kind == errors.Kind.Ok && buffer.length==260 && large[259]==0x80,"assembled transaction applies")
   event = events.Event{kind:events.Kind.Edit,key:1,width:2,text_length:1}
   event.text[0] = 'a'
-  check(events.collect_edit(&collector,&event).failure.kind == errors.Kind.Ok,"new transaction")
+  check(!errors.failed(events.collect_edit(&collector,&event).failure),"new transaction")
   event.kind = events.Kind.Overflow
-  check(events.collect_edit(&collector,&event).failure.kind != errors.Kind.Ok && !collector.active,"overflow discards partial edit")
+  check(errors.failed(events.collect_edit(&collector,&event).failure) && !collector.active,"overflow discards partial edit")
   event = events.Event{kind:events.Kind.Edit,key:1,width:2,scancode:1,text_length:1,button:1}
   event.text[0] = 'b'
-  check(events.collect_edit(&collector,&event).failure.kind != errors.Kind.Ok,"orphan final rejected")
+  check(errors.failed(events.collect_edit(&collector,&event).failure),"orphan final rejected")
   golden(arena)
 }
 '''

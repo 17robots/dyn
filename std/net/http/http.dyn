@@ -314,7 +314,7 @@ pub fn parse_request(input: []const u8) HttpHead {
 
 pub fn header(input: []const u8, name: []const u8) HttpHeader {
   head := http_parse_head(input, starts_ascii_case(input, 0, "HTTP/"))
-  if head.failure.kind != parse.Kind.Ok {
+  if parse.failed(head.failure) {
     return HttpHeader{ offset: head.offset, failure: head.failure }
   }
   cursor: usize = 0
@@ -583,7 +583,7 @@ pub fn decode_chunked(arena: *memory.Arena, input: []const u8) HttpIoResult {
 
 pub fn parse_url(input: []const u8) Url {
   parsed := urls.parse(input)
-  if parsed.failure.kind != parse.Kind.Ok {
+  if parse.failed(parsed.failure) {
     return Url{ offset: parsed.offset, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: parsed.offset } }
   }
   value := parsed.value
@@ -1021,7 +1021,7 @@ pub fn frame_request(input: []const u8, capacity: usize) FrameResult {
     return FrameResult{ status: FrameStatus.Incomplete }
   }
   head := parse_request(input)
-  if head.failure.kind != parse.Kind.Ok {
+  if parse.failed(head.failure) {
     return FrameResult{ status: FrameStatus.Invalid, offset: head.offset }
   }
   if head.chunked {
@@ -1066,7 +1066,7 @@ pub fn receive(state: *Server) ReceiveResult {
       head = parse_request(state.storage[..state.used])
       head_checked = true
       // More bytes cannot repair a complete head that does not parse.
-      if head.failure.kind != parse.Kind.Ok {
+      if parse.failed(head.failure) {
         failure := receive_failure(state, ErrorKind.Invalid, 0)
         state.first.offset = head.offset
         failure.offset = head.offset
@@ -1261,7 +1261,7 @@ fn head_emit(writer: *HeadWriter, piece: []const u8) {
   } else if writer.mode == HeadMode.Stage {
     writer.used = append_bytes(writer.staging, writer.used, piece)
   } else {
-    writer.failed = response_output(writer.response, piece).failure.kind != io.Kind.Ok
+    writer.failed = io.failed(response_output(writer.response, piece).failure)
   }
 }
 fn head_write(writer: *HeadWriter, options: ResponseOptions, status: u16, reason: []const u8, content_type: []const u8, body_length: usize, chunked: bool) {
@@ -1356,7 +1356,7 @@ fn response_begin(response: *Response, options: ResponseOptions, body_length: us
       }
       return result
     }
-    if response_output(response, staging[..head_length]).failure.kind != io.Kind.Ok {
+    if io.failed(response_output(response, staging[..head_length]).failure) {
       return response.first
     }
   } else {
@@ -1466,7 +1466,7 @@ pub fn respond_buffered(response: *Response, length: usize, options: ResponseOpt
     return Result{ detail: ErrorKind.Invalid, failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
   written := response_begin(response, options, length, false, "", true)
-  if written.failure.kind == io.Kind.Ok { response.finished = true }
+  if !io.failed(written.failure) { response.finished = true }
   return written
 }
 
@@ -1680,7 +1680,7 @@ fn client_receive(arena: *memory.Arena, input: io.Reader, method: []const u8) Cl
     if !head_checked && head_complete(response_storage[..used], &head_scan) {
       head = parse_response(response_storage[..used])
       head_checked = true
-      if head.failure.kind != parse.Kind.Ok {
+      if parse.failed(head.failure) {
         return ClientResponse{ offset: head.offset, detail: ErrorKind.Invalid, failure: io.Failure{ kind: io.Kind.InvalidInput } }
       }
     }

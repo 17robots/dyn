@@ -81,16 +81,16 @@ fn main() {''']
   arena := mem.arena_from_buffer(backing[..])
   built := builder.from_buffer(backing[..0])
   for i in 0..1000 { builder.append_grow(&built, arena, "x") }
-  t.expect(built.failure.kind == io.Kind.Ok, "builder growth")
+  t.expect(!io.failed(built.failure), "builder growth")
   t.expect(mem.arena_used(arena) == 1024, "last allocation extends without retained old buffers")
   view := builder.bytes(&built)
   builder.append_grow(&built, arena, view)
-  t.expect(built.failure.kind == io.Kind.Ok, "overlapping growth")
+  t.expect(!io.failed(built.failure), "overlapping growth")
   t.expect(built.length == 2000 && mem.arena_used(arena) == 2048, "self append in place")
   _ = mem.arena_push(arena, 1, 1)
   previous := &built.storage[0]
   builder.reserve(&built, arena, 4096)
-  t.expect(built.failure.kind == io.Kind.Ok, "interleaved growth")
+  t.expect(!io.failed(built.failure), "interleaved growth")
   t.expect(&built.storage[0] != previous && built.storage[1999] == 'x', "interleaved allocation copied")
   mem.arena_reset(arena)
   names := hash.slots(Entry, arena, 32)
@@ -139,11 +139,11 @@ use "std/mem" mem
 fn main() {
   arena := mem.arena_alloc(0)
   created := t.temporary_directory(arena, "dyn-performance-contract")
-  t.expect(created.failure.kind == io.Kind.Ok && created.value.active, "temporary directory")
+  t.expect(!io.failed(created.failure) && created.value.active, "temporary directory")
   frames: [4]fs.RemovalFrame
   scratch: [4096]u8
   removed := t.remove_temporary(&created.value, frames[..], scratch[..])
-  t.expect(removed.failure.kind == io.Kind.Ok && !created.value.active, "remove temporary directory")
+  t.expect(!io.failed(removed.failure) && !created.value.active, "remove temporary directory")
 }
 ''')
         for flags in ([], ['--release']):

@@ -91,7 +91,7 @@ fn main() {
   font := software.Font{ glyph: bitmap, line_height: 12 }
   pixels := mem.push_array(u8, persistent_arena, #cast(usize, 61440))
   surface := software.Surface{ pixels: pixels, width: 160, height: 96, stride: 640 }
-  check(software.render(&surface, ui.first(&context), font).failure.kind == errors.Kind.Ok, "software")
+  check(!errors.failed(software.render(&surface, ui.first(&context), font).failure), "software")
   vertices := mem.push_array(f32, persistent_arena, #cast(usize, 86016))
   loaded.api.clear_color(0.0, 0.0, 0.0, 0.0)
   loaded.api.clear(gl.ColorBufferBit)

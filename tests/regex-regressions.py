@@ -14,14 +14,14 @@ use "std/mem" memory
 fn require(ok:bool,message:[]const u8){ if !ok { #panic(message) } }
 fn compile(arena:*memory.Arena,pattern:[]const u8) regex.Program {
   result:=regex.compile(arena,pattern)
-  require(result.failure.kind == parse.Kind.Ok,pattern)
+  require(!parse.failed(result.failure),pattern)
   return result.value
 }
 fn check(pattern:[]const u8,text:[]const u8,expected:usize,matched:bool){
   arena := memory.arena_alloc(0)
   program:=compile(arena,pattern)
   result:=regex.find(program,text)
-  require(result.failure.kind == parse.Kind.Ok && result.value.found==matched && (!matched || result.value.end==expected),pattern)
+  require(!parse.failed(result.failure) && result.value.found==matched && (!matched || result.value.end==expected),pattern)
 }
 fn main(){
   check("^a{1,}$","aaaaaaaaaaaaaaaa",16,true)
@@ -46,7 +46,7 @@ fn main(){
   input:=memory.push_array(u8,arena,100000)
   for i in 0..#len(input){input[i]='a'}
   result:=regex.find(program,input)
-  require(result.failure.kind == parse.Kind.Ok && result.value.found && result.value.end==100000,"long repetition")
+  require(!parse.failed(result.failure) && result.value.found && result.value.end==100000,"long repetition")
   require(result.captures[0].found && result.captures[0].start==99999 && result.captures[0].end==100000,"last capture")
   program=compile(arena,"(a*)a")
   result=regex.find(program,"aaaa")
@@ -58,10 +58,10 @@ fn main(){
   long_input:[200]u8
   for i in 0..200 {long_input[i]='a'}
   result=regex.find(program,long_input[..])
-  require(result.failure.kind == parse.Kind.Ok && result.value.found && result.value.end==200 && result.captures[0].start==199,"arena workspace")
+  require(!parse.failed(result.failure) && result.value.found && result.value.end==200 && result.captures[0].start==199,"arena workspace")
   program=compile(arena,"(a)*")
   result=regex.find(program,"aaa")
-  require(result.failure.kind == parse.Kind.Ok && result.value.end==3 && result.captures[0].start==2,"reused workspace")
+  require(!parse.failed(result.failure) && result.value.end==3 && result.captures[0].start==2,"reused workspace")
   io.println("regex passed")
 }
 '''

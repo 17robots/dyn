@@ -54,7 +54,7 @@ fn main() {
   arena := mem.arena_alloc(4 * mem.GiB)
   defer mem.arena_release(arena)
   arguments := process.arguments(arena)
-  if arguments.failure.kind != io.Kind.Ok {
+  if io.failed(arguments.failure) {
     #panic("cannot read arguments")
   }
   for path in arguments.value[1..] {
@@ -64,7 +64,7 @@ fn main() {
     put(&out, arena, path)
     put(&out, arena, "\n")
     source := fs.read_all(arena, path, 64 * mem.MiB)
-    if source.failure.kind != io.Kind.Ok {
+    if io.failed(source.failure) {
       #panic("cannot read source")
     }
     tree := Tree{}

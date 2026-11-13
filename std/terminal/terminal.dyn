@@ -11,7 +11,7 @@ pub struct Result { failure: io.Failure }
 // Descriptors 0, 1 and 2 are the standard streams on every platform. On
 // Windows any other value is a console handle.
 pub fn is_attached(descriptor: isize) bool {
-  return read_state(descriptor).failure.kind == io.Kind.Ok
+  return !io.failed(read_state(descriptor).failure)
 }
 
 // Applies a small cfmakeraw equivalent: no echo, no line buffering, no signal

@@ -35,9 +35,9 @@ fn good(raw: []const u8, hx: []const u8, upper: []const u8, b64: []const u8) {
   x: h.Decoded = h.decode(a, hx)
   y: b.Decoded = b.decode(a, b64)
   z := h.decode(a, upper)
-  if x.failure.kind != parse.Kind.Ok || y.failure.kind != parse.Kind.Ok || z.failure.kind != parse.Kind.Ok || !bytes.equal(x.value, raw) || !bytes.equal(y.value, raw) || !bytes.equal(z.value, raw) { #panic("decode oracle") }
+  if parse.failed(x.failure) || parse.failed(y.failure) || parse.failed(z.failure) || !bytes.equal(x.value, raw) || !bytes.equal(y.value, raw) || !bytes.equal(z.value, raw) { #panic("decode oracle") }
   if x.failure.offset != 0 || y.failure.offset != 0 || z.failure.offset != 0 ||
-     x.failure.kind != parse.Kind.Ok || y.failure.kind != parse.Kind.Ok || z.failure.kind != parse.Kind.Ok { #panic("success diagnostics") }
+     parse.failed(x.failure) || parse.failed(y.failure) || parse.failed(z.failure) { #panic("success diagnostics") }
   if mem.arena_mark(a) != mem.arena_start(a) + 7 + 3 * #len(raw) { #panic("exact decode allocation") }
   if !bytes.equal(h.encode(a, raw, false), hx) || !bytes.equal(h.encode(a, raw, true), upper) || !bytes.equal(b.encode(a, raw), b64) { #panic("encode oracle") }
   for c in prefix { if c != 99 { #panic("success changed prefix") } }
@@ -85,8 +85,8 @@ fn overlap(hex: bool, invalid: bool, start: usize) {
 fn main() {
   z := b.Decoded{}
   q := h.Decoded{}
-  if q.failure.kind != parse.Kind.Ok || #len(z.value) != 0 || #len(q.value) != 0 ||
-     z.failure.offset != 0 || q.failure.offset != 0 || z.failure.kind != parse.Kind.Ok || q.failure.kind != parse.Kind.Ok { #panic("zero initialization") }
+  if parse.failed(q.failure) || #len(z.value) != 0 || #len(q.value) != 0 ||
+     z.failure.offset != 0 || q.failure.offset != 0 || parse.failed(z.failure) || parse.failed(q.failure) { #panic("zero initialization") }
 '''
 
 
@@ -152,9 +152,9 @@ if x.failure.offset != 4 || y.failure.offset != 4 ||
    #len(x.value) != 0 || #len(y.value) != 0 || mem.arena_mark(a) != mem.arena_start(a) { #panic("validation before exhaustion") }
 x = b.decode(a, "")
 y = h.decode(a, "")
-if x.failure.kind != parse.Kind.Ok || y.failure.kind != parse.Kind.Ok || #len(x.value) != 0 || #len(y.value) != 0 ||
+if parse.failed(x.failure) || parse.failed(y.failure) || #len(x.value) != 0 || #len(y.value) != 0 ||
    x.failure.offset != 0 || y.failure.offset != 0 ||
-   x.failure.kind != parse.Kind.Ok || y.failure.kind != parse.Kind.Ok || mem.arena_mark(a) != mem.arena_start(a) { #panic("empty at capacity") }
+   parse.failed(x.failure) || parse.failed(y.failure) || mem.arena_mark(a) != mem.arena_start(a) { #panic("empty at capacity") }
 }
 '''
     return program, len(cases)

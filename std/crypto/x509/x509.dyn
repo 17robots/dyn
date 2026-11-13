@@ -517,7 +517,7 @@ fn extensions(element: der.Element, view: *View) Reason {
 // All returned slices borrow the original DER, including the envelope.
 pub fn inspect(encoded: []const u8) InspectResult {
   envelope := certificate.parse(encoded)
-  if envelope.failure.kind != parse.Kind.Ok {
+  if parse.failed(envelope.failure) {
     return failed(Reason.Malformed)
   }
   view := View{envelope:envelope.value}
@@ -774,7 +774,7 @@ pub fn validate(chain: []const []const u8, anchors: []const []const u8, options:
   views: [16]View
   for i in 0..#len(chain) {
     parsed := inspect(chain[i])
-    if parsed.failure.kind != parse.Kind.Ok {
+    if parse.failed(parsed.failure) {
       return validation(parsed.reason, i)
     }
     views[i] = parsed.value
@@ -823,7 +823,7 @@ pub fn validate(chain: []const []const u8, anchors: []const []const u8, options:
   }
   for i in 0..#len(anchors) {
     anchor := inspect(anchors[i])
-    if anchor.failure.kind != parse.Kind.Ok || !bytes.equal(views[last].issuer, anchor.value.subject) || !constraints(&anchor.value, options.purpose, true, below) {
+    if parse.failed(anchor.failure) || !bytes.equal(views[last].issuer, anchor.value.subject) || !constraints(&anchor.value, options.purpose, true, below) {
       continue
     }
     if signed(&views[last], &anchor.value) {

@@ -31,18 +31,18 @@ fn main() {
  for item.found { tokens[count] = item.value
  count += 1
  item = mp.next(&state) }
- check(item.failure.kind == parse.Kind.Ok && count == 8)
+ check(!parse.failed(item.failure) && count == 8)
  check(tokens[0].kind == mp.Kind.Map && tokens[0].value == 2)
  check(tokens[2].kind == mp.Kind.Array && tokens[2].value == 3)
  check(tokens[5].integer == -1 && bytes.equal(tokens[7].bytes,"hi"))
  encoded := mp.encode(arena,tokens[..count])
- check(encoded.failure.kind == parse.Kind.Ok)
+ check(!parse.failed(encoded.failure))
  state = mp.reader(encoded.value)
  for token in tokens[..count] {
   value := mp.next(&state)
   check(value.found && value.value.kind == token.kind && value.value.value == token.value && value.value.integer == token.integer && bytes.equal(value.value.bytes,token.bytes))
  }
- check(mp.next(&state).failure.kind == parse.Kind.Ok && !mp.next(&state).found)
+ check(!parse.failed(mp.next(&state).failure) && !mp.next(&state).found)
  // Every header is either complete or a structured failure, never a trap.
  raw: [20]u8
  for tag in 0..256 {
@@ -50,7 +50,7 @@ fn main() {
   state = mp.reader(raw[..])
   result := mp.next(&state)
   for result.found { result = mp.next(&state) }
-  check(result.failure.kind == parse.Kind.Ok || result.failure.kind == parse.Kind.Syntax)
+  check(!parse.failed(result.failure) || result.failure.kind == parse.Kind.Syntax)
  }
  bad("\xc1")
  bad("\x91")
@@ -60,7 +60,7 @@ fn main() {
  bad("\xcf\x00")
  extrema: [7]mp.Token = [mp.Token{kind:mp.Kind.Unsigned,value:0xffffffffffffffff},mp.Token{kind:mp.Kind.Signed,integer:-9223372036854775808},mp.Token{kind:mp.Kind.Signed,integer:9223372036854775807},mp.Token{kind:mp.Kind.Float,real:-1.5},mp.Token{kind:mp.Kind.Extension,extension:-1,bytes:"123456789012"},mp.Token{kind:mp.Kind.Text,bytes:"\xff\x00"},mp.Token{kind:mp.Kind.Bool,boolean:true}]
  encoded = mp.encode(arena,extrema[..])
- check(encoded.failure.kind == parse.Kind.Ok)
+ check(!parse.failed(encoded.failure))
  state = mp.reader(encoded.value)
  for expected in extrema {
   result := mp.next(&state)

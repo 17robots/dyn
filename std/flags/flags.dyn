@@ -167,7 +167,7 @@ pub fn parse(arena: *memory.Arena, options: []const Option, arguments: [][]const
   values := memory.push_array(Value, arena, #len(options))
   positionals := memory.push_array([]const u8, arena, #len(arguments))
   result := parse_buffers(options, arguments, values, positionals)
-  if result.failure.kind != parse.Kind.Ok {
+  if parse.failed(result.failure) {
     memory.arena_rewind(arena, mark)
   }
   return result
@@ -213,7 +213,7 @@ fn render(destination: []u8, program: []const u8, options: []const Option, is_us
 }
 fn render_checked(destination: []u8, program: []const u8, options: []const Option, is_usage: bool) TextResult {
   measured := render(destination[..0], program, options, is_usage, false)
-  if measured.failure.kind != parse.Kind.Ok {
+  if parse.failed(measured.failure) {
     return measured
   }
   if measured.required > #len(destination) {
@@ -258,7 +258,7 @@ pub fn completion(arena: *memory.Arena, options: []const Option) []u8 {
 fn render_arena(arena: *memory.Arena, program: []const u8, options: []const Option, is_usage: bool) []u8 {
   empty: [0]u8
   measured := render(empty[..], program, options, is_usage, false)
-  if measured.failure.kind != parse.Kind.Ok {
+  if parse.failed(measured.failure) {
     #panic("flags: usage text size overflows")
   }
   output := memory.push_bytes_uninit(arena, measured.required)

@@ -13,14 +13,14 @@ fn require(ok: bool) { if !ok { #panic("watch result contract") } }
 fn main() {
  state := watch.Watcher{}
  first := watch.next(&state)
- require(first.failure.kind != errors.Kind.Ok && errors.failed(first.failure) && first.failure.native == -9 && first.failure.kind == errors.Kind.InvalidState)
+ require(errors.failed(first.failure) && errors.failed(first.failure) && first.failure.native == -9 && first.failure.kind == errors.Kind.InvalidState)
  for i in 0..3 {
   next := watch.next(&state)
-  require(next.failure.kind != errors.Kind.Ok && next.status == first.status && next.failure.native == first.failure.native && next.failure.kind == first.failure.kind)
+  require(errors.failed(next.failure) && next.status == first.status && next.failure.native == first.failure.native && next.failure.kind == first.failure.kind)
  }
  watch.close(&state)
  again := watch.next(&state)
- require(again.failure.kind != errors.Kind.Ok && again.failure.native == first.failure.native && again.failure.kind == first.failure.kind)
+ require(errors.failed(again.failure) && again.failure.native == first.failure.native && again.failure.kind == first.failure.kind)
 }
 '''
 LINUX = '''use "std/fs/watch" watch
@@ -30,7 +30,7 @@ fn main() {
  backing: [272]u8
  state := watch.Watcher{descriptor: 999999, active: true, storage: backing[..]}
  first := watch.next(&state)
- require(first.failure.kind != errors.Kind.Ok && first.failure.native == -9 && first.failure.kind == errors.Kind.InvalidState)
+ require(errors.failed(first.failure) && first.failure.native == -9 && first.failure.kind == errors.Kind.InvalidState)
  descriptors: [2]i32
  require(#syscall(293, &descriptors[0], 2048) == 0)
  defer { _ = #syscall(3, descriptors[0])
@@ -40,13 +40,13 @@ fn main() {
  state.descriptor = #cast(isize, descriptors[0])
  for i in 0..3 {
   result := watch.next(&state)
-  require(result.failure.kind != errors.Kind.Ok && result.failure.native == first.failure.native && result.failure.kind == first.failure.kind && state.used == 0)
+  require(errors.failed(result.failure) && result.failure.native == first.failure.native && result.failure.kind == first.failure.kind && state.used == 0)
  }
  byte[0] = 0
  require(#syscall(0, descriptors[0], &byte[0], 1) == 1 && byte[0] == 91)
  state = watch.Watcher{storage: backing[..], used: 273}
  malformed := watch.next(&state)
- require(malformed.failure.kind != errors.Kind.Ok && malformed.failure.native == -74 && malformed.failure.kind == errors.Kind.System)
+ require(errors.failed(malformed.failure) && malformed.failure.native == -74 && malformed.failure.kind == errors.Kind.System)
  state.used = 0
  repeated := watch.next(&state)
  require(repeated.failure.native == -74 && repeated.failure.kind == malformed.failure.kind)

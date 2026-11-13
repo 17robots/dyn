@@ -37,7 +37,7 @@ fn qualified(name: []const u8) ExpandedName {
 }
 pub fn namespace_resolve(state: *const Namespaces, name: []const u8, attribute: bool) ExpandedName {
   result := qualified(name)
-  if result.failure.kind != parse.Kind.Ok {
+  if parse.failed(result.failure) {
     return result
   }
   if bytes.equal(result.prefix, "xmlns") || (attribute && bytes.equal(name, "xmlns")) {
@@ -151,7 +151,7 @@ fn namespace_enter_impl(state: *Namespaces, event: Event) ExpandedName {
       break
     }
     split := qualified(item.name)
-    if split.failure.kind != parse.Kind.Ok {
+    if parse.failed(split.failure) {
       return split
     }
     declaration := bytes.equal(item.name, "xmlns") || bytes.equal(split.prefix, "xmlns")
@@ -173,7 +173,7 @@ fn namespace_enter_impl(state: *Namespaces, event: Event) ExpandedName {
     }
   }
   resolved := namespace_resolve(state, copied, false)
-  if resolved.failure.kind != parse.Kind.Ok || bytes.equal(resolved.prefix, "xmlns") {
+  if parse.failed(resolved.failure) || bytes.equal(resolved.prefix, "xmlns") {
     return ExpandedName{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   scan := attributes(event)
@@ -184,7 +184,7 @@ fn namespace_enter_impl(state: *Namespaces, event: Event) ExpandedName {
       break
     }
     current := namespace_resolve(state, attribute_item.name, true)
-    if current.failure.kind != parse.Kind.Ok {
+    if parse.failed(current.failure) {
       return current
     }
     prior := attributes(event)
@@ -214,7 +214,7 @@ pub fn namespace_enter(state: *Namespaces, event: Event) ExpandedName {
   used := state.used
   depth := state.depth
   result := namespace_enter_impl(state, event)
-  if result.failure.kind != parse.Kind.Ok {
+  if parse.failed(result.failure) {
     state.count = count
     state.used = used
     state.depth = depth

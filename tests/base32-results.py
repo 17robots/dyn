@@ -20,7 +20,7 @@ fn good(raw,encoded:[]const u8) {
   arena:=mem.arena_from_buffer(backing[..])
   _=mem.push_bytes_uninit(arena,7)
   decoded:=codec.decode(arena,encoded)
-  if decoded.failure.kind != parse.Kind.Ok || decoded.failure.offset!=0 || decoded.failure.kind != parse.Kind.Ok || !bytes.equal(decoded.value,raw) || mem.arena_mark(arena)!=mem.arena_start(arena)+7+#len(raw) { #panic("base32 oracle") }
+  if parse.failed(decoded.failure) || decoded.failure.offset!=0 || parse.failed(decoded.failure) || !bytes.equal(decoded.value,raw) || mem.arena_mark(arena)!=mem.arena_start(arena)+7+#len(raw) { #panic("base32 oracle") }
   if !bytes.equal(codec.encode(arena,raw),encoded) { #panic("base32 encode") }
 }
 fn bad(encoded:[]const u8,offset:usize) {

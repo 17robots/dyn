@@ -20,15 +20,15 @@ fn moving(block: usize, bounded: bool) {
   defer mem.arena_release(arena)
   state: builder.Builder
   builder.reserve(&state, arena, 8)
-  require(state.failure.kind == io.Kind.Ok)
+  require(!io.failed(state.failure))
   builder.append(&state, "abcdefgh")
-  require(state.failure.kind == io.Kind.Ok)
+  require(!io.failed(state.failure))
   old := state.storage
   first := arena.current
   for i in mem.ArenaHeader + 8..#len(first.data) { first.data[i] = 85 }
   mark := mem.arena_mark(arena)
   builder.reserve(&state, arena, 64)
-  require(state.failure.kind == io.Kind.Ok)
+  require(!io.failed(state.failure))
   if &state.storage[0] == &old[0] { #panic("builder move required") }
   require(bytes.equal(builder.bytes(&state), "abcdefgh"))
   require(bytes.equal(old, "abcdefgh"))
@@ -37,7 +37,7 @@ fn moving(block: usize, bounded: bool) {
   state.length = 64
   before := state.storage
   builder.append_grow(&state, arena, before)
-  require(state.failure.kind == io.Kind.Ok)
+  require(!io.failed(state.failure))
   require(state.length == 128 && &state.storage[0] != &before[0])
   require(bytes.equal(state.storage[..64], before) && bytes.equal(state.storage[64..128], before))
   require(bytes.equal(old, "abcdefgh"))
@@ -53,21 +53,21 @@ fn current_block() {
   mem.fill(guard, 91)
   state: builder.Builder
   builder.reserve(&state, arena, 64)
-  require(state.failure.kind == io.Kind.Ok)
+  require(!io.failed(state.failure))
   require(mem.arena_snapshot(arena).blocks == 2)
   builder.append(&state, "seed")
-  require(state.failure.kind == io.Kind.Ok)
+  require(!io.failed(state.failure))
   previous := &state.storage[0]
   mark := mem.arena_mark(arena)
   builder.reserve(&state, arena, 80)
-  require(state.failure.kind == io.Kind.Ok)
+  require(!io.failed(state.failure))
   require(&state.storage[0] == previous && mem.arena_mark(arena) == mark + 16)
   require(bytes.equal(builder.bytes(&state), "seed"))
   // Another allocation makes the builder non-topmost even in the same block.
   other := mem.push_bytes_uninit(arena, 1)
   other[0] = 37
   builder.reserve(&state, arena, 96)
-  require(state.failure.kind == io.Kind.Ok)
+  require(!io.failed(state.failure))
   require(&state.storage[0] != previous && other[0] == 37)
   for value in guard { require(value == 91) }
   require(bytes.equal(builder.bytes(&state), "seed"))
@@ -76,7 +76,7 @@ fn failures() {
   backing: [4]u8 = [1, 2, 3, 4]
   state := builder.from_buffer(backing[..])
   builder.append(&state, "abc")
-  require(state.failure.kind == io.Kind.Ok)
+  require(!io.failed(state.failure))
   builder.append(&state, "XY")
   require(state.failure.kind == io.Kind.Capacity)
   require(state.length == 3 && bytes.equal(builder.bytes(&state), "abc") && backing[3] == 4)
@@ -90,7 +90,7 @@ fn failures() {
   require(mem.arena_mark(arena) == mark)
   builder.clear(&state)
   builder.append(&state, "wxyz")
-  require(state.failure.kind == io.Kind.Ok)
+  require(!io.failed(state.failure))
   huge := #slice(&backing[0], #max(usize))
   builder.append_grow(&state, arena, huge)
   require(state.failure.kind == io.Kind.Overflow)

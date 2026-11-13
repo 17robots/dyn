@@ -53,11 +53,11 @@ fn main() {
   url = http.parse_url("http://host:0/path")
   metadata(url.failure.kind, url.offset, parse.Kind.Syntax, 12)
   valid_head := http.parse_request("GET / HTTP/1.1\r\n\r\n")
-  if valid_head.failure.kind != parse.Kind.Ok || valid_head.offset != 0 { #panic("request success metadata") }
+  if parse.failed(valid_head.failure) || valid_head.offset != 0 { #panic("request success metadata") }
   valid_head = http.parse_response("HTTP/1.1 200 OK\r\n\r\n")
-  if valid_head.failure.kind != parse.Kind.Ok || valid_head.offset != 0 { #panic("response success metadata") }
+  if parse.failed(valid_head.failure) || valid_head.offset != 0 { #panic("response success metadata") }
   url = http.parse_url("http://host/path")
-  if url.failure.kind != parse.Kind.Ok || url.offset != 0 { #panic("URL success metadata") }
+  if parse.failed(url.failure) || url.offset != 0 { #panic("URL success metadata") }
 
   malformed: [4]u8 = [129, 126, 0, 1]
   frame := ws.parse_frame(malformed[..])
@@ -74,12 +74,12 @@ fn main() {
   metadata(frame.failure.kind, frame.offset, parse.Kind.Truncated, 3)
   valid: [2]u8 = [129, 0]
   frame = ws.parse_frame(valid[..])
-  if frame.failure.kind != parse.Kind.Ok || frame.offset != 0 || frame.consumed != 2 { #panic("frame success metadata") }
+  if parse.failed(frame.failure) || frame.offset != 0 || frame.consumed != 2 { #panic("frame success metadata") }
   state := ws.message_state(false)
   message: [32]u8
   control: [125]u8
   event := ws.receive(&state, message[..], control[..], frame)
-  if event.failure.kind != errors.Kind.Ok || event.detail != ws.WebSocketEventKind.Ready { #panic("event classification") }
+  if errors.failed(event.failure) || event.detail != ws.WebSocketEventKind.Ready { #panic("event classification") }
   event = ws.receive(&state, message[..], control[..], ws.parse_frame(malformed[..]))
   if event.failure.kind != errors.Kind.InvalidInput || event.offset != 2 { #panic("event metadata") }
   if event.detail != ws.WebSocketEventKind.Error { #panic("error event classification") }
@@ -93,13 +93,13 @@ fn main() {
   response = ws.validate_upgrade_response("HTTP/1.1 200 OK\r\n\r\n", "")
   if response.failure.kind != errors.Kind.InvalidInput || response.offset != 0 { #panic("upgrade metadata") }
   response = ws.validate_upgrade_response("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n\r\n", "dGhlIHNhbXBsZSBub25jZQ==")
-  if response.failure.kind != io.Kind.Ok || response.failure.kind != errors.Kind.Ok || response.failure.native != 0 || response.offset != 0 { #panic("upgrade success metadata") }
+  if io.failed(response.failure) || errors.failed(response.failure) || response.failure.native != 0 || response.offset != 0 { #panic("upgrade success metadata") }
 
   // Zero values are failures despite a zero native code; close preserves OS codes.
   zero := http.Result{}
-  if zero.failure.kind != errors.Kind.Ok || zero.failure.native != 0 || zero.offset != 0 || zero.detail != http.ErrorKind.None { #panic("zero HTTP result") }
+  if errors.failed(zero.failure) || zero.failure.native != 0 || zero.offset != 0 || zero.detail != http.ErrorKind.None { #panic("zero HTTP result") }
   ws_zero := ws.Result{}
-  if ws_zero.failure.kind != errors.Kind.Ok || ws_zero.failure.native != 0 || ws_zero.offset != 0 { #panic("zero WS result") }
+  if errors.failed(ws_zero.failure) || ws_zero.failure.native != 0 || ws_zero.offset != 0 { #panic("zero WS result") }
   connection := http.Connection{}
   http.close(&connection)
   routes: [1]http.Route
@@ -108,7 +108,7 @@ fn main() {
   if route.failure.kind != errors.Kind.InvalidInput || route.offset != 0 { #panic("metadata") }
   if route.detail != http.ErrorKind.Invalid || router.count != 0 { #panic("invalid route result") }
   route = http.route(&router, "GET", "/", handler)
-  if route.failure.kind != io.Kind.Ok || route.failure.kind != errors.Kind.Ok || route.failure.native != 0 || route.offset != 0 || router.count != 1 { #panic("route success result") }
+  if io.failed(route.failure) || errors.failed(route.failure) || route.failure.native != 0 || route.offset != 0 || router.count != 1 { #panic("route success result") }
   route = http.route(&router, "GET", "/other", handler)
   if route.failure.kind != errors.Kind.Capacity || route.offset != 0 { #panic("metadata") }
   if route.detail != http.ErrorKind.Capacity || router.count != 1 { #panic("route capacity result") }
@@ -121,20 +121,20 @@ fn main() {
     server := http.server(reader, writer, storage[..])
     first := http.receive(&server)
     again := http.receive(&server)
-    if first.failure.kind == io.Kind.Ok || first.failure.kind != errors.Kind.PermissionDenied || first.failure.native != trace.native || first.offset != 0 || first.detail != http.ErrorKind.Io { #panic("HTTP native metadata") }
-    if again.failure.kind == io.Kind.Ok || again.failure.kind != first.failure.kind || again.failure.native != first.failure.native || again.offset != first.offset || again.detail != first.detail || trace.calls != 1 { #panic("HTTP native replay") }
+    if !io.failed(first.failure) || first.failure.kind != errors.Kind.PermissionDenied || first.failure.native != trace.native || first.offset != 0 || first.detail != http.ErrorKind.Io { #panic("HTTP native metadata") }
+    if !io.failed(again.failure) || again.failure.kind != first.failure.kind || again.failure.native != first.failure.native || again.offset != first.offset || again.detail != first.detail || trace.calls != 1 { #panic("HTTP native replay") }
     trace.calls = 0
     frames: [32]u8
     socket := ws.connection(reader, writer, frames[..], message[..], control[..], true)
     received := ws.connection_receive(&socket)
-    if received.failure.kind == io.Kind.Ok || received.failure.kind != errors.Kind.PermissionDenied || received.failure.native != trace.native || received.offset != 0 || trace.calls != 1 { #panic("WS native read metadata") }
+    if !io.failed(received.failure) || received.failure.kind != errors.Kind.PermissionDenied || received.failure.native != trace.native || received.offset != 0 || trace.calls != 1 { #panic("WS native read metadata") }
     replay := ws.connection_ping(&socket, "", 0)
-    if replay.failure.kind == io.Kind.Ok || replay.failure.kind != received.failure.kind || replay.failure.native != received.failure.native || replay.offset != received.offset || trace.calls != 1 { #panic("WS native read replay") }
+    if !io.failed(replay.failure) || replay.failure.kind != received.failure.kind || replay.failure.native != received.failure.native || replay.offset != received.offset || trace.calls != 1 { #panic("WS native read replay") }
     socket = ws.connection(reader, writer, frames[..], message[..], control[..], true)
     sent := ws.connection_send(&socket, 1, "x", true, 1)
-    if sent.failure.kind == io.Kind.Ok || sent.failure.kind != errors.Kind.PermissionDenied || sent.failure.native != trace.native || sent.offset != 0 || trace.calls != 2 { #panic("WS native write metadata") }
+    if !io.failed(sent.failure) || sent.failure.kind != errors.Kind.PermissionDenied || sent.failure.native != trace.native || sent.offset != 0 || trace.calls != 2 { #panic("WS native write metadata") }
     replay = ws.connection_close(&socket, "", 0)
-    if replay.failure.kind == io.Kind.Ok || replay.failure.kind != sent.failure.kind || replay.failure.native != sent.failure.native || replay.offset != sent.offset || trace.calls != 2 { #panic("WS native write replay") }
+    if !io.failed(replay.failure) || replay.failure.kind != sent.failure.kind || replay.failure.native != sent.failure.native || replay.offset != sent.offset || trace.calls != 2 { #panic("WS native write replay") }
   }
 }
 '''

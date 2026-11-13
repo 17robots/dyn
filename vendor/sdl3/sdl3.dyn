@@ -35,7 +35,7 @@ pub fn window_create(title: []const u8, title_buffer: []u8, width: i32, height: 
     return WindowResult{ failure: io.Failure{ kind: io.Kind.System } }
   }
   native_title := c.string_into(title_buffer, title)
-  if native_title.failure.kind != parse.Kind.Ok {
+  if parse.failed(native_title.failure) {
     return WindowResult{ failure: io.Failure{ kind: io.Kind.System } }
   }
   value := native_create_window(native_title.value, width, height, flags)

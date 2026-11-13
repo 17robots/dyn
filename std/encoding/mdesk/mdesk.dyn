@@ -60,7 +60,7 @@ pub fn parse(arena: *mem.Arena, source: []const u8) ParseResult {
   root := mem.push(Node, arena)
   root.kind = Kind.Root
   parse_children(&parser, root, 0)
-  if parser.failure.kind != parse.Kind.Ok {
+  if parse.failed(parser.failure) {
     mem.arena_rewind(arena, mark)
     return ParseResult{ root: #cast(*Node, &nil_node), offset: parser.failure.offset, failure: parser.failure }
   }
@@ -151,7 +151,7 @@ pub fn line_of(source: []const u8, offset: usize) usize {
 }
 
 fn fail(parser: *Parser, kind: parse.Kind, message: []const u8, offset: usize) {
-  if parser.failure.kind == parse.Kind.Ok {
+  if !parse.failed(parser.failure) {
     parser.failure = parse.Failure{ kind: kind, offset: offset, message: message }
   }
 }
@@ -286,7 +286,7 @@ fn parse_children(parser: *Parser, parent: *Node, close: u8) {
   }
   for true {
     skip(parser, true)
-    if parser.failure.kind != parse.Kind.Ok {
+    if parse.failed(parser.failure) {
       return
     }
     if parser.at >= #len(parser.source) {
@@ -343,7 +343,7 @@ fn parse_node(parser: *Parser) *Node {
     append_tag(node, tag_node)
     skip(parser, false)
   }
-  if parser.failure.kind != parse.Kind.Ok {
+  if parse.failed(parser.failure) {
     return node
   }
   if parser.at >= #len(source) || closer(source[parser.at]) || source[parser.at] == ':' {

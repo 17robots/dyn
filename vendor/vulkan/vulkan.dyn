@@ -27,7 +27,7 @@ pub fn version_patch(version: u32) u32 {
 // name_buffer receives a temporary NUL-terminated copy. Returned function is loader-owned.
 pub fn procedure(instance: Instance, name: []const u8, name_buffer: []u8) ProcedureResult {
   encoded := c.string_into(name_buffer, name)
-  if encoded.failure.kind != parse.Kind.Ok {
+  if parse.failed(encoded.failure) {
     return ProcedureResult{ failure: io.Failure{ kind: io.Kind.System } }
   }
   value := vulkan_get_instance_proc_address(instance, encoded.value)

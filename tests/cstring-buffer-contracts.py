@@ -24,10 +24,10 @@ fn main() {
  backing:[6]u8
  mem.fill(backing[..],165)
  exact:=c.string_into(backing[1..5],"abc")
- check(exact.failure.kind == parse.Kind.Ok && exact.required==4 && exact.value==&backing[1])
+ check(!parse.failed(exact.failure) && exact.required==4 && exact.value==&backing[1])
  check(mem.equal(backing[1..5],"abc\x00") && backing[0]==165 && backing[5]==165)
  empty:=c.string_into(backing[1..2],"")
- check(empty.failure.kind == parse.Kind.Ok && empty.required==1 && empty.value==&backing[1] && backing[1]==0)
+ check(!parse.failed(empty.failure) && empty.required==1 && empty.value==&backing[1] && backing[1]==0)
  check(backing[0]==165 && backing[2]=='b' && backing[5]==165)
  mem.fill(backing[..],165)
  short:=c.string_into(backing[1..4],"abc")
@@ -39,9 +39,9 @@ fn main() {
  for byte in backing { check(byte==165) }
  _=mem.copy(backing[..],"abcde!")
  overlap:=c.string_into(backing[1..5],backing[..3])
- check(overlap.failure.kind == parse.Kind.Ok && overlap.value==&backing[1] && mem.equal(backing[..],"aabc\x00!"))
+ check(!parse.failed(overlap.failure) && overlap.value==&backing[1] && mem.equal(backing[..],"aabc\x00!"))
  reverse:=c.string_into(backing[..4],backing[1..4])
- check(reverse.failure.kind == parse.Kind.Ok && reverse.value==&backing[0] && mem.equal(backing[..],"abc\x00\x00!"))
+ check(!parse.failed(reverse.failure) && reverse.value==&backing[0] && mem.equal(backing[..],"abc\x00\x00!"))
  before:[6]u8
  _=mem.copy(before[..],backing[..])
  alias_invalid:=c.string_into(backing[1..],backing[..5])
@@ -52,7 +52,7 @@ fn main() {
  path:[4300]u8
  mem.fill(path[..],'a')
  removed:=fs.remove(path[..])
- check(removed.failure.kind != io.Kind.Ok)
+ check(io.failed(removed.failure))
  for byte in path { check(byte=='a') }
 }
 '''
@@ -99,7 +99,7 @@ visited:usize=0
 fail_second:bool=false
 fn loader(name:*const u8) rawptr {
  text:=c.bytes_from_string(name,64)
- if text.failure.kind != parse.Kind.Ok || visited>=#len(names) || !mem.equal(text.value,names[visited]) { #panic("OpenGL CString loader") }
+ if parse.failed(text.failure) || visited>=#len(names) || !mem.equal(text.value,names[visited]) { #panic("OpenGL CString loader") }
  visited+=1
  if fail_second && visited==2 { return nil }
  return #cast(rawptr,1)

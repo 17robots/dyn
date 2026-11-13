@@ -42,7 +42,7 @@ fn main() {
   }
   text := c_string(arena, "café-😀")
   parsed := c.bytes_from_string(text, 16)
-  if parsed.failure.kind != parse.Kind.Ok || !bytes.equal(parsed.value, "café-😀") { #panic("CString bytes") }
+  if parse.failed(parsed.failure) || !bytes.equal(parsed.value, "café-😀") { #panic("CString bytes") }
   before_invalid := mem.arena_mark(arena)
   invalid: [3]u8 = ['a', 0, 'b']
   if c_string(arena, invalid[..]) != nil || mem.arena_mark(arena) != before_invalid {
@@ -53,16 +53,16 @@ fn main() {
   if vector == nil || #slice(vector, 4)[3].value != nil { #panic("vector sentinel") }
   for at in 0..3 {
     item := c.bytes_from_string(#slice(vector, 4)[at].value, 32)
-    if item.failure.kind != parse.Kind.Ok || !bytes.equal(item.value, arguments[at]) { #panic("vector bytes") }
+    if parse.failed(item.failure) || !bytes.equal(item.value, arguments[at]) { #panic("vector bytes") }
   }
   before_spawn := mem.arena_mark(arena)
   environment: [1][]const u8 = ["KEY=value"]
   result := spawn_native(arena, "/program", arguments[..], Options{environment: environment[..], directory: "/tmp"})
-  if result.failure.kind != io.Kind.Ok || result.value.handle != 42 || mem.arena_mark(arena) != before_spawn {
+  if io.failed(result.failure) || result.value.handle != 42 || mem.arena_mark(arena) != before_spawn {
     #panic("spawn setup and rewind")
   }
   rejected := spawn_native(arena, invalid[..], arguments[..], Options{})
-  if rejected.failure.kind == io.Kind.Ok || mem.arena_mark(arena) != before_spawn { #panic("failed setup rewind") }
+  if !io.failed(rejected.failure) || mem.arena_mark(arena) != before_spawn { #panic("failed setup rewind") }
   if !bytes.equal(c.bytes_from_string(text, 16).value, "café-😀") { #panic("live allocation") }
 }
 '''

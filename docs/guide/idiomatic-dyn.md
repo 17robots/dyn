@@ -327,7 +327,7 @@ use "std/io"
 struct Writer { file: fs.File, failure: io.Failure }
 
 fn put(writer: *Writer, text: []const u8) {
-  if writer.failure.kind != io.Kind.Ok {
+  if io.failed(writer.failure) {
     return
   }
   writer.failure = fs.write(&writer.file, text).failure

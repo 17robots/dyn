@@ -59,12 +59,12 @@ fn form_round_trip(context: rawptr, input: []const u8) bool {
   }
   decoded: [256]u8
   value := http.form_decode(decoded[..], encoded[..3 * #len(input)])
-  if value.failure.kind != parse.Kind.Ok || !bytes.equal(value.value, input) {
+  if parse.failed(value.failure) || !bytes.equal(value.value, input) {
     return false
   }
   small: [8]u8
   raw := http.form_decode(small[..], input)
-  return raw.failure.kind != parse.Kind.Ok || #len(raw.value) <= #len(input)
+  return parse.failed(raw.failure) || #len(raw.value) <= #len(input)
 }
 
 // Splits input at the first zero byte into pattern and path. Captures must be
@@ -120,7 +120,7 @@ fn header_injection(context: rawptr, input: []const u8) bool {
   response := http.Response{ output: io.Writer{ data: &capture, write: capture_write } }
   headers: [1]http.Header = [http.Header{ name: input[..split], value: input[split + 1..] }]
   sent := http.respond(&response, "", http.ResponseOptions{ content_type: "text/plain", headers: headers[..] })
-  if sent.failure.kind != io.Kind.Ok {
+  if io.failed(sent.failure) {
     return capture.length == 0
   }
   head := capture.bytes[..capture.length]
@@ -185,9 +185,9 @@ fn main() {
   defer mem.arena_release(arena)
   scale: u64 = 1
   arguments := process.arguments(arena)
-  if arguments.failure.kind == io.Kind.Ok && #len(arguments.value) > 1 {
+  if !io.failed(arguments.failure) && #len(arguments.value) > 1 {
     parsed := parse.u64_decimal(arguments.value[1])
-    if parsed.failure.kind == parse.Kind.Ok && parsed.value > 0 {
+    if !parse.failed(parsed.failure) && parsed.value > 0 {
       scale = parsed.value
     }
   }

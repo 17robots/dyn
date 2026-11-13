@@ -107,11 +107,11 @@ fn main() {
   pixels := mem.push_array(u8, output, #cast(usize, 480 * 240 * 4))
   surface := software.Surface{ pixels: pixels, width: 480, height: 240, stride: 480 * 4 }
   rendered := software.render(&surface, ui.first(&context), software.Font{ glyph: glyph, line_height: 20 })
-  if rendered.failure.kind != io.Kind.Ok || count != 3 {
+  if io.failed(rendered.failure) || count != 3 {
     #panic("UI demo render")
   }
   encoded := png.encode(output, pixels, 480, 240, 4)
-  if encoded.failure.kind != parse.Kind.Ok || fs.write_all("ui-demo.png", encoded.value).failure.kind != io.Kind.Ok {
+  if parse.failed(encoded.failure) || io.failed(fs.write_all("ui-demo.png", encoded.value).failure) {
     #panic("UI demo output")
   }
 }

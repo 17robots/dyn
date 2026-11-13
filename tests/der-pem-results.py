@@ -19,10 +19,10 @@ fn check(ok: bool) { if !ok { #panic("DER/PEM result regression") } }
 fn main() {
   certificate_bytes:[10]u8=[48,8,48,0,48,0,3,2,0,170]
   certificate_result:=certificate.parse(certificate_bytes[..])
-  check(certificate_result.failure.kind == parse.Kind.Ok && certificate_result.failure.kind==parse.Kind.Ok && certificate_result.value.signature_bits[0]==170)
+  check(!parse.failed(certificate_result.failure) && certificate_result.failure.kind==parse.Kind.Ok && certificate_result.value.signature_bits[0]==170)
   for i in 0..10 {
     broken:=certificate.parse(certificate_bytes[..i])
-    check(broken.failure.kind != parse.Kind.Ok && broken.failure.kind==parse.Kind.Syntax && #len(broken.value.encoded)==0 && broken.offset<=i)
+    check(parse.failed(broken.failure) && broken.failure.kind==parse.Kind.Syntax && #len(broken.value.encoded)==0 && broken.offset<=i)
   }
   certificate_bytes[0]=49
   check(certificate.parse(certificate_bytes[..]).offset==0)
@@ -38,28 +38,28 @@ fn main() {
   child := der.enter(element.value)
   check(der.next(&child).value.content[0] == 7 && der.finished(&child))
   eof := der.next(&c)
-  check(!eof.found && eof.failure.kind == parse.Kind.Ok && eof.offset == 5 && der.finished(&c))
+  check(!eof.found && !parse.failed(eof.failure) && eof.offset == 5 && der.finished(&c))
   storage: [4096]u8
   arena := mem.arena_from_buffer(storage[..])
   prefix := mem.push_bytes_uninit(arena, 7)
   prefix[0] = 42
   mark := mem.arena_mark(arena)
   valid := pem.decode(arena, "prefix\n-----BEGIN TEST-----\nAQID\n-----END TEST-----\ntail")
-  check(valid.failure.kind == parse.Kind.Ok && bytes.equal(valid.label, "TEST") && valid.consumed == 52)
+  check(!parse.failed(valid.failure) && bytes.equal(valid.label, "TEST") && valid.consumed == 52)
   check(#len(valid.value) == 3)
   mem.arena_rewind(arena, mark)
   empty := pem.decode(arena, "-----BEGIN TEST-----\n-----END TEST-----")
-  check(empty.failure.kind == parse.Kind.Ok && #len(empty.value) == 0 && bytes.equal(empty.label, "TEST") && empty.failure.kind == parse.Kind.Ok)
+  check(!parse.failed(empty.failure) && #len(empty.value) == 0 && bytes.equal(empty.label, "TEST") && !parse.failed(empty.failure))
   mem.arena_rewind(arena, mark)
   bad := pem.decode(arena, "-----BEGIN TEST-----\n!!!!\n-----END TEST-----")
-  check(bad.failure.kind != parse.Kind.Ok)
+  check(parse.failed(bad.failure))
   check(mem.arena_mark(arena) == mark && prefix[0] == 42 && #len(bad.value) == 0 && bad.offset == 21 && bad.failure.kind == parse.Kind.Syntax)
   
   z: der.Result
   p: pem.Result
-  check(z.failure.kind == parse.Kind.Ok && z.offset == 0 && #len(z.value.content) == 0)
-  check(p.failure.kind == parse.Kind.Ok && p.offset == 0 && #len(p.value) == 0)
-  check(der.next(&c).failure.kind == parse.Kind.Ok)
+  check(!parse.failed(z.failure) && z.offset == 0 && #len(z.value.content) == 0)
+  check(!parse.failed(p.failure) && p.offset == 0 && #len(p.value) == 0)
+  check(!parse.failed(der.next(&c).failure))
   malformed: [6][]const u8 = ["\x02", "\x1f\x00", "\x02\x80", "\x02\x82\x01", "\x02\x81\x00", "\x02\x03\x01"]
   offsets: [6]usize = [0, 0, 1, 1, 2, 2]
   for i in 0..6 {
@@ -77,7 +77,7 @@ fn main() {
   failures: [6][]const u8 = ["", "-----BEGIN -----\n", "-----BEGIN TEST-----x", "-----BEGIN TEST-----\nAQID\n-----END NO-----", "-----BEGIN TEST-----\nAQID", "-----BEGIN TEST-----\nA\n-----END TEST-----"]
   for input in failures {
     result := pem.decode(arena, input)
-    check(result.failure.kind != parse.Kind.Ok && result.failure.kind == parse.Kind.Syntax && #len(result.value) == 0 && #len(result.label) == 0 && result.consumed == 0 && result.offset <= #len(input))
+    check(parse.failed(result.failure) && result.failure.kind == parse.Kind.Syntax && #len(result.value) == 0 && #len(result.label) == 0 && result.consumed == 0 && result.offset <= #len(input))
     check(mem.arena_mark(arena) == mark && prefix[0] == 42)
   }
 

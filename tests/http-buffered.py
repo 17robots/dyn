@@ -40,14 +40,14 @@ fn main() {
   if #len(storage) != 8 { #panic("reserve") }
   storage[0] = 'x'
   if #len(http.body_buffer(&r, 8)) != 0 || sink.reserves != 2 { #panic("repeat reserve") }
-  if http.respond_buffered(&r, 9, http.ResponseOptions{}).failure.kind == io.Kind.Ok { #panic("length") }
-  if http.respond_buffered(&r, 1, http.ResponseOptions{ content_type: "bad\r\n" }).failure.kind == io.Kind.Ok { #panic("header injection") }
+  if !io.failed(http.respond_buffered(&r, 9, http.ResponseOptions{}).failure) { #panic("length") }
+  if !io.failed(http.respond_buffered(&r, 1, http.ResponseOptions{ content_type: "bad\r\n" }).failure) { #panic("header injection") }
   huge: [9000]u8
   for i in 0..#len(huge) { huge[i] = 'a' }
   if http.respond_buffered(&r, 1, http.ResponseOptions{ reason: huge[..] }).failure.kind != io.Kind.Capacity { #panic("head capacity") }
   if sink.commits != 0 || r.started { #panic("published invalid head") }
-  if http.respond_buffered(&r, 1, http.ResponseOptions{}).failure.kind != io.Kind.Ok || !r.finished || sink.commits != 1 || sink.writes != 0 { #panic("commit") }
-  if http.respond_buffered(&r, 1, http.ResponseOptions{}).failure.kind == io.Kind.Ok || sink.commits != 1 { #panic("recommit") }
+  if io.failed(http.respond_buffered(&r, 1, http.ResponseOptions{}).failure) || !r.finished || sink.commits != 1 || sink.writes != 0 { #panic("commit") }
+  if !io.failed(http.respond_buffered(&r, 1, http.ResponseOptions{}).failure) || sink.commits != 1 { #panic("recommit") }
   for native in [0, -73] {
     failing := Sink{ fail: true, code: #cast(isize, native) }
     failed := response(&failing)
@@ -61,7 +61,7 @@ fn main() {
   }
   fallback := response(&sink)
   _ = http.body_buffer(&fallback, 8)
-  if http.respond(&fallback, "fallback", http.ResponseOptions{}).failure.kind != io.Kind.Ok || #len(fallback.reserved) != 0 { #panic("cancel reservation") }
+  if io.failed(http.respond(&fallback, "fallback", http.ResponseOptions{}).failure) || #len(fallback.reserved) != 0 { #panic("cancel reservation") }
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-http-buffered-') as tmp:

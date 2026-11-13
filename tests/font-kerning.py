@@ -117,9 +117,9 @@ with tempfile.TemporaryDirectory(prefix='dyn-font-kerning-') as directory:
         source = ('use "std/parse" parse\nuse "std/font" font\nuse "std/math" math\n'
                   'data: []const u8 = "' + ''.join('\\x%02x' % byte for byte in data) + '"\n'
                   'fn main() {\n  face := font.open(data)\n')
-        source += f'  if (face.failure.kind == parse.Kind.Ok) != {str(ok).lower()} {{ #panic("{name}: status") }}\n'
+        source += f'  if (!parse.failed(face.failure)) != {str(ok).lower()} {{ #panic("{name}: status") }}\n'
         if ok:
-            source += f'  if face.failure.kind != parse.Kind.Ok || face.offset != 0 {{ #panic("{name}: metadata") }}\n'
+            source += f'  if parse.failed(face.failure) || face.offset != 0 {{ #panic("{name}: metadata") }}\n'
             source += f'  if font.glyph_index(&face.value, 65) != 1 {{ #panic("{name}: cmap compatibility") }}\n'
             for left, right, want in ((1, 2, expected[0]), (1, 3, expected[1]), (2, 3, expected[2])):
                 source += f'  if math.abs(font.kerning(&face.value, {left}, {right}, 16) - {want}) > 0.000001 {{ #panic("{name}: pair {left} {right}") }}\n'
@@ -144,7 +144,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-font-kerning-') as directory:
         at = records[b'kern']
         field_at = at + (8 if field == 'offset' else 12)
         data[field_at:field_at + 4] = u32(len(data) + 100)
-        (work / 'main.dyn').write_text('use "std/parse" parse\nuse "std/font" font\ndata: []const u8 = "' + ''.join('\\x%02x' % byte for byte in data) + '"\nfn main() {\n face := font.open(data)\n if face.failure.kind == parse.Kind.Ok || face.failure.kind != parse.Kind.Syntax || face.offset != ' + str(at + 8) + ' { #panic("kern directory bounds") }\n}\n')
+        (work / 'main.dyn').write_text('use "std/parse" parse\nuse "std/font" font\ndata: []const u8 = "' + ''.join('\\x%02x' % byte for byte in data) + '"\nfn main() {\n face := font.open(data)\n if !parse.failed(face.failure) || face.failure.kind != parse.Kind.Syntax || face.offset != ' + str(at + 8) + ' { #panic("kern directory bounds") }\n}\n')
         for mode in ('--debug', '--release'):
             output = work / 'program'
             subprocess.run([DYN, 'build', str(work), mode, '--quiet', '--no-cache', '--output', str(output)], check=True, timeout=300)

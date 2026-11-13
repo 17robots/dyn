@@ -92,7 +92,7 @@ LAYOUT
     require(ts.node_start(node) == 0 && ts.node_end(node) == 12)
     require(ts.child_count(node) == 1)
     kind := ts.node_type(node, 64)
-    require(kind.failure.kind == parse.Kind.Ok && bytes.equal(kind.value, "source_file"))
+    require(!parse.failed(kind.failure) && bytes.equal(kind.value, "source_file"))
     copy := ts.tree_copy_owned(parsed.tree)
     require(copy != nil)
     ts.tree_destroy_owned(parsed.tree)

@@ -26,11 +26,11 @@ for index, (pattern, text) in enumerate(cases):
     span = '' if match is None else f' && r.value.start == {match.start()} && r.value.end == {match.end()}'
     checks.append(f'''if true {{
     p := regex.compile(arena, {json.dumps(pattern)})
-    require(p.failure.kind == parse.Kind.Ok, "compile {index}")
+    require(!parse.failed(p.failure), "compile {index}")
     before := mem.arena_used(arena)
     for repeat in 0..3 {{
       r := regex.find(p.value, {json.dumps(text)})
-      require(r.failure.kind == parse.Kind.Ok && r.value.found == {expected}{span}, "case {index}")
+      require(!parse.failed(r.failure) && r.value.found == {expected}{span}, "case {index}")
       require(mem.arena_used(arena) == before, "match allocated")
     }}
   }}''')
@@ -45,7 +45,7 @@ fn main() {
   first := regex.compile(arena, pattern[..])
   second := regex.compile(arena, "b+")
   pattern[0] = 'z'
-  require(first.failure.kind == parse.Kind.Ok && second.failure.kind == parse.Kind.Ok && regex.matches(first.value, "aaab") && regex.matches(second.value, "bbb"), "independent owned patterns")
+  require(!parse.failed(first.failure) && !parse.failed(second.failure) && regex.matches(first.value, "aaab") && regex.matches(second.value, "bbb"), "independent owned patterns")
   invalid_program: regex.Program
   invalid_match := regex.find(invalid_program, "a")
   require(invalid_match.failure.kind == parse.Kind.Syntax, "zero program")
@@ -58,14 +58,14 @@ fn main() {
   require(mem.arena_used(arena) == mark, "invalid allocated")
   captured := regex.compile(arena, "(a)b|(a)c")
   one := regex.find(captured.value, "ac")
-  require(one.failure.kind == parse.Kind.Ok && !one.captures[0].found && one.captures[1].found && one.captures[1].end == 1, "captures")
+  require(!parse.failed(one.failure) && !one.captures[0].found && one.captures[1].found && one.captures[1].end == 1, "captures")
   two := regex.find(captured.value, "zz")
-  require(two.failure.kind == parse.Kind.Ok && !two.value.found && !two.captures[0].found && !two.captures[1].found, "capture clear")
+  require(!parse.failed(two.failure) && !two.value.found && !two.captures[0].found && !two.captures[1].found, "capture clear")
   backing: [32768]u8
   for i in 0..#len(backing) { backing[i] = 255 }
   fixed := mem.arena_from_buffer(backing[..])
   fixed_program := regex.compile(fixed, "(a)*")
-  require(fixed_program.failure.kind == parse.Kind.Ok && regex.find(fixed_program.value, "aaa").captures[0].start == 2, "dirty backing zero initialization")
+  require(!parse.failed(fixed_program.failure) && regex.find(fixed_program.value, "aaa").captures[0].start == 2, "dirty backing zero initialization")
   long_program := regex.compile(arena, "^(a)*$")
   long_text := mem.push_array(u8, arena, 100000)
   for i in 0..#len(long_text) { long_text[i] = 'a' }

@@ -112,7 +112,7 @@ fn report(file: []const u8) {
   input := mem.arena_alloc(mem.GiB)
   defer mem.arena_release(input)
   read := fs.read_all(input, file, 1024 * mem.MiB)
-  if read.failure.kind != io.Kind.Ok {
+  if io.failed(read.failure) {
     #panic("read report")
   }
   scratch := mem.arena_alloc(0)
@@ -124,7 +124,7 @@ fn report(file: []const u8) {
     length := bytes.find_byte(rest, '\n')
     if length != 0 {
       parsed := json.parse(scratch, rest[..length])
-      if parsed.failure.kind != parse.Kind.Ok || !add_record(&summary, parsed.root) {
+      if parse.failed(parsed.failure) || !add_record(&summary, parsed.root) {
         #panic("invalid record")
       }
       mem.arena_reset(scratch)
@@ -139,7 +139,7 @@ fn report(file: []const u8) {
 fn search_walk(directory: []const u8, result: *Search) {
   buffer: [32768]u8
   opened := fs.open_directory(directory, buffer[..])
-  if opened.failure.kind != io.Kind.Ok {
+  if io.failed(opened.failure) {
     #panic("open directory")
   }
   state := opened.value
@@ -149,7 +149,7 @@ fn search_walk(directory: []const u8, result: *Search) {
   for {
     entry := fs.directory_next(&state)
     if !entry.found {
-      if entry.failure.kind != io.Kind.Ok {
+      if io.failed(entry.failure) {
         #panic("read directory")
       }
       break
@@ -170,7 +170,7 @@ fn search_walk(directory: []const u8, result: *Search) {
       search_walk(joined.value, result)
     } else if bytes.ends_with(entry.name, ".txt") {
       read := fs.read_all(scratch, joined.value, 1024 * mem.MiB)
-      if read.failure.kind != io.Kind.Ok {
+      if io.failed(read.failure) {
         #panic("read search")
       }
       result.files += 1
@@ -229,7 +229,7 @@ fn handle(response: *http.Response, request: *const http.Request) http.Result {
     return http.respond(response, "invalid\n", http.ResponseOptions{ status: 400, close_connection: true })
   }
   parsed := json.parse(arena, request.body)
-  if parsed.failure.kind != parse.Kind.Ok || parsed.root.kind != json.KindArray {
+  if parse.failed(parsed.failure) || parsed.root.kind != json.KindArray {
     return http.respond(response, "invalid\n", http.ResponseOptions{ status: 400, close_connection: true })
   }
   summary: Summary
@@ -248,19 +248,19 @@ fn serve() {
   state := mem.push(App, arena)
   address := net.ipv4(127, 0, 0, 1, 0)
   opened := net.tcp_listen_ipv4(&address, 128)
-  if opened.failure.kind != io.Kind.Ok {
+  if io.failed(opened.failure) {
     #panic("listen")
   }
   listener := net.listener_take(&opened.value)
   bound: net.Address
-  if net.local_address(listener.descriptor, &bound).failure.kind != io.Kind.Ok {
+  if io.failed(net.local_address(listener.descriptor, &bound).failure) {
     #panic("local address")
   }
   workers := mem.push_array(concurrent.Worker, arena, 4)
   receive := mem.push_array(u8, arena, #cast(usize, 4) * (mem.MiB + 16384))
   stacks := mem.push_array(u8, arena, #cast(usize, 4) * 512 * mem.KiB)
   started := concurrent.start_context(arena, workers, &listener, receive, mem.MiB + 16384, stacks, 512 * mem.KiB, handle, state)
-  if started.failure.kind != io.Kind.Ok {
+  if io.failed(started.failure) {
     #panic("workers")
   }
   port := #cast(u64, bound.bytes[2]) * 256 + #cast(u64, bound.bytes[3])
@@ -273,7 +273,7 @@ fn serve() {
   concurrent.stop(workers)
   joined := concurrent.join(workers)
   net.listener_close(&listener)
-  if joined.failure.kind != io.Kind.Ok {
+  if io.failed(joined.failure) {
     #panic("join workers")
   }
 }
@@ -281,7 +281,7 @@ fn main() {
   arena := mem.arena_alloc(mem.GiB)
   defer mem.arena_release(arena)
   arguments := process.arguments(arena)
-  if arguments.failure.kind != io.Kind.Ok {
+  if io.failed(arguments.failure) {
     #panic("arguments")
   }
   args := arguments.value

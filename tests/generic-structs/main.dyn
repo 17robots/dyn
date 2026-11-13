@@ -65,7 +65,7 @@ fn main() {
     #panic("chunk list")
   }
   counted := io.Result(i32){ value: 3 }
-  if counted.value != 3 || counted.failure.kind != io.Kind.Ok {
+  if counted.value != 3 || io.failed(counted.failure) {
     #panic("result")
   }
   info := #typeof(Box(i32))

@@ -259,7 +259,7 @@ fn word_boundary(state: *State, text: []const u8, at: usize, forward: bool) usiz
     mem.arena_rewind(state.frame, mark)
   }
   boundaries := unicode_text.word_breaks(state.frame, text)
-  if boundaries.failure.kind != parse.Kind.Ok {
+  if parse.failed(boundaries.failure) {
     return at
   }
   if forward {

@@ -73,7 +73,7 @@ pub fn open(window: *Window, title: []const u8, width, height: i32) Result {
   }
   storage: [4096]u8
   name := c.string_into(storage[..], title)
-  if name.failure.kind != parse.Kind.Ok {
+  if parse.failed(name.failure) {
     return Result{kind:io.Kind.InvalidInput}
   }
   display := display_open(nil)

@@ -220,7 +220,7 @@ fn websocket_accept(destination: []u8, key: []const u8) []u8 {
 // Validates the HTTP request-side RFC 6455 upgrade fields. Returned key borrows request.
 fn websocket_validate_upgrade_request(request: []const u8) WebSocketUpgrade {
   head := http.parse_request(request)
-  if head.failure.kind != parse.Kind.Ok {
+  if parse.failed(head.failure) {
     return WebSocketUpgrade{ offset: head.offset, failure: parse.Failure{ kind: head.failure.kind, offset: head.offset } }
   }
   if #len(request) < 4 || !ws_equal(request[..4], "GET ") {
@@ -258,7 +258,7 @@ fn websocket_write_upgrade_response(destination: []u8, key: []const u8) []u8 {
 
 fn websocket_validate_upgrade_response(response: []const u8, key: []const u8) bool {
   head := http.parse_response(response)
-  if head.failure.kind != parse.Kind.Ok || head.code != 101 {
+  if parse.failed(head.failure) || head.code != 101 {
     return false
   }
   upgrade := http.header(response, "Upgrade")
@@ -416,7 +416,7 @@ fn websocket_parse(input: []const u8) WebSocketFrame {
 }
 
 fn websocket_decode(destination: []u8, frame: WebSocketFrame) []u8 {
-  if frame.failure.kind != parse.Kind.Ok || #len(destination) < #len(frame.payload) {
+  if parse.failed(frame.failure) || #len(destination) < #len(frame.payload) {
     return destination[..0]
   }
   fm0 := frame.mask >> 24
@@ -516,7 +516,7 @@ fn websocket_message_state(expect_masked: bool) WebSocketMessageState {
 // Advances one RFC 6455 message io. All storage belongs to the caller.
 // Message storage persists across fragments; control storage may be reused per call.
 fn websocket_receive(state: *WebSocketMessageState, message: []u8, control: []u8, frame: WebSocketFrame) WebSocketEvent {
-  if frame.failure.kind != parse.Kind.Ok {
+  if parse.failed(frame.failure) {
     return WebSocketEvent{ offset: frame.offset, detail: WebSocketEventKind.Error, failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
   if state.closed {
@@ -601,7 +601,7 @@ pub fn write_upgrade_response(arena: *mem.Arena, key: []const u8) []u8 {
 
 pub fn validate_upgrade_response(response: []const u8, key: []const u8) Result {
   head := http.parse_response(response)
-  if head.failure.kind != parse.Kind.Ok {
+  if parse.failed(head.failure) {
     return Result{ offset: head.offset, failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
   if !websocket_validate_upgrade_response(response, key) {
@@ -758,7 +758,7 @@ pub fn connection_receive(state: *WebSocketConnection) WebSocketResult {
   state.frame_consumed = 0
   for true {
     frame := websocket_parse(state.frames[..state.frame_used])
-    if frame.failure.kind == parse.Kind.Ok {
+    if !parse.failed(frame.failure) {
       event := websocket_receive(&state.state, state.message, state.control, frame)
       if event.detail == WebSocketEventKind.Error {
         state.offset = event.offset

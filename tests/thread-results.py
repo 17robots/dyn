@@ -35,13 +35,13 @@ fn invalid(result: thread.SpawnResult, arena: *mem.Arena, mark: usize) {
 }
 fn joined(value: *thread.Thread) {
   result := thread.join(value)
-  if result.failure.kind != errors.Kind.Ok || result.failure.native != 0 || result.value != 0 || thread.id(value) != 0 { #panic("join result") }
+  if errors.failed(result.failure) || result.failure.native != 0 || result.value != 0 || thread.id(value) != 0 { #panic("join result") }
 }
 fn main() {
   zero := thread.SpawnResult{}
-  if zero.value != nil || zero.failure.kind != errors.Kind.Ok || zero.failure.native != 0 { #panic("zero spawn result") }
+  if zero.value != nil || errors.failed(zero.failure) || zero.failure.native != 0 { #panic("zero spawn result") }
   result := thread.Result{}
-  if result.value != 0 || result.failure.kind != errors.Kind.Ok || result.failure.native != 0 { #panic("zero result") }
+  if result.value != 0 || errors.failed(result.failure) || result.failure.native != 0 { #panic("zero result") }
   empty := thread.Thread{}
   if thread.id(&empty) != 0 { #panic("zero id") }
   joined(&empty)
@@ -61,11 +61,11 @@ fn main() {
   first := Shared{}
   second := Shared{}
   owned := thread.spawn_with_size(arena, 131072, worker, &first)
-  if owned.failure.kind != errors.Kind.Ok || owned.value == nil || owned.failure.kind != errors.Kind.Ok || owned.failure.native != 0 { #panic("owned spawn") }
+  if errors.failed(owned.failure) || owned.value == nil || errors.failed(owned.failure) || owned.failure.native != 0 { #panic("owned spawn") }
   stable := owned.value
   owned_mark := mem.arena_mark(arena)
   borrowed := thread.spawn(arena, stack[..], worker, &second)
-  if borrowed.failure.kind != errors.Kind.Ok || borrowed.value == nil || borrowed.failure.kind != errors.Kind.Ok || borrowed.failure.native != 0 { #panic("borrowed spawn") }
+  if errors.failed(borrowed.failure) || borrowed.value == nil || errors.failed(borrowed.failure) || borrowed.failure.native != 0 { #panic("borrowed spawn") }
   if borrowed.value == stable || owned.value != stable || owned_mark <= mark { #panic("stable distinct nodes") }
   for sync.load_u32(&first.arrived) == 0 || sync.load_u32(&second.arrived) == 0 { _ = thread.yield_now() }
   if thread.id(stable) == 0 || thread.id(borrowed.value) == 0 || thread.id(stable) == thread.id(borrowed.value) { #panic("two active ids") }

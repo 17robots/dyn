@@ -81,16 +81,16 @@ cases = {
   exhausted := mem.arena_from_buffer(tiny[pad..pad+mem.ArenaHeader+1])
   if image.resize(exhausted, input[..], 2, 2, output[..], 4, 4, 1, false) { #panic("arena allocator replaced") }''',
     'vulkan': '''library := dynlib.open("libvulkan.so.1", dynlib.Now)
-  if library.failure.kind != io.Kind.Ok { #panic("loader") }
+  if io.failed(library.failure) { #panic("loader") }
   symbol := dynlib.symbol(library.value, "vkEnumerateInstanceVersion")
-  if symbol.failure.kind != io.Kind.Ok { #panic("procedure") }
+  if io.failed(symbol.failure) { #panic("procedure") }
   version: u32 = 0
   if raw.vkEnumerateInstanceVersion(#cast(raw.Procedure_vkEnumerateInstanceVersion, symbol.value), &version) != raw.VK_SUCCESS || version == 0 { #panic("dispatch") }
   _ = dynlib.close(&library.value)''',
     'opengl': '''library := dynlib.open("libGL.so.1", dynlib.Now)
-  if library.failure.kind != io.Kind.Ok { #panic("loader") }
+  if io.failed(library.failure) { #panic("loader") }
   symbol := dynlib.symbol(library.value, "glGetError")
-  if symbol.failure.kind != io.Kind.Ok { #panic("procedure") }
+  if io.failed(symbol.failure) { #panic("procedure") }
   raw.glClear(record_clear, #cast(u32, raw.GL_COLOR_BUFFER_BIT))
   if recorded_mask != #cast(u32, raw.GL_COLOR_BUFFER_BIT) { #panic("dispatch") }
   _ = dynlib.close(&library.value)''',

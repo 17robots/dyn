@@ -74,7 +74,7 @@ fn main() {
   parts: [2][]const u8 = ["one", "two"]
   expect(bytes.equal(strings.join(arena, parts[..], "/"), "one/two"))
   parsed := ini.parse(arena, "[window]\nwidth=80\nheight=25\n")
-  expect(parsed.failure.kind == parse.Kind.Ok && #len(parsed.value) == 3)
+  expect(!parse.failed(parsed.failure) && #len(parsed.value) == 3)
   expect(bytes.equal(parsed.value[2].section, "window") && bytes.equal(parsed.value[2].value, "25"))
   before := mem.arena_used(arena)
   syntax := ini.parse(arena, "x=1\ninvalid\n")
@@ -83,7 +83,7 @@ fn main() {
   tiny_storage: [mem.ArenaBufferOverhead]u8
   tiny := mem.arena_from_buffer(tiny_storage[..])
   tiny = mem.arena_from_buffer(tiny.data[..mem.ArenaHeader])
-  expect(ini.parse(tiny, "# empty").failure.kind == parse.Kind.Ok)
+  expect(!parse.failed(ini.parse(tiny, "# empty").failure))
   expect(#len(strings.clone(tiny, "")) == 0)
   expect(mem.arena_used(tiny) == 0)
 

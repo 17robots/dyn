@@ -126,13 +126,13 @@ fn additional_contracts() {
   check(!end.found && end.failure.kind == parse.StreamKind.Ok)
   attrs := xml.attributes(xml.Event{})
   attr := xml.next_attribute(&attrs)
-  check(!attr.found && attr.failure.kind == parse.Kind.Ok)
+  check(!attr.found && !parse.failed(attr.failure))
   zero_field: csv.Field
   zero_result: xml.Result
   zero_attribute: xml.Attribute
   check(!zero_field.found && zero_field.failure.kind == parse.StreamKind.Ok)
   check(!zero_result.found && zero_result.failure.kind == parse.StreamKind.Ok)
-  check(!zero_attribute.found && zero_attribute.failure.kind == parse.Kind.Ok)
+  check(!zero_attribute.found && !parse.failed(zero_attribute.failure))
   // CSV diagnostics retain the field's starting byte offset.
   bad := csv.scanner("a,\"unfinished")
   check(csv.next(&bad, scratch[..]).found)

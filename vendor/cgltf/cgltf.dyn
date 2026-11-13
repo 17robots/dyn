@@ -55,7 +55,7 @@ pub fn attach_buffer(model: Model, index: usize, bytes: []const u8) bool {
 }
 pub fn buffer_uri(model: Model, index: usize, maximum: usize) []const u8 {
   value := c.bytes_from_string(native_uri(model, index), maximum)
-  if value.failure.kind != parse.Kind.Ok {
+  if parse.failed(value.failure) {
     return ""
   }
   return value.value

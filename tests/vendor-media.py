@@ -56,7 +56,7 @@ fn main() {
   defer ts.tree_destroy_owned(parsed.tree)
   node := ts.root(parsed.tree)
   kind := ts.node_type(node, 128)
-  if kind.failure.kind != parse.Kind.Ok || !bytes.equal(kind.value, "translation_unit") || ts.node_has_error(node) {
+  if parse.failed(kind.failure) || !bytes.equal(kind.value, "translation_unit") || ts.node_has_error(node) {
     #panic("root")
   }
   if ts.node_end(node) != 6 || ts.child_count(node) != 1 {
@@ -219,7 +219,7 @@ fn main() {
     return
   }
   loaded := fs.read_all(storage, args[1], 8 * 1024 * 1024)
-  if loaded.failure.kind != io.Kind.Ok {
+  if io.failed(loaded.failure) {
     #panic("read archive")
   }
   opened := archive.open_memory_owned(loaded.value)
@@ -239,7 +239,7 @@ fn main() {
       #panic("archive header")
     }
     name := archive.entry_name(entry.entry, 4096)
-    if name.failure.kind != parse.Kind.Ok {
+    if parse.failed(name.failure) {
       #panic("archive name")
     }
     io.println("{}", name.value)
@@ -305,7 +305,7 @@ fn main() {
   }
   defer sdl3.surface_destroy_owned(surface.value)
   bytes := fs.read_all(storage, args[1], 8 * 1024 * 1024)
-  if bytes.failure.kind != io.Kind.Ok {
+  if io.failed(bytes.failure) {
     #panic("image read")
   }
   decoded := image.decode_owned(bytes.value)
@@ -482,7 +482,7 @@ fn atlas_smoke(api: *gl.Api) {
 }
 fn missing_texture_proc(name: *const u8) rawptr {
   bytes := c.bytes_from_string(name, 64)
-  if bytes.failure.kind == parse.Kind.Ok && bytes.equal(bytes.value, "glTexImage2D") { return nil }
+  if !parse.failed(bytes.failure) && bytes.equal(bytes.value, "glTexImage2D") { return nil }
   return sdl3.gl_proc(name)
 }
 fn main() {

@@ -54,9 +54,9 @@ fn main() {
   check(!io.failed(text.failure), "builder clear")
   arguments: [1][]const u8 = ["true"]
   spawned := process.spawn(arena, "/bin/true", arguments[..], process.Options{})
-  check(spawned.failure.kind == io.Kind.Ok, "zero options spawn")
+  check(!io.failed(spawned.failure), "zero options spawn")
   exited := process.wait(&spawned.value, false)
-  check(exited.failure.kind == io.Kind.Ok && exited.code == 0, "zero options inherit")
+  check(!io.failed(exited.failure) && exited.code == 0, "zero options inherit")
   idle: watch.Watcher
   watch.close(&idle)
   check(!idle.active, "zero watcher closes nothing")

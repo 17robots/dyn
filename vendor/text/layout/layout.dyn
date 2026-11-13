@@ -369,7 +369,7 @@ fn paragraph(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[
     return emit(output, api, bidi_api, text, &resolved.value, clusters, 0, #len(text), base, font, tab)
   }
   breaks:=unicode.line_breaks(work, text)
-  if breaks.failure.kind != parse.Kind.Ok {
+  if parse.failed(breaks.failure) {
     return io.Kind.InvalidInput
   }
   spans:=mem.arena_alloc(0)

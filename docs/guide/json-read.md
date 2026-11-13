@@ -14,7 +14,7 @@ fn main() {
   arena := mem.arena_alloc(mem.MiB)
   defer mem.arena_release(arena)
   parsed := json.parse(arena, "{\"count\":12}")
-  if parsed.failure.kind != parse.Kind.Ok {
+  if parse.failed(parsed.failure) {
     return
   }
   count := json.as_u64(json.get(parsed.root, "count"))

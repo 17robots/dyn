@@ -62,12 +62,12 @@ fn main() {
  for archive in [data, PAX, GNU] {
    state := tar.reader(archive)
    first := tar.next(&state)
-   check(first.found && first.failure.kind == parse.Kind.Ok )
+   check(first.found && !parse.failed(first.failure) )
    check(bytes.equal(first.entry.data,"hello") && first.entry.kind == '0')
    empty := tar.next(&state)
    check(empty.found && #len(empty.entry.data) == 0)
    end := tar.next(&state)
-   check(!end.found && end.failure.kind == parse.Kind.Ok)
+   check(!end.found && !parse.failed(end.failure))
    check(!tar.next(&state).found)
    header: [512]u8
    metadata: [2048]u8
@@ -89,7 +89,7 @@ fn main() {
    state := tar.reader(source)
    result := tar.next(&state)
    for result.found { result = tar.next(&state) }
-   check(!result.found && result.failure.kind == parse.Kind.Ok)
+   check(!result.found && !parse.failed(result.failure))
    header: [512]u8
    cursor := io.cursor(source)
    stream := tar.stream_reader(io.cursor_reader(&cursor),header[..],header[..0])

@@ -19,7 +19,7 @@ pub fn open_owned(path: []const u8, buffer: []u8, points: f32) FontResult {
     return FontResult{ failure: io.Failure{ kind: io.Kind.System } }
   }
   encoded := c.string_into(buffer, path)
-  if encoded.failure.kind != parse.Kind.Ok {
+  if parse.failed(encoded.failure) {
     return FontResult{ failure: io.Failure{ kind: io.Kind.System } }
   }
   value := native_open(encoded.value, points)

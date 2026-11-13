@@ -33,7 +33,7 @@ fn save(arena:*mem.Arena,rects:[]const layout.SelectionRect,path:[]const u8) {
   fields:[7]u32=[#cast(u32,r.line),#cast(u32,r.start),#cast(u32,r.end),#cast(u32,#cast(i32,r.x*64.0)),#cast(u32,#cast(i32,r.y*64.0)),#cast(u32,#cast(i32,r.width*64.0)),#cast(u32,#cast(i32,r.height*64.0))]
   for j in 0..7 {binary.store_u32_le(output[4+i*28+j*4..8+i*28+j*4],fields[j])}
  }
- check(fs.write_all(path,output).failure.kind == errors.Kind.Ok)
+ check(!errors.failed(fs.write_all(path,output).failure))
 }
 fn main() {
  owner:=mem.arena_alloc(0)
@@ -42,14 +42,14 @@ fn main() {
   mem.arena_release(owner)}
  library:=dynlib.open("HB_LIBRARY",dynlib.Now)
  bidi_library:=dynlib.open("BIDI_LIBRARY",dynlib.Now)
- check(library.failure.kind == errors.Kind.Ok && bidi_library.failure.kind == errors.Kind.Ok)
+ check(!errors.failed(library.failure) && !errors.failed(bidi_library.failure))
  defer {_=dynlib.close(&library.value)
   _=dynlib.close(&bidi_library.value)}
  h:=hb.load(library.value)
  b:=bidi.load(bidi_library.value)
  check(!errors.failed(h.failure) && !errors.failed(b.failure))
  bytes:=fs.read_all(owner,"font.ttf",10000000)
- check(bytes.failure.kind == errors.Kind.Ok)
+ check(!errors.failed(bytes.failure))
  font:=hb.font_owned(&h.api,bytes.value,0)
  check(!errors.failed(font.failure))
  defer h.api.font_destroy(font.value)

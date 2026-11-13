@@ -143,7 +143,7 @@ pub fn connection_release(connection: *Connection) {
 fn reader_read(data: rawptr, destination: []u8) io.Transfer {
   connection := #cast(*Connection, data)
   result := read(connection.*, destination)
-  if result.failure.kind != io.Kind.Ok {
+  if io.failed(result.failure) {
     return io.Transfer{ failure: io.Failure{ kind: result.failure.kind, native: result.failure.native } }
   }
   status := io.Status.Complete
@@ -156,7 +156,7 @@ fn reader_read(data: rawptr, destination: []u8) io.Transfer {
 fn writer_write(data: rawptr, source: []const u8) io.Transfer {
   connection := #cast(*Connection, data)
   result := write(connection.*, source)
-  if result.failure.kind != io.Kind.Ok {
+  if io.failed(result.failure) {
     return io.Transfer{ transferred: result.count, failure: io.Failure{ kind: result.failure.kind, native: result.failure.native } }
   }
   return io.Transfer{ transferred: result.count, status: io.Status.Complete }

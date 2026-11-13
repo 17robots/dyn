@@ -3,7 +3,7 @@ use "std/io" errors
 use "std/mem"
 fn main() {
   context := tls.client_config_create()
-  if context.failure.kind != errors.Kind.Ok { #panic("native TLS trust configuration") }
+  if errors.failed(context.failure) { #panic("native TLS trust configuration") }
   defer tls.config_release(&context.value)
   backing: [256]u8
   arena := mem.arena_from_buffer(backing[..])
@@ -11,7 +11,7 @@ fn main() {
   held.* = 42
   mark := mem.arena_mark(arena)
   failed := tls.client_connection_create(arena, context.value, -1, "example.test")
-  if failed.failure.kind == errors.Kind.Ok || failed.value != nil || failed.detail != tls.ErrorKind.InvalidArgument || failed.failure.kind != errors.Kind.InvalidInput || failed.failure.native != 0 { #panic("native TLS invalid descriptor") }
+  if !errors.failed(failed.failure) || failed.value != nil || failed.detail != tls.ErrorKind.InvalidArgument || failed.failure.kind != errors.Kind.InvalidInput || failed.failure.native != 0 { #panic("native TLS invalid descriptor") }
   server := tls.server_config_create(arena, "/dyn/nonexistent/certificate.pem", "/dyn/nonexistent/key.pem")
-  if server.failure.kind == errors.Kind.Ok || server.value != nil || mem.arena_mark(arena) != mark || held.* != 42 { #panic("native TLS failed setup rollback") }
+  if !errors.failed(server.failure) || server.value != nil || mem.arena_mark(arena) != mark || held.* != 42 { #panic("native TLS failed setup rollback") }
 }

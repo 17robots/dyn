@@ -45,7 +45,7 @@ pub fn get_into(url: []const u8, url_buffer: []u8, destination: []u8, timeout_ms
     return Result{ code: -1, failure: io.Failure{ kind: io.Kind.System } }
   }
   encoded := c.string_into(url_buffer, url)
-  if encoded.failure.kind != parse.Kind.Ok {
+  if parse.failed(encoded.failure) {
     return Result{ code: -1, failure: io.Failure{ kind: io.Kind.System } }
   }
   easy := native_easy_init()

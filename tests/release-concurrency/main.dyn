@@ -33,7 +33,7 @@ fn main() {
   i: usize = 0
   for i < 4 {
     spawned:=thread.spawn(arena,stacks[i][..],worker,&state)
-    if spawned.failure.kind != errors.Kind.Ok { #panic("spawn") }
+    if errors.failed(spawned.failure) { #panic("spawn") }
     workers[i]=spawned.value
     i += 1
   }
@@ -45,7 +45,7 @@ fn main() {
   i = 0
   for i < 4 {
     sync.semaphore_wait(&state.gate)
-    if thread.join(workers[i]).failure.kind != errors.Kind.Ok { #panic("join") }
+    if errors.failed(thread.join(workers[i]).failure) { #panic("join") }
     i += 1
   }
   if state.total != 40000 || sync.load_u64(&state.atomic) != 40000 || state.initializers != 1 { #panic("concurrency result") }

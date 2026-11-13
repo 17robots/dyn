@@ -23,7 +23,7 @@ fn main() {
   check(xml.is_nil(&zero) && xml.is_nil(nil))
   check(xml.child(nil, "x") == &xml.nil_node && xml.at(nil, 0) == &xml.nil_node && xml.next_sibling(nil) == &xml.nil_node)
   r := xml.parse(arena, "<?xml version='1.0'?>\\n<!--before--><root a='&amp;' b=\\"2\\"><leaf/>raw&amp;<!--hi--><![CDATA[<raw>]]><?pi body  ?></root> ")
-  check(r.failure.kind == parse.Kind.Ok && r.failure.kind == parse.Kind.Ok)
+  check(!parse.failed(r.failure) && !parse.failed(r.failure))
   check(r.root.kind == xml.NodeKind.Document && r.root.parent == nil)
   check(xml.at(r.root, 0).kind == xml.NodeKind.Processing && bytes.equal(xml.at(r.root, 0).text, " version='1.0'"))
   root := xml.child(r.root, "root")
@@ -40,7 +40,7 @@ fn main() {
   borrowed: [8]u8 = ['<', 't', '>', 'x', '<', '/', 't', '>']
   borrowed_tree := xml.parse(arena, borrowed[..])
   borrowed_text := xml.at(xml.child(borrowed_tree.root, "t"), 0)
-  check(borrowed_tree.failure.kind == parse.Kind.Ok && #cast(usize, &borrowed_text.text[0]) == #cast(usize, &borrowed[3]))
+  check(!parse.failed(borrowed_tree.failure) && #cast(usize, &borrowed_text.text[0]) == #cast(usize, &borrowed[3]))
   borrowed[3] = 'y'
   check(bytes.equal(borrowed_text.text, "y"))
   mark := mem.arena_mark(arena)
@@ -57,7 +57,7 @@ bad = [('', 0, ''), ('<a></b>', 3, 'mismatched tag'),
 for value, offset, detail in bad:
     source += f'''  if true {{
     bad := xml.parse(arena, {json.dumps(value)})
-    check(bad.failure.kind != parse.Kind.Ok && bad.root == &xml.nil_node && bad.failure.kind == parse.Kind.Syntax && bad.offset == {offset} && bytes.equal(bad.failure.message, "{detail}"))
+    check(parse.failed(bad.failure) && bad.root == &xml.nil_node && bad.failure.kind == parse.Kind.Syntax && bad.offset == {offset} && bytes.equal(bad.failure.message, "{detail}"))
     check(mem.arena_mark(arena) == mark && bytes.equal(root.name, "root"))
     check(xml.child(bad.root, "a") == &xml.nil_node)
   }}
@@ -65,7 +65,7 @@ for value, offset, detail in bad:
 source += '''
   invalid: [8]u8 = ['<', 'a', '>', 255, '<', '/', 'a', '>']
   bad_utf8 := xml.parse(arena, invalid[..])
-  check(bad_utf8.failure.kind != parse.Kind.Ok && bad_utf8.offset == 3 && bad_utf8.failure.kind == parse.Kind.Syntax && bad_utf8.failure.kind == parse.Kind.Syntax && bad_utf8.root == &xml.nil_node)
+  check(parse.failed(bad_utf8.failure) && bad_utf8.offset == 3 && bad_utf8.failure.kind == parse.Kind.Syntax && bad_utf8.failure.kind == parse.Kind.Syntax && bad_utf8.root == &xml.nil_node)
   check(mem.arena_mark(arena) == mark)
   backing: [4096]u8
   for i in 0..#len(backing) { backing[i] = 255 }
@@ -74,11 +74,11 @@ source += '''
   prefix.* = 42
   fixed_mark := mem.arena_mark(fixed)
   failed := xml.parse(fixed, "<a><b/></z>")
-  check(failed.failure.kind != parse.Kind.Ok && mem.arena_mark(fixed) == fixed_mark && prefix.* == 42)
+  check(parse.failed(failed.failure) && mem.arena_mark(fixed) == fixed_mark && prefix.* == 42)
   input: [11]u8 = ['<', 'a', ' ', 'x', '=', '"', 'v', '"', '/', '>', ' ']
   owned := xml.parse(fixed, input[..])
   element := xml.child(owned.root, "a")
-  check(owned.failure.kind == parse.Kind.Ok && element.first == nil && element.last == nil && element.next == xml.at(owned.root, 1) && #len(element.text) == 0)
+  check(!parse.failed(owned.failure) && element.first == nil && element.last == nil && element.next == xml.at(owned.root, 1) && #len(element.text) == 0)
   check(#cast(usize, owned.root) >= #cast(usize, &backing[0]) && #cast(usize, owned.root) < #cast(usize, &backing[4095]))
   check(#cast(usize, element) >= #cast(usize, &backing[0]) && #cast(usize, element) < #cast(usize, &backing[4095]))
   check(#cast(usize, &element.name[0]) == #cast(usize, &input[1]) && #cast(usize, &element.attributes[0]) == #cast(usize, &input[2]))
@@ -96,7 +96,7 @@ source += '''
     deep[30003 + i * 4] = '>'
   }
   nested := xml.parse(arena, deep)
-  check(nested.failure.kind == parse.Kind.Ok)
+  check(!parse.failed(nested.failure))
   cursor := nested.root
   for i in 0..10000 { cursor = xml.at(cursor, 0)
     check(cursor.kind == xml.NodeKind.Element) }

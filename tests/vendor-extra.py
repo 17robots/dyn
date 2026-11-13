@@ -222,10 +222,10 @@ fn main() {
   deadline := time.deadline_after(60 * time.Second)
   samples: [2048]f32
   heard := false
-  if deadline.failure.kind != io.Kind.Ok { #panic("deadline clock failed") }
+  if io.failed(deadline.failure) { #panic("deadline clock failed") }
   for !audio.sound_ended(sound.value) {
     deadline_status := time.deadline_expired(&deadline.value)
-    if deadline_status.failure.kind != io.Kind.Ok { #panic("deadline clock failed") }
+    if io.failed(deadline_status.failure) { #panic("deadline clock failed") }
     if deadline_status.value { break }
     if offline {
       result := audio.mix(engine.value, samples[..])
@@ -360,7 +360,7 @@ fn main() {
   args := linux.process_arguments(backing)
   if #len(args) == 2 {
     file := fs.read_all(backing, args[1], 1024 * 1024)
-    if file.failure.kind != io.Kind.Ok {
+    if io.failed(file.failure) {
       #panic("GLB read")
     }
     binary := cgltf.parse_owned(file.value)
@@ -537,10 +537,10 @@ fn main() {
   }
   deadline := time.deadline_after(5 * time.Second)
   done := false
-  if deadline.failure.kind != io.Kind.Ok { #panic("deadline clock failed") }
+  if io.failed(deadline.failure) { #panic("deadline clock failed") }
   for !done {
     deadline_status := time.deadline_expired(&deadline.value)
-    if deadline_status.failure.kind != io.Kind.Ok { #panic("deadline clock failed") }
+    if io.failed(deadline_status.failure) { #panic("deadline clock failed") }
     if deadline_status.value { break }
     remote := enet.service(server, 0)
     if !remote.ok {
@@ -583,10 +583,10 @@ fn main() {
   server_closed := false
   client_closed := false
   deadline = time.deadline_after(5 * time.Second)
-  if deadline.failure.kind != io.Kind.Ok { #panic("deadline clock failed") }
+  if io.failed(deadline.failure) { #panic("deadline clock failed") }
   for (!server_closed || !client_closed) {
     deadline_status := time.deadline_expired(&deadline.value)
-    if deadline_status.failure.kind != io.Kind.Ok { #panic("deadline clock failed") }
+    if io.failed(deadline_status.failure) { #panic("deadline clock failed") }
     if deadline_status.value { break }
     server_event := enet.service(server, 0)
     client_event := enet.service(client, 0)
@@ -632,7 +632,7 @@ fn main() {
     #panic("WAV path required")
   }
   bytes := fs.read_all(storage, args[1], 1024 * 1024)
-  if bytes.failure.kind != io.Kind.Ok {
+  if io.failed(bytes.failure) {
     #panic("WAV read")
   }
   mark := mem.arena_mark(storage)
@@ -718,7 +718,7 @@ fn main() {
     #panic("WAV path required")
   }
   bytes := fs.read_all(storage, args[1], 1024 * 1024)
-  if bytes.failure.kind != io.Kind.Ok {
+  if io.failed(bytes.failure) {
     #panic("WAV read")
   }
   if !mixer.init() {

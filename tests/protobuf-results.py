@@ -32,13 +32,13 @@ fn main() {
     pb.Field{ number: 5, wire: pb.Wire.EndGroup }]
   encoded := pb.encode(arena,fields[..])
   golden := "\x08\x96\x01\x11\xef\xcd\xab\x89\x67\x45\x23\x01\x1a\x03hi\x00\x25\xef\xcd\xab\x89\x2b\x08\xff\xff\xff\xff\xff\xff\xff\xff\xff\x01\x2c"
-  check(encoded.failure.kind == parse.Kind.Ok && bytes.equal(encoded.value,golden))
+  check(!parse.failed(encoded.failure) && bytes.equal(encoded.value,golden))
   state := pb.reader(golden)
   for expected in fields {
     result := pb.next(&state)
     check(result.found && result.value.number == expected.number && result.value.wire == expected.wire && result.value.value == expected.value && bytes.equal(result.value.bytes,expected.bytes))
   }
-  check(!pb.next(&state).found && pb.next(&state).failure.kind == parse.Kind.Ok)
+  check(!pb.next(&state).found && !parse.failed(pb.next(&state).failure))
   integers: [7]i64 = [-9223372036854775808,-500,-1,0,1,500,9223372036854775807]
   for value in integers { check(pb.unzigzag(pb.zigzag(value)) == value) }
   check(pb.zigzag(-1) == 1 && pb.zigzag(500) == 1000 && pb.zigzag(-9223372036854775808) == 0xffffffffffffffff)
@@ -67,13 +67,13 @@ fn main() {
   encoded = pb.encode(arena,fields[..1])
   state = pb.reader(encoded.value)
   result := pb.next(&state)
-  check(encoded.failure.kind == parse.Kind.Ok && result.found && result.value.number == 536870911 && result.value.value == 0xffffffffffffffff)
+  check(!parse.failed(encoded.failure) && result.found && result.value.number == 536870911 && result.value.value == 0xffffffffffffffff)
   // Every cut is either a complete shorter message or a structured failure.
   for length in 0..#len(golden) {
     state = pb.reader(golden[..length])
     item := pb.next(&state)
     for item.found { item = pb.next(&state) }
-    check(item.failure.kind == parse.Kind.Ok || item.failure.kind == parse.Kind.Syntax)
+    check(!parse.failed(item.failure) || item.failure.kind == parse.Kind.Syntax)
   }
 }
 '''

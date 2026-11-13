@@ -30,7 +30,7 @@ fn read(raw: rawptr, dest: []u8) io.Transfer {
   return io.Transfer{ transferred: count, status: io.Status.End }
 }
 fn same(r: http.Result, code: isize) {
-  if r.failure.kind == io.Kind.Ok || r.detail != http.ErrorKind.Io || r.failure.native != code { #panic("first HTTP error") }
+  if !io.failed(r.failure) || r.detail != http.ErrorKind.Io || r.failure.native != code { #panic("first HTTP error") }
 }
 fn main() {
   for native in [0, -73] {
@@ -64,7 +64,7 @@ fn main() {
       sink := Sink{}
       response := http.Response{ output: io.Writer{ data: &sink, write: write } }
       opened := http.respond_stream(&response, http.ResponseOptions{})
-      if opened.failure.kind != io.Kind.Ok { #panic("open body") }
+      if io.failed(opened.failure) { #panic("open body") }
       sink.fail = sink.calls + #cast(usize, segment)
       sink.code = code
       writer := http.body_writer(&opened.body)
@@ -120,14 +120,14 @@ fn main() {
   if http.respond(&response, "", http.ResponseOptions{}).detail != http.ErrorKind.Invalid { #panic("zero response") }
   body := http.Body{}
   writer := http.body_writer(&body)
-  if !io.failed(writer.write(writer.data, "").failure) || http.body_abort(&body).failure.kind == io.Kind.Ok || http.body_finish(&body).failure.kind == io.Kind.Ok { #panic("zero body") }
+  if !io.failed(writer.write(writer.data, "").failure) || !io.failed(http.body_abort(&body).failure) || !io.failed(http.body_finish(&body).failure) { #panic("zero body") }
   // Successful partial writes and empty callbacks remain usable.
   sink := Sink{ partial: true }
   response = http.Response{ output: io.Writer{ data: &sink, write: write } }
   opened := http.respond_stream(&response, http.ResponseOptions{})
   writer = http.body_writer(&opened.body)
   if io.failed(writer.write(writer.data, "").failure) || io.write_all(writer, "abc").transferred != 3 { #panic("partial success") }
-  if http.body_finish(&opened.body).failure.kind != io.Kind.Ok { #panic("finish success") }
+  if io.failed(http.body_finish(&opened.body).failure) { #panic("finish success") }
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-http-sticky-') as temporary:

@@ -475,7 +475,7 @@ fn read_scale(display: rawptr) f32 {
     return 1.0
   }
   found := c.bytes_from_string(raw, 1048576)
-  if found.failure.kind != parse.Kind.Ok {
+  if parse.failed(found.failure) {
     return 1.0
   }
   text := found.value
@@ -1118,7 +1118,7 @@ pub fn set_title(window: *Window, title: []const u8) Result {
   }
   storage: [4096]u8
   name := c.string_into(storage[..], title)
-  if name.failure.kind != parse.Kind.Ok {
+  if parse.failed(name.failure) {
     return Result{kind:io.Kind.InvalidInput}
   }
   _ = store_name(window.display, window.handle, name.value)

@@ -26,7 +26,7 @@ fn main() {
   signal.close(&zero)
   check(signal.watch(signal.Set{}).failure.kind == errors.Kind.InvalidInput)
   opened := signal.watch(signal.Set{ interrupt: true, terminate: true, hangup: HANGUP })
-  check(opened.failure.kind == io.Kind.Ok)
+  check(!io.failed(opened.failure))
   state := opened.value
   first := signal.poll(&state)
   check(first.found && first.value == signal.Kind.None)

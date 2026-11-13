@@ -34,7 +34,7 @@ fn correction(collector: *events.EditBuffer, token: u64, start, end: i32, text: 
   event := events.Event{kind:events.Kind.Edit,key:#cast(u32,token & 4294967295),modifiers:#cast(u32,token>>32),x:start,y:end,width:#cast(i32,#len(text)),text_length:#cast(u32,#len(text)),button:1}
   for i in 0..#len(text) { event.text[i] = text[i] }
   result := events.collect_edit(collector,&event)
-  check(result.failure.kind == errors.Kind.Ok && result.ready,"native edit assembly")
+  check(!errors.failed(result.failure) && result.ready,"native edit assembly")
   return result.value
 }
 fn main() {

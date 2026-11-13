@@ -9,7 +9,7 @@ pub struct OpenResult { database: Database, code: i32, failure: io.Failure }
 // Provider allocates database. Successful results require close; failures own nothing.
 pub fn open(name: []const u8, buffer: []u8) OpenResult {
   encoded := c.string_into(buffer, name)
-  if encoded.failure.kind != parse.Kind.Ok {
+  if parse.failed(encoded.failure) {
     return OpenResult{ code: string_error(encoded.failure.kind), failure: io.Failure{ kind: io.Kind.System } }
   }
   database: rawptr = nil
@@ -30,7 +30,7 @@ extern fn sqlite_open_flags "sqlite3_open_v2"(name: c.string, database: *rawptr,
 pub fn open_with_options(name: []const u8, buffer: []u8, options: OpenOptions) OpenResult {
   if !options.caller_serialized { return open(name, buffer) }
   encoded := c.string_into(buffer, name)
-  if encoded.failure.kind != parse.Kind.Ok {
+  if parse.failed(encoded.failure) {
     return OpenResult{ code: string_error(encoded.failure.kind), failure: io.Failure{ kind: io.Kind.System } }
   }
   database: rawptr = nil
@@ -63,7 +63,7 @@ pub fn execute(database: Database, sql: []const u8, buffer: []u8) io.Failure {
     return code_failure(-1)
   }
   encoded := c.string_into(buffer, sql)
-  if encoded.failure.kind != parse.Kind.Ok {
+  if parse.failed(encoded.failure) {
     return code_failure(string_error(encoded.failure.kind))
   }
   error: rawptr = nil
@@ -80,7 +80,7 @@ pub fn error_message(database: Database, maximum: usize) []const u8 {
     return ""
   }
   value := c.bytes_from_string(sqlite_error_message(database), maximum)
-  if value.failure.kind != parse.Kind.Ok {
+  if parse.failed(value.failure) {
     return ""
   }
   return value.value

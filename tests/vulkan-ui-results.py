@@ -42,7 +42,7 @@ fn main() {
  actual[i] = pixels[i] }
  surface := software.Surface{pixels:pixels[..],width:32,height:32,stride:132}
  target := software.Surface{pixels:actual[..],width:32,height:32,stride:132}
- check(software.render(&surface,&commands[0],font).failure.kind == errors.Kind.Ok)
+ check(!errors.failed(software.render(&surface,&commands[0],font).failure))
  check(gpu.render(&renderer,arena,&target,&commands[0],font).ok)
  for i in 0..#len(pixels) { check(pixels[i] == actual[i]) }
  // Reuse persistent GPU buffer on a smaller frame.
@@ -50,7 +50,7 @@ fn main() {
  surface.height = 5
  target.width = 7
  target.height = 5
- check(software.render(&surface,&commands[0],font).failure.kind == errors.Kind.Ok)
+ check(!errors.failed(software.render(&surface,&commands[0],font).failure))
  check(gpu.render(&renderer,arena,&target,&commands[0],font).ok)
  for i in 0..#len(pixels) { check(pixels[i] == actual[i]) }
  renderer.limits.draws = 0

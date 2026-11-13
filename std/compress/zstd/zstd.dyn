@@ -38,7 +38,7 @@ pub fn compress(arena: *memory.Arena, source: []const u8, level: i32) BufferResu
 pub fn decompress(arena: *memory.Arena, source: []const u8) BufferResult {
   mark := memory.arena_mark(arena)
   size := frame_size(source)
-  if size.failure.kind != parse.Kind.Ok {
+  if parse.failed(size.failure) {
     return BufferResult{ offset: size.offset, failure: size.failure }
   }
   if !size.known {

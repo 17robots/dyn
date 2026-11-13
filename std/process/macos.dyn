@@ -224,7 +224,7 @@ fn sleep_native() {
 fn environment_native(name: []const u8, destination: []u8) EnvironmentResult {
   buffer: [4096]u8
   key := c.string_into(buffer[..], name)
-  if key.failure.kind != parse.Kind.Ok {
+  if parse.failed(key.failure) {
     return EnvironmentResult{ failure: io.Failure{ kind: io.Kind.Capacity, native: -28 } }
   }
   value := native_environment(key.value)
@@ -232,7 +232,7 @@ fn environment_native(name: []const u8, destination: []u8) EnvironmentResult {
     return EnvironmentResult{ value: destination[..0] }
   }
   parsed := c.bytes_from_string(value, #len(destination)+1)
-  if parsed.failure.kind != parse.Kind.Ok || #len(parsed.value) > #len(destination) {
+  if parse.failed(parsed.failure) || #len(parsed.value) > #len(destination) {
     return EnvironmentResult{ failure: io.Failure{ kind: io.Kind.Capacity, native: -28 } }
   }
   i: usize = 0

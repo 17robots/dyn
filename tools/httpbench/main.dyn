@@ -66,14 +66,14 @@ fn now_micros() u64 {
 
 // One request and its full response. False on any error.
 fn exchange(connection: *net.Connection, request: []const u8, storage: []u8) bool {
-  if net.connection_write(connection, request).failure.kind != io.Kind.Ok {
+  if io.failed(net.connection_write(connection, request).failure) {
     return false
   }
   used: usize = 0
   for true {
     if used > 3 {
       head := http.parse_response(storage[..used])
-      if head.failure.kind == parse.Kind.Ok {
+      if !parse.failed(head.failure) {
         total := head.header_length + head.content_length
         if total > #len(storage) {
           return false
@@ -87,7 +87,7 @@ fn exchange(connection: *net.Connection, request: []const u8, storage: []u8) boo
       return false
     }
     read := net.connection_read(connection, storage[used..])
-    if read.failure.kind != io.Kind.Ok || read.value <= 0 {
+    if io.failed(read.failure) || read.value <= 0 {
       return false
     }
     used += #cast(usize, read.value)
@@ -98,7 +98,7 @@ fn exchange(connection: *net.Connection, request: []const u8, storage: []u8) boo
 fn client_main(client: *Client) isize {
   storage: [ReceiveSize]u8
   opened := net.tcp_connect_ipv4(&client.shared.address)
-  if opened.failure.kind != io.Kind.Ok {
+  if io.failed(opened.failure) {
     client.errors += 1
     return 0
   }
@@ -120,7 +120,7 @@ fn client_main(client: *Client) isize {
 // Zero for a missing or malformed number; callers reject zero.
 fn argument_u64(arguments: [][]const u8, index: usize) u64 {
   parsed := parse.u64_decimal(arguments[index])
-  if parsed.failure.kind != parse.Kind.Ok {
+  if parse.failed(parsed.failure) {
     return 0
   }
   return parsed.value
@@ -142,7 +142,7 @@ fn main() i32 {
   arena := mem.arena_alloc(0)
   defer mem.arena_release(arena)
   arguments := process.arguments(arena)
-  if arguments.failure.kind != io.Kind.Ok || #len(arguments.value) < 5 {
+  if io.failed(arguments.failure) || #len(arguments.value) < 5 {
     io.eprintln("usage: httpbench PORT PATH CONNECTIONS SECONDS [A.B.C.D]")
     return 2
   }
@@ -163,7 +163,7 @@ fn main() i32 {
         end += 1
       }
       part := parse.u64_decimal(values[5][at..end])
-      if part.failure.kind != parse.Kind.Ok || part.value > 255 {
+      if parse.failed(part.failure) || part.value > 255 {
         io.eprintln("httpbench: bad IPv4 address")
         return 2
       }
@@ -189,7 +189,7 @@ fn main() i32 {
   for i in 0..count {
     clients[i].shared = shared
     spawned := thread.spawn_with_size(arena, ReceiveSize + 128 * 1024, client_main, &clients[i])
-    if spawned.failure.kind != io.Kind.Ok {
+    if io.failed(spawned.failure) {
       io.eprintln("httpbench: cannot start client threads")
       sync.store_u32(&shared.stopping, 1)
       break

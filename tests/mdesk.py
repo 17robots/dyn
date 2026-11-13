@@ -29,7 +29,7 @@ fn main() {
   defer mem.arena_release(arena)
   source := #load("types.mdesk")
   parsed := mdesk.parse(arena, source)
-  expect(parsed.failure.kind == parse.Kind.Ok, "parse")
+  expect(!parse.failed(parsed.failure), "parse")
   root := parsed.root
   expect(root.kind == mdesk.Kind.Root && mdesk.child_count(root) == 6, "root children")
 
@@ -51,7 +51,7 @@ fn main() {
   empty_string := mdesk.child_at(mdesk.child(root, "empty"), 0)
   expect(empty_string.label == mdesk.Label.String && #len(empty_string.string) == 0, "empty string")
   nested := mdesk.parse(arena, "op: + version: 1.2.3 a: b: c")
-  expect(nested.failure.kind == parse.Kind.Ok && mdesk.child_count(nested.root) == 3, "chained children")
+  expect(!parse.failed(nested.failure) && mdesk.child_count(nested.root) == 3, "chained children")
   expect(mdesk.child_at(mdesk.child(nested.root, "op"), 0).label == mdesk.Label.Symbol, "symbol")
   expect(bytes.equal(mdesk.child(mdesk.child(mdesk.child(nested.root, "a"), "b"), "c").string, "c"), "a: b: c")
 

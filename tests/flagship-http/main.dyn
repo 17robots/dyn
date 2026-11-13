@@ -99,12 +99,12 @@ fn main() {
 
   address := net.ipv4(127, 0, 0, 1, 0)
   listened := net.tcp_listen_ipv4(&address, 64)
-  if listened.failure.kind != io.Kind.Ok {
+  if io.failed(listened.failure) {
     #panic("cannot listen")
   }
   listener := net.listener_take(&listened.value)
   bound := net.Address{}
-  if net.local_address(listener.descriptor, &bound).failure.kind != io.Kind.Ok {
+  if io.failed(net.local_address(listener.descriptor, &bound).failure) {
     #panic("cannot read local address")
   }
   port := #cast(u64, bound.bytes[2]) * 256 + #cast(u64, bound.bytes[3])
@@ -113,7 +113,7 @@ fn main() {
   receive_storage := mem.push_array(u8, arena, WorkerCount * 16 * mem.KiB)
   stacks := mem.push_array(u8, arena, WorkerCount * 256 * mem.KiB)
   started := concurrent.start_context(arena, workers, &listener, receive_storage, 16 * mem.KiB, stacks, 256 * mem.KiB, handle, state)
-  if started.failure.kind != io.Kind.Ok {
+  if io.failed(started.failure) {
     #panic("cannot start workers")
   }
 
@@ -129,7 +129,7 @@ fn main() {
   concurrent.stop(workers)
   joined := concurrent.join(workers)
   net.listener_close(&listener)
-  if joined.failure.kind != io.Kind.Ok {
+  if io.failed(joined.failure) {
     #panic("worker failed")
   }
 }

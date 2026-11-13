@@ -295,7 +295,7 @@ fn read_config(arena: *mem.Arena) {
     io.println("config missing")
     return
   }
-  if file.failure.kind != io.Kind.Ok {
+  if io.failed(file.failure) {
     io.println("config unreadable")
     return
   }

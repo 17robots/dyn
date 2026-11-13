@@ -87,14 +87,14 @@ fn fail(data: rawptr, destination: []u8) io.Transfer {
 }
 fn results(arena: *mem.Arena, encoded: []const u8, unknown: []const u8, workspace: []u8) {
  packed_result := z.compress(arena, "portable zstd", 3)
- if packed_result.failure.kind != parse.Kind.Ok { #panic("compress success") }
+ if parse.failed(packed_result.failure) { #panic("compress success") }
  unpacked := z.decompress(arena, packed_result.value)
- if unpacked.failure.kind != parse.Kind.Ok || #len(unpacked.value) != 13 { #panic("roundtrip") }
+ if parse.failed(unpacked.failure) || #len(unpacked.value) != 13 { #panic("roundtrip") }
  mark := mem.arena_used(arena)
  bad := z.decompress(arena, "bad")
  if bad.failure.kind != parse.Kind.Syntax || #len(bad.value) != 0 || mem.arena_used(arena) != mark { #panic("malformed result") }
  size := z.frame_size(unknown)
- if size.failure.kind != parse.Kind.Ok || size.known { #panic("unknown valid frame") }
+ if parse.failed(size.failure) || size.known { #panic("unknown valid frame") }
  unsupported := z.decompress(arena, unknown)
  if unsupported.failure.kind != parse.Kind.Unsupported || mem.arena_used(arena) != mark { #panic("unknown arena unsupported") }
  // Header retains a valid known size, while truncation fails after allocation.
@@ -141,7 +141,7 @@ fn main() {
  encoded := fs.read_all(arena, "DIRECTORY/encoded", 2000000)
  concatenated := fs.read_all(arena, "DIRECTORY/concatenated", 4000000)
  unknown := fs.read_all(arena, "DIRECTORY/unknown", 2000000)
- if raw.failure.kind != io.Kind.Ok || encoded.failure.kind != io.Kind.Ok || concatenated.failure.kind != io.Kind.Ok || unknown.failure.kind != io.Kind.Ok { #panic("fixtures") }
+ if io.failed(raw.failure) || io.failed(encoded.failure) || io.failed(concatenated.failure) || io.failed(unknown.failure) { #panic("fixtures") }
  workspace := #slice(mem.arena_push_uninit(arena, z.decoder_workspace_size(21), 8), z.decoder_workspace_size(21))
  results(arena, encoded.value, unknown.value, workspace)
  verify(raw.value, unknown.value, workspace, 13, 21, false, 1)

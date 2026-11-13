@@ -163,7 +163,7 @@ pub fn percent_decode(arena: *mem.Arena, source: []const u8) EncodingResult {
   mark := mem.arena_mark(arena)
   space := mem.push_bytes_uninit(arena, #len(source))
   decoded := percent_decode_into(space, source)
-  if decoded.failure.kind != parse.Kind.Ok {
+  if parse.failed(decoded.failure) {
     mem.arena_rewind(arena, mark)
     return EncodingResult{ offset: decoded.offset, failure: parse.Failure{ kind: decoded.failure.kind } }
   }

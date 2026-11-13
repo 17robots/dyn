@@ -37,15 +37,15 @@ fn main() {
   storage: [1024]u8
   failed := watch.open(storage[..271])
   watch.close(&failed.value)
-  require(failed.failure.kind != io.Kind.Ok,"short buffer")
+  require(io.failed(failed.failure),"short buffer")
   opened := watch.open(storage[..])
-  require(opened.failure.kind == io.Kind.Ok,"FSEvents open")
+  require(!io.failed(opened.failure),"FSEvents open")
   defer { watch.close(&opened.value) }
-  require(watch.add(&opened.value,"missing-directory",watch.Changes).failure.kind != io.Kind.Ok,"missing path")
-  require(watch.add(&opened.value,"existing",watch.Changes).failure.kind != io.Kind.Ok,"file path")
+  require(io.failed(watch.add(&opened.value,"missing-directory",watch.Changes).failure),"missing path")
+  require(io.failed(watch.add(&opened.value,"existing",watch.Changes).failure),"file path")
   added := watch.add(&opened.value,".",watch.Changes)
   other := watch.add(&opened.value,"other",watch.Changes)
-  require(added.failure.kind == io.Kind.Ok && other.failure.kind == io.Kind.Ok && added.value != other.value,"multiple watches")
+  require(!io.failed(added.failure) && !io.failed(other.failure) && added.value != other.value,"multiple watches")
   require(watch.add(&opened.value,".",watch.Changes).value == added.value,"repeat add identity")
   stage("create")
   await_event(&opened.value,added.value,"café-😀",watch.Create,false)
@@ -59,8 +59,8 @@ fn main() {
   await_event(&opened.value,added.value,"renamed",watch.Delete,false)
   stage("other")
   await_event(&opened.value,other.value,"second",watch.Create,false)
-  require(watch.remove(&opened.value,added.value).failure.kind == io.Kind.Ok,"remove")
-  require(watch.remove(&opened.value,added.value).failure.kind != io.Kind.Ok,"stale remove")
+  require(!io.failed(watch.remove(&opened.value,added.value).failure),"remove")
+  require(io.failed(watch.remove(&opened.value,added.value).failure),"stale remove")
   stage("removed")
   await_event(&opened.value,other.value,"third",watch.Create,false)
   for attempt in 0..50 {
@@ -73,8 +73,8 @@ fn main() {
   // Each close invalidates pending callbacks before freeing/reusing contexts.
   for iteration in 0..16 {
     pending := watch.open(storage[..])
-    require(pending.failure.kind == io.Kind.Ok,"pending open")
-    require(watch.add(&pending.value,".",watch.Changes).failure.kind == io.Kind.Ok,"pending add")
+    require(!io.failed(pending.failure),"pending open")
+    require(!io.failed(watch.add(&pending.value,".",watch.Changes).failure),"pending add")
     _ = time.sleep(time.Millisecond*5)
     watch.close(&pending.value)
     watch.close(&pending.value)

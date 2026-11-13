@@ -15,7 +15,7 @@ use "std/bytes"
 fn check(ok: bool, message: []const u8) { if !ok { #panic(message) } }
 fn main() {
   zero_result := flags.Result{}
-  check(zero_result.failure.kind == parse.Kind.Ok && zero_result.offset == 0 && #len(zero_result.option) == 0 && #len(zero_result.value.values) == 0 && #len(zero_result.value.positionals) == 0, "zero result")
+  check(!parse.failed(zero_result.failure) && zero_result.offset == 0 && #len(zero_result.option) == 0 && #len(zero_result.value.values) == 0 && #len(zero_result.value.positionals) == 0, "zero result")
   backing: [4096]u8
   arena := mem.arena_from_buffer(backing[..])
   prefix := mem.push_array(u8, arena, 3)
@@ -27,7 +27,7 @@ fn main() {
   positional: [3]u8 = ['s', 'r', 'c']
   args: [10][]const u8 = ["first", "-vvn-42", "--ratio=1.25e2", "-o", output[..], positional[..], "--count", "7", "--", "-v"]
   parsed := flags.parse(arena, options[..], args[..])
-  check(parsed.failure.kind == parse.Kind.Ok, "success")
+  check(!parse.failed(parsed.failure), "success")
   values := parsed.value.values
   check(#len(values) == 5 && values[0].occurrences == 2 && values[1].occurrences == 2, "occurrences")
   check(bytes.equal(values[1].text, "7") && bytes.equal(values[2].text, "1.25e2"), "typed/last wins")
@@ -46,7 +46,7 @@ fn main() {
   check(#len(failure.value.values) == 0 && #len(failure.value.positionals) == 0 && mem.arena_mark(arena) == mark && prefix[0] == 91, "failure rollback")
   choice_args: [2][]const u8 = ["-m", "fast"]
   choice_result := flags.parse(arena, options[..], choice_args[..])
-  check(choice_result.failure.kind == parse.Kind.Ok && choice_result.value.values[3].present && bytes.equal(choice_result.value.values[3].text, "fast"), "explicit choice")
+  check(!parse.failed(choice_result.failure) && choice_result.value.values[3].present && bytes.equal(choice_result.value.values[3].text, "fast"), "explicit choice")
   mem.arena_rewind(arena, mark)
   bad[0] = "-n"
   missing := flags.parse(arena, options[..], bad[..])
@@ -73,7 +73,7 @@ fn main() {
   tiny_pad := (16-(#cast(usize,&tiny[0])&15))&15
   zero := mem.arena_from_buffer(tiny[tiny_pad..tiny_pad+mem.ArenaHeader])
   result := flags.parse(zero, none[..], empty[..])
-  check(result.failure.kind == parse.Kind.Ok && #len(result.value.values) == 0 && #len(result.value.positionals) == 0 && mem.arena_used(zero) == 0, "empty")
+  check(!parse.failed(result.failure) && #len(result.value.values) == 0 && #len(result.value.positionals) == 0 && mem.arena_used(zero) == 0, "empty")
 }
 '''
 PANIC = '''use "std/mem" mem

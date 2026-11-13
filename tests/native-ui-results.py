@@ -54,7 +54,7 @@ fn main() {
  pixels: [4096]u8
  surface := software.Surface{pixels:pixels[..],width:32,height:32,stride:128}
  font := software.Font{glyph:bitmap,line_height:3}
- check(software.render(&surface,&commands[0],font).failure.kind == errors.Kind.Ok)
+ check(!errors.failed(software.render(&surface,&commands[0],font).failure))
  loaded.api.enable(gl.FramebufferSrgb)
  loaded.api.enable(gl.ColorLogicOp)
  loaded.api.enable(gl.RasterizerDiscard)

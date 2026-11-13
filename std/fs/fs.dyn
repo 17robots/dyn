@@ -101,7 +101,7 @@ pub fn write(file: *File, source: []const u8) Result {
 }
 fn adapter_read(data: rawptr, destination: []u8) io.Transfer {
   result := read(#cast(*File, data), destination)
-  if result.failure.kind != io.Kind.Ok {
+  if io.failed(result.failure) {
     return io.Transfer{ transferred: result.transferred, failure: io.Failure{ kind: result.failure.kind, native: result.failure.native } }
   }
   status := io.Status.Complete
@@ -112,7 +112,7 @@ fn adapter_read(data: rawptr, destination: []u8) io.Transfer {
 }
 fn adapter_write(data: rawptr, source: []const u8) io.Transfer {
   result := write(#cast(*File, data), source)
-  if result.failure.kind != io.Kind.Ok {
+  if io.failed(result.failure) {
     return io.Transfer{ transferred: result.transferred, failure: io.Failure{ kind: result.failure.kind, native: result.failure.native } }
   }
   return io.Transfer{ transferred: result.transferred }
@@ -203,7 +203,7 @@ pub fn unmap(mapping: *Mapping) Result {
 // Reads one complete file into arena storage, bounded by maximum.
 pub fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) ReadAllResult {
   opened := open(path)
-  if opened.failure.kind != io.Kind.Ok {
+  if io.failed(opened.failure) {
     return ReadAllResult{ failure: io.Failure{ kind: opened.failure.kind, native: opened.failure.native } }
   }
   mark := memory.arena_mark(arena)
@@ -219,7 +219,7 @@ pub fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) ReadAllR
   // change length while being read, and pseudo files that report zero.
   hint: usize = 0
   info := file_metadata(&opened.value)
-  if info.failure.kind == io.Kind.Ok && info.size != 0 && info.size <= maximum {
+  if !io.failed(info.failure) && info.size != 0 && info.size <= maximum {
     hint = #cast(usize, info.size)
   }
   for {
@@ -232,7 +232,7 @@ pub fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) ReadAllR
       // caller buffer still distinguishes EOF from capacity/maximum overflow.
       probe: [1]u8
       extra := read(&opened.value, probe[..])
-      if extra.failure.kind != io.Kind.Ok {
+      if io.failed(extra.failure) {
         error = extra.failure.native
         kind = extra.failure.kind
         break
@@ -320,7 +320,7 @@ pub fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) ReadAllR
     }
     part := read(&opened.value, output[total..total + capacity])
     total += part.transferred
-    if part.failure.kind != io.Kind.Ok {
+    if io.failed(part.failure) {
       error = part.failure.native
       kind = part.failure.kind
       break
@@ -343,7 +343,7 @@ pub fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) ReadAllR
 // A failed close is not reported. Use sync when the write must be durable.
 pub fn write_all(path: []const u8, source: []const u8) Result {
   created := create(path)
-  if created.failure.kind != io.Kind.Ok {
+  if io.failed(created.failure) {
     return Result{ failure: io.Failure{ kind: created.failure.kind, native: created.failure.native } }
   }
   result := write(&created.value, source)

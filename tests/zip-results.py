@@ -59,18 +59,18 @@ fn main() {
  first := zip.next(&state)
  check(first.found && first.failure.kind == parse.StreamKind.Ok && first.offset == 36)
  decoded := zip.extract(arena,first.value)
- check(decoded.failure.kind == parse.Kind.Ok && bytes.equal(decoded.value,"hello") && decoded.failure.kind == parse.Kind.Ok)
+ check(!parse.failed(decoded.failure) && bytes.equal(decoded.value,"hello") && !parse.failed(decoded.failure))
  mark := mem.arena_used(arena)
  bad := first.value
  bad.checksum = 0
  crc := zip.extract(arena,bad)
- check(crc.failure.kind != parse.Kind.Ok && crc.failure.kind == parse.Kind.Checksum && #len(crc.value) == 0 && mem.arena_used(arena) == mark)
+ check(parse.failed(crc.failure) && crc.failure.kind == parse.Kind.Checksum && #len(crc.value) == 0 && mem.arena_used(arena) == mark)
  empty := zip.next(&state)
- check(empty.found && zip.extract(arena,empty.value).failure.kind == parse.Kind.Ok)
+ check(empty.found && !parse.failed(zip.extract(arena,empty.value).failure))
  end := zip.next(&state)
  check(!end.found && end.failure.kind == parse.StreamKind.Ok)
  opened := zip.open_checked(data)
- check(opened.failure.kind == parse.Kind.Ok)
+ check(!parse.failed(opened.failure))
  indexed := zip.next(&opened.value)
  check(indexed.found && bytes.equal(indexed.value.payload,"hello"))
  check(zip.next(&opened.value).found)
@@ -120,21 +120,21 @@ fn main() {
  capacity := zip.stream_reader(io.Reader{},header[..2],name[..],payload[..])
  check(zip.next_stream(&capacity).failure.parse.kind == parse.Kind.Capacity)
  invalid_open := zip.open_checked("x")
- check(invalid_open.failure.kind != parse.Kind.Ok && invalid_open.failure.kind == parse.Kind.Syntax)
+ check(parse.failed(invalid_open.failure) && invalid_open.failure.kind == parse.Kind.Syntax)
  eof_input := Input{ source: "", fail: 100 }
  eof_stream := zip.stream_reader(io.Reader{ data: &eof_input, read: read },header[..],name[..],payload[..])
  eof := zip.next_stream(&eof_stream)
  check(!eof.found && eof.failure.kind == parse.StreamKind.Ok)
  check(!zip.next_stream(&eof_stream).found && eof_input.calls == 1)
  empty_checked := zip.open_checked(data[#len(data)-22..])
- check(empty_checked.failure.kind != parse.Kind.Ok)
+ check(parse.failed(empty_checked.failure))
  empty_eocd: [22]u8
  empty_eocd[0] = 80
  empty_eocd[1] = 75
  empty_eocd[2] = 5
  empty_eocd[3] = 6
  empty_archive := zip.open_checked(empty_eocd[..])
- check(empty_archive.failure.kind == parse.Kind.Ok && !zip.next(&empty_archive.value).found)
+ check(!parse.failed(empty_archive.failure) && !zip.next(&empty_archive.value).found)
  empty_cursor := io.cursor(empty_eocd[..])
  empty_stream := zip.stream_reader(io.cursor_reader(&empty_cursor),header[..],name[..],payload[..])
  check(!zip.next_stream(&empty_stream).found && empty_stream.offset == 22)
@@ -143,11 +143,11 @@ fn main() {
  zero_extract: zip.ExtractResult
  zero_open: zip.OpenResult
  check(!zero.found && zero.failure.kind == parse.StreamKind.Ok && zero.offset == 0 && zero.failure.kind == parse.StreamKind.Ok)
- check(zero_extract.failure.kind == parse.Kind.Ok && #len(zero_extract.value) == 0 && zero_open.failure.kind == parse.Kind.Ok)
+ check(!parse.failed(zero_extract.failure) && #len(zero_extract.value) == 0 && !parse.failed(zero_open.failure))
  zero_reader: zip.ArchiveReader
  check(!zip.next(&zero_reader).found)
  overflow := zip.extract(arena,zip.Entry{ uncompressed_size: ~#cast(usize,0) })
- check(overflow.failure.kind != parse.Kind.Ok && overflow.failure.kind == parse.Kind.Overflow && mem.arena_used(arena) == mark)
+ check(parse.failed(overflow.failure) && overflow.failure.kind == parse.Kind.Overflow && mem.arena_used(arena) == mark)
 }
 '''
 
