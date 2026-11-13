@@ -300,7 +300,7 @@ fn main() {
   }
   path: [4096]u8
   surface := image.load_owned(args[1], path[..])
-  if !surface.ok {
+  if io.failed(surface.failure) {
     #panic("image load")
   }
   defer sdl3.surface_destroy_owned(surface.value)
@@ -309,11 +309,11 @@ fn main() {
     #panic("image read")
   }
   decoded := image.decode_owned(bytes.value)
-  if !decoded.ok {
+  if io.failed(decoded.failure) {
     #panic("image decode")
   }
   defer sdl3.surface_destroy_owned(decoded.value)
-  if image.decode_owned("not an image").ok {
+  if !io.failed(image.decode_owned("not an image").failure) {
     #panic("malformed image accepted")
   }
   io.println("SDL_image: loaded file and decoded caller buffer")
@@ -338,24 +338,24 @@ fn main() {
   defer ttf.quit()
   path: [4096]u8
   font := ttf.open_owned(args[1], path[..], 20.0)
-  if !font.ok {
+  if io.failed(font.failure) {
     #panic("font open")
   }
   defer ttf.destroy_owned(font.value)
   empty := ttf.measure(font.value, "")
-  if !empty.ok || empty.width != 0 {
+  if io.failed(empty.failure) || empty.width != 0 {
     #panic("empty text")
   }
   measured := ttf.measure(font.value, "Hello Dyn")
-  if !measured.ok || measured.width <= 0 || measured.height <= 0 {
+  if io.failed(measured.failure) || measured.width <= 0 || measured.height <= 0 {
     #panic("font measure")
   }
   surface := ttf.render_owned(font.value, "Hello Dyn", sdl3.Color{ red: 255, green: 255, blue: 255, alpha: 255 })
-  if !surface.ok {
+  if io.failed(surface.failure) {
     #panic("font render")
   }
   defer sdl3.surface_destroy_owned(surface.value)
-  if ttf.open_owned(args[1], path[..], 0.0).ok {
+  if !io.failed(ttf.open_owned(args[1], path[..], 0.0).failure) {
     #panic("font size validation")
   }
   io.println("SDL_ttf: measured and rendered text")
@@ -481,16 +481,16 @@ fn atlas_smoke(api: *gl.Api) {
   if api.get_error() != 0 { #panic("atlas GL error") }
 }
 fn missing_texture_proc(name: *const u8) rawptr {
-  bytes := c.bytes_from_string(name, 64)
-  if !parse.failed(bytes.failure) && bytes.equal(bytes.value, "glTexImage2D") { return nil }
+  text := c.bytes_from_string(name, 64)
+  if !parse.failed(text.failure) && bytes.equal(text.value, "glTexImage2D") { return nil }
   return sdl3.gl_proc(name)
 }
 fn main() {
   missing := gl.load(missing_proc)
-  if missing.ok || !bytes.equal(missing.missing, "glClearColor") {
+  if !io.failed(missing.failure) || !bytes.equal(missing.missing, "glClearColor") {
     #panic("missing symbol accepted")
   }
-  if gl.load(nil).ok {
+  if !io.failed(gl.load(nil).failure) {
     #panic("nil loader accepted")
   }
   backing: [65536]u8
@@ -506,7 +506,7 @@ fn main() {
   }
   title: [64]u8
   window := sdl3.window_create("Dyn OpenGL triangle", title[..], 640, 480, sdl3.WindowOpenGL | sdl3.WindowResizable)
-  if !window.ok {
+  if io.failed(window.failure) {
     #panic("GL window")
   }
   defer sdl3.window_destroy_owned(window.value)
@@ -521,12 +521,12 @@ fn main() {
     #panic("GL current")
   }
   loaded := gl.load(sdl3.gl_proc)
-  if !loaded.ok {
+  if io.failed(loaded.failure) {
     io.eprintln("missing {}", loaded.missing)
     #panic("GL load")
   }
   absent_texture := gl.load(missing_texture_proc)
-  if absent_texture.ok || !bytes.equal(absent_texture.missing, "glTexImage2D") || absent_texture.api.clear_color != nil {
+  if !io.failed(absent_texture.failure) || !bytes.equal(absent_texture.missing, "glTexImage2D") || absent_texture.api.clear_color != nil {
     #panic("partial atlas API accepted")
   }
   api := &loaded.api
@@ -661,7 +661,8 @@ fn main() {
   if !io.failed(curl.get_into("file:///etc/passwd", url[..], output[..], 5000).failure) { #panic("protocol restriction") }
 }
 ''',
-    'provider-abi': r'''use "vendor/tree_sitter" ts
+    'provider-abi': r'''use "std/io"
+use "vendor/tree_sitter" ts
 use "vendor/sdl3"
 use "vendor/sdl3/image" image
 use "vendor/sdl3/ttf" ttf
@@ -680,28 +681,28 @@ fn main() {
   if #len(args) != 3 { #panic("image and font paths required") }
   buffer: [4096]u8
   surface := image.load_owned(args[1], buffer[..])
-  if !surface.ok { #panic("image") }
+  if io.failed(surface.failure) { #panic("image") }
   defer sdl3.surface_destroy_owned(surface.value)
   if surface_valid(surface.value) == 0 { #panic("image dimensions") }
   if !ttf.init() { #panic("TTF init") }
   defer ttf.quit()
   font := ttf.open_owned(args[2], buffer[..], 18.0)
-  if !font.ok { #panic("font") }
+  if io.failed(font.failure) { #panic("font") }
   defer ttf.destroy_owned(font.value)
   rendered := ttf.render_owned(font.value, "Dyn", sdl3.Color{ red: 255, green: 127, blue: 64, alpha: 255 })
-  if !rendered.ok { #panic("rendered text") }
+  if io.failed(rendered.failure) { #panic("rendered text") }
   defer sdl3.surface_destroy_owned(rendered.value)
   if surface_valid(rendered.value) == 0 { #panic("text dimensions") }
   if !sdl3.init_video() { #panic("video") }
   defer sdl3.quit()
   window := sdl3.window_create("provider test", buffer[..], 64, 64, sdl3.WindowHidden)
-  if !window.ok { #panic("window") }
+  if io.failed(window.failure) { #panic("window") }
   defer sdl3.window_destroy_owned(window.value)
   renderer := sdl3.renderer_create_default_owned(window.value)
-  if !renderer.ok { #panic("renderer") }
+  if io.failed(renderer.failure) { #panic("renderer") }
   defer sdl3.renderer_destroy_owned(renderer.value)
   texture := sdl3.texture_from_surface_owned(renderer.value, surface.value)
-  if !texture.ok { #panic("texture") }
+  if io.failed(texture.failure) { #panic("texture") }
   defer sdl3.texture_destroy_owned(texture.value)
   if !sdl3.texture_draw(renderer.value, texture.value) || !sdl3.present(renderer.value) { #panic("draw") }
 }

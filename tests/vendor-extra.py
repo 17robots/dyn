@@ -35,7 +35,7 @@ fn main() {
   rectangles[2] = atlas.Rectangle{ width: 4, height: 4 }
   mark := mem.arena_mark(backing)
   placed := atlas.pack(backing, 16, 16, rectangles[..])
-  if !placed.ok || placed.count != 3 || mem.arena_mark(backing) != mark {
+  if io.failed(placed.failure) || placed.count != 3 || mem.arena_mark(backing) != mark {
     #panic("atlas packing")
   }
   i: usize = 0
@@ -55,7 +55,7 @@ fn main() {
     i += 1
   }
   partial := atlas.pack(backing, 4, 4, rectangles[..])
-  if partial.ok || partial.code != 0 || partial.count != 1 {
+  if !io.failed(partial.failure) || partial.code != 0 || partial.count != 1 {
     #panic("atlas partial fit")
   }
   rectangles[0].width = -1
@@ -117,12 +117,12 @@ fn main() {
   defer sdl.quit()
   text: [256]u8
   window := sdl.window_create("Dyn interactive UI", text[..], 640, 360, sdl.WindowResizable)
-  if !window.ok {
+  if io.failed(window.failure) {
     #panic("SDL window")
   }
   defer sdl.window_destroy_owned(window.value)
   renderer := sdl.renderer_create_default_owned(window.value)
-  if !renderer.ok {
+  if io.failed(renderer.failure) {
     #panic("SDL renderer")
   }
   defer sdl.renderer_destroy_owned(renderer.value)
@@ -202,17 +202,17 @@ fn main() {
   }
   offline := #len(args) == 3 && bytes.equal(args[2], "--offline")
   engine := audio.engine_create(arena, !offline)
-  if !engine.ok {
+  if io.failed(engine.failure) {
     #panic("audio engine/device")
   }
   defer audio.engine_close(engine.value)
   path: [4096]u8
   mark := mem.arena_mark(arena)
-  if audio.sound_create(arena, engine.value, "/nonexistent/dyn-audio-fixture", path[..]).ok || mem.arena_mark(arena) != mark {
+  if !io.failed(audio.sound_create(arena, engine.value, "/nonexistent/dyn-audio-fixture", path[..]).failure) || mem.arena_mark(arena) != mark {
     #panic("sound failure rollback")
   }
   sound := audio.sound_create(arena, engine.value, args[1], path[..])
-  if !sound.ok {
+  if io.failed(sound.failure) {
     #panic("sound decode")
   }
   defer audio.sound_close(sound.value)
@@ -229,7 +229,7 @@ fn main() {
     if deadline_status.value { break }
     if offline {
       result := audio.mix(engine.value, samples[..])
-      if !result.ok {
+      if io.failed(result.failure) {
         #panic("audio mix")
       }
       for sample in samples[..result.samples] {
@@ -260,25 +260,25 @@ fn main() {
   output: [128]u8
   source := "caller buffers caller buffers caller buffers"
   result := lz4.compress(compressed[..], source)
-  if !result.ok {
+  if io.failed(result.failure) {
     #panic("LZ4 compression")
   }
   decoded := lz4.decompress(output[..], compressed[..result.written])
-  if !decoded.ok || !bytes.equal(output[..decoded.written], source) {
+  if io.failed(decoded.failure) || !bytes.equal(output[..decoded.written], source) {
     #panic("LZ4 roundtrip")
   }
-  if lz4.decompress(output[..1], compressed[..result.written]).ok {
+  if !io.failed(lz4.decompress(output[..1], compressed[..result.written]).failure) {
     #panic("short output accepted")
   }
-  if lz4.compress(compressed[..0], source).ok {
+  if !io.failed(lz4.compress(compressed[..0], source).failure) {
     #panic("short compressed output accepted")
   }
   invalid: [1]u8 = [255]
-  if lz4.decompress(output[..], invalid[..]).ok {
+  if !io.failed(lz4.decompress(output[..], invalid[..]).failure) {
     #panic("invalid block accepted")
   }
   empty := lz4.compress(compressed[..], "")
-  if !empty.ok || !lz4.decompress(output[..0], compressed[..empty.written]).ok {
+  if io.failed(empty.failure) || io.failed(lz4.decompress(output[..0], compressed[..empty.written]).failure) {
     #panic("empty block")
   }
   if lz4.compress_bound(lz4.MaxInput + 1) != 0 {
@@ -295,9 +295,9 @@ use "std/mem"
 use "std/fs"
 use "std/os/linux"
 fn main() {
-  bytes := "{\"asset\":{\"version\":\"2.0\"},\"nodes\":[{}],\"buffers\":[{\"byteLength\":12,\"uri\":\"data:application/octet-stream;base64,AAAAAAAAgD8AAABA\"}],\"bufferViews\":[{\"buffer\":0,\"byteLength\":12}],\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":1,\"type\":\"VEC3\"}]}"
-  model := cgltf.parse_owned(bytes)
-  if !model.ok {
+  document := "{\"asset\":{\"version\":\"2.0\"},\"nodes\":[{}],\"buffers\":[{\"byteLength\":12,\"uri\":\"data:application/octet-stream;base64,AAAAAAAAgD8AAABA\"}],\"bufferViews\":[{\"buffer\":0,\"byteLength\":12}],\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":1,\"type\":\"VEC3\"}]}"
+  model := cgltf.parse_owned(document)
+  if io.failed(model.failure) {
     #panic("glTF parse")
   }
   defer cgltf.destroy_owned(model.value)
@@ -311,11 +311,11 @@ fn main() {
   if cgltf.read_float(model.value, 1, 0, values[..]) || cgltf.read_float(model.value, 0, 0, values[..1]) {
     #panic("glTF invalid accessor accepted")
   }
-  if cgltf.parse_owned("broken").ok {
+  if !io.failed(cgltf.parse_owned("broken").failure) {
     #panic("invalid glTF accepted")
   }
   external := cgltf.parse_owned("{\"asset\":{\"version\":\"2.0\"},\"buffers\":[{\"byteLength\":12,\"uri\":\"external.bin\"}]}")
-  if !external.ok {
+  if io.failed(external.failure) {
     #panic("external glTF parse")
   }
   defer cgltf.destroy_owned(external.value)
@@ -325,7 +325,7 @@ fn main() {
   // Application chooses how external URIs are resolved. This example supplies
   // caller-owned arrays; real tools can read files into a retained model arena.
   mesh := cgltf.parse_owned("{\"asset\":{\"version\":\"2.0\"},\"buffers\":[{\"byteLength\":36,\"uri\":\"vertices.bin\"},{\"byteLength\":6,\"uri\":\"indices.bin\"}],\"bufferViews\":[{\"buffer\":0,\"byteLength\":36},{\"buffer\":1,\"byteLength\":6}],\"accessors\":[{\"bufferView\":0,\"componentType\":5126,\"count\":3,\"type\":\"VEC3\"},{\"bufferView\":1,\"componentType\":5123,\"count\":3,\"type\":\"SCALAR\"}],\"materials\":[{\"pbrMetallicRoughness\":{\"baseColorFactor\":[1,0.5,0.25,1]}}],\"meshes\":[{\"primitives\":[{\"attributes\":{\"POSITION\":0},\"indices\":1,\"material\":0}]}],\"nodes\":[{\"mesh\":0,\"translation\":[1,2,3]}]}")
-  if !mesh.ok {
+  if io.failed(mesh.failure) {
     #panic("mesh parse")
   }
   defer cgltf.destroy_owned(mesh.value)
@@ -345,7 +345,7 @@ fn main() {
     #panic("mesh traversal")
   }
   index := cgltf.read_index(mesh.value, 1, 2)
-  if !index.ok || index.value != 2 || cgltf.read_index(mesh.value, 1, 3).ok || cgltf.attribute(mesh.value, 0, 0, cgltf.Normal, 0) != -1 {
+  if io.failed(index.failure) || index.value != 2 || !io.failed(cgltf.read_index(mesh.value, 1, 3).failure) || cgltf.attribute(mesh.value, 0, 0, cgltf.Normal, 0) != -1 {
     #panic("mesh indices")
   }
   transform: [16]f32
@@ -364,7 +364,7 @@ fn main() {
       #panic("GLB read")
     }
     binary := cgltf.parse_owned(file.value)
-    if !binary.ok {
+    if io.failed(binary.failure) {
       #panic("GLB parse")
     }
     defer cgltf.destroy_owned(binary.value)
@@ -417,7 +417,7 @@ fn main() {
     event_index: i32 = 0
     for event_index < count {
       event := physics.contact(world, true, event_index)
-      if !event.ok {
+      if io.failed(event.failure) {
         #panic("contact event")
       }
       if event.first == circle || event.second == circle {
@@ -429,22 +429,22 @@ fn main() {
   }
   circle_position := physics.position(circle_body)
   joint_position := physics.position(pendulum)
-  if !contacts || !circle_position.ok || circle_position.y < 0.4 || circle_position.y > 0.7 || !joint_position.ok || joint_position.y < 1.9 || joint_position.y > 2.1 {
+  if !contacts || io.failed(circle_position.failure) || circle_position.y < 0.4 || circle_position.y > 0.7 || io.failed(joint_position.failure) || joint_position.y < 1.9 || joint_position.y > 2.1 {
     #panic("circle contact/joint motion")
   }
   hits: [1]physics.Shape
   candidates := physics.query(world, -2.0, -2.0, 5.0, 5.0, hits[..])
-  if !candidates.ok || candidates.total < 3 || candidates.written != 1 || physics.query(world, 2.0, 2.0, -2.0, -2.0, hits[..]).ok || physics.contact(world, true, 999).ok {
+  if io.failed(candidates.failure) || candidates.total < 3 || candidates.written != 1 || !io.failed(physics.query(world, 2.0, 2.0, -2.0, -2.0, hits[..]).failure) || !io.failed(physics.contact(world, true, 999).failure) {
     #panic("physics query")
   }
   if !physics.joint_destroy(joint) || physics.joint_destroy(joint) {
     #panic("joint destruction")
   }
   final := physics.position(falling)
-  if !final.ok || final.y < 0.4 || final.y > 0.7 {
+  if io.failed(final.failure) || final.y < 0.4 || final.y > 0.7 {
     #panic("body failed to rest on ground")
   }
-  if !physics.body_destroy(falling) || physics.position(falling).ok || physics.body_destroy(falling) {
+  if !physics.body_destroy(falling) || !io.failed(physics.position(falling).failure) || physics.body_destroy(falling) {
     #panic("stale body ID")
   }
   io.println("Box2D falling box passed")
@@ -543,7 +543,7 @@ fn main() {
     if io.failed(deadline_status.failure) { #panic("deadline clock failed") }
     if deadline_status.value { break }
     remote := enet.service(server, 0)
-    if !remote.ok {
+    if io.failed(remote.failure) {
       #panic("server service")
     }
     if remote.kind == enet.Received {
@@ -556,7 +556,7 @@ fn main() {
       enet.packet_destroy(remote.packet)
     }
     local := enet.service(client, 0)
-    if !local.ok {
+    if io.failed(local.failure) {
       #panic("client service")
     }
     if local.kind == enet.Connected {
@@ -590,7 +590,7 @@ fn main() {
     if deadline_status.value { break }
     server_event := enet.service(server, 0)
     client_event := enet.service(client, 0)
-    if !server_event.ok || !client_event.ok {
+    if io.failed(server_event.failure) || io.failed(client_event.failure) {
       #panic("disconnect service")
     }
     if server_event.kind == enet.Disconnected {
@@ -636,11 +636,11 @@ fn main() {
     #panic("WAV read")
   }
   mark := mem.arena_mark(storage)
-  if audio.decoder_create(storage, "invalid").ok || mem.arena_mark(storage) != mark {
+  if !io.failed(audio.decoder_create(storage, "invalid").failure) || mem.arena_mark(storage) != mark {
     #panic("invalid decoder rollback")
   }
   decoder := audio.decoder_create(storage, bytes.value)
-  if !decoder.ok {
+  if io.failed(decoder.failure) {
     #panic("decoder")
   }
   defer audio.decoder_close(decoder.value)
@@ -650,7 +650,7 @@ fn main() {
   iterations: usize = 0
   for iterations < 200 {
     result := audio.decoder_read(decoder.value, samples[..])
-    if !result.ok {
+    if io.failed(result.failure) {
       #panic("decode read")
     }
     for sample in samples[..result.samples] {
@@ -664,15 +664,15 @@ fn main() {
     }
     iterations += 1
   }
-  if !heard || !ended || audio.decoder_read(decoder.value, samples[..1]).ok {
+  if !heard || !ended || !io.failed(audio.decoder_read(decoder.value, samples[..1]).failure) {
     #panic("decode frames")
   }
   audio.decoder_close(decoder.value)
-  if audio.decoder_read(decoder.value, samples[..]).ok {
+  if !io.failed(audio.decoder_read(decoder.value, samples[..]).failure) {
     #panic("closed decoder accepted")
   }
   engine := audio.engine_create(storage, false)
-  if !engine.ok {
+  if io.failed(engine.failure) {
     #panic("audio engine")
   }
   defer audio.engine_close(engine.value)
@@ -684,7 +684,7 @@ fn main() {
   iterations = 0
   for !heard && iterations < 200 {
     mixed := audio.mix(engine.value, samples[..])
-    if !mixed.ok {
+    if io.failed(mixed.failure) {
       #panic("engine mix")
     }
     for mixed_sample in samples[..mixed.samples] {
@@ -751,7 +751,7 @@ fn main() {
   iterations: usize = 0
   for iterations < 200 && mixer.playing(track) {
     result := mixer.generate(engine, samples[..])
-    if !result.ok {
+    if io.failed(result.failure) {
       #panic("mixer generate")
     }
     for sample in samples[..result.written] {
@@ -768,7 +768,7 @@ fn main() {
     #panic("mixer stop")
   }
   silent := mixer.generate(engine, samples[..])
-  if !silent.ok || silent.written != 0 {
+  if io.failed(silent.failure) || silent.written != 0 {
     #panic("mixer silence status")
   }
   for silent_sample in samples {
@@ -776,7 +776,7 @@ fn main() {
       #panic("mixer silence output")
     }
   }
-  if mixer.generate(engine, samples[..1]).ok {
+  if !io.failed(mixer.generate(engine, samples[..1]).failure) {
     #panic("odd sample count accepted")
   }
   device := mixer.create_device_owned()

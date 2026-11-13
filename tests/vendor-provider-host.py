@@ -86,7 +86,7 @@ LAYOUT
     require(!ts.parser_language(parser, nil))
     require(ts.parser_language(parser, grammar()))
     parsed := ts.parse(parser, nil, "fn main() {}")
-    require(parsed.ok)
+    require(!io.failed(parsed.failure))
     node := ts.root(parsed.tree)
     require(ts.node_valid(node) && !ts.node_has_error(node))
     require(ts.node_start(node) == 0 && ts.node_end(node) == 12)
@@ -102,17 +102,17 @@ LAYOUT
       start_point: ts.Point{ column: 11 }, old_end_point: ts.Point{ column: 11 }, new_end_point: ts.Point{ column: 12 } }
     require(ts.tree_edit(copy, &edit))
     reparsed := ts.parse(parser, copy, "fn main() { }")
-    require(reparsed.ok && ts.node_end(ts.root(reparsed.tree)) == 13)
+    require(!io.failed(reparsed.failure) && ts.node_end(ts.root(reparsed.tree)) == 13)
     ts.tree_destroy_owned(copy)
     ts.tree_destroy_owned(reparsed.tree)
     broken := ts.parse(parser, nil, "fn main( {")
-    require(broken.ok && ts.node_has_error(ts.root(broken.tree)))
+    require(!io.failed(broken.failure) && ts.node_has_error(ts.root(broken.tree)))
     ts.tree_destroy_owned(broken.tree)
     ts.parser_destroy_owned(parser)
   }
   ts.tree_destroy_owned(nil)
   ts.parser_destroy_owned(nil)
-  require(!ts.parse(nil, nil, "").ok)
+  require(io.failed(ts.parse(nil, nil, "").failure))
   io.println("tree-sitter provider ok")
 }
 '''

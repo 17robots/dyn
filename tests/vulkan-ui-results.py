@@ -24,7 +24,7 @@ fn main() {
  arena := mem.arena_alloc(0)
  defer { mem.arena_release(arena) }
  renderer := gpu.Renderer{}
- check(gpu.open(&renderer,gpu.Limits{}).ok)
+ check(!errors.failed(gpu.open(&renderer,gpu.Limits{}).failure))
  defer { gpu.close(&renderer) }
  check(gpu.open(&renderer,gpu.Limits{}).kind == errors.Kind.InvalidState)
  commands: [5]ui.Command = [
@@ -43,7 +43,7 @@ fn main() {
  surface := software.Surface{pixels:pixels[..],width:32,height:32,stride:132}
  target := software.Surface{pixels:actual[..],width:32,height:32,stride:132}
  check(!errors.failed(software.render(&surface,&commands[0],font).failure))
- check(gpu.render(&renderer,arena,&target,&commands[0],font).ok)
+ check(!errors.failed(gpu.render(&renderer,arena,&target,&commands[0],font).failure))
  for i in 0..#len(pixels) { check(pixels[i] == actual[i]) }
  // Reuse persistent GPU buffer on a smaller frame.
  surface.width = 7
@@ -51,7 +51,7 @@ fn main() {
  target.width = 7
  target.height = 5
  check(!errors.failed(software.render(&surface,&commands[0],font).failure))
- check(gpu.render(&renderer,arena,&target,&commands[0],font).ok)
+ check(!errors.failed(gpu.render(&renderer,arena,&target,&commands[0],font).failure))
  for i in 0..#len(pixels) { check(pixels[i] == actual[i]) }
  renderer.limits.draws = 0
  check(gpu.render(&renderer,arena,&target,&commands[0],font).kind == errors.Kind.Capacity)
