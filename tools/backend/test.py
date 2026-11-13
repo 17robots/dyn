@@ -492,13 +492,12 @@ def inspect(path, debug):
                for offset in range(table[4], table[4] + table[5], table[9])]
     assert all(s[1] >> 4 == 0 for s in symbols[:table[7]])
     assert all(s[1] >> 4 == 1 for s in symbols[table[7]:])
-    # Table-based release unwinding needs continue, but no set/link/unlink calls.
-    # Debug keeps those calls; its stack traces walk frame pointers, with no
+    # Table-based unwinding needs continue, but no set/link/unlink calls. Debug
+    # builds generate this program's functions through SSA as release does, so
+    # they unwind by table too; their stack traces walk frame pointers, with no
     # hook in each function. Both modes retain the local .text section symbol
     # used by the unwind-table relocation.
     runtime_symbols = {b'dyn_panic', b'dyn_unwind_continue', b'fmod', b'fmodf', b'dyn_check_failed'}
-    if debug:
-        runtime_symbols |= {b'dyn_unwind_set', b'dyn_unwind_link', b'dyn_unwind_unlink'}
     # Three generic templates produce five concrete instances. Fixed symbols:
     # null, .rodata, .text, literals, initializer, and initialized flag.
     concrete_functions = SOURCE.count('pub fn ') - 3 + 5
