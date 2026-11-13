@@ -144,7 +144,8 @@ typedef struct {
   SsaDef *defs; uint32_t def_capacity, def_count;
   SsaPending *pending; uint32_t pending_count, pending_capacity;
   uint32_t current;
-  bool unsupported, failed;
+  /* failed falls back to the tree emitter; out_of_memory fails the object. */
+  bool unsupported, failed, out_of_memory;
   /* Locals: SSA variables (two per local: data and length words) or frame
      memory at local_offset. */
   bool *memory_local, *address_exposed;
@@ -191,6 +192,7 @@ typedef struct {
   struct SsaChunk *keep, *temp;
   struct SsaPool *pool;
 } Ssa;
+static void ssa_out_of_memory(Ssa *s) { s->failed = s->out_of_memory = true; }
 
 /* Call argument locations; see ssa_argument. */
 enum { SSA_TARGET = 32, SSA_RESULT_POINTER = 33, SSA_STACK = 64, SSA_ILP32_PART = 128 };
@@ -232,7 +234,7 @@ static SsaChunk *ssa_chunk(Ssa *s, size_t need) {
   }
   size_t size = need < SSA_CHUNK_BYTES ? SSA_CHUNK_BYTES : need;
   SsaChunk *chunk = size > SIZE_MAX - sizeof(SsaChunk) ? NULL : malloc(sizeof(SsaChunk) + size);
-  if (!chunk) { s->failed = true; return NULL; }
+  if (!chunk) { ssa_out_of_memory(s); return NULL; }
   chunk->used = 0;
   chunk->size = size;
   return chunk;
@@ -421,7 +423,7 @@ static void ssa_define(Ssa *s, uint32_t variable, uint32_t block, int32_t value)
   if (2 * (s->def_count + 1) > s->def_capacity) {
     uint32_t capacity = s->def_capacity ? 2 * s->def_capacity : 1024;
     SsaDef *grown = ssa_temp(s, (size_t)capacity * sizeof(*grown));
-    if (!grown) { s->failed = true; return; }
+    if (!grown) { ssa_out_of_memory(s); return; }
     for (uint32_t i = 0; i < capacity; ++i) grown[i].key = UINT64_MAX;
     for (uint32_t i = 0; i < s->def_capacity; ++i) {
       if (s->defs[i].key == UINT64_MAX) continue;
@@ -468,7 +470,7 @@ static int32_t ssa_phi_operands(Ssa *s, uint32_t variable, int32_t phi) {
   SsaBlock *b = &s->blocks[s->values[phi].block];
   uint32_t count = b->preds.count;
   int32_t stack[64] = {0}, *items = count <= 64 ? stack : ssa_temp(s, count * sizeof(int32_t));
-  if (!items) { s->failed = true; return phi; }
+  if (!items) { ssa_out_of_memory(s); return phi; }
   for (uint32_t i = 0; i < count; ++i)
     items[i] = ssa_read(s, variable, s->blocks[s->values[phi].block].preds.items[i], s->values[phi].cls);
   s->values[phi].list = ssa_list(s, items, count);
@@ -968,7 +970,7 @@ static int32_t ssa_expr_value(Ssa *s, DynExprId id, int32_t *second, unsigned de
       return ssa_symbol(s, 1, SYM_LOCAL, 0);
     }
     size_t at = literal(s->ctx, (const char *)string->data, string->length);
-    if (s->ctx->rodata.failed) { s->failed = true; return 0; }
+    if (s->ctx->rodata.failed) { ssa_out_of_memory(s); return 0; }
     if (second) *second = ssa_const(s, string->length, SC_INT);
     return ssa_symbol(s, 1, SYM_LOCAL, (int64_t)at);
   }
@@ -3240,11 +3242,11 @@ static void ssa_build(Ssa *s) {
   s->address_exposed = ssa_keep_zero(s, locals * sizeof(bool));
   s->local_offset = ssa_keep_zero(s, locals * sizeof(uint32_t));
   s->alias = ssa_keep(s, locals * sizeof(int32_t));
-  if (!s->memory_local || !s->address_exposed || !s->local_offset || !s->alias) { s->failed = true; return; }
+  if (!s->memory_local || !s->address_exposed || !s->local_offset || !s->alias) { ssa_out_of_memory(s); return; }
   if (s->ctx->dwarf) {
     s->scope_low = ssa_keep_zero(s, locals * sizeof(uint32_t));
     s->scope_high = ssa_keep_zero(s, locals * sizeof(uint32_t));
-    if (!s->scope_low || !s->scope_high) { s->failed = true; return; }
+    if (!s->scope_low || !s->scope_high) { ssa_out_of_memory(s); return; }
   }
   for (uint32_t i = 0; i < locals; ++i) s->alias[i] = -1;
   s->variable_count = 2 * f->local_count;
@@ -3458,7 +3460,7 @@ static uint32_t *ssa_order(Ssa *s, uint32_t *count) {
   uint32_t *order = ssa_keep(s, (s->block_count + 1) * sizeof(uint32_t));
   /* The DFS stack (two words per entry) and the postorder share one block. */
   uint32_t *stack = ssa_temp(s, (s->block_count + 1) * 3 * sizeof(uint32_t));
-  if (!order || !stack) { s->failed = true; return NULL; }
+  if (!order || !stack) { ssa_out_of_memory(s); return NULL; }
   for (uint32_t i = 0; i < s->block_count; ++i) { s->blocks[i].reachable = false; s->blocks[i].order = UINT32_MAX; }
   uint32_t top = 0, n = 0;
   stack[top++] = 0; stack[top++] = 0;
@@ -3657,7 +3659,7 @@ static bool ssa_unswitch(Ssa *s, const uint32_t *order, uint32_t n) {
   enum { UNSWITCH_VALUES = 192 };
   bool *inside = ssa_temp_zero(s, (size_t)(s->block_count + 1) * (sizeof(bool)));
   uint32_t *work = ssa_temp(s, (s->block_count + 1) * sizeof(uint32_t));
-  if (!inside || !work) { s->failed = true; return false; }
+  if (!inside || !work) { ssa_out_of_memory(s); return false; }
   bool done = false;
   for (uint32_t i = 0; i < n && !done && !s->failed; ++i) {
     uint32_t header = order[i];
@@ -3747,7 +3749,7 @@ static bool ssa_unswitch(Ssa *s, const uint32_t *order, uint32_t n) {
     uint32_t *block_map = ssa_temp(s, (s->block_count + 1) * sizeof(uint32_t));
     uint32_t value_base = s->value_count;
     uint32_t *value_map = ssa_temp(s, ((size_t)s->value_count + 1) * sizeof(uint32_t));
-    if (!block_map || !value_map) { s->failed = true; break; }
+    if (!block_map || !value_map) { ssa_out_of_memory(s); break; }
     uint32_t original_blocks = s->block_count;
     for (uint32_t b = 0; b < original_blocks; ++b) block_map[b] = b;
     for (uint32_t v = 0; v < value_base; ++v) value_map[v] = v;
@@ -3775,7 +3777,7 @@ static bool ssa_unswitch(Ssa *s, const uint32_t *order, uint32_t n) {
         uint32_t words = v->op == SO_PHI || v->op == SO_FIND ? v->count : v->op == SO_CALL ? 3 * v->count : 0;
         if (words) {
           int32_t *items = ssa_temp(s, words * sizeof(int32_t));
-          if (!items) { s->failed = true; break; }
+          if (!items) { ssa_out_of_memory(s); break; }
           for (uint32_t w = 0; w < words; ++w) items[w] = (int32_t)s->lists[s->values[copy].list + w];
           uint32_t list = ssa_list(s, items, words);
           s->values[copy].list = list;
@@ -3817,7 +3819,7 @@ static bool ssa_unswitch(Ssa *s, const uint32_t *order, uint32_t n) {
         SsaValue *phi = &s->values[s->blocks[b].values.items[k]];
         if (phi->op != SO_PHI) break;
         int32_t *items = ssa_temp(s, 2 * preds * sizeof(int32_t));
-        if (!items) { s->failed = true; break; }
+        if (!items) { ssa_out_of_memory(s); break; }
         for (uint32_t p = 0; p < preds; ++p) {
           int32_t op = (int32_t)s->lists[phi->list + p];
           items[p] = op;
@@ -3986,7 +3988,7 @@ static void ssa_thread_edge(Ssa *s, uint32_t from, uint32_t via, uint32_t to) {
 }
 static bool ssa_thread_conditions(Ssa *s, const uint32_t *order, uint32_t n) {
   uint32_t *uses = ssa_temp_zero(s, (size_t)((size_t)s->value_count + 1) * (sizeof(uint32_t)));
-  if (!uses) { s->failed = true; return false; }
+  if (!uses) { ssa_out_of_memory(s); return false; }
   for (uint32_t i = 0; i < n; ++i) {
     SsaBlock *block = &s->blocks[order[i]];
     int32_t controls[4] = {block->control, block->control2, block->control3, block->control4};
@@ -4534,7 +4536,7 @@ static bool ssa_reuse_loads(Ssa *s, const uint32_t *order, uint32_t n) {
   /* By block: the epoch at its end, or 0 before it is visited. */
   uint64_t *end_epoch = ssa_temp_zero(s, (size_t)s->block_count * sizeof(uint64_t));
   uint32_t *work = ssa_temp(s, 64 * sizeof(uint32_t)), *seen = ssa_temp_zero(s, (size_t)s->block_count * sizeof(uint32_t));
-  if (!table || !end_epoch || !work || !seen) { s->failed = true; return false; }
+  if (!table || !end_epoch || !work || !seen) { ssa_out_of_memory(s); return false; }
   /* epoch names the memory state; top is the last one handed out. Entries
      of a reused epoch may come from blocks that do not dominate the one
      looking, so then a hit must also dominate. */
@@ -4675,7 +4677,7 @@ static bool ssa_cse(Ssa *s, const uint32_t *order, uint32_t n) {
   size_t blocks = s->block_count ? s->block_count : 1;
   /* The hash table, then the dominator numbering. */
   int32_t *table = ssa_temp(s, capacity * sizeof(int32_t) + (n ? 5 * blocks * sizeof(uint32_t) : 0));
-  if (!table) { s->failed = true; return false; }
+  if (!table) { ssa_out_of_memory(s); return false; }
   for (uint32_t i = 0; i < capacity; ++i) table[i] = -1;
   uint32_t *numbers = n ? (uint32_t *)(table + capacity) : NULL;
   uint32_t *enter = numbers, *leave = numbers ? numbers + blocks : NULL;
@@ -4941,7 +4943,7 @@ static bool ssa_forward(Ssa *s, const uint32_t *order, uint32_t n) {
   SsaKnown *known = NULL;
   uint32_t known_count = 0, known_capacity = 0;
   bool changed = false;
-  if (!state || !owner || !touched || !writer || !saved) { s->failed = true; goto done; }
+  if (!state || !owner || !touched || !writer || !saved) { ssa_out_of_memory(s); goto done; }
   ssa_classify_regions(s, order, n, state);
   for (size_t i = 0; i < (size_t)regions * SSA_TRACKED; ++i) owner[i] = saved[i] = SSA_UNKNOWN;
   for (uint32_t r = 0; r < regions; ++r) writer[r] = UINT32_MAX;
@@ -6021,7 +6023,7 @@ static bool ssa_self_inline(Ssa *s, const uint32_t *order, uint32_t n) {
   for (unsigned d = 0; d < depth; ++d) {
     maps[d] = ssa_temp(s, ((size_t)original_values + 1) * sizeof(uint32_t));
     block_maps[d] = ssa_temp(s, ((size_t)original_blocks + 1) * sizeof(uint32_t));
-    if (!maps[d] || !block_maps[d]) { s->failed = true; return false; }
+    if (!maps[d] || !block_maps[d]) { ssa_out_of_memory(s); return false; }
     for (uint32_t v = 0; v < original_values; ++v) maps[d][v] = v;
     for (uint32_t b = 0; b < original_blocks; ++b) block_maps[d][b] = b;
     for (uint32_t i = 1; i < n && !s->failed; ++i) {
@@ -6045,7 +6047,7 @@ static bool ssa_self_inline(Ssa *s, const uint32_t *order, uint32_t n) {
         uint32_t words = s->values[copy].op == SO_PHI ? s->values[copy].count : s->values[copy].op == SO_CALL ? 3 * s->values[copy].count : 0;
         if (words) {
           int32_t *items = ssa_temp(s, words * sizeof(int32_t));
-          if (!items) { s->failed = true; return false; }
+          if (!items) { ssa_out_of_memory(s); return false; }
           for (uint32_t w = 0; w < words; ++w) items[w] = (int32_t)s->lists[s->values[copy].list + w];
           s->values[copy].list = ssa_list(s, items, words);
         }
@@ -6335,7 +6337,7 @@ static bool ssa_jam_loop(Ssa *s, const uint32_t *order, uint32_t n, uint32_t ind
   /* The second copy reads counter + 1. */
   uint32_t value_limit = s->value_count;
   int32_t *map = ssa_temp(s, value_limit * sizeof(int32_t));
-  if (!map) { s->failed = true; return false; }
+  if (!map) { ssa_out_of_memory(s); return false; }
   for (uint32_t i = 0; i < value_limit; ++i) map[i] = -1;
   int32_t next = ssa_value(s, first, SO_ADD, SC_INT, counter, -1, -1, 0, 0);
   int32_t constant = ssa_value(s, first, SO_CONST, SC_INT, -1, -1, -1, 1, 0);
@@ -6363,7 +6365,7 @@ static bool ssa_jam_loop(Ssa *s, const uint32_t *order, uint32_t n, uint32_t ind
     SsaList *values = &s->blocks[b].values;
     uint32_t count = values->count;
     uint32_t *items = ssa_temp(s, 2 * (count + 1) * sizeof(uint32_t)), out = 0;
-    if (!items) { s->failed = true; break; }
+    if (!items) { ssa_out_of_memory(s); break; }
     /* Ordered updates can read another phi's first-iteration result, even
        when that result occurs later in the original latch. Finish the whole
        first latch before appending any second-iteration instructions. */
@@ -6429,7 +6431,7 @@ static bool ssa_jam(Ssa *s, const uint32_t *order, uint32_t n) {
   uint32_t depends_size = s->value_count + 1;
   uint8_t *depends = ssa_temp(s, depends_size);
   bool changed = false;
-  if (!stamp || !work || !depends) { s->failed = true; goto done; }
+  if (!stamp || !work || !depends) { ssa_out_of_memory(s); goto done; }
   for (uint32_t i = 0; i < n && !s->failed; ++i) {
     if (s->value_count > 100000) break;
     if (depends_size < s->value_count + 1) {
@@ -6809,7 +6811,7 @@ static bool ssa_vloops(Ssa *s, const uint32_t *order, uint32_t n) {
   bool *in_loop = ssa_temp_zero(s, (size_t)(s->block_count ? s->block_count : 1) * (sizeof(bool)));
   int32_t *map = ssa_temp_zero(s, (size_t)(s->value_count ? s->value_count : 1) * (sizeof(int32_t)));
   uint32_t *body = ssa_temp(s, (s->block_count ? s->block_count : 1) * sizeof(uint32_t));
-  if (!in_loop || !map || !body) { s->failed = true; return false; }
+  if (!in_loop || !map || !body) { ssa_out_of_memory(s); return false; }
   uint32_t value_limit = s->value_count;
   for (uint32_t i = 0; i < n; ++i) {
     uint32_t h = order[i];
@@ -7212,7 +7214,7 @@ static bool ssa_pairs(Ssa *s, const uint32_t *order, uint32_t n) {
 }
 static bool ssa_hoist(Ssa *s, const uint32_t *order, uint32_t n) {
   uint32_t *stamp = ssa_temp_zero(s, (size_t)(s->block_count) * (sizeof(uint32_t))), *work = ssa_temp(s, (s->block_count + 1) * sizeof(uint32_t));
-  if (!stamp || !work) { s->failed = true; return false; }
+  if (!stamp || !work) { ssa_out_of_memory(s); return false; }
   bool changed = false;
   uint32_t mark = 0;
   for (uint32_t i = n; i-- > 0;) {
@@ -7274,7 +7276,7 @@ static bool ssa_hoist(Ssa *s, const uint32_t *order, uint32_t n) {
 /* Removes values nothing needs; counts the uses of the rest. */
 static void ssa_dce(Ssa *s, const uint32_t *order, uint32_t n) {
   uint32_t *work = ssa_temp(s, (s->value_count + 1) * sizeof(uint32_t)), top = 0;
-  if (!work) { s->failed = true; return; }
+  if (!work) { ssa_out_of_memory(s); return; }
   for (uint32_t i = 0; i < s->value_count; ++i) { s->values[i].uses = 0; s->values[i].dead = true; }
   for (uint32_t i = 0; i < n; ++i) {
     SsaBlock *block = &s->blocks[order[i]];
@@ -7651,7 +7653,7 @@ static bool ssa_intervals(SsaAlloc *a) {
      every block an earlier walk for the same value already covered. */
   uint32_t *first = ssa_temp_zero(s, (size_t)((size_t)s->value_count + 1) * (sizeof(uint32_t)));
   SsaLiveIn *sorted = ssa_temp(s, (live_count ? live_count : 1) * sizeof(*sorted));
-  if (!first || !sorted) { s->failed = true; return false; }
+  if (!first || !sorted) { ssa_out_of_memory(s); return false; }
   for (uint32_t i = 0; i < live_count; ++i) ++first[live[i].value + 1];
   for (uint32_t v = 0; v < s->value_count; ++v) first[v + 1] += first[v];
   for (uint32_t i = 0; i < live_count; ++i) sorted[first[live[i].value]++] = live[i];
@@ -8196,7 +8198,7 @@ static void ssa_local_splits(SsaAlloc *a) {
   SsaSpan *spans[64];
   for (unsigned r = 0; r < 64; ++r) {
     spans[r] = counts[r] ? ssa_temp(s, counts[r] * sizeof(SsaSpan)) : NULL;
-    if (counts[r] && !spans[r]) { s->failed = true; return; }
+    if (counts[r] && !spans[r]) { ssa_out_of_memory(s); return; }
   }
   for (uint32_t id = 0; id < s->value_count; ++id) {
     SsaValue *v = &s->values[id];
@@ -8213,13 +8215,13 @@ static void ssa_local_splits(SsaAlloc *a) {
      from the one before it alone, such as a fast path past its checks. A
      register loaded in one of them is still there in the next. */
   bool *cached = ssa_temp_zero(s, (size_t)(s->block_count + 1) * sizeof(bool));
-  if (!cached) { s->failed = true; return; }
+  if (!cached) { ssa_out_of_memory(s); return; }
   for (uint32_t c = 0; c < a->cache_count; ++c)
     for (uint32_t b = 0; b < s->block_count; ++b)
       if (a->cache_member[(size_t)c * s->block_count + b]) cached[b] = true;
   /* Loop caches set and clear their values' registers block by block. */
   bool *cache_value = ssa_temp_zero(s, (size_t)(s->value_count + 1) * sizeof(bool));
-  if (!cache_value) { s->failed = true; return; }
+  if (!cache_value) { ssa_out_of_memory(s); return; }
   for (uint32_t c = 0; c < a->cache_count; ++c) {
     cache_value[a->caches[c].value] = true;
     if (a->caches[c].evicted != UINT32_MAX) cache_value[a->caches[c].evicted] = true;
@@ -11246,7 +11248,7 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
       SsaBlock *block = &s->blocks[e->tables[i].block];
       uint32_t entries = s->lists[block->table + 1];
       char *bytes = ssa_temp(s, (size_t)entries * 4 + 1);
-      if (!bytes) { s->failed = true; break; }
+      if (!bytes) { ssa_out_of_memory(s); break; }
       for (uint32_t k = 0; k < entries; ++k) {
         int32_t delta = (int32_t)((int64_t)s->blocks[s->lists[block->table + 3 + k]].at - (int64_t)e->tables[i].anchor);
         for (unsigned j = 0; j < 4; ++j) bytes[4 * k + j] = (char)(delta >> (8 * j));
@@ -11564,7 +11566,7 @@ static int ssa_emit_prepared(BackendContext *ctx, const DynSource *source, const
   p->order = NULL;
   int result = SSA_UNSUPPORTED;
   struct timespec phase = dyn_timing_start(&source->context);
-  if (!ssa_finish_literals(s)) s->failed = true;
+  if (!ssa_finish_literals(s)) ssa_out_of_memory(s);
   if (!p->ready || s->failed) goto done;
   if (ctx->rv32 || ctx->t32) {
     result = ssa32_function(s, order, n);
@@ -11676,6 +11678,8 @@ static int ssa_emit_prepared(BackendContext *ctx, const DynSource *source, const
   if (result == SSA_EMITTED && source->context.optimization && source->context.optimization->remarks)
     fprintf(stderr, "remark: %s: SSA code generation, %u spill slots, %u loop-cached values\n", f->name, alloc->spill_slots, alloc->cache_count);
 done:
+  /* Memory ran out: the object fails, as the tree emitter's would. */
+  if (s->out_of_memory) result = SSA_FAILED;
   /* Paired-target preflight emits no instructions. Keep any literals interned
      during SSA construction, just as on the normal build-time fallback path. */
   if ((ctx->rv32 || ctx->t32) && result == SSA_UNSUPPORTED && ctx->optimization_remarks)
