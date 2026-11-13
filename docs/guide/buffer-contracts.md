@@ -56,3 +56,29 @@ commitment diagnostic. Ordinary page-commit failures during a push still panic.
 Retained-result lifetimes are listed in [memory](memory.md#what-each-result-borrows).
 A numeric mark is not a generation-checked token: do not reuse marks across
 reset or release, or with another arena.
+
+### Transport-owned HTTP response bodies
+
+`http.body_buffer(response, capacity)` optionally borrows exclusive writable body
+storage from the response transport. An empty result means unavailable; use the
+ordinary `respond` path with caller storage. Evented HTTP supplies this storage
+when the connection has no queued output and its base buffer or an overflow
+block can hold the requested capacity plus an 8 KiB header prefix.
+
+Initialize the body prefix and pass its length to `http.respond_buffered`.
+It validates response headers before publishing bytes, then queues header and
+body without copying the body. The view expires on any response operation or
+handler return; never retain it or mutate it after commit. Invalid buffered
+length/options leave the reservation available for correction. Ordinary
+`respond` cancels an unpublished reservation. Callback failures remain sticky,
+including native error zero. Custom response backends must implement both
+reservation callbacks and keep queued storage alive until transmission ends.
+
+Evented `Config.overflow_send_size` and `overflow_send_count` enable a fixed,
+per-worker pool; both default to zero. A connection leases at most one block,
+which returns after output drains or the connection closes. Pending transport
+writes retain the same backing for TLS retries. `storage_size` includes the
+pool; no request allocates memory. When the pool is exhausted, ordinary writes
+retain the existing synchronous-flush behavior and body reservation fails.
+To avoid adding pool-exhaustion stalls for bounded responses, provide one block
+per connection slot and enough room for the largest body plus header prefix.

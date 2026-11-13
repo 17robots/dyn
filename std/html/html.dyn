@@ -51,14 +51,101 @@ pub fn output(source: *const Writer) Trusted {
 // Appends text with & < > " ' replaced by entities. Returns false, with the
 // buffer marked failed, when it does not fit.
 pub fn write_escaped(buffer: *fmt.Buffer, text: []const u8) bool {
-  start: usize = 0
-  for i in 0..#len(text) {
-    replacement := entity(text[i])
-    if #len(replacement) > 0 {
-      _ = fmt.write(buffer, text[start..i])
-      _ = fmt.write(buffer, replacement)
-      start = i + 1
+  // Keep ordinary text on its existing one-copy path. Only escaped text
+  // needs the per-entity optimization below.
+  first: usize = 0
+  for first < #len(text) {
+    byte := text[first]
+    if byte == '&' || byte == '<' || byte == '>' || byte == '"' || byte == 39 { break }
+    first += 1
+  }
+  if first == #len(text) { return fmt.write(buffer, text) }
+  // Reserve the worst case once. Near-capacity and aliased inputs keep the
+  // span writer below, including its exact partial-write failure behavior.
+  if !buffer.failed && buffer.length <= #len(buffer.data) && #len(text) > 0 &&
+    #len(text) <= (#len(buffer.data) - buffer.length) / 6 {
+    maximum := #len(text) * 6
+    destination := buffer.data[buffer.length..buffer.length + maximum]
+    output_address := #cast(usize, &destination[0])
+    input_address := #cast(usize, &text[0])
+    disjoint := false
+    if output_address >= input_address {
+      disjoint = output_address - input_address >= #len(text)
+    } else {
+      disjoint = input_address - output_address >= maximum
     }
+    // Raw byte views of the writer itself must also use the original order.
+    state_address := #cast(usize, buffer)
+    state_disjoint := false
+    if state_address >= input_address {
+      state_disjoint = state_address - input_address >= #len(text)
+    } else {
+      state_disjoint = input_address - state_address >= #sizeof(fmt.Buffer)
+    }
+    if disjoint && state_disjoint {
+      source_prefix := text[..first]
+      destination_prefix := destination[..first]
+      for i in 0..first { destination_prefix[i] = source_prefix[i] }
+      used := first
+      for byte in text[first..] {
+        if byte == '&' {
+          slot := destination[used..used + 6]
+          slot[0] = '&'
+          slot[1] = 'a'
+          slot[2] = 'm'
+          slot[3] = 'p'
+          slot[4] = ';'
+          used += 5
+        } else if byte == '<' {
+          slot := destination[used..used + 6]
+          slot[0] = '&'
+          slot[1] = 'l'
+          slot[2] = 't'
+          slot[3] = ';'
+          used += 4
+        } else if byte == '>' {
+          slot := destination[used..used + 6]
+          slot[0] = '&'
+          slot[1] = 'g'
+          slot[2] = 't'
+          slot[3] = ';'
+          used += 4
+        } else if byte == '"' {
+          slot := destination[used..used + 6]
+          slot[0] = '&'
+          slot[1] = 'q'
+          slot[2] = 'u'
+          slot[3] = 'o'
+          slot[4] = 't'
+          slot[5] = ';'
+          used += 6
+        } else if byte == 39 {
+          slot := destination[used..used + 6]
+          slot[0] = '&'
+          slot[1] = '#'
+          slot[2] = '3'
+          slot[3] = '9'
+          slot[4] = ';'
+          used += 5
+        } else {
+          destination[used] = byte
+          used += 1
+        }
+      }
+      buffer.length += used
+      return true
+    }
+  }
+  start: usize = 0
+  for i in first..#len(text) {
+    byte := text[i]
+    // Ordinary bytes skip the entity lookup and both writes.
+    if byte != '&' && byte != '<' && byte != '>' && byte != '"' && byte != '\'' {
+      continue
+    }
+    _ = fmt.write(buffer, text[start..i])
+    _ = fmt.write(buffer, entity(byte))
+    start = i + 1
   }
   _ = fmt.write(buffer, text[start..])
   return !buffer.failed

@@ -19,20 +19,27 @@ if sys.platform != 'linux':
 BIG = bytes(ord('a') + i % 26 for i in range(200 * 1024))
 
 
-def read_all(connection):
+def read_all(connection, allow_reset=False):
     received = b''
-    while chunk := connection.recv(65536):
-        received += chunk
+    try:
+        while chunk := connection.recv(65536):
+            received += chunk
+    except ConnectionResetError:
+        if not allow_reset:
+            raise
     return received
 
 
-def raw(port, data):
+def raw_request(port, data, allow_reset=False):
     with socket.create_connection(('127.0.0.1', port), timeout=10) as connection:
         connection.sendall(data)
-        return read_all(connection)
+        return read_all(connection, allow_reset)
 
 
-def exercise(port):
+def exercise(port, pooled=False):
+    # The test transport closes like TLS; rejected unread TCP can reset after
+    # its response. Default plain TCP still requires a graceful drain.
+    raw = lambda port, data: raw_request(port, data, pooled)
     client = http.client.HTTPConnection('127.0.0.1', port, timeout=10)
     for _ in range(3):
         client.request('GET', '/health')
@@ -53,6 +60,11 @@ def exercise(port):
     assert (reply.status, reply.read()) == (200, BIG)
     client.request('GET', '/health')
     assert client.getresponse().read() == b'ok\n'
+    for _ in range(3):
+        client.request('GET', '/buffered')
+        assert client.getresponse().read() == BIG
+        client.request('GET', '/buffered-empty')
+        assert client.getresponse().read() == b''
     client.close()
 
     # Query decoding, HTML escaping, request and response headers.
@@ -94,6 +106,26 @@ def exercise(port):
     assert (reply.status, reply.read()) == (201, b'created\n')
     client.close()
 
+    if pooled:
+        # One worker, one block. A non-reading client holds it, so another
+        # buffered response must use the ordinary bounded flushing fallback.
+        slow = socket.create_connection(('127.0.0.1', port), timeout=10)
+        slow.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+        slow.sendall(b'GET /buffered HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n')
+        time.sleep(.1)
+        competitor = http.client.HTTPConnection('127.0.0.1', port, timeout=10)
+        competitor.request('GET', '/buffered')
+        reply = competitor.getresponse()
+        assert reply.getheader('X-Buffered') is None, 'overflow pool was not exhausted'
+        assert reply.read() == BIG
+        slow.close()
+        time.sleep(.1)
+        competitor.request('GET', '/buffered')
+        reply = competitor.getresponse()
+        assert reply.getheader('X-Buffered') == 'yes', 'closed client did not release block'
+        assert reply.read() == BIG
+        competitor.close()
+
     # Slow reader: the worker drains the large body as the peer reads.
     with socket.create_connection(('127.0.0.1', port), timeout=10) as connection:
         connection.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
@@ -105,6 +137,10 @@ def exercise(port):
     # Pipelining, in one write and split byte by byte.
     pipeline = (b'GET /health HTTP/1.1\r\nHost: x\r\n\r\n' * 3 +
                 b'GET /health HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n')
+    buffered_pipeline = (b'GET /buffered HTTP/1.1\r\nHost: x\r\n\r\n' * 2 +
+                         b'GET /health HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n')
+    result = raw(port, buffered_pipeline)
+    assert result.count(b'HTTP/1.1 200 OK') == 3 and result.count(BIG) == 2
     assert raw(port, pipeline).count(b'HTTP/1.1 200 OK') == 4
     with socket.create_connection(('127.0.0.1', port), timeout=10) as connection:
         connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
@@ -121,11 +157,12 @@ def exercise(port):
     chunked = b'POST /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n'
     assert raw(port, chunked).startswith(b'HTTP/1.1 400 Bad Request\r\n')
 
-    # Idle connections close after the 500 ms timeout.
-    with socket.create_connection(('127.0.0.1', port), timeout=10) as connection:
-        started = time.monotonic()
-        assert connection.recv(1) == b''
-        assert 0.3 < time.monotonic() - started < 5
+    if not pooled:
+        # Idle connections close after the 500 ms timeout.
+        with socket.create_connection(('127.0.0.1', port), timeout=10) as connection:
+            started = time.monotonic()
+            assert connection.recv(1) == b''
+            assert 0.3 < time.monotonic() - started < 5
 
     # More concurrent keep-alive clients (48) than the 32 slots: extras wait in the backlog.
     failures = []
@@ -157,7 +194,7 @@ def exercise(port):
 
 
 with tempfile.TemporaryDirectory(prefix='dyn-http-evented-') as temporary:
-    for release, mode in ((False, 'single'), (True, 'single'), (True, 'shared')):
+    for release, mode in ((False, 'single'), (True, 'single'), (True, 'shared'), (False, 'pooled'), (True, 'pooled')):
         program = Path(temporary) / 'server'
         subprocess.run([DYN, 'build', str(ROOT / 'tests/http-evented'), '--no-cache', '--quiet',
                         '--output', str(program)] + (['--release'] if release else []),
@@ -166,7 +203,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-http-evented-') as temporary:
         try:
             line = server.stdout.readline().decode()
             assert line.startswith('port '), line
-            exercise(int(line.split()[1]))
+            exercise(int(line.split()[1]), mode == 'pooled')
             assert server.wait(timeout=15) == 0
         finally:
             if server.poll() is None:

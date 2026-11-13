@@ -22,6 +22,26 @@ pub fn open(name: []const u8, buffer: []u8) OpenResult {
   }
   return OpenResult{ database: database, code: code, ok: true }
 }
+// Opt in only when the caller serializes every connection/statement operation,
+// including borrowed views, from publication until all workers have stopped.
+// The provider's default mutex mode remains the default for all existing calls.
+pub struct OpenOptions { caller_serialized: bool }
+extern fn sqlite_open_flags "sqlite3_open_v2"(name: c.string, database: *rawptr, flags: i32, vfs: c.string) i32
+pub fn open_with_options(name: []const u8, buffer: []u8, options: OpenOptions) OpenResult {
+  if !options.caller_serialized { return open(name, buffer) }
+  encoded := c.string_into(buffer, name)
+  if encoded.failure.kind != parse.Kind.Ok {
+    return OpenResult{ code: string_error(encoded.failure.kind) }
+  }
+  database: rawptr = nil
+  // READWRITE | CREATE | NOMUTEX: file locking/durability are unchanged.
+  code := sqlite_open_flags(encoded.value, &database, 0x8006, nil)
+  if code != 0 {
+    if database != nil { _ = sqlite_close(database) }
+    return OpenResult{ code: code }
+  }
+  return OpenResult{ database: database, code: code, ok: true }
+}
 pub fn close(database: Database) i32 {
   if database == nil {
     return 0

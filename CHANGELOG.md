@@ -28,6 +28,19 @@ servers so they pick up the new `dyn`.
   the SDK, including `DYN_SDK`, so SDK declaration queries work outside the
   compiler directory. Local paths keep precedence; formatter and build path
   resolution are unchanged.
+- Decimal formatting keeps division by ten constant and reuses one quotient
+  per digit, allowing existing native strength reduction to avoid hardware
+  division. Generic base formatting and decimal output remain unchanged.
+- `fmt.write` copies through an exact-length local slice, allowing the release
+  compiler to move descriptor loads and redundant destination bounds checks out
+  of the byte loop. Capacity failures remain sticky and preserve prior output.
+- HTML escaping skips entity lookup for ordinary bytes while preserving
+  bounded writes, sticky failures, and the existing five escaped characters.
+- Evented HTTP optionally shares fixed overflow send blocks between connections.
+  `http.body_buffer` and `respond_buffered` let handlers build bounded response
+  bodies directly in transport-owned storage, avoiding a body copy. Pooling is
+  disabled by default; existing handlers and configuration keep their behavior.
+- `vendor/sqlite` adds `open_with_options` for explicit SQLite open flags.
 
 ## 0.1.0-preview.34
 

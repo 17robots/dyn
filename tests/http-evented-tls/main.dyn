@@ -27,6 +27,33 @@ fn text(response: *http.Response, body: []const u8) http.Result {
 }
 
 fn handle(response: *http.Response, request: *const http.Request, app: *App) http.Result {
+  if bytes.equal(request.path, "/buffered") || bytes.equal(request.path, "/buffered-empty") {
+    if #len(http.body_buffer(response, 0)) != 0 || #len(http.body_buffer(response, 0xffffffffffffffff)) != 0 {
+      #panic("invalid reservation succeeded")
+    }
+    body := http.body_buffer(response, BigSize)
+    if #len(body) == 0 {
+      if bytes.equal(request.path, "/buffered-empty") { return text(response, "") }
+      return text(response, app.big)
+    }
+    if #len(http.body_buffer(response, 1)) != 0 { #panic("second reservation succeeded") }
+    if http.respond_buffered(response, BigSize + 1, http.ResponseOptions{}).failure.kind == io.Kind.Ok {
+      #panic("oversize commit succeeded")
+    }
+    bad_headers: [1]http.Header = [http.Header{ name: "X-Test", value: "bad\r\nheader" }]
+    if http.respond_buffered(response, 1, http.ResponseOptions{ headers: bad_headers[..] }).failure.kind == io.Kind.Ok {
+      #panic("invalid header succeeded")
+    }
+    _ = mem.copy(body, app.big)
+    length := BigSize
+    if bytes.equal(request.path, "/buffered-empty") { length = 0 }
+    result := http.respond_buffered(response, length, http.ResponseOptions{ content_type: "text/plain" })
+    if result.failure.kind != io.Kind.Ok { return result }
+    if http.respond_buffered(response, 1, http.ResponseOptions{}).failure.kind == io.Kind.Ok {
+      #panic("second commit succeeded")
+    }
+    return result
+  }
   if bytes.equal(request.path, "/health") {
     return text(response, "ok\n")
   }
@@ -68,6 +95,8 @@ fn main() i32 {
   config.connections_per_worker = 16
   config.receive_size = 4 * mem.KiB
   config.send_size = 4 * mem.KiB
+  config.overflow_send_size = 256 * mem.KiB
+  config.overflow_send_count = 1
   config.idle_timeout_milliseconds = 500
   config.transport = &transport
   // Without a libc-thread spawner, start refuses the OpenSSL transport.
@@ -95,6 +124,9 @@ fn main() i32 {
   }
   evented.stop(workers)
   joined := evented.join(workers)
+  for worker in workers {
+    if worker.send_pool.free_count != config.overflow_send_count { #panic("overflow block leaked") }
+  }
   tls.config_release(&context.value)
   if joined.failure.kind != io.Kind.Ok {
     return 1

@@ -28,6 +28,14 @@ fn main() {
   check(out.failed && !fmt.write(&out, "d") && strings.equal(fmt.bytes(&out), "abc"), "fmt keeps the first failure")
   fmt.clear(&out)
   check(!out.failed && fmt.write(&out, "ok"), "fmt clear")
+  fmt.clear(&out)
+  check(fmt.write(&out, "abcd") && fmt.write(&out, ""), "fmt exact capacity and empty append")
+  check(!fmt.write(&out, "e") && strings.equal(fmt.bytes(&out), "abcd"), "fmt overflow preserves bytes")
+  fmt.clear(&out)
+  check(fmt.write(&out, "ab") && fmt.write(&out, storage[..2]) && strings.equal(fmt.bytes(&out), "abab"), "fmt append from own backing")
+  bad := fmt.buffer(storage[..])
+  bad.length = 5
+  check(!fmt.write(&bad, "") && bad.failed && bad.length == 5, "fmt invalid cursor fails before slicing")
   bytes: [2]u8 = []
   text := builder.from_buffer(bytes[..])
   _ = builder.append(&text, "abc")
