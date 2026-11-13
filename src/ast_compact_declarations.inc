@@ -896,6 +896,13 @@ static unsigned body_workers(const DynSource *s, size_t jobs) {
 /* Lowers jobs on worker threads into the program; false leaves it unchanged
    so the caller lowers serially, which also reports diagnostics in order. */
 static bool body_parallel(const DynSource *s, DynAstProgram *a, BodyJob *jobs, size_t count, unsigned workers) {
+  /* Runs copy the program, name indexes included, and only read them: an
+     index behind its count (instances were created since it was built)
+     would be extended by every run at once into the arrays they share. */
+  (void)find_struct(a, (DynSpan){0}, s);
+  (void)find_enum(a, (DynSpan){0}, s);
+  (void)find_alias(a, (DynSpan){0}, s);
+  if (a->allocation_failed) return false;
   BodyBase base = {0, 0, 0, 0, 0, 0, 0, a->pointer_count, a->array_count, a->slice_count,
                    a->fn_type_count, a->fn_type_param_count, a->loop_count};
   /* Runs of about equal source size, a few per worker for balance. */
