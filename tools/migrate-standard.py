@@ -61,7 +61,7 @@ VOIDED = {'std/fmt': ['write', 'write_byte', 'write_u64', 'write_i64', 'write_bo
 
 
 def module_aliases(directory):
-    """Import path -> alias for every `use` in a module directory."""
+    """Import path -> every alias it has in a module directory."""
     aliases = {}
     for path in sorted(directory.glob('*.dyn')):
         for line in path.read_text().split('\n'):
@@ -69,7 +69,7 @@ def module_aliases(directory):
             if not stripped.startswith('use '):
                 continue
             for module, alias in USE.findall(stripped):
-                aliases[module] = alias or module.rsplit('/', 1)[-1]
+                aliases.setdefault(module, set()).add(alias or module.rsplit('/', 1)[-1])
     return aliases
 
 
@@ -77,35 +77,29 @@ def rename_calls(path, aliases):
     text = path.read_text()
     result = text
     for module, pairs in RENAMES.items():
-        alias = aliases.get(module)
-        if not alias:
-            continue
-        for old, new in pairs:
-            result = re.sub(r'(?<![\w.])' + re.escape(alias) + r'\.' + re.escape(old) + r'\b', alias + '.' + new, result)
+        for alias in aliases.get(module, ()):
+            for old, new in pairs:
+                result = re.sub(r'(?<![\w.])' + re.escape(alias) + r'\.' + re.escape(old) + r'\b', alias + '.' + new, result)
     for module, names in VOIDED.items():
-        alias = aliases.get(module)
-        if not alias:
-            continue
-        for name in names:
-            result = re.sub(r'_ = (' + re.escape(alias) + r'\.' + name + r'\()', r'\1', result)
+        for alias in aliases.get(module, ()):
+            for name in names:
+                result = re.sub(r'_ = (' + re.escape(alias) + r'\.' + name + r'\()', r'\1', result)
     moved = False
-    byte_alias = aliases.get('std/bytes', 'bytes')
+    byte_alias = sorted(aliases.get('std/bytes', {'bytes'}))[0]
     for module, names in TO_BYTES.items():
-        alias = aliases.get(module)
-        if not alias:
-            continue
-        for name in names:
-            old, new = name if isinstance(name, tuple) else (name, name)
-            pattern = r'(?<![\w.])' + re.escape(alias) + r'\.' + re.escape(old) + r'\('
-            if re.search(pattern, result):
-                moved = True
-                result = re.sub(pattern, byte_alias + '.' + new + '(', result)
+        for alias in aliases.get(module, ()):
+            for name in names:
+                old, new = name if isinstance(name, tuple) else (name, name)
+                pattern = r'(?<![\w.])' + re.escape(alias) + r'\.' + re.escape(old) + r'\('
+                if re.search(pattern, result):
+                    moved = True
+                    result = re.sub(pattern, byte_alias + '.' + new + '(', result)
     if moved and 'std/bytes' not in aliases:
         lines = result.split('\n')
         last_use = max((i for i, line in enumerate(lines) if line.startswith('use ')), default=-1)
         lines.insert(last_use + 1, 'use "std/bytes"')
         result = '\n'.join(lines)
-        aliases['std/bytes'] = 'bytes'
+        aliases['std/bytes'] = {'bytes'}
     if result != text:
         path.write_text(result)
         return True
@@ -134,6 +128,13 @@ def main(arguments):
             print(path)
             changed += 1
     for path in files(paths, embedded):
+        if path.suffix != '.dyn':
+            aliases = {}
+            for module, alias in USE.findall('\n'.join(re.findall(r'use ("[^"]+"(?:[ \t]+\w+)?)', path.read_text()))):
+                aliases.setdefault(module, set()).add(alias or module.rsplit('/', 1)[-1])
+            if rename_calls(path, aliases):
+                print(path)
+                changed += 1
         text = path.read_text()
         result = rewrite(text, embedded and path.suffix != '.dyn')
         if result != text:
