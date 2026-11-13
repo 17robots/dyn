@@ -1194,8 +1194,8 @@ fn decimal(destination: []u8, value: usize) []const u8 {
   return destination[..#len(text)]
 }
 
-fn write_output(destination: io.Writer, bytes: []const u8) Result {
-  written := io.write_all(destination, bytes)
+fn write_output(destination: io.Writer, data: []const u8) Result {
+  written := io.write_all(destination, data)
   if io.failed(written.failure) {
     return Result{ detail: ErrorKind.Io, failure: io.Failure{ kind: written.failure.kind, native: written.failure.native } }
   }

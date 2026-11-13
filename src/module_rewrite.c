@@ -882,11 +882,25 @@ typedef struct {
   Module *modules;
   size_t module_count;
   const size_t *owners;
+  /* Per source: a local that takes an import alias's name, as start + 1. */
+  size_t *shadowed;
   atomic_size_t next;
   atomic_bool failed;
 } RewriteJobs;
+/* Locals never take the name of a module the file's module imports: a local
+   would otherwise silently hide every `alias.member` use in its scope. */
+static size_t alias_shadowed(const DynSource *s, const Module *m, const DynScopeIndex *locals) {
+  for (size_t i = 0; i < locals->count; ++i) {
+    const DynScopeBinding *b = &locals->items[i];
+    for (size_t j = 0; j < m->alias_count; ++j)
+      if (strlen(m->aliases[j].name) == b->length && !memcmp(m->aliases[j].name, b->name, b->length) &&
+          b->name >= s->text && b->name < s->text + s->length)
+        return (size_t)(b->name - s->text) + 1;
+  }
+  return 0;
+}
 /* Each source rewrites independently against the read-only module tables. */
-static bool rewrite_source(DynSource *s, Module *m, Module *modules, size_t module_count) {
+static bool rewrite_source(DynSource *s, Module *m, Module *modules, size_t module_count, size_t *shadowed) {
   DynSyntaxCache *cache = s->context.syntax_cache;
   if (cache && rewrite_reuse(cache, s, m->rewrite_key)) return true;
   const ExpSnapshotTree *tree = dyn_compact_tree(s);
@@ -894,9 +908,17 @@ static bool rewrite_source(DynSource *s, Module *m, Module *modules, size_t modu
   Edits edits = {0};
   DynScopeIndex locals = {0};
   bool fresh = !s->original_text;
-  bool ok = dyn_scope_build(&locals, s) &&
-            compact_rewrite_nodes(s, tree, m, modules, module_count, &edits, &locals) &&
+  bool ok = dyn_scope_build(&locals, s);
+  if (ok && m->alias_count) *shadowed = alias_shadowed(s, m, &locals);
+  ok = ok && compact_rewrite_nodes(s, tree, m, modules, module_count, &edits, &locals) &&
             apply_edits(s, &edits);
+  if (ok && *shadowed) {
+    /* Move the offset past the edits before it, into the rewritten text. */
+    size_t at = *shadowed - 1, moved = at;
+    for (size_t i = 0; i < edits.count && edits.items[i].end <= at; ++i)
+      moved = moved - (edits.items[i].end - edits.items[i].start) + strlen(edits.items[i].text);
+    *shadowed = moved + 1;
+  }
   edits_free(&edits);
   dyn_scope_free(&locals);
   if (ok && cache && fresh)
@@ -912,7 +934,8 @@ static void *rewrite_worker(void *raw) {
       return NULL;
     DynSource *s = &jobs->sources->items[i];
     if (dyn_source_target_enabled(s) != 0 &&
-        !rewrite_source(s, &jobs->modules[jobs->owners[i]], jobs->modules, jobs->module_count))
+        !rewrite_source(s, &jobs->modules[jobs->owners[i]], jobs->modules, jobs->module_count,
+                        &jobs->shadowed[i]))
       atomic_store(&jobs->failed, true);
   }
 }
@@ -1002,19 +1025,38 @@ int dyn_module_rewrite_project(const char *project_root, DynSources *sources) {
   if (!result && sources->count && sources->items[0].context.syntax_cache)
     rewrite_module_keys(modules, module_count);
   if (!result) {
+    size_t *shadowed = calloc(sources->count ? sources->count : 1, sizeof(*shadowed));
     RewriteJobs jobs = {.sources = sources, .modules = modules,
-                        .module_count = module_count, .owners = owners};
+                        .module_count = module_count, .owners = owners, .shadowed = shadowed};
     atomic_init(&jobs.next, 0);
     atomic_init(&jobs.failed, false);
-    rewrite_parallel(&jobs, sources);
-    if (atomic_load(&jobs.failed))
+    if (!shadowed)
       result = 2;
+    else
+      rewrite_parallel(&jobs, sources);
+    if (!result && atomic_load(&jobs.failed))
+      result = 2;
+    for (size_t i = 0; !result && i < sources->count; ++i) {
+      if (!shadowed[i]) continue;
+      size_t at = shadowed[i] - 1, end = at;
+      const DynSource *source = &sources->items[i];
+      while (end < source->length && (isalnum((unsigned char)source->text[end]) || source->text[end] == '_')) ++end;
+      char message[256];
+      snprintf(message, sizeof(message),
+               "a local cannot take the name of the imported module '%.*s'; rename the local",
+               (int)(end - at), source->text + at);
+      dyn_diagnostic_source("error", source, at, end, message);
+      shadowed[i] = SIZE_MAX;
+    }
+    for (size_t i = 0; !result && i < sources->count; ++i)
+      if (shadowed[i] == SIZE_MAX) result = 1;
+    free(shadowed);
   }
   if (!result && !capture_dependencies(sources, modules, module_count, owners)) result = 2;
   free(owners);
   free_modules(modules, module_count);
   free(root);
-  if (result)
+  if (result == 2)
     fprintf(stderr,
             "error: failed to create module-qualified compiler symbols\n");
   return result;

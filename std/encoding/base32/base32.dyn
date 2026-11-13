@@ -124,7 +124,7 @@ fn decode_pass(destination: []u8, source: []const u8, write: bool, offset: *usiz
       }
       digit += 1
     }
-    bytes := (symbols * 5) / 8
+    bytes_value := (symbols * 5) / 8
     if symbols != 8 && symbols != 7 && symbols != 5 && symbols != 4 && symbols != 2 {
       offset.* = input_at + symbols
       return Result{ data: destination[..0], failure: parse.Failure{ kind: parse.Kind.Syntax } }
@@ -133,12 +133,12 @@ fn decode_pass(destination: []u8, source: []const u8, write: bool, offset: *usiz
       offset.* = input_at + symbols
       return Result{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
     }
-    unused := symbols * 5 - bytes * 8
+    unused := symbols * 5 - bytes_value * 8
     if unused > 0 && ((block >> ((8 - symbols) * 5)) & ((#cast(u64, 1) << unused) - 1)) != 0 {
       offset.* = input_at + symbols - 1
       return Result{ data: destination[..0], failure: parse.Failure{ kind: parse.Kind.Syntax } }
     }
-    for byte_at in 0..bytes {
+    for byte_at in 0..bytes_value {
       if write {
         destination[output_at] = #cast(u8, ((block >> (32 - byte_at * 8)) & 255))
       }

@@ -288,18 +288,18 @@ pub fn read_stream(state: *StreamReader, destination: []u8) stream.Transfer {
   return stream.Transfer{ transferred: take, status: status }
 }
 
-fn string_end(bytes: []const u8) usize {
+fn string_end(data: []const u8) usize {
   i: usize = 0
-  for i < #len(bytes) && bytes[i] != 0 {
+  for i < #len(data) && data[i] != 0 {
     i += 1
   }
   return i
 }
 
-fn octal(bytes: []const u8, output: *u64) bool {
+fn octal(data: []const u8, output: *u64) bool {
   value: u64 = 0
   found := false
-  for byte in bytes {
+  for byte in data {
     if byte == 0 || byte == ' ' {
       if found { break } else { continue }
     }

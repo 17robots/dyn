@@ -586,16 +586,16 @@ fn utf8_byte(value: usize, marker: u8) u8 {
   return converted | marker
 }
 
-fn literal(cursor: *Cursor, text: []const u8) bool {
-  if cursor.at + #len(text) > #len(cursor.source) {
+fn literal(cursor: *Cursor, content: []const u8) bool {
+  if cursor.at + #len(content) > #len(cursor.source) {
     return false
   }
-  for i in 0..#len(text) {
-    if cursor.source[cursor.at + i] != text[i] {
+  for i in 0..#len(content) {
+    if cursor.source[cursor.at + i] != content[i] {
       return false
     }
   }
-  cursor.at += #len(text)
+  cursor.at += #len(content)
   return true
 }
 

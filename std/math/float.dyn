@@ -798,8 +798,8 @@ fn reduce_pi2_large(x: f64) Remainder {
     carry = sum >> 24
     k += 1
   }
-  integer := window_word(&limbs, base, point + 2) >> 62
-  n := #cast(i32, integer)
+  whole := window_word(&limbs, base, point + 2) >> 62
+  n := #cast(i32, whole)
   w0 := window_word(&limbs, base, point)
   w1 := window_word(&limbs, base, point - 64)
   w2 := window_word(&limbs, base, point - 128)

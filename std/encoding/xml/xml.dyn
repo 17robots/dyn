@@ -108,11 +108,11 @@ pub fn writer(destination_writer: stream.Writer) Writer {
   return Writer{ sink: destination_writer }
 }
 
-fn emit(state: *Writer, bytes: []const u8) bool {
+fn emit(state: *Writer, data: []const u8) bool {
   if state.failed {
     return false
   }
-  result := stream.write_all(state.sink, bytes)
+  result := stream.write_all(state.sink, data)
   if stream.failed(result.failure) {
     state.failed = true
     state.failure = parse.io_failure(result.failure.kind, result.failure.native)

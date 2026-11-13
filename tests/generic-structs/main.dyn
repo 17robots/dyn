@@ -18,13 +18,13 @@ fn unwrap(box: Box($T)) T {
 }
 fn push(arena: *mem.Arena, list: *List($T), value: $T) {
   if list.last == nil || list.last.count == 4 {
-    chunk := mem.push(Chunk(T), arena)
+    chunk_value := mem.push(Chunk(T), arena)
     if list.last == nil {
-      list.first = chunk
+      list.first = chunk_value
     } else {
-      list.last.next = chunk
+      list.last.next = chunk_value
     }
-    list.last = chunk
+    list.last = chunk_value
   }
   list.last.items[list.last.count] = value
   list.last.count += 1
@@ -32,12 +32,12 @@ fn push(arena: *mem.Arena, list: *List($T), value: $T) {
 }
 fn sum(list: *const List(i64)) i64 {
   total: i64 = 0
-  chunk := list.first
-  for chunk != nil {
-    for i in 0..chunk.count {
-      total += chunk.items[i]
+  chunk_value := list.first
+  for chunk_value != nil {
+    for i in 0..chunk_value.count {
+      total += chunk_value.items[i]
     }
-    chunk = chunk.next
+    chunk_value = chunk_value.next
   }
   return total
 }

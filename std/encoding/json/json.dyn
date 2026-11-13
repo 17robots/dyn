@@ -149,16 +149,16 @@ fn skip(cursor: *Cursor) {
   cursor.at = at
 }
 
-fn literal(cursor: *Cursor, text: []const u8) bool {
-  if cursor.at + #len(text) > #len(cursor.source) {
+fn literal(cursor: *Cursor, content: []const u8) bool {
+  if cursor.at + #len(content) > #len(cursor.source) {
     return false
   }
-  for i in 0..#len(text) {
-    if cursor.source[cursor.at + i] != text[i] {
+  for i in 0..#len(content) {
+    if cursor.source[cursor.at + i] != content[i] {
       return false
     }
   }
-  cursor.at += #len(text)
+  cursor.at += #len(content)
   return true
 }
 
@@ -597,12 +597,12 @@ fn parse_node(arena: *memory.Arena, cursor: *Cursor, depth: usize) *Value {
     return bool_node
   }
   if byte == '"' {
-    text := decoded_string(arena, cursor)
+    content := decoded_string(arena, cursor)
     if cursor.error != parse.Kind.Ok {
       return nil
     }
     string_node := node(arena, KindString)
-    string_node.text = text
+    string_node.text = content
     return string_node
   }
   if byte == '[' || byte == '{' {
@@ -695,19 +695,19 @@ pub fn push_bool(arena: *memory.Arena, value: bool) *Value {
   return result
 }
 // Retains text as a borrowed view; caller keeps it alive.
-pub fn push_number(arena: *memory.Arena, text: []const u8) *Value {
-  cursor := Cursor{ source: text, at: 0 }
-  if !number(&cursor) || cursor.at != #len(text) {
+pub fn push_number(arena: *memory.Arena, content: []const u8) *Value {
+  cursor := Cursor{ source: content, at: 0 }
+  if !number(&cursor) || cursor.at != #len(content) {
     return nil
   }
   result := node(arena, KindNumber)
-  result.text = text
+  result.text = content
   return result
 }
 // Retains text as a borrowed view; caller keeps it alive.
-pub fn push_string(arena: *memory.Arena, text: []const u8) *Value {
+pub fn push_string(arena: *memory.Arena, content: []const u8) *Value {
   result := node(arena, KindString)
-  result.text = text
+  result.text = content
   return result
 }
 pub fn push_array(arena: *memory.Arena) *Value {
@@ -915,11 +915,11 @@ pub fn is_object(value: *const Value) bool {
   return value != nil && value.kind == KindObject
 }
 
-fn copy(destination: []u8, at: *usize, bytes: []const u8) bool {
-  if at.* > #len(destination) || #len(bytes) > #len(destination) - at.* {
+fn copy(destination: []u8, at: *usize, data: []const u8) bool {
+  if at.* > #len(destination) || #len(data) > #len(destination) - at.* {
     return false
   }
-  for byte in bytes {
+  for byte in data {
     destination[at.*] = byte
     at.* += 1
   }

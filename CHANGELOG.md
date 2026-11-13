@@ -29,6 +29,22 @@ and run `tools/migrate-standard.py`.
 - Literal format templates are checked against their arguments at compile time,
   and run-time templates that do not match print with `{?}` and `{+value}`
   markers instead of printing nothing.
+- Structs and plain enums passed by name to a literal template print their
+  contents (`Unit{name: ada, at: Vec2{x: 1.5, y: 2}}`), rewritten at compile
+  time with no run-time metadata.
+- One error shape: statuses never carry an `Error` variant (`io.Transfer` is
+  `{transferred, failure, status}`), `std/os` and vendor results replace
+  `ok: bool` with `failure: io.Failure`, `bytes/builder` and `fmt` writes are
+  sticky and return nothing, sqlite calls return `io.Failure`, and
+  `io.failed`/`parse.failed` are the checks.
+- Std renames: `mem.arena_alloc*`, `json.push_*`, `box.push_state`; byte search
+  lives only in `std/bytes`; `sort.sort_by` and `sort.stable_by`; `fmt.print`.
+- Generics: `T{}` names the instance's struct, inference reads through
+  function types, and `nil` takes its type from the other arguments, so
+  `thread.spawn` and other callbacks take `fn(*$C)` with a typed context.
+- `#target(streams: yes)` selects every target with standard streams.
+- A local can no longer take the name of a module its file imports.
+- The language is frozen until stage 0 ([stability](docs/guide/stability.md)).
 
 ## 0.1.0-preview.35
 
