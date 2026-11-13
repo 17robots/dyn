@@ -173,6 +173,7 @@ import_jump dyn_sync_single, WakeByAddressSingle
 import_jump dyn_sync_all, WakeByAddressAll
 import_jump dyn_sync_error, GetLastError
 import_jump dyn_win_yield, SwitchToThread
+import_jump dyn_win_system_info, GetSystemInfo
 import_jump dyn_fs_make_directory, CreateDirectoryW
 import_jump dyn_fs_delete, DeleteFileW
 import_jump dyn_fs_remove_directory, RemoveDirectoryW
@@ -316,6 +317,7 @@ kernel_lookup:
     thunk CloseHandle
     thunk WaitForSingleObject
     thunk SwitchToThread
+    thunk GetSystemInfo
     thunk CreateDirectoryW
     thunk DeleteFileW
     thunk RemoveDirectoryW
@@ -418,6 +420,7 @@ iat ExitProcess
 iat CloseHandle
 iat WaitForSingleObject
 iat SwitchToThread
+iat GetSystemInfo
 iat CreateDirectoryW
 iat DeleteFileW
 iat RemoveDirectoryW
@@ -523,6 +526,7 @@ hint ExitProcess
 hint CloseHandle
 hint WaitForSingleObject
 hint SwitchToThread
+hint GetSystemInfo
 hint CreateDirectoryW
 hint DeleteFileW
 hint RemoveDirectoryW

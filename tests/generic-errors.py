@@ -81,3 +81,26 @@ with tempfile.TemporaryDirectory(prefix='dyn-generic-spelling-') as directory:
     result = subprocess.run([DYN, 'run', str(work), '--quiet'], capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stderr
 print('PASS generic errors: conflicts name the binding argument; std instance failures land on the program call; one generic spelling; inferred instance values')
+
+# A bad generic signature is reported once and does not stop later functions
+# from being declared, so their bodies raise no false errors.
+CASCADE = '''fn make(items: []$T, state: *T) i32 {
+  return 0
+}
+
+fn other() i32 {
+  return 1
+}
+
+fn main() {
+  _ = other()
+}
+'''
+with tempfile.TemporaryDirectory(prefix='dyn-generic-cascade-') as directory:
+    work = Path(directory)
+    (work / 'main.dyn').write_text(CASCADE)
+    result = subprocess.run([DYN, 'check', str(work)], capture_output=True, text=True, timeout=60)
+    errors = [line for line in result.stderr.splitlines() if ': error:' in line]
+    assert result.returncode != 0 and len(errors) == 1, result.stderr
+    assert 'in every parameter that supplies it' in errors[0], result.stderr
+print('PASS generic signature errors do not cascade')

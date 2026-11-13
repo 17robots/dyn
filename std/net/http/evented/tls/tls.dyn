@@ -1,0 +1,76 @@
+// TLS for std/net/http/evented through std/net/tls (OpenSSL 3, Linux).
+// Importing this module links libssl and libcrypto; evented itself does not.
+//
+//   context := tls.server_config_create(arena, "cert.pem", "key.pem")
+//   transport := https.transport(context.value)
+//   spawner := posix.spawner()
+//   config.transport = &transport
+//   config.spawner = &spawner
+//
+// OpenSSL keeps per-thread state, so workers must be libc threads: evented
+// refuses this transport without a spawner from std/thread/posix. The context,
+// Transport and Spawner must outlive the workers: release the context with
+// tls.config_release only after evented.join returns.
+#target(kernel: linux)
+
+use "std/io" io
+use "std/net/http/evented" evented
+use "std/net/tls" provider
+
+pub fn transport(context: provider.Context) evented.Transport {
+  return evented.Transport{
+    data: context,
+    open: open,
+    handshake: handshake,
+    read: read,
+    write: write,
+    close: close,
+    needs_native_threads: true,
+  }
+}
+
+fn status(result: provider.Result) evented.TransportIo {
+  if result.failure.kind == io.Kind.Ok {
+    return evented.TransportIo{ count: result.count }
+  }
+  if result.detail == provider.ErrorKind.WantRead {
+    return evented.TransportIo{ status: evented.TransportStatus.WouldRead }
+  }
+  if result.detail == provider.ErrorKind.WantWrite {
+    return evented.TransportIo{ status: evented.TransportStatus.WouldWrite }
+  }
+  return evented.TransportIo{ status: evented.TransportStatus.Failed }
+}
+
+fn open(data: rawptr, descriptor: isize) rawptr {
+  created := provider.server_connection_create(data, #cast(i32, descriptor))
+  if created.failure.kind != io.Kind.Ok {
+    return nil
+  }
+  return created.value
+}
+
+fn handshake(session: rawptr) evented.TransportIo {
+  return status(provider.server_handshake(session))
+}
+
+fn read(session: rawptr, destination: []u8) evented.TransportIo {
+  result := status(provider.read(session, destination))
+  // A successful zero-byte read is the peer's close_notify.
+  if result.status == evented.TransportStatus.Ok && result.count == 0 && #len(destination) > 0 {
+    return evented.TransportIo{ status: evented.TransportStatus.End }
+  }
+  return result
+}
+
+fn write(session: rawptr, source: []const u8) evented.TransportIo {
+  return status(provider.write(session, source))
+}
+
+// Sends close_notify when the socket allows it without waiting, then frees
+// the session.
+fn close(session: rawptr) {
+  connection := session
+  _ = provider.shutdown(connection)
+  provider.connection_release(&connection)
+}

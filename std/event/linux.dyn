@@ -22,7 +22,7 @@ fn native_control(queue: *Queue, index: usize, entry: Entry) Result {
   return Result{ failure: io.Failure{ kind: outcome.failure.kind, native: outcome.failure.native } }
 }
 fn native_wait(arena: *mem.Arena, queue: *Queue, timeout: i32) WaitResult {
-  native := mem.push_array(net.Event, arena, #len(queue.entries))
+  native := mem.push_array(net.Event, arena, queue.batch)
   outcome := net.event_wait(queue.handle, native, timeout)
   if outcome.failure.kind != io.Kind.Ok {
     return WaitResult{ failure: io.Failure{ kind: outcome.failure.kind, native: outcome.failure.native } }

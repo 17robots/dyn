@@ -2,3 +2,13 @@ use "std/mem" mem
 use "std/io" io
 pub type SpawnResult = io.Result(*Thread)
 pub type Result = io.Result(isize)
+
+// A thread creator chosen by the caller, for code that starts threads on
+// someone else's behalf (servers, pools). spawn returns a handle or nil;
+// join waits for it and returns false on failure, keeping the handle.
+// std/thread/posix supplies one for programs whose threads call C libraries.
+pub struct Spawner {
+  data: rawptr,
+  spawn: fn(rawptr, *mem.Arena, usize, fn(rawptr) isize, rawptr) rawptr,
+  join: fn(rawptr, rawptr) bool,
+}

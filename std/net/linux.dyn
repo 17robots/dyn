@@ -6,6 +6,10 @@ const UnixPathLimit: usize = 107
 const SocketLevel: usize = 1
 const ReuseOption: usize = 2
 const ErrorOption: usize = 4
+const TcpLevel: usize = 6
+const NoDelayOption: usize = 1
+// Zero: no load-balancing SO_REUSEPORT on this platform.
+const ReusePortOption: usize = 15
 const NoSignalFlag: usize = 16384
 fn native_interrupted(code: isize) bool {
   return code == -4

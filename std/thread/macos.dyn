@@ -13,6 +13,7 @@ extern fn wait "pthread_join"(thread: rawptr, value: *rawptr) i32
 extern fn native_id "pthread_mach_thread_np"(thread: rawptr) u32
 extern fn native_yield "sched_yield"() i32
 extern fn native_errno "__error"() *i32
+extern fn sysctl_by_name "sysctlbyname"(name: *const u8, value: rawptr, length: *usize, new_value: rawptr, new_length: usize) i32
 
 pub struct Thread { handle: rawptr, identifier: u32, entry: fn(rawptr) isize, context: rawptr, ready: sync.AtomicU32 }
 
@@ -100,4 +101,15 @@ pub fn yield_now() Result {
     return Result{ failure: io.Failure{ kind: io.darwin(error), native: error } }
   }
   return Result{}
+}
+
+// Logical CPUs currently available (hw.activecpu), at least 1.
+pub fn cpu_count() usize {
+  name := "hw.activecpu\x00"
+  value: i32 = 0
+  length: usize = #sizeof(i32)
+  if sysctl_by_name(&name[0], &value, &length, nil, 0) != 0 || value < 1 {
+    return 1
+  }
+  return #cast(usize, value)
 }

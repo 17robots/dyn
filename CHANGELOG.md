@@ -12,6 +12,72 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
+## Unreleased
+
+- New `std/net/http/evented`: an event-loop HTTP/1.1 server on `std/event`
+  (epoll/kqueue). Each worker multiplexes many nonblocking keep-alive
+  connections, so slow or idle clients no longer hold a thread. Handlers keep the
+  `http.Handler` signature. All buffers are fixed at `evented.start`; see
+  `evented.default_config` and `evented.storage_size`. Idle connections close
+  after `idle_timeout_milliseconds`; rejected requests get their 400/413 before a
+  graceful close.
+- `http.respond` now sends the response head and a body of up to 8 KiB in one
+  write. Before, the head left in about ten small writes, and keep-alive clients
+  waited about 40 ms per response on Nagle plus delayed ACK.
+- New `http.frame_request` frames one buffered request without I/O, for servers
+  that own their sockets.
+- New `net.no_delay` sets `TCP_NODELAY`. The evented server enables it on every
+  accepted connection.
+- `evented.start_shared` gives every worker its own `SO_REUSEPORT` listener, so
+  the kernel spreads connections instead of waking every worker (Linux; other
+  platforms report Unsupported). New `net.tcp_listen_ipv4_shared`,
+  `net.reuse_port` and `evented.local_port`.
+- `std/event` add, modify and remove are now constant time (free list plus a
+  descriptor table), and `wait` asks the kernel for at most 512 events per call
+  instead of zeroing an array the size of the queue.
+- `http.Request` has `path` and `query`, split from `target`. `http.dispatch`
+  now matches routes against `path`, so `/search?q=x` reaches a `/search` route.
+- New `http.query_value`, `http.form_value`, `http.form_decode` and
+  `http.form_field` decode urlencoded fields into caller storage.
+  `http.request_header` reads one request header.
+- `http.ResponseOptions.headers` adds response headers. A header name that is
+  not a token, or a value (or reason or content type) holding CR, LF or NUL,
+  fails with `ErrorKind.Invalid` before any byte is written, so request data
+  cannot inject headers.
+- New `std/html` with `html.write_escaped` for HTML text in `fmt.Buffer`s.
+- New `thread.cpu_count()`: CPUs the process may run on (Linux affinity mask,
+  macOS `hw.activecpu`, Windows `GetSystemInfo`). Size worker pools with it.
+- Typed HTTP state with generics: `http.Typed(T)` and `http.bind` pair a `*T`
+  with handlers of type `fn(*Response, *const Request, *T) Result`, so handlers
+  no longer cast `Request.context`. A handler for another state type is a
+  compile error.
+- New generic router `http.Routes(T)` (`typed_routes`, `add`, `bind_routes`,
+  `serve_routes`): `:name` path parameters read with `http.param`, 405 with an
+  `Allow` header, and a typed fallback. New status constants 201, 303, 401, 403,
+  405, 409, 422, 429 and 503.
+- `std/html` gains `html.Writer`: `html.text` escapes, and `html.markup` takes
+  only `html.Trusted`, made with `html.trusted(...)`. Passing plain bytes as
+  markup is a compile error.
+- New `parse.u64_decimal` and `parse.i64_decimal`: strict decimal integers
+  with overflow and offset reporting.
+- Compiler: a malformed generic signature no longer stops later functions from
+  being declared, which had produced false "may exit without return" errors.
+- New `tools/httpbench`: a Dyn HTTP/1.1 keep-alive load generator
+  (`httpbench PORT PATH CONNECTIONS SECONDS`) with p50/p99/max latency.
+- Tests: `http-fuzz` fuzzes request framing, form decoding, path matching,
+  response header validation and HTML escaping; `http-bench` fails when either
+  HTTP server drops below 20000 requests/s or 20 ms p99, which catches stalls
+  such as the old 40 ms Nagle delay.
+- HTTPS for the evented server: `evented.Config.transport` takes a
+  `Transport` (open, handshake, read, write, close) and
+  `std/net/http/evented/tls` supplies an OpenSSL one (Linux). Only programs
+  importing that module link libssl.
+- New `std/thread/posix`: pthread-backed `spawn`, `join` and `spawner()`.
+  std/thread's Linux threads carry no libc thread state, so C libraries with
+  per-thread state (malloc caches, OpenSSL) corrupt memory when several run at
+  once. `evented.Config.spawner` selects the thread creator, and `start`
+  refuses a transport marked `needs_native_threads` without one.
+
 ## 0.1.0-preview.32
 
 - Generics have one spelling, and existing code needs a rewrite. `tools/migrate-generics.py`

@@ -1,0 +1,11 @@
+// Prints thread.cpu_count().
+use "std/fmt"
+use "std/io"
+use "std/mem"
+use "std/thread"
+
+fn main() {
+  digits: [20 + mem.ArenaBufferOverhead]u8
+  scratch := mem.arena_from_buffer(digits[..])
+  io.println(fmt.u64_decimal(scratch, #cast(u64, thread.cpu_count())))
+}

@@ -85,3 +85,25 @@ pub fn yield_now() Result {
   }
   return Result{ value: value }
 }
+
+// CPUs this process may run on (its affinity mask), at least 1. Use it to size
+// worker pools; it can change while the process runs.
+pub fn cpu_count() usize {
+  mask: [128]u8 = []
+  written := #syscall(204, 0, #len(mask), &mask[0])
+  if written <= 0 {
+    return 1
+  }
+  count: usize = 0
+  for byte in mask[..#cast(usize, written)] {
+    bits := byte
+    for bits != 0 {
+      count += #cast(usize, bits & 1)
+      bits >>= 1
+    }
+  }
+  if count == 0 {
+    return 1
+  }
+  return count
+}

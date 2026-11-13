@@ -17,10 +17,19 @@ struct Entry { descriptor: isize, token: u64, events: u32, active: bool }
 // descriptor before closing/reusing it. A queue never owns its descriptors.
 // A native control failure poisons the queue: close and rebuild it, since a
 // platform may have applied part of a multi-filter update.
+// Lookups are O(1): free entry indices are a stack, and an open-addressed
+// table maps descriptor to entry. wait asks the kernel for at most batch
+// events; level triggering reports the rest on the next call.
 pub struct Queue {
   handle: isize, active: bool, entries: []Entry,
   failed: bool, kind: io.Kind, error: isize,
+  free: []u32, free_count: usize,
+  table: []u32, used_slots: usize,
+  batch: usize,
 }
+const SlotEmpty: u32 = 0
+const SlotRemoved: u32 = 4294967295
+const MaxBatch: usize = 512
 
 pub fn open(arena: *mem.Arena, capacity: usize) OpenResult {
   if capacity == 0 || capacity > 2147483647 {
@@ -30,15 +39,74 @@ pub fn open(arena: *mem.Arena, capacity: usize) OpenResult {
   if opened.failure.kind != io.Kind.Ok {
     return OpenResult{ failure: io.Failure{ kind: opened.failure.kind, native: opened.failure.native } }
   }
-  return OpenResult{ value: Queue{ handle: opened.value, active: true, entries: mem.push_array(Entry, arena, capacity) } }
+  table_size: usize = 8
+  for table_size < 2 * capacity {
+    table_size *= 2
+  }
+  queue := Queue{
+    handle: opened.value, active: true, entries: mem.push_array(Entry, arena, capacity),
+    free: mem.push_array(u32, arena, capacity), free_count: capacity,
+    table: mem.push_array(u32, arena, table_size), batch: capacity,
+  }
+  if queue.batch > MaxBatch {
+    queue.batch = MaxBatch
+  }
+  for i in 0..capacity {
+    queue.free[i] = #cast(u32, capacity - 1 - i)
+  }
+  return OpenResult{ value: queue }
+}
+fn slot_start(queue: *const Queue, descriptor: isize) usize {
+  // Fibonacci hashing spreads consecutive descriptors.
+  hashed := #cast(u64, descriptor) * 11400714819323198485
+  return #cast(usize, hashed >> 32) & (#len(queue.table) - 1)
+}
+// Table slot holding descriptor, or #len(queue.table).
+fn find_slot(queue: *const Queue, descriptor: isize) usize {
+  mask := #len(queue.table) - 1
+  at := slot_start(queue, descriptor)
+  for _ in 0..#len(queue.table) {
+    value := queue.table[at]
+    if value == SlotEmpty {
+      return #len(queue.table)
+    }
+    if value != SlotRemoved && queue.entries[value - 1].descriptor == descriptor {
+      return at
+    }
+    at = (at + 1) & mask
+  }
+  return #len(queue.table)
 }
 fn find(queue: *Queue, descriptor: isize) usize {
+  slot := find_slot(queue, descriptor)
+  if slot == #len(queue.table) {
+    return #len(queue.entries)
+  }
+  return #cast(usize, queue.table[slot] - 1)
+}
+fn table_place(queue: *Queue, descriptor: isize, index: usize) {
+  mask := #len(queue.table) - 1
+  at := slot_start(queue, descriptor)
+  for queue.table[at] != SlotEmpty && queue.table[at] != SlotRemoved {
+    at = (at + 1) & mask
+  }
+  if queue.table[at] == SlotEmpty {
+    queue.used_slots += 1
+  }
+  queue.table[at] = #cast(u32, index + 1)
+}
+// Removed markers only shorten probes when cleared; rebuild once live plus
+// removed slots pass three quarters of the table.
+fn table_rebuild(queue: *Queue) {
+  for i in 0..#len(queue.table) {
+    queue.table[i] = SlotEmpty
+  }
+  queue.used_slots = 0
   for i in 0..#len(queue.entries) {
-    if queue.entries[i].active && queue.entries[i].descriptor == descriptor {
-      return i
+    if queue.entries[i].active {
+      table_place(queue, queue.entries[i].descriptor, i)
     }
   }
-  return #len(queue.entries)
 }
 fn state(queue: *Queue) Result {
   if !queue.active {
@@ -71,12 +139,20 @@ pub fn add(queue: *Queue, descriptor: isize, events: u32, token: u64) Result {
   if find(queue, descriptor) != #len(queue.entries) {
     return Result{ failure: io.Failure{ kind: io.Kind.AlreadyExists } }
   }
-  for i in 0..#len(queue.entries) {
-    if !queue.entries[i].active {
-      return control(queue, i, Entry{ descriptor: descriptor, token: token, events: events, active: true })
-    }
+  if queue.free_count == 0 {
+    return Result{ failure: io.Failure{ kind: io.Kind.Capacity } }
   }
-  return Result{ failure: io.Failure{ kind: io.Kind.Capacity } }
+  index := #cast(usize, queue.free[queue.free_count - 1])
+  added := control(queue, index, Entry{ descriptor: descriptor, token: token, events: events, active: true })
+  if added.failure.kind != io.Kind.Ok {
+    return added
+  }
+  queue.free_count -= 1
+  if 4 * (queue.used_slots + 1) > 3 * #len(queue.table) {
+    table_rebuild(queue)
+  }
+  table_place(queue, descriptor, index)
+  return added
 }
 pub fn modify(queue: *Queue, descriptor: isize, events: u32, token: u64) Result {
   ready := state(queue)
@@ -97,11 +173,19 @@ pub fn remove(queue: *Queue, descriptor: isize) Result {
   if ready.failure.kind != io.Kind.Ok {
     return ready
   }
-  index := find(queue, descriptor)
-  if index == #len(queue.entries) {
+  slot := find_slot(queue, descriptor)
+  if slot == #len(queue.table) {
     return Result{ failure: io.Failure{ kind: io.Kind.NotFound } }
   }
-  return control(queue, index, Entry{})
+  index := #cast(usize, queue.table[slot] - 1)
+  removed := control(queue, index, Entry{})
+  if removed.failure.kind != io.Kind.Ok {
+    return removed
+  }
+  queue.table[slot] = SlotRemoved
+  queue.free[queue.free_count] = #cast(u32, index)
+  queue.free_count += 1
+  return removed
 }
 // Level-triggered readiness. Use nonblocking descriptors; readiness can become
 // stale before I/O. timeout < 0 waits indefinitely, zero polls. Each call's

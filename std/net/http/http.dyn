@@ -653,9 +653,19 @@ pub fn parse_url(input: []const u8) Url {
 }
 
 pub const StatusOk: u16 = 200
+pub const StatusCreated: u16 = 201
 pub const StatusNoContent: u16 = 204
+pub const StatusSeeOther: u16 = 303
 pub const StatusBadRequest: u16 = 400
+pub const StatusUnauthorized: u16 = 401
+pub const StatusForbidden: u16 = 403
 pub const StatusNotFound: u16 = 404
+pub const StatusMethodNotAllowed: u16 = 405
+pub const StatusConflict: u16 = 409
+pub const StatusUnprocessableContent: u16 = 422
+pub const StatusTooManyRequests: u16 = 429
+pub const StatusServiceUnavailable: u16 = 503
+pub const MaxParams: usize = 4
 pub const StatusPayloadTooLarge: u16 = 413
 pub const StatusInternalServerError: u16 = 500
 
@@ -677,11 +687,18 @@ pub struct Request {
   raw: []const u8,
   method: []const u8,
   target: []const u8,
+  // target before '?', and after it (empty when absent). Both borrow raw.
+  path: []const u8,
+  query: []const u8,
   body: []const u8,
   header_length: usize,
   keep_alive: bool,
   // Borrowed application state given to serve_stream_context and friends; nil otherwise.
   context: rawptr,
+  // Path parameters captured by a Routes pattern such as /users/:id. Read
+  // them with param.
+  params: [MaxParams]Header,
+  param_count: usize,
 }
 
 pub struct Response {
@@ -693,11 +710,17 @@ pub struct Response {
   finished: bool,
 }
 
+pub struct Header { name: []const u8, value: []const u8 }
+
 pub struct ResponseOptions {
   status: u16,
   reason: []const u8,
   content_type: []const u8,
   close_connection: bool,
+  // Extra response headers, written in order. Names must be tokens and values
+  // must not hold CR, LF or NUL; otherwise respond fails with Invalid before
+  // writing anything, so request data cannot inject headers.
+  headers: []const Header,
 }
 
 pub struct Server {
@@ -772,7 +795,7 @@ pub fn dispatch(state: *Router, response: *Response, request: *const Request) Re
   i: usize = 0
   for i < state.count {
     candidate := state.routes[i]
-    if bytes.equal(candidate.method, request.method) && bytes.equal(candidate.target, request.target) {
+    if bytes.equal(candidate.method, request.method) && bytes.equal(candidate.target, request.path) {
       return candidate.handler(response, request)
     }
     i += 1
@@ -781,6 +804,147 @@ pub fn dispatch(state: *Router, response: *Response, request: *const Request) Re
     return state.fallback(response, request)
   }
   return respond(response, "not found\n", ResponseOptions{ status: StatusNotFound, content_type: "text/plain; charset=utf-8" })
+}
+
+// Typed application state. A server stores one Handler and one rawptr; bind
+// pairs them so the cast back to *T lives here, matched by construction, and
+// handlers receive *T directly. The Typed value must stay alive and unmoved
+// while any server uses the Binding.
+pub struct Typed(T) {
+  state: *T,
+  handler: fn(*Response, *const Request, *T) Result,
+}
+
+pub struct Binding { handler: Handler, context: rawptr }
+
+fn typed_dispatch(T: type, response: *Response, request: *const Request) Result {
+  typed := #cast(*Typed(T), request.context)
+  return typed.handler(response, request, typed.state)
+}
+
+pub fn bind(typed: *Typed($T)) Binding {
+  return Binding{ handler: #instance(typed_dispatch, T), context: typed }
+}
+
+// Typed router. Patterns are exact paths with optional :name segments, each
+// matching one nonempty path segment: "/users/:id/posts/:post". At most
+// MaxParams per pattern. A path that matches with another method gets 405
+// with an Allow header; no match runs fallback, or 404 when fallback is nil.
+pub struct TypedRoute(T) {
+  method: []const u8,
+  pattern: []const u8,
+  handler: fn(*Response, *const Request, *T) Result,
+}
+
+pub struct Routes(T) {
+  routes: []TypedRoute(T),
+  count: usize,
+  state: *T,
+  fallback: fn(*Response, *const Request, *T) Result,
+}
+
+// Route storage is caller-supplied; method and pattern strings are borrowed.
+pub fn typed_routes(storage: []TypedRoute($T), state: *$T) Routes(T) {
+  return Routes(T){ routes: storage, state: state }
+}
+
+pub fn add(router: *Routes($T), method: []const u8, pattern: []const u8, handler: fn(*Response, *const Request, *$T) Result) Result {
+  if handler == nil || #len(pattern) == 0 || pattern[0] != '/' || pattern_params(pattern) > MaxParams {
+    return Result{ detail: ErrorKind.Invalid, failure: io.Failure{ kind: io.Kind.InvalidInput } }
+  }
+  if router.count >= #len(router.routes) {
+    return Result{ detail: ErrorKind.Capacity, failure: io.Failure{ kind: io.Kind.Capacity } }
+  }
+  router.routes[router.count] = TypedRoute(T){ method: method, pattern: pattern, handler: handler }
+  router.count += 1
+  return Result{}
+}
+
+fn routes_dispatch(T: type, response: *Response, request: *const Request) Result {
+  return serve_routes(#cast(*Routes(T), request.context), response, request)
+}
+
+// Runs the matching route. Use it from a Typed handler that wraps routing
+// with its own work, such as counting or authentication.
+pub fn serve_routes(router: *Routes($T), response: *Response, request: *const Request) Result {
+  matched := request.*
+  allow_storage: [128]u8 = []
+  allow_used: usize = 0
+  for i in 0..router.count {
+    candidate := &router.routes[i]
+    if !match_path(candidate.pattern, request.path, &matched) {
+      continue
+    }
+    if bytes.equal(candidate.method, request.method) {
+      return candidate.handler(response, &matched, router.state)
+    }
+    if allow_used > 0 {
+      allow_used = append_bytes(allow_storage[..], allow_used, ", ")
+    }
+    allow_used = append_bytes(allow_storage[..], allow_used, candidate.method)
+  }
+  if allow_used > 0 && allow_used <= #len(allow_storage) {
+    headers: [1]Header = [Header{ name: "Allow", value: allow_storage[..allow_used] }]
+    return respond(response, "method not allowed\n", ResponseOptions{ status: StatusMethodNotAllowed,
+      content_type: "text/plain; charset=utf-8", headers: headers[..] })
+  }
+  if router.fallback != nil {
+    return router.fallback(response, request, router.state)
+  }
+  return respond(response, "not found\n", ResponseOptions{ status: StatusNotFound, content_type: "text/plain; charset=utf-8" })
+}
+
+// Binds a router for a server start, like bind.
+pub fn bind_routes(router: *Routes($T)) Binding {
+  return Binding{ handler: #instance(routes_dispatch, T), context: router }
+}
+
+fn pattern_params(pattern: []const u8) usize {
+  count: usize = 0
+  for i in 0..#len(pattern) {
+    if pattern[i] == ':' && i > 0 && pattern[i - 1] == '/' {
+      count += 1
+    }
+  }
+  return count
+}
+
+// Matches path against pattern segment by segment, capturing :name segments
+// into request.params. Captures borrow path.
+pub fn match_path(pattern: []const u8, path: []const u8, request: *Request) bool {
+  request.param_count = 0
+  p: usize = 0
+  q: usize = 0
+  for p < #len(pattern) && q < #len(path) {
+    if pattern[p] == ':' && p > 0 && pattern[p - 1] == '/' {
+      name_end := p + bytes.find_byte(pattern[p..], '/')
+      value_end := q + bytes.find_byte(path[q..], '/')
+      if value_end == q || request.param_count >= MaxParams {
+        return false
+      }
+      request.params[request.param_count] = Header{ name: pattern[p + 1..name_end], value: path[q..value_end] }
+      request.param_count += 1
+      p = name_end
+      q = value_end
+      continue
+    }
+    if pattern[p] != path[q] {
+      return false
+    }
+    p += 1
+    q += 1
+  }
+  return p == #len(pattern) && q == #len(path)
+}
+
+// Path parameter captured by a Routes pattern, still percent-encoded.
+pub fn param(request: *const Request, name: []const u8) HttpHeader {
+  for i in 0..request.param_count {
+    if bytes.equal(request.params[i].name, name) {
+      return HttpHeader{ name: request.params[i].name, value: request.params[i].value, found: true }
+    }
+  }
+  return HttpHeader{}
 }
 
 pub fn server(input: stream.Reader, output: stream.Writer, storage: []u8) Server {
@@ -820,14 +984,58 @@ fn request_parts(input: []const u8, head: HttpHead) Request {
     return Request{}
   }
   total := head.header_length + head.content_length
+  target := input[first_space + 1..second_space]
+  question := bytes.find_byte(target, '?')
+  query := target[..0]
+  if question < #len(target) {
+    query = target[question + 1..]
+  }
   return Request{
     raw: input[..total],
     method: input[..first_space],
-    target: input[first_space + 1..second_space],
+    target: target,
+    path: target[..question],
+    query: query,
     body: input[head.header_length..total],
     header_length: head.header_length,
     keep_alive: head.keep_alive,
   }
+}
+
+pub enum FrameStatus { Incomplete, Ready, Invalid, Capacity }
+pub struct FrameResult { status: FrameStatus, request: Request, consumed: usize, offset: usize }
+
+// Frames one request from bytes already buffered, with no I/O, for callers that
+// own their sockets (event loops). capacity is the most bytes the caller can
+// ever buffer for one request. Ready requests borrow input; consumed is its
+// full length. Incomplete means read more. Chunked request bodies are Invalid.
+pub fn frame_request(input: []const u8, capacity: usize) FrameResult {
+  scan: usize = 0
+  if !head_complete(input, &scan) {
+    if #len(input) >= capacity {
+      return FrameResult{ status: FrameStatus.Capacity }
+    }
+    return FrameResult{ status: FrameStatus.Incomplete }
+  }
+  head := parse_request(input)
+  if head.failure.kind != parse.Kind.Ok {
+    return FrameResult{ status: FrameStatus.Invalid, offset: head.offset }
+  }
+  if head.chunked {
+    return FrameResult{ status: FrameStatus.Invalid }
+  }
+  if head.header_length > capacity || head.content_length > capacity - head.header_length {
+    return FrameResult{ status: FrameStatus.Capacity }
+  }
+  total := head.header_length + head.content_length
+  if #len(input) < total {
+    return FrameResult{ status: FrameStatus.Incomplete }
+  }
+  request := request_parts(input, head)
+  if #len(request.method) == 0 {
+    return FrameResult{ status: FrameStatus.Invalid }
+  }
+  return FrameResult{ status: FrameStatus.Ready, request: request, consumed: total }
 }
 
 fn receive_failure(state: *Server, detail: ErrorKind, native: isize) ReceiveResult {
@@ -925,14 +1133,41 @@ fn status_reason(status: u16) []const u8 {
   if status == 200 {
     return "OK"
   }
+  if status == 201 {
+    return "Created"
+  }
   if status == 204 {
     return "No Content"
+  }
+  if status == 303 {
+    return "See Other"
   }
   if status == 400 {
     return "Bad Request"
   }
+  if status == 401 {
+    return "Unauthorized"
+  }
+  if status == 403 {
+    return "Forbidden"
+  }
   if status == 404 {
     return "Not Found"
+  }
+  if status == 405 {
+    return "Method Not Allowed"
+  }
+  if status == 409 {
+    return "Conflict"
+  }
+  if status == 422 {
+    return "Unprocessable Content"
+  }
+  if status == 429 {
+    return "Too Many Requests"
+  }
+  if status == 503 {
+    return "Service Unavailable"
   }
   if status == 413 {
     return "Payload Too Large"
@@ -987,7 +1222,76 @@ fn response_output(response: *Response, source: []const u8) Result {
   return Result{}
 }
 
-fn response_begin(response: *Response, options: ResponseOptions, body_length: usize, chunked: bool) Result {
+fn header_valid(item: Header) bool {
+  if #len(item.name) == 0 {
+    return false
+  }
+  for byte in item.name {
+    if !token_byte(byte) {
+      return false
+    }
+  }
+  for byte in item.value {
+    if byte == '\r' || byte == '\n' || byte == 0 {
+      return false
+    }
+  }
+  return true
+}
+fn text_valid(value: []const u8) bool {
+  for byte in value {
+    if byte == '\r' || byte == '\n' || byte == 0 {
+      return false
+    }
+  }
+  return true
+}
+
+enum HeadMode { Measure, Stage, Direct }
+struct HeadWriter { mode: HeadMode, staging: []u8, used: usize, response: *Response, failed: bool }
+fn head_emit(writer: *HeadWriter, piece: []const u8) {
+  if writer.failed {
+    return
+  }
+  if writer.mode == HeadMode.Measure {
+    writer.used += #len(piece)
+  } else if writer.mode == HeadMode.Stage {
+    writer.used = append_bytes(writer.staging, writer.used, piece)
+  } else {
+    writer.failed = response_output(writer.response, piece).failure.kind != io.Kind.Ok
+  }
+}
+fn head_write(writer: *HeadWriter, options: ResponseOptions, status: u16, reason: []const u8, content_type: []const u8, body_length: usize, chunked: bool) {
+  number_storage: [20]u8 = []
+  head_emit(writer, "HTTP/1.1 ")
+  head_emit(writer, decimal(number_storage[..], #cast(usize, status)))
+  head_emit(writer, " ")
+  head_emit(writer, reason)
+  head_emit(writer, "\r\nContent-Type: ")
+  head_emit(writer, content_type)
+  if chunked {
+    head_emit(writer, "\r\nTransfer-Encoding: chunked")
+  } else {
+    head_emit(writer, "\r\nContent-Length: ")
+    head_emit(writer, decimal(number_storage[..], body_length))
+  }
+  for item in options.headers {
+    head_emit(writer, "\r\n")
+    head_emit(writer, item.name)
+    head_emit(writer, ": ")
+    head_emit(writer, item.value)
+  }
+  if options.close_connection {
+    head_emit(writer, "\r\nConnection: close\r\n\r\n")
+  } else {
+    head_emit(writer, "\r\nConnection: keep-alive\r\n\r\n")
+  }
+}
+
+// Writes the response head, followed by body when given. Head and body leave in
+// one write when they fit in a stack staging buffer: separate small writes on a
+// keep-alive socket stall on Nagle plus delayed ACK (about 40 ms per response).
+fn response_begin(response: *Response, options: ResponseOptions, body_length: usize, chunked: bool, body: []const u8) Result {
   if response.failed {
     return response.first
   }
@@ -1006,40 +1310,122 @@ fn response_begin(response: *Response, options: ResponseOptions, body_length: us
   if #len(content_type) == 0 {
     content_type = "application/octet-stream"
   }
-  number_storage: [20]u8 = []
-  status_text := decimal(number_storage[..], #cast(usize, status))
-  if response_output(response, "HTTP/1.1 ").failure.kind != io.Kind.Ok || response_output(response, status_text).failure.kind != io.Kind.Ok ||
-    response_output(response, " ").failure.kind != io.Kind.Ok || response_output(response, reason).failure.kind != io.Kind.Ok ||
-    response_output(response, "\r\nContent-Type: ").failure.kind != io.Kind.Ok || response_output(response, content_type).failure.kind != io.Kind.Ok {
-    return response.first
+  // Rejected before any byte is written; the response stays unstarted.
+  if !text_valid(reason) || !text_valid(content_type) {
+    return Result{ detail: ErrorKind.Invalid, failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
-  if chunked {
-    if response_output(response, "\r\nTransfer-Encoding: chunked").failure.kind != io.Kind.Ok {
+  for item in options.headers {
+    if !header_valid(item) {
+      return Result{ detail: ErrorKind.Invalid, failure: io.Failure{ kind: io.Kind.InvalidInput } }
+    }
+  }
+  staging: [8 * memory.KiB]u8 = []
+  measure := HeadWriter{ mode: HeadMode.Measure, response: response }
+  head_write(&measure, options, status, reason, content_type, body_length, chunked)
+  head_length := measure.used
+  if head_length <= #len(staging) {
+    stage := HeadWriter{ mode: HeadMode.Stage, staging: staging[..], response: response }
+    head_write(&stage, options, status, reason, content_type, body_length, chunked)
+    if #len(body) <= #len(staging) - head_length {
+      // Common case: head and body in one write.
+      used := append_bytes(staging[..], head_length, body)
+      result := response_output(response, staging[..used])
+      if result.failure.kind == io.Kind.Ok {
+        response.started = true
+      }
+      return result
+    }
+    if response_output(response, staging[..head_length]).failure.kind != io.Kind.Ok {
       return response.first
     }
   } else {
-    length_text := decimal(number_storage[..], body_length)
-    if response_output(response, "\r\nContent-Length: ").failure.kind != io.Kind.Ok || response_output(response, length_text).failure.kind != io.Kind.Ok {
+    direct := HeadWriter{ mode: HeadMode.Direct, response: response }
+    head_write(&direct, options, status, reason, content_type, body_length, chunked)
+    if direct.failed {
       return response.first
     }
   }
-  connection := "\r\nConnection: keep-alive\r\n\r\n"
-  if options.close_connection {
-    connection = "\r\nConnection: close\r\n\r\n"
+  response.started = true
+  return response_output(response, body)
+}
+
+// First request header named name (ASCII case-insensitive). The value borrows
+// request.raw. Each call scans the head.
+pub fn request_header(request: *const Request, name: []const u8) HttpHeader {
+  return header(request.raw[..request.header_length], name)
+}
+
+pub struct FieldValue { value: []u8, found: bool, failure: parse.Failure }
+
+// application/x-www-form-urlencoded value into destination: '+' becomes a
+// space and %XX a byte. Fails with Syntax on a bad escape and Capacity when
+// destination is too small; destination contents are then unspecified.
+pub fn form_decode(destination: []u8, source: []const u8) FieldValue {
+  at: usize = 0
+  i: usize = 0
+  for i < #len(source) {
+    if at == #len(destination) {
+      return FieldValue{ found: true, failure: parse.Failure{ kind: parse.Kind.Capacity, offset: i } }
+    }
+    byte := source[i]
+    if byte == '%' {
+      if #len(source) - i < 3 || hex(source[i + 1]) < 0 || hex(source[i + 2]) < 0 {
+        return FieldValue{ found: true, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: i } }
+      }
+      destination[at] = #cast(u8, hex(source[i + 1]) * 16 + hex(source[i + 2]))
+      i += 3
+    } else {
+      if byte == '+' {
+        byte = ' '
+      }
+      destination[at] = byte
+      i += 1
+    }
+    at += 1
   }
-  result := response_output(response, connection)
-  if result.failure.kind == io.Kind.Ok {
-    response.started = true
+  return FieldValue{ value: destination[..at], found: true }
+}
+
+// Raw, still-encoded value of the first field named name in an urlencoded
+// form or query string.
+pub fn form_field(form: []const u8, name: []const u8) HttpHeader {
+  start: usize = 0
+  for start <= #len(form) {
+    end := start + bytes.find_byte(form[start..], '&')
+    pair := form[start..end]
+    equals := bytes.find_byte(pair, '=')
+    if bytes.equal(pair[..equals], name) {
+      if equals == #len(pair) {
+        return HttpHeader{ name: pair, value: pair[..0], found: true }
+      }
+      return HttpHeader{ name: pair[..equals], value: pair[equals + 1..], found: true }
+    }
+    start = end + 1
   }
-  return result
+  return HttpHeader{}
+}
+
+// Decoded query parameter name into destination. found is false when absent.
+pub fn query_value(request: *const Request, name: []const u8, destination: []u8) FieldValue {
+  field := form_field(request.query, name)
+  if !field.found {
+    return FieldValue{}
+  }
+  return form_decode(destination, field.value)
+}
+
+// Decoded urlencoded body field name into destination. The caller checks the
+// content type when it matters. found is false when absent.
+pub fn form_value(request: *const Request, name: []const u8, destination: []u8) FieldValue {
+  field := form_field(request.body, name)
+  if !field.found {
+    return FieldValue{}
+  }
+  return form_decode(destination, field.value)
 }
 
 pub fn respond(response: *Response, body: []const u8, options: ResponseOptions) Result {
-  started := response_begin(response, options, #len(body), false)
-  if started.failure.kind != io.Kind.Ok {
-    return started
-  }
-  written := response_output(response, body)
+  written := response_begin(response, options, #len(body), false, body)
   if written.failure.kind == io.Kind.Ok {
     response.finished = true
   }
@@ -1047,7 +1433,7 @@ pub fn respond(response: *Response, body: []const u8, options: ResponseOptions) 
 }
 
 pub fn respond_stream(response: *Response, options: ResponseOptions) BodyResult {
-  started := response_begin(response, options, 0, true)
+  started := response_begin(response, options, 0, true, "")
   if started.failure.kind != io.Kind.Ok {
     return BodyResult{ detail: started.detail, body: Body{ failed: true, first: started, first_stream: response.first_stream }, result: started, failure: io.Failure{ kind: started.failure.kind, native: started.failure.native } }
   }

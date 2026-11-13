@@ -176,7 +176,7 @@ pub fn accept(descriptor: isize) Result {
   return result(native_accept(descriptor, nil, nil))
 }
 
-fn stream_listen(family: usize, address: []const u8, backlog: usize) ListenerResult {
+fn stream_listen(family: usize, address: []const u8, backlog: usize, shared: bool) ListenerResult {
   opened := socket(family, SocketStream, 0)
   if opened.failure.kind != io.Kind.Ok {
     return ListenerResult{ value: Listener{}, failure: io.Failure{ kind: opened.failure.kind, native: opened.failure.native } }
@@ -189,6 +189,13 @@ fn stream_listen(family: usize, address: []const u8, backlog: usize) ListenerRes
     if reused.failure.kind != io.Kind.Ok {
       close(descriptor)
       return ListenerResult{ value: Listener{}, failure: io.Failure{ kind: reused.failure.kind, native: reused.failure.native } }
+    }
+  }
+  if shared {
+    balanced := reuse_port(descriptor, true)
+    if balanced.failure.kind != io.Kind.Ok {
+      close(descriptor)
+      return ListenerResult{ value: Listener{}, failure: io.Failure{ kind: balanced.failure.kind, native: balanced.failure.native } }
     }
   }
   bound := bind(descriptor, address)
@@ -219,13 +226,19 @@ fn stream_connect(family: usize, address: []const u8) ConnectionResult {
 }
 
 pub fn tcp_listen_ipv4(address: *const Ipv4Address, backlog: usize) ListenerResult {
-  return stream_listen(AddressFamilyIpv4, address.bytes[..], backlog)
+  return stream_listen(AddressFamilyIpv4, address.bytes[..], backlog, false)
+}
+// Like tcp_listen_ipv4 with SO_REUSEPORT set before bind. Several listeners on
+// one address then share incoming connections, balanced by the kernel. Linux
+// only: elsewhere the result fails with Unsupported.
+pub fn tcp_listen_ipv4_shared(address: *const Ipv4Address, backlog: usize) ListenerResult {
+  return stream_listen(AddressFamilyIpv4, address.bytes[..], backlog, true)
 }
 pub fn tcp_connect_ipv4(address: *const Ipv4Address) ConnectionResult {
   return stream_connect(AddressFamilyIpv4, address.bytes[..])
 }
 pub fn tcp_listen_ipv6(address: *const Ipv6Address, backlog: usize) ListenerResult {
-  return stream_listen(AddressFamilyIpv6, address.bytes[..], backlog)
+  return stream_listen(AddressFamilyIpv6, address.bytes[..], backlog, false)
 }
 pub fn tcp_connect_ipv6(address: *const Ipv6Address) ConnectionResult {
   return stream_connect(AddressFamilyIpv6, address.bytes[..])
@@ -235,7 +248,7 @@ pub fn unix_listen(address: *const UnixAddress, backlog: usize) ListenerResult {
   if address.length == 0 || address.length > #len(address.bytes) {
     return ListenerResult{ failure: io.Failure{ kind: io.Kind.InvalidInput, native: -22 } }
   }
-  return stream_listen(AddressFamilyUnix, address.bytes[..address.length], backlog)
+  return stream_listen(AddressFamilyUnix, address.bytes[..address.length], backlog, false)
 }
 pub fn unix_connect(address: *const UnixAddress) ConnectionResult {
   if address.length == 0 || address.length > #len(address.bytes) {
@@ -471,6 +484,29 @@ pub fn reuse_address(descriptor: isize, enabled: bool) Result {
     value = 1
   }
   return result(native_set_option(descriptor, SocketLevel, ReuseOption, &value, #sizeof(i32)))
+}
+
+// TCP_NODELAY: send small segments at once instead of waiting for the peer's
+// ACK. Request/response servers want this; bulk senders usually do not.
+pub fn no_delay(descriptor: isize, enabled: bool) Result {
+  value: i32 = 0
+  if enabled {
+    value = 1
+  }
+  return result(native_set_option(descriptor, TcpLevel, NoDelayOption, &value, #sizeof(i32)))
+}
+
+// SO_REUSEPORT with kernel load balancing. Unsupported where the platform has
+// only the non-balancing variant (macOS) or none (Windows).
+pub fn reuse_port(descriptor: isize, enabled: bool) Result {
+  if ReusePortOption == 0 {
+    return Result{ value: -95, failure: io.Failure{ kind: io.Kind.Unsupported, native: -95 } }
+  }
+  value: i32 = 0
+  if enabled {
+    value = 1
+  }
+  return result(native_set_option(descriptor, SocketLevel, ReusePortOption, &value, #sizeof(i32)))
 }
 
 // Completes a nonblocking connect by reading SO_ERROR. Zero means connected.
