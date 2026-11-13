@@ -265,6 +265,13 @@ static char *resolve_vendor(const char *path, bool *oom) {
     return realpath(relative, NULL);
   return NULL;
 }
+char *dyn_module_resolve_sdk(const char *path) {
+  bool oom = false;
+  if (!path) return NULL;
+  if (!strncmp(path, "std/", 4)) return resolve_std(path, &oom);
+  if (!strncmp(path, "vendor/", 7)) return resolve_vendor(path, &oom);
+  return NULL;
+}
 /* Sets *oom when an allocation fails, as opposed to an unresolved path. */
 static char *resolve_checked(Resolver *r, const char *current, const char *path,
                              bool *oom) {

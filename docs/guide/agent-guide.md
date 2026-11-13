@@ -18,6 +18,11 @@ dyn build app --output build/app
 the SDK, so the same command works from any directory. It needs no language
 server and no entry point.
 
+When a `std/...` or `vendor/...` path is absent in the current directory,
+`dyn docs` resolves it through the compiler's SDK lookup, including `DYN_SDK`.
+Existing local directories and files keep their normal meaning. SDK declaration
+queries do not load the current project's manifest or link native providers.
+
 Query an exported symbol with Python (no extra dependencies):
 
 ```sh

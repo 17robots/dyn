@@ -12,6 +12,23 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
+## Unreleased
+
+- Native x86-64 SSA release builds propagate cheap uniform scalar arguments
+  into readonly parameters of private direct-call helpers, including loops.
+  Calls and signatures remain; public functions, escaped callbacks, mutable
+  or addressed parameters, conflicting calls, and expensive constants stay
+  general. This reuses existing optimizer scans without cloning functions.
+- Native x86-64 release code can reuse one runtime quotient for matching
+  division/remainder operations. Original checks and panic order remain;
+  conservative control-flow and per-function budgets bound optimization work.
+- Identical integer operands in comparisons now fold without affecting NaNs
+  in floating-point comparisons.
+- `dyn docs` resolves missing local `std/...` and `vendor/...` paths through
+  the SDK, including `DYN_SDK`, so SDK declaration queries work outside the
+  compiler directory. Local paths keep precedence; formatter and build path
+  resolution are unchanged.
+
 ## 0.1.0-preview.34
 
 - Guarded callback inlining ignores unreachable callback candidates. This

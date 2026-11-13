@@ -82,10 +82,11 @@ with tempfile.TemporaryDirectory(prefix='dyn-native-opt-') as directory:
         profile.write_text(contents)
         run(DYN, 'build', module, '--backend', 'native', '--release',
             '--sample-profile', profile, '--output', work/'invalid', success=False)
+    # Public entrypoints keep shift operands general despite literal test calls.
     (module/'main.dyn').write_text('''
-fn left(a: u64, b: u64) u64 { return a << b }
-fn right(a: u64, b: u64) u64 { return a >> b }
-fn signed_right(a: i64, b: u64) i64 { return a >> b }
+pub fn left(a: u64, b: u64) u64 { return a << b }
+pub fn right(a: u64, b: u64) u64 { return a >> b }
+pub fn signed_right(a: i64, b: u64) i64 { return a >> b }
 // Mutable, so inlined calls still shift by a variable count.
 counts: [3]u64 = [4, 63, 2]
 fn main() {
