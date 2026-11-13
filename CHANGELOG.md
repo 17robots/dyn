@@ -54,6 +54,10 @@ servers so they pick up the new `dyn`.
   walk's `if node.left == nil { return 1 }`, runs before the function saves
   any registers; the tree benchmark runs 3% faster. `for i in a..=b` with
   a constant `b` below the type's maximum compares once per iteration.
+  A recursion such as `return fib(n - 1) + fib(n - 2)`, already turned into
+  a loop with one call, now copies that loop into its own call six levels
+  deep, so most calls never happen; the Fibonacci benchmark runs twice as
+  fast.
 - Functions that take or return fixed arrays or payload enums by value, such
   as `fn area(shape: Shape) f64`, and functions that call C variadic
   functions now compile to optimized SSA code on every 64-bit target. No

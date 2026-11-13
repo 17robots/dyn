@@ -5889,6 +5889,194 @@ static bool ssa_accumulate(Ssa *s, const uint32_t *order, uint32_t n) {
     fprintf(stderr, "remark: %s: self-recursive tail additions accumulate in a loop\n", f->name);
   return !s->failed;
 }
+/* ---- Recursive inlining ----
+
+   After ssa_accumulate a Fibonacci-style function is one loop with one
+   self-call left in it:
+
+     fib(n): acc = 0; while n >= 2 { acc += fib(n - 1); n -= 2 }; return acc + n
+
+   That call becomes a copy of the loop, whose own call becomes another copy,
+   and so on a few levels down, as GCC does with recursive inlining. Most
+   calls of such a recursion land on the deepest levels, so each level takes
+   out a call and return per call it replaces. The entry block holds only
+   the parameters and constants, so a copy reads the call's arguments where
+   the original reads its parameters. All copies come from the untouched
+   loop before any call site is rewired. */
+enum { SSA_SELF_INLINE_DEPTH = 6, SSA_SELF_INLINE_VALUES = 192 };
+static bool ssa_self_inline(Ssa *s, const uint32_t *order, uint32_t n) {
+  const DynIrProgram *ir = s->ir;
+  size_t index = (size_t)(s->f - ir->functions);
+  if (n < 2 || index >= ir->function_count || s->ctx->rv32 || s->ctx->t32) return false;
+  unsigned self = s->ctx->function_symbols[index];
+  uint32_t entry = order[0];
+  int32_t call = -1, result = -1;
+  uint32_t call_block = UINT32_MAX, values = 0, return_count = 0;
+  for (uint32_t k = 0; k < s->blocks[entry].values.count; ++k) {
+    uint8_t op = s->values[s->blocks[entry].values.items[k]].op;
+    if (op != SO_PARAM && op != SO_CONST) return false;
+  }
+  if (s->blocks[entry].kind != SB_PLAIN) return false;
+  for (uint32_t i = 1; i < n; ++i) {
+    SsaBlock *block = &s->blocks[order[i]];
+    if (block->kind != SB_PLAIN && block->kind != SB_IF && block->kind != SB_RETURN) return false;
+    if (block->kind == SB_RETURN) {
+      if (block->control < 0 || block->control2 >= 0 || block->control3 >= 0 || block->control4 >= 0) return false;
+      ++return_count;
+    }
+    values += block->values.count;
+    for (uint32_t k = 0; k < block->values.count; ++k) {
+      int32_t id = (int32_t)block->values.items[k];
+      SsaValue *v = &s->values[id];
+      if (v->op == SO_PARAM || v->op == SO_FIND || v->op == SO_FRAME) return false;
+      if (v->op == SO_CALL) {
+        if (call >= 0 || v->aux2 || (unsigned)v->aux != self || v->cond || v->abi_group_count || v->x87 || v->al_count) return false;
+        call = id; call_block = order[i];
+      } else if (v->op == SO_RESULT && v->a == call && call >= 0) {
+        if (result >= 0 || v->aux) return false;
+        result = id;
+      } else if (v->op == SO_RESULT) return false;
+    }
+  }
+  /* Wiring a copy reads the original blocks' kinds, so the split block stays plain or a branch. */
+  if (call < 0 || result < 0 || !return_count || return_count > 16 || s->blocks[call_block].kind == SB_RETURN) return false;
+  unsigned depth = SSA_SELF_INLINE_VALUES / (values ? values : 1);
+  if (depth > SSA_SELF_INLINE_DEPTH) depth = SSA_SELF_INLINE_DEPTH;
+  if (!depth) return false;
+  /* Each parameter is one register argument of the call. */
+  SsaValue *c = &s->values[call];
+  int32_t params[16], arguments[16];
+  unsigned param_count = 0;
+  for (uint32_t k = 0; k < s->blocks[entry].values.count; ++k) {
+    int32_t id = (int32_t)s->blocks[entry].values.items[k];
+    if (s->values[id].op != SO_PARAM) continue;
+    if (param_count == 16 || s->values[id].aux >= SSA_TARGET) return false;
+    int32_t argument = -1;
+    for (uint32_t a = 0; a < c->count; ++a)
+      if ((int32_t)s->lists[c->list + 3 * a + 1] == s->values[id].aux && !s->lists[c->list + 3 * a + 2])
+        argument = (int32_t)s->lists[c->list + 3 * a];
+    if (argument < 0) return false;
+    params[param_count] = id; arguments[param_count++] = argument;
+  }
+  if (param_count != c->count) return false;
+  /* The original loop, copied depth times before anything changes. */
+  uint32_t original_blocks = s->block_count, original_values = s->value_count;
+  uint32_t *maps[SSA_SELF_INLINE_DEPTH], *block_maps[SSA_SELF_INLINE_DEPTH];
+  for (unsigned d = 0; d < depth; ++d) {
+    maps[d] = ssa_temp(s, ((size_t)original_values + 1) * sizeof(uint32_t));
+    block_maps[d] = ssa_temp(s, ((size_t)original_blocks + 1) * sizeof(uint32_t));
+    if (!maps[d] || !block_maps[d]) { s->failed = true; return false; }
+    for (uint32_t v = 0; v < original_values; ++v) maps[d][v] = v;
+    for (uint32_t b = 0; b < original_blocks; ++b) block_maps[d][b] = b;
+    for (uint32_t i = 1; i < n && !s->failed; ++i) {
+      uint32_t copy = ssa_block(s);
+      if (s->failed) return false;
+      SsaBlock *source = &s->blocks[order[i]], *target = &s->blocks[copy];
+      SsaList none = {0};
+      *target = *source;
+      target->values = none; target->preds = none;
+      block_maps[d][order[i]] = copy;
+    }
+    uint32_t base = s->value_count;
+    for (uint32_t i = 1; i < n && !s->failed; ++i) {
+      uint32_t b = order[i];
+      for (uint32_t k = 0; k < s->blocks[b].values.count && !s->failed; ++k) {
+        uint32_t id = s->blocks[b].values.items[k];
+        int32_t copy = ssa_value(s, block_maps[d][b], SO_CONST, SC_INT, -1, -1, -1, 0, 0);
+        if (s->failed) return false;
+        s->values[copy] = s->values[id];
+        s->values[copy].block = block_maps[d][b];
+        uint32_t words = s->values[copy].op == SO_PHI ? s->values[copy].count : s->values[copy].op == SO_CALL ? 3 * s->values[copy].count : 0;
+        if (words) {
+          int32_t *items = ssa_temp(s, words * sizeof(int32_t));
+          if (!items) { s->failed = true; return false; }
+          for (uint32_t w = 0; w < words; ++w) items[w] = (int32_t)s->lists[s->values[copy].list + w];
+          s->values[copy].list = ssa_list(s, items, words);
+        }
+        maps[d][id] = (uint32_t)copy;
+        ssa_push(s, &s->blocks[block_maps[d][b]].values, (uint32_t)copy);
+      }
+    }
+    if (s->failed) return false;
+    /* Parameters read the arguments of the call this copy replaces: the
+       original call for the first copy, the previous copy's call after. */
+    for (unsigned p = 0; p < param_count; ++p)
+      maps[d][params[p]] = d ? maps[d - 1][arguments[p]] : (uint32_t)arguments[p];
+    for (uint32_t v = base; v < s->value_count; ++v) {
+      uint32_t count = ssa_operands(s, v, ssa_slots, SSA_MAX_OPERANDS);
+      for (uint32_t q = 0; q < count; ++q)
+        if (*ssa_slots[q] >= 0 && (uint32_t)*ssa_slots[q] < original_values) *ssa_slots[q] = (int32_t)maps[d][*ssa_slots[q]];
+    }
+    for (uint32_t i = 1; i < n; ++i) {
+      SsaBlock *copy = &s->blocks[block_maps[d][order[i]]];
+      int32_t *controls[4] = {&copy->control, &copy->control2, &copy->control3, &copy->control4};
+      for (unsigned k = 0; k < 4; ++k) if (*controls[k] >= 0) *controls[k] = (int32_t)maps[d][*controls[k]];
+      for (unsigned k = 0; k < 2; ++k) if (copy->succ[k] != UINT32_MAX) copy->succ[k] = block_maps[d][copy->succ[k]];
+      SsaBlock *source = &s->blocks[order[i]];
+      for (uint32_t p = 0; p < source->preds.count && !s->failed; ++p)
+        ssa_push(s, &s->blocks[block_maps[d][order[i]]].preds, block_maps[d][source->preds.items[p]]);
+    }
+    if (s->failed) return false;
+  }
+  /* Each call site jumps into its copy; the copy's returns meet in the
+     rest of the call's block. */
+  uint32_t header = s->blocks[entry].succ[0];
+  for (unsigned d = 0; d < depth && !s->failed; ++d) {
+    uint32_t site = d ? block_maps[d - 1][call_block] : call_block;
+    int32_t site_call = d ? (int32_t)maps[d - 1][call] : call, site_result = d ? (int32_t)maps[d - 1][result] : result;
+    uint32_t rest = ssa_block(s);
+    if (s->failed) return false;
+    SsaBlock *from = &s->blocks[site], *to = &s->blocks[rest];
+    to->kind = from->kind; to->control = from->control; to->control2 = from->control2;
+    to->control3 = from->control3; to->control4 = from->control4;
+    to->succ[0] = from->succ[0]; to->succ[1] = from->succ[1];
+    to->loop_depth = from->loop_depth; to->sealed = true; to->cold = from->cold;
+    for (unsigned k = 0; k < 2; ++k) {
+      if (to->succ[k] == UINT32_MAX) continue;
+      SsaBlock *next = &s->blocks[to->succ[k]];
+      for (uint32_t p = 0; p < next->preds.count; ++p) if (next->preds.items[p] == site) next->preds.items[p] = rest;
+    }
+    uint32_t kept = 0, at = UINT32_MAX;
+    for (uint32_t k = 0; k < s->blocks[site].values.count && !s->failed; ++k) {
+      uint32_t id = s->blocks[site].values.items[k];
+      if ((int32_t)id == site_call) { at = k; continue; }
+      if ((int32_t)id == site_result) continue;
+      if (at == UINT32_MAX) { s->blocks[site].values.items[kept++] = id; continue; }
+      s->values[id].block = rest;
+      ssa_push(s, &s->blocks[rest].values, id);
+    }
+    if (s->failed) return false;
+    from = &s->blocks[site];
+    from->values.count = kept;
+    from->kind = SB_PLAIN; from->control = from->control2 = from->control3 = from->control4 = -1;
+    from->succ[0] = block_maps[d][header]; from->succ[1] = UINT32_MAX;
+    SsaBlock *copy_header = &s->blocks[block_maps[d][header]];
+    for (uint32_t p = 0; p < copy_header->preds.count; ++p) if (copy_header->preds.items[p] == entry) copy_header->preds.items[p] = site;
+    int32_t returned[16];
+    uint32_t returns = 0;
+    for (uint32_t i = 1; i < n; ++i) {
+      if (s->blocks[order[i]].kind != SB_RETURN) continue;
+      uint32_t b = block_maps[d][order[i]];
+      SsaBlock *block = &s->blocks[b];
+      returned[returns++] = block->control;
+      block->kind = SB_PLAIN; block->control = -1; block->succ[0] = block->succ[1] = UINT32_MAX;
+      ssa_edge(s, b, rest);
+    }
+    int32_t value = returned[0];
+    if (returns > 1) {
+      value = ssa_new_phi(s, rest, s->values[site_result].cls);
+      if (s->failed) return false;
+      s->values[value].list = ssa_list(s, returned, returns);
+      s->values[value].count = returns;
+    }
+    s->values[site_call].dead = true;
+    ssa_replace(s, (uint32_t)site_result, value);
+    s->values[site_result].dead = true;
+  }
+  if (!s->failed && s->ctx->optimization_remarks)
+    fprintf(stderr, "remark: %s: recursive call inlined %u levels deep\n", s->f->name, depth);
+  return !s->failed;
+}
 /* std/mem's zero_bytes_fast, once folding has made its length constant, as
    in each mem.push: one fixed fill instead of a call. x86-64 and AArch64
    store unaligned; the call stays on RISC-V. */
@@ -11160,6 +11348,12 @@ static void ssa_prepare(SsaPrepared *p, BackendContext *ctx, const DynSource *so
     order = ssa_order(s, &n);
     if (!order || s->failed) goto done;
     ssa_dominators(s, order, n);
+    if (ssa_self_inline(s, order, n)) {
+      ssa_resolve_all(s);
+      order = ssa_order(s, &n);
+      if (!order || s->failed) goto done;
+      ssa_dominators(s, order, n);
+    }
   }
   for (unsigned i = 0; i < n; ++i) {
     SsaBlock *block = &s->blocks[order[i]];
