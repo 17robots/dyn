@@ -25,12 +25,16 @@ pub fn clear(state: *Buffer) {
 }
 
 pub fn write(state: *Buffer, value: []const u8) bool {
-  if state.failed || state.length > #len(state.data) || #len(value) > remaining(state) {
+  if state.failed || state.length > #len(state.data) || #len(value) > #len(state.data) - state.length {
     state.failed = true
     return false
   }
+  // Give the copy loop an exact-length local slice. This keeps descriptor
+  // loads and redundant destination checks out of the per-byte loop.
+  destination := state.data[state.length..]
+  destination = destination[..#len(value)]
   for i in 0..#len(value) {
-    state.data[state.length + i] = value[i]
+    destination[i] = value[i]
   }
   state.length += #len(value)
   return true
@@ -78,7 +82,26 @@ fn u64_base_into(destination: []u8, value: u64, base: u8, uppercase: bool) []u8 
 }
 
 fn u64_decimal_into(destination: []u8, value: u64) []u8 {
-  return u64_base_into(destination, value, 10, false)
+  // Keep the radix constant so the backend can reduce division by ten.
+  digit_count: usize = 1
+  remaining_value := value
+  for remaining_value >= 10 {
+    remaining_value /= 10
+    digit_count += 1
+  }
+  if #len(destination) < digit_count {
+    return destination[..0]
+  }
+  at := digit_count
+  remaining_value = value
+  for at > 0 {
+    at -= 1
+    quotient := remaining_value / 10
+    digit := remaining_value - quotient * 10
+    destination[at] = #cast(u8, digit) + '0'
+    remaining_value = quotient
+  }
+  return destination[..digit_count]
 }
 
 fn i64_decimal_into(destination: []u8, value: i64) []u8 {

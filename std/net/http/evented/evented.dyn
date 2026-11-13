@@ -4,11 +4,14 @@
 // http.Handler signature and run on the worker thread that owns the connection.
 //
 // All memory is caller-supplied and fixed at start: per connection one receive
-// buffer and one send buffer. Nothing allocates per request.
+// buffer and one send buffer, with an optional bounded per-worker overflow
+// pool shared by active responses. Nothing allocates per request.
 //
 // Costs to know:
 // - A handler that blocks stalls every connection on its worker.
-// - A response larger than the send buffer is flushed synchronously: the
+// - A response larger than its send buffer leases an overflow block when
+//   available. When the pool is exhausted or the block is too small, it is
+//   flushed synchronously: the
 //   worker waits (up to write_timeout_milliseconds) for the socket to drain.
 // - A request larger than the receive buffer gets 413 and the connection closes.
 //
@@ -31,6 +34,11 @@ pub struct Config {
   connections_per_worker: usize,
   receive_size: usize,
   send_size: usize,
+  // Optional fixed overflow blocks shared by this worker's connections. Both
+  // zero disables pooling. Blocks must exceed send_size. A drained or closed
+  // connection returns its block; an exhausted pool uses synchronous flushing.
+  overflow_send_size: usize,
+  overflow_send_count: usize,
   // Closes connections with no complete request activity for this long. Zero disables.
   idle_timeout_milliseconds: i64,
   // Longest a worker waits on one client during a synchronous large flush.
@@ -80,6 +88,7 @@ pub fn default_config() Config {
 pub fn storage_size(config: Config, worker_count: usize) usize {
   per_connection := #sizeof(Connection) + config.receive_size + config.send_size
   per_worker := config.connections_per_worker * (per_connection + #sizeof(usize)) + config.stack_size + scratch_size(config) + 4096
+  per_worker += config.overflow_send_count * (config.overflow_send_size + #sizeof(usize))
   return worker_count * per_worker
 }
 
@@ -90,12 +99,26 @@ fn scratch_size(config: Config) usize {
 
 pub struct Result { started: usize, failure: io.Failure }
 
+struct SendPool {
+  backing: []u8,
+  free: []usize,
+  free_count: usize,
+  block_size: usize,
+}
+
 struct Connection {
   descriptor: isize,
   active: bool,
   input: []u8,
   used: usize,
   output: []u8,
+  base_output: []u8,
+  pool: *SendPool,
+  // One-based pool index; zero means output is base_output.
+  overflow_slot: usize,
+  // A transport retry must see the same source backing and length.
+  write_pending: bool,
+  body_reserved: bool,
   sent: usize,
   queued: usize,
   // Stop reading and parsing until queued output drains.
@@ -130,6 +153,7 @@ pub struct Worker {
   connections: []Connection,
   free: []usize,
   free_count: usize,
+  send_pool: SendPool,
   queue: event.Queue,
   // False while every slot is busy: the level-triggered listener would
   // otherwise wake the loop continuously.
@@ -193,26 +217,58 @@ fn set_interest(worker: *Worker, index: usize, events: u32) bool {
   return event.modify(&worker.queue, connection.descriptor, events, #cast(u64, index) + 1).failure.kind == io.Kind.Ok
 }
 
-// Sends queued output without blocking. Returns false when the connection is
-// dead and must be closed.
+// Returns an overflow block only after its queued bytes drain or the socket closes.
+fn release_output(connection: *Connection) {
+  if connection.overflow_slot == 0 {
+    return
+  }
+  pool := connection.pool
+  pool.free[pool.free_count] = connection.overflow_slot - 1
+  pool.free_count += 1
+  connection.overflow_slot = 0
+  connection.output = connection.base_output
+}
+
+// Called only before transport IO or after a successful flush, never while a
+// TLS write retry borrows the current output slice.
+fn grow_output(connection: *Connection) bool {
+  pool := connection.pool
+  if pool == nil || connection.overflow_slot != 0 || pool.free_count == 0 || connection.write_pending {
+    return false
+  }
+  pool.free_count -= 1
+  slot := pool.free[pool.free_count]
+  backing := pool.backing[slot * pool.block_size..(slot + 1) * pool.block_size]
+  _ = mem.copy(backing[..connection.queued], connection.output[..connection.queued])
+  connection.output = backing
+  connection.overflow_slot = slot + 1
+  return true
+}
+
+// Sends queued output without blocking. False means the socket must close.
 fn flush(connection: *Connection) bool {
   connection.flush_wants_read = false
   for connection.sent < connection.queued {
     sent := connection_write(connection, connection.output[connection.sent..connection.queued])
     if sent.status == TransportStatus.WouldWrite {
+      connection.write_pending = true
       return true
     }
     if sent.status == TransportStatus.WouldRead {
+      connection.write_pending = true
       connection.flush_wants_read = true
       return true
     }
     if sent.status != TransportStatus.Ok {
       return false
     }
+    connection.write_pending = false
     connection.sent += sent.count
   }
   connection.sent = 0
   connection.queued = 0
+  connection.body_reserved = false
+  release_output(connection)
   return true
 }
 
@@ -243,9 +299,13 @@ fn output_write(data: rawptr, source: []const u8) io.Transfer {
   if connection.failed {
     return io.Transfer{ kind: io.Kind.InvalidState, status: io.Status.Error }
   }
+  connection.body_reserved = false
   written: usize = 0
   for written < #len(source) {
     room := #len(connection.output) - connection.queued
+    if #len(source) - written > room && grow_output(connection) {
+      room = #len(connection.output) - connection.queued
+    }
     if room == 0 {
       if !flush_blocking(connection) {
         connection.failed = true
@@ -262,6 +322,37 @@ fn output_write(data: rawptr, source: []const u8) io.Transfer {
     written += count
   }
   return io.Transfer{ transferred: written }
+}
+
+// A reserved body is borrowed only during the current handler. The prefix
+// leaves room for a checked header, so commit queues both without moving body.
+fn reserve_body(data: rawptr, capacity: usize) []u8 {
+  connection := #cast(*Connection, data)
+  if connection.failed || connection.body_reserved || connection.queued != 0 || connection.sent != 0 ||
+    capacity > 0xffffffffffffffff - 8192 {
+    return connection.output[..0]
+  }
+  required := capacity + 8192
+  if required > #len(connection.output) {
+    _ = grow_output(connection)
+  }
+  if required > #len(connection.output) {
+    return connection.output[..0]
+  }
+  connection.body_reserved = true
+  return connection.output[8192..required]
+}
+
+fn commit_body(data: rawptr, head: []const u8, length: usize) io.Transfer {
+  connection := #cast(*Connection, data)
+  if !connection.body_reserved || #len(head) > 8192 || length > #len(connection.output) - 8192 {
+    return io.Transfer{ kind: io.Kind.InvalidState, status: io.Status.Error }
+  }
+  connection.sent = 8192 - #len(head)
+  connection.queued = 8192 + length
+  _ = mem.copy(connection.output[connection.sent..8192], head)
+  connection.body_reserved = false
+  return io.Transfer{ transferred: #len(head) + length }
 }
 
 fn reject(connection: *Connection, status: u16, body: []const u8) {
@@ -281,9 +372,11 @@ fn close_connection(worker: *Worker, index: usize) {
     connection.transport.close(connection.session)
   }
   network.close(connection.descriptor)
+  release_output(connection)
   input := connection.input
-  output := connection.output
-  connection.* = Connection{ input: input, output: output }
+  output := connection.base_output
+  pool := connection.pool
+  connection.* = Connection{ input: input, output: output, base_output: output, pool: pool }
   worker.free[worker.free_count] = index
   worker.free_count += 1
   if !worker.listening && sync.load_u32(&worker.stopping) == 0 {
@@ -313,7 +406,8 @@ fn serve_buffered(worker: *Worker, index: usize) bool {
     }
     request := framed.request
     request.context = worker.context
-    response := http.Response{ output: io.Writer{ data: connection, write: output_write } }
+    response := http.Response{ output: io.Writer{ data: connection, write: output_write },
+      reserve_body: reserve_body, commit_body: commit_body }
     worker.requests += 1
     handled := worker.handler(&response, &request)
     consumed += framed.consumed
@@ -595,6 +689,10 @@ fn valid_start(workers: []Worker, config: Config, handler: http.Handler) io.Fail
     config.receive_size < 512 || config.send_size < 512 || config.stack_size < 64 * mem.KiB {
     return io.Failure{ kind: io.Kind.InvalidInput }
   }
+  if (config.overflow_send_count == 0) != (config.overflow_send_size == 0) ||
+    (config.overflow_send_count > 0 && config.overflow_send_size <= config.send_size) {
+    return io.Failure{ kind: io.Kind.InvalidInput }
+  }
   if config.transport != nil && config.transport.needs_native_threads && config.spawner == nil {
     return io.Failure{ kind: io.Kind.InvalidInput }
   }
@@ -615,9 +713,18 @@ fn start_worker(arena: *mem.Arena, worker: *Worker) io.Failure {
   worker.free = mem.push_array(usize, arena, count)
   receive := mem.push_bytes_uninit(arena, count * config.receive_size)
   send := mem.push_bytes_uninit(arena, count * config.send_size)
+  worker.send_pool.backing = mem.push_bytes_uninit(arena, config.overflow_send_count * config.overflow_send_size)
+  worker.send_pool.free = mem.push_array(usize, arena, config.overflow_send_count)
+  worker.send_pool.free_count = config.overflow_send_count
+  worker.send_pool.block_size = config.overflow_send_size
+  for i in 0..config.overflow_send_count {
+    worker.send_pool.free[i] = config.overflow_send_count - 1 - i
+  }
   for c in 0..count {
     worker.connections[c].input = receive[c * config.receive_size..(c + 1) * config.receive_size]
     worker.connections[c].output = send[c * config.send_size..(c + 1) * config.send_size]
+    worker.connections[c].base_output = worker.connections[c].output
+    worker.connections[c].pool = &worker.send_pool
     worker.free[c] = count - 1 - c
   }
   worker.free_count = count

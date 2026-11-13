@@ -37,6 +37,11 @@ def exercise(port, certificate):
     assert client.getresponse().read() == b'x' * 3000
     client.request('GET', '/big')
     assert client.getresponse().read() == BIG
+    for _ in range(3):
+        client.request('GET', '/buffered')
+        assert client.getresponse().read() == BIG
+        client.request('GET', '/buffered-empty')
+        assert client.getresponse().read() == b''
     client.close()
 
     # Pipelined requests inside one TLS stream, and a slow reader of /big.

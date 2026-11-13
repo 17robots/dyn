@@ -703,6 +703,12 @@ pub struct Response {
   first: Result,
   first_stream: io.Transfer,
   output: io.Writer,
+  // Optional transport-owned response storage. Both callbacks use output.data.
+  // reserve_body returns exclusive writable storage until commit or handler return.
+  // commit_body queues a copied head followed by the first length body bytes.
+  reserve_body: fn(rawptr, usize) []u8,
+  commit_body: fn(rawptr, []const u8, usize) io.Transfer,
+  reserved: []u8,
   started: bool,
   finished: bool,
 }
@@ -1288,13 +1294,14 @@ fn head_write(writer: *HeadWriter, options: ResponseOptions, status: u16, reason
 // Writes the response head, followed by body when given. Head and body leave in
 // one write when they fit in a stack staging buffer: separate small writes on a
 // keep-alive socket stall on Nagle plus delayed ACK (about 40 ms per response).
-fn response_begin(response: *Response, options: ResponseOptions, body_length: usize, chunked: bool, body: []const u8) Result {
+fn response_begin(response: *Response, options: ResponseOptions, body_length: usize, chunked: bool, body: []const u8, buffered: bool) Result {
   if response.failed {
     return response.first
   }
   if response.started || response.finished || response.output.write == nil {
     return response_failure(response, Result{ detail: ErrorKind.Invalid, failure: io.Failure{ kind: io.Kind.InvalidState } })
   }
+  if !buffered { response.reserved = response.reserved[..0] }
   status := options.status
   if status == 0 {
     status = StatusOk
@@ -1320,6 +1327,23 @@ fn response_begin(response: *Response, options: ResponseOptions, body_length: us
   measure := HeadWriter{ mode: HeadMode.Measure, response: response }
   head_write(&measure, options, status, reason, content_type, body_length, chunked)
   head_length := measure.used
+  if buffered {
+    if head_length > #len(staging) {
+      return Result{ detail: ErrorKind.Capacity, failure: io.Failure{ kind: io.Kind.Capacity } }
+    }
+    stage := HeadWriter{ mode: HeadMode.Stage, staging: staging[..], response: response }
+    head_write(&stage, options, status, reason, content_type, body_length, false)
+    written := response.commit_body(response.output.data, staging[..head_length], body_length)
+    response.reserved = response.reserved[..0]
+    if written.status == io.Status.Error || written.transferred != head_length + body_length {
+      response.first_stream = written
+      failure_kind := written.kind
+      if failure_kind == io.Kind.Ok { failure_kind = io.Kind.InvalidState }
+      return response_failure(response, Result{ detail: ErrorKind.Io, failure: io.Failure{ kind: failure_kind, native: written.error } })
+    }
+    response.started = true
+    return Result{}
+  }
   if head_length <= #len(staging) {
     stage := HeadWriter{ mode: HeadMode.Stage, staging: staging[..], response: response }
     head_write(&stage, options, status, reason, content_type, body_length, chunked)
@@ -1421,8 +1445,33 @@ pub fn form_value(request: *const Request, name: []const u8, destination: []u8) 
   return form_decode(destination, field.value)
 }
 
+// Returns exclusive transport-owned body storage, or empty when unavailable.
+// Do not retain the view beyond respond_buffered, another response operation,
+// or handler return. No bytes are queued until respond_buffered succeeds.
+pub fn body_buffer(response: *Response, capacity: usize) []u8 {
+  if response.failed || response.started || response.finished || capacity == 0 ||
+    #len(response.reserved) != 0 || response.reserve_body == nil || response.commit_body == nil {
+    empty: []u8
+    return empty
+  }
+  response.reserved = response.reserve_body(response.output.data, capacity)
+  return response.reserved
+}
+
+// Commit the initialized prefix of body_buffer without copying its body.
+// Invalid options/length leave the reservation available for correction.
+pub fn respond_buffered(response: *Response, length: usize, options: ResponseOptions) Result {
+  if response.failed { return response.first }
+  if response.commit_body == nil || #len(response.reserved) == 0 || length > #len(response.reserved) {
+    return Result{ detail: ErrorKind.Invalid, failure: io.Failure{ kind: io.Kind.InvalidInput } }
+  }
+  written := response_begin(response, options, length, false, "", true)
+  if written.failure.kind == io.Kind.Ok { response.finished = true }
+  return written
+}
+
 pub fn respond(response: *Response, body: []const u8, options: ResponseOptions) Result {
-  written := response_begin(response, options, #len(body), false, body)
+  written := response_begin(response, options, #len(body), false, body, false)
   if !io.failed(written.failure) {
     response.finished = true
   }
@@ -1430,7 +1479,7 @@ pub fn respond(response: *Response, body: []const u8, options: ResponseOptions) 
 }
 
 pub fn respond_stream(response: *Response, options: ResponseOptions) BodyResult {
-  started := response_begin(response, options, 0, true, "")
+  started := response_begin(response, options, 0, true, "", false)
   if io.failed(started.failure) {
     return BodyResult{ detail: started.detail, body: Body{ failed: true, first: started, first_stream: response.first_stream }, result: started, failure: io.Failure{ kind: started.failure.kind, native: started.failure.native } }
   }

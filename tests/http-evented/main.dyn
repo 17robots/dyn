@@ -25,6 +25,37 @@ struct App {
   route_storage: [4]http.TypedRoute(App),
 }
 
+// Test-only plain transport limits kernel buffering so a slow client keeps an
+// overflow lease while another connection exercises pool exhaustion.
+fn limited_open(data: rawptr, descriptor: isize) rawptr {
+  _ = data
+  size: i32 = 4096
+  if #syscall(54, descriptor, 1, 7, &size, 4) < 0 { return nil }
+  return #cast(rawptr, descriptor)
+}
+fn limited_handshake(session: rawptr) evented.TransportIo {
+  _ = session
+  return evented.TransportIo{}
+}
+fn limited_read(session: rawptr, output: []u8) evented.TransportIo {
+  result := net.receive(#cast(isize, session), output, 0)
+  if result.failure.kind != io.Kind.Ok {
+    if net.would_block(&result) { return evented.TransportIo{ status: evented.TransportStatus.WouldRead } }
+    return evented.TransportIo{ status: evented.TransportStatus.Failed }
+  }
+  if result.value == 0 { return evented.TransportIo{ status: evented.TransportStatus.End } }
+  return evented.TransportIo{ count: #cast(usize, result.value) }
+}
+fn limited_write(session: rawptr, source: []const u8) evented.TransportIo {
+  result := net.send(#cast(isize, session), source, 0)
+  if result.failure.kind != io.Kind.Ok {
+    if net.would_block(&result) { return evented.TransportIo{ status: evented.TransportStatus.WouldWrite } }
+    return evented.TransportIo{ status: evented.TransportStatus.Failed }
+  }
+  return evented.TransportIo{ count: #cast(usize, result.value) }
+}
+fn limited_close(session: rawptr) { _ = session }
+
 fn user_post(response: *http.Response, request: *const http.Request, app: *App) http.Result {
   storage: [128]u8
   page := html.writer(storage[..])
@@ -45,6 +76,34 @@ fn text(response: *http.Response, status: u16, body: []const u8) http.Result {
 }
 
 fn handle(response: *http.Response, request: *const http.Request, app: *App) http.Result {
+  if bytes.equal(request.path, "/buffered") || bytes.equal(request.path, "/buffered-empty") {
+    if #len(http.body_buffer(response, 0)) != 0 || #len(http.body_buffer(response, 0xffffffffffffffff)) != 0 {
+      #panic("invalid reservation succeeded")
+    }
+    body := http.body_buffer(response, BigSize)
+    if #len(body) == 0 {
+      if bytes.equal(request.path, "/buffered-empty") { return text(response, http.StatusOk, "") }
+      return text(response, http.StatusOk, app.big)
+    }
+    if #len(http.body_buffer(response, 1)) != 0 { #panic("second reservation succeeded") }
+    if http.respond_buffered(response, BigSize + 1, http.ResponseOptions{}).failure.kind == io.Kind.Ok {
+      #panic("oversize commit succeeded")
+    }
+    bad_headers: [1]http.Header = [http.Header{ name: "X-Test", value: "bad\r\nheader" }]
+    if http.respond_buffered(response, 1, http.ResponseOptions{ headers: bad_headers[..] }).failure.kind == io.Kind.Ok {
+      #panic("invalid header succeeded")
+    }
+    _ = mem.copy(body, app.big)
+    length := BigSize
+    if bytes.equal(request.path, "/buffered-empty") { length = 0 }
+    good_headers: [1]http.Header = [http.Header{ name: "X-Buffered", value: "yes" }]
+    result := http.respond_buffered(response, length, http.ResponseOptions{ content_type: "text/plain", headers: good_headers[..] })
+    if result.failure.kind != io.Kind.Ok { return result }
+    if http.respond_buffered(response, 1, http.ResponseOptions{}).failure.kind == io.Kind.Ok {
+      #panic("second commit succeeded")
+    }
+    return result
+  }
   if bytes.equal(request.target, "/health") {
     return text(response, http.StatusOk, "ok\n")
   }
@@ -129,7 +188,17 @@ fn main() {
   config.idle_timeout_milliseconds = 500
   arguments := process.arguments(arena)
   shared := arguments.failure.kind == io.Kind.Ok && #len(arguments.value) > 1 && bytes.equal(arguments.value[1], "shared")
-  workers := mem.push_array(evented.Worker, arena, WorkerCount)
+  pooled := arguments.failure.kind == io.Kind.Ok && #len(arguments.value) > 1 && bytes.equal(arguments.value[1], "pooled")
+  transport := evented.Transport{ open: limited_open, handshake: limited_handshake, read: limited_read, write: limited_write, close: limited_close }
+  worker_count := WorkerCount
+  if pooled {
+    config.overflow_send_size = 256 * mem.KiB
+    config.overflow_send_count = 1
+    config.idle_timeout_milliseconds = 30000
+    config.transport = &transport
+    worker_count = 1
+  }
+  workers := mem.push_array(evented.Worker, arena, worker_count)
   listener := net.Listener{}
   started := evented.Result{}
   if shared {
@@ -159,6 +228,9 @@ fn main() {
   joined := evented.join(workers)
   if listener.active {
     net.listener_close(&listener)
+  }
+  for worker in workers {
+    if worker.send_pool.free_count != config.overflow_send_count { #panic("overflow block leaked") }
   }
   if joined.failure.kind != io.Kind.Ok {
     #panic("worker failed")
