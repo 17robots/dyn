@@ -1,0 +1,6 @@
+Errors are values
+
+A call that can fail returns {value, failure}. The value is always safe to
+read, so a failure you ignore gives you an empty result, not a crash.
+
+A broken invariant is different: that is a bug, and the program panics.

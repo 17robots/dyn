@@ -1,0 +1,19 @@
+$ journal < commands.txt
+noted #1
+noted #2
+noted #3
+  #3 Read chapter 3 of the arena paper
+  #2 Call the plumber about the kitchen sink
+  #1 Buy oat milk
+  #3 Read chapter 3 of the arena paper
+  #2 Call the plumber about the kitchen sink
+2 found
+notes: 3, permanent: 209 bytes, frame peak: 87 bytes
+forgot #3: Read chapter 3 of the arena paper
+forgot #2: Call the plumber about the kitchen sink
+notes: 1, permanent: 52 bytes, frame peak: 87 bytes
+noted #2
+  #2 Kitchen light is out
+1 found
+unknown command: dance
+notes: 2, permanent: 116 bytes, frame peak: 87 bytes

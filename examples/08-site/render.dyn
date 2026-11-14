@@ -1,0 +1,97 @@
+// One page of text as HTML.
+//
+// The page format is plain text: the first line is the title, a line that
+// starts with "# " is a heading, lines that start with "- " are a list, and
+// other lines are paragraphs separated by blank lines.
+
+use "std/bytes"
+use "std/html"
+use "std/strings"
+
+enum Block {
+  Nothing,
+  Paragraph,
+  List,
+}
+
+// html.Writer escapes text and only takes markup marked as trusted, so text
+// from a page can never inject a tag. Writes are sticky: when the storage
+// runs out the writer fails, later writes do nothing, and the caller checks
+// html.failed once.
+fn open_tag(w: *html.Writer, tag: []const u8) {
+  html.markup(w, html.trusted(tag))
+}
+
+fn close_block(w: *html.Writer, block: Block) {
+  case block {
+    Block.Nothing => {}
+    Block.Paragraph => { open_tag(w, "</p>\n") }
+    Block.List => { open_tag(w, "</ul>\n") }
+  }
+}
+
+fn header(w: *html.Writer, title: []const u8) {
+  open_tag(w, "<!doctype html>\n<html><head><meta charset=\"utf-8\"><title>")
+  html.text(w, title)
+  open_tag(w, "</title></head>\n<body>\n<h1>")
+  html.text(w, title)
+  open_tag(w, "</h1>\n")
+}
+
+fn footer(w: *html.Writer) {
+  open_tag(w, "</body></html>\n")
+}
+
+// The first line of a page, trimmed.
+fn page_title(text: []const u8) []const u8 {
+  scan := strings.scanner(text)
+  return strings.trim(strings.scan_line(&scan).value)
+}
+
+fn render_page(w: *html.Writer, text: []const u8) {
+  scan := strings.scanner(text)
+  title := strings.trim(strings.scan_line(&scan).value)
+  header(w, title)
+  open_tag(w, "<p><a href=\"index.html\">All pages</a></p>\n")
+  block := Block.Nothing
+  for {
+    next := strings.scan_line(&scan)
+    if !next.found {
+      break
+    }
+    line := strings.trim(next.value)
+    if #len(line) == 0 {
+      close_block(w, block)
+      block = Block.Nothing
+    } else if bytes.starts_with(line, "# ") {
+      close_block(w, block)
+      block = Block.Nothing
+      open_tag(w, "<h2>")
+      html.text(w, line[2..])
+      open_tag(w, "</h2>\n")
+    } else if bytes.starts_with(line, "- ") {
+      if block != Block.List {
+        close_block(w, block)
+        open_tag(w, "<ul>\n")
+        block = Block.List
+      }
+      open_tag(w, "<li>")
+      html.text(w, line[2..])
+      open_tag(w, "</li>\n")
+    } else {
+      if block == Block.Nothing {
+        open_tag(w, "<p>")
+        block = Block.Paragraph
+      } else if block == Block.List {
+        close_block(w, block)
+        open_tag(w, "<p>")
+        block = Block.Paragraph
+      } else {
+        open_tag(w, "\n")
+      }
+      html.text(w, line)
+    }
+  }
+  close_block(w, block)
+  footer(w)
+}

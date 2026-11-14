@@ -1,0 +1,61 @@
+// A generic stack: last in, first out, for any element type.
+//
+// Stack(T) is a type with a parameter. Writing Stack(Edit) makes one for
+// Edit values; each instance is checked as ordinary code for its T, so an
+// operation T does not support is an error at that instance.
+
+use "std/mem"
+
+pub struct Stack(T) {
+  items: []T,       // the used front of storage
+  storage: []T,
+  arena: *mem.Arena,
+}
+
+// What pop returns: found is false when the stack was empty, and value is
+// then T's zero value, which is always safe to read.
+pub struct Popped(T) {
+  value: T,
+  found: bool,
+}
+
+// $T at a parameter means "infer T from this argument".
+pub fn init(s: *Stack($T), arena: *mem.Arena) {
+  s.arena = arena
+}
+
+pub fn push(s: *Stack($T), value: $T) {
+  used := #len(s.items)
+  if used == #len(s.storage) {
+    // Out of room: move to storage twice the size in the same arena. The
+    // old storage stays in the arena until it is reset; arenas never free
+    // one allocation at a time.
+    capacity := used * 2
+    if capacity < 8 {
+      capacity = 8
+    }
+    grown := mem.push_array(T, s.arena, capacity)
+    _ = mem.copy(grown, s.items)
+    s.storage = grown
+  }
+  s.storage[used] = value
+  s.items = s.storage[..used + 1]
+}
+
+pub fn pop(s: *Stack($T)) Popped(T) {
+  used := #len(s.items)
+  if used == 0 {
+    return Popped(T){}
+  }
+  value := s.items[used - 1]
+  s.items = s.storage[..used - 1]
+  return Popped(T){ value: value, found: true }
+}
+
+pub fn clear(s: *Stack($T)) {
+  s.items = s.storage[..0]
+}
+
+pub fn count(s: *const Stack($T)) usize {
+  return #len(s.items)
+}

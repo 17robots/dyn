@@ -1,0 +1,29 @@
+$ editor < script.txt
+--- 4 lines, 4 to undo, 0 to redo
+1 | Shopping list
+2 | eggs
+3 | flour
+4 | sugar
+--- 4 lines, 7 to undo, 0 to redo
+1 | Shopping list
+2 | milk
+3 | brown sugar
+4 | sugar
+--- 5 lines, 5 to undo, 2 to redo
+1 | Shopping list
+2 | milk
+3 | eggs
+4 | flour
+5 | sugar
+--- 5 lines, 6 to undo, 1 to redo
+1 | Shopping list
+2 | milk
+3 | eggs
+4 | brown sugar
+5 | sugar
+nothing to redo
+--- 0 lines, 0 to undo, 7 to redo
+cannot delete 9
+cannot insert 0 nope
+cannot add
+unknown command: fly

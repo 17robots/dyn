@@ -1,8 +1,13 @@
-// Learn Dyn in Y minutes. This file compiles and runs: dyn build . && ./learn
+// The Dyn tour: the whole language in one file that compiles and runs.
+//
+//   dyn run examples/tour
 //
 // Dyn is a small, explicit systems language. No hidden allocation, no hidden
 // runtime, no garbage collector, no exceptions. Memory comes from arenas you
 // pass around. What you read is what runs.
+//
+// This file is a reference to skim. To learn by building programs, work
+// through the projects next to it, starting with examples/01-life.
 
 // ---------------------------------------------------------------- Modules ---
 // A directory is a module; this file is its main.dyn. `use` binds the module
@@ -16,14 +21,16 @@ use "std/fs" files       // an import can be renamed
 use "std/panic"
 
 // --------------------------------------------------- Constants and globals ---
-const SCREEN_WIDTH := 320           // adapts like a literal: fits u16, i64, f32...
-const GREETING := "hello"           // []const u8
-const MAX_HEALTH: i32 = 100         // or give a constant its type
+// Constants and types are PascalCase; functions, locals and fields are
+// snake_case.
+const ScreenWidth := 320            // adapts like a literal: fits u16, i64, f32...
+const Greeting := "hello"           // []const u8
+const MaxHealth: i32 = 100          // or give a constant its type
 global_counter: u64 = 0             // a mutable global, zeroed before main
 
 // Fixed-array lengths may use constant arithmetic.
-const CELLS: usize = 4 * 4
-board: [CELLS]u8
+const Cells: usize = 4 * 4
+board: [Cells]u8
 
 // -------------------------------------------------------------- Functions ---
 // Parameters are typed; the result type follows the parameter list.
@@ -47,8 +54,11 @@ fn numbers() {
   ratio := #cast(f64, wide) / 3.0
   bits := #bitcast(u64, ratio)       // same size, bits unchanged
   io.println("numbers: {} {} {} {}", wide, narrow, ratio, bits != 0)
-  // Integer arithmetic wraps; division by zero panics. Floats are IEEE-754.
-  // Float to integer casts saturate, and NaN becomes 0, on every target.
+  // Debug builds stop with overflow.ok when + - * << or negation overflows;
+  // release builds wrap. Code that means to wrap, like a hash, says so with
+  // math.wrapping_add, wrapping_sub or wrapping_mul. Division by zero always
+  // panics. Floats are IEEE-754. Float to integer casts saturate, and NaN
+  // becomes 0, on every target.
   io.println("saturate: {}", #cast(u8, 1000.0))
 }
 
@@ -56,7 +66,7 @@ fn numbers() {
 distinct type Meters = f64
 
 // type makes a transparent alias, declared at module scope.
-type Grid = [CELLS]u8
+type Grid = [Cells]u8
 
 // ---------------------------------------------------------------- Structs ---
 // A field may have a default; the rest start at zero. Literals, declarations
@@ -69,7 +79,7 @@ struct Vec2 {
 struct Player {
   name: []const u8,
   position: Vec2,
-  health: i32 = MAX_HEALTH,
+  health: i32 = MaxHealth,
   target: *Player,   // pointers start as nil
 }
 
@@ -101,6 +111,8 @@ fn structs() {
   if hero.target == nil {
     io.println("no target")
   }
+  // A struct passed by name to a literal template prints its fields.
+  io.println("{}", hero.position)
 }
 
 // ------------------------------------------------------------------ Enums ---
@@ -113,7 +125,9 @@ enum Color {
   Blue,
 }
 
-// An explicit backing type, and #cast to and from the tag.
+// An explicit backing type. #cast(u8, op) reads the tag; an integer becomes
+// an enum only through enums.from_int, which gives the first variant when no
+// variant has that tag.
 enum(u8) Op {
   Nop,
   Add,
@@ -222,12 +236,21 @@ fn control() {
       }
     }
   }
-  // case on integers: patterns are constants, and _ takes the rest.
+  // case on integers: patterns are constants, and _ takes the rest. One arm
+  // may list several patterns.
   kind := ""
   case steps {
     0 => { kind = "none" }
+    1, 2, 3 => { kind = "few" }
     4 => { kind = "four" }
     _ => { kind = "other" }
+  }
+  // case on text compares the bytes, and always needs _.
+  command := "stop"
+  case command {
+    "go" => { kind = "moving" }
+    "stop" => {}
+    _ => { kind = "unknown" }
   }
   // Names never shadow: pick a new one. A name is free again after its block.
   if found {
@@ -246,6 +269,16 @@ fn sum(values: []const i32) i32 {
   return total
 }
 
+// for value, index: the index is a usize counting from 0.
+fn index_of(values: []const i32, wanted: i32) usize {
+  for v, i in values {
+    if v == wanted {
+      return i
+    }
+  }
+  return #len(values)         // the miss value: one past the end
+}
+
 fn arrays() {
   primes: [5]i32 = [2, 3, 5, 7, 11]   // fixed array: a value, copied on assign
   middle := primes[1..4]              // a slice: {pointer, length}, a view
@@ -253,7 +286,8 @@ fn arrays() {
     p.* *= 2
   }
   // middle sees the doubled values: a slice shares the array's storage.
-  io.println("len {} sum {} middle {}", #len(primes), sum(primes[..]), sum(middle))
+  io.println("len {} sum {} middle {} index {}", #len(primes), sum(primes[..]), sum(middle),
+    index_of(primes[..], 14))
   // Indexing is bounds-checked: primes[9] panics with index.ok.
 }
 
@@ -456,7 +490,7 @@ fn layout() {
 // returns the result, and a discarded result is written _ = so it shows.
 fn main() {
   panic.set_handler(crash_report)
-  io.println("{} {}", GREETING, add(SCREEN_WIDTH, 1))
+  io.println("{} {}", Greeting, add(ScreenWidth, 1))
   numbers()
   structs()
   enums()

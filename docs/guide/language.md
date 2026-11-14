@@ -204,8 +204,8 @@ Implicit numeric conversion is allowed only when destination represents every so
 value exactly. Constants adapt when their specific value fits, and a literal that does not fit
 its context is a compile error, checked again for each type a generic function is called with.
 An integer literal in a float context is that float when it is exact (up to 2^24 for `f32`,
-2^53 for `f64`), so `x * 2` works for any numeric `T`. Integer arithmetic
-wraps. Floats use IEEE-754. Expression evaluation is left-to-right.
+2^53 for `f64`), so `x * 2` works for any numeric `T`. Integer overflow
+panics in debug builds and wraps in release (see [numeric rules](#numeric-rules)). Floats use IEEE-754. Expression evaluation is left-to-right.
 A float literal with no float context is `f64`, so `x := 1.5` is `f64`.
 Float literals accept trailing dots (`2.`); lexical lookahead keeps `2..3` an integer range.
 Explicit locals without initializers start at zero, or at their struct's field defaults.
@@ -244,8 +244,8 @@ loop with that label. Active labels cannot duplicate. Transfers run defers for e
 
 Struct field order determines layout. Packed structs preserve order, remove inter-field padding,
 and have alignment 1. Construction gives every field its default (zero when it declares none), then
-applies explicit literal members. `.{ ... }` requires expected
-struct type. Struct assignment copies by value. Unknown/duplicate fields, duplicate declarations,
+applies explicit literal members. A literal always names its type:
+`Point{ x: 1 }`. Struct assignment copies by value. Unknown/duplicate fields, duplicate declarations,
 by-value recursion and aggregate comparison fail. Empty structs have size and alignment 1 so arrays
 have stable element stride and distinct elements have distinct addresses.
 

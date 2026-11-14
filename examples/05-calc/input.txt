@@ -1,0 +1,15 @@
+1 + 2 * 3
+(1 + 2) * 3
+2 ^ 3 ^ 2
+-4 + 10 % 4
+let r = 2.5
+pi * r ^ 2
+let area = pi * r ^ 2
+sqrt(area / pi)
+floor(7 / 2)
+1 / 0
+radius * 2
+cos(1)
+2 * (3 + 4
+1 + * 2
+let = 5

@@ -1,0 +1,15 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Arenas</title></head>
+<body>
+<h1>Arenas</h1>
+<p><a href="index.html">All pages</a></p>
+<p>An arena hands out memory by moving one offset forward.
+Freeing is just as cheap: move the offset back.</p>
+<h2>Three lifetimes</h2>
+<ul>
+<li>the whole program</li>
+<li>one request or frame</li>
+<li>one function call</li>
+</ul>
+<p>Pick the arena by how long the data lives, not by its type.</p>
+</body></html>

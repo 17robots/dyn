@@ -1,0 +1,19 @@
+$ ledger expenses.csv
+ledger: expenses.csv:13: bad amount twenty
+ledger: expenses.csv:14: expected 4 fields, found 3
+category          count      amount
+rent                  1      950.00
+groceries             5      228.23
+transport             4      112.60
+eating out            2       25.90
+home                  1       12.99
+total                13     1329.72
+
+month             count      amount
+2026-09               6      188.47
+2026-10               5     1038.90
+2026-11               2      102.35
+total                13     1329.72
+
+largest: October rent (950.00, line 8)
+skipped 2 bad rows

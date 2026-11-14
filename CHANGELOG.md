@@ -14,6 +14,11 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+- `examples/` is now a course: nine tested projects in order, from the Game
+  of Life to a multi-threaded prime counter, each with a README of what it
+  teaches and exercises. `examples/learn` moved to `examples/tour`.
+  `tests/examples.py` replaces `tests/learn-example.py`: it formats, vets
+  and replays every example's `session.txt` in debug and release.
 - Breaking: `union` types are removed. `union` stays a reserved word, and a
   `union` declaration fails with "union types were removed; use #bitcast or a
   payload enum". Nothing in `std` or `vendor` used them.

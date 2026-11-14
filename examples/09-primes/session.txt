@@ -1,0 +1,4 @@
+$ primes 1000000 4 2>/dev/null
+78498 primes below 1000000; the largest is 999983
+$ primes 100 1 2>/dev/null
+25 primes below 100; the largest is 97

@@ -1,6 +1,8 @@
 # Dyn documentation
 
-Read [the tour](../examples/learn/main.dyn), a single program that runs, for the whole
+Learn by building: [the examples](../examples/README.md) are nine small, tested programs, from
+the Game of Life to a multi-threaded prime counter, each adding a few ideas to the last.
+[The tour](../examples/tour/main.dyn) is a single program that runs, for the whole
 language in one sitting. Then read [idiomatic Dyn](guide/idiomatic-dyn.md) and keep the
 [language reference](guide/language.md) and [standard library](guide/std.md)
 pages at hand. `dyn docs std/<module>` prints any module's declarations and

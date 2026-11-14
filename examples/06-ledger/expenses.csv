@@ -1,0 +1,16 @@
+date,category,description,amount
+2026-09-02,groceries,Market run,54.20
+2026-09-03,transport,Bus pass,45
+2026-09-07,eating out,"Pizza, two slices",8.5
+2026-09-12,groceries,Bakery,6.75
+2026-09-19,home,"Lamp ""reading"" bulb",12.99
+2026-09-28,groceries,Market run,61.03
+2026-10-01,rent,October rent,950.00
+2026-10-04,eating out,Noodle bar,17.40
+2026-10-09,groceries,Market run,48.90
+2026-10-15,transport,Train to the coast,32.60
+2026-10-15,transport,Refund: delayed train,-10.00
+2026-10-22,home,Kettle,twenty
+2026-10-30,groceries,Market run
+2026-11-02,groceries,Market run,57.35
+2026-11-03,transport,Bus pass,45.00

@@ -1,0 +1,28 @@
+add Shopping list
+add eggs
+add flour
+add sugar
+print
+insert 2 milk
+change 4 brown sugar
+delete 3
+print
+undo
+undo
+print
+redo
+print
+add butter
+redo
+undo
+undo
+undo
+undo
+undo
+undo
+undo
+print
+delete 9
+insert 0 nope
+add
+fly away

@@ -1,0 +1,13 @@
+note Buy oat milk
+note Call the plumber about the kitchen sink
+note Read chapter 3 of the arena paper
+list
+find the
+stats
+undo
+undo
+stats
+note Kitchen light is out
+find KITCHEN
+dance
+stats

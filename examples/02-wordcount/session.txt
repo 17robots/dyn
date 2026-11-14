@@ -1,0 +1,11 @@
+$ wordcount poem.txt words.txt
+       7      21     110     110 poem.txt
+       2       4      23      27 words.txt
+       9      25     133     137 total
+$ wordcount poem.txt missing.txt
+       7      21     110     110 poem.txt
+wordcount: missing.txt: no such file
+       7      21     110     110 total
+[exit 1]
+$ wordcount < poem.txt
+       7      21     110     110

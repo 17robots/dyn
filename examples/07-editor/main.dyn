@@ -1,0 +1,176 @@
+// editor: a line editor that runs a script of commands from standard input,
+// with unlimited undo and redo.
+//
+//   add TEXT          add a line at the end
+//   insert N TEXT     insert a line before line N
+//   delete N          delete line N
+//   change N TEXT     replace line N
+//   undo, redo        step back or forward through the edits
+//   print             show the document
+//
+// Run: dyn run examples/07-editor < examples/07-editor/script.txt
+
+use "./stack"
+use "std/bufio"
+use "std/bytes"
+use "std/container/array"
+use "std/io"
+use "std/mem"
+use "std/parse"
+use "std/strings"
+
+struct Editor {
+  lines: array.Array([]const u8),
+  undo: stack.Stack(Edit),       // an instance of the generic type
+  redo: stack.Stack(Edit),
+  text: *mem.Arena,              // every line's text, kept for undo
+}
+
+fn print_document(editor: *const Editor) {
+  io.println("--- {} lines, {} to undo, {} to redo", #len(editor.lines.items),
+    stack.count(&editor.undo), stack.count(&editor.redo))
+  for line, i in editor.lines.items {
+    io.println("{} | {}", i + 1, line)
+  }
+}
+
+// A new edit: do it, remember it for undo, and forget anything to redo.
+fn perform(editor: *Editor, e: Edit) {
+  apply(&editor.lines, e)
+  stack.push(&editor.undo, e)
+  stack.clear(&editor.redo)
+}
+
+fn step_back(editor: *Editor) {
+  popped := stack.pop(&editor.undo)
+  if !popped.found {
+    io.println("nothing to undo")
+    return
+  }
+  apply(&editor.lines, inverse(popped.value))
+  stack.push(&editor.redo, popped.value)
+}
+
+fn step_forward(editor: *Editor) {
+  popped := stack.pop(&editor.redo)
+  if !popped.found {
+    io.println("nothing to redo")
+    return
+  }
+  apply(&editor.lines, popped.value)
+  stack.push(&editor.undo, popped.value)
+}
+
+// "insert 2 some text" as its parts.
+struct Arguments {
+  line: usize,         // 0 when the command has no line number
+  text: []const u8,
+  valid: bool,
+}
+
+fn arguments(rest: []const u8, wants_line: bool, wants_text: bool) Arguments {
+  result := Arguments{ text: rest, valid: true }
+  if wants_line {
+    space := bytes.find_byte(rest, ' ')
+    number := parse.u64_decimal(rest[..space])
+    if parse.failed(number.failure) || number.value == 0 {
+      return Arguments{}
+    }
+    result.line = #cast(usize, number.value)
+    result.text = ""
+    if space < #len(rest) {
+      result.text = rest[space + 1..]
+    }
+  }
+  if wants_text != (#len(result.text) > 0) {
+    return Arguments{}
+  }
+  return result
+}
+
+fn run(editor: *Editor, line: []const u8) {
+  text := strings.trim(line)
+  space := bytes.find_byte(text, ' ')
+  name := text[..space]
+  rest: []const u8 = ""
+  if space < #len(text) {
+    rest = strings.trim(text[space + 1..])
+  }
+  count := #len(editor.lines.items)
+  case name {
+    "" => {
+      return
+    }
+    "add" => {
+      a := arguments(rest, false, true)
+      if a.valid {
+        perform(editor, Edit.Insert(LineText{ index: count, text: strings.clone(editor.text, a.text) }))
+        return
+      }
+    }
+    "insert" => {
+      a := arguments(rest, true, true)
+      if a.valid && a.line <= count + 1 {
+        perform(editor, Edit.Insert(LineText{ index: a.line - 1, text: strings.clone(editor.text, a.text) }))
+        return
+      }
+    }
+    "delete" => {
+      a := arguments(rest, true, false)
+      if a.valid && a.line <= count {
+        index := a.line - 1
+        perform(editor, Edit.Delete(LineText{ index: index, text: editor.lines.items[index] }))
+        return
+      }
+    }
+    "change" => {
+      a := arguments(rest, true, true)
+      if a.valid && a.line <= count {
+        index := a.line - 1
+        change := LineChange{ index: index, before: editor.lines.items[index], after: strings.clone(editor.text, a.text) }
+        perform(editor, Edit.Change(change))
+        return
+      }
+    }
+    "undo" => {
+      step_back(editor)
+      return
+    }
+    "redo" => {
+      step_forward(editor)
+      return
+    }
+    "print" => {
+      print_document(editor)
+      return
+    }
+    _ => {
+      io.println("unknown command: {}", name)
+      return
+    }
+  }
+  io.println("cannot {}", text)
+}
+
+fn main() {
+  arena := mem.arena_alloc(0)
+  defer mem.arena_release(arena)
+  editor := Editor{ text: arena }
+  array.init(&editor.lines, arena)
+  stack.init(&editor.undo, arena)
+  stack.init(&editor.redo, arena)
+
+  input_storage: [4096]u8
+  reader := bufio.reader(io.stdin(), input_storage[..])
+  line: [1024]u8
+  ended := false
+  for !ended {
+    read := bufio.read_line(&reader, line[..])
+    if io.failed(read.failure) || read.status == bufio.ReadStatus.More {
+      io.eprintln("editor: cannot read a line")
+      return
+    }
+    ended = read.status == bufio.ReadStatus.End
+    run(&editor, line[..read.transferred])
+  }
+}
