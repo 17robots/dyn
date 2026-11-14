@@ -11697,19 +11697,21 @@ static int ssa_emit_prepared(BackendContext *ctx, const DynSource *source, const
       ctx->local_scope_begin[i] = ctx->local_scope_end[i] = 0;
       if (!s->scope_low || !s->scope_low[i]) continue;
       /* The scope's code: from its first statement row to the first later
-         row outside it. Debug code keeps statements in source order. */
+         row outside it. Debug code keeps statements in source order; the
+         out-of-line failure paths of checked operations come after the
+         function's other code and stay outside, so sibling scopes, such as
+         an if and its else, never overlap. */
       uint32_t low = s->scope_low[i], high = s->scope_high[i];
-      size_t begin = SIZE_MAX, last = 0, end = ctx->text.n;
+      size_t begin = SIZE_MAX, end = ctx->text.n;
       for (uint32_t r = 0; r < emit.row_count; ++r) {
         uint32_t pos = emit.rows[r].pos;
         if (pos < low || pos > high) continue;
         if (emit.rows[r].pc < begin) begin = emit.rows[r].pc;
-        if (emit.rows[r].pc > last) last = emit.rows[r].pc;
       }
       if (begin == SIZE_MAX) { ctx->local_scope_begin[i] = ctx->local_scope_end[i] = ctx->text.n; continue; }
       for (uint32_t r = 0; r < emit.row_count; ++r) {
         uint32_t pos = emit.rows[r].pos;
-        if (emit.rows[r].pc > last && emit.rows[r].pc < end && (pos < low || pos > high)) end = emit.rows[r].pc;
+        if (emit.rows[r].pc > begin && emit.rows[r].pc < end && (pos < low || pos > high)) end = emit.rows[r].pc;
       }
       ctx->local_scope_begin[i] = begin;
       ctx->local_scope_end[i] = end;

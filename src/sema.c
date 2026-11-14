@@ -29,7 +29,14 @@ typedef struct {
   size_t mem_kind_count;
   /* On a lifetime-check worker: where its vet findings count (SemaLate). */
   unsigned *late_vet;
+  /* Format call arguments evaluated once into unnamed locals, in order, by
+     statements placed just before the statement that makes the call. */
+  struct SemaHoist { DynExprId call, init; uint32_t local, stmt, local_stmt; } *hoists;
+  size_t hoist_count, hoist_capacity;
+  uint32_t defer_depth;
 } Sema;
+#define SEMA_HOIST_PENDING UINT32_MAX
+#define SEMA_HOIST_DROPPED (UINT32_MAX - 1)
 
 /* How errors are being reported in the analysis running on this thread.
    dyn_sema_base resets it, so nothing carries over from an earlier analysis
@@ -1518,7 +1525,8 @@ static DynExprId format_clone(DynAstProgram *a, DynExprId id) {
 }
 static void format_value(DynAstProgram *a, FormatExpansion *x, DynExprId path, DynType type,
                          const DynSource *s, unsigned depth) {
-  DynExprId value = format_clone(a, path);
+  /* A path is cloned for each use; anything else, an enum, is used once. */
+  DynExprId value = format_path(a, path, 0) ? format_clone(a, path) : path;
   if (value == DYN_NO_EXPR) { x->failed = true; return; }
   if (dyn_type_is_struct(type) && depth < 4) {
     const DynAstStruct *st = &a->structs[type - DYN_TYPE_STRUCT_BASE];
@@ -1581,21 +1589,82 @@ static void format_value(DynAstProgram *a, FormatExpansion *x, DynExprId path, D
   format_text(x, "{}", 2);
   format_item(x, value);
 }
-static void expand_format_arguments(DynAstProgram *a, const DynAstFn *callee, DynExprId call,
-                                    DynExprId template, const DynSource *s) {
+/* Whether an argument reads the same however late it is evaluated. */
+static bool format_constant(const DynAstProgram *a, DynExprId id) {
+  if (id == DYN_NO_EXPR) return true;
+  const DynAstExpr *e = &a->expressions[id];
+  switch (e->kind) {
+  case DYN_EXPR_INT: case DYN_EXPR_FLOAT: case DYN_EXPR_BOOL: case DYN_EXPR_CHAR:
+  case DYN_EXPR_STRING: case DYN_EXPR_NIL: case DYN_EXPR_ENUM: case DYN_EXPR_FUNCTION:
+    return true;
+  case DYN_EXPR_GLOBAL:
+    return e->integer < a->global_count && a->globals[e->integer].is_const;
+  case DYN_EXPR_CONVERT:
+    return format_constant(a, e->left);
+  default:
+    return false;
+  }
+}
+static bool format_expands(const DynAstProgram *a, DynType type) {
+  return dyn_type_is_struct(type) || (dyn_type_is_enum(type) && !a->enums[type - DYN_TYPE_ENUM_BASE].has_payload);
+}
+/* A struct argument that is not a name or field path, such as a call, is
+   read once per field, so the call's arguments are first evaluated, in
+   order, into unnamed locals. The statement that makes the call claims
+   them in sema_stmt; the function's check then places them before it. */
+static bool format_hoist(Sema *sema, DynAstProgram *a, const DynAstFn *callee, DynExprId call,
+                         const DynSource *s, unsigned *errors) {
+  uint32_t item_start = a->expressions[call].item_start;
+  uint32_t first = callee->param_count, count = a->expressions[call].item_count;
+  bool needed = false;
+  for (uint32_t i = first; i < count; ++i) {
+    DynExprId source = a->items[item_start + i].expression;
+    if (source != DYN_NO_EXPR && dyn_type_is_struct(a->expressions[source].type) && !format_path(a, source, 0))
+      needed = true;
+  }
+  if (!needed) return true;
+  /* A worker cannot add statements; the function is checked again serially. */
+  SEMA_SERIAL_ONLY(return false);
+  for (uint32_t i = 0; i < count; ++i) {
+    if (i == first - 1) continue; /* the template */
+    DynExprId source = a->items[item_start + i].expression;
+    if (format_constant(a, source)) continue;
+    DynType type = a->expressions[source].type;
+    if (sema->hoist_count == sema->hoist_capacity) {
+      size_t c = sema->hoist_capacity ? sema->hoist_capacity * 2 : 8;
+      struct SemaHoist *grown = realloc(sema->hoists, c * sizeof(*grown));
+      if (!grown) { error_out_of_memory(a->expressions[call].span, s, errors); return false; }
+      sema->hoists = grown;
+      sema->hoist_capacity = c;
+    }
+    if (!reserve_local(a) || !reserve_expr(a)) { error_out_of_memory(a->expressions[call].span, s, errors); return false; }
+    uint32_t local = (uint32_t)a->local_count;
+    a->locals[a->local_count++] = (DynAstLocal){.type = type, .used = true,
+                                                .depth = sema->block_depth,
+                                                .owner_function = sema->current_function};
+    DynExprId name = (DynExprId)a->expression_count;
+    a->expressions[a->expression_count++] = (DynAstExpr){.kind = DYN_EXPR_NAME, .type = type,
+                                                         .span = a->expressions[source].span,
+                                                         .left = DYN_NO_EXPR, .right = DYN_NO_EXPR,
+                                                         .integer = local};
+    a->items[item_start + i].expression = name;
+    sema->hoists[sema->hoist_count++] = (struct SemaHoist){.call = call, .init = source, .local = local,
+                                                           .stmt = SEMA_HOIST_PENDING, .local_stmt = UINT32_MAX};
+  }
+  return true;
+}
+static void expand_format_arguments(Sema *sema, DynAstProgram *a, const DynAstFn *callee, DynExprId call,
+                                    DynExprId template, const DynSource *s, unsigned *errors) {
   uint32_t item_start = a->expressions[call].item_start;
   uint32_t first = callee->param_count, count = a->expressions[call].item_count;
   bool any = false;
-  /* Pack items hold each typed value; IR lowering boxes them into any. */
+  /* Pack items hold each typed value; IR lowering boxes them into any. An
+     enum is read once, so any expression gives it; a struct needs a path. */
   for (uint32_t i = first; i < count; ++i) {
     DynExprId source = a->items[item_start + i].expression;
-    if (source == DYN_NO_EXPR) continue;
-    DynType type = a->expressions[source].type;
-    if ((dyn_type_is_struct(type) || (dyn_type_is_enum(type) && !a->enums[type - DYN_TYPE_ENUM_BASE].has_payload)) &&
-        format_path(a, source, 0))
-      any = true;
+    if (source != DYN_NO_EXPR && format_expands(a, a->expressions[source].type)) any = true;
   }
-  if (!any) return;
+  if (!any || !format_hoist(sema, a, callee, call, s, errors)) return;
   const DynAstString *original = &a->strings[a->expressions[template].integer];
   FormatExpansion x = {0};
   for (uint32_t i = 0; i < first; ++i) format_item(&x, a->items[item_start + i].expression);
@@ -1606,8 +1675,7 @@ static void expand_format_arguments(DynAstProgram *a, const DynAstFn *callee, Dy
     if (c == '{' && following == '}') {
       DynExprId source = a->items[item_start + next++].expression;
       DynType type = source == DYN_NO_EXPR ? DYN_TYPE_ERROR : a->expressions[source].type;
-      if (source != DYN_NO_EXPR && format_path(a, source, 0) &&
-          (dyn_type_is_struct(type) || (dyn_type_is_enum(type) && !a->enums[type - DYN_TYPE_ENUM_BASE].has_payload)))
+      if (source != DYN_NO_EXPR && format_expands(a, type))
         format_value(a, &x, source, type, s, 0);
       else {
         format_text(&x, "{}", 2);
@@ -1641,7 +1709,7 @@ static void expand_format_arguments(DynAstProgram *a, const DynAstFn *callee, Dy
 /* A function whose last fixed parameter is `template: []const u8` and whose
    pack is `...any` takes a format template: {} inserts the next argument, {{
    and }} write braces. A literal template is checked against the arguments. */
-static void check_format_template(DynAstProgram *a, const DynAstFn *callee, DynExprId call,
+static void check_format_template(Sema *sema, DynAstProgram *a, const DynAstFn *callee, DynExprId call,
                                   const DynSource *s, unsigned *errors) {
   if (!callee->param_count || callee->variadic_type == DYN_TYPE_ERROR) return;
   DynAstSlice *pack = slice_info(a, callee->variadic_type);
@@ -1676,7 +1744,7 @@ static void check_format_template(DynAstProgram *a, const DynAstFn *callee, DynE
                  (unsigned)holes, (unsigned)arguments, arguments == 1 ? "" : "s");
     return;
   }
-  expand_format_arguments(a, callee, call, template, s);
+  expand_format_arguments(sema, a, callee, call, template, s, errors);
 }
 static DynType check_expr(Sema *, DynAstProgram *, DynExprId, const DynSource *,
                           unsigned *, DynType);
@@ -2386,7 +2454,7 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
           }
         }
       if (callee->variadic && !callee->foreign)
-        check_format_template(a, callee, id, s, errors);
+        check_format_template(sema, a, callee, id, s, errors);
       return a->expressions[id].type = return_type;
     }
   }
@@ -3912,8 +3980,108 @@ static bool returns_local_borrow(Sema *sema, DynAstProgram *a, DynExprId id) {
 
 #include "lifetime.h"
 
+static bool sema_stmt_checked(Sema *sema, DynAstProgram *a, DynAstStmt *st,
+                              const DynSource *s, unsigned *errors);
+static DynExprId format_strip(const DynAstProgram *a, DynExprId id) {
+  while (id != DYN_NO_EXPR && a->expressions[id].kind == DYN_EXPR_CONVERT) id = a->expressions[id].left;
+  return id;
+}
+/* A format call whose arguments were hoisted must be the whole statement:
+   an expression statement, a declaration's value, an assignment's value or
+   a return value. Anywhere else, such as a loop condition or after &&,
+   evaluating the arguments first would change what runs. */
 static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
                       const DynSource *s, unsigned *errors) {
+  size_t mark = sema->hoist_count;
+  bool terminated = sema_stmt_checked(sema, a, st, s, errors);
+  for (size_t i = mark; i < sema->hoist_count; ++i) {
+    struct SemaHoist *h = &sema->hoists[i];
+    if (h->stmt != SEMA_HOIST_PENDING) continue;
+    bool whole = format_strip(a, st->expression) == h->call &&
+                 (st->kind == DYN_STMT_EXPR || st->kind == DYN_STMT_LOCAL || st->kind == DYN_STMT_RETURN ||
+                  (st->kind == DYN_STMT_ASSIGN && (st->target == DYN_NO_EXPR || format_path(a, st->target, 0))));
+    if (whole && !sema->defer_depth) {
+      h->stmt = (uint32_t)(st - a->statements);
+      continue;
+    }
+    for (size_t j = i; j < sema->hoist_count; ++j)
+      if (sema->hoists[j].call == h->call) sema->hoists[j].stmt = SEMA_HOIST_DROPPED;
+    error_span(a->expressions[h->call].span, s, errors,
+               "format template: a struct argument that is not a name or field is read once per field; "
+               "make this call its own statement, or bind the value to a name first");
+  }
+  return terminated;
+}
+/* Places each claimed hoist's declaration just before its statement, in
+   every block of the function. */
+/* Serial-only growth for the arrays a worker never adds to. */
+static bool sema_grow_array(void **array, size_t *capacity, size_t need, size_t element) {
+  if (need <= *capacity) return true;
+  size_t n = *capacity ? *capacity * 2 : 32;
+  while (n < need) n *= 2;
+  void *p = realloc(*array, n * element);
+  if (!p) return false;
+  *array = p;
+  *capacity = n;
+  return true;
+}
+static bool hoist_block(Sema *sema, DynAstProgram *a, uint32_t *start, uint32_t *count, unsigned depth) {
+  if (depth > 4096) return false;
+  uint32_t extra = 0;
+  for (uint32_t i = 0; i < *count; ++i) {
+    uint32_t id = a->children[*start + i];
+    if (id >= a->statement_count) continue;
+    DynAstStmt *st = &a->statements[id];
+    if (st->body_count && !hoist_block(sema, a, &a->statements[id].body_start, &a->statements[id].body_count, depth + 1)) return false;
+    st = &a->statements[id];
+    if (st->else_count && !hoist_block(sema, a, &a->statements[id].else_start, &a->statements[id].else_count, depth + 1)) return false;
+    st = &a->statements[id];
+    for (uint32_t j = 0; j < st->case_arm_count; ++j) {
+      DynAstCaseArm *arm = &a->case_arms[a->statements[id].case_arm_start + j];
+      if (arm->body_count && !hoist_block(sema, a, &arm->body_start, &arm->body_count, depth + 1)) return false;
+    }
+    for (size_t h = 0; h < sema->hoist_count; ++h)
+      if (sema->hoists[h].stmt == id) ++extra;
+  }
+  if (!extra) return true;
+  uint32_t fresh = (uint32_t)a->child_count;
+  for (uint32_t i = 0; i < *count; ++i) {
+    uint32_t id = a->children[*start + i];
+    for (size_t h = 0; h < sema->hoist_count; ++h) {
+      if (sema->hoists[h].stmt != id) continue;
+      if (!sema_grow_array((void **)&a->children, &a->child_capacity, a->child_count + 1, sizeof(*a->children))) return false;
+      a->children[a->child_count++] = sema->hoists[h].local_stmt;
+    }
+    if (!sema_grow_array((void **)&a->children, &a->child_capacity, a->child_count + 1, sizeof(*a->children))) return false;
+    a->children[a->child_count++] = id;
+  }
+  *start = fresh;
+  *count += extra;
+  return true;
+}
+static void sema_place_hoists(Sema *sema, DynAstProgram *a, DynAstFn *fn, const DynSource *s, unsigned *errors) {
+  bool any = false;
+  for (size_t h = 0; h < sema->hoist_count; ++h) {
+    struct SemaHoist *x = &sema->hoists[h];
+    if (x->stmt >= SEMA_HOIST_DROPPED) continue;
+    if (!sema_grow_array((void **)&a->statements, &a->statement_capacity, a->statement_count + 1, sizeof(*a->statements))) {
+      error_out_of_memory(fn->name, s, errors);
+      return;
+    }
+    x->local_stmt = (uint32_t)a->statement_count;
+    a->statements[a->statement_count++] = (DynAstStmt){.kind = DYN_STMT_LOCAL, .span = a->expressions[x->init].span,
+                                                       .declared_type = a->locals[x->local].type,
+                                                       .expression = x->init, .target = DYN_NO_EXPR,
+                                                       .local_id = x->local,
+                                                       .loop_depth = a->statements[x->stmt].loop_depth,
+                                                       .target_loop_id = UINT32_MAX};
+    any = true;
+  }
+  if (any && !hoist_block(sema, a, &fn->body_start, &fn->body_count, 0)) error_out_of_memory(fn->name, s, errors);
+  sema->hoist_count = 0;
+}
+static bool sema_stmt_checked(Sema *sema, DynAstProgram *a, DynAstStmt *st,
+                              const DynSource *s, unsigned *errors) {
   if (st->kind == DYN_STMT_INVALID)
     return false;
   if (st->kind == DYN_STMT_DEFER) {
@@ -3921,9 +4089,11 @@ static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
     for (uint32_t i = 0; i < st->body_count; ++i)
       valid = valid_defer_stmt(a, a->children[st->body_start + i], s, errors) &&
               valid;
+    ++sema->defer_depth;
     if (valid)
       (void)sema_block(sema, a, st->body_start, st->body_count, s, errors,
                        true);
+    --sema->defer_depth;
     return false;
   }
   if (st->kind == DYN_STMT_ASSERT) {
@@ -5000,10 +5170,14 @@ static void sema_check_function(Sema *sema, DynAstProgram *a, const DynSource *s
       sema_report.origin = a->instances[outer].call;
       sema_report.has_origin = !span_in_library(s, sema_report.origin);
     }
+    sema->hoist_count = 0;
+    sema->defer_depth = 0;
     bool terminated =
         sema_block(sema, a, fn->body_start, fn->body_count, s, errors, false);
     sema_report.has_origin = false;
     fn = &a->functions[f];
+    if (sema->hoist_count && !sema_work) sema_place_hoists(sema, a, fn, s, errors);
+    sema->hoist_count = 0;
     fn->local_count = (uint32_t)a->local_count - fn->local_start;
     /* A worker leaves lifetimes to the commit, which runs them in order. */
     if (!sema_work && (!late || (!*errors && fn->local_count && !sema_late_add(late, f))))
@@ -5278,5 +5452,6 @@ bool dyn_sema_base(DynAstProgram *a, const DynSource *s, unsigned *errors) {
   free(sema.locals.buckets);
   free(sema.locals.next);
   free(sema.active_loops);
+  free(sema.hoists);
   return ok;
 }

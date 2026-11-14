@@ -26,3 +26,8 @@ fresh 100 0
 run 4 -1
 unit Unit{name: ada, at: Vec2{x: 1.5, y: 2}, op: Sub} at Vec2{x: 1.5, y: 2} op Sub errno 2
 op true true
+spot 0 Vec2{x: 1, y: 0.5} Add 11
+Vec2{x: 12, y: 0.5} made 12
+Pair{a: 3, b: 4} Vec2{x: 13, y: 0.5}
+at Vec2{x: 14, y: 0.5} after 14
+deref Pair{a: 1, b: 2}

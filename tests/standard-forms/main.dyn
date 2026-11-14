@@ -1,6 +1,8 @@
 // for x, i and text cases: the forms added by the 2026-11-13 standardization.
 use "std/enums"
 use "std/io"
+use "std/mem"
+use "std/strings"
 
 struct Pair { a: i32, b: i32 }
 struct Player { health: i32 = 100, armor: i32 }
@@ -46,6 +48,20 @@ fn next(calls: *i32) []const u8 {
   return "edit"
 }
 
+fn spot(calls: *i32) Vec2 {
+  calls.* += 1
+  return Vec2{x: #cast(f32, calls.*), y: 0.5}
+}
+
+fn pick(calls: *i32) Op {
+  calls.* += 10
+  return Op.Add
+}
+
+fn where_now(arena: *mem.Arena, calls: *i32) []u8 {
+  return strings.format(arena, "at {} after {}", spot(calls), calls.*)
+}
+
 fn main() {
   values: [4]i32 = [10, 20, 30, 40]
   for value, i in values { io.println("{} {}", i, value) }
@@ -73,4 +89,15 @@ fn main() {
   // A struct or enum in a literal template prints its contents.
   io.println("unit {} at {} op {} errno {}", unit, unit.at, unit.op, Errno.NoEnt)
   io.println("op {} {}", enums.from_int(Op, 2) == Op.Sub, enums.from_int(Op, 9) == Op.Nop)
+  // Any struct or enum expression prints; each argument is evaluated once, in order.
+  arena := mem.arena_alloc(0)
+  made: i32 = 0
+  io.println("spot {} {} {} {}", made, spot(&made), pick(&made), made)
+  line := strings.format(arena, "{}", spot(&made))
+  io.println("{} made {}", line, made)
+  line = strings.format(arena, "{} {}", pairs[made - 11], spot(&made))
+  io.println("{}", line)
+  io.println("{}", where_now(arena, &made))
+  first := &pairs[0]
+  io.println("deref {}", first.*)
 }
