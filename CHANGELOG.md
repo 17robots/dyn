@@ -12,7 +12,7 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
-## Unreleased
+## 0.1.0-preview.37
 
 - A struct or enum from any expression now prints its contents in a literal
   format template: `io.println("{}", spot())` evaluates `spot()` once, before
