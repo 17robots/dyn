@@ -341,8 +341,11 @@ case kind {
 
 Every `case` is exhaustive or contains `_`; integer interval analysis may prove exhaustive
 coverage. A case on text, a `[]const u8` or `[]u8` subject, takes string literal patterns and
-always needs `_`. It evaluates the subject once and compares its length, then its bytes, against
-each pattern in order; arms take no binding:
+always needs `_`; arms take no binding. It evaluates the subject once and makes no calls. Up to
+four patterns are compared in order, length first, then bytes. With more, it dispatches like an
+integer case: on the length, then on the bytes that tell the remaining patterns apart, and
+compares the rest of the one candidate left, so a lookup costs about the same for 5 arms or 500.
+Patterns never overlap, so the order cannot change which arm runs:
 
 ```dyn
 fn command(word: []const u8) i32 {
@@ -353,7 +356,8 @@ fn command(word: []const u8) i32 {
   }
 }
 ```
- Patterns use literals/constants only. Arm order is irrelevant; duplicates,
+ Integer and enum patterns use literals or constants; text patterns are string literals. Arm
+order is irrelevant; duplicates,
 overlaps, unreachable `_`, and redundant `_` fail. `Variant payload` copies its payload.
 `Variant *payload` aliases payload storage and permits assignment or field mutation; it requires a
 mutable assignable case subject. The alias exists only inside its arm.

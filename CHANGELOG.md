@@ -18,6 +18,16 @@ servers so they pick up the new `dyn`.
   between them, such as a text `case` with 25 or more arms or one long `||`
   over struct fields. The load-reuse table is now sized for every load in the
   function, so its probe always ends. Generated code is otherwise unchanged.
+- A text `case` with more than four patterns dispatches like an integer case:
+  on the length, then on the bytes that tell the patterns apart, and compares
+  the rest of the one candidate left. A lookup no longer grows with the number
+  of arms: 200 keywords run about 9x faster, 40 about 2.4x, 8 about 1.2x.
+  Debug builds of a text case are about 3x smaller: an index the case has
+  already proven in bounds keeps no bounds check. Which arm runs is unchanged.
+- The tree emitter (`DYN_NO_SSA=1`) builds a text case in debug builds; a
+  literal `if true` no longer looks like it can fall off the end of a function.
+- The guide says text patterns are string literals; named constants are for
+  integer and enum patterns.
 
 ## 0.1.0-preview.37
 

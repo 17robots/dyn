@@ -3710,13 +3710,14 @@ static bool sema_case_v2(Sema *sema, DynAstProgram *a, DynAstStmt *st,
        literals; IR lowering turns it into that chain of comparisons. */
     DynType literal = sema_intern_slice(a, DYN_TYPE_U8, true);
     bool wildcard = false, all_terminate = true;
+    uint32_t patterns = 0;
     for (uint32_t i = 0; i < st->case_arm_count; ++i) {
       DynAstCaseArm *arm = &a->case_arms[st->case_arm_start + i];
       if (arm->wildcard) {
         if (wildcard)
           error_span(arm->span, s, errors, "duplicate _ case arm");
         wildcard = true;
-      }
+      } else patterns += arm->pattern_count;
       if (arm->binding.end_byte > arm->binding.start_byte)
         error_span(arm->binding, s, errors, "a text case arm takes no binding; use the subject");
       for (uint32_t j = 0; j < arm->pattern_count; ++j) {
@@ -3761,6 +3762,16 @@ static bool sema_case_v2(Sema *sema, DynAstProgram *a, DynAstStmt *st,
     a->locals[a->local_count++] = (DynAstLocal){.type = subject,
                                                 .depth = sema->block_depth,
                                                 .owner_function = sema->current_function};
+    if (patterns > DYN_TEXT_CASE_CHAIN_PATTERNS) {
+      /* The matching arm's number, which IR lowering dispatches on. */
+      if (!reserve_local(a)) {
+        error_out_of_memory(st->span, s, errors);
+        return false;
+      }
+      a->locals[a->local_count++] = (DynAstLocal){.type = DYN_TYPE_U32,
+                                                  .depth = sema->block_depth,
+                                                  .owner_function = sema->current_function};
+    }
     return all_terminate;
   }
   if (!enum_case && !integer_case) {
