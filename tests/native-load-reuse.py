@@ -3,6 +3,8 @@
 
 A run of stores to disjoint fields of one base supplies later loads of any
 of them; a store through another pointer in between still invalidates them.
+A long text case keeps every arm's loads in one memory state across many
+blocks; the load table must still end its probe instead of spinning.
 """
 import os
 from pathlib import Path
@@ -105,6 +107,25 @@ fn main() {
 }
 '''
 
+# Loads with no write between them share one epoch across blocks. A text case
+# with twenty-five arms, or one || over sixty-six fields, once filled the
+# 64-slot table and hung release builds. The tree emitter (DYN_NO_SSA=1) has
+# no text case, so only SSA builds run these.
+ARMS = 40
+FIELDS = 80
+TEXT_CASE = ('use "std/io"\nfn pick(key: []const u8) u64 {\n  case key {\n' +
+             ''.join(f'    "k{i}" => {{ return {i} }}\n' for i in range(ARMS)) +
+             '    _ => { return 999 }\n  }\n}\n'
+             'struct Wide {\n' + ''.join(f'  f{i}: u64,\n' for i in range(FIELDS)) + '}\n'
+             'fn has(w: *const Wide, k: u64) bool {\n  return ' +
+             ' || '.join(f'w.f{i} == k' for i in range(FIELDS)) + '\n}\n'
+             'fn main() {\n'
+             '  if pick("k37") != 37 || pick("k3") != 3 || pick("k") != 999 { #panic("text case") }\n'
+             '  w := Wide{}\n'
+             '  w.f79 = 5\n'
+             '  if !has(&w, 5) || has(&w, 6) { #panic("wide or") }\n'
+             '  io.println("text case passed")\n}\n')
+
 with tempfile.TemporaryDirectory(prefix='dyn-load-reuse-') as temporary:
     work = Path(temporary)
     source = work/'src'
@@ -134,4 +155,17 @@ with tempfile.TemporaryDirectory(prefix='dyn-load-reuse-') as temporary:
                     body = assembly.split('<pair_run>:\n')[1].split('\n\n')[0]
                     reads = re.findall(r'\b(?:mov\w*|add\w*|imul\w*|lea\w*)\s+[^,\n]*\([^\)\n]*\),%', body)
                     assert not [r for r in reads if not r.startswith('lea')], ('store run was not forwarded', body)
-print('PASS repeated loads: aliasing stores, partial writes, calls, overlap copies, zeroing, loops, branches and disjoint store runs')
+    cases = work/'case'
+    cases.mkdir()
+    (cases/'main.dyn').write_text(TEXT_CASE)
+    for mode, level in (('debug', None), ('release', 2), ('release', 3)):
+        output = work/f'case-{mode}-{level}'
+        command = [DYN, 'build', str(cases), '--'+mode, '--no-cache', '--output', str(output)]
+        if level:
+            command += ['--opt-level', str(level)]
+        built = subprocess.run(command, env=dict(os.environ, DYN_NO_SSA='0'),
+                               capture_output=True, text=True, timeout=90)
+        assert built.returncode == 0, built.stderr
+        ran = subprocess.run([str(output)], capture_output=True, text=True, timeout=30)
+        assert ran.returncode == 0 and ran.stdout == 'text case passed\n', ran
+print('PASS repeated loads: aliasing stores, partial writes, calls, overlap copies, zeroing, loops, branches and disjoint store runs; long text case and wide or')

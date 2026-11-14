@@ -12,6 +12,13 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
+## Unreleased
+
+- Release builds no longer hang on functions with many loads and no write
+  between them, such as a text `case` with 25 or more arms or one long `||`
+  over struct fields. The load-reuse table is now sized for every load in the
+  function, so its probe always ends. Generated code is otherwise unchanged.
+
 ## 0.1.0-preview.37
 
 - A struct or enum from any expression now prints its contents in a literal
