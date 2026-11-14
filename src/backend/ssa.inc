@@ -4530,11 +4530,17 @@ static bool ssa_quiet_since_idom(Ssa *s, uint32_t block, uint32_t *work, uint32_
    A join, such as a loop exit, also reuses the loads of blocks that
    dominate it when no path from its immediate dominator writes memory. */
 static bool ssa_reuse_loads(Ssa *s, const uint32_t *order, uint32_t n) {
-  uint32_t largest = 0, capacity = 64, reused = 0, forwarded = 0;
-  for (uint32_t i = 0; i < n; ++i)
-    if (s->blocks[order[i]].values.count > largest)
-      largest = s->blocks[order[i]].values.count;
-  while (capacity < (uint64_t)largest * 2) {
+  /* One epoch can span many blocks (a reused dominator epoch, or blocks that
+     continue their predecessor), so every load of the function may share the
+     table. Size it by all loads, not the largest block, so it stays at most
+     half full and the probe below always reaches a free slot. */
+  uint32_t loads = 0, capacity = 64, reused = 0, forwarded = 0;
+  for (uint32_t i = 0; i < n; ++i) {
+    SsaBlock *block = &s->blocks[order[i]];
+    for (uint32_t k = 0; k < block->values.count; ++k)
+      loads += s->values[block->values.items[k]].op == SO_LOAD;
+  }
+  while (capacity < (uint64_t)loads * 2) {
     if (capacity > UINT32_MAX / 2) { s->failed = true; return false; }
     capacity *= 2;
   }
