@@ -452,10 +452,14 @@ the count of arguments are errors. A template computed at run time is checked wh
 missing value prints `{?}`, an extra one prints at the end as `{+value}`, and a value with no text
 form prints `{?}`.
 
-With a literal template, a struct or plain enum named by a variable, field path or constant
-prints its contents. The compiler rewrites the call, so nothing is looked up at run time:
-`io.println("{}", unit)` prints `Unit{name: ada, at: Vec2{x: 1.5, y: 2}, op: Sub}`, reading
-each field once. Enums with set tags print the tag. Bind any other expression to a name first.
+With a literal template, a struct or plain enum argument prints its contents. The compiler
+rewrites the call, so nothing is looked up at run time: `io.println("{}", unit)` prints
+`Unit{name: ada, at: Vec2{x: 1.5, y: 2}, op: Sub}`, reading each field once. Enums with set
+tags print the tag. A struct from any other expression, such as `io.println("{}", spot())` or
+`points[i]`, is evaluated once into an unnamed local before the call, with the call's other
+arguments, in order. Such a call must be its own statement: an expression statement, a
+declaration's or assignment's value, or a return value. In a condition, after `&&`, or in a
+`defer`, bind the value to a name first.
 
 ## Builtins
 

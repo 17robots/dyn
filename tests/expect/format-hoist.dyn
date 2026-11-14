@@ -1,0 +1,21 @@
+// A struct argument that is not a name or field is evaluated once, before the
+// call; the call must then be its own statement.
+use "std/io"
+use "std/mem"
+use "std/strings"
+
+struct Vec2 { x: i32, y: i32 }
+
+fn spot() Vec2 {
+  return Vec2{x: 1, y: 2}
+}
+
+fn main() {
+  arena := mem.arena_alloc(0)
+  ready := true
+  if ready && #len(strings.format(arena, "{}", spot())) > 0 { // error: make this call its own statement
+    io.println("ready")
+  }
+  defer io.println("{}", spot()) // error: make this call its own statement
+  io.println("{}", spot())
+}

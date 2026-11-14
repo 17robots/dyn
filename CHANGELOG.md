@@ -12,6 +12,16 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
+## Unreleased
+
+- A struct or enum from any expression now prints its contents in a literal
+  format template: `io.println("{}", spot())` evaluates `spot()` once, before
+  the call, with the call's other arguments, in order. Such a call must be its
+  own statement; inside a condition, after `&&` or in a `defer` it is an error
+  that says to bind the value to a name. Enums print from any expression.
+- Native debug builds keep overflow checks and correct DWARF scopes: sibling
+  `if`/`else` locals no longer both show in `info locals`.
+
 ## 0.1.0-preview.36
 
 Breaking cleanup before the language freeze; see
