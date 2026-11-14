@@ -12,7 +12,7 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
-## Unreleased
+## 0.1.0-preview.38
 
 - Release builds no longer hang on functions with many loads and no write
   between them, such as a text `case` with 25 or more arms or one long `||`
