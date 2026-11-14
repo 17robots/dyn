@@ -708,7 +708,8 @@ static int32_t ssa_address_value(Ssa *s, DynExprId id, unsigned depth) {
       base = ssa_address(s, e->left, depth + 1);
       length = ssa_const(s, ir->arrays[type - DYN_TYPE_ARRAY_BASE].length, SC_INT);
     } else base = ssa_expr(s, e->left, &length, depth + 1);
-    ssa_check(s, index, length, CC_B, GUARD_INDEX);
+    /* A proven index (IR range proofs, text case dispatch) needs no check. */
+    if (!e->boolean) ssa_check(s, index, length, CC_B, GUARD_INDEX);
     return ssa_element(s, base, index, size);
   }
   /* Aggregate rvalues (calls, literals) already evaluate to an address. */

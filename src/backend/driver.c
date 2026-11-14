@@ -1468,7 +1468,8 @@ static bool address_value(BackendContext *ctx, const DynIrProgram *ir, const Dyn
       isa_immediate(ctx, R_D, ir->arrays[type-DYN_TYPE_ARRAY_BASE].length);
     } else if (!expression(ctx, ir,f,e->left,depth+1)) return false;
     isa_pop(ctx, R_C);
-    isa_compare(ctx, R_C, R_D); guard(ctx, f, CC_B, GUARD_INDEX);
+    /* A proven index (IR range proofs, text case dispatch) needs no check. */
+    if (!e->boolean) { isa_compare(ctx, R_C, R_D); guard(ctx, f, CC_B, GUARD_INDEX); }
     isa_scale(ctx, R_C, size); isa_alu(ctx, ALU_ADD, R_A, R_C);
   } else if (ctx->temporary_offsets[id]) return expression(ctx, ir,f,id,depth+1);
   else return false;
@@ -2622,7 +2623,12 @@ static bool block_statements_value(BackendContext *ctx, const DynIrProgram *ir, 
       isa_patch(ctx, otherwise, ctx->text.n);
       if (!block(ctx, ir, f, s->else_start, s->else_count, depth + 1, &else_falls)) return false;
       if (done != SIZE_MAX) isa_patch(ctx, done, ctx->text.n);
-      reachable = reachable && (then_falls || else_falls);
+      /* Debug keeps a literal condition's branch, but its other side still
+         never runs: text case lowering wraps a case that returns in
+         `if true`, which must not look like falling off the end. */
+      const DynIrExpr *test = &ir->expressions[s->expression];
+      if (test->kind == DYN_EXPR_BOOL) reachable = reachable && (test->boolean ? then_falls : else_falls);
+      else reachable = reachable && (then_falls || else_falls);
     } else if (s->kind == DYN_STMT_LOCAL || s->kind == DYN_STMT_ASSIGN) {
       if (s->kind == DYN_STMT_ASSIGN && s->local_id == UINT32_MAX && s->target == DYN_NO_EXPR) {
         if (!expression(ctx, ir, f, s->expression, 0)) return false;

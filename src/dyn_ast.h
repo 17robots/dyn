@@ -301,6 +301,11 @@ typedef struct {
   bool for_index;
   DynSpan index_name;
 } DynAstStmt;
+/* A text case with more string patterns than this dispatches through integer
+   cases on its length and chosen bytes instead of testing each pattern in
+   turn. Sema then gives it a second hidden u32 local, local_id + 1, that holds
+   the matching arm's number. */
+enum { DYN_TEXT_CASE_CHAIN_PATTERNS = 4 };
 typedef struct {
   DynSpan name;
   DynType type;

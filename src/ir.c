@@ -436,32 +436,77 @@ static bool ir_wraps(const DynSource *source, DynSpan span) {
 
 /* A case on text: `case name { "a" => {...} _ => {...} }`. Sema left the
    subject's hidden local in the statement's local_id. Lowering rewrites it in
-   place into `if true { hidden := subject; if len == 1 && hidden[0] == 'a'
-   {...} else {...} }`: a length compare, then one compare per byte. */
-typedef struct { size_t expressions, statements, children; } TextCaseSpace;
+   place into `if true { hidden := subject; ... }`.
+
+   Up to DYN_TEXT_CASE_CHAIN_PATTERNS patterns stay a chain, the smallest code
+   for a few: `if len == 1 && hidden[0] == 'a' {...} else {...}`.
+
+   More dispatch instead, so a lookup costs the same for any number of arms:
+   an integer case on the length, then on the byte that splits the remaining
+   patterns most, until one candidate is left; its other bytes are compared
+   once. An arm with one pattern whose body ends in a jump (return, break,
+   continue, #panic) runs its body right there: control never comes back.
+   Any other arm stores its number in sema's second hidden local, which, and
+   a last integer case on which runs its body, or `_` when nothing matched.
+   Every path still runs exactly one body, as the chain does:
+
+     hidden := subject
+     which: u32 = 0
+     case #len(hidden) { 4 => { case hidden[0] { 'o' => { if ... { return 1 } } ... } } ... }
+     case which { 1 => { "go", "run" } ... _ => { _ } }
+
+   Patterns are distinct, so dispatch order cannot change which arm runs.
+   Every index here is in bounds once the length is known: the chain tests
+   the length first and && short-circuits, and dispatch has switched on it,
+   so the indexes are marked proven and skip their bounds checks. */
+typedef struct { size_t expressions, statements, children, patterns, arms; } TextCaseSpace;
 static bool text_case(const DynAstProgram *a, const DynAstStmt *st) {
   return st->kind == DYN_STMT_CASE && st->local_id != UINT32_MAX && st->local_id < a->local_count;
+}
+static const DynAstString *text_pattern(const DynAstProgram *a, const DynAstPattern *p) {
+  return p->first < a->expression_count && a->expressions[p->first].kind == DYN_EXPR_STRING
+             ? &a->strings[a->expressions[p->first].integer] : NULL;
+}
+static uint32_t text_case_patterns(const DynAstProgram *a, const DynAstStmt *st) {
+  uint32_t patterns = 0;
+  for (uint32_t j = 0; j < st->case_arm_count; ++j) {
+    const DynAstCaseArm *arm = &a->case_arms[st->case_arm_start + j];
+    if (!arm->wildcard) patterns += arm->pattern_count;
+  }
+  return patterns;
 }
 static TextCaseSpace text_case_space(const DynAstProgram *a) {
   TextCaseSpace space = {0};
   for (size_t i = 0; i < a->statement_count; ++i) {
     const DynAstStmt *st = &a->statements[i];
     if (!text_case(a, st)) continue;
-    size_t arms = 0;
-    space.expressions += 2;
+    size_t arms = 0, patterns = 0, bytes = 0;
     for (uint32_t j = 0; j < st->case_arm_count; ++j) {
       const DynAstCaseArm *arm = &a->case_arms[st->case_arm_start + j];
       if (arm->wildcard) continue;
       ++arms;
       for (uint32_t k = 0; k < arm->pattern_count; ++k) {
-        const DynAstPattern *p = &a->patterns[arm->pattern_start + k];
-        size_t length = p->first < a->expression_count && a->expressions[p->first].kind == DYN_EXPR_STRING
-                            ? a->strings[a->expressions[p->first].integer].length : 0;
-        space.expressions += 5 + 6 * length;
+        const DynAstString *text = text_pattern(a, &a->patterns[arm->pattern_start + k]);
+        bytes += text ? text->length : 0;
+        ++patterns;
       }
     }
-    space.statements += 2 + arms;
-    space.children += 2 + arms;
+    if (patterns > DYN_TEXT_CASE_CHAIN_PATTERNS) {
+      /* At most one byte dispatch per pattern, whose arms lead to at most two
+         nodes per pattern; one leaf per pattern; one dispatch on the length
+         and one on the arm number. */
+      size_t bodies = 0;
+      for (uint32_t j = 0; j < st->case_arm_count; ++j) bodies += a->case_arms[st->case_arm_start + j].body_count;
+      space.expressions += 6 * bytes + 5 * patterns + 8;
+      space.statements += 3 * patterns + 8;
+      space.children += 5 * patterns + bodies + 8;
+      space.patterns += 3 * patterns + arms + 2;
+      space.arms += 5 * patterns + arms + 4;
+    } else {
+      space.expressions += 2 + 5 * patterns + 6 * bytes;
+      space.statements += 2 + arms;
+      space.children += 2 + arms;
+    }
   }
   return space;
 }
@@ -477,11 +522,233 @@ static uint32_t text_stmt(DynIrProgram *ir, DynIrStmt st) {
   ir->statements[ir->statement_count++] = st;
   return id;
 }
+static uint32_t text_child(DynIrProgram *ir, uint32_t statement) {
+  uint32_t at = (uint32_t)ir->child_count;
+  ir->children[ir->child_count++] = statement;
+  return at;
+}
 static DynIrStmt text_if(DynExprId condition, DynSpan span) {
   return (DynIrStmt){.kind = DYN_STMT_IF, .expression = condition, .target = DYN_NO_EXPR,
                      .local_id = UINT32_MAX, .target_loop_id = UINT32_MAX, .span = span};
 }
-static void lower_text_cases(const DynAstProgram *a, DynIrProgram *ir) {
+static DynExprId text_int(DynIrProgram *ir, DynType type, uint64_t value, DynSpan span) {
+  return text_expr(ir, (DynIrExpr){.kind = DYN_EXPR_INT, .type = type, .integer = value, .span = span});
+}
+static DynExprId text_name(DynIrProgram *ir, DynType type, uint32_t local, DynSpan span) {
+  return text_expr(ir, (DynIrExpr){.kind = DYN_EXPR_NAME, .type = type, .integer = local, .span = span});
+}
+/* hidden[at]; callers have already tested or dispatched on the length. */
+static DynExprId text_byte(DynIrProgram *ir, DynType subject, uint32_t hidden, size_t at, DynSpan span) {
+  DynExprId name = text_name(ir, subject, hidden, span);
+  DynExprId index = text_int(ir, DYN_TYPE_USIZE, at, span);
+  return text_expr(ir, (DynIrExpr){.kind = DYN_EXPR_INDEX, .type = DYN_TYPE_U8, .left = name, .right = index,
+                                   .boolean = true, .span = span});
+}
+static DynExprId text_and(DynIrProgram *ir, DynExprId left, DynExprId right, DynSpan span) {
+  if (left == DYN_NO_EXPR) return right;
+  return text_expr(ir, (DynIrExpr){.kind = DYN_EXPR_BINARY, .type = DYN_TYPE_BOOL, .op = DYN_OP_LOGICAL_AND, .left = left, .right = right, .span = span});
+}
+static DynExprId text_byte_equal(DynIrProgram *ir, DynType subject, uint32_t hidden, size_t at, uint8_t want, DynSpan span) {
+  DynExprId byte = text_byte(ir, subject, hidden, at, span);
+  DynExprId value = text_int(ir, DYN_TYPE_U8, want, span);
+  return text_expr(ir, (DynIrExpr){.kind = DYN_EXPR_BINARY, .type = DYN_TYPE_BOOL, .op = DYN_OP_EQ, .left = byte, .right = value, .span = span});
+}
+/* An integer case on subject: arm k matches values[k] and runs the children
+   at starts[k], counts[k]; `_` runs the children at rest_start, rest_count. */
+static uint32_t text_dispatch(DynIrProgram *ir, DynExprId subject, DynType type, const uint64_t *values, const uint32_t *starts,
+                              const uint32_t *counts, uint32_t count, uint32_t rest_start, uint32_t rest_count, DynSpan span) {
+  uint32_t first_arm = (uint32_t)ir->case_arm_count;
+  for (uint32_t k = 0; k < count; ++k) {
+    uint32_t pattern = (uint32_t)ir->pattern_count++;
+    ir->patterns[pattern] = (DynIrPattern){.first = values[k], .last = values[k], .type = type};
+    ir->case_arms[ir->case_arm_count++] = (DynIrCaseArm){.pattern_start = pattern, .pattern_count = 1, .body_start = starts[k],
+                                                         .body_count = counts[k], .local_id = UINT32_MAX};
+  }
+  ir->case_arms[ir->case_arm_count++] = (DynIrCaseArm){.pattern_start = (uint32_t)ir->pattern_count, .body_start = rest_start,
+                                                       .body_count = rest_count, .local_id = UINT32_MAX, .wildcard = true};
+  return text_stmt(ir, (DynIrStmt){.kind = DYN_STMT_CASE, .expression = subject, .target = DYN_NO_EXPR, .local_id = UINT32_MAX,
+                                   .target_loop_id = UINT32_MAX, .case_arm_start = first_arm, .case_arm_count = count + 1, .span = span});
+}
+typedef struct {
+  const DynAstString *text;
+  /* The pattern's place in source, for sorting; the arm's number in the
+     final dispatch, from 1, or 0 when its body runs at the leaf. */
+  uint32_t order, arm, body_start, body_count;
+} TextPattern;
+typedef struct {
+  DynIrProgram *ir;
+  DynType subject;
+  uint32_t hidden, which;
+  DynSpan span;
+  bool *fixed; /* Byte positions already dispatched on along this path. */
+} TextTree;
+/* The last candidate: compare the bytes no dispatch has checked and, when
+   they match, run the arm's body or store its number. */
+static uint32_t text_leaf(TextTree *t, const TextPattern *p) {
+  DynIrProgram *ir = t->ir;
+  DynExprId match = DYN_NO_EXPR;
+  for (size_t b = 0; b < p->text->length; ++b)
+    if (!t->fixed[b])
+      match = text_and(ir, match, text_byte_equal(ir, t->subject, t->hidden, b, (uint8_t)p->text->data[b], t->span), t->span);
+  if (match == DYN_NO_EXPR)
+    match = text_expr(ir, (DynIrExpr){.kind = DYN_EXPR_BOOL, .type = DYN_TYPE_BOOL, .boolean = true, .span = t->span});
+  DynIrStmt test = text_if(match, t->span);
+  if (p->arm) {
+    uint32_t store = text_stmt(ir, (DynIrStmt){.kind = DYN_STMT_ASSIGN, .expression = text_int(ir, DYN_TYPE_U32, p->arm, t->span),
+                                               .target = DYN_NO_EXPR, .local_id = t->which, .target_loop_id = UINT32_MAX, .span = t->span});
+    test.body_start = text_child(ir, store);
+    test.body_count = 1;
+  } else {
+    /* The final dispatch never reaches this arm, so its body runs here. */
+    test.body_start = p->body_start;
+    test.body_count = p->body_count;
+  }
+  return text_stmt(ir, test);
+}
+/* Patterns of one length that agree on every fixed byte. Distinct patterns
+   of equal length differ somewhere, so a split always exists. */
+static uint32_t text_node(TextTree *t, TextPattern *p, uint32_t count, size_t length, bool *failed) {
+  if (count == 1) return text_leaf(t, p);
+  size_t best = SIZE_MAX;
+  unsigned best_values = 1;
+  for (size_t at = 0; at < length; ++at) {
+    if (t->fixed[at]) continue;
+    bool seen[256] = {0};
+    unsigned values = 0;
+    for (uint32_t k = 0; k < count; ++k) {
+      uint8_t byte = (uint8_t)p[k].text->data[at];
+      values += !seen[byte];
+      seen[byte] = true;
+    }
+    if (values > best_values) best = at, best_values = values;
+  }
+  if (best == SIZE_MAX) { *failed = true; return 0; }
+  /* Stable insertion sort by the chosen byte keeps output deterministic. */
+  for (uint32_t k = 1; k < count; ++k) {
+    TextPattern moving = p[k];
+    uint32_t j = k;
+    for (; j > 0 && (uint8_t)p[j - 1].text->data[best] > (uint8_t)moving.text->data[best]; --j) p[j] = p[j - 1];
+    p[j] = moving;
+  }
+  uint64_t values[256];
+  uint32_t starts[256], counts[256], groups = 0;
+  t->fixed[best] = true;
+  for (uint32_t k = 0; k < count && !*failed;) {
+    uint32_t end = k + 1;
+    while (end < count && p[end].text->data[best] == p[k].text->data[best]) ++end;
+    uint32_t root = text_node(t, p + k, end - k, length, failed);
+    values[groups] = (uint8_t)p[k].text->data[best];
+    starts[groups] = text_child(t->ir, root);
+    counts[groups++] = 1;
+    k = end;
+  }
+  t->fixed[best] = false;
+  if (*failed) return 0;
+  return text_dispatch(t->ir, text_byte(t->ir, t->subject, t->hidden, best, t->span), DYN_TYPE_U8, values, starts, counts, groups,
+                       (uint32_t)t->ir->child_count, 0, t->span);
+}
+/* Whether a body always leaves through its last statement, so running it at
+   a leaf cannot fall through into the final dispatch. */
+static bool text_body_jumps(const DynIrProgram *ir, uint32_t start, uint32_t count) {
+  if (!count) return false;
+  DynStmtKind last = ir->statements[ir->children[start + count - 1]].kind;
+  return last == DYN_STMT_RETURN || last == DYN_STMT_BREAK || last == DYN_STMT_CONTINUE || last == DYN_STMT_PANIC;
+}
+static int text_pattern_order(const void *left, const void *right) {
+  const TextPattern *a = left, *b = right;
+  if (a->text->length != b->text->length) return a->text->length < b->text->length ? -1 : 1;
+  return a->order < b->order ? -1 : a->order > b->order;
+}
+/* Returns the statement replacing a dispatching text case, or UINT32_MAX. */
+static uint32_t text_case_tree(const DynAstProgram *a, DynIrProgram *ir, const DynIrStmt *original, uint32_t local_id) {
+  DynSpan span = original->span;
+  uint32_t hidden = original->local_id, which = hidden + 1, wildcard = UINT32_MAX, shared = 0, patterns = 0;
+  DynType subject = ir->locals[hidden].type;
+  if (which >= ir->local_count || ir->locals[which].type != DYN_TYPE_U32) return UINT32_MAX;
+  DynIrCaseArm *arms = &ir->case_arms[original->case_arm_start];
+  uint32_t arm_count = original->case_arm_count;
+  for (uint32_t j = 0; j < arm_count; ++j) {
+    if (arms[j].wildcard) wildcard = j;
+    else patterns += arms[j].pattern_count;
+  }
+  TextPattern *list = calloc(patterns ? patterns : 1, sizeof(*list));
+  uint64_t *values = calloc(arm_count + patterns + 1, sizeof(*values));
+  uint32_t *starts = calloc(arm_count + patterns + 1, sizeof(*starts)), *counts = calloc(arm_count + patterns + 1, sizeof(*counts));
+  size_t longest = 0;
+  bool failed = !list || !values || !starts || !counts;
+  uint32_t n = 0;
+  for (uint32_t j = 0; j < arm_count && !failed; ++j) {
+    if (arms[j].wildcard) continue;
+    bool here = arms[j].pattern_count == 1 && text_body_jumps(ir, arms[j].body_start, arms[j].body_count);
+    uint32_t number = here ? 0 : ++shared;
+    for (uint32_t k = 0; k < arms[j].pattern_count; ++k) {
+      const DynAstString *text = text_pattern(a, &a->patterns[arms[j].pattern_start + k]);
+      if (!text) { failed = true; break; }
+      list[n] = (TextPattern){text, n, number, arms[j].body_start, arms[j].body_count};
+      ++n;
+      if (text->length > longest) longest = text->length;
+    }
+  }
+  bool *fixed = failed ? NULL : calloc(longest ? longest : 1, sizeof(bool));
+  if (!fixed) failed = true;
+  uint32_t outer = UINT32_MAX;
+  if (!failed) {
+    qsort(list, n, sizeof(*list), text_pattern_order);
+    TextTree t = {ir, subject, hidden, which, span, fixed};
+    uint32_t groups = 0;
+    for (uint32_t k = 0; k < n && !failed;) {
+      uint32_t end = k + 1;
+      while (end < n && list[end].text->length == list[k].text->length) ++end;
+      uint32_t root = text_node(&t, list + k, end - k, list[k].text->length, &failed);
+      values[groups] = list[k].text->length;
+      starts[groups] = text_child(ir, root);
+      counts[groups++] = 1;
+      k = end;
+    }
+    if (!failed) {
+      DynExprId length = text_expr(ir, (DynIrExpr){.kind = DYN_EXPR_LEN, .type = DYN_TYPE_USIZE, .left = text_name(ir, subject, hidden, span),
+                                                   .right = DYN_NO_EXPR, .span = span});
+      uint32_t by_length = text_dispatch(ir, length, DYN_TYPE_USIZE, values, starts, counts, groups, (uint32_t)ir->child_count, 0, span);
+      DynIrStmt none = {.kind = DYN_STMT_LOCAL, .expression = text_int(ir, DYN_TYPE_U32, 0, span), .target = DYN_NO_EXPR,
+                        .local_id = which, .target_loop_id = UINT32_MAX, .span = span};
+      uint32_t which_local = text_stmt(ir, none);
+      /* Arms that store a number run here; no match leaves which at 0. */
+      uint32_t number = 0;
+      for (uint32_t j = 0; j < arm_count; ++j) {
+        if (arms[j].wildcard || (arms[j].pattern_count == 1 && text_body_jumps(ir, arms[j].body_start, arms[j].body_count))) continue;
+        values[number] = number + 1;
+        starts[number] = arms[j].body_start;
+        counts[number++] = arms[j].body_count;
+      }
+      uint32_t rest_start = wildcard == UINT32_MAX ? (uint32_t)ir->child_count : arms[wildcard].body_start;
+      uint32_t rest_count = wildcard == UINT32_MAX ? 0 : arms[wildcard].body_count;
+      uint32_t run;
+      if (number) run = text_dispatch(ir, text_name(ir, DYN_TYPE_U32, which, span), DYN_TYPE_U32, values, starts, counts, number,
+                                      rest_start, rest_count, span);
+      else {
+        /* Every arm ran at a leaf and left; reaching here means no match. */
+        DynIrStmt rest = text_if(text_expr(ir, (DynIrExpr){.kind = DYN_EXPR_BOOL, .type = DYN_TYPE_BOOL, .boolean = true, .span = span}), span);
+        rest.body_start = rest_start;
+        rest.body_count = rest_count;
+        run = text_stmt(ir, rest);
+      }
+      DynIrStmt block = text_if(text_expr(ir, (DynIrExpr){.kind = DYN_EXPR_BOOL, .type = DYN_TYPE_BOOL, .boolean = true, .span = span}), span);
+      block.body_start = text_child(ir, local_id);
+      (void)text_child(ir, which_local);
+      (void)text_child(ir, by_length);
+      (void)text_child(ir, run);
+      block.body_count = 4;
+      outer = text_stmt(ir, block);
+    }
+  }
+  free(fixed);
+  free(list);
+  free(values);
+  free(starts);
+  free(counts);
+  return failed ? UINT32_MAX : outer;
+}
+static bool lower_text_cases(const DynAstProgram *a, DynIrProgram *ir) {
   size_t statements = a->statement_count;
   for (size_t i = 0; i < statements; ++i) {
     if (!text_case(a, &a->statements[i])) continue;
@@ -489,13 +756,19 @@ static void lower_text_cases(const DynAstProgram *a, DynIrProgram *ir) {
     DynSpan span = original->span;
     uint32_t hidden = original->local_id;
     DynType subject = ir->locals[hidden].type;
+    DynIrStmt local = {.kind = DYN_STMT_LOCAL, .expression = original->expression, .target = DYN_NO_EXPR,
+                       .local_id = hidden, .target_loop_id = UINT32_MAX, .span = span};
+    uint32_t local_id = text_stmt(ir, local);
+    if (text_case_patterns(a, &a->statements[i]) > DYN_TEXT_CASE_CHAIN_PATTERNS) {
+      uint32_t outer = text_case_tree(a, ir, original, local_id);
+      if (outer == UINT32_MAX) return false;
+      ir->statements[i] = ir->statements[outer];
+      continue;
+    }
     DynIrCaseArm *arms = &ir->case_arms[original->case_arm_start];
     uint32_t arm_count = original->case_arm_count, wildcard = UINT32_MAX;
     for (uint32_t j = 0; j < arm_count; ++j)
       if (arms[j].wildcard) wildcard = j;
-    DynIrStmt local = {.kind = DYN_STMT_LOCAL, .expression = original->expression, .target = DYN_NO_EXPR,
-                       .local_id = hidden, .target_loop_id = UINT32_MAX, .span = span};
-    uint32_t local_id = text_stmt(ir, local);
     /* Build the chain from the last arm back: each if's else is the next. */
     uint32_t else_start = wildcard == UINT32_MAX ? 0 : arms[wildcard].body_start;
     uint32_t else_count = wildcard == UINT32_MAX ? 0 : arms[wildcard].body_count;
@@ -505,20 +778,14 @@ static void lower_text_cases(const DynAstProgram *a, DynIrProgram *ir) {
       DynExprId any = DYN_NO_EXPR;
       /* IR arms share the AST's pattern indexes; lowering moved `_` last. */
       for (uint32_t k = 0; k < arms[j].pattern_count; ++k) {
-        const DynAstPattern *p = &a->patterns[arms[j].pattern_start + k];
-        const DynAstString *text = &a->strings[a->expressions[p->first].integer];
-        DynExprId name = text_expr(ir, (DynIrExpr){.kind = DYN_EXPR_NAME, .type = subject, .integer = hidden, .span = span});
-        DynExprId length = text_expr(ir, (DynIrExpr){.kind = DYN_EXPR_LEN, .type = DYN_TYPE_USIZE, .left = name, .right = DYN_NO_EXPR, .span = span});
-        DynExprId count = text_expr(ir, (DynIrExpr){.kind = DYN_EXPR_INT, .type = DYN_TYPE_USIZE, .integer = text->length, .span = span});
+        const DynAstString *text = text_pattern(a, &a->patterns[arms[j].pattern_start + k]);
+        if (!text) return false;
+        DynExprId length = text_expr(ir, (DynIrExpr){.kind = DYN_EXPR_LEN, .type = DYN_TYPE_USIZE, .left = text_name(ir, subject, hidden, span),
+                                                     .right = DYN_NO_EXPR, .span = span});
+        DynExprId count = text_int(ir, DYN_TYPE_USIZE, text->length, span);
         DynExprId match = text_expr(ir, (DynIrExpr){.kind = DYN_EXPR_BINARY, .type = DYN_TYPE_BOOL, .op = DYN_OP_EQ, .left = length, .right = count, .span = span});
-        for (size_t b = 0; b < text->length; ++b) {
-          DynExprId at = text_expr(ir, (DynIrExpr){.kind = DYN_EXPR_NAME, .type = subject, .integer = hidden, .span = span});
-          DynExprId index = text_expr(ir, (DynIrExpr){.kind = DYN_EXPR_INT, .type = DYN_TYPE_USIZE, .integer = b, .span = span});
-          DynExprId byte = text_expr(ir, (DynIrExpr){.kind = DYN_EXPR_INDEX, .type = DYN_TYPE_U8, .left = at, .right = index, .span = span});
-          DynExprId want = text_expr(ir, (DynIrExpr){.kind = DYN_EXPR_INT, .type = DYN_TYPE_U8, .integer = text->data[b], .span = span});
-          DynExprId same = text_expr(ir, (DynIrExpr){.kind = DYN_EXPR_BINARY, .type = DYN_TYPE_BOOL, .op = DYN_OP_EQ, .left = byte, .right = want, .span = span});
-          match = text_expr(ir, (DynIrExpr){.kind = DYN_EXPR_BINARY, .type = DYN_TYPE_BOOL, .op = DYN_OP_LOGICAL_AND, .left = match, .right = same, .span = span});
-        }
+        for (size_t b = 0; b < text->length; ++b)
+          match = text_and(ir, match, text_byte_equal(ir, subject, hidden, b, (uint8_t)text->data[b], span), span);
         any = any == DYN_NO_EXPR ? match
             : text_expr(ir, (DynIrExpr){.kind = DYN_EXPR_BINARY, .type = DYN_TYPE_BOOL, .op = DYN_OP_LOGICAL_OR, .left = any, .right = match, .span = span});
       }
@@ -548,6 +815,7 @@ static void lower_text_cases(const DynAstProgram *a, DynIrProgram *ir) {
     ir->children[ir->child_count++] = chain;
     ir->statements[i] = outer;
   }
+  return true;
 }
 static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgram *ir, bool proofs) {
   memset(ir, 0, sizeof(*ir));
@@ -587,7 +855,7 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
       !allocate((void **)&ir->arrays, ir->array_count, sizeof(*ir->arrays)) || !allocate((void **)&ir->slices, ir->slice_count, sizeof(*ir->slices)) ||
       !allocate((void **)&ir->fn_types, ir->fn_type_count, sizeof(*ir->fn_types)) || !allocate((void **)&ir->fn_type_params, ir->fn_type_param_count, sizeof(*ir->fn_type_params)) ||
       !allocate((void **)&ir->strings, ir->string_count, sizeof(*ir->strings)) || !allocate((void **)&ir->statements, ir->statement_count + text.statements, sizeof(*ir->statements)) ||
-      !allocate((void **)&ir->patterns, ir->pattern_count, sizeof(*ir->patterns)) || !allocate((void **)&ir->case_arms, ir->case_arm_count, sizeof(*ir->case_arms)) ||
+      !allocate((void **)&ir->patterns, ir->pattern_count + text.patterns, sizeof(*ir->patterns)) || !allocate((void **)&ir->case_arms, ir->case_arm_count + text.arms, sizeof(*ir->case_arms)) ||
       !allocate((void **)&ir->children, ir->child_count + text.children, sizeof(*ir->children)) || !allocate((void **)&ir->locals, ir->local_count, sizeof(*ir->locals))) {
     dyn_ir_free(ir);
     return false;
@@ -856,7 +1124,10 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
   for (size_t i = 0; i < ir->global_count; ++i) ir->globals[i].type = lower_type(a, ir->globals[i].type);
   for (size_t i = 0; i < ir->enum_count; ++i) ir->enums[i].tag_type = lower_type(a, ir->enums[i].tag_type);
   if (a->child_count) memcpy(ir->children, a->children, a->child_count * sizeof(*ir->children));
-  if (text.statements) lower_text_cases(a, ir);
+  if (text.statements && !lower_text_cases(a, ir)) {
+    dyn_ir_free(ir);
+    return false;
+  }
   if (proofs) prove_unsigned_ranges(ir, dyn_target_pointer_bytes(dyn_context_target(&source->context)));
   for (size_t i = 0; i < ir->function_count; ++i) {
     if ((size_t)ir->functions[i].body_start + ir->functions[i].body_count > ir->child_count) {
