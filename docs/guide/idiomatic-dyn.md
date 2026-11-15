@@ -32,12 +32,13 @@ boundary, controls integer width, or declares zero-initialized storage.
 ```dyn
 count := 3                 // inferred
 offset: isize = 0         // explicit representation
-buffer: [4096]u8 = []     // fixed stack storage, zero-filled
+buffer: [4096]u8          // fixed stack storage, zero-filled
 ```
 
-A name may be declared again only inside a nested block or loop, as in `if ready { x := parse(x) }`;
-a second declaration in the same block, a loop variable redeclared inside its own loop, and a local
-that hides a global, function or module are errors. Prefer reassigning an existing variable. Use
+Names never shadow: a local cannot reuse the name of anything still in scope, in the same block or
+a nested one, nor the name of a global, function or module. Pick a new name
+(`parsed := parse(text)`) or reassign the existing variable. A name is free again once its block
+or loop ends. Use
 `const` for compile-time constants and `distinct type` for values that must not mix by accident.
 
 ```dyn
@@ -259,7 +260,8 @@ fn describe(state: State) []const u8 {
 ```
 
 Use `for item in values` when copying each element is fine. Use `for *item` when mutating array/slice
-elements in place. Use `for i in 0..count` for index loops instead of a manual counter; use `..=`
+elements in place. Use `for item, i in values` (or `for *item, i`) when the body needs the element
+and its `usize` index. Use `for i in 0..count` for index loops instead of a manual counter; use `..=`
 when the last value is included. Use `for i in #reverse(0..count)` or `for value in
 #reverse(values)` to walk backwards instead of a manual down-counter. Use condition-form `for condition` or bare `for {}` for state
 machines and event loops. Loop and block names are reusable once their scope ends, so consecutive

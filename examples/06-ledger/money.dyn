@@ -1,0 +1,62 @@
+// Money as whole cents. A distinct type has i64's representation but is its
+// own type: a Cents never mixes with a plain i64, or with a count, by
+// accident. Converting either way takes an explicit #cast.
+
+use "std/bytes"
+use "std/fmt"
+use "std/parse"
+
+distinct type Cents = i64
+
+// "12", "12.5", "12.50" or "-3.25" as cents.
+fn parse_cents(text: []const u8) parse.Result(Cents) {
+  negative := #len(text) > 0 && text[0] == '-'
+  digits := text
+  if negative {
+    digits = text[1..]
+  }
+  dot := bytes.find_byte(digits, '.')       // #len(digits) when absent
+  whole := parse.u64_decimal(digits[..dot])
+  if parse.failed(whole.failure) {
+    return parse.Result(Cents){ failure: whole.failure }
+  }
+  fraction: u64 = 0
+  if dot < #len(digits) {
+    decimals := digits[dot + 1..]
+    parsed := parse.u64_decimal(decimals)
+    if parse.failed(parsed.failure) || #len(decimals) > 2 {
+      return parse.Result(Cents){
+        failure: parse.Failure{ kind: parse.Kind.Syntax, offset: dot + 1, message: "an amount has at most two decimals" },
+      }
+    }
+    fraction = parsed.value
+    if #len(decimals) == 1 {
+      fraction *= 10
+    }
+  }
+  // A debug build checks every + and * for overflow; a release build wraps.
+  // An amount this large is bad input, not a reason to crash, so test it.
+  if whole.value > 1000000000000 {
+    return parse.Result(Cents){
+      failure: parse.Failure{ kind: parse.Kind.Overflow, message: "amount too large" },
+    }
+  }
+  cents := #cast(Cents, whole.value * 100 + fraction)
+  if negative {
+    cents = -cents
+  }
+  return parse.Result(Cents){ value: cents }
+}
+
+// 1234 as "12.34", into a sticky fmt.Buffer.
+fn write_cents(buffer: *fmt.Buffer, amount: Cents) {
+  value := #cast(i64, amount)
+  if value < 0 {
+    fmt.write_byte(buffer, '-')
+    value = -value
+  }
+  magnitude := #cast(u64, value)
+  fmt.write_u64(buffer, magnitude / 100)
+  fmt.write_byte(buffer, '.')
+  fmt.write_u64_width(buffer, magnitude % 100, 2, '0')
+}

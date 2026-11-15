@@ -1,0 +1,251 @@
+// Turning a line of text into a tree of Expr nodes.
+//
+//   line    = "let" name "=" sum | sum
+//   sum     = product (("+" | "-") product)*
+//   product = unary (("*" | "/" | "%") unary)*
+//   unary   = "-" unary | power
+//   power   = atom ("^" unary)?
+//   atom    = number | name | name "(" sum ")" | "(" sum ")"
+
+use "std/bytes"
+use "std/mem"
+use "std/parse"
+use "std/strings"
+
+// A tagged enum: each variant may carry one value. The first variant
+// carries nothing, so a zero Token is End.
+enum Token {
+  End,
+  Number: f64,
+  Name: []const u8,
+  Symbol: u8,
+}
+
+struct Lexeme {
+  token: Token,
+  offset: usize,
+}
+
+// Payloads that need several values point at a struct. Nodes live in the
+// arena the parser was given; the tree is dropped by resetting that arena.
+struct Operation {
+  operator: u8,
+  left: *Expr,
+  right: *Expr,
+  offset: usize,
+}
+
+struct FunctionCall {
+  name: []const u8,
+  argument: *Expr,
+  offset: usize,
+}
+
+struct Reference {
+  name: []const u8,
+  offset: usize,
+}
+
+enum Expr {
+  Invalid,
+  Number: f64,
+  Variable: Reference,
+  Negate: *Expr,
+  Binary: Operation,
+  Call: FunctionCall,
+}
+
+// The parser keeps its first failure. After one, every step returns an
+// Invalid node and changes nothing, so the grammar functions read straight
+// through and the caller checks failure once.
+struct Parser {
+  text: []const u8,
+  offset: usize,
+  current: Lexeme,
+  arena: *mem.Arena,
+  failure: parse.Failure,
+}
+
+fn is_name_byte(byte: u8) bool {
+  return strings.ascii_is_alpha(byte) || strings.ascii_is_digit(byte) || byte == '_'
+}
+
+fn fail(p: *Parser, offset: usize, message: []const u8) *Expr {
+  if !parse.failed(p.failure) {
+    p.failure = parse.Failure{ kind: parse.Kind.Syntax, offset: offset, message: message }
+  }
+  return node(p, Expr.Invalid)
+}
+
+fn node(p: *Parser, value: Expr) *Expr {
+  result := mem.push(Expr, p.arena)
+  result.* = value
+  return result
+}
+
+// Reads the next token into p.current.
+fn advance(p: *Parser) {
+  for p.offset < #len(p.text) && strings.ascii_is_whitespace(p.text[p.offset]) {
+    p.offset += 1
+  }
+  start := p.offset
+  if start == #len(p.text) {
+    p.current = Lexeme{ offset: start }
+    return
+  }
+  first := p.text[start]
+  if strings.ascii_is_digit(first) || first == '.' {
+    for p.offset < #len(p.text) && (strings.ascii_is_digit(p.text[p.offset]) || p.text[p.offset] == '.') {
+      p.offset += 1
+    }
+    digits := p.text[start..p.offset]
+    if !strings.valid(f64, digits) {
+      _ = fail(p, start, "not a number")
+    }
+    p.current = Lexeme{ token: Token.Number(strings.parse(f64, digits)), offset: start }
+    return
+  }
+  if is_name_byte(first) {
+    for p.offset < #len(p.text) && is_name_byte(p.text[p.offset]) {
+      p.offset += 1
+    }
+    p.current = Lexeme{ token: Token.Name(p.text[start..p.offset]), offset: start }
+    return
+  }
+  p.offset += 1
+  p.current = Lexeme{ token: Token.Symbol(first), offset: start }
+}
+
+// Whether the current token is the symbol wanted.
+fn at_symbol(p: *const Parser, wanted: u8) bool {
+  case p.current.token {
+    Token.Symbol symbol => { return symbol == wanted }
+    _ => { return false }
+  }
+}
+
+fn expect_symbol(p: *Parser, wanted: u8, message: []const u8) {
+  if at_symbol(p, wanted) {
+    advance(p)
+    return
+  }
+  _ = fail(p, p.current.offset, message)
+}
+
+fn atom(p: *Parser) *Expr {
+  if parse.failed(p.failure) {
+    return node(p, Expr.Invalid)
+  }
+  at := p.current
+  case at.token {
+    Token.End => {
+      return fail(p, at.offset, "expected a value")
+    }
+    Token.Number value => {
+      advance(p)
+      return node(p, Expr.Number(value))
+    }
+    Token.Name name => {
+      advance(p)
+      if !at_symbol(p, '(') {
+        return node(p, Expr.Variable(Reference{ name: name, offset: at.offset }))
+      }
+      advance(p)
+      argument := sum(p)
+      expect_symbol(p, ')', "expected )")
+      return node(p, Expr.Call(FunctionCall{ name: name, argument: argument, offset: at.offset }))
+    }
+    Token.Symbol symbol => {
+      if symbol != '(' {
+        return fail(p, at.offset, "expected a value")
+      }
+      advance(p)
+      inside := sum(p)
+      expect_symbol(p, ')', "expected )")
+      return inside
+    }
+  }
+}
+
+fn binary(p: *Parser, operator: u8, left: *Expr, right: *Expr, offset: usize) *Expr {
+  return node(p, Expr.Binary(Operation{ operator: operator, left: left, right: right, offset: offset }))
+}
+
+// Exponents group to the right: 2^3^2 is 2^(3^2).
+fn power(p: *Parser) *Expr {
+  base := atom(p)
+  if !at_symbol(p, '^') {
+    return base
+  }
+  offset := p.current.offset
+  advance(p)
+  return binary(p, '^', base, unary(p), offset)
+}
+
+fn unary(p: *Parser) *Expr {
+  if at_symbol(p, '-') {
+    advance(p)
+    return node(p, Expr.Negate(unary(p)))
+  }
+  return power(p)
+}
+
+fn product(p: *Parser) *Expr {
+  left := unary(p)
+  for at_symbol(p, '*') || at_symbol(p, '/') || at_symbol(p, '%') {
+    operator := p.text[p.current.offset]
+    offset := p.current.offset
+    advance(p)
+    left = binary(p, operator, left, unary(p), offset)
+  }
+  return left
+}
+
+fn sum(p: *Parser) *Expr {
+  left := product(p)
+  for at_symbol(p, '+') || at_symbol(p, '-') {
+    operator := p.text[p.current.offset]
+    offset := p.current.offset
+    advance(p)
+    left = binary(p, operator, left, product(p), offset)
+  }
+  return left
+}
+
+// One parsed line: an expression, maybe assigned to a name.
+struct Statement {
+  name: []const u8,     // empty when the line is a bare expression
+  value: *Expr,
+}
+
+fn parse_line(arena: *mem.Arena, text: []const u8) parse.Result(Statement) {
+  p := Parser{ text: text, arena: arena }
+  advance(&p)
+  statement: Statement
+  case p.current.token {
+    Token.Name name => {
+      if bytes.equal(name, "let") {
+        advance(&p)
+        case p.current.token {
+          Token.Name target => {
+            statement.name = target
+            advance(&p)
+          }
+          _ => {
+            _ = fail(&p, p.current.offset, "expected a name after let")
+          }
+        }
+        expect_symbol(&p, '=', "expected =")
+      }
+    }
+    _ => {}
+  }
+  statement.value = sum(&p)
+  case p.current.token {
+    Token.End => {}
+    _ => {
+      _ = fail(&p, p.current.offset, "unexpected text")
+    }
+  }
+  return parse.Result(Statement){ value: statement, failure: p.failure }
+}

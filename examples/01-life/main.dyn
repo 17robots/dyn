@@ -1,0 +1,124 @@
+// Conway's Game of Life on a small board whose edges wrap around.
+//
+// Every generation, a live cell with two or three live neighbours survives,
+// a dead cell with exactly three comes alive, and every other cell is dead.
+//
+// Run: dyn run examples/01-life
+
+use "std/io"
+
+// Constants built from literals adapt to the type each use needs.
+const Width := 12
+const Height := 8
+const Generations := 4
+
+// The starting pattern, one string per row: '#' is alive, '.' is dead.
+// A glider in the top left and a blinker on the right. This is a global: it
+// lives for the whole program and its initializer runs before main.
+pattern: [Height][]const u8 = [
+  ".#..........",
+  "..#.........",
+  "###......#..",
+  ".........#..",
+  ".........#..",
+  "............",
+  "............",
+  "............",
+]
+
+// A struct groups related values. The board is a fixed array of rows, and a
+// fixed array is a value: assigning a Board copies every cell.
+struct Board {
+  cells: [Height][Width]bool,
+  generation: u32,
+}
+
+// A *Board parameter lets the function change the caller's board.
+fn load(board: *Board, rows: []const []const u8) {
+  for text, y in rows {
+    // A broken invariant is a bug, not an error to recover from: panic.
+    if #len(text) != Width {
+      #panic("every pattern row must be Width bytes")
+    }
+    // for value, index: the index is always a usize.
+    for byte, x in text {
+      case byte {
+        '#' => {
+          board.cells[y][x] = true
+        }
+        _ => {}
+      }
+    }
+  }
+}
+
+// Board by value: the function reads its own copy.
+fn neighbours(board: Board, x: usize, y: usize) u32 {
+  count: u32 = 0
+  for dy in 0..3 {
+    for dx in 0..3 {
+      if dx == 1 && dy == 1 {
+        continue
+      }
+      // Add the size before subtracting one, so the index never goes below
+      // zero. A debug build stops with overflow.ok if arithmetic overflows.
+      nx := (x + Width + dx - 1) % Width
+      ny := (y + Height + dy - 1) % Height
+      if board.cells[ny][nx] {
+        count += 1
+      }
+    }
+  }
+  return count
+}
+
+// Returns the next generation as a new Board value.
+fn step(board: Board) Board {
+  next: Board            // a declaration without a value starts at zero
+  next.generation = board.generation + 1
+  for row, y in board.cells {
+    for alive, x in row {
+      n := neighbours(board, x, y)
+      next.cells[y][x] = n == 3 || (alive && n == 2)
+    }
+  }
+  return next
+}
+
+fn population(board: Board) u32 {
+  total: u32 = 0
+  for row in board.cells {
+    for alive in row {
+      if alive {
+        total += 1
+      }
+    }
+  }
+  return total
+}
+
+fn show(board: Board) {
+  io.println("generation {}, {} alive", board.generation, population(board))
+  // Build each row in a fixed buffer on the stack, then print it as a slice.
+  line: [Width]u8
+  for row in board.cells {
+    for alive, x in row {
+      if alive {
+        line[x] = '#'
+      } else {
+        line[x] = '.'
+      }
+    }
+    io.println("  {}", line[..])
+  }
+}
+
+fn main() {
+  board: Board
+  load(&board, pattern[..])
+  show(board)
+  for _ in 0..Generations {
+    board = step(board)
+    show(board)
+  }
+}

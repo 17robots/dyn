@@ -1,0 +1,153 @@
+// wordcount: count lines, words, characters and bytes, like wc.
+//
+//   wordcount [FILE...]
+//
+// With no files it reads standard input. Each input streams through one
+// fixed buffer on the stack, so a file of any size uses the same memory.
+//
+// Run: dyn run examples/02-wordcount -- examples/02-wordcount/poem.txt
+
+use "std/fmt"
+use "std/fs"
+use "std/io"
+use "std/process"
+
+// Counts for one input. Every field starts at zero.
+struct Counts {
+  lines: u64,
+  words: u64,
+  characters: u64,
+  bytes: u64,
+  in_word: bool,   // carries a word across the end of one chunk
+}
+
+fn is_space(byte: u8) bool {
+  case byte {
+    ' ', '\t', '\n', '\r' => { return true }
+    _ => { return false }
+  }
+}
+
+// Counting happens chunk by chunk, so the state lives in Counts, not in a
+// local of this function.
+fn count_chunk(counts: *Counts, chunk: []const u8) {
+  counts.bytes += #len(chunk)
+  for byte in chunk {
+    if byte == '\n' {
+      counts.lines += 1
+    }
+    // UTF-8 continuation bytes look like 10xxxxxx. Every other byte starts
+    // a character. Mixing & with == needs parentheses.
+    if (byte & 0xC0) != 0x80 {
+      counts.characters += 1
+    }
+    if is_space(byte) {
+      counts.in_word = false
+    } else if !counts.in_word {
+      counts.in_word = true
+      counts.words += 1
+    }
+  }
+}
+
+// io.Reader is the seam every input shares: a file, standard input, a
+// socket or bytes in memory. The function does not care which.
+fn count_reader(reader: io.Reader, counts: *Counts) io.Failure {
+  chunk: [64 * 1024]u8
+  failure: io.Failure    // zero: no failure yet
+  ended := false
+  for !ended && !io.failed(failure) {
+    t := io.read(reader, chunk[..])
+    // Bytes may arrive together with a failure or the end, so count first.
+    count_chunk(counts, chunk[..t.transferred])
+    failure = t.failure
+    ended = t.status == io.Status.End
+  }
+  return failure
+}
+
+fn add(total: *Counts, part: Counts) {
+  total.lines += part.lines
+  total.words += part.words
+  total.characters += part.characters
+  total.bytes += part.bytes
+}
+
+// One right-aligned row. A fmt.Buffer writes into storage you give it.
+// Writes are sticky: after one does not fit, the rest do nothing, and the
+// buffer's failed field says so once at the end.
+fn show(counts: Counts, name: []const u8) {
+  storage: [256]u8
+  row := fmt.buffer(storage[..])
+  fmt.write_u64_width(&row, counts.lines, 8, ' ')
+  fmt.write_u64_width(&row, counts.words, 8, ' ')
+  fmt.write_u64_width(&row, counts.characters, 8, ' ')
+  fmt.write_u64_width(&row, counts.bytes, 8, ' ')
+  if #len(name) > 0 {
+    fmt.write(&row, " ")
+    fmt.write(&row, name)
+  }
+  if row.failed {
+    #panic("a row is longer than its buffer")
+  }
+  io.println("{}", fmt.bytes(&row))
+}
+
+fn describe(kind: io.Kind) []const u8 {
+  case kind {
+    io.Kind.NotFound => { return "no such file" }
+    io.Kind.PermissionDenied => { return "permission denied" }
+    _ => { return "cannot read" }
+  }
+}
+
+// main may return an i32: the process exit code.
+fn main() i32 {
+  // process.start gives the arguments, argv[0] first, and an arena that
+  // lives for the whole program. Call it on main's first line.
+  program := process.start()
+  files := program.args[1..]
+
+  if #len(files) == 0 {
+    counts: Counts
+    failure := count_reader(io.stdin(), &counts)
+    if io.failed(failure) {
+      io.eprintln("wordcount: standard input: {}", describe(failure.kind))
+      return 1
+    }
+    show(counts, "")
+    return 0
+  }
+
+  total: Counts
+  status: i32 = 0
+  for name in files {
+    // A fallible call returns {value, failure}. The value is always safe
+    // to read; on failure it is a closed File.
+    opened := fs.open(name)
+    if io.failed(opened.failure) {
+      io.eprintln("wordcount: {}: {}", name, describe(opened.failure.kind))
+      status = 1
+      continue
+    }
+    // A File is an OS handle, so it must have exactly one owner. take moves
+    // it out of the result instead of copying it; dyn vet flags a copy.
+    file := fs.take(&opened.value)
+    // defer runs when this loop iteration's block ends, however it ends.
+    defer fs.close(&file)
+
+    counts: Counts
+    failure := count_reader(fs.reader(&file), &counts)
+    if io.failed(failure) {
+      io.eprintln("wordcount: {}: {}", name, describe(failure.kind))
+      status = 1
+      continue
+    }
+    show(counts, name)
+    add(&total, counts)
+  }
+  if #len(files) > 1 {
+    show(total, "total")
+  }
+  return status
+}

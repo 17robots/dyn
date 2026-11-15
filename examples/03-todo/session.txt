@@ -1,0 +1,29 @@
+$ todo list
+nothing to do
+$ todo add buy oat milk
+added 1. buy oat milk
+$ todo add write the docs
+added 2. write the docs
+$ todo add call the plumber
+added 3. call the plumber
+$ todo done 2
+done 2. write the docs
+$ todo list
+1. [ ] buy oat milk
+2. [x] write the docs
+3. [ ] call the plumber
+$ todo remove 1
+removed 1. buy oat milk
+$ todo done 7
+todo: no task 7
+[exit 1]
+$ todo done two
+todo: no task two
+[exit 1]
+$ todo clear
+cleared 1 done
+$ todo list
+1. [ ] call the plumber
+$ todo rename 1
+usage: todo list | add TEXT... | done N | remove N | clear
+[exit 2]

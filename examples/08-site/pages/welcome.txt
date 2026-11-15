@@ -1,0 +1,8 @@
+Welcome to <Dyn>
+
+This site was made by a Dyn program. Text such as <b>, & and "quotes"
+is escaped, so a page can never add markup by accident.
+
+# What is here
+- a page about arenas
+- a page about errors

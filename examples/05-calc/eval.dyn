@@ -1,0 +1,106 @@
+// Computing the value of an Expr tree.
+
+use "std/bytes"
+use "std/container/map"
+use "std/math"
+
+// Evaluation fails in its own ways, so it has its own result: a value and a
+// problem, where the zero Problem means it worked. The value is 0 on failure.
+enum Problem {
+  None,
+  UnknownName,
+  UnknownFunction,
+  DivideByZero,
+}
+
+struct Value {
+  number: f64,
+  problem: Problem,
+  offset: usize,      // where in the line the problem is
+}
+
+fn problem_text(problem: Problem) []const u8 {
+  case problem {
+    Problem.None => { return "" }
+    Problem.UnknownName => { return "unknown name" }
+    Problem.UnknownFunction => { return "unknown function" }
+    Problem.DivideByZero => { return "division by zero" }
+  }
+}
+
+fn failure(problem: Problem, offset: usize) Value {
+  return Value{ problem: problem, offset: offset }
+}
+
+fn call(function: FunctionCall, argument: f64) Value {
+  case function.name {
+    "sqrt" => { return Value{ number: math.sqrt(argument) } }
+    "abs" => { return Value{ number: math.abs(argument) } }
+    "floor" => { return Value{ number: math.floor(argument) } }
+    _ => { return failure(Problem.UnknownFunction, function.offset) }
+  }
+}
+
+fn apply(operator: Operation, left: f64, right: f64) Value {
+  case operator.operator {
+    '+' => { return Value{ number: left + right } }
+    '-' => { return Value{ number: left - right } }
+    '*' => { return Value{ number: left * right } }
+    '^' => { return Value{ number: math.pow(left, right) } }
+    '/', '%' => {
+      if right == 0.0 {
+        return failure(Problem.DivideByZero, operator.offset)
+      }
+      if operator.operator == '/' {
+        return Value{ number: left / right }
+      }
+      return Value{ number: left % right }
+    }
+    _ => {
+      #panic("the parser only makes known operators")
+    }
+  }
+}
+
+// A recursive walk. case is exhaustive: add a variant to Expr and every
+// case that does not handle it stops compiling.
+fn evaluate(e: *const Expr, names: *const map.Map([]const u8, f64)) Value {
+  case e.* {
+    Expr.Invalid => {
+      #panic("a tree with a parse failure is never evaluated")
+    }
+    Expr.Number n => {
+      return Value{ number: n }
+    }
+    Expr.Variable v => {
+      found := map.get(names, v.name)     // nil when absent
+      if found == nil {
+        return failure(Problem.UnknownName, v.offset)
+      }
+      return Value{ number: found.* }
+    }
+    Expr.Negate inner => {
+      value := evaluate(inner, names)
+      value.number = -value.number
+      return value
+    }
+    Expr.Binary b => {
+      left := evaluate(b.left, names)
+      if left.problem != Problem.None {
+        return left
+      }
+      right := evaluate(b.right, names)
+      if right.problem != Problem.None {
+        return right
+      }
+      return apply(b, left.number, right.number)
+    }
+    Expr.Call c => {
+      argument := evaluate(c.argument, names)
+      if argument.problem != Problem.None {
+        return argument
+      }
+      return call(c, argument.number)
+    }
+  }
+}

@@ -1,0 +1,108 @@
+// Totals by a key, sorted, as a text table.
+
+use "std/bytes"
+use "std/container/array"
+use "std/container/map"
+use "std/fmt"
+use "std/io"
+use "std/mem"
+use "std/sort"
+use "std/strings"
+
+struct Total {
+  amount: Cents,
+  count: u32,
+}
+
+struct Row {
+  name: []const u8,
+  total: Total,
+}
+
+// Adds amount under key. A map stores the key slice, not its bytes, and key
+// points into a buffer the next CSV field overwrites, so a new key is copied
+// into the arena first.
+fn add_to(totals: *map.Map([]const u8, Total), arena: *mem.Arena, key: []const u8, amount: Cents) {
+  found := map.get(totals, key)
+  if found == nil {
+    kept: []const u8 = strings.clone(arena, key)
+    map.insert(totals, kept, Total{ amount: amount, count: 1 })
+    return
+  }
+  found.amount += amount
+  found.count += 1
+}
+
+// A map has no order. Copy its entries into an array to sort them.
+fn rows(totals: *const map.Map([]const u8, Total), arena: *mem.Arena) []Row {
+  result: array.Array(Row)
+  array.init(&result, arena)
+  walk := map.walk(totals)
+  for map.next(&walk) {
+    array.push(&result, Row{ name: walk.entry.key, total: walk.entry.value })
+  }
+  return result.items
+}
+
+// Functions are values: sort.sort_by takes the comparison as an argument.
+fn larger_amount(a: Row, b: Row) bool {
+  if a.total.amount != b.total.amount {
+    return a.total.amount > b.total.amount
+  }
+  return bytes.compare(a.name, b.name) < 0     // ties in name order
+}
+
+fn earlier_name(a: Row, b: Row) bool {
+  return bytes.compare(a.name, b.name) < 0
+}
+
+fn pad_right(line: *fmt.Buffer, text: []const u8, width: usize) {
+  fmt.write(line, text)
+  if #len(text) < width {
+    fmt.write_padding(line, ' ', width - #len(text))
+  }
+}
+
+fn pad_left_cents(line: *fmt.Buffer, amount: Cents, width: usize) {
+  storage: [32]u8
+  cell := fmt.buffer(storage[..])
+  write_cents(&cell, amount)
+  text := fmt.bytes(&cell)
+  if #len(text) < width {
+    fmt.write_padding(line, ' ', width - #len(text))
+  }
+  fmt.write(line, text)
+}
+
+fn print_table(title: []const u8, table: []const Row) {
+  storage: [256]u8
+  line := fmt.buffer(storage[..])
+  pad_right(&line, title, 16)
+  fmt.write(&line, "  count      amount")
+  io.println("{}", fmt.bytes(&line))
+  everything: Total
+  for row in table {
+    fmt.clear(&line)
+    pad_right(&line, row.name, 16)
+    fmt.write_u64_width(&line, row.total.count, 7, ' ')
+    pad_left_cents(&line, row.total.amount, 12)
+    io.println("{}", fmt.bytes(&line))
+    everything.amount += row.total.amount
+    everything.count += row.total.count
+  }
+  fmt.clear(&line)
+  pad_right(&line, "total", 16)
+  fmt.write_u64_width(&line, everything.count, 7, ' ')
+  pad_left_cents(&line, everything.amount, 12)
+  // One check for every write above.
+  if line.failed {
+    #panic("a table line is longer than its buffer")
+  }
+  io.println("{}", fmt.bytes(&line))
+}
+
+fn print_sorted(title: []const u8, totals: *const map.Map([]const u8, Total), arena: *mem.Arena, less: fn(Row, Row) bool) {
+  table := rows(totals, arena)
+  sort.sort_by(table, less)
+  print_table(title, table)
+}

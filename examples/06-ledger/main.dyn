@@ -1,0 +1,123 @@
+// ledger: totals by category and by month from a CSV file of expenses.
+//
+//   ledger FILE.csv
+//
+// The first row names the columns: date,category,description,amount
+//
+// Run: dyn run examples/06-ledger -- examples/06-ledger/expenses.csv
+
+use "std/container/map"
+use "std/encoding/csv"
+use "std/fmt"
+use "std/fs"
+use "std/io"
+use "std/math"
+use "std/mem"
+use "std/parse"
+use "std/process"
+
+const Columns := 4
+
+struct Largest {
+  amount: Cents,
+  storage: [128]u8,     // its own copy of the description
+  description: []const u8,
+  line: u32,
+}
+
+fn main() i32 {
+  program := process.start()
+  arena := program.arena
+  if #len(program.args) != 2 {
+    io.eprintln("usage: ledger FILE.csv")
+    return 2
+  }
+  path := program.args[1]
+  file := fs.read_all(arena, path, 16 << 20)
+  if io.failed(file.failure) {
+    io.eprintln("ledger: cannot read {}", path)
+    return 1
+  }
+
+  categories: map.Map([]const u8, Total)
+  map.init(&categories, arena)
+  months: map.Map([]const u8, Total)
+  map.init(&months, arena)
+  largest: Largest
+  skipped: u32 = 0
+
+  // One buffer per column: csv.next copies each field, unquoted, into the
+  // buffer it is given, and a record's fields must all stay readable.
+  storage: [Columns][128]u8
+  fields: [Columns][]const u8
+  scan := csv.scanner(file.value)
+  line: u32 = 0
+  ended := false
+  for !ended {
+    line += 1
+    count: usize = 0
+    record_ended := false
+    for !record_ended {
+      column := count
+      if column >= Columns {
+        column = Columns - 1      // extra fields are read and counted, not kept
+      }
+      field := csv.next(&scan, storage[column][..])
+      if !field.found {
+        ended = true
+        break
+      }
+      fields[column] = field.text
+      count += 1
+      record_ended = field.end_record
+      ended = field.end_input
+    }
+    if scan.failure.kind != parse.StreamKind.Ok {
+      io.eprintln("ledger: {}:{}: not valid CSV", path, line)
+      return 1
+    }
+    if line == 1 || count == 0 || (count == 1 && #len(fields[0]) == 0) {
+      continue                    // the header, or a blank line
+    }
+    if count != Columns {
+      io.eprintln("ledger: {}:{}: expected {} fields, found {}", path, line, Columns, count)
+      skipped += 1
+      continue
+    }
+    amount := parse_cents(fields[3])
+    if parse.failed(amount.failure) {
+      io.eprintln("ledger: {}:{}: bad amount {}", path, line, fields[3])
+      skipped += 1
+      continue
+    }
+    date := fields[0]
+    if #len(date) < 7 {
+      io.eprintln("ledger: {}:{}: bad date {}", path, line, date)
+      skipped += 1
+      continue
+    }
+    add_to(&categories, arena, fields[1], amount.value)
+    add_to(&months, arena, date[..7], amount.value)
+    if amount.value > largest.amount {
+      largest.amount = amount.value
+      // fields[2] is overwritten by the next row, so keep a copy, cut to fit.
+      length := math.min(#len(fields[2]), #len(largest.storage))
+      kept := mem.copy(largest.storage[..], fields[2][..length])
+      largest.description = largest.storage[..kept]
+      largest.line = line
+    }
+  }
+
+  print_sorted("category", &categories, arena, larger_amount)
+  io.println("")
+  print_sorted("month", &months, arena, earlier_name)
+  io.println("")
+  storage_line: [64]u8
+  money := fmt.buffer(storage_line[..])
+  write_cents(&money, largest.amount)
+  io.println("largest: {} ({}, line {})", largest.description, fmt.bytes(&money), largest.line)
+  if skipped > 0 {
+    io.println("skipped {} bad rows", skipped)
+  }
+  return 0
+}

@@ -1,0 +1,11 @@
+Arenas
+
+An arena hands out memory by moving one offset forward.
+Freeing is just as cheap: move the offset back.
+
+# Three lifetimes
+- the whole program
+- one request or frame
+- one function call
+
+Pick the arena by how long the data lives, not by its type.

@@ -1,0 +1,163 @@
+// site: build a small static website from a directory of text pages.
+//
+//   site SOURCE OUTPUT
+//
+// Every SOURCE/NAME.txt becomes OUTPUT/NAME.html, and OUTPUT/index.html
+// links to every page, sorted by title.
+//
+// Run: dyn run examples/08-site -- examples/08-site/pages build/site
+
+use "std/bytes"
+use "std/container/array"
+use "std/fs"
+use "std/html"
+use "std/io"
+use "std/mem"
+use "std/path"
+use "std/process"
+use "std/sort"
+use "std/strings"
+
+const MaxPageBytes: usize = 1 << 20
+
+struct Page {
+  name: []const u8,    // "intro" for intro.txt
+  title: []const u8,
+}
+
+// Lists SOURCE/*.txt. The names a directory gives back borrow its buffer,
+// which the next refill overwrites, so each kept name is copied.
+fn list_pages(arena: *mem.Arena, source: []const u8) io.Result([][]const u8) {
+  names: array.Array([]const u8)
+  array.init(&names, arena)
+  storage: [4096]u8
+  opened := fs.open_directory(source, storage[..])
+  if io.failed(opened.failure) {
+    return io.Result([][]const u8){ failure: opened.failure }
+  }
+  directory := opened.value
+  defer fs.close_directory(&directory)
+  for {
+    entry := fs.directory_next(&directory)
+    if io.failed(entry.failure) {
+      return io.Result([][]const u8){ failure: entry.failure }
+    }
+    if !entry.found {
+      break
+    }
+    if bytes.equal(path.extension(entry.name), ".txt") {
+      // strings.clone returns []u8. Name the type to store it as []const u8.
+      kept: []const u8 = strings.clone(arena, entry.name)
+      array.push(&names, kept)
+    }
+  }
+  return io.Result([][]const u8){ value: names.items }
+}
+
+fn earlier_title(a: Page, b: Page) bool {
+  return bytes.compare(a.title, b.title) < 0
+}
+
+// Builds one page. Everything this needs only while it runs goes in
+// scratch: the file's text, the HTML and the paths. The mark and the
+// deferred rewind give all of it back when the function returns, so a site
+// of a thousand pages needs no more scratch than its largest page. What
+// must outlive the call, the page's name and title, goes in keep.
+fn build_page(keep: *mem.Arena, scratch: *mem.Arena, source: []const u8, output: []const u8, file_name: []const u8) io.Result(Page) {
+  mark := mem.arena_mark(scratch)
+  defer mem.arena_rewind(scratch, mark)
+
+  input := path.join(scratch, source, file_name)
+  read := fs.read_all(scratch, input.value, MaxPageBytes)
+  if io.failed(read.failure) {
+    io.eprintln("site: cannot read {}", input.value)
+    return io.Result(Page){ failure: read.failure }
+  }
+  // Escaping turns one byte into at most six ("&quot;"), plus room for tags.
+  writer := html.writer(mem.push_bytes_uninit(scratch, 6 * #len(read.value) + 1024))
+  render_page(&writer, read.value)
+  if html.failed(&writer) {
+    #panic("the page buffer is sized for the worst case of escaping")
+  }
+
+  stem := file_name[..#len(file_name) - #len(".txt")]
+  page_name := strings.format(scratch, "{}.html", stem)
+  target := path.join(scratch, output, page_name)
+  written := fs.write_all(target.value, html.output(&writer).bytes)
+  if io.failed(written.failure) {
+    io.eprintln("site: cannot write {}", target.value)
+    return io.Result(Page){ failure: written.failure }
+  }
+  page := Page{ name: strings.clone(keep, stem), title: strings.clone(keep, page_title(read.value)) }
+  return io.Result(Page){ value: page }
+}
+
+fn build_index(scratch: *mem.Arena, output: []const u8, pages: []const Page) io.Failure {
+  mark := mem.arena_mark(scratch)
+  defer mem.arena_rewind(scratch, mark)
+  size: usize = 1024
+  for page in pages {
+    size += 6 * (#len(page.name) + #len(page.title)) + 64
+  }
+  writer := html.writer(mem.push_bytes_uninit(scratch, size))
+  header(&writer, "All pages")
+  open_tag(&writer, "<ul>\n")
+  for page in pages {
+    open_tag(&writer, "<li><a href=\"")
+    html.text(&writer, page.name)
+    open_tag(&writer, ".html\">")
+    html.text(&writer, page.title)
+    open_tag(&writer, "</a></li>\n")
+  }
+  open_tag(&writer, "</ul>\n")
+  footer(&writer)
+  if html.failed(&writer) {
+    #panic("the index buffer is sized for the worst case of escaping")
+  }
+  target := path.join(scratch, output, "index.html")
+  return fs.write_all(target.value, html.output(&writer).bytes).failure
+}
+
+fn main() i32 {
+  program := process.start()
+  if #len(program.args) != 3 {
+    io.eprintln("usage: site SOURCE OUTPUT")
+    return 2
+  }
+  source := program.args[1]
+  output := program.args[2]
+  keep := program.arena
+  scratch := mem.arena_alloc(0)
+  defer mem.arena_release(scratch)
+
+  listed := list_pages(keep, source)
+  if io.failed(listed.failure) {
+    io.eprintln("site: cannot list {}", source)
+    return 1
+  }
+  made := fs.make_directory(output, 0o755)
+  if io.failed(made.failure) && made.failure.kind != io.Kind.AlreadyExists {
+    io.eprintln("site: cannot create {}", output)
+    return 1
+  }
+
+  pages: array.Array(Page)
+  array.init(&pages, keep)
+  for file_name in listed.value {
+    built := build_page(keep, scratch, source, output, file_name)
+    if io.failed(built.failure) {
+      return 1
+    }
+    array.push(&pages, built.value)
+  }
+  sort.sort_by(pages.items, earlier_title)
+  if io.failed(build_index(scratch, output, pages.items)) {
+    io.eprintln("site: cannot write the index")
+    return 1
+  }
+  for page in pages.items {
+    io.println("{}.html  {}", page.name, page.title)
+  }
+  io.println("{} pages, {} scratch bytes at peak", #len(pages.items), mem.arena_snapshot(scratch).peak_used)
+  return 0
+}

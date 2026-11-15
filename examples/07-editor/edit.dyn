@@ -1,0 +1,59 @@
+// The document and the edits that change it. Every edit can be undone
+// because it records what it needs to put things back.
+
+use "std/container/array"
+
+// An edit to one line. Delete keeps the text it removed so undo can put
+// it back; Change keeps both texts.
+struct LineText {
+  index: usize,
+  text: []const u8,
+}
+
+struct LineChange {
+  index: usize,
+  before: []const u8,
+  after: []const u8,
+}
+
+enum Edit {
+  None,
+  Insert: LineText,
+  Delete: LineText,
+  Change: LineChange,
+}
+
+// The edit that undoes this one.
+fn inverse(e: Edit) Edit {
+  case e {
+    Edit.None => { return Edit.None }
+    Edit.Insert line => { return Edit.Delete(line) }
+    Edit.Delete line => { return Edit.Insert(line) }
+    Edit.Change c => {
+      return Edit.Change(LineChange{ index: c.index, before: c.after, after: c.before })
+    }
+  }
+}
+
+fn apply(lines: *array.Array([]const u8), e: Edit) {
+  case e {
+    Edit.None => {}
+    Edit.Insert line => {
+      array.push(lines, "")
+      // Shift the tail down one, from the end, to open a gap at index.
+      for i in #reverse(line.index + 1..#len(lines.items)) {
+        lines.items[i] = lines.items[i - 1]
+      }
+      lines.items[line.index] = line.text
+    }
+    Edit.Delete line => {
+      for i in line.index + 1..#len(lines.items) {
+        lines.items[i - 1] = lines.items[i]
+      }
+      _ = array.pop(lines)
+    }
+    Edit.Change c => {
+      lines.items[c.index] = c.after
+    }
+  }
+}

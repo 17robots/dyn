@@ -1,0 +1,153 @@
+// todo: a task list kept in a text file.
+//
+//   todo list              show every task
+//   todo add TEXT...       add a task
+//   todo done N            mark task N done
+//   todo remove N          delete task N
+//   todo clear             delete every done task
+//
+// Tasks live in ./todo.txt, or in the file named by TODO_FILE.
+//
+// Run: dyn run examples/03-todo -- add learn Dyn
+
+use "std/container/array"
+use "std/io"
+use "std/mem"
+use "std/parse"
+use "std/process"
+use "std/strings"
+
+fn usage() i32 {
+  io.eprintln("usage: todo list | add TEXT... | done N | remove N | clear")
+  return 2
+}
+
+fn show(tasks: []const Task) {
+  if #len(tasks) == 0 {
+    io.println("nothing to do")
+    return
+  }
+  for task, i in tasks {
+    io.println("{}. {}{}", i + 1, marker(task.state), task.text)
+  }
+}
+
+// Task numbers start at 1 on the command line and at 0 in the array.
+// parse.u64_decimal reports a failure instead of guessing at bad text.
+fn task_index(text: []const u8, count: usize) usize {
+  number := parse.u64_decimal(text)
+  if parse.failed(number.failure) || number.value == 0 || number.value > count {
+    return count       // the miss value: one past the end, as find does
+  }
+  return #cast(usize, number.value - 1)
+}
+
+// The task named by "todo done N", or count after reporting why not.
+fn chosen(args: [][]const u8, count: usize) usize {
+  if #len(args) != 3 {
+    _ = usage()
+    return count
+  }
+  index := task_index(args[2], count)
+  if index == count {
+    io.eprintln("todo: no task {}", args[2])
+  }
+  return index
+}
+
+fn remove_at(tasks: *array.Array(Task), index: usize) {
+  for i in index + 1..#len(tasks.items) {
+    tasks.items[i - 1] = tasks.items[i]
+  }
+  _ = array.pop(tasks)
+}
+
+fn main() i32 {
+  program := process.start()
+  arena := program.arena
+  args := program.args
+  if #len(args) < 2 {
+    return usage()
+  }
+
+  path: []const u8 = "todo.txt"
+  setting := process.environment(arena, "TODO_FILE")
+  if setting.found {
+    path = setting.value
+  }
+
+  tasks: array.Array(Task)
+  array.init(&tasks, arena)
+  loaded := load(&tasks, arena, path)
+  if io.failed(loaded.failure) {
+    io.eprintln("todo: cannot read {}", path)
+    return 1
+  }
+  if parse.failed(loaded.problem) {
+    io.eprintln("todo: {}:{}: {}", path, loaded.line, loaded.problem.message)
+    return 1
+  }
+
+  changed := false
+  command := args[1]
+  // case on text compares bytes; _ takes every other command.
+  case command {
+    "list" => {
+      show(tasks.items)
+    }
+    "add" => {
+      if #len(args) < 3 {
+        return usage()
+      }
+      text := strings.join(arena, args[2..], " ")
+      array.push(&tasks, Task{ text: text })
+      io.println("added {}. {}", #len(tasks.items), text)
+      changed = true
+    }
+    "done" => {
+      index := chosen(args, #len(tasks.items))
+      if index == #len(tasks.items) {
+        return 1
+      }
+      task := &tasks.items[index]     // a pointer into the array
+      task.state = State.Done
+      io.println("done {}. {}", index + 1, task.text)
+      changed = true
+    }
+    "remove" => {
+      index := chosen(args, #len(tasks.items))
+      if index == #len(tasks.items) {
+        return 1
+      }
+      io.println("removed {}. {}", index + 1, tasks.items[index].text)
+      remove_at(&tasks, index)
+      changed = true
+    }
+    "clear" => {
+      kept: usize = 0
+      for task in tasks.items {
+        if task.state == State.Open {
+          tasks.items[kept] = task
+          kept += 1
+        }
+      }
+      io.println("cleared {} done", #len(tasks.items) - kept)
+      for #len(tasks.items) > kept {
+        _ = array.pop(&tasks)
+      }
+      changed = true
+    }
+    _ => {
+      return usage()
+    }
+  }
+
+  if changed {
+    failure := save(tasks.items, arena, path)
+    if io.failed(failure) {
+      io.eprintln("todo: cannot save {}", path)
+      return 1
+    }
+  }
+  return 0
+}
