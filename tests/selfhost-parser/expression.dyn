@@ -45,7 +45,6 @@ const FlagIteration: u16 = 64
 const FlagPrimary: u16 = 128
 const FlagBitcast: u16 = 256
 const FlagWildcard: u16 = 512
-const FlagUnion: u16 = 1024
 const FlagInstance: u16 = 2048
 const FlagIndexed: u16 = 4096
 

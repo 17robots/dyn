@@ -744,11 +744,12 @@ fn src_struct(p: *Parser) u32 {
   start := p.token.start
   first := None
   last := None
-  is_packed := take(p, "packed")
-  is_union := !is_packed && take(p, "union")
-  if !is_union {
-    expect(p, "struct")
+  if token_is(p, "union") {
+    fail(p, start, "union types were removed; use #bitcast or a payload enum")
+    return None
   }
+  is_packed := take(p, "packed")
+  expect(p, "struct")
   chain(p, &first, &last, parse_name(p))
   src_type_parameters(p, &first, &last)
   expect(p, "{")
@@ -774,9 +775,6 @@ fn src_struct(p: *Parser) u32 {
   flags: u16
   if is_packed {
     flags = FlagPacked
-  }
-  if is_union {
-    flags = FlagUnion
   }
   return mark(p, add_node(p, SrcStruct, start, end, first), flags)
 }

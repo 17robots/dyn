@@ -907,7 +907,7 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
         (DynIrStruct){.name = a->structs[i].template_of ? copy_instance_name(a, DYN_TYPE_STRUCT_BASE + (DynType)i, source, &cursor)
                                                         : copy_span(a->structs[i].name, source, &cursor),
                       .span = a->structs[i].span,
-                      .packed = a->structs[i].packed, .is_union = a->structs[i].is_union,
+                      .packed = a->structs[i].packed,
                       .is_public = a->structs[i].is_public,
                       .module_owner = a->structs[i].module_owner,
                       .field_start = a->structs[i].field_start,

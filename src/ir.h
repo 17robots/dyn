@@ -39,7 +39,7 @@ typedef struct {
 typedef struct {
   char *name;
   DynSpan span;
-  bool packed, is_union;
+  bool packed;
   bool is_public;
   uint64_t module_owner;
   uint32_t field_start, field_count;

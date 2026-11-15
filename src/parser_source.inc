@@ -42,6 +42,7 @@ static bool src_next_is(Parser *p, const char *word) {
   return next.end - next.start == strlen(word) && at(p, next.start, word);
 }
 static bool src_distinct(Parser *p) { return is(p, "distinct"); }
+/* union still starts a declaration so src_struct can report its removal. */
 static bool src_packed(Parser *p) { return is(p, "packed") || is(p, "union"); }
 /* A pattern that can only be a type: i32, []const u8, *Node, fn(..), $T.
    Named types (Point, geo.Point, Box(i32)) parse as value patterns and the
@@ -492,8 +493,12 @@ static void src_type_parameters(Parser *p, uint32_t *first, uint32_t *last) {
 }
 static uint32_t src_struct(Parser *p) {
   uint32_t start = p->token.start, first = NONE, last = NONE;
-  bool packed = take(p, "packed"), is_union = !packed && take(p, "union");
-  if (!is_union) expect(p, "struct");
+  if (is(p, "union")) {
+    fail(p, start, "union types were removed; use #bitcast or a payload enum");
+    return NONE;
+  }
+  bool packed = take(p, "packed");
+  expect(p, "struct");
   append(p, &first, &last, name(p));
   src_type_parameters(p, &first, &last);
   expect(p, "{");
@@ -507,7 +512,7 @@ static uint32_t src_struct(Parser *p) {
     if (!take(p, ",")) break;
   }
   uint32_t end = p->token.end; expect(p, "}");
-  return mark(p, src_node(p, SRC_STRUCT, start, end, first), (is_union ? EXP_UNION : 0) | (packed ? EXP_PACKED : 0));
+  return mark(p, src_node(p, SRC_STRUCT, start, end, first), packed ? EXP_PACKED : 0);
 }
 static uint32_t src_enum(Parser *p) {
   uint32_t start = p->token.start, first = NONE, last = NONE;

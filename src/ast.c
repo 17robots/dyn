@@ -957,7 +957,7 @@ DynType dyn_ast_struct_instance(DynAstProgram *a, uint32_t template_id, const Dy
     return DYN_TYPE_ERROR;
   }
   DynAstStruct model = a->structs[template_id];
-  DynAstStruct st = {.span = model.span, .packed = model.packed, .is_union = model.is_union,
+  DynAstStruct st = {.span = model.span, .packed = model.packed,
                      .is_public = model.is_public, .module_owner = model.module_owner,
                      .template_of = template_id + 1, .type_param_count = count};
   for (uint32_t i = 0; i < count; ++i) {
@@ -1166,11 +1166,6 @@ static bool layout_struct(uint32_t id, DynAstProgram *a, unsigned char *state,
       return false;
     if (align > max_align)
       max_align = align;
-    if (st->is_union) {
-      f->offset = 0;
-      if (field_size > size) size = field_size;
-      continue;
-    }
     if (size > limit - (align - 1)) goto oversized_struct;
     size = (size + align - 1) / align * align;
     f->offset = size;

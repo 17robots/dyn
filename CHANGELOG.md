@@ -12,6 +12,18 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
+## Unreleased
+
+- Breaking: `union` types are removed. `union` stays a reserved word, and a
+  `union` declaration fails with "union types were removed; use #bitcast or a
+  payload enum". Nothing in `std` or `vendor` used them.
+
+  | Old | New |
+  | --- | --- |
+  | `union W { bits: u64, number: f64 }` then `w.bits` | `#bitcast(u64, number)` |
+  | A union that stores one of several shapes | A payload enum |
+  | A field that mirrors a C union | The largest member's size and alignment, such as `[4]u32` |
+
 ## 0.1.0-preview.38
 
 - Release builds no longer hang on functions with many loads and no write
