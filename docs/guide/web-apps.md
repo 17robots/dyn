@@ -185,8 +185,11 @@ zlib's default size.
 ## Forms and uploads
 
 `http.form_value` decodes urlencoded fields. `http.multipart` and
-`http.next_part` walk a `multipart/form-data` body; parts borrow it. The
-whole body must fit `Config.receive_size`, so raise it for uploads.
+`http.next_part` walk a `multipart/form-data` body; parts borrow it. A request
+larger than `Config.receive_size` borrows one of `Config.upload_count` blocks
+of `Config.upload_size` bytes until it is handled (503 when none is free, 413
+when it is bigger). Clients that send `Expect: 100-continue` get `100 Continue`
+before their body.
 
 ## Live updates
 
@@ -244,6 +247,7 @@ so with `Overflow.Reject` they are closed instead.
 ## Not yet
 
 - HTTP/2 and HTTP/3.
-- Streaming request bodies: a request must fit the receive buffer.
+- Unbounded streaming request bodies: a request must fit `Config.upload_size`.
+- Chunked request bodies (`Transfer-Encoding: chunked` uploads) get 400.
 - Response compression on the fly in `serve_asset`; dynamic responses call
   `gzip.write` themselves.

@@ -67,6 +67,9 @@ Web applications: see [docs/guide/web-apps.md](docs/guide/web-apps.md).
     reserve slot, `Reject` answers 503. Before, new clients waited in the
     kernel backlog behind idle connections until those timed out.
   - `client_ip` gives the client's address.
+  - Request bodies larger than `receive_size` borrow a block from an
+    upload pool (`Config.upload_size`, `upload_count`); `Expect:
+    100-continue` is answered.
   - Breaking: `storage_size` grows for reserve slots, job storage and the
     inbox.
 - `std/event` gains `Waker` for waking a queue from another thread.

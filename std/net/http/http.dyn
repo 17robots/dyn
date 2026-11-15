@@ -1038,7 +1038,9 @@ fn request_parts(input: []const u8, head: HttpHead) Request {
 }
 
 pub enum FrameStatus { Incomplete, Ready, Invalid, Capacity }
-pub struct FrameResult { status: FrameStatus, request: Request, consumed: usize, offset: usize }
+// On Incomplete with a complete head, total is the request's full length and
+// expect_continue says the client waits for 100 Continue before its body.
+pub struct FrameResult { status: FrameStatus, request: Request, consumed: usize, offset: usize, total: usize, expect_continue: bool }
 
 // Frames one request from bytes already buffered, with no I/O, for callers that
 // own their sockets (event loops). capacity is the most bytes the caller can
@@ -1064,7 +1066,9 @@ pub fn frame_request(input: []const u8, capacity: usize) FrameResult {
   }
   total := head.header_length + head.content_length
   if #len(input) < total {
-    return FrameResult{ status: FrameStatus.Incomplete }
+    expect := header(input[..head.header_length], "Expect")
+    return FrameResult{ status: FrameStatus.Incomplete, total: total,
+      expect_continue: expect.found && ascii_equal(trim_ows(expect.value), "100-continue") }
   }
   request := request_parts(input, head)
   if #len(request.method) == 0 {

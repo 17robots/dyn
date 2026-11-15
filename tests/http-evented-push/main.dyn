@@ -24,7 +24,7 @@ struct App {
   workers: []evented.Worker,
   assets: http.Assets,
   router: http.Routes(App),
-  route_storage: [10]http.TypedRoute(App),
+  route_storage: [12]http.TypedRoute(App),
 }
 
 struct Hash { input: [64]u8, length: usize, digest: [32]u8, ok: bool }
@@ -115,6 +115,20 @@ fn client(response: *http.Response, request: *const http.Request, app: *App) htt
   return text(response, 200, net.ip_text(storage[..], evented.client_ip(response)))
 }
 
+// Upload: answers the body's length and byte sum.
+fn upload(response: *http.Response, request: *const http.Request, app: *App) http.Result {
+  sum: u64 = 0
+  for byte in request.body {
+    sum += byte
+  }
+  storage: [64]u8
+  out := fmt.buffer(storage[..])
+  fmt.write_u64(&out, #len(request.body))
+  fmt.write_byte(&out, ' ')
+  fmt.write_u64(&out, sum)
+  return text(response, 200, fmt.bytes(&out))
+}
+
 fn quit(response: *http.Response, request: *const http.Request, app: *App) http.Result {
   sync.store_u32(&app.quit, 1)
   return text(response, 200, "bye\n")
@@ -176,6 +190,7 @@ fn main() {
   _ = http.add(&app.router, "POST", "/quit", quit)
   _ = http.add(&app.router, "GET", "/static/:name", asset)
   _ = http.add(&app.router, "GET", "/ip", client)
+  _ = http.add(&app.router, "POST", "/upload", upload)
   typed := http.Typed(App){ state: &app, handler: handle }
   binding := http.bind(&typed)
   config := evented.default_config()
@@ -184,6 +199,8 @@ fn main() {
   config.send_size = 4 * mem.KiB
   config.overflow_send_size = 64 * mem.KiB
   config.overflow_send_count = 8
+  config.upload_size = mem.MiB
+  config.upload_count = 2
   config.spawner = &spawner
   config.pool = jobs
   config.on_message = on_message

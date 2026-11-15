@@ -108,6 +108,40 @@ def exercise(port):
 
     assert request(port, 'GET', '/ip')[2] == b'127.0.0.1'
 
+    # Uploads past the 4 KiB receive buffer borrow a 1 MiB block.
+    blob = bytes((i * 7) % 251 for i in range(700 * 1024))
+    status, _, body = request(port, 'POST', '/upload', blob)
+    assert (status, body) == (200, f'{len(blob)} {sum(blob)}'.encode()), (status, body)
+    for _ in range(3):
+        assert request(port, 'POST', '/upload', b'small')[2] == b'5 %d' % sum(b'small')
+    status, _, _ = request(port, 'POST', '/upload', bytes(1100 * 1024))
+    assert status == 413, status
+    # Expect: 100-continue gets its interim response before the body is sent.
+    with socket.create_connection(('127.0.0.1', port), timeout=10) as sock:
+        sock.sendall(b'POST /upload HTTP/1.1\r\nHost: x\r\nExpect: 100-continue\r\nContent-Length: 20000\r\n\r\n')
+        assert read_until(sock, b'\r\n\r\n') == b'HTTP/1.1 100 Continue\r\n\r\n'
+        sock.sendall(b'z' * 20000)
+        reply = read_until(sock, b'20000 ' + str(20000 * ord('z')).encode())
+        assert reply.startswith(b'HTTP/1.1 200 OK'), reply
+    # Two blocks per worker: slow uploads holding every block make the next one 503.
+    slow = []
+    for _ in range(4):
+        sock = socket.create_connection(('127.0.0.1', port), timeout=10)
+        sock.sendall(b'POST /upload HTTP/1.1\r\nHost: x\r\nContent-Length: 500000\r\n\r\n' + bytes(8000))
+        slow.append(sock)
+    time.sleep(0.3)
+    busy = 0
+    for _ in range(4):
+        with socket.create_connection(('127.0.0.1', port), timeout=10) as sock:
+            sock.sendall(b'POST /upload HTTP/1.1\r\nHost: x\r\nContent-Length: 500000\r\n\r\n' + bytes(8000))
+            busy += read_until(sock, b'\r\n').startswith(b'HTTP/1.1 503')
+    assert busy >= 1, busy
+    for sock in slow:
+        sock.close()
+    time.sleep(0.2)
+    status, _, body = request(port, 'POST', '/upload', blob)
+    assert (status, body) == (200, f'{len(blob)} {sum(blob)}'.encode()), 'blocks come back'
+
     # Static assets: gzip when accepted, ETag and Last-Modified revalidation, HEAD.
     css = b'body { color: red; } ' * 196 + b'body'
     status, headers, body = request(port, 'GET', '/static/style.css', headers={'Accept-Encoding': 'gzip'})

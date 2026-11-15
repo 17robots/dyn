@@ -54,6 +54,13 @@ pub struct Config {
   // connection returns its block; an exhausted pool uses synchronous flushing.
   overflow_send_size: usize,
   overflow_send_count: usize,
+  // Optional per-worker pool of large receive blocks for request bodies
+  // bigger than receive_size, up to upload_size bytes with the head. A
+  // request borrows one block until it is handled; with none free it gets
+  // 503. Both zero disables: larger requests get 413. Blocks must exceed
+  // receive_size.
+  upload_size: usize,
+  upload_count: usize,
   // Closes connections with no complete request activity for this long. Zero disables.
   idle_timeout_milliseconds: i64,
   // Longest a worker waits on one client during a synchronous large flush.
@@ -168,6 +175,7 @@ pub fn storage_size(config: Config, worker_count: usize) usize {
   per_connection := #sizeof(Connection) + config.receive_size + config.send_size
   per_worker := slots * (per_connection + #sizeof(usize)) + config.stack_size + scratch_size(config) + 4096
   per_worker += config.overflow_send_count * (config.overflow_send_size + #sizeof(usize))
+  per_worker += config.upload_count * (config.upload_size + #sizeof(usize))
   per_worker += slots * (config.job_size + mem.ArenaBufferOverhead + 2 * #sizeof(usize))
   per_worker += 2 * (config.inbox_messages * #sizeof(Post) + config.inbox_bytes) + 64
   return worker_count * per_worker
@@ -197,6 +205,13 @@ struct Connection {
   descriptor: isize,
   active: bool,
   input: []u8,
+  // input is base_input, or an upload block (input_slot is its one-based
+  // index) while a large request is read and handled.
+  base_input: []u8,
+  input_slot: usize,
+  uploads: *SendPool,
+  // 100 Continue already sent for the request being read.
+  continue_sent: bool,
   used: usize,
   output: []u8,
   base_output: []u8,
@@ -269,6 +284,7 @@ pub struct Worker {
   free: []usize,
   free_count: usize,
   send_pool: SendPool,
+  upload_pool: SendPool,
   queue: event.Queue,
   // False while every slot is busy: the level-triggered listener would
   // otherwise wake the loop continuously.
@@ -549,7 +565,10 @@ fn close_connection(worker: *Worker, index: usize) {
 
 fn recycle(worker: *Worker, index: usize) {
   connection := &worker.connections[index]
-  input := connection.input
+  connection.used = 0
+  release_input(connection)
+  input := connection.base_input
+  uploads := connection.uploads
   output := connection.base_output
   pool := connection.pool
   jobs := connection.jobs
@@ -564,8 +583,8 @@ fn recycle(worker: *Worker, index: usize) {
   if regular {
     worker.serving -= 1
   }
-  connection.* = Connection{ input: input, output: output, base_output: output, pool: pool, worker: worker, index: index,
-    generation: generation, jobs: jobs }
+  connection.* = Connection{ input: input, base_input: input, uploads: uploads, output: output, base_output: output, pool: pool,
+    worker: worker, index: index, generation: generation, jobs: jobs }
   worker.free[worker.free_count] = index
   worker.free_count += 1
   if regular && sync.load_u32(&worker.stopping) == 0 {
@@ -591,9 +610,21 @@ fn serve_buffered(worker: *Worker, index: usize) bool {
     connection.used = 0
   }
   consumed: usize = 0
+  capacity := #len(connection.base_input)
+  if connection.uploads != nil && connection.uploads.block_size > capacity {
+    capacity = connection.uploads.block_size
+  }
+  wanted: usize = 0
   for connection.mode == Mode.Http && !connection.writing && !connection.close_after && !connection.failed {
-    framed := http.frame_request(connection.input[consumed..connection.used], #len(connection.input))
+    framed := http.frame_request(connection.input[consumed..connection.used], capacity)
     if framed.status == http.FrameStatus.Incomplete {
+      wanted = framed.total
+      if framed.expect_continue && !connection.continue_sent && framed.total > 0 {
+        connection.continue_sent = true
+        if !push_bytes(connection, "HTTP/1.1 100 Continue\r\n\r\n") {
+          return false
+        }
+      }
       break
     }
     if framed.status == http.FrameStatus.Invalid {
@@ -606,6 +637,7 @@ fn serve_buffered(worker: *Worker, index: usize) bool {
       reject(connection, http.StatusPayloadTooLarge, "request too large\n")
       break
     }
+    connection.continue_sent = false
     request := framed.request
     request.context = worker.context
     response := new_response(connection)
@@ -631,6 +663,12 @@ fn serve_buffered(worker: *Worker, index: usize) bool {
     }
   }
   shift_input(connection, consumed)
+  // A request larger than the receive buffer moves to an upload block.
+  if connection.mode == Mode.Http && !connection.close_after && wanted > #len(connection.input) &&
+    !grow_input(connection, wanted) {
+    worker.rejected += 1
+    reject(connection, http.StatusServiceUnavailable, "upload slots busy\n")
+  }
   if connection.mode == Mode.WebSocket && !connection.writing && !connection.close_after {
     if !websocket_frames(worker, index) {
       return false
@@ -658,6 +696,36 @@ fn shift_input(connection: *Connection, consumed: usize) {
     connection.input[i] = connection.input[consumed + i]
   }
   connection.used = remaining
+  release_input(connection)
+}
+
+// Moves input into an upload block big enough for a request of total bytes.
+fn grow_input(connection: *Connection, total: usize) bool {
+  pool := connection.uploads
+  if connection.input_slot != 0 || pool == nil || pool.free_count == 0 || total > pool.block_size {
+    return false
+  }
+  pool.free_count -= 1
+  slot := pool.free[pool.free_count]
+  block := pool.backing[slot * pool.block_size..(slot + 1) * pool.block_size]
+  _ = mem.copy(block[..connection.used], connection.input[..connection.used])
+  connection.input = block
+  connection.input_slot = slot + 1
+  return true
+}
+
+// Back to the base buffer once what is left fits it. Never while a job's
+// request still borrows the block.
+fn release_input(connection: *Connection) {
+  if connection.input_slot == 0 || connection.job_running || connection.used > #len(connection.base_input) {
+    return
+  }
+  _ = mem.copy(connection.base_input[..connection.used], connection.input[..connection.used])
+  pool := connection.uploads
+  pool.free[pool.free_count] = connection.input_slot - 1
+  pool.free_count += 1
+  connection.input_slot = 0
+  connection.input = connection.base_input
 }
 
 // After run: send what earlier pipelined requests queued, then read nothing
@@ -1070,6 +1138,9 @@ fn valid_start(workers: []Worker, config: Config, handler: http.Handler) io.Fail
     (config.overflow_send_count > 0 && config.overflow_send_size <= config.send_size) {
     return io.Failure{ kind: io.Kind.InvalidInput }
   }
+  if (config.upload_count == 0) != (config.upload_size == 0) || (config.upload_count > 0 && config.upload_size <= config.receive_size) {
+    return io.Failure{ kind: io.Kind.InvalidInput }
+  }
   if config.transport != nil && config.transport.needs_native_threads && config.spawner == nil {
     return io.Failure{ kind: io.Kind.InvalidInput }
   }
@@ -1100,8 +1171,19 @@ fn start_worker(arena: *mem.Arena, worker: *Worker) io.Failure {
   for i in 0..config.overflow_send_count {
     worker.send_pool.free[i] = config.overflow_send_count - 1 - i
   }
+  worker.upload_pool.backing = mem.push_bytes_uninit(arena, config.upload_count * config.upload_size)
+  worker.upload_pool.free = mem.push_array(usize, arena, config.upload_count)
+  worker.upload_pool.free_count = config.upload_count
+  worker.upload_pool.block_size = config.upload_size
+  for i in 0..config.upload_count {
+    worker.upload_pool.free[i] = config.upload_count - 1 - i
+  }
   for c in 0..count {
     worker.connections[c].input = receive[c * config.receive_size..(c + 1) * config.receive_size]
+    worker.connections[c].base_input = worker.connections[c].input
+    if config.upload_count > 0 {
+      worker.connections[c].uploads = &worker.upload_pool
+    }
     worker.connections[c].output = send[c * config.send_size..(c + 1) * config.send_size]
     worker.connections[c].base_output = worker.connections[c].output
     worker.connections[c].pool = &worker.send_pool
