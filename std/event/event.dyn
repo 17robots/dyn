@@ -236,3 +236,73 @@ pub fn close(queue: *Queue) {
   outcome := native_close(queue.handle)
   queue.* = Queue{}
 }
+
+// Wakes a queue's owner from another thread. The waker is a loopback datagram
+// socket connected to itself, so it works with every queue backend. The owner
+// adds descriptor to its queue for Readable and calls waker_drain when it
+// fires; any thread may call wake. One wake may cover several posts: drain,
+// then look at everything posted.
+pub struct Waker { descriptor: isize, active: bool }
+pub type WakerResult = io.Result(Waker)
+
+pub fn waker_open() WakerResult {
+  opened := net.socket(net.AddressFamilyIpv4, net.SocketDatagram, 0)
+  if io.failed(opened.failure) {
+    return WakerResult{ failure: opened.failure }
+  }
+  descriptor := opened.value
+  local := net.ipv4(127, 0, 0, 1, 0)
+  bound := net.bind_ipv4(descriptor, &local)
+  if io.failed(bound.failure) {
+    net.close(descriptor)
+    return WakerResult{ failure: bound.failure }
+  }
+  address := net.Address{}
+  named := net.local_address(descriptor, &address)
+  if io.failed(named.failure) {
+    net.close(descriptor)
+    return WakerResult{ failure: named.failure }
+  }
+  connected := net.connect(descriptor, address.bytes[..address.length])
+  if io.failed(connected.failure) {
+    net.close(descriptor)
+    return WakerResult{ failure: connected.failure }
+  }
+  blocking := net.nonblocking(descriptor, true)
+  if io.failed(blocking.failure) {
+    net.close(descriptor)
+    return WakerResult{ failure: blocking.failure }
+  }
+  return WakerResult{ value: Waker{ descriptor: descriptor, active: true } }
+}
+
+// Never blocks. A full socket buffer means wakes are already pending.
+pub fn wake(waker: *const Waker) {
+  if !waker.active {
+    return
+  }
+  signal: [1]u8 = [1]
+  _ = net.send(waker.descriptor, signal[..], 0)
+}
+
+// Discards pending wakes. Call on the owner's thread before reading posts.
+pub fn waker_drain(waker: *const Waker) {
+  if !waker.active {
+    return
+  }
+  storage: [64]u8
+  for i in 0..1024 {
+    received := net.receive(waker.descriptor, storage[..], 0)
+    if io.failed(received.failure) || received.value <= 0 {
+      return
+    }
+  }
+}
+
+pub fn waker_close(waker: *Waker) {
+  if !waker.active {
+    return
+  }
+  net.close(waker.descriptor)
+  waker.* = Waker{}
+}

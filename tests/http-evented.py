@@ -151,9 +151,9 @@ def exercise(port, pooled=False):
     # Invalid and oversized requests are answered, then closed.
     assert raw(port, b'NOT HTTP\r\n\r\n').startswith(b'HTTP/1.1 400 Bad Request\r\n')
     huge_body = b'POST /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 100000\r\n\r\n'
-    assert raw(port, huge_body).startswith(b'HTTP/1.1 413 Payload Too Large\r\n')
+    assert raw(port, huge_body).startswith(b'HTTP/1.1 413 Content Too Large\r\n')
     huge_head = b'GET /health HTTP/1.1\r\nX-Fill: ' + b'y' * 8000 + b'\r\n\r\n'
-    assert raw(port, huge_head).startswith(b'HTTP/1.1 413 Payload Too Large\r\n')
+    assert raw(port, huge_head).startswith(b'HTTP/1.1 413 Content Too Large\r\n')
     chunked = b'POST /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n'
     assert raw(port, chunked).startswith(b'HTTP/1.1 400 Bad Request\r\n')
 

@@ -60,7 +60,9 @@ fn main() {
       same(http.body_finish(&opened.body), code)
       if sink.calls != calls { #panic("header retry") }
     }
-    for segment in 1..6 {
+    // A small chunk is one write: segment 1 fails it, 2 fails the finish, 3
+    // fails partway through a later chunk written one byte per call.
+    for segment in 1..4 {
       sink := Sink{}
       response := http.Response{ output: io.Writer{ data: &sink, write: write } }
       opened := http.respond_stream(&response, http.ResponseOptions{})
@@ -69,15 +71,15 @@ fn main() {
       sink.code = code
       writer := http.body_writer(&opened.body)
       first := writer.write(writer.data, "abc")
-      if segment == 5 {
+      if segment == 2 {
         if io.failed(first.failure) { #panic("early failure") }
         same(http.body_finish(&opened.body), code)
-      } else if segment == 6 {
+      } else if segment == 3 {
         // Partial writes in a later body chunk.
         sink.partial = true
         first = writer.write(writer.data, "later")
       }
-      if segment != 5 && (!io.failed(first.failure) || first.failure.native != code || first.failure.kind != errors.Kind.InvalidInput) { #panic("stream error metadata") }
+      if segment != 2 && (!io.failed(first.failure) || first.failure.native != code || first.failure.kind != errors.Kind.InvalidInput) { #panic("stream error metadata") }
       calls := sink.calls
       replay := writer.write(writer.data, "")
       if !io.failed(replay.failure) || replay.failure.native != code { #panic("empty callback replay") }
