@@ -16,6 +16,9 @@ servers so they pick up the new `dyn`.
 
 Web applications: see [docs/guide/web-apps.md](docs/guide/web-apps.md).
 
+- A bare block, `{ ... }` as a statement, opens a scope: its locals end and
+  its defers run at the closing brace. Hold a lock for part of a function
+  without a helper function or `if true`.
 - SHA-256 is about 15 times faster (25 to 380 MiB/s on x86-64), and PBKDF2
   about 26 times (20,000 iterations: 185 to 7 ms). `std/crypto/core` built
   32-bit arithmetic from 64-bit remainders and multiply loops; ChaCha20 and

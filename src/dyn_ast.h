@@ -299,6 +299,8 @@ typedef struct {
   bool defer_block, for_pointer, for_const, is_const, for_range, for_inclusive, for_reverse;
   /* for x, i in xs: the index local is local_id + 1. */
   bool for_index;
+  /* `{ ... }` as a statement: an if on literal true that ends when its body does. */
+  bool bare_block;
   DynSpan index_name;
 } DynAstStmt;
 /* A text case with more string patterns than this dispatches through integer

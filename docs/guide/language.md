@@ -369,6 +369,24 @@ boxed concrete type identity and bind a copied value of that exact type. A liter
 `any` takes a default type, as in Go and Odin: an integer is `i32`, a float `f64`, a string
 `[]const u8`, a character `u32`.
 
+A bare block, `{ ... }` on its own as a statement, opens a scope: its locals end at the closing
+brace and its defers run there. Use it to hold a lock or other resource for part of a function:
+
+```dyn
+fn sign_up(app: *App, name: []const u8) i64 {
+  id: i64 = 0
+  {
+    sync.lock(&app.lock)
+    defer sync.unlock(&app.lock)
+    id = insert_user(app, name)
+  }
+  return start_session(app, id) // takes app.lock again
+}
+```
+
+A bare block costs nothing; it compiles as `if true { ... }`, and a block that returns ends the
+function.
+
 `defer` runs at enclosing-block exit in LIFO order. Direct-call arguments evaluate at defer
 site. Deferred blocks observe captured storage at execution. Deferred statements exclude
 `return`, `break`, `continue`, declarations, and nested `defer`. Double panic aborts cleanup.

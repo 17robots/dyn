@@ -4524,6 +4524,8 @@ static bool sema_stmt_checked(Sema *sema, DynAstProgram *a, DynAstStmt *st,
       pop_loop(sema);
     if (st->kind == DYN_STMT_FOR)
       return false;
+    if (st->bare_block)
+      return body;
     bool other = st->else_count && sema_block(sema, a, st->else_start,
                                               st->else_count, s, errors, true);
     return st->else_count && body && other;
