@@ -12,6 +12,62 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
+## Unreleased
+
+Web applications: see [docs/guide/web-apps.md](docs/guide/web-apps.md).
+
+- SHA-256 is about 15 times faster (25 to 380 MiB/s on x86-64), and PBKDF2
+  about 26 times (20,000 iterations: 185 to 7 ms). `std/crypto/core` built
+  32-bit arithmetic from 64-bit remainders and multiply loops; ChaCha20 and
+  the WebSocket SHA-1 did too. `hmac.sha256_key` and `hmac.sha256_with`
+  hash an HMAC key once for many messages.
+- x86-64 release builds emit 32-bit operations for `u32` arithmetic whose
+  result is truncated anyway, and `ROR` for `x >> c | x << (32 - c)`.
+- Literal arithmetic such as `1 << 15` or `3 * 4` adapts to a generic call's
+  parameter type like a plain literal, instead of defaulting to `i32`.
+- `std/crypto/blake2b`, and Argon2id in `std/crypto/password`
+  (`argon2id`, `argon2id_encode`, `argon2id_verify`), checked against
+  RFC 9106 and the reference implementation.
+- `std/compress/deflate` gains a real encoder (`deflate`): hash chains, lazy
+  matching, zlib's level parameters and dynamic Huffman blocks, with output
+  within 0.1% of zlib. `gzip.compress` and `gzip.write` use it.
+- `json.writer` writes JSON into caller storage with automatic separators.
+- `std/net/http`:
+  - Breaking: 413 is reported as "Content Too Large" (RFC 9110); the
+    constant keeps its name `StatusPayloadTooLarge`.
+  - Breaking: every response carries `Date` unless
+    `ResponseOptions.omit_date` is set.
+  - Breaking: 1xx, 204 and 304 heads carry no `Content-Type` or
+    `Content-Length`, and `respond` rejects a body for them. An empty
+    response without a content type no longer sends one.
+  - `GET` routes answer `HEAD`.
+  - `status_reason` covers every registered code; more `Status*` constants.
+  - New helpers: `cookie`, `cookie_in`, `set_cookie` (`Cookie`, `SameSite`),
+    `format_date`, `parse_date`, `sse_event`.
+  - Static assets: `make_asset`, `load_directory`, `find_asset`,
+    `serve_asset`, `content_type`, `accepts_encoding`, `etag_matches`.
+  - `multipart` and `next_part` for `multipart/form-data`.
+  - `Limiter`, `allow` and `ip_key` for rate limits.
+  - A small chunk of a streamed body is now sent as one write.
+- `std/net/http/evented`:
+  - `run` hands a request to a thread pool and answers it from a finish
+    function; `job` gives per-connection job storage.
+  - `open_stream` (Server-Sent Events, long polling) and `upgrade`
+    (WebSocket) return a `Peer`; `send`, `publish` (topics) and `close_peer`
+    reach peers from any thread; `Config.on_message` receives WebSocket
+    messages.
+  - When every slot is busy, an idle keep-alive connection is evicted, then
+    `Config.overflow` decides: `Wait` (default) holds the client in a
+    reserve slot, `Reject` answers 503. Before, new clients waited in the
+    kernel backlog behind idle connections until those timed out.
+  - `client_ip` gives the client's address.
+  - Breaking: `storage_size` grows for reserve slots, job storage and the
+    inbox.
+- `std/event` gains `Waker` for waking a queue from another thread.
+- `std/thread/pool` gains `start_spawned` for pools on a custom spawner.
+- `std/net` gains `address_ip` and `ip_text`.
+- `vendor/sqlite` gains `bind_values` and `done`.
+
 ## 0.1.0-preview.39
 
 Breaking: see [docs/migrations/0.1.0-preview.39.md](docs/migrations/0.1.0-preview.39.md).

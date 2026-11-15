@@ -1738,8 +1738,19 @@ static bool untyped_literal(DynAstProgram *a, DynExprId id) {
   if (id == DYN_NO_EXPR)
     return false;
   DynAstExpr e = a->expressions[id];
-  if (e.kind == DYN_EXPR_UNARY && e.op == DYN_OP_NEG)
+  if (e.kind == DYN_EXPR_UNARY && (e.op == DYN_OP_NEG || e.op == DYN_OP_BIT_NOT))
     return untyped_literal(a, e.left);
+  /* Arithmetic on literals adapts like a literal: 1 << 15, 3 * 4. */
+  if (e.kind == DYN_EXPR_BINARY) {
+    switch (e.op) {
+    case DYN_OP_ADD: case DYN_OP_SUB: case DYN_OP_MUL: case DYN_OP_DIV: case DYN_OP_REM:
+    case DYN_OP_BIT_AND: case DYN_OP_BIT_OR: case DYN_OP_BIT_XOR: case DYN_OP_SHL: case DYN_OP_SHR:
+      return e.right != DYN_NO_EXPR && untyped_literal(a, e.left) && untyped_literal(a, e.right) &&
+             a->expressions[e.left].kind != DYN_EXPR_NIL && a->expressions[e.right].kind != DYN_EXPR_NIL;
+    default:
+      return false;
+    }
+  }
   /* nil, like a number, takes its type from the other arguments. */
   return e.kind == DYN_EXPR_INT || e.kind == DYN_EXPR_FLOAT || e.kind == DYN_EXPR_CHAR ||
          e.kind == DYN_EXPR_NIL;
