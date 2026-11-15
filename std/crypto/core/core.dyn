@@ -1,23 +1,10 @@
 // Private implementation shared by the public algorithm modules.
-const Mod32: u64 = 4294967296
-fn add32(a: u32, b: u32) u32 {
-  wide_a: u64 = a
-  wide_b: u64 = b
-  return #cast(u32, ((wide_a + wide_b) % Mod32))
-}
-fn shl32(x: u32, n: usize) u32 {
-  factor: u64 = 1
-  for i in 0..n {
-    factor *= 2
-  }
-  wide: u64 = x
-  return #cast(u32, ((wide * factor) % Mod32))
-}
-fn rotr(x: u32, n: usize) u32 {
-  return (x >> n) | shl32(x, 32 - n)
+// Std code wraps on overflow in every build mode, so + and << are mod 2^32.
+fn rotr(x: u32, n: u32) u32 {
+  return (x >> n) | (x << (32 - n))
 }
 
-const K: [64]u64 = [
+const K: [64]u32 = [
   1116352408, 1899447441, 3049323471, 3921009573, 961987163, 1508970993, 2453635748, 2870763221,
   3624381080, 310598401, 607225278, 1426881987, 1925078388, 2162078206, 2614888103, 3248222580,
   3835390401, 4022224774, 264347078, 604807628, 770255983, 1249150122, 1555081692, 1996064986,
@@ -28,61 +15,65 @@ const K: [64]u64 = [
   1955562222, 2024104815, 2227730452, 2361852424, 2428436474, 2756734187, 3204031479, 3329325298
 ]
 
-fn block(state: []u32, input: []const u8) {
-  words: [64]u32
-  i: usize = 0
-  for i < 16 {
-    at := i * 4
-    byte0: u32 = input[at]
-    byte1: u32 = input[at + 1]
-    byte2: u32 = input[at + 2]
-    byte3: u32 = input[at + 3]
-    words[i] = (byte0 << 24) | (byte1 << 16) | (byte2 << 8) | byte3
-    i += 1
+fn block(state: *[8]u32, input: []const u8) {
+  if #len(input) < 64 {
+    return
   }
-  for i < 64 {
+  words: [64]u32
+  for i in 0..16 {
+    at := i * 4
+    words[i] = (#cast(u32, input[at]) << 24) | (#cast(u32, input[at + 1]) << 16) | (#cast(u32, input[at + 2]) << 8) | #cast(u32, input[at + 3])
+  }
+  for i in 16..64 {
     word_x := words[i - 15]
     word_y := words[i - 2]
-    extend0 := rotr(word_x, 7) ^ rotr(word_x, 18) ^ (word_x >> 3)
-    extend1 := rotr(word_y, 17) ^ rotr(word_y, 19) ^ (word_y >> 10)
-    words[i] = add32(add32(words[i - 16], extend0), add32(words[i - 7], extend1))
-    i += 1
+    // One call per statement: the inliner expands one call per statement.
+    x7 := rotr(word_x, 7)
+    x18 := rotr(word_x, 18)
+    y17 := rotr(word_y, 17)
+    y19 := rotr(word_y, 19)
+    extend0 := x7 ^ x18 ^ (word_x >> 3)
+    extend1 := y17 ^ y19 ^ (word_y >> 10)
+    words[i] = words[i - 16] + extend0 + words[i - 7] + extend1
   }
-  a := state[0]
-  b := state[1]
-  c := state[2]
-  d := state[3]
-  e := state[4]
-  f := state[5]
-  g := state[6]
-  h := state[7]
-  i = 0
-  for i < 64 {
-    round1 := rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)
-    choose := (e & f) ^ ((e ^ 4294967295) & g)
-    constant: u32 = #cast(u32, K[i])
-    t1 := add32(add32(add32(add32(h, round1), choose), constant), words[i])
-    round0 := rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)
+  a := state.*[0]
+  b := state.*[1]
+  c := state.*[2]
+  d := state.*[3]
+  e := state.*[4]
+  f := state.*[5]
+  g := state.*[6]
+  h := state.*[7]
+  for i in 0..64 {
+    e6 := rotr(e, 6)
+    e11 := rotr(e, 11)
+    e25 := rotr(e, 25)
+    round1 := e6 ^ e11 ^ e25
+    choose := (e & f) ^ (~e & g)
+    t1 := h + round1 + choose + K[i] + words[i]
+    a2 := rotr(a, 2)
+    a13 := rotr(a, 13)
+    a22 := rotr(a, 22)
+    round0 := a2 ^ a13 ^ a22
     majority := (a & b) ^ (a & c) ^ (b & c)
-    t2 := add32(round0, majority)
+    t2 := round0 + majority
     h = g
     g = f
     f = e
-    e = add32(d, t1)
+    e = d + t1
     d = c
     c = b
     b = a
-    a = add32(t1, t2)
-    i += 1
+    a = t1 + t2
   }
-  state[0] = add32(state[0], a)
-  state[1] = add32(state[1], b)
-  state[2] = add32(state[2], c)
-  state[3] = add32(state[3], d)
-  state[4] = add32(state[4], e)
-  state[5] = add32(state[5], f)
-  state[6] = add32(state[6], g)
-  state[7] = add32(state[7], h)
+  state.*[0] += a
+  state.*[1] += b
+  state.*[2] += c
+  state.*[3] += d
+  state.*[4] += e
+  state.*[5] += f
+  state.*[6] += g
+  state.*[7] += h
 }
 
 // Zero is an empty SHA-256 stream. Explicit init resets a used or failed stream.
@@ -125,14 +116,14 @@ pub fn sha256_update(context: *Sha256, input: []const u8) bool {
     context.tail_length += take
     at += take
     if context.tail_length == 64 {
-      block(context.state[..], context.tail[..])
+      block(&context.state, context.tail[..])
       context.tail_length = 0
     } else {
       return true
     }
   }
   for #len(input) - at >= 64 {
-    block(context.state[..], input[at..at + 64])
+    block(&context.state, input[at..at + 64])
     at += 64
   }
   rest: usize = 0
@@ -174,9 +165,9 @@ pub fn sha256_finish(context: *Sha256, destination: []u8) []u8 {
     tail[blocks - 1 - i] = #cast(u8, (bits >> (i * 8)))
     i += 1
   }
-  block(context.state[..], tail[..64])
+  block(&context.state, tail[..64])
   if blocks == 128 {
-    block(context.state[..], tail[64..])
+    block(&context.state, tail[64..])
   }
   i = 0
   for i < 8 {
@@ -199,47 +190,61 @@ pub fn sha256(destination: []u8, input: []const u8) []u8 {
   return sha256_finish(&context, destination)
 }
 
-pub fn hmac_sha256(destination: []u8, key: []const u8, message: []const u8) []u8 {
+// HMAC-SHA256 with the key pads already hashed. Computing many MACs with one
+// key (PBKDF2, HKDF expand) then costs two compressions less per MAC.
+pub struct HmacSha256 { inner: Sha256, outer: Sha256 }
+
+// False, leaving state unusable, when a key longer than a block cannot be
+// hashed (beyond SHA-256's input limit).
+pub fn hmac_sha256_init(state: *HmacSha256, key: []const u8) bool {
+  state.* = HmacSha256{}
+  key_block: [64]u8
+  if #len(key) > 64 {
+    if #len(sha256(key_block[..32], key)) != 32 {
+      state.inner.failed = true
+      return false
+    }
+  } else {
+    for i in 0..#len(key) {
+      key_block[i] = key[i]
+    }
+  }
+  pad: [64]u8
+  for i in 0..64 {
+    pad[i] = key_block[i] ^ 0x36
+  }
+  sha256_init(&state.inner)
+  _ = sha256_update(&state.inner, pad[..])
+  for i in 0..64 {
+    pad[i] = key_block[i] ^ 0x5c
+  }
+  sha256_init(&state.outer)
+  _ = sha256_update(&state.outer, pad[..])
+  return true
+}
+
+// MAC of message into 32 bytes of destination. The keyed state is unchanged.
+pub fn hmac_sha256_sum(state: *const HmacSha256, destination: []u8, message: []const u8) []u8 {
   if #len(destination) < 32 {
     return destination[..0]
   }
-  key_block: [64]u8
-  key_digest: [32]u8
-  key_at: usize = 0
-  if #len(key) > 64 {
-    hashed := sha256(key_digest[..], key)
-    if #len(hashed) != 32 {
-      return destination[..0]
-    }
-    for key_at < #len(hashed) {
-      key_block[key_at] = hashed[key_at]
-      key_at += 1
-    }
-  } else {
-    for key_at < #len(key) {
-      key_block[key_at] = key[key_at]
-      key_at += 1
-    }
-  }
-  inner_block: [64]u8
-  outer_block: [64]u8
-  for pad_at in 0..64 {
-    inner_block[pad_at] = key_block[pad_at] ^ 54
-    outer_block[pad_at] = key_block[pad_at] ^ 92
-  }
-  inner := Sha256{}
-  sha256_init(&inner)
-  if !sha256_update(&inner, inner_block[..]) || !sha256_update(&inner, message) {
+  inner := state.inner
+  if inner.failed || !inner.initialized || !sha256_update(&inner, message) {
     return destination[..0]
   }
   inner_digest: [32]u8
   _ = sha256_finish(&inner, inner_digest[..])
-  outer := Sha256{}
-  sha256_init(&outer)
-  if !sha256_update(&outer, outer_block[..]) || !sha256_update(&outer, inner_digest[..]) {
+  outer := state.outer
+  _ = sha256_update(&outer, inner_digest[..])
+  return sha256_finish(&outer, destination)
+}
+
+pub fn hmac_sha256(destination: []u8, key: []const u8, message: []const u8) []u8 {
+  state := HmacSha256{}
+  if #len(destination) < 32 || !hmac_sha256_init(&state, key) {
     return destination[..0]
   }
-  return sha256_finish(&outer, destination)
+  return hmac_sha256_sum(&state, destination, message)
 }
 
 pub fn equal_constant_time(left: []const u8, right: []const u8) bool {

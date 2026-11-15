@@ -89,6 +89,10 @@ enum { SYM_GLOBAL, SYM_FUNCTION, SYM_LOCAL };
 typedef struct {
   uint8_t op, cls, cond, scale;
   bool effect, dead, fused, retain_constant;
+  /* x86-64, set by ssa_narrow32 just before allocation: w32 emits the
+     operation on 32-bit registers, so its result is zero-extended from 32
+     bits; rotate (with w32, op SO_SHR) emits ROR by the constant b. */
+  bool w32, rotate;
   int32_t a, b, c;
   int64_t aux, aux2;
   uint32_t block, list, count, uses, check_origin;
@@ -5244,6 +5248,7 @@ static void ssa_range(Ssa *s, int32_t id, uint32_t block, uint64_t *lo, uint64_t
 static void ssa_range_compute(Ssa *s, int32_t id, uint32_t block, uint64_t *lo, uint64_t *hi, unsigned depth) {
   SsaValue *v = &s->values[id];
   uint64_t alo, ahi, blo, bhi, c;
+  if (v->w32) { *hi = UINT32_MAX; return; }
   switch (v->op) {
   case SO_CONST: if (v->cls == SC_INT) *lo = *hi = (uint64_t)v->aux; return;
   case SO_EXT:
@@ -8943,22 +8948,23 @@ static Cond ssa_compare_values(SsaEmit *e, int32_t a, int32_t b, Cond cond) {
 static void ssa_alu(SsaEmit *e, SsaValue *v, unsigned extension, unsigned char opcode, bool commutative) {
   Ssa *s = e->s; BackendContext *ctx = e->ctx;
   int32_t a = v->a, b = v->b, imm;
+  bool wide = !v->w32;
   unsigned d = ssa_target(e, v);
   if (commutative && ssa_imm32(s, a, &imm) && !ssa_imm32(s, b, &imm)) { int32_t t = a; a = b; b = t; }
   if (ssa_imm32(s, b, &imm)) {
     x86_mov(ctx, d, ssa_get(e, a, d));
-    if (imm >= -128 && imm <= 127) { x86_reg_op(ctx, -1, true, OP1(0x83), extension, d, false); byte(ctx, (uint8_t)imm); }
-    else { x86_reg_op(ctx, -1, true, OP1(0x81), extension, d, false); word(ctx, (uint32_t)imm); }
+    if (imm >= -128 && imm <= 127) { x86_reg_op(ctx, -1, wide, OP1(0x83), extension, d, false); byte(ctx, (uint8_t)imm); }
+    else { x86_reg_op(ctx, -1, wide, OP1(0x81), extension, d, false); word(ctx, (uint32_t)imm); }
     return;
   }
   SsaValue *vb = &s->values[b];
   if (vb->reg >= 0 && (unsigned)vb->reg == d && a != b) {
     if (commutative) { int32_t t = a; a = b; b = t; vb = &s->values[b]; }
-    else { x86_mov(ctx, X_R10, d); x86_mov(ctx, d, ssa_get(e, a, d)); x86_reg_op(ctx, -1, true, OP1(opcode), d, X_R10, false); return; }
+    else { x86_mov(ctx, X_R10, d); x86_mov(ctx, d, ssa_get(e, a, d)); x86_reg_op(ctx, -1, wide, OP1(opcode), d, X_R10, false); return; }
   }
   x86_mov(ctx, d, ssa_get(e, a, d));
-  if (vb->op != SO_CONST && vb->op != SO_FRAME && vb->reg < 0) x86_mem_op(ctx, -1, true, OP1(opcode), d, ssa_slot_memory(e, vb), false);
-  else x86_reg_op(ctx, -1, true, OP1(opcode), d, ssa_get(e, b, X_R10), false);
+  if (vb->op != SO_CONST && vb->op != SO_FRAME && vb->reg < 0) x86_mem_op(ctx, -1, wide, OP1(opcode), d, ssa_slot_memory(e, vb), false);
+  else x86_reg_op(ctx, -1, wide, OP1(opcode), d, ssa_get(e, b, X_R10), false);
 }
 static void ssa_float_op(SsaEmit *e, SsaValue *v, unsigned char opcode, bool commutative) {
   Ssa *s = e->s; BackendContext *ctx = e->ctx;
@@ -10038,7 +10044,7 @@ static void ssa_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
     if (x->reg >= 0 && (unsigned)x->reg != d && (imm || (y->reg >= 0 && (unsigned)y->reg != d))) {
       SsaMemory m = imm ? (SsaMemory){x->reg, -1, 1, imm32_scratch} : (SsaMemory){x->reg, y->reg, 1, 0};
       if (m.index == X_RSP) { m.index = m.base; m.base = X_RSP; }
-      x86_mem_op(ctx, -1, true, OP1(0x8d), d, m, false);
+      x86_mem_op(ctx, -1, !v->w32, OP1(0x8d), d, m, false);
     } else ssa_alu(e, v, 0, 0x03, true);
     ssa_put(e, v, d);
     return;
@@ -10068,25 +10074,25 @@ static void ssa_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
     if (ssa_imm32(s, a, &imm) && !ssa_imm32(s, b, &imm)) { int32_t t = a; a = b; b = t; }
     if (ssa_imm32(s, b, &imm)) {
       unsigned ra = ssa_get(e, a, d);
-      x86_reg_op(ctx, -1, true, OP1(0x69), d, ra, false); word(ctx, (uint32_t)imm);
+      x86_reg_op(ctx, -1, !v->w32, OP1(0x69), d, ra, false); word(ctx, (uint32_t)imm);
     } else {
       SsaValue *vb = &s->values[b];
       if (vb->reg >= 0 && (unsigned)vb->reg == d && a != b) { int32_t t = a; a = b; b = t; vb = &s->values[b]; }
       x86_mov(ctx, d, ssa_get(e, a, d));
-      if (vb->op != SO_CONST && vb->reg < 0) x86_mem_op(ctx, -1, true, OP2(0x0f, 0xaf), d, ssa_slot_memory(e, vb), false);
-      else x86_reg_op(ctx, -1, true, OP2(0x0f, 0xaf), d, ssa_get(e, b, X_R10), false);
+      if (vb->op != SO_CONST && vb->reg < 0) x86_mem_op(ctx, -1, !v->w32, OP2(0x0f, 0xaf), d, ssa_slot_memory(e, vb), false);
+      else x86_reg_op(ctx, -1, !v->w32, OP2(0x0f, 0xaf), d, ssa_get(e, b, X_R10), false);
     }
     if (v->op == SO_MULO) ssa_fail_raw(e, JCC_O, GUARD_OVERFLOW);
     ssa_put(e, v, d);
     return;
   }
   case SO_SHL: case SO_SHR: case SO_SAR: {
-    unsigned extension = v->op == SO_SHL ? 4 : v->op == SO_SHR ? 5 : 7;
+    unsigned extension = v->rotate ? 1 : v->op == SO_SHL ? 4 : v->op == SO_SHR ? 5 : 7;
     d = ssa_target(e, v);
     uint64_t c;
     if (ssa_is_const(s, v->b, &c)) {
       x86_mov(ctx, d, ssa_get(e, v->a, d));
-      x86_reg_op(ctx, -1, true, OP1(0xc1), extension, d, false); byte(ctx, (uint8_t)(c & 63));
+      x86_reg_op(ctx, -1, !v->w32, OP1(0xc1), extension, d, false); byte(ctx, (uint8_t)(c & (v->w32 ? 31 : 63)));
     } else if (ctx->bmi2) {
       unsigned ra = ssa_get(e, v->a, X_R11), rc = ssa_get(e, v->b, X_R10);
       byte(ctx, 0xc4);
@@ -10185,7 +10191,7 @@ static void ssa_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
   case SO_NEG: case SO_NOT:
     d = ssa_target(e, v);
     x86_mov(ctx, d, ssa_get(e, v->a, d));
-    x86_reg_op(ctx, -1, true, OP1(0xf7), v->op == SO_NEG ? 3 : 2, d, false);
+    x86_reg_op(ctx, -1, !v->w32, OP1(0xf7), v->op == SO_NEG ? 3 : 2, d, false);
     ssa_put(e, v, d);
     return;
   case SO_EXT:
@@ -10507,6 +10513,69 @@ static int ssa_float_branch(SsaEmit *e, const SsaValue *c) {
   x86_reg_op(ctx, f32 ? -1 : 0x66, false, OP2(0x0f, 0x2e), ra - X_XMM0, rb - X_XMM0, false);
   return c->aux == 2 || c->aux == 4 ? CC_A : CC_AE;
 }
+/* x86-64: a 32-bit zero-extension whose operand is an integer operation
+   used nowhere else becomes that operation on 32-bit registers, which
+   zero-extends its result for free. Then x >> c | x << (32 - c), with x
+   known to fit in 32 bits, becomes ROR. Runs after dce, which counts uses. */
+static bool ssa_fits32(Ssa *s, int32_t id, uint32_t block) {
+  if (id < 0) return false;
+  uint64_t lo, hi;
+  ssa_range(s, id, block, &lo, &hi, 0);
+  return hi <= UINT32_MAX;
+}
+static void ssa_narrow32(Ssa *s, const uint32_t *order, uint32_t n) {
+  bool changed = false;
+  for (uint32_t i = 0; i < n; ++i) {
+    SsaBlock *block = &s->blocks[order[i]];
+    for (uint32_t k = 0; k < block->values.count; ++k) {
+      uint32_t id = block->values.items[k];
+      SsaValue *v = &s->values[id];
+      if (v->dead || v->op != SO_EXT || v->aux != 32 || v->aux2 || v->a < 0) continue;
+      SsaValue *x = &s->values[v->a];
+      if (x->dead || x->cls != SC_INT || x->uses != 1 || x->w32) continue;
+      uint64_t c;
+      bool narrow = false;
+      switch (x->op) {
+      case SO_ADD: case SO_SUB: case SO_MUL: case SO_AND: case SO_OR: case SO_XOR: case SO_NEG: case SO_NOT:
+        narrow = true;
+        break;
+      case SO_SHL:
+        narrow = ssa_is_const(s, x->b, &c) && c < 32;
+        break;
+      default:
+        break;
+      }
+      if (!narrow) continue;
+      x->w32 = true;
+      ssa_replace(s, id, v->a);
+      changed = true;
+    }
+  }
+  if (!changed) return;
+  ssa_resolve_all(s);
+  ssa_dce(s, order, n);
+  ++s->range_stamp;
+  for (uint32_t i = 0; i < n; ++i) {
+    SsaBlock *block = &s->blocks[order[i]];
+    for (uint32_t k = 0; k < block->values.count; ++k) {
+      SsaValue *v = &s->values[block->values.items[k]];
+      if (v->dead || v->op != SO_OR || v->cls != SC_INT || v->a < 0 || v->b < 0) continue;
+      int32_t right = v->a, left = v->b;
+      if (s->values[right].op != SO_SHR) { int32_t t = right; right = left; left = t; }
+      SsaValue *r = &s->values[right], *l = &s->values[left];
+      uint64_t rc, lc;
+      if (r->op != SO_SHR || r->rotate || l->op != SO_SHL || !l->w32 || r->a != l->a || r->a < 0 ||
+          !ssa_is_const(s, r->b, &rc) || !ssa_is_const(s, l->b, &lc) || rc == 0 || rc >= 32 || lc != 32 - rc ||
+          !ssa_fits32(s, r->a, order[i]))
+        continue;
+      v->op = SO_SHR;
+      v->a = r->a;
+      v->b = r->b;
+      v->w32 = v->rotate = true;
+    }
+  }
+  ssa_dce(s, order, n);
+}
 static void ssa_fuse(Ssa *s, const uint32_t *order, uint32_t n) {
   /* A comparison used only by a select in its block sits right before it
      and is emitted by it: CMP then CMOVcc, or CSEL with its condition. */
@@ -10687,7 +10756,8 @@ static bool ssa_early_value(SsaEarly *w, int32_t id, SsaSymbol *out) {
   if (w->sym[id].kind == 3) return false;
   if (w->sym[id].kind) { *out = w->sym[id]; return true; }
   SsaValue *v = &s->values[id];
-  if (v->cls != SC_INT || !w->visited[v->block]) return false;
+  /* 32-bit forms (ssa_narrow32) take the regular path. */
+  if (v->cls != SC_INT || !w->visited[v->block] || v->w32) return false;
   SsaSymbol x = {0, 0, 0}, y = {0, 0, 0}, r = {0, 0, 0};
   switch (v->op) {
   case SO_CONST: r = (SsaSymbol){1, 0, v->aux}; break;
@@ -11561,6 +11631,7 @@ allocate:
     if (ssa_reuse_loads(s, order, n)) ssa_resolve_all(s);
     ssa_dce(s, order, n);
   }
+  if (!ctx->a64 && !ctx->rv64 && !ctx->rv32 && !ctx->t32) ssa_narrow32(s, order, n);
   ssa_fuse(s, order, n);
   ssa_loop_depths(s, order, n);
   ssa_mark_cold(s, order, n);
