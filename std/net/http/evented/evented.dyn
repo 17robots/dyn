@@ -2102,12 +2102,16 @@ pub fn open_stream(response: *http.Response, options: http.ResponseOptions, topi
 }
 
 // Answers a WebSocket upgrade request (RFC 6455 4.2) with 101 and switches
-// the connection to WebSocket frames. Messages from the client go to
+// the connection to WebSocket frames; on HTTP/2, an extended CONNECT stream
+// (RFC 8441) gets 200 and carries the frames. Messages from the client go to
 // Config.on_message; send, publish (topic, or 0) and close_peer reach it.
 // Pings are answered; a client close is echoed. InvalidInput when request is
 // not a valid upgrade; the handler should then answer 400.
 pub fn upgrade(response: *http.Response, request: *const http.Request, topic: u64) PeerResult {
   connection := connection_of(response)
+  if connection != nil && connection.h2 != nil {
+    return h2_upgrade(connection, response, topic)
+  }
   if connection == nil || connection.mode != Mode.Http || response.started || response.finished {
     return PeerResult{ failure: io.Failure{ kind: io.Kind.InvalidState } }
   }

@@ -22,6 +22,9 @@ Web applications: see [docs/guide/web-apps.md](docs/guide/web-apps.md).
   and receive_body work per stream. Flow control both ways, fixed memory
   (`http2_connections`, `http2_slots`). `std/net/http/hpack` implements
   HPACK; `tls.server_alpn` selects ALPN on servers.
+- WebSockets over HTTP/2 (RFC 8441): `evented.upgrade` on an extended
+  CONNECT stream answers 200 and carries frames in DATA; send, publish,
+  close_peer and on_message work as on HTTP/1.1.
 - Request bodies of any size: `Config.on_large_body` gets requests whose
   body fits no buffer, and `evented.receive_body` hands it over piece by
   piece, chunked framing removed (`http.ChunkReader`), then calls finish

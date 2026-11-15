@@ -8,6 +8,7 @@ import gzip
 import http.client
 import os
 from pathlib import Path
+import socket
 import struct
 import subprocess
 import sys
@@ -35,6 +36,127 @@ def goaway(client):
                 return struct.unpack('!II', payload[:8])[1]
     except (EOFError, ConnectionResetError):
         return None
+
+
+def ws_frame(opcode, payload, final=True):
+    first = (0x80 if final else 0) | opcode
+    mask = os.urandom(4)
+    size = len(payload)
+    if size < 126:
+        head = struct.pack('!BB', first, 0x80 | size)
+    else:
+        head = struct.pack('!BBH', first, 0x80 | 126, size)
+    return head + mask + bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+
+
+def ws_frames(data):
+    """Complete server frames in data, unmasked: [(opcode, payload)], rest."""
+    frames = []
+    while len(data) >= 2:
+        size, at = data[1] & 0x7f, 2
+        if size == 126:
+            if len(data) < 4:
+                break
+            size, at = struct.unpack('!H', data[2:4])[0], 4
+        elif size == 127:
+            if len(data) < 10:
+                break
+            size, at = struct.unpack('!Q', data[2:10])[0], 10
+        if len(data) < at + size:
+            break
+        frames.append((data[0] & 0x0f, data[at:at + size]))
+        data = data[at + size:]
+    return frames, data
+
+
+def ws_open(c, path='/chat'):
+    stream = c.next_id
+    c.next_id += 2
+    c.streams[stream] = {'headers': None, 'data': b'', 'ended': False, 'reset': None}
+    block = literal(':method', 'CONNECT') + literal(':protocol', 'websocket') + literal(':scheme', 'http') + \
+        literal(':path', path) + literal(':authority', 'test') + literal('sec-websocket-version', '13')
+    c.send(HEADERS, 0x4, stream, block)
+    while c.streams[stream]['headers'] is None and c.streams[stream]['reset'] is None:
+        c.read_frame()
+    return stream
+
+
+def ws_next(c, stream, count=1):
+    """Waits for count more frames on a WebSocket stream."""
+    state = c.streams[stream]
+    state.setdefault('seen', 0)
+    while True:
+        frames, _ = ws_frames(state['data'])
+        if len(frames) >= state['seen'] + count:
+            out = frames[state['seen']:state['seen'] + count]
+            state['seen'] += count
+            return out
+        if state['ended'] or state['reset'] is not None:
+            raise AssertionError(('stream ended', frames, state))
+        c.read_frame()
+
+
+def exercise_websocket(port):
+    c = Client(port)
+    c.response(c.request('GET', '/health'))
+    assert c.settings.get(8) == 1, 'SETTINGS_ENABLE_CONNECT_PROTOCOL'
+    chat = ws_open(c)
+    assert dict(c.streams[chat]['headers'])[':status'] == '200', c.streams[chat]
+    assert not c.streams[chat]['ended']
+    c.send(DATA, 0, chat, ws_frame(1, b'hello'))
+    assert ws_next(c, chat) == [(1, b'echo:hello')]
+    c.send(DATA, 0, chat, ws_frame(2, b'\x00\x01\xff'))
+    assert ws_next(c, chat) == [(2, b'echo:\x00\x01\xff')]
+    c.send(DATA, 0, chat, ws_frame(9, b'are you there'))
+    assert ws_next(c, chat) == [(10, b'are you there')]
+    # A fragmented message, its frames split across DATA frames.
+    wire = ws_frame(1, b'frag', final=False) + ws_frame(0, b'mented')
+    c.send(DATA, 0, chat, wire[:3])
+    c.send(DATA, 0, chat, wire[3:])
+    assert ws_next(c, chat) == [(1, b'echo:fragmented')]
+    big = bytes(range(256)) * 20
+    c.send(DATA, 0, chat, ws_frame(2, big))
+    assert ws_next(c, chat) == [(2, b'echo:' + big)]
+    # Publish reaches HTTP/2 and HTTP/1.1 sockets alike; ordinary requests share the connection.
+    second = ws_open(c)
+    sock = socket.create_connection(('127.0.0.1', port), timeout=10)
+    import base64
+    key = base64.b64encode(os.urandom(16))
+    sock.sendall(b'GET /chat HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n'
+                 b'Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: ' + key + b'\r\n\r\n')
+    head = b''
+    while b'\r\n\r\n' not in head:
+        head += sock.recv(4096)
+    assert head.startswith(b'HTTP/1.1 101'), head
+    leftover = head.split(b'\r\n\r\n', 1)[1]
+    c.send(DATA, 0, chat, ws_frame(1, b'all:hi everyone'))
+    assert ws_next(c, chat) == [(1, b'hi everyone')]
+    assert ws_next(c, second) == [(1, b'hi everyone')]
+    data = leftover
+    while not ws_frames(data)[0]:
+        data += sock.recv(4096)
+    assert ws_frames(data)[0][0] == (1, b'hi everyone'), data
+    assert c.response(c.request('GET', '/health'))[2] == b'ok\n'
+    # close_peer from the server: close frame 1000, then END_STREAM.
+    c.send(DATA, 0, second, ws_frame(1, b'bye'))
+    assert ws_next(c, second) == [(8, b'\x03\xe8')]
+    c.wait(second)
+    assert c.streams[second]['ended']
+    # A client close is echoed and ends the stream.
+    c.send(DATA, 0, chat, ws_frame(8, b'\x03\xe8'))
+    assert ws_next(c, chat) == [(8, b'\x03\xe8')]
+    c.wait(chat)
+    # A client reset ends a socket; a CONNECT without :protocol is refused.
+    third = ws_open(c)
+    c.send(RST, 0, third, struct.pack('!I', 8))
+    stream = c.next_id
+    c.next_id += 2
+    c.streams[stream] = {'headers': None, 'data': b'', 'ended': False, 'reset': None}
+    c.send(HEADERS, 0x4, stream, literal(':method', 'CONNECT') + literal(':authority', 'test'))
+    assert c.wait(stream)['reset'] == 1
+    assert c.response(c.request('GET', '/health'))[2] == b'ok\n'
+    sock.close()
+    c.close()
 
 
 def exercise(port):
@@ -162,6 +284,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-h2-') as temporary:
             assert line.startswith('port '), line
             port = int(line.split()[1])
             exercise(port)
+            exercise_websocket(port)
             client = http.client.HTTPConnection('127.0.0.1', port, timeout=10)
             client.request('POST', '/quit')
             client.getresponse().read()
@@ -171,4 +294,4 @@ with tempfile.TemporaryDirectory(prefix='dyn-h2-') as temporary:
                 server.kill()
                 server.wait()
 print('PASS HTTP/2: requests, HEAD, bodies, uploads, large bodies, gzip, flow control, multiplexed jobs, SSE, '
-      'trailers, CONTINUATION, PING, resets, malformed requests, connection errors (debug/release)')
+      'trailers, CONTINUATION, PING, resets, malformed requests, connection errors, WebSockets over HTTP/2 (debug/release)')

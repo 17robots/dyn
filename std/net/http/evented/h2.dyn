@@ -4,9 +4,8 @@
 //
 // Each stream becomes an ordinary http.Request and runs the same handler; the
 // HTTP/1.1 response the handler writes is turned into HEADERS and DATA frames.
-// So routing, run, open_stream (SSE), receive_body and every response helper
-// work unchanged, per stream. WebSocket upgrades are HTTP/1.1 only: browsers
-// open a separate connection for them.
+// So routing, run, open_stream (SSE), receive_body, upgrade (WebSockets over
+// HTTP/2, RFC 8441) and every response helper work unchanged, per stream.
 //
 // Memory stays fixed: an h2 connection leases one of Config.http2_connections
 // state blocks (HPACK table and stream table), and each stream holds one of
@@ -27,6 +26,7 @@ use "std/mem" mem
 use "std/net" network
 use "std/net/http" http
 use "std/net/http/hpack" hpack
+use "std/net/websocket" websocket
 use "std/parse" parse
 use "std/sync" sync
 use "std/thread/pool" tasks
@@ -85,6 +85,8 @@ enum Phase {
   // on_large_body before receive_body, and while the body arrives.
   LargeHead,
   Large,
+  // upgrade: WebSocket frames in DATA, assembled in the slot.
+  WebSocket,
 }
 
 // How the HTTP/1.1 response written so far maps to frames.
@@ -113,6 +115,11 @@ struct Stream {
   output_left: usize,
   output_chunks: http.ChunkReader,
   topic: u64,
+  // An extended CONNECT for :protocol websocket (RFC 8441 4).
+  websocket_request: bool,
+  frames: websocket.WebSocketMessageState,
+  websocket_used: usize,
+  close_sent: bool,
 }
 
 struct H2 {
@@ -322,10 +329,12 @@ fn h2_begin(worker: *Worker, index: usize) bool {
   h2.initial_window = 65535
   h2.peer_frame = MaxFrame
   connection.h2 = h2
-  settings: [18]u8
+  settings: [24]u8
   settings_item(settings[0..6], 3, #cast(u32, Http2Streams))
   settings_item(settings[6..12], 4, #cast(u32, StreamWindow))
   settings_item(settings[12..18], 6, #cast(u32, worker.config.receive_size - 1024))
+  // SETTINGS_ENABLE_CONNECT_PROTOCOL: WebSockets over HTTP/2.
+  settings_item(settings[18..24], 8, 1)
   _ = send_frame(connection, FrameSettings, 0, 0, settings[..], false)
   // The buffer is empty here, so these always fit.
   _ = send_window_update(connection, 0, ConnectionWindow - 65535)
@@ -407,6 +416,13 @@ fn close_stream(worker: *Worker, connection: *Connection, index: usize) {
   stream := &h2.streams[index]
   if stream.phase == Phase.Free {
     return
+  }
+  if stream.phase == Phase.WebSocket && worker.config.on_message != nil {
+    peer := peer_of(worker, connection.index)
+    peer.stream = stream.id
+    message := Message{ peer: peer, kind: MessageKind.Closed, context: worker.config.message_context }
+    worker.config.on_message(&message)
+    stream = &h2.streams[index]
   }
   give_upload(connection, stream)
   if stream.slot != 0 {
@@ -830,7 +846,7 @@ fn connection_specific(name: []const u8) bool {
     bytes.equal(name, "transfer-encoding") || bytes.equal(name, "upgrade")
 }
 
-struct Head { length: usize, declared: i64, ok: bool }
+struct Head { length: usize, declared: i64, ok: bool, websocket: bool }
 
 fn append(destination: []u8, at: usize, piece: []const u8) usize {
   if at + #len(piece) > #len(destination) {
@@ -847,6 +863,8 @@ fn synthesize(fields: []const u8, destination: []u8) Head {
   path := fields[..0]
   scheme := fields[..0]
   authority := fields[..0]
+  protocol := fields[..0]
+  has_protocol := false
   has_method := false
   has_path := false
   has_scheme := false
@@ -877,6 +895,9 @@ fn synthesize(fields: []const u8, destination: []u8) Head {
       } else if bytes.equal(field.name, ":authority") && !has_authority {
         authority = field.value
         has_authority = true
+      } else if bytes.equal(field.name, ":protocol") && !has_protocol {
+        protocol = field.value
+        has_protocol = true
       } else {
         return Head{}
       }
@@ -909,9 +930,18 @@ fn synthesize(fields: []const u8, destination: []u8) Head {
       declared = value
     }
   }
-  // CONNECT is not supported; every other method needs all three.
-  if !has_method || !has_path || !has_scheme || #len(path) == 0 || bytes.equal(method, "CONNECT") || !method_valid(method) {
+  // Only the extended CONNECT of RFC 8441 for WebSockets; :protocol needs it.
+  websocket_connect := bytes.equal(method, "CONNECT") && has_protocol && bytes.equal(protocol, "websocket")
+  if has_protocol && !websocket_connect {
     return Head{}
+  }
+  if !has_method || !has_path || !has_scheme || #len(path) == 0 || (bytes.equal(method, "CONNECT") && !websocket_connect) ||
+    !method_valid(method) {
+    return Head{}
+  }
+  if websocket_connect {
+    // The handler sees the HTTP/1.1 form: GET with Upgrade.
+    method = "GET"
   }
   if path[0] != '/' && !(bytes.equal(path, "*") && bytes.equal(method, "OPTIONS")) {
     return Head{}
@@ -931,6 +961,9 @@ fn synthesize(fields: []const u8, destination: []u8) Head {
     used = append(destination, used, authority)
     used = append(destination, used, "\r\n")
   }
+  if websocket_connect {
+    used = append(destination, used, "upgrade: websocket\r\nconnection: upgrade\r\n")
+  }
   at = 0
   for at < #len(fields) {
     field := field_at(fields, at)
@@ -947,7 +980,7 @@ fn synthesize(fields: []const u8, destination: []u8) Head {
   if used > #len(destination) {
     return Head{}
   }
-  return Head{ length: used, declared: declared, ok: true }
+  return Head{ length: used, declared: declared, ok: true, websocket: websocket_connect }
 }
 
 // A method is a token; HTTP/2 keeps its case.
@@ -1031,7 +1064,17 @@ fn on_headers(worker: *Worker, index: usize, at: usize, sequence: usize) bool {
   }
   stream := &h2.streams[free]
   stream.* = Stream{ id: id, phase: Phase.Receiving, send_window: h2.initial_window, slot: slot, storage: storage,
-    head_length: head.length, declared: head.declared, ended: ended }
+    head_length: head.length, declared: head.declared, ended: ended, websocket_request: head.websocket }
+  if head.websocket {
+    // The stream stays open for frames: dispatch now, not at END_STREAM.
+    h2.stream_count += 1
+    if ended {
+      reset_stream(worker, connection, free, ErrorProtocol)
+    } else {
+      dispatch(worker, index, free)
+    }
+    return true
+  }
   h2.stream_count += 1
   if ended {
     stream_ended(worker, index, free)
@@ -1107,6 +1150,16 @@ fn on_data(worker: *Worker, index: usize, flags: u8, id: u32, payload: []const u
     return
   }
   stream := &h2.streams[found]
+  if stream.phase == Phase.WebSocket && !stream.ended {
+    stream.credit += #cast(i64, #len(payload))
+    websocket_data(worker, connection, found, data, (flags & FlagEndStream) != 0)
+    stream = &h2.streams[found]
+    if stream.phase == Phase.WebSocket && stream.credit >= StreamWindow / 2 &&
+      send_window_update(connection, stream.id, stream.credit) {
+      stream.credit = 0
+    }
+    return
+  }
   if stream.ended || (stream.phase != Phase.Receiving && stream.phase != Phase.Large) {
     reset_stream(worker, connection, found, ErrorStreamClosed)
     return
@@ -1205,8 +1258,8 @@ fn dispatch(worker: *Worker, index: usize, stream_index: usize) {
   if stream.phase == Phase.Deferred || stream.phase == Phase.Free {
     return
   }
-  if stream.phase == Phase.Streaming || stream.phase == Phase.Large {
-    // Answered, with pushes to come; or reading a large body.
+  if stream.phase == Phase.Streaming || stream.phase == Phase.Large || stream.phase == Phase.WebSocket {
+    // Answered, with pushes or frames to come; or reading a large body.
     return
   }
   finish_stream(worker, index, stream_index)
@@ -1751,8 +1804,19 @@ fn h2_deliver(worker: *Worker, connection: *Connection, item: Post, payload: []c
   if item.kind == PostKind.Publish {
     for i in 0..Http2Streams {
       stream := &h2.streams[i]
-      if stream.phase == Phase.Streaming && stream.topic == item.topic {
+      if stream.topic != item.topic {
+        continue
+      }
+      if stream.phase == Phase.Streaming {
         if !send_data(worker, connection, i, payload, false, false) {
+          reset_stream(worker, connection, i, ErrorCancel)
+        }
+      } else if stream.phase == Phase.WebSocket && !stream.close_sent {
+        opcode: u8 = 1
+        if item.binary {
+          opcode = 2
+        }
+        if !websocket_send(worker, connection, i, opcode, payload) {
           reset_stream(worker, connection, i, ErrorCancel)
         }
       }
@@ -1760,6 +1824,21 @@ fn h2_deliver(worker: *Worker, connection: *Connection, item: Post, payload: []c
     return
   }
   index := find_stream(h2, item.stream)
+  if index != Http2Streams && h2.streams[index].phase == Phase.WebSocket {
+    stream := &h2.streams[index]
+    if item.kind == PostKind.Close {
+      websocket_close(worker, connection, index, 1000)
+      return
+    }
+    opcode: u8 = 1
+    if item.binary {
+      opcode = 2
+    }
+    if !stream.close_sent && !websocket_send(worker, connection, index, opcode, payload) {
+      reset_stream(worker, connection, index, ErrorCancel)
+    }
+    return
+  }
   if index == Http2Streams || h2.streams[index].phase != Phase.Streaming {
     return
   }
@@ -1857,4 +1936,135 @@ fn large_end(worker: *Worker, connection: *Connection, stream_index: usize, outc
     stream.ended = false
   }
   finish_stream(worker, connection.index, stream_index)
+}
+
+// ---------------------------------------------------------------- WebSockets (RFC 8441)
+
+// upgrade on an HTTP/2 stream: 200, then WebSocket frames in DATA.
+fn h2_upgrade(connection: *Connection, response: *http.Response, topic: u64) PeerResult {
+  worker := connection.worker
+  h2 := connection.h2
+  stream := current_stream(connection)
+  if stream.phase != Phase.Answering || !stream.websocket_request || response.started || response.finished || stream.slot == 0 {
+    return PeerResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
+  }
+  block: [8]u8
+  length := hpack.encode_field(block[..], ":status", "200")
+  if length == 0 || !send_frame(connection, FrameHeaders, FlagEndHeaders, stream.id, block[..length], true) {
+    return PeerResult{ failure: io.Failure{ kind: io.Kind.Capacity } }
+  }
+  response.started = true
+  response.finished = true
+  stream = current_stream(connection)
+  stream.output = Output.Done
+  stream.phase = Phase.WebSocket
+  stream.topic = topic
+  stream.frames = websocket.message_state(true)
+  stream.websocket_used = 0
+  // Messages assemble in the slot; the request bytes are done with.
+  give_upload(connection, stream)
+  stream.storage = worker.h2.slots[stream.slot - 1].bytes
+  peer := peer_of(worker, connection.index)
+  peer.stream = stream.id
+  _ = h2
+  return PeerResult{ value: peer }
+}
+
+// One WebSocket frame as DATA, never waiting: a full window fails.
+fn websocket_send(worker: *Worker, connection: *Connection, index: usize, opcode: u8, payload: []const u8) bool {
+  head_storage: [10]u8
+  head := frame_head(head_storage[..], opcode, #len(payload))
+  stream := &connection.h2.streams[index]
+  total := #cast(i64, #len(head) + #len(payload))
+  if total > stream.send_window || total > connection.h2.send_window {
+    return false
+  }
+  return send_data(worker, connection, index, head, false, false) && send_data(worker, connection, index, payload, false, false)
+}
+
+// Sends a close frame once and ends our side of the stream.
+fn websocket_close(worker: *Worker, connection: *Connection, index: usize, code: u16) {
+  stream := &connection.h2.streams[index]
+  if !stream.close_sent {
+    payload: [2]u8 = [#cast(u8, code >> 8), #cast(u8, code)]
+    stream.close_sent = true
+    if !websocket_send(worker, connection, index, 8, payload[..]) {
+      reset_stream(worker, connection, index, ErrorCancel)
+      return
+    }
+  }
+  empty: [0]u8
+  _ = send_data(worker, connection, index, empty[..], true, false)
+  close_stream(worker, connection, index)
+}
+
+// Client bytes for a WebSocket stream: frames are parsed as they complete,
+// fragments assembled at the front of the slot, as on HTTP/1.1.
+fn websocket_data(worker: *Worker, connection: *Connection, index: usize, data: []const u8, end: bool) {
+  stream := &connection.h2.streams[index]
+  buffer := stream.storage
+  if #len(data) > #len(buffer) - stream.websocket_used {
+    // The message cannot fit a slot.
+    websocket_close(worker, connection, index, 1009)
+    return
+  }
+  stream.websocket_used += mem.copy(buffer[stream.websocket_used..], data)
+  for {
+    stream = &connection.h2.streams[index]
+    if stream.phase != Phase.WebSocket || stream.close_sent {
+      break
+    }
+    start := stream.frames.used
+    frame := websocket.parse_frame(buffer[start..stream.websocket_used])
+    if frame.failure.kind == parse.Kind.Truncated {
+      break
+    }
+    control: [125]u8
+    received := websocket.receive(&stream.frames, buffer[..start + frame.consumed], control[..], frame)
+    frame_end := start + frame.consumed
+    kept := start
+    if received.detail == websocket.WebSocketEventKind.None {
+      kept = stream.frames.used
+    }
+    if received.detail == websocket.WebSocketEventKind.Error {
+      websocket_close(worker, connection, index, 1002)
+      return
+    }
+    if received.detail == websocket.WebSocketEventKind.Ping {
+      if !websocket_send(worker, connection, index, 10, received.payload) {
+        reset_stream(worker, connection, index, ErrorCancel)
+        return
+      }
+    } else if received.detail == websocket.WebSocketEventKind.Close {
+      websocket_close(worker, connection, index, 1000)
+      return
+    } else if received.detail == websocket.WebSocketEventKind.Ready {
+      if worker.config.on_message != nil {
+        kind := MessageKind.Text
+        if received.opcode == 2 {
+          kind = MessageKind.Binary
+        }
+        peer := peer_of(worker, connection.index)
+        peer.stream = stream.id
+        message := Message{ peer: peer, kind: kind, payload: received.payload, context: worker.config.message_context }
+        worker.config.on_message(&message)
+      }
+      kept = 0
+    }
+    stream = &connection.h2.streams[index]
+    if stream.phase != Phase.WebSocket {
+      return
+    }
+    remaining := stream.websocket_used - frame_end
+    for i in 0..remaining {
+      buffer[kept + i] = buffer[frame_end + i]
+    }
+    stream.websocket_used = kept + remaining
+  }
+  stream = &connection.h2.streams[index]
+  if end && stream.phase == Phase.WebSocket {
+    // The client ended its side without a close frame.
+    stream.ended = true
+    websocket_close(worker, connection, index, 1000)
+  }
 }

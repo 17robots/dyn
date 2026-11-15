@@ -295,10 +295,13 @@ and reverse proxies do). Others keep HTTP/1.1 on the same port.
 
 Each stream becomes an ordinary `http.Request` for the same handler, and the
 response it writes goes out as HEADERS and DATA frames, so routing, sessions,
-`respond_compressed`, `serve_asset`, `run`, `open_stream` and `receive_body`
-work unchanged, per stream: a slow job holds up only its own stream.
-`evented.upgrade` stays HTTP/1.1; browsers open a separate connection for
-WebSockets.
+`respond_compressed`, `serve_asset`, `run`, `open_stream`, `receive_body`
+and `upgrade` work unchanged, per stream: a slow job holds up only its own
+stream. WebSockets ride an HTTP/2 stream as RFC 8441 describes: the server
+advertises `SETTINGS_ENABLE_CONNECT_PROTOCOL`, the client's extended CONNECT
+reaches the handler as an ordinary `GET` with `Upgrade: websocket`, and
+`upgrade` answers 200 instead of 101. A socket's messages assemble in its
+request slot, so they are limited to `receive_size`, as on HTTP/1.1.
 
 ```dyn
 use "std/mem"
@@ -342,4 +345,3 @@ so with `Overflow.Reject` they are closed instead.
 ## Not yet
 
 - HTTP/3 (QUIC).
-- WebSockets over HTTP/2 (RFC 8441); browsers use HTTP/1.1 for them.
