@@ -10517,11 +10517,53 @@ static int ssa_float_branch(SsaEmit *e, const SsaValue *c) {
    used nowhere else becomes that operation on 32-bit registers, which
    zero-extends its result for free. Then x >> c | x << (32 - c), with x
    known to fit in 32 bits, becomes ROR. Runs after dce, which counts uses. */
-static bool ssa_fits32(Ssa *s, int32_t id, uint32_t block) {
-  if (id < 0) return false;
-  uint64_t lo, hi;
-  ssa_range(s, id, block, &lo, &hi, 0);
-  return hi <= UINT32_MAX;
+/* Which values are below 2^32, as a fixpoint: phis start optimistic (a u32
+   loop variable carried around a loop), and anything an operand disproves
+   drops out until nothing changes. */
+static bool ssa_fits32_value(Ssa *s, const bool *fits, uint32_t id) {
+  SsaValue *v = &s->values[id];
+  uint64_t c;
+  if (v->cls != SC_INT) return false;
+  if (v->w32) return true;
+  switch (v->op) {
+  case SO_CONST: return (uint64_t)v->aux <= UINT32_MAX;
+  case SO_EXT: return !v->aux2 && v->aux <= 32;
+  case SO_LOAD: return !(v->aux2 >> 9 & 1) && !(v->aux2 >> 8 & 1) && (v->aux2 & 0xff) <= 32;
+  case SO_CMP: case SO_FCMP: return true;
+  case SO_AND: return (v->a >= 0 && fits[v->a]) || (v->b >= 0 && fits[v->b]);
+  case SO_OR: case SO_XOR: return v->a >= 0 && v->b >= 0 && fits[v->a] && fits[v->b];
+  case SO_SHR: return v->a >= 0 && fits[v->a];
+  case SO_COPY: return v->a >= 0 && fits[v->a];
+  case SO_REM: return !v->aux2 && ssa_is_const(s, v->b, &c) && c && c - 1 <= UINT32_MAX;
+  case SO_PHI:
+    for (uint32_t k = 0; k < v->count; ++k) {
+      int32_t operand = (int32_t)s->lists[v->list + k];
+      if (operand < 0 || !fits[operand]) return false;
+    }
+    return true;
+  default: return false;
+  }
+}
+static bool *ssa_fits32_all(Ssa *s, const uint32_t *order, uint32_t n) {
+  bool *fits = ssa_temp(s, (s->value_count + 1) * sizeof(bool));
+  if (!fits) return NULL;
+  for (uint32_t i = 0; i < s->value_count; ++i) fits[i] = false;
+  for (uint32_t i = 0; i < n; ++i) {
+    SsaBlock *block = &s->blocks[order[i]];
+    for (uint32_t k = 0; k < block->values.count; ++k)
+      fits[block->values.items[k]] = s->values[block->values.items[k]].cls == SC_INT;
+  }
+  for (bool changed = true; changed;) {
+    changed = false;
+    for (uint32_t i = 0; i < n; ++i) {
+      SsaBlock *block = &s->blocks[order[i]];
+      for (uint32_t k = 0; k < block->values.count; ++k) {
+        uint32_t id = block->values.items[k];
+        if (fits[id] && !ssa_fits32_value(s, fits, id)) { fits[id] = false; changed = true; }
+      }
+    }
+  }
+  return fits;
 }
 static void ssa_narrow32(Ssa *s, const uint32_t *order, uint32_t n) {
   bool changed = false;
@@ -10555,6 +10597,8 @@ static void ssa_narrow32(Ssa *s, const uint32_t *order, uint32_t n) {
   ssa_resolve_all(s);
   ssa_dce(s, order, n);
   ++s->range_stamp;
+  bool *fits = ssa_fits32_all(s, order, n);
+  if (!fits) return;
   for (uint32_t i = 0; i < n; ++i) {
     SsaBlock *block = &s->blocks[order[i]];
     for (uint32_t k = 0; k < block->values.count; ++k) {
@@ -10566,7 +10610,7 @@ static void ssa_narrow32(Ssa *s, const uint32_t *order, uint32_t n) {
       uint64_t rc, lc;
       if (r->op != SO_SHR || r->rotate || l->op != SO_SHL || !l->w32 || r->a != l->a || r->a < 0 ||
           !ssa_is_const(s, r->b, &rc) || !ssa_is_const(s, l->b, &lc) || rc == 0 || rc >= 32 || lc != 32 - rc ||
-          !ssa_fits32(s, r->a, order[i]))
+          !fits[r->a])
         continue;
       v->op = SO_SHR;
       v->a = r->a;

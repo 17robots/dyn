@@ -27,13 +27,8 @@ fn block(state: *[8]u32, input: []const u8) {
   for i in 16..64 {
     word_x := words[i - 15]
     word_y := words[i - 2]
-    // One call per statement: the inliner expands one call per statement.
-    x7 := rotr(word_x, 7)
-    x18 := rotr(word_x, 18)
-    y17 := rotr(word_y, 17)
-    y19 := rotr(word_y, 19)
-    extend0 := x7 ^ x18 ^ (word_x >> 3)
-    extend1 := y17 ^ y19 ^ (word_y >> 10)
+    extend0 := rotr(word_x, 7) ^ rotr(word_x, 18) ^ (word_x >> 3)
+    extend1 := rotr(word_y, 17) ^ rotr(word_y, 19) ^ (word_y >> 10)
     words[i] = words[i - 16] + extend0 + words[i - 7] + extend1
   }
   a := state.*[0]
@@ -45,16 +40,10 @@ fn block(state: *[8]u32, input: []const u8) {
   g := state.*[6]
   h := state.*[7]
   for i in 0..64 {
-    e6 := rotr(e, 6)
-    e11 := rotr(e, 11)
-    e25 := rotr(e, 25)
-    round1 := e6 ^ e11 ^ e25
+    round1 := rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)
     choose := (e & f) ^ (~e & g)
     t1 := h + round1 + choose + K[i] + words[i]
-    a2 := rotr(a, 2)
-    a13 := rotr(a, 13)
-    a22 := rotr(a, 22)
-    round0 := a2 ^ a13 ^ a22
+    round0 := rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)
     majority := (a & b) ^ (a & c) ^ (b & c)
     t2 := round0 + majority
     h = g

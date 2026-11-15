@@ -1,0 +1,63 @@
+// u32 arithmetic, rotates and near-rotates, and statements with several
+// calls to pure helpers, mixed with calls that have effects or can trap.
+// Debug and release must print the same lines.
+use "std/io"
+
+counter: u32 = 0
+
+fn rotr(x: u32, n: u32) u32 {
+  return (x >> n) | (x << (32 - n))
+}
+
+fn rotl(x: u32, n: u32) u32 {
+  return (x << n) | (x >> (32 - n))
+}
+
+fn mix(a: u32, b: u32) u32 {
+  return a * 2654435761 + b
+}
+
+// Not pure: it changes a global the statement also reads.
+fn bump(x: u32) u32 {
+  counter += 1
+  return x + counter
+}
+
+// Can trap: division.
+fn ratio(a: u32, b: u32) u32 {
+  return a / b
+}
+
+fn not_rotate(x: u32, y: u32) u32 {
+  return (x >> 3) | (y << 29)
+}
+
+fn wide(x: u64) u64 {
+  return (x >> 7) | (x << 57)
+}
+
+fn main() {
+  state: u32 = 0x6a09e667
+  other: u32 = 0xbb67ae85
+  total: u64 = 0
+  for i in 0..2000 {
+    k := #cast(u32, i)
+    state = rotr(state, 6) ^ rotr(state, 11) ^ rotr(state, 25) ^ (state >> 3)
+    other = rotl(other ^ k, 7) + mix(state, k) - mix(other, 3) + rotr(k + 1, 31)
+    a := state * other + ~k - (k << 5)
+    b := -a
+    c := not_rotate(a, b) ^ rotr(b, 13)
+    // The global read must see bump's update only after bump runs.
+    d := counter + bump(c) + rotr(c, 1)
+    e := mix(d, rotr(d, 9)) + mix(rotl(d, 3), d)
+    total += #cast(u64, e) + wide(#cast(u64, a) << 20 | #cast(u64, c))
+    if rotr(e, 4) > rotl(e, 4) && mix(e, 1) != 0 {
+      total ^= 1
+    }
+  }
+  io.println("{} {} {} {}", state, other, counter, total)
+  // A division that would trap stays after the check that guards it.
+  zero: u32 = 0
+  safe := zero == 0 || ratio(1, zero) == 0
+  io.println("{} {}", safe, rotr(state, 16) + ratio(other, 7) + rotl(state, 16))
+}
