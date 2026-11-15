@@ -317,13 +317,106 @@ pub fn etag_matches(request: *const Request, etag: []const u8) bool {
   return false
 }
 
+// A single byte range of a representation length bytes long, from a Range
+// header (RFC 9110 14.1.2): bytes=first-last, bytes=first- or bytes=-suffix.
+// present is false without a usable single bytes range (absent, another
+// unit, several ranges, or bad syntax), and the whole representation is
+// sent. satisfiable is false when the range starts past the end (416).
+// start and end are a half-open interval.
+pub struct ByteRange { start: usize, end: usize, present: bool, satisfiable: bool }
+
+fn decimal_value(text: []const u8) Decimal {
+  if #len(text) == 0 || #len(text) > 19 {
+    return Decimal{}
+  }
+  value: usize = 0
+  for byte in text {
+    if byte < '0' || byte > '9' {
+      return Decimal{}
+    }
+    value = value * 10 + (byte - '0')
+  }
+  return Decimal{ value: value, ok: true }
+}
+
+pub fn byte_range(request: *const Request, length: usize) ByteRange {
+  header := request_header(request, "Range")
+  if !header.found {
+    return ByteRange{}
+  }
+  value := trim_ows(header.value)
+  if #len(value) < 7 || !ascii_equal(value[..6], "bytes=") || bytes.find_byte(value, ',') != #len(value) {
+    return ByteRange{}
+  }
+  spec := trim_ows(value[6..])
+  dash := bytes.find_byte(spec, '-')
+  if dash == #len(spec) {
+    return ByteRange{}
+  }
+  first_text := trim_ows(spec[..dash])
+  last_text := trim_ows(spec[dash + 1..])
+  if #len(first_text) == 0 {
+    suffix := decimal_value(last_text)
+    if !suffix.ok {
+      return ByteRange{}
+    }
+    if suffix.value == 0 || length == 0 {
+      return ByteRange{ present: true }
+    }
+    take := suffix.value
+    if take > length {
+      take = length
+    }
+    return ByteRange{ start: length - take, end: length, present: true, satisfiable: true }
+  }
+  first := decimal_value(first_text)
+  if !first.ok {
+    return ByteRange{}
+  }
+  end := length
+  if #len(last_text) > 0 {
+    last := decimal_value(last_text)
+    if !last.ok || last.value < first.value {
+      return ByteRange{}
+    }
+    if last.value < length {
+      end = last.value + 1
+    }
+  }
+  if first.value >= length {
+    return ByteRange{ present: true }
+  }
+  return ByteRange{ start: first.value, end: end, present: true, satisfiable: true }
+}
+
+// If-Range (RFC 9110 13.1.5): the range applies only while the validator
+// still matches: a strong ETag, or a date equal to modified.
+fn range_current(request: *const Request, asset: *const Asset) bool {
+  header := request_header(request, "If-Range")
+  if !header.found {
+    return true
+  }
+  value := trim_ows(header.value)
+  if #len(value) > 0 && value[0] == '"' {
+    return bytes.equal(value, asset.etag)
+  }
+  parsed := parse_date(value)
+  return asset.modified != 0 && !parse.failed(parsed.failure) && parsed.value == asset.modified
+}
+
+fn put_decimal(destination: []u8, at: usize, value: usize) usize {
+  return append_bytes(destination, at, decimal(destination[at..], value))
+}
+
 // Answers request with asset: 304 when If-None-Match matches (or, without
-// If-None-Match, when If-Modified-Since is not older than modified), else
-// 200 with the gzip copy when the client accepts gzip. cache_control is sent
+// If-None-Match, when If-Modified-Since is not older than modified); 206 for
+// a single byte range of the uncompressed bytes (416 when it starts past the
+// end; If-Range honored); else 200 with the gzip copy when the client
+// accepts gzip. cache_control is sent
 // as Cache-Control when not empty, such as "public, max-age=31536000,
 // immutable" for fingerprinted names or "no-cache" to revalidate each time.
 pub fn serve_asset(response: *Response, request: *const Request, asset: *const Asset, cache_control: []const u8) Result {
-  headers: [5]Header
+  headers: [7]Header
   count: usize = 0
   headers[count] = Header{ name: "ETag", value: asset.etag }
   count += 1
@@ -352,6 +445,33 @@ pub fn serve_asset(response: *Response, request: *const Request, asset: *const A
   }
   if not_modified {
     return respond(response, "", ResponseOptions{ status: StatusNotModified, headers: headers[..count] })
+  }
+  headers[count] = Header{ name: "Accept-Ranges", value: "bytes" }
+  count += 1
+  wanted := ByteRange{}
+  if bytes.equal(request.method, "GET") || bytes.equal(request.method, "HEAD") {
+    wanted = byte_range(request, #len(asset.body))
+  }
+  if wanted.present && range_current(request, asset) {
+    range_storage: [64]u8
+    at := append_bytes(range_storage[..], 0, "bytes ")
+    if !wanted.satisfiable {
+      at = append_bytes(range_storage[..], at, "*/")
+      at = put_decimal(range_storage[..], at, #len(asset.body))
+      headers[count] = Header{ name: "Content-Range", value: range_storage[..at] }
+      count += 1
+      return respond(response, "", ResponseOptions{ status: StatusRangeNotSatisfiable, content_type: asset.content_type,
+        headers: headers[..count] })
+    }
+    at = put_decimal(range_storage[..], at, wanted.start)
+    at = append_bytes(range_storage[..], at, "-")
+    at = put_decimal(range_storage[..], at, wanted.end - 1)
+    at = append_bytes(range_storage[..], at, "/")
+    at = put_decimal(range_storage[..], at, #len(asset.body))
+    headers[count] = Header{ name: "Content-Range", value: range_storage[..at] }
+    count += 1
+    return respond(response, asset.body[wanted.start..wanted.end], ResponseOptions{ status: StatusPartialContent,
+      content_type: asset.content_type, headers: headers[..count] })
   }
   if #len(asset.gzip) > 0 && accepts_encoding(request, "gzip") {
     headers[count] = Header{ name: "Content-Encoding", value: "gzip" }

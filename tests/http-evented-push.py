@@ -127,6 +127,25 @@ def exercise(port):
     status, headers, body = request(port, 'HEAD', '/static/logo.png')
     assert (status, body, headers['content-type'], headers['content-length']) == (200, b'', 'image/png', '15'), headers
     assert request(port, 'GET', '/static/missing.js')[0] == 404
+    # Byte ranges: one range of the uncompressed bytes, If-Range, 416.
+    whole = css[:4096]
+    for spec, start, end in (('bytes=0-9', 0, 10), ('bytes=4090-', 4090, 4096), ('bytes=-6', 4090, 4096),
+                             ('bytes=100-99999', 100, 4096)):
+        status, headers, body = request(port, 'GET', '/static/style.css',
+                                        headers={'Range': spec, 'Accept-Encoding': 'gzip'})
+        assert (status, body, headers['content-range']) == (206, whole[start:end], f'bytes {start}-{end - 1}/4096'), (spec, status, headers)
+        assert 'content-encoding' not in headers
+    status, headers, _ = request(port, 'GET', '/static/style.css', headers={'Range': 'bytes=5000-'})
+    assert (status, headers['content-range']) == (416, 'bytes */4096'), (status, headers)
+    status, headers, body = request(port, 'GET', '/static/style.css', headers={'Range': 'bytes=0-1,5-6'})
+    assert (status, body, headers['accept-ranges']) == (200, whole, 'bytes')
+    status, _, body = request(port, 'GET', '/static/style.css', headers={'Range': 'bytes=0-1', 'If-Range': etag})
+    assert (status, body) == (206, whole[:2])
+    status, _, body = request(port, 'GET', '/static/style.css', headers={'Range': 'bytes=0-1', 'If-Range': '"stale"'})
+    assert (status, body) == (200, whole)
+    status, _, body = request(port, 'GET', '/static/style.css',
+                              headers={'Range': 'bytes=0-1', 'If-Range': 'Sun, 06 Nov 1994 08:49:37 GMT'})
+    assert (status, body) == (206, whole[:2])
 
     # Offload: the hash runs on the pool and matches Python's PBKDF2.
     status, _, body = request(port, 'POST', '/hash', b'correct horse')

@@ -173,7 +173,9 @@ type from the extension, a strong ETag, and a gzip copy at level 9 when that
 is smaller. `http.load_directory` loads a whole tree at startup.
 `http.serve_asset` answers `If-None-Match` and `If-Modified-Since` with 304,
 sends gzip when `Accept-Encoding` allows it (q-values honored), and sets
-`Vary`, `ETag`, `Last-Modified` and the `Cache-Control` you give. Fingerprinted
+`Vary`, `ETag`, `Last-Modified` and the `Cache-Control` you give. A single
+`Range` gets 206 with the uncompressed bytes, honoring `If-Range`; a range
+past the end gets 416. Fingerprinted
 names can use `"public, max-age=31536000, immutable"`.
 
 For dynamic responses, `gzip.write` compresses into caller storage
@@ -242,7 +244,6 @@ so with `Overflow.Reject` they are closed instead.
 ## Not yet
 
 - HTTP/2 and HTTP/3.
-- Range requests (206).
 - Streaming request bodies: a request must fit the receive buffer.
 - Response compression on the fly in `serve_asset`; dynamic responses call
   `gzip.write` themselves.

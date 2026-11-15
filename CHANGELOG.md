@@ -45,7 +45,8 @@ Web applications: see [docs/guide/web-apps.md](docs/guide/web-apps.md).
   - New helpers: `cookie`, `cookie_in`, `set_cookie` (`Cookie`, `SameSite`),
     `format_date`, `parse_date`, `sse_event`.
   - Static assets: `make_asset`, `load_directory`, `find_asset`,
-    `serve_asset`, `content_type`, `accepts_encoding`, `etag_matches`.
+    `serve_asset` (with single byte ranges, 206 and 416), `byte_range`,
+    `content_type`, `accepts_encoding`, `etag_matches`.
   - `multipart` and `next_part` for `multipart/form-data`.
   - `Limiter`, `allow` and `ip_key` for rate limits.
   - A small chunk of a streamed body is now sent as one write.
