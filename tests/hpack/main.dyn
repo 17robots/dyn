@@ -1,0 +1,98 @@
+// HPACK against Go's encoder: vectors.txt holds 300 header blocks written by
+// golang.org/x/net/http2/hpack with a 256-byte table, size updates, sensitive
+// fields and Huffman strings, each with the fields it encodes (both hex).
+// Decodes every block in order with one decoder, then round-trips each field
+// list through encode_field. Prints the counts and the first mismatch.
+use "std/bytes"
+use "std/encoding/hex"
+use "std/io"
+use "std/mem"
+use "std/net/http/hpack"
+use "std/parse"
+
+const Vectors: []const u8 = #load("vectors.txt")
+
+// Decodes block, joining fields as name=value|...; empty on failure.
+fn decode_all(decoder: *hpack.Decoder, block: []const u8, output: []u8) []const u8 {
+  scratch: [1024]u8
+  used: usize = 0
+  at: usize = 0
+  hpack.decode_begin(decoder)
+  for at < #len(block) {
+    field := hpack.decode_field(decoder, block[at..], scratch[..])
+    if parse.failed(field.failure) {
+      return "error"
+    }
+    at += field.consumed
+    if field.update {
+      continue
+    }
+    if used > 0 {
+      output[used] = '|'
+      used += 1
+    }
+    used += mem.copy(output[used..], field.name)
+    output[used] = '='
+    used += 1
+    used += mem.copy(output[used..], field.value)
+  }
+  return output[..used]
+}
+
+fn main() {
+  arena := mem.arena_alloc(4 * mem.MiB)
+  defer mem.arena_release(arena)
+  storage: [hpack.DefaultTableSize]u8
+  entries: [hpack.DefaultTableSize / hpack.EntryOverhead]hpack.Entry
+  decoder := hpack.decoder(storage[..], entries[..])
+  decoded: usize = 0
+  encoded: usize = 0
+  lines := bytes.splitter(Vectors, "\n")
+  for {
+    piece := bytes.split_next(&lines)
+    if !piece.found {
+      break
+    }
+    if #len(piece.value) == 0 {
+      continue
+    }
+    tab := bytes.find_byte(piece.value, '\t')
+    block := hex.decode(arena, piece.value[..tab])
+    want := hex.decode(arena, piece.value[tab + 1..])
+    output: [4096]u8
+    got := decode_all(&decoder, block.value, output[..])
+    if !bytes.equal(got, want.value) {
+      io.println("decode mismatch {}: {} != {}", decoded, got, want.value)
+      return
+    }
+    decoded += 1
+    // Round trip: encode the same fields, decode with a fresh table.
+    wire: [4096]u8
+    length: usize = 0
+    fields := bytes.splitter(want.value, "|")
+    for {
+      item := bytes.split_next(&fields)
+      if !item.found {
+        break
+      }
+      equals := bytes.find_byte(item.value, '=')
+      written := hpack.encode_field(wire[length..], item.value[..equals], item.value[equals + 1..])
+      if written == 0 {
+        io.println("encode failed {}", encoded)
+        return
+      }
+      length += written
+    }
+    fresh_storage: [hpack.DefaultTableSize]u8
+    fresh_entries: [hpack.DefaultTableSize / hpack.EntryOverhead]hpack.Entry
+    fresh := hpack.decoder(fresh_storage[..], fresh_entries[..])
+    again: [4096]u8
+    round := decode_all(&fresh, wire[..length], again[..])
+    if !bytes.equal(round, want.value) {
+      io.println("round trip mismatch {}: {}", encoded, round)
+      return
+    }
+    encoded += 1
+  }
+  io.println("decoded {} encoded {} size {}", decoded, encoded, decoder.table.size)
+}
