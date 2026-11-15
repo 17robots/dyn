@@ -16,6 +16,10 @@ servers so they pick up the new `dyn`.
 
 Web applications: see [docs/guide/web-apps.md](docs/guide/web-apps.md).
 
+- `evented.respond_compressed` gzips dynamic responses with a per-worker
+  encoder (`Config.compress_level`) when the client accepts gzip, the type
+  compresses and the body is at least 1 KiB; `http.respond_compressed`
+  takes the encoder itself.
 - A bare block, `{ ... }` as a statement, opens a scope: its locals end and
   its defers run at the closing brace. Hold a lock for part of a function
   without a helper function or `if true`.

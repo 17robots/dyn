@@ -1,0 +1,65 @@
+use "std/compress/gzip" gzip
+use "std/parse" parse
+
+// Gzip for dynamic responses. Static assets carry a precompressed copy
+// instead (see make_asset).
+
+// Bodies shorter than this go out as they are: a gzip member has 18 bytes of
+// framing, and small bodies fit one packet either way.
+pub const CompressMinimum: usize = 1024
+
+// Extra headers respond_compressed can carry besides Content-Encoding and Vary.
+pub const CompressHeaders: usize = 30
+
+// Like respond, with body gzipped at level (1-9) when that helps: the content
+// type compresses (text, JSON, XML, SVG, JavaScript, WebAssembly), body has at
+// least CompressMinimum bytes, the request accepts gzip and the result is
+// smaller. The compressed bytes go straight into transport storage
+// (body_buffer), so a response without it, or one too large for it, goes out
+// uncompressed. Such responses carry Vary: Accept-Encoding either way.
+// encoder is workspace, reused across calls; nil never compresses. options
+// that already set Content-Encoding, or carry more than CompressHeaders
+// headers, send body as respond would.
+pub fn respond_compressed(response: *Response, request: *const Request, body: []const u8, options: ResponseOptions,
+  level: u8, encoder: *gzip.Encoder) Result {
+  if !compressible(options.content_type) || #len(body) < CompressMinimum || #len(options.headers) > CompressHeaders ||
+    has_coding(options.headers) {
+    return respond(response, body, options)
+  }
+  headers: [CompressHeaders + 2]Header
+  count: usize = 0
+  for item in options.headers {
+    headers[count] = item
+    count += 1
+  }
+  headers[count] = Header{ name: "Vary", value: "Accept-Encoding" }
+  count += 1
+  varied := options
+  varied.headers = headers[..count]
+  if encoder == nil || !accepts_encoding(request, "gzip") {
+    return respond(response, body, varied)
+  }
+  storage := body_buffer(response, gzip.compress_bound(#len(body)))
+  if #len(storage) == 0 {
+    return respond(response, body, varied)
+  }
+  encoded := gzip.write(storage, body, level, encoder)
+  if parse.failed(encoded.failure) || #len(encoded.value) >= #len(body) {
+    // The reservation lapses: respond queues its own copy.
+    return respond(response, body, varied)
+  }
+  headers[count] = Header{ name: "Content-Encoding", value: "gzip" }
+  count += 1
+  varied.headers = headers[..count]
+  return respond_buffered(response, #len(encoded.value), varied)
+}
+
+// Whether a response with these headers already names a content coding.
+fn has_coding(headers: []const Header) bool {
+  for item in headers {
+    if ascii_equal(item.name, "Content-Encoding") {
+      return true
+    }
+  }
+  return false
+}

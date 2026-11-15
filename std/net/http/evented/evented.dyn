@@ -31,6 +31,7 @@
 #target(pointer_bits: 64)
 
 use "std/bytes" bytes
+use "std/compress/gzip" gzip
 use "std/event" event
 use "std/io" io
 use "std/mem" mem
@@ -94,6 +95,9 @@ pub struct Config {
   // Message.context for on_message. Workers share it: synchronize what it
   // points to.
   message_context: rawptr,
+  // gzip level (1-9) for respond_compressed; each worker keeps one encoder
+  // workspace (about 300 KiB). Zero sends bodies uncompressed.
+  compress_level: u8,
 }
 
 // Wait holds the client in a reserve slot until a regular one frees, then in
@@ -178,6 +182,9 @@ pub fn storage_size(config: Config, worker_count: usize) usize {
   per_worker += config.upload_count * (config.upload_size + #sizeof(usize))
   per_worker += slots * (config.job_size + mem.ArenaBufferOverhead + 2 * #sizeof(usize))
   per_worker += 2 * (config.inbox_messages * #sizeof(Post) + config.inbox_bytes) + 64
+  if config.compress_level > 0 {
+    per_worker += #sizeof(gzip.Encoder) + #alignof(gzip.Encoder)
+  }
   return worker_count * per_worker
 }
 
@@ -315,6 +322,8 @@ pub struct Worker {
   // Current IMF-fixdate for Date headers, refreshed once per loop pass.
   date: [http.DateLength]u8,
   date_second: i64,
+  // Workspace for respond_compressed; nil when Config.compress_level is zero.
+  encoder: *gzip.Encoder,
 }
 
 const ListenerToken: u64 = 0
@@ -1141,6 +1150,9 @@ fn valid_start(workers: []Worker, config: Config, handler: http.Handler) io.Fail
   if (config.upload_count == 0) != (config.upload_size == 0) || (config.upload_count > 0 && config.upload_size <= config.receive_size) {
     return io.Failure{ kind: io.Kind.InvalidInput }
   }
+  if config.compress_level > 9 {
+    return io.Failure{ kind: io.Kind.InvalidInput }
+  }
   if config.transport != nil && config.transport.needs_native_threads && config.spawner == nil {
     return io.Failure{ kind: io.Kind.InvalidInput }
   }
@@ -1202,6 +1214,9 @@ fn start_worker(arena: *mem.Arena, worker: *Worker) io.Failure {
     worker.inbox.done[half] = mem.push_array(usize, arena, count)
   }
   worker.scratch = mem.arena_from_buffer(mem.push_bytes_uninit(arena, scratch_size(config)))
+  if config.compress_level > 0 {
+    worker.encoder = #cast(*gzip.Encoder, mem.arena_push_uninit(arena, #sizeof(gzip.Encoder), #alignof(gzip.Encoder)))
+  }
   blocking := network.nonblocking(worker.listener.descriptor, true)
   if io.failed(blocking.failure) {
     return blocking.failure
@@ -1619,6 +1634,19 @@ pub fn client_ip(response: *http.Response) network.Ip {
     return network.Ip{}
   }
   return network.address_ip(&connection.remote)
+}
+
+// http.respond_compressed with the worker's encoder at Config.compress_level:
+// body is gzipped when the client accepts it and that helps. Uncompressed
+// when compress_level is zero or response is not an evented response.
+pub fn respond_compressed(response: *http.Response, request: *const http.Request, body: []const u8,
+  options: http.ResponseOptions) http.Result {
+  connection := connection_of(response)
+  if connection == nil {
+    return http.respond_compressed(response, request, body, options, 0, nil)
+  }
+  worker := connection.worker
+  return http.respond_compressed(response, request, body, options, worker.config.compress_level, worker.encoder)
 }
 
 // ---------------------------------------------------------------- run

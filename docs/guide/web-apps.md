@@ -178,9 +178,14 @@ sends gzip when `Accept-Encoding` allows it (q-values honored), and sets
 past the end gets 416. Fingerprinted
 names can use `"public, max-age=31536000, immutable"`.
 
-For dynamic responses, `gzip.write` compresses into caller storage
-with a reusable `gzip.Encoder` workspace. Level 1 is fast; level 6 matches
-zlib's default size.
+For dynamic responses, set `Config.compress_level` (1 is fast, 6 matches
+zlib's default size) and answer with `evented.respond_compressed(response,
+request, body, options)`. It gzips straight into the send buffer when the
+content type compresses, the body has at least `http.CompressMinimum` (1 KiB)
+bytes, the client accepts gzip and the result is smaller, and sends `Vary:
+Accept-Encoding`. Each worker keeps one encoder (about 300 KiB). Outside the
+evented server, `http.respond_compressed` takes the encoder and level, and
+`gzip.write` compresses into caller storage.
 
 ## Forms and uploads
 
@@ -249,5 +254,3 @@ so with `Overflow.Reject` they are closed instead.
 
 - HTTP/2 and HTTP/3.
 - Unbounded streaming request bodies: a request must fit `Config.upload_size`.
-- Response compression on the fly in `serve_asset`; dynamic responses call
-  `gzip.write` themselves.

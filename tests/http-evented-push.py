@@ -4,6 +4,7 @@ flowing), pipelining behind a job, SSE streams with publish, WebSocket echo,
 ping, fragments, broadcast, close and protocol errors, HEAD, Date, and the
 overflow policy (idle eviction, then 503)."""
 import base64
+import gzip as gz
 import hashlib
 import http.client
 import os
@@ -108,6 +109,18 @@ def exercise(port):
 
     assert request(port, 'GET', '/ip')[2] == b'127.0.0.1'
 
+    # Dynamic responses gzip when the client accepts it.
+    rows = b'[' + b','.join(b'{"id":%d,"name":"row %d"}' % (i, i) for i in range(400)) + b']'
+    status, headers, body = request(port, 'GET', '/report', headers={'Accept-Encoding': 'gzip, br'})
+    assert (status, headers['content-encoding'], headers['vary'], headers['cache-control']) == (200, 'gzip', 'Accept-Encoding', 'no-store'), headers
+    assert gz.decompress(body) == rows and len(body) < len(rows) // 4, len(body)
+    status, headers, body = request(port, 'HEAD', '/report', headers={'Accept-Encoding': 'gzip'})
+    assert (status, body, headers['content-encoding']) == (200, b'', 'gzip') and int(headers['content-length']) < len(rows) // 4, headers
+    status, headers, body = request(port, 'GET', '/report', headers={'Accept-Encoding': 'gzip;q=0'})
+    assert (status, body, headers['vary'], 'content-encoding' in headers) == (200, rows, 'Accept-Encoding', False), headers
+    status, headers, body = request(port, 'GET', '/report?n=2', headers={'Accept-Encoding': 'gzip'})
+    assert (status, body, 'content-encoding' in headers, 'vary' in headers) == (200, b'[{"id":0,"name":"row 0"},{"id":1,"name":"row 1"}]', False, False), headers
+
     # Uploads past the 4 KiB receive buffer borrow a 1 MiB block.
     blob = bytes((i * 7) % 251 for i in range(700 * 1024))
     status, _, body = request(port, 'POST', '/upload', blob)
@@ -171,7 +184,6 @@ def exercise(port):
     css = b'body { color: red; } ' * 196 + b'body'
     status, headers, body = request(port, 'GET', '/static/style.css', headers={'Accept-Encoding': 'gzip'})
     assert (status, headers['content-encoding'], headers['vary']) == (200, 'gzip', 'Accept-Encoding'), headers
-    import gzip as gz
     assert gz.decompress(body) == css[:4096] and len(body) < 200
     etag = headers['etag']
     assert headers['last-modified'] == 'Sun, 06 Nov 1994 08:49:37 GMT' and headers['cache-control'] == 'public, max-age=60'
