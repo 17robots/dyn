@@ -12,7 +12,9 @@ Pin the new version and its checksums from [`mise.example.toml`](mise.example.to
 run `mise install`, and confirm with `dyn version`. Restart editor language
 servers so they pick up the new `dyn`.
 
-## Unreleased
+## 0.1.0-preview.39
+
+Breaking: see [docs/migrations/0.1.0-preview.39.md](docs/migrations/0.1.0-preview.39.md).
 
 - `examples/` is now a course: nine tested projects in order, from the Game
   of Life to a multi-threaded prime counter, each with a README of what it
