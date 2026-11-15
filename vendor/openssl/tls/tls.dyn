@@ -153,6 +153,62 @@ pub fn set_alpn_protocols(connection: Connection, protocols: []const u8) bool {
   return ssl_set_alpn(connection, &protocols[0], #cast(u32, #len(protocols))) == 0
 }
 
+// Server side: during each handshake, picks the first protocol of
+// preference that the client offers, in wire format like set_alpn_protocols.
+// preference must outlive the context (a string literal does). No common
+// protocol continues without ALPN.
+pub fn set_server_alpn(context: Context, preference: *const []const u8) bool {
+  if context == nil || preference == nil || #len(preference.*) == 0 {
+    return false
+  }
+  ssl_context_alpn_select(context, alpn_select, #cast(rawptr, preference))
+  return true
+}
+
+// SSL_CTX_alpn_select_cb_func: SSL_TLSEXT_ERR_OK (0) with out pointing into
+// the client's list, or SSL_TLSEXT_ERR_NOACK (3).
+fn alpn_select(connection: rawptr, out: *rawptr, out_length: *u8, offered: *const u8, offered_length: u32, argument: rawptr) i32 {
+  _ = connection
+  preference := #cast(*const []const u8, argument).*
+  if offered == nil || offered_length == 0 {
+    return 3
+  }
+  client := #slice(offered, offered_length)
+  at: usize = 0
+  for at < #len(preference) {
+    length := #cast(usize, preference[at])
+    if length == 0 || length > #len(preference) - at - 1 {
+      return 3
+    }
+    wanted := preference[at + 1..at + 1 + length]
+    at += 1 + length
+    index: usize = 0
+    for index < #len(client) {
+      size := #cast(usize, client[index])
+      if size > #len(client) - index - 1 {
+        break
+      }
+      candidate := client[index + 1..index + 1 + size]
+      if size == length && bytes_equal(candidate, wanted) {
+        out.* = #cast(rawptr, &client[index + 1])
+        out_length.* = #cast(u8, size)
+        return 0
+      }
+      index += 1 + size
+    }
+  }
+  return 3
+}
+
+fn bytes_equal(left: []const u8, right: []const u8) bool {
+  for i in 0..#len(left) {
+    if left[i] != right[i] {
+      return false
+    }
+  }
+  return true
+}
+
 // Returned selection borrows the connection and dies when it is freed or renegotiated.
 pub fn selected_alpn(connection: Connection) []const u8 {
   if connection == nil {

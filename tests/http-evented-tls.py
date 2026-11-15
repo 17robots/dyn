@@ -99,6 +99,35 @@ def exercise(port, certificate):
     client.close()
 
 
+def exercise_h2(port, certificate):
+    """HTTP/2 through ALPN: flow control over TLS, reserved bodies, many streams."""
+    sys.path.insert(0, str(ROOT / 'tests'))
+    import h2client
+    context = ssl.create_default_context(cafile=str(certificate))
+    context.set_alpn_protocols(['h2', 'http/1.1'])
+    c = h2client.Client(port, tls=context)
+    assert c.response(c.request('GET', '/health'))[2] == b'ok\n'
+    assert c.response(c.request('POST', '/echo', b'x' * 20000))[2] == b'x' * 20000
+    assert c.response(c.request('POST', '/echo', b'x' * 70000))[0] == 413, 'no upload pool here'
+    for _ in range(3):
+        assert c.response(c.request('GET', '/big'))[2] == BIG
+    # body_buffer and respond_buffered: the body is staged, then framed.
+    status, headers, body = c.response(c.request('GET', '/buffered'))
+    assert (status, body) == (200, BIG), headers
+    status, headers, body = c.response(c.request('GET', '/buffered-empty'))
+    assert (status, body, headers['content-length']) == (200, b'', '0'), headers
+    ids = [c.request('GET', '/big') for _ in range(10)]
+    assert all(c.response(s)[2] == BIG for s in ids)
+    c.close()
+    # Clients that offer only HTTP/1.1 still get it.
+    plain = ssl.create_default_context(cafile=str(certificate))
+    plain.set_alpn_protocols(['http/1.1'])
+    client = http.client.HTTPSConnection('127.0.0.1', port, context=plain, timeout=10)
+    client.request('POST', '/quit')
+    assert client.getresponse().status == 200
+    client.close()
+
+
 with tempfile.TemporaryDirectory(prefix='dyn-http-tls-') as temporary:
     work = Path(temporary)
     certificate = work / 'cert.pem'
@@ -120,4 +149,14 @@ with tempfile.TemporaryDirectory(prefix='dyn-http-tls-') as temporary:
             if server.poll() is None:
                 server.kill()
                 server.wait()
-print('PASS evented HTTPS: keep-alive, pipelining, slow large responses, 24 clients, plain/garbage refused, idle handshake closed (debug/release)')
+        server = subprocess.Popen([str(program), str(certificate), str(key), 'h2'], stdout=subprocess.PIPE)
+        try:
+            line = server.stdout.readline().decode()
+            assert line.startswith('port '), line
+            exercise_h2(int(line.split()[1]), certificate)
+            assert server.wait(timeout=15) == 0
+        finally:
+            if server.poll() is None:
+                server.kill()
+                server.wait()
+print('PASS evented HTTPS: keep-alive, pipelining, slow large responses, 24 clients, plain/garbage refused, idle handshake closed, HTTP/2 through ALPN (debug/release)')

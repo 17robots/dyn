@@ -74,8 +74,8 @@ fn main() i32 {
   arena := mem.arena_alloc(64 * mem.MiB)
   defer mem.arena_release(arena)
   arguments := process.arguments(arena)
-  if io.failed(arguments.failure) || #len(arguments.value) != 3 {
-    io.eprintln("usage: main CERT.pem KEY.pem")
+  if io.failed(arguments.failure) || #len(arguments.value) < 3 || #len(arguments.value) > 4 {
+    io.eprintln("usage: main CERT.pem KEY.pem [h2]")
     return 2
   }
   context := tls.server_config_create(arena, arguments.value[1], arguments.value[2])
@@ -99,6 +99,17 @@ fn main() i32 {
   config.overflow_send_count = 1
   config.idle_timeout_milliseconds = 500
   config.transport = &transport
+  if #len(arguments.value) == 4 && bytes.equal(arguments.value[3], "h2") {
+    // HTTP/2 through ALPN; frames need 16 KiB of receive buffer.
+    if !https.offer_http2(context.value) {
+      io.eprintln("cannot offer h2")
+      return 1
+    }
+    config.http2 = true
+    config.receive_size = 32 * mem.KiB
+    config.http2_connections = 8
+    config.http2_slots = 8
+  }
   // Without a libc-thread spawner, start refuses the OpenSSL transport.
   refused := evented.start_shared(arena, mem.push_array(evented.Worker, arena, 1), net.ipv4(127, 0, 0, 1, 0), 1,
     config, binding.handler, binding.context)

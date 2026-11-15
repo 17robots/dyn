@@ -285,6 +285,54 @@ Watch signals with `std/process/signal` on the main thread before starting
 workers, then `signal.wait`, `evented.stop`, `evented.join`, and close the
 database. Workers close their connections and wait for running jobs.
 
+## HTTP/2
+
+Set `Config.http2` and every connection may speak HTTP/2 (RFC 9113): TLS
+clients that pick `h2` through ALPN, which browsers do once
+`https.offer_http2(context)` offers it, and cleartext clients that start with
+the connection preface (prior knowledge, as `curl --http2-prior-knowledge`
+and reverse proxies do). Others keep HTTP/1.1 on the same port.
+
+Each stream becomes an ordinary `http.Request` for the same handler, and the
+response it writes goes out as HEADERS and DATA frames, so routing, sessions,
+`respond_compressed`, `serve_asset`, `run`, `open_stream` and `receive_body`
+work unchanged, per stream: a slow job holds up only its own stream.
+`evented.upgrade` stays HTTP/1.1; browsers open a separate connection for
+WebSockets.
+
+```dyn
+use "std/mem"
+use "std/net/http/evented"
+
+fn http2_config() evented.Config {
+  config := evented.default_config()
+  config.http2 = true
+  // A whole 16 KiB frame must fit the receive buffer.
+  config.receive_size = 32 * mem.KiB
+  config.http2_connections = 256
+  config.http2_slots = 64
+  return config
+}
+```
+
+Memory stays fixed. An HTTP/2 connection leases one of
+`Config.http2_connections` state blocks per worker (HPACK table and 100
+streams, about 21 KiB). Each stream holds one of the worker's
+`Config.http2_slots` request slots (`receive_size` plus `job_size`) until it
+is answered; a body past its slot borrows an upload block, and a larger one
+goes to `Config.on_large_body`. A stream that finds no slot is refused
+(`REFUSED_STREAM`), which clients retry. A connection that finds no state
+block is told to go away. With 32 KiB receive buffers the defaults (256 blocks, 64
+slots) add about 7.5 MiB per worker; `evented.storage_size` counts it.
+
+Flow control is honored both ways. A response larger than the client's
+window waits inside the handler for `WINDOW_UPDATE` (up to
+`write_timeout_milliseconds`), as an HTTP/1.1 response waits for the socket;
+browsers grant megabytes. Pushes to an `open_stream` stream never wait: one
+whose window is closed is reset. Headers are HPACK-compressed
+(`std/net/http/hpack`); the server sends no dynamic-table entries, only
+static indexes and Huffman-coded literals.
+
 ## TLS
 
 `std/net/http/evented/tls` supplies an OpenSSL transport for `Config.transport`;
@@ -293,4 +341,5 @@ so with `Overflow.Reject` they are closed instead.
 
 ## Not yet
 
-- HTTP/2 and HTTP/3.
+- HTTP/3 (QUIC).
+- WebSockets over HTTP/2 (RFC 8441); browsers use HTTP/1.1 for them.

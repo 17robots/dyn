@@ -21,6 +21,7 @@ extern fn ssl_write "SSL_write_ex"(connection: rawptr, source: rawptr, length: u
 extern fn ssl_shutdown "SSL_shutdown"(connection: rawptr) i32
 extern fn ssl_set_alpn "SSL_set_alpn_protos"(connection: rawptr, protocols: *const u8, length: u32) i32
 extern fn ssl_get_alpn "SSL_get0_alpn_selected"(connection: rawptr, selected: *rawptr, length: *u32)
+extern fn ssl_context_alpn_select "SSL_CTX_set_alpn_select_cb"(context: rawptr, callback: fn(rawptr, *rawptr, *u8, *const u8, u32, rawptr) i32, argument: rawptr)
 extern fn ssl_peer_certificate "SSL_get1_peer_certificate"(connection: rawptr) rawptr
 extern fn certificate_free "X509_free"(certificate: rawptr)
 extern fn certificate_subject_name "X509_get_subject_name"(certificate: rawptr) rawptr

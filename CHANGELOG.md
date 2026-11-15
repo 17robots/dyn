@@ -16,6 +16,12 @@ servers so they pick up the new `dyn`.
 
 Web applications: see [docs/guide/web-apps.md](docs/guide/web-apps.md).
 
+- HTTP/2 in `std/net/http/evented` with `Config.http2`: TLS clients through
+  ALPN (`https.offer_http2`) and prior-knowledge cleartext clients, on the
+  same port as HTTP/1.1. Streams run the ordinary handler; run, open_stream
+  and receive_body work per stream. Flow control both ways, fixed memory
+  (`http2_connections`, `http2_slots`). `std/net/http/hpack` implements
+  HPACK; `tls.server_alpn` selects ALPN on servers.
 - Request bodies of any size: `Config.on_large_body` gets requests whose
   body fits no buffer, and `evented.receive_body` hands it over piece by
   piece, chunked framing removed (`http.ChunkReader`), then calls finish

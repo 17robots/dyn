@@ -7,6 +7,9 @@
 //   config.transport = &transport
 //   config.spawner = &spawner
 //
+// For HTTP/2 set Config.http2 and call offer_http2(context) before starting:
+// browsers then negotiate "h2" through ALPN.
+//
 // OpenSSL keeps per-thread state, so workers must be libc threads: evented
 // refuses this transport without a spawner from std/thread/posix. The context,
 // Transport and Spawner must outlive the workers: release the context with
@@ -25,8 +28,23 @@ pub fn transport(context: provider.Context) evented.Transport {
     read: read,
     write: write,
     close: close,
+    protocol: protocol,
     needs_native_threads: true,
   }
+}
+
+// ALPN preference for HTTP/2 servers: h2, then HTTP/1.1.
+alpn_http2: []const u8 = "\x02h2\x08http/1.1"
+
+// Offers HTTP/2 through ALPN on context; with Config.http2 the server then
+// speaks HTTP/2 to clients that pick it. Without Config.http2 a client that
+// picks h2 gets HTTP/1.1 it cannot read, so set both or neither.
+pub fn offer_http2(context: provider.Context) bool {
+  return provider.server_alpn(context, &alpn_http2)
+}
+
+fn protocol(session: rawptr) []const u8 {
+  return provider.selected_alpn(session)
 }
 
 fn status(result: provider.Result) evented.TransportIo {

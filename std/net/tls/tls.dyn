@@ -34,6 +34,12 @@ fn result(value: provider.Result) Result {
 pub fn set_alpn_protocols(connection: Connection, protocols: []const u8) Result {
   return result(provider.set_alpn_result(connection, protocols))
 }
+// Server ALPN: each handshake picks the first protocol of preference (wire
+// format, such as "\x02h2\x08http/1.1") the client offers. preference must
+// outlive the context; a string literal does.
+pub fn server_alpn(context: Context, preference: *const []const u8) bool {
+  return provider.set_server_alpn(context, preference)
+}
 // Borrows provider connection memory. Invalid after connection_release or a
 // renegotiation that replaces the negotiated protocol; copy before either.
 pub fn selected_alpn(connection: Connection) []const u8 {

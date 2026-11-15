@@ -28,6 +28,8 @@
 //   larger than that goes to Config.on_large_body, which reads it in pieces
 //   with receive_body, or gets 413.
 //
+// Config.http2 adds HTTP/2 (see h2.dyn) for clients that ask for it.
+//
 // Config.transport replaces plain TCP reads and writes, for TLS. This module
 // has no TLS dependency; std/net/http/evented/tls supplies an OpenSSL one.
 #target(pointer_bits: 64)
@@ -101,6 +103,14 @@ pub struct Config {
   // receive_size): called with the head only, it answers, or reads the body
   // in pieces with receive_body. nil answers 413.
   on_large_body: http.Handler,
+  // HTTP/2: prior-knowledge cleartext clients, and TLS clients whose ALPN
+  // chose "h2" (Transport.protocol). Needs receive_size of at least 17 KiB.
+  // http2_connections state blocks (about 21 KiB each) bound the HTTP/2
+  // connections per worker; http2_slots request slots (receive_size plus
+  // job_size each) bound the streams in progress per worker.
+  http2: bool,
+  http2_connections: usize,
+  http2_slots: usize,
   // gzip level (1-9) for respond_compressed; each worker keeps one encoder
   // workspace (about 300 KiB). Zero sends bodies uncompressed.
   compress_level: u8,
@@ -114,7 +124,10 @@ pub enum Overflow { Wait, Reject }
 // A stream or WebSocket connection, valid from any thread. A peer that has
 // closed makes send and close_peer no-ops; its slot's next connection has a
 // different generation.
-pub struct Peer { worker: u32, index: u32, generation: u32 }
+pub struct Peer { worker: u32, index: u32, generation: u32,
+  // An HTTP/2 stream on that connection; 0 for HTTP/1.1.
+  stream: u32,
+}
 
 pub enum MessageKind { Text, Binary, Closed }
 
@@ -123,7 +136,7 @@ pub struct Message { peer: Peer, kind: MessageKind, payload: []const u8, context
 
 pub type PeerResult = io.Result(Peer)
 
-enum Mode { Http, Deferred, Stream, WebSocket, Body }
+enum Mode { Http, Deferred, Stream, WebSocket, Body, Http2 }
 
 // How a body read with receive_body ended, for its finish function.
 // Stopped: chunk returned false. Invalid: malformed chunked framing. Closed:
@@ -132,7 +145,7 @@ enum Mode { Http, Deferred, Stream, WebSocket, Body }
 pub enum BodyEnd { Complete, Stopped, Invalid, Closed }
 
 enum PostKind { Send, Publish, Close }
-struct Post { kind: PostKind, binary: bool, index: u32, generation: u32, topic: u64, offset: usize, length: usize }
+struct Post { kind: PostKind, binary: bool, index: u32, generation: u32, stream: u32, topic: u64, offset: usize, length: usize }
 
 // Double-buffered inbox: other threads append to the pending half under lock;
 // the worker swaps halves and reads the other one without the lock.
@@ -164,6 +177,9 @@ pub struct Transport {
   read: fn(rawptr, []u8) TransportIo,
   write: fn(rawptr, []const u8) TransportIo,
   close: fn(rawptr),
+  // The application protocol the handshake agreed on (TLS ALPN), such as
+  // "h2"; nil when the transport has none.
+  protocol: fn(rawptr) []const u8,
   // The transport calls C code that keeps per-thread state; start then
   // requires Config.spawner.
   needs_native_threads: bool,
@@ -180,6 +196,8 @@ pub fn default_config() Config {
     overflow: Overflow.Wait,
     evict_idle_milliseconds: 1000,
     job_size: 1 * mem.KiB,
+    http2_connections: 256,
+    http2_slots: 64,
     inbox_messages: 1024,
     inbox_bytes: 256 * mem.KiB,
   }
@@ -197,6 +215,7 @@ pub fn storage_size(config: Config, worker_count: usize) usize {
   if config.compress_level > 0 {
     per_worker += #sizeof(gzip.Encoder) + #alignof(gzip.Encoder)
   }
+  per_worker += h2_storage_size(config)
   return worker_count * per_worker
 }
 
@@ -298,6 +317,10 @@ struct Connection {
   body_data: rawptr,
   body_chunk: fn(rawptr, []const u8) bool,
   body_finish: fn(*http.Response, *const http.Request, rawptr, BodyEnd) http.Result,
+  // HTTP/2 state, while mode is Http2.
+  h2: *H2,
+  // No request read yet: the HTTP/2 preface may still come.
+  fresh: bool,
 }
 
 pub struct Worker {
@@ -347,6 +370,7 @@ pub struct Worker {
   date_second: i64,
   // Workspace for respond_compressed; nil when Config.compress_level is zero.
   encoder: *gzip.Encoder,
+  h2: H2Pool,
 }
 
 const ListenerToken: u64 = 0
@@ -591,7 +615,8 @@ fn close_connection(worker: *Worker, index: usize) {
     message := Message{ peer: peer_of(worker, index), kind: MessageKind.Closed, context: worker.config.message_context }
     worker.config.on_message(&message)
   }
-  if connection.job_running {
+  h2_close_all(worker, connection)
+  if connection.job_running || (connection.h2 != nil && connection.h2.jobs > 0) {
     // The pool still uses this slot's job storage; free it when the job ends.
     connection.active = false
     connection.zombie = true
@@ -602,6 +627,7 @@ fn close_connection(worker: *Worker, index: usize) {
 
 fn recycle(worker: *Worker, index: usize) {
   connection := &worker.connections[index]
+  h2_release(worker, connection)
   connection.used = 0
   release_input(connection)
   input := connection.base_input
@@ -644,6 +670,21 @@ fn serve_buffered(worker: *Worker, index: usize) bool {
   }
   if connection.mode == Mode.Body {
     return body_feed(worker, index)
+  }
+  if connection.mode == Mode.Http2 {
+    return h2_serve(worker, index)
+  }
+  if connection.fresh && connection.mode == Mode.Http && worker.config.http2 {
+    // Prior knowledge (RFC 9113 3.3): the client starts with the preface.
+    if preface_prefix(connection.input[..connection.used]) {
+      if connection.used < #len(Preface) {
+        return true
+      }
+      connection.fresh = false
+      _ = h2_begin(worker, index)
+      return h2_serve(worker, index)
+    }
+    connection.fresh = false
   }
   if connection.mode == Mode.Stream {
     // A stream's client has nothing more to say; discard what it sends.
@@ -934,6 +975,11 @@ fn on_handshake(worker: *Worker, index: usize) {
   }
   connection.handshaking = false
   connection.last_active = now_milliseconds()
+  if worker.config.http2 && connection.transport.protocol != nil &&
+    bytes.equal(connection.transport.protocol(connection.session), "h2") {
+    connection.fresh = false
+    _ = h2_begin(worker, index)
+  }
   // The client's first request may arrive with its last handshake message.
   on_readable(worker, index)
 }
@@ -991,6 +1037,7 @@ fn other_has_room(worker: *const Worker) bool {
 fn begin(worker: *Worker, index: usize) {
   connection := &worker.connections[index]
   connection.last_active = now_milliseconds()
+  connection.fresh = true
   if !set_interest(worker, index, event.Readable) {
     close_connection(worker, index)
     return
@@ -1103,7 +1150,8 @@ fn sweep_idle(worker: *Worker, now: i64) {
     connection := &worker.connections[i]
     // Streams and WebSockets stay open until a side closes them; parked
     // clients wait for a slot.
-    if connection.active && (connection.mode == Mode.Http || connection.mode == Mode.Body) && !connection.parked &&
+    quiet_h2 := connection.mode == Mode.Http2 && (connection.h2 == nil || (connection.h2.stream_count == 0 && connection.h2.jobs == 0))
+    if connection.active && (connection.mode == Mode.Http || connection.mode == Mode.Body || quiet_h2) && !connection.parked &&
       now - connection.last_active > limit {
       close_connection(worker, i)
     }
@@ -1201,7 +1249,7 @@ fn valid_start(workers: []Worker, config: Config, handler: http.Handler) io.Fail
   if (config.upload_count == 0) != (config.upload_size == 0) || (config.upload_count > 0 && config.upload_size <= config.receive_size) {
     return io.Failure{ kind: io.Kind.InvalidInput }
   }
-  if config.compress_level > 9 {
+  if config.compress_level > 9 || !h2_valid(config) {
     return io.Failure{ kind: io.Kind.InvalidInput }
   }
   if config.transport != nil && config.transport.needs_native_threads && config.spawner == nil {
@@ -1268,6 +1316,7 @@ fn start_worker(arena: *mem.Arena, worker: *Worker) io.Failure {
   if config.compress_level > 0 {
     worker.encoder = #cast(*gzip.Encoder, mem.arena_push_uninit(arena, #sizeof(gzip.Encoder), #alignof(gzip.Encoder)))
   }
+  h2_start(arena, worker)
   blocking := network.nonblocking(worker.listener.descriptor, true)
   if io.failed(blocking.failure) {
     return blocking.failure
@@ -1454,7 +1503,7 @@ fn peer_of(worker: *const Worker, index: usize) Peer {
 
 // The connection behind an evented response, or nil for any other response.
 fn connection_of(response: *http.Response) *Connection {
-  if response.output.write != output_write {
+  if response.output.write != output_write && response.output.write != h2_write {
     return nil
   }
   return #cast(*Connection, response.output.data)
@@ -1494,7 +1543,8 @@ pub fn send(workers: []Worker, peer: Peer, payload: []const u8, binary: bool) io
   if !live_peer(workers, peer) {
     return io.Failure{ kind: io.Kind.InvalidInput }
   }
-  return post(&workers[peer.worker], Post{ kind: PostKind.Send, binary: binary, index: peer.index, generation: peer.generation }, payload)
+  return post(&workers[peer.worker], Post{ kind: PostKind.Send, binary: binary, index: peer.index, generation: peer.generation,
+    stream: peer.stream }, payload)
 }
 
 // Queues payload for every stream and WebSocket opened with topic, on every
@@ -1514,7 +1564,8 @@ pub fn close_peer(workers: []Worker, peer: Peer) io.Failure {
   if !live_peer(workers, peer) {
     return io.Failure{ kind: io.Kind.InvalidInput }
   }
-  return post(&workers[peer.worker], Post{ kind: PostKind.Close, index: peer.index, generation: peer.generation }, "")
+  return post(&workers[peer.worker], Post{ kind: PostKind.Close, index: peer.index, generation: peer.generation,
+    stream: peer.stream }, "")
 }
 
 // Queues bytes without ever blocking: a peer too slow to take them closes.
@@ -1629,7 +1680,8 @@ fn settle(worker: *Worker, index: usize) {
 }
 
 fn pushable(connection: *const Connection) bool {
-  return connection.active && (connection.mode == Mode.Stream || connection.mode == Mode.WebSocket)
+  return connection.active && (connection.mode == Mode.Stream || connection.mode == Mode.WebSocket ||
+      (connection.mode == Mode.Http2 && connection.h2 != nil))
 }
 
 fn read_inbox(worker: *Worker) {
@@ -1639,7 +1691,12 @@ fn read_inbox(worker: *Worker) {
   inbox.pending = 1 - half
   sync.unlock(&inbox.lock)
   for i in 0..inbox.done_count[half] {
-    job_done(worker, inbox.done[half][i])
+    entry := inbox.done[half][i]
+    if (entry & SlotJob) != 0 {
+      h2_job_done(worker, entry & ~SlotJob)
+    } else {
+      job_done(worker, entry)
+    }
   }
   inbox.done_count[half] = 0
   touched := false
@@ -1649,7 +1706,9 @@ fn read_inbox(worker: *Worker) {
     if item.kind == PostKind.Publish {
       for c in 0..#len(worker.connections) {
         connection := &worker.connections[c]
-        if pushable(connection) && connection.topic == item.topic && !connection.close_after {
+        if pushable(connection) && connection.mode == Mode.Http2 && !connection.close_after {
+          h2_deliver(worker, connection, item, payload)
+        } else if pushable(connection) && connection.topic == item.topic && !connection.close_after {
           deliver(worker, c, item, payload)
         }
       }
@@ -1659,7 +1718,11 @@ fn read_inbox(worker: *Worker) {
     index := #cast(usize, item.index)
     connection := &worker.connections[index]
     if pushable(connection) && connection.generation == item.generation && !connection.close_after {
-      deliver(worker, index, item, payload)
+      if connection.mode == Mode.Http2 {
+        h2_deliver(worker, connection, item, payload)
+      } else {
+        deliver(worker, index, item, payload)
+      }
       touched = true
     }
   }
@@ -1707,6 +1770,14 @@ pub fn respond_compressed(response: *http.Response, request: *const http.Request
 // already running, or T does not fit Config.job_size.
 pub fn job(T: type, response: *http.Response) *T {
   connection := connection_of(response)
+  if connection != nil && connection.h2 != nil {
+    jobs := h2_job(connection)
+    if jobs == nil {
+      return nil
+    }
+    mem.arena_reset(jobs)
+    return mem.try_push(T, jobs)
+  }
   if connection == nil || connection.jobs == nil || connection.job_running {
     return nil
   }
@@ -1727,6 +1798,19 @@ pub fn job(T: type, response: *http.Response) *T {
 // Capacity when the pool's queue is full, InvalidState outside a handler.
 pub fn run(response: *http.Response, data: *$J, work: fn(*$J), finish: fn(*http.Response, *const http.Request, *$J) http.Result) io.Failure {
   connection := connection_of(response)
+  if connection != nil && connection.h2 != nil && !response.started && !response.finished {
+    if connection.worker.config.pool == nil {
+      return io.Failure{ kind: io.Kind.Unsupported }
+    }
+    if work == nil || finish == nil || data == nil {
+      return io.Failure{ kind: io.Kind.InvalidInput }
+    }
+    started := h2_run(connection, data, #cast(fn(rawptr), work), #cast(fn(*http.Response, *const http.Request, rawptr) http.Result, finish))
+    if !io.failed(started) {
+      response.finished = true
+    }
+    return started
+  }
   if connection == nil || connection.mode != Mode.Http || connection.job_running || response.started || response.finished {
     return io.Failure{ kind: io.Kind.InvalidState }
   }
@@ -1808,11 +1892,15 @@ fn job_done(worker: *Worker, index: usize) {
 pub fn receive_body(response: *http.Response, data: *$J, chunk: fn(*$J, []const u8) bool,
   finish: fn(*http.Response, *const http.Request, *$J, BodyEnd) http.Result) io.Failure {
   connection := connection_of(response)
-  if connection == nil || connection.mode != Mode.Body || connection.body_started || response.started || response.finished {
-    return io.Failure{ kind: io.Kind.InvalidState }
-  }
   if data == nil || chunk == nil || finish == nil {
     return io.Failure{ kind: io.Kind.InvalidInput }
+  }
+  if connection != nil && connection.h2 != nil {
+    return h2_receive_body(connection, response, data, #cast(fn(rawptr, []const u8) bool, chunk),
+      #cast(fn(*http.Response, *const http.Request, rawptr, BodyEnd) http.Result, finish))
+  }
+  if connection == nil || connection.mode != Mode.Body || connection.body_started || response.started || response.finished {
+    return io.Failure{ kind: io.Kind.InvalidState }
   }
   if connection.body_expect && !connection.continue_sent {
     if !push_bytes(connection, "HTTP/1.1 100 Continue\r\n\r\n") {
@@ -1998,6 +2086,9 @@ fn body_end(worker: *Worker, index: usize, outcome: BodyEnd) bool {
 // apply. InvalidState when response is not a fresh evented response.
 pub fn open_stream(response: *http.Response, options: http.ResponseOptions, topic: u64) PeerResult {
   connection := connection_of(response)
+  if connection != nil && connection.h2 != nil {
+    return h2_open_stream(connection, response, options, topic)
+  }
   if connection == nil || connection.mode != Mode.Http || response.started || response.finished || response.head_only {
     return PeerResult{ failure: io.Failure{ kind: io.Kind.InvalidState } }
   }

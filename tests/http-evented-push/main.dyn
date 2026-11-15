@@ -27,7 +27,8 @@ struct App {
   workers: []evented.Worker,
   assets: http.Assets,
   router: http.Routes(App),
-  route_storage: [14]http.TypedRoute(App),
+  route_storage: [16]http.TypedRoute(App),
+  big: [300 * 1024]u8,
 }
 
 struct Hash { input: [64]u8, length: usize, digest: [32]u8, ok: bool }
@@ -38,6 +39,11 @@ fn text(response: *http.Response, status: u16, body: []const u8) http.Result {
 
 fn health(response: *http.Response, request: *const http.Request, app: *App) http.Result {
   return text(response, 200, "ok\n")
+}
+
+// Larger than a 64 KiB HTTP/2 window: the handler waits for WINDOW_UPDATE.
+fn big(response: *http.Response, request: *const http.Request, app: *App) http.Result {
+  return text(response, 200, app.big[..])
 }
 
 // A dynamic JSON body, gzipped when the client accepts it; ?n= sets its rows.
@@ -268,10 +274,14 @@ fn main() {
   asset_storage[1] = http.make_asset(arena, "logo.png", "\x89PNG not really")
   app.assets = http.Assets{ items: asset_storage[..], count: 2 }
   http.sort_assets(&app.assets)
+  for i in 0..#len(app.big) {
+    app.big[i] = #cast(u8, 'a' + i % 26)
+  }
   app.router = http.typed_routes(app.route_storage[..], &app)
   _ = http.add(&app.router, "GET", "/health", health)
   _ = http.add(&app.router, "GET", "/report", report)
   _ = http.add(&app.router, "GET", "/abandoned", abandoned)
+  _ = http.add(&app.router, "GET", "/big", big)
   _ = http.add(&app.router, "POST", "/hash", hash)
   _ = http.add(&app.router, "GET", "/events", events)
   _ = http.add(&app.router, "GET", "/chat", chat)
@@ -299,6 +309,13 @@ fn main() {
   arguments := process.arguments(arena)
   if #len(arguments.value) > 1 && bytes.equal(arguments.value[1], "wait") {
     config.overflow = evented.Overflow.Wait
+  }
+  if #len(arguments.value) > 1 && bytes.equal(arguments.value[1], "h2") {
+    // HTTP/2 needs room for a whole 16 KiB frame.
+    config.http2 = true
+    config.receive_size = 32 * mem.KiB
+    config.http2_connections = 8
+    config.http2_slots = 16
   }
   config.evict_idle_milliseconds = 200
   config.compress_level = 6
