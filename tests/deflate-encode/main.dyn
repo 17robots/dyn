@@ -1,0 +1,22 @@
+// Compresses a file with std/compress/gzip: deflate-encode LEVEL INPUT OUTPUT.
+use "std/compress/gzip"
+use "std/fs"
+use "std/io"
+use "std/mem"
+use "std/process"
+use "std/time"
+
+// gz LEVEL INPUT OUTPUT
+fn main() {
+  arena := mem.arena_alloc(0)
+  defer mem.arena_release(arena)
+  arguments := process.arguments(arena)
+  level := arguments.value[1][0] - '0'
+  read := fs.read_all(arena, arguments.value[2], 1 << 30)
+  started := time.monotonic_now()
+  encoded := gzip.compress(arena, read.value, level)
+  ended := time.monotonic_now()
+  elapsed := time.elapsed(started.value, ended.value)
+  _ = fs.write_all(arguments.value[3], encoded.value)
+  io.println("{} -> {} in {} us", #len(read.value), #len(encoded.value), elapsed.value / 1000)
+}

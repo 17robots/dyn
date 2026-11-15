@@ -1,0 +1,362 @@
+use "std/bytes" bytes
+use "std/compress/gzip" gzip
+use "std/fs" files
+use "std/hash" hash
+use "std/io" io
+use "std/mem" memory
+
+// Static files served from memory: each Asset carries its bytes, a gzip
+// copy when that is smaller, a strong ETag and its content type. serve_asset
+// answers conditional requests (If-None-Match, If-Modified-Since) with 304,
+// negotiates gzip through Accept-Encoding, and handles HEAD through the
+// response. Assets come from #load at compile time (make_asset) or from a
+// directory at startup (load_directory).
+
+pub struct Asset {
+  // URL path below the mount, without a leading slash: "css/app.css".
+  path: []const u8,
+  content_type: []const u8,
+  body: []const u8,
+  // Empty when gzip would not be smaller.
+  gzip: []const u8,
+  // Quoted strong validator: "\"0123456789abcdef\"".
+  etag: []const u8,
+  // Unix seconds for Last-Modified, or 0 to leave it out.
+  modified: i64,
+}
+
+// Assets in caller storage; paths are looked up by binary search.
+pub struct Assets { items: []Asset, count: usize }
+
+pub struct AssetsResult { value: Assets, failure: io.Failure }
+
+struct MimeType { extension: []const u8, content_type: []const u8 }
+
+const MimeTypes: [36]MimeType = [
+  MimeType{ extension: "avif", content_type: "image/avif" },
+  MimeType{ extension: "bin", content_type: "application/octet-stream" },
+  MimeType{ extension: "css", content_type: "text/css; charset=utf-8" },
+  MimeType{ extension: "csv", content_type: "text/csv; charset=utf-8" },
+  MimeType{ extension: "gif", content_type: "image/gif" },
+  MimeType{ extension: "gz", content_type: "application/gzip" },
+  MimeType{ extension: "htm", content_type: "text/html; charset=utf-8" },
+  MimeType{ extension: "html", content_type: "text/html; charset=utf-8" },
+  MimeType{ extension: "ico", content_type: "image/vnd.microsoft.icon" },
+  MimeType{ extension: "jpeg", content_type: "image/jpeg" },
+  MimeType{ extension: "jpg", content_type: "image/jpeg" },
+  MimeType{ extension: "js", content_type: "text/javascript; charset=utf-8" },
+  MimeType{ extension: "json", content_type: "application/json" },
+  MimeType{ extension: "map", content_type: "application/json" },
+  MimeType{ extension: "md", content_type: "text/markdown; charset=utf-8" },
+  MimeType{ extension: "mjs", content_type: "text/javascript; charset=utf-8" },
+  MimeType{ extension: "mp3", content_type: "audio/mpeg" },
+  MimeType{ extension: "mp4", content_type: "video/mp4" },
+  MimeType{ extension: "oga", content_type: "audio/ogg" },
+  MimeType{ extension: "ogg", content_type: "audio/ogg" },
+  MimeType{ extension: "ogv", content_type: "video/ogg" },
+  MimeType{ extension: "otf", content_type: "font/otf" },
+  MimeType{ extension: "pdf", content_type: "application/pdf" },
+  MimeType{ extension: "png", content_type: "image/png" },
+  MimeType{ extension: "svg", content_type: "image/svg+xml" },
+  MimeType{ extension: "tar", content_type: "application/x-tar" },
+  MimeType{ extension: "ttf", content_type: "font/ttf" },
+  MimeType{ extension: "txt", content_type: "text/plain; charset=utf-8" },
+  MimeType{ extension: "wasm", content_type: "application/wasm" },
+  MimeType{ extension: "wav", content_type: "audio/wav" },
+  MimeType{ extension: "webm", content_type: "video/webm" },
+  MimeType{ extension: "webmanifest", content_type: "application/manifest+json" },
+  MimeType{ extension: "webp", content_type: "image/webp" },
+  MimeType{ extension: "woff", content_type: "font/woff" },
+  MimeType{ extension: "woff2", content_type: "font/woff2" },
+  MimeType{ extension: "xml", content_type: "application/xml" },
+]
+
+// Content type for a file name by its extension, ASCII case-insensitive:
+// "app.CSS" is text/css. Unknown extensions are application/octet-stream.
+pub fn content_type(name: []const u8) []const u8 {
+  dot := bytes.find_last_byte(name, '.')
+  slash := bytes.find_last_byte(name, '/')
+  if dot == #len(name) || (slash != #len(name) && slash > dot) {
+    return "application/octet-stream"
+  }
+  extension := name[dot + 1..]
+  for item in MimeTypes {
+    if ascii_equal(item.extension, extension) {
+      return item.content_type
+    }
+  }
+  return "application/octet-stream"
+}
+
+// Media that gzip helps: text, JSON, XML, SVG, JavaScript, WebAssembly.
+fn compressible(media: []const u8) bool {
+  return bytes.starts_with(media, "text/") || bytes.starts_with(media, "application/json") ||
+    bytes.starts_with(media, "application/xml") || bytes.starts_with(media, "application/manifest+json") ||
+    bytes.starts_with(media, "image/svg+xml") || bytes.starts_with(media, "application/wasm")
+}
+
+// An Asset for body with path, in arena: content type from the extension,
+// the strong ETag from a 64-bit FNV-1a hash, and a gzip copy at level 9 when
+// the type compresses and the copy is smaller. body is borrowed.
+pub fn make_asset(arena: *memory.Arena, path: []const u8, body: []const u8) Asset {
+  item := Asset{ path: path, content_type: content_type(path), body: body }
+  digest := hash.hash64(body)
+  tag := memory.push_bytes_uninit(arena, 18)
+  digits := "0123456789abcdef"
+  tag[0] = '"'
+  for i in 0..16 {
+    tag[1 + i] = digits[#cast(usize, (digest >> #cast(u64, 60 - 4 * i)) & 15)]
+  }
+  tag[17] = '"'
+  item.etag = tag
+  if compressible(item.content_type) && #len(body) > 256 {
+    mark := memory.arena_mark(arena)
+    encoded := gzip.compress(arena, body, 9)
+    if #len(encoded.value) > 0 && #len(encoded.value) < #len(body) {
+      item.gzip = encoded.value
+    } else {
+      memory.arena_rewind(arena, mark)
+    }
+  }
+  return item
+}
+
+fn asset_less(left: []const u8, right: []const u8) bool {
+  shared := #len(left)
+  if #len(right) < shared {
+    shared = #len(right)
+  }
+  for i in 0..shared {
+    if left[i] != right[i] {
+      return left[i] < right[i]
+    }
+  }
+  return #len(left) < #len(right)
+}
+
+// Orders assets by path so find_asset can search them. load_directory
+// already returns them sorted; call this after adding assets yourself.
+pub fn sort_assets(assets: *Assets) {
+  for i in 1..assets.count {
+    item := assets.items[i]
+    at := i
+    for at > 0 && asset_less(item.path, assets.items[at - 1].path) {
+      assets.items[at] = assets.items[at - 1]
+      at -= 1
+    }
+    assets.items[at] = item
+  }
+}
+
+// The asset at path, or nil. assets must be sorted (sort_assets).
+pub fn find_asset(assets: *const Assets, path: []const u8) *const Asset {
+  low: usize = 0
+  high := assets.count
+  for low < high {
+    middle := low + (high - low) / 2
+    candidate := &assets.items[middle]
+    if bytes.equal(candidate.path, path) {
+      return candidate
+    }
+    if asset_less(candidate.path, path) {
+      low = middle + 1
+    } else {
+      high = middle
+    }
+  }
+  return nil
+}
+
+// Every regular file below root, recursively, read into arena as assets in
+// storage, sorted. Names starting with '.' are skipped. Fails with Capacity
+// when storage is too small or a file exceeds maximum bytes; with the
+// operating system's failure when a directory or file cannot be read.
+pub fn load_directory(arena: *memory.Arena, root: []const u8, storage: []Asset, maximum: usize) AssetsResult {
+  assets := Assets{ items: storage }
+  failure := load_tree(arena, root, "", &assets, maximum, 0)
+  if io.failed(failure) {
+    return AssetsResult{ failure: failure }
+  }
+  sort_assets(&assets)
+  return AssetsResult{ value: assets }
+}
+
+fn join_path(arena: *memory.Arena, left: []const u8, right: []const u8) []u8 {
+  if #len(left) == 0 {
+    joined := memory.push_bytes_uninit(arena, #len(right))
+    _ = memory.copy(joined, right)
+    return joined
+  }
+  joined := memory.push_bytes_uninit(arena, #len(left) + 1 + #len(right))
+  _ = memory.copy(joined[..#len(left)], left)
+  joined[#len(left)] = '/'
+  _ = memory.copy(joined[#len(left) + 1..], right)
+  return joined
+}
+
+fn load_tree(arena: *memory.Arena, root: []const u8, relative: []const u8, assets: *Assets, maximum: usize, depth: usize) io.Failure {
+  if depth > 32 {
+    return io.Failure{ kind: io.Kind.InvalidInput }
+  }
+  directory_path := root
+  if #len(relative) > 0 {
+    directory_path = join_path(arena, root, relative)
+  }
+  listing: [4096]u8
+  opened := files.open_directory(directory_path, listing[..])
+  if io.failed(opened.failure) {
+    return opened.failure
+  }
+  directory := opened.value
+  defer files.close_directory(&directory)
+  for true {
+    entry := files.directory_next(&directory)
+    if io.failed(entry.failure) {
+      return entry.failure
+    }
+    if !entry.found {
+      return io.Failure{}
+    }
+    if #len(entry.name) == 0 || entry.name[0] == '.' {
+      continue
+    }
+    child := join_path(arena, relative, entry.name)
+    if entry.kind == 4 {
+      nested := load_tree(arena, root, child, assets, maximum, depth + 1)
+      if io.failed(nested) {
+        return nested
+      }
+      continue
+    }
+    if entry.kind != 8 {
+      continue
+    }
+    if assets.count == #len(assets.items) {
+      return io.Failure{ kind: io.Kind.Capacity }
+    }
+    read := files.read_all(arena, join_path(arena, root, child), maximum)
+    if io.failed(read.failure) {
+      return read.failure
+    }
+    assets.items[assets.count] = make_asset(arena, child, read.value)
+    assets.count += 1
+  }
+  return io.Failure{}
+}
+
+// Whether the request's Accept-Encoding allows coding (RFC 9110 12.5.3): it
+// is listed, or "*" is, with a q-value above zero.
+pub fn accepts_encoding(request: *const Request, coding: []const u8) bool {
+  header := request_header(request, "Accept-Encoding")
+  if !header.found {
+    return false
+  }
+  rest := header.value
+  wildcard := false
+  for #len(rest) > 0 {
+    end := bytes.find_byte(rest, ',')
+    item := trim_ows(rest[..end])
+    semicolon := bytes.find_byte(item, ';')
+    name := trim_ows(item[..semicolon])
+    allowed := true
+    if semicolon < #len(item) {
+      parameters := trim_ows(item[semicolon + 1..])
+      if #len(parameters) >= 3 && ascii_lower(parameters[0]) == 'q' && parameters[1] == '=' {
+        value := parameters[2..]
+        allowed = false
+        for byte in value {
+          if byte >= '1' && byte <= '9' {
+            allowed = true
+          }
+        }
+      }
+    }
+    if ascii_equal(name, coding) {
+      return allowed
+    }
+    if bytes.equal(name, "*") {
+      wildcard = allowed
+    }
+    if end >= #len(rest) {
+      break
+    }
+    rest = rest[end + 1..]
+  }
+  return wildcard
+}
+
+// If-None-Match against etag: "*" or a listed tag, comparing weakly (W/
+// prefixes ignored), as RFC 9110 13.1.2 requires for GET and HEAD.
+pub fn etag_matches(request: *const Request, etag: []const u8) bool {
+  header := request_header(request, "If-None-Match")
+  if !header.found {
+    return false
+  }
+  if bytes.equal(trim_ows(header.value), "*") {
+    return true
+  }
+  wanted := etag
+  if bytes.starts_with(wanted, "W/") {
+    wanted = wanted[2..]
+  }
+  rest := header.value
+  for #len(rest) > 0 {
+    end := bytes.find_byte(rest, ',')
+    item := trim_ows(rest[..end])
+    if bytes.starts_with(item, "W/") {
+      item = item[2..]
+    }
+    if bytes.equal(item, wanted) {
+      return true
+    }
+    if end >= #len(rest) {
+      break
+    }
+    rest = rest[end + 1..]
+  }
+  return false
+}
+
+// Answers request with asset: 304 when If-None-Match matches (or, without
+// If-None-Match, when If-Modified-Since is not older than modified), else
+// 200 with the gzip copy when the client accepts gzip. cache_control is sent
+// as Cache-Control when not empty, such as "public, max-age=31536000,
+// immutable" for fingerprinted names or "no-cache" to revalidate each time.
+pub fn serve_asset(response: *Response, request: *const Request, asset: *const Asset, cache_control: []const u8) Result {
+  headers: [5]Header
+  count: usize = 0
+  headers[count] = Header{ name: "ETag", value: asset.etag }
+  count += 1
+  if #len(cache_control) > 0 {
+    headers[count] = Header{ name: "Cache-Control", value: cache_control }
+    count += 1
+  }
+  modified_storage: [DateLength]u8
+  if asset.modified != 0 {
+    headers[count] = Header{ name: "Last-Modified", value: format_date(modified_storage[..], asset.modified) }
+    count += 1
+  }
+  if #len(asset.gzip) > 0 {
+    headers[count] = Header{ name: "Vary", value: "Accept-Encoding" }
+    count += 1
+  }
+  not_modified := false
+  if request_header(request, "If-None-Match").found {
+    not_modified = etag_matches(request, asset.etag)
+  } else if asset.modified != 0 {
+    since := request_header(request, "If-Modified-Since")
+    if since.found {
+      parsed := parse_date(since.value)
+      not_modified = !parse.failed(parsed.failure) && parsed.value >= asset.modified
+    }
+  }
+  if not_modified {
+    return respond(response, "", ResponseOptions{ status: StatusNotModified, headers: headers[..count] })
+  }
+  if #len(asset.gzip) > 0 && accepts_encoding(request, "gzip") {
+    headers[count] = Header{ name: "Content-Encoding", value: "gzip" }
+    count += 1
+    return respond(response, asset.gzip, ResponseOptions{ content_type: asset.content_type, headers: headers[..count] })
+  }
+  return respond(response, asset.body, ResponseOptions{ content_type: asset.content_type, headers: headers[..count] })
+}

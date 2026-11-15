@@ -106,6 +106,26 @@ def exercise(port):
     status, headers, body = request(port, 'HEAD', '/health')
     assert (status, body, headers['content-length']) == (200, b'', '3'), (status, body, headers)
 
+    # Static assets: gzip when accepted, ETag and Last-Modified revalidation, HEAD.
+    css = b'body { color: red; } ' * 196 + b'body'
+    status, headers, body = request(port, 'GET', '/static/style.css', headers={'Accept-Encoding': 'gzip'})
+    assert (status, headers['content-encoding'], headers['vary']) == (200, 'gzip', 'Accept-Encoding'), headers
+    import gzip as gz
+    assert gz.decompress(body) == css[:4096] and len(body) < 200
+    etag = headers['etag']
+    assert headers['last-modified'] == 'Sun, 06 Nov 1994 08:49:37 GMT' and headers['cache-control'] == 'public, max-age=60'
+    status, headers, body = request(port, 'GET', '/static/style.css', headers={'Accept-Encoding': 'gzip;q=0'})
+    assert (status, 'content-encoding' in headers, body) == (200, False, css[:4096])
+    status, headers, body = request(port, 'GET', '/static/style.css', headers={'If-None-Match': f'"x", W/{etag}'})
+    assert (status, body, headers['etag'], 'content-length' in headers) == (304, b'', etag, False), headers
+    status, _, _ = request(port, 'GET', '/static/style.css', headers={'If-Modified-Since': 'Sun, 06 Nov 1994 08:49:37 GMT'})
+    assert status == 304
+    status, _, _ = request(port, 'GET', '/static/style.css', headers={'If-Modified-Since': 'Sat, 05 Nov 1994 08:49:37 GMT'})
+    assert status == 200
+    status, headers, body = request(port, 'HEAD', '/static/logo.png')
+    assert (status, body, headers['content-type'], headers['content-length']) == (200, b'', 'image/png', '15'), headers
+    assert request(port, 'GET', '/static/missing.js')[0] == 404
+
     # Offload: the hash runs on the pool and matches Python's PBKDF2.
     status, _, body = request(port, 'POST', '/hash', b'correct horse')
     assert (status, body) == (200, expected_hash(b'correct horse')), body

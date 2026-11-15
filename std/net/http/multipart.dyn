@@ -1,0 +1,188 @@
+use "std/bytes" bytes
+use "std/parse" parse
+
+// multipart/form-data request bodies (RFC 7578). Parts borrow the request
+// body; nothing is copied or allocated. The whole body must fit the server's
+// receive buffer, so size uploads with Config.receive_size.
+
+pub struct Part {
+  // From Content-Disposition: the field name, and the file name when the
+  // part is a file. Quotes are removed; backslash escapes are kept as sent.
+  name: []const u8,
+  filename: []const u8,
+  has_filename: bool,
+  // Empty means text/plain.
+  content_type: []const u8,
+  body: []const u8,
+}
+
+pub struct Parts {
+  delimiter: [74]u8,
+  delimiter_length: usize,
+  rest: []const u8,
+  done: bool,
+  failed: bool,
+}
+
+pub struct PartsResult { value: Parts, failure: parse.Failure }
+pub struct PartResult { value: Part, found: bool, failure: parse.Failure }
+
+// The boundary parameter of a multipart Content-Type, unquoted.
+fn boundary_of(content_type: []const u8) []const u8 {
+  rest := content_type
+  for #len(rest) > 0 {
+    end := bytes.find_byte(rest, ';')
+    item := trim_ows(rest[..end])
+    equals := bytes.find_byte(item, '=')
+    if equals < #len(item) && ascii_equal(trim_ows(item[..equals]), "boundary") {
+      value := trim_ows(item[equals + 1..])
+      if #len(value) >= 2 && value[0] == '"' && value[#len(value) - 1] == '"' {
+        value = value[1..#len(value) - 1]
+      }
+      return value
+    }
+    if end >= #len(rest) {
+      break
+    }
+    rest = rest[end + 1..]
+  }
+  return content_type[..0]
+}
+
+// Starts reading a multipart/form-data body. Fails with Syntax when the
+// Content-Type is not multipart/form-data or has no valid boundary (1-70
+// bytes), or the body does not start with the first delimiter.
+pub fn multipart(request: *const Request) PartsResult {
+  header := request_header(request, "Content-Type")
+  if !header.found || #len(header.value) < 19 || !ascii_equal(header.value[..19], "multipart/form-data") {
+    return PartsResult{ failure: parse.Failure{ kind: parse.Kind.Syntax, message: "not multipart/form-data" } }
+  }
+  boundary := boundary_of(header.value)
+  if #len(boundary) == 0 || #len(boundary) > 70 {
+    return PartsResult{ failure: parse.Failure{ kind: parse.Kind.Syntax, message: "bad boundary" } }
+  }
+  reader := Parts{}
+  reader.delimiter[0] = '\r'
+  reader.delimiter[1] = '\n'
+  reader.delimiter[2] = '-'
+  reader.delimiter[3] = '-'
+  for i in 0..#len(boundary) {
+    reader.delimiter[4 + i] = boundary[i]
+  }
+  reader.delimiter_length = 4 + #len(boundary)
+  body := request.body
+  // The first delimiter may lack its leading CRLF; a preamble is skipped.
+  first := reader.delimiter[2..reader.delimiter_length]
+  at: usize = 0
+  if !bytes.starts_with(body, first) {
+    found := bytes.find(body, reader.delimiter[..reader.delimiter_length])
+    if found == #len(body) {
+      return PartsResult{ failure: parse.Failure{ kind: parse.Kind.Syntax, message: "no first boundary" } }
+    }
+    at = found + 2
+  }
+  reader.rest = body[at + #len(first)..]
+  return PartsResult{ value: reader }
+}
+
+// A Content-Disposition parameter such as name="field", unquoted.
+fn disposition_parameter(value: []const u8, wanted: []const u8) HttpHeader {
+  rest := value
+  for #len(rest) > 0 {
+    // Split on ';' outside quotes.
+    end: usize = 0
+    quoted := false
+    for end < #len(rest) && (quoted || rest[end] != ';') {
+      if rest[end] == '"' {
+        quoted = !quoted
+      } else if rest[end] == '\\' && quoted && end + 1 < #len(rest) {
+        end += 1
+      }
+      end += 1
+    }
+    item := trim_ows(rest[..end])
+    equals := bytes.find_byte(item, '=')
+    if equals < #len(item) && ascii_equal(trim_ows(item[..equals]), wanted) {
+      text := trim_ows(item[equals + 1..])
+      if #len(text) >= 2 && text[0] == '"' && text[#len(text) - 1] == '"' {
+        text = text[1..#len(text) - 1]
+      }
+      return HttpHeader{ name: wanted, value: text, found: true }
+    }
+    if end >= #len(rest) {
+      break
+    }
+    rest = rest[end + 1..]
+  }
+  return HttpHeader{}
+}
+
+// The next part. found is false after the closing delimiter. Fails with
+// Syntax on a malformed part or a body cut short; the failure is sticky.
+pub fn next_part(reader: *Parts) PartResult {
+  if reader.failed {
+    return PartResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
+  }
+  if reader.done {
+    return PartResult{}
+  }
+  rest := reader.rest
+  // After a delimiter: "--" closes, otherwise optional padding and CRLF.
+  if bytes.starts_with(rest, "--") {
+    reader.done = true
+    return PartResult{}
+  }
+  line_end := bytes.find(rest, "\r\n")
+  if line_end == #len(rest) || #len(trim_ows(rest[..line_end])) != 0 {
+    reader.failed = true
+    return PartResult{ failure: parse.Failure{ kind: parse.Kind.Syntax, message: "bad delimiter line" } }
+  }
+  rest = rest[line_end + 2..]
+  part := Part{}
+  disposition := false
+  for true {
+    end := bytes.find(rest, "\r\n")
+    if end == #len(rest) {
+      reader.failed = true
+      return PartResult{ failure: parse.Failure{ kind: parse.Kind.Truncated, message: "part headers cut short" } }
+    }
+    line := rest[..end]
+    rest = rest[end + 2..]
+    if #len(line) == 0 {
+      break
+    }
+    colon := bytes.find_byte(line, ':')
+    if colon == #len(line) {
+      reader.failed = true
+      return PartResult{ failure: parse.Failure{ kind: parse.Kind.Syntax, message: "bad part header" } }
+    }
+    field := trim_ows(line[..colon])
+    value := trim_ows(line[colon + 1..])
+    if ascii_equal(field, "content-disposition") {
+      if #len(value) < 9 || !ascii_equal(value[..9], "form-data") {
+        reader.failed = true
+        return PartResult{ failure: parse.Failure{ kind: parse.Kind.Syntax, message: "not form-data" } }
+      }
+      part.name = disposition_parameter(value, "name").value
+      file := disposition_parameter(value, "filename")
+      part.filename = file.value
+      part.has_filename = file.found
+      disposition = true
+    } else if ascii_equal(field, "content-type") {
+      part.content_type = value
+    }
+  }
+  if !disposition {
+    reader.failed = true
+    return PartResult{ failure: parse.Failure{ kind: parse.Kind.Syntax, message: "part without Content-Disposition" } }
+  }
+  delimiter := reader.delimiter[..reader.delimiter_length]
+  end := bytes.find(rest, delimiter)
+  if end == #len(rest) {
+    reader.failed = true
+    return PartResult{ failure: parse.Failure{ kind: parse.Kind.Truncated, message: "no closing boundary" } }
+  }
+  part.body = rest[..end]
+  reader.rest = rest[end + #len(delimiter)..]
+  return PartResult{ value: part, found: true }
+}

@@ -1,6 +1,6 @@
 use "std/parse" parse
 use "std/mem" memory
-use "std/strings" text
+use "std/strings" strings
 use "std/io" stream
 use "std/unicode/utf8" utf8
 use "std/bytes"
@@ -799,62 +799,62 @@ fn read_into(value: *const Value, target: any) {
     }
     *f64 p => {
       if value.kind == KindNumber {
-        p.* = text.parse(f64, value.text)
+        p.* = strings.parse(f64, value.text)
       }
     }
     *f32 p => {
       if value.kind == KindNumber {
-        p.* = text.parse(f32, value.text)
+        p.* = strings.parse(f32, value.text)
       }
     }
     *i64 p => {
       if value.kind == KindNumber {
-        p.* = text.parse(i64, value.text)
+        p.* = strings.parse(i64, value.text)
       }
     }
     *i32 p => {
       if value.kind == KindNumber {
-        p.* = text.parse(i32, value.text)
+        p.* = strings.parse(i32, value.text)
       }
     }
     *i16 p => {
       if value.kind == KindNumber {
-        p.* = text.parse(i16, value.text)
+        p.* = strings.parse(i16, value.text)
       }
     }
     *i8 p => {
       if value.kind == KindNumber {
-        p.* = text.parse(i8, value.text)
+        p.* = strings.parse(i8, value.text)
       }
     }
     *isize p => {
       if value.kind == KindNumber {
-        p.* = text.parse(isize, value.text)
+        p.* = strings.parse(isize, value.text)
       }
     }
     *u64 p => {
       if value.kind == KindNumber {
-        p.* = text.parse(u64, value.text)
+        p.* = strings.parse(u64, value.text)
       }
     }
     *u32 p => {
       if value.kind == KindNumber {
-        p.* = text.parse(u32, value.text)
+        p.* = strings.parse(u32, value.text)
       }
     }
     *u16 p => {
       if value.kind == KindNumber {
-        p.* = text.parse(u16, value.text)
+        p.* = strings.parse(u16, value.text)
       }
     }
     *u8 p => {
       if value.kind == KindNumber {
-        p.* = text.parse(u8, value.text)
+        p.* = strings.parse(u8, value.text)
       }
     }
     *usize p => {
       if value.kind == KindNumber {
-        p.* = text.parse(usize, value.text)
+        p.* = strings.parse(usize, value.text)
       }
     }
     _ => {

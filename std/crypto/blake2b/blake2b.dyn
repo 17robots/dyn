@@ -1,0 +1,161 @@
+// BLAKE2b (RFC 7693): digests of 1-64 bytes, optionally keyed (up to 64 key
+// bytes). Std code wraps, so + is addition mod 2^64.
+use "std/encoding/binary" binary
+
+const Iv: [8]u64 = [
+  0x6a09e667f3bcc908, 0xbb67ae8584caa73b, 0x3c6ef372fe94f82b, 0xa54ff53a5f1d36f1,
+  0x510e527fade682d1, 0x9b05688c2b3e6c1f, 0x1f83d9abfb41bd6b, 0x5be0cd19137e2179,
+]
+
+const Sigma: [12][16]u8 = [
+  [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+  [14, 10, 4, 8, 9, 15, 13, 6, 1, 12, 0, 2, 11, 7, 5, 3],
+  [11, 8, 12, 0, 5, 2, 15, 13, 10, 14, 3, 6, 7, 1, 9, 4],
+  [7, 9, 3, 1, 13, 12, 11, 14, 2, 6, 5, 10, 4, 0, 15, 8],
+  [9, 0, 5, 7, 2, 4, 10, 15, 14, 1, 11, 12, 6, 8, 3, 13],
+  [2, 12, 6, 10, 0, 11, 8, 3, 4, 13, 7, 5, 15, 14, 1, 9],
+  [12, 5, 1, 15, 14, 13, 4, 10, 0, 7, 6, 3, 9, 2, 8, 11],
+  [13, 11, 7, 14, 12, 1, 3, 9, 5, 0, 15, 4, 8, 6, 2, 10],
+  [6, 15, 14, 9, 11, 3, 0, 8, 12, 2, 13, 7, 1, 4, 10, 5],
+  [10, 2, 8, 4, 7, 6, 1, 5, 15, 11, 9, 14, 3, 12, 13, 0],
+  [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+  [14, 10, 4, 8, 9, 15, 13, 6, 1, 12, 0, 2, 11, 7, 5, 3],
+]
+
+pub struct State {
+  hash: [8]u64,
+  block: [128]u8,
+  used: usize,
+  // Bytes compressed so far, as a 128-bit counter.
+  low: u64,
+  high: u64,
+  length: usize,
+  failed: bool,
+}
+
+fn rotate(value: u64, amount: u64) u64 {
+  return (value >> amount) | (value << (64 - amount))
+}
+
+fn mix(v: *[16]u64, a: usize, b: usize, c: usize, d: usize, x: u64, y: u64) {
+  v.*[a] = v.*[a] + v.*[b] + x
+  v.*[d] = rotate(v.*[d] ^ v.*[a], 32)
+  v.*[c] = v.*[c] + v.*[d]
+  v.*[b] = rotate(v.*[b] ^ v.*[c], 24)
+  v.*[a] = v.*[a] + v.*[b] + y
+  v.*[d] = rotate(v.*[d] ^ v.*[a], 16)
+  v.*[c] = v.*[c] + v.*[d]
+  v.*[b] = rotate(v.*[b] ^ v.*[c], 63)
+}
+
+fn compress(state: *State, last: bool) {
+  m: [16]u64
+  for i in 0..16 {
+    m[i] = binary.load_u64_le(state.block[i * 8..i * 8 + 8])
+  }
+  v: [16]u64
+  for i in 0..8 {
+    v[i] = state.hash[i]
+    v[i + 8] = Iv[i]
+  }
+  v[12] ^= state.low
+  v[13] ^= state.high
+  if last {
+    v[14] = ~v[14]
+  }
+  for round in 0..12 {
+    s := &Sigma[round]
+    mix(&v, 0, 4, 8, 12, m[s.*[0]], m[s.*[1]])
+    mix(&v, 1, 5, 9, 13, m[s.*[2]], m[s.*[3]])
+    mix(&v, 2, 6, 10, 14, m[s.*[4]], m[s.*[5]])
+    mix(&v, 3, 7, 11, 15, m[s.*[6]], m[s.*[7]])
+    mix(&v, 0, 5, 10, 15, m[s.*[8]], m[s.*[9]])
+    mix(&v, 1, 6, 11, 12, m[s.*[10]], m[s.*[11]])
+    mix(&v, 2, 7, 8, 13, m[s.*[12]], m[s.*[13]])
+    mix(&v, 3, 4, 9, 14, m[s.*[14]], m[s.*[15]])
+  }
+  for i in 0..8 {
+    state.hash[i] ^= v[i] ^ v[i + 8]
+  }
+}
+
+// A state for a length-byte digest (1-64), keyed when key is not empty
+// (at most 64 bytes). An invalid length or key makes finish fail.
+pub fn init(length: usize, key: []const u8) State {
+  state := State{ length: length }
+  if length == 0 || length > 64 || #len(key) > 64 {
+    state.failed = true
+    return state
+  }
+  for i in 0..8 {
+    state.hash[i] = Iv[i]
+  }
+  state.hash[0] ^= 0x01010000 ^ (#cast(u64, #len(key)) << 8) ^ #cast(u64, length)
+  if #len(key) > 0 {
+    for i in 0..#len(key) {
+      state.block[i] = key[i]
+    }
+    state.used = 128
+  }
+  return state
+}
+
+fn advance(state: *State, count: u64) {
+  state.low += count
+  if state.low < count {
+    state.high += 1
+  }
+}
+
+pub fn update(state: *State, input: []const u8) {
+  if state.failed {
+    return
+  }
+  at: usize = 0
+  for at < #len(input) {
+    // A full block is compressed only once more input follows: the last
+    // block must be compressed by finish with the final flag.
+    if state.used == 128 {
+      advance(state, 128)
+      compress(state, false)
+      state.used = 0
+    }
+    take := #len(input) - at
+    if take > 128 - state.used {
+      take = 128 - state.used
+    }
+    for i in 0..take {
+      state.block[state.used + i] = input[at + i]
+    }
+    state.used += take
+    at += take
+  }
+}
+
+// Writes the digest into the first length bytes of destination; empty when
+// destination is shorter or the state was invalid.
+pub fn finish(state: *State, destination: []u8) []u8 {
+  if state.failed || #len(destination) < state.length {
+    return destination[..0]
+  }
+  advance(state, state.used)
+  for i in state.used..128 {
+    state.block[i] = 0
+  }
+  compress(state, true)
+  full: [64]u8
+  for i in 0..8 {
+    binary.store_u64_le(full[i * 8..i * 8 + 8], state.hash[i])
+  }
+  for i in 0..state.length {
+    destination[i] = full[i]
+  }
+  return destination[..state.length]
+}
+
+// One-shot digest of input, #len(destination) bytes long (1-64), unkeyed.
+pub fn sum(destination: []u8, input: []const u8) []u8 {
+  state := init(#len(destination), "")
+  update(&state, input)
+  return finish(&state, destination)
+}

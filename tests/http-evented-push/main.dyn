@@ -22,6 +22,7 @@ const ChatTopic: u64 = 2
 struct App {
   quit: sync.AtomicU32,
   workers: []evented.Worker,
+  assets: http.Assets,
   router: http.Routes(App),
   route_storage: [8]http.TypedRoute(App),
 }
@@ -101,6 +102,14 @@ fn broadcast(response: *http.Response, request: *const http.Request, app: *App) 
   return text(response, 200, "sent\n")
 }
 
+fn asset(response: *http.Response, request: *const http.Request, app: *App) http.Result {
+  found := http.find_asset(&app.assets, http.param(request, "name").value)
+  if found == nil {
+    return text(response, 404, "no asset\n")
+  }
+  return http.serve_asset(response, request, found, "public, max-age=60")
+}
+
 fn quit(response: *http.Response, request: *const http.Request, app: *App) http.Result {
   sync.store_u32(&app.quit, 1)
   return text(response, 200, "bye\n")
@@ -142,6 +151,17 @@ fn main() {
   jobs := started.value
   workers: [WorkerCount]evented.Worker
   app := App{ workers: workers[..] }
+  asset_storage: [2]http.Asset
+  style: [4096]u8
+  rule := "body { color: red; } "
+  for i in 0..#len(style) {
+    style[i] = rule[i % #len(rule)]
+  }
+  asset_storage[0] = http.make_asset(arena, "style.css", style[..])
+  asset_storage[0].modified = 784111777
+  asset_storage[1] = http.make_asset(arena, "logo.png", "\x89PNG not really")
+  app.assets = http.Assets{ items: asset_storage[..], count: 2 }
+  http.sort_assets(&app.assets)
   app.router = http.typed_routes(app.route_storage[..], &app)
   _ = http.add(&app.router, "GET", "/health", health)
   _ = http.add(&app.router, "POST", "/hash", hash)
@@ -149,6 +169,7 @@ fn main() {
   _ = http.add(&app.router, "GET", "/chat", chat)
   _ = http.add(&app.router, "POST", "/broadcast", broadcast)
   _ = http.add(&app.router, "POST", "/quit", quit)
+  _ = http.add(&app.router, "GET", "/static/:name", asset)
   typed := http.Typed(App){ state: &app, handler: handle }
   binding := http.bind(&typed)
   config := evented.default_config()
@@ -172,7 +193,7 @@ fn main() {
   address := net.ipv4(127, 0, 0, 1, 0)
   listened := net.tcp_listen_ipv4(&address, 64)
   if io.failed(listened.failure) { #panic("listen") }
-  listener := listened.value
+  listener := net.listener_take(&listened.value)
   ran := evented.start(storage, workers[..], &listener, config, binding.handler, binding.context)
   if io.failed(ran.failure) { #panic("start") }
   io.println("port {}", evented.local_port(workers[..]))

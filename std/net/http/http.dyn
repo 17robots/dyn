@@ -1287,7 +1287,7 @@ fn two_digits(text: []const u8, at: usize) i64 {
   if high < '0' || high > '9' || low < '0' || low > '9' {
     return -1
   }
-  return #cast(i64, (high - '0') * 10 + (low - '0'))
+  return ((high - '0') * 10 + (low - '0'))
 }
 
 // Unix seconds from an IMF-fixdate, as in If-Modified-Since. The obsolete

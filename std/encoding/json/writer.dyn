@@ -1,0 +1,210 @@
+use "std/fmt" format
+use "std/unicode/utf8" utf8
+
+// JSON output into bounded caller storage, without a Value tree. Separators
+// are automatic: write a key before each object member, then its value.
+// Failure is sticky: a write that does not fit, invalid UTF-8, a key outside
+// an object, a value without its key, or nesting past MaxDepth marks the
+// writer failed and later writes do nothing. Check failed once at the end.
+pub const MaxDepth: usize = 64
+
+pub struct Writer {
+  buffer: format.Buffer,
+  // Per open container: true for an object; whether it holds a member yet.
+  objects: [MaxDepth]bool,
+  members: [MaxDepth]bool,
+  depth: usize,
+  // An object member's key was written and its value is due.
+  keyed: bool,
+  invalid: bool,
+}
+
+pub fn writer(storage: []u8) Writer {
+  return Writer{ buffer: format.buffer(storage) }
+}
+
+pub fn failed(target: *const Writer) bool {
+  return target.invalid || target.buffer.failed
+}
+
+// The JSON written so far, or empty when failed or a container is still open.
+pub fn output(target: *const Writer) []const u8 {
+  if failed(target) || target.depth != 0 || target.keyed {
+    return target.buffer.data[..0]
+  }
+  return format.bytes(&target.buffer)
+}
+
+// Separator before a value: a comma between array elements; inside an
+// object the value must follow its key.
+fn before_value(target: *Writer) bool {
+  if failed(target) {
+    return false
+  }
+  if target.depth == 0 {
+    if target.buffer.length > 0 {
+      target.invalid = true
+      return false
+    }
+    return true
+  }
+  level := target.depth - 1
+  if target.objects[level] {
+    if !target.keyed {
+      target.invalid = true
+      return false
+    }
+    target.keyed = false
+    return true
+  }
+  if target.members[level] {
+    format.write_byte(&target.buffer, ',')
+  }
+  target.members[level] = true
+  return true
+}
+
+fn open(target: *Writer, object: bool, byte: u8) {
+  if !before_value(target) {
+    return
+  }
+  if target.depth == MaxDepth {
+    target.invalid = true
+    return
+  }
+  format.write_byte(&target.buffer, byte)
+  target.objects[target.depth] = object
+  target.members[target.depth] = false
+  target.depth += 1
+}
+
+fn close(target: *Writer, object: bool, byte: u8) {
+  if failed(target) {
+    return
+  }
+  if target.depth == 0 || target.objects[target.depth - 1] != object || target.keyed {
+    target.invalid = true
+    return
+  }
+  target.depth -= 1
+  format.write_byte(&target.buffer, byte)
+}
+
+pub fn object_begin(target: *Writer) {
+  open(target, true, '{')
+}
+
+pub fn object_end(target: *Writer) {
+  close(target, true, '}')
+}
+
+pub fn array_begin(target: *Writer) {
+  open(target, false, '[')
+}
+
+pub fn array_end(target: *Writer) {
+  close(target, false, ']')
+}
+
+fn quoted(target: *Writer, value: []const u8) {
+  if !utf8.valid(value) {
+    target.invalid = true
+    return
+  }
+  digits := "0123456789abcdef"
+  format.write_byte(&target.buffer, '"')
+  start: usize = 0
+  for i in 0..#len(value) {
+    byte := value[i]
+    if byte >= 0x20 && byte != '"' && byte != '\\' {
+      continue
+    }
+    format.write(&target.buffer, value[start..i])
+    start = i + 1
+    if byte == '"' {
+      format.write(&target.buffer, "\\\"")
+    } else if byte == '\\' {
+      format.write(&target.buffer, "\\\\")
+    } else if byte == '\n' {
+      format.write(&target.buffer, "\\n")
+    } else if byte == '\r' {
+      format.write(&target.buffer, "\\r")
+    } else if byte == '\t' {
+      format.write(&target.buffer, "\\t")
+    } else {
+      format.write(&target.buffer, "\\u00")
+      format.write_byte(&target.buffer, digits[byte >> 4])
+      format.write_byte(&target.buffer, digits[byte & 15])
+    }
+  }
+  format.write(&target.buffer, value[start..])
+  format.write_byte(&target.buffer, '"')
+}
+
+// The next object member's name.
+pub fn key(target: *Writer, name: []const u8) {
+  if failed(target) {
+    return
+  }
+  if target.depth == 0 || !target.objects[target.depth - 1] || target.keyed {
+    target.invalid = true
+    return
+  }
+  level := target.depth - 1
+  if target.members[level] {
+    format.write_byte(&target.buffer, ',')
+  }
+  target.members[level] = true
+  quoted(target, name)
+  format.write_byte(&target.buffer, ':')
+  target.keyed = true
+}
+
+pub fn text(target: *Writer, value: []const u8) {
+  if before_value(target) {
+    quoted(target, value)
+  }
+}
+
+pub fn integer(target: *Writer, value: i64) {
+  if before_value(target) {
+    format.write_i64(&target.buffer, value)
+  }
+}
+
+pub fn unsigned(target: *Writer, value: u64) {
+  if before_value(target) {
+    format.write_u64(&target.buffer, value)
+  }
+}
+
+// Shortest round-trip form. NaN and infinities have no JSON form: failed.
+pub fn float(target: *Writer, value: f64) {
+  if value != value || value - value != 0.0 {
+    target.invalid = true
+    return
+  }
+  if before_value(target) {
+    format.write_f64_shortest(&target.buffer, value)
+  }
+}
+
+pub fn boolean(target: *Writer, value: bool) {
+  if before_value(target) {
+    format.write_bool(&target.buffer, value)
+  }
+}
+
+pub fn null(target: *Writer) {
+  if before_value(target) {
+    format.write(&target.buffer, "null")
+  }
+}
+
+// Already-encoded JSON, written as is: output of another Writer or encode.
+// The caller vouches that it is one valid JSON value.
+pub fn raw(target: *Writer, encoded: []const u8) {
+  if before_value(target) {
+    format.write(&target.buffer, encoded)
+  }
+}
