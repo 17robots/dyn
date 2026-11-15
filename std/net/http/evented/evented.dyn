@@ -244,6 +244,8 @@ struct Connection {
   job_running: bool,
   // Closed while its job ran: the slot is freed when the job reports back.
   zombie: bool,
+  // The client's address, from accept.
+  remote: network.Address,
   // A reserve slot answering 503, or holding a client until a regular slot
   // frees (Overflow.Wait); neither counts in Worker.serving.
   refusal: bool,
@@ -911,7 +913,8 @@ fn on_accept(worker: *Worker) {
       stop_listening(worker)
       return
     }
-    accepted := network.accept(worker.listener.descriptor)
+    remote := network.Address{}
+    accepted := network.accept_address(worker.listener.descriptor, &remote)
     if io.failed(accepted.failure) {
       // Would-block: another worker won the race. Other errors (EMFILE,
       // ECONNABORTED) are per-connection; keep serving.
@@ -941,6 +944,7 @@ fn on_accept(worker: *Worker) {
     connection := &worker.connections[index]
     connection.descriptor = descriptor
     connection.active = true
+    connection.remote = remote
     connection.last_active = now_milliseconds()
     connection.write_timeout = worker.config.write_timeout_milliseconds
     connection.interest = 0
@@ -1522,6 +1526,17 @@ fn read_inbox(worker: *Worker) {
       settle(worker, c)
     }
   }
+}
+
+// The client's IP and port for an evented response; empty bytes otherwise.
+// Behind a proxy this is the proxy: read X-Forwarded-For only from proxies
+// you trust.
+pub fn client_ip(response: *http.Response) network.Ip {
+  connection := connection_of(response)
+  if connection == nil {
+    return network.Ip{}
+  }
+  return network.address_ip(&connection.remote)
 }
 
 // ---------------------------------------------------------------- run

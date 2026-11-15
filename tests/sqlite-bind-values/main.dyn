@@ -1,0 +1,26 @@
+// sqlite.bind_values over every supported type, then sqlite.done; prints what a query reads back.
+use "std/io"
+use "vendor/sqlite"
+
+fn main() {
+  scratch: [512]u8
+  opened := sqlite.open(":memory:", scratch[..])
+  _ = sqlite.execute(opened.database, "CREATE TABLE t(a INTEGER, b TEXT, c BLOB, d REAL, e)", scratch[..])
+  prepared := sqlite.prepare(opened.database, "INSERT INTO t VALUES(?1, ?2, ?3, ?4, ?5)")
+  statement := prepared.statement
+  id: usize = 42
+  bound := sqlite.bind_values(&statement, id, "text", sqlite.Blob{ bytes: "\x00\x01" }, 1.5, sqlite.Null{})
+  io.println("bind {}", bound.kind)
+  io.println("step {}", sqlite.step(&statement).state)
+  sqlite.done(&statement)
+  bad := sqlite.bind_values(&statement, true, opened)
+  io.println("bad {}", bad.kind)
+  sqlite.done(&statement)
+  _ = sqlite.finalize(&statement)
+  query := sqlite.prepare(opened.database, "SELECT a, b, length(c), d, e IS NULL FROM t")
+  select := query.statement
+  _ = sqlite.step(&select)
+  io.println("{} {} {} {} {}", sqlite.column(&select, 0).integer, sqlite.column(&select, 1).bytes, sqlite.column(&select, 2).integer, sqlite.column(&select, 3).real, sqlite.column(&select, 4).integer)
+  _ = sqlite.finalize(&select)
+  _ = sqlite.close(opened.database)
+}

@@ -45,5 +45,5 @@ with tempfile.TemporaryDirectory(prefix='dyn-http-helpers-') as temporary:
         assert output.startswith(EXPECTED), output
         rest = output[len(EXPECTED):].rstrip('\n').split('\n')
         assert json.loads(rest[0]) == {'a': [-1, 18446744073709551615, 0.1, False, None, 'q"\\\n ', {'x': 1}], 'b': {}}, rest[0]
-        assert rest[1:] == ['false 0', 'true', 'true'], rest
+        assert rest[1:] == ['false 0', 'true', 'limit 3 false true true', '2001:db8::1:0:1', 'true'], rest
 print('http helpers ok')

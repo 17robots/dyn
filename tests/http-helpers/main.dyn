@@ -2,6 +2,7 @@
 // line, for tests/http-helpers.py to compare.
 use "std/encoding/json"
 use "std/io"
+use "std/net"
 use "std/net/http"
 
 fn request(raw: []const u8) http.Request {
@@ -68,6 +69,24 @@ fn main() {
   json.object_begin(&wrong)
   json.integer(&wrong, 1)
   io.println("{}", json.failed(&wrong))
+  buckets: [16]http.Bucket
+  limit := http.limiter(buckets[..], 3, 1, 1000)
+  allowed: usize = 0
+  for i in 0..10 {
+    if http.allow_at(&limit, 7, 0) {
+      allowed += 1
+    }
+  }
+  io.println("limit {} {} {} {}", allowed, http.allow_at(&limit, 7, 500), http.allow_at(&limit, 7, 1000), http.allow_at(&limit, 8, 1000))
+  six := net.Ip{ length: 16 }
+  six.bytes[0] = 0x20
+  six.bytes[1] = 0x01
+  six.bytes[2] = 0x0d
+  six.bytes[3] = 0xb8
+  six.bytes[11] = 1
+  six.bytes[15] = 1
+  address_text: [64]u8
+  io.println("{}", net.ip_text(address_text[..], six))
   tiny: [4]u8
   small := json.writer(tiny[..])
   json.text(&small, "too long")

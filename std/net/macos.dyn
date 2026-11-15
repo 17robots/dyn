@@ -22,6 +22,9 @@ fn address_family(bytes: []u8, length: usize, family: usize) {
   bytes[0] = #cast(u8, length)
   bytes[1] = #cast(u8, family)
 }
+fn read_family(bytes: []const u8) usize {
+  return #cast(usize, bytes[1])
+}
 fn native_socket(family: usize, kind: usize, protocol: usize) isize {
   return #syscall(sys.Socket, family, kind, protocol)
 }

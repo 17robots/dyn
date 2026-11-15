@@ -33,6 +33,9 @@ fn native_would_block(code: isize) bool {
 fn address_family(bytes: []u8, _length: usize, family: usize) {
   bytes[0] = #cast(u8, family)
 }
+fn read_family(bytes: []const u8) usize {
+  return #cast(usize, bytes[0])
+}
 fn native_status(value: i32) isize {
   if value == -1 {
     return win.socket_error()

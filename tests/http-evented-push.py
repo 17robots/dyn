@@ -106,6 +106,8 @@ def exercise(port):
     status, headers, body = request(port, 'HEAD', '/health')
     assert (status, body, headers['content-length']) == (200, b'', '3'), (status, body, headers)
 
+    assert request(port, 'GET', '/ip')[2] == b'127.0.0.1'
+
     # Static assets: gzip when accepted, ETag and Last-Modified revalidation, HEAD.
     css = b'body { color: red; } ' * 196 + b'body'
     status, headers, body = request(port, 'GET', '/static/style.css', headers={'Accept-Encoding': 'gzip'})

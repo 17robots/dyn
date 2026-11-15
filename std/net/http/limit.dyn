@@ -1,0 +1,93 @@
+use "std/sync" sync
+use "std/time" clock
+
+// Token buckets keyed by a 64-bit client key (see ip_key), for rate limits
+// such as "5 logins per minute per address". Each key may spend burst
+// requests at once and regains rate tokens per period. The table is fixed
+// size and set associative: when a set is full, the bucket refilled longest
+// ago is replaced, so a flood of new keys can only make old keys forget their
+// debt, never block anyone else. Safe from any thread.
+pub struct Bucket { key: u64, tokens: i64, updated: i64, used: bool }
+
+pub struct Limiter {
+  lock: sync.Mutex,
+  buckets: []Bucket,
+  // Tokens are counted in thousandths.
+  burst: i64,
+  rate: i64,
+  period_milliseconds: i64,
+}
+
+const SetSize: usize = 8
+
+// A limiter over storage (a multiple of 8 buckets; extra are unused):
+// burst requests at once, refilled at rate per period_milliseconds.
+pub fn limiter(storage: []Bucket, burst: u32, rate: u32, period_milliseconds: i64) Limiter {
+  count := #len(storage) / SetSize * SetSize
+  for i in 0..count {
+    storage[i] = Bucket{}
+  }
+  return Limiter{ lock: sync.mutex(), buckets: storage[..count], burst: #cast(i64, burst) * 1000, rate: #cast(i64, rate) * 1000,
+    period_milliseconds: period_milliseconds }
+}
+
+fn now_milliseconds() i64 {
+  now := clock.monotonic_now()
+  return now.value.seconds * 1000 + now.value.nanoseconds / clock.Millisecond
+}
+
+// Spends one token for key: true when allowed. A limiter without buckets or
+// with a zero period allows everything.
+pub fn allow(limiter: *Limiter, key: u64) bool {
+  return allow_at(limiter, key, now_milliseconds())
+}
+
+// allow with an explicit monotonic time in milliseconds, for tests.
+pub fn allow_at(limiter: *Limiter, key: u64, now: i64) bool {
+  if #len(limiter.buckets) == 0 || limiter.period_milliseconds <= 0 {
+    return true
+  }
+  mixed := key * 0x9e3779b97f4a7c15
+  set := #cast(usize, (mixed >> 32) % (#len(limiter.buckets) / SetSize)) * SetSize
+  sync.lock(&limiter.lock)
+  defer sync.unlock(&limiter.lock)
+  chosen := set
+  for i in set..set + SetSize {
+    bucket := &limiter.buckets[i]
+    if bucket.used && bucket.key == key {
+      chosen = i
+      break
+    }
+    if !bucket.used || (limiter.buckets[chosen].used && bucket.updated < limiter.buckets[chosen].updated) {
+      chosen = i
+    }
+  }
+  bucket := &limiter.buckets[chosen]
+  if !bucket.used || bucket.key != key {
+    bucket.* = Bucket{ key: key, tokens: limiter.burst, updated: now, used: true }
+  }
+  elapsed := now - bucket.updated
+  if elapsed > 0 {
+    refill := elapsed * limiter.rate / limiter.period_milliseconds
+    bucket.tokens += refill
+    if bucket.tokens > limiter.burst {
+      bucket.tokens = limiter.burst
+    }
+    bucket.updated = now
+  }
+  if bucket.tokens < 1000 {
+    return false
+  }
+  bucket.tokens -= 1000
+  return true
+}
+
+// A key for ip bytes (IPv4 or IPv6) and a purpose: FNV-1a over both, so one
+// limiter table can hold several limits.
+pub fn ip_key(ip: []const u8, purpose: u64) u64 {
+  value: u64 = 0xcbf29ce484222325 ^ purpose
+  for byte in ip {
+    value = (value ^ byte) * 0x100000001b3
+  }
+  return value
+}

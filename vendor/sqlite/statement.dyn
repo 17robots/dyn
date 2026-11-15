@@ -154,6 +154,69 @@ pub fn bind_blob(statement: *Statement, index: i32, value: []const u8) io.Failur
   return code_failure(bind_bytes(statement, index, value, false))
 }
 
+// Values for bind_values: Blob binds bytes as a blob, Null binds SQL NULL.
+pub struct Blob { bytes: []const u8 }
+pub struct Null {}
+
+// Binds values to parameters 1, 2, ... in order. Each value is an integer
+// (bound as i64), f32 or f64, bool (0 or 1), []const u8 or []u8 (text),
+// Blob or Null. Stops at the first failure; an unsupported type fails with
+// InvalidInput.
+pub fn bind_values(statement: *Statement, values: ...any) io.Failure {
+  for i in 0..#len(values) {
+    index := #cast(i32, i + 1)
+    bound := io.Failure{}
+    case values[i] {
+      i64 value => { bound = bind_i64(statement, index, value) }
+      i32 value => { bound = bind_i64(statement, index, value) }
+      i16 value => { bound = bind_i64(statement, index, value) }
+      i8 value => { bound = bind_i64(statement, index, value) }
+      u32 value => { bound = bind_i64(statement, index, value) }
+      u16 value => { bound = bind_i64(statement, index, value) }
+      u8 value => { bound = bind_i64(statement, index, value) }
+      u64 value => {
+        if value > 9223372036854775807 {
+          return io.Failure{ kind: io.Kind.Overflow }
+        }
+        bound = bind_i64(statement, index, #cast(i64, value))
+      }
+      usize value => {
+        if #cast(u64, value) > 9223372036854775807 {
+          return io.Failure{ kind: io.Kind.Overflow }
+        }
+        bound = bind_i64(statement, index, #cast(i64, value))
+      }
+      isize value => { bound = bind_i64(statement, index, #cast(i64, value)) }
+      f64 value => { bound = bind_f64(statement, index, value) }
+      f32 value => { bound = bind_f64(statement, index, value) }
+      bool value => {
+        flag: i64 = 0
+        if value {
+          flag = 1
+        }
+        bound = bind_i64(statement, index, flag)
+      }
+      []const u8 value => { bound = bind_text(statement, index, value) }
+      []u8 value => { bound = bind_text(statement, index, value) }
+      Blob value => { bound = bind_blob(statement, index, value.bytes) }
+      Null value => { bound = bind_null(statement, index) }
+      _ => { return io.Failure{ kind: io.Kind.InvalidInput } }
+    }
+    if io.failed(bound) {
+      return bound
+    }
+  }
+  return io.Failure{}
+}
+
+// Returns statement to Ready and drops its bindings, ready for the next
+// use: defer sqlite.done(&statement) right after taking it. Errors are not
+// reported; step already reported them.
+pub fn done(statement: *Statement) {
+  _ = reset(statement)
+  _ = clear_bindings(statement)
+}
+
 pub fn column_count(statement: *const Statement) i32 {
   if statement.handle == nil {
     return 0

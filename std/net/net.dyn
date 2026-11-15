@@ -598,3 +598,118 @@ pub fn poll_has(item: *const PollDescriptor, events: i16) bool {
 }
 
 
+
+// The IP of an IPv4 or IPv6 socket address: 4 or 16 bytes in network order,
+// and the port. Empty bytes for other families.
+pub struct Ip { bytes: [16]u8, length: usize, port: u16 }
+
+pub fn address_ip(address: *const Address) Ip {
+  result := Ip{}
+  if address.length < 8 {
+    return result
+  }
+  family := read_family(address.bytes[..])
+  result.port = #cast(u16, address.bytes[2]) << 8 | #cast(u16, address.bytes[3])
+  if family == AddressFamilyIpv4 {
+    for i in 0..4 {
+      result.bytes[i] = address.bytes[4 + i]
+    }
+    result.length = 4
+  } else if family == AddressFamilyIpv6 && address.length >= 24 {
+    for i in 0..16 {
+      result.bytes[i] = address.bytes[8 + i]
+    }
+    result.length = 16
+  }
+  return result
+}
+
+fn put_decimal(destination: []u8, at: usize, value: u32) usize {
+  digits: [10]u8
+  count: usize = 0
+  rest := value
+  for true {
+    digits[count] = #cast(u8, '0' + rest % 10)
+    count += 1
+    rest /= 10
+    if rest == 0 {
+      break
+    }
+  }
+  position := at
+  for i in 0..count {
+    if position < #len(destination) {
+      destination[position] = digits[count - 1 - i]
+    }
+    position += 1
+  }
+  return position
+}
+
+// The IP as text: dotted IPv4, or IPv6 in RFC 5952 form (lowercase, the
+// longest run of zero groups as ::). Empty when destination is shorter than
+// 46 bytes or ip is empty.
+pub fn ip_text(destination: []u8, ip: Ip) []u8 {
+  if #len(destination) < 46 || (ip.length != 4 && ip.length != 16) {
+    return destination[..0]
+  }
+  at: usize = 0
+  if ip.length == 4 {
+    for i in 0..4 {
+      if i > 0 {
+        destination[at] = '.'
+        at += 1
+      }
+      at = put_decimal(destination, at, #cast(u32, ip.bytes[i]))
+    }
+    return destination[..at]
+  }
+  groups: [8]u32
+  for i in 0..8 {
+    groups[i] = #cast(u32, ip.bytes[2 * i]) << 8 | #cast(u32, ip.bytes[2 * i + 1])
+  }
+  best_start: usize = 8
+  best_length: usize = 0
+  i: usize = 0
+  for i < 8 {
+    if groups[i] != 0 {
+      i += 1
+      continue
+    }
+    start := i
+    for i < 8 && groups[i] == 0 {
+      i += 1
+    }
+    if i - start > best_length && i - start >= 2 {
+      best_start = start
+      best_length = i - start
+    }
+  }
+  digits := "0123456789abcdef"
+  g: usize = 0
+  for g < 8 {
+    if g == best_start {
+      destination[at] = ':'
+      destination[at + 1] = ':'
+      at += 2
+      g += best_length
+      continue
+    }
+    if g > 0 && g != best_start + best_length {
+      destination[at] = ':'
+      at += 1
+    }
+    value := groups[g]
+    started := false
+    for shift in 0..4 {
+      nibble := (value >> #cast(u32, 12 - 4 * shift)) & 15
+      if nibble != 0 || started || shift == 3 {
+        destination[at] = digits[nibble]
+        at += 1
+        started = true
+      }
+    }
+    g += 1
+  }
+  return destination[..at]
+}
