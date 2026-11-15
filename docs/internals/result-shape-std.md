@@ -110,9 +110,8 @@ if loaded.failure.kind == Kind.Image {
 }
 ```
 
-Only the field named by `kind` is meaningful. The others stay zero. A `union`
-would save space but cannot be read safely without checking `kind`, so prefer
-plain fields unless the failure is stored in bulk.
+Only the field named by `kind` is meaningful. The others stay zero. Use a
+payload enum instead when the failure is stored in bulk and the space matters.
 
 ### Grouping by meaning instead of source
 

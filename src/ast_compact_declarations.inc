@@ -82,7 +82,6 @@ static bool compact_add_struct_names(const DynSource *s, DynAstProgram *a,
         (DynAstStruct){.span = compact_span(d),
                        .name = ns,
                        .packed = packed,
-                       .is_union = compact_flag(d, EXP_UNION),
                        .is_template = template_parameters != 0,
                        .type_param_count = template_parameters,
                        .alignment = 0,
@@ -187,7 +186,6 @@ static bool compact_add_struct_fields(const DynSource *s, DynAstProgram *a,
         }
         DynAstField field = {.name = name, .type = type, .default_value = DYN_NO_EXPR};
         if (!compact_null(init)) {
-          if (st->is_union) compact_report(init, s, errors, "union members have no defaults");
           field.has_default = true;
           field.default_value = compact_expr(init, s, a, errors);
           st = &a->structs[struct_id];

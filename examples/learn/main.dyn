@@ -103,14 +103,6 @@ fn structs() {
   }
 }
 
-// ----------------------------------------------------------------- Unions ---
-// A union overlaps its members. No pointers allowed inside, so every bit
-// pattern is valid. Reading another member reinterprets the bytes.
-union Word {
-  bits: u64,
-  number: f64,
-}
-
 // ------------------------------------------------------------------ Enums ---
 // Variants are numbered 0, 1, 2 in order. The first variant is the zero
 // value, so it should mean "nothing". Always write Enum.Variant.
@@ -171,9 +163,8 @@ fn enums() {
   circle := Shape.Circle(2.0)
   grow(&circle)
   io.println("areas {} {}", area(circle), area(Shape.Rect(Vec2{ x: 2.0, y: 3.0 })))
-  w: Word
-  w.number = 1.0
-  io.println("1.0 as bits {}", w.bits)
+  number: f64 = 1.0
+  io.println("1.0 as bits {}", #bitcast(u64, number)) // same-size numbers only
 }
 
 // ------------------------------------------------------------ Control flow ---

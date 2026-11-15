@@ -156,21 +156,6 @@ static bool integer(Sema *sema, DynType t) {
   t = underlying_type(sema->program, t);
   return t >= DYN_TYPE_I8 && t <= DYN_TYPE_USIZE;
 }
-/* Union members overlap, so a pointer member could be forged from bytes. */
-static bool sema_holds_pointer(const DynAstProgram *a, DynType t, unsigned depth) {
-  if (depth > 256 || t == DYN_TYPE_ANY || t == DYN_TYPE_RAWPTR || t == DYN_TYPE_STRING ||
-      dyn_type_is_pointer(t) || dyn_type_is_function(t) || dyn_type_is_slice(t))
-    return true;
-  if (dyn_type_is_array(t))
-    return sema_holds_pointer(a, a->arrays[t - DYN_TYPE_ARRAY_BASE].element, depth + 1);
-  if (dyn_type_is_struct(t)) {
-    const DynAstStruct *record = &a->structs[t - DYN_TYPE_STRUCT_BASE];
-    for (uint32_t i = 0; i < record->field_count; ++i)
-      if (sema_holds_pointer(a, a->fields[record->field_start + i].type, depth + 1))
-        return true;
-  }
-  return false;
-}
 static bool signed_int(Sema *sema, DynType t) {
   t = underlying_type(sema->program, t);
   return (t >= DYN_TYPE_I8 && t <= DYN_TYPE_I64) || t == DYN_TYPE_ISIZE;
@@ -2250,7 +2235,6 @@ static DynExprId copy_untyped(DynAstProgram *a, DynExprId id) {
 static bool struct_has_defaults(DynAstProgram *a, DynType type, unsigned depth) {
   if (!dyn_type_is_struct(type) || depth > 64) return false;
   DynAstStruct *st = &a->structs[type - DYN_TYPE_STRUCT_BASE];
-  if (st->is_union) return false;
   for (uint32_t i = 0; i < st->field_count; ++i) {
     DynAstField *f = &a->fields[st->field_start + i];
     if (f->has_default || struct_has_defaults(a, f->type, depth + 1)) return true;
@@ -3084,7 +3068,7 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
     }
     a->expressions[id].integer = sid;
     a->expressions[id].type = DYN_TYPE_STRUCT_BASE + sid;
-    if (!a->structs[sid].is_union && struct_has_defaults(a, DYN_TYPE_STRUCT_BASE + sid, 0)) {
+    if (struct_has_defaults(a, DYN_TYPE_STRUCT_BASE + sid, 0)) {
       /* Omitted fields take their defaults; omitted struct fields their own. */
       DynAstStruct *model = &a->structs[sid];
       uint32_t given = a->expressions[id].item_count, extra = 0;
@@ -3142,8 +3126,6 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
                      "struct field initializer type mismatch");
       }
     }
-    if (a->structs[sid].is_union && a->expressions[id].item_count > 1)
-      error_span(a->expressions[id].span, s, errors, "a union literal sets one member");
     return a->expressions[id].type;
   }
   if (a->expressions[id].kind == DYN_EXPR_FIELD) {
@@ -5271,12 +5253,6 @@ static bool sema_program(Sema *sema, DynAstProgram *a, const DynSource *s,
     }
   }
   free(type_order);
-  for (size_t i = 0; i < a->struct_count; ++i)
-    if (a->structs[i].is_union)
-      for (uint32_t k = 0; k < a->structs[i].field_count; ++k)
-        if (sema_holds_pointer(a, a->fields[a->structs[i].field_start + k].type, 0))
-          error_span(a->fields[a->structs[i].field_start + k].name, s, errors,
-                     "union members cannot hold pointers, slices or any");
   unsigned char *constant_globals = calloc(a->global_count ? a->global_count : 1, 1);
   if (!constant_globals) { a->allocation_failed = true; return false; }
   /* Resolve all global expressions before following constant dependencies;

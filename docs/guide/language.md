@@ -181,7 +181,8 @@ treating it as text. `const` prevents writes through this view only: another `[]
 same memory can still change the bytes. Character literals are untyped integer constants holding a Unicode scalar value:
 they take any expected integer type the value fits, and default to `u32`.
 
-`distinct`, `packed`, `union` and `type` are reserved keywords and cannot be names.
+`distinct`, `packed`, `union` and `type` are reserved keywords and cannot be names. `union` is
+reserved but declares nothing; Dyn has no union types.
 
 `type` creates module-level transparent aliases; aliases may be forward-referenced and
 alias cycles fail. There are no local aliases; declare them at module scope.
@@ -248,11 +249,9 @@ struct type. Struct assignment copies by value. Unknown/duplicate fields, duplic
 by-value recursion and aggregate comparison fail. Empty structs have size and alignment 1 so arrays
 have stable element stride and distinct elements have distinct addresses.
 
-`union Value { bits: u64, number: f64, bytes: [8]u8 }` overlaps its members at offset 0. Its size
-is the largest member, rounded to the largest alignment. Members cannot hold pointers, slices or
-`any`, so every bit pattern is valid for every member and zero is valid. Reading a member other
-than the last one written reinterprets the bytes. A literal sets at most one member. Passing a
-union by value to foreign code is not a supported C ABI promise; pass a pointer.
+Dyn has no union types. Reinterpret a number's bits with `#bitcast`, and store one of several
+shapes in a payload enum. To match a C union's layout, declare a field of the largest member's
+size and alignment, such as `[4]u32` for a 16-byte, 4-aligned union.
 
 Functions may accept and return primitive or struct values. Arguments evaluate left-to-right and
 must match declared parameter count/types, subject to normal lossless conversions. Non-void
