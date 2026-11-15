@@ -21,9 +21,9 @@ Web applications: see [docs/guide/web-apps.md](docs/guide/web-apps.md).
   32-bit arithmetic from 64-bit remainders and multiply loops; ChaCha20 and
   the WebSocket SHA-1 did too. `hmac.sha256_key` and `hmac.sha256_with`
   hash an HMAC key once for many messages.
-- x86-64 release builds emit 32-bit operations for `u32` arithmetic whose
-  result is truncated anyway, and `ROR` for `x >> c | x << (32 - c)`, also
-  on `u32` loop variables.
+- x86-64 and AArch64 release builds emit 32-bit operations for `u32`
+  arithmetic whose result is truncated anyway, and a rotate for
+  `x >> c | x << (32 - c)`, also on `u32` loop variables.
 - The inliner expands every call to a small pure function in a statement,
   not only the first: `rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)` becomes
   straight-line code. A user-written SHA-256 runs 2.4 times faster.

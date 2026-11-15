@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""x86-64 32-bit ALU forms and ROR (ssa_narrow32), and pure leaf calls
+"""32-bit ALU forms and ROR on x86-64 and AArch64 (ssa_narrow32), and pure leaf calls
 expanded from anywhere in a statement (inline_hoist): release output equals
 debug output, and release code uses ROR for the rotate helpers."""
 import os
 from pathlib import Path
 import platform
+import shutil
 import subprocess
 import tempfile
 
@@ -28,4 +29,12 @@ with tempfile.TemporaryDirectory(prefix='dyn-narrow-hoist-') as temporary:
         text = (work / 'program.s.s').read_text() if (work / 'program.s.s').exists() else listing.read_text()
         main = text[text.index('_main"'):] if '_main"' in text else text
         assert ': ror ' in main, 'release main uses ROR'
+    # AArch64 W-register forms and EXTR, under qemu when it is installed.
+    qemu = shutil.which('qemu-aarch64')
+    if qemu:
+        program = work / 'program-a64'
+        subprocess.run([DYN, 'build', str(ROOT / 'tests/native-narrow-hoist'), '--release', '--target', 'aarch64-linux',
+                        '--quiet', '--no-cache', '--output', str(program)], check=True, timeout=180)
+        result = subprocess.run([qemu, str(program)], capture_output=True, text=True, check=True, timeout=60).stdout
+        assert result == outputs[0], (result, outputs[0])
 print('native narrow hoist ok')

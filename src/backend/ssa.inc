@@ -10513,7 +10513,7 @@ static int ssa_float_branch(SsaEmit *e, const SsaValue *c) {
   x86_reg_op(ctx, f32 ? -1 : 0x66, false, OP2(0x0f, 0x2e), ra - X_XMM0, rb - X_XMM0, false);
   return c->aux == 2 || c->aux == 4 ? CC_A : CC_AE;
 }
-/* x86-64: a 32-bit zero-extension whose operand is an integer operation
+/* x86-64 and AArch64: a 32-bit zero-extension whose operand is an integer operation
    used nowhere else becomes that operation on 32-bit registers, which
    zero-extends its result for free. Then x >> c | x << (32 - c), with x
    known to fit in 32 bits, becomes ROR. Runs after dce, which counts uses. */
@@ -11675,7 +11675,7 @@ allocate:
     if (ssa_reuse_loads(s, order, n)) ssa_resolve_all(s);
     ssa_dce(s, order, n);
   }
-  if (!ctx->a64 && !ctx->rv64 && !ctx->rv32 && !ctx->t32) ssa_narrow32(s, order, n);
+  if (!ctx->rv64 && !ctx->rv32 && !ctx->t32) ssa_narrow32(s, order, n);
   ssa_fuse(s, order, n);
   ssa_loop_depths(s, order, n);
   ssa_mark_cold(s, order, n);

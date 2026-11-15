@@ -152,8 +152,11 @@ static Cond a64s_compare(SsaEmit *e, int32_t a, int32_t b, Cond cond) {
   return cond;
 }
 /* d = a op b for three-register integer instructions. */
+/* A w32 value (ssa_narrow32) uses the W form: bit 31 clear, and the upper
+   half of the destination becomes zero. */
 static void a64s_binary(SsaEmit *e, SsaValue *v, uint32_t opcode) {
   unsigned d = a64s_target(v), ra = a64s_get(e, v->a, A_S1), rb = a64s_get(e, v->b, A_S2);
+  if (v->w32) opcode &= ~0x80000000u;
   a64_word(e->ctx, opcode | rb << 16 | ra << 5 | d);
   a64s_put(e, v, d);
 }
@@ -619,7 +622,7 @@ static void a64s_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
   case SO_FRAME: case SO_PHI: case SO_PARAM: case SO_COPY:
     return;
   case SO_ADD: case SO_SUB:
-    if (ssa_is_const(s, v->b, &c) && (c < 4096 || 0 - c < 4096)) {
+    if (!v->w32 && ssa_is_const(s, v->b, &c) && (c < 4096 || 0 - c < 4096)) {
       d = a64s_target(v);
       int64_t n = v->op == SO_ADD ? (int64_t)c : -(int64_t)c;
       a64s_add_immediate(ctx, d, a64s_get(e, v->a, A_S1), n);
@@ -657,7 +660,10 @@ static void a64s_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
     d = a64s_target(v);
     if (ssa_is_const(s, v->b, &c)) {
       unsigned n = a64s_get(e, v->a, A_S1), amount = (unsigned)(c & 63);
-      if (v->op == SO_SHL) a64_word(ctx, 0xd3400000u | ((64 - amount) & 63) << 16 | (63 - amount) << 10 | n << 5 | d);
+      if (v->rotate) a64_word(ctx, 0x13800000u | n << 16 | (amount & 31) << 10 | n << 5 | d); /* ror wd, wn, #c (extr) */
+      else if (v->w32 && v->op == SO_SHL)
+        a64_word(ctx, 0x53000000u | ((32 - amount) & 31) << 16 | (31 - (amount & 31)) << 10 | n << 5 | d); /* lsl wd */
+      else if (v->op == SO_SHL) a64_word(ctx, 0xd3400000u | ((64 - amount) & 63) << 16 | (63 - amount) << 10 | n << 5 | d);
       else a64_word(ctx, (v->op == SO_SHR ? 0xd340fc00u : 0x9340fc00u) | amount << 16 | n << 5 | d);
       a64s_put(e, v, d);
       return;
@@ -677,7 +683,8 @@ static void a64s_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
   }
   case SO_NEG: case SO_NOT:
     d = a64s_target(v);
-    a64_word(ctx, (v->op == SO_NEG ? 0xcb0003e0u : 0xaa2003e0u) | a64s_get(e, v->a, A_S1) << 16 | d);
+    a64_word(ctx, ((v->op == SO_NEG ? 0xcb0003e0u : 0xaa2003e0u) & (v->w32 ? ~0x80000000u : ~0u)) |
+                  a64s_get(e, v->a, A_S1) << 16 | d);
     a64s_put(e, v, d);
     return;
   case SO_EXT:
