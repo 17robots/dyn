@@ -189,7 +189,8 @@ zlib's default size.
 larger than `Config.receive_size` borrows one of `Config.upload_count` blocks
 of `Config.upload_size` bytes until it is handled (503 when none is free, 413
 when it is bigger). Clients that send `Expect: 100-continue` get `100 Continue`
-before their body.
+before their body. Chunked request bodies (`Transfer-Encoding: chunked`) are
+decoded in place once complete.
 
 ## Live updates
 
@@ -248,6 +249,5 @@ so with `Overflow.Reject` they are closed instead.
 
 - HTTP/2 and HTTP/3.
 - Unbounded streaming request bodies: a request must fit `Config.upload_size`.
-- Chunked request bodies (`Transfer-Encoding: chunked` uploads) get 400.
 - Response compression on the fly in `serve_asset`; dynamic responses call
   `gzip.write` themselves.

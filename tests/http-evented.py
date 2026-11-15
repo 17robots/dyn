@@ -154,8 +154,12 @@ def exercise(port, pooled=False):
     assert raw(port, huge_body).startswith(b'HTTP/1.1 413 Content Too Large\r\n')
     huge_head = b'GET /health HTTP/1.1\r\nX-Fill: ' + b'y' * 8000 + b'\r\n\r\n'
     assert raw(port, huge_head).startswith(b'HTTP/1.1 413 Content Too Large\r\n')
-    chunked = b'POST /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n'
-    assert raw(port, chunked).startswith(b'HTTP/1.1 400 Bad Request\r\n')
+    # Chunked bodies are decoded in place; a malformed chunk is 400.
+    chunked = b'POST /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n5\r\nhello\r\n0\r\n\r\n'
+    reply = raw(port, chunked)
+    assert reply.startswith(b'HTTP/1.1 200 OK\r\n') and reply.endswith(b'\r\n\r\nhello'), reply
+    malformed = b'POST /echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\n\r\n'
+    assert raw(port, malformed).startswith(b'HTTP/1.1 400 Bad Request\r\n')
 
     if not pooled:
         # Idle connections close after the 500 ms timeout.

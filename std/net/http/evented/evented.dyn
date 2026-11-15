@@ -616,7 +616,7 @@ fn serve_buffered(worker: *Worker, index: usize) bool {
   }
   wanted: usize = 0
   for connection.mode == Mode.Http && !connection.writing && !connection.close_after && !connection.failed {
-    framed := http.frame_request(connection.input[consumed..connection.used], capacity)
+    framed := http.frame_request_decoding(connection.input[consumed..connection.used], capacity)
     if framed.status == http.FrameStatus.Incomplete {
       wanted = framed.total
       if framed.expect_continue && !connection.continue_sent && framed.total > 0 {

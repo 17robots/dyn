@@ -1077,6 +1077,49 @@ pub fn frame_request(input: []const u8, capacity: usize) FrameResult {
   return FrameResult{ status: FrameStatus.Ready, request: request, consumed: total }
 }
 
+// Like frame_request, and also takes Transfer-Encoding: chunked bodies. Once
+// the whole chunked body has arrived it is decoded in place, so input
+// changes; Request.body and Request.raw then hold the decoded body. Until
+// then the result is Incomplete with total one past the bytes at hand.
+pub fn frame_request_decoding(input: []u8, capacity: usize) FrameResult {
+  scan: usize = 0
+  if !head_complete(input, &scan) {
+    return frame_request(input, capacity)
+  }
+  head := parse_request(input)
+  if parse.failed(head.failure) || !head.chunked {
+    return frame_request(input, capacity)
+  }
+  if head.header_length > capacity {
+    return FrameResult{ status: FrameStatus.Capacity }
+  }
+  empty: [0]u8
+  probe := scan_chunked(input[head.header_length..], empty[..], false)
+  if probe.failure.kind == io.Kind.WouldBlock {
+    if #len(input) >= capacity {
+      return FrameResult{ status: FrameStatus.Capacity }
+    }
+    expect := header(input[..head.header_length], "Expect")
+    return FrameResult{ status: FrameStatus.Incomplete, total: #len(input) + 1,
+      expect_continue: expect.found && ascii_equal(trim_ows(expect.value), "100-continue") }
+  }
+  if io.failed(probe.failure) {
+    return FrameResult{ status: FrameStatus.Invalid, offset: head.header_length + probe.offset }
+  }
+  body := input[head.header_length..]
+  decoded := scan_chunked(body, body, true)
+  if io.failed(decoded.failure) {
+    return FrameResult{ status: FrameStatus.Invalid }
+  }
+  framed := head
+  framed.content_length = decoded.count
+  request := request_parts(input, framed)
+  if #len(request.method) == 0 {
+    return FrameResult{ status: FrameStatus.Invalid }
+  }
+  return FrameResult{ status: FrameStatus.Ready, request: request, consumed: head.header_length + probe.consumed }
+}
+
 fn receive_failure(state: *Server, detail: ErrorKind, native: isize) ReceiveResult {
   if !state.failed {
     state.failed = true
@@ -1109,10 +1152,22 @@ pub fn receive(state: *Server) ReceiveResult {
         return failure
       }
     }
-    if head_checked {
-      if head.chunked {
+    if head_checked && head.chunked {
+      // Decoded in place once the whole body is here.
+      framed := frame_request_decoding(state.storage[..state.used], #len(state.storage))
+      if framed.status == FrameStatus.Invalid {
         return receive_failure(state, ErrorKind.Invalid, 0)
       }
+      if framed.status == FrameStatus.Capacity {
+        return receive_failure(state, ErrorKind.Capacity, 0)
+      }
+      if framed.status == FrameStatus.Ready {
+        request := framed.request
+        request.context = state.context
+        state.consumed = framed.consumed
+        return ReceiveResult{ request: request, response: Response{ output: state.output, head_only: bytes.equal(request.method, "HEAD") }, detail: ErrorKind.None }
+      }
+    } else if head_checked {
       if head.content_length > #len(state.storage) - head.header_length {
         return receive_failure(state, ErrorKind.Capacity, 0)
       }

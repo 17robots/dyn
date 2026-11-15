@@ -123,20 +123,45 @@ def exercise(port):
         sock.sendall(b'z' * 20000)
         reply = read_until(sock, b'20000 ' + str(20000 * ord('z')).encode())
         assert reply.startswith(b'HTTP/1.1 200 OK'), reply
-    # Two blocks per worker: slow uploads holding every block make the next one 503.
-    slow = []
-    for _ in range(4):
-        sock = socket.create_connection(('127.0.0.1', port), timeout=10)
-        sock.sendall(b'POST /upload HTTP/1.1\r\nHost: x\r\nContent-Length: 500000\r\n\r\n' + bytes(8000))
-        slow.append(sock)
-    time.sleep(0.3)
-    busy = 0
-    for _ in range(4):
+    # Chunked uploads are decoded in place, small or past the receive buffer,
+    # and pipelined requests after them still parse.
+    def chunked(data, sizes):
+        out, at = b'', 0
+        for size in sizes:
+            piece = data[at:at + size]
+            at += size
+            out += b'%x;ext=1\r\n' % len(piece) + piece + b'\r\n'
+        return out + b'0\r\nX-Trailer: yes\r\n\r\n'
+    for data, sizes in ((b'hello chunks', [5, 7]), (blob[:300000], [1000, 99000, 200000])):
         with socket.create_connection(('127.0.0.1', port), timeout=10) as sock:
-            sock.sendall(b'POST /upload HTTP/1.1\r\nHost: x\r\nContent-Length: 500000\r\n\r\n' + bytes(8000))
-            busy += read_until(sock, b'\r\n').startswith(b'HTTP/1.1 503')
-    assert busy >= 1, busy
-    for sock in slow:
+            sock.sendall(b'POST /upload HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n' + chunked(data, sizes) +
+                         b'GET /health HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n')
+            reply = b''
+            while chunk := sock.recv(65536):
+                reply += chunk
+        assert f'{len(data)} {sum(data)}'.encode() in reply and reply.endswith(b'ok\n'), reply[:300]
+    for bad in (b'Transfer-Encoding: chunked\r\n\r\nzz\r\n', b'Transfer-Encoding: chunked\r\nContent-Length: 3\r\n\r\n3\r\nabc\r\n0\r\n\r\n'):
+        with socket.create_connection(('127.0.0.1', port), timeout=10) as sock:
+            sock.sendall(b'POST /upload HTTP/1.1\r\nHost: x\r\n' + bad)
+            assert read_until(sock, b'\r\n').startswith(b'HTTP/1.1 400'), bad
+
+    # Four blocks in all: once every block is held by a slow upload, the next
+    # upload gets 503. A probe that finds a free block waits for its body and
+    # keeps holding it.
+    held, busy = [], False
+    for _ in range(12):
+        sock = socket.create_connection(('127.0.0.1', port), timeout=1)
+        sock.sendall(b'POST /upload HTTP/1.1\r\nHost: x\r\nContent-Length: 500000\r\n\r\n' + bytes(8000))
+        try:
+            if read_until(sock, b'\r\n').startswith(b'HTTP/1.1 503'):
+                busy = True
+                sock.close()
+                break
+        except socket.timeout:
+            pass
+        held.append(sock)
+    assert busy and len(held) <= 4, len(held)
+    for sock in held:
         sock.close()
     time.sleep(0.2)
     status, _, body = request(port, 'POST', '/upload', blob)

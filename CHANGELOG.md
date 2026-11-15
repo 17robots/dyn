@@ -70,6 +70,8 @@ Web applications: see [docs/guide/web-apps.md](docs/guide/web-apps.md).
   - Request bodies larger than `receive_size` borrow a block from an
     upload pool (`Config.upload_size`, `upload_count`); `Expect:
     100-continue` is answered.
+  - Chunked request bodies are accepted and decoded in place, by both
+    servers (`http.frame_request_decoding`); before, they got 400.
   - Breaking: `storage_size` grows for reserve slots, job storage and the
     inbox.
 - `std/event` gains `Waker` for waking a queue from another thread.

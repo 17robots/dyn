@@ -94,7 +94,7 @@ for end in range(len(chunk_head), len(chunk)):
     cases.append((chunk[:end], '', False, 'GET', 65536))
 for wire, body, valid, method, capacity in cases:
     SOURCE += f'  check({q(wire)}, {q(body)}, {str(valid).lower()}, {q(method)})\n'
-for malformed in ['bad\r\n\r\n', 'POST / HTTP/1.1\r\nContent-Length: 3\r\n\r\na', 'POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n']:
+for malformed in ['bad\r\n\r\n', 'POST / HTTP/1.1\r\nContent-Length: 3\r\n\r\na', 'POST / HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\nzz\r\n\r\n']:
     SOURCE += '  server_invalid(' + q(malformed) + ')\n'
 SOURCE += '  server_check(' + q('POST /one HTTP/1.1\r\nContent-Length: 3\r\n\r\nabcGET /two HTTP/1.1\r\n\r\n') + ')\n}\n'
 with tempfile.TemporaryDirectory(prefix='dyn-http-fragments-') as temporary:
