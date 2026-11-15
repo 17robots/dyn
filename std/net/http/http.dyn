@@ -562,6 +562,183 @@ fn scan_chunked(input: []const u8, destination: []u8, write: bool) HttpIoResult 
   }
   return HttpIoResult{ failure: io.Failure{ kind: io.Kind.System } }
 }
+// Incremental chunked body decoding (RFC 9112 7.1) for bodies read in pieces,
+// such as uploads larger than any buffer. Framing is checked byte by byte as
+// it arrives and never buffered; data is handed back as slices of the input.
+// Extensions are skipped; trailer fields are checked and dropped.
+pub struct ChunkReader {
+  phase: ChunkPhase,
+  size: usize,
+  // Decoded bytes so far.
+  total: usize,
+  // A trailer field name being read: its length and whether it can still be
+  // Content-Length or Transfer-Encoding, which trailers must not carry.
+  name_length: usize,
+  maybe_length: bool,
+  maybe_encoding: bool,
+}
+
+enum ChunkPhase { Size, Extension, SizeEnd, Data, DataCr, DataLf, TrailerStart, TrailerName, TrailerValue, TrailerLf, EndLf, Done, Failed }
+
+// consumed bytes of input were used; data, when not empty, is the next piece
+// of the body (it lies inside input[..consumed]). done once the final chunk
+// and trailers have been read: input[consumed..] then belongs to the next
+// message. failed for malformed framing, with offset into input.
+pub struct ChunkStep { consumed: usize, data: []const u8, done: bool, failed: bool, offset: usize }
+
+pub fn chunk_reader() ChunkReader {
+  return ChunkReader{ phase: ChunkPhase.Size }
+}
+
+// Reads framing from input until it reaches data, the end of the body or the
+// end of input. Call again with input[consumed..] until consumed is zero or
+// done is set.
+pub fn chunk_step(reader: *ChunkReader, input: []const u8) ChunkStep {
+  at: usize = 0
+  for at < #len(input) {
+    byte := input[at]
+    case reader.phase {
+      ChunkPhase.Size => {
+        value := hex(byte)
+        if value >= 0 {
+          if reader.size > (#max(usize) - #cast(usize, value)) / 16 {
+            return chunk_failed(reader, at)
+          }
+          reader.size = reader.size * 16 + #cast(usize, value)
+          reader.name_length += 1
+        } else if reader.name_length == 0 {
+          return chunk_failed(reader, at)
+        } else if byte == ';' {
+          reader.phase = ChunkPhase.Extension
+        } else if byte == '\r' {
+          reader.phase = ChunkPhase.SizeEnd
+        } else {
+          return chunk_failed(reader, at)
+        }
+      }
+      ChunkPhase.Extension => {
+        if byte == '\r' {
+          reader.phase = ChunkPhase.SizeEnd
+        } else if byte < 32 || byte == 127 {
+          return chunk_failed(reader, at)
+        }
+      }
+      ChunkPhase.SizeEnd => {
+        if byte != '\n' {
+          return chunk_failed(reader, at)
+        }
+        reader.name_length = 0
+        if reader.size == 0 {
+          reader.phase = ChunkPhase.TrailerStart
+        } else {
+          if reader.size > #max(usize) - reader.total {
+            return chunk_failed(reader, at)
+          }
+          reader.phase = ChunkPhase.Data
+        }
+      }
+      ChunkPhase.Data => {
+        count := #len(input) - at
+        if count > reader.size {
+          count = reader.size
+        }
+        reader.size -= count
+        reader.total += count
+        if reader.size == 0 {
+          reader.phase = ChunkPhase.DataCr
+        }
+        return ChunkStep{ consumed: at + count, data: input[at..at + count] }
+      }
+      ChunkPhase.DataCr => {
+        if byte != '\r' {
+          return chunk_failed(reader, at)
+        }
+        reader.phase = ChunkPhase.DataLf
+      }
+      ChunkPhase.DataLf => {
+        if byte != '\n' {
+          return chunk_failed(reader, at)
+        }
+        reader.phase = ChunkPhase.Size
+      }
+      ChunkPhase.TrailerStart => {
+        if byte == '\r' {
+          reader.phase = ChunkPhase.EndLf
+        } else if token_byte(byte) {
+          reader.name_length = 0
+          reader.maybe_length = true
+          reader.maybe_encoding = true
+          trailer_name_byte(reader, byte)
+          reader.phase = ChunkPhase.TrailerName
+        } else {
+          return chunk_failed(reader, at)
+        }
+      }
+      ChunkPhase.TrailerName => {
+        if byte == ':' {
+          if (reader.maybe_length && reader.name_length == 14) || (reader.maybe_encoding && reader.name_length == 17) {
+            return chunk_failed(reader, at)
+          }
+          reader.phase = ChunkPhase.TrailerValue
+        } else if token_byte(byte) {
+          trailer_name_byte(reader, byte)
+        } else {
+          return chunk_failed(reader, at)
+        }
+      }
+      ChunkPhase.TrailerValue => {
+        if byte == '\r' {
+          reader.phase = ChunkPhase.TrailerLf
+        } else if (byte < 32 && byte != '\t') || byte == 127 {
+          return chunk_failed(reader, at)
+        }
+      }
+      ChunkPhase.TrailerLf => {
+        if byte != '\n' {
+          return chunk_failed(reader, at)
+        }
+        reader.phase = ChunkPhase.TrailerStart
+      }
+      ChunkPhase.EndLf => {
+        if byte != '\n' {
+          return chunk_failed(reader, at)
+        }
+        reader.phase = ChunkPhase.Done
+        return ChunkStep{ consumed: at + 1, done: true }
+      }
+      ChunkPhase.Done => {
+        return ChunkStep{ consumed: at, done: true }
+      }
+      ChunkPhase.Failed => {
+        return ChunkStep{ consumed: at, failed: true, offset: at }
+      }
+    }
+    at += 1
+  }
+  if reader.phase == ChunkPhase.Data && reader.size == 0 {
+    reader.phase = ChunkPhase.DataCr
+  }
+  return ChunkStep{ consumed: at, done: reader.phase == ChunkPhase.Done, failed: reader.phase == ChunkPhase.Failed }
+}
+
+fn chunk_failed(reader: *ChunkReader, at: usize) ChunkStep {
+  reader.phase = ChunkPhase.Failed
+  return ChunkStep{ consumed: at, failed: true, offset: at }
+}
+
+fn trailer_name_byte(reader: *ChunkReader, byte: u8) {
+  lower := ascii_lower(byte)
+  length := "content-length"
+  encoding := "transfer-encoding"
+  if reader.name_length >= #len(length) || length[reader.name_length] != lower {
+    reader.maybe_length = false
+  }
+  if reader.name_length >= #len(encoding) || encoding[reader.name_length] != lower {
+    reader.maybe_encoding = false
+  }
+  reader.name_length += 1
+}
+
 // Borrowed inputs may live below the mark, but must not overlap future writes.
 fn validate_borrow(arena: *memory.Arena, input: []const u8) {
   if memory.arena_overlaps_unallocated(arena, input) {
@@ -1040,7 +1217,11 @@ fn request_parts(input: []const u8, head: HttpHead) Request {
 pub enum FrameStatus { Incomplete, Ready, Invalid, Capacity }
 // On Incomplete with a complete head, total is the request's full length and
 // expect_continue says the client waits for 100 Continue before its body.
-pub struct FrameResult { status: FrameStatus, request: Request, consumed: usize, offset: usize, total: usize, expect_continue: bool }
+pub struct FrameResult { status: FrameStatus, request: Request, consumed: usize, offset: usize, total: usize, expect_continue: bool,
+  // frame_request_head: the declared Content-Length, or chunked.
+  body_length: usize,
+  chunked: bool,
+}
 
 // Frames one request from bytes already buffered, with no I/O, for callers that
 // own their sockets (event loops). capacity is the most bytes the caller can
@@ -1118,6 +1299,37 @@ pub fn frame_request_decoding(input: []u8, capacity: usize) FrameResult {
     return FrameResult{ status: FrameStatus.Invalid }
   }
   return FrameResult{ status: FrameStatus.Ready, request: request, consumed: head.header_length + probe.consumed }
+}
+
+// Frames only a request's head, for bodies read separately (see ChunkReader).
+// Ready requests borrow input and have an empty body; consumed is the head's
+// length, body_length the declared Content-Length unless chunked is set.
+// Capacity means the head alone exceeds capacity.
+pub fn frame_request_head(input: []const u8, capacity: usize) FrameResult {
+  scan: usize = 0
+  if !head_complete(input, &scan) {
+    if #len(input) >= capacity {
+      return FrameResult{ status: FrameStatus.Capacity }
+    }
+    return FrameResult{ status: FrameStatus.Incomplete }
+  }
+  head := parse_request(input)
+  if parse.failed(head.failure) {
+    return FrameResult{ status: FrameStatus.Invalid, offset: head.offset }
+  }
+  if head.header_length > capacity {
+    return FrameResult{ status: FrameStatus.Capacity }
+  }
+  framed := head
+  framed.content_length = 0
+  request := request_parts(input, framed)
+  if #len(request.method) == 0 {
+    return FrameResult{ status: FrameStatus.Invalid }
+  }
+  expect := header(input[..head.header_length], "Expect")
+  return FrameResult{ status: FrameStatus.Ready, request: request, consumed: head.header_length,
+    expect_continue: expect.found && ascii_equal(trim_ows(expect.value), "100-continue"),
+    body_length: head.content_length, chunked: head.chunked }
 }
 
 fn receive_failure(state: *Server, detail: ErrorKind, native: isize) ReceiveResult {

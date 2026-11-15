@@ -42,6 +42,10 @@ with tempfile.TemporaryDirectory(prefix='dyn-http-helpers-') as temporary:
         subprocess.run([DYN, 'build', str(ROOT / 'tests/http-helpers'), mode, '--quiet', '--no-cache',
                         '--output', str(program)], check=True, timeout=180)
         output = subprocess.run([str(program)], capture_output=True, text=True, check=True, timeout=30).stdout
+        chunks = output.split('\n')[:6]
+        assert chunks == ['chunks abcdefg done 36 6', 'chunks z done 11 4', 'chunks ab failed 24 5',
+                          'chunks ab failed 5 5', 'chunks  failed 0 0', 'chunks  failed 16 16'], chunks
+        output = '\n'.join(output.split('\n')[6:])
         assert output.startswith(EXPECTED), output
         rest = output[len(EXPECTED):].rstrip('\n').split('\n')
         assert json.loads(rest[0]) == {'a': [-1, 18446744073709551615, 0.1, False, None, 'q"\\\n ', {'x': 1}], 'b': {}}, rest[0]

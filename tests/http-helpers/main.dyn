@@ -13,7 +13,41 @@ fn request(raw: []const u8) http.Request {
   return framed.request
 }
 
+// Decodes message one byte at a time, then whole: the data, and where it ends.
+fn chunk_pieces(message: []const u8) {
+  output: [64]u8
+  length: usize = 0
+  reader := http.chunk_reader()
+  at: usize = 0
+  state := "more"
+  for at < #len(message) {
+    step := http.chunk_step(&reader, message[at..at + 1])
+    for byte in step.data {
+      output[length] = byte
+      length += 1
+    }
+    at += step.consumed
+    if step.failed {
+      state = "failed"
+      break
+    }
+    if step.done {
+      state = "done"
+      break
+    }
+  }
+  whole := http.chunk_reader()
+  first := http.chunk_step(&whole, message)
+  io.println("chunks {} {} {} {}", output[..length], state, at, first.consumed)
+}
+
 fn main() {
+  chunk_pieces("3\r\nabc\r\n4;x=y\r\ndefg\r\n0\r\nX-Sum: 1\r\n\r\nrest")
+  chunk_pieces("1\r\nz\r\n0\r\n\r\n")
+  chunk_pieces("2\r\nab\r\n0\r\nContent-Length: 2\r\n\r\n")
+  chunk_pieces("2\r\nabX\n")
+  chunk_pieces("\r\n")
+  chunk_pieces("fffffffffffffffff\r\n")
   storage: [512]u8
   io.println("{}", http.format_date(storage[..], 784111777))
   io.println("{}", http.format_date(storage[..], 951782400))

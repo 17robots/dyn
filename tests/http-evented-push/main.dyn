@@ -9,6 +9,7 @@ use "std/mem"
 use "std/net"
 use "std/net/http"
 use "std/net/http/evented"
+use "std/parse"
 use "std/process"
 use "std/sync"
 use "std/thread/pool"
@@ -21,6 +22,8 @@ const ChatTopic: u64 = 2
 
 struct App {
   quit: sync.AtomicU32,
+  // Large bodies whose client left mid-upload.
+  abandoned: sync.AtomicU32,
   workers: []evented.Worker,
   assets: http.Assets,
   router: http.Routes(App),
@@ -179,6 +182,68 @@ fn on_message(message: *const evented.Message) {
   _ = evented.send(app.workers, message.peer, fmt.bytes(&out), message.kind == evented.MessageKind.Binary)
 }
 
+// Bodies larger than any upload block, read as they arrive: POST /large
+// answers with the byte count and sum, ?limit=N stops after N bytes, and
+// anything else is refused from the head alone.
+struct Upload { app: *App, count: usize, sum: u64, limit: usize }
+
+fn large_chunk(job: *Upload, piece: []const u8) bool {
+  for byte in piece {
+    job.sum += #cast(u64, byte)
+  }
+  job.count += #len(piece)
+  return job.limit == 0 || job.count <= job.limit
+}
+
+fn large_finish(response: *http.Response, request: *const http.Request, job: *Upload, end: evented.BodyEnd) http.Result {
+  storage: [64]u8
+  line := fmt.buffer(storage[..])
+  case end {
+    evented.BodyEnd.Complete => {
+      fmt.print(&line, "{} {}", job.count, job.sum)
+      return text(response, 200, fmt.bytes(&line))
+    }
+    evented.BodyEnd.Stopped => {
+      fmt.print(&line, "stopped after {}", job.count)
+      return text(response, http.StatusPayloadTooLarge, fmt.bytes(&line))
+    }
+    evented.BodyEnd.Invalid => { return text(response, http.StatusBadRequest, "bad chunks\n") }
+    evented.BodyEnd.Closed => {
+      _ = sync.fetch_add_u32(&job.app.abandoned, 1)
+      return http.Result{}
+    }
+  }
+}
+
+fn large_body(response: *http.Response, request: *const http.Request) http.Result {
+  typed := #cast(*http.Typed(App), request.context)
+  if !bytes.equal(request.path, "/large") {
+    return text(response, http.StatusPayloadTooLarge, "too large\n")
+  }
+  job := evented.job(Upload, response)
+  if job == nil {
+    return text(response, http.StatusServiceUnavailable, "busy\n")
+  }
+  job.app = typed.state
+  storage: [16]u8
+  limit := http.query_value(request, "limit", storage[..])
+  if limit.found {
+    parsed := parse.u64_decimal(limit.value)
+    job.limit = #cast(usize, parsed.value)
+  }
+  if io.failed(evented.receive_body(response, job, large_chunk, large_finish)) {
+    return text(response, http.StatusInternalServerError, "cannot read\n")
+  }
+  return http.Result{}
+}
+
+fn abandoned(response: *http.Response, request: *const http.Request, app: *App) http.Result {
+  storage: [16]u8
+  line := fmt.buffer(storage[..])
+  fmt.print(&line, "{}", sync.load_u32(&app.abandoned))
+  return text(response, 200, fmt.bytes(&line))
+}
+
 fn handle(response: *http.Response, request: *const http.Request, app: *App) http.Result {
   return http.serve_routes(&app.router, response, request)
 }
@@ -206,6 +271,7 @@ fn main() {
   app.router = http.typed_routes(app.route_storage[..], &app)
   _ = http.add(&app.router, "GET", "/health", health)
   _ = http.add(&app.router, "GET", "/report", report)
+  _ = http.add(&app.router, "GET", "/abandoned", abandoned)
   _ = http.add(&app.router, "POST", "/hash", hash)
   _ = http.add(&app.router, "GET", "/events", events)
   _ = http.add(&app.router, "GET", "/chat", chat)
@@ -236,6 +302,7 @@ fn main() {
   }
   config.evict_idle_milliseconds = 200
   config.compress_level = 6
+  config.on_large_body = large_body
   storage := mem.arena_sub(arena, evented.storage_size(config, WorkerCount) + mem.MiB)
   address := net.ipv4(127, 0, 0, 1, 0)
   listened := net.tcp_listen_ipv4(&address, 64)

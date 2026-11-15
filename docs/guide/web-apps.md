@@ -197,6 +197,47 @@ when it is bigger). Clients that send `Expect: 100-continue` get `100 Continue`
 before their body. Chunked request bodies (`Transfer-Encoding: chunked`) are
 decoded in place once complete.
 
+Bodies larger than any block go to `Config.on_large_body` with the head
+alone (nil answers 413). It answers from the head, or reads the body as it
+arrives with `evented.receive_body(response, data, chunk, finish)`:
+
+```dyn
+use "std/io"
+use "std/net/http"
+use "std/net/http/evented"
+
+struct Upload { count: usize }
+
+fn piece(job: *Upload, bytes: []const u8) bool {
+  job.count += #len(bytes)
+  return job.count <= 100 * 1024 * 1024
+}
+
+fn done(response: *http.Response, request: *const http.Request, job: *Upload, end: evented.BodyEnd) http.Result {
+  if end != evented.BodyEnd.Complete {
+    return http.respond(response, "upload failed\n", http.ResponseOptions{ status: http.StatusBadRequest })
+  }
+  return http.respond(response, "stored\n", http.ResponseOptions{})
+}
+
+fn large_body(response: *http.Response, request: *const http.Request) http.Result {
+  job := evented.job(Upload, response)
+  if job == nil || io.failed(evented.receive_body(response, job, piece, done)) {
+    return http.respond(response, "busy\n", http.ResponseOptions{ status: http.StatusServiceUnavailable })
+  }
+  return http.Result{}
+}
+```
+
+`chunk` runs on the worker thread for every piece that arrives, chunked
+framing already removed (`http.ChunkReader` does that incrementally);
+return false to stop. `finish` runs once with how the body ended
+(`BodyEnd.Complete`, `Stopped`, `Invalid` or `Closed`); after anything but
+`Complete` the connection closes once it has answered, and `Closed` sends
+nothing but lets it clean up. It may hand slow work to `run` with the same
+data. Large-body connections never hold an upload block, and the idle
+timeout applies to them.
+
 ## Live updates
 
 `evented.open_stream` starts a chunked response that stays open after the
@@ -253,4 +294,3 @@ so with `Overflow.Reject` they are closed instead.
 ## Not yet
 
 - HTTP/2 and HTTP/3.
-- Unbounded streaming request bodies: a request must fit `Config.upload_size`.

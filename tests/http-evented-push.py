@@ -109,6 +109,45 @@ def exercise(port):
 
     assert request(port, 'GET', '/ip')[2] == b'127.0.0.1'
 
+    # Bodies past the 1 MiB upload blocks stream through Config.on_large_body.
+    big = bytes((i * 13) % 256 for i in range(5 * 1024 * 1024 + 7))
+    status, _, body = request(port, 'POST', '/large', big)
+    assert (status, body) == (200, b'%d %d' % (len(big), sum(big))), (status, body)
+    with socket.create_connection(('127.0.0.1', port), timeout=10) as sock:
+        # Chunked, odd chunk sizes, a trailer, then a pipelined request.
+        pieces, at, size = [], 0, 1
+        while at < len(big):
+            piece = big[at:at + size]
+            pieces.append(b'%x;ext=1\r\n' % len(piece) + piece + b'\r\n')
+            at += len(piece)
+            size = size * 3 + 1 if size < 300000 else 7
+        sock.sendall(b'POST /large HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n' + b''.join(pieces) +
+                     b'0\r\nX-Digest: none\r\n\r\nGET /health HTTP/1.1\r\nHost: x\r\n\r\n')
+        reply = read_until(sock, b'ok\n')
+        assert b'%d %d' % (len(big), sum(big)) in reply and reply.count(b'HTTP/1.1 200') == 2, reply[:400]
+    with socket.create_connection(('127.0.0.1', port), timeout=10) as sock:
+        sock.sendall(b'POST /large HTTP/1.1\r\nHost: x\r\nExpect: 100-continue\r\nContent-Length: 3000000\r\n\r\n')
+        assert read_until(sock, b'\r\n\r\n') == b'HTTP/1.1 100 Continue\r\n\r\n'
+        sock.sendall(bytes(3000000))
+        assert read_until(sock, b'3000000 0').startswith(b'HTTP/1.1 200 OK')
+    status, _, body = request(port, 'POST', '/large?limit=2000000', big)
+    assert status == 413 and body.startswith(b'stopped after ') and 2000000 < int(body.split()[2]) < len(big), (status, body)
+    status, _, body = request(port, 'POST', '/elsewhere', big)
+    assert (status, body) == (413, b'too large\n'), (status, body)
+    with socket.create_connection(('127.0.0.1', port), timeout=10) as sock:
+        sock.sendall(b'POST /large HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n' + b'100000\r\n' + bytes(0x100000) +
+                     b'\r\nzz\r\n')
+        assert read_until(sock, b'bad chunks\n').startswith(b'HTTP/1.1 400'), 'malformed framing'
+    with socket.create_connection(('127.0.0.1', port), timeout=10) as sock:
+        sock.sendall(b'POST /large HTTP/1.1\r\nHost: x\r\nContent-Length: 9000000\r\n\r\n' + bytes(2 * 1024 * 1024))
+        time.sleep(0.2)
+    for _ in range(50):
+        if request(port, 'GET', '/abandoned')[2] == b'1':
+            break
+        time.sleep(0.05)
+    assert request(port, 'GET', '/abandoned')[2] == b'1', 'finish saw the client leave'
+    assert request(port, 'GET', '/health')[0] == 200
+
     # Dynamic responses gzip when the client accepts it.
     rows = b'[' + b','.join(b'{"id":%d,"name":"row %d"}' % (i, i) for i in range(400)) + b']'
     status, headers, body = request(port, 'GET', '/report', headers={'Accept-Encoding': 'gzip, br'})

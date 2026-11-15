@@ -24,7 +24,9 @@
 //   available. When the pool is exhausted or the block is too small, it is
 //   flushed synchronously: the
 //   worker waits (up to write_timeout_milliseconds) for the socket to drain.
-// - A request larger than the receive buffer gets 413 and the connection closes.
+// - A request larger than the receive buffer borrows an upload block; one
+//   larger than that goes to Config.on_large_body, which reads it in pieces
+//   with receive_body, or gets 413.
 //
 // Config.transport replaces plain TCP reads and writes, for TLS. This module
 // has no TLS dependency; std/net/http/evented/tls supplies an OpenSSL one.
@@ -95,6 +97,10 @@ pub struct Config {
   // Message.context for on_message. Workers share it: synchronize what it
   // points to.
   message_context: rawptr,
+  // Requests whose body is larger than any buffer here (upload_size, else
+  // receive_size): called with the head only, it answers, or reads the body
+  // in pieces with receive_body. nil answers 413.
+  on_large_body: http.Handler,
   // gzip level (1-9) for respond_compressed; each worker keeps one encoder
   // workspace (about 300 KiB). Zero sends bodies uncompressed.
   compress_level: u8,
@@ -117,7 +123,13 @@ pub struct Message { peer: Peer, kind: MessageKind, payload: []const u8, context
 
 pub type PeerResult = io.Result(Peer)
 
-enum Mode { Http, Deferred, Stream, WebSocket }
+enum Mode { Http, Deferred, Stream, WebSocket, Body }
+
+// How a body read with receive_body ended, for its finish function.
+// Stopped: chunk returned false. Invalid: malformed chunked framing. Closed:
+// the client went away; the response then sends nothing. After anything but
+// Complete the connection closes once finish has answered.
+pub enum BodyEnd { Complete, Stopped, Invalid, Closed }
 
 enum PostKind { Send, Publish, Close }
 struct Post { kind: PostKind, binary: bool, index: u32, generation: u32, topic: u64, offset: usize, length: usize }
@@ -275,6 +287,17 @@ struct Connection {
   // WebSocket: message assembly state; assembled bytes lead input.
   frames: websocket.WebSocketMessageState,
   close_sent: bool,
+  // A large body: the request head stays at input[..body_head] while body
+  // bytes pass through behind it. body_left counts Content-Length bytes.
+  body_head: usize,
+  body_left: usize,
+  body_chunked: bool,
+  body_reader: http.ChunkReader,
+  body_expect: bool,
+  body_started: bool,
+  body_data: rawptr,
+  body_chunk: fn(rawptr, []const u8) bool,
+  body_finish: fn(*http.Response, *const http.Request, rawptr, BodyEnd) http.Result,
 }
 
 pub struct Worker {
@@ -559,6 +582,11 @@ fn close_connection(worker: *Worker, index: usize) {
   }
   network.close(connection.descriptor)
   release_output(connection)
+  connection.failed = true
+  if connection.mode == Mode.Body && connection.body_started {
+    // The finish function still owns its data: let it clean up.
+    _ = body_end(worker, index, BodyEnd.Closed)
+  }
   if connection.mode == Mode.WebSocket && worker.config.on_message != nil {
     message := Message{ peer: peer_of(worker, index), kind: MessageKind.Closed, context: worker.config.message_context }
     worker.config.on_message(&message)
@@ -614,6 +642,9 @@ fn serve_buffered(worker: *Worker, index: usize) bool {
   if connection.mode == Mode.Deferred {
     return flush_and_wait(worker, index)
   }
+  if connection.mode == Mode.Body {
+    return body_feed(worker, index)
+  }
   if connection.mode == Mode.Stream {
     // A stream's client has nothing more to say; discard what it sends.
     connection.used = 0
@@ -642,6 +673,13 @@ fn serve_buffered(worker: *Worker, index: usize) bool {
       break
     }
     if framed.status == http.FrameStatus.Capacity {
+      if worker.config.on_large_body != nil {
+        head := http.frame_request_head(connection.input[consumed..connection.used], capacity)
+        if head.status == http.FrameStatus.Ready {
+          shift_input(connection, consumed)
+          return body_begin(worker, index, head)
+        }
+      }
       worker.rejected += 1
       reject(connection, http.StatusPayloadTooLarge, "request too large\n")
       break
@@ -675,8 +713,20 @@ fn serve_buffered(worker: *Worker, index: usize) bool {
   // A request larger than the receive buffer moves to an upload block.
   if connection.mode == Mode.Http && !connection.close_after && wanted > #len(connection.input) &&
     !grow_input(connection, wanted) {
-    worker.rejected += 1
-    reject(connection, http.StatusServiceUnavailable, "upload slots busy\n")
+    if wanted <= capacity {
+      worker.rejected += 1
+      reject(connection, http.StatusServiceUnavailable, "upload slots busy\n")
+    } else {
+      // No block could ever hold it (a chunked body with no upload pool).
+      if worker.config.on_large_body != nil {
+        head := http.frame_request_head(connection.input[..connection.used], capacity)
+        if head.status == http.FrameStatus.Ready {
+          return body_begin(worker, index, head)
+        }
+      }
+      worker.rejected += 1
+      reject(connection, http.StatusPayloadTooLarge, "request too large\n")
+    }
   }
   if connection.mode == Mode.WebSocket && !connection.writing && !connection.close_after {
     if !websocket_frames(worker, index) {
@@ -1053,7 +1103,8 @@ fn sweep_idle(worker: *Worker, now: i64) {
     connection := &worker.connections[i]
     // Streams and WebSockets stay open until a side closes them; parked
     // clients wait for a slot.
-    if connection.active && connection.mode == Mode.Http && !connection.parked && now - connection.last_active > limit {
+    if connection.active && (connection.mode == Mode.Http || connection.mode == Mode.Body) && !connection.parked &&
+      now - connection.last_active > limit {
       close_connection(worker, i)
     }
   }
@@ -1656,7 +1707,12 @@ pub fn respond_compressed(response: *http.Response, request: *const http.Request
 // already running, or T does not fit Config.job_size.
 pub fn job(T: type, response: *http.Response) *T {
   connection := connection_of(response)
-  if connection == nil || connection.jobs == nil || connection.job_running || connection.mode != Mode.Http {
+  if connection == nil || connection.jobs == nil || connection.job_running {
+    return nil
+  }
+  // In Config.on_large_body, before receive_body: storage for the reader.
+  large_head := connection.mode == Mode.Body && !connection.body_started
+  if connection.mode != Mode.Http && !large_head {
     return nil
   }
   mem.arena_reset(connection.jobs)
@@ -1737,6 +1793,201 @@ fn job_done(worker: *Worker, index: usize) {
   if !serve_buffered(worker, index) {
     close_connection(worker, index)
   }
+}
+
+// ---------------------------------------------------------------- large bodies
+
+// In Config.on_large_body: reads the request body as it arrives instead of
+// buffering it. chunk(data, piece) runs on the worker thread for each piece,
+// chunked framing already removed; keep it quick, as for any handler, and
+// return false to stop reading. finish answers on the worker thread once the
+// body has ended (see BodyEnd), with a fresh response and the same request;
+// it may hand slow work to run with the same data. data must point into job
+// storage (see job) or other memory that outlives finish. The client gets
+// 100 Continue now if it asked for it. InvalidState outside on_large_body.
+pub fn receive_body(response: *http.Response, data: *$J, chunk: fn(*$J, []const u8) bool,
+  finish: fn(*http.Response, *const http.Request, *$J, BodyEnd) http.Result) io.Failure {
+  connection := connection_of(response)
+  if connection == nil || connection.mode != Mode.Body || connection.body_started || response.started || response.finished {
+    return io.Failure{ kind: io.Kind.InvalidState }
+  }
+  if data == nil || chunk == nil || finish == nil {
+    return io.Failure{ kind: io.Kind.InvalidInput }
+  }
+  if connection.body_expect && !connection.continue_sent {
+    if !push_bytes(connection, "HTTP/1.1 100 Continue\r\n\r\n") {
+      return io.Failure{ kind: io.Kind.Capacity }
+    }
+    connection.continue_sent = true
+  }
+  connection.body_data = data
+  connection.body_chunk = #cast(fn(rawptr, []const u8) bool, chunk)
+  connection.body_finish = #cast(fn(*http.Response, *const http.Request, rawptr, BodyEnd) http.Result, finish)
+  connection.body_started = true
+  // The handler returns before any response: mark it so the server waits.
+  response.finished = true
+  return io.Failure{}
+}
+
+// A complete head whose body fits no buffer: input holds the head first.
+// Config.on_large_body answers it or starts receive_body.
+fn body_begin(worker: *Worker, index: usize, head: http.FrameResult) bool {
+  connection := &worker.connections[index]
+  connection.mode = Mode.Body
+  connection.body_head = head.consumed
+  connection.body_left = head.body_length
+  connection.body_chunked = head.chunked
+  connection.body_reader = http.chunk_reader()
+  connection.body_expect = head.expect_continue
+  connection.body_started = false
+  request := head_request(connection)
+  response := new_response(connection)
+  response.head_only = bytes.equal(request.method, "HEAD")
+  worker.requests += 1
+  handled := worker.config.on_large_body(&response, &request)
+  if connection.body_started {
+    if !body_feed(worker, index) {
+      return false
+    }
+    return !connection.active || settle_body(worker, index)
+  }
+  // Answered from the head alone: close after the reply, draining the unread
+  // body so the client sees it.
+  _ = handled
+  connection.mode = Mode.Http
+  connection.body_head = 0
+  connection.close_after = true
+  connection.rejected = true
+  connection.used = 0
+  if connection.failed || !flush(connection) {
+    return false
+  }
+  if connection.queued > 0 {
+    connection.writing = true
+    return set_interest(worker, index, write_interest(connection))
+  }
+  finish(worker, index)
+  return true
+}
+
+// The request whose head leads input, with an empty body.
+fn head_request(connection: *Connection) http.Request {
+  framed := http.frame_request_head(connection.input[..connection.body_head], connection.body_head)
+  request := framed.request
+  request.context = connection.worker.context
+  return request
+}
+
+// Sends what receive_body queued (100 Continue) without blocking.
+fn settle_body(worker: *Worker, index: usize) bool {
+  connection := &worker.connections[index]
+  if connection.failed || !flush(connection) {
+    return false
+  }
+  if connection.queued > 0 {
+    connection.writing = true
+    return set_interest(worker, index, write_interest(connection))
+  }
+  return true
+}
+
+// Hands every buffered body byte to chunk, then drops it, keeping the head.
+// False means close now.
+fn body_feed(worker: *Worker, index: usize) bool {
+  connection := &worker.connections[index]
+  at := connection.body_head
+  end := connection.used
+  outcome := BodyEnd.Complete
+  ended := false
+  for at < end && !ended {
+    piece: []const u8 = connection.input[at..at]
+    if connection.body_chunked {
+      step := http.chunk_step(&connection.body_reader, connection.input[at..end])
+      if step.failed {
+        outcome = BodyEnd.Invalid
+        ended = true
+        break
+      }
+      piece = step.data
+      at += step.consumed
+      ended = step.done
+      if step.consumed == 0 {
+        break
+      }
+    } else {
+      count := end - at
+      if count > connection.body_left {
+        count = connection.body_left
+      }
+      piece = connection.input[at..at + count]
+      connection.body_left -= count
+      at += count
+      ended = connection.body_left == 0
+    }
+    if #len(piece) > 0 && !connection.body_chunk(connection.body_data, piece) {
+      outcome = BodyEnd.Stopped
+      ended = true
+    }
+  }
+  // Keep the head and whatever follows the body: the next request.
+  rest := connection.used - at
+  for i in 0..rest {
+    connection.input[connection.body_head + i] = connection.input[at + i]
+  }
+  connection.used = connection.body_head + rest
+  if !ended {
+    return true
+  }
+  return body_end(worker, index, outcome)
+}
+
+// Runs finish once the body ended, then serves what follows it. False means
+// close now.
+fn body_end(worker: *Worker, index: usize, outcome: BodyEnd) bool {
+  connection := &worker.connections[index]
+  request := head_request(connection)
+  response := new_response(connection)
+  response.head_only = bytes.equal(request.method, "HEAD")
+  data := connection.body_data
+  done := connection.body_finish
+  connection.body_started = false
+  connection.continue_sent = false
+  if outcome == BodyEnd.Closed {
+    _ = done(&response, &request, data, outcome)
+    return false
+  }
+  connection.mode = Mode.Http
+  handled := done(&response, &request, data, outcome)
+  head := connection.body_head
+  connection.body_head = 0
+  if connection.mode == Mode.Deferred {
+    // finish called run: the head stays in input until that job answers.
+    connection.job_request = request
+    connection.job_consumed = head
+    return flush_and_wait(worker, index)
+  }
+  if outcome != BodyEnd.Complete {
+    connection.rejected = true
+    connection.close_after = true
+  }
+  if io.failed(handled.failure) || !response.finished || !request.keep_alive {
+    connection.close_after = true
+  }
+  shift_input(connection, head)
+  if connection.close_after {
+    connection.used = 0
+    if connection.failed || !flush(connection) {
+      return false
+    }
+    if connection.queued > 0 {
+      connection.writing = true
+      return set_interest(worker, index, write_interest(connection))
+    }
+    finish(worker, index)
+    return true
+  }
+  // Pipelined requests may follow the body.
+  return serve_buffered(worker, index)
 }
 
 // ---------------------------------------------------------------- streams

@@ -16,6 +16,10 @@ servers so they pick up the new `dyn`.
 
 Web applications: see [docs/guide/web-apps.md](docs/guide/web-apps.md).
 
+- Request bodies of any size: `Config.on_large_body` gets requests whose
+  body fits no buffer, and `evented.receive_body` hands it over piece by
+  piece, chunked framing removed (`http.ChunkReader`), then calls finish
+  with how it ended. Without it they still get 413.
 - `evented.respond_compressed` gzips dynamic responses with a per-worker
   encoder (`Config.compress_level`) when the client accepts gzip, the type
   compresses and the body is at least 1 KiB; `http.respond_compressed`
