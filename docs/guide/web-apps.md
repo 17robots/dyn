@@ -336,6 +336,41 @@ whose window is closed is reset. Headers are HPACK-compressed
 (`std/net/http/hpack`); the server sends no dynamic-table entries, only
 static indexes and Huffman-coded literals.
 
+## HTTP/3
+
+Set `Config.http3` (with `Config.http2`) and give `Config.quic` a QUIC stack:
+`https.quic(https.quic_context(arena, "cert.pem", "key.pem").value)` from
+`std/net/http/evented/tls`, which uses OpenSSL's QUIC server (OpenSSL 3.5 or
+later). Each worker then opens a UDP socket at the TCP listener's address
+with SO_REUSEPORT, and every TCP response carries
+`Alt-Svc: h3=":PORT"; ma=86400`, so browsers move to HTTP/3 on their next
+request.
+
+```dyn
+use "std/mem"
+use "std/net/http/evented"
+use "std/net/http/evented/tls" https
+
+fn http3_config(quic: *const evented.Quic) evented.Config {
+  config := evented.default_config()
+  config.receive_size = 32 * mem.KiB
+  config.http2 = true
+  config.http3 = true
+  config.quic = quic
+  return config
+}
+```
+
+A QUIC connection takes a connection slot and an HTTP/2 state block, and
+each request stream a request slot, so the HTTP/2 limits bound HTTP/3 too.
+Streams run the same handler, with the same `run`, `open_stream`,
+`receive_body` and response helpers; QUIC does flow control, and a response
+that outruns it waits inside the handler as on HTTP/2. QPACK runs without a
+dynamic table: the server advertises capacity 0, so header blocks decode
+independently (`std/net/http/qpack`). QUIC timers (acknowledgements, loss
+recovery) run in the worker's loop. Not offered over HTTP/3: server push and
+WebSockets (RFC 9220); browsers keep using TCP for WebSockets.
+
 ## TLS
 
 `std/net/http/evented/tls` supplies an OpenSSL transport for `Config.transport`;
@@ -344,4 +379,4 @@ so with `Overflow.Reject` they are closed instead.
 
 ## Not yet
 
-- HTTP/3 (QUIC).
+- WebSockets over HTTP/3 (RFC 9220), which browsers do not use yet.

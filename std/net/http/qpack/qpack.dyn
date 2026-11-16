@@ -1,0 +1,304 @@
+// QPACK (RFC 9204), the header compression of HTTP/3, without a dynamic
+// table. An endpoint that advertises SETTINGS_QPACK_MAX_TABLE_CAPACITY 0
+// receives only static references and literals, so every field section
+// decodes on its own, in any order, and needs no encoder or decoder stream.
+// The encoder here likewise sends static indexes and literals, Huffman-coded
+// when shorter (the code is HPACK's).
+use "std/net/http/hpack" hpack
+use "std/parse" parse
+
+pub const StaticCount: usize = 99
+
+// One decoded field line; name and value point into scratch.
+pub struct Field { name: []const u8, value: []const u8, consumed: usize, failure: parse.Failure }
+
+pub struct Prefix { consumed: usize, ok: bool }
+
+struct Integer { value: usize, consumed: usize, ok: bool }
+
+fn read_integer(block: []const u8, prefix: u8) Integer {
+  if #len(block) == 0 {
+    return Integer{}
+  }
+  mask := (#cast(usize, 1) << #cast(usize, prefix)) - 1
+  value := #cast(usize, block[0]) & mask
+  if value < mask {
+    return Integer{ value: value, consumed: 1, ok: true }
+  }
+  shift: usize = 0
+  at: usize = 1
+  for at < #len(block) {
+    byte := block[at]
+    at += 1
+    value += (#cast(usize, byte) & 127) << shift
+    shift += 7
+    if (byte & 128) == 0 {
+      return Integer{ value: value, consumed: at, ok: true }
+    }
+    if shift > 21 {
+      return Integer{}
+    }
+  }
+  return Integer{}
+}
+
+struct Text { length: usize, consumed: usize, ok: bool }
+
+// A string literal whose length has an N-bit prefix, with the Huffman flag
+// just above it.
+fn read_string(block: []const u8, prefix: u8, destination: []u8) Text {
+  if #len(block) == 0 {
+    return Text{}
+  }
+  huffman := (block[0] & (#cast(u8, 1) << prefix)) != 0
+  length := read_integer(block, prefix)
+  if !length.ok || length.value > #len(block) - length.consumed {
+    return Text{}
+  }
+  encoded := block[length.consumed..length.consumed + length.value]
+  if huffman {
+    decoded := hpack.huffman_decode(encoded, destination)
+    if !decoded.ok {
+      return Text{}
+    }
+    return Text{ length: decoded.length, consumed: length.consumed + length.value, ok: true }
+  }
+  if #len(encoded) > #len(destination) {
+    return Text{}
+  }
+  for i in 0..#len(encoded) {
+    destination[i] = encoded[i]
+  }
+  return Text{ length: #len(encoded), consumed: length.consumed + length.value, ok: true }
+}
+
+fn static_name(index: usize) []const u8 {
+  start := #cast(usize, StaticNameStart[index])
+  return StaticText[start..start + #cast(usize, StaticNameLength[index])]
+}
+
+fn static_value(index: usize) []const u8 {
+  start := #cast(usize, StaticValueStart[index])
+  return StaticText[start..start + #cast(usize, StaticValueLength[index])]
+}
+
+fn failed(kind: parse.Kind, offset: usize) Field {
+  return Field{ failure: parse.Failure{ kind: kind, offset: offset } }
+}
+
+fn copy_into(destination: []u8, source: []const u8) bool {
+  if #len(source) > #len(destination) {
+    return false
+  }
+  for i in 0..#len(source) {
+    destination[i] = source[i]
+  }
+  return true
+}
+
+// Reads the field section prefix (RFC 9204 4.5.1). Without a dynamic table
+// the Required Insert Count must be zero; the base is then unused.
+pub fn decode_prefix(section: []const u8) Prefix {
+  count := read_integer(section, 8)
+  if !count.ok || count.value != 0 {
+    return Prefix{}
+  }
+  base := read_integer(section[count.consumed..], 7)
+  if !base.ok {
+    return Prefix{}
+  }
+  return Prefix{ consumed: count.consumed + base.consumed, ok: true }
+}
+
+// Decodes the field line at the start of section into scratch. A reference
+// to the dynamic table fails with Syntax (QPACK_DECOMPRESSION_FAILED).
+pub fn decode_field(section: []const u8, scratch: []u8) Field {
+  if #len(section) == 0 {
+    return failed(parse.Kind.Truncated, 0)
+  }
+  first := section[0]
+  if (first & 0x80) != 0 {
+    // Indexed field line; T (0x40) selects the static table.
+    index := read_integer(section, 6)
+    if (first & 0x40) == 0 || !index.ok || index.value >= StaticCount {
+      return failed(parse.Kind.Syntax, 0)
+    }
+    name := static_name(index.value)
+    value := static_value(index.value)
+    if !copy_into(scratch, name) || !copy_into(scratch[#len(name)..], value) {
+      return failed(parse.Kind.Capacity, 0)
+    }
+    return Field{ name: scratch[..#len(name)], value: scratch[#len(name)..#len(name) + #len(value)], consumed: index.consumed }
+  }
+  if (first & 0xc0) == 0x40 {
+    // Literal with a name reference; T (0x10) selects the static table.
+    index := read_integer(section, 4)
+    if (first & 0x10) == 0 || !index.ok || index.value >= StaticCount {
+      return failed(parse.Kind.Syntax, 0)
+    }
+    name := static_name(index.value)
+    if !copy_into(scratch, name) {
+      return failed(parse.Kind.Capacity, 0)
+    }
+    value := read_string(section[index.consumed..], 7, scratch[#len(name)..])
+    if !value.ok {
+      return failed(parse.Kind.Syntax, index.consumed)
+    }
+    return Field{ name: scratch[..#len(name)], value: scratch[#len(name)..#len(name) + value.length],
+      consumed: index.consumed + value.consumed }
+  }
+  if (first & 0xe0) == 0x20 {
+    // Literal with a literal name: H at 0x08, a 3-bit length.
+    name := read_string(section, 3, scratch)
+    if !name.ok {
+      return failed(parse.Kind.Syntax, 0)
+    }
+    value := read_string(section[name.consumed..], 7, scratch[name.length..])
+    if !value.ok {
+      return failed(parse.Kind.Syntax, name.consumed)
+    }
+    return Field{ name: scratch[..name.length], value: scratch[name.length..name.length + value.length],
+      consumed: name.consumed + value.consumed }
+  }
+  // Post-base references need the dynamic table.
+  return failed(parse.Kind.Syntax, 0)
+}
+
+// ---------------------------------------------------------------- encoding
+
+fn write_integer(destination: []u8, flags: u8, prefix: u8, value: usize) usize {
+  if #len(destination) == 0 {
+    return 0
+  }
+  mask := (#cast(usize, 1) << #cast(usize, prefix)) - 1
+  if value < mask {
+    destination[0] = flags | #cast(u8, value)
+    return 1
+  }
+  destination[0] = flags | #cast(u8, mask)
+  rest := value - mask
+  at: usize = 1
+  for rest >= 128 {
+    if at == #len(destination) {
+      return 0
+    }
+    destination[at] = #cast(u8, rest & 127) | 128
+    rest >>= 7
+    at += 1
+  }
+  if at == #len(destination) {
+    return 0
+  }
+  destination[at] = #cast(u8, rest)
+  return at + 1
+}
+
+fn lower(byte: u8) u8 {
+  if byte >= 'A' && byte <= 'Z' {
+    return byte + 32
+  }
+  return byte
+}
+
+// A string with an N-bit length prefix under flags, the Huffman flag just
+// above the prefix; Huffman-coded when shorter. lowercase folds a name.
+fn write_string(destination: []u8, flags: u8, prefix: u8, text: []const u8, lowercase: bool) usize {
+  folded: [256]u8
+  source := text
+  if lowercase && #len(text) <= #len(folded) {
+    for i in 0..#len(text) {
+      folded[i] = lower(text[i])
+    }
+    source = folded[..#len(text)]
+  }
+  coded := hpack.huffman_length(source)
+  if coded < #len(source) {
+    head := write_integer(destination, flags | (#cast(u8, 1) << prefix), prefix, coded)
+    if head == 0 || coded > #len(destination) - head {
+      return 0
+    }
+    return head + hpack.huffman_encode(source, destination[head..])
+  }
+  head := write_integer(destination, flags, prefix, #len(source))
+  if head == 0 || #len(source) > #len(destination) - head {
+    return 0
+  }
+  for i in 0..#len(source) {
+    destination[head + i] = source[i]
+  }
+  return head + #len(source)
+}
+
+fn equal_folded(name: []const u8, known: []const u8) bool {
+  if #len(name) != #len(known) {
+    return false
+  }
+  for i in 0..#len(name) {
+    if lower(name[i]) != known[i] {
+      return false
+    }
+  }
+  return true
+}
+
+fn equal(left: []const u8, right: []const u8) bool {
+  if #len(left) != #len(right) {
+    return false
+  }
+  for i in 0..#len(left) {
+    if left[i] != right[i] {
+      return false
+    }
+  }
+  return true
+}
+
+// The prefix of a section that uses no dynamic table: two zero bytes.
+pub fn encode_prefix(destination: []u8) usize {
+  if #len(destination) < 2 {
+    return 0
+  }
+  destination[0] = 0
+  destination[1] = 0
+  return 2
+}
+
+// Writes one field line and returns its length, or 0 when it does not fit.
+// Names are lowercased; names longer than 256 bytes must already be.
+pub fn encode_field(destination: []u8, name: []const u8, value: []const u8) usize {
+  name_index := StaticCount
+  for index in 0..StaticCount {
+    if !equal_folded(name, static_name(index)) {
+      continue
+    }
+    if name_index == StaticCount {
+      name_index = index
+    }
+    if equal(static_value(index), value) {
+      // Indexed field line, static (1 1 index).
+      return write_integer(destination, 0xc0, 6, index)
+    }
+  }
+  if name_index < StaticCount {
+    // Literal with a static name reference (0 1 N=0 T=1 index).
+    at := write_integer(destination, 0x50, 4, name_index)
+    if at == 0 {
+      return 0
+    }
+    written := write_string(destination[at..], 0, 7, value, false)
+    if written == 0 {
+      return 0
+    }
+    return at + written
+  }
+  // Literal with a literal name (0 0 1 N=0 H length).
+  at := write_string(destination, 0x20, 3, name, true)
+  if at == 0 {
+    return 0
+  }
+  written := write_string(destination[at..], 0, 7, value, false)
+  if written == 0 {
+    return 0
+  }
+  return at + written
+}

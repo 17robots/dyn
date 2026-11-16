@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """HPACK decoding against 300 blocks from Go's encoder (dynamic table
 evictions, size updates, Huffman, never-indexed fields) and encode/decode
-round trips. tools/hpack-vectors regenerates the vectors."""
+round trips, and the same fields through QPACK (static table only).
+tools/hpack-vectors regenerates the vectors."""
 import os
 from pathlib import Path
 import subprocess

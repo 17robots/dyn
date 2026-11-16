@@ -1,0 +1,788 @@
+// HTTP/3 (RFC 9114) on evented workers, with Config.http3 and a QUIC stack in
+// Config.quic (std/net/http/evented/tls supplies OpenSSL's). Each worker owns
+// a UDP socket on the TCP listener's address (SO_REUSEPORT) and a QUIC
+// listener; TCP responses then carry Alt-Svc, so browsers move to HTTP/3.
+//
+// A QUIC connection takes a connection slot and an HTTP/2 state block, and
+// each request stream a request slot, exactly as an HTTP/2 stream does: the
+// same request synthesis, handler, run, open_stream, receive_body and
+// response translation serve both. Only the framing differs: HTTP/3 frames on
+// QUIC streams, QPACK without a dynamic table (we advertise capacity 0, so
+// field sections decode independently and need no encoder stream), and flow
+// control inside QUIC. Server push and WebSockets over HTTP/3 (RFC 9220) are
+// not offered; browsers use HTTP/1.1 or HTTP/2 for WebSockets.
+use "std/bytes" bytes
+use "std/event" event
+use "std/io" io
+use "std/mem" mem
+use "std/net" network
+use "std/net/http" http
+use "std/net/http/qpack" qpack
+use "std/parse" parse
+
+pub enum QuicStatus { Ok, WouldBlock, End, Reset, Failed }
+pub struct QuicIo { count: usize, status: QuicStatus }
+// An accepted stream; unidirectional streams carry control and QPACK data.
+pub struct QuicStream { handle: rawptr, id: u64, unidirectional: bool }
+
+// A QUIC server stack, like Transport for TLS. Handles are opaque; every
+// call runs on the worker that owns the listener, and nothing blocks.
+pub struct Quic {
+  data: rawptr,
+  // A listener over a bound nonblocking UDP socket, or nil.
+  listen: fn(rawptr, isize) rawptr,
+  // Processes network I/O and timers; milliseconds to the next timer or -1.
+  handle_events: fn(rawptr) i64,
+  accept_connection: fn(rawptr) rawptr,
+  accept_stream: fn(rawptr) QuicStream,
+  // A new server unidirectional stream on a connection, or nil.
+  open_stream: fn(rawptr) rawptr,
+  // End: the peer finished the stream; Reset: the peer reset it.
+  read: fn(rawptr, []u8) QuicIo,
+  // Writes what fits; true concludes the stream after source.
+  write: fn(rawptr, []const u8, bool) QuicIo,
+  writable: fn(rawptr) usize,
+  reset: fn(rawptr, u64),
+  closed: fn(rawptr) bool,
+  // Frees a stream handle.
+  free: fn(rawptr),
+  // Closes a connection with an application error code and frees it.
+  close: fn(rawptr, u64),
+  // The peer's sockaddr into the buffer; its length or 0.
+  peer: fn(rawptr, []u8) usize,
+  close_listener: fn(rawptr),
+}
+
+const QuicToken: u64 = 0xfffffffffffffffe
+
+const H3NoError: u64 = 0x100
+const H3GeneralProtocolError: u64 = 0x101
+const H3InternalError: u64 = 0x102
+const H3StreamCreationError: u64 = 0x103
+const H3ClosedCriticalStream: u64 = 0x104
+const H3FrameUnexpected: u64 = 0x105
+const H3FrameError: u64 = 0x106
+const H3ExcessiveLoad: u64 = 0x107
+const H3RequestRejected: u64 = 0x10b
+const H3RequestCancelled: u64 = 0x10c
+const H3RequestIncomplete: u64 = 0x10d
+const H3MessageError: u64 = 0x10e
+const QpackDecompressionFailed: u64 = 0x200
+
+const FrameH3Data: u64 = 0
+const FrameH3Headers: u64 = 1
+// Unidirectional stream types.
+const StreamControl: u64 = 0
+const UniStreams: usize = 8
+
+// HTTP/2 error codes used by the shared stream code, as HTTP/3 codes.
+fn h3_code(code: u32) u64 {
+  case code {
+    0 => { return H3NoError }
+    2 => { return H3InternalError }
+    5 => { return H3FrameUnexpected }
+    6 => { return H3FrameError }
+    7 => { return H3RequestRejected }
+    8 => { return H3RequestCancelled }
+    9 => { return QpackDecompressionFailed }
+    11 => { return H3ExcessiveLoad }
+    1 => { return H3MessageError }
+    _ => { return H3GeneralProtocolError }
+  }
+}
+
+// ---------------------------------------------------------------- varints
+
+struct Varint { value: u64, length: usize }
+
+// A QUIC variable-length integer (RFC 9000 16); length 0 while incomplete.
+fn read_varint(source: []const u8) Varint {
+  if #len(source) == 0 {
+    return Varint{}
+  }
+  length := #cast(usize, 1) << #cast(usize, source[0] >> 6)
+  if #len(source) < length {
+    return Varint{}
+  }
+  value := #cast(u64, source[0] & 0x3f)
+  for i in 1..length {
+    value = (value << 8) | #cast(u64, source[i])
+  }
+  return Varint{ value: value, length: length }
+}
+
+fn write_varint(destination: []u8, value: u64) usize {
+  if value < 64 {
+    destination[0] = #cast(u8, value)
+    return 1
+  }
+  if value < 16384 {
+    destination[0] = 0x40 | #cast(u8, value >> 8)
+    destination[1] = #cast(u8, value)
+    return 2
+  }
+  if value < 1073741824 {
+    for i in 0..4 {
+      destination[i] = #cast(u8, value >> #cast(u64, 24 - 8 * i))
+    }
+    destination[0] |= 0x80
+    return 4
+  }
+  for i in 0..8 {
+    destination[i] = #cast(u8, value >> #cast(u64, 56 - 8 * i))
+  }
+  destination[0] |= 0xc0
+  return 8
+}
+
+// ---------------------------------------------------------------- setup
+
+fn h3_valid(config: Config) bool {
+  return !config.http3 || (config.quic != nil && config.http2)
+}
+
+fn h3_storage_size(config: Config) usize {
+  if !config.http3 {
+    return 0
+  }
+  return MaxFrame + 1024 + config.http2_connections * #sizeof(usize) + 64
+}
+
+// Opens the worker's UDP socket and QUIC listener on the TCP listener's
+// address, and the Alt-Svc value TCP responses advertise.
+fn h3_start(arena: *mem.Arena, worker: *Worker) io.Failure {
+  config := worker.config
+  if !config.http3 {
+    return io.Failure{}
+  }
+  worker.h2.read = mem.push_bytes_uninit(arena, MaxFrame + 1024)
+  worker.h3_connections = mem.push_array(usize, arena, config.http2_connections)
+  address := network.Address{}
+  if io.failed(network.local_address(worker.listener.descriptor, &address).failure) {
+    return io.Failure{ kind: io.Kind.System }
+  }
+  family := #cast(usize, address.bytes[0]) | (#cast(usize, address.bytes[1]) << 8)
+  opened := network.socket(family, network.SocketDatagram, 0)
+  if io.failed(opened.failure) {
+    return opened.failure
+  }
+  descriptor := opened.value
+  _ = network.reuse_address(descriptor, true)
+  _ = network.reuse_port(descriptor, true)
+  if io.failed(network.nonblocking(descriptor, true).failure) ||
+    io.failed(network.bind(descriptor, address.bytes[..address.length]).failure) {
+    network.close(descriptor)
+    return io.Failure{ kind: io.Kind.System }
+  }
+  listener := config.quic.listen(config.quic.data, descriptor)
+  if listener == nil {
+    network.close(descriptor)
+    return io.Failure{ kind: io.Kind.System }
+  }
+  worker.udp = descriptor
+  worker.quic_listener = listener
+  port := (#cast(u16, address.bytes[2]) << 8) | #cast(u16, address.bytes[3])
+  text: [16]u8
+  digits := decimal_text(text[..], #cast(u64, port))
+  at := append_text(worker.alt_svc[..], 0, "h3=\":")
+  at = append_text(worker.alt_svc[..], #len(at), digits)
+  at = append_text(worker.alt_svc[..], #len(at), "\"; ma=86400")
+  worker.alt_svc_length = #len(at)
+  return event.add(&worker.queue, descriptor, event.Readable, QuicToken).failure
+}
+
+fn decimal_text(destination: []u8, value: u64) []const u8 {
+  at := #len(destination)
+  number := value
+  for {
+    at -= 1
+    destination[at] = #cast(u8, '0' + number % 10)
+    number /= 10
+    if number == 0 {
+      break
+    }
+  }
+  return destination[at..]
+}
+
+fn h3_stop(worker: *Worker) {
+  if worker.quic_listener == nil {
+    return
+  }
+  _ = event.remove(&worker.queue, worker.udp)
+  worker.config.quic.close_listener(worker.quic_listener)
+  worker.quic_listener = nil
+  network.close(worker.udp)
+}
+
+// The Alt-Svc value for TCP responses, or empty.
+fn alt_svc(worker: *Worker) []const u8 {
+  return worker.alt_svc[..worker.alt_svc_length]
+}
+
+// ---------------------------------------------------------------- connections
+
+// Runs every pending QUIC event: new connections, streams, request bytes.
+// Then flushes what handlers wrote.
+fn h3_poll(worker: *Worker) {
+  if worker.quic_listener == nil {
+    return
+  }
+  quic := worker.config.quic
+  worker.quic_timer = quic.handle_events(worker.quic_listener)
+  for {
+    handle := quic.accept_connection(worker.quic_listener)
+    if handle == nil {
+      break
+    }
+    h3_accept(worker, handle)
+  }
+  // Backwards: closing swaps the last connection into the closed one's place.
+  at := worker.h3_count
+  for at > 0 {
+    at -= 1
+    index := worker.h3_connections[at]
+    if !h3_service(worker, index) {
+      close_connection(worker, index)
+    }
+  }
+  worker.quic_timer = quic.handle_events(worker.quic_listener)
+}
+
+fn h3_accept(worker: *Worker, handle: rawptr) {
+  quic := worker.config.quic
+  if worker.free_count == 0 || worker.serving >= worker.config.connections_per_worker || worker.h2.free_count == 0 ||
+    worker.h3_count == #len(worker.h3_connections) {
+    quic.close(handle, H3ExcessiveLoad)
+    return
+  }
+  worker.free_count -= 1
+  index := worker.free[worker.free_count]
+  connection := &worker.connections[index]
+  connection.descriptor = -1
+  connection.active = true
+  connection.mode = Mode.Http2
+  connection.last_active = now_milliseconds()
+  connection.write_timeout = worker.config.write_timeout_milliseconds
+  connection.remote.length = quic.peer(handle, connection.remote.bytes[..])
+  worker.serving += 1
+  worker.accepted += 1
+  h2 := lease_h2(worker, connection)
+  h2.quic = true
+  h2.handle = handle
+  h2.send_window = MaxWindow
+  h2.initial_window = MaxWindow
+  h2.preface = true
+  h2.settings_seen = true
+  h2.h3_slot = worker.h3_count
+  worker.h3_connections[worker.h3_count] = index
+  worker.h3_count += 1
+  // Our control stream: type, then SETTINGS (RFC 9114 7.2.4). It goes out
+  // once the handshake lets us open streams; see h3_control.
+  settings: [32]u8
+  length: usize = 0
+  length += write_varint(settings[length..], 0x01)
+  length += write_varint(settings[length..], 0)
+  length += write_varint(settings[length..], 0x06)
+  length += write_varint(settings[length..], #cast(u64, worker.config.receive_size - 1024))
+  length += write_varint(settings[length..], 0x07)
+  length += write_varint(settings[length..], 0)
+  used := write_varint(h2.control_bytes[..], StreamControl)
+  used += write_varint(h2.control_bytes[used..], 0x04)
+  used += write_varint(h2.control_bytes[used..], #cast(u64, length))
+  used += mem.copy(h2.control_bytes[used..], settings[..length])
+  h2.control_length = used
+  h3_control(worker, connection)
+}
+
+// Opens our control stream and sends its SETTINGS, as far as QUIC allows
+// now; the loop retries until all of it is out.
+fn h3_control(worker: *Worker, connection: *Connection) {
+  h2 := connection.h2
+  quic := worker.config.quic
+  if h2.control_sent == h2.control_length {
+    return
+  }
+  if h2.control == nil {
+    h2.control = quic.open_stream(h2.handle)
+    if h2.control == nil {
+      return
+    }
+  }
+  written := quic.write(h2.control, h2.control_bytes[h2.control_sent..h2.control_length], false)
+  if written.status == QuicStatus.Failed {
+    h3_fail(connection, H3InternalError)
+    return
+  }
+  h2.control_sent += written.count
+}
+
+// Accepts streams and reads request bytes. False means close the connection.
+fn h3_service(worker: *Worker, index: usize) bool {
+  connection := &worker.connections[index]
+  quic := worker.config.quic
+  h2 := connection.h2
+  if !connection.active || connection.close_after || h2 == nil || quic.closed(h2.handle) {
+    return false
+  }
+  h3_control(worker, connection)
+  for {
+    accepted := quic.accept_stream(h2.handle)
+    if accepted.handle == nil {
+      break
+    }
+    connection.last_active = now_milliseconds()
+    if accepted.unidirectional {
+      if h2.uni_count == UniStreams {
+        quic.reset(accepted.handle, H3StreamCreationError)
+        quic.free(accepted.handle)
+        continue
+      }
+      h2.uni[h2.uni_count] = accepted.handle
+      h2.uni_type[h2.uni_count] = 0xffffffffffffffff
+      h2.uni_count += 1
+      continue
+    }
+    h3_open_request(worker, index, accepted)
+  }
+  if !h3_read_uni(worker, connection) {
+    return false
+  }
+  for i in 0..Http2Streams {
+    if !connection.active || connection.close_after {
+      break
+    }
+    stream := &h2.streams[i]
+    if stream.handle != nil && !stream.ended && (stream.phase == Phase.Receiving || stream.phase == Phase.Large) {
+      h3_read_stream(worker, index, i)
+    }
+  }
+  return connection.active && !connection.close_after
+}
+
+// Client unidirectional streams: the control stream must stay open; QPACK
+// streams carry nothing we need with capacity 0; others are ignored.
+fn h3_read_uni(worker: *Worker, connection: *Connection) bool {
+  h2 := connection.h2
+  quic := worker.config.quic
+  for i in 0..h2.uni_count {
+    for {
+      chunk: [512]u8
+      read := quic.read(h2.uni[i], chunk[..])
+      if read.status == QuicStatus.WouldBlock {
+        break
+      }
+      if read.status != QuicStatus.Ok {
+        if h2.uni_type[i] == StreamControl {
+          h2.close_code = H3ClosedCriticalStream
+          return false
+        }
+        break
+      }
+      if h2.uni_type[i] == 0xffffffffffffffff && read.count > 0 {
+        kind := read_varint(chunk[..read.count])
+        if kind.length > 0 {
+          h2.uni_type[i] = kind.value
+        }
+      }
+    }
+  }
+  return true
+}
+
+fn h3_open_request(worker: *Worker, index: usize, accepted: QuicStream) {
+  connection := &worker.connections[index]
+  h2 := connection.h2
+  quic := worker.config.quic
+  free := Http2Streams
+  if !h2.goaway {
+    for i in 0..Http2Streams {
+      if h2.streams[i].phase == Phase.Free {
+        free = i
+        break
+      }
+    }
+  }
+  // Internal ids are QUIC ids plus one: zero means none.
+  id := #cast(u32, accepted.id + 1)
+  slot: usize = 0
+  if free != Http2Streams {
+    slot = take_slot(worker, connection, id)
+  }
+  if slot == 0 {
+    quic.reset(accepted.handle, H3RequestRejected)
+    quic.free(accepted.handle)
+    return
+  }
+  if id > h2.last_stream {
+    h2.last_stream = id
+  }
+  stream := &h2.streams[free]
+  stream.* = Stream{ id: id, phase: Phase.Receiving, send_window: MaxWindow, slot: slot, storage: worker.h2.slots[slot - 1].bytes,
+    declared: -1, handle: accepted.handle }
+  h2.stream_count += 1
+}
+
+// Reads what a request stream has and parses its frames.
+fn h3_read_stream(worker: *Worker, index: usize, stream_index: usize) {
+  connection := &worker.connections[index]
+  quic := worker.config.quic
+  buffer := worker.h2.read
+  for connection.active && !connection.close_after {
+    stream := &connection.h2.streams[stream_index]
+    if stream.handle == nil || stream.ended || (stream.phase != Phase.Receiving && stream.phase != Phase.Large) {
+      return
+    }
+    read := quic.read(stream.handle, buffer)
+    if read.status == QuicStatus.WouldBlock {
+      return
+    }
+    if read.status == QuicStatus.End {
+      h3_finished(worker, index, stream_index)
+      return
+    }
+    if read.status != QuicStatus.Ok {
+      stream.reset = true
+      if stream.phase == Phase.Large {
+        large_end(worker, connection, stream_index, BodyEnd.Closed)
+      } else {
+        close_stream(worker, connection, stream_index)
+      }
+      return
+    }
+    connection.last_active = now_milliseconds()
+    h3_frames(worker, index, stream_index, buffer[..read.count])
+  }
+}
+
+// Frames on a request stream: HEADERS, DATA, trailers; partial frames carry
+// over between reads.
+fn h3_frames(worker: *Worker, index: usize, stream_index: usize, input: []const u8) {
+  connection := &worker.connections[index]
+  at: usize = 0
+  for at < #len(input) {
+    stream := &connection.h2.streams[stream_index]
+    if stream.phase != Phase.Receiving && stream.phase != Phase.Large {
+      return
+    }
+    if !stream.in_frame {
+      room := #len(stream.frame_head) - stream.frame_head_used
+      count := #len(input) - at
+      if count > room {
+        count = room
+      }
+      old := stream.frame_head_used
+      _ = mem.copy(stream.frame_head[old..], input[at..at + count])
+      stream.frame_head_used += count
+      kind := read_varint(stream.frame_head[..stream.frame_head_used])
+      length := Varint{}
+      if kind.length > 0 {
+        length = read_varint(stream.frame_head[kind.length..stream.frame_head_used])
+      }
+      if kind.length == 0 || length.length == 0 {
+        if stream.frame_head_used == #len(stream.frame_head) {
+          h3_fail(connection, H3FrameError)
+          return
+        }
+        at += count
+        continue
+      }
+      header := kind.length + length.length
+      at += header - old
+      stream.frame_head_used = 0
+      stream.in_frame = true
+      stream.frame_type = kind.value
+      stream.frame_left = length.value
+      if !h3_frame_start(worker, index, stream_index) {
+        return
+      }
+      stream = &connection.h2.streams[stream_index]
+      if stream.frame_left == 0 {
+        stream.in_frame = false
+        if !h3_frame_end(worker, index, stream_index) {
+          return
+        }
+      }
+      continue
+    }
+    count := #len(input) - at
+    if #cast(u64, count) > stream.frame_left {
+      count = #cast(usize, stream.frame_left)
+    }
+    piece := input[at..at + count]
+    at += count
+    stream.frame_left -= #cast(u64, count)
+    end := stream.frame_left == 0
+    if end {
+      stream.in_frame = false
+    }
+    if stream.frame_type == FrameH3Headers && !stream.headers_seen {
+      _ = mem.copy(stream.storage[stream.headers_length..], piece)
+      stream.headers_length += count
+    } else if stream.frame_type == FrameH3Data {
+      h3_body(worker, index, stream_index, piece)
+    }
+    stream = &connection.h2.streams[stream_index]
+    if end && (stream.phase == Phase.Receiving || stream.phase == Phase.Large) && !h3_frame_end(worker, index, stream_index) {
+      return
+    }
+  }
+}
+
+// A frame's type and length are known. False stops reading the stream.
+fn h3_frame_start(worker: *Worker, index: usize, stream_index: usize) bool {
+  connection := &worker.connections[index]
+  stream := &connection.h2.streams[stream_index]
+  kind := stream.frame_type
+  // Control frames and HTTP/2 frame types have no place on a request stream.
+  if kind == 0x02 || kind == 0x03 || kind == 0x04 || kind == 0x05 || kind == 0x06 || kind == 0x07 || kind == 0x08 ||
+    kind == 0x09 || kind == 0x0d {
+    h3_fail(connection, H3FrameUnexpected)
+    return false
+  }
+  if kind == FrameH3Data && !stream.headers_seen {
+    h3_fail(connection, H3FrameUnexpected)
+    return false
+  }
+  if kind == FrameH3Headers && !stream.headers_seen && stream.frame_left > #cast(u64, #len(stream.storage)) {
+    // Larger than SETTINGS_MAX_FIELD_SECTION_SIZE.
+    reset_stream(worker, connection, stream_index, ErrorCalm)
+    return false
+  }
+  return true
+}
+
+// A whole frame was read. False stops reading the stream.
+fn h3_frame_end(worker: *Worker, index: usize, stream_index: usize) bool {
+  connection := &worker.connections[index]
+  stream := &connection.h2.streams[stream_index]
+  if stream.frame_type != FrameH3Headers || stream.headers_seen {
+    // Trailers need no decoding: with no dynamic table, skipping them
+    // leaves no state behind.
+    return true
+  }
+  pool := &worker.h2
+  block := pool.block[..stream.headers_length]
+  _ = mem.copy(block, stream.storage[..stream.headers_length])
+  fields := h3_decode(worker, block)
+  if fields == 0xffffffffffffffff {
+    reset_stream(worker, connection, stream_index, ErrorCompression)
+    return false
+  }
+  if fields == 0xfffffffffffffffe {
+    reset_stream(worker, connection, stream_index, ErrorCalm)
+    return false
+  }
+  head := synthesize(pool.fields[..fields], stream.storage)
+  if !head.ok || head.websocket {
+    reset_stream(worker, connection, stream_index, ErrorProtocol)
+    return false
+  }
+  stream = &connection.h2.streams[stream_index]
+  stream.headers_seen = true
+  stream.head_length = head.length
+  stream.declared = head.declared
+  if head.declared > #cast(i64, #len(stream.storage) - head.length) {
+    grow_stream(worker, index, stream_index, #cast(usize, head.declared))
+  }
+  return true
+}
+
+// QPACK field section to pool.fields, as decode_block does for HPACK.
+fn h3_decode(worker: *Worker, block: []const u8) usize {
+  pool := &worker.h2
+  prefix := qpack.decode_prefix(block)
+  if !prefix.ok {
+    return 0xffffffffffffffff
+  }
+  used: usize = 0
+  at := prefix.consumed
+  for at < #len(block) {
+    field := qpack.decode_field(block[at..], pool.head)
+    if parse.failed(field.failure) {
+      return 0xffffffffffffffff
+    }
+    at += field.consumed
+    need := 4 + #len(field.name) + #len(field.value)
+    if need > #len(pool.fields) - used {
+      return 0xfffffffffffffffe
+    }
+    pool.fields[used] = #cast(u8, #len(field.name) >> 8)
+    pool.fields[used + 1] = #cast(u8, #len(field.name))
+    pool.fields[used + 2] = #cast(u8, #len(field.value) >> 8)
+    pool.fields[used + 3] = #cast(u8, #len(field.value))
+    used += 4
+    used += mem.copy(pool.fields[used..], field.name)
+    used += mem.copy(pool.fields[used..], field.value)
+  }
+  return used
+}
+
+// DATA payload: into the request, or to a large body's chunk function.
+fn h3_body(worker: *Worker, index: usize, stream_index: usize, data: []const u8) {
+  connection := &worker.connections[index]
+  h2 := connection.h2
+  stream := &h2.streams[stream_index]
+  if stream.phase == Phase.Receiving && stream.head_length + stream.body_length + #len(data) > #len(stream.storage) {
+    grow_stream(worker, index, stream_index, stream.body_length + #len(data))
+    stream = &h2.streams[stream_index]
+    if stream.phase != Phase.Receiving && stream.phase != Phase.Large {
+      return
+    }
+  }
+  if stream.phase == Phase.Large {
+    slot := &worker.h2.slots[stream.slot - 1]
+    if #len(data) > 0 && !slot.body_chunk(slot.body_data, data) {
+      large_end(worker, connection, stream_index, BodyEnd.Stopped)
+    }
+    return
+  }
+  at := stream.head_length + stream.body_length
+  stream.body_length += mem.copy(stream.storage[at..at + #len(data)], data)
+  if stream.declared >= 0 && stream.body_length > #cast(usize, stream.declared) {
+    reset_stream(worker, connection, stream_index, ErrorProtocol)
+  }
+}
+
+// The client finished its side of a request stream.
+fn h3_finished(worker: *Worker, index: usize, stream_index: usize) {
+  connection := &worker.connections[index]
+  stream := &connection.h2.streams[stream_index]
+  if stream.in_frame || stream.frame_head_used > 0 {
+    h3_fail(connection, H3FrameError)
+    return
+  }
+  if !stream.headers_seen {
+    reset_stream(worker, connection, stream_index, ErrorRefused)
+    return
+  }
+  stream.ended = true
+  stream_ended(worker, index, stream_index)
+}
+
+// A connection error: close with code once the loop reaches it.
+fn h3_fail(connection: *Connection, code: u64) {
+  connection.h2.close_code = code
+  connection.close_after = true
+}
+
+// Closes the QUIC side of a connection: streams, control streams, then the
+// connection itself, with the recorded error code.
+fn h3_close(worker: *Worker, connection: *Connection) {
+  h2 := connection.h2
+  quic := worker.config.quic
+  h2_close_all(worker, connection)
+  for i in 0..h2.uni_count {
+    quic.free(h2.uni[i])
+  }
+  h2.uni_count = 0
+  if h2.control != nil {
+    quic.free(h2.control)
+    h2.control = nil
+  }
+  code := h2.close_code
+  if code == 0 {
+    code = H3NoError
+  }
+  if h2.handle != nil {
+    quic.close(h2.handle, code)
+    h2.handle = nil
+  }
+  // Out of the worker's list: the last one takes this place.
+  last := worker.h3_count - 1
+  moved := worker.h3_connections[last]
+  worker.h3_connections[h2.h3_slot] = moved
+  worker.connections[moved].h2.h3_slot = h2.h3_slot
+  worker.h3_count = last
+}
+
+// ---------------------------------------------------------------- writing
+
+// Writes bytes to a request stream. blocking waits (up to
+// write_timeout_milliseconds) for QUIC flow control; otherwise all of bytes
+// must fit now, or nothing is written.
+fn h3_write(worker: *Worker, connection: *Connection, stream_index: usize, source: []const u8, conclude: bool, blocking: bool) bool {
+  quic := worker.config.quic
+  stream := &connection.h2.streams[stream_index]
+  handle := stream.handle
+  if handle == nil || stream.reset {
+    return true
+  }
+  if !blocking && quic.writable(handle) < #len(source) {
+    return false
+  }
+  at: usize = 0
+  started := now_milliseconds()
+  for at < #len(source) || conclude {
+    last := conclude && at == #len(source)
+    written := quic.write(handle, source[at..], false)
+    if last {
+      written = quic.write(handle, source[at..at], true)
+    }
+    at += written.count
+    if written.status == QuicStatus.Failed {
+      return false
+    }
+    if written.status == QuicStatus.Ok && last {
+      return true
+    }
+    if written.status == QuicStatus.WouldBlock {
+      if !blocking || now_milliseconds() - started > #cast(i64, connection.write_timeout) {
+        return false
+      }
+      // Let QUIC send and take acknowledgements, then wait for packets.
+      timer := quic.handle_events(worker.quic_listener)
+      wait := 10
+      if timer >= 0 && timer < 10 {
+        wait = #cast(i32, timer)
+      }
+      _ = network.wait(worker.udp, network.PollReadable, wait)
+    }
+  }
+  return true
+}
+
+// HEADERS on a QUIC stream: QPACK into pool.encoded, then the frame.
+fn h3_send_headers(worker: *Worker, connection: *Connection, stream_index: usize, block: []const u8, end: bool, blocking: bool) bool {
+  head: [16]u8
+  used := write_varint(head[..], FrameH3Headers)
+  used += write_varint(head[used..], #cast(u64, #len(block)))
+  if !h3_write(worker, connection, stream_index, head[..used], false, blocking) {
+    return false
+  }
+  return h3_write(worker, connection, stream_index, block, end, blocking)
+}
+
+// DATA frames of at most MaxFrame bytes; end concludes the stream.
+fn h3_send_data(worker: *Worker, connection: *Connection, stream_index: usize, data: []const u8, end: bool, blocking: bool) bool {
+  rest := data
+  if !blocking {
+    // A push must fit whole, framing included.
+    stream := &connection.h2.streams[stream_index]
+    if stream.handle != nil && worker.config.quic.writable(stream.handle) < #len(data) + 16 * (#len(data) / MaxFrame + 1) {
+      return false
+    }
+  }
+  for #len(rest) > 0 {
+    count := #len(rest)
+    if count > MaxFrame {
+      count = MaxFrame
+    }
+    head: [16]u8
+    used := write_varint(head[..], FrameH3Data)
+    used += write_varint(head[used..], #cast(u64, count))
+    last := end && count == #len(rest)
+    if !h3_write(worker, connection, stream_index, head[..used], false, blocking) ||
+      !h3_write(worker, connection, stream_index, rest[..count], last, blocking) {
+      return false
+    }
+    rest = rest[count..]
+    if last {
+      return true
+    }
+  }
+  if end {
+    return h3_write(worker, connection, stream_index, rest, true, blocking)
+  }
+  return true
+}

@@ -1,0 +1,328 @@
+// QUIC servers through OpenSSL 3.5+ (OSSL_QUIC_server_method): a listener on
+// a nonblocking UDP socket, its connections and their streams. Everything is
+// nonblocking; the caller drives timers with handle_events and
+// event_timeout_milliseconds.
+
+extern fn ssl_context_control "SSL_CTX_ctrl"(context: rawptr, command: i32, value: i64, argument: rawptr) i64
+extern fn ssl_set_bio "SSL_set_bio"(ssl: rawptr, read: rawptr, write: rawptr)
+extern fn bio_new_dgram "BIO_new_dgram"(descriptor: i32, close: i32) rawptr
+extern fn bio_addr_new "BIO_ADDR_new"() rawptr
+extern fn bio_addr_free "BIO_ADDR_free"(address: rawptr)
+extern fn bio_addr_family "BIO_ADDR_family"(address: rawptr) i32
+extern fn bio_addr_rawaddress "BIO_ADDR_rawaddress"(address: rawptr, destination: rawptr, length: *usize) i32
+extern fn bio_addr_rawport "BIO_ADDR_rawport"(address: rawptr) u16
+
+extern fn native_open_library "dlopen"(path: *const u8, flags: i32) rawptr
+extern fn native_find_symbol "dlsym"(handle: rawptr, name: *const u8) rawptr
+
+// The QUIC calls above OpenSSL 3.0 are found at run time, so a program that
+// uses TLS still links and runs against OpenSSL 3.0; there, creating a QUIC
+// server fails instead.
+struct QuicApi {
+  quic_server_method: fn() rawptr,
+  ssl_new_listener: fn(context: rawptr, flags: u64) rawptr,
+  ssl_set_blocking_mode: fn(ssl: rawptr, blocking: i32) i32,
+  ssl_handle_events: fn(ssl: rawptr) i32,
+  ssl_get_event_timeout: fn(ssl: rawptr, value: *TimeValue, infinite: *i32) i32,
+  ssl_accept_connection: fn(ssl: rawptr, flags: u64) rawptr,
+  ssl_accept_stream: fn(ssl: rawptr, flags: u64) rawptr,
+  ssl_new_stream: fn(ssl: rawptr, flags: u64) rawptr,
+  ssl_get_stream_id: fn(ssl: rawptr) u64,
+  ssl_set_default_stream_mode: fn(ssl: rawptr, mode: u32) i32,
+  ssl_set_incoming_stream_policy: fn(ssl: rawptr, policy: i32, code: u64) i32,
+  ssl_write_ex2: fn(ssl: rawptr, source: rawptr, length: usize, flags: u64, written: *usize) i32,
+  ssl_get_stream_read_state: fn(ssl: rawptr) i32,
+  ssl_stream_reset: fn(ssl: rawptr, arguments: *StreamResetArguments, size: usize) i32,
+  ssl_shutdown_ex: fn(ssl: rawptr, flags: u64, arguments: *ShutdownArguments, size: usize) i32,
+  ssl_get_value_uint: fn(ssl: rawptr, class: u32, id: u32, value: *u64) i32,
+  ssl_get_conn_close_info: fn(ssl: rawptr, info: *CloseInfo, size: usize) i32,
+  ssl_get_peer_addr: fn(ssl: rawptr, address: rawptr) i32,
+}
+native: QuicApi
+native_loaded: bool
+
+// The address of name, a NUL-terminated symbol; clears complete when the
+// library lacks it.
+fn symbol(library: rawptr, name: []const u8, complete: *bool) rawptr {
+  found := native_find_symbol(library, &name[0])
+  if found == nil {
+    complete.* = false
+  }
+  return found
+}
+
+// Finds the QUIC calls once, before the first QUIC server starts; false when
+// the linked libssl is older than OpenSSL 3.5. The libssl this program links
+// is already loaded, and RTLD_NOLOAD (4) finds that copy without loading a
+// second one.
+fn load_native() bool {
+  if native_loaded { return true }
+  names: [2][]const u8 = ["libssl.so.4\x00", "libssl.so.3\x00"]
+  library: rawptr = nil
+  for name in names {
+    if library == nil {
+      library = native_open_library(&name[0], 2 | 4)
+    }
+  }
+  if library == nil { return false }
+  complete := true
+  table: QuicApi
+  table.quic_server_method = #cast(fn() rawptr, symbol(library, "OSSL_QUIC_server_method\x00", &complete))
+  table.ssl_new_listener = #cast(fn(context: rawptr, flags: u64) rawptr, symbol(library, "SSL_new_listener\x00", &complete))
+  table.ssl_set_blocking_mode = #cast(fn(ssl: rawptr, blocking: i32) i32, symbol(library, "SSL_set_blocking_mode\x00", &complete))
+  table.ssl_handle_events = #cast(fn(ssl: rawptr) i32, symbol(library, "SSL_handle_events\x00", &complete))
+  table.ssl_get_event_timeout = #cast(fn(ssl: rawptr, value: *TimeValue, infinite: *i32) i32, symbol(library, "SSL_get_event_timeout\x00", &complete))
+  table.ssl_accept_connection = #cast(fn(ssl: rawptr, flags: u64) rawptr, symbol(library, "SSL_accept_connection\x00", &complete))
+  table.ssl_accept_stream = #cast(fn(ssl: rawptr, flags: u64) rawptr, symbol(library, "SSL_accept_stream\x00", &complete))
+  table.ssl_new_stream = #cast(fn(ssl: rawptr, flags: u64) rawptr, symbol(library, "SSL_new_stream\x00", &complete))
+  table.ssl_get_stream_id = #cast(fn(ssl: rawptr) u64, symbol(library, "SSL_get_stream_id\x00", &complete))
+  table.ssl_set_default_stream_mode = #cast(fn(ssl: rawptr, mode: u32) i32, symbol(library, "SSL_set_default_stream_mode\x00", &complete))
+  table.ssl_set_incoming_stream_policy = #cast(fn(ssl: rawptr, policy: i32, code: u64) i32, symbol(library, "SSL_set_incoming_stream_policy\x00", &complete))
+  table.ssl_write_ex2 = #cast(fn(ssl: rawptr, source: rawptr, length: usize, flags: u64, written: *usize) i32, symbol(library, "SSL_write_ex2\x00", &complete))
+  table.ssl_get_stream_read_state = #cast(fn(ssl: rawptr) i32, symbol(library, "SSL_get_stream_read_state\x00", &complete))
+  table.ssl_stream_reset = #cast(fn(ssl: rawptr, arguments: *StreamResetArguments, size: usize) i32, symbol(library, "SSL_stream_reset\x00", &complete))
+  table.ssl_shutdown_ex = #cast(fn(ssl: rawptr, flags: u64, arguments: *ShutdownArguments, size: usize) i32, symbol(library, "SSL_shutdown_ex\x00", &complete))
+  table.ssl_get_value_uint = #cast(fn(ssl: rawptr, class: u32, id: u32, value: *u64) i32, symbol(library, "SSL_get_value_uint\x00", &complete))
+  table.ssl_get_conn_close_info = #cast(fn(ssl: rawptr, info: *CloseInfo, size: usize) i32, symbol(library, "SSL_get_conn_close_info\x00", &complete))
+  table.ssl_get_peer_addr = #cast(fn(ssl: rawptr, address: rawptr) i32, symbol(library, "SSL_get_peer_addr\x00", &complete))
+  if !complete { return false }
+  native = table
+  native_loaded = true
+  return true
+}
+
+
+struct TimeValue { seconds: i64, microseconds: i64 }
+struct StreamResetArguments { code: u64 }
+struct ShutdownArguments { code: u64, reason: *const u8 }
+struct CloseInfo { error_code: u64, frame_type: u64, reason: rawptr, reason_length: usize, flags: u32 }
+
+const ModePartialWrite: i64 = 1
+const ControlMode: i32 = 33
+const AcceptNoBlock: u64 = 1
+const StreamUni: u64 = 1
+const StreamNoBlock: u64 = 2
+const WriteConclude: u64 = 1
+const ErrorZeroReturn: i32 = 6
+const StreamStateResetRemote: i32 = 5
+const StreamStateConnectionClosed: i32 = 6
+const StreamStateFinished: i32 = 3
+const ValueClassGeneric: u32 = 0
+const ValueWriteBufferAvailable: u32 = 9
+const ShutdownNoBlock: u64 = 4
+
+pub enum QuicStatus { Ok, WouldBlock, End, Reset, Failed }
+pub struct QuicIo { count: usize, status: QuicStatus }
+// An accepted stream: unidirectional streams are the client's (id % 4 == 2).
+pub struct QuicStream { handle: rawptr, id: u64, unidirectional: bool }
+
+// A QUIC server context with a PEM certificate chain and key.
+pub fn quic_server_context_create(arena: *mem.Arena, certificate: []const u8, key: []const u8) ContextResult {
+  mark := mem.arena_mark(arena)
+  defer mem.arena_rewind(arena, mark)
+  certificate_path := c.string_from_bytes(arena, certificate)
+  key_path := c.string_from_bytes(arena, key)
+  if parse.failed(certificate_path.failure) || parse.failed(key_path.failure) {
+    return ContextResult{ error: ErrorKind.InvalidArgument, failure: io.Failure{ kind: io.Kind.System } }
+  }
+  provider_clear_error()
+  method: rawptr = nil
+  if load_native() {
+    method = native.quic_server_method()
+  }
+  if method == nil {
+    return ContextResult{ error: ErrorKind.Provider, provider_code: provider_error(), failure: io.Failure{ kind: io.Kind.System } }
+  }
+  context := ssl_context_new(method)
+  if context == nil {
+    return ContextResult{ error: ErrorKind.Provider, provider_code: provider_error(), failure: io.Failure{ kind: io.Kind.System } }
+  }
+  if context_use_certificate(context, certificate_path.value) != 1 ||
+    context_use_key(context, key_path.value, FileTypePem) != 1 || context_check_key(context) != 1 {
+    code := provider_error()
+    ssl_context_free(context)
+    return ContextResult{ error: ErrorKind.Provider, provider_code: code, failure: io.Failure{ kind: io.Kind.System } }
+  }
+  // Streams write what fits and report the count.
+  _ = ssl_context_control(context, ControlMode, ModePartialWrite, nil)
+  return ContextResult{ value: context }
+}
+
+// A nonblocking listener on a bound, nonblocking UDP socket; nil on failure.
+// The socket stays the caller's.
+pub fn quic_listen(context: Context, descriptor: i32) rawptr {
+  listener := native.ssl_new_listener(context, 0)
+  if listener == nil {
+    return nil
+  }
+  bio := bio_new_dgram(descriptor, 0)
+  if bio == nil {
+    ssl_free(listener)
+    return nil
+  }
+  ssl_set_bio(listener, bio, bio)
+  if native.ssl_set_blocking_mode(listener, 0) != 1 {
+    ssl_free(listener)
+    return nil
+  }
+  return listener
+}
+
+// Processes pending network I/O and timers. Milliseconds until the next
+// timer, or -1 for none.
+pub fn quic_handle_events(listener: rawptr) i64 {
+  _ = native.ssl_handle_events(listener)
+  value := TimeValue{}
+  infinite: i32 = 0
+  if native.ssl_get_event_timeout(listener, &value, &infinite) != 1 || infinite != 0 {
+    return -1
+  }
+  return value.seconds * 1000 + (value.microseconds + 999) / 1000
+}
+
+// The next new connection, or nil. It has no default stream; incoming
+// streams wait for quic_accept_stream.
+pub fn quic_accept_connection(listener: rawptr) rawptr {
+  connection := native.ssl_accept_connection(listener, AcceptNoBlock)
+  if connection == nil {
+    return nil
+  }
+  _ = native.ssl_set_default_stream_mode(connection, 0)
+  _ = native.ssl_set_incoming_stream_policy(connection, 1, 0)
+  _ = native.ssl_set_blocking_mode(connection, 0)
+  return connection
+}
+
+pub fn quic_accept_stream(connection: rawptr) QuicStream {
+  stream := native.ssl_accept_stream(connection, AcceptNoBlock)
+  if stream == nil {
+    return QuicStream{}
+  }
+  id := native.ssl_get_stream_id(stream)
+  return QuicStream{ handle: stream, id: id, unidirectional: (id & 2) != 0 }
+}
+
+// A new server unidirectional stream, or nil.
+pub fn quic_open_stream(connection: rawptr) rawptr {
+  return native.ssl_new_stream(connection, StreamUni | StreamNoBlock)
+}
+
+pub fn quic_read(stream: rawptr, destination: []u8) QuicIo {
+  if #len(destination) == 0 {
+    return QuicIo{}
+  }
+  count: usize = 0
+  status := ssl_read(stream, #cast(rawptr, &destination[0]), #len(destination), &count)
+  if status == 1 {
+    return QuicIo{ count: count }
+  }
+  code := ssl_error(stream, status)
+  if code == ErrorWantRead {
+    return QuicIo{ status: QuicStatus.WouldBlock }
+  }
+  if code == ErrorZeroReturn {
+    return QuicIo{ status: QuicStatus.End }
+  }
+  state := native.ssl_get_stream_read_state(stream)
+  if state == StreamStateFinished {
+    return QuicIo{ status: QuicStatus.End }
+  }
+  if state == StreamStateResetRemote {
+    return QuicIo{ status: QuicStatus.Reset }
+  }
+  provider_clear_error()
+  return QuicIo{ status: QuicStatus.Failed }
+}
+
+// Writes what fits; conclude ends the stream once all of source is taken.
+pub fn quic_write(stream: rawptr, source: []const u8, conclude: bool) QuicIo {
+  flags: u64 = 0
+  if conclude {
+    flags = WriteConclude
+  }
+  written: usize = 0
+  pointer: rawptr = nil
+  if #len(source) > 0 {
+    pointer = #cast(rawptr, &source[0])
+  }
+  status := native.ssl_write_ex2(stream, pointer, #len(source), flags, &written)
+  if status == 1 {
+    return QuicIo{ count: written }
+  }
+  code := ssl_error(stream, status)
+  if code == ErrorWantWrite || code == ErrorWantRead {
+    return QuicIo{ count: written, status: QuicStatus.WouldBlock }
+  }
+  provider_clear_error()
+  return QuicIo{ count: written, status: QuicStatus.Failed }
+}
+
+// Bytes the stream's send buffer takes now.
+pub fn quic_writable(stream: rawptr) usize {
+  value: u64 = 0
+  if native.ssl_get_value_uint(stream, ValueClassGeneric, ValueWriteBufferAvailable, &value) != 1 {
+    return 0
+  }
+  return #cast(usize, value)
+}
+
+pub fn quic_reset_stream(stream: rawptr, code: u64) {
+  arguments := StreamResetArguments{ code: code }
+  _ = native.ssl_stream_reset(stream, &arguments, #sizeof(StreamResetArguments))
+}
+
+// Whether the connection has closed or is closing.
+pub fn quic_closed(connection: rawptr) bool {
+  info := CloseInfo{}
+  return native.ssl_get_conn_close_info(connection, &info, #sizeof(CloseInfo)) == 1
+}
+
+pub fn quic_free(ssl: rawptr) {
+  if ssl != nil {
+    ssl_free(ssl)
+  }
+}
+
+// Starts an application close with code and frees the connection; OpenSSL
+// finishes the close in the background.
+pub fn quic_close(connection: rawptr, code: u64) {
+  arguments := ShutdownArguments{ code: code }
+  _ = native.ssl_shutdown_ex(connection, ShutdownNoBlock, &arguments, #sizeof(ShutdownArguments))
+  ssl_free(connection)
+}
+
+// The peer's address as a sockaddr (family, port, address), like accept.
+pub fn quic_peer(connection: rawptr, destination: []u8) usize {
+  address := bio_addr_new()
+  if address == nil || #len(destination) < 28 {
+    return 0
+  }
+  defer bio_addr_free(address)
+  if native.ssl_get_peer_addr(connection, address) != 1 {
+    return 0
+  }
+  raw: [16]u8
+  length: usize = 16
+  if bio_addr_rawaddress(address, #cast(rawptr, &raw[0]), &length) != 1 {
+    return 0
+  }
+  port := bio_addr_rawport(address)
+  for i in 0..28 {
+    destination[i] = 0
+  }
+  family := bio_addr_family(address)
+  destination[0] = #cast(u8, family)
+  // rawport is in network order.
+  destination[2] = #cast(u8, port)
+  destination[3] = #cast(u8, port >> 8)
+  if length == 4 {
+    for i in 0..4 {
+      destination[4 + i] = raw[i]
+    }
+    return 16
+  }
+  for i in 0..16 {
+    destination[8 + i] = raw[i]
+  }
+  return 28
+}

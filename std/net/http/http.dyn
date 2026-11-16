@@ -911,6 +911,9 @@ pub struct Response {
   // Preformatted IMF-fixdate for the Date header, kept current by the server
   // loop. Empty: response_begin reads the clock itself.
   date: []const u8,
+  // Set by servers that also speak HTTP/3: an Alt-Svc value (RFC 7838) sent
+  // with every response, such as h3=":443"; ma=86400. Empty sends none.
+  alt_svc: []const u8,
 }
 
 pub struct Header { name: []const u8, value: []const u8 }
@@ -1696,6 +1699,10 @@ fn head_write(writer: *HeadWriter, options: ResponseOptions, status: u16, reason
   if #len(date) > 0 {
     head_emit(writer, "\r\nDate: ")
     head_emit(writer, date)
+  }
+  if #len(writer.response.alt_svc) > 0 {
+    head_emit(writer, "\r\nAlt-Svc: ")
+    head_emit(writer, writer.response.alt_svc)
   }
   for item in options.headers {
     head_emit(writer, "\r\n")

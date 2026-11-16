@@ -28,7 +28,8 @@
 //   larger than that goes to Config.on_large_body, which reads it in pieces
 //   with receive_body, or gets 413.
 //
-// Config.http2 adds HTTP/2 (see h2.dyn) for clients that ask for it.
+// Config.http2 adds HTTP/2 (see h2.dyn) for clients that ask for it, and
+// Config.http3 adds HTTP/3 over QUIC (h3.dyn) on the same port, over UDP.
 //
 // Config.transport replaces plain TCP reads and writes, for TLS. This module
 // has no TLS dependency; std/net/http/evented/tls supplies an OpenSSL one.
@@ -111,6 +112,12 @@ pub struct Config {
   http2: bool,
   http2_connections: usize,
   http2_slots: usize,
+  // HTTP/3 on a UDP socket at the TCP listener's address, through quic
+  // (std/net/http/evented/tls supplies OpenSSL's). Needs http2: QUIC
+  // connections take its state blocks and request slots. TCP responses then
+  // carry Alt-Svc. quic must stay alive until join returns.
+  http3: bool,
+  quic: *const Quic,
   // gzip level (1-9) for respond_compressed; each worker keeps one encoder
   // workspace (about 300 KiB). Zero sends bodies uncompressed.
   compress_level: u8,
@@ -215,7 +222,7 @@ pub fn storage_size(config: Config, worker_count: usize) usize {
   if config.compress_level > 0 {
     per_worker += #sizeof(gzip.Encoder) + #alignof(gzip.Encoder)
   }
-  per_worker += h2_storage_size(config)
+  per_worker += h2_storage_size(config) + h3_storage_size(config)
   return worker_count * per_worker
 }
 
@@ -371,6 +378,15 @@ pub struct Worker {
   // Workspace for respond_compressed; nil when Config.compress_level is zero.
   encoder: *gzip.Encoder,
   h2: H2Pool,
+  // HTTP/3: the UDP socket, QUIC listener, milliseconds to its next timer,
+  // the QUIC connections' slots, and the Alt-Svc value for TCP responses.
+  udp: isize,
+  quic_listener: rawptr,
+  quic_timer: i64,
+  h3_connections: []usize,
+  h3_count: usize,
+  alt_svc: [48]u8,
+  alt_svc_length: usize,
 }
 
 const ListenerToken: u64 = 0
@@ -578,7 +594,7 @@ fn commit_body(data: rawptr, head: []const u8, length: usize) io.Transfer {
 
 fn new_response(connection: *Connection) http.Response {
   return http.Response{ output: io.Writer{ data: connection, write: output_write },
-    reserve_body: reserve_body, commit_body: commit_body, date: connection.worker.date[..] }
+    reserve_body: reserve_body, commit_body: commit_body, date: connection.worker.date[..], alt_svc: alt_svc(connection.worker) }
 }
 
 fn reject(connection: *Connection, status: u16, body: []const u8) {
@@ -604,9 +620,14 @@ fn close_connection(worker: *Worker, index: usize) {
   if connection.session != nil {
     connection.transport.close(connection.session)
   }
-  network.close(connection.descriptor)
+  if connection.descriptor >= 0 {
+    network.close(connection.descriptor)
+  }
   release_output(connection)
   connection.failed = true
+  if connection.h2 != nil && connection.h2.quic {
+    h3_close(worker, connection)
+  }
   if connection.mode == Mode.Body && connection.body_started {
     // The finish function still owns its data: let it clean up.
     _ = body_end(worker, index, BodyEnd.Closed)
@@ -1150,7 +1171,9 @@ fn sweep_idle(worker: *Worker, now: i64) {
     connection := &worker.connections[i]
     // Streams and WebSockets stay open until a side closes them; parked
     // clients wait for a slot.
-    quiet_h2 := connection.mode == Mode.Http2 && (connection.h2 == nil || (connection.h2.stream_count == 0 && connection.h2.jobs == 0))
+    // QUIC keeps its own idle timeout.
+    quiet_h2 := connection.mode == Mode.Http2 && (connection.h2 == nil ||
+        (!connection.h2.quic && connection.h2.stream_count == 0 && connection.h2.jobs == 0))
     if connection.active && (connection.mode == Mode.Http || connection.mode == Mode.Body || quiet_h2) && !connection.parked &&
       now - connection.last_active > limit {
       close_connection(worker, i)
@@ -1172,7 +1195,12 @@ fn worker_main(worker: *Worker) isize {
   refresh_date(worker)
   for sync.load_u32(&worker.stopping) == 0 {
     mark := mem.arena_mark(worker.scratch)
-    waited := event.wait(worker.scratch, &worker.queue, 100)
+    timeout: i32 = 100
+    if worker.quic_listener != nil && worker.quic_timer >= 0 && worker.quic_timer < 100 {
+      // QUIC timers (acknowledgements, loss recovery) run in this loop.
+      timeout = #cast(i32, worker.quic_timer)
+    }
+    waited := event.wait(worker.scratch, &worker.queue, timeout)
     if io.failed(waited.failure) {
       worker.error = Result{ failure: waited.failure }
       break
@@ -1186,6 +1214,9 @@ fn worker_main(worker: *Worker) isize {
       if item.token == WakerToken {
         event.waker_drain(&worker.waker)
         read_inbox(worker)
+        continue
+      }
+      if item.token == QuicToken {
         continue
       }
       index := #cast(usize, item.token - 1)
@@ -1203,6 +1234,8 @@ fn worker_main(worker: *Worker) isize {
       }
     }
     mem.arena_rewind(worker.scratch, mark)
+    // Datagrams, timers, and whatever handlers and pushes wrote to QUIC.
+    h3_poll(worker)
     // Parked clients take slots from connections that have since gone idle.
     if worker.parked > 0 {
       now := now_milliseconds()
@@ -1231,6 +1264,7 @@ fn worker_main(worker: *Worker) isize {
   if worker.listening {
     _ = event.remove(&worker.queue, worker.listener.descriptor)
   }
+  h3_stop(worker)
   _ = event.remove(&worker.queue, worker.waker.descriptor)
   event.close(&worker.queue)
   event.waker_close(&worker.waker)
@@ -1249,7 +1283,7 @@ fn valid_start(workers: []Worker, config: Config, handler: http.Handler) io.Fail
   if (config.upload_count == 0) != (config.upload_size == 0) || (config.upload_count > 0 && config.upload_size <= config.receive_size) {
     return io.Failure{ kind: io.Kind.InvalidInput }
   }
-  if config.compress_level > 9 || !h2_valid(config) {
+  if config.compress_level > 9 || !h2_valid(config) || !h3_valid(config) {
     return io.Failure{ kind: io.Kind.InvalidInput }
   }
   if config.transport != nil && config.transport.needs_native_threads && config.spawner == nil {
@@ -1343,6 +1377,12 @@ fn start_worker(arena: *mem.Arena, worker: *Worker) io.Failure {
     event.close(&worker.queue)
     event.waker_close(&worker.waker)
     return watched.failure
+  }
+  quic_started := h3_start(arena, worker)
+  if io.failed(quic_started) {
+    event.close(&worker.queue)
+    event.waker_close(&worker.waker)
+    return quic_started
   }
   if config.spawner != nil {
     worker.native = config.spawner.spawn(config.spawner.data, arena, config.stack_size, #cast(fn(rawptr) isize, worker_main), worker)

@@ -99,7 +99,20 @@ fn main() i32 {
   config.overflow_send_count = 1
   config.idle_timeout_milliseconds = 500
   config.transport = &transport
-  if #len(arguments.value) == 4 && bytes.equal(arguments.value[3], "h2") {
+  h3 := #len(arguments.value) == 4 && bytes.equal(arguments.value[3], "h3")
+  quic_stack := evented.Quic{}
+  if h3 {
+    // HTTP/3 needs its own QUIC context with the same certificate.
+    quic_context := https.quic_context(arena, arguments.value[1], arguments.value[2])
+    if io.failed(quic_context.failure) {
+      io.eprintln("cannot create the QUIC context")
+      return 1
+    }
+    quic_stack = https.quic(quic_context.value)
+    config.http3 = true
+    config.quic = &quic_stack
+  }
+  if #len(arguments.value) == 4 && (bytes.equal(arguments.value[3], "h2") || h3) {
     // HTTP/2 through ALPN; frames need 16 KiB of receive buffer.
     if !https.offer_http2(context.value) {
       io.eprintln("cannot offer h2")

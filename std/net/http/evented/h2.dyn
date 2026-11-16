@@ -26,6 +26,7 @@ use "std/mem" mem
 use "std/net" network
 use "std/net/http" http
 use "std/net/http/hpack" hpack
+use "std/net/http/qpack" qpack
 use "std/net/websocket" websocket
 use "std/parse" parse
 use "std/sync" sync
@@ -120,6 +121,15 @@ struct Stream {
   frames: websocket.WebSocketMessageState,
   websocket_used: usize,
   close_sent: bool,
+  // HTTP/3: the QUIC stream, and frame parsing across reads.
+  handle: rawptr,
+  frame_head: [16]u8,
+  frame_head_used: usize,
+  frame_type: u64,
+  frame_left: u64,
+  in_frame: bool,
+  headers_seen: bool,
+  headers_length: usize,
 }
 
 struct H2 {
@@ -146,6 +156,19 @@ struct H2 {
   // Jobs running for this connection's streams.
   jobs: usize,
   pool_index: usize,
+  // HTTP/3 (h3.dyn): the QUIC connection, our control stream, the client's
+  // unidirectional streams and the code to close with.
+  quic: bool,
+  handle: rawptr,
+  control: rawptr,
+  uni: [8]rawptr,
+  uni_type: [8]u64,
+  uni_count: usize,
+  close_code: u64,
+  h3_slot: usize,
+  control_bytes: [48]u8,
+  control_length: usize,
+  control_sent: usize,
 }
 
 // A request slot: request bytes and job storage for one stream.
@@ -182,6 +205,8 @@ struct H2Pool {
   head_used: usize,
   encoded: []u8,
   body: []u8,
+  // HTTP/3 stream reads.
+  read: []u8,
 }
 
 fn h2_storage_size(config: Config) usize {
@@ -275,6 +300,13 @@ fn send_frame(connection: *Connection, kind: u8, flags: u8, stream: u32, payload
 }
 
 fn send_reset(connection: *Connection, stream: u32, code: u32) {
+  if connection.h2.quic {
+    index := find_stream(connection.h2, stream)
+    if index != Http2Streams && connection.h2.streams[index].handle != nil {
+      connection.worker.config.quic.reset(connection.h2.streams[index].handle, h3_code(code))
+    }
+    return
+  }
   payload: [4]u8
   put_u32(payload[..], code)
   _ = send_frame(connection, FrameReset, 0, stream, payload[..], false)
@@ -283,6 +315,10 @@ fn send_reset(connection: *Connection, stream: u32, code: u32) {
 // False when the send buffer is full: the credit stays owed and goes out
 // with a later frame.
 fn send_window_update(connection: *Connection, stream: u32, increment: i64) bool {
+  if connection.h2.quic {
+    // QUIC does its own flow control.
+    return true
+  }
   payload: [4]u8
   put_u32(payload[..], #cast(u32, increment))
   return send_frame(connection, FrameWindowUpdate, 0, stream, payload[..], false)
@@ -291,6 +327,10 @@ fn send_window_update(connection: *Connection, stream: u32, increment: i64) bool
 // A connection error (RFC 9113 5.4.1): GOAWAY, then close once it is sent.
 fn h2_fail(connection: *Connection, code: u32) {
   h2 := connection.h2
+  if h2.quic {
+    h3_fail(connection, h3_code(code))
+    return
+  }
   if !h2.goaway {
     payload: [8]u8
     put_u32(payload[0..4], h2.last_stream)
@@ -319,16 +359,7 @@ fn h2_begin(worker: *Worker, index: usize) bool {
     connection.rejected = true
     return false
   }
-  pool.free_count -= 1
-  slot := pool.free[pool.free_count]
-  h2 := &pool.states[slot]
-  h2.* = H2{}
-  h2.decoder = hpack.decoder(h2.table_storage[..], h2.table_entries[..])
-  h2.pool_index = slot
-  h2.send_window = 65535
-  h2.initial_window = 65535
-  h2.peer_frame = MaxFrame
-  connection.h2 = h2
+  h2 := lease_h2(worker, connection)
   settings: [24]u8
   settings_item(settings[0..6], 3, #cast(u32, Http2Streams))
   settings_item(settings[6..12], 4, #cast(u32, StreamWindow))
@@ -339,6 +370,22 @@ fn h2_begin(worker: *Worker, index: usize) bool {
   // The buffer is empty here, so these always fit.
   _ = send_window_update(connection, 0, ConnectionWindow - 65535)
   return true
+}
+
+// A fresh state block for connection; the caller checked one is free.
+fn lease_h2(worker: *Worker, connection: *Connection) *H2 {
+  pool := &worker.h2
+  pool.free_count -= 1
+  slot := pool.free[pool.free_count]
+  h2 := &pool.states[slot]
+  h2.* = H2{}
+  h2.decoder = hpack.decoder(h2.table_storage[..], h2.table_entries[..])
+  h2.pool_index = slot
+  h2.send_window = 65535
+  h2.initial_window = 65535
+  h2.peer_frame = MaxFrame
+  connection.h2 = h2
+  return h2
 }
 
 fn settings_item(destination: []u8, id: u16, value: u32) {
@@ -425,6 +472,10 @@ fn close_stream(worker: *Worker, connection: *Connection, index: usize) {
     stream = &h2.streams[index]
   }
   give_upload(connection, stream)
+  if stream.handle != nil {
+    worker.config.quic.free(stream.handle)
+    stream.handle = nil
+  }
   if stream.slot != 0 {
     slot := &worker.h2.slots[stream.slot - 1]
     if slot.job_running {
@@ -1239,6 +1290,9 @@ fn h2_response(worker: *Worker, connection: *Connection, stream_index: usize) ht
   stream.output = Output.Head
   response := http.Response{ output: io.Writer{ data: connection, write: h2_write }, reserve_body: h2_reserve,
     commit_body: h2_commit, date: worker.date[..] }
+  if !h2.quic {
+    response.alt_svc = alt_svc(worker)
+  }
   response.head_only = stream.head_only
   return response
 }
@@ -1277,8 +1331,9 @@ fn finish_stream(worker: *Worker, index: usize, stream_index: usize) {
     reset_stream(worker, connection, stream_index, ErrorInternal)
     return
   }
-  if !stream.ended && !stream.reset {
+  if !stream.ended && !stream.reset && !connection.h2.quic {
     // Answered early (RFC 9113 8.1): the rest of the body is not wanted.
+    // On QUIC, freeing the stream stops the client's sending.
     send_reset(connection, stream.id, ErrorNone)
   }
   close_stream(worker, connection, stream_index)
@@ -1455,8 +1510,12 @@ fn send_headers(worker: *Worker, connection: *Connection, stream_index: usize, h
     // Interim responses have no place here; HTTP/2 clients do not wait.
     return false
   }
+  quic := h2.quic
   encoded: usize = 0
-  written := hpack.encode_field(pool.encoded[encoded..], ":status", status)
+  if quic {
+    encoded = qpack.encode_prefix(pool.encoded)
+  }
+  written := field_out(quic, pool.encoded[encoded..], ":status", status)
   if written == 0 {
     return false
   }
@@ -1494,7 +1553,7 @@ fn send_headers(worker: *Worker, connection: *Connection, stream_index: usize, h
       }
       length = parsed
     }
-    written = hpack.encode_field(pool.encoded[encoded..], name, value)
+    written = field_out(quic, pool.encoded[encoded..], name, value)
     if written == 0 {
       return false
     }
@@ -1516,6 +1575,9 @@ fn send_headers(worker: *Worker, connection: *Connection, stream_index: usize, h
     end_flag = FlagEndStream
   }
   block := pool.encoded[..encoded]
+  if quic {
+    return h3_send_headers(worker, connection, stream_index, block, stream.output == Output.Done, blocking)
+  }
   first := true
   for first || #len(block) > 0 {
     count := #len(block)
@@ -1545,6 +1607,9 @@ fn send_headers(worker: *Worker, connection: *Connection, stream_index: usize, h
 // the last one (an empty frame when data is empty).
 fn send_data(worker: *Worker, connection: *Connection, stream_index: usize, data: []const u8, end: bool, blocking: bool) bool {
   h2 := connection.h2
+  if h2.quic {
+    return h3_send_data(worker, connection, stream_index, data, end, blocking)
+  }
   rest := data
   for {
     stream := &h2.streams[stream_index]
@@ -2067,4 +2132,11 @@ fn websocket_data(worker: *Worker, connection: *Connection, index: usize, data: 
     stream.ended = true
     websocket_close(worker, connection, index, 1000)
   }
+}
+
+fn field_out(quic: bool, destination: []u8, name: []const u8, value: []const u8) usize {
+  if quic {
+    return qpack.encode_field(destination, name, value)
+  }
+  return hpack.encode_field(destination, name, value)
 }

@@ -8,7 +8,9 @@
 //   config.spawner = &spawner
 //
 // For HTTP/2 set Config.http2 and call offer_http2(context) before starting:
-// browsers then negotiate "h2" through ALPN.
+// browsers then negotiate "h2" through ALPN. For HTTP/3 also set
+// Config.http3 and Config.quic to quic(quic_context(...)): QUIC needs its own
+// context (OpenSSL's QUIC server method), with the same certificate.
 //
 // OpenSSL keeps per-thread state, so workers must be libc threads: evented
 // refuses this transport without a spawner from std/thread/posix. The context,
@@ -17,8 +19,10 @@
 #target(kernel: linux)
 
 use "std/io" io
+use "std/mem" mem
 use "std/net/http/evented" evented
 use "std/net/tls" provider
+use "vendor/openssl/tls" openssl
 
 pub fn transport(context: provider.Context) evented.Transport {
   return evented.Transport{
@@ -91,4 +95,70 @@ fn close(session: rawptr) {
   connection := session
   _ = provider.shutdown(connection)
   provider.connection_release(&connection)
+}
+
+// ---------------------------------------------------------------- HTTP/3
+
+alpn_h3: []const u8 = "\x02h3"
+
+pub struct QuicContextResult { value: provider.Context, failure: io.Failure }
+
+// A QUIC server context offering "h3" through ALPN, from PEM files. Release
+// it with tls.config_release after evented.join returns.
+pub fn quic_context(arena: *mem.Arena, certificate: []const u8, key: []const u8) QuicContextResult {
+  created := openssl.quic_server_context_create(arena, certificate, key)
+  if io.failed(created.failure) || !openssl.set_server_alpn(created.value, &alpn_h3) {
+    return QuicContextResult{ failure: io.Failure{ kind: io.Kind.System } }
+  }
+  return QuicContextResult{ value: created.value }
+}
+
+// The QUIC stack for Config.quic. context must outlive the workers.
+pub fn quic(context: provider.Context) evented.Quic {
+  return evented.Quic{
+    data: context,
+    listen: quic_listen,
+    handle_events: openssl.quic_handle_events,
+    accept_connection: openssl.quic_accept_connection,
+    accept_stream: quic_accept_stream,
+    open_stream: openssl.quic_open_stream,
+    read: quic_read,
+    write: quic_write,
+    writable: openssl.quic_writable,
+    reset: openssl.quic_reset_stream,
+    closed: openssl.quic_closed,
+    free: openssl.quic_free,
+    close: openssl.quic_close,
+    peer: openssl.quic_peer,
+    close_listener: openssl.quic_free,
+  }
+}
+
+fn quic_listen(data: rawptr, descriptor: isize) rawptr {
+  return openssl.quic_listen(data, #cast(i32, descriptor))
+}
+
+fn quic_accept_stream(connection: rawptr) evented.QuicStream {
+  accepted := openssl.quic_accept_stream(connection)
+  return evented.QuicStream{ handle: accepted.handle, id: accepted.id, unidirectional: accepted.unidirectional }
+}
+
+fn quic_status(status: openssl.QuicStatus) evented.QuicStatus {
+  case status {
+    openssl.QuicStatus.Ok => { return evented.QuicStatus.Ok }
+    openssl.QuicStatus.WouldBlock => { return evented.QuicStatus.WouldBlock }
+    openssl.QuicStatus.End => { return evented.QuicStatus.End }
+    openssl.QuicStatus.Reset => { return evented.QuicStatus.Reset }
+    openssl.QuicStatus.Failed => { return evented.QuicStatus.Failed }
+  }
+}
+
+fn quic_read(stream: rawptr, destination: []u8) evented.QuicIo {
+  read := openssl.quic_read(stream, destination)
+  return evented.QuicIo{ count: read.count, status: quic_status(read.status) }
+}
+
+fn quic_write(stream: rawptr, source: []const u8, conclude: bool) evented.QuicIo {
+  written := openssl.quic_write(stream, source, conclude)
+  return evented.QuicIo{ count: written.count, status: quic_status(written.status) }
 }

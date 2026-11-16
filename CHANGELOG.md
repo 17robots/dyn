@@ -22,6 +22,11 @@ Web applications: see [docs/guide/web-apps.md](docs/guide/web-apps.md).
   and receive_body work per stream. Flow control both ways, fixed memory
   (`http2_connections`, `http2_slots`). `std/net/http/hpack` implements
   HPACK; `tls.server_alpn` selects ALPN on servers.
+- HTTP/3 in `std/net/http/evented` with `Config.http3` and a QUIC stack in
+  `Config.quic` (`https.quic` over OpenSSL's QUIC server): UDP on the TCP
+  port, Alt-Svc on TCP responses, and streams on the HTTP/2 machinery, so
+  run, open_stream and receive_body work per stream. `std/net/http/qpack`
+  implements QPACK without a dynamic table.
 - WebSockets over HTTP/2 (RFC 8441): `evented.upgrade` on an extended
   CONNECT stream answers 200 and carries frames in DATA; send, publish,
   close_peer and on_message work as on HTTP/1.1.
