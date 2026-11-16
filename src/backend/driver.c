@@ -417,12 +417,13 @@ static void trace_start_call(BackendContext *ctx) {
 }
 /* Debug builds: function at [start, end) of .text, named "name (path:" in
    traces, with the rows emitted since trace_row_mark. */
+static const char *report_name(const DynIrFunction *f);
 static bool trace_function(BackendContext *ctx, const DynIrFunction *f, const DynSource *source,
                            const DynLocationIndex *locations, uint32_t start, unsigned symbol) {
   const char *path = "?"; unsigned line, column;
   dyn_location_get(locations, source, f->source_offset, &path, &line, &column);
   char label[4096];
-  int length = snprintf(label, sizeof(label), "%s (%s:", f->debug_name ? f->debug_name : f->name, path ? path : "?");
+  int length = snprintf(label, sizeof(label), "%s (%s:", report_name(f), path ? path : "?");
   if (length < 0) return false;
   if ((size_t)length >= sizeof(label)) length = (int)sizeof(label) - 1;
   if (ctx->trace_names_size + (size_t)length > ctx->trace_names_capacity) {
@@ -643,6 +644,14 @@ static void store_memory(BackendContext *ctx, DynType type) {
   isa_store_value(ctx, memory_bits(type));
 }
 static const char *function_name(const DynIrFunction *f) { return f->foreign ? f->link_name : f->name; }
+/* The name a failed check or a trace reports: an instance's readable name,
+   and a module function's own name (the path names its module). */
+static const char *report_name(const DynIrFunction *f) {
+  if (f->debug_name) return f->debug_name;
+  const char *name = function_name(f);
+  if (!f->foreign && strlen(name) > 22 && !memcmp(name, "dyn_m", 5) && name[21] == '_') name += 22;
+  return name;
+}
 static void guard(BackendContext *ctx, const DynIrFunction *f, Cond success, unsigned check) {
   if (ctx->message_offsets[check] == SIZE_MAX || ctx->message_origins[check] != ctx->check_origin ||
       ctx->message_bytes[check] != ctx->check_byte) {
@@ -652,7 +661,7 @@ static void guard(BackendContext *ctx, const DynIrFunction *f, Cond success, uns
        name and kind << 24 | name length, so each name is stored once. */
     const DynIrFunction *origin = ctx->check_origin && ctx->check_origin <= ctx->active_ir->function_count
         ? &ctx->active_ir->functions[ctx->check_origin - 1] : f;
-    const char *name = function_name(origin);
+    const char *name = report_name(origin);
     size_t length = strlen(name);
     if (length > 800) length = 800;
     char located[801];

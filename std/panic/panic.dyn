@@ -1,10 +1,12 @@
-// A process panic handler. It runs once, after cleanups, right before a panic
-// that nothing handles reports its message and exits. It cannot recover the
-// program: use it to log, write a crash report or flush files. A panic inside
-// the handler reports and exits without running it again.
+// Panics and a process panic handler. A panic is for bugs: it prints its
+// message and a stack trace and exits with status 101, without running
+// defers. The handler runs once, right before that report, for work the
+// operating system will not do at exit, such as restoring a terminal's mode,
+// logging or writing a crash report; it cannot recover the program. A panic
+// inside the handler reports and exits without running it again.
 //
-// On Wasm a panic traps at once, with no cleanups and no report, so the
-// handler never runs there.
+// On Wasm a panic traps at once, with no report, so the handler never runs
+// there.
 
 handler: fn([]const u8)
 
@@ -22,4 +24,11 @@ fn run(message: *const u8, length: u64) {
 pub fn set_handler(callback: fn(message: []const u8)) {
   handler = callback
   install()
+}
+
+// Panics with message when condition is false: a check for a bug that is
+// part of the program, in every build. #assert checks constants at compile
+// time instead.
+pub fn assert(condition: bool, message: []const u8) {
+  if !condition { #panic(message) }
 }

@@ -9519,7 +9519,7 @@ static void a64s_store_outgoing(SsaEmit *e, int32_t value, uint32_t offset, unsi
    "at path:line" for the statement, as the tree emitter writes it. */
 static size_t ssa_check_name(SsaEmit *e, uint32_t origin, uint32_t pos, size_t *length) {
   BackendContext *ctx = e->ctx; Ssa *s = e->s;
-  const char *name = function_name(origin && origin <= s->ir->function_count ? &s->ir->functions[origin - 1] : s->f);
+  const char *name = report_name(origin && origin <= s->ir->function_count ? &s->ir->functions[origin - 1] : s->f);
   size_t n = strlen(name);
   if (n > 800) n = 800;
   char located[801];

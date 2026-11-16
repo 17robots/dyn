@@ -2180,6 +2180,7 @@ module's full declarations and comments.
 ## std/panic
 
 - `fn set_handler(callback: fn(message: []const u8))`: Installs the handler, replacing any earlier one.
+- `fn assert(condition: bool, message: []const u8)`: Panics with message when condition is false: a check for a bug that is part of the program, in every build.
 
 ## std/parse
 
