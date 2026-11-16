@@ -75,3 +75,8 @@ fn mapping_release(bytes: []u8) isize {
 fn mapping_commit(bytes: []u8, from: usize, to: usize) bool {
   return true
 }
+
+// No advice on this target.
+fn mapping_sparse(bytes: []u8) {
+  _ = bytes
+}

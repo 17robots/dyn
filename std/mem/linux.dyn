@@ -25,3 +25,15 @@ fn mapping_release(bytes: []u8) isize {
 fn mapping_commit(bytes: []u8, from: usize, to: usize) bool {
   return true
 }
+
+// Huge pages off for the whole pages inside bytes (MADV_NOHUGEPAGE).
+fn mapping_sparse(bytes: []u8) {
+  if #len(bytes) == 0 {
+    return
+  }
+  start := (#cast(usize, &bytes[0]) + 4095) & ~#cast(usize, 4095)
+  end := (#cast(usize, &bytes[0]) + #len(bytes)) & ~#cast(usize, 4095)
+  if end > start {
+    _ = #syscall(sys.Madvise, start, end - start, 15)
+  }
+}

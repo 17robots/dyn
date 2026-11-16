@@ -587,6 +587,14 @@ pub fn arena_push_array(arena: *Arena, count: usize, element_size: usize, alignm
   return arena_push(arena, size.bytes, alignment)
 }
 
+// Tells the OS that bytes will be touched sparsely, such as one receive
+// buffer per connection of which few are busy: on Linux the whole pages inside
+// bytes stop getting transparent huge pages, so touching a few bytes no longer
+// makes 2 MiB resident. Only memory use changes; other targets ignore it.
+pub fn advise_sparse(bytes: []u8) {
+  mapping_sparse(bytes)
+}
+
 // Like arena_push, without zeroing, for bytes that are overwritten right away.
 pub fn arena_push_uninit(arena: *Arena, size: usize, alignment: usize) *u8 {
   memory := arena_push_fast(arena, size, alignment)

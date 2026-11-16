@@ -212,6 +212,12 @@ pub fn default_config() Config {
 
 // Bytes of backing storage start needs for this many workers.
 pub fn storage_size(config: Config, worker_count: usize) usize {
+  return worker_count * worker_storage(config)
+}
+
+// One worker's block: start carves it from the arena in one piece, so the OS
+// can be told up front that it is touched sparsely (see mem.advise_sparse).
+fn worker_storage(config: Config) usize {
   slots := slot_count(config)
   per_connection := #sizeof(Connection) + config.receive_size + config.send_size
   per_worker := slots * (per_connection + #sizeof(usize)) + config.stack_size + scratch_size(config) + 4096
@@ -223,7 +229,10 @@ pub fn storage_size(config: Config, worker_count: usize) usize {
     per_worker += #sizeof(gzip.Encoder) + #alignof(gzip.Encoder)
   }
   per_worker += h2_storage_size(config) + h3_storage_size(config)
-  return worker_count * per_worker
+  // The event queue (entry, free list, hash table per slot), thread records,
+  // alignment padding.
+  per_worker += (slots + 2) * 64 + 64 * mem.KiB
+  return per_worker
 }
 
 // Reserve slots hold parked clients or answer 503: a reply drains like any
@@ -1302,9 +1311,15 @@ fn valid_start(workers: []Worker, config: Config, handler: http.Handler) io.Fail
 
 // Allocates the worker's connections and queue, then spawns its thread.
 // worker.listener and worker.own_listener are set by the caller.
-fn start_worker(arena: *mem.Arena, worker: *Worker) io.Failure {
+fn start_worker(outer: *mem.Arena, worker: *Worker) io.Failure {
   config := worker.config
   count := slot_count(config)
+  // Most of a worker's storage is per-slot buffers of which few are busy.
+  // Advise before anything touches it: with transparent huge pages, a first
+  // touch would otherwise make a whole 2 MiB page resident.
+  backing := mem.push_bytes_uninit(outer, worker_storage(config))
+  mem.advise_sparse(backing)
+  arena := mem.arena_from_buffer(backing)
   worker.connections = mem.push_array(Connection, arena, count)
   worker.free = mem.push_array(usize, arena, count)
   receive := mem.push_bytes_uninit(arena, count * config.receive_size)
@@ -1323,6 +1338,8 @@ fn start_worker(arena: *mem.Arena, worker: *Worker) io.Failure {
   for i in 0..config.upload_count {
     worker.upload_pool.free[i] = config.upload_count - 1 - i
   }
+  job_stride := config.job_size + mem.ArenaBufferOverhead
+  job_bytes := mem.push_bytes_uninit(arena, count * job_stride)
   for c in 0..count {
     worker.connections[c].input = receive[c * config.receive_size..(c + 1) * config.receive_size]
     worker.connections[c].base_input = worker.connections[c].input
@@ -1336,7 +1353,7 @@ fn start_worker(arena: *mem.Arena, worker: *Worker) io.Failure {
     worker.connections[c].index = c
     worker.connections[c].generation = 1
     if config.job_size > 0 {
-      worker.connections[c].jobs = mem.arena_from_buffer(mem.push_bytes_uninit(arena, config.job_size + mem.ArenaBufferOverhead))
+      worker.connections[c].jobs = mem.arena_from_buffer(job_bytes[c * job_stride..(c + 1) * job_stride])
     }
     worker.free[c] = count - 1 - c
   }

@@ -36,7 +36,23 @@ fn wide(x: u64) u64 {
   return (x >> 7) | (x << 57)
 }
 
+// 64-bit rotates by constants (one ROR), a near-rotate that must stay two
+// shifts, and the low-half mask (a 32-bit move), as in BLAKE2b and Argon2.
+fn mix64(a: u64, b: u64) u64 {
+  x := a + b + 2 * (a & 0xffffffff) * (b & 0xffffffff)
+  y := (x >> 32) | (x << 32)
+  z := (y >> 24) | (y << 40)
+  w := (z >> 63) | (z << 1)
+  near := (w >> 5) | (w << 58)
+  return w ^ near
+}
+
 fn main() {
+  lanes: u64 = 0x510e527fade682d1
+  for i in 0..1000 {
+    lanes = mix64(lanes, #cast(u64, i) * 0x9e3779b97f4a7c15)
+  }
+  io.println("{}", lanes)
   state: u32 = 0x6a09e667
   other: u32 = 0xbb67ae85
   total: u64 = 0

@@ -40,7 +40,8 @@ pub fn argon2id_workspace_words(parameters: Argon2Parameters) usize {
   if !parameters_valid(parameters) {
     return 0
   }
-  return lane_blocks(parameters) * parameters.parallelism * BlockWords
+  // The memory, then two blocks of scratch for fill_block.
+  return lane_blocks(parameters) * parameters.parallelism * BlockWords + 2 * BlockWords
 }
 
 fn put32(state: *blake2b.State, value: u32) {
@@ -83,48 +84,378 @@ fn long_hash(destination: []u8, first: []const u8, second: []const u8) {
   _ = blake2b.sum(destination[at..], previous[..])
 }
 
-fn multiply_add(a: u64, b: u64) u64 {
-  return a + b + 2 * (a & 0xffffffff) * (b & 0xffffffff)
-}
-
-fn rotate(value: u64, amount: u64) u64 {
-  return (value >> amount) | (value << (64 - amount))
-}
-
-fn round_mix(v: []u64, a: usize, b: usize, c: usize, d: usize) {
-  v[a] = multiply_add(v[a], v[b])
-  v[d] = rotate(v[d] ^ v[a], 32)
-  v[c] = multiply_add(v[c], v[d])
-  v[b] = rotate(v[b] ^ v[c], 24)
-  v[a] = multiply_add(v[a], v[b])
-  v[d] = rotate(v[d] ^ v[a], 16)
-  v[c] = multiply_add(v[c], v[d])
-  v[b] = rotate(v[b] ^ v[c], 63)
-}
-
-// The permutation P on 16 words, given by their indices into block.
-fn permute(block: []u64, index: [16]usize) {
-  v: [16]u64
-  for i in 0..16 {
-    v[i] = block[index[i]]
+// The permutation P (RFC 9106 3.6): eight steps of G, the BLAKE2b mix with
+// the BlaMka multiply, on 16 words of a block. Each step is written out with
+// its four words in locals: one function per step would cost calls, and a
+// table of positions loads and stores the words again. The BlaMka
+// multiply-add and the rotations are spelled out too (a + b + 2 * lo(a) *
+// lo(b), and x >> n | x << (64 - n), which compiles to one rotate), so the
+// steps do not depend on how much the compiler inlines into a large
+// function. The words are those of a row (16 in a row) or a column (8 pairs,
+// 16 words apart).
+fn permute_row(r: []u64, base: usize) {
+  {
+    x := r[base + 0]
+    y := r[base + 4]
+    z := r[base + 8]
+    w := r[base + 12]
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 32) | (w << 32)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 24) | (y << 40)
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 16) | (w << 48)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 63) | (y << 1)
+    r[base + 0] = x
+    r[base + 4] = y
+    r[base + 8] = z
+    r[base + 12] = w
   }
-  round_mix(v[..], 0, 4, 8, 12)
-  round_mix(v[..], 1, 5, 9, 13)
-  round_mix(v[..], 2, 6, 10, 14)
-  round_mix(v[..], 3, 7, 11, 15)
-  round_mix(v[..], 0, 5, 10, 15)
-  round_mix(v[..], 1, 6, 11, 12)
-  round_mix(v[..], 2, 7, 8, 13)
-  round_mix(v[..], 3, 4, 9, 14)
-  for i in 0..16 {
-    block[index[i]] = v[i]
+  {
+    x := r[base + 1]
+    y := r[base + 5]
+    z := r[base + 9]
+    w := r[base + 13]
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 32) | (w << 32)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 24) | (y << 40)
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 16) | (w << 48)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 63) | (y << 1)
+    r[base + 1] = x
+    r[base + 5] = y
+    r[base + 9] = z
+    r[base + 13] = w
+  }
+  {
+    x := r[base + 2]
+    y := r[base + 6]
+    z := r[base + 10]
+    w := r[base + 14]
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 32) | (w << 32)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 24) | (y << 40)
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 16) | (w << 48)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 63) | (y << 1)
+    r[base + 2] = x
+    r[base + 6] = y
+    r[base + 10] = z
+    r[base + 14] = w
+  }
+  {
+    x := r[base + 3]
+    y := r[base + 7]
+    z := r[base + 11]
+    w := r[base + 15]
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 32) | (w << 32)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 24) | (y << 40)
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 16) | (w << 48)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 63) | (y << 1)
+    r[base + 3] = x
+    r[base + 7] = y
+    r[base + 11] = z
+    r[base + 15] = w
+  }
+  {
+    x := r[base + 0]
+    y := r[base + 5]
+    z := r[base + 10]
+    w := r[base + 15]
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 32) | (w << 32)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 24) | (y << 40)
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 16) | (w << 48)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 63) | (y << 1)
+    r[base + 0] = x
+    r[base + 5] = y
+    r[base + 10] = z
+    r[base + 15] = w
+  }
+  {
+    x := r[base + 1]
+    y := r[base + 6]
+    z := r[base + 11]
+    w := r[base + 12]
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 32) | (w << 32)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 24) | (y << 40)
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 16) | (w << 48)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 63) | (y << 1)
+    r[base + 1] = x
+    r[base + 6] = y
+    r[base + 11] = z
+    r[base + 12] = w
+  }
+  {
+    x := r[base + 2]
+    y := r[base + 7]
+    z := r[base + 8]
+    w := r[base + 13]
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 32) | (w << 32)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 24) | (y << 40)
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 16) | (w << 48)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 63) | (y << 1)
+    r[base + 2] = x
+    r[base + 7] = y
+    r[base + 8] = z
+    r[base + 13] = w
+  }
+  {
+    x := r[base + 3]
+    y := r[base + 4]
+    z := r[base + 9]
+    w := r[base + 14]
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 32) | (w << 32)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 24) | (y << 40)
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 16) | (w << 48)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 63) | (y << 1)
+    r[base + 3] = x
+    r[base + 4] = y
+    r[base + 9] = z
+    r[base + 14] = w
   }
 }
 
-// next = G(previous, reference), xor-ed into next when accumulate.
-fn fill_block(previous: []const u64, reference: []const u64, next: []u64, accumulate: bool) {
-  r: [BlockWords]u64
-  saved: [BlockWords]u64
+fn permute_column(r: []u64, base: usize) {
+  {
+    x := r[base + 0]
+    y := r[base + 32]
+    z := r[base + 64]
+    w := r[base + 96]
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 32) | (w << 32)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 24) | (y << 40)
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 16) | (w << 48)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 63) | (y << 1)
+    r[base + 0] = x
+    r[base + 32] = y
+    r[base + 64] = z
+    r[base + 96] = w
+  }
+  {
+    x := r[base + 1]
+    y := r[base + 33]
+    z := r[base + 65]
+    w := r[base + 97]
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 32) | (w << 32)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 24) | (y << 40)
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 16) | (w << 48)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 63) | (y << 1)
+    r[base + 1] = x
+    r[base + 33] = y
+    r[base + 65] = z
+    r[base + 97] = w
+  }
+  {
+    x := r[base + 16]
+    y := r[base + 48]
+    z := r[base + 80]
+    w := r[base + 112]
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 32) | (w << 32)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 24) | (y << 40)
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 16) | (w << 48)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 63) | (y << 1)
+    r[base + 16] = x
+    r[base + 48] = y
+    r[base + 80] = z
+    r[base + 112] = w
+  }
+  {
+    x := r[base + 17]
+    y := r[base + 49]
+    z := r[base + 81]
+    w := r[base + 113]
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 32) | (w << 32)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 24) | (y << 40)
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 16) | (w << 48)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 63) | (y << 1)
+    r[base + 17] = x
+    r[base + 49] = y
+    r[base + 81] = z
+    r[base + 113] = w
+  }
+  {
+    x := r[base + 0]
+    y := r[base + 33]
+    z := r[base + 80]
+    w := r[base + 113]
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 32) | (w << 32)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 24) | (y << 40)
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 16) | (w << 48)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 63) | (y << 1)
+    r[base + 0] = x
+    r[base + 33] = y
+    r[base + 80] = z
+    r[base + 113] = w
+  }
+  {
+    x := r[base + 1]
+    y := r[base + 48]
+    z := r[base + 81]
+    w := r[base + 96]
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 32) | (w << 32)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 24) | (y << 40)
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 16) | (w << 48)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 63) | (y << 1)
+    r[base + 1] = x
+    r[base + 48] = y
+    r[base + 81] = z
+    r[base + 96] = w
+  }
+  {
+    x := r[base + 16]
+    y := r[base + 49]
+    z := r[base + 64]
+    w := r[base + 97]
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 32) | (w << 32)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 24) | (y << 40)
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 16) | (w << 48)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 63) | (y << 1)
+    r[base + 16] = x
+    r[base + 49] = y
+    r[base + 64] = z
+    r[base + 97] = w
+  }
+  {
+    x := r[base + 17]
+    y := r[base + 32]
+    z := r[base + 65]
+    w := r[base + 112]
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 32) | (w << 32)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 24) | (y << 40)
+    x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
+    w ^= x
+    w = (w >> 16) | (w << 48)
+    z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
+    y ^= z
+    y = (y >> 63) | (y << 1)
+    r[base + 17] = x
+    r[base + 32] = y
+    r[base + 65] = z
+    r[base + 112] = w
+  }
+}
+
+// next = G(previous, reference), xor-ed into next when accumulate. scratch
+// holds two blocks of working space.
+fn fill_block(previous: []const u64, reference: []const u64, next: []u64, accumulate: bool, scratch: []u64) {
+  r := scratch[..BlockWords]
+  saved := scratch[BlockWords..2 * BlockWords]
   for i in 0..BlockWords {
     r[i] = previous[i] ^ reference[i]
     saved[i] = r[i]
@@ -133,19 +464,10 @@ fn fill_block(previous: []const u64, reference: []const u64, next: []u64, accumu
     }
   }
   for row in 0..8 {
-    index: [16]usize
-    for k in 0..16 {
-      index[k] = 16 * row + k
-    }
-    permute(r[..], index)
+    permute_row(r, 16 * row)
   }
   for column in 0..8 {
-    index: [16]usize
-    for k in 0..8 {
-      index[2 * k] = 2 * column + 16 * k
-      index[2 * k + 1] = 2 * column + 16 * k + 1
-    }
-    permute(r[..], index)
+    permute_column(r, 2 * column)
   }
   for i in 0..BlockWords {
     next[i] = saved[i] ^ r[i]
@@ -154,10 +476,10 @@ fn fill_block(previous: []const u64, reference: []const u64, next: []u64, accumu
 
 struct Addresses { input: [BlockWords]u64, block: [BlockWords]u64, zero: [BlockWords]u64 }
 
-fn next_addresses(addresses: *Addresses) {
+fn next_addresses(addresses: *Addresses, scratch: []u64) {
   addresses.input[6] += 1
-  fill_block(addresses.zero[..], addresses.input[..], addresses.block[..], false)
-  fill_block(addresses.zero[..], addresses.block[..], addresses.block[..], false)
+  fill_block(addresses.zero[..], addresses.input[..], addresses.block[..], false, scratch)
+  fill_block(addresses.zero[..], addresses.block[..], addresses.block[..], false, scratch)
 }
 
 // Argon2id of password with salt (at least 8 bytes), and optional secret
@@ -174,6 +496,7 @@ pub fn argon2id_keyed(destination: []u8, password: []const u8, salt: []const u8,
   segment_length := lane_length / SyncPoints
   total := lane_length * lanes
   memory := workspace[..total * BlockWords]
+  scratch := workspace[total * BlockWords..total * BlockWords + 2 * BlockWords]
   initial := blake2b.init(64, "")
   put32(&initial, parameters.parallelism)
   put32(&initial, #cast(u32, #len(destination)))
@@ -223,7 +546,7 @@ pub fn argon2id_keyed(destination: []u8, password: []const u8, salt: []const u8,
           addresses.input[4] = parameters.iterations
           addresses.input[5] = TypeId
           if start == 2 {
-            next_addresses(&addresses)
+            next_addresses(&addresses, scratch)
           }
         }
         for index in start..segment_length {
@@ -235,7 +558,7 @@ pub fn argon2id_keyed(destination: []u8, password: []const u8, salt: []const u8,
           random: u64 = 0
           if independent {
             if index % BlockWords == 0 {
-              next_addresses(&addresses)
+              next_addresses(&addresses, scratch)
             }
             random = addresses.block[index % BlockWords]
           } else {
@@ -274,7 +597,7 @@ pub fn argon2id_keyed(destination: []u8, password: []const u8, salt: []const u8,
           reference := reference_lane * lane_length + (first + #cast(usize, relative)) % lane_length
           fill_block(memory[previous * BlockWords..(previous + 1) * BlockWords],
             memory[reference * BlockWords..(reference + 1) * BlockWords],
-            memory[current * BlockWords..(current + 1) * BlockWords], pass != 0)
+            memory[current * BlockWords..(current + 1) * BlockWords], pass != 0, scratch)
         }
       }
     }

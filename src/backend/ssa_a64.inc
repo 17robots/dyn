@@ -660,7 +660,8 @@ static void a64s_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
     d = a64s_target(v);
     if (ssa_is_const(s, v->b, &c)) {
       unsigned n = a64s_get(e, v->a, A_S1), amount = (unsigned)(c & 63);
-      if (v->rotate) a64_word(ctx, 0x13800000u | n << 16 | (amount & 31) << 10 | n << 5 | d); /* ror wd, wn, #c (extr) */
+      if (v->rotate && v->w32) a64_word(ctx, 0x13800000u | n << 16 | (amount & 31) << 10 | n << 5 | d); /* ror wd, wn, #c (extr) */
+      else if (v->rotate) a64_word(ctx, 0x93c00000u | n << 16 | amount << 10 | n << 5 | d); /* ror xd, xn, #c (extr) */
       else if (v->w32 && v->op == SO_SHL)
         a64_word(ctx, 0x53000000u | ((32 - amount) & 31) << 16 | (31 - (amount & 31)) << 10 | n << 5 | d); /* lsl wd */
       else if (v->op == SO_SHL) a64_word(ctx, 0xd3400000u | ((64 - amount) & 63) << 16 | (63 - amount) << 10 | n << 5 | d);

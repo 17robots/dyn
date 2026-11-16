@@ -89,9 +89,10 @@ enum { SYM_GLOBAL, SYM_FUNCTION, SYM_LOCAL };
 typedef struct {
   uint8_t op, cls, cond, scale;
   bool effect, dead, fused, retain_constant;
-  /* x86-64, set by ssa_narrow32 just before allocation: w32 emits the
-     operation on 32-bit registers, so its result is zero-extended from 32
-     bits; rotate (with w32, op SO_SHR) emits ROR by the constant b. */
+  /* x86-64 and AArch64, set by ssa_narrow32 just before allocation: w32
+     emits the operation on 32-bit registers, so its result is zero-extended
+     from 32 bits; rotate (op SO_SHR) emits ROR by the constant b, on 32 bits
+     with w32 and on 64 bits without (ssa_rotate64). */
   bool w32, rotate;
   int32_t a, b, c;
   int64_t aux, aux2;
@@ -10050,7 +10051,19 @@ static void ssa_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
     return;
   }
   case SO_SUB: ssa_alu(e, v, 5, 0x2b, false); ssa_put(e, v, ssa_target(e, v)); return;
-  case SO_AND: ssa_alu(e, v, 4, 0x23, true); ssa_put(e, v, ssa_target(e, v)); return;
+  case SO_AND: {
+    uint64_t mask;
+    if (!v->w32 && ssa_is_const(s, v->b, &mask) && mask == UINT32_MAX && v->a >= 0) {
+      /* x & 0xffffffff: a 32-bit move zero-extends. */
+      d = ssa_target(e, v);
+      x86_reg_op(ctx, -1, false, OP1(0x8b), d, ssa_get(e, v->a, d), false);
+      ssa_put(e, v, d);
+      return;
+    }
+    ssa_alu(e, v, 4, 0x23, true);
+    ssa_put(e, v, ssa_target(e, v));
+    return;
+  }
   case SO_OR: ssa_alu(e, v, 1, 0x0b, true); ssa_put(e, v, ssa_target(e, v)); return;
   case SO_XOR: ssa_alu(e, v, 6, 0x33, true); ssa_put(e, v, ssa_target(e, v)); return;
   case SO_ADDO: case SO_SUBO:
@@ -10619,6 +10632,32 @@ static void ssa_narrow32(Ssa *s, const uint32_t *order, uint32_t n) {
     }
   }
   ssa_dce(s, order, n);
+}
+/* x86-64 and AArch64: x >> c | x << (64 - c) on 64-bit values becomes one
+   ROR, as BLAKE2b, SHA-512 and Argon2 write their rotations. */
+static void ssa_rotate64(Ssa *s, const uint32_t *order, uint32_t n) {
+  bool changed = false;
+  for (uint32_t i = 0; i < n; ++i) {
+    SsaBlock *block = &s->blocks[order[i]];
+    for (uint32_t k = 0; k < block->values.count; ++k) {
+      SsaValue *v = &s->values[block->values.items[k]];
+      if (v->dead || v->op != SO_OR || v->cls != SC_INT || v->w32 || v->a < 0 || v->b < 0) continue;
+      int32_t right = v->a, left = v->b;
+      if (s->values[right].op != SO_SHR) { int32_t t = right; right = left; left = t; }
+      SsaValue *r = &s->values[right], *l = &s->values[left];
+      uint64_t rc, lc;
+      if (r->op != SO_SHR || r->rotate || r->w32 || l->op != SO_SHL || l->w32 || r->a != l->a || r->a < 0 ||
+          r->cls != SC_INT || !ssa_is_const(s, r->b, &rc) || !ssa_is_const(s, l->b, &lc) || rc == 0 || rc >= 64 ||
+          lc != 64 - rc)
+        continue;
+      v->op = SO_SHR;
+      v->a = r->a;
+      v->b = r->b;
+      v->rotate = true;
+      changed = true;
+    }
+  }
+  if (changed) ssa_dce(s, order, n);
 }
 static void ssa_fuse(Ssa *s, const uint32_t *order, uint32_t n) {
   /* A comparison used only by a select in its block sits right before it
@@ -11675,7 +11714,10 @@ allocate:
     if (ssa_reuse_loads(s, order, n)) ssa_resolve_all(s);
     ssa_dce(s, order, n);
   }
-  if (!ctx->rv64 && !ctx->rv32 && !ctx->t32) ssa_narrow32(s, order, n);
+  if (!ctx->rv64 && !ctx->rv32 && !ctx->t32) {
+    ssa_narrow32(s, order, n);
+    ssa_rotate64(s, order, n);
+  }
   ssa_fuse(s, order, n);
   ssa_loop_depths(s, order, n);
   ssa_mark_cold(s, order, n);

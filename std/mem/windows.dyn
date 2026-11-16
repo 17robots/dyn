@@ -24,3 +24,8 @@ fn mapping_release(bytes: []u8) isize {
   }
   return 0
 }
+
+// No advice on this target.
+fn mapping_sparse(bytes: []u8) {
+  _ = bytes
+}

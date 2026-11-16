@@ -22,6 +22,17 @@ Web applications: see [docs/guide/web-apps.md](docs/guide/web-apps.md).
   and receive_body work per stream. Flow control both ways, fixed memory
   (`http2_connections`, `http2_slots`). `std/net/http/hpack` implements
   HPACK; `tls.server_alpn` selects ALPN on servers.
+- The evented server's memory no longer swells under transparent huge
+  pages: each worker's storage is one block marked with the new
+  `mem.advise_sparse`, so a few busy connections touch 4 KiB pages, not
+  2 MiB ones. Chirp went from 13 to 8 MiB idle and 22 to 11 MiB under load,
+  level with Rust and C.
+- x86-64 and AArch64 emit one rotate for 64-bit `x >> c | x << (64 - c)`,
+  and x86-64 a 32-bit move for `x & 0xffffffff`. Argon2id is 2.4 times
+  faster (32 to 13 ms for OWASP's 19 MiB setting; the SIMD reference C
+  takes 10): its permutation keeps G's words in locals, uses fixed offsets
+  and reuses two blocks of workspace (`argon2id_workspace_words` grew by
+  two blocks).
 - HTTP/3 in `std/net/http/evented` with `Config.http3` and a QUIC stack in
   `Config.quic` (`https.quic` over OpenSSL's QUIC server): UDP on the TCP
   port, Alt-Svc on TCP responses, and streams on the HTTP/2 machinery, so
