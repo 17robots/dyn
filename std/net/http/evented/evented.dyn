@@ -358,6 +358,9 @@ pub struct Worker {
   connections: []Connection,
   free: []usize,
   free_count: usize,
+  // One past the highest slot ever taken. Free slots are reused last in,
+  // first out, so scans over connections stop here, not at the capacity.
+  slots_used: usize,
   send_pool: SendPool,
   upload_pool: SendPool,
   queue: event.Queue,
@@ -979,7 +982,7 @@ fn evict_idle(worker: *Worker, now: i64) bool {
   limit := worker.config.evict_idle_milliseconds
   if limit < 0 { return false }
   oldest: usize = #len(worker.connections)
-  for i in 0..#len(worker.connections) {
+  for i in 0..worker.slots_used {
     connection := &worker.connections[i]
     if !connection.active || connection.parked || connection.refusal || connection.mode != Mode.Http ||
       connection.writing || connection.used != 0 || connection.queued != 0 || connection.handshaking ||
@@ -1037,7 +1040,7 @@ fn begin(worker: *Worker, index: usize) {
 fn promote(worker: *Worker) {
   if worker.parked == 0 || worker.serving >= worker.config.connections_per_worker { return }
   first: usize = #len(worker.connections)
-  for i in 0..#len(worker.connections) {
+  for i in 0..worker.slots_used {
     connection := &worker.connections[i]
     if connection.active && connection.parked &&
       (first == #len(worker.connections) || connection.last_active < worker.connections[first].last_active) {
@@ -1089,6 +1092,9 @@ fn on_accept(worker: *Worker) {
     }
     worker.free_count -= 1
     index := worker.free[worker.free_count]
+    if index >= worker.slots_used {
+      worker.slots_used = index + 1
+    }
     connection := &worker.connections[index]
     connection.descriptor = descriptor
     connection.active = true
@@ -1120,7 +1126,7 @@ fn on_accept(worker: *Worker) {
 
 fn sweep_idle(worker: *Worker, now: i64) {
   limit := worker.config.idle_timeout_milliseconds
-  for i in 0..#len(worker.connections) {
+  for i in 0..worker.slots_used {
     connection := &worker.connections[i]
     // Streams and WebSockets stay open until a side closes them; parked
     // clients wait for a slot.
@@ -1668,7 +1674,7 @@ fn read_inbox(worker: *Worker) {
     item := inbox.posts[half][i]
     payload := inbox.bytes[half][item.offset..item.offset + item.length]
     if item.kind == PostKind.Publish {
-      for c in 0..#len(worker.connections) {
+      for c in 0..worker.slots_used {
         connection := &worker.connections[c]
         if pushable(connection) && connection.mode == Mode.Http2 && !connection.close_after {
           h2_deliver(worker, connection, item, payload)
@@ -1693,7 +1699,7 @@ fn read_inbox(worker: *Worker) {
   inbox.post_count[half] = 0
   inbox.byte_count[half] = 0
   if !touched { return }
-  for c in 0..#len(worker.connections) {
+  for c in 0..worker.slots_used {
     connection := &worker.connections[c]
     if pushable(connection) && !connection.writing && (connection.queued > 0 || connection.close_after) {
       settle(worker, c)

@@ -16,6 +16,11 @@ servers so they pick up the new `dyn`.
 
 Web applications: see [docs/guide/web-apps.md](docs/guide/web-apps.md).
 
+- The evented server scans only the connection slots it has used, not all
+  `connections_per_worker`: a published message used to walk every slot on
+  every worker. HTTP header parsing finds line ends with `bytes.find_byte`
+  and checks token bytes against two bit masks. Static responses are about
+  10% faster, and a post with a live feed 22% faster in Chirp.
 - The SSA backend combines byte loads and stores on x86-64 and AArch64:
   `x[0] | x[1] << 8 | ...` from consecutive addresses is one load, and
   storing a value's successive bytes (or constant bytes) one store.

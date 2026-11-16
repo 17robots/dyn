@@ -123,17 +123,30 @@ fn trim_ows(value: []const u8) []const u8 {
   }
   return value[first..last]
 }
+// RFC 9110 tchar: letters, digits and !#$%&'*+-.^_`|~, as bits of two masks
+// over ASCII (bytes 0-63 and 64-127).
+const TokenLow: u64 = 0x03ff6cfa00000000
+const TokenHigh: u64 = 0x57ffffffc7fffffe
+
 fn token_byte(byte: u8) bool {
-  return (byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z') ||
-    (byte >= '0' && byte <= '9') || byte == '!' || byte == '#' || byte == '$' || byte == '%' ||
-    byte == '&' || byte == 39 || byte == '*' || byte == '+' || byte == '-' || byte == '.' ||
-    byte == '^' || byte == '_' || byte == '`' || byte == '|' || byte == '~'
+  if byte >= 128 { return false }
+  if byte >= 64 { return ((TokenHigh >> #cast(u64, byte - 64)) & 1) != 0 }
+  return ((TokenLow >> #cast(u64, byte)) & 1) != 0
 }
-fn http_parse_head(input: []const u8, response: bool) HttpHead {
-  line_end: usize = 0
-  for line_end + 1 < #len(input) && !(input[line_end] == '\r' && input[line_end + 1] == '\n') {
-    line_end += 1
+// The next "\r\n" at or after from, found with find_byte; #len(input) - 1
+// (or from, near the end) when there is none.
+fn crlf_at(input: []const u8, from: usize) usize {
+  at := from
+  for at + 1 < #len(input) {
+    at += bytes.find_byte(input[at..#len(input) - 1], '\r')
+    if at + 1 >= #len(input) || input[at + 1] == '\n' { return at }
+    at += 1
   }
+  return at
+}
+
+fn http_parse_head(input: []const u8, response: bool) HttpHead {
+  line_end := crlf_at(input, 0)
   if line_end + 1 >= #len(input) {
     return HttpHead{ offset: #len(input), failure: parse.Failure{ kind: parse.Kind.Syntax, offset: #len(input) } }
   }
@@ -210,10 +223,7 @@ fn http_parse_head(input: []const u8, response: bool) HttpHead {
       }
       return HttpHead{ code: code, header_length: cursor + 2, content_length: content_length, keep_alive: keep_alive && !close_requested, chunked: chunked, framing: framing }
     }
-    end := cursor
-    for end + 1 < #len(input) && !(input[end] == '\r' && input[end + 1] == '\n') {
-      end += 1
-    }
+    end := crlf_at(input, cursor)
     if end + 1 >= #len(input) {
       return HttpHead{ offset: #len(input), failure: parse.Failure{ kind: parse.Kind.Syntax, offset: #len(input) } }
     }

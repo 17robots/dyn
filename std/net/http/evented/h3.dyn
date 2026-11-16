@@ -240,6 +240,9 @@ fn h3_accept(worker: *Worker, handle: rawptr) {
   }
   worker.free_count -= 1
   index := worker.free[worker.free_count]
+  if index >= worker.slots_used {
+    worker.slots_used = index + 1
+  }
   connection := &worker.connections[index]
   connection.descriptor = -1
   connection.active = true
