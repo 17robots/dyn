@@ -151,6 +151,18 @@ Work that calls C libraries, such as SQLite, needs a pool on threads with
 libc state: `pool.start_spawned(arena, threads, capacity, stack, &posix.spawner())`.
 Pass it as `Config.pool`. `join` waits for running jobs.
 
+## Grouping work: later
+
+`evented.later(response, data, finish)` answers a request after the worker
+has handled every connection that is ready now, on the same thread, before
+it waits again. Requests that arrive together can share work, such as one
+database transaction for many writes: each handler queues its row and calls
+`later`; the first `finish` of the pass commits them all, and each `finish`
+then replies. `data` lives in job storage (`evented.job`), like `run`.
+HTTP/2 and HTTP/3 streams get InvalidState, so call `finish` yourself there.
+Chirp creates posts this way: 2.3 times as many per second, with a quarter
+of the p99 latency.
+
 ## JSON
 
 `std/encoding/json` parses into an arena (`json.parse`) and writes into

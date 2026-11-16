@@ -162,6 +162,38 @@ def exercise(port):
     client.close()
     assert workers <= {0, 1}, workers
 
+    # later: requests ready in one pass finish together, after it (12 clients
+    # fit the 8 slots per worker).
+    largest = 0
+    for _ in range(20):
+        sockets = [socket.create_connection(('127.0.0.1', port), timeout=10) for _ in range(12)]
+        for s in sockets:
+            s.sendall(b'GET /later HTTP/1.1\r\nHost: x\r\n\r\n')
+        for s in sockets:
+            reply = b''
+            while not reply.endswith(b'\n') or b'\r\n\r\n' not in reply:
+                chunk = s.recv(4096)
+                assert chunk, reply
+                reply += chunk
+            line = reply.split(b'\r\n\r\n', 1)[1].decode()
+            number, size = int(line.split()[1]), int(line.split()[3])
+            assert reply.startswith(b'HTTP/1.1 200') and 1 <= number <= size, reply
+            largest = max(largest, size)
+            s.close()
+        if largest > 1:
+            break
+    assert largest > 1, largest
+    # Pipelined requests on one connection are each deferred in turn.
+    s = socket.create_connection(('127.0.0.1', port), timeout=10)
+    s.sendall(b'GET /later HTTP/1.1\r\nHost: x\r\n\r\n' * 4)
+    reply = b''
+    while reply.count(b'later ') < 4:
+        chunk = s.recv(4096)
+        assert chunk, reply
+        reply += chunk
+    assert reply.count(b'HTTP/1.1 200') == 4, reply
+    s.close()
+
     # Dynamic responses gzip when the client accepts it.
     rows = b'[' + b','.join(b'{"id":%d,"name":"row %d"}' % (i, i) for i in range(400)) + b']'
     status, headers, body = request(port, 'GET', '/report', headers={'Accept-Encoding': 'gzip, br'})

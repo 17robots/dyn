@@ -225,7 +225,8 @@ pub fn storage_size(config: Config, worker_count: usize) usize {
 fn worker_storage(config: Config) usize {
   slots := slot_count(config)
   per_connection := #sizeof(Connection) + config.receive_size + config.send_size
-  per_worker := slots * (per_connection + #sizeof(usize)) + config.stack_size + scratch_size(config) + 4096
+  // Per slot: its free-list and later-list entries.
+  per_worker := slots * (per_connection + 2 * #sizeof(usize)) + config.stack_size + scratch_size(config) + 4096
   per_worker += config.overflow_send_count * (config.overflow_send_size + #sizeof(usize))
   per_worker += config.upload_count * (config.upload_size + #sizeof(usize))
   per_worker += slots * (config.job_size + mem.ArenaBufferOverhead + 2 * #sizeof(usize))
@@ -358,6 +359,10 @@ pub struct Worker {
   connections: []Connection,
   free: []usize,
   free_count: usize,
+  // Connections whose requests finish after this pass's events (later).
+  later: []usize,
+  later_count: usize,
+  later_done: usize,
   // One past the highest slot ever taken. Free slots are reused last in,
   // first out, so scans over connections stop here, not at the capacity.
   slots_used: usize,
@@ -1187,6 +1192,7 @@ fn worker_main(worker: *Worker) isize {
       }
     }
     mem.arena_rewind(worker.scratch, mark)
+    finish_later(worker)
     // Datagrams, timers, and whatever handlers and pushes wrote to QUIC.
     h3_poll(worker)
     // Parked clients take slots from connections that have since gone idle.
@@ -1203,6 +1209,7 @@ fn worker_main(worker: *Worker) isize {
       }
     }
   }
+  finish_later(worker)
   for i in 0..#len(worker.connections) {
     close_connection(worker, i)
   }
@@ -1266,6 +1273,7 @@ fn start_worker(outer: *mem.Arena, worker: *Worker) io.Failure {
   arena := mem.arena_from_buffer(backing)
   worker.connections = mem.push_array(Connection, arena, count)
   worker.free = mem.push_array(usize, arena, count)
+  worker.later = mem.push_array(usize, arena, count)
   receive := mem.push_bytes_uninit(arena, count * config.receive_size)
   send := mem.push_bytes_uninit(arena, count * config.send_size)
   worker.send_pool.backing = mem.push_bytes_uninit(arena, config.overflow_send_count * config.overflow_send_size)
@@ -1822,6 +1830,51 @@ pub fn run(response: *http.Response, data: *$J, work: fn(*$J), finish: fn(*http.
   // The handler returns before any response: mark it so the server waits.
   response.finished = true
   return io.Failure{}
+}
+
+// Finishes the request on this worker once every connection that is ready
+// now has had its turn: finish(response, request, data) runs after the
+// current pass over events, before the worker waits again. Group work across
+// requests this way, such as one database transaction for many writes. data
+// must outlive finish (see job). InvalidState on HTTP/2 and HTTP/3 streams,
+// outside a handler, or with a job already running.
+pub fn later(response: *http.Response, data: *$J, finish: fn(*http.Response, *const http.Request, *$J) http.Result) io.Failure {
+  connection := connection_of(response)
+  if connection == nil || connection.h2 != nil || connection.mode != Mode.Http || connection.job_running || response.started ||
+    response.finished {
+    return io.Failure{ kind: io.Kind.InvalidState }
+  }
+  if finish == nil || data == nil { return io.Failure{ kind: io.Kind.InvalidInput } }
+  worker := connection.worker
+  if worker.later_count == #len(worker.later) {
+    // Requests deferred while finish_later runs: drop the finished prefix.
+    pending := worker.later_count - worker.later_done
+    for i in 0..pending {
+      worker.later[i] = worker.later[worker.later_done + i]
+    }
+    worker.later_count = pending
+    worker.later_done = 0
+  }
+  connection.job_data = data
+  connection.job_finish = #cast(fn(*http.Response, *const http.Request, rawptr) http.Result, finish)
+  connection.job_running = true
+  connection.mode = Mode.Deferred
+  worker.jobs_running += 1
+  worker.later[worker.later_count] = connection.index
+  worker.later_count += 1
+  response.finished = true
+  return io.Failure{}
+}
+
+// Requests deferred with later, including any that their finishing defers.
+fn finish_later(worker: *Worker) {
+  for worker.later_done < worker.later_count {
+    index := worker.later[worker.later_done]
+    worker.later_done += 1
+    job_done(worker, index)
+  }
+  worker.later_count = 0
+  worker.later_done = 0
 }
 
 // On a pool thread.

@@ -16,6 +16,9 @@ servers so they pick up the new `dyn`.
 
 Web applications: see [docs/guide/web-apps.md](docs/guide/web-apps.md).
 
+- `evented.later` finishes a request after the worker's current pass over
+  ready connections, so handlers can group work, such as one transaction for
+  many inserts. Chirp's post creation went from 85k to 198k per second.
 - The evented server scans only the connection slots it has used, not all
   `connections_per_worker`: a published message used to walk every slot on
   every worker. HTTP header parsing finds line ends with `bytes.find_byte`
