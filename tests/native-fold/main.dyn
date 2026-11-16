@@ -1,0 +1,34 @@
+// SSA folds: a subslice of constant length (its constant indexes need no
+// run-time check), a + b + 2 * x * y as one multiply and an LEA, and
+// constants on the left of commutative operators. Debug and release agree.
+use "std/io"
+
+fn window_sum(r: []u64, base: usize) u64 {
+  v := r[base..base + 4]
+  return v[0] + v[1] * 3 + v[2] * 5 + v[3] * 7
+}
+
+fn blamka(a: u64, b: u64) u64 {
+  return a + b + 2 * (a & 0xffff) * (b & 0xffff)
+}
+
+fn left_constants(x: u64) u64 {
+  return (3 + x) * (8 * x) + (5 & x) + (6 | x) + (9 ^ x)
+}
+
+fn main() {
+  words: [64]u64
+  for i in 0..64 {
+    words[i] = #cast(u64, i) * 2654435761 % 1000003
+  }
+  total: u64 = 0
+  for base in 0..60 {
+    total += window_sum(words[..], base)
+  }
+  acc: u64 = 1
+  for i in 0..10000 {
+    acc = blamka(acc % 4000000000, #cast(u64, i) * 7919) % 1000000007
+    total += left_constants(#cast(u64, i) % 100000)
+  }
+  io.println("{} {}", total, acc)
+}

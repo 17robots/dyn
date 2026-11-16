@@ -85,6 +85,14 @@ enum { SYM_GLOBAL, SYM_FUNCTION, SYM_LOCAL };
 #define SSA_PENDING_LITERAL UINT32_MAX
 /* Memory types: bits | signed << 8 | float << 9. */
 #define SSA_MEM(bits, sign, fl) ((bits) | (sign) << 8 | (fl) << 9)
+/* x86-64: functions with loops start on SSA_LOOP_ENTRY_ALIGN bytes, loop
+   headers on SSA_LOOP_HEADER_ALIGN from there (see ssa_aligned_entry). */
+#ifndef SSA_LOOP_ENTRY_ALIGN
+#define SSA_LOOP_ENTRY_ALIGN 64
+#endif
+#ifndef SSA_LOOP_HEADER_ALIGN
+#define SSA_LOOP_HEADER_ALIGN 16
+#endif
 
 typedef struct {
   uint8_t op, cls, cond, scale;
@@ -4232,6 +4240,9 @@ static bool ssa_condition_holds(Cond cond, uint64_t a, uint64_t b) {
   }
 }
 /* Replaces values computable now. Returns whether anything changed. */
+static bool x86_lea_target(const Ssa *s) {
+  return !s->ctx->a64 && !s->ctx->rv64 && !s->ctx->rv32 && !s->ctx->t32;
+}
 static bool ssa_fold(Ssa *s, const uint32_t *order, uint32_t n) {
   bool changed = false;
   for (uint32_t i = 0; i < n; ++i) {
@@ -4239,14 +4250,61 @@ static bool ssa_fold(Ssa *s, const uint32_t *order, uint32_t n) {
     for (uint32_t k = 0; k < block->values.count; ++k) {
       uint32_t id = block->values.items[k];
       SsaValue *v = &s->values[id];
-      uint64_t x, y, r;
+      uint64_t x = 0, y = 0, r = 0;
       bool ca = ssa_is_const(s, v->a, &x), cb = ssa_is_const(s, v->b, &y);
+      /* Commutative operations keep a constant on the right, where the rules
+         below and instruction selection look for it. */
+      if (ca && !cb && v->a >= 0 && v->b >= 0 && v->cls == SC_INT &&
+          (v->op == SO_ADD || v->op == SO_MUL || v->op == SO_AND || v->op == SO_OR || v->op == SO_XOR)) {
+        int32_t t = v->a; v->a = v->b; v->b = t;
+        uint64_t u = x; x = y; y = u;
+        ca = false; cb = true;
+        changed = true;
+      }
       int32_t replacement = -1;
       bool constant = false;
       switch (v->op) {
-      case SO_ADD: if (ca && cb) { r = x + y; constant = true; } else if (cb && !y) replacement = v->a; else if (ca && !x) replacement = v->b; break;
-      case SO_SUB: if (ca && cb) { r = x - y; constant = true; } else if (cb && !y) replacement = v->a; break;
+      case SO_ADD: {
+        if (ca && cb) { r = x + y; constant = true; break; }
+        if (cb && !y) { replacement = v->a; break; }
+        if (ca && !x) { replacement = v->b; break; }
+        break;
+      }
+      case SO_SUB: {
+        if (ca && cb) { r = x - y; constant = true; break; }
+        if (cb && !y) { replacement = v->a; break; }
+        /* (b + c) - b is c: the length of xs[b..b + c]. */
+        SsaValue *sum = v->a >= 0 ? &s->values[v->a] : NULL;
+        uint64_t c;
+        if (sum && sum->op == SO_ADD && sum->cls == SC_INT && v->b >= 0 && sum->a == v->b && ssa_is_const(s, sum->b, &c)) {
+          r = c; constant = true;
+        } else if (sum && sum->op == SO_ADD && sum->cls == SC_INT && v->b >= 0 && sum->b == v->b && ssa_is_const(s, sum->a, &c)) {
+          r = c; constant = true;
+        }
+        break;
+      }
       case SO_MUL:
+        if (!ca && !cb && v->cls == SC_INT && v->a >= 0 && v->b >= 0) {
+          /* (p << k) * q is (p * q) << k: the shift leaves the multiply's
+             dependency chain, and can fold into a following add. */
+          for (unsigned side = 0; side < 2; ++side) {
+            int32_t shifted = side ? v->b : v->a, other = side ? v->a : v->b;
+            SsaValue *sh = &s->values[shifted];
+            uint64_t bits;
+            if (sh->op != SO_SHL || sh->cls != SC_INT || sh->a < 0 || !ssa_is_const(s, sh->b, &bits) || bits >= 64) continue;
+            int32_t amount = sh->b, base = sh->a;
+            int32_t product = ssa_value(s, order[i], SO_MUL, SC_INT, base, other, -1, 0, 0);
+            if (s->failed) return false;
+            v = &s->values[id];
+            v->op = SO_SHL; v->a = product; v->b = amount;
+            ssa_push(s, &block->values, 0);
+            memmove(block->values.items + k + 1, block->values.items + k, (block->values.count - k - 1) * sizeof(uint32_t));
+            block->values.items[k] = (uint32_t)product; ++k;
+            changed = true;
+            break;
+          }
+          break;
+        }
         if (ca && cb) { r = x * y; constant = true; }
         else if (cb && y == 1) replacement = v->a;
         else if (cb && y && !(y & (y - 1))) {
@@ -10659,6 +10717,32 @@ static void ssa_rotate64(Ssa *s, const uint32_t *order, uint32_t n) {
   }
   if (changed) ssa_dce(s, order, n);
 }
+/* x86-64, after the loop passes, which look for adds and shifts, and after
+   ssa_narrow32: t + (p << k)
+   with k in 1..3 is one LEA [t + p*2^k], as in a + b + 2 * x * y. */
+static void ssa_late_lea(Ssa *s, const uint32_t *order, uint32_t n) {
+  if (!x86_lea_target(s)) return;
+  bool changed = false;
+  for (uint32_t i = 0; i < n; ++i) {
+    SsaBlock *block = &s->blocks[order[i]];
+    for (uint32_t k = 0; k < block->values.count; ++k) {
+      SsaValue *v = &s->values[block->values.items[k]];
+      /* A 32-bit add (ssa_narrow32) stays one: LEA here is 64-bit. */
+      if (v->dead || v->op != SO_ADD || v->cls != SC_INT || v->w32 || v->a < 0 || v->b < 0) continue;
+      for (unsigned side = 0; side < 2; ++side) {
+        int32_t shifted = side ? v->a : v->b, other = side ? v->b : v->a;
+        SsaValue *sh = &s->values[shifted];
+        uint64_t bits;
+        if (sh->op != SO_SHL || sh->w32 || sh->cls != SC_INT || sh->a < 0 || !ssa_is_const(s, sh->b, &bits) || bits < 1 || bits > 3)
+          continue;
+        v->op = SO_LEA; v->a = other; v->b = sh->a; v->scale = (uint8_t)(1u << bits); v->aux = 0;
+        changed = true;
+        break;
+      }
+    }
+  }
+  if (changed) ssa_dce(s, order, n);
+}
 static void ssa_fuse(Ssa *s, const uint32_t *order, uint32_t n) {
   /* A comparison used only by a select in its block sits right before it
      and is emitted by it: CMP then CMOVcc, or CSEL with its condition. */
@@ -11183,7 +11267,7 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
         w->slot = place == 1 ? a->caches[c].evicted_slot : -1;
       }
     }
-    /* Loop headers start on a 16-byte boundary, so short loops do not
+    /* Loop headers start on a SSA_LOOP_HEADER_ALIGN boundary, so short loops do not
        straddle fetch lines; the padding is one multi-byte NOP run. */
     if (!ctx->a64 && !ctx->rv64) {
       bool header = false;
@@ -11192,7 +11276,7 @@ static bool ssa_emit_function(SsaEmit *e, const uint32_t *order, uint32_t n) {
         static const unsigned char nops[][9] = {{0x90}, {0x66, 0x90}, {0x0f, 0x1f, 0x00}, {0x0f, 0x1f, 0x40, 0x00},
           {0x0f, 0x1f, 0x44, 0x00, 0x00}, {0x66, 0x0f, 0x1f, 0x44, 0x00, 0x00}, {0x0f, 0x1f, 0x80, 0x00, 0x00, 0x00, 0x00},
           {0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00}, {0x66, 0x0f, 0x1f, 0x84, 0x00, 0x00, 0x00, 0x00, 0x00}};
-        unsigned pad = (unsigned)(-ctx->text.n & 15);
+        unsigned pad = (unsigned)(-ctx->text.n & (SSA_LOOP_HEADER_ALIGN - 1));
         while (pad) { unsigned n = pad > 9 ? 9 : pad; code(ctx, nops[n - 1], n); pad -= n; }
       }
     }
@@ -11717,6 +11801,7 @@ allocate:
   if (!ctx->rv64 && !ctx->rv32 && !ctx->t32) {
     ssa_narrow32(s, order, n);
     ssa_rotate64(s, order, n);
+    ssa_late_lea(s, order, n);
   }
   ssa_fuse(s, order, n);
   ssa_loop_depths(s, order, n);
@@ -11770,7 +11855,11 @@ static bool ssa_finish_literals(Ssa *s) {
   }
   return true;
 }
-/* x86-64 release builds start a function with a loop on a 16-byte boundary.
+/* x86-64 release builds start a function with a loop on a 64-byte boundary,
+   a whole fetch line, so its loops sit at the same place in their lines
+   whatever the linker put before it: with 16, one 16-byte shift of earlier
+   code moved matmul's inner loop across a line and cost it 35%. */
+/* x86-64 release builds start a function with a loop on a 64-byte boundary.
    Its loop headers pad to 16 bytes from where the function starts, so they
    align the same in a shard as in the object, and emission is identical
    whether a worker or the driver does it. The predicate is the one the
@@ -11821,7 +11910,7 @@ static int ssa_emit_prepared(BackendContext *ctx, const DynSource *source, const
   order = layout;
   if (ssa_aligned_entry(ctx, s, order, n)) {
     if (ctx->shard) ctx->shard->aligned_entry = true;
-    while (ctx->text.n & 15) { byte(ctx, 0xcc); ++ctx->ssa_entry_pad; }
+    while (ctx->text.n & (SSA_LOOP_ENTRY_ALIGN - 1)) { byte(ctx, 0xcc); ++ctx->ssa_entry_pad; }
   }
   /* Measure, then emit again with short branches. */
   emit.start = ctx->text.n;
@@ -12017,7 +12106,7 @@ static int ssa_shard_merge(BackendContext *ctx, const SsaEmitted *m) {
   ctx->ssa_allocate_ms += m->allocate_ms; ctx->ssa_emit_ms += m->emit_ms;
   if (m->result != SSA_EMITTED) return m->result;
   if (m->aligned_entry)
-    while (ctx->text.n & 15) { byte(ctx, 0xcc); ++ctx->ssa_entry_pad; }
+    while (ctx->text.n & (SSA_LOOP_ENTRY_ALIGN - 1)) { byte(ctx, 0xcc); ++ctx->ssa_entry_pad; }
   size_t base = ctx->text.n;
   if (!reserve(&ctx->text, base + m->text_length)) return SSA_FAILED;
   if (m->text_length) memcpy(ctx->text.data + base, m->text, m->text_length);

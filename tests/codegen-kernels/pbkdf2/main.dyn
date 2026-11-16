@@ -1,0 +1,16 @@
+// PBKDF2-HMAC-SHA256, 50 derivations of 20000 iterations.
+use "std/crypto/password"
+use "std/io"
+
+fn main() {
+  derived: [32]u8
+  scratch: [20]u8
+  salt: [16]u8
+  check: u64 = 0
+  for i in 0..50 {
+    salt[0] = #cast(u8, i)
+    _ = password.pbkdf2_sha256(derived[..], "correct-horse-battery", salt[..], 20000, scratch[..])
+    check += #cast(u64, derived[0])
+  }
+  io.println("{}", check)
+}

@@ -94,11 +94,12 @@ fn long_hash(destination: []u8, first: []const u8, second: []const u8) {
 // function. The words are those of a row (16 in a row) or a column (8 pairs,
 // 16 words apart).
 fn permute_row(r: []u64, base: usize) {
+  v := r[base..base + 16]
   {
-    x := r[base + 0]
-    y := r[base + 4]
-    z := r[base + 8]
-    w := r[base + 12]
+    x := v[0]
+    y := v[4]
+    z := v[8]
+    w := v[12]
     x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
     w ^= x
     w = (w >> 32) | (w << 32)
@@ -111,16 +112,16 @@ fn permute_row(r: []u64, base: usize) {
     z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
     y ^= z
     y = (y >> 63) | (y << 1)
-    r[base + 0] = x
-    r[base + 4] = y
-    r[base + 8] = z
-    r[base + 12] = w
+    v[0] = x
+    v[4] = y
+    v[8] = z
+    v[12] = w
   }
   {
-    x := r[base + 1]
-    y := r[base + 5]
-    z := r[base + 9]
-    w := r[base + 13]
+    x := v[1]
+    y := v[5]
+    z := v[9]
+    w := v[13]
     x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
     w ^= x
     w = (w >> 32) | (w << 32)
@@ -133,16 +134,16 @@ fn permute_row(r: []u64, base: usize) {
     z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
     y ^= z
     y = (y >> 63) | (y << 1)
-    r[base + 1] = x
-    r[base + 5] = y
-    r[base + 9] = z
-    r[base + 13] = w
+    v[1] = x
+    v[5] = y
+    v[9] = z
+    v[13] = w
   }
   {
-    x := r[base + 2]
-    y := r[base + 6]
-    z := r[base + 10]
-    w := r[base + 14]
+    x := v[2]
+    y := v[6]
+    z := v[10]
+    w := v[14]
     x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
     w ^= x
     w = (w >> 32) | (w << 32)
@@ -155,16 +156,16 @@ fn permute_row(r: []u64, base: usize) {
     z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
     y ^= z
     y = (y >> 63) | (y << 1)
-    r[base + 2] = x
-    r[base + 6] = y
-    r[base + 10] = z
-    r[base + 14] = w
+    v[2] = x
+    v[6] = y
+    v[10] = z
+    v[14] = w
   }
   {
-    x := r[base + 3]
-    y := r[base + 7]
-    z := r[base + 11]
-    w := r[base + 15]
+    x := v[3]
+    y := v[7]
+    z := v[11]
+    w := v[15]
     x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
     w ^= x
     w = (w >> 32) | (w << 32)
@@ -177,16 +178,16 @@ fn permute_row(r: []u64, base: usize) {
     z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
     y ^= z
     y = (y >> 63) | (y << 1)
-    r[base + 3] = x
-    r[base + 7] = y
-    r[base + 11] = z
-    r[base + 15] = w
+    v[3] = x
+    v[7] = y
+    v[11] = z
+    v[15] = w
   }
   {
-    x := r[base + 0]
-    y := r[base + 5]
-    z := r[base + 10]
-    w := r[base + 15]
+    x := v[0]
+    y := v[5]
+    z := v[10]
+    w := v[15]
     x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
     w ^= x
     w = (w >> 32) | (w << 32)
@@ -199,16 +200,16 @@ fn permute_row(r: []u64, base: usize) {
     z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
     y ^= z
     y = (y >> 63) | (y << 1)
-    r[base + 0] = x
-    r[base + 5] = y
-    r[base + 10] = z
-    r[base + 15] = w
+    v[0] = x
+    v[5] = y
+    v[10] = z
+    v[15] = w
   }
   {
-    x := r[base + 1]
-    y := r[base + 6]
-    z := r[base + 11]
-    w := r[base + 12]
+    x := v[1]
+    y := v[6]
+    z := v[11]
+    w := v[12]
     x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
     w ^= x
     w = (w >> 32) | (w << 32)
@@ -221,16 +222,16 @@ fn permute_row(r: []u64, base: usize) {
     z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
     y ^= z
     y = (y >> 63) | (y << 1)
-    r[base + 1] = x
-    r[base + 6] = y
-    r[base + 11] = z
-    r[base + 12] = w
+    v[1] = x
+    v[6] = y
+    v[11] = z
+    v[12] = w
   }
   {
-    x := r[base + 2]
-    y := r[base + 7]
-    z := r[base + 8]
-    w := r[base + 13]
+    x := v[2]
+    y := v[7]
+    z := v[8]
+    w := v[13]
     x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
     w ^= x
     w = (w >> 32) | (w << 32)
@@ -243,16 +244,16 @@ fn permute_row(r: []u64, base: usize) {
     z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
     y ^= z
     y = (y >> 63) | (y << 1)
-    r[base + 2] = x
-    r[base + 7] = y
-    r[base + 8] = z
-    r[base + 13] = w
+    v[2] = x
+    v[7] = y
+    v[8] = z
+    v[13] = w
   }
   {
-    x := r[base + 3]
-    y := r[base + 4]
-    z := r[base + 9]
-    w := r[base + 14]
+    x := v[3]
+    y := v[4]
+    z := v[9]
+    w := v[14]
     x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
     w ^= x
     w = (w >> 32) | (w << 32)
@@ -265,19 +266,20 @@ fn permute_row(r: []u64, base: usize) {
     z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
     y ^= z
     y = (y >> 63) | (y << 1)
-    r[base + 3] = x
-    r[base + 4] = y
-    r[base + 9] = z
-    r[base + 14] = w
+    v[3] = x
+    v[4] = y
+    v[9] = z
+    v[14] = w
   }
 }
 
 fn permute_column(r: []u64, base: usize) {
+  v := r[base..base + 114]
   {
-    x := r[base + 0]
-    y := r[base + 32]
-    z := r[base + 64]
-    w := r[base + 96]
+    x := v[0]
+    y := v[32]
+    z := v[64]
+    w := v[96]
     x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
     w ^= x
     w = (w >> 32) | (w << 32)
@@ -290,16 +292,16 @@ fn permute_column(r: []u64, base: usize) {
     z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
     y ^= z
     y = (y >> 63) | (y << 1)
-    r[base + 0] = x
-    r[base + 32] = y
-    r[base + 64] = z
-    r[base + 96] = w
+    v[0] = x
+    v[32] = y
+    v[64] = z
+    v[96] = w
   }
   {
-    x := r[base + 1]
-    y := r[base + 33]
-    z := r[base + 65]
-    w := r[base + 97]
+    x := v[1]
+    y := v[33]
+    z := v[65]
+    w := v[97]
     x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
     w ^= x
     w = (w >> 32) | (w << 32)
@@ -312,16 +314,16 @@ fn permute_column(r: []u64, base: usize) {
     z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
     y ^= z
     y = (y >> 63) | (y << 1)
-    r[base + 1] = x
-    r[base + 33] = y
-    r[base + 65] = z
-    r[base + 97] = w
+    v[1] = x
+    v[33] = y
+    v[65] = z
+    v[97] = w
   }
   {
-    x := r[base + 16]
-    y := r[base + 48]
-    z := r[base + 80]
-    w := r[base + 112]
+    x := v[16]
+    y := v[48]
+    z := v[80]
+    w := v[112]
     x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
     w ^= x
     w = (w >> 32) | (w << 32)
@@ -334,16 +336,16 @@ fn permute_column(r: []u64, base: usize) {
     z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
     y ^= z
     y = (y >> 63) | (y << 1)
-    r[base + 16] = x
-    r[base + 48] = y
-    r[base + 80] = z
-    r[base + 112] = w
+    v[16] = x
+    v[48] = y
+    v[80] = z
+    v[112] = w
   }
   {
-    x := r[base + 17]
-    y := r[base + 49]
-    z := r[base + 81]
-    w := r[base + 113]
+    x := v[17]
+    y := v[49]
+    z := v[81]
+    w := v[113]
     x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
     w ^= x
     w = (w >> 32) | (w << 32)
@@ -356,16 +358,16 @@ fn permute_column(r: []u64, base: usize) {
     z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
     y ^= z
     y = (y >> 63) | (y << 1)
-    r[base + 17] = x
-    r[base + 49] = y
-    r[base + 81] = z
-    r[base + 113] = w
+    v[17] = x
+    v[49] = y
+    v[81] = z
+    v[113] = w
   }
   {
-    x := r[base + 0]
-    y := r[base + 33]
-    z := r[base + 80]
-    w := r[base + 113]
+    x := v[0]
+    y := v[33]
+    z := v[80]
+    w := v[113]
     x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
     w ^= x
     w = (w >> 32) | (w << 32)
@@ -378,16 +380,16 @@ fn permute_column(r: []u64, base: usize) {
     z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
     y ^= z
     y = (y >> 63) | (y << 1)
-    r[base + 0] = x
-    r[base + 33] = y
-    r[base + 80] = z
-    r[base + 113] = w
+    v[0] = x
+    v[33] = y
+    v[80] = z
+    v[113] = w
   }
   {
-    x := r[base + 1]
-    y := r[base + 48]
-    z := r[base + 81]
-    w := r[base + 96]
+    x := v[1]
+    y := v[48]
+    z := v[81]
+    w := v[96]
     x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
     w ^= x
     w = (w >> 32) | (w << 32)
@@ -400,16 +402,16 @@ fn permute_column(r: []u64, base: usize) {
     z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
     y ^= z
     y = (y >> 63) | (y << 1)
-    r[base + 1] = x
-    r[base + 48] = y
-    r[base + 81] = z
-    r[base + 96] = w
+    v[1] = x
+    v[48] = y
+    v[81] = z
+    v[96] = w
   }
   {
-    x := r[base + 16]
-    y := r[base + 49]
-    z := r[base + 64]
-    w := r[base + 97]
+    x := v[16]
+    y := v[49]
+    z := v[64]
+    w := v[97]
     x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
     w ^= x
     w = (w >> 32) | (w << 32)
@@ -422,16 +424,16 @@ fn permute_column(r: []u64, base: usize) {
     z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
     y ^= z
     y = (y >> 63) | (y << 1)
-    r[base + 16] = x
-    r[base + 49] = y
-    r[base + 64] = z
-    r[base + 97] = w
+    v[16] = x
+    v[49] = y
+    v[64] = z
+    v[97] = w
   }
   {
-    x := r[base + 17]
-    y := r[base + 32]
-    z := r[base + 65]
-    w := r[base + 112]
+    x := v[17]
+    y := v[32]
+    z := v[65]
+    w := v[112]
     x = x + y + 2 * (x & 0xffffffff) * (y & 0xffffffff)
     w ^= x
     w = (w >> 32) | (w << 32)
@@ -444,10 +446,10 @@ fn permute_column(r: []u64, base: usize) {
     z = z + w + 2 * (z & 0xffffffff) * (w & 0xffffffff)
     y ^= z
     y = (y >> 63) | (y << 1)
-    r[base + 17] = x
-    r[base + 32] = y
-    r[base + 65] = z
-    r[base + 112] = w
+    v[17] = x
+    v[32] = y
+    v[65] = z
+    v[112] = w
   }
 }
 
