@@ -893,15 +893,15 @@ module's full declarations and comments.
 
 - `struct Face { data: []const u8, cmap: []const u8, glyf: []const u8, loca: []const u8, hmtx: []const u8, units_per_em: u16, glyphs: u16, metrics: u16, long_loca: bool, ascent: i16, descent: i16, line_gap: i16, kern: []const u8, }`: A face borrows immutable font bytes.
 - `struct FaceResult { value: Face, offset: usize, failure: parse.Failure }`
-- `struct Bitmap { pixels: []u8, width: i32, height: i32, x_offset: i32, y_offset: i32, advance: i32 }`
+- `struct Bitmap { pixels: []u8, width: usize, height: usize, x_offset: i32, y_offset: i32, advance: i32 }`
 - `struct BitmapResult { value: Bitmap, offset: usize, failure: parse.Failure }`
 - `fn open(data: []const u8) FaceResult`
 - `fn glyph_index(face: *const Face, codepoint: u32) u16`: Zero is the font's missing-glyph slot.
 - `fn raster(arena: *mem.Arena, face: *const Face, index: u16, pixels_per_em: u16) BitmapResult`: Unhinted 4x4 supersampling for simple and composite glyf outlines.
-- `struct AtlasGlyph { codepoint: u32, x: i32, y: i32, width: i32, height: i32, x_offset: i32, y_offset: i32, advance: i32 }`
-- `struct Atlas { pixels: []u8, width: i32, height: i32, line_height: i32, glyphs: []AtlasGlyph }`: Glyphs are sorted by codepoint.
+- `struct AtlasGlyph { codepoint: u32, x: usize, y: usize, width: usize, height: usize, x_offset: i32, y_offset: i32, advance: i32 }`
+- `struct Atlas { pixels: []u8, width: usize, height: usize, line_height: i32, glyphs: []AtlasGlyph }`: Glyphs are sorted by codepoint.
 - `struct AtlasResult { value: Atlas, offset: usize, failure: parse.Failure }`
-- `fn atlas(arena: *mem.Arena, face: *const Face, codepoints: []const u32, pixels_per_em: u16, width, height: i32) AtlasResult`: Shelf packing with one transparent padding pixel.
+- `fn atlas(arena: *mem.Arena, face: *const Face, codepoints: []const u32, pixels_per_em: u16, width, height: usize) AtlasResult`: Shelf packing with one transparent padding pixel.
 - `nil_glyph: AtlasGlyph`
 - `fn atlas_glyph(value: *const Atlas, codepoint: u32) *const AtlasGlyph`
 - `fn kerning(face: *const Face, left, right: u16, pixels_per_em: u16) f64`: Pixel adjustment added between left and right glyphs.
@@ -1074,19 +1074,19 @@ module's full declarations and comments.
 ## std/image
 
 - `enum Format { Unknown, Gray8, GrayAlpha8, Rgb8, Rgba8 }`
-- `struct View { pixels: []u8, width: u32, height: u32, stride: usize, format: Format, }`
+- `struct View { pixels: []u8, width: usize, height: usize, stride: usize, format: Format, }`
 - `fn bytes_per_pixel(format: Format) usize`
-- `fn view(pixels: []u8, width: u32, height: u32, stride: usize, format: Format) View`
+- `fn view(pixels: []u8, width: usize, height: usize, stride: usize, format: Format) View`
 - `fn row(source: *View, y: u32) []u8`
 
 ## std/image/bmp
 
-- `struct Info { width: u32, height: u32, channels: u8 }`: Windows DIB headers, uncompressed indexed/BGR and contiguous bitfields.
+- `struct Info { width: usize, height: usize, channels: u8 }`: Windows DIB headers, uncompressed indexed/BGR and contiguous bitfields.
 - `struct Image { info: Info, pixels: []u8 }`
 - `struct Result { value: Image, offset: usize, failure: parse.Failure }`
 - `type EncodeResult = parse.Bytes`
 - `fn decode(arena: *mem.Arena, source: []const u8) Result`: Ownership: pixels borrow arena backing;
-- `fn encode(arena: *mem.Arena, pixels: []const u8, width, height: u32, channels: u8) EncodeResult`: RGB is written as a 24-bit Windows DIB.
+- `fn encode(arena: *mem.Arena, pixels: []const u8, width, height: usize, channels: u8) EncodeResult`: RGB is written as a 24-bit Windows DIB.
 
 ## std/image/color
 
@@ -1097,57 +1097,57 @@ module's full declarations and comments.
 
 ## std/image/gif
 
-- `struct Info { width: u32, height: u32, channels: u8 }`: Decodes the first composited GIF87a/89a image, including interlace and transparency.
+- `struct Info { width: usize, height: usize, channels: u8 }`: Decodes the first composited GIF87a/89a image, including interlace and transparency.
 - `struct Image { info: Info, pixels: []u8 }`
 - `struct Result { value: Image, consumed: usize, offset: usize, failure: parse.Failure }`
 - `fn decode(arena: *mem.Arena, source: []const u8) Result`: Ownership: pixels borrow arena backing;
 
 ## std/image/jpeg
 
-- `struct Info { width: u32, height: u32, channels: u8 }`: ITU-T T.81 baseline sequential Huffman JPEG, 8-bit gray/RGB/YCbCr.
+- `struct Info { width: usize, height: usize, channels: u8 }`: ITU-T T.81 baseline sequential Huffman JPEG, 8-bit gray/RGB/YCbCr.
 - `struct Image { info: Info, pixels: []u8 }`
 - `struct Result { value: Image, offset: usize, failure: parse.Failure }`
 - `fn decode(arena: *mem.Arena, source: []const u8) Result`: Ownership: pixels borrow arena backing;
 
 ## std/image/png
 
-- `struct Info { width: u32, height: u32, channels: u8, valid: bool }`
+- `struct Info { width: usize, height: usize, channels: u8, valid: bool }`
 - `struct Image { info: Info, pixels: []u8 }`: Result.ok / InfoResult.ok are authoritative.
 - `struct Result { value: Image, offset: usize, failure: parse.Failure }`
 - `struct InfoResult { value: Info, offset: usize, failure: parse.Failure }`
 - `struct EncodeResult { value: []u8, offset: usize, failure: parse.Failure }`
 - `fn inspect(source: []const u8) InfoResult`
 - `fn decode(arena: *mem.Arena, source: []const u8) Result`
-- `fn encode(arena: *mem.Arena, pixels: []const u8, width: u32, height: u32, channels: u8) EncodeResult`
+- `fn encode(arena: *mem.Arena, pixels: []const u8, width: usize, height: usize, channels: u8) EncodeResult`
 
 ## std/image/pnm
 
-- `struct Info { width: u32, height: u32, channels: u8 }`: consumed permits concatenated raw images.
+- `struct Info { width: usize, height: usize, channels: u8 }`: consumed permits concatenated raw images.
 - `struct Image { info: Info, pixels: []u8 }`
 - `struct Result { value: Image, consumed: usize, offset: usize, failure: parse.Failure }`
 - `type EncodeResult = parse.Bytes`
 - `fn decode(arena: *mem.Arena, source: []const u8) Result`
-- `fn encode(arena: *mem.Arena, pixels: []const u8, width: u32, height: u32, channels: u8) EncodeResult`: Emit binary P5 (one channel) or P6 (three channels) with Maxval 255.
+- `fn encode(arena: *mem.Arena, pixels: []const u8, width: usize, height: usize, channels: u8) EncodeResult`: Emit binary P5 (one channel) or P6 (three channels) with Maxval 255.
 
 ## std/image/qoi
 
-- `struct Info { width: u32, height: u32, channels: u8, srgb: bool, valid: bool }`
+- `struct Info { width: usize, height: usize, channels: u8, srgb: bool, valid: bool }`
 - `struct Image { info: Info, pixels: []u8 }`: Result.ok / InfoResult.ok are authoritative.
 - `struct Result { value: Image, offset: usize, failure: parse.Failure }`
 - `struct InfoResult { value: Info, offset: usize, failure: parse.Failure }`
 - `struct EncodeResult { value: []u8, offset: usize, failure: parse.Failure }`
 - `fn inspect(source: []const u8) InfoResult`
 - `fn decode(arena: *mem.Arena, source: []const u8) Result`
-- `fn encode(arena: *mem.Arena, pixels: []const u8, width: u32, height: u32, channels: u8, srgb: bool) EncodeResult`
+- `fn encode(arena: *mem.Arena, pixels: []const u8, width: usize, height: usize, channels: u8, srgb: bool) EncodeResult`
 
 ## std/image/tga
 
-- `struct Info { width: u32, height: u32, channels: u8 }`: True-color and gray TGA, including RLE and all origin directions.
+- `struct Info { width: usize, height: usize, channels: u8 }`: True-color and gray TGA, including RLE and all origin directions.
 - `struct Image { info: Info, pixels: []u8 }`
 - `struct Result { value: Image, offset: usize, failure: parse.Failure }`
 - `type EncodeResult = parse.Bytes`
 - `fn decode(arena: *mem.Arena, source: []const u8) Result`: Ownership: pixels borrow arena backing;
-- `fn encode(arena: *mem.Arena, pixels: []const u8, width, height: u32, channels: u8) EncodeResult`: Ownership: encoded bytes borrow arena backing;
+- `fn encode(arena: *mem.Arena, pixels: []const u8, width, height: usize, channels: u8) EncodeResult`: Ownership: encoded bytes borrow arena backing;
 
 ## std/io
 

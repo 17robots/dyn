@@ -14,6 +14,37 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+Language (2026-11-16 cleanup; see `docs/guide/rules.md`):
+
+- Loops have no labels: `name: for`, `break: name` and `continue: name` are
+  errors. Set a flag and break again, or move the inner loop into a function.
+- `for *const value` is gone: `for *value` over a const slice already binds a
+  `*const` pointer.
+- `#offset` is gone: index a pointer range with `#slice(pointer, count)[i]`.
+- An integer or text `case` always needs a `_` arm; covering every value with
+  ranges no longer counts as exhaustive.
+- A panic, or a failed run-time check, no longer runs defers. It runs the
+  `panic.set_handler` handler, prints the message and trace, and exits with
+  status 101. Move cleanup that must happen at a crash, such as restoring a
+  terminal, into the handler.
+- Arithmetic is target-typed: `total: u64 = a_u32 * b_u32` multiplies in
+  `u64`. Write the narrow type where wrapping is meant
+  (`hashed: u32 = value * 2654435761`).
+- Signed and unsigned integers compare by value: `-1 < len` is true for a
+  `usize` len, and `i64` against `u64` needs no cast.
+- An unsigned `x % M` with a constant `M` narrows without `#cast`.
+- `for i in #step(first..last, n)` visits every n-th value;
+  `#reverse(#step(...))` goes from the last.
+- A generic `$T` bound to `u32` by one argument and `u64` by another is `u64`.
+
+Standard library:
+
+- `panic.assert(condition, message)` checks a condition in every build.
+- Image `width` and `height` (`image.View`, every encoder) and font sizes
+  (`font.Bitmap`, `font.Atlas`, `font.AtlasGlyph`, `font.atlas`) are `usize`.
+- Stack traces and runtime check failures name functions without the module
+  prefix.
+
 Servers:
 
 - One server and one router. `std/net/http/concurrent` (the blocking worker

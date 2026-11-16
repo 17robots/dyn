@@ -2,8 +2,8 @@ pub enum Format { Unknown, Gray8, GrayAlpha8, Rgb8, Rgba8 }
 
 pub struct View {
   pixels: []u8,
-  width: u32,
-  height: u32,
+  width: usize,
+  height: usize,
   stride: usize,
   format: Format,
 }
@@ -16,7 +16,7 @@ pub fn bytes_per_pixel(format: Format) usize {
   return 0
 }
 
-pub fn view(pixels: []u8, width: u32, height: u32, stride: usize, format: Format) View {
+pub fn view(pixels: []u8, width: usize, height: usize, stride: usize, format: Format) View {
   pixel_size := bytes_per_pixel(format)
   row_size := width * pixel_size
   if pixel_size == 0 || stride < row_size || height > #len(pixels) / stride { return View{} }

@@ -3,7 +3,7 @@ use "std/mem" mem
 use "std/encoding/binary" binary
 // True-color and gray TGA, including RLE and all origin directions. Color-map
 // images, 15/16-bit true color, and interleaving return Unsupported.
-pub struct Info { width: u32, height: u32, channels: u8 }
+pub struct Info { width: usize, height: usize, channels: u8 }
 pub struct Image { info: Info, pixels: []u8 }
 pub struct Result { value: Image, offset: usize, failure: parse.Failure }
 pub type EncodeResult = parse.Bytes
@@ -110,7 +110,7 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Result {
 }
 // Ownership: encoded bytes borrow arena backing; pixels are not retained.
 // Inputs must not borrow unused backing of the output arena.
-pub fn encode(arena: *mem.Arena, pixels: []const u8, width, height: u32, channels: u8) EncodeResult {
+pub fn encode(arena: *mem.Arena, pixels: []const u8, width, height: usize, channels: u8) EncodeResult {
   if width == 0 || height == 0 || width > 65535 || height > 65535 || (channels != 1 && channels != 2 && channels != 3 && channels != 4) {
     return EncodeResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
