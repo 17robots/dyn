@@ -270,22 +270,6 @@ static void a64s_symbol(SsaEmit *e, unsigned d, SsaValue *v) {
     relocate(ctx, (unsigned)v->aux, R_AARCH64_ADD_ABS_LO12_NC, v->c); a64_word(ctx, 0x91000000u | d << 5 | d);
   }
 }
-static void a64s_frame_argument(SsaEmit *e, uint32_t offset) { a64s_add_immediate(e->ctx, 0, A64_FP, (int32_t)offset); }
-static void a64s_protect_begin(SsaEmit *e, SsaBlock *block) {
-  BackendContext *ctx = e->ctx;
-  a64s_frame_argument(e, e->s->unwind_offset); runtime_call(ctx, 3);
-  a64_word(ctx, 0x7100001fu); /* cmp w0, #0 */
-  ssa_jump_to(e, CC_NE, block->succ[1]);
-  a64s_frame_argument(e, e->s->unwind_offset); runtime_call(ctx, 4);
-}
-static void a64s_protect_end(SsaEmit *e) {
-  BackendContext *ctx = e->ctx;
-  int32_t at = (int32_t)e->s->results_offset;
-  static const unsigned char saved[] = {0, 1, X_XMM0, X_XMM0 + 1, X_XMM0 + 2, X_XMM0 + 3};
-  for (unsigned i = 0; i < 6; ++i) a64s_slot_access(ctx, true, saved[i], (SsaMemory){A64_FP, -1, 1, at + 8 * (int32_t)i});
-  a64s_frame_argument(e, e->s->unwind_offset); runtime_call(ctx, 5);
-  for (unsigned i = 0; i < 6; ++i) a64s_slot_access(ctx, false, saved[i], (SsaMemory){A64_FP, -1, 1, at + 8 * (int32_t)i});
-}
 /* A stack argument: `width` bytes of the value at SP + offset. */
 static void a64s_store_outgoing(SsaEmit *e, int32_t value, uint32_t offset, unsigned width) {
   SsaValue *v = &e->s->values[value];
@@ -879,17 +863,11 @@ static void a64s_emit_value(SsaEmit *e, SsaBlock *block, uint32_t *k) {
   case SO_TRAP: isa_trap(ctx); return;
   case SO_COPYMEM: a64s_copy_memory(e, v); return;
   case SO_ZEROMEM: a64s_zero_memory(e, v); return;
-  case SO_CALL:
-    if (v->cond) { a64s_protect_begin(e, block); ssa_call_emit(e, block, k); a64s_protect_end(e); }
-    else ssa_call_emit(e, block, k);
-    return;
-  case SO_FAIL: ssa_fail_after_cleanup(e, v); return;
-  case SO_CONTINUE: runtime_call(ctx, 6); isa_trap(ctx); return;
+  case SO_CALL: ssa_call_emit(e, block, k); return;
   case SO_PANIC: {
     SsaMove moves[2] = {ssa_source(e, v->a), ssa_source(e, v->b)};
     moves[0].dst_kind = moves[1].dst_kind = L_REG; moves[0].dst = 0; moves[1].dst = 1;
     moves[0].cls = moves[1].cls = SC_INT;
-    if (v->cond) a64s_protect_begin(e, block);
     ssa_parallel(e, moves, 2);
     runtime_call(ctx, 0);
     isa_trap(ctx);

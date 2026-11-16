@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Panic messages survive local cleanup and caller-frame unwinding."""
+"""A panic prints its message, from an arena or the stack, whole; defers do not run."""
 import os
 from pathlib import Path
 import subprocess
@@ -68,17 +68,15 @@ with tempfile.TemporaryDirectory(prefix='dyn-panic-lifetime-') as temporary:
             assert built.returncode == 0, built.stderr
             result = subprocess.run([str(output)], capture_output=True, text=True, encoding='utf-8', timeout=5)
             assert result.returncode == 101, (name, mode, result.returncode, result.stderr)
-            if name != 'direct':
-                assert 'cleanup' in result.stdout, (name, mode, result.stdout)
+            assert 'cleanup' not in result.stdout, (name, mode, result.stdout)
             if name == 'bounds':
                 assert 'runtime check failed (index.ok) in checked' in result.stderr, result.stderr
             elif name == 'bounded':
                 first = result.stderr.splitlines()[0]
-                assert len(first) == 4096 and first.endswith(' [truncated]'), (name, mode, len(first))
+                assert first == 'x' * 6000, (name, mode, len(first))
             elif name == 'unicode-bound':
                 first = result.stderr.splitlines()[0]
-                assert first.startswith('x🙂') and first.endswith(' [truncated]')
-                assert len(first.encode()) <= 4096
+                assert first == 'x' + '🙂' * 1100, (name, mode, len(first))
             else:
                 assert 'owned panic message' in result.stderr, (name, mode, result.stderr)
-print('PASS panic message ownership across local/caller cleanup, debug/release')
+print('PASS panic messages print whole and skip defers, debug/release')

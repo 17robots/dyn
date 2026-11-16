@@ -402,15 +402,14 @@ function.
 
 `defer` runs at enclosing-block exit in LIFO order. Direct-call arguments evaluate at defer
 site. Deferred blocks observe captured storage at execution. Deferred statements exclude
-`return`, `break`, `continue`, declarations, and nested `defer`. Double panic aborts cleanup.
+`return`, `break`, `continue`, declarations, and nested `defer`.
 
-Panic runs active defers through caller frames. Cleanup uses fixed stack records and performs no
-allocation. A panic raised by a defer aborts remaining cleanup. There is no recovery mechanism:
-a panic is a bug, and expected failures are values. `std/panic` installs one process handler,
-`panic.set_handler(report)`, that runs once after cleanups and before the panic reports and exits,
-for logging, crash reports or flushing; it cannot resume the program. A panic that
-crosses foreign frames runs Dyn defers but skips cleanup in the C frames between them; see
-[FFI](ffi.md).
+A panic does not run defers. It runs the handler that `std/panic` installs with
+`panic.set_handler(report)`, prints the message and a stack trace, and exits with status 101. The
+handler runs once, for work the operating system will not do at exit, such as restoring a
+terminal's mode, logging or flushing a crash report; it cannot resume the program. The operating
+system frees memory and closes files when the process ends. There is no recovery mechanism: a
+panic is a bug, and expected failures are values.
 
 ## Numeric rules
 

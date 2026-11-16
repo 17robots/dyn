@@ -253,7 +253,8 @@ fn main() {{ calculate(-128,-1) }}
                 result = run([compiler, 'build', project, *flags, '--quiet', '--no-cache', '--output', binary])
                 assert result.returncode == 0, result.stderr
                 result = run([binary])
-                expected_stdout = {6: 'before\nbetween 128\ncleanup\n', 7: 'before\nbetween 0\ncleanup\n'}.get(index, 'before\ncleanup\n')
+                # The failing operation stops the program; defers do not run.
+                expected_stdout = {6: 'before\nbetween 128\n', 7: 'before\nbetween 0\n'}.get(index, 'before\n')
                 assert result.returncode != 0 and result.stdout == expected_stdout, result
                 detail = re.search(r'(?:divide|division)[a-zA-Z0-9_.]*', result.stderr)
                 expected_kind = 'division.overflow.ok' if index in [3, 5, 6, 7] else 'divide.ok'
@@ -261,4 +262,4 @@ fn main() {{ calculate(-128,-1) }}
                 observed = result.stdout, detail[0]
                 if expected is None: expected = observed
                 assert observed == expected, (observed, expected)
-print(f'PASS runtime div/rem: {sum(map(len,cases.values()))*2} oracle pairs per mode, signed/unsigned widths, calls/live values, aliasing, dominance, loops, assembly counts and exact panic/defer order (debug/O1/O2/O3/tree)')
+print(f'PASS runtime div/rem: {sum(map(len,cases.values()))*2} oracle pairs per mode, signed/unsigned widths, calls/live values, aliasing, dominance, loops, assembly counts and exact panic order (debug/O1/O2/O3/tree)')

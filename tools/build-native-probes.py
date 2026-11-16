@@ -53,7 +53,8 @@ for name, target in [('windows','x86_64-windows'), ('macos','aarch64-macos'), ('
             rows.append({'path':str(artifact.relative_to(OUT)), 'mode':mode,
                          'sha256':hashlib.sha256(artifact.read_bytes()).hexdigest()})
     manifest['targets'][name] = rows
-# New ports run the same thread/atomic/remainder and panic-cleanup contracts.
+# New ports run the same thread/atomic/remainder and panic contracts. A panic
+# runs no defers, so the panic probe prints nothing to stdout.
 contracts = {}
 for node in ast.parse((ROOT/'tests/cross-runtime.py').read_text()).body:
     if isinstance(node, ast.Assign) and len(node.targets)==1 and isinstance(node.targets[0],ast.Name) and node.targets[0].id in ('SOURCE','PANIC'):
@@ -77,7 +78,7 @@ for name,target in [('windows-arm64','aarch64-windows'),('macos-x64','x86_64-mac
             if selected: require_ssa(result, ['many','floats','big','retained','main'] if key=='SSA' else ['main'])
             rows.append(dict(path=str(output.relative_to(OUT)),mode=mode,sha256=hashlib.sha256(output.read_bytes()).hexdigest(),
                              expected_returncode=101 if key=='PANIC' else 0,
-                             expected_stdout='inner cleanup\nouter cleanup\n' if key=='PANIC' else 'Windows ARM64 SSA ready\n' if key=='SSA' else 'cross runtime ready\n'))
+                             expected_stdout='' if key=='PANIC' else 'Windows ARM64 SSA ready\n' if key=='SSA' else 'cross runtime ready\n'))
         project=OUT/'sources'/name/mode/'shared';project.mkdir(parents=True)
         (project/'main.dyn').write_text('pub fn calculate(value:f64) f64 { return value % 2.0 }\n')
         output=destination/('shared.dll' if 'windows' in name else 'shared.dylib')

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Execute Wasm arithmetic, aliasing, evaluation-order and cleanup regressions."""
+"""Execute Wasm arithmetic, aliasing, evaluation-order and cleanup regressions; a failed check traps without running defers."""
 import os
 from pathlib import Path
 import subprocess
@@ -59,7 +59,7 @@ const bytes = require('node:fs').readFileSync(process.argv[1]);
   }
   const cleanup = await fresh();
   assert.throws(()=>cleanup.cleanup(0), WebAssembly.RuntimeError);
-  assert.deepEqual(notes,[7]);
+  assert.deepEqual(notes,[]);
 })().catch(e=>{console.error(e);process.exit(1)});
 '''
 # Release executable pruning retains function IDs, but the inliner rebuilds

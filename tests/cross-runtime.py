@@ -188,7 +188,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-cross-runtime-') as temporary:
                         result = subprocess.run([*runner, str(output)], text=True, capture_output=True, timeout=20)
                         assert result.returncode == (101 if name == 'panic' else 0), (target, mode, name, result)
                         if name == 'panic':
-                            assert result.stdout.splitlines() == ['inner cleanup', 'outer cleanup'], result
+                            assert result.stdout == '', result
                             assert 'cross runtime panic' in result.stderr, result
                         else:
                             assert result.stdout == 'cross runtime ready\n', result

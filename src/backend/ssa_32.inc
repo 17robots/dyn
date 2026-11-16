@@ -150,21 +150,6 @@ static bool ssa32_remainder(Ssa *s, SsaValue *v) {
   return a[1] == 8 && !a[2] && a[4] == 9 && !a[5] &&
          ssa32_operand(s, a[0], cls) && ssa32_operand(s, a[3], cls);
 }
-/* A protected call owns the initial capture group of its normal successor. */
-static int32_t ssa32_preceding_call(Ssa *s, uint32_t block, bool live) {
-  SsaBlock *b = &s->blocks[block];
-  if (b->preds.count != 1 || b->preds.items[0] >= s->block_count) return -1;
-  SsaBlock *p = &s->blocks[b->preds.items[0]];
-  if (p->kind != SB_CALL || p->succ[0] != block) return -1;
-  for (uint32_t k = p->values.count; k; --k) {
-    uint32_t id = p->values.items[k - 1];
-    if (id >= s->value_count) return -1;
-    SsaValue *v = &s->values[id];
-    if (live && v->dead) continue;
-    return v->op == SO_CALL && v->cond == 1 ? (int32_t)id : -1;
-  }
-  return -1;
-}
 /* Check both constructed and live graphs before any instruction is emitted. */
 static bool ssa32_boundary(Ssa *s, bool live) {
   if (!ssa32_signature(s) || s->frame > MAX_AGGREGATE) return false;
@@ -175,24 +160,16 @@ static bool ssa32_boundary(Ssa *s, bool live) {
     if (!r->size || start >= 0 || start < -(int64_t)s->frame || start + r->size > end) return false;
     end = start;
   }
-  if (!!s->unwind_offset != !!s->results_offset) return false;
-  if (s->unwind_offset) {
-    uint32_t offsets[2] = {s->unwind_offset, s->results_offset}, sizes[2] = {224, 64};
-    for (unsigned j = 0; j < 2; ++j) {
-      int32_t r = ssa_region(s, (int32_t)offsets[j]);
-      if ((offsets[j] & 15) || r < 0 || s->regions[r].offset != offsets[j] || s->regions[r].size != sizes[j]) return false;
-    }
-  }
   AbiPart incoming[512]; unsigned incoming_count;
   if (!ssa32_incoming(s, incoming, &incoming_count)) return false;
   for (uint32_t i = 0; i < s->block_count; ++i) {
     SsaBlock *b = &s->blocks[i];
     if (live && !b->reachable) continue;
-    if (b->kind != SB_PLAIN && b->kind != SB_IF && b->kind != SB_RETURN && b->kind != SB_EXIT && b->kind != SB_CALL) return false;
+    if (b->kind != SB_PLAIN && b->kind != SB_IF && b->kind != SB_RETURN && b->kind != SB_EXIT) return false;
     /* All-return case arms leave an unused, empty join in the constructed graph. */
     if (!live && i && b->kind == SB_PLAIN && !b->preds.count && !b->values.count &&
         b->succ[0] == UINT32_MAX && b->succ[1] == UINT32_MAX) continue;
-    unsigned edges = b->kind == SB_IF || b->kind == SB_CALL ? 2 : b->kind == SB_PLAIN ? 1 : 0;
+    unsigned edges = b->kind == SB_IF ? 2 : b->kind == SB_PLAIN ? 1 : 0;
     for (unsigned j = 0; j < edges; ++j) {
       if (b->succ[j] >= s->block_count) return false;
       SsaBlock *to = &s->blocks[b->succ[j]];
@@ -201,8 +178,6 @@ static bool ssa32_boundary(Ssa *s, bool live) {
       if (matches != 1 || (live && !to->reachable)) return false;
     }
     if (b->kind == SB_IF && !ssa32_operand(s, b->control, SC_INT)) return false;
-    if (b->kind == SB_CALL && (!s->unwind_offset || b->succ[0] == b->succ[1] ||
-        b->control != -1 || b->control2 != -1 || b->control3 != -1 || b->control4 != -1)) return false;
     if (b->kind == SB_RETURN && aggregate(s->ir, s->f->return_type) &&
         !abi_memory(s->ctx, s->ir, s->f->return_type)) {
       SsaPart parts[4]; unsigned count;
@@ -224,23 +199,18 @@ static bool ssa32_boundary(Ssa *s, bool live) {
   for (uint32_t i = 0; i < s->block_count; ++i) {
     SsaBlock *b = &s->blocks[i];
     if (live && !b->reachable) continue;
-    int32_t call = ssa32_preceding_call(s, i, live); unsigned seen = 0;
-    bool protected_call = false;
+    int32_t call = -1; unsigned seen = 0;
     bool terminal = false;
     for (uint32_t k = 0; k < b->values.count; ++k) {
       uint32_t id = b->values.items[k];
       if (id >= s->value_count || s->values[id].block != i) return false;
       SsaValue *v = &s->values[id];
       if (live && v->dead) continue;
-      if (terminal || protected_call) return false;
+      if (terminal) return false;
       if (v->op == SO_PHI && seen) return false;
       if (v->op == SO_PHI && call >= 0 && s->values[call].block == i) call = -1;
-      if ((v->op == SO_CALL || v->op == SO_PANIC) && v->cond) {
-        if (v->cond != 1 || !v->effect || b->kind != SB_CALL) return false;
-        protected_call = true;
-      }
-      if (v->op == SO_TRAP || v->op == SO_FAIL || v->op == SO_CONTINUE ||
-          (v->op == SO_PANIC && !v->cond)) terminal = true;
+      if ((v->op == SO_CALL || v->op == SO_PANIC) && v->cond) return false;
+      if (v->op == SO_TRAP || v->op == SO_PANIC) terminal = true;
       if (v->op == SO_RESULT) {
         if (v->a != call || call < 0) return false;
         unsigned bit = v->aux == 0 ? 1 : v->aux == 1 ? 2 : v->aux >= X_XMM0 && v->aux < X_XMM0 + 4 ? 4u << (v->aux - X_XMM0) : 0;
@@ -248,8 +218,8 @@ static bool ssa32_boundary(Ssa *s, bool live) {
         seen |= bit;
       } else if (v->op != SO_PHI) { call = v->op == SO_CALL ? (int32_t)id : -1; seen = 0; }
     }
-    /* Terminal effects end exits; protected effects end two-edge call blocks. */
-    if (terminal != (b->kind == SB_EXIT) || protected_call != (b->kind == SB_CALL)) return false;
+    /* Terminal effects end exits. */
+    if (terminal != (b->kind == SB_EXIT)) return false;
     if (terminal && (b->control != -1 || b->control2 != -1 ||
                      b->control3 != -1 || b->control4 != -1 ||
                      b->succ[0] != UINT32_MAX || b->succ[1] != UINT32_MAX)) return false;
@@ -299,8 +269,7 @@ static bool ssa32_boundary(Ssa *s, bool live) {
     case SO_RESULT: {
       if (v->cond || v->b != -1 || v->c != -1 ||
           v->a < 0 || (uint32_t)v->a >= s->value_count || s->values[v->a].op != SO_CALL ||
-          (s->values[v->a].cond ? ssa32_preceding_call(s, v->block, live) != v->a :
-                                s->values[v->a].block != v->block)) return false;
+          s->values[v->a].block != v->block) return false;
       SsaValue *call = &s->values[v->a];
       if (call->aux2 == 1) {
         if (!ssa32_remainder(s, call) || v->aux2 || v->aux != X_XMM0 ||
@@ -406,17 +375,11 @@ static bool ssa32_boundary(Ssa *s, bool live) {
       if (v->aux || v->aux2 > 1 || v->cond) return false;
       break;
     case SO_ADDO: case SO_SUBO: case SO_MULO: case SO_DIV: case SO_REM: break;
-    case SO_FAIL: case SO_CONTINUE:
-      if (s->blocks[v->block].kind != SB_EXIT || !v->effect || v->cls != SC_NONE ||
-          v->a != -1 || v->b != -1 || v->c != -1 || v->aux2 || v->cond || v->count || v->list ||
-          v->abi_expr || v->abi_groups || v->abi_group_count ||
-          (v->op == SO_CONTINUE ? v->aux != 0 : (v->aux < 0 || v->aux >= GUARD_COUNT))) return false;
-      break;
     case SO_PANIC:
-      if (s->blocks[v->block].kind != (v->cond ? SB_CALL : SB_EXIT) || !v->effect ||
+      if (s->blocks[v->block].kind != SB_EXIT || !v->effect ||
           v->cls != SC_NONE || !ssa32_operand(s, v->a, SC_INT) ||
           !ssa32_operand(s, v->b, SC_INT) || v->c != -1 || v->scale != 1 ||
-          v->aux || v->aux2 || v->cond > 1 || v->count || v->list ||
+          v->aux || v->aux2 || v->cond || v->count || v->list ||
           v->abi_expr || v->abi_groups || v->abi_group_count) return false;
       break;
     case SO_TRAP:
@@ -617,14 +580,6 @@ static void ssa32_value(Ssa *s, uint32_t id) {
     ssa32_get(s, v->a, isa_argument(ctx, 0));
     runtime_call(ctx, 0);
     isa_trap(ctx); return;
-  case SO_FAIL: {
-    const char *name = function_name(s->f);
-    size_t length = strlen(name);
-    if (length > 800) length = 800;
-    isa_string_arguments(ctx, literal(ctx, name, length), (size_t)v->aux << 24 | length);
-    runtime_call(ctx, RUNTIME_CHECK_FAILED); isa_trap(ctx); return;
-  }
-  case SO_CONTINUE: runtime_call(ctx, 6); isa_trap(ctx); return;
   case SO_TRAP: isa_trap(ctx); return;
   case SO_MULOK32:
     ssa32_get(s, v->a, R_A); ssa32_get(s, v->b, R_C);
@@ -727,14 +682,14 @@ static int ssa32_function(Ssa *s, const uint32_t *order, uint32_t n) {
     if (b->control2 >= 0 && ((uint32_t)b->control2 >= s->value_count || s->values[b->control2].slot < 0)) return SSA_UNSUPPORTED;
     if (b->control3 >= 0 && ((uint32_t)b->control3 >= s->value_count || s->values[b->control3].slot < 0)) return SSA_UNSUPPORTED;
     if (b->control4 >= 0 && ((uint32_t)b->control4 >= s->value_count || s->values[b->control4].slot < 0)) return SSA_UNSUPPORTED;
-    unsigned edges = b->kind == SB_IF || b->kind == SB_CALL ? 2 : b->kind == SB_PLAIN ? 1 : 0;
+    unsigned edges = b->kind == SB_IF ? 2 : b->kind == SB_PLAIN ? 1 : 0;
     for (unsigned j = 0; j < edges; ++j) {
       if (b->succ[j] >= s->block_count) return SSA_UNSUPPORTED;
       SsaBlock *to = &s->blocks[b->succ[j]]; unsigned p = 0;
       while (p < to->preds.count && to->preds.items[p] != order[i]) ++p;
       if (p == to->preds.count || !to->reachable) return SSA_UNSUPPORTED;
     }
-    int32_t previous = ssa32_preceding_call(s, order[i], true);
+    int32_t previous = -1;
     for (uint32_t k = 0; k < b->values.count; ++k) {
       uint32_t id = b->values.items[k]; SsaValue *v = &s->values[id];
       if (v->dead) continue;
@@ -762,7 +717,7 @@ static int ssa32_function(Ssa *s, const uint32_t *order, uint32_t n) {
   ctx->stack_slots = ctx->loop_depth = 0;
   ctx->allocator_used = ctx->allocator_local_count = 0;
   /* Guard state belongs to this function, never the preceding tree/SSA one. */
-  ctx->defer_count = ctx->cleanup_depth = ctx->unwind_offset = 0;
+  ctx->defer_count = ctx->cleanup_depth = 0;
   ctx->unwinding = ctx->holding = false;
   for (unsigned i = 0; i < GUARD_COUNT; ++i)
     ctx->message_offsets[i] = ctx->guard_stubs[i] = SIZE_MAX;
@@ -779,16 +734,9 @@ static int ssa32_function(Ssa *s, const uint32_t *order, uint32_t n) {
   else t32_release_bank(ctx);
   for (uint32_t i = 0; i < n; ++i) {
     uint32_t id = order[i]; SsaBlock *b = &s->blocks[id]; b->at = ctx->text.n;
-    size_t landing = SIZE_MAX;
     for (uint32_t k = 0; k < b->values.count; ++k) {
       SsaValue *v = &s->values[b->values.items[k]];
       if (v->dead) continue;
-      if ((v->op == SO_CALL || v->op == SO_PANIC) && v->cond) {
-        /* Set/link at the fixed baseline, before any outgoing staging. */
-        isa_lea(ctx, isa_argument(ctx, 0), s->unwind_offset); runtime_call(ctx, 3);
-        isa_test32(ctx); landing = isa_branch(ctx, CC_NE);
-        isa_lea(ctx, isa_argument(ctx, 0), s->unwind_offset); runtime_call(ctx, 4);
-      }
       ssa32_value(s, b->values.items[k]);
     }
     if (b->kind == SB_RETURN) {
@@ -811,16 +759,6 @@ static int ssa32_function(Ssa *s, const uint32_t *order, uint32_t n) {
       if (ctx->rv32) rv32_return_registers(ctx, s->f->return_type);
       else t32_return_registers(ctx, s->f->return_type, wide_scalar(ctx, s->f->return_type));
       isa_return(ctx);
-    } else if (b->kind == SB_CALL) {
-      /* Results are already in successor slots and staging is released. */
-      isa_lea(ctx, isa_argument(ctx, 0), s->unwind_offset); runtime_call(ctx, 5);
-      ssa32_edge(s, id, b->succ[0], temporary);
-      jumps[jump_count++] = (Jump){isa_branch(ctx, -1), b->succ[0]};
-      isa_patch(ctx, landing, ctx->text.n);
-      isa_reset_stack(ctx); ctx->stack_slots = 0;
-      /* unwind_begin already popped this record. */
-      ssa32_edge(s, id, b->succ[1], temporary);
-      jumps[jump_count++] = (Jump){isa_branch(ctx, -1), b->succ[1]};
     } else if (b->kind == SB_IF) {
       ssa32_get(s, b->control, R_A); isa_test(ctx, R_A);
       size_t otherwise = isa_branch(ctx, CC_E);

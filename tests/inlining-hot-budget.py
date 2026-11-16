@@ -190,7 +190,7 @@ def main():
                 assert body and not re.search(r'call.*<tiny_hot(?:@plt)?>',body[1]),body[1] if body else asm
             import sys
             failure=run([sys.executable,'-c',f'import ctypes;lib=ctypes.CDLL({str(binary)!r});lib.fail(255)'],timeout=10)
-            assert failure.returncode==101 and failure.stdout=='CLEAN\n',failure
+            assert failure.returncode==101 and failure.stdout=='',failure
             if mode=='ssa':expected_failure=failure.stderr
             else:assert failure.stderr==expected_failure,(failure.stderr,expected_failure)
             print('PASS hot reservation',mode,'late-helper values, wraps, conditional exclusion, overflow cleanup/origin',flush=True)

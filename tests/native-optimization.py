@@ -195,7 +195,8 @@ fail() }
         output = work/f'inline-panic-{level}'
         run(DYN, 'build', module, '--release', '--opt-level', level, '--output', output)
         result = run(output, success=False)
-        assert result.stdout.splitlines() == ['inner', 'outer'], result.stdout
+        # A panic skips both defers, inlined or not.
+        assert result.stdout == '', result.stdout
         assert 'inline panic' in result.stderr, result.stderr
 
     # Exported wrappers around a check-heavy writer must not multiply its body.
@@ -223,4 +224,4 @@ fail() }
         run(DYN, 'build', module, '--backend', 'native', '--release', '--opt-level', level,
             '--output', output)
         run(output, success=False)
-print('PASS independent optimization levels, effect ordering, aliases, inlining, deferred cleanup and checked overflow')
+print('PASS independent optimization levels, effect ordering, aliases, inlining, deferred cleanup, panics without cleanup and checked overflow')

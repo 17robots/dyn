@@ -84,31 +84,8 @@ static void run_panic_hook(const unsigned char *message, uint64_t length) {
   if (hook) hook(message, length);
 }
 void dyn_unwind_begin(const unsigned char *message, uint64_t length) {
-  DynUnwindSlot *slot = unwind_slot(1);
-  if (!slot || slot->unwinding || !slot->top) { run_panic_hook(message, length); return; }
-  slot->unwinding = 1;
-  /* Cleanup can release the message's arena or overwrite its stack frame.
-     Own a bounded copy before jumping; panic handling must not allocate. */
-  static const unsigned char truncated[] = " [truncated]";
-  uint64_t copied = length;
-  if (!message) copied = length = 0;
-  if (copied > sizeof(slot->message_storage)) {
-    copied = sizeof(slot->message_storage) - (sizeof(truncated) - 1);
-    /* A valid UTF-8 diagnostic must not end with half a codepoint. */
-    while (copied && (message[copied] & 0xc0) == 0x80) --copied;
-  }
-  for (uint64_t i = 0; i < copied; ++i)
-    slot->message_storage[i] = message[i];
-  if (copied < length) {
-    for (size_t i = 0; i < sizeof(truncated) - 1; ++i)
-      slot->message_storage[copied + i] = truncated[i];
-    length = copied + sizeof(truncated) - 1;
-  }
-  slot->message = slot->message_storage;
-  slot->length = length;
-  DynUnwind *frame = slot->top;
-  slot->top = frame->previous;
-  dyn_unwind_jump(frame);
+  /* A panic does not run defers: the handler runs, then dyn_panic reports. */
+  run_panic_hook(message, length);
 }
 void dyn_unwind_continue(void) {
   DynUnwindSlot *slot = unwind_slot(0);

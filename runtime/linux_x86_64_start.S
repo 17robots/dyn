@@ -23,8 +23,8 @@ _start:
 .global dyn_panic
 .type dyn_panic,@function
 dyn_panic:
-    # Capture the caller's registers in dyn_unwind_jump's layout and walk the
-    # frame tables; this returns only when nothing handles the unwind.
+    # Capture the caller's registers so the trace starts at the panicking
+    # frame, run the panic handler, then report and exit.
     push %rdi
     push %rsi
     sub $88, %rsp
@@ -71,7 +71,7 @@ dyn_panic:
     mov $1, %eax
     syscall
 .Ldyn_panic_stack:
-    # The trace was captured when the panic began, before cleanups ran.
+    # The trace was captured when the panic began.
     and $-16, %rsp
     call dyn_trace_dump
 #endif
@@ -81,51 +81,6 @@ dyn_panic:
     mov $231, %eax
     syscall
     ud2
-.section .text.dyn_unwind_continue,"ax",@progbits
-.global dyn_unwind_continue
-.type dyn_unwind_continue,@function
-dyn_unwind_continue:
-    # Unwinding resumes from the frame whose cleanup just ran.
-    sub $72, %rsp
-    mov %rbx, 8(%rsp)
-    mov %rbp, 16(%rsp)
-    mov %r12, 24(%rsp)
-    mov %r13, 32(%rsp)
-    mov %r14, 40(%rsp)
-    mov %r15, 48(%rsp)
-    lea 80(%rsp), %rax
-    mov %rax, 56(%rsp)
-    mov 72(%rsp), %rax
-    mov %rax, 64(%rsp)
-    mov %rsp, %rdi
-    call dyn_unwind_resume
-    ud2
-.section .text.dyn_unwind_tables,"ax",@progbits
-.global dyn_unwind_tables_start
-.type dyn_unwind_tables_start,@function
-dyn_unwind_tables_start:
-#ifdef DYN_SHARED
-    # An empty module has no boundary symbol; load its weak zero through the GOT.
-    movq __start_dyn_unwind@GOTPCREL(%rip), %rax
-#else
-    lea __start_dyn_unwind(%rip), %rax
-#endif
-    ret
-.global dyn_unwind_tables_stop
-.type dyn_unwind_tables_stop,@function
-dyn_unwind_tables_stop:
-#ifdef DYN_SHARED
-    # An empty module has no boundary symbol; load its weak zero through the GOT.
-    movq __stop_dyn_unwind@GOTPCREL(%rip), %rax
-#else
-    lea __stop_dyn_unwind(%rip), %rax
-#endif
-    ret
-# Each module walks its own tables.
-.weak __start_dyn_unwind
-.weak __stop_dyn_unwind
-.hidden __start_dyn_unwind
-.hidden __stop_dyn_unwind
 .section .text.dyn_unwind_set,"ax",@progbits
 .global dyn_unwind_set
 .type dyn_unwind_set,@function

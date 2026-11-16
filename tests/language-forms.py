@@ -56,7 +56,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-language-forms-') as temporary:
         (project / 'main.dyn').write_text(source)
         result = subprocess.run([DYN, 'check', str(project)], capture_output=True, text=True, timeout=60)
         assert result.returncode != 0 and message in result.stderr, (source, result.stderr)
-    # The panic handler runs after cleanups, then the panic reports and exits.
+    # A panic skips defers: the handler runs, then the panic reports and exits.
     crash = Path(temporary) / 'crash'
     crash.mkdir()
     (crash / 'main.dyn').write_text('use "std/io"\nuse "std/panic"\n'
@@ -68,7 +68,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-language-forms-') as temporary:
         subprocess.run([DYN, 'build', str(crash), *flags, '--quiet', '--no-cache', '--output', str(program)],
                        check=True, timeout=120)
         result = subprocess.run([str(program)], capture_output=True, text=True, timeout=30)
-        assert result.returncode == 101 and result.stderr.startswith('cleanup\nreport: disk full\ndisk full\n'), result
+        assert result.returncode == 101 and result.stderr.startswith('report: disk full\ndisk full\n'), result
     # Wasm traps on a panic without a hook; the handler module still links there.
     wasm = crash / 'crash.wasm'
     subprocess.run([DYN, 'build', str(crash), '--target', 'wasm32-wasi', '--quiet', '--no-cache', '--output', str(wasm)],

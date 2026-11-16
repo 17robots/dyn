@@ -459,7 +459,6 @@ static size_t r32_once(BackendContext *c) {
   r32_li(c,R32_T1,1); rv_memory(c,true,R32_T1,10,0,0,false);
   return done;
 }
-static void r32_test32(BackendContext *c) { r32_mv(c,R32_LA,10); R32_SRAI(R32_HA,10,31); r32_li(c,R32_LB,0); r32_li(c,R32_HB,0); }
 static void r32_compare_top(BackendContext *c) {
   r32_mv(c,R32_LA,10); r32_mv(c,R32_HA,18); R32_LW(R32_LB,2,0); R32_LW(R32_HB,2,4);
 }

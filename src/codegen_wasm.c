@@ -471,11 +471,7 @@ static void defers(WG *, size_t);
 static void guard(WG *g) {
   op(g, 0x45);
   begin(g, 4, 0x40);
-  if (!g->unwinding) {
-    g->unwinding = true;
-    defers(g, 0);
-    g->unwinding = false;
-  }
+  /* A failed check traps without running defers, as a panic does. */
   op(g, 0);
   end(g);
 }

@@ -57,11 +57,13 @@ fn main() {
 '''
 TARGET_FAILURE=r'''
 use "std/io"
+use "std/panic"
 calls:u64
 fn side(x:u64) u64 { calls+=1
 return x }
+fn report(message:[]const u8) { io.println("{}",calls) }
 fn main() {
- defer { io.println("{}",calls) }
+ panic.set_handler(report)
  pointer:*u8=nil
  pointer.*=#cast(u8,side(256))
  calls+=100
@@ -97,4 +99,4 @@ with tempfile.TemporaryDirectory(prefix='dyn-inline-casts-') as directory:
     assert result.stdout.splitlines()==[count],result
     assert (' in '+kind+'\n') in result.stderr,result
     if label=='target': assert 'pointer.nonnull.ok' in result.stderr,result
-print('PASS cast-chain inlining: call removal, casts, one-shot effects, defers, target capture and check order/origins')
+print('PASS cast-chain inlining: call removal, casts, one-shot effects, target capture and check order/origins')
