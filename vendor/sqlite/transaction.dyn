@@ -1,3 +1,4 @@
+use "std/time"
 pub enum TransactionMode { Deferred, Immediate, Exclusive }
 pub struct IntegerResult { value: i64, code: i32, failure: io.Failure }
 // Applies to subsequent busy waits on this connection. Zero disables waiting.
@@ -5,6 +6,25 @@ pub fn busy_timeout(database: Database, milliseconds: i32) io.Failure {
   if database == nil || milliseconds < 0 { return code_failure(InvalidArgument) }
   return code_failure(sqlite_busy_timeout(database, milliseconds))
 }
+extern fn sqlite_busy_handler "sqlite3_busy_handler"(database: rawptr, handler: fn(rawptr, i32) i32, argument: rawptr) i32
+
+// Waits for another connection's write lock in short steps: 20 microseconds,
+// doubling to 1 millisecond, for about five seconds in all. SQLite's
+// busy_timeout sleeps whole milliseconds from the first retry, so threads
+// writing to one database wait far longer than the writes take.
+pub fn busy_wait(database: Database) io.Failure {
+  if database == nil { return code_failure(InvalidArgument) }
+  return code_failure(sqlite_busy_handler(database, busy_step, nil))
+}
+
+fn busy_step(_argument: rawptr, attempts: i32) i32 {
+  if attempts >= 5000 { return 0 }
+  step: i64 = 1000 * time.Microsecond
+  if attempts < 6 { step = (20 * time.Microsecond) << #cast(u64, attempts) }
+  _ = time.sleep(step)
+  return 1
+}
+
 pub fn changes(database: Database) IntegerResult {
   if database == nil {
     return IntegerResult{ code: InvalidArgument, failure: io.Failure{ kind: io.Kind.System } }

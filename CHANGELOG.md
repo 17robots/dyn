@@ -14,6 +14,15 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+Servers:
+
+- `sqlite.open_schema` waits for other connections' writes with
+  `sqlite.busy_wait`, which retries from 20 microseconds up to 1 millisecond
+  apart, instead of SQLite's busy timeout, which sleeps whole milliseconds.
+  Hold one app mutex around writes for full speed (docs/guide/web-apps.md).
+- `evented.job` panics, naming the type and both sizes, when the job type is
+  larger than `Config.job_size`. It used to return nil on every request.
+
 Finding things:
 
 - A misspelled module member suggests the closest public name
@@ -47,6 +56,11 @@ Fewer hidden compiler rules:
   compiler no longer recognizes those std functions by name.
 - Names starting with `dyn_builtin_` or `DynBuiltin` are reserved for the
   compiler.
+- `#init(p)` now makes `*p` a fresh value: zero, then field defaults, for
+  every type. `mem.push` and `mem.try_push` take uninitialized memory and
+  call it, so a pushed struct is filled with stores in place. Before,
+  `#init` only wrote defaults and the compiler zeroed pushes by recognizing
+  std/mem's `zero_bytes_fast` by name; that rule is gone.
 - The compiler no longer replaces `bytes.find_byte`, `bytes.find` or the
   JSON string scanner with inline SSE by recognizing their names.
   `bytes.find_byte` calls an SSE2 routine in the x86-64 runtime

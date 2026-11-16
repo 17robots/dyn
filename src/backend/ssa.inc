@@ -1909,6 +1909,23 @@ static bool ssa_mentions_local(Ssa *s, DynExprId id, uint64_t local, unsigned de
     if (ssa_mentions_local(s, ir->items[e->item_start + i].expression, local, depth + 1)) return true;
   return false;
 }
+/* A struct or array literal whose items are all constants, at any depth. */
+static bool ssa_constant_literal(const DynIrProgram *ir, DynExprId id, unsigned depth) {
+  if (id >= ir->expression_count || depth > 16) return false;
+  const DynIrExpr *e = &ir->expressions[id];
+  if (e->kind != DYN_EXPR_STRUCT && e->kind != DYN_EXPR_ARRAY) return false;
+  if ((uint64_t)e->item_start + e->item_count > ir->item_count) return false;
+  for (uint32_t i = 0; i < e->item_count; ++i) {
+    DynExprId item = ir->items[e->item_start + i].expression;
+    if (item >= ir->expression_count) return false;
+    const DynIrExpr *x = &ir->expressions[item];
+    while (x->kind == DYN_EXPR_CONVERT && x->left < ir->expression_count) x = &ir->expressions[x->left];
+    bool constant = x->kind == DYN_EXPR_INT || x->kind == DYN_EXPR_FLOAT || x->kind == DYN_EXPR_BOOL ||
+                    x->kind == DYN_EXPR_CHAR || x->kind == DYN_EXPR_NIL || x->kind == DYN_EXPR_STRING;
+    if (!constant && !ssa_constant_literal(ir, (DynExprId)(x - ir->expressions), depth + 1)) return false;
+  }
+  return true;
+}
 static void ssa_assign(Ssa *s, const DynIrStmt *st) {
   const DynIrProgram *ir = s->ir;
   if (st->kind == DYN_STMT_ASSIGN && st->local_id == UINT32_MAX && st->target == DYN_NO_EXPR) {
@@ -1965,6 +1982,12 @@ static void ssa_assign(Ssa *s, const DynIrStmt *st) {
     uint32_t size, alignment;
     if (!layout(ir, type, &size, &alignment, 0)) { SSA_GIVE_UP(s); return; }
     int32_t address = ssa_address(s, st->target, 0);
+    /* A literal of constants, such as #init's T{}, is built in place: it
+       reads no memory the stores could change, so no temporary is needed. */
+    if (ssa_constant_literal(ir, st->expression, 0)) {
+      ssa_initialize(s, address, type, st->expression, 0);
+      return;
+    }
     int32_t source = ssa_expr(s, st->expression, NULL, 0);
     ssa_copy_aggregate(s, address, source, size, alignment);
     return;
@@ -6214,25 +6237,6 @@ static bool ssa_self_inline(Ssa *s, const uint32_t *order, uint32_t n) {
   if (!s->failed && s->ctx->optimization_remarks)
     fprintf(stderr, "remark: %s: recursive call inlined %u levels deep\n", s->f->name, depth);
   return !s->failed;
-}
-/* std/mem's zero_bytes_fast, once folding has made its length constant, as
-   in each mem.push: one fixed fill instead of a call. x86-64 and AArch64
-   store unaligned; the call stays on RISC-V. */
-static void ssa_zero_calls(Ssa *s, const uint32_t *order, uint32_t n) {
-  BackendContext *ctx = s->ctx;
-  if (!ctx->zero_symbol || ctx->rv64 || ctx->rv32 || ctx->t32) return;
-  for (uint32_t i = 0; i < n; ++i) {
-    SsaBlock *block = &s->blocks[order[i]];
-    for (uint32_t k = 0; k < block->values.count; ++k) {
-      SsaValue *v = &s->values[block->values.items[k]];
-      if (v->dead || v->op != SO_CALL || v->aux2 || (unsigned)v->aux != ctx->zero_symbol || v->count != 2 || v->cond) continue;
-      int32_t pointer = (int32_t)s->lists[v->list], length = ssa_resolve(s, (int32_t)s->lists[v->list + 3]);
-      if (length < 0 || s->values[length].op != SO_CONST || (uint64_t)s->values[length].aux > 256) continue;
-      int64_t bytes = s->values[length].aux;
-      v->op = SO_ZEROMEM; v->cls = SC_NONE; v->a = pointer; v->b = v->c = -1;
-      v->aux = bytes; v->aux2 = 0; v->count = 0; v->list = 0;
-    }
-  }
 }
 /* ---- Unroll and jam ----
 
@@ -11708,7 +11712,6 @@ static void ssa_prepare(SsaPrepared *p, BackendContext *ctx, const DynSource *so
   }
   order = ssa_order(s, &n);
   if (!order || s->failed) goto done;
-  ssa_zero_calls(s, order, n);
   if (ssa_accumulate(s, order, n)) {
     ssa_resolve_all(s);
     order = ssa_order(s, &n);

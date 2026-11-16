@@ -195,9 +195,9 @@ are compile-time values. Every fresh value of the struct takes them: a literal's
 (`Player{}` or `Player{armor: 5}`), a declaration without an initializer (`p: Player`), and
 `mem.push(Player, arena)`. A declaration without an initializer is the one way to get a fresh
 value: `buffer: [64]u8 = []` is an error because the `= []` adds nothing. A field without a default is zero, and an omitted struct-typed field is
-that struct's own fresh value. `#init(pointer)` writes the defaults through a `*T`, which is how
-`mem.push` and custom allocators make fresh values; it compiles to nothing for a type without
-defaults. Zeroed bulk memory (`mem.push_array`, fixed arrays, `[]` initializers) stays zero: write
+that struct's own fresh value. `#init(pointer)` makes `*pointer` a fresh `T`, zero and then the
+defaults, which is how `mem.push` and custom allocators make fresh values from uninitialized
+memory; for a fixed-size `T` it compiles to stores in place. Zeroed bulk memory (`mem.push_array`, fixed arrays, `[]` initializers) stays zero: write
 a loop when its elements need defaults. Unions have no defaults.
 
 Implicit numeric conversion is allowed only when destination represents every source-type
@@ -542,8 +542,8 @@ most six integer/pointer arguments on
 Linux x86-64. It does not depend on `std`. The number may be a named constant: `std/os/linux/sys`
 and `std/os/macos/sys` name each call std makes, as in `#syscall(sys.Getpid)`.
 `#offsetof(Type, field)` is a field's byte offset as a `usize` constant.
-`#init(pointer)` is a statement that writes `T`'s field defaults through a mutable `*T`; for a type
-without defaults it only evaluates the pointer.
+`#init(pointer)` is a statement that sets `*T` to a fresh `T`, as a declaration without an
+initializer would: zero, then field defaults. It works for every type.
 `#assert(condition, "message")` fails compilation when a constant condition is false, at top level
 or in a function body.
 `#load("file")` embeds a file's bytes as a `[]const u8`; the path is relative to the module directory and may not contain `..`.

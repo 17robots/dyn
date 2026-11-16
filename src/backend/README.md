@@ -59,9 +59,7 @@ addition when overflow is not checked, and has no effects or checks other
 than overflow checks, keeps the sum in an accumulator and jumps back to its
 start instead of making the last call. Element
 copy loops, `for i in 0..n { d[i] = s[i] }` as `mem.copy` has them, become
-one forward copy on x86-64 when `n` fits both slices, and a call to
-`std/mem`'s `zero_bytes_fast` whose length folds to a constant becomes a
-fixed fill. Dense
+one forward copy on x86-64 when `n` fits both slices. Dense
 `case` statements become jump tables. On x86-64 System V, a recursive
 function whose first pure unsigned guard returns an argument can bypass frame
 setup on that path. Small leaf

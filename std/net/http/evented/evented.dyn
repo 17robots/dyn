@@ -1810,10 +1810,14 @@ pub fn serve(arena: *mem.Arena, workers: []Worker, address: network.Ipv4Address,
 // ---------------------------------------------------------------- run
 
 // Job storage for run, zeroed, in the connection's job arena: copy what the
-// work needs into it. nil when response is not an evented response, a job is
-// already running, or T does not fit Config.job_size.
+// work needs into it. nil when response is not an evented response or a job
+// is already running. Panics when T is larger than Config.job_size, which no
+// request could change.
 pub fn job(T: type, response: *http.Response) *T {
   connection := connection_of(response)
+  if connection != nil && #sizeof(T) > connection.worker.config.job_size {
+    job_too_large(#typeof(T).name, #sizeof(T), connection.worker.config.job_size)
+  }
   if connection != nil && connection.h2 != nil {
     jobs := h2_job(connection)
     if jobs == nil { return nil }
@@ -1826,6 +1830,13 @@ pub fn job(T: type, response: *http.Response) *T {
   if connection.mode != Mode.Http && !large_head { return nil }
   mem.arena_reset(connection.jobs)
   return mem.try_push(T, connection.jobs)
+}
+
+fn job_too_large(name: []const u8, size: usize, limit: usize) {
+  storage: [192]u8
+  message := format.buffer(storage[..])
+  format.print(&message, "evented.job: {} needs {} bytes, but Config.job_size is {}; raise job_size", name, size, limit)
+  #panic(format.bytes(&message))
 }
 
 // Hands the request to Config.pool: work(data) runs on a pool thread, then

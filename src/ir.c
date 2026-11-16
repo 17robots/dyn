@@ -4,58 +4,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Keep SDK candidate order in sync with module.c's resolve_std, without a
-   frontend-only link dependency on the module resolver. Missing paths or OOM
-   simply leave this optional optimization unrecognized. */
-extern char *realpath(const char *, char *);
-static char *sdk_source_path(const char *path, bool strict_configured) {
-  const char *configured = getenv("DYN_SDK");
-  if (configured && *configured) {
-    char *root = realpath(configured, NULL);
-    if (root) {
-      char *candidate = dyn_path_join(root, path);
-      if (!candidate) { free(root); return NULL; }
-      char *resolved = realpath(candidate, NULL);
-      free(candidate);
-      size_t n = strlen(root);
-      bool within = resolved && !strncmp(root, resolved, n) &&
-                    (resolved[n] == 0 || resolved[n] == '/');
-      free(root);
-      if (within) return resolved;
-      free(resolved);
-    }
-    if (strict_configured) return NULL;
-  }
-  char executable[4096], candidate[4096];
-  ssize_t n = dyn_host_executable(executable, sizeof(executable) - 1);
-  if (n < 0) return NULL;
-  executable[n] = 0;
-  char *slash = strrchr(executable, '/');
-  if (!slash) return NULL;
-  *slash = 0;
-  const char *formats[] = {"%s/../compiler/%s", "%s/../%s", "%s/../share/dyn/%s"};
-  for (size_t i = 0; i < sizeof(formats) / sizeof(*formats); ++i) {
-    int length = snprintf(candidate, sizeof(candidate), formats[i], executable,
-                          i == 2 ? path + 4 : path);
-    if (length < 0 || (size_t)length >= sizeof(candidate)) continue;
-    char *resolved = realpath(candidate, NULL);
-    if (resolved) return resolved;
-  }
-  return NULL;
-}
-/* Functions of one file share its path; resolve it once. */
-typedef struct {
-  const char *path;
-  char *canonical;
-} CanonicalPath;
-static const char *canonical_path(CanonicalPath *cache, const char *path) {
-  if (!cache->path || (cache->path != path && strcmp(cache->path, path))) {
-    free(cache->canonical);
-    cache->canonical = realpath(path, NULL);
-    cache->path = path;
-  }
-  return cache->canonical;
-}
 /* The compiler prelude's math builtins, which #sqrt(x) and the others call,
    carry their instruction's identity: the code generator emits the
    instruction where the target has one and calls the body elsewhere. */
@@ -87,35 +35,6 @@ static DynMathIntrinsic math_identity(const DynSource *source, const DynIrProgra
   return DYN_MATH_INTRINSIC_NONE;
 }
 
-/* std/mem's private zero_bytes_fast(items: []u8): the SSA backend writes a
-   constant-length call as one fixed-size fill, such as the zeroing of each
-   mem.push. Only the exact SDK declaration has this identity. */
-static DynByteIntrinsic zero_identity(const DynSource *source, CanonicalPath *paths,
-                                      const char *source_path, const char *sdk,
-                                      const DynAstProgram *a, const DynIrProgram *ir,
-                                      const DynIrFunction *fn) {
-  if (!sdk || !source_path || fn->foreign || fn->variadic || fn->generic || fn->instance || fn->is_public ||
-      fn->return_type != DYN_TYPE_VOID || fn->param_count != 1 || fn->param_start >= ir->param_count)
-    return DYN_BYTE_INTRINSIC_NONE;
-  DynType items = ir->params[fn->param_start].type;
-  if (!dyn_type_is_slice(items) || items - DYN_TYPE_SLICE_BASE >= a->slice_count ||
-      a->slices[items - DYN_TYPE_SLICE_BASE].is_const || a->slices[items - DYN_TYPE_SLICE_BASE].element != DYN_TYPE_U8)
-    return DYN_BYTE_INTRINSIC_NONE;
-  const char *canonical = canonical_path(paths, source_path);
-  if (!canonical || strcmp(canonical, sdk)) return DYN_BYTE_INTRINSIC_NONE;
-  const char *original, *ignored_path;
-  size_t length, offset;
-  dyn_source_position(source, fn->source_offset, &ignored_path, &original, &length, &offset);
-  const char name[] = "zero_bytes_fast";
-  size_t n = sizeof(name) - 1;
-  if (offset > length || n > length - offset || memcmp(original + offset, name, n)) return DYN_BYTE_INTRINSIC_NONE;
-  if (offset + n < length) {
-    unsigned char c = (unsigned char)original[offset + n];
-    if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_')
-      return DYN_BYTE_INTRINSIC_NONE;
-  }
-  return DYN_BYTE_INTRINSIC_ZERO;
-}
 
 static bool allocate(void **out, size_t count, size_t size) {
   if (!count) {
@@ -875,15 +794,11 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
      of memory, lookup retains its unindexed fallback. */
   (void)dyn_location_build(&ir->locations, source);
   DynLocationIndex locations = ir->locations;
-  CanonicalPath paths = {0};
-  char *mem_sdk = proofs ? sdk_source_path("std/mem/mem.dyn", true) : NULL;
   for (size_t i = 0; i < a->function_count; ++i) {
     size_t n = a->functions[i].name.end_byte - a->functions[i].name.start_byte;
     /* Instances share the generic's name; the suffix hashes the type arguments, so it stays stable when other code changes. */
     ir->functions[i].name = malloc(n + 20);
     if (!ir->functions[i].name) {
-      free(mem_sdk);
-      free(paths.canonical);
       dyn_ir_free(ir);
       return false;
     }
@@ -915,8 +830,6 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
     size_t link_length = a->functions[i].link_name.end_byte - a->functions[i].link_name.start_byte;
     ir->functions[i].link_name = malloc(link_length + 1);
     if (!ir->functions[i].link_name) {
-      free(mem_sdk);
-      free(paths.canonical);
       dyn_ir_free(ir);
       return false;
     }
@@ -941,10 +854,7 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
     ir->functions[i].module_owner = a->functions[i].module_owner;
     ir->functions[i].variadic_type = lower_type(a, a->functions[i].variadic_type);
     ir->functions[i].math_intrinsic = proofs ? math_identity(source, ir, &ir->functions[i]) : DYN_MATH_INTRINSIC_NONE;
-    ir->functions[i].byte_intrinsic = zero_identity(source, &paths, source_path, mem_sdk, a, ir, &ir->functions[i]);
   }
-  free(mem_sdk);
-  free(paths.canonical);
   for (size_t i = 0; i < a->global_count; ++i) {
     size_t n = a->globals[i].name.end_byte - a->globals[i].name.start_byte;
     ir->globals[i].name = malloc(n + 1);

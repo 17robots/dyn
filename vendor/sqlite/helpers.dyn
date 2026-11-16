@@ -142,8 +142,8 @@ fn equal(left: []const u8, right: []const u8) bool {
 }
 
 // A connection for one thread, ready to use: no SQLite mutex (only its
-// thread may use it), a 5 second busy timeout, and each schema statement run
-// (CREATE TABLE IF NOT EXISTS ..., PRAGMA ...). On failure the connection is
+// thread may use it), busy_wait for other connections' writes, and each
+// schema statement run (CREATE TABLE IF NOT EXISTS ..., PRAGMA ...). On failure the connection is
 // closed and the result carries the code.
 pub fn open_schema(path: []const u8, schema: []const []const u8) OpenResult {
   scratch: [1024]u8
@@ -156,7 +156,7 @@ pub fn open_schema(path: []const u8, schema: []const []const u8) OpenResult {
       return OpenResult{ failure: failure }
     }
   }
-  _ = busy_timeout(opened.database, 5000)
+  _ = busy_wait(opened.database)
   return opened
 }
 

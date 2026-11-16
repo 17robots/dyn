@@ -358,6 +358,13 @@ tells a duplicate key from other errors. `first` stops at the first row,
 (copied into an arena) read columns. Copy borrowed bytes before the next
 step. See [sqlite.md](sqlite.md).
 
+Every connection to the file can read at once, but only one can write. Give
+the app one `sync.Mutex` and hold it around each write or transaction:
+writers then take turns in microseconds. Without it they meet SQLite's file
+lock, and `sqlite.open_schema`'s busy handler (`sqlite.busy_wait`, retrying
+from 20 microseconds up to 1 millisecond apart) keeps them correct but slower:
+Chirp's creates ran at 119k per second that way and 191k with the mutex.
+
 ## Logging
 
 Set `Config.access_log` to a `log.Logger` and the server writes one line per

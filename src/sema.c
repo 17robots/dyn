@@ -4146,7 +4146,9 @@ static void sema_place_hoists(Sema *sema, DynAstProgram *a, DynAstFn *fn, const 
       return;
     }
     x->local_stmt = (uint32_t)a->statement_count;
-    a->statements[a->statement_count++] = (DynAstStmt){.kind = DYN_STMT_LOCAL, .span = a->expressions[x->init].span,
+    a->statements[a->statement_count++] = (DynAstStmt){.kind = DYN_STMT_LOCAL,
+                                                       .span = x->init == DYN_NO_EXPR ? a->statements[x->stmt].span
+                                                                                      : a->expressions[x->init].span,
                                                        .declared_type = a->locals[x->local].type,
                                                        .expression = x->init, .target = DYN_NO_EXPR,
                                                        .local_id = x->local,
@@ -4241,8 +4243,10 @@ static bool sema_stmt_checked(Sema *sema, DynAstProgram *a, DynAstStmt *st,
     return true;
   }
   if (st->kind == DYN_STMT_EXPR && a->expressions[st->expression].kind == DYN_EXPR_INIT) {
-    /* #init(p) writes T's field defaults through p, so allocators can make
-       fresh values. With no defaults it only evaluates p. */
+    /* #init(p) makes *p a fresh T: zero, then T's field defaults, so
+       allocators can hand out uninitialized memory. A struct gets T{}, which
+       the code generators fill in place; any other type is assigned from a
+       hidden local declared without a value, which is zero for every type. */
     DynExprId pointer = a->expressions[st->expression].left;
     DynType type = check_expr(sema, a, pointer, s, errors, DYN_TYPE_INFER);
     DynAstPointer *info = pointer_info(a, type);
@@ -4252,11 +4256,37 @@ static bool sema_stmt_checked(Sema *sema, DynAstProgram *a, DynAstStmt *st,
     }
     if (type == DYN_TYPE_ERROR) return false;
     DynType pointee = info->pointee;
-    if (!struct_has_defaults(a, pointee, 0)) {
-      st->expression = pointer;
+    DynSpan span = st->span;
+    if (!dyn_type_is_struct(pointee)) {
+      /* The hidden local is placed before this statement at the end of the
+         function's check; a worker cannot add statements. */
+      SEMA_SERIAL_ONLY(return false);
+      if (sema->hoist_count == sema->hoist_capacity) {
+        size_t c = sema->hoist_capacity ? sema->hoist_capacity * 2 : 8;
+        struct SemaHoist *grown = realloc(sema->hoists, c * sizeof(*grown));
+        if (!grown) { error_out_of_memory(span, s, errors); return false; }
+        sema->hoists = grown;
+        sema->hoist_capacity = c;
+      }
+      if (!reserve_local(a) || !sema_reserve_expr(a)) { error_out_of_memory(span, s, errors); return false; }
+      uint32_t local = (uint32_t)a->local_count;
+      a->locals[a->local_count++] = (DynAstLocal){.type = pointee, .used = true, .depth = sema->block_depth,
+                                                  .owner_function = sema->current_function};
+      DynExprId zero = (DynExprId)a->expression_count;
+      a->expressions[a->expression_count++] = (DynAstExpr){.kind = DYN_EXPR_NAME, .type = pointee, .span = span,
+          .left = DYN_NO_EXPR, .right = DYN_NO_EXPR, .integer = local};
+      if (!sema_reserve_expr(a)) { error_out_of_memory(span, s, errors); return false; }
+      DynExprId target = (DynExprId)a->expression_count;
+      a->expressions[a->expression_count++] = (DynAstExpr){.kind = DYN_EXPR_UNARY, .op = DYN_OP_DEREF,
+          .type = pointee, .span = span, .left = pointer, .right = DYN_NO_EXPR};
+      st->kind = DYN_STMT_ASSIGN;
+      st->target = target;
+      st->expression = zero;
+      st->assignment_op = DYN_OP_NONE;
+      sema->hoists[sema->hoist_count++] = (struct SemaHoist){.call = zero, .init = DYN_NO_EXPR, .local = local,
+          .stmt = (uint32_t)(st - a->statements), .local_stmt = UINT32_MAX};
       return false;
     }
-    DynSpan span = st->span;
     DynExprId fresh = fresh_struct(a, pointee, span);
     if (fresh == DYN_NO_EXPR || !sema_reserve_expr(a)) return false;
     DynExprId target = (DynExprId)a->expression_count;
