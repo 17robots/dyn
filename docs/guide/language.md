@@ -431,12 +431,20 @@ target, counting `usize` and `isize` as anywhere from 32 to 64 bits: `usize` wid
 `u32` to `usize` implicitly, while `u64` to `usize` needs `#cast`. The same rule joins
 the operands of a binary operator: when one operand's type widens to the other's without loss,
 the operator works in the wider type, so `count_u32 * size_u64` is a `u64` and `index_u32 < limit_i64`
-compares as `i64`. Each operand is computed in its own type first, so `a_u32 * b_u32 + c_u64`
-multiplies in `u32`. `u64` against `i64` has no lossless meeting type and needs a cast. `x += y`
-widens `y` to `x`'s type the same way. Shifts keep their rule: the result has the left operand's
-type. Two operators show their result's range in the code, so they narrow without a cast where
-a smaller integer type is expected and the range fits it: `x & M` with a constant `M` (`b: u8 =
-word & 0xff`), and an unsigned `x >> k` with a constant `k` (`top: u8 = x_u64 >> 56`). Nothing
+compares as `i64`. Arithmetic is target-typed: where the value goes into a wider number type (a
+typed variable, an assignment, a field, an argument or a result), the operators compute in that
+type, so `total: u64 = a_u32 * b_u32` multiplies in `u64` and cannot wrap at 32 bits. Integers
+widen only to integers and floats only to floats; `#cast` and `:=` give no target, so
+`n := a_u32 * b_u32` is a `u32`. Write the narrow type explicitly where wrapping is meant, as in
+`hashed: u32 = value * 2654435761`. `x += y` widens `y` to `x`'s type the same way. Shifts keep
+their rule: the result has the left operand's type, or the target's when that is wider.
+A comparison of a signed and an unsigned integer compares their values: `-1 < len` is true for a
+`usize` `len`, and `i64` against `u64` needs no cast. One operand is read twice, so at least one
+side must contain no calls; otherwise store a value in a name first. Arithmetic between `u64` and
+`i64` still has no lossless meeting type and needs a cast. Three operators show their result's
+range in the code, so they narrow without a cast where a smaller integer type is expected and the
+range fits it: `x & M` with a constant `M` (`b: u8 = word & 0xff`), an unsigned `x >> k` with a
+constant `k` (`top: u8 = x_u64 >> 56`) and an unsigned `x % M` with a constant `M`. Nothing
 else narrows implicitly; a range known only from a condition, as in `if x < 256 { ... }`, still
 needs `#cast`. `#cast` permits
 intentional narrowing and uses destination-width two's-complement/modulo representation for integers.

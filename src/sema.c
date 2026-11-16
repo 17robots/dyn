@@ -79,6 +79,7 @@ static bool target_gap_reported(DynSpan span, const DynSource *s) {
 }
 static int assert_value(DynAstProgram *a, DynExprId id, unsigned depth);
 static DynExprId sema_push_expr(DynAstProgram *a, DynAstExpr e);
+static DynExprId convert_expr(DynAstProgram *a, DynExprId source, DynType target);
 static bool span_in_library(const DynSource *s, DynSpan span) {
   const char *path, *text;
   size_t length, at;
@@ -625,6 +626,99 @@ static bool lossless(Sema *sema, DynType from, DynType to) {
     return needed <= precision;
   }
   return false;
+}
+/* Target-typed arithmetic: where a wider number type is expected (the type
+   of the variable, field, parameter or result the value goes into), the
+   operator works in that type, so `total: u64 = a_u32 * b_u32` multiplies
+   in u64. Integers widen only to integers and floats only to floats. */
+static bool widens_to_target(Sema *sema, DynType from, DynType target) {
+  if (from == target || target == DYN_TYPE_INFER || target == DYN_TYPE_ERROR ||
+      dyn_type_is_distinct(from) || dyn_type_is_distinct(target))
+    return false;
+  bool integers = integer(sema, from) && integer(sema, target);
+  bool floats = (from == DYN_TYPE_F32 || from == DYN_TYPE_F64) && target == DYN_TYPE_F64;
+  return (integers || floats) && lossless(sema, from, target);
+}
+/* Whether evaluating id twice is the same as once: no calls anywhere. */
+static bool expr_pure(DynAstProgram *a, DynExprId id) {
+  if (id == DYN_NO_EXPR) return true;
+  const DynAstExpr *e = &a->expressions[id];
+  switch (e->kind) {
+  case DYN_EXPR_INT: case DYN_EXPR_FLOAT: case DYN_EXPR_BOOL: case DYN_EXPR_CHAR:
+  case DYN_EXPR_NAME: case DYN_EXPR_GLOBAL: case DYN_EXPR_SIZE: case DYN_EXPR_ALIGN:
+  case DYN_EXPR_LIMIT: case DYN_EXPR_NIL:
+    return true;
+  case DYN_EXPR_UNARY: case DYN_EXPR_BINARY: case DYN_EXPR_CONVERT: case DYN_EXPR_CAST:
+  case DYN_EXPR_BITCAST: case DYN_EXPR_FIELD: case DYN_EXPR_INDEX: case DYN_EXPR_LEN:
+    return expr_pure(a, e->left) && expr_pure(a, e->right);
+  default:
+    return false;
+  }
+}
+static DynExprId typed_binary(DynAstProgram *a, DynOperator op, DynType type, DynExprId left,
+                              DynExprId right, DynSpan span) {
+  if (left == DYN_NO_EXPR || right == DYN_NO_EXPR) return DYN_NO_EXPR;
+  return sema_push_expr(a, (DynAstExpr){.kind = DYN_EXPR_BINARY, .op = op, .type = type,
+                                        .left = left, .right = right, .span = span});
+}
+static DynExprId typed_cast(DynAstProgram *a, DynExprId value, DynType type, DynSpan span) {
+  if (value == DYN_NO_EXPR) return DYN_NO_EXPR;
+  return sema_push_expr(a, (DynAstExpr){.kind = DYN_EXPR_CAST, .type = type, .integer = type,
+                                        .left = value, .right = DYN_NO_EXPR, .span = span});
+}
+static DynExprId typed_int(DynAstProgram *a, DynType type, uint64_t value, DynSpan span) {
+  return sema_push_expr(a, (DynAstExpr){.kind = DYN_EXPR_INT, .type = type, .integer = value,
+                                        .left = DYN_NO_EXPR, .right = DYN_NO_EXPR, .span = span});
+}
+/* A comparison of a signed and an unsigned integer with no lossless meeting
+   type (i64 against u64, i32 against usize) compares their values: a
+   negative value is below every unsigned one. It becomes two comparisons in
+   64 bits that read one operand twice, so that operand must have no calls.
+   Returns false, with an error, when neither operand qualifies. */
+static bool rewrite_mixed_sign_compare(Sema *sema, DynAstProgram *a, DynExprId id,
+                                       const DynSource *s, unsigned *errors) {
+  DynAstExpr e = a->expressions[id];
+  DynOperator op = e.op;
+  DynExprId sv = e.left, uv = e.right;
+  if (!signed_int(sema, a->expressions[sv].type)) {
+    sv = e.right; uv = e.left;
+    /* u OP s is s OP' u with the operator mirrored. */
+    op = op == DYN_OP_LT ? DYN_OP_GT : op == DYN_OP_GT ? DYN_OP_LT :
+         op == DYN_OP_LE ? DYN_OP_GE : op == DYN_OP_GE ? DYN_OP_LE : op;
+  }
+  bool s_pure = expr_pure(a, sv), u_pure = expr_pure(a, uv);
+  if (!s_pure && !u_pure) {
+    error_span(e.span, s, errors,
+               "comparing a signed and an unsigned value reads one of them twice: "
+               "store one in a name first, or #cast");
+    return false;
+  }
+  DynSpan span = e.span;
+  /* Both operands in 64 bits, which is lossless for each. */
+  DynExprId s64 = convert_expr(a, sv, DYN_TYPE_I64);
+  DynExprId u64 = convert_expr(a, uv, DYN_TYPE_U64);
+  bool below_wins = op == DYN_OP_LT || op == DYN_OP_LE || op == DYN_OP_NE;
+  DynExprId guard, compare;
+  if (s_pure) {
+    /* s < 0 decides it alone; otherwise compare as u64. */
+    guard = typed_binary(a, below_wins ? DYN_OP_LT : DYN_OP_GE, DYN_TYPE_BOOL, s64,
+                         typed_int(a, DYN_TYPE_I64, 0, span), span);
+    compare = typed_binary(a, op, DYN_TYPE_BOOL, typed_cast(a, s64, DYN_TYPE_U64, span), u64, span);
+  } else {
+    /* u above i64's maximum decides it alone; otherwise compare as i64. */
+    guard = typed_binary(a, below_wins ? DYN_OP_GT : DYN_OP_LE, DYN_TYPE_BOOL, u64,
+                         typed_int(a, DYN_TYPE_U64, (uint64_t)INT64_MAX, span), span);
+    compare = typed_binary(a, op, DYN_TYPE_BOOL, s64, typed_cast(a, u64, DYN_TYPE_I64, span), span);
+  }
+  if (guard == DYN_NO_EXPR || compare == DYN_NO_EXPR) {
+    error_out_of_memory(span, s, errors);
+    return false;
+  }
+  a->expressions[id].op = below_wins ? DYN_OP_LOGICAL_OR : DYN_OP_LOGICAL_AND;
+  a->expressions[id].left = guard;
+  a->expressions[id].right = compare;
+  a->expressions[id].type = DYN_TYPE_BOOL;
+  return true;
 }
 /* x += y widens y as x = x + y would: the operator meets at x's type when
    y converts to it losslessly. Shifts take any unsigned count instead. */
@@ -2314,8 +2408,8 @@ static uint32_t builtin_function(DynAstProgram *a, DynSpan builtin, const DynSou
       return i;
   return UINT32_MAX;
 }
-/* `x & M` with a constant M, and unsigned `x >> k` with a constant k, show
-   their range in the code. Where a smaller integer type is expected and that
+/* `x & M` with a constant M, unsigned `x >> k` and unsigned `x % M` with a
+   constant k or M, show their range in the code. Where a smaller integer type is expected and that
    range fits it, the value converts without #cast. */
 /* Whether the value of id, of type from, always fits target by its range:
    x & M with a constant M, or an unsigned x >> k with a constant k. */
@@ -2337,6 +2431,11 @@ static bool range_narrows(Sema *sema, DynAstProgram *a, DynExprId id, DynType fr
     unsigned width = bits(sema, from);
     if (signed_int(sema, from) || !shift.valid || shift.overflow || shift.value == 0 || shift.value >= width) return false;
     largest = (UINT64_C(1) << (width - shift.value)) - 1;
+  } else if (e.op == DYN_OP_REM) {
+    /* An unsigned x % M is below M. */
+    ConstantUInt divisor = constant_uint_at(a, e.right, 4);
+    if (signed_int(sema, from) || !divisor.valid || divisor.overflow || divisor.value == 0) return false;
+    largest = divisor.value - 1;
   } else
     return false;
   return literal_fits(sema, largest, target);
@@ -3233,6 +3332,10 @@ static DynType check_expr_node(Sema *sema, DynAstProgram *a, DynExprId id,
       error_span(a->expressions[id].span, s, errors, "shift count requires unsigned integer");
       return a->expressions[id].type = DYN_TYPE_ERROR;
     }
+    if (widens_to_target(sema, left, expected)) {
+        a->expressions[id].left = convert_expr(a, a->expressions[id].left, expected);
+      left = expected;
+    }
     ConstantUInt rhs = constant_uint(a, a->expressions[id].right);
     if (rhs.valid && rhs.value >= bits(sema, left)) {
       error_format(a->expressions[id].span, s, errors,
@@ -3274,6 +3377,14 @@ static DynType check_expr_node(Sema *sema, DynAstProgram *a, DynExprId id,
       left = right;
     }
   }
+  if (left != right && integer(sema, left) && integer(sema, right) &&
+      signed_int(sema, left) != signed_int(sema, right) &&
+      !dyn_type_is_distinct(left) && !dyn_type_is_distinct(right) &&
+      a->expressions[id].op >= DYN_OP_EQ && a->expressions[id].op <= DYN_OP_GE) {
+    if (!rewrite_mixed_sign_compare(sema, a, id, s, errors))
+      return a->expressions[id].type = DYN_TYPE_ERROR;
+    return DYN_TYPE_BOOL;
+  }
   if (left != right) {
     char lhs[128], rhs[128], message[384];
     type_name_into(a, left, s, lhs, sizeof(lhs));
@@ -3283,6 +3394,13 @@ static DynType check_expr_node(Sema *sema, DynAstProgram *a, DynExprId id,
              rhs);
     error_span(a->expressions[id].span, s, errors, message);
     return a->expressions[id].type = DYN_TYPE_ERROR;
+  }
+  if ((op == DYN_OP_ADD || op == DYN_OP_SUB || op == DYN_OP_MUL || op == DYN_OP_DIV ||
+       op == DYN_OP_REM || op == DYN_OP_BIT_AND || op == DYN_OP_BIT_OR || op == DYN_OP_BIT_XOR) &&
+      a->expressions[id].kind == DYN_EXPR_BINARY && widens_to_target(sema, left, expected)) {
+    a->expressions[id].left = convert_expr(a, a->expressions[id].left, expected);
+    a->expressions[id].right = convert_expr(a, a->expressions[id].right, expected);
+    left = right = expected;
   }
   if (numeric(sema, left) && a->expressions[id].op != DYN_OP_LOGICAL_AND &&
       a->expressions[id].op != DYN_OP_LOGICAL_OR) {

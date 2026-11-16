@@ -1,0 +1,14 @@
+decl 10000000000
+assign 10000000001
+return 10000000000
+arg 10000000000
+field 10000000000
+shift 104857600000
+plain u32 200000
+i32<usize true true
+i64<u64 true false true true
+call side true
+rem 0
+bounds 3
+extremes true true false
+edge true false false
