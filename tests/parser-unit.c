@@ -169,7 +169,7 @@ int main(void) {
   exp_free(&tree);
   const char *metadata = "use \"a\" mod\n#link(\"c\")\npub packed struct S{x:i32}\ndistinct type T=i32\n"
       "extern fn f \"c_f\"(...) fn(i32)u8\nfn g(p:*const T,x:[]const T){\n"
-      "for *const v in x{v.* = 1}\ncase p{_=>{}}\nfoo($T,#bitcast(u64,p))\n}";
+      "for *v in x{v.* = 1}\ncase p{_=>{}}\nfoo($T,#bitcast(u64,p))\n}";
   cancellation(metadata, true);
   assert(exp_parse_source(metadata, strlen(metadata), &tree));
   assert(tree.nodes[tree.root].parent == NONE);

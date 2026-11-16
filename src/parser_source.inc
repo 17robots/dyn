@@ -159,13 +159,15 @@ static uint32_t src_if(Parser *p) {
 }
 static uint32_t src_for(Parser *p) {
   uint32_t start = p->token.start, first = NONE, last = NONE;
-  if (!is(p, "for")) { append(p, &first, &last, name(p)); expect(p, ":"); }
   expect(p, "for");
   if (!is(p, "{")) {
     uint32_t begin = p->token.start, cf = NONE, cl = NONE;
     Parser saved = *p; uint32_t count = p->tree->count;
     bool pointer = take(p, "*");
-    bool constant = pointer && take(p, "const");
+    if (pointer && is(p, "const")) {
+      fail(p, p->token.start, "write `for *value in`: the pointer is const when the collection is");
+      return NONE;
+    }
     unsigned flags = 0;
     uint32_t binding = p->token.kind == NAME ? name(p) : NONE;
     uint32_t bound_type = NONE, index = NONE;
@@ -176,7 +178,7 @@ static uint32_t src_for(Parser *p) {
     }
     if (binding != NONE && index == NONE && !pointer && take(p, ":")) bound_type = type(p);
     if (binding != NONE && take(p, "in")) {
-      flags = EXP_ITERATION | (pointer ? EXP_POINTER_BINDING : 0) | (constant ? EXP_CONST : 0) |
+      flags = EXP_ITERATION | (pointer ? EXP_POINTER_BINDING : 0) |
               (index != NONE ? EXP_INDEXED : 0);
       append(p, &cf, &cl, binding);
       if (index != NONE) append(p, &cf, &cl, index);
@@ -278,8 +280,11 @@ static uint32_t src_statement_body(Parser *p) {
   if (is(p, "break") || is(p, "continue")) {
     unsigned kind = is(p, "break") ? SRC_BREAK : SRC_CONTINUE;
     uint32_t end = p->token.end; lex(p);
-    uint32_t child = take(p, ":") ? name(p) : NONE;
-    return src_node(p, kind, start, src_end(p, child, end), child);
+    if (is(p, ":")) {
+      fail(p, start, "loops have no labels: break and continue act on the innermost loop");
+      return NONE;
+    }
+    return src_node(p, kind, start, end, NONE);
   }
   if (is(p, "return")) {
     uint32_t end = p->token.end; lex(p);
@@ -299,7 +304,10 @@ static uint32_t src_statement_body(Parser *p) {
     Parser probe = *p; ExpTree scratch = {0}; probe.tree = &scratch;
     lex(&probe); bool colon = take(&probe, ":");
     if (scratch.error) { propagate_error(p, &scratch); return NONE; }
-    if (colon && is(&probe, "for")) return src_for(p);
+    if (colon && is(&probe, "for")) {
+      fail(p, start, "loops have no labels: use a flag variable, or move the inner loop into a function and return");
+      return NONE;
+    }
     return src_variable(p);
   }
   uint32_t value = expression(p, 0);

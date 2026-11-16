@@ -158,11 +158,18 @@ return i }
 pub fn loop_label(n:u64) u64 {
   i:u64 = 0
   total:u64 = 0
-  outer: for i < n { i += 1
-    for { if i == 2 { continue:outer }
-    if i > 5 { break:outer }
-    total += i
-    break }
+  done := false
+  for !done && i < n {
+    i += 1
+    for {
+      if i == 2 { break }
+      if i > 5 {
+        done = true
+        break
+      }
+      total += i
+      break
+    }
   }
   return total
 }
@@ -300,9 +307,18 @@ return total }
 pub fn range_nested(a:u64,b:u64) u64 { total:u64 = 0
 lo:u64 = 0
 hi:u64 = 3
-outer: for i in a..b { for j in lo..hi { if i == 2 { continue:outer }
-if i == 5 { break:outer }
-total += i+j } }
+stop := false
+for i in a..b {
+for j in lo..hi {
+if i == 2 { break }
+if i == 5 {
+stop = true
+break
+}
+total += i+j
+}
+if stop { break }
+}
 return total }
 pub fn range_bound_panic(a:u64,b:u64) u64 { total:u64 = 0
 for i in (a/b)..(a+1) { total += i }

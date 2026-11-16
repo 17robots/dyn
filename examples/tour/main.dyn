@@ -224,15 +224,16 @@ fn control() {
     steps += 1
     if steps == 4 { break }
   }
-  // Labels break out of nested loops.
+  // break leaves the innermost loop; a flag ends the outer one too.
   found := false
-  outer: for row in 0..4 {
+  for row in 0..4 {
     for col in 0..4 {
       if row * col == 6 {
         found = true
-        break: outer
+        break
       }
     }
+    if found { break }
   }
   // case on integers: patterns are constants, and _ takes the rest. One arm
   // may list several patterns.
@@ -302,9 +303,9 @@ fn memory() {
   raw := mem.arena_push(arena, 4, 1)
   bytes := #slice(#cast(*u8, raw), 4)
   bytes[3] = 7
-  // #offset moves a pointer by whole elements.
-  second := #offset(&scores[0], 1)
-  second.* = 1
+  // A pointer range indexes like a slice.
+  run := #slice(&scores[0], 2)
+  run[1] = 1
   io.println("memory {} {} {} {} {}", p.name, p.health, scores[0], scores[1], bytes[3])
 }
 

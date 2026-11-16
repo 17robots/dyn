@@ -12,7 +12,7 @@ module = str(ROOT / 'tests/vet-checks')
 plain = subprocess.run([DYN, 'vet', module], capture_output=True, text=True, timeout=60)
 assert plain.returncode == 1 and 'local is never used' in plain.stderr and 'unsafe:' not in plain.stderr, plain
 full = subprocess.run([DYN, 'vet', '--unsafe', module], capture_output=True, text=True, timeout=60)
-for message in ('unsafe: #slice', 'unsafe: #offset', 'unsafe: pointer cast', 'unsafe: size multiplication'):
+for message in ('unsafe: #slice', 'unsafe: pointer cast', 'unsafe: size multiplication'):
     assert message in full.stderr, (message, full.stderr)
 with tempfile.TemporaryDirectory() as directory:
     root = Path(directory)

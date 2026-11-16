@@ -256,10 +256,6 @@ fn src_for(p: *Parser) u32 {
   start := p.token.start
   first := None
   last := None
-  if !token_is(p, "for") {
-    chain(p, &first, &last, parse_name(p))
-    expect(p, ":")
-  }
   expect(p, "for")
   if !token_is(p, "{") {
     begin := p.token.start
@@ -268,7 +264,10 @@ fn src_for(p: *Parser) u32 {
     saved := p.*
     count := p.tree.count
     pointer := take(p, "*")
-    constant := pointer && take(p, "const")
+    if pointer && token_is(p, "const") {
+      fail(p, p.token.start, "write `for *value in`: the pointer is const when the collection is")
+      return None
+    }
     flags: u16
     binding := None
     if p.token.kind == TokenKind.Name {
@@ -297,9 +296,6 @@ fn src_for(p: *Parser) u32 {
       }
       if pointer {
         flags |= FlagPointerBinding
-      }
-      if constant {
-        flags |= FlagConst
       }
       chain(p, &condition_first, &condition_last, binding)
       if index != None {
@@ -458,11 +454,11 @@ fn src_statement_body(p: *Parser) u32 {
     }
     end := p.token.end
     lex(p)
-    child := None
-    if take(p, ":") {
-      child = parse_name(p)
+    if token_is(p, ":") {
+      fail(p, start, "loops have no labels: break and continue act on the innermost loop")
+      return None
     }
-    return add_node(p, kind, start, src_end(p, child, end), child)
+    return add_node(p, kind, start, end, None)
   }
   if token_is(p, "return") {
     end := p.token.end
@@ -490,7 +486,10 @@ fn src_statement_body(p: *Parser) u32 {
       propagate_error(p, &scratch)
       return None
     }
-    if colon && token_is(&probe, "for") { return src_for(p) }
+    if colon && token_is(&probe, "for") {
+      fail(p, start, "loops have no labels: use a flag variable, or move the inner loop into a function and return")
+      return None
+    }
     return src_variable(p)
   }
   value := expression(p, 0)

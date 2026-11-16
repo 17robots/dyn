@@ -575,8 +575,11 @@ static uint32_t parse(Parser *p, int minimum) {
     }
     uint32_t end = p->token.end; expect(p, ")");
     left = node(p, load ? EXP_LOAD : EXP_SYSCALL, token.start, end, first, (Token){0});
-  } else if (is(p, "#slice") || is(p, "#offset")) {
-    unsigned flags = is(p, "#offset") ? EXP_CONST : 0;
+  } else if (is(p, "#offset")) {
+    fail(p, token.start, "#offset was removed: index a pointer range with #slice(pointer, count)[i]");
+    return NONE;
+  } else if (is(p, "#slice")) {
+    unsigned flags = 0;
     lex(p); expect(p, "("); uint32_t child = expression(p, 0); expect(p, ",");
     uint32_t count = expression(p, 0); uint32_t end = p->token.end; expect(p, ")");
     if (child != NONE && !p->tree->error) p->tree->nodes[child].next = count;

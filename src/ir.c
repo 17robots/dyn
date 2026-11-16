@@ -904,7 +904,7 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
     ir->statements[i] = (DynIrStmt){.kind = from->kind, .expression = from->expression, .target = from->target, .assignment_op = from->assignment_op,
                                     .local_id = from->local_id, .body_start = from->body_start, .body_count = from->body_count, .else_start = from->else_start, .else_count = from->else_count,
                                     .loop_id = from->loop_id, .target_loop_id = from->target_loop_id, .case_arm_start = from->case_arm_start, .case_arm_count = from->case_arm_count,
-                                    .defer_block = from->defer_block, .for_pointer = from->for_pointer, .for_const = from->for_const, .for_range = from->for_range, .for_inclusive = from->for_inclusive, .for_reverse = from->for_reverse, .for_index = from->for_index, .span = from->span};
+                                    .defer_block = from->defer_block, .for_pointer = from->for_pointer, .for_range = from->for_range, .for_inclusive = from->for_inclusive, .for_reverse = from->for_reverse, .for_index = from->for_index, .span = from->span};
   }
   for (size_t i = 0; i < a->pattern_count; ++i)
     ir->patterns[i] = (DynIrPattern){a->patterns[i].first_value, a->patterns[i].last_value, lower_type(a, a->patterns[i].type), a->patterns[i].variant, a->patterns[i].is_enum, a->patterns[i].is_signed, a->patterns[i].is_type};

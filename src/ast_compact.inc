@@ -488,10 +488,10 @@ static DynExprId compact_expr(CompactNode node, const DynSource *s, DynAstProgra
       if (!compact_null(compact_unwrap(high))) e.integer = compact_expr(high, s, a, errors);
     }
   } else if (k == EXP_POINTER_OP) {
-    /* #slice(p, n) is a pointer slice; #offset(p, n) resolves in sema. */
+    /* #slice(p, n) is a pointer slice. */
     e.kind = DYN_EXPR_SLICE;
     e.boolean = true;
-    e.op = compact_flag(node, EXP_CONST) ? DYN_OP_ADD : DYN_OP_NONE;
+    e.op = DYN_OP_NONE;
     e.left = compact_expr(compact_child(node, 0), s, a, errors);
     e.right = DYN_NO_EXPR;
     e.integer = compact_expr(compact_child(node, 1), s, a, errors);
@@ -856,10 +856,6 @@ static uint32_t compact_stmt(CompactNode n, const DynSource *s, DynAstProgram *a
     CompactNode last = compact_last(n);
     for (uint32_t z = 0; z + 1 < count; ++z) {
       CompactNode c = compact_child(n, z);
-      if (!(compact_kind(c) != EXP_NAME)) {
-        st.label = compact_span(c);
-        continue;
-      }
       if (!(compact_kind(c) != SRC_FOR_CONDITION)) {
         uint32_t cc = compact_count(c);
         if (cc == 1)
@@ -867,7 +863,6 @@ static uint32_t compact_stmt(CompactNode n, const DynSource *s, DynAstProgram *a
         else {
           CompactNode binder = compact_child(c, 0);
           st.for_pointer = compact_flag(c, EXP_POINTER_BINDING);
-          st.for_const = compact_flag(c, EXP_CONST);
           st.name = compact_span(binder);
           st.for_index = compact_flag(c, EXP_INDEXED);
           if (st.for_index)
@@ -901,12 +896,8 @@ static uint32_t compact_stmt(CompactNode n, const DynSource *s, DynAstProgram *a
                 &st.body_count);
   } else if (!(k != SRC_BREAK)) {
     st.kind = DYN_STMT_BREAK;
-    if (compact_count(n))
-      st.control_label = compact_span(compact_child(n, 0));
   } else if (!(k != SRC_CONTINUE)) {
     st.kind = DYN_STMT_CONTINUE;
-    if (compact_count(n))
-      st.control_label = compact_span(compact_child(n, 0));
   } else if (!(k != SRC_DEFER)) {
     st.kind = DYN_STMT_DEFER;
     CompactNode action = compact_child(n, 0);

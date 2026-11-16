@@ -4,8 +4,6 @@ fn main() {
   pointer := &value
   view := #slice(pointer, 1)
   _ = view
-  next := #offset(pointer, 1)
-  _ = next
   raw := #cast(rawptr, pointer)
   _ = raw
 }

@@ -354,7 +354,7 @@ fn preedit_draw(_context: rawptr, data: rawptr, call: *PreeditDraw) {
       at: usize = 0
       for count < wanted && at < 4096 {
         point: u32 = 0
-        result := decode_multibyte(&point, #offset(bytes, at), 1, &state)
+        result := decode_multibyte(&point, &#slice(bytes, at + 1)[at], 1, &state)
         at += 1
         if result == #cast(usize, -2) { continue }
         if result == 0 || result == #cast(usize, -1) || utf8.encoded_width(point) == 0 {

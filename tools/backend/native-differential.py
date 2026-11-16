@@ -177,10 +177,17 @@ r := q
 return #cast(u64, (r.x + r.y)) }
 pub fn agg_nested_loops(a: u64) u64 {
   total: u64 = 0
-  outer: for i in 0..(a % 10) {
-    for j in #reverse(0..=(a % 7)) { if j == 3 { continue:outer }
-    if i * j > 20 { break:outer }
-    total += i * 7 + j }
+  stop := false
+  for i in 0..(a % 10) {
+    for j in #reverse(0..=(a % 7)) {
+      if j == 3 { break }
+      if i * j > 20 {
+        stop = true
+        break
+      }
+      total += i * 7 + j
+    }
+    if stop { break }
   }
   return total
 }

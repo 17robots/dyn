@@ -163,7 +163,6 @@ static bool numeric(Sema *sema, DynType t) {
   return integer(sema, t) || t == DYN_TYPE_F32 || t == DYN_TYPE_F64;
 }
 
-static bool span_present(DynSpan s) { return s.end_byte > s.start_byte; }
 static unsigned name_distance(DynSpan unknown, DynSpan candidate,
                               const DynSource *s) {
   size_t an = 0, bn = candidate.end_byte - candidate.start_byte;
@@ -233,15 +232,6 @@ static bool suggest_name(DynAstProgram *a, DynSpan unknown, const DynSource *s,
 }
 static bool push_loop(Sema *sema, DynAstStmt *st, const DynSource *s,
                       unsigned *errors) {
-  if (span_present(st->label))
-    for (size_t i = 0; i < sema->active_loop_count; ++i)
-      if (span_present(sema->active_loops[i]->label) &&
-          dyn_span_text_equal(st->label, sema->active_loops[i]->label, s)) {
-        error_span(st->label, s, errors, "duplicate active loop label");
-        note_span(sema->active_loops[i]->label, s,
-                  "previous label declared here");
-        break;
-      }
   if (sema->active_loop_count == sema->active_loop_capacity) {
     size_t c = sema->active_loop_capacity ? sema->active_loop_capacity * 2 : 8;
     void *p = realloc(sema->active_loops, c * sizeof(*sema->active_loops));
@@ -267,20 +257,8 @@ static bool resolve_loop_control(Sema *sema, DynAstStmt *st, const DynSource *s,
                                           : "continue requires enclosing loop");
     return false;
   }
-  if (!span_present(st->control_label)) {
-    st->target_loop_id =
-        sema->active_loops[sema->active_loop_count - 1]->loop_id;
-    return true;
-  }
-  for (size_t i = sema->active_loop_count; i > 0; --i)
-    if (span_present(sema->active_loops[i - 1]->label) &&
-        dyn_span_text_equal(st->control_label, sema->active_loops[i - 1]->label,
-                            s)) {
-      st->target_loop_id = sema->active_loops[i - 1]->loop_id;
-      return true;
-    }
-  error_span(st->control_label, s, errors, "unknown active loop label");
-  return false;
+  st->target_loop_id = sema->active_loops[sema->active_loop_count - 1]->loop_id;
+  return true;
 }
 static bool reserve_local(DynAstProgram *a) {
   if (a->local_count < a->local_capacity)
@@ -2734,50 +2712,19 @@ static DynType check_expr_node(Sema *sema, DynAstProgram *a, DynExprId id,
     }
     if (pointer && a->expressions[id].boolean)
       sema_vet_note(s, a->expressions[id].span, true,
-                    a->expressions[id].op == DYN_OP_ADD ? "unsafe: #offset" : "unsafe: #slice");
+                    "unsafe: #slice");
     if (pointer && !a->expressions[id].boolean) {
       error_span(a->expressions[id].span, s, errors,
                  "slice a pointer with #slice(pointer, count)");
       return a->expressions[id].type = DYN_TYPE_ERROR;
     }
     if (!pointer && a->expressions[id].boolean) {
-      error_span(a->expressions[id].span, s, errors, "#slice and #offset require a pointer");
+      error_span(a->expressions[id].span, s, errors, "#slice requires a pointer");
       return a->expressions[id].type = DYN_TYPE_ERROR;
     }
     if (pointer && !sema_type_layout(sema, a, pointer->pointee, false)) {
       error_span(a->expressions[id].span, s, errors, "cannot slice pointer to unsized type");
       return a->expressions[id].type = DYN_TYPE_ERROR;
-    }
-    if (a->expressions[id].boolean && a->expressions[id].op == DYN_OP_ADD) {
-      /* #offset(p, n) is p plus n elements, built from ordinary wrapping
-         address arithmetic so every backend lowers it the same way. */
-      DynType count_type = check_expr(sema, a, (DynExprId)a->expressions[id].integer, s, errors, DYN_TYPE_ISIZE);
-      if (!integer(sema, count_type)) {
-        error_span(a->expressions[id].span, s, errors, "#offset count requires an integer");
-        return a->expressions[id].type = DYN_TYPE_ERROR;
-      }
-      uint64_t stride = sema_type_layout(sema, a, pointer->pointee, false);
-      DynExprId address = convert_expr(a, a->expressions[id].left, DYN_TYPE_USIZE);
-      DynExprId count = convert_expr(a, (DynExprId)a->expressions[id].integer, DYN_TYPE_USIZE);
-      DynExprId size = reflection_expr(a, DYN_EXPR_INT, DYN_TYPE_USIZE, stride);
-      DynExprId bytes = reflection_expr(a, DYN_EXPR_BINARY, DYN_TYPE_USIZE, 0);
-      DynExprId sum = reflection_expr(a, DYN_EXPR_BINARY, DYN_TYPE_USIZE, 0);
-      if (address == DYN_NO_EXPR || count == DYN_NO_EXPR || sum == DYN_NO_EXPR)
-        return a->expressions[id].type = DYN_TYPE_ERROR;
-      /* Address arithmetic always wraps, even under --check-overflow. */
-      a->expressions[bytes].wrap = true;
-      a->expressions[sum].wrap = true;
-      a->expressions[bytes].op = DYN_OP_MUL;
-      a->expressions[bytes].left = count;
-      a->expressions[bytes].right = size;
-      a->expressions[sum].op = DYN_OP_ADD;
-      a->expressions[sum].left = address;
-      a->expressions[sum].right = bytes;
-      a->expressions[id].kind = DYN_EXPR_CONVERT;
-      a->expressions[id].left = sum;
-      a->expressions[id].op = DYN_OP_NONE;
-      a->expressions[id].boolean = false;
-      return a->expressions[id].type = base;
     }
     DynType element = ar ? ar->element : sl ? sl->element : pointer->pointee;
     bool element_const = sl ? sl->is_const : pointer && pointer->is_const;
@@ -3580,41 +3527,6 @@ static bool interval_overlap(const DynAstPattern *a, const DynAstPattern *b) {
   }
   return a->first_value <= b->last_value && b->first_value <= a->last_value;
 }
-static bool integer_case_complete(Sema *sema, DynAstProgram *a, DynAstStmt *st,
-                                  DynType type) {
-  bool sign = signed_int(sema, type);
-  unsigned width = bits(sema, type);
-  uint64_t cursor = sign
-                        ? (uint64_t)(width == 64 ? INT64_MIN
-                                                 : -(INT64_C(1) << (width - 1)))
-                        : 0,
-           max = sign
-                     ? (uint64_t)(width == 64 ? INT64_MAX
-                                              : (INT64_C(1) << (width - 1)) - 1)
-                     : (width == 64 ? UINT64_MAX : (UINT64_C(1) << width) - 1);
-  for (;;) {
-    DynAstPattern *found = NULL;
-    for (uint32_t i = 0; i < st->case_arm_count && !found; ++i) {
-      DynAstCaseArm *arm = &a->case_arms[st->case_arm_start + i];
-      for (uint32_t j = 0; j < arm->pattern_count; ++j) {
-        DynAstPattern *p = &a->patterns[arm->pattern_start + j];
-        if (p->first_value == cursor) {
-          found = p;
-          break;
-        }
-      }
-    }
-    if (!found)
-      return false;
-    if (found->last_value == max)
-      return true;
-    if (sign && (int64_t)found->last_value == INT64_MAX)
-      return false;
-    if (!sign && found->last_value == UINT64_MAX)
-      return false;
-    cursor = found->last_value + 1;
-  }
-}
 static bool sema_case_v2(Sema *sema, DynAstProgram *a, DynAstStmt *st,
                          const DynSource *s, unsigned *errors) {
   DynType subject =
@@ -3863,14 +3775,14 @@ static bool sema_case_v2(Sema *sema, DynAstProgram *a, DynAstStmt *st,
     for (uint32_t i = 0; i < en->variant_count; ++i)
       complete = complete && seen[i];
   } else
-    complete = integer_case_complete(sema, a, st, subject);
+    complete = false; /* an integer case always needs a _ arm */
   if (wildcard && complete)
     error_span(st->span, s, errors,
                "_ case arm is unreachable because all cases are covered");
   else if (!wildcard && !complete && enum_case)
     error_missing_variants(a, st->span, s, errors, "case is not exhaustive", subject, seen);
   else if (!wildcard && !complete)
-    error_span(st->span, s, errors, "case is not exhaustive: add the missing ranges or a _ arm");
+    error_span(st->span, s, errors, "an integer or text case needs a _ arm");
   if (enum_case) free(seen);
   return all_terminate;
 }
@@ -4325,7 +4237,7 @@ static bool sema_stmt_checked(Sema *sema, DynAstProgram *a, DynAstStmt *st,
       free(variants);
     } else if (!wildcard)
       error_span(st->span, s, errors,
-                 "integer case requires exhaustive ranges or _");
+                 "an integer or text case needs a _ arm");
     return all_terminate;
   }
   if (st->kind == DYN_STMT_IF || st->kind == DYN_STMT_FOR) {
@@ -4420,11 +4332,6 @@ static bool sema_stmt_checked(Sema *sema, DynAstProgram *a, DynAstStmt *st,
           return false;
         }
       }
-      if (st->for_pointer && !st->for_const && sl && sl->is_const) {
-        error_span(st->span, s, errors,
-                   "mutable pointer for-in requires mutable collection");
-        return false;
-      }
       if (local_name_conflict(sema, a, st->name, s, true)) {
         error_span(st->name, s, errors, local_name_conflict(sema, a, st->name, s, true));
         return false;
@@ -4452,7 +4359,7 @@ static bool sema_stmt_checked(Sema *sema, DynAstProgram *a, DynAstStmt *st,
               binding =
                   st->for_pointer
                       ? sema_intern_pointer(
-                            a, element, st->for_const || (sl && sl->is_const))
+                            a, element, sl && sl->is_const)
                       : element;
       if (binding == DYN_TYPE_ERROR) {
         error_out_of_memory(st->span, s, errors);

@@ -586,11 +586,11 @@ fn parse_operand(p: *Parser, minimum: i32) u32 {
       kind = ExpLoad
     }
     left = add_node(p, kind, token.start, end, first)
-  } else if token_is(p, "#slice") || token_is(p, "#offset") {
+  } else if token_is(p, "#offset") {
+    fail(p, token.start, "#offset was removed: index a pointer range with #slice(pointer, count)[i]")
+    return None
+  } else if token_is(p, "#slice") {
     flags: u16 = 0
-    if token_is(p, "#offset") {
-      flags = FlagConst
-    }
     lex(p)
     expect(p, "(")
     child := expression(p, 0)

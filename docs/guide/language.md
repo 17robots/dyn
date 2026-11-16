@@ -221,8 +221,8 @@ written order, not declaration order.
 `if` and condition-form `for` require `bool`. Bare `for {}` is an infinite loop. `break` and
 `continue` require an enclosing loop. Block locals are inaccessible after block exit. `for value in
 collection` accepts arrays and slices, evaluates the collection once, and copies each element into
-the loop-local binding. `for *value` binds a mutable pointer to each source element; mutable binding
-rejects const slices and requires assignable arrays. `for *const value` binds a const pointer.
+the loop-local binding. `for *value` binds a pointer to each source element. The pointer is `*const` when the collection is
+a const slice, so writing through it is an error there; arrays must be assignable.
 `for value, i in values` (and `for *value, i`) also binds the element's index as a `usize`; with
 `#reverse` the index still names the element's position. A range loop's variable is already its
 index, so a range takes no second name.
@@ -239,8 +239,9 @@ bindings are rejected. Inclusive ranges may end at the type's maximum without ov
 `#reverse`. `for value in #reverse(values)` and `for *value in #reverse(values)` visit array or
 slice elements from last to first. `#reverse` is valid only as a `for` iterable and never wraps an
 unsigned bound.
-Loops may be labeled as `name: for`; `break: name` and `continue: name` target any active enclosing
-loop with that label. Active labels cannot duplicate. Transfers run defers for every exited scope.
+`break` and `continue` act on the innermost loop; loops have no labels. To leave nested loops, set a
+flag and break again, or move the inner loop into a function and return. Transfers run defers for
+every exited scope.
 
 Struct field order determines layout. Packed structs preserve order, remove inter-field padding,
 and have alignment 1. Construction gives every field its default (zero when it declares none), then
