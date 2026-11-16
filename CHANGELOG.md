@@ -78,6 +78,12 @@ Fewer hidden compiler rules:
   remains the run-time aid for stale arena memory.
 - `process.spawn` returns `*Child`, kept in the arena it is given;
   `process.take` is gone.
+- Handles are plain values: copy them freely, close them once. `fs.take`,
+  `fs.borrow`, `fs.borrow_handle`, `net.listener_take`,
+  `net.connection_take` and `File.owned` are gone; assign the handle
+  (`file := opened.value`) instead. `dyn vet` warns about the obvious
+  mistake, by shape: a variable copied with `=` and both copies passed to
+  the same function, as in `fs.close(&file)` then `fs.close(&copy)`.
 - `#typeof(value)` on an `any` gives the boxed value's `TypeInfo` at run
   time. `TypeInfo` ids are the same numbers an `any` carries: unique in a
   program (two modules' `Point` types no longer share one) but not stable

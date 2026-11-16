@@ -5302,6 +5302,69 @@ static DynExprId sema_push_expr(DynAstProgram *a, DynAstExpr e) {
   a->expressions[a->expression_count] = e;
   return (DynExprId)a->expression_count++;
 }
+/* dyn vet: a struct local copied from another with `copy := original`, and
+   then both passed by mutable pointer to the same function, as in
+   fs.close(&original) and fs.close(&copy). Whatever that function releases
+   would be released twice. No function or type is known by name. */
+struct VetPassed { uint32_t function, local; DynSpan span; };
+static void vet_copied_handles(const DynAstProgram *a, const DynSource *s) {
+  struct VetPassed *passed = NULL;
+  size_t passed_count = 0, passed_capacity = 0;
+  for (size_t i = 0; i < a->expression_count; ++i) {
+    const DynAstExpr *e = &a->expressions[i];
+    if (e->kind != DYN_EXPR_CALL || e->integer >= a->function_count) continue;
+    for (uint32_t k = 0; k < e->item_count; ++k) {
+      DynExprId item = a->items[e->item_start + k].expression;
+      if (item >= a->expression_count) continue;
+      const DynAstExpr *address = &a->expressions[item];
+      /* A *const parameter only reads: passing both copies there is fine. */
+      if (address->kind != DYN_EXPR_UNARY || address->op != DYN_OP_ADDRESS || address->left >= a->expression_count) continue;
+      const DynAstExpr *name = &a->expressions[address->left];
+      if (name->kind != DYN_EXPR_NAME || name->integer >= a->local_count ||
+          !dyn_type_is_struct(a->locals[name->integer].type)) continue;
+      if (passed_count == passed_capacity) {
+        size_t grown = passed_capacity ? passed_capacity * 2 : 64;
+        struct VetPassed *more = realloc(passed, grown * sizeof(*more));
+        if (!more) { free(passed); return; }
+        passed = more;
+        passed_capacity = grown;
+      }
+      passed[passed_count++] = (struct VetPassed){(uint32_t)e->integer, (uint32_t)name->integer, e->span};
+    }
+  }
+  for (size_t i = 0; i < a->statement_count && passed_count; ++i) {
+    const DynAstStmt *st = &a->statements[i];
+    if (st->kind != DYN_STMT_LOCAL || st->local_id >= a->local_count || st->expression >= a->expression_count) continue;
+    const DynAstExpr *source = &a->expressions[st->expression];
+    if (source->kind != DYN_EXPR_NAME || source->integer >= a->local_count) continue;
+    uint32_t copy = st->local_id, original = (uint32_t)source->integer;
+    if (a->locals[copy].type != a->locals[original].type || !dyn_type_is_struct(a->locals[copy].type)) continue;
+    for (size_t x = 0; x < passed_count; ++x) {
+      if (passed[x].local != copy) continue;
+      for (size_t y = 0; y < passed_count; ++y) {
+        if (passed[y].local != original || passed[y].function != passed[x].function) continue;
+        const DynAstFn *callee = &a->functions[passed[x].function];
+        const char *callee_name = s->text + callee->name.start_byte;
+        size_t callee_length = callee->name.end_byte - callee->name.start_byte;
+        if (callee_length > 22 && !memcmp(callee_name, "dyn_m", 5) && callee_name[21] == '_') {
+          callee_name += 22;
+          callee_length -= 22;
+        }
+        char message[320];
+        snprintf(message, sizeof(message),
+                 "'%.*s' is a copy of '%.*s', and both are passed to %.*s; what it releases is released twice",
+                 (int)(a->locals[copy].name.end_byte - a->locals[copy].name.start_byte), s->text + a->locals[copy].name.start_byte,
+                 (int)(a->locals[original].name.end_byte - a->locals[original].name.start_byte),
+                 s->text + a->locals[original].name.start_byte, (int)callee_length, callee_name);
+        DynSpan later = passed[x].span.start_byte > passed[y].span.start_byte ? passed[x].span : passed[y].span;
+        sema_vet_note(s, later, false, message);
+        goto next_copy;
+      }
+    }
+  next_copy:;
+  }
+  free(passed);
+}
 /* main takes nothing: a program that wants its arguments calls
    process.start() itself, so nothing runs before main's first line. */
 static void sema_main_init(DynAstProgram *a, const DynSource *s, unsigned *errors) {
@@ -5382,6 +5445,7 @@ bool dyn_sema_base(DynAstProgram *a, const DynSource *s, unsigned *errors) {
           !a->locals[st->local_id].used && !discard_name(st->name, s))
         sema_vet_note(s, st->name, false, "local is never used");
     }
+    vet_copied_handles(a, s);
     for (size_t i = 0; i < a->expression_count; ++i) {
       const DynAstExpr *e = &a->expressions[i];
       if (e->kind == DYN_EXPR_SYSCALL)

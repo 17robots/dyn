@@ -209,7 +209,7 @@ fn main() {
     if io.failed(listened.failure) {
       #panic("cannot listen")
     }
-    listener = net.listener_take(&listened.value)
+    listener = listened.value
     started = evented.start(arena, workers, &listener, config, binding.handler, binding.context)
   }
   if io.failed(started.failure) {

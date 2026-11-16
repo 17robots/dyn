@@ -251,7 +251,7 @@ fn serve() {
   if io.failed(opened.failure) {
     #panic("listen")
   }
-  listener := net.listener_take(&opened.value)
+  listener := opened.value
   bound: net.Address
   if io.failed(net.local_address(listener.descriptor, &bound).failure) {
     #panic("local address")

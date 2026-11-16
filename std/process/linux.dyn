@@ -43,7 +43,7 @@ fn pipe_native() Pipe {
   return Pipe{ input: descriptors[0], output: descriptors[1] }
 }
 fn read_native(handle: isize, destination: []u8) ReadResult {
-  file := fs.borrow_handle(handle)
+  file := fs.adopt_handle(handle)
   result := fs.read(&file, destination)
   if io.failed(result.failure) && result.failure.native == -11 { return ReadResult{ ok: true } }
   return ReadResult{ count: result.transferred, ended: !io.failed(result.failure) && result.transferred == 0, error: result.failure.native, kind: result.failure.kind, ok: !io.failed(result.failure) }

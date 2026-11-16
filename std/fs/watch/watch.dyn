@@ -91,7 +91,7 @@ pub fn next(state: *Watcher) EventResult {
   }
   if state.offset == state.used {
     if !state.active { return event_failure(state, -9) }
-    file := fs.borrow_handle(state.descriptor)
+    file := fs.adopt_handle(state.descriptor)
     result := fs.read(&file, state.storage)
     if io.failed(result.failure) {
       if result.failure.native == -11 { return EventResult{ status: Status.Empty } }

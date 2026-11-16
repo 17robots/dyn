@@ -132,7 +132,7 @@ fn main() i32 {
     }
     // A File is an OS handle, so it must have exactly one owner. take moves
     // it out of the result instead of copying it; dyn vet flags a copy.
-    file := fs.take(&opened.value)
+    file := opened.value
     // defer runs when this loop iteration's block ends, however it ends.
     defer fs.close(&file)
 

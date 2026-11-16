@@ -1478,7 +1478,7 @@ pub fn start_shared(arena: *mem.Arena, workers: []Worker, address: network.Ipv4A
     worker := &workers[i]
     listened := network.tcp_listen_ipv4_shared(&address, backlog)
     if io.failed(listened.failure) { return abandon(workers, i, listened.failure) }
-    worker.own_listener = network.listener_take(&listened.value)
+    worker.own_listener = listened.value
     worker.listener = &worker.own_listener
     if i == 0 {
       // Pin a kernel-chosen port so later listeners join the same group.

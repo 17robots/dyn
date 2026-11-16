@@ -925,16 +925,13 @@ module's full declarations and comments.
 
 ## std/fs
 
-- `struct File { descriptor: isize, active: bool, owned: bool }`: File{} is unopened.
+- `struct File { descriptor: isize, active: bool }`: A file handle is a plain value: copy it freely, and close it once.
 - `type FileResult = io.Result(File)`
 - `struct Result { transferred: usize, failure: io.Failure }`
 - `type OffsetResult = io.Count`
 - `type ReadAllResult = io.Bytes`
 - `fn is_open(file: *const File) bool`
-- `fn adopt_handle(handle: isize) File`: Adopt transfers responsibility for a native handle to the returned owner.
-- `fn borrow_handle(handle: isize) File`
-- `fn borrow(file: *const File) File`
-- `fn take(file: *File) File`
+- `fn adopt_handle(handle: isize) File`: A File for a native handle opened elsewhere;
 - `fn open(path: []const u8) FileResult`
 - `fn create(path: []const u8) FileResult`
 - `fn append(path: []const u8) FileResult`
@@ -1618,8 +1615,6 @@ module's full declarations and comments.
 - `fn multicast_ttl_ipv4(descriptor: isize, ttl: u8) Result`
 - `fn multicast_loop_ipv4(descriptor: isize, enabled: bool) Result`: POSIX controls outgoing loopback;
 - `fn listener_accept(listener: *Listener) ConnectionResult`
-- `fn listener_take(listener: *Listener) Listener`: Moves the listener out, leaving the source closed so only the result owns it.
-- `fn connection_take(connection: *Connection) Connection`: Moves the connection out, leaving the source closed so only the result owns it.
 - `fn listener_close(listener: *Listener)`
 - `fn connection_close(connection: *Connection)`
 - `fn connection_read(connection: *Connection, destination: []u8) Result`

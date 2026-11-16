@@ -25,6 +25,8 @@ pub struct Address { bytes: [128]u8, length: usize }
 // `error` keeps the native code; `kind` is its portable category.
 pub type Result = io.Result(isize)
 // `active` makes zeroed storage a closed handle; descriptor 0 is a valid descriptor.
+// Connections and listeners are plain values, like files: copy them freely
+// and close them once.
 pub struct Connection { descriptor: isize, active: bool }
 pub struct Listener { descriptor: isize, active: bool }
 
@@ -293,20 +295,6 @@ pub fn listener_accept(listener: *Listener) ConnectionResult {
     return ConnectionResult{ value: Connection{}, failure: io.Failure{ kind: accepted.failure.kind, native: accepted.failure.native } }
   }
   return ConnectionResult{ value: connection_from_descriptor(result_value(&accepted)) }
-}
-
-// Moves the listener out, leaving the source closed so only the result owns it.
-pub fn listener_take(listener: *Listener) Listener {
-  result := listener.*
-  listener.* = Listener{}
-  return result
-}
-
-// Moves the connection out, leaving the source closed so only the result owns it.
-pub fn connection_take(connection: *Connection) Connection {
-  result := connection.*
-  connection.* = Connection{}
-  return result
 }
 
 pub fn listener_close(listener: *Listener) {
