@@ -677,6 +677,17 @@ fn parse_operand(p: *Parser, minimum: i32) u32 {
     }
     left = mark(p, add_node(p, ExpPointerOp, token.start, end, child), flags)
     primary = true
+  } else if token_is(p, "#sqrt") || token_is(p, "#floor") || token_is(p, "#ceil") || token_is(p, "#trunc") ||
+    token_is(p, "#round") || token_is(p, "#fma") {
+    // A math builtin names a function of the compiler's prelude, so
+    // #sqrt(x) parses as a call.
+    lex(p)
+    if !token_is(p, "(") {
+      fail(p, p.token.start, "expected '(' after a math builtin, as in #sqrt(x)")
+      return None
+    }
+    left = add_node(p, ExpName, token.start, token.end, None)
+    primary = true
   } else if token_is(p, "#len") || token_is(p, "#init") {
     kind := ExpLen
     lex(p)

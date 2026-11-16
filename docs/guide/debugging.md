@@ -74,7 +74,7 @@ the debugger's C-like casts when inspecting values.
 Integer arithmetic wraps. To find overflow that is not meant, build with `--check-overflow`:
 `+`, `-`, `*`, `<<` and negation in your own modules then panic with `overflow.ok` and a stack
 trace. Library code keeps wrapping. Use `math.wrapping_add`, `wrapping_sub` and `wrapping_mul`
-from `std/math` where your code wraps on purpose. The flag is for debug builds only.
+from `std/math` where your code wraps on purpose. The flag works in debug and release builds.
 
 ## Memory faults
 

@@ -5,7 +5,7 @@ typedef struct { bool stack, expired; uint32_t arena, address; } LifeValue;
 typedef struct { uint32_t local, field; LifeValue value; } LifeField;
 typedef struct {
   Sema *sema; DynAstProgram *a; const DynSource *source; unsigned *errors;
-  uint32_t first, count; LifeValue *locals;
+  uint32_t first, count, params; LifeValue *locals;
   LifeField *fields; size_t field_count, field_capacity;
 } Life;
 static LifeValue life_join(LifeValue a, LifeValue b) {
@@ -48,7 +48,7 @@ static uint8_t life_mem_kind(Life *l, uint64_t function) {
   DynSpan span=l->a->functions[function].name;
   const char *path,*text; size_t n,at;
   dyn_source_position(l->source,span.start_byte,&path,&text,&n,&at);
-  if (path && (strstr(path,"/std/mem/") || strstr(path,"/share/dyn/mem/")))
+  if (dyn_path_in_library_module(path, "mem"))
     for (size_t i=0;i<sizeof(life_mem_names)/sizeof(*life_mem_names);++i) {
       size_t z=strlen(life_mem_names[i]);
       if (at+z<=n && !memcmp(text+at,life_mem_names[i],z) &&
@@ -86,10 +86,10 @@ static void life_forget(Life *l);
 typedef enum { LIFE_NOT_OWNER, LIFE_ARENA_OWNER, LIFE_HANDLE_OWNER } LifeOwner;
 static LifeOwner life_owner(Life *l, DynType type) {
   static const struct { const char *module, *name; LifeOwner kind; } owners[] = {
-    {"mem/", "Arena", LIFE_ARENA_OWNER},
-    {"fs/", "File", LIFE_HANDLE_OWNER}, {"fs/watch/", "Watcher", LIFE_HANDLE_OWNER},
-    {"process/", "Child", LIFE_HANDLE_OWNER}, {"thread/", "Thread", LIFE_HANDLE_OWNER},
-    {"net/", "Listener", LIFE_HANDLE_OWNER}, {"net/", "Connection", LIFE_HANDLE_OWNER},
+    {"mem", "Arena", LIFE_ARENA_OWNER},
+    {"fs", "File", LIFE_HANDLE_OWNER}, {"fs/watch", "Watcher", LIFE_HANDLE_OWNER},
+    {"process", "Child", LIFE_HANDLE_OWNER}, {"thread", "Thread", LIFE_HANDLE_OWNER},
+    {"net", "Listener", LIFE_HANDLE_OWNER}, {"net", "Connection", LIFE_HANDLE_OWNER},
   };
   if (!dyn_type_is_struct(type)) return LIFE_NOT_OWNER;
   DynSpan name = l->a->structs[type - DYN_TYPE_STRUCT_BASE].name;
@@ -97,14 +97,8 @@ static LifeOwner life_owner(Life *l, DynType type) {
   dyn_source_position(l->source, name.start_byte, &path, &text, &length, &at);
   if (!path) return LIFE_NOT_OWNER;
   for (size_t i = 0; i < sizeof(owners) / sizeof(*owners); ++i) {
-    char std_dir[64], share_dir[64];
-    snprintf(std_dir, sizeof(std_dir), "/std/%s", owners[i].module);
-    snprintf(share_dir, sizeof(share_dir), "/share/dyn/%s", owners[i].module);
-    const char *found = strstr(path, std_dir);
-    size_t prefix = strlen(std_dir);
-    if (!found) { found = strstr(path, share_dir); prefix = strlen(share_dir); }
     /* The struct must be declared directly in that module directory. */
-    if (!found || strchr(found + prefix, '/')) continue;
+    if (!dyn_path_in_library_module(path, owners[i].module)) continue;
     size_t n = strlen(owners[i].name);
     if (at + n <= length && !memcmp(text + at, owners[i].name, n) &&
         (at + n == length || !(isalnum((unsigned char)text[at+n]) || text[at+n] == '_')))
@@ -126,7 +120,7 @@ static void life_warn_copy(Life *l, DynAstStmt *statement) {
   const char *path, *text; size_t length, at;
   dyn_source_position(l->source, statement->span.start_byte, &path, &text, &length, &at);
   // The standard library implements these types and transfers them deliberately.
-  if (path && (strstr(path, "/std/") || strstr(path, "/share/dyn/"))) return;
+  if (dyn_path_in_library(path)) return;
   dyn_diagnostic_source("warning", l->source,
       statement->span.start_byte, statement->span.end_byte,
       owner == LIFE_ARENA_OWNER
@@ -161,6 +155,9 @@ static LifeValue life_expr(Life *l,DynExprId id,unsigned depth) {
   } else if(e->kind==DYN_EXPR_UNARY && e->op==DYN_OP_ADDRESS && a->expressions[e->left].kind==DYN_EXPR_NAME) {
     uint32_t local=(uint32_t)a->expressions[e->left].integer;
     v.stack=life_local(l,local)!=NULL;v.address=local+1;
+  } else if(e->kind==DYN_EXPR_UNARY && e->op==DYN_OP_ADDRESS && a->expressions[e->left].kind==DYN_EXPR_STRUCT) {
+    /* &T{...} lives in this function's frame, like a local. */
+    v=life_expr(l,e->left,depth+1);v.stack=true;
   } else {
     LifeValue left=life_expr(l,e->left,depth+1), right=life_expr(l,e->right,depth+1);
     bool view=e->kind==DYN_EXPR_SLICE || e->kind==DYN_EXPR_CAST || e->kind==DYN_EXPR_CONVERT || e->kind==DYN_EXPR_BITCAST || e->kind==DYN_EXPR_FIELD || e->kind==DYN_EXPR_INDEX || e->kind==DYN_EXPR_UNARY;
@@ -202,6 +199,37 @@ static LifeValue life_expr(Life *l,DynExprId id,unsigned depth) {
   return v;
 }
 static void life_forget(Life *l) { memset(l->locals,0,l->count*sizeof(*l->locals)); l->field_count=0; }
+/* Whether a pointer comes from outside this call: a parameter, a global, or
+   a pointer read through one of them. Pointers made in the function are
+   unknown here, so they never count. */
+static bool life_outside_pointer(Life *l,DynExprId id,unsigned depth) {
+  DynAstProgram *a=l->a;
+  if(id==DYN_NO_EXPR || id>=a->expression_count || depth>64) return false;
+  DynAstExpr *e=&a->expressions[id];
+  if(e->kind==DYN_EXPR_NAME) return e->integer>=l->first && e->integer<(uint64_t)l->first+l->params;
+  if(e->kind==DYN_EXPR_GLOBAL) return true;
+  if(e->kind==DYN_EXPR_FIELD || e->kind==DYN_EXPR_INDEX || e->kind==DYN_EXPR_CONVERT || e->kind==DYN_EXPR_CAST ||
+     (e->kind==DYN_EXPR_UNARY && e->op==DYN_OP_DEREF))
+    return life_outside_pointer(l,e->left,depth+1);
+  return false;
+}
+/* Whether a write to target lands where the caller or a global can see it. */
+static bool life_target_escapes(Life *l,DynExprId id,unsigned depth) {
+  DynAstProgram *a=l->a;
+  if(id==DYN_NO_EXPR || id>=a->expression_count || depth>64) return false;
+  DynAstExpr *e=&a->expressions[id];
+  if(e->kind==DYN_EXPR_GLOBAL) return true;
+  if(e->kind==DYN_EXPR_UNARY && e->op==DYN_OP_DEREF) return life_outside_pointer(l,e->left,depth+1);
+  if(e->kind==DYN_EXPR_FIELD) {
+    if(dyn_type_is_pointer(a->expressions[e->left].type)) return life_outside_pointer(l,e->left,depth+1);
+    return life_target_escapes(l,e->left,depth+1);
+  }
+  if(e->kind==DYN_EXPR_INDEX) {
+    if(dyn_type_is_array(a->expressions[e->left].type)) return life_target_escapes(l,e->left,depth+1);
+    return life_outside_pointer(l,e->left,depth+1);
+  }
+  return false;
+}
 static void life_block(Life *l,uint32_t start,uint32_t count,unsigned depth) {
   if(depth>128) { life_forget(l); return; }
   for(uint32_t i=0;i<count && dyn_work_step(&l->source->context,1);++i) {
@@ -263,13 +291,17 @@ static void life_block(Life *l,uint32_t start,uint32_t count,unsigned depth) {
       bool direct_field= target->kind == DYN_EXPR_FIELD && !target->boolean && l->a->expressions[target->left].kind == DYN_EXPR_NAME;
       if(dest.expired && !direct_field) error_span(st->span,l->source,l->errors,"write to storage after arena_reset or arena_rewind to zero");
       if(direct_field) life_set_field(l,(uint32_t)l->a->expressions[target->left].integer,(uint32_t)target->integer,value);
-      else life_forget(l); /* An indirect write may replace tracked provenance. */
+      else {
+        if(value.stack && life_target_escapes(l,st->target,0))
+          error_span(st->span,l->source,l->errors,"stores the address of function-local storage where it outlives the function");
+        life_forget(l); /* An indirect write may replace tracked provenance. */
+      }
     }
   }
 }
 static void life_check_function(Sema *sema,DynAstProgram *a,const DynSource *s,unsigned *errors,DynAstFn *fn) {
   if(*errors || !fn->local_count) return;
-  Life l = {.sema=sema,.a=a,.source=s,.errors=errors,.first=fn->local_start,.count=fn->local_count};
+  Life l = {.sema=sema,.a=a,.source=s,.errors=errors,.first=fn->local_start,.count=fn->local_count,.params=fn->param_count};
   l.locals = calloc(l.count,sizeof(*l.locals));
   if(!l.locals) {
     a->allocation_failed = true;

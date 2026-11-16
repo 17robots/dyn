@@ -14,6 +14,32 @@ servers so they pick up the new `dyn`.
 
 ## Unreleased
 
+Fewer hidden compiler rules:
+
+- Integer arithmetic wraps in debug builds too. `--check-overflow` opts in
+  to overflow panics, now in debug and release builds alike.
+  `--no-check-overflow` is still accepted and is now the default.
+- The SDK's std and vendor code is recognized by its location in the SDK,
+  not by a path that contains `/std/` or `/vendor/`. A project under such a
+  directory is no longer exempt from `--check-overflow`, vet and the copy
+  warnings.
+- `&T{...}` takes the address of a struct literal; the storage lives until
+  the end of its block. `&f()` stays an error with a clearer message.
+- Storing a local's address through a parameter or into a global is an
+  error, like returning it.
+- `x & M` with a constant `M`, and an unsigned `x >> k` with a constant `k`,
+  convert to a smaller integer type without `#cast` when the result fits:
+  `low: u8 = word & 0xff`, `top: u8 = x >> 56`.
+- `#sqrt`, `#floor`, `#ceil`, `#trunc`, `#round` and `#fma` are builtins:
+  one instruction where the target has it, compiler-provided software
+  elsewhere. `std/math`'s `sqrt64`, `floor64` and the others call them. The
+  compiler no longer recognizes those std functions by name.
+- Names starting with `dyn_builtin_` or `DynBuiltin` are reserved for the
+  compiler.
+- `TypeInfo`, `TypeMember` and `TypeKind` are builtin type names, reserved in
+  every module; declaring one reports that. Before, a declaration collided
+  with `#typeof`'s types only in some programs.
+
 Web applications: see [docs/guide/web-apps.md](docs/guide/web-apps.md).
 
 - Shorter web apps, with no language change:

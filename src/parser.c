@@ -582,6 +582,14 @@ static uint32_t parse(Parser *p, int minimum) {
     if (child != NONE && !p->tree->error) p->tree->nodes[child].next = count;
     left = mark(p, node(p, EXP_POINTER_OP, token.start, end, child, (Token){0}), flags);
     primary = true;
+  } else if (is(p, "#sqrt") || is(p, "#floor") || is(p, "#ceil") || is(p, "#trunc") || is(p, "#round") ||
+             is(p, "#fma")) {
+    /* A math builtin names a function of the compiler's prelude, so
+       #sqrt(x) parses as a call. */
+    lex(p);
+    if (!is(p, "(")) { fail(p, p->token.start, "expected '(' after a math builtin, as in #sqrt(x)"); return NONE; }
+    left = node(p, EXP_NAME, token.start, token.end, NONE, (Token){0});
+    primary = true;
   } else if (is(p, "#len") || is(p, "#init")) {
     /* #init(pointer) shares #len's shape; the spelling tells them apart. */
     ExpKind kind = EXP_LEN;

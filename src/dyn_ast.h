@@ -424,6 +424,9 @@ typedef struct {
 } DynAstProgram;
 
 bool dyn_ast_lower_compact(const DynSource *, DynAstProgram *, unsigned *, const char *owner_key);
+/* Whether span lies in the reflection prelude the compiler adds before a
+   merged module's files. */
+bool dyn_reflection_prelude_span(DynSpan span, const DynSource *s);
 void dyn_ast_program_free(DynAstProgram *ast);
 /* The struct type for a template and arguments, created on first use. */
 DynType dyn_ast_struct_instance(DynAstProgram *, uint32_t template_id, const DynType *args);

@@ -21,7 +21,7 @@ void dyn_cli_help(const char *command) {
       "  --target <x86_64-linux|aarch64-linux|riscv64-linux|riscv64-none|riscv32-none|riscv32-none-soft|thumbv7em-none|thumbv7em-none-soft|thumbv7em-none-nucleo-h753zi|x86_64-macos|aarch64-macos|x86_64-windows|aarch64-windows|wasm32-browser|wasm32-wasi>\n"
       "  --jobs <1..256>  --max-work <positive frontend work units>\n"
       "  --cpu <generic|native>  --opt-level <1|2|3>  --opt-remarks\n"
-      "  --no-check-overflow  (debug builds check + - * << and negation for overflow by default)\n"
+      "  --check-overflow  (panic when + - * << or negation in the program's own code overflows)\n"
       "  --sample-profile <text profile>  (release builds only)\n"
       "  --backend <auto|native>  independent code generator\n"
       "  --link <object-archive-or-so>  (repeatable explicit FFI input)\n"
@@ -163,12 +163,8 @@ int dyn_cli_parse(int argc, char **argv, DynOptions *o) {
     fprintf(stderr, "error: --emit-ir requires build without code-generation, link or optimization options\n");
     return 2;
   }
-  if (o->overflow_set && !o->no_check_overflow && o->release) {
-    fprintf(stderr, "error: --check-overflow is for debug builds; release integer arithmetic always wraps\n");
-    return 2;
-  }
-  /* Debug builds check overflow unless --no-check-overflow; release wraps. */
-  o->optimization.check_overflow = !o->release && !o->no_check_overflow;
+  /* Integer arithmetic wraps in every build; --check-overflow opts in. */
+  o->optimization.check_overflow = o->overflow_set && !o->no_check_overflow;
   if (o->docs_json && strcmp(o->command, "docs")) {
     fprintf(stderr, "error: --json is only supported by docs\n");
     return 2;

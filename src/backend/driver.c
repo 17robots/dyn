@@ -2050,6 +2050,16 @@ static bool expression_value(BackendContext *ctx, const DynIrProgram *ir, const 
   if (e->kind == DYN_EXPR_UNARY) {
     if (e->op==DYN_OP_ADDRESS) {
       if (e->left<ir->expression_count && ir->expressions[e->left].kind==DYN_EXPR_FUNCTION) return expression(ctx, ir,f,e->left,depth+1);
+      /* &T{...} may be written through: the literal's own frame slot, never
+         the shared read-only copy of a constant literal. */
+      if (e->left<ir->expression_count && ir->expressions[e->left].kind==DYN_EXPR_STRUCT) {
+        if (!ctx->temporary_offsets[e->left]) return false;
+        isa_lea(ctx, R_A, ctx->temporary_offsets[e->left]);
+        if (!initialize(ctx, ir,f,ir->expressions[e->left].type,e->left,depth+1)) return false;
+        /* initialize leaves its source in R_A; the result is the slot. */
+        isa_lea(ctx, R_A, ctx->temporary_offsets[e->left]);
+        return !ctx->text.failed;
+      }
       return address(ctx, ir,f,e->left,depth+1);
     }
     if (e->op==DYN_OP_DEREF) {

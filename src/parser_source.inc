@@ -235,7 +235,8 @@ static bool src_expression_start(Parser *p) {
       is(p, "-") || is(p, "&") || is(p, "!") || is(p, "~") ||
       is(p, "#cast") || is(p, "#bitcast") || is(p, "#sizeof") ||
       is(p, "#alignof") || is(p, "#offsetof") || is(p, "#typeof") || is(p, "#max") || is(p, "#min") ||
-      is(p, "#len") || is(p, "#init") || is(p, "#instance") || is(p, "#slice") || is(p, "#offset") || is(p, "#load") || is(p, "#syscall");
+      is(p, "#len") || is(p, "#init") || is(p, "#instance") || is(p, "#slice") || is(p, "#offset") || is(p, "#load") || is(p, "#syscall") ||
+      is(p, "#sqrt") || is(p, "#floor") || is(p, "#ceil") || is(p, "#trunc") || is(p, "#round") || is(p, "#fma");
 }
 static uint32_t src_assert(Parser *p);
 static uint32_t src_panic(Parser *p) {

@@ -1,0 +1,352 @@
+// The compiler's prelude: declarations it adds in front of a program that
+// uses #typeof or a math builtin. tools/gen-prelude.py embeds this file in
+// src/prelude.inc; no module may declare these names.
+
+enum TypeKind { Invalid, Void, Bool, Integer, Float, Pointer, Array, Slice, Struct, Enum, Function }
+struct TypeMember { name: []const u8, type_id: u64, value: u64 }
+struct TypeInfo { id: u64, kind: TypeKind, name: []const u8, size: usize, alignment: usize, element_id: u64, length: usize, member_count: usize, parameter_count: usize, result_id: u64, fields: []const TypeMember, variants: []const TypeMember, arguments: []const TypeMember }
+
+// Math builtins. #sqrt(x), #floor(x), #ceil(x), #trunc(x), #round(x) and
+// #fma(x, y, z) call these. Where the target has the instruction, the code
+// generator emits it instead of the call; these bodies run everywhere else.
+// Arithmetic assumes round-to-nearest, ties-to-even.
+
+fn dyn_builtin_trunc(x: f64) f64 {
+  bits := #bitcast(u64, x)
+  exponent := #cast(i64, (bits >> 52) & 0x7ff) - 1023
+  if exponent >= 52 { return x }
+  if exponent < 0 { return #bitcast(f64, bits & 0x8000000000000000) }
+  mask := (#cast(u64, 1) << #cast(u64, 52 - exponent)) - 1
+  return #bitcast(f64, bits & ~mask)
+}
+
+fn dyn_builtin_floor(x: f64) f64 {
+  t := dyn_builtin_trunc(x)
+  if t > x { return t - 1.0 }
+  return t
+}
+
+fn dyn_builtin_ceil(x: f64) f64 {
+  t := dyn_builtin_trunc(x)
+  if t < x { return t + 1.0 }
+  return t
+}
+
+// Rounds half away from zero.
+fn dyn_builtin_round(x: f64) f64 {
+  t := dyn_builtin_trunc(x)
+  difference := x - t
+  if difference >= 0.5 { return t + 1.0 }
+  if difference <= -0.5 { return t - 1.0 }
+  return t
+}
+
+// Bit-by-bit square root, adapted from fdlibm e_sqrt; nearest-even rounding.
+fn dyn_builtin_sqrt(x: f64) f64 {
+  sign: u32 = 0x80000000
+  ix0 := #cast(u32, #bitcast(u64, x) >> 32)
+  ix1 := #cast(u32, #bitcast(u64, x))
+  if (ix0 & 0x7ff00000) == 0x7ff00000 { return x * x + x }
+  if ((ix0 & ~sign) | ix1) == 0 { return x }
+  if (ix0 & sign) != 0 { return #bitcast(f64, #cast(u64, 0x7ff8000000000000)) }
+  m := #cast(i32, ix0 >> 20)
+  if m == 0 {
+    for ix0 == 0 {
+      m -= 21
+      ix0 |= ix1 >> 11
+      ix1 = ix1 << 21
+    }
+    i: i32 = 0
+    for (ix0 & 0x00100000) == 0 {
+      ix0 = ix0 << 1
+      i += 1
+    }
+    m -= i - 1
+    if i > 0 {
+      ix0 |= ix1 >> #cast(u32, 32 - i)
+      ix1 = ix1 << #cast(u32, i)
+    }
+  }
+  m -= 1023
+  ix0 = (ix0 & 0x000fffff) | 0x00100000
+  if (m & 1) != 0 {
+    ix0 = ix0 + ix0 + ((ix1 & sign) >> 31)
+    ix1 = ix1 + ix1
+  }
+  m >>= 1
+  ix0 = ix0 + ix0 + ((ix1 & sign) >> 31)
+  ix1 = ix1 + ix1
+  q: u32 = 0
+  q1: u32 = 0
+  s0: u32 = 0
+  s1: u32 = 0
+  r: u32 = 0x00200000
+  for r != 0 {
+    t := s0 + r
+    if t <= ix0 {
+      s0 = t + r
+      ix0 -= t
+      q += r
+    }
+    ix0 = ix0 + ix0 + ((ix1 & sign) >> 31)
+    ix1 = ix1 + ix1
+    r >>= 1
+  }
+  r = sign
+  for r != 0 {
+    t1 := s1 + r
+    t := s0
+    if t < ix0 || (t == ix0 && t1 <= ix1) {
+      s1 = t1 + r
+      if (t1 & sign) == sign && (s1 & sign) == 0 { s0 += 1 }
+      ix0 -= t
+      if ix1 < t1 { ix0 -= 1 }
+      ix1 = ix1 - t1
+      q1 = q1 + r
+    }
+    ix0 = ix0 + ix0 + ((ix1 & sign) >> 31)
+    ix1 = ix1 + ix1
+    r >>= 1
+  }
+  // Round to nearest, ties to even.
+  if (ix0 | ix1) != 0 {
+    if q1 == 0xffffffff {
+      q1 = 0
+      q += 1
+    } else {
+      q1 += q1 & 1
+    }
+  }
+  result_high := (q >> 1) + 0x3fe00000
+  result_low := q1 >> 1
+  if (q & 1) == 1 { result_low |= sign }
+  result_high = #cast(u32, #cast(i32, result_high) + m * 1048576)
+  return #bitcast(f64, (#cast(u64, result_high) << 32) | #cast(u64, result_low))
+}
+
+// x * y + z with one rounding, to f32 or f64.
+fn dyn_builtin_fma(x, y, z: $T) T {
+  if #sizeof(T) == 4 {
+    return #cast(T, dyn_builtin_fused(#cast(f64, x), #cast(f64, y), #cast(f64, z), 24, -149))
+  }
+  return #cast(T, dyn_builtin_fused(#cast(f64, x), #cast(f64, y), #cast(f64, z), 53, -1074))
+}
+
+struct DynBuiltinSplit { mantissa: u64, exponent: i32, negative: bool }
+
+fn dyn_builtin_finite(x: f64) bool {
+  return (#bitcast(u64, x) & 0x7ff0000000000000) != 0x7ff0000000000000
+}
+
+// Exact integer product and aligned sum, rounded once to the target format.
+fn dyn_builtin_fused(x, y, z: f64, precision, minimum: i32) f64 {
+  if !dyn_builtin_finite(x) || !dyn_builtin_finite(y) { return x * y + z }
+  if !dyn_builtin_finite(z) { return z }
+  if x == 0.0 || y == 0.0 { return x * y + z }
+  xs := dyn_builtin_split(x)
+  ys := dyn_builtin_split(y)
+  p_high: u64 = 0
+  p_low: u64 = 0
+  dyn_builtin_multiply(xs.mantissa, ys.mantissa, &p_high, &p_low)
+  p_exponent := xs.exponent + ys.exponent
+  p_negative := xs.negative != ys.negative
+  if z == 0.0 { return dyn_builtin_round_wide(p_negative, p_high, p_low, p_exponent, precision, minimum) }
+  zs := dyn_builtin_split(z)
+  z_high: u64 = 0
+  z_low := zs.mantissa
+  z_exponent := zs.exponent
+  // Put each leading bit at position 125, leaving room for a carry and
+  // retaining at least 72 low bits beyond the output precision. Jam the
+  // smaller operand's discarded fraction into bit zero.
+  p_shift := 126 - dyn_builtin_wide_bits(p_high, p_low)
+  dyn_builtin_shift_left(&p_high, &p_low, p_shift)
+  p_exponent -= p_shift
+  z_shift := 126 - dyn_builtin_wide_bits(z_high, z_low)
+  dyn_builtin_shift_left(&z_high, &z_low, z_shift)
+  z_exponent -= z_shift
+  if p_exponent < z_exponent {
+    dyn_builtin_jam_right(&p_high, &p_low, z_exponent - p_exponent)
+    p_exponent = z_exponent
+  } else if z_exponent < p_exponent {
+    dyn_builtin_jam_right(&z_high, &z_low, p_exponent - z_exponent)
+  }
+  r_high := p_high
+  r_low := p_low
+  negative := p_negative
+  if p_negative == zs.negative {
+    r_low = p_low + z_low
+    carry: u64 = 0
+    if r_low < p_low { carry = 1 }
+    r_high = p_high + z_high + carry
+  } else if z_high > p_high || (z_high == p_high && z_low > p_low) {
+    r_low = z_low - p_low
+    borrow: u64 = 0
+    if z_low < p_low { borrow = 1 }
+    r_high = z_high - p_high - borrow
+    negative = zs.negative
+  } else {
+    r_low = p_low - z_low
+    borrow: u64 = 0
+    if p_low < z_low { borrow = 1 }
+    r_high = p_high - z_high - borrow
+  }
+  if r_high == 0 && r_low == 0 { return 0.0 }
+  return dyn_builtin_round_wide(negative, r_high, r_low, p_exponent, precision, minimum)
+}
+
+fn dyn_builtin_leading_zeros(value: u64) i32 {
+  if value == 0 { return 64 }
+  count: i32 = 0
+  rest := value
+  if (rest >> 32) == 0 {
+    count += 32
+    rest <<= 32
+  }
+  if (rest >> 48) == 0 {
+    count += 16
+    rest <<= 16
+  }
+  if (rest >> 56) == 0 {
+    count += 8
+    rest <<= 8
+  }
+  if (rest >> 60) == 0 {
+    count += 4
+    rest <<= 4
+  }
+  if (rest >> 62) == 0 {
+    count += 2
+    rest <<= 2
+  }
+  if (rest >> 63) == 0 { count += 1 }
+  return count
+}
+
+fn dyn_builtin_wide_bits(high_word, low_word: u64) i32 {
+  if high_word != 0 { return 128 - dyn_builtin_leading_zeros(high_word) }
+  return 64 - dyn_builtin_leading_zeros(low_word)
+}
+
+fn dyn_builtin_jam_right(high_word, low_word: *u64, shift: i32) {
+  if shift >= 128 {
+    high_word.* = 0
+    low_word.* = 1
+  } else if dyn_builtin_shift_right(high_word, low_word, shift) {
+    low_word.* |= 1
+  }
+}
+
+// x = mantissa * 2^exponent, with mantissa an integer below 2^53.
+fn dyn_builtin_split(x: f64) DynBuiltinSplit {
+  bits := #bitcast(u64, x)
+  raw_exponent := #cast(i32, (bits >> 52) & 0x7ff)
+  mantissa := bits & 0x000fffffffffffff
+  if raw_exponent == 0 { raw_exponent = 1 } else { mantissa |= 0x0010000000000000 }
+  return DynBuiltinSplit{ mantissa: mantissa, exponent: raw_exponent - 1075, negative: (bits >> 63) != 0 }
+}
+
+fn dyn_builtin_multiply(a, b: u64, high_out: *u64, low_out: *u64) {
+  a_low := a & 0xffffffff
+  a_high := a >> 32
+  b_low := b & 0xffffffff
+  b_high := b >> 32
+  low_low := a_low * b_low
+  high_low := a_high * b_low
+  low_high := a_low * b_high
+  high_high := a_high * b_high
+  middle := (low_low >> 32) + (high_low & 0xffffffff) + (low_high & 0xffffffff)
+  low_out.* = low_low & 0xffffffff | (middle << 32)
+  high_out.* = high_high + (high_low >> 32) + (low_high >> 32) + (middle >> 32)
+}
+
+fn dyn_builtin_shift_left(high_word: *u64, low_word: *u64, shift: i32) {
+  if shift >= 64 {
+    high_word.* = low_word.* << #cast(u64, shift - 64)
+    low_word.* = 0
+  } else if shift > 0 {
+    high_word.* = (high_word.* << #cast(u64, shift)) | (low_word.* >> #cast(u64, 64 - shift))
+    low_word.* = low_word.* << #cast(u64, shift)
+  }
+}
+
+// Shifts right and reports whether any set bit fell off.
+fn dyn_builtin_shift_right(high_word: *u64, low_word: *u64, shift: i32) bool {
+  lost := false
+  if shift >= 64 {
+    lost = low_word.* != 0 || (shift > 64 && (high_word.* & ((#cast(u64, 1) << #cast(u64, shift - 64)) - 1)) != 0)
+    if shift == 64 { lost = low_word.* != 0 }
+    low_word.* = high_word.* >> #cast(u64, shift - 64)
+    high_word.* = 0
+  } else if shift > 0 {
+    lost = (low_word.* & ((#cast(u64, 1) << #cast(u64, shift)) - 1)) != 0
+    low_word.* = (low_word.* >> #cast(u64, shift)) | (high_word.* << #cast(u64, 64 - shift))
+    high_word.* = high_word.* >> #cast(u64, shift)
+  }
+  return lost
+}
+
+// 2^n for n in -1022..1023.
+fn dyn_builtin_power2(n: i32) f64 {
+  return #bitcast(f64, #cast(u64, #cast(i64, n) + 1023) << 52)
+}
+
+// x * 2^n, handling overflow, underflow and subnormal results.
+fn dyn_builtin_scale(x: f64, n_value: i32) f64 {
+  n := n_value
+  y := x
+  if n > 1023 {
+    y *= dyn_builtin_power2(1023)
+    n -= 1023
+    if n > 1023 {
+      y *= dyn_builtin_power2(1023)
+      n -= 1023
+      if n > 1023 { n = 1023 }
+    }
+  } else if n < -1022 {
+    y *= dyn_builtin_power2(-1022) * dyn_builtin_power2(53)
+    n += 1022 - 53
+    if n < -1022 {
+      y *= dyn_builtin_power2(-1022) * dyn_builtin_power2(53)
+      n += 1022 - 53
+      if n < -1022 { n = -1022 }
+    }
+  }
+  return y * dyn_builtin_power2(n)
+}
+
+// Rounds (high:low) * 2^exponent to the nearest value of the given
+// precision, ties to even.
+fn dyn_builtin_round_wide(negative: bool, high_value: u64, low_value: u64, exponent_value: i32, precision, minimum_exponent: i32) f64 {
+  high_word := high_value
+  low_word := low_value
+  exponent := exponent_value
+  sticky := false
+  bits := dyn_builtin_wide_bits(high_word, low_word)
+  if bits > precision + 1 {
+    shift := bits - precision - 1
+    if dyn_builtin_shift_right(&high_word, &low_word, shift) { sticky = true }
+    exponent += shift
+  } else if bits < precision + 1 {
+    shift := precision + 1 - bits
+    dyn_builtin_shift_left(&high_word, &low_word, shift)
+    exponent -= shift
+  }
+  // Subnormal results: shift further so the exponent reaches the minimum.
+  minimum := minimum_exponent - 1
+  if exponent < minimum {
+    shift := minimum - exponent
+    if shift > 60 {
+      if low_word != 0 { sticky = true }
+      low_word = 0
+    } else if dyn_builtin_shift_right(&high_word, &low_word, shift) {
+      sticky = true
+    }
+    exponent = minimum
+  }
+  round_bit := low_word & 1
+  mantissa := low_word >> 1
+  if round_bit != 0 && (sticky || (mantissa & 1) != 0) { mantissa += 1 }
+  result := dyn_builtin_scale(#cast(f64, mantissa), exponent + 1)
+  if negative { return -result }
+  return result
+}

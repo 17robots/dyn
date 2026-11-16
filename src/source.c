@@ -9,6 +9,10 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include "host.h"
+#ifndef _WIN32
+extern char *realpath(const char *, char *);
+#endif
 #ifndef _WIN32
 #include <pthread.h>
 #include <stdatomic.h>
@@ -409,17 +413,15 @@ bool dyn_module_target_gap(const DynContext *context, const char *directory, cha
   int n = snprintf(name, capacity, "%s", shown);
   return n > 0 && (size_t)n < capacity;
 }
+#include "prelude.inc"
+static size_t compiler_prelude_length(void) {
+  size_t total = 0;
+  for (size_t i = 0; i < sizeof(compiler_prelude) / sizeof(*compiler_prelude); ++i)
+    total += strlen(compiler_prelude[i]);
+  return total;
+}
 int dyn_sources_merge(const DynSources *sources, const char *module_name,
                       DynSource *out) {
-  static const char reflection_prelude[] =
-      "enum TypeKind { Invalid, Void, Bool, Integer, Float, Pointer, Array, "
-      "Slice, Struct, Enum, Function }\n"
-      "struct TypeMember { name: []const u8, type_id: u64, value: u64 }\n"
-      "struct TypeInfo { id: u64, kind: "
-      "TypeKind, name: []const u8, size: usize, alignment: usize, "
-      "element_id: u64, length: usize, member_count: usize, "
-      "parameter_count: usize, result_id: u64, fields: []const TypeMember, "
-      "variants: []const TypeMember, arguments: []const TypeMember }\n";
   memset(out, 0, sizeof(*out));
   if (sources->count)
     out->context = sources->items[0].context;
@@ -444,7 +446,7 @@ int dyn_sources_merge(const DynSources *sources, const char *module_name,
       return 1;
     }
   }
-  size_t prelude = reflection ? sizeof(reflection_prelude) - 1 : 0;
+  size_t prelude = reflection ? compiler_prelude_length() : 0;
   if (SIZE_MAX - total < prelude)
     return 2;
   total += prelude;
@@ -458,9 +460,11 @@ int dyn_sources_merge(const DynSources *sources, const char *module_name,
   size_t at = 0;
   if (prelude) {
     if (reflection) {
-      memcpy(out->text + at, reflection_prelude,
-             sizeof(reflection_prelude) - 1);
-      at += sizeof(reflection_prelude) - 1;
+      for (size_t i = 0; i < sizeof(compiler_prelude) / sizeof(*compiler_prelude); ++i) {
+        size_t n = strlen(compiler_prelude[i]);
+        memcpy(out->text + at, compiler_prelude[i], n);
+        at += n;
+      }
     }
   }
   for (size_t i = 0; i < sources->count; ++i) {
@@ -615,4 +619,138 @@ void dyn_source_free(DynSource *s) {
   }
   free(s->maps);
   memset(s, 0, sizeof(*s));
+}
+
+/* SDK paths: `use "std/..."` and `use "vendor/..."` resolve against DYN_SDK, or
+   else against the directories around the running compiler. */
+static bool sdk_within(const char *root, const char *path) {
+  size_t n = strlen(root);
+  return !strncmp(root, path, n) && (path[n] == 0 || path[n] == '/');
+}
+static char *resolve_configured_sdk(const char *path, bool *oom) {
+  const char *configured = getenv("DYN_SDK");
+  if (!configured || !*configured)
+    return NULL;
+  char *root = realpath(configured, NULL);
+  if (!root)
+    return NULL;
+  char *candidate = dyn_path_join(root, path);
+  if (!candidate)
+    *oom = true;
+  char *result = candidate ? realpath(candidate, NULL) : NULL;
+  free(candidate);
+  if (!result || !sdk_within(root, result)) {
+    free(result);
+    result = NULL;
+  }
+  free(root);
+  return result;
+}
+static char *resolve_std(const char *path, bool *oom) {
+  char *configured = resolve_configured_sdk(path, oom);
+  if (configured)
+    return configured;
+  char executable[4096];
+  ssize_t n = dyn_host_executable(executable, sizeof(executable) - 1);
+  if (n < 0)
+    return NULL;
+  executable[n] = 0;
+  char *slash = strrchr(executable, '/');
+  if (!slash)
+    return NULL;
+  *slash = 0;
+  char relative[4096];
+  if (snprintf(relative, sizeof(relative), "%s/../compiler/%s", executable,
+               path) < (int)sizeof(relative)) {
+    char *found = realpath(relative, NULL);
+    if (found)
+      return found;
+  }
+  if (snprintf(relative, sizeof(relative), "%s/../%s", executable, path) <
+      (int)sizeof(relative)) {
+    char *found = realpath(relative, NULL);
+    if (found)
+      return found;
+  }
+  if (snprintf(relative, sizeof(relative), "%s/../share/dyn/%s", executable,
+               path + 4) < (int)sizeof(relative))
+    return realpath(relative, NULL);
+  return NULL;
+}
+static char *resolve_vendor(const char *path, bool *oom) {
+  char *configured = resolve_configured_sdk(path, oom);
+  if (configured)
+    return configured;
+  char executable[4096];
+  ssize_t n = dyn_host_executable(executable, sizeof(executable) - 1);
+  if (n < 0)
+    return NULL;
+  executable[n] = 0;
+  char *slash = strrchr(executable, '/');
+  if (!slash)
+    return NULL;
+  *slash = 0;
+  char relative[4096];
+  if (snprintf(relative, sizeof(relative), "%s/../compiler/%s", executable,
+               path) < (int)sizeof(relative)) {
+    char *found = realpath(relative, NULL);
+    if (found)
+      return found;
+  }
+  if (snprintf(relative, sizeof(relative), "%s/../sdk/%s", executable, path) <
+      (int)sizeof(relative)) {
+    char *found = realpath(relative, NULL);
+    if (found)
+      return found;
+  }
+  if (snprintf(relative, sizeof(relative), "%s/../%s", executable, path) <
+      (int)sizeof(relative)) {
+    char *found = realpath(relative, NULL);
+    if (found)
+      return found;
+  }
+  if (snprintf(relative, sizeof(relative), "%s/../share/dyn/%s", executable,
+               path) < (int)sizeof(relative))
+    return realpath(relative, NULL);
+  return NULL;
+}
+char *dyn_sdk_resolve(const char *path, bool *oom) {
+  if (!path) return NULL;
+  if (!strncmp(path, "std/", 4)) return resolve_std(path, oom);
+  if (!strncmp(path, "vendor/", 7)) return resolve_vendor(path, oom);
+  return NULL;
+}
+char *dyn_module_resolve_sdk(const char *path) {
+  bool oom = false;
+  return dyn_sdk_resolve(path, &oom);
+}
+/* The SDK's std and vendor directories, found the way `use` finds them.
+   Each thread resolves them once. */
+static _Thread_local char *library_roots[2];
+static _Thread_local bool library_ready;
+bool dyn_path_in_library_module(const char *path, const char *module) {
+  if (!path) return false;
+  if (!library_ready) {
+    library_roots[0] = dyn_module_resolve_sdk("std/");
+    library_roots[1] = dyn_module_resolve_sdk("vendor/");
+    library_ready = true;
+  }
+  /* The SDK's files are always opened by the canonical path the resolver
+     returns, so the path compares as it is. */
+  const char *canonical = path;
+  for (size_t i = 0; i < 2; ++i) {
+    const char *root = library_roots[i];
+    if (!root || (module && i)) continue;
+    size_t n = strlen(root);
+    if (strncmp(root, canonical, n) || canonical[n] != '/') continue;
+    if (!module) return true;
+    size_t m = strlen(module);
+    const char *rest = canonical + n + 1;
+    /* Directly in the module's directory, not in a module below it. */
+    return !strncmp(rest, module, m) && rest[m] == '/' && !strchr(rest + m + 1, '/');
+  }
+  return false;
+}
+bool dyn_path_in_library(const char *path) {
+  return dyn_path_in_library_module(path, NULL);
 }

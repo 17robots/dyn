@@ -860,6 +860,13 @@ static int32_t ssa_unary(Ssa *s, const DynIrExpr *e, int32_t *second, unsigned d
   if (e->op == DYN_OP_ADDRESS) {
     if (e->left < ir->expression_count && ir->expressions[e->left].kind == DYN_EXPR_FUNCTION)
       return ssa_expr(s, e->left, NULL, depth + 1);
+    /* &T{...} may be written through: the literal gets its own frame slot,
+       never the shared read-only copy of a constant literal. */
+    if (e->left < ir->expression_count && ir->expressions[e->left].kind == DYN_EXPR_STRUCT) {
+      int32_t literal = ssa_temporary(s, ir->expressions[e->left].type);
+      ssa_initialize(s, literal, ir->expressions[e->left].type, e->left, depth + 1);
+      return literal;
+    }
     int32_t address = ssa_address(s, e->left, depth + 1);
     uint32_t size, alignment;
     if (!s->failed && address >= 0 && e->left < ir->expression_count && ir->expressions[e->left].kind == DYN_EXPR_INDEX &&

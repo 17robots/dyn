@@ -85,7 +85,7 @@ static bool span_in_library(const DynSource *s, DynSpan span) {
   const char *path, *text;
   size_t length, at;
   dyn_source_position(s, span.start_byte, &path, &text, &length, &at);
-  return path && (strstr(path, "/std/") || strstr(path, "/vendor/") || strstr(path, "/share/dyn/"));
+  return dyn_path_in_library(path);
 }
 static void error_span(DynSpan span, const DynSource *s, unsigned *e,
                        const char *m) {
@@ -549,7 +549,7 @@ static uint32_t sema_find_field(DynAstProgram *a, uint32_t sid, DynSpan name,
 /* Vet reports user code only: std implements these operations on purpose. */
 /* Vet reports only the user's own code, never std or vendored modules. */
 static bool vet_path_skipped(const char *path) {
-  return !path || strstr(path, "/std/") || strstr(path, "/share/dyn/") || strstr(path, "/vendor/");
+  return !path || dyn_path_in_library(path);
 }
 static void sema_vet_note(const DynSource *s, DynSpan span, bool unsafe_note, const char *message) {
   if (!s->context.vet || (unsafe_note && !s->context.vet_unsafe)) return;
@@ -2280,9 +2280,60 @@ static DynType expand_untyped(Sema *sema, DynAstProgram *a, DynExprId id, DynExp
   if (a->expressions[id].kind != DYN_EXPR_NAME) a->expressions[id].span = span;
   return check_expr(sema, a, id, s, errors, expected);
 }
+static DynType check_expr_node(Sema *sema, DynAstProgram *a, DynExprId id,
+                               const DynSource *s, unsigned *errors,
+                               DynType expected);
+/* The prelude function behind a math builtin: #sqrt names dyn_builtin_sqrt. */
+static uint32_t builtin_function(DynAstProgram *a, DynSpan builtin, const DynSource *s) {
+  char name[64];
+  size_t length = builtin.end_byte - builtin.start_byte;
+  if (length < 2 || length > 32) return UINT32_MAX;
+  snprintf(name, sizeof(name), "dyn_builtin_%.*s", (int)(length - 1), s->text + builtin.start_byte + 1);
+  for (uint32_t i = 0; i < a->function_count; ++i)
+    if (dyn_reflection_prelude_span(a->functions[i].name, s) && span_is(a->functions[i].name, s, name) &&
+        !a->functions[i].is_instance)
+      return i;
+  return UINT32_MAX;
+}
+/* `x & M` with a constant M, and unsigned `x >> k` with a constant k, show
+   their range in the code. Where a smaller integer type is expected and that
+   range fits it, the value converts without #cast. */
+static DynType narrow_by_range(Sema *sema, DynAstProgram *a, DynExprId id, DynType t, DynType expected) {
+  if (t == DYN_TYPE_ERROR || t == expected || expected == DYN_TYPE_INFER || id == DYN_NO_EXPR) return t;
+  if (dyn_type_is_distinct(t) || dyn_type_is_distinct(expected) || !integer(sema, t) || !integer(sema, expected) ||
+      lossless(sema, t, expected))
+    return t;
+  DynAstExpr e = a->expressions[id];
+  if (e.kind != DYN_EXPR_BINARY || e.right == DYN_NO_EXPR) return t;
+  uint64_t largest;
+  if (e.op == DYN_OP_BIT_AND) {
+    ConstantUInt mask = constant_uint_at(a, e.right, 4);
+    if (!mask.valid || mask.overflow) mask = constant_uint_at(a, e.left, 4);
+    if (!mask.valid || mask.overflow) return t;
+    largest = mask.value;
+  } else if (e.op == DYN_OP_SHR) {
+    ConstantUInt shift = constant_uint_at(a, e.right, 4);
+    unsigned width = bits(sema, t);
+    if (signed_int(sema, t) || !shift.valid || shift.overflow || shift.value == 0 || shift.value >= width) return t;
+    largest = (UINT64_C(1) << (width - shift.value)) - 1;
+  } else
+    return t;
+  if (!literal_fits(sema, largest, expected)) return t;
+  DynExprId moved = sema_push_expr(a, e);
+  if (moved == DYN_NO_EXPR) return t;
+  a->expressions[id] = (DynAstExpr){.kind = DYN_EXPR_CAST, .type = expected, .integer = expected,
+                                    .left = moved, .right = DYN_NO_EXPR, .span = e.span};
+  return expected;
+}
 static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
                           const DynSource *s, unsigned *errors,
                           DynType expected) {
+  DynType type = check_expr_node(sema, a, id, s, errors, expected);
+  return narrow_by_range(sema, a, id, type, expected);
+}
+static DynType check_expr_node(Sema *sema, DynAstProgram *a, DynExprId id,
+                               const DynSource *s, unsigned *errors,
+                               DynType expected) {
   if (!dyn_work_step(&s->context, 1)) return DYN_TYPE_ERROR;
   if (id == DYN_NO_EXPR)
     return DYN_TYPE_VOID;
@@ -2342,6 +2393,16 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
   }
   if (a->expressions[id].kind == DYN_EXPR_CALL) {
     uint32_t fn = sema_find_function(sema, a, a->expressions[id].span, s);
+    DynSpan callee_span = a->expressions[id].span;
+    if (fn == UINT32_MAX && callee_span.end_byte > callee_span.start_byte && s->text[callee_span.start_byte] == '#') {
+      /* #sqrt(x) calls the prelude's dyn_builtin_sqrt; the code generator
+         emits the instruction where the target has one. */
+      fn = builtin_function(a, callee_span, s);
+      if (fn == UINT32_MAX) {
+        error_span(callee_span, s, errors, "math builtin is missing from the compiler prelude");
+        return a->expressions[id].type = DYN_TYPE_ERROR;
+      }
+    }
     if (fn == UINT32_MAX) {
       if (find_local(sema, a, a->expressions[id].span, s) == UINT32_MAX &&
           sema_find_global_name(sema, a, a->expressions[id].span, s) == UINT32_MAX) {
@@ -2713,13 +2774,16 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
                     : reported_type(function_signature_type(a, reflected_fn), source->span, s, errors);
     }
     uint32_t info = UINT32_MAX, member = UINT32_MAX, kind_enum = UINT32_MAX;
-    for (uint32_t i = 0; i < a->struct_count; ++i)
+    /* Only the compiler's own declarations, which precede the module's files. */
+    for (uint32_t i = 0; i < a->struct_count; ++i) {
+      if (!dyn_reflection_prelude_span(a->structs[i].name, s)) continue;
       if (span_is(a->structs[i].name, s, "TypeInfo"))
         info = i;
       else if (span_is(a->structs[i].name, s, "TypeMember"))
         member = i;
+    }
     for (uint32_t i = 0; i < a->enum_count; ++i)
-      if (span_is(a->enums[i].name, s, "TypeKind"))
+      if (dyn_reflection_prelude_span(a->enums[i].name, s) && span_is(a->enums[i].name, s, "TypeKind"))
         kind_enum = i;
     if (info == UINT32_MAX || member == UINT32_MAX || kind_enum == UINT32_MAX) {
       error_span(a->expressions[id].span, s, errors, "compiler reflection ABI is unavailable");
@@ -3263,12 +3327,17 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
     }
     DynType value = check_expr(sema, a, a->expressions[id].left, s, errors, DYN_TYPE_INFER);
     DynExprKind kind = a->expressions[a->expressions[id].left].kind;
+    /* &T{...} points at the literal's own storage, which lives until the end
+       of the function's current block, like a local. */
+    bool literal = kind == DYN_EXPR_STRUCT && dyn_type_is_struct(value);
     if (kind != DYN_EXPR_NAME && kind != DYN_EXPR_GLOBAL &&
-        kind != DYN_EXPR_FIELD && kind != DYN_EXPR_INDEX &&
+        kind != DYN_EXPR_FIELD && kind != DYN_EXPR_INDEX && !literal &&
         !(kind == DYN_EXPR_UNARY &&
           a->expressions[a->expressions[id].left].op == DYN_OP_DEREF)) {
       error_span(a->expressions[id].span, s, errors,
-                 "address operand must be assignable storage or function");
+                 kind == DYN_EXPR_CALL || kind == DYN_EXPR_INDIRECT_CALL
+                     ? "a call result has no storage to point at; bind it to a name first"
+                     : "address operand must be assignable storage, a struct literal or a function");
       return a->expressions[id].type = DYN_TYPE_ERROR;
     }
     return a->expressions[id].type = sema_intern_pointer(a, value, lvalue_const(a, a->expressions[id].left));
@@ -3944,7 +4013,9 @@ static bool function_storage(Sema *sema, DynAstProgram *a, DynExprId id) {
   if (e->kind == DYN_EXPR_NAME)
     return e->integer < a->local_count &&
            a->locals[e->integer].owner_function == sema->current_function;
-  /* Literal storage may be promoted to a static constant by codegen. */
+  /* &T{...} takes the literal's own storage in this function's frame. */
+  if (e->kind == DYN_EXPR_STRUCT)
+    return true;
   if (e->kind == DYN_EXPR_FIELD)
     return !dyn_type_is_pointer(
                underlying_type(a, a->expressions[e->left].type)) &&

@@ -178,109 +178,15 @@ static bool within(const char *root, const char *path) {
   size_t n = strlen(root);
   return !strncmp(root, path, n) && (path[n] == 0 || path[n] == '/');
 }
-static char *resolve_configured_sdk(const char *path, bool *oom) {
-  const char *configured = getenv("DYN_SDK");
-  if (!configured || !*configured)
-    return NULL;
-  char *root = realpath(configured, NULL);
-  if (!root)
-    return NULL;
-  char *candidate = dyn_path_join(root, path);
-  if (!candidate)
-    *oom = true;
-  char *result = candidate ? realpath(candidate, NULL) : NULL;
-  free(candidate);
-  if (!result || !within(root, result)) {
-    free(result);
-    result = NULL;
-  }
-  free(root);
-  return result;
-}
-static char *resolve_std(const char *path, bool *oom) {
-  char *configured = resolve_configured_sdk(path, oom);
-  if (configured)
-    return configured;
-  char executable[4096];
-  ssize_t n = dyn_host_executable(executable, sizeof(executable) - 1);
-  if (n < 0)
-    return NULL;
-  executable[n] = 0;
-  char *slash = strrchr(executable, '/');
-  if (!slash)
-    return NULL;
-  *slash = 0;
-  char relative[4096];
-  if (snprintf(relative, sizeof(relative), "%s/../compiler/%s", executable,
-               path) < (int)sizeof(relative)) {
-    char *found = realpath(relative, NULL);
-    if (found)
-      return found;
-  }
-  if (snprintf(relative, sizeof(relative), "%s/../%s", executable, path) <
-      (int)sizeof(relative)) {
-    char *found = realpath(relative, NULL);
-    if (found)
-      return found;
-  }
-  if (snprintf(relative, sizeof(relative), "%s/../share/dyn/%s", executable,
-               path + 4) < (int)sizeof(relative))
-    return realpath(relative, NULL);
-  return NULL;
-}
-static char *resolve_vendor(const char *path, bool *oom) {
-  char *configured = resolve_configured_sdk(path, oom);
-  if (configured)
-    return configured;
-  char executable[4096];
-  ssize_t n = dyn_host_executable(executable, sizeof(executable) - 1);
-  if (n < 0)
-    return NULL;
-  executable[n] = 0;
-  char *slash = strrchr(executable, '/');
-  if (!slash)
-    return NULL;
-  *slash = 0;
-  char relative[4096];
-  if (snprintf(relative, sizeof(relative), "%s/../compiler/%s", executable,
-               path) < (int)sizeof(relative)) {
-    char *found = realpath(relative, NULL);
-    if (found)
-      return found;
-  }
-  if (snprintf(relative, sizeof(relative), "%s/../sdk/%s", executable, path) <
-      (int)sizeof(relative)) {
-    char *found = realpath(relative, NULL);
-    if (found)
-      return found;
-  }
-  if (snprintf(relative, sizeof(relative), "%s/../%s", executable, path) <
-      (int)sizeof(relative)) {
-    char *found = realpath(relative, NULL);
-    if (found)
-      return found;
-  }
-  if (snprintf(relative, sizeof(relative), "%s/../share/dyn/%s", executable,
-               path) < (int)sizeof(relative))
-    return realpath(relative, NULL);
-  return NULL;
-}
-char *dyn_module_resolve_sdk(const char *path) {
-  bool oom = false;
-  if (!path) return NULL;
-  if (!strncmp(path, "std/", 4)) return resolve_std(path, &oom);
-  if (!strncmp(path, "vendor/", 7)) return resolve_vendor(path, &oom);
-  return NULL;
-}
 /* Sets *oom when an allocation fails, as opposed to an unresolved path. */
 static char *resolve_checked(Resolver *r, const char *current, const char *path,
                              bool *oom) {
   if (!path || !*path)
     return NULL;
   if (!strncmp(path, "std/", 4))
-    return resolve_std(path, oom);
+    return dyn_sdk_resolve(path, oom);
   if (!strncmp(path, "vendor/", 7))
-    return resolve_vendor(path, oom);
+    return dyn_sdk_resolve(path, oom);
   const char *slash = strchr(path, '/');
   size_t first = slash ? (size_t)(slash - path) : strlen(path);
   for (size_t i = 0; i < r->dependency_count; ++i) {
@@ -722,8 +628,7 @@ static int visit(Resolver *r, const char *directory,
         } else {
           const char *vet_path, *vet_text; size_t vet_length, vet_at;
           dyn_source_position(s, item.start, &vet_path, &vet_text, &vet_length, &vet_at);
-          bool own = vet_path && !strstr(vet_path, "/std/") && !strstr(vet_path, "/share/dyn/") &&
-                     !strstr(vet_path, "/vendor/");
+          bool own = vet_path && !dyn_path_in_library(vet_path);
           if (s->context.vet && own && has(file_targets, file_target_count, target)) {
             char message[512];
             snprintf(

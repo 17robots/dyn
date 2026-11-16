@@ -205,7 +205,7 @@ value exactly. Constants adapt when their specific value fits, and a literal tha
 its context is a compile error, checked again for each type a generic function is called with.
 An integer literal in a float context is that float when it is exact (up to 2^24 for `f32`,
 2^53 for `f64`), so `x * 2` works for any numeric `T`. Integer overflow
-panics in debug builds and wraps in release (see [numeric rules](#numeric-rules)). Floats use IEEE-754. Expression evaluation is left-to-right.
+wraps in every build; `--check-overflow` makes it panic instead (see [numeric rules](#numeric-rules)). Floats use IEEE-754. Expression evaluation is left-to-right.
 A float literal with no float context is `f64`, so `x := 1.5` is `f64`.
 Float literals accept trailing dots (`2.`); lexical lookahead keeps `2..3` an integer range.
 Explicit locals without initializers start at zero, or at their struct's field defaults.
@@ -310,6 +310,13 @@ is untyped storage and cannot be dereferenced; explicitly cast it to a typed poi
 A mutable `*T` converts to `rawptr` implicitly, as C's `void *` does: `free(task)` needs no cast.
 The reverse, `rawptr` to `*T`, always requires `#cast`. `*const T` does not convert implicitly.
 
+`&` takes the address of a local, a global, a field, an element, or a struct literal. `&Point{x: 1}`
+points at the literal's own storage, which lives until the end of its block, like a local declared
+there. In a loop each iteration fills the same storage again. `return &Point{x: 1}` is an error,
+as `return &local` is. A call result has no storage of its own,
+so `&f()` is an error; bind it first (`p := f()`, then `&p`). The compiler also rejects storing a
+local's address through a parameter or into a global, where it would outlive the function.
+
 Pointers are thin. Dereference checks nil and alignment, but not lifetime or allocation
 bounds. Thin pointers cannot be indexed or sliced with `[..]`. `#slice(pointer, count)` makes a slice
 from a pointer and a length the compiler cannot verify, so a wrong count reads out of bounds. Slices are `{data, len}` descriptors and are
@@ -409,12 +416,12 @@ values. Bitwise operators require integers. Division and remainder by zero panic
 minimum divided by `-1` panics. `std/math` has `add_overflows`, `sub_overflows`, `mul_overflows` and
 saturating arithmetic for code that wants them.
 
-Debug builds check overflow: `+`, `-`, `*`, `<<`, unary negation and their compound assignments
-in the program's own modules panic with `overflow.ok` instead of wrapping. `std` and `vendor`
-code keeps wrapping. Write `math.wrapping_add`, `wrapping_sub` or `wrapping_mul` where a program
-means to wrap, so the code reads the same in debug and release. `--no-check-overflow` turns the
-checks off for a debug build. Release builds always wrap; the checks find overflow bugs, they do
-not change the meaning of a correct program.
+Integer arithmetic wraps in debug and release builds alike. `--check-overflow`, in either mode,
+makes `+`, `-`, `*`, `<<`, unary negation and their compound assignments in the program's own
+modules panic with `overflow.ok` instead of wrapping. The SDK's `std` and `vendor` code keeps
+wrapping. Write `math.wrapping_add`, `wrapping_sub` or `wrapping_mul` where a program means to
+wrap, so a checked build does not stop there. The checks find overflow bugs; they do not change
+the meaning of a correct program.
 
 Untyped integer constants are evaluated exactly for the implemented constant-expression operators,
 then adapted only when their value is representable in the expected type. Runtime implicit numeric
@@ -426,7 +433,11 @@ the operator works in the wider type, so `count_u32 * size_u64` is a `u64` and `
 compares as `i64`. Each operand is computed in its own type first, so `a_u32 * b_u32 + c_u64`
 multiplies in `u32`. `u64` against `i64` has no lossless meeting type and needs a cast. `x += y`
 widens `y` to `x`'s type the same way. Shifts keep their rule: the result has the left operand's
-type. `#cast` permits
+type. Two operators show their result's range in the code, so they narrow without a cast where
+a smaller integer type is expected and the range fits it: `x & M` with a constant `M` (`b: u8 =
+word & 0xff`), and an unsigned `x >> k` with a constant `k` (`top: u8 = x_u64 >> 56`). Nothing
+else narrows implicitly; a range known only from a condition, as in `if x < 256 { ... }`, still
+needs `#cast`. `#cast` permits
 intentional narrowing and uses destination-width two's-complement/modulo representation for integers.
 Float-to-integer conversion truncates toward zero and saturates: an out-of-range value gives the
 type's minimum or maximum, and NaN gives 0, on every target. `#bitcast` preserves bits and requires
@@ -495,9 +506,17 @@ collections, and ordinary algorithms belong in libraries.
 - Validation and termination: compile-time `#assert` and runtime `#panic`.
 - Build input and OS boundary: `#load` and `#syscall`.
 - Iteration: `#reverse`, valid only in a `for` iterable.
+- Floating-point operations the hardware has: `#sqrt`, `#floor`, `#ceil`, `#trunc`, `#round` and `#fma`.
 - Module directives: `#target` and `#link`, documented with platform and FFI rules.
 
 `#sizeof(T)` and `#alignof(T)` are the short forms of `#typeof(T).size` and `#typeof(T).alignment`.
+
+`#sqrt(x)`, `#floor(x)`, `#ceil(x)`, `#trunc(x)` and `#round(x)` take and return `f64`; `#round`
+rounds halves away from zero. `#fma(x, y, z)` computes `x * y + z` with one rounding, in `f32` or
+`f64`. Each is one instruction where the target has it (`sqrt` everywhere with an FPU; the
+rounding operations on AArch64, and on x86-64 with SSE4.1; `fma` on AArch64, RISC-V and x86-64
+with FMA3) and a correctly rounded software routine elsewhere. The software comes with the
+compiler, so these need no import; `std/math` wraps them for generic code.
 
 `#target(key: value)` at the top of a file keeps that file only for matching targets. The keys
 are `arch`, `kernel` (`linux`, `darwin`, `windows`, `wasi`, `none`, `browser`), `abi`, `libc`,
@@ -537,6 +556,8 @@ alignment. Only types passed to `#typeof` emit name metadata. Bare function name
 Struct fields, enum variants, and function arguments expose immutable name/type-ID descriptors
 (`TypeMember`); its `value` is a field's byte offset or a variant's tag;
 recursive relationships use IDs rather than nested metadata.
+`TypeInfo`, `TypeMember` and `TypeKind` are builtin type names: no module may declare a type with
+one of them.
 
 ## Removed/deferred syntax
 

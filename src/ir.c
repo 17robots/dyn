@@ -56,33 +56,33 @@ static const char *canonical_path(CanonicalPath *cache, const char *path) {
   }
   return cache->canonical;
 }
-static DynMathIntrinsic math_identity(const DynSource *source, CanonicalPath *paths,
-                                     const char *source_path, const char *sdk,
-                                     const DynIrProgram *ir, const DynIrFunction *fn) {
-  if (!sdk || !source_path || fn->foreign || fn->variadic || fn->generic ||
-      !fn->is_public || (fn->return_type != DYN_TYPE_F32 && fn->return_type != DYN_TYPE_F64))
+/* The compiler prelude's math builtins, which #sqrt(x) and the others call,
+   carry their instruction's identity: the code generator emits the
+   instruction where the target has one and calls the body elsewhere. */
+static DynMathIntrinsic math_identity(const DynSource *source, const DynIrProgram *ir, const DynIrFunction *fn) {
+  if (!source->map_count || fn->source_offset >= source->maps[0].start || fn->foreign || fn->variadic ||
+      (fn->return_type != DYN_TYPE_F32 && fn->return_type != DYN_TYPE_F64))
     return DYN_MATH_INTRINSIC_NONE;
-  const char *canonical = canonical_path(paths, source_path);
-  bool trusted = canonical && !strcmp(canonical, sdk);
-  if (!trusted) return DYN_MATH_INTRINSIC_NONE;
   const char *original, *ignored_path;
   size_t length, offset;
   dyn_source_position(source, fn->source_offset, &ignored_path, &original, &length, &offset);
   size_t end = offset;
-  while (end < length && ((original[end] >= 'a' && original[end] <= 'z') ||
-         (original[end] >= 'A' && original[end] <= 'Z') ||
-         (original[end] >= '0' && original[end] <= '9') || original[end] == '_')) ++end;
-  const char *names[] = {"sqrt64", "floor64", "ceil64", "trunc64", "round64", "copysign64", "fma64", "fma"};
-  for (size_t i = 0; i < sizeof(names) / sizeof(*names); ++i) {
-    if (end - offset != strlen(names[i]) || memcmp(original + offset, names[i], end - offset)) continue;
-    bool generic_fma = i == 7;
-    if (fn->instance != generic_fma || (!generic_fma && fn->return_type != DYN_TYPE_F64)) break;
-    uint32_t count = i >= 6 ? 3 : i == 5 ? 2 : 1;
-    if (fn->param_count != count || fn->param_start > ir->param_count ||
-        count > ir->param_count - fn->param_start) break;
+  while (end < length && ((original[end] >= 'a' && original[end] <= 'z') || original[end] == '_')) ++end;
+  static const struct { const char *name; DynMathIntrinsic kind; uint32_t count; } builtins[] = {
+    {"dyn_builtin_sqrt", DYN_MATH_INTRINSIC_SQRT, 1}, {"dyn_builtin_floor", DYN_MATH_INTRINSIC_FLOOR, 1},
+    {"dyn_builtin_ceil", DYN_MATH_INTRINSIC_CEIL, 1}, {"dyn_builtin_trunc", DYN_MATH_INTRINSIC_TRUNC, 1},
+    {"dyn_builtin_round", DYN_MATH_INTRINSIC_ROUND, 1}, {"dyn_builtin_fma", DYN_MATH_INTRINSIC_FMA, 3},
+  };
+  for (size_t i = 0; i < sizeof(builtins) / sizeof(*builtins); ++i) {
+    if (end - offset != strlen(builtins[i].name) || memcmp(original + offset, builtins[i].name, end - offset)) continue;
+    /* fma is generic over f32 and f64; the others take f64. */
+    bool generic = builtins[i].kind == DYN_MATH_INTRINSIC_FMA;
+    if (fn->instance != generic || (!generic && fn->return_type != DYN_TYPE_F64)) break;
+    uint32_t count = builtins[i].count;
+    if (fn->param_count != count || fn->param_start > ir->param_count || count > ir->param_count - fn->param_start) break;
     for (uint32_t j = 0; j < count; ++j)
       if (ir->params[fn->param_start + j].type != fn->return_type) return DYN_MATH_INTRINSIC_NONE;
-    return generic_fma ? DYN_MATH_INTRINSIC_FMA : (DynMathIntrinsic)(DYN_MATH_INTRINSIC_SQRT + i);
+    return builtins[i].kind;
   }
   return DYN_MATH_INTRINSIC_NONE;
 }
@@ -431,7 +431,7 @@ static bool ir_wraps(const DynSource *source, DynSpan span) {
   const char *path, *text;
   size_t length, at;
   dyn_source_position(source, span.start_byte, &path, &text, &length, &at);
-  return path && (strstr(path, "/std/") || strstr(path, "/vendor/") || strstr(path, "/share/dyn/"));
+  return dyn_path_in_library(path);
 }
 
 /* A case on text: `case name { "a" => {...} _ => {...} }`. Sema left the
@@ -943,7 +943,6 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
   (void)dyn_location_build(&ir->locations, source);
   DynLocationIndex locations = ir->locations;
   CanonicalPath paths = {0};
-  char *math_sdk = proofs ? sdk_source_path("std/math/float.dyn", false) : NULL;
   char *bytes_sdk = proofs ? sdk_source_path("std/bytes/bytes.dyn", true) : NULL;
   char *json_sdk = proofs ? sdk_source_path("std/encoding/json/read/read.dyn", true) : NULL;
   char *mutable_json_sdk = proofs ? sdk_source_path("std/encoding/json/json.dyn", true) : NULL;
@@ -957,7 +956,6 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
       free(mutable_json_sdk);
       free(json_sdk);
       free(bytes_sdk);
-      free(math_sdk);
       free(paths.canonical);
       dyn_ir_free(ir);
       return false;
@@ -994,7 +992,6 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
       free(mutable_json_sdk);
       free(json_sdk);
       free(bytes_sdk);
-      free(math_sdk);
       free(paths.canonical);
       dyn_ir_free(ir);
       return false;
@@ -1019,7 +1016,7 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
     ir->functions[i].is_public = a->functions[i].is_public;
     ir->functions[i].module_owner = a->functions[i].module_owner;
     ir->functions[i].variadic_type = lower_type(a, a->functions[i].variadic_type);
-    ir->functions[i].math_intrinsic = math_identity(source, &paths, source_path, math_sdk, ir, &ir->functions[i]);
+    ir->functions[i].math_intrinsic = proofs ? math_identity(source, ir, &ir->functions[i]) : DYN_MATH_INTRINSIC_NONE;
     ir->functions[i].byte_intrinsic = byte_identity(source, &paths, source_path, bytes_sdk, a, ir, &ir->functions[i]);
     if (ir->functions[i].byte_intrinsic == DYN_BYTE_INTRINSIC_NONE)
       ir->functions[i].byte_intrinsic = json_byte_identity(source, &paths, source_path, json_sdk, mutable_json_sdk, a, ir, &ir->functions[i]);
@@ -1030,7 +1027,6 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
   free(mutable_json_sdk);
   free(json_sdk);
   free(bytes_sdk);
-  free(math_sdk);
   free(paths.canonical);
   for (size_t i = 0; i < a->global_count; ++i) {
     size_t n = a->globals[i].name.end_byte - a->globals[i].name.start_byte;

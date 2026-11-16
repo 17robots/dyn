@@ -126,7 +126,12 @@ bool dyn_source_prepare(DynSource *source) {
       exp_snapshot_release(source->compact); source->compact = NULL;
       source->compact_reflection = false; return false;
     }
-    if (tree->nodes[i].parent != UINT32_MAX && tree->nodes[i].kind == EXP_TYPEOF)
+    /* #typeof and the math builtins (#sqrt and the others, parsed as names)
+       use the compiler's prelude. */
+    if (tree->nodes[i].parent != UINT32_MAX &&
+        (tree->nodes[i].kind == EXP_TYPEOF ||
+         (tree->nodes[i].kind == EXP_NAME && tree->nodes[i].start < source->length &&
+          source->text[tree->nodes[i].start] == '#')))
       source->compact_reflection = true;
   }
   return true;

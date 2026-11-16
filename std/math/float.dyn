@@ -64,10 +64,7 @@ pub fn copysign(x, sign: $T) T {
 }
 // x * y + z with one rounding.
 pub fn fma(x, y, z: $T) T {
-  if #sizeof(T) == 4 {
-    return #cast(T, fused(#cast(f64, x), #cast(f64, y), #cast(f64, z), 24, -149))
-  }
-  return #cast(T, fma64(#cast(f64, x), #cast(f64, y), #cast(f64, z)))
+  return #fma(x, y, z)
 }
 pub fn sin(x: $T) T {
   return #cast(T, sin64(#cast(f64, x)))
@@ -200,202 +197,30 @@ pub fn copysign64(x, sign: f64) f64 {
   return #bitcast(f64, magnitude | sign_bit)
 }
 
+// #trunc, #floor, #ceil, #round, #sqrt and #fma are compiler builtins: one
+// instruction where the target has it, a software routine elsewhere.
 pub fn trunc64(x: f64) f64 {
-  bits := #bitcast(u64, x)
-  exponent := #cast(i64, (bits >> 52) & 0x7ff) - 1023
-  if exponent >= 52 { return x }
-  if exponent < 0 { return #bitcast(f64, bits & bits_8000000000000000) }
-  mask := (#cast(u64, 1) << #cast(u64, 52 - exponent)) - 1
-  return #bitcast(f64, bits & ~mask)
+  return #trunc(x)
 }
 pub fn floor64(x: f64) f64 {
-  t := trunc64(x)
-  if t > x { return t - 1.0 }
-  return t
+  return #floor(x)
 }
 pub fn ceil64(x: f64) f64 {
-  t := trunc64(x)
-  if t < x { return t + 1.0 }
-  return t
+  return #ceil(x)
 }
+// Rounds half away from zero.
 pub fn round64(x: f64) f64 {
-  t := trunc64(x)
-  difference := x - t
-  if difference >= 0.5 { return t + 1.0 }
-  if difference <= -0.5 { return t - 1.0 }
-  return t
+  return #round(x)
 }
 
-// Bit-by-bit square root, adapted from fdlibm e_sqrt; nearest-even rounding.
+// Correctly rounded.
 pub fn sqrt64(x: f64) f64 {
-  sign: u32 = 0x80000000
-  ix0 := high(x)
-  ix1 := low(x)
-  if (ix0 & 0x7ff00000) == 0x7ff00000 { return x * x + x }
-  if ((ix0 & ~sign) | ix1) == 0 { return x }
-  if (ix0 & sign) != 0 { return nan() }
-  m := #cast(i32, ix0 >> 20)
-  if m == 0 {
-    for ix0 == 0 {
-      m -= 21
-      ix0 |= ix1 >> 11
-      ix1 = ix1 << 21
-    }
-    i: i32 = 0
-    for (ix0 & 0x00100000) == 0 {
-      ix0 = ix0 << 1
-      i += 1
-    }
-    m -= i - 1
-    if i > 0 {
-      ix0 |= ix1 >> #cast(u32, 32 - i)
-      ix1 = ix1 << #cast(u32, i)
-    }
-  }
-  m -= 1023
-  ix0 = (ix0 & 0x000fffff) | 0x00100000
-  if (m & 1) != 0 {
-    ix0 = ix0 + ix0 + ((ix1 & sign) >> 31)
-    ix1 = ix1 + ix1
-  }
-  m >>= 1
-  ix0 = ix0 + ix0 + ((ix1 & sign) >> 31)
-  ix1 = ix1 + ix1
-  q: u32 = 0
-  q1: u32 = 0
-  s0: u32 = 0
-  s1: u32 = 0
-  r: u32 = 0x00200000
-  for r != 0 {
-    t := s0 + r
-    if t <= ix0 {
-      s0 = t + r
-      ix0 -= t
-      q += r
-    }
-    ix0 = ix0 + ix0 + ((ix1 & sign) >> 31)
-    ix1 = ix1 + ix1
-    r >>= 1
-  }
-  r = sign
-  for r != 0 {
-    t1 := s1 + r
-    t := s0
-    if t < ix0 || (t == ix0 && t1 <= ix1) {
-      s1 = t1 + r
-      if (t1 & sign) == sign && (s1 & sign) == 0 {
-        s0 += 1
-      }
-      ix0 -= t
-      if ix1 < t1 {
-        ix0 -= 1
-      }
-      ix1 = ix1 - t1
-      q1 = q1 + r
-    }
-    ix0 = ix0 + ix0 + ((ix1 & sign) >> 31)
-    ix1 = ix1 + ix1
-    r >>= 1
-  }
-  // Round to nearest, ties to even.
-  if (ix0 | ix1) != 0 {
-    if q1 == 0xffffffff {
-      q1 = 0
-      q += 1
-    } else {
-      q1 += q1 & 1
-    }
-  }
-  result_high := (q >> 1) + 0x3fe00000
-  result_low := q1 >> 1
-  if (q & 1) == 1 {
-    result_low |= sign
-  }
-  result_high = #cast(u32, (#cast(i32, result_high) + m * 1048576))
-  return words(result_high, result_low)
+  return #sqrt(x)
 }
 
-// Exact integer product and aligned sum, rounded once to the target format.
+// x * y + z with one rounding.
 pub fn fma64(x, y, z: f64) f64 {
-  return fused(x, y, z, 53, -1074)
-}
-
-fn fused(x, y, z: f64, precision, minimum: i32) f64 {
-  if !is_finite(x) || !is_finite(y) { return x * y + z }
-  if !is_finite(z) { return z }
-  if x == 0.0 || y == 0.0 { return x * y + z }
-  xs := split_float(x)
-  ys := split_float(y)
-  p_high: u64 = 0
-  p_low: u64 = 0
-  multiply_64(xs.mantissa, ys.mantissa, &p_high, &p_low)
-  p_exponent := xs.exponent + ys.exponent
-  p_negative := xs.negative != ys.negative
-  if z == 0.0 {
-    return round_wide(p_negative, p_high, p_low, p_exponent, false, precision, minimum)
-  }
-  zs := split_float(z)
-  z_high: u64 = 0
-  z_low := zs.mantissa
-  z_exponent := zs.exponent
-  // Put each leading bit at position 125, leaving room for a carry and
-  // retaining at least 72 low bits beyond the output precision. Jam the
-  // smaller operand's discarded fraction into bit zero. Cancellation can
-  // expose those bits only when the exponents are close, when alignment is exact.
-  p_shift := 126 - wide_bits(p_high, p_low)
-  shift_left_128(&p_high, &p_low, p_shift)
-  p_exponent -= p_shift
-  z_shift := 126 - wide_bits(z_high, z_low)
-  shift_left_128(&z_high, &z_low, z_shift)
-  z_exponent -= z_shift
-  if p_exponent < z_exponent {
-    jam_right(&p_high, &p_low, z_exponent - p_exponent)
-    p_exponent = z_exponent
-  } else if z_exponent < p_exponent {
-    jam_right(&z_high, &z_low, p_exponent - z_exponent)
-  }
-  r_high := p_high
-  r_low := p_low
-  negative := p_negative
-  if p_negative == zs.negative {
-    r_low = p_low + z_low
-    carry: u64 = 0
-    if r_low < p_low {
-      carry = 1
-    }
-    r_high = p_high + z_high + carry
-  } else if z_high > p_high || (z_high == p_high && z_low > p_low) {
-    r_low = z_low - p_low
-    borrow: u64 = 0
-    if z_low < p_low {
-      borrow = 1
-    }
-    r_high = z_high - p_high - borrow
-    negative = zs.negative
-  } else {
-    r_low = p_low - z_low
-    borrow: u64 = 0
-    if p_low < z_low {
-      borrow = 1
-    }
-    r_high = p_high - z_high - borrow
-  }
-  if r_high == 0 && r_low == 0 { return 0.0 }
-  return round_wide(negative, r_high, r_low, p_exponent, false, precision, minimum)
-}
-
-fn wide_bits(hi, lo: u64) i32 {
-  if hi != 0 { return 128 - #cast(i32, leading_zeros(hi)) }
-  return 64 - #cast(i32, leading_zeros(lo))
-}
-
-fn jam_right(hi, lo: *u64, shift: i32) {
-  if shift >= 128 {
-    hi.* = 0
-    lo.* = 1
-  } else if shift_right_128(hi, lo, shift) {
-    lo.* |= 1
-  }
+  return #fma(x, y, z)
 }
 
 struct Split { mantissa: u64, exponent: i32, negative: bool }
@@ -407,98 +232,6 @@ fn split_float(x: f64) Split {
   mantissa := bits & bits_fffffffffffff
   if raw_exponent == 0 { raw_exponent = 1 } else { mantissa |= bits_10000000000000 }
   return Split{ mantissa: mantissa, exponent: raw_exponent - 1075, negative: (bits >> 63) != 0 }
-}
-
-fn multiply_64(a, b: u64, high_out: *u64, low_out: *u64) {
-  a_low := a & 0xffffffff
-  a_high := a >> 32
-  b_low := b & 0xffffffff
-  b_high := b >> 32
-  low_low := a_low * b_low
-  high_low := a_high * b_low
-  low_high := a_low * b_high
-  high_high := a_high * b_high
-  middle := (low_low >> 32) + (high_low & 0xffffffff) + (low_high & 0xffffffff)
-  low_out.* = low_low & 0xffffffff | (middle << 32)
-  high_out.* = high_high + (high_low >> 32) + (low_high >> 32) + (middle >> 32)
-}
-
-fn shift_left_128(high_word: *u64, low_word: *u64, shift: i32) {
-  if shift >= 64 {
-    high_word.* = low_word.* << #cast(u64, shift - 64)
-    low_word.* = 0
-  } else if shift > 0 {
-    high_word.* = (high_word.* << #cast(u64, shift)) | (low_word.* >> #cast(u64, 64 - shift))
-    low_word.* = low_word.* << #cast(u64, shift)
-  }
-}
-
-// Shifts right and reports whether any set bit fell off.
-fn shift_right_128(high_word: *u64, low_word: *u64, shift: i32) bool {
-  lost := false
-  if shift >= 64 {
-    lost = low_word.* != 0 || (shift > 64 && (high_word.* & ((#cast(u64, 1) << #cast(u64, shift - 64)) - 1)) != 0)
-    if shift == 64 {
-      lost = low_word.* != 0
-    }
-    low_word.* = high_word.* >> #cast(u64, shift - 64)
-    high_word.* = 0
-  } else if shift > 0 {
-    lost = (low_word.* & ((#cast(u64, 1) << #cast(u64, shift)) - 1)) != 0
-    low_word.* = (low_word.* >> #cast(u64, shift)) | (high_word.* << #cast(u64, 64 - shift))
-    high_word.* = high_word.* >> #cast(u64, shift)
-  }
-  return lost
-}
-
-// Rounds (high:low) * 2^exponent, plus a sticky fraction below it, to the
-// nearest f64, ties to even.
-fn round_wide(negative: bool, high_value: u64, low_value: u64, exponent_value: i32, sticky_value: bool, precision, minimum_exponent: i32) f64 {
-  high_word := high_value
-  low_word := low_value
-  exponent := exponent_value
-  sticky := sticky_value
-  // Keep the target precision plus a round bit in low_word, collecting
-  // the discarded lower bits into sticky.
-  bits: i32 = 0
-  if high_word != 0 {
-    bits = 128 - #cast(i32, leading_zeros(high_word))
-  } else {
-    bits = 64 - #cast(i32, leading_zeros(low_word))
-  }
-  if bits > precision + 1 {
-    shift := bits - precision - 1
-    if shift_right_128(&high_word, &low_word, shift) {
-      sticky = true
-    }
-    exponent += shift
-  } else if bits < precision + 1 {
-    shift := precision + 1 - bits
-    shift_left_128(&high_word, &low_word, shift)
-    exponent -= shift
-  }
-  // Subnormal results: shift further so the exponent reaches the minimum.
-  minimum := minimum_exponent - 1
-  if exponent < minimum {
-    shift := minimum - exponent
-    if shift > 60 {
-      if low_word != 0 {
-        sticky = true
-      }
-      low_word = 0
-    } else if shift_right_128(&high_word, &low_word, shift) {
-      sticky = true
-    }
-    exponent = minimum
-  }
-  round_bit := low_word & 1
-  mantissa := low_word >> 1
-  if round_bit != 0 && (sticky || (mantissa & 1) != 0) {
-    mantissa += 1
-  }
-  result := scale(#cast(f64, mantissa), exponent + 1)
-  if negative { return -result }
-  return result
 }
 
 // fdlibm-style kernels below. Constants are the published fdlibm values.

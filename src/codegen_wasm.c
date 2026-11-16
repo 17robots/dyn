@@ -560,6 +560,9 @@ static unsigned address(WG *g, DynExprId id) {
     op(g, 0x6a);
     return save(g, 0x7f);
   }
+  /* &T{...}: a struct literal evaluates into its own frame slot. */
+  if (e->kind == DYN_EXPR_STRUCT)
+    return expr(g, id);
   g->failed = true;
   return constant(g, 0, 0x7f);
 }
