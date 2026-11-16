@@ -3,9 +3,7 @@ use "std/io" io
 extern fn argument_command "dyn_arguments_command"() *const u16
 struct ArgumentToken { next: usize, length: usize, ok: bool }
 fn argument_emit(destination: []u8, at: usize, value: u32, writing: bool) usize {
-  if writing {
-    return utf8.encode(destination[at..], value)
-  }
+  if writing { return utf8.encode(destination[at..], value) }
   return utf8.encoded_width(value)
 }
 // Microsoft CRT quoting: argv[0] treats backslashes literally; later arguments
@@ -16,9 +14,7 @@ fn argument_token(command: []const u16, start: usize, first: bool, destination: 
   quoted: bool = false
   for at < #len(command) {
     byte := command[at]
-    if !quoted && (byte == 32 || byte == 9) {
-      break
-    }
+    if !quoted && (byte == 32 || byte == 9) { break }
     if !first && byte == 92 {
       slashes: usize = 0
       for at < #len(command) && command[at] == 92 {
@@ -55,13 +51,9 @@ fn argument_token(command: []const u16, start: usize, first: bool, destination: 
       continue
     }
     decoded := utf16.decode(command, at)
-    if !decoded.valid {
-      return ArgumentToken{}
-    }
+    if !decoded.valid { return ArgumentToken{} }
     width := argument_emit(destination, used, decoded.codepoint, writing)
-    if width == 0 {
-      return ArgumentToken{}
-    }
+    if width == 0 { return ArgumentToken{} }
     used += width
     at += decoded.width
   }
@@ -76,17 +68,13 @@ fn argument_skip(command: []const u16, at: usize) usize {
 }
 fn arguments_native(arena: *mem.Arena) ArgumentsResult {
   raw := argument_command()
-  if raw == nil {
-    return ArgumentsResult{ failure: io.Failure{ kind: io.Kind.InvalidState } }
-  }
+  if raw == nil { return ArgumentsResult{ failure: io.Failure{ kind: io.Kind.InvalidState } } }
   native := #slice(raw, 32767)
   length: usize = 0
   for length < 32767 && native[length] != 0 {
     length += 1
   }
-  if length == 32767 {
-    return ArgumentsResult{ failure: io.Failure{ kind: io.Kind.Overflow } }
-  }
+  if length == 32767 { return ArgumentsResult{ failure: io.Failure{ kind: io.Kind.Overflow } } }
   command := #slice(raw, length)
   empty: []u8
   count: usize = 0
@@ -94,17 +82,13 @@ fn arguments_native(arena: *mem.Arena) ArgumentsResult {
   at := argument_skip(command, 0)
   for at < length {
     token := argument_token(command, at, count == 0, empty, false)
-    if !token.ok {
-      return ArgumentsResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
-    }
+    if !token.ok { return ArgumentsResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } } }
     size += token.length
     count += 1
     at = argument_skip(command, token.next)
   }
   result := argument_slots(arena, count)
-  if io.failed(result.failure) {
-    return result
-  }
+  if io.failed(result.failure) { return result }
   allocation := mem.arena_push_uninit(arena, size, 1)
   bytes := arena.data[..0]
   if size > 0 {
@@ -115,9 +99,7 @@ fn arguments_native(arena: *mem.Arena) ArgumentsResult {
   at = argument_skip(command, 0)
   for at < length {
     copied := argument_token(command, at, index == 0, bytes[used..], true)
-    if !copied.ok {
-      return ArgumentsResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
-    }
+    if !copied.ok { return ArgumentsResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } } }
     result.value[index] = bytes[used..used + copied.length]
     used += copied.length
     index += 1

@@ -76,14 +76,10 @@ const MimeTypes: [36]MimeType = [
 pub fn content_type(name: []const u8) []const u8 {
   dot := bytes.find_last_byte(name, '.')
   slash := bytes.find_last_byte(name, '/')
-  if dot == #len(name) || (slash != #len(name) && slash > dot) {
-    return "application/octet-stream"
-  }
+  if dot == #len(name) || (slash != #len(name) && slash > dot) { return "application/octet-stream" }
   extension := name[dot + 1..]
   for item in MimeTypes {
-    if ascii_equal(item.extension, extension) {
-      return item.content_type
-    }
+    if ascii_equal(item.extension, extension) { return item.content_type }
   }
   return "application/octet-stream"
 }
@@ -127,9 +123,7 @@ fn asset_less(left: []const u8, right: []const u8) bool {
     shared = #len(right)
   }
   for i in 0..shared {
-    if left[i] != right[i] {
-      return left[i] < right[i]
-    }
+    if left[i] != right[i] { return left[i] < right[i] }
   }
   return #len(left) < #len(right)
 }
@@ -155,9 +149,7 @@ pub fn find_asset(assets: *const Assets, path: []const u8) *const Asset {
   for low < high {
     middle := low + (high - low) / 2
     candidate := &assets.items[middle]
-    if bytes.equal(candidate.path, path) {
-      return candidate
-    }
+    if bytes.equal(candidate.path, path) { return candidate }
     if asset_less(candidate.path, path) {
       low = middle + 1
     } else {
@@ -174,9 +166,7 @@ pub fn find_asset(assets: *const Assets, path: []const u8) *const Asset {
 pub fn load_directory(arena: *memory.Arena, root: []const u8, storage: []Asset, maximum: usize) AssetsResult {
   assets := Assets{ items: storage }
   failure := load_tree(arena, root, "", &assets, maximum, 0)
-  if io.failed(failure) {
-    return AssetsResult{ failure: failure }
-  }
+  if io.failed(failure) { return AssetsResult{ failure: failure } }
   sort_assets(&assets)
   return AssetsResult{ value: assets }
 }
@@ -195,49 +185,31 @@ fn join_path(arena: *memory.Arena, left: []const u8, right: []const u8) []u8 {
 }
 
 fn load_tree(arena: *memory.Arena, root: []const u8, relative: []const u8, assets: *Assets, maximum: usize, depth: usize) io.Failure {
-  if depth > 32 {
-    return io.Failure{ kind: io.Kind.InvalidInput }
-  }
+  if depth > 32 { return io.Failure{ kind: io.Kind.InvalidInput } }
   directory_path := root
   if #len(relative) > 0 {
     directory_path = join_path(arena, root, relative)
   }
   listing: [4096]u8
   opened := files.open_directory(directory_path, listing[..])
-  if io.failed(opened.failure) {
-    return opened.failure
-  }
+  if io.failed(opened.failure) { return opened.failure }
   directory := opened.value
   defer files.close_directory(&directory)
   for true {
     entry := files.directory_next(&directory)
-    if io.failed(entry.failure) {
-      return entry.failure
-    }
-    if !entry.found {
-      return io.Failure{}
-    }
-    if #len(entry.name) == 0 || entry.name[0] == '.' {
-      continue
-    }
+    if io.failed(entry.failure) { return entry.failure }
+    if !entry.found { return io.Failure{} }
+    if #len(entry.name) == 0 || entry.name[0] == '.' { continue }
     child := join_path(arena, relative, entry.name)
     if entry.kind == 4 {
       nested := load_tree(arena, root, child, assets, maximum, depth + 1)
-      if io.failed(nested) {
-        return nested
-      }
+      if io.failed(nested) { return nested }
       continue
     }
-    if entry.kind != 8 {
-      continue
-    }
-    if assets.count == #len(assets.items) {
-      return io.Failure{ kind: io.Kind.Capacity }
-    }
+    if entry.kind != 8 { continue }
+    if assets.count == #len(assets.items) { return io.Failure{ kind: io.Kind.Capacity } }
     read := files.read_all(arena, join_path(arena, root, child), maximum)
-    if io.failed(read.failure) {
-      return read.failure
-    }
+    if io.failed(read.failure) { return read.failure }
     assets.items[assets.count] = make_asset(arena, child, read.value)
     assets.count += 1
   }
@@ -248,9 +220,7 @@ fn load_tree(arena: *memory.Arena, root: []const u8, relative: []const u8, asset
 // is listed, or "*" is, with a q-value above zero.
 pub fn accepts_encoding(request: *const Request, coding: []const u8) bool {
   header := request_header(request, "Accept-Encoding")
-  if !header.found {
-    return false
-  }
+  if !header.found { return false }
   rest := header.value
   wildcard := false
   for #len(rest) > 0 {
@@ -271,15 +241,11 @@ pub fn accepts_encoding(request: *const Request, coding: []const u8) bool {
         }
       }
     }
-    if ascii_equal(name, coding) {
-      return allowed
-    }
+    if ascii_equal(name, coding) { return allowed }
     if bytes.equal(name, "*") {
       wildcard = allowed
     }
-    if end >= #len(rest) {
-      break
-    }
+    if end >= #len(rest) { break }
     rest = rest[end + 1..]
   }
   return wildcard
@@ -289,12 +255,8 @@ pub fn accepts_encoding(request: *const Request, coding: []const u8) bool {
 // prefixes ignored), as RFC 9110 13.1.2 requires for GET and HEAD.
 pub fn etag_matches(request: *const Request, etag: []const u8) bool {
   header := request_header(request, "If-None-Match")
-  if !header.found {
-    return false
-  }
-  if bytes.equal(trim_ows(header.value), "*") {
-    return true
-  }
+  if !header.found { return false }
+  if bytes.equal(trim_ows(header.value), "*") { return true }
   wanted := etag
   if bytes.starts_with(wanted, "W/") {
     wanted = wanted[2..]
@@ -306,12 +268,8 @@ pub fn etag_matches(request: *const Request, etag: []const u8) bool {
     if bytes.starts_with(item, "W/") {
       item = item[2..]
     }
-    if bytes.equal(item, wanted) {
-      return true
-    }
-    if end >= #len(rest) {
-      break
-    }
+    if bytes.equal(item, wanted) { return true }
+    if end >= #len(rest) { break }
     rest = rest[end + 1..]
   }
   return false
@@ -326,14 +284,10 @@ pub fn etag_matches(request: *const Request, etag: []const u8) bool {
 pub struct ByteRange { start: usize, end: usize, present: bool, satisfiable: bool }
 
 fn decimal_value(text: []const u8) Decimal {
-  if #len(text) == 0 || #len(text) > 19 {
-    return Decimal{}
-  }
+  if #len(text) == 0 || #len(text) > 19 { return Decimal{} }
   value: usize = 0
   for byte in text {
-    if byte < '0' || byte > '9' {
-      return Decimal{}
-    }
+    if byte < '0' || byte > '9' { return Decimal{} }
     value = value * 10 + (byte - '0')
   }
   return Decimal{ value: value, ok: true }
@@ -341,28 +295,20 @@ fn decimal_value(text: []const u8) Decimal {
 
 pub fn byte_range(request: *const Request, length: usize) ByteRange {
   header := request_header(request, "Range")
-  if !header.found {
-    return ByteRange{}
-  }
+  if !header.found { return ByteRange{} }
   value := trim_ows(header.value)
   if #len(value) < 7 || !ascii_equal(value[..6], "bytes=") || bytes.find_byte(value, ',') != #len(value) {
     return ByteRange{}
   }
   spec := trim_ows(value[6..])
   dash := bytes.find_byte(spec, '-')
-  if dash == #len(spec) {
-    return ByteRange{}
-  }
+  if dash == #len(spec) { return ByteRange{} }
   first_text := trim_ows(spec[..dash])
   last_text := trim_ows(spec[dash + 1..])
   if #len(first_text) == 0 {
     suffix := decimal_value(last_text)
-    if !suffix.ok {
-      return ByteRange{}
-    }
-    if suffix.value == 0 || length == 0 {
-      return ByteRange{ present: true }
-    }
+    if !suffix.ok { return ByteRange{} }
+    if suffix.value == 0 || length == 0 { return ByteRange{ present: true } }
     take := suffix.value
     if take > length {
       take = length
@@ -370,22 +316,16 @@ pub fn byte_range(request: *const Request, length: usize) ByteRange {
     return ByteRange{ start: length - take, end: length, present: true, satisfiable: true }
   }
   first := decimal_value(first_text)
-  if !first.ok {
-    return ByteRange{}
-  }
+  if !first.ok { return ByteRange{} }
   end := length
   if #len(last_text) > 0 {
     last := decimal_value(last_text)
-    if !last.ok || last.value < first.value {
-      return ByteRange{}
-    }
+    if !last.ok || last.value < first.value { return ByteRange{} }
     if last.value < length {
       end = last.value + 1
     }
   }
-  if first.value >= length {
-    return ByteRange{ present: true }
-  }
+  if first.value >= length { return ByteRange{ present: true } }
   return ByteRange{ start: first.value, end: end, present: true, satisfiable: true }
 }
 
@@ -393,13 +333,9 @@ pub fn byte_range(request: *const Request, length: usize) ByteRange {
 // still matches: a strong ETag, or a date equal to modified.
 fn range_current(request: *const Request, asset: *const Asset) bool {
   header := request_header(request, "If-Range")
-  if !header.found {
-    return true
-  }
+  if !header.found { return true }
   value := trim_ows(header.value)
-  if #len(value) > 0 && value[0] == '"' {
-    return bytes.equal(value, asset.etag)
-  }
+  if #len(value) > 0 && value[0] == '"' { return bytes.equal(value, asset.etag) }
   parsed := parse_date(value)
   return asset.modified != 0 && !parse.failed(parsed.failure) && parsed.value == asset.modified
 }

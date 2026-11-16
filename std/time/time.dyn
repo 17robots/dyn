@@ -28,9 +28,7 @@ pub fn checked_add(a, b: i64) DurationResult {
 }
 pub fn checked_sub(a, b: i64) DurationResult {
   if b == -9223372036854775807 - 1 {
-    if a >= 0 {
-      return DurationResult{ failure: io.Failure{ kind: io.Kind.Overflow } }
-    }
+    if a >= 0 { return DurationResult{ failure: io.Failure{ kind: io.Kind.Overflow } } }
     return DurationResult{ value: a - b }
   }
   return checked_add(a, 0 - b)
@@ -64,9 +62,7 @@ pub fn realtime_now() ClockResult {
   return native_clock(false)
 }
 pub fn sleep(duration: i64) SleepResult {
-  if duration <= 0 {
-    return SleepResult{}
-  }
+  if duration <= 0 { return SleepResult{} }
   return native_sleep(duration)
 }
 pub fn deadline_after(duration: i64) DeadlineResult {
@@ -91,9 +87,7 @@ pub fn deadline_after(duration: i64) DeadlineResult {
   return DeadlineResult{ value: Deadline{ at: Instant{ seconds: sum.value, nanoseconds: nanos } } }
 }
 pub fn deadline_expired(deadline: *const Deadline) ExpiredResult {
-  if deadline == nil {
-    return ExpiredResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
-  }
+  if deadline == nil { return ExpiredResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } } }
   now := monotonic_now()
   if io.failed(now.failure) {
     return ExpiredResult{ failure: io.Failure{ kind: now.failure.kind, native: now.failure.native } }
@@ -102,9 +96,7 @@ pub fn deadline_expired(deadline: *const Deadline) ExpiredResult {
       (now.value.seconds == deadline.at.seconds && now.value.nanoseconds >= deadline.at.nanoseconds) }
 }
 pub fn deadline_remaining(deadline: *const Deadline) DurationResult {
-  if deadline == nil {
-    return DurationResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
-  }
+  if deadline == nil { return DurationResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } } }
   now := monotonic_now()
   if io.failed(now.failure) {
     return DurationResult{ failure: io.Failure{ kind: now.failure.kind, native: now.failure.native } }
@@ -172,9 +164,7 @@ pub struct Parsed { value: DateTime, valid: bool }
 // Parses YYYY-MM-DDTHH:MM:SSZ. ok is false, with a zero value, for anything else.
 pub fn parse_iso8601(input: []const u8) Parsed {
   value: DateTime
-  if !parse_iso8601_into(input, &value) {
-    return Parsed{}
-  }
+  if !parse_iso8601_into(input, &value) { return Parsed{} }
   return Parsed{ value: value, valid: true }
 }
 
@@ -185,9 +175,7 @@ fn parse_iso8601_into(input: []const u8, output: *DateTime) bool {
   }
   positions: [14]u8 = [0, 1, 2, 3, 5, 6, 8, 9, 11, 12, 14, 15, 17, 18]
   for i in 0..#len(positions) {
-    if !decimal(input[positions[i]]) {
-      return false
-    }
+    if !decimal(input[positions[i]]) { return false }
   }
   output.* = DateTime{
     year: #cast(i32, ((#cast(u32, (input[0] - '0'))) * 1000 + (#cast(u32, (input[1] - '0'))) * 100 + (#cast(u32, (input[2] - '0'))) * 10 + #cast(u32, (input[3] - '0')))),

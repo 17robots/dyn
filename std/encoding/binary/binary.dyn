@@ -99,9 +99,7 @@ pub fn uleb128_size(value: u64) usize {
 
 pub fn uleb128_encode(destination: []u8, value: u64) []u8 {
   needed := uleb128_size(value)
-  if needed > #len(destination) {
-    return destination[..0]
-  }
+  if needed > #len(destination) { return destination[..0] }
   at: usize = 0
   for value >= 128 {
     destination[at] = #cast(u8, (value & 127)) | 128
@@ -119,18 +117,14 @@ pub fn uleb128_decode(source: []const u8) Decode {
   for i < #len(source) && i < 10 {
     byte := source[i]
     if i == 9 {
-      if byte > 1 {
-        return Decode{}
-      }
+      if byte > 1 { return Decode{} }
       if byte == 1 {
         value |= 9223372036854775808
       }
     } else {
       value += (byte & 127) * factor
     }
-    if byte < 128 {
-      return Decode{ value: value, consumed: i + 1, valid: true }
-    }
+    if byte < 128 { return Decode{ value: value, consumed: i + 1, valid: true } }
     if i < 8 {
       factor *= 128
     }

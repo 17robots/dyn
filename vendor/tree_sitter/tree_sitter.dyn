@@ -41,20 +41,14 @@ pub fn tree_destroy_owned(tree: Tree) {
   }
 }
 pub fn tree_copy_owned(tree: Tree) Tree {
-  if tree == nil {
-    return nil
-  }
+  if tree == nil { return nil }
   return native_tree_copy(tree)
 }
 // Coordinates are UTF-8 byte columns, not code points. Nodes obtained before an
 // edit must be reacquired (this wrapper does not expose ts_node_edit).
 pub fn tree_edit(tree: Tree, edit: *const Edit) bool {
-  if tree == nil || edit == nil {
-    return false
-  }
-  if edit.start_byte > edit.old_end_byte || edit.start_byte > edit.new_end_byte {
-    return false
-  }
+  if tree == nil || edit == nil { return false }
+  if edit.start_byte > edit.old_end_byte || edit.start_byte > edit.new_end_byte { return false }
   if !point_before(edit.start_point, edit.old_end_point) || !point_before(edit.start_point, edit.new_end_point) {
     return false
   }
@@ -65,45 +59,33 @@ fn point_before(a: Point, b: Point) bool {
   return a.row < b.row || (a.row == b.row && a.column <= b.column)
 }
 pub fn root(tree: Tree) Node {
-  if tree == nil {
-    return Node{}
-  }
+  if tree == nil { return Node{} }
   return native_root(tree)
 }
 pub fn node_valid(node: Node) bool {
   return node.id != nil && node.tree != nil
 }
 pub fn node_start(node: Node) u32 {
-  if !node_valid(node) {
-    return 0
-  }
+  if !node_valid(node) { return 0 }
   return native_start(node)
 }
 pub fn node_end(node: Node) u32 {
-  if !node_valid(node) {
-    return 0
-  }
+  if !node_valid(node) { return 0 }
   return native_end(node)
 }
 pub fn node_has_error(node: Node) bool {
   return node_valid(node) && native_has_error(node)
 }
 pub fn child_count(node: Node) u32 {
-  if !node_valid(node) {
-    return 0
-  }
+  if !node_valid(node) { return 0 }
   return native_child_count(node)
 }
 pub fn child(node: Node, index: u32) Node {
-  if !node_valid(node) {
-    return Node{}
-  }
+  if !node_valid(node) { return Node{} }
   return native_child(node, index)
 }
 // Type name borrows grammar storage; grammar must remain loaded.
 pub fn node_type(node: Node, maximum: usize) c.BytesResult {
-  if !node_valid(node) {
-    return c.BytesResult{}
-  }
+  if !node_valid(node) { return c.BytesResult{} }
   return c.bytes_from_string(native_type(node), maximum)
 }

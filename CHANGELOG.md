@@ -16,6 +16,37 @@ servers so they pick up the new `dyn`.
 
 Web applications: see [docs/guide/web-apps.md](docs/guide/web-apps.md).
 
+- Shorter servers. `vendor/sqlite` gains a per-connection statement cache
+  (`cache`, `cached`, `cache_close`) and one-call forms: `run`, `first`,
+  `query`/`next`, `integer`, `bytes`, `text` and `constraint`. `std/net/http`
+  gains `http.text`, `http.json` and `http.redirect`; `std/encoding/json`
+  gains `json.field`. The evented server gives each worker a request arena
+  (`evented.arena`, `Config.request_arena_size`) and names the worker
+  (`evented.worker_index`), so each worker can own a database connection
+  without a lock, and `evented.serve` serves until SIGINT or SIGTERM. Chirp
+  went from 750 to 422 lines (Go 435, Rust 393), with the same throughput
+  on reads and 13% more on writes.
+- Threads from `std/thread` and `std/thread/posix` start with SIGINT, SIGTERM
+  and SIGHUP blocked. A pool started before `signal.watch` used to take the
+  signal and end the process instead of letting it shut down.
+- `dyn fmt` puts a guard on one line when it fits in 100 columns:
+  `if done { return value }` for an `if` with no else whose block is one
+  return, break or continue. `dyn fmt --check` reports code with these
+  guards spread over three lines. std, runtime and vendor are reformatted,
+  about 5,800 lines shorter.
+- Fixed a release miscompile: the O2 inliner treated a leaf that reads a
+  field through a pointer as pure, and could run it before an earlier
+  argument's call. `f(run(p), code_of(p))` read `p.code` from before
+  `run`. Debug builds and O1 were right.
+- SSA folds: `(b + c) - b` is `c`, so `xs[b..b + 4]` has a constant length
+  and its constant indexes need no checks; `(p << k) * q` becomes
+  `(p * q) << k`, and on x86-64 `t + (p << k)` becomes one LEA, so
+  `a + b + 2 * x * y` costs one multiply. Constants move to the right of
+  commutative operations. Argon2id takes 11.4 ms (it took 13.4 ms; Go
+  takes 11.1 and the reference C 10). Functions with loops start on 64-byte
+  boundaries, so an unrelated edit no longer moves a hot loop's speed by
+  a third. `tools/codegen-bench.py` measures kernel time, spills and stack
+  traffic against a saved baseline.
 - HTTP/2 in `std/net/http/evented` with `Config.http2`: TLS clients through
   ALPN (`https.offer_http2`) and prior-knowledge cleartext clients, on the
   same port as HTTP/1.1. Streams run the ordinary handler; run, open_stream

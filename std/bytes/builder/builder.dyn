@@ -30,16 +30,12 @@ pub fn clear(state: *Builder) {
 // Extends the arena's most recent buffer in place when possible. Otherwise old
 // arena buffers remain allocated until the caller rewinds or resets.
 pub fn reserve(state: *Builder, arena: *memory.Arena, capacity: usize) {
-  if io.failed(state.failure) {
-    return
-  }
+  if io.failed(state.failure) { return }
   if state.length > #len(state.storage) {
     fail(state, io.Kind.InvalidState)
     return
   }
-  if capacity <= #len(state.storage) {
-    return
-  }
+  if capacity <= #len(state.storage) { return }
   if #len(state.storage) > 0 && memory.arena_try_extend(arena, &state.storage[0],
     #len(state.storage), capacity - #len(state.storage)) {
     state.storage = #slice(&state.storage[0], capacity)
@@ -55,9 +51,7 @@ pub fn reserve(state: *Builder, arena: *memory.Arena, capacity: usize) {
 // Allocation: none; capacity is fixed until an explicit reserve or append_grow.
 // Failure: builder length and bytes are unchanged.
 pub fn append(state: *Builder, source: []const u8) {
-  if io.failed(state.failure) {
-    return
-  }
+  if io.failed(state.failure) { return }
   if state.length > #len(state.storage) {
     fail(state, io.Kind.InvalidState)
     return
@@ -73,9 +67,7 @@ pub fn append(state: *Builder, source: []const u8) {
 // Geometric growth. Panics when the arena cannot hold the selected capacity.
 // Existing views must be reacquired after mutation. Source may borrow this builder.
 pub fn append_grow(state: *Builder, arena: *memory.Arena, source: []const u8) {
-  if io.failed(state.failure) {
-    return
-  }
+  if io.failed(state.failure) { return }
   if state.length > #len(state.storage) {
     fail(state, io.Kind.InvalidState)
     return

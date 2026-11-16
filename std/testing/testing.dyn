@@ -59,9 +59,7 @@ pub fn random_next(generator: *Random) u64 {
   return random_value
 }
 pub fn random_below(generator: *Random, bound: usize) usize {
-  if bound == 0 {
-    return 0
-  }
+  if bound == 0 { return 0 }
   return #cast(usize, (random_next(generator) % bound))
 }
 
@@ -83,9 +81,7 @@ fn benchmark_failure(benchmark: *Benchmark, kind: io.Kind, code: isize) clock.Du
   return clock.DurationResult{ failure: io.Failure{ kind: benchmark.kind, native: benchmark.error } }
 }
 pub fn benchmark_elapsed(benchmark: *Benchmark) clock.DurationResult {
-  if benchmark.failed {
-    return benchmark_failure(benchmark, benchmark.kind, benchmark.error)
-  }
+  if benchmark.failed { return benchmark_failure(benchmark, benchmark.kind, benchmark.error) }
   if io.failed(benchmark.started.failure) {
     return benchmark_failure(benchmark, benchmark.started.failure.kind, benchmark.started.failure.native)
   }
@@ -94,25 +90,17 @@ pub fn benchmark_elapsed(benchmark: *Benchmark) clock.DurationResult {
     return benchmark_failure(benchmark, finished.failure.kind, finished.failure.native)
   }
   duration := clock.elapsed(benchmark.started.value, finished.value)
-  if io.failed(duration.failure) {
-    return benchmark_failure(benchmark, io.Kind.Overflow, 0)
-  }
+  if io.failed(duration.failure) { return benchmark_failure(benchmark, io.Kind.Overflow, 0) }
   return duration
 }
 pub fn benchmark_nanoseconds_each(benchmark: *Benchmark) clock.DurationResult {
-  if benchmark.failed {
-    return benchmark_failure(benchmark, benchmark.kind, benchmark.error)
-  }
+  if benchmark.failed { return benchmark_failure(benchmark, benchmark.kind, benchmark.error) }
   if io.failed(benchmark.started.failure) && (io.failed(benchmark.started.failure) || benchmark.started.failure.native != 0) {
     return benchmark_failure(benchmark, benchmark.started.failure.kind, benchmark.started.failure.native)
   }
-  if benchmark.iterations == 0 {
-    return clock.DurationResult{}
-  }
+  if benchmark.iterations == 0 { return clock.DurationResult{} }
   duration := benchmark_elapsed(benchmark)
-  if io.failed(duration.failure) {
-    return duration
-  }
+  if io.failed(duration.failure) { return duration }
   duration.value /= #cast(i64, benchmark.iterations)
   return duration
 }

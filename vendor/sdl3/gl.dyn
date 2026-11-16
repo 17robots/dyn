@@ -4,21 +4,15 @@ use "std/io"
 pub const WindowOpenGL: u64 = 2
 pub type GlContext = rawptr
 pub fn gl_request_core(major: i32, minor: i32) bool {
-  if major < 3 || minor < 0 {
-    return false
-  }
+  if major < 3 || minor < 0 { return false }
   return native_gl_attribute(17, major) && native_gl_attribute(18, minor) && native_gl_attribute(20, 1)
 }
 pub fn gl_create_owned(window: Window) GlContext {
-  if window == nil {
-    return nil
-  }
+  if window == nil { return nil }
   return native_gl_create(window)
 }
 pub fn gl_destroy_owned(context: GlContext) bool {
-  if context == nil {
-    return true
-  }
+  if context == nil { return true }
   return native_gl_destroy(context)
 }
 pub fn gl_make_current(window: Window, context: GlContext) bool {
@@ -27,9 +21,7 @@ pub fn gl_make_current(window: Window, context: GlContext) bool {
 // Name must be NUL-terminated; call with current context. Can supply directly to
 // vendor/opengl.load. This function does not allocate or cache addresses.
 pub fn gl_proc(name: *const u8) rawptr {
-  if name == nil {
-    return nil
-  }
+  if name == nil { return nil }
   return native_gl_proc(name)
 }
 pub fn gl_swap(window: Window) bool {

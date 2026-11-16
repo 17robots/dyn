@@ -34,9 +34,7 @@ fn decimal(cursor: *Cursor) u32 {
   value: u32 = 0
   for cursor.at < #len(cursor.source) {
     c := cursor.source[cursor.at]
-    if c < '0' || c > '9' {
-      break
-    }
+    if c < '0' || c > '9' { break }
     digit := #cast(u32, c - '0')
     if value > (4294967295 - digit) / 10 {
       cursor.failed = true

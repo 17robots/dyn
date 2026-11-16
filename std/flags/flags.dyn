@@ -21,17 +21,13 @@ pub fn string_option(name: []const u8, short: u8) Option {
 
 fn long_index(options: []const Option, name: []const u8) usize {
   for i in 0..#len(options) {
-    if bytes.equal(options[i].name, name) {
-      return i
-    }
+    if bytes.equal(options[i].name, name) { return i }
   }
   return #len(options)
 }
 fn short_index(options: []const Option, name: u8) usize {
   for i in 0..#len(options) {
-    if options[i].short != 0 && options[i].short == name {
-      return i
-    }
+    if options[i].short != 0 && options[i].short == name { return i }
   }
   return #len(options)
 }
@@ -45,9 +41,7 @@ fn parse_buffers(
   value_storage: []Value,
   positional_storage: [][]const u8,
 ) Result {
-  if #len(value_storage) < #len(options) {
-    return failure(parse.Kind.Capacity, "", 0, "")
-  }
+  if #len(value_storage) < #len(options) { return failure(parse.Kind.Capacity, "", 0, "") }
   values := value_storage[..#len(options)]
   for i in 0..#len(values) {
     values[i] = Value{}
@@ -76,9 +70,7 @@ fn parse_buffers(
       }
       inline := name_end < #len(text)
       if options[long_option].kind == Kind.Bool {
-        if inline {
-          return failure(parse.Kind.Syntax, "unexpected value", argument, text)
-        }
+        if inline { return failure(parse.Kind.Syntax, "unexpected value", argument, text) }
       } else if inline {
         values[long_option].text = text[name_end + 1..]
       } else {
@@ -176,9 +168,7 @@ pub fn parse(arena: *memory.Arena, options: []const Option, arguments: [][]const
 pub struct TextResult { value: []u8, required: usize, failure: parse.Failure }
 
 fn render_piece(destination: []u8, offset: *usize, piece: []const u8, write: bool) bool {
-  if #len(piece) > #cast(usize, -1) - offset.* {
-    return false
-  }
+  if #len(piece) > #cast(usize, -1) - offset.* { return false }
   if write {
     _ = memory.copy(destination[offset.*..], piece)
   }
@@ -213,9 +203,7 @@ fn render(destination: []u8, program: []const u8, options: []const Option, is_us
 }
 fn render_checked(destination: []u8, program: []const u8, options: []const Option, is_usage: bool) TextResult {
   measured := render(destination[..0], program, options, is_usage, false)
-  if parse.failed(measured.failure) {
-    return measured
-  }
+  if parse.failed(measured.failure) { return measured }
   if measured.required > #len(destination) {
     return TextResult{ required: measured.required, failure: parse.Failure{ kind: parse.Kind.Capacity } }
   }

@@ -19,9 +19,7 @@ pub fn open_directory(path: []const u8, storage: []u8) DirectoryResult {
   }
   // O_RDONLY | O_DIRECTORY | O_CLOEXEC.
   descriptor := #syscall(sys.Open, name, 17825792, 0)
-  if descriptor < 0 {
-    return DirectoryResult{ failure: io.darwin_failure(descriptor) }
-  }
+  if descriptor < 0 { return DirectoryResult{ failure: io.darwin_failure(descriptor) } }
   return DirectoryResult{ value: Directory{ file: owned_file(descriptor), storage: storage } }
 }
 
@@ -36,12 +34,8 @@ pub fn directory_next(directory: *Directory) DirectoryEntry {
       for value == -4 {
         value = #syscall(sys.Getdirentries64, directory.file.descriptor, &directory.storage[0], #len(directory.storage), &directory.base)
       }
-      if value < 0 {
-        return DirectoryEntry{ failure: io.darwin_failure(value) }
-      }
-      if value == 0 {
-        return DirectoryEntry{}
-      }
+      if value < 0 { return DirectoryEntry{ failure: io.darwin_failure(value) } }
+      if value == 0 { return DirectoryEntry{} }
       directory.offset = 0
       directory.used = #cast(usize, value)
     }
@@ -59,9 +53,7 @@ pub fn directory_next(directory: *Directory) DirectoryEntry {
     directory.offset += record
     dot := #len(name) == 1 && name[0] == '.'
     dot_dot := #len(name) == 2 && name[0] == '.' && name[1] == '.'
-    if !dot && !dot_dot {
-      return DirectoryEntry{ name: name, kind: kind, found: true }
-    }
+    if !dot && !dot_dot { return DirectoryEntry{ name: name, kind: kind, found: true } }
   }
   return DirectoryEntry{}
 }
@@ -97,9 +89,7 @@ pub fn metadata(path: []const u8) Metadata {
   }
   raw: [144]u8
   value := #syscall(sys.Stat64, name, &raw[0])
-  if value < 0 {
-    return Metadata{ failure: io.darwin_failure(value) }
-  }
+  if value < 0 { return Metadata{ failure: io.darwin_failure(value) } }
   return stat_metadata(&raw)
 }
 
@@ -109,22 +99,16 @@ pub fn file_metadata(file: *const File) Metadata {
   }
   raw: [144]u8
   value := #syscall(sys.Fstat64, file.descriptor, &raw[0])
-  if value < 0 {
-    return Metadata{ failure: io.darwin_failure(value) }
-  }
+  if value < 0 { return Metadata{ failure: io.darwin_failure(value) } }
   return stat_metadata(&raw)
 }
 
 fn path_call(number: isize, path: []const u8, argument: usize) Result {
   space: [4096]u8
   name := terminated(path, space[..])
-  if name == nil {
-    return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput, native: -22 } }
-  }
+  if name == nil { return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput, native: -22 } } }
   value := #syscall(number, name, argument)
-  if value < 0 {
-    return failure(value)
-  }
+  if value < 0 { return failure(value) }
   return Result{}
 }
 
@@ -149,8 +133,6 @@ pub fn rename(old_path: []const u8, new_path: []const u8) Result {
     return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput, native: -22 } }
   }
   value := #syscall(sys.Rename, old_name, new_name)
-  if value < 0 {
-    return failure(value)
-  }
+  if value < 0 { return failure(value) }
   return Result{}
 }

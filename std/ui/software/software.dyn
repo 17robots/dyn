@@ -15,44 +15,26 @@ pub struct Glyph { pixels: []const u8, width: i32, height: i32, stride: usize, x
 pub struct Font { data: rawptr, glyph: fn(rawptr, u32) Glyph, line_height: i32 }
 pub struct Result { failure: io.Failure }
 fn valid_surface(surface: *const Surface) bool {
-  if surface.width < 0 || surface.height < 0 {
-    return false
-  }
-  if surface.width == 0 || surface.height == 0 {
-    return true
-  }
+  if surface.width < 0 || surface.height < 0 { return false }
+  if surface.width == 0 || surface.height == 0 { return true }
   width := #cast(usize, surface.width)
   height := #cast(usize, surface.height)
-  if width > #len(surface.pixels) / 4 {
-    return false
-  }
-  if surface.stride < width * 4 || surface.stride == 0 {
-    return false
-  }
+  if width > #len(surface.pixels) / 4 { return false }
+  if surface.stride < width * 4 || surface.stride == 0 { return false }
   return height <= #len(surface.pixels) / surface.stride
 }
 fn valid_glyph(glyph: *const Glyph) bool {
-  if glyph.width < 0 || glyph.height < 0 || glyph.advance < 0 {
-    return false
-  }
-  if glyph.width == 0 || glyph.height == 0 {
-    return true
-  }
-  if glyph.stride < #cast(usize, glyph.width) || glyph.stride == 0 {
-    return false
-  }
+  if glyph.width < 0 || glyph.height < 0 || glyph.advance < 0 { return false }
+  if glyph.width == 0 || glyph.height == 0 { return true }
+  if glyph.stride < #cast(usize, glyph.width) || glyph.stride == 0 { return false }
   width := #cast(usize, glyph.width)
-  if width > #len(glyph.pixels) {
-    return false
-  }
+  if width > #len(glyph.pixels) { return false }
   // Atlas views can end immediately after the last row's used pixels.
   return #cast(usize, glyph.height - 1) <= (#len(glyph.pixels) - width) / glyph.stride
 }
 fn blend(surface: *Surface, x, y: i32, tint: ui.Color, coverage: u8) {
   alpha := (#cast(u32, tint.a) * #cast(u32, coverage) + 127) / 255
-  if alpha == 0 {
-    return
-  }
+  if alpha == 0 { return }
   at := #cast(usize, y) * surface.stride + #cast(usize, x) * 4
   // Full coverage replaces every destination component, including alpha.
   if alpha == 255 {
@@ -107,17 +89,13 @@ fn rounded(surface: *Surface, clip: ui.Rect, shape: ui.Rect, radius: i32, tint: 
 }
 struct DrawResult { advance: i32, ok: bool }
 fn draw_glyph(surface: *Surface, clip: ui.Rect, tint: ui.Color, font: Font, codepoint: u32, x, y: i64) DrawResult {
-  if font.glyph == nil || font.line_height <= 0 {
-    return DrawResult{}
-  }
+  if font.glyph == nil || font.line_height <= 0 { return DrawResult{} }
   if x < #cast(i64, clip.x) - 4294967296 || x > #cast(i64, clip.x) + #cast(i64, clip.width) + 4294967296 ||
     y < #cast(i64, clip.y) - 4294967296 || y > #cast(i64, clip.y) + #cast(i64, clip.height) + 4294967296 {
     return DrawResult{ ok: true }
   }
   glyph := font.glyph(font.data, codepoint)
-  if !valid_glyph(&glyph) {
-    return DrawResult{}
-  }
+  if !valid_glyph(&glyph) { return DrawResult{} }
   left := x + glyph.x_offset
   top := y + glyph.y_offset
   // Intersect in i64: bearings may place the glyph outside i32 coordinates.
@@ -166,26 +144,18 @@ fn text(surface: *Surface, command: *const ui.Command, clip: ui.Rect, font: Font
     if !decoded.valid {
       codepoint = 65533
     }
-    if codepoint == 13 {
-      continue
-    }
+    if codepoint == 13 { continue }
     if codepoint == 10 {
       x = command.bounds.x
       y += font.line_height
-      if y >= bottom + 2147483648 {
-        break
-      }
+      if y >= bottom + 2147483648 { break }
       continue
     }
     // Beyond this bound, even the most negative i32 bearing cannot reach
     // the clip. Nonnegative advances make it safe to skip the rest of the line.
-    if x >= right + 2147483648 {
-      continue
-    }
+    if x >= right + 2147483648 { continue }
     drawn := draw_glyph(surface, clip, command.color, font, codepoint, x, y)
-    if !drawn.ok {
-      return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
-    }
+    if !drawn.ok { return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } } }
     x += drawn.advance
   }
   return Result{}
@@ -194,12 +164,8 @@ fn text(surface: *Surface, command: *const ui.Command, clip: ui.Rect, font: Font
 // surface data returns InvalidInput. A glyph failure may leave earlier draws
 // visible. This renderer clips text without wrapping, kerning or shaping.
 pub fn render(surface: *Surface, commands: *const ui.Command, font: Font) Result {
-  if !valid_surface(surface) {
-    return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
-  }
-  if surface.width == 0 || surface.height == 0 {
-    return Result{}
-  }
+  if !valid_surface(surface) { return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } } }
+  if surface.width == 0 || surface.height == 0 { return Result{} }
   viewport := ui.Rect{ width: surface.width, height: surface.height }
   command := commands
   for command.kind != ui.Kind.None {
@@ -213,14 +179,10 @@ pub fn render(surface: *Surface, commands: *const ui.Command, font: Font) Result
         }
       } else if command.kind == ui.Kind.Glyph {
         drawn := draw_glyph(surface, clip, command.color, font, command.codepoint, command.glyph_x, command.glyph_y)
-        if !drawn.ok {
-          return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
-        }
+        if !drawn.ok { return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } } }
       } else if command.kind == ui.Kind.Text {
         outcome := text(surface, command, clip, font)
-        if io.failed(outcome.failure) {
-          return outcome
-        }
+        if io.failed(outcome.failure) { return outcome }
       }
     }
     command = ui.next(command)

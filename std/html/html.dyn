@@ -143,9 +143,7 @@ pub fn write_escaped(buffer: *fmt.Buffer, text: []const u8) {
   for i in first..#len(text) {
     byte := text[i]
     // Ordinary bytes skip the entity lookup and both writes.
-    if byte != '&' && byte != '<' && byte != '>' && byte != '"' && byte != '\'' {
-      continue
-    }
+    if byte != '&' && byte != '<' && byte != '>' && byte != '"' && byte != '\'' { continue }
     fmt.write(buffer, text[start..i])
     fmt.write(buffer, entity(byte))
     start = i + 1
@@ -155,20 +153,10 @@ pub fn write_escaped(buffer: *fmt.Buffer, text: []const u8) {
 
 // Entity for one byte, or empty when the byte needs no escaping.
 pub fn entity(byte: u8) []const u8 {
-  if byte == '&' {
-    return "&amp;"
-  }
-  if byte == '<' {
-    return "&lt;"
-  }
-  if byte == '>' {
-    return "&gt;"
-  }
-  if byte == '"' {
-    return "&quot;"
-  }
-  if byte == '\'' {
-    return "&#39;"
-  }
+  if byte == '&' { return "&amp;" }
+  if byte == '<' { return "&lt;" }
+  if byte == '>' { return "&gt;" }
+  if byte == '"' { return "&quot;" }
+  if byte == '\'' { return "&#39;" }
   return ""
 }

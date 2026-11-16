@@ -30,17 +30,13 @@ fn c_string(arena: *mem.Arena, value: []const u8) *const u8 {
   return c.string_from_bytes(arena, value).value
 }
 fn c_vector(arena: *mem.Arena, values: [][]const u8) *CString {
-  if #len(values) > 2305843009213693950 {
-    return nil
-  }
+  if #len(values) > 2305843009213693950 { return nil }
   allocation := mem.arena_push(arena, (#len(values)+1)*#sizeof(CString), #alignof(CString))
   pointer := #cast(*CString, allocation)
   slots := #slice(pointer, #len(values)+1)
   for at in 0..#len(values) {
     slots[at].value = c_string(arena, values[at])
-    if slots[at].value == nil {
-      return nil
-    }
+    if slots[at].value == nil { return nil }
   }
   return pointer
 }
@@ -158,9 +154,7 @@ fn wait_native(child: *Child, nonblocking: bool) ExitResult {
     wait_error := mac_error()
     return ExitResult{ failure: io.darwin_failure(wait_error) }
   }
-  if value == 0 {
-    return ExitResult{}
-  }
+  if value == 0 { return ExitResult{} }
   child.active = false
   if (status & 127) == 0 {
     return ExitResult{ code: #cast(u32, ((status >> 8) & 255)), finished: true }
@@ -201,9 +195,7 @@ fn read_native(handle: isize, destination: []u8) ReadResult {
     amount = native_read(#cast(i32, handle), &destination[0], #len(destination))
   }
   if amount < 0 {
-    if native_errno().* == 35 {
-      return ReadResult{ ok: true }
-    }
+    if native_errno().* == 35 { return ReadResult{ ok: true } }
     read_error := mac_error()
     return ReadResult{ error: read_error, kind: io.darwin(read_error) }
   }
@@ -228,9 +220,7 @@ fn environment_native(name: []const u8, destination: []u8) EnvironmentResult {
     return EnvironmentResult{ failure: io.Failure{ kind: io.Kind.Capacity, native: -28 } }
   }
   value := native_environment(key.value)
-  if value == nil {
-    return EnvironmentResult{ value: destination[..0] }
-  }
+  if value == nil { return EnvironmentResult{ value: destination[..0] } }
   parsed := c.bytes_from_string(value, #len(destination)+1)
   if parse.failed(parsed.failure) || #len(parsed.value) > #len(destination) {
     return EnvironmentResult{ failure: io.Failure{ kind: io.Kind.Capacity, native: -28 } }
@@ -257,13 +247,9 @@ extern fn argument_length "dyn_arguments_length"(value: *const u8) usize
 extern fn argument_vector "dyn_arguments_vector"() ***const u8
 fn arguments_native(arena: *mem.Arena) ArgumentsResult {
   count := argument_count().*
-  if count < 0 {
-    return ArgumentsResult{ failure: io.Failure{ kind: io.Kind.InvalidState } }
-  }
+  if count < 0 { return ArgumentsResult{ failure: io.Failure{ kind: io.Kind.InvalidState } } }
   result := argument_slots(arena, #cast(usize, count))
-  if io.failed(result.failure) {
-    return result
-  }
+  if io.failed(result.failure) { return result }
   vector := #slice(argument_vector().*, count)
   at: usize = 0
   for at < #cast(usize, count) {

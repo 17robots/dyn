@@ -10,9 +10,7 @@ pub type TemporaryResult = io.Result(TemporaryDirectory)
 // Reserves a private 0700 directory. Its path is in arena.
 pub fn temporary_directory(arena: *mem.Arena, prefix: []const u8) TemporaryResult {
   for byte in prefix {
-    if byte == 0 || byte == '/' {
-      return TemporaryResult{ failure: io.linux_failure(-22) }
-    }
+    if byte == 0 || byte == '/' { return TemporaryResult{ failure: io.linux_failure(-22) } }
   }
   for attempt in 0..128 {
     path := temporary_path(arena, prefix, "")
@@ -27,9 +25,7 @@ pub fn temporary_directory(arena: *mem.Arena, prefix: []const u8) TemporaryResul
   return TemporaryResult{ failure: io.linux_failure(-17) }
 }
 pub fn remove_temporary(directory: *TemporaryDirectory, frames: []fs.RemovalFrame, scratch: []u8) fs.Result {
-  if !directory.active {
-    return fs.Result{}
-  }
+  if !directory.active { return fs.Result{} }
   result := fs.remove_tree(directory.path, frames, scratch)
   if !io.failed(result.failure) {
     directory.active = false

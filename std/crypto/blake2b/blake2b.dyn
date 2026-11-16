@@ -108,9 +108,7 @@ fn advance(state: *State, count: u64) {
 }
 
 pub fn update(state: *State, input: []const u8) {
-  if state.failed {
-    return
-  }
+  if state.failed { return }
   at: usize = 0
   for at < #len(input) {
     // A full block is compressed only once more input follows: the last
@@ -135,9 +133,7 @@ pub fn update(state: *State, input: []const u8) {
 // Writes the digest into the first length bytes of destination; empty when
 // destination is shorter or the state was invalid.
 pub fn finish(state: *State, destination: []u8) []u8 {
-  if state.failed || #len(destination) < state.length {
-    return destination[..0]
-  }
+  if state.failed || #len(destination) < state.length { return destination[..0] }
   advance(state, state.used)
   for i in state.used..128 {
     state.block[i] = 0

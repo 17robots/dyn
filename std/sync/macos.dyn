@@ -14,9 +14,7 @@ extern fn unfair_try_lock "os_unfair_lock_trylock"(value: *u32) bool
 extern fn unfair_unlock "os_unfair_lock_unlock"(value: *u32)
 
 fn native_wait(address: *AtomicU32, expected: u32) isize {
-  if wait_address(&address.value, expected, 4, 0) < 0 {
-    return 0 - #cast(isize, wait_error().*)
-  }
+  if wait_address(&address.value, expected, 4, 0) < 0 { return 0 - #cast(isize, wait_error().*) }
   return 0
 }
 fn native_wake(address: *AtomicU32, all: bool) {
@@ -41,9 +39,7 @@ fn native_wait_timeout(address: *AtomicU32, expected: u32, duration: i64) isize 
     return 0
   }
   code := wait_error().*
-  if code == 60 {
-    return 1
-  }
+  if code == 60 { return 1 }
   return 0 - #cast(isize, code)
 }
 fn native_sync_error(code: isize) io.Kind {

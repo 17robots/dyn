@@ -6,13 +6,9 @@ pub struct Samples { count: usize, minimum, median, p90, maximum: i64, valid: bo
 // or negative samples without mutation. Median is the lower middle observation;
 // p90 uses the nearest-rank definition. Measure batches to amortize clock costs.
 pub fn summarize(samples: []i64) Samples {
-  if #len(samples) == 0 {
-    return Samples{}
-  }
+  if #len(samples) == 0 { return Samples{} }
   for value in samples {
-    if value < 0 {
-      return Samples{}
-    }
+    if value < 0 { return Samples{} }
   }
   sorting.sort(samples)
   count := #len(samples)

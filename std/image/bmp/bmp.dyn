@@ -14,21 +14,15 @@ fn le32(data: []const u8, at: usize) u32 {
   return binary.load_u32_le(data[at..])
 }
 fn mask_valid(mask: u32, bits: u16) bool {
-  if bits < 32 && mask >> bits != 0 {
-    return false
-  }
-  if mask == 0 {
-    return true
-  }
+  if bits < 32 && mask >> bits != 0 { return false }
+  if mask == 0 { return true }
   for (mask & 1) == 0 {
     mask >>= 1
   }
   return (mask & (mask + 1)) == 0
 }
 fn component(pixel, mask: u32, missing: u8) u8 {
-  if mask == 0 {
-    return missing
-  }
+  if mask == 0 { return missing }
   for (mask & 1) == 0 {
     mask >>= 1
     pixel >>= 1
@@ -196,9 +190,7 @@ pub fn encode(arena: *mem.Arena, pixels: []const u8, width, height: u32, channel
     return EncodeResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
   count := #cast(u64, width) * #cast(u64, height)
-  if count > 16777216 {
-    return EncodeResult{ failure: parse.Failure{ kind: parse.Kind.Capacity } }
-  }
+  if count > 16777216 { return EncodeResult{ failure: parse.Failure{ kind: parse.Kind.Capacity } } }
   if #cast(usize, count) * #cast(usize, channels) != #len(pixels) {
     return EncodeResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }

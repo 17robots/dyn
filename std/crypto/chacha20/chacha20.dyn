@@ -27,9 +27,7 @@ fn quarter(state: []u32, a, b, c, d: usize) {
 }
 
 pub fn block(destination: []u8, key: []const u8, nonce: []const u8, counter: u32) bool {
-  if #len(destination) < 64 || #len(key) != 32 || #len(nonce) != 12 {
-    return false
-  }
+  if #len(destination) < 64 || #len(key) != 32 || #len(nonce) != 12 { return false }
   initial: [16]u32
   initial[0] = 1634760805
   initial[1] = 857760878
@@ -65,23 +63,17 @@ pub fn block(destination: []u8, key: []const u8, nonce: []const u8, counter: u32
 
 // IETF ChaCha20. Input/output may be the same slice. Counter exhaustion fails.
 pub fn xor(destination: []u8, input: []const u8, key: []const u8, nonce: []const u8, counter: u32) bool {
-  if #len(destination) < #len(input) || #len(key) != 32 || #len(nonce) != 12 {
-    return false
-  }
+  if #len(destination) < #len(input) || #len(key) != 32 || #len(nonce) != 12 { return false }
   blocks := #len(input) / 64
   if #len(input) % 64 != 0 {
     blocks += 1
   }
-  if #cast(u64, blocks) > 4294967296 - #cast(u64, counter) {
-    return false
-  }
+  if #cast(u64, blocks) > 4294967296 - #cast(u64, counter) { return false }
   stream: [64]u8
   at: usize = 0
   block_counter := counter
   for at < #len(input) {
-    if !block(stream[..], key, nonce, block_counter) {
-      return false
-    }
+    if !block(stream[..], key, nonce, block_counter) { return false }
     take := #len(input) - at
     if take > 64 {
       take = 64

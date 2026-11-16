@@ -61,9 +61,7 @@ fn default_hash(seed: u64, key: $K) u64 {
       #typeof(K).kind == TypeKind.Bool || #typeof(K).kind == TypeKind.Pointer ||
       (#typeof(K).kind == TypeKind.Slice && #typeof(K).element_id == #typeof(u8).id),
     "map.init: keys must be integers, enums, bools, pointers or text; use map.init_with for other keys")
-  if #typeof(K).kind == TypeKind.Slice {
-    return text_hash(seed, #cast(*const []const u8, &key).*)
-  }
+  if #typeof(K).kind == TypeKind.Slice { return text_hash(seed, #cast(*const []const u8, &key).*) }
   // A bool hashes by its truth as the language reads it, not its byte.
   if #typeof(K).kind == TypeKind.Bool {
     truth: u64 = 0
@@ -72,15 +70,9 @@ fn default_hash(seed: u64, key: $K) u64 {
     }
     return integer_hash(seed, truth)
   }
-  if #sizeof(K) == 8 {
-    return integer_hash(seed, #cast(*const u64, &key).*)
-  }
-  if #sizeof(K) == 4 {
-    return integer_hash(seed, #cast(u64, #cast(*const u32, &key).*))
-  }
-  if #sizeof(K) == 2 {
-    return integer_hash(seed, #cast(u64, #cast(*const u16, &key).*))
-  }
+  if #sizeof(K) == 8 { return integer_hash(seed, #cast(*const u64, &key).*) }
+  if #sizeof(K) == 4 { return integer_hash(seed, #cast(u64, #cast(*const u32, &key).*)) }
+  if #sizeof(K) == 2 { return integer_hash(seed, #cast(u64, #cast(*const u16, &key).*)) }
   return integer_hash(seed, #cast(u64, #cast(*const u8, &key).*))
 }
 
@@ -91,15 +83,9 @@ fn default_equal(left: $K, right: $K) bool {
   if #typeof(K).kind == TypeKind.Bool {
     return #cast(*const bool, &left).* == #cast(*const bool, &right).*
   }
-  if #sizeof(K) == 8 {
-    return #cast(*const u64, &left).* == #cast(*const u64, &right).*
-  }
-  if #sizeof(K) == 4 {
-    return #cast(*const u32, &left).* == #cast(*const u32, &right).*
-  }
-  if #sizeof(K) == 2 {
-    return #cast(*const u16, &left).* == #cast(*const u16, &right).*
-  }
+  if #sizeof(K) == 8 { return #cast(*const u64, &left).* == #cast(*const u64, &right).* }
+  if #sizeof(K) == 4 { return #cast(*const u32, &left).* == #cast(*const u32, &right).* }
+  if #sizeof(K) == 2 { return #cast(*const u16, &left).* == #cast(*const u16, &right).* }
   return #cast(*const u8, &left).* == #cast(*const u8, &right).*
 }
 
@@ -118,13 +104,9 @@ pub fn text_hash(seed: u64, key: []const u8) u64 {
 }
 
 pub fn text_equal(left: []const u8, right: []const u8) bool {
-  if #len(left) != #len(right) {
-    return false
-  }
+  if #len(left) != #len(right) { return false }
   for i in 0..#len(left) {
-    if left[i] != right[i] {
-      return false
-    }
+    if left[i] != right[i] { return false }
   }
   return true
 }
@@ -158,14 +140,10 @@ fn locate(m: *const Map($K, $V), key: $K, code: u64) usize {
   at := #cast(usize, code) & mask
   for true {
     tag := tags[at]
-    if tag == 0 {
-      return at
-    }
+    if tag == 0 { return at }
     // Apart from the &&, so the compiler can inline equal_key.
     if tag == want {
-      if equal_key(entries[at].key, key) {
-        return at
-      }
+      if equal_key(entries[at].key, key) { return at }
     }
     at = (at + 1) & mask
   }
@@ -248,26 +226,18 @@ pub fn upsert(m: *Map($K, $V), key: $K, initial: $V) *V {
 
 // The value for key, or nil when key is absent. An empty map needs no init.
 pub fn get(m: *const Map($K, $V), key: $K) *V {
-  if m.count == 0 {
-    return nil
-  }
+  if m.count == 0 { return nil }
   at := locate(m, key, m.hash_key(m.seed, key))
-  if m.tags[at] == 0 {
-    return nil
-  }
+  if m.tags[at] == 0 { return nil }
   return &m.entries[at].value
 }
 
 // Removes key. Returns false when it was absent. Later entries of the probe run
 // shift back, so no tombstones build up.
 pub fn remove(m: *Map($K, $V), key: $K) bool {
-  if m.count == 0 {
-    return false
-  }
+  if m.count == 0 { return false }
   at := locate(m, key, m.hash_key(m.seed, key))
-  if m.tags[at] == 0 {
-    return false
-  }
+  if m.tags[at] == 0 { return false }
   mask := #len(m.tags) - 1
   next := (at + 1) & mask
   for m.tags[next] != 0 {

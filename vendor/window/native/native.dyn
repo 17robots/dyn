@@ -48,21 +48,13 @@ extern fn native_listen_events "dyn_window_listen_events"(handle: rawptr, enable
 extern fn native_next_event "dyn_window_next_event"(handle: rawptr, event: *OrderedEvent) i32
 extern fn native_wake "dyn_window_wake"(handle: rawptr) i32
 pub fn open(window: *Window, title: []const u8, width, height: i32) Result {
-  if window.handle != nil {
-    return Result{kind:io.Kind.InvalidState}
-  }
-  if width <= 0 || height <= 0 || #len(title) > 4095 {
-    return Result{kind:io.Kind.InvalidInput}
-  }
+  if window.handle != nil { return Result{kind:io.Kind.InvalidState} }
+  if width <= 0 || height <= 0 || #len(title) > 4095 { return Result{kind:io.Kind.InvalidInput} }
   storage: [4096]u8
   name := c.string_into(storage[..], title)
-  if parse.failed(name.failure) {
-    return Result{kind:io.Kind.InvalidInput}
-  }
+  if parse.failed(name.failure) { return Result{kind:io.Kind.InvalidInput} }
   handle := native_open(name.value, width, height)
-  if handle == nil {
-    return Result{kind:io.Kind.System}
-  }
+  if handle == nil { return Result{kind:io.Kind.System} }
   window.* = Window{handle:handle, width:width, height:height}
   opened := poll(window)
   if opened.kind != io.Kind.Ok {
@@ -78,14 +70,10 @@ pub fn close(window: *Window) {
   }
 }
 pub fn poll(window: *Window) Result {
-  if window.handle == nil {
-    return Result{kind:io.Kind.InvalidState}
-  }
+  if window.handle == nil { return Result{kind:io.Kind.InvalidState} }
   previous_composition := window.composition.active != 0
   frame := Frame{}
-  if native_poll(window.handle, &frame) == 0 {
-    return Result{kind:io.Kind.System}
-  }
+  if native_poll(window.handle, &frame) == 0 { return Result{kind:io.Kind.System} }
   window.width = frame.width
   window.height = frame.height
   window.close_requested = (frame.flags & 128) != 0
@@ -98,29 +86,19 @@ pub fn poll(window: *Window) Result {
   return Result{}
 }
 pub fn make_current(window: *Window) Result {
-  if window.handle == nil {
-    return Result{kind:io.Kind.InvalidState}
-  }
-  if native_current(window.handle) == 0 {
-    return Result{kind:io.Kind.System}
-  }
+  if window.handle == nil { return Result{kind:io.Kind.InvalidState} }
+  if native_current(window.handle) == 0 { return Result{kind:io.Kind.System} }
   return Result{}
 }
 pub fn swap(window: *Window) Result {
-  if window.handle == nil {
-    return Result{kind:io.Kind.InvalidState}
-  }
-  if native_swap(window.handle) == 0 {
-    return Result{kind:io.Kind.System}
-  }
+  if window.handle == nil { return Result{kind:io.Kind.InvalidState} }
+  if native_swap(window.handle) == 0 { return Result{kind:io.Kind.System} }
   return Result{}
 }
 
 // Offers text on the clipboard; longer text is truncated to 64 KiB.
 pub fn set_clipboard(window: *Window, text: []const u8) {
-  if window.handle == nil {
-    return
-  }
+  if window.handle == nil { return }
   length := #len(text)
   if length > 65536 {
     length = 65536
@@ -148,9 +126,7 @@ pub fn set_cursor(window: *Window, cursor: Cursor) {
 
 // Display scale relative to 96 DPI (or the platform's base scale).
 pub fn scale(window: *const Window) f32 {
-  if window.desktop.scale <= 0.0 {
-    return 1.0
-  }
+  if window.desktop.scale <= 0.0 { return 1.0 }
   return window.desktop.scale
 }
 
@@ -194,12 +170,8 @@ pub fn next_event(window: *Window, output: *OrderedEvent) bool {
 }
 // Thread-safe; join all wake callers before close. Wakes may coalesce.
 pub fn wake(window: *const Window) Result {
-  if window.handle == nil {
-    return Result{kind:io.Kind.InvalidState}
-  }
-  if native_wake(window.handle) == 0 {
-    return Result{kind:io.Kind.System}
-  }
+  if window.handle == nil { return Result{kind:io.Kind.InvalidState} }
+  if native_wake(window.handle) == 0 { return Result{kind:io.Kind.System} }
   return Result{}
 }
 
@@ -221,9 +193,7 @@ pub fn composition(window: *const Window) Composition {
 // Enables text input and places the caret rectangle (window pixels) where the
 // input method shows its candidates.
 pub fn set_text_input(window: *Window, enabled: bool, x, y, width, height: i32) {
-  if window.handle == nil {
-    return
-  }
+  if window.handle == nil { return }
   on: i32 = 0
   if enabled {
     on = 1
@@ -234,14 +204,10 @@ pub fn set_text_input(window: *Window, enabled: bool, x, y, width, height: i32) 
 
 // The most recent pasted text, borrowed until the next paste request/reply or close.
 pub fn clipboard(window: *const Window) []const u8 {
-  if window.handle == nil {
-    return ""
-  }
+  if window.handle == nil { return "" }
   text: *const u8 = nil
   length := native_clipboard(window.handle, &text)
-  if text == nil {
-    return ""
-  }
+  if text == nil { return "" }
   return #slice(text, length)
 }
 
@@ -249,17 +215,11 @@ pub type Surrounding = surrounding_edit.Context
 // Publish after enabling ordered listening and before enabling a newly focused
 // field. The protocol copies text synchronously. Failure preserves old context.
 pub fn set_surrounding_text(window: *Window, context: Surrounding) Result {
-  if window.handle == nil {
-    return Result{ kind: io.Kind.InvalidState }
-  }
+  if window.handle == nil { return Result{ kind: io.Kind.InvalidState } }
   checked := surrounding_edit.validate(&context)
-  if checked.kind != io.Kind.Ok {
-    return Result{ kind: checked.kind }
-  }
+  if checked.kind != io.Kind.Ok { return Result{ kind: checked.kind } }
   for byte in context.text {
-    if byte == 0 {
-      return Result{ kind: io.Kind.InvalidInput }
-    }
+    if byte == 0 { return Result{ kind: io.Kind.InvalidInput } }
   }
   empty: [1]u8
   pointer: *const u8 = &empty[0]
@@ -271,50 +231,26 @@ pub fn set_surrounding_text(window: *Window, context: Surrounding) Result {
     cause = 1
   }
   status := native_surrounding(window.handle, pointer, #cast(u32, #len(context.text)), #cast(u32, context.cursor), #cast(u32, context.anchor), context.token, cause)
-  if status == 1 {
-    return Result{}
-  }
-  if status == -1 {
-    return Result{ kind: io.Kind.Unsupported }
-  }
-  if status == -2 {
-    return Result{ kind: io.Kind.Capacity }
-  }
+  if status == 1 { return Result{} }
+  if status == -1 { return Result{ kind: io.Kind.Unsupported } }
+  if status == -2 { return Result{ kind: io.Kind.Capacity } }
   return Result{ kind: io.Kind.InvalidState }
 }
 
 fn checked_status(status: i32) Result {
-  if status == 1 {
-    return Result{}
-  }
-  if status == -1 {
-    return Result{kind:io.Kind.Unsupported}
-  }
-  if status == -2 {
-    return Result{kind:io.Kind.Capacity}
-  }
-  if status == -3 {
-    return Result{kind:io.Kind.InvalidInput}
-  }
-  if status == -4 {
-    return Result{kind:io.Kind.InvalidState}
-  }
+  if status == 1 { return Result{} }
+  if status == -1 { return Result{kind:io.Kind.Unsupported} }
+  if status == -2 { return Result{kind:io.Kind.Capacity} }
+  if status == -3 { return Result{kind:io.Kind.InvalidInput} }
+  if status == -4 { return Result{kind:io.Kind.InvalidState} }
   return Result{kind:io.Kind.System}
 }
 pub fn set_title(window: *Window, title: []const u8) Result {
-  if window.handle == nil {
-    return Result{kind:io.Kind.InvalidState}
-  }
-  if #len(title) > 4096 {
-    return Result{kind:io.Kind.Capacity}
-  }
-  if !utf8.valid(title) {
-    return Result{kind:io.Kind.InvalidInput}
-  }
+  if window.handle == nil { return Result{kind:io.Kind.InvalidState} }
+  if #len(title) > 4096 { return Result{kind:io.Kind.Capacity} }
+  if !utf8.valid(title) { return Result{kind:io.Kind.InvalidInput} }
   for byte in title {
-    if byte == 0 {
-      return Result{kind:io.Kind.InvalidInput}
-    }
+    if byte == 0 { return Result{kind:io.Kind.InvalidInput} }
   }
   empty: [1]u8
   pointer: *const u8 = &empty[0]
@@ -324,35 +260,21 @@ pub fn set_title(window: *Window, title: []const u8) Result {
   return checked_status(native_set_title(window.handle, pointer, #cast(u32, #len(title))))
 }
 pub fn set_size(window: *Window, width, height: i32) Result {
-  if window.handle == nil {
-    return Result{kind:io.Kind.InvalidState}
-  }
-  if width <= 0 || height <= 0 {
-    return Result{kind:io.Kind.InvalidInput}
-  }
+  if window.handle == nil { return Result{kind:io.Kind.InvalidState} }
+  if width <= 0 || height <= 0 { return Result{kind:io.Kind.InvalidInput} }
   result := checked_status(native_set_size(window.handle, width, height))
-  if result.kind != io.Kind.Ok {
-    return result
-  }
+  if result.kind != io.Kind.Ok { return result }
   return poll(window)
 }
 pub fn set_swap_interval(window: *Window, interval: i32) Result {
-  if window.handle == nil {
-    return Result{kind:io.Kind.InvalidState}
-  }
-  if interval < 0 {
-    return Result{kind:io.Kind.InvalidInput}
-  }
+  if window.handle == nil { return Result{kind:io.Kind.InvalidState} }
+  if interval < 0 { return Result{kind:io.Kind.InvalidInput} }
   return checked_status(native_swap_interval(window.handle, interval))
 }
 // Checked publication copies all text or reports failure; no truncation.
 pub fn try_set_clipboard(window: *Window, text: []const u8) Result {
-  if window.handle == nil {
-    return Result{kind:io.Kind.InvalidState}
-  }
-  if #len(text) > 4294967295 {
-    return Result{kind:io.Kind.Capacity}
-  }
+  if window.handle == nil { return Result{kind:io.Kind.InvalidState} }
+  if #len(text) > 4294967295 { return Result{kind:io.Kind.Capacity} }
   empty: [1]u8
   pointer: *const u8 = &empty[0]
   if #len(text) != 0 {
@@ -370,8 +292,6 @@ pub fn paste_pending(window: *const Window) bool {
   return window.handle != nil && native_paste_pending(window.handle) != 0
 }
 pub fn paste_status(window: *const Window) Result {
-  if window.handle == nil {
-    return Result{kind:io.Kind.InvalidState}
-  }
+  if window.handle == nil { return Result{kind:io.Kind.InvalidState} }
   return checked_status(native_paste_status(window.handle))
 }

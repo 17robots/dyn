@@ -106,16 +106,12 @@ pub fn log10(x: $T) T {
   return #cast(T, log10_64(#cast(f64, x)))
 }
 pub fn pow(x, y: $T) T {
-  if signaling_nan(x) || signaling_nan(y) {
-    return #cast(T, nan())
-  }
+  if signaling_nan(x) || signaling_nan(y) { return #cast(T, nan()) }
   return #cast(T, pow64(#cast(f64, x), #cast(f64, y)))
 }
 // sqrt(x * x + y * y) without intermediate overflow.
 pub fn hypot(x, y: $T) T {
-  if signaling_nan(x) || signaling_nan(y) {
-    return #cast(T, nan())
-  }
+  if signaling_nan(x) || signaling_nan(y) { return #cast(T, nan()) }
   return #cast(T, hypot64(#cast(f64, x), #cast(f64, y)))
 }
 // a + (b - a) * t.
@@ -207,38 +203,26 @@ pub fn copysign64(x, sign: f64) f64 {
 pub fn trunc64(x: f64) f64 {
   bits := #bitcast(u64, x)
   exponent := #cast(i64, (bits >> 52) & 0x7ff) - 1023
-  if exponent >= 52 {
-    return x
-  }
-  if exponent < 0 {
-    return #bitcast(f64, bits & bits_8000000000000000)
-  }
+  if exponent >= 52 { return x }
+  if exponent < 0 { return #bitcast(f64, bits & bits_8000000000000000) }
   mask := (#cast(u64, 1) << #cast(u64, 52 - exponent)) - 1
   return #bitcast(f64, bits & ~mask)
 }
 pub fn floor64(x: f64) f64 {
   t := trunc64(x)
-  if t > x {
-    return t - 1.0
-  }
+  if t > x { return t - 1.0 }
   return t
 }
 pub fn ceil64(x: f64) f64 {
   t := trunc64(x)
-  if t < x {
-    return t + 1.0
-  }
+  if t < x { return t + 1.0 }
   return t
 }
 pub fn round64(x: f64) f64 {
   t := trunc64(x)
   difference := x - t
-  if difference >= 0.5 {
-    return t + 1.0
-  }
-  if difference <= -0.5 {
-    return t - 1.0
-  }
+  if difference >= 0.5 { return t + 1.0 }
+  if difference <= -0.5 { return t - 1.0 }
   return t
 }
 
@@ -247,15 +231,9 @@ pub fn sqrt64(x: f64) f64 {
   sign: u32 = 0x80000000
   ix0 := high(x)
   ix1 := low(x)
-  if (ix0 & 0x7ff00000) == 0x7ff00000 {
-    return x * x + x
-  }
-  if ((ix0 & ~sign) | ix1) == 0 {
-    return x
-  }
-  if (ix0 & sign) != 0 {
-    return nan()
-  }
+  if (ix0 & 0x7ff00000) == 0x7ff00000 { return x * x + x }
+  if ((ix0 & ~sign) | ix1) == 0 { return x }
+  if (ix0 & sign) != 0 { return nan() }
   m := #cast(i32, ix0 >> 20)
   if m == 0 {
     for ix0 == 0 {
@@ -343,15 +321,9 @@ pub fn fma64(x, y, z: f64) f64 {
 }
 
 fn fused(x, y, z: f64, precision, minimum: i32) f64 {
-  if !is_finite(x) || !is_finite(y) {
-    return x * y + z
-  }
-  if !is_finite(z) {
-    return z
-  }
-  if x == 0.0 || y == 0.0 {
-    return x * y + z
-  }
+  if !is_finite(x) || !is_finite(y) { return x * y + z }
+  if !is_finite(z) { return z }
+  if x == 0.0 || y == 0.0 { return x * y + z }
   xs := split_float(x)
   ys := split_float(y)
   p_high: u64 = 0
@@ -408,16 +380,12 @@ fn fused(x, y, z: f64, precision, minimum: i32) f64 {
     }
     r_high = p_high - z_high - borrow
   }
-  if r_high == 0 && r_low == 0 {
-    return 0.0
-  }
+  if r_high == 0 && r_low == 0 { return 0.0 }
   return round_wide(negative, r_high, r_low, p_exponent, false, precision, minimum)
 }
 
 fn wide_bits(hi, lo: u64) i32 {
-  if hi != 0 {
-    return 128 - #cast(i32, leading_zeros(hi))
-  }
+  if hi != 0 { return 128 - #cast(i32, leading_zeros(hi)) }
   return 64 - #cast(i32, leading_zeros(lo))
 }
 
@@ -529,24 +497,16 @@ fn round_wide(negative: bool, high_value: u64, low_value: u64, exponent_value: i
     mantissa += 1
   }
   result := scale(#cast(f64, mantissa), exponent + 1)
-  if negative {
-    return -result
-  }
+  if negative { return -result }
   return result
 }
 
 // fdlibm-style kernels below. Constants are the published fdlibm values.
 
 pub fn exp64(x: f64) f64 {
-  if is_nan(x) {
-    return x
-  }
-  if x > 709.782712893383973096 {
-    return inf()
-  }
-  if x < -745.13321910194110842 {
-    return 0.0
-  }
+  if is_nan(x) { return x }
+  if x > 709.782712893383973096 { return inf() }
+  if x < -745.13321910194110842 { return 0.0 }
   ln2_high: f64 = 6.93147180369123816490e-01
   ln2_low: f64 = 1.90821492927058770002e-10
   inverse_ln2: f64 = 1.44269504088896338700e+00
@@ -554,9 +514,7 @@ pub fn exp64(x: f64) f64 {
   if absolute < 0.0 {
     absolute = -absolute
   }
-  if absolute < 3.7252902984e-09 {
-    return 1.0 + x
-  }
+  if absolute < 3.7252902984e-09 { return 1.0 + x }
   k := round64(x * inverse_ln2)
   high_part := x - k * ln2_high
   low_part := k * ln2_low
@@ -568,15 +526,9 @@ pub fn exp64(x: f64) f64 {
 }
 
 pub fn exp2_64(x: f64) f64 {
-  if is_nan(x) {
-    return x
-  }
-  if x >= 1024.0 {
-    return inf()
-  }
-  if x < -1075.0 {
-    return 0.0
-  }
+  if is_nan(x) { return x }
+  if x >= 1024.0 { return inf() }
+  if x < -1075.0 { return 0.0 }
   k := round64(x)
   f := x - k
   return scale(exp64(f * ln2), #cast(i32, k))
@@ -616,19 +568,13 @@ fn log_special(x: f64) bool {
 }
 
 fn log_special_value(x: f64) f64 {
-  if is_nan(x) || x == inf() {
-    return x
-  }
-  if x == 0.0 {
-    return -inf()
-  }
+  if is_nan(x) || x == inf() { return x }
+  if x == 0.0 { return -inf() }
   return nan()
 }
 
 pub fn log64(x: f64) f64 {
-  if log_special(x) {
-    return log_special_value(x)
-  }
+  if log_special(x) { return log_special_value(x) }
   reduced := reduce_log(x)
   dk := #cast(f64, reduced.k)
   return dk * 6.93147180369123816490e-01 + (reduced.f + (log_tail(reduced.f) + dk * 1.90821492927058770002e-10))
@@ -653,9 +599,7 @@ fn log_parts(x: f64) Split2 {
 }
 
 pub fn log2_64(x: f64) f64 {
-  if log_special(x) {
-    return log_special_value(x)
-  }
+  if log_special(x) { return log_special_value(x) }
   parts := log_parts(x)
   inverse_high: f64 = 1.44269504072144627571e+00
   inverse_low: f64 = 1.67517131648865118353e-10
@@ -667,9 +611,7 @@ pub fn log2_64(x: f64) f64 {
 }
 
 pub fn log10_64(x: f64) f64 {
-  if log_special(x) {
-    return log_special_value(x)
-  }
+  if log_special(x) { return log_special_value(x) }
   reduced := reduce_log(x)
   logarithm := logarithm_dd(reduced.f)
   fraction := dd_mul(logarithm, DoubleDouble{ hi: 4.34294481903251816668e-01, lo: 1.098319650216765073e-17 })
@@ -679,9 +621,7 @@ pub fn log10_64(x: f64) f64 {
 }
 
 pub fn hypot64(x_value, y_value: f64) f64 {
-  if signaling_nan(x_value) || signaling_nan(y_value) {
-    return nan()
-  }
+  if signaling_nan(x_value) || signaling_nan(y_value) { return nan() }
   x := x_value
   y := y_value
   if x < 0.0 {
@@ -690,20 +630,14 @@ pub fn hypot64(x_value, y_value: f64) f64 {
   if y < 0.0 {
     y = -y
   }
-  if x == inf() || y == inf() {
-    return inf()
-  }
-  if is_nan(x) || is_nan(y) {
-    return x + y
-  }
+  if x == inf() || y == inf() { return inf() }
+  if is_nan(x) || is_nan(y) { return x + y }
   if x < y {
     t := x
     x = y
     y = t
   }
-  if x == 0.0 {
-    return 0.0
-  }
+  if x == 0.0 { return 0.0 }
   // Scale the larger operand near 1 and split the products to reduce
   // rounding error in the sum of squares.
   exponent := #cast(i32, (high(x) >> 20) & 0x7ff) - 1023
@@ -827,9 +761,7 @@ fn reduce_pi2_large(x: f64) Remainder {
     w2 = 0
     shift += 64
   }
-  if w0 == 0 {
-    return Remainder{ n: n, y0: 0.0, y1: 0.0 }
-  }
+  if w0 == 0 { return Remainder{ n: n, y0: 0.0, y1: 0.0 } }
   z := #cast(i32, leading_zeros(w0))
   if z > 0 {
     w0 = (w0 << #cast(u64, z)) | (w1 >> #cast(u64, 64 - z))
@@ -859,9 +791,7 @@ fn reduce_pi2_large(x: f64) Remainder {
 }
 
 fn reduce_pi2(x: f64) Remainder {
-  if (high(x) & 0x7fffffff) >= 0x413921fb {
-    return reduce_pi2_large(x)
-  }
+  if (high(x) & 0x7fffffff) >= 0x413921fb { return reduce_pi2_large(x) }
   inverse_pio2: f64 = 6.36619772367581382433e-01
   pio2_1: f64 = 1.57079632673412561417e+00
   pio2_1t: f64 = 6.07710050650619224932e-11
@@ -895,9 +825,7 @@ fn reduce_pi2(x: f64) Remainder {
 fn round_even(x: f64) f64 {
   // Adding and subtracting 1.5 * 2^52 rounds to the nearest integer.
   magic: f64 = 6755399441055744.0
-  if x >= 0.0 {
-    return (x + magic) - magic
-  }
+  if x >= 0.0 { return (x + magic) - magic }
   return -((-x + magic) - magic)
 }
 
@@ -906,9 +834,7 @@ fn kernel_sin(x, y: f64, has_tail: bool) f64 {
   w := z * z
   r: f64 = 8.33333333332248946124e-03 + z * (-1.98412698298579493134e-04 + z * 2.75573137070700676789e-06) + z * w * (-2.50507602534068634195e-08 + z * 1.58969099521155010221e-10)
   v := z * x
-  if !has_tail {
-    return x + v * (-1.66666666666666324348e-01 + z * r)
-  }
+  if !has_tail { return x + v * (-1.66666666666666324348e-01 + z * r) }
   return x - ((z * (0.5 * y - v * r) - y) - v * -1.66666666666666324348e-01)
 }
 
@@ -948,14 +874,10 @@ fn kernel_tan(x_value, y_value: f64, odd: bool) f64 {
       sign_value = -1.0
     }
     v = sign_value - 2.0 * (x + (r - w * w / (w + sign_value)))
-    if negative {
-      return -v
-    }
+    if negative { return -v }
     return v
   }
-  if !odd {
-    return w
-  }
+  if !odd { return w }
   w0 := with_low(w, 0)
   v = r - (w0 - x)
   a: f64 = -1.0 / w
@@ -968,58 +890,30 @@ fn small_angle(x: f64) bool {
 }
 
 pub fn sin64(x: f64) f64 {
-  if x == 0.0 {
-    return x
-  }
-  if !is_finite(x) {
-    return nan()
-  }
-  if small_angle(x) {
-    return kernel_sin(x, 0.0, false)
-  }
+  if x == 0.0 { return x }
+  if !is_finite(x) { return nan() }
+  if small_angle(x) { return kernel_sin(x, 0.0, false) }
   reduced := reduce_pi2(x)
-  if reduced.n == 0 {
-    return kernel_sin(reduced.y0, reduced.y1, true)
-  }
-  if reduced.n == 1 {
-    return kernel_cos(reduced.y0, reduced.y1)
-  }
-  if reduced.n == 2 {
-    return -kernel_sin(reduced.y0, reduced.y1, true)
-  }
+  if reduced.n == 0 { return kernel_sin(reduced.y0, reduced.y1, true) }
+  if reduced.n == 1 { return kernel_cos(reduced.y0, reduced.y1) }
+  if reduced.n == 2 { return -kernel_sin(reduced.y0, reduced.y1, true) }
   return -kernel_cos(reduced.y0, reduced.y1)
 }
 
 pub fn cos64(x: f64) f64 {
-  if !is_finite(x) {
-    return nan()
-  }
-  if small_angle(x) {
-    return kernel_cos(x, 0.0)
-  }
+  if !is_finite(x) { return nan() }
+  if small_angle(x) { return kernel_cos(x, 0.0) }
   reduced := reduce_pi2(x)
-  if reduced.n == 0 {
-    return kernel_cos(reduced.y0, reduced.y1)
-  }
-  if reduced.n == 1 {
-    return -kernel_sin(reduced.y0, reduced.y1, true)
-  }
-  if reduced.n == 2 {
-    return -kernel_cos(reduced.y0, reduced.y1)
-  }
+  if reduced.n == 0 { return kernel_cos(reduced.y0, reduced.y1) }
+  if reduced.n == 1 { return -kernel_sin(reduced.y0, reduced.y1, true) }
+  if reduced.n == 2 { return -kernel_cos(reduced.y0, reduced.y1) }
   return kernel_sin(reduced.y0, reduced.y1, true)
 }
 
 pub fn tan64(x: f64) f64 {
-  if x == 0.0 {
-    return x
-  }
-  if !is_finite(x) {
-    return nan()
-  }
-  if small_angle(x) {
-    return kernel_tan(x, 0.0, false)
-  }
+  if x == 0.0 { return x }
+  if !is_finite(x) { return nan() }
+  if small_angle(x) { return kernel_tan(x, 0.0, false) }
   reduced := reduce_pi2(x)
   return kernel_tan(reduced.y0, reduced.y1, (reduced.n & 1) != 0)
 }
@@ -1030,19 +924,13 @@ pub fn atan64(x_value: f64) f64 {
   negative := (hx >> 31) != 0
   ix := hx & 0x7fffffff
   if ix >= 0x44100000 {
-    if is_nan(x) {
-      return x
-    }
-    if negative {
-      return -(1.57079632679489655800e+00 + 6.12323399573676603587e-17)
-    }
+    if is_nan(x) { return x }
+    if negative { return -(1.57079632679489655800e+00 + 6.12323399573676603587e-17) }
     return 1.57079632679489655800e+00 + 6.12323399573676603587e-17
   }
   id: i32 = -1
   if ix < 0x3fdc0000 {
-    if ix < 0x3e400000 {
-      return x
-    }
+    if ix < 0x3e400000 { return x }
   } else {
     if x < 0.0 {
       x = -x
@@ -1067,27 +955,19 @@ pub fn atan64(x_value: f64) f64 {
   w := z * z
   s1 := z * (3.33333333333329318027e-01 + w * (1.42857142725034663711e-01 + w * (9.09088713343650656196e-02 + w * (6.66107313738753120669e-02 + w * (4.97687799461593236017e-02 + w * 1.62858201153657823623e-02)))))
   s2 := w * (-1.99999999998764832476e-01 + w * (-1.11111104054623557880e-01 + w * (-7.69187620504482999495e-02 + w * (-5.83357013379057348645e-02 + w * -3.65315727442169155270e-02))))
-  if id < 0 {
-    return x - x * (s1 + s2)
-  }
+  if id < 0 { return x - x * (s1 + s2) }
   high_parts: [4]f64 = [4.63647609000806093515e-01, 7.85398163397448278999e-01, 9.82793723247329054082e-01, 1.57079632679489655800e+00]
   low_parts: [4]f64 = [2.26987774529616870924e-17, 3.06161699786838301793e-17, 1.39033110312309984516e-17, 6.12323399573676603587e-17]
   index := #cast(usize, id)
   result := high_parts[index] - ((x * (s1 + s2) - low_parts[index]) - x)
-  if negative {
-    return -result
-  }
+  if negative { return -result }
   return result
 }
 
 pub fn atan2_64(y, x: f64) f64 {
   pi_low: f64 = 1.2246467991473531772e-16
-  if is_nan(x) || is_nan(y) {
-    return x + y
-  }
-  if x == 1.0 {
-    return atan64(y)
-  }
+  if is_nan(x) || is_nan(y) { return x + y }
+  if x == 1.0 { return atan64(y) }
   y_negative := (high(y) >> 31) != 0
   x_negative := (high(x) >> 31) != 0
   m: i32 = 0
@@ -1098,18 +978,12 @@ pub fn atan2_64(y, x: f64) f64 {
     m |= 2
   }
   if y == 0.0 {
-    if m <= 1 {
-      return y
-    }
-    if m == 2 {
-      return pi
-    }
+    if m <= 1 { return y }
+    if m == 2 { return pi }
     return -pi
   }
   if x == 0.0 {
-    if y_negative {
-      return -pi / 2.0
-    }
+    if y_negative { return -pi / 2.0 }
     return pi / 2.0
   }
   if is_inf(x) {
@@ -1123,9 +997,7 @@ pub fn atan2_64(y, x: f64) f64 {
   ix := high(x) & 0x7fffffff
   iy := high(y) & 0x7fffffff
   if is_inf(y) || ix + (64 << 20) < iy {
-    if y_negative {
-      return -pi / 2.0
-    }
+    if y_negative { return -pi / 2.0 }
     return pi / 2.0
   }
   z: f64 = 0.0
@@ -1135,15 +1007,9 @@ pub fn atan2_64(y, x: f64) f64 {
     ratio := copysign64(y / x, 1.0)
     z = atan64(ratio)
   }
-  if m == 0 {
-    return z
-  }
-  if m == 1 {
-    return -z
-  }
-  if m == 2 {
-    return pi - (z - pi_low)
-  }
+  if m == 0 { return z }
+  if m == 1 { return -z }
+  if m == 2 { return pi - (z - pi_low) }
   return (z - pi_low) - pi
 }
 
@@ -1160,15 +1026,11 @@ pub fn asin64(x: f64) f64 {
   ix := hx & 0x7fffffff
   negative := (hx >> 31) != 0
   if ix >= 0x3ff00000 {
-    if ((ix - 0x3ff00000) | low(x)) == 0 {
-      return x * pio2_high + x * 7.52316384526264005e-37
-    }
+    if ((ix - 0x3ff00000) | low(x)) == 0 { return x * pio2_high + x * 7.52316384526264005e-37 }
     return nan()
   }
   if ix < 0x3fe00000 {
-    if ix < 0x3e500000 && ix >= 0x00100000 {
-      return x
-    }
+    if ix < 0x3e500000 && ix >= 0x00100000 { return x }
     return x + x * asin_ratio(x * x)
   }
   absolute := x
@@ -1186,9 +1048,7 @@ pub fn asin64(x: f64) f64 {
     c := (z - f * f) / (s + f)
     result = 0.5 * pio2_high - (2.0 * s * r - (pio2_low - 2.0 * c) - (0.5 * pio2_high - 2.0 * f))
   }
-  if negative {
-    return -result
-  }
+  if negative { return -result }
   return result
 }
 
@@ -1200,17 +1060,13 @@ pub fn acos64(x: f64) f64 {
   negative := (hx >> 31) != 0
   if ix >= 0x3ff00000 {
     if ((ix - 0x3ff00000) | low(x)) == 0 {
-      if negative {
-        return 2.0 * pio2_high + 7.52316384526264005e-37
-      }
+      if negative { return 2.0 * pio2_high + 7.52316384526264005e-37 }
       return 0.0
     }
     return nan()
   }
   if ix < 0x3fe00000 {
-    if ix <= 0x3c600000 {
-      return pio2_high + 7.52316384526264005e-37
-    }
+    if ix <= 0x3c600000 { return pio2_high + 7.52316384526264005e-37 }
     return pio2_high - (x - (pio2_low - x * asin_ratio(x * x)))
   }
   if negative {
@@ -1229,28 +1085,18 @@ pub fn acos64(x: f64) f64 {
 
 // x^y, using a compensated logarithm/product for finite positive magnitudes.
 pub fn pow64(x, y: f64) f64 {
-  if signaling_nan(x) || signaling_nan(y) {
-    return nan()
-  }
-  if y == 0.0 || x == 1.0 {
-    return 1.0
-  }
-  if is_nan(x) || is_nan(y) {
-    return x + y
-  }
+  if signaling_nan(x) || signaling_nan(y) { return nan() }
+  if y == 0.0 || x == 1.0 { return 1.0 }
+  if is_nan(x) || is_nan(y) { return x + y }
   y_integer := trunc64(y) == y
   y_odd := y_integer && is_odd(y)
   if x == 0.0 {
     negative_zero := (high(x) >> 31) != 0
     if y < 0.0 {
-      if y_odd && negative_zero {
-        return -inf()
-      }
+      if y_odd && negative_zero { return -inf() }
       return inf()
     }
-    if y_odd && negative_zero {
-      return -0.0
-    }
+    if y_odd && negative_zero { return -0.0 }
     return 0.0
   }
   if is_inf(y) {
@@ -1258,36 +1104,24 @@ pub fn pow64(x, y: f64) f64 {
     if absolute < 0.0 {
       absolute = -absolute
     }
-    if absolute == 1.0 {
-      return 1.0
-    }
-    if (absolute > 1.0) == (y > 0.0) {
-      return inf()
-    }
+    if absolute == 1.0 { return 1.0 }
+    if (absolute > 1.0) == (y > 0.0) { return inf() }
     return 0.0
   }
   if is_inf(x) {
-    if x < 0.0 {
-      return pow64(-0.0, -y)
-    }
-    if y < 0.0 {
-      return 0.0
-    }
+    if x < 0.0 { return pow64(-0.0, -y) }
+    if y < 0.0 { return 0.0 }
     return inf()
   }
   negative := false
   base := x
   if x < 0.0 {
-    if !y_integer {
-      return nan()
-    }
+    if !y_integer { return nan() }
     negative = y_odd
     base = -x
   }
   result := pow_positive(base, y)
-  if negative {
-    return -result
-  }
+  if negative { return -result }
   return result
 }
 
@@ -1354,38 +1188,24 @@ fn logarithm_dd(f: f64) DoubleDouble {
 }
 
 fn pow_positive(base, y: f64) f64 {
-  if y == 1.0 {
-    return base
-  }
-  if y == -1.0 {
-    return 1.0 / base
-  }
+  if y == 1.0 { return base }
+  if y == -1.0 { return 1.0 / base }
   reduced := reduce_log(base)
   logarithm := logarithm_dd(reduced.f)
   inverse := DoubleDouble{ hi: 1.44269504088896338700, lo: 2.035527374093103311e-17 }
   t := dd_add(DoubleDouble{ hi: reduced.k, lo: 0.0 }, dd_mul(logarithm, inverse))
   // Avoid infinite products and the invalid residual infinity - infinity.
   estimate := y * t.hi
-  if estimate > 1025.0 {
-    return inf()
-  }
-  if estimate < -1080.0 {
-    return 0.0
-  }
+  if estimate > 1025.0 { return inf() }
+  if estimate < -1080.0 { return 0.0 }
   product := dd_mul(DoubleDouble{ hi: y, lo: 0.0 }, t)
   sum := product.hi + product.lo
-  if product.hi > 1024.0 || (product.hi == 1024.0 && product.lo >= 0.0) {
-    return inf()
-  }
-  if product.hi < -1075.0 {
-    return 0.0
-  }
+  if product.hi > 1024.0 || (product.hi == 1024.0 && product.lo >= 0.0) { return inf() }
+  if product.hi < -1075.0 { return 0.0 }
   if product.hi == -1075.0 {
     // A positive residual lies above the half-minimum-subnormal tie even
     // when exp of that residual would round to exactly 1 in binary64.
-    if product.lo > 0.0 {
-      return #bitcast(f64, #cast(u64, 1))
-    }
+    if product.lo > 0.0 { return #bitcast(f64, #cast(u64, 1)) }
     return 0.0
   }
   n := round64(sum)

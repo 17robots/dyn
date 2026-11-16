@@ -28,9 +28,7 @@ pub nil_entry: Entry
 const depth_limit: usize = 8
 
 fn equal_fold(left: []const u8, right: []const u8) bool {
-  if #len(left) != #len(right) {
-    return false
-  }
+  if #len(left) != #len(right) { return false }
   for i in 0..#len(left) {
     a := left[i]
     b := right[i]
@@ -40,9 +38,7 @@ fn equal_fold(left: []const u8, right: []const u8) bool {
     if b >= 65 && b <= 90 {
       b += 32
     }
-    if a != b {
-      return false
-    }
+    if a != b { return false }
   }
   return true
 }
@@ -59,9 +55,7 @@ struct Table { value: []const u8, ok: bool }
 
 fn table(data: []const u8, tag: u32) Table {
   count := #cast(usize, u16be(data, 4))
-  if 12 + count * 16 > #len(data) {
-    return Table{}
-  }
+  if 12 + count * 16 > #len(data) { return Table{} }
   for i in 0..count {
     at := 12 + i * 16
     if u32be(data, at) == tag {
@@ -79,24 +73,18 @@ fn table(data: []const u8, tag: u32) Table {
 // A name table string as UTF-8 in arena: Windows Unicode records in English
 // preferred, then any Windows Unicode record, then Macintosh Roman ASCII.
 fn name(arena: *mem.Arena, names: []const u8, wanted: u16) []const u8 {
-  if #len(names) < 6 {
-    return ""
-  }
+  if #len(names) < 6 { return "" }
   count := #cast(usize, u16be(names, 2))
   storage := #cast(usize, u16be(names, 4))
   best: usize = 0
   best_rank := 0
   for i in 0..count {
     at := 6 + i * 12
-    if at + 12 > #len(names) {
-      break
-    }
+    if at + 12 > #len(names) { break }
     platform := u16be(names, at)
     encoding := u16be(names, at + 2)
     language := u16be(names, at + 4)
-    if u16be(names, at + 6) != wanted {
-      continue
-    }
+    if u16be(names, at + 6) != wanted { continue }
     rank := 0
     if platform == 3 && (encoding == 1 || encoding == 10) {
       rank = 2
@@ -113,28 +101,20 @@ fn name(arena: *mem.Arena, names: []const u8, wanted: u16) []const u8 {
       best = at
     }
   }
-  if best_rank == 0 {
-    return ""
-  }
+  if best_rank == 0 { return "" }
   length := #cast(usize, u16be(names, best + 8))
   offset := storage + u16be(names, best + 10)
-  if offset > #len(names) || length > #len(names) - offset {
-    return ""
-  }
+  if offset > #len(names) || length > #len(names) - offset { return "" }
   raw := names[offset..offset + length]
   if best_rank == 1 {
     copied := mem.push_bytes_uninit(arena, length)
     for i in 0..length {
-      if raw[i] >= 128 || raw[i] == 0 {
-        return ""
-      }
+      if raw[i] >= 128 || raw[i] == 0 { return "" }
       copied[i] = raw[i]
     }
     return copied
   }
-  if length % 2 != 0 {
-    return ""
-  }
+  if length % 2 != 0 { return "" }
   output := mem.push_bytes_uninit(arena, length / 2 * 3 + 4)
   used: usize = 0
   at: usize = 0
@@ -142,21 +122,13 @@ fn name(arena: *mem.Arena, names: []const u8, wanted: u16) []const u8 {
     unit := #cast(u32, u16be(raw, at))
     at += 2
     if unit >= 0xd800 && unit <= 0xdbff {
-      if at + 1 >= length {
-        return ""
-      }
+      if at + 1 >= length { return "" }
       low := #cast(u32, u16be(raw, at))
-      if low < 0xdc00 || low > 0xdfff {
-        return ""
-      }
+      if low < 0xdc00 || low > 0xdfff { return "" }
       at += 2
       unit = 0x10000 + ((unit - 0xd800) << 10) + (low - 0xdc00)
-    } else if unit >= 0xdc00 && unit <= 0xdfff {
-      return ""
-    }
-    if unit == 0 {
-      return ""
-    }
+    } else if unit >= 0xdc00 && unit <= 0xdfff { return "" }
+    if unit == 0 { return "" }
     used += utf8.encode(output[used..], unit)
   }
   return output[..used]
@@ -174,29 +146,19 @@ pub fn describe(arena: *mem.Arena, path: []const u8, data: []const u8) Entry {
 }
 
 fn describe_data(arena: *mem.Arena, path: []const u8, data: []const u8) Entry {
-  if #len(data) < 12 || u32be(data, 0) != 65536 {
-    return nil_entry
-  }
+  if #len(data) < 12 || u32be(data, 0) != 65536 { return nil_entry }
   count := #cast(usize, u16be(data, 4))
-  if count > (#len(data) - 12) / 16 {
-    return nil_entry
-  }
+  if count > (#len(data) - 12) / 16 { return nil_entry }
   for i in 0..count {
     at := 12 + i * 16
     offset := #cast(usize, u32be(data, at + 8))
     length := #cast(usize, u32be(data, at + 12))
-    if offset > #len(data) || length > #len(data) - offset {
-      return nil_entry
-    }
+    if offset > #len(data) || length > #len(data) - offset { return nil_entry }
   }
   opened := font.open(data)
-  if parse.failed(opened.failure) {
-    return nil_entry
-  }
+  if parse.failed(opened.failure) { return nil_entry }
   names := table(data, 0x6e616d65)
-  if !names.ok {
-    return nil_entry
-  }
+  if !names.ok { return nil_entry }
   // Typographic family and subfamily (16, 17) group weights under one name.
   family := name(arena, names.value, 16)
   if #len(family) == 0 {
@@ -206,9 +168,7 @@ fn describe_data(arena: *mem.Arena, path: []const u8, data: []const u8) Entry {
   if #len(style) == 0 {
     style = name(arena, names.value, 2)
   }
-  if #len(family) == 0 {
-    return nil_entry
-  }
+  if #len(family) == 0 { return nil_entry }
   entry := Entry{ path: strings.clone(arena, path), family: family, style: style, weight: 400 }
   os2 := table(data, 0x4f532f32)
   if os2.ok && #len(os2.value) >= 64 {
@@ -227,9 +187,7 @@ fn describe_data(arena: *mem.Arena, path: []const u8, data: []const u8) Entry {
 }
 
 fn font_file(name: []const u8) bool {
-  if #len(name) < 4 {
-    return false
-  }
+  if #len(name) < 4 { return false }
   ending := name[#len(name) - 4..]
   return equal_fold(ending, ".ttf") || equal_fold(ending, ".otf")
 }
@@ -237,20 +195,14 @@ fn font_file(name: []const u8) bool {
 struct Walk { entries: []Entry, count: usize }
 
 fn visit(arena: *mem.Arena, scratch: *mem.Arena, walk: *Walk, directory: []const u8, depth: usize) {
-  if depth > depth_limit || walk.count == #len(walk.entries) {
-    return
-  }
+  if depth > depth_limit || walk.count == #len(walk.entries) { return }
   storage: [8192]u8
   opened := fs.open_directory(directory, storage[..])
-  if io.failed(opened.failure) {
-    return
-  }
+  if io.failed(opened.failure) { return }
   listing := opened.value
   for walk.count < #len(walk.entries) {
     item := fs.directory_next(&listing)
-    if !item.found {
-      break
-    }
+    if !item.found { break }
     mark := mem.arena_mark(scratch)
     parts: [2][]const u8 = [directory, item.name]
     path := strings.join(scratch, parts[..], "/")
@@ -311,9 +263,7 @@ pub fn scan(arena: *mem.Arena, limit: usize) []Entry {
 
 fn home(arena: *mem.Arena) []const u8 {
   found := process.environment(arena, "HOME")
-  if !io.failed(found.failure) && found.found {
-    return found.value
-  }
+  if !io.failed(found.failure) && found.found { return found.value }
   return ""
 }
 
@@ -352,9 +302,7 @@ pub fn find(entries: []const Entry, family: []const u8, weight: u16, italic: boo
 pub fn first_of(entries: []const Entry, preferred: []const []const u8, weight: u16, italic: bool) *const Entry {
   for family in preferred {
     found := find(entries, family, weight, italic)
-    if #len(found.path) != 0 {
-      return found
-    }
+    if #len(found.path) != 0 { return found }
   }
   return &nil_entry
 }
@@ -366,9 +314,7 @@ const sans_families: [8][]const u8 = ["Inter", "Noto Sans", "DejaVu Sans", "Libe
 // any face whose post table marks it fixed pitch.
 pub fn monospace(entries: []const Entry) *const Entry {
   known := first_of(entries, monospace_families[..], 400, false)
-  if #len(known.path) != 0 {
-    return known
-  }
+  if #len(known.path) != 0 { return known }
   best: *const Entry = &nil_entry
   best_score: u32 = 4294967295
   for i in 0..#len(entries) {
@@ -386,9 +332,7 @@ pub fn monospace(entries: []const Entry) *const Entry {
 // A regular proportional face for interface text.
 pub fn sans(entries: []const Entry) *const Entry {
   known := first_of(entries, sans_families[..], 400, false)
-  if #len(known.path) != 0 {
-    return known
-  }
+  if #len(known.path) != 0 { return known }
   best: *const Entry = &nil_entry
   best_score: u32 = 4294967295
   for i in 0..#len(entries) {
@@ -409,25 +353,17 @@ pub fn sans(entries: []const Entry) *const Entry {
 pub fn covering(entries: []const Entry, codepoint: u32, regular_only: bool) *const Entry {
   for i in 0..#len(entries) {
     entry := &entries[i]
-    if regular_only && (entry.italic || entry.weight != 400) {
-      continue
-    }
+    if regular_only && (entry.italic || entry.weight != 400) { continue }
     file := fs.open(entry.path)
-    if io.failed(file.failure) {
-      continue
-    }
+    if io.failed(file.failure) { continue }
     handle := fs.take(&file.value)
     mapped := fs.map(&handle)
     fs.close(&handle)
-    if io.failed(mapped.failure) {
-      continue
-    }
+    if io.failed(mapped.failure) { continue }
     face := font.open(mapped.value)
     found := !parse.failed(face.failure) && font.glyph_index(&face.value, codepoint) != 0
     _ = fs.unmap(&mapped)
-    if found {
-      return entry
-    }
+    if found { return entry }
   }
   return &nil_entry
 }

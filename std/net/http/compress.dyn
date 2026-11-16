@@ -36,13 +36,9 @@ pub fn respond_compressed(response: *Response, request: *const Request, body: []
   count += 1
   varied := options
   varied.headers = headers[..count]
-  if encoder == nil || !accepts_encoding(request, "gzip") {
-    return respond(response, body, varied)
-  }
+  if encoder == nil || !accepts_encoding(request, "gzip") { return respond(response, body, varied) }
   storage := body_buffer(response, gzip.compress_bound(#len(body)))
-  if #len(storage) == 0 {
-    return respond(response, body, varied)
-  }
+  if #len(storage) == 0 { return respond(response, body, varied) }
   encoded := gzip.write(storage, body, level, encoder)
   if parse.failed(encoded.failure) || #len(encoded.value) >= #len(body) {
     // The reservation lapses: respond queues its own copy.
@@ -57,9 +53,7 @@ pub fn respond_compressed(response: *Response, request: *const Request, body: []
 // Whether a response with these headers already names a content coding.
 fn has_coding(headers: []const Header) bool {
   for item in headers {
-    if ascii_equal(item.name, "Content-Encoding") {
-      return true
-    }
+    if ascii_equal(item.name, "Content-Encoding") { return true }
   }
   return false
 }

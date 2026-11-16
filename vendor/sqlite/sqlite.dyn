@@ -45,27 +45,19 @@ pub fn open_with_options(name: []const u8, buffer: []u8, options: OpenOptions) O
 // A SQLite result code as a failure: SQLITE_OK (0) succeeds, and native keeps
 // any other code.
 fn code_failure(code: i32) io.Failure {
-  if code == 0 {
-    return io.Failure{}
-  }
+  if code == 0 { return io.Failure{} }
   return io.Failure{ kind: io.Kind.System, native: #cast(isize, code) }
 }
 pub fn close(database: Database) io.Failure {
-  if database == nil {
-    return io.Failure{}
-  }
+  if database == nil { return io.Failure{} }
   return code_failure(sqlite_close(database))
 }
 
 // SQL is borrowed only for call. SQLite owns returned error; wrapper releases it.
 pub fn execute(database: Database, sql: []const u8, buffer: []u8) io.Failure {
-  if database == nil {
-    return code_failure(-1)
-  }
+  if database == nil { return code_failure(-1) }
   encoded := c.string_into(buffer, sql)
-  if parse.failed(encoded.failure) {
-    return code_failure(string_error(encoded.failure.kind))
-  }
+  if parse.failed(encoded.failure) { return code_failure(string_error(encoded.failure.kind)) }
   error: rawptr = nil
   code := sqlite_exec(database, encoded.value, nil, nil, &error)
   if error != nil {
@@ -76,22 +68,14 @@ pub fn execute(database: Database, sql: []const u8, buffer: []u8) io.Failure {
 
 // Returned bytes borrow database and expire at next SQLite call or close.
 pub fn error_message(database: Database, maximum: usize) []const u8 {
-  if database == nil {
-    return ""
-  }
+  if database == nil { return "" }
   value := c.bytes_from_string(sqlite_error_message(database), maximum)
-  if parse.failed(value.failure) {
-    return ""
-  }
+  if parse.failed(value.failure) { return "" }
   return value.value
 }
 
 fn string_error(error: parse.Kind) i32 {
-  if error == parse.Kind.Capacity {
-    return Capacity
-  }
-  if error == parse.Kind.Overflow {
-    return Overflow
-  }
+  if error == parse.Kind.Capacity { return Capacity }
+  if error == parse.Kind.Overflow { return Overflow }
   return InvalidArgument
 }

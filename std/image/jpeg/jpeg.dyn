@@ -52,9 +52,7 @@ fn symbol(bits: *Bits, table: *const Huffman) u8 {
   value: u32 = 0
   for length in 0..16 {
     value = (value << 1) | take(bits, 1)
-    if bits.failed {
-      return 0
-    }
+    if bits.failed { return 0 }
     start := table.first[length]
     if value >= start && value - start < table.counts[length] {
       return table.values[#cast(usize, table.offsets[length]) + #cast(usize, (value - start))]
@@ -64,40 +62,26 @@ fn symbol(bits: *Bits, table: *const Huffman) u8 {
   return 0
 }
 fn signed(bits: *Bits, size: u8) i32 {
-  if size == 0 {
-    return 0
-  }
+  if size == 0 { return 0 }
   value := #cast(i32, take(bits, size))
   threshold := #cast(i32, 1) << (size - 1)
-  if value < threshold {
-    return value + 1 - (#cast(i32, 1) << size)
-  }
+  if value < threshold { return value + 1 - (#cast(i32, 1) << size) }
   return value
 }
 fn clamp(value: i32) u8 {
-  if value < 0 {
-    return 0
-  }
-  if value > 255 {
-    return 255
-  }
+  if value < 0 { return 0 }
+  if value > 255 { return 255 }
   return #cast(u8, value)
 }
 fn sample_value(value: f64) u8 {
-  if value <= 0.0 {
-    return 0
-  }
-  if value >= 255.0 {
-    return 255
-  }
+  if value <= 0.0 { return 0 }
+  if value >= 255.0 { return 255 }
   return #cast(u8, math.floor64(value + 0.5))
 }
 fn block(decoder: *Decoder, bits: *Bits, component: *Component, bx, by: usize) bool {
   coefficients: [64]f64
   category := symbol(bits, &decoder.dc[component.dc_table])
-  if bits.failed || category > 11 {
-    return invalid(decoder)
-  }
+  if bits.failed || category > 11 { return invalid(decoder) }
   difference := signed(bits, category)
   component.prediction += difference
   if bits.failed || component.prediction < -2047 || component.prediction > 2047 {
@@ -109,29 +93,19 @@ fn block(decoder: *Decoder, bits: *Bits, component: *Component, bx, by: usize) b
   nonzero := false
   for at < 64 {
     value := symbol(bits, &decoder.ac[component.ac_table])
-    if bits.failed {
-      return invalid(decoder)
-    }
-    if value == 0 {
-      break
-    }
+    if bits.failed { return invalid(decoder) }
+    if value == 0 { break }
     if value == 240 {
-      if at > 48 {
-        return invalid(decoder)
-      }
+      if at > 48 { return invalid(decoder) }
       at += 16
       continue
     }
     run := #cast(usize, value >> 4)
     size := value & 15
-    if size == 0 || size > 10 || run >= 64 - at {
-      return invalid(decoder)
-    }
+    if size == 0 || size > 10 || run >= 64 - at { return invalid(decoder) }
     at += run
     amplitude := signed(bits, size)
-    if bits.failed {
-      return invalid(decoder)
-    }
+    if bits.failed { return invalid(decoder) }
     coefficients[Zigzag[at]] = (amplitude * decoder.quant[q][at])
     nonzero = true
     at += 1
@@ -176,13 +150,9 @@ fn quantization(decoder: *Decoder, payload: []const u8) bool {
       return false
     }
     id := #cast(usize, descriptor & 15)
-    if id >= 4 || #len(payload) - at < 64 {
-      return invalid(decoder)
-    }
+    if id >= 4 || #len(payload) - at < 64 { return invalid(decoder) }
     for i in 0..64 {
-      if payload[at + i] == 0 {
-        return invalid(decoder)
-      }
+      if payload[at + i] == 0 { return invalid(decoder) }
       decoder.quant[id][i] = payload[at + i]
     }
     decoder.quant_valid[id] = true
@@ -193,16 +163,12 @@ fn quantization(decoder: *Decoder, payload: []const u8) bool {
 fn huffman(decoder: *Decoder, payload: []const u8) bool {
   at: usize = 0
   for at < #len(payload) {
-    if #len(payload) - at < 17 {
-      return invalid(decoder)
-    }
+    if #len(payload) - at < 17 { return invalid(decoder) }
     descriptor := payload[at]
     at += 1
     id := #cast(usize, descriptor & 15)
     kind := descriptor >> 4
-    if id >= 4 || kind > 1 {
-      return invalid(decoder)
-    }
+    if id >= 4 || kind > 1 { return invalid(decoder) }
     table := &decoder.dc[id]
     if kind == 1 {
       table = &decoder.ac[id]
@@ -222,9 +188,7 @@ fn huffman(decoder: *Decoder, payload: []const u8) bool {
       code = (code + #cast(u32, n)) << 1
     }
     at += 16
-    if count == 0 || count > #len(payload) - at {
-      return invalid(decoder)
-    }
+    if count == 0 || count > #len(payload) - at { return invalid(decoder) }
     for i in 0..count {
       table.values[i] = payload[at + i]
     }
@@ -234,9 +198,7 @@ fn huffman(decoder: *Decoder, payload: []const u8) bool {
   return true
 }
 fn frame(_arena: *mem.Arena, decoder: *Decoder, payload: []const u8) bool {
-  if decoder.count != 0 || #len(payload) < 6 {
-    return invalid(decoder)
-  }
+  if decoder.count != 0 || #len(payload) < 6 { return invalid(decoder) }
   if payload[0] != 8 {
     decoder.kind = parse.Kind.Unsupported
     return false
@@ -252,9 +214,7 @@ fn frame(_arena: *mem.Arena, decoder: *Decoder, payload: []const u8) bool {
     decoder.kind = parse.Kind.Unsupported
     return false
   }
-  if #len(payload) != 6 + count * 3 {
-    return invalid(decoder)
-  }
+  if #len(payload) != 6 + count * 3 { return invalid(decoder) }
   if #cast(u64, decoder.width) * #cast(u64, decoder.height) > 16777216 {
     decoder.kind = parse.Kind.Capacity
     return false
@@ -265,13 +225,9 @@ fn frame(_arena: *mem.Arena, decoder: *Decoder, payload: []const u8) bool {
     h := payload[7 + i * 3] >> 4
     v := payload[7 + i * 3] & 15
     q := payload[8 + i * 3]
-    if h == 0 || h > 4 || v == 0 || v > 4 || q > 3 {
-      return invalid(decoder)
-    }
+    if h == 0 || h > 4 || v == 0 || v > 4 || q > 3 { return invalid(decoder) }
     for j in 0..i {
-      if decoder.components[j].id == id {
-        return invalid(decoder)
-      }
+      if decoder.components[j].id == id { return invalid(decoder) }
     }
     decoder.components[i] = Component{ id: id, h: h, v: v, quant: q }
     if h > decoder.hmax {
@@ -282,9 +238,7 @@ fn frame(_arena: *mem.Arena, decoder: *Decoder, payload: []const u8) bool {
     }
     blocks += #cast(usize, h) * #cast(usize, v)
   }
-  if blocks > 10 {
-    return invalid(decoder)
-  }
+  if blocks > 10 { return invalid(decoder) }
   decoder.count = count
   return true
 }
@@ -311,9 +265,7 @@ fn padding(bits: *const Bits) bool {
   return !bits.failed && (bits.buffer & mask) == mask
 }
 fn scan(decoder: *Decoder, payload: []const u8) bool {
-  if decoder.count == 0 || #len(payload) < 6 {
-    return invalid(decoder)
-  }
+  if decoder.count == 0 || #len(payload) < 6 { return invalid(decoder) }
   count := #cast(usize, payload[0])
   if count == 0 || count > decoder.count || #len(payload) != 1 + count * 2 + 3 {
     return invalid(decoder)
@@ -331,13 +283,9 @@ fn scan(decoder: *Decoder, payload: []const u8) bool {
         found = j
       }
     }
-    if found == decoder.count {
-      return invalid(decoder)
-    }
+    if found == decoder.count { return invalid(decoder) }
     for j in 0..i {
-      if selected[j] == found {
-        return invalid(decoder)
-      }
+      if selected[j] == found { return invalid(decoder) }
     }
     selected[i] = found
     component := &decoder.components[found]
@@ -362,14 +310,10 @@ fn scan(decoder: *Decoder, payload: []const u8) bool {
   for y in 0..rows {
     for x in 0..columns {
       if decoder.restart != 0 && units != 0 && units % decoder.restart == 0 {
-        if !padding(&bits) {
-          return invalid(decoder)
-        }
+        if !padding(&bits) { return invalid(decoder) }
         bits.count = 0
         bits.buffer = 0
-        if bits.at == #len(bits.source) || bits.source[bits.at] != 255 {
-          return invalid(decoder)
-        }
+        if bits.at == #len(bits.source) || bits.source[bits.at] != 255 { return invalid(decoder) }
         for bits.at < #len(bits.source) && bits.source[bits.at] == 255 {
           bits.at += 1
         }
@@ -402,9 +346,7 @@ fn scan(decoder: *Decoder, payload: []const u8) bool {
       units += 1
     }
   }
-  if !padding(&bits) {
-    return invalid(decoder)
-  }
+  if !padding(&bits) { return invalid(decoder) }
   decoder.at = bits.at
   for i in 0..count {
     decoder.components[selected[i]].decoded = true

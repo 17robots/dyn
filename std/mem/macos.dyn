@@ -4,9 +4,7 @@ use "std/os/macos/sys"
 const DefaultBlock: usize = 64 * GiB
 fn mapping_allocate(size: usize) Mapping {
   address := #syscall(sys.Mmap, 0, size, 3, 4098, -1, 0)
-  if address < 0 {
-    return Mapping{ error: address }
-  }
+  if address < 0 { return Mapping{ error: address } }
   return Mapping{ bytes: #slice(#cast(*u8, address), size), committed: size, ok: true }
 }
 fn mapping_release(bytes: []u8) isize {

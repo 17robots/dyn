@@ -174,48 +174,34 @@ fn previous_boundary(text: []const u8, at: usize) usize {
   index := at
   for index > 0 {
     index -= 1
-    if (text[index] & 0xc0) != 0x80 {
-      return index
-    }
+    if (text[index] & 0xc0) != 0x80 { return index }
   }
   return 0
 }
 
 fn next_boundary(text: []const u8, at: usize) usize {
-  if at >= #len(text) {
-    return #len(text)
-  }
+  if at >= #len(text) { return #len(text) }
   decoded := utf8.decode(text, at)
-  if !decoded.valid {
-    return at + 1
-  }
+  if !decoded.valid { return at + 1 }
   return at + decoded.width
 }
 
 fn selection_low(edit: *const Edit) usize {
-  if edit.selecting && edit.anchor < edit.cursor {
-    return edit.anchor
-  }
+  if edit.selecting && edit.anchor < edit.cursor { return edit.anchor }
   return edit.cursor
 }
 
 fn selection_high(edit: *const Edit) usize {
-  if edit.selecting && edit.anchor > edit.cursor {
-    return edit.anchor
-  }
+  if edit.selecting && edit.anchor > edit.cursor { return edit.anchor }
   return edit.cursor
 }
 
 fn insert(state: *State, storage: []u8, edit: *Edit, text: []const u8) bool {
   low := selection_low(edit)
   high := selection_high(edit)
-  if !utf8.valid(text) || #len(text) > #len(storage) - (edit.length - (high - low)) {
-    return false
-  }
+  if !utf8.valid(text) || #len(text) > #len(storage) - (edit.length - (high - low)) { return false }
   for byte in text {
-    if byte == 0 || byte == 10 || byte == 13 {
-      return false
-    }
+    if byte == 0 || byte == 10 || byte == 13 { return false }
   }
   replacement := mem.push_bytes_uninit(state.frame, #len(text))
   _ = mem.copy(replacement, text)
@@ -259,9 +245,7 @@ fn word_boundary(state: *State, text: []const u8, at: usize, forward: bool) usiz
     mem.arena_rewind(state.frame, mark)
   }
   boundaries := unicode_text.word_breaks(state.frame, text)
-  if parse.failed(boundaries.failure) {
-    return at
-  }
+  if parse.failed(boundaries.failure) { return at }
   if forward {
     target := #len(text)
     for boundary in boundaries.value {
@@ -281,9 +265,7 @@ fn word_boundary(state: *State, text: []const u8, at: usize, forward: bool) usiz
   }
   previous: usize = 0
   for boundary in boundaries.value {
-    if boundary >= target {
-      break
-    }
+    if boundary >= target { break }
     previous = boundary
   }
   return previous
@@ -296,9 +278,7 @@ fn pointer_boundary(state: *State, box: *const Box, text: []const u8, scroll: f3
   for previous < #len(text) {
     next := next_boundary(text, previous)
     width := state.measure(state.measure_data, text[..next])
-    if x < (previous_width + width) / 2.0 {
-      return previous
-    }
+    if x < (previous_width + width) / 2.0 { return previous }
     previous = next
     previous_width = width
   }
@@ -314,9 +294,7 @@ pub fn text_field(state: *State, label: []const u8, storage: []u8, edit: *Edit) 
     edit.length = #len(storage)
   }
   // Caller offsets may have become stale after replacing its buffer.
-  if !utf8.valid(storage[..edit.length]) {
-    return result
-  }
+  if !utf8.valid(storage[..edit.length]) { return result }
   if edit.cursor > edit.length {
     edit.cursor = edit.length
   }

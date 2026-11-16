@@ -28,13 +28,9 @@ pub fn destroy_owned(mixer: Mixer) {
 // Source borrowed only during synchronous predecode; provider owns the audio.
 // Audio can outlive the originating mixer and must be destroyed separately.
 pub fn decode_owned(mixer: Mixer, bytes: []const u8) Audio {
-  if mixer == nil || #len(bytes) == 0 {
-    return nil
-  }
+  if mixer == nil || #len(bytes) == 0 { return nil }
   input := native_io(#cast(rawptr, &bytes[0]), #len(bytes))
-  if input == nil {
-    return nil
-  }
+  if input == nil { return nil }
   return native_load(mixer, input, true, true)
 }
 pub fn audio_destroy_owned(audio: Audio) {
@@ -43,9 +39,7 @@ pub fn audio_destroy_owned(audio: Audio) {
   }
 }
 pub fn track_create(mixer: Mixer) Track {
-  if mixer == nil {
-    return nil
-  }
+  if mixer == nil { return nil }
   return native_track(mixer)
 }
 pub fn track_destroy(track: Track) {
@@ -69,9 +63,7 @@ pub fn generate(mixer: Mixer, samples: []f32) Result {
     return Result{ code: -1, failure: io.Failure{ kind: io.Kind.System } }
   }
   code := native_generate(mixer, #cast(rawptr, &samples[0]), #cast(i32, (#len(samples) * 4)))
-  if code < 0 {
-    return Result{ code: code, failure: io.Failure{ kind: io.Kind.System } }
-  }
+  if code < 0 { return Result{ code: code, failure: io.Failure{ kind: io.Kind.System } } }
   return Result{ written: #cast(usize, code) / 4, code: code }
 }
 extern fn native_create "MIX_CreateMixer"(spec: *const sdl3.AudioSpec) Mixer

@@ -24,9 +24,7 @@ fn trim(source: []const u8) []const u8 {
 }
 
 fn valid_name(name: []const u8) bool {
-  if #len(name) == 0 {
-    return false
-  }
+  if #len(name) == 0 { return false }
   for i in 0..#len(name) {
     byte := name[i]
     if !((byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z') ||
@@ -67,9 +65,7 @@ pub fn parse(arena: *memory.Arena, source: []const u8) ParseResult {
 
 fn value(fields: []const Field, name: []const u8) []const u8 {
   for field in fields {
-    if byte_ops.equal(field.name, name) {
-      return field.value
-    }
+    if byte_ops.equal(field.name, name) { return field.value }
   }
   return ""
 }
@@ -107,9 +103,7 @@ pub fn render_with(destination: stream.Writer, template: *const Template, fields
     if cursor + 1 < #len(template.source) && template.source[cursor] == '{' && template.source[cursor + 1] == '{' {
       if cursor > literal {
         literal_result := write_literal(destination, template.source[literal..cursor], literal)
-        if literal_result.failure.kind != parse.StreamKind.Ok {
-          return literal_result
-        }
+        if literal_result.failure.kind != parse.StreamKind.Ok { return literal_result }
       }
       end := cursor + 2
       for end + 1 < #len(template.source) && !(template.source[end] == '}' && template.source[end + 1] == '}') {
@@ -119,9 +113,7 @@ pub fn render_with(destination: stream.Writer, template: *const Template, fields
         return RenderResult{ offset: cursor, failure: parse.parse_failure(parse.Kind.Syntax, cursor, "") }
       }
       field_result := render_field(destination, value(fields, trim(template.source[cursor + 2..end])))
-      if field_result.failure.kind != parse.StreamKind.Ok {
-        return field_result
-      }
+      if field_result.failure.kind != parse.StreamKind.Ok { return field_result }
       cursor = end + 2
       literal = cursor
     } else {

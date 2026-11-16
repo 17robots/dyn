@@ -45,9 +45,7 @@ pub fn vec2_length(a: Vec2) f32 {
 }
 pub fn vec2_normalize(a: Vec2) Vec2 {
   magnitude := vec2_magnitude(a)
-  if magnitude == 0.0 {
-    return Vec2{ x: 0.0, y: 0.0 }
-  }
+  if magnitude == 0.0 { return Vec2{ x: 0.0, y: 0.0 } }
   return Vec2{ x: #cast(f32, a.x / magnitude), y: #cast(f32, a.y / magnitude) }
 }
 pub fn vec2_lerp(a, b: Vec2, t: f32) Vec2 {
@@ -88,9 +86,7 @@ pub fn vec3_length(a: Vec3) f32 {
 }
 pub fn vec3_normalize(a: Vec3) Vec3 {
   magnitude := vec3_magnitude(a)
-  if magnitude == 0.0 {
-    return Vec3{ x: 0.0, y: 0.0, z: 0.0 }
-  }
+  if magnitude == 0.0 { return Vec3{ x: 0.0, y: 0.0, z: 0.0 } }
   return Vec3{ x: #cast(f32, a.x / magnitude), y: #cast(f32, a.y / magnitude), z: #cast(f32, a.z / magnitude) }
 }
 pub fn vec3_lerp(a, b: Vec3, t: f32) Vec3 {
@@ -135,9 +131,7 @@ pub fn vec4_length(a: Vec4) f32 {
 }
 pub fn vec4_normalize(a: Vec4) Vec4 {
   magnitude := vec4_magnitude(a)
-  if magnitude == 0.0 {
-    return Vec4{ x: 0.0, y: 0.0, z: 0.0, w: 0.0 }
-  }
+  if magnitude == 0.0 { return Vec4{ x: 0.0, y: 0.0, z: 0.0, w: 0.0 } }
   return Vec4{ x: #cast(f32, a.x / magnitude), y: #cast(f32, a.y / magnitude), z: #cast(f32, a.z / magnitude), w: #cast(f32, a.w / magnitude) }
 }
 pub fn vec4_lerp(a, b: Vec4, t: f32) Vec4 {

@@ -14,9 +14,7 @@ pub fn decoder_create(arena: *mem.Arena, bytes: []const u8) Context {
   }
   mark := mem.arena_mark(arena)
   allocation := mem.arena_try_push(arena, decoder_size(), decoder_align())
-  if !allocation.ok {
-    return Context{ code: -4, failure: io.Failure{ kind: io.Kind.System } }
-  }
+  if !allocation.ok { return Context{ code: -4, failure: io.Failure{ kind: io.Kind.System } } }
   state := #cast(rawptr, allocation.memory)
   code := decoder_init(state, #cast(rawptr, &bytes[0]), #len(bytes))
   if code != 0 {
@@ -37,14 +35,10 @@ pub extern fn decoder_close "dyn_ma_decoder_close"(decoder: rawptr)
 // device=false gives deterministic offline mixing. device=true opens the default
 // playback device; its availability/latency require hardware qualification.
 pub fn engine_create(arena: *mem.Arena, device: bool) Context {
-  if arena == nil {
-    return Context{ code: -2, failure: io.Failure{ kind: io.Kind.System } }
-  }
+  if arena == nil { return Context{ code: -2, failure: io.Failure{ kind: io.Kind.System } } }
   mark := mem.arena_mark(arena)
   allocation := mem.arena_try_push(arena, engine_size(), engine_align())
-  if !allocation.ok {
-    return Context{ code: -4, failure: io.Failure{ kind: io.Kind.System } }
-  }
+  if !allocation.ok { return Context{ code: -4, failure: io.Failure{ kind: io.Kind.System } } }
   state := #cast(rawptr, allocation.memory)
   code := engine_init(state, device)
   if code != 0 {
@@ -54,9 +48,7 @@ pub fn engine_create(arena: *mem.Arena, device: bool) Context {
   return Context{ value: state }
 }
 pub fn play_file(engine: rawptr, path: []const u8, buffer: []u8) bool {
-  if engine == nil {
-    return false
-  }
+  if engine == nil { return false }
   encoded := c.string_into(buffer, path)
   return !parse.failed(encoded.failure) && native_play(engine, encoded.value) == 0
 }
@@ -92,9 +84,7 @@ pub fn sound_create(arena: *mem.Arena, engine: rawptr, path: []const u8, buffer:
   }
   mark := mem.arena_mark(arena)
   work := mem.arena_try_push(arena, sound_size(), sound_align())
-  if !work.ok {
-    return Context{ code: -4, failure: io.Failure{ kind: io.Kind.System } }
-  }
+  if !work.ok { return Context{ code: -4, failure: io.Failure{ kind: io.Kind.System } } }
   state := #cast(rawptr, work.memory)
   code := sound_init(state, engine, encoded.value)
   if code != 0 {

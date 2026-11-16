@@ -48,9 +48,7 @@ pub fn stream_reader(input: stream.Reader, header_storage: []u8, metadata: []u8)
 
 struct Header { entry: Entry, ended: bool, ok: bool }
 fn parse_header(header: []const u8) Header {
-  if #len(header) < 512 {
-    return Header{}
-  }
+  if #len(header) < 512 { return Header{} }
   all_zero := true
   for byte in header[..512] {
     if byte != 0 {
@@ -58,21 +56,15 @@ fn parse_header(header: []const u8) Header {
       break
     }
   }
-  if all_zero {
-    return Header{ ended: true, ok: true }
-  }
+  if all_zero { return Header{ ended: true, ok: true } }
   expected: u64 = 0
   size: u64 = 0
   checksum: u64 = 0
-  if !octal(header[148..156], &expected) || !octal(header[124..136], &size) {
-    return Header{}
-  }
+  if !octal(header[148..156], &expected) || !octal(header[124..136], &size) { return Header{} }
   for i in 0..512 {
     if i >= 148 && i < 156 { checksum += 32 } else { checksum += header[i] }
   }
-  if checksum != expected || size > 18446744073709551104 {
-    return Header{}
-  }
+  if checksum != expected || size > 18446744073709551104 { return Header{} }
   prefix := header[..0]
   if header[257] == 'u' && header[258] == 's' && header[259] == 't' && header[260] == 'a' && header[261] == 'r' && header[262] == 0 {
     prefix = header[345..345 + string_end(header[345..500])]
@@ -94,9 +86,7 @@ fn syntax_failure(state: *StreamReader, kind: parse.Kind, message: []const u8) S
   return stream_failure(state, parse.parse_failure(kind, state.offset, message))
 }
 fn read_exact(state: *StreamReader, destination: []u8) stream.Transfer {
-  if state.failed {
-    return parse.stream_result(state.failure, 0)
-  }
+  if state.failed { return parse.stream_result(state.failure, 0) }
   result := stream.read_exact(state.source_reader, destination)
   if stream.failed(result.failure) {
     _ = stream_failure(state, parse.io_failure(result.failure.kind, result.failure.native))
@@ -156,15 +146,9 @@ fn compact_metadata(state: *StreamReader, local: *Overrides) bool {
 // header/metadata storage until next_stream. Each metadata half must fit live
 // names plus the next extension payload. Empty metadata accepts plain TAR only.
 pub fn next_stream(state: *StreamReader) StreamEntry {
-  if state.failed {
-    return StreamEntry{ offset: state.offset, failure: state.failure }
-  }
-  if state.ended {
-    return StreamEntry{ offset: state.offset }
-  }
-  if #len(state.header_storage) < 512 {
-    return syntax_failure(state, parse.Kind.Capacity, "")
-  }
+  if state.failed { return StreamEntry{ offset: state.offset, failure: state.failure } }
+  if state.ended { return StreamEntry{ offset: state.offset } }
+  if #len(state.header_storage) < 512 { return syntax_failure(state, parse.Kind.Capacity, "") }
   if state.active {
     if !discard(state, state.remaining + state.padding) {
       return StreamEntry{ offset: state.offset, failure: state.failure }
@@ -186,13 +170,9 @@ pub fn next_stream(state: *StreamReader) StreamEntry {
       return syntax_failure(state, parse.Kind.Truncated, "")
     }
     parsed := parse_header(state.header_storage[..512])
-    if !parsed.ok {
-      return syntax_failure(state, parse.Kind.Syntax, "invalid header")
-    }
+    if !parsed.ok { return syntax_failure(state, parse.Kind.Syntax, "invalid header") }
     if parsed.ended {
-      if pending {
-        return syntax_failure(state, parse.Kind.Syntax, "invalid header")
-      }
+      if pending { return syntax_failure(state, parse.Kind.Syntax, "invalid header") }
       state.ended = true
       return StreamEntry{ offset: state.offset }
     }
@@ -237,9 +217,7 @@ pub fn next_stream(state: *StreamReader) StreamEntry {
       }
       value := payload[..#len(payload) - 1]
       for byte in value {
-        if byte == 0 {
-          return syntax_failure(state, parse.Kind.Syntax, "invalid header")
-        }
+        if byte == 0 { return syntax_failure(state, parse.Kind.Syntax, "invalid header") }
       }
       if entry.kind == 'L' {
         local.path = value
@@ -258,23 +236,17 @@ pub fn next_stream(state: *StreamReader) StreamEntry {
 
 // Reads entry payload incrementally. End means this entry is complete, not archive EOF.
 pub fn read_stream(state: *StreamReader, destination: []u8) stream.Transfer {
-  if state.failed {
-    return parse.stream_result(state.failure, 0)
-  }
+  if state.failed { return parse.stream_result(state.failure, 0) }
   if !state.active {
     _ = stream_failure(state, parse.io_failure(stream.Kind.InvalidState, 0))
     return parse.stream_result(state.failure, 0)
   }
-  if #len(destination) == 0 {
-    return stream.Transfer{}
-  }
+  if #len(destination) == 0 { return stream.Transfer{} }
   take := state.remaining
   if take > #len(destination) {
     take = #len(destination)
   }
-  if take == 0 {
-    return stream.Transfer{ status: stream.Status.End }
-  }
+  if take == 0 { return stream.Transfer{ status: stream.Status.End } }
   result := read_exact(state, destination[..take])
   if (result.status != stream.Status.Complete || stream.failed(result.failure)) {
     _ = syntax_failure(state, parse.Kind.Truncated, "")
@@ -303,12 +275,8 @@ fn octal(data: []const u8, output: *u64) bool {
     if byte == 0 || byte == ' ' {
       if found { break } else { continue }
     }
-    if byte < '0' || byte > '7' {
-      return false
-    }
-    if value > (18446744073709551615 - #cast(u64, (byte - '0'))) / 8 {
-      return false
-    }
+    if byte < '0' || byte > '7' { return false }
+    if value > (18446744073709551615 - #cast(u64, (byte - '0'))) / 8 { return false }
     value = value * 8 + (byte - '0')
     found = true
   }

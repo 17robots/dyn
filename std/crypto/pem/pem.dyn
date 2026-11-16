@@ -5,20 +5,14 @@ use "std/encoding/base64" base64
 
 pub struct Result { value: []u8, label: []const u8, consumed: usize, offset: usize, failure: parse.Failure }
 fn equal_at(source: []const u8, at: usize, expected: []const u8) bool {
-  if at > #len(source) || #len(expected) > #len(source) - at {
-    return false
-  }
+  if at > #len(source) || #len(expected) > #len(source) - at { return false }
   for i in 0..#len(expected) {
-    if source[at + i] != expected[i] {
-      return false
-    }
+    if source[at + i] != expected[i] { return false }
   }
   return true
 }
 fn append(destination: []u8, at: *usize, source: []const u8) bool {
-  if #len(source) > #len(destination) - at.* {
-    return false
-  }
+  if #len(source) > #len(destination) - at.* { return false }
   for byte in source {
     destination[at.*] = byte
     at.* += 1
@@ -57,9 +51,7 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Result {
   if at < #len(source) && source[at] == '\r' {
     at += 1
   }
-  if at >= #len(source) || source[at] != '\n' {
-    return fail(arena, mark, at, parse.Kind.Syntax)
-  }
+  if at >= #len(source) || source[at] != '\n' { return fail(arena, mark, at, parse.Kind.Syntax) }
   at += 1
   body_start := at
   encoded_length: usize = 0
@@ -93,12 +85,8 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Result {
       at += 1
     }
   }
-  if !found_end {
-    return fail(arena, mark, at, parse.Kind.Syntax)
-  }
+  if !found_end { return fail(arena, mark, at, parse.Kind.Syntax) }
   decoded := base64.decode(arena, base64_storage[..encoded_length])
-  if parse.failed(decoded.failure) {
-    return fail(arena, mark, body_start, parse.Kind.Syntax)
-  }
+  if parse.failed(decoded.failure) { return fail(arena, mark, body_start, parse.Kind.Syntax) }
   return Result{ value: decoded.value, label: label, consumed: at }
 }

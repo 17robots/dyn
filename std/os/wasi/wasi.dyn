@@ -11,9 +11,7 @@ pub extern fn clock_time "dyn_wasi_clock"(clock: u32, precision: u64, time: *u64
 
 // Errors are WASI errno values; stream adapters expose their negative value.
 pub fn write(fd: u32, bytes: []const u8) io.Transfer {
-  if #len(bytes) == 0 {
-    return io.Transfer{ status: io.Status.Complete }
-  }
+  if #len(bytes) == 0 { return io.Transfer{ status: io.Status.Complete } }
   count: usize = 0
   error := wasi_raw.write(fd, #cast(rawptr, &bytes[0]), #len(bytes), &count)
   if error != 0 {
@@ -22,25 +20,19 @@ pub fn write(fd: u32, bytes: []const u8) io.Transfer {
   return io.Transfer{ transferred: count, status: io.Status.Complete }
 }
 pub fn read(fd: u32, bytes: []u8) io.Transfer {
-  if #len(bytes) == 0 {
-    return io.Transfer{ status: io.Status.Complete }
-  }
+  if #len(bytes) == 0 { return io.Transfer{ status: io.Status.Complete } }
   count: usize = 0
   error := wasi_raw.read(fd, &bytes[0], #len(bytes), &count)
   if error != 0 {
     return io.Transfer{ transferred: count, failure: io.Failure{ kind: io.Kind.System, native: 0 - #cast(isize, error) } }
   }
-  if count == 0 {
-    return io.Transfer{ status: io.Status.End }
-  }
+  if count == 0 { return io.Transfer{ status: io.Status.End } }
   return io.Transfer{ transferred: count, status: io.Status.Complete }
 }
 pub struct OpenResult { fd: u32, failure: io.Failure }
 // Relative to a directory descriptor granted by the host. No implicit preopens.
 pub fn open_read(directory: u32, path: []const u8) OpenResult {
-  if #len(path) == 0 {
-    return OpenResult{ failure: io.wasi_failure(#cast(isize, 28)) }
-  }
+  if #len(path) == 0 { return OpenResult{ failure: io.wasi_failure(#cast(isize, 28)) } }
   result := OpenResult{}
   error := native_open(directory, &path[0], #len(path), &result.fd)
   if error != 0 {
@@ -49,9 +41,7 @@ pub fn open_read(directory: u32, path: []const u8) OpenResult {
   return result
 }
 pub fn random(bytes: []u8) u32 {
-  if #len(bytes) == 0 {
-    return 0
-  }
+  if #len(bytes) == 0 { return 0 }
   return native_random(&bytes[0], #len(bytes))
 }
 pub struct Arguments { values: [][]const u8, failure: io.Failure }
@@ -60,12 +50,8 @@ pub fn arguments(arena: *mem.Arena) Arguments {
   count: usize = 0
   size: usize = 0
   error := native_sizes(&count, &size)
-  if error != 0 {
-    return Arguments{ failure: io.wasi_failure(#cast(isize, error)) }
-  }
-  if count == 0 {
-    return Arguments{}
-  }
+  if error != 0 { return Arguments{ failure: io.wasi_failure(#cast(isize, error)) } }
+  if count == 0 { return Arguments{} }
   maximum := #max(usize)
   if count > maximum / #sizeof([]const u8) || count > maximum / #sizeof(*u8) {
     return Arguments{ failure: io.wasi_failure(#cast(isize, 48)) }

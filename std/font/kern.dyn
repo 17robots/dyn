@@ -6,33 +6,19 @@ fn kern_supported(bytes: []const u8, at: usize) bool {
   return u16be(bytes, at) == 0 && (coverage & 0xfff7) == 1
 }
 fn validate_kern(bytes: []const u8, glyphs: u16) KernCheck {
-  if #len(bytes) < 2 {
-    return KernCheck{}
-  }
-  if u16be(bytes, 0) != 0 {
-    return KernCheck{ ok: true }
-  }
-  if #len(bytes) < 4 {
-    return KernCheck{}
-  }
+  if #len(bytes) < 2 { return KernCheck{} }
+  if u16be(bytes, 0) != 0 { return KernCheck{ ok: true } }
+  if #len(bytes) < 4 { return KernCheck{} }
   count := #cast(usize, u16be(bytes, 2))
   at: usize = 4
   for i in 0..count {
-    if !fits(bytes, at, 6) {
-      return KernCheck{ offset: at }
-    }
+    if !fits(bytes, at, 6) { return KernCheck{ offset: at } }
     length := #cast(usize, u16be(bytes, at + 2))
-    if length < 6 || !fits(bytes, at, length) {
-      return KernCheck{ offset: at + 2 }
-    }
+    if length < 6 || !fits(bytes, at, length) { return KernCheck{ offset: at + 2 } }
     if kern_supported(bytes, at) {
-      if length < 14 {
-        return KernCheck{ offset: at + 2 }
-      }
+      if length < 14 { return KernCheck{ offset: at + 2 } }
       pairs := #cast(usize, u16be(bytes, at + 6))
-      if pairs > (length - 14) / 6 {
-        return KernCheck{ offset: at + 6 }
-      }
+      if pairs > (length - 14) / 6 { return KernCheck{ offset: at + 6 } }
       previous: u32 = 0
       for j in 0..pairs {
         pair_at := at + 14 + j * 6

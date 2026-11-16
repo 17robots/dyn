@@ -14,15 +14,9 @@ const virtual_terminal_output: u32 = 4
 
 // Maps 0, 1 and 2 to the standard input, output and error handles.
 fn handle_of(descriptor: isize) rawptr {
-  if descriptor == 0 {
-    return io.standard_handle(4294967286)
-  }
-  if descriptor == 1 {
-    return io.standard_handle(4294967285)
-  }
-  if descriptor == 2 {
-    return io.standard_handle(4294967284)
-  }
+  if descriptor == 0 { return io.standard_handle(4294967286) }
+  if descriptor == 1 { return io.standard_handle(4294967285) }
+  if descriptor == 2 { return io.standard_handle(4294967284) }
   return #cast(rawptr, descriptor)
 }
 
@@ -55,12 +49,8 @@ pub fn read_state(descriptor: isize) Read {
 }
 
 pub fn restore(descriptor: isize, saved: *const State) Result {
-  if saved == nil {
-    return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
-  }
-  if set_mode(handle_of(descriptor), mode_of(saved)) == 0 {
-    return failure()
-  }
+  if saved == nil { return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } } }
+  if set_mode(handle_of(descriptor), mode_of(saved)) == 0 { return failure() }
   return Result{}
 }
 

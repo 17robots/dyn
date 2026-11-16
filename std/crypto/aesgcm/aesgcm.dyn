@@ -169,23 +169,17 @@ fn transform(key: *const Key, j0: Block, output: []u8, input: []const u8) {
   }
 }
 fn overlaps(left: []const u8, right: []const u8) bool {
-  if #len(left) == 0 || #len(right) == 0 {
-    return false
-  }
+  if #len(left) == 0 || #len(right) == 0 { return false }
   a := #cast(usize, &left[0])
   b := #cast(usize, &right[0])
-  if a <= b {
-    return b-a < #len(left)
-  }
+  if a <= b { return b-a < #len(left) }
   return a-b < #len(right)
 }
 fn valid(output: []u8, input: []const u8, aad: []const u8, key: []const u8, nonce: []const u8) bool {
   if #len(key) != 32 || #len(nonce) == 0 || #len(nonce) > 128 || #len(output) != #len(input) || #cast(u64, #len(input)) > 68719476704 || #cast(u64, #len(aad)) > 0x1fffffffffffffff {
     return false
   }
-  if overlaps(output, key) || overlaps(output, nonce) || overlaps(output, aad) {
-    return false
-  }
+  if overlaps(output, key) || overlaps(output, nonce) || overlaps(output, aad) { return false }
   if overlaps(output, input) && #cast(rawptr, &output[0]) != #cast(rawptr, &input[0]) {
     return false
   }
@@ -217,9 +211,7 @@ pub fn open(output: []u8, input: []const u8, authentication: []const u8, aad: []
   expected: [16]u8
   binary.store_u64_be(expected[..8], value.high)
   binary.store_u64_be(expected[8..], value.low)
-  if !core.equal_constant_time(expected[..], authentication) {
-    return false
-  }
+  if !core.equal_constant_time(expected[..], authentication) { return false }
   transform(&key, j0, output, input)
   return true
 }

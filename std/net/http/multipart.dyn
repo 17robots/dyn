@@ -41,9 +41,7 @@ fn boundary_of(content_type: []const u8) []const u8 {
       }
       return value
     }
-    if end >= #len(rest) {
-      break
-    }
+    if end >= #len(rest) { break }
     rest = rest[end + 1..]
   }
   return content_type[..0]
@@ -109,9 +107,7 @@ fn disposition_parameter(value: []const u8, wanted: []const u8) HttpHeader {
       }
       return HttpHeader{ name: wanted, value: text, found: true }
     }
-    if end >= #len(rest) {
-      break
-    }
+    if end >= #len(rest) { break }
     rest = rest[end + 1..]
   }
   return HttpHeader{}
@@ -120,12 +116,8 @@ fn disposition_parameter(value: []const u8, wanted: []const u8) HttpHeader {
 // The next part. found is false after the closing delimiter. Fails with
 // Syntax on a malformed part or a body cut short; the failure is sticky.
 pub fn next_part(reader: *Parts) PartResult {
-  if reader.failed {
-    return PartResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
-  }
-  if reader.done {
-    return PartResult{}
-  }
+  if reader.failed { return PartResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } } }
+  if reader.done { return PartResult{} }
   rest := reader.rest
   // After a delimiter: "--" closes, otherwise optional padding and CRLF.
   if bytes.starts_with(rest, "--") {
@@ -148,9 +140,7 @@ pub fn next_part(reader: *Parts) PartResult {
     }
     line := rest[..end]
     rest = rest[end + 2..]
-    if #len(line) == 0 {
-      break
-    }
+    if #len(line) == 0 { break }
     colon := bytes.find_byte(line, ':')
     if colon == #len(line) {
       reader.failed = true

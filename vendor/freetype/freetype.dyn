@@ -73,9 +73,7 @@ pub fn bitmap(face: rawptr) BitmapResult {
     return BitmapResult{ kind:io.Kind.Overflow, failure: io.Failure{ kind: io.Kind.System } }
   }
   result := BitmapView{width:#cast(i32, value.width), height:#cast(i32, value.rows), left:slot.bitmap_left, top:slot.bitmap_top, advance_x:slot.advance.x, advance_y:slot.advance.y}
-  if value.width == 0 || value.rows == 0 {
-    return BitmapResult{ value:result }
-  }
+  if value.width == 0 || value.rows == 0 { return BitmapResult{ value:result } }
   if slot.format != 0x62697473 || value.pixel_mode != 2 || value.num_grays != 256 || value.pitch < 0 || #cast(u32, value.pitch) < value.width || value.buffer == nil {
     return BitmapResult{ kind:io.Kind.Unsupported, failure: io.Failure{ kind: io.Kind.System } }
   }

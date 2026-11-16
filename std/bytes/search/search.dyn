@@ -6,9 +6,7 @@ pub struct Prepared { pattern: Pattern, valid: bool }
 
 // Capacity failure leaves table untouched. Empty needles need no storage.
 pub fn prepare(needle: []const u8, table: []usize) Prepared {
-  if #len(table) < #len(needle) {
-    return Prepared{}
-  }
+  if #len(table) < #len(needle) { return Prepared{} }
   matched: usize = 0
   for index in 0..#len(needle) {
     if index == 0 {
@@ -29,12 +27,8 @@ pub fn prepare(needle: []const u8, table: []usize) Prepared {
 // First byte offset, or #len(text) on a miss. Empty needle matches at zero.
 // No allocations.
 pub fn find(pattern: Pattern, text: []const u8) usize {
-  if #len(pattern.needle) == 0 {
-    return 0
-  }
-  if #len(pattern.needle) > #len(text) {
-    return #len(text)
-  }
+  if #len(pattern.needle) == 0 { return 0 }
+  if #len(pattern.needle) > #len(text) { return #len(text) }
   matched: usize = 0
   for index in 0..#len(text) {
     for matched > 0 && text[index] != pattern.needle[matched] {
@@ -43,9 +37,7 @@ pub fn find(pattern: Pattern, text: []const u8) usize {
     if text[index] == pattern.needle[matched] {
       matched += 1
     }
-    if matched == #len(pattern.needle) {
-      return index + 1 - matched
-    }
+    if matched == #len(pattern.needle) { return index + 1 - matched }
   }
   return #len(text)
 }

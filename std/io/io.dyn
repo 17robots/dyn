@@ -40,9 +40,7 @@ pub fn complete(transfer: Transfer) bool {
 }
 
 pub fn read(reader: Reader, destination: []u8) Transfer {
-  if #len(destination) == 0 {
-    return Transfer{}
-  }
+  if #len(destination) == 0 { return Transfer{} }
   if reader.read == nil {
     return Transfer{ failure: Failure{ kind: Kind.InvalidInput, native: -22 } }
   }
@@ -50,9 +48,7 @@ pub fn read(reader: Reader, destination: []u8) Transfer {
 }
 
 pub fn write(writer: Writer, source: []const u8) Transfer {
-  if #len(source) == 0 {
-    return Transfer{}
-  }
+  if #len(source) == 0 { return Transfer{} }
   if writer.write == nil {
     return Transfer{ failure: Failure{ kind: Kind.InvalidInput, native: -22 } }
   }
@@ -111,9 +107,7 @@ fn print_value(writer: Writer, value: any) Transfer {
       return write_all(writer, format.f64_decimal(scratch, item, 6))
     }
     bool item => {
-      if item {
-        return write_all(writer, "true")
-      }
+      if item { return write_all(writer, "true") }
       return write_all(writer, "false")
     }
     i8 item => {
@@ -255,9 +249,7 @@ pub fn print_to(writer: Writer, template: []const u8, arguments: ...any) Transfe
 pub fn println_arguments(writer: Writer, template: []const u8, arguments: []const any) Transfer {
   result := print_arguments(writer, template, arguments)
   // A template that did not match its arguments still printed; end its line.
-  if failed(result.failure) && result.failure.kind != Kind.InvalidInput {
-    return result
-  }
+  if failed(result.failure) && result.failure.kind != Kind.InvalidInput { return result }
   newline := write_all(writer, "\n")
   if failed(newline.failure) {
     return Transfer{ transferred: result.transferred + newline.transferred, failure: Failure{ kind: newline.failure.kind, native: newline.failure.native } }

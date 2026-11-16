@@ -131,9 +131,7 @@ pub struct LoadResult { api: Api, missing: []const u8, failure: io.Failure }
 fn symbol(loader: Loader, name: []const u8) rawptr {
   buffer: [64]u8
   encoded := c.string_into(buffer[..], name)
-  if parse.failed(encoded.failure) {
-    return nil
-  }
+  if parse.failed(encoded.failure) { return nil }
   return loader(encoded.value)
 }
 // Loader must be usable synchronously with a current GL 3.3+ core context.

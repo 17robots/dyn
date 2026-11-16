@@ -9,9 +9,7 @@ use "std/parse" parse
 pub struct Adapter { face: *const font.Face, arena: *mem.Arena, pixels_per_em: u16, failed: bool, failure: parse.Failure }
 fn glyph(raw: rawptr, codepoint: u32) software.Glyph {
   state := #cast(*Adapter, raw)
-  if state.failed {
-    return software.Glyph{ width: -1 }
-  }
+  if state.failed { return software.Glyph{ width: -1 } }
   index := font.glyph_index(state.face, codepoint)
   bitmap := font.raster(state.arena, state.face, index, state.pixels_per_em)
   if parse.failed(bitmap.failure) {

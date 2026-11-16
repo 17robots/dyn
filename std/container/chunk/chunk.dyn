@@ -34,15 +34,11 @@ pub fn push(arena: *mem.Arena, list: *$L, value: $E) *E {
 // Element number index, or nil_node when index is past the end. Walks the
 // chunks, so prefer iterating chunk by chunk for whole-list passes.
 pub fn at(list: *const $L, index: usize, nil_node: *const $E) *E {
-  if index >= list.total {
-    return #cast(*E, nil_node)
-  }
+  if index >= list.total { return #cast(*E, nil_node) }
   remaining := index
   chunk := list.first
   for chunk != nil {
-    if remaining < chunk.count {
-      return &chunk.items[remaining]
-    }
+    if remaining < chunk.count { return &chunk.items[remaining] }
     remaining -= chunk.count
     chunk = chunk.next
   }

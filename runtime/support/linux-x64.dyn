@@ -59,9 +59,7 @@ fn unwind_find(rip: u64, landing: *u64) usize {
   stop := unwind_tables_stop()
   for at + 24 <= stop {
     size := #cast(usize, unwind_u32(at + 4))
-    if unwind_u32(at) != 0x55594e44 || size < 24 || size > stop - at {
-      return 0
-    }
+    if unwind_u32(at) != 0x55594e44 || size < 24 || size > stop - at { return 0 }
     relative := #cast(i64, #cast(i32, unwind_u32(at + 8)))
     text := #cast(u64, at + 8) + #cast(u64, relative)
     if rip >= text && rip - text < unwind_u32(at + 12) {

@@ -19,20 +19,14 @@ pub type DirectoryResult = io.Result(Directory)
 pub struct DirectoryEntry { name: []const u8, kind: u8, found: bool, failure: io.Failure }
 
 fn terminated(path: []const u8, storage: []u8) *const u8 {
-  if #len(path) == 0 {
-    return nil
-  }
+  if #len(path) == 0 { return nil }
   result := cstrings.string_into(storage, path)
-  if parse.failed(result.failure) {
-    return nil
-  }
+  if parse.failed(result.failure) { return nil }
   return result.value
 }
 
 pub fn open_directory(path: []const u8, storage: []u8) DirectoryResult {
-  if #len(storage) < 24 {
-    return DirectoryResult{ failure: io.linux_failure(-22) }
-  }
+  if #len(storage) < 24 { return DirectoryResult{ failure: io.linux_failure(-22) } }
   opened := open_flags(path, directory_flag, 0)
   if io.failed(opened.failure) {
     return DirectoryResult{ failure: io.linux_failure(opened.failure.native) }
@@ -51,12 +45,8 @@ pub fn directory_next(directory: *Directory) DirectoryEntry {
       for value == -4 {
         value = #syscall(sys.Getdents64, directory.file.descriptor, &directory.storage[0], #len(directory.storage))
       }
-      if value < 0 {
-        return DirectoryEntry{ failure: io.linux_failure(value) }
-      }
-      if value == 0 {
-        return DirectoryEntry{}
-      }
+      if value < 0 { return DirectoryEntry{ failure: io.linux_failure(value) } }
+      if value == 0 { return DirectoryEntry{} }
       directory.offset = 0
       directory.used = #cast(usize, value)
     }
@@ -79,9 +69,7 @@ pub fn directory_next(directory: *Directory) DirectoryEntry {
     name := directory.storage[name_start..name_end]
     dot := #len(name) == 1 && name[0] == '.'
     dot_dot := #len(name) == 2 && name[0] == '.' && name[1] == '.'
-    if !dot && !dot_dot {
-      return DirectoryEntry{ name: name, kind: kind, found: true }
-    }
+    if !dot && !dot_dot { return DirectoryEntry{ name: name, kind: kind, found: true } }
   }
   return DirectoryEntry{}
 }
@@ -94,13 +82,9 @@ pub fn close_directory(directory: *Directory) {
 
 // A failed close is not reported. Sync the destination when it must be durable.
 pub fn copy_file(source: []const u8, destination: []const u8, scratch: []u8) Result {
-  if #len(scratch) == 0 {
-    return Result{ failure: io.linux_failure(-22) }
-  }
+  if #len(scratch) == 0 { return Result{ failure: io.linux_failure(-22) } }
   input := open(source)
-  if io.failed(input.failure) {
-    return Result{ failure: io.linux_failure(input.failure.native) }
-  }
+  if io.failed(input.failure) { return Result{ failure: io.linux_failure(input.failure.native) } }
   output_file := open_flags(destination, 65, 420)
   if io.failed(output_file.failure) {
     close(&input.value)
@@ -138,18 +122,12 @@ pub fn copy_file(source: []const u8, destination: []const u8, scratch: []u8) Res
 // statx has one fixed layout on supported Linux architectures (Linux 4.11+).
 // Descriptor lookup avoids path replacement races and does not change file position.
 pub fn file_metadata(file: *const File) Metadata {
-  if !is_open(file) {
-    return Metadata{ failure: io.linux_failure(-9) }
-  }
+  if !is_open(file) { return Metadata{ failure: io.linux_failure(-9) } }
   raw: [32]u64
   empty: [1]u8
   result := #syscall(sys.Statx, file.descriptor, &empty[0], 4096, 2047, &raw[0])
-  if result < 0 {
-    return Metadata{ failure: io.linux_failure(result) }
-  }
-  if (raw[0] & 769) != 769 {
-    return Metadata{ failure: io.linux_failure(-95) }
-  }
+  if result < 0 { return Metadata{ failure: io.linux_failure(result) } }
+  if (raw[0] & 769) != 769 { return Metadata{ failure: io.linux_failure(-95) } }
   return Metadata{ size: raw[5], inode: raw[4], device: raw[17], mode: #cast(u16, (raw[3] >> 32)) }
 }
 pub fn metadata(path: []const u8) Metadata {
@@ -159,22 +137,16 @@ pub fn metadata(path: []const u8) Metadata {
   }
   info := file_metadata(&opened.value)
   close(&opened.value)
-  if io.failed(info.failure) {
-    return info
-  }
+  if io.failed(info.failure) { return info }
   return info
 }
 
 pub fn remove(path: []const u8) Result {
   storage: [4096 + mem.ArenaBufferOverhead]u8
   raw := terminated(path, storage[..])
-  if raw == nil {
-    return Result{ transferred: 0, failure: io.linux_failure(-36) }
-  }
+  if raw == nil { return Result{ transferred: 0, failure: io.linux_failure(-36) } }
   value := #syscall(sys.Unlinkat, -100, raw, 0)
-  if value < 0 {
-    return Result{ transferred: 0, failure: io.linux_failure(value) }
-  }
+  if value < 0 { return Result{ transferred: 0, failure: io.linux_failure(value) } }
   return Result{ transferred: 0, failure: io.linux_failure(0) }
 }
 
@@ -187,35 +159,25 @@ pub fn rename(old_path: []const u8, new_path: []const u8) Result {
     return Result{ transferred: 0, failure: io.linux_failure(-36) }
   }
   value := #syscall(sys.Renameat, -100, old_raw, -100, new_raw)
-  if value < 0 {
-    return Result{ transferred: 0, failure: io.linux_failure(value) }
-  }
+  if value < 0 { return Result{ transferred: 0, failure: io.linux_failure(value) } }
   return Result{ transferred: 0, failure: io.linux_failure(0) }
 }
 
 pub fn make_directory(path: []const u8, mode: usize) Result {
   storage: [4096 + mem.ArenaBufferOverhead]u8
   raw := terminated(path, storage[..])
-  if raw == nil {
-    return Result{ transferred: 0, failure: io.linux_failure(-36) }
-  }
+  if raw == nil { return Result{ transferred: 0, failure: io.linux_failure(-36) } }
   value := #syscall(sys.Mkdirat, -100, raw, mode)
-  if value < 0 {
-    return Result{ transferred: 0, failure: io.linux_failure(value) }
-  }
+  if value < 0 { return Result{ transferred: 0, failure: io.linux_failure(value) } }
   return Result{ transferred: 0, failure: io.linux_failure(0) }
 }
 
 pub fn remove_directory(path: []const u8) Result {
   storage: [4096 + mem.ArenaBufferOverhead]u8
   raw := terminated(path, storage[..])
-  if raw == nil {
-    return Result{ transferred: 0, failure: io.linux_failure(-36) }
-  }
+  if raw == nil { return Result{ transferred: 0, failure: io.linux_failure(-36) } }
   value := #syscall(sys.Unlinkat, -100, raw, 512)
-  if value < 0 {
-    return Result{ transferred: 0, failure: io.linux_failure(value) }
-  }
+  if value < 0 { return Result{ transferred: 0, failure: io.linux_failure(value) } }
   return Result{ transferred: 0, failure: io.linux_failure(0) }
 }
 
@@ -224,37 +186,27 @@ pub fn symbolic_link(target: []const u8, link: []const u8) Result {
   link_storage: [4096 + mem.ArenaBufferOverhead]u8
   target_raw := terminated(target, target_storage[..])
   link_raw := terminated(link, link_storage[..])
-  if target_raw == nil || link_raw == nil {
-    return Result{ failure: io.linux_failure(-36) }
-  }
+  if target_raw == nil || link_raw == nil { return Result{ failure: io.linux_failure(-36) } }
   value := #syscall(sys.Symlinkat, target_raw, -100, link_raw)
-  if value < 0 {
-    return Result{ failure: io.linux_failure(value) }
-  }
+  if value < 0 { return Result{ failure: io.linux_failure(value) } }
   return Result{}
 }
 
 fn read_link_into(path: []const u8, destination: []u8) PathResult {
   storage: [4096 + mem.ArenaBufferOverhead]u8
   raw := terminated(path, storage[..])
-  if raw == nil {
-    return PathResult{ value: destination[..0], failure: io.linux_failure(-36) }
-  }
+  if raw == nil { return PathResult{ value: destination[..0], failure: io.linux_failure(-36) } }
   if #len(destination) == 0 {
     return PathResult{ value: destination[..0], failure: io.linux_failure(-22) }
   }
   value := #syscall(sys.Readlinkat, -100, raw, &destination[0], #len(destination))
-  if value < 0 {
-    return PathResult{ value: destination[..0], failure: io.linux_failure(value) }
-  }
+  if value < 0 { return PathResult{ value: destination[..0], failure: io.linux_failure(value) } }
   return PathResult{ value: destination[..#cast(usize, value)], failure: io.linux_failure(0) }
 }
 
 pub fn sync_directory(path: []const u8) Result {
   opened := open_flags(path, directory_flag, 0)
-  if io.failed(opened.failure) {
-    return Result{ failure: io.linux_failure(opened.failure.native) }
-  }
+  if io.failed(opened.failure) { return Result{ failure: io.linux_failure(opened.failure.native) } }
   synced := sync(&opened.value)
   close(&opened.value)
   return synced
@@ -286,13 +238,9 @@ pub fn atomic_begin(destination: []const u8, temporary: []const u8) AtomicResult
 }
 
 pub fn atomic_commit(transaction: *AtomicFile) Result {
-  if !transaction.active {
-    return Result{ transferred: 0, failure: io.linux_failure(-22) }
-  }
+  if !transaction.active { return Result{ transferred: 0, failure: io.linux_failure(-22) } }
   synced := sync(&transaction.file)
-  if io.failed(synced.failure) {
-    return synced
-  }
+  if io.failed(synced.failure) { return synced }
   close(&transaction.file)
   renamed := rename(transaction.temporary, transaction.destination)
   if !io.failed(renamed.failure) {
@@ -305,16 +253,12 @@ pub fn atomic_commit(transaction: *AtomicFile) Result {
 // which honor fsync for files and directories.
 pub fn atomic_commit_durable(transaction: *AtomicFile, parent_directory: []const u8) Result {
   committed := atomic_commit(transaction)
-  if io.failed(committed.failure) {
-    return committed
-  }
+  if io.failed(committed.failure) { return committed }
   return sync_directory(parent_directory)
 }
 
 pub fn atomic_abort(transaction: *AtomicFile) Result {
-  if !transaction.active {
-    return Result{ transferred: 0, failure: io.linux_failure(-22) }
-  }
+  if !transaction.active { return Result{ transferred: 0, failure: io.linux_failure(-22) } }
   if is_open(&transaction.file) {
     close(&transaction.file)
   }
@@ -352,9 +296,7 @@ fn environment_get(name: []const u8, destination: []u8) PathResult {
   if io.failed(result.failure) {
     return PathResult{ value: destination[..0], failure: io.linux_failure(result.failure.native) }
   }
-  if !result.found {
-    return PathResult{ value: destination[..0], failure: io.linux_failure(-2) }
-  }
+  if !result.found { return PathResult{ value: destination[..0], failure: io.linux_failure(-2) } }
   return PathResult{ value: result.value }
 }
 
@@ -398,9 +340,7 @@ fn app_directory_into(kind: AppDirectory, destination: []u8) PathResult {
     suffix = "/.local/share"
   }
   configured := environment_get(variable, destination)
-  if !io.failed(configured.failure) && #len(configured.value) > 0 {
-    return configured
-  }
+  if !io.failed(configured.failure) && #len(configured.value) > 0 { return configured }
   home_storage: [4096]u8
   fallback_home := environment_get("HOME", home_storage[..])
   if io.failed(fallback_home.failure) {
@@ -417,24 +357,16 @@ pub fn lock(file: *File, operation: usize) Result {
   for value == -4 {
     value = #syscall(sys.Flock, file.descriptor, operation)
   }
-  if value < 0 {
-    return Result{ failure: io.linux_failure(value) }
-  }
+  if value < 0 { return Result{ failure: io.linux_failure(value) } }
   return Result{}
 }
 pub fn truncate(path: []const u8, length: usize) Result {
-  if length > 9223372036854775807 {
-    return Result{ failure: io.linux_failure(-22) }
-  }
+  if length > 9223372036854775807 { return Result{ failure: io.linux_failure(-22) } }
   storage: [4096 + mem.ArenaBufferOverhead]u8
   name := terminated(path, storage[..])
-  if name == nil {
-    return Result{ failure: io.linux_failure(-36) }
-  }
+  if name == nil { return Result{ failure: io.linux_failure(-36) } }
   value := #syscall(sys.Truncate, name, length)
-  if value < 0 {
-    return Result{ failure: io.linux_failure(value) }
-  }
+  if value < 0 { return Result{ failure: io.linux_failure(value) } }
   return Result{}
 }
 

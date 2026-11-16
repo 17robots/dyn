@@ -66,17 +66,13 @@ fn native_get_option(descriptor: isize, level: usize, option: usize, data: rawpt
 }
 fn native_nonblocking(descriptor: isize, enabled: bool) isize {
   flags := #syscall(sys.Fcntl, descriptor, 3, 0)
-  if flags < 0 {
-    return flags
-  }
+  if flags < 0 { return flags }
   if enabled { flags = flags | 4 } else { flags = flags & ~4 }
   return #syscall(sys.Fcntl, descriptor, 4, flags)
 }
 struct TimeValue { seconds: isize, microseconds: isize }
 fn native_timeout(descriptor: isize, milliseconds: usize, sending: bool) isize {
-  if milliseconds / 1000 > 9223372036854775807 {
-    return -22
-  }
+  if milliseconds / 1000 > 9223372036854775807 { return -22 }
   timeout := TimeValue{ seconds: #cast(isize, (milliseconds / 1000)), microseconds: #cast(isize, ((milliseconds % 1000) * 1000)) }
   option: usize = 4102
   if sending {
@@ -106,9 +102,7 @@ pub fn receive_packet(descriptor: isize, bytes: []u8) Result {
   for value == -4 {
     value = #syscall(sys.Recvmsg, descriptor, &header, 0)
   }
-  if value >= 0 && (header.flags & 16) != 0 {
-    return result(#cast(isize, #len(bytes)) + 1)
-  }
+  if value >= 0 && (header.flags & 16) != 0 { return result(#cast(isize, #len(bytes)) + 1) }
   return result(value)
 }
 

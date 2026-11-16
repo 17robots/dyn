@@ -5,16 +5,12 @@ pub fn clear(words: []u64) {
 }
 
 pub fn get(words: []const u64, bit: usize) bool {
-  if bit / 64 >= #len(words) {
-    return false
-  }
+  if bit / 64 >= #len(words) { return false }
   return (words[bit / 64] & (#cast(u64, 1) << (bit % 64))) != 0
 }
 
 pub fn set(words: []u64, bit: usize, value: bool) bool {
-  if bit / 64 >= #len(words) {
-    return false
-  }
+  if bit / 64 >= #len(words) { return false }
   mask := #cast(u64, 1) << (bit % 64)
   if value {
     words[bit / 64] = words[bit / 64] | mask

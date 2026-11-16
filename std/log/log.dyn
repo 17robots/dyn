@@ -7,38 +7,22 @@ pub fn logger(output: stream.Writer, minimum: Level) Logger {
   return Logger{ output: output, minimum: minimum }
 }
 fn enabled(level, minimum: Level) bool {
-  if minimum == Level.Debug {
-    return true
-  }
-  if minimum == Level.Info {
-    return level != Level.Debug
-  }
-  if minimum == Level.Warning {
-    return level == Level.Warning || level == Level.Error
-  }
+  if minimum == Level.Debug { return true }
+  if minimum == Level.Info { return level != Level.Debug }
+  if minimum == Level.Warning { return level == Level.Warning || level == Level.Error }
   return level == Level.Error
 }
 fn name(level: Level) []const u8 {
-  if level == Level.Debug {
-    return "debug"
-  }
-  if level == Level.Info {
-    return "info"
-  }
-  if level == Level.Warning {
-    return "warning"
-  }
+  if level == Level.Debug { return "debug" }
+  if level == Level.Info { return "info" }
+  if level == Level.Warning { return "warning" }
   return "error"
 }
 pub fn write(target: *Logger, level: Level, message: []const u8, fields: []const Field) stream.Transfer {
-  if !enabled(level, target.minimum) {
-    return stream.Transfer{ status: stream.Status.Complete }
-  }
+  if !enabled(level, target.minimum) { return stream.Transfer{ status: stream.Status.Complete } }
   total: usize = 0
   first := stream.write_all(target.output, name(level))
-  if stream.failed(first.failure) {
-    return first
-  }
+  if stream.failed(first.failure) { return first }
   total += first.transferred
   separator := stream.write_all(target.output, ": ")
   if stream.failed(separator.failure) {

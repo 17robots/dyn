@@ -2,9 +2,7 @@ pub enum TransactionMode { Deferred, Immediate, Exclusive }
 pub struct IntegerResult { value: i64, code: i32, failure: io.Failure }
 // Applies to subsequent busy waits on this connection. Zero disables waiting.
 pub fn busy_timeout(database: Database, milliseconds: i32) io.Failure {
-  if database == nil || milliseconds < 0 {
-    return code_failure(InvalidArgument)
-  }
+  if database == nil || milliseconds < 0 { return code_failure(InvalidArgument) }
   return code_failure(sqlite_busy_timeout(database, milliseconds))
 }
 pub fn changes(database: Database) IntegerResult {
@@ -25,9 +23,7 @@ pub fn in_transaction(database: Database) bool {
   return database != nil && sqlite_autocommit(database) == 0
 }
 fn transaction_command(database: Database, command: *const u8) i32 {
-  if database == nil {
-    return InvalidArgument
-  }
+  if database == nil { return InvalidArgument }
   return sqlite_exec(database, command, nil, nil, nil)
 }
 pub fn begin(database: Database, mode: TransactionMode) io.Failure {

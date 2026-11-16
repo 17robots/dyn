@@ -9,9 +9,7 @@ extern fn arena_last_error "dyn_win_arena_last_error"() u32
 // MEM_RESERVE only; pushes commit pages through mapping_commit.
 fn mapping_allocate(size: usize) Mapping {
   address := arena_virtual_alloc(nil, size, 8192, 4)
-  if address == nil {
-    return Mapping{ error: #cast(isize, arena_last_error()) }
-  }
+  if address == nil { return Mapping{ error: #cast(isize, arena_last_error()) } }
   return Mapping{ bytes: #slice(#cast(*u8, address), size), ok: true }
 }
 // MEM_COMMIT of bytes[from..to] as read/write.
@@ -19,9 +17,7 @@ fn mapping_commit(bytes: []u8, from: usize, to: usize) bool {
   return arena_virtual_alloc(&bytes[from], to - from, 4096, 4) != nil
 }
 fn mapping_release(bytes: []u8) isize {
-  if arena_virtual_free(&bytes[0], 0, 32768) == 0 {
-    return #cast(isize, arena_last_error())
-  }
+  if arena_virtual_free(&bytes[0], 0, 32768) == 0 { return #cast(isize, arena_last_error()) }
   return 0
 }
 

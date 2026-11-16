@@ -9,9 +9,7 @@ fn valid_handle(handle: rawptr) bool {
   return handle != nil && #cast(usize, handle) != 18446744073709551615
 }
 fn transfer_limit(size: usize) u32 {
-  if size > 4294967295 {
-    return 4294967295
-  }
+  if size > 4294967295 { return 4294967295 }
   return #cast(u32, size)
 }
 fn stream_error(count: u32, code: u32) Transfer {
@@ -22,46 +20,30 @@ fn stream_error(count: u32, code: u32) Transfer {
   return Transfer{ transferred: count, failure: Failure{ kind: windows(error), native: error } }
 }
 fn stdin_read(_data: rawptr, destination: []u8) Transfer {
-  if #len(destination) == 0 {
-    return Transfer{}
-  }
+  if #len(destination) == 0 { return Transfer{} }
   handle := standard_handle(4294967286) // STD_INPUT_HANDLE (-10)
-  if !valid_handle(handle) {
-    return stream_error(0, 6)
-  }
+  if !valid_handle(handle) { return stream_error(0, 6) }
   count: u32 = 0
   if standard_read(handle, &destination[0], transfer_limit(#len(destination)), &count, nil) == 0 {
     error := standard_error()
     // A closed pipe and a file at EOF both end the byte stream.
-    if error == 109 || error == 38 {
-      return Transfer{ transferred: count, status: Status.End }
-    }
+    if error == 109 || error == 38 { return Transfer{ transferred: count, status: Status.End } }
     // A message-mode pipe may return a partial message with ERROR_MORE_DATA.
-    if error == 234 && count > 0 {
-      return Transfer{ transferred: count }
-    }
+    if error == 234 && count > 0 { return Transfer{ transferred: count } }
     return stream_error(count, error)
   }
-  if count == 0 {
-    return Transfer{ status: Status.End }
-  }
+  if count == 0 { return Transfer{ status: Status.End } }
   return Transfer{ transferred: count }
 }
 fn write_standard(kind: u32, source: []const u8) Transfer {
-  if #len(source) == 0 {
-    return Transfer{}
-  }
+  if #len(source) == 0 { return Transfer{} }
   handle := standard_handle(kind)
-  if !valid_handle(handle) {
-    return stream_error(0, 6)
-  }
+  if !valid_handle(handle) { return stream_error(0, 6) }
   count: u32 = 0
   if standard_write(handle, &source[0], transfer_limit(#len(source)), &count, nil) == 0 {
     return stream_error(count, standard_error())
   }
-  if count == 0 {
-    return stream_error(0, 5)
-  }
+  if count == 0 { return stream_error(0, 5) }
   return Transfer{ transferred: count }
 }
 fn stdout_write(_data: rawptr, source: []const u8) Transfer {

@@ -9,24 +9,16 @@ const AeadGetTag: i32 = 16
 const AeadSetTag: i32 = 17
 
 fn cipher(kind: u8) rawptr {
-  if kind == CipherAes256Gcm {
-    return evp_aes_256_gcm()
-  }
-  if kind == CipherChacha20Poly1305 {
-    return evp_chacha20_poly1305()
-  }
+  if kind == CipherAes256Gcm { return evp_aes_256_gcm() }
+  if kind == CipherChacha20Poly1305 { return evp_chacha20_poly1305() }
   return nil
 }
 fn pointer(bytes: []const u8) rawptr {
-  if #len(bytes) == 0 {
-    return nil
-  }
+  if #len(bytes) == 0 { return nil }
   return #cast(rawptr, &bytes[0])
 }
 fn mutable_pointer(bytes: []u8) rawptr {
-  if #len(bytes) == 0 {
-    return nil
-  }
+  if #len(bytes) == 0 { return nil }
   return #cast(rawptr, &bytes[0])
 }
 
@@ -241,9 +233,7 @@ pub fn ed25519_sign(destination: []u8, message: []const u8, private_key: []const
 }
 pub fn ed25519_verify(signature: []const u8, message: []const u8, public_key: []const u8) bool {
   provider_clear_error()
-  if #len(signature) != 64 || #len(public_key) != 32 {
-    return false
-  }
+  if #len(signature) != 64 || #len(public_key) != 32 { return false }
   key := evp_pkey_raw_public(KeyEd25519, nil, pointer(public_key), 32)
   context := evp_digest_context_new()
   if key == nil || context == nil {

@@ -44,9 +44,7 @@ pub fn allow(limiter: *Limiter, key: u64) bool {
 
 // allow with an explicit monotonic time in milliseconds, for tests.
 pub fn allow_at(limiter: *Limiter, key: u64, now: i64) bool {
-  if #len(limiter.buckets) == 0 || limiter.period_milliseconds <= 0 {
-    return true
-  }
+  if #len(limiter.buckets) == 0 || limiter.period_milliseconds <= 0 { return true }
   mixed := key * 0x9e3779b97f4a7c15
   set := #cast(usize, (mixed >> 32) % (#len(limiter.buckets) / SetSize)) * SetSize
   sync.lock(&limiter.lock)
@@ -75,9 +73,7 @@ pub fn allow_at(limiter: *Limiter, key: u64, now: i64) bool {
     }
     bucket.updated = now
   }
-  if bucket.tokens < 1000 {
-    return false
-  }
+  if bucket.tokens < 1000 { return false }
   bucket.tokens -= 1000
   return true
 }

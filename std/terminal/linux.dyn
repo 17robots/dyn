@@ -6,20 +6,14 @@ use "std/os/linux/sys"
 pub fn read_state(descriptor: isize) Read {
   result: Read
   code := #syscall(sys.Ioctl, descriptor, 21505, &result.value.bytes[0])
-  if code < 0 {
-    return Read{ failure: io.linux_failure(code) }
-  }
+  if code < 0 { return Read{ failure: io.linux_failure(code) } }
   return result
 }
 
 pub fn restore(descriptor: isize, saved: *const State) Result {
-  if saved == nil {
-    return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
-  }
+  if saved == nil { return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } } }
   code := #syscall(sys.Ioctl, descriptor, 21506, &saved.bytes[0])
-  if code < 0 {
-    return Result{ failure: io.linux_failure(code) }
-  }
+  if code < 0 { return Result{ failure: io.linux_failure(code) } }
   return Result{}
 }
 
@@ -37,9 +31,7 @@ fn make_raw(_descriptor: isize, state: *State) {
 pub fn size(descriptor: isize) Size {
   bytes: [8]u8
   code := #syscall(sys.Ioctl, descriptor, 21523, &bytes[0])
-  if code < 0 {
-    return Size{ failure: io.linux_failure(code) }
-  }
+  if code < 0 { return Size{ failure: io.linux_failure(code) } }
   rows := #cast(usize, bytes[0]) + #cast(usize, bytes[1]) * 256
   columns := #cast(usize, bytes[2]) + #cast(usize, bytes[3]) * 256
   return Size{ columns: columns, rows: rows }

@@ -57,9 +57,7 @@ fn neighbours(board: Board, x: usize, y: usize) u32 {
   count: u32 = 0
   for dy in 0..3 {
     for dx in 0..3 {
-      if dx == 1 && dy == 1 {
-        continue
-      }
+      if dx == 1 && dy == 1 { continue }
       // Add the size before subtracting one, so the index never goes below
       // zero. A debug build stops with overflow.ok if arithmetic overflows.
       nx := (x + Width + dx - 1) % Width

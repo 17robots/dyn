@@ -8,9 +8,7 @@ pub fn read_state(_descriptor: isize) Read {
 }
 
 pub fn restore(_descriptor: isize, saved: *const State) Result {
-  if saved == nil {
-    return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
-  }
+  if saved == nil { return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } } }
   return Result{ failure: io.Failure{ kind: io.Kind.Unsupported } }
 }
 

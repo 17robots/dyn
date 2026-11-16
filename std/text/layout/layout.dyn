@@ -19,19 +19,13 @@ fn valid_metric(value: f64) bool {
   return value == value && value >= -2147483647.0 && value <= 2147483647.0
 }
 fn kern(font: Font, left, right: u32) f64 {
-  if font.kerning == nil {
-    return 0.0
-  }
+  if font.kerning == nil { return 0.0 }
   return font.kerning(font.data, left, right)
 }
 fn step(cluster: Cluster, x: f64) f64 {
-  if cluster.soft {
-    return 0.0
-  }
+  if cluster.soft { return 0.0 }
   if cluster.tab {
-    if cluster.advance <= 0.0 {
-      return 0.0
-    }
+    if cluster.advance <= 0.0 { return 0.0 }
     return (math.floor64(x / cluster.advance) + 1.0) * cluster.advance - x
   }
   return cluster.advance
@@ -218,9 +212,7 @@ pub fn build(arena: *mem.Arena, source: []const u8, font: Font, requested: Optio
     for i in begin..visible_end {
       cluster := clusters[i]
       show_soft := cluster.soft && selected_break && i + 1 == end
-      if cluster.soft && !show_soft {
-        continue
-      }
+      if cluster.soft && !show_soft { continue }
       adjustment: f64 = 0.0
       if has_previous && cluster.count > 0 {
         adjustment = kern(font, previous, cluster.first_cp)

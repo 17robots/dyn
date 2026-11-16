@@ -45,9 +45,7 @@ pub fn query(world: World, x0: f32, y0: f32, x1: f32, y1: f32, output: []Shape) 
     data = &output[0]
   }
   count := native_query(world, x0, y0, x1, y1, data, #len(output))
-  if count < 0 {
-    return Query{ failure: io.Failure{ kind: io.Kind.System } }
-  }
+  if count < 0 { return Query{ failure: io.Failure{ kind: io.Kind.System } } }
   total := #cast(usize, count)
   written := total
   if written > #len(output) {

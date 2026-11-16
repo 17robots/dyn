@@ -32,19 +32,13 @@ fn list_pages(arena: *mem.Arena, source: []const u8) io.Result([][]const u8) {
   array.init(&names, arena)
   storage: [4096]u8
   opened := fs.open_directory(source, storage[..])
-  if io.failed(opened.failure) {
-    return io.Result([][]const u8){ failure: opened.failure }
-  }
+  if io.failed(opened.failure) { return io.Result([][]const u8){ failure: opened.failure } }
   directory := opened.value
   defer fs.close_directory(&directory)
   for {
     entry := fs.directory_next(&directory)
-    if io.failed(entry.failure) {
-      return io.Result([][]const u8){ failure: entry.failure }
-    }
-    if !entry.found {
-      break
-    }
+    if io.failed(entry.failure) { return io.Result([][]const u8){ failure: entry.failure } }
+    if !entry.found { break }
     if bytes.equal(path.extension(entry.name), ".txt") {
       // strings.clone returns []u8. Name the type to store it as []const u8.
       kept: []const u8 = strings.clone(arena, entry.name)
@@ -145,9 +139,7 @@ fn main() i32 {
   array.init(&pages, keep)
   for file_name in listed.value {
     built := build_page(keep, scratch, source, output, file_name)
-    if io.failed(built.failure) {
-      return 1
-    }
+    if io.failed(built.failure) { return 1 }
     array.push(&pages, built.value)
   }
   sort.sort_by(pages.items, earlier_title)

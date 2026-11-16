@@ -28,9 +28,7 @@ fn spawn_with_size_untyped(arena: *mem.Arena, stack_size: usize, entry: fn(rawpt
 // Success clears the native owner. Failure retains it for retry; keep the
 // arena/thread/context alive until success. One caller controls this descriptor.
 pub fn join(thread: *Thread) Result {
-  if thread.native.handle == nil {
-    return Result{}
-  }
+  if thread.native.handle == nil { return Result{} }
   if !win.thread_join(&thread.native) {
     error := win.thread_error()
     return Result{ failure: io.windows_failure(error) }
@@ -40,9 +38,7 @@ pub fn join(thread: *Thread) Result {
 
 // Identifies an unjoined thread; this is not a portable liveness check.
 pub fn id(thread: *const Thread) u32 {
-  if thread.native.handle == nil {
-    return 0
-  }
+  if thread.native.handle == nil { return 0 }
   return thread.native.id
 }
 
@@ -62,8 +58,6 @@ pub fn cpu_count() usize {
   system_info(&info)
   count := #cast(usize, info.bytes[32]) | #cast(usize, info.bytes[33]) << 8 |
     #cast(usize, info.bytes[34]) << 16 | #cast(usize, info.bytes[35]) << 24
-  if count == 0 {
-    return 1
-  }
+  if count == 0 { return 1 }
   return count
 }

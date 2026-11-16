@@ -30,45 +30,33 @@ fn link(parent, child: *Value) {
 fn find(parent: *Value, key: []const u8) *Value {
   value := parent.first
   for value != nil {
-    if bytes.equal(value.key, key) {
-      return value
-    }
+    if bytes.equal(value.key, key) { return value }
     value = value.next
   }
   return nil
 }
 pub fn member(parent: *const Value, key: []const u8) *const Value {
-  if parent == nil || parent.kind != Kind.Table {
-    return &nil_value
-  }
+  if parent == nil || parent.kind != Kind.Table { return &nil_value }
   value := parent.first
   for value != nil {
-    if bytes.equal(value.key, key) {
-      return value
-    }
+    if bytes.equal(value.key, key) { return value }
     value = value.next
   }
   return &nil_value
 }
 pub fn index(parent: *const Value, at: usize) *const Value {
-  if parent == nil || parent.kind != Kind.Array {
-    return &nil_value
-  }
+  if parent == nil || parent.kind != Kind.Array { return &nil_value }
   value := parent.first
   count: usize = 0
   for value != nil {
-    if count == at {
-      return value
-    }
+    if count == at { return value }
     count += 1
     value = value.next
   }
   return &nil_value
 }
 fn peek(parser: *const Parser) u8 {
-  if parser.at == #len(parser.source) {
-    return 0
-  }
+  if parser.at == #len(parser.source) { return 0 }
   return parser.source[parser.at]
 }
 fn horizontal(parser: *Parser) {
@@ -91,9 +79,7 @@ fn newline(parser: *Parser) bool {
   return false
 }
 fn comment(parser: *Parser) {
-  if peek(parser) != 35 {
-    return
-  }
+  if peek(parser) != 35 { return }
   for parser.at < #len(parser.source) && peek(parser) != 10 && peek(parser) != 13 {
     c := peek(parser)
     if (c < 32 && c != 9) || c == 127 {
@@ -106,21 +92,13 @@ fn spaces(parser: *Parser) {
   for true {
     horizontal(parser)
     comment(parser)
-    if !newline(parser) {
-      return
-    }
+    if !newline(parser) { return }
   }
 }
 fn hex(c: u8) i32 {
-  if c >= 48 && c <= 57 {
-    return c - 48
-  }
-  if c >= 65 && c <= 70 {
-    return c - 65 + 10
-  }
-  if c >= 97 && c <= 102 {
-    return c - 97 + 10
-  }
+  if c >= 48 && c <= 57 { return c - 48 }
+  if c >= 65 && c <= 70 { return c - 65 + 10 }
+  if c >= 97 && c <= 102 { return c - 97 + 10 }
   return -1
 }
 fn quoted(parser: *Parser, key: bool) []const u8 {
@@ -179,9 +157,7 @@ fn quoted(parser: *Parser, key: bool) []const u8 {
         if newline(parser) {
           for true {
             horizontal(parser)
-            if !newline(parser) {
-              break
-            }
+            if !newline(parser) { break }
           }
           continue
         }
@@ -248,9 +224,7 @@ fn bare(c: u8) bool {
 }
 fn keypart(parser: *Parser) []const u8 {
   horizontal(parser)
-  if peek(parser) == 34 || peek(parser) == 39 {
-    return quoted(parser, true)
-  }
+  if peek(parser) == 34 || peek(parser) == 39 { return quoted(parser, true) }
   start := parser.at
   for bare(peek(parser)) {
     parser.at += 1
@@ -282,14 +256,10 @@ fn digits(source: []const u8, at: *usize, base: i32) bool {
   return at.* > start && previous
 }
 fn fixed(source: []const u8, at, count: usize) i32 {
-  if at > #len(source) || count > #len(source) - at {
-    return -1
-  }
+  if at > #len(source) || count > #len(source) - at { return -1 }
   result: i32 = 0
   for i in at..at + count {
-    if source[i] < 48 || source[i] > 57 {
-      return -1
-    }
+    if source[i] < 48 || source[i] > 57 { return -1 }
     result = result * 10 + (source[i] - 48)
   }
   return result
@@ -301,28 +271,18 @@ fn datetime(source: []const u8) bool {
     year := fixed(source, 0, 4)
     month := fixed(source, 5, 2)
     day := fixed(source, 8, 2)
-    if year < 0 || month < 1 || month > 12 || day < 1 {
-      return false
-    }
+    if year < 0 || month < 1 || month > 12 || day < 1 { return false }
     days: [12]i32 = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
     if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) {
       days[1] = 29
     }
-    if day > days[month - 1] {
-      return false
-    }
+    if day > days[month - 1] { return false }
     at = 10
-    if at == #len(source) {
-      return true
-    }
-    if source[at] != 84 && source[at] != 116 && source[at] != 32 {
-      return false
-    }
+    if at == #len(source) { return true }
+    if source[at] != 84 && source[at] != 116 && source[at] != 32 { return false }
     at += 1
   }
-  if #len(source) - at < 8 || source[at + 2] != 58 || source[at + 5] != 58 {
-    return false
-  }
+  if #len(source) - at < 8 || source[at + 2] != 58 || source[at + 5] != 58 { return false }
   hour := fixed(source, at, 2)
   minute := fixed(source, at + 3, 2)
   // RFC 3339/TOML ABNF includes leap second 60; retain it as text.
@@ -337,19 +297,11 @@ fn datetime(source: []const u8) bool {
     for at < #len(source) && source[at] >= 48 && source[at] <= 57 {
       at += 1
     }
-    if at == start {
-      return false
-    }
+    if at == start { return false }
   }
-  if at == #len(source) {
-    return true
-  }
-  if !date {
-    return false
-  }
-  if (source[at] == 90 || source[at] == 122) && at + 1 == #len(source) {
-    return true
-  }
+  if at == #len(source) { return true }
+  if !date { return false }
+  if (source[at] == 90 || source[at] == 122) && at + 1 == #len(source) { return true }
   if #len(source) - at != 6 || (source[at] != 43 && source[at] != 45) || source[at + 3] != 58 {
     return false
   }
@@ -358,12 +310,8 @@ fn datetime(source: []const u8) bool {
   return offset_hour >= 0 && offset_hour <= 23 && offset_minute >= 0 && offset_minute <= 59
 }
 fn scalar_kind(source: []const u8) Kind {
-  if bytes.equal(source, "true") || bytes.equal(source, "false") {
-    return Kind.Bool
-  }
-  if datetime(source) {
-    return Kind.DateTime
-  }
+  if bytes.equal(source, "true") || bytes.equal(source, "false") { return Kind.Bool }
+  if datetime(source) { return Kind.DateTime }
   at: usize = 0
   negative := false
   signed := false
@@ -372,9 +320,7 @@ fn scalar_kind(source: []const u8) Kind {
     negative = source[0] == 45
     at += 1
   }
-  if bytes.equal(source[at..], "inf") || bytes.equal(source[at..], "nan") {
-    return Kind.Float
-  }
+  if bytes.equal(source[at..], "inf") || bytes.equal(source[at..], "nan") { return Kind.Float }
   base: i32 = 10
   if #len(source) - at >= 2 && source[at] == 48 {
     prefix := source[at + 1]
@@ -386,26 +332,18 @@ fn scalar_kind(source: []const u8) Kind {
       base = 2
     }
     if base != 10 {
-      if signed {
-        return Kind.Missing
-      }
+      if signed { return Kind.Missing }
       at += 2
     }
   }
   start := at
-  if !digits(source, &at, base) {
-    return Kind.Missing
-  }
-  if base == 10 && at - start > 1 && source[start] == 48 {
-    return Kind.Missing
-  }
+  if !digits(source, &at, base) { return Kind.Missing }
+  if base == 10 && at - start > 1 && source[start] == 48 { return Kind.Missing }
   floating := false
   if base == 10 && at < #len(source) && source[at] == 46 {
     floating = true
     at += 1
-    if !digits(source, &at, 10) {
-      return Kind.Missing
-    }
+    if !digits(source, &at, 10) { return Kind.Missing }
   }
   if base == 10 && at < #len(source) && (source[at] == 101 || source[at] == 69) {
     floating = true
@@ -413,29 +351,19 @@ fn scalar_kind(source: []const u8) Kind {
     if at < #len(source) && (source[at] == 43 || source[at] == 45) {
       at += 1
     }
-    if !digits(source, &at, 10) {
-      return Kind.Missing
-    }
+    if !digits(source, &at, 10) { return Kind.Missing }
   }
-  if at != #len(source) {
-    return Kind.Missing
-  }
-  if floating {
-    return Kind.Float
-  }
+  if at != #len(source) { return Kind.Missing }
+  if floating { return Kind.Float }
   maximum: u64 = 9223372036854775807
   if negative {
     maximum += 1
   }
   number: u64 = 0
   for i in start..#len(source) {
-    if source[i] == 95 {
-      continue
-    }
+    if source[i] == 95 { continue }
     digit := #cast(u64, hex(source[i]))
-    if number > (maximum - digit) / #cast(u64, base) {
-      return Kind.Missing
-    }
+    if number > (maximum - digit) / #cast(u64, base) { return Kind.Missing }
     number = number * #cast(u64, base) + digit
   }
   return Kind.Integer
@@ -461,14 +389,10 @@ fn value(parser: *Parser) *Value {
     spaces(parser)
     for peek(parser) != 93 && !parser.failed {
       child := value(parser)
-      if child == nil {
-        return nil
-      }
+      if child == nil { return nil }
       link(result, child)
       spaces(parser)
-      if peek(parser) == 93 {
-        break
-      }
+      if peek(parser) == 93 { break }
       if peek(parser) != 44 {
         parser.failed = true
         return nil
@@ -490,9 +414,7 @@ fn value(parser: *Parser) *Value {
     for peek(parser) != 125 && !parser.failed {
       assign(parser, result)
       horizontal(parser)
-      if peek(parser) == 125 {
-        break
-      }
+      if peek(parser) == 125 { break }
       if peek(parser) != 44 {
         parser.failed = true
         return nil
@@ -547,9 +469,7 @@ fn assign(parser: *Parser, table: *Value) {
   for true {
     key := keypart(parser)
     horizontal(parser)
-    if parser.failed {
-      return
-    }
+    if parser.failed { return }
     if peek(parser) == 46 {
       child := find(parent, key)
       if child == nil {
@@ -573,9 +493,7 @@ fn assign(parser: *Parser, table: *Value) {
     parser.at += 1
     horizontal(parser)
     child := value(parser)
-    if child == nil || parser.failed {
-      return
-    }
+    if child == nil || parser.failed { return }
     child.key = key
     link(parent, child)
     return
@@ -591,9 +509,7 @@ fn header(parser: *Parser, root: *Value) *Value {
   for true {
     key := keypart(parser)
     horizontal(parser)
-    if parser.failed {
-      return root
-    }
+    if parser.failed { return root }
     child := find(parent, key)
     final := peek(parser) != 46
     if final && array {
@@ -630,9 +546,7 @@ fn header(parser: *Parser, root: *Value) *Value {
       }
       parent = child
     }
-    if final {
-      break
-    }
+    if final { break }
     parser.at += 1
   }
   if peek(parser) != 93 {
@@ -650,14 +564,10 @@ fn header(parser: *Parser, root: *Value) *Value {
   return parent
 }
 fn bounded(value: *const Value, depth: usize) bool {
-  if depth > 64 {
-    return false
-  }
+  if depth > 64 { return false }
   child := value.first
   for child != nil {
-    if !bounded(child, depth + 1) {
-      return false
-    }
+    if !bounded(child, depth + 1) { return false }
     child = child.next
   }
   return true
@@ -717,21 +627,15 @@ fn valid_children(current: *const Value) bool {
   for fast != nil && fast.next != nil {
     slow = slow.next
     fast = fast.next.next
-    if slow == fast {
-      return false
-    }
+    if slow == fast { return false }
   }
   if current.kind == Kind.Table {
     child := current.first
     for child != nil {
-      if !utf8.valid(child.key) {
-        return false
-      }
+      if !utf8.valid(child.key) { return false }
       previous := current.first
       for previous != child {
-        if bytes.equal(previous.key, child.key) {
-          return false
-        }
+        if bytes.equal(previous.key, child.key) { return false }
         previous = previous.next
       }
       child = child.next
@@ -740,18 +644,12 @@ fn valid_children(current: *const Value) bool {
   return true
 }
 fn emit(arena: *mem.Arena, output: *[]u8, current: *const Value, depth: usize) bool {
-  if current == nil || depth >= 64 {
-    return false
-  }
+  if current == nil || depth >= 64 { return false }
   if current.kind == Kind.String {
-    if !utf8.valid(current.text) {
-      return false
-    }
+    if !utf8.valid(current.text) { return false }
     emit_string(arena, output, current.text)
   } else if current.kind == Kind.Array || current.kind == Kind.Table {
-    if !valid_children(current) {
-      return false
-    }
+    if !valid_children(current) { return false }
     opening: u8 = 91
     closing: u8 = 93
     if current.kind == Kind.Table {
@@ -765,9 +663,7 @@ fn emit(arena: *mem.Arena, output: *[]u8, current: *const Value, depth: usize) b
         emit_string(arena, output, child.key)
         mem.append_many_grow(arena, output, " = ")
       }
-      if !emit(arena, output, child, depth + 1) {
-        return false
-      }
+      if !emit(arena, output, child, depth + 1) { return false }
       child = child.next
       if child != nil {
         mem.append_many_grow(arena, output, ", ")
@@ -781,9 +677,7 @@ fn emit(arena: *mem.Arena, output: *[]u8, current: *const Value, depth: usize) b
       mem.append_many_grow(arena, output, "false")
     }
   } else {
-    if current.kind == Kind.Missing || scalar_kind(current.text) != current.kind {
-      return false
-    }
+    if current.kind == Kind.Missing || scalar_kind(current.text) != current.kind { return false }
     mem.append_many_grow(arena, output, current.text)
   }
   return true

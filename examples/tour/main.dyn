@@ -222,9 +222,7 @@ fn control() {
   steps := 0
   for {
     steps += 1
-    if steps == 4 {
-      break
-    }
+    if steps == 4 { break }
   }
   // Labels break out of nested loops.
   found := false
@@ -272,9 +270,7 @@ fn sum(values: []const i32) i32 {
 // for value, index: the index is a usize counting from 0.
 fn index_of(values: []const i32, wanted: i32) usize {
   for v, i in values {
-    if v == wanted {
-      return i
-    }
+    if v == wanted { return i }
   }
   return #len(values)         // the miss value: one past the end
 }
@@ -339,9 +335,7 @@ fn crash_report(message: []const u8) {
 fn cleanup() {
   defer bump()
   defer bump()
-  if global_counter > 100 {
-    return
-  }
+  if global_counter > 100 { return }
 }
 
 // ------------------------------------------------------------- Generics ---

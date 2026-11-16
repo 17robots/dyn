@@ -52,9 +52,7 @@ fn protocol(session: rawptr) []const u8 {
 }
 
 fn status(result: provider.Result) evented.TransportIo {
-  if !io.failed(result.failure) {
-    return evented.TransportIo{ count: result.count }
-  }
+  if !io.failed(result.failure) { return evented.TransportIo{ count: result.count } }
   if result.detail == provider.ErrorKind.WantRead {
     return evented.TransportIo{ status: evented.TransportStatus.WouldRead }
   }
@@ -66,9 +64,7 @@ fn status(result: provider.Result) evented.TransportIo {
 
 fn open(data: rawptr, descriptor: isize) rawptr {
   created := provider.server_connection_create(data, #cast(i32, descriptor))
-  if io.failed(created.failure) {
-    return nil
-  }
+  if io.failed(created.failure) { return nil }
   return created.value
 }
 

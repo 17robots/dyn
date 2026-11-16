@@ -41,9 +41,7 @@ pub fn decompress(arena: *memory.Arena, source: []const u8) BufferResult {
   if parse.failed(size.failure) {
     return BufferResult{ offset: size.offset, failure: size.failure }
   }
-  if !size.known {
-    return BufferResult{ failure: parse.Failure{ kind: parse.Kind.Unsupported } }
-  }
+  if !size.known { return BufferResult{ failure: parse.Failure{ kind: parse.Kind.Unsupported } } }
   if size.size > #max(usize) {
     return BufferResult{ failure: parse.Failure{ kind: parse.Kind.Overflow } }
   }
@@ -84,20 +82,14 @@ pub fn decoder(input: stream.Reader, compressed_bytes: []u8, workspace: []u8, wi
 }
 fn decoder_read(data: rawptr, destination: []u8) stream.Transfer {
   state := #cast(*Decoder, data)
-  if state.failed {
-    return parse.stream_result(state.failure, 0)
-  }
+  if state.failed { return parse.stream_result(state.failure, 0) }
   if state.offset > state.used || state.used > #len(state.compressed_storage) {
     state.failed = true
     state.failure = parse.io_failure(stream.Kind.InvalidState, 0)
     return parse.stream_result(state.failure, 0)
   }
-  if #len(destination) == 0 {
-    return stream.Transfer{}
-  }
-  if state.finished {
-    return stream.Transfer{ status: stream.Status.End }
-  }
+  if #len(destination) == 0 { return stream.Transfer{} }
+  if state.finished { return stream.Transfer{ status: stream.Status.End } }
   for {
     // First flush provider output, even with no new input. Reading the next chunk
     // before doing so would stall a caller while output is already available.
@@ -115,9 +107,7 @@ fn decoder_read(data: rawptr, destination: []u8) stream.Transfer {
     } else if decoded.consumed != 0 || decoded.written != 0 {
       state.frame_ended = false
     }
-    if decoded.written != 0 {
-      return stream.Transfer{ transferred: decoded.written }
-    }
+    if decoded.written != 0 { return stream.Transfer{ transferred: decoded.written } }
     if state.offset < state.used {
       if decoded.consumed == 0 {
         state.failed = true

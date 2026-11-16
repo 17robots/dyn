@@ -20,20 +20,12 @@ struct OpenHow { flags: u64, mode: u64, resolve: u64 }
 // Destination receives at most one read; partial reads are ordinary progress.
 // ENOSYS is reported on kernels lacking openat2; no insecure fallback.
 pub fn read(directory: *const Directory, path: []const u8, destination: []u8) ReadResult {
-  if directory == nil {
-    return failure(-22)
-  }
-  if !directory.active {
-    return failure(-9)
-  }
-  if #len(path) == 0 || #len(path) > 4095 || path[0] == '/' {
-    return failure(-22)
-  }
+  if directory == nil { return failure(-22) }
+  if !directory.active { return failure(-9) }
+  if #len(path) == 0 || #len(path) > 4095 || path[0] == '/' { return failure(-22) }
   name: [4096]u8
   for i in 0..#len(path) {
-    if path[i] == 0 {
-      return failure(-22)
-    }
+    if path[i] == 0 { return failure(-22) }
     name[i] = path[i]
   }
   // O_CLOEXEC | O_NONBLOCK, RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | NO_MAGICLINKS.
@@ -59,11 +51,7 @@ pub fn read(directory: *const Directory, path: []const u8, destination: []u8) Re
     _ = observe.record(directory.events,
       observe.Event{kind: observe.Kind.ResourceClosed, resource: directory.resource, source: "std/fs/capability"})
   }
-  if value < 0 {
-    return failure(value)
-  }
-  if closed < 0 {
-    return failure(closed)
-  }
+  if value < 0 { return failure(value) }
+  if closed < 0 { return failure(closed) }
   return ReadResult{ value: #cast(usize, value) }
 }

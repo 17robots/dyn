@@ -48,9 +48,7 @@ pub fn is_zero(value: Int) bool {
 pub struct U64Result { value: u64, valid: bool }
 
 pub fn to_u64(value: Int) U64Result {
-  if value.negative || #len(value.limbs) > 2 {
-    return U64Result{}
-  }
+  if value.negative || #len(value.limbs) > 2 { return U64Result{} }
   result: u64 = 0
   for i in 0..#len(value.limbs) {
     result |= #cast(u64, value.limbs[i]) << #cast(u64, 32 * i)
@@ -68,18 +66,14 @@ pub fn absolute(value: Int) Int {
 
 fn compare_magnitude(a: []const u32, b: []const u32) i32 {
   if #len(a) != #len(b) {
-    if #len(a) < #len(b) {
-      return -1
-    }
+    if #len(a) < #len(b) { return -1 }
     return 1
   }
   at := #len(a)
   for at != 0 {
     at -= 1
     if a[at] != b[at] {
-      if a[at] < b[at] {
-        return -1
-      }
+      if a[at] < b[at] { return -1 }
       return 1
     }
   }
@@ -89,15 +83,11 @@ fn compare_magnitude(a: []const u32, b: []const u32) i32 {
 // -1, 0 or 1 as a is less than, equal to or greater than b.
 pub fn compare(a: Int, b: Int) i32 {
   if a.negative != b.negative {
-    if a.negative {
-      return -1
-    }
+    if a.negative { return -1 }
     return 1
   }
   order := compare_magnitude(a.limbs, b.limbs)
-  if a.negative {
-    return -order
-  }
+  if a.negative { return -order }
   return order
 }
 
@@ -148,9 +138,7 @@ fn subtract_magnitude(arena: *mem.Arena, a: []const u32, b: []const u32) []u32 {
 }
 
 pub fn add(arena: *mem.Arena, a: Int, b: Int) Int {
-  if a.negative == b.negative {
-    return trimmed(add_magnitude(arena, a.limbs, b.limbs), a.negative)
-  }
+  if a.negative == b.negative { return trimmed(add_magnitude(arena, a.limbs, b.limbs), a.negative) }
   if compare_magnitude(a.limbs, b.limbs) >= 0 {
     return trimmed(subtract_magnitude(arena, a.limbs, b.limbs), a.negative)
   }
@@ -162,9 +150,7 @@ pub fn subtract(arena: *mem.Arena, a: Int, b: Int) Int {
 }
 
 pub fn multiply(arena: *mem.Arena, a: Int, b: Int) Int {
-  if is_zero(a) || is_zero(b) {
-    return Int{}
-  }
+  if is_zero(a) || is_zero(b) { return Int{} }
   result := mem.push_array(u32, arena, #len(a.limbs) + #len(b.limbs))
   for i in 0..#len(a.limbs) {
     carry: u64 = 0
@@ -224,9 +210,7 @@ fn divide_magnitude(arena: *mem.Arena, a: []const u32, b: []const u32, quotient:
     for estimate > 0xffffffff || estimate * next > (rest << 32 | dividend[j + n - 2]) {
       estimate -= 1
       rest += top
-      if rest > 0xffffffff {
-        break
-      }
+      if rest > 0xffffffff { break }
     }
     // Multiply and subtract estimate * divisor from the dividend window.
     borrow: i64 = 0
@@ -267,12 +251,8 @@ fn divide_magnitude(arena: *mem.Arena, a: []const u32, b: []const u32, quotient:
 // Truncated division: the quotient rounds toward zero and the remainder has
 // the sign of a. ok is false, with zero results, when b is zero.
 pub fn divide(arena: *mem.Arena, a: Int, b: Int) Division {
-  if is_zero(b) {
-    return Division{}
-  }
-  if compare_magnitude(a.limbs, b.limbs) < 0 {
-    return Division{ remainder: a, valid: true }
-  }
+  if is_zero(b) { return Division{} }
+  if compare_magnitude(a.limbs, b.limbs) < 0 { return Division{ remainder: a, valid: true } }
   quotient := mem.push_array(u32, arena, #len(a.limbs) - #len(b.limbs) + 1)
   if #len(b.limbs) == 1 {
     divisor := #cast(u64, b.limbs[0])
@@ -296,9 +276,7 @@ pub fn divide(arena: *mem.Arena, a: Int, b: Int) Division {
 }
 
 pub fn shift_left(arena: *mem.Arena, value: Int, bits: usize) Int {
-  if is_zero(value) {
-    return value
-  }
+  if is_zero(value) { return value }
   words := bits / 32
   shift := #cast(u32, bits % 32)
   result := mem.push_array(u32, arena, #len(value.limbs) + words + 1)
@@ -315,9 +293,7 @@ pub fn shift_left(arena: *mem.Arena, value: Int, bits: usize) Int {
 // Shifts the magnitude right; negative values round toward zero.
 pub fn shift_right(arena: *mem.Arena, value: Int, bits: usize) Int {
   words := bits / 32
-  if words >= #len(value.limbs) {
-    return Int{}
-  }
+  if words >= #len(value.limbs) { return Int{} }
   shift := #cast(u32, bits % 32)
   count := #len(value.limbs) - words
   result := mem.push_array(u32, arena, count)
@@ -332,9 +308,7 @@ pub fn shift_right(arena: *mem.Arena, value: Int, bits: usize) Int {
 }
 
 pub fn bit_length(value: Int) usize {
-  if is_zero(value) {
-    return 0
-  }
+  if is_zero(value) { return 0 }
   top := value.limbs[#len(value.limbs) - 1]
   return #len(value.limbs) * 32 - #cast(usize, leading_zeros(top))
 }
@@ -342,9 +316,7 @@ pub fn bit_length(value: Int) usize {
 // The non-negative remainder of value modulo a positive modulus.
 fn reduce(arena: *mem.Arena, value: Int, modulus: Int) Int {
   divided := divide(arena, value, modulus)
-  if divided.remainder.negative {
-    return add(arena, divided.remainder, modulus)
-  }
+  if divided.remainder.negative { return add(arena, divided.remainder, modulus) }
   return divided.remainder
 }
 
@@ -353,13 +325,9 @@ fn reduce(arena: *mem.Arena, value: Int, modulus: Int) Int {
 pub struct ModResult { value: Int, valid: bool }
 
 pub fn power_mod(arena: *mem.Arena, base: Int, exponent: Int, modulus: Int) ModResult {
-  if modulus.negative || is_zero(modulus) || exponent.negative {
-    return ModResult{}
-  }
+  if modulus.negative || is_zero(modulus) || exponent.negative { return ModResult{} }
   one := from_u64(arena, 1)
-  if equal(modulus, one) {
-    return ModResult{ valid: true }
-  }
+  if equal(modulus, one) { return ModResult{ valid: true } }
   result := one
   current := reduce(arena, base, modulus)
   bits := bit_length(exponent)
@@ -387,15 +355,9 @@ pub fn gcd(arena: *mem.Arena, a: Int, b: Int) Int {
 }
 
 fn digit_value(byte: u8) u32 {
-  if byte >= '0' && byte <= '9' {
-    return byte - '0'
-  }
-  if byte >= 'a' && byte <= 'z' {
-    return #cast(u32, byte - 'a') + 10
-  }
-  if byte >= 'A' && byte <= 'Z' {
-    return #cast(u32, byte - 'A') + 10
-  }
+  if byte >= '0' && byte <= '9' { return byte - '0' }
+  if byte >= 'a' && byte <= 'z' { return #cast(u32, byte - 'a') + 10 }
+  if byte >= 'A' && byte <= 'Z' { return #cast(u32, byte - 'A') + 10 }
   return 99
 }
 

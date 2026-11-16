@@ -160,9 +160,7 @@ fn build_symbol_tables(encoder: *Encoder) {
 }
 
 fn distance_code(encoder: *const Encoder, distance: usize) usize {
-  if distance <= 256 {
-    return (encoder.distance_symbol[distance - 1])
-  }
+  if distance <= 256 { return (encoder.distance_symbol[distance - 1]) }
   return (encoder.distance_symbol[256 + ((distance - 1) >> 7)])
 }
 
@@ -191,9 +189,7 @@ fn build_lengths(encoder: *Encoder, counts: []u32, lengths: []u8, limit: u32) {
   // Leaves sorted by count, then symbol (insertion sort: at most 286).
   leaves: usize = 0
   for i in 0..n {
-    if counts[i] == 0 {
-      continue
-    }
+    if counts[i] == 0 { continue }
     at := leaves
     for at > 0 && counts[encoder.order[at - 1]] > counts[i] {
       encoder.order[at] = encoder.order[at - 1]
@@ -366,15 +362,9 @@ fn length_runs(lengths: []const u8, runs: *LengthRuns) {
 const LengthOrder: [19]u8 = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15]
 
 fn extra_bits_of(symbol: u8) u32 {
-  if symbol == 16 {
-    return 2
-  }
-  if symbol == 17 {
-    return 3
-  }
-  if symbol == 18 {
-    return 7
-  }
+  if symbol == 16 { return 2 }
+  if symbol == 17 { return 3 }
+  if symbol == 18 { return 7 }
   return 0
 }
 
@@ -448,9 +438,7 @@ fn write_stored(bits: *OutputBits, raw: []const u8, final: bool) {
     }
     bits.written += take
     at += take
-    if at == #len(raw) {
-      return
-    }
+    if at == #len(raw) { return }
   }
 }
 
@@ -584,9 +572,7 @@ fn longest(encoder: *const Encoder, source: []const u8, at: usize, first: usize,
   for candidate != 0 && chain > 0 {
     position := candidate - 1
     distance := at - position
-    if distance > WindowSize || distance == 0 {
-      break
-    }
+    if distance > WindowSize || distance == 0 { break }
     if best.length < limit && source[position + best.length] == source[at + best.length] && source[position] == source[at] {
       length: usize = 0
       for length < limit && source[position + length] == source[at + length] {
@@ -594,23 +580,17 @@ fn longest(encoder: *const Encoder, source: []const u8, at: usize, first: usize,
       }
       if length > best.length {
         best = Match{ length: length, distance: distance }
-        if length >= level.nice || length == limit {
-          break
-        }
+        if length >= level.nice || length == limit { break }
       }
     }
     next := #cast(usize, encoder.previous[position & WindowMask])
     // Chains only go back; an entry at or past position is from an older
     // window slot reuse.
-    if next == 0 || next - 1 >= position {
-      break
-    }
+    if next == 0 || next - 1 >= position { break }
     candidate = next
     chain -= 1
   }
-  if best.length < MinMatch || best.distance == 0 {
-    return Match{}
-  }
+  if best.length < MinMatch || best.distance == 0 { return Match{} }
   return best
 }
 
@@ -735,8 +715,6 @@ pub fn deflate(destination: []u8, source: []const u8, level: u8, encoder: *Encod
   }
   flush_block(encoder, &bits, source[block_start..], true)
   align_bits(&bits)
-  if !bits.ok {
-    return Encoded{ failure: parse.Failure{ kind: parse.Kind.Capacity } }
-  }
+  if !bits.ok { return Encoded{ failure: parse.Failure{ kind: parse.Kind.Capacity } } }
   return Encoded{ value: destination[..bits.written] }
 }

@@ -97,13 +97,9 @@ struct Varint { value: u64, length: usize }
 
 // A QUIC variable-length integer (RFC 9000 16); length 0 while incomplete.
 fn read_varint(source: []const u8) Varint {
-  if #len(source) == 0 {
-    return Varint{}
-  }
+  if #len(source) == 0 { return Varint{} }
   length := #cast(usize, 1) << #cast(usize, source[0] >> 6)
-  if #len(source) < length {
-    return Varint{}
-  }
+  if #len(source) < length { return Varint{} }
   value := #cast(u64, source[0] & 0x3f)
   for i in 1..length {
     value = (value << 8) | #cast(u64, source[i])
@@ -142,9 +138,7 @@ fn h3_valid(config: Config) bool {
 }
 
 fn h3_storage_size(config: Config) usize {
-  if !config.http3 {
-    return 0
-  }
+  if !config.http3 { return 0 }
   return MaxFrame + 1024 + config.http2_connections * #sizeof(usize) + 64
 }
 
@@ -152,9 +146,7 @@ fn h3_storage_size(config: Config) usize {
 // address, and the Alt-Svc value TCP responses advertise.
 fn h3_start(arena: *mem.Arena, worker: *Worker) io.Failure {
   config := worker.config
-  if !config.http3 {
-    return io.Failure{}
-  }
+  if !config.http3 { return io.Failure{} }
   worker.h2.read = mem.push_bytes_uninit(arena, MaxFrame + 1024)
   worker.h3_connections = mem.push_array(usize, arena, config.http2_connections)
   address := network.Address{}
@@ -163,9 +155,7 @@ fn h3_start(arena: *mem.Arena, worker: *Worker) io.Failure {
   }
   family := #cast(usize, address.bytes[0]) | (#cast(usize, address.bytes[1]) << 8)
   opened := network.socket(family, network.SocketDatagram, 0)
-  if io.failed(opened.failure) {
-    return opened.failure
-  }
+  if io.failed(opened.failure) { return opened.failure }
   descriptor := opened.value
   _ = network.reuse_address(descriptor, true)
   _ = network.reuse_port(descriptor, true)
@@ -198,17 +188,13 @@ fn decimal_text(destination: []u8, value: u64) []const u8 {
     at -= 1
     destination[at] = #cast(u8, '0' + number % 10)
     number /= 10
-    if number == 0 {
-      break
-    }
+    if number == 0 { break }
   }
   return destination[at..]
 }
 
 fn h3_stop(worker: *Worker) {
-  if worker.quic_listener == nil {
-    return
-  }
+  if worker.quic_listener == nil { return }
   _ = event.remove(&worker.queue, worker.udp)
   worker.config.quic.close_listener(worker.quic_listener)
   worker.quic_listener = nil
@@ -225,16 +211,12 @@ fn alt_svc(worker: *Worker) []const u8 {
 // Runs every pending QUIC event: new connections, streams, request bytes.
 // Then flushes what handlers wrote.
 fn h3_poll(worker: *Worker) {
-  if worker.quic_listener == nil {
-    return
-  }
+  if worker.quic_listener == nil { return }
   quic := worker.config.quic
   worker.quic_timer = quic.handle_events(worker.quic_listener)
   for {
     handle := quic.accept_connection(worker.quic_listener)
-    if handle == nil {
-      break
-    }
+    if handle == nil { break }
     h3_accept(worker, handle)
   }
   // Backwards: closing swaps the last connection into the closed one's place.
@@ -300,14 +282,10 @@ fn h3_accept(worker: *Worker, handle: rawptr) {
 fn h3_control(worker: *Worker, connection: *Connection) {
   h2 := connection.h2
   quic := worker.config.quic
-  if h2.control_sent == h2.control_length {
-    return
-  }
+  if h2.control_sent == h2.control_length { return }
   if h2.control == nil {
     h2.control = quic.open_stream(h2.handle)
-    if h2.control == nil {
-      return
-    }
+    if h2.control == nil { return }
   }
   written := quic.write(h2.control, h2.control_bytes[h2.control_sent..h2.control_length], false)
   if written.status == QuicStatus.Failed {
@@ -328,9 +306,7 @@ fn h3_service(worker: *Worker, index: usize) bool {
   h3_control(worker, connection)
   for {
     accepted := quic.accept_stream(h2.handle)
-    if accepted.handle == nil {
-      break
-    }
+    if accepted.handle == nil { break }
     connection.last_active = now_milliseconds()
     if accepted.unidirectional {
       if h2.uni_count == UniStreams {
@@ -345,13 +321,9 @@ fn h3_service(worker: *Worker, index: usize) bool {
     }
     h3_open_request(worker, index, accepted)
   }
-  if !h3_read_uni(worker, connection) {
-    return false
-  }
+  if !h3_read_uni(worker, connection) { return false }
   for i in 0..Http2Streams {
-    if !connection.active || connection.close_after {
-      break
-    }
+    if !connection.active || connection.close_after { break }
     stream := &h2.streams[i]
     if stream.handle != nil && !stream.ended && (stream.phase == Phase.Receiving || stream.phase == Phase.Large) {
       h3_read_stream(worker, index, i)
@@ -369,9 +341,7 @@ fn h3_read_uni(worker: *Worker, connection: *Connection) bool {
     for {
       chunk: [512]u8
       read := quic.read(h2.uni[i], chunk[..])
-      if read.status == QuicStatus.WouldBlock {
-        break
-      }
+      if read.status == QuicStatus.WouldBlock { break }
       if read.status != QuicStatus.Ok {
         if h2.uni_type[i] == StreamControl {
           h2.close_code = H3ClosedCriticalStream
@@ -434,9 +404,7 @@ fn h3_read_stream(worker: *Worker, index: usize, stream_index: usize) {
       return
     }
     read := quic.read(stream.handle, buffer)
-    if read.status == QuicStatus.WouldBlock {
-      return
-    }
+    if read.status == QuicStatus.WouldBlock { return }
     if read.status == QuicStatus.End {
       h3_finished(worker, index, stream_index)
       return
@@ -462,9 +430,7 @@ fn h3_frames(worker: *Worker, index: usize, stream_index: usize, input: []const 
   at: usize = 0
   for at < #len(input) {
     stream := &connection.h2.streams[stream_index]
-    if stream.phase != Phase.Receiving && stream.phase != Phase.Large {
-      return
-    }
+    if stream.phase != Phase.Receiving && stream.phase != Phase.Large { return }
     if !stream.in_frame {
       room := #len(stream.frame_head) - stream.frame_head_used
       count := #len(input) - at
@@ -493,15 +459,11 @@ fn h3_frames(worker: *Worker, index: usize, stream_index: usize, input: []const 
       stream.in_frame = true
       stream.frame_type = kind.value
       stream.frame_left = length.value
-      if !h3_frame_start(worker, index, stream_index) {
-        return
-      }
+      if !h3_frame_start(worker, index, stream_index) { return }
       stream = &connection.h2.streams[stream_index]
       if stream.frame_left == 0 {
         stream.in_frame = false
-        if !h3_frame_end(worker, index, stream_index) {
-          return
-        }
+        if !h3_frame_end(worker, index, stream_index) { return }
       }
       continue
     }
@@ -592,21 +554,15 @@ fn h3_frame_end(worker: *Worker, index: usize, stream_index: usize) bool {
 fn h3_decode(worker: *Worker, block: []const u8) usize {
   pool := &worker.h2
   prefix := qpack.decode_prefix(block)
-  if !prefix.ok {
-    return 0xffffffffffffffff
-  }
+  if !prefix.ok { return 0xffffffffffffffff }
   used: usize = 0
   at := prefix.consumed
   for at < #len(block) {
     field := qpack.decode_field(block[at..], pool.head)
-    if parse.failed(field.failure) {
-      return 0xffffffffffffffff
-    }
+    if parse.failed(field.failure) { return 0xffffffffffffffff }
     at += field.consumed
     need := 4 + #len(field.name) + #len(field.value)
-    if need > #len(pool.fields) - used {
-      return 0xfffffffffffffffe
-    }
+    if need > #len(pool.fields) - used { return 0xfffffffffffffffe }
     pool.fields[used] = #cast(u8, #len(field.name) >> 8)
     pool.fields[used + 1] = #cast(u8, #len(field.name))
     pool.fields[used + 2] = #cast(u8, #len(field.value) >> 8)
@@ -626,9 +582,7 @@ fn h3_body(worker: *Worker, index: usize, stream_index: usize, data: []const u8)
   if stream.phase == Phase.Receiving && stream.head_length + stream.body_length + #len(data) > #len(stream.storage) {
     grow_stream(worker, index, stream_index, stream.body_length + #len(data))
     stream = &h2.streams[stream_index]
-    if stream.phase != Phase.Receiving && stream.phase != Phase.Large {
-      return
-    }
+    if stream.phase != Phase.Receiving && stream.phase != Phase.Large { return }
   }
   if stream.phase == Phase.Large {
     slot := &worker.h2.slots[stream.slot - 1]
@@ -705,12 +659,8 @@ fn h3_write(worker: *Worker, connection: *Connection, stream_index: usize, sourc
   quic := worker.config.quic
   stream := &connection.h2.streams[stream_index]
   handle := stream.handle
-  if handle == nil || stream.reset {
-    return true
-  }
-  if !blocking && quic.writable(handle) < #len(source) {
-    return false
-  }
+  if handle == nil || stream.reset { return true }
+  if !blocking && quic.writable(handle) < #len(source) { return false }
   at: usize = 0
   started := now_milliseconds()
   for at < #len(source) || conclude {
@@ -720,12 +670,8 @@ fn h3_write(worker: *Worker, connection: *Connection, stream_index: usize, sourc
       written = quic.write(handle, source[at..at], true)
     }
     at += written.count
-    if written.status == QuicStatus.Failed {
-      return false
-    }
-    if written.status == QuicStatus.Ok && last {
-      return true
-    }
+    if written.status == QuicStatus.Failed { return false }
+    if written.status == QuicStatus.Ok && last { return true }
     if written.status == QuicStatus.WouldBlock {
       if !blocking || now_milliseconds() - started > #cast(i64, connection.write_timeout) {
         return false
@@ -747,9 +693,7 @@ fn h3_send_headers(worker: *Worker, connection: *Connection, stream_index: usize
   head: [16]u8
   used := write_varint(head[..], FrameH3Headers)
   used += write_varint(head[used..], #cast(u64, #len(block)))
-  if !h3_write(worker, connection, stream_index, head[..used], false, blocking) {
-    return false
-  }
+  if !h3_write(worker, connection, stream_index, head[..used], false, blocking) { return false }
   return h3_write(worker, connection, stream_index, block, end, blocking)
 }
 
@@ -777,12 +721,8 @@ fn h3_send_data(worker: *Worker, connection: *Connection, stream_index: usize, d
       return false
     }
     rest = rest[count..]
-    if last {
-      return true
-    }
+    if last { return true }
   }
-  if end {
-    return h3_write(worker, connection, stream_index, rest, true, blocking)
-  }
+  if end { return h3_write(worker, connection, stream_index, rest, true, blocking) }
   return true
 }

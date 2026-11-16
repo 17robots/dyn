@@ -8,9 +8,7 @@ fn native_clock(monotonic: bool) ClockResult {
     clock = 1
   }
   code := #syscall(sys.ClockGettime, clock, &value)
-  if code < 0 {
-    return ClockResult{ failure: io.linux_failure(code) }
-  }
+  if code < 0 { return ClockResult{ failure: io.linux_failure(code) } }
   return ClockResult{ value: value }
 }
 fn native_sleep(duration: i64) SleepResult {
@@ -21,8 +19,6 @@ fn native_sleep(duration: i64) SleepResult {
     request = remaining
     code = #syscall(sys.Nanosleep, &request, &remaining)
   }
-  if code < 0 {
-    return SleepResult{ failure: io.linux_failure(code) }
-  }
+  if code < 0 { return SleepResult{ failure: io.linux_failure(code) } }
   return SleepResult{}
 }

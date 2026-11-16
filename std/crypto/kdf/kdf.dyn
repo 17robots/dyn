@@ -2,9 +2,7 @@ use "std/crypto/core" crypto_core
 use "std/bytes" bytes
 
 pub fn hkdf_extract(destination: []u8, salt: []const u8, input_key_material: []const u8) []u8 {
-  if #len(destination) < 32 {
-    return destination[..0]
-  }
+  if #len(destination) < 32 { return destination[..0] }
   zero_salt: [32]u8
   actual_salt := salt
   if #len(actual_salt) == 0 {
@@ -64,8 +62,6 @@ pub fn hkdf_expand(destination: []u8, pseudorandom_key: []const u8, info: []cons
 
 pub fn hkdf(destination: []u8, salt: []const u8, input_key_material: []const u8, info: []const u8, scratch: []u8) bool {
   extracted: [32]u8
-  if #len(hkdf_extract(extracted[..], salt, input_key_material)) != 32 {
-    return false
-  }
+  if #len(hkdf_extract(extracted[..], salt, input_key_material)) != 32 { return false }
   return hkdf_expand(destination, extracted[..], info, scratch)
 }

@@ -9,9 +9,7 @@ fn open_flags(path: []const u8, flags: usize, mode: usize) FileResult {
     return FileResult{ failure: io.Failure{ kind: io.Kind.InvalidInput, native: -36 } }
   }
   descriptor := #syscall(sys.Openat, -100, raw, flags | 524288, mode)
-  if descriptor < 0 {
-    return FileResult{ failure: io.linux_failure(descriptor) }
-  }
+  if descriptor < 0 { return FileResult{ failure: io.linux_failure(descriptor) } }
   return FileResult{ value: owned_file(descriptor) }
 }
 
@@ -29,15 +27,9 @@ fn native_create_exclusive(path: []const u8) FileResult {
 }
 
 fn native_open(path: []const u8, mode: u8) FileResult {
-  if mode == 1 {
-    return native_create(path)
-  }
-  if mode == 2 {
-    return native_append(path)
-  }
-  if mode == 3 {
-    return native_create_exclusive(path)
-  }
+  if mode == 1 { return native_create(path) }
+  if mode == 2 { return native_append(path) }
+  if mode == 3 { return native_create_exclusive(path) }
   return native_open_read(path)
 }
 fn native_close(handle: isize) isize {

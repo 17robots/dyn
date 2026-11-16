@@ -11,25 +11,19 @@ const unwind_hint_count: usize = 64
 // Private anonymous read-write pages through the mmap syscall; zero on failure.
 fn runtime_pages(bytes: u64) u64 {
   address := syscall_raw(197, 0, #cast(i64, bytes), 3, 4098, -1, 0)
-  if address <= 0 {
-    return 0
-  }
+  if address <= 0 { return 0 }
   return #cast(u64, address)
 }
 fn thread_id() u64 {
   return #cast(usize, pthread_self())
 }
 fn trace_write(data: *const u8, size: u64) {
-  if size == 0 {
-    return
-  }
+  if size == 0 { return }
   bytes := #slice(data, #cast(usize, size))
   offset: usize = 0
   for offset < #len(bytes) {
     written := syscall_raw(4, 2, #cast(i64, #cast(usize, &bytes[offset])), #cast(i64, (#len(bytes) - offset)), 0, 0, 0)
-    if written <= 0 {
-      return
-    }
+    if written <= 0 { return }
     offset += #cast(usize, written)
   }
 }
@@ -68,9 +62,7 @@ fn fault_handler(_signal: i32, _information: rawptr, context: rawptr) {
 }
 fn trace_thread_started() {
   base := runtime_pages(fault_stack_size)
-  if base == 0 {
-    return
-  }
+  if base == 0 { return }
   stack := SignalStack{ base: #cast(usize, base), size: #cast(usize, fault_stack_size) }
   _ = signal_stack(&stack, nil)
   action := SignalAction{ handler: #cast(usize, #cast(rawptr, fault_handler)), flags: signal_on_stack | signal_information }

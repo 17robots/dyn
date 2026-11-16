@@ -8,30 +8,20 @@ type Result = codec.Result
 // Source and destination must not overlap. All failures leave destination unchanged.
 
 fn symbol(value: u8) u8 {
-  if value < 26 {
-    return 'A' + value
-  }
+  if value < 26 { return 'A' + value }
   return '2' + value - 26
 }
 
 fn decode_symbol(byte: u8) u8 {
-  if byte >= 'A' && byte <= 'Z' {
-    return byte - 'A'
-  }
-  if byte >= 'a' && byte <= 'z' {
-    return byte - 'a'
-  }
-  if byte >= '2' && byte <= '7' {
-    return byte - '2' + 26
-  }
+  if byte >= 'A' && byte <= 'Z' { return byte - 'A' }
+  if byte >= 'a' && byte <= 'z' { return byte - 'a' }
+  if byte >= '2' && byte <= '7' { return byte - '2' + 26 }
   return 255
 }
 
 fn encoded_size(length: usize) usize {
   maximum := #cast(usize, -1)
-  if length > maximum - 4 || (length + 4) / 5 > maximum / 8 {
-    return 0
-  }
+  if length > maximum - 4 || (length + 4) / 5 > maximum / 8 { return 0 }
   return ((length + 4) / 5) * 8
 }
 
@@ -74,26 +64,20 @@ fn encode_into(destination: []u8, source: []const u8) Result {
 }
 
 fn decoded_extent(source: []const u8) usize {
-  if #len(source) == 0 {
-    return 0
-  }
+  if #len(source) == 0 { return 0 }
   padding: usize = 0
   at := #len(source)
   for at > 0 && source[at - 1] == '=' {
     padding += 1
     at -= 1
   }
-  if #len(source) % 8 != 0 || padding > 6 {
-    return 0
-  }
+  if #len(source) % 8 != 0 || padding > 6 { return 0 }
   return (#len(source) / 8) * 5 - (padding * 5 + 7) / 8
 }
 
 fn decode_pass(destination: []u8, source: []const u8, write: bool, offset: *usize) Result {
   offset.* = #len(source)
-  if #len(source) == 0 {
-    return Result{ data: destination[..0] }
-  }
+  if #len(source) == 0 { return Result{ data: destination[..0] } }
   if #len(source) % 8 != 0 {
     return Result{ data: destination[..0], failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
@@ -153,9 +137,7 @@ fn decode_pass(destination: []u8, source: []const u8, write: bool, offset: *usiz
 fn decode_into(destination: []u8, source: []const u8) Result {
   offset: usize = 0
   measured := decode_pass(destination[..0], source, false, &offset)
-  if parse.failed(measured.failure) {
-    return measured
-  }
+  if parse.failed(measured.failure) { return measured }
   if measured.required > #len(destination) {
     return Result{ failure: parse.Failure{ kind: parse.Kind.Capacity }, required: measured.required }
   }

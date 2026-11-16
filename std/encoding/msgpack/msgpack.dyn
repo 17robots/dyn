@@ -36,17 +36,13 @@ fn accept(state: *Reader, token: Token) parse.Kind {
     state.remaining[state.depth - 1] -= 1
   }
   if token.kind == Kind.Array || token.kind == Kind.Map {
-    if token.value > 0xffffffff {
-      return parse.Kind.Syntax
-    }
+    if token.value > 0xffffffff { return parse.Kind.Syntax }
     count := token.value
     if token.kind == Kind.Map {
       count *= 2
     }
     if count != 0 {
-      if state.depth == #len(state.remaining) {
-        return parse.Kind.Capacity
-      }
+      if state.depth == #len(state.remaining) { return parse.Kind.Capacity }
       state.remaining[state.depth] = count
       state.depth += 1
     }
@@ -65,9 +61,7 @@ pub fn next(state: *Reader) Result {
   }
   start := state.offset
   if start == #len(state.source) {
-    if !complete(state) {
-      return fail(state, start, parse.Kind.Syntax)
-    }
+    if !complete(state) { return fail(state, start, parse.Kind.Syntax) }
     return Result{ offset: start }
   }
   tag := state.source[start]
@@ -135,9 +129,7 @@ pub fn next(state: *Reader) Result {
       size = 4
     }
   }
-  if size > #len(state.source) - at {
-    return fail(state, at, parse.Kind.Syntax)
-  }
+  if size > #len(state.source) - at { return fail(state, at, parse.Kind.Syntax) }
   if size != 0 {
     raw := number(state.source[at..at+size])
     at += size
@@ -155,16 +147,12 @@ pub fn next(state: *Reader) Result {
     }
   }
   if token.kind == Kind.Extension {
-    if at == #len(state.source) {
-      return fail(state, at, parse.Kind.Syntax)
-    }
+    if at == #len(state.source) { return fail(state, at, parse.Kind.Syntax) }
     token.extension = #cast(i8, state.source[at])
     at += 1
   }
   if payload {
-    if token.value > (#len(state.source) - at) {
-      return fail(state, at, parse.Kind.Syntax)
-    }
+    if token.value > (#len(state.source) - at) { return fail(state, at, parse.Kind.Syntax) }
     count := #cast(usize, token.value)
     token.bytes = state.source[at..at+count]
     at += count
@@ -175,14 +163,10 @@ pub fn next(state: *Reader) Result {
     if token.kind == Kind.Map {
       minimum *= 2
     }
-    if minimum > (#len(state.source) - at) {
-      return fail(state, at, parse.Kind.Syntax)
-    }
+    if minimum > (#len(state.source) - at) { return fail(state, at, parse.Kind.Syntax) }
   }
   kind := accept(state, token)
-  if kind != parse.Kind.Ok {
-    return fail(state, start, kind)
-  }
+  if kind != parse.Kind.Ok { return fail(state, start, kind) }
   state.offset = at
   return Result{ value: token, offset: start, found: true }
 }
@@ -193,116 +177,58 @@ fn put(output: []u8, at: *usize, value: u64, size: usize) {
   at.* += size
 }
 fn header(token: Token) u8 {
-  if token.kind == Kind.Nil {
-    return 0xc0
-  }
+  if token.kind == Kind.Nil { return 0xc0 }
   if token.kind == Kind.Bool {
-    if token.boolean {
-      return 0xc3
-    }
+    if token.boolean { return 0xc3 }
     return 0xc2
   }
-  if token.kind == Kind.Signed {
-    return 0xd3
-  }
-  if token.kind == Kind.Float {
-    return 0xcb
-  }
+  if token.kind == Kind.Signed { return 0xd3 }
+  if token.kind == Kind.Float { return 0xcb }
   if token.kind == Kind.Unsigned {
-    if token.value < 128 {
-      return #cast(u8, token.value)
-    }
-    if token.value <= 255 {
-      return 0xcc
-    }
-    if token.value <= 65535 {
-      return 0xcd
-    }
-    if token.value <= 0xffffffff {
-      return 0xce
-    }
+    if token.value < 128 { return #cast(u8, token.value) }
+    if token.value <= 255 { return 0xcc }
+    if token.value <= 65535 { return 0xcd }
+    if token.value <= 0xffffffff { return 0xce }
     return 0xcf
   }
   if token.kind == Kind.Array {
-    if token.value < 16 {
-      return 0x90 | #cast(u8, token.value)
-    }
-    if token.value <= 65535 {
-      return 0xdc
-    }
+    if token.value < 16 { return 0x90 | #cast(u8, token.value) }
+    if token.value <= 65535 { return 0xdc }
     return 0xdd
   }
   if token.kind == Kind.Map {
-    if token.value < 16 {
-      return 0x80 | #cast(u8, token.value)
-    }
-    if token.value <= 65535 {
-      return 0xde
-    }
+    if token.value < 16 { return 0x80 | #cast(u8, token.value) }
+    if token.value <= 65535 { return 0xde }
     return 0xdf
   }
   length := #len(token.bytes)
   if token.kind == Kind.Text {
-    if length < 32 {
-      return 0xa0 | #cast(u8, length)
-    }
-    if length <= 255 {
-      return 0xd9
-    }
-    if length <= 65535 {
-      return 0xda
-    }
+    if length < 32 { return 0xa0 | #cast(u8, length) }
+    if length <= 255 { return 0xd9 }
+    if length <= 65535 { return 0xda }
     return 0xdb
   }
   if token.kind == Kind.Extension {
-    if length == 1 {
-      return 0xd4
-    }
-    if length == 2 {
-      return 0xd5
-    }
-    if length == 4 {
-      return 0xd6
-    }
-    if length == 8 {
-      return 0xd7
-    }
-    if length == 16 {
-      return 0xd8
-    }
-    if length <= 255 {
-      return 0xc7
-    }
-    if length <= 65535 {
-      return 0xc8
-    }
+    if length == 1 { return 0xd4 }
+    if length == 2 { return 0xd5 }
+    if length == 4 { return 0xd6 }
+    if length == 8 { return 0xd7 }
+    if length == 16 { return 0xd8 }
+    if length <= 255 { return 0xc7 }
+    if length <= 65535 { return 0xc8 }
     return 0xc9
   }
-  if length <= 255 {
-    return 0xc4
-  }
-  if length <= 65535 {
-    return 0xc5
-  }
+  if length <= 255 { return 0xc4 }
+  if length <= 65535 { return 0xc5 }
   return 0xc6
 }
 fn extra(tag: u8) usize {
-  if tag >= 0xcc && tag <= 0xcf {
-    return #cast(usize, 1) << #cast(usize, tag - 0xcc)
-  }
-  if tag == 0xd3 || tag == 0xcb {
-    return 8
-  }
-  if tag >= 0xc4 && tag <= 0xc9 {
-    return #cast(usize, 1) << #cast(usize, (tag - 0xc4) % 3)
-  }
-  if tag >= 0xd9 && tag <= 0xdb {
-    return #cast(usize, 1) << #cast(usize, tag - 0xd9)
-  }
+  if tag >= 0xcc && tag <= 0xcf { return #cast(usize, 1) << #cast(usize, tag - 0xcc) }
+  if tag == 0xd3 || tag == 0xcb { return 8 }
+  if tag >= 0xc4 && tag <= 0xc9 { return #cast(usize, 1) << #cast(usize, (tag - 0xc4) % 3) }
+  if tag >= 0xd9 && tag <= 0xdb { return #cast(usize, 1) << #cast(usize, tag - 0xd9) }
   if tag >= 0xdc && tag <= 0xdf {
-    if (tag & 1) != 0 {
-      return 4
-    }
+    if (tag & 1) != 0 { return 4 }
     return 2
   }
   return 0

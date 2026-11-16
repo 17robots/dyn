@@ -115,9 +115,7 @@ struct Command {
 fn split_command(line: []const u8) Command {
   text := strings.trim(line)
   space := bytes.find_byte(text, ' ')   // #len(text) when there is no space
-  if space == #len(text) {
-    return Command{ name: text }
-  }
+  if space == #len(text) { return Command{ name: text } }
   return Command{ name: text[..space], rest: strings.trim(text[space + 1..]) }
 }
 
@@ -176,8 +174,6 @@ fn main() {
     run(&journal, frame, line[..read.transferred])
     // Everything the command put in frame is gone now, all at once.
     mem.arena_reset(frame)
-    if read.status == bufio.ReadStatus.End {
-      return
-    }
+    if read.status == bufio.ReadStatus.End { return }
   }
 }

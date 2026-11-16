@@ -52,17 +52,11 @@ pub fn finish(destination: *Trace, span: Span) Result {
     return fail(destination, finished.failure.kind, finished.failure.native)
   }
   duration := clock.elapsed(span.started.value, finished.value)
-  if io.failed(duration.failure) {
-    return fail(destination, io.Kind.Overflow, 0)
-  }
+  if io.failed(duration.failure) { return fail(destination, io.Kind.Overflow, 0) }
   scaled := span.started.value.seconds
-  if scaled > 9223372036 || scaled < -9223372036 {
-    return fail(destination, io.Kind.Overflow, 0)
-  }
+  if scaled > 9223372036 || scaled < -9223372036 { return fail(destination, io.Kind.Overflow, 0) }
   absolute := clock.checked_add(scaled * clock.Second, span.started.value.nanoseconds)
-  if io.failed(absolute.failure) {
-    return fail(destination, io.Kind.Overflow, 0)
-  }
+  if io.failed(absolute.failure) { return fail(destination, io.Kind.Overflow, 0) }
   destination.events[destination.count] = Event{
     name: span.name,
     started_nanoseconds: absolute.value,

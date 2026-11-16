@@ -42,9 +42,7 @@ pub fn close(renderer: *Renderer) {
   }
 }
 fn append(build: *Build, bounds: ui.Rect, tint: ui.Color, glyph: *const software.Glyph, source_x, source_y: usize) {
-  if bounds.width <= 0 || bounds.height <= 0 || tint.a == 0 {
-    return
-  }
+  if bounds.width <= 0 || bounds.height <= 0 || tint.a == 0 { return }
   if build.count >= build.limits.draws {
     build.kind = io.Kind.Capacity
     return
@@ -85,9 +83,7 @@ fn glyph(build: *Build, clip: ui.Rect, tint: ui.Color, font: software.Font, code
     build.kind = io.Kind.InvalidInput
     return 0
   }
-  if bitmap.width == 0 || bitmap.height == 0 {
-    return bitmap.advance
-  }
+  if bitmap.width == 0 || bitmap.height == 0 { return bitmap.advance }
   if bitmap.stride < #cast(usize, bitmap.width) || #cast(usize, bitmap.width) > #len(bitmap.pixels) {
     build.kind = io.Kind.InvalidInput
     return 0
@@ -129,9 +125,7 @@ pub fn render(renderer: *Renderer, scratch: *mem.Arena, surface: *software.Surfa
   if surface.width < 0 || surface.height < 0 {
     return Result{ kind:io.Kind.InvalidInput, failure: io.Failure{ kind: io.Kind.System } }
   }
-  if surface.width == 0 || surface.height == 0 {
-    return Result{}
-  }
+  if surface.width == 0 || surface.height == 0 { return Result{} }
   width := #cast(usize, surface.width)
   height := #cast(usize, surface.height)
   if width > #len(surface.pixels)/4 || surface.stride < width*4 || height > #len(surface.pixels)/surface.stride {
@@ -183,9 +177,7 @@ pub fn render(renderer: *Renderer, scratch: *mem.Arena, surface: *software.Surfa
     }
     command = command.next
   }
-  if build.count == 0 {
-    return Result{}
-  }
+  if build.count == 0 { return Result{} }
   max_words := #max(usize)/4
   if max_words > 0xffffffff {
     max_words = 0xffffffff

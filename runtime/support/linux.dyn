@@ -7,25 +7,19 @@ const unwind_hint_count: usize = 64
 // them on first touch.
 fn runtime_pages(bytes: u64) u64 {
   address := syscall_raw(mmap_number(), 0, #cast(i64, bytes), 3, 34, -1, 0)
-  if address < 0 {
-    return 0
-  }
+  if address < 0 { return 0 }
   return #cast(u64, address)
 }
 fn thread_id() u64 {
   return #cast(u64, syscall_raw(thread_number(), 0, 0, 0, 0, 0, 0))
 }
 fn trace_write(data: *const u8, size: u64) {
-  if size == 0 {
-    return
-  }
+  if size == 0 { return }
   bytes := #slice(data, #cast(usize, size))
   offset: usize = 0
   for offset < #len(bytes) {
     written := syscall_raw(write_number(), 2, #cast(i64, #cast(usize, &bytes[offset])), #cast(i64, (#len(bytes) - offset)), 0, 0, 0)
-    if written <= 0 {
-      return
-    }
+    if written <= 0 { return }
     offset += #cast(usize, written)
   }
 }
@@ -47,9 +41,7 @@ fn fault_handler(_signal: i32, _information: rawptr, context: rawptr) {
 }
 pub fn dyn_fault_install() {
   stack := SignalStack{ base: runtime_pages(fault_stack_size), size: fault_stack_size }
-  if stack.base == 0 {
-    return
-  }
+  if stack.base == 0 { return }
   _ = syscall_raw(sigaltstack_number(), #cast(i64, #cast(usize, &stack)), 0, 0, 0, 0, 0)
   handler := #cast(usize, #cast(rawptr, fault_handler))
   action := SignalAction{ handler: handler, flags: signal_on_stack | signal_information | signal_restorer_flag(), restorer: signal_restorer(handler) }

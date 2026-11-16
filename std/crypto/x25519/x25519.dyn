@@ -3,9 +3,7 @@ use "std/crypto/curve25519" field
 // destination must have at least 32 bytes. Inputs are
 // copied before writing, permitting in-place use. All-zero shared secrets fail.
 pub fn shared(destination: []u8, private_key: []const u8, peer: []const u8) bool {
-  if #len(destination)<32 || #len(private_key)!=32 || #len(peer)!=32 {
-    return false
-  }
+  if #len(destination)<32 || #len(private_key)!=32 || #len(peer)!=32 { return false }
   scalar: [32]u8
   for i in 0..32 {
     scalar[i]=private_key[i]

@@ -17,9 +17,7 @@ fn parse_cents(text: []const u8) parse.Result(Cents) {
   }
   dot := bytes.find_byte(digits, '.')       // #len(digits) when absent
   whole := parse.u64_decimal(digits[..dot])
-  if parse.failed(whole.failure) {
-    return parse.Result(Cents){ failure: whole.failure }
-  }
+  if parse.failed(whole.failure) { return parse.Result(Cents){ failure: whole.failure } }
   fraction: u64 = 0
   if dot < #len(digits) {
     decimals := digits[dot + 1..]

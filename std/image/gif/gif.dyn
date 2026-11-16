@@ -38,9 +38,7 @@ fn byte(bits: *Bits) u8 {
 fn code(bits: *Bits, width: u8) u16 {
   for bits.count < width {
     next := byte(bits)
-    if bits.failed {
-      return 0
-    }
+    if bits.failed { return 0 }
     bits.buffer |= #cast(u32, next) << bits.count
     bits.count += 8
   }
@@ -50,9 +48,7 @@ fn code(bits: *Bits, width: u8) u16 {
   return value
 }
 fn finish(bits: *Bits) {
-  if bits.failed {
-    return
-  }
+  if bits.failed { return }
   bits.at += bits.remaining
   bits.remaining = 0
   for true {
@@ -78,12 +74,8 @@ fn skip(source: []const u8, start: usize) usize {
   for at < #len(source) {
     length := #cast(usize, source[at])
     at += 1
-    if length == 0 {
-      return at
-    }
-    if length > #len(source) - at {
-      return #len(source) + 1
-    }
+    if length == 0 { return at }
+    if length > #len(source) - at { return #len(source) + 1 }
     at += length
   }
   return #len(source) + 1
@@ -220,9 +212,7 @@ pub fn decode(arena: *mem.Arena, source: []const u8) Result {
         old = -1
         continue
       }
-      if incoming == end {
-        break
-      }
+      if incoming == end { break }
       current := incoming
       used: usize = 0
       if old < 0 {

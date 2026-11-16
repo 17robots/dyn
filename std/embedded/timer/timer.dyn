@@ -15,9 +15,7 @@ pub fn now(timer: *const MachineTimer) u64 {
     high := mmio.load_u32(timer.time + 4)
     low := mmio.load_u32(timer.time)
     again := mmio.load_u32(timer.time + 4)
-    if high == again {
-      return (#cast(u64, high) << 32) | #cast(u64, low)
-    }
+    if high == again { return (#cast(u64, high) << 32) | #cast(u64, low) }
   }
   return 0
 }

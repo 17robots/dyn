@@ -4,9 +4,7 @@ use "std/os/linux/sys"
 const DefaultBlock: usize = 64 * GiB
 fn mapping_allocate(size: usize) Mapping {
   address := #syscall(sys.Mmap, 0, size, 3, 16418, -1, 0)
-  if address < 0 {
-    return Mapping{ error: address }
-  }
+  if address < 0 { return Mapping{ error: address } }
   // With transparent huge pages set to "always", the first touch of a large
   // aligned reservation faults a whole 2 MiB page, so every small arena would
   // cost 2 MiB resident. Opt only the leading 2 MiB out; bigger arenas still
@@ -28,9 +26,7 @@ fn mapping_commit(bytes: []u8, from: usize, to: usize) bool {
 
 // Huge pages off for the whole pages inside bytes (MADV_NOHUGEPAGE).
 fn mapping_sparse(bytes: []u8) {
-  if #len(bytes) == 0 {
-    return
-  }
+  if #len(bytes) == 0 { return }
   start := (#cast(usize, &bytes[0]) + 4095) & ~#cast(usize, 4095)
   end := (#cast(usize, &bytes[0]) + #len(bytes)) & ~#cast(usize, 4095)
   if end > start {

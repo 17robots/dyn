@@ -24,9 +24,7 @@ pub fn next(state: *Reader) FieldResult {
     return FieldResult{ offset: state.error_offset, failure: parse.Failure{ kind: state.kind, offset: state.error_offset } }
   }
   if state.offset == #len(state.source) {
-    if state.depth != 0 {
-      return fail(state, state.offset, parse.Kind.Syntax)
-    }
+    if state.depth != 0 { return fail(state, state.offset, parse.Kind.Syntax) }
     return FieldResult{ offset: state.offset }
   }
   start := state.offset
@@ -39,39 +37,27 @@ pub fn next(state: *Reader) FieldResult {
   field := Field{ number: #cast(u32, key.value >> 3), wire: enums.from_int(Wire, #cast(u64, wire)) }
   if field.wire == Wire.Varint {
     value := binary.uleb128_decode(state.source[at..])
-    if !value.valid {
-      return fail(state, at, parse.Kind.Syntax)
-    }
+    if !value.valid { return fail(state, at, parse.Kind.Syntax) }
     field.value = value.value
     at += value.consumed
   } else if field.wire == Wire.Fixed64 {
-    if #len(state.source) - at < 8 {
-      return fail(state, at, parse.Kind.Syntax)
-    }
+    if #len(state.source) - at < 8 { return fail(state, at, parse.Kind.Syntax) }
     field.value = binary.load_u64_le(state.source[at..at+8])
     at += 8
   } else if field.wire == Wire.Fixed32 {
-    if #len(state.source) - at < 4 {
-      return fail(state, at, parse.Kind.Syntax)
-    }
+    if #len(state.source) - at < 4 { return fail(state, at, parse.Kind.Syntax) }
     field.value = binary.load_u32_le(state.source[at..at+4])
     at += 4
   } else if field.wire == Wire.Bytes {
     length := binary.uleb128_decode(state.source[at..])
-    if !length.valid {
-      return fail(state, at, parse.Kind.Syntax)
-    }
+    if !length.valid { return fail(state, at, parse.Kind.Syntax) }
     at += length.consumed
-    if length.value > (#len(state.source) - at) {
-      return fail(state, at, parse.Kind.Syntax)
-    }
+    if length.value > (#len(state.source) - at) { return fail(state, at, parse.Kind.Syntax) }
     count := #cast(usize, length.value)
     field.bytes = state.source[at..at+count]
     at += count
   } else if field.wire == Wire.StartGroup {
-    if state.depth == #len(state.groups) {
-      return fail(state, start, parse.Kind.Capacity)
-    }
+    if state.depth == #len(state.groups) { return fail(state, start, parse.Kind.Capacity) }
     state.groups[state.depth] = field.number
     state.depth += 1
   } else {

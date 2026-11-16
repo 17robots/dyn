@@ -50,9 +50,7 @@ fn line_append(output: *Output, line: Line) {
   }
 }
 fn level(cluster: Cluster, adjusted: []i8, first_scalar: usize) i8 {
-  if #len(adjusted)!=0 {
-    return adjusted[cluster.scalar-first_scalar]
-  }
+  if #len(adjusted)!=0 { return adjusted[cluster.scalar-first_scalar] }
   return cluster.level
 }
 fn shape(arena:*mem.Arena, api:*const hb.Api, text:[]const u8, clusters:[]Cluster, first, last:usize, adjusted:[]i8, first_scalar:usize, show_soft:bool) Span {
@@ -198,9 +196,7 @@ fn shape(arena:*mem.Arena, api:*const hb.Api, text:[]const u8, clusters:[]Cluste
   return Span{ runs:runs[..used], units:units[..unit_count] }
 }
 fn advance(unit: Unit, x, tab:f64) f64 {
-  if unit.tab {
-    return (math.floor64(x/tab)+1.0)*tab-x
-  }
+  if unit.tab { return (math.floor64(x/tab)+1.0)*tab-x }
   return unit.advance
 }
 fn cluster_index(clusters:[]Cluster, offset:usize) usize {
@@ -229,13 +225,9 @@ fn emit(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[]cons
   first_scalar:=scalar_index(paragraph, start)
   last_scalar:=scalar_index(paragraph, end)
   reordered:=bidi.reorder(work, bidi_api, paragraph, first_scalar, last_scalar)
-  if io.failed(reordered.failure) {
-    return reordered.kind
-  }
+  if io.failed(reordered.failure) { return reordered.kind }
   span:=shape(work, api, text, clusters, first, last, reordered.value.levels, first_scalar, end<#len(text))
-  if io.failed(span.failure) {
-    return span.kind
-  }
+  if io.failed(span.failure) { return span.kind }
   order:=mem.push_array(usize, work, #len(span.runs))
   seen:=mem.push_array(u8, work, #len(span.runs))
   count:usize=0
@@ -310,9 +302,7 @@ fn paragraph(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[
   work:=mem.arena_alloc(0)
   defer mem.arena_release(work)
   resolved:=bidi.resolve(work, bidi_api, text, options.base)
-  if io.failed(resolved.failure) {
-    return resolved.kind
-  }
+  if io.failed(resolved.failure) { return resolved.kind }
   count:=utf8.codepoint_count(text).value
   clusters:=mem.push_array(Cluster, work, count)
   used:usize=0
@@ -322,13 +312,9 @@ fn paragraph(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[
   for iterator.offset<#len(text) {
     start:=iterator.offset
     grapheme:=unicode.next_grapheme(&iterator)
-    if !grapheme.found {
-      return io.Kind.InvalidInput
-    }
+    if !grapheme.found { return io.Kind.InvalidInput }
     face:=font.select(font.data, grapheme.value)
-    if face.font==nil {
-      return io.Kind.NotFound
-    }
+    if face.font==nil { return io.Kind.NotFound }
     script:u32=0
     at:=start
     for at<iterator.offset {
@@ -369,16 +355,12 @@ fn paragraph(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[
     return emit(output, api, bidi_api, text, &resolved.value, clusters, 0, #len(text), base, font, tab)
   }
   breaks:=unicode.line_breaks(work, text)
-  if parse.failed(breaks.failure) {
-    return io.Kind.InvalidInput
-  }
+  if parse.failed(breaks.failure) { return io.Kind.InvalidInput }
   spans:=mem.arena_alloc(0)
   defer mem.arena_release(spans)
   adjusted:[0]i8
   measured:=shape(spans, api, text, clusters, 0, used, adjusted[..], 0, false)
-  if io.failed(measured.failure) {
-    return measured.kind
-  }
+  if io.failed(measured.failure) { return measured.kind }
   breaks_index:usize=0
   for u in 0..#len(measured.units) {
     for breaks_index<#len(breaks.value) && breaks.value[breaks_index].offset<measured.units[u].end {
@@ -398,9 +380,7 @@ fn paragraph(output:*Output, api:*const hb.Api, bidi_api:*const bidi.Api, text:[
       at:=u
       for at<#len(measured.units) {
         width:=advance(measured.units[at], x, tab)
-        if at>u && x+width>options.width {
-          break
-        }
+        if at>u && x+width>options.width { break }
         x+=width
         at+=1
         if measured.units[at-1].break_after {
@@ -590,13 +570,9 @@ pub fn at_point(layout:*const Layout, x, y:f64) Hit {
   if y>0.0 {
     line_index=#cast(usize, math.floor64(y/layout.line_height))
   }
-  if line_index>=#len(layout.lines) {
-    return cluster_at(layout, #len(layout.text))
-  }
+  if line_index>=#len(layout.lines) { return cluster_at(layout, #len(layout.text)) }
   line:=layout.lines[line_index]
-  if line.glyph_count==0 {
-    return hit(layout, line_index, line.start)
-  }
+  if line.glyph_count==0 { return hit(layout, line_index, line.start) }
   first:=layout.glyphs[line.glyph_start]
   if x<first.x {
     offset:=first.start
@@ -710,9 +686,7 @@ pub fn selection(arena: *mem.Arena, layout: *const Layout, start, end: usize) Se
   if arena==nil || layout==nil || start>end || end>#len(layout.text) || !utf8.valid(layout.text) || !selection_boundary(layout.text, start) || !selection_boundary(layout.text, end) {
     return SelectionResult{ kind:io.Kind.InvalidInput, failure: io.Failure{ kind: io.Kind.System } }
   }
-  if start==end {
-    return SelectionResult{}
-  }
+  if start==end { return SelectionResult{} }
   if layout.line_height<=0 {
     return SelectionResult{ kind:io.Kind.InvalidInput, failure: io.Failure{ kind: io.Kind.System } }
   }
@@ -736,9 +710,7 @@ pub fn selection(arena: *mem.Arena, layout: *const Layout, start, end: usize) Se
   if count>#max(usize)/#sizeof(SelectionRect) {
     return SelectionResult{ kind:io.Kind.Overflow, failure: io.Failure{ kind: io.Kind.System } }
   }
-  if count==0 {
-    return SelectionResult{}
-  }
+  if count==0 { return SelectionResult{} }
   rects:=mem.push_array(SelectionRect, arena, count)
   _=selection_walk(layout, start, end, rects)
   return SelectionResult{ value:rects }

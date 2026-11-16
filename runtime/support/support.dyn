@@ -38,14 +38,10 @@ fn chunk_at(address: u64) *UnwindChunk {
 fn unwind_grow() bool {
   bytes := #cast(u64, #sizeof(UnwindChunk))
   fresh := runtime_pages(bytes)
-  if fresh == 0 {
-    return false
-  }
+  if fresh == 0 { return false }
   link := &unwind_first
   for true {
-    if atomic_claim(link, 0, fresh) {
-      return true
-    }
+    if atomic_claim(link, 0, fresh) { return true }
     link = &chunk_at(atomic_load(link)).next
   }
   return false
@@ -55,18 +51,14 @@ fn unwind_slot(claim: bool) *UnwindSlot {
   tid := thread_id()
   first := atomic_load(&unwind_first)
   if first == 0 {
-    if !claim || !unwind_grow() {
-      return nil
-    }
+    if !claim || !unwind_grow() { return nil }
     first = atomic_load(&unwind_first)
   }
   head := chunk_at(first)
   // Nested cleanup on the first owner already needs only one atomic read.
   // Keep that path ahead of the hint, which benefits empty-stack registration.
   first_seen := atomic_load(&head.slots[0].tid)
-  if first_seen == tid {
-    return &head.slots[0]
-  }
+  if first_seen == tid { return &head.slots[0] }
   if tid != 0 && tid >> 58 == 0 {
     hint := atomic_load(&unwind_hints[#cast(usize, tid % unwind_hint_count)])
     index := #cast(usize, hint & 63)
@@ -76,12 +68,8 @@ fn unwind_slot(claim: bool) *UnwindSlot {
       if index != 0 {
         seen = atomic_load(&candidate.tid)
       }
-      if seen == tid {
-        return candidate
-      }
-      if claim && seen == 0 && atomic_claim(&candidate.tid, 0, tid) {
-        return candidate
-      }
+      if seen == tid { return candidate }
+      if claim && seen == 0 && atomic_claim(&candidate.tid, 0, tid) { return candidate }
     }
   }
   for true {
@@ -107,13 +95,9 @@ fn unwind_slot(claim: bool) *UnwindSlot {
       chunk = atomic_load(&chunk_at(chunk).next)
       base += unwind_chunk_slots
     }
-    if !claim {
-      return nil
-    }
+    if !claim { return nil }
     if empty == nil {
-      if !unwind_grow() {
-        return nil
-      }
+      if !unwind_grow() { return nil }
     } else if atomic_claim(&empty.tid, 0, tid) {
       unwind_remember(tid, empty_index)
       return empty
@@ -305,9 +289,7 @@ fn append_index(buffer: []u8, at: u64, value: u64) u64 {
     digits[count] = #cast(u8, magnitude % 10) + '0'
     count += 1
     magnitude /= 10
-    if magnitude == 0 {
-      break
-    }
+    if magnitude == 0 { break }
   }
   for count != 0 {
     count -= 1
@@ -322,9 +304,7 @@ pub fn fmod(input: f64, divisor: f64) f64 {
   sign := (#bitcast(u64, input)) & 0x8000000000000000
   x := #bitcast(f64, ((#bitcast(u64, input)) & 0x7fffffffffffffff))
   y := #bitcast(f64, ((#bitcast(u64, divisor)) & 0x7fffffffffffffff))
-  if x - x != 0.0 || y != y || y == 0.0 {
-    return (input * divisor) / (input * divisor)
-  }
+  if x - x != 0.0 || y != y || y == 0.0 { return (input * divisor) / (input * divisor) }
   scale := y
   for scale <= x * 0.5 {
     scale *= 2.0
@@ -333,9 +313,7 @@ pub fn fmod(input: f64, divisor: f64) f64 {
     if x >= scale {
       x -= scale
     }
-    if scale <= y {
-      break
-    }
+    if scale <= y { break }
     scale *= 0.5
   }
   return #bitcast(f64, ((#bitcast(u64, x)) | sign))
@@ -344,9 +322,7 @@ pub fn fmodf(input: f32, divisor: f32) f32 {
   sign := (#bitcast(u32, input)) & 0x80000000
   x := #bitcast(f32, ((#bitcast(u32, input)) & 0x7fffffff))
   y := #bitcast(f32, ((#bitcast(u32, divisor)) & 0x7fffffff))
-  if x - x != 0.0 || y != y || y == 0.0 {
-    return (input * divisor) / (input * divisor)
-  }
+  if x - x != 0.0 || y != y || y == 0.0 { return (input * divisor) / (input * divisor) }
   scale := y
   for scale <= x * 0.5 {
     scale *= 2.0
@@ -355,9 +331,7 @@ pub fn fmodf(input: f32, divisor: f32) f32 {
     if x >= scale {
       x -= scale
     }
-    if scale <= y {
-      break
-    }
+    if scale <= y { break }
     scale *= 0.5
   }
   return #bitcast(f32, ((#bitcast(u32, x)) | sign))

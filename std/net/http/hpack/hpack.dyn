@@ -86,14 +86,10 @@ struct Integer { value: usize, consumed: usize, ok: bool }
 
 // An integer with an N-bit prefix (RFC 7541 5.1), at most 2^28 or so.
 fn read_integer(block: []const u8, prefix: u8) Integer {
-  if #len(block) == 0 {
-    return Integer{}
-  }
+  if #len(block) == 0 { return Integer{} }
   mask := (#cast(usize, 1) << #cast(usize, prefix)) - 1
   value := #cast(usize, block[0]) & mask
-  if value < mask {
-    return Integer{ value: value, consumed: 1, ok: true }
-  }
+  if value < mask { return Integer{ value: value, consumed: 1, ok: true } }
   shift: usize = 0
   at: usize = 1
   for at < #len(block) {
@@ -101,12 +97,8 @@ fn read_integer(block: []const u8, prefix: u8) Integer {
     at += 1
     value += (#cast(usize, byte) & 127) << shift
     shift += 7
-    if (byte & 128) == 0 {
-      return Integer{ value: value, consumed: at, ok: true }
-    }
-    if shift > 21 {
-      return Integer{}
-    }
+    if (byte & 128) == 0 { return Integer{ value: value, consumed: at, ok: true } }
+    if shift > 21 { return Integer{} }
   }
   return Integer{}
 }
@@ -115,28 +107,20 @@ struct Text { length: usize, consumed: usize, ok: bool }
 
 // A string literal (RFC 7541 5.2) decoded into destination.
 fn read_string(block: []const u8, destination: []u8) Text {
-  if #len(block) == 0 {
-    return Text{}
-  }
+  if #len(block) == 0 { return Text{} }
   huffman := (block[0] & 0x80) != 0
   length := read_integer(block, 7)
-  if !length.ok || length.value > #len(block) - length.consumed {
-    return Text{}
-  }
+  if !length.ok || length.value > #len(block) - length.consumed { return Text{} }
   encoded := block[length.consumed..length.consumed + length.value]
   if !huffman {
-    if #len(encoded) > #len(destination) {
-      return Text{}
-    }
+    if #len(encoded) > #len(destination) { return Text{} }
     for i in 0..#len(encoded) {
       destination[i] = encoded[i]
     }
     return Text{ length: #len(encoded), consumed: length.consumed + length.value, ok: true }
   }
   decoded := huffman_decode(encoded, destination)
-  if !decoded.ok {
-    return Text{}
-  }
+  if !decoded.ok { return Text{} }
   return Text{ length: decoded.length, consumed: length.consumed + length.value, ok: true }
 }
 
@@ -156,21 +140,15 @@ pub fn huffman_decode(source: []const u8, destination: []u8) Decoded {
       first := FirstCode[length]
       if count != 0 && code >= first && code - first < count {
         symbol := DecodeSymbols[#cast(usize, FirstIndex[length]) + #cast(usize, code - first)]
-        if symbol == 256 || written == #len(destination) {
-          return Decoded{}
-        }
+        if symbol == 256 || written == #len(destination) { return Decoded{} }
         destination[written] = #cast(u8, symbol)
         written += 1
         code = 0
         length = 0
-      } else if length == 30 {
-        return Decoded{}
-      }
+      } else if length == 30 { return Decoded{} }
     }
   }
-  if length > 7 || code != (#cast(u32, 1) << #cast(u32, length)) - 1 {
-    return Decoded{}
-  }
+  if length > 7 || code != (#cast(u32, 1) << #cast(u32, length)) - 1 { return Decoded{} }
   return Decoded{ length: written, ok: true }
 }
 
@@ -279,15 +257,11 @@ struct Named { name: []const u8, value: []const u8, ok: bool }
 
 // Field index (RFC 7541 2.3.3): static first, then dynamic.
 fn lookup(table: *const Table, index: usize) Named {
-  if index == 0 {
-    return Named{}
-  }
+  if index == 0 { return Named{} }
   if index <= StaticCount {
     return Named{ name: static_name(index), value: static_value(index), ok: true }
   }
-  if index - StaticCount > table.count {
-    return Named{}
-  }
+  if index - StaticCount > table.count { return Named{} }
   entry := dynamic_entry(table, index - StaticCount)
   name := table.storage[entry.offset..entry.offset + entry.name_length]
   value := table.storage[entry.offset + entry.name_length..entry.offset + entry.name_length + entry.value_length]
@@ -295,9 +269,7 @@ fn lookup(table: *const Table, index: usize) Named {
 }
 
 fn copy_into(destination: []u8, source: []const u8) bool {
-  if #len(source) > #len(destination) {
-    return false
-  }
+  if #len(source) > #len(destination) { return false }
   for i in 0..#len(source) {
     destination[i] = source[i]
   }
@@ -309,17 +281,13 @@ fn copy_into(destination: []u8, source: []const u8) bool {
 // with Syntax for malformed input (a COMPRESSION_ERROR) and Capacity when
 // scratch is too small.
 pub fn decode_field(decoder: *Decoder, block: []const u8, scratch: []u8) Field {
-  if #len(block) == 0 {
-    return failed(parse.Kind.Truncated, 0)
-  }
+  if #len(block) == 0 { return failed(parse.Kind.Truncated, 0) }
   first := block[0]
   table := &decoder.table
   if (first & 0x80) != 0 {
     index := read_integer(block, 7)
     named := lookup(table, index.value)
-    if !index.ok || !named.ok {
-      return failed(parse.Kind.Syntax, 0)
-    }
+    if !index.ok || !named.ok { return failed(parse.Kind.Syntax, 0) }
     if !copy_into(scratch, named.name) || !copy_into(scratch[#len(named.name)..], named.value) {
       return failed(parse.Kind.Capacity, 0)
     }
@@ -342,32 +310,22 @@ pub fn decode_field(decoder: *Decoder, block: []const u8, scratch: []u8) Field {
     prefix = 6
   }
   index := read_integer(block, prefix)
-  if !index.ok {
-    return failed(parse.Kind.Syntax, 0)
-  }
+  if !index.ok { return failed(parse.Kind.Syntax, 0) }
   at := index.consumed
   name_length: usize = 0
   if index.value == 0 {
     name := read_string(block[at..], scratch)
-    if !name.ok {
-      return failed(parse.Kind.Syntax, at)
-    }
+    if !name.ok { return failed(parse.Kind.Syntax, at) }
     at += name.consumed
     name_length = name.length
   } else {
     named := lookup(table, index.value)
-    if !named.ok {
-      return failed(parse.Kind.Syntax, 0)
-    }
-    if !copy_into(scratch, named.name) {
-      return failed(parse.Kind.Capacity, 0)
-    }
+    if !named.ok { return failed(parse.Kind.Syntax, 0) }
+    if !copy_into(scratch, named.name) { return failed(parse.Kind.Capacity, 0) }
     name_length = #len(named.name)
   }
   value := read_string(block[at..], scratch[name_length..])
-  if !value.ok {
-    return failed(parse.Kind.Syntax, at)
-  }
+  if !value.ok { return failed(parse.Kind.Syntax, at) }
   at += value.consumed
   name := scratch[..name_length]
   text := scratch[name_length..name_length + value.length]
@@ -383,9 +341,7 @@ pub fn decode_field(decoder: *Decoder, block: []const u8, scratch: []u8) Field {
 // Appends an integer with an N-bit prefix; the prefix bits of destination[0]
 // above it are kept from flags. 0 when it does not fit.
 fn write_integer(destination: []u8, flags: u8, prefix: u8, value: usize) usize {
-  if #len(destination) == 0 {
-    return 0
-  }
+  if #len(destination) == 0 { return 0 }
   mask := (#cast(usize, 1) << #cast(usize, prefix)) - 1
   if value < mask {
     destination[0] = flags | #cast(u8, value)
@@ -395,24 +351,18 @@ fn write_integer(destination: []u8, flags: u8, prefix: u8, value: usize) usize {
   rest := value - mask
   at: usize = 1
   for rest >= 128 {
-    if at == #len(destination) {
-      return 0
-    }
+    if at == #len(destination) { return 0 }
     destination[at] = #cast(u8, rest & 127) | 128
     rest >>= 7
     at += 1
   }
-  if at == #len(destination) {
-    return 0
-  }
+  if at == #len(destination) { return 0 }
   destination[at] = #cast(u8, rest)
   return at + 1
 }
 
 fn lower(byte: u8) u8 {
-  if byte >= 'A' && byte <= 'Z' {
-    return byte + 32
-  }
+  if byte >= 'A' && byte <= 'Z' { return byte + 32 }
   return byte
 }
 
@@ -430,15 +380,11 @@ fn write_string(destination: []u8, text: []const u8, lowercase: bool) usize {
   coded := huffman_length(source)
   if coded < #len(source) {
     head := write_integer(destination, 0x80, 7, coded)
-    if head == 0 || coded > #len(destination) - head {
-      return 0
-    }
+    if head == 0 || coded > #len(destination) - head { return 0 }
     return head + huffman_encode(source, destination[head..])
   }
   head := write_integer(destination, 0, 7, #len(source))
-  if head == 0 || #len(source) > #len(destination) - head {
-    return 0
-  }
+  if head == 0 || #len(source) > #len(destination) - head { return 0 }
   for i in 0..#len(source) {
     destination[head + i] = source[i]
   }
@@ -446,13 +392,9 @@ fn write_string(destination: []u8, text: []const u8, lowercase: bool) usize {
 }
 
 fn equal_folded(name: []const u8, known: []const u8) bool {
-  if #len(name) != #len(known) {
-    return false
-  }
+  if #len(name) != #len(known) { return false }
   for i in 0..#len(name) {
-    if lower(name[i]) != known[i] {
-      return false
-    }
+    if lower(name[i]) != known[i] { return false }
   }
   return true
 }
@@ -463,9 +405,7 @@ fn equal_folded(name: []const u8, known: []const u8) bool {
 pub fn encode_field(destination: []u8, name: []const u8, value: []const u8) usize {
   name_index: usize = 0
   for index in 1..StaticCount + 1 {
-    if !equal_folded(name, static_name(index)) {
-      continue
-    }
+    if !equal_folded(name, static_name(index)) { continue }
     if name_index == 0 {
       name_index = index
     }
@@ -476,28 +416,20 @@ pub fn encode_field(destination: []u8, name: []const u8, value: []const u8) usiz
   }
   // Literal without indexing (RFC 7541 6.2.2).
   at := write_integer(destination, 0, 4, name_index)
-  if at == 0 {
-    return 0
-  }
+  if at == 0 { return 0 }
   if name_index == 0 {
     written := write_string(destination[at..], name, true)
-    if written == 0 {
-      return 0
-    }
+    if written == 0 { return 0 }
     at += written
   }
   written := write_string(destination[at..], value, false)
-  if written == 0 {
-    return 0
-  }
+  if written == 0 { return 0 }
   return at + written
 }
 
 fn copy_equal(left: []const u8, right: []const u8) bool {
   for i in 0..#len(left) {
-    if left[i] != right[i] {
-      return false
-    }
+    if left[i] != right[i] { return false }
   }
   return true
 }

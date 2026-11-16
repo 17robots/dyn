@@ -22,9 +22,7 @@ fn parse_number(text: []const u8, offset: *usize, output: *u32, kind: *parse.Kin
   for offset.* < #len(text) && text[offset.*] >= '0' && text[offset.*] <= '9' {
     offset.* += 1
   }
-  if offset.* == start {
-    return false
-  }
+  if offset.* == start { return false }
   if offset.* - start > 1 && text[start] == '0' {
     offset.* = start + 1
     return false
@@ -46,9 +44,7 @@ fn parse_number(text: []const u8, offset: *usize, output: *u32, kind: *parse.Kin
 
 fn valid_identifiers(text: []const u8, prerelease: bool, failure: *usize) bool {
   failure.* = 0
-  if #len(text) == 0 {
-    return false
-  }
+  if #len(text) == 0 { return false }
   start: usize = 0
   i: usize = 0
   for i <= #len(text) {
@@ -133,27 +129,17 @@ fn bytes_compare(a: []const u8, b: []const u8) i32 {
     shared = #len(b)
   }
   for i in 0..shared {
-    if a[i] < b[i] {
-      return -1
-    }
-    if a[i] > b[i] {
-      return 1
-    }
+    if a[i] < b[i] { return -1 }
+    if a[i] > b[i] { return 1 }
   }
-  if #len(a) < #len(b) {
-    return -1
-  }
-  if #len(a) > #len(b) {
-    return 1
-  }
+  if #len(a) < #len(b) { return -1 }
+  if #len(a) > #len(b) { return 1 }
   return 0
 }
 
 fn numeric_identifier(value: []const u8) bool {
   for byte in value {
-    if byte < '0' || byte > '9' {
-      return false
-    }
+    if byte < '0' || byte > '9' { return false }
   }
   return true
 }
@@ -171,15 +157,9 @@ fn next_identifier(text: []const u8, offset: *usize) []const u8 {
 }
 
 fn compare_prerelease(a: []const u8, b: []const u8) i32 {
-  if #len(a) == 0 && #len(b) == 0 {
-    return 0
-  }
-  if #len(a) == 0 {
-    return 1
-  }
-  if #len(b) == 0 {
-    return -1
-  }
+  if #len(a) == 0 && #len(b) == 0 { return 0 }
+  if #len(a) == 0 { return 1 }
+  if #len(b) == 0 { return -1 }
   a_at: usize = 0
   b_at: usize = 0
   for a_at < #len(a) && b_at < #len(b) {
@@ -187,12 +167,8 @@ fn compare_prerelease(a: []const u8, b: []const u8) i32 {
     right := next_identifier(b, &b_at)
     left_numeric := numeric_identifier(left)
     right_numeric := numeric_identifier(right)
-    if left_numeric && !right_numeric {
-      return -1
-    }
-    if !left_numeric && right_numeric {
-      return 1
-    }
+    if left_numeric && !right_numeric { return -1 }
+    if !left_numeric && right_numeric { return 1 }
     comparison: i32 = 0
     if left_numeric {
       if #len(left) < #len(right) {
@@ -205,39 +181,21 @@ fn compare_prerelease(a: []const u8, b: []const u8) i32 {
     } else {
       comparison = bytes_compare(left, right)
     }
-    if comparison != 0 {
-      return comparison
-    }
+    if comparison != 0 { return comparison }
   }
-  if a_at < #len(a) {
-    return 1
-  }
-  if b_at < #len(b) {
-    return -1
-  }
+  if a_at < #len(a) { return 1 }
+  if b_at < #len(b) { return -1 }
   return 0
 }
 
 // Build metadata does not affect precedence.
 pub fn compare(a, b: Version) i32 {
-  if a.major < b.major {
-    return -1
-  }
-  if a.major > b.major {
-    return 1
-  }
-  if a.minor < b.minor {
-    return -1
-  }
-  if a.minor > b.minor {
-    return 1
-  }
-  if a.patch < b.patch {
-    return -1
-  }
-  if a.patch > b.patch {
-    return 1
-  }
+  if a.major < b.major { return -1 }
+  if a.major > b.major { return 1 }
+  if a.minor < b.minor { return -1 }
+  if a.minor > b.minor { return 1 }
+  if a.patch < b.patch { return -1 }
+  if a.patch > b.patch { return 1 }
   return compare_prerelease(a.prerelease, b.prerelease)
 }
 
@@ -253,15 +211,11 @@ pub struct Range {
 pub fn contains(range: *const Range, version: Version) bool {
   if range.has_minimum {
     lower := compare(version, range.minimum)
-    if lower < 0 || (lower == 0 && !range.include_minimum) {
-      return false
-    }
+    if lower < 0 || (lower == 0 && !range.include_minimum) { return false }
   }
   if range.has_maximum {
     upper := compare(version, range.maximum)
-    if upper > 0 || (upper == 0 && !range.include_maximum) {
-      return false
-    }
+    if upper > 0 || (upper == 0 && !range.include_maximum) { return false }
   }
   return true
 }

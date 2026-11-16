@@ -15,16 +15,12 @@ pub fn destroy_owned(state: State) {
   }
 }
 pub fn stack_size(state: State) i32 {
-  if state == nil {
-    return 0
-  }
+  if state == nil { return 0 }
   return native_top(state)
 }
 // Only remove values; never grow the stack through this API.
 pub fn pop(state: State, count: i32) bool {
-  if state == nil || count < 0 || count > native_top(state) {
-    return false
-  }
+  if state == nil || count < 0 || count > native_top(state) { return false }
   native_settop(state, native_top(state) - count)
   return true
 }
@@ -33,9 +29,7 @@ pub fn pop(state: State, count: i32) bool {
 // Chunk source borrowed only during call. Caller must pop result/error.
 // Wrapper errors -1/-2 leave the stack unchanged.
 pub fn execute(state: State, source: []const u8) Result {
-  if state == nil {
-    return Result{ code: -1, failure: io.Failure{ kind: io.Kind.System } }
-  }
+  if state == nil { return Result{ code: -1, failure: io.Failure{ kind: io.Kind.System } } }
   if native_checkstack(state, 2) == 0 {
     return Result{ code: -2, failure: io.Failure{ kind: io.Kind.System } }
   }
@@ -53,9 +47,7 @@ pub fn execute(state: State, source: []const u8) Result {
   return Result{ code: code, failure: io.failure_if(code != 0) }
 }
 fn valid_index(state: State, index: i32) bool {
-  if state == nil || index == 0 {
-    return false
-  }
+  if state == nil || index == 0 { return false }
   top := native_top(state)
   return (index > 0 && index <= top) || (index < 0 && index >= 0 - top)
 }
@@ -75,9 +67,7 @@ pub fn bytes(state: State, index: i32) BytesResult {
   }
   length: usize = 0
   pointer := native_string(state, index, &length)
-  if pointer == nil {
-    return BytesResult{ failure: io.Failure{ kind: io.Kind.System } }
-  }
+  if pointer == nil { return BytesResult{ failure: io.Failure{ kind: io.Kind.System } } }
   return BytesResult{ value: #slice(pointer, length) }
 }
 extern fn native_new "luaL_newstate"() State

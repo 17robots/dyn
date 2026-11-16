@@ -18,9 +18,7 @@ pub fn parse(encoded: []const u8) Result {
     }
     return Result{ offset:outer.offset, failure: parse.Failure{ kind: kind, offset: outer.offset } }
   }
-  if outer.value.tag!=48 {
-    return Result{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
-  }
+  if outer.value.tag!=48 { return Result{ failure: parse.Failure{ kind: parse.Kind.Syntax } } }
   if !der.finished(&outer_cursor) {
     return Result{ offset:outer_cursor.offset, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: outer_cursor.offset } }
   }

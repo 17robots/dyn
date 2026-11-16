@@ -16,9 +16,7 @@ const K: [64]u32 = [
 ]
 
 fn block(state: *[8]u32, input: []const u8) {
-  if #len(input) < 64 {
-    return
-  }
+  if #len(input) < 64 { return }
   words: [64]u32
   for i in 0..16 {
     at := i * 4
@@ -81,9 +79,7 @@ pub fn sha256_update(context: *Sha256, input: []const u8) bool {
   if !context.initialized {
     sha256_init(context)
   }
-  if context.failed {
-    return false
-  }
+  if context.failed { return false }
   input_length: u64 = #len(input)
   maximum: u64 = 2305843009213693951
   if input_length > maximum - context.length {
@@ -130,12 +126,8 @@ pub fn sha256_finish(context: *Sha256, destination: []u8) []u8 {
   if !context.initialized {
     sha256_init(context)
   }
-  if context.failed {
-    return destination[..0]
-  }
-  if #len(destination) < 32 {
-    return destination[..0]
-  }
+  if context.failed { return destination[..0] }
+  if #len(destination) < 32 { return destination[..0] }
   tail: [128]u8
   remaining := context.tail_length
   i: usize = 0
@@ -173,9 +165,7 @@ pub fn sha256_finish(context: *Sha256, destination: []u8) []u8 {
 pub fn sha256(destination: []u8, input: []const u8) []u8 {
   context := Sha256{}
   sha256_init(&context)
-  if !sha256_update(&context, input) {
-    return destination[..0]
-  }
+  if !sha256_update(&context, input) { return destination[..0] }
   return sha256_finish(&context, destination)
 }
 
@@ -214,9 +204,7 @@ pub fn hmac_sha256_init(state: *HmacSha256, key: []const u8) bool {
 
 // MAC of message into 32 bytes of destination. The keyed state is unchanged.
 pub fn hmac_sha256_sum(state: *const HmacSha256, destination: []u8, message: []const u8) []u8 {
-  if #len(destination) < 32 {
-    return destination[..0]
-  }
+  if #len(destination) < 32 { return destination[..0] }
   inner := state.inner
   if inner.failed || !inner.initialized || !sha256_update(&inner, message) {
     return destination[..0]
@@ -230,16 +218,12 @@ pub fn hmac_sha256_sum(state: *const HmacSha256, destination: []u8, message: []c
 
 pub fn hmac_sha256(destination: []u8, key: []const u8, message: []const u8) []u8 {
   state := HmacSha256{}
-  if #len(destination) < 32 || !hmac_sha256_init(&state, key) {
-    return destination[..0]
-  }
+  if #len(destination) < 32 || !hmac_sha256_init(&state, key) { return destination[..0] }
   return hmac_sha256_sum(&state, destination, message)
 }
 
 pub fn equal_constant_time(left: []const u8, right: []const u8) bool {
-  if #len(left) != #len(right) {
-    return false
-  }
+  if #len(left) != #len(right) { return false }
   difference: u8 = 0
   for i in 0..#len(left) {
     difference = difference | (left[i] ^ right[i])

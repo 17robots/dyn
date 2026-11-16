@@ -152,9 +152,7 @@ pub fn quic_server_context_create(arena: *mem.Arena, certificate: []const u8, ke
 // The socket stays the caller's.
 pub fn quic_listen(context: Context, descriptor: i32) rawptr {
   listener := native.ssl_new_listener(context, 0)
-  if listener == nil {
-    return nil
-  }
+  if listener == nil { return nil }
   bio := bio_new_dgram(descriptor, 0)
   if bio == nil {
     ssl_free(listener)
@@ -174,9 +172,7 @@ pub fn quic_handle_events(listener: rawptr) i64 {
   _ = native.ssl_handle_events(listener)
   value := TimeValue{}
   infinite: i32 = 0
-  if native.ssl_get_event_timeout(listener, &value, &infinite) != 1 || infinite != 0 {
-    return -1
-  }
+  if native.ssl_get_event_timeout(listener, &value, &infinite) != 1 || infinite != 0 { return -1 }
   return value.seconds * 1000 + (value.microseconds + 999) / 1000
 }
 
@@ -184,9 +180,7 @@ pub fn quic_handle_events(listener: rawptr) i64 {
 // streams wait for quic_accept_stream.
 pub fn quic_accept_connection(listener: rawptr) rawptr {
   connection := native.ssl_accept_connection(listener, AcceptNoBlock)
-  if connection == nil {
-    return nil
-  }
+  if connection == nil { return nil }
   _ = native.ssl_set_default_stream_mode(connection, 0)
   _ = native.ssl_set_incoming_stream_policy(connection, 1, 0)
   _ = native.ssl_set_blocking_mode(connection, 0)
@@ -195,9 +189,7 @@ pub fn quic_accept_connection(listener: rawptr) rawptr {
 
 pub fn quic_accept_stream(connection: rawptr) QuicStream {
   stream := native.ssl_accept_stream(connection, AcceptNoBlock)
-  if stream == nil {
-    return QuicStream{}
-  }
+  if stream == nil { return QuicStream{} }
   id := native.ssl_get_stream_id(stream)
   return QuicStream{ handle: stream, id: id, unidirectional: (id & 2) != 0 }
 }
@@ -208,28 +200,16 @@ pub fn quic_open_stream(connection: rawptr) rawptr {
 }
 
 pub fn quic_read(stream: rawptr, destination: []u8) QuicIo {
-  if #len(destination) == 0 {
-    return QuicIo{}
-  }
+  if #len(destination) == 0 { return QuicIo{} }
   count: usize = 0
   status := ssl_read(stream, #cast(rawptr, &destination[0]), #len(destination), &count)
-  if status == 1 {
-    return QuicIo{ count: count }
-  }
+  if status == 1 { return QuicIo{ count: count } }
   code := ssl_error(stream, status)
-  if code == ErrorWantRead {
-    return QuicIo{ status: QuicStatus.WouldBlock }
-  }
-  if code == ErrorZeroReturn {
-    return QuicIo{ status: QuicStatus.End }
-  }
+  if code == ErrorWantRead { return QuicIo{ status: QuicStatus.WouldBlock } }
+  if code == ErrorZeroReturn { return QuicIo{ status: QuicStatus.End } }
   state := native.ssl_get_stream_read_state(stream)
-  if state == StreamStateFinished {
-    return QuicIo{ status: QuicStatus.End }
-  }
-  if state == StreamStateResetRemote {
-    return QuicIo{ status: QuicStatus.Reset }
-  }
+  if state == StreamStateFinished { return QuicIo{ status: QuicStatus.End } }
+  if state == StreamStateResetRemote { return QuicIo{ status: QuicStatus.Reset } }
   provider_clear_error()
   return QuicIo{ status: QuicStatus.Failed }
 }
@@ -246,9 +226,7 @@ pub fn quic_write(stream: rawptr, source: []const u8, conclude: bool) QuicIo {
     pointer = #cast(rawptr, &source[0])
   }
   status := native.ssl_write_ex2(stream, pointer, #len(source), flags, &written)
-  if status == 1 {
-    return QuicIo{ count: written }
-  }
+  if status == 1 { return QuicIo{ count: written } }
   code := ssl_error(stream, status)
   if code == ErrorWantWrite || code == ErrorWantRead {
     return QuicIo{ count: written, status: QuicStatus.WouldBlock }
@@ -294,18 +272,12 @@ pub fn quic_close(connection: rawptr, code: u64) {
 // The peer's address as a sockaddr (family, port, address), like accept.
 pub fn quic_peer(connection: rawptr, destination: []u8) usize {
   address := bio_addr_new()
-  if address == nil || #len(destination) < 28 {
-    return 0
-  }
+  if address == nil || #len(destination) < 28 { return 0 }
   defer bio_addr_free(address)
-  if native.ssl_get_peer_addr(connection, address) != 1 {
-    return 0
-  }
+  if native.ssl_get_peer_addr(connection, address) != 1 { return 0 }
   raw: [16]u8
   length: usize = 16
-  if bio_addr_rawaddress(address, #cast(rawptr, &raw[0]), &length) != 1 {
-    return 0
-  }
+  if bio_addr_rawaddress(address, #cast(rawptr, &raw[0]), &length) != 1 { return 0 }
   port := bio_addr_rawport(address)
   for i in 0..28 {
     destination[i] = 0

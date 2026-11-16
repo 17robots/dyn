@@ -1,9 +1,7 @@
 use "std/mem" mem
 
 fn digit(value: u8) u8 {
-  if value < 10 {
-    return '0' + value
-  }
+  if value < 10 { return '0' + value }
   return 'a' + value - 10
 }
 
@@ -52,9 +50,7 @@ pub fn poison(destination: []u8, pattern: u8) {
 }
 pub fn all_equal(source: []const u8, pattern: u8) bool {
   for byte in source {
-    if byte != pattern {
-      return false
-    }
+    if byte != pattern { return false }
   }
   return true
 }

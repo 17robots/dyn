@@ -133,9 +133,7 @@ fn expect_symbol(p: *Parser, wanted: u8, message: []const u8) {
 }
 
 fn atom(p: *Parser) *Expr {
-  if parse.failed(p.failure) {
-    return node(p, Expr.Invalid)
-  }
+  if parse.failed(p.failure) { return node(p, Expr.Invalid) }
   at := p.current
   case at.token {
     Token.End => {
@@ -156,9 +154,7 @@ fn atom(p: *Parser) *Expr {
       return node(p, Expr.Call(FunctionCall{ name: name, argument: argument, offset: at.offset }))
     }
     Token.Symbol symbol => {
-      if symbol != '(' {
-        return fail(p, at.offset, "expected a value")
-      }
+      if symbol != '(' { return fail(p, at.offset, "expected a value") }
       advance(p)
       inside := sum(p)
       expect_symbol(p, ')', "expected )")
@@ -174,9 +170,7 @@ fn binary(p: *Parser, operator: u8, left: *Expr, right: *Expr, offset: usize) *E
 // Exponents group to the right: 2^3^2 is 2^(3^2).
 fn power(p: *Parser) *Expr {
   base := atom(p)
-  if !at_symbol(p, '^') {
-    return base
-  }
+  if !at_symbol(p, '^') { return base }
   offset := p.current.offset
   advance(p)
   return binary(p, '^', base, unary(p), offset)

@@ -25,9 +25,7 @@ fn trim(state: *Reader) {
 }
 fn accept(state: *Reader, token: Token) parse.Kind {
   trim(state)
-  if #cast(u32, token.kind) > #cast(u32, Kind.End) {
-    return parse.Kind.Syntax
-  }
+  if #cast(u32, token.kind) > #cast(u32, Kind.End) { return parse.Kind.Syntax }
   if token.kind == Kind.End {
     if token.indefinite || state.depth == 0 || !state.frames[state.depth - 1].indefinite || state.frames[state.depth - 1].odd {
       return parse.Kind.Syntax
@@ -41,18 +39,14 @@ fn accept(state: *Reader, token: Token) parse.Kind {
   if token.kind == Kind.Simple && (token.value > 255 || (token.value >= 20 && token.value <= 31)) {
     return parse.Kind.Syntax
   }
-  if token.kind == Kind.Text && !utf8.valid(token.bytes) {
-    return parse.Kind.Syntax
-  }
+  if token.kind == Kind.Text && !utf8.valid(token.bytes) { return parse.Kind.Syntax }
   if token.indefinite && (token.kind == Kind.Text || token.kind == Kind.Bytes) && #len(token.bytes) != 0 {
     return parse.Kind.Syntax
   }
   if state.depth > 0 {
     frame := &state.frames[state.depth - 1]
     if frame.kind == Kind.Text || frame.kind == Kind.Bytes {
-      if token.kind != frame.kind || token.indefinite {
-        return parse.Kind.Syntax
-      }
+      if token.kind != frame.kind || token.indefinite { return parse.Kind.Syntax }
     }
     if frame.indefinite {
       if frame.kind == Kind.Map {
@@ -68,15 +62,11 @@ fn accept(state: *Reader, token: Token) parse.Kind {
       count = 1
     }
     if token.kind == Kind.Map && !token.indefinite {
-      if count > 0x7fffffffffffffff {
-        return parse.Kind.Overflow
-      }
+      if count > 0x7fffffffffffffff { return parse.Kind.Overflow }
       count *= 2
     }
     if token.indefinite || count != 0 {
-      if state.depth == #len(state.frames) {
-        return parse.Kind.Capacity
-      }
+      if state.depth == #len(state.frames) { return parse.Kind.Capacity }
       state.frames[state.depth] = Frame{ kind: token.kind, remaining: count, indefinite: token.indefinite }
       state.depth += 1
     }
@@ -100,9 +90,7 @@ fn half(raw: u64) f64 {
     }
     return result
   }
-  if exponent == 31 {
-    return #bitcast(f64, sign | 0x7ff0000000000000 | (fraction << 42))
-  }
+  if exponent == 31 { return #bitcast(f64, sign | 0x7ff0000000000000 | (fraction << 42)) }
   return #bitcast(f64, sign | ((exponent + 1008) << 52) | (fraction << 42))
 }
 pub fn next(state: *Reader) Result {
@@ -112,9 +100,7 @@ pub fn next(state: *Reader) Result {
   start := state.offset
   if start == #len(state.source) {
     trim(state)
-    if state.depth != 0 {
-      return fail(state, start, parse.Kind.Syntax)
-    }
+    if state.depth != 0 { return fail(state, start, parse.Kind.Syntax) }
     return Result{ offset: start }
   }
   tag := state.source[start]
@@ -126,9 +112,7 @@ pub fn next(state: *Reader) Result {
     token.kind = enums.from_int(Kind, #cast(u64, major))
   }
   value := #cast(u64, info)
-  if info >= 28 && info <= 30 {
-    return fail(state, start, parse.Kind.Syntax)
-  }
+  if info >= 28 && info <= 30 { return fail(state, start, parse.Kind.Syntax) }
   if info == 31 {
     if tag == 255 {
       token.kind = Kind.End
@@ -140,9 +124,7 @@ pub fn next(state: *Reader) Result {
     value = 0
   } else if info >= 24 {
     count := #cast(usize, 1) << #cast(usize, info - 24)
-    if count > #len(state.source) - at {
-      return fail(state, at, parse.Kind.Syntax)
-    }
+    if count > #len(state.source) - at { return fail(state, at, parse.Kind.Syntax) }
     value = 0
     for byte in state.source[at..at+count] {
       value = (value << 8) | byte
@@ -159,9 +141,7 @@ pub fn next(state: *Reader) Result {
     } else if info == 23 {
       token.kind = Kind.Undefined
     } else if info <= 24 {
-      if info == 24 && value < 32 {
-        return fail(state, start, parse.Kind.Syntax)
-      }
+      if info == 24 && value < 32 { return fail(state, start, parse.Kind.Syntax) }
       token.kind = Kind.Simple
     } else {
       token.kind = Kind.Float
@@ -178,9 +158,7 @@ pub fn next(state: *Reader) Result {
     }
   }
   if !token.indefinite && (token.kind == Kind.Bytes || token.kind == Kind.Text) {
-    if value > (#len(state.source) - at) {
-      return fail(state, at, parse.Kind.Syntax)
-    }
+    if value > (#len(state.source) - at) { return fail(state, at, parse.Kind.Syntax) }
     count := #cast(usize, value)
     token.bytes = state.source[at..at+count]
     token.value = 0
@@ -191,45 +169,29 @@ pub fn next(state: *Reader) Result {
     if token.kind == Kind.Map {
       available /= 2
     }
-    if value > available {
-      return fail(state, at, parse.Kind.Syntax)
-    }
+    if value > available { return fail(state, at, parse.Kind.Syntax) }
   }
   kind := accept(state, token)
-  if kind != parse.Kind.Ok {
-    return fail(state, start, kind)
-  }
+  if kind != parse.Kind.Ok { return fail(state, start, kind) }
   state.offset = at
   return Result{ value: token, offset: start, found: true }
 }
 fn extra(value: u64) usize {
-  if value < 24 {
-    return 0
-  }
-  if value <= 255 {
-    return 1
-  }
-  if value <= 65535 {
-    return 2
-  }
-  if value <= 0xffffffff {
-    return 4
-  }
+  if value < 24 { return 0 }
+  if value <= 255 { return 1 }
+  if value <= 65535 { return 2 }
+  if value <= 0xffffffff { return 4 }
   return 8
 }
 fn argument(token: Token) u64 {
-  if token.kind == Kind.Bytes || token.kind == Kind.Text {
-    return #len(token.bytes)
-  }
+  if token.kind == Kind.Bytes || token.kind == Kind.Text { return #len(token.bytes) }
   return token.value
 }
 fn size(token: Token) usize {
   if token.indefinite || token.kind == Kind.End || token.kind == Kind.Bool || token.kind == Kind.Null || token.kind == Kind.Undefined {
     return 1
   }
-  if token.kind == Kind.Float {
-    return 9
-  }
+  if token.kind == Kind.Float { return 9 }
   return 1 + extra(argument(token))
 }
 fn put(output: []u8, at: *usize, value: u64, count: usize) {

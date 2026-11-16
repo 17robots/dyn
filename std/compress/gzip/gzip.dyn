@@ -50,9 +50,7 @@ pub fn write(destination: []u8, source: []const u8, level: u8, encoder: *Encoder
     destination[i] = header[i]
   }
   body := deflate.deflate(destination[10..#len(destination) - 8], source, level, encoder)
-  if parse.failed(body.failure) {
-    return body
-  }
+  if parse.failed(body.failure) { return body }
   at := 10 + #len(body.value)
   crc := hash.crc32(source)
   size := #cast(u32, #len(source))
@@ -71,8 +69,6 @@ pub fn compress(arena: *mem.Arena, source: []const u8, level: u8) Encoded {
   encoder := #cast(*Encoder, mem.arena_push_uninit(arena, #sizeof(Encoder), #alignof(Encoder)))
   encoded := write(output, source, level, encoder)
   mem.arena_rewind(arena, mark)
-  if parse.failed(encoded.failure) {
-    return encoded
-  }
+  if parse.failed(encoded.failure) { return encoded }
   return encoded
 }

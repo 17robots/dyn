@@ -49,9 +49,7 @@ fn main() {
     }
     ended = read.status == bufio.ReadStatus.End
     line := line_storage[..read.transferred]
-    if #len(strings.trim(line)) == 0 {
-      continue
-    }
+    if #len(strings.trim(line)) == 0 { continue }
     io.println("> {}", line)
 
     parsed := parse_line(frame, line)

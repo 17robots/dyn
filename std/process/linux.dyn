@@ -14,9 +14,7 @@ fn wait_native(child: *Child, nonblocking: bool) ExitResult {
   if io.failed(value.failure) {
     return ExitResult{ failure: io.linux_failure(value.failure.native) }
   }
-  if value.process == 0 {
-    return ExitResult{}
-  }
+  if value.process == 0 { return ExitResult{} }
   child.active = false
   if os.exited(value.status) {
     return ExitResult{ code: os.exit_status(value.status), finished: true }
@@ -34,9 +32,7 @@ fn close_native(handle: isize) Status {
 fn pipe_native() Pipe {
   descriptors: [2]i32
   result := #syscall(sys.Pipe2, &descriptors[0], 524288)
-  if result < 0 {
-    return Pipe{ failure: io.linux_failure(result) }
-  }
+  if result < 0 { return Pipe{ failure: io.linux_failure(result) } }
   flags := #syscall(sys.Fcntl, descriptors[0], 3, 0)
   changed := #syscall(sys.Fcntl, descriptors[0], 4, flags | 2048)
   if changed < 0 {
@@ -49,9 +45,7 @@ fn pipe_native() Pipe {
 fn read_native(handle: isize, destination: []u8) ReadResult {
   file := fs.borrow_handle(handle)
   result := fs.read(&file, destination)
-  if io.failed(result.failure) && result.failure.native == -11 {
-    return ReadResult{ ok: true }
-  }
+  if io.failed(result.failure) && result.failure.native == -11 { return ReadResult{ ok: true } }
   return ReadResult{ count: result.transferred, ended: !io.failed(result.failure) && result.transferred == 0, error: result.failure.native, kind: result.failure.kind, ok: !io.failed(result.failure) }
 }
 fn milliseconds_native() MillisecondsResult {
@@ -71,9 +65,7 @@ fn environment_native(name: []const u8, destination: []u8) EnvironmentResult {
 
 fn duplicate_native(value: isize) HandleResult {
   copied := #syscall(sys.Fcntl, value, 1030, 3)
-  if copied < 0 {
-    return HandleResult{ error: copied, kind: io.linux(copied) }
-  }
+  if copied < 0 { return HandleResult{ error: copied, kind: io.linux(copied) } }
   return HandleResult{ value: copied, ok: true }
 }
 
@@ -92,9 +84,7 @@ fn arguments_native(arena: *mem.Arena) ArgumentsResult {
     return ArgumentsResult{ failure: io.Failure{ kind: io.Kind.InvalidState } }
   }
   result := argument_slots(arena, count)
-  if io.failed(result.failure) {
-    return result
-  }
+  if io.failed(result.failure) { return result }
   at: usize = 0
   start: usize = 0
   index: usize = 0

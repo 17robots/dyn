@@ -34,9 +34,7 @@ pub fn rng1u64_union(a, b: Rng1u64) Rng1u64 {
     rng1u64_check(b)
     return b
   }
-  if rng1u64_empty(b) {
-    return a
-  }
+  if rng1u64_empty(b) { return a }
   return Rng1u64{min: min(a.min, b.min), max: max(a.max, b.max)}
 }
 pub fn rng1u64_dimension(r: Rng1u64) u64 {
@@ -91,9 +89,7 @@ pub fn rng1i64_union(a, b: Rng1i64) Rng1i64 {
     rng1i64_check(b)
     return b
   }
-  if rng1i64_empty(b) {
-    return a
-  }
+  if rng1i64_empty(b) { return a }
   return Rng1i64{min: min(a.min, b.min), max: max(a.max, b.max)}
 }
 pub fn rng1i64_dimension(r: Rng1i64) i64 {
@@ -151,9 +147,7 @@ pub fn rng1f32_union(a, b: Rng1f32) Rng1f32 {
     rng1f32_check(b)
     return b
   }
-  if rng1f32_empty(b) {
-    return a
-  }
+  if rng1f32_empty(b) { return a }
   return Rng1f32{min: min(a.min, b.min), max: max(a.max, b.max)}
 }
 pub fn rng1f32_dimension(r: Rng1f32) f32 {
@@ -196,9 +190,7 @@ pub fn rng2f32_contains(r: Rng2f32, point: Vec2) bool {
 pub fn rng2f32_overlaps(a, b: Rng2f32) bool {
   rng2f32_check(a)
   rng2f32_check(b)
-  if rng2f32_empty(a) || rng2f32_empty(b) {
-    return false
-  }
+  if rng2f32_empty(a) || rng2f32_empty(b) { return false }
   return a.min.x < b.max.x && b.min.x < a.max.x && a.min.y < b.max.y && b.min.y < a.max.y
 }
 pub fn rng2f32_intersect(a, b: Rng2f32) Rng2f32 {
@@ -213,9 +205,7 @@ pub fn rng2f32_union(a, b: Rng2f32) Rng2f32 {
     rng2f32_check(b)
     return b
   }
-  if rng2f32_empty(b) {
-    return a
-  }
+  if rng2f32_empty(b) { return a }
   return Rng2f32{min: Vec2{x: min(a.min.x, b.min.x), y: min(a.min.y, b.min.y)}, max: Vec2{x: max(a.max.x, b.max.x), y: max(a.max.y, b.max.y)}}
 }
 pub fn rng2f32_dimension(r: Rng2f32) Vec2 {
@@ -256,9 +246,7 @@ pub fn rng2i32_contains(r: Rng2i32, point: Vec2i) bool {
 pub fn rng2i32_overlaps(a, b: Rng2i32) bool {
   rng2i32_check(a)
   rng2i32_check(b)
-  if rng2i32_empty(a) || rng2i32_empty(b) {
-    return false
-  }
+  if rng2i32_empty(a) || rng2i32_empty(b) { return false }
   return a.min.x < b.max.x && b.min.x < a.max.x && a.min.y < b.max.y && b.min.y < a.max.y
 }
 pub fn rng2i32_intersect(a, b: Rng2i32) Rng2i32 {
@@ -273,9 +261,7 @@ pub fn rng2i32_union(a, b: Rng2i32) Rng2i32 {
     rng2i32_check(b)
     return b
   }
-  if rng2i32_empty(b) {
-    return a
-  }
+  if rng2i32_empty(b) { return a }
   return Rng2i32{min: Vec2i{x: min(a.min.x, b.min.x), y: min(a.min.y, b.min.y)}, max: Vec2i{x: max(a.max.x, b.max.x), y: max(a.max.y, b.max.y)}}
 }
 pub fn rng2i32_dimension(r: Rng2i32) Vec2i {

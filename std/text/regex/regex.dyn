@@ -66,9 +66,7 @@ fn closing(pattern: []const u8, at: usize, close: u8) usize {
     } else if !in_class && b == '(' {
       depth += 1
     } else if !in_class && b == ')' {
-      if close == ')' && depth == 0 {
-        return i
-      }
+      if close == ')' && depth == 0 { return i }
       if depth > 0 {
         depth -= 1
       }
@@ -109,13 +107,9 @@ fn expression(state: *CompileState, lo: usize, hi: usize) bool {
       }
     }
     if split {
-      if !sequence(state, branch, i) {
-        return false
-      }
+      if !sequence(state, branch, i) { return false }
       if branches > 0 {
-        if !token(state, AlternateToken, 0, 0, 0) {
-          return false
-        }
+        if !token(state, AlternateToken, 0, 0, 0) { return false }
       }
       branches += 1
       branch = i + 1
@@ -150,9 +144,7 @@ fn sequence(state: *CompileState, lo: usize, hi: usize) bool {
         state.ok = false
         return false
       }
-      if !token(state, Class, 0, i, w) {
-        return false
-      }
+      if !token(state, Class, 0, i, w) { return false }
       after = i + w
     } else if state.pattern[i] == '\\' {
       if i + 1 >= hi || !token(state, Char, state.pattern[i + 1], 0, 0) {
@@ -175,9 +167,7 @@ fn sequence(state: *CompileState, lo: usize, hi: usize) bool {
       } else if state.pattern[i] == '$' {
         op = End
       }
-      if !token(state, op, state.pattern[i], 0, 0) {
-        return false
-      }
+      if !token(state, op, state.pattern[i], 0, 0) { return false }
     }
     minimum: usize = 1
     maximum: usize = 1
@@ -232,9 +222,7 @@ fn sequence(state: *CompileState, lo: usize, hi: usize) bool {
       // A zero-count atom is an epsilon fragment. Keeping a Jump token makes
       // concatenation well-formed without executing the discarded atom.
       if minimum == 0 && maximum == 0 && !unbounded {
-        if !token(state, Jump, 0, 0, 0) {
-          return false
-        }
+        if !token(state, Jump, 0, 0, 0) { return false }
         atom_count = 0
       }
       copies := minimum
@@ -244,44 +232,28 @@ fn sequence(state: *CompileState, lo: usize, hi: usize) bool {
       for copies > 0 {
         for k in 0..atom_count {
           saved := state.tokens[begin + k]
-          if !token(state, saved.op, saved.byte, saved.x, saved.y) {
-            return false
-          }
+          if !token(state, saved.op, saved.byte, saved.x, saved.y) { return false }
         }
-        if !token(state, ConcatToken, 0, 0, 0) {
-          return false
-        }
+        if !token(state, ConcatToken, 0, 0, 0) { return false }
         copies -= 1
       }
       if unbounded {
         for k2 in 0..atom_count {
           saved2 := state.tokens[begin + k2]
-          if !token(state, saved2.op, saved2.byte, saved2.x, saved2.y) {
-            return false
-          }
+          if !token(state, saved2.op, saved2.byte, saved2.x, saved2.y) { return false }
         }
-        if !token(state, StarToken, 0, 0, 0) {
-          return false
-        }
-        if minimum > 0 && !token(state, ConcatToken, 0, 0, 0) {
-          return false
-        }
+        if !token(state, StarToken, 0, 0, 0) { return false }
+        if minimum > 0 && !token(state, ConcatToken, 0, 0, 0) { return false }
       } else if maximum > 0 {
         extras := maximum - minimum
         for extras > 0 {
           for k3 in 0..atom_count {
             saved3 := state.tokens[begin + k3]
-            if !token(state, saved3.op, saved3.byte, saved3.x, saved3.y) {
-              return false
-            }
+            if !token(state, saved3.op, saved3.byte, saved3.x, saved3.y) { return false }
           }
-          if !token(state, OptionalToken, 0, 0, 0) {
-            return false
-          }
+          if !token(state, OptionalToken, 0, 0, 0) { return false }
           if minimum > 0 || extras < maximum {
-            if !token(state, ConcatToken, 0, 0, 0) {
-              return false
-            }
+            if !token(state, ConcatToken, 0, 0, 0) { return false }
           }
           extras -= 1
         }
@@ -289,9 +261,7 @@ fn sequence(state: *CompileState, lo: usize, hi: usize) bool {
       after = qafter
     }
     if pieces > 0 {
-      if !token(state, ConcatToken, 0, 0, 0) {
-        return false
-      }
+      if !token(state, ConcatToken, 0, 0, 0) { return false }
     }
     pieces += 1
     i = after
@@ -305,12 +275,8 @@ struct Fragment { start: usize, out: usize }
 fn field(code: []Instruction, slot: usize) usize {
   instruction := slot / 3
   part := slot % 3
-  if part == 0 {
-    return code[instruction].x
-  }
-  if part == 1 {
-    return code[instruction].y
-  }
+  if part == 0 { return code[instruction].x }
+  if part == 1 { return code[instruction].y }
   return code[instruction].z
 }
 fn set_field(code: []Instruction, slot: usize, value: usize) {
@@ -330,9 +296,7 @@ fn list(code: []Instruction, instruction: usize, part: usize) usize {
   return slot
 }
 fn append_list(code: []Instruction, first: usize, second: usize) usize {
-  if first == NoPatch {
-    return second
-  }
+  if first == NoPatch { return second }
   at := first
   for field(code, at) != NoPatch {
     at = field(code, at)
@@ -366,18 +330,14 @@ fn compile_into(pattern: []const u8, storage: []Instruction, workspace: []Instru
       in_class = false
     } else if !in_class && byte == '(' {
       nesting += 1
-      if nesting > 128 {
-        return Program{ error: parse.Kind.Capacity }
-      }
+      if nesting > 128 { return Program{ error: parse.Kind.Capacity } }
     } else if !in_class && byte == ')' && nesting > 0 {
       nesting -= 1
     }
   }
   state := CompileState{ pattern: pattern, tokens: workspace, ok: true }
   if #len(pattern) == 0 || !expression(&state, 0, #len(pattern)) || !state.ok {
-    if state.capacity {
-      return Program{ error: parse.Kind.Capacity }
-    }
+    if state.capacity { return Program{ error: parse.Kind.Capacity } }
     return Program{ error: parse.Kind.Syntax }
   }
   top: usize = 0
@@ -401,9 +361,7 @@ fn compile_into(pattern: []const u8, storage: []Instruction, workspace: []Instru
       used += 1
       top += 1
     } else if item.op == ConcatToken {
-      if top < 2 {
-        return Program{ error: parse.Kind.Syntax }
-      }
+      if top < 2 { return Program{ error: parse.Kind.Syntax } }
       right := Fragment{ start: scratch[(top - 1) * 2], out: scratch[(top - 1) * 2 + 1] }
       left := Fragment{ start: scratch[(top - 2) * 2], out: scratch[(top - 2) * 2 + 1] }
       patch_list(storage, left.out, right.start)
@@ -411,12 +369,8 @@ fn compile_into(pattern: []const u8, storage: []Instruction, workspace: []Instru
       scratch[(top - 1) * 2] = left.start
       scratch[(top - 1) * 2 + 1] = right.out
     } else if item.op == AlternateToken {
-      if top < 2 {
-        return Program{ error: parse.Kind.Syntax }
-      }
-      if used >= #len(storage) {
-        return Program{ error: parse.Kind.Capacity }
-      }
+      if top < 2 { return Program{ error: parse.Kind.Syntax } }
+      if used >= #len(storage) { return Program{ error: parse.Kind.Capacity } }
       right2 := Fragment{ start: scratch[(top - 1) * 2], out: scratch[(top - 1) * 2 + 1] }
       left2 := Fragment{ start: scratch[(top - 2) * 2], out: scratch[(top - 2) * 2 + 1] }
       storage[used] = Instruction{ op: Split, x: left2.start, y: right2.start }
@@ -426,12 +380,8 @@ fn compile_into(pattern: []const u8, storage: []Instruction, workspace: []Instru
       scratch[(top - 1) * 2 + 1] = joined
       used += 1
     } else if item.op == StarToken || item.op == PlusToken || item.op == OptionalToken {
-      if top < 1 {
-        return Program{ error: parse.Kind.Syntax }
-      }
-      if used >= #len(storage) {
-        return Program{ error: parse.Kind.Capacity }
-      }
+      if top < 1 { return Program{ error: parse.Kind.Syntax } }
+      if used >= #len(storage) { return Program{ error: parse.Kind.Capacity } }
       value := Fragment{ start: scratch[(top - 1) * 2], out: scratch[(top - 1) * 2 + 1] }
       storage[used] = Instruction{ op: Split, x: value.start }
       if item.op == StarToken {
@@ -449,12 +399,8 @@ fn compile_into(pattern: []const u8, storage: []Instruction, workspace: []Instru
     }
     i += 1
   }
-  if top != 1 {
-    return Program{ error: parse.Kind.Syntax }
-  }
-  if used >= #len(storage) {
-    return Program{ error: parse.Kind.Capacity }
-  }
+  if top != 1 { return Program{ error: parse.Kind.Syntax } }
+  if used >= #len(storage) { return Program{ error: parse.Kind.Capacity } }
   start := scratch[0]
   storage[used] = Instruction{ op: Accept }
   patch_list(storage, scratch[1], used)
@@ -542,9 +488,7 @@ fn expand(program: Program, text: []const u8, at: usize, seed: []usize,
     row := pending[top * stride..(top + 1) * stride]
     for true {
       pc := row[0]
-      if pc >= #len(program.code) || seen[pc] != 0 {
-        break
-      }
+      if pc >= #len(program.code) || seen[pc] != 0 { break }
       seen[pc] = 1
       instruction := program.code[pc]
       if instruction.op == Split {
@@ -567,14 +511,10 @@ fn expand(program: Program, text: []const u8, at: usize, seed: []usize,
         }
         row[0] = instruction.y
       } else if instruction.op == Begin {
-        if at != 0 {
-          break
-        }
+        if at != 0 { break }
         row[0] = instruction.x
       } else if instruction.op == End {
-        if at != #len(text) {
-          break
-        }
+        if at != #len(text) { break }
         row[0] = instruction.x
       } else {
         copy_thread(output[used.* * stride..(used.* + 1) * stride], row)
@@ -588,25 +528,17 @@ fn expand(program: Program, text: []const u8, at: usize, seed: []usize,
 // Private workspace sizing. Zero means invalid
 // program or size overflow. Space depends on the program, never on input length.
 fn workspace_size(program: Program, capture_count: usize) usize {
-  if !program.valid || #len(program.code) == 0 {
-    return 0
-  }
+  if !program.valid || #len(program.code) == 0 { return 0 }
   groups := capture_count
   if groups > program.groups {
     groups = program.groups
   }
-  if groups > (NoPatch - 1) / 2 {
-    return 0
-  }
+  if groups > (NoPatch - 1) / 2 { return 0 }
   stride := groups * 2 + 1
   n := #len(program.code)
-  if n > (NoPatch - 1) / 3 {
-    return 0
-  }
+  if n > (NoPatch - 1) / 3 { return 0 }
   rows := n * 3 + 1
-  if stride > (NoPatch - n) / rows {
-    return 0
-  }
+  if stride > (NoPatch - n) / rows { return 0 }
   return rows * stride + n
 }
 
@@ -618,9 +550,7 @@ fn execute(program: Program, text: []const u8, captures: []Match, workspace: []u
     captures[i] = Match{}
   }
   required := workspace_size(program, #len(captures))
-  if !program.valid {
-    return Match{}
-  }
+  if !program.valid { return Match{} }
   if required == 0 || #len(workspace) < required {
     #panic("regex workspace invariant")
   }
@@ -684,9 +614,7 @@ fn execute(program: Program, text: []const u8, captures: []Match, workspace: []u
       count = next_count
       at += 1
     }
-    if found.found {
-      return found
-    }
+    if found.found { return found }
     start += 1
   }
   return Match{}
@@ -709,12 +637,8 @@ pub fn matches(program: Program, text: []const u8) bool {
 }
 
 fn atom(pattern: []const u8, at: usize, byte: u8) bool {
-  if pattern[at] == '.' {
-    return true
-  }
-  if pattern[at] == '\\' && at + 1 < #len(pattern) {
-    return pattern[at + 1] == byte
-  }
+  if pattern[at] == '.' { return true }
+  if pattern[at] == '\\' && at + 1 < #len(pattern) { return pattern[at + 1] == byte }
   if pattern[at] == '[' {
     i := at + 1
     inverted := false
@@ -742,18 +666,14 @@ fn atom(pattern: []const u8, at: usize, byte: u8) bool {
         i += 1
       }
     }
-    if inverted {
-      return !found
-    }
+    if inverted { return !found }
     return found
   }
   return pattern[at] == byte
 }
 
 fn width(pattern: []const u8, at: usize) usize {
-  if pattern[at] == '\\' && at + 1 < #len(pattern) {
-    return 2
-  }
+  if pattern[at] == '\\' && at + 1 < #len(pattern) { return 2 }
   if pattern[at] == '[' {
     i := at + 1
     for i < #len(pattern) {
@@ -770,24 +690,18 @@ fn width(pattern: []const u8, at: usize) usize {
 }
 
 fn counted(pattern: []const u8, at: usize, minimum: *usize, maximum: *usize, unbounded: *bool, after: *usize) bool {
-  if at >= #len(pattern) || pattern[at] != '{' {
-    return false
-  }
+  if at >= #len(pattern) || pattern[at] != '{' { return false }
   i := at + 1
   min: usize = 0
   digits: usize = 0
   for i < #len(pattern) && pattern[i] >= '0' && pattern[i] <= '9' {
     digit := #cast(usize, (pattern[i] - '0'))
-    if min > (NoPatch - digit) / 10 {
-      return false
-    }
+    if min > (NoPatch - digit) / 10 { return false }
     min = min * 10 + digit
     i += 1
     digits += 1
   }
-  if digits == 0 {
-    return false
-  }
+  if digits == 0 { return false }
   max := min
   unlimited := false
   if i < #len(pattern) && pattern[i] == ',' {
@@ -798,17 +712,13 @@ fn counted(pattern: []const u8, at: usize, minimum: *usize, maximum: *usize, unb
       unlimited = false
       for i < #len(pattern) && pattern[i] >= '0' && pattern[i] <= '9' {
         digit2 := #cast(usize, (pattern[i] - '0'))
-        if max > (NoPatch - digit2) / 10 {
-          return false
-        }
+        if max > (NoPatch - digit2) / 10 { return false }
         max = max * 10 + digit2
         i += 1
       }
     }
   }
-  if i >= #len(pattern) || pattern[i] != '}' || (!unlimited && max < min) {
-    return false
-  }
+  if i >= #len(pattern) || pattern[i] != '}' || (!unlimited && max < min) { return false }
   minimum.* = min
   maximum.* = max
   unbounded.* = unlimited
@@ -825,9 +735,7 @@ pub fn next(state: *Iterator) MatchResult {
   if !state.program.valid {
     return MatchResult{ failure: parse.Failure{ kind: parse.Kind.Syntax, message: "program not compiled" } }
   }
-  if state.done || state.offset > #len(state.text) {
-    return MatchResult{}
-  }
+  if state.done || state.offset > #len(state.text) { return MatchResult{} }
   result := find_from(state.program, state.text, state.offset)
   if !result.value.found {
     state.done = true

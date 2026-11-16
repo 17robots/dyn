@@ -42,9 +42,7 @@ fn table(data: []const u8, tag: u32) Table {
   return Table{}
 }
 pub fn open(data: []const u8) FaceResult {
-  if #len(data) < 12 {
-    return FaceResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
-  }
+  if #len(data) < 12 { return FaceResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } } }
   signature := u32be(data, 0)
   if signature != 65536 {
     if signature == 0x4f54544f || signature == 0x74746366 || signature == 0x74727565 || signature == 0x74797031 {
@@ -102,9 +100,7 @@ pub fn open(data: []const u8) FaceResult {
     at := 4 + i * 8
     platform := u16be(cmap.value, at)
     encoding := u16be(cmap.value, at + 2)
-    if platform != 0 && !(platform == 3 && (encoding == 1 || encoding == 10)) {
-      continue
-    }
+    if platform != 0 && !(platform == 3 && (encoding == 1 || encoding == 10)) { continue }
     offset := #cast(usize, u32be(cmap.value, at + 4))
     if !fits(cmap.value, offset, 2) {
       return FaceResult{ offset: cmap.offset + at + 4, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: cmap.offset + at + 4 } }
@@ -145,9 +141,7 @@ pub fn open(data: []const u8) FaceResult {
         }
         prior = end
       }
-      if prior != 65535 {
-        return FaceResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
-      }
+      if prior != 65535 { return FaceResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } } }
     } else {
       groups := #cast(usize, u32be(sub, 12))
       if groups > (length - 16) / 12 {
@@ -169,9 +163,7 @@ pub fn open(data: []const u8) FaceResult {
       best = kind
     }
   }
-  if best == 0 {
-    return FaceResult{ failure: parse.Failure{ kind: parse.Kind.Unsupported } }
-  }
+  if best == 0 { return FaceResult{ failure: parse.Failure{ kind: parse.Kind.Unsupported } } }
   kern := table(data, 0x6b65726e)
   if !kern.ok && kern.offset != 0 {
     return FaceResult{ offset: kern.offset, failure: parse.Failure{ kind: parse.Kind.Syntax, offset: kern.offset } }
@@ -189,9 +181,7 @@ pub fn open(data: []const u8) FaceResult {
   return FaceResult{ value: face }
 }
 fn location(face: *const Face, index: usize) usize {
-  if face.long_loca {
-    return u32be(face.loca, index * 4)
-  }
+  if face.long_loca { return u32be(face.loca, index * 4) }
   return #cast(usize, u16be(face.loca, index * 2)) * 2
 }
 // Zero is the font's missing-glyph slot. Invalid Unicode also maps to zero.
@@ -217,37 +207,25 @@ pub fn glyph_index(face: *const Face, codepoint: u32) u16 {
     }
     return 0
   }
-  if codepoint > 65535 {
-    return 0
-  }
+  if codepoint > 65535 { return 0 }
   segments := #cast(usize, u16be(sub, 6)) / 2
   for i in 0..segments {
     end := #cast(u32, u16be(sub, 14 + i * 2))
-    if codepoint > end {
-      continue
-    }
+    if codepoint > end { continue }
     start := #cast(u32, u16be(sub, 16 + segments * 2 + i * 2))
-    if codepoint < start {
-      return 0
-    }
+    if codepoint < start { return 0 }
     delta := u16be(sub, 16 + segments * 4 + i * 2)
     at := 16 + segments * 6 + i * 2
     range := #cast(usize, u16be(sub, at))
     value := #cast(u16, codepoint)
     if range != 0 {
       skip := #cast(usize, (codepoint - start)) * 2
-      if range > #len(sub) - at || !fits(sub, at + range, skip + 2) {
-        return 0
-      }
+      if range > #len(sub) - at || !fits(sub, at + range, skip + 2) { return 0 }
       value = u16be(sub, at + range + skip)
-      if value == 0 {
-        return 0
-      }
+      if value == 0 { return 0 }
     }
     value = value + delta
-    if value >= face.glyphs {
-      return 0
-    }
+    if value >= face.glyphs { return 0 }
     return value
   }
   return 0
@@ -275,17 +253,11 @@ pub fn raster(arena: *mem.Arena, face: *const Face, index: u16, pixels_per_em: u
   start := location(face, index)
   end := location(face, #cast(usize, index) + 1)
   bitmap := Bitmap{ advance: advance }
-  if start == end {
-    return BitmapResult{ value: bitmap }
-  }
+  if start == end { return BitmapResult{ value: bitmap } }
   data := face.glyf[start..end]
-  if #len(data) < 10 {
-    return BitmapResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
-  }
+  if #len(data) < 10 { return BitmapResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } } }
   contours := i16be(data, 0)
-  if contours == 0 {
-    return BitmapResult{ value: bitmap }
-  }
+  if contours == 0 { return BitmapResult{ value: bitmap } }
   if contours > 0 && !fits(data, 10, #cast(usize, contours) * 2 + 2) {
     return BitmapResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
   }
@@ -293,9 +265,7 @@ pub fn raster(arena: *mem.Arena, face: *const Face, index: u16, pixels_per_em: u
   y0 := i16be(data, 4)
   x1 := i16be(data, 6)
   y1 := i16be(data, 8)
-  if x0 > x1 || y0 > y1 {
-    return BitmapResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
-  }
+  if x0 > x1 || y0 > y1 { return BitmapResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } } }
   metric_base := metric_origin(face, index, x0)
   left := math.floor64((x0 - metric_base.x) * scale)
   top := math.floor64(0.0 - y1 * scale)
@@ -326,9 +296,7 @@ pub fn raster(arena: *mem.Arena, face: *const Face, index: u16, pixels_per_em: u
   }
   budget := OutlineBudget{ points: 8192, nodes: 256 }
   outline := read_outline(arena, face, index, 0, &budget)
-  if !outline.ok {
-    return BitmapResult{ failure: parse.Failure{ kind: outline.kind } }
-  }
+  if !outline.ok { return BitmapResult{ failure: parse.Failure{ kind: outline.kind } } }
   if outline.advance.x < 0.0 || outline.advance.y != 0.0 {
     return BitmapResult{ failure: parse.Failure{ kind: parse.Kind.Unsupported } }
   }
@@ -362,9 +330,7 @@ pub fn raster(arena: *mem.Arena, face: *const Face, index: u16, pixels_per_em: u
   }
   // Each off-curve point produces at most 128 flattened edges; on-curve
   // segments need one. Bound this temporary expansion explicitly.
-  if count > 8192 {
-    return BitmapResult{ failure: parse.Failure{ kind: parse.Kind.Capacity } }
-  }
+  if count > 8192 { return BitmapResult{ failure: parse.Failure{ kind: parse.Kind.Capacity } } }
   edges := mem.push_array(Edge, arena, count * 129 + #len(ends))
   used: usize = 0
   first: usize = 0
@@ -468,9 +434,7 @@ pub fn atlas(arena: *mem.Arena, face: *const Face, codepoints: []const u32, pixe
     }
   }
   line := #cast(i32, face.ascent) - #cast(i32, face.descent) + #cast(i32, face.line_gap)
-  if line <= 0 {
-    return AtlasResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } }
-  }
+  if line <= 0 { return AtlasResult{ failure: parse.Failure{ kind: parse.Kind.Syntax } } }
   scale := #cast(f64, pixels_per_em) / #cast(f64, face.units_per_em)
   mark := mem.arena_mark(arena)
   success := false
@@ -535,9 +499,7 @@ pub fn atlas(arena: *mem.Arena, face: *const Face, codepoints: []const u32, pixe
 }
 pub nil_glyph: AtlasGlyph
 pub fn atlas_glyph(value: *const Atlas, codepoint: u32) *const AtlasGlyph {
-  if #len(value.glyphs) == 0 {
-    return &nil_glyph
-  }
+  if #len(value.glyphs) == 0 { return &nil_glyph }
   low: usize = 0
   high := #len(value.glyphs) - 1
   for low < high {
