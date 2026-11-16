@@ -1478,8 +1478,13 @@ static bool inline_pure_expr(const DynIrProgram *ir, DynExprId id, unsigned *rem
     if (dyn_op_wraps(e->op) && !e->wrap && e->type != DYN_TYPE_F32 && e->type != DYN_TYPE_F64)
       return false;
     break;
+  case DYN_EXPR_FIELD:
+    /* p.x through a pointer reads memory another call may write. */
+    if (e->left < ir->expression_count && dyn_type_is_pointer(ir->expressions[e->left].type))
+      return false;
+    break;
   case DYN_EXPR_CONVERT: case DYN_EXPR_CAST: case DYN_EXPR_BITCAST:
-  case DYN_EXPR_FIELD: case DYN_EXPR_STRUCT:
+  case DYN_EXPR_STRUCT:
     break;
   default:
     return false;
