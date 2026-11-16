@@ -221,9 +221,11 @@ fn load_tree(arena: *memory.Arena, root: []const u8, relative: []const u8, asset
     }
     if entry.kind != 8 { continue }
     if assets.count == #len(assets.items) { return io.Failure{ kind: io.Kind.Capacity } }
-    read := files.read_all(arena, join_path(arena, root, child), maximum)
-    if io.failed(read.failure) { return read.failure }
-    assets.items[assets.count] = make_asset(arena, child, read.value)
+    file := files.open(join_path(arena, root, child))
+    contents := files.read_contents(arena, &file, maximum)
+    files.close(&file)
+    if file.failed { return file.failure }
+    assets.items[assets.count] = make_asset(arena, child, contents)
     assets.count += 1
   }
   return io.Failure{}

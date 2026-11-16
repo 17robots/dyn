@@ -309,19 +309,23 @@ fn memory() {
   io.println("memory {} {} {} {} {}", p.name, p.health, scores[0], scores[1], bytes[3])
 }
 
-// --------------------------------------------------- Errors are values ---
-// No exceptions. Fallible calls return a result with a failure you check.
+// ------------------------------------------------- Failure is state ---
+// No exceptions and no error values to check after each call. A failed
+// operation marks its object: check file.failed once, where it matters.
 fn read_config(arena: *mem.Arena) {
-  file := files.read_all(arena, "does-not-exist.conf", 1 << 20)
+  file := files.open("does-not-exist.conf")
+  text := files.read_contents(arena, &file, 1 << 20)
+  files.close(&file)
   if file.failure.kind == io.Kind.NotFound {
     io.println("config missing")
     return
   }
-  if io.failed(file.failure) {
-    io.println("config unreadable")
+  if file.failed {
+    storage: [256]u8
+    io.println("config unreadable: {}", io.describe(storage[..], file.failure))
     return
   }
-  io.println("config {} bytes", #len(file.value))
+  io.println("config {} bytes", #len(text))
 }
 
 // ---------------------------------------------------------------- Defer ---

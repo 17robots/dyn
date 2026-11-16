@@ -320,27 +320,23 @@ promoted types. Do not expose Dyn slices, strings, or `any` as if they were C va
 ## Check errors once
 
 When several steps can fail, keep the first failure in one place and check it at the end. Each step
-does nothing once a failure is recorded:
+does nothing once a failure is recorded. An `fs.File` works this way itself: its first failure sticks
+to it, later operations on it do nothing, and `file.failure` names the operation and path.
 
 ```dyn
 use "std/fs"
 use "std/io"
 
-struct Writer { file: fs.File, failure: io.Failure }
-
-fn put(writer: *Writer, text: []const u8) {
-  if io.failed(writer.failure) {
-    return
-  }
-  writer.failure = fs.write(&writer.file, text).failure
-}
-
-fn save(file: fs.File) io.Failure {
-  writer := Writer{ file: file }
-  put(&writer, "name: ")
-  put(&writer, "dyn\n")
-  return writer.failure
+fn save(path: []const u8) io.Failure {
+  file := fs.create(path)
+  _ = fs.write(&file, "name: ")
+  _ = fs.write(&file, "dyn\n")
+  fs.close(&file)
+  return file.failure
 }
 ```
+
+A type of your own does the same with a `failed` flag and a `failure` field, set by the first step
+that fails and checked by every step before it does anything.
 
 The code stays straight, a failure stops the remaining work, and there is one `if` at the end.

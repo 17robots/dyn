@@ -23,16 +23,18 @@ fn main() {
   args := process.arguments(arena)
   if io.failed(args.failure) || #len(args.value) != 4 { #panic("image arguments") }
   ENCODER
-  source := fs.read_all(arena, args.value[2], 64000000)
-  if io.failed(source.failure) { #panic("image source") }
+  source_file := fs.open(args.value[2])
+  source := fs.read_contents(arena, &source_file, 64000000)
+  fs.close(&source_file)
+  if source_file.failed { #panic("image source") }
   before := mem.arena_mark(arena)
-  result := codec.decode(arena, source.value)
+  result := codec.decode(arena, source)
   if parse.failed(result.failure) {
     if mem.arena_mark(arena) != before { #panic("image rollback") }
     io.println("ERR {}", #cast(u32, result.failure.kind))
     return
   }
-  if io.failed(fs.write_all(args.value[3], result.value.pixels).failure) { #panic("image output") }
+  if !fs.write_all(args.value[3], result.value.pixels) { #panic("image output") }
   io.println("{} {}", result.value.info.width, result.value.info.height)
 }
 '''
@@ -41,7 +43,7 @@ ENCODER='''if bytes.starts_with(args.value[1], "encode") {
   pixels: [16]u8
   for i in 0..4 { for j in 0..#cast(usize, channels) { pixels[i * #cast(usize, channels) + j] = #cast(u8, (i * 51 + j * 37)) } }
   result := codec.encode(arena, pixels[..4 * #cast(usize, channels)], 2, 2, channels)
-  if parse.failed(result.failure) || io.failed(fs.write_all(args.value[2], result.value).failure) { #panic("image encode") }
+  if parse.failed(result.failure) || !fs.write_all(args.value[2], result.value) { #panic("image encode") }
   return
 }'''
 u16=lambda x:struct.pack('<H',x)

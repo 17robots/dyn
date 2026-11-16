@@ -26,7 +26,7 @@ fn main() {
   paths: [5][]const u8 = ["8.wav","16.wav","24.wav","32.wav","float.wav"]
   for i in 0..5 {
     encoded := wav.encode(arena, &audio, formats[i])
-    check(!parse.failed(encoded.failure) && !errors.failed(fs.write_all(paths[i],encoded.value).failure))
+    check(!parse.failed(encoded.failure) && fs.write_all(paths[i],encoded.value))
     decoded := wav.decode(arena, encoded.value)
     check(!parse.failed(decoded.failure) && decoded.value.rate == 48000 && decoded.value.channels == 2 && #len(decoded.value.samples) == 6)
     for j in 0..6 {
@@ -44,22 +44,24 @@ fn main() {
   check(!parse.failed(extended.failure))
   decoded := wav.decode(arena, extended.value)
   check(!parse.failed(decoded.failure) && decoded.value.channel_mask == 3)
-  check(!errors.failed(fs.write_all("extended.wav",extended.value).failure))
+  check(fs.write_all("extended.wav",extended.value))
   floating := wav.encode(arena, &audio, wav.Encoding.Float32)
   check(!parse.failed(floating.failure) && !parse.failed(wav.decode(arena, floating.value).failure))
   before := mem.arena_mark(arena)
   audio.channel_mask = 1
   check(wav.encode(arena, &audio, wav.Encoding.Pcm16).failure.kind == parse.Kind.Syntax)
   check(mem.arena_mark(arena) == before)
-  reference := fs.read_all(arena,"reference.wav",10000)
-  check(!errors.failed(reference.failure))
-  decoded = wav.decode(arena, reference.value)
+  reference_file := fs.open("reference.wav")
+  reference := fs.read_contents(arena, &reference_file, 10000)
+  fs.close(&reference_file)
+  check(!reference_file.failed)
+  decoded = wav.decode(arena, reference)
   check(!parse.failed(decoded.failure) && #len(decoded.value.samples) == 5)
   expected: [5]f32 = [-1.0,-0.5,0.0,0.5,0.999969482421875]
   for i in 0..5 { check(decoded.value.samples[i] == expected[i]) }
   // Every individual header/data mutation must return or decode, never trap.
-  work := mem.push_array(u8,arena,#len(reference.value))
-  _ = mem.copy(work,reference.value)
+  work := mem.push_array(u8,arena,#len(reference))
+  _ = mem.copy(work,reference)
   for at in 0..#len(work) {
     for bit in 0..8 {
       saved := work[at]

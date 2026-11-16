@@ -23,11 +23,13 @@ fn main() {
   if io.failed(arguments.failure) || #len(arguments.value) != 3 {
     #panic("usage: font-ui-demo FONT.ttf OUTPUT.png")
   }
-  bytes := fs.read_all(output, arguments.value[1], 64000000)
-  if io.failed(bytes.failure) {
+  bytes_file := fs.open(arguments.value[1])
+  bytes := fs.read_contents(output, &bytes_file, 64000000)
+  fs.close(&bytes_file)
+  if bytes_file.failed {
     #panic("cannot read font")
   }
-  opened := font.open(bytes.value)
+  opened := font.open(bytes)
   if parse.failed(opened.failure) {
     #panic("unsupported or malformed TrueType font")
   }
@@ -82,7 +84,7 @@ fn main() {
     #panic("UI demo render")
   }
   encoded := png.encode(output, pixels, 480, 240, 4)
-  if parse.failed(encoded.failure) || io.failed(fs.write_all(arguments.value[2], encoded.value).failure) {
+  if parse.failed(encoded.failure) || !fs.write_all(arguments.value[2], encoded.value) {
     #panic("UI demo output")
   }
 }

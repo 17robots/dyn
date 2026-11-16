@@ -46,6 +46,16 @@ Language (2026-11-16 cleanup; see `docs/guide/rules.md`):
 
 Standard library:
 
+- Files keep their failure. `fs.open`, `fs.create`, `fs.append` and
+  `fs.create_exclusive` return an `fs.File`; when opening fails, the file is
+  failed and every operation on it does nothing. `fs.read` and `fs.write`
+  return byte counts, `fs.seek` the position, `fs.sync` nothing: check
+  `file.failed` (and `file.ended` for reads) once, where it matters.
+  `io.Failure` gains `operation` and `path`, and `io.describe(storage, failure)`
+  gives "open /etc/app.conf: not found".
+- `fs.read_all(arena, path, maximum)` returns the bytes, empty on failure, and
+  `fs.write_all(path, bytes)` returns whether it worked. To learn why, open the
+  file and use `fs.read_contents(arena, &file, maximum)` or `fs.write`.
 - `panic.assert(condition, message)` checks a condition in every build.
 - Image `width` and `height` (`image.View`, every encoder) and font sizes
   (`font.Bitmap`, `font.Atlas`, `font.AtlasGlyph`, `font.atlas`) are `usize`.

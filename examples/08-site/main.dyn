@@ -62,14 +62,16 @@ fn build_page(keep: *mem.Arena, scratch: *mem.Arena, source: []const u8, output:
   defer mem.arena_rewind(scratch, mark)
 
   input := path.join(scratch, source, file_name)
-  read := fs.read_all(scratch, input.value, MaxPageBytes)
-  if io.failed(read.failure) {
+  file := fs.open(input.value)
+  read := fs.read_contents(scratch, &file, MaxPageBytes)
+  fs.close(&file)
+  if file.failed {
     io.eprintln("site: cannot read {}", input.value)
-    return io.Result(Page){ failure: read.failure }
+    return io.Result(Page){ failure: file.failure }
   }
   // Escaping turns one byte into at most six ("&quot;"), plus room for tags.
-  writer := html.writer(mem.push_bytes_uninit(scratch, 6 * #len(read.value) + 1024))
-  render_page(&writer, read.value)
+  writer := html.writer(mem.push_bytes_uninit(scratch, 6 * #len(read) + 1024))
+  render_page(&writer, read)
   if html.failed(&writer) {
     #panic("the page buffer is sized for the worst case of escaping")
   }
@@ -77,12 +79,14 @@ fn build_page(keep: *mem.Arena, scratch: *mem.Arena, source: []const u8, output:
   stem := file_name[..#len(file_name) - #len(".txt")]
   page_name := strings.format(scratch, "{}.html", stem)
   target := path.join(scratch, output, page_name)
-  written := fs.write_all(target.value, html.output(&writer).bytes)
-  if io.failed(written.failure) {
+  page_file := fs.create(target.value)
+  _ = fs.write(&page_file, html.output(&writer).bytes)
+  fs.close(&page_file)
+  if page_file.failed {
     io.eprintln("site: cannot write {}", target.value)
-    return io.Result(Page){ failure: written.failure }
+    return io.Result(Page){ failure: page_file.failure }
   }
-  page := Page{ name: strings.clone(keep, stem), title: strings.clone(keep, page_title(read.value)) }
+  page := Page{ name: strings.clone(keep, stem), title: strings.clone(keep, page_title(read)) }
   return io.Result(Page){ value: page }
 }
 
@@ -109,7 +113,10 @@ fn build_index(scratch: *mem.Arena, output: []const u8, pages: []const Page) io.
     #panic("the index buffer is sized for the worst case of escaping")
   }
   target := path.join(scratch, output, "index.html")
-  return fs.write_all(target.value, html.output(&writer).bytes).failure
+  index_file := fs.create(target.value)
+  _ = fs.write(&index_file, html.output(&writer).bytes)
+  fs.close(&index_file)
+  return index_file.failure
 }
 
 fn main() i32 {

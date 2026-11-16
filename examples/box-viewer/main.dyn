@@ -136,7 +136,7 @@ fn save(api: *const gl.Api, arena: *mem.Arena, path: []const u8, width, height: 
     _ = mem.copy(rows[y * stride..(y + 1) * stride], raw[(#cast(usize, height) - 1 - y) * stride..(#cast(usize, height) - y) * stride])
   }
   encoded := png.encode(arena, rows, #cast(u32, width), #cast(u32, height), 4)
-  if parse.failed(encoded.failure) || io.failed(fs.write_all(path, encoded.value).failure) {
+  if parse.failed(encoded.failure) || !fs.write_all(path, encoded.value) {
     #panic("cannot write the screenshot")
   }
 }
@@ -173,11 +173,13 @@ fn main() {
       #panic("no supported system font; pass a TrueType file")
     }
   }
-  data := fs.read_all(persistent, path, 67108864)
-  if io.failed(data.failure) {
+  data_file := fs.open(path)
+  data := fs.read_contents(persistent, &data_file, 67108864)
+  fs.close(&data_file)
+  if data_file.failed {
     #panic("cannot read the font; pass a TrueType file")
   }
-  face := font.open(data.value)
+  face := font.open(data)
   if parse.failed(face.failure) {
     #panic("not a TrueType font")
   }

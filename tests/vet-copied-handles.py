@@ -26,8 +26,8 @@ fn grow(pool: *Pool) {
 
 fn main() {
   opened := fs.open("main.dyn")
-  if io.failed(opened.failure) { return }
-  file := opened.value
+  if opened.failed { return }
+  file := opened
   copy := file
   _ = fs.is_open(&file)
   _ = fs.is_open(&copy)

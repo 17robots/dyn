@@ -20,8 +20,8 @@ fn main() {
   clean()
   check(!io.failed(fs.make_directory("listing", 493).failure), "make directory")
   check(!io.failed(fs.make_directory("listing/inner", 493).failure), "make inner")
-  check(!io.failed(fs.write_all("listing/alpha.txt", "a").failure), "alpha")
-  check(!io.failed(fs.write_all("listing/βeta.txt", "b").failure), "beta")
+  check(fs.write_all("listing/alpha.txt", "a"), "alpha")
+  check(fs.write_all("listing/βeta.txt", "b"), "beta")
   storage: [4096]u8
   opened := fs.open_directory("listing", storage[..])
   check(!io.failed(opened.failure), "open directory")

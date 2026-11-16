@@ -1,6 +1,8 @@
-// Portable categories accompany (and never replace) the original native code.
-// A library validation failure may have no native code. Test kind/ok/status first.
-pub struct Failure { kind: Kind, native: isize }
+// Why an operation failed: a portable kind, the native code when the system
+// gave one, and what was being done, such as operation "open" on path
+// "/etc/app.conf". path borrows the caller's text. describe turns it into
+// "open /etc/app.conf: not found".
+pub struct Failure { kind: Kind, native: isize, operation: []const u8, path: []const u8 }
 // A value and how getting it went. value is always safe to read: zero or a
 // documented partial result on failure.
 pub struct Result(T) { value: T, failure: Failure }
@@ -104,4 +106,44 @@ pub fn darwin(code: isize) Kind {
   // Other common categories have the same values as Linux's base errno set.
   if value == 11 || value == 38 || value == 75 || value == 95 { return Kind.System }
   return linux(code)
+}
+
+// A short description of kind: "not found", "permission denied".
+pub fn kind_text(kind: Kind) []const u8 {
+  case kind {
+    Kind.Ok => { return "ok" }
+    Kind.InvalidInput => { return "invalid input" }
+    Kind.InvalidState => { return "invalid state" }
+    Kind.NotFound => { return "not found" }
+    Kind.PermissionDenied => { return "permission denied" }
+    Kind.AlreadyExists => { return "already exists" }
+    Kind.Capacity => { return "out of space" }
+    Kind.Overflow => { return "too large" }
+    Kind.Interrupted => { return "interrupted" }
+    Kind.WouldBlock => { return "would block" }
+    Kind.Unsupported => { return "unsupported" }
+    Kind.System => { return "system error" }
+  }
+}
+// "operation path: kind" in storage, such as "open /etc/app.conf: not found";
+// parts that are empty are left out. Truncated to storage.
+pub fn describe(storage: []u8, failure: Failure) []u8 {
+  used: usize = 0
+  used = describe_put(storage, used, failure.operation)
+  if #len(failure.path) != 0 {
+    if used != 0 { used = describe_put(storage, used, " ") }
+    used = describe_put(storage, used, failure.path)
+  }
+  if used != 0 { used = describe_put(storage, used, ": ") }
+  used = describe_put(storage, used, kind_text(failure.kind))
+  return storage[..used]
+}
+fn describe_put(storage: []u8, at: usize, text: []const u8) usize {
+  used := at
+  for byte in text {
+    if used == #len(storage) { return used }
+    storage[used] = byte
+    used += 1
+  }
+  return used
 }

@@ -929,29 +929,28 @@ module's full declarations and comments.
 
 ## std/fs
 
-- `struct File { descriptor: isize, active: bool }`: A file handle is a plain value: copy it freely, and close it once.
-- `type FileResult = io.Result(File)`
+- `struct File { descriptor: isize, active: bool, failed: bool, ended: bool, failure: io.Failure }`: A file handle is a plain value: copy it freely, and close it once.
 - `struct Result { transferred: usize, failure: io.Failure }`
 - `type OffsetResult = io.Count`
-- `type ReadAllResult = io.Bytes`
 - `fn is_open(file: *const File) bool`
 - `fn adopt_handle(handle: isize) File`: A File for a native handle opened elsewhere;
-- `fn open(path: []const u8) FileResult`
-- `fn create(path: []const u8) FileResult`
-- `fn append(path: []const u8) FileResult`
-- `fn create_exclusive(path: []const u8) FileResult`
+- `fn open(path: []const u8) File`: Opens path for reading.
+- `fn create(path: []const u8) File`
+- `fn append(path: []const u8) File`
+- `fn create_exclusive(path: []const u8) File`
 - `fn close(file: *File)`
-- `fn read(file: *File, destination: []u8) Result`: Destination borrows caller storage.
-- `fn write(file: *File, source: []const u8) Result`
+- `fn read(file: *File, destination: []u8) usize`: Reads into destination and returns the byte count.
+- `fn write(file: *File, source: []const u8) usize`: Writes all of source and returns the bytes written, fewer on a failure.
 - `fn reader(file: *File) io.Reader`: Adapters borrow the File itself: keep it alive and unmoved until I/O completes.
 - `fn writer(file: *File) io.Writer`
-- `fn seek(file: *File, offset: isize, origin: usize) OffsetResult`: origin: 0 start, 1 current, 2 end.
-- `fn sync(file: *File) Result`
+- `fn seek(file: *File, offset: isize, origin: usize) usize`: Moves the file position and returns it;
+- `fn sync(file: *File)`: Makes written data durable.
 - `type Mapping = io.Result([]const u8)`: A read-only view of a whole file, owned by the caller until unmap.
 - `fn map(file: *const File) Mapping`: Maps the whole file.
 - `fn unmap(mapping: *Mapping) Result`: Releases a mapping and clears it.
-- `fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) ReadAllResult`: Reads one complete file into arena storage, bounded by maximum.
-- `fn write_all(path: []const u8, source: []const u8) Result`: A failed close is not reported.
+- `fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) []u8`: Reads one complete file into arena storage, bounded by maximum.
+- `fn read_contents(arena: *memory.Arena, file: *File, maximum: usize) []u8`: Reads the rest of file into arena storage, bounded by maximum.
+- `fn write_all(path: []const u8, source: []const u8) bool`: Creates or replaces path with source;
 - `struct Metadata { size: u64, inode: u64, device: u64, mode: u16, failure: io.Failure }`
 - `type PathResult = io.Bytes`
 - `enum AppDirectory { Home, Config, Cache, Data, Runtime }`
@@ -1151,7 +1150,7 @@ module's full declarations and comments.
 
 ## std/io
 
-- `struct Failure { kind: Kind, native: isize }`: Portable categories accompany (and never replace) the original native code.
+- `struct Failure { kind: Kind, native: isize, operation: []const u8, path: []const u8 }`: Why an operation failed: a portable kind, the native code when the system gave one, and what was being done, such as operation "open" on ...
 - `struct Result(T) { value: T, failure: Failure }`: A value and how getting it went.
 - `type Bytes = Result([]u8)`
 - `type Count = Result(usize)`
@@ -1166,6 +1165,8 @@ module's full declarations and comments.
 - `fn windows(code: isize) Kind`
 - `fn wasi(code: isize) Kind`
 - `fn darwin(code: isize) Kind`
+- `fn kind_text(kind: Kind) []const u8`: A short description of kind: "not found", "permission denied".
+- `fn describe(storage: []u8, failure: Failure) []u8`: "operation path: kind" in storage, such as "open /etc/app.conf: not found";
 - `enum Status { Complete, End }`: A transfer either completed or reached the end.
 - `struct Transfer { transferred: usize, failure: Failure, status: Status, }`
 - `struct Reader { data: rawptr, read: fn(rawptr, []u8) Transfer, }`

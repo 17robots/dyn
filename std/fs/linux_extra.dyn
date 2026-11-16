@@ -84,13 +84,13 @@ pub fn close_directory(directory: *Directory) {
 pub fn copy_file(source: []const u8, destination: []const u8, scratch: []u8) Result {
   if #len(scratch) == 0 { return Result{ failure: io.linux_failure(-22) } }
   input := open(source)
-  if io.failed(input.failure) { return Result{ failure: io.linux_failure(input.failure.native) } }
+  if input.failed { return Result{ failure: input.failure } }
   output_file := open_flags(destination, 65, 420)
   if io.failed(output_file.failure) {
-    close(&input.value)
+    close(&input)
     return Result{ failure: io.linux_failure(output_file.failure.native) }
   }
-  source_info := file_metadata(&input.value)
+  source_info := file_metadata(&input)
   destination_info := file_metadata(&output_file.value)
   validation_error: isize = 0
   if io.failed(source_info.failure) {
@@ -106,12 +106,12 @@ pub fn copy_file(source: []const u8, destination: []const u8, scratch: []u8) Res
     validation_error = #syscall(sys.Ftruncate, output_file.value.descriptor, 0)
   }
   if validation_error != 0 {
-    close(&input.value)
+    close(&input)
     close(&output_file.value)
     return Result{ failure: io.linux_failure(validation_error) }
   }
-  copied := io.copy(writer(&output_file.value), reader(&input.value), scratch)
-  close(&input.value)
+  copied := io.copy(writer(&output_file.value), reader(&input), scratch)
+  close(&input)
   close(&output_file.value)
   if io.failed(copied.failure) {
     return Result{ transferred: copied.transferred, failure: io.Failure{ kind: copied.failure.kind, native: copied.failure.native } }
@@ -132,11 +132,9 @@ pub fn file_metadata(file: *const File) Metadata {
 }
 pub fn metadata(path: []const u8) Metadata {
   opened := open(path)
-  if io.failed(opened.failure) {
-    return Metadata{ failure: io.linux_failure(opened.failure.native) }
-  }
-  info := file_metadata(&opened.value)
-  close(&opened.value)
+  if opened.failed { return Metadata{ failure: opened.failure } }
+  info := file_metadata(&opened)
+  close(&opened)
   if io.failed(info.failure) { return info }
   return info
 }
@@ -207,9 +205,10 @@ fn read_link_into(path: []const u8, destination: []u8) PathResult {
 pub fn sync_directory(path: []const u8) Result {
   opened := open_flags(path, directory_flag, 0)
   if io.failed(opened.failure) { return Result{ failure: io.linux_failure(opened.failure.native) } }
-  synced := sync(&opened.value)
-  close(&opened.value)
-  return synced
+  directory := opened.value
+  sync(&directory)
+  close(&directory)
+  return Result{ failure: directory.failure }
 }
 
 pub struct AtomicFile {
@@ -226,11 +225,9 @@ pub fn atomic_begin(destination: []const u8, temporary: []const u8) AtomicResult
     return AtomicResult{ failure: io.linux_failure(-22) }
   }
   created := create_exclusive(temporary)
-  if io.failed(created.failure) {
-    return AtomicResult{ failure: io.linux_failure(created.failure.native) }
-  }
+  if created.failed { return AtomicResult{ failure: created.failure } }
   return AtomicResult{ value: AtomicFile{
-    file: created.value,
+    file: created,
     destination: destination,
     temporary: temporary,
     active: true,
@@ -239,8 +236,8 @@ pub fn atomic_begin(destination: []const u8, temporary: []const u8) AtomicResult
 
 pub fn atomic_commit(transaction: *AtomicFile) Result {
   if !transaction.active { return Result{ transferred: 0, failure: io.linux_failure(-22) } }
-  synced := sync(&transaction.file)
-  if io.failed(synced.failure) { return synced }
+  sync(&transaction.file)
+  if transaction.file.failed { return Result{ failure: transaction.file.failure } }
   close(&transaction.file)
   renamed := rename(transaction.temporary, transaction.destination)
   if !io.failed(renamed.failure) {
@@ -277,9 +274,10 @@ pub fn write_atomic(destination: []const u8, temporary: []const u8, source: []co
   }
   transaction := transaction_result.value
   written := write(&transaction.file, source)
-  if io.failed(written.failure) {
+  if transaction.file.failed {
+    failure := transaction.file.failure
     _ = atomic_abort(&transaction)
-    return written
+    return Result{ transferred: written, failure: failure }
   }
   committed := atomic_commit(&transaction)
   if io.failed(committed.failure) {
@@ -288,7 +286,7 @@ pub fn write_atomic(destination: []const u8, temporary: []const u8, source: []co
     }
     return committed
   }
-  return Result{ transferred: written.transferred }
+  return Result{ transferred: written }
 }
 
 fn environment_get(name: []const u8, destination: []u8) PathResult {

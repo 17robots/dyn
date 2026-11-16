@@ -39,7 +39,7 @@ fn save(arena:*mem.Arena,result:*const layout.Layout,path:[]const u8) {
   values:[8]u32=[g.id,#cast(u32,g.start),#cast(u32,g.end),#cast(u32,#cast(i32,g.x*64.0)),#cast(u32,#cast(i32,g.y*64.0)),#cast(u32,#cast(i32,g.x_offset*64.0)),#cast(u32,#cast(i32,g.y_offset*64.0)),#cast(u32,#cast(i32,g.advance*64.0))]
   for j in 0..8 {binary.store_u32_le(out[4+i*32+j*4..8+i*32+j*4],values[j])}
  }
- check(!errors.failed(fs.write_all(path,out).failure))
+ check(fs.write_all(path,out))
 }
 fn main() {
  arena:=mem.arena_alloc(0)
@@ -52,14 +52,16 @@ fn main() {
  h:=hb.load(hb_library.value)
  b:=bidi.load(bidi_library.value)
  check(!errors.failed(h.failure) && !errors.failed(b.failure))
- data:=fs.read_all(arena,"font.ttf",10000000)
- check(!errors.failed(data.failure))
- created:=hb.font_owned(&h.api,data.value,0)
+ data_file := fs.open("font.ttf")
+ data := fs.read_contents(arena, &data_file, 10000000)
+ fs.close(&data_file)
+ check(!data_file.failed)
+ created:=hb.font_owned(&h.api,data,0)
  check(!errors.failed(created.failure))
  defer h.api.font_destroy(created.value)
  h.api.font_set_scale(created.value,2048,2048)
  font:=layout.Font{data:created.value,select:select,line_height:40,space_advance:10.171875}
- other:=hb.font_owned(&h.api,data.value,0)
+ other:=hb.font_owned(&h.api,data,0)
  check(!errors.failed(other.failure))
  other_font=other.value
  defer h.api.font_destroy(other.value)

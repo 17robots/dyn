@@ -54,7 +54,7 @@ fn save(arena:*mem.Arena,api:*const bidi.Api,text:[]const u8,base:u32,path:[]con
    append(out,&at,#cast(u32,line.value.levels[i]))
   }
  }
- check(!errors.failed(fs.write_all(path,out[..at]).failure))
+ check(fs.write_all(path,out[..at]))
 }
 fn fail_resolve(input:*const u32,n:i32,base:*u32,visual:*u32,lv:*i32,vl:*i32,levels:*i8) i8 {
  _=input

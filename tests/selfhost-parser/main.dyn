@@ -61,12 +61,14 @@ fn main() {
     put(&out, arena, "== ")
     put(&out, arena, path)
     put(&out, arena, "\n")
-    source := fs.read_all(arena, path, 64 * mem.MiB)
-    if io.failed(source.failure) {
+    source_file := fs.open(path)
+    source := fs.read_contents(arena, &source_file, 64 * mem.MiB)
+    fs.close(&source_file)
+    if source_file.failed {
       #panic("cannot read source")
     }
     tree := Tree{}
-    root := parse_source(source.value, &tree, arena)
+    root := parse_source(source, &tree, arena)
     if root == None {
       put(&out, arena, "error ")
       put_number(&out, arena, #cast(u64, tree.error_offset))

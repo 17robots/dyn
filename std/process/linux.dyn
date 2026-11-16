@@ -44,9 +44,9 @@ fn pipe_native() Pipe {
 }
 fn read_native(handle: isize, destination: []u8) ReadResult {
   file := fs.adopt_handle(handle)
-  result := fs.read(&file, destination)
-  if io.failed(result.failure) && result.failure.native == -11 { return ReadResult{ ok: true } }
-  return ReadResult{ count: result.transferred, ended: !io.failed(result.failure) && result.transferred == 0, error: result.failure.native, kind: result.failure.kind, ok: !io.failed(result.failure) }
+  count := fs.read(&file, destination)
+  if file.failed && file.failure.native == -11 { return ReadResult{ ok: true } }
+  return ReadResult{ count: count, ended: file.ended, error: file.failure.native, kind: file.failure.kind, ok: !file.failed }
 }
 fn milliseconds_native() MillisecondsResult {
   now := time.monotonic_now()
@@ -70,17 +70,19 @@ fn duplicate_native(value: isize) HandleResult {
 }
 
 fn arguments_native(arena: *mem.Arena) ArgumentsResult {
-  raw := fs.read_all(arena, "/proc/self/cmdline", #max(usize))
-  if io.failed(raw.failure) {
-    return ArgumentsResult{ failure: io.Failure{ kind: raw.failure.kind, native: raw.failure.native } }
+  raw_file := fs.open("/proc/self/cmdline")
+  raw := fs.read_contents(arena, &raw_file, #max(usize))
+  fs.close(&raw_file)
+  if raw_file.failed {
+    return ArgumentsResult{ failure: io.Failure{ kind: raw_file.failure.kind, native: raw_file.failure.native } }
   }
   count: usize = 0
-  for byte in raw.value {
+  for byte in raw {
     if byte == 0 {
       count += 1
     }
   }
-  if #len(raw.value) > 0 && raw.value[#len(raw.value) - 1] != 0 {
+  if #len(raw) > 0 && raw[#len(raw) - 1] != 0 {
     return ArgumentsResult{ failure: io.Failure{ kind: io.Kind.InvalidState } }
   }
   result := argument_slots(arena, count)
@@ -88,9 +90,9 @@ fn arguments_native(arena: *mem.Arena) ArgumentsResult {
   at: usize = 0
   start: usize = 0
   index: usize = 0
-  for at < #len(raw.value) {
-    if raw.value[at] == 0 {
-      result.value[index] = raw.value[start..at]
+  for at < #len(raw) {
+    if raw[at] == 0 {
+      result.value[index] = raw[start..at]
       index += 1
       start = at + 1
     }

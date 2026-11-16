@@ -210,9 +210,8 @@ fn visit(arena: *mem.Arena, scratch: *mem.Arena, walk: *Walk, directory: []const
       // Directories recurse with their own scratch path, then release it.
       visit(arena, scratch, walk, path, depth + 1)
     } else if font_file(item.name) && walk.count < #len(walk.entries) {
-      file := fs.open(path)
-      if !io.failed(file.failure) {
-        handle := file.value
+      handle := fs.open(path)
+      if !handle.failed {
         mapped := fs.map(&handle)
         fs.close(&handle)
         if !io.failed(mapped.failure) {
@@ -354,9 +353,8 @@ pub fn covering(entries: []const Entry, codepoint: u32, regular_only: bool) *con
   for i in 0..#len(entries) {
     entry := &entries[i]
     if regular_only && (entry.italic || entry.weight != 400) { continue }
-    file := fs.open(entry.path)
-    if io.failed(file.failure) { continue }
-    handle := file.value
+    handle := fs.open(entry.path)
+    if handle.failed { continue }
     mapped := fs.map(&handle)
     fs.close(&handle)
     if io.failed(mapped.failure) { continue }
