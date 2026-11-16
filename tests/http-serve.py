@@ -6,6 +6,7 @@ import re
 import http.client
 import os
 from pathlib import Path
+import shutil
 import signal
 import subprocess
 import sys
@@ -48,4 +49,55 @@ with tempfile.TemporaryDirectory(prefix='dyn-http-serve-') as temporary:
             if server.poll() is None:
                 server.kill()
                 server.wait()
-print('PASS evented.serve: answers, logs, stops on SIGTERM and SIGINT')
+
+# Without load-balancing SO_REUSEPORT (macOS, Windows) serve shares one
+# listener across workers. Both targets build; the Windows one runs under wine.
+PORTABLE = '''use "std/io"
+use "std/mem"
+use "std/net"
+use "std/net/http"
+use "std/net/http/evented"
+
+fn hello(response: *http.Response, request: *const http.Request) http.Result {
+  return http.text(response, 200, "hello\\n")
+}
+
+fn main() i32 {
+  config := evented.default_config()
+  config.connections_per_worker = 16
+  arena := mem.arena_alloc(evented.storage_size(config, 2) + mem.MiB)
+  defer mem.arena_release(arena)
+  workers: [2]evented.Worker
+  result := evented.serve(arena, workers[..], net.ipv4(127, 0, 0, 1, 18098), config, hello, nil)
+  if io.failed(result.failure) { return 1 }
+  return 0
+}
+'''
+ran = ''
+with tempfile.TemporaryDirectory(prefix='dyn-http-serve-portable-') as temporary:
+    work = Path(temporary)
+    (work / 'main.dyn').write_text(PORTABLE)
+    for target in ('aarch64-macos', 'x86_64-windows'):
+        subprocess.run([DYN, 'build', str(work), '--target', target, '--quiet', '--no-cache',
+                        '--output', str(work / target)], check=True, timeout=180)
+    wine = shutil.which('wine')
+    if wine:
+        server = subprocess.Popen([wine, str(work / 'x86_64-windows')], stdout=subprocess.DEVNULL,
+                                  stderr=subprocess.DEVNULL, start_new_session=True)
+        try:
+            reply = None
+            for _ in range(240):
+                try:
+                    client = http.client.HTTPConnection('127.0.0.1', 18098, timeout=5)
+                    client.request('GET', '/')
+                    reply = client.getresponse()
+                    break
+                except (ConnectionRefusedError, ConnectionResetError):
+                    time.sleep(0.25)
+            assert reply is not None and (reply.status, reply.read()) == (200, b'hello\n')
+            assert server.poll() is None, server.returncode
+            ran = ', Windows serve under wine'
+        finally:
+            os.killpg(server.pid, signal.SIGKILL)
+            server.wait()
+print('PASS evented.serve: answers, logs, stops on SIGTERM and SIGINT; builds for macOS/Windows' + ran)

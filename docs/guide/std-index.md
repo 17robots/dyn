@@ -1625,7 +1625,7 @@ module's full declarations and comments.
 - `fn connection_write(connection: *Connection, source: []const u8) Result`
 - `fn connection_reader(connection: *Connection) io.Reader`
 - `fn connection_writer(connection: *Connection) io.Writer`
-- `fn accept_address(descriptor: isize, address: *Address) Result`
+- `fn accept_address(descriptor: isize, address: *Address, nonblocking: bool) Result`: Accepts one connection and records its peer address.
 - `fn local_address(descriptor: isize, address: *Address) Result`
 - `fn peer_address(descriptor: isize, address: *Address) Result`
 - `fn send(descriptor: isize, bytes: []const u8, flags: usize) Result`
@@ -1668,14 +1668,6 @@ module's full declarations and comments.
 - `const CompressMinimum: usize = 1024`: Bodies shorter than this go out as they are: a gzip member has 18 bytes of framing, and small bodies fit one packet either way.
 - `const CompressHeaders: usize = 30`: Extra headers respond_compressed can carry besides Content-Encoding and Vary.
 - `fn respond_compressed(response: *Response, request: *const Request, body: []const u8, options: ResponseOptions, level: u8, encoder: *gzip.Encoder) Result`: Like respond, with body gzipped at level (1-9) when that helps: the content type compresses (text, JSON, XML, SVG, JavaScript ...
-- `type StreamReader = io.Reader`
-- `type StreamWriter = io.Writer`
-- `type StreamResult = io.Transfer`
-- `type Listener = network.Listener`
-- `type Connection = network.Connection`
-- `type AcceptResult = io.Result(Connection)`
-- `fn accept(listener: *Listener) AcceptResult`
-- `fn close(connection: *Connection)`
 - `enum Framing { None, Length, Chunked, Close }`
 - `struct HttpHead { offset: usize, framing: Framing, code: u16, header_length: usize, content_length: usize, keep_alive: bool, chunked: bool, failure: parse.Failure }`: Parser offsets are byte positions in the supplied input;
 - `struct HttpHeader { offset: usize, name: []const u8, value: []const u8, found: bool, failure: parse.Failure }`
@@ -1723,7 +1715,7 @@ module's full declarations and comments.
 - `const StatusPayloadTooLarge: u16 = 413`
 - `const StatusInternalServerError: u16 = 500`
 - `enum ErrorKind { None, End, Invalid, Capacity, Io }`
-- `struct Request { raw: []const u8, method: []const u8, target: []const u8, // target before '?', and after it (empty when absent). Both borrow raw. path: []const u8, query: []const u8, body: []const u8, header_length: usize, keep_alive: bool, // Borrowed application state given to serve_stream_context and friends; nil otherwise. context: rawptr, // Path parameters captured by a Routes pattern such as /users/:id. Read // them with param. params: [MaxParams]Header, param_count: usize, }`
+- `struct Request { raw: []const u8, method: []const u8, target: []const u8, // target before '?', and after it (empty when absent). Both borrow raw. path: []const u8, query: []const u8, body: []const u8, header_length: usize, keep_alive: bool, // Borrowed application state given to serve_stream or an evented start; nil otherwise. context: rawptr, // Path parameters captured by a Routes pattern such as /users/:id. Read // them with param. params: [MaxParams]Header, param_count: usize, }`
 - `struct Response { failed: bool, first: Result, first_stream: io.Transfer, output: io.Writer, // Optional transport-owned response storage. Both callbacks use output.data. // reserve_body returns exclusive writable storage until commit or handler return. // commit_body queues a copied head followed by the first length body bytes. reserve_body: fn(rawptr, usize) []u8, commit_body: fn(rawptr, []const u8, usize) io.Transfer, reserved: []u8, started: bool, finished: bool, // The request was HEAD: the head is sent with the Content-Length the body // would have, and the body is dropped. head_only: bool, // Preformatted IMF-fixdate for the Date header, kept current by the server // loop. Empty: response_begin reads the clock itself. date: []const u8, // Set by servers that also speak HTTP/3: an Alt-Svc value (RFC 7838) sent // with every response, such as h3=":443"; ma=86400. Empty sends none. alt_svc: []const u8, // The status sent, once the head is written; 0 before. status: u16, }`
 - `struct Header { name: []const u8, value: []const u8 }`
 - `struct ResponseOptions { status: u16, reason: []const u8, content_type: []const u8, close_connection: bool, // Leaves out the Date header that every response otherwise carries. omit_date: bool, // Extra response headers, written in order. Names must be tokens and values // must not hold CR, LF or NUL; otherwise respond fails with Invalid before // writing anything, so request data cannot inject headers. headers: []const Header, }`
@@ -1733,12 +1725,7 @@ module's full declarations and comments.
 - `struct Body { failed: bool, first: Result, first_stream: io.Transfer, output: io.Writer, finished: bool, // A HEAD response: writes succeed and send nothing. discard: bool, }`
 - `struct BodyResult { detail: ErrorKind, body: Body, result: Result, failure: io.Failure }`
 - `type Handler = fn(*Response, *const Request) Result`
-- `struct Route { method: []const u8, target: []const u8, handler: Handler, }`
-- `struct Router { routes: []Route, count: usize, fallback: Handler, }`
 - `struct ClientResponse { raw: []u8, body: []u8, status: u16, detail: ErrorKind, offset: usize, failure: io.Failure, }`
-- `fn router(storage: []Route, fallback: Handler) Router`: Router storage is supplied by the caller.
-- `fn route(state: *Router, method: []const u8, target: []const u8, handler: Handler) Result`
-- `fn dispatch(state: *Router, response: *Response, request: *const Request) Result`
 - `struct Typed(T) { state: *T, handler: fn(*Response, *const Request, *T) Result, }`: Typed application state.
 - `struct Binding { handler: Handler, context: rawptr }`
 - `fn bind(typed: *Typed($T)) Binding`
@@ -1751,7 +1738,6 @@ module's full declarations and comments.
 - `fn match_path(pattern: []const u8, path: []const u8, request: *Request) bool`: Matches path against pattern segment by segment, capturing :name segments into request.params.
 - `fn param(request: *const Request, name: []const u8) HttpHeader`: Path parameter captured by a Routes pattern, still percent-encoded.
 - `fn server(input: io.Reader, output: io.Writer, storage: []u8) Server`
-- `fn connection_server(input: io.Reader, output: io.Writer, storage: []u8) Server`
 - `enum FrameStatus { Incomplete, Ready, Invalid, Capacity }`
 - `struct FrameResult { status: FrameStatus, request: Request, consumed: usize, offset: usize, total: usize, expect_continue: bool, // frame_request_head: the declared Content-Length, or chunked. body_length: usize, chunked: bool, }`: On Incomplete with a complete head, total is the request's full length and expect_continue says the client waits for 100 Continue before ...
 - `fn frame_request(input: []const u8, capacity: usize) FrameResult`: Frames one request from bytes already buffered, with no I/O, for callers that own their sockets (event loops).
@@ -1784,10 +1770,7 @@ module's full declarations and comments.
 - `fn body_writer(body: *Body) io.Writer`: Borrows a stable Body slot: do not move or destroy it during the writer's lifetime.
 - `fn body_finish(body: *Body) Result`
 - `fn body_abort(body: *Body) Result`
-- `fn serve_connection(connection: *network.Connection, storage: []u8, handler: Handler) Result`
-- `fn serve_connection_context(connection: *network.Connection, storage: []u8, handler: Handler, context: rawptr) Result`: Like serve_connection;
-- `fn serve_stream(input: io.Reader, output: io.Writer, storage: []u8, handler: Handler) Result`: Stream seam shared by plain TCP, TLS, tests, and embedded transports.
-- `fn serve_stream_context(input: io.Reader, output: io.Writer, storage: []u8, handler: Handler, context: rawptr) Result`: Like serve_stream;
+- `fn serve_stream(input: io.Reader, output: io.Writer, storage: []u8, handler: Handler, context: rawptr) Result`: Serves HTTP/1.1 on one stream until the client closes or a request fails, one request at a time on the calling thread.
 - `fn client_do(arena: *memory.Arena, input: io.Reader, output: io.Writer, method: []const u8, target: []const u8, host: []const u8, body: []const u8) ClientResponse`: Complete exchange;
 - `fn client_do_connection(arena: *memory.Arena, connection: *network.Connection, method: []const u8, target: []const u8, host: []const u8, body: []const u8) ClientResponse`
 - `fn write_request(arena: *memory.Arena, method: []const u8, target: []const u8, host: []const u8, body: []const u8) []u8`: A complete HTTP/1.1 request with Connection: close, in arena.
@@ -1823,15 +1806,6 @@ module's full declarations and comments.
 - `struct ByteRange { start: usize, end: usize, present: bool, satisfiable: bool }`: A single byte range of a representation length bytes long, from a Range header (RFC 9110 14.1.2): bytes=first-last, bytes=first- or ...
 - `fn byte_range(request: *const Request, length: usize) ByteRange`
 - `fn serve_asset(response: *Response, request: *const Request, asset: *const Asset, cache_control: []const u8) Result`: Answers request with asset: 304 when If-None-Match matches (or, without If-None-Match, when If-Modified-Since is not older than modified);
-
-## std/net/http/concurrent
-
-- `struct Worker { thread: *threading.Thread, listener: *http.Listener, handler: http.Handler, context: rawptr, storage: []u8, error: Result, stopping: sync.AtomicU32, control: sync.Mutex, active_descriptor: isize, active_socket: bool, request_errors: usize, }`
-- `struct Result { started: usize, failure: io.Failure }`
-- `fn stop(workers: []Worker)`: Call stop, then join, then close the listener.
-- `fn start(arena: *mem.Arena, workers: []Worker, listener: *http.Listener, receive_storage: []u8, worker_storage_size: usize, stacks: []u8, stack_size: usize, handler: http.Handler) Result`: Backing storage/stacks must be disjoint and live through join.
-- `fn start_context(arena: *mem.Arena, workers: []Worker, listener: *http.Listener, receive_storage: []u8, worker_storage_size: usize, stacks: []u8, stack_size: usize, handler: http.Handler, context: rawptr) Result`: Like start;
-- `fn join(workers: []Worker) Result`: Always attempts every join;
 
 ## std/net/http/evented
 
@@ -1977,7 +1951,7 @@ module's full declarations and comments.
 - `enum WebSocketEventKind { None, Ready, Ping, Pong, Close, Error }`
 - `struct WebSocketMessageState { used: usize, opcode: u8, fragmented: bool, closed: bool, enforce_mask: bool, masked: bool }`
 - `struct WebSocketEvent { payload: []u8, detail: WebSocketEventKind, offset: usize, opcode: u8, close_code: u16, failure: io.Failure }`
-- `struct WebSocketConnection { input: http.StreamReader, output: http.StreamWriter, frames: []u8, // Retain unread wire bytes; compact only on the next receive. frame_used: usize, frame_consumed: usize, input_ended: bool, message: []u8, control: []u8, state: WebSocketMessageState, client: bool, active: bool, failed: bool, kind: io.Kind, error: isize, offset: usize, close_sent: bool, }`
+- `struct WebSocketConnection { input: io.Reader, output: io.Writer, frames: []u8, // Retain unread wire bytes; compact only on the next receive. frame_used: usize, frame_consumed: usize, input_ended: bool, message: []u8, control: []u8, state: WebSocketMessageState, client: bool, active: bool, failed: bool, kind: io.Kind, error: isize, offset: usize, close_sent: bool, }`
 - `struct Result { offset: usize, failure: io.Failure }`
 - `struct WebSocketResult { event: WebSocketEvent, offset: usize, failure: io.Failure }`
 - `fn accept(destination: []u8, key: []const u8) []u8`: Concise public names;
@@ -1989,7 +1963,7 @@ module's full declarations and comments.
 - `fn decode_frame(arena: *mem.Arena, frame: WebSocketFrame) []u8`: The frame's payload, unmasked, in arena.
 - `fn message_state(expect_masked: bool) WebSocketMessageState`
 - `fn receive(state: *WebSocketMessageState, message: []u8, control: []u8, frame: WebSocketFrame) WebSocketEvent`
-- `fn connection(input: http.StreamReader, output: http.StreamWriter, frames: []u8, message: []u8, control: []u8, client: bool) WebSocketConnection`: Stateful stream wrapper.
+- `fn connection(input: io.Reader, output: io.Writer, frames: []u8, message: []u8, control: []u8, client: bool) WebSocketConnection`: Stateful stream wrapper.
 - `fn connection_send(state: *WebSocketConnection, opcode: u8, payload: []const u8, final: bool, mask: u32) Result`
 - `fn connection_ping(state: *WebSocketConnection, payload: []const u8, mask: u32) Result`
 - `fn connection_pong(state: *WebSocketConnection, payload: []const u8, mask: u32) Result`
@@ -2106,6 +2080,7 @@ module's full declarations and comments.
 - `const Symlinkat: u64 = 266`
 - `const Readlinkat: u64 = 267`
 - `const Ppoll: u64 = 271`
+- `const Accept4: u64 = 288`
 - `const Signalfd4: u64 = 289`
 - `const EpollCreate1: u64 = 291`
 - `const Pipe2: u64 = 293`

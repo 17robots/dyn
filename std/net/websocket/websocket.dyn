@@ -11,8 +11,8 @@ pub struct WebSocketMessageState { used: usize, opcode: u8, fragmented: bool, cl
 pub struct WebSocketEvent { payload: []u8, detail: WebSocketEventKind, offset: usize, opcode: u8, close_code: u16, failure: io.Failure }
 
 pub struct WebSocketConnection {
-  input: http.StreamReader,
-  output: http.StreamWriter,
+  input: io.Reader,
+  output: io.Writer,
   frames: []u8,
   // Retain unread wire bytes; compact only on the next receive.
   frame_used: usize,
@@ -611,7 +611,7 @@ pub fn receive(state: *WebSocketMessageState, message: []u8, control: []u8, fram
 // reply is still allowed. Other sends after either Close return InvalidState with native code zero, not a sticky
 // failure. Reset by assigning a fresh connection(...) with fresh stream/buffer
 // state; clearing error alone does not reset the connection.
-pub fn connection(input: http.StreamReader, output: http.StreamWriter, frames: []u8, message: []u8,
+pub fn connection(input: io.Reader, output: io.Writer, frames: []u8, message: []u8,
   control: []u8, client: bool) WebSocketConnection {
   return WebSocketConnection{
     input: input,

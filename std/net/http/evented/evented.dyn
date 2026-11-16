@@ -1130,17 +1130,13 @@ fn on_accept(worker: *Worker) {
       return
     }
     remote := network.Address{}
-    accepted := network.accept_address(worker.listener.descriptor, &remote)
+    accepted := network.accept_address(worker.listener.descriptor, &remote, true)
     if io.failed(accepted.failure) {
       // Would-block: another worker won the race. Other errors (EMFILE,
       // ECONNABORTED) are per-connection; keep serving.
       return
     }
     descriptor := accepted.value
-    if io.failed(network.nonblocking(descriptor, true).failure) {
-      network.close(descriptor)
-      continue
-    }
     _ = network.no_delay(descriptor, true)
     worker.accepted += 1
     // Only now, with a client waiting, make room for it.
@@ -1466,7 +1462,7 @@ pub fn start(arena: *mem.Arena, workers: []Worker, listener: *network.Listener, 
 // so the kernel spreads new connections across workers instead of waking all
 // of them. Port 0 picks one free port shared by all; read it back with
 // local_port. join closes the listeners. Linux only: elsewhere the result
-// fails with Unsupported; use start there.
+// fails with Unsupported; use start there, or serve, which does.
 pub fn start_shared(arena: *mem.Arena, workers: []Worker, address: network.Ipv4Address, backlog: usize,
   config: Config, handler: http.Handler, context: rawptr) Result {
   invalid := valid_start(workers, config, handler)
@@ -1817,6 +1813,8 @@ pub fn worker_index(response: *http.Response) usize {
 // Runs the server until SIGINT or SIGTERM: watches the signals first (before
 // any thread starts, as std/process/signal requires), starts workers with
 // start_shared on address, waits for a signal, then stops and joins them.
+// Where the kernel cannot balance SO_REUSEPORT listeners (macOS, Windows),
+// the workers share one listener through start instead.
 // arena must hold storage_size(config, #len(workers)).
 pub fn serve(arena: *mem.Arena, workers: []Worker, address: network.Ipv4Address, config: Config, handler: http.Handler,
   context: rawptr) Result {
@@ -1824,7 +1822,15 @@ pub fn serve(arena: *mem.Arena, workers: []Worker, address: network.Ipv4Address,
   if io.failed(watched.failure) { return Result{ failure: watched.failure } }
   signals := watched.value
   defer signal.close(&signals)
+  listener := network.Listener{}
+  defer network.listener_close(&listener)
   started := start_shared(arena, workers, address, 1024, config, handler, context)
+  if started.failure.kind == io.Kind.Unsupported {
+    listened := network.tcp_listen_ipv4(&address, 1024)
+    if io.failed(listened.failure) { return Result{ failure: listened.failure } }
+    listener = listened.value
+    started = start(arena, workers, &listener, config, handler, context)
+  }
   if io.failed(started.failure) { return started }
   _ = signal.wait(&signals)
   stop(workers)

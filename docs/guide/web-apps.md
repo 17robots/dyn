@@ -67,6 +67,10 @@ Every response carries `Date`, formatted once per loop pass by the server.
 `1xx`, `204` and `304` heads carry no `Content-Type` or `Content-Length`, and
 `respond` rejects a body for them.
 
+`evented` is the one server. Outside it, `http.serve_stream` runs a handler
+over any `io.Reader` and `io.Writer` pair, one request at a time on the
+calling thread: for a single-threaded or embedded server, or a test.
+
 ## Sessions and CSRF
 
 `std/net/http/session` handles cookie sessions in front of your own store,
@@ -399,9 +403,12 @@ and time, in the access log or on standard error; move that work to `run`.
 
 `evented.serve` watches SIGINT and SIGTERM, serves, then stops the workers
 and waits for them: workers close their connections and wait for running
-jobs. Close the database after it returns. To run more than the server, call
-`signal.watch` on the main thread yourself, then `start_shared`,
-`signal.wait`, `evented.stop` and `evented.join`. Threads from `std/thread`
+jobs. Close the database after it returns. On Linux every worker gets its
+own `SO_REUSEPORT` listener; where the kernel cannot balance those (macOS,
+Windows) the workers share one. To run more than the server, call
+`signal.watch` on the main thread yourself, then `start_shared` (Linux) or
+`start` with your own listener, `signal.wait`, `evented.stop` and
+`evented.join`. Threads from `std/thread`
 and `std/thread/posix` start with SIGINT, SIGTERM and SIGHUP blocked, so a
 pool started earlier cannot take the signal.
 
@@ -457,6 +464,11 @@ whose window is closed is reset. Headers are HPACK-compressed
 static indexes and Huffman-coded literals.
 
 ## HTTP/3
+
+Experimental. HTTP/3 is off unless `Config.http3` is set, and one test
+covers it, which needs OpenSSL 3.5 and a curl built with HTTP/3. Use
+HTTP/2 over TLS for production; most deployments put a proxy in front for
+HTTP/3 anyway.
 
 Set `Config.http3` (with `Config.http2`) and give `Config.quic` a QUIC stack:
 `https.quic(https.quic_context(arena, "cert.pem", "key.pem").value)` from

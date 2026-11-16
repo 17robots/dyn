@@ -16,6 +16,32 @@ servers so they pick up the new `dyn`.
 
 Servers:
 
+- One server and one router. `std/net/http/concurrent` (the blocking worker
+  pool) is gone: use `std/net/http/evented`, which on four workers ran
+  738k keep-alive requests a second from 32 clients where `concurrent` ran
+  478k. The
+  exact-path `http.Router` (`router`, `route`, `dispatch`, `Route`) is gone:
+  use `http.Routes(T)` (`typed_routes`, `add`, `bind_routes`), which also
+  has `:name` segments and 405 with `Allow`.
+- `http.serve_stream` takes the context argument that `serve_stream_context`
+  took; `serve_stream_context`, `serve_connection`,
+  `serve_connection_context` and `connection_server` are gone. Wrap a
+  connection with `net.connection_reader` and `net.connection_writer`, and
+  build a `Server` with `http.server`.
+- Gone with them: `http.accept`, `http.close` and the `http.Listener`,
+  `http.Connection`, `http.StreamReader`, `http.StreamWriter`,
+  `http.StreamResult` and `http.AcceptResult` aliases. Use the `std/net` and
+  `std/io` names.
+- `evented.serve` works on macOS and Windows: without load-balancing
+  `SO_REUSEPORT` it shares one listener across workers. It failed with
+  Unsupported there before.
+- Linux sockets are close-on-exec, like files, so a spawned program no longer
+  inherits listeners and connections. `net.accept_address` takes a
+  `nonblocking` flag and sets it in the same call (`accept4` on Linux).
+- Routes without `:name` segments no longer copy the request: dispatch over
+  11 routes takes 7 to 38 ns, down from 15 to 41.
+- HTTP/3 is marked experimental in the guide.
+
 - `html.print` escapes every value that is not text or `Trusted` after
   formatting it. A struct whose field held `<script>` was written raw.
 

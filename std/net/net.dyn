@@ -168,7 +168,7 @@ pub fn bind(descriptor: isize, address: []const u8) Result {
 }
 
 pub fn accept(descriptor: isize) Result {
-  return result(native_accept(descriptor, nil, nil))
+  return result(native_accept(descriptor, nil, nil, false))
 }
 
 fn stream_listen(family: usize, address: []const u8, backlog: usize, shared: bool) ListenerResult {
@@ -370,9 +370,11 @@ pub fn connection_writer(connection: *Connection) io.Writer {
   return io.Writer{ data: connection, write: connection_writer_write }
 }
 
-pub fn accept_address(descriptor: isize, address: *Address) Result {
+// Accepts one connection and records its peer address. nonblocking sets the
+// new socket nonblocking in the same step where the platform allows it.
+pub fn accept_address(descriptor: isize, address: *Address, nonblocking: bool) Result {
   length: u32 = 128
-  outcome := result(native_accept(descriptor, &address.bytes[0], &length))
+  outcome := result(native_accept(descriptor, &address.bytes[0], &length, nonblocking))
   if !io.failed(outcome.failure) {
     address.length = length
   }

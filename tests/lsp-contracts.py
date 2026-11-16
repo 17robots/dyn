@@ -240,7 +240,7 @@ class Contracts(unittest.TestCase):
         cases = [('std/', {'io', 'mem', 'net'}),
                  ('std/bytes/', {'builder'}),
                  ('std/net/', {'http', 'tls', 'dns'}),
-                 ('std/net/http/', {'concurrent'}),
+                 ('std/net/http/', {'evented'}),
                  ('std/encoding/', {'json', 'base64'})]
         previous = ''
         for ident, (typed, expected) in enumerate(cases, 2):

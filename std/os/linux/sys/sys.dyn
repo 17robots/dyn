@@ -60,6 +60,7 @@ pub const Renameat: u64 = 264
 pub const Symlinkat: u64 = 266
 pub const Readlinkat: u64 = 267
 pub const Ppoll: u64 = 271
+pub const Accept4: u64 = 288
 pub const Signalfd4: u64 = 289
 pub const EpollCreate1: u64 = 291
 pub const Pipe2: u64 = 293
