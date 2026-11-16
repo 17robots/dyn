@@ -1,3 +1,5 @@
+use "std/html" html
+
 // One-call answers for the usual responses. Each is respond with its
 // options filled in; pass headers for anything more.
 
@@ -21,4 +23,30 @@ pub fn redirect(response: *Response, location: []const u8, set_cookie: []const u
     count = 2
   }
   return respond(response, "", ResponseOptions{ status: StatusSeeOther, headers: headers[..count] })
+}
+
+// A Writer for an HTML page (see page): over the response's send buffer when
+// it is free, so the page goes out without a copy, else over fallback.
+pub fn page_writer(response: *Response, fallback: []u8) html.Writer {
+  storage := body_buffer(response, #len(fallback))
+  if #len(storage) == 0 { return html.writer(fallback) }
+  return html.writer(storage)
+}
+
+// Sends the page from page_writer with status as text/html, not cached, with
+// Content-Security-Policy default-src 'self' and X-Content-Type-Options
+// nosniff. 500 when it did not fit its storage.
+pub fn page(response: *Response, status: u16, rendered: *const html.Writer) Result {
+  if html.failed(rendered) { return text(response, 500, "page too large") }
+  headers: [3]Header = [
+    Header{ name: "Content-Security-Policy", value: "default-src 'self'" },
+    Header{ name: "X-Content-Type-Options", value: "nosniff" },
+    Header{ name: "Cache-Control", value: "no-store" },
+  ]
+  options := ResponseOptions{ status: status, content_type: "text/html; charset=utf-8", headers: headers[..] }
+  body := html.output(rendered).bytes
+  if #len(response.reserved) > 0 && #len(body) > 0 && &body[0] == &response.reserved[0] {
+    return respond_buffered(response, #len(body), options)
+  }
+  return respond(response, body, options)
 }

@@ -1,7 +1,9 @@
 // evented.serve: answers until SIGTERM, then stops, joins and returns. Pools
-// started first (raw and libc threads) must not take the signal.
+// started first (raw and libc threads) must not take the signal. Each request
+// is logged to stderr (Config.access_log).
 use "std/fmt"
 use "std/io"
+use "std/log"
 use "std/mem"
 use "std/net"
 use "std/net/http"
@@ -16,6 +18,8 @@ fn hello(response: *http.Response, request: *const http.Request) http.Result {
 fn main() i32 {
   config := evented.default_config()
   config.connections_per_worker = 16
+  logger := log.logger(io.stderr(), log.Level.Info)
+  config.access_log = &logger
   arena := mem.arena_alloc(evented.storage_size(config, 2) + 2 * mem.MiB)
   defer mem.arena_release(arena)
   raw := pool.start(arena, 2, 16, 64 * mem.KiB)

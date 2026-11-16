@@ -32,6 +32,54 @@ pub fn text(destination: *Writer, value: []const u8) {
   write_escaped(&destination.buffer, value)
 }
 
+// Writes markup with each {} replaced by the next value: text ([]const u8,
+// []u8) escaped, Trusted markup as it is, numbers and bools as fmt writes
+// them. {{ and }} write one brace, as in fmt.print. The parameter is not
+// named template, so the compiler passes Trusted values through instead of
+// formatting them; a missing value writes {?}. markup is what the program
+// wrote, such as a literal; never pass request data as markup.
+pub fn print(destination: *Writer, markup: []const u8, values: ...any) {
+  next: usize = 0
+  start: usize = 0
+  at: usize = 0
+  for at < #len(markup) {
+    byte := markup[at]
+    if byte != '{' && byte != '}' {
+      at += 1
+      continue
+    }
+    fmt.write(&destination.buffer, markup[start..at])
+    following: u8 = 0
+    if at + 1 < #len(markup) {
+      following = markup[at + 1]
+    }
+    if byte == '{' && following == '}' {
+      if next >= #len(values) {
+        fmt.write(&destination.buffer, "{?}")
+        next += 1
+        at += 2
+        start = at
+        continue
+      }
+      case values[next] {
+        []const u8 value => { text(destination, value) }
+        []u8 value => { text(destination, value) }
+        Trusted value => { fmt.write(&destination.buffer, value.bytes) }
+        _ => { fmt.print_arguments(&destination.buffer, "{}", values[next..next + 1]) }
+      }
+      next += 1
+      at += 2
+    } else {
+      // {{, }}, or a lone brace: one brace.
+      fmt.write_byte(&destination.buffer, byte)
+      at += 1
+      if following == byte { at += 1 }
+    }
+    start = at
+  }
+  fmt.write(&destination.buffer, markup[start..])
+}
+
 pub fn number(destination: *Writer, value: u64) {
   fmt.write_u64(&destination.buffer, value)
 }

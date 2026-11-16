@@ -534,7 +534,8 @@ or in a function body.
 `#typeof(type_or_value)` returns compiler-provided `TypeInfo` without evaluating value operands.
 It requires no standard-library import. Metadata includes stable name-derived ID, `TypeKind`, name, size, and
 alignment. Only types passed to `#typeof` emit name metadata. Bare function names are accepted.
-Struct fields, enum variants, and function arguments expose immutable name/type-ID descriptors;
+Struct fields, enum variants, and function arguments expose immutable name/type-ID descriptors
+(`TypeMember`); its `value` is a field's byte offset or a variant's tag;
 recursive relationships use IDs rather than nested metadata.
 
 ## Removed/deferred syntax

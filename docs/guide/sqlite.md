@@ -56,6 +56,11 @@ The usual statement life in one call each. Failure stays on the statement:
 | `constraint(statement)` | the last failure was a constraint (duplicate key, foreign key) |
 | `cache(database)`, `cached(&cache, sql)`, `cache_close(&cache)` | prepare each SQL text once per connection, up to `CacheSize` (64) |
 
+`open_schema(path, schema)` opens a connection for one thread (no SQLite
+mutex, 5 second busy timeout) and runs each schema statement.
+`transaction(database, rows, write)` calls `write` for each row inside one
+IMMEDIATE transaction and commits, or rolls back and returns false.
+
 `cached` returns nil when preparing fails (`cache.failed`, `cache.code`) or
 the cache is full. Its SQL must outlive the cache, as a string literal does.
 `cache_close` finalizes every statement; close the database after it.

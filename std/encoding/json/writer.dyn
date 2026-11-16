@@ -249,3 +249,66 @@ pub fn field(target: *Writer, name: []const u8, value: any) {
     _ => { target.invalid = true }
   }
 }
+
+// Writes the struct value as a JSON object: each field by name, in
+// declaration order. Fields may be integers, floats, bool or text
+// ([]const u8, []u8); any other field type fails the writer (write nested
+// values with key and their own object_of).
+pub fn object_of(target: *Writer, value: $T) {
+  object_at(target, &value)
+}
+
+// Writes the structs in values as a JSON array of objects (see object_of).
+pub fn array_of(target: *Writer, values: []const $T) {
+  array_begin(target)
+  for i in 0..#len(values) {
+    object_at(target, &values[i])
+  }
+  array_end(target)
+}
+
+fn object_at(target: *Writer, value: *const $T) {
+  #assert(#typeof(T).kind == TypeKind.Struct, "json.object_of: value must be a struct")
+  info := #typeof(T)
+  base := #cast(usize, value)
+  object_begin(target)
+  for member in info.fields {
+    key(target, member.name)
+    write_member(target, base + #cast(usize, member.value), member.type_id)
+  }
+  object_end(target)
+}
+
+fn write_member(target: *Writer, at: usize, type_id: u64) {
+  if type_id == #typeof(i64).id {
+    integer(target, #cast(*const i64, at).*)
+  } else if type_id == #typeof([]const u8).id || type_id == #typeof([]u8).id {
+    text(target, #cast(*const []const u8, at).*)
+  } else if type_id == #typeof(bool).id {
+    boolean(target, #cast(*const bool, at).*)
+  } else if type_id == #typeof(i32).id {
+    integer(target, #cast(*const i32, at).*)
+  } else if type_id == #typeof(u64).id {
+    unsigned(target, #cast(*const u64, at).*)
+  } else if type_id == #typeof(u32).id {
+    unsigned(target, #cast(*const u32, at).*)
+  } else if type_id == #typeof(usize).id {
+    unsigned(target, #cast(u64, #cast(*const usize, at).*))
+  } else if type_id == #typeof(isize).id {
+    integer(target, #cast(i64, #cast(*const isize, at).*))
+  } else if type_id == #typeof(i16).id {
+    integer(target, #cast(*const i16, at).*)
+  } else if type_id == #typeof(u16).id {
+    unsigned(target, #cast(*const u16, at).*)
+  } else if type_id == #typeof(i8).id {
+    integer(target, #cast(*const i8, at).*)
+  } else if type_id == #typeof(u8).id {
+    unsigned(target, #cast(*const u8, at).*)
+  } else if type_id == #typeof(f64).id {
+    float(target, #cast(*const f64, at).*)
+  } else if type_id == #typeof(f32).id {
+    float(target, #cast(f64, #cast(*const f32, at).*))
+  } else {
+    target.invalid = true
+  }
+}

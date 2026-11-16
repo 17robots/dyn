@@ -140,3 +140,37 @@ fn equal(left: []const u8, right: []const u8) bool {
   }
   return true
 }
+
+// A connection for one thread, ready to use: no SQLite mutex (only its
+// thread may use it), a 5 second busy timeout, and each schema statement run
+// (CREATE TABLE IF NOT EXISTS ..., PRAGMA ...). On failure the connection is
+// closed and the result carries the code.
+pub fn open_schema(path: []const u8, schema: []const []const u8) OpenResult {
+  scratch: [1024]u8
+  opened := open_with_options(path, scratch[..], OpenOptions{ caller_serialized: true })
+  if io.failed(opened.failure) { return opened }
+  for sql in schema {
+    failure := execute(opened.database, sql, scratch[..])
+    if io.failed(failure) {
+      _ = close(opened.database)
+      return OpenResult{ failure: failure }
+    }
+  }
+  _ = busy_timeout(opened.database, 5000)
+  return opened
+}
+
+// Calls write for each of rows inside one IMMEDIATE transaction and commits.
+// False, with the transaction rolled back, when it cannot begin or commit;
+// write records each row's own outcome.
+pub fn transaction(database: Database, rows: []$R, write: fn(*$R)) bool {
+  if io.failed(begin(database, TransactionMode.Immediate)) { return false }
+  for i in 0..#len(rows) {
+    write(&rows[i])
+  }
+  if io.failed(commit(database)) {
+    _ = rollback(database)
+    return false
+  }
+  return true
+}

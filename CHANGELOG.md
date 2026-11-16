@@ -16,6 +16,21 @@ servers so they pick up the new `dyn`.
 
 Web applications: see [docs/guide/web-apps.md](docs/guide/web-apps.md).
 
+- Shorter web apps, with no language change:
+  - `json.object_of`/`json.array_of` write structs as JSON objects, by
+    field name. `#typeof` field descriptors now carry each field's byte
+    offset in `TypeMember.value`.
+  - `html.print` fills `{}` with escaped text, numbers, or `Trusted` markup.
+    `http.page_writer` and `http.page` send a page from the send buffer,
+    with CSP and nosniff.
+  - `std/net/http/session` gives tokens, CSRF secrets, the `sid` cookie and
+    a per-worker cache in front of the app's own store.
+  - `Config.access_log` logs each request. `log.write` writes a line in one
+    write.
+  - `sqlite.open_schema`, `sqlite.transaction`, `http.assets_of` and
+    `process.environment_or` cover the rest. `http.Response.status` records
+    the status sent.
+  - Chirp went from 538 to 416 lines, as fast as before.
 - `evented.later` finishes a request after the worker's current pass over
   ready connections, so handlers can group work, such as one transaction for
   many inserts. Chirp's post creation went from 85k to 198k per second.

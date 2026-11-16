@@ -94,6 +94,13 @@ pub fn close_pipe(handle: isize) {
 }
 // The value of environment variable name, in arena. A missing variable is ok
 // with found false.
+// The variable's value in arena, or fallback when it is unset or unreadable.
+pub fn environment_or(arena: *mem.Arena, name: []const u8, fallback: []const u8) []const u8 {
+  found := environment(arena, name)
+  if !found.found || io.failed(found.failure) { return fallback }
+  return found.value
+}
+
 pub fn environment(arena: *mem.Arena, name: []const u8) EnvironmentResult {
   capacity := mem.trial_size(arena, 256)
   for capacity > 0 {

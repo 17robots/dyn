@@ -137,7 +137,7 @@ their contracts, and `dyn docs std/strings --json` gives the same as JSON.
 | `std/event` | Portable level-triggered readiness queues: epoll, kqueue and WSAPoll |
 | `std/net` | IPv4, IPv6 and Unix streams, IPv4 UDP multicast, polling and event queues |
 | `std/net/dns` | DNS queries into caller storage |
-| `std/net/http`, `http/concurrent`, `http/evented` | HTTP/1 client, server and router, cookies, static assets, multipart, SSE and rate limits; a thread-per-connection worker pool; and an event-loop server (epoll/kqueue) with thread-pool jobs, streams and WebSockets. See [web apps](web-apps.md) |
+| `std/net/http`, `http/concurrent`, `http/evented`, `http/session` | HTTP/1 client, server and router, cookies, static assets, pages, multipart, SSE and rate limits; a thread-per-connection worker pool; an event-loop server (epoll/kqueue) with thread-pool jobs, streams, WebSockets, HTTP/2 and HTTP/3; and cookie sessions with a per-worker cache. See [web apps](web-apps.md) |
 | `std/net/websocket` | RFC 6455 handshake and frame codec |
 | `std/net/url` | URL parsing and component encoding |
 | `std/net/tls` | Verified TLS client and server through OpenSSL; link it explicitly |

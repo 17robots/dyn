@@ -20,6 +20,20 @@ fn name(level: Level) []const u8 {
 }
 pub fn write(target: *Logger, level: Level, message: []const u8, fields: []const Field) stream.Transfer {
   if !enabled(level, target.minimum) { return stream.Transfer{ status: stream.Status.Complete } }
+  // A line that fits goes out in one write, so lines from several threads
+  // do not interleave; a longer one is written in pieces.
+  line: [1024]u8
+  length := put(line[..], 0, name(level))
+  length = put(line[..], length, ": ")
+  length = put(line[..], length, message)
+  for field in fields {
+    length = put(line[..], length, " ")
+    length = put(line[..], length, field.name)
+    length = put(line[..], length, "=")
+    length = put(line[..], length, field.value)
+  }
+  length = put(line[..], length, "\n")
+  if length <= #len(line) { return stream.write_all(target.output, line[..length]) }
   total: usize = 0
   first := stream.write_all(target.output, name(level))
   if stream.failed(first.failure) { return first }
@@ -59,4 +73,13 @@ pub fn write(target: *Logger, level: Level, message: []const u8, fields: []const
     return ending
   }
   return stream.Transfer{ transferred: total + ending.transferred, status: stream.Status.Complete }
+}
+
+// Appends text at length, or returns more than #len(line) once it no longer fits.
+fn put(line: []u8, length: usize, text: []const u8) usize {
+  if length > #len(line) || #len(text) > #len(line) - length { return #len(line) + 1 }
+  for i in 0..#len(text) {
+    line[length + i] = text[i]
+  }
+  return length + #len(text)
 }

@@ -1403,7 +1403,7 @@ static DynExprId reflection_members(DynAstProgram *a, const DynSource *s,
                                     DynType member_type, DynType slice_type,
                                     const DynSpan *names, const DynType *types,
                                     uint32_t count, const char *const *builtin_names,
-                                    const DynAstVariant *variants) {
+                                    const DynAstVariant *variants, const DynAstField *fields_of) {
   if (!count)
     return reflection_expr(a, DYN_EXPR_NIL, slice_type, 0);
   if (!reserve_reflection_items(a, (size_t)count * 4))
@@ -1423,8 +1423,9 @@ static DynExprId reflection_members(DynAstProgram *a, const DynSource *s,
     DynExprId type_id = reflection_expr(
         a, DYN_EXPR_INT, DYN_TYPE_U64,
         types[i] == DYN_TYPE_VOID ? 0 : reflection_id(type_name));
-    /* An enum variant's tag; other members report 0. */
-    DynExprId value = reflection_expr(a, DYN_EXPR_INT, DYN_TYPE_U64, variants ? variants[i].tag : 0);
+    /* An enum variant's tag, a struct field's byte offset; arguments report 0. */
+    uint64_t member_value = variants ? variants[i].tag : fields_of ? fields_of[i].offset : 0;
+    DynExprId value = reflection_expr(a, DYN_EXPR_INT, DYN_TYPE_U64, member_value);
     if (name == DYN_NO_EXPR || type_id == DYN_NO_EXPR || value == DYN_NO_EXPR)
       return DYN_NO_EXPR;
     uint32_t fields = (uint32_t)a->item_count;
@@ -2828,7 +2829,8 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
       }
       if (names && types)
         values[10] = reflection_members(a, s, member_type, member_slice, names,
-                                        types, subject->field_count, NULL, NULL);
+                                        types, subject->field_count, NULL, NULL,
+                                        &a->fields[subject->field_start]);
       free(names);
       free(types);
     } else if (dyn_type_is_enum(operand)) {
@@ -2844,7 +2846,7 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
       if (names && types)
         values[11] = reflection_members(a, s, member_type, member_slice, names,
                                         types, subject->variant_count, NULL,
-                                        &a->variants[subject->variant_start]);
+                                        &a->variants[subject->variant_start], NULL);
       free(names);
       free(types);
     } else if (dyn_type_is_function(operand)) {
@@ -2860,7 +2862,7 @@ static DynType check_expr(Sema *sema, DynAstProgram *a, DynExprId id,
       }
       if (names && types)
         values[12] = reflection_members(a, s, member_type, member_slice, names,
-                                        types, signature->param_count, NULL, NULL);
+                                        types, signature->param_count, NULL, NULL, NULL);
       free(names);
       free(types);
     }

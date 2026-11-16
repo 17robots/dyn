@@ -874,6 +874,8 @@ pub struct Response {
   // Set by servers that also speak HTTP/3: an Alt-Svc value (RFC 7838) sent
   // with every response, such as h3=":443"; ma=86400. Empty sends none.
   alt_svc: []const u8,
+  // The status sent, once the head is written; 0 before.
+  status: u16,
 }
 
 pub struct Header { name: []const u8, value: []const u8 }
@@ -1624,6 +1626,7 @@ fn response_begin(response: *Response, options: ResponseOptions, body_length: us
   if status == 0 {
     status = StatusOk
   }
+  response.status = status
   reason := options.reason
   if #len(reason) == 0 {
     reason = status_reason(status)

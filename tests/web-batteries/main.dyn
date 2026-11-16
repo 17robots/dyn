@@ -1,0 +1,65 @@
+// std pieces that keep web apps short: json.object_of/array_of, html.print,
+// std/net/http/session, http.assets_of, process.environment_or and one-write
+// log lines.
+use "std/encoding/json"
+use "std/html"
+use "std/io"
+use "std/log"
+use "std/mem"
+use "std/net/http"
+use "std/net/http/session" sessions
+use "std/process"
+
+struct Post { id: i64, author: []const u8, body: []const u8, created: i64, ok: bool, score: f64, small: u8, count: usize }
+
+struct Nested { inner: Post }
+
+fn main() {
+  arena := mem.arena_alloc(mem.MiB)
+  defer mem.arena_release(arena)
+  storage: [1024]u8
+  posts: [2]Post = [
+    Post{ id: 1, author: "ann", body: "hi \"there\"", created: 99, ok: true, score: 1.5, small: 7, count: 3 },
+    Post{ id: -2, author: "bo", body: "x\n", score: -0.25 },
+  ]
+  out := json.writer(storage[..])
+  json.array_of(&out, posts[..])
+  io.println("{}", json.output(&out))
+  single := json.writer(storage[..])
+  json.object_of(&single, posts[1])
+  io.println("{}", json.output(&single))
+  nested := json.writer(storage[..])
+  json.object_of(&nested, Nested{})
+  io.println("nested fails {}", json.failed(&nested))
+
+  inner_storage: [128]u8
+  inner := html.writer(inner_storage[..])
+  html.print(&inner, "<i>{}</i>", "a&b")
+  page := html.writer(storage[..])
+  html.print(&page, "<p id=\"{}\" class=\"{}\">{} {} {}</p><style>p {{ color: red }}</style>{} [{}] {}", 42, "x\"y", "<b>", true,
+    html.output(&inner), -7, html.trusted("<br>"))
+  io.println("{}", html.output(&page).bytes)
+
+  cache: sessions.Cache
+  shared := sessions.Shared{}
+  started := sessions.start(arena, 3600)
+  io.println("start {} {} {} {}", started.ok, #len(started.token), #len(started.csrf), started.cookie[..4])
+  io.println("cold {}", sessions.cached(&cache, &shared, started.token, 100).found)
+  kept := sessions.remember(&cache, started.token, 7, started.csrf, "ann", 200)
+  hit := sessions.cached(&cache, &shared, started.token, 100)
+  io.println("remembered {} hit {} user {} data {} csrf {} {}", kept.found, hit.found, hit.user, hit.data,
+    sessions.csrf_ok(&hit, started.csrf), sessions.csrf_ok(&hit, "nope"))
+  io.println("expired {}", sessions.cached(&cache, &shared, started.token, 200).found)
+  io.println("forget {}", sessions.forget(&shared))
+  io.println("after forget {}", sessions.cached(&cache, &shared, started.token, 100).found)
+
+  assets := http.assets_of(arena, "app.js", "let x = 1", "app.css", "p { }", "dangling")
+  js := http.find_asset(&assets, "app.js")
+  css := http.find_asset(&assets, "app.css")
+  io.println("assets {} {} {}", assets.count, js.content_type, css.content_type)
+
+  io.println("env {} {}", process.environment_or(arena, "WEB_BATTERIES_SET", "unset"), process.environment_or(arena, "WEB_BATTERIES_NONE", "fallback"))
+  logger := log.logger(io.stdout(), log.Level.Info)
+  fields: [2]log.Field = [log.Field{ name: "a", value: "1" }, log.Field{ name: "b", value: "two" }]
+  _ = log.write(&logger, log.Level.Info, "hello", fields[..])
+}

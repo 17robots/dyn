@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""evented.serve answers requests, then stops cleanly on SIGTERM and SIGINT."""
+"""evented.serve answers requests, then stops cleanly on SIGTERM and SIGINT;
+Config.access_log writes one line per request."""
+import re
 import http.client
 import os
 from pathlib import Path
@@ -19,7 +21,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-http-serve-') as temporary:
     subprocess.run([DYN, 'build', str(ROOT / 'tests/http-serve'), '--quiet', '--no-cache', '--output', str(program)],
                    check=True, timeout=180)
     for sent in (signal.SIGTERM, signal.SIGINT):
-        server = subprocess.Popen([str(program)], stdout=subprocess.PIPE, text=True)
+        server = subprocess.Popen([str(program)], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         try:
             for _ in range(100):
                 try:
@@ -34,8 +36,10 @@ with tempfile.TemporaryDirectory(prefix='dyn-http-serve-') as temporary:
             server.send_signal(sent)
             assert server.wait(timeout=10) == 0
             assert server.stdout.read() == 'stopped 2\n'
+            logged = server.stderr.read()
+            assert re.fullmatch(r'info: request client=127\.0\.0\.1 method=GET path=/ status=200 us=\d+\n', logged), logged
         finally:
             if server.poll() is None:
                 server.kill()
                 server.wait()
-print('PASS evented.serve: answers, stops on SIGTERM and SIGINT')
+print('PASS evented.serve: answers, logs, stops on SIGTERM and SIGINT')

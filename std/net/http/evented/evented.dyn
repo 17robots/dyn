@@ -38,7 +38,9 @@
 use "std/bytes" bytes
 use "std/compress/gzip" gzip
 use "std/event" event
+use "std/fmt" format
 use "std/io" io
+use "std/log" log
 use "std/mem" mem
 use "std/net" network
 use "std/net/http" http
@@ -122,6 +124,9 @@ pub struct Config {
   // Bytes of each worker's request arena (see arena): scratch a handler
   // allocates from and never frees, reset before the next handler runs.
   request_arena_size: usize,
+  // When set, one line per answered request: client, method, path, status
+  // and microseconds in the handler (and its finish, for run and later).
+  access_log: *log.Logger,
   // gzip level (1-9) for respond_compressed; each worker keeps one encoder
   // workspace (about 300 KiB). Zero sends bodies uncompressed.
   compress_level: u8,
@@ -416,6 +421,35 @@ pub struct Worker {
 
 const ListenerToken: u64 = 0
 const WakerToken: u64 = 0xffffffffffffffff
+
+// A clock reading for the access log, or 0 when there is none.
+fn log_start(worker: *const Worker) i64 {
+  if worker.config.access_log == nil { return 0 }
+  now := clock.monotonic_now()
+  if io.failed(now.failure) { return 0 }
+  return now.value.seconds * 1000000 + now.value.nanoseconds / 1000
+}
+
+fn log_request(worker: *const Worker, remote: *const network.Address, request: *const http.Request,
+  response: *const http.Response, started: i64) {
+  if worker.config.access_log == nil || response.status == 0 { return }
+  elapsed := log_start(worker) - started
+  address: [64]u8
+  status: [8]u8
+  micros: [24]u8
+  status_text := format.buffer(status[..])
+  format.write_u64(&status_text, #cast(u64, response.status))
+  micros_text := format.buffer(micros[..])
+  format.write_i64(&micros_text, elapsed)
+  fields: [5]log.Field = [
+    log.Field{ name: "client", value: network.ip_text(address[..], network.address_ip(remote)) },
+    log.Field{ name: "method", value: request.method },
+    log.Field{ name: "path", value: request.path },
+    log.Field{ name: "status", value: format.bytes(&status_text) },
+    log.Field{ name: "us", value: format.bytes(&micros_text) },
+  ]
+  _ = log.write(worker.config.access_log, log.Level.Info, "request", fields[..])
+}
 
 fn now_milliseconds() i64 {
   now := clock.monotonic_now()
@@ -741,7 +775,9 @@ fn serve_buffered(worker: *Worker, index: usize) bool {
     response := new_response(connection)
     response.head_only = bytes.equal(request.method, "HEAD")
     worker.requests += 1
+    started := log_start(worker)
     handled := worker.handler(&response, &request)
+    log_request(worker, &connection.remote, &request, &response, started)
     consumed += framed.consumed
     if connection.mode == Mode.Deferred {
       // run took the request: it stays in input until finish answers it.
@@ -1903,7 +1939,9 @@ fn job_done(worker: *Worker, index: usize) {
   request := connection.job_request
   response := new_response(connection)
   response.head_only = bytes.equal(request.method, "HEAD")
+  started := log_start(worker)
   handled := connection.job_finish(&response, &request, connection.job_data)
+  log_request(worker, &connection.remote, &request, &response, started)
   if io.failed(handled.failure) || !response.finished || !request.keep_alive {
     connection.close_after = true
   }

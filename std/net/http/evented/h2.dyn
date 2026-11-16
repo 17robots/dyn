@@ -1220,8 +1220,10 @@ fn dispatch(worker: *Worker, index: usize, stream_index: usize) {
   stream.phase = Phase.Answering
   response := h2_response(worker, connection, stream_index)
   worker.requests += 1
+  started := log_start(worker)
   handled := worker.handler(&response, &request)
   _ = handled
+  log_request(worker, &connection.remote, &request, &response, started)
   stream = &h2.streams[stream_index]
   if stream.phase == Phase.Deferred || stream.phase == Phase.Free { return }
   if stream.phase == Phase.Streaming || stream.phase == Phase.Large || stream.phase == Phase.WebSocket {
@@ -1670,7 +1672,9 @@ fn h2_job_done(worker: *Worker, slot_index: usize) {
   stream.phase = Phase.Answering
   request := slot.job_request
   response := h2_response(worker, connection, stream_index)
+  started := log_start(worker)
   _ = slot.job_finish(&response, &request, slot.job_data)
+  log_request(worker, &connection.remote, &request, &response, started)
   stream = &connection.h2.streams[stream_index]
   if stream.phase == Phase.Answering {
     finish_stream(worker, connection.index, stream_index)

@@ -130,6 +130,19 @@ fn asset_less(left: []const u8, right: []const u8) bool {
 
 // Orders assets by path so find_asset can search them. load_directory
 // already returns them sorted; call this after adding assets yourself.
+// Assets from path, body pairs, such as ("app.js", #load("static/app.js")),
+// sorted for find_asset. A last path without a body is left out.
+pub fn assets_of(arena: *memory.Arena, pairs: ...[]const u8) Assets {
+  count := #len(pairs) / 2
+  items := memory.push_array(Asset, arena, count)
+  for i in 0..count {
+    items[i] = make_asset(arena, pairs[2 * i], pairs[2 * i + 1])
+  }
+  assets := Assets{ items: items, count: count }
+  sort_assets(&assets)
+  return assets
+}
+
 pub fn sort_assets(assets: *Assets) {
   for i in 1..assets.count {
     item := assets.items[i]

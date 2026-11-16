@@ -69,29 +69,37 @@ Every response carries `Date`, formatted once per loop pass by the server.
 
 ## Sessions and CSRF
 
-Read cookies with `http.cookie(request, "sid")`; write them with
-`http.set_cookie` into caller storage, then pass the text as a `Set-Cookie`
-header:
+`std/net/http/session` handles cookie sessions in front of your own store,
+such as a SQLite table:
 
 ```dyn
+use "std/mem"
 use "std/net/http"
+use "std/net/http/session" sessions
 
-fn session_header(storage: []u8, token: []const u8) http.Header {
-  text := http.set_cookie(storage, http.Cookie{ name: "sid", value: token, path: "/", max_age: 86400,
-    http_only: true, secure: true, same_site: http.SameSite.Lax })
-  return http.Header{ name: "Set-Cookie", value: text.value }
+// cache is this worker's; shared is one for the whole server.
+fn current(cache: *sessions.Cache, shared: *sessions.Shared, request: *const http.Request, now: i64) sessions.Session {
+  token := sessions.token(request)
+  session := sessions.cached(cache, shared, token, now)
+  if session.found || #len(token) == 0 { return session }
+  // Look token up in the store; on a hit, keep the answer:
+  // return sessions.remember(cache, token, user, csrf, name, expires)
+  return session
 }
 ```
 
-`set_cookie` refuses names that are not tokens, values outside the cookie
-octets, attributes with `;` or control bytes, and `SameSite=None` without
-`Secure`. A negative `max_age` deletes the cookie.
+`sessions.start(arena, seconds)` makes a token, a CSRF secret and the
+`Set-Cookie` value (`sid`, HttpOnly, SameSite=Lax) for a new session to
+store. After deleting one from the store, `sessions.forget(&shared)` empties
+every worker's cache and returns the cookie that clears it.
+`sessions.csrf_ok(&session, presented)` compares a form field or
+`X-CSRF-Token` header in constant time; require it on every state-changing
+request. `data` (up to 64 bytes) is yours, such as the user's name.
 
-Make session tokens with `std/crypto/random` (32 bytes, hex). Pair each
-session with a CSRF token and require it on every state-changing request, in
-a form field or an `X-CSRF-Token` header, compared with
-`crypto_core.equal_constant_time`. `SameSite=Lax` blocks most cross-site
-posts; the token covers the rest.
+Underneath, `http.cookie` reads cookies and `http.set_cookie` writes them. It
+refuses names that are not tokens, values outside the cookie octets,
+attributes with `;` or control bytes, and `SameSite=None` without `Secure`.
+A negative `max_age` deletes the cookie.
 
 ## Passwords
 
@@ -166,38 +174,58 @@ of the p99 latency.
 ## JSON
 
 `std/encoding/json` parses into an arena (`json.parse`) and writes into
-caller storage without a tree (`json.writer`). The writer places commas
-itself; failure is sticky, so check once:
+caller storage without a tree (`json.writer`). `json.object_of` writes a
+struct as an object, each field by name, and `json.array_of` a slice of
+them:
 
 ```dyn
 use "std/encoding/json"
 
-fn post_json(storage: []u8, id: i64, author: []const u8, body: []const u8) []const u8 {
+struct Post { id: i64, author: []const u8, body: []const u8 }
+
+fn posts_json(storage: []u8, posts: []const Post) []const u8 {
   out := json.writer(storage)
   json.object_begin(&out)
-  json.field(&out, "id", id)
-  json.field(&out, "author", author)
-  json.field(&out, "body", body)
+  json.key(&out, "posts")
+  json.array_of(&out, posts)
   json.object_end(&out)
   return json.output(&out)
 }
 ```
 
-`json.field` writes a key and a text, integer, float or bool value; other
-values fail the writer. `json.key` with `json.array_begin` or
-`json.object_begin` nests.
-
-`json.output` is empty when anything failed: storage too small, invalid
-UTF-8, a value without its key, or a container left open.
+Fields may be integers, floats, bool or text; a nested struct fails the
+writer, so write it with `json.key` and its own `object_of`. For one-off
+objects, `json.field` writes a key and a scalar value. The writer places
+commas itself, and failure is sticky: `json.output` is empty when anything
+failed (storage too small, invalid UTF-8, a value without its key, or a
+container left open).
 
 ## HTML
 
 `std/html` escapes text by default; raw markup must be marked with
-`html.trusted`. Render into transport storage with `http.body_buffer` and
-`http.respond_buffered` to skip a copy.
+`html.trusted`. `html.print` fills `{}` with escaped text, numbers, or
+`Trusted` markup as it is:
+
+```dyn
+use "std/html"
+use "std/mem"
+use "std/net/http"
+
+fn greet(response: *http.Response, storage: []u8, name: []const u8) http.Result {
+  out := http.page_writer(response, storage)
+  html.print(&out, "<!doctype html><title>Hi</title><p>Hello, <b>{}</b>!</p>", name)
+  return http.page(response, 200, &out)
+}
+```
+
+`http.page_writer` renders into the send buffer when it is free, so the page
+goes out without a copy, and `http.page` sends it as HTML, not cached, with
+`Content-Security-Policy: default-src 'self'` and `nosniff`.
 
 ## Static files
 
+`http.assets_of(arena, "app.js", #load("static/app.js"), ...)` makes sorted
+assets from path and body pairs; `http.find_asset` looks one up.
 `http.make_asset` wraps bytes (from `#load` or a file) as an `Asset`: content
 type from the extension, a strong ETag, and a gzip copy at level 9 when that
 is smaller. `http.load_directory` loads a whole tree at startup.
@@ -329,6 +357,13 @@ tells a duplicate key from other errors. `first` stops at the first row,
 `query` and `next` walk rows, and `integer`, `bytes` (borrowed) and `text`
 (copied into an arena) read columns. Copy borrowed bytes before the next
 step. See [sqlite.md](sqlite.md).
+
+## Logging
+
+Set `Config.access_log` to a `log.Logger` and the server writes one line per
+answered request: client, method, path, status and the microseconds spent in
+the handler (and its finish, for `run` and `later`). `log.write` sends a line
+in one write, so workers' lines do not interleave.
 
 ## Shutdown
 
