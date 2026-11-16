@@ -15,11 +15,11 @@ fn u32le(data: []const u8, at: usize) u32 {
 }
 fn put16(data: []u8, at: usize, value: u16) {
   data[at] = #cast(u8, value)
-  data[at + 1] = #cast(u8, (value >> 8))
+  data[at + 1] = (value >> 8)
 }
 fn put32(data: []u8, at: usize, value: u32) {
   put16(data, at, #cast(u16, value))
-  put16(data, at + 2, #cast(u16, value >> 16))
+  put16(data, at + 2, value >> 16)
 }
 fn tag(data: []const u8, at: usize, a, b, c, d: u8) bool {
   return data[at] == a && data[at+1] == b && data[at+2] == c && data[at+3] == d

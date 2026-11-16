@@ -126,7 +126,7 @@ fn decode_into(destination: []u8, source: []const u8) DecodeWork {
         input += 4
       } else if (tag & 192) == 0 {
         indexed_pixel := table[(tag & 63)]
-        red = #cast(u8, (indexed_pixel >> 24))
+        red = (indexed_pixel >> 24)
         green = #cast(u8, (indexed_pixel >> 16))
         blue = #cast(u8, (indexed_pixel >> 8))
         alpha = #cast(u8, indexed_pixel)
@@ -160,7 +160,7 @@ fn decode_into(destination: []u8, source: []const u8) DecodeWork {
 }
 
 fn put_u32be(destination: []u8, at: usize, number: u32) {
-  destination[at] = #cast(u8, (number >> 24))
+  destination[at] = (number >> 24)
   destination[at + 1] = #cast(u8, (number >> 16))
   destination[at + 2] = #cast(u8, (number >> 8))
   destination[at + 3] = #cast(u8, number)

@@ -513,11 +513,11 @@ fn put_reflected(state: *Buffer, value: any) bool {
   if info.kind != TypeKind.Enum { return false }
   tag: u64 = 0
   if info.size == 1 {
-    tag = #cast(u64, #cast(*const u8, at).*)
+    tag = #cast(*const u8, at).*
   } else if info.size == 2 {
-    tag = #cast(u64, #cast(*const u16, at).*)
+    tag = #cast(*const u16, at).*
   } else if info.size == 4 {
-    tag = #cast(u64, #cast(*const u32, at).*)
+    tag = #cast(*const u32, at).*
   } else if info.size == 8 {
     tag = #cast(*const u64, at).*
   } else {

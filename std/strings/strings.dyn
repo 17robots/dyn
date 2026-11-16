@@ -206,7 +206,7 @@ fn decimal_compare(numerator: *const DecimalInteger, denominator: *const Decimal
   right := denominator.*
   high := denominator.*
   decimal_multiply(&right, #cast(u32, mantissa), 0)
-  decimal_multiply(&high, #cast(u32, (mantissa >> 32)), 0)
+  decimal_multiply(&high, (mantissa >> 32), 0)
   decimal_shift(&high, 32)
   decimal_add(&right, &high)
   if exponent < 0 {

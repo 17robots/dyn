@@ -148,7 +148,7 @@ const bits_10000000000000: u64 = 0x0010000000000000
 
 // Bit access.
 fn high(x: f64) u32 {
-  return #cast(u32, #bitcast(u64, x) >> 32)
+  return #bitcast(u64, x) >> 32
 }
 fn low(x: f64) u32 {
   return #cast(u32, #bitcast(u64, x))
@@ -552,7 +552,7 @@ fn reduce_pi2(x: f64) Remainder {
     }
   }
   y1 := (r - y0) - w
-  return Remainder{ n: #cast(i32, #cast(i64, fn_value) & 3), y0: y0, y1: y1 }
+  return Remainder{ n: #cast(i64, fn_value) & 3, y0: y0, y1: y1 }
 }
 
 fn round_even(x: f64) f64 {

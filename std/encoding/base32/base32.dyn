@@ -52,7 +52,7 @@ fn encode_into(destination: []u8, source: []const u8) Result {
     symbols := (take * 8 + 4) / 5
     for digit in 0..8 {
       if digit < symbols {
-        destination[output_at] = symbol(#cast(u8, ((block >> (35 - digit * 5)) & 31)))
+        destination[output_at] = symbol(((block >> (35 - digit * 5)) & 31))
       } else {
         destination[output_at] = '='
       }
@@ -124,7 +124,7 @@ fn decode_pass(destination: []u8, source: []const u8, write: bool, offset: *usiz
     }
     for byte_at in 0..bytes_value {
       if write {
-        destination[output_at] = #cast(u8, ((block >> (32 - byte_at * 8)) & 255))
+        destination[output_at] = ((block >> (32 - byte_at * 8)) & 255)
       }
       output_at += 1
     }

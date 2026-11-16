@@ -447,7 +447,7 @@ fn log_request(worker: *const Worker, remote: *const network.Address, request: *
   status: [8]u8
   micros: [24]u8
   status_text := format.buffer(status[..])
-  format.write_u64(&status_text, #cast(u64, response.status))
+  format.write_u64(&status_text, response.status)
   micros_text := format.buffer(micros[..])
   format.write_i64(&micros_text, elapsed)
   fields: [5]log.Field = [
@@ -1811,7 +1811,7 @@ pub fn arena(response: *http.Response) *mem.Arena {
 pub fn worker_index(response: *http.Response) usize {
   connection := connection_of(response)
   if connection == nil { return 0 }
-  return #cast(usize, connection.worker.id)
+  return connection.worker.id
 }
 
 // Runs the server until SIGINT or SIGTERM: watches the signals first (before

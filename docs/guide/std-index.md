@@ -716,6 +716,10 @@ module's full declarations and comments.
 - `fn iterator(container: *const Value) Iterator`: @ownership Iterator and entries borrow the document's arena storage.
 - `fn next(state: *Iterator) Entry`
 
+## std/encoding/json/scan
+
+- `fn text_prefix(source: []const u8) usize`: How many bytes start source before the first one a JSON string scanner must look at: a byte below 32, at or above 128, '"' or '\\'.
+
 ## std/encoding/mdesk
 
 - `enum Kind { Nil, Root, Main, Tag }`
@@ -1050,7 +1054,7 @@ module's full declarations and comments.
 - `fn writer(storage: []u8) Writer`
 - `fn markup(destination: *Writer, value: Trusted)`
 - `fn text(destination: *Writer, value: []const u8)`: Escaped text.
-- `fn print(destination: *Writer, markup: []const u8, values: ...any)`: Writes markup with each {} replaced by the next value: text ([]const u8, []u8) escaped, Trusted markup as it is, numbers and bools as fmt ...
+- `fn print(destination: *Writer, template: []const u8, values: ...any)`: Writes template with each {} replaced by the next value: Trusted template as it is, and anything else as fmt writes it, escaped: text ...
 - `fn number(destination: *Writer, value: u64)`
 - `fn signed(destination: *Writer, value: i64)`
 - `fn failed(source: *const Writer) bool`

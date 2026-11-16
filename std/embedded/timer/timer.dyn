@@ -22,7 +22,7 @@ pub fn now(timer: *const MachineTimer) u64 {
 // Avoid transient early compares when updating through 32-bit device accesses.
 pub fn deadline(timer: *const MachineTimer, ticks: u64) {
   mmio.store_u32(timer.compare, 0xffffffff)
-  mmio.store_u32(timer.compare + 4, #cast(u32, (ticks >> 32)))
+  mmio.store_u32(timer.compare + 4, (ticks >> 32))
   mmio.store_u32(timer.compare, #cast(u32, ticks))
 }
 pub fn disarm(timer: *const MachineTimer) {

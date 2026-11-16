@@ -56,4 +56,10 @@ with tempfile.TemporaryDirectory(prefix='dyn-narrow-by-range-') as temporary:
         (bad / 'main.dyn').write_text(f'fn main() {{\n  x: u64 = 5\n  s: i64 = 5\n  {line}\n  _ = s\n}}\n')
         checked = subprocess.run([DYN, 'check', str(bad)], capture_output=True, text=True, timeout=60)
         assert checked.returncode != 0 and 'mismatch' in checked.stderr, (line, checked.stderr)
-print('PASS narrowing by range: & constant and unsigned >> constant convert when they fit; nothing else does')
+    (work / 'casts').mkdir()
+    (work / 'casts' / 'main.dyn').write_text('use "std/io"\n\nfn main() {\n  x: u64 = 300\n'
+                                             '  a: u8 = #cast(u8, x & 0xff)\n  b: u8 = #cast(u8, x >> 8)\n'
+                                             '  io.println("{} {}", a, b)\n}\n')
+    vetted = subprocess.run([DYN, 'vet', str(work / 'casts')], capture_output=True, text=True, timeout=60)
+    assert vetted.stderr.count('cast is implicit here') == 1 and 'main.dyn:5:' in vetted.stderr, vetted.stderr
+print('PASS narrowing by range: & constant and unsigned >> constant convert when they fit; nothing else does; vet flags the casts')

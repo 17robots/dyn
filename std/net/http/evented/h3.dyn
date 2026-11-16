@@ -102,7 +102,7 @@ fn read_varint(source: []const u8) Varint {
   if #len(source) < length { return Varint{} }
   value := #cast(u64, source[0] & 0x3f)
   for i in 1..length {
-    value = (value << 8) | #cast(u64, source[i])
+    value = (value << 8) | source[i]
   }
   return Varint{ value: value, length: length }
 }
@@ -173,7 +173,7 @@ fn h3_start(arena: *mem.Arena, worker: *Worker) io.Failure {
   worker.quic_listener = listener
   port := (#cast(u16, address.bytes[2]) << 8) | #cast(u16, address.bytes[3])
   text: [16]u8
-  digits := decimal_text(text[..], #cast(u64, port))
+  digits := decimal_text(text[..], port)
   at := append_text(worker.alt_svc[..], 0, "h3=\":")
   at = append_text(worker.alt_svc[..], #len(at), digits)
   at = append_text(worker.alt_svc[..], #len(at), "\"; ma=86400")
@@ -269,12 +269,12 @@ fn h3_accept(worker: *Worker, handle: rawptr) {
   length += write_varint(settings[length..], 0x01)
   length += write_varint(settings[length..], 0)
   length += write_varint(settings[length..], 0x06)
-  length += write_varint(settings[length..], #cast(u64, worker.config.receive_size - 1024))
+  length += write_varint(settings[length..], worker.config.receive_size - 1024)
   length += write_varint(settings[length..], 0x07)
   length += write_varint(settings[length..], 0)
   used := write_varint(h2.control_bytes[..], StreamControl)
   used += write_varint(h2.control_bytes[used..], 0x04)
-  used += write_varint(h2.control_bytes[used..], #cast(u64, length))
+  used += write_varint(h2.control_bytes[used..], length)
   used += mem.copy(h2.control_bytes[used..], settings[..length])
   h2.control_length = used
   h3_control(worker, connection)
@@ -471,12 +471,12 @@ fn h3_frames(worker: *Worker, index: usize, stream_index: usize, input: []const 
       continue
     }
     count := #len(input) - at
-    if #cast(u64, count) > stream.frame_left {
+    if count > stream.frame_left {
       count = #cast(usize, stream.frame_left)
     }
     piece := input[at..at + count]
     at += count
-    stream.frame_left -= #cast(u64, count)
+    stream.frame_left -= count
     end := stream.frame_left == 0
     if end {
       stream.in_frame = false
@@ -509,7 +509,7 @@ fn h3_frame_start(worker: *Worker, index: usize, stream_index: usize) bool {
     h3_fail(connection, H3FrameUnexpected)
     return false
   }
-  if kind == FrameH3Headers && !stream.headers_seen && stream.frame_left > #cast(u64, #len(stream.storage)) {
+  if kind == FrameH3Headers && !stream.headers_seen && stream.frame_left > #len(stream.storage) {
     // Larger than SETTINGS_MAX_FIELD_SECTION_SIZE.
     reset_stream(worker, connection, stream_index, ErrorCalm)
     return false
@@ -676,9 +676,7 @@ fn h3_write(worker: *Worker, connection: *Connection, stream_index: usize, sourc
     if written.status == QuicStatus.Failed { return false }
     if written.status == QuicStatus.Ok && last { return true }
     if written.status == QuicStatus.WouldBlock {
-      if !blocking || now_milliseconds() - started > #cast(i64, connection.write_timeout) {
-        return false
-      }
+      if !blocking || now_milliseconds() - started > connection.write_timeout { return false }
       // Let QUIC send and take acknowledgements, then wait for packets.
       timer := quic.handle_events(worker.quic_listener)
       wait := 10
@@ -695,7 +693,7 @@ fn h3_write(worker: *Worker, connection: *Connection, stream_index: usize, sourc
 fn h3_send_headers(worker: *Worker, connection: *Connection, stream_index: usize, block: []const u8, end: bool, blocking: bool) bool {
   head: [16]u8
   used := write_varint(head[..], FrameH3Headers)
-  used += write_varint(head[used..], #cast(u64, #len(block)))
+  used += write_varint(head[used..], #len(block))
   if !h3_write(worker, connection, stream_index, head[..used], false, blocking) { return false }
   return h3_write(worker, connection, stream_index, block, end, blocking)
 }
@@ -717,7 +715,7 @@ fn h3_send_data(worker: *Worker, connection: *Connection, stream_index: usize, d
     }
     head: [16]u8
     used := write_varint(head[..], FrameH3Data)
-    used += write_varint(head[used..], #cast(u64, count))
+    used += write_varint(head[used..], count)
     last := end && count == #len(rest)
     if !h3_write(worker, connection, stream_index, head[..used], false, blocking) ||
       !h3_write(worker, connection, stream_index, rest[..count], last, blocking) {

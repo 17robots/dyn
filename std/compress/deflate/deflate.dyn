@@ -186,7 +186,7 @@ fn decoder_read(data: rawptr, destination: []u8) stream.Transfer {
         crc_at += 1
       }
       // ISIZE is defined modulo 2^32. Use a wider intermediate for debug builds.
-      state.member_size = #cast(u32, ((#cast(u64, state.member_size) + #cast(u64, (result.written - before))) & 4294967295))
+      state.member_size = ((#cast(u64, state.member_size) + #cast(u64, (result.written - before))) & 4294967295)
     }
     if result.written > before { break }
     if result.done { continue }
@@ -292,7 +292,7 @@ fn write_bits(writer: *BitWriter, value: u32, count: usize) {
       writer.ok = false
       return
     }
-    writer.destination[writer.written] = #cast(u8, (writer.value & 255))
+    writer.destination[writer.written] = (writer.value & 255)
     writer.written += 1
     writer.value >>= 8
     writer.count -= 8

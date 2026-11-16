@@ -43,9 +43,7 @@ fn dump(out: *Output, arena: *mem.Arena, tree: *const Tree, root: u32) {
     for id != root && tree.nodes[id].next == None {
       id = tree.nodes[id].parent
     }
-    if id == root {
-      return
-    }
+    if id == root { return }
     id = tree.nodes[id].next
   }
 }

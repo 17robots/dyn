@@ -64,7 +64,7 @@ pub fn present(renderer: Renderer) bool {
 }
 pub fn event_type(event: *const Event) u32 {
   if event == nil { return 0 }
-  return #cast(u32, (event.words[0] & 4294967295))
+  return (event.words[0] & 4294967295)
 }
 pub fn poll_event(event: *Event) bool {
   return event != nil && native_poll_event(#cast(rawptr, event))

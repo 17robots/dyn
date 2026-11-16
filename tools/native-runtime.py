@@ -378,7 +378,7 @@ class Assembler:
                'pblendw': (b'\x66', b'\x0f\x3a\x0e', True), 'sha256rnds2': (b'', b'\x0f\x38\xcb', False),
                'sha256msg1': (b'', b'\x0f\x38\xcc', False), 'sha256msg2': (b'', b'\x0f\x38\xcd', False),
                'pcmpeqb': (b'\x66', b'\x0f\x74', False), 'pmovmskb': (b'\x66', b'\x0f\xd7', False),
-               'por': (b'\x66', b'\x0f\xeb', False)}
+               'por': (b'\x66', b'\x0f\xeb', False), 'pcmpgtb': (b'\x66', b'\x0f\x64', False)}
         if op in sse:
             prefix, opcode, immediate = sse[op]
             value = int(args.pop(0)[1:], 0) if immediate else None

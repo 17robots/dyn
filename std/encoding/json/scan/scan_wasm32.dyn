@@ -1,0 +1,5 @@
+#target(arch: wasm32)
+
+fn text_prefix_target(source: []const u8) usize {
+  return text_prefix_bytes(source)
+}

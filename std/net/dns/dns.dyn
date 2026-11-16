@@ -22,7 +22,7 @@ fn load_u16(data: []const u8, offset: usize) u16 {
   return #cast(u16, data[offset]) * 256 + #cast(u16, data[offset + 1])
 }
 fn store_u16(data: []u8, offset: usize, value: u16) {
-  data[offset] = #cast(u8, (value >> 8))
+  data[offset] = (value >> 8)
   data[offset + 1] = #cast(u8, value)
 }
 struct Name { end: usize, length: usize, ok: bool, offset: usize }

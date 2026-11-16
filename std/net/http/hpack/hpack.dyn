@@ -88,7 +88,7 @@ struct Integer { value: usize, consumed: usize, ok: bool }
 fn read_integer(block: []const u8, prefix: u8) Integer {
   if #len(block) == 0 { return Integer{} }
   mask := (#cast(usize, 1) << #cast(usize, prefix)) - 1
-  value := #cast(usize, block[0]) & mask
+  value := block[0] & mask
   if value < mask { return Integer{ value: value, consumed: 1, ok: true } }
   shift: usize = 0
   at: usize = 1
@@ -156,7 +156,7 @@ pub fn huffman_decode(source: []const u8, destination: []u8) Decoded {
 pub fn huffman_length(source: []const u8) usize {
   bits: usize = 0
   for byte in source {
-    bits += #cast(usize, HuffmanLengths[byte])
+    bits += HuffmanLengths[byte]
   }
   return (bits + 7) / 8
 }
@@ -168,7 +168,7 @@ pub fn huffman_encode(source: []const u8, destination: []u8) usize {
   written: usize = 0
   for byte in source {
     length := #cast(usize, HuffmanLengths[byte])
-    pending = (pending << #cast(u64, length)) | #cast(u64, HuffmanCodes[byte])
+    pending = (pending << #cast(u64, length)) | HuffmanCodes[byte]
     bits += length
     for bits >= 8 {
       bits -= 8
@@ -186,12 +186,12 @@ pub fn huffman_encode(source: []const u8, destination: []u8) usize {
 
 fn static_name(index: usize) []const u8 {
   start := #cast(usize, StaticNameStart[index - 1])
-  return StaticText[start..start + #cast(usize, StaticNameLength[index - 1])]
+  return StaticText[start..start + StaticNameLength[index - 1]]
 }
 
 fn static_value(index: usize) []const u8 {
   start := #cast(usize, StaticValueStart[index - 1])
-  return StaticText[start..start + #cast(usize, StaticValueLength[index - 1])]
+  return StaticText[start..start + StaticValueLength[index - 1]]
 }
 
 // Dynamic entry index (1 is the newest).

@@ -257,7 +257,7 @@ fn h2_start(arena: *mem.Arena, worker: *Worker) {
 // ---------------------------------------------------------------- frames
 
 fn put_u32(destination: []u8, value: u32) {
-  destination[0] = #cast(u8, value >> 24)
+  destination[0] = value >> 24
   destination[1] = #cast(u8, value >> 16)
   destination[2] = #cast(u8, value >> 8)
   destination[3] = #cast(u8, value)
@@ -382,7 +382,7 @@ fn lease_h2(worker: *Worker, connection: *Connection) *H2 {
 }
 
 fn settings_item(destination: []u8, id: u16, value: u32) {
-  destination[0] = #cast(u8, id >> 8)
+  destination[0] = id >> 8
   destination[1] = #cast(u8, id)
   put_u32(destination[2..6], value)
 }
@@ -603,13 +603,13 @@ fn on_control(worker: *Worker, index: usize, kind: u8, flags: u8, id: u32, paylo
         return false
       }
       if setting == 4 {
-        if #cast(i64, value) > MaxWindow {
+        if value > MaxWindow {
           h2_fail(connection, ErrorFlowControl)
           return false
         }
         // The change applies to every open stream (RFC 9113 6.9.2).
-        delta := #cast(i64, value) - h2.initial_window
-        h2.initial_window = #cast(i64, value)
+        delta := value - h2.initial_window
+        h2.initial_window = value
         for i in 0..Http2Streams {
           if h2.streams[i].phase != Phase.Free {
             h2.streams[i].send_window += delta
@@ -621,7 +621,7 @@ fn on_control(worker: *Worker, index: usize, kind: u8, flags: u8, id: u32, paylo
           h2_fail(connection, ErrorProtocol)
           return false
         }
-        h2.peer_frame = #cast(usize, value)
+        h2.peer_frame = value
         if h2.peer_frame > MaxFrame {
           h2.peer_frame = MaxFrame
         }
@@ -755,7 +755,7 @@ fn gather_block(worker: *Worker, connection: *Connection, at: usize, sequence: u
       pad: usize = 0
       if (flags & FlagPadded) != 0 {
         if #len(payload) == 0 { return pool.block[..0] }
-        pad = #cast(usize, payload[0])
+        pad = payload[0]
         start = 1
       }
       if (flags & FlagPriority) != 0 {
@@ -904,7 +904,7 @@ fn synthesize(fields: []const u8, destination: []u8) Head {
       if #len(field.value) == 0 || #len(field.value) > 18 { return Head{} }
       for byte in field.value {
         if byte < '0' || byte > '9' { return Head{} }
-        value = value * 10 + #cast(i64, byte - '0')
+        value = value * 10 + byte - '0'
       }
       if declared >= 0 && declared != value { return Head{} }
       declared = value
@@ -1422,7 +1422,7 @@ fn send_headers(worker: *Worker, connection: *Connection, stream_index: usize, h
       parsed: i64 = 0
       for byte in value {
         if byte >= '0' && byte <= '9' {
-          parsed = parsed * 10 + #cast(i64, byte - '0')
+          parsed = parsed * 10 + byte - '0'
         }
       }
       length = parsed
@@ -1526,7 +1526,7 @@ fn wait_window(worker: *Worker, connection: *Connection, stream_index: usize) bo
     stream := &h2.streams[stream_index]
     if stream.reset || stream.phase == Phase.Free { return true }
     if stream.send_window > 0 && h2.send_window > 0 { return true }
-    if now_milliseconds() - started > #cast(i64, connection.write_timeout) || connection.used == #len(connection.input) {
+    if now_milliseconds() - started > connection.write_timeout || connection.used == #len(connection.input) {
       return false
     }
     received := connection_read(connection, connection.input[connection.used..])

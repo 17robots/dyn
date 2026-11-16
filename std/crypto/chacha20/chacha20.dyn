@@ -13,7 +13,7 @@ fn store32(output: []u8, at: usize, value: u32) {
   output[at] = #cast(u8, value)
   output[at + 1] = #cast(u8, (value >> 8))
   output[at + 2] = #cast(u8, (value >> 16))
-  output[at + 3] = #cast(u8, (value >> 24))
+  output[at + 3] = (value >> 24)
 }
 fn quarter(state: []u32, a, b, c, d: usize) {
   state[a] = add(state[a], state[b])

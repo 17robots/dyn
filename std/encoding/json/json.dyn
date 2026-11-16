@@ -4,6 +4,7 @@ use "std/strings" strings
 use "std/io" stream
 use "std/unicode/utf8" utf8
 use "std/bytes"
+use "std/encoding/json/scan"
 
 struct Cursor { source: []const u8, at: usize, error: parse.Kind }
 
@@ -337,14 +338,9 @@ fn failed_string(cursor: *Cursor) []const u8 {
 }
 
 // Stop before any byte that needs the full string scanner: a control byte,
-// a byte at or above 128, '"' or '\\'. Most JSON strings are short, so a
-// loop small enough to inline beats a wider scan with a call.
+// a byte at or above 128, '"' or '\\'.
 fn ascii_string_prefix(source: []const u8) usize {
-  for i in 0..#len(source) {
-    byte := source[i]
-    if byte < 32 || byte >= 128 || byte == '"' || byte == '\\' { return i }
-  }
-  return #len(source)
+  return scan.text_prefix(source)
 }
 
 fn decoded_string(arena: *memory.Arena, cursor: *Cursor) []const u8 {

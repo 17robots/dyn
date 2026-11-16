@@ -81,7 +81,7 @@ pub fn ipv4_address(destination: []u8, a: u8, b: u8, c: u8, d: u8, port: u16) []
     destination[i] = 0
   }
   address_family(destination, 16, 2)
-  destination[2] = #cast(u8, (port >> 8))
+  destination[2] = (port >> 8)
   destination[3] = #cast(u8, port)
   destination[4] = a
   destination[5] = b
@@ -99,7 +99,7 @@ pub fn ipv4(a: u8, b: u8, c: u8, d: u8, port: u16) Ipv4Address {
 pub fn ipv6(bytes: [16]u8, port: u16, scope: u32) Ipv6Address {
   value: Ipv6Address = Ipv6Address{}
   address_family(value.bytes[..], 28, AddressFamilyIpv6)
-  value.bytes[2] = #cast(u8, (port >> 8))
+  value.bytes[2] = (port >> 8)
   value.bytes[3] = #cast(u8, port)
   for i in 0..16 {
     value.bytes[8 + i] = bytes[i]
@@ -107,7 +107,7 @@ pub fn ipv6(bytes: [16]u8, port: u16, scope: u32) Ipv6Address {
   value.bytes[24] = #cast(u8, scope)
   value.bytes[25] = #cast(u8, (scope >> 8))
   value.bytes[26] = #cast(u8, (scope >> 16))
-  value.bytes[27] = #cast(u8, (scope >> 24))
+  value.bytes[27] = (scope >> 24)
   return value
 }
 
@@ -614,7 +614,7 @@ pub fn ip_text(destination: []u8, ip: Ip) []u8 {
         destination[at] = '.'
         at += 1
       }
-      at = put_decimal(destination, at, #cast(u32, ip.bytes[i]))
+      at = put_decimal(destination, at, ip.bytes[i])
     }
     return destination[..at]
   }

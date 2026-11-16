@@ -86,8 +86,8 @@ pub fn encode(output: []u8, value: Field) {
     select(&t, &m, 1-bit)
   }
   for i in 0..16 {
-    output[2*i] = #cast(u8, t.limbs[i] & 255)
-    output[2*i+1] = #cast(u8, (t.limbs[i] >> 8) & 255)
+    output[2*i] = t.limbs[i] & 255
+    output[2*i+1] = (t.limbs[i] >> 8) & 255
   }
 }
 pub fn inverse(value: Field) Field {

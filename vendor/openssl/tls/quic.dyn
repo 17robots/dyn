@@ -286,7 +286,7 @@ pub fn quic_peer(connection: rawptr, destination: []u8) usize {
   destination[0] = #cast(u8, family)
   // rawport is in network order.
   destination[2] = #cast(u8, port)
-  destination[3] = #cast(u8, port >> 8)
+  destination[3] = port >> 8
   if length == 4 {
     for i in 0..4 {
       destination[4 + i] = raw[i]

@@ -167,7 +167,7 @@ fn bind_list(statement: *Statement, values: []const any) io.Failure {
         if #cast(u64, value) > 9223372036854775807 { return io.Failure{ kind: io.Kind.Overflow } }
         bound = bind_i64(statement, index, #cast(i64, value))
       }
-      isize value => { bound = bind_i64(statement, index, #cast(i64, value)) }
+      isize value => { bound = bind_i64(statement, index, value) }
       f64 value => { bound = bind_f64(statement, index, value) }
       f32 value => { bound = bind_f64(statement, index, value) }
       bool value => {

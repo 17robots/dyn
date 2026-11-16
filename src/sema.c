@@ -696,6 +696,7 @@ static void vet_cast_report(const DynSource *s, DynSpan span, bool redundant) {
   if (!copy) { casts->failed = true; return; }
   casts->items[casts->count++] = (DynVetCast){copy, at, span.start_byte, span.end_byte, false};
 }
+static bool range_narrows(Sema *sema, DynAstProgram *a, DynExprId id, DynType from, DynType target);
 static void vet_cast(Sema *sema, DynAstProgram *a, const DynSource *s, DynExprId id,
                      DynType target) {
   if (!s->context.vet || id == DYN_NO_EXPR) return;
@@ -705,7 +706,8 @@ static void vet_cast(Sema *sema, DynAstProgram *a, const DynSource *s, DynExprId
   if (e->kind != DYN_EXPR_CAST || e->left == DYN_NO_EXPR || !vet_cast_builtin(s, e->span)) return;
   DynType from = a->expressions[e->left].type;
   if (from == DYN_TYPE_ERROR || e->type == DYN_TYPE_ERROR || target == DYN_TYPE_ERROR) return;
-  vet_cast_report(s, e->span, e->type == target && (from == target || lossless(sema, from, target)));
+  vet_cast_report(s, e->span, e->type == target && (from == target || lossless(sema, from, target) ||
+                                                    range_narrows(sema, a, e->left, from, target)));
 }
 static DynAstPointer *pointer_info(DynAstProgram *a, DynType t) {
   return dyn_type_is_pointer(t) && t - DYN_TYPE_POINTER_BASE < a->pointer_count
@@ -2337,27 +2339,33 @@ static uint32_t builtin_function(DynAstProgram *a, DynSpan builtin, const DynSou
 /* `x & M` with a constant M, and unsigned `x >> k` with a constant k, show
    their range in the code. Where a smaller integer type is expected and that
    range fits it, the value converts without #cast. */
-static DynType narrow_by_range(Sema *sema, DynAstProgram *a, DynExprId id, DynType t, DynType expected) {
-  if (t == DYN_TYPE_ERROR || t == expected || expected == DYN_TYPE_INFER || id == DYN_NO_EXPR) return t;
-  if (dyn_type_is_distinct(t) || dyn_type_is_distinct(expected) || !integer(sema, t) || !integer(sema, expected) ||
-      lossless(sema, t, expected))
-    return t;
+/* Whether the value of id, of type from, always fits target by its range:
+   x & M with a constant M, or an unsigned x >> k with a constant k. */
+static bool range_narrows(Sema *sema, DynAstProgram *a, DynExprId id, DynType from, DynType target) {
+  if (id == DYN_NO_EXPR || from == DYN_TYPE_ERROR || from == target || target == DYN_TYPE_INFER ||
+      dyn_type_is_distinct(from) || dyn_type_is_distinct(target) || !integer(sema, from) || !integer(sema, target) ||
+      lossless(sema, from, target))
+    return false;
   DynAstExpr e = a->expressions[id];
-  if (e.kind != DYN_EXPR_BINARY || e.right == DYN_NO_EXPR) return t;
+  if (e.kind != DYN_EXPR_BINARY || e.right == DYN_NO_EXPR) return false;
   uint64_t largest;
   if (e.op == DYN_OP_BIT_AND) {
     ConstantUInt mask = constant_uint_at(a, e.right, 4);
     if (!mask.valid || mask.overflow) mask = constant_uint_at(a, e.left, 4);
-    if (!mask.valid || mask.overflow) return t;
+    if (!mask.valid || mask.overflow) return false;
     largest = mask.value;
   } else if (e.op == DYN_OP_SHR) {
     ConstantUInt shift = constant_uint_at(a, e.right, 4);
-    unsigned width = bits(sema, t);
-    if (signed_int(sema, t) || !shift.valid || shift.overflow || shift.value == 0 || shift.value >= width) return t;
+    unsigned width = bits(sema, from);
+    if (signed_int(sema, from) || !shift.valid || shift.overflow || shift.value == 0 || shift.value >= width) return false;
     largest = (UINT64_C(1) << (width - shift.value)) - 1;
   } else
-    return t;
-  if (!literal_fits(sema, largest, expected)) return t;
+    return false;
+  return literal_fits(sema, largest, target);
+}
+static DynType narrow_by_range(Sema *sema, DynAstProgram *a, DynExprId id, DynType t, DynType expected) {
+  if (!range_narrows(sema, a, id, t, expected)) return t;
+  DynAstExpr e = a->expressions[id];
   DynExprId moved = sema_push_expr(a, e);
   if (moved == DYN_NO_EXPR) return t;
   a->expressions[id] = (DynAstExpr){.kind = DYN_EXPR_CAST, .type = expected, .integer = expected,

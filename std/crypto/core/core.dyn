@@ -159,7 +159,7 @@ pub fn sha256_finish(context: *Sha256, destination: []u8) []u8 {
   blocks(&context.state, tail[..length])
   i = 0
   for i < 8 {
-    destination[i * 4] = #cast(u8, (context.state[i] >> 24))
+    destination[i * 4] = (context.state[i] >> 24)
     destination[i * 4 + 1] = #cast(u8, (context.state[i] >> 16))
     destination[i * 4 + 2] = #cast(u8, (context.state[i] >> 8))
     destination[i * 4 + 3] = #cast(u8, context.state[i])
@@ -225,7 +225,7 @@ fn hmac_sha256_short(state: *const HmacSha256, destination: []u8, message: []con
   inner := state.inner.state
   blocks(&inner, work[..])
   for i in 0..8 {
-    work[i * 4] = #cast(u8, inner[i] >> 24)
+    work[i * 4] = inner[i] >> 24
     work[i * 4 + 1] = #cast(u8, inner[i] >> 16)
     work[i * 4 + 2] = #cast(u8, inner[i] >> 8)
     work[i * 4 + 3] = #cast(u8, inner[i])
@@ -240,7 +240,7 @@ fn hmac_sha256_short(state: *const HmacSha256, destination: []u8, message: []con
   outer := state.outer.state
   blocks(&outer, work[..])
   for i in 0..8 {
-    destination[i * 4] = #cast(u8, outer[i] >> 24)
+    destination[i * 4] = outer[i] >> 24
     destination[i * 4 + 1] = #cast(u8, outer[i] >> 16)
     destination[i * 4 + 2] = #cast(u8, outer[i] >> 8)
     destination[i * 4 + 3] = #cast(u8, outer[i])

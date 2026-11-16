@@ -58,6 +58,8 @@ Fewer hidden compiler rules:
 - `x & M` with a constant `M`, and an unsigned `x >> k` with a constant `k`,
   convert to a smaller integer type without `#cast` when the result fits:
   `low: u8 = word & 0xff`, `top: u8 = x >> 56`.
+  `dyn vet` reports casts the rule makes unnecessary; 104 are gone from std,
+  vendor and the examples.
 - `#sqrt`, `#floor`, `#ceil`, `#trunc`, `#round` and `#fma` are builtins:
   one instruction where the target has it, compiler-provided software
   elsewhere. `std/math`'s `sqrt64`, `floor64` and the others call them. The
@@ -99,8 +101,9 @@ Fewer hidden compiler rules:
   `bytes.find_byte` calls an SSE2 routine in the x86-64 runtime
   (`dyn_find_byte`) through an ordinary `extern`, and reads eight bytes at
   a time on other targets. `bytes.find` builds on it. The JSON scanners
-  use a short loop that inlines; the JSON benchmark kernel runs 6 percent
-  slower than with the old inline SSE.
+  share `std/encoding/json/scan`, which calls a second SSE2 routine
+  (`dyn_json_text_prefix`) on x86-64; the JSON benchmark kernel runs within
+  1 percent of the old inline SSE.
 - `TypeInfo`, `TypeMember` and `TypeKind` are builtin type names, reserved in
   every module; declaring one reports that. Before, a declaration collided
   with `#typeof`'s types only in some programs.

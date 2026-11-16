@@ -6,7 +6,10 @@ release --opt-level 3 and release on the tree code generator, and reports
 any program whose builds print or exit differently. Arithmetic wraps in
 every build, so every program has one meaning.
 
-  tools/fuzz-parity.py [--count N] [--seed S] [--keep DIR]
+  tools/fuzz-parity.py [--count N] [--seed S] [--keep DIR] [--target T]
+
+With --target (aarch64-linux, riscv64-linux, wasm32-wasi), the builds are
+debug, release and opt-level 3 for that target, run under qemu or node.
 
 A differing program is saved under --keep (default build/fuzz-parity) with
 its outputs; tools/bisect-passes.py then names the pass behind it."""
@@ -68,7 +71,28 @@ class Program:
             return f'(if_greater({left}, {right}))' if kind == 'i64' else f'({left} ^ {right})'
         return f'({left} {op} {right})'
 
+    def float_expression(self, names, depth):
+        """An f64 expression: + - * / over f64 names, literals and converted integers."""
+        rng = self.rng
+        floats = [name for name, kind in names.items() if kind == 'f64']
+        if depth <= 0 or rng.random() < 0.3:
+            choice = rng.random()
+            if floats and choice < 0.5:
+                return rng.choice(floats)
+            if choice < 0.8:
+                return rng.choice(['1.5', '0.25', '-3.0', '1000000.0', '0.1', '7.0'])
+            others = [name for name, kind in names.items() if kind != 'f64']
+            return f'#cast(f64, {rng.choice(others)})' if others else '2.0'
+        left = self.float_expression(names, depth - 1)
+        right = self.float_expression(names, depth - 1)
+        return f'({left} {rng.choice(["+", "-", "*", "/"])} {right})'
+
+    def value(self, kind, names, depth):
+        return self.float_expression(names, depth) if kind == 'f64' else self.expression(kind, names, depth)
+
     def condition(self, names):
+        if self.rng.random() < 0.2:
+            return f'({self.float_expression(names, 2)} {self.rng.choice(["<", ">=", "!="])} {self.float_expression(names, 1)})'
         kind = self.rng.choice(list(TYPES))
         left = self.expression(kind, names, 2)
         right = self.expression(kind, names, 1)
@@ -79,42 +103,82 @@ class Program:
         pad = '  ' * indent
         for _ in range(rng.randrange(2, 6)):
             choice = rng.random()
-            target = rng.choice([name for name in names if not name.startswith('i')] or list(names))
+            target = rng.choice([name for name in names if not name.startswith(('i', 'k'))] or list(names))
             kind = names[target]
-            if choice < 0.5 or depth <= 0:
-                operator = rng.choice(['=', '+=', '-=', '^=', '*='])
-                self.lines.append(f'{pad}{target} {operator} {self.expression(kind, names, 3)}')
-            elif choice < 0.65:
+            integer_targets = [name for name in names if names[name] != 'f64' and not name.startswith(('i', 'k'))]
+            if choice < 0.4 or depth <= 0:
+                operator = rng.choice(['=', '+=', '-=', '*=']) if kind == 'f64' else rng.choice(['=', '+=', '-=', '^=', '*='])
+                self.lines.append(f'{pad}{target} {operator} {self.value(kind, names, 3)}')
+            elif choice < 0.5:
                 self.lines.append(f'{pad}if {self.condition(names)} {{')
                 self.block(names, depth - 1, indent + 1)
                 self.lines.append(f'{pad}}} else {{')
                 self.block(names, depth - 1, indent + 1)
                 self.lines.append(f'{pad}}}')
-            elif choice < 0.8:
+            elif choice < 0.6:
                 loop = f'i{indent}'
-                self.lines.append(f'{pad}for {loop} in 0..{rng.randrange(1, 9)} {{')
+                self.lines.append(f'{pad}for {loop}: u64 in 0..{rng.randrange(1, 9)} {{')
                 inner = dict(names)
                 inner[loop] = 'u64'
-                self.lines.append(f'{pad}  table[{loop} % 8] ^= #cast(u64, {self.expression(kind, inner, 2)})')
+                self.lines.append(f'{pad}  table[{loop} % 8] ^= #cast(u64, {self.expression("u64", inner, 2)})')
                 self.block(inner, depth - 1, indent + 1)
                 self.lines.append(f'{pad}}}')
-            elif choice < 0.9:
+            elif choice < 0.68 and integer_targets:
+                # A while-style loop with continue and break.
+                self.counter += 1
+                counter = f'k{self.counter}'
+                self.lines.append(f'{pad}{counter}: u64 = 0')
+                self.lines.append(f'{pad}for {counter} < {rng.randrange(2, 12)} {{')
+                self.lines.append(f'{pad}  {counter} += 1')
+                inner = dict(names)
+                inner[counter] = 'u64'
+                self.lines.append(f'{pad}  if {self.condition(inner)} {{ continue }}')
+                self.block(inner, depth - 1, indent + 1)
+                self.lines.append(f'{pad}  if {self.condition(inner)} {{ break }}')
+                self.lines.append(f'{pad}}}')
+            elif choice < 0.76 and integer_targets:
+                subject = rng.choice(integer_targets)
+                self.lines.append(f'{pad}case {subject} & 3 {{')
+                for arm in ('0', '1'):
+                    self.lines.append(f'{pad}  {arm} => {{')
+                    self.block(names, depth - 1, indent + 2)
+                    self.lines.append(f'{pad}  }}')
+                self.lines.append(f'{pad}  _ => {{')
+                self.block(names, depth - 1, indent + 2)
+                self.lines.append(f'{pad}  }}')
+                self.lines.append(f'{pad}}}')
+            elif choice < 0.84:
                 field = rng.choice(['a', 'b', 'c'])
                 field_kind = {'a': 'u32', 'b': 'i64', 'c': 'u8'}[field]
                 self.lines.append(f'{pad}state.{field} = {self.expression(field_kind, names, 2)}')
-                self.lines.append(f'{pad}{target} ^= #cast({kind}, state.{field})')
-            else:
+                self.lines.append(f'{pad}{target} {"+=" if kind == "f64" else "^="} #cast({kind}, state.{field})')
+            elif choice < 0.9:
+                self.lines.append(f'{pad}adjust(&state, #cast(i64, {self.value(kind, names, 2)}))')
+            elif choice < 0.95 and kind != 'f64':
+                low = rng.randrange(0, 8)
+                high = rng.randrange(low, 9)
+                self.lines.append(f'{pad}{target} ^= #cast({kind}, total(table[{low}..{high}]))')
+            elif kind != 'f64':
                 self.lines.append(f'{pad}{target} += #cast({kind}, mix(#cast(i64, {target}), #cast(u32, {self.expression("u32", names, 1)})))')
+            else:
+                self.lines.append(f'{pad}{target} = {self.float_expression(names, 2)}')
 
     def generate(self):
         rng = self.rng
+        self.counter = 0
         names = {f'v{i}': rng.choice(list(TYPES)) for i in range(6)}
+        names['f0'] = 'f64'
+        names['f1'] = 'f64'
         self.lines += ['use "std/io"', '', 'struct State { a: u32, b: i64, c: u8 }', '',
                        'fn if_greater(x: i64, y: i64) i64 {', '  if x > y { return x }', '  return y', '}', '',
                        'fn mix(x: i64, y: u32) i64 {', f'  return (x * 31 + #cast(i64, y)) ^ (x >> 7)', '}', '',
+                       'fn adjust(state: *State, by: i64) {', '  state.b += by', '  if state.b > 1000 { state.b -= 777 }',
+                       '  state.a ^= #cast(u32, state.b)', '}', '',
+                       'fn total(values: []const u64) u64 {', '  sum: u64 = 0', '  for value in values {',
+                       '    sum = sum * 31 + value', '  }', '  return sum', '}', '',
                        'fn main() {', '  table: [8]u64', '  state := State{}']
         for name, kind in names.items():
-            self.lines.append(f'  {name}: {kind} = {self.literal(kind)}')
+            self.lines.append(f'  {name}: {kind} = {"1.0" if kind == "f64" else self.literal(kind)}')
         for _ in range(rng.randrange(3, 7)):
             self.block(names, 2, 1)
             values = ', '.join(names)
@@ -124,14 +188,24 @@ class Program:
         return '\n'.join(self.lines) + '\n'
 
 
+WASI = r'''
+const {WASI}=require('node:wasi'),fs=require('fs');
+(async()=>{const wasi=new WASI({version:'preview1',args:['test'],returnOnExit:true});const {instance}=await WebAssembly.instantiate(fs.readFileSync(process.argv[1]),{wasi_snapshot_preview1:wasi.wasiImport});process.exitCode=wasi.start(instance);})().catch(e=>{console.error(e);process.exit(1)});
+'''
+EMULATORS = {'aarch64-linux': ['qemu-aarch64'], 'riscv64-linux': ['qemu-riscv64'],
+             'wasm32-wasi': ['node', '--no-warnings', '-e', WASI]}
+TARGET = []
+
+
 def outcome(project, name, flags, env):
     program = project / name
-    built = subprocess.run([DYN, 'build', str(project), *flags, '--quiet', '--no-cache', '--output', str(program)],
+    built = subprocess.run([DYN, 'build', str(project), *flags, *TARGET, '--quiet', '--no-cache', '--output', str(program)],
                            capture_output=True, text=True, timeout=600, env={**os.environ, **env})
     if built.returncode:
         return ('build failed', built.stderr[-2000:])
+    emulator = EMULATORS.get(TARGET[1], []) if TARGET else []
     try:
-        run = subprocess.run([str(program)], capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL)
+        run = subprocess.run([*emulator, str(program)], capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:
         return ('timeout', '')
     return (run.returncode, run.stdout)
@@ -150,7 +224,12 @@ def main():
     parser.add_argument('--count', type=int, default=100)
     parser.add_argument('--seed', type=int, default=1)
     parser.add_argument('--keep', type=Path, default=ROOT / 'build/fuzz-parity')
+    parser.add_argument('--target')
     args = parser.parse_args()
+    global BUILDS
+    if args.target:
+        TARGET.extend(['--target', args.target])
+        BUILDS = tuple(build for build in BUILDS if build[0] != 'tree')
     differing = build_failures = 0
     with tempfile.TemporaryDirectory(prefix='dyn-fuzz-parity-') as temporary:
         seeds = range(args.seed, args.seed + args.count)

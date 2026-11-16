@@ -49,9 +49,7 @@ const FlagInstance: u16 = 2048
 const FlagIndexed: u16 = 4096
 
 fn add_node(p: *Parser, kind: u16, start: u32, end: u32, first: u32) u32 {
-  if p.tree.failed {
-    return None
-  }
+  if p.tree.failed { return None }
   if p.tree.count >= 0xFFFFFFFE {
     fail(p, start, "tree too large")
     return None
@@ -73,30 +71,18 @@ fn node_end(p: *const Parser, id: u32) u32 {
 
 fn precedence(p: *const Parser) i32 {
   n := p.token.end - p.token.start
-  if n == 0 || n > 2 {
-    return 0
-  }
+  if n == 0 || n > 2 { return 0 }
   c := byte_at(p, p.token.start)
   if n == 2 {
     next := byte_at(p, p.token.start + 1)
     if next == c {
-      if c == '|' {
-        return 2
-      }
-      if c == '&' {
-        return 3
-      }
-      if c == '<' || c == '>' {
-        return 9
-      }
+      if c == '|' { return 2 }
+      if c == '&' { return 3 }
+      if c == '<' || c == '>' { return 9 }
     }
     if next == '=' {
-      if c == '=' || c == '!' {
-        return 4
-      }
-      if c == '<' || c == '>' {
-        return 5
-      }
+      if c == '=' || c == '!' { return 4 }
+      if c == '<' || c == '>' { return 5 }
     }
     return 0
   }
@@ -128,9 +114,7 @@ fn precedence(p: *const Parser) i32 {
 fn primitive(p: *const Parser) bool {
   names: [15][]const u8 = ["i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64", "isize", "usize", "bool", "rawptr", "any"]
   for candidate in names {
-    if token_is(p, candidate) {
-      return true
-    }
+    if token_is(p, candidate) { return true }
   }
   return false
 }
@@ -151,28 +135,18 @@ fn same_line(p: *Parser) bool {
 }
 
 fn optional_type_start(p: *Parser) bool {
-  if !same_line(p) {
-    return false
-  }
-  if fn_type_start(p) {
-    return true
-  }
-  if src_distinct(p) || src_packed(p) {
-    return false
-  }
+  if !same_line(p) { return false }
+  if fn_type_start(p) { return true }
+  if src_distinct(p) || src_packed(p) { return false }
   declarations: [8][]const u8 = ["fn", "pub", "use", "const", "type", "struct", "enum", "extern"]
   for candidate in declarations {
-    if token_is(p, candidate) {
-      return false
-    }
+    if token_is(p, candidate) { return false }
   }
   return p.token.kind == TokenKind.Name || token_is(p, "*") || token_is(p, "[") || at(p, p.token.start, "$")
 }
 
 fn chain(p: *Parser, first: *u32, last: *u32, child: u32) {
-  if child == None || p.tree.failed {
-    return
-  }
+  if child == None || p.tree.failed { return }
   if first.* == None {
     first.* = child
   } else {
@@ -196,9 +170,7 @@ fn parse_name(p: *Parser) u32 {
 }
 
 fn type_body(p: *Parser) u32 {
-  if p.tree.failed {
-    return None
-  }
+  if p.tree.failed { return None }
   token := p.token
   first := None
   last := None
@@ -218,9 +190,7 @@ fn type_body(p: *Parser) u32 {
         lex(p)
       }
       chain(p, &first, &last, parse_type(p))
-      if !take(p, ",") {
-        break
-      }
+      if !take(p, ",") { break }
     }
     end = p.token.end
     expect(p, ")")
@@ -276,9 +246,7 @@ fn type_body(p: *Parser) u32 {
       lex(p)
       for !token_is(p, ")") && !p.tree.failed {
         chain(p, &first, &last, parse_type(p))
-        if !take(p, ",") {
-          break
-        }
+        if !take(p, ",") { break }
       }
       end = p.token.end
       expect(p, ")")
@@ -292,9 +260,7 @@ fn type_body(p: *Parser) u32 {
 }
 
 fn parse_type(p: *Parser) u32 {
-  if p.tree.failed {
-    return None
-  }
+  if p.tree.failed { return None }
   p.depth += 1
   if p.depth > MaxDepth {
     fail(p, p.token.start, "expression nesting limit exceeded")
@@ -304,9 +270,7 @@ fn parse_type(p: *Parser) u32 {
   start := p.token.start
   child := type_body(p)
   p.depth -= 1
-  if child == None {
-    return None
-  }
+  if child == None { return None }
   return add_node(p, ExpType, start, node_end(p, child), child)
 }
 
@@ -343,9 +307,7 @@ fn array_type_suffix(p: *Parser, array: u32, named: bool) u32 {
   }
   is_const := take(p, "const")
   element := parse_type(p)
-  if element == None {
-    return None
-  }
+  if element == None { return None }
   if first != None {
     p.tree.nodes[first].next = element
   } else {
@@ -366,19 +328,13 @@ fn array_type_suffix(p: *Parser, array: u32, named: bool) u32 {
 }
 
 fn argument(p: *Parser, allow_named_type: bool) u32 {
-  if p.tree.failed {
-    return None
-  }
-  if token_is(p, "true") || token_is(p, "false") || token_is(p, "nil") {
-    return expression(p, 0)
-  }
+  if p.tree.failed { return None }
+  if token_is(p, "true") || token_is(p, "false") || token_is(p, "nil") { return expression(p, 0) }
   if token_is(p, "[") {
     // Parse the shared bracket contents once. Replaying them during type
     // speculation makes nested array arguments take exponential work.
     array := aggregate(p)
-    if array == None {
-      return None
-    }
+    if array == None { return None }
     saved := p.*
     count := p.tree.count
     first := p.tree.nodes[array].first
@@ -388,24 +344,16 @@ fn argument(p: *Parser, allow_named_type: bool) u32 {
     }
     if allow_named_type {
       candidate := array_type_suffix(p, array, true)
-      if !p.tree.failed && (token_is(p, ")") || token_is(p, ",")) {
-        return candidate
-      }
-      if resource_error(p) {
-        return None
-      }
+      if !p.tree.failed && (token_is(p, ")") || token_is(p, ",")) { return candidate }
+      if resource_error(p) { return None }
       restore(p, &saved, count)
       if first != None {
         p.tree.nodes[first].next = sibling
       }
     }
     value := expression_tail(p, array, false, 0)
-    if !p.tree.failed && (token_is(p, ")") || token_is(p, ",")) {
-      return value
-    }
-    if resource_error(p) {
-      return None
-    }
+    if !p.tree.failed && (token_is(p, ")") || token_is(p, ",")) { return value }
+    if resource_error(p) { return None }
     if allow_named_type {
       fail(p, p.token.start, "expected argument delimiter")
       return None
@@ -425,14 +373,10 @@ fn argument(p: *Parser, allow_named_type: bool) u32 {
       child = type_body(p)
     }
     if !p.tree.failed && (committed || token_is(p, ")") || token_is(p, ",")) {
-      if allow_named_type {
-        return child
-      }
+      if allow_named_type { return child }
       return add_node(p, ExpTypeArgument, p.tree.nodes[child].start, node_end(p, child), child)
     }
-    if resource_error(p) {
-      return None
-    }
+    if resource_error(p) { return None }
     restore(p, &saved, count)
   }
   return expression(p, 0)
@@ -482,16 +426,12 @@ fn aggregate(p: *Parser) u32 {
       field := parse_name(p)
       expect(p, ":")
       value := expression(p, 0)
-      if p.tree.failed {
-        break
-      }
+      if p.tree.failed { break }
       p.tree.nodes[field].next = value
       child = add_node(p, ExpMember, member_start, node_end(p, value), field)
     }
     chain(p, &first, &last, child)
-    if !take(p, ",") {
-      break
-    }
+    if !take(p, ",") { break }
   }
   end := p.token.end
   expect(p, close)
@@ -503,26 +443,16 @@ fn aggregate(p: *Parser) u32 {
 }
 
 fn struct_start(p: *Parser) bool {
-  if p.tree.failed {
-    return false
-  }
-  if token_is(p, ".") {
-    return true
-  }
-  if token_is(p, "true") || token_is(p, "false") || token_is(p, "nil") {
-    return false
-  }
-  if p.token.kind != TokenKind.Name {
-    return false
-  }
+  if p.tree.failed { return false }
+  if token_is(p, ".") { return true }
+  if token_is(p, "true") || token_is(p, "false") || token_is(p, "nil") { return false }
+  if p.token.kind != TokenKind.Name { return false }
   probe := p.*
   scratch := Tree{}
   probe.tree = &scratch
   lex(&probe)
   for take(&probe, ".") && !scratch.failed {
-    if probe.token.kind != TokenKind.Name {
-      return false
-    }
+    if probe.token.kind != TokenKind.Name { return false }
     lex(&probe)
   }
   // Box(i32){...}: adjacent arguments that parse as types, then the brace.
@@ -569,9 +499,7 @@ fn parse_operand(p: *Parser, minimum: i32) u32 {
     }
     for callee != None && take(p, ",") && !p.tree.failed {
       value := argument(p, false)
-      if value == None {
-        break
-      }
+      if value == None { break }
       p.tree.nodes[last].next = value
       last = value
     }
@@ -648,9 +576,7 @@ fn parse_operand(p: *Parser, minimum: i32) u32 {
     } else {
       for !token_is(p, ")") && !p.tree.failed {
         chain(p, &first, &last, expression(p, 0))
-        if !take(p, ",") {
-          break
-        }
+        if !take(p, ",") { break }
       }
     }
     end := p.token.end
@@ -747,23 +673,17 @@ fn expression_tail(p: *Parser, operand: u32, primary_operand: bool, minimum: i32
       field := p.token
       lex(p)
       field_name := add_node(p, ExpName, field.start, field.end, None)
-      if field_name == None {
-        break
-      }
+      if field_name == None { break }
       p.tree.nodes[left].next = field_name
       left = mark(p, add_node(p, ExpField, start, field.end, left), FlagPrimary)
     } else if primary && take(p, "(") {
       last := left
       for !token_is(p, ")") && !p.tree.failed {
         value := argument(p, false)
-        if value == None {
-          break
-        }
+        if value == None { break }
         p.tree.nodes[last].next = value
         last = value
-        if !take(p, ",") {
-          break
-        }
+        if !take(p, ",") { break }
       }
       end := p.token.end
       expect(p, ")")
@@ -780,9 +700,7 @@ fn expression_tail(p: *Parser, operand: u32, primary_operand: bool, minimum: i32
       }
       end := p.token.end
       expect(p, "]")
-      if p.tree.failed {
-        break
-      }
+      if p.tree.failed { break }
       // Missing slice endpoints are represented by zero-width empty groups.
       if slice && low == None {
         low = add_node(p, ExpGroup, token.end, token.end, None)
@@ -790,9 +708,7 @@ fn expression_tail(p: *Parser, operand: u32, primary_operand: bool, minimum: i32
       if slice && high == None {
         high = add_node(p, ExpGroup, end - 1, end - 1, None)
       }
-      if p.tree.failed {
-        break
-      }
+      if p.tree.failed { break }
       p.tree.nodes[left].next = low
       kind := ExpIndex
       if slice {
@@ -802,14 +718,10 @@ fn expression_tail(p: *Parser, operand: u32, primary_operand: bool, minimum: i32
       left = mark(p, add_node(p, kind, start, end, left), FlagPrimary)
     } else {
       level := precedence(p)
-      if level == 0 || level < minimum {
-        break
-      }
+      if level == 0 || level < minimum { break }
       lex(p)
       right := expression(p, level + 1)
-      if right == None {
-        break
-      }
+      if right == None { break }
       p.tree.nodes[left].next = right
       left = add_node(p, ExpBinary, start, node_end(p, right), left)
       primary = false
@@ -819,9 +731,7 @@ fn expression_tail(p: *Parser, operand: u32, primary_operand: bool, minimum: i32
 }
 
 fn expression(p: *Parser, minimum: i32) u32 {
-  if p.tree.failed {
-    return None
-  }
+  if p.tree.failed { return None }
   p.depth += 1
   if p.depth > MaxDepth {
     fail(p, p.token.start, "expression nesting limit exceeded")

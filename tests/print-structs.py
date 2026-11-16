@@ -11,6 +11,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 DYN = str(Path(os.environ.get('DYN', ROOT / 'build/dyn-release')).resolve())
 SOURCE = '''use "std/fmt"
+use "std/html"
 use "std/io"
 use "std/strings"
 use "std/mem"
@@ -36,12 +37,17 @@ fn main() {
   buffer := fmt.buffer(storage[..])
   fmt.print(&buffer, "[{}]", units[1].at)
   io.println("{} {}", fmt.bytes(&buffer), strings.format(arena, "{}", Code.Ok))
+  page_storage: [256]u8
+  page := html.writer(page_storage[..])
+  html.print(&page, "<p>{}</p>", Unit{ name: "<b>&" })
+  io.println("{}", html.output(&page).bytes)
 }
 '''
 EXPECTED = ('Unit{name: ada, at: Vec2{x: 1.5, y: 2}, op: Sub, code: Missing, hp: -7, alive: true, size: 3}\n'
             'Unit{name: bo, at: Vec2{x: 0, y: 0}, op: Add, code: None, hp: 0, alive: false, size: 0} Sub\n'
             '{?}\n'
-            '[Vec2{x: 1.5, y: 2}] Ok\n')
+            '[Vec2{x: 1.5, y: 2}] Ok\n'
+            '<p>Unit{name: &lt;b&gt;&amp;, at: Vec2{x: 0, y: 0}, op: Add, code: None, hp: 0, alive: false, size: 0}</p>\n')
 WASI = r'''
 const {WASI}=require('node:wasi'),fs=require('fs');
 (async()=>{const wasi=new WASI({version:'preview1',args:['test'],returnOnExit:true});const {instance}=await WebAssembly.instantiate(fs.readFileSync(process.argv[1]),{wasi_snapshot_preview1:wasi.wasiImport});process.exitCode=wasi.start(instance);})().catch(e=>{console.error(e);process.exit(1)});
