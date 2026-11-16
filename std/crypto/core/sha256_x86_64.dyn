@@ -1,0 +1,9 @@
+#target(arch: x86_64)
+
+// SHA-256 blocks with the CPU's SHA instructions, in the runtime; false when
+// the CPU has none (the runtime asks CPUID once).
+extern fn sha256_hardware "dyn_sha256_blocks"(state: *[8]u32, data: *const u8, count: usize) bool
+
+fn hardware_blocks(state: *[8]u32, data: []const u8) bool {
+  return sha256_hardware(state, &data[0], #len(data) / 64)
+}

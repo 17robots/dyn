@@ -327,7 +327,7 @@ class Assembler:
         args = self.operands(tail[0]) if tail else []
         if line in ('rep movsb', 'rep stosb'):
             self.emit(b'\xf3\xa4' if line == 'rep movsb' else b'\xf3\xaa'); return
-        fixed = {'syscall': b'\x0f\x05', 'ud2': b'\x0f\x0b', 'ret': b'\xc3', 'retq': b'\xc3'}
+        fixed = {'syscall': b'\x0f\x05', 'ud2': b'\x0f\x0b', 'ret': b'\xc3', 'retq': b'\xc3', 'cpuid': b'\x0f\xa2'}
         if op in fixed:
             self.emit(fixed[op]); return
         suffix = op[-1] if op[-1] in 'qlb' else ''
@@ -353,10 +353,27 @@ class Assembler:
             self.modrm(b'\x0f\x94', 0, args[0], 8); return
         if op == 'movzbl':
             r, _ = self.reg(args[1]); self.modrm(b'\x0f\xb6', r, args[0], 32); return
-        if op == 'movdqu':
+        if op in ('movdqu', 'movdqa'):
             source_reg = args[0].startswith('%xmm')
             r, _ = self.reg(args[0] if source_reg else args[1])
-            self.modrm(b'\x0f\x7f' if source_reg else b'\x0f\x6f', r, args[1] if source_reg else args[0], 32, b'\xf3'); return
+            self.modrm(b'\x0f\x7f' if source_reg else b'\x0f\x6f', r, args[1] if source_reg else args[0], 32,
+                       b'\xf3' if op == 'movdqu' else b'\x66'); return
+        # SSE forms used by SHA-256: op [$imm,] source, destination. An
+        # immediate takes register operands only, so no relocation follows it.
+        sse = {'paddd': (b'\x66', b'\x0f\xfe', False), 'pshufb': (b'\x66', b'\x0f\x38\x00', False),
+               'pshufd': (b'\x66', b'\x0f\x70', True), 'palignr': (b'\x66', b'\x0f\x3a\x0f', True),
+               'pblendw': (b'\x66', b'\x0f\x3a\x0e', True), 'sha256rnds2': (b'', b'\x0f\x38\xcb', False),
+               'sha256msg1': (b'', b'\x0f\x38\xcc', False), 'sha256msg2': (b'', b'\x0f\x38\xcd', False)}
+        if op in sse:
+            prefix, opcode, immediate = sse[op]
+            value = int(args.pop(0)[1:], 0) if immediate else None
+            if immediate and not args[0].startswith('%'):
+                raise ValueError(op + ' with an immediate takes register operands')
+            r, _ = self.reg(args[1])
+            self.modrm(opcode, r, args[0], 32, prefix)
+            if immediate:
+                self.emit(bytes([value]))
+            return
         if op in ('stmxcsr', 'ldmxcsr', 'fnstcw', 'fldcw'):
             instruction, extension = {'stmxcsr': (b'\x0f\xae', 3), 'ldmxcsr': (b'\x0f\xae', 2), 'fnstcw': (b'\xd9', 7), 'fldcw': (b'\xd9', 5)}[op]
             self.modrm(instruction, extension, args[0], 32); return
@@ -1189,6 +1206,9 @@ def main():
         defines.add('DYN_SHARED')
     assembler = Assembler(target).assemble(ROOT / 'runtime' / source, defines)
     assembler.assemble(ROOT / 'runtime' / ('native_memory_thumb.S' if assembler.thumb else 'native_memory_riscv64.S' if assembler.rv64 else 'native_memory_aarch64.S' if assembler.a64 else 'native_memory_x86_64.S'), defines | ({'DYN_WINDOWS'} if assembler.coff else set()) | ({'DYN_MACOS'} if assembler.macho else set()))
+    if not (assembler.thumb or assembler.rv64 or assembler.a64):
+        assembler.assemble(ROOT / 'runtime/native_sha256_x86_64.S', defines | ({'DYN_WINDOWS'} if assembler.coff else set()) |
+                           ({'DYN_MACOS'} if assembler.macho else set()))
     if assembler.coff and not assembler.a64:
         assembler.assemble(ROOT / 'runtime/native_windows_imports.S')
     args.output.parent.mkdir(parents=True, exist_ok=True)

@@ -16,6 +16,13 @@ servers so they pick up the new `dyn`.
 
 Web applications: see [docs/guide/web-apps.md](docs/guide/web-apps.md).
 
+- SHA-256 uses the CPU's SHA instructions on x86-64 when CPUID reports
+  them (the runtime checks once and falls back to the Dyn code otherwise):
+  about 7 times faster. HMAC-SHA256 hashes a message of up to 55 bytes in
+  one block per pad. PBKDF2-SHA256 with 20,000 iterations takes 1.8 ms,
+  against 7 ms before and OpenSSL's 2.2 ms on the same machine. The
+  language is unchanged: the instructions live in the runtime assembly
+  (`runtime/native_sha256_x86_64.S`), as `memcpy` does.
 - Shorter servers. `vendor/sqlite` gains a per-connection statement cache
   (`cache`, `cached`, `cache_close`) and one-call forms: `run`, `first`,
   `query`/`next`, `integer`, `bytes`, `text` and `constraint`. `std/net/http`

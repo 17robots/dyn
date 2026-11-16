@@ -1,0 +1,25 @@
+// SHA-256, HMAC and PBKDF2 vectors; tests/sha256-hardware.py runs them with
+// and without the CPU's SHA instructions.
+use "std/crypto/core"
+use "std/crypto/password"
+use "std/encoding/hex"
+use "std/io"
+use "std/mem"
+
+fn main() {
+  arena := mem.arena_alloc(mem.MiB)
+  defer mem.arena_release(arena)
+  digest: [32]u8
+  io.println("{}", hex.encode(arena, core.sha256(digest[..], "abc"), false))
+  long: [1000]u8
+  for i in 0..1000 {
+    long[i] = #cast(u8, i * 7)
+  }
+  io.println("{}", hex.encode(arena, core.sha256(digest[..], long[..]), false))
+  mac: [32]u8
+  io.println("{}", hex.encode(arena, core.hmac_sha256(mac[..], "key", "The quick brown fox jumps over the lazy dog"), false))
+  derived: [32]u8
+  scratch: [20]u8
+  _ = password.pbkdf2_sha256(derived[..], "password", "salt", 4096, scratch[..])
+  io.println("{}", hex.encode(arena, derived[..], false))
+}
