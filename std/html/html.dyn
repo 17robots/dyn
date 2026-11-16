@@ -5,6 +5,7 @@
 // compile. Escaping covers element content and quoted attribute values. It
 // does not make text safe inside <script>, <style>, URLs or unquoted
 // attributes; those need context-specific encoding.
+use "std/encoding/binary"
 use "std/fmt" fmt
 
 // Markup the program vouches for: literals and output of other Writers.
@@ -50,15 +51,39 @@ pub fn output(source: *const Writer) Trusted {
 
 // Appends text with & < > " ' replaced by entities. Sticky like fmt.write:
 // when it does not fit, the buffer is marked failed.
+// Nonzero when a byte of word is zero (the high bit of the first such byte is
+// set; bits above it may be wrong).
+fn zero_byte(word: u64) u64 {
+  return (word - 0x0101010101010101) & ~word & 0x8080808080808080
+}
+
+// Nonzero when a byte of word needs escaping: x | 1 is ' for & and ', and
+// x | 2 is > for < and >.
+fn special_bytes(word: u64) u64 {
+  return zero_byte((word | 0x0101010101010101) ^ 0x2727272727272727) |
+    zero_byte((word | 0x0202020202020202) ^ 0x3e3e3e3e3e3e3e3e) | zero_byte(word ^ 0x2222222222222222)
+}
+
+// How many bytes start text before the first that needs escaping, eight at a
+// time.
+fn clean_prefix(text: []const u8) usize {
+  at: usize = 0
+  for #len(text) - at >= 8 {
+    if special_bytes(binary.load_u64_le(text[at..at + 8])) != 0 { break }
+    at += 8
+  }
+  for at < #len(text) {
+    byte := text[at]
+    if byte == '&' || byte == '<' || byte == '>' || byte == '"' || byte == 39 { break }
+    at += 1
+  }
+  return at
+}
+
 pub fn write_escaped(buffer: *fmt.Buffer, text: []const u8) {
   // Keep ordinary text on its existing one-copy path. Only escaped text
   // needs the per-entity optimization below.
-  first: usize = 0
-  for first < #len(text) {
-    byte := text[first]
-    if byte == '&' || byte == '<' || byte == '>' || byte == '"' || byte == 39 { break }
-    first += 1
-  }
+  first := clean_prefix(text)
   if first == #len(text) {
     fmt.write(buffer, text)
     return

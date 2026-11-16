@@ -3,7 +3,8 @@ use "std/unicode/utf8"
 // A statement owns its provider handle. Do not copy live statements or access
 // fields directly. Database must remain open until every statement is finalized.
 pub enum State { Ready, Row, Done, Failed }
-pub struct Statement { handle: rawptr, state: State, code: i32 }
+// columns is the result column count, fixed when the statement is prepared.
+pub struct Statement { handle: rawptr, state: State, code: i32, columns: i32 }
 pub struct PrepareResult { statement: Statement, consumed: usize, empty: bool, code: i32, failure: io.Failure }
 pub struct StepResult { state: State, code: i32, failure: io.Failure }
 pub enum ColumnKind { Null, Integer, Float, Text, Blob }
@@ -40,7 +41,11 @@ pub fn prepare(database: Database, sql: []const u8) PrepareResult {
     return PrepareResult{ code: code, failure: io.Failure{ kind: io.Kind.System } }
   }
   consumed := #cast(usize, tail) - #cast(usize, &sql[0])
-  return PrepareResult{ statement: Statement{ handle: handle }, consumed: consumed, empty: handle == nil }
+  columns: i32 = 0
+  if handle != nil {
+    columns = sqlite_column_count(handle)
+  }
+  return PrepareResult{ statement: Statement{ handle: handle, columns: columns }, consumed: consumed, empty: handle == nil }
 }
 
 // Row and Done are successful, distinct outcomes. Repeated calls after Done or
@@ -199,7 +204,7 @@ pub fn column_count(statement: *const Statement) i32 {
 // kind distinguishes NULL, empty text, empty blob and numeric zero. Returned bytes
 // borrow SQLite storage until step/reset/finalize; clone them into an arena to retain.
 pub fn column(statement: *const Statement, index: i32) Column {
-  if statement.handle == nil || statement.state != State.Row || index < 0 || index >= sqlite_column_count(statement.handle) {
+  if statement.handle == nil || statement.state != State.Row || index < 0 || index >= statement.columns {
     return Column{ code: InvalidArgument, failure: io.Failure{ kind: io.Kind.System } }
   }
   kind := sqlite_column_type(statement.handle, index)

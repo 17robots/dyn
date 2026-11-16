@@ -1,0 +1,24 @@
+// Byte loads and stores of one value at consecutive addresses, as
+// std/encoding/binary writes them, become one load or store in release.
+use "std/encoding/binary"
+use "std/io"
+
+fn main() {
+  data: [80]u8
+  for i in 0..64 {
+    binary.store_u64_le(data[i..i + 8], #cast(u64, i) * 0x0102030405060708)
+  }
+  binary.store_u32_le(data[72..76], 0xdeadbeef)
+  binary.store_u16_le(data[76..78], 0x1234)
+  total: u64 = 0
+  for i in 0..64 {
+    total ^= binary.load_u64_le(data[i..i + 8])
+  }
+  // Bytes stored one by one and read back as a word, and the reverse.
+  data[0] = 1
+  data[1] = 2
+  data[2] = 3
+  data[3] = 4
+  io.println("{} {} {} {}", total, binary.load_u32_le(data[72..76]), binary.load_u16_le(data[76..78]),
+    binary.load_u32_le(data[..4]))
+}

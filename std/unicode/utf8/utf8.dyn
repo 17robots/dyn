@@ -1,4 +1,6 @@
 // Strict UTF-8 over byte slices. Invalid decoding consumes one byte for recovery.
+use "std/encoding/binary"
+
 
 pub struct Decode {
   codepoint: u32,
@@ -43,6 +45,11 @@ pub fn decode(text: []const u8, offset: usize) Decode {
 pub fn valid(text: []const u8) bool {
   offset: usize = 0
   for offset < #len(text) {
+    // Eight ASCII bytes at a time: none has its high bit set.
+    if #len(text) - offset >= 8 && (binary.load_u64_le(text[offset..offset + 8]) & 0x8080808080808080) == 0 {
+      offset += 8
+      continue
+    }
     // ASCII bytes are complete code points; avoid constructing Decode for each.
     if text[offset] < 128 {
       offset += 1

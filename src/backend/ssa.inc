@@ -10720,6 +10720,258 @@ static void ssa_rotate64(Ssa *s, const uint32_t *order, uint32_t n) {
 /* x86-64, after the loop passes, which look for adds and shifts, and after
    ssa_narrow32: t + (p << k)
    with k in 1..3 is one LEA [t + p*2^k], as in a + b + 2 * x * y. */
+/* Load combining: an OR of unsigned integer loads from one base and index,
+   each shifted left by eight times its distance from the lowest offset, and
+   together covering 16, 32 or 64 contiguous bits, is one load of that width
+   on little-endian targets that allow unaligned access (x86-64, AArch64).
+   `x[0] | x[1] << 8 | ...` written byte by byte becomes one MOV. The same
+   bytes are read, so no new fault is possible; the combined load sits at the
+   OR, so only loads in its block with nothing that writes memory between
+   them and the OR take part. */
+typedef struct { int32_t load; unsigned shift; } SsaLoadPiece;
+static bool ssa_load_pieces(Ssa *s, int32_t id, unsigned shift, SsaLoadPiece *pieces, unsigned *count, unsigned depth) {
+  if (id < 0 || depth > 16 || shift >= 64) return false;
+  SsaValue *v = &s->values[id];
+  uint64_t c;
+  if (v->cls != SC_INT || v->w32) return false;
+  switch (v->op) {
+  case SO_OR:
+    return ssa_load_pieces(s, v->a, shift, pieces, count, depth + 1) &&
+           ssa_load_pieces(s, v->b, shift, pieces, count, depth + 1);
+  case SO_SHL:
+    return ssa_is_const(s, v->b, &c) && c % 8 == 0 && c < 64 &&
+           ssa_load_pieces(s, v->a, shift + (unsigned)c, pieces, count, depth + 1);
+  case SO_EXT: {
+    /* A zero extension changes nothing when every piece under it fits. */
+    if (v->aux2 || v->a < 0) return false;
+    unsigned before = *count;
+    if (!ssa_load_pieces(s, v->a, shift, pieces, count, depth + 1)) return false;
+    for (unsigned q = before; q < *count; ++q)
+      if (pieces[q].shift + (unsigned)(s->values[pieces[q].load].aux2 & 0xff) > shift + (uint64_t)v->aux) return false;
+    return true;
+  }
+  case SO_LOAD: {
+    unsigned bits = (unsigned)(v->aux2 & 0xff);
+    if (v->aux2 != SSA_MEM(bits, 0, 0) || (bits != 8 && bits != 16 && bits != 32) || *count >= 8) return false;
+    pieces[(*count)++] = (SsaLoadPiece){id, shift};
+    return true;
+  }
+  default:
+    return false;
+  }
+}
+/* A value as a root plus a constant: x + 1 and x + 2 share the root x. */
+static int32_t ssa_constant_offset(Ssa *s, int32_t id, int64_t *offset) {
+  uint64_t c;
+  for (unsigned depth = 0; id >= 0 && depth < 8; ++depth) {
+    const SsaValue *v = &s->values[id];
+    if (v->op == SO_COPY && v->a >= 0) id = v->a;
+    else if (v->op == SO_ADD && v->cls == SC_INT && !v->w32 && v->b >= 0 && ssa_is_const(s, v->b, &c)) {
+      *offset += (int64_t)c;
+      id = v->a;
+    } else if (v->op == SO_ADD && v->cls == SC_INT && !v->w32 && v->a >= 0 && ssa_is_const(s, v->a, &c)) {
+      *offset += (int64_t)c;
+      id = v->b;
+    } else break;
+  }
+  return id;
+}
+/* A load's address [base + index * scale + offset], with constants moved
+   out of base and index into offset. */
+typedef struct { int32_t base, index; int64_t offset; } SsaAddress;
+static SsaAddress ssa_load_address(Ssa *s, const SsaValue *load) {
+  SsaAddress address = {-1, -1, load->aux};
+  address.base = ssa_constant_offset(s, load->a, &address.offset);
+  uint64_t c;
+  if (load->b >= 0 && ssa_is_const(s, load->b, &c)) {
+    address.offset += (int64_t)c * (int64_t)load->scale;
+  } else if (load->b >= 0) {
+    int64_t steps = 0;
+    address.index = ssa_constant_offset(s, load->b, &steps);
+    address.offset += steps * (int64_t)load->scale;
+  }
+  return address;
+}
+/* The values a byte store's value passes through, each with the bit position
+   of the stored byte in it: x >> 8 stores bit 8 of x and bit 0 of x >> 8.
+   Zero extensions that keep the byte pass through. Returns how many. */
+typedef struct { int32_t value; unsigned shift; } SsaByteSource;
+static unsigned ssa_byte_sources(Ssa *s, int32_t id, SsaByteSource *chain) {
+  uint64_t c;
+  unsigned shift = 0, count = 0;
+  for (unsigned depth = 0; id >= 0 && depth < 8; ++depth) {
+    const SsaValue *v = &s->values[id];
+    if (v->cls != SC_INT) break;
+    chain[count++] = (SsaByteSource){id, shift};
+    if (v->w32) break;
+    if (v->op == SO_SHR && v->b >= 0 && ssa_is_const(s, v->b, &c) && c % 8 == 0 && shift + c < 64) {
+      shift += (unsigned)c;
+      id = v->a;
+    } else if (v->op == SO_EXT && !v->aux2 && v->a >= 0 && (uint64_t)v->aux >= 8 && shift + 8 <= (uint64_t)v->aux) {
+      id = v->a;
+    } else if (v->op == SO_COPY && v->a >= 0) {
+      id = v->a;
+    } else {
+      break;
+    }
+  }
+  return count;
+}
+static bool ssa_byte_source_at(const SsaByteSource *chain, unsigned count, int32_t value, unsigned shift) {
+  for (unsigned q = 0; q < count; ++q)
+    if (chain[q].value == value && chain[q].shift == shift) return true;
+  return false;
+}
+/* Store combining: byte stores of the successive bytes of one value to
+   consecutive addresses, with nothing between them that reads or writes
+   memory, are one 16-, 32- or 64-bit store on x86-64 and AArch64. The same
+   bytes are written; the store happens at the last of them. */
+static void ssa_combine_stores(Ssa *s, const uint32_t *order, uint32_t n) {
+  if (s->ctx->rv64 || s->ctx->rv32 || s->ctx->t32) return;
+  bool changed = false;
+  for (uint32_t i = 0; i < n; ++i) {
+    SsaBlock *block = &s->blocks[order[i]];
+    for (uint32_t k = 0; k < block->values.count; ++k) {
+      const SsaValue *head = &s->values[block->values.items[k]];
+      if (head->dead || head->op != SO_STORE || head->aux2 != SSA_MEM(8, 0, 0) || head->c < 0) continue;
+      /* Up to eight byte stores, only pure values between them. */
+      uint32_t at[8];
+      unsigned count = 0;
+      for (uint32_t q = k; q < block->values.count && count < 8; ++q) {
+        const SsaValue *v = &s->values[block->values.items[q]];
+        if (v->dead) continue;
+        if (v->op == SO_STORE && v->aux2 == SSA_MEM(8, 0, 0) && v->c >= 0) { at[count++] = q; continue; }
+        if (v->effect) break;
+      }
+      unsigned sizes[3] = {8, 4, 2};
+      for (unsigned z = 0; z < 3; ++z) {
+        unsigned m = sizes[z];
+        if (m > count) continue;
+        const SsaValue *first = &s->values[block->values.items[at[0]]];
+        SsaAddress address = ssa_load_address(s, first);
+        if (address.base < 0) continue;
+        SsaByteSource chain[8];
+        unsigned length = ssa_byte_sources(s, first->c, chain);
+        /* The deepest value that holds the first byte at bit 0 and every
+           later byte q at bit 8q. */
+        int32_t root = -1;
+        for (unsigned d = length; d-- > 0 && root < 0;) {
+          if (chain[d].shift != 0) continue;
+          bool match = true;
+          for (unsigned q = 1; q < m && match; ++q) {
+            const SsaValue *v = &s->values[block->values.items[at[q]]];
+            SsaAddress here = ssa_load_address(s, v);
+            SsaByteSource other[8];
+            unsigned others = ssa_byte_sources(s, v->c, other);
+            match = ssa_byte_source_at(other, others, chain[d].value, 8 * q) && here.base == address.base &&
+                    here.index == address.index && (v->b < 0 || v->scale == first->scale) &&
+                    here.offset == address.offset + (int64_t)q;
+          }
+          if (match) root = chain[d].value;
+        }
+        /* Constant bytes, such as a literal stored byte by byte, become
+           one constant word. */
+        uint64_t word = 0, byte;
+        bool constant = true;
+        for (unsigned q = 0; q < m && constant; ++q) {
+          const SsaValue *v = &s->values[block->values.items[at[q]]];
+          SsaAddress here = ssa_load_address(s, v);
+          constant = ssa_is_const(s, v->c, &byte) && here.base == address.base && here.index == address.index &&
+                     (v->b < 0 || v->scale == first->scale) && here.offset == address.offset + (int64_t)q;
+          word |= (byte & 0xff) << (8 * q);
+        }
+        if (root < 0 && constant) {
+          root = ssa_value(s, order[i], SO_CONST, SC_INT, -1, -1, -1, (int64_t)word, 0);
+          if (s->failed) return;
+          uint32_t place = at[m - 1];
+          ssa_push(s, &block->values, 0);
+          memmove(block->values.items + place + 1, block->values.items + place,
+                  (block->values.count - place - 1) * sizeof(uint32_t));
+          block->values.items[place] = (uint32_t)root;
+          ++at[m - 1];
+        }
+        bool match = root >= 0;
+        if (!match) continue;
+        /* ssa_value may have moved the values: read through indexes. */
+        uint8_t scale = s->values[block->values.items[at[0]]].scale;
+        SsaValue *last = &s->values[block->values.items[at[m - 1]]];
+        last->a = address.base; last->b = address.index; last->c = root;
+        last->scale = address.index >= 0 ? scale : 1;
+        last->aux = address.offset; last->aux2 = SSA_MEM(8 * m, 0, 0);
+        for (unsigned q = 0; q + 1 < m; ++q) s->values[block->values.items[at[q]]].dead = true;
+        changed = true;
+        break;
+      }
+    }
+    if (changed) {
+      uint32_t kept = 0;
+      for (uint32_t k = 0; k < block->values.count; ++k) {
+        uint32_t id = block->values.items[k];
+        if (!(s->values[id].dead && s->values[id].op == SO_STORE)) block->values.items[kept++] = id;
+      }
+      block->values.count = kept;
+    }
+  }
+  if (changed) ssa_dce(s, order, n);
+}
+static void ssa_combine_loads(Ssa *s, const uint32_t *order, uint32_t n) {
+  if (s->ctx->rv64 || s->ctx->rv32 || s->ctx->t32) return;
+  bool changed = false;
+  for (uint32_t i = 0; i < n; ++i) {
+    SsaBlock *block = &s->blocks[order[i]];
+    for (uint32_t k = 0; k < block->values.count; ++k) {
+      int32_t root = (int32_t)block->values.items[k];
+      SsaValue *v = &s->values[root];
+      if (v->dead || v->op != SO_OR || v->cls != SC_INT || v->w32) continue;
+      SsaLoadPiece pieces[8];
+      unsigned count = 0;
+      if (!ssa_load_pieces(s, root, 0, pieces, &count, 0) || count < 2) continue;
+      const SsaValue *first = &s->values[pieces[0].load];
+      SsaAddress address = ssa_load_address(s, first);
+      int64_t offsets[8];
+      int64_t lowest = address.offset;
+      unsigned total = 0;
+      bool same = address.base >= 0;
+      for (unsigned q = 0; q < count && same; ++q) {
+        const SsaValue *load = &s->values[pieces[q].load];
+        SsaAddress at = ssa_load_address(s, load);
+        offsets[q] = at.offset;
+        same = at.base == address.base && at.index == address.index && (load->b < 0 || load->scale == first->scale) &&
+               load->block == order[i];
+        if (offsets[q] < lowest) lowest = offsets[q];
+        total += (unsigned)(load->aux2 & 0xff);
+      }
+      if (!same || (total != 16 && total != 32 && total != 64)) continue;
+      /* Each piece sits at its byte distance, and the pieces do not overlap. */
+      uint64_t covered = 0;
+      bool placed = true;
+      for (unsigned q = 0; q < count && placed; ++q) {
+        const SsaValue *load = &s->values[pieces[q].load];
+        unsigned bits = (unsigned)(load->aux2 & 0xff);
+        int64_t distance = offsets[q] - lowest;
+        uint64_t mask = (bits == 64 ? ~0ull : (1ull << bits) - 1) << pieces[q].shift;
+        placed = distance >= 0 && (uint64_t)distance * 8 == pieces[q].shift && pieces[q].shift + bits <= total &&
+                 !(covered & mask);
+        covered |= mask;
+      }
+      if (!placed || covered != (total == 64 ? ~0ull : (1ull << total) - 1)) continue;
+      /* Nothing between the earliest piece and the OR writes memory. */
+      uint32_t start = k;
+      for (uint32_t q = 0; q < k; ++q)
+        for (unsigned r = 0; r < count; ++r)
+          if (block->values.items[q] == (uint32_t)pieces[r].load && q < start) start = q;
+      bool quiet = start < k;
+      for (uint32_t q = start; q < k && quiet; ++q) quiet = !ssa_value_writes(&s->values[block->values.items[q]]);
+      if (!quiet) continue;
+      /* The index keeps its scale; the constants it carried are in lowest. */
+      uint8_t scale = first->scale;
+      v->op = SO_LOAD; v->a = address.base; v->b = address.index; v->c = -1; v->scale = address.index >= 0 ? scale : 1;
+      v->aux = lowest; v->aux2 = SSA_MEM(total, 0, 0); v->effect = first->effect;
+      changed = true;
+    }
+  }
+  if (changed) ssa_dce(s, order, n);
+}
 static void ssa_late_lea(Ssa *s, const uint32_t *order, uint32_t n) {
   if (!x86_lea_target(s)) return;
   bool changed = false;
@@ -11798,6 +12050,8 @@ allocate:
     if (ssa_reuse_loads(s, order, n)) ssa_resolve_all(s);
     ssa_dce(s, order, n);
   }
+  ssa_combine_loads(s, order, n);
+  ssa_combine_stores(s, order, n);
   if (!ctx->rv64 && !ctx->rv32 && !ctx->t32) {
     ssa_narrow32(s, order, n);
     ssa_rotate64(s, order, n);

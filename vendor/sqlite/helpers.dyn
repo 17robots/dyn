@@ -48,21 +48,24 @@ pub fn next(statement: *Statement) bool {
   return step(statement).state == State.Row
 }
 
-// Column index of the current row as an integer; 0 for NULL or non-integers.
+// Column index of the current row as an integer, converted the way SQLite
+// converts (NULL is 0, text is parsed, a real is truncated); 0 off a row.
 pub fn integer(statement: *const Statement, index: i32) i64 {
-  value := column(statement, index)
-  if value.kind != ColumnKind.Integer { return 0 }
-  return value.integer
+  if !readable(statement, index) { return 0 }
+  return sqlite_column_integer(statement.handle, index)
 }
-
-// Column index's text or blob bytes, borrowed until the next step or reset.
+// Column index of the current row as bytes, borrowed until the next step:
+// text and blobs as stored, NULL empty, numbers as SQLite writes them.
 pub fn bytes(statement: *const Statement, index: i32) []const u8 {
-  return column(statement, index).bytes
+  if !readable(statement, index) { return "" }
+  // Text and blobs come back as stored; column_bytes must follow column_blob.
+  pointer := sqlite_column_blob(statement.handle, index)
+  length := sqlite_column_bytes(statement.handle, index)
+  if pointer == nil || length <= 0 { return "" }
+  return #slice(pointer, length)
 }
-
-// Column index's text or blob bytes copied into arena, so they outlive the row.
 pub fn text(arena: *mem.Arena, statement: *const Statement, index: i32) []const u8 {
-  value := column(statement, index).bytes
+  value := bytes(statement, index)
   copy := mem.push_bytes_uninit(arena, #len(value))
   _ = mem.copy(copy, value)
   return copy
@@ -117,6 +120,10 @@ pub fn cached(statements: *Cache, sql: []const u8) *Statement {
   entry.* = CacheEntry{ sql: sql, statement: prepared.statement }
   statements.count += 1
   return &entry.statement
+}
+
+fn readable(statement: *const Statement, index: i32) bool {
+  return statement.handle != nil && statement.state == State.Row && index >= 0 && index < statement.columns
 }
 
 // Finalizes every cached statement. Call before closing the database.

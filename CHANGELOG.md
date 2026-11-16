@@ -16,6 +16,18 @@ servers so they pick up the new `dyn`.
 
 Web applications: see [docs/guide/web-apps.md](docs/guide/web-apps.md).
 
+- The SSA backend combines byte loads and stores on x86-64 and AArch64:
+  `x[0] | x[1] << 8 | ...` from consecutive addresses is one load, and
+  storing a value's successive bytes (or constant bytes) one store.
+  `binary.load_u64_le` and `store_u64_le` compile to one instruction each;
+  BLAKE2b is 7% faster.
+- `html.text`, JSON string writing and `utf8.valid` look at eight bytes at
+  a time while nothing needs escaping or decoding: text without specials
+  escapes twice as fast. Text with an entity every few bytes runs as before.
+- `vendor/sqlite`: statements keep their column count, and `integer`,
+  `bytes` and `text` read a column with one or two SQLite calls instead of
+  four. `integer` converts the way SQLite does (text is parsed), and `bytes`
+  returns a number's text.
 - SHA-256 uses the CPU's SHA instructions on x86-64 when CPUID reports
   them (the runtime checks once and falls back to the Dyn code otherwise):
   about 7 times faster. HMAC-SHA256 hashes a message of up to 55 bytes in
