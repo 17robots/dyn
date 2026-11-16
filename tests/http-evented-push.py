@@ -6,6 +6,7 @@ overflow policy (idle eviction, then 503)."""
 import base64
 import gzip as gz
 import hashlib
+import json
 import http.client
 import os
 from pathlib import Path
@@ -147,6 +148,19 @@ def exercise(port):
         time.sleep(0.05)
     assert request(port, 'GET', '/abandoned')[2] == b'1', 'finish saw the client leave'
     assert request(port, 'GET', '/health')[0] == 200
+
+    # The request arena empties before each handler; json.field and http.json.
+    client = http.client.HTTPConnection('127.0.0.1', port, timeout=10)
+    workers = set()
+    for _ in range(3000):
+        client.request('GET', '/scratch')
+        reply = client.getresponse()
+        data = json.loads(reply.read())
+        assert reply.status == 200 and reply.getheader('content-type') == 'application/json', reply.status
+        assert data['path'] == '/scratch' and data['ok'] is True, data
+        workers.add(data['worker'])
+    client.close()
+    assert workers <= {0, 1}, workers
 
     # Dynamic responses gzip when the client accepts it.
     rows = b'[' + b','.join(b'{"id":%d,"name":"row %d"}' % (i, i) for i in range(400)) + b']'

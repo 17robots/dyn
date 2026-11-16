@@ -10,6 +10,21 @@ pub struct Thread { tid: sync.AtomicU32, stack: []u8 }
 // writing into the next mapping. 64 KiB covers 64 KiB pages.
 const stack_guard: usize = 65536
 
+// New threads start with SIGHUP, SIGINT and SIGTERM blocked (the mask is
+// inherited), so those process signals reach the thread that unblocks or
+// watches them (std/process/signal), never a worker started earlier.
+fn block_quit_signals() u64 {
+  mask: u64 = 0x4003
+  previous: u64 = 0
+  _ = #syscall(sys.RtSigprocmask, 0, &mask, &previous, 8)
+  return previous
+}
+
+fn restore_signals(previous: u64) {
+  saved := previous
+  _ = #syscall(sys.RtSigprocmask, 2, &saved, 0, 8)
+}
+
 extern fn spawn_raw "dyn_thread_spawn"(
   stack: *u8,
   size: usize,
@@ -32,7 +47,9 @@ fn spawn_untyped(arena: *mem.Arena, stack: []u8, entry: fn(rawptr) isize, contex
   }
   mark := mem.arena_mark(arena)
   thread := mem.push(Thread, arena)
+  signals := block_quit_signals()
   value := spawn_raw(&stack[0], #len(stack), entry, context, &thread.tid)
+  restore_signals(signals)
   if value < 0 {
     mem.arena_rewind(arena, mark)
     return SpawnResult{ failure: io.linux_failure(value) }
@@ -61,7 +78,9 @@ fn spawn_with_size_untyped(arena: *mem.Arena, size: usize, entry: fn(rawptr) isi
   base := #cast(*u8, address)
   _ = #syscall(sys.Mprotect, base, stack_guard, 0)
   thread.stack = #slice(base, total)
+  signals := block_quit_signals()
   value := spawn_raw(&thread.stack[stack_guard], total - stack_guard, entry, context, &thread.tid)
+  restore_signals(signals)
   if value < 0 {
     _ = #syscall(sys.Munmap, base, total)
     mem.arena_rewind(arena, mark)
@@ -97,9 +116,7 @@ pub fn id(thread: *const Thread) u32 {
 }
 pub fn yield_now() Result {
   value := #syscall(sys.SchedYield)
-  if value < 0 {
-    return Result{ failure: io.linux_failure(value) }
-  }
+  if value < 0 { return Result{ failure: io.linux_failure(value) } }
   return Result{ value: value }
 }
 
@@ -108,9 +125,7 @@ pub fn yield_now() Result {
 pub fn cpu_count() usize {
   mask: [128]u8
   written := #syscall(sys.SchedGetaffinity, 0, #len(mask), &mask[0])
-  if written <= 0 {
-    return 1
-  }
+  if written <= 0 { return 1 }
   count: usize = 0
   for byte in mask[..#cast(usize, written)] {
     bits := byte
@@ -119,8 +134,6 @@ pub fn cpu_count() usize {
       bits >>= 1
     }
   }
-  if count == 0 {
-    return 1
-  }
+  if count == 0 { return 1 }
   return count
 }

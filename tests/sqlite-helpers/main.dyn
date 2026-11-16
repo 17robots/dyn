@@ -1,0 +1,52 @@
+// vendor/sqlite helpers: the statement cache, run, first, query/next, the
+// column readers and constraint.
+use "std/io"
+use "std/mem"
+use "vendor/sqlite"
+
+fn main() {
+  arena := mem.arena_alloc(mem.MiB)
+  defer mem.arena_release(arena)
+  buffer: [256]u8
+  opened := sqlite.open(":memory:", buffer[..])
+  if io.failed(opened.failure) {
+    #panic("open")
+  }
+  database := opened.database
+  defer {
+    _ = sqlite.close(database)
+  }
+  _ = sqlite.execute(database, "CREATE TABLE user(id INTEGER PRIMARY KEY, name TEXT UNIQUE, score INTEGER)", buffer[..])
+  statements := sqlite.cache(database)
+  defer sqlite.cache_close(&statements)
+  insert := "INSERT INTO user(name, score) VALUES(?1, ?2)"
+  for i in 0..5 {
+    names: [5][]const u8 = ["ada", "bob", "cy", "di", "ed"]
+    if !sqlite.run(sqlite.cached(&statements, insert), names[i], i * 10) {
+      #panic("insert")
+    }
+  }
+  again := sqlite.cached(&statements, insert)
+  io.println("cached once {}", again == sqlite.cached(&statements, "INSERT INTO user(name, score) VALUES(?1, ?2)"))
+  io.println("duplicate {} constraint {}", sqlite.run(again, "bob", 1), sqlite.constraint(again))
+  lookup := sqlite.cached(&statements, "SELECT id, name, score FROM user WHERE name = ?1")
+  if sqlite.first(lookup, "cy") {
+    id := sqlite.integer(lookup, 0)
+    // Copied text outlives the row.
+    name := sqlite.text(arena, lookup, 1)
+    sqlite.done(lookup)
+    io.println("first {} {} {}", id, name, #len(name))
+  }
+  io.println("missing {}", sqlite.first(lookup, "zed"))
+  sqlite.done(lookup)
+  list := sqlite.cached(&statements, "SELECT name, score FROM user WHERE score >= ?1 ORDER BY score")
+  total: i64 = 0
+  if sqlite.query(list, 20) {
+    for sqlite.next(list) {
+      io.println("row {} {}", sqlite.bytes(list, 0), sqlite.integer(list, 1))
+      total += sqlite.integer(list, 1)
+    }
+  }
+  sqlite.done(list)
+  io.println("total {} bad sql {}", total, sqlite.cached(&statements, "SELEKT 1") == nil)
+}

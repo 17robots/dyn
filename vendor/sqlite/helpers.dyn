@@ -1,0 +1,135 @@
+use "std/mem"
+
+// Shorter forms for the usual statement life: run a write, read a first row,
+// walk rows. Failure stays on the statement (state Failed, code), the way
+// step leaves it, so a caller checks once where it matters.
+
+// Binds values to parameters 1, 2, ... (see bind_values), steps to the end
+// and gives the statement back. True when it ran to Done. On failure the
+// statement's code stays readable (see constraint) until its next use.
+pub fn run(statement: *Statement, values: ...any) bool {
+  done(statement)
+  if io.failed(bind_list(statement, values)) { return false }
+  for {
+    stepped := step(statement)
+    if stepped.state == State.Done {
+      _ = reset(statement)
+      _ = clear_bindings(statement)
+      return true
+    }
+    if stepped.state != State.Row {
+      code := statement.code
+      _ = reset(statement)
+      _ = clear_bindings(statement)
+      statement.code = code
+      return false
+    }
+  }
+  return false
+}
+
+// Binds values and steps to the first row: true when a row is ready for the
+// column readers below. Read it, then done(statement), or defer that.
+pub fn first(statement: *Statement, values: ...any) bool {
+  done(statement)
+  if io.failed(bind_list(statement, values)) { return false }
+  return step(statement).state == State.Row
+}
+
+// Binds values for a query walked with next: for sqlite.next(statement) { ... }.
+// Call done(statement) after the walk, or defer it.
+pub fn query(statement: *Statement, values: ...any) bool {
+  done(statement)
+  return !io.failed(bind_list(statement, values))
+}
+
+// Steps to the next row; false at the end or on failure.
+pub fn next(statement: *Statement) bool {
+  return step(statement).state == State.Row
+}
+
+// Column index of the current row as an integer; 0 for NULL or non-integers.
+pub fn integer(statement: *const Statement, index: i32) i64 {
+  value := column(statement, index)
+  if value.kind != ColumnKind.Integer { return 0 }
+  return value.integer
+}
+
+// Column index's text or blob bytes, borrowed until the next step or reset.
+pub fn bytes(statement: *const Statement, index: i32) []const u8 {
+  return column(statement, index).bytes
+}
+
+// Column index's text or blob bytes copied into arena, so they outlive the row.
+pub fn text(arena: *mem.Arena, statement: *const Statement, index: i32) []const u8 {
+  value := column(statement, index).bytes
+  copy := mem.push_bytes_uninit(arena, #len(value))
+  _ = mem.copy(copy, value)
+  return copy
+}
+
+// Whether the statement's last step failed on a constraint (SQLITE_CONSTRAINT),
+// such as a UNIQUE column.
+pub fn constraint(statement: *const Statement) bool {
+  return (statement.code & 255) == 19
+}
+
+// Prepared statements of one connection, keyed by their SQL: each is
+// prepared on first use and kept. sql must outlive the cache (a string
+// literal does).
+pub const CacheSize: usize = 64
+
+struct CacheEntry { sql: []const u8, statement: Statement }
+
+pub struct Cache {
+  database: Database,
+  entries: [CacheSize]CacheEntry,
+  count: usize,
+  // A prepare failed or the cache was full; the code is SQLite's.
+  failed: bool,
+  code: i32,
+}
+
+pub fn cache(database: Database) Cache {
+  return Cache{ database: database }
+}
+
+// The statement for sql, prepared on first use. nil when it does not
+// prepare (cache.failed, cache.code tell why) or the cache is full.
+pub fn cached(statements: *Cache, sql: []const u8) *Statement {
+  for i in 0..statements.count {
+    entry := &statements.entries[i]
+    if #len(entry.sql) == #len(sql) && (#len(sql) == 0 || &entry.sql[0] == &sql[0] || equal(entry.sql, sql)) {
+      return &entry.statement
+    }
+  }
+  if statements.count == CacheSize {
+    statements.failed = true
+    return nil
+  }
+  prepared := prepare(statements.database, sql)
+  if io.failed(prepared.failure) || prepared.empty {
+    statements.failed = true
+    statements.code = prepared.code
+    return nil
+  }
+  entry := &statements.entries[statements.count]
+  entry.* = CacheEntry{ sql: sql, statement: prepared.statement }
+  statements.count += 1
+  return &entry.statement
+}
+
+// Finalizes every cached statement. Call before closing the database.
+pub fn cache_close(statements: *Cache) {
+  for i in 0..statements.count {
+    _ = finalize(&statements.entries[i].statement)
+  }
+  statements.count = 0
+}
+
+fn equal(left: []const u8, right: []const u8) bool {
+  for i in 0..#len(left) {
+    if left[i] != right[i] { return false }
+  }
+  return true
+}

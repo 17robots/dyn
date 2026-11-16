@@ -44,6 +44,7 @@ use "std/net" network
 use "std/net/http" http
 use "std/net/websocket" websocket
 use "std/parse" parse
+use "std/process/signal" signal
 use "std/sync" sync
 use "std/thread" threading
 use "std/thread/pool" tasks
@@ -118,6 +119,9 @@ pub struct Config {
   // carry Alt-Svc. quic must stay alive until join returns.
   http3: bool,
   quic: *const Quic,
+  // Bytes of each worker's request arena (see arena): scratch a handler
+  // allocates from and never frees, reset before the next handler runs.
+  request_arena_size: usize,
   // gzip level (1-9) for respond_compressed; each worker keeps one encoder
   // workspace (about 300 KiB). Zero sends bodies uncompressed.
   compress_level: u8,
@@ -205,6 +209,7 @@ pub fn default_config() Config {
     job_size: 1 * mem.KiB,
     http2_connections: 256,
     http2_slots: 64,
+    request_arena_size: 1 * mem.MiB,
     inbox_messages: 1024,
     inbox_bytes: 256 * mem.KiB,
   }
@@ -229,6 +234,7 @@ fn worker_storage(config: Config) usize {
     per_worker += #sizeof(gzip.Encoder) + #alignof(gzip.Encoder)
   }
   per_worker += h2_storage_size(config) + h3_storage_size(config)
+  per_worker += config.request_arena_size + mem.ArenaBufferOverhead
   // The event queue (entry, free list, hash table per slot), thread records,
   // alignment padding.
   per_worker += (slots + 2) * 64 + 64 * mem.KiB
@@ -386,6 +392,8 @@ pub struct Worker {
   date_second: i64,
   // Workspace for respond_compressed; nil when Config.compress_level is zero.
   encoder: *gzip.Encoder,
+  // The request arena; nil when Config.request_arena_size is zero.
+  request_arena: *mem.Arena,
   h2: H2Pool,
   // HTTP/3: the UDP socket, QUIC listener, milliseconds to its next timer,
   // the QUIC connections' slots, and the Alt-Svc value for TCP responses.
@@ -403,9 +411,7 @@ const WakerToken: u64 = 0xffffffffffffffff
 
 fn now_milliseconds() i64 {
   now := clock.monotonic_now()
-  if io.failed(now.failure) {
-    return 0
-  }
+  if io.failed(now.failure) { return 0 }
   return now.value.seconds * 1000 + now.value.nanoseconds / clock.Millisecond
 }
 
@@ -415,26 +421,18 @@ fn connection_read(connection: *Connection, destination: []u8) TransportIo {
   }
   received := network.receive(connection.descriptor, destination, 0)
   if io.failed(received.failure) {
-    if network.would_block(&received) {
-      return TransportIo{ status: TransportStatus.WouldRead }
-    }
+    if network.would_block(&received) { return TransportIo{ status: TransportStatus.WouldRead } }
     return TransportIo{ status: TransportStatus.Failed }
   }
-  if received.value == 0 {
-    return TransportIo{ status: TransportStatus.End }
-  }
+  if received.value == 0 { return TransportIo{ status: TransportStatus.End } }
   return TransportIo{ count: #cast(usize, received.value) }
 }
 
 fn connection_write(connection: *Connection, source: []const u8) TransportIo {
-  if connection.transport != nil {
-    return connection.transport.write(connection.session, source)
-  }
+  if connection.transport != nil { return connection.transport.write(connection.session, source) }
   sent := network.send(connection.descriptor, source, 0)
   if io.failed(sent.failure) {
-    if network.would_block(&sent) {
-      return TransportIo{ status: TransportStatus.WouldWrite }
-    }
+    if network.would_block(&sent) { return TransportIo{ status: TransportStatus.WouldWrite } }
     return TransportIo{ status: TransportStatus.Failed }
   }
   return TransportIo{ count: #cast(usize, sent.value) }
@@ -443,14 +441,10 @@ fn connection_write(connection: *Connection, source: []const u8) TransportIo {
 // Zero events takes the descriptor out of the queue, as while a job runs.
 fn set_interest(worker: *Worker, index: usize, events: u32) bool {
   connection := &worker.connections[index]
-  if connection.interest == events {
-    return true
-  }
+  if connection.interest == events { return true }
   previous := connection.interest
   connection.interest = events
-  if events == 0 {
-    return !io.failed(event.remove(&worker.queue, connection.descriptor).failure)
-  }
+  if events == 0 { return !io.failed(event.remove(&worker.queue, connection.descriptor).failure) }
   if previous == 0 {
     return !io.failed(event.add(&worker.queue, connection.descriptor, events, #cast(u64, index) + 1).failure)
   }
@@ -459,9 +453,7 @@ fn set_interest(worker: *Worker, index: usize, events: u32) bool {
 
 // Returns an overflow block only after its queued bytes drain or the socket closes.
 fn release_output(connection: *Connection) {
-  if connection.overflow_slot == 0 {
-    return
-  }
+  if connection.overflow_slot == 0 { return }
   pool := connection.pool
   pool.free[pool.free_count] = connection.overflow_slot - 1
   pool.free_count += 1
@@ -505,9 +497,7 @@ fn flush(connection: *Connection) bool {
       connection.flush_wants_read = true
       return true
     }
-    if sent.status != TransportStatus.Ok {
-      return false
-    }
+    if sent.status != TransportStatus.Ok { return false }
     connection.write_pending = false
     connection.sent += sent.count
   }
@@ -522,29 +512,21 @@ fn flush(connection: *Connection) bool {
 // only when one response outgrows the send buffer.
 fn flush_blocking(connection: *Connection) bool {
   for connection.queued > 0 {
-    if !flush(connection) {
-      return false
-    }
-    if connection.queued == 0 {
-      return true
-    }
+    if !flush(connection) { return false }
+    if connection.queued == 0 { return true }
     wanted := network.PollWritable
     if connection.flush_wants_read {
       wanted = network.PollReadable
     }
     ready := network.wait(connection.descriptor, wanted, connection.write_timeout)
-    if io.failed(ready.failure) || ready.value == 0 {
-      return false
-    }
+    if io.failed(ready.failure) || ready.value == 0 { return false }
   }
   return true
 }
 
 fn output_write(data: rawptr, source: []const u8) io.Transfer {
   connection := #cast(*Connection, data)
-  if connection.failed {
-    return io.Transfer{ failure: io.Failure{ kind: io.Kind.InvalidState } }
-  }
+  if connection.failed { return io.Transfer{ failure: io.Failure{ kind: io.Kind.InvalidState } } }
   connection.body_reserved = false
   written: usize = 0
   for written < #len(source) {
@@ -582,9 +564,7 @@ fn reserve_body(data: rawptr, capacity: usize) []u8 {
   if required > #len(connection.output) {
     _ = grow_output(connection)
   }
-  if required > #len(connection.output) {
-    return connection.output[..0]
-  }
+  if required > #len(connection.output) { return connection.output[..0] }
   connection.body_reserved = true
   return connection.output[8192..required]
 }
@@ -602,6 +582,10 @@ fn commit_body(data: rawptr, head: []const u8, length: usize) io.Transfer {
 }
 
 fn new_response(connection: *Connection) http.Response {
+  // Every handler call starts with an empty request arena.
+  if connection.worker.request_arena != nil {
+    mem.arena_reset(connection.worker.request_arena)
+  }
   return http.Response{ output: io.Writer{ data: connection, write: output_write },
     reserve_body: reserve_body, commit_body: commit_body, date: connection.worker.date[..], alt_svc: alt_svc(connection.worker) }
 }
@@ -620,9 +604,7 @@ fn reject(connection: *Connection, status: u16, body: []const u8) {
 
 fn close_connection(worker: *Worker, index: usize) {
   connection := &worker.connections[index]
-  if !connection.active {
-    return
-  }
+  if !connection.active { return }
   if connection.interest != 0 {
     _ = event.remove(&worker.queue, connection.descriptor)
   }
@@ -695,21 +677,13 @@ fn recycle(worker: *Worker, index: usize) {
 // connection must close now.
 fn serve_buffered(worker: *Worker, index: usize) bool {
   connection := &worker.connections[index]
-  if connection.mode == Mode.Deferred {
-    return flush_and_wait(worker, index)
-  }
-  if connection.mode == Mode.Body {
-    return body_feed(worker, index)
-  }
-  if connection.mode == Mode.Http2 {
-    return h2_serve(worker, index)
-  }
+  if connection.mode == Mode.Deferred { return flush_and_wait(worker, index) }
+  if connection.mode == Mode.Body { return body_feed(worker, index) }
+  if connection.mode == Mode.Http2 { return h2_serve(worker, index) }
   if connection.fresh && connection.mode == Mode.Http && worker.config.http2 {
     // Prior knowledge (RFC 9113 3.3): the client starts with the preface.
     if preface_prefix(connection.input[..connection.used]) {
-      if connection.used < #len(Preface) {
-        return true
-      }
+      if connection.used < #len(Preface) { return true }
       connection.fresh = false
       _ = h2_begin(worker, index)
       return h2_serve(worker, index)
@@ -732,9 +706,7 @@ fn serve_buffered(worker: *Worker, index: usize) bool {
       wanted = framed.total
       if framed.expect_continue && !connection.continue_sent && framed.total > 0 {
         connection.continue_sent = true
-        if !push_bytes(connection, "HTTP/1.1 100 Continue\r\n\r\n") {
-          return false
-        }
+        if !push_bytes(connection, "HTTP/1.1 100 Continue\r\n\r\n") { return false }
       }
       break
     }
@@ -769,9 +741,7 @@ fn serve_buffered(worker: *Worker, index: usize) bool {
       connection.job_consumed = consumed
       return flush_and_wait(worker, index)
     }
-    if connection.mode == Mode.Stream || connection.mode == Mode.WebSocket {
-      break
-    }
+    if connection.mode == Mode.Stream || connection.mode == Mode.WebSocket { break }
     if io.failed(handled.failure) || !response.finished {
       // A handler that failed or never finished leaves the stream unframed.
       connection.close_after = true
@@ -791,22 +761,16 @@ fn serve_buffered(worker: *Worker, index: usize) bool {
       // No block could ever hold it (a chunked body with no upload pool).
       if worker.config.on_large_body != nil {
         head := http.frame_request_head(connection.input[..connection.used], capacity)
-        if head.status == http.FrameStatus.Ready {
-          return body_begin(worker, index, head)
-        }
+        if head.status == http.FrameStatus.Ready { return body_begin(worker, index, head) }
       }
       worker.rejected += 1
       reject(connection, http.StatusPayloadTooLarge, "request too large\n")
     }
   }
   if connection.mode == Mode.WebSocket && !connection.writing && !connection.close_after {
-    if !websocket_frames(worker, index) {
-      return false
-    }
+    if !websocket_frames(worker, index) { return false }
   }
-  if connection.failed || !flush(connection) {
-    return false
-  }
+  if connection.failed || !flush(connection) { return false }
   if connection.queued > 0 {
     connection.writing = true
     return set_interest(worker, index, write_interest(connection))
@@ -818,9 +782,7 @@ fn serve_buffered(worker: *Worker, index: usize) bool {
 }
 
 fn shift_input(connection: *Connection, consumed: usize) {
-  if consumed == 0 {
-    return
-  }
+  if consumed == 0 { return }
   remaining := connection.used - consumed
   for i in 0..remaining {
     connection.input[i] = connection.input[consumed + i]
@@ -862,9 +824,7 @@ fn release_input(connection: *Connection) {
 // until the job finishes. Hangups still arrive.
 fn flush_and_wait(worker: *Worker, index: usize) bool {
   connection := &worker.connections[index]
-  if connection.failed || !flush(connection) {
-    return false
-  }
+  if connection.failed || !flush(connection) { return false }
   if connection.queued > 0 {
     connection.writing = true
     return set_interest(worker, index, write_interest(connection))
@@ -873,9 +833,7 @@ fn flush_and_wait(worker: *Worker, index: usize) bool {
 }
 
 fn write_interest(connection: *const Connection) u32 {
-  if connection.flush_wants_read {
-    return event.Readable
-  }
+  if connection.flush_wants_read { return event.Readable }
   return event.Writable
 }
 
@@ -950,9 +908,7 @@ fn on_readable(worker: *Worker, index: usize) {
     if !connection.active || connection.writing || connection.draining || connection.mode == Mode.Deferred {
       return
     }
-    if connection.transport == nil && received.count < room {
-      return
-    }
+    if connection.transport == nil && received.count < room { return }
   }
 }
 
@@ -1021,9 +977,7 @@ fn on_handshake(worker: *Worker, index: usize) {
 // from losing its connection between two of them.
 fn evict_idle(worker: *Worker, now: i64) bool {
   limit := worker.config.evict_idle_milliseconds
-  if limit < 0 {
-    return false
-  }
+  if limit < 0 { return false }
   oldest: usize = #len(worker.connections)
   for i in 0..#len(worker.connections) {
     connection := &worker.connections[i]
@@ -1036,9 +990,7 @@ fn evict_idle(worker: *Worker, now: i64) bool {
       oldest = i
     }
   }
-  if oldest == #len(worker.connections) {
-    return false
-  }
+  if oldest == #len(worker.connections) { return false }
   close_connection(worker, oldest)
   worker.evicted += 1
   return true
@@ -1052,13 +1004,9 @@ fn stop_listening(worker: *Worker) {
 
 // Another worker on this listener still has a regular slot free.
 fn other_has_room(worker: *const Worker) bool {
-  if worker.own_listener.active {
-    return false
-  }
+  if worker.own_listener.active { return false }
   for *other in worker.group {
-    if other != worker && sync.load_u32(&other.full) == 0 {
-      return true
-    }
+    if other != worker && sync.load_u32(&other.full) == 0 { return true }
   }
   return false
 }
@@ -1087,9 +1035,7 @@ fn begin(worker: *Worker, index: usize) {
 
 // A regular slot is free: the longest parked client takes it.
 fn promote(worker: *Worker) {
-  if worker.parked == 0 || worker.serving >= worker.config.connections_per_worker {
-    return
-  }
+  if worker.parked == 0 || worker.serving >= worker.config.connections_per_worker { return }
   first: usize = #len(worker.connections)
   for i in 0..#len(worker.connections) {
     connection := &worker.connections[i]
@@ -1098,9 +1044,7 @@ fn promote(worker: *Worker) {
       first = i
     }
   }
-  if first == #len(worker.connections) {
-    return
-  }
+  if first == #len(worker.connections) { return }
   worker.connections[first].parked = false
   worker.parked -= 1
   worker.serving += 1
@@ -1192,9 +1136,7 @@ fn sweep_idle(worker: *Worker, now: i64) {
 
 fn refresh_date(worker: *Worker) {
   now := clock.realtime_now()
-  if io.failed(now.failure) || now.value.seconds == worker.date_second {
-    return
-  }
+  if io.failed(now.failure) || now.value.seconds == worker.date_second { return }
   worker.date_second = now.value.seconds
   _ = http.format_date(worker.date[..], now.value.seconds)
 }
@@ -1225,13 +1167,9 @@ fn worker_main(worker: *Worker) isize {
         read_inbox(worker)
         continue
       }
-      if item.token == QuicToken {
-        continue
-      }
+      if item.token == QuicToken { continue }
       index := #cast(usize, item.token - 1)
-      if !worker.connections[index].active {
-        continue
-      }
+      if !worker.connections[index].active { continue }
       if (item.events & (event.Error | event.Hangup)) != 0 && (item.events & event.Readable) == 0 {
         close_connection(worker, index)
       } else if worker.connections[index].handshaking {
@@ -1368,14 +1306,13 @@ fn start_worker(outer: *mem.Arena, worker: *Worker) io.Failure {
     worker.encoder = #cast(*gzip.Encoder, mem.arena_push_uninit(arena, #sizeof(gzip.Encoder), #alignof(gzip.Encoder)))
   }
   h2_start(arena, worker)
+  if config.request_arena_size > 0 {
+    worker.request_arena = mem.arena_from_buffer(mem.push_bytes_uninit(arena, config.request_arena_size + mem.ArenaBufferOverhead))
+  }
   blocking := network.nonblocking(worker.listener.descriptor, true)
-  if io.failed(blocking.failure) {
-    return blocking.failure
-  }
+  if io.failed(blocking.failure) { return blocking.failure }
   opened := event.open(arena, count + 2)
-  if io.failed(opened.failure) {
-    return opened.failure
-  }
+  if io.failed(opened.failure) { return opened.failure }
   worker.queue = opened.value
   worker.listening = true
   added := event.add(&worker.queue, worker.listener.descriptor, event.Readable, ListenerToken)
@@ -1437,9 +1374,7 @@ fn abandon(workers: []Worker, started: usize, failure: io.Failure) Result {
 pub fn start(arena: *mem.Arena, workers: []Worker, listener: *network.Listener, config: Config,
   handler: http.Handler, context: rawptr) Result {
   invalid := valid_start(workers, config, handler)
-  if invalid.kind != io.Kind.Ok {
-    return Result{ failure: invalid }
-  }
+  if invalid.kind != io.Kind.Ok { return Result{ failure: invalid } }
   if listener == nil || !listener.active {
     return Result{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
   }
@@ -1448,9 +1383,7 @@ pub fn start(arena: *mem.Arena, workers: []Worker, listener: *network.Listener, 
   }
   for i in 0..#len(workers) {
     failed := start_worker(arena, &workers[i])
-    if failed.kind != io.Kind.Ok {
-      return abandon(workers, i, failed)
-    }
+    if failed.kind != io.Kind.Ok { return abandon(workers, i, failed) }
   }
   return Result{ started: #len(workers) }
 }
@@ -1463,18 +1396,14 @@ pub fn start(arena: *mem.Arena, workers: []Worker, listener: *network.Listener, 
 pub fn start_shared(arena: *mem.Arena, workers: []Worker, address: network.Ipv4Address, backlog: usize,
   config: Config, handler: http.Handler, context: rawptr) Result {
   invalid := valid_start(workers, config, handler)
-  if invalid.kind != io.Kind.Ok {
-    return Result{ failure: invalid }
-  }
+  if invalid.kind != io.Kind.Ok { return Result{ failure: invalid } }
   for i in 0..#len(workers) {
     workers[i] = Worker{ handler: handler, context: context, config: config, id: #cast(u32, i), group: workers }
   }
   for i in 0..#len(workers) {
     worker := &workers[i]
     listened := network.tcp_listen_ipv4_shared(&address, backlog)
-    if io.failed(listened.failure) {
-      return abandon(workers, i, listened.failure)
-    }
+    if io.failed(listened.failure) { return abandon(workers, i, listened.failure) }
     worker.own_listener = network.listener_take(&listened.value)
     worker.listener = &worker.own_listener
     if i == 0 {
@@ -1488,22 +1417,16 @@ pub fn start_shared(arena: *mem.Arena, workers: []Worker, address: network.Ipv4A
   }
   for i in 0..#len(workers) {
     failed := start_worker(arena, &workers[i])
-    if failed.kind != io.Kind.Ok {
-      return abandon(workers, i, failed)
-    }
+    if failed.kind != io.Kind.Ok { return abandon(workers, i, failed) }
   }
   return Result{ started: #len(workers) }
 }
 
 // Local port of the first worker's listener, or 0.
 pub fn local_port(workers: []Worker) u16 {
-  if #len(workers) == 0 || workers[0].listener == nil {
-    return 0
-  }
+  if #len(workers) == 0 || workers[0].listener == nil { return 0 }
   bound := network.Address{}
-  if io.failed(network.local_address(workers[0].listener.descriptor, &bound).failure) {
-    return 0
-  }
+  if io.failed(network.local_address(workers[0].listener.descriptor, &bound).failure) { return 0 }
   return #cast(u16, bound.bytes[2]) * 256 + #cast(u16, bound.bytes[3])
 }
 
@@ -1560,9 +1483,7 @@ fn peer_of(worker: *const Worker, index: usize) Peer {
 
 // The connection behind an evented response, or nil for any other response.
 fn connection_of(response: *http.Response) *Connection {
-  if response.output.write != output_write && response.output.write != h2_write {
-    return nil
-  }
+  if response.output.write != output_write && response.output.write != h2_write { return nil }
   return #cast(*Connection, response.output.data)
 }
 
@@ -1597,9 +1518,7 @@ fn post(worker: *Worker, item: Post, payload: []const u8) io.Failure {
 // worker. A closed peer drops it. Fails with Capacity when the inbox is full,
 // InvalidInput for a malformed peer.
 pub fn send(workers: []Worker, peer: Peer, payload: []const u8, binary: bool) io.Failure {
-  if !live_peer(workers, peer) {
-    return io.Failure{ kind: io.Kind.InvalidInput }
-  }
+  if !live_peer(workers, peer) { return io.Failure{ kind: io.Kind.InvalidInput } }
   return post(&workers[peer.worker], Post{ kind: PostKind.Send, binary: binary, index: peer.index, generation: peer.generation,
     stream: peer.stream }, payload)
 }
@@ -1609,33 +1528,25 @@ pub fn send(workers: []Worker, peer: Peer, payload: []const u8, binary: bool) io
 pub fn publish(workers: []Worker, topic: u64, payload: []const u8, binary: bool) io.Failure {
   for *worker in workers {
     posted := post(worker, Post{ kind: PostKind.Publish, binary: binary, topic: topic }, payload)
-    if io.failed(posted) {
-      return posted
-    }
+    if io.failed(posted) { return posted }
   }
   return io.Failure{}
 }
 
 // Ends a stream (final chunk) or WebSocket (close frame 1000), then closes it.
 pub fn close_peer(workers: []Worker, peer: Peer) io.Failure {
-  if !live_peer(workers, peer) {
-    return io.Failure{ kind: io.Kind.InvalidInput }
-  }
+  if !live_peer(workers, peer) { return io.Failure{ kind: io.Kind.InvalidInput } }
   return post(&workers[peer.worker], Post{ kind: PostKind.Close, index: peer.index, generation: peer.generation,
     stream: peer.stream }, "")
 }
 
 // Queues bytes without ever blocking: a peer too slow to take them closes.
 fn push_bytes(connection: *Connection, source: []const u8) bool {
-  if connection.failed || connection.close_after {
-    return false
-  }
+  if connection.failed || connection.close_after { return false }
   if #len(source) > #len(connection.output) - connection.queued {
     _ = grow_output(connection)
   }
-  if #len(source) > #len(connection.output) - connection.queued {
-    return false
-  }
+  if #len(source) > #len(connection.output) - connection.queued { return false }
   _ = mem.copy(connection.output[connection.queued..connection.queued + #len(source)], source)
   connection.queued += #len(source)
   return true
@@ -1670,9 +1581,7 @@ fn push_frame(connection: *Connection, opcode: u8, payload: []const u8) bool {
 }
 
 fn push_chunk(connection: *Connection, payload: []const u8) bool {
-  if #len(payload) == 0 {
-    return true
-  }
+  if #len(payload) == 0 { return true }
   size_storage: [24]u8
   digits := "0123456789abcdef"
   at := #len(size_storage) - 2
@@ -1717,9 +1626,7 @@ fn deliver(worker: *Worker, index: usize, item: Post, payload: []const u8) {
 
 fn settle(worker: *Worker, index: usize) {
   connection := &worker.connections[index]
-  if !connection.active {
-    return
-  }
+  if !connection.active { return }
   if !flush(connection) {
     close_connection(worker, index)
     return
@@ -1785,9 +1692,7 @@ fn read_inbox(worker: *Worker) {
   }
   inbox.post_count[half] = 0
   inbox.byte_count[half] = 0
-  if !touched {
-    return
-  }
+  if !touched { return }
   for c in 0..#len(worker.connections) {
     connection := &worker.connections[c]
     if pushable(connection) && !connection.writing && (connection.queued > 0 || connection.close_after) {
@@ -1801,9 +1706,7 @@ fn read_inbox(worker: *Worker) {
 // you trust.
 pub fn client_ip(response: *http.Response) network.Ip {
   connection := connection_of(response)
-  if connection == nil {
-    return network.Ip{}
-  }
+  if connection == nil { return network.Ip{} }
   return network.address_ip(&connection.remote)
 }
 
@@ -1813,11 +1716,45 @@ pub fn client_ip(response: *http.Response) network.Ip {
 pub fn respond_compressed(response: *http.Response, request: *const http.Request, body: []const u8,
   options: http.ResponseOptions) http.Result {
   connection := connection_of(response)
-  if connection == nil {
-    return http.respond_compressed(response, request, body, options, 0, nil)
-  }
+  if connection == nil { return http.respond_compressed(response, request, body, options, 0, nil) }
   worker := connection.worker
   return http.respond_compressed(response, request, body, options, worker.config.compress_level, worker.encoder)
+}
+
+// Scratch for the current handler, in the worker's request arena: allocate
+// from it and never free. It is emptied before the next handler runs on this
+// worker, so nothing in it outlives the handler (use job storage for run).
+// nil for a response that is not evented, or with Config.request_arena_size 0.
+pub fn arena(response: *http.Response) *mem.Arena {
+  connection := connection_of(response)
+  if connection == nil { return nil }
+  return connection.worker.request_arena
+}
+
+// Which of the started workers runs this handler, from 0: an index into
+// per-worker state, such as one database connection each, which then needs
+// no lock. Workers never share a handler call.
+pub fn worker_index(response: *http.Response) usize {
+  connection := connection_of(response)
+  if connection == nil { return 0 }
+  return #cast(usize, connection.worker.id)
+}
+
+// Runs the server until SIGINT or SIGTERM: watches the signals first (before
+// any thread starts, as std/process/signal requires), starts workers with
+// start_shared on address, waits for a signal, then stops and joins them.
+// arena must hold storage_size(config, #len(workers)).
+pub fn serve(arena: *mem.Arena, workers: []Worker, address: network.Ipv4Address, config: Config, handler: http.Handler,
+  context: rawptr) Result {
+  watched := signal.watch(signal.Set{ interrupt: true, terminate: true })
+  if io.failed(watched.failure) { return Result{ failure: watched.failure } }
+  signals := watched.value
+  defer signal.close(&signals)
+  started := start_shared(arena, workers, address, 1024, config, handler, context)
+  if io.failed(started.failure) { return started }
+  _ = signal.wait(&signals)
+  stop(workers)
+  return join(workers)
 }
 
 // ---------------------------------------------------------------- run
@@ -1829,20 +1766,14 @@ pub fn job(T: type, response: *http.Response) *T {
   connection := connection_of(response)
   if connection != nil && connection.h2 != nil {
     jobs := h2_job(connection)
-    if jobs == nil {
-      return nil
-    }
+    if jobs == nil { return nil }
     mem.arena_reset(jobs)
     return mem.try_push(T, jobs)
   }
-  if connection == nil || connection.jobs == nil || connection.job_running {
-    return nil
-  }
+  if connection == nil || connection.jobs == nil || connection.job_running { return nil }
   // In Config.on_large_body, before receive_body: storage for the reader.
   large_head := connection.mode == Mode.Body && !connection.body_started
-  if connection.mode != Mode.Http && !large_head {
-    return nil
-  }
+  if connection.mode != Mode.Http && !large_head { return nil }
   mem.arena_reset(connection.jobs)
   return mem.try_push(T, connection.jobs)
 }
@@ -1856,9 +1787,7 @@ pub fn job(T: type, response: *http.Response) *T {
 pub fn run(response: *http.Response, data: *$J, work: fn(*$J), finish: fn(*http.Response, *const http.Request, *$J) http.Result) io.Failure {
   connection := connection_of(response)
   if connection != nil && connection.h2 != nil && !response.started && !response.finished {
-    if connection.worker.config.pool == nil {
-      return io.Failure{ kind: io.Kind.Unsupported }
-    }
+    if connection.worker.config.pool == nil { return io.Failure{ kind: io.Kind.Unsupported } }
     if work == nil || finish == nil || data == nil {
       return io.Failure{ kind: io.Kind.InvalidInput }
     }
@@ -1872,12 +1801,8 @@ pub fn run(response: *http.Response, data: *$J, work: fn(*$J), finish: fn(*http.
     return io.Failure{ kind: io.Kind.InvalidState }
   }
   worker := connection.worker
-  if worker.config.pool == nil {
-    return io.Failure{ kind: io.Kind.Unsupported }
-  }
-  if work == nil || finish == nil || data == nil {
-    return io.Failure{ kind: io.Kind.InvalidInput }
-  }
+  if worker.config.pool == nil { return io.Failure{ kind: io.Kind.Unsupported } }
+  if work == nil || finish == nil || data == nil { return io.Failure{ kind: io.Kind.InvalidInput } }
   connection.job_data = data
   connection.job_work = #cast(fn(rawptr), work)
   connection.job_finish = #cast(fn(*http.Response, *const http.Request, rawptr) http.Result, finish)
@@ -1991,9 +1916,7 @@ fn body_begin(worker: *Worker, index: usize, head: http.FrameResult) bool {
   worker.requests += 1
   handled := worker.config.on_large_body(&response, &request)
   if connection.body_started {
-    if !body_feed(worker, index) {
-      return false
-    }
+    if !body_feed(worker, index) { return false }
     return !connection.active || settle_body(worker, index)
   }
   // Answered from the head alone: close after the reply, draining the unread
@@ -2004,9 +1927,7 @@ fn body_begin(worker: *Worker, index: usize, head: http.FrameResult) bool {
   connection.close_after = true
   connection.rejected = true
   connection.used = 0
-  if connection.failed || !flush(connection) {
-    return false
-  }
+  if connection.failed || !flush(connection) { return false }
   if connection.queued > 0 {
     connection.writing = true
     return set_interest(worker, index, write_interest(connection))
@@ -2026,9 +1947,7 @@ fn head_request(connection: *Connection) http.Request {
 // Sends what receive_body queued (100 Continue) without blocking.
 fn settle_body(worker: *Worker, index: usize) bool {
   connection := &worker.connections[index]
-  if connection.failed || !flush(connection) {
-    return false
-  }
+  if connection.failed || !flush(connection) { return false }
   if connection.queued > 0 {
     connection.writing = true
     return set_interest(worker, index, write_interest(connection))
@@ -2056,9 +1975,7 @@ fn body_feed(worker: *Worker, index: usize) bool {
       piece = step.data
       at += step.consumed
       ended = step.done
-      if step.consumed == 0 {
-        break
-      }
+      if step.consumed == 0 { break }
     } else {
       count := end - at
       if count > connection.body_left {
@@ -2080,9 +1997,7 @@ fn body_feed(worker: *Worker, index: usize) bool {
     connection.input[connection.body_head + i] = connection.input[at + i]
   }
   connection.used = connection.body_head + rest
-  if !ended {
-    return true
-  }
+  if !ended { return true }
   return body_end(worker, index, outcome)
 }
 
@@ -2121,9 +2036,7 @@ fn body_end(worker: *Worker, index: usize, outcome: BodyEnd) bool {
   shift_input(connection, head)
   if connection.close_after {
     connection.used = 0
-    if connection.failed || !flush(connection) {
-      return false
-    }
+    if connection.failed || !flush(connection) { return false }
     if connection.queued > 0 {
       connection.writing = true
       return set_interest(worker, index, write_interest(connection))
@@ -2150,9 +2063,7 @@ pub fn open_stream(response: *http.Response, options: http.ResponseOptions, topi
     return PeerResult{ failure: io.Failure{ kind: io.Kind.InvalidState } }
   }
   opened := http.respond_stream(response, options)
-  if io.failed(opened.failure) {
-    return PeerResult{ failure: opened.failure }
-  }
+  if io.failed(opened.failure) { return PeerResult{ failure: opened.failure } }
   connection.mode = Mode.Stream
   connection.topic = topic
   return PeerResult{ value: peer_of(connection.worker, connection.index) }
@@ -2166,9 +2077,7 @@ pub fn open_stream(response: *http.Response, options: http.ResponseOptions, topi
 // not a valid upgrade; the handler should then answer 400.
 pub fn upgrade(response: *http.Response, request: *const http.Request, topic: u64) PeerResult {
   connection := connection_of(response)
-  if connection != nil && connection.h2 != nil {
-    return h2_upgrade(connection, response, topic)
-  }
+  if connection != nil && connection.h2 != nil { return h2_upgrade(connection, response, topic) }
   if connection == nil || connection.mode != Mode.Http || response.started || response.finished {
     return PeerResult{ failure: io.Failure{ kind: io.Kind.InvalidState } }
   }
@@ -2178,9 +2087,7 @@ pub fn upgrade(response: *http.Response, request: *const http.Request, topic: u6
   }
   accept_storage: [64]u8
   accepted := websocket.accept(accept_storage[..], checked.key)
-  if #len(accepted) == 0 {
-    return PeerResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } }
-  }
+  if #len(accepted) == 0 { return PeerResult{ failure: io.Failure{ kind: io.Kind.InvalidInput } } }
   head_storage: [256]u8
   head := append_text(head_storage[..], 0, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ")
   head = append_text(head_storage[..], #len(head), accepted)
@@ -2198,9 +2105,7 @@ pub fn upgrade(response: *http.Response, request: *const http.Request, topic: u6
 
 fn append_text(destination: []u8, at: usize, piece: []const u8) []u8 {
   end := at + #len(piece)
-  if end > #len(destination) {
-    return destination[..at]
-  }
+  if end > #len(destination) { return destination[..at] }
   _ = mem.copy(destination[at..end], piece)
   return destination[..end]
 }
@@ -2243,9 +2148,7 @@ fn websocket_frames(worker: *Worker, index: usize) bool {
       return true
     }
     if received.detail == websocket.WebSocketEventKind.Ping {
-      if !push_frame(connection, 10, received.payload) {
-        return false
-      }
+      if !push_frame(connection, 10, received.payload) { return false }
     } else if received.detail == websocket.WebSocketEventKind.Close {
       close_with(connection, 1000)
     } else if received.detail == websocket.WebSocketEventKind.Ready {

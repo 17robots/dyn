@@ -29,9 +29,7 @@ pub fn prepare(database: Database, sql: []const u8) PrepareResult {
       return PrepareResult{ code: InvalidArgument, failure: io.Failure{ kind: io.Kind.System } }
     }
   }
-  if #len(sql) == 0 {
-    return PrepareResult{ empty: true }
-  }
+  if #len(sql) == 0 { return PrepareResult{ empty: true } }
   handle: rawptr = nil
   tail: c.string = nil
   code := sqlite_prepare(database, &sql[0], #cast(i32, #len(sql)), &handle, &tail)
@@ -51,9 +49,7 @@ pub fn step(statement: *Statement) StepResult {
   if statement.handle == nil {
     return StepResult{ state: State.Failed, code: InvalidArgument, failure: io.Failure{ kind: io.Kind.System } }
   }
-  if statement.state == State.Done {
-    return StepResult{ state: State.Done, code: statement.code }
-  }
+  if statement.state == State.Done { return StepResult{ state: State.Done, code: statement.code } }
   if statement.state == State.Failed {
     return StepResult{ state: State.Failed, code: statement.code, failure: io.Failure{ kind: io.Kind.System } }
   }
@@ -71,9 +67,7 @@ pub fn step(statement: *Statement) StepResult {
 // Always resets execution state, even when reporting the preceding execution's
 // error. Parameter values survive reset; use clear_bindings to release them.
 pub fn reset(statement: *Statement) io.Failure {
-  if statement.handle == nil {
-    return code_failure(InvalidArgument)
-  }
+  if statement.handle == nil { return code_failure(InvalidArgument) }
   code := sqlite_reset(statement.handle)
   statement.state = State.Ready
   statement.code = 0
@@ -85,9 +79,7 @@ pub fn reset(statement: *Statement) io.Failure {
 pub fn finalize(statement: *Statement) io.Failure {
   handle := statement.handle
   statement.* = Statement{}
-  if handle == nil {
-    return io.Failure{}
-  }
+  if handle == nil { return io.Failure{} }
   return code_failure(sqlite_finalize(handle))
 }
 
@@ -95,36 +87,24 @@ fn can_bind(statement: *const Statement) bool {
   return statement.handle != nil && statement.state == State.Ready
 }
 pub fn clear_bindings(statement: *Statement) io.Failure {
-  if !can_bind(statement) {
-    return code_failure(InvalidArgument)
-  }
+  if !can_bind(statement) { return code_failure(InvalidArgument) }
   return code_failure(sqlite_clear_bindings(statement.handle))
 }
 pub fn bind_null(statement: *Statement, index: i32) io.Failure {
-  if !can_bind(statement) {
-    return code_failure(InvalidArgument)
-  }
+  if !can_bind(statement) { return code_failure(InvalidArgument) }
   return code_failure(sqlite_bind_null(statement.handle, index))
 }
 pub fn bind_i64(statement: *Statement, index: i32, value: i64) io.Failure {
-  if !can_bind(statement) {
-    return code_failure(InvalidArgument)
-  }
+  if !can_bind(statement) { return code_failure(InvalidArgument) }
   return code_failure(sqlite_bind_integer(statement.handle, index, value))
 }
 pub fn bind_f64(statement: *Statement, index: i32, value: f64) io.Failure {
-  if !can_bind(statement) {
-    return code_failure(InvalidArgument)
-  }
+  if !can_bind(statement) { return code_failure(InvalidArgument) }
   return code_failure(sqlite_bind_float(statement.handle, index, value))
 }
 fn bind_bytes(statement: *Statement, index: i32, value: []const u8, text: bool) i32 {
-  if !can_bind(statement) {
-    return InvalidArgument
-  }
-  if #len(value) > 2147483647 {
-    return Overflow
-  }
+  if !can_bind(statement) { return InvalidArgument }
+  if #len(value) > 2147483647 { return Overflow }
   // Empty data must have a non-null pointer so it is not bound as SQL NULL.
   empty: [1]u8
   pointer := #cast(rawptr, &empty[0])
@@ -140,13 +120,9 @@ fn bind_bytes(statement: *Statement, index: i32, value: []const u8, text: bool) 
 // SQLite copies bindings before return. Text must be valid UTF-8 without NUL;
 // use blobs for arbitrary bytes. Inputs may be changed immediately after binding.
 pub fn bind_text(statement: *Statement, index: i32, value: []const u8) io.Failure {
-  if !utf8.valid(value) {
-    return code_failure(InvalidArgument)
-  }
+  if !utf8.valid(value) { return code_failure(InvalidArgument) }
   for byte in value {
-    if byte == 0 {
-      return code_failure(InvalidArgument)
-    }
+    if byte == 0 { return code_failure(InvalidArgument) }
   }
   return code_failure(bind_bytes(statement, index, value, true))
 }
@@ -163,6 +139,10 @@ pub struct Null {}
 // Blob or Null. Stops at the first failure; an unsupported type fails with
 // InvalidInput.
 pub fn bind_values(statement: *Statement, values: ...any) io.Failure {
+  return bind_list(statement, values)
+}
+
+fn bind_list(statement: *Statement, values: []const any) io.Failure {
   for i in 0..#len(values) {
     index := #cast(i32, i + 1)
     bound := io.Failure{}
@@ -175,15 +155,11 @@ pub fn bind_values(statement: *Statement, values: ...any) io.Failure {
       u16 value => { bound = bind_i64(statement, index, value) }
       u8 value => { bound = bind_i64(statement, index, value) }
       u64 value => {
-        if value > 9223372036854775807 {
-          return io.Failure{ kind: io.Kind.Overflow }
-        }
+        if value > 9223372036854775807 { return io.Failure{ kind: io.Kind.Overflow } }
         bound = bind_i64(statement, index, #cast(i64, value))
       }
       usize value => {
-        if #cast(u64, value) > 9223372036854775807 {
-          return io.Failure{ kind: io.Kind.Overflow }
-        }
+        if #cast(u64, value) > 9223372036854775807 { return io.Failure{ kind: io.Kind.Overflow } }
         bound = bind_i64(statement, index, #cast(i64, value))
       }
       isize value => { bound = bind_i64(statement, index, #cast(i64, value)) }
@@ -202,9 +178,7 @@ pub fn bind_values(statement: *Statement, values: ...any) io.Failure {
       Null value => { bound = bind_null(statement, index) }
       _ => { return io.Failure{ kind: io.Kind.InvalidInput } }
     }
-    if io.failed(bound) {
-      return bound
-    }
+    if io.failed(bound) { return bound }
   }
   return io.Failure{}
 }
@@ -218,9 +192,7 @@ pub fn done(statement: *Statement) {
 }
 
 pub fn column_count(statement: *const Statement) i32 {
-  if statement.handle == nil {
-    return 0
-  }
+  if statement.handle == nil { return 0 }
   return sqlite_column_count(statement.handle)
 }
 // Columns are zero-based and available only after Row. No implicit conversions:
@@ -231,9 +203,7 @@ pub fn column(statement: *const Statement, index: i32) Column {
     return Column{ code: InvalidArgument, failure: io.Failure{ kind: io.Kind.System } }
   }
   kind := sqlite_column_type(statement.handle, index)
-  if kind == 5 {
-    return Column{ kind: ColumnKind.Null }
-  }
+  if kind == 5 { return Column{ kind: ColumnKind.Null } }
   if kind == 1 {
     return Column{ kind: ColumnKind.Integer, integer: sqlite_column_integer(statement.handle, index) }
   }
@@ -254,8 +224,6 @@ pub fn column(statement: *const Statement, index: i32) Column {
   if pointer == nil && (length != 0 || kind == 3) {
     return Column{ code: 7, failure: io.Failure{ kind: io.Kind.System } }
   }
-  if length == 0 {
-    return Column{ kind: result_kind, bytes: "" }
-  }
+  if length == 0 { return Column{ kind: result_kind, bytes: "" } }
   return Column{ kind: result_kind, bytes: #slice(pointer, length) }
 }

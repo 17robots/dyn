@@ -26,23 +26,37 @@ struct App {
 }
 
 fn health(response: *http.Response, request: *const http.Request, app: *App) http.Result {
-  return http.respond(response, "ok\n", http.ResponseOptions{ content_type: "text/plain" })
+  return http.text(response, 200, "ok\n")
 }
 
 fn handle(response: *http.Response, request: *const http.Request, app: *App) http.Result {
   return http.serve_routes(&app.router, response, request)
 }
 
-fn serve(app: *App, workers: []evented.Worker) {
+fn run(app: *App, workers: []evented.Worker) evented.Result {
   app.router = http.typed_routes(app.routes[..], app)
   _ = http.add(&app.router, "GET", "/health", health)
   typed := http.Typed(App){ state: app, handler: handle }
   binding := http.bind(&typed)
   config := evented.default_config()
   arena := mem.arena_alloc(evented.storage_size(config, #len(workers)) + mem.MiB)
-  _ = evented.start_shared(arena, workers, net.ipv4(127, 0, 0, 1, 8080), 1024, config, binding.handler, binding.context)
+  defer mem.arena_release(arena)
+  // Serves until SIGINT or SIGTERM, then stops and joins the workers.
+  return evented.serve(arena, workers, net.ipv4(127, 0, 0, 1, 8080), config, binding.handler, binding.context)
 }
 ```
+
+`http.text`, `http.json` and `http.redirect` are the usual replies: plain
+text, JSON with `Cache-Control: no-store`, and a 303 with an optional
+`Set-Cookie`. `http.respond` takes any status, type and headers.
+
+Each worker has a request arena, reset before every request:
+`evented.arena(response)` is scratch for a page, copied column text or a
+parsed body, sized by `Config.request_arena_size` (1 MiB). Exhaustion
+panics, so size it for the largest response you build there.
+`evented.worker_index(response)` names the worker running a handler; give
+each worker its own state, such as a database connection, and it needs no
+lock, because a worker's handlers run one at a time.
 
 Routes match exact paths with `:name` segments (`/posts/:id`, read with
 `http.param`). A path that matches with another method gets 405 with `Allow`.
@@ -149,16 +163,17 @@ use "std/encoding/json"
 fn post_json(storage: []u8, id: i64, author: []const u8, body: []const u8) []const u8 {
   out := json.writer(storage)
   json.object_begin(&out)
-  json.key(&out, "id")
-  json.integer(&out, id)
-  json.key(&out, "author")
-  json.text(&out, author)
-  json.key(&out, "body")
-  json.text(&out, body)
+  json.field(&out, "id", id)
+  json.field(&out, "author", author)
+  json.field(&out, "body", body)
   json.object_end(&out)
   return json.output(&out)
 }
 ```
+
+`json.field` writes a key and a text, integer, float or bool value; other
+values fail the writer. `json.key` with `json.array_begin` or
+`json.object_begin` nests.
 
 `json.output` is empty when anything failed: storage too small, invalid
 UTF-8, a value without its key, or a container left open.
@@ -275,18 +290,43 @@ the proxy; read `X-Forwarded-For` only from proxies you trust.
 
 ## SQLite
 
-`vendor/sqlite` statements are prepared once and reused. Bind a whole
-parameter list with `sqlite.bind_values(&statement, id, name, sqlite.Blob{ bytes: hash })`
-and give the statement back with `defer sqlite.done(&statement)`, which resets
-it and clears its bindings. With one connection shared by workers, open it
-with `OpenOptions{ caller_serialized: true }` and hold your own mutex around
-each use; copy column bytes out before the next step. See [sqlite.md](sqlite.md).
+`vendor/sqlite` keeps prepared statements in a per-connection cache keyed by
+their SQL, and runs them in one call each. Open one connection per worker
+and pick it with `evented.worker_index`; then no handler shares a statement.
+
+```dyn
+use "std/mem"
+use "std/net/http"
+use "std/net/http/evented"
+use "vendor/sqlite"
+
+struct Database { handle: sqlite.Database, statements: sqlite.Cache }
+
+fn name_of(databases: []Database, response: *http.Response, id: i64) []const u8 {
+  statements := &databases[evented.worker_index(response)].statements
+  lookup := sqlite.cached(statements, "SELECT name FROM user WHERE id=?1")
+  if !sqlite.first(lookup, id) { return "" }
+  defer sqlite.done(lookup)
+  return sqlite.text(evented.arena(response), lookup, 0)
+}
+```
+
+`sqlite.run(statement, values...)` binds, steps to the end and resets; a
+failure leaves its code on the statement, so `sqlite.constraint(statement)`
+tells a duplicate key from other errors. `first` stops at the first row,
+`query` and `next` walk rows, and `integer`, `bytes` (borrowed) and `text`
+(copied into an arena) read columns. Copy borrowed bytes before the next
+step. See [sqlite.md](sqlite.md).
 
 ## Shutdown
 
-Watch signals with `std/process/signal` on the main thread before starting
-workers, then `signal.wait`, `evented.stop`, `evented.join`, and close the
-database. Workers close their connections and wait for running jobs.
+`evented.serve` watches SIGINT and SIGTERM, serves, then stops the workers
+and waits for them: workers close their connections and wait for running
+jobs. Close the database after it returns. To run more than the server, call
+`signal.watch` on the main thread yourself, then `start_shared`,
+`signal.wait`, `evented.stop` and `evented.join`. Threads from `std/thread`
+and `std/thread/posix` start with SIGINT, SIGTERM and SIGHUP blocked, so a
+pool started earlier cannot take the signal.
 
 ## HTTP/2
 

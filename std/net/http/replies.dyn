@@ -1,0 +1,24 @@
+// One-call answers for the usual responses. Each is respond with its
+// options filled in; pass headers for anything more.
+
+// A plain-text body with status.
+pub fn text(response: *Response, status: u16, body: []const u8) Result {
+  return respond(response, body, ResponseOptions{ status: status, content_type: "text/plain; charset=utf-8" })
+}
+
+// A JSON body with status, not cached.
+pub fn json(response: *Response, status: u16, body: []const u8) Result {
+  cache: [1]Header = [Header{ name: "Cache-Control", value: "no-store" }]
+  return respond(response, body, ResponseOptions{ status: status, content_type: "application/json", headers: cache[..] })
+}
+
+// 303 See Other to location, with a Set-Cookie when set_cookie is not empty
+// (see set_cookie): the answer to a form post.
+pub fn redirect(response: *Response, location: []const u8, set_cookie: []const u8) Result {
+  headers: [2]Header = [Header{ name: "Location", value: location }, Header{ name: "Set-Cookie", value: set_cookie }]
+  count: usize = 1
+  if #len(set_cookie) > 0 {
+    count = 2
+  }
+  return respond(response, "", ResponseOptions{ status: StatusSeeOther, headers: headers[..count] })
+}

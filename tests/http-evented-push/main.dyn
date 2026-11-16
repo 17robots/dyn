@@ -3,6 +3,7 @@
 // Prints "port N" once listening; POST /quit stops it.
 use "std/bytes"
 use "std/crypto/password"
+use "std/encoding/json"
 use "std/fmt"
 use "std/io"
 use "std/mem"
@@ -28,7 +29,7 @@ struct App {
   workers: []evented.Worker,
   assets: http.Assets,
   router: http.Routes(App),
-  route_storage: [16]http.TypedRoute(App),
+  route_storage: [18]http.TypedRoute(App),
   big: [300 * 1024]u8,
 }
 
@@ -40,6 +41,23 @@ fn text(response: *http.Response, status: u16, body: []const u8) http.Result {
 
 fn health(response: *http.Response, request: *const http.Request, app: *App) http.Result {
   return text(response, 200, "ok\n")
+}
+
+// The request arena: 4 KiB per call, never freed; the server empties it
+// before each handler, so thousands of calls fit a 1 MiB arena.
+fn scratch(response: *http.Response, request: *const http.Request, app: *App) http.Result {
+  arena := evented.arena(response)
+  if arena == nil {
+    return text(response, 500, "no arena")
+  }
+  block := mem.push_bytes_uninit(arena, 4096)
+  out := json.writer(block)
+  json.object_begin(&out)
+  json.field(&out, "worker", evented.worker_index(response))
+  json.field(&out, "path", request.path)
+  json.field(&out, "ok", true)
+  json.object_end(&out)
+  return http.json(response, 200, json.output(&out))
 }
 
 // Larger than a 64 KiB HTTP/2 window: the handler waits for WINDOW_UPDATE.
@@ -283,6 +301,7 @@ fn main() {
   _ = http.add(&app.router, "GET", "/report", report)
   _ = http.add(&app.router, "GET", "/abandoned", abandoned)
   _ = http.add(&app.router, "GET", "/big", big)
+  _ = http.add(&app.router, "GET", "/scratch", scratch)
   _ = http.add(&app.router, "POST", "/hash", hash)
   _ = http.add(&app.router, "GET", "/events", events)
   _ = http.add(&app.router, "GET", "/chat", chat)
