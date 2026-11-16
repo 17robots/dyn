@@ -11644,6 +11644,12 @@ typedef struct SsaPrepared {
   double build_ms, optimize_ms, allocate_ms;
   struct SsaEmitted *emitted; /* emitted by a worker into its shard */
 } SsaPrepared;
+/* DYN_SKIP=hoist,fold turns those optional SSA passes off, and with them
+   the IR optimizer's "inline" and "propagate". tools/bisect-passes.py uses
+   it to find the pass behind a release build that differs from debug. */
+static bool ssa_pass_on(const char *name) {
+  return dyn_optimization_pass_on(name);
+}
 static void ssa_prepare(SsaPrepared *p, BackendContext *ctx, const DynSource *source, const DynIrProgram *ir,
                         const DynIrFunction *f, bool defer_literals, SsaPool *pool) {
   p->s = (Ssa){.ctx = ctx, .ir = ir, .f = f, .current = UINT32_MAX, .defer_literals = defer_literals, .pool = pool};
@@ -11700,11 +11706,11 @@ static void ssa_prepare(SsaPrepared *p, BackendContext *ctx, const DynSource *so
     }
     bool changed = false;
     switch (pass) {
-    case 0: changed = ssa_forward(s, order, n); break;
-    case 1: changed = ssa_fold(s, order, n); break;
-    case 2: changed = ssa_cse(s, order, n); break;
-    case 3: changed = ssa_reuse_loads(s, order, n); break;
-    default: changed = ssa_prove(s, order, n); break;
+    case 0: changed = ssa_pass_on("forward") && ssa_forward(s, order, n); break;
+    case 1: changed = ssa_pass_on("fold") && ssa_fold(s, order, n); break;
+    case 2: changed = ssa_pass_on("cse") && ssa_cse(s, order, n); break;
+    case 3: changed = ssa_pass_on("reuse_loads") && ssa_reuse_loads(s, order, n); break;
+    default: changed = ssa_pass_on("prove") && ssa_prove(s, order, n); break;
     }
     /* A pass that changed nothing left every operand resolved. */
     if (changed && pass != 4) ssa_resolve_all(s);
@@ -11712,12 +11718,12 @@ static void ssa_prepare(SsaPrepared *p, BackendContext *ctx, const DynSource *so
   }
   order = ssa_order(s, &n);
   if (!order || s->failed) goto done;
-  if (ssa_accumulate(s, order, n)) {
+  if (ssa_pass_on("accumulate") && ssa_accumulate(s, order, n)) {
     ssa_resolve_all(s);
     order = ssa_order(s, &n);
     if (!order || s->failed) goto done;
     ssa_dominators(s, order, n);
-    if (ssa_self_inline(s, order, n)) {
+    if (ssa_pass_on("self_inline") && ssa_self_inline(s, order, n)) {
       ssa_resolve_all(s);
       order = ssa_order(s, &n);
       if (!order || s->failed) goto done;
@@ -11728,16 +11734,16 @@ static void ssa_prepare(SsaPrepared *p, BackendContext *ctx, const DynSource *so
     SsaBlock *block = &s->blocks[order[i]];
     for (uint32_t k = 0; k < block->values.count; ++k) s->values[block->values.items[k]].block = order[i];
   }
-  if (ssa_jam(s, order, n)) ssa_resolve_all(s);
+  if (ssa_pass_on("jam") && ssa_jam(s, order, n)) ssa_resolve_all(s);
   ssa_divisions(s, order, n);
   ssa_resolve_all(s);
-  if (ssa_hoist(s, order, n)) {
+  if (ssa_pass_on("hoist") && ssa_hoist(s, order, n)) {
     /* Hoisted copies of one computation meet in the same preheader. */
     ssa_dominators(s, order, n);
     ssa_cse(s, order, n);
     ssa_resolve_all(s);
   }
-  if (ssa_unswitch(s, order, n)) {
+  if (ssa_pass_on("unswitch") && ssa_unswitch(s, order, n)) {
     order = ssa_order(s, &n);
     if (!order || s->failed) goto done;
     /* The copy's untaken side is unreachable now; a phi that lost its
@@ -11758,9 +11764,9 @@ static void ssa_prepare(SsaPrepared *p, BackendContext *ctx, const DynSource *so
       for (uint32_t k = 0; k < block->values.count; ++k) s->values[block->values.items[k]].block = order[i];
     }
   }
-  if (ssa_strength(s, order, n)) ssa_resolve_all(s);
-  if (ssa_thread_conditions(s, order, n)) ssa_resolve_all(s);
-  if (ssa_selects(s, order, n)) ssa_resolve_all(s);
+  if (ssa_pass_on("strength") && ssa_strength(s, order, n)) ssa_resolve_all(s);
+  if (ssa_pass_on("thread_conditions") && ssa_thread_conditions(s, order, n)) ssa_resolve_all(s);
+  if (ssa_pass_on("selects") && ssa_selects(s, order, n)) ssa_resolve_all(s);
   if (s->failed) goto done;
   ssa_split_edges(s);
   order = ssa_order(s, &n);
@@ -11769,7 +11775,7 @@ static void ssa_prepare(SsaPrepared *p, BackendContext *ctx, const DynSource *so
   ssa_addressing(s, order, n);
   ssa_dce(s, order, n);
   /* After dce: dead frame stores no longer stand between load and use. */
-  if (!ctx->rv32 && !ctx->t32 && ssa_float_loads(s, order, n)) {
+  if (!ctx->rv32 && !ctx->t32 && ssa_pass_on("float_loads") && ssa_float_loads(s, order, n)) {
     ssa_resolve_all(s);
     ssa_dce(s, order, n);
   }
@@ -11778,20 +11784,20 @@ static void ssa_prepare(SsaPrepared *p, BackendContext *ctx, const DynSource *so
     p->ready = true;
     goto done;
   }
-  if (ssa_vloops(s, order, n)) ssa_dce(s, order, n);
+  if (ssa_pass_on("vloops") && ssa_vloops(s, order, n)) ssa_dce(s, order, n);
 allocate:
-  if (ctx->vectorize && !ctx->rv64 && ssa_pairs(s, order, n)) {
+  if (ctx->vectorize && !ctx->rv64 && ssa_pass_on("pairs") && ssa_pairs(s, order, n)) {
     ssa_resolve_all(s);
     /* Two trees may load the same pair. */
     if (ssa_reuse_loads(s, order, n)) ssa_resolve_all(s);
     ssa_dce(s, order, n);
   }
-  ssa_combine_loads(s, order, n);
-  ssa_combine_stores(s, order, n);
+  if (ssa_pass_on("combine_loads")) ssa_combine_loads(s, order, n);
+  if (ssa_pass_on("combine_stores")) ssa_combine_stores(s, order, n);
   if (!ctx->rv64 && !ctx->rv32 && !ctx->t32) {
-    ssa_narrow32(s, order, n);
-    ssa_rotate64(s, order, n);
-    ssa_late_lea(s, order, n);
+    if (ssa_pass_on("narrow32")) ssa_narrow32(s, order, n);
+    if (ssa_pass_on("rotate64")) ssa_rotate64(s, order, n);
+    if (ssa_pass_on("late_lea")) ssa_late_lea(s, order, n);
   }
   ssa_fuse(s, order, n);
   ssa_loop_depths(s, order, n);

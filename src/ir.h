@@ -1,5 +1,7 @@
 #ifndef DYN_IR_H
 #define DYN_IR_H
+#include <stdlib.h>
+#include <string.h>
 #include "dyn_ast.h"
 #include "dyn_location.h"
 
@@ -96,6 +98,22 @@ typedef struct {
   size_t length;
 } DynIrString;
 /* Private derived optimization metadata; precision is the function return_type. */
+/* DYN_SKIP=hoist,inline names optional optimization passes to leave out,
+   to find the one behind a release build that differs from debug
+   (tools/bisect-passes.py). */
+static inline bool dyn_optimization_pass_on(const char *name) {
+  const char *skip = getenv("DYN_SKIP");
+  if (!skip || !*skip) return true;
+  size_t n = strlen(name);
+  for (const char *p = skip; *p;) {
+    const char *end = strchr(p, ',');
+    size_t length = end ? (size_t)(end - p) : strlen(p);
+    if (length == n && !memcmp(p, name, n)) return false;
+    if (!end) break;
+    p = end + 1;
+  }
+  return true;
+}
 typedef enum {
   DYN_MATH_INTRINSIC_NONE,
   DYN_MATH_INTRINSIC_SQRT,

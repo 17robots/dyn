@@ -365,12 +365,35 @@ lock, and `sqlite.open_schema`'s busy handler (`sqlite.busy_wait`, retrying
 from 20 microseconds up to 1 millisecond apart) keeps them correct but slower:
 Chirp's creates ran at 119k per second that way and 191k with the mutex.
 
+## Caching across workers
+
+Each worker can keep its own copy of something built from shared data, such
+as a rendered list, without locks. `std/cache` keeps them current: the
+writer calls `cache.changed(&app.posts)` after a write, and a worker checks
+before using its copy.
+
+```dyn
+seen := cache.stale(&worker.posts, &app.posts)
+if seen != 0 {
+  // rebuild the worker's copy
+  cache.rebuilt(&worker.posts, seen)
+}
+```
+
+`seen` is read before the rebuild, so a write that lands during it leaves
+the copy stale for the next request. The session cache works the same way.
+
 ## Logging
 
 Set `Config.access_log` to a `log.Logger` and the server writes one line per
 answered request: client, method, path, status and the microseconds spent in
 the handler (and its finish, for `run` and `later`). `log.write` sends a line
 in one write, so workers' lines do not interleave.
+
+A handler that blocks (a slow query, file I/O, password hashing) stalls
+every connection on its worker. Set `Config.slow_handler_microseconds` and
+the server warns about each handler that runs that long, with method, path
+and time, in the access log or on standard error; move that work to `run`.
 
 ## Shutdown
 

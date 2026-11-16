@@ -2073,7 +2073,8 @@ static bool optimize(const DynSource *source, const DynIrProgram *input, DynIrPr
     if (e->kind == DYN_EXPR_UNARY && e->op == DYN_OP_ADDRESS && e->left < input->expression_count)
       addressed[e->left] = true;
   }
-  for (size_t i = 0; i < input->expression_count; ++i) {
+  bool propagate = dyn_optimization_pass_on("propagate");
+  for (size_t i = 0; propagate && i < input->expression_count; ++i) {
     if (input->live.expressions && !input->live.expressions[i]) continue;
     const DynIrExpr *e = &input->expressions[i];
     if (e->kind == DYN_EXPR_INT || e->kind == DYN_EXPR_BOOL ||
@@ -2148,7 +2149,7 @@ static bool optimize(const DynSource *source, const DynIrProgram *input, DynIrPr
   /* DYN_NO_INLINE=1 keeps every call, for tests that inspect one function's
      code or remarks. */
   const char *no_inline = getenv("DYN_NO_INLINE");
-  bool inline_calls = !no_inline || !*no_inline || !strcmp(no_inline, "0");
+  bool inline_calls = (!no_inline || !*no_inline || !strcmp(no_inline, "0")) && dyn_optimization_pass_on("inline");
   if (level >= 2 && inline_calls && !inline_program_within(o, false, uniform_params, level == 2 ? 176 : 512)) {
     free(samples);
     dyn_native_optimization_free(o);

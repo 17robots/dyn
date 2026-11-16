@@ -114,6 +114,7 @@ search for a word finds the function that does it.
 | `std/process/signal` | Interrupt, terminate and hangup signals as queued events, read with `poll` or `wait` |
 | `std/thread`, `std/sync` | Arena-backed thread handles; caller or owned stacks; portable synchronization |
 | `std/thread/pool` | Fixed worker pool over a bounded arena queue, and wait groups |
+| `std/cache` | Per-worker copies of shared data: writers call `changed`, each worker rebuilds when `stale` says so |
 | `std/time` | Monotonic and realtime clocks, durations, deadlines, calendar dates and UTC ISO-8601 |
 | `std/time/zone` | Time zones from TZif files, POSIX rules or the Windows zone; local time, strftime-style formatting and RFC 3339 |
 | `std/terminal` | Raw mode, terminal size and key decoding |

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """evented.serve answers requests, then stops cleanly on SIGTERM and SIGINT;
-Config.access_log writes one line per request."""
+Config.access_log writes one line per request, and Config.slow_handler_microseconds
+warns about a slow handler."""
 import re
 import http.client
 import os
@@ -32,12 +33,17 @@ with tempfile.TemporaryDirectory(prefix='dyn-http-serve-') as temporary:
                 except ConnectionRefusedError:
                     time.sleep(0.05)
             assert (reply.status, reply.read()) == (200, b'hello\n')
+            client.request('GET', '/slow')
+            reply = client.getresponse()
+            assert (reply.status, reply.read()) == (200, b'hello\n')
             client.close()
             server.send_signal(sent)
             assert server.wait(timeout=10) == 0
             assert server.stdout.read() == 'stopped 2\n'
             logged = server.stderr.read()
-            assert re.fullmatch(r'info: request client=127\.0\.0\.1 method=GET path=/ status=200 us=\d+\n', logged), logged
+            assert re.fullmatch(r'info: request client=127\.0\.0\.1 method=GET path=/ status=200 us=\d+\n'
+                                r'warning: slow handler method=GET path=/slow us=\d+\n'
+                                r'info: request client=127\.0\.0\.1 method=GET path=/slow status=200 us=\d+\n', logged), logged
         finally:
             if server.poll() is None:
                 server.kill()

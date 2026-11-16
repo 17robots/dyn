@@ -127,6 +127,10 @@ pub struct Config {
   // When set, one line per answered request: client, method, path, status
   // and microseconds in the handler (and its finish, for run and later).
   access_log: *log.Logger,
+  // When nonzero, a warning line for every handler that runs at least this
+  // many microseconds, a sign of blocking work on the event loop (move it to
+  // run). It goes to access_log, or to standard error without one.
+  slow_handler_microseconds: u64,
   // gzip level (1-9) for respond_compressed; each worker keeps one encoder
   // workspace (about 300 KiB). Zero sends bodies uncompressed.
   compress_level: u8,
@@ -422,9 +426,10 @@ pub struct Worker {
 const ListenerToken: u64 = 0
 const WakerToken: u64 = 0xffffffffffffffff
 
-// A clock reading for the access log, or 0 when there is none.
+// A clock reading for the access log and the slow-handler warning, or 0
+// when neither is on.
 fn log_start(worker: *const Worker) i64 {
-  if worker.config.access_log == nil { return 0 }
+  if worker.config.access_log == nil && worker.config.slow_handler_microseconds == 0 { return 0 }
   now := clock.monotonic_now()
   if io.failed(now.failure) { return 0 }
   return now.value.seconds * 1000000 + now.value.nanoseconds / 1000
@@ -432,8 +437,12 @@ fn log_start(worker: *const Worker) i64 {
 
 fn log_request(worker: *const Worker, remote: *const network.Address, request: *const http.Request,
   response: *const http.Response, started: i64) {
-  if worker.config.access_log == nil || response.status == 0 { return }
+  if started == 0 { return }
   elapsed := log_start(worker) - started
+  if worker.config.slow_handler_microseconds > 0 && elapsed >= #cast(i64, worker.config.slow_handler_microseconds) {
+    log_slow(worker, request, elapsed)
+  }
+  if worker.config.access_log == nil || response.status == 0 { return }
   address: [64]u8
   status: [8]u8
   micros: [24]u8
@@ -449,6 +458,21 @@ fn log_request(worker: *const Worker, remote: *const network.Address, request: *
     log.Field{ name: "us", value: format.bytes(&micros_text) },
   ]
   _ = log.write(worker.config.access_log, log.Level.Info, "request", fields[..])
+}
+
+fn log_slow(worker: *const Worker, request: *const http.Request, elapsed: i64) {
+  micros: [24]u8
+  micros_text := format.buffer(micros[..])
+  format.write_i64(&micros_text, elapsed)
+  fields: [3]log.Field = [
+    log.Field{ name: "method", value: request.method },
+    log.Field{ name: "path", value: request.path },
+    log.Field{ name: "us", value: format.bytes(&micros_text) },
+  ]
+  standard := log.logger(io.stderr(), log.Level.Warning)
+  destination := worker.config.access_log
+  if destination == nil { destination = &standard }
+  _ = log.write(destination, log.Level.Warning, "slow handler", fields[..])
 }
 
 fn now_milliseconds() i64 {
