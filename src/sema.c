@@ -2299,7 +2299,7 @@ static void sema_fill_type_table(Sema *sema, DynAstProgram *a, const DynSource *
     entries[used++] = (struct TypeTableEntry){reflection_type_id(a, types[i]), info};
   }
   free(types);
-  qsort(entries, used, sizeof(*entries), type_table_order);
+  if (used) qsort(entries, used, sizeof(*entries), type_table_order);
   /* A distinct type shares its underlying type's id: keep one entry. */
   size_t unique = 0;
   for (size_t i = 0; i < used; ++i)

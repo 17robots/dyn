@@ -675,8 +675,9 @@ static int visit(Resolver *r, const char *directory,
         } else {
           const char *vet_path, *vet_text; size_t vet_length, vet_at;
           dyn_source_position(s, item.start, &vet_path, &vet_text, &vet_length, &vet_at);
-          bool own = vet_path && !dyn_path_in_library(vet_path);
-          if (s->context.vet && own && has(file_targets, file_target_count, target)) {
+          /* Only vet asks whether this is the program's own code. */
+          if (s->context.vet && vet_path && !dyn_path_in_library(vet_path) &&
+              has(file_targets, file_target_count, target)) {
             char message[512];
             snprintf(
                 message, sizeof(message),

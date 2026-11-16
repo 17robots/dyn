@@ -16,6 +16,9 @@ servers so they pick up the new `dyn`.
 
 Servers:
 
+- `html.print` escapes every value that is not text or `Trusted` after
+  formatting it. A struct whose field held `<script>` was written raw.
+
 - `sqlite.open_schema` waits for other connections' writes with
   `sqlite.busy_wait`, which retries from 20 microseconds up to 1 millisecond
   apart, instead of SQLite's busy timeout, which sleeps whole milliseconds.

@@ -19,6 +19,12 @@ int main(void) {
   write_source(manifest, "dependency fixture lib\n");
   write_source(main_path, "use \"fixture\" lib\nfn main() { value := lib.answer() _ = value }\n");
   write_source(lib_path, "pub fn answer() i32 { return 42 }\n");
+  /* The first pass sets DYN_SDK, which once made loading resolve the SDK
+     and cache it, so later iterations allocated less than the first. It
+     runs first, before anything has cached the SDK's directories. */
+  for (int pass = 0; pass < 2; ++pass) {
+  if (!pass) assert(!setenv("DYN_SDK", root, 1));
+  else assert(!unsetenv("DYN_SDK"));
   size_t total = 0;
   for (size_t iteration = 0; !iteration || iteration <= total; ++iteration) {
     calls = failed = 0; fail_at = iteration;
@@ -30,6 +36,7 @@ int main(void) {
     if (!iteration) { assert(!result); total = calls; }
     else { assert(failed); assert(result != 0); }
     dyn_source_free(&merged); dyn_sources_free(&project); dyn_sources_free(&roots);
+  }
   }
   unlink(manifest); unlink(main_path); unlink(lib_path); rmdir(lib); rmdir(root);
   return 0;
