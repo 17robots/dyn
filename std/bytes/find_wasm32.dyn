@@ -1,0 +1,6 @@
+#target(arch: wasm32)
+
+// No runtime search routine on wasm32; find_byte reads eight bytes at a time.
+fn find_byte_target(value: []const u8, byte: u8) usize {
+  return find_byte_words(value, byte)
+}

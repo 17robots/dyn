@@ -336,8 +336,9 @@ fn failed_string(cursor: *Cursor) []const u8 {
   return cursor.source[..0]
 }
 
-// Stop before any byte requiring the full decoder. The compiler may replace
-// this exact SDK helper with bounded SIMD; all other paths use this scalar body.
+// Stop before any byte that needs the full string scanner: a control byte,
+// a byte at or above 128, '"' or '\\'. Most JSON strings are short, so a
+// loop small enough to inline beats a wider scan with a call.
 fn ascii_string_prefix(source: []const u8) usize {
   for i in 0..#len(source) {
     byte := source[i]

@@ -448,6 +448,46 @@ static bool decl_named(Resolver *r, const char *directory, const char *name,
   *is_public = interface->decls[low].is_public;
   return true;
 }
+/* Edit distance between two names, giving up past limit. */
+static size_t member_distance(const char *a, const char *b, size_t limit) {
+  size_t n = strlen(a), m = strlen(b);
+  if (n > 63 || m > 63 || (n > m ? n - m : m - n) > limit) return limit + 1;
+  size_t row[64];
+  for (size_t j = 0; j <= m; ++j) row[j] = j;
+  for (size_t i = 1; i <= n; ++i) {
+    size_t diagonal = row[0], smallest = row[0] = i;
+    for (size_t j = 1; j <= m; ++j) {
+      size_t above = row[j];
+      size_t best = diagonal + (a[i - 1] != b[j - 1]);
+      if (above + 1 < best) best = above + 1;
+      if (row[j - 1] + 1 < best) best = row[j - 1] + 1;
+      row[j] = best;
+      diagonal = above;
+      if (best < smallest) smallest = best;
+    }
+    if (smallest > limit) return limit + 1;
+  }
+  return row[m];
+}
+/* The module's public name closest to member, within about a third of its
+   length, or NULL. */
+static const char *closest_member(Resolver *r, const char *directory, const char *member) {
+  ModuleInterface *interface = find_interface(r, directory);
+  if (!interface) return NULL;
+  size_t limit = strlen(member) / 3;
+  if (limit < 2) limit = 2;
+  const char *best = NULL;
+  size_t best_distance = limit + 1;
+  for (size_t i = 0; i < interface->decl_count; ++i) {
+    if (!interface->decls[i].is_public) continue;
+    size_t distance = member_distance(member, interface->decls[i].name, limit);
+    if (distance < best_distance) {
+      best_distance = distance;
+      best = interface->decls[i].name;
+    }
+  }
+  return best;
+}
 static size_t alias_index(char **aliases, size_t count, const char *name) {
   for (size_t i = 0; i < count; ++i)
     if (!strcmp(aliases[i], name))
@@ -483,10 +523,17 @@ static int validate_member_at(Resolver *r, uint32_t start, uint32_t end, const D
       snprintf(message, sizeof(message),
                "module '%s' has no source file for target %s; '%s.%s' is unavailable there",
                module, dyn_context_target(&s->context)->name, qualifier, member);
-    } else
-      snprintf(message, sizeof(message),
-               "imported member '%s.%s' is missing or not pub", qualifier,
-               member);
+    } else if (decl_named(r, targets[found], member, &pub))
+      snprintf(message, sizeof(message), "'%s.%s' is not pub; only pub declarations can be used from another module",
+               qualifier, member);
+    else {
+      const char *closest = closest_member(r, targets[found], member);
+      if (closest)
+        snprintf(message, sizeof(message), "'%s' has no pub member '%s'; did you mean '%s.%s'?", qualifier, member,
+                 qualifier, closest);
+      else
+        snprintf(message, sizeof(message), "'%s' has no pub member '%s'", qualifier, member);
+    }
     dyn_diagnostic_source("error", s, start, end, message);
     return 1;
   }

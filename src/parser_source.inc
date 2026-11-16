@@ -409,6 +409,15 @@ static uint32_t src_bare_variant(const Parser *p, uint32_t from) {
   }
   return NONE;
 }
+/* `[3]i32{1, 2, 3}` written as in other languages: an element type name
+   right after `]`, then `{`. */
+static bool src_typed_array_literal(Parser *p) {
+  uint32_t at = p->token.start;
+  while (at > 0 && (p->text[at - 1] == ' ' || p->text[at - 1] == '\t')) --at;
+  if (at == 0 || p->text[at - 1] != ']' || p->token.kind != NAME) return false;
+  Token next = src_peek(p);
+  return next.kind != END && next.start < p->length && p->text[next.start] == '{';
+}
 static uint32_t src_block(Parser *p) {
   uint32_t start = p->token.start, first = NONE, last = NONE;
   expect(p, "{");
@@ -419,6 +428,8 @@ static uint32_t src_block(Parser *p) {
       uint32_t variant = src_bare_variant(p, statement_start(p, saved));
       if (variant != NONE)
         fail(p, variant, "an enum variant needs its type: write Enum.Variant, not .Variant");
+      else if (src_typed_array_literal(p))
+        fail(p, p->token.start, "write an array literal as [a, b, c] and give the type to the name: values: [3]i32 = [1, 2, 3]");
       else
         fail(p, p->token.start, "each statement must start on its own line");
     }
@@ -599,7 +610,11 @@ static uint32_t src_declaration(Parser *p) {
   else if (is(p, "type") || src_distinct(p)) child = src_alias(p);
   else if (!public && is(p, "use")) child = src_use(p);
   else if (!public && is(p, "#assert")) child = src_assert(p);
-  else if (p->token.kind == NAME && src_peek(p).kind == END) {
+  else if (!public && (is(p, "import") || is(p, "package")) &&
+           (src_peek(p).kind == NAME || src_peek(p).kind == STRING)) {
+    fail(p, p->token.start, "Dyn imports a module with use, as in use \"std/io\"");
+    child = NONE;
+  } else if (p->token.kind == NAME && src_peek(p).kind == END) {
     /* A dangling declaration name is the offending token, not the empty
        position after its trailing newline. Editors need a visible range. */
     fail(p, p->token.start, "incomplete or invalid syntax");

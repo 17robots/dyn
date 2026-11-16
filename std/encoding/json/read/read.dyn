@@ -356,9 +356,9 @@ pub fn at(array: *const Value, index: usize) *const Value {
   return at
 }
 
-// Stop before any byte that needs the full JSON string scanner. The compiler
-// may replace this exact SDK helper with bounded SIMD; other targets use this
-// body, including for short slices and bytes outside printable ASCII.
+// Stop before any byte that needs the full string scanner: a control byte,
+// a byte at or above 128, '"' or '\\'. Most JSON strings are short, so a
+// loop small enough to inline beats a wider scan with a call.
 fn ascii_string_prefix(source: []const u8) usize {
   for i in 0..#len(source) {
     byte := source[i]

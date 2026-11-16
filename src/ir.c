@@ -87,73 +87,6 @@ static DynMathIntrinsic math_identity(const DynSource *source, const DynIrProgra
   return DYN_MATH_INTRINSIC_NONE;
 }
 
-static bool byte_const_slice(const DynAstProgram *a, DynType type) {
-  return dyn_type_is_slice(type) && type - DYN_TYPE_SLICE_BASE < a->slice_count &&
-         a->slices[type - DYN_TYPE_SLICE_BASE].is_const &&
-         a->slices[type - DYN_TYPE_SLICE_BASE].element == DYN_TYPE_U8;
-}
-/* Only the current SDK's original ordinary declaration can gain this identity.
-   Read AST slice metadata: IR slice entries are populated after functions. */
-static DynByteIntrinsic byte_identity(const DynSource *source, CanonicalPath *paths,
-                                     const char *source_path, const char *sdk,
-                                     const DynAstProgram *a, const DynIrProgram *ir,
-                                     const DynIrFunction *fn) {
-  if (!sdk || !source_path || fn->foreign || fn->variadic || fn->generic ||
-      fn->instance || !fn->is_public || fn->return_type != DYN_TYPE_USIZE ||
-      fn->param_count != 2 || fn->param_start > ir->param_count ||
-      2 > ir->param_count - fn->param_start ||
-      !byte_const_slice(a, ir->params[fn->param_start].type))
-    return DYN_BYTE_INTRINSIC_NONE;
-  const char *canonical = canonical_path(paths, source_path);
-  bool trusted = canonical && !strcmp(canonical, sdk);
-  if (!trusted) return DYN_BYTE_INTRINSIC_NONE;
-  const char *original, *ignored_path;
-  size_t length, offset;
-  dyn_source_position(source, fn->source_offset, &ignored_path, &original, &length, &offset);
-  if (offset > length) return DYN_BYTE_INTRINSIC_NONE;
-  size_t end = offset;
-  while (end < length && ((original[end] >= 'a' && original[end] <= 'z') ||
-         (original[end] >= 'A' && original[end] <= 'Z') ||
-         (original[end] >= '0' && original[end] <= '9') || original[end] == '_')) ++end;
-  DynType needle = ir->params[fn->param_start + 1].type;
-  if (end - offset == 9 && !memcmp(original + offset, "find_byte", 9) && needle == DYN_TYPE_U8)
-    return DYN_BYTE_INTRINSIC_FIND_BYTE;
-  if (end - offset == 4 && !memcmp(original + offset, "find", 4) && byte_const_slice(a, needle))
-    return DYN_BYTE_INTRINSIC_FIND;
-  return DYN_BYTE_INTRINSIC_NONE;
-}
-
-/* The private JSON scanner has a scalar body on every target. Only its exact
-   SDK declaration may use the bounded x86 implementation. */
-static DynByteIntrinsic json_byte_identity(const DynSource *source, CanonicalPath *paths,
-                                          const char *source_path, const char *sdk,
-                                          const char *mutable_sdk,
-                                          const DynAstProgram *a, const DynIrProgram *ir,
-                                          const DynIrFunction *fn) {
-  if ((!sdk && !mutable_sdk) || !source_path || fn->foreign || fn->variadic ||
-      fn->generic || fn->instance || fn->is_public ||
-      fn->return_type != DYN_TYPE_USIZE || fn->param_count != 1 ||
-      fn->param_start >= ir->param_count ||
-      !byte_const_slice(a, ir->params[fn->param_start].type)) return DYN_BYTE_INTRINSIC_NONE;
-  const char *canonical = canonical_path(paths, source_path);
-  bool trusted = canonical && ((sdk && !strcmp(canonical, sdk)) ||
-                               (mutable_sdk && !strcmp(canonical, mutable_sdk)));
-  if (!trusted) return DYN_BYTE_INTRINSIC_NONE;
-  const char *original, *ignored_path;
-  size_t length, offset;
-  dyn_source_position(source, fn->source_offset, &ignored_path, &original, &length, &offset);
-  const char name[] = "ascii_string_prefix";
-  size_t n = sizeof(name) - 1;
-  if (offset > length || n > length - offset || memcmp(original + offset, name, n))
-    return DYN_BYTE_INTRINSIC_NONE;
-  if (offset + n < length) {
-    unsigned char c = (unsigned char)original[offset + n];
-    if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-        (c >= '0' && c <= '9') || c == '_') return DYN_BYTE_INTRINSIC_NONE;
-  }
-  return DYN_BYTE_INTRINSIC_JSON_ASCII_PREFIX;
-}
-
 /* std/mem's private zero_bytes_fast(items: []u8): the SSA backend writes a
    constant-length call as one fixed-size fill, such as the zeroing of each
    mem.push. Only the exact SDK declaration has this identity. */
@@ -943,9 +876,6 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
   (void)dyn_location_build(&ir->locations, source);
   DynLocationIndex locations = ir->locations;
   CanonicalPath paths = {0};
-  char *bytes_sdk = proofs ? sdk_source_path("std/bytes/bytes.dyn", true) : NULL;
-  char *json_sdk = proofs ? sdk_source_path("std/encoding/json/read/read.dyn", true) : NULL;
-  char *mutable_json_sdk = proofs ? sdk_source_path("std/encoding/json/json.dyn", true) : NULL;
   char *mem_sdk = proofs ? sdk_source_path("std/mem/mem.dyn", true) : NULL;
   for (size_t i = 0; i < a->function_count; ++i) {
     size_t n = a->functions[i].name.end_byte - a->functions[i].name.start_byte;
@@ -953,9 +883,6 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
     ir->functions[i].name = malloc(n + 20);
     if (!ir->functions[i].name) {
       free(mem_sdk);
-      free(mutable_json_sdk);
-      free(json_sdk);
-      free(bytes_sdk);
       free(paths.canonical);
       dyn_ir_free(ir);
       return false;
@@ -989,9 +916,6 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
     ir->functions[i].link_name = malloc(link_length + 1);
     if (!ir->functions[i].link_name) {
       free(mem_sdk);
-      free(mutable_json_sdk);
-      free(json_sdk);
-      free(bytes_sdk);
       free(paths.canonical);
       dyn_ir_free(ir);
       return false;
@@ -1017,16 +941,9 @@ static bool lower_ir(const DynAstProgram *a, const DynSource *source, DynIrProgr
     ir->functions[i].module_owner = a->functions[i].module_owner;
     ir->functions[i].variadic_type = lower_type(a, a->functions[i].variadic_type);
     ir->functions[i].math_intrinsic = proofs ? math_identity(source, ir, &ir->functions[i]) : DYN_MATH_INTRINSIC_NONE;
-    ir->functions[i].byte_intrinsic = byte_identity(source, &paths, source_path, bytes_sdk, a, ir, &ir->functions[i]);
-    if (ir->functions[i].byte_intrinsic == DYN_BYTE_INTRINSIC_NONE)
-      ir->functions[i].byte_intrinsic = json_byte_identity(source, &paths, source_path, json_sdk, mutable_json_sdk, a, ir, &ir->functions[i]);
-    if (ir->functions[i].byte_intrinsic == DYN_BYTE_INTRINSIC_NONE)
-      ir->functions[i].byte_intrinsic = zero_identity(source, &paths, source_path, mem_sdk, a, ir, &ir->functions[i]);
+    ir->functions[i].byte_intrinsic = zero_identity(source, &paths, source_path, mem_sdk, a, ir, &ir->functions[i]);
   }
   free(mem_sdk);
-  free(mutable_json_sdk);
-  free(json_sdk);
-  free(bytes_sdk);
   free(paths.canonical);
   for (size_t i = 0; i < a->global_count; ++i) {
     size_t n = a->globals[i].name.end_byte - a->globals[i].name.start_byte;

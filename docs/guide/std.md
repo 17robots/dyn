@@ -3,6 +3,8 @@
 Every std package is ordinary Dyn source shipped with the SDK. The source is the
 API reference: `dyn docs std/strings` prints a module's public declarations and
 their contracts, and `dyn docs std/strings --json` gives the same as JSON.
+[The std index](std-index.md) lists every public declaration in one page, one line each, so a
+search for a word finds the function that does it.
 
 ## Conventions
 

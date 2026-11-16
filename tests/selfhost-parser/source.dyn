@@ -589,6 +589,20 @@ fn src_statement(p: *Parser) u32 {
   return value
 }
 
+// `[3]i32{1, 2, 3}` written as in other languages: an element type name
+// right after `]`, then `{`.
+fn src_typed_array_literal(p: *Parser) bool {
+  at := p.token.start
+  for at > 0 && (p.text[at - 1] == ' ' || p.text[at - 1] == '\t') {
+    at -= 1
+  }
+  if at == 0 || p.text[at - 1] != ']' || p.token.kind != TokenKind.Name {
+    return false
+  }
+  next := src_peek(p)
+  return next.kind != TokenKind.End && #cast(usize, next.start) < #len(p.text) && p.text[next.start] == '{'
+}
+
 fn src_block(p: *Parser) u32 {
   start := p.token.start
   first := None
@@ -601,6 +615,8 @@ fn src_block(p: *Parser) u32 {
       variant := src_bare_variant(p, statement_start)
       if variant != None {
         fail(p, variant, "an enum variant needs its type: write Enum.Variant, not .Variant")
+      } else if src_typed_array_literal(p) {
+        fail(p, p.token.start, "write an array literal as [a, b, c] and give the type to the name: values: [3]i32 = [1, 2, 3]")
       } else {
         fail(p, p.token.start, "each statement must start on its own line")
       }
@@ -942,6 +958,9 @@ fn src_declaration(p: *Parser) u32 {
     child = src_use(p)
   } else if !public && token_is(p, "#assert") {
     child = src_assert(p)
+  } else if !public && (token_is(p, "import") || token_is(p, "package")) &&
+    (src_peek(p).kind == TokenKind.Name || src_peek(p).kind == TokenKind.Text) {
+    fail(p, p.token.start, "Dyn imports a module with use, as in use \"std/io\"")
   } else if p.token.kind == TokenKind.Name && src_peek(p).kind == TokenKind.End {
     // A dangling declaration name is the offending token, not the empty
     // position after its trailing newline. Editors need a visible range.

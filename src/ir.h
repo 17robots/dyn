@@ -109,9 +109,6 @@ typedef enum {
 /* Private derived identity; never serialized in the public IR dump. */
 typedef enum {
   DYN_BYTE_INTRINSIC_NONE,
-  DYN_BYTE_INTRINSIC_FIND_BYTE,
-  DYN_BYTE_INTRINSIC_FIND,
-  DYN_BYTE_INTRINSIC_JSON_ASCII_PREFIX,
   /* std/mem's zero_bytes_fast: a constant length becomes a fixed zero fill. */
   DYN_BYTE_INTRINSIC_ZERO
 } DynByteIntrinsic;

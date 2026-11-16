@@ -1,3 +1,5 @@
+use "std/encoding/binary"
+
 // Allocation-free byte-slice operations. Returned slices borrow input or caller storage.
 
 pub fn equal(left: []const u8, right: []const u8) bool {
@@ -31,10 +33,24 @@ pub fn ends_with(value: []const u8, suffix: []const u8) bool {
 // slice bound: value[..at] is the whole input and value[at..] is empty.
 
 pub fn find_byte(value: []const u8, byte: u8) usize {
-  for i in 0..#len(value) {
-    if value[i] == byte { return i }
+  return find_byte_target(value, byte)
+}
+
+// Eight bytes at a time: a word holds byte where word ^ pattern has a zero
+// byte. The tail, and the word that matched, finish one byte at a time.
+fn find_byte_words(value: []const u8, byte: u8) usize {
+  pattern := #cast(u64, byte) * 0x0101010101010101
+  at: usize = 0
+  for #len(value) - at >= 8 {
+    word := binary.load_u64_le(value[at..at + 8]) ^ pattern
+    if ((word - 0x0101010101010101) & ~word & 0x8080808080808080) != 0 { break }
+    at += 8
   }
-  return #len(value)
+  for at < #len(value) {
+    if value[at] == byte { return at }
+    at += 1
+  }
+  return at
 }
 
 pub fn find_last_byte(value: []const u8, byte: u8) usize {
