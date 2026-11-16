@@ -413,7 +413,7 @@ fn src_expression_start(p: *Parser) bool {
   if kind == TokenKind.Name || kind == TokenKind.Number || kind == TokenKind.Text || kind == TokenKind.Character {
     return true
   }
-  starts: [28][]const u8 = ["(", "[", ".", "-", "&", "!", "~", "#cast", "#bitcast", "#sizeof", "#alignof", "#offsetof", "#typeof", "#max", "#min", "#len", "#init", "#instance", "#slice", "#offset", "#load", "#syscall", "#sqrt", "#floor", "#ceil", "#trunc", "#round", "#fma"]
+  starts: [29][]const u8 = ["(", "[", ".", "-", "&", "!", "~", "#cast", "#bitcast", "#wrapping", "#sizeof", "#alignof", "#offsetof", "#typeof", "#max", "#min", "#len", "#init", "#instance", "#slice", "#offset", "#load", "#syscall", "#sqrt", "#floor", "#ceil", "#trunc", "#round", "#fma"]
   for candidate in starts {
     if token_is(p, candidate) { return true }
   }

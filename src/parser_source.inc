@@ -247,7 +247,7 @@ static bool src_expression_start(Parser *p) {
   return p->token.kind == NAME || p->token.kind == NUMBER || p->token.kind == STRING ||
       p->token.kind == CHARACTER || is(p, "(") || is(p, "[") || is(p, ".") ||
       is(p, "-") || is(p, "&") || is(p, "!") || is(p, "~") ||
-      is(p, "#cast") || is(p, "#bitcast") || is(p, "#sizeof") ||
+      is(p, "#cast") || is(p, "#bitcast") || is(p, "#wrapping") || is(p, "#sizeof") ||
       is(p, "#alignof") || is(p, "#offsetof") || is(p, "#typeof") || is(p, "#max") || is(p, "#min") ||
       is(p, "#len") || is(p, "#init") || is(p, "#instance") || is(p, "#slice") || is(p, "#offset") || is(p, "#load") || is(p, "#syscall") ||
       is(p, "#sqrt") || is(p, "#floor") || is(p, "#ceil") || is(p, "#trunc") || is(p, "#round") || is(p, "#fma");

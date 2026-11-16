@@ -301,8 +301,30 @@ static DynExprId compact_argument(CompactNode n, const DynSource *s, DynAstProgr
     .span = compact_span(n), .left = DYN_NO_EXPR, .right = DYN_NO_EXPR};
   return (DynExprId)a->expression_count++;
 }
+static DynExprId compact_expr_node(CompactNode node, const DynSource *s, DynAstProgram *a,
+                                 unsigned *errors);
+/* Marks the integer arithmetic of a #wrapping(...) operand to wrap. Calls
+   inside it keep their own rules. */
+static void compact_mark_wrapping(DynAstProgram *a, DynExprId id, unsigned depth) {
+  if (id == DYN_NO_EXPR || id >= a->expression_count || depth > 4096) return;
+  DynAstExpr *e = &a->expressions[id];
+  if (e->kind == DYN_EXPR_CALL || e->kind == DYN_EXPR_INDIRECT_CALL) return;
+  if (e->kind == DYN_EXPR_BINARY || e->kind == DYN_EXPR_UNARY) e->wrap = true;
+  DynExprId left = e->left, right = e->right;
+  compact_mark_wrapping(a, left, depth + 1);
+  compact_mark_wrapping(a, right, depth + 1);
+}
 static DynExprId compact_expr(CompactNode node, const DynSource *s, DynAstProgram *a,
                             unsigned *errors) {
+  bool wrapping = false;
+  for (CompactNode n = node; compact_kind(n) == EXP_GROUP; n = compact_first(n))
+    wrapping = wrapping || compact_flag(n, EXP_WRAPPING);
+  DynExprId id = compact_expr_node(node, s, a, errors);
+  if (wrapping) compact_mark_wrapping(a, id, 0);
+  return id;
+}
+static DynExprId compact_expr_node(CompactNode node, const DynSource *s, DynAstProgram *a,
+                                 unsigned *errors) {
   if (!dyn_work_step(&s->context, 1)) return DYN_NO_EXPR;
   node = compact_unwrap(node);
   if (!reserve_expr(a)) {

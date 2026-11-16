@@ -224,7 +224,8 @@ pub fn glyph_index(face: *const Face, codepoint: u32) u16 {
       value = u16be(sub, at + range + skip)
       if value == 0 { return 0 }
     }
-    value = value + delta
+    // idDelta is modulo 65536.
+    value = #wrapping(value + delta)
     if value >= face.glyphs { return 0 }
     return value
   }

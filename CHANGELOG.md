@@ -33,6 +33,9 @@ Language (2026-11-16 cleanup; see `docs/guide/rules.md`):
 - Signed and unsigned integers compare by value: `-1 < len` is true for a
   `usize` len, and `i64` against `u64` needs no cast.
 - An unsigned `x % M` with a constant `M` narrows without `#cast`.
+- `--check-overflow` checks every module, std and vendor included. Write
+  `#wrapping(expr)` where arithmetic means to wrap (hashes, rotations, SWAR);
+  std's own wrapping code is marked this way and runs clean with checks on.
 - `for i in #step(first..last, n)` visits every n-th value;
   `#reverse(#step(...))` goes from the last.
 - A generic `$T` bound to `u32` by one argument and `u64` by another is `u64`.

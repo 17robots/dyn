@@ -54,12 +54,12 @@ pub fn narrow(T: type, value: $U) T {
 // Integer type facts.
 pub fn is_signed(T: type) bool {
   zero: T = 0
-  return (zero - 1) < zero
+  return #wrapping(zero - 1) < zero
 }
 pub fn max_value(T: type) T {
   if is_signed(T) { return #cast(T, (#cast(u64, 1) << #cast(u64, #sizeof(T) * 8 - 1)) - 1) }
   zero: T = 0
-  return zero - 1
+  return #wrapping(zero - 1)
 }
 pub fn min_value(T: type) T {
   if is_signed(T) { return -max_value(T) - 1 }
@@ -108,7 +108,7 @@ pub fn rotate_left(value: $T, amount: u32) T {
   shift := #cast(u64, amount) % width
   bits := bits_of(value)
   if shift == 0 { return value }
-  rotated := (bits << shift) | (bits >> (width - shift))
+  rotated := #wrapping(bits << shift) | (bits >> (width - shift))
   return #cast(T, rotated)
 }
 pub fn rotate_right(value: $T, amount: u32) T {
@@ -160,7 +160,7 @@ fn magnitude(value: $T) u64 {
   zero: T = 0
   raw := bits_of(value)
   if is_signed(T) && value < zero {
-    if #sizeof(T) == 8 { return #cast(u64, 0) - raw }
+    if #sizeof(T) == 8 { return #wrapping(#cast(u64, 0) - raw) }
     return (#cast(u64, 1) << #cast(u64, #sizeof(T) * 8)) - raw
   }
   return raw
@@ -215,14 +215,14 @@ pub fn isqrt(value: $T) T {
 // arithmetic, which wraps.
 pub fn add_overflows(a, b: $T) bool {
   zero: T = 0
-  result := a + b
+  result := #wrapping(a + b)
   if is_signed(T) { return (a < zero) == (b < zero) && (result < zero) != (a < zero) }
   return result < a
 }
 pub fn sub_overflows(a, b: $T) bool {
   zero: T = 0
   if is_signed(T) {
-    result := a - b
+    result := #wrapping(a - b)
     return (a < zero) != (b < zero) && (result < zero) != (a < zero)
   }
   return b > a
@@ -233,20 +233,19 @@ pub fn mul_overflows(a, b: $T) bool {
     minimum := min_value(T)
     if (a == #cast(T, -1) && b == minimum) || (b == #cast(T, -1) && a == minimum) { return true }
   }
-  result := a * b
+  result := #wrapping(a * b)
   return result / a != b
 }
-// Arithmetic that wraps on overflow, as + - * do by default. Programs built
-// with --check-overflow use these where wrapping is meant, such as hashes;
-// std code always wraps, so these never check.
+// Arithmetic that wraps on overflow, even under --check-overflow, for code
+// that means to wrap, such as hashes. #wrapping(a * b) does the same inline.
 pub fn wrapping_add(a, b: $T) T {
-  return a + b
+  return #wrapping(a + b)
 }
 pub fn wrapping_sub(a, b: $T) T {
-  return a - b
+  return #wrapping(a - b)
 }
 pub fn wrapping_mul(a, b: $T) T {
-  return a * b
+  return #wrapping(a * b)
 }
 // Arithmetic that stops at T's limits instead of overflowing.
 pub fn saturating_add(a, b: $T) T {

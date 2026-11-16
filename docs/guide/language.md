@@ -423,10 +423,12 @@ minimum divided by `-1` panics. `std/math` has `add_overflows`, `sub_overflows`,
 saturating arithmetic for code that wants them.
 
 Integer arithmetic wraps in debug and release builds alike. `--check-overflow`, in either mode,
-makes `+`, `-`, `*`, `<<`, unary negation and their compound assignments in the program's own
-modules panic with `overflow.ok` instead of wrapping. The SDK's `std` and `vendor` code keeps
-wrapping. Write `math.wrapping_add`, `wrapping_sub` or `wrapping_mul` where a program means to
-wrap, so a checked build does not stop there. The checks find overflow bugs; they do not change
+makes `+`, `-`, `*`, `<<`, unary negation and their compound assignments panic with
+`overflow.ok` instead of wrapping, in every module, std and vendor included. Write
+`#wrapping(expr)` where code means to wrap, such as a hash or a rotation: its integer arithmetic
+wraps even in a checked build, and it compiles to the same instructions as without it. Calls
+inside it keep their own rules. `math.wrapping_add`, `wrapping_sub` and `wrapping_mul` do the same
+as functions. The checks find overflow bugs; they do not change
 the meaning of a correct program.
 
 Untyped integer constants are evaluated exactly for the implemented constant-expression operators,
@@ -509,6 +511,7 @@ mean that the operation runs at compile time. Allocation, I/O, formatting,
 collections, and ordinary algorithms belong in libraries.
 
 - Conversion: `#cast(Type, value)` and `#bitcast(Type, value)`.
+- Arithmetic that wraps on purpose: `#wrapping(expr)`.
 - Layout and reflection: `#sizeof`, `#alignof`, `#offsetof`, and `#typeof`.
 - Integer limits: `#max` and `#min`.
 - Representation and pointers: `#len`, `#slice` and `#init`.

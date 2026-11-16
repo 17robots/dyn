@@ -23,30 +23,30 @@ pub fn init(key: []const u8) State {
   return state
 }
 fn block(state: *State, input: []const u8, high: u64) {
-  state.h[0] += load(input, 0) & Mask
-  state.h[1] += (load(input, 3) >> 2) & Mask
-  state.h[2] += (load(input, 6) >> 4) & Mask
-  state.h[3] += (load(input, 9) >> 6) & Mask
-  state.h[4] += (load(input, 12) >> 8) | high
+  state.h[0] = #wrapping(state.h[0] + (load(input, 0) & Mask))
+  state.h[1] = #wrapping(state.h[1] + ((load(input, 3) >> 2) & Mask))
+  state.h[2] = #wrapping(state.h[2] + ((load(input, 6) >> 4) & Mask))
+  state.h[3] = #wrapping(state.h[3] + ((load(input, 9) >> 6) & Mask))
+  state.h[4] = #wrapping(state.h[4] + ((load(input, 12) >> 8) | high))
   d: [5]u64
   for i in 0..5 {
     for j in 0..5 {
       // i/j are public, so this branch and these indexes reveal no key bits.
       if j <= i {
-        d[i] += state.h[j] * state.r[i-j]
+        d[i] = #wrapping(d[i] + (state.h[j] * state.r[i-j]))
       } else {
-        d[i] += state.h[j] * state.r[5+i-j] * 5
+        d[i] = #wrapping(d[i] + (state.h[j] * state.r[5+i-j] * 5))
       }
     }
   }
   carry: u64 = 0
   for i in 0..5 {
-    d[i] += carry
+    d[i] = #wrapping(d[i] + carry)
     state.h[i] = d[i] & Mask
     carry = d[i] >> 26
   }
-  state.h[0] += carry * 5
-  state.h[1] += state.h[0] >> 26
+  state.h[0] = #wrapping(state.h[0] + (carry * 5))
+  state.h[1] = #wrapping(state.h[1] + (state.h[0] >> 26))
   state.h[0] &= Mask
 }
 pub fn update(state: *State, input: []const u8) bool {
@@ -100,8 +100,8 @@ pub fn finish(state: *State) Tag {
     carry = g[i] >> 26
     g[i] &= Mask
   }
-  g[4] = h[4] + carry - (1 << 26)
-  select := (g[4] >> 63) - 1
+  g[4] = #wrapping(h[4] + carry - (1 << 26))
+  select := #wrapping((g[4] >> 63) - 1)
   for i in 0..5 {
     h[i] = (h[i] & ~select) | (g[i] & select)
   }

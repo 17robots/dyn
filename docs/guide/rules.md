@@ -34,7 +34,8 @@ behavior (std, vendor) is not language and is documented with each module.
 11. **Three operators narrow without a cast** where their range fits: `x & M`, unsigned `x >> k`
     and unsigned `x % M` with a constant `M` or `k`.
 12. **Integer arithmetic wraps.** `--check-overflow` turns overflow of `+ - * <<` and negation
-    in the program's own modules into a panic. Division by zero always panics.
+    into a panic in every module, std included; arithmetic inside `#wrapping(...)` still wraps.
+    Division by zero always panics.
 13. **`*const T` and `[]const T` are shallow.** They forbid writes through that view only.
     `*T` converts to `*const T` and to `rawptr`, never back.
 
@@ -69,7 +70,7 @@ behavior (std, vendor) is not language and is documented with each module.
 24. **No code is special.** The compiler treats every module the same, whatever its name or path.
     Std, core and heap are ordinary Dyn code that anyone could write.
 25. **Builtins start with `#`** and exist only for what the compiler must provide: `#cast`,
-    `#bitcast`, `#sizeof`, `#alignof`, `#offsetof`, `#typeof`, `#len`, `#slice`, `#init`,
+    `#bitcast`, `#wrapping`, `#sizeof`, `#alignof`, `#offsetof`, `#typeof`, `#len`, `#slice`, `#init`,
     `#assert`, `#panic`, `#syscall`, `#reverse`, `#step`, `#max`, `#min`, `#load`, `#instance`,
     and `#sqrt`, `#floor`, `#ceil`, `#trunc`, `#round`, `#fma` where hardware has the
     instruction. File directives: `#target` and `#link`.

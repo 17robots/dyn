@@ -478,11 +478,12 @@ fn reduce_pi2_large(x: f64) Remainder {
     w0 = ~w0
     w1 = ~w1
     w2 = ~w2
-    w2 = w2 + 1
+    // A 192-bit increment: each word wraps into the carry test.
+    w2 = #wrapping(w2 + 1)
     if w2 == 0 {
-      w1 = w1 + 1
+      w1 = #wrapping(w1 + 1)
       if w1 == 0 {
-        w0 = w0 + 1
+        w0 = #wrapping(w0 + 1)
       }
     }
   }
@@ -497,12 +498,12 @@ fn reduce_pi2_large(x: f64) Remainder {
   if w0 == 0 { return Remainder{ n: n, y0: 0.0, y1: 0.0 } }
   z := #cast(i32, leading_zeros(w0))
   if z > 0 {
-    w0 = (w0 << #cast(u64, z)) | (w1 >> #cast(u64, 64 - z))
-    w1 = (w1 << #cast(u64, z)) | (w2 >> #cast(u64, 64 - z))
+    w0 = #wrapping(w0 << #cast(u64, z)) | (w1 >> #cast(u64, 64 - z))
+    w1 = #wrapping(w1 << #cast(u64, z)) | (w2 >> #cast(u64, 64 - z))
   }
   shift += z
   hi := w0 >> 11
-  lo := ((w0 & 0x7ff) << 42) | (w1 >> 22)
+  lo := #wrapping((w0 & 0x7ff) << 42) | (w1 >> 22)
   a := scale(#cast(f64, hi), -shift - 53)
   b := scale(#cast(f64, lo), -shift - 106)
   pio2_hi: f64 = 1.57079632679489655800

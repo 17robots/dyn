@@ -545,7 +545,7 @@ fn flush_block(encoder: *Encoder, bits: *OutputBits, raw: []const u8, final: boo
 fn hash_at(source: []const u8, at: usize, shift: u32) usize {
   value := (#cast(u32, source[at]) << 16) | (#cast(u32, source[at + 1]) << 8) | #cast(u32, source[at + 2])
   // Multiplicative hashing wraps in 32 bits.
-  hashed: u32 = value * 2654435761
+  hashed: u32 = #wrapping(value * 2654435761)
   return hashed >> shift
 }
 

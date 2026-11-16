@@ -274,16 +274,15 @@ static bool validate_ir(const DynIrProgram *ir) {
     if ((size_t)ir->case_arms[i].pattern_start + ir->case_arms[i].pattern_count > ir->pattern_count || (size_t)ir->case_arms[i].body_start + ir->case_arms[i].body_count > ir->child_count) return false;
   return true;
 }
-/* Whether integer arithmetic written at span wraps. It always does, except
-   with --check-overflow in the program's own modules: std and vendor code
-   relies on wrapping (hashes, checksums), so it keeps it. */
+/* Whether integer arithmetic wraps: always, except under --check-overflow,
+   which checks every module alike. #wrapping(...) marks arithmetic that
+   wraps on purpose, such as hashes. */
 static bool ir_wraps(const DynSource *source, DynSpan span) {
+  /* The prelude implements builtins such as #sqrt in software; like the
+     instructions it stands in for, its arithmetic wraps. */
+  if (source && dyn_reflection_prelude_span(span, source)) return true;
   const DynOptimization *o = source ? source->context.optimization : NULL;
-  if (!o || !o->check_overflow) return true;
-  const char *path, *text;
-  size_t length, at;
-  dyn_source_position(source, span.start_byte, &path, &text, &length, &at);
-  return dyn_path_in_library(path);
+  return !o || !o->check_overflow;
 }
 
 /* A case on text: `case name { "a" => {...} _ => {...} }`. Sema left the

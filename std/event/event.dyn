@@ -58,7 +58,7 @@ pub fn open(arena: *mem.Arena, capacity: usize) OpenResult {
 }
 fn slot_start(queue: *const Queue, descriptor: isize) usize {
   // Fibonacci hashing spreads consecutive descriptors.
-  hashed := #cast(u64, descriptor) * 11400714819323198485
+  hashed := #wrapping(#cast(u64, descriptor) * 11400714819323198485)
   return #cast(usize, hashed >> 32) & (#len(queue.table) - 1)
 }
 // Table slot holding descriptor, or #len(queue.table).

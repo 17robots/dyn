@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Integer arithmetic wraps in every build. --check-overflow opts in, in debug
-and release: the program's own + - * << and negation then panic on overflow,
-std code keeps wrapping and math.wrapping_* never checks."""
+and release: + - * << and negation then panic on overflow in every module,
+std included; #wrapping(...) and math.wrapping_* never check, and std's
+hashes (the map below) wrap inside #wrapping."""
 import os
 from pathlib import Path
 import platform
@@ -31,7 +32,7 @@ fn main() {
   map.insert(&m, 18446744073709551615, 7)
   io.println("std {}", map.get(&m, 18446744073709551615).*)
   high: u32 = 0x80000000
-  io.println("wrapping {}", math.wrapping_mul(high, 2))
+  io.println("wrapping {} {}", math.wrapping_mul(high, 2), #wrapping(high * 2 + 1))
   mode := #len(program.args)
   if mode == 2 {
     small: u8 = 200
@@ -60,7 +61,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-check-overflow-') as directory:
         assert built.returncode == 0, built.stderr
         for arguments, line in (([], 8), (['a'], 23), (['a', 'b'], 28), (['a', 'b', 'c'], 32)):
             result = subprocess.run([str(output), *arguments], capture_output=True, text=True, timeout=30)
-            assert result.stdout.startswith('std 7\nwrapping 0\n'), result
+            assert result.stdout.startswith('std 7\nwrapping 0 1\n'), result
             if checked:
                 assert result.returncode == 101, result
                 assert f'runtime check failed (overflow.ok)' in result.stderr, result.stderr
@@ -68,4 +69,4 @@ with tempfile.TemporaryDirectory(prefix='dyn-check-overflow-') as directory:
                 assert '--release' in flags or f'main.dyn:{line}\n' in result.stderr, (line, result.stderr)
             else:
                 assert result.returncode == 0 and result.stdout.endswith('bump -2147483648\n'), result
-print('PASS overflow checks: wrap by default in debug and release; --check-overflow checks own arithmetic in both')
+print('PASS overflow checks: wrap by default; --check-overflow checks every module; #wrapping wraps (debug/release)')

@@ -101,7 +101,7 @@ pub fn array_end(target: *Writer) {
 
 // Nonzero when a byte of word is zero.
 fn zero_byte(word: u64) u64 {
-  return (word - 0x0101010101010101) & ~word & 0x8080808080808080
+  return #wrapping(word - 0x0101010101010101) & ~word & 0x8080808080808080
 }
 
 // How many bytes start text before the first that needs escaping (below
@@ -110,7 +110,7 @@ fn clean_prefix(text: []const u8) usize {
   at: usize = 0
   for #len(text) - at >= 8 {
     word := binary.load_u64_le(text[at..at + 8])
-    below := (word - 0x2020202020202020) & ~word & 0x8080808080808080
+    below := #wrapping(word - 0x2020202020202020) & ~word & 0x8080808080808080
     if (below | zero_byte(word ^ 0x2222222222222222) | zero_byte(word ^ 0x5c5c5c5c5c5c5c5c)) != 0 { break }
     at += 8
   }

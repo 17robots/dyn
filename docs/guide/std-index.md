@@ -1292,7 +1292,7 @@ module's full declarations and comments.
 - `fn add_overflows(a, b: $T) bool`: Whether a + b, a - b or a * b leaves T's range.
 - `fn sub_overflows(a, b: $T) bool`
 - `fn mul_overflows(a, b: $T) bool`
-- `fn wrapping_add(a, b: $T) T`: Arithmetic that wraps on overflow, as + - * do by default.
+- `fn wrapping_add(a, b: $T) T`: Arithmetic that wraps on overflow, even under --check-overflow, for code that means to wrap, such as hashes.
 - `fn wrapping_sub(a, b: $T) T`
 - `fn wrapping_mul(a, b: $T) T`
 - `fn saturating_add(a, b: $T) T`: Arithmetic that stops at T's limits instead of overflowing.

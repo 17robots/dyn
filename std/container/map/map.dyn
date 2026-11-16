@@ -116,9 +116,9 @@ pub fn text_equal(left: []const u8, right: []const u8) bool {
 pub fn integer_hash(seed: u64, key: u64) u64 {
   mixed := key ^ seed
   mixed = mixed ^ (mixed >> 33)
-  mixed = mixed * 0xff51afd7ed558ccd
+  mixed = #wrapping(mixed * 0xff51afd7ed558ccd)
   mixed = mixed ^ (mixed >> 33)
-  mixed = mixed * 0xc4ceb9fe1a85ec53
+  mixed = #wrapping(mixed * 0xc4ceb9fe1a85ec53)
   return mixed ^ (mixed >> 33)
 }
 
@@ -242,7 +242,8 @@ pub fn remove(m: *Map($K, $V), key: $K) bool {
   next := (at + 1) & mask
   for m.tags[next] != 0 {
     home := #cast(usize, m.hash_key(m.seed, m.entries[next].key)) & mask
-    if ((next - home) & mask) >= ((next - at) & mask) {
+    // Probe distances are circular: they wrap.
+    if (#wrapping(next - home) & mask) >= (#wrapping(next - at) & mask) {
       m.tags[at] = m.tags[next]
       m.entries[at] = m.entries[next]
       at = next

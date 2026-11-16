@@ -35,6 +35,7 @@ typedef enum {
   EXP_POINTER_BINDING = 16, EXP_INCLUSIVE = 32, EXP_ITERATION = 64,
   EXP_PRIMARY = 128, EXP_BITCAST = 256, EXP_WILDCARD = 512,
   EXP_INSTANCE = 2048, /* #instance(f, T): names a generic instance */
+  EXP_WRAPPING = 8192, /* #wrapping(expr): a group whose arithmetic wraps */
   EXP_INDEXED = 4096 /* for x, i in xs: the condition holds an index name */
 } ExpFlag;
 typedef enum {
