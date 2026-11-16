@@ -128,7 +128,7 @@ fn main() {
   at: usize = narrow
   check(widened + #cast(u64, at) == 12, "size widening")
   // Generic instances as function values, and default map keys.
-  twice := #instance(doubled, u32)
+  twice: fn(u32) u32 = doubled
   check(twice(21) == 42, "instance value")
   arena2 := mem.arena_alloc(0)
   by_errno: map.Map(Errno, u32)

@@ -42,12 +42,12 @@ pub struct Map(K, V) {
 // and compare by value; any other key type is a compile error, so give
 // init_with its hash and equality.
 pub fn init(m: *Map($K, $V), arena: *mem.Arena) {
-  init_seeded_with(m, arena, 0x243f6a8885a308d3, #instance(default_hash, K), #instance(default_equal, K))
+  init_seeded_with(m, arena, 0x243f6a8885a308d3, default_hash, default_equal)
 }
 
 // init with a chosen seed, for keys an attacker may choose.
 pub fn init_seeded(m: *Map($K, $V), arena: *mem.Arena, seed: u64) {
-  init_seeded_with(m, arena, seed, #instance(default_hash, K), #instance(default_equal, K))
+  init_seeded_with(m, arena, seed, default_hash, default_equal)
 }
 
 // init with the key's hash and equality: fn(seed, key) u64 and fn(a, b) bool.

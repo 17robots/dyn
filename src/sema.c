@@ -1761,6 +1761,39 @@ static uint64_t instance_hash(DynAstProgram *a, const DynSource *s,
 /* Infer type arguments, find or create the instance, and check the call
    against the instance's concrete signature. Type arguments are removed from
    the call, so later passes see an ordinary direct call. */
+/* The instance of a generic function for args, as a function value. */
+static DynType generic_function_value(Sema *sema, DynAstProgram *a, DynExprId id, uint32_t generic,
+                                      const DynType *args, DynSpan call, const DynSource *s, unsigned *errors) {
+  DynAstGeneric g = a->generics[generic];
+  uint32_t function = UINT32_MAX;
+  for (size_t i = 0; i < a->instance_count && function == UINT32_MAX; ++i)
+    if (a->instances[i].generic == generic &&
+        !memcmp(a->instances[i].args, args, g.type_param_count * sizeof(*args)))
+      function = a->instances[i].function;
+  if (function == UINT32_MAX) {
+    uint32_t depth = 0;
+    if (sema->current_function != UINT32_MAX &&
+        a->functions[sema->current_function].is_instance)
+      depth = a->instances[a->functions[sema->current_function].instance].depth + 1;
+    if (depth >= DYN_MAX_INSTANCE_DEPTH) {
+      error_span(call, s, errors, "generic instances nest too deeply (limit 32)");
+      return a->expressions[id].type = DYN_TYPE_ERROR;
+    }
+    SEMA_SERIAL_ONLY(return a->expressions[id].type = DYN_TYPE_ERROR);
+    function = dyn_ast_instantiate(a, s, generic, args, depth, call,
+                                   instance_hash(a, s, args, g.type_param_count));
+    if (function == UINT32_MAX) {
+      error_out_of_memory(call, s, errors);
+      return a->expressions[id].type = DYN_TYPE_ERROR;
+    }
+  }
+  DynAstExpr *e = &a->expressions[id];
+  e->kind = DYN_EXPR_FUNCTION;
+  e->integer = function;
+  e->left = DYN_NO_EXPR;
+  e->item_count = 0;
+  return e->type = reported_type(function_pointer_type(a, function), call, s, errors);
+}
 static DynType check_generic_call(Sema *sema, DynAstProgram *a, DynExprId id,
                                   uint32_t generic, const DynSource *s,
                                   unsigned *errors) {
@@ -1768,8 +1801,8 @@ static DynType check_generic_call(Sema *sema, DynAstProgram *a, DynExprId id,
   DynSpan call = a->expressions[id].span;
   uint32_t item_start = a->expressions[id].item_start,
            item_count = a->expressions[id].item_count;
-  /* #instance(f, T, ...) names an instance as a function value: one type per
-     type parameter, in the order the parameters are declared. */
+  /* #instance(f, T, ...) names an instance by its types, for a function
+     whose types its signature does not show (T: type parameters). */
   if (a->expressions[id].instance) {
     DynType args[DYN_MAX_TYPE_PARAMS] = {0};
     bool types = item_count == g.type_param_count;
@@ -1793,39 +1826,12 @@ static DynType check_generic_call(Sema *sema, DynAstProgram *a, DynExprId id,
       error_span(call, s, errors, message);
       return a->expressions[id].type = DYN_TYPE_ERROR;
     }
-    uint32_t function = UINT32_MAX;
-    for (size_t i = 0; i < a->instance_count && function == UINT32_MAX; ++i)
-      if (a->instances[i].generic == generic &&
-          !memcmp(a->instances[i].args, args, g.type_param_count * sizeof(*args)))
-        function = a->instances[i].function;
-    if (function == UINT32_MAX) {
-      uint32_t depth = 0;
-      if (sema->current_function != UINT32_MAX &&
-          a->functions[sema->current_function].is_instance)
-        depth = a->instances[a->functions[sema->current_function].instance].depth + 1;
-      if (depth >= DYN_MAX_INSTANCE_DEPTH) {
-        error_span(call, s, errors, "generic instances nest too deeply (limit 32)");
-        return a->expressions[id].type = DYN_TYPE_ERROR;
-      }
-      SEMA_SERIAL_ONLY(return a->expressions[id].type = DYN_TYPE_ERROR);
-      function = dyn_ast_instantiate(a, s, generic, args, depth, call,
-                                     instance_hash(a, s, args, g.type_param_count));
-      if (function == UINT32_MAX) {
-        error_out_of_memory(call, s, errors);
-        return a->expressions[id].type = DYN_TYPE_ERROR;
-      }
-    }
-    DynAstExpr *e = &a->expressions[id];
-    e->kind = DYN_EXPR_FUNCTION;
-    e->integer = function;
-    e->left = DYN_NO_EXPR;
-    e->item_count = 0;
-    return e->type = reported_type(function_pointer_type(a, function), call, s, errors);
+    return generic_function_value(sema, a, id, generic, args, call, s, errors);
   }
   if (item_count != g.param_count) {
     error_span(call, s, errors,
                item_count == g.type_param_count
-                   ? "function argument count mismatch; to name an instance as a value, write #instance(f, T)"
+                   ? "function argument count mismatch; to use an instance as a value, give it a function type, as in f: fn(u32) u32 = name"
                    : "function argument count mismatch");
     return a->expressions[id].type = DYN_TYPE_ERROR;
   }
@@ -1861,7 +1867,7 @@ static DynType check_generic_call(Sema *sema, DynAstProgram *a, DynExprId id,
         error_span(a->expressions[arg].span, s, errors,
                    p.is_type ? "expected a type argument"
                    : item_count == g.type_param_count
-                       ? "a type is not a value; to name an instance as a value, write #instance(f, T)"
+                       ? "a type is not a value; to use an instance as a value, give it a function type, as in f: fn(u32) u32 = name"
                        : "a type is not a value");
         failed = true;
         continue;
@@ -1873,7 +1879,15 @@ static DynType check_generic_call(Sema *sema, DynAstProgram *a, DynExprId id,
         }
         continue;
       }
-      if ((pass == 0) == untyped_literal(a, arg))
+      /* Untyped literals, and generic functions passed as values, take
+         their types from the other arguments, so they bind second. */
+      bool deferred = untyped_literal(a, arg);
+      if (!deferred && a->expressions[arg].kind == DYN_EXPR_NAME &&
+          find_local(sema, a, a->expressions[arg].span, s) == UINT32_MAX) {
+        uint32_t named = sema_find_function(sema, a, a->expressions[arg].span, s);
+        deferred = named != UINT32_MAX && a->functions[named].is_generic;
+      }
+      if ((pass == 0) == deferred)
         continue;
       DynType expected = DYN_TYPE_INFER;
       if (pass == 1) {
@@ -2746,9 +2760,31 @@ static DynType check_expr_node(Sema *sema, DynAstProgram *a, DynExprId id,
     if (fn != UINT32_MAX) {
       /* A function named without a call is its code pointer, spelled fn(...) R. */
       if (a->functions[fn].is_generic) {
-        error_span(a->expressions[id].span, s, errors,
-                   "a generic function can only be called, not used as a value");
-        return a->expressions[id].type = DYN_TYPE_ERROR;
+        /* A generic function used where a function type is expected takes
+           its type arguments from that type: f: fn(u32) u32 = doubled. */
+        uint32_t generic = a->functions[fn].generic;
+        DynAstGeneric g = a->generics[generic];
+        /* A function value's type is a pointer to its signature. */
+        DynAstPointer *pointer = pointer_info(a, expected);
+        DynAstFnType *want = fn_type_info(a, pointer ? pointer->pointee : expected);
+        DynType args[DYN_MAX_TYPE_PARAMS];
+        for (uint32_t k = 0; k < DYN_MAX_TYPE_PARAMS; ++k) args[k] = DYN_TYPE_INFER;
+        bool bound = want && !want->variadic && want->param_count == g.param_count;
+        uint32_t conflict = 0;
+        for (uint32_t i = 0; bound && i < g.param_count; ++i) {
+          DynAstGenericParam p = a->generic_params[g.param_start + i];
+          bound = !p.is_type && bind_pattern(a, p.pattern, a->fn_type_params[want->param_start + i], args, &conflict);
+        }
+        if (bound) bound = bind_pattern(a, g.return_pattern, want->return_type, args, &conflict);
+        for (uint32_t k = 0; bound && k < g.type_param_count; ++k)
+          bound = args[k] != DYN_TYPE_INFER && args[k] != DYN_TYPE_ERROR;
+        if (!bound) {
+          error_span(a->expressions[id].span, s, errors,
+                     want ? "this generic function does not match the expected function type"
+                          : "a generic function used as a value needs a function type to take its types from, as in f: fn(u32) u32 = name");
+          return a->expressions[id].type = DYN_TYPE_ERROR;
+        }
+        return generic_function_value(sema, a, id, generic, args, a->expressions[id].span, s, errors);
       }
       if (a->functions[fn].variadic && !a->functions[fn].foreign) {
         error_span(a->expressions[id].span, s, errors,

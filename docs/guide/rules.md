@@ -17,7 +17,7 @@ behavior (std, vendor) is not language and is documented with each module.
    struct's field defaults. `#init(p)` makes `*p` that same fresh value.
 5. **Types are written in full.** `Enum.Variant` always names its enum, a struct literal always
    names its type, there are no local type aliases, and generic types are inferred only from
-   call arguments.
+   call arguments, or from the function type a generic function is used as.
 
 ## Values and conversions
 

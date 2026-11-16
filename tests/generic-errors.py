@@ -61,7 +61,7 @@ INSTANCE = '''fn mix(seed: u64, key: $K) u64 {
 }
 
 fn main() {
-  hash := #instance(mix, u32)
+  hash: fn(u64, u32) u64 = mix
   if hash(1, 2) != 3 {
     #panic("instance value")
   }

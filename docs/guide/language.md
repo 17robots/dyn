@@ -122,14 +122,15 @@ fn max(a: $T, b: $T) T {
 one instance, and the compiler checks each instance's body as ordinary code: a body that is invalid
 for a type is an error at the call that created the instance. There are no constraints, traits,
 interfaces, operator overloading or compile-time execution, and types are inferred only from
-arguments, never from the expected result. The
+arguments, never from the expected result, with one exception below. The
 [generics design](../internals/generics-design.md) records the rules and what is deliberately left
 out.
 
-`#instance(f, T, ...)` names an instance as a function value, with one type per type parameter
-in the order they are declared: `hash := #instance(key_hash, u32)` has type `fn(u64, u32) u64`
-when `key_hash` is `fn(seed: u64, key: $K) u64`, and `#instance(mem.push, Node)` has type
-`fn(*Arena) *Node`. A call `f(...)` always runs the function.
+A generic function used as a value, where a function type is expected, takes its type arguments
+from that type: with `key_hash` declared as `fn(seed: u64, key: $K) u64`,
+`hash: fn(u64, u32) u64 = key_hash` is the `u32` instance, and passing `key_hash` to a parameter of
+type `fn(u64, u32) u64` does the same. A function with a `T: type` parameter shows no `T` in its
+signature, so name its instance with `#instance(f, T)`. A call `f(...)` always runs the function.
 
 `#assert` also works in a function body, where it is checked when the body is: in a generic
 function, once per instance. With `#typeof`, whose scalar fields (`kind`, `size`, `id`,

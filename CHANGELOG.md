@@ -36,6 +36,10 @@ Language (2026-11-16 cleanup; see `docs/guide/rules.md`):
 - `for i in #step(first..last, n)` visits every n-th value;
   `#reverse(#step(...))` goes from the last.
 - A generic `$T` bound to `u32` by one argument and `u64` by another is `u64`.
+- A generic function used where a function type is expected takes its types
+  from it: `hash: fn(u64, u32) u64 = key_hash`, or `key_hash` passed to such a
+  parameter. `#instance(f, T)` remains only for functions whose `T: type`
+  parameters the signature does not show.
 
 Standard library:
 
