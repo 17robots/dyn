@@ -1887,7 +1887,19 @@ static DynType check_generic_call(Sema *sema, DynAstProgram *a, DynExprId id,
       uint32_t conflict = 0;
       DynType before[DYN_MAX_TYPE_PARAMS];
       memcpy(before, args, sizeof(before));
-      if (!bind_pattern(a, p.pattern, values[i], args, &conflict)) {
+      bool bound_now = bind_pattern(a, p.pattern, values[i], args, &conflict);
+      if (!bound_now && p.pattern == DYN_TYPE_PARAM_BASE + conflict && numeric(sema, args[conflict]) &&
+          numeric(sema, a->bind_conflict)) {
+        /* Numbers join as operands do: a bare $T bound to u32 and to u64 is
+           u64, and the narrower argument widens at the call. */
+        if (lossless(sema, args[conflict], a->bind_conflict)) {
+          args[conflict] = a->bind_conflict;
+          binder[conflict] = arg;
+          bound_now = true;
+        } else if (lossless(sema, a->bind_conflict, args[conflict]))
+          bound_now = true;
+      }
+      if (!bound_now) {
         char first[128], second[128], message[640];
         dyn_type_format(a, args[conflict], s, first, sizeof(first));
         dyn_type_format(a, a->bind_conflict, s, second, sizeof(second));
@@ -2042,7 +2054,7 @@ static bool vet_fixed_type(Sema *sema, DynAstProgram *a, DynExprId id, const Dyn
    type: the operator widens the operand itself. Not when both sides are
    casts, since dropping both would narrow the arithmetic. */
 static void vet_operand_cast(Sema *sema, DynAstProgram *a, const DynSource *s, DynExprId id,
-                             DynExprId other) {
+                             DynExprId other, bool target_typed) {
   if (!s->context.vet || id == DYN_NO_EXPR || other == DYN_NO_EXPR) return;
   if (sema->current_function != UINT32_MAX && a->functions[sema->current_function].is_instance)
     return;
@@ -2050,9 +2062,12 @@ static void vet_operand_cast(Sema *sema, DynAstProgram *a, const DynSource *s, D
   if (e->kind != DYN_EXPR_CAST || e->left == DYN_NO_EXPR || !vet_cast_builtin(s, e->span)) return;
   DynType from = a->expressions[e->left].type;
   if (from == DYN_TYPE_ERROR || e->type == DYN_TYPE_ERROR) return;
+  /* Under target-typed arithmetic the operator already works in the cast's
+     type, so a lossless widening cast beside a typed operand adds nothing. */
   bool redundant = from == e->type ||
       (a->expressions[other].kind != DYN_EXPR_CAST && a->expressions[other].type == e->type &&
-       lossless(sema, from, e->type) && vet_fixed_type(sema, a, other, s, 0));
+       lossless(sema, from, e->type) && vet_fixed_type(sema, a, other, s, 0)) ||
+      (target_typed && widens_to_target(sema, from, e->type) && vet_fixed_type(sema, a, other, s, 0));
   vet_cast_report(s, e->span, redundant);
 }
 static DynExprId copy_untyped(DynAstProgram *a, DynExprId id) {
@@ -3299,8 +3314,13 @@ static DynType check_expr_node(Sema *sema, DynAstProgram *a, DynExprId id,
     bool comparison = op >= DYN_OP_EQ && op <= DYN_OP_GE;
     literal_right = check_expr(sema, a, a->expressions[id].right, s, errors,
                                comparison ? DYN_TYPE_INFER : expected);
+    /* Under target-typed arithmetic the literal takes the target's type. */
+    bool arithmetic = op == DYN_OP_ADD || op == DYN_OP_SUB || op == DYN_OP_MUL || op == DYN_OP_DIV ||
+                      op == DYN_OP_REM || op == DYN_OP_BIT_AND || op == DYN_OP_BIT_OR || op == DYN_OP_BIT_XOR;
     left = check_expr(sema, a, a->expressions[id].left, s, errors,
-                      literal_right == DYN_TYPE_ERROR ? expected : literal_right);
+                      literal_right == DYN_TYPE_ERROR ? expected
+                      : arithmetic && widens_to_target(sema, literal_right, expected) ? expected
+                                                                                      : literal_right);
   } else
     left = check_expr(sema, a, a->expressions[id].left, s, errors, expected);
   if (a->expressions[id].kind == DYN_EXPR_UNARY) {
@@ -3346,9 +3366,14 @@ static DynType check_expr_node(Sema *sema, DynAstProgram *a, DynExprId id,
     }
     return a->expressions[id].type = left;
   }
+  bool target_arithmetic = a->expressions[id].kind == DYN_EXPR_BINARY &&
+      (op == DYN_OP_ADD || op == DYN_OP_SUB || op == DYN_OP_MUL || op == DYN_OP_DIV ||
+       op == DYN_OP_REM || op == DYN_OP_BIT_AND || op == DYN_OP_BIT_OR || op == DYN_OP_BIT_XOR) &&
+      widens_to_target(sema, left, expected);
   DynType right = literal_left
                       ? literal_right
-                      : check_expr(sema, a, a->expressions[id].right, s, errors, left);
+                      : check_expr(sema, a, a->expressions[id].right, s, errors,
+                                   target_arithmetic ? expected : left);
   if (left == DYN_TYPE_ERROR || right == DYN_TYPE_ERROR)
     return a->expressions[id].type = DYN_TYPE_ERROR;
   if (left != right && dyn_type_is_pointer(left) &&
@@ -3404,8 +3429,11 @@ static DynType check_expr_node(Sema *sema, DynAstProgram *a, DynExprId id,
   }
   if (numeric(sema, left) && a->expressions[id].op != DYN_OP_LOGICAL_AND &&
       a->expressions[id].op != DYN_OP_LOGICAL_OR) {
-    vet_operand_cast(sema, a, s, a->expressions[id].left, a->expressions[id].right);
-    vet_operand_cast(sema, a, s, a->expressions[id].right, a->expressions[id].left);
+    bool target_typed = expected == left &&
+        (op == DYN_OP_ADD || op == DYN_OP_SUB || op == DYN_OP_MUL || op == DYN_OP_DIV ||
+         op == DYN_OP_REM || op == DYN_OP_BIT_AND || op == DYN_OP_BIT_OR || op == DYN_OP_BIT_XOR);
+    vet_operand_cast(sema, a, s, a->expressions[id].left, a->expressions[id].right, target_typed);
+    vet_operand_cast(sema, a, s, a->expressions[id].right, a->expressions[id].left, target_typed);
   }
   if (a->expressions[id].op == DYN_OP_LOGICAL_AND || a->expressions[id].op == DYN_OP_LOGICAL_OR) {
     if (left != DYN_TYPE_BOOL)
@@ -3982,6 +4010,171 @@ static bool returns_local_borrow(Sema *sema, DynAstProgram *a, DynExprId id) {
 
 #include "lifetime.h"
 
+/* Expression builders for loop rewrites: typed nodes that wrap and are not
+   checked again. */
+static DynExprId step_name(DynAstProgram *a, uint32_t local, DynType type, DynSpan span) {
+  return sema_push_expr(a, (DynAstExpr){.kind = DYN_EXPR_NAME, .type = type, .span = span,
+                                        .left = DYN_NO_EXPR, .right = DYN_NO_EXPR, .integer = local});
+}
+static DynExprId step_op(DynAstProgram *a, DynOperator op, DynType type, DynExprId left, DynExprId right,
+                         DynSpan span) {
+  if (left == DYN_NO_EXPR || (right == DYN_NO_EXPR && op != DYN_OP_BIT_NOT)) return DYN_NO_EXPR;
+  return sema_push_expr(a, (DynAstExpr){.kind = right == DYN_NO_EXPR ? DYN_EXPR_UNARY : DYN_EXPR_BINARY,
+                                        .op = op, .type = type, .left = left, .right = right, .span = span,
+                                        .wrap = true});
+}
+static DynExprId step_cast(DynAstProgram *a, DynExprId value, DynType type, DynSpan span) {
+  if (value == DYN_NO_EXPR) return DYN_NO_EXPR;
+  return sema_push_expr(a, (DynAstExpr){.kind = DYN_EXPR_CAST, .type = type, .integer = type,
+                                        .left = value, .right = DYN_NO_EXPR, .span = span});
+}
+static DynExprId step_constant(DynAstProgram *a, DynType type, uint64_t value, DynSpan span) {
+  return sema_push_expr(a, (DynAstExpr){.kind = DYN_EXPR_INT, .type = type, .integer = value,
+                                        .left = DYN_NO_EXPR, .right = DYN_NO_EXPR, .span = span});
+}
+/* 1 when x - y borrows (x < y as unsigned), 0 otherwise, without a branch:
+   ((~x & y) | (~(x ^ y) & (x - y))) >> (width - 1). */
+static DynExprId step_borrow(DynAstProgram *a, DynType u, unsigned width, DynExprId x1, DynExprId y1,
+                             DynExprId x2, DynExprId y2, DynExprId x3, DynExprId y3, DynSpan span) {
+  DynExprId low = step_op(a, DYN_OP_BIT_AND, u, step_op(a, DYN_OP_BIT_NOT, u, x1, DYN_NO_EXPR, span), y1, span);
+  DynExprId same = step_op(a, DYN_OP_BIT_NOT, u, step_op(a, DYN_OP_BIT_XOR, u, x2, y2, span), DYN_NO_EXPR, span);
+  DynExprId high = step_op(a, DYN_OP_BIT_AND, u, same, step_op(a, DYN_OP_SUB, u, x3, y3, span), span);
+  return step_op(a, DYN_OP_SHR, u, step_op(a, DYN_OP_BIT_OR, u, low, high, span),
+                 step_constant(a, u, width - 1, span), span);
+}
+static DynType unsigned_of(Sema *sema, DynType t) {
+  switch (underlying_type(sema->program, t)) {
+  case DYN_TYPE_I8: return DYN_TYPE_U8;
+  case DYN_TYPE_I16: return DYN_TYPE_U16;
+  case DYN_TYPE_I32: return DYN_TYPE_U32;
+  case DYN_TYPE_I64: return DYN_TYPE_U64;
+  case DYN_TYPE_ISIZE: return DYN_TYPE_USIZE;
+  default: return underlying_type(sema->program, t);
+  }
+}
+static bool step_hoist(Sema *sema, uint32_t local, DynExprId init, uint32_t stmt, DynSpan span,
+                       const DynSource *s, unsigned *errors) {
+  if (sema->hoist_count == sema->hoist_capacity) {
+    size_t c = sema->hoist_capacity ? sema->hoist_capacity * 2 : 8;
+    struct SemaHoist *grown = realloc(sema->hoists, c * sizeof(*grown));
+    if (!grown) { error_out_of_memory(span, s, errors); return false; }
+    sema->hoists = grown;
+    sema->hoist_capacity = c;
+  }
+  sema->hoists[sema->hoist_count++] = (struct SemaHoist){.call = DYN_NO_EXPR, .init = init, .local = local,
+                                                          .stmt = stmt, .local_stmt = UINT32_MAX};
+  return true;
+}
+static uint32_t step_local(Sema *sema, DynAstProgram *a, DynType type, DynSpan name, unsigned depth) {
+  if (!reserve_local(a)) return UINT32_MAX;
+  uint32_t id = (uint32_t)a->local_count;
+  a->locals[a->local_count++] = (DynAstLocal){.name = name, .type = type, .used = true, .depth = depth,
+                                              .owner_function = sema->current_function};
+  return id;
+}
+/* for i in #step(first..last, n) { body } runs as
+     lo := first; hi := last; step := n            (once, in order)
+     for k in start..=end { i := T(U(lo) + k * U(step)); body }
+   where U is T's unsigned type, end = (U(hi) - U(lo) - 1) / U(step) for
+   `..` and (U(hi) - U(lo)) / U(step) for `..=`, and start is 1 with end 0
+   when the range is empty, chosen by a branch-free borrow test. #reverse
+   walks k down. Every operator wraps and none can overflow, so the counter
+   never passes the type's limit. Returns the binding's local in *binding,
+   and leaves st a plain inclusive range over k. */
+static bool sema_step_rewrite(Sema *sema, DynAstProgram *a, DynAstStmt *st, DynType type, const DynSource *s,
+                              unsigned *errors, uint32_t *binding) {
+  SEMA_SERIAL_ONLY(return false);
+  DynSpan span = st->span;
+  if (dyn_type_is_distinct(type)) {
+    error_span(span, s, errors, "#step needs a plain integer range");
+    return false;
+  }
+  DynType step_type = check_expr(sema, a, st->step, s, errors, type);
+  if (step_type == DYN_TYPE_ERROR) return false;
+  if (step_type != type) {
+    char want[128], message[256];
+    type_name_into(a, type, s, want, sizeof(want));
+    snprintf(message, sizeof(message), "#step's step must have the range's type %s", want);
+    error_span(a->expressions[st->step].span, s, errors, message);
+    return false;
+  }
+  ConstantInt constant = constant_int(a, st->step);
+  ConstantUInt constant_unsigned = constant_uint(a, st->step);
+  if ((signed_int(sema, type) && constant.valid && constant.value <= 0) ||
+      (!signed_int(sema, type) && constant_unsigned.valid && constant_unsigned.value == 0)) {
+    error_span(a->expressions[st->step].span, s, errors, "#step needs a positive step");
+    return false;
+  }
+  DynType u = unsigned_of(sema, type);
+  unsigned width = bits(sema, u);
+  uint32_t stmt = (uint32_t)(st - a->statements);
+  unsigned depth = sema->block_depth;
+  uint32_t lo = step_local(sema, a, type, (DynSpan){0}, depth), hi = step_local(sema, a, type, (DynSpan){0}, depth),
+           step = step_local(sema, a, type, (DynSpan){0}, depth);
+  if (lo == UINT32_MAX || hi == UINT32_MAX || step == UINT32_MAX ||
+      !step_hoist(sema, lo, st->target, stmt, span, s, errors) ||
+      !step_hoist(sema, hi, st->expression, stmt, span, s, errors) ||
+      !step_hoist(sema, step, st->step, stmt, span, s, errors)) {
+    error_out_of_memory(span, s, errors);
+    return false;
+  }
+#define STEP_U(local) step_cast(a, step_name(a, local, type, span), u, span)
+  /* Order-preserving unsigned views for the borrow test: flipping the sign
+     bit maps a signed range onto the unsigned one in order. */
+  uint64_t flip = signed_int(sema, type) ? UINT64_C(1) << (width - 1) : 0;
+#define STEP_ORDER(local) step_op(a, DYN_OP_BIT_XOR, u, STEP_U(local), step_constant(a, u, flip, span), span)
+  DynExprId borrow, distance;
+  if (st->for_inclusive) {
+    /* Empty when hi < lo: hi - lo borrows. */
+    borrow = step_borrow(a, u, width, STEP_ORDER(hi), STEP_ORDER(lo), STEP_ORDER(hi), STEP_ORDER(lo),
+                         STEP_ORDER(hi), STEP_ORDER(lo), span);
+    distance = step_op(a, DYN_OP_SUB, u, STEP_U(hi), STEP_U(lo), span);
+  } else {
+    /* Empty unless lo < hi: lo - hi borrows. */
+    DynExprId below = step_borrow(a, u, width, STEP_ORDER(lo), STEP_ORDER(hi), STEP_ORDER(lo), STEP_ORDER(hi),
+                                  STEP_ORDER(lo), STEP_ORDER(hi), span);
+    borrow = step_op(a, DYN_OP_BIT_XOR, u, below, step_constant(a, u, 1, span), span);
+    distance = step_op(a, DYN_OP_SUB, u, step_op(a, DYN_OP_SUB, u, STEP_U(hi), STEP_U(lo), span),
+                       step_constant(a, u, 1, span), span);
+  }
+  /* mask is all ones for a non-empty range and zero for an empty one. */
+  DynExprId mask = step_op(a, DYN_OP_SUB, u, borrow, step_constant(a, u, 1, span), span);
+  DynExprId end = step_op(a, DYN_OP_BIT_AND, u, step_op(a, DYN_OP_DIV, u, distance, STEP_U(step), span), mask, span);
+  /* start: 1 when empty (borrow 1), 0 otherwise; the borrow expression is
+     rebuilt so each node has one parent. */
+  DynExprId start = st->for_inclusive
+                        ? step_borrow(a, u, width, STEP_ORDER(hi), STEP_ORDER(lo), STEP_ORDER(hi), STEP_ORDER(lo),
+                                      STEP_ORDER(hi), STEP_ORDER(lo), span)
+                        : step_op(a, DYN_OP_BIT_XOR, u,
+                                  step_borrow(a, u, width, STEP_ORDER(lo), STEP_ORDER(hi), STEP_ORDER(lo),
+                                              STEP_ORDER(hi), STEP_ORDER(lo), STEP_ORDER(hi), span),
+                                  step_constant(a, u, 1, span), span);
+  uint32_t counter = step_local(sema, a, u, (DynSpan){0}, depth + 1);
+  uint32_t value = step_local(sema, a, type, st->name, depth + 1);
+  DynExprId scaled = counter == UINT32_MAX ? DYN_NO_EXPR
+                                           : step_op(a, DYN_OP_MUL, u, step_name(a, counter, u, span), STEP_U(step), span);
+  DynExprId bound = step_cast(a, step_op(a, DYN_OP_ADD, u, STEP_U(lo), scaled, span), type, span);
+#undef STEP_U
+#undef STEP_ORDER
+  if (start == DYN_NO_EXPR || end == DYN_NO_EXPR || bound == DYN_NO_EXPR || value == UINT32_MAX) {
+    error_out_of_memory(span, s, errors);
+    return false;
+  }
+  a->locals[value].active = true;
+  a->locals[value].loop_variable = true;
+  a->locals[value].used = false;
+  /* The binding is declared at the top of the body, before its first statement. */
+  if (st->body_count && !step_hoist(sema, value, bound, a->children[st->body_start], span, s, errors))
+    return false;
+  st->target = start;
+  st->expression = end;
+  st->for_inclusive = true;
+  st->for_step = false;
+  st->declared_type = u;
+  st->local_id = counter;
+  *binding = value;
+  return true;
+}
 static bool sema_stmt_checked(Sema *sema, DynAstProgram *a, DynAstStmt *st,
                               const DynSource *s, unsigned *errors);
 static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
@@ -4401,6 +4594,20 @@ static bool sema_stmt_checked(Sema *sema, DynAstProgram *a, DynAstStmt *st,
       if (st->for_pointer) {
         error_span(st->span, s, errors,
                    "range for-in binds values; remove the pointer binding");
+        return false;
+      }
+      if (st->for_step) {
+        if (local_name_conflict(sema, a, st->name, s, true)) {
+          error_span(st->name, s, errors, local_name_conflict(sema, a, st->name, s, true));
+          return false;
+        }
+        uint32_t binding;
+        if (!sema_step_rewrite(sema, a, st, type, s, errors, &binding)) return false;
+        bool pushed = push_loop(sema, st, s, errors);
+        (void)sema_block(sema, a, st->body_start, st->body_count, s, errors, true);
+        if (pushed)
+          pop_loop(sema);
+        a->locals[binding].active = false;
         return false;
       }
       if (local_name_conflict(sema, a, st->name, s, true)) {

@@ -24,6 +24,8 @@ typedef enum {
   SRC_CASE, SRC_CASE_ARM, SRC_CASE_PATTERN, SRC_TYPE_PATTERN, SRC_FOR,
   SRC_FOR_CONDITION, SRC_DEFER, SRC_ASSIGNMENT, SRC_ASSERT, SRC_PANIC,
   SRC_RANGE, SRC_QUALIFIER, SRC_REVERSE,
+  /* #step(range, n): child 0 is the range, its next the step. */
+  SRC_STEP,
   /* Recovering parses replace a failed statement or declaration with this leaf. */
   SRC_ERROR
 } ExpSourceKind;

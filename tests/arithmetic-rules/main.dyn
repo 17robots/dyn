@@ -41,6 +41,18 @@ fn main() {
   low: u8 = a % 200
   io.println("rem {}", low)
   bounds()
+  small: u32 = 4000000000
+  large: u64 = 5000000000
+  io.println("generic join {} {}", bigger(small, large), bigger(large, small))
+  byte: u8 = 200
+  sum: usize = byte + 257
+  flipped: usize = 300 + byte
+  io.println("literal target {} {}", sum, flipped)
+}
+
+fn bigger(a, b: $T) T {
+  if a > b { return a }
+  return b
 }
 
 fn bounds() {

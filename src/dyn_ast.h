@@ -301,6 +301,9 @@ typedef struct {
   bool for_index;
   /* `{ ... }` as a statement: an if on literal true that ends when its body does. */
   bool bare_block;
+  /* for i in #step(range, n): step holds n until sema rewrites the loop. */
+  bool for_step;
+  DynExprId step;
   DynSpan index_name;
 } DynAstStmt;
 /* A text case with more string patterns than this dispatches through integer

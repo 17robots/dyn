@@ -13,7 +13,7 @@ CC = shlex.split(os.environ.get('CC', 'cc'))
 PIECES = [b'{', b'}', b'(', b')', b'[', b']', b'.', b'..', b'...', b',', b':', b'=', b'"', b"'",
           b'#', b'$', b'*', b'\n', b' ', b'0x', b'1.', b'/*', b'\\', b'\xff', b'\xe0\x80',
           b'if ', b'for ', b'case ', b'fn ', b'x', b'\x0b', b'\x00', b'..=', b'=>',
-          b'#reverse(', b'#cast(']
+          b'#reverse(', b'#step(', b'#cast(']
 
 corpus = sorted(path for directory in ('std', 'runtime', 'vendor', 'tests')
                 for path in (ROOT / directory).rglob('*.dyn'))

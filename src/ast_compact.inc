@@ -881,6 +881,13 @@ static uint32_t compact_stmt(CompactNode n, const DynSource *s, DynAstProgram *a
             st.for_reverse = true;
             iterable = compact_child(iterable, 0);
           }
+          if (compact_kind(iterable) == SRC_STEP) {
+            st.for_step = true;
+            st.step = compact_expr(compact_child(iterable, 1), s, a, errors);
+            iterable = compact_child(iterable, 0);
+            if (compact_kind(iterable) != SRC_RANGE)
+              compact_diagnostic(c, s, errors, "#step takes a range, as in #step(0..10, 2)");
+          }
           if (!(compact_kind(iterable) != SRC_RANGE)) {
             st.for_range = true;
             st.for_inclusive = compact_flag(iterable, EXP_INCLUSIVE);

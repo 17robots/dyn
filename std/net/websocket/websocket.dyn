@@ -250,7 +250,7 @@ fn ws_put64(output: []u8, at: usize, value: usize) {
   remaining := value
   for i > 0 {
     i -= 1
-    output[at + i] = #cast(u8, (remaining % Ws256))
+    output[at + i] = remaining % Ws256
     remaining /= Ws256
   }
 }

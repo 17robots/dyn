@@ -38,6 +38,7 @@ const SrcPanic: u16 = 1035
 const SrcRange: u16 = 1036
 const SrcQualifier: u16 = 1037
 const SrcReverse: u16 = 1038
+const SrcStep: u16 = 1039
 
 fn src_end(p: *const Parser, id: u32, fallback: u32) u32 {
   if id == None { return fallback }
@@ -252,6 +253,21 @@ fn src_if(p: *Parser) u32 {
   return add_node(p, SrcIf, start, src_end(p, last, start), first)
 }
 
+// #step(first..last, n)
+fn src_step(p: *Parser) u32 {
+  start := p.token.start
+  lex(p)
+  expect(p, "(")
+  range := src_range(p, false)
+  expect(p, ",")
+  step := expression(p, 0)
+  end := p.token.end
+  expect(p, ")")
+  if range == None || step == None || p.tree.failed { return None }
+  p.tree.nodes[range].next = step
+  return add_node(p, SrcStep, start, end, range)
+}
+
 fn src_for(p: *Parser) u32 {
   start := p.token.start
   first := None
@@ -308,10 +324,17 @@ fn src_for(p: *Parser) u32 {
         reverse_start := p.token.start
         lex(p)
         expect(p, "(")
-        value := src_range(p, false)
+        value := None
+        if token_is(p, "#step") {
+          value = src_step(p)
+        } else {
+          value = src_range(p, false)
+        }
         end := p.token.end
         expect(p, ")")
         chain(p, &condition_first, &condition_last, add_node(p, SrcReverse, reverse_start, end, value))
+      } else if token_is(p, "#step") {
+        chain(p, &condition_first, &condition_last, src_step(p))
       } else {
         chain(p, &condition_first, &condition_last, src_range(p, true))
       }

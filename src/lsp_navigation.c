@@ -91,6 +91,8 @@ const char *lsp_builtin_hover(const char *text, size_t line, size_t character) {
                "element count."},
       {"#reverse", "for item in #reverse(range_or_collection)\nVisits a range, "
                    "array, or slice from its last value to its first."},
+      {"#step", "for i in #step(first..last, step)\nVisits every step-th value of a "
+                "range from its first; #reverse(#step(...)) goes from the last."},
       {"#sizeof", "#sizeof(type_or_value) -> usize\nReturns the compile-time "
                   "size in bytes."},
       {"#alignof", "#alignof(type_or_value) -> usize\nReturns the compile-time "

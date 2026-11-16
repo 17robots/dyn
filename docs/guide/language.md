@@ -238,7 +238,12 @@ bindings are rejected. Inclusive ranges may end at the type's maximum without ov
 2, 1, 0 and `#reverse(1..=3)` gives 3, 2, 1. A descending range stays empty with or without
 `#reverse`. `for value in #reverse(values)` and `for *value in #reverse(values)` visit array or
 slice elements from last to first. `#reverse` is valid only as a `for` iterable and never wraps an
-unsigned bound.
+unsigned bound. `for i in #step(first..last, n)` visits `first`, `first + n`, and so on while the value
+is in the range: `#step(0..10, 3)` gives 0, 3, 6, 9 and `#step(0..=10, 5)` gives 0, 5, 10. The step
+has the range's type and must be positive; a constant zero or negative step is an error, and a
+zero step at run time divides by zero. Bounds and step evaluate once, in order, and the counter
+never passes the type's limit, so `#step(250..=255, 2)` on a `u8` stops at 254. `continue` moves
+to the next value. `#reverse(#step(0..10, 3))` visits the same values from the last: 9, 6, 3, 0.
 `break` and `continue` act on the innermost loop; loops have no labels. To leave nested loops, set a
 flag and break again, or move the inner loop into a function and return. Transfers run defers for
 every exited scope.
@@ -294,8 +299,8 @@ Enums remain single-choice values.
 Pointers are thin and zero-initialize to `nil`. `&value` requires assignable storage; `pointer.*`
 dereferences it. Struct fields automatically dereference struct pointers. Dereference checks nil
 and pointee alignment, then panics on failure. Pointers support equality with compatible pointers or `nil`, and ordering with `<`, `<=`, `>` and
-`>=`. `#offset(pointer, count)` moves a pointer by whole elements, and a negative count moves back.
-A pointer from `#offset` has no bounds check; its dereference keeps the nil and alignment checks. Mutable pointers implicitly widen to
+`>=`. There is no pointer arithmetic: `#slice(pointer, count)` makes a slice you vouch for, and
+indexing it is bounds checked against that count. Mutable pointers implicitly widen to
 `*const T`, never back to mutable. Shallow const forbids replacing fields through the const pointer,
 while a mutable pointer stored in such a field still permits mutation of its own pointee:
 
@@ -506,10 +511,10 @@ collections, and ordinary algorithms belong in libraries.
 - Conversion: `#cast(Type, value)` and `#bitcast(Type, value)`.
 - Layout and reflection: `#sizeof`, `#alignof`, `#offsetof`, and `#typeof`.
 - Integer limits: `#max` and `#min`.
-- Representation and pointers: `#len`, `#slice` and `#offset`.
+- Representation and pointers: `#len`, `#slice` and `#init`.
 - Validation and termination: compile-time `#assert` and runtime `#panic`.
 - Build input and OS boundary: `#load` and `#syscall`.
-- Iteration: `#reverse`, valid only in a `for` iterable.
+- Iteration: `#reverse` and `#step`, valid only in a `for` iterable.
 - Floating-point operations the hardware has: `#sqrt`, `#floor`, `#ceil`, `#trunc`, `#round` and `#fma`.
 - Module directives: `#target` and `#link`, documented with platform and FFI rules.
 

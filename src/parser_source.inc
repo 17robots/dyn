@@ -157,6 +157,17 @@ static uint32_t src_if(Parser *p) {
   }
   return src_node(p, SRC_IF, start, src_end(p, last, start), first);
 }
+/* #step(first..last, n) */
+static uint32_t src_step(Parser *p) {
+  uint32_t start = p->token.start; lex(p); expect(p, "(");
+  uint32_t range = src_range(p, false);
+  expect(p, ",");
+  uint32_t step = expression(p, 0), end = p->token.end;
+  expect(p, ")");
+  if (range == NONE || step == NONE || p->tree->error) return NONE;
+  p->tree->nodes[range].next = step;
+  return src_node(p, SRC_STEP, start, end, range);
+}
 static uint32_t src_for(Parser *p) {
   uint32_t start = p->token.start, first = NONE, last = NONE;
   expect(p, "for");
@@ -185,9 +196,10 @@ static uint32_t src_for(Parser *p) {
       if (bound_type != NONE) append(p, &cf, &cl, bound_type);
       if (is(p, "#reverse")) {
         uint32_t reverse_start = p->token.start; lex(p); expect(p, "(");
-        uint32_t value = src_range(p, false), end = p->token.end; expect(p, ")");
+        uint32_t value = is(p, "#step") ? src_step(p) : src_range(p, false), end = p->token.end; expect(p, ")");
         append(p, &cf, &cl, src_node(p, SRC_REVERSE, reverse_start, end, value));
-      } else append(p, &cf, &cl, src_range(p, true));
+      } else if (is(p, "#step")) append(p, &cf, &cl, src_step(p));
+      else append(p, &cf, &cl, src_range(p, true));
     } else {
       if (!src_restore(p, saved, count)) return NONE;
       append(p, &cf, &cl, src_condition(p));
