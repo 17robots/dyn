@@ -6,347 +6,366 @@ enum TypeKind { Invalid, Void, Bool, Integer, Float, Pointer, Array, Slice, Stru
 struct TypeMember { name: []const u8, type_id: u64, value: u64 }
 struct TypeInfo { id: u64, kind: TypeKind, name: []const u8, size: usize, alignment: usize, element_id: u64, length: usize, member_count: usize, parameter_count: usize, result_id: u64, fields: []const TypeMember, variants: []const TypeMember, arguments: []const TypeMember }
 
+// The TypeInfo of every type the program boxes into any, and of the types
+// inside them, sorted by id. The compiler fills it in after checking the
+// program; #typeof(value) on an any looks the value's type up here.
+const dyn_builtin_types: [1]TypeInfo = [TypeInfo{}]
+
+fn dyn_builtin_type_of(dyn_builtin_value: any) TypeInfo {
+  // An any is {type id, pointer}; the id is the boxed type's TypeInfo id.
+  dyn_builtin_id := #cast(*const u64, &dyn_builtin_value).*
+  dyn_builtin_table := dyn_builtin_types[..]
+  dyn_builtin_low: usize = 0
+  dyn_builtin_high := #len(dyn_builtin_table)
+  for dyn_builtin_low < dyn_builtin_high {
+    dyn_builtin_middle := dyn_builtin_low + (dyn_builtin_high - dyn_builtin_low) / 2
+    if dyn_builtin_table[dyn_builtin_middle].id < dyn_builtin_id { dyn_builtin_low = dyn_builtin_middle + 1 } else { dyn_builtin_high = dyn_builtin_middle }
+  }
+  if dyn_builtin_low < #len(dyn_builtin_table) && dyn_builtin_table[dyn_builtin_low].id == dyn_builtin_id { return dyn_builtin_table[dyn_builtin_low] }
+  return TypeInfo{}
+}
+
 // Math builtins. #sqrt(x), #floor(x), #ceil(x), #trunc(x), #round(x) and
 // #fma(x, y, z) call these. Where the target has the instruction, the code
 // generator emits it instead of the call; these bodies run everywhere else.
 // Arithmetic assumes round-to-nearest, ties-to-even.
 
-fn dyn_builtin_trunc(x: f64) f64 {
-  bits := #bitcast(u64, x)
-  exponent := #cast(i64, (bits >> 52) & 0x7ff) - 1023
-  if exponent >= 52 { return x }
-  if exponent < 0 { return #bitcast(f64, bits & 0x8000000000000000) }
-  mask := (#cast(u64, 1) << #cast(u64, 52 - exponent)) - 1
-  return #bitcast(f64, bits & ~mask)
+fn dyn_builtin_trunc(dyn_builtin_x: f64) f64 {
+  dyn_builtin_bits := #bitcast(u64, dyn_builtin_x)
+  dyn_builtin_exponent := #cast(i64, (dyn_builtin_bits >> 52) & 0x7ff) - 1023
+  if dyn_builtin_exponent >= 52 { return dyn_builtin_x }
+  if dyn_builtin_exponent < 0 { return #bitcast(f64, dyn_builtin_bits & 0x8000000000000000) }
+  dyn_builtin_mask := (#cast(u64, 1) << #cast(u64, 52 - dyn_builtin_exponent)) - 1
+  return #bitcast(f64, dyn_builtin_bits & ~dyn_builtin_mask)
 }
 
-fn dyn_builtin_floor(x: f64) f64 {
-  t := dyn_builtin_trunc(x)
-  if t > x { return t - 1.0 }
-  return t
+fn dyn_builtin_floor(dyn_builtin_x: f64) f64 {
+  dyn_builtin_t := dyn_builtin_trunc(dyn_builtin_x)
+  if dyn_builtin_t > dyn_builtin_x { return dyn_builtin_t - 1.0 }
+  return dyn_builtin_t
 }
 
-fn dyn_builtin_ceil(x: f64) f64 {
-  t := dyn_builtin_trunc(x)
-  if t < x { return t + 1.0 }
-  return t
+fn dyn_builtin_ceil(dyn_builtin_x: f64) f64 {
+  dyn_builtin_t := dyn_builtin_trunc(dyn_builtin_x)
+  if dyn_builtin_t < dyn_builtin_x { return dyn_builtin_t + 1.0 }
+  return dyn_builtin_t
 }
 
 // Rounds half away from zero.
-fn dyn_builtin_round(x: f64) f64 {
-  t := dyn_builtin_trunc(x)
-  difference := x - t
-  if difference >= 0.5 { return t + 1.0 }
-  if difference <= -0.5 { return t - 1.0 }
-  return t
+fn dyn_builtin_round(dyn_builtin_x: f64) f64 {
+  dyn_builtin_t := dyn_builtin_trunc(dyn_builtin_x)
+  dyn_builtin_difference := dyn_builtin_x - dyn_builtin_t
+  if dyn_builtin_difference >= 0.5 { return dyn_builtin_t + 1.0 }
+  if dyn_builtin_difference <= -0.5 { return dyn_builtin_t - 1.0 }
+  return dyn_builtin_t
 }
 
 // Bit-by-bit square root, adapted from fdlibm e_sqrt; nearest-even rounding.
-fn dyn_builtin_sqrt(x: f64) f64 {
-  sign: u32 = 0x80000000
-  ix0 := #cast(u32, #bitcast(u64, x) >> 32)
-  ix1 := #cast(u32, #bitcast(u64, x))
-  if (ix0 & 0x7ff00000) == 0x7ff00000 { return x * x + x }
-  if ((ix0 & ~sign) | ix1) == 0 { return x }
-  if (ix0 & sign) != 0 { return #bitcast(f64, #cast(u64, 0x7ff8000000000000)) }
-  m := #cast(i32, ix0 >> 20)
-  if m == 0 {
-    for ix0 == 0 {
-      m -= 21
-      ix0 |= ix1 >> 11
-      ix1 = ix1 << 21
+fn dyn_builtin_sqrt(dyn_builtin_x: f64) f64 {
+  dyn_builtin_sign: u32 = 0x80000000
+  dyn_builtin_ix0 := #cast(u32, #bitcast(u64, dyn_builtin_x) >> 32)
+  dyn_builtin_ix1 := #cast(u32, #bitcast(u64, dyn_builtin_x))
+  if (dyn_builtin_ix0 & 0x7ff00000) == 0x7ff00000 { return dyn_builtin_x * dyn_builtin_x + dyn_builtin_x }
+  if ((dyn_builtin_ix0 & ~dyn_builtin_sign) | dyn_builtin_ix1) == 0 { return dyn_builtin_x }
+  if (dyn_builtin_ix0 & dyn_builtin_sign) != 0 { return #bitcast(f64, #cast(u64, 0x7ff8000000000000)) }
+  dyn_builtin_m := #cast(i32, dyn_builtin_ix0 >> 20)
+  if dyn_builtin_m == 0 {
+    for dyn_builtin_ix0 == 0 {
+      dyn_builtin_m -= 21
+      dyn_builtin_ix0 |= dyn_builtin_ix1 >> 11
+      dyn_builtin_ix1 = dyn_builtin_ix1 << 21
     }
-    i: i32 = 0
-    for (ix0 & 0x00100000) == 0 {
-      ix0 = ix0 << 1
-      i += 1
+    dyn_builtin_i: i32 = 0
+    for (dyn_builtin_ix0 & 0x00100000) == 0 {
+      dyn_builtin_ix0 = dyn_builtin_ix0 << 1
+      dyn_builtin_i += 1
     }
-    m -= i - 1
-    if i > 0 {
-      ix0 |= ix1 >> #cast(u32, 32 - i)
-      ix1 = ix1 << #cast(u32, i)
+    dyn_builtin_m -= dyn_builtin_i - 1
+    if dyn_builtin_i > 0 {
+      dyn_builtin_ix0 |= dyn_builtin_ix1 >> #cast(u32, 32 - dyn_builtin_i)
+      dyn_builtin_ix1 = dyn_builtin_ix1 << #cast(u32, dyn_builtin_i)
     }
   }
-  m -= 1023
-  ix0 = (ix0 & 0x000fffff) | 0x00100000
-  if (m & 1) != 0 {
-    ix0 = ix0 + ix0 + ((ix1 & sign) >> 31)
-    ix1 = ix1 + ix1
+  dyn_builtin_m -= 1023
+  dyn_builtin_ix0 = (dyn_builtin_ix0 & 0x000fffff) | 0x00100000
+  if (dyn_builtin_m & 1) != 0 {
+    dyn_builtin_ix0 = dyn_builtin_ix0 + dyn_builtin_ix0 + ((dyn_builtin_ix1 & dyn_builtin_sign) >> 31)
+    dyn_builtin_ix1 = dyn_builtin_ix1 + dyn_builtin_ix1
   }
-  m >>= 1
-  ix0 = ix0 + ix0 + ((ix1 & sign) >> 31)
-  ix1 = ix1 + ix1
-  q: u32 = 0
-  q1: u32 = 0
-  s0: u32 = 0
-  s1: u32 = 0
-  r: u32 = 0x00200000
-  for r != 0 {
-    t := s0 + r
-    if t <= ix0 {
-      s0 = t + r
-      ix0 -= t
-      q += r
+  dyn_builtin_m >>= 1
+  dyn_builtin_ix0 = dyn_builtin_ix0 + dyn_builtin_ix0 + ((dyn_builtin_ix1 & dyn_builtin_sign) >> 31)
+  dyn_builtin_ix1 = dyn_builtin_ix1 + dyn_builtin_ix1
+  dyn_builtin_q: u32 = 0
+  dyn_builtin_q1: u32 = 0
+  dyn_builtin_s0: u32 = 0
+  dyn_builtin_s1: u32 = 0
+  dyn_builtin_r: u32 = 0x00200000
+  for dyn_builtin_r != 0 {
+    dyn_builtin_t := dyn_builtin_s0 + dyn_builtin_r
+    if dyn_builtin_t <= dyn_builtin_ix0 {
+      dyn_builtin_s0 = dyn_builtin_t + dyn_builtin_r
+      dyn_builtin_ix0 -= dyn_builtin_t
+      dyn_builtin_q += dyn_builtin_r
     }
-    ix0 = ix0 + ix0 + ((ix1 & sign) >> 31)
-    ix1 = ix1 + ix1
-    r >>= 1
+    dyn_builtin_ix0 = dyn_builtin_ix0 + dyn_builtin_ix0 + ((dyn_builtin_ix1 & dyn_builtin_sign) >> 31)
+    dyn_builtin_ix1 = dyn_builtin_ix1 + dyn_builtin_ix1
+    dyn_builtin_r >>= 1
   }
-  r = sign
-  for r != 0 {
-    t1 := s1 + r
-    t := s0
-    if t < ix0 || (t == ix0 && t1 <= ix1) {
-      s1 = t1 + r
-      if (t1 & sign) == sign && (s1 & sign) == 0 { s0 += 1 }
-      ix0 -= t
-      if ix1 < t1 { ix0 -= 1 }
-      ix1 = ix1 - t1
-      q1 = q1 + r
+  dyn_builtin_r = dyn_builtin_sign
+  for dyn_builtin_r != 0 {
+    dyn_builtin_t1 := dyn_builtin_s1 + dyn_builtin_r
+    dyn_builtin_t := dyn_builtin_s0
+    if dyn_builtin_t < dyn_builtin_ix0 || (dyn_builtin_t == dyn_builtin_ix0 && dyn_builtin_t1 <= dyn_builtin_ix1) {
+      dyn_builtin_s1 = dyn_builtin_t1 + dyn_builtin_r
+      if (dyn_builtin_t1 & dyn_builtin_sign) == dyn_builtin_sign && (dyn_builtin_s1 & dyn_builtin_sign) == 0 { dyn_builtin_s0 += 1 }
+      dyn_builtin_ix0 -= dyn_builtin_t
+      if dyn_builtin_ix1 < dyn_builtin_t1 { dyn_builtin_ix0 -= 1 }
+      dyn_builtin_ix1 = dyn_builtin_ix1 - dyn_builtin_t1
+      dyn_builtin_q1 = dyn_builtin_q1 + dyn_builtin_r
     }
-    ix0 = ix0 + ix0 + ((ix1 & sign) >> 31)
-    ix1 = ix1 + ix1
-    r >>= 1
+    dyn_builtin_ix0 = dyn_builtin_ix0 + dyn_builtin_ix0 + ((dyn_builtin_ix1 & dyn_builtin_sign) >> 31)
+    dyn_builtin_ix1 = dyn_builtin_ix1 + dyn_builtin_ix1
+    dyn_builtin_r >>= 1
   }
   // Round to nearest, ties to even.
-  if (ix0 | ix1) != 0 {
-    if q1 == 0xffffffff {
-      q1 = 0
-      q += 1
+  if (dyn_builtin_ix0 | dyn_builtin_ix1) != 0 {
+    if dyn_builtin_q1 == 0xffffffff {
+      dyn_builtin_q1 = 0
+      dyn_builtin_q += 1
     } else {
-      q1 += q1 & 1
+      dyn_builtin_q1 += dyn_builtin_q1 & 1
     }
   }
-  result_high := (q >> 1) + 0x3fe00000
-  result_low := q1 >> 1
-  if (q & 1) == 1 { result_low |= sign }
-  result_high = #cast(u32, #cast(i32, result_high) + m * 1048576)
-  return #bitcast(f64, (#cast(u64, result_high) << 32) | #cast(u64, result_low))
+  dyn_builtin_result_high := (dyn_builtin_q >> 1) + 0x3fe00000
+  dyn_builtin_result_low := dyn_builtin_q1 >> 1
+  if (dyn_builtin_q & 1) == 1 { dyn_builtin_result_low |= dyn_builtin_sign }
+  dyn_builtin_result_high = #cast(u32, #cast(i32, dyn_builtin_result_high) + dyn_builtin_m * 1048576)
+  return #bitcast(f64, (#cast(u64, dyn_builtin_result_high) << 32) | #cast(u64, dyn_builtin_result_low))
 }
 
 // x * y + z with one rounding, to f32 or f64.
-fn dyn_builtin_fma(x, y, z: $T) T {
+fn dyn_builtin_fma(dyn_builtin_x, dyn_builtin_y, dyn_builtin_z: $T) T {
   if #sizeof(T) == 4 {
-    return #cast(T, dyn_builtin_fused(#cast(f64, x), #cast(f64, y), #cast(f64, z), 24, -149))
+    return #cast(T, dyn_builtin_fused(#cast(f64, dyn_builtin_x), #cast(f64, dyn_builtin_y), #cast(f64, dyn_builtin_z), 24, -149))
   }
-  return #cast(T, dyn_builtin_fused(#cast(f64, x), #cast(f64, y), #cast(f64, z), 53, -1074))
+  return #cast(T, dyn_builtin_fused(#cast(f64, dyn_builtin_x), #cast(f64, dyn_builtin_y), #cast(f64, dyn_builtin_z), 53, -1074))
 }
 
 struct DynBuiltinSplit { mantissa: u64, exponent: i32, negative: bool }
 
-fn dyn_builtin_finite(x: f64) bool {
-  return (#bitcast(u64, x) & 0x7ff0000000000000) != 0x7ff0000000000000
+fn dyn_builtin_finite(dyn_builtin_x: f64) bool {
+  return (#bitcast(u64, dyn_builtin_x) & 0x7ff0000000000000) != 0x7ff0000000000000
 }
 
 // Exact integer product and aligned sum, rounded once to the target format.
-fn dyn_builtin_fused(x, y, z: f64, precision, minimum: i32) f64 {
-  if !dyn_builtin_finite(x) || !dyn_builtin_finite(y) { return x * y + z }
-  if !dyn_builtin_finite(z) { return z }
-  if x == 0.0 || y == 0.0 { return x * y + z }
-  xs := dyn_builtin_split(x)
-  ys := dyn_builtin_split(y)
-  p_high: u64 = 0
-  p_low: u64 = 0
-  dyn_builtin_multiply(xs.mantissa, ys.mantissa, &p_high, &p_low)
-  p_exponent := xs.exponent + ys.exponent
-  p_negative := xs.negative != ys.negative
-  if z == 0.0 { return dyn_builtin_round_wide(p_negative, p_high, p_low, p_exponent, precision, minimum) }
-  zs := dyn_builtin_split(z)
-  z_high: u64 = 0
-  z_low := zs.mantissa
-  z_exponent := zs.exponent
+fn dyn_builtin_fused(dyn_builtin_x, dyn_builtin_y, dyn_builtin_z: f64, dyn_builtin_precision, dyn_builtin_minimum: i32) f64 {
+  if !dyn_builtin_finite(dyn_builtin_x) || !dyn_builtin_finite(dyn_builtin_y) { return dyn_builtin_x * dyn_builtin_y + dyn_builtin_z }
+  if !dyn_builtin_finite(dyn_builtin_z) { return dyn_builtin_z }
+  if dyn_builtin_x == 0.0 || dyn_builtin_y == 0.0 { return dyn_builtin_x * dyn_builtin_y + dyn_builtin_z }
+  dyn_builtin_xs := dyn_builtin_split(dyn_builtin_x)
+  dyn_builtin_ys := dyn_builtin_split(dyn_builtin_y)
+  dyn_builtin_p_high: u64 = 0
+  dyn_builtin_p_low: u64 = 0
+  dyn_builtin_multiply(dyn_builtin_xs.mantissa, dyn_builtin_ys.mantissa, &dyn_builtin_p_high, &dyn_builtin_p_low)
+  dyn_builtin_p_exponent := dyn_builtin_xs.exponent + dyn_builtin_ys.exponent
+  dyn_builtin_p_negative := dyn_builtin_xs.negative != dyn_builtin_ys.negative
+  if dyn_builtin_z == 0.0 { return dyn_builtin_round_wide(dyn_builtin_p_negative, dyn_builtin_p_high, dyn_builtin_p_low, dyn_builtin_p_exponent, dyn_builtin_precision, dyn_builtin_minimum) }
+  dyn_builtin_zs := dyn_builtin_split(dyn_builtin_z)
+  dyn_builtin_z_high: u64 = 0
+  dyn_builtin_z_low := dyn_builtin_zs.mantissa
+  dyn_builtin_z_exponent := dyn_builtin_zs.exponent
   // Put each leading bit at position 125, leaving room for a carry and
   // retaining at least 72 low bits beyond the output precision. Jam the
   // smaller operand's discarded fraction into bit zero.
-  p_shift := 126 - dyn_builtin_wide_bits(p_high, p_low)
-  dyn_builtin_shift_left(&p_high, &p_low, p_shift)
-  p_exponent -= p_shift
-  z_shift := 126 - dyn_builtin_wide_bits(z_high, z_low)
-  dyn_builtin_shift_left(&z_high, &z_low, z_shift)
-  z_exponent -= z_shift
-  if p_exponent < z_exponent {
-    dyn_builtin_jam_right(&p_high, &p_low, z_exponent - p_exponent)
-    p_exponent = z_exponent
-  } else if z_exponent < p_exponent {
-    dyn_builtin_jam_right(&z_high, &z_low, p_exponent - z_exponent)
+  dyn_builtin_p_shift := 126 - dyn_builtin_wide_bits(dyn_builtin_p_high, dyn_builtin_p_low)
+  dyn_builtin_shift_left(&dyn_builtin_p_high, &dyn_builtin_p_low, dyn_builtin_p_shift)
+  dyn_builtin_p_exponent -= dyn_builtin_p_shift
+  dyn_builtin_z_shift := 126 - dyn_builtin_wide_bits(dyn_builtin_z_high, dyn_builtin_z_low)
+  dyn_builtin_shift_left(&dyn_builtin_z_high, &dyn_builtin_z_low, dyn_builtin_z_shift)
+  dyn_builtin_z_exponent -= dyn_builtin_z_shift
+  if dyn_builtin_p_exponent < dyn_builtin_z_exponent {
+    dyn_builtin_jam_right(&dyn_builtin_p_high, &dyn_builtin_p_low, dyn_builtin_z_exponent - dyn_builtin_p_exponent)
+    dyn_builtin_p_exponent = dyn_builtin_z_exponent
+  } else if dyn_builtin_z_exponent < dyn_builtin_p_exponent {
+    dyn_builtin_jam_right(&dyn_builtin_z_high, &dyn_builtin_z_low, dyn_builtin_p_exponent - dyn_builtin_z_exponent)
   }
-  r_high := p_high
-  r_low := p_low
-  negative := p_negative
-  if p_negative == zs.negative {
-    r_low = p_low + z_low
-    carry: u64 = 0
-    if r_low < p_low { carry = 1 }
-    r_high = p_high + z_high + carry
-  } else if z_high > p_high || (z_high == p_high && z_low > p_low) {
-    r_low = z_low - p_low
-    borrow: u64 = 0
-    if z_low < p_low { borrow = 1 }
-    r_high = z_high - p_high - borrow
-    negative = zs.negative
+  dyn_builtin_r_high := dyn_builtin_p_high
+  dyn_builtin_r_low := dyn_builtin_p_low
+  dyn_builtin_negative := dyn_builtin_p_negative
+  if dyn_builtin_p_negative == dyn_builtin_zs.negative {
+    dyn_builtin_r_low = dyn_builtin_p_low + dyn_builtin_z_low
+    dyn_builtin_carry: u64 = 0
+    if dyn_builtin_r_low < dyn_builtin_p_low { dyn_builtin_carry = 1 }
+    dyn_builtin_r_high = dyn_builtin_p_high + dyn_builtin_z_high + dyn_builtin_carry
+  } else if dyn_builtin_z_high > dyn_builtin_p_high || (dyn_builtin_z_high == dyn_builtin_p_high && dyn_builtin_z_low > dyn_builtin_p_low) {
+    dyn_builtin_r_low = dyn_builtin_z_low - dyn_builtin_p_low
+    dyn_builtin_borrow: u64 = 0
+    if dyn_builtin_z_low < dyn_builtin_p_low { dyn_builtin_borrow = 1 }
+    dyn_builtin_r_high = dyn_builtin_z_high - dyn_builtin_p_high - dyn_builtin_borrow
+    dyn_builtin_negative = dyn_builtin_zs.negative
   } else {
-    r_low = p_low - z_low
-    borrow: u64 = 0
-    if p_low < z_low { borrow = 1 }
-    r_high = p_high - z_high - borrow
+    dyn_builtin_r_low = dyn_builtin_p_low - dyn_builtin_z_low
+    dyn_builtin_borrow: u64 = 0
+    if dyn_builtin_p_low < dyn_builtin_z_low { dyn_builtin_borrow = 1 }
+    dyn_builtin_r_high = dyn_builtin_p_high - dyn_builtin_z_high - dyn_builtin_borrow
   }
-  if r_high == 0 && r_low == 0 { return 0.0 }
-  return dyn_builtin_round_wide(negative, r_high, r_low, p_exponent, precision, minimum)
+  if dyn_builtin_r_high == 0 && dyn_builtin_r_low == 0 { return 0.0 }
+  return dyn_builtin_round_wide(dyn_builtin_negative, dyn_builtin_r_high, dyn_builtin_r_low, dyn_builtin_p_exponent, dyn_builtin_precision, dyn_builtin_minimum)
 }
 
-fn dyn_builtin_leading_zeros(value: u64) i32 {
-  if value == 0 { return 64 }
-  count: i32 = 0
-  rest := value
-  if (rest >> 32) == 0 {
-    count += 32
-    rest <<= 32
+fn dyn_builtin_leading_zeros(dyn_builtin_value: u64) i32 {
+  if dyn_builtin_value == 0 { return 64 }
+  dyn_builtin_count: i32 = 0
+  dyn_builtin_rest := dyn_builtin_value
+  if (dyn_builtin_rest >> 32) == 0 {
+    dyn_builtin_count += 32
+    dyn_builtin_rest <<= 32
   }
-  if (rest >> 48) == 0 {
-    count += 16
-    rest <<= 16
+  if (dyn_builtin_rest >> 48) == 0 {
+    dyn_builtin_count += 16
+    dyn_builtin_rest <<= 16
   }
-  if (rest >> 56) == 0 {
-    count += 8
-    rest <<= 8
+  if (dyn_builtin_rest >> 56) == 0 {
+    dyn_builtin_count += 8
+    dyn_builtin_rest <<= 8
   }
-  if (rest >> 60) == 0 {
-    count += 4
-    rest <<= 4
+  if (dyn_builtin_rest >> 60) == 0 {
+    dyn_builtin_count += 4
+    dyn_builtin_rest <<= 4
   }
-  if (rest >> 62) == 0 {
-    count += 2
-    rest <<= 2
+  if (dyn_builtin_rest >> 62) == 0 {
+    dyn_builtin_count += 2
+    dyn_builtin_rest <<= 2
   }
-  if (rest >> 63) == 0 { count += 1 }
-  return count
+  if (dyn_builtin_rest >> 63) == 0 { dyn_builtin_count += 1 }
+  return dyn_builtin_count
 }
 
-fn dyn_builtin_wide_bits(high_word, low_word: u64) i32 {
-  if high_word != 0 { return 128 - dyn_builtin_leading_zeros(high_word) }
-  return 64 - dyn_builtin_leading_zeros(low_word)
+fn dyn_builtin_wide_bits(dyn_builtin_high_word, dyn_builtin_low_word: u64) i32 {
+  if dyn_builtin_high_word != 0 { return 128 - dyn_builtin_leading_zeros(dyn_builtin_high_word) }
+  return 64 - dyn_builtin_leading_zeros(dyn_builtin_low_word)
 }
 
-fn dyn_builtin_jam_right(high_word, low_word: *u64, shift: i32) {
-  if shift >= 128 {
-    high_word.* = 0
-    low_word.* = 1
-  } else if dyn_builtin_shift_right(high_word, low_word, shift) {
-    low_word.* |= 1
+fn dyn_builtin_jam_right(dyn_builtin_high_word, dyn_builtin_low_word: *u64, dyn_builtin_shift: i32) {
+  if dyn_builtin_shift >= 128 {
+    dyn_builtin_high_word.* = 0
+    dyn_builtin_low_word.* = 1
+  } else if dyn_builtin_shift_right(dyn_builtin_high_word, dyn_builtin_low_word, dyn_builtin_shift) {
+    dyn_builtin_low_word.* |= 1
   }
 }
 
 // x = mantissa * 2^exponent, with mantissa an integer below 2^53.
-fn dyn_builtin_split(x: f64) DynBuiltinSplit {
-  bits := #bitcast(u64, x)
-  raw_exponent := #cast(i32, (bits >> 52) & 0x7ff)
-  mantissa := bits & 0x000fffffffffffff
-  if raw_exponent == 0 { raw_exponent = 1 } else { mantissa |= 0x0010000000000000 }
-  return DynBuiltinSplit{ mantissa: mantissa, exponent: raw_exponent - 1075, negative: (bits >> 63) != 0 }
+fn dyn_builtin_split(dyn_builtin_x: f64) DynBuiltinSplit {
+  dyn_builtin_bits := #bitcast(u64, dyn_builtin_x)
+  dyn_builtin_raw_exponent := #cast(i32, (dyn_builtin_bits >> 52) & 0x7ff)
+  dyn_builtin_mantissa := dyn_builtin_bits & 0x000fffffffffffff
+  if dyn_builtin_raw_exponent == 0 { dyn_builtin_raw_exponent = 1 } else { dyn_builtin_mantissa |= 0x0010000000000000 }
+  return DynBuiltinSplit{ mantissa: dyn_builtin_mantissa, exponent: dyn_builtin_raw_exponent - 1075, negative: (dyn_builtin_bits >> 63) != 0 }
 }
 
-fn dyn_builtin_multiply(a, b: u64, high_out: *u64, low_out: *u64) {
-  a_low := a & 0xffffffff
-  a_high := a >> 32
-  b_low := b & 0xffffffff
-  b_high := b >> 32
-  low_low := a_low * b_low
-  high_low := a_high * b_low
-  low_high := a_low * b_high
-  high_high := a_high * b_high
-  middle := (low_low >> 32) + (high_low & 0xffffffff) + (low_high & 0xffffffff)
-  low_out.* = low_low & 0xffffffff | (middle << 32)
-  high_out.* = high_high + (high_low >> 32) + (low_high >> 32) + (middle >> 32)
+fn dyn_builtin_multiply(dyn_builtin_a, dyn_builtin_b: u64, dyn_builtin_high_out: *u64, dyn_builtin_low_out: *u64) {
+  dyn_builtin_a_low := dyn_builtin_a & 0xffffffff
+  dyn_builtin_a_high := dyn_builtin_a >> 32
+  dyn_builtin_b_low := dyn_builtin_b & 0xffffffff
+  dyn_builtin_b_high := dyn_builtin_b >> 32
+  dyn_builtin_low_low := dyn_builtin_a_low * dyn_builtin_b_low
+  dyn_builtin_high_low := dyn_builtin_a_high * dyn_builtin_b_low
+  dyn_builtin_low_high := dyn_builtin_a_low * dyn_builtin_b_high
+  dyn_builtin_high_high := dyn_builtin_a_high * dyn_builtin_b_high
+  dyn_builtin_middle := (dyn_builtin_low_low >> 32) + (dyn_builtin_high_low & 0xffffffff) + (dyn_builtin_low_high & 0xffffffff)
+  dyn_builtin_low_out.* = dyn_builtin_low_low & 0xffffffff | (dyn_builtin_middle << 32)
+  dyn_builtin_high_out.* = dyn_builtin_high_high + (dyn_builtin_high_low >> 32) + (dyn_builtin_low_high >> 32) + (dyn_builtin_middle >> 32)
 }
 
-fn dyn_builtin_shift_left(high_word: *u64, low_word: *u64, shift: i32) {
-  if shift >= 64 {
-    high_word.* = low_word.* << #cast(u64, shift - 64)
-    low_word.* = 0
-  } else if shift > 0 {
-    high_word.* = (high_word.* << #cast(u64, shift)) | (low_word.* >> #cast(u64, 64 - shift))
-    low_word.* = low_word.* << #cast(u64, shift)
+fn dyn_builtin_shift_left(dyn_builtin_high_word: *u64, dyn_builtin_low_word: *u64, dyn_builtin_shift: i32) {
+  if dyn_builtin_shift >= 64 {
+    dyn_builtin_high_word.* = dyn_builtin_low_word.* << #cast(u64, dyn_builtin_shift - 64)
+    dyn_builtin_low_word.* = 0
+  } else if dyn_builtin_shift > 0 {
+    dyn_builtin_high_word.* = (dyn_builtin_high_word.* << #cast(u64, dyn_builtin_shift)) | (dyn_builtin_low_word.* >> #cast(u64, 64 - dyn_builtin_shift))
+    dyn_builtin_low_word.* = dyn_builtin_low_word.* << #cast(u64, dyn_builtin_shift)
   }
 }
 
 // Shifts right and reports whether any set bit fell off.
-fn dyn_builtin_shift_right(high_word: *u64, low_word: *u64, shift: i32) bool {
-  lost := false
-  if shift >= 64 {
-    lost = low_word.* != 0 || (shift > 64 && (high_word.* & ((#cast(u64, 1) << #cast(u64, shift - 64)) - 1)) != 0)
-    if shift == 64 { lost = low_word.* != 0 }
-    low_word.* = high_word.* >> #cast(u64, shift - 64)
-    high_word.* = 0
-  } else if shift > 0 {
-    lost = (low_word.* & ((#cast(u64, 1) << #cast(u64, shift)) - 1)) != 0
-    low_word.* = (low_word.* >> #cast(u64, shift)) | (high_word.* << #cast(u64, 64 - shift))
-    high_word.* = high_word.* >> #cast(u64, shift)
+fn dyn_builtin_shift_right(dyn_builtin_high_word: *u64, dyn_builtin_low_word: *u64, dyn_builtin_shift: i32) bool {
+  dyn_builtin_lost := false
+  if dyn_builtin_shift >= 64 {
+    dyn_builtin_lost = dyn_builtin_low_word.* != 0 || (dyn_builtin_shift > 64 && (dyn_builtin_high_word.* & ((#cast(u64, 1) << #cast(u64, dyn_builtin_shift - 64)) - 1)) != 0)
+    if dyn_builtin_shift == 64 { dyn_builtin_lost = dyn_builtin_low_word.* != 0 }
+    dyn_builtin_low_word.* = dyn_builtin_high_word.* >> #cast(u64, dyn_builtin_shift - 64)
+    dyn_builtin_high_word.* = 0
+  } else if dyn_builtin_shift > 0 {
+    dyn_builtin_lost = (dyn_builtin_low_word.* & ((#cast(u64, 1) << #cast(u64, dyn_builtin_shift)) - 1)) != 0
+    dyn_builtin_low_word.* = (dyn_builtin_low_word.* >> #cast(u64, dyn_builtin_shift)) | (dyn_builtin_high_word.* << #cast(u64, 64 - dyn_builtin_shift))
+    dyn_builtin_high_word.* = dyn_builtin_high_word.* >> #cast(u64, dyn_builtin_shift)
   }
-  return lost
+  return dyn_builtin_lost
 }
 
 // 2^n for n in -1022..1023.
-fn dyn_builtin_power2(n: i32) f64 {
-  return #bitcast(f64, #cast(u64, #cast(i64, n) + 1023) << 52)
+fn dyn_builtin_power2(dyn_builtin_n: i32) f64 {
+  return #bitcast(f64, #cast(u64, #cast(i64, dyn_builtin_n) + 1023) << 52)
 }
 
 // x * 2^n, handling overflow, underflow and subnormal results.
-fn dyn_builtin_scale(x: f64, n_value: i32) f64 {
-  n := n_value
-  y := x
-  if n > 1023 {
-    y *= dyn_builtin_power2(1023)
-    n -= 1023
-    if n > 1023 {
-      y *= dyn_builtin_power2(1023)
-      n -= 1023
-      if n > 1023 { n = 1023 }
+fn dyn_builtin_scale(dyn_builtin_x: f64, dyn_builtin_n_value: i32) f64 {
+  dyn_builtin_n := dyn_builtin_n_value
+  dyn_builtin_y := dyn_builtin_x
+  if dyn_builtin_n > 1023 {
+    dyn_builtin_y *= dyn_builtin_power2(1023)
+    dyn_builtin_n -= 1023
+    if dyn_builtin_n > 1023 {
+      dyn_builtin_y *= dyn_builtin_power2(1023)
+      dyn_builtin_n -= 1023
+      if dyn_builtin_n > 1023 { dyn_builtin_n = 1023 }
     }
-  } else if n < -1022 {
-    y *= dyn_builtin_power2(-1022) * dyn_builtin_power2(53)
-    n += 1022 - 53
-    if n < -1022 {
-      y *= dyn_builtin_power2(-1022) * dyn_builtin_power2(53)
-      n += 1022 - 53
-      if n < -1022 { n = -1022 }
+  } else if dyn_builtin_n < -1022 {
+    dyn_builtin_y *= dyn_builtin_power2(-1022) * dyn_builtin_power2(53)
+    dyn_builtin_n += 1022 - 53
+    if dyn_builtin_n < -1022 {
+      dyn_builtin_y *= dyn_builtin_power2(-1022) * dyn_builtin_power2(53)
+      dyn_builtin_n += 1022 - 53
+      if dyn_builtin_n < -1022 { dyn_builtin_n = -1022 }
     }
   }
-  return y * dyn_builtin_power2(n)
+  return dyn_builtin_y * dyn_builtin_power2(dyn_builtin_n)
 }
 
 // Rounds (high:low) * 2^exponent to the nearest value of the given
 // precision, ties to even.
-fn dyn_builtin_round_wide(negative: bool, high_value: u64, low_value: u64, exponent_value: i32, precision, minimum_exponent: i32) f64 {
-  high_word := high_value
-  low_word := low_value
-  exponent := exponent_value
-  sticky := false
-  bits := dyn_builtin_wide_bits(high_word, low_word)
-  if bits > precision + 1 {
-    shift := bits - precision - 1
-    if dyn_builtin_shift_right(&high_word, &low_word, shift) { sticky = true }
-    exponent += shift
-  } else if bits < precision + 1 {
-    shift := precision + 1 - bits
-    dyn_builtin_shift_left(&high_word, &low_word, shift)
-    exponent -= shift
+fn dyn_builtin_round_wide(dyn_builtin_negative: bool, dyn_builtin_high_value: u64, dyn_builtin_low_value: u64, dyn_builtin_exponent_value: i32, dyn_builtin_precision, dyn_builtin_minimum_exponent: i32) f64 {
+  dyn_builtin_high_word := dyn_builtin_high_value
+  dyn_builtin_low_word := dyn_builtin_low_value
+  dyn_builtin_exponent := dyn_builtin_exponent_value
+  dyn_builtin_sticky := false
+  dyn_builtin_bits := dyn_builtin_wide_bits(dyn_builtin_high_word, dyn_builtin_low_word)
+  if dyn_builtin_bits > dyn_builtin_precision + 1 {
+    dyn_builtin_shift := dyn_builtin_bits - dyn_builtin_precision - 1
+    if dyn_builtin_shift_right(&dyn_builtin_high_word, &dyn_builtin_low_word, dyn_builtin_shift) { dyn_builtin_sticky = true }
+    dyn_builtin_exponent += dyn_builtin_shift
+  } else if dyn_builtin_bits < dyn_builtin_precision + 1 {
+    dyn_builtin_shift := dyn_builtin_precision + 1 - dyn_builtin_bits
+    dyn_builtin_shift_left(&dyn_builtin_high_word, &dyn_builtin_low_word, dyn_builtin_shift)
+    dyn_builtin_exponent -= dyn_builtin_shift
   }
   // Subnormal results: shift further so the exponent reaches the minimum.
-  minimum := minimum_exponent - 1
-  if exponent < minimum {
-    shift := minimum - exponent
-    if shift > 60 {
-      if low_word != 0 { sticky = true }
-      low_word = 0
-    } else if dyn_builtin_shift_right(&high_word, &low_word, shift) {
-      sticky = true
+  dyn_builtin_minimum := dyn_builtin_minimum_exponent - 1
+  if dyn_builtin_exponent < dyn_builtin_minimum {
+    dyn_builtin_shift := dyn_builtin_minimum - dyn_builtin_exponent
+    if dyn_builtin_shift > 60 {
+      if dyn_builtin_low_word != 0 { dyn_builtin_sticky = true }
+      dyn_builtin_low_word = 0
+    } else if dyn_builtin_shift_right(&dyn_builtin_high_word, &dyn_builtin_low_word, dyn_builtin_shift) {
+      dyn_builtin_sticky = true
     }
-    exponent = minimum
+    dyn_builtin_exponent = dyn_builtin_minimum
   }
-  round_bit := low_word & 1
-  mantissa := low_word >> 1
-  if round_bit != 0 && (sticky || (mantissa & 1) != 0) { mantissa += 1 }
-  result := dyn_builtin_scale(#cast(f64, mantissa), exponent + 1)
-  if negative { return -result }
-  return result
+  dyn_builtin_round_bit := dyn_builtin_low_word & 1
+  dyn_builtin_mantissa := dyn_builtin_low_word >> 1
+  if dyn_builtin_round_bit != 0 && (dyn_builtin_sticky || (dyn_builtin_mantissa & 1) != 0) { dyn_builtin_mantissa += 1 }
+  dyn_builtin_result := dyn_builtin_scale(#cast(f64, dyn_builtin_mantissa), dyn_builtin_exponent + 1)
+  if dyn_builtin_negative { return -dyn_builtin_result }
+  return dyn_builtin_result
 }

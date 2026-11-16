@@ -64,6 +64,25 @@ Fewer hidden compiler rules:
   compiler no longer recognizes those std functions by name.
 - Names starting with `dyn_builtin_` or `DynBuiltin` are reserved for the
   compiler.
+- Format templates are ordinary library code. The compiler no longer treats
+  a parameter named `template` specially: it neither checks `{}` counts nor
+  rewrites struct arguments. Structs and plain enums print at run time
+  through their `TypeInfo` (`Unit{name: ada, at: Vec2{x: 1.5, y: 2}, op:
+  Sub}`), from any expression; plain enums with set values print the
+  variant's name. `dyn vet` reports a literal template whose `{}` count
+  differs from its values; at run time a mismatch prints `{?}` or `{+value}`.
+- The compiler knows no std function or type by name. Gone with that: the
+  vet warnings for copying `Arena`, `File`, `Thread` and other std handles,
+  and the errors for using arena memory after `arena_reset`. Returning or
+  storing the address of a local is still an error. `poison_on_rewind`
+  remains the run-time aid for stale arena memory.
+- `process.spawn` returns `*Child`, kept in the arena it is given;
+  `process.take` is gone.
+- `#typeof(value)` on an `any` gives the boxed value's `TypeInfo` at run
+  time. `TypeInfo` ids are the same numbers an `any` carries: unique in a
+  program (two modules' `Point` types no longer share one) but not stable
+  across builds. `reflect.address` and `reflect.point` read and make `any`
+  values; `fmt.write_value` writes one.
 - `#init(p)` now makes `*p` a fresh value: zero, then field defaults, for
   every type. `mem.push` and `mem.try_push` take uninitialized memory and
   call it, so a pushed struct is filled with stores in place. Before,

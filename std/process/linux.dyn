@@ -4,10 +4,10 @@ use "std/os/linux" os
 use "std/fs" fs
 use "std/time" time
 use "std/os/linux/sys"
-fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, configuration: Options) SpawnResult {
+fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, configuration: Options) NativeSpawn {
   native := os.spawn_environment(arena, path, arguments, configuration.environment,
     os.SpawnOptions{ input: native_stream(configuration.input), output: native_stream(configuration.output), error: native_stream(configuration.error), directory: configuration.directory })
-  return SpawnResult{ value: Child{ handle: native.process, active: !io.failed(native.failure) }, failure: io.linux_failure(native.failure.native) }
+  return NativeSpawn{ value: Child{ handle: native.process, active: !io.failed(native.failure) }, failure: io.linux_failure(native.failure.native) }
 }
 fn wait_native(child: *Child, nonblocking: bool) ExitResult {
   value := os.wait(child.handle, nonblocking)

@@ -728,7 +728,7 @@ char *dyn_module_resolve_sdk(const char *path) {
    Each thread resolves them once. */
 static _Thread_local char *library_roots[2];
 static _Thread_local bool library_ready;
-bool dyn_path_in_library_module(const char *path, const char *module) {
+bool dyn_path_in_library(const char *path) {
   if (!path) return false;
   if (!library_ready) {
     library_roots[0] = dyn_module_resolve_sdk("std/");
@@ -737,20 +737,11 @@ bool dyn_path_in_library_module(const char *path, const char *module) {
   }
   /* The SDK's files are always opened by the canonical path the resolver
      returns, so the path compares as it is. */
-  const char *canonical = path;
   for (size_t i = 0; i < 2; ++i) {
     const char *root = library_roots[i];
-    if (!root || (module && i)) continue;
+    if (!root) continue;
     size_t n = strlen(root);
-    if (strncmp(root, canonical, n) || canonical[n] != '/') continue;
-    if (!module) return true;
-    size_t m = strlen(module);
-    const char *rest = canonical + n + 1;
-    /* Directly in the module's directory, not in a module below it. */
-    return !strncmp(rest, module, m) && rest[m] == '/' && !strchr(rest + m + 1, '/');
+    if (!strncmp(root, path, n) && path[n] == '/') return true;
   }
   return false;
-}
-bool dyn_path_in_library(const char *path) {
-  return dyn_path_in_library_module(path, NULL);
 }

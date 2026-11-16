@@ -55,7 +55,7 @@ fn main() {
   arguments: [1][]const u8 = ["true"]
   spawned := process.spawn(arena, "/bin/true", arguments[..], process.Options{})
   check(!io.failed(spawned.failure), "zero options spawn")
-  exited := process.wait(&spawned.value, false)
+  exited := process.wait(spawned.value, false)
   check(!io.failed(exited.failure) && exited.code == 0, "zero options inherit")
   idle: watch.Watcher
   watch.close(&idle)

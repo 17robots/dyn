@@ -25,8 +25,6 @@ typedef struct {
   DynAstStmt **active_loops;
   size_t active_loop_count, active_loop_capacity;
   /* Per function: 0 unknown, 1 not a std/mem function, 2 + i is mem_names[i]. */
-  uint8_t *mem_kinds;
-  size_t mem_kind_count;
   /* On a lifetime-check worker: where its vet findings count (SemaLate). */
   unsigned *late_vet;
   /* Format call arguments evaluated once into unnamed locals, in order, by
@@ -1319,13 +1317,16 @@ static void type_name_params(DynAstProgram *a, DynType t, const DynSource *s,
 static void type_name_into(DynAstProgram *a, DynType t, const DynSource *s, char *out, size_t cap) {
   type_name_params(a, t, s, out, cap, NULL);
 }
-static uint64_t reflection_id(const char *name) {
-  uint64_t h = UINT64_C(1469598103934665603);
-  for (const unsigned char *p = (const unsigned char *)name; *p; ++p) {
-    h ^= *p;
-    h *= UINT64_C(1099511628211);
+/* A type's id is the compiler's number for it, the same number an any
+   holding a value of that type carries, so #typeof(value) on an any finds
+   its TypeInfo by it. Unique within a program; not stable across builds. */
+static uint64_t reflection_type_id(const DynAstProgram *a, DynType type) {
+  /* Code generation sees a distinct type as its underlying type. */
+  for (size_t guard = 0; dyn_type_is_distinct(type) && guard <= a->alias_count; ++guard) {
+    if (type - DYN_TYPE_DISTINCT_BASE >= a->alias_count) break;
+    type = a->aliases[type - DYN_TYPE_DISTINCT_BASE].target;
   }
-  return h;
+  return (uint64_t)type;
 }
 static unsigned reflection_kind(Sema *sema, DynType t) {
   if (t == DYN_TYPE_VOID)
@@ -1418,11 +1419,8 @@ static DynExprId reflection_members(DynAstProgram *a, const DynSource *s,
     const char *sname = names ? s->text + names[i].start_byte : "";
     if (builtin_names) { sname = builtin_names[i]; n = strlen(sname); }
     DynExprId name = reflection_string(a, name_type, sname, n);
-    char type_name[512];
-    type_name_into(a, types[i], s, type_name, sizeof(type_name));
-    DynExprId type_id = reflection_expr(
-        a, DYN_EXPR_INT, DYN_TYPE_U64,
-        types[i] == DYN_TYPE_VOID ? 0 : reflection_id(type_name));
+    DynExprId type_id = reflection_expr(a, DYN_EXPR_INT, DYN_TYPE_U64,
+                                        types[i] == DYN_TYPE_VOID ? 0 : reflection_type_id(a, types[i]));
     /* An enum variant's tag, a struct field's byte offset; arguments report 0. */
     uint64_t member_value = variants ? variants[i].tag : fields_of ? fields_of[i].offset : 0;
     DynExprId value = reflection_expr(a, DYN_EXPR_INT, DYN_TYPE_U64, member_value);
@@ -1455,253 +1453,15 @@ static DynExprId reflection_members(DynAstProgram *a, const DynSource *s,
   return slice;
 }
 
-/* Struct and enum values in a literal template print their contents. The
-   compiler rewrites the template and the arguments, so nothing is looked up at
-   run time: `"{}", point` becomes `"Point{{x: {}, y: {}}}", point.x, point.y`,
-   and a plain enum becomes its variant's name, read from a constant table.
-   Only a name or field path is expanded, since it is read once per field;
-   any other expression keeps the {?} it prints at run time. */
-typedef struct {
-  char *text;
-  size_t length, capacity;
-  DynAstItem *items;
-  uint32_t count, capacity_items;
-  bool failed;
-} FormatExpansion;
-static void format_text(FormatExpansion *x, const char *text, size_t length) {
-  if (x->failed) return;
-  if (x->length + length > x->capacity) {
-    size_t c = x->capacity ? x->capacity * 2 : 64;
-    while (c < x->length + length) c *= 2;
-    char *p = realloc(x->text, c);
-    if (!p) { x->failed = true; return; }
-    x->text = p;
-    x->capacity = c;
-  }
-  memcpy(x->text + x->length, text, length);
-  x->length += length;
-}
-static void format_item(FormatExpansion *x, DynExprId expression) {
-  if (x->failed) return;
-  if (x->count == x->capacity_items) {
-    uint32_t c = x->capacity_items ? x->capacity_items * 2 : 8;
-    DynAstItem *p = realloc(x->items, c * sizeof(*p));
-    if (!p) { x->failed = true; return; }
-    x->items = p;
-    x->capacity_items = c;
-  }
-  x->items[x->count++] = (DynAstItem){.expression = expression, .field_index = UINT32_MAX};
-}
-static bool format_path(const DynAstProgram *a, DynExprId id, unsigned depth) {
-  if (id == DYN_NO_EXPR || depth > 16) return false;
-  const DynAstExpr *e = &a->expressions[id];
-  if (e->kind == DYN_EXPR_NAME || e->kind == DYN_EXPR_GLOBAL || e->kind == DYN_EXPR_ENUM) return true;
-  return e->kind == DYN_EXPR_FIELD && format_path(a, e->left, depth + 1);
-}
-static DynExprId format_clone(DynAstProgram *a, DynExprId id) {
-  if (!reserve_expr(a)) return DYN_NO_EXPR;
-  DynAstExpr copy = a->expressions[id];
-  if (copy.kind == DYN_EXPR_FIELD) {
-    copy.left = format_clone(a, copy.left);
-    if (copy.left == DYN_NO_EXPR || !reserve_expr(a)) return DYN_NO_EXPR;
-  }
-  DynExprId clone = (DynExprId)a->expression_count;
-  a->expressions[a->expression_count++] = copy;
-  return clone;
-}
-static void format_value(DynAstProgram *a, FormatExpansion *x, DynExprId path, DynType type,
-                         const DynSource *s, unsigned depth) {
-  /* A path is cloned for each use; anything else, an enum, is used once. */
-  DynExprId value = format_path(a, path, 0) ? format_clone(a, path) : path;
-  if (value == DYN_NO_EXPR) { x->failed = true; return; }
-  if (dyn_type_is_struct(type) && depth < 4) {
-    const DynAstStruct *st = &a->structs[type - DYN_TYPE_STRUCT_BASE];
-    char name[256];
-    type_name_into(a, type, s, name, sizeof(name));
-    format_text(x, name, strlen(name));
-    format_text(x, "{{", 2);
-    for (uint32_t i = 0; i < st->field_count && !x->failed; ++i) {
-      const DynAstField *field = &a->fields[a->structs[type - DYN_TYPE_STRUCT_BASE].field_start + i];
-      if (i) format_text(x, ", ", 2);
-      format_text(x, s->text + field->name.start_byte, field->name.end_byte - field->name.start_byte);
-      format_text(x, ": ", 2);
-      DynExprId member = reflection_expr(a, DYN_EXPR_FIELD, field->type, i);
-      if (member == DYN_NO_EXPR) { x->failed = true; return; }
-      a->expressions[member].left = value;
-      a->expressions[member].span = field->name;
-      format_value(a, x, member, field->type, s, depth + 1);
-    }
-    format_text(x, "}}", 2);
-    return;
-  }
-  if (dyn_type_is_enum(type) && !a->enums[type - DYN_TYPE_ENUM_BASE].has_payload &&
-      !a->enums[type - DYN_TYPE_ENUM_BASE].explicit_tags) {
-    /* A constant table of variant names, indexed by the tag. */
-    const DynAstEnum *en = &a->enums[type - DYN_TYPE_ENUM_BASE];
-    DynType text = sema_intern_slice(a, DYN_TYPE_U8, true);
-    DynType table_type = sema_intern_array(a, text, en->variant_count);
-    if (text == DYN_TYPE_ERROR || table_type == DYN_TYPE_ERROR ||
-        !reserve_reflection_items(a, en->variant_count)) { x->failed = true; return; }
-    uint32_t start = (uint32_t)a->item_count;
-    a->item_count += en->variant_count;
-    for (uint32_t i = 0; i < en->variant_count; ++i) {
-      DynSpan variant = a->variants[en->variant_start + i].name;
-      DynExprId name = reflection_string(a, text, s->text + variant.start_byte,
-                                         variant.end_byte - variant.start_byte);
-      if (name == DYN_NO_EXPR) { x->failed = true; return; }
-      a->items[start + i] = (DynAstItem){.expression = name, .field_index = UINT32_MAX};
-    }
-    DynExprId table = reflection_expr(a, DYN_EXPR_ARRAY, table_type, 0);
-    DynExprId index = convert_expr(a, value, DYN_TYPE_USIZE);
-    DynExprId pick = reflection_expr(a, DYN_EXPR_INDEX, text, 0);
-    if (table == DYN_NO_EXPR || index == DYN_NO_EXPR || pick == DYN_NO_EXPR) { x->failed = true; return; }
-    a->expressions[table].item_start = start;
-    a->expressions[table].item_count = en->variant_count;
-    a->expressions[pick].left = table;
-    a->expressions[pick].right = index;
-    a->expressions[index].type = DYN_TYPE_USIZE;
-    format_text(x, "{}", 2);
-    format_item(x, pick);
-    return;
-  }
-  if (dyn_type_is_enum(type) && !a->enums[type - DYN_TYPE_ENUM_BASE].has_payload) {
-    /* Set tags: print the tag. */
-    format_text(x, "{}", 2);
-    DynExprId tag = convert_expr(a, value, DYN_TYPE_U64);
-    if (tag == DYN_NO_EXPR) { x->failed = true; return; }
-    format_item(x, tag);
-    return;
-  }
-  format_text(x, "{}", 2);
-  format_item(x, value);
-}
-/* Whether an argument reads the same however late it is evaluated. */
-static bool format_constant(const DynAstProgram *a, DynExprId id) {
-  if (id == DYN_NO_EXPR) return true;
-  const DynAstExpr *e = &a->expressions[id];
-  switch (e->kind) {
-  case DYN_EXPR_INT: case DYN_EXPR_FLOAT: case DYN_EXPR_BOOL: case DYN_EXPR_CHAR:
-  case DYN_EXPR_STRING: case DYN_EXPR_NIL: case DYN_EXPR_ENUM: case DYN_EXPR_FUNCTION:
-    return true;
-  case DYN_EXPR_GLOBAL:
-    return e->integer < a->global_count && a->globals[e->integer].is_const;
-  case DYN_EXPR_CONVERT:
-    return format_constant(a, e->left);
-  default:
-    return false;
-  }
-}
-static bool format_expands(const DynAstProgram *a, DynType type) {
-  return dyn_type_is_struct(type) || (dyn_type_is_enum(type) && !a->enums[type - DYN_TYPE_ENUM_BASE].has_payload);
-}
-/* A struct argument that is not a name or field path, such as a call, is
-   read once per field, so the call's arguments are first evaluated, in
-   order, into unnamed locals. The statement that makes the call claims
-   them in sema_stmt; the function's check then places them before it. */
-static bool format_hoist(Sema *sema, DynAstProgram *a, const DynAstFn *callee, DynExprId call,
-                         const DynSource *s, unsigned *errors) {
-  uint32_t item_start = a->expressions[call].item_start;
-  uint32_t first = callee->param_count, count = a->expressions[call].item_count;
-  bool needed = false;
-  for (uint32_t i = first; i < count; ++i) {
-    DynExprId source = a->items[item_start + i].expression;
-    if (source != DYN_NO_EXPR && dyn_type_is_struct(a->expressions[source].type) && !format_path(a, source, 0))
-      needed = true;
-  }
-  if (!needed) return true;
-  /* A worker cannot add statements; the function is checked again serially. */
-  SEMA_SERIAL_ONLY(return false);
-  for (uint32_t i = 0; i < count; ++i) {
-    if (i == first - 1) continue; /* the template */
-    DynExprId source = a->items[item_start + i].expression;
-    if (format_constant(a, source)) continue;
-    DynType type = a->expressions[source].type;
-    if (sema->hoist_count == sema->hoist_capacity) {
-      size_t c = sema->hoist_capacity ? sema->hoist_capacity * 2 : 8;
-      struct SemaHoist *grown = realloc(sema->hoists, c * sizeof(*grown));
-      if (!grown) { error_out_of_memory(a->expressions[call].span, s, errors); return false; }
-      sema->hoists = grown;
-      sema->hoist_capacity = c;
-    }
-    if (!reserve_local(a) || !reserve_expr(a)) { error_out_of_memory(a->expressions[call].span, s, errors); return false; }
-    uint32_t local = (uint32_t)a->local_count;
-    a->locals[a->local_count++] = (DynAstLocal){.type = type, .used = true,
-                                                .depth = sema->block_depth,
-                                                .owner_function = sema->current_function};
-    DynExprId name = (DynExprId)a->expression_count;
-    a->expressions[a->expression_count++] = (DynAstExpr){.kind = DYN_EXPR_NAME, .type = type,
-                                                         .span = a->expressions[source].span,
-                                                         .left = DYN_NO_EXPR, .right = DYN_NO_EXPR,
-                                                         .integer = local};
-    a->items[item_start + i].expression = name;
-    sema->hoists[sema->hoist_count++] = (struct SemaHoist){.call = call, .init = source, .local = local,
-                                                           .stmt = SEMA_HOIST_PENDING, .local_stmt = UINT32_MAX};
-  }
-  return true;
-}
-static void expand_format_arguments(Sema *sema, DynAstProgram *a, const DynAstFn *callee, DynExprId call,
-                                    DynExprId template, const DynSource *s, unsigned *errors) {
-  uint32_t item_start = a->expressions[call].item_start;
-  uint32_t first = callee->param_count, count = a->expressions[call].item_count;
-  bool any = false;
-  /* Pack items hold each typed value; IR lowering boxes them into any. An
-     enum is read once, so any expression gives it; a struct needs a path. */
-  for (uint32_t i = first; i < count; ++i) {
-    DynExprId source = a->items[item_start + i].expression;
-    if (source != DYN_NO_EXPR && format_expands(a, a->expressions[source].type)) any = true;
-  }
-  if (!any || !format_hoist(sema, a, callee, call, s, errors)) return;
-  const DynAstString *original = &a->strings[a->expressions[template].integer];
-  FormatExpansion x = {0};
-  for (uint32_t i = 0; i < first; ++i) format_item(&x, a->items[item_start + i].expression);
-  uint32_t next = first;
-  for (size_t i = 0; i < original->length && !x.failed; ++i) {
-    unsigned char c = original->data[i];
-    unsigned char following = i + 1 < original->length ? original->data[i + 1] : 0;
-    if (c == '{' && following == '}') {
-      DynExprId source = a->items[item_start + next++].expression;
-      DynType type = source == DYN_NO_EXPR ? DYN_TYPE_ERROR : a->expressions[source].type;
-      if (source != DYN_NO_EXPR && format_expands(a, type))
-        format_value(a, &x, source, type, s, 0);
-      else {
-        format_text(&x, "{}", 2);
-        format_item(&x, source);
-      }
-      ++i;
-    } else if ((c == '{' || c == '}') && following == c) {
-      format_text(&x, (const char *)original->data + i, 2);
-      ++i;
-    } else
-      format_text(&x, (const char *)original->data + i, 1);
-  }
-  if (!x.failed && reserve_reflection_string(a) && reserve_reflection_items(a, x.count)) {
-    unsigned char *bytes = malloc(x.length ? x.length : 1);
-    if (bytes) {
-      memcpy(bytes, x.text, x.length);
-      uint32_t string = (uint32_t)a->string_count;
-      a->strings[a->string_count++] = (DynAstString){bytes, x.length};
-      a->expressions[template].integer = string;
-      uint32_t start = (uint32_t)a->item_count;
-      memcpy(a->items + start, x.items, x.count * sizeof(*x.items));
-      a->item_count += x.count;
-      a->expressions[call].item_start = start;
-      a->expressions[call].item_count = x.count;
-    }
-  }
-  free(x.text);
-  free(x.items);
-}
-
-/* A function whose last fixed parameter is `template: []const u8` and whose
-   pack is `...any` takes a format template: {} inserts the next argument, {{
-   and }} write braces. A literal template is checked against the arguments. */
-static void check_format_template(Sema *sema, DynAstProgram *a, const DynAstFn *callee, DynExprId call,
-                                  const DynSource *s, unsigned *errors) {
-  if (!callee->param_count || callee->variadic_type == DYN_TYPE_ERROR) return;
-  DynAstSlice *pack = slice_info(a, callee->variadic_type);
+/* dyn vet, like Go's vet for printf: a call that passes a string literal
+   with braces as the last fixed argument, right before a ...any pack, is
+   taken as a format template and its {} count is checked against the
+   values. Only vet looks; the compiler treats every function the same, and
+   a mismatch prints {?} or {+value} at run time. */
+static void vet_format_template(const DynAstProgram *a, const DynAstFn *callee, DynExprId call, const DynSource *s) {
+  if (!s->context.vet || !callee->param_count || callee->variadic_type == DYN_TYPE_ERROR) return;
+  DynAstSlice *pack = slice_info((DynAstProgram *)a, callee->variadic_type);
   if (!pack || pack->element != DYN_TYPE_ANY) return;
-  const DynAstParam *param = &a->params[callee->param_start + callee->param_count - 1];
-  if (!span_is(param->name, s, "template")) return;
   uint32_t item_count = a->expressions[call].item_count;
   if (item_count < callee->param_count) return;
   DynExprId template = a->items[a->expressions[call].item_start + callee->param_count - 1].expression;
@@ -1710,27 +1470,27 @@ static void check_format_template(Sema *sema, DynAstProgram *a, const DynAstFn *
   if (template == DYN_NO_EXPR || a->expressions[template].kind != DYN_EXPR_STRING) return;
   const DynAstString *text = &a->strings[a->expressions[template].integer];
   uint32_t holes = 0;
+  bool braces = false;
   for (size_t i = 0; i < text->length; ++i) {
     unsigned char c = text->data[i];
     if (c != '{' && c != '}') continue;
+    braces = true;
     unsigned char next = i + 1 < text->length ? text->data[i + 1] : 0;
     if (c == '{' && next == '}') ++holes;
     else if (next != c) {
-      error_span(a->expressions[template].span, s, errors,
-                 c == '{' ? "format template: only {} inserts a value; write {{ for a literal brace"
-                          : "format template: write }} for a literal brace");
+      sema_vet_note(s, a->expressions[template].span, false,
+                    c == '{' ? "format template: only {} inserts a value; write {{ for a literal brace"
+                             : "format template: write }} for a literal brace");
       return;
     }
     ++i;
   }
   uint32_t arguments = item_count - callee->param_count;
-  if (holes != arguments) {
-    error_format(a->expressions[call].span, s, errors,
-                 "format template has %u {} but the call passes %u argument%s",
-                 (unsigned)holes, (unsigned)arguments, arguments == 1 ? "" : "s");
-    return;
-  }
-  expand_format_arguments(sema, a, callee, call, template, s, errors);
+  if (!braces || holes == arguments) return;
+  char message[160];
+  snprintf(message, sizeof(message), "format template has %u {} but the call passes %u value%s",
+           (unsigned)holes, (unsigned)arguments, arguments == 1 ? "" : "s");
+  sema_vet_note(s, a->expressions[call].span, false, message);
 }
 static DynType check_expr(Sema *, DynAstProgram *, DynExprId, const DynSource *,
                           unsigned *, DynType);
@@ -2283,6 +2043,285 @@ static DynType expand_untyped(Sema *sema, DynAstProgram *a, DynExprId id, DynExp
 static DynType check_expr_node(Sema *sema, DynAstProgram *a, DynExprId id,
                                const DynSource *s, unsigned *errors,
                                DynType expected);
+/* A function or global the compiler prelude declares, by name. */
+static uint32_t prelude_function(DynAstProgram *a, const DynSource *s, const char *name) {
+  for (uint32_t i = 0; i < a->function_count; ++i)
+    if (dyn_reflection_prelude_span(a->functions[i].name, s) && span_is(a->functions[i].name, s, name) &&
+        !a->functions[i].is_instance)
+      return i;
+  return UINT32_MAX;
+}
+static uint32_t prelude_global(DynAstProgram *a, const DynSource *s, const char *name) {
+  for (uint32_t i = 0; i < a->global_count; ++i)
+    if (dyn_reflection_prelude_span(a->globals[i].name, s) && span_is(a->globals[i].name, s, name)) return i;
+  return UINT32_MAX;
+}
+/* A TypeInfo literal for operand; reflected_fn names a function whose
+   parameter names the arguments take. DYN_NO_EXPR after reporting. */
+static DynExprId reflection_info(Sema *sema, DynAstProgram *a, DynType operand, uint32_t reflected_fn,
+                                 DynSpan span, const DynSource *s, unsigned *errors) {
+  uint32_t info = UINT32_MAX, member = UINT32_MAX, kind_enum = UINT32_MAX;
+  /* Only the compiler's own declarations, which precede the module's files. */
+  for (uint32_t i = 0; i < a->struct_count; ++i) {
+    if (!dyn_reflection_prelude_span(a->structs[i].name, s)) continue;
+    if (span_is(a->structs[i].name, s, "TypeInfo"))
+      info = i;
+    else if (span_is(a->structs[i].name, s, "TypeMember"))
+      member = i;
+  }
+  for (uint32_t i = 0; i < a->enum_count; ++i)
+    if (dyn_reflection_prelude_span(a->enums[i].name, s) && span_is(a->enums[i].name, s, "TypeKind"))
+      kind_enum = i;
+  if (info == UINT32_MAX || member == UINT32_MAX || kind_enum == UINT32_MAX) {
+    error_span(span, s, errors, "compiler reflection ABI is unavailable");
+    return DYN_NO_EXPR;
+  }
+  DynAstStruct *st = &a->structs[info];
+  DynAstEnum *en = &a->enums[kind_enum];
+  bool abi =
+      st->field_count == 13 && a->structs[member].field_count == 3 &&
+      en->variant_count >= 11 &&
+      a->fields[st->field_start].type == DYN_TYPE_U64 &&
+      a->fields[st->field_start + 1].type == DYN_TYPE_ENUM_BASE + kind_enum &&
+      a->fields[st->field_start + 3].type == DYN_TYPE_USIZE &&
+      a->fields[st->field_start + 4].type == DYN_TYPE_USIZE &&
+      a->fields[st->field_start + 5].type == DYN_TYPE_U64 &&
+      a->fields[st->field_start + 6].type == DYN_TYPE_USIZE &&
+      a->fields[st->field_start + 7].type == DYN_TYPE_USIZE &&
+      a->fields[st->field_start + 8].type == DYN_TYPE_USIZE &&
+      a->fields[st->field_start + 9].type == DYN_TYPE_U64;
+  if (!abi) {
+    error_span(span, s, errors, "compiler TypeInfo ABI mismatch");
+    return DYN_NO_EXPR;
+  }
+  char name[512];
+  type_name_into(a, operand, s, name, sizeof(name));
+  size_t length = strlen(name);
+  if (!reserve_reflection_string(a) || !reserve_reflection_items(a, 13)) {
+    error_out_of_memory(span, s, errors);
+    return DYN_NO_EXPR;
+  }
+  unsigned char *bytes = malloc(length);
+  if (length && !bytes) {
+    error_out_of_memory(span, s, errors);
+    return DYN_NO_EXPR;
+  }
+  if (length)
+    memcpy(bytes, name, length);
+  uint32_t string = (uint32_t)a->string_count;
+  a->strings[a->string_count++] = (DynAstString){bytes, length};
+  uint32_t start = (uint32_t)a->item_count;
+  a->item_count += 13;
+  DynExprId values[13];
+  values[0] =
+      reflection_expr(a, DYN_EXPR_INT, DYN_TYPE_U64, reflection_type_id(a, operand));
+  unsigned k = reflection_kind(sema, operand);
+  values[1] =
+      reflection_expr(a, DYN_EXPR_ENUM, DYN_TYPE_ENUM_BASE + kind_enum,
+                      en->variant_start + k);
+  values[2] = reflection_expr(a, DYN_EXPR_STRING,
+                              a->fields[st->field_start + 2].type, string);
+  uint64_t size = operand == DYN_TYPE_VOID || dyn_type_is_function(operand)
+                      ? 0
+                      : sema_type_layout(sema, a, operand, false),
+           alignment =
+               operand == DYN_TYPE_VOID || dyn_type_is_function(operand)
+                   ? 1
+                   : sema_type_layout(sema, a, operand, true);
+  values[3] = reflection_expr(a, DYN_EXPR_INT, DYN_TYPE_USIZE, size);
+  values[4] = reflection_expr(a, DYN_EXPR_INT, DYN_TYPE_USIZE, alignment);
+  DynType element = DYN_TYPE_VOID, result = DYN_TYPE_VOID;
+  uint64_t array_length = 0, members = 0, parameters = 0;
+  if (dyn_type_is_pointer(operand))
+    element = pointer_info(a, operand)->pointee;
+  else if (dyn_type_is_array(operand)) {
+    element = array_info(a, operand)->element;
+    array_length = array_info(a, operand)->length;
+  } else if (dyn_type_is_slice(operand))
+    element = slice_info(a, operand)->element;
+  else if (dyn_type_is_struct(operand))
+    members = a->structs[operand - DYN_TYPE_STRUCT_BASE].field_count;
+  else if (dyn_type_is_enum(operand))
+    members = a->enums[operand - DYN_TYPE_ENUM_BASE].variant_count;
+  else if (dyn_type_is_function(operand)) {
+    DynAstFnType *fn = fn_type_info(a, operand);
+    parameters = fn->param_count;
+    result = fn->return_type;
+  }
+  uint64_t element_id = element == DYN_TYPE_VOID ? 0 : reflection_type_id(a, element),
+           result_id = result == DYN_TYPE_VOID ? 0 : reflection_type_id(a, result);
+  values[5] = reflection_expr(a, DYN_EXPR_INT, DYN_TYPE_U64, element_id);
+  values[6] = reflection_expr(a, DYN_EXPR_INT, DYN_TYPE_USIZE, array_length);
+  values[7] = reflection_expr(a, DYN_EXPR_INT, DYN_TYPE_USIZE, members);
+  values[8] = reflection_expr(a, DYN_EXPR_INT, DYN_TYPE_USIZE, parameters);
+  values[9] = reflection_expr(a, DYN_EXPR_INT, DYN_TYPE_U64, result_id);
+  DynType member_type = DYN_TYPE_STRUCT_BASE + member;
+  DynType member_slice = sema_intern_slice(a, member_type, true);
+  values[10] = reflection_expr(a, DYN_EXPR_NIL, member_slice, 0);
+  values[11] = reflection_expr(a, DYN_EXPR_NIL, member_slice, 0);
+  values[12] = reflection_expr(a, DYN_EXPR_NIL, member_slice, 0);
+  if (dyn_type_is_struct(operand)) {
+    DynAstStruct *subject = &a->structs[operand - DYN_TYPE_STRUCT_BASE];
+    DynSpan *names = calloc(subject->field_count, sizeof(*names));
+    DynType *types = calloc(subject->field_count, sizeof(*types));
+    if (subject->field_count && (!names || !types))
+      values[10] = DYN_NO_EXPR;
+    for (uint32_t i = 0; i < subject->field_count && names && types; ++i) {
+      names[i] = a->fields[subject->field_start + i].name;
+      types[i] = a->fields[subject->field_start + i].type;
+    }
+    if (names && types)
+      values[10] = reflection_members(a, s, member_type, member_slice, names,
+                                      types, subject->field_count, NULL, NULL,
+                                      &a->fields[subject->field_start]);
+    free(names);
+    free(types);
+  } else if (dyn_type_is_enum(operand)) {
+    DynAstEnum *subject = &a->enums[operand - DYN_TYPE_ENUM_BASE];
+    DynSpan *names = calloc(subject->variant_count, sizeof(*names));
+    DynType *types = calloc(subject->variant_count, sizeof(*types));
+    if (subject->variant_count && (!names || !types))
+      values[11] = DYN_NO_EXPR;
+    for (uint32_t i = 0; i < subject->variant_count && names && types; ++i) {
+      names[i] = a->variants[subject->variant_start + i].name;
+      types[i] = a->variants[subject->variant_start + i].payload_type;
+    }
+    if (names && types)
+      values[11] = reflection_members(a, s, member_type, member_slice, names,
+                                      types, subject->variant_count, NULL,
+                                      &a->variants[subject->variant_start], NULL);
+    free(names);
+    free(types);
+  } else if (dyn_type_is_function(operand)) {
+    DynAstFnType *signature = fn_type_info(a, operand);
+    DynSpan *names = calloc(signature->param_count, sizeof(*names));
+    DynType *types = calloc(signature->param_count, sizeof(*types));
+    if (signature->param_count && (!names || !types))
+      values[12] = DYN_NO_EXPR;
+    for (uint32_t i = 0; i < signature->param_count && names && types; ++i) {
+      types[i] = a->fn_type_params[signature->param_start + i];
+      if (reflected_fn != UINT32_MAX)
+        names[i] = a->params[a->functions[reflected_fn].param_start + i].name;
+    }
+    if (names && types)
+      values[12] = reflection_members(a, s, member_type, member_slice, names,
+                                      types, signature->param_count, NULL, NULL, NULL);
+    free(names);
+    free(types);
+  }
+  for (uint32_t i = 0; i < 13; ++i) {
+    if (values[i] == DYN_NO_EXPR) {
+      error_out_of_memory(span, s, errors);
+      return DYN_NO_EXPR;
+    }
+    a->items[start + i] =
+        (DynAstItem){.expression = values[i], .field_index = i};
+  }
+  DynExprId built = sema_push_expr(a, (DynAstExpr){.kind = DYN_EXPR_STRUCT, .boolean_reflection = true,
+      .type = DYN_TYPE_STRUCT_BASE + info, .integer = info, .left = DYN_NO_EXPR, .right = DYN_NO_EXPR,
+      .item_start = start, .item_count = 13, .span = span});
+  if (built == DYN_NO_EXPR) error_out_of_memory(span, s, errors);
+  return built;
+}
+struct TypeTableEntry { uint64_t id; DynExprId info; };
+static int type_table_order(const void *left, const void *right) {
+  uint64_t a = ((const struct TypeTableEntry *)left)->id, b = ((const struct TypeTableEntry *)right)->id;
+  return a < b ? -1 : a > b;
+}
+static bool type_table_add(DynAstProgram *a, DynType **types, size_t *count, size_t *capacity, DynType type) {
+  if (type == DYN_TYPE_ERROR || type == DYN_TYPE_INFER || type == DYN_TYPE_VOID || type == DYN_TYPE_ANY ||
+      dyn_type_is_param(type) || dyn_ast_type_is_open(a, type))
+    return true;
+  for (size_t i = 0; i < *count; ++i)
+    if ((*types)[i] == type) return true;
+  if (*count == *capacity) {
+    size_t grown = *capacity ? *capacity * 2 : 64;
+    DynType *more = realloc(*types, grown * sizeof(*more));
+    if (!more) return false;
+    *types = more;
+    *capacity = grown;
+  }
+  (*types)[(*count)++] = type;
+  return true;
+}
+/* Fills the prelude's dyn_builtin_types once the program is checked: the
+   TypeInfo of every type boxed into any, and of the field, element and
+   payload types inside them, sorted by id, for #typeof(value) on an any. */
+static void sema_fill_type_table(Sema *sema, DynAstProgram *a, const DynSource *s, unsigned *errors) {
+  uint32_t table = prelude_global(a, s, "dyn_builtin_types");
+  if (table == UINT32_MAX || *errors) return;
+  DynType *types = NULL;
+  size_t count = 0, capacity = 0;
+  bool ok = true;
+  for (size_t i = 0; i < a->expression_count && ok; ++i) {
+    const DynAstExpr *e = &a->expressions[i];
+    if (e->kind == DYN_EXPR_CONVERT && e->type == DYN_TYPE_ANY && e->left < a->expression_count)
+      ok = type_table_add(a, &types, &count, &capacity, a->expressions[e->left].type);
+    if (e->kind != DYN_EXPR_CALL || e->integer >= a->function_count) continue;
+    const DynAstFn *callee = &a->functions[e->integer];
+    DynAstSlice *pack = callee->variadic && callee->variadic_type != DYN_TYPE_ERROR ? slice_info(a, callee->variadic_type) : NULL;
+    if (!pack || pack->element != DYN_TYPE_ANY) continue;
+    for (uint32_t k = callee->param_count; k < e->item_count && ok; ++k) {
+      DynExprId item = a->items[e->item_start + k].expression;
+      if (item < a->expression_count) ok = type_table_add(a, &types, &count, &capacity, a->expressions[item].type);
+    }
+  }
+  /* The types inside: struct fields, array elements, enum payloads. */
+  for (size_t i = 0; i < count && ok; ++i) {
+    DynType type = types[i];
+    if (dyn_type_is_distinct(type) && type - DYN_TYPE_DISTINCT_BASE < a->alias_count)
+      ok = type_table_add(a, &types, &count, &capacity, a->aliases[type - DYN_TYPE_DISTINCT_BASE].target);
+    else if (dyn_type_is_struct(type)) {
+      const DynAstStruct *st = &a->structs[type - DYN_TYPE_STRUCT_BASE];
+      for (uint32_t f = 0; f < st->field_count && ok; ++f)
+        ok = type_table_add(a, &types, &count, &capacity, a->fields[st->field_start + f].type);
+    } else if (dyn_type_is_array(type))
+      ok = type_table_add(a, &types, &count, &capacity, array_info(a, type)->element);
+    else if (dyn_type_is_enum(type)) {
+      const DynAstEnum *en = &a->enums[type - DYN_TYPE_ENUM_BASE];
+      for (uint32_t v = 0; v < en->variant_count && ok; ++v)
+        ok = type_table_add(a, &types, &count, &capacity, a->variants[en->variant_start + v].payload_type);
+    }
+  }
+  struct TypeTableEntry *entries = count ? calloc(count, sizeof(*entries)) : NULL;
+  if (!ok || (count && !entries)) {
+    free(types);
+    free(entries);
+    error_out_of_memory(a->globals[table].name, s, errors);
+    return;
+  }
+  size_t used = 0;
+  for (size_t i = 0; i < count; ++i) {
+    DynExprId info = reflection_info(sema, a, types[i], UINT32_MAX, a->globals[table].name, s, errors);
+    if (info == DYN_NO_EXPR) { free(types); free(entries); return; }
+    entries[used++] = (struct TypeTableEntry){reflection_type_id(a, types[i]), info};
+  }
+  free(types);
+  qsort(entries, used, sizeof(*entries), type_table_order);
+  /* A distinct type shares its underlying type's id: keep one entry. */
+  size_t unique = 0;
+  for (size_t i = 0; i < used; ++i)
+    if (!unique || entries[unique - 1].id != entries[i].id) entries[unique++] = entries[i];
+  DynType info_type = a->globals[table].type;
+  DynType element = dyn_type_is_array(info_type) ? array_info(a, info_type)->element : DYN_TYPE_ERROR;
+  DynType filled = unique && element != DYN_TYPE_ERROR ? sema_intern_array(a, element, unique) : DYN_TYPE_ERROR;
+  if (filled == DYN_TYPE_ERROR || !reserve_reflection_items(a, unique)) {
+    free(entries);
+    return;
+  }
+  uint32_t start = (uint32_t)a->item_count;
+  for (size_t i = 0; i < unique; ++i)
+    a->items[a->item_count++] = (DynAstItem){.expression = entries[i].info, .field_index = UINT32_MAX};
+  free(entries);
+  DynExprId array = sema_push_expr(a, (DynAstExpr){.kind = DYN_EXPR_ARRAY, .type = filled, .left = DYN_NO_EXPR,
+      .right = DYN_NO_EXPR, .item_start = start, .item_count = (uint32_t)unique, .span = a->globals[table].name});
+  if (array == DYN_NO_EXPR) { error_out_of_memory(a->globals[table].name, s, errors); return; }
+  a->globals[table].type = filled;
+  a->globals[table].initializer = array;
+  for (size_t i = 0; i < a->expression_count; ++i)
+    if (a->expressions[i].kind == DYN_EXPR_GLOBAL && a->expressions[i].integer == table)
+      a->expressions[i].type = filled;
+}
 /* The prelude function behind a math builtin: #sqrt names dyn_builtin_sqrt. */
 static uint32_t builtin_function(DynAstProgram *a, DynSpan builtin, const DynSource *s) {
   char name[64];
@@ -2511,7 +2550,7 @@ static DynType check_expr_node(Sema *sema, DynAstProgram *a, DynExprId id,
           }
         }
       if (callee->variadic && !callee->foreign)
-        check_format_template(sema, a, callee, id, s, errors);
+        vet_format_template(a, callee, id, s);
       return a->expressions[id].type = return_type;
     }
   }
@@ -2773,178 +2812,26 @@ static DynType check_expr_node(Sema *sema, DynAstProgram *a, DynExprId id,
                     ? check_expr(sema, a, a->expressions[id].left, s, errors, DYN_TYPE_INFER)
                     : reported_type(function_signature_type(a, reflected_fn), source->span, s, errors);
     }
-    uint32_t info = UINT32_MAX, member = UINT32_MAX, kind_enum = UINT32_MAX;
-    /* Only the compiler's own declarations, which precede the module's files. */
-    for (uint32_t i = 0; i < a->struct_count; ++i) {
-      if (!dyn_reflection_prelude_span(a->structs[i].name, s)) continue;
-      if (span_is(a->structs[i].name, s, "TypeInfo"))
-        info = i;
-      else if (span_is(a->structs[i].name, s, "TypeMember"))
-        member = i;
-    }
-    for (uint32_t i = 0; i < a->enum_count; ++i)
-      if (dyn_reflection_prelude_span(a->enums[i].name, s) && span_is(a->enums[i].name, s, "TypeKind"))
-        kind_enum = i;
-    if (info == UINT32_MAX || member == UINT32_MAX || kind_enum == UINT32_MAX) {
-      error_span(a->expressions[id].span, s, errors, "compiler reflection ABI is unavailable");
-      return a->expressions[id].type = DYN_TYPE_ERROR;
-    }
-    DynAstStruct *st = &a->structs[info];
-    DynAstEnum *en = &a->enums[kind_enum];
-    bool abi =
-        st->field_count == 13 && a->structs[member].field_count == 3 &&
-        en->variant_count >= 11 &&
-        a->fields[st->field_start].type == DYN_TYPE_U64 &&
-        a->fields[st->field_start + 1].type == DYN_TYPE_ENUM_BASE + kind_enum &&
-        a->fields[st->field_start + 3].type == DYN_TYPE_USIZE &&
-        a->fields[st->field_start + 4].type == DYN_TYPE_USIZE &&
-        a->fields[st->field_start + 5].type == DYN_TYPE_U64 &&
-        a->fields[st->field_start + 6].type == DYN_TYPE_USIZE &&
-        a->fields[st->field_start + 7].type == DYN_TYPE_USIZE &&
-        a->fields[st->field_start + 8].type == DYN_TYPE_USIZE &&
-        a->fields[st->field_start + 9].type == DYN_TYPE_U64;
-    if (!abi) {
-      error_span(a->expressions[id].span, s, errors, "compiler TypeInfo ABI mismatch");
-      return a->expressions[id].type = DYN_TYPE_ERROR;
-    }
-    char name[512];
-    type_name_into(a, operand, s, name, sizeof(name));
-    size_t length = strlen(name);
-    if (!reserve_reflection_string(a) || !reserve_reflection_items(a, 13)) {
-      error_out_of_memory(a->expressions[id].span, s, errors);
-      return a->expressions[id].type = DYN_TYPE_ERROR;
-    }
-    unsigned char *bytes = malloc(length);
-    if (length && !bytes) {
-      error_out_of_memory(a->expressions[id].span, s, errors);
-      return a->expressions[id].type = DYN_TYPE_ERROR;
-    }
-    if (length)
-      memcpy(bytes, name, length);
-    uint32_t string = (uint32_t)a->string_count;
-    a->strings[a->string_count++] = (DynAstString){bytes, length};
-    uint32_t start = (uint32_t)a->item_count;
-    a->item_count += 13;
-    DynExprId values[13];
-    values[0] =
-        reflection_expr(a, DYN_EXPR_INT, DYN_TYPE_U64, reflection_id(name));
-    unsigned k = reflection_kind(sema, operand);
-    values[1] =
-        reflection_expr(a, DYN_EXPR_ENUM, DYN_TYPE_ENUM_BASE + kind_enum,
-                        en->variant_start + k);
-    values[2] = reflection_expr(a, DYN_EXPR_STRING,
-                                a->fields[st->field_start + 2].type, string);
-    uint64_t size = operand == DYN_TYPE_VOID || dyn_type_is_function(operand)
-                        ? 0
-                        : sema_type_layout(sema, a, operand, false),
-             alignment =
-                 operand == DYN_TYPE_VOID || dyn_type_is_function(operand)
-                     ? 1
-                     : sema_type_layout(sema, a, operand, true);
-    values[3] = reflection_expr(a, DYN_EXPR_INT, DYN_TYPE_USIZE, size);
-    values[4] = reflection_expr(a, DYN_EXPR_INT, DYN_TYPE_USIZE, alignment);
-    DynType element = DYN_TYPE_VOID, result = DYN_TYPE_VOID;
-    uint64_t array_length = 0, members = 0, parameters = 0;
-    if (dyn_type_is_pointer(operand))
-      element = pointer_info(a, operand)->pointee;
-    else if (dyn_type_is_array(operand)) {
-      element = array_info(a, operand)->element;
-      array_length = array_info(a, operand)->length;
-    } else if (dyn_type_is_slice(operand))
-      element = slice_info(a, operand)->element;
-    else if (dyn_type_is_struct(operand))
-      members = a->structs[operand - DYN_TYPE_STRUCT_BASE].field_count;
-    else if (dyn_type_is_enum(operand))
-      members = a->enums[operand - DYN_TYPE_ENUM_BASE].variant_count;
-    else if (dyn_type_is_function(operand)) {
-      DynAstFnType *fn = fn_type_info(a, operand);
-      parameters = fn->param_count;
-      result = fn->return_type;
-    }
-    char related_name[512];
-    uint64_t element_id = 0, result_id = 0;
-    if (element != DYN_TYPE_VOID) {
-      type_name_into(a, element, s, related_name, sizeof(related_name));
-      element_id = reflection_id(related_name);
-    }
-    if (result != DYN_TYPE_VOID) {
-      type_name_into(a, result, s, related_name, sizeof(related_name));
-      result_id = reflection_id(related_name);
-    }
-    values[5] = reflection_expr(a, DYN_EXPR_INT, DYN_TYPE_U64, element_id);
-    values[6] = reflection_expr(a, DYN_EXPR_INT, DYN_TYPE_USIZE, array_length);
-    values[7] = reflection_expr(a, DYN_EXPR_INT, DYN_TYPE_USIZE, members);
-    values[8] = reflection_expr(a, DYN_EXPR_INT, DYN_TYPE_USIZE, parameters);
-    values[9] = reflection_expr(a, DYN_EXPR_INT, DYN_TYPE_U64, result_id);
-    DynType member_type = DYN_TYPE_STRUCT_BASE + member;
-    DynType member_slice = sema_intern_slice(a, member_type, true);
-    values[10] = reflection_expr(a, DYN_EXPR_NIL, member_slice, 0);
-    values[11] = reflection_expr(a, DYN_EXPR_NIL, member_slice, 0);
-    values[12] = reflection_expr(a, DYN_EXPR_NIL, member_slice, 0);
-    if (dyn_type_is_struct(operand)) {
-      DynAstStruct *subject = &a->structs[operand - DYN_TYPE_STRUCT_BASE];
-      DynSpan *names = calloc(subject->field_count, sizeof(*names));
-      DynType *types = calloc(subject->field_count, sizeof(*types));
-      if (subject->field_count && (!names || !types))
-        values[10] = DYN_NO_EXPR;
-      for (uint32_t i = 0; i < subject->field_count && names && types; ++i) {
-        names[i] = a->fields[subject->field_start + i].name;
-        types[i] = a->fields[subject->field_start + i].type;
-      }
-      if (names && types)
-        values[10] = reflection_members(a, s, member_type, member_slice, names,
-                                        types, subject->field_count, NULL, NULL,
-                                        &a->fields[subject->field_start]);
-      free(names);
-      free(types);
-    } else if (dyn_type_is_enum(operand)) {
-      DynAstEnum *subject = &a->enums[operand - DYN_TYPE_ENUM_BASE];
-      DynSpan *names = calloc(subject->variant_count, sizeof(*names));
-      DynType *types = calloc(subject->variant_count, sizeof(*types));
-      if (subject->variant_count && (!names || !types))
-        values[11] = DYN_NO_EXPR;
-      for (uint32_t i = 0; i < subject->variant_count && names && types; ++i) {
-        names[i] = a->variants[subject->variant_start + i].name;
-        types[i] = a->variants[subject->variant_start + i].payload_type;
-      }
-      if (names && types)
-        values[11] = reflection_members(a, s, member_type, member_slice, names,
-                                        types, subject->variant_count, NULL,
-                                        &a->variants[subject->variant_start], NULL);
-      free(names);
-      free(types);
-    } else if (dyn_type_is_function(operand)) {
-      DynAstFnType *signature = fn_type_info(a, operand);
-      DynSpan *names = calloc(signature->param_count, sizeof(*names));
-      DynType *types = calloc(signature->param_count, sizeof(*types));
-      if (signature->param_count && (!names || !types))
-        values[12] = DYN_NO_EXPR;
-      for (uint32_t i = 0; i < signature->param_count && names && types; ++i) {
-        types[i] = a->fn_type_params[signature->param_start + i];
-        if (reflected_fn != UINT32_MAX)
-          names[i] = a->params[a->functions[reflected_fn].param_start + i].name;
-      }
-      if (names && types)
-        values[12] = reflection_members(a, s, member_type, member_slice, names,
-                                        types, signature->param_count, NULL, NULL, NULL);
-      free(names);
-      free(types);
-    }
-    for (uint32_t i = 0; i < 13; ++i) {
-      if (values[i] == DYN_NO_EXPR) {
-        error_out_of_memory(a->expressions[id].span, s, errors);
+    if (!a->expressions[id].boolean && operand == DYN_TYPE_ANY) {
+      /* The boxed value's TypeInfo, looked up at run time in the table the
+         compiler fills in after checking the program. */
+      uint32_t lookup = prelude_function(a, s, "dyn_builtin_type_of");
+      if (lookup == UINT32_MAX || !reserve_reflection_items(a, 1)) {
+        error_span(a->expressions[id].span, s, errors, "#typeof of an any needs the compiler prelude");
         return a->expressions[id].type = DYN_TYPE_ERROR;
       }
-      a->items[start + i] =
-          (DynAstItem){.expression = values[i], .field_index = i};
+      uint32_t item = (uint32_t)a->item_count++;
+      a->items[item] = (DynAstItem){.expression = a->expressions[id].left};
+      a->expressions[id].kind = DYN_EXPR_CALL;
+      a->expressions[id].integer = lookup;
+      a->expressions[id].left = a->expressions[id].right = DYN_NO_EXPR;
+      a->expressions[id].item_start = item;
+      a->expressions[id].item_count = 1;
+      return a->expressions[id].type = a->functions[lookup].return_type;
     }
-    a->expressions[id].kind = DYN_EXPR_STRUCT;
-    a->expressions[id].boolean_reflection = true;
-    a->expressions[id].type = DYN_TYPE_STRUCT_BASE + info;
-    a->expressions[id].integer = info;
-    a->expressions[id].left = a->expressions[id].right = DYN_NO_EXPR;
-    a->expressions[id].item_start = start;
-    a->expressions[id].item_count = 13;
+    DynExprId built = reflection_info(sema, a, operand, reflected_fn, a->expressions[id].span, s, errors);
+    if (built == DYN_NO_EXPR) return a->expressions[id].type = DYN_TYPE_ERROR;
+    a->expressions[id] = a->expressions[built];
     return a->expressions[id].type;
   }
   if (a->expressions[id].kind == DYN_EXPR_LIMIT) {
@@ -4059,35 +3946,9 @@ static bool returns_local_borrow(Sema *sema, DynAstProgram *a, DynExprId id) {
 
 static bool sema_stmt_checked(Sema *sema, DynAstProgram *a, DynAstStmt *st,
                               const DynSource *s, unsigned *errors);
-static DynExprId format_strip(const DynAstProgram *a, DynExprId id) {
-  while (id != DYN_NO_EXPR && a->expressions[id].kind == DYN_EXPR_CONVERT) id = a->expressions[id].left;
-  return id;
-}
-/* A format call whose arguments were hoisted must be the whole statement:
-   an expression statement, a declaration's value, an assignment's value or
-   a return value. Anywhere else, such as a loop condition or after &&,
-   evaluating the arguments first would change what runs. */
 static bool sema_stmt(Sema *sema, DynAstProgram *a, DynAstStmt *st,
                       const DynSource *s, unsigned *errors) {
-  size_t mark = sema->hoist_count;
-  bool terminated = sema_stmt_checked(sema, a, st, s, errors);
-  for (size_t i = mark; i < sema->hoist_count; ++i) {
-    struct SemaHoist *h = &sema->hoists[i];
-    if (h->stmt != SEMA_HOIST_PENDING) continue;
-    bool whole = format_strip(a, st->expression) == h->call &&
-                 (st->kind == DYN_STMT_EXPR || st->kind == DYN_STMT_LOCAL || st->kind == DYN_STMT_RETURN ||
-                  (st->kind == DYN_STMT_ASSIGN && (st->target == DYN_NO_EXPR || format_path(a, st->target, 0))));
-    if (whole && !sema->defer_depth) {
-      h->stmt = (uint32_t)(st - a->statements);
-      continue;
-    }
-    for (size_t j = i; j < sema->hoist_count; ++j)
-      if (sema->hoists[j].call == h->call) sema->hoists[j].stmt = SEMA_HOIST_DROPPED;
-    error_span(a->expressions[h->call].span, s, errors,
-               "format template: a struct argument that is not a name or field is read once per field; "
-               "make this call its own statement, or bind the value to a name first");
-  }
-  return terminated;
+  return sema_stmt_checked(sema, a, st, s, errors);
 }
 /* Places each claimed hoist's declaration just before its statement, in
    every block of the function. */
@@ -5078,7 +4939,6 @@ static bool sema_late_add(SemaLate *late, uint32_t function) {
 static void *sema_late_worker(void *argument) {
   SemaLate *late = argument;
   Sema sema = *late->sema;
-  sema.mem_kinds = NULL; sema.mem_kind_count = 0;
   sema.locals = (SemaNames){0}; sema.indexed_locals = 0;
   sema.active_loops = NULL; sema.active_loop_count = sema.active_loop_capacity = 0;
   memset(&sema_report, 0, sizeof(sema_report));
@@ -5093,7 +4953,6 @@ static void *sema_late_worker(void *argument) {
     life_check_function(&sema, late->a, late->s, &c->errors, &late->a->functions[c->function]);
   }
   dyn_diagnostic_capture = NULL;
-  free(sema.mem_kinds);
   return NULL;
 }
 #endif
@@ -5427,6 +5286,7 @@ static bool sema_program(Sema *sema, DynAstProgram *a, const DynSource *s,
   for (uint32_t f = first; f < a->function_count && dyn_work_step(&s->context, 1); ++f)
     sema_check_function(sema, a, s, errors, f, late);
   if (late) sema_late_finish(late, errors);
+  sema_fill_type_table(sema, a, s, errors);
   sema_report.assert_failed = false;
   sema->current_function = UINT32_MAX;
   return *errors == 0;
@@ -5547,7 +5407,6 @@ bool dyn_sema_base(DynAstProgram *a, const DynSource *s, unsigned *errors) {
     error_span((DynSpan){0}, s, errors, "interned type capacity exceeded");
     ok = false;
   }
-  free(sema.mem_kinds);
   free(sema.functions.buckets);
   free(sema.functions.next);
   free(sema.globals.buckets);

@@ -284,10 +284,8 @@ char *dyn_module_resolve_import(const DynContext *, const char *project_root, co
 char *dyn_module_resolve_sdk(const char *path);
 /* An SDK path, such as "std/fmt", resolved; sets *oom when allocation fails. */
 char *dyn_sdk_resolve(const char *path, bool *oom);
-/* Whether path is a file of the SDK's std or vendor trees. With module, such
-   as "mem", whether it is directly in std/<module>/. */
+/* Whether path is a file of the SDK's std or vendor trees. */
 bool dyn_path_in_library(const char *path);
-bool dyn_path_in_library_module(const char *path, const char *module);
 bool dyn_cache_hit(const DynSources *sources, const DynOptions *options, const char *compiler_path, const char *output);
 uint64_t dyn_cache_file_hash(const char *compiler_path);
 bool dyn_cache_directory(char *path, size_t capacity);

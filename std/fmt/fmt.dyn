@@ -2,6 +2,7 @@
 // failed compound writes; the free functions return text in an arena.
 
 use "std/mem" mem
+use "std/reflect" reflect
 
 // failed records the first write that did not fit; later writes do nothing,
 // so callers write freely and check failed once at the end. A write that does
@@ -243,7 +244,7 @@ fn put_arguments(state: *Buffer, arguments: []const any) bool {
         ok = put(state, value)
       }
       _ => {
-        ok = false
+        ok = put_reflected(state, argument)
       }
     }
     if !ok {
@@ -421,6 +422,13 @@ pub fn write_quoted(state: *Buffer, value: []const u8) {
 pub fn write_u64_width(state: *Buffer, value: u64, width: usize, padding: u8) {
   _ = put_u64_width(state, value, width, padding)
 }
+// One value, as print would insert it; a value with no text form fails the
+// write.
+pub fn write_value(state: *Buffer, value: any) {
+  one: [1]any = [value]
+  _ = put_arguments(state, one[..])
+}
+
 // Each value in turn, as print would insert it; a value with no text form
 // fails the write.
 pub fn write_values(state: *Buffer, values: ...any) {
@@ -482,6 +490,45 @@ pub fn print_arguments(state: *Buffer, template: []const u8, arguments: []const 
     state.length = start
     state.failed = true
   }
+}
+
+// A struct prints as Name{field: value, ...} and a plain enum as its
+// variant's name, read through the value's TypeInfo. Anything else has no
+// text form here.
+fn put_reflected(state: *Buffer, value: any) bool {
+  info := #typeof(value)
+  at := reflect.address(value)
+  if info.kind == TypeKind.Struct {
+    if !put(state, info.name) || !put(state, "{") { return false }
+    for i in 0..#len(info.fields) {
+      member := info.fields[i]
+      if i > 0 && !put(state, ", ") { return false }
+      if !put(state, member.name) || !put(state, ": ") { return false }
+      field: any
+      reflect.point(&field, member.type_id, at + #cast(usize, member.value))
+      if !put_value(state, field) { return false }
+    }
+    return put(state, "}")
+  }
+  if info.kind != TypeKind.Enum { return false }
+  tag: u64 = 0
+  if info.size == 1 {
+    tag = #cast(u64, #cast(*const u8, at).*)
+  } else if info.size == 2 {
+    tag = #cast(u64, #cast(*const u16, at).*)
+  } else if info.size == 4 {
+    tag = #cast(u64, #cast(*const u32, at).*)
+  } else if info.size == 8 {
+    tag = #cast(*const u64, at).*
+  } else {
+    return false
+  }
+  for variant in info.variants {
+    // A variant with a payload has no plain text form.
+    if variant.type_id != 0 { return false }
+    if variant.value == tag { return put(state, variant.name) }
+  }
+  return put_u64(state, tag)
 }
 
 fn put_value(state: *Buffer, value: any) bool {

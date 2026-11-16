@@ -1,5 +1,5 @@
-// A struct argument that is not a name or field is evaluated once, before the
-// call; the call must then be its own statement.
+// A struct argument prints at run time like any other value, from any
+// expression and in any position.
 use "std/io"
 use "std/mem"
 use "std/strings"
@@ -13,9 +13,9 @@ fn spot() Vec2 {
 fn main() {
   arena := mem.arena_alloc(0)
   ready := true
-  if ready && #len(strings.format(arena, "{}", spot())) > 0 { // error: make this call its own statement
+  if ready && #len(strings.format(arena, "{}", spot())) > 0 {
     io.println("ready")
   }
-  defer io.println("{}", spot()) // error: make this call its own statement
+  defer io.println("{}", spot())
   io.println("{}", spot())
 }

@@ -147,15 +147,21 @@ fn print_value(writer: Writer, value: any) Transfer {
       return write_all(writer, item)
     }
     _ => {
-      // A type with no text form prints as a marker rather than ending the line.
-      return write_all(writer, "{?}")
+      // Structs and plain enums print through fmt, which reads their
+      // TypeInfo; a type with no text form prints as a marker rather than
+      // ending the line.
+      text: [1024]u8
+      rendered := format.buffer(text[..])
+      format.write_value(&rendered, value)
+      if rendered.failed || #len(format.bytes(&rendered)) == 0 { return write_all(writer, "{?}") }
+      return write_all(writer, format.bytes(&rendered))
     }
   }
 }
 
 // print_arguments is the non-variadic entry point used by forwarding wrappers.
 // The format language is intentionally small: {} inserts a value; {{ and }}
-// write literal braces. A literal template is checked by the compiler. A
+// write literal braces. dyn vet checks a literal template's {} count. A
 // template made at run time that does not match its arguments still prints:
 // a {} with no argument prints {?}, a lone brace prints as itself, and each
 // extra argument prints at the end as {+value}. The result then reports

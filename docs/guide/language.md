@@ -476,22 +476,17 @@ Comparisons do not chain: `0 <= i < n` is an error, written `0 <= i && i < n`. W
 
 ## Format templates
 
-A function whose last fixed parameter is `template: []const u8` and whose pack is `...any` takes a
-format template, as `io.println`, `io.print_to`, `strings.format` and `fmt.print` do. `{}` inserts
-the next argument and `{{` and `}}` write a brace. When the template is a string literal, the
-compiler checks it: a lone brace, `{:x}` or any other spec, and a count of `{}` that differs from
-the count of arguments are errors. A template computed at run time is checked when it runs: a
-missing value prints `{?}`, an extra one prints at the end as `{+value}`, and a value with no text
-form prints `{?}`.
+Formatting is ordinary library code: `io.println`, `io.print_to`, `strings.format` and
+`fmt.print` take a template and `...any` values. `{}` inserts the next value and `{{` and `}}`
+write a brace. A missing value prints `{?}`, an extra one prints at the end as `{+value}`, and a
+value with no text form prints `{?}`. The compiler treats these functions like any other.
+`dyn vet`, like Go's vet, checks calls that pass a literal with braces right before the values:
+a lone brace or a `{}` count that differs from the number of values is reported.
 
-With a literal template, a struct or plain enum argument prints its contents. The compiler
-rewrites the call, so nothing is looked up at run time: `io.println("{}", unit)` prints
-`Unit{name: ada, at: Vec2{x: 1.5, y: 2}, op: Sub}`, reading each field once. Enums with set
-tags print the tag. A struct from any other expression, such as `io.println("{}", spot())` or
-`points[i]`, is evaluated once into an unnamed local before the call, with the call's other
-arguments, in order. Such a call must be its own statement: an expression statement, a
-declaration's or assignment's value, or a return value. In a condition, after `&&`, or in a
-`defer`, bind the value to a name first.
+A struct or plain enum value prints its contents, read at run time through its `TypeInfo`:
+`io.println("{}", unit)` prints `Unit{name: ada, at: Vec2{x: 1.5, y: 2}, op: Sub}`. Any
+expression works, such as `spot()` or `points[i]`, and each is evaluated once like any other
+argument. An enum with a payload has no text form.
 
 ## Builtins
 
@@ -551,7 +546,10 @@ or in a function body.
 `#panic(message)` accepts any `[]const u8` expression; messages need not be literals.
 
 `#typeof(type_or_value)` returns compiler-provided `TypeInfo` without evaluating value operands.
-It requires no standard-library import. Metadata includes stable name-derived ID, `TypeKind`, name, size, and
+For a value of type `any` it is the boxed value's `TypeInfo`, found at run time: the compiler
+keeps a table of the types the program boxes into `any` and the types inside them.
+It requires no standard-library import. Metadata includes an ID (the same for a type and for an
+`any` holding it; unique in a program, not stable across builds), `TypeKind`, name, size, and
 alignment. Only types passed to `#typeof` emit name metadata. Bare function names are accepted.
 Struct fields, enum variants, and function arguments expose immutable name/type-ID descriptors
 (`TypeMember`); its `value` is a field's byte offset or a variant's tag;

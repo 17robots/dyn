@@ -879,6 +879,7 @@ module's full declarations and comments.
 - `fn write_padding(state: *Buffer, byte: u8, amount: usize)`
 - `fn write_quoted(state: *Buffer, value: []const u8)`
 - `fn write_u64_width(state: *Buffer, value: u64, width: usize, padding: u8)`
+- `fn write_value(state: *Buffer, value: any)`: One value, as print would insert it;
 - `fn write_values(state: *Buffer, values: ...any)`: Each value in turn, as print would insert it;
 - `fn print(state: *Buffer, template: []const u8, arguments: ...any)`: Formats template into the buffer: {} inserts the next argument, {{ and }} write braces.
 - `fn print_arguments(state: *Buffer, template: []const u8, arguments: []const any)`
@@ -2242,15 +2243,14 @@ module's full declarations and comments.
 - `struct Redirect { handle: isize, set: bool }`: Handles are native descriptors/HANDLE values.
 - `fn redirect(handle: isize) Redirect`: Connects the child's stream to handle.
 - `struct Options { input: Redirect, output: Redirect, error: Redirect, environment: [][]const u8, directory: []const u8 }`: Zero is valid: inherit all three streams, the parent's environment and directory.
-- `struct Child { handle: isize, active: bool }`
-- `type SpawnResult = io.Result(Child)`
+- `struct Child { handle: isize, active: bool }`: A running child process, in the arena spawn was given;
+- `type SpawnResult = io.Result(*Child)`
 - `struct ExitResult { code: u32, signal: u32, finished: bool, failure: io.Failure }`
 - `struct Status { failure: io.Failure }`
 - `struct Pipe { input: isize, output: isize, failure: io.Failure }`
 - `struct EnvironmentResult { value: []u8, found: bool, failure: io.Failure }`
 - `struct CaptureResult { output: []u8, errors: []u8, exit: ExitResult, timed_out: bool, limit_reached: bool, failure: io.Failure }`
 - `fn spawn(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, configuration: Options) SpawnResult`
-- `fn take(child: *Child) Child`: Transfer the owned child handle.
 - `fn wait(child: *Child, nonblocking: bool) ExitResult`
 - `fn terminate(child: *Child) Status`
 - `fn pipe() Pipe`
@@ -2310,6 +2310,8 @@ module's full declarations and comments.
 ## std/reflect
 
 - `enum Kind { Invalid, None, Bool, Integer, Float, Pointer, Array, Slice, Struct, Enum, Function, }`: Stable public categories.
+- `fn address(value: any) usize`: The address of the value an any holds.
+- `fn point(target: *any, type_id: u64, address: usize)`: Makes target an any for the value of type type_id at address, borrowed, not copied.
 - `fn category(info: TypeInfo) Kind`: Bridge existing compiler metadata into public reflection vocabulary.
 - `fn same(left: TypeInfo, right: TypeInfo) bool`
 - `fn is_number(info: TypeInfo) bool`
