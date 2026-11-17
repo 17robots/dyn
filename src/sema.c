@@ -5641,6 +5641,122 @@ static void vet_copied_handles(const DynAstProgram *a, const DynSource *s) {
   }
   free(passed);
 }
+/* dyn vet, by shape: a struct local declared without a value that is only
+   ever passed by pointer, as in `status: fail.Status` given to calls as
+   &status, collects what those calls record and nobody reads it. And a local
+   initialized by such a call, `text := f(&status, ...)`, tested for being
+   empty (`#len(text) == 0`) before the struct is read: an empty result can be
+   a success, so the emptiness says nothing about a failure. No function or
+   type is known by name. `_ = status` reads it, to drop it on purpose. */
+static bool vet_local_name(const DynAstProgram *a, DynExprId id, uint32_t *local) {
+  if (id >= a->expression_count) return false;
+  const DynAstExpr *e = &a->expressions[id];
+  if (e->kind != DYN_EXPR_NAME || e->integer >= a->local_count) return false;
+  *local = (uint32_t)e->integer;
+  return true;
+}
+static bool vet_zero_literal(const DynAstProgram *a, DynExprId id) {
+  return id < a->expression_count && a->expressions[id].kind == DYN_EXPR_INT && a->expressions[id].integer == 0;
+}
+static void vet_unread_state(const DynAstProgram *a, const DynSource *s) {
+  if (!a->local_count || !a->expression_count) return;
+  bool *zero_declared = calloc(a->local_count, sizeof(bool));
+  uint32_t *passed = calloc(a->local_count, sizeof(uint32_t));
+  uint32_t *reads = calloc(a->local_count, sizeof(uint32_t));
+  bool *passed_name = calloc(a->expression_count, sizeof(bool));
+  /* The struct local each local was initialized from by a call taking its address. */
+  uint32_t *filled_by = malloc(a->local_count * sizeof(uint32_t));
+  DynSpan *filled_at = calloc(a->local_count, sizeof(DynSpan));
+  if (!zero_declared || !passed || !reads || !passed_name || !filled_by || !filled_at) goto done;
+  for (uint32_t i = 0; i < a->local_count; ++i) filled_by[i] = UINT32_MAX;
+  for (size_t i = 0; i < a->statement_count; ++i) {
+    const DynAstStmt *st = &a->statements[i];
+    if (st->kind == DYN_STMT_LOCAL && st->local_id < a->local_count && st->expression == DYN_NO_EXPR &&
+        dyn_type_is_struct(a->locals[st->local_id].type))
+      zero_declared[st->local_id] = true;
+  }
+  for (size_t i = 0; i < a->expression_count; ++i) {
+    const DynAstExpr *e = &a->expressions[i];
+    if (e->kind != DYN_EXPR_CALL && e->kind != DYN_EXPR_INDIRECT_CALL) continue;
+    for (uint32_t k = 0; k < e->item_count; ++k) {
+      DynExprId item = a->items[e->item_start + k].expression;
+      if (item >= a->expression_count) continue;
+      const DynAstExpr *address = &a->expressions[item];
+      uint32_t local;
+      if (address->kind != DYN_EXPR_UNARY || address->op != DYN_OP_ADDRESS ||
+          !vet_local_name(a, address->left, &local)) continue;
+      passed_name[address->left] = true;
+      ++passed[local];
+    }
+  }
+  for (size_t i = 0; i < a->expression_count; ++i) {
+    uint32_t local;
+    if (!passed_name[i] && vet_local_name(a, (DynExprId)i, &local)) ++reads[local];
+  }
+  for (size_t i = 0; i < a->statement_count; ++i) {
+    const DynAstStmt *st = &a->statements[i];
+    if (st->kind != DYN_STMT_LOCAL || st->local_id >= a->local_count || st->expression >= a->expression_count) continue;
+    const DynAstExpr *call = &a->expressions[st->expression];
+    if (call->kind != DYN_EXPR_CALL && call->kind != DYN_EXPR_INDIRECT_CALL) continue;
+    for (uint32_t k = 0; k < call->item_count; ++k) {
+      DynExprId item = a->items[call->item_start + k].expression;
+      uint32_t state;
+      if (item >= a->expression_count || a->expressions[item].kind != DYN_EXPR_UNARY ||
+          a->expressions[item].op != DYN_OP_ADDRESS || !vet_local_name(a, a->expressions[item].left, &state) ||
+          !zero_declared[state]) continue;
+      filled_by[st->local_id] = state;
+      filled_at[st->local_id] = call->span;
+      break;
+    }
+  }
+  for (uint32_t local = 0; local < a->local_count; ++local) {
+    if (!zero_declared[local] || !passed[local] || reads[local]) continue;
+    DynSpan name = a->locals[local].name;
+    int length = (int)(name.end_byte - name.start_byte);
+    char message[320];
+    snprintf(message, sizeof(message),
+             "'%.*s' is only ever passed by pointer and never read, so what the calls record in it is lost; "
+             "read it, or write `_ = %.*s` to drop it on purpose",
+             length, s->text + name.start_byte, length, s->text + name.start_byte);
+    sema_vet_note(s, name, false, message);
+  }
+  for (size_t i = 0; i < a->expression_count; ++i) {
+    const DynAstExpr *e = &a->expressions[i];
+    if (e->kind != DYN_EXPR_BINARY || (e->op != DYN_OP_EQ && e->op != DYN_OP_NE && e->op != DYN_OP_GT)) continue;
+    DynExprId length = e->left;
+    if (!vet_zero_literal(a, e->right)) {
+      if (e->op == DYN_OP_GT || !vet_zero_literal(a, e->left)) continue;
+      length = e->right;
+    }
+    uint32_t result;
+    if (length >= a->expression_count || a->expressions[length].kind != DYN_EXPR_LEN ||
+        !vet_local_name(a, a->expressions[length].left, &result) || filled_by[result] == UINT32_MAX) continue;
+    uint32_t state = filled_by[result];
+    /* Fine when the state was read between the call and this test. */
+    bool checked = false;
+    for (size_t j = 0; j < a->expression_count && !checked; ++j) {
+      uint32_t local;
+      if (passed_name[j] || !vet_local_name(a, (DynExprId)j, &local) || local != state) continue;
+      size_t at = a->expressions[j].span.start_byte;
+      checked = at > filled_at[result].start_byte && at < e->span.start_byte;
+    }
+    if (checked) continue;
+    DynSpan result_name = a->locals[result].name, state_name = a->locals[state].name;
+    char message[320];
+    snprintf(message, sizeof(message),
+             "an empty '%.*s' does not mean the call failed, since an empty result can be a success; test '%.*s' instead",
+             (int)(result_name.end_byte - result_name.start_byte), s->text + result_name.start_byte,
+             (int)(state_name.end_byte - state_name.start_byte), s->text + state_name.start_byte);
+    sema_vet_note(s, e->span, false, message);
+  }
+done:
+  free(zero_declared);
+  free(passed);
+  free(reads);
+  free(passed_name);
+  free(filled_by);
+  free(filled_at);
+}
 /* main takes nothing: a program that wants its arguments calls
    process.start() itself, so nothing runs before main's first line. */
 static void sema_main_init(DynAstProgram *a, const DynSource *s, unsigned *errors) {
@@ -5722,6 +5838,7 @@ bool dyn_sema_base(DynAstProgram *a, const DynSource *s, unsigned *errors) {
         sema_vet_note(s, st->name, false, "local is never used");
     }
     vet_copied_handles(a, s);
+    vet_unread_state(a, s);
     for (size_t i = 0; i < a->expression_count; ++i) {
       const DynAstExpr *e = &a->expressions[i];
       if (e->kind == DYN_EXPR_SYSCALL)

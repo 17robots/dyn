@@ -47,13 +47,16 @@ Language (2026-11-16 cleanup; see `docs/guide/rules.md`):
 Standard library:
 
 - Failure is state you pass in: new `std/fail` (`fail.Status`, `fail.Failure`,
-  `fail.Kind`, `fail.set`, `fail.invalid`, `fail.describe`,
+  `fail.Kind`, `fail.make`, `fail.set`, `fail.invalid`, `fail.describe`,
   `fail.panic_on_failure`). A function that can fail takes a `*fail.Status`;
   the first failure stays there with its kind, native code, operation, path
   and reason, and every later call given that status does nothing and returns
   zero or empty. Check `status.failed` once, before acting on the results.
   `Status.on_failure` is called once when the first failure is recorded.
-  `io.Kind` is now the same type as `fail.Kind`.
+  A `fail.Failure` keeps its own copy of its text (up to 228 bytes; a long
+  path keeps its end), so it stays readable after the text it came from is
+  gone; read it with `fail.operation_text`, `fail.path_text` and
+  `fail.message_text`. `io.Kind` is now the same type as `fail.Kind`.
 - `std/fs` moves to it. Every fallible function takes the status first (after
   the arena when it allocates): `fs.open(&status, path)`,
   `fs.read(&status, &file, buffer)`, `fs.write(&status, &file, bytes)` (no
@@ -74,6 +77,14 @@ Standard library:
   `fs.make_directory_exclusive`. `fs.make_directory` now succeeds when the
   directory exists.
 - `testing.remove_temporary` takes a status.
+
+Tools:
+
+- `dyn vet` warns about a struct local declared without a value that is only
+  ever passed by pointer and never read, such as a `fail.Status` nothing
+  checks (`_ = status` drops it on purpose), and about a result tested for
+  being empty before the status its call filled in is read. Both go by shape;
+  no type is known by name.
 - `panic.assert(condition, message)` checks a condition in every build.
 - Image `width` and `height` (`image.View`, every encoder) and font sizes
   (`font.Bitmap`, `font.Atlas`, `font.AtlasGlyph`, `font.atlas`) are `usize`.

@@ -224,8 +224,11 @@ Five rules make it work:
    To pass it on, `fail.set(status, step.failure)`.
 
 Your own code records a problem it finds in its input the same way, with
-`fail.invalid(status, "config", path, "port out of range")`. A failure borrows
-its `path` and `message` text, so that text must outlive the check.
+`fail.invalid(status, "config", path, "port out of range")`. A failure keeps
+its own copy of its text, so it stays readable after the path or message it
+came from is gone; read the parts with `fail.operation_text`, `fail.path_text`
+and `fail.message_text`. `dyn vet` warns about a status that is passed to calls
+but never read, and about an empty result used as the failure test.
 
 Modules move to this model one at a time; `std/fs` is first. A module that has
 not moved yet returns `{value, failure}` (`io.Result(T)`, `parse.Result(T)`):

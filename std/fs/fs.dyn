@@ -37,11 +37,14 @@ pub fn adopt_handle(handle: isize) File {
 
 // Records a native failure: its portable kind and the system's own reason.
 fn fail_native(status: *fail.Status, operation: []const u8, path: []const u8, code: isize) {
-  fail.set(status, fail.Failure{ kind: native_kind(code), native: code, operation: operation, path: path,
-    message: native_text(code) })
+  if status.failed { return }
+  failure := fail.make(native_kind(code), operation, path, native_text(code))
+  failure.native = code
+  fail.set(status, failure)
 }
 fn fail_kind(status: *fail.Status, operation: []const u8, path: []const u8, kind: fail.Kind, message: []const u8) {
-  fail.set(status, fail.Failure{ kind: kind, operation: operation, path: path, message: message })
+  if status.failed { return }
+  fail.set(status, fail.make(kind, operation, path, message))
 }
 // Records code when it is a failure (negative).
 fn check(status: *fail.Status, operation: []const u8, path: []const u8, code: isize) {
@@ -150,7 +153,7 @@ fn adapter_read(data: rawptr, destination: []u8) io.Transfer {
   file := #cast(*File, data)
   status: fail.Status
   count := read(&status, file, destination)
-  if status.failed { return io.Transfer{ transferred: count, failure: io.from_fail(status.failure) } }
+  if status.failed { return io.Transfer{ transferred: count, failure: stream_failure(&status, "read", file) } }
   stream_status := io.Status.Complete
   if count == 0 && #len(destination) != 0 {
     stream_status = io.Status.End
@@ -161,8 +164,13 @@ fn adapter_write(data: rawptr, source: []const u8) io.Transfer {
   file := #cast(*File, data)
   status: fail.Status
   count := write_count(&status, file, source)
-  if status.failed { return io.Transfer{ transferred: count, failure: io.from_fail(status.failure) } }
+  if status.failed { return io.Transfer{ transferred: count, failure: stream_failure(&status, "write", file) } }
   return io.Transfer{ transferred: count }
+}
+// An io.Failure borrows its text, so it names the file's own path, which
+// outlives the call, not the status's copy.
+fn stream_failure(status: *const fail.Status, operation: []const u8, file: *const File) io.Failure {
+  return io.Failure{ kind: status.failure.kind, native: status.failure.native, operation: operation, path: file.path }
 }
 pub fn reader(file: *File) io.Reader {
   return io.Reader{ data: file, read: adapter_read }
@@ -363,8 +371,9 @@ pub fn read_contents(arena: *memory.Arena, status: *fail.Status, file: *File, ma
   if kind == fail.Kind.Overflow {
     fail_kind(status, "read", file.path, kind, "file is larger than the limit")
   } else if kind != fail.Kind.Ok {
-    fail.set(status, fail.Failure{ kind: kind, native: error, operation: "read", path: file.path,
-      message: "out of memory" })
+    failure := fail.make(kind, "read", file.path, "out of memory")
+    failure.native = error
+    fail.set(status, failure)
   }
   if status.failed {
     memory.arena_rewind(arena, mark)

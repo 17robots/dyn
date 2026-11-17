@@ -36,6 +36,18 @@ Casts that set a type stay: `wide := #cast(u64, n)`, an operand beside a
 literal (`#cast(u64, n) * 2`), and casts on both operands. A cast is reported
 only when every target agrees, so `#cast(i32, descriptor)` stays when
 `net.Descriptor` is `isize` on Windows.
+It also checks failure handling by shape:
+- A struct local declared without a value and only ever passed by pointer is
+  never read, so what the calls record in it is lost. An example is a
+  `status: fail.Status` that nothing checks. Write `_ = status` to drop it on
+  purpose.
+- A result tested for being empty (`#len(text) == 0`) before the status its
+  call filled in is read. An empty result can be a success, such as an empty
+  file; test `status.failed`.
+- A struct copied with `copy := original`, with both copies then passed by
+  mutable pointer to the same function, such as `fs.close(&file)` and
+  `fs.close(&copy)`. Whatever it releases is released twice.
+
 Editors flag unused parameters except those named with a leading `_`, such as
 `_signal` in a callback that ignores it.
 Editors leave the cast check to `dyn vet`, since it checks every target.
