@@ -87,6 +87,8 @@ fn main() i32 {
 - Generics: `fn max(a: $T, b: $T) T` infers `T` from arguments;
   `fn make(T: type, ...)` takes it first, as in `mem.push(Node, arena)`.
 - `defer` runs at block exit. A panic ends the program; it is for bugs.
+  `panic.assert(condition, "message")` (`std/panic`) checks one at run time,
+  in every build; `#assert` checks constants at compile time.
 
 ## Failure: one shape everywhere
 

@@ -995,7 +995,7 @@ Layer: heap
 - `struct Bitmap { pixels: []u8, width: usize, height: usize, x_offset: i32, y_offset: i32, advance: i32 }`
 - `fn open(status: *fail.Status, data: []const u8) Face`
 - `fn glyph_index(face: *const Face, codepoint: u32) u16`: Zero is the font's missing-glyph slot.
-- `fn raster(arena: *mem.Arena, status: *fail.Status, face: *const Face, index: u16, pixels_per_em: u16) Bitmap`: Unhinted 4x4 supersampling for simple and composite glyf outlines.
+- `fn raster(arena: *mem.Arena, status: *fail.Status, face: *const Face, index: u16, pixels_per_em: usize) Bitmap`: Unhinted 4x4 supersampling for simple and composite glyf outlines.
 - `struct AtlasGlyph { codepoint: u32, x: usize, y: usize, width: usize, height: usize, x_offset: i32, y_offset: i32, advance: i32 }`
 - `struct Atlas { pixels: []u8, width: usize, height: usize, line_height: i32, glyphs: []AtlasGlyph }`: Glyphs are sorted by codepoint.
 - `fn atlas(arena: *mem.Arena, status: *fail.Status, face: *const Face, codepoints: []const u32, pixels_per_em: u16, width, height: usize) Atlas`: Shelf packing with one transparent padding pixel.

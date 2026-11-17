@@ -76,12 +76,12 @@ pub fn match(status: *fail.Status, pattern: Pattern, data: MatchData, subject: [
   }
   return code >= 0
 }
-pub fn capture(data: MatchData, index: u32) Span {
-  if data == nil || index >= native_count(data) { return Span{} }
+pub fn capture(data: MatchData, index: usize) Span {
+  if data == nil || index >= #cast(usize, native_count(data)) { return Span{} }
   offsets := native_offsets(data)
   pair := #slice(offsets, #cast(usize, native_count(data)) * 2)
-  start := pair[#cast(usize, index) * 2]
-  end := pair[#cast(usize, index) * 2 + 1]
+  start := pair[index * 2]
+  end := pair[index * 2 + 1]
   return Span{ start: start, end: end, found: start != #cast(usize, -1) && end != #cast(usize, -1) }
 }
 extern fn native_compile "pcre2_compile_8"(pattern: *const u8, length: usize, options: u32, code: *i32, offset: *usize, context: rawptr) Pattern

@@ -41,6 +41,16 @@ fn clamp(value: i32, low: i32, high: i32) i32 {
   and `init(&x)` fills storage that already exists. Conversions are
   `X_from_Y`: the result first, then the source.
 
+## Number types in public APIs
+
+- Counts, lengths, sizes in memory and indexes are `usize`, as `#len` is.
+- File sizes and offsets are `u64` (or `isize` for a signed seek): a file can
+  be larger than the address space of a 32-bit target.
+- On-screen geometry is `i32`, beside signed `x` and `y`.
+- A field defined by a format, protocol or C struct keeps that width (a
+  glyph index is `u16`, a ChaCha20 block counter `u32`); a wrapper converts
+  once, at the boundary.
+
 ## Imports
 
 - Inside a library, import its own modules with `./` or `../` paths. Never use

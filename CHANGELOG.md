@@ -257,6 +257,12 @@ Standard library:
   for every target; the suite and CI check all 110 of those modules on
   riscv64-none, riscv32-none and thumbv7em-none, and that no module imports
   a higher layer.
+- Counts, lengths and indexes are `usize` across the vendor wrappers too:
+  `sqlite` column and parameter indexes and `column_count`
+  (`Statement.columns`), `pcre2.capture`, `tree_sitter` `child`,
+  `child_count`, `node_start` and `node_end`, `lua.pop` and `stack_size`,
+  `stb` image and atlas sizes, and `font.raster`'s `pixels_per_em`. The
+  rule is in `docs/guide/style.md`.
 - Arenas (`std/mem`) keep a small core. Running out always panics, a fixed
   buffer included, with a message that says whether the buffer was full, a
   limit was reached or the source had no more memory:

@@ -7,13 +7,17 @@ pub struct Rectangle { width: i32, height: i32, x: i32, y: i32, was_packed: i32 
 // The count packed; was_packed marks each one. A partial fit is not a
 // failure: compare the count. Bad sizes fail with InvalidInput. An exhausted
 // scratch arena panics.
-pub fn pack(scratch: *mem.Arena, status: *fail.Status, width: i32, height: i32, rectangles: []Rectangle) usize {
+pub fn pack(scratch: *mem.Arena, status: *fail.Status, width: usize, height: usize, rectangles: []Rectangle) usize {
   if status.failed { return 0 }
   if scratch == nil {
     fail.invalid(status, "pack rectangles", "", "no scratch arena")
     return 0
   }
-  size := native_size(width, #len(rectangles))
+  if width > 32768 || height > 32768 {
+    fail.invalid(status, "pack rectangles", "", "the atlas is larger than 32768")
+    return 0
+  }
+  size := native_size(#cast(i32, width), #len(rectangles))
   if size == 0 {
     fail.invalid(status, "pack rectangles", "", "bad width or count")
     return 0
@@ -25,7 +29,7 @@ pub fn pack(scratch: *mem.Arena, status: *fail.Status, width: i32, height: i32, 
   if #len(rectangles) != 0 {
     data = &rectangles[0]
   }
-  code := native_pack(width, height, data, #len(rectangles), #cast(rawptr, &work[0]), size)
+  code := native_pack(#cast(i32, width), #cast(i32, height), data, #len(rectangles), #cast(rawptr, &work[0]), size)
   if code < 0 {
     fail.invalid(status, "pack rectangles", "", "bad rectangle sizes")
     return 0

@@ -16,19 +16,19 @@ pub fn destroy_owned(state: State) {
     native_close(state)
   }
 }
-pub fn stack_size(state: State) i32 {
+pub fn stack_size(state: State) usize {
   if state == nil { return 0 }
-  return native_top(state)
+  return #cast(usize, native_top(state))
 }
 // Only remove values; never grow the stack through this API. Popping more
 // than the stack holds fails with InvalidInput and changes nothing.
-pub fn pop(status: *fail.Status, state: State, count: i32) {
+pub fn pop(status: *fail.Status, state: State, count: usize) {
   if status.failed { return }
-  if state == nil || count < 0 || count > native_top(state) {
+  if state == nil || count > #cast(usize, native_top(state)) {
     fail.invalid(status, "pop Lua stack", "", "no state, or more values than the stack holds")
     return
   }
-  native_settop(state, native_top(state) - count)
+  native_settop(state, native_top(state) - #cast(i32, count))
 }
 // Text-only protected execution. On success leaves exactly one result (nil if
 // chunk returns none); on failure leaves one error. Earlier stack values survive.
