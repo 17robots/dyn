@@ -359,6 +359,9 @@ Tools:
   (`fs.list_dir`, `fs.create_dir_all`, `fs.exists`, `strings.equal`, ...)
   say what Dyn calls them, and a member with no close spelling lists related
   ones (`related: fs.list`).
+- Two neighboring arguments that each fit the other's parameter are reported
+  as swapped, with the swap as a suggestion: `function arguments 1 and 2 look
+  swapped (expected *Arena, *Status; found *Status, *Arena)`.
 - `dyn guide` prints the guide built into the compiler: `--brief` for one
   page of what to write (and what not to bring from Go, Rust, Zig or C), or a
   topic: `rules`, `idioms`, `language`, `memory`, `collections`, `std`,
