@@ -427,6 +427,8 @@ typedef struct {
 } DynAstProgram;
 
 bool dyn_ast_lower_compact(const DynSource *, DynAstProgram *, unsigned *, const char *owner_key);
+/* lazy: library function bodies the program cannot reach stay unchecked. */
+bool dyn_ast_lower_compact_lazy(const DynSource *, DynAstProgram *, unsigned *, const char *owner_key, bool lazy);
 /* Whether span lies in the reflection prelude the compiler adds before a
    merged module's files. */
 bool dyn_reflection_prelude_span(DynSpan span, const DynSource *s);

@@ -12,7 +12,8 @@ DynCheckResult dyn_check_sources(const DynSources *sources,
   DynAnalysisResult result =
       dyn_analyze(&merged, &ast,
                   (DynAnalysisOptions){.main_path = main_path,
-                                       .require_main = require_main});
+                                       .require_main = require_main,
+                                       .lazy_library = true});
   dyn_ast_program_free(&ast);
   dyn_source_free(&merged);
   return (DynCheckResult){result.has_main, result.main_valid, result.errors};
@@ -46,7 +47,7 @@ static void vet_confirm(const DynContext *base, const DynTarget *target, const c
   DynSource merged = {0};
   if (!dyn_sources_merge(&project, main_path, &merged)) {
     DynAstProgram ast = {0};
-    dyn_analyze(&merged, &ast, (DynAnalysisOptions){.main_path = main_path});
+    dyn_analyze(&merged, &ast, (DynAnalysisOptions){.main_path = main_path, .lazy_library = true});
     dyn_ast_program_free(&ast);
   }
   dyn_source_free(&merged);
@@ -74,7 +75,7 @@ DynCheckResult dyn_vet_sources(const DynSources *sources, const char *main_path,
   DynVetCasts *casts = merged.context.vet_casts;
   DynAstProgram ast = {0};
   DynAnalysisResult result =
-      dyn_analyze(&merged, &ast, (DynAnalysisOptions){.main_path = main_path});
+      dyn_analyze(&merged, &ast, (DynAnalysisOptions){.main_path = main_path, .lazy_library = true});
   dyn_ast_program_free(&ast);
   if (casts && !result.errors) {
     casts->confirm = true;

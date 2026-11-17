@@ -7,6 +7,7 @@ typedef struct {
   const char *main_path;
   bool require_main;
   bool recover; /* Retain useful declarations from incomplete editor syntax. */
+  bool lazy_library; /* Skip library bodies the program cannot reach. */
 } DynAnalysisOptions;
 typedef struct {
   unsigned errors;

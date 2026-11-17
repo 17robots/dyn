@@ -124,8 +124,26 @@ const char *dyn_type_name(DynType t) {
          : dyn_type_is_slice(t)   ? "slice"
                                   : "struct";
 }
+/* Errors inside a module with no source file for the target, such as a
+   signature naming a type only another target's file declares, share that
+   cause: report it once per module, as sema does for bodies. */
+static _Thread_local char lowering_gap_module[4096];
 static void diagnostic_span(DynSpan p, const DynSource *s, unsigned *errors,
                             const char *message) {
+  char name[4096];
+  if (dyn_source_target_gap(s, p.start_byte, name, sizeof(name))) {
+    if (!strcmp(lowering_gap_module, name)) {
+      ++*errors;
+      return;
+    }
+    memcpy(lowering_gap_module, name, strlen(name) + 1);
+    char gap[4200];
+    snprintf(gap, sizeof(gap), "module '%s' has no source file for target %s; it is unavailable there",
+             name, dyn_context_target(&s->context)->name);
+    dyn_diagnostic_source("error", s, p.start_byte, p.end_byte, gap);
+    ++*errors;
+    return;
+  }
   dyn_diagnostic_source("error", s, p.start_byte, p.end_byte, message);
   ++*errors;
 }
@@ -1375,7 +1393,7 @@ static bool compact_open_late_instances(DynAstProgram *a) {
   return true;
 }
 static bool lower_declarations(DynSpan root, const DynSource *s, DynAstProgram *a,
-                               unsigned *errors, const char *owner_key) {
+                               unsigned *errors, const char *owner_key, bool lazy) {
   unsigned before = *errors;
   DynNameIndex functions = {0}, globals = {0};
   a->structs_open = true;
@@ -1396,7 +1414,7 @@ static bool lower_declarations(DynSpan root, const DynSource *s, DynAstProgram *
       diagnostic(root, s, errors, "out of memory");
     return false;
   }
-  compact_lower_function_bodies(s, a, errors, owner_key, &functions);
+  compact_lower_function_bodies(s, a, errors, owner_key, &functions, lazy);
   *errors += a->instance_errors;
   a->instance_errors = 0;
   if (a->invalid_array_extent.end_byte)
@@ -1414,7 +1432,12 @@ static bool lower_declarations(DynSpan root, const DynSource *s, DynAstProgram *
 }
 bool dyn_ast_lower_compact(const DynSource *s, DynAstProgram *a,
                            unsigned *errors, const char *owner_key) {
+  return dyn_ast_lower_compact_lazy(s, a, errors, owner_key, false);
+}
+bool dyn_ast_lower_compact_lazy(const DynSource *s, DynAstProgram *a,
+                                unsigned *errors, const char *owner_key, bool lazy) {
   memset(a,0,sizeof(*a));
+  lowering_gap_module[0] = 0;
   DynSpan root={s->compact_root_start,s->compact_root_end};
   size_t count=s->syntax_part_count ? s->syntax_part_count : 1;
   for (size_t i=0;i<count;++i) {
@@ -1431,7 +1454,7 @@ bool dyn_ast_lower_compact(const DynSource *s, DynAstProgram *a,
     return false;
   }
   a->decl_count=0;
-  return lower_declarations(root,s,a,errors,owner_key);
+  return lower_declarations(root,s,a,errors,owner_key,lazy);
 }
 
 #undef diagnostic

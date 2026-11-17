@@ -113,7 +113,8 @@ DynAnalysisResult dyn_analyze(const DynSource *source, DynAstProgram *ast, DynAn
   }
   dyn_timing_phase(&source->context, &phase, "parse");
   if (dyn_work_step(&source->context, 1) && (!result.errors || options.recover)) {
-    dyn_ast_lower_compact(source, ast, &result.errors, options.owner_key);
+    bool lazy = options.lazy_library && options.main_path && !dyn_path_in_library(options.main_path);
+    dyn_ast_lower_compact_lazy(source, ast, &result.errors, options.owner_key, lazy);
     dyn_timing_phase(&source->context, &phase, "ast");
     if (!ast->allocation_failed && (ast->struct_count || ast->enum_count || ast->function_count || ast->global_count))
       if (!dyn_sema_function(ast, source, &result.errors) && !result.errors) ast->allocation_failed = true;

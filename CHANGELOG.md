@@ -80,6 +80,10 @@ Standard library:
 
 Tools:
 
+- `dyn check` and `dyn vet` check std and vendor function bodies only when
+  the program can reach them; `dyn check` on a library module still checks
+  all of it. Checking the compile-budget fixture makes 16% fewer
+  allocations and peaks at 31 MiB instead of 42.
 - `dyn vet` warns about a struct local declared without a value that is only
   ever passed by pointer and never read, such as a `fail.Status` nothing
   checks (`_ = status` drops it on purpose), and about a result tested for
