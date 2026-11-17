@@ -7,14 +7,52 @@ pub type World = u32
 pub type Body = u64
 pub type Shape = u64
 pub struct Position { x: f32, y: f32 }
-pub extern fn create_owned "dyn_b2_world_create"(gravity_x: f32, gravity_y: f32) World
-pub extern fn destroy_owned "dyn_b2_world_destroy"(world: World) bool
+// Bad numbers (not finite, sizes not positive) or a stale ID fail with
+// InvalidInput. Destroying a stale ID does nothing.
+pub fn create_owned(status: *fail.Status, gravity_x: f32, gravity_y: f32) World {
+  if status.failed { return 0 }
+  world := native_world_create(gravity_x, gravity_y)
+  if world == 0 {
+    fail.invalid(status, "create world", "", "gravity is not finite")
+  }
+  return world
+}
+pub fn destroy_owned(world: World) {
+  _ = native_world_destroy(world)
+}
 // dt must be finite, >0 and <=1 second; substeps 1..64.
-pub extern fn step "dyn_b2_step"(world: World, dt: f32, substeps: i32) bool
-pub extern fn body_create "dyn_b2_body"(world: World, x: f32, y: f32, dynamic: bool) Body
-pub extern fn body_destroy "dyn_b2_body_destroy"(body: Body) bool
+pub fn step(status: *fail.Status, world: World, dt: f32, substeps: i32) {
+  if status.failed { return }
+  if !native_step(world, dt, substeps) {
+    fail.invalid(status, "step world", "", "invalid world, dt or substeps")
+  }
+}
+pub fn body_create(status: *fail.Status, world: World, x: f32, y: f32, dynamic: bool) Body {
+  if status.failed { return 0 }
+  body := native_body(world, x, y, dynamic)
+  if body == 0 {
+    fail.invalid(status, "create body", "", "invalid world or position")
+  }
+  return body
+}
+pub fn body_destroy(body: Body) {
+  _ = native_body_destroy(body)
+}
 // Positive finite half-extents and nonnegative finite density. Body owns shape.
-pub extern fn box_create "dyn_b2_box"(body: Body, half_width: f32, half_height: f32, density: f32) Shape
+pub fn box_create(status: *fail.Status, body: Body, half_width: f32, half_height: f32, density: f32) Shape {
+  if status.failed { return 0 }
+  shape := native_box(body, half_width, half_height, density)
+  if shape == 0 {
+    fail.invalid(status, "create box", "", "invalid body, size or density")
+  }
+  return shape
+}
+extern fn native_world_create "dyn_b2_world_create"(gravity_x: f32, gravity_y: f32) World
+extern fn native_world_destroy "dyn_b2_world_destroy"(world: World) bool
+extern fn native_step "dyn_b2_step"(world: World, dt: f32, substeps: i32) bool
+extern fn native_body "dyn_b2_body"(world: World, x: f32, y: f32, dynamic: bool) Body
+extern fn native_body_destroy "dyn_b2_body_destroy"(body: Body) bool
+extern fn native_box "dyn_b2_box"(body: Body, half_width: f32, half_height: f32, density: f32) Shape
 // A destroyed or invalid body fails with InvalidInput.
 pub fn position(status: *fail.Status, body: Body) Position {
   if status.failed { return Position{} }
@@ -28,18 +66,52 @@ pub fn position(status: *fail.Status, body: Body) Position {
 extern fn native_position "dyn_b2_position"(body: Body, x: *f32, y: *f32) bool
 
 pub type Joint = u64
-pub extern fn circle_create "dyn_b2_circle"(body: Body, radius: f32, density: f32) Shape
+pub fn circle_create(status: *fail.Status, body: Body, radius: f32, density: f32) Shape {
+  if status.failed { return 0 }
+  shape := native_circle(body, radius, density)
+  if shape == 0 {
+    fail.invalid(status, "create circle", "", "invalid body, radius or density")
+  }
+  return shape
+}
 // Rigid distance joint anchored at body origins; bodies must share a world.
-pub extern fn distance_joint "dyn_b2_distance"(first: Body, second: Body, length: f32) Joint
-pub extern fn joint_destroy "dyn_b2_joint_destroy"(joint: Joint) bool
-pub extern fn contact_events "dyn_b2_events"(shape: Shape, enabled: bool) bool
-// Read after step and before modifying the world. -1 means invalid world.
-pub extern fn contact_count "dyn_b2_contact_count"(world: World, begin: bool) i32
+pub fn distance_joint(status: *fail.Status, first: Body, second: Body, length: f32) Joint {
+  if status.failed { return 0 }
+  joint := native_distance(first, second, length)
+  if joint == 0 {
+    fail.invalid(status, "create joint", "", "invalid bodies or length")
+  }
+  return joint
+}
+pub fn joint_destroy(joint: Joint) {
+  _ = native_joint_destroy(joint)
+}
+pub fn contact_events(status: *fail.Status, shape: Shape, enabled: bool) {
+  if status.failed { return }
+  if !native_events(shape, enabled) {
+    fail.invalid(status, "contact events", "", "invalid shape")
+  }
+}
+// Read after step and before modifying the world.
+pub fn contact_count(status: *fail.Status, world: World, begin: bool) usize {
+  if status.failed { return 0 }
+  count := native_contact_count(world, begin)
+  if count < 0 {
+    fail.invalid(status, "count contacts", "", "invalid world")
+    return 0
+  }
+  return #cast(usize, count)
+}
+extern fn native_circle "dyn_b2_circle"(body: Body, radius: f32, density: f32) Shape
+extern fn native_distance "dyn_b2_distance"(first: Body, second: Body, length: f32) Joint
+extern fn native_joint_destroy "dyn_b2_joint_destroy"(joint: Joint) bool
+extern fn native_events "dyn_b2_events"(shape: Shape, enabled: bool) bool
+extern fn native_contact_count "dyn_b2_contact_count"(world: World, begin: bool) i32
 // found is false for an index past contact_count or an invalid world.
 pub struct Contact { first: Shape, second: Shape, found: bool }
-pub fn contact(world: World, begin: bool, index: i32) Contact {
+pub fn contact(world: World, begin: bool, index: usize) Contact {
   result := Contact{}
-  result.found = native_contact(world, begin, index, &result.first, &result.second)
+  result.found = index <= 2147483647 && native_contact(world, begin, #cast(i32, index), &result.first, &result.second)
   if !result.found { return Contact{} }
   return result
 }

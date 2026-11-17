@@ -81,11 +81,12 @@ LAYOUT
   // Repetition exercises ordinary create/copy/free and failed-parse cleanup.
   for iteration in 0..32 {
     _ = iteration
-    parser := ts.parser_create_owned()
-    require(parser != nil)
-    require(!ts.parser_language(parser, nil))
-    require(ts.parser_language(parser, grammar()))
     status: fail.Status
+    parser := ts.parser_create_owned(&status)
+    no_language: fail.Status
+    ts.parser_language(&no_language, parser, nil)
+    require(no_language.failed)
+    ts.parser_language(&status, parser, grammar())
     parsed := ts.parse(&status, parser, nil, "fn main() {}")
     require(!status.failed)
     node := ts.root(parsed)
@@ -93,14 +94,15 @@ LAYOUT
     require(ts.node_start(node) == 0 && ts.node_end(node) == 12)
     require(ts.child_count(node) == 1)
     require(bytes.equal(ts.node_type(node, 64), "source_file"))
-    copy := ts.tree_copy_owned(parsed)
-    require(copy != nil)
+    copy := ts.tree_copy_owned(&status, parsed)
+    require(!status.failed)
     ts.tree_destroy_owned(parsed)
     // The copied tree remains live after the original is destroyed.
     require(ts.node_end(ts.root(copy)) == 12)
     edit := ts.Edit{ start_byte: 11, old_end_byte: 11, new_end_byte: 12,
       start_point: ts.Point{ column: 11 }, old_end_point: ts.Point{ column: 11 }, new_end_point: ts.Point{ column: 12 } }
-    require(ts.tree_edit(copy, &edit))
+    ts.tree_edit(&status, copy, &edit)
+    require(!status.failed)
     reparsed := ts.parse(&status, parser, copy, "fn main() { }")
     require(!status.failed && ts.node_end(ts.root(reparsed)) == 13)
     ts.tree_destroy_owned(copy)

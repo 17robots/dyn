@@ -6,8 +6,11 @@ pub type Font = rawptr
 pub struct Size { width: i32, height: i32 }
 // Init/quit must be balanced; destroy fonts before quit. Use each font on its
 // creating thread. SDL owns rendered surfaces; destroy them separately.
-pub fn init() bool {
-  return native_init()
+pub fn init(status: *fail.Status) {
+  if status.failed { return }
+  if !native_init() {
+    sdl3.record_error(status, "start SDL_ttf")
+  }
 }
 pub fn quit() {
   native_quit()

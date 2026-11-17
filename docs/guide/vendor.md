@@ -12,7 +12,10 @@ need their own library naming, deployment and ABI checks.
 There are two layers:
 
 - **Wrappers** such as `vendor/sqlite` or `vendor/sdl3` are small, hand-written,
-  Dyn-shaped APIs with documented ownership.
+  Dyn-shaped APIs with documented ownership. They follow std's failure model: a
+  call that can fail takes a `*fail.Status` and returns its value, carrying the
+  library's own message and code (`failure.native`); destroy and close functions
+  take none.
 - **Raw bindings** under `vendor/<name>/raw` are generated from the installed C
   headers and expose the full C API. See [raw bindings](#raw-bindings).
 
@@ -289,11 +292,11 @@ SDL's default-device creation is exercised with the dummy audio driver.
 
 cgltf never resolves external paths automatically. Use `buffer_uri`/`buffer_size`,
 load each external resource under application policy, then `attach_buffer`.
-Attached bytes are borrowed through model destruction. `load_embedded` rejects
-any unresolved external buffer before loading data URIs/GLB data; already attached
-buffers are skipped. Nodes expose mesh indices and world transforms; primitives
-expose attributes, indices, topology and material indices, with RGBA base factors.
-Queries returning signed indices use -1 for absent/invalid. Sparse accessor reading and glTF writing are outside this
+Attached bytes are borrowed through model destruction. `load_embedded` fails with
+`InvalidState` on any unresolved external buffer before loading data URIs/GLB data;
+already attached buffers are skipped. Nodes expose mesh indices and world transforms;
+primitives expose attributes, indices, topology and material indices, with RGBA base
+factors. Optional indices return an `Index` with `found` false when absent. Sparse accessor reading and glTF writing are outside this
 surface. Apply input-size limits in the application before parsing untrusted data.
 
 Box2D accepts finite gravity/geometry, positive half-extents, nonnegative density,
@@ -313,7 +316,7 @@ widget labels are limited to 4096 bytes. Windows cannot nest through this initia
 adapter; each successful window begin needs a matching end before ending a frame.
 
 LZ4 operates on raw blocks, not LZ4 frames. The caller must know the output bound
-and check returned status. Failed compression/decompression may alter output.
+and check the status. Failed compression/decompression may alter output.
 ENet’s `listen_owned` helper remains loopback/one-channel. `listen_at_owned`
 accepts numeric IPv4, including `0.0.0.0` for all interfaces. Extended constructors
 and `send_channel` support 1–255 channels; received events include channel IDs. Payloads sent through the helper are capped at 1 MiB.
@@ -321,11 +324,11 @@ Reliable UDP is not encryption or authentication. Graceful disconnect is
 asynchronous: keep servicing until Disconnected or an application deadline.
 The receiving peer sees the supplied disconnect reason in event data.
 
-stb rectangles use integer dimensions 1–32768 without rotation; `packed` marks
-individual successes when the atlas is too small. Resizing supports tightly packed
+stb rectangles use integer dimensions 1–32768 without rotation; `was_packed` marks
+individual successes when the atlas is too small, and the count says how many fit. Resizing supports tightly packed
 1–4 channel u8 pixels with dimensions 1–32768 and at most INT32_MAX bytes per
 image. RGBA is straight alpha. Failed operations may alter output; reject overlapping
-input/output. Scratch exhaustion returns failure without leaking arena space.
+input/output. Scratch exhaustion fails with `Capacity` without leaking arena space.
 
 `lz4-example`, `cgltf-example`, `box2d-example`, `microui-example`, and `enet-example`
 run without arguments. `stb-example` checks packing/resizing with caller storage. `cgltf-example FILE.glb` additionally reads a GLB model

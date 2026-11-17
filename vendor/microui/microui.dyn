@@ -12,37 +12,76 @@ pub const Rect: i32 = 3
 pub const Text: i32 = 4
 pub const Icon: i32 = 5
 pub struct Rectangle { x: i32, y: i32, width: i32, height: i32 }
-pub fn create(arena: *mem.Arena) Context {
-  if arena == nil { return nil }
+// Calls out of order (begin twice, a widget outside a window, end inside a
+// window) fail with InvalidState; text over 4096 bytes or a full command list
+// with InvalidInput.
+pub fn create(arena: *mem.Arena, status: *fail.Status) Context {
+  if status.failed { return nil }
+  if arena == nil {
+    fail.invalid(status, "create UI", "", "no arena")
+    return nil
+  }
   allocation := mem.arena_try_push(arena, native_size(), native_align())
-  if !allocation.ok { return nil }
+  if !allocation.ok {
+    fail.set(status, fail.make(fail.Kind.Capacity, "create UI", "", "the arena is full"))
+    return nil
+  }
   state := #cast(rawptr, allocation.memory)
   native_init(state)
   return state
 }
-pub extern fn begin "dyn_mu_begin"(context: Context) bool
-pub extern fn end "dyn_mu_end"(context: Context) bool
-pub fn window(context: Context, title: []const u8, buffer: []u8, bounds: Rectangle) bool {
-  if #len(title) > 4096 { return false }
-  converting: fail.Status
-  encoded := c.string_into(&converting, buffer, title)
-  return !converting.failed && native_window(context, encoded, bounds.x, bounds.y, bounds.width, bounds.height)
+pub fn begin(status: *fail.Status, context: Context) {
+  ui_checked(status, "begin frame", native_begin(context))
 }
-pub extern fn window_end "dyn_mu_window_end"(context: Context) bool
-pub fn label(context: Context, text: []const u8, buffer: []u8) bool {
-  if #len(text) > 4096 { return false }
-  converting: fail.Status
-  encoded := c.string_into(&converting, buffer, text)
-  return !converting.failed && native_label(context, encoded)
+pub fn end(status: *fail.Status, context: Context) {
+  ui_checked(status, "end frame", native_end(context))
 }
-// -1 invalid/full, 0 idle, 1 clicked. Inputs must arrive before begin().
-pub fn button(context: Context, text: []const u8, buffer: []u8) i32 {
-  if #len(text) > 4096 { return -1 }
-  converting: fail.Status
-  encoded := c.string_into(&converting, buffer, text)
-  if converting.failed { return -1 }
-  return native_button(context, encoded)
+// Whether the window is open; widgets go inside an open window.
+pub fn window(status: *fail.Status, context: Context, title: []const u8, buffer: []u8, bounds: Rectangle) bool {
+  encoded := ui_text(status, "window", title, buffer)
+  if status.failed { return false }
+  if bounds.width <= 0 || bounds.height <= 0 {
+    fail.invalid(status, "window", "", "the size must be positive")
+    return false
+  }
+  return native_window(context, encoded, bounds.x, bounds.y, bounds.width, bounds.height)
 }
+pub fn window_end(status: *fail.Status, context: Context) {
+  ui_checked(status, "end window", native_window_end(context))
+}
+pub fn label(status: *fail.Status, context: Context, text: []const u8, buffer: []u8) {
+  encoded := ui_text(status, "label", text, buffer)
+  if status.failed { return }
+  ui_checked(status, "label", native_label(context, encoded))
+}
+// Whether the button was clicked this frame. Inputs must arrive before begin().
+pub fn button(status: *fail.Status, context: Context, text: []const u8, buffer: []u8) bool {
+  encoded := ui_text(status, "button", text, buffer)
+  if status.failed { return false }
+  clicked := native_button(context, encoded)
+  if clicked < 0 {
+    fail.set(status, fail.make(fail.Kind.InvalidState, "button", "", "outside a window, or the command list is full"))
+    return false
+  }
+  return clicked == 1
+}
+fn ui_text(status: *fail.Status, operation: []const u8, text: []const u8, buffer: []u8) c.string {
+  if status.failed { return nil }
+  if #len(text) > 4096 {
+    fail.invalid(status, operation, "", "text over 4096 bytes")
+    return nil
+  }
+  return c.string_into(status, buffer, text)
+}
+fn ui_checked(status: *fail.Status, operation: []const u8, ok: bool) {
+  if status.failed { return }
+  if !ok {
+    fail.set(status, fail.make(fail.Kind.InvalidState, operation, "", "called out of order, or the command list is full"))
+  }
+}
+extern fn native_begin "dyn_mu_begin"(context: Context) bool
+extern fn native_end "dyn_mu_end"(context: Context) bool
+extern fn native_window_end "dyn_mu_window_end"(context: Context) bool
 // action 0 move, 1 left press, 2 left release.
 pub extern fn mouse "dyn_mu_mouse"(context: Context, x: i32, y: i32, action: i32)
 // Iterate after end(). Commands/text borrow context storage until next begin().

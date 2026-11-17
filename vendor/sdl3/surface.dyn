@@ -26,8 +26,13 @@ pub fn texture_destroy_owned(texture: Texture) {
   }
 }
 // Draw entire texture to entire rendering target. Present separately.
-pub fn texture_draw(renderer: Renderer, texture: Texture) bool {
-  return renderer != nil && texture != nil && native_texture_draw(renderer, texture, nil, nil)
+pub fn texture_draw(status: *fail.Status, renderer: Renderer, texture: Texture) {
+  if status.failed { return }
+  if renderer == nil || texture == nil {
+    fail.invalid(status, "draw texture", "", "no renderer or texture")
+    return
+  }
+  checked(status, "draw texture", native_texture_draw(renderer, texture, nil, nil))
 }
 extern fn native_surface_destroy "SDL_DestroySurface"(surface: Surface)
 extern fn native_texture_create "SDL_CreateTextureFromSurface"(renderer: Renderer, surface: Surface) Texture
