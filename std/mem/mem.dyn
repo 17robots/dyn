@@ -30,6 +30,10 @@ pub struct Arena {
   // Bytes of this block ready to use: what the OS has committed of a
   // mapping (only Windows commits on demand), or a whole caller buffer.
   committed: usize,
+  // From this offset on, the block was never handed out and still holds the
+  // zeros the OS gave it, so zeroing pushes skip it and its pages stay
+  // untouched. The block's length when its memory may hold old bytes.
+  fresh: usize,
   // This block is an OS mapping that release returns.
   owns_memory: bool,
   // First block only. Never add blocks: set for arena_from_buffer.
@@ -56,7 +60,9 @@ pub struct Source {
   limit: usize,
 }
 
-struct Mapping { bytes: []u8, committed: usize, error: isize, ok: bool }
+// zeroed: the OS hands the pages out zero-filled, so untouched ones need no
+// zeroing (Linux, macOS, Windows; not wasm or bare metal, which reuse memory).
+struct Mapping { bytes: []u8, committed: usize, error: isize, ok: bool, zeroed: bool }
 
 // Bytes the arena header takes at the start of each block, and of every
 // arena_from_buffer buffer. See ArenaBufferOverhead for unaligned caller buffers.
@@ -88,9 +94,13 @@ fn mapping_with_header(size: usize) Mapping {
 }
 
 // Puts a block header at the start of bytes.
-fn block_init(bytes: []u8, base: usize, owns_memory: bool, committed: usize) *Arena {
+fn block_init(bytes: []u8, base: usize, owns_memory: bool, committed: usize, zeroed: bool) *Arena {
   block := #cast(*Arena, &bytes[0])
-  block.* = Arena{ data: bytes, base: base, offset: header_size(), owns_memory: owns_memory, committed: committed }
+  fresh := #len(bytes)
+  if zeroed {
+    fresh = header_size()
+  }
+  block.* = Arena{ data: bytes, base: base, offset: header_size(), owns_memory: owns_memory, committed: committed, fresh: fresh }
   return block
 }
 
@@ -120,6 +130,17 @@ fn take_within(context: rawptr, size: usize) []u8 {
 // backing. Panics when backing cannot hold the header. Release clears it;
 // reuse the storage by calling this again.
 pub fn arena_from_buffer(backing: []u8) *Arena {
+  return buffer_arena(backing, false)
+}
+
+// Like arena_from_buffer, for storage known to be all zero, such as a
+// push_array(u8, ...) from an arena on OS pages: pushes skip zeroing it, so
+// pages nothing writes are never touched and cost no memory.
+pub fn arena_from_zeroed(storage: []u8) *Arena {
+  return buffer_arena(storage, true)
+}
+
+fn buffer_arena(backing: []u8, zeroed: bool) *Arena {
   if #len(backing) == 0 {
     #panic("arena buffer cannot hold the arena header")
   }
@@ -128,7 +149,7 @@ pub fn arena_from_buffer(backing: []u8) *Arena {
   if skip > #len(backing) || #len(backing) - skip < header_size() {
     #panic("arena buffer cannot hold the arena header")
   }
-  arena := block_init(backing[skip..], 0, false, #len(backing) - skip)
+  arena := block_init(backing[skip..], 0, false, #len(backing) - skip, zeroed)
   arena.current = arena
   arena.fixed_buffer = true
   arena.backing = #len(arena.data)
@@ -176,7 +197,7 @@ fn new_block(source: *const Source, size: usize, base: usize) *Arena {
     if !mapping.ok {
       #panic("cannot reserve arena memory")
     }
-    return block_init(mapping.bytes, base, true, mapping.committed)
+    return block_init(mapping.bytes, base, true, mapping.committed, mapping.zeroed)
   }
   bytes := source.take(source.context, size)
   if #len(bytes) < size || #len(bytes) < header_size() {
@@ -185,7 +206,7 @@ fn new_block(source: *const Source, size: usize, base: usize) *Arena {
   if (#cast(usize, &bytes[0]) & 15) != 0 {
     #panic("arena source block is not 16-byte aligned")
   }
-  return block_init(bytes, base, false, #len(bytes))
+  return block_init(bytes, base, false, #len(bytes), false)
 }
 
 // Returns a block to where it came from.
@@ -313,6 +334,10 @@ pub fn arena_rewind(arena: *Arena, mark: usize) {
   }
   block := arena.current
   at := target - block.base
+  // What was handed out may now hold anything.
+  if block.offset > block.fresh {
+    block.fresh = block.offset
+  }
   if arena.poison_on_rewind {
     i := at
     for i < block.offset {
@@ -347,6 +372,23 @@ fn zero_bytes_fast(items: []u8) {
     items[i] = 0
     i += 1
   }
+}
+
+// Zeroes the size bytes at memory that a push just took from block, whose
+// offset was prior, except what lies past both prior and the block's fresh
+// mark: never handed out, so still zero, and left untouched.
+fn zero_pushed(block: *const Arena, memory: *u8, size: usize, prior: usize) {
+  known := block.fresh
+  if prior > known {
+    known = prior
+  }
+  start := #cast(usize, memory) - #cast(usize, &block.data[0])
+  if start >= known { return }
+  count := size
+  if count > known - start {
+    count = known - start
+  }
+  zero_bytes_fast(#slice(memory, count))
 }
 
 // Adds a block large enough for size bytes at alignment. Panics when the
@@ -414,9 +456,10 @@ fn arena_push_slow(arena: *Arena, size: usize, alignment: usize, zero_memory: bo
           #panic("cannot commit arena memory")
         }
         memory := &available[padding]
+        prior := block.offset
         block.offset = end
         if zero_memory {
-          zero_bytes_fast(#slice(memory, size))
+          zero_pushed(block, memory, size, prior)
         }
         return memory
       }
@@ -489,11 +532,13 @@ pub fn push_array(T: type, arena: *Arena, count: usize) []T {
     #panic("arena size overflow")
   }
   size := count * #sizeof(T)
+  block := arena.current
+  prior := block.offset
   memory := arena_push_fast(arena, size, #alignof(T))
   if memory == nil {
     return #slice(#cast(*T, arena_push_slow(arena, size, #alignof(T), true)), count)
   }
-  zero_bytes_fast(#slice(memory, size))
+  zero_pushed(block, memory, size, prior)
   return #slice(#cast(*T, memory), count)
 }
 

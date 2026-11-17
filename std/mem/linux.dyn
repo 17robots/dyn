@@ -14,7 +14,7 @@ fn mapping_allocate(size: usize) Mapping {
     head = 2 * MiB
   }
   _ = #syscall(sys.Madvise, address, head, 15)
-  return Mapping{ bytes: #slice(#cast(*u8, address), size), committed: size, ok: true }
+  return Mapping{ bytes: #slice(#cast(*u8, address), size), committed: size, ok: true, zeroed: true }
 }
 fn mapping_release(bytes: []u8) isize {
   return #syscall(sys.Munmap, &bytes[0], #len(bytes))

@@ -239,11 +239,7 @@ fn h3_accept(worker: *Worker, handle: rawptr) {
     quic.close(handle, H3ExcessiveLoad)
     return
   }
-  worker.free_count -= 1
-  index := worker.free[worker.free_count]
-  if index >= worker.slots_used {
-    worker.slots_used = index + 1
-  }
+  index := take_connection(worker)
   connection := &worker.connections[index]
   connection.descriptor = -1
   connection.active = true

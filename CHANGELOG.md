@@ -312,6 +312,11 @@ Standard library:
       own events.
   - `fs.read_all` no longer fails with `Capacity`: an arena that cannot hold
     the file panics.
+  - Pushes skip zeroing OS pages that were never handed out, which are
+    already zero, so a large `push_array` on `arena_alloc` memory costs no
+    memory until it is written. `arena_from_zeroed(storage)` is
+    `arena_from_buffer` for storage known to be zero (such as a
+    `push_array(u8, ...)` from OS pages), with the same saving.
 
 Compiler:
 
@@ -431,6 +436,10 @@ Servers:
   long (blocking work on the event loop), in the access log or on stderr.
 - `std/cache`: per-worker copies of shared data, from the pattern the
   session cache used. `std/net/http/session` now builds on it.
+- The evented server sets up a connection slot when it is first taken, and
+  its job arena on its first job, so idle slots cost no memory: the flagship
+  server with the default `Config` (four workers of 1024 slots) is 0.5 MiB
+  resident after serving, down from 9.7 MiB.
 - `evented.job` panics, naming the type and both sizes, when the job type is
   larger than `Config.job_size`. It used to return nil on every request.
 
