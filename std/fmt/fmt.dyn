@@ -52,9 +52,7 @@ fn put(state: *Buffer, value: []const u8) bool {
 }
 
 fn put_byte(state: *Buffer, value: u8) bool {
-  if stopped(state) || state.length >= #len(state.data) {
-    return full(state)
-  }
+  if stopped(state) || state.length >= #len(state.data) { return full(state) }
   state.data[state.length] = value
   state.length += 1
   return true

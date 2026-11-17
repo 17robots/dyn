@@ -255,14 +255,10 @@ pub fn hmac_sha256_sum(state: *const HmacSha256, destination: []u8, message: []c
     return hmac_sha256_short(state, destination, message)
   }
   inner := state.inner
-  if inner.failed || !inner.initialized {
-    return destination[..0]
-  }
+  if inner.failed || !inner.initialized { return destination[..0] }
   sha256_update(&inner, message)
   inner_digest: [32]u8
-  if #len(sha256_finish(&inner, inner_digest[..])) != 32 {
-    return destination[..0]
-  }
+  if #len(sha256_finish(&inner, inner_digest[..])) != 32 { return destination[..0] }
   outer := state.outer
   sha256_update(&outer, inner_digest[..])
   return sha256_finish(&outer, destination)

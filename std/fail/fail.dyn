@@ -15,16 +15,17 @@
 //     io.eprintln("app: {}", fail.describe(storage[..], status.failure))
 //   }
 //
-// Rules of use:
-// - One status per unit of work. Work that must carry on after a failure (a
-//   server, a command loop, each of many files) gives each item its own status.
-// - Check before you act: before printing results or doing anything that does
-//   not take the status, including using a computed number as a size or index,
-//   or a loop that only ends on data.
-// - Cleanup after a failure uses a fresh status, or functions that take none.
-// - An empty result is not a failure test; status.failed is.
-// - To react to one kind of failure, give that step its own status and look at
-//   status.failure.kind.
+// The rules, for every std and vendor call:
+// 1. If it can fail, it takes the status, and returns zero or empty after a
+//    failure.
+// 2. If it can come up empty, the result has found; that is not a failure.
+// 3. Check status.failed before you use what you got: before printing
+//    results, or using a computed number as a size or index.
+// In a loop that keeps going after a failure, give each item its own status.
+// Cleanup functions take none, so they work after a failure. To react to one
+// kind of failure, give that step its own status and look at failure.kind.
+// Record your own failures with invalid (bad input), at (a place in the
+// input) or set(make(...)) (anything else).
 
 // The portable reason. Kind.Ok is the zero value.
 pub enum Kind { Ok, InvalidInput, InvalidState, NotFound, PermissionDenied, AlreadyExists, Capacity, Overflow, Interrupted, WouldBlock, Unsupported, System }
