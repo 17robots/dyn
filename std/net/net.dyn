@@ -1,6 +1,7 @@
 #target(pointer_bits: 64)
 
 
+use "std/fail"
 use "std/io" io
 use "std/time" clock
 
@@ -363,11 +364,11 @@ fn connection_writer_write(data: rawptr, source: []const u8) io.Transfer {
 }
 
 pub fn connection_reader(connection: *Connection) io.Reader {
-  return io.Reader{ data: connection, read: connection_reader_read }
+  return io.Reader{ data: connection, read: connection_reader_read_stream }
 }
 
 pub fn connection_writer(connection: *Connection) io.Writer {
-  return io.Writer{ data: connection, write: connection_writer_write }
+  return io.Writer{ data: connection, write: connection_writer_write_stream }
 }
 
 // Accepts one connection and records its peer address. nonblocking sets the
@@ -668,4 +669,12 @@ pub fn ip_text(destination: []u8, ip: Ip) []u8 {
     g += 1
   }
   return destination[..at]
+}
+
+fn connection_reader_read_stream(data: rawptr, status: *fail.Status, destination: []u8) usize {
+  return io.from_transfer(status, connection_reader_read(data, destination), "read", "")
+}
+
+fn connection_writer_write_stream(data: rawptr, status: *fail.Status, source: []const u8) usize {
+  return io.from_transfer(status, connection_writer_write(data, source), "write", "")
 }

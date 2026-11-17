@@ -312,18 +312,32 @@ choice, not an arbitrary collection of flags.
 storage. None of these require printing to be a compiler builtin or allocate implicitly.
 
 ```dyn
-use "std/io" io
+use "std/fail"
+use "std/io"
 
 io.println("count: {}", count)
-result := io.println_to(log_file, "count: {}", count)
-if io.failed(result.failure) { #panic("log write failed") }
+status: fail.Status
+io.println_to(&status, log_file, "count: {}", count)
 ```
 
-`io.print` and `io.println` write to standard output and return nothing, so a terminal print needs
-no `_ =`; `io.eprint` and `io.eprintln` write to standard error. They ignore write failures such
-as a closed pipe. `io.print_to` and `io.println_to` take any writer and return the `Transfer`, so
-a discarded result there stays visible as `_ =`. All of them support `{}` substitutions and
+`io.print` and `io.println` write to standard output and `io.eprint` and `io.eprintln` to standard
+error; they ignore write failures such as a closed pipe. `io.print_to` and `io.println_to` take any
+writer and a status, like every call that can fail. All of them support `{}` substitutions and
 `{{`/`}}` literal braces. `std/terminal` provides terminal controls.
+
+A `Reader` or `Writer` is a data pointer and one function that takes the status. `io.read` returns
+the count read, 0 at the end of the stream and after a failure, so a read loop ends by itself:
+
+```dyn
+for {
+  count := io.read(status, reader, chunk[..])
+  if count == 0 { break }
+  use_bytes(chunk[..count])
+}
+```
+
+`io.write` writes everything, `io.read_exact` fills its buffer or fails if the stream ends partway,
+and `io.copy` copies a reader to a writer.
 Treat partial operations and native errors as ordinary results. Do not assume text is C-compatible;
 use `std/c` helpers at explicit FFI boundaries.
 

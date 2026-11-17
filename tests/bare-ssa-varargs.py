@@ -100,7 +100,7 @@ fn('capsret','','u32','x:=capret(510,'+','.join(['1']*510)+')\nreturn #cast(u32,
 fn('capsretindirect','','u32','p:=capret\nx:=p(510,'+','.join(['1']*510)+')\nreturn #cast(u32,x.a)')
 c+='Large capret(W n,...){va_list ap;va_start(ap,n);W sum=0;for(W i=0;i<n;i++)sum+=va_arg(ap,int);va_end(ap);Large r={sum,2,3,4,5};return r;}\n'
 checks+=['capsret()!=510','capsretindirect()!=510']
-src+='extern fn cpacr() u32\nfn main(){'+''.join(f'if {ch} {{ #panic("case {i}") }}\n' for i,ch in enumerate(checks))+'_ = io.write_all(io.stdout(),"VARARGS OK\\n") }\n'
+src+='extern fn cpacr() u32\nfn main(){'+''.join(f'if {ch} {{ #panic("case {i}") }}\n' for i,ch in enumerate(checks))+'_ = io.write_transfer(io.stdout(),"VARARGS OK\\n") }\n'
 
 cases={
 'bool':'x:=true', 'rawptr':'x:=#cast(rawptr,0)', 'array':'x:[2]u32=[1,2]',

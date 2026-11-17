@@ -7,6 +7,7 @@ import tempfile
 ROOT=Path(__file__).resolve().parents[1]
 DYN=Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve()
 SOURCE=r'''
+use "std/fail"
 use "std/io"
 use "std/net/http"
 struct Sink { body: [32]u8, reserves: usize, commits: usize, writes: usize, fail: bool, code: isize }
@@ -22,10 +23,13 @@ fn commit(raw: rawptr, head: []const u8, size: usize) io.Transfer {
   if sink.fail { return io.Transfer{ failure: io.Failure{ kind: io.Kind.System, native: sink.code } } }
   return io.Transfer{ transferred: #len(head) + size }
 }
-fn write(raw: rawptr, source: []const u8) io.Transfer {
+fn write_transfer(raw: rawptr, source: []const u8) io.Transfer {
   sink := #cast(*Sink, raw)
   sink.writes += 1
   return io.Transfer{ transferred: #len(source) }
+}
+fn write(data: rawptr, status: *fail.Status, source: []const u8) usize {
+  return io.from_transfer(status, write_transfer(data, source), "write", "")
 }
 fn response(sink: *Sink) http.Response {
   return http.Response{ output: io.Writer{ data: sink, write: write }, reserve_body: reserve, commit_body: commit }

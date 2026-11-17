@@ -1,4 +1,5 @@
 #target(kernel: darwin)
+use "std/fail"
 use "std/os/macos/sys"
 
 // Darwin syscall shim returns negative errno, including EINTR (-4).
@@ -45,13 +46,13 @@ fn stderr_write(_data: rawptr, source: []const u8) Transfer {
 }
 
 pub fn stdin() Reader {
-  return Reader{ data: nil, read: stdin_read }
+  return Reader{ data: nil, read: stdin_stream }
 }
 pub fn stdout() Writer {
-  return Writer{ data: nil, write: stdout_write }
+  return Writer{ data: nil, write: stdout_stream }
 }
 pub fn stderr() Writer {
-  return Writer{ data: nil, write: stderr_write }
+  return Writer{ data: nil, write: stderr_stream }
 }
 
 // Terminal output. These ignore write failures, such as a closed pipe, so a
@@ -59,3 +60,14 @@ pub fn stderr() Writer {
 
 
 
+
+// The standard streams as Reader and Writer functions.
+fn stdin_stream(_data: rawptr, status: *fail.Status, destination: []u8) usize {
+  return from_transfer(status, stdin_read(nil, destination), "read", "standard input")
+}
+fn stdout_stream(_data: rawptr, status: *fail.Status, source: []const u8) usize {
+  return from_transfer(status, stdout_write(nil, source), "write", "standard output")
+}
+fn stderr_stream(_data: rawptr, status: *fail.Status, source: []const u8) usize {
+  return from_transfer(status, stderr_write(nil, source), "write", "standard error")
+}

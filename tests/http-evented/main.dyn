@@ -120,7 +120,7 @@ fn handle(response: *http.Response, request: *const http.Request, app: *App) htt
     }
     writer := http.body_writer(&opened.body)
     for i in 0..3 {
-      _ = writer.write(writer.data, "chunk\n")
+      _ = io.write_transfer(writer, "chunk\n")
     }
     return http.body_finish(&opened.body)
   }
@@ -218,9 +218,9 @@ fn main() {
   port := #cast(u64, evented.local_port(workers))
   digits: [20 + mem.ArenaBufferOverhead]u8
   scratch := mem.arena_from_buffer(digits[..])
-  _ = io.write_all(io.stdout(), "port ")
-  _ = io.write_all(io.stdout(), fmt.u64_decimal(scratch, port))
-  _ = io.write_all(io.stdout(), "\n")
+  _ = io.write_transfer(io.stdout(), "port ")
+  _ = io.write_transfer(io.stdout(), fmt.u64_decimal(scratch, port))
+  _ = io.write_transfer(io.stdout(), "\n")
   for sync.load_u32(&state.quit) == 0 {
     _ = time.sleep(10 * time.Millisecond)
   }

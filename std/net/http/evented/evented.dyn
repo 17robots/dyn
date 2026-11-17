@@ -39,6 +39,7 @@ use "std/bytes" bytes
 use "std/compress/gzip" gzip
 use "std/event" event
 use "std/fmt" format
+use "std/fail"
 use "std/io" io
 use "std/log" log
 use "std/mem" mem
@@ -457,7 +458,9 @@ fn log_request(worker: *const Worker, remote: *const network.Address, request: *
     log.Field{ name: "status", value: format.bytes(&status_text) },
     log.Field{ name: "us", value: format.bytes(&micros_text) },
   ]
-  _ = log.write(worker.config.access_log, log.Level.Info, "request", fields[..])
+  // A failed log write does not fail the request.
+  logged: fail.Status
+  log.write(&logged, worker.config.access_log, log.Level.Info, "request", fields[..])
 }
 
 fn log_slow(worker: *const Worker, request: *const http.Request, elapsed: i64) {
@@ -472,7 +475,8 @@ fn log_slow(worker: *const Worker, request: *const http.Request, elapsed: i64) {
   standard := log.logger(io.stderr(), log.Level.Warning)
   destination := worker.config.access_log
   if destination == nil { destination = &standard }
-  _ = log.write(destination, log.Level.Warning, "slow handler", fields[..])
+  logged: fail.Status
+  log.write(&logged, destination, log.Level.Warning, "slow handler", fields[..])
 }
 
 fn now_milliseconds() i64 {
@@ -590,9 +594,14 @@ fn flush_blocking(connection: *Connection) bool {
   return true
 }
 
-fn output_write(data: rawptr, source: []const u8) io.Transfer {
+// Queues source for the connection; the count queued. A failure, a full
+// output that cannot be flushed, is recorded and marks the connection failed.
+fn output_write(data: rawptr, status: *fail.Status, source: []const u8) usize {
   connection := #cast(*Connection, data)
-  if connection.failed { return io.Transfer{ failure: io.Failure{ kind: io.Kind.InvalidState } } }
+  if connection.failed {
+    fail.set(status, fail.make(fail.Kind.InvalidState, "write", "", "connection failed"))
+    return 0
+  }
   connection.body_reserved = false
   written: usize = 0
   for written < #len(source) {
@@ -603,7 +612,8 @@ fn output_write(data: rawptr, source: []const u8) io.Transfer {
     if room == 0 {
       if !flush_blocking(connection) {
         connection.failed = true
-        return io.Transfer{ transferred: written, failure: io.Failure{ kind: io.Kind.WouldBlock } }
+        fail.set(status, fail.make(fail.Kind.WouldBlock, "write", "", "output could not be flushed"))
+        return written
       }
       room = #len(connection.output)
     }
@@ -615,7 +625,7 @@ fn output_write(data: rawptr, source: []const u8) io.Transfer {
     connection.queued += count
     written += count
   }
-  return io.Transfer{ transferred: written }
+  return written
 }
 
 // A reserved body is borrowed only during the current handler. The prefix
@@ -1553,7 +1563,7 @@ fn peer_of(worker: *const Worker, index: usize) Peer {
 
 // The connection behind an evented response, or nil for any other response.
 fn connection_of(response: *http.Response) *Connection {
-  if response.output.write != output_write && response.output.write != h2_write { return nil }
+  if response.output.write != output_write && response.output.write != h2_write_stream { return nil }
   return #cast(*Connection, response.output.data)
 }
 
@@ -2309,3 +2319,4 @@ fn websocket_frames(worker: *Worker, index: usize) bool {
   }
   return true
 }
+

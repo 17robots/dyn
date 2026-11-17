@@ -63,32 +63,35 @@ pub fn count_down(n: $T) T {
 }
 '''
 
-MAIN = '''use "std/io"
+MAIN = '''use "std/fail"
+use "std/io"
 use "util"
 
 struct Cell { ch: u32, fg: u32 }
 
 fn main() {
   out := io.stdout()
+  printed: fail.Status
   cells: [3]Cell = [Cell{ch: 1}, Cell{ch: 2}, Cell{ch: 3}]
   util.fill(cells[..], Cell{ch: 9, fg: 1})
-  _ = io.println_to(out, "{} {}", cells[2].ch, cells[0].fg)
-  _ = io.println_to(out, "{} {} {}", util.double_size(Cell), util.double_size(util.Pair), util.double_size(*Cell))
+  io.println_to(&printed, out, "{} {}", cells[2].ch, cells[0].fg)
+  io.println_to(&printed, out, "{} {} {}", util.double_size(Cell), util.double_size(util.Pair), util.double_size(*Cell))
   nums: [3]i32 = [4, -2, 11]
-  _ = io.println_to(out, "{} {}", util.largest(nums[..]), util.total(nums[..]))
+  io.println_to(&printed, out, "{} {}", util.largest(nums[..]), util.total(nums[..]))
   x: u32 = 7
-  _ = io.println_to(out, "{} {}", util.min(x, 3), util.min(2.5, 1.5))
+  io.println_to(&printed, out, "{} {}", util.min(x, 3), util.min(2.5, 1.5))
   a: i64 = 1
   b: i64 = 2
   util.swap(&a, &b)
-  _ = io.println_to(out, "{} {}", a, b)
+  io.println_to(&printed, out, "{} {}", a, b)
   util.zero(&cells[1])
-  _ = io.println_to(out, "{} {}", cells[1].ch, util.count_down(5))
+  io.println_to(&printed, out, "{} {}", cells[1].ch, util.count_down(5))
 }
 '''
 EXPECTED = '9 1\n16 32 16\n11 13\n3 1.5\n2 1\n0 5'
 
-STD = '''use "std/io"
+STD = '''use "std/fail"
+use "std/io"
 use "std/mem"
 use "std/math"
 use "std/sort"
@@ -97,6 +100,7 @@ struct Node { value: i32, next: *Node }
 
 fn main() {
   out := io.stdout()
+  printed: fail.Status
   backing: [4096]u8
   arena := mem.arena_from_buffer(backing[..])
   node := mem.push(Node, arena)
@@ -108,20 +112,20 @@ fn main() {
   many := mem.push_array(u16, arena, 3)
   bytes := mem.push_bytes_uninit(arena, 8)
   mem.fill(bytes, 5)
-  _ = io.println_to(out, "{} {} {} {} {}", node.value, nodes[3].value, one.*, many[2], bytes[7])
+  io.println_to(&printed, out, "{} {} {} {} {}", node.value, nodes[3].value, one.*, many[2], bytes[7])
   xs: [4]i32 = [1, 2, 3, 4]
   _ = mem.move(xs[1..], xs[..3])
   mem.swap(&xs[0], &xs[3])
   mem.zero(nodes)
-  _ = io.println_to(out, "{} {} {} {}", xs[0], xs[3], mem.equal(xs[1..3], xs[2..4]), nodes[3].value)
+  io.println_to(&printed, out, "{} {} {} {}", xs[0], xs[3], mem.equal(xs[1..3], xs[2..4]), nodes[3].value)
   x: u32 = 7
-  _ = io.println_to(out, "{} {} {} {} {}", math.min(x, 3), math.max(2.5, 4.0), math.clamp(15, 0, 10), math.abs(-4), math.narrow(u8, 200))
+  io.println_to(&printed, out, "{} {} {} {} {}", math.min(x, 3), math.max(2.5, 4.0), math.clamp(15, 0, 10), math.abs(-4), math.narrow(u8, 200))
   big: [40]i64
   for i in 0..40 { big[i] = #cast(i64, ((i * 37) % 40)) - 20 }
   sort.sort(big[..])
   small: [5]f32 = [3.0, 1.0, 2.0, 5.0, 4.0]
   sort.sort(small[..])
-  _ = io.println_to(out, "{} {} {} {} {}", big[0], big[39], small[4], sort.search(big[..], 7).index,
+  io.println_to(&printed, out, "{} {} {} {} {}", big[0], big[39], small[4], sort.search(big[..], 7).index,
     sort.search(big[..], 7).found)
 }
 '''

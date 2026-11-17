@@ -1,4 +1,5 @@
 use "std/mem" mem
+use "std/fail"
 use "std/io" stream
 use "std/parse" parse
 
@@ -48,7 +49,7 @@ fn refill(state: *Decoder) bool {
     state.error = -28
     return false
   }
-  result := stream.read(state.source_reader, state.compressed_storage[remaining..])
+  result := stream.read_transfer(state.source_reader, state.compressed_storage[remaining..])
   state.compressed_used += result.transferred
   if stream.failed(result.failure) {
     state.error = result.failure.native
@@ -227,7 +228,7 @@ fn decoder_read(data: rawptr, destination: []u8) stream.Transfer {
   return stream.Transfer{ transferred: amount, status: status }
 }
 pub fn decoder_reader(state: *Decoder) stream.Reader {
-  return stream.Reader{ data: state, read: decoder_read }
+  return stream.Reader{ data: state, read: decoder_read_stream }
 }
 
 // Emits byte-aligned stored DEFLATE blocks. Call with final=false for each
@@ -1031,4 +1032,8 @@ pub fn resume_gzip(state: *GzipState, destination: []u8, input: []const u8) Resu
 fn gunzip_internal(destination: []u8, input: []const u8) Result {
   state := GzipState{}
   return resume_gzip(&state, destination, input)
+}
+
+fn decoder_read_stream(data: rawptr, status: *fail.Status, destination: []u8) usize {
+  return stream.from_transfer(status, decoder_read(data, destination), "read", "")
 }

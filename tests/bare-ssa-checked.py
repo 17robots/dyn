@@ -49,8 +49,8 @@ for ty, maximum, minimum in [('u64', 2 ** 64 - 1, 0), ('i64', 2 ** 63 - 1, -2 **
     if ty.startswith('i'):
         for op in ['div', 'rem']:
             cases.append((op + '_min_' + ty, f'_={op}_{ty}({minimum},-1)', 'division overflow'))
-funcs += '\npub fn ordered(a:u64,b:u64,c:u64,d:u64) u64 { return a/b+c*d }\npub fn shifts(a:u64,b:u64) u64 { return a<<b }\npub fn negated(a:i64) i64 { return -a }\npub fn shared(a:u64,b:u64,c:u64) u64 { return (a+b)+c }\nfn cleanup(a:u64,b:u64) u64 { defer { _=io.write_all(io.stdout(),"CLEAN\\n") }\nreturn a+b }\n'
-cases += [('ordered', '_=ordered(1,0,18446744073709551615,2)', 'divide'), ('shiftcount', '_=shifts(1,64)', 'shift'), ('shiftbits', '_=shifts(18446744073709551615,1)', 'overflow'), ('negated', '_=negated(-9223372036854775808)', 'overflow'), ('shared', '_=shared(1,2,18446744073709551615)', 'overflow'), ('cleanup', '_=cleanup(18446744073709551615,1)', 'overflow'), ('caller_cleanup', 'defer { _=io.write_all(io.stdout(),"OUTER\\n") }\n_=add_u64(18446744073709551615,1)', 'overflow')]
+funcs += '\npub fn ordered(a:u64,b:u64,c:u64,d:u64) u64 { return a/b+c*d }\npub fn shifts(a:u64,b:u64) u64 { return a<<b }\npub fn negated(a:i64) i64 { return -a }\npub fn shared(a:u64,b:u64,c:u64) u64 { return (a+b)+c }\nfn cleanup(a:u64,b:u64) u64 { defer { _=io.write_transfer(io.stdout(),"CLEAN\\n") }\nreturn a+b }\n'
+cases += [('ordered', '_=ordered(1,0,18446744073709551615,2)', 'divide'), ('shiftcount', '_=shifts(1,64)', 'shift'), ('shiftbits', '_=shifts(18446744073709551615,1)', 'overflow'), ('negated', '_=negated(-9223372036854775808)', 'overflow'), ('shared', '_=shared(1,2,18446744073709551615)', 'overflow'), ('cleanup', '_=cleanup(18446744073709551615,1)', 'overflow'), ('caller_cleanup', 'defer { _=io.write_transfer(io.stdout(),"OUTER\\n") }\n_=add_u64(18446744073709551615,1)', 'overflow')]
 cases += [('boundaries', 'if mul_i64(-9223372036854775808,1)!=-9223372036854775808 { #panic("mul min") }\nif mul_u64(18446744073709551615,1)!=18446744073709551615 { #panic("mul max") }\nif add_i64(-9223372036854775808,9223372036854775807)!=-1 { #panic("add") }\nif sub_i64(-1,9223372036854775807)!=-9223372036854775808 { #panic("sub") }\nif div_i64(-9223372036854775808,1)!=-9223372036854775808 { #panic("div") }\nif rem_i64(-9223372036854775808,1)!=0 { #panic("rem") }', '')]
 
 
@@ -102,7 +102,7 @@ def main():
                 project = work/name
                 project.mkdir()
                 (project/'main.dyn').write_text('use "std/io"\n' + funcs +
-                    'fn main() {\n' + body + '\n_=io.write_all(io.stdout(),"OK\\n") }')
+                    'fn main() {\n' + body + '\n_=io.write_transfer(io.stdout(),"OK\\n") }')
                 names = [fn for fn in re.findall(r'pub fn (\w+)', funcs) if fn+'(' in body]
                 fallback = []
                 if name in ('cleanup', 'caller_cleanup'):

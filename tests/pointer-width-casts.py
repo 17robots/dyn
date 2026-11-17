@@ -45,7 +45,7 @@ def source(bits):
     expected = 0x12345678fedcba98 & ((1 << bits) - 1)
     checks.append(f'if pointer_chain(0x12345678fedcba98)!={expected} {{ #panic("pointer_chain") }}')
     return '\n'.join(declarations + ['fn main() {'] + checks +
-                     ['_=io.write_all(io.stdout(),"POINTER WIDTH PASS\\n")', '}']), names
+                     ['_=io.write_transfer(io.stdout(),"POINTER WIDTH PASS\\n")', '}']), names
 
 
 def run(command):

@@ -14,13 +14,13 @@ struct Particle {
 fn print_number(label: []const u8, value: u64) {
   digits: [20 + mem.ArenaBufferOverhead]u8
   scratch := mem.arena_from_buffer(digits[..])
-  _ = io.write_all(io.stdout(), label)
-  _ = io.write_all(io.stdout(), fmt.u64_decimal(scratch, value))
-  _ = io.write_all(io.stdout(), "\n")
+  _ = io.write_transfer(io.stdout(), label)
+  _ = io.write_transfer(io.stdout(), fmt.u64_decimal(scratch, value))
+  _ = io.write_transfer(io.stdout(), "\n")
 }
 
 fn main() {
-  _ = io.write_all(io.stdout(), "hello from bare metal\n")
+  _ = io.write_transfer(io.stdout(), "hello from bare metal\n")
   arena := mem.arena_alloc(256 * mem.KiB)
   defer mem.arena_release(arena)
   values: []u64

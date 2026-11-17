@@ -19,7 +19,7 @@ fn main() {
   }
   // Empty standard input makes this index -1, unknown to the compiler.
   buffer: [1]u8
-  input := io.read(io.stdin(), buffer[..])
-  _ = io.write_all(io.stdout(), "ok\n")
+  input := io.read_transfer(io.stdin(), buffer[..])
+  _ = io.write_transfer(io.stdout(), "ok\n")
   _ = pick(values[..], #cast(i32, input.transferred) - 1)
 }

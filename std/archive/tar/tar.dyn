@@ -87,7 +87,7 @@ fn syntax_failure(state: *StreamReader, kind: parse.Kind, message: []const u8) S
 }
 fn read_exact(state: *StreamReader, destination: []u8) stream.Transfer {
   if state.failed { return parse.stream_result(state.failure, 0) }
-  result := stream.read_exact(state.source_reader, destination)
+  result := stream.read_exact_transfer(state.source_reader, destination)
   if stream.failed(result.failure) {
     _ = stream_failure(state, parse.io_failure(result.failure.kind, result.failure.native))
   }

@@ -43,18 +43,18 @@ module's full declarations and comments.
 
 ## std/bufio
 
-- `struct Writer { destination: io.Writer, storage: []u8, used: usize, error: isize, kind: io.Kind, }`: The first error is sticky;
+- `struct Writer { destination: io.Writer, storage: []u8, used: usize, }`: Collects small writes in storage and passes them on in large ones.
 - `fn writer(destination: io.Writer, storage: []u8) Writer`
 - `fn writer_buffered(state: *const Writer) usize`
-- `fn writer_flush(state: *Writer) io.Transfer`
+- `fn writer_flush(status: *fail.Status, state: *Writer)`: Writes everything buffered.
 - `fn writer_adapter(state: *Writer) io.Writer`
-- `struct Reader { source: io.Reader, storage: []u8, start: usize, end: usize, ended: bool, error: isize, kind: io.Kind, pending: [2]u8, pending_count: usize, }`: Storage and the underlying source are borrowed;
+- `struct Reader { source: io.Reader, storage: []u8, start: usize, end: usize, ended: bool, pending: [2]u8, pending_count: usize, }`: Reads source a buffer at a time.
 - `fn reader(source: io.Reader, storage: []u8) Reader`
 - `fn reader_adapter(state: *Reader) io.Reader`
-- `enum ReadStatus { Complete, End, More }`: More means the record continues past destination;
-- `struct ReadResult { transferred: usize, failure: io.Failure, status: ReadStatus, }`
-- `fn read_until(state: *Reader, destination: []u8, delimiter: u8) ReadResult`: Consume and exclude delimiter.
-- `fn read_line(state: *Reader, destination: []u8) ReadResult`: Accept LF and CRLF;
+- `enum ReadStatus { Complete, End, More }`: How a record read ended: at its delimiter (Complete), at the end of the input (End, possibly with a final unterminated fragment), or ...
+- `struct ReadResult { transferred: usize, status: ReadStatus, }`
+- `fn read_until(status: *fail.Status, state: *Reader, destination: []u8, delimiter: u8) ReadResult`: Reads up to delimiter, which is consumed and left out.
+- `fn read_line(status: *fail.Status, state: *Reader, destination: []u8) ReadResult`: Reads one line: LF and CRLF end it, a lone CR is kept.
 
 ## std/bytes
 
@@ -663,7 +663,7 @@ module's full declarations and comments.
 - `fn is_string(value: *const Value) bool`
 - `fn is_array(value: *const Value) bool`
 - `fn is_object(value: *const Value) bool`
-- `fn write(destination: stream.Writer, value: *const Value) stream.Transfer`
+- `fn write(status: *fail.Status, destination: stream.Writer, value: *const Value)`: Writes value as compact JSON.
 - `fn write_string(arena: *memory.Arena, source: []const u8) []u8`: source as a quoted JSON string, in arena.
 - `fn encode(arena: *memory.Arena, value: *const Value) []u8`: value as compact JSON, in arena.
 - `fn encode_pretty(arena: *memory.Arena, value: *const Value, indent: usize) []u8`: value as JSON indented by indent spaces per level, in arena.
@@ -1183,21 +1183,24 @@ module's full declarations and comments.
 - `fn darwin_text(code: isize) []const u8`
 - `fn windows_text(code: isize) []const u8`
 - `fn wasi_text(code: isize) []const u8`
-- `enum Status { Complete, End }`: A transfer either completed or reached the end.
+- `struct Reader { data: rawptr, read: fn(rawptr, *fail.Status, []u8) usize, }`: Byte streams.
+- `struct Writer { data: rawptr, write: fn(rawptr, *fail.Status, []const u8) usize, }`: A write returns how many bytes of source it took, possibly fewer than all;
+- `enum Status { Complete, End }`: The result of a transfer in modules that have not moved to fail.Status: a count, whether the stream ended, and the failure, zero on success.
 - `struct Transfer { transferred: usize, failure: Failure, status: Status, }`
-- `struct Reader { data: rawptr, read: fn(rawptr, []u8) Transfer, }`
-- `struct Writer { data: rawptr, write: fn(rawptr, []const u8) Transfer, }`
 - `fn complete(transfer: Transfer) bool`: Whether a transfer finished without reaching the end and without failing.
-- `fn read(reader: Reader, destination: []u8) Transfer`
-- `fn write(writer: Writer, source: []const u8) Transfer`
-- `fn read_exact(reader: Reader, destination: []u8) Transfer`
-- `fn write_all(writer: Writer, source: []const u8) Transfer`
-- `fn print_arguments(writer: Writer, template: []const u8, arguments: []const any) Transfer`: print_arguments is the non-variadic entry point used by forwarding wrappers.
-- `fn print_to(writer: Writer, template: []const u8, arguments: ...any) Transfer`: Checked formatting to any writer: {} takes the next argument.
-- `fn println_arguments(writer: Writer, template: []const u8, arguments: []const any) Transfer`
-- `fn println_to(writer: Writer, template: []const u8, arguments: ...any) Transfer`
-- `fn copy(writer: Writer, reader: Reader, scratch: []u8) Transfer`
-- `fn copy_n(writer: Writer, reader: Reader, amount: usize, scratch: []u8) Transfer`
+- `fn from_transfer(status: *fail.Status, transfer: Transfer, operation: []const u8, path: []const u8) usize`: Records a Transfer's failure in status and returns its count: for Reader and Writer functions built on code that still returns Transfer.
+- `fn read_transfer(reader: Reader, destination: []u8) Transfer`: One read or write as a Transfer, for modules that still report through Transfer.
+- `fn read_exact_transfer(reader: Reader, destination: []u8) Transfer`: Reads until destination is full or the stream ends;
+- `fn write_transfer(writer: Writer, source: []const u8) Transfer`
+- `fn read(status: *fail.Status, reader: Reader, destination: []u8) usize`: Reads into destination;
+- `fn read_exact(status: *fail.Status, reader: Reader, destination: []u8) usize`: Fills destination.
+- `fn write(status: *fail.Status, writer: Writer, source: []const u8)`: Writes all of source.
+- `fn print_arguments(status: *fail.Status, writer: Writer, template: []const u8, arguments: []const any)`: print_arguments is the non-variadic entry point used by forwarding wrappers.
+- `fn print_to(status: *fail.Status, writer: Writer, template: []const u8, arguments: ...any)`: Checked formatting to any writer: {} takes the next argument.
+- `fn println_arguments(status: *fail.Status, writer: Writer, template: []const u8, arguments: []const any)`: Like print_arguments, then a newline.
+- `fn println_to(status: *fail.Status, writer: Writer, template: []const u8, arguments: ...any)`
+- `fn copy(status: *fail.Status, writer: Writer, reader: Reader, scratch: []u8) usize`: Copies reader to writer until the end of the reader, through scratch;
+- `fn copy_n(status: *fail.Status, writer: Writer, reader: Reader, amount: usize, scratch: []u8)`: Copies exactly amount bytes;
 - `struct Cursor { data: []const u8, offset: usize, }`
 - `fn cursor(data: []const u8) Cursor`
 - `fn cursor_reader(state: *Cursor) Reader`
@@ -1221,7 +1224,7 @@ module's full declarations and comments.
 - `struct Field { name: []const u8, value: []const u8 }`
 - `struct Logger { output: stream.Writer, minimum: Level }`
 - `fn logger(output: stream.Writer, minimum: Level) Logger`
-- `fn write(target: *Logger, level: Level, message: []const u8, fields: []const Field) stream.Transfer`
+- `fn write(status: *fail.Status, target: *Logger, level: Level, message: []const u8, fields: []const Field)`: Writes one line, "level: message name=value ...", when level is at least the logger's minimum.
 
 ## std/math
 

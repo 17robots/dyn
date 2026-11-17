@@ -65,7 +65,7 @@ def main():
    env.pop('DYN_NO_SSA',None)
    if mode=='tree': env['DYN_NO_SSA']='1'
    for name,body,panic in CASES:
-    (work/'main.dyn').write_text(FUNCTIONS+'\nfn main() {\n'+body+'\n_=io.write_all(io.stdout(),"OK\\n")\n}\n')
+    (work/'main.dyn').write_text(FUNCTIONS+'\nfn main() {\n'+body+'\n_=io.write_transfer(io.stdout(),"OK\\n")\n}\n')
     binary=work/'program'
     build=subprocess.run([DYN,'build',str(work),'--release','--opt-level','3','--no-cache','--quiet','--opt-remarks','--output',str(binary)],env=env,text=True,capture_output=True,timeout=120)
     assert build.returncode==0,(mode,name,build.stderr)

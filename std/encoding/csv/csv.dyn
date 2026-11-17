@@ -23,7 +23,7 @@ fn stream_byte(state: *StreamScanner) ByteResult {
   }
   if state.ended { return ByteResult{ end: true, ok: true } }
   byte: [1]u8
-  result := stream.read(state.input, byte[..])
+  result := stream.read_transfer(state.input, byte[..])
   if stream.failed(result.failure) {
     state.failure = parse.io_failure(result.failure.kind, result.failure.native)
     state.finished = true
@@ -124,7 +124,7 @@ pub fn writer(destination_writer: stream.Writer) Writer {
 
 fn write_all(state: *Writer, bytes: []const u8) bool {
   if state.failed { return false }
-  result := stream.write_all(state.sink, bytes)
+  result := stream.write_transfer(state.sink, bytes)
   if stream.failed(result.failure) {
     state.failed = true
     state.failure = parse.io_failure(result.failure.kind, result.failure.native)

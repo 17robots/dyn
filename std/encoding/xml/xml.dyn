@@ -84,7 +84,7 @@ pub fn next_stream(state: *StreamScanner) Result {
     if state.used == #len(state.storage) {
       return stream_fail(state, parse.parse_failure(parse.Kind.Capacity, 0, ""))
     }
-    input_result := stream.read(state.input, state.storage[state.used..])
+    input_result := stream.read_transfer(state.input, state.storage[state.used..])
     if stream.failed(input_result.failure) {
       return stream_fail(state, parse.io_failure(input_result.failure.kind, input_result.failure.native))
     }
@@ -104,7 +104,7 @@ pub fn writer(destination_writer: stream.Writer) Writer {
 
 fn emit(state: *Writer, data: []const u8) bool {
   if state.failed { return false }
-  result := stream.write_all(state.sink, data)
+  result := stream.write_transfer(state.sink, data)
   if stream.failed(result.failure) {
     state.failed = true
     state.failure = parse.io_failure(result.failure.kind, result.failure.native)

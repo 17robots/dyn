@@ -14,6 +14,7 @@ if sys.platform not in ('linux', 'darwin', 'win32'):
 
 SOURCE = r'''use "std/net/http" http
 use "std/net/websocket" ws
+use "std/fail"
 use "std/io" io
 use "std/io" errors
 use "std/parse" parse
@@ -27,15 +28,21 @@ struct Trace { calls: usize, native: isize }
 fn typed_handler(response: *http.Response, request: *const http.Request, state: *Trace) http.Result {
   return http.Result{}
 }
-fn read(raw: rawptr, dest: []u8) io.Transfer {
+fn read_transfer(raw: rawptr, dest: []u8) io.Transfer {
   trace := #cast(*Trace, raw)
   trace.calls += 1
   return io.Transfer{ failure: io.Failure{ kind: errors.Kind.PermissionDenied, native: trace.native } }
 }
-fn write(raw: rawptr, source: []const u8) io.Transfer {
+fn read(data: rawptr, status: *fail.Status, destination: []u8) usize {
+  return io.from_transfer(status, read_transfer(data, destination), "read", "")
+}
+fn write_transfer(raw: rawptr, source: []const u8) io.Transfer {
   trace := #cast(*Trace, raw)
   trace.calls += 1
   return io.Transfer{ failure: io.Failure{ kind: errors.Kind.PermissionDenied, native: trace.native } }
+}
+fn write(data: rawptr, status: *fail.Status, source: []const u8) usize {
+  return io.from_transfer(status, write_transfer(data, source), "write", "")
 }
 fn main() {
   head(http.parse_request("GET / HTTP/1.1\r\nBad Header: x\r\n\r\n"), 19)

@@ -1,3 +1,4 @@
+use "std/fail"
 use "std/io" stream
 
 pub enum Level { Debug, Info, Warning, Error }
@@ -18,8 +19,10 @@ fn name(level: Level) []const u8 {
   if level == Level.Warning { return "warning" }
   return "error"
 }
-pub fn write(target: *Logger, level: Level, message: []const u8, fields: []const Field) stream.Transfer {
-  if !enabled(level, target.minimum) { return stream.Transfer{ status: stream.Status.Complete } }
+// Writes one line, "level: message name=value ...", when level is at least
+// the logger's minimum.
+pub fn write(status: *fail.Status, target: *Logger, level: Level, message: []const u8, fields: []const Field) {
+  if status.failed || !enabled(level, target.minimum) { return }
   // A line that fits goes out in one write, so lines from several threads
   // do not interleave; a longer one is written in pieces.
   line: [1024]u8
@@ -33,46 +36,20 @@ pub fn write(target: *Logger, level: Level, message: []const u8, fields: []const
     length = put(line[..], length, field.value)
   }
   length = put(line[..], length, "\n")
-  if length <= #len(line) { return stream.write_all(target.output, line[..length]) }
-  total: usize = 0
-  first := stream.write_all(target.output, name(level))
-  if stream.failed(first.failure) { return first }
-  total += first.transferred
-  separator := stream.write_all(target.output, ": ")
-  if stream.failed(separator.failure) {
-    separator.transferred += total
-    return separator
+  if length <= #len(line) {
+    stream.write(status, target.output, line[..length])
+    return
   }
-  total += separator.transferred
-  body := stream.write_all(target.output, message)
-  if stream.failed(body.failure) {
-    body.transferred += total
-    return body
-  }
-  total += body.transferred
+  stream.write(status, target.output, name(level))
+  stream.write(status, target.output, ": ")
+  stream.write(status, target.output, message)
   for field in fields {
-    parts: [3][]const u8 = [" ", field.name, "="]
-    for part in parts {
-      field_part := stream.write_all(target.output, part)
-      if stream.failed(field_part.failure) {
-        field_part.transferred += total
-        return field_part
-      }
-      total += field_part.transferred
-    }
-    field_value := stream.write_all(target.output, field.value)
-    if stream.failed(field_value.failure) {
-      field_value.transferred += total
-      return field_value
-    }
-    total += field_value.transferred
+    stream.write(status, target.output, " ")
+    stream.write(status, target.output, field.name)
+    stream.write(status, target.output, "=")
+    stream.write(status, target.output, field.value)
   }
-  ending := stream.write_all(target.output, "\n")
-  if stream.failed(ending.failure) {
-    ending.transferred += total
-    return ending
-  }
-  return stream.Transfer{ transferred: total + ending.transferred, status: stream.Status.Complete }
+  stream.write(status, target.output, "\n")
 }
 
 // Appends text at length, or returns more than #len(line) once it no longer fits.

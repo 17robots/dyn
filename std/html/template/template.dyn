@@ -13,7 +13,7 @@ pub fn parse(arena: *memory.Arena, source: []const u8) ParseResult {
 }
 
 fn write(destination: io.Writer, source: []const u8) RenderResult {
-  result := io.write_all(destination, source)
+  result := io.write_transfer(destination, source)
   if io.failed(result.failure) {
     kind:=result.failure.kind
     if kind==io.Kind.Ok {

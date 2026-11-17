@@ -21,6 +21,7 @@
 // - Frames are processed in order; a header block must fit receive_size.
 use "std/bytes" bytes
 use "std/event" event
+use "std/fail"
 use "std/io" io
 use "std/mem" mem
 use "std/net" network
@@ -287,9 +288,10 @@ fn send_frame(connection: *Connection, kind: u8, flags: u8, stream: u32, payload
     }
     return push_bytes(connection, head[..]) && push_bytes(connection, payload)
   }
-  written := output_write(connection, head[..])
-  if io.failed(written.failure) { return false }
-  return !io.failed(output_write(connection, payload).failure)
+  status: fail.Status
+  _ = output_write(connection, &status, head[..])
+  _ = output_write(connection, &status, payload)
+  return !status.failed
 }
 
 fn send_reset(connection: *Connection, stream: u32, code: u32) {
@@ -1202,7 +1204,7 @@ fn h2_response(worker: *Worker, connection: *Connection, stream_index: usize) ht
   }
   stream := &h2.streams[stream_index]
   stream.output = Output.Head
-  response := http.Response{ output: io.Writer{ data: connection, write: h2_write }, reserve_body: h2_reserve,
+  response := http.Response{ output: io.Writer{ data: connection, write: h2_write_stream }, reserve_body: h2_reserve,
     commit_body: h2_commit, date: worker.date[..] }
   if !h2.quic {
     response.alt_svc = alt_svc(worker)
@@ -1965,4 +1967,8 @@ fn websocket_data(worker: *Worker, connection: *Connection, index: usize, data: 
 fn field_out(quic: bool, destination: []u8, name: []const u8, value: []const u8) usize {
   if quic { return qpack.encode_field(destination, name, value) }
   return hpack.encode_field(destination, name, value)
+}
+
+fn h2_write_stream(data: rawptr, status: *fail.Status, source: []const u8) usize {
+  return io.from_transfer(status, h2_write(data, source), "write", "")
 }

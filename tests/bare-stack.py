@@ -30,7 +30,7 @@ fn descend(depth: usize) u8 {
 
 fn main() {
   result := descend(1000000)
-  _ = io.write_all(io.stdout(), "unexpected return\\n")
+  _ = io.write_transfer(io.stdout(), "unexpected return\\n")
   _ = result
 }
 '''
@@ -45,7 +45,7 @@ fn main() {
   frame: [SIZE]u8
   fill(frame[..])
   if frame[0] == 0 && frame[SIZE - 1] == #cast(u8, (SIZE - 1) % 251) {
-    _ = io.write_all(io.stdout(), "frame ok\\n")
+    _ = io.write_transfer(io.stdout(), "frame ok\\n")
   }
 }
 '''

@@ -12,6 +12,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-performance-') as directory:
     body=['use "std/bytes" bytes', 'use "std/bytes/search" search', 'use "std/testing" t',
           '''use "std/mem" mem
 use "std/container/hash" hash
+use "std/fail"
 use "std/io" io
 use "std/bufio" bufio
 use "std/bytes/builder" builder
@@ -19,7 +20,7 @@ use "std/io" errors
 struct Sink { calls: usize, used: usize, fail_after: usize, fail: bool, bytes: [64]u8 }
 struct Entry { key: []const u8, hash: u64, hash_next: *Entry, bytes: [1]u8, value: usize }
 const nil_entry: Entry = Entry{}
-fn sink_write(data: rawptr, source: []const u8) io.Transfer {
+fn sink_write_transfer(data: rawptr, source: []const u8) io.Transfer {
   state := #cast(*Sink, data)
   state.calls += 1
   if state.fail || (state.fail_after > 0 && state.calls > state.fail_after) { return io.Transfer{ transferred: 0, failure: io.Failure{ kind: errors.Kind.PermissionDenied, native: -13 } } }
@@ -28,6 +29,9 @@ fn sink_write(data: rawptr, source: []const u8) io.Transfer {
   for i in 0..amount { state.bytes[state.used + i] = source[i] }
   state.used += amount
   return io.Transfer{ transferred: amount, status: io.Status.Complete }
+}
+fn sink_write(data: rawptr, status: *fail.Status, source: []const u8) usize {
+  return io.from_transfer(status, sink_write_transfer(data, source), "write", "")
 }
 fn main() {''']
     randomizer=random.Random(124)
@@ -47,31 +51,36 @@ fn main() {''']
   sink := Sink{}
   staging: [4]u8
   buffered := bufio.writer(io.Writer{data: #cast(rawptr, &sink), write: sink_write}, staging[..])
-  result := io.write_all(bufio.writer_adapter(&buffered), "abcdefghijklmnopqrst")
-  t.expect(result.transferred == 20 && sink.used == 16 && buffered.used == 4, "direct path keeps tail")
-  t.expect(io.complete(bufio.writer_flush(&buffered)), "flush tail")
+  status: fail.Status
+  io.write(&status, bufio.writer_adapter(&buffered), "abcdefghijklmnopqrst")
+  t.expect(!status.failed && sink.used == 16 && buffered.used == 4, "direct path keeps tail")
+  bufio.writer_flush(&status, &buffered)
+  t.expect(!status.failed, "flush tail")
   t.expect(bytes.equal(sink.bytes[..sink.used], "abcdefghijklmnopqrst"), "short writes preserve order")
   sink.fail = true
-  result = io.write_all(bufio.writer_adapter(&buffered), "abcdefghijkl")
-  t.expect(io.failed(result.failure) && result.transferred == 0, "direct failure")
+  failing: fail.Status
+  io.write(&failing, bufio.writer_adapter(&buffered), "abcdefghijkl")
+  t.expect(failing.failed, "direct failure")
   calls := sink.calls
-  _ = io.write_all(bufio.writer_adapter(&buffered), "z")
-  t.expect(sink.calls == calls, "sticky direct failure")
+  io.write(&failing, bufio.writer_adapter(&buffered), "z")
+  t.expect(sink.calls == calls, "a failed status writes nothing more")
   sink = Sink{fail_after: 1}
   buffered = bufio.writer(io.Writer{data: #cast(rawptr, &sink), write: sink_write}, staging[..])
-  result = io.write_all(bufio.writer_adapter(&buffered), "abcdefghijkl")
-  t.expect(io.failed(result.failure) && result.transferred == 3 && sink.used == 3 && buffered.used == 0, "partial direct failure")
+  partial: fail.Status
+  io.write(&partial, bufio.writer_adapter(&buffered), "abcdefghijkl")
+  t.expect(partial.failed && sink.used == 3 && buffered.used == 0, "partial direct failure")
   chunk_storage: [8]u8
   text := "abcdefghijklmnopqrst"
   for capacity in 1..9 {
     for size in 0..21 {
       sink = Sink{}
       buffered = bufio.writer(io.Writer{data: #cast(rawptr, &sink), write: sink_write}, chunk_storage[..capacity])
-      result = io.write_all(bufio.writer_adapter(&buffered), text[..size])
+      chunked: fail.Status
+      io.write(&chunked, bufio.writer_adapter(&buffered), text[..size])
       expected: usize = 0
       if size > 0 { expected = (size - 1) % capacity + 1 }
-      t.expect(result.transferred == size && buffered.used == expected, "buffered tail unchanged")
-      _ = bufio.writer_flush(&buffered)
+      t.expect(!chunked.failed && buffered.used == expected, "buffered tail unchanged")
+      bufio.writer_flush(&chunked, &buffered)
       t.expect(bytes.equal(sink.bytes[..sink.used], text[..size]), "all chunk boundaries")
     }
   }

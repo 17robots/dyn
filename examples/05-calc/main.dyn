@@ -8,6 +8,7 @@
 // Run: dyn run examples/05-calc < examples/05-calc/input.txt
 
 use "std/bufio"
+use "std/fail"
 use "std/container/map"
 use "std/io"
 use "std/math"
@@ -40,11 +41,17 @@ fn main() {
   input_storage: [4096]u8
   reader := bufio.reader(io.stdin(), input_storage[..])
   line_storage: [256]u8
+  input: fail.Status
   ended := false
   for !ended {
-    read := bufio.read_line(&reader, line_storage[..])
-    if io.failed(read.failure) || read.status == bufio.ReadStatus.More {
-      io.eprintln("calc: cannot read a line")
+    read := bufio.read_line(&input, &reader, line_storage[..])
+    if input.failed {
+      storage: [512]u8
+      io.eprintln("calc: {}", fail.describe(storage[..], input.failure))
+      return
+    }
+    if read.status == bufio.ReadStatus.More {
+      io.eprintln("calc: a line is longer than its buffer")
       return
     }
     ended = read.status == bufio.ReadStatus.End
