@@ -1,0 +1,27 @@
+use "std/io"
+
+struct Body {
+  x: f64, y: f64, z: f64,
+  vx: f64, vy: f64, vz: f64,
+  mass: f64, charge: f64,
+}
+
+bodies: [1024]Body
+
+fn energy(b: Body, scale: f64) f64 {
+  return 0.5 * b.mass * (b.vx * b.vx + b.vy * b.vy + b.vz * b.vz) * scale + b.charge * (b.x + b.y + b.z)
+}
+
+fn main() {
+  for i in 0..#len(bodies) {
+    v := #cast(f64, i % 13)
+    bodies[i] = Body{ x: v, y: v * 2, z: v * 3, vx: v * 0.5, vy: v * 0.25, vz: v * 0.125, mass: 1 + v, charge: 0.5 }
+  }
+  total: f64 = 0
+  for round in 0..20000 {
+    for b in bodies {
+      total += energy(b, 1.0 + #cast(f64, round % 3))
+    }
+  }
+  io.println("{}", #cast(u64, total))
+}

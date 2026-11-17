@@ -313,6 +313,19 @@ Compiler:
   it does reach, so importing an unused module could change the code of
   used ones.
 
+Compiler speed of generated code:
+
+- Struct and array parameters are copied less. An inlined body reads a
+  caller's local in place when it never writes the parameter or takes its
+  address; a callee keeps a stack-passed struct where it arrived and reads a
+  by-pointer one (AArch64, Windows) through the pointer, outside debug
+  builds; a caller passes a local whose address is never taken without a
+  snapshot. A 64-byte struct passed by value to an inlined function costs no
+  copy (0.046 to 0.030 s on `tools/bench/bodies`), and an out-of-line call
+  one copy instead of three.
+- `tools/bench/run.py` also builds each kernel with Zig (ReleaseFast and
+  ReleaseSafe); see PERFORMANCE.md.
+
 Tools:
 
 - Errors can carry a fix. Text output prints it under the snippet
