@@ -187,15 +187,50 @@ borrowed; inspect them with an exhaustive type `case` and do not retain them.
 
 ## Errors and cleanup
 
-Dyn has one way to report each kind of outcome. A failed value is still safe
-to read: it is zero, an empty stub, or a documented partial result, so code
-that ignores a failure keeps running on ordinary empty data.
+A function that can fail takes a `*fail.Status`, the way a function that
+allocates takes a `*mem.Arena`, so its signature says it can fail. The first
+failure is recorded in the status and stays there; every later call given that
+status does nothing and returns zero or empty. Code does not check after each
+call: it checks `status.failed` once, before it acts on the results, and prints
+`status.failure` with `fail.describe`, such as
+`open app.json: no such file or directory`.
 
-- **The operation can fail:** return `{value, failure}` (`io.Result(T)`,
-  `parse.Result(T)`), or a bare `Failure` when there is no value. OS and I/O
-  work uses `io.Failure {kind, native}`; parsers use `parse.Failure {kind,
-  offset, message}`. Check it with `io.failed(result.failure)` or
-  `parse.failed(result.failure)`.
+```dyn
+status: fail.Status
+text := fs.read_all(arena, &status, path, 1 << 20)   // fails: empty
+fs.write_all(&status, copy_path, text)               // already failed: writes nothing
+if status.failed {
+  storage: [512]u8
+  io.eprintln("tool: {}", fail.describe(storage[..], status.failure))
+  return 1
+}
+```
+
+Five rules make it work:
+
+1. **One status per unit of work.** A failed status stays failed. Work that
+   must carry on after a failure, such as a command loop, a server or each of
+   many files, declares a status per item, inside the loop.
+2. **Check before you act:** before printing results, reporting success, or
+   doing anything that does not take the status, such as your own side
+   effects, using a computed number as a size or index, or a loop that only
+   ends on data.
+3. **Cleanup after a failure** uses a fresh status, or functions that take
+   none such as `fs.close`: the failed status turns cleanup into no-ops too.
+4. **An empty result is not a failure test.** An empty file gives empty text;
+   `status.failed` is the test.
+5. **To react to one kind of failure,** such as falling back when a file is
+   missing, give that step its own status and look at `status.failure.kind`.
+   To pass it on, `fail.set(status, step.failure)`.
+
+Your own code records a problem it finds in its input the same way, with
+`fail.invalid(status, "config", path, "port out of range")`. A failure borrows
+its `path` and `message` text, so that text must outlive the check.
+
+Modules move to this model one at a time; `std/fs` is first. A module that has
+not moved yet returns `{value, failure}` (`io.Result(T)`, `parse.Result(T)`):
+check it with `io.failed(result.failure)` or `parse.failed(result.failure)`.
+
 - **Absence is not failure:** a lookup returns `nil` (`map.get`) or an empty
   stub for tree nodes, and every `find*` returns `#len(text)` on a miss.
 - **A step with several normal outcomes** returns a `Status` enum such as
@@ -203,9 +238,6 @@ that ignores a failure keeps running on ordinary empty data.
   variant; the failure is its own field next to it.
 - **Yes-or-no questions** return `bool`, and only predicates do:
   `is_*`, `has_*`, `valid`.
-- **Many steps in a row** keep the first failure in their own state and turn
-  later calls into no-ops. Writers that work this way return nothing; check
-  their `failed` field or failure once at the end.
 - **A broken invariant** is `#panic`. There is no recovery.
 
 ```dyn
@@ -234,8 +266,8 @@ Ownership is independent of success: say whether a returned slice borrows the
 input, occupies caller storage or lives in a supplied arena, and never allocate
 on failure.
 
-Handle expected failures near the operation. Use `defer` immediately after successful resource
-acquisition. Defers run in LIFO order on normal scope exit, control transfer, and panic.
+Use `defer` immediately after acquiring a resource. Defers run in LIFO order on normal scope exit
+and control transfer; a panic does not run them.
 
 ```dyn
 resource := acquire()
@@ -319,24 +351,22 @@ promoted types. Do not expose Dyn slices, strings, or `any` as if they were C va
 
 ## Check errors once
 
-When several steps can fail, keep the first failure in one place and check it at the end. Each step
-does nothing once a failure is recorded. An `fs.File` works this way itself: its first failure sticks
-to it, later operations on it do nothing, and `file.failure` names the operation and path.
+When several steps can fail, pass one status through them and check it at the end. Each step does
+nothing once a failure is recorded, and the failure names the operation and the path.
 
 ```dyn
+use "std/fail"
 use "std/fs"
-use "std/io"
 
-fn save(path: []const u8) io.Failure {
-  file := fs.create(path)
-  _ = fs.write(&file, "name: ")
-  _ = fs.write(&file, "dyn\n")
-  fs.close(&file)
-  return file.failure
+fn save(status: *fail.Status, path: []const u8) {
+  file := fs.create(status, path)
+  defer fs.close(&file)
+  fs.write(status, &file, "name: ")
+  fs.write(status, &file, "dyn\n")
 }
 ```
 
-A type of your own does the same with a `failed` flag and a `failure` field, set by the first step
-that fails and checked by every step before it does anything.
+A function of your own that can fail takes the status the same way, and does not need to check it
+unless it is about to act on a result.
 
 The code stays straight, a failure stops the remaining work, and there is one `if` at the end.

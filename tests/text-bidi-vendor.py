@@ -15,6 +15,7 @@ def lit(data): return '"'+''.join(f'\\x{x:02x}' for x in data)+'"'
 SOURCE=r'''use "vendor/fribidi" bidi
 use "std/dynlib" dynlib
 use "std/mem" mem
+use "std/fail"
 use "std/fs" fs
 use "std/encoding/binary" binary
 use "std/io" errors
@@ -54,7 +55,7 @@ fn save(arena:*mem.Arena,api:*const bidi.Api,text:[]const u8,base:u32,path:[]con
    append(out,&at,#cast(u32,line.value.levels[i]))
   }
  }
- check(fs.write_all(path,out[..at]))
+ check(fs_write_file(path,out[..at]))
 }
 fn fail_resolve(input:*const u32,n:i32,base:*u32,visual:*u32,lv:*i32,vl:*i32,levels:*i8) i8 {
  _=input
@@ -114,6 +115,13 @@ fn main() {
  check(bidi.reorder(arena,&broken,&paragraph,0,2).kind==errors.Kind.System && mem.arena_mark(arena)==mark)
  check(!errors.failed(dynlib.close(&library.value).failure))
  check(paragraph.logical[1]==1488 && paragraph.starts[1]==1 && paragraph.ends[1]==3 && paragraph.levels[1]==saved_level)
+}
+
+// Writes data to path; whether it worked.
+fn fs_write_file(path: []const u8, data: []const u8) bool {
+  status: fail.Status
+  fs.write_all(&status, path, data)
+  return !status.failed
 }
 '''
 C=r'''#include <fribidi.h>

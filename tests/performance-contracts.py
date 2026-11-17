@@ -133,6 +133,7 @@ fn main() {''']
     if platform.system() == 'Linux':
         # Target isolation must preserve the existing Linux temporary helpers.
         (src/'main.dyn').write_text('''use "std/testing" t
+use "std/fail"
 use "std/fs" fs
 use "std/io" io
 use "std/mem" mem
@@ -142,8 +143,9 @@ fn main() {
   t.expect(!io.failed(created.failure) && created.value.active, "temporary directory")
   frames: [4]fs.RemovalFrame
   scratch: [4096]u8
-  removed := t.remove_temporary(&created.value, frames[..], scratch[..])
-  t.expect(!io.failed(removed.failure) && !created.value.active, "remove temporary directory")
+  removed: fail.Status
+  t.remove_temporary(&removed, &created.value, frames[..], scratch[..])
+  t.expect(!removed.failed && !created.value.active, "remove temporary directory")
 }
 ''')
         for flags in ([], ['--release']):

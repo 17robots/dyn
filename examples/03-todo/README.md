@@ -26,6 +26,12 @@ Tasks are saved in `./todo.txt`, or the file named by `TODO_FILE`. See
 - **Writing a result type.** `parse_task` returns `parse.Result(Task)`, a
   value and a `parse.Failure` with a kind, an offset and a message.
   `parse.u64_decimal` reports bad numbers the same way.
+- **A status for loading and saving.** `load` and `save` take a
+  `*fail.Status`; `main` checks it once after each. Inside `save`, a failed
+  write makes the rename do nothing, so no check sits between them.
+- **Reacting to one kind of failure.** `load` reads with a status of its own
+  and treats `fail.Kind.NotFound` as an empty list; any other failure goes on
+  to the caller with `fail.set`.
 - **Borrowing the file's text.** `fs.read_all` loads the whole file into the
   arena, and every `Task.text` is a slice of that text. Nothing is copied
   and nothing is freed one task at a time.

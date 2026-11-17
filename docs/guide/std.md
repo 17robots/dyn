@@ -20,17 +20,19 @@ search for a word finds the function that does it.
   `process.Options{}` (inherit every stream), and scanners given only their
   `source`. Arena handles are pointers to backing headers and require
   `arena_alloc` or `arena_from_buffer`; a nil arena handle does not allocate.
-- **Errors are values, in one shape.** If the world can make a function fail,
-  it returns `{value, failure}`; with nothing to return, the failure alone.
-  Effects use `io.Failure {kind, native}`. Parsers use `parse.Failure {kind,
-  offset, message}`, and stream decoders use `parse.StreamFailure`. Zero means
-  success. Scanners add `found`, and end of input is `found` false with no
-  failure. Tree parsers (`json`, `mdesk`) name the payload `root` and return a
-  usable stub on failure. Migration status
-  and remaining exceptions are tracked in [std standardization](../internals/std-standardization.md).
-  Scanners and writers keep their first error in their state and turn later
-  calls into no-ops, so callers check once at the end. Predicates return
-  `bool`. Missing lookups and end of input are ordinary results, not errors.
+- **Failure is state you pass in.** A function the world can make fail takes
+  a `*fail.Status` (std/fail): the first failure stays there with its kind,
+  native code, operation, path and reason, and every later call given that
+  status does nothing and returns zero or empty. Callers check
+  `status.failed` once, before acting on the results, and print the failure
+  with `fail.describe`. See [idiomatic Dyn](idiomatic-dyn.md#errors-and-cleanup)
+  for the rules. `std/fs` uses this model; modules not moved yet return
+  `{value, failure}` with `io.Failure {kind, native}` or `parse.Failure {kind,
+  offset, message}`, where zero means success. Migration status is tracked in
+  [std standardization](../internals/std-standardization.md). Scanners and
+  writers keep their first error in their state and turn later calls into
+  no-ops. Predicates return `bool`. Missing lookups and end of input are
+  ordinary results, not errors.
 - **One place for byte search.** `std/bytes` owns `equal`, `find`,
   `find_byte`, `find_last`, `find_last_byte`, `contains`, `starts_with` and
   `ends_with`; `std/strings` holds text work (trim, split, join, format, parse)

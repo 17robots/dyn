@@ -9,6 +9,7 @@
 use "std/container/map"
 use "std/encoding/csv"
 use "std/fmt"
+use "std/fail"
 use "std/fs"
 use "std/io"
 use "std/math"
@@ -33,11 +34,11 @@ fn main() i32 {
     return 2
   }
   path := program.args[1]
-  file_file := fs.open(path)
-  file := fs.read_contents(arena, &file_file, 16 << 20)
-  fs.close(&file_file)
-  if file_file.failed {
-    io.eprintln("ledger: cannot read {}", path)
+  status: fail.Status
+  file := fs.read_all(arena, &status, path, 16 << 20)
+  if status.failed {
+    storage: [512]u8
+    io.eprintln("ledger: {}", fail.describe(storage[..], status.failure))
     return 1
   }
 

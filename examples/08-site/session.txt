@@ -1,8 +1,8 @@
 $ site pages out
 arenas.html  Arenas
-errors.html  Errors are values
+errors.html  Failure is state
 welcome.html  Welcome to <Dyn>
-3 pages, 2851 scratch bytes at peak
+3 pages, 2890 scratch bytes at peak
 $ site missing out
-site: cannot list missing
+site: list missing: no such file or directory
 [exit 1]

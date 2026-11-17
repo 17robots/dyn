@@ -18,6 +18,7 @@ use "vendor/harfbuzz" hb
 use "vendor/fribidi" bidi
 use "std/mem" mem
 use "std/io"
+use "std/fail"
 use "std/fs" fs
 use "std/dynlib" dynlib
 use "std/io" errors
@@ -33,7 +34,7 @@ fn save(arena:*mem.Arena,rects:[]const layout.SelectionRect,path:[]const u8) {
   fields:[7]u32=[#cast(u32,r.line),#cast(u32,r.start),#cast(u32,r.end),#cast(u32,#cast(i32,r.x*64.0)),#cast(u32,#cast(i32,r.y*64.0)),#cast(u32,#cast(i32,r.width*64.0)),#cast(u32,#cast(i32,r.height*64.0))]
   for j in 0..7 {binary.store_u32_le(output[4+i*28+j*4..8+i*28+j*4],fields[j])}
  }
- check(fs.write_all(path,output))
+ check(fs_write_file(path,output))
 }
 fn main() {
  owner:=mem.arena_alloc(0)
@@ -48,9 +49,8 @@ fn main() {
  h:=hb.load(library.value)
  b:=bidi.load(bidi_library.value)
  check(!errors.failed(h.failure) && !errors.failed(b.failure))
- bytes_file := fs.open("font.ttf")
- bytes := fs.read_contents(owner, &bytes_file, 10000000)
- fs.close(&bytes_file)
+ bytes_file: fail.Status
+ bytes := fs.read_all(owner, &bytes_file, "font.ttf", 10000000)
  check(!bytes_file.failed)
  font:=hb.font_owned(&h.api,bytes,0)
  check(!errors.failed(font.failure))
@@ -125,6 +125,13 @@ fn main() {
  check(!errors.failed(long_line.failure))
  long_selection:=layout.selection(scratch,&long_line.value,1,19999)
  check(!errors.failed(long_selection.failure) && #len(long_selection.value)==1 && long_selection.value[0].start==1 && long_selection.value[0].end==19999)
+}
+
+// Writes data to path; whether it worked.
+fn fs_write_file(path: []const u8, data: []const u8) bool {
+  status: fail.Status
+  fs.write_all(&status, path, data)
+  return !status.failed
 }
 '''
 # Reuse only the independent C shaping oracle, never its Dyn implementation.

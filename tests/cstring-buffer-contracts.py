@@ -18,6 +18,7 @@ SOURCE = r'''use "std/c" c
 use "std/parse" parse
 use "std/io" io
 use "std/mem" mem
+use "std/fail"
 use "std/fs" fs
 fn check(ok:bool) { if !ok { #panic("CString buffer contract") } }
 fn main() {
@@ -51,8 +52,9 @@ fn main() {
  check(overflow.failure.kind == parse.Kind.Overflow && overflow.value==nil && mem.equal(backing[..],before[..]))
  path:[4300]u8
  mem.fill(path[..],'a')
- removed:=fs.remove(path[..])
- check(io.failed(removed.failure))
+ removed: fail.Status
+ fs.remove(&removed, path[..])
+ check(removed.failed)
  for byte in path { check(byte=='a') }
 }
 '''

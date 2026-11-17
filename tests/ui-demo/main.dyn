@@ -6,6 +6,7 @@ use "std/ui" ui
 use "std/ui/software" software
 use "std/mem" mem
 use "std/image/png" png
+use "std/fail"
 use "std/fs" fs
 use "std/fmt" fmt
 patterns: [38][7]u8 = [
@@ -111,7 +112,14 @@ fn main() {
     #panic("UI demo render")
   }
   encoded := png.encode(output, pixels, 480, 240, 4)
-  if parse.failed(encoded.failure) || !fs.write_all("ui-demo.png", encoded.value) {
+  if parse.failed(encoded.failure) || !fs_write_file("ui-demo.png", encoded.value) {
     #panic("UI demo output")
   }
+}
+
+// Writes data to path; whether it worked.
+fn fs_write_file(path: []const u8, data: []const u8) bool {
+  status: fail.Status
+  fs.write_all(&status, path, data)
+  return !status.failed
 }

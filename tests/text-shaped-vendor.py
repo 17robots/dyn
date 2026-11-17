@@ -17,6 +17,7 @@ use "vendor/harfbuzz" hb
 use "vendor/fribidi" bidi
 use "std/mem" mem
 use "std/io"
+use "std/fail"
 use "std/fs" fs
 use "std/dynlib" dynlib
 use "std/io" errors
@@ -39,7 +40,7 @@ fn save(arena:*mem.Arena,result:*const layout.Layout,path:[]const u8) {
   values:[8]u32=[g.id,#cast(u32,g.start),#cast(u32,g.end),#cast(u32,#cast(i32,g.x*64.0)),#cast(u32,#cast(i32,g.y*64.0)),#cast(u32,#cast(i32,g.x_offset*64.0)),#cast(u32,#cast(i32,g.y_offset*64.0)),#cast(u32,#cast(i32,g.advance*64.0))]
   for j in 0..8 {binary.store_u32_le(out[4+i*32+j*4..8+i*32+j*4],values[j])}
  }
- check(fs.write_all(path,out))
+ check(fs_write_file(path,out))
 }
 fn main() {
  arena:=mem.arena_alloc(0)
@@ -52,9 +53,8 @@ fn main() {
  h:=hb.load(hb_library.value)
  b:=bidi.load(bidi_library.value)
  check(!errors.failed(h.failure) && !errors.failed(b.failure))
- data_file := fs.open("font.ttf")
- data := fs.read_contents(arena, &data_file, 10000000)
- fs.close(&data_file)
+ data_file: fail.Status
+ data := fs.read_all(arena, &data_file, "font.ttf", 10000000)
  check(!data_file.failed)
  created:=hb.font_owned(&h.api,data,0)
  check(!errors.failed(created.failure))
@@ -120,6 +120,13 @@ fn main() {
  mixed_eof:=layout.cluster_at(&mixed.value,#len(mixed.value.text))
  check(!errors.failed(mixed_eof.failure) && mixed_eof.rtl && mixed_eof.x<mixed.value.width)
 
+}
+
+// Writes data to path; whether it worked.
+fn fs_write_file(path: []const u8, data: []const u8) bool {
+  status: fail.Status
+  fs.write_all(&status, path, data)
+  return !status.failed
 }
 '''
 # C deliberately items scalars, applies native bidi line reordering, then shapes

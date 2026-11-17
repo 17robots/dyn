@@ -14,16 +14,17 @@ dyn run examples/02-wordcount < examples/02-wordcount/poem.txt
   gives `program.args` (the program's own path first) and `program.arena`,
   an arena that lives as long as the program.
 - **Exit codes.** `fn main() i32` returns the process exit status.
-- **Results.** `fs.open(name)` returns `{value, failure}`. Check it with
-  `io.failed(opened.failure)`; `failure.kind` is a portable category such as
-  `io.Kind.NotFound`. The value is safe to read even on failure.
+- **A status per file.** `count_file` takes a `*fail.Status`, and so does
+  every `fs` call in it. After a failure `fs.read` returns 0, so the read
+  loop ends by itself; nothing inside checks. Each file gets its own status in
+  `main`, so one that cannot be read is reported with `fail.describe`
+  (`open missing.txt: no such file or directory`) and the rest still count.
 - **Closing a handle once.** A `fs.File` is a plain value naming an OS
-  resource. `file := opened.value` copies it out of the result, and `defer
-  fs.close(&file)` closes it when the loop iteration ends, however it ends.
-- **Streaming through a seam.** `count_reader` takes an `io.Reader`, so the
-  same code reads a file (`fs.reader(&file)`) and standard input
-  (`io.stdin()`). It reads 64 KiB at a time into one stack buffer, so a file
-  of any size uses the same memory.
+  resource. `defer fs.close(&file)` closes it when `count_file` returns,
+  however it returns; closing a file that never opened does nothing.
+- **Streaming.** Both inputs read 64 KiB at a time into one stack buffer, so
+  a file of any size uses the same memory. Standard input is an `io.Reader`
+  (`io.stdin()`), whose reads report their own failure and end.
 - **State across chunks.** A word can be cut in two by a chunk boundary, so
   `Counts.in_word` carries that state from one chunk to the next.
 - **Bit tests.** UTF-8 continuation bytes look like `10xxxxxx`;

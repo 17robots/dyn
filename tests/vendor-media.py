@@ -205,6 +205,7 @@ fn main() {
     'archive-example': r'''use "std/parse" parse
 use "vendor/archive"
 use "std/mem"
+use "std/fail"
 use "std/fs"
 use "std/os/linux"
 use "std/io"
@@ -218,9 +219,8 @@ fn main() {
     io.println("usage: archive-example ARCHIVE")
     return
   }
-  loaded_file := fs.open(args[1])
-  loaded := fs.read_contents(storage, &loaded_file, 8 * 1024 * 1024)
-  fs.close(&loaded_file)
+  loaded_file: fail.Status
+  loaded := fs.read_all(storage, &loaded_file, args[1], 8 * 1024 * 1024)
   if loaded_file.failed {
     #panic("read archive")
   }
@@ -287,6 +287,7 @@ fn main() {
     'sdl3-image-example': r'''use "vendor/sdl3"
 use "vendor/sdl3/image" image
 use "std/mem"
+use "std/fail"
 use "std/fs"
 use "std/os/linux"
 use "std/io"
@@ -306,9 +307,8 @@ fn main() {
     #panic("image load")
   }
   defer sdl3.surface_destroy_owned(surface.value)
-  bytes_file := fs.open(args[1])
-  bytes := fs.read_contents(storage, &bytes_file, 8 * 1024 * 1024)
-  fs.close(&bytes_file)
+  bytes_file: fail.Status
+  bytes := fs.read_all(storage, &bytes_file, args[1], 8 * 1024 * 1024)
   if bytes_file.failed {
     #panic("image read")
   }

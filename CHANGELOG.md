@@ -46,16 +46,34 @@ Language (2026-11-16 cleanup; see `docs/guide/rules.md`):
 
 Standard library:
 
-- Files keep their failure. `fs.open`, `fs.create`, `fs.append` and
-  `fs.create_exclusive` return an `fs.File`; when opening fails, the file is
-  failed and every operation on it does nothing. `fs.read` and `fs.write`
-  return byte counts, `fs.seek` the position, `fs.sync` nothing: check
-  `file.failed` (and `file.ended` for reads) once, where it matters.
-  `io.Failure` gains `operation` and `path`, and `io.describe(storage, failure)`
-  gives "open /etc/app.conf: not found".
-- `fs.read_all(arena, path, maximum)` returns the bytes, empty on failure, and
-  `fs.write_all(path, bytes)` returns whether it worked. To learn why, open the
-  file and use `fs.read_contents(arena, &file, maximum)` or `fs.write`.
+- Failure is state you pass in: new `std/fail` (`fail.Status`, `fail.Failure`,
+  `fail.Kind`, `fail.set`, `fail.invalid`, `fail.describe`,
+  `fail.panic_on_failure`). A function that can fail takes a `*fail.Status`;
+  the first failure stays there with its kind, native code, operation, path
+  and reason, and every later call given that status does nothing and returns
+  zero or empty. Check `status.failed` once, before acting on the results.
+  `Status.on_failure` is called once when the first failure is recorded.
+  `io.Kind` is now the same type as `fail.Kind`.
+- `std/fs` moves to it. Every fallible function takes the status first (after
+  the arena when it allocates): `fs.open(&status, path)`,
+  `fs.read(&status, &file, buffer)`, `fs.write(&status, &file, bytes)` (no
+  return), `fs.read_all(arena, &status, path, maximum)`,
+  `fs.write_all(&status, path, bytes)`, `fs.metadata(&status, path)`,
+  `fs.remove`, `fs.rename`, `fs.make_directory`, directory listing,
+  `fs.copy_file`, the atomic-file functions, `fs.remove_tree`, `fs.lock`,
+  `fs.truncate`, `fs.read_link` and `fs.app_directory`. `fs.File` loses
+  `failed` and `failure` and gains `path`; `fs.Metadata`,
+  `fs.DirectoryEntry` and the directory functions no longer carry failures;
+  `fs.Result`, `fs.Mapping`, `fs.DirectoryResult`, `fs.PathResult` and
+  `fs.AtomicResult` are gone. `fs.map` returns the bytes and `fs.unmap`,
+  `fs.close` and `fs.atomic_abort` take no status, so cleanup works after a
+  failure. Failures carry the system's own reason: "open app.json: no such
+  file or directory", "read /tmp: is a directory".
+- New in `std/fs`: `fs.list(arena, &status, path)` (a directory's entries,
+  copied), `fs.is_directory`, `fs.is_file`, and
+  `fs.make_directory_exclusive`. `fs.make_directory` now succeeds when the
+  directory exists.
+- `testing.remove_temporary` takes a status.
 - `panic.assert(condition, message)` checks a condition in every build.
 - Image `width` and `height` (`image.View`, every encoder) and font sizes
   (`font.Bitmap`, `font.Atlas`, `font.AtlasGlyph`, `font.atlas`) are `usize`.

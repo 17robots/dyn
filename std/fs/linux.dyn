@@ -63,3 +63,6 @@ fn native_map(handle: isize, size: usize) isize {
 fn native_unmap(address: usize, size: usize) isize {
   return #syscall(sys.Munmap, address, size)
 }
+fn native_text(code: isize) []const u8 {
+  return io.linux_text(code)
+}

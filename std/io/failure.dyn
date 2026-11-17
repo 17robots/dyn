@@ -1,3 +1,4 @@
+use "std/fail"
 // Why an operation failed: a portable kind, the native code when the system
 // gave one, and what was being done, such as operation "open" on path
 // "/etc/app.conf". path borrows the caller's text. describe turns it into
@@ -9,7 +10,8 @@ pub struct Result(T) { value: T, failure: Failure }
 pub type Bytes = Result([]u8)
 pub type Count = Result(usize)
 
-pub enum Kind { Ok, InvalidInput, InvalidState, NotFound, PermissionDenied, AlreadyExists, Capacity, Overflow, Interrupted, WouldBlock, Unsupported, System }
+// The portable kinds are fail.Kind; io.Kind is the same type.
+pub type Kind = fail.Kind
 
 // Whether a step failed. Kind.Ok is the zero value, so a zero Failure succeeded.
 pub fn failed(failure: Failure) bool {
@@ -108,22 +110,13 @@ pub fn darwin(code: isize) Kind {
   return linux(code)
 }
 
+// A fail.Failure as an io.Failure, for streams.
+pub fn from_fail(failure: fail.Failure) Failure {
+  return Failure{ kind: failure.kind, native: failure.native, operation: failure.operation, path: failure.path }
+}
 // A short description of kind: "not found", "permission denied".
 pub fn kind_text(kind: Kind) []const u8 {
-  case kind {
-    Kind.Ok => { return "ok" }
-    Kind.InvalidInput => { return "invalid input" }
-    Kind.InvalidState => { return "invalid state" }
-    Kind.NotFound => { return "not found" }
-    Kind.PermissionDenied => { return "permission denied" }
-    Kind.AlreadyExists => { return "already exists" }
-    Kind.Capacity => { return "out of space" }
-    Kind.Overflow => { return "too large" }
-    Kind.Interrupted => { return "interrupted" }
-    Kind.WouldBlock => { return "would block" }
-    Kind.Unsupported => { return "unsupported" }
-    Kind.System => { return "system error" }
-  }
+  return fail.kind_text(kind)
 }
 // "operation path: kind" in storage, such as "open /etc/app.conf: not found";
 // parts that are empty are left out. Truncated to storage.
@@ -146,4 +139,94 @@ fn describe_put(storage: []u8, at: usize, text: []const u8) usize {
     used += 1
   }
   return used
+}
+
+// The system's own reason for a native code, such as "is a directory" for
+// Linux's -21; empty when the portable kind says enough.
+pub fn linux_text(code: isize) []const u8 {
+  case magnitude(code) {
+    1 => { return "operation not permitted" }
+    2 => { return "no such file or directory" }
+    5 => { return "input/output error" }
+    9 => { return "bad file descriptor" }
+    12 => { return "out of memory" }
+    13 => { return "permission denied" }
+    16 => { return "device or resource busy" }
+    17 => { return "already exists" }
+    18 => { return "cross-device link" }
+    20 => { return "not a directory" }
+    21 => { return "is a directory" }
+    22 => { return "invalid argument" }
+    24 => { return "too many open files" }
+    27 => { return "file too large" }
+    28 => { return "no space left on device" }
+    30 => { return "read-only file system" }
+    32 => { return "broken pipe" }
+    36 => { return "file name too long" }
+    39 => { return "directory not empty" }
+    40 => { return "too many levels of symbolic links" }
+    98 => { return "address already in use" }
+    101 => { return "network is unreachable" }
+    104 => { return "connection reset" }
+    110 => { return "timed out" }
+    111 => { return "connection refused" }
+    113 => { return "no route to host" }
+    _ => { return "" }
+  }
+}
+pub fn darwin_text(code: isize) []const u8 {
+  value := magnitude(code)
+  if value <= 34 { return linux_text(code) }
+  case value {
+    35 => { return "resource temporarily unavailable" }
+    48 => { return "address already in use" }
+    51 => { return "network is unreachable" }
+    54 => { return "connection reset" }
+    60 => { return "timed out" }
+    61 => { return "connection refused" }
+    62 => { return "too many levels of symbolic links" }
+    63 => { return "file name too long" }
+    65 => { return "no route to host" }
+    66 => { return "directory not empty" }
+    _ => { return "" }
+  }
+}
+pub fn windows_text(code: isize) []const u8 {
+  case magnitude(code) {
+    2 => { return "no such file or directory" }
+    3 => { return "no such file or directory" }
+    5 => { return "permission denied" }
+    32 => { return "file is in use" }
+    80 => { return "already exists" }
+    112 => { return "no space left on device" }
+    145 => { return "directory not empty" }
+    183 => { return "already exists" }
+    206 => { return "file name too long" }
+    267 => { return "not a directory" }
+    10048 => { return "address already in use" }
+    10054 => { return "connection reset" }
+    10060 => { return "timed out" }
+    10061 => { return "connection refused" }
+    _ => { return "" }
+  }
+}
+pub fn wasi_text(code: isize) []const u8 {
+  case magnitude(code) {
+    2 => { return "permission denied" }
+    20 => { return "already exists" }
+    31 => { return "is a directory" }
+    37 => { return "file name too long" }
+    44 => { return "no such file or directory" }
+    51 => { return "no space left on device" }
+    54 => { return "not a directory" }
+    55 => { return "directory not empty" }
+    63 => { return "operation not permitted" }
+    69 => { return "read-only file system" }
+    _ => { return "" }
+  }
+}
+fn magnitude(code: isize) isize {
+  if code == #min(isize) { return 0 }
+  if code < 0 { return 0 - code }
+  return code
 }

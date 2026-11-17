@@ -292,6 +292,7 @@ use "std/io" io
 use "std/strings"
 use "std/bytes"
 use "std/mem"
+use "std/fail"
 use "std/fs"
 use "std/os/linux"
 fn main() {
@@ -359,9 +360,8 @@ fn main() {
   }
   args := linux.process_arguments(backing)
   if #len(args) == 2 {
-    file_file := fs.open(args[1])
-    file := fs.read_contents(backing, &file_file, 1024 * 1024)
-    fs.close(&file_file)
+    file_file: fail.Status
+    file := fs.read_all(backing, &file_file, args[1], 1024 * 1024)
     if file_file.failed {
       #panic("GLB read")
     }
@@ -622,6 +622,7 @@ fn main() {
 use "std/mem"
 use "std/os/linux"
 use "std/fs"
+use "std/fail"
 use "std/io"
 use "std/time"
 fn main() {
@@ -633,9 +634,8 @@ fn main() {
   if #len(args) != 2 {
     #panic("WAV path required")
   }
-  bytes_file := fs.open(args[1])
-  bytes := fs.read_contents(storage, &bytes_file, 1024 * 1024)
-  fs.close(&bytes_file)
+  bytes_file: fail.Status
+  bytes := fs.read_all(storage, &bytes_file, args[1], 1024 * 1024)
   if bytes_file.failed {
     #panic("WAV read")
   }
@@ -710,6 +710,7 @@ fn main() {
     'sdl3-mixer': r'''use "vendor/sdl3/mixer"
 use "std/mem"
 use "std/os/linux"
+use "std/fail"
 use "std/fs"
 use "std/io"
 fn main() {
@@ -721,8 +722,9 @@ fn main() {
   if #len(args) != 2 {
     #panic("WAV path required")
   }
-  bytes := fs.read_all(storage, args[1], 1024 * 1024)
-  if #len(bytes) == 0 {
+  bytes_file: fail.Status
+  bytes := fs.read_all(storage, &bytes_file, args[1], 1024 * 1024)
+  if bytes_file.failed {
     #panic("WAV read")
   }
   if !mixer.init() {

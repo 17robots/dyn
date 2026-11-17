@@ -2,6 +2,7 @@
 use "std/io" io
 use "std/os/linux" os
 use "std/fs" fs
+use "std/fail"
 use "std/time" time
 use "std/os/linux/sys"
 fn spawn_native(arena: *mem.Arena, path: []const u8, arguments: [][]const u8, configuration: Options) NativeSpawn {
@@ -44,9 +45,10 @@ fn pipe_native() Pipe {
 }
 fn read_native(handle: isize, destination: []u8) ReadResult {
   file := fs.adopt_handle(handle)
-  count := fs.read(&file, destination)
-  if file.failed && file.failure.native == -11 { return ReadResult{ ok: true } }
-  return ReadResult{ count: count, ended: file.ended, error: file.failure.native, kind: file.failure.kind, ok: !file.failed }
+  status: fail.Status
+  count := fs.read(&status, &file, destination)
+  if status.failed && status.failure.native == -11 { return ReadResult{ ok: true } }
+  return ReadResult{ count: count, ended: file.ended, error: status.failure.native, kind: status.failure.kind, ok: !status.failed }
 }
 fn milliseconds_native() MillisecondsResult {
   now := time.monotonic_now()
@@ -70,11 +72,10 @@ fn duplicate_native(value: isize) HandleResult {
 }
 
 fn arguments_native(arena: *mem.Arena) ArgumentsResult {
-  raw_file := fs.open("/proc/self/cmdline")
-  raw := fs.read_contents(arena, &raw_file, #max(usize))
-  fs.close(&raw_file)
-  if raw_file.failed {
-    return ArgumentsResult{ failure: io.Failure{ kind: raw_file.failure.kind, native: raw_file.failure.native } }
+  status: fail.Status
+  raw := fs.read_all(arena, &status, "/proc/self/cmdline", #max(usize))
+  if status.failed {
+    return ArgumentsResult{ failure: io.Failure{ kind: status.failure.kind, native: status.failure.native } }
   }
   count: usize = 0
   for byte in raw {

@@ -844,6 +844,17 @@ module's full declarations and comments.
 - `fn waker_drain(waker: *const Waker)`: Discards pending wakes.
 - `fn waker_close(waker: *Waker)`
 
+## std/fail
+
+- `enum Kind { Ok, InvalidInput, InvalidState, NotFound, PermissionDenied, AlreadyExists, Capacity, Overflow, Interrupted, WouldBlock, Unsupported, System }`: The portable reason.
+- `struct Failure { kind: Kind, // The system's own code, when the system gave one. native: isize, // What was being done: "open", "read", "parse", "connect". operation: []const u8, // The file, directory, address or document involved. path: []const u8, // The specific reason, such as "is a directory" or "expected a digit"; // empty means the kind says it. message: []const u8, // For text input: where it went wrong, in bytes from the start. offset: usize, has_offset: bool, }`: What went wrong, where, and doing what.
+- `struct Status { failed: bool, failure: Failure, // Optional. Called once, inside the call that failed, when the first // failure is recorded, with context. It cannot undo the failure. on_failure: fn(rawptr, Failure), context: rawptr, }`
+- `fn set(status: *Status, failure: Failure)`: Records failure unless status already holds one;
+- `fn invalid(status: *Status, operation: []const u8, path: []const u8, message: []const u8)`: Records a problem your own code found in its input, such as invalid(&status, "config", path, "port out of range").
+- `fn panic_on_failure(context: rawptr, failure: Failure)`: For on_failure: ends the program at the first failure, with its description.
+- `fn kind_text(kind: Kind) []const u8`: A short description of kind: "not found", "permission denied".
+- `fn describe(storage: []u8, failure: Failure) []u8`: "operation path: reason" in storage, such as "open /etc/app.conf: no such file or directory" or "parse app.json at 41: expected ','".
+
 ## std/flags
 
 - `enum Kind { Bool, String, Integer, Float, Choice }`: Command-line parser.
@@ -929,62 +940,59 @@ module's full declarations and comments.
 
 ## std/fs
 
-- `struct File { descriptor: isize, active: bool, failed: bool, ended: bool, failure: io.Failure }`: A file handle is a plain value: copy it freely, and close it once.
-- `struct Result { transferred: usize, failure: io.Failure }`
-- `type OffsetResult = io.Count`
+- `struct File { descriptor: isize, active: bool, ended: bool, path: []const u8 }`: Files and directories.
+- `struct Metadata { size: u64, inode: u64, device: u64, mode: u16 }`: Size, inode, device and the POSIX mode (type and permission bits).
+- `struct DirectoryEntry { name: []const u8, kind: u8, found: bool }`: One directory entry.
 - `fn is_open(file: *const File) bool`
 - `fn adopt_handle(handle: isize) File`: A File for a native handle opened elsewhere;
-- `fn open(path: []const u8) File`: Opens path for reading.
-- `fn create(path: []const u8) File`
-- `fn append(path: []const u8) File`
-- `fn create_exclusive(path: []const u8) File`
-- `fn close(file: *File)`
-- `fn read(file: *File, destination: []u8) usize`: Reads into destination and returns the byte count.
-- `fn write(file: *File, source: []const u8) usize`: Writes all of source and returns the bytes written, fewer on a failure.
-- `fn reader(file: *File) io.Reader`: Adapters borrow the File itself: keep it alive and unmoved until I/O completes.
+- `fn open(status: *fail.Status, path: []const u8) File`: Opens path for reading.
+- `fn create(status: *fail.Status, path: []const u8) File`: Creates path for writing, or empties it when it exists.
+- `fn append(status: *fail.Status, path: []const u8) File`: Opens path for writing at its end, creating it when missing.
+- `fn create_exclusive(status: *fail.Status, path: []const u8) File`: Creates path for writing;
+- `fn close(file: *File)`: Closes the file.
+- `fn read(status: *fail.Status, file: *File, destination: []u8) usize`: Reads into destination and returns the byte count: 0 at the end of the file (file.ended) and after a failure.
+- `fn write(status: *fail.Status, file: *File, source: []const u8)`: Writes all of source.
+- `fn reader(file: *File) io.Reader`
 - `fn writer(file: *File) io.Writer`
-- `fn seek(file: *File, offset: isize, origin: usize) usize`: Moves the file position and returns it;
-- `fn sync(file: *File)`: Makes written data durable.
-- `type Mapping = io.Result([]const u8)`: A read-only view of a whole file, owned by the caller until unmap.
-- `fn map(file: *const File) Mapping`: Maps the whole file.
-- `fn unmap(mapping: *Mapping) Result`: Releases a mapping and clears it.
-- `fn read_all(arena: *memory.Arena, path: []const u8, maximum: usize) []u8`: Reads one complete file into arena storage, bounded by maximum.
-- `fn read_contents(arena: *memory.Arena, file: *File, maximum: usize) []u8`: Reads the rest of file into arena storage, bounded by maximum.
-- `fn write_all(path: []const u8, source: []const u8) bool`: Creates or replaces path with source;
-- `struct Metadata { size: u64, inode: u64, device: u64, mode: u16, failure: io.Failure }`
-- `type PathResult = io.Bytes`
+- `fn seek(status: *fail.Status, file: *File, offset: isize, origin: usize) usize`: Moves the file position and returns it;
+- `fn sync(status: *fail.Status, file: *File)`: Makes written data durable.
+- `fn map(status: *fail.Status, file: *const File) []const u8`: A read-only view of the whole file, owned by the caller until unmap.
+- `fn unmap(mapping: *[]const u8)`: Releases a mapping and empties it.
+- `fn read_all(arena: *memory.Arena, status: *fail.Status, path: []const u8, maximum: usize) []u8`: Reads one complete file into arena storage, bounded by maximum.
+- `fn read_contents(arena: *memory.Arena, status: *fail.Status, file: *File, maximum: usize) []u8`: Reads the rest of file into arena storage, bounded by maximum.
+- `fn write_all(status: *fail.Status, path: []const u8, source: []const u8)`: Creates or replaces path with source.
+- `fn metadata(status: *fail.Status, path: []const u8) Metadata`: Metadata for path, following symbolic links.
+- `fn file_metadata(status: *fail.Status, file: *const File) Metadata`: Metadata for an open file.
+- `fn is_directory(info: Metadata) bool`: Whether info describes a directory or a regular file.
+- `fn is_file(info: Metadata) bool`
+- `fn remove(status: *fail.Status, path: []const u8)`: Removes the file at path.
+- `fn rename(status: *fail.Status, old_path: []const u8, new_path: []const u8)`: Renames old_path to new_path, replacing new_path when it exists.
+- `fn make_directory(status: *fail.Status, path: []const u8, mode: usize)`: Creates the directory path with mode (ignored on Windows).
+- `fn make_directory_exclusive(status: *fail.Status, path: []const u8, mode: usize)`: Creates the directory path with mode;
+- `fn remove_directory(status: *fail.Status, path: []const u8)`: Removes the empty directory path.
+- `fn open_directory(status: *fail.Status, path: []const u8, storage: []u8) Directory`: Opens the directory path for listing with directory_next.
+- `fn directory_next(status: *fail.Status, directory: *Directory) DirectoryEntry`: The next entry, without "." and "..".
+- `fn list(arena: *memory.Arena, status: *fail.Status, path: []const u8) []DirectoryEntry`: The names in directory path, copied into arena, without "." and "..".
 - `enum AppDirectory { Home, Config, Cache, Data, Runtime }`
-- `struct Directory { file: File, storage: []u8, offset: usize, used: usize, }`
-- `type DirectoryResult = io.Result(Directory)`
-- `struct DirectoryEntry { name: []const u8, kind: u8, found: bool, failure: io.Failure }`
-- `fn open_directory(path: []const u8, storage: []u8) DirectoryResult`
-- `fn directory_next(directory: *Directory) DirectoryEntry`: Entry name borrows directory storage and may be invalidated by next refill.
+- `struct Directory { file: File, storage: []u8, offset: usize, used: usize, path: []const u8, }`
 - `fn close_directory(directory: *Directory)`
-- `fn copy_file(source: []const u8, destination: []const u8, scratch: []u8) Result`: A failed close is not reported.
-- `fn file_metadata(file: *const File) Metadata`: statx has one fixed layout on supported Linux architectures (Linux 4.11+).
-- `fn metadata(path: []const u8) Metadata`
-- `fn remove(path: []const u8) Result`
-- `fn rename(old_path: []const u8, new_path: []const u8) Result`
-- `fn make_directory(path: []const u8, mode: usize) Result`
-- `fn remove_directory(path: []const u8) Result`
-- `fn symbolic_link(target: []const u8, link: []const u8) Result`
-- `fn sync_directory(path: []const u8) Result`
-- `struct AtomicFile { file: File, destination: []const u8, temporary: []const u8, active: bool, }`
-- `type AtomicResult = io.Result(AtomicFile)`
-- `fn atomic_begin(destination: []const u8, temporary: []const u8) AtomicResult`: Both paths are borrowed until commit/abort.
-- `fn atomic_commit(transaction: *AtomicFile) Result`
-- `fn atomic_commit_durable(transaction: *AtomicFile, parent_directory: []const u8) Result`: Also syncs parent directory, making committed rename durable across power loss on Linux filesystems which honor fsync for files and ...
-- `fn atomic_abort(transaction: *AtomicFile) Result`
-- `fn write_atomic(destination: []const u8, temporary: []const u8, source: []const u8) Result`: Writes through an explicitly named sibling temporary file and atomically renames it.
-- `fn lock(file: *File, operation: usize) Result`
-- `fn truncate(path: []const u8, length: usize) Result`
-- `fn read_link(arena: *mem.Arena, path: []const u8) PathResult`: The target of the symbolic link at path, in arena.
-- `fn app_directory(arena: *mem.Arena, kind: AppDirectory) PathResult`: The per-user directory of kind, in arena.
-- `struct Directory { file: File, storage: []u8, offset: usize, used: usize, base: i64 }`: Directory listing through getdirentries64, with the Linux API shape.
+- `fn copy_file(status: *fail.Status, source: []const u8, destination: []const u8, scratch: []u8) usize`: Copies source to destination, replacing it, and returns the bytes copied.
+- `fn symbolic_link(status: *fail.Status, target: []const u8, link: []const u8)`: Creates the symbolic link link pointing at target.
+- `fn sync_directory(status: *fail.Status, path: []const u8)`: Makes a directory's entries durable, such as a rename into it.
+- `struct AtomicFile { file: File, destination: []const u8, temporary: []const u8, active: bool, }`: A file written under a temporary name and renamed onto its destination when committed, so the destination is never partly written.
+- `fn atomic_begin(status: *fail.Status, destination: []const u8, temporary: []const u8) AtomicFile`: Both paths are borrowed until commit or abort.
+- `fn atomic_commit(status: *fail.Status, transaction: *AtomicFile)`: Syncs and closes the temporary file and renames it onto the destination.
+- `fn atomic_commit_durable(status: *fail.Status, transaction: *AtomicFile, parent_directory: []const u8)`: Also syncs the parent directory, making the committed rename durable across power loss on Linux file systems that honor fsync for ...
+- `fn atomic_abort(transaction: *AtomicFile)`: Closes and removes the temporary file.
+- `fn write_atomic(status: *fail.Status, destination: []const u8, temporary: []const u8, source: []const u8)`: Writes source to destination through the sibling temporary file and renames it into place, so destination is either the old file or all of ...
+- `fn lock(status: *fail.Status, file: *File, operation: usize)`: Locks file with flock(2): operation is LOCK_SH (1), LOCK_EX (2), or either with LOCK_NB (4);
+- `fn truncate(status: *fail.Status, path: []const u8, length: usize)`: Sets the length of the file at path.
+- `fn read_link(arena: *mem.Arena, status: *fail.Status, path: []const u8) []u8`: The target of the symbolic link at path, in arena.
+- `fn app_directory(arena: *mem.Arena, status: *fail.Status, kind: AppDirectory) []u8`: The per-user directory of kind, in arena.
+- `struct Directory { file: File, storage: []u8, offset: usize, used: usize, base: i64, path: []const u8 }`: Directory listing through getdirentries64, with the Linux API shape.
 - `struct RemovalFrame { directory: Directory, name: []const u8, parent: isize }`: Scratch frame storage for iterative, descriptor-relative tree removal.
-- `fn remove_tree(path: []const u8, frames: []RemovalFrame, scratch: []u8) Result`: Requires at least 280 scratch bytes per frame.
-- `struct Directory { handle: rawptr, storage: []u8, data: [592]u8, pending: bool, active: bool }`: Directory listing through FindFirstFileW, with the Linux API shape.
-- `fn make_directory(path: []const u8, _mode: usize) Result`: mode is ignored on Windows.
+- `fn remove_tree(status: *fail.Status, path: []const u8, frames: []RemovalFrame, scratch: []u8)`: Removes path and everything under it, without following symbolic links.
+- `struct Directory { handle: rawptr, storage: []u8, data: [592]u8, pending: bool, active: bool, path: []const u8 }`: Directory listing through FindFirstFileW, with the Linux API shape.
 
 ## std/fs/capability
 
@@ -1154,7 +1162,7 @@ module's full declarations and comments.
 - `struct Result(T) { value: T, failure: Failure }`: A value and how getting it went.
 - `type Bytes = Result([]u8)`
 - `type Count = Result(usize)`
-- `enum Kind { Ok, InvalidInput, InvalidState, NotFound, PermissionDenied, AlreadyExists, Capacity, Overflow, Interrupted, WouldBlock, Unsupported, System }`
+- `type Kind = fail.Kind`: The portable kinds are fail.Kind;
 - `fn failed(failure: Failure) bool`: Whether a step failed.
 - `fn failure_if(failed: bool) Failure`: For APIs that only say whether they worked: Kind.System when failed, zero otherwise.
 - `fn linux_failure(code: isize) Failure`: A native error code with its portable kind;
@@ -1165,8 +1173,13 @@ module's full declarations and comments.
 - `fn windows(code: isize) Kind`
 - `fn wasi(code: isize) Kind`
 - `fn darwin(code: isize) Kind`
+- `fn from_fail(failure: fail.Failure) Failure`: A fail.Failure as an io.Failure, for streams.
 - `fn kind_text(kind: Kind) []const u8`: A short description of kind: "not found", "permission denied".
 - `fn describe(storage: []u8, failure: Failure) []u8`: "operation path: kind" in storage, such as "open /etc/app.conf: not found";
+- `fn linux_text(code: isize) []const u8`: The system's own reason for a native code, such as "is a directory" for Linux's -21;
+- `fn darwin_text(code: isize) []const u8`
+- `fn windows_text(code: isize) []const u8`
+- `fn wasi_text(code: isize) []const u8`
 - `enum Status { Complete, End }`: A transfer either completed or reached the end.
 - `struct Transfer { transferred: usize, failure: Failure, status: Status, }`
 - `struct Reader { data: rawptr, read: fn(rawptr, []u8) Transfer, }`
@@ -2542,7 +2555,7 @@ module's full declarations and comments.
 - `struct TemporaryDirectory { path: []const u8, active: bool }`
 - `type TemporaryResult = io.Result(TemporaryDirectory)`
 - `fn temporary_directory(arena: *mem.Arena, prefix: []const u8) TemporaryResult`: Reserves a private 0700 directory.
-- `fn remove_temporary(directory: *TemporaryDirectory, frames: []fs.RemovalFrame, scratch: []u8) fs.Result`
+- `fn remove_temporary(status: *fail.Status, directory: *TemporaryDirectory, frames: []fs.RemovalFrame, scratch: []u8)`
 - `fn temporary_path(arena: *mem.Arena, prefix: []const u8, suffix: []const u8) []u8`
 - `fn expect(condition: bool, message: []const u8)`
 - `fn expect_false(condition: bool, message: []const u8)`

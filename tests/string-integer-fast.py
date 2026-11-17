@@ -10,6 +10,7 @@ def digits(n,b):
  return sign+(out or '0')
 header='''use "std/io" io
 use "std/strings"
+use "std/fail"
 use "std/fs"
 use "std/mem"
 fn require(ok: bool) { if !ok { #panic("integer parsing oracle") } }
@@ -60,7 +61,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-string-integers-') as tmp:
  }}
 }}
 ''')
-  calls.append(f'if true {{ arena := mem.arena_alloc(16*mem.MiB)\n input_file := fs.open("{fixture}")\n input := fs.read_contents(arena, &input_file, 16*mem.MiB)\n fs.close(&input_file)\n require(!input_file.failed)\n {fn}(input)\n mem.arena_release(arena) }}');count+=len(rows)
+  calls.append(f'if true {{ arena := mem.arena_alloc(16*mem.MiB)\n input_file: fail.Status\n input := fs.read_all(arena, &input_file, "{fixture}", 16*mem.MiB)\n  require(!input_file.failed)\n {fn}(input)\n mem.arena_release(arena) }}');count+=len(rows)
  (p/'main.dyn').write_text(header+'\n'.join(functions)+'\nfn main() {\n'+'\n'.join(calls)+'\n}\n')
  for mode in ('debug','release'):
   binary=p/mode;subprocess.run([DYN,'build',str(p),'--'+mode,'--no-cache','--quiet','--output',str(binary)],check=True,timeout=120)

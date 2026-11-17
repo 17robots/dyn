@@ -32,6 +32,7 @@ except (OSError, AttributeError) as exc:
 SOURCE = '''use "std/compress/zstd" z
 use "std/io" io
 use "std/mem" mem
+use "std/fail"
 use "std/fs" fs
 use "std/bytes" bytes
 struct Input { source: []const u8, at: usize, chunk: usize }
@@ -137,18 +138,14 @@ fn main() {
  owner := mem.arena_alloc(16000000)
  defer { mem.arena_release(owner) }
  arena := owner
- raw_file := fs.open("DIRECTORY/raw")
- raw := fs.read_contents(arena, &raw_file, 6000000)
- fs.close(&raw_file)
- encoded_file := fs.open("DIRECTORY/encoded")
- encoded := fs.read_contents(arena, &encoded_file, 2000000)
- fs.close(&encoded_file)
- concatenated_file := fs.open("DIRECTORY/concatenated")
- concatenated := fs.read_contents(arena, &concatenated_file, 4000000)
- fs.close(&concatenated_file)
- unknown_file := fs.open("DIRECTORY/unknown")
- unknown := fs.read_contents(arena, &unknown_file, 2000000)
- fs.close(&unknown_file)
+ raw_file: fail.Status
+ raw := fs.read_all(arena, &raw_file, "DIRECTORY/raw", 6000000)
+ encoded_file: fail.Status
+ encoded := fs.read_all(arena, &encoded_file, "DIRECTORY/encoded", 2000000)
+ concatenated_file: fail.Status
+ concatenated := fs.read_all(arena, &concatenated_file, "DIRECTORY/concatenated", 4000000)
+ unknown_file: fail.Status
+ unknown := fs.read_all(arena, &unknown_file, "DIRECTORY/unknown", 2000000)
  if raw_file.failed || encoded_file.failed || concatenated_file.failed || unknown_file.failed { #panic("fixtures") }
  workspace := #slice(mem.arena_push_uninit(arena, z.decoder_workspace_size(21), 8), z.decoder_workspace_size(21))
  results(arena, encoded, unknown, workspace)

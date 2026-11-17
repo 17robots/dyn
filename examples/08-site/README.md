@@ -13,25 +13,29 @@ A page is plain text. The first line is the title, `# ` starts a heading,
 
 ## What it teaches
 
-- **Directories.** `fs.open_directory` reads entries into a buffer you give
-  it, and `fs.directory_next` returns one entry at a time. An entry's name
-  borrows that buffer, so kept names are copied. The order is up to the
-  file system, so the program sorts before it writes the index.
+- **Directories.** `fs.list` copies a directory's entries into an arena.
+  The order is up to the file system, so the program sorts before it writes
+  the index.
+- **One status for the whole build.** Listing, reading and writing all take
+  the same `*fail.Status`. After the first failure every later step does
+  nothing, so `main` checks once, before reporting success, and prints the
+  failure (`list missing: no such file or directory`).
 - **Paths.** `path.join` and `path.extension` work on text and never touch
   the disk.
 - **Safe HTML.** `html.Writer` escapes everything written with `html.text`.
   Markup goes through `html.markup(w, html.trusted("<p>"))`, so text from a
   page, like `<Dyn>` in a title, can never become a tag.
 - **Scratch per unit of work.** `build_page` marks the scratch arena and
-  defers a rewind. The file's text, the HTML and the paths all go to scratch
-  and vanish when the page is done, so a site of a thousand pages needs no
-  more memory than its largest page. What must outlive the page (its name
-  and title) goes to the `keep` arena instead.
+  defers a rewind. The file's text and the HTML go to scratch and vanish
+  when the page is done, so a site of a thousand pages needs no more memory
+  than its largest page. What must outlive the page goes to the `keep` arena
+  instead: its name and title, and the paths, because a failure borrows its
+  path and `main` prints it after the scratch is gone.
 - **Sizing for the worst case.** Escaping turns one byte into at most six
   (`&quot;`), so a buffer of six times the input, plus room for tags, always
   fits, and a failed write would be a bug, a `#panic`.
-- **Failures you expect.** `fs.make_directory` failing with
-  `io.Kind.AlreadyExists` is fine; any other failure stops the program.
+- **Making a directory that may exist.** `fs.make_directory` succeeds when
+  the directory is already there; `fs.make_directory_exclusive` would fail.
 
 ## Exercises
 

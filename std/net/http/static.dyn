@@ -1,5 +1,6 @@
 use "std/bytes" bytes
 use "std/compress/gzip" gzip
+use "std/fail"
 use "std/fs" files
 use "std/hash" hash
 use "std/io" io
@@ -178,8 +179,9 @@ pub fn find_asset(assets: *const Assets, path: []const u8) *const Asset {
 // operating system's failure when a directory or file cannot be read.
 pub fn load_directory(arena: *memory.Arena, root: []const u8, storage: []Asset, maximum: usize) AssetsResult {
   assets := Assets{ items: storage }
-  failure := load_tree(arena, root, "", &assets, maximum, 0)
-  if io.failed(failure) { return AssetsResult{ failure: failure } }
+  status: fail.Status
+  load_tree(arena, &status, root, "", &assets, maximum, 0)
+  if status.failed { return AssetsResult{ failure: io.from_fail(status.failure) } }
   sort_assets(&assets)
   return AssetsResult{ value: assets }
 }
@@ -197,38 +199,39 @@ fn join_path(arena: *memory.Arena, left: []const u8, right: []const u8) []u8 {
   return joined
 }
 
-fn load_tree(arena: *memory.Arena, root: []const u8, relative: []const u8, assets: *Assets, maximum: usize, depth: usize) io.Failure {
-  if depth > 32 { return io.Failure{ kind: io.Kind.InvalidInput } }
+fn load_tree(arena: *memory.Arena, status: *fail.Status, root: []const u8, relative: []const u8, assets: *Assets, maximum: usize, depth: usize) {
+  if status.failed { return }
+  if depth > 32 {
+    fail.invalid(status, "load", root, "directories nested more than 32 deep")
+    return
+  }
   directory_path := root
   if #len(relative) > 0 {
     directory_path = join_path(arena, root, relative)
   }
   listing: [4096]u8
-  opened := files.open_directory(directory_path, listing[..])
-  if io.failed(opened.failure) { return opened.failure }
-  directory := opened.value
+  directory := files.open_directory(status, directory_path, listing[..])
   defer files.close_directory(&directory)
-  for true {
-    entry := files.directory_next(&directory)
-    if io.failed(entry.failure) { return entry.failure }
-    if !entry.found { return io.Failure{} }
+  for {
+    entry := files.directory_next(status, &directory)
+    if !entry.found { return }
     if #len(entry.name) == 0 || entry.name[0] == '.' { continue }
     child := join_path(arena, relative, entry.name)
     if entry.kind == 4 {
-      nested := load_tree(arena, root, child, assets, maximum, depth + 1)
-      if io.failed(nested) { return nested }
+      load_tree(arena, status, root, child, assets, maximum, depth + 1)
       continue
     }
     if entry.kind != 8 { continue }
-    if assets.count == #len(assets.items) { return io.Failure{ kind: io.Kind.Capacity } }
-    file := files.open(join_path(arena, root, child))
-    contents := files.read_contents(arena, &file, maximum)
-    files.close(&file)
-    if file.failed { return file.failure }
+    if assets.count == #len(assets.items) {
+      fail.set(status, fail.Failure{ kind: fail.Kind.Capacity, operation: "load", path: root, message: "more files than asset storage" })
+      return
+    }
+    contents := files.read_all(arena, status, join_path(arena, root, child), maximum)
+    // A failed read must not become an empty asset.
+    if status.failed { return }
     assets.items[assets.count] = make_asset(arena, child, contents)
     assets.count += 1
   }
-  return io.Failure{}
 }
 
 // Whether the request's Accept-Encoding allows coding (RFC 9110 12.5.3): it

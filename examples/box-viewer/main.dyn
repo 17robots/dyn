@@ -14,6 +14,7 @@ use "std/ui/software" software
 use "std/font" font
 use "std/font/system" system_fonts
 use "std/font/ui" font_ui
+use "std/fail"
 use "std/fs" fs
 use "std/io" io
 use "std/mem" mem
@@ -136,9 +137,11 @@ fn save(api: *const gl.Api, arena: *mem.Arena, path: []const u8, width, height: 
     _ = mem.copy(rows[y * stride..(y + 1) * stride], raw[(#cast(usize, height) - 1 - y) * stride..(#cast(usize, height) - y) * stride])
   }
   encoded := png.encode(arena, rows, #cast(u32, width), #cast(u32, height), 4)
-  if parse.failed(encoded.failure) || !fs.write_all(path, encoded.value) {
-    #panic("cannot write the screenshot")
+  status := fail.Status{ on_failure: fail.panic_on_failure }
+  if parse.failed(encoded.failure) {
+    #panic("cannot encode the screenshot")
   }
+  fs.write_all(&status, path, encoded.value)
 }
 
 fn main() {
@@ -173,12 +176,9 @@ fn main() {
       #panic("no supported system font; pass a TrueType file")
     }
   }
-  data_file := fs.open(path)
-  data := fs.read_contents(persistent, &data_file, 67108864)
-  fs.close(&data_file)
-  if data_file.failed {
-    #panic("cannot read the font; pass a TrueType file")
-  }
+  // A demo: any failure here ends it, with the failure's description.
+  status := fail.Status{ on_failure: fail.panic_on_failure }
+  data := fs.read_all(persistent, &status, path, 67108864)
   face := font.open(data)
   if parse.failed(face.failure) {
     #panic("not a TrueType font")

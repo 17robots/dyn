@@ -14,6 +14,7 @@ source=r'''use "std/audio/wav" wav
 use "std/io" io
 use "std/parse" parse
 use "std/mem" mem
+use "std/fail"
 use "std/fs" fs
 use "std/io" errors
 fn check(ok: bool) { if !ok { #panic("WAV contract") } }
@@ -26,7 +27,7 @@ fn main() {
   paths: [5][]const u8 = ["8.wav","16.wav","24.wav","32.wav","float.wav"]
   for i in 0..5 {
     encoded := wav.encode(arena, &audio, formats[i])
-    check(!parse.failed(encoded.failure) && fs.write_all(paths[i],encoded.value))
+    check(!parse.failed(encoded.failure) && fs_write_file(paths[i],encoded.value))
     decoded := wav.decode(arena, encoded.value)
     check(!parse.failed(decoded.failure) && decoded.value.rate == 48000 && decoded.value.channels == 2 && #len(decoded.value.samples) == 6)
     for j in 0..6 {
@@ -44,16 +45,15 @@ fn main() {
   check(!parse.failed(extended.failure))
   decoded := wav.decode(arena, extended.value)
   check(!parse.failed(decoded.failure) && decoded.value.channel_mask == 3)
-  check(fs.write_all("extended.wav",extended.value))
+  check(fs_write_file("extended.wav",extended.value))
   floating := wav.encode(arena, &audio, wav.Encoding.Float32)
   check(!parse.failed(floating.failure) && !parse.failed(wav.decode(arena, floating.value).failure))
   before := mem.arena_mark(arena)
   audio.channel_mask = 1
   check(wav.encode(arena, &audio, wav.Encoding.Pcm16).failure.kind == parse.Kind.Syntax)
   check(mem.arena_mark(arena) == before)
-  reference_file := fs.open("reference.wav")
-  reference := fs.read_contents(arena, &reference_file, 10000)
-  fs.close(&reference_file)
+  reference_file: fail.Status
+  reference := fs.read_all(arena, &reference_file, "reference.wav", 10000)
   check(!reference_file.failed)
   decoded = wav.decode(arena, reference)
   check(!parse.failed(decoded.failure) && #len(decoded.value.samples) == 5)
@@ -72,6 +72,13 @@ fn main() {
       work[at] = saved
     }
   }
+}
+
+// Writes data to path; whether it worked.
+fn fs_write_file(path: []const u8, data: []const u8) bool {
+  status: fail.Status
+  fs.write_all(&status, path, data)
+  return !status.failed
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-wav-') as directory:

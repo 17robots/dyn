@@ -1,4 +1,4 @@
-use "std/io" io
+use "std/fail"
 use "std/fs" fs
 use "std/bytes" bytes
 
@@ -8,34 +8,38 @@ fn check(ok: bool, message: []const u8) {
   }
 }
 
+// Removes what main makes. Cleanup: each step has its own status, so a
+// missing entry does not stop the rest.
 fn clean() {
-  _ = fs.remove("listing/alpha.txt")
-  _ = fs.remove("listing/βeta.txt")
-  _ = fs.remove("listing/renamed.txt")
-  _ = fs.remove_directory("listing/inner")
-  _ = fs.remove_directory("listing")
+  paths: [3][]const u8 = ["listing/alpha.txt", "listing/βeta.txt", "listing/renamed.txt"]
+  for path in paths {
+    status: fail.Status
+    fs.remove(&status, path)
+  }
+  inner: fail.Status
+  fs.remove_directory(&inner, "listing/inner")
+  outer: fail.Status
+  fs.remove_directory(&outer, "listing")
 }
 
 fn main() {
   clean()
-  check(!io.failed(fs.make_directory("listing", 493).failure), "make directory")
-  check(!io.failed(fs.make_directory("listing/inner", 493).failure), "make inner")
-  check(fs.write_all("listing/alpha.txt", "a"), "alpha")
-  check(fs.write_all("listing/βeta.txt", "b"), "beta")
+  status: fail.Status
+  fs.make_directory_exclusive(&status, "listing", 493)
+  fs.make_directory_exclusive(&status, "listing/inner", 493)
+  fs.make_directory(&status, "listing/inner", 493)
+  fs.write_all(&status, "listing/alpha.txt", "a")
+  fs.write_all(&status, "listing/βeta.txt", "b")
+  check(!status.failed, "make and write")
   storage: [4096]u8
-  opened := fs.open_directory("listing", storage[..])
-  check(!io.failed(opened.failure), "open directory")
-  directory := opened.value
+  directory := fs.open_directory(&status, "listing", storage[..])
   seen_alpha := false
   seen_beta := false
   seen_inner := false
   count := 0
   for true {
-    entry := fs.directory_next(&directory)
-    if !entry.found {
-      check(entry.failure.native == 0, "listing error")
-      break
-    }
+    entry := fs.directory_next(&status, &directory)
+    if !entry.found { break }
     count += 1
     if bytes.equal(entry.name, "alpha.txt") {
       seen_alpha = entry.kind == 8
@@ -47,20 +51,30 @@ fn main() {
       seen_inner = entry.kind == 4
     }
   }
+  check(!status.failed, "listing error")
   check(count == 3 && seen_alpha && seen_beta && seen_inner, "entries")
   fs.close_directory(&directory)
-  empty := fs.open_directory("listing/inner", storage[..])
-  check(!io.failed(empty.failure), "open empty")
-  inner := empty.value
-  check(!fs.directory_next(&inner).found, "empty directory")
+  inner := fs.open_directory(&status, "listing/inner", storage[..])
+  check(!fs.directory_next(&status, &inner).found && !status.failed, "empty directory")
   fs.close_directory(&inner)
-  check(io.failed(fs.open_directory("missing-directory", storage[..]).failure), "missing")
-  info := fs.metadata("listing/alpha.txt")
-  check(!io.failed(info.failure) && info.size == 1 && (info.mode & 0o170000) == 0o100000, "file metadata")
-  folder := fs.metadata("listing/inner")
-  check(!io.failed(folder.failure) && (folder.mode & 0o170000) == 0o040000, "directory metadata")
-  check(!io.failed(fs.rename("listing/alpha.txt", "listing/renamed.txt").failure), "rename")
-  check(io.failed(fs.metadata("listing/alpha.txt").failure) && !io.failed(fs.metadata("listing/renamed.txt").failure), "renamed")
+  missing: fail.Status
+  _ = fs.open_directory(&missing, "missing-directory", storage[..])
+  check(missing.failed && missing.failure.kind == fail.Kind.NotFound, "missing")
+  info := fs.metadata(&status, "listing/alpha.txt")
+  check(!status.failed && info.size == 1 && fs.is_file(info), "file metadata")
+  folder := fs.metadata(&status, "listing/inner")
+  check(!status.failed && fs.is_directory(folder), "directory metadata")
+  fs.rename(&status, "listing/alpha.txt", "listing/renamed.txt")
+  _ = fs.metadata(&status, "listing/renamed.txt")
+  check(!status.failed, "rename")
+  gone: fail.Status
+  _ = fs.metadata(&gone, "listing/alpha.txt")
+  check(gone.failed, "renamed away")
+  existing: fail.Status
+  fs.make_directory_exclusive(&existing, "listing", 493)
+  check(existing.failed && existing.failure.kind == fail.Kind.AlreadyExists, "exclusive")
   clean()
-  check(io.failed(fs.metadata("listing").failure), "cleaned up")
+  cleaned: fail.Status
+  _ = fs.metadata(&cleaned, "listing")
+  check(cleaned.failed, "cleaned up")
 }

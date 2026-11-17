@@ -2,6 +2,7 @@
 use "std/fmt" format
 use "std/os/linux" platform
 use "std/sync"
+use "std/fail"
 use "std/fs" fs
 use "std/io" io
 use "std/mem" mem
@@ -14,23 +15,24 @@ pub fn temporary_directory(arena: *mem.Arena, prefix: []const u8) TemporaryResul
   }
   for attempt in 0..128 {
     path := temporary_path(arena, prefix, "")
-    created := fs.make_directory(path, 448)
-    if !io.failed(created.failure) {
+    // create_exclusive semantics: an existing name is tried again.
+    status: fail.Status
+    fs.make_directory_exclusive(&status, path, 448)
+    if !status.failed {
       return TemporaryResult{ value: TemporaryDirectory{ path: path, active: true } }
     }
-    if created.failure.native != -17 {
-      return TemporaryResult{ failure: io.Failure{ kind: created.failure.kind, native: created.failure.native } }
+    if status.failure.kind != io.Kind.AlreadyExists {
+      return TemporaryResult{ failure: io.Failure{ kind: status.failure.kind, native: status.failure.native } }
     }
   }
   return TemporaryResult{ failure: io.linux_failure(-17) }
 }
-pub fn remove_temporary(directory: *TemporaryDirectory, frames: []fs.RemovalFrame, scratch: []u8) fs.Result {
-  if !directory.active { return fs.Result{} }
-  result := fs.remove_tree(directory.path, frames, scratch)
-  if !io.failed(result.failure) {
+pub fn remove_temporary(status: *fail.Status, directory: *TemporaryDirectory, frames: []fs.RemovalFrame, scratch: []u8) {
+  if !directory.active { return }
+  fs.remove_tree(status, directory.path, frames, scratch)
+  if !status.failed {
     directory.active = false
   }
-  return result
 }
 
 // Generates a process-local unique candidate name; it does not reserve a file.

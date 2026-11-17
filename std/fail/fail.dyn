@@ -1,0 +1,155 @@
+// Failure as state you pass in. A function that can fail takes a
+// *fail.Status, the way a function that allocates takes a *mem.Arena, so the
+// signature says which calls can fail.
+//
+// The first failure is recorded in the status and stays there. Every function
+// given a failed status does nothing and returns zero or empty. So code does
+// not check after each call: it checks status.failed once, before it acts on
+// the results, and prints status.failure with describe:
+//
+//   status: fail.Status
+//   text := fs.read_all(arena, &status, "app.json", 1 << 20)
+//   ...
+//   if status.failed {
+//     storage: [512]u8
+//     io.eprintln("app: {}", fail.describe(storage[..], status.failure))
+//   }
+//
+// Rules of use:
+// - One status per unit of work. Work that must carry on after a failure (a
+//   server, a command loop, each of many files) gives each item its own status.
+// - Check before you act: before printing results or doing anything that does
+//   not take the status, including using a computed number as a size or index,
+//   or a loop that only ends on data.
+// - Cleanup after a failure uses a fresh status, or functions that take none.
+// - An empty result is not a failure test; status.failed is.
+// - To react to one kind of failure, give that step its own status and look at
+//   status.failure.kind.
+
+// The portable reason. Kind.Ok is the zero value.
+pub enum Kind { Ok, InvalidInput, InvalidState, NotFound, PermissionDenied, AlreadyExists, Capacity, Overflow, Interrupted, WouldBlock, Unsupported, System }
+
+// What went wrong, where, and doing what. Text fields borrow the caller's or
+// static text.
+pub struct Failure {
+  kind: Kind,
+  // The system's own code, when the system gave one.
+  native: isize,
+  // What was being done: "open", "read", "parse", "connect".
+  operation: []const u8,
+  // The file, directory, address or document involved.
+  path: []const u8,
+  // The specific reason, such as "is a directory" or "expected a digit";
+  // empty means the kind says it.
+  message: []const u8,
+  // For text input: where it went wrong, in bytes from the start.
+  offset: usize,
+  has_offset: bool,
+}
+
+pub struct Status {
+  failed: bool,
+  failure: Failure,
+  // Optional. Called once, inside the call that failed, when the first
+  // failure is recorded, with context. It cannot undo the failure.
+  on_failure: fn(rawptr, Failure),
+  context: rawptr,
+}
+
+// Records failure unless status already holds one; later failures are
+// consequences of the first. A failure of Kind.Ok records nothing.
+pub fn set(status: *Status, failure: Failure) {
+  if status.failed || failure.kind == Kind.Ok { return }
+  status.failed = true
+  status.failure = failure
+  if status.on_failure != nil {
+    status.on_failure(status.context, failure)
+  }
+}
+
+// Records a problem your own code found in its input, such as
+// invalid(&status, "config", path, "port out of range").
+pub fn invalid(status: *Status, operation: []const u8, path: []const u8, message: []const u8) {
+  set(status, Failure{ kind: Kind.InvalidInput, operation: operation, path: path, message: message })
+}
+
+// For on_failure: ends the program at the first failure, with its description.
+pub fn panic_on_failure(context: rawptr, failure: Failure) {
+  storage: [512]u8
+  #panic(describe(storage[..], failure))
+}
+
+// A short description of kind: "not found", "permission denied".
+pub fn kind_text(kind: Kind) []const u8 {
+  case kind {
+    Kind.Ok => { return "ok" }
+    Kind.InvalidInput => { return "invalid input" }
+    Kind.InvalidState => { return "invalid state" }
+    Kind.NotFound => { return "not found" }
+    Kind.PermissionDenied => { return "permission denied" }
+    Kind.AlreadyExists => { return "already exists" }
+    Kind.Capacity => { return "out of space" }
+    Kind.Overflow => { return "too large" }
+    Kind.Interrupted => { return "interrupted" }
+    Kind.WouldBlock => { return "would block" }
+    Kind.Unsupported => { return "unsupported" }
+    Kind.System => { return "system error" }
+  }
+}
+
+// "operation path: reason" in storage, such as
+// "open /etc/app.conf: no such file or directory" or
+// "parse app.json at 41: expected ','". Empty parts are left out; the reason
+// is the message, else the kind. Truncated to storage.
+pub fn describe(storage: []u8, failure: Failure) []u8 {
+  used: usize = 0
+  used = put(storage, used, failure.operation)
+  if #len(failure.path) != 0 {
+    if used != 0 {
+      used = put(storage, used, " ")
+    }
+    used = put(storage, used, failure.path)
+  }
+  if failure.has_offset {
+    used = put(storage, used, " at ")
+    used = put_number(storage, used, failure.offset)
+  }
+  if used != 0 {
+    used = put(storage, used, ": ")
+  }
+  if #len(failure.message) != 0 {
+    used = put(storage, used, failure.message)
+  } else {
+    used = put(storage, used, kind_text(failure.kind))
+  }
+  return storage[..used]
+}
+
+fn put(storage: []u8, at: usize, text: []const u8) usize {
+  used := at
+  for byte in text {
+    if used == #len(storage) { return used }
+    storage[used] = byte
+    used += 1
+  }
+  return used
+}
+
+fn put_number(storage: []u8, at: usize, value: usize) usize {
+  digits: [20]u8
+  count: usize = 0
+  rest := value
+  for {
+    digits[count] = '0' + rest % 10
+    count += 1
+    rest /= 10
+    if rest == 0 { break }
+  }
+  used := at
+  for i in #reverse(0..count) {
+    if used == #len(storage) { return used }
+    storage[used] = digits[i]
+    used += 1
+  }
+  return used
+}

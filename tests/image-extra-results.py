@@ -13,6 +13,7 @@ CLI='''use "std/image/FORMAT" codec
 use "std/io" io
 use "std/parse" parse
 use "std/mem" mem
+use "std/fail"
 use "std/fs" fs
 use "std/process" process
 use "std/strings" strings
@@ -23,9 +24,8 @@ fn main() {
   args := process.arguments(arena)
   if io.failed(args.failure) || #len(args.value) != 4 { #panic("image arguments") }
   ENCODER
-  source_file := fs.open(args.value[2])
-  source := fs.read_contents(arena, &source_file, 64000000)
-  fs.close(&source_file)
+  source_file: fail.Status
+  source := fs.read_all(arena, &source_file, args.value[2], 64000000)
   if source_file.failed { #panic("image source") }
   before := mem.arena_mark(arena)
   result := codec.decode(arena, source)
@@ -34,8 +34,15 @@ fn main() {
     io.println("ERR {}", #cast(u32, result.failure.kind))
     return
   }
-  if !fs.write_all(args.value[3], result.value.pixels) { #panic("image output") }
+  if !fs_write_file(args.value[3], result.value.pixels) { #panic("image output") }
   io.println("{} {}", result.value.info.width, result.value.info.height)
+}
+
+// Writes data to path; whether it worked.
+fn fs_write_file(path: []const u8, data: []const u8) bool {
+  status: fail.Status
+  fs.write_all(&status, path, data)
+  return !status.failed
 }
 '''
 ENCODER='''if bytes.starts_with(args.value[1], "encode") {
@@ -43,7 +50,7 @@ ENCODER='''if bytes.starts_with(args.value[1], "encode") {
   pixels: [16]u8
   for i in 0..4 { for j in 0..#cast(usize, channels) { pixels[i * #cast(usize, channels) + j] = #cast(u8, (i * 51 + j * 37)) } }
   result := codec.encode(arena, pixels[..4 * #cast(usize, channels)], 2, 2, channels)
-  if parse.failed(result.failure) || !fs.write_all(args.value[2], result.value) { #panic("image encode") }
+  if parse.failed(result.failure) || !fs_write_file(args.value[2], result.value) { #panic("image encode") }
   return
 }'''
 u16=lambda x:struct.pack('<H',x)
