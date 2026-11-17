@@ -17,7 +17,7 @@ fn read_zone(arena: *mem.Arena, status: *fail.Status, name: []const u8, path: []
 
 fn posix_load(arena: *mem.Arena, status: *fail.Status, name: []const u8) Zone {
   mark := mem.arena_mark(arena)
-  path := mem.push_bytes_uninit(arena, #len(zoneinfo_root) + 1 + #len(name))
+  path := mem.push_bytes(arena, #len(zoneinfo_root) + 1 + #len(name))
   _ = mem.copy(path, zoneinfo_root)
   path[#len(zoneinfo_root)] = '/'
   _ = mem.copy(path[#len(zoneinfo_root) + 1..], name)

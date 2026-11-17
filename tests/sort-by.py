@@ -35,7 +35,7 @@ for index, keys in enumerate(cases):
     expected.append(''.join(f'{key}:{order} ' for order, key in ordered))
     expected.append(''.join(f'{key} ' for _, key in ordered))
 lines += ['  // The scratch copy is rewound: the arena is back where it started.',
-          '  if mem.arena_mark(arena) != mem.arena_start(arena) { #panic("stable_by kept its scratch") }', '}']
+          '  if mem.arena_mark(arena) != mem.ArenaHeader { #panic("stable_by kept its scratch") }', '}']
 with tempfile.TemporaryDirectory(prefix='dyn-sort-by-') as temporary:
     work = Path(temporary)
     (work / 'main.dyn').write_text('\n'.join(lines) + '\n')

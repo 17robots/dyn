@@ -156,7 +156,7 @@ fn main() {
  unknown_file: fail.Status
  unknown := fs.read_all(arena, &unknown_file, "DIRECTORY/unknown", 2000000)
  if raw_file.failed || encoded_file.failed || concatenated_file.failed || unknown_file.failed { #panic("fixtures") }
- workspace := #slice(mem.arena_push_uninit(arena, z.decoder_workspace_size(21), 8), z.decoder_workspace_size(21))
+ workspace := mem.push_bytes(arena, z.decoder_workspace_size(21))
  results(arena, encoded, unknown, workspace)
  verify(raw, unknown, workspace, 13, 21, false, 1)
  verify(raw, encoded, workspace, 1, 21, false, 1)

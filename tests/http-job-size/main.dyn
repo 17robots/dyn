@@ -29,7 +29,7 @@ fn main() {
   workers: [1]evented.Worker
   config := evented.default_config()
   config.connections_per_worker = 4
-  storage := mem.arena_sub(arena, evented.storage_size(config, 1) + mem.MiB)
+  storage := mem.arena_from_source(mem.within(arena, evented.storage_size(config, 1) + mem.MiB))
   address := net.ipv4(127, 0, 0, 1, 0)
   status := fail.Status{ on_failure: fail.panic_on_failure }
   listener := net.tcp_listen_ipv4(&status, &address, 16)

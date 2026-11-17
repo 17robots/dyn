@@ -12,7 +12,7 @@ pub fn hexdump(arena: *mem.Arena, source: []const u8, columns: usize) []u8 {
     #panic("hexdump needs at least one column")
   }
   rows := (#len(source) + columns - 1) / columns
-  destination := mem.push_bytes_uninit(arena, rows * 11 + #len(source) * 3)
+  destination := mem.push_bytes(arena, rows * 11 + #len(source) * 3)
   output_at: usize = 0
   input_at: usize = 0
   for input_at < #len(source) {

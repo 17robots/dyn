@@ -6,7 +6,7 @@ use "std/os/macos" platform
 
 fn main() {
   arena := mem.arena_alloc(4096)
-  memory := #slice(mem.arena_push(arena, 4096, 1), 4096)
+  memory := mem.push_bytes(arena, 4096)
   memory[0] = 42
   mem.arena_release(arena)
   status: fail.Status

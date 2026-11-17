@@ -19,7 +19,7 @@ fn main() {
   owned := mem.arena_alloc(64)
   defer { mem.arena_release(owned)
   io.println("cleanup") }
-  text := #slice(mem.arena_push(owned, 32, 1), 32)
+  text := mem.push_bytes(owned, 32)
   _ = mem.copy(text, "owned panic message")
   #panic(text[..19])
 }''',
@@ -30,7 +30,7 @@ fn main() {
   owned := mem.arena_alloc(64)
   defer { mem.arena_release(owned)
   io.println("cleanup") }
-  text := #slice(mem.arena_push(owned, 32, 1), 32)
+  text := mem.push_bytes(owned, 32)
   _ = mem.copy(text, "owned panic message")
   fail(text[..19])
 }''',

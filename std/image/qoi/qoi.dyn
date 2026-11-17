@@ -305,7 +305,7 @@ fn decode_work(arena: *mem.Arena, source: []const u8) DecodeWork {
   info := inspect_info(source)
   if info.width == 0 { return DecodeWork{ error: -22 } }
   mark := mem.arena_mark(arena)
-  result := decode_into(mem.push_bytes_uninit(arena, #cast(usize, info.width) * #cast(usize, info.height) * 4), source)
+  result := decode_into(mem.push_bytes(arena, #cast(usize, info.width) * #cast(usize, info.height) * 4), source)
   if !result.ok {
     mem.arena_rewind(arena, mark)
   }
@@ -316,7 +316,7 @@ fn decode_work(arena: *mem.Arena, source: []const u8) DecodeWork {
 fn encode_work(arena: *mem.Arena, pixels: []const u8, width: usize, height: usize, channels: u8, srgb: bool) EncodeWork {
   bound := #cast(usize, width) * #cast(usize, height) * (#cast(usize, channels) + 1) + 22
   mark := mem.arena_mark(arena)
-  result := encode_into(mem.push_bytes_uninit(arena, bound), pixels, width, height, channels, srgb)
+  result := encode_into(mem.push_bytes(arena, bound), pixels, width, height, channels, srgb)
   if !result.ok {
     mem.arena_rewind(arena, mark)
     return result

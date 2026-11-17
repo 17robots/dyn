@@ -917,11 +917,16 @@ pub fn gunzip(arena: *mem.Arena, status: *fail.Status, input: []const u8) Inflat
 
 // The output size is unknown, so decode into a block from arena and retry with
 // a doubled block when it fills up. Each retry rewinds, so nothing is wasted.
+// Panics when the arena is exhausted.
 fn grow_until_done(arena: *mem.Arena, status: *fail.Status, input: []const u8, gzip: bool) Inflated {
-  capacity := mem.trial_size(arena, 4 * #len(input) + 1024)
-  for capacity > 0 {
+  room := mem.arena_room(arena)
+  capacity := 4 * #len(input) + 1024
+  if capacity > room {
+    capacity = room
+  }
+  for capacity <= #max(usize) / 4 {
     mark := mem.arena_mark(arena)
-    space := mem.push_bytes_uninit(arena, capacity)
+    space := mem.push_bytes(arena, capacity)
     result: Result
     full := false
     if gzip {
@@ -944,9 +949,15 @@ fn grow_until_done(arena: *mem.Arena, status: *fail.Status, input: []const u8, g
       fail.set(status, failure)
       return Inflated{}
     }
-    capacity = mem.trial_next(arena, capacity)
+    if capacity == room {
+      #panic("arena exhausted: the output does not fit")
+    }
+    capacity = capacity * 2
+    if capacity > room {
+      capacity = room
+    }
   }
-  #panic("arena exhausted")
+  #panic("output size overflows")
 }
 
 fn crc_byte(previous: u32, byte: u8) u32 {

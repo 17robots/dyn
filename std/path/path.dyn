@@ -272,7 +272,7 @@ fn finish(arena: *mem.Arena, mark: usize, result: Built) Built {
 // left and right joined by one slash, in arena.
 pub fn join(arena: *mem.Arena, left: []const u8, right: []const u8) []u8 {
   mark := mem.arena_mark(arena)
-  space := mem.push_bytes_uninit(arena, #len(left) + #len(right) + 1)
+  space := mem.push_bytes(arena, #len(left) + #len(right) + 1)
   // The space fits any join, so join_into cannot fail here.
   return finish(arena, mark, join_into(space, left, right)).value
 }
@@ -280,7 +280,7 @@ pub fn join(arena: *mem.Arena, left: []const u8, right: []const u8) []u8 {
 // path with . and .. resolved and repeated slashes removed, in arena.
 pub fn clean(arena: *mem.Arena, path: []const u8) []u8 {
   mark := mem.arena_mark(arena)
-  space := mem.push_bytes_uninit(arena, #len(path) + 1)
+  space := mem.push_bytes(arena, #len(path) + 1)
   // The space fits any cleaned path, so clean_into cannot fail here.
   return finish(arena, mark, clean_into(space, path)).value
 }
@@ -291,7 +291,7 @@ pub fn safe_join(arena: *mem.Arena, status: *fail.Status, root: []const u8, chil
   empty: []u8
   if status.failed { return empty }
   mark := mem.arena_mark(arena)
-  space := mem.push_bytes_uninit(arena, #len(root) + #len(child) + 2)
+  space := mem.push_bytes(arena, #len(root) + #len(child) + 2)
   joined := finish(arena, mark, safe_join_into(space, root, child))
   if !joined.valid {
     fail.invalid(status, "join path", child, "the path is absolute or climbs out of its root")
@@ -305,7 +305,7 @@ pub fn relative(arena: *mem.Arena, status: *fail.Status, base: []const u8, targe
   empty: []u8
   if status.failed { return empty }
   mark := mem.arena_mark(arena)
-  space := mem.push_bytes_uninit(arena, 3 * #len(base) + #len(target) + 2)
+  space := mem.push_bytes(arena, 3 * #len(base) + #len(target) + 2)
   result := finish(arena, mark, relative_into(space, base, target))
   if !result.valid {
     fail.invalid(status, "relative path", target, "one path is absolute and the other relative, or one is over 4096 bytes")

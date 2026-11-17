@@ -51,13 +51,8 @@ pub fn parse(arena: *memory.Arena, status: *fail.Status, source: []const u8) Tem
       cursor += 1
     }
   }
-  retained: []u8
-  if #len(source) > 0 {
-    retained = #slice(memory.arena_push(arena, #len(source), 1), #len(source))
-    for i in 0..#len(source) {
-      retained[i] = source[i]
-    }
-  }
+  retained := memory.push_bytes(arena, #len(source))
+  _ = memory.copy(retained, source)
   return Template{ source: retained }
 }
 

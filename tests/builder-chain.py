@@ -15,8 +15,10 @@ use "std/bytes" bytes
 fn require(ok: bool) { if !ok { #panic("builder chain contract") } }
 fn moving(block: usize, bounded: bool) {
   arena: *mem.Arena
-  if bounded { arena = mem.arena_alloc_bounded(block, 4096) }
-  else { arena = mem.arena_alloc(block) }
+  source := mem.pages(0)
+  if bounded { source.limit = 4096 }
+  source.block_size = block
+  arena = mem.arena_from_source(source)
   defer mem.arena_release(arena)
   state: builder.Builder
   builder.reserve(arena, &state, 8)
@@ -41,17 +43,19 @@ fn moving(block: usize, bounded: bool) {
   require(bytes.equal(old, "abcdefgh"))
   for i in mem.ArenaHeader + 8..#len(first.data) { require(first.data[i] == 85) }
   mem.arena_rewind(arena, mark)
-  require(mem.arena_mark(arena) == mark && mem.arena_snapshot(arena).blocks == 1)
+  require(mem.arena_mark(arena) == mark && arena.current == arena)
   require(bytes.equal(old, "abcdefgh"))
 }
 fn current_block() {
-  arena := mem.arena_alloc_bounded(256, 2048)
+  source := mem.pages(2048)
+  source.block_size = 256
+  arena := mem.arena_from_source(source)
   defer mem.arena_release(arena)
-  guard := mem.push_bytes_uninit(arena, 100)
+  guard := mem.push_bytes(arena, 100)
   mem.fill(guard, 91)
   state: builder.Builder
   builder.reserve(arena, &state, 64)
-  require(mem.arena_snapshot(arena).blocks == 2)
+  require(arena.current.previous == arena)
   seeded: fail.Status
   builder.append(&seeded, &state, "seed")
   require(!seeded.failed)
@@ -61,7 +65,7 @@ fn current_block() {
   require(&state.storage[0] == previous && mem.arena_mark(arena) == mark + 16)
   require(bytes.equal(builder.bytes(&state), "seed"))
   // Another allocation makes the builder non-topmost even in the same block.
-  other := mem.push_bytes_uninit(arena, 1)
+  other := mem.push_bytes(arena, 1)
   other[0] = 37
   builder.reserve(arena, &state, 96)
   require(&state.storage[0] != previous && other[0] == 37)
@@ -96,7 +100,9 @@ fn main() {
 }
 '''
 PANICS = {
-    'bounded': '''arena := mem.arena_alloc_bounded(160, 320)
+    'bounded': '''source := mem.pages(320)
+  source.block_size = 160
+  arena := mem.arena_from_source(source)
   defer mem.arena_release(arena)
   state: builder.Builder
   builder.reserve(arena, &state, 8)

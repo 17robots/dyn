@@ -47,11 +47,9 @@ pub fn process_arguments(arena: *memory.Arena) [][]const u8 {
     count += 1
   }
 
-  bytes_allocation := memory.arena_push_uninit(arena, used, 1)
-  slots_allocation := memory.arena_push_uninit(arena, count * #sizeof([]const u8), #alignof([]const u8))
-  bytes := #slice(bytes_allocation, used)
+  bytes := memory.push_bytes(arena, used)
   _ = memory.copy(bytes, temporary[..used])
-  arguments := #slice(#cast(*[]const u8, slots_allocation), count)
+  arguments := memory.push_array([]const u8, arena, count)
   start: usize = 0
   at: usize = 0
   i = 0
@@ -121,14 +119,12 @@ pub fn fork_process(status: *fail.Status) isize {
 }
 
 fn terminate(arena: *memory.Arena, text: []const u8) *u8 {
-  allocation := memory.arena_push_uninit(arena, #len(text) + 1, 1)
-  raw := allocation
-  bytes := #slice(raw, #len(text) + 1)
+  bytes := memory.push_bytes(arena, #len(text) + 1)
   for i in 0..#len(text) {
     bytes[i] = text[i]
   }
   bytes[#len(text)] = 0
-  return raw
+  return &bytes[0]
 }
 
 pub fn execute(arena: *memory.Arena, path: []const u8, arguments: [][]const u8) isize {
@@ -146,9 +142,7 @@ pub fn execute(arena: *memory.Arena, path: []const u8, arguments: [][]const u8) 
   path_raw := terminate(arena, path)
   if path_raw == nil { return -28 }
   length := #len(arguments)
-  slots := memory.arena_push_uninit(arena, (length + 1) * #sizeof(CStringPointer), #alignof(CStringPointer))
-  raw := #cast(*CStringPointer, slots)
-  pointers := #slice(raw, length + 1)
+  pointers := memory.push_array(CStringPointer, arena, length + 1)
   for i in 0..length {
     pointers[i] = CStringPointer{ value: terminate(arena, arguments[i]) }
     if pointers[i].value == nil { return -28 }
@@ -189,17 +183,13 @@ pub fn spawn_environment(
     if directory_raw == nil { return spawn_failed(status, -28) }
   }
   count := #len(arguments)
-  allocation := memory.arena_push_uninit(arena, (count + 1) * #sizeof(CStringPointer), #alignof(CStringPointer))
-  raw := #cast(*CStringPointer, allocation)
-  pointers := #slice(raw, count + 1)
+  pointers := memory.push_array(CStringPointer, arena, count + 1)
   for index in 0..count {
     pointers[index].value = terminate(arena, arguments[index])
     if pointers[index].value == nil { return spawn_failed(status, -28) }
   }
   pointers[count].value = nil
-  env_allocation := memory.arena_push_uninit(arena, (#len(environment) + 1) * #sizeof(CStringPointer), #alignof(CStringPointer))
-  environment_raw := #cast(*CStringPointer, env_allocation)
-  environment_pointers := #slice(environment_raw, #len(environment) + 1)
+  environment_pointers := memory.push_array(CStringPointer, arena, #len(environment) + 1)
   env_index: usize = 0
   for env_index < #len(environment) {
     for env_byte in environment[env_index] {

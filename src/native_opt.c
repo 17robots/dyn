@@ -1843,7 +1843,12 @@ static bool inline_program_within(DynNativeOptimization *o, bool leaf_only, bool
   if (!b.addressed) b.failed = true;
   for (size_t i = 0; i < b.in->expression_count && !b.failed; ++i) {
     const DynIrExpr *e = &b.in->expressions[i];
-    if (b.uniform_params && e->kind == DYN_EXPR_CALL) inline_uniform_call(&b, e);
+    /* Only live calls decide a uniform argument: an unreachable caller, such
+       as one in an imported module the program never calls, must not
+       change how a live function compiles. */
+    if (b.uniform_params && e->kind == DYN_EXPR_CALL &&
+        (!b.in->live.expressions || b.in->live.expressions[i]))
+      inline_uniform_call(&b, e);
     /* &local, &local.field, &local[i], and slices of local arrays all point
        into the local's storage. */
     bool takes = (e->kind == DYN_EXPR_UNARY && e->op == DYN_OP_ADDRESS) || e->kind == DYN_EXPR_SLICE;

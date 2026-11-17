@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fallible array sizing and readable units in real allocations, debug/release."""
+"""Typed arrays, readable units, bounded growth and reuse in real allocations, debug/release."""
 import os
 from pathlib import Path
 import subprocess
@@ -13,61 +13,40 @@ fn expect(ok: bool) { if !ok { #panic("memory ergonomics contract") } }
 fn main() {
   created := mem.arena_alloc(mem.KiB)
   defer { mem.arena_release(created) }
-  count: usize = 7
-  size := mem.size_for(count, #sizeof(Item))
-  expect(size.valid)
-  allocation := mem.arena_push_array(created, count, #sizeof(Item), #alignof(Item))
-  items := #slice(#cast(*Item, allocation), count)
+  items := mem.push_array(Item, created, 7)
   for *item in items {
     expect(item.tag == 0 && item.value == 0)
     item.value = 42
   }
   expect(items[6].value == 42)
-  maximum := #cast(usize, -1)
-  edge := mem.size_for(maximum / 8, 8)
-  expect(edge.valid && edge.bytes == maximum - maximum % 8)
-  before := mem.arena_used(created)
-  overflow := mem.size_for(maximum / 8 + 1, 8)
-  expect(!overflow.valid && overflow.bytes == 0)
-  expect(mem.arena_used(created) == before && items[6].value == 42)
-  exact := mem.size_for(maximum, 1)
-  expect(exact.valid && exact.bytes == maximum)
-  zero_count := mem.size_for(0, maximum)
-  zero_size := mem.size_for(maximum, 0)
-  expect(zero_count.valid && zero_count.bytes == 0)
-  expect(zero_size.valid && zero_size.bytes == 0)
   expect(mem.MiB == 1024 * mem.KiB && mem.GiB == 1024 * mem.MiB)
 
-  chain := mem.arena_alloc_bounded(512, 4 * mem.KiB)
+  source := mem.pages(4 * mem.KiB)
+  source.block_size = 512
+  chain := mem.arena_from_source(source)
   defer { mem.arena_release(chain) }
   first := mem.push(u64, chain)
   first.* = 42
-  _ = mem.arena_push(chain, 400, 8)
+  _ = mem.push_bytes(chain, 400)
   second := mem.push(u64, chain)
   second.* = 17
-  _ = mem.arena_push(chain, 400, 8)
-  snapshot := mem.arena_snapshot(chain)
-  expect(snapshot.blocks >= 2 && snapshot.used >= 816)
+  _ = mem.push_bytes(chain, 400)
+  expect(chain.current != chain && mem.arena_used(chain) >= 816)
   expect(first.* == 42 && second.* == 17)
-  too_large := mem.arena_try_push(chain, 8 * mem.KiB, 1)
-  expect(!too_large.ok && too_large.error == mem.ErrorKind.Capacity)
-  expect(mem.arena_snapshot(chain).blocks == snapshot.blocks && first.* == 42 && second.* == 17)
   mem.arena_reset(chain)
-  expect(mem.arena_snapshot(chain).used == 0 && mem.arena_snapshot(chain).blocks == 1)
+  expect(mem.arena_used(chain) == 0 && chain.current == chain)
   for cycle in 0..100 {
-    _ = mem.arena_push(chain, 400, 8)
-    _ = mem.arena_push(chain, 400, 8)
+    _ = mem.push_bytes(chain, 400)
+    _ = mem.push_bytes(chain, 400)
     mem.arena_reset(chain)
-    expect(mem.arena_snapshot(chain).blocks == 1)
+    expect(chain.current == chain)
   }
-  tight := mem.arena_alloc_bounded(mem.ArenaHeader, mem.ArenaHeader)
-  expect(mem.arena_try_push(tight, 0, 1).ok)
-  expect(!mem.arena_try_push(tight, 1, 1).ok)
-  expect(mem.arena_snapshot(tight).blocks == 1)
+  tight := mem.arena_from_source(mem.pages(mem.ArenaHeader))
+  expect(#len(mem.push_bytes(tight, 0)) == 0 && tight.current == tight)
   mem.arena_release(tight)
   unbounded := mem.arena_alloc(0)
-  _ = mem.arena_push(unbounded, 4096, 8)
-  expect(mem.arena_snapshot(unbounded).blocks == 1)
+  _ = mem.push_bytes(unbounded, 4096)
+  expect(unbounded.current == unbounded)
   mem.arena_release(unbounded)
 }
 '''
@@ -81,4 +60,4 @@ with tempfile.TemporaryDirectory(prefix='dyn-memory-ergonomics-') as temporary:
                         '--output', str(output), *(['--release'] if release else [])],
                        cwd=ROOT, check=True, timeout=120)
         subprocess.run([str(output)], check=True, timeout=10)
-print('PASS memory units, checked arrays, bounded growth, retention, trim and repeated reuse (debug/release)')
+print('PASS memory units, typed arrays, bounded growth, retention and repeated reuse (debug/release)')

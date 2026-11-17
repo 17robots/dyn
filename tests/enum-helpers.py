@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""std/enums, zero-result division and try_append (debug/release)."""
+"""std/enums, and zero-result division (debug/release)."""
 import os
 from pathlib import Path
 import subprocess

@@ -138,5 +138,5 @@ for operation in ('_=png.decode(arena,&status,external[..])', '_=png.encode(aren
             output = work/'panic'
             subprocess.run([str(DYN),'build',str(work),'--'+mode,'--quiet','--no-cache','--output',str(output)],cwd=ROOT,env=ENV,check=True,timeout=120)
             result = subprocess.run([str(output)],capture_output=True,timeout=10)
-            assert result.returncode == 101 and b'arena exhausted or alignment invalid' in result.stderr.lower(), (operation,mode,result)
+            assert result.returncode == 101 and b'arena exhausted' in result.stderr.lower(), (operation,mode,result)
 print('PASS image arena exhaustion panics (debug/release)',flush=True)

@@ -262,7 +262,7 @@ pub fn extract(arena: *mem.Arena, status: *fail.Status, archive_entry: Entry) []
     return empty
   }
   mark := mem.arena_mark(arena)
-  output := extract_into(status, mem.push_bytes_uninit(arena, archive_entry.uncompressed_size), archive_entry)
+  output := extract_into(status, mem.push_bytes(arena, archive_entry.uncompressed_size), archive_entry)
   if status.failed {
     mem.arena_rewind(arena, mark)
   }

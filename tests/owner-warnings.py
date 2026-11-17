@@ -37,7 +37,7 @@ fn main() {
     source.write_text('''use "std/mem"
 fn main() {
   created := mem.arena_alloc(mem.KiB)
-  pointer := mem.arena_push(created, 1, 1)
+  pointer := mem.push(u8, created)
   pointer.* = 42
   moved := created
   created = nil

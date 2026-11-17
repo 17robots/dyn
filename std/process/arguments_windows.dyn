@@ -93,11 +93,7 @@ fn arguments_native(arena: *mem.Arena, status: *fail.Status) [][]const u8 {
     at = argument_skip(command, token.next)
   }
   result := argument_slots(arena, count)
-  allocation := mem.arena_push_uninit(arena, size, 1)
-  bytes := arena.data[..0]
-  if size > 0 {
-    bytes = #slice(allocation, size)
-  }
+  bytes := mem.push_bytes(arena, size)
   used: usize = 0
   index: usize = 0
   at = argument_skip(command, 0)

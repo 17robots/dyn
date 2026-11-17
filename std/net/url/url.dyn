@@ -154,7 +154,7 @@ fn percent_decode_into(destination: []u8, source: []const u8) Encoded {
 // One component percent-encoded, slashes included, in arena.
 pub fn percent_encode(arena: *mem.Arena, source: []const u8) []u8 {
   mark := mem.arena_mark(arena)
-  space := mem.push_bytes_uninit(arena, 3 * #len(source))
+  space := mem.push_bytes(arena, 3 * #len(source))
   encoded := percent_encode_into(space, source)
   mem.arena_rewind(arena, mark + #len(encoded.value))
   return encoded.value
@@ -166,7 +166,7 @@ pub fn percent_decode(arena: *mem.Arena, status: *fail.Status, source: []const u
   empty: []u8
   if status.failed { return empty }
   mark := mem.arena_mark(arena)
-  space := mem.push_bytes_uninit(arena, #len(source))
+  space := mem.push_bytes(arena, #len(source))
   decoded := percent_decode_into(space, source)
   if decoded.failed {
     mem.arena_rewind(arena, mark)

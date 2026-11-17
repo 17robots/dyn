@@ -31,7 +31,7 @@ pub fn increment() { counter += 1 }
 pub fn layout() usize { return #sizeof(usize)*100 + #sizeof(rawptr)*10 + #sizeof([]u8) }
 pub fn arithmetic(a: isize, b: isize) isize { return a / b }
 pub fn big(a: i64) i64 { return a + 1 }
-pub fn alloc(n: usize) rawptr { return #cast(rawptr, mem.arena_try_push(arena, n, 4).memory) }
+pub fn alloc(n: usize) rawptr { return &mem.push_array(u32, arena, (n + 3) / 4)[0] }
 pub fn reset() { mem.arena_reset(arena) }
 pub fn total(data: *u32, n: usize) u32 {
   values := #slice(data, n)
@@ -60,7 +60,7 @@ pub fn pool_test() bool {
 }
 pub fn heap_available() bool {
   created := mem.arena_alloc(32 + mem.ArenaHeader)
-  _ = mem.arena_push(created, 32, 1)
+  _ = mem.push_bytes(created, 32)
   mem.arena_release(created)
   created = nil
   mem.arena_release(created)
@@ -92,7 +92,7 @@ const bytes = require('node:fs').readFileSync(process.argv[1]);
   assert.equal(e.layout(),448); assert.equal(e.arithmetic(-9,2),-4); assert.equal(e.big(99n),100n);
   assert.equal(e.abi(),1); assert.equal(e.heap_available(),1);
   const p=e.alloc(16)>>>0; assert.ok(p); new Uint32Array(e.memory.buffer,p,4).set([7,8,9,10]);
-  assert.equal(e.total(p,4),34); assert.equal(e.alloc(256),0); assert.ok(e.alloc(112)); assert.equal(e.alloc(1),0); e.reset(); assert.equal(e.alloc(16)>>>0,p);
+  assert.equal(e.total(p,4),34); assert.throws(()=>e.alloc(256),WebAssembly.RuntimeError); assert.ok(e.alloc(112)); assert.throws(()=>e.alloc(1),WebAssembly.RuntimeError); e.reset(); assert.equal(e.alloc(16)>>>0,p);
   assert.equal(e.pool_test(),1);
   const another = await WebAssembly.instantiate(bytes,{env:{host_add:(a,b)=>a+b}});
   another.instance.exports.dyn_initialize();

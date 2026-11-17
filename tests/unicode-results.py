@@ -47,24 +47,26 @@ fn good(input: []const u8, expected: []const u8, mode: usize) {
  backing: [8192+mem.ArenaBufferOverhead]u8
  mem.fill(backing[..], 99)
  a := mem.arena_from_buffer(backing[..])
- prefix := mem.push_bytes_uninit(a, 7)
+ prefix := mem.push_bytes(a, 7)
  r := convert(a, input, mode)
  converted(r, expected)
- require(mem.arena_mark(a) == mem.arena_start(a) + 7 + #len(expected), "exact retained allocation")
+ require(mem.arena_mark(a) == mem.ArenaHeader + 7 + #len(expected), "exact retained allocation")
  for c in prefix { require(c == 99, "prefix preserved") }
 }
 fn chained(input: []const u8, expected: []const u8, mode: usize, block: usize, prior: bool) {
- a := mem.arena_alloc_bounded(block, 1024 * 1024)
+ source := mem.pages(1024 * 1024)
+ source.block_size = block
+ a := mem.arena_from_source(source)
  defer mem.arena_release(a)
- prefix := mem.push_bytes_uninit(a, 3)
+ prefix := mem.push_bytes(a, 3)
  mem.fill(prefix, 91)
  guard: []u8
  if prior {
-  guard = mem.push_bytes_uninit(a, 257)
+  guard = mem.push_bytes(a, 257)
   mem.fill(guard, 73)
-  require(mem.arena_snapshot(a).blocks > 1, "forced prior chain")
+  require(a.current != a, "forced prior chain")
  }
- owned_input := mem.push_bytes_uninit(a, #len(input))
+ owned_input := mem.push_bytes(a, #len(input))
  _ = mem.copy(owned_input, input)
  mark := mem.arena_mark(a)
  used := mem.arena_used(a)
@@ -85,19 +87,19 @@ fn bad(input: []const u8, off: usize) {
   backing: [256+mem.ArenaBufferOverhead]u8
   mem.fill(backing[..], 99)
   a := mem.arena_from_buffer(backing[..])
-  prefix := mem.push_bytes_uninit(a, 7)
+  prefix := mem.push_bytes(a, 7)
   a.poison_on_rewind = true
   snapshot: [256+mem.ArenaBufferOverhead]u8
   _ = mem.copy(snapshot[..], backing[..])
   r := convert(a, input, mode)
   require(r.failure.kind != fail.Kind.Ok && #len(r.value) == 0 && r.failure.kind == fail.Kind.InvalidInput && r.offset == off, "invalid diagnostics")
-  require(mem.arena_mark(a) == mem.arena_start(a) + 7, "invalid rollback")
+  require(mem.arena_mark(a) == mem.ArenaHeader + 7, "invalid rollback")
   require(bytes.equal(backing[..], snapshot[..]), "validation wrote arena")
   empty: [mem.ArenaBufferOverhead]u8
   pad := (16-(#cast(usize,&empty[0])&15))&15
   full := mem.arena_from_buffer(empty[pad..pad+mem.ArenaHeader])
   r = convert(full, input, mode)
-  require(r.failure.kind != fail.Kind.Ok && r.offset == off && r.failure.kind == fail.Kind.InvalidInput && #len(r.value) == 0 && mem.arena_mark(full) == mem.arena_start(full), "validate before allocation")
+  require(r.failure.kind != fail.Kind.Ok && r.offset == off && r.failure.kind == fail.Kind.InvalidInput && #len(r.value) == 0 && mem.arena_mark(full) == mem.ArenaHeader, "validate before allocation")
  }
 }
 fn overlap(start: usize, mode: usize) {
@@ -105,14 +107,14 @@ fn overlap(start: usize, mode: usize) {
  snapshot: [1024+mem.ArenaBufferOverhead]u8
  mem.fill(backing[..], 99)
  a := mem.arena_from_buffer(backing[..])
- _ = mem.push_bytes_uninit(a, 8)
- at := mem.arena_start(a) + start
+ _ = mem.push_bytes(a, 8)
+ at := mem.ArenaHeader + start
  _ = mem.copy(a.data[at..], "ABCD")
  payload := a.data[mem.ArenaHeader..]
  _ = mem.copy(snapshot[..], payload)
  r := convert(a, a.data[at..at+4], mode)
  require(r.failure.kind != fail.Kind.Ok && #len(r.value) == 0 && r.failure.kind == fail.Kind.InvalidInput && r.offset == 0, "overlap diagnostics")
- require(mem.arena_mark(a) == mem.arena_start(a) + 8 && bytes.equal(payload, snapshot[..#len(payload)]), "overlap preserved bytes and mark")
+ require(mem.arena_mark(a) == mem.ArenaHeader + 8 && bytes.equal(payload, snapshot[..#len(payload)]), "overlap preserved bytes and mark")
 }
 fn end(r: Grapheme) {
  require(!r.found && #len(r.value) == 0 && r.failure.kind == fail.Kind.Ok && r.offset == 0, "ordinary EOF")

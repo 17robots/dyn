@@ -66,7 +66,7 @@ for label, family, data, count, offset in cases:
   backing: [1024 + mem.ArenaBufferOverhead]u8
   arena := mem.arena_from_buffer(backing[..])
   arena.poison_on_rewind = true
-  prefix := mem.push_bytes_uninit(arena, 3)
+  prefix := mem.push_bytes(arena, 3)
   prefix[0] = 42
   mark := mem.arena_mark(arena)
   status: fail.Status
@@ -106,29 +106,29 @@ source += f'''fn aliases() {{
   arena.poison_on_rewind = true
   status: fail.Status
   result := dns.parse_ipv4(arena, &status, payload[16..16+#len(data)], 7, "example.test")
-  require(status.failed && #len(result) == 0 && mem.arena_mark(arena) == mem.arena_start(arena))
+  require(status.failed && #len(result) == 0 && mem.arena_mark(arena) == mem.ArenaHeader)
   for i in 0..#len(data) {{ require(payload[16+i] == data[i]) }}
   text := "example.test"
   for i in 0..#len(text) {{ payload[i] = text[i] }}
   overlapping: fail.Status
   result = dns.parse_ipv4(arena, &overlapping, data[..], 7, payload[..#len(text)])
-  require(overlapping.failed && mem.arena_mark(arena) == mem.arena_start(arena))
+  require(overlapping.failed && mem.arena_mark(arena) == mem.ArenaHeader)
   query := dns.query_ipv4(arena, payload[..#len(text)], 7)
-  require(#len(query) == 0 && mem.arena_mark(arena) == mem.arena_start(arena))
+  require(#len(query) == 0 && mem.arena_mark(arena) == mem.ArenaHeader)
   for i in 0..#len(text) {{ require(payload[i] == text[i]) }}
   server := net.ipv4(127,0,0,1,53)
   rejected4: fail.Status
   rejected6: fail.Status
   _ = dns.resolve_ipv4(arena, &rejected4, payload[..#len(text)], &server, 0)
   _ = dns.resolve_ipv6(arena, &rejected6, payload[..#len(text)], &server, 0)
-  require(rejected4.failed && rejected6.failed && mem.arena_mark(arena) == mem.arena_start(arena))
+  require(rejected4.failed && rejected6.failed && mem.arena_mark(arena) == mem.ArenaHeader)
   invalid4: fail.Status
   invalid6: fail.Status
   _ = dns.resolve_ipv4(arena, &invalid4, "", &server, 0)
   _ = dns.resolve_ipv6(arena, &invalid6, "", &server, 0)
-  require(invalid4.failed && invalid6.failed && mem.arena_mark(arena) == mem.arena_start(arena))
+  require(invalid4.failed && invalid6.failed && mem.arena_mark(arena) == mem.ArenaHeader)
   // Borrowing a live prefix is safe; output is after it.
-  _ = mem.push_bytes_uninit(arena, #len(text))
+  _ = mem.push_bytes(arena, #len(text))
   borrowed: fail.Status
   result = dns.parse_ipv4(arena, &borrowed, data[..], 7, payload[..#len(text)])
   require(!borrowed.failed && #len(result) == 2)

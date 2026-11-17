@@ -32,12 +32,7 @@ pub fn decoder_create(arena: *mem.Arena, status: *fail.Status, bytes: []const u8
     return nil
   }
   mark := mem.arena_mark(arena)
-  allocation := mem.arena_try_push(arena, decoder_size(), decoder_align())
-  if !allocation.ok {
-    audio_failed(status, "open decoder", -4)
-    return nil
-  }
-  state := #cast(rawptr, allocation.memory)
+  state := native_storage(arena, decoder_size(), decoder_align())
   code := decoder_init(state, #cast(rawptr, &bytes[0]), #len(bytes))
   if code != 0 {
     mem.arena_rewind(arena, mark)
@@ -71,12 +66,7 @@ pub fn engine_create(arena: *mem.Arena, status: *fail.Status, device: bool) rawp
     return nil
   }
   mark := mem.arena_mark(arena)
-  allocation := mem.arena_try_push(arena, engine_size(), engine_align())
-  if !allocation.ok {
-    audio_failed(status, "open engine", -4)
-    return nil
-  }
-  state := #cast(rawptr, allocation.memory)
+  state := native_storage(arena, engine_size(), engine_align())
   code := engine_init(state, device)
   if code != 0 {
     mem.arena_rewind(arena, mark)
@@ -128,12 +118,7 @@ pub fn sound_create(arena: *mem.Arena, status: *fail.Status, engine: rawptr, pat
   encoded := c.string_into(status, buffer, path)
   if status.failed { return nil }
   mark := mem.arena_mark(arena)
-  work := mem.arena_try_push(arena, sound_size(), sound_align())
-  if !work.ok {
-    audio_failed(status, "open sound", -4)
-    return nil
-  }
-  state := #cast(rawptr, work.memory)
+  state := native_storage(arena, sound_size(), sound_align())
   code := sound_init(state, engine, encoded)
   if code != 0 {
     mem.arena_rewind(arena, mark)
@@ -185,3 +170,15 @@ extern fn engine_align "dyn_ma_engine_align"() usize
 extern fn engine_init "dyn_ma_engine_init"(state: rawptr, device: bool) i32
 extern fn native_play "dyn_ma_play"(state: rawptr, path: c.string) i32
 extern fn native_mix "dyn_ma_mix"(state: rawptr, output: *f32, frames: u64, read: *u64) i32
+
+// Zeroed storage for a native state from arena, at the alignment the native
+// side reports. Panics when the arena is exhausted.
+fn native_storage(arena: *mem.Arena, size: usize, alignment: usize) rawptr {
+  if alignment == 0 || (alignment & (alignment - 1)) != 0 || alignment > 4096 || size > #max(usize) - alignment {
+    #panic("native state has an invalid size or alignment")
+  }
+  storage := mem.push_bytes(arena, size + alignment - 1)
+  mem.zero(storage)
+  skip := (alignment - (#cast(usize, &storage[0]) & (alignment - 1))) & (alignment - 1)
+  return &storage[skip]
+}

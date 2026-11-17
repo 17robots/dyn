@@ -422,12 +422,12 @@ non-aliasing merely because they are `const`.
 - `std/bufio`: large writes bypass staging copies while retaining a buffered tail.
   Short writes, ordering, partial errors and sticky errors retain their contracts.
 - `std/testing.summarize`: caller-owned sample statistics without allocation;
-  sorts samples in place. `std/mem.arena_snapshot` supplies used/peak/failure
-  counters, and `std/observe` supplies optional allocation event records.
+  sorts samples in place. `std/mem.arena_used` measures arena use, and
+  `std/observe` supplies optional event records.
 
 Performance changes must preserve empty inputs, overlap rules, arithmetic bounds,
 allocation-failure behavior and ABI contracts. `tests/performance-contracts.py`
 checks these alongside independent search oracles and compiler option/cache tests.
 
 Allocation goes through arenas: `mem.push(T, arena)`, `mem.push_array(T, arena, n)`
-and `mem.push_bytes_uninit(arena, n)`. See [memory patterns](docs/guide/memory-patterns.md).
+and `mem.push_bytes(arena, n)`. See [memory patterns](docs/guide/memory-patterns.md).

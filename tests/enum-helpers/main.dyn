@@ -1,7 +1,6 @@
 use "std/bytes"
 use "std/enums"
 use "std/math"
-use "std/mem"
 
 enum Key { Null, Space, Shift }
 
@@ -14,15 +13,5 @@ fn main() {
   }
   if math.div_or_zero(7, 0) != 0 || math.rem_or_zero(7, 2) != 1 {
     #panic("or zero")
-  }
-  arena := mem.arena_alloc(0)
-  defer mem.arena_release(arena)
-  items: []u32
-  stub: u32 = 99
-  first := mem.try_append(arena, &items, 1, &stub)
-  other := mem.push(u32, arena)
-  second := mem.try_append(arena, &items, 2, &stub)
-  if first.* != 1 || second != &stub || other.* != 0 {
-    #panic("try_append")
   }
 }

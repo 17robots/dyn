@@ -5,8 +5,8 @@ use "std/fail"
 // straight alpha. RGB/RGBA may use sRGB; alpha remains linear. No in-place resize.
 // All temporary storage comes from scratch, which is rewound before returning.
 // Source/destination storage must remain outside the scratch allocation range.
-// Bad sizes, channels or buffers fail with InvalidInput; running out of
-// scratch with Capacity.
+// Bad sizes, channels or buffers fail with InvalidInput. An exhausted scratch
+// arena panics.
 pub fn resize(scratch: *mem.Arena, status: *fail.Status, source: []const u8, width: i32, height: i32, destination: []u8, out_width: i32, out_height: i32, channels: i32, srgb: bool) {
   if status.failed { return }
   if scratch == nil || #len(source) == 0 || #len(destination) == 0 {
@@ -26,13 +26,22 @@ pub fn resize(scratch: *mem.Arena, status: *fail.Status, source: []const u8, wid
   mark := mem.arena_mark(scratch)
   defer mem.arena_rewind(scratch, mark)
   if !native_resize(#cast(rawptr, &source[0]), #len(source), width, height, #cast(rawptr, &destination[0]), #len(destination), out_width, out_height, channels, srgb, #cast(rawptr, scratch), scratch_allocate) {
-    fail.set(status, fail.make(fail.Kind.Capacity, "resize", "", "the scratch arena is full"))
+    fail.set(status, fail.make(fail.Kind.System, "resize", "", "the resize failed"))
   }
 }
 // Private synchronous callback; provider scratch cannot outlive resize.
 fn scratch_allocate(context: rawptr, size: usize) rawptr {
-  work := mem.arena_try_push(#cast(*mem.Arena, context), size, 64)
-  if !work.ok { return nil }
-  return #cast(rawptr, work.memory)
+  if size == 0 { return nil }
+  return &aligned_work(#cast(*mem.Arena, context), size)[0]
 }
 extern fn native_resize "dyn_stb_resize"(source: rawptr, length: usize, width: i32, height: i32, output: rawptr, capacity: usize, out_width: i32, out_height: i32, channels: i32, srgb: bool, context: rawptr, allocate: fn(rawptr, usize) rawptr) bool
+
+// size bytes from arena at a 64-byte boundary, for provider work memory.
+fn aligned_work(arena: *mem.Arena, size: usize) []u8 {
+  if size > #max(usize) - 63 {
+    #panic("work size overflow")
+  }
+  storage := mem.push_bytes(arena, size + 63)
+  skip := (64 - (#cast(usize, &storage[0]) & 63)) & 63
+  return storage[skip..skip + size]
+}

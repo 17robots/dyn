@@ -9,11 +9,8 @@ pub fn reset() {
   mem.arena_reset(arena)
 }
 pub fn allocate(size: usize) rawptr {
-  result := mem.arena_try_push(arena, size, 4)
-  if !result.ok {
-    return nil
-  }
-  return #cast(rawptr, result.memory)
+  if size == 0 { return nil }
+  return &mem.push_bytes(arena, size)[0]
 }
 
 // Caller supplies a live allocation of count RGBA pixels.

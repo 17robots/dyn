@@ -107,7 +107,7 @@ fn query_arena(arena: *mem.Arena, name: []const u8, identifier: u16, kind: u16) 
   }
   storage: [272]u8
   encoded := query(storage[..], name, identifier, kind)
-  output := mem.push_bytes_uninit(arena, #len(encoded))
+  output := mem.push_bytes(arena, #len(encoded))
   _ = mem.copy(output, encoded)
   return output
 }

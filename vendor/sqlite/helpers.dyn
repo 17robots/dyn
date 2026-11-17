@@ -54,7 +54,7 @@ pub fn bytes(statement: *const Statement, index: i32) []const u8 {
 }
 pub fn text(arena: *mem.Arena, statement: *const Statement, index: i32) []const u8 {
   value := bytes(statement, index)
-  copy := mem.push_bytes_uninit(arena, #len(value))
+  copy := mem.push_bytes(arena, #len(value))
   _ = mem.copy(copy, value)
   return copy
 }

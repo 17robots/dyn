@@ -138,12 +138,16 @@ pub fn environment(arena: *mem.Arena, status: *fail.Status, name: []const u8) Va
       return Variable{}
     }
   }
-  capacity := mem.trial_size(arena, 256)
-  for capacity > 0 {
+  room := mem.arena_room(arena)
+  capacity := #cast(usize, 256)
+  if capacity > room {
+    capacity = room
+  }
+  for capacity <= #max(usize) / 4 {
     mark := mem.arena_mark(arena)
     // Too small a buffer is retried bigger, so it gets a status of its own.
     attempt: fail.Status
-    result := environment_native(&attempt, name, mem.push_bytes_uninit(arena, capacity))
+    result := environment_native(&attempt, name, mem.push_bytes(arena, capacity))
     if !attempt.failed {
       mem.arena_rewind(arena, mark + #len(result.value))
       return result
@@ -153,9 +157,15 @@ pub fn environment(arena: *mem.Arena, status: *fail.Status, name: []const u8) Va
       fail.set(status, attempt.failure)
       return Variable{}
     }
-    capacity = mem.trial_next(arena, capacity)
+    if capacity == room {
+      #panic("arena exhausted: the output does not fit")
+    }
+    capacity = capacity * 2
+    if capacity > room {
+      capacity = room
+    }
   }
-  #panic("arena exhausted")
+  #panic("output size overflows")
 }
 
 // Zero limits are unlimited. A zero or negative timeout is infinite; no_wait
@@ -345,9 +355,5 @@ pub fn arguments(arena: *mem.Arena, status: *fail.Status) [][]const u8 {
 fn argument_slots(arena: *mem.Arena, count: usize) [][]const u8 {
   empty: [][]const u8
   if count == 0 { return empty }
-  if count > #max(usize) / #sizeof([]const u8) {
-    #panic("argument count overflow")
-  }
-  allocation := mem.arena_push_uninit(arena, count * #sizeof([]const u8), #alignof([]const u8))
-  return #slice(#cast(*[]const u8, allocation), count)
+  return mem.push_array([]const u8, arena, count)
 }

@@ -16,10 +16,10 @@ enum Shape { Dot, Circle: f64 }
 struct Settings { size: i32 = 7, name: []const u8 = "x", flags: u64 }
 
 fn dirty(T: type, arena: *mem.Arena) *T {
-  memory := mem.arena_push_uninit(arena, #sizeof(T), #alignof(T))
-  bytes := #slice(memory, #sizeof(T))
+  value := mem.push(T, arena)
+  bytes := #slice(#cast(*u8, value), #sizeof(T))
   for i in 0..#len(bytes) { bytes[i] = 0xab }
-  return #cast(*T, memory)
+  return value
 }
 
 fn main() {

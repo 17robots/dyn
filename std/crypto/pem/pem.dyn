@@ -31,7 +31,7 @@ fn malformed(arena: *mem.Arena, status: *fail.Status, mark: usize, offset: usize
 pub fn decode(arena: *mem.Arena, status: *fail.Status, source: []const u8) Block {
   if status.failed { return Block{} }
   mark := mem.arena_mark(arena)
-  base64_storage := mem.push_bytes_uninit(arena, #len(source))
+  base64_storage := mem.push_bytes(arena, #len(source))
   begin: []const u8 = "-----BEGIN "
   end_prefix: []const u8 = "-----END "
   start: usize = 0

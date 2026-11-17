@@ -11,7 +11,7 @@ fn main() {
   context: i64 = 3
   if invoke(callback,#cast(rawptr, &context)) != 7.5 { #panic("callback ABI") }
   arena := mem.arena_alloc(4096)
-  bytes := #slice(mem.arena_push(arena,64,8), 64)
+  bytes := mem.push_bytes(arena, 64)
   bytes[63] = 42
   mem.arena_release(arena)
 }

@@ -488,7 +488,7 @@ fn parse_into(text: []const u8, base: u8, target: any) bool {
 
 // Copies source into arena.
 pub fn clone(arena: *memory.Arena, source: []const u8) []u8 {
-  output := memory.push_bytes_uninit(arena, #len(source))
+  output := memory.push_bytes(arena, #len(source))
   _ = memory.copy(output, source)
   return output
 }
@@ -509,7 +509,7 @@ pub fn join(arena: *memory.Arena, parts: [][]const u8, separator: []const u8) []
       total = checked_add(total, #len(separator))
     }
   }
-  output := memory.push_bytes_uninit(arena, total)
+  output := memory.push_bytes(arena, total)
   at: usize = 0
   for i in 0..#len(parts) {
     if i > 0 {
@@ -561,7 +561,7 @@ pub fn replace(arena: *memory.Arena, source: []const u8, needle: []const u8, rep
     total = checked_add(total - #len(needle), #len(replacement))
     at += found + #len(needle)
   }
-  output := memory.push_bytes_uninit(arena, total)
+  output := memory.push_bytes(arena, total)
   at = 0
   written: usize = 0
   for {
@@ -637,7 +637,7 @@ pub fn format_arguments(arena: *memory.Arena, template: []const u8, arguments: [
   // io.print_arguments.
   counting: fail.Status
   io.print_arguments(&counting, io.Writer{ data: &size, write: count_write }, template, arguments)
-  output := memory.push_bytes_uninit(arena, size)
+  output := memory.push_bytes(arena, size)
   buffer := io.buffer_writer(output)
   writing: fail.Status
   io.print_arguments(&writing, io.buffer_writer_adapter(&buffer), template, arguments)
@@ -682,7 +682,7 @@ pub fn list_join(arena: *memory.Arena, list: *const List, separator: []const u8)
   if list.count > 1 {
     size += (list.count - 1) * #len(separator)
   }
-  output := memory.push_bytes_uninit(arena, size)
+  output := memory.push_bytes(arena, size)
   at: usize = 0
   node := list.first
   for node != nil {

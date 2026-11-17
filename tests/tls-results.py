@@ -62,7 +62,7 @@ fn main() {
   backing: [16384]u8
   mem.fill(backing[..], 165)
   arena := mem.arena_from_buffer(backing[..])
-  prefix := mem.push_bytes_uninit(arena, 7)
+  prefix := mem.push_bytes(arena, 7)
   mark := mem.arena_mark(arena)
   invalid: fail.Status
   connection := tls.client_connection_create(arena, &invalid, nil, -1, "host")
@@ -110,7 +110,7 @@ fn main() {
   mem.fill(backing[..], 165)
   arena := mem.arena_from_buffer(backing[..])
   storage := arena.data[mem.ArenaHeader..mem.ArenaHeader+32]
-  _ = mem.push_bytes_uninit(arena, 7)
+  _ = mem.push_bytes(arena, 7)
   for mode in 1..5 {
     conn := #cast(rawptr, mode)
     status: fail.Status
@@ -158,7 +158,7 @@ def run(path, release, panic=False):
                    env=dict(os.environ, DYN_SDK=str(ROOT)), check=True, timeout=90)
     result = subprocess.run([str(output)], capture_output=True, text=True, timeout=15)
     if panic:
-        assert result.returncode == 101 and 'arena exhausted or alignment invalid' in result.stderr, result
+        assert result.returncode == 101 and 'arena exhausted' in result.stderr, result
     else:
         assert result.returncode == 0, (path.name, result.stdout, result.stderr)
 

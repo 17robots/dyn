@@ -54,6 +54,5 @@ fn main() {
   }
   built := builder.from_buffer(backing[..0])
   for i in 0..1024 { builder.append_grow(arena, &built, "x") }
-  snapshot := memory.arena_snapshot(arena)
-  io.println("checksum={} arena_used={} arena_peak={} allocation_failures={}", checksum, snapshot.used, snapshot.peak_used, snapshot.allocation_failures)
+  io.println("checksum={} arena_used={}", checksum, memory.arena_used(arena))
 }

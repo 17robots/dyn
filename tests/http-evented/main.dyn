@@ -217,7 +217,7 @@ fn main() {
   arena := mem.arena_alloc(64 * mem.MiB)
   defer mem.arena_release(arena)
   state := mem.push(App, arena)
-  state.big = mem.push_bytes_uninit(arena, BigSize)
+  state.big = mem.push_bytes(arena, BigSize)
   for i in 0..BigSize {
     state.big[i] = #cast(u8, 'a' + i % 26)
   }

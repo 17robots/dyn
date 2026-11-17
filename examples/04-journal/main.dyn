@@ -36,6 +36,8 @@ struct Journal {
   permanent: *mem.Arena,
   newest: *Note,
   count: u32,
+  // The most the frame arena held at the end of any command.
+  frame_peak: usize,
 }
 
 fn add_note(journal: *Journal, text: []const u8) {
@@ -98,13 +100,11 @@ fn list(journal: *const Journal) {
   }
 }
 
-fn stats(journal: *const Journal, frame: *const mem.Arena) {
-  permanent := mem.arena_snapshot(journal.permanent)
-  per_frame := mem.arena_snapshot(frame)
+fn stats(journal: *const Journal) {
   // The permanent arena grows and shrinks with the notes. The frame arena
   // never holds more than one command's worth, however long the session.
   io.println("notes: {}, permanent: {} bytes, frame peak: {} bytes", journal.count,
-    permanent.used, per_frame.peak_used)
+    mem.arena_used(journal.permanent), journal.frame_peak)
 }
 
 // Splits "find cat" into "find" and "cat".
@@ -137,7 +137,7 @@ fn run(journal: *Journal, frame: *mem.Arena, line: []const u8) {
       list(journal)
     }
     "stats" => {
-      stats(journal, frame)
+      stats(journal)
     }
     _ => {
       io.println("unknown command: {}", command.name)
@@ -178,6 +178,9 @@ fn main() {
       continue
     }
     run(&journal, frame, line[..read.transferred])
+    if mem.arena_used(frame) > journal.frame_peak {
+      journal.frame_peak = mem.arena_used(frame)
+    }
     // Everything the command put in frame is gone now, all at once.
     mem.arena_reset(frame)
     if read.status == bufio.ReadStatus.End { return }

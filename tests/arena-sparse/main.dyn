@@ -26,7 +26,7 @@ fn resident_kib() u64 {
 fn main() {
   arena := mem.arena_alloc(80 * mem.MiB)
   defer mem.arena_release(arena)
-  region := mem.push_bytes_uninit(arena, 64 * mem.MiB)
+  region := mem.push_bytes(arena, 64 * mem.MiB)
   mem.advise_sparse(region)
   before := resident_kib()
   at: usize = 0

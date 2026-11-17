@@ -59,7 +59,7 @@ fn main() {
   }
   parameters := password.Argon2Parameters{ memory: number(arguments[3]), iterations: number(arguments[4]), parallelism: number(arguments[5]) }
   workspace := mem.push_array(u64, arena, password.argon2id_workspace_words(parameters))
-  hash := mem.push_bytes_uninit(arena, number(arguments[6]))
+  hash := mem.push_bytes(arena, number(arguments[6]))
   password.argon2id(&status, hash, arguments[1], arguments[2], parameters, workspace)
   text: [512]u8
   encoded := password.argon2id_encode(text[..], parameters, arguments[2], hash)

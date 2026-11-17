@@ -68,7 +68,7 @@ fn save(arena:*mem.Arena,api:*const bidi.Api,text:[]const u8,base:u32,path:[]con
  check(!failed(result.failure))
  p:=result.value
  n:=#len(p.logical)
- out:=mem.push_bytes_uninit(arena,8+n*32+4*(4+n*8))
+ out:=mem.push_bytes(arena,8+n*32+4*(4+n*8))
  at:usize=0
  append(out,&at,#cast(u32,n))
  append(out,&at,p.base)

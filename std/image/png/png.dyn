@@ -321,10 +321,10 @@ fn decode_work(arena: *mem.Arena, source: []const u8) DecodeWork {
   if info.width == 0 { return DecodeWork{ error: -22 } }
   row_size := #cast(usize, info.width) * #cast(usize, info.channels)
   mark := mem.arena_mark(arena)
-  pixels := mem.push_bytes_uninit(arena, row_size * info.height)
+  pixels := mem.push_bytes(arena, row_size * info.height)
   workspace := mem.arena_mark(arena)
-  compressed := mem.push_bytes_uninit(arena, #len(source))
-  scanlines := mem.push_bytes_uninit(arena, (row_size + 1) * info.height)
+  compressed := mem.push_bytes(arena, #len(source))
+  scanlines := mem.push_bytes(arena, (row_size + 1) * info.height)
   result := decode_into(pixels, compressed, scanlines, source)
   if !result.ok {
     mem.arena_rewind(arena, mark)
@@ -340,10 +340,10 @@ fn encode_work(arena: *mem.Arena, pixels: []const u8, width: usize, height: usiz
   scanline_size := (#cast(usize, width) * #cast(usize, channels) + 1) * #cast(usize, height)
   compressed_size := scanline_size + (scanline_size / 65535 + 1) * 5 + 6
   mark := mem.arena_mark(arena)
-  destination := mem.push_bytes_uninit(arena, compressed_size + 64)
+  destination := mem.push_bytes(arena, compressed_size + 64)
   workspace := mem.arena_mark(arena)
-  scanlines := mem.push_bytes_uninit(arena, scanline_size)
-  compressed := mem.push_bytes_uninit(arena, compressed_size)
+  scanlines := mem.push_bytes(arena, scanline_size)
+  compressed := mem.push_bytes(arena, compressed_size)
   result := encode_into(destination, scanlines, compressed, pixels, width, height, channels)
   mem.arena_rewind(arena, workspace)
   if !result.ok {

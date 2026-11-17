@@ -21,14 +21,21 @@ pub fn create(arena: *mem.Arena, status: *fail.Status) Context {
     fail.invalid(status, "create UI", "", "no arena")
     return nil
   }
-  allocation := mem.arena_try_push(arena, native_size(), native_align())
-  if !allocation.ok {
-    fail.set(status, fail.make(fail.Kind.Capacity, "create UI", "", "the arena is full"))
-    return nil
-  }
-  state := #cast(rawptr, allocation.memory)
+  state := native_storage(arena, native_size(), native_align())
   native_init(state)
   return state
+}
+
+// Zeroed storage for a native state from arena, at the alignment the native
+// side reports. Panics when the arena is exhausted.
+fn native_storage(arena: *mem.Arena, size: usize, alignment: usize) rawptr {
+  if alignment == 0 || (alignment & (alignment - 1)) != 0 || alignment > 4096 || size > #max(usize) - alignment {
+    #panic("native state has an invalid size or alignment")
+  }
+  storage := mem.push_bytes(arena, size + alignment - 1)
+  mem.zero(storage)
+  skip := (alignment - (#cast(usize, &storage[0]) & (alignment - 1))) & (alignment - 1)
+  return &storage[skip]
 }
 pub fn begin(status: *fail.Status, context: Context) {
   ui_checked(status, "begin frame", native_begin(context))

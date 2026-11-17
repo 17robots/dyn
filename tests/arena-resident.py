@@ -18,7 +18,7 @@ fn main() {
  arenas:[COUNT]*mem.Arena
  for i in 0..COUNT {
   arenas[i]=mem.arena_alloc(0)
-  bytes:=mem.push_bytes_uninit(arenas[i],64)
+  bytes:=mem.push_bytes(arenas[i],64)
   for *byte in bytes { byte.*=1 }
  }
  wait()

@@ -79,7 +79,7 @@ fn context_select(data:rawptr,text:[]const u8) layout.Face {
 }
 fn reject(data:rawptr,text:[]const u8) layout.Face {return layout.Face{}}
 fn save(arena:*mem.Arena,result:*const layout.Layout,path:[]const u8) {
- out:=mem.push_bytes_uninit(arena,4+#len(result.glyphs)*32)
+ out:=mem.push_bytes(arena,4+#len(result.glyphs)*32)
  binary.store_u32_le(out[..4],#cast(u32,#len(result.glyphs)))
  for i in 0..#len(result.glyphs) {
   g:=result.glyphs[i]
@@ -146,7 +146,7 @@ fn main() {
  alias:=layout_build(arena,wrapped.value.text,font,&h.api,&b.api,layout.Options{})
  check(!failed(alias.failure) && bytes.equal(alias.value.text,wrapped.value.text))
  // A long unwrapped editor line must not perform a source scan per glyph.
- long_text:=mem.push_bytes_uninit(arena,20000)
+ long_text:=mem.push_bytes(arena,20000)
  for i in 0..#len(long_text) {long_text[i]=120}
  long_line:=layout_build(arena,long_text,font,&h.api,&b.api,layout.Options{})
  check(!failed(long_line.failure) && #len(long_line.value.glyphs)==20000 && #len(long_line.value.lines)==1)

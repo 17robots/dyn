@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Intrusive containers: list, hash, chunk and slot_map helpers, mem.append, and SipHash-1-3."""
+"""Intrusive containers: list, hash, chunk and slot_map helpers, and SipHash-1-3."""
 import os
 from pathlib import Path
 import subprocess
@@ -41,47 +41,14 @@ def escaped_bytes(key):
 HASHES = 'use "std/container/hash" hash\nfn main() {\n' + ''.join(
     f'  if hash.hash_bytes({seed}, "{escaped_bytes(key)}") != {hash_bytes(seed, key)} {{\n    #panic("hash {seed} {len(key)}")\n  }}\n'
     for seed in SEEDS for key in KEYS) + '}\n'
-APPEND = """use "std/mem" mem
-fn main() {
-  arena := mem.arena_alloc(0)
-  items: []u64
-  for i in 0..1000 {
-    _ = mem.append(arena, &items, #cast(u64, i))
-  }
-  first := &items[0]
-  mem.append_many(arena, &items, items[..3])
-  if #len(items) != 1003 || items[1001] != 1 || first != &items[0] {
-    #panic("append")
-  }
-  storage: [64 + mem.ArenaBufferOverhead]u8
-  fixed := mem.arena_from_buffer(storage[..])
-  small: []u32
-  for i in 0..16 {
-    _ = mem.append(fixed, &small, #cast(u32, i))
-  }
-  if #len(small) != 16 || small[15] != 15 {
-    #panic("fixed")
-  }
-  if #len(std_args()) > 0 {
-    _ = mem.push(u8, arena)
-    _ = mem.append(arena, &items, 5)
-  }
-}
-fn std_args() []u8 {
-  empty: []u8
-  return empty
-}
-"""
 FAILURES = {
-    'not the newest allocation': 'use "std/mem" mem\nfn main() {\n  arena := mem.arena_alloc(0)\n  items: []u64\n  _ = mem.append(arena, &items, 1)\n  _ = mem.push(u8, arena)\n  _ = mem.append(arena, &items, 2)\n}\n',
-    'end of its arena block': 'use "std/mem" mem\nfn main() {\n  storage: [16 + mem.ArenaBufferOverhead]u8\n  arena := mem.arena_from_buffer(storage[..])\n  items: []u64\n  for i in 0..5 {\n    _ = mem.append(arena, &items, #cast(u64, i))\n  }\n}\n',
     'node is not an element': 'use "std/container/slot_map" slots\nstruct S { generation: u32 }\nfn main() {\n  a: [2]S\n  b: S\n  _ = slots.handle_of(a[..], &b)\n}\n',
 }
 with tempfile.TemporaryDirectory(prefix='dyn-containers-') as temporary:
     project = Path(temporary)
     source = project / 'main.dyn'
     output = project / ('program.exe' if os.name == 'nt' else 'program')
-    for program in (CONTAINERS, HASHES, APPEND):
+    for program in (CONTAINERS, HASHES):
         source.write_text(program)
         for release in (False, True):
             subprocess.run([DYN, 'build', str(project), '--no-cache', '--quiet', '--output', str(output),
@@ -95,4 +62,4 @@ with tempfile.TemporaryDirectory(prefix='dyn-containers-') as temporary:
     source.write_text('use "std/container/list" list\nstruct N { value: i32 }\nfn main() {\n  first: *N\n  n: N\n  list.sll_stack_push(&first, &n)\n}\n')
     result = subprocess.run([DYN, 'check', str(project), '--no-cache'], capture_output=True, text=True, timeout=30)
     assert result.returncode == 1 and "N has no field 'next'" in result.stderr, result.stderr
-print('PASS containers: intrusive list, hash, chunk and slot_map; mem.append; SipHash-1-3 matches reference (debug/release)')
+print('PASS containers: intrusive list, hash, chunk and slot_map; SipHash-1-3 matches reference (debug/release)')

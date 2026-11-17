@@ -106,11 +106,11 @@ proofs. IDs are snapshot-local. Invalid programs produce no semantic index.
 count and saturating dropped count. `record`, `recorded` and `clear` allocate nothing.
 Events carry kind, numeric resource/value and optional borrowed source/line labels.
 
-`mem.Arena` exposes peak usage and allocation-failure counts in `arena_snapshot`.
-Attach `arena.events` and set `arena.event_resource` to record allocation, failure,
-reclamation and release events. The log and labels must outlive recording and reside
-outside memory reclaimed by that arena. There is no implicit synchronization or
+File capabilities record denials and opened resources into a log attached
+through `events`. Application code records its own events with `record`. The log
+and labels must outlive recording. There is no implicit synchronization or
 whole-program tracing. Use one log per worker or synchronize externally.
+`mem.arena_used` measures arena use at any point.
 
 `slot_map.resolve` returns the live slot or the caller's read-only stub, so a
 stale handle reads as empty data instead of failing.

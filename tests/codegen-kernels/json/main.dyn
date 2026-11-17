@@ -8,7 +8,7 @@ use "std/mem"
 fn main() {
   arena := mem.arena_alloc(512 * mem.MiB)
   defer mem.arena_release(arena)
-  storage := mem.push_bytes_uninit(arena, 2 * mem.MiB)
+  storage := mem.push_bytes(arena, 2 * mem.MiB)
   out_status: fail.Status
   out := fmt.buffer(&out_status, storage)
   fmt.write(&out, "[")

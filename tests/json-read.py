@@ -36,16 +36,16 @@ fn parse(arena: *mem.Arena, source: []const u8) Parsed {
  root := json.parse(arena, &status, source)
  return Parsed{ root: root, offset: status.failure.offset, failure: status.failure }
 }'''
-lines=['use "std/fail"\nuse "std/encoding/json/read" json','use "std/encoding/json" mutable','use "std/mem" mem','use "std/io"','fn require(ok:bool,label:[]const u8) { if !ok { #panic(label) } }',HELPER,MUTABLE,'fn main() {','require(#sizeof(json.Value)==16,"compact value size")','arena:=mem.arena_alloc(mem.MiB)\ndefer mem.arena_release(arena)','_=mem.push_bytes_uninit(arena,3)\nprefix_mark:=mem.arena_mark(arena)']
+lines=['use "std/fail"\nuse "std/encoding/json/read" json','use "std/encoding/json" mutable','use "std/mem" mem','use "std/io"','fn require(ok:bool,label:[]const u8) { if !ok { #panic(label) } }','fn blocks(arena:*const mem.Arena) usize {\ncount:usize=0\nblock:=arena.current\nfor block!=nil {\ncount+=1\nblock=block.previous\n}\nreturn count\n}',HELPER,MUTABLE,'fn main() {','require(#sizeof(json.Value)==16,"compact value size")','arena:=mem.arena_alloc(mem.MiB)\ndefer mem.arena_release(arena)','_=mem.push_bytes(arena,3)\nprefix_mark:=mem.arena_mark(arena)']
 for i,v in enumerate(values):
- raw=json.dumps(v,ensure_ascii=i%2==0,separators=(',',':')).encode();lines+=['if true {',f'original:={quote(raw)}','input:=mem.push_bytes_uninit(arena,#len(original))\n_=mem.copy(input,original)','mark:=mem.arena_mark(arena)','result:=parse(arena,input)','require(result.failure.kind==fail.Kind.Ok,"valid metadata")','for i in 0..#len(input) { input[i]=255 }']
+ raw=json.dumps(v,ensure_ascii=i%2==0,separators=(',',':')).encode();lines+=['if true {',f'original:={quote(raw)}','input:=mem.push_bytes(arena,#len(original))\n_=mem.copy(input,original)','mark:=mem.arena_mark(arena)','result:=parse(arena,input)','require(result.failure.kind==fail.Kind.Ok,"valid metadata")','for i in 0..#len(input) { input[i]=255 }']
  # errors is not re-exported as Kind; use zero enum via cast.
  lines+=check('result.root',v,'value '+str(i));lines+=['mem.arena_rewind(arena,mark)','mem.arena_rewind(arena,prefix_mark)','}']
 invalid=[b'',b' ',b'01',b'1.',b'1e',b'-',b'true false',b'"x" trailing',b'{"a":}',b'[1,]',b'{"a" 1}',b'"unterminated',b'"bad\\q"',b'"bad\\"',b'"\\u12"',b'"\\u00xz"',b'"\\ud800"',b'"\\udc00"',b'"\\ud800\\u0041"',b'"\xc0\xaf"',b'"\xed\xa0\x80"',b'"\xf4\x90\x80\x80"',b'"\xe2\x82"',b'"\x80"',b'['*257+b'0'+b']'*257,b'1e9999']+[b'"a'+bytes([x])+b'b"' for x in range(32)]
 invalid += [b'['*n for n in range(1,258)] + [b'{\"x\":'*n for n in range(1,65)]
 for i,raw in enumerate(invalid):lines+=['if true {',f'result:=parse(arena,{quote(raw)})','require(result.failure.kind!=fail.Kind.Ok && json.kind(result.root)==json.KindMissing && mem.arena_mark(arena)==prefix_mark,"invalid rollback")','}']
 large=json.dumps(list(range(1000)),separators=(',',':')).encode();deep=b'['*256+b'0'+b']'*256
-lines += ['if true {',f'result:=parse(arena,{quote(large)})','require(result.failure.kind==fail.Kind.Ok && json.length(result.root)==1000,"growth array")','for i in 0..1000 { require(json.as_f64(json.at(result.root,i))==#cast(f64,i),"contiguous growth") }','require(result.root.bits==1001,"subtree span")','mem.arena_rewind(arena,prefix_mark)','}',f'require(parse(arena,{quote(deep)}).failure.kind==fail.Kind.Ok,"depth 256")','mem.arena_rewind(arena,prefix_mark)','if true {','backing:[512]u8\nfixed:=mem.arena_from_buffer(backing[..])','result:=parse(fixed,"{\\"x\\":1}")','require(result.failure.kind==fail.Kind.Ok && json.as_f64(json.get(result.root,"x"))==1.0,"fixed buffer")','}', 'if true {','storage:[1024]u8\nfixed:=mem.arena_from_buffer(storage[..])','input:=fixed.data[mem.ArenaHeader+10..mem.ArenaHeader+20]\n_=mem.copy(input,"[1,2,3,4] ")','result:=parse(fixed,input)','require(result.failure.kind!=fail.Kind.Ok && mem.arena_mark(fixed)==mem.arena_start(fixed) && mem.equal(input,"[1,2,3,4] "),"alias rejection")','}', 'require(json.kind(nil)==json.KindMissing && json.kind(json.get(nil,"x"))==json.KindMissing,"nil navigation")','}']
+lines += ['if true {',f'result:=parse(arena,{quote(large)})','require(result.failure.kind==fail.Kind.Ok && json.length(result.root)==1000,"growth array")','for i in 0..1000 { require(json.as_f64(json.at(result.root,i))==#cast(f64,i),"contiguous growth") }','require(result.root.bits==1001,"subtree span")','mem.arena_rewind(arena,prefix_mark)','}',f'require(parse(arena,{quote(deep)}).failure.kind==fail.Kind.Ok,"depth 256")','mem.arena_rewind(arena,prefix_mark)','if true {','backing:[512]u8\nfixed:=mem.arena_from_buffer(backing[..])','result:=parse(fixed,"{\\"x\\":1}")','require(result.failure.kind==fail.Kind.Ok && json.as_f64(json.get(result.root,"x"))==1.0,"fixed buffer")','}', 'if true {','storage:[1024]u8\nfixed:=mem.arena_from_buffer(storage[..])','input:=fixed.data[mem.ArenaHeader+10..mem.ArenaHeader+20]\n_=mem.copy(input,"[1,2,3,4] ")','result:=parse(fixed,input)','require(result.failure.kind!=fail.Kind.Ok && mem.arena_mark(fixed)==mem.ArenaHeader && mem.equal(input,"[1,2,3,4] "),"alias rejection")','}', 'require(json.kind(nil)==json.KindMissing && json.kind(json.get(nil,"x"))==json.KindMissing,"nil navigation")','}']
 edge_source = r'''
 if true {
   value:=parse(arena,"-0")
@@ -86,7 +86,7 @@ if true {
   pad:=(16-(#cast(usize,&backing[0])&15))&15
   fixed:=mem.arena_from_buffer(backing[pad..pad+mem.ArenaHeader+80])
   result:=parse(fixed,"\"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789\"")
-  require(result.failure.kind==fail.Kind.Ok && mem.arena_used(fixed)==80 && fixed.peak_used==80,"scalar exact capacity")
+  require(result.failure.kind==fail.Kind.Ok && mem.arena_used(fixed)==80,"scalar exact capacity")
 }
 '''
 # Keys and scalar values remain permitted at the maximum container depth.
@@ -108,23 +108,23 @@ chain_source = [
  'for bounded in [false,true] {',
  'for preforced in [false,true] {',
  'chain: *mem.Arena = nil',
- 'if bounded { chain=mem.arena_alloc_bounded(#cast(usize,block_size),256*mem.KiB) } else { chain=mem.arena_alloc(#cast(usize,block_size)) }',
+ 'blocks_from:=mem.pages(0)\nif bounded { blocks_from.limit=256*mem.KiB }\nblocks_from.block_size=#cast(usize,block_size)\nchain=mem.arena_from_source(blocks_from)',
  'prefix:=mem.push_array(u8,chain,8)',
  'mem.fill(prefix,91)',
- 'if preforced { _=mem.arena_push(chain,512,1)\n_=mem.arena_push(chain,8,1)\nrequire(mem.arena_snapshot(chain).blocks>1,"pre-forced chain") }',
+ 'if preforced { _=mem.push_bytes(chain,512)\n_=mem.push_bytes(chain,8)\nrequire(blocks(chain)>1,"pre-forced chain") }',
  'saved_mark:=mem.arena_mark(chain)',
- 'saved:=mem.arena_snapshot(chain)',
+ 'saved_blocks:=blocks(chain)\nsaved_backing:=chain.backing',
  f'large:=parse(chain,{quote(large)})',
  'require(large.failure.kind==fail.Kind.Ok && json.length(large.root)==1000 && large.root.bits==1001,"chained large tape")',
  'for i in 0..1000 { require(json.as_u64(json.at(large.root,i))==#cast(u64,i),"chained tape relocation values") }',
- 'require(mem.arena_snapshot(chain).blocks>saved.blocks,"parser added blocks")',
+ 'require(blocks(chain)>saved_blocks,"parser added blocks")',
  'retained:=mem.arena_mark(chain)',
  'tail:=chain.current.data[chain.current.offset..chain.current.offset+7]',
  '_=mem.copy(tail,"[0,1,2]")',
  'overlap:=parse(chain,tail)',
  'require(overlap.failure.kind!=fail.Kind.Ok && overlap.failure.kind == fail.Kind.InvalidInput && mem.arena_mark(chain)==retained && mem.equal(tail,"[0,1,2]"),"chained overlap preflight")',
  'mem.arena_rewind(chain,saved_mark)',
- 'require(mem.arena_mark(chain)==saved_mark && mem.arena_snapshot(chain).blocks==saved.blocks && mem.arena_snapshot(chain).capacity==saved.capacity,"chained success rewind")',
+ 'require(mem.arena_mark(chain)==saved_mark && blocks(chain)==saved_blocks && chain.backing==saved_backing,"chained success rewind")',
  f'input_data: [{len(chain_raw)}]u8 = [{",".join(map(str,chain_raw))}]',
  'owned:=parse(chain,input_data[..])',
  'require(owned.failure.kind==fail.Kind.Ok,"chained object document")',
@@ -135,7 +135,7 @@ chain_source = [
  *check('owned.root', chain_objects, 'chained object/string ownership'),
  'mem.arena_rewind(chain,saved_mark)',
  f'bad:=parse(chain,{quote(b"["*257+b"0"+b"]"*257)})',
- 'require(bad.failure.kind!=fail.Kind.Ok && json.is_missing(bad.root) && mem.arena_mark(chain)==saved_mark && mem.arena_snapshot(chain).blocks==saved.blocks && mem.arena_snapshot(chain).capacity==saved.capacity,"chained failure rollback")',
+ 'require(bad.failure.kind!=fail.Kind.Ok && json.is_missing(bad.root) && mem.arena_mark(chain)==saved_mark && blocks(chain)==saved_blocks && chain.backing==saved_backing,"chained failure rollback")',
  'for byte in prefix { require(byte==91,"chained prefix canary") }',
  'mem.arena_release(chain)',
  'chain=nil',
@@ -174,6 +174,15 @@ fn parse(arena: *mem.Arena, source: []const u8) Parsed {
 }
 pub fn json_read_selected_kind(v:*const json.Value) u8 { return json.kind(v) }
 fn require(ok:bool) { if !ok { #panic("JSON read target") } }
+fn blocks(arena:*const mem.Arena) usize {
+  count:usize=0
+  block:=arena.current
+  for block!=nil {
+    count+=1
+    block=block.previous
+  }
+  return count
+}
 fn main() {
  backing:[8192]u8
  arena:=mem.arena_from_buffer(backing[..])
@@ -201,24 +210,24 @@ fn main() {
 }
 '''
  cross_chain = '\n'.join([
-  'chain:=mem.arena_alloc_bounded(512,128*mem.KiB)',
+  'blocks_from:=mem.pages(128*mem.KiB)\nblocks_from.block_size=512\nchain:=mem.arena_from_source(blocks_from)',
   'prefix:=mem.push_array(u8,chain,8)',
   'mem.fill(prefix,91)',
-  '_=mem.arena_push(chain,512,1)',
-  '_=mem.arena_push(chain,8,1)',
+  '_=mem.push_bytes(chain,512)',
+  '_=mem.push_bytes(chain,8)',
   'before:=mem.arena_mark(chain)',
-  'before_blocks:=mem.arena_snapshot(chain).blocks',
+  'before_blocks:=blocks(chain)',
   f'large:=parse(chain,{quote(large)})',
   'require(large.failure.kind==fail.Kind.Ok && json.length(large.root)==1000 && large.root.bits==1001)',
   'for i in 0..1000 { require(json.as_u64(json.at(large.root,i))==#cast(u64,i)) }',
   'mem.arena_rewind(chain,before)',
-  'require(mem.arena_mark(chain)==before && mem.arena_snapshot(chain).blocks==before_blocks)',
+  'require(mem.arena_mark(chain)==before && blocks(chain)==before_blocks)',
   'owned:=parse(chain,"{\\"key\\":[\\"a\\\\u0000b\\",{\\"last\\":42}]}")',
   'require(owned.failure.kind==fail.Kind.Ok && json.as_u64(json.get(json.at(json.get(owned.root,"key"),1),"last"))==42)',
   'require(mem.equal(json.as_text(json.at(json.get(owned.root,"key"),0)),"a\\x00b"))',
   'mem.arena_rewind(chain,before)',
   'failed:=parse(chain,"[1,]")',
-  'require(failed.failure.kind!=fail.Kind.Ok && mem.arena_mark(chain)==before && mem.arena_snapshot(chain).blocks==before_blocks)',
+  'require(failed.failure.kind!=fail.Kind.Ok && mem.arena_mark(chain)==before && blocks(chain)==before_blocks)',
   'for byte in prefix { require(byte==91) }',
   'mem.arena_release(chain)',
   'chain=nil',

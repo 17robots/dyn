@@ -21,7 +21,7 @@ caller-buffer functions and their error reporting see
 | Layer | Responsibility |
 | --- | --- |
 | Compiler | Type parameters for typed pushes, `#sizeof`/`#alignof`, narrow escape and arena-copy checks |
-| Std | Arenas, typed pushes, `append`, mark/rewind/reset/release, scratch scopes; intrusive free lists in `std/container/list` |
+| Std | Arenas, typed pushes, mark/rewind/reset/release; growing arrays in `std/container/array`, intrusive free lists in `std/container/list` |
 | Application | Lifetime grouping, budgets, synchronization, cleanup order, recovery policy |
 
 The compiler's checks are deliberately narrow. There is no borrow checker,
@@ -34,15 +34,27 @@ An arena is a `*mem.Arena`: its header lives in its first backing block.
 Create it explicitly and pass the pointer directly to arena functions. A nil
 pointer is an inactive owner, not a lazily allocating arena.
 
+The whole API:
+
+| Function | What it does |
+| --- | --- |
+| `arena_alloc(block_size)` | An arena on OS pages that adds blocks as needed |
+| `arena_from_buffer(storage)` | An arena in caller storage that never grows |
+| `arena_from_source(source)` | An arena whose blocks come from a `Source` |
+| `push(T, arena)` | One zeroed `T` |
+| `push_array(T, arena, count)` | `count` zeroed `T`s |
+| `push_bytes(arena, count)` | `count` uninitialized bytes, right at the cursor |
+| `arena_mark` / `arena_rewind` | Take back everything pushed after a mark |
+| `arena_reset` | Take back everything |
+| `arena_release` | Return the blocks; the arena is gone |
+| `arena_used` | Bytes pushed, padding included, headers excluded |
+| `arena_room` | The largest push that cannot run out |
+
 - `mem.arena_alloc(block_size)` reserves the first block and adds blocks when
   needed. Earlier allocations do not move. `arena_alloc(0)` selects the target
   default: 64 GiB per block on 64-bit hosts, 4 MiB on wasm32, and 1 MiB on
   bare-metal targets. Host pages generally cost physical memory when touched;
   wasm32 obtains backed linear memory immediately.
-- `mem.arena_alloc_bounded(block_size, limit)` caps total backing bytes across
-  all blocks, including their headers. A zero limit means no cap. A nonzero
-  limit smaller than `mem.ArenaHeader` panics. The last block may be smaller
-  than the preferred block size to fit the remaining budget.
 - Each block reserves `mem.ArenaHeader` (144 bytes) for its header.
   `mem.arena_from_buffer(storage)` also consumes up to 15 initial bytes to
   align the header. To guarantee a given payload capacity with arbitrarily
@@ -50,10 +62,8 @@ pointer is an inactive owner, not a lazily allocating arena.
   `mem.ArenaBufferOverhead` (159 bytes). Smaller buffers that cannot hold the
   aligned header panic, including empty buffers.
 - Buffer arenas borrow their storage and never add blocks or fall back to OS
-  allocation. Reset and rewind preserve this fixed-buffer mode. After release,
-  call `arena_from_buffer` again before reusing the buffer as an arena.
-- `mem.arena_sub(parent, capacity)` carves out a fixed child; `capacity`
-  includes its header, so it is not the child's payload capacity.
+  allocation. After release, call `arena_from_buffer` again before reusing
+  the buffer as an arena.
 - Marks bracket temporary allocations. Rewind releases blocks added after the
   mark and reclaims later allocations in the remaining block. Reset rewinds
   to the empty first block.
@@ -61,67 +71,63 @@ pointer is an inactive owner, not a lazily allocating arena.
   the arena pointer and all its allocations. Release an owner once; a second
   release through a stale owned pointer is invalid. Releasing nil is harmless.
 
+### Block sources
+
+A `mem.Source` says where an arena's blocks come from, how big each one is
+(`block_size`, zero for the default) and how many backing bytes all of them
+may use (`limit`, headers included, zero for no cap):
+
+- `mem.pages(limit)` takes OS pages. `arena_alloc` is
+  `arena_from_source(pages(0))` with a block size.
+- `mem.within(parent, limit)` pushes each block onto another arena, so a
+  child arena lives inside its parent and goes away when the parent rewinds
+  past it.
+- Your own source sets `take` (return a 16-byte aligned block of at least the
+  asked size, or an empty slice) and, optionally, `give` (take one back on
+  rewind or release). A static region on a microcontroller or a pool of fixed
+  blocks fits here.
+
 ```dyn
 root := mem.arena_alloc(mem.GiB)
 defer mem.arena_release(root)
-permanent := mem.arena_sub(root, 512 * mem.MiB)
-frame := mem.arena_sub(root, 256 * mem.MiB)
-scratch := mem.arena_sub(root, 256 * mem.MiB)
+permanent := mem.arena_from_source(mem.within(root, 512 * mem.MiB))
+frame := mem.arena_from_source(mem.within(root, 256 * mem.MiB))
+scratch := mem.arena_from_source(mem.within(root, 256 * mem.MiB))
 ```
 
 Keep application state in `permanent`, reset `frame` once per loop or request,
 and rewind `scratch` around temporary work.
 
-### Fatal and fallible pushes
+### Running out
 
-The ordinary arena pushes either succeed or stop the program:
+Every push either succeeds or stops the program, like an index out of range.
+A fixed buffer that is full, a limit that is reached, a source with no more
+memory and a size that overflows all panic with a message that says which.
+There is no fallible push to check: size each arena for its work.
 
-- `mem.push(T, arena)` and `mem.push_array(T, arena, count)` return zeroed,
-  typed memory; `push_array` checks the size multiplication.
-- `mem.push_bytes_uninit(arena, size)` returns bytes without zeroing them.
-- `mem.arena_push`, `arena_push_uninit` and `arena_push_array` are the untyped
-  forms and return `*u8`.
+Bounds checks, invalid rewinds and broken layout preconditions panic too.
 
-Owned arenas add backing blocks when a push cannot fit the newest block;
-fixed-buffer arenas cannot grow. Owned pushes can fail because of a backing
-limit or a failed reservation, and Windows commitment failures panic. Ordinary
-push APIs treat exhaustion as fatal. Fallible forms let application code report
-exhaustion: `mem.try_push(T, arena)` returns nil and
-`mem.try_push_array(T, arena, count)` returns an empty slice on exhaustion or
-size overflow. The untyped `mem.arena_try_push` returns an `Allocation` with
-an error kind. Failure preserves existing allocations and payload bytes, but
-increments the failure counter and may record an observation event.
+### Bounding work
 
-| Recoverable | Fatal |
-| --- | --- |
-| `try_push` / `try_push_array` / `arena_try_push` | ordinary arena pushes |
-
-Bounds checks, invalid frees, invalid rewinds and broken layout preconditions
-panic everywhere.
-
-### Bounding work that can fail
-
-Std parsers and builders (`strings`, `encoding/json`, `ini` and others) use the fatal pushes. To reject one oversized request and keep running,
-give that work its own budget instead of a fallible API:
+To reject one oversized request and keep running, check its size before
+starting, then give the work an arena whose limit fits it:
 
 ```dyn
 fn handle(server: *mem.Arena, request: []const u8) bool {
-  if mem.arena_remaining(server) < RequestBudget {
+  if #len(request) > MaxRequest {
     return false // reject before starting
   }
   mark := mem.arena_mark(server)
   defer mem.arena_rewind(server, mark)
-  scratch := mem.arena_sub(server, RequestBudget)
+  scratch := mem.arena_from_source(mem.within(server, RequestBudget))
   // ... parse and respond using scratch ...
   return true
 }
 ```
 
-Size `RequestBudget` from the largest input you accept, checked up front.
-The child header consumes part of `RequestBudget`. Inside its payload budget,
-`try_push` lets your own code report exhaustion. This precheck deliberately
-requires room in the current block; it does not measure all backing that an
-owned arena could acquire.
+Size `RequestBudget` from the largest input you accept. Std parsers and
+encoders size their output from the input, so a checked input size bounds
+their memory.
 
 ### Partial output on failure
 
@@ -130,18 +136,19 @@ rewind on failure; others retain partial output. If a caller needs transactional
 behavior regardless of the callee, take `mem.arena_mark` before the call and
 rewind on failure. Rewinding also releases later backing blocks.
 
-### Appending contiguous data
+### Growing contiguous data
 
-`mem.append` and `mem.append_many` extend a top allocation in place when
-possible. Otherwise they allocate a larger contiguous slice and copy the old
-elements. The slice variable is updated; pointers into its previous storage do
-not follow it. Earlier independent arena allocations remain at their addresses.
+`std/container/array` grows a typed array on an arena: when it fills up it
+moves to storage twice the size, and the old storage stays in the arena until
+a rewind or reset. `std/bytes/builder` does the same for bytes, except that a
+builder whose storage is the arena's newest push grows in place. Pointers into
+the old storage do not follow a move. For elements that must never move, use
+a chunk list (`std/container/chunk`).
 
 ### Other lifetime patterns
 
-- `mem.Frames` holds two arena pointers that alternate each frame, for data
-  that must survive exactly one frame. Use `frames_create`, `frame_current`,
-  `frame_previous`, `frame_advance` and `frames_release`.
+- Data that must survive exactly one frame lives in one of two arenas that
+  swap each frame: reset the older one and make it current.
 - Individual objects are reused through an intrusive free list: the struct
   carries `free_next`, and `list.free_push` / `list.free_pop` move nodes on and
   off it. Freed nodes stay in the arena until it is reset.
@@ -196,11 +203,9 @@ A slice or pointer borrows storage; copying it never extends the storage's life.
 
 A function that needs temporary memory plus output that outlives the call takes
 two arenas: `output` for the result and `scratch` for the work. The scratch
-arena must not share backing with the output. `mem.scratch_begin` picks a
-scratch arena that does not conflict with a given one, and rejects both the same
-arena and any overlapping backing. End scratch scopes in reverse order, and
-never return scratch data. When the output size can be bounded, take a caller
-slice instead.
+arena must not share backing with the output. Rewind scratch to a mark taken
+on entry, and never return scratch data. When the output size can be bounded,
+take a caller slice instead.
 
 A numeric mark is not a generation-checked token: do not reuse marks across
 reset or release, or with another arena.
@@ -225,21 +230,14 @@ callback contexts, and join threads before reclaiming their stacks.
 
 ## Inspecting arenas
 
-`mem.arena_snapshot(arena)` returns capacity, used and remaining bytes,
-ownership, peak usage and the failed-allocation count as a plain value that
-survives reset and release. Peak and failure counters persist across reset and
-disappear with the released header. Capacity, used bytes and snapshots walk
-the block chain; remaining bytes describe only the newest block, not a
-growable arena's total potential budget.
+`mem.arena_used(arena)` counts the bytes pushed across every block, padding
+included and headers excluded. To track a peak, read it where the work ends,
+before the reset.
 
 Setting `arena.poison_on_rewind = true` fills reclaimed bytes in the retained
 block with `0xDD` on rewind and reset. Later blocks are released. Poisoning
 exposes some stale reads at the cost of touching those bytes; it does not make
 stale pointers safe.
-
-Attach a caller-owned `std/observe.Log` through `arena.events` to record
-allocations, failures and reclamation. The log allocates nothing and counts
-dropped events; keep its storage outside the observed arena.
 
 ## Cleanup failures
 
@@ -260,12 +258,3 @@ On `wasm32-browser` and `wasm32-wasi`, owned arenas get pages through
 `memory.grow`. Page splitting, reuse and coalescing live in `std/mem`. Released
 memory is reused within the instance but linear memory never shrinks. Any growth
 can detach JavaScript typed-array views, so rebuild them after allocating.
-
-### Fallible arena creation
-
-`mem.arena_try_alloc(block_size)` and `arena_try_alloc_bounded(block_size, limit)`
-return `ArenaAllocation` with `arena: *Arena`, `ok`, an error kind and system code.
-Failure returns nil and owns no backing; zero block size selects the target
-default. `arena_try_push_uninit` provides the ordinary fallible push contract
-without initializing returned bytes. Commitment failures return `System` from
-fallible pushes, and `arena_try_extend` returns false without advancing the arena.

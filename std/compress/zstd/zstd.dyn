@@ -30,13 +30,13 @@ pub fn compress(arena: *memory.Arena, status: *fail.Status, source: []const u8, 
   if status.failed { return empty }
   mark := memory.arena_mark(arena)
   capacity := compress_bound(#len(source))
-  allocation := memory.arena_push_uninit(arena, capacity, 1)
-  written := provider.compress(status, #slice(allocation, capacity), source, level)
+  allocation := memory.push_bytes(arena, capacity)
+  written := provider.compress(status, allocation, source, level)
   if status.failed {
     memory.arena_rewind(arena, mark)
     return empty
   }
-  return #slice(allocation, written)
+  return allocation[..written]
 }
 // One frame whose header records its size, into arena. A frame without a
 // recorded size fails with Unsupported: use the streaming decoder.
@@ -55,13 +55,13 @@ pub fn decompress(arena: *memory.Arena, status: *fail.Status, source: []const u8
     return empty
   }
   capacity := #cast(usize, size.size)
-  allocation := memory.arena_push_uninit(arena, capacity, 1)
-  written := provider.decompress(status, #slice(allocation, capacity), source)
+  allocation := memory.push_bytes(arena, capacity)
+  written := provider.decompress(status, allocation, source)
   if status.failed {
     memory.arena_rewind(arena, mark)
     return empty
   }
-  return #slice(allocation, written)
+  return allocation[..written]
 }
 pub fn frame_size(status: *fail.Status, source: []const u8) FrameSize {
   size := provider.frame_size(status, source)

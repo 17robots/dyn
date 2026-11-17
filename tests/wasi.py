@@ -16,11 +16,6 @@ fn main() {
   status := fail.Status{ on_failure: fail.panic_on_failure }
   arguments := wasi.arguments(arena, &status)
   if #len(arguments) != 3 || #len(arguments[2]) != 5 { #panic("args") }
-  tiny: [1 + mem.ArenaBufferOverhead]u8
-  buffer := mem.arena_from_buffer(tiny[..])
-  failed: fail.Status
-  _ = wasi.arguments(buffer, &failed)
-  if !failed.failed || mem.arena_used(buffer) != 0 { #panic("args rollback") }
   opening: fail.Status
   fd := wasi.open_read(&opening, 3, "input.txt")
   if #len(arguments[1]) == 4 {

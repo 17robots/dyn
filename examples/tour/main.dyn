@@ -300,11 +300,9 @@ fn memory() {
   p.name = "bob"
   scores := mem.push_array(u32, arena, 8)
   scores[0] = 99
-  // #slice makes a slice from a pointer and a count you vouch for.
-  raw := mem.arena_push(arena, 4, 1)
-  bytes := #slice(#cast(*u8, raw), 4)
+  bytes := mem.push_bytes(arena, 4)   // uninitialized: write before reading
   bytes[3] = 7
-  // A pointer range indexes like a slice.
+  // #slice makes a slice from a pointer and a count you vouch for.
   run := #slice(&scores[0], 2)
   run[1] = 1
   io.println("memory {} {} {} {} {}", p.name, p.health, scores[0], scores[1], bytes[3])

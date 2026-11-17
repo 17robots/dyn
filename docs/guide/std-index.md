@@ -1379,58 +1379,26 @@ module's full declarations and comments.
 
 ## std/mem
 
-- `enum ErrorKind { None, InvalidAlignment, Capacity, InvalidState, Overflow, System }`
-- `struct Allocation { error: ErrorKind, code: isize, memory: *u8, size: usize, ok: bool, }`
-- `struct Arena { // First block only: the newest block, where pushes go. current: *Arena, // The block before this one; nil for the first block. previous: *Arena, // This block's bytes, header included. data: []u8, // Position of data[0]. base: usize, // Bytes used in this block, header included. offset: usize, // Bytes of this block ready to use: what the OS has committed of a // mapping (only Windows commits on demand), or a whole caller buffer. committed: usize, // This block is an OS mapping that release returns. owns_memory: bool, // First block only. Never add blocks: set for arena_from_buffer. fixed_buffer: bool, // First block only: preferred size of each new block. block_size: usize, // First block only: cap on backing bytes across all blocks; zero means none. limit: usize, // First block only: backing bytes across all blocks. backing: usize, // First block only. Opt-in diagnostic scribble; does not make expired pointers safe. poison_on_rewind: bool, peak_used: usize, allocation_failures: usize, // First block only. Optional borrowed event sink; keep it alive until release. events: *observe.Log, event_resource: u64, }`: An arena is a chain of blocks.
+- `struct Arena { // First block only: the newest block, where pushes go. current: *Arena, // The block before this one; nil for the first block. previous: *Arena, // This block's bytes, header included. data: []u8, // Position of data[0]. base: usize, // Bytes used in this block, header included. offset: usize, // Bytes of this block ready to use: what the OS has committed of a // mapping (only Windows commits on demand), or a whole caller buffer. committed: usize, // This block is an OS mapping that release returns. owns_memory: bool, // First block only. Never add blocks: set for arena_from_buffer. fixed_buffer: bool, // First block only: where new blocks come from. source: Source, // First block only: backing bytes across all blocks. backing: usize, // First block only. Opt-in diagnostic scribble; does not make expired pointers safe. poison_on_rewind: bool, }`: An arena is a chain of blocks.
+- `struct Source { context: rawptr, take: fn(rawptr, usize) []u8, give: fn(rawptr, []u8), // Preferred size of each block; zero picks the default for the source. block_size: usize, // Cap on backing bytes across all blocks, headers included; zero means none. limit: usize, }`: Where an arena's blocks come from.
 - `const ArenaHeader: usize = 144`: Bytes the arena header takes at the start of each block, and of every arena_from_buffer buffer.
 - `const ArenaBufferOverhead: usize = ArenaHeader + 15`: Maximum bytes consumed by the header and aligning arbitrary caller storage.
+- `fn pages(limit: usize) Source`: OS pages for an arena, at most limit bytes in all (zero: no cap).
+- `fn within(parent: *Arena, limit: usize) Source`: Blocks carved from parent, at most limit bytes in all (zero: no cap).
 - `fn arena_from_buffer(backing: []u8) *Arena`: Places an arena in caller storage.
-- `fn arena_alloc(block_size: usize) *Arena`: Creates an owning arena.
-- `struct ArenaAllocation { arena: *Arena, error: ErrorKind, code: isize, ok: bool }`
-- `fn arena_try_alloc(block_size: usize) ArenaAllocation`: Like arena_alloc, returning an absent handle on reservation failure.
-- `fn arena_alloc_bounded(block_size: usize, limit: usize) *Arena`: Like arena_alloc, with a cap on backing bytes across all blocks, headers included.
-- `fn arena_try_alloc_bounded(block_size: usize, limit: usize) ArenaAllocation`: Fallible bounded construction.
-- `fn arena_release(arena: *Arena)`: Returns owned blocks to the OS.
-- `fn arena_capacity(arena: *const Arena) usize`: Bytes the arena can hold without adding a block: everything in its blocks except headers.
+- `fn arena_alloc(block_size: usize) *Arena`: An arena on OS pages.
+- `fn arena_from_source(source: Source) *Arena`: An arena whose blocks come from source.
+- `fn arena_release(arena: *Arena)`: Returns owned blocks to where they came from.
 - `fn arena_used(arena: *const Arena) usize`: Bytes pushed, padding included, headers excluded.
-- `fn arena_remaining(arena: *const Arena) usize`: Bytes left in the newest block.
-- `fn arena_overlaps_unallocated(arena: *const Arena, source: []const u8) bool`: Reports whether source borrows unused backing in any block.
-- `fn arena_mark(arena: *const Arena) usize`
-- `struct ArenaSnapshot { capacity: usize, used: usize, remaining: usize, blocks: usize, owns_memory: bool, poison_on_rewind: bool, peak_used: usize, allocation_failures: usize, }`
-- `fn arena_snapshot(arena: *const Arena) ArenaSnapshot`: Allocation-free value snapshot.
-- `fn arena_reset(arena: *Arena)`
-- `fn arena_start(arena: *const Arena) usize`: The mark of an empty arena.
-- `fn arena_rewind(arena: *Arena, mark: usize)`: Frees the blocks added after mark and returns the newest remaining block to it.
-- `fn arena_try_extend(arena: *Arena, memory: *u8, size: usize, extra: usize) bool`: Grows the newest allocation in place: when the size bytes at memory end at the arena's current position, adds extra zeroed bytes after them ...
-- `fn arena_push(arena: *Arena, size: usize, alignment: usize) *u8`: Ownership: result borrows arena backing;
-- `fn arena_push_array(arena: *Arena, count: usize, element_size: usize, alignment: usize) *u8`: Ownership: result borrows arena backing;
+- `fn arena_room(arena: *const Arena) usize`: The largest push that cannot run out: what is left of a buffer arena, or of a limit, or #max(usize).
+- `fn arena_overlaps_unallocated(arena: *const Arena, source: []const u8) bool`: Whether source borrows unused backing in any block of arena: bytes that are not live allocations, which the next push may overwrite.
+- `fn arena_mark(arena: *const Arena) usize`: The arena's current position, for arena_rewind.
+- `fn arena_reset(arena: *Arena)`: Takes back everything pushed.
+- `fn arena_rewind(arena: *Arena, mark: usize)`: Takes back everything pushed after mark, and frees the blocks added since.
 - `fn advise_sparse(bytes: []u8)`: Tells the OS that bytes will be touched sparsely, such as one receive buffer per connection of which few are busy: on Linux the whole pages ...
-- `fn arena_push_uninit(arena: *Arena, size: usize, alignment: usize) *u8`: Like arena_push, without zeroing, for bytes that are overwritten right away.
-- `fn arena_try_push(arena: *Arena, size: usize, alignment: usize) Allocation`: The one fallible push, for code with a strict budget.
-- `fn arena_try_push_uninit(arena: *Arena, size: usize, alignment: usize) Allocation`: Fallible allocation without initializing the returned bytes.
 - `fn push(T: type, arena: *Arena) *T`: Pushes one fresh T: zeroed, then T's field defaults.
 - `fn push_array(T: type, arena: *Arena, count: usize) []T`: Pushes count zeroed elements.
-- `fn push_array_init(T: type, arena: *Arena, count: usize) []T`: Pushes count elements, each zeroed and then given T's field defaults.
-- `fn try_push(T: type, arena: *Arena) *T`: Pushes one fresh T, zeroed and then given T's field defaults, or returns nil when the arena is exhausted.
-- `fn try_push_array(T: type, arena: *Arena, count: usize) []T`: Pushes count zeroed elements, or returns an empty slice when the arena is exhausted or the size overflows.
-- `fn append(arena: *Arena, items: *[]$T, value: $T) *T`: Appends value to items, a slice that owns the rest of arena: its elements must be the newest allocation on arena, so give each growing list ...
-- `fn append_grow(arena: *Arena, items: *[]$T, value: $T) *T`: Like append and append_many, but when the block fills the list moves to a new block.
-- `fn append_many_grow(arena: *Arena, items: *[]$T, values: []const $T)`
-- `fn try_append(arena: *Arena, items: *[]$T, value: $T, stub: *const $T) *T`: Like append, but returns stub instead of panicking when the list cannot grow.
-- `fn append_many(arena: *Arena, items: *[]$T, values: []const $T)`: Appends every element of values to items, under the same rules as append.
-- `fn trial_size(arena: *const Arena, wanted: usize) usize`: For producers that cannot know their output size in advance: they push a trial block, write into it, and on overflow rewind and try a ...
-- `fn trial_next(arena: *const Arena, current: usize) usize`
-- `fn push_bytes_uninit(arena: *Arena, count: usize) []u8`: Pushes count uninitialized bytes, for buffers that are overwritten right away.
-- `fn arena_sub(parent: *Arena, capacity: usize) *Arena`: A fixed arena placed in capacity bytes pushed from parent, header included.
-- `struct Scratch { arena: *Arena, mark: usize, active: bool, }`
-- `fn scratch_begin(first: *Arena, second: *Arena, conflict: *const Arena) Scratch`: Ownership: borrows a non-conflicting arena and records its current mark.
-- `fn scratch_end(scratch: *Scratch)`
-- `struct Frames { arenas: [2]*Arena, index: usize, }`: Two arenas swapped by frame_advance.
-- `fn frames_create(capacity: usize) Frames`: Ownership: returns two owning arenas reserving capacity bytes each.
-- `fn frame_current(frames: *Frames) *Arena`
-- `fn frame_previous(frames: *Frames) *Arena`
-- `fn frame_advance(frames: *Frames)`: Invalidation: resets the arena that held the frame before the previous one.
-- `fn frames_release(frames: *Frames)`
+- `fn push_bytes(arena: *Arena, count: usize) []u8`: Pushes count uninitialized bytes, for buffers that are written before they are read.
 - `fn copy(destination: []$T, source: []const $T) usize`: Copies source into the start of destination and returns the element count.
 - `fn move(destination: []$T, source: []const $T) usize`: Like copy, but source and destination may overlap.
 - `fn zero(items: []$T)`: Sets every element to its zero value.
@@ -1442,8 +1410,6 @@ module's full declarations and comments.
 - `const KiB: usize = 1024`: Binary byte units.
 - `const MiB: usize = 1024 * KiB`
 - `const GiB: usize = 1024 * MiB`
-- `struct SizeResult { bytes: usize, valid: bool }`
-- `fn size_for(count: usize, element_size: usize) SizeResult`: Computes array payload size without panicking on overflow.
 
 ## std/mmio
 

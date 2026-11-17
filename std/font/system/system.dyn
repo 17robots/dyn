@@ -107,7 +107,7 @@ fn name(arena: *mem.Arena, names: []const u8, wanted: u16) []const u8 {
   if offset > #len(names) || length > #len(names) - offset { return "" }
   raw := names[offset..offset + length]
   if best_rank == 1 {
-    copied := mem.push_bytes_uninit(arena, length)
+    copied := mem.push_bytes(arena, length)
     for i in 0..length {
       if raw[i] >= 128 || raw[i] == 0 { return "" }
       copied[i] = raw[i]
@@ -115,7 +115,7 @@ fn name(arena: *mem.Arena, names: []const u8, wanted: u16) []const u8 {
     return copied
   }
   if length % 2 != 0 { return "" }
-  output := mem.push_bytes_uninit(arena, length / 2 * 3 + 4)
+  output := mem.push_bytes(arena, length / 2 * 3 + 4)
   used: usize = 0
   at: usize = 0
   for at + 1 < length {

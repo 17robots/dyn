@@ -36,7 +36,7 @@ fn main() {
  backing: [1024]u8
  mem.fill(backing[..], 165)
  arena := mem.arena_from_buffer(backing[..])
- prefix := mem.push_bytes_uninit(arena, 7)
+ prefix := mem.push_bytes(arena, 7)
  mem.fill(prefix, 77)
  key: [32]u8
  nonce: [12]u8
@@ -95,7 +95,7 @@ fn main() {
   mem.fill(overlap_backing[..], 42)
   local := mem.arena_from_buffer(overlap_backing[..])
   storage := local.data[mem.ArenaHeader..mem.ArenaHeader+128]
-  _ = mem.push_bytes_uninit(local, 7)
+  _ = mem.push_bytes(local, 7)
   p: []const u8 = "hello"
   ad: []const u8 = "aad"
   ke: []const u8 = "\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b\x0c\x0d\x0e\x0f\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1a\x1b\x1c\x1d\x1e\x1f"
@@ -114,7 +114,7 @@ fn main() {
   mem.fill(overlap_backing[..], 42)
   local := mem.arena_from_buffer(overlap_backing[..])
   storage := local.data[mem.ArenaHeader..mem.ArenaHeader+128]
-  _ = mem.push_bytes_uninit(local, 7)
+  _ = mem.push_bytes(local, 7)
   ci: []const u8 = "\xce\xa7\x40\x3d\x4d\x60\x6b\x6e\x07\x4e\xc5\xd3\xba\xf3\x9d\x18"
   ta: []const u8 = "\xd0\xd1\xc8\xa7\x99\x99\x6b\xf0\x26\x5b\x98\xb5\xd4\x8a\xb9\x19"
   ad: []const u8 = ""
@@ -357,7 +357,7 @@ with tempfile.TemporaryDirectory(prefix="dyn-crypto-results-") as temporary:
             source = ('use "std/mem" mem\nuse "std/fail"\nuse "std/crypto/aead" aead\n'
                       'fn main() {\n status: fail.Status\n backing: [mem.ArenaBufferOverhead+4]u8\n'
                       ' arena := mem.arena_from_buffer(backing[..])\n'
-                      ' _ = mem.push_bytes_uninit(arena, mem.arena_remaining(arena) - 4)\n'
+                      ' _ = mem.push_bytes(arena, #len(arena.data) - arena.offset - 4)\n'
                       ' key: [32]u8\n nonce: [12]u8\n tag: [16]u8\n'
                       f' _ = aead.{operation}(arena, &status, aead.Cipher.{cipher}, {arguments})\n}}\n')
             exhaustion.append(project(root, cipher + "-" + operation, source))

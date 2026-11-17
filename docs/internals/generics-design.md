@@ -261,7 +261,7 @@ them in the compiler. Typed allocation is ordinary std code:
 | --- | --- |
 | `#alloc_or_panic(T, a)` | `mem.push(T, &arena)` |
 | `#alloc_slice_or_panic(T, a, n)` | `mem.push_array(T, &arena, n)` |
-| `#alloc_slice_uninit_or_panic(u8, a, n)` | `mem.push_bytes_uninit(&arena, n)` |
+| `#alloc_slice_uninit_or_panic(u8, a, n)` | `mem.push_bytes(&arena, n)` |
 | `#alloc(T, a)` and other recoverable forms | `mem.arena_push*`, then check `.ok` |
 
 Pushes zero by default. Uninitialized memory is only offered as bytes, which
@@ -275,7 +275,7 @@ overwritten right away. Std functions that produced output through an
 - `math`: `min`, `max`, `clamp`, `abs`, `narrow(T, x)` (panics if the value
   does not fit; the checked counterpart of `#cast`). These replace the
   `_i64`/`_u64` versions.
-- `mem`: `push`, `push_array`, `push_bytes_uninit`, `zero`, `clear`, `swap`, `copy`,
+- `mem`: `push`, `push_array`, `push_bytes`, `zero`, `clear`, `swap`, `copy`,
   `move`, `fill`, `equal`.
 - `sort`: `sort` (allocation-free introsort with monotone-input fast paths,
   insertion sort for small partitions, and a worst-case heap fallback; elements
@@ -354,7 +354,7 @@ Phase 1 std and builtins (done):
   instance with a file and line.
 - DNA: the six `#alloc*` sites and 27 byte-buffer casts around
   `arena_push_uninit_or_panic` moved to `mem.push`, `mem.push_array` and
-  `mem.push_bytes_uninit`.
+  `mem.push_bytes`.
 
 Not done:
 

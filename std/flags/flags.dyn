@@ -252,7 +252,7 @@ fn render_arena(arena: *memory.Arena, program: []const u8, options: []const Opti
   if measured.failed {
     #panic("flags: usage text size overflows")
   }
-  output := memory.push_bytes_uninit(arena, measured.required)
+  output := memory.push_bytes(arena, measured.required)
   _ = render_checked(output, program, options, is_usage)
   return output
 }

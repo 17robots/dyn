@@ -31,7 +31,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-doc-examples-') as temporary:
             subprocess.run([str(output)], check=True, timeout=10)
 report = json.loads(subprocess.check_output([DYN, 'docs', str(ROOT / 'std/mem'), '--json'], text=True))
 declarations = {d['name']: d for f in report['files'] for d in f['declarations']}
-assert set(declarations['arena_push']['contracts']) == {
+assert set(declarations['push']['contracts']) == {
     'ownership', 'invalidation', 'allocation', 'failure', 'thread_safety'}
-assert 'no heap fallback' in declarations['arena_push_array']['contracts']['allocation']
+assert 'no heap fallback' in declarations['push_array']['contracts']['allocation']
 print(f'PASS {len(programs)} complete documentation programs (debug/release) and JSON contract summaries')

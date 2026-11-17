@@ -58,7 +58,7 @@ fn build_page(keep: *mem.Arena, scratch: *mem.Arena, status: *fail.Status, sourc
   // Escaping turns one byte into at most six ("&quot;"), plus room for tags.
   // Sized for the worst case of escaping, so status only fails here if the
   // read did.
-  writer := html.writer(status, mem.push_bytes_uninit(scratch, 6 * #len(read) + 1024))
+  writer := html.writer(status, mem.push_bytes(scratch, 6 * #len(read) + 1024))
   render_page(&writer, read)
 
   stem := file_name[..#len(file_name) - #len(".txt")]
@@ -75,7 +75,7 @@ fn build_index(keep: *mem.Arena, scratch: *mem.Arena, status: *fail.Status, outp
   for page in pages {
     size += 6 * (#len(page.name) + #len(page.title)) + 64
   }
-  writer := html.writer(status, mem.push_bytes_uninit(scratch, size))
+  writer := html.writer(status, mem.push_bytes(scratch, size))
   header(&writer, "All pages")
   open_tag(&writer, "<ul>\n")
   for page in pages {
@@ -123,6 +123,7 @@ fn main() i32 {
   for page in pages.items {
     io.println("{}.html  {}", page.name, page.title)
   }
-  io.println("{} pages, {} scratch bytes at peak", #len(pages.items), mem.arena_snapshot(scratch).peak_used)
+  // Every function gave its scratch back, so nothing is left in it.
+  io.println("{} pages, {} scratch bytes left", #len(pages.items), mem.arena_used(scratch))
   return 0
 }

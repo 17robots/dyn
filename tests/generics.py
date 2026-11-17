@@ -110,7 +110,7 @@ fn main() {
   mem.clear(node)
   one := mem.push(i64, arena)
   many := mem.push_array(u16, arena, 3)
-  bytes := mem.push_bytes_uninit(arena, 8)
+  bytes := mem.push_bytes(arena, 8)
   mem.fill(bytes, 5)
   io.println_to(&printed, out, "{} {} {} {} {}", node.value, nodes[3].value, one.*, many[2], bytes[7])
   xs: [4]i32 = [1, 2, 3, 4]

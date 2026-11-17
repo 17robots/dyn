@@ -146,7 +146,7 @@ fn h3_storage_size(config: Config) usize {
 fn h3_start(arena: *mem.Arena, status: *fail.Status, worker: *Worker) {
   config := worker.config
   if status.failed || !config.http3 { return }
-  worker.h2.read = mem.push_bytes_uninit(arena, MaxFrame + 1024)
+  worker.h2.read = mem.push_bytes(arena, MaxFrame + 1024)
   worker.h3_connections = mem.push_array(usize, arena, config.http2_connections)
   address := network.Address{}
   network.local_address(status, worker.listener.descriptor, &address)

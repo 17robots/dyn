@@ -184,7 +184,7 @@ fn parse_iso8601_into(input: []const u8, output: *DateTime) bool {
 // date in years 0 through 9999.
 pub fn format_iso8601(arena: *mem.Arena, value: *const DateTime) []u8 {
   mark := mem.arena_mark(arena)
-  space := mem.push_bytes_uninit(arena, 20)
+  space := mem.push_bytes(arena, 20)
   text := format_iso8601_into(space, value)
   mem.arena_rewind(arena, mark + #len(text))
   return text

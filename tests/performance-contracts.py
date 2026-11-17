@@ -97,7 +97,7 @@ fn main() {''']
   view := builder.bytes(&built)
   builder.append_grow(arena, &built, view)
   t.expect(built.length == 2000 && mem.arena_used(arena) == 2048, "self append in place")
-  _ = mem.arena_push(arena, 1, 1)
+  _ = mem.push(u8, arena)
   previous := &built.storage[0]
   builder.reserve(arena, &built, 4096)
   t.expect(#len(built.storage) == 4096, "interleaved growth")

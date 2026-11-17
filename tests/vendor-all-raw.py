@@ -77,14 +77,8 @@ cases = {
   scaled: [16]u8
   status: fail.Status
   image.resize(arena, &status, input[..], 2, 2, scaled[..], 4, 4, 1, false)
-  if status.failed || mem.arena_mark(arena) != mem.arena_start(arena) { #panic("arena wrapper coexistence") }
-  if scaled[0] != 33 || scaled[15] != 33 { #panic("arena pixels") }
-  tiny: [1 + mem.ArenaBufferOverhead]u8
-  pad := (16-(#cast(usize,&tiny[0])&15))&15
-  exhausted := mem.arena_from_buffer(tiny[pad..pad+mem.ArenaHeader+1])
-  full: fail.Status
-  image.resize(exhausted, &full, input[..], 2, 2, scaled[..], 4, 4, 1, false)
-  if full.failure.kind != fail.Kind.Capacity { #panic("arena allocator replaced") }''',
+  if status.failed || mem.arena_used(arena) != 0 { #panic("arena wrapper coexistence") }
+  if scaled[0] != 33 || scaled[15] != 33 { #panic("arena pixels") }''',
     'vulkan': '''status: fail.Status
   library := dynlib.open(&status, "libvulkan.so.1", dynlib.Now)
   if status.failed { #panic("loader") }

@@ -2,6 +2,7 @@ use "std/mem" mem
 use "std/fail"
 use "std/unicode/utf8" utf8
 use "std/bytes"
+use "std/container/array"
 // TOML 1.0 tree. All parsed strings, keys and scalar lexemes are arena-owned.
 // Integer/float/date/time text preserves spelling
 // no conversion loses precision.
@@ -107,7 +108,8 @@ fn quoted(parser: *Parser, key: bool) []const u8 {
     parser.at += 2
     _ = newline(parser)
   }
-  output: []u8
+  output: array.Array(u8)
+  array.init(&output, parser.arena)
   for parser.at < #len(parser.source) {
     c := peek(parser)
     if c == quote {
@@ -118,34 +120,34 @@ fn quoted(parser: *Parser, key: bool) []const u8 {
       }
       if !multiline {
         parser.at -= count - 1
-        return output
+        return output.items
       }
       if count >= 3 {
         if count > 5 {
           parser.failed = true
-          return output
+          return output.items
         }
         for i in 3..count {
-          _ = mem.append_grow(parser.arena, &output, quote)
+          array.push(&output, quote)
         }
-        return output
+        return output.items
       }
       for i in 0..count {
-        _ = mem.append_grow(parser.arena, &output, quote)
+        array.push(&output, quote)
       }
       continue
     }
     if c == 10 || c == 13 {
       if !multiline || !newline(parser) {
         parser.failed = true
-        return output
+        return output.items
       }
-      _ = mem.append_grow(parser.arena, &output, #cast(u8, 10))
+      array.push(&output, #cast(u8, 10))
       continue
     }
     if (c < 32 && c != 9) || c == 127 {
       parser.failed = true
-      return output
+      return output.items
     }
     parser.at += 1
     if c == 92 && quote == 34 {
@@ -161,13 +163,13 @@ fn quoted(parser: *Parser, key: bool) []const u8 {
         }
         if parser.at != escape_start {
           parser.failed = true
-          return output
+          return output.items
         }
       }
       c = peek(parser)
       if parser.at == #len(parser.source) {
         parser.failed = true
-        return output
+        return output.items
       }
       parser.at += 1
       if c == 98 {
@@ -188,13 +190,13 @@ fn quoted(parser: *Parser, key: bool) []const u8 {
         scalar: u32 = 0
         if count > #len(parser.source) - parser.at {
           parser.failed = true
-          return output
+          return output.items
         }
         for i in 0..count {
           digit := hex(parser.source[parser.at + i])
           if digit < 0 {
             parser.failed = true
-            return output
+            return output.items
           }
           scalar = (scalar << 4) | #cast(u32, digit)
         }
@@ -203,19 +205,19 @@ fn quoted(parser: *Parser, key: bool) []const u8 {
         width := utf8.encode(encoded[..], scalar)
         if width == 0 {
           parser.failed = true
-          return output
+          return output.items
         }
-        mem.append_many_grow(parser.arena, &output, encoded[..width])
+        array.push_all(&output, encoded[..width])
         continue
       } else if c != 34 && c != 92 {
         parser.failed = true
-        return output
+        return output.items
       }
     }
-    _ = mem.append_grow(parser.arena, &output, c)
+    array.push(&output, c)
   }
   parser.failed = true
-  return output
+  return output.items
 }
 fn bare(c: u8) bool {
   return (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || (c >= 48 && c <= 57) || c == 45 || c == 95
@@ -499,8 +501,8 @@ fn assign(parser: *Parser, table: *Value) {
 }
 fn header(parser: *Parser, root: *Value) *Value {
   parser.at += 1
-  array := peek(parser) == 91
-  if array {
+  table_array := peek(parser) == 91
+  if table_array {
     parser.at += 1
   }
   parent := root
@@ -510,7 +512,7 @@ fn header(parser: *Parser, root: *Value) *Value {
     if parser.failed { return root }
     child := find(parent, key)
     final := peek(parser) != 46
-    if final && array {
+    if final && table_array {
       if child == nil {
         child = node(parser, Kind.Array)
         child.table_array = true
@@ -552,7 +554,7 @@ fn header(parser: *Parser, root: *Value) *Value {
     return root
   }
   parser.at += 1
-  if array {
+  if table_array {
     if peek(parser) != 93 {
       parser.failed = true
       return root
@@ -606,22 +608,22 @@ pub fn parse(arena: *mem.Arena, status: *fail.Status, source: []const u8) *const
   }
   return root
 }
-fn emit_string(arena: *mem.Arena, output: *[]u8, text: []const u8) {
-  _ = mem.append_grow(arena, output, #cast(u8, 34))
+fn emit_string(output: *array.Array(u8), text: []const u8) {
+  array.push(output, #cast(u8, 34))
   hexes := "0123456789abcdef"
   for c in text {
     if c == 34 || c == 92 {
-      _ = mem.append_grow(arena, output, #cast(u8, 92))
-      _ = mem.append_grow(arena, output, c)
+      array.push(output, #cast(u8, 92))
+      array.push(output, c)
     } else if c < 32 || c == 127 {
-      mem.append_many_grow(arena, output, "\\u00")
-      _ = mem.append_grow(arena, output, hexes[c >> 4])
-      _ = mem.append_grow(arena, output, hexes[c & 15])
+      array.push_all(output, "\\u00")
+      array.push(output, hexes[c >> 4])
+      array.push(output, hexes[c & 15])
     } else {
-      _ = mem.append_grow(arena, output, c)
+      array.push(output, c)
     }
   }
-  _ = mem.append_grow(arena, output, #cast(u8, 34))
+  array.push(output, #cast(u8, 34))
 }
 fn valid_children(current: *const Value) bool {
   slow := current.first
@@ -645,11 +647,11 @@ fn valid_children(current: *const Value) bool {
   }
   return true
 }
-fn emit(arena: *mem.Arena, output: *[]u8, current: *const Value, depth: usize) bool {
+fn emit(output: *array.Array(u8), current: *const Value, depth: usize) bool {
   if current == nil || depth >= 64 { return false }
   if current.kind == Kind.String {
     if !utf8.valid(current.text) { return false }
-    emit_string(arena, output, current.text)
+    emit_string(output, current.text)
   } else if current.kind == Kind.Array || current.kind == Kind.Table {
     if !valid_children(current) { return false }
     opening: u8 = 91
@@ -658,29 +660,29 @@ fn emit(arena: *mem.Arena, output: *[]u8, current: *const Value, depth: usize) b
       opening = 123
       closing = 125
     }
-    _ = mem.append_grow(arena, output, opening)
+    array.push(output, opening)
     child := current.first
     for child != nil {
       if current.kind == Kind.Table {
-        emit_string(arena, output, child.key)
-        mem.append_many_grow(arena, output, " = ")
+        emit_string(output, child.key)
+        array.push_all(output, " = ")
       }
-      if !emit(arena, output, child, depth + 1) { return false }
+      if !emit(output, child, depth + 1) { return false }
       child = child.next
       if child != nil {
-        mem.append_many_grow(arena, output, ", ")
+        array.push_all(output, ", ")
       }
     }
-    _ = mem.append_grow(arena, output, closing)
+    array.push(output, closing)
   } else if current.kind == Kind.Bool {
     if current.boolean {
-      mem.append_many_grow(arena, output, "true")
+      array.push_all(output, "true")
     } else {
-      mem.append_many_grow(arena, output, "false")
+      array.push_all(output, "false")
     }
   } else {
     if current.kind == Kind.Missing || scalar_kind(current.text) != current.kind { return false }
-    mem.append_many_grow(arena, output, current.text)
+    array.push_all(output, current.text)
   }
   return true
 }
@@ -693,23 +695,24 @@ pub fn encode(arena: *mem.Arena, status: *fail.Status, root: *const Value) []u8 
   if status.failed { return empty }
   if root == nil || root.kind != Kind.Table || !valid_children(root) { return unencodable(status) }
   mark := mem.arena_mark(arena)
-  output: []u8
+  output: array.Array(u8)
+  array.init(&output, arena)
   child := root.first
   for child != nil {
     if !utf8.valid(child.key) {
       mem.arena_rewind(arena, mark)
       return unencodable(status)
     }
-    emit_string(arena, &output, child.key)
-    mem.append_many_grow(arena, &output, " = ")
-    if !emit(arena, &output, child, 0) {
+    emit_string(&output, child.key)
+    array.push_all(&output, " = ")
+    if !emit(&output, child, 0) {
       mem.arena_rewind(arena, mark)
       return unencodable(status)
     }
-    _ = mem.append_grow(arena, &output, #cast(u8, 10))
+    array.push(&output, #cast(u8, 10))
     child = child.next
   }
-  return output
+  return output.items
 }
 
 fn unencodable(status: *fail.Status) []u8 {

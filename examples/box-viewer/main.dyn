@@ -111,7 +111,7 @@ fn build(state: *box.State, app: *App) {
     index := #cast(usize, app.matches[i])
     row := box.build_key(state, box.Clickable | box.DrawText | box.DrawBackground | box.HotAnimation, box.key(list.key, "row") + index, "")
     shown := row_text(text[..], index)
-    copied := mem.push_bytes_uninit(state.frame, #len(shown))
+    copied := mem.push_bytes(state.frame, #len(shown))
     _ = mem.copy(copied, shown)
     row.text = copied
     row.width = box.percent(1.0, 0.0)

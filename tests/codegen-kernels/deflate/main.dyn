@@ -7,7 +7,7 @@ fn main() {
   arena := mem.arena_alloc(256 * mem.MiB)
   defer mem.arena_release(arena)
   size := 8 * mem.MiB
-  text := mem.push_bytes_uninit(arena, size)
+  text := mem.push_bytes(arena, size)
   words := "the quick brown fox jumps over the lazy dog while chirp serves pages "
   seed: u64 = 7
   for i in 0..size {

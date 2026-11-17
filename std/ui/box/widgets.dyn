@@ -203,7 +203,7 @@ fn insert(state: *State, storage: []u8, edit: *Edit, text: []const u8) bool {
   for byte in text {
     if byte == 0 || byte == 10 || byte == 13 { return false }
   }
-  replacement := mem.push_bytes_uninit(state.frame, #len(text))
+  replacement := mem.push_bytes(state.frame, #len(text))
   _ = mem.copy(replacement, text)
   remove(storage, edit, low, high)
   edit.cursor = low
@@ -456,7 +456,7 @@ pub fn text_field(state: *State, label: []const u8, storage: []u8, edit: *Edit) 
         low = 0
         high = edit.length
       }
-      copied := mem.push_bytes_uninit(state.frame, high - low)
+      copied := mem.push_bytes(state.frame, high - low)
       _ = mem.copy(copied, storage[low..high])
       state.copied = copied
       if input.cut && high != low {
@@ -483,7 +483,7 @@ pub fn text_field(state: *State, label: []const u8, storage: []u8, edit: *Edit) 
   }
   focused = state.focused == box.key
   result.focused = focused
-  shown := mem.push_bytes_uninit(state.frame, edit.length)
+  shown := mem.push_bytes(state.frame, edit.length)
   _ = mem.copy(shown, storage[..edit.length])
   box.text = shown
   composing := state.input.composition
@@ -497,7 +497,7 @@ pub fn text_field(state: *State, label: []const u8, storage: []u8, edit: *Edit) 
     high := selection_high(edit)
     // Preview the replacement as one text run. Overlaying a second label
     // would draw preedit on top of the unchanged suffix beneath it.
-    preview := mem.push_bytes_uninit(state.frame, edit.length - (high - low) + #len(composing))
+    preview := mem.push_bytes(state.frame, edit.length - (high - low) + #len(composing))
     _ = mem.copy(preview[..low], storage[..low])
     _ = mem.copy(preview[low..low + #len(composing)], composing)
     _ = mem.copy(preview[low + #len(composing)..], storage[high..edit.length])

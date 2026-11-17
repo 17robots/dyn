@@ -17,22 +17,22 @@ fn good(raw,encoded:[]const u8) {
   backing:[2048 + mem.ArenaBufferOverhead]u8
   mem.fill(backing[..],99)
   arena:=mem.arena_from_buffer(backing[..])
-  _=mem.push_bytes_uninit(arena,7)
+  _=mem.push_bytes(arena,7)
   status:fail.Status
   decoded:=codec.decode(arena,&status,encoded)
-  if status.failed || !bytes.equal(decoded,raw) || mem.arena_mark(arena)!=mem.arena_start(arena)+7+#len(raw) { #panic("base32 oracle") }
+  if status.failed || !bytes.equal(decoded,raw) || mem.arena_mark(arena)!=mem.ArenaHeader+7+#len(raw) { #panic("base32 oracle") }
   if !bytes.equal(codec.encode(arena,raw),encoded) { #panic("base32 encode") }
 }
 fn bad(encoded:[]const u8,offset:usize) {
   backing:[256 + mem.ArenaBufferOverhead]u8
   mem.fill(backing[..],99)
   arena:=mem.arena_from_buffer(backing[..])
-  prefix:=mem.push_bytes_uninit(arena,7)
+  prefix:=mem.push_bytes(arena,7)
   prefix[0]=91
   arena.poison_on_rewind=true
   status:fail.Status
   decoded:=codec.decode(arena,&status,encoded)
-  if status.failure.offset!=offset || status.failure.kind != fail.Kind.InvalidInput || #len(decoded)!=0 || mem.arena_mark(arena)!=mem.arena_start(arena)+7 || prefix[0]!=91 || arena.data[mem.ArenaHeader+7]!=99 { #panic("base32 failure preflight") }
+  if status.failure.offset!=offset || status.failure.kind != fail.Kind.InvalidInput || #len(decoded)!=0 || mem.arena_mark(arena)!=mem.ArenaHeader+7 || prefix[0]!=91 || arena.data[mem.ArenaHeader+7]!=99 { #panic("base32 failure preflight") }
 }
 fn main() {
 '''
@@ -52,7 +52,7 @@ source+='''
   _=mem.copy(payload,"MZXW6YTB")
   status:fail.Status
   _=codec.decode(arena,&status,payload[..8])
-  if status.failure.kind != fail.Kind.InvalidInput || mem.arena_mark(arena)!=mem.arena_start(arena) || !bytes.equal(payload[..8],"MZXW6YTB") { #panic("base32 overlap") }
+  if status.failure.kind != fail.Kind.InvalidInput || mem.arena_mark(arena)!=mem.ArenaHeader || !bytes.equal(payload[..8],"MZXW6YTB") { #panic("base32 overlap") }
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-base32-results-') as directory:

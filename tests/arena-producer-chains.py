@@ -22,12 +22,14 @@ use "std/process"
 fn check(ok:bool) { if !ok { #panic("chained producer contract") } }
 struct Fixture { arena:*mem.Arena, prefix:[]u8, second:[]u8 }
 fn fresh() Fixture {
- arena:=mem.arena_alloc_bounded(160,8*mem.MiB)
- prefix:=mem.push_bytes_uninit(arena,16)
+ source:=mem.pages(8*mem.MiB)
+ source.block_size=160
+ arena:=mem.arena_from_source(source)
+ prefix:=mem.push_bytes(arena,16)
  mem.fill(prefix,91)
- second:=mem.push_bytes_uninit(arena,256)
+ second:=mem.push_bytes(arena,256)
  mem.fill(second,77)
- _=mem.arena_push(arena,1,1)
+ _=mem.push(u8,arena)
  check(mem.arena_mark(arena)>#len(arena.data))
  return Fixture{arena:arena,prefix:prefix,second:second}
 }

@@ -47,7 +47,7 @@ use "std/mem"
 use "std/bytes"
 use "std/fail"
 fn copy(arena: *mem.Arena, source: []const u8) []u8 {
-  destination := mem.push_bytes_uninit(arena, #len(source))
+  destination := mem.push_bytes(arena, #len(source))
   _ = mem.move(destination, source)
   return destination
 }
