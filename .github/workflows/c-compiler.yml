@@ -37,6 +37,8 @@ jobs:
         with:
           node-version: '24'
       - run: just release-check
+      - name: Std layers build for bare metal (riscv64-none, riscv32-none, thumbv7em-none)
+        run: python3 tests/std-layers.py
       - name: Check ARM64 COFF relocations and import thunks under sanitizers
         run: python3 tests/arm64-coff.py
       - name: Check Mach-O x64 relocation addends under sanitizers

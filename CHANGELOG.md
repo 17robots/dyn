@@ -251,6 +251,12 @@ Standard library:
     and `sessions.forget` return an `http.Cookie`.
   - `http.page_writer(&status, response, storage)` takes the handler's status
     again: a page that does not fit fails it, and the server answers 500.
+- Std has three layers, listed in `std/layers.txt` and shown in the std
+  index: core (no operating system, no memory source), heap (arenas and what
+  builds on them) and std (needs an operating system). Core and heap build
+  for every target; the suite and CI check all 110 of those modules on
+  riscv64-none, riscv32-none and thumbv7em-none, and that no module imports
+  a higher layer.
 - Arenas (`std/mem`) keep a small core. Running out always panics, a fixed
   buffer included, with a message that says whether the buffer was full, a
   limit was reached or the source had no more memory:
