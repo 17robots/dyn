@@ -9,6 +9,17 @@ ROOT=Path(__file__).resolve().parents[1]
 DYN=str(Path(os.environ.get('DYN',ROOT/'build/dyn-release')).resolve())
 import random
 SOURCE=r'''use "std/crypto/chacha20poly1305" aead
+use "std/fail"
+fn seal_ok(output: []u8, tag: []u8, input: []const u8, aad: []const u8, key: []const u8, nonce: []const u8) bool {
+ status: fail.Status
+ aead.seal(&status, output, tag, input, aad, key, nonce)
+ return !status.failed
+}
+fn open_ok(output: []u8, input: []const u8, tag: []const u8, aad: []const u8, key: []const u8, nonce: []const u8) bool {
+ status: fail.Status
+ aead.open(&status, output, input, tag, aad, key, nonce)
+ return !status.failed
+}
 use "std/bytes" bytes
 use "std/mem" mem
 fn check(ok: bool) { if !ok { #panic("native AEAD contract") } }
@@ -17,39 +28,39 @@ fn vector(key: []const u8, nonce: []const u8, aad: []const u8, message: []const 
  defer { mem.arena_release(arena) }
  output := mem.push_array(u8,arena,#len(message))
  tag: [16]u8
- check(aead.seal(output,tag[..],message,aad,key,nonce))
+ check(seal_ok(output,tag[..],message,aad,key,nonce))
  check(bytes.equal(output,cipher) && bytes.equal(tag[..],expected))
- check(aead.open(output,output,tag[..],aad,key,nonce) && bytes.equal(output,message))
- check(aead.seal(output,tag[..],output,aad,key,nonce) && bytes.equal(output,cipher) && bytes.equal(tag[..],expected))
+ check(open_ok(output,output,tag[..],aad,key,nonce) && bytes.equal(output,message))
+ check(seal_ok(output,tag[..],output,aad,key,nonce) && bytes.equal(output,cipher) && bytes.equal(tag[..],expected))
  wrong_key: [32]u8
  for i in 0..32 { wrong_key[i] = key[i] }
  wrong_key[0] ^= 1
  mem.fill(output,165)
- check(!aead.open(output,cipher,tag[..],aad,wrong_key[..],nonce))
+ check(!open_ok(output,cipher,tag[..],aad,wrong_key[..],nonce))
  for byte in output { check(byte == 165) }
  wrong_nonce: [128]u8
  for i in 0..#len(nonce) { wrong_nonce[i] = nonce[i] }
  wrong_nonce[0] ^= 1
- check(!aead.open(output,cipher,tag[..],aad,key,wrong_nonce[..#len(nonce)]))
+ check(!open_ok(output,cipher,tag[..],aad,key,wrong_nonce[..#len(nonce)]))
  for byte in output { check(byte == 165) }
  if #len(cipher) != 0 {
   changed := mem.push_array(u8,arena,#len(cipher))
   for i in 0..#len(cipher) { changed[i] = cipher[i] }
   changed[0] ^= 1
-  check(!aead.open(output,changed,tag[..],aad,key,nonce))
+  check(!open_ok(output,changed,tag[..],aad,key,nonce))
   for byte in output { check(byte == 165) }
  }
  if #len(aad) != 0 {
   changed_aad := mem.push_array(u8,arena,#len(aad))
   for i in 0..#len(aad) { changed_aad[i] = aad[i] }
   changed_aad[0] ^= 1
-  check(!aead.open(output,cipher,tag[..],changed_aad,key,nonce))
+  check(!open_ok(output,cipher,tag[..],changed_aad,key,nonce))
   for byte in output { check(byte == 165) }
  }
  for i in 0..16 {
   tag[i] ^= 1
   mem.fill(output,165)
-  check(!aead.open(output,cipher,tag[..],aad,key,nonce))
+  check(!open_ok(output,cipher,tag[..],aad,key,nonce))
   for byte in output { check(byte == 165) }
   tag[i] ^= 1
  }
@@ -97,17 +108,17 @@ SOURCE+=r''' key: [32]u8
  nonce: [12]u8
  storage: [100]u8
  tag: [16]u8
- check(!aead.seal(storage[..1],tag[..],storage[1..2],"",key[..],nonce[..1]))
- check(!aead.seal(storage[..10],tag[..],storage[1..11],"",key[..],nonce[..]))
- check(!aead.seal(storage[..1],tag[..],"x",storage[..1],key[..],nonce[..]))
- check(!aead.seal(storage[..1],storage[..16],"x","",key[..],nonce[..]))
- check(!aead.seal(storage[..1],tag[..],"x","",storage[..32],nonce[..]))
- check(!aead.open(storage[..1],"x",storage[..16],"",key[..],nonce[..]))
+ check(!seal_ok(storage[..1],tag[..],storage[1..2],"",key[..],nonce[..1]))
+ check(!seal_ok(storage[..10],tag[..],storage[1..11],"",key[..],nonce[..]))
+ check(!seal_ok(storage[..1],tag[..],"x",storage[..1],key[..],nonce[..]))
+ check(!seal_ok(storage[..1],storage[..16],"x","",key[..],nonce[..]))
+ check(!seal_ok(storage[..1],tag[..],"x","",storage[..32],nonce[..]))
+ check(!open_ok(storage[..1],"x",storage[..16],"",key[..],nonce[..]))
  for byte in storage { check(byte == 0) }
  if #sizeof(usize) == 8 {
   oversize_payload: u64 = 274877906881
   huge := #slice(&key[0], #cast(usize,oversize_payload))
-  check(!aead.seal(huge,tag[..],huge,"",key[..],nonce[..]))
+  check(!seal_ok(huge,tag[..],huge,"",key[..],nonce[..]))
  }
 
 }

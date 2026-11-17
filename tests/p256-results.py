@@ -54,6 +54,16 @@ fn facade_p256_sign_fails(output: []u8, a1: []const u8, a2: []const u8) bool {
  _ = facade.p256_sign(&status, output, a1, a2)
  return status.failed
 }
+fn public_fails(output: []u8, key: []const u8) bool {
+ status: fail.Status
+ p.public_key(&status, output, key)
+ return status.failed
+}
+fn sign_fails(output: []u8, message: []const u8, key: []const u8) bool {
+ status: fail.Status
+ p.sign(&status, output, message, key)
+ return status.failed
+}
 fn check(ok: bool) { if !ok { #panic("P256 contract") } }
 fn vector(key: []const u8,message: []const u8,expected_public: []const u8,expected_signature: []const u8) {
  public: [73]u8
@@ -108,13 +118,13 @@ s+=''' key: [32]u8
  check(rejected.failed && rejected.failure.kind == fail.Kind.InvalidInput && #len(invalid)==0)
  check(facade_p256_sign_fails(output[..],"",key[..]))
  for i in 0..96 { check(output[i]==165) }
- check(!p.public_key(output[..],key[..]) && !p.sign(output[..],"",key[..]))
+ check(public_fails(output[..],key[..]) && sign_fails(output[..],"",key[..]))
  key[31]=1
- check(!p.public_key(output[..64],key[..]))
+ check(public_fails(output[..64],key[..]))
  check(facade_p256_public_fails(output[..],output[64..96]))
- check(!p.public_key(output[..],output[64..96]))
+ check(public_fails(output[..],output[64..96]))
  check(facade_p256_sign_fails(output[..],output[80..81],key[..]))
- check(!p.sign(output[..],output[80..81],key[..]))
+ check(sign_fails(output[..],output[80..81],key[..]))
  check(!p.valid_public_key(public[..]) && !p.valid_public_key(public[..64]))
  check(!p.verify(signature[..],"",public[..]))
  check(!p.verify(signature[..63],"",public[..]))

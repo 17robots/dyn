@@ -74,11 +74,13 @@ fn block(state: *State, input: []const u8) {
 pub fn init() State {
   return State{words: [0x6a09e667f3bcc908, 0xbb67ae8584caa73b, 0x3c6ef372fe94f82b, 0xa54ff53a5f1d36f1, 0x510e527fade682d1, 0x9b05688c2b3e6c1f, 0x1f83d9abfb41bd6b, 0x5be0cd19137e2179], initialized:true}
 }
-pub fn update(state: *State, input: []const u8) bool {
+// Adds input. Input past SHA-512's limit latches failed, and finish then gives
+// an empty digest.
+pub fn update(state: *State, input: []const u8) {
   if !state.initialized {
     state.*=init()
   }
-  if state.failed { return false }
+  if state.failed { return }
   // Count bytes in 125 bits, so the 128-bit bit count cannot overflow.
   before:=state.low
   state.low=state.low+#len(input)
@@ -87,7 +89,7 @@ pub fn update(state: *State, input: []const u8) bool {
   }
   if state.high>0x1fffffffffffffff {
     state.failed=true
-    return false
+    return
   }
   at: usize
   if state.used!=0 {
@@ -110,7 +112,6 @@ pub fn update(state: *State, input: []const u8) bool {
     state.used+=1
     at+=1
   }
-  return true
 }
 pub fn finish(state: *State, destination: []u8) []u8 {
   if !state.initialized {
@@ -140,6 +141,6 @@ pub fn finish(state: *State, destination: []u8) []u8 {
 }
 pub fn digest(destination: []u8, input: []const u8) []u8 {
   state:=init()
-  if !update(&state, input) { return destination[..0] }
+  update(&state, input)
   return finish(&state, destination)
 }

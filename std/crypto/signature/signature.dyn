@@ -7,12 +7,12 @@ use "std/fail"
 // storage untouched. Arithmetic failures clear only the intended output prefix.
 // A bad length, key or overlap fails with InvalidInput.
 
-fn result(status: *fail.Status, destination: []u8, ok: bool) []u8 {
-  if !ok {
+// The output prefix, cleared and empty when the primitive failed.
+fn result(status: *fail.Status, destination: []u8) []u8 {
+  if status.failed {
     for i in 0..#len(destination) {
       destination[i] = 0
     }
-    fail.invalid(status, "sign", "", "the key was rejected")
     return destination[..0]
   }
   return destination
@@ -31,7 +31,8 @@ pub fn ed25519_public(status: *fail.Status, destination: []u8, private_key: []co
   if bytes.overlaps(destination, private_key) {
     return rejected(status, destination, "destination overlaps an input")
   }
-  return result(status, destination[..32], native.public_key(destination[..32], private_key))
+  native.public_key(status, destination[..32], private_key)
+  return result(status, destination[..32])
 }
 pub fn ed25519_sign(status: *fail.Status, destination: []u8, message: []const u8, private_key: []const u8) []u8 {
   if status.failed { return destination[..0] }
@@ -41,7 +42,8 @@ pub fn ed25519_sign(status: *fail.Status, destination: []u8, message: []const u8
   if bytes.overlaps(destination, private_key) || bytes.overlaps(destination, message) {
     return rejected(status, destination, "destination overlaps an input")
   }
-  return result(status, destination[..64], native.sign(destination[..64], message, private_key))
+  native.sign(status, destination[..64], message, private_key)
+  return result(status, destination[..64])
 }
 pub fn ed25519_verify(signature: []const u8, message: []const u8, public_key: []const u8) bool {
   return native.verify(signature, message, public_key)
@@ -52,16 +54,14 @@ pub fn ed25519_verify(signature: []const u8, message: []const u8, public_key: []
 // Invalid key, length or overlap leaves the entire destination unchanged.
 pub fn p256_public(status: *fail.Status, destination: []u8, private_key: []const u8) []u8 {
   if status.failed { return destination[..0] }
-  if !p256.public_key(destination, private_key) {
-    return rejected(status, destination, "bad key, length or overlap")
-  }
+  p256.public_key(status, destination, private_key)
+  if status.failed { return destination[..0] }
   return destination[..65]
 }
 pub fn p256_sign(status: *fail.Status, destination: []u8, message: []const u8, private_key: []const u8) []u8 {
   if status.failed { return destination[..0] }
-  if !p256.sign(destination, message, private_key) {
-    return rejected(status, destination, "bad key, length or overlap")
-  }
+  p256.sign(status, destination, message, private_key)
+  if status.failed { return destination[..0] }
   return destination[..64]
 }
 pub fn p256_verify(signature: []const u8, message: []const u8, public_key: []const u8) bool {

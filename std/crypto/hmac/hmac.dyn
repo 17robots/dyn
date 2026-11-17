@@ -11,7 +11,7 @@ pub type Sha256Key = crypto_core.HmacSha256
 
 pub fn sha256_key(key: []const u8) Sha256Key {
   state := Sha256Key{}
-  _ = crypto_core.hmac_sha256_init(&state, key)
+  crypto_core.hmac_sha256_init(&state, key)
   return state
 }
 

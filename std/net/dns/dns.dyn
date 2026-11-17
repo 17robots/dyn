@@ -456,7 +456,8 @@ fn exchange(status: *fail.Status, name: []const u8, server: *const network.Ipv4A
     deadline = time.deadline_after(timeout_milliseconds * time.Millisecond)
   }
   entropy: [2]u8
-  if !random.fill(entropy[..]) { return exchange_failed(status, fail.Kind.System, "no random identifier", -5) }
+  random.fill(status, entropy[..])
+  if status.failed { return Packet{} }
   identifier := load_u16(entropy[..], 0)
   request := query(packet, name, identifier, kind)
   if #len(request) == 0 { return exchange_failed(status, fail.Kind.InvalidInput, "invalid name", -22) }

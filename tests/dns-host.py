@@ -29,7 +29,9 @@ fn main() {
   sizes: [4]usize = [0,1,257,513]
   for size in sizes {
     for i in 0..515 { bytes[i] = 42 }
-    require(random.fill(bytes[1..size+1]),"native random failed")
+    filling: fail.Status
+    random.fill(&filling, bytes[1..size+1])
+    require(!filling.failed,"native random failed")
     require(bytes[0] == 42,"random prefix clobbered")
     for i in size+1..515 { require(bytes[i] == 42,"random suffix clobbered") }
   }

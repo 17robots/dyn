@@ -51,16 +51,14 @@ pub fn seal(arena: *mem.Arena, status: *fail.Status, kind: Cipher, plaintext: []
   output := mem.push_bytes_uninit(arena, count + 16)
   ciphertext := output[..count]
   tag := output[count..]
-  ok := false
   if kind == Cipher.Chacha20Poly1305 {
-    ok = native.seal(ciphertext, tag, plaintext, additional, key, nonce)
+    native.seal(status, ciphertext, tag, plaintext, additional, key, nonce)
   } else {
-    ok = aes.seal(ciphertext, tag, plaintext, additional, key, nonce)
+    aes.seal(status, ciphertext, tag, plaintext, additional, key, nonce)
   }
-  if !ok {
+  if status.failed {
     mem.zero(output)
     mem.arena_rewind(arena, mark)
-    fail.invalid(status, "seal", "", "the cipher rejected the input")
     return Sealed{}
   }
   return Sealed{ciphertext: ciphertext, tag: tag}
@@ -84,16 +82,14 @@ pub fn open(arena: *mem.Arena, status: *fail.Status, kind: Cipher, ciphertext: [
   }
   mark := mem.arena_mark(arena)
   plaintext := mem.push_bytes_uninit(arena, count)
-  ok := false
   if kind == Cipher.Chacha20Poly1305 {
-    ok = native.open(plaintext, ciphertext, tag, additional, key, nonce)
+    native.open(status, plaintext, ciphertext, tag, additional, key, nonce)
   } else {
-    ok = aes.open(plaintext, ciphertext, tag, additional, key, nonce)
+    aes.open(status, plaintext, ciphertext, tag, additional, key, nonce)
   }
-  if !ok {
+  if status.failed {
     mem.zero(plaintext)
     mem.arena_rewind(arena, mark)
-    fail.invalid(status, "open", "", "authentication failed")
     return empty
   }
   return plaintext

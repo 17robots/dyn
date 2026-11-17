@@ -76,15 +76,11 @@ pub fn remember(cache: *Cache, token: []const u8, user: i64, csrf: []const u8, d
 pub fn start(arena: *mem.Arena, status: *fail.Status, seconds: i64) New {
   if status.failed { return New{} }
   raw: [32]u8
-  if !random.fill(raw[..]) {
-    fail.set(status, fail.make(fail.Kind.System, "start session", "", "the system has no randomness"))
-    return New{}
-  }
+  random.fill(status, raw[..])
+  if status.failed { return New{} }
   token := hex.encode(arena, raw[..], false)
-  if !random.fill(raw[..16]) {
-    fail.set(status, fail.make(fail.Kind.System, "start session", "", "the system has no randomness"))
-    return New{}
-  }
+  random.fill(status, raw[..16])
+  if status.failed { return New{} }
   csrf := hex.encode(arena, raw[..16], false)
   storage := mem.push_bytes_uninit(arena, 160)
   cookie := http.set_cookie(status, storage, http.Cookie{ name: CookieName, value: token, path: "/", max_age: seconds, http_only: true,

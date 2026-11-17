@@ -39,7 +39,9 @@ fn hash(message: []const u8,expected: []const u8) {
  check(bytes.equal(sha.digest(output[..],message),expected))
  for split in 0..#len(message)+1 {
   state:=sha.init()
-  check(sha.update(&state,message[..split]) && sha.update(&state,"") && sha.update(&state,message[split..]))
+  sha.update(&state,message[..split])
+  sha.update(&state,"")
+  sha.update(&state,message[split..])
   check(bytes.equal(sha.finish(&state,output[..]),expected))
  }
 }
