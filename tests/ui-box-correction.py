@@ -11,13 +11,13 @@ SOURCE=r'''use "std/ui/box" box
 use "std/ui" ui
 use "std/mem" mem
 use "std/text/edit" edit
-use "std/io" errors
+use "std/fail"
 use "std/bytes" bytes
 use "vendor/window/events" events
 fn check(ok: bool, why: []const u8) { if !ok { #panic(why) } }
 fn measure(data: *u8, text: []const u8) f32 { _ = data
   return #cast(f32,#len(text))*8.0 }
-struct App { storage: [64]u8, edit: box.Edit, changed: bool, error: errors.Kind }
+struct App { storage: [64]u8, edit: box.Edit, changed: bool, error: fail.Kind }
 fn frame(state: *box.State, arena: *mem.Arena, app: *App, input: box.Input) {
   mem.arena_reset(arena)
   context := ui.Context{ style: ui.default_style }
@@ -33,8 +33,9 @@ fn frame(state: *box.State, arena: *mem.Arena, app: *App, input: box.Input) {
 fn correction(collector: *events.EditBuffer, token: u64, start, end: i32, text: []const u8) edit.Replacement {
   event := events.Event{kind:events.Kind.Edit,key:#cast(u32,token & 4294967295),modifiers:#cast(u32,token>>32),x:start,y:end,width:#cast(i32,#len(text)),text_length:#cast(u32,#len(text)),button:1}
   for i in 0..#len(text) { event.text[i] = text[i] }
-  result := events.collect_edit(collector,&event)
-  check(!errors.failed(result.failure) && result.ready,"native edit assembly")
+  status: fail.Status
+  result := events.collect_edit(&status,collector,&event)
+  check(!status.failed && result.ready,"native edit assembly")
   return result.value
 }
 fn main() {
@@ -54,20 +55,20 @@ fn main() {
   check(state.text_context.token == published,"idle redraw keeps context token")
   change := correction(&collector,published,0,3,"the")
   frame(state,arena,&app,box.Input{correction:&change})
-  check(app.changed && app.error == errors.Kind.Ok && bytes.equal(app.storage[..app.edit.length],"the cat") && app.edit.cursor == 3,"owned edit reaches widget")
+  check(app.changed && app.error == fail.Kind.Ok && bytes.equal(app.storage[..app.edit.length],"the cat") && app.edit.cursor == 3,"owned edit reaches widget")
   check(state.text_context.token != published && state.text_context.cause == edit.Cause.InputMethod,"correction publishes fresh IME context")
   frame(state,arena,&app,box.Input{correction:&change})
-  check(!app.changed && app.error == errors.Kind.InvalidState && bytes.equal(app.storage[..app.edit.length],"the cat"),"replay does not change buffer")
+  check(!app.changed && app.error == fail.Kind.InvalidState && bytes.equal(app.storage[..app.edit.length],"the cat"),"replay does not change buffer")
   published = state.text_context.token
   change = correction(&collector,published,0,3,"bad")
   frame(state,arena,&app,box.Input{left:true})
   frame(state,arena,&app,box.Input{correction:&change})
-  check(app.error == errors.Kind.InvalidState && bytes.equal(app.storage[..app.edit.length],"the cat"),"selection change invalidates pending edit")
+  check(app.error == fail.Kind.InvalidState && bytes.equal(app.storage[..app.edit.length],"the cat"),"selection change invalidates pending edit")
   published = state.text_context.token
   change = correction(&collector,published,0,3,"bad")
   app.storage[0] = 'T'
   frame(state,arena,&app,box.Input{correction:&change})
-  check(app.error == errors.Kind.InvalidState && app.storage[0] == 'T',"external document change invalidates edit")
+  check(app.error == fail.Kind.InvalidState && app.storage[0] == 'T',"external document change invalidates edit")
   published = state.text_context.token
   frame(state,arena,&app,box.Input{tab:true})
   check(state.text_context.token == 0,"leaving text focus removes publication")
@@ -75,13 +76,13 @@ fn main() {
   check(state.text_context.token != published,"returning focus gets fresh publication")
   change = correction(&collector,state.text_context.token,0,0,"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")
   frame(state,arena,&app,box.Input{correction:&change})
-  check(!app.changed && app.error == errors.Kind.Capacity && bytes.equal(app.storage[..app.edit.length],"The cat"),"capacity failure is atomic")
+  check(!app.changed && app.error == fail.Kind.Capacity && bytes.equal(app.storage[..app.edit.length],"The cat"),"capacity failure is atomic")
   change = correction(&collector,state.text_context.token,0,1,"A\nB")
   frame(state,arena,&app,box.Input{correction:&change})
-  check(app.error == errors.Kind.InvalidInput && app.storage[0] == 'T',"single line rejects multiline correction")
+  check(app.error == fail.Kind.InvalidInput && app.storage[0] == 'T',"single line rejects multiline correction")
   change = correction(&collector,state.text_context.token,0,1,"Z")
   frame(state,arena,&app,box.Input{correction:&change,text:"extra",tab:true})
-  check(app.error == errors.Kind.InvalidInput && bytes.equal(app.storage[..app.edit.length],"The cat") && state.text_context.token != 0,"unordered combined input rejected without moving focus")
+  check(app.error == fail.Kind.InvalidInput && bytes.equal(app.storage[..app.edit.length],"The cat") && state.text_context.token != 0,"unordered combined input rejected without moving focus")
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dyn-ui-correction-') as directory:

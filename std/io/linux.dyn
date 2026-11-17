@@ -3,47 +3,6 @@ use "std/fail"
 use "std/os/linux/sys"
 
 // Borrow the process standard descriptors; callers do not own or close them.
-fn stdin_read(_data: rawptr, destination: []u8) Transfer {
-  if #len(destination) == 0 {
-    return Transfer{ transferred: 0, status: Status.Complete, failure: Failure{ native: 0 } }
-  }
-  value := #syscall(sys.Read, 0, &destination[0], #len(destination))
-  for value == -4 {
-    value = #syscall(sys.Read, 0, &destination[0], #len(destination))
-  }
-  if value < 0 {
-    return Transfer{ transferred: 0, failure: Failure{ kind: linux(value), native: value } }
-  }
-  status := Status.Complete
-  if value == 0 {
-    status = Status.End
-  }
-  return Transfer{ transferred: #cast(usize, value), status: status, failure: Failure{ native: 0 } }
-}
-
-fn write_descriptor(descriptor: isize, source: []const u8) Transfer {
-  written: usize = 0
-  for written < #len(source) {
-    value := #syscall(sys.Write, descriptor, &source[written], #len(source) - written)
-    if value == -4 { } else if value <= 0 {
-      if value == 0 {
-        value = -5
-      }
-      return Transfer{ transferred: written, failure: Failure{ kind: linux(value), native: value } }
-    } else {
-      written += #cast(usize, value)
-    }
-  }
-  return Transfer{ transferred: written, status: Status.Complete, failure: Failure{ native: 0 } }
-}
-fn stdout_write(_data: rawptr, source: []const u8) Transfer {
-  return write_descriptor(1, source)
-}
-
-fn stderr_write(_data: rawptr, source: []const u8) Transfer {
-  return write_descriptor(2, source)
-}
-
 pub fn stdin() Reader {
   return Reader{ data: nil, read: stdin_stream }
 }
@@ -54,19 +13,39 @@ pub fn stderr() Writer {
   return Writer{ data: nil, write: stderr_stream }
 }
 
-// Terminal output. These ignore write failures, such as a closed pipe, so a
-// call needs no `_ =`; use print_to or println_to to check the result.
-
-
-
-
-// The standard streams as Reader and Writer functions.
 fn stdin_stream(_data: rawptr, status: *fail.Status, destination: []u8) usize {
-  return from_transfer(status, stdin_read(nil, destination), "read", "standard input")
+  if status.failed || #len(destination) == 0 { return 0 }
+  value := #syscall(sys.Read, 0, &destination[0], #len(destination))
+  for value == -4 {
+    value = #syscall(sys.Read, 0, &destination[0], #len(destination))
+  }
+  if value < 0 {
+    fail.set(status, from_linux("read", "standard input", value))
+    return 0
+  }
+  return #cast(usize, value)
+}
+
+fn write_descriptor(status: *fail.Status, descriptor: isize, path: []const u8, source: []const u8) usize {
+  if status.failed { return 0 }
+  written: usize = 0
+  for written < #len(source) {
+    value := #syscall(sys.Write, descriptor, &source[written], #len(source) - written)
+    if value == -4 { } else if value <= 0 {
+      if value == 0 {
+        value = -5
+      }
+      fail.set(status, from_linux("write", path, value))
+      return written
+    } else {
+      written += #cast(usize, value)
+    }
+  }
+  return written
 }
 fn stdout_stream(_data: rawptr, status: *fail.Status, source: []const u8) usize {
-  return from_transfer(status, stdout_write(nil, source), "write", "standard output")
+  return write_descriptor(status, 1, "standard output", source)
 }
 fn stderr_stream(_data: rawptr, status: *fail.Status, source: []const u8) usize {
-  return from_transfer(status, stderr_write(nil, source), "write", "standard error")
+  return write_descriptor(status, 2, "standard error", source)
 }

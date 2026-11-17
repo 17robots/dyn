@@ -174,7 +174,7 @@ for kind, ct in [('f32','float'), ('f64','double')]:
 source = WORK/'source'
 source.mkdir(exist_ok=True)
 (source/'main.dyn').write_text('\n'.join(dyn)+'\nfn main() {\n'+'\n'.join(body)+
-                              '\n_ = io.write_transfer(io.stdout(), "THUMB HFA PASS\\n")\n}\n')
+                              '\nio.print("THUMB HFA PASS\\n")\n}\n')
 for release in (False, True):
     mode = 'release' if release else 'debug'
     obj, image = WORK/f'{mode}.o', WORK/f'{mode}.elf'

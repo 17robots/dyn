@@ -1,6 +1,9 @@
 # Result shape: every std result, before and after
 
-Status: applied, with the changes listed in `docs/migrations/result-shape.md`.
+Status: superseded (2026-11). Every fallible std and vendor call now takes a
+`*fail.Status`; `io.Failure`, `io.Result`, `io.Transfer` and `parse.Result` are
+gone. See `docs/internals/plan-2026-11.md`. Kept as the record of the earlier
+shape, applied with the changes listed in `docs/migrations/result-shape.md`.
 This document shows the shape decided on 2026-11-05 applied to every result type
 in `std`. The mapping and the
 signature lists are generated from the source, then reviewed by rule, not

@@ -300,7 +300,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-thumb-soft-') as tmp:
     audit_controls(work)
     source = work / 'source'
     source.mkdir()
-    (source / 'main.dyn').write_text('\n'.join(D) + '\nfn main() {\n' + '\n'.join(B) + '\n_ = io.write_transfer(io.stdout(), "THUMB SOFT PASS\\n")\n}\n')
+    (source / 'main.dyn').write_text('\n'.join(D) + '\nfn main() {\n' + '\n'.join(B) + '\nio.print("THUMB SOFT PASS\\n")\n}\n')
     (work / 'oracle.c').write_text('\n'.join(C))
     common = [*CLANG, '--target=arm-none-eabi', '-mcpu=cortex-m7', '-mthumb', '-ffreestanding', '-fno-stack-protector']
     (work / 'hard.c').write_text('int hard_marker(void) { return 1; }\n')

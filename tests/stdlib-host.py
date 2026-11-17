@@ -15,7 +15,6 @@ use "std/process"
 use "std/time"
 use "std/mem"
 use "std/bytes"
-use "std/io" errors
 use "std/sync"
 fn require(value: bool, message: []const u8) { if !value { io.eprintln("{}", message)
 #panic(message) } }
@@ -40,21 +39,17 @@ fn lines(text: []const u8, expected: []const u8, capacity: usize, buffering: usi
   }
   require(bytes.equal(result[..used], expected), "stdlib assertion 35")
 }
-fn error_read_transfer(data: rawptr, destination: []u8) io.Transfer {
+fn error_read(data: rawptr, status: *fail.Status, destination: []u8) usize {
   _ = data
   destination[0] = 'x'
-  return io.Transfer{ transferred: 1, failure: io.Failure{ kind: errors.Kind.PermissionDenied } }
-}
-fn error_read(data: rawptr, status: *fail.Status, destination: []u8) usize {
-  return io.from_transfer(status, error_read_transfer(data, destination), "read", "")
-}
-fn error_write_transfer(data: rawptr, source: []const u8) io.Transfer {
-  _ = data
-  _ = source
-  return io.Transfer{ failure: io.Failure{ kind: errors.Kind.PermissionDenied } }
+  fail.set(status, fail.make(fail.Kind.PermissionDenied, "read", "", "mock"))
+  return 1
 }
 fn error_write(data: rawptr, status: *fail.Status, source: []const u8) usize {
-  return io.from_transfer(status, error_write_transfer(data, source), "write", "")
+  _ = data
+  _ = source
+  fail.set(status, fail.make(fail.Kind.PermissionDenied, "write", "", "mock"))
+  return 0
 }
 fn main() {
   counter32 := sync.atomic_u32(7)
@@ -91,17 +86,18 @@ fn main() {
   require(!fs.is_open(&unopened), "stdlib assertion 61")
   fs.close(&unopened)
   unopened_status: fail.Status
-  require(fs.read(&unopened_status, &unopened, tiny_backing[..]) == 0 && unopened_status.failure.kind == errors.Kind.InvalidState, "stdlib assertion 63")
+  require(fs.read(&unopened_status, &unopened, tiny_backing[..]) == 0 && unopened_status.failure.kind == fail.Kind.InvalidState, "stdlib assertion 63")
   missing: fail.Status
   _ = fs.open(&missing, "missing-file")
-  require(missing.failed && missing.failure.kind == errors.Kind.NotFound && missing.failure.native != 0, "stdlib assertion 65")
+  require(missing.failed && missing.failure.kind == fail.Kind.NotFound && missing.failure.native != 0, "stdlib assertion 65")
   status: fail.Status
   created := fs.create_exclusive(&status, "café-😀.txt")
   require(!status.failed, "stdlib assertion 67")
   duplicate: fail.Status
   _ = fs.create_exclusive(&duplicate, "café-😀.txt")
-  require(duplicate.failed && duplicate.failure.kind == errors.Kind.AlreadyExists, "stdlib assertion 69")
-  require(io.complete(io.write_transfer(fs.writer(&created), "abc")), "stdlib assertion 72")
+  require(duplicate.failed && duplicate.failure.kind == fail.Kind.AlreadyExists, "stdlib assertion 69")
+  io.write(&status, fs.writer(&created), "abc")
+  require(!status.failed, "stdlib assertion 72")
   fs.sync(&status, &created)
   require(!status.failed, "stdlib assertion 73")
   moved := created
@@ -115,17 +111,17 @@ fn main() {
   opened := fs.open(&status, "café-😀.txt")
   require(fs.seek(&status, &opened, 2, 0) == 2 && !status.failed, "stdlib assertion 82")
   contents: [8]u8
-  read := io.read_exact_transfer(fs.reader(&opened), contents[..4])
-  require((read.status == io.Status.Complete && !io.failed(read.failure)) && bytes.equal(contents[..4], "cdef"), "stdlib assertion 85")
-  require(io.read_transfer(fs.reader(&opened), contents[..]).status == io.Status.End, "stdlib assertion 86")
+  read := io.read_exact(&status, fs.reader(&opened), contents[..4])
+  require(read == 4 && !status.failed && bytes.equal(contents[..4], "cdef"), "stdlib assertion 85")
+  require(io.read(&status, fs.reader(&opened), contents[..]) == 0 && !status.failed, "stdlib assertion 86")
   fs.close(&opened)
   mark := mem.arena_mark(arena)
   bounded_file: fail.Status
   bounded := fs.read_all(arena, &bounded_file, "café-😀.txt", 5)
-  require(bounded_file.failed && bounded_file.failure.kind == errors.Kind.Overflow && mem.arena_mark(arena) == mark, "stdlib assertion 90")
+  require(bounded_file.failed && bounded_file.failure.kind == fail.Kind.Overflow && mem.arena_mark(arena) == mark, "stdlib assertion 90")
   exhausted_file: fail.Status
   exhausted := fs.read_all(tiny, &exhausted_file, "café-😀.txt", 100)
-  require(exhausted_file.failed && exhausted_file.failure.kind == errors.Kind.Capacity && mem.arena_mark(tiny) == mem.arena_start(tiny), "stdlib assertion 92")
+  require(exhausted_file.failed && exhausted_file.failure.kind == fail.Kind.Capacity && mem.arena_mark(tiny) == mem.arena_start(tiny), "stdlib assertion 92")
   all_file: fail.Status
   all := fs.read_all(arena, &all_file, "café-😀.txt", 6)
   require(!all_file.failed && bytes.equal(all, "abcdef"), "stdlib assertion 94")
@@ -151,16 +147,18 @@ fn main() {
     failing_status: fail.Status
     error_line := bufio.read_line(&failing_status, &failing, contents[..])
     require(failing_status.failed && error_line.transferred == 1, "stdlib assertion 114")
-    require(contents[0] == 'x' && failing_status.failure.kind == errors.Kind.PermissionDenied && failing_status.failure.native == 0, "stdlib assertion 115")
+    require(contents[0] == 'x' && failing_status.failure.kind == fail.Kind.PermissionDenied && failing_status.failure.native == 0, "stdlib assertion 115")
   }
   failed_output := bufio.writer(io.Writer{ write: error_write }, error_storage[..])
-  require(io.complete(io.write_transfer(bufio.writer_adapter(&failed_output), "pending")), "stdlib assertion 118")
+  pending: fail.Status
+  io.write(&pending, bufio.writer_adapter(&failed_output), "pending")
+  require(!pending.failed, "stdlib assertion 118")
   flush_status: fail.Status
   bufio.writer_flush(&flush_status, &failed_output)
-  require(flush_status.failure.kind == errors.Kind.PermissionDenied && failed_output.used == 7, "stdlib assertion 119")
+  require(flush_status.failure.kind == fail.Kind.PermissionDenied && failed_output.used == 7, "stdlib assertion 119")
   retry: fail.Status
   bufio.writer_flush(&retry, &failed_output)
-  require(retry.failure.kind == errors.Kind.PermissionDenied && failed_output.used == 7, "stdlib assertion 120")
+  require(retry.failure.kind == fail.Kind.PermissionDenied && failed_output.used == 7, "stdlib assertion 120")
   raw_cursor := io.cursor("a\r\nx")
   raw_input := bufio.reader(io.cursor_reader(&raw_cursor), error_storage[..1])
   raw_status: fail.Status
@@ -174,10 +172,10 @@ fn main() {
   _ = process.wait(&unstarted, &invalid_child, false)
   require(unstarted.failure.kind == fail.Kind.InvalidState, "stdlib assertion 128")
   minimum: isize = 0 - #cast(isize, (#max(usize) >> 1)) - 1
-  require(errors.linux(minimum) == errors.Kind.System, "stdlib assertion 130")
-  require(errors.darwin(minimum) == errors.Kind.System, "stdlib assertion 131")
-  require(errors.windows(minimum) == errors.Kind.System, "stdlib assertion 132")
-  require(errors.wasi(minimum) == errors.Kind.System, "stdlib assertion 133")
+  require(io.linux(minimum) == fail.Kind.System, "stdlib assertion 130")
+  require(io.darwin(minimum) == fail.Kind.System, "stdlib assertion 131")
+  require(io.windows(minimum) == fail.Kind.System, "stdlib assertion 132")
+  require(io.wasi(minimum) == fail.Kind.System, "stdlib assertion 133")
   started := time.monotonic_now()
   wall := time.realtime_now()
   require(wall.seconds > 1700000000, "stdlib assertion 136")

@@ -13,45 +13,8 @@ fn transfer_limit(size: usize) u32 {
   if size > 4294967295 { return 4294967295 }
   return #cast(u32, size)
 }
-fn stream_error(count: u32, code: u32) Transfer {
-  error: isize = 0 - #cast(isize, code)
-  if error == 0 {
-    error = -5
-  }
-  return Transfer{ transferred: count, failure: Failure{ kind: windows(error), native: error } }
-}
-fn stdin_read(_data: rawptr, destination: []u8) Transfer {
-  if #len(destination) == 0 { return Transfer{} }
-  handle := standard_handle(4294967286) // STD_INPUT_HANDLE (-10)
-  if !valid_handle(handle) { return stream_error(0, 6) }
-  count: u32 = 0
-  if standard_read(handle, &destination[0], transfer_limit(#len(destination)), &count, nil) == 0 {
-    error := standard_error()
-    // A closed pipe and a file at EOF both end the byte stream.
-    if error == 109 || error == 38 { return Transfer{ transferred: count, status: Status.End } }
-    // A message-mode pipe may return a partial message with ERROR_MORE_DATA.
-    if error == 234 && count > 0 { return Transfer{ transferred: count } }
-    return stream_error(count, error)
-  }
-  if count == 0 { return Transfer{ status: Status.End } }
-  return Transfer{ transferred: count }
-}
-fn write_standard(kind: u32, source: []const u8) Transfer {
-  if #len(source) == 0 { return Transfer{} }
-  handle := standard_handle(kind)
-  if !valid_handle(handle) { return stream_error(0, 6) }
-  count: u32 = 0
-  if standard_write(handle, &source[0], transfer_limit(#len(source)), &count, nil) == 0 {
-    return stream_error(count, standard_error())
-  }
-  if count == 0 { return stream_error(0, 5) }
-  return Transfer{ transferred: count }
-}
-fn stdout_write(_data: rawptr, source: []const u8) Transfer {
-  return write_standard(4294967285, source)
-}
-fn stderr_write(_data: rawptr, source: []const u8) Transfer {
-  return write_standard(4294967284, source)
+fn stream_failed(status: *fail.Status, operation: []const u8, path: []const u8, code: u32) {
+  fail.set(status, from_windows(operation, path, 0 - #cast(isize, code)))
 }
 
 // Borrow current standard handles. Bytes are not transcoded or newline-translated.
@@ -65,19 +28,43 @@ pub fn stderr() Writer {
   return Writer{ write: stderr_stream }
 }
 
-// Terminal output. These ignore write failures, such as a closed pipe, so a
-// call needs no `_ =`; use print_to or println_to to check the result.
-
-
-
-
-// The standard streams as Reader and Writer functions.
 fn stdin_stream(_data: rawptr, status: *fail.Status, destination: []u8) usize {
-  return from_transfer(status, stdin_read(nil, destination), "read", "standard input")
+  if status.failed || #len(destination) == 0 { return 0 }
+  handle := standard_handle(4294967286) // STD_INPUT_HANDLE (-10)
+  if !valid_handle(handle) {
+    stream_failed(status, "read", "standard input", 6)
+    return 0
+  }
+  count: u32 = 0
+  if standard_read(handle, &destination[0], transfer_limit(#len(destination)), &count, nil) == 0 {
+    error := standard_error()
+    // A closed pipe and a file at EOF both end the byte stream.
+    if error == 109 || error == 38 { return count }
+    // A message-mode pipe may return a partial message with ERROR_MORE_DATA.
+    if error == 234 && count > 0 { return count }
+    stream_failed(status, "read", "standard input", error)
+    return 0
+  }
+  return count
+}
+fn write_standard(status: *fail.Status, kind: u32, path: []const u8, source: []const u8) usize {
+  if status.failed || #len(source) == 0 { return 0 }
+  handle := standard_handle(kind)
+  if !valid_handle(handle) {
+    stream_failed(status, "write", path, 6)
+    return 0
+  }
+  count: u32 = 0
+  if standard_write(handle, &source[0], transfer_limit(#len(source)), &count, nil) == 0 {
+    stream_failed(status, "write", path, standard_error())
+    return count
+  }
+  if count == 0 { stream_failed(status, "write", path, 5) }
+  return count
 }
 fn stdout_stream(_data: rawptr, status: *fail.Status, source: []const u8) usize {
-  return from_transfer(status, stdout_write(nil, source), "write", "standard output")
+  return write_standard(status, 4294967285, "standard output", source)
 }
 fn stderr_stream(_data: rawptr, status: *fail.Status, source: []const u8) usize {
-  return from_transfer(status, stderr_write(nil, source), "write", "standard error")
+  return write_standard(status, 4294967284, "standard error", source)
 }

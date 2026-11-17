@@ -1,5 +1,6 @@
 // Signed integers index arrays and slices; negative values fail the bounds check.
 use "std/io"
+use "std/fail"
 
 fn pick(values: []const u8, index: i32) u8 {
   return values[index]
@@ -19,7 +20,8 @@ fn main() {
   }
   // Empty standard input makes this index -1, unknown to the compiler.
   buffer: [1]u8
-  input := io.read_transfer(io.stdin(), buffer[..])
-  _ = io.write_transfer(io.stdout(), "ok\n")
-  _ = pick(values[..], #cast(i32, input.transferred) - 1)
+  status: fail.Status
+  count := io.read(&status, io.stdin(), buffer[..])
+  io.print("ok\n")
+  _ = pick(values[..], #cast(i32, count) - 1)
 }

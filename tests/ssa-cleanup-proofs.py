@@ -15,7 +15,7 @@ use "std/io"
 extern fn opaque(value:usize) usize
 extern foreign_byte:u8
 extern fn foreign_alignment() usize
-fn cleanup() { _=io.write_transfer(io.stdout(),"D") }
+fn cleanup() { io.print("D") }
 pub fn local_plain() u64 {
  value:=#cast(u64,opaque(7))
  pointer:=&value
@@ -161,7 +161,7 @@ size_t foreign_alignment(void) { return (uintptr_t)&foreign_byte & 7; }
    if mode=='tree':env['DYN_NO_SSA']='1'
    for name,body,panic,cleanups in CASES:
     source=work/'source';source.mkdir(exist_ok=True)
-    (source/'main.dyn').write_text(FUNCTIONS+'\nfn main() {\n'+body+'\n_=io.write_transfer(io.stdout(),"OK\\n")\n}\n')
+    (source/'main.dyn').write_text(FUNCTIONS+'\nfn main() {\n'+body+'\nio.print("OK\\n")\n}\n')
     binary=work/'program'
     built=run([DYN,'build',source,'--release','--opt-level','3','--no-cache','--quiet','--opt-remarks','--link',work/'opaque.o','--output',binary],env=env)
     assert built.returncode==0,(mode,name,built.stderr)

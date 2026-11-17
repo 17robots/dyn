@@ -49,12 +49,12 @@ pub fn empty() { #panic("") }
 pub fn dynamic(s:[]const u8) { #panic(s) }
 pub fn sliced(s:[]const u8,a:usize,b:usize) { #panic(s[a..b]) }
 pub fn nul() { #panic("a\0b") }
-fn message() []const u8 { _=io.write_transfer(io.stdout(),"EVAL\n")
+fn message() []const u8 { io.print("EVAL\n")
 return "ordered" }
 pub fn ordered() { #panic(message()) }
-pub fn protected() { defer { _=io.write_transfer(io.stdout(),"CLEAN\n") }
+pub fn protected() { defer { io.print("CLEAN\n") }
 #panic(message()) }
-pub fn caller() { defer { _=io.write_transfer(io.stdout(),"OUTER\n") }
+pub fn caller() { defer { io.print("OUTER\n") }
 dynamic("called") }
 '''
 CASES = [

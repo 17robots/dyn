@@ -4,9 +4,9 @@ use "std/fail"
 // Integer skyline packing, no rotation. Caller owns rectangles; scratch arena is
 // rewound before return. Inputs must not overlap newly allocated scratch storage.
 pub struct Rectangle { width: i32, height: i32, x: i32, y: i32, was_packed: i32 }
-// The count packed; was_packed marks each one. Not every rectangle fitting is
-// not a failure: compare the count. Bad sizes fail with InvalidInput, too
-// little scratch with Capacity.
+// The count packed; was_packed marks each one. A partial fit is not a
+// failure: compare the count. Bad sizes fail with InvalidInput, too little
+// scratch with Capacity.
 pub fn pack(scratch: *mem.Arena, status: *fail.Status, width: i32, height: i32, rectangles: []Rectangle) usize {
   if status.failed { return 0 }
   if scratch == nil {
@@ -35,11 +35,9 @@ pub fn pack(scratch: *mem.Arena, status: *fail.Status, width: i32, height: i32, 
     return 0
   }
   count: usize = 0
-  if code >= 0 {
-    for rectangle in rectangles {
-      if rectangle.was_packed != 0 {
-        count += 1
-      }
+  for rectangle in rectangles {
+    if rectangle.was_packed != 0 {
+      count += 1
     }
   }
   return count

@@ -148,7 +148,7 @@ pub fn conditional(seed:u64,n:usize) u64 {
  return value
 }
 pub fn fail(x:u8) u8 {
- defer {_=io.write_transfer(io.stdout(),"CLEAN\\n")}
+ defer {io.print("CLEAN\\n")}
  for i in 0..1 {return checked(x)}
  return x
 }

@@ -1,6 +1,5 @@
 use "std/mem"
 use "std/container/chunk"
-use "std/io"
 struct Pair(A, B) { first: A, second: B }
 struct Box(T) { value: T, failed: bool }
 struct Node(T) { next: *Node(T), value: T }
@@ -64,9 +63,9 @@ fn main() {
   if shared.total != 100 || shared.first.next.items[0] != 64 {
     #panic("chunk list")
   }
-  counted := io.Result(i32){ value: 3 }
-  if counted.value != 3 || io.failed(counted.failure) {
-    #panic("result")
+  counted := chunk.Chunk(i32){ count: 3 }
+  if counted.count != 3 || counted.next != nil {
+    #panic("imported generic literal")
   }
   info := #typeof(Box(i32))
   if #len(info.name) != 8 || info.name[3] != '(' {

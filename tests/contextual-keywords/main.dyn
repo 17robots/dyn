@@ -25,7 +25,7 @@ fn main() {
   total += describe(#cast(i64, 10)) + describe(true)
   case total {
     23 => {
-      _ = io.write_transfer(io.stdout(), "ok\n")
+      io.print("ok\n")
     }
     _ => {
       #panic("contextual keywords")

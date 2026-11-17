@@ -60,7 +60,7 @@ c=t}2=>{a=17}_=>{b=19} }
 i=(i+1) }
 return a*100+b*10+c }
 pub fn terminal(x:i64) i64 { case x { 1=>{return 71}9=>{return 79}_=>{return 99} } }
-pub fn protected(x:Key) i64 { defer { _=io.write_transfer(io.stdout(),"CLEAN\n") }
+pub fn protected(x:Key) i64 { defer { io.print("CLEAN\n") }
 case x { Key.A=>{return 11}Key.B=>{return 22}Key.C=>{return 22}Key.D=>{return 33}Key.E=>{return 44} } }
 extern fn oracle() u32
 extern fn badtag() Key
@@ -208,7 +208,7 @@ def guests(work, compiler, target, flags, board, qemu, adapter, audit):
     if target.startswith('thumb'):
         b.arm_addends(obj)
     fixtures = [
-        ('success', 'n:=oracle()\nif n!=0 { io.println("BAD {}",n)\n#panic("oracle") }\n_=io.write_transfer(io.stdout(),"CASES OK\\n")', (0, b'CASES OK\n', b'')),
+        ('success', 'n:=oracle()\nif n!=0 { io.println("BAD {}",n)\n#panic("oracle") }\nio.print("CASES OK\\n")', (0, b'CASES OK\n', b'')),
         ('invalid', '_=exhaustive(badtag())', (101, b'runtime check failed (enum.tag.ok) in exhaustive\n', b'')),
         ('protected', '_=protected(badtag())', (101, b'CLEAN\nruntime check failed (enum.tag.ok) in protected\n', b'')),
     ]

@@ -16,22 +16,23 @@ use "std/fail"
 use "std/io" io
 use "std/bufio" bufio
 use "std/bytes/builder" builder
-use "std/io" errors
 struct Sink { calls: usize, used: usize, fail_after: usize, fail: bool, bytes: [64]u8 }
 struct Entry { key: []const u8, hash: u64, hash_next: *Entry, bytes: [1]u8, value: usize }
 const nil_entry: Entry = Entry{}
-fn sink_write_transfer(data: rawptr, source: []const u8) io.Transfer {
+fn sink_write(data: rawptr, status: *fail.Status, source: []const u8) usize {
   state := #cast(*Sink, data)
   state.calls += 1
-  if state.fail || (state.fail_after > 0 && state.calls > state.fail_after) { return io.Transfer{ transferred: 0, failure: io.Failure{ kind: errors.Kind.PermissionDenied, native: -13 } } }
+  if state.fail || (state.fail_after > 0 && state.calls > state.fail_after) {
+    failure := fail.make(fail.Kind.PermissionDenied, "write", "", "mock")
+    failure.native = -13
+    fail.set(status, failure)
+    return 0
+  }
   amount := #len(source)
   if amount > 3 { amount = 3 }
   for i in 0..amount { state.bytes[state.used + i] = source[i] }
   state.used += amount
-  return io.Transfer{ transferred: amount, status: io.Status.Complete }
-}
-fn sink_write(data: rawptr, status: *fail.Status, source: []const u8) usize {
-  return io.from_transfer(status, sink_write_transfer(data, source), "write", "")
+  return amount
 }
 fn main() {''']
     randomizer=random.Random(124)

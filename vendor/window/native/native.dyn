@@ -256,11 +256,8 @@ pub fn set_surrounding_text(status: *fail.Status, window: *Window, context: Surr
     window_failed(status, fail.Kind.InvalidState, "set surrounding text")
     return
   }
-  checked := surrounding_edit.validate(&context)
-  if checked.kind != fail.Kind.Ok {
-    window_failed(status, checked.kind, "set surrounding text")
-    return
-  }
+  surrounding_edit.validate(status, &context)
+  if status.failed { return }
   for byte in context.text {
     if byte == 0 {
       window_failed(status, fail.Kind.InvalidInput, "set surrounding text")

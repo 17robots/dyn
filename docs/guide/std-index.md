@@ -1094,40 +1094,20 @@ module's full declarations and comments.
 
 ## std/io
 
-- `struct Failure { kind: Kind, native: isize, operation: []const u8, path: []const u8 }`: Why an operation failed: a portable kind, the native code when the system gave one, and what was being done, such as operation "open" on ...
-- `struct Result(T) { value: T, failure: Failure }`: A value and how getting it went.
-- `type Bytes = Result([]u8)`
-- `type Count = Result(usize)`
-- `type Kind = fail.Kind`: The portable kinds are fail.Kind;
-- `fn failed(failure: Failure) bool`: Whether a step failed.
-- `fn failure_if(failed: bool) Failure`: For APIs that only say whether they worked: Kind.System when failed, zero otherwise.
-- `fn linux_failure(code: isize) Failure`: A native error code with its portable kind;
-- `fn darwin_failure(code: isize) Failure`
-- `fn windows_failure(code: isize) Failure`
-- `fn wasi_failure(code: isize) Failure`
 - `fn from_linux(operation: []const u8, path: []const u8, code: isize) fail.Failure`: A fail.Failure for a native error code: its portable kind, the code in native, and the system's text for it as the message.
 - `fn from_darwin(operation: []const u8, path: []const u8, code: isize) fail.Failure`
 - `fn from_windows(operation: []const u8, path: []const u8, code: isize) fail.Failure`
 - `fn from_wasi(operation: []const u8, path: []const u8, code: isize) fail.Failure`
-- `fn linux(code: isize) Kind`
-- `fn windows(code: isize) Kind`
-- `fn wasi(code: isize) Kind`
-- `fn darwin(code: isize) Kind`
-- `fn kind_text(kind: Kind) []const u8`: A short description of kind: "not found", "permission denied".
-- `fn describe(storage: []u8, failure: Failure) []u8`: "operation path: kind" in storage, such as "open /etc/app.conf: not found";
+- `fn linux(code: isize) fail.Kind`
+- `fn windows(code: isize) fail.Kind`
+- `fn wasi(code: isize) fail.Kind`
+- `fn darwin(code: isize) fail.Kind`
 - `fn linux_text(code: isize) []const u8`: The system's own reason for a native code, such as "is a directory" for Linux's -21;
 - `fn darwin_text(code: isize) []const u8`
 - `fn windows_text(code: isize) []const u8`
 - `fn wasi_text(code: isize) []const u8`
 - `struct Reader { data: rawptr, read: fn(rawptr, *fail.Status, []u8) usize, }`: Byte streams.
 - `struct Writer { data: rawptr, write: fn(rawptr, *fail.Status, []const u8) usize, }`: A write returns how many bytes of source it took, possibly fewer than all;
-- `enum Status { Complete, End }`: The result of a transfer in modules that have not moved to fail.Status: a count, whether the stream ended, and the failure, zero on success.
-- `struct Transfer { transferred: usize, failure: Failure, status: Status, }`
-- `fn complete(transfer: Transfer) bool`: Whether a transfer finished without reaching the end and without failing.
-- `fn from_transfer(status: *fail.Status, transfer: Transfer, operation: []const u8, path: []const u8) usize`: Records a Transfer's failure in status and returns its count: for Reader and Writer functions built on code that still returns Transfer.
-- `fn read_transfer(reader: Reader, destination: []u8) Transfer`: One read or write as a Transfer, for modules that still report through Transfer.
-- `fn read_exact_transfer(reader: Reader, destination: []u8) Transfer`: Reads until destination is full or the stream ends;
-- `fn write_transfer(writer: Writer, source: []const u8) Transfer`
 - `fn read(status: *fail.Status, reader: Reader, destination: []u8) usize`: Reads into destination;
 - `fn read_exact(status: *fail.Status, reader: Reader, destination: []u8) usize`: Fills destination.
 - `fn write(status: *fail.Status, writer: Writer, source: []const u8)`: Writes all of source.
@@ -1145,7 +1125,7 @@ module's full declarations and comments.
 - `fn buffer_writer_bytes(state: *const BufferWriter) []const u8`
 - `fn buffer_writer_reset(state: *BufferWriter)`
 - `fn buffer_writer_adapter(state: *BufferWriter) Writer`
-- `fn stdin() Reader`
+- `fn stdin() Reader`: Borrow the process standard descriptors;
 - `fn stdout() Writer`
 - `fn stderr() Writer`
 - `fn print(template: []const u8, arguments: ...any)`
@@ -2470,14 +2450,12 @@ module's full declarations and comments.
 - `struct Context { text: []const u8, cursor: usize, anchor: usize, token: u64, cause: Cause }`
 - `struct Replacement { text: []const u8, start: usize, end: usize, token: u64 }`
 - `struct Buffer { storage: []u8, length: usize, cursor: usize, anchor: usize, token: u64 }`: token zero means unpublished.
-- `type Status = io.Failure`
-- `type ContextResult = io.Result(Context)`
 - `struct Tracker { serial: u64, token: u64, owner: u64, length: usize, cursor: usize, anchor: usize, cause: Cause, bytes: [4096]u8, }`
 - `fn boundary(text: []const u8, offset: usize) bool`
-- `fn validate(context: *const Context) Status`: Validates the shared bounded context.
-- `fn snapshot(tracker: *Tracker, owner: u64, text: []const u8, cursor, anchor: usize, cause: Cause) ContextResult`: The returned view borrows tracker until its next changed snapshot.
+- `fn validate(status: *fail.Status, context: *const Context)`: Validates the shared bounded context.
+- `fn snapshot(status: *fail.Status, tracker: *Tracker, owner: u64, text: []const u8, cursor, anchor: usize, cause: Cause) Context`: The returned view borrows tracker until its next changed snapshot.
 - `fn invalidate(tracker: *Tracker)`: Invalidates a published identity without resetting the monotonic clock.
-- `fn apply(scratch: *mem.Arena, buffer: *Buffer, replacement: *const Replacement) Status`: All validation precedes writes.
+- `fn apply(scratch: *mem.Arena, status: *fail.Status, buffer: *Buffer, replacement: *const Replacement)`: All validation precedes writes.
 
 ## std/text/layout
 
@@ -2659,7 +2637,7 @@ module's full declarations and comments.
 - `struct Box { key: u64, flags: u32, // Layout axis for children: 0 stacks them left to right, 1 top to bottom. axis: u8, width: Size, height: Size, // Container inset in physical pixels. padding: [2]f32, text: []const u8, background: ui.Color, border: ui.Color, foreground: ui.Color, hot_color: ui.Color, active_color: ui.Color, // Corner radius in pixels for the background. radius: i32, // Pixel offset and selection span for editable text. Reset by build. text_offset: f32, selection: [2]f32, // Floating boxes take this position relative to the parent's content. floating: [2]f32, // Tree links, rebuilt every frame. parent: *Box, first: *Box, last: *Box, next: *Box, // Persistent state. hash_next: *Box, touched: u64, // Caller-owned identity associated with this cached box. Preserved across // builds, cleared when an expired box is recycled for a new key. user_data: usize, size: [2]f32, position: [2]f32, // Absolute screen rectangle of the last layout: x0, y0, x1, y1. rect: [4]f32, // Visible part after ancestor clips, for input. visible: [4]f32, hot_t: f32, active_t: f32, view: [2]f32, view_target: [2]f32, content: [2]f32, }`
 - `struct Input { x: f32, y: f32, down: bool, // Scroll in pixels this frame, positive scrolls content up and left. scroll_x: f32, scroll_y: f32, // UTF-8 text typed this frame, and editing keys pressed this frame. text: []const u8, backspace: bool, delete: bool, left: bool, right: bool, home: bool, end: bool, enter: bool, escape: bool, tab: bool, shift: bool, control: bool, select_all: bool, copy: bool, cut: bool, paste: bool, // The clipboard text offered for paste this frame. clipboard: []const u8, // The input method's in-progress composition (preedit), shown at the focused // text field's caret but not yet inserted. composition_cursor is a byte // offset into it, or -1. composition: []const u8, composition_cursor: i32, // Editing/navigation keys in this poll were consumed by the input method, // including the poll that clears preedit. Committed text still inserts. composition_handled: bool, // One complete correction as its own ordered input step. Do not combine it // with unrelated keyboard/text input. Stale or invalid corrections fail closed. correction: *const text_edits.Replacement, }`
 - `struct Signal { box: *Box, hovered: bool, pressed: bool, released: bool, clicked: bool, dragging: bool, // Pointer movement since the press while dragging. drag_x: f32, drag_y: f32, }`
-- `struct State { arena: *mem.Arena, frame: *mem.Arena, buckets: []*Box, free: *Box, frame_index: u64, root: *Box, parents: [parent_limit]*Box, depth: usize, input: Input, previous_down: bool, press_x: f32, press_y: f32, hot: u64, next_hot: u64, active: u64, dt: f32, // Text measurement in pixels, and the line height used for Text sizes. measure: fn(rawptr, []const u8) f32, measure_data: rawptr, line_height: f32, // Seconds for animations to close half their remaining distance. half_life: f32, // Keyboard focus, and text that a copy or cut this frame produced. focused: u64, focus_claimed: bool, // Snap animations instead of easing them, for users who ask for reduced // motion. reduced_motion: bool, // Display scale applied to pixel sizes and text padding. Pass a font // rasterized at the same scale. scale: f32, copied: []const u8, // Owned previous preedit for change-driven redraw; native snapshots cap256. composition_text: [256]u8, composition_length: usize, composition_cursor: i32, // Set during building when a focused text field wants text input: pass // text_input and text_input_rect (x, y, width, height in window pixels) to // the window so the input method places its candidates at the caret. text_input: bool, text_input_rect: [4]f32, text_input_anchor: *Box, // Publish this bounded context to a native input method before enabling the // focused field. Tracker lifetime must match one window, not one widget. text_context: text_edits.Context, text_context_error: io.Kind, text_tracker: text_edits.Tracker, }`
+- `struct State { arena: *mem.Arena, frame: *mem.Arena, buckets: []*Box, free: *Box, frame_index: u64, root: *Box, parents: [parent_limit]*Box, depth: usize, input: Input, previous_down: bool, press_x: f32, press_y: f32, hot: u64, next_hot: u64, active: u64, dt: f32, // Text measurement in pixels, and the line height used for Text sizes. measure: fn(rawptr, []const u8) f32, measure_data: rawptr, line_height: f32, // Seconds for animations to close half their remaining distance. half_life: f32, // Keyboard focus, and text that a copy or cut this frame produced. focused: u64, focus_claimed: bool, // Snap animations instead of easing them, for users who ask for reduced // motion. reduced_motion: bool, // Display scale applied to pixel sizes and text padding. Pass a font // rasterized at the same scale. scale: f32, copied: []const u8, // Owned previous preedit for change-driven redraw; native snapshots cap256. composition_text: [256]u8, composition_length: usize, composition_cursor: i32, // Set during building when a focused text field wants text input: pass // text_input and text_input_rect (x, y, width, height in window pixels) to // the window so the input method places its candidates at the caret. text_input: bool, text_input_rect: [4]f32, text_input_anchor: *Box, // Publish this bounded context to a native input method before enabling the // focused field. Tracker lifetime must match one window, not one widget. text_context: text_edits.Context, text_context_error: fail.Kind, text_tracker: text_edits.Tracker, }`
 - `struct StateResult { value: *State, valid: bool }`
 - `fn push_state(arena: *mem.Arena, measure: fn(*$C, []const u8) f32, measure_data: *$C, line_height: f32) *State`: A state in arena.
 - `fn display_text(label: []const u8) []const u8`: The visible part of a label: text before "##" is shown, the whole label is hashed.
@@ -2703,7 +2681,7 @@ module's full declarations and comments.
 - `fn list_begin(state: *State, label: []const u8, width: Size, height: Size, count: usize, row_height: f32) Range`
 - `fn list_end(state: *State)`
 - `struct Edit { length: usize, cursor: usize, // Active range is anchor..cursor when selecting is true. anchor: usize, selecting: bool, // Horizontal scroll in physical pixels; managed by text_field. scroll_x: f32, }`: An editable single-line field over caller storage.
-- `struct FieldSignal { signal: Signal, focused: bool, changed: bool, submitted: bool, correction_error: io.Kind }`
+- `struct FieldSignal { signal: Signal, focused: bool, changed: bool, submitted: bool, correction_error: fail.Kind }`
 - `fn text_field(state: *State, label: []const u8, storage: []u8, edit: *Edit) FieldSignal`
 
 ## std/ui/software

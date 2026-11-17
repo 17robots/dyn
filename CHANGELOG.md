@@ -178,6 +178,18 @@ Standard library:
   pcre2, lua, libarchive, curl, tree-sitter, cgltf, stb, enet and box2d
   bindings follow; library loaders (`opengl.load`, `freetype.load`, ...)
   return their `Api` and fail with `NotFound` naming the missing symbol.
+- The old failure types are gone: `io.Failure`, `io.Result`, `io.Bytes`,
+  `io.Count`, `io.Transfer`, `io.Status`, `io.complete`, `io.failed`,
+  `io.failure_if`, `io.describe`, `io.kind_text`, the `io.*_failure`
+  constructors, the `io.Kind` alias and the bridges `io.read_transfer`,
+  `io.write_transfer`, `io.read_exact_transfer` and `io.from_transfer`. Use
+  `fail.Kind`, `fail.describe`, `io.read`, `io.write` and `io.read_exact`;
+  `io.print` writes without a status. `io.linux(code)` and the other code
+  tables return a `fail.Kind`. `std/text/edit` takes the status
+  (`edit.validate(&status, &context)`, `edit.snapshot(&status, &tracker,
+  ...)` returns the `Context`, `edit.apply(scratch, &status, &buffer,
+  &replacement)`), as do `events.collect_edit(&status, &collector, &event)`
+  and the OpenSSL AEAD and key helpers (which return the bytes written).
 
 Tools:
 

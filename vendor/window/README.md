@@ -146,7 +146,7 @@ preedit and ordinary committed text remain available. See the
 low/high halves of the context token; `x`/`y` identify the replaced byte range;
 `width` is total replacement length; `scancode` is chunk offset; `button == 1`
 marks the final chunk. Native producers enqueue the complete replacement or
-report overflow. Feed events in order through `events.collect_edit`; its ready
+report overflow. Feed events in order through `events.collect_edit(&status, &collector, &event)`; its ready
 replacement borrows collector storage until the next Edit. Overflow discards
 partial assembly. Do not apply a correction from an aggregate keyboard summary.
 

@@ -68,7 +68,7 @@ expect(#syscall(10,mapped+4096,4096,3)==0)
 page:=#slice(#cast(*u8,mapped+4096), 4096)
 '''
         checks += ['expect(#syscall(11,mapped,12288)==0)']
-    return '\n'.join(declarations)+ '\nfn main() {\n'+pre+'\n'.join(checks)+'\n_=io.write_transfer(io.stdout(),"ZERO COPY PASS\\n")\n}\n'
+    return '\n'.join(declarations)+ '\nfn main() {\n'+pre+'\n'.join(checks)+'\nio.print("ZERO COPY PASS\\n")\n}\n'
 
 
 def shape(binary, expected=True):

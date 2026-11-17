@@ -4,40 +4,23 @@ use "std/fail"
 // no input, so stdin reports end of input.
 extern fn console_write "dyn_console_write"(data: *const u8, size: u64)
 
-fn stdin_read(_data: rawptr, destination: []u8) Transfer {
-  return Transfer{ transferred: 0, status: Status.End, failure: Failure{ native: 0 } }
-}
-
-fn console_writer_write(_data: rawptr, source: []const u8) Transfer {
-  if #len(source) != 0 {
-    console_write(&source[0], #len(source))
-  }
-  return Transfer{ transferred: #len(source), status: Status.Complete, failure: Failure{ native: 0 } }
-}
-
 pub fn stdin() Reader {
   return Reader{ data: nil, read: stdin_stream }
 }
 pub fn stdout() Writer {
-  return Writer{ data: nil, write: stdout_stream }
+  return Writer{ data: nil, write: console_stream }
 }
 pub fn stderr() Writer {
-  return Writer{ data: nil, write: stderr_stream }
+  return Writer{ data: nil, write: console_stream }
 }
 
-// Terminal output. These ignore write failures, such as a closed pipe, so a
-// call needs no `_ =`; use print_to or println_to to check the result.
-
-
-
-
-// The standard streams as Reader and Writer functions.
 fn stdin_stream(_data: rawptr, status: *fail.Status, destination: []u8) usize {
-  return from_transfer(status, stdin_read(nil, destination), "read", "standard input")
+  return 0
 }
-fn stdout_stream(_data: rawptr, status: *fail.Status, source: []const u8) usize {
-  return from_transfer(status, console_writer_write(nil, source), "write", "standard output")
-}
-fn stderr_stream(_data: rawptr, status: *fail.Status, source: []const u8) usize {
-  return from_transfer(status, console_writer_write(nil, source), "write", "standard error")
+fn console_stream(_data: rawptr, status: *fail.Status, source: []const u8) usize {
+  if status.failed { return 0 }
+  if #len(source) != 0 {
+    console_write(&source[0], #len(source))
+  }
+  return #len(source)
 }

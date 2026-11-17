@@ -113,7 +113,7 @@ def generate():
     for c in range(3):
         for r,field in enumerate('xyz'): exact(f'q.value.c{c}.{field}',[-1,-1,1][c] if c==r else 0)
     lines += ['if (cpacr() & 0x00f00000) != 0 { #panic("FPU enabled on soft Thumb") }',
-              '_=io.write_transfer(io.stdout(),"MATH TARGET PASS\\n")', '}']
+              'io.print("MATH TARGET PASS\\n")', '}']
     return '\n'.join(lines), checks
 
 

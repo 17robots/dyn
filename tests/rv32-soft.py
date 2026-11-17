@@ -142,7 +142,7 @@ with tempfile.TemporaryDirectory(prefix='dyn-rv32-soft-') as tmp:
     work = Path(tmp)
     source = work / 'source'
     source.mkdir()
-    (source / 'main.dyn').write_text('\n'.join(D) + '\nfn main() {\n' + '\n'.join(B) + '\n_ = io.write_transfer(io.stdout(), "RV32 SOFT PASS\\n")\n}\n')
+    (source / 'main.dyn').write_text('\n'.join(D) + '\nfn main() {\n' + '\n'.join(B) + '\nio.print("RV32 SOFT PASS\\n")\n}\n')
     (work / 'oracle.c').write_text('\n'.join(C))
     common = [*CLANG, '--target=riscv32-unknown-elf', '-mno-relax', '-mcmodel=medany', '-ffreestanding', '-fno-stack-protector']
     (work / 'hard.c').write_text('int hard_marker(void) { return 1; }\n')

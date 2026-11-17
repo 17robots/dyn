@@ -93,7 +93,7 @@ pub fn floating(x:f64) f64 { return x*2.0 }
 pub fn called(x:u64) u64 { return add(x,1) }
 extern fn oracle() i32
 fn main() { if oracle()!=0 { #panic("oracle failed") }
-_=io.write_transfer(io.stdout(),"SSA32 PASS\n") }
+io.print("SSA32 PASS\n") }
 
 pub fn frame(x:u64) u64 { y:=x
 p:=&y

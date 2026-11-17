@@ -2,33 +2,6 @@
 use "std/fail"
 use "std/os/wasi/raw" wasi_raw
 
-fn stdin_read(_data: rawptr, destination: []u8) Transfer {
-  if #len(destination) == 0 { return Transfer{ status: Status.Complete } }
-  count: usize = 0
-  error := wasi_raw.read(0, &destination[0], #len(destination), &count)
-  if error != 0 {
-    return Transfer{ transferred: count, failure: Failure{ kind: wasi(0 - #cast(isize, error)), native: 0 - #cast(isize, error) } }
-  }
-  if count == 0 { return Transfer{ status: Status.End } }
-  return Transfer{ transferred: count, status: Status.Complete }
-}
-
-fn write_descriptor(descriptor: u32, source: []const u8) Transfer {
-  if #len(source) == 0 { return Transfer{ status: Status.Complete } }
-  count: usize = 0
-  error := wasi_raw.write(descriptor, #cast(rawptr, &source[0]), #len(source), &count)
-  if error != 0 {
-    return Transfer{ transferred: count, failure: Failure{ kind: wasi(0 - #cast(isize, error)), native: 0 - #cast(isize, error) } }
-  }
-  return Transfer{ transferred: count, status: Status.Complete }
-}
-fn stdout_write(_data: rawptr, source: []const u8) Transfer {
-  return write_descriptor(1, source)
-}
-fn stderr_write(_data: rawptr, source: []const u8) Transfer {
-  return write_descriptor(2, source)
-}
-
 // Borrow the process standard descriptors; callers do not own or close them.
 pub fn stdin() Reader {
   return Reader{ read: stdin_stream }
@@ -40,19 +13,29 @@ pub fn stderr() Writer {
   return Writer{ write: stderr_stream }
 }
 
-// Terminal output. These ignore write failures, such as a closed pipe, so a
-// call needs no `_ =`; use print_to or println_to to check the result.
-
-
-
-
-// The standard streams as Reader and Writer functions.
 fn stdin_stream(_data: rawptr, status: *fail.Status, destination: []u8) usize {
-  return from_transfer(status, stdin_read(nil, destination), "read", "standard input")
+  if status.failed || #len(destination) == 0 { return 0 }
+  count: usize = 0
+  error := wasi_raw.read(0, &destination[0], #len(destination), &count)
+  if error != 0 {
+    fail.set(status, from_wasi("read", "standard input", 0 - #cast(isize, error)))
+    return 0
+  }
+  return count
+}
+
+fn write_descriptor(status: *fail.Status, descriptor: u32, path: []const u8, source: []const u8) usize {
+  if status.failed || #len(source) == 0 { return 0 }
+  count: usize = 0
+  error := wasi_raw.write(descriptor, #cast(rawptr, &source[0]), #len(source), &count)
+  if error != 0 {
+    fail.set(status, from_wasi("write", path, 0 - #cast(isize, error)))
+  }
+  return count
 }
 fn stdout_stream(_data: rawptr, status: *fail.Status, source: []const u8) usize {
-  return from_transfer(status, stdout_write(nil, source), "write", "standard output")
+  return write_descriptor(status, 1, "standard output", source)
 }
 fn stderr_stream(_data: rawptr, status: *fail.Status, source: []const u8) usize {
-  return from_transfer(status, stderr_write(nil, source), "write", "standard error")
+  return write_descriptor(status, 2, "standard error", source)
 }

@@ -168,7 +168,7 @@ pub struct Edit {
   // Horizontal scroll in physical pixels; managed by text_field.
   scroll_x: f32,
 }
-pub struct FieldSignal { signal: Signal, focused: bool, changed: bool, submitted: bool, correction_error: io.Kind }
+pub struct FieldSignal { signal: Signal, focused: bool, changed: bool, submitted: bool, correction_error: fail.Kind }
 
 fn previous_boundary(text: []const u8, at: usize) usize {
   index := at
@@ -330,7 +330,8 @@ pub fn text_field(state: *State, label: []const u8, storage: []u8, edit: *Edit) 
     if edit.selecting {
       anchor = edit.anchor
     }
-    before := text_edits.snapshot(&state.text_tracker, box.key, storage[..edit.length], edit.cursor, anchor, text_edits.Cause.Other)
+    published: fail.Status
+    before := text_edits.snapshot(&published, &state.text_tracker, box.key, storage[..edit.length], edit.cursor, anchor, text_edits.Cause.Other)
     if state.input.correction != nil {
       replacement := state.input.correction
       invalid := #len(state.input.text) != 0 || state.input.backspace || state.input.delete || state.input.left || state.input.right || state.input.home || state.input.end ||
@@ -340,14 +341,15 @@ pub fn text_field(state: *State, label: []const u8, storage: []u8, edit: *Edit) 
           invalid = true
         }
       }
-      if io.failed(before.failure) {
-        result.correction_error = before.failure.kind
+      if published.failed {
+        result.correction_error = published.failure.kind
       } else if invalid {
-        result.correction_error = io.Kind.InvalidInput
+        result.correction_error = fail.Kind.InvalidInput
       } else {
-        buffer := text_edits.Buffer{ storage: storage, length: edit.length, cursor: edit.cursor, anchor: anchor, token: before.value.token }
-        applied := text_edits.apply(state.frame, &buffer, replacement)
-        if applied.kind == io.Kind.Ok {
+        buffer := text_edits.Buffer{ storage: storage, length: edit.length, cursor: edit.cursor, anchor: anchor, token: before.token }
+        applied: fail.Status
+        text_edits.apply(state.frame, &applied, &buffer, replacement)
+        if !applied.failed {
           edit.length = buffer.length
           edit.cursor = buffer.cursor
           edit.anchor = buffer.anchor
@@ -355,7 +357,7 @@ pub fn text_field(state: *State, label: []const u8, storage: []u8, edit: *Edit) 
           result.changed = true
           correction_applied = true
         } else {
-          result.correction_error = applied.kind
+          result.correction_error = applied.failure.kind
         }
       }
       text_edits.invalidate(&state.text_tracker)
@@ -551,12 +553,11 @@ pub fn text_field(state: *State, label: []const u8, storage: []u8, edit: *Edit) 
     if edit.selecting {
       anchor = edit.anchor
     }
-    context := text_edits.snapshot(&state.text_tracker, box.key, storage[..edit.length], edit.cursor, anchor, cause)
-    if !io.failed(context.failure) {
-      state.text_context = context.value
-    } else {
-      state.text_context = text_edits.Context{}
-      state.text_context_error = context.failure.kind
+    snapshot: fail.Status
+    context := text_edits.snapshot(&snapshot, &state.text_tracker, box.key, storage[..edit.length], edit.cursor, anchor, cause)
+    state.text_context = context
+    if snapshot.failed {
+      state.text_context_error = snapshot.failure.kind
     }
     state.text_input_rect[0] = box.rect[0] + caret.floating[0]
     state.text_input_rect[1] = box.rect[1] + (box.size[1] - state.line_height) / 2.0

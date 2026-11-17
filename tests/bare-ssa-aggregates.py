@@ -84,7 +84,7 @@ extern fn oracle() i32
 fn main() { n:=oracle()
 if n!=0 { io.println("BAD {}",n)
 #panic("oracle") }
-_=io.write_transfer(io.stdout(),"LOCALS OK\n") }
+io.print("LOCALS OK\n") }
 '''
 
 C_SOURCE = r'''
@@ -255,7 +255,7 @@ def main():
             soft = soft.replace('extern fn verifybox(p:*Box) u64', 'fn verifybox(p:*Box) u64 { return 0 }')
             soft += r'''
 fn main() { if arrays(3,100)!=207 || descs(2)!=456 || boxed(123)!=267 { #panic("soft") }
-_=io.write_transfer(io.stdout(),"SOFT OK\n") }
+io.print("SOFT OK\n") }
 '''
             for mode in ('ssa', 'tree'):
                 execute('soft', soft, mode, (0, b'SOFT OK\n', b''),
