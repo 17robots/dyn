@@ -492,6 +492,13 @@ pub fn argon2id_keyed(status: *fail.Status, destination: []u8, password: []const
     fail.invalid(status, "Argon2id", "", "bad parameters, a salt under 8 bytes, output under 4 bytes, or too small a workspace")
     return
   }
+  derive(destination, password, salt, secret, associated, parameters, workspace)
+}
+
+// argon2id_keyed after validation. Kept apart so the status is not live
+// across the memory-filling loops.
+fn derive(destination: []u8, password: []const u8, salt: []const u8, secret: []const u8, associated: []const u8,
+  parameters: Argon2Parameters, workspace: []u64) {
   lanes := #cast(usize, parameters.parallelism)
   lane_length := lane_blocks(parameters)
   segment_length := lane_length / SyncPoints

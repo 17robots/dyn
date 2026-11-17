@@ -38,6 +38,9 @@ pub fn block(status: *fail.Status, destination: []u8, key: []const u8, nonce: []
   keystream(destination, key, nonce, counter)
 }
 fn keystream(destination: []u8, key: []const u8, nonce: []const u8, counter: u32) {
+  // Callers checked these; repeating them lets the compiler drop the bounds
+  // checks in the loops below.
+  if #len(destination) < 64 || #len(key) != 32 || #len(nonce) != 12 { return }
   initial: [16]u32
   initial[0] = 1634760805
   initial[1] = 857760878
